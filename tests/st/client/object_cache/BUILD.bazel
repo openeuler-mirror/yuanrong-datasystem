@@ -43,7 +43,7 @@ ds_cc_test(
     srcs = ["client_common_worker_api_test.cpp"],
     tags = ["manual"],
     deps = OC_CLIENT_COMMON_DEPS + [
-        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/client/worker_api:client_worker_common_api",
         "//src/datasystem/client/object_cache:object_client_impl",
         "//src/datasystem/client/object_cache/client_worker_api:client_worker_remote_api",
         "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
@@ -211,7 +211,7 @@ ds_cc_test(
     srcs = ["oc_client_get_mem_alloc_optimize_test.cpp"],
     tags = ["manual"],
     deps = OC_CLIENT_COMMON_DEPS + [
-        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/client/worker_api:client_worker_common_api",
         "//src/datasystem/common/util:wait_post",
     ],
 )
@@ -255,7 +255,7 @@ ds_cc_test(
     srcs = ["oc_client_worker_heartbeat_test.cpp"],
     tags = ["manual"],
     deps = OC_CLIENT_COMMON_DEPS + [
-        "//src/datasystem/client:mmap_manager",
+        "//src/datasystem/client/mmap_manager:mmap_manager",
         "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
     ],
 )
@@ -289,7 +289,7 @@ ds_cc_test(
     srcs = ["register_client_non_shm_rsp_test.cpp"],
     tags = ["manual"],
     deps = OC_CLIENT_COMMON_DEPS + [
-        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/client/worker_api:client_worker_common_api",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/util:version",
         "//src/datasystem/common/rpc:rpc_channel",

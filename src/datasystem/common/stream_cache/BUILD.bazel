@@ -21,7 +21,7 @@ ds_cc_library(
         "stream_meta_shm.cpp",
     ],
     deps = [
-        "//src/datasystem/client/mmap:immap_table_entry",
+        "//src/datasystem/client/mmap_manager:immap_table_entry",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/util:format",
         "//include/datasystem/stream:stream_headers",
@@ -57,7 +57,7 @@ ds_cc_library(
     ],
     deps = [
         "//src/datasystem/common/shared_memory:common_shared_memory",
-        "//src/datasystem/client:mmap_manager",
+        "//src/datasystem/client/mmap_manager:mmap_manager",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/util:strings_util",
@@ -79,7 +79,7 @@ ds_cc_library(
         ":stream_meta_shm",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/util:format",
-        "//src/datasystem/client/mmap:immap_table_entry",
+        "//src/datasystem/client/mmap_manager:immap_table_entry",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:raii",
         "//src/datasystem/common/perf:common_perf",

@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#include "datasystem/client/client_worker_common_api.h"
+#include "datasystem/client/worker_api/client_worker_common_api.h"
 
 #include <gtest/gtest.h>
 #include <utility>
 
-#include "datasystem/client/listen_worker.h"
+#include "datasystem/client/worker_api/listen_worker.h"
 #include "ut/common.h"
 
 namespace datasystem {

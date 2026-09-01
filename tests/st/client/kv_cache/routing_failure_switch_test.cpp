@@ -27,7 +27,7 @@
 #include <gtest/gtest.h>
 
 #include "client/object_cache/oc_client_common.h"
-#include "datasystem/client/routing/worker_router.h"
+#include "datasystem/client/object_cache/routing/worker_router.h"
 #include "datasystem/protos/cluster_topology.pb.h"
 
 namespace datasystem {

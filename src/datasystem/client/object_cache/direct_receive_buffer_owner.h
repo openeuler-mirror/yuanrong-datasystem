@@ -20,7 +20,7 @@
 #if defined(BUILD_PIPLN_H2D) && defined(USE_URMA)
 #include <memory>
 
-#include "datasystem/client/transport/data_plane/i_data_transporter.h"
+#include "datasystem/client/object_cache/transport/data_plane/i_data_transporter.h"
 #include "datasystem/common/rdma/urma_manager.h"
 
 namespace datasystem {

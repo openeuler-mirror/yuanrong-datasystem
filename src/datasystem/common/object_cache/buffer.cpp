@@ -24,7 +24,7 @@
 #include <limits>
 #include <new>
 
-#include "datasystem/client/mmap/immap_table_entry.h"
+#include "datasystem/client/mmap_manager/immap_table_entry.h"
 #include "datasystem/client/object_cache/object_client_impl.h"
 #ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"

@@ -192,7 +192,7 @@ ds_cc_library(
         #"comm_wrapper_base.h",
     ],
     deps = [
-        #"//src/datasystem/client/object_cache/device:object_cache_header",
+        #"//src/datasystem/client/hetero_cache/device:object_cache_header",
         "//src/datasystem/common/device:device_manager_factory",
         ":acl_parallel_direct_executor",
         "//src/datasystem/common/device:device_helper",

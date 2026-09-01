@@ -114,7 +114,7 @@ ds_cc_test(
     srcs = ["producer_test.cpp"],
     tags = ["manual"],
     deps = SC_COMMON_DEPS + [
-        "//src/datasystem/client:mmap_manager",
+        "//src/datasystem/client/mmap_manager:mmap_manager",
     ],
 )
 

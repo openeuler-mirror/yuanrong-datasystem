@@ -18,7 +18,7 @@
  * Description: Test ClientWorkerCommonApi class.
  */
 
-#include "datasystem/client/client_worker_common_api.h"
+#include "datasystem/client/worker_api/client_worker_common_api.h"
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/client/object_cache/client_worker_api/client_worker_remote_api.h"
 #include "datasystem/protos/object_posix.stub.rpc.pb.h"

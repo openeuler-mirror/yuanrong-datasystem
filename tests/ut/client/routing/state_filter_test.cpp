@@ -20,8 +20,8 @@
 
 #include <gtest/gtest.h>
 
-#include "datasystem/client/routing/state_filter.h"
-#include "datasystem/client/routing/worker_router.h"
+#include "datasystem/client/object_cache/routing/state_filter.h"
+#include "datasystem/client/object_cache/routing/worker_router.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/cluster_topology.pb.h"
 #include "ut/common.h"

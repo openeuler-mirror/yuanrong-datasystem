@@ -18,11 +18,11 @@
  * Description: ListenWorker class test.
  */
 
-#include "datasystem/client/listen_worker.h"
+#include "datasystem/client/worker_api/listen_worker.h"
 #include <atomic>
 #include <chrono>
 #include <thread>
-#include "datasystem/client/client_worker_common_api.h"
+#include "datasystem/client/worker_api/client_worker_common_api.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/timer.h"

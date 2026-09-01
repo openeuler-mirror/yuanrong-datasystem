@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "datasystem/client/urma_success_rate_tracker.h"
+#include "datasystem/client/object_cache/routing/urma_success_rate_tracker.h"
 
 #include <atomic>
 #include <thread>

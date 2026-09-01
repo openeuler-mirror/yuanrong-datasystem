@@ -27,8 +27,8 @@
 
 #include "client/object_cache/oc_client_common.h"
 #include "common_distributed_ext.h"
-#include "datasystem/client/routing/routing.h"
-#include "datasystem/client/transport/rpc/worker_rpc_client.h"
+#include "datasystem/client/object_cache/routing/routing.h"
+#include "datasystem/client/object_cache/transport/rpc/worker_rpc_client.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/kv_client.h"

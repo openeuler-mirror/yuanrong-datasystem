@@ -1,14 +1,14 @@
-add_subdirectory(mmap)
+add_subdirectory(mmap_manager)
 add_subdirectory(cluster_query)
 
 list(APPEND CLIENT_SRCS
         datasystem.cpp
-        client_worker_common_api.cpp
-        listen_worker.cpp
-        urma_success_rate_tracker.cpp
-        mmap_manager.cpp
+        worker_api/client_worker_common_api.cpp
+        worker_api/listen_worker.cpp
+        object_cache/routing/urma_success_rate_tracker.cpp
+        mmap_manager/mmap_manager.cpp
         client_flags_monitor.cpp
-        embedded_client_worker_api.cpp
+        worker_api/embedded_client_worker_api.cpp
         service_discovery.cpp
         context/context.cpp
         ../common/flags/kv_client_config.cpp
@@ -20,12 +20,12 @@ list(APPEND CLIENT_SRCS
         object_cache/object_client_impl.cpp
         object_cache/direct_receive_buffer_owner.cpp
         object_cache/client_memory_ref_table.cpp
-        object_cache/device/client_device_object_manager.cpp
-        object_cache/device/p2p_subscribe.cpp
-        object_cache/device/comm_factory.cpp
-        object_cache/device/future.cpp
-        object_cache/device/device_memory_unit.cpp
-        object_cache/device/hccl_comm_mgr.cpp
+        hetero_cache/device/client_device_object_manager.cpp
+        hetero_cache/device/p2p_subscribe.cpp
+        hetero_cache/device/comm_factory.cpp
+        hetero_cache/device/future.cpp
+        hetero_cache/device/device_memory_unit.cpp
+        hetero_cache/device/hccl_comm_mgr.cpp
         kv_cache/read_only_buffer.cpp
         kv_cache/kv_client.cpp
         hetero_cache/hetero_client.cpp
@@ -38,33 +38,33 @@ list(APPEND CLIENT_SRCS
         stream_cache/stream_client.cpp
         stream_cache/stream_client_impl.cpp
         stream_cache/producer_consumer_worker_api.cpp
-        transport/transport_advisor.cpp
-        transport/transport_phase_latency_recorder.cpp
-        transport/common/deadline_retry.cpp
-        transport/metadata/object_metadata_client.cpp
-        transport/object_read/object_read_flow.cpp
-        transport/object_read/replica_reader.cpp
-        transport/transport_layer.cpp
-        transport/worker_snapshot.cpp
-        transport/data_plane/data_plane_executor.cpp
-        transport/data_plane/data_plane_manager.cpp
-        transport/data_plane/shm_connection.cpp
-        transport/data_plane/shm_receive_buffer_owner.cpp
-        transport/data_plane/shm_send_buffer_owner.cpp
-        transport/data_plane/tcp_transporter.cpp
-        transport/data_plane/ub_connection.cpp
-        transport/data_plane/ub_transporter.cpp
-        transport/rpc/exist_request_builder.cpp
-        transport/rpc/mset_request_builder.cpp
-        transport/rpc/set_request_builder.cpp
-        transport/rpc/worker_rpc_client.cpp
-        routing/broken_filter.cpp
-        routing/hash_ring_refresher.cpp
-        routing/routing.cpp
-        routing/routing_rpc_client.cpp
-        routing/state_filter.cpp
-        routing/ub_health_filter.cpp
-        routing/worker_router.cpp)
+        object_cache/transport/transport_advisor.cpp
+        object_cache/transport/transport_phase_latency_recorder.cpp
+        object_cache/transport/common/deadline_retry.cpp
+        object_cache/transport/metadata/object_metadata_client.cpp
+        object_cache/transport/object_read/object_read_flow.cpp
+        object_cache/transport/object_read/replica_reader.cpp
+        object_cache/transport/transport_layer.cpp
+        object_cache/transport/worker_snapshot.cpp
+        object_cache/transport/data_plane/data_plane_executor.cpp
+        object_cache/transport/data_plane/data_plane_manager.cpp
+        object_cache/transport/data_plane/shm_connection.cpp
+        object_cache/transport/data_plane/shm_receive_buffer_owner.cpp
+        object_cache/transport/data_plane/shm_send_buffer_owner.cpp
+        object_cache/transport/data_plane/tcp_transporter.cpp
+        object_cache/transport/data_plane/ub_connection.cpp
+        object_cache/transport/data_plane/ub_transporter.cpp
+        object_cache/transport/rpc/exist_request_builder.cpp
+        object_cache/transport/rpc/mset_request_builder.cpp
+        object_cache/transport/rpc/set_request_builder.cpp
+        object_cache/transport/rpc/worker_rpc_client.cpp
+        object_cache/routing/broken_filter.cpp
+        object_cache/routing/hash_ring_refresher.cpp
+        object_cache/routing/routing.cpp
+        object_cache/routing/routing_rpc_client.cpp
+        object_cache/routing/state_filter.cpp
+        object_cache/routing/ub_health_filter.cpp
+        object_cache/routing/worker_router.cpp)
 
 list(APPEND CLIENT_DEPEND_LIBS
         ${SECUREC_LIBRARY}

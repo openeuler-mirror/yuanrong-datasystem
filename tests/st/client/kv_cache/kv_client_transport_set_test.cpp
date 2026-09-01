@@ -33,7 +33,7 @@
 
 #include "client/object_cache/oc_client_common.h"
 #include "cluster/topology_token_helper.h"
-#include "datasystem/client/routing/routing.h"
+#include "datasystem/client/object_cache/routing/routing.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/flags/flags.h"

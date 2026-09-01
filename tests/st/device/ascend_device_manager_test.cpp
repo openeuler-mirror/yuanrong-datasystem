@@ -25,7 +25,7 @@
 #include <tbb/concurrent_hash_map.h>
 
 #include "common.h"
-#include "datasystem/client/object_cache/device/p2p_subscribe.h"
+#include "datasystem/client/hetero_cache/device/p2p_subscribe.h"
 #include "datasystem/common/device/ascend/acl_device_manager.h"
 #include "datasystem/common/device/device_pointer_wrapper.h"
 #include "datasystem/common/device/ascend/cann_types.h"

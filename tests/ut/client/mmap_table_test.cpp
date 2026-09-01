@@ -17,7 +17,7 @@
 /**
  * Description: Mmap table class test.
  */
-#include "datasystem/client/mmap/immap_table.h"
+#include "datasystem/client/mmap_manager/immap_table.h"
 
 #include <algorithm>
 
@@ -27,8 +27,8 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 
-#include "datasystem/client/mmap/shm_mmap_table.h"
-#include "datasystem/client/mmap/shm_mmap_table_entry.h"
+#include "datasystem/client/mmap_manager/shm_mmap_table.h"
+#include "datasystem/client/mmap_manager/shm_mmap_table_entry.h"
 #include "datasystem/common/util/status_helper.h"
 #include "ut/common.h"
 

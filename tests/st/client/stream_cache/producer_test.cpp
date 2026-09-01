@@ -22,7 +22,7 @@
 #include "common/stream_cache/element_generator.h"
 #include "common/stream_cache/stream_common.h"
 #include "sc_client_common.h"
-#include "datasystem/client/mmap_manager.h"
+#include "datasystem/client/mmap_manager/mmap_manager.h"
 #include "datasystem/client/stream_cache/client_worker_api.h"
 #include "datasystem/stream_client.h"
 #include "datasystem/common/inject/inject_point.h"

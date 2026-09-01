@@ -41,7 +41,7 @@ ds_cc_test(
     copts = MOCK_COPTS,
     tags = ["manual"],
     deps = DEVICE_COMMON_DEPS + [
-        "//src/datasystem/client/object_cache/device:p2p_subscribe",
+        "//src/datasystem/client/hetero_cache/device:p2p_subscribe",
         "//src/datasystem/common/device:device_pointer_wrapper",
         "//src/datasystem/common/device/ascend:acl_device_manager",
         "//src/datasystem/common/device/ascend:cann_types",

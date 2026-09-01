@@ -22,7 +22,7 @@
 
 #include <cstdint>
 #include <memory>
-#include "datasystem/client/mmap/immap_table_entry.h"
+#include "datasystem/client/mmap_manager/immap_table_entry.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/status.h"
 

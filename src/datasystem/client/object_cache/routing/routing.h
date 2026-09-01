@@ -1,0 +1,92 @@
+/**
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * Description: Routing - the single facade for the routing module.
+ * Combines WorkerRouter + HashRingRefresher.
+ */
+#ifndef DATASYSTEM_CLIENT_ROUTING_ROUTING_H
+#define DATASYSTEM_CLIENT_ROUTING_ROUTING_H
+
+#include <atomic>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "datasystem/client/object_cache/routing/data_placement_policy.h"
+#include "datasystem/client/object_cache/routing/hash_ring_refresher.h"
+#include "datasystem/client/object_cache/routing/routing_rpc_client.h"
+#include "datasystem/client/object_cache/routing/worker_router.h"
+#include "datasystem/common/ak_sk/signature.h"
+#include "datasystem/common/rpc/brpc_factory.h"
+#include "datasystem/common/util/net_util.h"
+#include "datasystem/utils/status.h"
+
+namespace datasystem {
+namespace client {
+
+class Routing {
+public:
+    Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> signature,
+            HashRingRefresher::RingUpdateHook ringUpdateHook = {},
+            std::vector<std::shared_ptr<IWorkerFilter>> additionalFilters = {},
+            int64_t refreshIntervalMs = DEFAULT_REFRESH_INTERVAL_MS);
+
+    // Dependency-injection seam used by focused routing tests.
+    Routing(std::shared_ptr<WorkerRouter> router, std::shared_ptr<HashRingRefresher> refresher,
+            int64_t refreshIntervalMs = DEFAULT_REFRESH_INTERVAL_MS);
+    ~Routing();
+
+    Status Init(const std::string &hostId, const HostPort &initialWorkerAddr, bool initialWorkerIsLocal = false);
+
+    // Routing owns only its GetHashRing control channel. The caller owns business RPC execution and retries.
+    Status SelectWorker(const std::string &key, DataPlacementPolicy policy, HostPort &worker,
+                        const std::vector<HostPort> &exclude = {});
+
+    Status SelectWorkers(const std::vector<std::string> &keys, DataPlacementPolicy policy,
+                         std::unordered_map<HostPort, std::vector<std::string>> &groups,
+                         const std::vector<HostPort> &exclude = {});
+
+    void UpdateState(const HostPort &addr, StatusCode status);
+
+    bool ForceRefresh();
+
+    void Shutdown();
+
+private:
+    Status FetchHashRing(const HostPort &workerAddr, uint64_t currentVersion, ::datasystem::ClusterTopologyPb &ring,
+                         std::string &masterAddress, uint64_t &newVersion, bool &changed,
+                         std::unordered_map<std::string, std::string> &hostIdMap, int32_t timeoutMs);
+
+    static constexpr int64_t DEFAULT_REFRESH_INTERVAL_MS = 5'000;
+    std::shared_ptr<WorkerRouter> router_;
+    std::shared_ptr<HashRingRefresher> refresher_;
+    std::shared_ptr<RoutingRpcClient> rpcClient_;
+    int64_t refreshIntervalMs_;
+    HostPort initialWorkerAddr_;
+    bool initialWorkerIsLocal_{ false };
+    std::atomic<bool> hostIdResolutionAttempted_{ false };
+    std::atomic<bool> initialized_{ false };
+};
+
+Status ParseDataPlacementPolicy(const std::string &value, DataPlacementPolicy &policy);
+
+}  // namespace client
+}  // namespace datasystem
+
+#endif  // DATASYSTEM_CLIENT_ROUTING_ROUTING_H

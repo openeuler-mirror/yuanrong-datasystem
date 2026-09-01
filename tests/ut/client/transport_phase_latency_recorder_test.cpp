@@ -21,7 +21,7 @@
 #include <cstdint>
 #include <string>
 
-#include "datasystem/client/transport/transport_phase_latency_recorder.h"
+#include "datasystem/client/object_cache/transport/transport_phase_latency_recorder.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/raii.h"
 

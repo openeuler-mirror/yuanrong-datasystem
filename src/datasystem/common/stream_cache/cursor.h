@@ -22,7 +22,7 @@
 #include <cstdint>
 #include <sstream>
 #include "datasystem/common/shared_memory/shm_unit.h"
-#include "datasystem/client/mmap_manager.h"
+#include "datasystem/client/mmap_manager/mmap_manager.h"
 
 namespace datasystem {
 class SharedMemViewLock {

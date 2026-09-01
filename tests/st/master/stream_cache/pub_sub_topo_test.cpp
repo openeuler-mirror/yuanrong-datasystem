@@ -24,7 +24,7 @@
 #include "common.h"
 
 #include "common/stream_cache/stream_common.h"
-#include "datasystem/client/mmap_manager.h"
+#include "datasystem/client/mmap_manager/mmap_manager.h"
 #include "datasystem/stream_client.h"
 #include "datasystem/stream/producer.h"
 #include "datasystem/stream/consumer.h"

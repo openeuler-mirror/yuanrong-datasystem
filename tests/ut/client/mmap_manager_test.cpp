@@ -17,7 +17,7 @@
 /**
  * Description: Mmap table class test.
  */
-#include "datasystem/client/mmap_manager.h"
+#include "datasystem/client/mmap_manager/mmap_manager.h"
 
 #include <atomic>
 #include <chrono>
@@ -30,7 +30,7 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/wait_post.h"
-#include "datasystem/client/client_worker_common_api.h"
+#include "datasystem/client/worker_api/client_worker_common_api.h"
 
 #include "ut/common.h"
 

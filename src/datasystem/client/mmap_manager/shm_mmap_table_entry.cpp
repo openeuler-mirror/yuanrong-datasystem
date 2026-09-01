@@ -1,0 +1,112 @@
+/**
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * Description: Client mmap table management.
+ */
+#include "datasystem/client/mmap_manager/shm_mmap_table_entry.h"
+
+#include <atomic>
+#include <cstddef>
+#include <exception>
+#include <shared_mutex>
+#include <sys/mman.h>
+#include <unistd.h>
+
+#include "datasystem/common/device/nvidia/cuda_host_memory.h"
+#include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/util/strings_util.h"
+
+namespace datasystem {
+namespace client {
+Status ShmMmapTableEntry::Init(bool enableHugeTlb, const std::string &tenantId)
+{
+    (void)tenantId;
+    std::stringstream err;
+    if (size_ <= 0) {
+        err << "The mmap size [" << size_ << "] is invalid for fd [" << fd_ << "]";
+        LOG(ERROR) << err.str();
+        RETURN_STATUS(StatusCode::K_INVALID, err.str());
+    }
+    INJECT_POINT("IMmapTableEntry.mmap");
+    // mmap fd
+    uint32_t mFlag = MAP_SHARED;
+    if (enableHugeTlb) {
+        mFlag |= MAP_HUGETLB;
+    }
+    pointer_ = reinterpret_cast<uint8_t *>(mmap(nullptr, size_, PROT_READ | PROT_WRITE, mFlag, fd_, 0));
+    if (pointer_ == MAP_FAILED) {
+        RETURN_STATUS_LOG_ERROR(
+            StatusCode::K_RUNTIME_ERROR,
+            FormatString("Mmap [client id = %s, fd = %d] failed. Error no: [%s]", clientId_, fd_, StrErr(errno)));
+    }
+    // Exclude the shared memory from core dump.
+    int ret = madvise(pointer_, size_, MADV_DONTDUMP);
+    if (ret != 0) {
+        // Ignore and write log.
+        LOG(WARNING) << "madvise DONTDUMP memory failed: " << StrErr(errno);
+    }
+    // Closing this fd has an effect on performance.
+    RETRY_ON_EINTR(close(fd_));
+    LOG(INFO) << FormatString("mmap success, client id: %s, fd: %d, size: %zu", clientId_, fd_, size_);
+    return Status::OK();
+}
+
+void ShmMmapTableEntry::PinHostMemory()
+{
+    pinAttempted_.store(true, std::memory_order_release);
+    try {
+        INJECT_POINT_NO_RETURN("ShmMmapTableEntry.PinHostMemory");
+        RegisterCudaHostMemory(pointer_, size_);
+    } catch (const std::exception &e) {
+        LOG(WARNING) << "CUDA host memory pin task failed: " << e.what();
+    } catch (...) {
+        LOG(WARNING) << "CUDA host memory pin task failed with an unknown exception";
+    }
+    pinCompleted_.store(true, std::memory_order_release);
+}
+
+void ShmMmapTableEntry::SkipHostMemoryPin()
+{
+    pinCompleted_.store(true, std::memory_order_release);
+}
+
+bool ShmMmapTableEntry::IsCudaHostMemoryRegistrationDone() const
+{
+    return pinCompleted_.load(std::memory_order_acquire);
+}
+
+ShmMmapTableEntry::~ShmMmapTableEntry()
+{
+    // munmap fd.
+    if (pointer_ != nullptr && pointer_ != MAP_FAILED) {
+        if (pinAttempted_.load(std::memory_order_acquire)) {
+            UnregisterCudaHostMemory(pointer_);
+        }
+        int ret = munmap(pointer_, size_);
+        if (ret != 0) {
+            LOG(ERROR) << FormatString("munmap failed, client id: %s, fd: %d, size: %zu, returned: [%d], errno = [%s]",
+                                       clientId_, fd_, size_, ret, StrErr(errno));
+        } else {
+            LOG(INFO) << FormatString("munmap success, client id: %s, fd: %d, size: %zu", clientId_, fd_, size_);
+        }
+    } else {
+        LOG(ERROR) << FormatString("Mmap pointer is invalid, client id: %s, fd: %d, it may be nullptr", clientId_,
+                                   fd_);
+    }
+}
+}  // namespace client
+}  // namespace datasystem

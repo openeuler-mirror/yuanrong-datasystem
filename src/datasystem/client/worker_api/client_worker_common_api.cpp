@@ -1,0 +1,1290 @@
+/**
+ * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * Description: Implement the worker client class to communicate with the common worker service.
+ */
+#include "datasystem/client/worker_api/client_worker_common_api.h"
+
+#include <brpc/channel.h>
+#include "datasystem/protos/share_memory.brpc.stub.pb.h"
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <ctime>
+#include <mutex>
+#include <shared_mutex>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "datasystem/common/eventloop/timer_queue.h"
+#include "datasystem/common/flags/flags.h"
+#ifdef WITH_TESTS
+#include "datasystem/common/inject/inject_point.h"
+#endif
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/log/log_sampler.h"
+#include "datasystem/common/log/logging.h"
+#include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rpc/api_deadline.h"
+#include "datasystem/common/rpc/brpc_factory.h"
+#include "datasystem/common/rpc/timeout_duration.h"
+#include "datasystem/common/rpc/unix_sock_fd.h"
+#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
+#include "datasystem/common/string_intern/string_ref.h"
+#include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/util/compatibility_manager.h"
+#include "datasystem/common/util/fd_pass.h"
+#include "datasystem/common/util/format.h"
+#include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/rpc_util.h"
+#include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/validator.h"
+#include "datasystem/common/util/version.h"
+#include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/request_context.h"
+#include "datasystem/common/util/timer.h"
+#include "datasystem/utils/sensitive_value.h"
+#include "datasystem/utils/status.h"
+#include "datasystem/worker/object_cache/worker_worker_transport_api.h"
+
+DS_DECLARE_double(urma_failover_success_rate_ratio);
+DS_DECLARE_uint32(urma_failover_min_sample_count);
+
+namespace datasystem {
+namespace {
+static constexpr int64_t MIN_WAIT_MS = 1;
+
+int32_t CalculateSingleRpcTimeout(int32_t totalTimeoutMs)
+{
+    constexpr int32_t rpcMaxTimeout = 600000;    // 10min
+    constexpr int32_t shorterSplitTime = 30000;  // 30s
+    constexpr int32_t longerSplitTime = 90000;   // 90s
+    constexpr int32_t retryTimes = 3;
+
+    if (totalTimeoutMs <= shorterSplitTime) {
+        return totalTimeoutMs;
+    } else if (totalTimeoutMs <= longerSplitTime) {
+        return shorterSplitTime;
+    } else {
+        return std::min(totalTimeoutMs / retryTimes, rpcMaxTimeout);
+    }
+}
+
+const char *ShmEnableTypeName(ShmEnableType type)
+{
+    switch (type) {
+        case ShmEnableType::UDS:
+            return "Unix domain socket";
+        case ShmEnableType::SCMTCP:
+            return "SCMTCP";
+        case ShmEnableType::NONE:
+        default:
+            return "TCP";
+    }
+}
+
+int32_t BoundFdPassingTimeoutMs(int32_t connectTimeoutMs)
+{
+    // Bound fd-passing by the in-flight request deadline (ApiDeadline) so a delayed fd fails
+    // fast near the client's requestTimeoutMs instead of blocking up to connectTimeoutMs
+    // (default 9s). ApiRemainingUs() returns the 60s default when no request deadline is
+    // active (background calls), so connectTimeoutMs stays the ceiling in that case.
+    int64_t fdTimeoutMs = static_cast<int64_t>(connectTimeoutMs);
+    int64_t apiRemainingMs = TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs());
+    if (apiRemainingMs < fdTimeoutMs) {
+        fdTimeoutMs = std::max<int64_t>(apiRemainingMs, MIN_WAIT_MS);
+    }
+    return static_cast<int32_t>(fdTimeoutMs);
+}
+
+}  // namespace
+
+namespace client {
+std::string FormatUrmaSwitchWindowStats(const std::string &clientId, const std::string &workerAddress,
+                                        const UrmaSuccessRateTracker &tracker,
+                                        const UrmaSuccessRateTracker::WindowStats &windowStats, uint64_t windowLengthMs)
+{
+    return FormatString(
+        "[Switch] URMA data-plane settled window, client id: %s, worker address: %s, "
+        "success: %llu, failure: %llu, total: %llu, success rate ratio: %g, min sample count: %u, "
+        "window length ms: %llu, backoff level: %u, next allowed switch time ms: %llu",
+        clientId, workerAddress, windowStats.successCount, windowStats.failureCount, windowStats.totalCount,
+        FLAGS_urma_failover_success_rate_ratio, FLAGS_urma_failover_min_sample_count, windowLengthMs,
+        tracker.GetBackoffLevel(), tracker.GetNextAllowedSwitchTimeMs());
+}
+
+namespace {
+void MaybeApplyLogSampleConfig(const LogSampleConfigPb &config, const std::string &source)
+{
+    auto result = LogSampler::Instance().UpdateConfigFromProto(config);
+    if (result == LogSampler::ConfigUpdateResult::INVALID) {
+        LOG(ERROR) << FormatString("Illegal LogSampleConfigPb from %s: request_ppm=%u access_ppm=%u diagnostic_ppm=%u",
+                                   source, config.request_sample_ppm(), config.access_sample_ppm(),
+                                   config.diagnostic_sample_ppm());
+    } else if (result == LogSampler::ConfigUpdateResult::CHANGED) {
+        LOG(INFO) << FormatString("Applied log sample config from %s: enabled=%s", source,
+                                  config.enabled() ? "true" : "false");
+    }
+}
+
+CompatibilityVersion ParseWorkerCompatibilityVersionOrCurrent(const std::string &compatibilityVersionText,
+                                                              const std::string &source)
+{
+    auto baseline = CompatibilityManager::Instance().GetBaselineCompatibilityVersion();
+    if (compatibilityVersionText.empty()) {
+        return baseline;
+    }
+    CompatibilityVersion workerCompatibilityVersion;
+    auto rc = CompatibilityVersion::FromString(compatibilityVersionText, workerCompatibilityVersion);
+    if (rc.IsError()) {
+        LOG(WARNING) << FormatString("Parse worker compatibility version from %s failed, use baseline: %s", source,
+                                     rc.ToString());
+        return baseline;
+    }
+    return workerCompatibilityVersion;
+}
+}  // namespace
+
+void ClientWorkerCommonApiAttribute::UpdateMemoryAlignment(const RegisterClientRspPb &rsp)
+{
+    constexpr uint32_t defaultMemoryAlignment = 64;
+    const auto memoryAlignment = rsp.memory_alignment();
+    const bool isValid = memoryAlignment != 0
+                         && Validator::ValidateMemoryAlignment("worker memory_alignment", memoryAlignment);
+    memoryAlignment_.store(isValid ? memoryAlignment : defaultMemoryAlignment, std::memory_order_relaxed);
+}
+
+void ClientWorkerCommonApiAttribute::SetHeartbeatProperties(int32_t timeoutMs, const RegisterClientRspPb &rsp)
+{
+    std::vector<uint64_t> heartBeatTimeoutMsOptions = { static_cast<uint64_t>(timeoutMs), MAX_HEARTBEAT_TIMEOUT_MS };
+    uint64_t clientDeadTimeoutMs = rsp.client_dead_timeout_s() * TO_MILLISECOND;
+    // Compatible with old versions of worker
+    clientDeadTimeoutMs_ = clientDeadTimeoutMs == 0ul ? MIN_HEARTBEAT_TIMEOUT_MS : clientDeadTimeoutMs;
+    if (clientDeadTimeoutMs > 0) {
+        const int32_t retryNum = 3;  // Make sure the heartbeat is retried twice before worker timeout.
+        heartBeatTimeoutMsOptions.emplace_back(clientDeadTimeoutMs / retryNum);
+    }
+    heartBeatTimeoutMs_ = *std::min_element(heartBeatTimeoutMsOptions.begin(), heartBeatTimeoutMsOptions.end());
+    uint64_t clientReconnectWaitMs = rsp.client_reconnect_wait_s() * TO_MILLISECOND;
+    const int32_t reduceRatio = 5;
+    heartBeatIntervalMs_ =
+        std::min({ std::max(clientDeadTimeoutMs / reduceRatio, static_cast<uint64_t>(MIN_HEARTBEAT_INTERVAL_MS)),
+                   static_cast<uint64_t>(MAX_HEARTBEAT_INTERVAL_MS),
+                   clientReconnectWaitMs > 0 ? clientReconnectWaitMs / reduceRatio : UINT64_MAX });
+}
+
+void ClientWorkerCommonApiAttribute::ConsumeHeartbeatUbHealthSummary(const HeartbeatRspPb &rsp, const char *source)
+{
+#ifdef WITH_TESTS
+    bool skipSummary = false;
+    INJECT_POINT_NO_RETURN("client.heartbeat_ub_health_summary.skip", [&skipSummary]() { skipSummary = true; });
+    if (skipSummary) {
+        return;
+    }
+#endif
+    UbHealthSummaryApplyHook callback;
+    {
+        std::lock_guard<std::mutex> lock(ubHealthSummaryCallbackMutex_);
+        callback = ubHealthSummaryCallback_;
+    }
+    LOG_IF_ERROR(
+        datasystem::ApplyHeartbeatUbHealthSummary(rsp, hostPort_, ubHealthSummaryCache_, callback),
+        source);
+}
+
+IClientWorkerCommonApi::~IClientWorkerCommonApi() = default;
+ClientWorkerCommonApiAttribute::~ClientWorkerCommonApiAttribute() = default;
+
+ClientWorkerLocalCommonApi::ClientWorkerLocalCommonApi(
+    HostPort hostPort, std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api, void *worker,
+    HeartbeatType heartbeatType, bool enableCrossNodeConnection, Signature *signature, std::string deviceId)
+    : IClientWorkerCommonApi(std::move(hostPort), heartbeatType, false, signature),
+      api_(std::move(api)),
+      worker_(worker),
+      deviceId_(std::move(deviceId))
+{
+    (void)enableCrossNodeConnection;
+}
+
+Status ClientWorkerLocalCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize,
+                                        int32_t initAttemptTimeoutMs)
+{
+    (void)initAttemptTimeoutMs;
+    (void)fastTransportSize;
+    requestTimeoutMs_ = requestTimeoutMs;
+    connectTimeoutMs_ = connectTimeoutMs;
+    workerService_ = api_->GetWorkerService();
+    RegisterClientReqPb req;
+    RETURN_IF_NOT_OK(Connect(req, connectTimeoutMs));
+    return Status::OK();
+}
+
+Status ClientWorkerLocalCommonApi::SendHeartbeat(bool &workerReboot, bool &clientRemoved, int64_t remainTime,
+                                                 bool &isWorkerVoluntaryScaleDown,
+                                                 const std::vector<int64_t> &releasedFds,
+                                                 std::vector<int64_t> &expiredWorkerFds)
+{
+    (void)remainTime;
+    (void)releasedFds;
+    (void)expiredWorkerFds;
+    HeartbeatReqPb req;
+    HeartbeatRspPb rsp;
+    req.set_client_id(clientId_);
+    req.set_removable(removable_.load(std::memory_order_relaxed));
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+    Status status = api_->WorkerHeartbeat(workerService_, req, rsp);
+    workerReboot = false;
+    clientRemoved = false;
+    isWorkerVoluntaryScaleDown = false;
+    if (status.IsOk()) {
+        ConsumeHeartbeatUbHealthSummary(rsp, "Ignore invalid local Worker UB health summary");
+        clientRemoved = rsp.client_removed();
+        isWorkerVoluntaryScaleDown = rsp.is_voluntary_scale_down();
+        SetHealthy(!rsp.unhealthy());
+        if (rsp.has_log_sample_config()) {
+            MaybeApplyLogSampleConfig(rsp.log_sample_config(), "local worker heartbeat");
+        }
+    }
+    return status;
+}
+
+Status ClientWorkerLocalCommonApi::GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds,
+                                               const std::string &tenantId)
+{
+    (void)workerFds;
+    (void)clientFds;
+    (void)tenantId;
+    RETURN_STATUS(K_RUNTIME_ERROR, "Not support GetClientFd in embedded scenario");
+}
+
+Status ClientWorkerLocalCommonApi::UpdateToken(SensitiveValue &token)
+{
+    (void)token;
+    RETURN_STATUS(K_RUNTIME_ERROR, "Not support UpdateToken in embedded scenario");
+}
+
+Status ClientWorkerLocalCommonApi::UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey)
+{
+    (void)accessKey;
+    (void)secretKey;
+    RETURN_STATUS(K_RUNTIME_ERROR, "Not support UpdateAkSk in embedded scenario");
+}
+
+std::vector<HostPort> ClientWorkerLocalCommonApi::GetStandbyWorkers()
+{
+    LOG(ERROR) << "Not support GetStandbyWorkers in embedded scenario";
+    return {};
+}
+
+Status ClientWorkerLocalCommonApi::Disconnect(bool isDestruct)
+{
+    (void)isDestruct;
+    LOG(INFO) << FormatString("Client %s sends exit notice to worker.", clientId_);
+    DisconnectClientReqPb req;
+    DisconnectClientRspPb rsp;
+    req.set_client_id(clientId_);
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+    return api_->WorkerDisconnectClient(workerService_, req, rsp);
+}
+
+Status ClientWorkerLocalCommonApi::Reconnect()
+{
+    RETURN_STATUS(K_RUNTIME_ERROR, "Not support Reconnect in embedded scenario");
+}
+
+Status ClientWorkerLocalCommonApi::Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection,
+                                           int32_t stateTimeoutMs)
+{
+    (void)reconnection;
+    (void)stateTimeoutMs;
+    shmEnableType_ = ShmEnableType::UDS;
+    heartbeatType_ = HeartbeatType::RPC_HEARTBEAT;
+    req.set_server_fd(INVALID_SOCKET_FD);
+    req.set_version(DATASYSTEM_VERSION);
+    req.set_git_hash(GetGitHash());
+    req.set_heartbeat_enabled(heartbeatType_ != HeartbeatType::NO_HEARTBEAT);
+    req.set_socket_heartbeat(newFlowShm_);
+    req.set_shm_enabled(IsShmEnable());
+    req.set_tenant_id("");
+    req.set_enable_cross_node(enableCrossNodeConnection_);
+    req.set_pod_name(Logging::PodName());
+    req.set_device_id(deviceId_);
+    req.set_compatibility_version(CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString());
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+    RegisterClientRspPb rsp;
+    Status status;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(api_->WorkerRegisterClient(workerService_, req, rsp), "Register client failed");
+    VLOG(1) << "Register response: " << rsp.DebugString();
+    enableHugeTlb_ = rsp.enable_huge_tlb();
+    UpdateMemoryAlignment(rsp);
+    clientId_ = rsp.client_id();
+    lockId_ = rsp.lock_id();
+    (void)workerVersion_.fetch_add(1, std::memory_order_relaxed);
+    shmThreshold_ = rsp.shm_threshold();
+    workerId_ = rsp.worker_uuid();
+    workerCompatibilityVersion_ =
+        ParseWorkerCompatibilityVersionOrCurrent(rsp.worker_compatibility_version(), "local worker register");
+    workerEnableP2Ptransfer_ = rsp.enable_p2p_transfer();
+    SetHealthy(!rsp.unhealthy());
+    SetHeartbeatProperties(timeoutMs, rsp);
+    if (rsp.has_log_sample_config()) {
+        MaybeApplyLogSampleConfig(rsp.log_sample_config(), "local worker register");
+    }
+    return Status::OK();
+}
+
+ClientWorkerRemoteCommonApi::ClientWorkerRemoteCommonApi(HostPort hostPort,
+                                                         HeartbeatType heartbeatType, SensitiveValue token,
+                                                         Signature *signature, std::string tenantId,
+                                                         bool enableCrossNodeConnection,
+                                                         std::string deviceId)
+    : IClientWorkerCommonApi(std::move(hostPort), heartbeatType, enableCrossNodeConnection, signature),
+      tenantId_(std::move(tenantId)),
+      deviceId_(std::move(deviceId))
+{
+    recvPageThread_ = Thread(&ClientWorkerRemoteCommonApi::RecvPageFd, this);
+    clientAccessToken_ = std::make_unique<ClientAccessToken>(std::move(token));
+    urmaHandshakePool_ = std::make_unique<ThreadPool>(0, 1, "urma_handshake");
+    urmaHandshakeRetryPool_ = std::make_unique<ThreadPool>(0, 1, "urma_handshake_retry");
+}
+
+ClientWorkerRemoteCommonApi::~ClientWorkerRemoteCommonApi()
+{
+    stopUrmaHandshakeRetry_ = true;
+    recvClientFdState_.stopRecvPageFd = true;
+    recvClientFdState_.recvPageWaitPost->Set();
+    recvClientFdState_.recvPageNotify->Set();
+    CloseSocketFd();
+    urmaHandshakePool_.reset();
+    urmaHandshakeRetryPool_.reset();
+    if (recvPageThread_.joinable()) {
+        recvPageThread_.join();
+    }
+}
+
+void ClientWorkerRemoteCommonApi::SetRpcTimeout(int32_t timeout)
+{
+    rpcTimeoutMs_ = CalculateSingleRpcTimeout(timeout);
+    LOG(INFO) << "The total timeout is " << timeout << " ms, single rpc timeout is " << rpcTimeoutMs_ << " ms";
+}
+
+Status ClientWorkerRemoteCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize,
+                                         int32_t initAttemptTimeoutMs)
+{
+    CHECK_FAIL_RETURN_STATUS(
+        connectTimeoutMs >= RPC_MINIMUM_TIMEOUT, StatusCode::K_INVALID,
+        FormatString("The connectTimeoutMs(%d) should be greater than or equal to %d milliseconds.", connectTimeoutMs,
+                     RPC_MINIMUM_TIMEOUT));
+    int32_t attemptTimeoutMs = initAttemptTimeoutMs > 0 ? initAttemptTimeoutMs : connectTimeoutMs;
+    CHECK_FAIL_RETURN_STATUS(
+        attemptTimeoutMs >= RPC_MINIMUM_TIMEOUT, StatusCode::K_INVALID,
+        FormatString("The initAttemptTimeoutMs(%d) should be greater than or equal to %d milliseconds.",
+                     attemptTimeoutMs, RPC_MINIMUM_TIMEOUT));
+    CHECK_FAIL_RETURN_STATUS(
+        requestTimeoutMs >= 0, StatusCode::K_INVALID,
+        FormatString("The requestTimeoutMs(%d) should be greater than or equal to 0 milliseconds.", requestTimeoutMs));
+    requestTimeoutMs_ = requestTimeoutMs;
+    connectTimeoutMs_ = connectTimeoutMs;
+    fastTransportMemSize_ = fastTransportSize;
+    recvClientFdState_.getClientFdTimeoutMs = connectTimeoutMs;
+    SetRpcTimeout(requestTimeoutMs);
+    VLOG(1) << "Client start to connect worker";
+    CHECK_FAIL_RETURN_STATUS(TimerQueue::GetInstance()->Initialize(), K_RUNTIME_ERROR, "TimerQueue init failed!");
+    RegisterClientReqPb req;
+    RETURN_IF_NOT_OK(Connect(req, attemptTimeoutMs, false, connectTimeoutMs));
+    VLOG(1) << "The new client id is: " << clientId_;
+    return Status::OK();
+}
+
+Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection,
+                                            int32_t stateTimeoutMs)
+{
+    HostPort brpcAddr(hostPort_.Host(), hostPort_.Port());
+    BrpcChannelConfig cfg;
+    cfg.endpoint = brpcAddr.ToString();
+    // The channel is long-lived and carries runtime business RPCs after initialization,
+    // so its default RPC timeout follows the request budget. Initialization control RPCs
+    // override this default with the bounded timeout derived from the current attempt.
+    // TCP connection establishment continues to use the connection budget.
+    cfg.timeout_ms = requestTimeoutMs_;
+    cfg.connect_timeout_ms = connectTimeoutMs_;
+    // Disable brpc-level blind retry on client->worker channels.
+    // These channels carry non-idempotent RPCs (Delete, CloseProducer,
+    // CloseConsumer, etc.) that must not be re-driven silently.
+    cfg.max_retry = 0;
+    // Defer brpcChannel_ assignment until after all checks pass.
+    // In the reconnection path (reconnection=true), brpcChannel_ currently
+    // holds the old channel that brpcCommonStub_ references via a raw
+    // pointer.  If we overwrote brpcChannel_ first and then returned early
+    // from the socket-availability check, the old channel would be
+    // destroyed while brpcCommonStub_ still points to it — a use-after-
+    // free in subsequent Disconnect() / RegisterClient calls (issue #785).
+    auto newChannel = BrpcChannelFactory::Create(cfg);
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        newChannel != nullptr, StatusCode::K_RPC_UNAVAILABLE,
+        FormatString("Failed to init brpc channel to %s for WorkerService", brpcAddr.ToString()));
+    // brpc Channel::Init() is non-blocking — health check runs periodically.
+    // Wait for the TCP connection to establish before returning. If the
+    // socket is still not available within the retry window, fail Connect()
+    // explicitly: otherwise the subsequent RegisterClient RPC fails and
+    // leaves the client in INIT_FAILED, surfaced as a deferred "Not ready"
+    // by IsClientReady() seconds later (issue #785).
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(WaitForBrpcSocketAvailable(brpcAddr), StatusCode::K_RPC_UNAVAILABLE,
+        FormatString("brpc socket not available to %s for WorkerService", brpcAddr.ToString()));
+    brpcChannel_ = std::move(newChannel);
+    // The stub default follows the request budget. Initialization control RPCs explicitly
+    // override it, while other RPCs either use this default or set their own timeout.
+    brpcCommonStub_ = std::make_unique<WorkerService_BrpcGenericStub>(brpcChannel_.get(), requestTimeoutMs_);
+
+    bool isConnectSuccess = false;
+    int32_t serverFd = INVALID_SOCKET_FD;
+    int32_t socketFd = INVALID_SOCKET_FD;
+    ShmEnableType shmEnableType = ShmEnableType::NONE;
+    bool mustUds = heartbeatType_ == HeartbeatType::SOCKET_HEARTBEAT || (reconnection && IsShmEnable());
+#ifdef WITH_TESTS
+    INJECT_POINT_NO_RETURN("ClientWorkerCommonApi.Connect.MustUds", [&mustUds] { mustUds = true; });
+#endif
+    RETURN_IF_NOT_OK(CreateConnectionForTransferShmFd(timeoutMs, isConnectSuccess, serverFd, socketFd, shmEnableType));
+    if (mustUds && !isConnectSuccess) {
+        return { StatusCode::K_RPC_UNAVAILABLE,
+                 "[SHM_FD_TRANSFER_FAILED] Can not create connection to worker for shm fd transfer." };
+    }
+
+    if (isConnectSuccess) {
+        LOG(INFO) << "Client and worker support transfer data through shared memory and the fd send over "
+                  << ShmEnableTypeName(shmEnableType) << ", socketFd: " << socketFd << ", serverFd: " << serverFd;
+    }
+
+    CloseSocketFd();
+
+    shmEnableType_ = isUseStandbyWorker_ ? ShmEnableType::NONE : shmEnableType;
+    socketFd_ = socketFd;
+    if (isConnectSuccess) {
+        heartbeatType_ = heartbeatType_ == HeartbeatType::NO_HEARTBEAT ? HeartbeatType::RPC_HEARTBEAT : heartbeatType_;
+    }
+    req.set_server_fd(serverFd);
+    RETURN_IF_NOT_OK(RegisterClient(req, timeoutMs, stateTimeoutMs));
+    LOG(INFO) << FormatString("Register client to worker through the %s successfully, client id: %s",
+                              ShmEnableTypeName(shmEnableType_), clientId_);
+    return Status::OK();
+}
+
+bool ClientWorkerRemoteCommonApi::PrepareShmTransferEndpoint(const GetSocketPathRspPb &reply, std::string &endpointStr,
+                                                             ShmEnableType &shmEnableType)
+{
+    uint32_t shmWorkerPort = reply.shm_worker_port();
+    if (shmWorkerPort > 0) {
+        endpointStr = FormatString("tcp://%s:%d", hostPort_.Host(), shmWorkerPort);
+        shmEnableType = ShmEnableType::SCMTCP;
+        return true;
+    }
+
+    if (!reply.path().empty()) {
+        endpointStr = FormatString("ipc://%s", reply.path());
+        shmEnableType = ShmEnableType::UDS;
+        return true;
+    }
+
+    shmEnableType = ShmEnableType::NONE;
+    LOG(INFO) << "Both the uds socket path and shm_worker_port is empty, cannot transfer data through shm between "
+                 "client and worker.";
+    return false;
+}
+
+Status ClientWorkerRemoteCommonApi::CreateHandShakeFunc(UnixSockFd &fd, const std::string &endpoint, int32_t &serverFd)
+{
+    LOG(INFO) << FormatString("Try connect worker for shm fd transfer, endpoint: %s", endpoint);
+    RETURN_IF_NOT_OK(fd.Connect(endpoint));
+    uint32_t tmpServerFd;
+    // Get the server side fd and add this to the RegisterClientReqPb
+    RETURN_IF_NOT_OK(fd.SetTimeout(STUB_FRONTEND_TIMEOUT));
+    RETURN_IF_NOT_OK(fd.Recv32(tmpServerFd, false));
+#ifdef WITH_TESTS
+    INJECT_POINT("ClientWorkerCommonApi.CreateHandShakeFunc");
+#endif
+    CHECK_FAIL_RETURN_STATUS(tmpServerFd <= INT32_MAX, K_RUNTIME_ERROR, "Server fd exceed range of int32_t");
+    serverFd = static_cast<int32_t>(tmpServerFd);  // The FD sent by the worker is of the int type.
+    if (shmWorkerPort_ > 0) {
+        // check the client and worker in the same node.
+        std::vector<int> clientFds;
+        uint64_t requestId;
+        RETURN_IF_NOT_OK_APPEND_MSG(SockRecvFd(fd.GetFd(), true, clientFds, requestId), "Recv fd failed");
+        // after check connection, direct close the received fds.
+        for (int fd : clientFds) {
+            RETRY_ON_EINTR(close(fd));
+        }
+    }
+    LOG(INFO) << FormatString("Connects to local server %s successfully. Client fd %d. Server fd %d.", endpoint,
+                              fd.GetFd(), serverFd);
+    // Change the timeout back to the default.
+    return fd.SetTimeout(0);
+}
+
+Status ClientWorkerRemoteCommonApi::CreateConnectionForTransferShmFd(int32_t timeoutMs, bool &isConnectSuccess,
+                                                                     int32_t &serverFd, int32_t &socketFd,
+                                                                     ShmEnableType &shmEnableType)
+{
+    Timer timer(timeoutMs);
+    GetSocketPathRspPb reply;
+    RETURN_IF_NOT_OK(FetchSocketPath(timer.GetRemainingTimeMs(), reply));
+
+    isConnectSuccess = false;
+    shmEnableType = ShmEnableType::NONE;
+
+    std::string endpointStr;
+    // Determine how to reach the worker for shared memory transfer.
+    if (!PrepareShmTransferEndpoint(reply, endpointStr, shmEnableType)) {
+        return Status::OK();
+    }
+
+    shmWorkerPort_ = reply.shm_worker_port();
+    return HandShakeConnect(timer.GetRemainingTimeMs(), endpointStr, shmEnableType, isConnectSuccess, serverFd,
+                            socketFd);
+}
+
+Status ClientWorkerRemoteCommonApi::FetchSocketPath(int64_t remainingMs, GetSocketPathRspPb &reply)
+{
+    GetSocketPathReqPb req;
+    RETURN_IF_NOT_OK(SetToken(req));
+    req.set_tenant_id(tenantId_);
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+    // This control RPC belongs to initialization. The aggregate retry budget and per-call cap
+    // therefore come from the current connection attempt, not the business request timeout.
+    auto rc = RetryOnError(
+        remainingMs,
+        [this, &req, &reply](int32_t realRpcTimeout) {
+            INJECT_POINT("client.get_sock.fail");
+            RpcOptions opts;
+            opts.SetTimeout(realRpcTimeout);
+            return brpcCommonStub_->GetSocketPath(opts, req, reply);
+        },
+        []() { return Status::OK(); },
+        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
+          StatusCode::K_RPC_UNAVAILABLE },
+        CalculateSingleRpcTimeout(static_cast<int32_t>(remainingMs)));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Get socket path failed.");
+    return Status::OK();
+}
+
+Status ClientWorkerRemoteCommonApi::HandShakeConnect(int64_t remainingMs, const std::string &endpointStr,
+                                                     ShmEnableType &shmEnableType, bool &isConnectSuccess,
+                                                     int32_t &serverFd, int32_t &socketFd)
+{
+    UnixSockFd sock(RPC_NO_FILE_FD, shmWorkerPort_ > 0);
+    auto func = [this, &sock, &endpointStr, &serverFd](int32_t) {
+        Status status = CreateHandShakeFunc(sock, endpointStr, serverFd);
+        if (status.IsError()) {
+            LOG(WARNING) << FormatString(
+                "Client can not connect to server for shm fd transfer within allowed time (%dms). Socket path: "
+                "%s, Detail: %s",
+                STUB_FRONTEND_TIMEOUT, endpointStr, status.GetMsg());
+            sock.Close();
+        }
+        return status;
+    };
+    auto rc = RetryOnError(remainingMs, func, [] { return Status::OK(); }, { StatusCode::K_TRY_AGAIN });
+    if (rc.IsOk()) {
+        isConnectSuccess = true;
+        socketFd = sock.GetFd();
+    } else {
+        LOG(INFO) << "Failed connect to local worker via " << ShmEnableTypeName(shmEnableType)
+                  << ", client and worker maybe not in the same node, falling back to TCP";
+        shmEnableType = ShmEnableType::NONE;
+        shmWorkerPort_ = 0;
+    }
+    return Status::OK();
+}
+
+void ClientWorkerRemoteCommonApi::SaveStandbyWorker(
+    const std::string standbyWorker, const ::google::protobuf::RepeatedPtrField<std::string> &availableWorkers)
+{
+    if (!enableCrossNodeConnection_) {
+        return;
+    }
+    std::lock_guard<SharedMutex> l(standbyWorkerMutex_);
+    standbyWorkerAddrs_.clear();
+    for (const auto &addr : availableWorkers) {
+        HostPort workerAddr;
+        if (workerAddr.ParseString(addr).IsError()) {
+            VLOG(HEARTBEAT_LEVEL) << FormatString("Standby worker address %s is invalid.", addr);
+            continue;
+        }
+        (void)standbyWorkerAddrs_.emplace(workerAddr);
+    }
+    if (!standbyWorker.empty()) {
+        HostPort workerAddr;
+        if (workerAddr.ParseString(standbyWorker).IsOk()) {
+            (void)standbyWorkerAddrs_.emplace(workerAddr);
+        } else {
+            VLOG(HEARTBEAT_LEVEL) << FormatString("Standby worker address %s is invalid.", standbyWorker);
+        }
+    }
+}
+
+std::vector<HostPort> ClientWorkerRemoteCommonApi::GetStandbyWorkers()
+{
+    std::vector<HostPort> workers;
+    {
+        std::shared_lock<SharedMutex> l(standbyWorkerMutex_);
+        for (const auto &addr : standbyWorkerAddrs_) {
+            workers.emplace_back(addr);
+        }
+    }
+    static std::mt19937 gen(std::chrono::system_clock::now().time_since_epoch().count());
+    std::shuffle(workers.begin(), workers.end(), gen);
+    return workers;
+}
+
+void ClientWorkerRemoteCommonApi::ProcessRemoteHeartbeatSummary(const HeartbeatRspPb &rsp, bool &workerReboot)
+{
+    workerReboot = !workerStartId_.empty() && rsp.worker_start_id() != workerStartId_;
+    if (workerReboot) {
+        storeNotifyReboot_ = true;
+        return;
+    }
+    ConsumeHeartbeatUbHealthSummary(rsp, "Ignore invalid remote Worker UB health summary");
+}
+
+Status ClientWorkerRemoteCommonApi::SendHeartbeat(bool &workerReboot, bool &clientRemoved, int64_t remainTimeMs,
+                                                  bool &isWorkerVoluntaryScaleDown,
+                                                  const std::vector<int64_t> &releasedFds,
+                                                  std::vector<int64_t> &expiredWorkerFds)
+{
+    HeartbeatReqPb req;
+    HeartbeatRspPb rsp;
+    req.set_client_id(clientId_);
+    req.set_removable(removable_.load(std::memory_order_relaxed));
+    RETURN_IF_NOT_OK(SetToken(req));
+    *req.mutable_released_worker_fds() = { releasedFds.begin(), releasedFds.end() };
+
+    RpcOptions opts;
+    //  If the value is small, the worker restart scenario can be quickly detected.
+    if (remainTimeMs < heartBeatTimeoutMs_ && remainTimeMs > 0) {
+        opts.SetTimeout(remainTimeMs);
+    } else {
+        opts.SetTimeout(heartBeatTimeoutMs_);
+    }
+#ifdef WITH_TESTS
+    INJECT_POINT("ClientWorkerCommonApi.SendHeartbeat.timeoutMs", [&opts](int time) {
+        opts.SetTimeout(time);
+        return Status::OK();
+    });
+#endif
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+    Status status = brpcCommonStub_->Heartbeat(opts, req, rsp);
+    workerReboot = false;
+    clientRemoved = false;
+    isWorkerVoluntaryScaleDown = false;
+    if (status.IsOk()) {
+        ProcessRemoteHeartbeatSummary(rsp, workerReboot);
+        clientRemoved = rsp.client_removed();
+        isWorkerVoluntaryScaleDown = rsp.is_voluntary_scale_down();
+        SaveStandbyWorker(rsp.standby_worker(), rsp.available_workers());
+        expiredWorkerFds = { rsp.expired_worker_fds().begin(), rsp.expired_worker_fds().end() };
+        SetHealthy(!rsp.unhealthy());
+        if (rsp.has_log_sample_config()) {
+            MaybeApplyLogSampleConfig(rsp.log_sample_config(), "remote worker heartbeat");
+        }
+    }
+    return status;
+}
+
+void ClientWorkerRemoteCommonApi::ConstructDecShmUnit(const RegisterClientRspPb &rsp)
+{
+    if (IsShmEnable()) {
+        decShmUnit_ = std::make_shared<ShmUnitInfo>();
+        decShmUnit_->fd = rsp.store_fd();
+        decShmUnit_->mmapSize = rsp.mmap_size();
+        decShmUnit_->offset = static_cast<ptrdiff_t>(rsp.offset());
+        decShmUnit_->id = ShmKey::Intern(rsp.shm_id());
+    }
+}
+
+void ClientWorkerRemoteCommonApi::ConstructPipelineShmUnit(const RegisterClientRspPb &rsp)
+{
+    if (!IsShmEnable())
+        return;
+    auto &info = rsp.pipeline_queue_info();
+    if (info.shm_fd() == -1)
+        return;
+    pipelineMsgShmUnit_ = std::make_shared<ShmUnitInfo>();
+    pipelineMsgShmUnit_->fd = info.shm_fd();
+    pipelineMsgShmUnit_->mmapSize = info.mmap_size();
+    pipelineMsgShmUnit_->offset = static_cast<ptrdiff_t>(info.offset());
+    pipelineMsgShmUnit_->id = ShmKey::Intern(info.shm_id());
+}
+
+void ClientWorkerRemoteCommonApi::ConstructPipelineDataShmUnits(const RegisterClientRspPb &rsp)
+{
+    pipelineDataShmUnits_.clear();
+    if (!IsShmEnable()) {
+        return;
+    }
+    pipelineDataShmUnits_.reserve(rsp.pipeline_data_shm_infos_size());
+    for (const auto &info : rsp.pipeline_data_shm_infos()) {
+        if (info.shm_fd() <= 0 || info.mmap_size() == 0) {
+            continue;
+        }
+        auto shmUnit = std::make_shared<ShmUnitInfo>(info.shm_fd(), info.mmap_size());
+        shmUnit->offset = 0;
+        shmUnit->id = ShmKey::Intern("");  // not must
+        pipelineDataShmUnits_.emplace_back(std::move(shmUnit));
+    }
+    LOG(INFO) << PIPLN_LOG_PREFIX "RegisterClient received " << pipelineDataShmUnits_.size()
+              << " shm fds for cudaHostRegister";
+}
+
+void ClientWorkerRemoteCommonApi::CloseSocketFd()
+{
+    if (socketFd_ == INVALID_SOCKET_FD) {
+        return;
+    }
+    int fd = socketFd_;
+    int ret = shutdown(fd, SHUT_RDWR);
+    VLOG(1) << FormatString("shutdown socket fd:%d, ret: %d ", fd, ret);
+    if (ret == -1) {
+        LOG(ERROR) << "Close the old socket fd failed, fd = " << fd << " errno = " << errno;
+    }
+    RETRY_ON_EINTR(close(fd));
+#ifdef WITH_TESTS
+    INJECT_POINT("client.CloseSocketFd",
+                 [](int delayMs) { std::this_thread::sleep_for(std::chrono::milliseconds(delayMs)); });
+#endif
+    socketFd_ = INVALID_SOCKET_FD;
+}
+
+Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int32_t timeoutMs,
+                                                   int32_t stateTimeoutMs)
+{
+    int32_t registerStateTimeoutMs = stateTimeoutMs > 0 ? stateTimeoutMs : timeoutMs;
+    RETURN_IF_NOT_OK(SetToken(req));
+    req.set_version(DATASYSTEM_VERSION);
+    req.set_git_hash(GetGitHash());
+    req.set_heartbeat_enabled(heartbeatType_ != HeartbeatType::NO_HEARTBEAT);
+    req.set_socket_heartbeat(newFlowShm_);
+    req.set_shm_enabled(IsShmEnable());
+    req.set_tenant_id(tenantId_);
+    req.set_enable_cross_node(enableCrossNodeConnection_);
+    req.set_pod_name(Logging::PodName());
+    req.set_support_multi_shm_ref_count(true);
+    req.set_device_id(deviceId_);
+#ifdef WITH_TESTS
+    INJECT_POINT("client.RegisterClient.multi_shm_ref_count", [&req](bool multiShmRefCount) {
+        req.set_support_multi_shm_ref_count(multiShmRefCount);
+        return Status::OK();
+    });
+#endif
+    req.set_compatibility_version(CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString());
+    RegisterClientRspPb rsp;
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+    LOG(INFO) << "Start to send rpc to register client to worker, shm enable: " << IsShmEnable()
+              << ", enable cross node: " << enableCrossNodeConnection_ << ", tenant id: " << tenantId_
+              << ", auth: " << signature_->ToString()
+              << ", client support multi shm ref count:" << req.support_multi_shm_ref_count();
+    auto rc = RetryOnError(
+        timeoutMs,
+        [this, &req, &rsp](int32_t realRpcTimeout) {
+            INJECT_POINT("client.register.fail");
+            RpcOptions opts;
+            opts.SetTimeout(realRpcTimeout);
+            return brpcCommonStub_->RegisterClient(opts, req, rsp);
+        },
+        []() { return Status::OK(); },
+        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
+          StatusCode::K_RPC_UNAVAILABLE },
+        CalculateSingleRpcTimeout(timeoutMs));
+    if (rc.GetCode() == K_SERVER_FD_CLOSED) {
+        auto msg = rc.GetMsg();
+        rc = Status(K_TRY_AGAIN, std::move(msg));
+    }
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Register client failed");
+    VLOG(1) << "Register response: " << rsp.DebugString();
+    PostRegisterClient(registerStateTimeoutMs, rsp);
+    return Status::OK();
+}
+
+Status ClientWorkerRemoteCommonApi::UpdateToken(SensitiveValue &token)
+{
+    LOG(INFO) << "update token for client, clientId: " << clientId_;
+    CHECK_FAIL_RETURN_STATUS(!token.Empty(), K_INVALID, "token is empty");
+    clientAccessToken_->UpdateToken(token);
+    return Status::OK();
+}
+
+Status ClientWorkerRemoteCommonApi::UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey)
+{
+    std::hash<std::string> hasher;
+    LOG(INFO) << FormatString("[%s] update ak/sk (ak hash: %s, sk hash: %s)", tenantId_, hasher(accessKey),
+                              GetTruncatedStr(std::to_string(hasher(secretKey.GetData()))));
+    CHECK_FAIL_RETURN_STATUS(!accessKey.empty(), K_INVALID, "accessKey is empty");
+    CHECK_FAIL_RETURN_STATUS(!secretKey.Empty(), K_INVALID, "secretKey is empty");
+    return signature_->SetClientAkSk(accessKey, secretKey);
+}
+
+void ClientWorkerRemoteCommonApi::RecordUrmaDataPlaneResult(bool success)
+{
+    UrmaSuccessRateTracker::WindowStats windowStats;
+    if (!urmaSuccessRateTracker_.RecordUrmaResult(success, clientDeadTimeoutMs_, GetSteadyClockTimeStampMs(),
+                                                  &windowStats)) {
+        if (windowStats.totalCount > 0) {
+            VLOG(1) << FormatUrmaSwitchWindowStats(clientId_, hostPort_.ToString(), urmaSuccessRateTracker_,
+                                                   windowStats, clientDeadTimeoutMs_)
+                    << ", switch trigger: false";
+        }
+        return;
+    }
+    LOG(INFO) << FormatUrmaSwitchWindowStats(clientId_, hostPort_.ToString(), urmaSuccessRateTracker_, windowStats,
+                                             clientDeadTimeoutMs_)
+              << ", switch trigger: true";
+    if (urmaDataPlaneFailureCallback_ == nullptr || !urmaDataPlaneFailureCallback_()) {
+        LOG(ERROR) << "[Switch] Submit URMA data-plane failure worker switch failed, client id: " << clientId_
+                   << ", worker address: " << hostPort_.ToString();
+        urmaSuccessRateTracker_.FinishSwitchAttempt(false, GetSteadyClockTimeStampMs());
+    }
+}
+
+void ClientWorkerRemoteCommonApi::FinishUrmaDataPlaneSwitchAttempt(bool success)
+{
+    urmaSuccessRateTracker_.FinishSwitchAttempt(success, GetSteadyClockTimeStampMs());
+}
+
+void ClientWorkerRemoteCommonApi::SetUrmaDataPlaneFailureCallback(std::function<bool()> callback)
+{
+    urmaDataPlaneFailureCallback_ = std::move(callback);
+}
+
+Status ClientWorkerRemoteCommonApi::Disconnect(bool isDestruct)
+{
+    (void)isDestruct;
+    CHECK_FAIL_RETURN_STATUS(brpcCommonStub_ != nullptr, StatusCode::K_OK,
+                             "No active connection. Do not send disconnect notice.");
+    LOG(INFO) << FormatString("Client %s sends exit notice to worker.", clientId_);
+    DisconnectClientReqPb req;
+    DisconnectClientRspPb rsp;
+    req.set_client_id(clientId_);
+    RETURN_IF_NOT_OK(SetToken(req));
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+    // brpc connection teardown for DisconnectClient is a lightweight 1 s handshake RPC.
+    static constexpr int32_t BRPC_DISCONNECT_RPC_TIMEOUT_MS = 1000;           // 1s, brpc lightweight handshake
+    int rpcTimeoutMs = BRPC_DISCONNECT_RPC_TIMEOUT_MS;
+#ifdef WITH_TESTS
+    INJECT_POINT("ClientWorkerCommonApi.Disconnect.ShutdownQuickily", [&rpcTimeoutMs](int time) {
+        rpcTimeoutMs = time;
+        return Status::OK();
+    });
+#endif
+    RpcOptions opts;
+    opts.SetTimeout(rpcTimeoutMs);
+    RETURN_IF_NOT_OK(brpcCommonStub_->DisconnectClient(opts, req, rsp));
+    return Status::OK();
+}
+
+void ClientWorkerRemoteCommonApi::RecvFdAfterNotify(const std::vector<int> &workerFds, uint64_t requestId,
+                                                    const Timer &timer, std::vector<int> &clientFds)
+{
+    bool isRetry = false;
+    do {
+        if (isRetry) {
+            recvClientFdState_.recvPageWaitPost->Set();
+        }
+        recvClientFdState_.recvPageNotify->WaitFor(timer.GetRemainingTimeMs());
+        recvClientFdState_.recvPageNotify->Clear();
+        {
+            std::lock_guard<std::mutex> lck(recvClientFdState_.mutex);
+            auto itr = recvClientFdState_.requestId2UnmmapedClientFds.find(requestId);
+            if (itr == recvClientFdState_.requestId2UnmmapedClientFds.end()) {
+                isRetry = true;
+                continue;
+            }
+            if (itr->second.first.size() != workerFds.size()) {
+                LOG(ERROR) << "Get client fd from worker failed";
+                return;
+            }
+            clientFds = std::move(itr->second.first);
+            recvClientFdState_.requestId2UnmmapedClientFds.erase(itr);
+        }
+    } while (clientFds.empty() && timer.GetRemainingTimeMs() > 0);
+}
+
+Status ClientWorkerRemoteCommonApi::GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds,
+                                                const std::string &tenantId)
+{
+    if (!IsShmEnable() || socketFd_ == INVALID_SOCKET_FD) {
+        return { K_RUNTIME_ERROR, "Current client can not support uds, so query client fd failed." };
+    }
+#ifdef WITH_TESTS
+    PerfPoint point(PerfKey::RPC_WORKER_GET_CLIENT_FDS);
+#endif
+    GetClientFdReqPb req;
+    GetClientFdRspPb rsp;
+    req.set_client_id(clientId_);
+    auto requestId = ++recvClientFdState_.requestId;  // 0 is used for compatibility with old versions.
+    req.set_request_id(requestId);
+    for (auto workerFd : workerFds) {
+        req.add_worker_fds(static_cast<google::protobuf::int32>(workerFd));
+    }
+    recvClientFdState_.recvPageWaitPost->Set();
+
+    VLOG(1) << "Start to query page fd, socket fd: " << socketFd_
+            << ", worker fds: " << VectorToString(req.worker_fds());
+    const int32_t fdTimeoutMs = BoundFdPassingTimeoutMs(recvClientFdState_.getClientFdTimeoutMs);
+    Timer time = Timer(fdTimeoutMs);
+    RpcOptions opts;
+    opts.SetTimeout(fdTimeoutMs);
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(fdTimeoutMs));
+    if (!tenantId.empty()) {
+        req.set_tenant_id(tenantId);
+        RETURN_IF_NOT_OK(SetToken(req));
+    } else {
+        RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
+    }
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+
+    // Notice: GetClientFd should not be retried. Otherwise, Fd resources may remain or the process may be suspended.
+    Status status = brpcCommonStub_->GetClientFd(opts, req, rsp);
+#ifdef WITH_TESTS
+    INJECT_POINT("ClientWorkerCommonApi.GetClientFd.preReceive");
+#endif
+    if (status.IsOk()) {
+        RecvFdAfterNotify(workerFds, requestId, time, clientFds);
+    }
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!clientFds.empty(), K_RUNTIME_ERROR,
+                                         FormatString("Receive fd[%s] from %d failed, detail: %s",
+                                                      VectorToString(workerFds), socketFd_, status.ToString()));
+    VLOG(1) << FormatString("Receive fd[%s] from socket[%d] success, res: %s ", VectorToString(workerFds), socketFd_,
+                            VectorToString(clientFds));
+#ifdef WITH_TESTS
+    point.Record();
+#endif
+    return Status::OK();
+}
+
+void ClientWorkerRemoteCommonApi::PostRecvPageFd(const Status &status, uint64_t requestId,
+                                                 const std::vector<int> &pageFds)
+{
+    if (status.IsOk()) {
+        {
+            std::lock_guard<std::mutex> lck(recvClientFdState_.mutex);
+            recvClientFdState_.requestId2UnmmapedClientFds.emplace(
+                (requestId == 0 ? recvClientFdState_.requestId.load() : requestId),
+                std::make_pair(pageFds, GetSteadyClockTimeStampMs()));
+        }
+        LOG_IF(WARNING, pageFds.empty()) << "The received fd list is empty, may exceed the max open fd limit.";
+    } else {
+        LOG(WARNING) << "recv page fd from socketFd_ " << socketFd_ << " failed, status:" << status.ToString();
+    }
+
+#ifdef WITH_TESTS
+    INJECT_POINT("ClientWorkerCommonApi.RecvPageFd",
+                 [](int32_t time) { std::this_thread::sleep_for(std::chrono::milliseconds(time)); });
+#endif
+    VLOG(1) << "Finish to receive page fds: " << VectorToString(pageFds);
+}
+
+void ClientWorkerRemoteCommonApi::CloseExpiredFd()
+{
+    std::lock_guard<std::mutex> lck(recvClientFdState_.mutex);
+    for (auto itr = recvClientFdState_.requestId2UnmmapedClientFds.begin();
+         itr != recvClientFdState_.requestId2UnmmapedClientFds.end();) {
+        if (static_cast<uint64_t>(GetSteadyClockTimeStampMs()) - itr->second.second
+            > static_cast<uint64_t>(recvClientFdState_.getClientFdTimeoutMs)) {
+            LOG(INFO) << "Close expired fds: " << VectorToString(itr->second.first);
+            for (auto fd : itr->second.first) {
+                RETRY_ON_EINTR(close(fd));
+            }
+            itr = recvClientFdState_.requestId2UnmmapedClientFds.erase(itr);
+            continue;
+        }
+        ++itr;
+    }
+}
+
+void ClientWorkerRemoteCommonApi::RecvPageFd()
+{
+    while (!recvClientFdState_.stopRecvPageFd) {
+        VLOG(1) << "Start to wait to receive page fd";
+        recvClientFdState_.recvPageWaitPost->Wait();
+        recvClientFdState_.recvPageWaitPost->Clear();
+#ifdef WITH_TESTS
+        INJECT_POINT("client.RecvPageFd", [this](int sleepMs) {
+            if (recvClientFdState_.stopRecvPageFd) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+            }
+        });
+#endif
+        if (recvClientFdState_.stopRecvPageFd) {
+            break;
+        }
+        std::vector<int> pageFds;
+        VLOG(1) << "Start to receive page fd by socketFd_:" << socketFd_;
+        // Blocks and waits for worker to send fd unless the socket is disconnected.
+        std::vector<int> serverFds;
+        uint64_t requestId;
+        auto status = SockRecvFd(socketFd_, shmWorkerPort_ > 0, pageFds, requestId);
+        PostRecvPageFd(status, requestId, pageFds);
+        CloseExpiredFd();
+        recvClientFdState_.recvPageNotify->Set();
+    }
+}
+
+Status ClientWorkerRemoteCommonApi::Reconnect()
+{
+    const int32_t reconnectTimeout = connectTimeoutMs_;
+    LOG(INFO) << "Reconnect starting, timeout: " << reconnectTimeout << " ms";
+    RegisterClientReqPb req;
+    RETURN_IF_NOT_OK(Connect(req, reconnectTimeout, true));
+    RETURN_IF_NOT_OK(TryFastTransportAfterHeartbeat());
+    LOG(INFO) << "Reconnect success! New unix domain socket: " << socketFd_;
+    return Status::OK();
+}
+
+void ClientWorkerRemoteCommonApi::ApplyClientUbRegistrationConfig(const RegisterClientRspPb &rsp)
+{
+    // UB capability is process-wide, while fast_transport_mode is endpoint-scoped. A same-host endpoint may use
+    // SHM and still needs to pass the worker's NUMA policy to a client that can later access cross-node workers.
+    if (!rsp.ub_runtime_enabled()) {
+        return;
+    }
+    SetClientUbNumaConfig(rsp.ub_numa_affinity_enabled(), rsp.ub_numa_rr_type(), rsp.ub_numa_src_chip_policy(),
+                          rsp.ub_numa_inflight_wr_diff_threshold(), hostPort_.ToString());
+    // Do this before ObjectClientImpl can initialize its transport arena. Affinity must already be visible when
+    // Arena::Init decides whether to build the NUMA range table. Pure SHM clients do not request UB runtime.
+    if (ShouldRequestClientUrmaRuntime(rsp.ub_runtime_enabled(), mayAccessNonBoundWorker_,
+                                       rsp.fast_transport_mode() == FastTransportMode::UB)) {
+        SetClientFastTransportMode(FastTransportMode::UB, fastTransportMemSize_);
+    }
+}
+
+void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const RegisterClientRspPb &rsp)
+{
+    enableHugeTlb_ = rsp.enable_huge_tlb();
+    UpdateMemoryAlignment(rsp);
+    clientId_ = rsp.client_id();
+    workerStartId_ = rsp.worker_start_id();
+    lockId_ = rsp.lock_id();
+    uint32_t workerVersion = workerVersion_.fetch_add(1, std::memory_order_relaxed) + 1;
+    shmThreshold_ = rsp.shm_threshold();
+    workerId_ = rsp.worker_uuid();
+    workerCompatibilityVersion_ =
+        ParseWorkerCompatibilityVersionOrCurrent(rsp.worker_compatibility_version(), "remote worker register");
+    workerEnableP2Ptransfer_ = rsp.enable_p2p_transfer();
+    SetHealthy(!rsp.unhealthy());
+    workerSupportMultiShmRefCount_ = rsp.support_multi_shm_ref_count();
+    SetHeartbeatProperties(timeoutMs, rsp);
+    SaveStandbyWorker(rsp.standby_worker(), rsp.available_workers());
+    ConstructDecShmUnit(rsp);
+    LOG(INFO) << "[URMA_INIT] post_register addr=" << hostPort_.ToString() << " clientId=" << clientId_
+              << " ver=" << workerVersion << " shm=" << IsShmEnable() << " ft=" << rsp.fast_transport_mode()
+              << " ubRuntime=" << rsp.ub_runtime_enabled();
+    ApplyClientUbRegistrationConfig(rsp);
+    ConstructPipelineShmUnit(rsp);
+    ConstructPipelineDataShmUnits(rsp);
+    pendingFtHandshake_ = FtHandshakeContext{ timeoutMs, workerVersion, rsp };
+    if (rsp.has_log_sample_config()) {
+        MaybeApplyLogSampleConfig(rsp.log_sample_config(), "remote worker register");
+    }
+}
+
+Status ClientWorkerRemoteCommonApi::TryFastTransportAfterHeartbeat()
+{
+    if (!pendingFtHandshake_.has_value()) {
+        return Status::OK();
+    }
+    auto ctx = std::move(*pendingFtHandshake_);
+    pendingFtHandshake_.reset();
+    LOG(INFO) << "[URMA_INIT] try_ft addr=" << hostPort_.ToString() << " clientId=" << clientId_
+              << " ver=" << ctx.workerVersion << " shm=" << IsShmEnable() << " ft=" << ctx.rsp.fast_transport_mode();
+    auto rc = FastTransportHandshake(ctx.timeoutMs, ctx.workerVersion);
+    if (rc.IsError()) {
+        LOG(ERROR) << "Fast transport handshake failed for worker " << hostPort_.ToString()
+                   << ". Detail: " << rc.ToString();
+        return rc;
+    }
+    return Status::OK();
+}
+
+Status ClientWorkerRemoteCommonApi::FastTransportHandshake(int32_t timeoutMs, uint32_t workerVersion)
+{
+    (void)timeoutMs;
+    (void)workerVersion;
+    // PostRegisterClient has already requested UB runtime when either this endpoint uses UB or this client may
+    // connect cross-node. Keeping the request there is required because transport arenas can be initialized before
+    // this deferred handshake when local cache is disabled.
+    Status initRc = InitializeFastTransportManager();
+    if (initRc.IsError()) {
+        if (!IsShmEnable()) {
+            return initRc;
+        }
+        LOG(WARNING) << "Optional client UB runtime initialization failed for SHM endpoint "
+                     << hostPort_.ToString() << "; continue with SHM/TCP. Detail: " << initRc.ToString();
+        return Status::OK();
+    }
+
+    // This endpoint already uses SHM. Keep the process URMA capability for transport-layer access to other workers.
+    if (IsShmEnable()) {
+        return Status::OK();
+    }
+
+#ifdef USE_URMA
+    if (UrmaManager::IsUrmaEnabled()) {
+        auto traceId = Trace::Instance().GetTraceID();
+        auto future = urmaHandshakePool_->Submit([this, workerVersion, traceId]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+            return AsyncFirstUrmaHandshake(workerVersion);
+        });
+        int64_t waitMs = std::max<int64_t>(timeoutMs, MIN_WAIT_MS);
+
+        if (future.wait_for(std::chrono::milliseconds(waitMs)) == std::future_status::ready) {
+            Status status = future.get();
+            if (status.IsError()) {
+                LOG(WARNING) << "URMA handshake failed in register path within wait time " << waitMs
+                             << "ms, fall back to TCP/IP communication. Detail: " << status.ToString();
+            }
+        } else {
+            LOG(WARNING) << "URMA handshake exceeded register wait time " << waitMs
+                         << "ms and will continue in background. Heartbeat will start first for worker "
+                         << hostPort_.ToString() << ", clientId: " << clientId_;
+        }
+    }
+#endif
+    return Status::OK();
+}
+
+Status ClientWorkerRemoteCommonApi::AsyncFirstUrmaHandshake(uint32_t workerVersion)
+{
+#ifdef WITH_TESTS
+    INJECT_POINT("client.urma_first_handshake_delay");
+#endif
+    LOG(INFO) << "[URMA_INIT] first_hs addr=" << hostPort_.ToString() << " clientId=" << clientId_
+              << " ver=" << workerVersion;
+    GetRequestContext()->reqTimeoutDuration.InitWithPositiveTime(ClientGetRequestTimeout(requestTimeoutMs_));
+    Status status = TryUrmaHandshake();
+    uint32_t currentWorkerVersion = workerVersion_.load(std::memory_order_relaxed);
+    if (workerVersion != currentWorkerVersion) {
+        LOG(INFO) << "Ignore stale URMA first handshake result for worker " << hostPort_.ToString()
+                  << ", clientId: " << clientId_ << ", stale version: " << workerVersion
+                  << ", current version: " << currentWorkerVersion;
+        return Status::OK();
+    }
+    if (status.IsError()) {
+        ScheduleUrmaHandshakeRetry(workerVersion);
+    }
+    return status;
+}
+
+Status ClientWorkerRemoteCommonApi::TryUrmaHandshake()
+{
+    PerfPoint perfPoint(PerfKey::CLIENT_URMA_HANDSHAKE);
+    LOG(INFO) << "[URMA_INIT] try_hs addr=" << hostPort_.ToString() << " clientId=" << clientId_;
+    // Perform handshake to set up jfr and segments.
+    using TbbTransportStubTable =
+        tbb::concurrent_hash_map<std::string, std::shared_ptr<datasystem::object_cache::WorkerRemoteWorkerTransApi>>;
+    static TbbTransportStubTable tarnsportApiTable;
+    std::string endPoint = hostPort_.ToString();
+    TbbTransportStubTable::const_accessor constAccApi;
+    while (!tarnsportApiTable.find(constAccApi, endPoint)) {
+        TbbTransportStubTable::accessor acc;
+        if (tarnsportApiTable.insert(acc, endPoint)) {
+            std::shared_ptr<datasystem::object_cache::WorkerRemoteWorkerTransApi> transportApi =
+                std::make_shared<datasystem::object_cache::WorkerRemoteWorkerTransApi>(hostPort_, clientId_);
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(transportApi->Init(), "Create transport api faild.");
+            acc->second = std::move(transportApi);
+        }
+    }
+    UrmaHandshakeRspPb handshakeRsp;
+    RETURN_IF_NOT_OK(constAccApi->second->ExecOnceParrallelExchange(handshakeRsp));
+    return Status::OK();
+}
+
+void ClientWorkerRemoteCommonApi::ScheduleUrmaHandshakeRetry(uint32_t workerVersion)
+{
+    auto traceId = Trace::Instance().GetTraceID();
+    urmaHandshakeRetryPool_->Execute([this, workerVersion, traceId]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+        UrmaHandshakeRetryLoop(workerVersion);
+    });
+}
+
+void ClientWorkerRemoteCommonApi::UrmaHandshakeRetryLoop(uint32_t workerVersion)
+{
+    constexpr int maxRetryIntervalMs = 8000;
+    constexpr int retryCheckIntervalMs = 100;
+    constexpr int64_t rpcTimeout = 15000;
+    int nextRetryTimeMs = retryCheckIntervalMs;
+    Timer timer;
+    while (!stopUrmaHandshakeRetry_.load(std::memory_order_relaxed)) {
+        uint32_t currentWorkerVersion = workerVersion_.load(std::memory_order_relaxed);
+        if (workerVersion != currentWorkerVersion) {
+            LOG(INFO) << "Stop stale URMA handshake retry for worker " << hostPort_.ToString()
+                      << ", clientId: " << clientId_ << ", stale version: " << workerVersion
+                      << ", current version: " << currentWorkerVersion;
+            break;
+        }
+        INJECT_POINT_NO_RETURN("client.urma_handshake_retry");
+        if (timer.ElapsedMilliSecond() < nextRetryTimeMs) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(retryCheckIntervalMs));
+            continue;
+        }
+        timer.Reset();
+        GetRequestContext()->reqTimeoutDuration.InitWithPositiveTime(rpcTimeout);
+        Status status = TryUrmaHandshake();
+        currentWorkerVersion = workerVersion_.load(std::memory_order_relaxed);
+        if (workerVersion != currentWorkerVersion) {
+            LOG(INFO) << "Ignore stale URMA handshake retry result for worker " << hostPort_.ToString()
+                      << ", clientId: " << clientId_ << ", stale version: " << workerVersion
+                      << ", current version: " << currentWorkerVersion;
+            break;
+        }
+        if (LogUrmaHandshakeRetryResult(status)) {
+            nextRetryTimeMs = std::min<int>(nextRetryTimeMs << 1, maxRetryIntervalMs);
+            LOG(WARNING) << "URMA handshake async retry failed for worker " << hostPort_.ToString()
+                         << ", clientId: " << clientId_ << ", retry after " << nextRetryTimeMs
+                         << "ms. Detail: " << status.ToString();
+            continue;
+        }
+        break;
+    }
+}
+
+bool ClientWorkerRemoteCommonApi::LogUrmaHandshakeRetryResult(const Status &status)
+{
+    StatusCode code = status.GetCode();
+    if (code == StatusCode::K_TRY_AGAIN || code == StatusCode::K_URMA_CONNECT_FAILED
+        || IsRetryableRpcError(status)) {
+        return true;  // retryable: caller continues the backoff loop
+    }
+    if (IsNonRetryableRpcError(status)) {
+        LOG(WARNING) << "URMA handshake async retry stopped on non-retryable failure for worker "
+                     << hostPort_.ToString() << ", clientId: " << clientId_
+                     << ". Detail: " << status.ToString();
+    } else if (status.IsOk()) {
+        LOG(INFO) << "URMA handshake retry succeeded for worker " << hostPort_.ToString()
+                  << ", clientId: " << clientId_;
+    } else {
+        LOG(WARNING) << "URMA handshake retry failed for worker " << hostPort_.ToString()
+                     << ", clientId: " << clientId_ << ". Detail: " << status.ToString();
+    }
+    return false;
+}
+}  // namespace client
+}  // namespace datasystem

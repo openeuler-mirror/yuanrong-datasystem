@@ -19,7 +19,7 @@
 
 #include <utility>
 
-#include "datasystem/client/mmap/immap_table.h"
+#include "datasystem/client/mmap_manager/immap_table.h"
 #include "datasystem/common/object_cache/lock.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/stream_cache/cursor.h"

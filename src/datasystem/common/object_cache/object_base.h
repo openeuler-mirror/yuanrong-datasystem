@@ -28,7 +28,7 @@
 
 #include <tbb/concurrent_hash_map.h>
 
-#include "datasystem/client/mmap/immap_table_entry.h"
+#include "datasystem/client/mmap_manager/immap_table_entry.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
 #include "datasystem/common/object_cache/ireceive_buffer_owner.h"
