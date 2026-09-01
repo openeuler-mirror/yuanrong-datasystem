@@ -1,5 +1,5 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,11 +44,15 @@ namespace object_cache {
 constexpr double US_PER_MS = 1000.0;
 void ComputeDataSizes(const std::vector<StringView> &vals, std::vector<uint64_t> &sizes, uint64_t &sum);
 
+struct PipelineAsyncResource {
+    std::future<Status> rpcFuture;
+    std::promise<AsyncResult> promise;
+    PiplnRh2dParam piplnRh2dParam;
+};
+
 class BoundMode {
 public:
-    using WorkerNode = ObjectClientImpl::WorkerNode;
-    using SetRouteContext = ObjectClientImpl::SetRouteContext;
-    using SetFailureStage = ObjectClientImpl::SetFailureStage;
+    // WorkerNode/SetRouteContext/SetFailureStage come from client_mode_types.h (namespace-scope).
 
     // Behavior dependencies on the host (ObjectClientImpl) that stay outside BoundMode.
     struct HostServices {

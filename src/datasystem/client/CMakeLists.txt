@@ -20,6 +20,7 @@ list(APPEND CLIENT_SRCS
         object_cache/object_client_impl.cpp
         object_cache/worker_failover.cpp
         object_cache/bound_mode.cpp
+        object_cache/routed_mode.cpp
         object_cache/direct_receive_buffer_owner.cpp
         object_cache/client_memory_ref_table.cpp
         hetero_cache/device/client_device_object_manager.cpp

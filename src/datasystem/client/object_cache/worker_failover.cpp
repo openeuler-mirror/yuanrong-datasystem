@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <random>
+
 #include <bthread/mutex.h>
 
 #include "datasystem/client/object_cache/client_memory_ref_table.h"
@@ -241,11 +242,11 @@ Status WorkerFailover::ProcessWorkerLost(client::WorkerRecoveryReason reason)
     RETURN_IF_NOT_OK(RebuildWorkerShm());
     recovery.stage = ShmRecoveryState::Stage::IDLE;
     if (reason == client::WorkerRecoveryReason::CONNECTION_BROKEN) {
-        owner_.listenWorker_[ObjectClientImpl::LOCAL_WORKER]->SetWorkerAvailable(true);
+        owner_.listenWorker_[LOCAL_WORKER]->SetWorkerAvailable(true);
     }
     {
         std::lock_guard<std::mutex> lock(owner_.switchNodeMutex_);
-        if (owner_.currentNode_ == ObjectClientImpl::LOCAL_WORKER) {
+        if (owner_.currentNode_ == LOCAL_WORKER) {
             MarkWorkerAvailableLocked();
         }
     }
@@ -269,7 +270,7 @@ Status WorkerFailover::RegisterWorkerAfterWorkerLost(client::WorkerRecoveryReaso
             ids.emplace_back(entry.first);
         }
     }
-    auto &workerApi = owner_.workerApi_[ObjectClientImpl::LOCAL_WORKER];
+    auto &workerApi = owner_.workerApi_[LOCAL_WORKER];
     Status rc = workerApi->ReconnectWorker(ids);
     if (rc.IsError()) {
         constexpr int logInterval = 10;
@@ -283,7 +284,7 @@ Status WorkerFailover::RegisterWorkerAfterWorkerLost(client::WorkerRecoveryReaso
 
 Status WorkerFailover::RebuildWorkerShm()
 {
-    auto &workerApi = owner_.workerApi_[ObjectClientImpl::LOCAL_WORKER];
+    auto &workerApi = owner_.workerApi_[LOCAL_WORKER];
     (void)workerApi->CleanUpForDecreaseShmRefAfterWorkerLost();
     workerApi->CleanUpForPipelineRH2DQueueAfterWorkerLost();
     owner_.mmapManager_->CleanInvalidMmapTable();
@@ -312,7 +313,7 @@ Status WorkerFailover::RebuildWorkerShm()
 
 void WorkerFailover::CleanupWorkerShmAfterWorkerLost()
 {
-    auto &workerApi = owner_.workerApi_[ObjectClientImpl::LOCAL_WORKER];
+    auto &workerApi = owner_.workerApi_[LOCAL_WORKER];
     (void)workerApi->CleanUpForDecreaseShmRefAfterWorkerLost();
     (void)workerApi->CleanUpForPipelineRH2DQueueAfterWorkerLost();
     owner_.mmapManager_->CleanInvalidMmapTable();
@@ -370,22 +371,22 @@ Status WorkerFailover::ProcessStandbyWorkerLost(WorkerNode node, client::WorkerR
     return Status::OK();
 }
 
-WorkerFailover::WorkerNode WorkerFailover::GetNextWorkerNode(WorkerNode current)
+WorkerNode WorkerFailover::GetNextWorkerNode(WorkerNode current)
 {
     switch (current) {
-        case ObjectClientImpl::LOCAL_WORKER:
-        case ObjectClientImpl::STANDBY2_WORKER:
-            return ObjectClientImpl::STANDBY1_WORKER;
-        case ObjectClientImpl::STANDBY1_WORKER:
-            return ObjectClientImpl::STANDBY2_WORKER;
+        case LOCAL_WORKER:
+        case STANDBY2_WORKER:
+            return STANDBY1_WORKER;
+        case STANDBY1_WORKER:
+            return STANDBY2_WORKER;
         default:
-            return ObjectClientImpl::STANDBY1_WORKER;
+            return STANDBY1_WORKER;
     }
 }
 
 void WorkerFailover::StopStandbyWorkerListen(WorkerNode id)
 {
-    if (id == ObjectClientImpl::LOCAL_WORKER || owner_.listenWorker_[id] == nullptr) {
+    if (id == LOCAL_WORKER || owner_.listenWorker_[id] == nullptr) {
         return;
     }
     owner_.listenWorker_[id]->StopListenWorker(false);
@@ -420,18 +421,18 @@ bool WorkerFailover::SwitchWorkerNode(WorkerNode node, client::SwitchTriggerReas
     std::shared_ptr<IClientWorkerApi> nextWorkerApi;
     std::shared_ptr<client::ListenWorker> nextListenWorker;
     WorkerNode current;
-    WorkerNode next = ObjectClientImpl::LOCAL_WORKER;
+    WorkerNode next = LOCAL_WORKER;
     uint64_t switchGeneration = 0;
     bool switchBackToLocal = false;
     {
         std::lock_guard<std::mutex> lock(owner_.switchNodeMutex_);
         current = owner_.currentNode_;
-        if (current != node && node != ObjectClientImpl::LOCAL_WORKER) {
+        if (current != node && node != LOCAL_WORKER) {
             LOG(INFO) << FormatString("[Switch] Current node is %d, not %d, just ignore...", current, node);
             return true;
         }
 
-        if (current != node && node == ObjectClientImpl::LOCAL_WORKER) {
+        if (current != node && node == LOCAL_WORKER) {
             switchBackToLocal = true;
         } else {
             if (owner_.switchInProgress_) {
@@ -610,8 +611,8 @@ bool WorkerFailover::CommitStandbySwitch(WorkerNode current, WorkerNode next, ui
         // Stop the LOCAL_WORKER listener only when standby-side rediscovery can take over;
         // otherwise it is still the only recovery path.
         if (owner_.serviceDiscovery_ != nullptr && owner_.serviceDiscovery_->HasHostAffinity()
-            && owner_.listenWorker_[ObjectClientImpl::LOCAL_WORKER] != nullptr) {
-            retiredLocalListenWorker = owner_.listenWorker_[ObjectClientImpl::LOCAL_WORKER];
+            && owner_.listenWorker_[LOCAL_WORKER] != nullptr) {
+            retiredLocalListenWorker = owner_.listenWorker_[LOCAL_WORKER];
         }
         MarkWorkerAvailableLocked();
     }
@@ -730,13 +731,13 @@ WorkerFailover::StandbySwitchAttemptResult WorkerFailover::TrySwitchToLocalSameH
             return StandbySwitchAttemptResult::ABORT;
         }
         owner_.ipAddress_ = localAddress;
-        owner_.workerApi_[ObjectClientImpl::LOCAL_WORKER] = localWorkerApi;
+        owner_.workerApi_[LOCAL_WORKER] = localWorkerApi;
         ReplacePreferredLocalWorkerLocked(localMmapManager, oldLocalListener, oldMmapManager);
-        owner_.listenWorker_[ObjectClientImpl::LOCAL_WORKER] = localListenWorker;
+        owner_.listenWorker_[LOCAL_WORKER] = localListenWorker;
         owner_.clientEnableP2Ptransfer_ = localWorkerApi->workerEnableP2Ptransfer_;
         owner_.memoryRefCount_.SetSupportMultiShmRefCount(localWorkerApi->workerSupportMultiShmRefCount_);
-        owner_.currentNode_ = ObjectClientImpl::LOCAL_WORKER;
-        if (current != ObjectClientImpl::LOCAL_WORKER && owner_.listenWorker_[current] != nullptr) {
+        owner_.currentNode_ = LOCAL_WORKER;
+        if (current != LOCAL_WORKER && owner_.listenWorker_[current] != nullptr) {
             owner_.listenWorker_[current]->SetSwitched();
         }
         MarkWorkerAvailableLocked();
@@ -766,7 +767,7 @@ void WorkerFailover::ReplacePreferredLocalWorkerLocked(std::unique_ptr<client::M
                                                        std::shared_ptr<client::ListenWorker> &oldLocalListener,
                                                        std::unique_ptr<client::MmapManager> &oldMmapManager)
 {
-    oldLocalListener = std::move(owner_.listenWorker_[ObjectClientImpl::LOCAL_WORKER]);
+    oldLocalListener = std::move(owner_.listenWorker_[LOCAL_WORKER]);
     owner_.mmapManager_.swap(localMmapManager);
     oldMmapManager = std::move(localMmapManager);
 }
@@ -780,11 +781,11 @@ bool WorkerFailover::TrySwitchBackToLocalWorker()
     {
         std::lock_guard<std::mutex> lock(owner_.switchNodeMutex_);
         current = owner_.currentNode_;
-        if (current == ObjectClientImpl::LOCAL_WORKER) {
+        if (current == LOCAL_WORKER) {
             return false;
         }
-        localWorkerApi = owner_.workerApi_[ObjectClientImpl::LOCAL_WORKER];
-        localListenWorker = owner_.listenWorker_[ObjectClientImpl::LOCAL_WORKER];
+        localWorkerApi = owner_.workerApi_[LOCAL_WORKER];
+        localListenWorker = owner_.listenWorker_[LOCAL_WORKER];
         currentListenWorker = owner_.listenWorker_[current];
     }
 
@@ -798,7 +799,7 @@ bool WorkerFailover::TrySwitchBackToLocalWorker()
     if (s.IsOk() && !scaleDown && healthy) {
         {
             std::lock_guard<std::mutex> lock(owner_.switchNodeMutex_);
-            if (owner_.currentNode_ == ObjectClientImpl::LOCAL_WORKER) {
+            if (owner_.currentNode_ == LOCAL_WORKER) {
                 return true;
             }
             if (owner_.currentNode_ != current
@@ -809,7 +810,7 @@ bool WorkerFailover::TrySwitchBackToLocalWorker()
             if (currentListenWorker != nullptr) {
                 currentListenWorker->SetSwitched();
             }
-            owner_.currentNode_ = ObjectClientImpl::LOCAL_WORKER;
+            owner_.currentNode_ = LOCAL_WORKER;
             MarkWorkerAvailableLocked();
         }
         NotifySwitchToExpectedWorker(localWorkerApi->hostPort_);
@@ -832,7 +833,7 @@ bool WorkerFailover::GetPreferredLocalWorkerToRecover(WorkerNode &oldNode, HostP
 
     {
         std::lock_guard<std::mutex> lock(owner_.switchNodeMutex_);
-        if (owner_.currentNode_ == ObjectClientImpl::LOCAL_WORKER
+        if (owner_.currentNode_ == LOCAL_WORKER
         || (owner_.clientStateManager_->GetState() & (uint16_t)ClientState::EXITED)) {
             return false;
         }
@@ -872,7 +873,7 @@ Status WorkerFailover::PreparePreferredLocalWorker(const HostPort &localAddress,
                    << " failed: " << rc.ToString();
         return rc;
     }
-    ConfigureUrmaDataPlaneFailureCallback(ObjectClientImpl::LOCAL_WORKER, localWorkerApi);
+    ConfigureUrmaDataPlaneFailureCallback(LOCAL_WORKER, localWorkerApi);
 
     localMmapManager = std::make_unique<client::MmapManager>(localWorkerApi, false);
     rc = localWorkerApi->PrepareForDecreaseShmRef(std::bind(&client::MmapManager::LookupUnitsAndMmapFd,
@@ -884,7 +885,7 @@ Status WorkerFailover::PreparePreferredLocalWorker(const HostPort &localAddress,
     }
 
     localListenWorker = std::make_shared<client::ListenWorker>(localWorkerApi, localWorkerApi->heartbeatType_,
-                                                    ObjectClientImpl::LOCAL_WORKER,
+                                                    LOCAL_WORKER,
                                                     owner_.asyncSwitchWorkerPoolHandle_);
     localListenWorker->AddRecoveryCallback(
         &owner_, [this](client::WorkerRecoveryReason reason) { return ProcessWorkerLost(reason); });
@@ -915,17 +916,17 @@ bool WorkerFailover::CommitPreferredLocalWorker(WorkerNode oldNode, const HostPo
     std::unique_ptr<client::MmapManager> oldMmapManager;
     {
         std::lock_guard<std::mutex> lock(owner_.switchNodeMutex_);
-        if (owner_.currentNode_ == ObjectClientImpl::LOCAL_WORKER || owner_.currentNode_ != oldNode
+        if (owner_.currentNode_ == LOCAL_WORKER || owner_.currentNode_ != oldNode
             || (owner_.clientStateManager_->GetState() & (uint16_t)ClientState::EXITED)) {
             return false;
         }
         owner_.ipAddress_ = localAddress;
-        owner_.workerApi_[ObjectClientImpl::LOCAL_WORKER] = localWorkerApi;
+        owner_.workerApi_[LOCAL_WORKER] = localWorkerApi;
         ReplacePreferredLocalWorkerLocked(localMmapManager, oldLocalListener, oldMmapManager);
-        owner_.listenWorker_[ObjectClientImpl::LOCAL_WORKER] = localListenWorker;
+        owner_.listenWorker_[LOCAL_WORKER] = localListenWorker;
         owner_.clientEnableP2Ptransfer_ = localWorkerApi->workerEnableP2Ptransfer_;
         owner_.memoryRefCount_.SetSupportMultiShmRefCount(localWorkerApi->workerSupportMultiShmRefCount_);
-        owner_.currentNode_ = ObjectClientImpl::LOCAL_WORKER;
+        owner_.currentNode_ = LOCAL_WORKER;
         if (owner_.listenWorker_[oldNode] != nullptr) {
             owner_.listenWorker_[oldNode]->SetSwitched();
         }
