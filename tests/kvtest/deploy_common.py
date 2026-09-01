@@ -231,11 +231,12 @@ def start_procmon(pod, namespace, target_pid, remote_dir='/tmp',
     fully detached from the kubectl exec session.
 
     When ``port`` is set, procmon additionally monitors inbound/outbound
-    byte throughput on the service's listening port via ``ss -tin``
-    (aggregates bytes_sent/bytes_received across all ESTABLISHED sockets
-    on the port, diffs per sample → BytesIn/s + BytesOut/s). Useful for
-    coordinator monitoring where traffic on the listening port shows
-    worker connection activity.
+    byte throughput on the service's listening port via NETLINK_INET_DIAG
+    (queries kernel tcp_info directly — no external binary like ss needed,
+    works in slim containers). Aggregates bytes_sent/bytes_received across
+    all ESTABLISHED sockets on the port, diffs per sample → BytesIn/s +
+    BytesOut/s). Useful for coordinator monitoring where traffic on the
+    listening port shows worker connection activity.
     """
     cmd = (f'cd {remote_dir} && '
            f'python3 procmon.py --pid {target_pid} -i {interval} '

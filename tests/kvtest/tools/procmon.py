@@ -4,11 +4,98 @@
 import argparse
 import atexit
 import os
-import re
 import signal
+import socket
+import struct
 import subprocess
 import sys
 import time
+
+
+_NETLINK_INET_DIAG = 4
+_SOCK_DIAG_BY_FAMILY = 20
+_NLMSG_DONE = 3
+_NLMSG_ERROR = 2
+_NLM_F_REQUEST = 0x01
+_NLM_F_DUMP = 0x100 | 0x200
+_INET_DIAG_INFO = 2
+_INET_DIAG_INFO_BIT = 1 << (_INET_DIAG_INFO - 1)
+_TCP_ESTABLISHED = 1
+_NLMSG_HDR_SIZE = 16
+_INET_DIAG_MSG_SIZE = 72
+_RTA_HDR_SIZE = 4
+_TCPI_BYTES_RECEIVED_OFF = 128
+_TCPI_BYTES_SENT_OFF = 200
+_AF_NETLINK = 16
+_AF_INET = 2
+_AF_INET6 = 10
+_SOCK_RAW = 3
+_IPPROTO_TCP = 6
+_ENDIAN = '<' if sys.byteorder == 'little' else '>'
+
+
+def _align4(n):
+    return (n + 3) & ~3
+
+
+def _parse_netlink_diag_response(data, port):
+    """Parse a NETLINK_INET_DIAG SOCK_DIAG_BY_FAMILY dump response.
+
+    Returns ``(total_bytes_sent, total_bytes_received, found_any)`` where
+    ``found_any`` is True when at least one ESTABLISHED socket on ``port``
+    had parseable byte counters. ESTABLISHED sockets carry
+    ``tcpi_bytes_received`` (kernel >= 4.4, offset 128) and
+    ``tcpi_bytes_sent`` (kernel >= 4.8, offset 200) inside the
+    INET_DIAG_INFO rtattr's tcp_info payload. LISTEN sockets have no
+    byte counters and are naturally excluded by the state check plus the
+    absence of those offsets in a too-short tcp_info.
+
+    On a kernel older than 4.4 the tcp_info payload is < 136 bytes, so
+    neither offset is readable — returns found_any=False, and callers
+    treat that as (None, None).
+    """
+    total_sent = 0
+    total_recv = 0
+    found_any = False
+    offset = 0
+    while offset + _NLMSG_HDR_SIZE <= len(data):
+        nlmsg_len = struct.unpack_from(_ENDIAN + 'I', data, offset)[0]
+        if nlmsg_len < _NLMSG_HDR_SIZE or offset + nlmsg_len > len(data):
+            break
+        nlmsg_type = struct.unpack_from(_ENDIAN + 'H', data, offset + 4)[0]
+        if nlmsg_type == _NLMSG_DONE:
+            break
+        if nlmsg_type == _NLMSG_ERROR:
+            break
+        if nlmsg_type == _SOCK_DIAG_BY_FAMILY:
+            msg_off = offset + _NLMSG_HDR_SIZE
+            if msg_off + _INET_DIAG_MSG_SIZE > len(data):
+                break
+            state = data[msg_off + 1]
+            if state != _TCP_ESTABLISHED:
+                offset += _align4(nlmsg_len)
+                continue
+            rta_off = msg_off + _INET_DIAG_MSG_SIZE
+            msg_end = offset + nlmsg_len
+            while rta_off + _RTA_HDR_SIZE <= msg_end:
+                rta_len = struct.unpack_from(_ENDIAN + 'H', data, rta_off)[0]
+                rta_type = struct.unpack_from(_ENDIAN + 'H', data, rta_off + 2)[0]
+                if rta_len < _RTA_HDR_SIZE:
+                    break
+                if rta_type == _INET_DIAG_INFO:
+                    info_start = rta_off + _RTA_HDR_SIZE
+                    info_end = rta_off + rta_len
+                    tcp_info = data[info_start:info_end]
+                    if len(tcp_info) >= _TCPI_BYTES_RECEIVED_OFF + 8:
+                        total_recv += struct.unpack_from(
+                            _ENDIAN + 'Q', tcp_info, _TCPI_BYTES_RECEIVED_OFF)[0]
+                        found_any = True
+                    if len(tcp_info) >= _TCPI_BYTES_SENT_OFF + 8:
+                        total_sent += struct.unpack_from(
+                            _ENDIAN + 'Q', tcp_info, _TCPI_BYTES_SENT_OFF)[0]
+                rta_off += _align4(rta_len)
+        offset += _align4(nlmsg_len)
+    return total_sent, total_recv, found_any
 
 
 def find_pid(name):
@@ -176,15 +263,20 @@ def read_tcp_attempt_fails_stats():
 
 
 def read_port_traffic(port, timeout=5):
-    """Read cumulative bytes_sent + bytes_received across all TCP sockets
-    on the listening ``port`` via ``ss -tin``.
+    """Read cumulative bytes_sent + bytes_received across all ESTABLISHED
+    TCP sockets on the listening ``port`` via NETLINK_INET_DIAG.
+
+    Queries the kernel's sock_diag interface directly — the same data
+    source ``ss -ti`` uses — so the byte counters are identical. No
+    external binary required; works with Python 3 alone, which matters
+    for slim containers that lack iproute2.
 
     Returns ``(total_bytes_sent, total_bytes_received)`` — the SUM across
     all matching sockets. ESTABLISHED sockets carry ``bytes_sent`` /
-    ``bytes_received`` counters (kernel >= 4.4, iproute2 >= 4.4); the
-    LISTEN socket does not, so it is naturally excluded. Counters are
-    cumulative since each socket's creation; callers diff successive
-    samples to get a rate:
+    ``bytes_received`` counters (kernel >= 4.4 for bytes_received,
+    >= 4.8 for bytes_sent); the LISTEN socket does not, so it is
+    naturally excluded. Counters are cumulative since each socket's
+    creation; callers diff successive samples to get a rate:
 
       BytesOut/s = delta(total_bytes_sent) / dt   (server-sent = outbound)
       BytesIn/s  = delta(total_bytes_received) / dt (server-recv = inbound)
@@ -193,30 +285,61 @@ def read_port_traffic(port, timeout=5):
     aggregate, so the diff undercounts short-lived connections; for
     long-lived coordinator<->worker connections this is accurate.
 
-    Returns ``(None, None)`` when ``ss`` is missing, the kernel/iproute2
-    is too old to emit byte counters, the port filter matches zero
-    sockets, or the subprocess times out — callers treat None as "no
-    traffic data this sample" and skip the rate computation.
+    Returns ``(None, None)`` when the netlink socket cannot be opened
+    (non-Linux, insufficient privileges), the kernel is too old to emit
+    byte counters, no ESTABLISHED sockets match the port filter, or the
+    query times out — callers treat None as "no traffic data this
+    sample" and skip the rate computation.
+
+    A single request queries both AF_INET and AF_INET6 to cover
+    dual-stack listeners (a server bound to ``::`` accepts IPv4
+    connections via v4-mapped sockets, which appear under AF_INET6).
     """
-    try:
-        result = subprocess.run(
-            ['ss', '-tin', f'sport = :{port}'],
-            capture_output=True, text=True, timeout=timeout)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    total_sent = 0
+    total_recv = 0
+    found_any = False
+
+    for family in (_AF_INET, _AF_INET6):
+        try:
+            sock = socket.socket(
+                _AF_NETLINK, _SOCK_RAW, _NETLINK_INET_DIAG)
+        except (OSError, ValueError):
+            continue
+        try:
+            sock.settimeout(timeout)
+            req = bytearray(_NLMSG_HDR_SIZE + 56)
+            struct.pack_into(
+                _ENDIAN + 'IHHII', req, 0,
+                len(req), _SOCK_DIAG_BY_FAMILY,
+                _NLM_F_REQUEST | _NLM_F_DUMP, 1, 0)
+            struct.pack_into(
+                _ENDIAN + 'BBBBI', req, _NLMSG_HDR_SIZE,
+                family, _IPPROTO_TCP, _INET_DIAG_INFO_BIT, 0, 0xFFF)
+            struct.pack_into('>H', req, _NLMSG_HDR_SIZE + 8, port)
+            sock.sendall(bytes(req))
+            chunks = []
+            while True:
+                try:
+                    chunk = sock.recv(8192)
+                except socket.timeout:
+                    break
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                sock.settimeout(0.2)
+        except OSError:
+            continue
+        finally:
+            sock.close()
+        data = b''.join(chunks) if chunks else b''
+        sent, recv, found = _parse_netlink_diag_response(data, port)
+        total_sent += sent
+        total_recv += recv
+        found_any = found_any or found
+
+    if not found_any:
         return None, None
-    if result.returncode != 0:
-        return None, None
-    out = result.stdout or ''
-    # Real `ss -ti` output uses `key:value` colon-separated fields on the
-    # indented TCP info lines (e.g. ``bytes_sent:16703 bytes_received:1449``).
-    # Older/some iproute2 builds may use whitespace instead; ``[:\s]+`` matches
-    # both so the parser does not silently no-op on the dominant colon format.
-    sent_values = re.findall(r'bytes_sent[:\s]+(\d+)', out)
-    recv_values = re.findall(r'bytes_received[:\s]+(\d+)', out)
-    if not sent_values and not recv_values:
-        return None, None
-    return (sum(int(v) for v in sent_values),
-            sum(int(v) for v in recv_values))
+    return total_sent, total_recv
 
 
 def format_mb(bytes_val):
@@ -270,9 +393,11 @@ def main():
                              "of waiting for timeout.")
     parser.add_argument("--port", type=int, default=None,
                         help="Monitor inbound/outbound byte throughput on this TCP "
-                             "listening port via `ss -tin` (aggregates bytes_sent / "
-                             "bytes_received across all ESTABLISHED sockets on the "
-                             "port). When omitted, no traffic monitoring is done.")
+                             "listening port via NETLINK_INET_DIAG (queries kernel "
+                             "tcp_info directly, no external binary like ss needed). "
+                             "Aggregates bytes_sent / bytes_received across all "
+                             "ESTABLISHED sockets on the port. When omitted, no "
+                             "traffic monitoring is done.")
     args = parser.parse_args()
 
     if not args.process and not args.pid:
