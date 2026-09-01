@@ -618,7 +618,8 @@ private:
      * @param[in] objectKey Object key.
      * @param[in] version Object version.
      */
-    Status RemoveLocation(const std::string &objectKey, uint64_t version);
+    Status RemoveLocation(const std::string &objectKey, uint64_t version,
+                          master::RemoveMetaReqPb::Cause cause = master::RemoveMetaReqPb::NORMAL);
 
     /**
      * @brief Correct the QueryMetaRspPb if need.

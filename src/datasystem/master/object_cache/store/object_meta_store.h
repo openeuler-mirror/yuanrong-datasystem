@@ -198,6 +198,16 @@ public:
     Status RemoveObjectLocation(const std::string &objectKey, const std::string &workerAddr);
 
     /**
+     * @brief Remove a rollback location after the ordered RocksDB operation completes.
+     */
+    Status RemoveObjectLocationForRollbackAndWait(const std::string &objectKey, const std::string &workerAddr);
+
+    /**
+     * @brief Atomically remove one object location and the object's metadata from RocksDB.
+     */
+    Status RemoveObjectLocationAndMeta(const std::string &objectKey, const std::string &workerAddr);
+
+    /**
      * @brief Get all pairs from KvStore table
      * @param[in] table the KvStore table name to get all pairs
      * @param[out] outMetas The output metas in table

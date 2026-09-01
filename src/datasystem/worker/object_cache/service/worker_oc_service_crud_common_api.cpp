@@ -57,6 +57,7 @@ namespace datasystem {
 namespace object_cache {
 
 static constexpr int DEBUG_LOG_LEVEL = 2;
+static constexpr uint32_t ROLLBACK_UNSUPPORTED_LOG_EVERY_N = 100;
 
 void WorkerOcServiceCrudCommonApi::SleepForMetaMovingRetry(int64_t sleepTimeMs)
 {
@@ -93,6 +94,30 @@ void AppendRemoveMetaResponse(const master::RemoveMetaRspPb &response, std::vect
     needWaitIds.insert(needWaitIds.end(), response.need_wait_ids().begin(), response.need_wait_ids().end());
     needMigrateL2CacheIds.insert(needMigrateL2CacheIds.end(), response.need_l2cache_ids().begin(),
                                  response.need_l2cache_ids().end());
+}
+
+void AppendUnacknowledgedRollbackIds(const std::list<std::string> &requestedIds,
+                                     const master::RemoveMetaRspPb &response,
+                                     master::RemoveMetaReqPb::Cause removeCause,
+                                     std::vector<std::string> &failedIds)
+{
+    if (removeCause != master::RemoveMetaReqPb::ROLLBACK_UNACK) {
+        return;
+    }
+    std::unordered_set<std::string> handledIds{ response.success_ids().begin(), response.success_ids().end() };
+    handledIds.insert(response.failed_ids().begin(), response.failed_ids().end());
+    handledIds.insert(response.need_data_ids().begin(), response.need_data_ids().end());
+    handledIds.insert(response.need_wait_ids().begin(), response.need_wait_ids().end());
+    handledIds.insert(response.need_l2cache_ids().begin(), response.need_l2cache_ids().end());
+    handledIds.insert(response.outdated_ids().begin(), response.outdated_ids().end());
+    for (const auto &redirect : response.info()) {
+        handledIds.insert(redirect.change_meta_ids().begin(), redirect.change_meta_ids().end());
+    }
+    for (const auto &objectKey : requestedIds) {
+        if (handledIds.count(objectKey) == 0) {
+            failedIds.emplace_back(objectKey);
+        }
+    }
 }
 
 }  // namespace
@@ -580,7 +605,70 @@ Status WorkerOcServiceCrudCommonApi::RemoveMeta(const std::list<std::string> &ob
         [workerMasterApi](master::RemoveMetaReqPb &req, master::RemoveMetaRspPb &rsp) {
             return workerMasterApi->RemoveMeta(req, rsp);
         };
-    return WorkerOcServiceCrudCommonApi::RedirectRetryWhenMetasMoving(request, response, func);
+    const Status rpcStatus = WorkerOcServiceCrudCommonApi::RedirectRetryWhenMetasMoving(request, response, func);
+    return ValidateRollbackUnackRpcResult(removeCause, rpcStatus, response);
+}
+
+Status WorkerOcServiceCrudCommonApi::ValidateRollbackUnackResponse(
+    master::RemoveMetaReqPb::Cause removeCause, const master::RemoveMetaRspPb &response)
+{
+    if (removeCause == master::RemoveMetaReqPb::ROLLBACK_UNACK && response.ByteSizeLong() == 0) {
+        RETURN_STATUS(K_NOT_SUPPORTED, "Metadata owner does not support explicit UNACK rollback responses");
+    }
+    return Status::OK();
+}
+
+Status WorkerOcServiceCrudCommonApi::ValidateRollbackUnackRpcResult(
+    master::RemoveMetaReqPb::Cause removeCause, const Status &rpcStatus,
+    const master::RemoveMetaRspPb &response)
+{
+    if (rpcStatus.IsError()) {
+        if (removeCause == master::RemoveMetaReqPb::ROLLBACK_UNACK && rpcStatus.GetCode() == K_NOT_SUPPORTED) {
+            return Status(K_TRY_AGAIN, "Metadata owner returned K_NOT_SUPPORTED for UNACK rollback");
+        }
+        return rpcStatus;
+    }
+    return ValidateRollbackUnackResponse(removeCause, response);
+}
+
+bool WorkerOcServiceCrudCommonApi::IsRollbackUnackCompatibilityStatus(
+    master::RemoveMetaReqPb::Cause removeCause, const Status &status)
+{
+    return removeCause == master::RemoveMetaReqPb::ROLLBACK_UNACK && status.GetCode() == K_NOT_SUPPORTED;
+}
+
+void WorkerOcServiceCrudCommonApi::LogUnsupportedRollbackUnack(size_t objectCount)
+{
+    LOG_FIRST_AND_EVERY_N(WARNING, ROLLBACK_UNSUPPORTED_LOG_EVERY_N)
+        << "Metadata owner does not support UNACK rollback; stop this cleanup batch, object count: " << objectCount;
+}
+
+void WorkerOcServiceCrudCommonApi::MergeRedirectRemoveMetaResult(
+    const Status &result, const std::list<std::string> &redirectIds,
+    const master::RemoveMetaRspPb &redirectResponse, master::RemoveMetaReqPb::Cause removeCause,
+    const std::string &topologyOperationId, std::vector<std::string> &failedIds,
+    std::vector<std::string> &needMigrateIds, std::vector<std::string> &needWaitIds,
+    std::vector<std::string> &needMigrateL2CacheIds)
+{
+    if (IsRollbackUnackCompatibilityStatus(removeCause, result)) {
+        LogUnsupportedRollbackUnack(redirectIds.size());
+        return;
+    }
+    const bool isMissingTopologyMember =
+        removeCause == master::RemoveMetaReqPb::GIVEUP_PRIMARY && !topologyOperationId.empty()
+        && result.GetCode() == K_NOT_FOUND && result.GetMsg().find("member address not found") != std::string::npos;
+    if (isMissingTopologyMember) {
+        LOG(WARNING) << "CLUSTER_SCALE_IN action=missing_member_fast_fallback"
+                     << " operation_prefix=" << cluster::TopologyDiagnosticPrefix(topologyOperationId)
+                     << " fallback_count=" << redirectIds.size() << " status=" << result.ToString();
+        needMigrateIds.insert(needMigrateIds.end(), redirectIds.begin(), redirectIds.end());
+    } else if (result.IsError()) {
+        LOG(WARNING) << "remove meta failed: " << result.ToString();
+        failedIds.insert(failedIds.end(), redirectIds.begin(), redirectIds.end());
+    } else {
+        AppendRemoveMetaResponse(redirectResponse, failedIds, needMigrateIds, needWaitIds, needMigrateL2CacheIds);
+        AppendUnacknowledgedRollbackIds(redirectIds, redirectResponse, removeCause, failedIds);
+    }
 }
 
 Status WorkerOcServiceCrudCommonApi::RemoveMetadataFromRedirectMaster(
@@ -612,28 +700,8 @@ Status WorkerOcServiceCrudCommonApi::RemoveMetadataFromRedirectMaster(
         }
         Status result = RemoveMeta(redirectIds, redirectWorkerMasterApi, removeCause, UINT64_MAX, false, localAddress,
                                    batchKeyVersions, redirectRsp, topologyOperationId);
-        // save the result to rsp and payload
-        const bool isMissingTopologyMember =
-            removeCause == master::RemoveMetaReqPb::GIVEUP_PRIMARY && !topologyOperationId.empty()
-            && result.GetCode() == K_NOT_FOUND
-            && result.GetMsg().find("member address not found") != std::string::npos;
-        if (isMissingTopologyMember) {
-            LOG(WARNING) << "CLUSTER_SCALE_IN action=missing_member_fast_fallback"
-                         << " operation_prefix=" << cluster::TopologyDiagnosticPrefix(topologyOperationId)
-                         << " fallback_count=" << redirectIds.size() << " status=" << result.ToString();
-            needMigrateIds.insert(needMigrateIds.end(), redirectIds.begin(), redirectIds.end());
-        } else if (result.IsError()) {
-            LOG(WARNING) << "remove meta failed: " << result.ToString();
-            failedIds.insert(failedIds.end(), redirectIds.begin(), redirectIds.end());
-        } else {
-            failedIds.insert(failedIds.end(), redirectRsp.failed_ids().begin(), redirectRsp.failed_ids().end());
-            needMigrateIds.insert(needMigrateIds.end(), redirectRsp.need_data_ids().begin(),
-                                  redirectRsp.need_data_ids().end());
-            needWaitIds.insert(needWaitIds.end(), redirectRsp.need_wait_ids().begin(),
-                               redirectRsp.need_wait_ids().end());
-            needMigrateL2CacheIds.insert(needMigrateL2CacheIds.end(), redirectRsp.need_l2cache_ids().begin(),
-                                         redirectRsp.need_l2cache_ids().end());
-        }
+        MergeRedirectRemoveMetaResult(result, redirectIds, redirectRsp, removeCause, topologyOperationId, failedIds,
+                                      needMigrateIds, needWaitIds, needMigrateL2CacheIds);
     }
     return Status::OK();
 }
@@ -646,11 +714,16 @@ void WorkerOcServiceCrudCommonApi::HandleRemoveMetaResponse(
     std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds,
     const std::string &topologyOperationId)
 {
+    if (IsRollbackUnackCompatibilityStatus(removeCause, result)) {
+        LogUnsupportedRollbackUnack(objectKeysRemoveList.size());
+        return;
+    }
     if (result.IsError()) {
         LOG(WARNING) << "remove meta failed: " << result.ToString();
         failedIds.insert(failedIds.end(), objectKeysRemoveList.begin(), objectKeysRemoveList.end());
     } else {
         AppendRemoveMetaResponse(response, failedIds, needMigrateIds, needWaitIds, needMigrateL2CacheIds);
+        AppendUnacknowledgedRollbackIds(objectKeysRemoveList, response, removeCause, failedIds);
     }
     RemoveMetadataFromRedirectMaster(response, removeCause, localAddress, batchKeyVersions, failedIds, needMigrateIds,
                                      needWaitIds, needMigrateL2CacheIds, topologyOperationId);

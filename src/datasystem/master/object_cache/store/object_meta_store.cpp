@@ -612,7 +612,7 @@ Status ObjectMetaStore::AddObjectLocation(const std::string &objectKey, const st
     PerfPoint point(PerfKey::MASTER_ROCKSDB_ADD_OBJ_LOCATION);
     std::string key = workerAddr + "_" + objectKey;
     // for compatibility: empty string "" stands for ACK, "0" stands for UNACK
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rocksStore_->Put(LOCATION_TABLE, key, ackPersistenceVal),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rocksStore_->PutWithOrderingKey(LOCATION_TABLE, key, ackPersistenceVal, objectKey),
                                      FormatString("Failed to add global ref to rocksdb: %s", key));
     return Status::OK();
 }
@@ -640,8 +640,35 @@ Status ObjectMetaStore::RemoveObjectLocation(const std::string &objectKey, const
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
     PerfPoint point(PerfKey::MASTER_ROCKSDB_REMOVE_OBJ_LOCATION);
     std::string key = workerAddr + "_" + objectKey;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(RemoveRocksKey(key, LOCATION_TABLE),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rocksStore_->DeleteWithOrderingKey(LOCATION_TABLE, key, objectKey),
                                      FormatString("Failed to delete location from rocksdb: %s", key));
+    return Status::OK();
+}
+
+Status ObjectMetaStore::RemoveObjectLocationForRollbackAndWait(const std::string &objectKey,
+                                                               const std::string &workerAddr)
+{
+    RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
+    PerfPoint point(PerfKey::MASTER_ROCKSDB_REMOVE_OBJ_LOCATION);
+    const std::string locationKey = workerAddr + "_" + objectKey;
+    const std::vector<RocksStore::TableKey> tableKeys = { { LOCATION_TABLE, locationKey } };
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        rocksStore_->DeleteBatchAcrossTables(tableKeys, objectKey),
+        FormatString("Failed to commit rollback location deletion to rocksdb: %s", locationKey));
+    return Status::OK();
+}
+
+Status ObjectMetaStore::RemoveObjectLocationAndMeta(const std::string &objectKey, const std::string &workerAddr)
+{
+    RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
+    PerfPoint point(PerfKey::MASTER_ROCKSDB_REMOVE_OBJ_LOCATION);
+    const std::string locationKey = workerAddr + "_" + objectKey;
+    const std::vector<RocksStore::TableKey> tableKeys = {
+        { LOCATION_TABLE, locationKey }, { META_TABLE, objectKey }
+    };
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        rocksStore_->DeleteBatchAcrossTables(tableKeys, objectKey),
+        FormatString("Failed to delete object metadata and location from rocksdb: %s", objectKey));
     return Status::OK();
 }
 

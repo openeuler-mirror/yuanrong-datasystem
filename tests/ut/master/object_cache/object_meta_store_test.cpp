@@ -153,6 +153,38 @@ TEST_F(ObjectMetaStoreTest, TestCreateQueryRemoveMeta)
     sleep(1);
 }
 
+TEST_F(ObjectMetaStoreTest, AsyncRemoveObjectLocationAndMetaWaitsForAtomicBatch)
+{
+    ASSERT_EQ(FLAGS_rocksdb_write_mode, "async");
+    const std::string objectKey = "async-atomic-remove";
+    const std::string workerAddress = "127.0.0.1:1000";
+    const std::string locationKey = workerAddress + "_" + objectKey;
+    ObjectMetaPb meta;
+    meta.set_object_key(objectKey);
+
+    DS_ASSERT_OK(rocksStore_->Put(META_TABLE, objectKey, meta.SerializeAsString()));
+    DS_ASSERT_OK(ObjectMetaStore_->AddObjectLocation(objectKey, workerAddress, "0"));
+    DS_ASSERT_OK(ObjectMetaStore_->RemoveObjectLocationAndMeta(objectKey, workerAddress));
+
+    std::string value;
+    EXPECT_EQ(rocksStore_->Get(META_TABLE, objectKey, value).GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(rocksStore_->Get(LOCATION_TABLE, locationKey, value).GetCode(), K_NOT_FOUND);
+}
+
+TEST_F(ObjectMetaStoreTest, AsyncRemoveObjectLocationForRollbackWaitsForCommit)
+{
+    ASSERT_EQ(FLAGS_rocksdb_write_mode, "async");
+    const std::string objectKey = "async-rollback-location-remove";
+    const std::string workerAddress = "127.0.0.1:1000";
+    const std::string locationKey = workerAddress + "_" + objectKey;
+    DS_ASSERT_OK(ObjectMetaStore_->AddObjectLocation(objectKey, workerAddress, "0"));
+
+    DS_ASSERT_OK(ObjectMetaStore_->RemoveObjectLocationForRollbackAndWait(objectKey, workerAddress));
+
+    std::string value;
+    EXPECT_EQ(rocksStore_->Get(LOCATION_TABLE, locationKey, value).GetCode(), K_NOT_FOUND);
+}
+
 // Verify that rocksdb_write_mode=none makes RocksStore::GetInstance return a shell instance
 // WITHOUT calling DB::Open (no LOCK file is created) and that subsequent Put/Get calls do not
 // crash (they are short-circuited by RETURN_OK_IF_TRUE(disableRocksDB)). This is the contract

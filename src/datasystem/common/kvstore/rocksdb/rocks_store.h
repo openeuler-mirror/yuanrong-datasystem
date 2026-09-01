@@ -45,6 +45,11 @@ namespace datasystem {
 enum class RocksdbWriteMode { ASYNC, SYNC, NONE };
 class RocksStore : public KvStore {
 public:
+    struct TableKey {
+        std::string tableName;
+        std::string key;
+    };
+
     /**
      * @brief Create a new rocksdb database in the input path.
      * @param[in] dbPath Directory to store the database.
@@ -90,6 +95,12 @@ public:
      * @return Status of the call.
      */
     Status Put(const std::string &tableName, const std::string &key, const std::string &value) override;
+
+    /**
+     * @brief Put a key-value using an explicit async ordering key.
+     */
+    Status PutWithOrderingKey(const std::string &tableName, const std::string &key, const std::string &value,
+                              const std::string &orderingKey);
 
     /**
      * @brief Put a new key-value into a table.
@@ -242,6 +253,20 @@ public:
      * @return Status of the call, Status::KVStoreError() if the operation fails.
      */
     Status Delete(const std::string &tableName, const std::string &key) override;
+
+    /**
+     * @brief Delete a key using an explicit async ordering key.
+     */
+    Status DeleteWithOrderingKey(const std::string &tableName, const std::string &key,
+                                 const std::string &orderingKey);
+
+    /**
+     * @brief Atomically delete keys from multiple column families.
+     * @param[in] tableKeys Table and key pairs included in one RocksDB write batch.
+     * @param[in] orderingKey Async lane shared with preceding writes for the same object.
+     * @return Status after the batch has completed in both sync and async modes.
+     */
+    Status DeleteBatchAcrossTables(const std::vector<TableKey> &tableKeys, const std::string &orderingKey);
 
     /**
      * @brief Delete some keys by prefix.

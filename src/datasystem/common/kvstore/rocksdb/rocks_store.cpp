@@ -61,6 +61,19 @@ static constexpr size_t ROCKSDB_MAX_LOG_FILE_NUM = 3;
 std::atomic<bool> RocksStore::disableRocksDB{ false };
 
 namespace {
+using ResolvedTableKey = std::pair<rocksdb::ColumnFamilyHandle *, std::string>;
+
+rocksdb::Status WriteDeleteBatchAcrossTables(rocksdb::DB *db, const std::vector<ResolvedTableKey> &tableKeys, bool sync)
+{
+    rocksdb::WriteBatch batch;
+    for (const auto &tableKey : tableKeys) {
+        batch.Delete(tableKey.first, rocksdb::Slice(tableKey.second));
+    }
+    rocksdb::WriteOptions options;
+    options.sync = sync;
+    return db->Write(options, &batch);
+}
+
 void InitRocksOptions(rocksdb::Options &options)
 {
     options.IncreaseParallelism(FLAGS_rocksdb_background_threads);
@@ -271,6 +284,12 @@ Status RocksStore::DropTable(const std::string &tableName)
 
 Status RocksStore::Put(const std::string &tableName, const std::string &key, const std::string &value)
 {
+    return PutWithOrderingKey(tableName, key, value, key);
+}
+
+Status RocksStore::PutWithOrderingKey(const std::string &tableName, const std::string &key, const std::string &value,
+                                      const std::string &orderingKey)
+{
     RETURN_OK_IF_TRUE(disableRocksDB);
     RETURN_OK_IF_TRUE(mode_ == RocksdbWriteMode::NONE);
     rocksdb::Status rc;
@@ -297,7 +316,7 @@ Status RocksStore::Put(const std::string &tableName, const std::string &key, con
         if (callerTraceID.empty()) {
             callerTraceID = "RocksStoreAsync;" + GetStringUuid();
         }
-        auto future = asyncThreadPool_->Submit(key, [this, tableHandle, key, value, callerTraceID]() {
+        auto future = asyncThreadPool_->Submit(orderingKey, [this, tableHandle, key, value, callerTraceID]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callerTraceID);
             rocksdb::Status rc = Put(tableHandle, key, value, FLAGS_rocksdb_sync_write);
             if (!rc.ok()) {
@@ -535,6 +554,12 @@ Status RocksStore::PrefixSearch(const std::string &tableName, const std::string 
 
 Status RocksStore::Delete(const std::string &tableName, const std::string &key)
 {
+    return DeleteWithOrderingKey(tableName, key, key);
+}
+
+Status RocksStore::DeleteWithOrderingKey(const std::string &tableName, const std::string &key,
+                                         const std::string &orderingKey)
+{
     RETURN_OK_IF_TRUE(disableRocksDB);
     RETURN_OK_IF_TRUE(mode_ == RocksdbWriteMode::NONE);
     rocksdb::Status rc;
@@ -558,7 +583,7 @@ Status RocksStore::Delete(const std::string &tableName, const std::string &key)
         if (callerTraceID.empty()) {
             callerTraceID = "RocksStoreAsync;" + GetStringUuid();
         }
-        auto future = asyncThreadPool_->Submit(key, [this, tableHandle, key, callerTraceID]() {
+        auto future = asyncThreadPool_->Submit(orderingKey, [this, tableHandle, key, callerTraceID]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callerTraceID);
             rocksdb::Status rc = Delete(tableHandle, key, FLAGS_rocksdb_sync_write);
             if (!rc.ok()) {
@@ -569,6 +594,39 @@ Status RocksStore::Delete(const std::string &tableName, const std::string &key)
     }
     GetMasterTimeCost().Append("RocksDB Delete", timer.ElapsedMilliSecond());
     return Status::OK();
+}
+
+Status RocksStore::DeleteBatchAcrossTables(const std::vector<TableKey> &tableKeys, const std::string &orderingKey)
+{
+    RETURN_OK_IF_TRUE(disableRocksDB);
+    RETURN_OK_IF_TRUE(mode_ == RocksdbWriteMode::NONE);
+    CHECK_FAIL_RETURN_STATUS(db_, StatusCode::K_NOT_FOUND, "Database does not exist");
+#ifdef WITH_TESTS
+    INJECT_POINT("master.rocksdb.delete_multi_cf");
+#endif
+    std::vector<ResolvedTableKey> resolvedKeys;
+    resolvedKeys.reserve(tableKeys.size());
+    for (const auto &tableKey : tableKeys) {
+        auto table = tables_.find(tableKey.tableName);
+        CHECK_FAIL_RETURN_STATUS(table != tables_.end(), StatusCode::K_NOT_FOUND,
+                                 "Table " + tableKey.tableName + " does not exist");
+        resolvedKeys.emplace_back(table->second, tableKey.key);
+    }
+    rocksdb::Status rc;
+    if (mode_ == RocksdbWriteMode::SYNC) {
+        rc = WriteDeleteBatchAcrossTables(db_, resolvedKeys, FLAGS_rocksdb_sync_write);
+    } else if (mode_ == RocksdbWriteMode::ASYNC) {
+        auto callerTraceID = Trace::Instance().GetTraceID();
+        if (callerTraceID.empty()) {
+            callerTraceID = "RocksStoreAsync;" + GetStringUuid();
+        }
+        auto future = asyncThreadPool_->Submit(orderingKey, [this, resolvedKeys, callerTraceID, &rc]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callerTraceID);
+            rc = WriteDeleteBatchAcrossTables(db_, resolvedKeys, FLAGS_rocksdb_sync_write);
+        });
+        future.wait();
+    }
+    return CheckAndRemoveDbPath(rc);
 }
 
 Status RocksStore::PrefixDelete(const std::string &tableName, const std::string &prefixKey)

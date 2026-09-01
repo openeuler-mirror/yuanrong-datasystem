@@ -34,6 +34,21 @@ using namespace datasystem::worker;
 using namespace datasystem::master;
 namespace datasystem {
 namespace st {
+namespace {
+RemoveMetaReqPb MakeRollbackRequest(const std::string &objectKey, const std::string &address, uint64_t version)
+{
+    RemoveMetaReqPb request;
+    request.set_address(address);
+    request.set_cause(RemoveMetaReqPb::ROLLBACK_UNACK);
+    request.set_redirect(true);
+    request.add_ids(objectKey);
+    auto *objectVersion = request.add_id_with_version();
+    objectVersion->set_id(objectKey);
+    objectVersion->set_version(version);
+    return request;
+}
+}  // namespace
+
 class WorkerOCMasterTest : public ExternalClusterTest {
 public:
     void SetUp() override
@@ -76,6 +91,49 @@ public:
         HostPort workerAddress;
         cluster_->GetWorkerAddr(workerIndex, workerAddress);
         return workerAddress.ToString();
+    }
+
+    void CreateObject(const std::shared_ptr<WorkerMasterOCApi> &client, const std::string &ownerAddress,
+                      const std::string &objectKey)
+    {
+        CreateMetaReqPb request;
+        CreateMetaRspPb response;
+        request.set_address(ownerAddress);
+        request.mutable_meta()->set_object_key(objectKey);
+        request.mutable_meta()->set_data_size(1);
+        DS_ASSERT_OK(client->CreateMeta(request, response));
+    }
+
+    std::unordered_map<std::string, uint64_t> QueryVersions(const std::shared_ptr<WorkerMasterOCApi> &client,
+                                                            const std::string &requesterAddress,
+                                                            const std::vector<std::string> &objectKeys)
+    {
+        QueryMetaReqPb request;
+        QueryMetaRspPb response;
+        std::vector<RpcMessage> payloads;
+        request.set_address(requesterAddress);
+        *request.mutable_ids() = { objectKeys.begin(), objectKeys.end() };
+        DS_EXPECT_OK(client->QueryMeta(request, 0, response, payloads));
+        std::unordered_map<std::string, uint64_t> versions;
+        for (const auto &queryMeta : response.query_metas()) {
+            versions.emplace(queryMeta.meta().object_key(), queryMeta.meta().version());
+        }
+        return versions;
+    }
+
+    std::unordered_map<std::string, std::unordered_set<std::string>> GetLocationSets(
+        const std::shared_ptr<WorkerMasterOCApi> &client, const std::vector<std::string> &objectKeys)
+    {
+        GetObjectLocationsReqPb request;
+        GetObjectLocationsRspPb response;
+        *request.mutable_object_keys() = { objectKeys.begin(), objectKeys.end() };
+        DS_EXPECT_OK(client->GetObjectLocations(request, response));
+        std::unordered_map<std::string, std::unordered_set<std::string>> locations;
+        for (const auto &info : response.location_infos()) {
+            locations.emplace(info.object_key(), std::unordered_set<std::string>{ info.object_locations().begin(),
+                                                                                  info.object_locations().end() });
+        }
+        return locations;
     }
 
     void MakeObjectMetas(int num, std::unordered_map<std::string, ObjectMeta> &metas, int workerIndex = 0)
@@ -207,6 +265,40 @@ TEST_F(WorkerOCMasterTest, TestCreateQueryRemoveMeta)
     queryIds.clear();
     queryIds.emplace_back("123456789");
     EXPECT_EQ(WorkerQuery(workerAddress, queryIds, inMetas, client, 0), Status::OK());
+}
+
+TEST_F(WorkerOCMasterTest, TestRollbackUnackLocationThroughWorkerMasterRpc)
+{
+    const std::string unackKey = "rollback-rpc-unack";
+    const std::string ackKey = "rollback-rpc-ack";
+    const std::string ownerAddress = GetWorkerAddr(0);
+    const std::string requesterAddress = GetWorkerAddr(1);
+    auto ownerClient = CreateClient(0);
+    auto requesterClient = CreateClient(1);
+    CreateObject(ownerClient, ownerAddress, unackKey);
+    CreateObject(ownerClient, ownerAddress, ackKey);
+    auto versions = QueryVersions(requesterClient, requesterAddress, { unackKey, ackKey });
+    ASSERT_EQ(versions.size(), 2U);
+
+    auto unackRollback = MakeRollbackRequest(unackKey, requesterAddress, versions.at(unackKey));
+    RemoveMetaRspPb unackRollbackResponse;
+    DS_ASSERT_OK(requesterClient->RemoveMeta(unackRollback, unackRollbackResponse));
+    CreateCopyMetaReqPb createCopyRequest;
+    CreateCopyMetaRspPb createCopyResponse;
+    createCopyRequest.set_object_key(ackKey);
+    createCopyRequest.set_address(requesterAddress);
+    createCopyRequest.set_version(versions.at(ackKey));
+    DS_ASSERT_OK(requesterClient->CreateCopyMeta(createCopyRequest, createCopyResponse));
+    auto ackRollback = MakeRollbackRequest(ackKey, requesterAddress, versions.at(ackKey));
+    RemoveMetaRspPb ackRollbackResponse;
+    DS_ASSERT_OK(requesterClient->RemoveMeta(ackRollback, ackRollbackResponse));
+    RemoveMetaRspPb repeatedRollbackResponse;
+    DS_ASSERT_OK(requesterClient->RemoveMeta(unackRollback, repeatedRollbackResponse));
+
+    auto locations = GetLocationSets(ownerClient, { unackKey, ackKey });
+    ASSERT_EQ(locations.size(), 2U);
+    EXPECT_EQ(locations.at(unackKey).count(requesterAddress), 0U);
+    EXPECT_EQ(locations.at(ackKey).count(requesterAddress), 1U);
 }
 
 TEST_F(WorkerOCMasterTest, TestCreateConcurrency)
