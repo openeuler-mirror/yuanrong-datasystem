@@ -17,6 +17,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from deploy_common import log_error, log_info, setup_logging
 
 
+_GRACEFUL_STOP_TIMEOUT = 120
+_SUMMARY_TIMEOUT = 60
+_POLL_INTERVAL = 2
+
+
 def _print_timings(action, timings):
     """Print per-pod duration stats for an action.
 
@@ -712,9 +717,35 @@ class Deployer:
                 else:
                     log_info(f'  {target} -> HTTP stop failed')
 
-        # Phase 2: wait for graceful shutdown (summary file generation, etc.)
-        log_info('Waiting 5s for graceful shutdown...')
-        time.sleep(5)
+        # Phase 2: poll for graceful shutdown instead of blind sleep.
+        # HTTP stop (Phase 1) sets running_=false; the process then
+        # flushes logs, writes summary, closes connections. Polling
+        # check_alive detects actual exit so we proceed to SIGTERM only
+        # when still needed, without wasting wall-clock on processes
+        # that already exited (and without force-killing too early when
+        # the process needs more time to finish writing).
+        def check_alive(node):
+            r = self.run_on(node,
+                            'pgrep -x kvtest 2>/dev/null',
+                            check=False)
+            return r.returncode == 0
+
+        log_info(f'Waiting for graceful shutdown (up to {_GRACEFUL_STOP_TIMEOUT}s)...')
+        deadline = time.monotonic() + _GRACEFUL_STOP_TIMEOUT
+        alive = list(self.nodes)
+        while alive and time.monotonic() < deadline:
+            alive = []
+            with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
+                check_futures = {pool.submit(check_alive, n): n for n in self.nodes}
+                for f in as_completed(check_futures):
+                    if f.result():
+                        alive.append(check_futures[f])
+            if alive:
+                time.sleep(_POLL_INTERVAL)
+        if alive:
+            log_info(f'  {len(alive)} nodes still running after {_GRACEFUL_STOP_TIMEOUT}s')
+        else:
+            log_info('  All processes exited gracefully')
 
         # Phase 3: SIGTERM remaining processes
         def kill_remaining(node, sig=''):
@@ -725,12 +756,6 @@ class Deployer:
                 f"for p in $(pgrep -x procmon.py 2>/dev/null); do "
                 f"kill {sig} $p 2>/dev/null; done",
                 check=False, timeout=10)
-
-        def check_alive(node):
-            r = self.run_on(node,
-                            'pgrep -x kvtest 2>/dev/null',
-                            check=False)
-            return r.returncode == 0
 
         with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
             kill_futures = [pool.submit(kill_remaining, n) for n in self.nodes]
@@ -812,20 +837,36 @@ class Deployer:
         collect_dir = output_dir
         results = []
 
-        # Phase 1: trigger summary generation on running instances
+        # Phase 1: trigger summary generation on running instances.
+        # The /summary endpoint is synchronous — WriteSummary runs inline
+        # and returns HTTP 200 only after run_summary.txt is written to
+        # disk. So curl rc=0 means the summary file is ready. Retry per
+        # node until success or timeout; if the process is dead or the
+        # port unreachable, exhaust the timeout and collect whatever
+        # files are available.
         log_info('Triggering summary generation...')
 
         def trigger_summary(node):
             port = node.get('port', self.listen_port)
             url = f'http://localhost:{port}/summary'
-            self.run_on(node, f'curl -sf -X POST {url} --max-time 3', check=False, timeout=5)
+            deadline = time.monotonic() + _SUMMARY_TIMEOUT
+            while time.monotonic() < deadline:
+                r = self.run_on(node, f'curl -sf -X POST {url} --max-time 3',
+                                check=False, timeout=10)
+                if r.returncode == 0:
+                    return True
+                time.sleep(_POLL_INTERVAL)
+            return False
 
         with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
-            futures = [pool.submit(trigger_summary, n) for n in self.nodes]
+            futures = {pool.submit(trigger_summary, n): n for n in self.nodes}
             for f in as_completed(futures):
-                pass
-
-        time.sleep(1)
+                node = futures[f]
+                target = self._exec_target(node)
+                if f.result():
+                    log_info(f'  {target} -> summary OK')
+                else:
+                    log_info(f'  {target} -> summary timeout, collecting available files')
 
         # Phase 2: collect kvtest output files and SDK logs
         def collect_all(node, local_dir):

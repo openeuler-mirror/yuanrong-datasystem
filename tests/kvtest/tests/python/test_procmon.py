@@ -3,6 +3,7 @@
 
 import io
 import os
+import socket
 import unittest
 from unittest.mock import MagicMock, patch, mock_open
 
@@ -10,7 +11,7 @@ from unittest.mock import MagicMock, patch, mock_open
 # Make procmon importable
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'tools'))
-from procmon import find_pid, read_proc_stat, read_proc_mem_breakdown, read_tcp_attempt_fails_stats, read_port_traffic, format_mb
+from procmon import find_pid, read_proc_stat, read_proc_mem_breakdown, read_tcp_attempt_fails_stats, read_port_traffic, _parse_netlink_diag_response, format_mb
 
 
 class TestFindPid(unittest.TestCase):
@@ -179,136 +180,232 @@ class TestReadTcpAttemptFailsStats(unittest.TestCase):
 
 
 class TestReadPortTraffic(unittest.TestCase):
-    """read_port_traffic: parses `ss -tin` output, aggregates
-    bytes_sent/bytes_received across all sockets on the port.
+    """read_port_traffic: NETLINK_INET_DIAG query + _parse_netlink_diag_response.
 
-    The `ss -tin 'sport = :PORT'` output is multi-line per socket: a header
-    line (State/Recv-Q/Send-Q/Local/Peer) followed by indented TCP internal
-    info lines. Real iproute2 ``ss -ti`` uses ``key:value`` colon-separated
-    fields (e.g. ``bytes_sent:16703 bytes_received:1449``); the regex
-    ``[:\\s]+`` matches both colon and whitespace so the parser works on the
-    dominant colon format and is tolerant of whitespace-only variants.
+    read_port_traffic queries the kernel's sock_diag interface directly
+    (no external binary like ss needed). _parse_netlink_diag_response is
+    the pure parser that extracts bytes_sent/bytes_received from the
+    netlink dump's tcp_info payloads.
     """
 
-    # Realistic ss -tin output: two ESTAB sockets on port 31511, each with
-    # colon-separated key:value TCP internal fields. The LISTEN socket (if
-    # present) has no byte counters and is naturally excluded by the regex.
-    _SS_OUTPUT = (
-        "State  Recv-Q Send-Q Local Address:Port  Peer Address:Port   Process\n"
-        "ESTAB  0      0      10.0.0.1:31511      10.0.0.2:54321\n"
-        "    cubic wscale:7,7 rto:204 rtt:0.1/0.05 mss:1448 pmtu:1500 rcvmss:1404\n"
-        "    bytes_sent:1048576 bytes_ack:1048576 bytes_received:524288 segs_out:1024 segs_in:512\n"
-        "    send 8388.6Kbps rcv_rtt:0.1ms rcv_space:14600\n"
-        "ESTAB  0      0      10.0.0.1:31511      10.0.0.3:54322\n"
-        "    cubic wscale:7,7 rto:204 rtt:0.1/0.05 mss:1448 pmtu:1500 rcvmss:1404\n"
-        "    bytes_sent:2097152 bytes_ack:2097152 bytes_received:131072 segs_out:2048 segs_in:128\n"
-    )
+    @staticmethod
+    def _mock_sock_with_data(data):
+        """Mock socket: recv returns data once, then raises socket.timeout."""
+        sock = MagicMock()
+        sock.recv.side_effect = [data, socket.timeout]
+        return sock
 
-    @patch('procmon.subprocess.run')
-    def test_aggregates_bytes_across_multiple_sockets(self, mock_run):
-        # Two ESTAB sockets: sent=1M+2M=3M, recv=512K+128K=640K.
-        mock_run.return_value = MagicMock(returncode=0, stdout=self._SS_OUTPUT)
-        sent, recv = read_port_traffic(31511)
+    @staticmethod
+    def _mock_sock_empty():
+        """Mock socket: recv always raises socket.timeout (no data)."""
+        sock = MagicMock()
+        sock.recv.side_effect = socket.timeout
+        return sock
+
+    @patch('procmon.socket.socket')
+    def test_parses_netlink_response(self, mock_socket_cls):
+        # AF_INET returns one ESTAB socket with byte counters; AF_INET6
+        # returns nothing. Aggregates to sent=1M, recv=512K.
+        data = (_build_diag_msg(31511, 1, _build_tcp_info(
+            bytes_sent=1048576, bytes_received=524288))
+            + _build_done_msg())
+        mock_socket_cls.side_effect = [
+            self._mock_sock_with_data(data),
+            self._mock_sock_empty(),
+        ]
+        sent, recv = read_port_traffic(31511, timeout=2)
+        self.assertEqual(sent, 1048576)
+        self.assertEqual(recv, 524288)
+
+    @patch('procmon.socket.socket')
+    def test_aggregates_across_inet_and_inet6(self, mock_socket_cls):
+        # The function queries both AF_INET and AF_INET6 (dual-stack).
+        # Each family's mock socket returns one socket; the byte counters
+        # are summed.
+        ipv4_data = (_build_diag_msg(31511, 1, _build_tcp_info(
+            bytes_sent=1000, bytes_received=2000))
+            + _build_done_msg())
+        ipv6_data = (_build_diag_msg(31511, 1, _build_tcp_info(
+            bytes_sent=3000, bytes_received=4000), family=10)
+            + _build_done_msg())
+        mock_socket_cls.side_effect = [
+            self._mock_sock_with_data(ipv4_data),
+            self._mock_sock_with_data(ipv6_data),
+        ]
+        sent, recv = read_port_traffic(31511, timeout=2)
+        self.assertEqual(sent, 4000)
+        self.assertEqual(recv, 6000)
+
+    @patch('procmon.socket.socket')
+    def test_no_estab_sockets_returns_none(self, mock_socket_cls):
+        # Kernel responds with only NLMSG_DONE (no ESTAB sockets on the
+        # port). Must return (None, None), not (0, 0), so the caller
+        # skips the rate computation instead of printing 0.0MB/s.
+        mock_socket_cls.side_effect = [
+            self._mock_sock_with_data(_build_done_msg()),
+            self._mock_sock_empty(),
+        ]
+        sent, recv = read_port_traffic(31511, timeout=2)
+        self.assertIsNone(sent)
+        self.assertIsNone(recv)
+
+    @patch('procmon.socket.socket')
+    def test_socket_open_failure_returns_none(self, mock_socket_cls):
+        # AF_NETLINK socket creation fails (e.g. non-Linux platform, or
+        # CAP_NET_ADMIN denied in a restricted container). Must return
+        # (None, None) without crashing.
+        mock_socket_cls.side_effect = OSError('Permission denied')
+        sent, recv = read_port_traffic(31511, timeout=2)
+        self.assertIsNone(sent)
+        self.assertIsNone(recv)
+
+    @patch('procmon.socket.socket')
+    def test_request_includes_port_filter(self, mock_socket_cls):
+        # Verify the netlink request carries the port in big-endian
+        # (__be16) at the idiag_sport offset (req offset 24).
+        import struct
+        inet_sock = self._mock_sock_with_data(_build_done_msg())
+        inet6_sock = self._mock_sock_empty()
+        mock_socket_cls.side_effect = [inet_sock, inet6_sock]
+        read_port_traffic(31511, timeout=2)
+        # sendall is called on the first (AF_INET) mock socket
+        sent_data = inet_sock.sendall.call_args[0][0]
+        # idiag_sport is at offset 24 (nlmsghdr=16 + req header=8)
+        sport = struct.unpack_from('>H', sent_data, 24)[0]
+        self.assertEqual(sport, 31511)
+        # Verify nlmsg_type = SOCK_DIAG_BY_FAMILY = 20
+        nlmsg_type = struct.unpack_from('<H', sent_data, 4)[0]
+        self.assertEqual(nlmsg_type, 20)
+
+
+def _build_tcp_info(bytes_sent=None, bytes_received=None, length=208):
+    """Build a tcp_info blob with byte counters at the correct offsets.
+
+    Offset 128: tcpi_bytes_received (u64, kernel >= 4.4)
+    Offset 200: tcpi_bytes_sent     (u64, kernel >= 4.8)
+    """
+    import struct as _s
+    buf = bytearray(length)
+    if bytes_received is not None and len(buf) >= 128 + 8:
+        _s.pack_into('<Q', buf, 128, bytes_received)
+    if bytes_sent is not None and len(buf) >= 200 + 8:
+        _s.pack_into('<Q', buf, 200, bytes_sent)
+    return bytes(buf)
+
+
+def _build_diag_msg(port, state, tcp_info, family=2):
+    """Build one netlink SOCK_DIAG_BY_FAMILY response message.
+
+    Layout: nlmsghdr(16) + inet_diag_msg(72) + rtattr(INET_DIAG_INFO, tcp_info).
+    inet_diag_msg.idiag_sport = port (big-endian __be16 at offset 4).
+    inet_diag_msg.idiag_state = state (u8 at offset 1).
+    """
+    import struct as _s
+    diag_msg = bytearray(72)
+    diag_msg[0] = family
+    diag_msg[1] = state
+    _s.pack_into('>H', diag_msg, 4, port)
+    rta_len = 4 + len(tcp_info)
+    rta = _s.pack('<HH', rta_len, 2) + tcp_info
+    while len(rta) % 4:
+        rta += b'\x00'
+    msg_len = 16 + len(diag_msg) + len(rta)
+    nlmsghdr = _s.pack('<IHHII', msg_len, 20, 0, 1, 0)
+    return nlmsghdr + bytes(diag_msg) + rta
+
+
+def _build_done_msg():
+    """Build an NLMSG_DONE trailer."""
+    import struct as _s
+    return _s.pack('<IHHII', 16, 3, 0, 1, 0)
+
+
+class TestParseNetlinkDiagResponse(unittest.TestCase):
+    """_parse_netlink_diag_response: parses NETLINK_INET_DIAG dump,
+    aggregates bytes_sent/bytes_received across ESTABLISHED sockets.
+
+    This is the pure parser that the netlink fallback path uses. It reads
+    the same tcp_info byte counters as `ss -ti`, so a container without
+    iproute2 installed still gets per-port throughput data.
+    """
+
+    def test_aggregates_bytes_across_multiple_estab_sockets(self):
+        # Two ESTAB sockets on port 31511: sent=1M+2M=3M, recv=512K+128K=640K.
+        msg1 = _build_diag_msg(31511, 1, _build_tcp_info(
+            bytes_sent=1048576, bytes_received=524288))
+        msg2 = _build_diag_msg(31511, 1, _build_tcp_info(
+            bytes_sent=2097152, bytes_received=131072))
+        data = msg1 + msg2 + _build_done_msg()
+        sent, recv, found = _parse_netlink_diag_response(data, 31511)
+        self.assertTrue(found)
         self.assertEqual(sent, 1048576 + 2097152)
         self.assertEqual(recv, 524288 + 131072)
 
-    @patch('procmon.subprocess.run')
-    def test_single_socket_colon_format(self, mock_run):
-        output = (
-            "ESTAB  0  0  10.0.0.1:31511  10.0.0.2:54321\n"
-            "    cubic rtt:0.1ms\n"
-            "    bytes_sent:100 bytes_received:200\n"
-        )
-        mock_run.return_value = MagicMock(returncode=0, stdout=output)
-        sent, recv = read_port_traffic(31511)
-        self.assertEqual(sent, 100)
-        self.assertEqual(recv, 200)
-
-    @patch('procmon.subprocess.run')
-    def test_whitespace_format_also_supported(self, mock_run):
-        # Defensive: if some iproute2 build uses whitespace instead of colon,
-        # the parser must still work. This pins the [:\s]+ regex against
-        # regression to \s+ (which would silently no-op on real colon output).
-        output = (
-            "ESTAB  0  0  10.0.0.1:31511  10.0.0.2:54321\n"
-            "    bytes_sent 100 bytes_received 200\n"
-        )
-        mock_run.return_value = MagicMock(returncode=0, stdout=output)
-        sent, recv = read_port_traffic(31511)
-        self.assertEqual(sent, 100)
-        self.assertEqual(recv, 200)
-
-    @patch('procmon.subprocess.run')
-    def test_no_sockets_returns_none(self, mock_run):
-        # Port filter matches zero sockets (server not listening, or no
-        # ESTAB connections yet). ss returns rc=0 but empty body (just the
-        # header line, no byte fields). Must return (None, None) so the
-        # caller skips the rate computation, not (0, 0) which would
-        # produce a misleading 0.0MB/s line.
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
-        sent, recv = read_port_traffic(31511)
-        self.assertIsNone(sent)
-        self.assertIsNone(recv)
-
-    @patch('procmon.subprocess.run')
-    def test_ss_missing_returns_none(self, mock_run):
-        # ss binary not installed in the container. FileNotFoundError is
-        # caught; returns (None, None) so procmon degrades to no-traffic
-        # mode without crashing the whole monitoring loop.
-        mock_run.side_effect = FileNotFoundError('ss')
-        sent, recv = read_port_traffic(31511)
-        self.assertIsNone(sent)
-        self.assertIsNone(recv)
-
-    @patch('procmon.subprocess.run')
-    def test_ss_nonzero_rc_returns_none(self, mock_run):
-        # ss exits non-zero (insufficient privileges, invalid port filter
-        # syntax, etc.). Treat as no data, not an error — procmon's
-        # sample loop must keep going so CPU/MEM/FD stats are not lost.
-        mock_run.return_value = MagicMock(returncode=1, stdout='', stderr='error')
-        sent, recv = read_port_traffic(31511)
-        self.assertIsNone(sent)
-        self.assertIsNone(recv)
-
-    @patch('procmon.subprocess.run')
-    def test_ss_timeout_returns_none(self, mock_run):
-        import subprocess
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd=['ss'], timeout=5)
-        sent, recv = read_port_traffic(31511)
-        self.assertIsNone(sent)
-        self.assertIsNone(recv)
-
-    @patch('procmon.subprocess.run')
-    def test_listen_socket_without_counters_excluded(self, mock_run):
-        # The LISTEN socket appears in ss -tin output but has no
-        # bytes_sent/bytes_received (it never carries traffic, only
-        # accepts connections). The regex naturally excludes it because
-        # the field names are absent from the LISTEN socket's info lines.
-        # This test pins that behavior: only ESTAB sockets contribute.
-        output = (
-            "LISTEN 0  128  0.0.0.0:31511  0.0.0.0:*\n"
-            "    cubic\n"
-            "ESTAB  0  0  10.0.0.1:31511  10.0.0.2:54321\n"
-            "    bytes_sent:500 bytes_received:300\n"
-        )
-        mock_run.return_value = MagicMock(returncode=0, stdout=output)
-        sent, recv = read_port_traffic(31511)
-        # Only the ESTAB socket's 500/300 counted; LISTEN socket ignored.
+    def test_listen_socket_excluded(self):
+        # LISTEN socket (state=10) appears in the dump but carries no
+        # byte counters; only ESTAB (state=1) contributes.
+        listen_msg = _build_diag_msg(31511, 10, _build_tcp_info(
+            bytes_sent=0, bytes_received=0))
+        estab_msg = _build_diag_msg(31511, 1, _build_tcp_info(
+            bytes_sent=500, bytes_received=300))
+        data = listen_msg + estab_msg + _build_done_msg()
+        sent, recv, found = _parse_netlink_diag_response(data, 31511)
+        self.assertTrue(found)
         self.assertEqual(sent, 500)
         self.assertEqual(recv, 300)
 
-    @patch('procmon.subprocess.run')
-    def test_passes_port_filter_to_ss(self, mock_run):
-        # Verify the ss command includes the port filter so the right
-        # sockets are selected. Pins the `ss -tin 'sport = :PORT'` form
-        # (same filter syntax as deploy_common.find_pid_by_port).
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
-        read_port_traffic(31511)
-        call_args = mock_run.call_args[0]
-        cmd = call_args[0]
-        self.assertEqual(cmd[0], 'ss')
-        self.assertIn('-tin', cmd)
-        self.assertIn('sport = :31511', cmd)
+    def test_empty_dump_returns_not_found(self):
+        # No ESTAB sockets match the port filter; kernel responds with
+        # only NLMSG_DONE. Returns found=False → caller treats as
+        # (None, None), not (0, 0), to avoid a misleading 0.0MB/s line.
+        data = _build_done_msg()
+        sent, recv, found = _parse_netlink_diag_response(data, 31511)
+        self.assertFalse(found)
+        self.assertEqual(sent, 0)
+        self.assertEqual(recv, 0)
+
+    def test_old_kernel_no_bytes_sent(self):
+        # Kernel < 4.8: tcp_info is only 136 bytes (up to and including
+        # bytes_received at offset 128). bytes_sent at offset 200 is
+        # absent — parser must skip it without error.
+        tcp_info = _build_tcp_info(
+            bytes_sent=None, bytes_received=4096, length=136)
+        msg = _build_diag_msg(31511, 1, tcp_info)
+        data = msg + _build_done_msg()
+        sent, recv, found = _parse_netlink_diag_response(data, 31511)
+        self.assertTrue(found)
+        self.assertEqual(recv, 4096)
+        # bytes_sent not available on this kernel → stays 0
+        self.assertEqual(sent, 0)
+
+    def test_very_old_kernel_no_byte_counters(self):
+        # Kernel < 4.4: tcp_info < 136 bytes, neither bytes_sent nor
+        # bytes_received is available. found=False → (None, None).
+        tcp_info = _build_tcp_info(length=104)
+        msg = _build_diag_msg(31511, 1, tcp_info)
+        data = msg + _build_done_msg()
+        sent, recv, found = _parse_netlink_diag_response(data, 31511)
+        self.assertFalse(found)
+
+    def test_nlmsg_error_terminates_parsing(self):
+        # Kernel sends NLMSG_ERROR (type=2). Parser must stop and return
+        # whatever it found so far (nothing) → (0, 0, False).
+        import struct as _s
+        error_msg = _s.pack('<IHHII', 16, 2, 0, 1, 0)
+        data = error_msg + _build_done_msg()
+        sent, recv, found = _parse_netlink_diag_response(data, 31511)
+        self.assertFalse(found)
+
+    def test_truncated_message_terminates_parsing(self):
+        # A truncated nlmsghdr (fewer than 16 bytes) must not crash;
+        # parser returns what it has so far.
+        msg = _build_diag_msg(31511, 1, _build_tcp_info(
+            bytes_sent=100, bytes_received=200))
+        data = msg + b'\x03\x00\x00\x00'  # claims len=3 but < 16
+        sent, recv, found = _parse_netlink_diag_response(data, 31511)
+        self.assertTrue(found)
+        self.assertEqual(sent, 100)
+        self.assertEqual(recv, 200)
 
 
 class TestFormatMb(unittest.TestCase):
