@@ -73,6 +73,7 @@ extern char **environ;
 #include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/util/raii.h"
@@ -513,11 +514,13 @@ public:
         return Status::OK();
     }
 
-    Status InvokeDecreaseReference(const TransportRequestContext &context, const ShmKey &shmId) override
+    Status InvokeDecreaseReference(const TransportRequestContext &context, const ShmKey &shmId,
+                                   bool delayRelease = false) override
     {
         ++decreaseReferenceCount;
         decreaseReferenceContexts.push_back(context);
         decreaseReferenceShmIds.push_back(shmId);
+        decreaseReferenceDelayRelease.push_back(delayRelease);
         return decreaseReferenceStatus;
     }
 
@@ -591,6 +594,7 @@ public:
     std::string multiSetLastMessage;
     std::vector<TransportRequestContext> decreaseReferenceContexts;
     std::vector<ShmKey> decreaseReferenceShmIds;
+    std::vector<bool> decreaseReferenceDelayRelease;
     std::function<void()> onSetInvoke;
     std::function<void()> afterSetInvoke;
     std::function<void()> onMultiSetInvoke;
@@ -1489,6 +1493,19 @@ public:
         return Status::OK();
     }
 
+    bool DelayReleaseIfNeeded(const UbReceiveBuffer &buffer, const Status &reason, const std::string &request,
+                              const std::string &reasonSource) override
+    {
+        if (!NeedDelayReleaseShmUnit(reason)) {
+            return false;
+        }
+        ++delayReleaseCount;
+        delayedOwners.emplace_back(buffer.owner);
+        delayReleaseReasons.emplace_back(reason);
+        delayReleaseContexts.emplace_back(request, reasonSource);
+        return true;
+    }
+
     uint64_t maxGetSize = 16;
     Status allocateStatus = Status::OK();
     std::function<Status(uint64_t)> allocateHandler;
@@ -1497,6 +1514,10 @@ public:
     std::vector<uint64_t> allocationAttempts;
     std::vector<uint64_t> allocationSizes;
     std::weak_ptr<FakeBufferOwner> lastOwner;
+    int delayReleaseCount = 0;
+    std::vector<std::shared_ptr<IReceiveBufferOwner>> delayedOwners;
+    std::vector<Status> delayReleaseReasons;
+    std::vector<std::pair<std::string, std::string>> delayReleaseContexts;
 };
 
 TEST(WorkerRpcClientTest, SignsFinalReadRequestsBeforeRpc)
@@ -1594,9 +1615,8 @@ TEST(ShmConnectionTest, VoluntaryScaleDownDoesNotReconnectSharedMemory)
     auto session = std::shared_ptr<ShmSession>(new ShmSession(
         MakeAddress(9001), rpcClient, fdChannel, mmapManager, "endpoint-client", "worker-start", 1,
         releasePool, MakeRequestContext(), true, connection.scaleInDraining_));
-    rpcClient->beforeShmHeartbeatReturn = [&connection, session] {
+    rpcClient->beforeShmHeartbeatReturn = [session] {
         session->Close(false);
-        connection.Invalidate(session);
     };
     connection.session_ = session;
 
@@ -1787,8 +1807,14 @@ TEST(WorkerRpcClientTest, SignsCreateAndSetBeforeRpc)
     EXPECT_EQ(client.invokedDecreaseReferenceRequest.token(), "token-1");
     EXPECT_EQ(client.invokedDecreaseReferenceRequest.tenant_id(), "tenant-1");
     EXPECT_TRUE(client.invokedDecreaseReferenceRequest.is_routed());
+    EXPECT_FALSE(client.invokedDecreaseReferenceRequest.delay_release());
     EXPECT_EQ(client.invokedDecreaseReferenceRequest.access_key(), "access-1");
     EXPECT_FALSE(client.invokedDecreaseReferenceRequest.signature().empty());
+
+    ASSERT_TRUE(client.InvokeDecreaseReference(context, ShmKey::Intern("shm-2"), true).IsOk());
+    EXPECT_EQ(client.decreaseReferenceInvokeCount, 2);
+    EXPECT_EQ(client.invokedDecreaseReferenceRequest.object_keys(0), "shm-2");
+    EXPECT_TRUE(client.invokedDecreaseReferenceRequest.delay_release());
 }
 
 TEST(WorkerRpcClientTest, RecordsRoutedSetRpcTotalLatency)
@@ -3174,6 +3200,105 @@ TEST(ObjectMetadataClientTest, UbCapacityMissReleasesBufferAndFallsBack)
     ASSERT_TRUE(metadata.QueryAndGet(MakeAddress(41), batch, nullptr).IsOk());
     EXPECT_FALSE(results[0].inlineData.has_value());
     EXPECT_TRUE(bufferProvider->lastOwner.expired());
+}
+
+TEST(ObjectMetadataClientTest, UbWriteFailureStatusDelaysOnlyAffectedInlineBuffer)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 32;
+    manager->queryAndGetHandler = [](const HostPort &, const QueryAndGetReqPb &request,
+                                     QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
+        EXPECT_TRUE(request.data_request().has_ub());
+        auto *failed = AddLocation(response, "failed", MakeAddress(51), 6);
+        failed->mutable_status()->set_error_code(K_URMA_ERROR);
+        failed->mutable_status()->set_error_msg("write completion is uncertain");
+        AddLocation(response, "miss", MakeAddress(52), 6);
+        return Status::OK();
+    };
+    ObjectMetadataClient metadata(manager, std::make_shared<DeadlineRetry>(),
+                                  std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE),
+                                  bufferProvider, 16);
+    auto results = MakeMetadataItems({ { 0, "failed", MakeAddress(41) },
+                                       { 1, "miss", MakeAddress(41) } });
+    auto batch = MakeMetadataBatch(results);
+
+    ASSERT_TRUE(metadata.QueryAndGet(MakeAddress(41), batch, nullptr).IsOk());
+    EXPECT_EQ(bufferProvider->allocateCount, 2);
+    EXPECT_EQ(bufferProvider->delayReleaseCount, 1);
+    ASSERT_EQ(bufferProvider->delayReleaseReasons.size(), 1u);
+    EXPECT_EQ(bufferProvider->delayReleaseReasons[0].GetCode(), K_URMA_ERROR);
+    EXPECT_TRUE(results[0].status.IsOk());
+    EXPECT_TRUE(results[1].status.IsOk());
+    EXPECT_FALSE(results[0].inlineData.has_value());
+    EXPECT_FALSE(results[1].inlineData.has_value());
+}
+
+TEST(ObjectMetadataClientTest, UbWriteFailureStatusDelaysBufferBeforeReturningMetadataMiss)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    manager->queryAndGetHandler = [](const HostPort &, const QueryAndGetReqPb &request,
+                                     QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
+        EXPECT_TRUE(request.data_request().has_ub());
+        auto *failed = response.add_results();
+        failed->mutable_location()->set_object_key("missing");
+        failed->mutable_status()->set_error_code(K_URMA_ERROR);
+        failed->mutable_status()->set_error_msg("write completion is uncertain");
+        return Status::OK();
+    };
+    ObjectMetadataClient metadata(manager, std::make_shared<DeadlineRetry>(),
+                                  std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE),
+                                  bufferProvider, 16);
+    auto results = MakeMetadataItems({ { 0, "missing", MakeAddress(41) } });
+    auto batch = MakeMetadataBatch(results);
+
+    ASSERT_TRUE(metadata.QueryAndGet(MakeAddress(41), batch, nullptr).IsOk());
+    EXPECT_EQ(bufferProvider->delayReleaseCount, 1);
+    ASSERT_EQ(bufferProvider->delayReleaseReasons.size(), 1u);
+    EXPECT_EQ(bufferProvider->delayReleaseReasons[0].GetCode(), K_URMA_ERROR);
+    EXPECT_EQ(results[0].status.GetCode(), K_NOT_FOUND);
+}
+
+TEST(ObjectMetadataClientTest, AmbiguousUbQueryRetryDelaysOldBufferAndAllocatesNewBuffer)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    int invokeCount = 0;
+    uint64_t firstBufferAddress = 0;
+    manager->queryAndGetHandler = [&invokeCount, &firstBufferAddress](
+                                      const HostPort &, const QueryAndGetReqPb &request,
+                                      QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
+        EXPECT_TRUE(request.data_request().has_ub());
+        EXPECT_EQ(request.data_request().ub().buffer_infos_size(), 1);
+        if (!request.data_request().has_ub() || request.data_request().ub().buffer_infos_size() != 1) {
+            return Status(K_RUNTIME_ERROR, "invalid QueryAndGet UB request");
+        }
+        const auto bufferAddress = request.data_request().ub().buffer_infos(0).seg_va();
+        ++invokeCount;
+        if (invokeCount == 1) {
+            firstBufferAddress = bufferAddress;
+            return Status(K_RPC_CANCELLED, "ambiguous QueryAndGet");
+        }
+        EXPECT_NE(bufferAddress, firstBufferAddress);
+        AddLocation(response, "key", MakeAddress(51), 6);
+        return Status::OK();
+    };
+    ObjectMetadataClient metadata(manager, std::make_shared<DeadlineRetry>(),
+                                  std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE),
+                                  bufferProvider, 16);
+    auto results = MakeMetadataItems({ { 0, "key", MakeAddress(41) } });
+    auto batch = MakeMetadataBatch(results);
+
+    ASSERT_TRUE(metadata.QueryAndGet(MakeAddress(41), batch, nullptr).IsOk());
+    EXPECT_EQ(invokeCount, 2);
+    EXPECT_EQ(bufferProvider->allocateCount, 2);
+    EXPECT_EQ(bufferProvider->delayReleaseCount, 1);
+    ASSERT_EQ(bufferProvider->delayReleaseReasons.size(), 1u);
+    EXPECT_EQ(bufferProvider->delayReleaseReasons[0].GetCode(), K_RPC_CANCELLED);
 }
 
 TEST(ObjectMetadataClientTest, UbBufferAllocationFailureFallsBackToTcp)
@@ -7979,6 +8104,20 @@ TEST(UbTransporterTest, ShmSendBufferOwnerReleasesOnRoutedWorker)
     EXPECT_EQ(rpcClient->decreaseReferenceCount, 1);
     ASSERT_FALSE(rpcClient->decreaseReferenceShmIds.empty());
     EXPECT_EQ(rpcClient->decreaseReferenceShmIds[0].ToString(), "test-shm-id");
+}
+
+TEST(UbTransporterTest, ShmSendBufferOwnerPropagatesDelayRelease)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    auto pool = std::make_shared<ThreadPool>(0, 1, "test_release");
+    {
+        auto owner = std::make_shared<ShmSendBufferOwner>(
+            rpcClient, ShmKey::Intern("test-shm-id"), MakeRequestContext(), pool, nullptr);
+        owner->MarkDelayRelease();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    ASSERT_EQ(rpcClient->decreaseReferenceDelayRelease.size(), 1u);
+    EXPECT_TRUE(rpcClient->decreaseReferenceDelayRelease[0]);
 }
 }  // namespace
 }  // namespace client

@@ -44,8 +44,6 @@ class PerfPoint;
 
 namespace object_cache {
 
-class DelayedReleaseShmManager;
-
 using QueryMetaMap = std::unordered_map<std::string, master::QueryMetaInfoPb>;
 
 class WorkerOcServiceGetImpl : public WorkerOcServiceCrudCommonApi,
@@ -1207,8 +1205,6 @@ private:
     std::shared_ptr<ThreadPool> threadPool_{ nullptr };
 
     std::unique_ptr<ThreadPool> remoteGetThreadPool_{ nullptr };
-
-    std::unique_ptr<DelayedReleaseShmManager> delayedReleaseShmManager_{ nullptr };
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 

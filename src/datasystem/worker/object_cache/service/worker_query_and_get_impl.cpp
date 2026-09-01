@@ -30,6 +30,7 @@
 #include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/object_cache/shm_guard.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/shared_memory/delayed_release_shm_manager.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/validator.h"
@@ -291,7 +292,9 @@ Status WorkerQueryAndGetImpl::EncodeLocalHits(RequestState &state)
         if (rc.IsError() || !encoded) {
             state.payloads.resize(payloadCount);
             state.tcpPayloadSize = tcpPayloadSize;
-            state.response.mutable_results(i)->Clear();
+            auto *result = state.response.mutable_results(i);
+            result->clear_location();
+            result->clear_data_result();
             state.misses.emplace_back(objectKey);
             VLOG_IF(1, rc.IsError()) << "[ObjectKey " << objectKey
                                      << "] QueryAndGet inline data fallback: " << rc.ToString();
@@ -312,7 +315,7 @@ Status WorkerQueryAndGetImpl::EncodeLocalHit(RequestState &state, size_t index,
     if (request.data_request().has_tcp()) {
         RETURN_IF_NOT_OK(EncodeTcp(params, *result.mutable_data_result(), state, encoded));
     } else if (request.data_request().has_ub()) {
-        RETURN_IF_NOT_OK(EncodeUb(request.data_request().ub(), index, params, encoded));
+        RETURN_IF_NOT_OK(EncodeUb(request.data_request().ub(), index, params, result, encoded));
         if (encoded) {
             result.mutable_data_result();
         }
@@ -356,7 +359,8 @@ Status WorkerQueryAndGetImpl::EncodeTcp(const GetObjEntryParams &params, QueryAn
 }
 
 Status WorkerQueryAndGetImpl::EncodeUb(const QueryAndGetUbDataReqPb &request, size_t index,
-                                       const GetObjEntryParams &params, bool &encoded) const
+                                       const GetObjEntryParams &params, QueryAndGetResultPb &result,
+                                       bool &encoded) const
 {
     encoded = false;
     if (params.dataSize > request.buffer_size()) {
@@ -388,6 +392,16 @@ Status WorkerQueryAndGetImpl::EncodeUb(const QueryAndGetUbDataReqPb &request, si
         ReportLocalUbOperationFailure(ubAdmission_.get(), localAddress_, failedEndpoint,
                                       UbOperationKind::CLIENT_GET_WRITEBACK, rc, failure.providerStatus,
                                       failure.cqeStatus);
+        result.mutable_status()->set_error_code(rc.GetCode());
+        result.mutable_status()->set_error_msg(rc.GetMsg());
+        if (NeedDelayReleaseShmUnit(rc)) {
+            LOG_EVERY_T(WARNING, DELAY_RELEASE_LOG_INTERVAL_SEC)
+                << "[QUERY_AND_GET_DELAY_RELEASE_ADD] id=" << params.shmUnit->id
+                << ", identity=" << params.shmUnit->GetIdentity() << ", bytes=" << params.shmUnit->size
+                << ", delayMs=" << DEFAULT_SHM_DELAY_RELEASE_MS << ", reason=" << rc;
+            DelayedReleaseShmManager::Instance().Add(
+                params.shmUnit, std::chrono::milliseconds(DEFAULT_SHM_DELAY_RELEASE_MS));
+        }
         return rc;
     }
     METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_GET_URMA_TOTAL_BYTES, params.dataSize);

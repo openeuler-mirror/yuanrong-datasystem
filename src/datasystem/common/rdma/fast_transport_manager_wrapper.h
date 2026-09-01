@@ -37,6 +37,8 @@
 #include "datasystem/protos/meta_transport.pb.h"
 
 namespace datasystem {
+bool NeedDelayReleaseShmUnit(const Status &status);
+
 /**
  * @brief Get an unique identifier for connection between device and the remote host.
  * @param[out] commId The uuid in string.

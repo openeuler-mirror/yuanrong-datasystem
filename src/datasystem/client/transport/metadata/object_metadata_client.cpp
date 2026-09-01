@@ -27,6 +27,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
+#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -301,15 +302,19 @@ Status ObjectMetadataClient::QueryWithRetry(const HostPort &address, const Objec
         bool rpcDispatched = false;
         Status rc = InvokeQueryAndGet(address, request, response, payloads, context, rpcDispatched);
         RETURN_OK_IF_TRUE(rc.IsOk());
-        RETURN_IF_NOT_OK(PrepareQueryRetry(address, rc, rpcDispatched, context, backoffMs));
+        RETURN_IF_NOT_OK(PrepareQueryRetry(address, items, rc, rpcDispatched, context, backoffMs));
     }
 }
 
-Status ObjectMetadataClient::PrepareQueryRetry(const HostPort &address, const Status &rc, bool rpcDispatched,
-                                               InlineRequestContext &context, int64_t &backoffMs)
+Status ObjectMetadataClient::PrepareQueryRetry(const HostPort &address, const ObjectMetadataBatch &items,
+                                               const Status &rc, bool rpcDispatched, InlineRequestContext &context,
+                                               int64_t &backoffMs)
 {
-    if (rpcDispatched && context.mode == InlineTransportMode::SHM && context.shmTransporter != nullptr) {
-        context.shmTransporter->InvalidateSession(context.shmSession);
+    const bool quarantineUbBuffers =
+        rpcDispatched && context.mode == InlineTransportMode::UB && NeedDelayReleaseShmUnit(rc);
+    if (quarantineUbBuffers) {
+        DelayReleaseUbBuffers(context, rc, "rpc_status");
+        context.DisableInlineData();
     }
     const bool routeFailure = IsMetadataOwnerRouteFailure(rc.GetCode());
     if (routeFailure && metadataFailureHandler_) {
@@ -336,7 +341,35 @@ Status ObjectMetadataClient::PrepareQueryRetry(const HostPort &address, const St
     }
     VLOG(1) << "[TransportGet][Metadata] Retrying query, meta owner: " << address.ToString()
             << ", status: " << rc.ToString();
-    return retry_->Backoff(backoffMs);
+    RETURN_IF_NOT_OK(retry_->Backoff(backoffMs));
+    if (quarantineUbBuffers) {
+        RETURN_IF_NOT_OK(PrepareUbInlineRequest(address, items, context));
+    }
+    return Status::OK();
+}
+
+void ObjectMetadataClient::DelayReleaseUbBuffers(InlineRequestContext &context, const Status &reason,
+                                                 const std::string &reasonSource) const
+{
+    for (const auto &[item, buffer] : context.ubBuffers) {
+        const std::string objectKey = item == nullptr ? std::string() : item->objectKey;
+        ubBufferProvider_->DelayReleaseIfNeeded(buffer, reason, "QueryAndGet", reasonSource + ":" + objectKey);
+    }
+}
+
+bool ObjectMetadataClient::HandleUbTransportStatus(ObjectMetadataItem &item, const QueryAndGetResultPb &result,
+                                                   InlineRequestContext &context) const
+{
+    if (context.mode != InlineTransportMode::UB || !result.has_status()
+        || result.status().error_code() == K_OK) {
+        return false;
+    }
+    auto buffer = context.ubBuffers.find(&item);
+    if (buffer != context.ubBuffers.end()) {
+        const Status status(static_cast<StatusCode>(result.status().error_code()), result.status().error_msg());
+        ubBufferProvider_->DelayReleaseIfNeeded(buffer->second, status, "QueryAndGet", "response_status");
+    }
+    return true;
 }
 
 Status ObjectMetadataClient::BuildQueryRequest(const HostPort &address, const ObjectMetadataBatch &items,
@@ -377,12 +410,16 @@ Status ObjectMetadataClient::ApplyResult(ObjectMetadataItem &item, const QueryAn
     const auto &location = result.location();
     CHECK_FAIL_RETURN_STATUS(location.object_key() == item.objectKey, K_RUNTIME_ERROR,
                              "QueryAndGet result key does not match request order");
+    const bool hasUbTransportError = HandleUbTransportStatus(item, result, context);
     if (location.object_locations_size() == 0) {
         item.status = Status(K_NOT_FOUND, "Object was not found");
         return Status::OK();
     }
     item.status = Status::OK();
     CopyLocation(location, item.location);
+    if (hasUbTransportError) {
+        return Status::OK();
+    }
     if (!result.has_data_result()) {
         // Absence of data_result is a per-key fast-path miss; the caller will execute phase two.
         return Status::OK();
@@ -416,9 +453,6 @@ Status ObjectMetadataClient::ApplyResult(ObjectMetadataItem &item, const QueryAn
     if (rc.IsError() && context.mode == InlineTransportMode::SHM) {
         VLOG(1) << "[ObjectKey " << item.objectKey
                 << "] QueryAndGet SHM materialization fallback: " << rc.ToString();
-        if (context.shmTransporter != nullptr) {
-            context.shmTransporter->InvalidateSession(context.shmSession);
-        }
         return Status::OK();
     }
     RETURN_IF_NOT_OK(rc);
@@ -495,11 +529,7 @@ Status ObjectMetadataClient::Query(const HostPort &address, const ObjectMetadata
     QueryAndGetRspPb response;
     std::vector<RpcMessage> payloads;
     RETURN_IF_NOT_OK(QueryWithRetry(address, items, response, payloads, context));
-    Status rc = ApplyResults(items, response, payloads, context);
-    if (rc.IsError() && context.mode == InlineTransportMode::SHM && context.shmTransporter != nullptr) {
-        context.shmTransporter->InvalidateSession(context.shmSession);
-    }
-    return rc;
+    return ApplyResults(items, response, payloads, context);
 }
 
 Status ObjectMetadataClient::QueryAndGet(const HostPort &address, const ObjectMetadataBatch &items,

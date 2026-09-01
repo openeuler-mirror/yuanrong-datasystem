@@ -71,6 +71,7 @@ constexpr char INJECT_NOT_FOUND_KEY_PREFIX[] = "transport_get_inject_not_found_"
 constexpr char UB_GET_SIZE_ENV[] = "DATASYSTEM_UB_GET_DATA_SIZE_BYTES";
 constexpr char SKIP_WARMUP_INJECT[] = "ObjectClientImpl.ClientWorkerWarmup.skip";
 constexpr char QUERY_AND_GET_INJECT[] = "client.transport.query_and_get";
+constexpr char QUERY_AND_GET_AFTER_DISPATCH_INJECT[] = "client.transport.query_and_get.after_dispatch";
 constexpr char GET_OBJECT_REMOTE_INJECT[] = "client.transport.get_object_remote";
 constexpr char BATCH_GET_OBJECT_REMOTE_INJECT[] = "client.transport.batch_get_object_remote";
 constexpr char WORKER_OC_GET_INJECT[] = "client.transport.worker_oc_get";
@@ -931,6 +932,43 @@ TEST_F(KVClientTransportGetWithAllWorkersShmTest, SameNodeMetadataOwnerHitUsesSh
     ASSERT_EQ(workerAfter.metadataMisses, workerBefore.metadataMisses);
 }
 
+TEST_F(KVClientTransportGetWithAllWorkersShmTest, QueryAndGetRpcFailureKeepsShmSession)
+{
+    std::vector<std::string> keys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 2, keys);
+    ASSERT_EQ(keys.size(), 2u);
+    const std::string value(VALUE_SIZE, 'r');
+    DS_ASSERT_OK(writer_->Set(keys[0], value));
+    DS_ASSERT_OK(writer_->Set(keys[1], value));
+
+    Optional<Buffer> liveBuffer;
+    DS_ASSERT_OK(reader_->Get(keys[0], liveBuffer));
+    ASSERT_TRUE(liveBuffer);
+    ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+
+    TransportRpcCounts rpcBefore;
+    GetRpcCounts(rpcBefore);
+    {
+        DS_ASSERT_OK(inject::Set(QUERY_AND_GET_AFTER_DISPATCH_INJECT,
+                                 "1*return(K_RPC_CANCELLED)"));
+        Raii clearInject([] { (void)inject::Clear(QUERY_AND_GET_AFTER_DISPATCH_INJECT); });
+        Optional<Buffer> failedBuffer;
+        const Status rc = reader_->Get(keys[1], failedBuffer);
+        ASSERT_EQ(rc.GetCode(), StatusCode::K_RPC_CANCELLED);
+    }
+
+    AssertBufferEqual(*liveBuffer, value);
+    Optional<Buffer> recoveredBuffer;
+    DS_ASSERT_OK(reader_->Get(keys[1], recoveredBuffer));
+    ASSERT_TRUE(recoveredBuffer);
+    AssertBufferEqual(*recoveredBuffer, value);
+    ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+
+    TransportRpcCounts rpcAfter;
+    GetRpcCounts(rpcAfter);
+    ASSERT_EQ(rpcAfter.registerShmClient, rpcBefore.registerShmClient);
+}
+
 TEST_F(KVClientTransportGetWithAllWorkersShmTest, UnavailableShmSessionFallsBackBeforeDispatch)
 {
     std::vector<std::string> keys;
@@ -953,18 +991,33 @@ TEST_F(KVClientTransportGetWithAllWorkersShmTest, UnavailableShmSessionFallsBack
 TEST_F(KVClientTransportGetWithAllWorkersShmTest, ShmMaterializationFailureFallsBackPerKey)
 {
     std::vector<std::string> keys;
-    GetRealHashKeysToWorker(META_OWNER_INDEX, 1, keys);
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 2, keys);
+    ASSERT_EQ(keys.size(), 2u);
     const std::string value(VALUE_SIZE, 'm');
-    DS_ASSERT_OK(writer_->Set(keys.front(), value));
+    DS_ASSERT_OK(writer_->Set(keys[0], value));
+    DS_ASSERT_OK(writer_->Set(keys[1], value));
+
+    Optional<Buffer> liveBuffer;
+    DS_ASSERT_OK(reader_->Get(keys[0], liveBuffer));
+    ASSERT_TRUE(liveBuffer);
+    ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+
+    TransportRpcCounts rpcBefore;
+    GetRpcCounts(rpcBefore);
     DS_ASSERT_OK(inject::Set(SHM_MATERIALIZATION_FAILURE_INJECT, "1*return(K_RUNTIME_ERROR)"));
     Raii clearInject([] { (void)inject::Clear(SHM_MATERIALIZATION_FAILURE_INJECT); });
 
     Optional<Buffer> buffer;
-    DS_ASSERT_OK(reader_->Get(keys.front(), buffer));
+    DS_ASSERT_OK(reader_->Get(keys[1], buffer));
 
     ASSERT_TRUE(buffer);
     AssertBufferEqual(*buffer, value);
+    AssertBufferEqual(*liveBuffer, value);
     ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+
+    TransportRpcCounts rpcAfter;
+    GetRpcCounts(rpcAfter);
+    ASSERT_EQ(rpcAfter.registerShmClient, rpcBefore.registerShmClient);
 }
 
 TEST_F(KVClientTransportGetTest, CrossNodeMetadataOwnerHitUsesUbInline)

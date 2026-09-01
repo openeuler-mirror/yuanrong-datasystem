@@ -132,7 +132,6 @@ ds_cc_library(
         "//src/datasystem/protos:utils_cc_proto",
         "//src/datasystem/worker:authenticate",
         "//src/datasystem/worker/object_cache:async_update_location_manager",
-        "//src/datasystem/worker/object_cache:delayed_release_shm_manager",
         "//src/datasystem/worker/object_cache:object_cache_worker_flags",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:worker_request_manager",

@@ -13,8 +13,8 @@
  * limitations under the License.
  */
 
-#ifndef DATASYSTEM_WORKER_OBJECT_CACHE_DELAYED_RELEASE_SHM_MANAGER_H
-#define DATASYSTEM_WORKER_OBJECT_CACHE_DELAYED_RELEASE_SHM_MANAGER_H
+#ifndef DATASYSTEM_COMMON_SHARED_MEMORY_DELAYED_RELEASE_SHM_MANAGER_H
+#define DATASYSTEM_COMMON_SHARED_MEMORY_DELAYED_RELEASE_SHM_MANAGER_H
 
 #include <chrono>
 #include <condition_variable>
@@ -28,11 +28,12 @@
 #include "datasystem/common/shared_memory/shm_unit.h"
 
 namespace datasystem {
-namespace object_cache {
+
+constexpr int64_t DEFAULT_SHM_DELAY_RELEASE_MS = 128;
+constexpr int DELAY_RELEASE_LOG_INTERVAL_SEC = 10;
 
 class DelayedReleaseShmManager {
 public:
-    DelayedReleaseShmManager();
     ~DelayedReleaseShmManager();
 
     DelayedReleaseShmManager(const DelayedReleaseShmManager &) = delete;
@@ -40,9 +41,13 @@ public:
     DelayedReleaseShmManager(DelayedReleaseShmManager &&) = delete;
     DelayedReleaseShmManager &operator=(DelayedReleaseShmManager &&) = delete;
 
-    void Add(std::shared_ptr<ShmUnit> shmUnit, std::chrono::milliseconds delay);
+    static DelayedReleaseShmManager &Instance();
+
+    void Add(const std::shared_ptr<ShmUnit> &shmUnit, std::chrono::milliseconds delay);
 
 private:
+    DelayedReleaseShmManager();
+
     struct DelayedReleaseEntry {
         std::chrono::steady_clock::time_point releaseTime;
         std::shared_ptr<ShmUnit> shmUnit;
@@ -66,7 +71,6 @@ private:
     std::thread releaseThread_;
 };
 
-}  // namespace object_cache
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_WORKER_OBJECT_CACHE_DELAYED_RELEASE_SHM_MANAGER_H
+#endif  // DATASYSTEM_COMMON_SHARED_MEMORY_DELAYED_RELEASE_SHM_MANAGER_H

@@ -528,7 +528,6 @@ Status WorkerOcServicePublishImpl::PublishObject(ObjectKV &objectKV, const Publi
     if (!payloads.empty()) {
         RETURN_IF_NOT_OK(SaveBinaryObjectToMemory(objectKV, payloads, evictionManager_, memCpyThreadPool_));
     }
-
     INJECT_POINT("worker.free_object_resource", [&safeObj]() {
         LOG_IF_ERROR(safeObj->FreeResources(), "SafeObj free failed");
         return Status::OK();

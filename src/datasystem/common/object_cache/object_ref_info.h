@@ -479,7 +479,8 @@ public:
      * @param[in] shmId The shared memory id.
      * @return Status of the call
      */
-    Status RemoveShmUnit(const ClientKey &clientId, const ShmKey &shmId);
+    Status RemoveShmUnit(const ClientKey &clientId, const ShmKey &shmId,
+                         std::shared_ptr<ShmUnit> *removedShmUnit = nullptr);
 
     /**
      * @brief Remove a client from the client table.

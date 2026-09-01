@@ -178,6 +178,11 @@ public:
             return segmentSize_;
         }
 
+        std::shared_ptr<ShmUnit> GetShmUnit() const
+        {
+            return shmUnit_;
+        }
+
     private:
         void Release()
         {

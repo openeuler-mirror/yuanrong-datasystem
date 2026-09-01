@@ -70,7 +70,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/common/util/meta_route_tool.h"
-#include "datasystem/worker/object_cache/delayed_release_shm_manager.h"
+#include "datasystem/common/shared_memory/delayed_release_shm_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/service_execution_policy.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
@@ -187,14 +187,12 @@ WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initPar
     if (FLAGS_enable_worker_worker_batch_get) {
         workerBatchRemoteGetThreadPool_ = std::make_unique<ThreadPool>(1, FLAGS_rpc_thread_num, "BatchRemoteGet");
     }
-    delayedReleaseShmManager_ = std::make_unique<DelayedReleaseShmManager>();
 }
 
 WorkerOcServiceGetImpl::~WorkerOcServiceGetImpl()
 {
     workerBatchRemoteGetThreadPool_ = nullptr;
     remoteGetThreadPool_ = nullptr;
-    delayedReleaseShmManager_ = nullptr;
     if (asyncUpdateLocationManager_) {
         asyncUpdateLocationManager_->Stop();
         asyncUpdateLocationManager_ = nullptr;

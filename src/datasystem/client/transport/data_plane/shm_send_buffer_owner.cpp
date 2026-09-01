@@ -66,8 +66,11 @@ void ShmSendBufferOwner::Release()
         return;
     }
     try {
+        // The ObjectBuffer owner stays alive through Set, so an ambiguous write is marked before Release snapshots it.
+        // Capture by value because the asynchronous task can outlive this owner.
         releasePool->Execute([rpcClient = std::move(rpcClient), context = context_, shmId = shmId_,
-                             handle = lifecycleHandle_]() {
+                              handle = lifecycleHandle_,
+                              delayRelease = delayRelease_.load(std::memory_order_acquire)]() {
             // Retry with backoff (mirrors TransportLayer::InvokeReleaseWithRetry): a single transient
             // failure must not drop the release (region would leak until client-lost). On exhaustion, log
             // and leave it to client-lost.
@@ -81,7 +84,7 @@ void ShmSendBufferOwner::Release()
                     std::this_thread::sleep_for(std::chrono::milliseconds(backoffMs[attempt]));
                 }
                 ApiDeadlineGuard deadlineGuard(WRITE_REFERENCE_RELEASE_TIMEOUT_MS);
-                rc = rpcClient->InvokeDecreaseReference(context, shmId);
+                rc = rpcClient->InvokeDecreaseReference(context, shmId, delayRelease);
                 if (rc.IsOk()) {
                     return;
                 }
@@ -96,6 +99,11 @@ void ShmSendBufferOwner::Release()
     } catch (const std::exception &e) {
         LOG(WARNING) << "Submit routed write reference release failed: " << e.what();
     }
+}
+
+void ShmSendBufferOwner::MarkDelayRelease()
+{
+    delayRelease_.store(true, std::memory_order_release);
 }
 
 bool ShmSendBufferOwner::ManagesWorkerReference() const

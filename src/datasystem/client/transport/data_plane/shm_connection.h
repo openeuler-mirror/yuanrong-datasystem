@@ -171,8 +171,6 @@ public:
 
     Status Acquire(const TransportRequestContext &context, std::shared_ptr<ShmSession> &session);
 
-    void Invalidate(const std::shared_ptr<ShmSession> &session);
-
     bool IsAlive() const override;
 
     AccessTransportKind Kind() const override;
