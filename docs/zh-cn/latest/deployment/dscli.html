@@ -3036,7 +3036,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class
 <td><p>uint32</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">4</span></code></p></td>
 <td><p>否</p></td>
-<td><p>新建哈希环和扩容时为每个 Worker 分配的 token 数，取值范围为 <code class="docutils literal notranslate"><span class="pre">1</span></code>～<code class="docutils literal notranslate"><span class="pre">4096</span></code>。同一集群中执行 topology 规划的进程（Worker 或 Coordinator）必须使用相同配置；修改不会重分配已有 topology 中已持久化的 token。</p></td>
+<td><p>首次创建哈希环时为每个 Worker 分配的 token 数，取值范围为 <code class="docutils literal notranslate"><span class="pre">1</span></code>～<code class="docutils literal notranslate"><span class="pre">4096</span></code>。该值会写入集群 topology；后续扩容和重规划使用 topology 中的集群值，修改本地配置不会改变已有集群的 token 数。</p></td>
 </tr>
 <tr class="row-even"><td><p>enable_reconciliation</p></td>
 <td><p>bool</p></td>
