@@ -87,6 +87,7 @@ namespace datasystem {
 namespace ut {
 
 constexpr int64_t K_INJECT_WAIT_POLL_MS = 1;
+constexpr int64_t REMOTE_GET_CLEANUP_TIMEOUT_MS = 1'000;
 bool WaitForInjectPointExecuteCount(const std::string &name, uint64_t expectedCount,
                                     std::chrono::milliseconds timeout)
 {
@@ -1393,6 +1394,45 @@ protected:
         return queryMeta;
     }
 
+    struct RemoteGetCleanupState {
+        size_t queryMetaCalls = 0;
+        size_t removeMetaCalls = 0;
+        uint64_t removedVersion = 0;
+    };
+
+    void InstallRemoteGetFailureApi(const std::string &objectKey, uint64_t firstVersion, uint64_t latestVersion,
+                                    RemoteGetCleanupState &state)
+    {
+        RouteObjectToMaster(objectKey, leavingWorkerAddress_);
+        auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(leavingWorkerAddress_, localAddress_);
+        api->queryMeta_ = [this, &objectKey, firstVersion, latestVersion,
+                           &state](master::QueryMetaReqPb &, uint64_t, master::QueryMetaRspPb &rsp,
+                                   std::vector<RpcMessage> &) {
+            auto queryMeta = MakeQueryMeta();
+            queryMeta.mutable_meta()->set_object_key(objectKey);
+            queryMeta.mutable_meta()->set_version(state.queryMetaCalls++ == 0 ? firstVersion : latestVersion);
+            queryMeta.set_address(leavingWorkerAddress_.ToString());
+            *rsp.add_query_metas() = std::move(queryMeta);
+            return Status::OK();
+        };
+        api->removeMeta_ = [&state](master::RemoveMetaReqPb &req, master::RemoveMetaRspPb &) {
+            ++state.removeMetaCalls;
+            state.removedVersion = req.version();
+            return Status::OK();
+        };
+        workerMasterApiManager_->SetDefaultApi(api);
+    }
+
+    Status RunRemoteGetFailure(const std::string &objectKey, std::unordered_set<std::string> &failedIds,
+                               std::set<ReadKey> &needRetryIds,
+                               std::unordered_map<std::string, uint64_t> &failedKeyVersions)
+    {
+        failedIds.clear();
+        needRetryIds.clear();
+        return impl_->ProcessObjectsNotExistInLocal({ ReadKey(objectKey) }, 0, failedIds, needRetryIds,
+                                                    failedKeyVersions);
+    }
+
     MigrateTestPlacementFacade placement_;
     worker::MetadataRouteResolver metadataRoute_{ &placement_, worker::MetadataRouteOptions{} };
     HostPort localAddress_{ "127.0.0.1", 18888 };
@@ -1424,12 +1464,124 @@ TEST_F(NotifyRemoteGetMigrationTest, ProcessObjectsNotExistInLocalPreservesRpcEr
     GetRequestContext()->reqTimeoutDuration.Init(1'000);
     std::unordered_set<std::string> failedIds;
     std::set<ReadKey> needRetryIds;
-    auto rc = impl_->ProcessObjectsNotExistInLocal({ ReadKey(objectKey) }, 0, failedIds, needRetryIds);
+    std::unordered_map<std::string, uint64_t> failedKeyVersions;
+    auto rc = impl_->ProcessObjectsNotExistInLocal({ ReadKey(objectKey) }, 0, failedIds, needRetryIds,
+                                                   failedKeyVersions);
 
     EXPECT_EQ(rc.GetCode(), K_RPC_PEER_DEAD);
     EXPECT_THAT(failedIds, Contains(objectKey));
     EXPECT_TRUE(needRetryIds.empty());
     EXPECT_EQ(objectTable_->Contains(objectKey).GetCode(), K_NOT_FOUND);
+}
+
+TEST_F(NotifyRemoteGetMigrationTest, OrdinaryRemoteGetDefersMetadataCleanupAndPreservesQueryVersion)
+{
+    constexpr uint64_t queryMetaVersion = 41;
+    constexpr uint64_t latestQueryMetaVersion = 42;
+    const bool oldNeedMetadata = FLAGS_oc_io_from_l2cache_need_metadata;
+    Raii restoreFlag([oldNeedMetadata]() { FLAGS_oc_io_from_l2cache_need_metadata = oldNeedMetadata; });
+    FLAGS_oc_io_from_l2cache_need_metadata = false;
+
+    const std::string objectKey = "ordinary-remote-get-failure";
+    RemoteGetCleanupState state;
+    InstallRemoteGetFailureApi(objectKey, queryMetaVersion, latestQueryMetaVersion, state);
+
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(REMOTE_GET_CLEANUP_TIMEOUT_MS);
+    DS_ASSERT_OK(inject::Set("worker.remote_get_failed", "return(K_RUNTIME_ERROR)"));
+    Raii clearInject([]() { (void)inject::Clear("worker.remote_get_failed"); });
+    std::unordered_set<std::string> failedIds;
+    std::set<ReadKey> needRetryIds;
+    std::unordered_map<std::string, uint64_t> failedKeyVersions;
+
+    auto rc = RunRemoteGetFailure(objectKey, failedIds, needRetryIds, failedKeyVersions);
+
+    EXPECT_EQ(rc.GetCode(), K_RUNTIME_ERROR);
+    EXPECT_THAT(failedIds, Contains(objectKey));
+    EXPECT_TRUE(needRetryIds.empty());
+    EXPECT_EQ(state.removeMetaCalls, 0U);
+    EXPECT_EQ(failedKeyVersions,
+              (std::unordered_map<std::string, uint64_t>{ { objectKey, queryMetaVersion } }));
+
+    EXPECT_EQ(RunRemoteGetFailure(objectKey, failedIds, needRetryIds, failedKeyVersions).GetCode(), K_RUNTIME_ERROR);
+    EXPECT_EQ(state.removeMetaCalls, 0U);
+    EXPECT_EQ(failedKeyVersions,
+              (std::unordered_map<std::string, uint64_t>{ { objectKey, latestQueryMetaVersion } }));
+
+    impl_->DeleteFailedRemoteGetMetas(failedIds, failedKeyVersions);
+
+    EXPECT_EQ(state.removeMetaCalls, 1U);
+    EXPECT_EQ(state.removedVersion, latestQueryMetaVersion);
+}
+
+TEST_F(NotifyRemoteGetMigrationTest, OrdinaryRemoteGetCleansRegisteredVersionAfterRetryQueryMetaFailure)
+{
+    constexpr uint64_t queryMetaVersion = 43;
+    const std::string objectKey = "ordinary-remote-get-query-meta-retry-failure";
+    RouteObjectToMaster(objectKey, leavingWorkerAddress_);
+    RemoteGetCleanupState state;
+    auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(leavingWorkerAddress_, localAddress_);
+    api->queryMeta_ = [this, &objectKey, queryMetaVersion,
+                       &state](master::QueryMetaReqPb &, uint64_t, master::QueryMetaRspPb &rsp,
+                               std::vector<RpcMessage> &) {
+        if (state.queryMetaCalls++ > 0) {
+            return Status(K_RPC_PEER_DEAD, "query meta retry failed");
+        }
+        auto queryMeta = MakeQueryMeta();
+        queryMeta.mutable_meta()->set_object_key(objectKey);
+        queryMeta.mutable_meta()->set_version(queryMetaVersion);
+        queryMeta.set_address(leavingWorkerAddress_.ToString());
+        *rsp.add_query_metas() = std::move(queryMeta);
+        return Status::OK();
+    };
+    api->removeMeta_ = [&state](master::RemoveMetaReqPb &req, master::RemoveMetaRspPb &) {
+        ++state.removeMetaCalls;
+        state.removedVersion = req.version();
+        return Status::OK();
+    };
+    workerMasterApiManager_->SetDefaultApi(api);
+    auto request = std::make_shared<GetRequest>(AccessRecorderKey::DS_POSIX_GET);
+    request->GetObjects().emplace(objectKey, GetObjInfo{});
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(REMOTE_GET_CLEANUP_TIMEOUT_MS);
+    DS_ASSERT_OK(inject::Set("worker.remote_get_failed", "return(K_WORKER_PULL_OBJECT_NOT_FOUND)"));
+    Raii clearInject([]() { (void)inject::Clear("worker.remote_get_failed"); });
+
+    DS_ASSERT_OK(impl_->TryGetObjectFromRemote(0, request, { ReadKey(objectKey) }));
+
+    EXPECT_EQ(state.queryMetaCalls, 2U);
+    EXPECT_EQ(state.removeMetaCalls, 1U);
+    EXPECT_EQ(state.removedVersion, queryMetaVersion);
+    EXPECT_EQ(request->GetReadyCount(), 1U);
+    EXPECT_EQ(request->GetObjects().at(objectKey).rc.GetCode(), K_RPC_PEER_DEAD);
+}
+
+TEST_F(NotifyRemoteGetMigrationTest, FinalRemoteGetCleanupFiltersRecoveredAttemptVersions)
+{
+    constexpr uint64_t failedVersion = 51;
+    constexpr uint64_t recoveredVersion = 52;
+    const std::string failedKey = "final-remote-get-failure";
+    const std::string recoveredKey = "recovered-remote-get";
+    RouteObjectToMaster(failedKey, leavingWorkerAddress_);
+    size_t removeMetaCalls = 0;
+    auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(leavingWorkerAddress_, localAddress_);
+    api->removeMeta_ = [&](master::RemoveMetaReqPb &req, master::RemoveMetaRspPb &) {
+        ++removeMetaCalls;
+        EXPECT_THAT(req.ids(), ElementsAre(failedKey));
+        EXPECT_EQ(req.version(), failedVersion);
+        return Status::OK();
+    };
+    workerMasterApiManager_->SetDefaultApi(api);
+    std::unordered_set<std::string> failedIds{ failedKey };
+    std::unordered_map<std::string, uint64_t> failedKeyVersions{
+        { failedKey, failedVersion }, { recoveredKey, recoveredVersion }
+    };
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(REMOTE_GET_CLEANUP_TIMEOUT_MS);
+
+    impl_->DeleteFailedRemoteGetMetas(failedIds, failedKeyVersions);
+
+    EXPECT_EQ(removeMetaCalls, 1U);
 }
 
 #ifdef USE_NPU
@@ -1459,7 +1611,7 @@ TEST_F(NotifyRemoteGetMigrationTest, GetObjectFromAnywhereAllowsNullRequestWithR
 
     ScopedRequestContext requestContext;
     GetRequestContext()->reqTimeoutDuration.Init(1'000);
-    auto rc = impl_->GetObjectFromAnywhereWithLock(ReadKey(objectKey), nullptr, entry, true, queryMeta, payloads);
+    auto rc = impl_->GetObjectFromAnywhereWithLock(ReadKey(objectKey), nullptr, entry, queryMeta, payloads);
 
     EXPECT_TRUE(rc.IsError());
     EXPECT_EQ(objectTable_->Contains(objectKey).GetCode(), K_NOT_FOUND);

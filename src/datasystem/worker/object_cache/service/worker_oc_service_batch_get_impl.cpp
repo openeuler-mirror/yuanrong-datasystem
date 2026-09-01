@@ -231,12 +231,8 @@ Status WorkerOcServiceGetImpl::BatchGetRetrieveRemotePayload(uint64_t completeDa
     return Status::OK();
 }
 
-void WorkerOcServiceGetImpl::HandleGetFailureHelper(const std::string &objectKey, uint64_t version,
-                                                    std::shared_ptr<SafeObjType> &entry, bool isInsert)
+void WorkerOcServiceGetImpl::HandleGetFailureHelper(std::shared_ptr<SafeObjType> &entry)
 {
-    (void)isInsert;
-    LOG(WARNING) << "Get object from remote failed, start to remove location from master";
-    (void)RemoveLocation(objectKey, version);
     CleanupGetFailureOnLock(entry);
 }
 
@@ -383,11 +379,8 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
     }
     auto infoIter = failedMetas.begin();
     while (infoIter != failedMetas.end()) {
-        auto &objectKey = infoIter->queryMeta->meta().object_key();
-        auto &pair = infoIter->entry;
-        auto &entry = pair->safeObj;
-        bool isInsert = pair->insert;
-        HandleGetFailureHelper(objectKey, infoIter->queryMeta->meta().version(), entry, isInsert);
+        auto &entry = infoIter->entry->safeObj;
+        HandleGetFailureHelper(entry);
         infoIter++;
     }
     if (successIds.size() != (queryMetas.size() - payloadIndexMetas.size())) {

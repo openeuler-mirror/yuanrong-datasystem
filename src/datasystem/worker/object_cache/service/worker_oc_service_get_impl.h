@@ -89,14 +89,23 @@ public:
      * @param[in] objectKeys These objects not exist in local.
      * @param[in] subTimeout The get request timeout for subscribe.
      * @param[out] failedIds The failed object key list.
-     * @param[in] needRetryIds retry keys info, contain offset, size, objKey.
      * @param[out] needRetryIds Need retry get id list.
+     * @param[out] failedKeyVersions QueryMeta versions for failed remote gets.
      * @param[in] request Get request instance.
      * @return Status of the call.
      */
     Status ProcessObjectsNotExistInLocal(const std::set<ReadKey> &objectsNeedGetRemote, int64_t subTimeout,
                                          std::unordered_set<std::string> &failedIds, std::set<ReadKey> &needRetryIds,
+                                         std::unordered_map<std::string, uint64_t> &failedKeyVersions,
                                          const std::shared_ptr<GetRequest> &request = nullptr);
+
+    /**
+     * @brief Delete exact QueryMeta versions for the final failed remote gets.
+     * @param[in] cleanupIds Object keys selected for metadata cleanup after retries.
+     * @param[in] failedKeyVersions QueryMeta versions observed on failed attempts.
+     */
+    void DeleteFailedRemoteGetMetas(const std::unordered_set<std::string> &cleanupIds,
+                                    const std::unordered_map<std::string, uint64_t> &failedKeyVersions);
 
     /**
      * @brief Get object data from remote cache (remote worker or redis) based on object meta.
@@ -703,13 +712,12 @@ private:
      * @param[in] readKey read key info, contain offset, size, objKey.
      * @param[in] request Get request instance.
      * @param[in] entry Object safe entry.
-     * @param[in] isInsert Indicate the entry is new inserted to object table or not.
      * @param[in] queryMeta The object meta info contains remote address and data size.
      * @param[in] payloads Get payloads that contains object data.
      * @return Status of the call.
      */
     Status GetObjectFromAnywhereWithLock(const ReadKey &readKey, const std::shared_ptr<GetRequest> &request,
-                                         std::shared_ptr<SafeObjType> &entry, bool isInsert,
+                                         std::shared_ptr<SafeObjType> &entry,
                                          const master::QueryMetaInfoPb &queryMeta, std::vector<RpcMessage> &payloads);
 
     /**
@@ -1058,8 +1066,7 @@ private:
         std::vector<master::QueryMetaInfoPb> &queryMetas,
         std::vector<std::string> &absentObjectKeys);
 
-    void HandleGetFailureHelper(const std::string &objectKey, uint64_t version, std::shared_ptr<SafeObjType> &entry,
-                                bool isInsert);
+    void HandleGetFailureHelper(std::shared_ptr<SafeObjType> &entry);
 
     void CleanupGetFailureOnLock(std::shared_ptr<SafeObjType> &entry);
 
