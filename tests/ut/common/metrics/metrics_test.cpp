@@ -1106,10 +1106,10 @@ TEST_F(MetricsTest, kv_metric_urma_id_layout_test)
         { metrics::KvMetricId::BRPC_SERVER_RSP_QUEUE_LATENCY, "brpc_server_rsp_queue_latency" },
         { metrics::KvMetricId::BRPC_RPC_E2E_LATENCY, "brpc_rpc_e2e_latency" },
         { metrics::KvMetricId::BRPC_RPC_NETWORK_RESIDUAL_LATENCY, "brpc_rpc_network_residual_latency" },
-        { metrics::KvMetricId::WORKER_FROM_CLIENT_SHM_TOTAL_BYTES, "worker_from_client_shm_total_bytes" },
-        { metrics::KvMetricId::WORKER_FROM_CLIENT_LOCAL_TOTAL_BYTES, "worker_from_client_local_total_bytes" },
-        { metrics::KvMetricId::WORKER_FROM_CLIENT_TCP_TOTAL_BYTES, "worker_from_client_tcp_total_bytes" },
-        { metrics::KvMetricId::WORKER_FROM_CLIENT_URMA_TOTAL_BYTES, "worker_from_client_urma_total_bytes" },
+        { metrics::KvMetricId::WORKER_FROM_CLIENT_PUBLISH_SHM_TOTAL_BYTES, "worker_from_client_publish_shm_total_bytes" },
+        { metrics::KvMetricId::WORKER_FROM_CLIENT_PUBLISH_LOCAL_TOTAL_BYTES, "worker_from_client_publish_local_total_bytes" },
+        { metrics::KvMetricId::WORKER_FROM_CLIENT_PUBLISH_TCP_TOTAL_BYTES, "worker_from_client_publish_tcp_total_bytes" },
+        { metrics::KvMetricId::WORKER_FROM_CLIENT_PUBLISH_URMA_TOTAL_BYTES, "worker_from_client_publish_urma_total_bytes" },
         { metrics::KvMetricId::CLIENT_GET_SHM_READ_TOTAL_BYTES, "client_get_shm_read_total_bytes" },
         { metrics::KvMetricId::CLIENT_EXIST_REDIRECT_TOTAL, "client_exist_redirect_total" },
         { metrics::KvMetricId::CLIENT_EXIST_CONNECTION_RETRY_TOTAL, "client_exist_connection_retry_total" },
@@ -1120,22 +1120,42 @@ TEST_F(MetricsTest, kv_metric_urma_id_layout_test)
         { metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_UB_SPLIT_TOTAL, "client_direct_batch_get_ub_split_total" },
         { metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_TCP_FALLBACK_TOTAL,
           "client_direct_batch_get_tcp_fallback_total" },
+        { metrics::KvMetricId::WORKER_TO_CLIENT_GET_SHM_TOTAL_BYTES, "worker_to_client_get_shm_total_bytes" },
+        { metrics::KvMetricId::WORKER_TO_CLIENT_GET_URMA_TOTAL_BYTES, "worker_to_client_get_urma_total_bytes" },
     };
     EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_RPC_TOTAL), 95u);
     EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_OBJECT_TOTAL), 96u);
     EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_REPLICA_RETRY_TOTAL), 97u);
     EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_UB_SPLIT_TOTAL), 98u);
     EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_TCP_FALLBACK_TOTAL), 99u);
+    // Lock the worker_to_client_get_* numeric IDs: TCP reuses id 20, SHM/URMA are appended at 141/142.
+    // These ids are a stable contract for log/JSON consumers; drifting them breaks cross-version ops config.
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::WORKER_TO_CLIENT_GET_TCP_TOTAL_BYTES), 20u);
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::WORKER_TO_CLIENT_GET_SHM_TOTAL_BYTES), 141u);
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::WORKER_TO_CLIENT_GET_URMA_TOTAL_BYTES), 142u);
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::KV_METRIC_END), 143u);
     for (size_t k = 0; k < sizeof(kTailMetrics) / sizeof(kTailMetrics[0]); ++k) {
         const auto wantId = static_cast<uint16_t>(kTailMetrics[k].id);
         const auto *desc = std::find_if(descs, descs + count,
             [wantId](const metrics::MetricDesc &d) { return d.id == wantId; });
         ASSERT_NE(desc, descs + count) << "metric id " << wantId << " (" << kTailMetrics[k].name << ") not found";
         EXPECT_STREQ(desc->name, kTailMetrics[k].name);
-        if (wantId >= static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_RPC_TOTAL)) {
+        if (wantId >= static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_RPC_TOTAL)
+            && wantId <= static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_TCP_FALLBACK_TOTAL)) {
             EXPECT_EQ(desc->type, metrics::MetricType::COUNTER);
             EXPECT_STREQ(desc->unit, "count");
         }
+    }
+    // worker_to_client_get_* are byte counters, not count counters.
+    for (auto id : { metrics::KvMetricId::WORKER_TO_CLIENT_GET_TCP_TOTAL_BYTES,
+                     metrics::KvMetricId::WORKER_TO_CLIENT_GET_SHM_TOTAL_BYTES,
+                     metrics::KvMetricId::WORKER_TO_CLIENT_GET_URMA_TOTAL_BYTES }) {
+        const auto wantId = static_cast<uint16_t>(id);
+        const auto *desc = std::find_if(descs, descs + count,
+            [wantId](const metrics::MetricDesc &d) { return d.id == wantId; });
+        ASSERT_NE(desc, descs + count);
+        EXPECT_EQ(desc->type, metrics::MetricType::COUNTER);
+        EXPECT_STREQ(desc->unit, "bytes");
     }
 }
 
@@ -1277,13 +1297,17 @@ TEST_F(MetricsTest, transport_bytes_test)
     METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_TCP_WRITE_TOTAL_BYTES, 13);
     METRIC_ADD(metrics::KvMetricId::CLIENT_GET_URMA_READ_TOTAL_BYTES, 17);
     METRIC_ADD(metrics::KvMetricId::CLIENT_GET_TCP_READ_TOTAL_BYTES, 19);
-    METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_TOTAL_BYTES, 23);
+    METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_GET_TCP_TOTAL_BYTES, 23);
+    METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_GET_SHM_TOTAL_BYTES, 29);
+    METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_GET_URMA_TOTAL_BYTES, 31);
     auto summary = metrics::DumpSummaryForTest();
     EXPECT_NE(summary.find(ScalarMetricJson("client_put_urma_write_total_bytes", 11, 11)), std::string::npos);
     EXPECT_NE(summary.find(ScalarMetricJson("client_put_tcp_write_total_bytes", 13, 13)), std::string::npos);
     EXPECT_NE(summary.find(ScalarMetricJson("client_get_urma_read_total_bytes", 17, 17)), std::string::npos);
     EXPECT_NE(summary.find(ScalarMetricJson("client_get_tcp_read_total_bytes", 19, 19)), std::string::npos);
-    EXPECT_NE(summary.find(ScalarMetricJson("worker_to_client_total_bytes", 23, 23)), std::string::npos);
+    EXPECT_NE(summary.find(ScalarMetricJson("worker_to_client_get_tcp_total_bytes", 23, 23)), std::string::npos);
+    EXPECT_NE(summary.find(ScalarMetricJson("worker_to_client_get_shm_total_bytes", 29, 29)), std::string::npos);
+    EXPECT_NE(summary.find(ScalarMetricJson("worker_to_client_get_urma_total_bytes", 31, 31)), std::string::npos);
 }
 
 TEST_F(MetricsTest, no_sensitive_data_test)
@@ -1625,32 +1649,32 @@ TEST_F(MetricsTest, client_put_local_write_bytes_counter_test)
 TEST_F(MetricsTest, worker_from_client_shm_bytes_counter_test)
 {
     InitKvMetricsForTest();
-    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_SHM_TOTAL_BYTES, 100);
-    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("worker_from_client_shm_total_bytes", 100, 100)),
+    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_PUBLISH_SHM_TOTAL_BYTES, 100);
+    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("worker_from_client_publish_shm_total_bytes", 100, 100)),
               std::string::npos);
 }
 
 TEST_F(MetricsTest, worker_from_client_local_bytes_counter_test)
 {
     InitKvMetricsForTest();
-    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_LOCAL_TOTAL_BYTES, 100);
-    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("worker_from_client_local_total_bytes", 100, 100)),
+    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_PUBLISH_LOCAL_TOTAL_BYTES, 100);
+    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("worker_from_client_publish_local_total_bytes", 100, 100)),
               std::string::npos);
 }
 
 TEST_F(MetricsTest, worker_from_client_tcp_bytes_counter_test)
 {
     InitKvMetricsForTest();
-    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_TCP_TOTAL_BYTES, 100);
-    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("worker_from_client_tcp_total_bytes", 100, 100)),
+    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_PUBLISH_TCP_TOTAL_BYTES, 100);
+    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("worker_from_client_publish_tcp_total_bytes", 100, 100)),
               std::string::npos);
 }
 
 TEST_F(MetricsTest, worker_from_client_urma_bytes_counter_test)
 {
     InitKvMetricsForTest();
-    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_URMA_TOTAL_BYTES, 100);
-    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("worker_from_client_urma_total_bytes", 100, 100)),
+    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_PUBLISH_URMA_TOTAL_BYTES, 100);
+    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("worker_from_client_publish_urma_total_bytes", 100, 100)),
               std::string::npos);
 }
 

@@ -270,12 +270,12 @@ void RecordMultiPublishTransportMetrics(const MultiPublishReqPb &req, uint64_t p
         }
     }
     if (hasNonShmObject && payloadBytes > 0) {
-        const auto metricId = clientShmEnabled ? metrics::KvMetricId::WORKER_FROM_CLIENT_LOCAL_TOTAL_BYTES
-                                               : metrics::KvMetricId::WORKER_FROM_CLIENT_TCP_TOTAL_BYTES;
+        const auto metricId = clientShmEnabled ? metrics::KvMetricId::WORKER_FROM_CLIENT_PUBLISH_LOCAL_TOTAL_BYTES
+                                               : metrics::KvMetricId::WORKER_FROM_CLIENT_PUBLISH_TCP_TOTAL_BYTES;
         METRIC_ADD(metricId, payloadBytes);
     }
-    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_SHM_TOTAL_BYTES, shmBytes);
-    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_URMA_TOTAL_BYTES, urmaBytes);
+    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_PUBLISH_SHM_TOTAL_BYTES, shmBytes);
+    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_PUBLISH_URMA_TOTAL_BYTES, urmaBytes);
 }
 
 void ObserveMetadataRpcOnTopology(cluster::TopologyEngine *topologyEngine, const HostPort &target, const Status &status)
@@ -646,17 +646,17 @@ Status WorkerOCServiceImpl::Publish(const PublishReqPb &req, PublishRspPb &resp,
         const bool clientShmEnabled = WorkerOcServiceCrudCommonApi::ClientShmEnabled(clientId);
         if (!req.shm_id().empty()) {
             if (WorkerOcServiceCrudCommonApi::ShmEnable() && clientShmEnabled) {
-                METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_SHM_TOTAL_BYTES,
+                METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_PUBLISH_SHM_TOTAL_BYTES,
                            static_cast<uint64_t>(req.data_size()));
             } else {
-                METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_URMA_TOTAL_BYTES,
+                METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_PUBLISH_URMA_TOTAL_BYTES,
                            static_cast<uint64_t>(req.data_size()));
             }
         } else if (payloadBytes > 0) {
             if (clientShmEnabled) {
-                METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_LOCAL_TOTAL_BYTES, payloadBytes);
+                METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_PUBLISH_LOCAL_TOTAL_BYTES, payloadBytes);
             } else {
-                METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_TCP_TOTAL_BYTES, payloadBytes);
+                METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_PUBLISH_TCP_TOTAL_BYTES, payloadBytes);
             }
         }
         UpdateWorkerObjectGauge(objectTable_);
