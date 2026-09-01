@@ -1210,6 +1210,87 @@ TEST(DsCoordinationBackendSessionTest, ExitingPublicationUsesCallerTimeoutBudget
     EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
 }
 
+TEST(DsCoordinationBackendSessionTest, DiagnosticReadIsBoundedDuringOwnerTransition)
+{
+    constexpr char injectPoint[] = "CoordinationBackend.MembershipMutation.afterDiagnosticWriteBegin";
+    constexpr int32_t ownerTimeoutMs = 2'000;
+    constexpr int32_t diagnosticTimeoutMs = 50;
+    constexpr auto injectWaitTimeout = std::chrono::milliseconds(500);
+    constexpr auto diagnosticCompletionTimeout = std::chrono::milliseconds(500);
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
+    ASSERT_TRUE(inject::Set(injectPoint, "pause").IsOk());
+    std::future<Status> owner;
+    Raii clearInject([&] { (void)inject::Clear(injectPoint); });
+    owner = std::async(std::launch::async, [&] {
+        return backend.UpdateNodeStateWithTimeout(MemberLifecycleState::READY, ownerTimeoutMs);
+    });
+    const auto injectDeadline = std::chrono::steady_clock::now() + injectWaitTimeout;
+    while (inject::GetExecuteCount(injectPoint) == 0 && std::chrono::steady_clock::now() < injectDeadline) {
+        std::this_thread::yield();
+    }
+    if (inject::GetExecuteCount(injectPoint) == 0) {
+        ASSERT_TRUE(inject::Clear(injectPoint).IsOk());
+    }
+    ASSERT_GT(inject::GetExecuteCount(injectPoint), 0);
+
+    const auto startedAt = std::chrono::steady_clock::now();
+    const auto status = backend.UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, diagnosticTimeoutMs);
+    const auto elapsed = std::chrono::steady_clock::now() - startedAt;
+    EXPECT_EQ(status.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_NE(status.GetMsg().find("owner=changing"), std::string::npos);
+    EXPECT_LT(elapsed, diagnosticCompletionTimeout);
+
+    ASSERT_TRUE(inject::Clear(injectPoint).IsOk());
+    EXPECT_TRUE(owner.get().IsOk());
+}
+
+TEST(DsCoordinationBackendSessionTest, DiagnosticReadRetriesChangedSequence)
+{
+    constexpr char ownerInject[] = "CoordinationBackend.MembershipMutation.afterDiagnosticAcquired";
+    constexpr char readerInject[] = "CoordinationBackend.MembershipMutation.beforeDiagnosticSequenceValidation";
+    constexpr int32_t ownerTimeoutMs = 2'000;
+    constexpr int32_t diagnosticTimeoutMs = 50;
+    constexpr auto injectWaitTimeout = std::chrono::milliseconds(500);
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
+    ASSERT_TRUE(inject::Set(ownerInject, "pause").IsOk());
+    ASSERT_TRUE(inject::Set(readerInject, "pause").IsOk());
+    std::future<Status> owner;
+    std::future<Status> reader;
+    Raii clearOwnerInject([&] { (void)inject::Clear(ownerInject); });
+    Raii clearReaderInject([&] { (void)inject::Clear(readerInject); });
+    owner = std::async(std::launch::async, [&] {
+        return backend.UpdateNodeStateWithTimeout(MemberLifecycleState::READY, ownerTimeoutMs);
+    });
+    const auto ownerDeadline = std::chrono::steady_clock::now() + injectWaitTimeout;
+    while (inject::GetExecuteCount(ownerInject) == 0 && std::chrono::steady_clock::now() < ownerDeadline) {
+        std::this_thread::yield();
+    }
+    ASSERT_GT(inject::GetExecuteCount(ownerInject), 0);
+    reader = std::async(std::launch::async, [&] {
+        return backend.UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, diagnosticTimeoutMs);
+    });
+    const auto readerDeadline = std::chrono::steady_clock::now() + injectWaitTimeout;
+    while (inject::GetExecuteCount(readerInject) == 0 && std::chrono::steady_clock::now() < readerDeadline) {
+        std::this_thread::yield();
+    }
+    ASSERT_GT(inject::GetExecuteCount(readerInject), 0);
+    ASSERT_TRUE(inject::Clear(ownerInject).IsOk());
+    EXPECT_TRUE(owner.get().IsOk());
+    ASSERT_TRUE(inject::Clear(readerInject).IsOk());
+    ASSERT_EQ(reader.wait_for(injectWaitTimeout), std::future_status::ready);
+    const auto status = reader.get();
+    EXPECT_EQ(status.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_NE(status.GetMsg().find("owner=unknown"), std::string::npos);
+}
+
 TEST(DsCoordinationBackendSessionTest, RemainingTimeoutRoundsPositiveSubMillisecondBudgetUp)
 {
     const auto now = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
