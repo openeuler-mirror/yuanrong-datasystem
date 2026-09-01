@@ -20,6 +20,17 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "bound_mode_test",
+    srcs = ["bound_mode_test.cpp"],
+    deps = [
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:status_helper",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "mmap_manager_test",
     srcs = ["mmap_manager_test.cpp"],
     deps = [
