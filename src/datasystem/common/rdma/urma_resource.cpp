@@ -739,6 +739,73 @@ void UrmaConnection::Clear()
     urmaJfrInfo_ = UrmaJfrInfo();
 }
 
+Status UrmaConnection::AcquireInflightSlot(int64_t remainingUs)
+{
+    if (remainingUs <= 0) {
+        return Status(K_RPC_DEADLINE_EXCEEDED, "API deadline exceeded before acquiring peer in-flight jetty slot");
+    }
+    std::unique_lock<bthread::Mutex> lock(inflightMutex_);
+    if (retiredJetties_ >= MAX_RETIRED_JETTIES) {
+        // Circuit-broken peer: its writes already retired MAX_RETIRED_JETTIES Jetties (fatal CQE
+        // form). Handing it more Jetties would let it rotate through the whole pool one batch at
+        // a time — exactly the amplification this PR must stop. K_URMA_TRY_AGAIN lets callers
+        // take the same fallback path as pool exhaustion. Recovery = connection rebuild.
+        return Status(K_URMA_TRY_AGAIN,
+                      FormatString("Peer circuit-broken: %u Jetties retired for this peer, no more will be "
+                                   "handed out (rebuild the connection to recover)",
+                                   retiredJetties_));
+    }
+    // bthread::ConditionVariable::wait_for returns only 0 (woken, possibly spurious) or ETIMEDOUT;
+    // the while re-check re-gates spurious wakes, so no other errno handling is needed.
+    while (inflightJettyCount_ >= MAX_INFLIGHT_JETTIES) {
+        if (inflightCv_.wait_for(lock, static_cast<long>(remainingUs)) == ETIMEDOUT) {
+            break;
+        }
+    }
+    if (inflightJettyCount_ >= MAX_INFLIGHT_JETTIES) {
+        return Status(K_URMA_TRY_AGAIN,
+                      FormatString("Peer in-flight jetty cap saturated (MAX_INFLIGHT_JETTIES=%u) and wait timed "
+                                   "out for slot; peer=%s",
+                                   MAX_INFLIGHT_JETTIES, urmaJfrInfo_.uniqueInstanceId.c_str()));
+    }
+    inflightJettyCount_++;
+    return Status::OK();
+}
+
+void UrmaConnection::ReleaseInflightSlot()
+{
+    std::lock_guard<bthread::Mutex> lock(inflightMutex_);
+    if (inflightJettyCount_ == 0) {
+        // Unbalanced release (double free on an error path). Decrementing below zero would wrap
+        // to ~4 billion and permanently freeze this peer's cap, so refuse and log instead.
+        LOG(WARNING) << "[URMA_INFLIGHT_SLOT] Unbalanced ReleaseInflightSlot on peer "
+                     << urmaJfrInfo_.uniqueInstanceId;
+        return;
+    }
+    inflightJettyCount_--;
+    inflightCv_.notify_one();
+}
+
+void UrmaConnection::OnJettyRetired()
+{
+    std::lock_guard<bthread::Mutex> lock(inflightMutex_);
+    if (retiredJetties_ < MAX_RETIRED_JETTIES) {
+        ++retiredJetties_;
+        if (retiredJetties_ == MAX_RETIRED_JETTIES) {
+            LOG(WARNING) << "[URMA_PEER_CIRCUIT_BREAK] Peer " << urmaJfrInfo_.uniqueInstanceId
+                         << " retired " << retiredJetties_
+                         << " Jetties; further jetty acquisition for this peer is refused until "
+                            "the connection is rebuilt";
+        }
+    }
+}
+
+bool UrmaConnection::IsCircuitBroken() const
+{
+    std::lock_guard<bthread::Mutex> lock(inflightMutex_);
+    return retiredJetties_ >= MAX_RETIRED_JETTIES;
+}
+
 UrmaResource::~UrmaResource()
 {
     Clear();
@@ -1172,6 +1239,13 @@ void UrmaResource::TryForceReleaseTimedOutSendLane(const std::shared_ptr<UrmaSen
     }
 
     if (retireForOrphanPressure) {
+        // Orphan-saturated retire bypasses ApplyActiveSendLaneAction, so the peer's in-flight slot
+        // must be released and the retire attributed here. Saturated orphans mean this peer's
+        // writes kept timing out without completion — remote-attributed, count toward the breaker.
+        if (auto connection = jetty->GetConnection().lock(); connection != nullptr) {
+            connection->OnJettyRetired();
+            connection->ReleaseInflightSlot();
+        }
         LOG_IF_ERROR(RetireJetty(jetty), "Failed to asynchronously retire orphan-saturated URMA send Jetty");
     } else {
         LOG_IF_ERROR(ApplyActiveSendLaneAction(laneLease, action), "Failed to force release timed-out URMA send lane");
@@ -1234,13 +1308,26 @@ Status UrmaResource::ApplyActiveSendLaneAction(const std::shared_ptr<UrmaSendLan
     if (jetty == nullptr) {
         return Status::OK();
     }
+    // Release the per-peer in-flight slot so a blocked peer (at the MAX_INFLIGHT_JETTIES cap) can
+    // proceed. Both RELEASE (normal completion) and RETIRE (cqe9 failure) paths must release it;
+    // a RETIRE that skipped release would permanently exhaust the peer's slot and block it.
+    // If the connection is already destroyed, the counter died with it (per-peer state lives on
+    // the UrmaConnection object), so there is nothing to release for a reconnect's fresh counter.
+    auto connection = jetty->GetConnection().lock();
     if (action == UrmaSendLaneLease::SettleAction::RELEASE) {
         INJECT_POINT("UrmaManager.ApplySendLaneAction.Release");
         ReleaseJetty(jetty);
+        if (connection != nullptr) {
+            connection->ReleaseInflightSlot();
+        }
         return Status::OK();
     }
     INJECT_POINT("UrmaManager.ApplySendLaneAction.Retire");
-    return RetireJetty(jetty);
+    auto rc = RetireJetty(jetty);
+    if (connection != nullptr) {
+        connection->ReleaseInflightSlot();
+    }
+    return rc;
 }
 
 Status UrmaResource::CompleteActiveSendLane(uint32_t jettyId, uint64_t requestId, int cqeStatus)
@@ -1279,6 +1366,18 @@ Status UrmaResource::CompleteActiveSendLane(uint32_t jettyId, uint64_t requestId
             << ", orphanTracked=" << orphanTracked
             << ", remainingOrphanWrs=" << (jetty == nullptr ? 0 : jetty->GetOrphanWrCount());
         return Status::OK();
+    }
+    // Circuit-breaker attribution: a fatal-CQE completion drove this lane to RETIRE — that is
+    // remote/hardware damage attributable to the peer. Local failure paths (RequestRetire on
+    // post/create errors) settle through the same ApplyActiveSendLaneAction(RETIRE) but must NOT
+    // count toward the peer's breaker, so the counting lives here and in the other peer-attributed
+    // callers, not inside Apply.
+    if (action == UrmaSendLaneLease::SettleAction::RETIRE && laneLease != nullptr) {
+        if (auto settleJetty = laneLease->GetJetty(); settleJetty != nullptr) {
+            if (auto connection = settleJetty->GetConnection().lock(); connection != nullptr) {
+                connection->OnJettyRetired();
+            }
+        }
     }
     return ApplyActiveSendLaneAction(laneLease, action);
 }
@@ -1387,6 +1486,14 @@ Status UrmaResource::RetireActiveSendLane(uint32_t jettyId)
         action = laneLease->Retire();
         if (action != UrmaSendLaneLease::SettleAction::NONE) {
             activeSendLanes_.erase(iter);
+        }
+    }
+    // Peer-attributed retire (async jetty error / fatal wait path) — count toward the breaker.
+    if (action == UrmaSendLaneLease::SettleAction::RETIRE && laneLease != nullptr) {
+        if (auto settleJetty = laneLease->GetJetty(); settleJetty != nullptr) {
+            if (auto connection = settleJetty->GetConnection().lock(); connection != nullptr) {
+                connection->OnJettyRetired();
+            }
         }
     }
     return ApplyActiveSendLaneAction(laneLease, action);

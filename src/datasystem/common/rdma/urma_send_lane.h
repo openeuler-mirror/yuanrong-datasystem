@@ -25,6 +25,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <iterator>
 #include <memory>
 #include <mutex>
@@ -277,20 +278,20 @@ public:
     void Clear()
     {
         jettys_.clear();
-        idleIndices_.clear();
+        idleQueue_.clear();
     }
 
     void Add(std::shared_ptr<UrmaJetty> jetty)
     {
-        idleIndices_.push_back(jettys_.size());
+        idleQueue_.push_back(jettys_.size());
         jettys_.push_back(std::move(jetty));
     }
 
     bool PopIdle(std::shared_ptr<UrmaJetty> &jetty)
     {
-        while (!idleIndices_.empty()) {
-            const auto idx = idleIndices_.back();
-            idleIndices_.pop_back();
+        while (!idleQueue_.empty()) {
+            const auto idx = idleQueue_.front();
+            idleQueue_.pop_front();
             if (idx >= jettys_.size()) {
                 continue;
             }
@@ -309,10 +310,10 @@ public:
             return false;
         }
         const auto idx = static_cast<size_t>(std::distance(jettys_.begin(), iter));
-        if (std::find(idleIndices_.begin(), idleIndices_.end(), idx) != idleIndices_.end()) {
+        if (std::find(idleQueue_.begin(), idleQueue_.end(), idx) != idleQueue_.end()) {
             return true;
         }
-        idleIndices_.push_back(idx);
+        idleQueue_.push_back(idx);
         return true;
     }
 
@@ -323,10 +324,10 @@ public:
                 continue;
             }
             const auto lastIdx = jettys_.size() - 1;
-            idleIndices_.erase(std::remove(idleIndices_.begin(), idleIndices_.end(), i), idleIndices_.end());
+            idleQueue_.erase(std::remove(idleQueue_.begin(), idleQueue_.end(), i), idleQueue_.end());
             if (i != lastIdx) {
                 jettys_[i] = std::move(jettys_[lastIdx]);
-                std::replace(idleIndices_.begin(), idleIndices_.end(), lastIdx, i);
+                std::replace(idleQueue_.begin(), idleQueue_.end(), lastIdx, i);
             }
             jettys_.pop_back();
             return true;
@@ -338,14 +339,14 @@ public:
     {
         Stats stats;
         stats.poolSize = jettys_.size();
-        stats.idleCount = idleIndices_.size();
+        stats.idleCount = idleQueue_.size();
         stats.inUseCount = stats.poolSize > stats.idleCount ? stats.poolSize - stats.idleCount : 0;
         return stats;
     }
 
 private:
     std::vector<std::shared_ptr<UrmaJetty>> jettys_;
-    std::vector<size_t> idleIndices_;
+    std::deque<size_t> idleQueue_;
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RDMA_URMA_SEND_LANE_H

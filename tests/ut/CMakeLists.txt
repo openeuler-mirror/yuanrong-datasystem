@@ -132,6 +132,7 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX ".*/client/urma_remote_jetty_reuse_tes
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX ".*/client/urma_send_jetty_lifecycle_test\\.cpp$")
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX ".*/client/urma_send_jetty_fault_test\\.cpp$")
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX ".*/client/urma_jetty_gate_test\\.cpp$")
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX ".*/client/urma_connection_inflight_test\\.cpp$")
 
 if (NOT BUILD_WITH_RDMA)
     list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX ".*/rdma/.*\\.cpp$")
@@ -238,6 +239,19 @@ if (BUILD_WITH_URMA)
     add_ds_ut_executable(ds_ut_urma_jetty_gate
             client/urma_jetty_gate_test.cpp
             $<TARGET_OBJECTS:_ds_ut_main_obj>)
+endif()
+# Per-peer in-flight jetty cap UT. Touches only the in-flight counter/condvar (no URMA hardware),
+# so it builds under both BUILD_WITH_URMA and BUILD_WITH_URMA_MOCK for dev/CI verification.
+if (BUILD_WITH_URMA OR BUILD_WITH_URMA_MOCK)
+    add_ds_ut_executable(ds_ut_urma_connection_inflight
+            client/urma_connection_inflight_test.cpp
+            $<TARGET_OBJECTS:_ds_ut_main_obj>)
+endif()
+if (BUILD_WITH_URMA_MOCK)
+    # Under the mock backend urma_resource.h must take the mock ABI include path, so the test
+    # target needs the same private definitions as the other mock-backed UT targets above.
+    target_compile_definitions(ds_ut_urma_connection_inflight PRIVATE USE_URMA USE_URMA_MOCK)
+    target_link_libraries(ds_ut_urma_connection_inflight PRIVATE common_urma_mock_obj)
 endif()
 add_executable(ds_ut_slot_store
         common/l2cache/slot_store_test.cpp
@@ -351,6 +365,12 @@ if (BUILD_WITH_URMA OR BUILD_WITH_URMA_MOCK)
             ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
             ${DS_UT_HEAVY_LINK_END}
             -Wl,--reduce-memory-overheads)
+    target_link_libraries(ds_ut_urma_connection_inflight PRIVATE
+            ${DS_UT_HEAVY_LINK_START}
+            ${DS_UT_DEPEND_LIBS}
+            ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+            ${DS_UT_HEAVY_LINK_END}
+            -Wl,--reduce-memory-overheads)
 endif()
 if (BUILD_WITH_URMA)
     target_link_libraries(ds_ut_urma_jetty_gate PRIVATE
@@ -448,6 +468,8 @@ if (BUILD_WITH_URMA OR BUILD_WITH_URMA_MOCK)
     add_datasystem_test(ds_ut_urma_send_jetty_lifecycle
             TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
     add_datasystem_test(ds_ut_urma_send_jetty_fault
+            TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+    add_datasystem_test(ds_ut_urma_connection_inflight
             TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 endif()
 if (BUILD_WITH_URMA)

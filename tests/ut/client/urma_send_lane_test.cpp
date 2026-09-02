@@ -36,7 +36,7 @@ std::shared_ptr<UrmaJetty> MakeOpaqueJetty()
 TEST(SendJettyPoolTest, PopReleaseAndExhaustionUpdateStats)
 {
     // Covers the normal acquire/exhaust/release lifecycle and verifies that observable pool stats stay consistent with
-    // the idle index stack.
+    // the idle queue (FIFO: Add appends to the tail, PopIdle takes from the head).
     SendJettyPool pool;
     auto first = MakeOpaqueJetty();
     auto second = MakeOpaqueJetty();
@@ -50,13 +50,13 @@ TEST(SendJettyPoolTest, PopReleaseAndExhaustionUpdateStats)
 
     std::shared_ptr<UrmaJetty> acquired;
     ASSERT_TRUE(pool.PopIdle(acquired));
-    EXPECT_EQ(acquired.get(), second.get());
+    EXPECT_EQ(acquired.get(), first.get());
     stats = pool.GetStats();
     EXPECT_EQ(stats.idleCount, 1ul);
     EXPECT_EQ(stats.inUseCount, 1ul);
 
     ASSERT_TRUE(pool.PopIdle(acquired));
-    EXPECT_EQ(acquired.get(), first.get());
+    EXPECT_EQ(acquired.get(), second.get());
     EXPECT_FALSE(pool.PopIdle(acquired));
     stats = pool.GetStats();
     EXPECT_EQ(stats.idleCount, 0ul);
@@ -129,16 +129,16 @@ TEST(SendJettyPoolTest, RemoveInUseJettyKeepsOtherIdleJettys)
 
     std::shared_ptr<UrmaJetty> acquired;
     ASSERT_TRUE(pool.PopIdle(acquired));
-    ASSERT_EQ(acquired.get(), second.get());
+    ASSERT_EQ(acquired.get(), first.get());
 
-    EXPECT_TRUE(pool.Remove(second));
+    EXPECT_TRUE(pool.Remove(first));
     auto stats = pool.GetStats();
     EXPECT_EQ(stats.poolSize, 1ul);
     EXPECT_EQ(stats.idleCount, 1ul);
     EXPECT_EQ(stats.inUseCount, 0ul);
 
     ASSERT_TRUE(pool.PopIdle(acquired));
-    EXPECT_EQ(acquired.get(), first.get());
+    EXPECT_EQ(acquired.get(), second.get());
     EXPECT_FALSE(pool.PopIdle(acquired));
 }
 
