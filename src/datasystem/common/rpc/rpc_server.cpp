@@ -98,17 +98,19 @@ Status RpcServer::AddBrpcServices(const std::function<Status(brpc::Server &)> &r
     return registrar(*brpcServer_);
 }
 
-Status RpcServer::StartBrpcServer(const std::string &addr, int port)
+Status RpcServer::StartBrpcServer(const std::string &addr, int port, BrpcLogPolicy logPolicy)
 {
     if (!brpcServer_) {
         brpcServer_ = std::make_unique<brpc::Server>();
     }
-    logging::LoggingSettings settings;
-    settings.logging_dest = logging::LOG_TO_NONE;
-    settings.log_file = "";
-    settings.lock_log = logging::DONT_LOCK_LOG_FILE;
-    settings.delete_old = logging::APPEND_TO_OLD_LOG_FILE;
-    logging::InitLogging(settings);
+    if (logPolicy == BrpcLogPolicy::DISABLE_PROCESS_LOGGING) {
+        logging::LoggingSettings settings;
+        settings.logging_dest = logging::LOG_TO_NONE;
+        settings.log_file = "";
+        settings.lock_log = logging::DONT_LOCK_LOG_FILE;
+        settings.delete_old = logging::APPEND_TO_OLD_LOG_FILE;
+        logging::InitLogging(settings);
+    }
 
     brpc::ServerOptions options;
     options.idle_timeout_sec = -1;

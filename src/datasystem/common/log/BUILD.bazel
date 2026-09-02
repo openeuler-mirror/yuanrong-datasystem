@@ -111,16 +111,33 @@ ds_cc_library(
     ],
 )
 
+ds_cc_library(
+    name = "butil_log_sink",
+    srcs = ["butil_log_sink.cpp"],
+    hdrs = [
+        "butil_log_sink.h",
+        "butil_log_sink_lease.h",
+    ],
+    deps = [
+        ":common_log",
+        "//src/datasystem/common/util:no_destructor_header",
+        "@com_github_apache_brpc//:butil",
+    ],
+)
+
 # Full logging implementation (excludes failure_handler which has separate absl deps)
 ds_cc_library(
     name = "common_log",
     srcs = glob(["*.cpp"], exclude = [
+        "butil_log_sink.cpp",
         "failure_handler.cpp",
         "log_sampler.cpp",
         "log_sampler_proto.cpp",
         "operation_logger.cpp",
     ]),
     hdrs = glob(["*.h", "*.def"], exclude = [
+        "butil_log_sink.h",
+        "butil_log_sink_lease.h",
         "failure_handler.h",
         "operation_logger.h",
         "log_sample_state.h",

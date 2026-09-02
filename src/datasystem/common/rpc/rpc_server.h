@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_COMMON_RPC_RPC_SERVER_H
 #define DATASYSTEM_COMMON_RPC_RPC_SERVER_H
 
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
@@ -51,6 +52,11 @@ DS_DECLARE_int32(rpc_thread_num);
 DS_DECLARE_int32(v);
 
 namespace datasystem {
+
+enum class BrpcLogPolicy : uint8_t {
+    DISABLE_PROCESS_LOGGING,
+    PRESERVE_PROCESS_CONFIGURATION,
+};
 
 class RpcServer final : public Interruptible {
 public:
@@ -217,9 +223,11 @@ public:
      * @brief Start the brpc server listening on the given address and port.
      * @param[in] addr IP address.
      * @param[in] port Port number.
+     * @param[in] logPolicy Process-wide butil logging policy.
      * @return Status of the call.
      */
-    Status StartBrpcServer(const std::string &addr, int port);
+    Status StartBrpcServer(const std::string &addr, int port,
+                           BrpcLogPolicy logPolicy = BrpcLogPolicy::DISABLE_PROCESS_LOGGING);
 
     /**
      * @brief Stop the brpc server synchronously (Stop + Join + reset).

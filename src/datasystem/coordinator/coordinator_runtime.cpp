@@ -26,6 +26,7 @@
 #include "datasystem/common/flags/dynamic_flag_config.h"
 #include "datasystem/common/flags/flag_manager.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/log/butil_log_sink.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/operation_logger.h"
@@ -133,6 +134,7 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
     const std::string logFilename = FLAGS_log_filename.empty() ? "datasystem_coordinator" : FLAGS_log_filename;
     Logging::GetInstance()->Start(logFilename, LogProcessRole::COORDINATOR);
     Logging::GetInstance()->LogProcessVersion(GIT_HASH, GIT_BRANCH);
+    butilLogSinkLease_ = std::make_unique<ButilLogSinkLease>();
     Status firstError;
     std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery;
     int expectedMemberCount = 0;

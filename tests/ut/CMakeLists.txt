@@ -26,6 +26,7 @@ set(DS_UT_DEPEND_LIBS
         coordinator_store_backend
         coordinator_topology_control_host
         datasystem_braft
+        butil_log_sink
         common_log
         common_metrics
         common_buffer
