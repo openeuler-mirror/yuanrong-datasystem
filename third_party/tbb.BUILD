@@ -64,6 +64,8 @@ cc_library(
     copts = [
         "-std=c++17",
         "-fPIC",
+        # Preserve TBB's scheduler zero-initialization before placement new.
+        "-flifetime-dse=1",
         "-DUSE_PTHREAD",
         "-D__TBB_BUILD=1",
         "-Wno-error=deprecated-declarations",
