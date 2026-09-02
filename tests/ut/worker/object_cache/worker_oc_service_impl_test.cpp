@@ -47,6 +47,7 @@
 #include "datasystem/common/shared_memory/delayed_release_shm_manager.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/request_context.h"
+#include "datasystem/client/object_cache/transport/object_read/object_read_types.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/worker/authenticate.h"
@@ -3636,6 +3637,19 @@ TEST_F(WorkerOcServiceImplTest, ValidateWorkerStateReturnsNotReadyWhenReconcilia
     Status rc = skipImpl->ValidateWorkerState(noRecon, 60000);
     EXPECT_EQ(rc.GetCode(), K_NOT_READY);
 
+    DS_ASSERT_OK(SetHealthProbe());
+}
+
+TEST_F(WorkerOcServiceImplTest, ValidateWorkerStateReturnsDrainingWhenScaleInExitIsUnhealthy)
+{
+    DS_ASSERT_OK(ResetHealthProbe());
+    ASSERT_FALSE(IsHealthy());
+    exitRequested_.store(true, std::memory_order_release);
+
+    BthreadReadGuard noRecon;
+    const Status rc = impl_->ValidateWorkerState(noRecon, K_META_MOVING_RETRY_TIMEOUT_MS);
+
+    EXPECT_TRUE(client::IsWorkerDrainingForScaleIn(rc));
     DS_ASSERT_OK(SetHealthProbe());
 }
 }  // namespace ut
