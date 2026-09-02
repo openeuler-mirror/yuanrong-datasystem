@@ -828,6 +828,78 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, MetaNotFoundRebalanceConverges)
     AssertReadable(client2_, batch);
 }
 
+// Regression guard: ClearWriteSnapshot must not purge alive workers when the master runs with a
+// small node_dead_timeout_s (e.g. 5s in production). Without a floor, alive workers that haven't
+// re-reported within 5s are purged → snapshot has only the reporting worker → no target → no
+// migration. The fix adds a 60s floor (SNAPSHOT_CLEAR_MIN_S), mirroring HOLD_TTL_MIN_S.
+//
+// Key technique: stagger worker report cycles so the bug triggers deterministically.
+// Worker 0 gets NodeSelector.setInterval:call(200) via per-worker -inject_actions override
+// (gflags last-wins) → reports every 200ms. Workers 1/2 use the default 30s cycle.
+// After ~12s, w1/w2 entries age past 5s → cleared without fix → snapshot has only w0 → no target.
+// With the 60s floor, w1/w2 entries are kept → snapshot has all workers → migration succeeds.
+class LEVEL1_KVClientMemoryRebalanceSmallDeadTimeoutTest : public LEVEL1_KVClientMemoryRebalanceTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numWorkers = 3;
+        opts.numEtcd = 1;
+        opts.numOBS = 0;
+        opts.workerGflagParams =
+            "-shared_memory_size_mb=64 -log_monitor=true -enable_memory_rebalance=true "
+            "-rebalance_usage_gap_percent=30 -rebalance_source_usage_percent=70 "
+            "-rebalance_task_report_grace_ms=500 -data_migrate_rate_limit_mb=1024 "
+            "-node_dead_timeout_s=5";
+        // Global injects: NO NodeSelector.setInterval → workers 1/2 report at default 30s.
+        // 30s >> 5s threshold → entries age past 5s → cleared without fix.
+        opts.injectActions =
+            "ResourceManager.setInterval:call(500);"
+            "TcpMigrateTransport.MigrateDataToRemote.delay:100000*call();"
+            "MemoryRebalanceScheduler.AssignTask:100000*call();"
+            "MemoryRebalanceScheduler.ExpireTask:100000*call();"
+            "MemoryRebalanceScheduler.CooldownSeconds:call(1);"
+            "worker.migrate_service.return:100000*call()";
+        // Worker 0: per-worker -inject_actions overrides global (gflags last-wins).
+        // Adds NodeSelector.setInterval:call(200) → reports every 200ms (triggers Schedule fast).
+        // Must include test.start.notWait + master.disableRocksDb (normally auto-prepended).
+        opts.workerSpecifyGflagParams[0] =
+            "-inject_actions=test.start.notWait:call(0);"
+            "NodeSelector.setInterval:call(200);"
+            "ResourceManager.setInterval:call(500);"
+            "TcpMigrateTransport.MigrateDataToRemote.delay:100000*call();"
+            "MemoryRebalanceScheduler.AssignTask:100000*call();"
+            "MemoryRebalanceScheduler.ExpireTask:100000*call();"
+            "MemoryRebalanceScheduler.CooldownSeconds:call(1);"
+            "worker.migrate_service.return:100000*call();"
+            "master.disableRocksDb:1*call()";
+    }
+};
+
+TEST_F(LEVEL1_KVClientMemoryRebalanceSmallDeadTimeoutTest, RebalanceSucceedsWithSmallDeadTimeout)
+{
+    WaitAllNodesActiveInHashRing(3);
+
+    // Wait 12s so w1/w2 entries age past 5s (node_dead_timeout_s) AND two clear cycles complete
+    // (entries oscillate between read/write buffers; clear only purges writeSnapshot_,
+    // so 2 clear cycles = ~3s needed to empty both buffers after entries exceed 5s).
+    SleepMs(12'000);
+
+    auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+    auto sourceSendBaseline = GetInjectCount(WORKER0, SOURCE_SEND_POINT);
+
+    // 9 * 5MB payload → 9 * 6MiB(jemalloc) = 54MiB > 70% of 64MiB = 44.8MiB → triggers rebalance.
+    auto sourceBatch = WriteObjects(client0_, "rebalance_small_dead_timeout", 9, 's');
+
+    // 12s timeout. w0 reports every 200ms, so with fix the task is assigned < 1s after writing.
+    // Without fix: w1/w2 entries cleared (aged > 5s) → snapshot has only w0 → no target → timeout FAIL.
+    // The 18s gap between sleep-end and w1/w2's next 30s report exceeds the 12s timeout,
+    // so w1/w2 cannot refill the snapshot before the deadline.
+    // With fix: w1/w2 entries kept (60s floor) → snapshot has all workers → task assigned → PASS.
+    WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1, AllWorkers(), 12'000);
+    WaitForInjectCount(WORKER0, SOURCE_SEND_POINT, sourceSendBaseline + 1);
+    AssertReadable(client1_, sourceBatch);
+}
+
 class LEVEL1_KVClientMemoryRebalanceLowRateTest : public LEVEL1_KVClientMemoryRebalanceTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override

@@ -20,6 +20,7 @@
 
 #include "datasystem/master/resource_manager.h"
 
+#include <algorithm>
 #include <chrono>
 #include <mutex>
 #include <utility>
@@ -37,6 +38,8 @@ namespace datasystem {
 namespace master {
 namespace {
 constexpr uint32_t FULL_COHORT_PERCENT = 100;
+
+constexpr uint64_t SNAPSHOT_CLEAR_MIN_S = 60;
 
 master::EvictionPolicyWorkerProgressPb BuildEvictionPolicyWorkerProgress(const master::WorkerStat &stat)
 {
@@ -442,7 +445,9 @@ void ResourceManager::WorkerThread()
 
 void ResourceManager::ClearWriteSnapshot()
 {
-    auto deadTimestamp = GetSteadyClockTimeStampMs() - static_cast<uint64_t>(FLAGS_node_dead_timeout_s) * SECS_TO_MS;
+    const uint64_t deadTimeoutS =
+        std::max(static_cast<uint64_t>(FLAGS_node_dead_timeout_s), SNAPSHOT_CLEAR_MIN_S);
+    auto deadTimestamp = GetSteadyClockTimeStampMs() - deadTimeoutS * SECS_TO_MS;
     std::lock_guard<std::mutex> lock(writeSnapshotMutex_);
     for (auto it = writeSnapshot_.begin(); it != writeSnapshot_.end();) {
         if (it->second.timestamp < deadTimestamp) {

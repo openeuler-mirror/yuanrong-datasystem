@@ -97,6 +97,7 @@ uint64_t SubOrZero(uint64_t lhs, uint64_t rhs)
 class TestResourceManager : public ResourceManager {
 public:
     using ResourceManager::SwitchSnapshots;
+    using ResourceManager::ClearWriteSnapshot;
 };
 
 class ResourceManagerTest : public CommonTest {
@@ -300,6 +301,47 @@ TEST_F(ResourceManagerTest, SnapshotBuildDoesNotBlockConcurrentReportWhileReadin
     DS_EXPECT_OK(highUsageReport.get());
     DS_EXPECT_OK(concurrentReport.get());
     EXPECT_TRUE(reportCompleted) << "Snapshot build held the write snapshot lock while copying the read snapshot";
+}
+
+// Regression guard: ClearWriteSnapshot must not purge alive workers when node_dead_timeout_s is
+// small (e.g. 5s in production). The 30s resource-report cycle far exceeds the heartbeat-based
+// dead timeout; without a floor, ClearWriteSnapshot wipes all entries that are more than 5s old,
+// leaving the scheduling snapshot empty and breaking rebalance. The fix adds a 60s floor
+// (SNAPSHOT_CLEAR_MIN_S), mirroring HOLD_TTL_MIN_S in the rebalance scheduler.
+//
+// Fixture sets FLAGS_node_dead_timeout_s = 0 and skips background swaps, so the test can
+// deterministically call ClearWriteSnapshot + SwitchSnapshots in sequence.
+//
+// Without the fix: deadTimestamp = now - 0 = now. After 2ms sleep, all worker timestamps
+//   are strictly < now → all purged → snapshot empty → no rebalance task.
+// With the fix: deadTimestamp = now - max(0, 60)s = now - 60s. Worker timestamps are
+//   2ms old, well within 60s → all kept → snapshot has 3 targets → rebalance task assigned.
+TEST_F(ResourceManagerTest, ClearWriteSnapshotDoesNotPurgeAliveWorkersWithSmallDeadTimeout)
+{
+    const std::string source = "127.0.0.1:9200";
+    const std::string target1 = "127.0.0.1:1010";
+    const std::string target2 = "127.0.0.1:1020";
+    const std::string target3 = "127.0.0.1:1030";
+
+    (void)Report(*rm_, target1, 100, 900);
+    (void)Report(*rm_, target2, 200, 800);
+    (void)Report(*rm_, target3, 300, 700);
+
+    rm_->SwitchSnapshots();
+    rm_->SwitchSnapshots();
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+
+    rm_->ClearWriteSnapshot();
+
+    rm_->SwitchSnapshots();
+
+    auto rsp = Report(*rm_, source, 900, 100);
+
+    ASSERT_TRUE(HasRebalanceTask(rsp))
+        << "ClearWriteSnapshot purged alive workers; snapshot had no targets for rebalance";
+    EXPECT_NE(rsp.rebalance_task().source_worker(), rsp.rebalance_task().target_worker());
+    EXPECT_EQ(rsp.stats_size(), 4) << "Snapshot should have 3 targets + 1 source";
 }
 }  // namespace ut
 }  // namespace datasystem
