@@ -343,5 +343,41 @@ TEST_F(ResourceManagerTest, ClearWriteSnapshotDoesNotPurgeAliveWorkersWithSmallD
     EXPECT_NE(rsp.rebalance_task().source_worker(), rsp.rebalance_task().target_worker());
     EXPECT_EQ(rsp.stats_size(), 4) << "Snapshot should have 3 targets + 1 source";
 }
+
+// Edge case: when host uptime is less than the clear threshold (e.g., 60s after reboot),
+// the subtraction nowMs - ttlMs would underflow without saturating subtraction. This test
+// simulates that scenario by setting node_dead_timeout_s to a value larger than any realistic
+// uptime, so nowMs < ttlMs always holds.
+//
+// Without saturating subtraction: deadTimestamp wraps to ~UINT64_MAX → all entries purged.
+// With saturating subtraction: deadTimestamp = 0 → no entries purged (timestamp < 0 is false).
+TEST_F(ResourceManagerTest, ClearWriteSnapshotSaturatesWhenUptimeBelowThreshold)
+{
+    FLAGS_node_dead_timeout_s = 4294967295u;  // UINT32_MAX, ~136 years > any real uptime
+
+    const std::string source = "127.0.0.1:9200";
+    const std::string target1 = "127.0.0.1:1010";
+    const std::string target2 = "127.0.0.1:1020";
+    const std::string target3 = "127.0.0.1:1030";
+
+    (void)Report(*rm_, target1, 100, 900);
+    (void)Report(*rm_, target2, 200, 800);
+    (void)Report(*rm_, target3, 300, 700);
+
+    rm_->SwitchSnapshots();
+    rm_->SwitchSnapshots();
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+
+    rm_->ClearWriteSnapshot();
+
+    rm_->SwitchSnapshots();
+
+    auto rsp = Report(*rm_, source, 900, 100);
+
+    ASSERT_TRUE(HasRebalanceTask(rsp))
+        << "ClearWriteSnapshot purged entries due to unsigned underflow when uptime < threshold";
+    EXPECT_EQ(rsp.stats_size(), 4) << "Snapshot should retain all workers with saturating subtraction";
+}
 }  // namespace ut
 }  // namespace datasystem
