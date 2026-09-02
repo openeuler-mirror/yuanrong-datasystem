@@ -24,6 +24,7 @@
 #include <mutex>
 #include <string>
 
+#include "datasystem/common/log/butil_log_sink_lease.h"
 #include "datasystem/coordinator_server.h"
 #include "datasystem/coordinator/raft/coordinator_raft_types.h"
 
@@ -95,6 +96,7 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable stopCv_;
     bool stopRequested_{ false };
+    std::unique_ptr<ButilLogSinkLease> butilLogSinkLease_;
     std::unique_ptr<coordinator::CoordinatorServiceImpl> service_;
     std::function<Status()> onStart_;
     std::function<Status()> onStop_;

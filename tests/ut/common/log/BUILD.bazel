@@ -5,6 +5,14 @@ load("//bazel:build_defs.bzl", "ds_cc_test")
 
 package(default_visibility = ["//visibility:public"])
 
+ds_cc_test(
+    name = "butil_log_sink_test",
+    srcs = ["butil_log_sink_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log:butil_log_sink",
+    ],
+)
+
 # 失败处理器测试
 ds_cc_test(
     name = "failure_handler_test",

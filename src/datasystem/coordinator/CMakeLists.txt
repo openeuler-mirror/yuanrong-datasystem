@@ -62,6 +62,7 @@ target_link_libraries(coordinator_runtime PUBLIC
     static_coordinator_discovery
 )
 target_link_libraries(coordinator_runtime PRIVATE
+    butil_log_sink
     common_flags
     common_log
     common_metrics

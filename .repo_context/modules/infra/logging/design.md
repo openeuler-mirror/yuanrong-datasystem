@@ -21,6 +21,9 @@
   - `src/datasystem/common/log/logging.cpp`
   - `src/datasystem/common/log/log_manager.h`
   - `src/datasystem/common/log/log_manager.cpp`
+  - `src/datasystem/common/log/butil_log_sink.h`
+  - `src/datasystem/common/log/butil_log_sink_lease.h`
+  - `src/datasystem/common/log/butil_log_sink.cpp`
   - `src/datasystem/common/log/access_recorder.h`
   - `src/datasystem/common/log/access_recorder.cpp`
   - `src/datasystem/common/log/access_point.def`
@@ -126,6 +129,7 @@
 | `AccessRecorder` | per-operation latency and metadata recorder | `src/datasystem/common/log/access_recorder.h/.cpp` |
 | `AccessRecorderManager` | owner of exporter instances for access, request-out, and client-access logs | `src/datasystem/common/log/access_recorder.h/.cpp` |
 | `LogManager` | background loop for compression, rolling, pruning, and monitor flush | `src/datasystem/common/log/log_manager.h/.cpp` |
+| `ButilLogSinkLease` | process-level reference-counted lease that installs one butil sink on the first acquisition and restores the previous sink after the last release | `src/datasystem/common/log/butil_log_sink_lease.h` and `butil_log_sink.cpp` |
 | `FailureWriter` | crash-path writer used by absl failure-signal handling | `src/datasystem/common/log/failure_handler.cpp` |
 | `HardDiskExporter` | buffered exporter that writes monitor-style records to disk asynchronously | `src/datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.h/.cpp` |
 
@@ -133,6 +137,8 @@
 
 - Current implementation or baseline behavior:
   - the module wraps a local `ds_spdlog` backend for ordinary logs, uses a singleton `Logging` lifecycle, and delegates access or resource log flushing to `HardDiskExporter`.
+  - `ButilLogSink` maps butil FATAL/ERROR/WARNING and lower severities to the corresponding DataSystem severity, preserves source location and message bytes, and returns `true` to suppress duplicate butil fallback output.
+  - Coordinator acquires `ButilLogSinkLease` after `Logging` starts and releases it after its service stops. Multiple in-process runtimes share one sink through process-level reference counting, so release order need not be LIFO. Worker keeps the default policy that disables process-wide brpc logging.
   - embedded `transfer_engine` code uses a separate private facade over unregistered synchronous `ds_spdlog::logger` instances; it preserves the established severity-file and stderr routing through `TRANSFER_ENGINE_*` configuration without initializing or shutting down the datasystem `Logging` singleton, spdlog registry, async pool, or process-global logging state.
 - Relevant constraints from current release or deployment:
   - the design is local-process and filesystem-based, not a replicated logging service;
@@ -156,6 +162,7 @@
   - `AccessRecorder` and `AccessRecorderManager` serialize structured performance records;
   - `LogManager` performs periodic file maintenance and monitor flush;
   - `FailureWriter` persists crash output directly to file.
+  - `ButilLogSinkLease` owns the process-global brpc/braft-to-DataSystem adapter lifetime; forwarded records then use the normal DataSystem provider and its configured downstream buffering.
 - Key runtime roles or processes:
   - request or worker threads emit logs and maintain trace state;
   - a background maintenance thread owned by `LogManager` performs rolling, compression, pruning, and monitor flush;

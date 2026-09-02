@@ -85,6 +85,9 @@ Updates are process-local and are not distributed or persisted.
 `CoordinatorServiceImpl` uses `CREATED -> INITIALIZED -> STARTING -> RUNNING -> STOPPING -> STOPPED`.
 
 - `Start()` registers business services and braft services on one shared brpc server, starts listening, and leaves election-enabled startup in `STARTING`.
+- Coordinator startup preserves the process's butil logging configuration and installs a process-wide butil `LogSink`
+  that forwards brpc and braft messages to the DataSystem logging provider; Worker startup continues to disable routine
+  brpc logging through the shared RPC server's default log policy.
 - All business RPCs return `K_NOT_READY` during the `STARTING` window.
 - `StartElectionManager()` reserves one attempt under the Service lifecycle mutex, constructs and publishes the Manager, starts its bootstrap worker without that mutex, then publishes Service `RUNNING`; Raft and business readiness may still be pending.
 - A failed election-start attempt keeps the Service `STARTING` and the endpoint listening until Runtime invokes `onStop` and calls explicit Service shutdown; retries are rejected.

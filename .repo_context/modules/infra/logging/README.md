@@ -17,6 +17,9 @@
   - `src/datasystem/common/log/logging.cpp`
   - `src/datasystem/common/log/log_manager.h`
   - `src/datasystem/common/log/log_manager.cpp`
+  - `src/datasystem/common/log/butil_log_sink.h`
+  - `src/datasystem/common/log/butil_log_sink_lease.h`
+  - `src/datasystem/common/log/butil_log_sink.cpp`
   - `src/datasystem/common/log/access_recorder.h`
   - `src/datasystem/common/log/access_recorder.cpp`
   - `src/datasystem/common/log/access_point.def`
@@ -46,6 +49,7 @@
 
 - Verified:
   - `common_log` builds from `log_manager.cpp`, `logging.cpp`, `access_recorder.cpp`, `trace.cpp`, and `failure_handler.cpp`.
+  - `butil_log_sink` is a separate target that adapts process-global butil logging to `common_log` without adding a brpc dependency to `common_log`.
   - `log.h` provides the main logging macros used across the repository, including `LOG`, `VLOG`, `LOG_EVERY_N`, `LOG_FIRST_N`, and `CHECK`.
   - `Logging` is the main lifecycle singleton that initializes log directories, configures the spdlog-backed provider, starts background maintenance, and creates the access-recorder manager.
   - `LogManager` runs background work for log rolling, compression, and periodic monitor-log flush.
@@ -87,6 +91,7 @@
 | `AccessRecorder` | structured performance/access logging and lazy sampled-out skip through Object/Stream/RequestOut facades | `access-recorder.md` and `log-sampler-design.md` |
 | `AccessRecorderManager` | exporter owner for monitor/access logs | `access-recorder.md` and `log-lifecycle-and-rotation.md` |
 | `LogSampler` | per-request random hash-threshold sampling | `log-sampler-design.md` |
+| `ButilLogSink` / `ButilLogSinkLease` | brpc/braft severity and source-location forwarding, with one process-level reference-counted sink | `butil_log_sink.*` |
 | `failure_handler.*` | crash/backtrace logging | `log-lifecycle-and-rotation.md` |
 
 ## Cross-Module Coupling
@@ -100,6 +105,7 @@
 - Logging is consumed by:
   - public C/C++/Java/Python API wrappers via `Trace` and `AccessRecorder`
   - worker/master runtime code through `LOG`, `VLOG`, and resource/access logging
+  - Coordinator through `ButilLogSinkLease`; the first lease installs the process sink, arbitrary-order releases retain it, and the last release restores the previous sink after service shutdown
   - resource metrics flushing via `LogManager::DoLogMonitorWrite()`
 
 ## Review And Bugfix Notes

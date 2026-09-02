@@ -780,7 +780,7 @@ Status CoordinatorServiceImpl::StartInternal()
             }
         }
 
-        status = rpcServer_->StartBrpcServer(brpcAddr_, brpcPort_);
+        status = rpcServer_->StartBrpcServer(brpcAddr_, brpcPort_, BrpcLogPolicy::PRESERVE_PROCESS_CONFIGURATION);
         if (status.IsError()) {
             return status;
         }
