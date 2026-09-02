@@ -1398,6 +1398,7 @@ protected:
         size_t queryMetaCalls = 0;
         size_t removeMetaCalls = 0;
         uint64_t removedVersion = 0;
+        master::RemoveMetaReqPb::Cause removeCause = master::RemoveMetaReqPb::NORMAL;
     };
 
     void InstallRemoteGetFailureApi(const std::string &objectKey, uint64_t firstVersion, uint64_t latestVersion,
@@ -1415,9 +1416,11 @@ protected:
             *rsp.add_query_metas() = std::move(queryMeta);
             return Status::OK();
         };
-        api->removeMeta_ = [&state](master::RemoveMetaReqPb &req, master::RemoveMetaRspPb &) {
+        api->removeMeta_ = [&state](master::RemoveMetaReqPb &req, master::RemoveMetaRspPb &rsp) {
             ++state.removeMetaCalls;
             state.removedVersion = req.version();
+            state.removeCause = req.cause();
+            *rsp.mutable_success_ids() = { req.ids().begin(), req.ids().end() };
             return Status::OK();
         };
         workerMasterApiManager_->SetDefaultApi(api);
@@ -1512,6 +1515,7 @@ TEST_F(NotifyRemoteGetMigrationTest, OrdinaryRemoteGetDefersMetadataCleanupAndPr
 
     EXPECT_EQ(state.removeMetaCalls, 1U);
     EXPECT_EQ(state.removedVersion, latestQueryMetaVersion);
+    EXPECT_EQ(state.removeCause, master::RemoveMetaReqPb::ROLLBACK_UNACK);
 }
 
 TEST_F(NotifyRemoteGetMigrationTest, OrdinaryRemoteGetCleansRegisteredVersionAfterRetryQueryMetaFailure)
@@ -1534,9 +1538,11 @@ TEST_F(NotifyRemoteGetMigrationTest, OrdinaryRemoteGetCleansRegisteredVersionAft
         *rsp.add_query_metas() = std::move(queryMeta);
         return Status::OK();
     };
-    api->removeMeta_ = [&state](master::RemoveMetaReqPb &req, master::RemoveMetaRspPb &) {
+    api->removeMeta_ = [&state](master::RemoveMetaReqPb &req, master::RemoveMetaRspPb &rsp) {
         ++state.removeMetaCalls;
         state.removedVersion = req.version();
+        state.removeCause = req.cause();
+        *rsp.mutable_success_ids() = { req.ids().begin(), req.ids().end() };
         return Status::OK();
     };
     workerMasterApiManager_->SetDefaultApi(api);
@@ -1552,6 +1558,7 @@ TEST_F(NotifyRemoteGetMigrationTest, OrdinaryRemoteGetCleansRegisteredVersionAft
     EXPECT_EQ(state.queryMetaCalls, 2U);
     EXPECT_EQ(state.removeMetaCalls, 1U);
     EXPECT_EQ(state.removedVersion, queryMetaVersion);
+    EXPECT_EQ(state.removeCause, master::RemoveMetaReqPb::ROLLBACK_UNACK);
     EXPECT_EQ(request->GetReadyCount(), 1U);
     EXPECT_EQ(request->GetObjects().at(objectKey).rc.GetCode(), K_RPC_PEER_DEAD);
 }
@@ -1565,10 +1572,12 @@ TEST_F(NotifyRemoteGetMigrationTest, FinalRemoteGetCleanupFiltersRecoveredAttemp
     RouteObjectToMaster(failedKey, leavingWorkerAddress_);
     size_t removeMetaCalls = 0;
     auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(leavingWorkerAddress_, localAddress_);
-    api->removeMeta_ = [&](master::RemoveMetaReqPb &req, master::RemoveMetaRspPb &) {
+    api->removeMeta_ = [&](master::RemoveMetaReqPb &req, master::RemoveMetaRspPb &rsp) {
         ++removeMetaCalls;
         EXPECT_THAT(req.ids(), ElementsAre(failedKey));
         EXPECT_EQ(req.version(), failedVersion);
+        EXPECT_EQ(req.cause(), master::RemoveMetaReqPb::ROLLBACK_UNACK);
+        *rsp.mutable_success_ids() = { req.ids().begin(), req.ids().end() };
         return Status::OK();
     };
     workerMasterApiManager_->SetDefaultApi(api);
@@ -1905,11 +1914,12 @@ TEST_F(NotifyRemoteGetMigrationTest, TransferFailureCleansInsertedEntriesAndBatc
     size_t removeMetaCalls = 0;
     std::vector<std::string> removedKeys;
     auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(masterAddress, localAddress_);
-    api->removeMeta_ = [&](master::RemoveMetaReqPb &removeReq, master::RemoveMetaRspPb &) {
+    api->removeMeta_ = [&](master::RemoveMetaReqPb &removeReq, master::RemoveMetaRspPb &removeRsp) {
         ++removeMetaCalls;
         removedKeys.assign(removeReq.ids().begin(), removeReq.ids().end());
         for (const auto &objectKey : removeReq.ids()) {
             EXPECT_FALSE(objectTable_->Contains(objectKey).IsOk());
+            removeRsp.add_success_ids(objectKey);
         }
         return Status::OK();
     };

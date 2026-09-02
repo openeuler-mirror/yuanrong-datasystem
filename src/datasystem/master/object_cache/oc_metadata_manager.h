@@ -1819,6 +1819,12 @@ private:
     Status RemoveMetaLocation(const RemoveMetaReqPb &request, const std::string &address, RemoveMetaRspPb &response,
                               uint64_t version = UINT64_MAX);
 
+    Status RollbackUnackLocations(const RemoveMetaReqPb &request, const std::string &address,
+                                  RemoveMetaRspPb &response);
+
+    void RollbackUnackLocation(const std::string &objectKey, const std::string &address, uint64_t version,
+                               RemoveMetaRspPb &response);
+
     /**
      * @brief Remove object meta info for invalidating buffer operation.
      * @param[in] request The rpc request protobuf.

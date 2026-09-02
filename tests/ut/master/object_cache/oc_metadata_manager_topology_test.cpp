@@ -37,6 +37,9 @@ constexpr char LOCAL_ADDRESS[] = "127.0.0.1:30001";
 constexpr char TARGET_ADDRESS[] = "127.0.0.1:30002";
 constexpr char SURVIVOR_ADDRESS[] = "127.0.0.1:30003";
 constexpr uint64_t LOCATION_TOPOLOGY_VERSION = 11;
+constexpr uint64_t QUERY_META_OBJECT_VERSION = 101;
+constexpr int ROLLBACK_UNACK_CAUSE_WIRE_VALUE = 4;
+constexpr char REMOVE_META_CAUSE_WIRE_TAG = '\x18';
 constexpr size_t MEMBER_ID_SIZE = 16;
 constexpr size_t SHA256_HEX_SIZE = 64;
 
@@ -55,6 +58,9 @@ public:
     {
         RELEASE_STUBS
         (void)inject::Clear("master.rocksdb.put");
+        (void)inject::Clear("master.rocksdb.delete");
+        (void)inject::Clear("master.rocksdb.delete_multi_cf");
+        (void)inject::Clear("OCMetadataManager.GetValidTopologyWorkers");
         (void)inject::Clear("OCNotifyWorkerManager.CheckWorkerIsHealth.worker.unhealthy");
         rocksStore_.reset();
         FLAGS_rocksdb_write_mode = oldWriteMode_;
@@ -81,6 +87,110 @@ public:
         ASSERT_TRUE(shard.table.find(accessor, objectKey));
         accessor->second.meta.mutable_config()->set_write_mode(
             static_cast<uint32_t>(WriteMode::NONE_L2_CACHE_EVICT));
+    }
+
+    void InsertVersionedRequesterLocation(OCMetadataManager &manager, const std::string &objectKey, uint64_t version,
+                                          AckState requesterState)
+    {
+        TbbMetaTable::accessor accessor;
+        auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+        bthread::RWLockWrGuard lock(shard.mutex);
+        (void)shard.table.insert(accessor, objectKey);
+        accessor->second.meta.set_object_key(objectKey);
+        accessor->second.meta.set_primary_address(LOCAL_ADDRESS);
+        accessor->second.meta.set_version(version);
+        accessor->second.locations[LOCAL_ADDRESS] = AckState::ACK;
+        accessor->second.locations[TARGET_ADDRESS] = requesterState;
+    }
+
+    void InsertPersistedNoneL2RequesterLocation(OCMetadataManager &manager, const std::string &objectKey,
+                                                bool includeAckCopy)
+    {
+        ObjectMetaPb meta;
+        meta.set_object_key(objectKey);
+        meta.set_primary_address(LOCAL_ADDRESS);
+        meta.set_version(QUERY_META_OBJECT_VERSION);
+        meta.mutable_config()->set_write_mode(static_cast<uint32_t>(WriteMode::NONE_L2_CACHE_EVICT));
+        {
+            TbbMetaTable::accessor accessor;
+            auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+            bthread::RWLockWrGuard lock(shard.mutex);
+            (void)shard.table.insert(accessor, objectKey);
+            accessor->second.meta = meta;
+            accessor->second.locations[TARGET_ADDRESS] = AckState::UNACK;
+            if (includeAckCopy) {
+                accessor->second.locations[LOCAL_ADDRESS] = AckState::ACK;
+            }
+        }
+        DS_ASSERT_OK(rocksStore_->Put(META_TABLE, objectKey, meta.SerializeAsString()));
+        DS_ASSERT_OK(rocksStore_->Put(LOCATION_TABLE, std::string(TARGET_ADDRESS) + "_" + objectKey, "0"));
+        if (includeAckCopy) {
+            DS_ASSERT_OK(rocksStore_->Put(LOCATION_TABLE, std::string(LOCAL_ADDRESS) + "_" + objectKey, ""));
+        }
+    }
+
+    bool HasMeta(OCMetadataManager &manager, const std::string &objectKey)
+    {
+        TbbMetaTable::const_accessor accessor;
+        auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+        bthread::RWLockRdGuard lock(shard.mutex);
+        return shard.table.find(accessor, objectKey);
+    }
+
+    bool HasPersistedKey(const std::string &table, const std::string &key)
+    {
+        std::string value;
+        return rocksStore_->Get(table, key, value).IsOk();
+    }
+
+    void ExpectRecoveredState(const std::string &objectKey, bool hasMeta, bool hasRequesterLocation)
+    {
+        DS_ASSERT_OK(inject::Set("OCMetadataManager.GetValidTopologyWorkers",
+                                 FormatString("return(%s)", TARGET_ADDRESS)));
+        OCMetadataManager recovered(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                                    true, HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+        DS_ASSERT_OK(recovered.objectStore_->Init());
+        recovered.nestedRefManager_ = std::make_unique<OCNestedManager>(recovered.objectStore_, true);
+        recovered.expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(LOCAL_ADDRESS, &recovered);
+        recovered.expiredObjectManager_->Init();
+        DS_ASSERT_OK(recovered.LoadMeta(true));
+        EXPECT_EQ(HasMeta(recovered, objectKey), hasMeta);
+        EXPECT_EQ(HasRequesterLocation(recovered, objectKey), hasRequesterLocation);
+    }
+
+    bool HasRequesterLocation(OCMetadataManager &manager, const std::string &objectKey)
+    {
+        TbbMetaTable::const_accessor accessor;
+        auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+        bthread::RWLockRdGuard lock(shard.mutex);
+        return shard.table.find(accessor, objectKey) && accessor->second.locations.count(TARGET_ADDRESS) != 0;
+    }
+
+    RemoveMetaReqPb MakeUnknownRollbackRequest(const std::string &objectKey, uint64_t version)
+    {
+        RemoveMetaReqPb request;
+        request.set_address(TARGET_ADDRESS);
+        request.add_ids(objectKey);
+        auto *objectVersion = request.add_id_with_version();
+        objectVersion->set_id(objectKey);
+        objectVersion->set_version(version);
+        std::string wire = request.SerializeAsString();
+        wire.push_back(REMOVE_META_CAUSE_WIRE_TAG);
+        wire.push_back(static_cast<char>(ROLLBACK_UNACK_CAUSE_WIRE_VALUE));
+        EXPECT_TRUE(request.ParseFromString(wire));
+        return request;
+    }
+
+    RemoveMetaReqPb MakeRollbackRequest(const std::string &objectKey, uint64_t version)
+    {
+        RemoveMetaReqPb request;
+        request.set_address(TARGET_ADDRESS);
+        request.set_cause(RemoveMetaReqPb::ROLLBACK_UNACK);
+        request.add_ids(objectKey);
+        auto *objectVersion = request.add_id_with_version();
+        objectVersion->set_id(objectKey);
+        objectVersion->set_version(version);
+        return request;
     }
 
     std::string oldWriteMode_;
@@ -129,6 +239,229 @@ void MakeTargetReadable(OCMetadataManager &manager, const std::string &objectKey
     accessor->second.meta.set_primary_address(LOCAL_ADDRESS);
     accessor->second.locations[LOCAL_ADDRESS] = AckState::ACK;
     accessor->second.locations[TARGET_ADDRESS] = AckState::ACK;
+}
+
+TEST_F(OCMetadataManagerTopologyTest, RollbackCauseWireValueDoesNotFallBackToNormal)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "unknown_rollback_cause_wire";
+    InsertVersionedRequesterLocation(manager, objectKey, QUERY_META_OBJECT_VERSION, AckState::ACK);
+    RemoveMetaReqPb request = MakeUnknownRollbackRequest(objectKey, QUERY_META_OBJECT_VERSION);
+    RemoveMetaRspPb response;
+
+    ASSERT_EQ(static_cast<int>(request.cause()), ROLLBACK_UNACK_CAUSE_WIRE_VALUE);
+    DS_ASSERT_OK(manager.RemoveMeta(request, response));
+
+    EXPECT_TRUE(HasRequesterLocation(manager, objectKey));
+    EXPECT_EQ(response.success_ids_size(), 1);
+    EXPECT_EQ(response.failed_ids_size(), 0);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, RollbackUnackRemovesExactVersionUnackLocation)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "rollback_exact_version_unack";
+    InsertVersionedRequesterLocation(manager, objectKey, QUERY_META_OBJECT_VERSION, AckState::UNACK);
+    RemoveMetaReqPb request = MakeRollbackRequest(objectKey, QUERY_META_OBJECT_VERSION);
+    RemoveMetaRspPb response;
+
+    DS_ASSERT_OK(manager.RemoveMeta(request, response));
+
+    EXPECT_FALSE(HasRequesterLocation(manager, objectKey));
+    ASSERT_EQ(response.success_ids_size(), 1);
+    EXPECT_EQ(response.success_ids(0), objectKey);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, RollbackUnackKeepsAckAndNewerVersionLocations)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string ackKey = "rollback_same_version_ack";
+    const std::string newerKey = "rollback_newer_version_unack";
+    InsertVersionedRequesterLocation(manager, ackKey, QUERY_META_OBJECT_VERSION, AckState::ACK);
+    InsertVersionedRequesterLocation(manager, newerKey, QUERY_META_OBJECT_VERSION + 1, AckState::UNACK);
+    RemoveMetaRspPb ackResponse;
+    RemoveMetaRspPb newerResponse;
+
+    auto ackRequest = MakeRollbackRequest(ackKey, QUERY_META_OBJECT_VERSION);
+    auto staleRequest = MakeRollbackRequest(newerKey, QUERY_META_OBJECT_VERSION);
+    DS_ASSERT_OK(manager.RemoveMeta(ackRequest, ackResponse));
+    DS_ASSERT_OK(manager.RemoveMeta(staleRequest, newerResponse));
+
+    EXPECT_TRUE(HasRequesterLocation(manager, ackKey));
+    EXPECT_TRUE(HasRequesterLocation(manager, newerKey));
+    EXPECT_EQ(ackResponse.success_ids_size(), 1);
+    EXPECT_EQ(newerResponse.success_ids_size(), 1);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, RollbackUnackRejectsFutureVersionAndIsIdempotent)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string futureKey = "rollback_future_version";
+    const std::string repeatKey = "rollback_repeated";
+    const std::string missingVersionKey = "rollback_missing_version";
+    InsertVersionedRequesterLocation(manager, futureKey, QUERY_META_OBJECT_VERSION, AckState::UNACK);
+    InsertVersionedRequesterLocation(manager, repeatKey, QUERY_META_OBJECT_VERSION, AckState::UNACK);
+    InsertVersionedRequesterLocation(manager, missingVersionKey, QUERY_META_OBJECT_VERSION, AckState::UNACK);
+    auto futureRequest = MakeRollbackRequest(futureKey, QUERY_META_OBJECT_VERSION + 1);
+    auto repeatRequest = MakeRollbackRequest(repeatKey, QUERY_META_OBJECT_VERSION);
+    RemoveMetaReqPb missingVersionRequest;
+    missingVersionRequest.set_address(TARGET_ADDRESS);
+    missingVersionRequest.set_cause(RemoveMetaReqPb::ROLLBACK_UNACK);
+    missingVersionRequest.add_ids(missingVersionKey);
+    RemoveMetaRspPb futureResponse;
+    RemoveMetaRspPb firstResponse;
+    RemoveMetaRspPb secondResponse;
+    RemoveMetaRspPb missingVersionResponse;
+
+    DS_ASSERT_OK(manager.RemoveMeta(futureRequest, futureResponse));
+    DS_ASSERT_OK(manager.RemoveMeta(repeatRequest, firstResponse));
+    DS_ASSERT_OK(manager.RemoveMeta(repeatRequest, secondResponse));
+    DS_ASSERT_OK(manager.RemoveMeta(missingVersionRequest, missingVersionResponse));
+
+    EXPECT_TRUE(HasRequesterLocation(manager, futureKey));
+    EXPECT_EQ(futureResponse.failed_ids_size(), 1);
+    EXPECT_FALSE(HasRequesterLocation(manager, repeatKey));
+    EXPECT_EQ(firstResponse.success_ids_size(), 1);
+    EXPECT_EQ(secondResponse.success_ids_size(), 1);
+    EXPECT_TRUE(HasRequesterLocation(manager, missingVersionKey));
+    EXPECT_EQ(missingVersionResponse.failed_ids_size(), 1);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, RollbackUnackKeepsLocationWhenPersistenceDeleteFails)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "rollback_persistence_failure";
+    InsertVersionedRequesterLocation(manager, objectKey, QUERY_META_OBJECT_VERSION, AckState::UNACK);
+    DS_ASSERT_OK(inject::Set("master.rocksdb.delete_multi_cf", "1*return(K_KVSTORE_ERROR)"));
+    auto request = MakeRollbackRequest(objectKey, QUERY_META_OBJECT_VERSION);
+    RemoveMetaRspPb response;
+
+    DS_ASSERT_OK(manager.RemoveMeta(request, response));
+
+    EXPECT_TRUE(HasRequesterLocation(manager, objectKey));
+    EXPECT_EQ(response.failed_ids_size(), 1);
+    EXPECT_EQ(response.success_ids_size(), 0);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, RollbackLastNoneL2UnackRemovesMetaAndRecoversEmpty)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "rollback_last_none_l2_unack";
+    InsertPersistedNoneL2RequesterLocation(manager, objectKey, false);
+    auto request = MakeRollbackRequest(objectKey, QUERY_META_OBJECT_VERSION);
+    RemoveMetaRspPb firstResponse;
+    RemoveMetaRspPb secondResponse;
+
+    DS_ASSERT_OK(manager.RemoveMeta(request, firstResponse));
+    DS_ASSERT_OK(manager.RemoveMeta(request, secondResponse));
+
+    EXPECT_EQ(firstResponse.success_ids_size(), 1);
+    EXPECT_EQ(secondResponse.success_ids_size(), 1);
+    EXPECT_FALSE(HasMeta(manager, objectKey));
+    EXPECT_FALSE(HasPersistedKey(META_TABLE, objectKey));
+    EXPECT_FALSE(HasPersistedKey(LOCATION_TABLE, std::string(TARGET_ADDRESS) + "_" + objectKey));
+    ExpectRecoveredState(objectKey, false, false);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, RollbackNoneL2UnackKeepsMetaWithAckCopy)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "rollback_none_l2_with_ack";
+    InsertPersistedNoneL2RequesterLocation(manager, objectKey, true);
+    auto request = MakeRollbackRequest(objectKey, QUERY_META_OBJECT_VERSION);
+    RemoveMetaRspPb response;
+
+    DS_ASSERT_OK(manager.RemoveMeta(request, response));
+
+    EXPECT_EQ(response.success_ids_size(), 1);
+    EXPECT_TRUE(HasMeta(manager, objectKey));
+    EXPECT_FALSE(HasRequesterLocation(manager, objectKey));
+    EXPECT_TRUE(HasPersistedKey(META_TABLE, objectKey));
+    EXPECT_TRUE(HasPersistedKey(LOCATION_TABLE, std::string(LOCAL_ADDRESS) + "_" + objectKey));
+    EXPECT_FALSE(HasPersistedKey(LOCATION_TABLE, std::string(TARGET_ADDRESS) + "_" + objectKey));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, RollbackNoneL2UnackWithAckKeepsStateWhenCommittedDeleteFails)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "rollback_none_l2_ack_delete_failure";
+    const std::string locationKey = std::string(TARGET_ADDRESS) + "_" + objectKey;
+    InsertPersistedNoneL2RequesterLocation(manager, objectKey, true);
+    DS_ASSERT_OK(inject::Set("master.rocksdb.delete_multi_cf", "return(K_KVSTORE_ERROR)"));
+    auto request = MakeRollbackRequest(objectKey, QUERY_META_OBJECT_VERSION);
+    RemoveMetaRspPb failedResponse;
+
+    DS_ASSERT_OK(manager.RemoveMeta(request, failedResponse));
+
+    EXPECT_EQ(failedResponse.failed_ids_size(), 1);
+    EXPECT_TRUE(HasMeta(manager, objectKey));
+    EXPECT_TRUE(HasRequesterLocation(manager, objectKey));
+    EXPECT_TRUE(HasPersistedKey(META_TABLE, objectKey));
+    EXPECT_TRUE(HasPersistedKey(LOCATION_TABLE, locationKey));
+    ExpectRecoveredState(objectKey, true, true);
+
+    DS_ASSERT_OK(inject::Clear("master.rocksdb.delete_multi_cf"));
+    RemoveMetaRspPb retryResponse;
+    DS_ASSERT_OK(manager.RemoveMeta(request, retryResponse));
+    EXPECT_EQ(retryResponse.success_ids_size(), 1);
+    EXPECT_TRUE(HasMeta(manager, objectKey));
+    EXPECT_FALSE(HasRequesterLocation(manager, objectKey));
+    EXPECT_FALSE(HasPersistedKey(LOCATION_TABLE, locationKey));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, RollbackLastNoneL2UnackAtomicFailureKeepsStateForRetry)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "rollback_last_none_l2_atomic_failure";
+    const std::string locationKey = std::string(TARGET_ADDRESS) + "_" + objectKey;
+    InsertPersistedNoneL2RequesterLocation(manager, objectKey, false);
+    DS_ASSERT_OK(inject::Set("master.rocksdb.delete_multi_cf", "return(K_KVSTORE_ERROR)"));
+    auto request = MakeRollbackRequest(objectKey, QUERY_META_OBJECT_VERSION);
+    RemoveMetaRspPb failedResponse;
+
+    DS_ASSERT_OK(manager.RemoveMeta(request, failedResponse));
+
+    EXPECT_EQ(failedResponse.failed_ids_size(), 1);
+    EXPECT_TRUE(HasMeta(manager, objectKey));
+    EXPECT_TRUE(HasRequesterLocation(manager, objectKey));
+    EXPECT_TRUE(HasPersistedKey(META_TABLE, objectKey));
+    EXPECT_TRUE(HasPersistedKey(LOCATION_TABLE, locationKey));
+    ExpectRecoveredState(objectKey, true, true);
+
+    DS_ASSERT_OK(inject::Clear("master.rocksdb.delete_multi_cf"));
+    RemoveMetaRspPb retryResponse;
+    DS_ASSERT_OK(manager.RemoveMeta(request, retryResponse));
+    EXPECT_EQ(retryResponse.success_ids_size(), 1);
+    EXPECT_FALSE(HasMeta(manager, objectKey));
+    EXPECT_FALSE(HasPersistedKey(META_TABLE, objectKey));
+    EXPECT_FALSE(HasPersistedKey(LOCATION_TABLE, locationKey));
 }
 
 TEST_F(OCMetadataManagerTopologyTest, PureQueryMetaUsesMembershipVersionThatContainsEveryReturnedLocation)

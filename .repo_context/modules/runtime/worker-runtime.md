@@ -198,6 +198,18 @@
     immediately instead of rebuilding the same dead peer's RPC stub until the configured request timeout expires.
     Background reconciliation and metadata push paths retain their bounded stub-rebuild retry because those operations
     are idempotent and must tolerate a restarting metadata owner.
+  - `DeleteObjectsMetaUnacked`, used by remote-Get failure paths that retained an exact `QueryMeta` version, sends
+    `RemoveMetaReqPb::ROLLBACK_UNACK`. The metadata owner removes the requester location only when that version still
+    matches and the location remains `UNACK`; an `ACK`, a newer version, or a missing location is an idempotent no-op,
+    while a future version is rejected. Persistent location deletion commits before the in-memory erase; deleting the
+    final `NONE_L2_CACHE_EVICT` location removes the location and metadata column-family keys in one ordered RocksDB
+    batch, so a storage failure keeps both memory and persistence available for retry. When acknowledged copies remain,
+    rollback waits for the ordered location-only delete to complete before erasing memory for the same reason. Worker
+    cleanup requires an
+    explicit per-key response and never falls back to `NORMAL`; only an RPC-successful, completely empty response from
+    an older owner stops that cleanup batch with a rate-limited compatibility warning. RPC errors, including an explicit
+    `K_NOT_SUPPORTED`, remain retryable. Deploy metadata owners before Workers when rolling out this cause, because an
+    older proto3 owner safely no-ops the unknown enum but cannot acknowledge it.
   - Object-cache request retry backoff and contended SHM read-latch retry use cooperative bthread sleep; an interrupted
     pthread fallback resumes the remaining backoff instead of shortening it. LocalMaster delete fanout initiates each
     eligible asynchronous Worker notification before collecting responses, without a pthread-pool `future.get()` join.

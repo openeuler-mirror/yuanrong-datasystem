@@ -144,6 +144,7 @@ class FakeWorkerMasterOCApi final : public worker::WorkerLocalMasterOCApi {
 public:
     using CreateMetaHandler = std::function<Status(master::CreateMetaReqPb &, master::CreateMetaRspPb &)>;
     using QueryMetaHandler = std::function<Status(int, master::QueryMetaRspPb &)>;
+    using RemoveMetaHandler = std::function<Status(master::RemoveMetaReqPb &, master::RemoveMetaRspPb &)>;
 
     explicit FakeWorkerMasterOCApi(const HostPort &localAddr) : WorkerLocalMasterOCApi(nullptr, localAddr, nullptr)
     {
@@ -254,11 +255,11 @@ public:
         return GetObjectLocations(request, response);
     }
 
-    Status RemoveMeta(master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &) override
+    Status RemoveMeta(master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &response) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
         removeMetaRequests_.emplace_back(request);
-        return Status::OK();
+        return removeMetaHandler_ == nullptr ? Status::OK() : removeMetaHandler_(request, response);
     }
 
     Status PureQueryMeta(master::PureQueryMetaReqPb &, master::PureQueryMetaRspPb &response) override
@@ -358,6 +359,12 @@ public:
         createMetaHandler_ = std::move(handler);
     }
 
+    void SetRemoveMetaHandler(RemoveMetaHandler handler)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        removeMetaHandler_ = std::move(handler);
+    }
+
     int CreateMetaCallCount() const
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -414,6 +421,7 @@ private:
     std::function<Status(master::CreateMultiMetaReqPb &, master::CreateMultiMetaRspPb &)> createMultiMetaHandler_;
     CreateMetaHandler createMetaHandler_;
     QueryMetaHandler queryMetaHandler_;
+    RemoveMetaHandler removeMetaHandler_;
     std::vector<master::CreateMultiMetaReqPb> createMultiMetaRequests_;
     std::vector<master::RemoveMetaReqPb> removeMetaRequests_;
     int queryMetaCallCount_{ 0 };
@@ -1094,8 +1102,25 @@ TEST_F(WorkerOcServiceImplTest, BatchAdmissionFailsBeforeLaneWhenFallbackDisable
 class TestWorkerOcServiceCrudCommonApi : public WorkerOcServiceCrudCommonApi {
 public:
     using WorkerOcServiceCrudCommonApi::TranslateQualifiedMetadataDeadline;
+    using WorkerOcServiceCrudCommonApi::ValidateRollbackUnackResponse;
     using WorkerOcServiceCrudCommonApi::WorkerOcServiceCrudCommonApi;
 };
+
+TEST_F(WorkerOcServiceImplTest, EmptyRollbackResponseIsOnlyUnsupportedCompatibilityCase)
+{
+    master::RemoveMetaRspPb emptyResponse;
+    master::RemoveMetaRspPb explicitResponse;
+    explicitResponse.add_failed_ids("object-key");
+
+    EXPECT_EQ(TestWorkerOcServiceCrudCommonApi::ValidateRollbackUnackResponse(
+                  master::RemoveMetaReqPb::ROLLBACK_UNACK, emptyResponse)
+                  .GetCode(),
+              K_NOT_SUPPORTED);
+    DS_EXPECT_OK(TestWorkerOcServiceCrudCommonApi::ValidateRollbackUnackResponse(
+        master::RemoveMetaReqPb::NORMAL, emptyResponse));
+    DS_EXPECT_OK(TestWorkerOcServiceCrudCommonApi::ValidateRollbackUnackResponse(
+        master::RemoveMetaReqPb::ROLLBACK_UNACK, explicitResponse));
+}
 
 TEST_F(WorkerOcServiceImplTest, MetadataDeadlineTriggersRefreshStatusOnlyAfterFailureQualification)
 {
@@ -2123,6 +2148,10 @@ TEST_F(WorkerOcServiceImplTest, DeviceRemoteGetReservesCleanupBudgetBeforeRetry)
         }
         return Status::OK();
     });
+    api->SetRemoveMetaHandler([](master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &response) {
+        *response.mutable_success_ids() = { request.ids().begin(), request.ids().end() };
+        return Status::OK();
+    });
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
@@ -2145,12 +2174,315 @@ TEST_F(WorkerOcServiceImplTest, DeviceRemoteGetReservesCleanupBudgetBeforeRetry)
     EXPECT_EQ(api->QueryMetaCallCount(), secondQueryMetaCall);
     auto requests = api->RemoveMetaRequests();
     ASSERT_EQ(requests.size(), 1U);
+    EXPECT_EQ(requests.front().cause(), master::RemoveMetaReqPb::ROLLBACK_UNACK);
     EXPECT_THAT(requests.front().ids(),
                 UnorderedElementsAre(finalRetryKey, secondAttemptFailureKey, firstAttemptFailureKey));
     ASSERT_EQ(requests.front().id_with_version_size(), static_cast<int>(remoteObjectKeys.size()));
     for (const auto &idWithVersion : requests.front().id_with_version()) {
         EXPECT_EQ(idWithVersion.version(), queryMetaVersion);
     }
+}
+
+TEST_F(WorkerOcServiceImplTest, RollbackUnackEmptySingleResponseStopsCleanupRetry)
+{
+    constexpr uint64_t rollbackVersion = 7;
+    const std::string objectKey = "rollback-unack-unsupported-single";
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    placement_.SetOwner(objectKey, localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+
+    getImpl.DeleteObjectsMetaUnacked({ { objectKey, rollbackVersion } });
+
+    auto requests = api->RemoveMetaRequests();
+    ASSERT_EQ(requests.size(), 1U);
+    EXPECT_EQ(requests.front().cause(), master::RemoveMetaReqPb::ROLLBACK_UNACK);
+    EXPECT_THAT(requests.front().ids(), ElementsAre(objectKey));
+}
+
+TEST_F(WorkerOcServiceImplTest, RollbackUnackEmptyBatchResponseStopsCleanupRetry)
+{
+    constexpr uint64_t rollbackVersion = 8;
+    const std::string firstKey = "rollback-unack-unsupported-batch-first";
+    const std::string secondKey = "rollback-unack-unsupported-batch-second";
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    placement_.SetOwner(firstKey, localAddress_);
+    placement_.SetOwner(secondKey, localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+
+    getImpl.DeleteObjectsMetaUnacked({ { firstKey, rollbackVersion }, { secondKey, rollbackVersion } });
+
+    auto requests = api->RemoveMetaRequests();
+    ASSERT_EQ(requests.size(), 1U);
+    EXPECT_THAT(requests.front().ids(), UnorderedElementsAre(firstKey, secondKey));
+}
+
+TEST_F(WorkerOcServiceImplTest, RollbackUnackRetriesBatchRpcNotSupportedFailure)
+{
+    constexpr uint64_t rollbackVersion = 16;
+    const std::string firstKey = "rollback-unack-rpc-not-supported-batch-first";
+    const std::string secondKey = "rollback-unack-rpc-not-supported-batch-second";
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    placement_.SetOwner(firstKey, localAddress_);
+    placement_.SetOwner(secondKey, localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    size_t calls = 0;
+    api->SetRemoveMetaHandler([&](master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &response) {
+        if (++calls == 1) {
+            return Status(K_NOT_SUPPORTED, "remote batch remove operation is unavailable");
+        }
+        *response.mutable_success_ids() = { request.ids().begin(), request.ids().end() };
+        return Status::OK();
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    auto param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+
+    getImpl.DeleteObjectsMetaUnacked({ { firstKey, rollbackVersion }, { secondKey, rollbackVersion } });
+
+    EXPECT_EQ(api->RemoveMetaRequests().size(), 2U);
+}
+
+TEST_F(WorkerOcServiceImplTest, DeleteObjectsMetaUnackedUsesRollbackCause)
+{
+    constexpr uint64_t rollbackVersion = 9;
+    const std::string objectKey = "delete-unacked-rollback-cause";
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    placement_.SetOwner(objectKey, localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    api->SetRemoveMetaHandler([](master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &response) {
+        *response.mutable_success_ids() = { request.ids().begin(), request.ids().end() };
+        return Status::OK();
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+
+    getImpl.DeleteObjectsMetaUnacked({ { objectKey, rollbackVersion } });
+
+    auto requests = api->RemoveMetaRequests();
+    ASSERT_EQ(requests.size(), 1U);
+    EXPECT_EQ(requests.front().cause(), master::RemoveMetaReqPb::ROLLBACK_UNACK);
+    ASSERT_EQ(requests.front().id_with_version_size(), 1);
+    EXPECT_EQ(requests.front().id_with_version(0).version(), rollbackVersion);
+}
+
+TEST_F(WorkerOcServiceImplTest, RollbackUnackEmptyRedirectResponseStopsCleanupRetry)
+{
+    constexpr uint64_t rollbackVersion = 10;
+    const HostPort redirectMaster("127.0.0.1", 18482);
+    const std::string objectKey = "redirected-rollback-unack";
+    TestDistributedTopology topology(localAddress_, redirectMaster);
+    DS_ASSERT_OK(topology.InitStatus());
+    auto redirectApi = std::make_shared<FakeWorkerMasterOCApi>(redirectMaster);
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
+    apiManager->SetApi(redirectMaster, redirectApi);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy());
+    TestWorkerOcServiceCrudCommonApi common(param);
+    master::RemoveMetaRspPb response;
+    auto *redirect = response.add_info();
+    redirect->set_redirect_meta_address(redirectMaster.ToString());
+    redirect->add_change_meta_ids(objectKey);
+    std::vector<std::string> failedIds;
+    std::vector<std::string> needMigrateIds;
+    std::vector<std::string> needWaitIds;
+    std::vector<std::string> needL2CacheIds;
+
+    DS_ASSERT_OK(common.RemoveMetadataFromRedirectMaster(
+        response, master::RemoveMetaReqPb::ROLLBACK_UNACK, localAddress_.ToString(),
+        { { objectKey, rollbackVersion } }, failedIds, needMigrateIds, needWaitIds, needL2CacheIds, ""));
+
+    EXPECT_TRUE(failedIds.empty());
+    auto requests = redirectApi->RemoveMetaRequests();
+    ASSERT_EQ(requests.size(), 1U);
+    EXPECT_EQ(requests.front().cause(), master::RemoveMetaReqPb::ROLLBACK_UNACK);
+}
+
+TEST_F(WorkerOcServiceImplTest, RollbackUnackRedirectRpcNotSupportedRemainsRetryable)
+{
+    constexpr uint64_t rollbackVersion = 17;
+    const HostPort redirectMaster("127.0.0.1", 18482);
+    const std::string objectKey = "redirected-rollback-unack-rpc-not-supported";
+    TestDistributedTopology topology(localAddress_, redirectMaster);
+    DS_ASSERT_OK(topology.InitStatus());
+    auto redirectApi = std::make_shared<FakeWorkerMasterOCApi>(redirectMaster);
+    redirectApi->SetRemoveMetaHandler([](master::RemoveMetaReqPb &, master::RemoveMetaRspPb &) {
+        return Status(K_NOT_SUPPORTED, "remote redirect remove operation is unavailable");
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
+    apiManager->SetApi(redirectMaster, redirectApi);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy());
+    TestWorkerOcServiceCrudCommonApi common(param);
+    master::RemoveMetaRspPb response;
+    auto *redirect = response.add_info();
+    redirect->set_redirect_meta_address(redirectMaster.ToString());
+    redirect->add_change_meta_ids(objectKey);
+    std::vector<std::string> failedIds;
+    std::vector<std::string> needMigrateIds;
+    std::vector<std::string> needWaitIds;
+    std::vector<std::string> needL2CacheIds;
+
+    DS_ASSERT_OK(common.RemoveMetadataFromRedirectMaster(
+        response, master::RemoveMetaReqPb::ROLLBACK_UNACK, localAddress_.ToString(),
+        { { objectKey, rollbackVersion } }, failedIds, needMigrateIds, needWaitIds, needL2CacheIds, ""));
+
+    EXPECT_THAT(failedIds, ElementsAre(objectKey));
+}
+
+TEST_F(WorkerOcServiceImplTest, RollbackUnackRetriesTransportFailure)
+{
+    constexpr uint64_t rollbackVersion = 11;
+    const std::string objectKey = "rollback-unack-transport-retry";
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    placement_.SetOwner(objectKey, localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    size_t calls = 0;
+    api->SetRemoveMetaHandler([&](master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &response) {
+        if (++calls == 1) {
+            return Status(K_RPC_UNAVAILABLE, "transient rollback failure");
+        }
+        *response.mutable_success_ids() = { request.ids().begin(), request.ids().end() };
+        return Status::OK();
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    auto param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+
+    getImpl.DeleteObjectsMetaUnacked({ { objectKey, rollbackVersion } });
+
+    EXPECT_EQ(api->RemoveMetaRequests().size(), 2U);
+}
+
+TEST_F(WorkerOcServiceImplTest, RollbackUnackRetriesRpcNotSupportedFailure)
+{
+    constexpr uint64_t rollbackVersion = 15;
+    const std::string objectKey = "rollback-unack-rpc-not-supported";
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    placement_.SetOwner(objectKey, localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    size_t calls = 0;
+    api->SetRemoveMetaHandler([&](master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &response) {
+        if (++calls == 1) {
+            return Status(K_NOT_SUPPORTED, "remote remove operation is unavailable");
+        }
+        *response.mutable_success_ids() = { request.ids().begin(), request.ids().end() };
+        return Status::OK();
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    auto param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+
+    getImpl.DeleteObjectsMetaUnacked({ { objectKey, rollbackVersion } });
+
+    EXPECT_EQ(api->RemoveMetaRequests().size(), 2U);
+}
+
+TEST_F(WorkerOcServiceImplTest, RollbackUnackRetriesExplicitFailure)
+{
+    constexpr uint64_t rollbackVersion = 12;
+    const std::string firstKey = "rollback-unack-explicit-failure";
+    const std::string secondKey = "rollback-unack-missing-result";
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    placement_.SetOwner(firstKey, localAddress_);
+    placement_.SetOwner(secondKey, localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    size_t calls = 0;
+    api->SetRemoveMetaHandler([&](master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &response) {
+        if (++calls == 1) {
+            response.add_failed_ids(firstKey);
+            response.add_success_ids(secondKey);
+        } else {
+            *response.mutable_success_ids() = { request.ids().begin(), request.ids().end() };
+        }
+        return Status::OK();
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    auto param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+
+    getImpl.DeleteObjectsMetaUnacked({ { firstKey, rollbackVersion }, { secondKey, rollbackVersion } });
+
+    auto requests = api->RemoveMetaRequests();
+    ASSERT_EQ(requests.size(), 2U);
+    EXPECT_THAT(requests.back().ids(), ElementsAre(firstKey));
+}
+
+TEST_F(WorkerOcServiceImplTest, RollbackUnackRetriesMissingPartialResult)
+{
+    constexpr uint64_t rollbackVersion = 13;
+    const std::string acknowledgedKey = "rollback-unack-acknowledged-result";
+    const std::string missingKey = "rollback-unack-missing-result";
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    placement_.SetOwner(acknowledgedKey, localAddress_);
+    placement_.SetOwner(missingKey, localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    size_t calls = 0;
+    api->SetRemoveMetaHandler([&](master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &response) {
+        if (++calls == 1) {
+            response.add_success_ids(acknowledgedKey);
+        } else {
+            *response.mutable_success_ids() = { request.ids().begin(), request.ids().end() };
+        }
+        return Status::OK();
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    auto param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+
+    getImpl.DeleteObjectsMetaUnacked(
+        { { acknowledgedKey, rollbackVersion }, { missingKey, rollbackVersion } });
+
+    auto requests = api->RemoveMetaRequests();
+    ASSERT_EQ(requests.size(), 2U);
+    EXPECT_THAT(requests.back().ids(), ElementsAre(missingKey));
+}
+
+TEST_F(WorkerOcServiceImplTest, RollbackUnackRetriesMetaMovingResponse)
+{
+    constexpr uint64_t rollbackVersion = 14;
+    const std::string objectKey = "rollback-unack-meta-moving";
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    placement_.SetOwner(objectKey, localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    size_t calls = 0;
+    api->SetRemoveMetaHandler([&](master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &response) {
+        if (++calls == 1) {
+            response.set_meta_is_moving(true);
+        } else {
+            *response.mutable_success_ids() = { request.ids().begin(), request.ids().end() };
+        }
+        return Status::OK();
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    auto param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+
+    getImpl.DeleteObjectsMetaUnacked({ { objectKey, rollbackVersion } });
+
+    EXPECT_EQ(api->RemoveMetaRequests().size(), 2U);
 }
 
 TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterReportsMetadataRpcSuccess)

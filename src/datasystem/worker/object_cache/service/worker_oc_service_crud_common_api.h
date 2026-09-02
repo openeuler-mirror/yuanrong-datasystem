@@ -458,7 +458,26 @@ protected:
     Status TranslateQualifiedMetadataDeadline(const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
                                               const Status &status, bool rpcDispatched) const;
 
+    static Status ValidateRollbackUnackResponse(master::RemoveMetaReqPb::Cause removeCause,
+                                                const master::RemoveMetaRspPb &response);
+
+    static Status ValidateRollbackUnackRpcResult(master::RemoveMetaReqPb::Cause removeCause,
+                                                 const Status &rpcStatus,
+                                                 const master::RemoveMetaRspPb &response);
+
+    static bool IsRollbackUnackCompatibilityStatus(master::RemoveMetaReqPb::Cause removeCause,
+                                                   const Status &status);
+
+    static void LogUnsupportedRollbackUnack(size_t objectCount);
+
 private:
+    void MergeRedirectRemoveMetaResult(
+        const Status &result, const std::list<std::string> &redirectIds,
+        const master::RemoveMetaRspPb &redirectResponse, master::RemoveMetaReqPb::Cause removeCause,
+        const std::string &topologyOperationId, std::vector<std::string> &failedIds,
+        std::vector<std::string> &needMigrateIds, std::vector<std::string> &needWaitIds,
+        std::vector<std::string> &needMigrateL2CacheIds);
+
     /**
      * @brief Partition a multi-copy metadata request into local and redirected sub-requests.
      * @param[in] request Original multi-copy metadata request.

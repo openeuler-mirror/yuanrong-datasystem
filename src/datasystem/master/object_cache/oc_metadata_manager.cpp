@@ -106,13 +106,14 @@ static constexpr int64_t CLIENT_ID_REF_RETRY_JITTER_MAX_MS = 50;
 static constexpr int64_t CLIENT_ID_REF_RETRY_JITTER_BOUND_MS = CLIENT_ID_REF_RETRY_JITTER_MAX_MS + 1;
 static constexpr size_t TOPOLOGY_OPERATION_DIAGNOSTIC_PREFIX_SIZE = 12;
 
-static bool ShouldRemoveNoneL2Meta(const ObjectMeta &objectMeta, RemoveMetaReqPb::Cause cause)
+static bool ShouldRemoveNoneL2Meta(const ObjectMeta &objectMeta, RemoveMetaReqPb::Cause cause,
+                                   size_t remainingLocationCount)
 {
     if (!objectMeta.IsNoneL2CacheEvict()) {
         return false;
     }
     // EVICTION means the data is gone; NORMAL only removes one location.
-    return cause == RemoveMetaReqPb::EVICTION || objectMeta.locations.empty();
+    return cause == RemoveMetaReqPb::EVICTION || remainingLocationCount == 0;
 }
 
 static std::string TopologyOperationPrefix(const std::string &operationId)
@@ -1407,6 +1408,9 @@ Status OCMetadataManager::RemoveMeta(const RemoveMetaReqPb &request, RemoveMetaR
         case RemoveMetaReqPb_Cause_GIVEUP_PRIMARY:
             RETURN_IF_NOT_OK(GiveUpPrimaryLocation(request, address, response));
             break;
+        case RemoveMetaReqPb_Cause_ROLLBACK_UNACK:
+            RETURN_IF_NOT_OK(RollbackUnackLocations(request, address, response));
+            break;
         default:
             LOG(WARNING) << "Unsupported type: " << request.cause();
             break;
@@ -1713,7 +1717,7 @@ Status OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, con
             }
             (void)accessor->second.locations.erase(address);
             (void)objectStore_->RemoveObjectLocation(objectKey, address);
-            if (ShouldRemoveNoneL2Meta(accessor->second, request.cause())) {
+            if (ShouldRemoveNoneL2Meta(accessor->second, request.cause(), accessor->second.locations.size())) {
                 (void)objectStore_->RemoveMeta(objectKey, false);
                 (void)metaShards_[shardIdx].table.erase(accessor);
             }
@@ -1743,6 +1747,77 @@ Status OCMetadataManager::RemoveMetaLocation(const std::string &objectKey, const
     (void)accessor->second.locations.erase(address);
     (void)objectStore_->RemoveObjectLocation(objectKey, address);
     return Status::OK();
+}
+
+Status OCMetadataManager::RollbackUnackLocations(const RemoveMetaReqPb &request, const std::string &address,
+                                                 RemoveMetaRspPb &response)
+{
+    std::vector<std::string> objectKeys = { request.ids().begin(), request.ids().end() };
+    std::unordered_map<std::string, uint64_t> versions;
+    versions.reserve(request.id_with_version_size());
+    for (const auto &objectVersion : request.id_with_version()) {
+        versions.emplace(objectVersion.id(), objectVersion.version());
+    }
+    RETURN_IF_NOT_OK(FillObjectRedirectResponses(response, objectKeys, request.redirect()));
+    RETURN_OK_IF_TRUE(response.meta_is_moving());
+    if (!objectKeys.empty() && IsLocalExitRequested() && request.redirect() && FLAGS_enable_redirect) {
+        response.set_meta_is_moving(true);
+        return Status::OK();
+    }
+    for (const auto &objectKey : objectKeys) {
+        if (IsLocalExitRequested()) {
+            response.add_failed_ids(objectKey);
+            continue;
+        }
+        auto version = versions.find(objectKey);
+        if (version == versions.end()) {
+            LOG(WARNING) << FormatString("[ObjectKey %s] Missing version for UNACK location rollback", objectKey);
+            response.add_failed_ids(objectKey);
+            continue;
+        }
+        RollbackUnackLocation(objectKey, address, version->second, response);
+    }
+    return Status::OK();
+}
+
+void OCMetadataManager::RollbackUnackLocation(const std::string &objectKey, const std::string &address,
+                                              uint64_t version, RemoveMetaRspPb &response)
+{
+    size_t shardIdx = GetShardIndex(objectKey);
+    bthread::RWLockRdGuard lock(metaShards_[shardIdx].mutex);
+    TbbMetaTable::accessor accessor;
+    if (!metaShards_[shardIdx].table.find(accessor, objectKey)) {
+        response.add_success_ids(objectKey);
+        return;
+    }
+    const auto currentVersion = accessor->second.meta.version();
+    if (version < currentVersion) {
+        response.add_success_ids(objectKey);
+        return;
+    }
+    if (version > currentVersion) {
+        response.add_failed_ids(objectKey);
+        return;
+    }
+    auto location = accessor->second.locations.find(address);
+    if (location == accessor->second.locations.end() || location->second != AckState::UNACK) {
+        response.add_success_ids(objectKey);
+        return;
+    }
+    const size_t remainingLocationCount = accessor->second.locations.size() - 1;
+    const bool removeMeta = ShouldRemoveNoneL2Meta(accessor->second, RemoveMetaReqPb::ROLLBACK_UNACK,
+                                                   remainingLocationCount);
+    const Status rc = removeMeta ? objectStore_->RemoveObjectLocationAndMeta(objectKey, address)
+                                 : objectStore_->RemoveObjectLocationForRollbackAndWait(objectKey, address);
+    if (rc.IsError()) {
+        response.add_failed_ids(objectKey);
+        return;
+    }
+    accessor->second.locations.erase(location);
+    if (removeMeta) {
+        (void)metaShards_[shardIdx].table.erase(accessor);
+    }
+    response.add_success_ids(objectKey);
 }
 
 Status OCMetadataManager::RemoveMetaForInvalidateBuffer(const RemoveMetaReqPb &request, const std::string &address,

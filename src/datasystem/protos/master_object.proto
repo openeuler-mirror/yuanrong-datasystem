@@ -196,6 +196,7 @@ message RemoveMetaReqPb {
     EVICTION = 1;
     INVALID_BUFFER = 2;
     GIVEUP_PRIMARY = 3; // voluntary scale down clear meta location.
+    ROLLBACK_UNACK = 4; // rollback a same-version QueryMeta location only while it remains unacknowledged.
   }
   bytes address = 1;
   repeated string ids = 2;

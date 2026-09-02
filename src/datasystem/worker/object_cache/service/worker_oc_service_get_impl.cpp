@@ -93,8 +93,9 @@ namespace object_cache {
 
 static constexpr int DEBUG_LOG_LEVEL = 2;
 static constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
+static constexpr int32_t GET_LOCATION_ROLLBACK_MAX_RETRY = 3;
 static constexpr double EXIST_LOCAL_CHECK_TIMEOUT_US = 50.0;
-static constexpr RemoveMetaReqPb::Cause GET_LOCATION_CLEANUP_CAUSE = RemoveMetaReqPb::NORMAL;
+static constexpr RemoveMetaReqPb::Cause GET_LOCATION_ROLLBACK_CAUSE = RemoveMetaReqPb::ROLLBACK_UNACK;
 static const char *const EXIST_REDIRECTS_FIELD = "exist_redirects";
 static const char *const EXIST_REDIRECT_ADDRESS_FIELD = "address";
 static const char *const EXIST_REDIRECT_KEYS_FIELD = "keys";
@@ -104,6 +105,21 @@ static constexpr double US_PER_MS = 1000.0;
 static constexpr int64_t REMOTE_GET_CLEANUP_HEADROOM_MS = 100;
 
 namespace {
+void CollectRollbackRetryIds(std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
+                             std::vector<std::string> &needWaitIds, std::vector<std::string> &retryIds)
+{
+    retryIds.clear();
+    retryIds.insert(retryIds.end(), std::make_move_iterator(failedIds.begin()),
+                    std::make_move_iterator(failedIds.end()));
+    retryIds.insert(retryIds.end(), std::make_move_iterator(needMigrateIds.begin()),
+                    std::make_move_iterator(needMigrateIds.end()));
+    retryIds.insert(retryIds.end(), std::make_move_iterator(needWaitIds.begin()),
+                    std::make_move_iterator(needWaitIds.end()));
+    failedIds.clear();
+    needMigrateIds.clear();
+    needWaitIds.clear();
+}
+
 Status ValidateRemoteGetResult(bool workerConnected, const Status &status, SafeObjType &entry,
     const std::string &objectKey, const std::string &address)
 {
@@ -778,7 +794,6 @@ void WorkerOcServiceGetImpl::DeleteObjectsMetaUnacked(
         return;
     }
     LOG(INFO) << "delete unacked object meta, size: " << deleteKeyVersions.size();
-    const int32_t maxRetry = 3;
     int32_t retry = 0;
     std::vector<std::string> objKeys;
     std::vector<std::string> failedIds;
@@ -789,34 +804,33 @@ void WorkerOcServiceGetImpl::DeleteObjectsMetaUnacked(
     for (const auto &kv : deleteKeyVersions) {
         objKeys.emplace_back(kv.first);
     }
-    while (!objKeys.empty() && retry < maxRetry) {
+    while (!objKeys.empty() && retry < GET_LOCATION_ROLLBACK_MAX_RETRY) {
         if (GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() <= 0) {
             LOG(WARNING) << "Stop retry delete unacked object meta due to exhausted timeout, remaining size: "
                          << objKeys.size();
             break;
         }
         if (objKeys.size() == 1) {
-            auto status = RemoveLocation(objKeys.front(), deleteKeyVersions.at(objKeys.front()));
+            auto status =
+                RemoveLocation(objKeys.front(), deleteKeyVersions.at(objKeys.front()), GET_LOCATION_ROLLBACK_CAUSE);
             if (status.IsOk()) {
+                objKeys.clear();
+                break;
+            }
+            if (IsRollbackUnackCompatibilityStatus(GET_LOCATION_ROLLBACK_CAUSE, status)) {
+                LogUnsupportedRollbackUnack(objKeys.size());
                 objKeys.clear();
                 break;
             }
             retry++;
             continue;
         }
-        GroupAndRemoveMeta(objKeys, GET_LOCATION_CLEANUP_CAUSE, localAddress_.ToString(), deleteKeyVersions,
+        GroupAndRemoveMeta(objKeys, GET_LOCATION_ROLLBACK_CAUSE, localAddress_.ToString(), deleteKeyVersions,
                            failedIds, needMigrateIds, needWaitIds, noUseNeedL2DataIds);
-        objKeys.clear();
         if (!failedIds.empty() || !needMigrateIds.empty() || !needWaitIds.empty()) {
-            objKeys.insert(objKeys.end(), std::make_move_iterator(failedIds.begin()),
-                           std::make_move_iterator(failedIds.end()));
-            objKeys.insert(objKeys.end(), std::make_move_iterator(needMigrateIds.begin()),
-                           std::make_move_iterator(needMigrateIds.end()));
-            objKeys.insert(objKeys.end(), std::make_move_iterator(needWaitIds.begin()),
-                           std::make_move_iterator(needWaitIds.end()));
-            failedIds.clear();
-            needMigrateIds.clear();
-            needWaitIds.clear();
+            CollectRollbackRetryIds(failedIds, needMigrateIds, needWaitIds, objKeys);
+        } else {
+            objKeys.clear();
         }
         retry++;
     }
@@ -2911,7 +2925,8 @@ void WorkerOcServiceGetImpl::ClearObjectsByObjectKeys(const std::unordered_map<s
     }
 }
 
-Status WorkerOcServiceGetImpl::RemoveLocation(const std::string &objectKey, uint64_t version)
+Status WorkerOcServiceGetImpl::RemoveLocation(const std::string &objectKey, uint64_t version,
+                                              RemoveMetaReqPb::Cause cause)
 {
     INJECT_POINT("worker.remove_location");
     std::shared_ptr<WorkerMasterOCApi> api;
@@ -2920,13 +2935,23 @@ Status WorkerOcServiceGetImpl::RemoveLocation(const std::string &objectKey, uint
     RemoveMetaRspPb rsp;
     req.add_ids(objectKey);
     req.set_address(localAddress_.ToString());
-    req.set_cause(GET_LOCATION_CLEANUP_CAUSE);
+    req.set_cause(cause);
     req.set_version(version);
     req.set_redirect(true);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(api->RemoveMeta(req, rsp),
+    if (cause == RemoveMetaReqPb::ROLLBACK_UNACK) {
+        auto *objectVersion = req.add_id_with_version();
+        objectVersion->set_id(objectKey);
+        objectVersion->set_version(version);
+    }
+    const Status rpcStatus = api->RemoveMeta(req, rsp);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateRollbackUnackRpcResult(cause, rpcStatus, rsp),
                                      FormatString("[ObjectKey %s] Remove location failed.", objectKey));
     if (rsp.meta_is_moving() || !rsp.info().empty() || !rsp.failed_ids().empty()) {
         RETURN_STATUS(K_TRY_AGAIN, FormatString("[ObjectKey %s] Remove location needs retry.", objectKey));
+    }
+    if (cause == RemoveMetaReqPb::ROLLBACK_UNACK
+        && std::find(rsp.success_ids().begin(), rsp.success_ids().end(), objectKey) == rsp.success_ids().end()) {
+        RETURN_STATUS(K_TRY_AGAIN, FormatString("[ObjectKey %s] UNACK rollback was not acknowledged.", objectKey));
     }
     return Status::OK();
 }
