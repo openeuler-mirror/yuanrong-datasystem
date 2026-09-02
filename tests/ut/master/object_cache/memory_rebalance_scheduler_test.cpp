@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <algorithm>
 #include <initializer_list>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -32,8 +33,10 @@
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/cluster/model/topology_snapshot.h"
 #include "datasystem/cluster/runtime/topology_snapshot_state.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/object_cache/node_info.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/timer.h"
 #include "ut/common.h"
 
@@ -50,6 +53,8 @@ namespace datasystem {
 namespace ut {
 namespace {
 constexpr uint64_t MEMORY_CAPACITY = 1'000;
+constexpr uint64_t ONE_GB = 1024ull * 1024 * 1024;
+constexpr uint64_t MB = 1024 * 1024;
 constexpr uint64_t MS_PER_SECOND = 1'000;
 constexpr uint64_t TRANSFER_TIME_MULTIPLIER = 2;
 constexpr size_t TOPOLOGY_MEMBER_ID_SIZE = 16;
@@ -139,24 +144,27 @@ master::ReportRebalanceResultReqPb MakeFreshResultReq(const master::RebalanceTas
     return req;
 }
 
-void PublishScaleInTopology(cluster::TopologySnapshotState &snapshots,
-                            std::initializer_list<std::string> workers, const std::string &leavingWorker)
+void PublishTopology(cluster::TopologySnapshotState &snapshots, std::initializer_list<std::string> workers,
+                     uint64_t version, std::optional<cluster::TopologyChangeType> batchType = std::nullopt,
+                     const std::string &transitionalWorker = "",
+                     cluster::MemberState transitionalState = cluster::MemberState::ACTIVE)
 {
     cluster::TopologyState topology;
     topology.clusterHasInit = true;
-    topology.version = 1;
-    topology.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_IN, 1 };
+    topology.version = version;
+    if (batchType.has_value()) {
+        topology.activeBatch = cluster::ActiveBatch{ *batchType, version };
+    }
     char id = 'a';
     uint32_t token = 0;
     for (const auto &worker : workers) {
-        const auto state =
-            worker == leavingWorker ? cluster::MemberState::LEAVING : cluster::MemberState::ACTIVE;
+        const auto state = worker == transitionalWorker ? transitionalState : cluster::MemberState::ACTIVE;
         topology.members.emplace_back(
             cluster::Member{ { std::string(TOPOLOGY_MEMBER_ID_SIZE, id++), worker }, state, { token++ } });
     }
     std::shared_ptr<const cluster::TopologySnapshot> snapshot;
     DS_ASSERT_OK(cluster::TopologySnapshot::Create(
-        std::move(topology), 1, std::string(TOPOLOGY_DIGEST_SIZE, 'a'), snapshot));
+        std::move(topology), static_cast<int64_t>(version), std::string(TOPOLOGY_DIGEST_SIZE, 'a'), snapshot));
     cluster::SnapshotUpdateOutcome outcome;
     DS_ASSERT_OK(snapshots.Publish(std::move(snapshot), outcome));
 }
@@ -316,11 +324,12 @@ TEST_F(MemoryRebalanceSchedulerTest, SelectBestSourceTargetPairFromFourWorkers)
     EXPECT_EQ(rsp.rebalance_task().target_eviction_policy_epoch(), 0u);
 }
 
-TEST_F(MemoryRebalanceSchedulerTest, DoesNotPickLeavingWorkerAsTarget)
+TEST_F(MemoryRebalanceSchedulerTest, ActiveTopologyBatchBlocksSurvivorRebalance)
 {
     cluster::TopologySnapshotState snapshots;
     cluster::MembershipEndpointView membership(snapshots);
-    PublishScaleInTopology(snapshots, { WORKER_92, WORKER_15, WORKER_10 }, WORKER_10);
+    PublishTopology(snapshots, { WORKER_92, WORKER_15, WORKER_10 }, 1,
+                    cluster::TopologyChangeType::SCALE_IN, WORKER_10, cluster::MemberState::LEAVING);
     MemoryRebalanceScheduler scheduler;
     scheduler.SetTopologyMembership(&membership);
     auto resourceSnapshot = MakeSnapshot({
@@ -331,15 +340,15 @@ TEST_F(MemoryRebalanceSchedulerTest, DoesNotPickLeavingWorkerAsTarget)
 
     auto rsp = ScheduleAndGetRsp(scheduler, WORKER_92, resourceSnapshot);
 
-    ASSERT_FALSE(rsp.rebalance_task().task_id().empty());
-    EXPECT_EQ(rsp.rebalance_task().target_worker(), WORKER_15);
+    EXPECT_TRUE(rsp.rebalance_task().task_id().empty());
 }
 
 TEST_F(MemoryRebalanceSchedulerTest, DoesNotDispatchFromLeavingSource)
 {
     cluster::TopologySnapshotState snapshots;
     cluster::MembershipEndpointView membership(snapshots);
-    PublishScaleInTopology(snapshots, { WORKER_92, WORKER_10 }, WORKER_92);
+    PublishTopology(snapshots, { WORKER_92, WORKER_10 }, 1, cluster::TopologyChangeType::SCALE_IN,
+                    WORKER_92, cluster::MemberState::LEAVING);
     MemoryRebalanceScheduler scheduler;
     scheduler.SetTopologyMembership(&membership);
     auto resourceSnapshot = MakeSnapshot({
@@ -350,6 +359,94 @@ TEST_F(MemoryRebalanceSchedulerTest, DoesNotDispatchFromLeavingSource)
     auto rsp = ScheduleAndGetRsp(scheduler, WORKER_92, resourceSnapshot);
 
     EXPECT_TRUE(rsp.rebalance_task().task_id().empty());
+}
+
+TEST_F(MemoryRebalanceSchedulerTest, StableTopologyWaitsForFreshReportsBeforeScheduling)
+{
+    cluster::TopologySnapshotState snapshots;
+    cluster::MembershipEndpointView membership(snapshots);
+    MemoryRebalanceScheduler scheduler;
+    scheduler.SetTopologyMembership(&membership);
+    auto balanced = MakeSnapshot({ MakeNode(WORKER_92, 100, 900), MakeNode(WORKER_10, 100, 900) });
+    PublishTopology(snapshots, { WORKER_92, WORKER_10 }, 1);
+    EXPECT_TRUE(ScheduleAndGetRsp(scheduler, WORKER_92, balanced).rebalance_task().task_id().empty());
+
+    PublishTopology(snapshots, { WORKER_92, WORKER_10, WORKER_15 }, 2,
+                    cluster::TopologyChangeType::SCALE_OUT, WORKER_15, cluster::MemberState::JOINING);
+    auto imbalanced = MakeSnapshot({ MakeNode(WORKER_92, 920, 80), MakeNode(WORKER_10, 100, 900),
+                                     MakeNode(WORKER_15, 100, 900) });
+    EXPECT_TRUE(ScheduleAndGetRsp(scheduler, WORKER_92, imbalanced).rebalance_task().task_id().empty());
+
+    PublishTopology(snapshots, { WORKER_92, WORKER_10, WORKER_15 }, 3);
+    Raii clearInject([]() { (void)inject::Clear("MemoryRebalanceScheduler.TopologyCooldownMs"); });
+    DS_ASSERT_OK(inject::Set("MemoryRebalanceScheduler.TopologyCooldownMs", "call(0)"));
+    EXPECT_TRUE(ScheduleAndGetRsp(scheduler, WORKER_92, imbalanced).rebalance_task().task_id().empty());
+    EXPECT_TRUE(ScheduleAndGetRsp(scheduler, WORKER_10, imbalanced).rebalance_task().task_id().empty());
+    EXPECT_TRUE(ScheduleAndGetRsp(scheduler, WORKER_15, imbalanced).rebalance_task().task_id().empty());
+
+    auto rsp = ScheduleAndGetRsp(scheduler, WORKER_92, imbalanced);
+    EXPECT_FALSE(rsp.rebalance_task().task_id().empty());
+}
+
+TEST_F(MemoryRebalanceSchedulerTest, StableTopologyDoesNotRedispatchTaskWhenActiveBatchWasMissed)
+{
+    cluster::TopologySnapshotState snapshots;
+    cluster::MembershipEndpointView membership(snapshots);
+    MemoryRebalanceScheduler scheduler;
+    scheduler.SetTopologyMembership(&membership);
+    PublishTopology(snapshots, { WORKER_92, WORKER_10 }, 1);
+    auto resourceSnapshot = MakeSnapshot({ MakeNode(WORKER_92, 920, 80), MakeNode(WORKER_10, 100, 900),
+                                           MakeNode(WORKER_15, 100, 900) });
+    auto initialRsp = ScheduleAndGetRsp(scheduler, WORKER_92, resourceSnapshot);
+    ASSERT_FALSE(initialRsp.rebalance_task().task_id().empty());
+
+    PublishTopology(snapshots, { WORKER_92, WORKER_10, WORKER_15 }, 2,
+                    cluster::TopologyChangeType::SCALE_OUT, WORKER_15, cluster::MemberState::JOINING);
+    PublishTopology(snapshots, { WORKER_92, WORKER_10, WORKER_15 }, 3);
+    Raii clearInject([]() { (void)inject::Clear("MemoryRebalanceScheduler.TopologyCooldownMs"); });
+    DS_ASSERT_OK(inject::Set("MemoryRebalanceScheduler.TopologyCooldownMs", "call(0)"));
+    EXPECT_TRUE(ScheduleAndGetRsp(scheduler, WORKER_92, resourceSnapshot).rebalance_task().task_id().empty());
+    EXPECT_TRUE(ScheduleAndGetRsp(scheduler, WORKER_10, resourceSnapshot).rebalance_task().task_id().empty());
+    EXPECT_TRUE(ScheduleAndGetRsp(scheduler, WORKER_15, resourceSnapshot).rebalance_task().task_id().empty());
+
+    auto stableRsp = ScheduleAndGetRsp(scheduler, WORKER_92, resourceSnapshot);
+    EXPECT_TRUE(stableRsp.rebalance_task().task_id().empty());
+}
+
+TEST_F(MemoryRebalanceSchedulerTest, StableTopologyDoesNotReplayPreBatchSuccessor)
+{
+    cluster::TopologySnapshotState snapshots;
+    cluster::MembershipEndpointView membership(snapshots);
+    MemoryRebalanceScheduler scheduler;
+    scheduler.SetTopologyMembership(&membership);
+    PublishTopology(snapshots, { WORKER_92, WORKER_10 }, 1);
+    auto resourceSnapshot = MakeSnapshot({
+        MakeNode(WORKER_92, 900 * MB, ONE_GB - 900 * MB, true, ONE_GB, ONE_GB),
+        MakeNode(WORKER_10, 100 * MB, ONE_GB - 100 * MB, true, ONE_GB, ONE_GB),
+        MakeNode(WORKER_15, 100 * MB, ONE_GB - 100 * MB, true, ONE_GB, ONE_GB),
+    });
+    auto initialRsp = ScheduleAndGetRsp(scheduler, WORKER_92, resourceSnapshot);
+    const auto predecessor = initialRsp.rebalance_task();
+    master::ReportRebalanceResultRspPb successorRsp;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(predecessor, ONE_GB - 400 * MB, 300 * MB), successorRsp));
+    ASSERT_TRUE(successorRsp.has_next_rebalance_task());
+
+    PublishTopology(snapshots, { WORKER_92, WORKER_10, WORKER_15 }, 2,
+                    cluster::TopologyChangeType::SCALE_OUT, WORKER_15, cluster::MemberState::JOINING);
+    EXPECT_TRUE(ScheduleAndGetRsp(scheduler, WORKER_92, resourceSnapshot).rebalance_task().task_id().empty());
+    PublishTopology(snapshots, { WORKER_92, WORKER_10, WORKER_15 }, 3);
+    Raii clearInject([]() { (void)inject::Clear("MemoryRebalanceScheduler.TopologyCooldownMs"); });
+    DS_ASSERT_OK(inject::Set("MemoryRebalanceScheduler.TopologyCooldownMs", "call(0)"));
+    (void)ScheduleAndGetRsp(scheduler, WORKER_92, resourceSnapshot);
+    (void)ScheduleAndGetRsp(scheduler, WORKER_92, resourceSnapshot);
+    (void)ScheduleAndGetRsp(scheduler, WORKER_10, resourceSnapshot);
+    (void)ScheduleAndGetRsp(scheduler, WORKER_15, resourceSnapshot);
+
+    master::ReportRebalanceResultRspPb replayRsp;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(predecessor, ONE_GB - 400 * MB, 300 * MB), replayRsp));
+    EXPECT_FALSE(replayRsp.has_next_rebalance_task());
 }
 
 TEST_F(MemoryRebalanceSchedulerTest, FallsBackToResourceSnapshotBeforeTopologyIsReady)
@@ -367,6 +464,29 @@ TEST_F(MemoryRebalanceSchedulerTest, FallsBackToResourceSnapshotBeforeTopologyIs
 
     ASSERT_FALSE(rsp.rebalance_task().task_id().empty());
     EXPECT_EQ(rsp.rebalance_task().target_worker(), WORKER_10);
+}
+
+TEST_F(MemoryRebalanceSchedulerTest, FirstStableTopologyInvalidatesPreTopologyTask)
+{
+    cluster::TopologySnapshotState snapshots;
+    cluster::MembershipEndpointView membership(snapshots);
+    MemoryRebalanceScheduler scheduler;
+    scheduler.SetTopologyMembership(&membership);
+    auto resourceSnapshot = MakeSnapshot({ MakeNode(WORKER_92, 920, 80), MakeNode(WORKER_10, 100, 900) });
+    const auto preTopologyTask = ScheduleAndGetRsp(scheduler, WORKER_92, resourceSnapshot).rebalance_task();
+    ASSERT_FALSE(preTopologyTask.task_id().empty());
+
+    PublishTopology(snapshots, { WORKER_92, WORKER_10 }, 1);
+    Raii clearInject([]() { (void)inject::Clear("MemoryRebalanceScheduler.TopologyCooldownMs"); });
+    DS_ASSERT_OK(inject::Set("MemoryRebalanceScheduler.TopologyCooldownMs", "call(0)"));
+    EXPECT_TRUE(ScheduleAndGetRsp(scheduler, WORKER_92, resourceSnapshot).rebalance_task().task_id().empty());
+    EXPECT_TRUE(ScheduleAndGetRsp(scheduler, WORKER_10, resourceSnapshot).rebalance_task().task_id().empty());
+
+    EXPECT_TRUE(ScheduleAndGetRsp(scheduler, WORKER_92, resourceSnapshot).rebalance_task().task_id().empty());
+    master::ReportRebalanceResultRspPb resultRsp;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(preTopologyTask, preTopologyTask.max_bytes(), preTopologyTask.max_bytes()), resultRsp));
+    EXPECT_FALSE(resultRsp.has_next_rebalance_task());
 }
 
 TEST_F(MemoryRebalanceSchedulerTest, UsageGapThresholdControlsWhetherTaskIsCreated)
@@ -1092,11 +1212,6 @@ TEST_F(MemoryRebalanceSchedulerTest, TargetClampBindsMaxBytesToAvailableHeadroom
 // reached the watermark).
 // ============================================================================
 
-namespace {
-constexpr uint64_t ONE_GB = 1024ull * 1024 * 1024;
-constexpr uint64_t MB = 1024 * 1024;
-}  // namespace
-
 // A single 300MB batch does not exhaust a GB-scale budget, so master returns a next task whose
 // max_bytes is the remaining budget (capped by 300MB / target headroom). The loop terminates when
 // the fixed budget (set at Schedule) is fully migrated.
@@ -1132,6 +1247,29 @@ TEST_F(MemoryRebalanceSchedulerTest, ReportResultReturnsNextBatchUntilBudgetExha
     DS_ASSERT_OK(scheduler.ReportResult(
         MakeFreshResultReq(nextTask, ONE_GB - 500 * MB, 100 * MB), batch2Rsp));
     EXPECT_FALSE(batch2Rsp.has_next_rebalance_task());
+}
+
+TEST_F(MemoryRebalanceSchedulerTest, ActiveTopologyBatchStopsSuccessorChain)
+{
+    cluster::TopologySnapshotState snapshots;
+    cluster::MembershipEndpointView membership(snapshots);
+    MemoryRebalanceScheduler scheduler;
+    scheduler.SetTopologyMembership(&membership);
+    PublishTopology(snapshots, { WORKER_92, WORKER_10 }, 1);
+    auto snapshot = MakeSnapshot({
+        MakeNode(WORKER_92, 900 * MB, ONE_GB - 900 * MB, true, ONE_GB, ONE_GB),
+        MakeNode(WORKER_10, 100 * MB, ONE_GB - 100 * MB, true, ONE_GB, ONE_GB),
+    });
+    auto firstRsp = ScheduleAndGetRsp(scheduler, WORKER_92, snapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+
+    PublishTopology(snapshots, { WORKER_92, WORKER_10, WORKER_15 }, 2,
+                    cluster::TopologyChangeType::SCALE_OUT, WORKER_15, cluster::MemberState::JOINING);
+    master::ReportRebalanceResultRspPb resultRsp;
+    DS_ASSERT_OK(scheduler.ReportResult(
+        MakeFreshResultReq(firstRsp.rebalance_task(), ONE_GB - 400 * MB, 300 * MB), resultRsp));
+
+    EXPECT_FALSE(resultRsp.has_next_rebalance_task());
 }
 
 // When the fixed total budget is migrated in one batch (byte-scale, 300MB cap does not bind),

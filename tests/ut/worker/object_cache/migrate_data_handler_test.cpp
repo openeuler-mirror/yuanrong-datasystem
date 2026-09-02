@@ -1224,6 +1224,77 @@ TEST_F(MigrateDataHandlerTest, TestUrmaReadTransportModeUsesMigrateDataDirect)
     ASSERT_TRUE(result.failedIds.empty());
 }
 
+TEST_F(MigrateDataHandlerTest, UrmaReadRebalanceFenceUsesFastTransport)
+{
+    const std::string oldTransportMode = FLAGS_data_migrate_urma_transport_mode;
+    Raii restoreTransportMode([oldTransportMode]() { FLAGS_data_migrate_urma_transport_mode = oldTransportMode; });
+    FLAGS_data_migrate_urma_transport_mode = "read";
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&object_cache::NodeSelector::TryGetAvailableMemory, (_, _))
+        .WillOnce(DoAll(SetArgReferee<1>(1024ul * 1024ul), Return(Status::OK())));
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("UrmaReadFencedRebalance", 100, 1, objectKeys);
+    AsyncResourceReleaser::Instance().Init(objectTable_);
+    Raii shutdownReleaser([]() { AsyncResourceReleaser::Instance().Shutdown(); });
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::NotifyRemoteGet, (_, _)).Times(0);
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _)).Times(0);
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataDirect, (_, _))
+        .WillOnce(Invoke([](MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp) {
+            EXPECT_EQ(req.objects_size(), 1);
+            EXPECT_TRUE(req.has_rebalance_policy_fence());
+            EXPECT_EQ(req.target_eviction_policy(), static_cast<uint32_t>(master::EVICTION_POLICY_CLOCK));
+            EXPECT_EQ(req.target_eviction_policy_epoch(), 7u);
+            EXPECT_EQ(req.rebalance_task_id(), "urma-read-fenced-task");
+            rsp.set_remain_bytes(1024ul * 1024ul);
+            rsp.set_limit_rate(1024ul * 1024ul);
+            return Status::OK();
+        }));
+    RebalancePolicyFence fence{ true, static_cast<uint32_t>(master::EVICTION_POLICY_CLOCK), 7,
+                                "urma-read-fenced-task" };
+    MigrateDataHandler handler(MigrateType::SPILL, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr, nullptr, false, 0, {}, std::move(fence));
+
+    auto result = handler.MigrateDataToRemote();
+
+    DS_ASSERT_OK(result.status);
+    EXPECT_EQ(result.successIds.size(), size_t(1));
+}
+
+TEST_F(MigrateDataHandlerTest, UrmaWriteRebalanceFenceUsesFastTransport)
+{
+    const std::string oldTransportMode = FLAGS_data_migrate_urma_transport_mode;
+    Raii restoreTransportMode([oldTransportMode]() { FLAGS_data_migrate_urma_transport_mode = oldTransportMode; });
+    FLAGS_data_migrate_urma_transport_mode = "write";
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&object_cache::NodeSelector::TryGetAvailableMemory, (_, _))
+        .WillOnce(DoAll(SetArgReferee<1>(1024ul * 1024ul), Return(Status::OK())));
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("UrmaWriteFencedRebalance", 100, 1, objectKeys);
+    AsyncResourceReleaser::Instance().Init(objectTable_);
+    Raii shutdownReleaser([]() { AsyncResourceReleaser::Instance().Shutdown(); });
+    auto remoteApi = std::make_shared<MigrateTestRemoteWorkerOCApi>(hostPort_, hostPort_);
+    remoteApi->notifyRemoteGet_ = [](NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp) {
+        EXPECT_EQ(req.object_keys_size(), 1);
+        EXPECT_TRUE(req.has_rebalance_policy_fence());
+        EXPECT_EQ(req.target_eviction_policy(), static_cast<uint32_t>(master::EVICTION_POLICY_CLOCK));
+        EXPECT_EQ(req.target_eviction_policy_epoch(), 9u);
+        EXPECT_EQ(req.rebalance_task_id(), "urma-write-fenced-task");
+        rsp.set_remain_bytes(1024ul * 1024ul);
+        rsp.set_limit_rate(1024ul * 1024ul);
+        return Status::OK();
+    };
+    RebalancePolicyFence fence{ true, static_cast<uint32_t>(master::EVICTION_POLICY_CLOCK), 9,
+                                "urma-write-fenced-task" };
+    MigrateDataHandler handler(MigrateType::SPILL, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi, strategy_,
+                               nullptr, nullptr, false, 0, {}, std::move(fence));
+
+    auto result = handler.MigrateDataToRemote();
+
+    DS_ASSERT_OK(result.status);
+    EXPECT_EQ(remoteApi->notifyRemoteGetCalls_, size_t(1));
+    EXPECT_EQ(result.successIds.size(), size_t(1));
+}
+
 TEST_F(MigrateDataHandlerTest, UrmaReadFailurePreservesStructuredOperatorDetail)
 {
     const std::string oldTransportMode = FLAGS_data_migrate_urma_transport_mode;

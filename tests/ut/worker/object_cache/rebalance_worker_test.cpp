@@ -67,6 +67,7 @@ constexpr uint32_t TARGET_TOPOLOGY_TOKEN = 2;
 const HostPort LOCAL_ADDR("127.0.0.1", 31501);
 const HostPort MASTER_ADDR("127.0.0.1", 31500);
 const std::string TARGET_ADDR = "127.0.0.1:31502";
+const std::string JOINING_ADDR = "127.0.0.1:31503";
 
 master::RebalanceTaskPb MakeTask(const std::string &taskId, uint64_t maxBytes)
 {
@@ -923,6 +924,30 @@ protected:
         DS_ASSERT_OK(snapshots_.Publish(std::move(snapshot), outcome));
     }
 
+    void PublishScaleOutTopology()
+    {
+        cluster::TopologyState topology;
+        topology.clusterHasInit = true;
+        topology.version = ++topologyVersion_;
+        topology.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_OUT, topologyVersion_ };
+        topology.members = {
+            cluster::Member{ { std::string(TOPOLOGY_MEMBER_ID_SIZE, 'l'), LOCAL_ADDR.ToString() },
+                             cluster::MemberState::ACTIVE, { 0 } },
+            cluster::Member{ { std::string(TOPOLOGY_MEMBER_ID_SIZE, 'm'), MASTER_ADDR.ToString() },
+                             cluster::MemberState::ACTIVE, { 1 } },
+            cluster::Member{ { std::string(TOPOLOGY_MEMBER_ID_SIZE, 't'), TARGET_ADDR },
+                             cluster::MemberState::ACTIVE, { TARGET_TOPOLOGY_TOKEN } },
+            cluster::Member{ { std::string(TOPOLOGY_MEMBER_ID_SIZE, 'j'), JOINING_ADDR },
+                             cluster::MemberState::JOINING, { TARGET_TOPOLOGY_TOKEN + 1 } },
+        };
+        std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+        DS_ASSERT_OK(cluster::TopologySnapshot::Create(
+            std::move(topology), static_cast<int64_t>(topologyVersion_), std::string(TOPOLOGY_DIGEST_SIZE, 'a'),
+            snapshot));
+        cluster::SnapshotUpdateOutcome outcome;
+        DS_ASSERT_OK(snapshots_.Publish(std::move(snapshot), outcome));
+    }
+
     RebalanceExecutor::MigrateResult MakeMigrateResult(const std::vector<std::string> &successIds,
                                                        const Status &status = Status::OK())
     {
@@ -986,6 +1011,26 @@ TEST_F(RebalanceExecutorTest, AbortsWhenAssignedMasterBecomesFailed)
     EXPECT_EQ(reports_[0].failureSide, master::REBALANCE_FAILURE_CONTROL_PLANE);
     EXPECT_EQ(migrateIndex_, size_t(0));
     EXPECT_NE(reports_[0].failedReason.find("unavailable"), std::string::npos);
+}
+
+TEST_F(RebalanceExecutorTest, StopsAtLocalBatchBoundaryWhenTopologyBatchStarts)
+{
+    InstallHooks({ { { "obj1", 50 } }, { { "obj2", 50 } } },
+                 { MakeMigrateResult({ "obj1" }), MakeMigrateResult({ "obj2" }) },
+                 [this]() {
+                     if (migrateIndex_ == 1) {
+                         PublishScaleOutTopology();
+                     }
+                 });
+
+    executor_->Submit(MakeTask("topology-batch-stop-task", 100), MASTER_ADDR.ToString());
+
+    ASSERT_TRUE(WaitReports(1));
+    ASSERT_TRUE(WaitTaskDone());
+    ASSERT_EQ(reports_.size(), size_t(1));
+    EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_SUCCEEDED);
+    EXPECT_EQ(reports_[0].migratedBytes, 50u);
+    EXPECT_EQ(migrateIndex_, size_t(1));
 }
 
 TEST_F(RebalanceExecutorTest, AbortsWhenAssignedMasterIsUnreachable)

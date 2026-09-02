@@ -39,6 +39,12 @@ public:
     Status MigrateDataToRemote(const Request &req, Response &rsp) override;
 
 private:
+    void FillRequestHeader(const Request &req, MigrateDataDirectReqPb &reqPb) const;
+    Status AppendObject(const HostPort &localAddress, BaseDataUnit &data, Response &rsp,
+                        MigrateDataDirectReqPb &reqPb, uint64_t &totalDataBytes) const;
+    Status BuildRequest(const Request &req, Response &rsp, MigrateDataDirectReqPb &reqPb,
+                        uint64_t &totalDataBytes) const;
+
     /**
      * @brief Process the response from MigrateDataDirect RPC.
      * @param[in] reqPb The protobuf request that was sent.

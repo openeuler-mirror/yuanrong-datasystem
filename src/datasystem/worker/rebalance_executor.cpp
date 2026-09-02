@@ -415,15 +415,10 @@ Status RebalanceExecutor::ExecuteBatch(object_cache::RebalanceCandidateSession &
                                        ExecutionStats &stats, object_cache::DataMigrator &migrator,
                                        std::unordered_set<std::string> &taskSkippedKeys)
 {
-    auto rc = CheckTargetAdmission(targetAddr);
-    if (rc.IsError()) {
-        stats.failureSide = master::REBALANCE_FAILURE_TARGET;
-        return rc;
-    }
     std::unordered_map<std::string, uint64_t> candidates;
     ObjectHeatMap objectHeats;
-    rc = SelectCandidates(candidateSession, task.max_bytes() - stats.migratedBytes, candidates, objectHeats,
-                          taskSkippedKeys);
+    auto rc = SelectCandidates(candidateSession, task.max_bytes() - stats.migratedBytes, candidates, objectHeats,
+                               taskSkippedKeys);
     if (rc.IsError()) {
         stats.lastBatchAllSkipped = false;
         stats.failureSide = rc.GetCode() == K_NOT_FOUND ? master::REBALANCE_FAILURE_NO_CANDIDATE
@@ -474,6 +469,9 @@ void RebalanceExecutor::ExecuteBatches(const master::RebalanceTaskPb &task, cons
     std::unique_ptr<object_cache::DataMigrator> migrator;
     object_cache::RebalanceCandidateSession candidateSession;
     while (stats.migratedBytes < task.max_bytes()) {
+        if (ShouldStopBeforeBatch(targetAddr, stats)) {
+            break;
+        }
         if (IsCancellationRequested()) {
             stats.failureSide = master::REBALANCE_FAILURE_CONTROL_PLANE;
             stats.failedReason = "Rebalance task cancelled for eviction policy update";
@@ -511,6 +509,33 @@ void RebalanceExecutor::ExecuteBatches(const master::RebalanceTaskPb &task, cons
             break;
         }
     }
+}
+
+bool RebalanceExecutor::IsTopologyBatchActive() const
+{
+    if (membership_ == nullptr) {
+        return false;
+    }
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    auto rc = membership_->GetSnapshot(snapshot);
+    return rc.IsOk() && snapshot != nullptr && snapshot->GetActiveBatch().has_value();
+}
+
+bool RebalanceExecutor::ShouldStopBeforeBatch(const HostPort &targetAddr, ExecutionStats &stats) const
+{
+    auto rc = CheckTargetAdmission(targetAddr);
+    if (rc.IsError()) {
+        stats.failureSide = master::REBALANCE_FAILURE_TARGET;
+        stats.failedReason = rc.ToString();
+        return true;
+    }
+    if (!IsTopologyBatchActive()) {
+        return false;
+    }
+    stats.failureSide = master::REBALANCE_FAILURE_CONTROL_PLANE;
+    stats.failedReason = "Rebalance task stopped because a topology batch is active";
+    stats.candidatesExhausted = stats.migratedBytes > 0;
+    return true;
 }
 
 bool RebalanceExecutor::ShouldRetryBatchFailure(const Status &status, const master::RebalanceTaskPb &task,

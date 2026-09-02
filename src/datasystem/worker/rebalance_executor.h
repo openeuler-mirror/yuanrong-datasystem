@@ -163,6 +163,8 @@ private:
     uint64_t NowMsForExpiryCheck() const;
     bool IsExpired(uint64_t localDeadlineMs) const;
     bool IsCancellationRequested() const;
+    bool IsTopologyBatchActive() const;
+    bool ShouldStopBeforeBatch(const HostPort &targetAddr, ExecutionStats &stats) const;
     bool IsAssignedMasterUnavailable(const master::RebalanceTaskPb &task, ExecutionStats &stats) const;
     bool IsExitRequested() const { return exitRequested_ != nullptr && exitRequested_->load(); }
     void ClassifyBatchResult(const master::RebalanceTaskPb &task, bool masterUnavailable, ExecutionStats &stats);

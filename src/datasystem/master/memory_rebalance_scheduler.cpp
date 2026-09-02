@@ -63,6 +63,7 @@ constexpr uint64_t REBALANCE_MAX_BYTES_PER_TASK = 300 * 1024ul * 1024ul;
 // with the next cycle's fresh budget and foreground work. The flag-driven migration rate limit
 // (~40 MiB/s default) bounds throughput; this bounds wall-clock duty cycle.
 constexpr uint64_t REBALANCE_EPOCH_BUDGET_MS = 30 * MS_PER_SECOND;
+constexpr uint64_t TOPOLOGY_STABLE_COOLDOWN_MS = MS_PER_SECOND;
 
 uint64_t SubOrZero(uint64_t lhs, uint64_t rhs)
 {
@@ -83,6 +84,82 @@ void MemoryRebalanceScheduler::SetTopologyMembership(const cluster::MembershipEn
 {
     std::lock_guard<bthread::Mutex> lock(mutex_);
     topologyMembership_ = topologyMembership;
+}
+
+uint64_t MemoryRebalanceScheduler::GetTopologyCooldownMs()
+{
+    uint64_t cooldownMs = TOPOLOGY_STABLE_COOLDOWN_MS;
+    INJECT_POINT_NO_RETURN("MemoryRebalanceScheduler.TopologyCooldownMs",
+                           [&cooldownMs](uint64_t value) { cooldownMs = value; });
+    return cooldownMs;
+}
+
+void MemoryRebalanceScheduler::StartTopologyStabilizationLocked(uint64_t version, uint64_t stableSinceMs)
+{
+    observedTopologyVersion_ = version;
+    topologyStabilizationPending_ = true;
+    topologyStableSinceMs_ = stableSinceMs;
+    freshTopologyReportWorkers_.clear();
+}
+
+void MemoryRebalanceScheduler::MarkActiveTasksTopologyStaleLocked()
+{
+    for (auto &entry : activeTasksBySource_) {
+        entry.second.topologyStale = true;
+    }
+}
+
+bool MemoryRebalanceScheduler::AllowRebalanceForTopologyLocked(const cluster::TopologySnapshot *snapshot,
+                                                               const std::string &reportingWorker, uint64_t nowMs)
+{
+    if (snapshot == nullptr) {
+        return true;
+    }
+    const uint64_t version = snapshot->Version();
+    if (!topologyObserved_) {
+        topologyObserved_ = true;
+        observedTopologyVersion_ = version;
+        if (!snapshot->GetActiveBatch().has_value()) {
+            if (activeTasksBySource_.empty()) {
+                return true;
+            }
+            MarkActiveTasksTopologyStaleLocked();
+            StartTopologyStabilizationLocked(version, nowMs);
+        }
+    }
+    if (snapshot->GetActiveBatch().has_value()) {
+        if (!topologyStabilizationPending_ || observedTopologyVersion_ != version
+            || topologyStableSinceMs_ != 0) {
+            StartTopologyStabilizationLocked(version, 0);
+            MarkActiveTasksTopologyStaleLocked();
+            LOG(INFO) << FormatString("[MemoryRebalance] suspend scheduling for active topology batch version=%lu",
+                                      version);
+        }
+        return false;
+    }
+    if (observedTopologyVersion_ != version) {
+        MarkActiveTasksTopologyStaleLocked();
+        StartTopologyStabilizationLocked(version, nowMs);
+    }
+    if (!topologyStabilizationPending_) {
+        return true;
+    }
+    if (topologyStableSinceMs_ == 0) {
+        StartTopologyStabilizationLocked(version, nowMs);
+    }
+    const cluster::Member *member = nullptr;
+    if (!reportingWorker.empty() && snapshot->FindMemberByAddress(reportingWorker, member).IsOk()
+        && member->state == cluster::MemberState::ACTIVE) {
+        freshTopologyReportWorkers_.emplace(reportingWorker);
+    }
+    if (nowMs - topologyStableSinceMs_ < GetTopologyCooldownMs()
+        || freshTopologyReportWorkers_.size() < snapshot->ActiveMembers().size()) {
+        return false;
+    }
+    topologyStabilizationPending_ = false;
+    LOG(INFO) << FormatString("[MemoryRebalance] resume scheduling for stable topology version=%lu reports=%zu",
+                              version, freshTopologyReportWorkers_.size());
+    return true;
 }
 
 bool MemoryRebalanceScheduler::IsFailedStatus(master::RebalanceTaskStatusPb status)
@@ -121,10 +198,13 @@ Status MemoryRebalanceScheduler::Schedule(const master::ResourceReportReqPb &req
     std::lock_guard<bthread::Mutex> lock(mutex_);
     ExpireTimeoutTasksLocked(nowMs);
     ReleaseSnapshotHoldsLocked(snapshot);
+    RETURN_OK_IF_TRUE(!AllowRebalanceForTopologyLocked(topologySnapshot.get(), reportingWorker, nowMs));
 
     auto activeTask = activeTasksBySource_.find(reportingWorker);
     if (activeTask != activeTasksBySource_.end()) {
-        *rsp.mutable_rebalance_task() = activeTask->second.task;
+        if (!activeTask->second.topologyStale) {
+            *rsp.mutable_rebalance_task() = activeTask->second.task;
+        }
         return Status::OK();
     }
 
@@ -187,10 +267,15 @@ bool MemoryRebalanceScheduler::NeedSnapshotForSchedule(const master::ResourceRep
     uint64_t nowMs = GetSteadyClockTimeStampMs();
     std::lock_guard<bthread::Mutex> lock(mutex_);
     ExpireTimeoutTasksLocked(nowMs);
+    if (!AllowRebalanceForTopologyLocked(topologySnapshot.get(), reportingWorker, nowMs)) {
+        return false;
+    }
 
     auto activeTask = activeTasksBySource_.find(reportingWorker);
     if (activeTask != activeTasksBySource_.end()) {
-        *rsp.mutable_rebalance_task() = activeTask->second.task;
+        if (!activeTask->second.topologyStale) {
+            *rsp.mutable_rebalance_task() = activeTask->second.task;
+        }
         return false;
     }
     return IsSourceCandidateLocked(reportingNode, nowMs, topologySnapshot.get());
@@ -198,11 +283,11 @@ bool MemoryRebalanceScheduler::NeedSnapshotForSchedule(const master::ResourceRep
 
 Status MemoryRebalanceScheduler::ReplayOrIgnoreStaleLocked(
     std::unordered_map<std::string, RunningTask>::iterator taskIt,
-    const master::ReportRebalanceResultReqPb &req, master::ReportRebalanceResultRspPb &rsp)
+    const master::ReportRebalanceResultReqPb &req, bool allowReplay, master::ReportRebalanceResultRspPb &rsp)
 {
     // Predecessor's response was lost in flight; worker retries it. If the active entry's
     // immediatePredecessorTaskId matches, replay the successor so the chain continues.
-    if (!taskIt->second.immediatePredecessorTaskId.empty()
+    if (allowReplay && !taskIt->second.topologyStale && !taskIt->second.immediatePredecessorTaskId.empty()
         && taskIt->second.immediatePredecessorTaskId == req.task_id()) {
         *rsp.mutable_next_rebalance_task() = taskIt->second.task;
         LOG(INFO) << FormatString(
@@ -225,9 +310,11 @@ Status MemoryRebalanceScheduler::ReportResult(const master::ReportRebalanceResul
     CHECK_FAIL_RETURN_STATUS(!req.source_worker().empty(), K_INVALID, "The rebalance source worker can not be empty");
     CHECK_FAIL_RETURN_STATUS(IsTerminalStatus(req.status()), K_INVALID, "The rebalance task status is not terminal");
 
+    auto topologySnapshot = GetTopologySnapshot();
     uint64_t nowMs = GetSteadyClockTimeStampMs();
     std::lock_guard<bthread::Mutex> lock(mutex_);
     ExpireTimeoutTasksLocked(nowMs);
+    const bool allowSuccessor = AllowRebalanceForTopologyLocked(topologySnapshot.get(), "", nowMs);
 
     auto taskIt = activeTasksBySource_.find(req.source_worker());
     if (taskIt == activeTasksBySource_.end()) {
@@ -240,7 +327,7 @@ Status MemoryRebalanceScheduler::ReportResult(const master::ReportRebalanceResul
     CHECK_FAIL_RETURN_STATUS(task.source_worker() == req.source_worker(), K_RUNTIME_ERROR,
                              "Rebalance task source index is inconsistent");
     if (task.task_id() != req.task_id()) {
-        return ReplayOrIgnoreStaleLocked(taskIt, req, rsp);
+        return ReplayOrIgnoreStaleLocked(taskIt, req, allowSuccessor, rsp);
     }
     CHECK_FAIL_RETURN_STATUS(task.target_worker() == req.target_worker(), K_INVALID,
                              "The rebalance result does not match the active task");
@@ -255,13 +342,14 @@ Status MemoryRebalanceScheduler::ReportResult(const master::ReportRebalanceResul
     const bool succeeded = !IsFailedStatus(req.status());
     RemoveTaskLocked(req.source_worker(), nowMs, succeeded, req.failure_side());
 
-    ProcessFreshFeedbackLocked(prevTask, req, nowMs, rsp);
+    ProcessFreshFeedbackLocked(prevTask, req, nowMs, allowSuccessor && !prevTask.topologyStale, rsp);
     return Status::OK();
 }
 
 void MemoryRebalanceScheduler::ProcessFreshFeedbackLocked(RunningTask &prevTask,
                                                           const master::ReportRebalanceResultReqPb &req,
                                                           uint64_t nowMs,
+                                                          bool allowSuccessor,
                                                           master::ReportRebalanceResultRspPb &rsp)
 {
     // proto3 scalar uint64 has no presence: remain==0 is ambiguous (genuine target full OR old
@@ -278,7 +366,7 @@ void MemoryRebalanceScheduler::ProcessFreshFeedbackLocked(RunningTask &prevTask,
     futureView_[req.target_worker()].minimumObservedUsedMemory =
         std::max(futureView_[req.target_worker()].minimumObservedUsedMemory, freshUsed);
     prevTask.cumulativeMigrated += req.migrated_bytes();
-    if (req.migrated_bytes() < prevTask.task.max_bytes()) {
+    if (req.migrated_bytes() < prevTask.task.max_bytes() || !allowSuccessor) {
         return;
     }
     master::RebalanceTaskPb nextTask;

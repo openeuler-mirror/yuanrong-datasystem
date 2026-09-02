@@ -83,9 +83,10 @@
     epoch/target 收敛。COMMIT 下发的同一资源报告以及所有非 STABLE worker 报告均标记为 rebalance not-ready，
     避免禁止淘汰期间继续成为 rebalance source/target。RebalanceTask 同时携带 source/target policy+epoch；
     source 启动与逐批校验、target RPC 准入再校验。worker 在 COMMIT 前暂停并排空 outbound rebalance 与 inbound
-    migration，转换结束后恢复；带 target fence 的迁移强制 TCP，阻止迟到旧 epoch 写入。混合版本阶段保持热更新
-    入口关闭：旧 task 缺少 fence 时新 worker 安全拒绝，旧 worker 的 `UNSPECIFIED` policy 不参与新 master 调度；待
-    master/worker 全部升级后再提交 PRECHECK/COMMIT。
+    migration，转换结束后恢复；默认 memory rebalance 的 SPILL 迁移在 URMA 开启时可走 read/write 快速通道，
+    direct/NotifyRemoteGet 请求携带相同 target fence，并在 target 准入前校验，阻止迟到旧 epoch
+    写入；携带 heat metadata 或启用 keep-local-copy 时仍走 TCP。当前基线直接使用最终协议，memory rebalance
+    task 与对应迁移请求必须携带完整 policy/epoch fence。
   - heat 衰减不在淘汰时做（淘汰时 counter 不衰减），改为在 worker 周期资源上报前做一次：`NodeSelector::CollectClusterInfo`
     开头调用已注册的 pre-report hook（`RegisterPreReportHook`，仿 `RegisterRebalanceTaskHandler`，
     于 `WorkerOCServer::CreateRebalanceExecutor` 注册、`StopRebalanceExecutor` 反注册），

@@ -87,6 +87,7 @@ protected:
         uint64_t cumulativeMigrated{ 0 };
         uint64_t epochStartMs{ 0 };
         std::string immediatePredecessorTaskId;
+        bool topologyStale{ false };
     };
 
     /** Target-side future memory delta. heldBytes is always a subset of inflightBytes. */

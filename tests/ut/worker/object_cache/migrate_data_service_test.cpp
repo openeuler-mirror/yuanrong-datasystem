@@ -708,6 +708,16 @@ TEST_F(MigrateDataServiceTest, RebalanceTargetRejectsStalePolicyFence)
     EXPECT_EQ(impl_->CheckMigrateDataAdmission(req, rsp).GetCode(), StatusCode::K_NOT_READY);
     EXPECT_THAT(rsp.fail_ids(), ElementsAre("fenced-object"));
 
+    MigrateDataDirectReqPb directReq;
+    directReq.set_has_rebalance_policy_fence(true);
+    directReq.set_target_eviction_policy(master::EVICTION_POLICY_CLOCK);
+    directReq.set_target_eviction_policy_epoch(0);
+    directReq.set_rebalance_task_id("stale-direct-target-task");
+    directReq.add_objects()->set_object_key("fenced-direct-object");
+    MigrateDataDirectRspPb directRsp;
+    EXPECT_EQ(impl_->MigrateDataDirect(directReq, directRsp).GetCode(), StatusCode::K_NOT_READY);
+    EXPECT_THAT(directRsp.failed_object_keys(), ElementsAre("fenced-direct-object"));
+
     req.set_target_eviction_policy(master::EVICTION_POLICY_HEAT);
     DS_ASSERT_OK(impl_->CheckMigrateDataAdmission(req, rsp));
     impl_->ReleaseIncomingMigrationAdmission();

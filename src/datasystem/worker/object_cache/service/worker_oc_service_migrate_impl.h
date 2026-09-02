@@ -596,6 +596,8 @@ private:
      */
     Status CheckMigrateDataAdmission(const MigrateDataReqPb &req, MigrateDataRspPb &rsp);
 
+    Status ValidateRebalancePolicyFence(bool enabled, uint32_t targetPolicy, uint64_t targetEpoch) const;
+
     /**
      * @brief Acquire one incoming migration admission slot.
      * @return K_OK while the gate is open; K_NOT_READY after local ScaleIn drain starts.

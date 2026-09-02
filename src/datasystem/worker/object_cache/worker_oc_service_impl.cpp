@@ -3278,6 +3278,8 @@ void WorkerOCServiceImpl::InitShmRefForClient(const ClientKey &clientId, bool su
 Status WorkerOCServiceImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp)
 {
     ScopedRequestContext ctx;
+    RETURN_IF_NOT_OK(gMigrateProc_->ValidateRebalancePolicyFence(
+        req.has_rebalance_policy_fence(), req.target_eviction_policy(), req.target_eviction_policy_epoch()));
     RETURN_IF_NOT_OK(gMigrateProc_->AcquireIncomingMigrationAdmission(true));
     Raii admission([this] { gMigrateProc_->ReleaseIncomingMigrationAdmission(); });
     INJECT_POINT_NO_RETURN("WorkerOCServiceImpl.NotifyRemoteGet.afterAdmission");
