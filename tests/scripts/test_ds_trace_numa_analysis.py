@@ -467,6 +467,22 @@ def test_renderer_uses_generic_source_label_when_pr_is_not_supplied(tmp_path: Pa
     assert "源码基线" in html
 
 
+def test_source_chain_references_files_present_in_current_checkout(tmp_path: Path):
+    module = load_module()
+    run_dir, bottleneck_path, archive = write_run_contract(tmp_path)
+    analysis = module.build_analysis(
+        run_dir,
+        bottleneck_path,
+        archive,
+        {"head": "head-ref", "base": "head-ref", "pr": 0},
+    )
+    repository_root = SCRIPT.parents[1]
+
+    for item in analysis["source_chain"]:
+        source_path = item["source"].split(":", 1)[0]
+        assert (repository_root / source_path).is_file(), source_path
+
+
 def test_runtime_config_keeps_missing_values_unconfigured(tmp_path: Path):
     module = load_module()
     run_dir, bottleneck_path, archive = write_run_contract(tmp_path)
@@ -513,3 +529,33 @@ def test_cli_writes_json_and_html(tmp_path: Path):
     assert rc == 0
     assert output.exists()
     assert json.loads(analysis_json.read_text(encoding="utf-8"))["aggregate"]["unique_trace_count"] == 4
+
+
+def test_cli_without_pr_uses_generic_source_metadata_and_titles(tmp_path: Path):
+    module = load_module()
+    run_dir, bottleneck_path, archive = write_run_contract(tmp_path)
+    echarts = tmp_path / "echarts.js"
+    echarts.write_text("window.echarts={init(){return {setOption(){},resize(){},dispose(){}}}};", encoding="utf-8")
+    output = tmp_path / "index.html"
+    analysis_json = tmp_path / "analysis.json"
+
+    rc = module.main(
+        [
+            "--run-dir", str(run_dir),
+            "--bottleneck-analysis", str(bottleneck_path),
+            "--archive", str(archive),
+            "--source-head", "head-ref",
+            "--source-base", "head-ref",
+            "--echarts", str(echarts),
+            "--output", str(output),
+            "--analysis-json", str(analysis_json),
+        ]
+    )
+
+    analysis = json.loads(analysis_json.read_text(encoding="utf-8"))
+    html = output.read_text(encoding="utf-8")
+    assert analysis["metadata"]["source"]["pr"] is None
+    assert "PR2081" not in html
+    assert "PR 2081" not in html
+    assert "当前源码链" in html
+    assert "源码基线" in html

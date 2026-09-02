@@ -609,7 +609,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--source-head", required=True)
     parser.add_argument("--source-base", required=True)
-    parser.add_argument("--pr", type=int, default=2081)
+    parser.add_argument("--pr", type=int)
     parser.add_argument("--qps-per-node", type=float)
     parser.add_argument("--client-count", type=int)
     parser.add_argument("--threads-per-client", type=int)

@@ -48,6 +48,17 @@ WRITE_STAGE_NAMES = (
     "RPC框架",
     "未解释残差",
 )
+WRITE_CLIENT_FLOWS = frozenset(
+    {
+        "DS_KV_CLIENT_SET",
+        "DS_KV_CLIENT_MSET",
+        "DS_KV_CLIENT_CREATE",
+        "DS_KV_CLIENT_PUBLISH",
+    }
+)
+WRITE_CLIENT_OPERATION_RE = "|".join(
+    re.escape(name.removeprefix("DS_KV_CLIENT_")) for name in sorted(WRITE_CLIENT_FLOWS)
+)
 PROBLEM_NAMES = tuple(stage for stage in STAGE_NAMES if stage != "URMA超时等待") + ("URMA超时",)
 NON_TRANSPORT_CATEGORIES = (
     "Client UB接收缓冲分配失败",
@@ -394,11 +405,7 @@ def _apply_focus_breakdown(row: dict) -> None:
 
 
 def _is_write_flow(trace: dict) -> bool:
-    return any(
-        name.startswith("DS_KV_CLIENT_")
-        and any(operation in name for operation in ("SET", "CREATE", "PUBLISH"))
-        for name in trace.get("flows", {})
-    )
+    return bool(WRITE_CLIENT_FLOWS.intersection(trace.get("flows", {})))
 
 
 def _write_rpc_group(evidence: list[str], operation: str) -> list[dict[str, int]]:
@@ -451,7 +458,7 @@ def _build_write_row(base: dict, trace: dict) -> dict:
     size_bytes = int(base.get("size_bytes", 0) or 0)
     for text in evidence:
         match = re.search(
-            r"\| (-?\d+) \| DS_KV_CLIENT_(?:M?SET|CREATE|PUBLISH) \| (\d+) \| (\d+) \|",
+            rf"\| (-?\d+) \| DS_KV_CLIENT_(?:{WRITE_CLIENT_OPERATION_RE}) \| (\d+) \| (\d+) \|",
             text,
         )
         if match:
@@ -1834,6 +1841,17 @@ def _urma_critical_path(logical_writes: list[dict]) -> tuple[float, str]:
     return critical_ms, basis
 
 
+def _sequential_urma_path(logical_writes: list[dict]) -> tuple[float, str]:
+    durations = [
+        item["wall_clock_ms"] if item["complete"] else item["slowest_wr_ms"]
+        for item in logical_writes
+    ]
+    basis = f"{len(logical_writes)}个串行逻辑Write之和"
+    if any(not item["complete"] for item in logical_writes):
+        basis += "·含最慢WR回退值"
+    return sum(durations), basis
+
+
 def _apply_inline_query_urma_attribution(row: dict) -> None:
     row["inline_query_urma_ms"] = None
     row["inline_query_urma_basis"] = None
@@ -1861,6 +1879,7 @@ def _apply_inline_query_urma_attribution(row: dict) -> None:
                 "worker": worker,
                 "start": end - dt.timedelta(milliseconds=total_ms),
                 "end": end,
+                "total_ms": total_ms,
             }
         )
     if not inline_candidates or not row.get("client_query_and_get_ms"):
@@ -1890,7 +1909,11 @@ def _apply_inline_query_urma_attribution(row: dict) -> None:
     for attempt, inline_requests in zip(inline_candidates, requests_by_attempt):
         if inline_requests:
             logical_writes = _group_urma_logical_writes(inline_requests)
-            paths_by_worker[attempt["worker"]].append(_urma_critical_path(logical_writes))
+            path_ms, basis = _sequential_urma_path(logical_writes)
+            clamped_ms = min(attempt["total_ms"], path_ms)
+            if clamped_ms < path_ms:
+                basis += "·QueryAndGet父窗口clamp"
+            paths_by_worker[attempt["worker"]].append((clamped_ms, basis))
     if not paths_by_worker:
         return
 

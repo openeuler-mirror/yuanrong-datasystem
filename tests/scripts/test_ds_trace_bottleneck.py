@@ -1492,6 +1492,73 @@ def test_worker_query_and_get_inline_urma_is_removed_from_query_parent(run_dir: 
     assert "已剝离 inline URMA" in html
 
 
+def test_worker_query_and_get_inline_urma_sums_sequential_logical_writes(run_dir: Path):
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    item = trace(
+        "worker-inline-query-two-writes",
+        6,
+        0,
+        timestamp="2026-08-24T10:46:58.312000",
+        query_meta_ms=5.0,
+        worker="data-worker-8",
+    )
+    item["latency_summary_us"] = {"client.rpc.direct_query_and_get": 5_000}
+    item["ub_events"] = [
+        chunked_urma_event(
+            "2026-08-24T10:46:58.313500",
+            "data-worker-8",
+            2.0,
+            "154032",
+            1,
+            1,
+            post_us=130862131000,
+            observed_us=130862133000,
+        ),
+        chunked_urma_event(
+            "2026-08-24T10:46:58.315500",
+            "data-worker-8",
+            2.0,
+            "154033",
+            1,
+            1,
+            post_us=130862133100,
+            observed_us=130862135100,
+        ),
+    ]
+    item["urma_elapsed_ms"] = {"total": metric(2.0) | {"count": 2}}
+    item["evidence_coverage"]["urma"] = "present"
+    item["evidence"].append(
+        {
+            "source": "fixture.log",
+            "member": "worker-inline-query-two-writes",
+            "line": 2,
+            "worker": "data-worker-8",
+            "host_ip": "",
+            "text": (
+                "2026-08-24T10:46:58.316000 | [SLOW LOG] QueryAndGet done, "
+                "keyCount: 2, inlineHits: 2, misses: 0, transport: UB, "
+                "preprocess: 0.003ms, localRead: 4.800ms, metadata: 0.000ms, "
+                "delivery: 0.027ms, total: 5.000ms, status: code: [OK]"
+            ),
+        }
+    )
+    summary["traces"]["worker-inline-query-two-writes"] = item
+    summary["trace_count"] += 1
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    row = next(
+        value
+        for value in load_module().build_analysis(run_dir, top_n=100, deadline_ms=None)["traces"]
+        if value["trace_id"] == "worker-inline-query-two-writes"
+    )
+
+    assert row["inline_query_urma_ms"] == pytest.approx(4.0)
+    assert row["query_and_get_exclusive_ms"] == pytest.approx(1.0)
+    assert row["attribution_ms"]["URMA"] == pytest.approx(4.0)
+    assert "2个串行逻辑Write" in row["inline_query_urma_basis"]
+
+
 def test_worker_query_and_get_inline_urma_requires_same_worker(run_dir: Path):
     summary_path = run_dir / "summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -2347,6 +2414,23 @@ def test_worker_only_trace_is_excluded_from_client_topn(run_dir: Path):
     assert analysis["excluded_without_client_window"] == 1
     assert all(row["trace_id"] != "worker-only" for row in analysis["traces"])
     assert any("lack a Client latency window" in item for item in analysis["limitations"])
+
+
+@pytest.mark.parametrize(
+    ("flow", "expected"),
+    [
+        ("DS_KV_CLIENT_SET", True),
+        ("DS_KV_CLIENT_MSET", True),
+        ("DS_KV_CLIENT_CREATE", True),
+        ("DS_KV_CLIENT_PUBLISH", True),
+        ("DS_KV_CLIENT_SETNX", False),
+        ("DS_KV_CLIENT_MSETNX", False),
+        ("DS_KV_CLIENT_MCREATE", False),
+        ("DS_POSIX_SET", False),
+    ],
+)
+def test_write_flow_filter_matches_supported_operation_contract(flow: str, expected: bool):
+    assert load_module()._is_write_flow({"flows": {flow: 1}}) is expected
 
 
 def test_write_trace_has_separate_create_publish_breakdown(run_dir: Path):
