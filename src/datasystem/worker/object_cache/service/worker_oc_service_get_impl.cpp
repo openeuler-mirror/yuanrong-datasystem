@@ -101,6 +101,7 @@ static const char *const EXIST_REDIRECT_KEYS_FIELD = "keys";
 static constexpr char URMA_WARMUP_KEY_PREFIX[] = "_urma_";
 
 static constexpr double US_PER_MS = 1000.0;
+static constexpr int64_t REMOTE_GET_CLEANUP_HEADROOM_MS = 100;
 
 namespace {
 Status ValidateRemoteGetResult(bool workerConnected, const Status &status, SafeObjType &entry,
@@ -117,6 +118,80 @@ Status ValidateRemoteGetResult(bool workerConnected, const Status &status, SafeO
         RETURN_STATUS(K_NOT_FOUND, FormatString("GetFromRemote failed, object(%s) not exist in worker.", objectKey));
     }
     return Status::OK();
+}
+
+void CollectFailedRemoteGetVersions(const std::vector<QueryMetaInfoPb> &queryMetas,
+                                    const std::unordered_set<std::string> &failedIds,
+                                    std::unordered_map<std::string, uint64_t> &failedKeyVersions)
+{
+    if (failedIds.empty()) {
+        return;
+    }
+    failedKeyVersions.reserve(failedKeyVersions.size() + std::min(queryMetas.size(), failedIds.size()));
+    for (const auto &queryMeta : queryMetas) {
+        const auto &meta = queryMeta.meta();
+        if (failedIds.count(meta.object_key()) > 0) {
+            failedKeyVersions.insert_or_assign(meta.object_key(), meta.version());
+        }
+    }
+}
+
+void CollectRegisteredRemoteGetCleanupIds(
+    const std::set<ReadKey> &candidateIds,
+    const std::unordered_map<std::string, uint64_t> &failedKeyVersions,
+    std::unordered_set<std::string> &cleanupIds)
+{
+    cleanupIds.reserve(cleanupIds.size() + std::min(candidateIds.size(), failedKeyVersions.size()));
+    for (const auto &readKey : candidateIds) {
+        if (failedKeyVersions.count(readKey.objectKey) > 0) {
+            cleanupIds.emplace(readKey.objectKey);
+        }
+    }
+}
+
+void CollectFinalRemoteGetFailures(const std::unordered_set<std::string> &attemptFailedIds,
+                                   const std::set<ReadKey> &needRetryIds,
+                                   std::unordered_set<std::string> &failedIds,
+                                   std::unordered_set<std::string> &cleanupIds)
+{
+    for (const auto &objectKey : attemptFailedIds) {
+        if (needRetryIds.count(ReadKey(objectKey)) == 0) {
+            failedIds.emplace(objectKey);
+            cleanupIds.emplace(objectKey);
+        }
+    }
+}
+
+void CollectPendingRemoteGetFailures(const std::set<ReadKey> &needRetryIds,
+                                     std::unordered_set<std::string> &failedIds,
+                                     std::unordered_set<std::string> &cleanupIds)
+{
+    for (const auto &readKey : needRetryIds) {
+        failedIds.emplace(readKey.objectKey);
+        cleanupIds.emplace(readKey.objectKey);
+    }
+}
+
+bool IsQueryMetaRpcFailure(const Status &status, const std::unordered_set<std::string> &attemptFailedIds,
+                           const std::set<ReadKey> &needRetryIds)
+{
+    return attemptFailedIds.empty() && needRetryIds.empty()
+           && (status.GetCode() == K_TRY_AGAIN || IsRetryableRpcError(status) || IsNonRetryableRpcError(status));
+}
+
+std::unordered_map<std::string, uint64_t> FilterFinalFailedRemoteGetVersions(
+    const std::unordered_set<std::string> &failedIds,
+    const std::unordered_map<std::string, uint64_t> &failedKeyVersions)
+{
+    std::unordered_map<std::string, uint64_t> finalFailedKeyVersions;
+    finalFailedKeyVersions.reserve(std::min(failedIds.size(), failedKeyVersions.size()));
+    for (const auto &objectKey : failedIds) {
+        auto version = failedKeyVersions.find(objectKey);
+        if (version != failedKeyVersions.end()) {
+            finalFailedKeyVersions.emplace(objectKey, version->second);
+        }
+    }
+    return finalFailedKeyVersions;
 }
 }  // namespace
 
@@ -616,22 +691,23 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromRemote(int64_t subTimeout, std::s
     auto needRemoteGetIds = std::move(remoteObjectKeys);
     PerfPoint pointRemote(PerfKey::WORKER_PROCESS_GET_OBJECT_REMOTE);
     std::unordered_set<std::string> failedIds;
+    std::unordered_set<std::string> cleanupIds;
+    std::unordered_map<std::string, uint64_t> failedKeyVersions;
     Status status;
 
     do {
         std::set<ReadKey> needRetryIds;
         std::unordered_set<std::string> tmpFailedIds;
-        status = ProcessObjectsNotExistInLocal(needRemoteGetIds, subTimeout, tmpFailedIds, needRetryIds, request);
-        std::for_each(tmpFailedIds.begin(), tmpFailedIds.end(), [&](const std::string &id) {
-            if (needRetryIds.count(ReadKey(id)) == 0) {
-                (void)failedIds.emplace(id);
-            }
-        });
+        status = ProcessObjectsNotExistInLocal(needRemoteGetIds, subTimeout, tmpFailedIds, needRetryIds,
+                                               failedKeyVersions, request);
+        CollectFinalRemoteGetFailures(tmpFailedIds, needRetryIds, failedIds, cleanupIds);
+        if (IsQueryMetaRpcFailure(status, tmpFailedIds, needRetryIds)) {
+            CollectRegisteredRemoteGetCleanupIds(needRemoteGetIds, failedKeyVersions, cleanupIds);
+        }
         int64_t remainTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
-        const int64_t timeoutThresholdMs = 100;
         INJECT_POINT_NO_RETURN("TryGetObjectFromRemote.NoRetry", [&remainTimeMs] { remainTimeMs = 0; });
         // If we meets OOM, never try get again because there is no space for us to save the objects.
-        if (status.GetCode() == K_OUT_OF_MEMORY || remainTimeMs <= timeoutThresholdMs) {
+        if (status.GetCode() == K_OUT_OF_MEMORY || remainTimeMs <= REMOTE_GET_CLEANUP_HEADROOM_MS) {
             // Budget exhausted while some keys are still pending retry (remote persistently
             // returned K_WORKER_PULL_OBJECT_NOT_FOUND). Mark them K_NOT_FOUND so the client
             // gets a fast, correct result instead of waiting for the subscribe timer to fire
@@ -648,22 +724,14 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromRemote(int64_t subTimeout, std::s
                     LOG_IF_ERROR(request->MarkFailed(key.objectKey, notFoundRc), "MarkFailed failed");
                 });
             }
-            std::for_each(needRetryIds.begin(), needRetryIds.end(),
-                          [&](const ReadKey &key) { failedIds.emplace(key.objectKey); });
+            CollectPendingRemoteGetFailures(needRetryIds, failedIds, cleanupIds);
             break;
         }
         needRemoteGetIds.swap(needRetryIds);
         subTimeout = remainTimeMs >= subTimeout ? subTimeout : remainTimeMs > 0 ? subTimeout - remainTimeMs : 0;
     } while (!needRemoteGetIds.empty());
-    if (!failedIds.empty()) {
-        std::unordered_map<std::string, uint64_t> failedKeyVersions;
-        failedKeyVersions.reserve(failedIds.size());
-        // it's in sync flow, so we can use current time as the delete version.
-        uint64_t version = static_cast<uint64_t>(GetSystemClockTimeStampUs());
-        for (const auto &id : failedIds) {
-            failedKeyVersions.emplace(id, version);
-        }
-        DeleteObjectsMetaUnacked(failedKeyVersions);
+    if (!cleanupIds.empty()) {
+        DeleteFailedRemoteGetMetas(cleanupIds, failedKeyVersions);
     }
 
     pointRemote.Record();
@@ -691,6 +759,16 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromRemote(int64_t subTimeout, std::s
         }
     }
     return Status::OK();
+}
+
+void WorkerOcServiceGetImpl::DeleteFailedRemoteGetMetas(
+    const std::unordered_set<std::string> &cleanupIds,
+    const std::unordered_map<std::string, uint64_t> &failedKeyVersions)
+{
+    if (cleanupIds.empty() || failedKeyVersions.empty()) {
+        return;
+    }
+    DeleteObjectsMetaUnacked(FilterFinalFailedRemoteGetVersions(cleanupIds, failedKeyVersions));
 }
 
 void WorkerOcServiceGetImpl::DeleteObjectsMetaUnacked(
@@ -892,6 +970,8 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
                                                              int64_t subTimeout,
                                                              std::unordered_set<std::string> &failedIds,
                                                              std::set<ReadKey> &needRetryIds,
+                                                             std::unordered_map<std::string, uint64_t>
+                                                                 &failedKeyVersions,
                                                              const std::shared_ptr<GetRequest> &request)
 {
     auto config = GetServerLatencyTraceConfig();
@@ -979,6 +1059,7 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
                         FormatString("[Get] Master query done, targets: %d, hits: %d, cost: %.3fms",
                                      objectsNeedGetRemote.size(), queryMetas.size(), queryMetaMs));
     auto getRet = GetObjectsFromAnywhere(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
+    CollectFailedRemoteGetVersions(queryMetas, failedIds, failedKeyVersions);
     lastRc = getRet.IsError() ? getRet : lastRc;
     // If Get() is allowed to receive objects without meta, do it at last so that valid objects with meta can have
     // a fair change to complete within the given timeout.
@@ -2223,9 +2304,8 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
             }
             const auto &readKey = subIter->first;
             std::shared_ptr<SafeObjType> &subEntry = subIter->second.safeObj;
-            bool isInsert = subIter->second.insert;
             Timer getFromRemoteTimer;
-            Status status = GetObjectFromAnywhereWithLock(readKey, request, subEntry, isInsert, queryMeta, payloads);
+            Status status = GetObjectFromAnywhereWithLock(readKey, request, subEntry, queryMeta, payloads);
             double remoteElapsed = getFromRemoteTimer.ElapsedMilliSecond();
 
             // Protects access to successIds, needRetryIds, failedIds, and lastRc
@@ -2309,8 +2389,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereSerially(const std::vector<
         }
         const auto &readKey = iter->first;
         Timer getFromRemoteTimer;
-        auto status = GetObjectFromAnywhereWithLock(readKey, request, iter->second.safeObj, iter->second.insert,
-                                                    queryMeta, payloads);
+        auto status = GetObjectFromAnywhereWithLock(readKey, request, iter->second.safeObj, queryMeta, payloads);
         double remoteElapsed = getFromRemoteTimer.ElapsedMilliSecond();
         if (status.IsOk()) {
             LOG(INFO) << FormatString("[ObjectKey %s] Get from remote success, elapsed %.3f ms.", objectKey,
@@ -2346,7 +2425,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereSerially(const std::vector<
 
 Status WorkerOcServiceGetImpl::GetObjectFromAnywhereWithLock(const ReadKey &readKey,
                                                              const std::shared_ptr<GetRequest> &request,
-                                                             std::shared_ptr<SafeObjType> &entry, bool isInsert,
+                                                             std::shared_ptr<SafeObjType> &entry,
                                                              const master::QueryMetaInfoPb &queryMeta,
                                                              std::vector<RpcMessage> &payloads)
 {
@@ -2383,7 +2462,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromAnywhereWithLock(const ReadKey &read
                         ? GetObjectFromRemoteOnLock(meta, request, address, queryMeta.single_copy(), objectKV)
                         : GetObjectFromQueryMetaResultOnLock(request, queryMeta, payloads, objectKV);
     if (status.IsError()) {
-        HandleGetFailureHelper(objectKey, meta.version(), entry, isInsert);
+        HandleGetFailureHelper(entry);
     }
 
     return status;

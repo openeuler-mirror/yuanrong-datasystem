@@ -52,6 +52,7 @@
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/client_manager/client_manager.h"
 #include "datasystem/worker/cluster_event_type.h"
+#include "datasystem/worker/object_cache/device/worker_device_oc_manager.h"
 #include "datasystem/worker/worker_health_check.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_multi_publish_impl.h"
@@ -74,6 +75,7 @@ DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_bool(enable_leaving_intercept);
 DS_DECLARE_bool(enable_reconciliation);
 DS_DECLARE_bool(enable_transport_fallback);
+DS_DECLARE_bool(enable_worker_worker_batch_get);
 DS_DECLARE_uint32(arena_per_tenant);
 DS_DECLARE_int32(oc_worker_worker_parallel_min);
 
@@ -86,6 +88,17 @@ constexpr int64_t K_META_MOVING_RETRY_TIMEOUT_MS = 1'000;
 constexpr size_t K_EXPECTED_META_MOVING_RPC_CALLS = 2;
 constexpr uint64_t K_META_MOVING_SUCCESS_VERSION = 7;
 using WorkerMasterOCApiManager = worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>;
+
+void AddDeviceRemoteGetMeta(master::QueryMetaRspPb &rsp, const std::string &objectKey, uint64_t version,
+                            const HostPort &primaryAddress, DataFormat format)
+{
+    auto *queryMeta = rsp.add_query_metas();
+    queryMeta->mutable_meta()->set_object_key(objectKey);
+    queryMeta->mutable_meta()->set_version(version);
+    queryMeta->mutable_meta()->set_data_size(1);
+    queryMeta->mutable_meta()->set_primary_address(primaryAddress.ToString());
+    queryMeta->mutable_meta()->mutable_config()->set_data_format(static_cast<uint32_t>(format));
+}
 
 constexpr const char *K_REF_MOVING_RETRY_BEFORE_SLEEP_INJECT_POINT =
     "WorkerOcServiceGlobalReferenceImpl.SleepForRefMovingRetry.beforeSleep";
@@ -130,6 +143,7 @@ bool WaitForCondition(const std::function<bool()> &condition, std::chrono::milli
 class FakeWorkerMasterOCApi final : public worker::WorkerLocalMasterOCApi {
 public:
     using CreateMetaHandler = std::function<Status(master::CreateMetaReqPb &, master::CreateMetaRspPb &)>;
+    using QueryMetaHandler = std::function<Status(int, master::QueryMetaRspPb &)>;
 
     explicit FakeWorkerMasterOCApi(const HostPort &localAddr) : WorkerLocalMasterOCApi(nullptr, localAddr, nullptr)
     {
@@ -219,6 +233,9 @@ public:
         (void)payloads;
         std::lock_guard<std::mutex> lock(mutex_);
         ++queryMetaCallCount_;
+        if (queryMetaHandler_) {
+            return queryMetaHandler_(queryMetaCallCount_, response);
+        }
         response = queryMetaResponse_;
         return queryMetaStatus_;
     }
@@ -265,6 +282,11 @@ public:
     void SetQueryMetaResponse(const master::QueryMetaRspPb &response)
     {
         queryMetaResponse_ = response;
+    }
+
+    void SetQueryMetaHandler(QueryMetaHandler handler)
+    {
+        queryMetaHandler_ = std::move(handler);
     }
 
     void SetGetObjectLocationsStatus(const Status &status)
@@ -391,6 +413,7 @@ private:
     int decreaseCallCount_{ 0 };
     std::function<Status(master::CreateMultiMetaReqPb &, master::CreateMultiMetaRspPb &)> createMultiMetaHandler_;
     CreateMetaHandler createMetaHandler_;
+    QueryMetaHandler queryMetaHandler_;
     std::vector<master::CreateMultiMetaReqPb> createMultiMetaRequests_;
     std::vector<master::RemoveMetaReqPb> removeMetaRequests_;
     int queryMetaCallCount_{ 0 };
@@ -2070,6 +2093,64 @@ TEST_F(WorkerOcServiceImplTest, GetLocationCleanupUsesNormalCause)
     auto requests = api->RemoveMetaRequests();
     ASSERT_EQ(requests.size(), 1U);
     EXPECT_EQ(requests.front().cause(), master::RemoveMetaReqPb::NORMAL);
+}
+
+TEST_F(WorkerOcServiceImplTest, DeviceRemoteGetReservesCleanupBudgetBeforeRetry)
+{
+    constexpr uint64_t queryMetaVersion = 61;
+    constexpr int64_t retryCleanupWindowMs = 50;
+    constexpr int64_t initialTimeoutMs = 1'000;
+    constexpr int secondQueryMetaCall = 2;
+    constexpr char remainingTimeInject[] = "worker.device_remote_get.remaining_time_ms";
+    const bool oldBatchRemoteGet = FLAGS_enable_worker_worker_batch_get;
+    Raii restoreBatchRemoteGet([oldBatchRemoteGet]() { FLAGS_enable_worker_worker_batch_get = oldBatchRemoteGet; });
+    FLAGS_enable_worker_worker_batch_get = false;
+    const std::string finalRetryKey = "device-a-final-retry";
+    const std::string secondAttemptFailureKey = "device-z-second-failure";
+    const std::string firstAttemptFailureKey = "device-zz-first-failure";
+    for (const auto &key : { finalRetryKey, secondAttemptFailureKey, firstAttemptFailureKey }) {
+        placement_.SetOwner(key, localAddress_);
+    }
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    api->SetQueryMetaHandler([&](int callCount, master::QueryMetaRspPb &rsp) {
+        AddDeviceRemoteGetMeta(rsp, finalRetryKey, queryMetaVersion, localAddress_, DataFormat::BINARY);
+        if (callCount <= secondQueryMetaCall) {
+            AddDeviceRemoteGetMeta(rsp, secondAttemptFailureKey, queryMetaVersion, localAddress_,
+                                   callCount == secondQueryMetaCall ? DataFormat::LIST : DataFormat::BINARY);
+        }
+        if (callCount == 1) {
+            AddDeviceRemoteGetMeta(rsp, firstAttemptFailureKey, queryMetaVersion, localAddress_, DataFormat::LIST);
+        }
+        return Status::OK();
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    impl_->getProc_ = std::make_shared<WorkerOcServiceGetImpl>(param, nullptr, nullptr, nullptr, nullptr, localAddress_,
+                                                               nullptr);
+    WorkerDeviceOcManager deviceManager(impl_.get());
+    GetDeviceObjectReqPb req;
+    std::vector<std::string> remoteObjectKeys{ finalRetryKey, secondAttemptFailureKey, firstAttemptFailureKey };
+    auto request = std::make_shared<GetDeviceObjectRequest>(remoteObjectKeys, nullptr,
+                                                            ClientKey::Intern("device-client"), 0, req);
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(initialTimeoutMs);
+    DS_ASSERT_OK(inject::Set(remainingTimeInject,
+                             FormatString("1*call(%ld)->1*call(%ld)->1*call(0)", initialTimeoutMs,
+                                          retryCleanupWindowMs)));
+    Raii clearRemainingTimeInject([&]() { (void)inject::Clear(remainingTimeInject); });
+
+    DS_ASSERT_OK(deviceManager.TryGetDeviceObjectFromRemote(0, request, remoteObjectKeys));
+
+    EXPECT_EQ(api->QueryMetaCallCount(), secondQueryMetaCall);
+    auto requests = api->RemoveMetaRequests();
+    ASSERT_EQ(requests.size(), 1U);
+    EXPECT_THAT(requests.front().ids(),
+                UnorderedElementsAre(finalRetryKey, secondAttemptFailureKey, firstAttemptFailureKey));
+    ASSERT_EQ(requests.front().id_with_version_size(), static_cast<int>(remoteObjectKeys.size()));
+    for (const auto &idWithVersion : requests.front().id_with_version()) {
+        EXPECT_EQ(idWithVersion.version(), queryMetaVersion);
+    }
 }
 
 TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterReportsMetadataRpcSuccess)

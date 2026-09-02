@@ -20,6 +20,7 @@
 #include <memory>
 
 #include "datasystem/common/device/device_helper.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/request_context.h"
@@ -35,6 +36,36 @@ using namespace datasystem::worker;
 
 namespace datasystem {
 namespace object_cache {
+
+namespace {
+constexpr int64_t REMOTE_GET_CLEANUP_HEADROOM_MS = 100;
+
+void AddReadKeysToFailedIds(const std::set<ReadKey> &keys, std::unordered_set<std::string> &failedIds)
+{
+    std::for_each(keys.begin(), keys.end(), [&failedIds](const ReadKey &key) { failedIds.emplace(key.objectKey); });
+}
+
+void AddNonRetryableIds(const std::unordered_set<std::string> &attemptFailedIds, const std::set<ReadKey> &retryIds,
+                        std::unordered_set<std::string> &failedIds)
+{
+    std::for_each(attemptFailedIds.begin(), attemptFailedIds.end(), [&](const std::string &id) {
+        if (retryIds.count(ReadKey(id)) == 0) {
+            (void)failedIds.emplace(id);
+        }
+    });
+}
+
+Status GetDeviceRemoteGetRemainingTimeMs(int64_t &remainingTimeMs)
+{
+    remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+    INJECT_POINT("worker.device_remote_get.remaining_time_ms", [&remainingTimeMs](int64_t timeMs) {
+        remainingTimeMs = timeMs;
+        GetRequestContext()->reqTimeoutDuration.Init(timeMs);
+        return Status::OK();
+    });
+    return Status::OK();
+}
+}  // namespace
 
 Status WorkerDeviceOcManager::PublishDeviceObject(const std::string &devObjectKey, const PublishDeviceObjectReqPb &req,
                                                   const std::vector<RpcMessage> &payloads)
@@ -225,23 +256,28 @@ Status WorkerDeviceOcManager::TryGetDeviceObjectFromRemote(const int64_t subTime
     if (!objectsNeedGetRemote.empty()) {
         PerfPoint pointRemote(PerfKey::WORKER_PROCESS_GET_OBJECT_REMOTE);
         std::unordered_set<std::string> failedIds;
+        std::unordered_map<std::string, uint64_t> failedKeyVersions;
         std::set<ReadKey> needRetryIds;
         Status status;
         do {
             needRetryIds.clear();
-            status =
-                workerOcImpl_->getProc_->ProcessObjectsNotExistInLocal(needGetIds, subTimeout, failedIds, needRetryIds);
+            std::unordered_set<std::string> tmpFailedIds;
+            status = workerOcImpl_->getProc_->ProcessObjectsNotExistInLocal(
+                needGetIds, subTimeout, tmpFailedIds, needRetryIds, failedKeyVersions);
+            AddNonRetryableIds(tmpFailedIds, needRetryIds, failedIds);
             if (status.IsOk()) {
+                AddReadKeysToFailedIds(needRetryIds, failedIds);
                 break;
             }
-            if (status.GetCode() == K_OUT_OF_MEMORY ||
-                GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() <= 0) {
-                std::for_each(needRetryIds.begin(), needRetryIds.end(),
-                              [&failedIds](const ReadKey &key) { failedIds.emplace(key.objectKey); });
+            int64_t remainingTimeMs;
+            RETURN_IF_NOT_OK(GetDeviceRemoteGetRemainingTimeMs(remainingTimeMs));
+            if (status.GetCode() == K_OUT_OF_MEMORY || remainingTimeMs <= REMOTE_GET_CLEANUP_HEADROOM_MS) {
+                AddReadKeysToFailedIds(needRetryIds, failedIds);
                 break;
             }
             needGetIds.swap(needRetryIds);
         } while (!needGetIds.empty());
+        workerOcImpl_->getProc_->DeleteFailedRemoteGetMetas(failedIds, failedKeyVersions);
         pointRemote.Record();
         if (status.GetCode() == K_OUT_OF_MEMORY) {
             return deviceReqManager_.ReturnFromGetDeviceObjectRequest(request, status);
