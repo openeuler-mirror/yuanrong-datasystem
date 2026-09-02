@@ -1397,6 +1397,9 @@ Status WorkerOCServiceImpl::ValidateWorkerState(BthreadReadGuard &noRecon, int r
 {
     Timer timer;
     if (!IsHealthy()) {
+        if (exitRequested_ != nullptr && exitRequested_->load(std::memory_order_acquire)) {
+            RETURN_STATUS(K_NOT_READY, "Worker is draining for ScaleIn");
+        }
         if (IsStartupReconciling()) {
             RETURN_STATUS(K_TRY_AGAIN,
                           "Worker is starting up and reconciliation in progress, please retry");
