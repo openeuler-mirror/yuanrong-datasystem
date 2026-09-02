@@ -13,6 +13,20 @@
 
 using namespace datasystem;
 
+namespace {
+std::atomic<bool> gKvtestClientInitialized{true};
+}
+
+void SetKvtestClientInitialized(bool initialized)
+{
+    gKvtestClientInitialized.store(initialized, std::memory_order_release);
+}
+
+bool IsKvtestClientInitialized()
+{
+    return gKvtestClientInitialized.load(std::memory_order_acquire);
+}
+
 std::string GenerateTraceId(const char *prefix, int instanceId) {
     constexpr int kTraceIdIndexWidth = 8;
     static const auto processId = getpid();
@@ -315,6 +329,10 @@ bool ExecutePipeline(
     int instanceId) {
     bool allOk = true;
     for (auto &[name, fn] : ops) {
+        const bool isGetOperation = name == kOpGetBuffer || name == kOpMGet || name == kOpCacheGetOrCreate;
+        if (isGetOperation && !IsKvtestClientInitialized()) {
+            continue;
+        }
         ctx.traceId = GenerateTraceId(name.c_str(), instanceId);
         Status traceRc = Context::SetTraceId(ctx.traceId);
         if (!traceRc.IsOk()) {
