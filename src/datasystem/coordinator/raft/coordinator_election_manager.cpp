@@ -20,7 +20,9 @@
 #include <algorithm>
 #include <cerrno>
 #include <exception>
+#include <future>
 #include <limits>
+#include <map>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -33,10 +35,8 @@
 #include "datasystem/protos/coordinator.brpc.stub.pb.h"
 // brpc headers above override LOG/VLOG/DLOG via butil/logging.h.
 // Include DataSystem helpers afterwards to restore the spdlog-based macros.
-#include "datasystem/common/ak_sk/hasher.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
-#include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
@@ -53,13 +53,35 @@ constexpr char kCoordinatorRaftLogSegmentPrefix[] = "log_";
 constexpr char kCoordinatorRaftInProgressLogSegmentPrefix[] = "log_inprogress_";
 constexpr size_t kCoordinatorRaftLogIndexWidth = 20;
 constexpr size_t kCoordinatorRaftClosedLogIndexCount = 2;
-constexpr size_t kSha256HexLength = 64;
 constexpr char K_COORDINATOR_BOOTSTRAP_TRACE_PREFIX[] = "CoordinatorBootstrap;";
-constexpr std::chrono::milliseconds kInitialBootstrapRetryDelay{ 100 };
-constexpr std::chrono::milliseconds kMaxBootstrapRetryDelay{ 1'000 };
-constexpr uint32_t kBootstrapRetryJitterMinPercent = 80;
-constexpr uint32_t kBootstrapRetryJitterMaxPercent = 120;
-constexpr uint32_t kPercentBase = 100;
+constexpr std::chrono::milliseconds kBootstrapExchangeInterval{ 100 };
+constexpr std::chrono::milliseconds kBootstrapRpcTimeout{ 100 };
+constexpr std::chrono::seconds K_BOOTSTRAP_OBSERVATION_TTL{ 1 };
+constexpr std::chrono::seconds K_BOOTSTRAP_CONSISTENT_VIEW_DELAY{ 1 };
+
+struct CommittedConfigVote {
+    std::vector<std::string> peers;
+    size_t confirmations{ 0 };
+};
+
+void RecordCommittedConfigVote(const std::string &reporter, const std::vector<std::string> &committedPeers,
+                               bool &observedCommittedConfiguration, std::vector<CommittedConfigVote> &votes)
+{
+    if (committedPeers.empty()) {
+        return;
+    }
+    observedCommittedConfiguration = true;
+    if (!std::binary_search(committedPeers.begin(), committedPeers.end(), reporter)) {
+        return;
+    }
+    auto vote = std::find_if(votes.begin(), votes.end(),
+                             [&committedPeers](const auto &candidate) { return candidate.peers == committedPeers; });
+    if (vote == votes.end()) {
+        votes.emplace_back(CommittedConfigVote{ committedPeers, 1 });
+    } else {
+        ++vote->confirmations;
+    }
+}
 
 struct DirectoryCloser {
     void operator()(DIR *directory) const noexcept
@@ -331,26 +353,6 @@ Status NormalizePeers(const std::vector<std::string> &input, std::vector<std::st
     return Status::OK();
 }
 
-Status BuildCandidateDigest(const std::vector<std::string> &peers, std::string &digest)
-{
-    std::string encoded;
-    for (const auto &peer : peers) {
-        encoded.append(std::to_string(peer.size()));
-        encoded.push_back(':');
-        encoded.append(peer);
-        encoded.push_back(';');
-    }
-    return Hasher().GetSha256Hex(encoded, digest);
-}
-
-bool IsSha256Hex(std::string_view digest)
-{
-    return digest.size() == kSha256HexLength && std::all_of(digest.begin(), digest.end(), [](char character) {
-               return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')
-                      || (character >= 'A' && character <= 'F');
-           });
-}
-
 Status DependencyExceptionStatus(const char *operation, const std::exception *error = nullptr)
 {
     std::string message = std::string("Coordinator election manager failed to ") + operation;
@@ -405,86 +407,43 @@ CoordinatorElectionManager::MembershipHandle::~MembershipHandle() noexcept
 
 CoordinatorElectionManager::Dependencies CoordinatorElectionManager::MakeProductionDependencies()
 {
+    struct BootstrapChannels {
+        std::mutex mutex;
+        std::map<std::string, std::shared_ptr<brpc::Channel>> byPeer;
+    };
+
     Dependencies dependencies;
+    auto bootstrapChannels = std::make_shared<BootstrapChannels>();
     dependencies.probeLocalMetadata = ProbeCoordinatorRaftMetadata;
     dependencies.discoverCandidates = [](const std::shared_ptr<ICoordinatorDiscovery> &discovery,
                                          std::vector<std::string> &candidates) {
         return discovery->GetCoordinators(candidates);
     };
-    dependencies.probePeer = [](const std::string &peer, int32_t timeoutMs, RaftBootstrapState &state) {
-        BrpcChannelConfig config;
-        config.endpoint = peer;
-        config.timeout_ms = timeoutMs;
-        config.connect_timeout_ms = timeoutMs;
-        config.max_retry = 0;
-        config.enable_circuit_breaker = false;
-        auto channel = BrpcChannelFactory::Create(config);
+    dependencies.exchangeObservation = [bootstrapChannels](const std::string &peer, int32_t timeoutMs,
+                                                           const RaftBootstrapObservationPb &request,
+                                                           RaftBootstrapObservationPb &response) {
+        std::shared_ptr<brpc::Channel> channel;
+        {
+            std::lock_guard<std::mutex> lock(bootstrapChannels->mutex);
+            auto &cached = bootstrapChannels->byPeer[peer];
+            if (cached == nullptr) {
+                BrpcChannelConfig config;
+                config.endpoint = peer;
+                config.timeout_ms = timeoutMs;
+                config.connect_timeout_ms = timeoutMs;
+                config.max_retry = 0;
+                config.enable_circuit_breaker = false;
+                cached = BrpcChannelFactory::Create(config);
+            }
+            channel = cached;
+        }
         CHECK_FAIL_RETURN_STATUS(channel != nullptr, K_RPC_UNAVAILABLE,
-                                 "Failed to create Coordinator bootstrap probe channel");
+                                 "Failed to create Coordinator bootstrap observation channel");
 
         CoordinatorService_BrpcGenericStub stub(channel.get(), timeoutMs);
-        GetRaftBootstrapStateReqPb request;
-        request.set_group_id(kCoordinatorRaftGroupId);
-        GetRaftBootstrapStateRspPb response;
-        RETURN_IF_NOT_OK(stub.GetRaftBootstrapState(request, response));
-
-        if constexpr (sizeof(size_t) < sizeof(uint64_t)) {
-            CHECK_FAIL_RETURN_STATUS(response.expected_member_count() <= std::numeric_limits<size_t>::max(), K_INVALID,
-                                     "Coordinator bootstrap response expected member count exceeds size_t");
-            CHECK_FAIL_RETURN_STATUS(response.candidate_count() <= std::numeric_limits<size_t>::max(), K_INVALID,
-                                     "Coordinator bootstrap response candidate count exceeds size_t");
-        }
-        state.probeReady = response.probe_ready();
-        state.groupId = response.group_id();
-        state.localPeer = response.local_peer();
-        state.expectedMemberCount = static_cast<size_t>(response.expected_member_count());
-        switch (response.metadata_state()) {
-            case RAFT_METADATA_ABSENT:
-                state.metadataState = RaftMetadataState::ABSENT;
-                break;
-            case RAFT_METADATA_VALID:
-                state.metadataState = RaftMetadataState::VALID;
-                break;
-            case RAFT_METADATA_CORRUPT:
-                state.metadataState = RaftMetadataState::CORRUPT;
-                break;
-            case RAFT_METADATA_UNKNOWN:
-                state.metadataState = RaftMetadataState::UNKNOWN;
-                break;
-            default:
-                return Status(K_INVALID, "Coordinator bootstrap response has an unknown metadata state");
-        }
-        state.candidateCount = static_cast<size_t>(response.candidate_count());
-        state.candidateDigest = response.candidate_digest();
-        state.committedPeers.assign(response.committed_peers().begin(), response.committed_peers().end());
-        switch (response.phase()) {
-            case RAFT_BOOTSTRAP_OBSERVING:
-                state.phase = RaftBootstrapPhase::OBSERVING;
-                break;
-            case RAFT_BOOTSTRAP_RETRYING:
-                state.phase = RaftBootstrapPhase::RETRYING;
-                break;
-            case RAFT_BOOTSTRAP_STARTED:
-                state.phase = RaftBootstrapPhase::STARTED;
-                break;
-            case RAFT_BOOTSTRAP_TERMINAL:
-                state.phase = RaftBootstrapPhase::TERMINAL;
-                break;
-            default:
-                return Status(K_INVALID, "Coordinator bootstrap response has an unknown phase");
-        }
-        state.statusCode = response.status_code();
-        return Status::OK();
+        return stub.ExchangeBootstrapObservation(request, response);
     };
-    dependencies.digestCandidates = BuildCandidateDigest;
     dependencies.now = [] { return std::chrono::steady_clock::now(); };
-    dependencies.jitterBootstrapRetry = [](std::chrono::milliseconds baseDelay) {
-        thread_local RandomData random;
-        const auto baseCount = static_cast<uint32_t>(baseDelay.count());
-        const auto minDelay = baseCount * kBootstrapRetryJitterMinPercent / kPercentBase;
-        const auto maxDelay = baseCount * kBootstrapRetryJitterMaxPercent / kPercentBase;
-        return std::chrono::milliseconds(random.GetRandomUint32(minDelay, maxDelay));
-    };
     dependencies.createNode = [](const CoordinatorRaftOptions &options,
                                  const CoordinatorRaftEventCallbacks &callbacks) {
         auto handle = std::make_unique<NodeHandle>();
@@ -526,9 +485,6 @@ CoordinatorElectionManager::CoordinatorElectionManager(CoordinatorElectionOption
       discovery_(std::move(discovery)),
       dependencies_(std::move(dependencies))
 {
-    bootstrapState_.groupId = kCoordinatorRaftGroupId;
-    bootstrapState_.localPeer = options_.raftFlags.localAddress;
-    bootstrapState_.expectedMemberCount = options_.membershipOptions.expectedMemberCount;
 }
 
 CoordinatorElectionManager::~CoordinatorElectionManager() noexcept
@@ -565,8 +521,8 @@ Status CoordinatorElectionManager::ValidateStartupInput() const
     CHECK_FAIL_RETURN_STATUS(CoordinatorRaftPeerAddress(localPeer) == options_.raftFlags.localAddress, K_INVALID,
                              "Coordinator Raft local address must be normalized");
     CHECK_FAIL_RETURN_STATUS(
-        dependencies_.probeLocalMetadata && dependencies_.discoverCandidates && dependencies_.probePeer
-            && dependencies_.digestCandidates && dependencies_.now && dependencies_.jitterBootstrapRetry
+        dependencies_.probeLocalMetadata && dependencies_.discoverCandidates && dependencies_.exchangeObservation
+            && dependencies_.now
             && dependencies_.createNode && dependencies_.startNode && dependencies_.createMembership
             && dependencies_.startMembership && dependencies_.shutdownMembership && dependencies_.isLeader
             && dependencies_.getLeader,
@@ -610,179 +566,199 @@ void CoordinatorElectionManager::RunBootstrapControl() noexcept
             callback();
         }
     });
-    RaftBootstrapState localState;
-    {
-        std::lock_guard<std::mutex> lock(bootstrapMutex_);
-        localState = bootstrapState_;
-    }
-    localState.phase = RaftBootstrapPhase::OBSERVING;
-    localState.statusCode = static_cast<int32_t>(K_OK);
-    PublishBootstrapState(localState);
-    auto status = dependencies_.digestCandidates({}, localState.candidateDigest);
-    if (status.IsError()) {
-        localState.probeReady = true;
-        PublishBootstrapState(std::move(localState));
-        RecordBootstrapTerminalStatus(std::move(status));
-        return;
-    }
-
-    status = dependencies_.probeLocalMetadata(options_.raftFlags.dataDir, localState.metadataState);
-    localState.probeReady = true;
-    PublishBootstrapState(localState);
+    RaftMetadataState metadataState = RaftMetadataState::UNKNOWN;
+    auto status = dependencies_.probeLocalMetadata(options_.raftFlags.dataDir, metadataState);
     if (status.IsError()) {
         RecordBootstrapTerminalStatus(std::move(status));
         return;
     }
-    if (localState.metadataState == RaftMetadataState::VALID) {
+    if (metadataState == RaftMetadataState::VALID) {
         status = StartOwnedComponents(RecoverPlan{}, RaftMetadataState::VALID);
         if (status.IsError() && !IsBootstrapStopRequested()) {
             RecordBootstrapTerminalStatus(std::move(status));
         }
         return;
     }
-    if (localState.metadataState != RaftMetadataState::ABSENT) {
+    if (metadataState != RaftMetadataState::ABSENT) {
         RecordBootstrapTerminalStatus(
             Status(K_DATA_INCONSISTENCY, "Coordinator local Raft metadata state is not bootstrappable"));
         return;
     }
 
     std::chrono::steady_clock::time_point nextWarningAt{};
-    std::chrono::milliseconds bootstrapRetryBaseDelay = kInitialBootstrapRetryDelay;
     while (!IsBootstrapStopRequested()) {
         std::vector<std::string> normalizedCandidates;
-        status = RefreshBootstrapObservation(localState, normalizedCandidates);
-        if (status.IsError()) {
-            if (status.GetCode() != K_NOT_READY) {
-                RecordBootstrapTerminalStatus(std::move(status));
+        status = RefreshBootstrapTargets(normalizedCandidates);
+        if (status.IsOk() && options_.bootstrapMode == RaftBootstrapMode::STATIC_INITIAL_PEERS) {
+            if (normalizedCandidates.size() != options_.membershipOptions.expectedMemberCount) {
+                RecordBootstrapTerminalStatus(
+                    Status(K_INVALID, "Coordinator static initial peers do not match expected member count"));
                 return;
             }
-            localState.phase = RaftBootstrapPhase::RETRYING;
-            localState.statusCode = static_cast<int32_t>(status.GetCode());
-            PublishBootstrapState(localState);
-            WarnBootstrapRetry(status, nextWarningAt);
-            if (WaitForBootstrapRetryOrStop(bootstrapRetryBaseDelay)) {
-                return;
-            }
-            continue;
-        }
-
-        RaftStartPlan startPlan = RecoverPlan{};
-        status = TryBuildStartPlan(localState, normalizedCandidates, startPlan);
-        if (IsBootstrapStopRequested()) {
-            return;
-        }
-        if (status.IsOk()) {
-            status = StartOwnedComponents(std::move(startPlan), localState.metadataState);
+            status = StartOwnedComponents(BootstrapPlan{ std::move(normalizedCandidates) }, metadataState);
             if (status.IsError() && !IsBootstrapStopRequested()) {
                 RecordBootstrapTerminalStatus(std::move(status));
             }
             return;
         }
-        localState.phase = RaftBootstrapPhase::RETRYING;
-        localState.statusCode = static_cast<int32_t>(status.GetCode());
-        PublishBootstrapState(localState);
+        if (status.IsOk()) {
+            status = ExchangeBootstrapRound(normalizedCandidates);
+        }
+
+        RaftStartPlan startPlan = RecoverPlan{};
+        if (status.IsOk()) {
+            status = TryBuildStartPlan(startPlan);
+        }
+        if (IsBootstrapStopRequested()) {
+            return;
+        }
+        if (status.IsOk()) {
+            status = StartOwnedComponents(std::move(startPlan), metadataState);
+            if (status.IsError() && !IsBootstrapStopRequested()) {
+                RecordBootstrapTerminalStatus(std::move(status));
+            }
+            return;
+        }
+        if (status.GetCode() != K_NOT_READY) {
+            RecordBootstrapTerminalStatus(std::move(status));
+            return;
+        }
         WarnBootstrapRetry(status, nextWarningAt);
-        if (WaitForBootstrapRetryOrStop(bootstrapRetryBaseDelay)) {
+        if (WaitForBootstrapRetryOrStop()) {
             return;
         }
     }
 }
 
-Status CoordinatorElectionManager::RefreshBootstrapObservation(RaftBootstrapState &localState,
-                                                               std::vector<std::string> &normalizedCandidates)
+Status CoordinatorElectionManager::RefreshBootstrapTargets(std::vector<std::string> &normalizedCandidates)
 {
     std::vector<std::string> discoveredCandidates;
     Status discoveryStatus = dependencies_.discoverCandidates(discovery_, discoveredCandidates);
     if (discoveryStatus.IsError()) {
-        localState.probeReady = false;
-        localState.phase = RaftBootstrapPhase::RETRYING;
-        localState.statusCode = static_cast<int32_t>(K_NOT_READY);
-        PublishBootstrapState(localState);
         return Status(K_NOT_READY, "Coordinator Discovery bootstrap observation failed: " + discoveryStatus.ToString());
     }
 
     const auto normalizeStatus = NormalizePeers(discoveredCandidates, normalizedCandidates);
     if (normalizeStatus.IsError()) {
-        localState.probeReady = false;
-        localState.phase = RaftBootstrapPhase::RETRYING;
-        localState.statusCode = static_cast<int32_t>(K_NOT_READY);
-        PublishBootstrapState(localState);
         return Status(K_NOT_READY,
                       "Coordinator Discovery returned an invalid bootstrap candidate: " + normalizeStatus.ToString());
     }
-    std::string digest;
-    RETURN_IF_NOT_OK(dependencies_.digestCandidates(normalizedCandidates, digest));
-    localState.probeReady = true;
-    localState.candidateCount = normalizedCandidates.size();
-    localState.candidateDigest = std::move(digest);
-    localState.phase = RaftBootstrapPhase::OBSERVING;
-    localState.statusCode = static_cast<int32_t>(K_OK);
-    PublishBootstrapState(localState);
+    CHECK_FAIL_RETURN_STATUS(std::binary_search(normalizedCandidates.begin(), normalizedCandidates.end(),
+                                                options_.raftFlags.localAddress),
+                             K_NOT_READY, "Coordinator Discovery bootstrap view does not contain the local peer");
     return Status::OK();
 }
 
-Status CoordinatorElectionManager::TryBuildStartPlan(const RaftBootstrapState &localState,
-                                                     const std::vector<std::string> &normalizedCandidates,
-                                                     RaftStartPlan &startPlan)
+Status CoordinatorElectionManager::ExchangeBootstrapRound(const std::vector<std::string> &normalizedCandidates)
 {
-    std::vector<BootstrapObservation> observations;
-    RETURN_IF_NOT_OK(CollectBootstrapObservations(localState, normalizedCandidates, observations));
-    return DecideStartPlan(localState, normalizedCandidates, observations, startPlan);
-}
+    RaftBootstrapObservationPb request;
+    std::vector<std::string> probeTargets;
+    {
+        std::lock_guard<std::mutex> lock(bootstrapMutex_);
+        const auto now = dependencies_.now();
+        RETURN_IF_NOT_OK(BuildLocalObservationLocked(now, request));
+        probeTargets = BuildBootstrapProbeTargetsLocked(normalizedCandidates, now);
+    }
+    CHECK_FAIL_RETURN_STATUS(!IsBootstrapStopRequested(), K_SHUTTING_DOWN,
+                             "Coordinator bootstrap observation exchange was cancelled by shutdown");
 
-Status CoordinatorElectionManager::CollectBootstrapObservations(const RaftBootstrapState &localState,
-                                                                const std::vector<std::string> &normalizedCandidates,
-                                                                std::vector<BootstrapObservation> &observations) const
-{
-    observations.clear();
-    observations.reserve(normalizedCandidates.size());
-    for (const auto &peer : normalizedCandidates) {
-        if (IsBootstrapStopRequested()) {
-            return Status(K_SHUTTING_DOWN, "Coordinator bootstrap peer observation was cancelled by shutdown");
-        }
+    struct ExchangeResult {
+        std::string peer;
+        Status status;
+        RaftBootstrapObservationPb response;
+    };
+    std::vector<std::future<ExchangeResult>> exchanges;
+    exchanges.reserve(probeTargets.size());
+    for (const auto &peer : probeTargets) {
+        exchanges.emplace_back(std::async(std::launch::async, [this, peer, request] {
+            ExchangeResult result{ peer, Status::OK(), {} };
+            result.status = dependencies_.exchangeObservation(
+                peer, static_cast<int32_t>(kBootstrapRpcTimeout.count()), request, result.response);
+            return result;
+        }));
+    }
 
-        BootstrapObservation observation;
-        observation.peer = peer;
-        if (peer == localState.localPeer) {
-            observation.state = localState;
-            observation.status = Status::OK();
-        } else {
-            observation.status = ProbePeerBootstrapState(peer, observation.state);
+    for (auto &exchange : exchanges) {
+        auto result = exchange.get();
+        if (result.status.IsError()) {
+            continue;
         }
-        observations.emplace_back(std::move(observation));
+        CHECK_FAIL_RETURN_STATUS(result.response.sender_peer() == result.peer, K_INVALID,
+                                 "Coordinator bootstrap response sender does not match the target peer");
+        std::lock_guard<std::mutex> lock(bootstrapMutex_);
+        RETURN_IF_NOT_OK(RecordPeerObservationLocked(result.response, dependencies_.now()));
     }
     return Status::OK();
 }
 
-Status CoordinatorElectionManager::DecideStartPlan(const RaftBootstrapState &localState,
-                                                   const std::vector<std::string> &normalizedCandidates,
-                                                   const std::vector<BootstrapObservation> &observations,
-                                                   RaftStartPlan &startPlan) const
+std::vector<std::string> CoordinatorElectionManager::BuildBootstrapProbeTargetsLocked(
+    const std::vector<std::string> &normalizedCandidates, std::chrono::steady_clock::time_point now)
 {
-    struct CommittedConfigVote {
-        std::vector<std::string> peers;
-        size_t confirmations{ 0 };
-    };
+    std::vector<std::string> activeTargets;
+    std::vector<std::string> pendingTargets;
+    for (const auto &peer : normalizedCandidates) {
+        if (peer == options_.raftFlags.localAddress) {
+            continue;
+        }
+        const auto observation = bootstrapState_.knownPeers.find(peer);
+        if (observation != bootstrapState_.knownPeers.end()
+            && now - observation->second.lastSeen <= K_BOOTSTRAP_OBSERVATION_TTL) {
+            activeTargets.emplace_back(peer);
+        } else {
+            pendingTargets.emplace_back(peer);
+        }
+    }
 
+    const auto probeBudget = options_.membershipOptions.expectedMemberCount;
+    std::vector<std::string> targets;
+    targets.reserve(std::min(probeBudget, activeTargets.size() + pendingTargets.size()));
+    for (const auto &peer : activeTargets) {
+        if (targets.size() == probeBudget) {
+            return targets;
+        }
+        targets.emplace_back(peer);
+    }
+    if (pendingTargets.empty()) {
+        bootstrapProbeCursor_ = 0;
+        return targets;
+    }
+    const auto start = bootstrapProbeCursor_ % pendingTargets.size();
+    for (size_t offset = 0; offset < pendingTargets.size() && targets.size() < probeBudget; ++offset) {
+        targets.emplace_back(pendingTargets[(start + offset) % pendingTargets.size()]);
+        ++bootstrapProbeCursor_;
+    }
+    bootstrapProbeCursor_ %= pendingTargets.size();
+    return targets;
+}
+
+Status CoordinatorElectionManager::TryBuildStartPlan(RaftStartPlan &startPlan)
+{
+    std::lock_guard<std::mutex> lock(bootstrapMutex_);
+    const auto now = dependencies_.now();
+    const auto activePeers = BuildActivePeersLocked(now);
+    bool decided = false;
+    RETURN_IF_NOT_OK(TryBuildCommittedStartPlanLocked(activePeers, startPlan, decided));
+    if (decided) {
+        return Status::OK();
+    }
+    RETURN_IF_NOT_OK(TryBuildFreshStartPlanLocked(activePeers, now, startPlan, decided));
+    return decided ? Status::OK() : Status(K_NOT_READY, "Coordinator bootstrap plan is not confirmed");
+}
+
+Status CoordinatorElectionManager::TryBuildCommittedStartPlanLocked(const std::vector<std::string> &activePeers,
+                                                                    RaftStartPlan &startPlan, bool &decided) const
+{
     bool observedCommittedConfiguration = false;
     std::vector<CommittedConfigVote> committedConfigVotes;
-    for (const auto &observation : observations) {
-        if (observation.status.IsError() || observation.state.metadataState != RaftMetadataState::VALID
-            || observation.state.committedPeers.empty()) {
+    RecordCommittedConfigVote(options_.raftFlags.localAddress, bootstrapState_.committedPeers,
+                              observedCommittedConfiguration, committedConfigVotes);
+    for (const auto &peer : activePeers) {
+        if (peer == options_.raftFlags.localAddress) {
             continue;
         }
-        observedCommittedConfiguration = true;
-        if (!std::binary_search(observation.state.committedPeers.begin(), observation.state.committedPeers.end(),
-                                observation.peer)) {
-            continue;
-        }
-        auto vote = std::find_if(committedConfigVotes.begin(), committedConfigVotes.end(),
-                                 [&observation](const auto &v) { return v.peers == observation.state.committedPeers; });
-        if (vote == committedConfigVotes.end()) {
-            committedConfigVotes.emplace_back(CommittedConfigVote{ observation.state.committedPeers, 1 });
-        } else {
-            ++vote->confirmations;
-        }
+        const auto iter = bootstrapState_.knownPeers.find(peer);
+        RecordCommittedConfigVote(peer, iter->second.committedPeers, observedCommittedConfiguration,
+                                  committedConfigVotes);
     }
 
     const std::vector<std::string> *quorumConfirmedPeers = nullptr;
@@ -798,116 +774,252 @@ Status CoordinatorElectionManager::DecideStartPlan(const RaftBootstrapState &loc
     }
 
     if (quorumConfirmedPeers != nullptr) {
-        if (std::binary_search(quorumConfirmedPeers->begin(), quorumConfirmedPeers->end(), localState.localPeer)) {
+        if (std::binary_search(quorumConfirmedPeers->begin(), quorumConfirmedPeers->end(),
+                               options_.raftFlags.localAddress)) {
             startPlan = BootstrapPlan{ *quorumConfirmedPeers };
         } else {
             startPlan = WaitingToJoinPlan{};
         }
+        decided = true;
         return Status::OK();
     }
-
-    Status firstRetryableError;
-    Status firstBlockingObservationError;
-    std::vector<std::string> bootstrappableCandidates;
-    bootstrappableCandidates.reserve(normalizedCandidates.size());
-    for (const auto &observation : observations) {
-        if (observation.status.IsError()) {
-            if (firstRetryableError.IsOk()) {
-                firstRetryableError =
-                    Status(K_NOT_READY, "Coordinator bootstrap peer observation is not ready for " + observation.peer
-                                            + ": " + observation.status.ToString());
-            }
-            continue;
-        }
-
-        const auto &peerState = observation.state;
-        if (peerState.metadataState == RaftMetadataState::CORRUPT
-            || peerState.metadataState == RaftMetadataState::UNKNOWN) {
-            if (firstBlockingObservationError.IsOk()) {
-                firstBlockingObservationError =
-                    Status(K_NOT_READY, "Coordinator bootstrap peer metadata state is not ready for first bootstrap: "
-                                            + observation.peer);
-            }
-            continue;
-        }
-        if (peerState.metadataState == RaftMetadataState::VALID && !peerState.committedPeers.empty()) {
-            continue;
-        }
-        if (!IsSha256Hex(peerState.candidateDigest) || peerState.candidateCount != localState.candidateCount
-            || peerState.candidateDigest != localState.candidateDigest) {
-            if (firstBlockingObservationError.IsOk()) {
-                firstBlockingObservationError =
-                    Status(K_NOT_READY,
-                           "Coordinator bootstrap candidate observation digest does not match: " + observation.peer);
-            }
-            continue;
-        }
-        bootstrappableCandidates.emplace_back(observation.peer);
-    }
-
-    const size_t target = options_.membershipOptions.expectedMemberCount;
-    if (observedCommittedConfiguration) {
-        for (const auto &vote : committedConfigVotes) {
-            if (vote.peers.size() < target
-                && std::includes(normalizedCandidates.begin(), normalizedCandidates.end(), vote.peers.begin(),
-                                 vote.peers.end())
-                && std::binary_search(vote.peers.begin(), vote.peers.end(), localState.localPeer)) {
-                startPlan = BootstrapPlan{ vote.peers };
-                return Status::OK();
-            }
-        }
-        return Status(K_NOT_READY,
-                      "Coordinator bootstrap observed committed configuration but no configuration reached quorum");
-    }
-
-    if (firstBlockingObservationError.IsError()) {
-        return firstBlockingObservationError;
-    }
-    const size_t bootstrapQuorum = QuorumSize(target);
-    if (bootstrappableCandidates.size() < bootstrapQuorum) {
-        if (firstRetryableError.IsError()) {
-            return firstRetryableError;
-        }
-        return Status(K_NOT_READY,
-                      FormatString("Coordinator bootstrap has %zu bootstrappable candidates but requires quorum %zu",
-                                   bootstrappableCandidates.size(), bootstrapQuorum));
-    }
-
-    const size_t selectedCount = std::min(target, bootstrappableCandidates.size());
-    std::vector<std::string> selected(
-        bootstrappableCandidates.begin(),
-        bootstrappableCandidates.begin() + static_cast<std::vector<std::string>::difference_type>(selectedCount));
-    if (!std::binary_search(selected.begin(), selected.end(), localState.localPeer)) {
-        startPlan = WaitingToJoinPlan{};
-        return Status::OK();
-    }
-    startPlan = BootstrapPlan{ std::move(selected) };
+    CHECK_FAIL_RETURN_STATUS(!observedCommittedConfiguration, K_NOT_READY,
+                             "Coordinator bootstrap observed committed configuration without member quorum");
     return Status::OK();
 }
 
-Status CoordinatorElectionManager::ProbePeerBootstrapState(const std::string &peer, RaftBootstrapState &state) const
+Status CoordinatorElectionManager::TryBuildFreshStartPlanLocked(const std::vector<std::string> &activePeers,
+                                                                std::chrono::steady_clock::time_point now,
+                                                                RaftStartPlan &startPlan, bool &decided)
 {
-    RETURN_IF_NOT_OK(dependencies_.probePeer(peer, options_.raftFlags.electionTimeoutMs, state));
-    CHECK_FAIL_RETURN_STATUS(state.groupId == kCoordinatorRaftGroupId, K_INVALID,
-                             "Coordinator bootstrap response has the wrong group id");
-    braft::PeerId responsePeer;
-    RETURN_IF_NOT_OK(ParseCoordinatorRaftPeer(state.localPeer, responsePeer));
-    const auto normalizedResponsePeer = CoordinatorRaftPeerAddress(responsePeer);
-    CHECK_FAIL_RETURN_STATUS(normalizedResponsePeer == state.localPeer && normalizedResponsePeer == peer, K_INVALID,
-                             "Coordinator bootstrap response local peer does not match the probed endpoint");
-    CHECK_FAIL_RETURN_STATUS(state.expectedMemberCount == options_.membershipOptions.expectedMemberCount, K_INVALID,
-                             "Coordinator bootstrap response expected member count does not match");
-    if (!state.probeReady) {
-        return Status(K_NOT_READY, "Coordinator bootstrap peer probe is not ready");
+    const auto target = options_.membershipOptions.expectedMemberCount;
+    if (activePeers.size() != target) {
+        if (!bootstrapState_.frozenPlan) {
+            bootstrapState_.consistentView.reset();
+        }
+        return Status(
+            K_NOT_READY,
+            FormatString("Coordinator bootstrap observes %zu active peers but requires exactly %zu", activePeers.size(),
+                         target));
     }
-    std::vector<std::string> normalizedCommittedPeers;
-    RETURN_IF_NOT_OK(NormalizePeers(state.committedPeers, normalizedCommittedPeers));
-    CHECK_FAIL_RETURN_STATUS(normalizedCommittedPeers == state.committedPeers, K_INVALID,
-                             "Coordinator bootstrap response committed peers are not normalized, unique, and sorted");
-    CHECK_FAIL_RETURN_STATUS(state.metadataState == RaftMetadataState::VALID || normalizedCommittedPeers.empty(),
-                             K_INVALID, "Coordinator bootstrap response has committed peers without valid metadata");
-    state.committedPeers = std::move(normalizedCommittedPeers);
+    if (!HasCompleteConsistentViewLocked(activePeers)) {
+        if (!bootstrapState_.frozenPlan) {
+            bootstrapState_.consistentView.reset();
+        }
+        return Status(K_NOT_READY, "Coordinator bootstrap peers do not report one complete consistent view");
+    }
+
+    if (!bootstrapState_.consistentView || bootstrapState_.consistentView->peers != activePeers) {
+        bootstrapState_.consistentView = RaftBootstrapState::ConsistentView{ activePeers, now };
+        return Status(K_NOT_READY, "Coordinator bootstrap complete view entered the stability window");
+    }
+    if (now - bootstrapState_.consistentView->since < K_BOOTSTRAP_CONSISTENT_VIEW_DELAY) {
+        return Status(K_NOT_READY, "Coordinator bootstrap complete view is not stable for one second");
+    }
+    if (!bootstrapState_.frozenPlan) {
+        bootstrapState_.frozenPlan = BootstrapPlan{ activePeers };
+        bootstrapState_.phase = RaftBootstrapPhase::PROPOSED;
+        return Status(K_NOT_READY, "Coordinator bootstrap plan was frozen and awaits peer confirmation");
+    }
+    CHECK_FAIL_RETURN_STATUS(bootstrapState_.frozenPlan->initialPeers == activePeers, K_DATA_INCONSISTENCY,
+                             "Coordinator bootstrap active peers changed after the plan was frozen");
+    CHECK_FAIL_RETURN_STATUS(HasMatchingFrozenPlansLocked(activePeers), K_NOT_READY,
+                             "Coordinator bootstrap frozen plan is not confirmed by every member");
+    startPlan = *bootstrapState_.frozenPlan;
+    decided = true;
     return Status::OK();
+}
+
+Status CoordinatorElectionManager::ExchangeBootstrapObservation(const RaftBootstrapObservationPb &request,
+                                                                RaftBootstrapObservationPb &response)
+{
+    CHECK_FAIL_RETURN_STATUS(options_.bootstrapMode == RaftBootstrapMode::DISCOVERY_OBSERVATION, K_INVALID,
+                             "Coordinator bootstrap observation exchange is disabled for static initial peers");
+    {
+        std::lock_guard<std::mutex> lock(bootstrapMutex_);
+        RETURN_IF_NOT_OK(RecordPeerObservationLocked(request, dependencies_.now()));
+        RETURN_IF_NOT_OK(BuildLocalObservationLocked(dependencies_.now(), response));
+    }
+    return Status::OK();
+}
+
+Status CoordinatorElectionManager::RecordPeerObservationLocked(const RaftBootstrapObservationPb &observation,
+                                                               std::chrono::steady_clock::time_point now)
+{
+    std::string sender;
+    std::vector<std::string> peers;
+    std::vector<std::string> committedPeers;
+    RETURN_IF_NOT_OK(NormalizePeerObservation(observation, sender, peers, committedPeers));
+
+    RaftBootstrapPhase phase;
+    RETURN_IF_NOT_OK(ParsePeerObservationPhase(observation, sender, peers, phase));
+    bootstrapState_.knownPeers[sender] =
+        RaftBootstrapState::ReceivedObservation{ std::move(peers), std::move(committedPeers), phase, now };
+    return Status::OK();
+}
+
+Status CoordinatorElectionManager::NormalizePeerObservation(const RaftBootstrapObservationPb &observation,
+                                                            std::string &sender, std::vector<std::string> &peers,
+                                                            std::vector<std::string> &committedPeers) const
+{
+    if constexpr (sizeof(size_t) < sizeof(uint64_t)) {
+        CHECK_FAIL_RETURN_STATUS(observation.expected_member_count() <= std::numeric_limits<size_t>::max(), K_INVALID,
+                                 "Coordinator bootstrap expected member count exceeds size_t");
+    }
+    CHECK_FAIL_RETURN_STATUS(
+        observation.expected_member_count() == options_.membershipOptions.expectedMemberCount, K_INVALID,
+        "Coordinator bootstrap expected member count does not match");
+
+    braft::PeerId senderPeer;
+    RETURN_IF_NOT_OK(ParseCoordinatorRaftPeer(observation.sender_peer(), senderPeer));
+    sender = CoordinatorRaftPeerAddress(senderPeer);
+    CHECK_FAIL_RETURN_STATUS(
+        sender == observation.sender_peer() && sender != options_.raftFlags.localAddress, K_INVALID,
+        "Coordinator bootstrap sender is invalid");
+
+    const std::vector<std::string> wirePeers(observation.peers().begin(), observation.peers().end());
+    RETURN_IF_NOT_OK(NormalizePeers(wirePeers, peers));
+    CHECK_FAIL_RETURN_STATUS(peers == wirePeers, K_INVALID,
+                             "Coordinator bootstrap peers are not normalized and unique");
+    CHECK_FAIL_RETURN_STATUS(peers.size() <= options_.membershipOptions.expectedMemberCount, K_INVALID,
+                             "Coordinator bootstrap observation exceeds the expected member count");
+
+    const std::vector<std::string> wireCommittedPeers(observation.committed_peers().begin(),
+                                                      observation.committed_peers().end());
+    RETURN_IF_NOT_OK(NormalizePeers(wireCommittedPeers, committedPeers));
+    CHECK_FAIL_RETURN_STATUS(committedPeers == wireCommittedPeers, K_INVALID,
+                             "Coordinator bootstrap committed peers are not normalized and unique");
+    CHECK_FAIL_RETURN_STATUS(
+        committedPeers.size() <= options_.membershipOptions.expectedMemberCount + 1, K_INVALID,
+        "Coordinator bootstrap committed configuration exceeds the supported transition size");
+    return Status::OK();
+}
+
+Status CoordinatorElectionManager::ParsePeerObservationPhase(const RaftBootstrapObservationPb &observation,
+                                                             const std::string &sender,
+                                                             const std::vector<std::string> &peers,
+                                                             RaftBootstrapPhase &phase) const
+{
+    switch (observation.phase()) {
+        case RAFT_BOOTSTRAP_OBSERVING:
+            phase = RaftBootstrapPhase::OBSERVING;
+            CHECK_FAIL_RETURN_STATUS(std::binary_search(peers.begin(), peers.end(), sender), K_INVALID,
+                                     "Coordinator bootstrap observing view does not contain the sender");
+            break;
+        case RAFT_BOOTSTRAP_PROPOSED:
+            phase = RaftBootstrapPhase::PROPOSED;
+            CHECK_FAIL_RETURN_STATUS(
+                peers.size() == options_.membershipOptions.expectedMemberCount
+                    && std::binary_search(peers.begin(), peers.end(), sender),
+                K_INVALID, "Coordinator bootstrap frozen plan is incomplete or excludes the sender");
+            break;
+        case RAFT_BOOTSTRAP_STARTED:
+            phase = RaftBootstrapPhase::STARTED;
+            CHECK_FAIL_RETURN_STATUS(
+                peers.empty()
+                    || (peers.size() == options_.membershipOptions.expectedMemberCount
+                        && std::binary_search(peers.begin(), peers.end(), sender)),
+                K_INVALID, "Coordinator bootstrap frozen plan is incomplete or excludes the sender");
+            break;
+        case RAFT_BOOTSTRAP_TERMINAL:
+            phase = RaftBootstrapPhase::TERMINAL;
+            break;
+        default:
+            return Status(K_INVALID, "Coordinator bootstrap observation has an unknown phase");
+    }
+    return Status::OK();
+}
+
+Status CoordinatorElectionManager::BuildLocalObservationLocked(std::chrono::steady_clock::time_point now,
+                                                               RaftBootstrapObservationPb &observation) const
+{
+    observation.Clear();
+    observation.set_sender_peer(options_.raftFlags.localAddress);
+    observation.set_expected_member_count(options_.membershipOptions.expectedMemberCount);
+    RaftBootstrapObservationPhasePb phase = RAFT_BOOTSTRAP_OBSERVING;
+    const std::vector<std::string> *peers = nullptr;
+    auto observedPeers = BuildActivePeersLocked(now);
+    switch (bootstrapState_.phase) {
+        case RaftBootstrapPhase::OBSERVING:
+            peers = &observedPeers;
+            break;
+        case RaftBootstrapPhase::PROPOSED:
+            phase = RAFT_BOOTSTRAP_PROPOSED;
+            CHECK_FAIL_RETURN_STATUS(bootstrapState_.frozenPlan.has_value(), K_DATA_INCONSISTENCY,
+                                     "Coordinator bootstrap proposed phase has no frozen plan");
+            peers = &bootstrapState_.frozenPlan->initialPeers;
+            break;
+        case RaftBootstrapPhase::STARTED:
+            phase = RAFT_BOOTSTRAP_STARTED;
+            if (bootstrapState_.frozenPlan) {
+                peers = &bootstrapState_.frozenPlan->initialPeers;
+            } else {
+                peers = nullptr;
+            }
+            break;
+        case RaftBootstrapPhase::TERMINAL:
+            phase = RAFT_BOOTSTRAP_TERMINAL;
+            peers = &observedPeers;
+            break;
+    }
+    observation.set_phase(phase);
+    if (peers != nullptr) {
+        for (const auto &peer : *peers) {
+            observation.add_peers(peer);
+        }
+    }
+    for (const auto &peer : bootstrapState_.committedPeers) {
+        observation.add_committed_peers(peer);
+    }
+    return Status::OK();
+}
+
+std::vector<std::string> CoordinatorElectionManager::BuildActivePeersLocked(
+    std::chrono::steady_clock::time_point now) const
+{
+    std::vector<std::string> activePeers{ options_.raftFlags.localAddress };
+    activePeers.reserve(bootstrapState_.knownPeers.size() + 1);
+    for (const auto &[peer, observation] : bootstrapState_.knownPeers) {
+        if (now - observation.lastSeen <= K_BOOTSTRAP_OBSERVATION_TTL) {
+            activePeers.emplace_back(peer);
+        }
+    }
+    std::sort(activePeers.begin(), activePeers.end());
+    return activePeers;
+}
+
+bool CoordinatorElectionManager::HasCompleteConsistentViewLocked(
+    const std::vector<std::string> &activePeers) const
+{
+    for (const auto &peer : activePeers) {
+        if (peer == options_.raftFlags.localAddress) {
+            continue;
+        }
+        const auto iter = bootstrapState_.knownPeers.find(peer);
+        if (iter == bootstrapState_.knownPeers.end()
+            || iter->second.phase == RaftBootstrapPhase::TERMINAL
+            || iter->second.peers != activePeers) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool CoordinatorElectionManager::HasMatchingFrozenPlansLocked(const std::vector<std::string> &activePeers) const
+{
+    for (const auto &peer : activePeers) {
+        if (peer == options_.raftFlags.localAddress) {
+            continue;
+        }
+        const auto iter = bootstrapState_.knownPeers.find(peer);
+        if (iter == bootstrapState_.knownPeers.end()
+            || (iter->second.phase != RaftBootstrapPhase::PROPOSED
+                && iter->second.phase != RaftBootstrapPhase::STARTED)
+            || iter->second.peers != bootstrapState_.frozenPlan->initialPeers) {
+            return false;
+        }
+    }
+    return true;
 }
 
 CoordinatorRaftEventCallbacks CoordinatorElectionManager::BuildManagedCallbacks()
@@ -987,13 +1099,12 @@ Status CoordinatorElectionManager::StartOwnedComponents(RaftStartPlan startPlan,
     const auto planName = RaftStartPlanName(startPlan);
     const auto planPeers = RaftStartPlanPeers(startPlan);
     LOG(INFO) << "COORDINATOR_RAFT_START_PLAN current_addr=" << options_.raftFlags.localAddress
-              << " local_peer=" << snapshot.localPeer << " plan=" << planName
+              << " local_peer=" << options_.raftFlags.localAddress << " plan=" << planName
               << " metadata_state=" << RaftMetadataStateName(metadataState)
               << " expected_member_count=" << options_.membershipOptions.expectedMemberCount
-              << " candidate_count=" << snapshot.candidateCount << " candidate_digest=" << snapshot.candidateDigest
               << " committed_peers=" << VectorToString(snapshot.committedPeers)
               << " plan_peers=" << VectorToString(planPeers);
-    CoordinatorRaftOptions raftOptions{ snapshot.localPeer, options_.raftFlags.dataDir,
+    CoordinatorRaftOptions raftOptions{ options_.raftFlags.localAddress, options_.raftFlags.dataDir,
                                         options_.raftFlags.heartbeatIntervalMs, options_.raftFlags.electionTimeoutMs,
                                         std::move(startPlan) };
 
@@ -1019,9 +1130,6 @@ Status CoordinatorElectionManager::StartOwnedComponents(RaftStartPlan startPlan,
         terminal = bootstrapState_.phase == RaftBootstrapPhase::TERMINAL;
         if (terminal) {
             terminalStatus = bootstrapStatus_;
-        } else {
-            bootstrapState_.metadataState = RaftMetadataState::VALID;
-            bootstrapState_.probeReady = true;
         }
     }
     bootstrapCv_.notify_all();
@@ -1078,7 +1186,6 @@ Status CoordinatorElectionManager::StartOwnedComponents(RaftStartPlan startPlan,
                     membership_ = std::move(membership);
                 }
                 bootstrapState_.phase = RaftBootstrapPhase::STARTED;
-                bootstrapState_.statusCode = static_cast<int32_t>(K_OK);
             }
         }
     }
@@ -1101,19 +1208,6 @@ Status CoordinatorElectionManager::StartOwnedComponents(RaftStartPlan startPlan,
     return Status::OK();
 }
 
-void CoordinatorElectionManager::PublishBootstrapState(RaftBootstrapState state)
-{
-    {
-        std::lock_guard<std::mutex> lock(bootstrapMutex_);
-        if (bootstrapState_.phase == RaftBootstrapPhase::TERMINAL) {
-            return;
-        }
-        state.committedPeers = bootstrapState_.committedPeers;
-        bootstrapState_ = std::move(state);
-    }
-    bootstrapCv_.notify_all();
-}
-
 bool CoordinatorElectionManager::GetBootstrapTerminalStatus(Status &status) const
 {
     std::lock_guard<std::mutex> lock(bootstrapMutex_);
@@ -1134,8 +1228,7 @@ void CoordinatorElectionManager::RecordBootstrapTerminalStatus(Status status)
         if (bootstrapState_.phase != RaftBootstrapPhase::TERMINAL) {
             bootstrapStatus_ = Status(statusCode, "");
             bootstrapState_.phase = RaftBootstrapPhase::TERMINAL;
-            bootstrapState_.statusCode = static_cast<int32_t>(statusCode);
-            localPeer = bootstrapState_.localPeer;
+            localPeer = options_.raftFlags.localAddress;
             firstTerminal = true;
         }
     }
@@ -1148,27 +1241,12 @@ void CoordinatorElectionManager::RecordBootstrapTerminalStatus(Status status)
     }
 }
 
-bool CoordinatorElectionManager::WaitForBootstrapRetryOrStop(std::chrono::milliseconds &baseDelay)
+bool CoordinatorElectionManager::WaitForBootstrapRetryOrStop()
 {
-    auto retryDelay = baseDelay;
-    try {
-        retryDelay = dependencies_.jitterBootstrapRetry(baseDelay);
-    } catch (const std::exception &exception) {
-        LOG_FIRST_N(WARNING, 1) << "Failed to jitter Coordinator bootstrap retry delay, using base delay: "
-                                << exception.what();
-    } catch (...) {
-        LOG_FIRST_N(WARNING, 1)
-            << "Failed to jitter Coordinator bootstrap retry delay with an unknown exception, using base delay";
-    }
-    baseDelay = std::min(baseDelay * 2, kMaxBootstrapRetryDelay);
-
     std::unique_lock<std::mutex> lock(bootstrapMutex_);
-    const auto observedWakeGeneration = bootstrapWakeGeneration_;
     ++bootstrapRetryWaiters_;
     bootstrapCv_.notify_all();
-    bootstrapCv_.wait_for(lock, retryDelay, [this, observedWakeGeneration] {
-        return bootstrapStopRequested_ || bootstrapWakeGeneration_ != observedWakeGeneration;
-    });
+    bootstrapCv_.wait_for(lock, kBootstrapExchangeInterval, [this] { return bootstrapStopRequested_; });
     --bootstrapRetryWaiters_;
     bootstrapCv_.notify_all();
     return bootstrapStopRequested_;

@@ -383,7 +383,7 @@ private:
 class CoordinatorServiceElectionTest : public CoordinatorServiceElectionTestBase,
                                        public testing::WithParamInterface<BusinessRpc> {};
 
-TEST_F(CoordinatorServiceElectionTestBase, SingleExpectedMemberDisablesBootstrapRpc)
+TEST_F(CoordinatorServiceElectionTestBase, SingleExpectedMemberDisablesBootstrapExchangeRpc)
 {
     const auto caseDeadline = std::chrono::steady_clock::now() + kCaseBudget;
     auto discovery = std::make_shared<CountingCoordinatorDiscovery>(endpoint_);
@@ -392,16 +392,14 @@ TEST_F(CoordinatorServiceElectionTestBase, SingleExpectedMemberDisablesBootstrap
     auto channel = CreateBusinessChannel(caseDeadline);
     ASSERT_NE(channel, nullptr);
     coordinator::CoordinatorService_BrpcGenericStub stub(channel.get());
-    coordinator::GetRaftBootstrapStateReqPb request;
-    request.set_group_id(coordinator::kCoordinatorRaftGroupId);
-    coordinator::GetRaftBootstrapStateRspPb response;
-    const auto bootstrapStatus = stub.GetRaftBootstrapState(request, response);
+    coordinator::RaftBootstrapObservationPb request;
+    request.set_sender_peer("127.0.0.1:31502");
+    request.set_expected_member_count(1);
+    request.add_peers(request.sender_peer());
+    coordinator::RaftBootstrapObservationPb response;
+    const auto bootstrapStatus = stub.ExchangeBootstrapObservation(request, response);
     EXPECT_EQ(bootstrapStatus.GetCode(), K_INVALID) << bootstrapStatus.ToString();
     EXPECT_EQ(discovery->CallCount(), 0U);
-
-    request.set_group_id("wrong-coordinator-raft-group");
-    const auto wrongGroupStatus = stub.GetRaftBootstrapState(request, response);
-    EXPECT_EQ(wrongGroupStatus.GetCode(), K_INVALID) << wrongGroupStatus.ToString();
     ASSERT_NO_FATAL_FAILURE(ShutdownAndReleaseService(caseDeadline));
 }
 

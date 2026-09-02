@@ -185,36 +185,6 @@ CoordinatorRecoveryStatePb ToPbRecoveryState(TopologyRecoveryState state)
     return COORDINATOR_RECOVERING;
 }
 
-RaftMetadataStatePb ToPbRaftMetadataState(RaftMetadataState state)
-{
-    switch (state) {
-        case RaftMetadataState::ABSENT:
-            return RAFT_METADATA_ABSENT;
-        case RaftMetadataState::VALID:
-            return RAFT_METADATA_VALID;
-        case RaftMetadataState::CORRUPT:
-            return RAFT_METADATA_CORRUPT;
-        case RaftMetadataState::UNKNOWN:
-            return RAFT_METADATA_UNKNOWN;
-    }
-    return RAFT_METADATA_UNKNOWN;
-}
-
-RaftBootstrapPhasePb ToPbRaftBootstrapPhase(RaftBootstrapPhase phase)
-{
-    switch (phase) {
-        case RaftBootstrapPhase::OBSERVING:
-            return RAFT_BOOTSTRAP_OBSERVING;
-        case RaftBootstrapPhase::RETRYING:
-            return RAFT_BOOTSTRAP_RETRYING;
-        case RaftBootstrapPhase::STARTED:
-            return RAFT_BOOTSTRAP_STARTED;
-        case RaftBootstrapPhase::TERMINAL:
-            return RAFT_BOOTSTRAP_TERMINAL;
-    }
-    return RAFT_BOOTSTRAP_TERMINAL;
-}
-
 ReportTopologyRecoveryCandidateRspPb::ResultPb ToPbReportResult(TopologyRecoveryReportResult result)
 {
     switch (result) {
@@ -234,11 +204,13 @@ ReportTopologyRecoveryCandidateRspPb::ResultPb ToPbReportResult(TopologyRecovery
 CoordinatorServiceImpl::CoordinatorServiceImpl(const HostPort &localAddress,
                                                std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery,
                                                size_t expectedMemberCount, CoordinatorRaftFlags raftFlags,
-                                               bthread_tag_t watchDispatcherBthreadTag)
+                                               bthread_tag_t watchDispatcherBthreadTag,
+                                               RaftBootstrapMode bootstrapMode)
     : CoordinatorService(localAddress),
       coordinatorAddr_(localAddress),
       coordinatorDiscovery_(std::move(coordinatorDiscovery)),
       expectedMemberCount_(expectedMemberCount),
+      bootstrapMode_(bootstrapMode),
       raftFlags_(std::move(raftFlags)),
       watchDispatcherBthreadTag_(watchDispatcherBthreadTag)
 {
@@ -272,6 +244,7 @@ Status CoordinatorServiceImpl::BuildElectionStartupContext(CoordinatorElectionOp
         CoordinatorMembershipOptions{ expectedMemberCount_, std::chrono::milliseconds(raftFlags_.healthCheckIntervalMs),
                                       std::chrono::milliseconds(raftFlags_.memberFailureGraceMs),
                                       std::chrono::milliseconds(raftFlags_.discoveryRetryIntervalMs) };
+    options.bootstrapMode = bootstrapMode_;
     return Status::OK();
 }
 
@@ -1306,49 +1279,32 @@ Status CoordinatorServiceImpl::GetCoordinatorId(const GetCoordinatorIdReqPb &req
     return Status::OK();
 }
 
-Status CoordinatorServiceImpl::GetRaftBootstrapState(const GetRaftBootstrapStateReqPb &req,
-                                                     GetRaftBootstrapStateRspPb &rsp)
+Status CoordinatorServiceImpl::ExchangeBootstrapObservation(const RaftBootstrapObservationPb &req,
+                                                            RaftBootstrapObservationPb &rsp)
 {
-    METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_GET_RAFT_BOOTSTRAP_STATE_REQUEST_TOTAL);
-    CHECK_FAIL_RETURN_STATUS(req.group_id() == kCoordinatorRaftGroupId, K_INVALID,
-                             "Coordinator bootstrap request has the wrong Raft group id");
+    METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_EXCHANGE_BOOTSTRAP_OBSERVATION_REQUEST_TOTAL);
 #ifdef WITH_TESTS
     if (raftBootstrapHandlerEnteredHook_) {
         raftBootstrapHandlerEnteredHook_();
     }
 #endif
 
-    RaftBootstrapState bootstrapState;
     {
         std::lock_guard<std::mutex> lock(lifecycleMutex_);
         const auto lifecycleState = servingState_.load(std::memory_order_acquire);
         if (lifecycleState == ServingState::STOPPING || lifecycleState == ServingState::STOPPED) {
             return Status(K_SHUTTING_DOWN, "Coordinator bootstrap state is unavailable during shutdown");
         }
+        CHECK_FAIL_RETURN_STATUS(IsElectionConfigured(), K_INVALID, "Coordinator election is disabled");
+        CHECK_FAIL_RETURN_STATUS(electionManager_ != nullptr, K_NOT_READY,
+                                 "Coordinator election manager is not published");
+        RETURN_IF_NOT_OK(electionManager_->ExchangeBootstrapObservation(req, rsp));
     }
-    CHECK_FAIL_RETURN_STATUS(IsElectionConfigured(), K_INVALID, "Coordinator election is disabled");
-    CHECK_FAIL_RETURN_STATUS(electionManager_ != nullptr, K_NOT_READY, "Coordinator election manager is not published");
-    RETURN_IF_NOT_OK(electionManager_->GetBootstrapState(bootstrapState));
 #ifdef WITH_TESTS
     if (raftBootstrapSnapshotCopiedHook_) {
         raftBootstrapSnapshotCopiedHook_();
     }
 #endif
-
-    GetRaftBootstrapStateRspPb localRsp;
-    localRsp.set_probe_ready(bootstrapState.probeReady);
-    localRsp.set_group_id(bootstrapState.groupId);
-    localRsp.set_local_peer(bootstrapState.localPeer);
-    localRsp.set_expected_member_count(static_cast<uint64_t>(bootstrapState.expectedMemberCount));
-    localRsp.set_metadata_state(ToPbRaftMetadataState(bootstrapState.metadataState));
-    localRsp.set_candidate_count(static_cast<uint64_t>(bootstrapState.candidateCount));
-    localRsp.set_candidate_digest(bootstrapState.candidateDigest);
-    localRsp.set_phase(ToPbRaftBootstrapPhase(bootstrapState.phase));
-    localRsp.set_status_code(bootstrapState.statusCode);
-    for (const auto &peer : bootstrapState.committedPeers) {
-        localRsp.add_committed_peers(peer);
-    }
-    rsp = std::move(localRsp);
     return Status::OK();
 }
 

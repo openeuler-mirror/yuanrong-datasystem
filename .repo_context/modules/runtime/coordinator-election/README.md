@@ -48,7 +48,8 @@ sequenceDiagram
     R->>S: StartElectionManager()
     S->>E: Construct, publish, and Start bootstrap worker
     S->>S: Publish lifecycle RUNNING
-    E->>D: Bootstrap Discovery and peer probes, or local-data recovery
+    E->>D: Read bootstrap exchange targets, or recover local data
+    E->>E: Exchange full observations until one stable plan is confirmed
     E->>N: Start Node after a plan converges
     E->>M: Start Membership
     R->>R: Event loop
@@ -65,7 +66,7 @@ sequenceDiagram
 
 `CoordinatorOptions` carries a config path, Discovery provider, expected member count, and paired lifecycle callbacks. The production `CoordinatorServer` façade rejects an empty parameterized path and owns one Runtime. Runtime passes a non-empty path directly to `FlagManager::ParseConfigFile`; parse failures return the `K_INVALID` error built from the path and parser message. Runtime does not add path-form or file-metadata checks.
 
-The no-argument `CoordinatorServer::InitAndRun()` / `CoordinatorRuntime::InitAndRun()` path is the dscli-compatible entry. When `coordinator_raft_initial_peers` is empty, it constructs the Service with no Discovery and member count `0`, so the Coordinator runs in single-node no-election mode; the Runtime still calls `StartElectionManager()`, and the Service returns `OK` without publishing an election Manager. When `coordinator_raft_initial_peers` is non-empty, Runtime builds `StaticCoordinatorDiscovery` from that exact list; if the resulting member count configures election, startup uses the same Service `StartElectionManager()` path as parameterized Runtime startup. Direct `CoordinatorRuntime` startup with an empty config path remains restricted to internal in-process tests for the parameterized overload. Each Runtime starts Coordinator logging and immediately records the build's Git commit and branch before processing startup options. After parsing succeeds or is skipped, each startup attempt calls `GetRaftFlags()` exactly once and captures the config-log snapshot before local-address parsing and Service construction. In-process multi-Runtime fixtures set shared common flags before launching any Runtime, do not mutate them while any Runtime is active, and restore them only after every Runtime has stopped and joined. Endpoint, exclusive Raft data root, Raft heartbeat/election timing, Discovery retry timing, member failure grace, and internal membership timing are isolated by each Runtime's `GetRaftFlags()` snapshot. Production runs one Coordinator Runtime per process.
+The no-argument `CoordinatorServer::InitAndRun()` / `CoordinatorRuntime::InitAndRun()` path is the dscli-compatible entry. When `coordinator_raft_initial_peers` is empty, it constructs the Service with no Discovery and member count `0`, so the Coordinator runs in single-node no-election mode; the Runtime still calls `StartElectionManager()`, and the Service returns `OK` without publishing an election Manager. When `coordinator_raft_initial_peers` is non-empty, Runtime builds `StaticCoordinatorDiscovery` from that exact list and explicitly selects static-initial-peer bootstrap. The Manager starts braft from the complete normalized list without observation exchange. Direct `CoordinatorRuntime` startup with an empty config path remains restricted to internal in-process tests for the parameterized overload. Each Runtime starts Coordinator logging and immediately records the build's Git commit and branch before processing startup options. After parsing succeeds or is skipped, each startup attempt calls `GetRaftFlags()` exactly once and captures the config-log snapshot before local-address parsing and Service construction. In-process multi-Runtime fixtures set shared common flags before launching any Runtime, do not mutate them while any Runtime is active, and restore them only after every Runtime has stopped and joined. Endpoint, exclusive Raft data root, Raft heartbeat/election timing, Discovery retry timing, member failure grace, and internal membership timing are isolated by each Runtime's `GetRaftFlags()` snapshot. Production runs one Coordinator Runtime per process.
 
 `CoordinatorRuntime::UpdateConfig()` owns one long-lived `DynamicFlagConfig` and `DynamicConfigUpdater`. It accepts
 string-valued JSON objects only after Service `Init()`/`Start()`, `onStart`, and election-manager startup succeed. The
@@ -97,7 +98,13 @@ Updates are process-local and are not distributed or persisted.
 
 User-facing Coordinator election timing flags are `coordinator_raft_heartbeat_interval_ms`, `coordinator_raft_election_timeout_ms`, `coordinator_discovery_retry_interval_ms`, and `coordinator_member_failure_grace_ms`. `coordinator_raft_heartbeat_interval_ms` defaults to 100 ms and must be in `[10, 10000]`; `coordinator_raft_election_timeout_ms` defaults to 1000 ms and must be an integer multiple of heartbeat with a ratio in `[5, 10]`. Discovery retry defaults to 5000 ms and member failure grace defaults to 10000 ms.
 
-Fresh-bootstrap `K_NOT_READY` observations use an internal jittered exponential retry with base delays `100, 200, 400, 800, 1000...` ms and ±20% jitter. This retry belongs only to the bootstrap worker. `coordinator_discovery_retry_interval_ms` continues to govern Membership Discovery after Node startup, so fast cold-start convergence does not increase steady-state polling.
+Fresh bootstrap exchanges `RaftBootstrapObservationPb` every 100 ms with a 100 ms RPC timeout. Received observations
+remain active for 1 second, and a complete consistent view must remain unchanged for 1 second before its plan can be
+frozen. Discovery only supplies probe targets: an unreachable stale Discovery endpoint does not invalidate an Exchange
+round or enter the active view. Each round prioritizes active peers and probes at most `N` targets concurrently, rotating
+through other Discovery targets so stale entries cannot extend the round linearly. Per-peer BRPC channels are reused for
+the Manager lifetime. Successful responses are validated and recorded exactly like inbound requests.
+`coordinator_discovery_retry_interval_ms` continues to govern Membership Discovery after Node startup.
 
 The repository's braft patch initializes the follower election timer with the sum of the configured election timeout and braft's clock-drift margin, while the Leader stepdown timer retains the configured election timeout. Each accepted current-Leader `AppendEntries` renews the follower lease and resets the election timer from the same observation, keeping the lease and election timer aligned.
 
@@ -105,8 +112,16 @@ The membership health-check interval and bootstrap retry-warning interval are in
 
 ## Bootstrap Convergence And Serving Gate
 
-- `expectedMemberCount = N` is the voting-member target, not an exact fresh-bootstrap candidate count. A fresh cluster may bootstrap once the normalized candidate count reaches `floor(N / 2) + 1`; the initial committed configuration need not already contain `N` members.
-- Candidate snapshots are endpoint-normalized, sorted, deduplicated, and SHA-256 digested. From quorum through `N`, every bootstrappable candidate is used. Above `N`, the Manager still probes every visible candidate before deterministically selecting the first `N` bootstrappable candidates; an unselected fresh node waits for an authoritative committed configuration.
+- SO-integrated startup through `CoordinatorOptions` uses observation bootstrap. Here `expectedMemberCount = N` is the
+  exact fresh-bootstrap member count: every one of the `N` members must exchange the same normalized complete view,
+  keep it stable for 1 second, and confirm the same frozen plan.
+- Dscli startup with `coordinator_raft_initial_peers` uses the complete normalized static list directly as the immutable
+  bootstrap plan and does not exchange bootstrap observations. With five configured peers, three running processes can
+  form the braft majority and elect a Leader.
+- Each request records the sender's normalized view and the receiver's local `steady_clock` receipt time. The active
+  local view is the local endpoint plus senders observed within the last second. More or fewer than exactly `N` active
+  endpoints, duplicate or unsorted wire lists, and differing peer views all prevent fresh bootstrap; the Manager never
+  truncates the view to a sorted top-`N` subset.
 - Local metadata probing treats an absent data root, missing persistence paths, and empty regular persistence files as no
   persistence evidence. After the complete layout is checked and no recognized non-empty regular persistence file
   exists, the probe revalidates and removes only the recognized empty persistence files before publishing `ABSENT`, so
@@ -115,19 +130,29 @@ The membership health-check interval and bootstrap retry-warning interval are in
   `raft_meta`, `log_meta`, or correctly named log-segment file selects `VALID` and `RecoverPlan`, leaving content
   consistency to braft. Recognized path type conflicts return `K_INVALID`; other filesystem-access failures return
   `K_NOT_READY`; both are terminal and fail-closed.
-- Before first bootstrap or rebuild, the Manager probes every normalized Discovery-visible candidate, including candidates after the first `N`, and collects the complete observation set before deciding. Candidate shortage does not skip this probe phase.
+- Discovery supplies only exchange targets. Every bootstrap worker prioritizes active peers, then rotates through other
+  normalized targets within the bounded concurrent fanout. Fresh-plan decisions use validated request and successful
+  response observations with their local receive times.
 - Valid non-empty committed configurations take precedence only after the same normalized committed peer list is confirmed by that committed list's own quorum (`size / 2 + 1`), counting only reports from peers that are themselves members of that committed list. A quorum-confirmed configuration containing an `ABSENT` local endpoint becomes the explicit `BootstrapPlan` used to rebuild local election/membership metadata; a quorum-confirmed configuration excluding local produces `WaitingToJoinPlan`.
-- Observed committed configurations without any quorum-confirmed peer list are retryable `K_NOT_READY`; conflicting quorum-confirmed configurations are also retryable `K_NOT_READY`, including the expected `N` versus `N + 1` observation window during Add-before-Remove membership replacement. The narrow exception is target-quorum fresh bootstrap (`committed_size < N`): if a valid peer already reports a committed peer subset of the current normalized candidates and that subset includes the local `ABSENT` endpoint, the local peer may rebuild from that same subset to converge with the first peer that won the bootstrap race.
-- A successful remote probe reporting `UNKNOWN` or `CORRUPT` metadata is non-authoritative and retryable: it prevents first bootstrap with `K_NOT_READY` while the same Manager worker remains active.
-- Only when no visible candidate reports an authoritative committed configuration may a fresh set bootstrap. A peer is bootstrappable only after it is observable, has fresh `ABSENT` metadata, and reports the same full candidate count/digest plus immutable group/target identity. Peer unavailability excludes that peer from first-bootstrap selection and does not block when a fresh target majority remains; successful invalid observations, remote `UNKNOWN`/`CORRUPT` metadata, or digest disagreement keep the lifecycle active with no committed configuration and the business gate closed.
-- After braft successfully initializes a non-empty `BootstrapPlan`, `CoordinatorRaftNode` publishes lifecycle `STARTED` but does not synthesize the normalized `initial_conf` as committed configuration index 0. Only braft configuration callbacks publish committed membership. While no candidate reports a real non-empty committed configuration, an observable peer with `VALID` metadata but an empty committed configuration remains bootstrappable only when its candidate count/digest and immutable group/target identity match the current fresh bootstrap view. This lets staggered peers start the same plan without treating one node's local initialization as a committed membership decision.
+- Observed committed configurations without any quorum-confirmed peer list are retryable `K_NOT_READY`; conflicting
+  quorum-confirmed configurations are also retryable. A committed configuration always takes priority over a fresh
+  observation plan.
+- Once one complete view has remained stable for 1 second, the Manager freezes the full `N`-member `BootstrapPlan` and
+  publishes `PROPOSED`. It starts braft only after every plan member publishes `PROPOSED` or `STARTED` with exactly that
+  plan. A frozen-plan conflict fails closed: bootstrap does not recalculate the plan, change a vote, or invoke
+  `reset_peers`.
+- After braft successfully initializes a non-empty `BootstrapPlan`, `CoordinatorRaftNode` publishes lifecycle `STARTED`
+  but does not synthesize the normalized `initial_conf` as committed configuration index 0. Only braft configuration
+  callbacks publish committed membership.
 - `CoordinatorMembershipManager` treats committed configuration as the only membership authority; Add/Remove callbacks are diagnostic-only and capture no Manager state.
 - `CoordinatorRaftNode` admits at most one in-flight Add/Remove through its operation drain token. While that token is held, `CoordinatorMembershipManager` skips reconciliation before reading committed status; completion publishes committed configuration before releasing the token, so the next round rebuilds its decision from the new B. A concurrent submission still returns `K_TRY_AGAIN`, and Node shutdown stops new admission before draining the accepted operation.
 - It fills a bootstrap vacancy with Add-only reconciliation. For replacement, it commits the waiting candidate at `N + 1` before removing the confirmed failed follower.
 - Eligible candidates rotate by never-attempted first, then oldest Add-attempt timestamp. Replacement rollback requires committed-state proof that the candidate was submitted by the current term's replacement intent.
 - Service lifecycle `RUNNING` means the endpoint is active and the Manager's background bootstrap worker has started; it is not election completion or business readiness. Only the current braft Leader has `raftServing_ = true`; followers, waiting candidates, bootstrap waiters, and quorum-lost nodes return `K_NOT_READY` from business RPCs.
 
-The first-bootstrap Discovery safety premise is one globally convergent deployment control domain. Mutually invisible candidate sets that independently reach target majority are outside the supported bootstrap contract.
+The first-bootstrap safety premise is that all configured members can overlap for the observation, stability, and
+proposal-confirmation windows. Partial availability before the first committed configuration is intentionally traded
+for deterministic full-plan agreement.
 
 ## Discovery Callback Contract
 
@@ -139,9 +164,17 @@ The Runtime calls `onStart` after the shared endpoint is listening and before el
 
 ## Bootstrap Diagnostics And Wire Compatibility
 
-`GetRaftBootstrapState` bypasses the Leader-only business gate and copies the Manager-owned value snapshot. Its public phase is `OBSERVING`, `RETRYING`, `STARTED`, or `TERMINAL`; `status_code` is the stable numeric `StatusCode`. `TERMINAL` is one-way and preserves the first terminal status: later observation, retry, Node startup, Membership startup, or ownership publication cannot replace it with another phase/status. Unpublished Node/Membership instances are cleaned up outside the bootstrap mutex; if ownership was already published before a later terminal callback, the Manager remains shutdown-safe and the business gate stays closed. The response deliberately has no raw Status text or Raft data-directory field.
+`ExchangeBootstrapObservation` bypasses the Leader-only business gate and uses the same minimal message for request and
+response: sender, expected count, peers, phase, and committed peers. `peers` is the current view in `OBSERVING` and the
+frozen plan in `PROPOSED`. A fresh-bootstrap `STARTED` node continues to publish its frozen plan, while a recovered
+`STARTED` node leaves `peers` empty and publishes its independently bounded committed configuration in
+`committed_peers`; this permits the membership manager's transient `N + 1` replacement configuration. Receiver-local
+timestamps, stability state, terminal Status details, and local metadata state never cross the wire.
 
-The Coordinator protobuf service order is a wire contract for the custom ZMQ transport. Legacy `ReportTopologyRecoveryCandidate` and `GetClusterRawSnapshot` remain method indexes 7 and 8; the appended `GetRaftBootstrapState` method is index 9. New methods must remain after all existing methods.
+The Coordinator protobuf service order is a wire contract for the custom ZMQ transport. Legacy
+`ReportTopologyRecoveryCandidate` and `GetClusterRawSnapshot` remain method indexes 7 and 8;
+`ExchangeBootstrapObservation` replaces the former bootstrap-state method at index 9, so later method indexes do not
+move. The protocol change requires a full Coordinator-version rollout rather than mixed old/new binaries.
 
 ## Replication And Request Boundary
 
@@ -155,10 +188,10 @@ The current braft state machine rejects management-log apply and the Node expose
 | UT | `tests/ut/common/coordinator/coordinator_raft_state_machine_test.cpp` | FSM event and exception boundaries. |
 | UT | `tests/ut/common/coordinator/coordinator_raft_node_test.cpp` | Node lifecycle, absence of synthetic Bootstrap index-0 publication, non-Bootstrap startup, committed state, operations, and drain. |
 | UT | `tests/ut/common/coordinator/coordinator_membership_manager_test.cpp` | Committed-state membership policy, candidate fairness, replacement proof and rollback, fresh submission revalidation, timing, and shutdown. |
-| UT | `tests/ut/common/coordinator/coordinator_election_manager_test.cpp` | Target-quorum bootstrap, local-`ABSENT` rebuild from authoritative peers, retrying `N`/`N + 1` conflicts, sanitized phase/status transitions, and Node/Membership ownership and lifecycle ordering. |
+| UT | `tests/ut/common/coordinator/coordinator_election_manager_test.cpp` | Incomplete-view waiting, stable full-view proposal confirmation, candidate-expansion reproduction, static full-peer startup without Exchange, committed-configuration priority, local recovery, and malformed observation rejection. |
 | UT | `tests/ut/coordinator/coordinator_server_options_test.cpp` | Public empty-path rejection, direct Runtime empty-path process-flags startup, non-empty config parsing, per-instance Raft snapshots, lifecycle retry, readiness, shutdown ordering, ZMQ method-index compatibility, and allocator-backed real brpc lifecycle. |
 | ST | `tests/st/common/raft/coordinator_service_election_test.cpp` | Real single-Service shared endpoint, election, recovery, and cleanup. |
-| ST | `tests/st/common/raft/coordinator_runtime_election_test.cpp` | Real in-process Runtimes launched with empty config paths, stable fixture-owned common flags, and per-generation endpoint/data/timing snapshots; covers one-candidate waiting, target-quorum bootstrap, membership, Discovery failure, serving-gate isolation, failover, persisted restart, deleted-root rebuild, and bounded quorum loss. |
+| ST | `tests/st/common/raft/coordinator_runtime_election_test.cpp` | Real in-process Runtimes launched with empty config paths, stable fixture-owned common flags, and per-generation endpoint/data/timing snapshots; covers complete-view bootstrap, Discovery failure, serving-gate isolation, failover, persisted restart, deleted-root rebuild, and bounded quorum loss. |
 | ST | `tests/st/common/raft/coordinator_raft_node_test.cpp` | Real Node and Membership scenarios. |
 | ST | `tests/st/common/raft/braft_cluster_test.cpp` | Raw braft cluster behavior, including bounded failover after accepted Leader heartbeats align follower election timers. |
 
