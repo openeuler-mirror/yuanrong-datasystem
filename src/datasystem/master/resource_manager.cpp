@@ -447,7 +447,9 @@ void ResourceManager::ClearWriteSnapshot()
 {
     const uint64_t deadTimeoutS =
         std::max(static_cast<uint64_t>(FLAGS_node_dead_timeout_s), SNAPSHOT_CLEAR_MIN_S);
-    auto deadTimestamp = GetSteadyClockTimeStampMs() - deadTimeoutS * SECS_TO_MS;
+    const uint64_t nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    const uint64_t ttlMs = deadTimeoutS * SECS_TO_MS;
+    const uint64_t deadTimestamp = nowMs > ttlMs ? nowMs - ttlMs : 0;
     std::lock_guard<std::mutex> lock(writeSnapshotMutex_);
     for (auto it = writeSnapshot_.begin(); it != writeSnapshot_.end();) {
         if (it->second.timestamp < deadTimestamp) {
