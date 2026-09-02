@@ -20,7 +20,7 @@
 #include "datasystem/client/stream_cache/consumer_impl.h"
 #include <numeric>
 #include <utility>
-#include "datasystem/client/listen_worker.h"
+#include "datasystem/client/worker_api/listen_worker.h"
 #include "datasystem/client/stream_cache/client_worker_api.h"
 
 #include "datasystem/protos/stream_posix.brpc.stub.pb.h"

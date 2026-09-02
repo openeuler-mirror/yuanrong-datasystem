@@ -24,7 +24,7 @@
 #include "datasystem/object_client.h"
 #include "datasystem/utils/status.h"
 #include "oc_client_common.h"
-#include "datasystem/client/client_worker_common_api.h"
+#include "datasystem/client/worker_api/client_worker_common_api.h"
 
 namespace datasystem {
 namespace st {

@@ -21,8 +21,8 @@
 #define DATASYSTEM_CLIENT_STREAM_CACHE_CLIENT_BASE_IMPL_H
 
 #include <string>
-#include "datasystem/client/listen_worker.h"
-#include "datasystem/client/mmap_manager.h"
+#include "datasystem/client/worker_api/listen_worker.h"
+#include "datasystem/client/mmap_manager/mmap_manager.h"
 #include "datasystem/client/stream_cache/client_worker_api.h"
 #include "datasystem/client/stream_cache/stream_client_impl.h"
 #include "datasystem/client/stream_cache/producer_consumer_worker_api.h"

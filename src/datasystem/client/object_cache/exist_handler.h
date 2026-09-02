@@ -24,8 +24,8 @@
 #include <unordered_set>
 #include <vector>
 
-#include "datasystem/client/routing/data_placement_policy.h"
-#include "datasystem/client/transport/rpc/exist_types.h"
+#include "datasystem/client/object_cache/routing/data_placement_policy.h"
+#include "datasystem/client/object_cache/transport/rpc/exist_types.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/utils/sensitive_value.h"

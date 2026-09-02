@@ -81,7 +81,7 @@ ds_cc_library(
     ],
     deps = [
         "//include/datasystem/hetero:hetero_headers",
-        "//src/datasystem/client/object_cache/device:object_cache_header",
+        "//src/datasystem/client/hetero_cache/device:object_cache_header",
         "//src/datasystem/common/device:device_manager_base",
         "//src/datasystem/common/device:device_pointer_wrapper",
         "//src/datasystem/common/device/ascend:acl_pipeline_task",
@@ -108,7 +108,7 @@ ds_cc_library(
         ":comm_wrapper_base_header",
         "//include/datasystem/hetero:hetero_headers",
         "//src/datasystem/client/hetero_cache:hetero_cache_headers",
-        "//src/datasystem/client/object_cache/device:object_cache_header",
+        "//src/datasystem/client/hetero_cache/device:object_cache_header",
         "//src/datasystem/common/device:device_manager_base",
         "//src/datasystem/common/device:device_pointer_wrapper",
         "//src/datasystem/common/device/ascend:acl_pipeline_task",

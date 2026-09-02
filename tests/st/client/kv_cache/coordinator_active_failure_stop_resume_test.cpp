@@ -33,7 +33,7 @@
 
 #include "client/object_cache/oc_client_common.h"
 #include "cluster/topology_token_helper.h"
-#include "datasystem/client/transport/rpc/worker_rpc_client.h"
+#include "datasystem/client/object_cache/transport/rpc/worker_rpc_client.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"

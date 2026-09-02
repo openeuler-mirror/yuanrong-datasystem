@@ -19,7 +19,7 @@
 
 #include "datasystem/common/device/acl_pipeline_p2p_task.h"
 #include "datasystem/client/hetero_cache/device_util.h"
-#include "datasystem/client/object_cache/device/hccl_comm_mgr.h"
+#include "datasystem/client/hetero_cache/device/hccl_comm_mgr.h"
 #include "datasystem/common/device/ascend/cann_types.h"
 #include "datasystem/common/device/comm_wrapper_base.h"
 #include "datasystem/common/device/device_manager_base.h"

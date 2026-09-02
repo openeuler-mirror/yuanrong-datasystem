@@ -25,10 +25,10 @@
 
 #include <gtest/gtest.h>
 
-#include "datasystem/client/routing/hash_ring_refresher.h"
-#include "datasystem/client/routing/routing.h"
-#include "datasystem/client/routing/routing_rpc_client.h"
-#include "datasystem/client/routing/worker_router.h"
+#include "datasystem/client/object_cache/routing/hash_ring_refresher.h"
+#include "datasystem/client/object_cache/routing/routing.h"
+#include "datasystem/client/object_cache/routing/routing_rpc_client.h"
+#include "datasystem/client/object_cache/routing/worker_router.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/cluster_topology.pb.h"

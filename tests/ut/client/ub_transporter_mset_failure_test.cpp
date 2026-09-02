@@ -27,10 +27,10 @@
 #include <utility>
 #include <vector>
 
-#include "datasystem/client/transport/data_plane/ub_connection.h"
-#include "datasystem/client/transport/data_plane/ub_transporter.h"
-#include "datasystem/client/transport/object_buffer_internal.h"
-#include "datasystem/client/transport/rpc/worker_rpc_client.h"
+#include "datasystem/client/object_cache/transport/data_plane/ub_connection.h"
+#include "datasystem/client/object_cache/transport/data_plane/ub_transporter.h"
+#include "datasystem/client/object_cache/transport/object_buffer_internal.h"
+#include "datasystem/client/object_cache/transport/rpc/worker_rpc_client.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/object/object_buffer.h"
 #include "datasystem/protos/object_posix.pb.h"

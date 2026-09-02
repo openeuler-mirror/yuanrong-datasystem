@@ -27,9 +27,9 @@
 
 #include <gtest/gtest.h>
 
-#include "datasystem/client/routing/hash_ring_refresher.h"
-#include "datasystem/client/routing/i_worker_filter.h"
-#include "datasystem/client/routing/worker_router.h"
+#include "datasystem/client/object_cache/routing/hash_ring_refresher.h"
+#include "datasystem/client/object_cache/routing/i_worker_filter.h"
+#include "datasystem/client/object_cache/routing/worker_router.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/raii.h"

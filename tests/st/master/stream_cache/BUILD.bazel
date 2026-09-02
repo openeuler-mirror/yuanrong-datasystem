@@ -8,7 +8,7 @@ ds_cc_test(
     tags = ["manual"],
     deps = [
         "//src/datasystem/client:datasystem",
-        "//src/datasystem/client:mmap_manager",
+        "//src/datasystem/client/mmap_manager:mmap_manager",
         "//src/datasystem/client/stream_cache:consumer",
         "//src/datasystem/client/stream_cache:producer",
         "//src/datasystem/client/stream_cache:stream_client",
@@ -24,7 +24,7 @@ ds_cc_test(
     tags = ["manual"],
     deps = [
         "//src/datasystem/client:datasystem",
-        "//src/datasystem/client:mmap_manager",
+        "//src/datasystem/client/mmap_manager:mmap_manager",
         "//src/datasystem/client/stream_cache:consumer",
         "//src/datasystem/client/stream_cache:producer",
         "//src/datasystem/client/stream_cache:stream_client",

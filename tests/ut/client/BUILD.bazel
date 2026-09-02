@@ -6,7 +6,7 @@ ds_cc_test(
     name = "client_worker_common_api_test",
     srcs = ["client_worker_common_api_test.cpp"],
     deps = [
-        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/client/worker_api:client_worker_common_api",
         "//tests/ut:ut_common",
     ],
 )
@@ -24,10 +24,10 @@ ds_cc_test(
     srcs = ["mmap_manager_test.cpp"],
     deps = [
         "//src/datasystem/worker:add_miss_libs_fixme",
-        "//src/datasystem/client/object_cache/device:client_device_object_manager",
+        "//src/datasystem/client/hetero_cache/device:client_device_object_manager",
         "//src/datasystem/common/device/ascend:p2phccl_comm_wrapper",
-        "//src/datasystem/client:client_worker_common_api",
-        "//src/datasystem/client:mmap_manager",
+        "//src/datasystem/client/worker_api:client_worker_common_api",
+        "//src/datasystem/client/mmap_manager:mmap_manager",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/shared_memory:common_shared_memory",
         "//src/datasystem/common/util:raii",
@@ -39,7 +39,7 @@ ds_cc_test(
     name = "mmap_table_test",
     srcs = ["mmap_table_test.cpp"],
     deps = [
-        "//src/datasystem/client/mmap:mmap_table",
+        "//src/datasystem/client/mmap_manager:mmap_table",
         "//src/datasystem/common/util:status_helper",
         "//tests/ut:ut_common",
     ],
@@ -58,7 +58,7 @@ ds_cc_test(
     name = "urma_success_rate_tracker_test",
     srcs = ["urma_success_rate_tracker_test.cpp"],
     deps = [
-        "//src/datasystem/client:urma_success_rate_tracker",
+        "//src/datasystem/client/object_cache/routing:urma_success_rate_tracker",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/log:common_log",
         "//tests/ut:ut_common",
@@ -71,7 +71,7 @@ ds_cc_test(
     deps = [
         "//include/datasystem:headers",
         "//src/datasystem/client:datasystem",
-        "//src/datasystem/client:client_transport",
+        "//src/datasystem/client/object_cache/transport:client_transport",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/object_cache:object_base",
@@ -90,7 +90,7 @@ ds_cc_test(
     name = "transport_phase_latency_recorder_test",
     srcs = ["transport_phase_latency_recorder_test.cpp"],
     deps = [
-        "//src/datasystem/client:transport_phase_latency_recorder",
+        "//src/datasystem/client/object_cache/transport:transport_phase_latency_recorder",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/util:common_util",
     ],
@@ -106,7 +106,7 @@ ds_cc_test(
     }),
     deps = [
         "//include/datasystem:headers",
-        "//src/datasystem/client:client_transport",
+        "//src/datasystem/client/object_cache/transport:client_transport",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/object_cache:object_base",
         "//src/datasystem/common/object_cache:object_buffer",
@@ -127,7 +127,7 @@ ds_cc_test(
     name = "ub_transporter_mset_failure_test",
     srcs = ["ub_transporter_mset_failure_test.cpp"],
     deps = [
-        "//src/datasystem/client:client_transport",
+        "//src/datasystem/client/object_cache/transport:client_transport",
         "//src/datasystem/common/object_cache:object_buffer",
         "//src/datasystem/common/rpc:mem_view",
         "//tests/ut:ut_common",

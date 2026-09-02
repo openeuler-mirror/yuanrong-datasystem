@@ -20,7 +20,7 @@
 #include <string>
 
 #include "common.h"
-#include "datasystem/client/client_worker_common_api.h"
+#include "datasystem/client/worker_api/client_worker_common_api.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/util/version.h"
 #include "datasystem/common/rpc/rpc_auth_keys.h"

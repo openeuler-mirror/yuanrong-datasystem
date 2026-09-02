@@ -24,8 +24,8 @@
 #include <string>
 
 #include "datasystem/common/flags/flags.h"
-#include "datasystem/client/client_worker_common_api.h"
-#include "datasystem/client/mmap_manager.h"
+#include "datasystem/client/worker_api/client_worker_common_api.h"
+#include "datasystem/client/mmap_manager/mmap_manager.h"
 #include "datasystem/client/stream_cache/receive_element.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/shared_memory/shm_unit_info.h"

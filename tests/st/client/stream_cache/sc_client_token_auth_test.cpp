@@ -21,7 +21,7 @@
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/common/log/log.h"
 #include "sc_client_common.h"
-#include "datasystem/client/mmap_manager.h"
+#include "datasystem/client/mmap_manager/mmap_manager.h"
 #include "datasystem/client/stream_cache/client_worker_api.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/rpc_util.h"

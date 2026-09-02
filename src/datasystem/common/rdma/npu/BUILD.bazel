@@ -51,7 +51,7 @@ ds_cc_library(
         "//src/datasystem/common/flags:dynamic_flag_config",
     #     "//src/datasystem/common/util:common_util",
         "//src/datasystem/common/device/ascend:acl_device_manager_header",
-    #     "//src/datasystem/client/object_cache/device:device_memory_unit_header",
+    #     "//src/datasystem/client/hetero_cache/device:device_memory_unit_header",
     #     "//src/datasystem/common/immutable_string:immutable_string",
     #     "//include/datasystem/hetero:hetero_headers",
         "//src/datasystem/common/util:locks",

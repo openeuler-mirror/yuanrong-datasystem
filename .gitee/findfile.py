@@ -44,6 +44,9 @@ if __name__ == "__main__":
     cmd2 = "lcov --extract {}/total.info \"*src/datasystem/*\" -o {}/total.info".format(os.path.join(args.folder1), args.folder2)
     os.system(cmd2)
 
-    cmd3 = "lcov --remove {}/total.info \"*client/object_cache/device*\"  \"*worker/object_cache/device*\" \"*master/object_cache/device*\" \"*common/device/ascend*\" \"*/protos/*\" \"*/build/*\" -o {}/result.info".format(os.path.join(args.folder2), args.folder2)
+    cmd3 = ("lcov --remove {}/total.info \"*client/hetero_cache/device*\""
+            "  \"*worker/object_cache/device*\" \"*master/object_cache/device*\""
+            " \"*common/device/ascend*\" \"*/protos/*\" \"*/build/*\""
+            " -o {}/result.info").format(os.path.join(args.folder2), args.folder2)
     os.system(cmd3)
     print("[TIMER] lcov total time: ", time.time() - start_time)

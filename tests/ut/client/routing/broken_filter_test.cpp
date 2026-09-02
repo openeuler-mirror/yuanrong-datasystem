@@ -20,7 +20,7 @@
 
 #include <gtest/gtest.h>
 
-#include "datasystem/client/routing/broken_filter.h"
+#include "datasystem/client/object_cache/routing/broken_filter.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/utils/status.h"
 #include "ut/common.h"

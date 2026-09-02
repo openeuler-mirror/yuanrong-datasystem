@@ -27,7 +27,7 @@
 #include <mutex>
 
 #include "datasystem/common/log/log.h"
-#include "datasystem/client/object_cache/device/device_memory_unit.h"
+#include "datasystem/client/hetero_cache/device/device_memory_unit.h"
 #include "datasystem/common/device/nvidia/cuda_types.h"
 #include "datasystem/common/device/device_manager_base.h"
 #include "datasystem/common/util/dlutils.h"

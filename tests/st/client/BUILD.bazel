@@ -20,8 +20,8 @@ ds_cc_test(
     tags = ["manual"],
     deps = [
         "//src/datasystem/client:add_client_miss_libs_fixme",
-        "//src/datasystem/client:client_worker_common_api",
-        "//src/datasystem/client:listen_worker",
+        "//src/datasystem/client/worker_api:client_worker_common_api",
+        "//src/datasystem/client/worker_api:listen_worker",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/util:status_helper",
         "//tests/st:st_common",

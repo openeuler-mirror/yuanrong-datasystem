@@ -27,7 +27,7 @@
 #include "datasystem/stream/producer.h"
 #include "datasystem/stream/consumer.h"
 #include "datasystem/client/stream_cache/client_worker_api.h"
-#include "datasystem/client/mmap_manager.h"
+#include "datasystem/client/mmap_manager/mmap_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 
 using namespace datasystem::client::stream_cache;

@@ -247,7 +247,7 @@ ds_cc_test(
     srcs = ["routing_failure_switch_test.cpp"],
     tags = ["manual"],
     deps = KV_COMMON_DEPS + [
-        "//src/datasystem/client/routing:routing",
+        "//src/datasystem/client/object_cache/routing:routing",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/protos:cluster_topology_cc_proto",
@@ -259,8 +259,8 @@ ds_cc_test(
     srcs = ["routing_topology_convergence_test.cpp"],
     tags = ["manual"],
     deps = KV_COMMON_DEPS + [
-        "//src/datasystem/client/routing:routing",
-        "//src/datasystem/client:client_transport",
+        "//src/datasystem/client/object_cache/routing:routing",
+        "//src/datasystem/client/object_cache/transport:client_transport",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
@@ -274,7 +274,7 @@ ds_cc_test(
     srcs = ["coordinator_active_failure_stop_resume_test.cpp"],
     tags = ["manual"],
     deps = KV_COMMON_DEPS + [
-        "//src/datasystem/client:client_transport",
+        "//src/datasystem/client/object_cache/transport:client_transport",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/util:hash_algorithm",
@@ -463,7 +463,7 @@ ds_cc_test(
     srcs = ["kv_client_urma_failover_test.cpp"],
     tags = ["manual"],
     deps = KV_COMMON_DEPS + [
-        "//src/datasystem/client:urma_success_rate_tracker",
+        "//src/datasystem/client/object_cache/routing:urma_success_rate_tracker",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/common/object_cache:common_object_cache",

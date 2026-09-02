@@ -1,12 +1,11 @@
-load("//:version.bzl", "DATASYSTEM_VERSION")
 load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//src/datasystem:__subpackages__"])
 
 CLIENT_SRCS = [
-    "client_worker_common_api.cpp",
-    "listen_worker.cpp",
-    "mmap_manager.cpp",
+    "worker_api/client_worker_common_api.cpp",
+    "worker_api/listen_worker.cpp",
+    "mmap_manager/mmap_manager.cpp",
     "client_flags_monitor.cpp",
     "context/context.cpp",
     "object_cache/client_worker_api.cpp",
@@ -20,10 +19,10 @@ CLIENT_SRCS = [
 CLIENT_HDRS = [
     "object_cache/client_worker_api.h",
     "object_cache/direct_receive_buffer_owner.h",
-    "mmap_manager.h",
-    "client_worker_common_api.h",
+    "mmap_manager/mmap_manager.h",
+    "worker_api/client_worker_common_api.h",
     "client_flags_monitor.h",
-    "listen_worker.h",
+    "worker_api/listen_worker.h",
     "object_cache/exist_handler.h",
     "object_cache/object_client_impl.h",
     "client_state_manager.h",
@@ -51,95 +50,10 @@ CLIENT_DEPS = [
     "//src/datasystem/protos:worker_stream_zmq_cc_proto",
     "//src/datasystem/protos:worker_stream_cc_proto",
     "//src/datasystem/protos:perf_posix_protos",
-    "//src/datasystem/client/mmap:mmap_table",
+    "//src/datasystem/client/mmap_manager:mmap_table",
     "@com_google_protobuf//:protobuf",
     "@nlohmann_json//:json",
 ]
-
-ds_cc_library(
-    name = "mmap_manager",
-    srcs = [
-        "mmap_manager.cpp",
-    ],
-    hdrs = [
-        "mmap_manager.h",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//src/datasystem/client:client_worker_common_api",
-        "//src/datasystem/client/mmap:mmap_table",
-        "//src/datasystem/common/ak_sk:ak_sk_manager",
-        "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/shared_memory:common_shm_unit_info",
-        "//src/datasystem/common/util:common_util",
-        "//src/datasystem/common/util:fd_manager",
-        "//src/datasystem/protos:share_memory_zmq_cc_proto",
-    ],
-    alwayslink = True,
-)
-
-ds_cc_library(
-    name = "urma_success_rate_tracker",
-    srcs = [
-        "urma_success_rate_tracker.cpp",
-    ],
-    hdrs = [
-        "urma_success_rate_tracker.h",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//src/datasystem/common/flags:ds_flags",
-    ],
-    alwayslink = True,
-)
-
-ds_cc_library(
-    name = "transport_exist_types",
-    hdrs = [
-        "transport/rpc/exist_types.h",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//include/datasystem/utils:utils_headers",
-    ],
-)
-
-ds_cc_library(
-    name = "client_worker_common_api",
-    srcs = [
-        "client_worker_common_api.cpp",
-    ],
-    hdrs = [
-        "client_worker_common_api.h",
-    ],
-    defines = [
-        "DATASYSTEM_VERSION=\\\"{}\\\"".format(DATASYSTEM_VERSION),
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//src/datasystem/client:embedded_client_worker_api",
-        "//src/datasystem/client:urma_success_rate_tracker",
-        "//src/datasystem/common/rpc:brpc_factory",
-        "//src/datasystem/common/ak_sk:signature",
-        "//src/datasystem/common/eventloop:common_event_loop",
-        "//src/datasystem/common/object_cache:common_object_cache",
-        "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
-        "//src/datasystem/common/rpc:unix_sock_fd",
-        "//src/datasystem/common/shared_memory:common_shared_memory",
-        "//src/datasystem/common/shared_memory:common_shm_unit_info",
-        "//src/datasystem/common/token:client_access_token",
-        "//src/datasystem/common/util:common_util",
-        "//src/datasystem/common/util:fd_pass",
-        "//src/datasystem/common/util:rpc_util",
-        "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/protos:object_posix_zmq_cc_proto",
-        "//src/datasystem/protos:share_memory_zmq_cc_proto",
-        "//src/datasystem/protos:share_memory_brpc",
-        "//src/datasystem/worker/object_cache:worker_worker_transport_api",
-        "@com_github_apache_brpc//:brpc",
-    ],
-    alwayslink = True,
-)
 
 ds_cc_library(
     name = "client_flags_monitor",
@@ -159,23 +73,6 @@ ds_cc_library(
 )
 
 ds_cc_library(
-    name = "listen_worker",
-    srcs = [
-        "listen_worker.cpp",
-    ],
-    hdrs = [
-        "listen_worker.h",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//include/datasystem/utils:utils_headers",
-        "//src/datasystem/client:client_worker_common_api",
-        "//src/datasystem/common/inject:common_inject",
-    ],
-    alwayslink = True,
-)
-
-ds_cc_library(
     name = "client_state_manager",
     hdrs = [
         "client_state_manager.h",
@@ -186,31 +83,10 @@ ds_cc_library(
 )
 
 ds_cc_library(
-    name = "embedded_client_worker_api",
-    srcs = [
-        "embedded_client_worker_api.cpp",
-    ],
-    hdrs = [
-        "embedded_client_worker_api.h",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//include/datasystem/utils:utils_headers",
-        "//src/datasystem/common/rpc:rpc_message",
-        "//src/datasystem/common/rpc:rpc_server_stream_base",
-        "//src/datasystem/common/util:dlutils",
-        "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/protos:object_posix_cc_proto",
-        "//src/datasystem/protos:share_memory_cc_proto",
-    ],
-    alwayslink = True,
-)
-
-ds_cc_library(
     name = "add_client_miss_libs_fixme",
     visibility = ["//visibility:public"],
     deps = [
-        "//src/datasystem/client/object_cache/device:client_device_object_manager",
+        "//src/datasystem/client/hetero_cache/device:client_device_object_manager",
         "//src/datasystem/common/device:comm_wrapper",
         "//src/datasystem/common/device/ascend:p2phccl_comm_wrapper",
         "//src/datasystem/common/l2cache:persistence_api",
@@ -234,117 +110,6 @@ ds_cc_library(
         "//src/datasystem/worker/stream_cache/page_queue:shared_page_queue",
         "//src/datasystem/worker/stream_cache/page_queue:shared_page_queue_group",
     ],
-)
-
-ds_cc_library(
-    name = "transport_phase_latency_recorder",
-    srcs = ["transport/transport_phase_latency_recorder.cpp"],
-    hdrs = ["transport/transport_phase_latency_recorder.h"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/util:net_util",
-    ],
-)
-
-ds_cc_library(
-    name = "client_transport",
-    srcs = [
-        "transport/transport_advisor.cpp",
-        "transport/common/deadline_retry.cpp",
-        "transport/metadata/object_metadata_client.cpp",
-        "transport/object_read/object_read_flow.cpp",
-        "transport/object_read/replica_reader.cpp",
-        "transport/transport_layer.cpp",
-        "transport/worker_snapshot.cpp",
-        "transport/data_plane/data_plane_executor.cpp",
-        "transport/data_plane/data_plane_manager.cpp",
-        "transport/data_plane/shm_connection.cpp",
-        "transport/data_plane/shm_receive_buffer_owner.cpp",
-        "transport/data_plane/shm_send_buffer_owner.cpp",
-        "transport/data_plane/tcp_transporter.cpp",
-        "transport/data_plane/ub_connection.cpp",
-        "transport/data_plane/ub_transporter.cpp",
-        "transport/rpc/exist_request_builder.cpp",
-        "transport/rpc/mset_request_builder.cpp",
-        "transport/rpc/set_request_builder.cpp",
-        "transport/rpc/worker_rpc_client.cpp",
-    ],
-    defines = [
-        "DATASYSTEM_VERSION=\\\"{}\\\"".format(DATASYSTEM_VERSION),
-    ],
-    hdrs = [
-        "transport/object_buffer_internal.h",
-        "transport/transport_advisor.h",
-        "transport/shm_fd.h",
-        "transport/transport_kind.h",
-        "transport/transport_layer.h",
-        "transport/worker_snapshot.h",
-        "transport/common/deadline_retry.h",
-        "transport/metadata/object_metadata_client.h",
-        "transport/object_read/object_read_flow.h",
-        "transport/object_read/object_read_types.h",
-        "transport/object_read/replica_reader.h",
-        "transport/data_plane/data_plane_executor.h",
-        "transport/data_plane/data_plane_manager.h",
-        "transport/data_plane/i_data_plane_connection.h",
-        "transport/data_plane/i_data_transporter.h",
-        "transport/data_plane/shm_connection.h",
-        "transport/data_plane/shm_receive_buffer_owner.h",
-        "transport/data_plane/shm_send_buffer_owner.h",
-        "transport/data_plane/shm_transporter.h",
-        "transport/data_plane/tcp_transporter.h",
-        "transport/data_plane/ub_connection.h",
-        "transport/data_plane/ub_transporter.h",
-        "transport/rpc/exist_request_builder.h",
-        "transport/rpc/exist_types.h",
-        "transport/rpc/mset_request_builder.h",
-        "transport/rpc/set_request_builder.h",
-        "transport/rpc/worker_rpc_client.h",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":transport_exist_types",
-        "//include/datasystem:headers",
-        "//src/datasystem/client:client_worker_common_api",
-        "//src/datasystem/client:mmap_manager",
-        "//src/datasystem/client:transport_phase_latency_recorder",
-        "//src/datasystem/client/routing:routing",
-        "//src/datasystem/common/ak_sk:signature",
-        "//src/datasystem/common/eventloop:common_event_loop",
-        "//src/datasystem/common/flags:dynamic_flag_config",
-        "//src/datasystem/common/inject:common_inject",
-        "//src/datasystem/common/log:access_recorder_header",
-        "//src/datasystem/common/metrics:common_metrics",
-        "//src/datasystem/common/object_cache:object_base",
-        "//src/datasystem/common/object_cache:object_buffer",
-        "//src/datasystem/common/perf:common_perf",
-        "//src/datasystem/common/rdma:common_rdma",
-        "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/rpc:api_deadline",
-        "//src/datasystem/common/rpc:api_deadline_helpers",
-        "//src/datasystem/common/rpc:brpc_factory",
-        "//src/datasystem/common/rpc:mem_view",
-        "//src/datasystem/common/rpc:rpc_message",
-        "//src/datasystem/common/rpc:rpc_options",
-        "//src/datasystem/common/rpc:timeout_duration",
-        "//src/datasystem/common/rpc:unix_sock_fd",
-        "//src/datasystem/common/shared_memory:common_shm_unit_info",
-        "//src/datasystem/common/util:common_util",
-        "//src/datasystem/common/util:numa_util",
-        "//src/datasystem/common/util:rpc_diagnostic",
-        "//src/datasystem/common/util:rpc_util",
-        "//src/datasystem/common/util:thread_pool",
-        "//src/datasystem/common/util:validator",
-        "//src/datasystem/protos:object_posix_brpc",
-        "//src/datasystem/protos:master_object_brpc",
-        "//src/datasystem/protos:share_memory_brpc",
-        "//src/datasystem/protos:cluster_topology_cc_proto",
-        "//src/datasystem/protos:worker_object_brpc",
-        "@com_github_apache_brpc//:brpc",
-        "@tbb//:tbb",
-    ],
-    alwayslink = True,
 )
 
 ds_cc_library(
@@ -377,7 +142,7 @@ ds_cc_library(
     deps = [
         ":add_client_miss_libs_fixme",
         ":router_client",
-        "//src/datasystem/client:listen_worker",
+        "//src/datasystem/client/worker_api:listen_worker",
         "//src/datasystem/client/context",
         "//src/datasystem/client/hetero_cache:hetero_client",
         "//src/datasystem/client/kv_cache:kv_client",

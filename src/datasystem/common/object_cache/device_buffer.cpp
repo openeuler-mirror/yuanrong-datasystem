@@ -22,7 +22,7 @@
 
 #include <memory>
 
-#include "datasystem/client/object_cache/device/device_memory_unit.h"
+#include "datasystem/client/hetero_cache/device/device_memory_unit.h"
 #include "datasystem/client/object_cache/object_client_impl.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/log/log.h"

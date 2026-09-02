@@ -25,8 +25,8 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "datasystem/client/embedded_client_worker_api.h"
-#include "datasystem/client/client_worker_common_api.h"
+#include "datasystem/client/worker_api/embedded_client_worker_api.h"
+#include "datasystem/client/worker_api/client_worker_common_api.h"
 #include "datasystem/client/object_cache/client_worker_api/client_worker_base_api.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/string_intern/string_ref.h"

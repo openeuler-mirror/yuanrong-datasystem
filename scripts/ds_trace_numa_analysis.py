@@ -423,7 +423,7 @@ def build_source_chain(source: dict) -> list[dict]:
         },
         {
             "stage": "chip信息传播",
-            "source": "src/datasystem/client/transport/data_plane/ub_transporter.cpp:NumaIdToChipId",
+            "source": "src/datasystem/client/object_cache/transport/data_plane/ub_transporter.cpp:NumaIdToChipId",
             "judgment": "接收 buffer NUMA id 转为传输描述中的 chip id",
             "source_ref": head,
         },

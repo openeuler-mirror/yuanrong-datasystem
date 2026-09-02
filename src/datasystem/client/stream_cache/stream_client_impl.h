@@ -26,8 +26,8 @@
 #include "re2/re2.h"
 
 #include "datasystem/client/client_state_manager.h"
-#include "datasystem/client/listen_worker.h"
-#include "datasystem/client/mmap_manager.h"
+#include "datasystem/client/worker_api/listen_worker.h"
+#include "datasystem/client/mmap_manager/mmap_manager.h"
 #include "datasystem/client/stream_cache/client_worker_api.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/flags/flags.h"

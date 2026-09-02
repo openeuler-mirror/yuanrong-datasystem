@@ -31,11 +31,11 @@
 #include <utility>
 #include <vector>
 
-#include "datasystem/client/routing/ub_health_filter.h"
-#include "datasystem/client/transport/common/deadline_retry.h"
-#include "datasystem/client/transport/object_buffer_internal.h"
-#include "datasystem/client/transport/object_read/replica_reader.h"
-#include "datasystem/client/transport/transport_layer.h"
+#include "datasystem/client/object_cache/routing/ub_health_filter.h"
+#include "datasystem/client/object_cache/transport/common/deadline_retry.h"
+#include "datasystem/client/object_cache/transport/object_buffer_internal.h"
+#include "datasystem/client/object_cache/transport/object_read/replica_reader.h"
+#include "datasystem/client/object_cache/transport/transport_layer.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/object_cache/ub_health_summary_codec.h"
