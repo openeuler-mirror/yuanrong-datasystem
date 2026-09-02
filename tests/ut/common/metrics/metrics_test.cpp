@@ -1122,6 +1122,7 @@ TEST_F(MetricsTest, kv_metric_urma_id_layout_test)
           "client_direct_batch_get_tcp_fallback_total" },
         { metrics::KvMetricId::WORKER_TO_CLIENT_GET_SHM_TOTAL_BYTES, "worker_to_client_get_shm_total_bytes" },
         { metrics::KvMetricId::WORKER_TO_CLIENT_GET_URMA_TOTAL_BYTES, "worker_to_client_get_urma_total_bytes" },
+        { metrics::KvMetricId::WORKER_SHM_REF_HARD_RECLAIM_TOTAL, "worker_shm_ref_hard_reclaim_total" },
     };
     EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_RPC_TOTAL), 95u);
     EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_OBJECT_TOTAL), 96u);
@@ -1133,7 +1134,7 @@ TEST_F(MetricsTest, kv_metric_urma_id_layout_test)
     EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::WORKER_TO_CLIENT_GET_TCP_TOTAL_BYTES), 20u);
     EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::WORKER_TO_CLIENT_GET_SHM_TOTAL_BYTES), 141u);
     EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::WORKER_TO_CLIENT_GET_URMA_TOTAL_BYTES), 142u);
-    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::KV_METRIC_END), 143u);
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::KV_METRIC_END), 144u);
     for (size_t k = 0; k < sizeof(kTailMetrics) / sizeof(kTailMetrics[0]); ++k) {
         const auto wantId = static_cast<uint16_t>(kTailMetrics[k].id);
         const auto *desc = std::find_if(descs, descs + count,

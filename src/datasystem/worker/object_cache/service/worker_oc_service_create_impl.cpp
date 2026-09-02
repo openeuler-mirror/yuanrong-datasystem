@@ -130,7 +130,7 @@ Status WorkerOcServiceCreateImpl::CreateImpl(const std::string &tenantId, const 
     std::string shmUnitId;
     IndexUuidGenerator(shmIdCounter.fetch_add(1), shmUnitId);
     shmUnit->id = ShmKey::Intern(shmUnitId);
-    memoryRefTable_->AddShmUnit(clientId, shmUnit, requestTimeoutMs);
+    memoryRefTable_->AddShmUnit(clientId, shmUnit, requestTimeoutMs, !ClientShmEnabled(clientId));
 
     // Construct CreateRespPb.
     resp.set_store_fd(shmUnit->GetFd());
@@ -247,7 +247,8 @@ Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, c
         }
         PerfPoint point(PerfKey::WORKER_MULTI_CREATE_ADD_SHM_UNITS);
 
-        memoryRefTable_->AddShmUnits(clientAccessor, shmUnits, req.request_timeout());
+        memoryRefTable_->AddShmUnits(clientAccessor, shmUnits, req.request_timeout(),
+                                     !ClientShmEnabled(clientAccessor->first));
         return Status::OK();
     };
 

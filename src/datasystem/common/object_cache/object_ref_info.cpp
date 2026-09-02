@@ -27,6 +27,8 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/metrics/kv_metrics.h"
+#include "datasystem/common/constants.h"
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/string_intern/string_ref.h"
@@ -37,6 +39,8 @@
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/utils/status.h"
+
+DS_DECLARE_uint64(shm_ref_hard_reclaim_timeout_ms);
 
 namespace datasystem {
 namespace object_cache {
@@ -127,7 +131,7 @@ void SharedMemoryRefTable::InitShmRefForClient(const ClientKey &clientId, bool s
 }
 
 void SharedMemoryRefTable::AddShmUnit(const ClientKey &clientId, std::shared_ptr<ShmUnit> &shmUnit,
-                                      int64_t requestTimeoutMs)
+                                      int64_t requestTimeoutMs, bool reclaimable)
 {
     const auto &shmId = shmUnit->GetId();
     TbbMemoryClientRefTable::const_accessor clientAccessor;
@@ -149,7 +153,7 @@ void SharedMemoryRefTable::AddShmUnit(const ClientKey &clientId, std::shared_ptr
         metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_SHM_REF_TABLE_BYTES))
             .Inc(static_cast<int64_t>(shmUnit->size));
     }
-    RecordMaybeExpiredShm(clientId, shmId, requestTimeoutMs);
+    RecordMaybeExpiredShm(clientId, shmId, requestTimeoutMs, reclaimable);
     METRIC_INC(metrics::KvMetricId::WORKER_SHM_REF_ADD_TOTAL);
     metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_SHM_REF_TABLE_SIZE))
         .Set(static_cast<int64_t>(shmRefTable_.size()));
@@ -157,7 +161,8 @@ void SharedMemoryRefTable::AddShmUnit(const ClientKey &clientId, std::shared_ptr
 }
 
 void SharedMemoryRefTable::AddShmUnits(TbbMemoryClientRefTable::const_accessor &clientAccessor,
-                                       std::vector<std::shared_ptr<ShmUnit>> &shmUnits, int64_t requestTimeoutMs)
+                                       std::vector<std::shared_ptr<ShmUnit>> &shmUnits, int64_t requestTimeoutMs,
+                                       bool reclaimable)
 {
     TbbMemoryObjectRefTable::accessor objectAccessor;
     const ClientKey &clientId = clientAccessor->first;
@@ -184,7 +189,7 @@ void SharedMemoryRefTable::AddShmUnits(TbbMemoryClientRefTable::const_accessor &
             datasystem::memory::Allocator::Instance()->ChangeRefPageCount(1);
             firstRefBytes += shmUnit->size;
         }
-        RecordMaybeExpiredShm(clientId, shmId, requestTimeoutMs);
+        RecordMaybeExpiredShm(clientId, shmId, requestTimeoutMs, reclaimable);
         ++addedCount;
         VLOG(1) << "AddShmUnit for shmid: " << shmUnit->id << " client id: " << clientId;
     }
@@ -293,13 +298,21 @@ void SharedMemoryRefTable::GetClientRefIds(const ClientKey &clientId, std::vecto
 }
 
 void SharedMemoryRefTable::RecordMaybeExpiredShm(const ClientKey &clientId, const ShmKey &shmId,
-                                                 int64_t requestTimeoutMs)
+                                                 int64_t requestTimeoutMs, bool reclaimable)
 {
     auto expireTimeMs = GetMaybeExpiredDeadlineMs(requestTimeoutMs);
+    // Reclaimable items (create-未-publish orphans) use the hard reclaim deadline as their queue
+    // pop time, so the background flush reclaims them directly when it fires (they never enter the
+    // per-client maybeExpired table, which the client will not reconcile). Non-reclaimable items use
+    // the soft deadline and follow the original table path for client reconciliation.
+    if (reclaimable && FLAGS_shm_ref_hard_reclaim_timeout_ms > 0) {
+        expireTimeMs += FLAGS_shm_ref_hard_reclaim_timeout_ms;
+    }
     std::lock_guard<std::shared_mutex> lock(maybeExpiredShmQueueMutex_);
-    maybeExpiredShmQueue_.push({ requestTimeoutMs, expireTimeMs, clientId, shmId });
+    maybeExpiredShmQueue_.push({ requestTimeoutMs, expireTimeMs, clientId, shmId, reclaimable });
     VLOG(1) << "RecordMaybeExpiredShm: clientId=" << clientId << " shmId=" << shmId
-               << " requestTimeoutMs=" << requestTimeoutMs << " expireTimeMs=" << expireTimeMs;
+               << " requestTimeoutMs=" << requestTimeoutMs << " expireTimeMs=" << expireTimeMs
+               << " reclaimable=" << reclaimable;
 }
 
 void SharedMemoryRefTable::GetMaybeExpiredShmIds(const ClientKey &clientId, std::vector<ShmKey> &shmIds)
@@ -385,13 +398,21 @@ Status SharedMemoryRefTable::RemoveClient(const ClientKey &clientId)
 void SharedMemoryRefTable::FlushMaybeExpiredQueue(uint64_t nowMs)
 {
     std::vector<MaybeExpiredShmItem> expiredItems;
+    std::vector<MaybeExpiredShmItem> hardReclaimItems;
     size_t queueSize = 0;
     {
         std::lock_guard<std::shared_mutex> lockForQueue(maybeExpiredShmQueueMutex_);
         queueSize = maybeExpiredShmQueue_.size();
         while (!maybeExpiredShmQueue_.empty() && maybeExpiredShmQueue_.top().expireTimeMs <= nowMs) {
             auto item = maybeExpiredShmQueue_.top();
-            expiredItems.push_back(item);
+            // Reclaimable items carry the hard-reclaim deadline as their expireTimeMs (set in
+            // RecordMaybeExpiredShm), so a pop here means the hard timeout fired -> reclaim.
+            // Non-reclaimable items carry the soft deadline -> move to the per-client table.
+            if (item.reclaimable && FLAGS_shm_ref_hard_reclaim_timeout_ms > 0) {
+                hardReclaimItems.push_back(item);
+            } else {
+                expiredItems.push_back(item);
+            }
             maybeExpiredShmQueue_.pop();
         }
     }
@@ -400,6 +421,13 @@ void SharedMemoryRefTable::FlushMaybeExpiredQueue(uint64_t nowMs)
     LOG_EVERY_T(INFO, logIntervalSec) << "The size of maybeExpiredShmQueue_ is " << queueSize
                                       << ", the size of shmRefTable_ is " << shmRefTable_.size();
 
+    MoveExpiredToMaybeTable(expiredItems);
+
+    HardReclaimExpiredShmUnits(hardReclaimItems);
+}
+
+void SharedMemoryRefTable::MoveExpiredToMaybeTable(const std::vector<MaybeExpiredShmItem> &expiredItems)
+{
     std::vector<MaybeExpiredShmItem> failedItems;
     for (const auto &item : expiredItems) {
         if (!ClientContainsShm(item.clientId, item.shmId)) {
@@ -411,11 +439,47 @@ void SharedMemoryRefTable::FlushMaybeExpiredQueue(uint64_t nowMs)
             failedItems.emplace_back(item);
         }
     }
-
     // delay if already expired, re-insert into queue
     for (const auto &item : failedItems) {
-        RecordMaybeExpiredShm(item.clientId, item.shmId, item.requestTimeoutMs);
+        RecordMaybeExpiredShm(item.clientId, item.shmId, item.requestTimeoutMs, item.reclaimable);
     }
+}
+
+void SharedMemoryRefTable::HardReclaimExpiredShmUnits(const std::vector<MaybeExpiredShmItem> &hardReclaimItems)
+{
+    // Proactively reclaim hard-expired shm units that the client never came back to reconcile.
+    // Safe because PublishImpl removes the client ref whenever a publish RPC is issued under
+    // ClientShmEnabled=false, so anything still in shmRefTable_ here was never published (no
+    // ObjectMeta bound). RemoveShmUnit currently always returns OK (not-found is OK); if a future
+    // change makes it return an error, re-arm so the next tick retries instead of dropping the item.
+    // Reclaim outside the queue/table locks (caller collected items) to keep the client->shm lock order.
+    if (hardReclaimItems.empty()) {
+        return;
+    }
+    size_t reclaimedThisTick = 0;
+    size_t requeuedThisTick = 0;
+    for (const auto &item : hardReclaimItems) {
+        if (!ClientContainsShm(item.clientId, item.shmId)) {
+            continue;  // already released via Reconcile/RemoveClient/destructor
+        }
+        VLOG(1) << "[SHM_REF_HARD_RECLAIM] remove shm " << item.shmId << " for client " << item.clientId
+                << ", soft deadline " << item.expireTimeMs << " passed hard timeout "
+                << FLAGS_shm_ref_hard_reclaim_timeout_ms << "ms";
+        Status rc = RemoveShmUnit(item.clientId, item.shmId);
+        if (rc.IsError()) {
+            RecordMaybeExpiredShm(item.clientId, item.shmId, item.requestTimeoutMs, item.reclaimable);
+            ++requeuedThisTick;
+        } else {
+            METRIC_INC(metrics::KvMetricId::WORKER_SHM_REF_HARD_RECLAIM_TOTAL);
+            ++reclaimedThisTick;
+        }
+        ClearMaybeExpiredShmIds(item.clientId, { item.shmId });
+    }
+    LOG_EVERY_T(WARNING, LOG_TIME_LIMIT_LEVEL2)
+        << "[SHM_REF_HARD_RECLAIM] tick reclaimed=" << reclaimedThisTick
+        << ", requeued=" << requeuedThisTick
+        << ", hardCandidates=" << hardReclaimItems.size()
+        << ", shmRefTableSize=" << shmRefTable_.size();
 }
 
 bool SharedMemoryRefTable::ClientContainsShm(const ClientKey &clientId, const ShmKey &shmId) const

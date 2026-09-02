@@ -285,6 +285,12 @@ DS_DEFINE_uint64_dynamic(client_slow_log_rpc_slower_than, 5000,
                  "Client-side RPC operation latency threshold (microseconds) for slow-log and latency summary. "
                  "Default 5000 (5ms). 0 means disabled. When enabled, requests whose RPC phases exceed this threshold "
                  "will include a latency summary in the access log.");
+DS_DEFINE_uint64(shm_ref_hard_reclaim_timeout_ms, 5000,
+                 "Worker-side hard timeout (ms) to proactively reclaim shm units that remain in shmRefTable after "
+                 "the soft reconcile deadline expired without a client ReconcileShmRef. Covers create-but-not-"
+                 "published shm leaks under enableLocalCache=false when the client is alive but not revisiting. "
+                 "Measured from the soft deadline (requestTimeoutMs), not from create time, so it never races an "
+                 "in-flight publish. Default 5000 (5s). 0 disables proactive reclaim (revert to passive reconcile).");
 
 DS_DEFINE_int32(fd_pool_prewarm_size, GetInt32FromEnv("DATASYSTEM_FD_POOL_PREWARM_SIZE", 5000),
                 "Number of fds to briefly open then close during SDK Init and worker startup to pre-expand the "

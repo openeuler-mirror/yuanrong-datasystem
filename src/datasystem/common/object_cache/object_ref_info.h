@@ -444,6 +444,10 @@ public:
         uint64_t expireTimeMs;
         ClientKey clientId;
         ShmKey shmId;
+        bool reclaimable;  // true for create path under ClientShmEnabled=false (enableLocalCache=false,
+                           // covers urma and TCP fallback); worker caller sets it. Get's SHM fd-passing
+                           // path keeps false so proactive reclaim never touches a shmUnit the local-cache
+                           // client may still be using.
     };
 
     SharedMemoryRefTable();
@@ -455,7 +459,8 @@ public:
      * @param[in] clientId uuid of client.
      * @param[in] shmUnit The safe object.
      */
-    void AddShmUnit(const ClientKey &clientId, std::shared_ptr<ShmUnit> &shmUnit, int64_t requestTimeoutMs = 0);
+    void AddShmUnit(const ClientKey &clientId, std::shared_ptr<ShmUnit> &shmUnit, int64_t requestTimeoutMs = 0,
+                    bool reclaimable = false);
 
     /**
      * @brief Add shared memory units reference to the client table.
@@ -463,7 +468,8 @@ public:
      * @param[in] shmUnits The safe objects.
      */
     void AddShmUnits(TbbMemoryClientRefTable::const_accessor &clientAccessor,
-                     std::vector<std::shared_ptr<ShmUnit>> &shmUnits, int64_t requestTimeoutMs = 0);
+                     std::vector<std::shared_ptr<ShmUnit>> &shmUnits, int64_t requestTimeoutMs = 0,
+                     bool reclaimable = false);
 
     /**
      * @brief Check one shared memory unit whether be referred by client.
@@ -516,7 +522,8 @@ public:
      * @param[in] clientId uuid of client.
      * @param[in] shmId The shared memory id.
      */
-    void RecordMaybeExpiredShm(const ClientKey &clientId, const ShmKey &shmId, int64_t requestTimeoutMs);
+    void RecordMaybeExpiredShm(const ClientKey &clientId, const ShmKey &shmId, int64_t requestTimeoutMs,
+                               bool reclaimable = false);
 
     /**
      * @brief Get the current maybe expired shm ids of the client.
@@ -548,6 +555,21 @@ public:
     void FlushMaybeExpiredQueue(uint64_t nowMs);
 
 private:
+    /**
+     * @brief Proactively reclaim shm units whose soft deadline + hard timeout passed without a
+     * client ReconcileShmRef. Only reclaimable items (create path under enableLocalCache=false)
+     * are eligible. Safe because PublishImpl removes the client ref on any publish outcome, so
+     * anything still in shmRefTable_ here was never published.
+     * @param[in] hardReclaimItems Items popped from maybeExpiredShmQueue_ that exceeded the hard timeout.
+     */
+    void HardReclaimExpiredShmUnits(const std::vector<MaybeExpiredShmItem> &hardReclaimItems);
+
+    /**
+     * @brief Move soft-expired (non-reclaimable) items from the popped list into the per-client
+     * maybeExpired table for client reconciliation. Items already present are re-queued.
+     * @param[in] expiredItems Items popped from the queue whose soft deadline passed.
+     */
+    void MoveExpiredToMaybeTable(const std::vector<MaybeExpiredShmItem> &expiredItems);
 
     /**
      * @brief Remove shared memory unit reference from the client table and shm table.

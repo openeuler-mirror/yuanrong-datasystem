@@ -21,6 +21,7 @@
 
 #include "ut/common.h"
 #include "datasystem/common/object_cache/object_ref_info.h"
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/object_cache/safe_table.h"
@@ -30,6 +31,8 @@
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "../common/binmock/binmock.h"
+
+DS_DECLARE_uint64(shm_ref_hard_reclaim_timeout_ms);
 
 namespace datasystem {
 namespace ut {
@@ -744,6 +747,95 @@ TEST_F(ObjRefTableTest, ReconcileClientShmRefsGetMaybeExpiredShmIds)
     std::unordered_set<ShmKey> maybeSet3(maybeExpiredShmIds.begin(), maybeExpiredShmIds.end());
     ASSERT_EQ(maybeSet3.count(shmId1), 0);
     ASSERT_EQ(maybeSet3.count(shmId2), 0);
+}
+
+// Hard reclaim proactively removes a reclaimable shmUnit (create path under enableLocalCache=false)
+// after the soft deadline + hard timeout passed without a client ReconcileShmRef.
+TEST_F(ObjRefTableTest, HardReclaimReclaimsReclaimableShmAfterTimeout)
+{
+    const uint64_t fakeTickStep = 1000UL;
+    uint64_t currentTimeMs = 0;
+    // GetMaybeExpiredDeadlineMs uses GetCurrentTimeMs at AddShmUnit time; inject a fixed base so the
+    // soft deadline is deterministic, then advance past it + the hard timeout in later flushes.
+    ASSERT_TRUE(inject::Set("shm_ref.GetCurrentTimeMs", FormatString("1*return(1000)->abort()")));
+
+    auto clientId = ClientKey::Intern(GetStringUuid());
+    auto shmId = ShmKey::Intern(GetStringUuid());
+    auto shmUnit = std::make_shared<ShmUnit>();
+    shmUnit->id = shmId;
+
+    // requestTimeoutMs=1000 -> soft deadline = 1000(base) + 1000 = 2000. reclaimable=true.
+    memRefTable_.AddShmUnit(clientId, shmUnit, 1000, true);
+    ASSERT_TRUE(memRefTable_.Contains(clientId, shmId));
+
+    // Advance to 3000: past soft deadline 2000 -> moved to maybeExpiredShmTable_, not yet hard-reclaimed.
+    currentTimeMs += fakeTickStep;
+    currentTimeMs += fakeTickStep;
+    currentTimeMs += fakeTickStep;
+    memRefTable_.FlushMaybeExpiredQueue(currentTimeMs);
+    ASSERT_TRUE(memRefTable_.Contains(clientId, shmId))
+        << "shmUnit must remain in shmRefTable_ before the hard timeout";
+
+    // Advance to 7000: soft deadline 2000 + hard timeout 5000 = 7000 -> hard reclaim triggers.
+    currentTimeMs += fakeTickStep;
+    currentTimeMs += fakeTickStep;
+    currentTimeMs += fakeTickStep;
+    currentTimeMs += fakeTickStep;
+    memRefTable_.FlushMaybeExpiredQueue(currentTimeMs);
+    ASSERT_FALSE(memRefTable_.Contains(clientId, shmId))
+        << "reclaimable shmUnit must be hard-reclaimed after soft deadline + hard timeout";
+}
+
+// Hard reclaim must NOT touch a non-reclaimable shmUnit (Get's SHM fd-passing path), even after the
+// hard timeout passed. The client owns its lifetime via DecreaseReference/Reconcile.
+TEST_F(ObjRefTableTest, HardReclaimSkipsNonReclaimableShm)
+{
+    const uint64_t fakeTickStep = 1000UL;
+    uint64_t currentTimeMs = 0;
+    ASSERT_TRUE(inject::Set("shm_ref.GetCurrentTimeMs", FormatString("1*return(1000)->abort()")));
+
+    auto clientId = ClientKey::Intern(GetStringUuid());
+    auto shmId = ShmKey::Intern(GetStringUuid());
+    auto shmUnit = std::make_shared<ShmUnit>();
+    shmUnit->id = shmId;
+
+    // reclaimable=false (default, SHM fd-passing path). soft deadline = 2000.
+    memRefTable_.AddShmUnit(clientId, shmUnit, 1000, false);
+    ASSERT_TRUE(memRefTable_.Contains(clientId, shmId));
+
+    // Advance to 7000: well past soft deadline 2000 + hard timeout 5000, but reclaimable=false.
+    for (int i = 0; i < 6; i++) {
+        currentTimeMs += fakeTickStep;
+    }
+    memRefTable_.FlushMaybeExpiredQueue(currentTimeMs);
+    ASSERT_TRUE(memRefTable_.Contains(clientId, shmId))
+        << "non-reclaimable shmUnit must NOT be hard-reclaimed";
+}
+
+// When the hard reclaim timeout flag is 0, proactive reclaim is disabled (passive reconcile only).
+TEST_F(ObjRefTableTest, HardReclaimDisabledWhenFlagZero)
+{
+    const uint64_t fakeTickStep = 1000UL;
+    uint64_t currentTimeMs = 0;
+    ASSERT_TRUE(inject::Set("shm_ref.GetCurrentTimeMs", FormatString("1*return(1000)->abort()")));
+
+    auto clientId = ClientKey::Intern(GetStringUuid());
+    auto shmId = ShmKey::Intern(GetStringUuid());
+    auto shmUnit = std::make_shared<ShmUnit>();
+    shmUnit->id = shmId;
+
+    FLAGS_shm_ref_hard_reclaim_timeout_ms = 0;
+    memRefTable_.AddShmUnit(clientId, shmUnit, 1000, true);
+    ASSERT_TRUE(memRefTable_.Contains(clientId, shmId));
+
+    // Advance far past any soft+hard window; with flag=0 nothing should be reclaimed.
+    for (int i = 0; i < 10; i++) {
+        currentTimeMs += fakeTickStep;
+    }
+    memRefTable_.FlushMaybeExpiredQueue(currentTimeMs);
+    ASSERT_TRUE(memRefTable_.Contains(clientId, shmId))
+        << "flag=0 must disable proactive hard reclaim";
+    FLAGS_shm_ref_hard_reclaim_timeout_ms = 5000;  // restore default
 }
 }  // namespace ut
 }  // namespace datasystem
