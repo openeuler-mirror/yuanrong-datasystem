@@ -151,18 +151,14 @@ Status WorkerOcServiceMigrateImpl::CheckResource(const MigrateDataReqPb &req, Mi
 
 Status WorkerOcServiceMigrateImpl::CheckMigrateDataAdmission(const MigrateDataReqPb &req, MigrateDataRspPb &rsp)
 {
-    if (req.has_rebalance_policy_fence()) {
-        CHECK_FAIL_RETURN_STATUS(evictionManager_ != nullptr, StatusCode::K_NOT_READY,
-                                 "Target eviction manager is not initialized");
-        auto fenceRc =
-            evictionManager_->ValidateRebalancePolicy(req.target_eviction_policy(), req.target_eviction_policy_epoch());
-        if (fenceRc.IsError()) {
-            std::unordered_set<std::string> failedIds;
-            std::transform(req.objects().begin(), req.objects().end(), std::inserter(failedIds, failedIds.end()),
-                           [](const auto &info) { return info.object_key(); });
-            FillMigrateDataResponse(req, {}, {}, failedIds, false, rsp);
-            return fenceRc;
-        }
+    auto fenceRc = ValidateRebalancePolicyFence(req.has_rebalance_policy_fence(), req.target_eviction_policy(),
+                                                req.target_eviction_policy_epoch());
+    if (fenceRc.IsError()) {
+        std::unordered_set<std::string> failedIds;
+        std::transform(req.objects().begin(), req.objects().end(), std::inserter(failedIds, failedIds.end()),
+                       [](const auto &info) { return info.object_key(); });
+        FillMigrateDataResponse(req, {}, {}, failedIds, false, rsp);
+        return fenceRc;
     }
     auto rc = AcquireIncomingMigrationAdmission();
     if (rc.IsOk()) {
@@ -174,6 +170,15 @@ Status WorkerOcServiceMigrateImpl::CheckMigrateDataAdmission(const MigrateDataRe
     FillMigrateDataResponse(req, {}, {}, failedIds, false, rsp);
     rsp.set_scale_down_state(MigrateDataRspPb::DATA_MIGRATION_STARTED);
     return rc;
+}
+
+Status WorkerOcServiceMigrateImpl::ValidateRebalancePolicyFence(bool enabled, uint32_t targetPolicy,
+                                                                uint64_t targetEpoch) const
+{
+    RETURN_OK_IF_TRUE(!enabled);
+    CHECK_FAIL_RETURN_STATUS(evictionManager_ != nullptr, StatusCode::K_NOT_READY,
+                             "Target eviction manager is not initialized");
+    return evictionManager_->ValidateRebalancePolicy(targetPolicy, targetEpoch);
 }
 
 Status WorkerOcServiceMigrateImpl::AcquireIncomingMigrationAdmission(bool requireUbAdmission)
@@ -372,6 +377,11 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirect(const MigrateDataDirectReqP
     LOG(INFO) << FormatString("[Migrate Data] Count: %d, Objects: %s", req.objects_size(),
                               VectorToString(GetObjects(req)));
     RETURN_OK_IF_TRUE(req.objects().empty());
+    auto fenceRc = ValidateRebalancePolicyFence(req.has_rebalance_policy_fence(), req.target_eviction_policy(),
+                                                req.target_eviction_policy_epoch());
+    if (fenceRc.IsError()) {
+        return PrepareMigrateDataDirectError(req, rsp, fenceRc.GetCode(), fenceRc.GetMsg());
+    }
     auto admissionRc = AcquireIncomingMigrationAdmission(true);
     if (admissionRc.IsError()) {
         return PrepareMigrateDataDirectError(req, rsp, admissionRc.GetCode(), admissionRc.GetMsg());
@@ -412,8 +422,7 @@ Status WorkerOcServiceMigrateImpl::PrepareMigrateDataDirectError(const MigrateDa
 Status WorkerOcServiceMigrateImpl::PreCheckMigrateDataDirect(const MigrateDataDirectReqPb &req,
                                                              MigrateDataDirectRspPb &rsp)
 {
-    // Direct migration remains a SPILL-only wire protocol. Absence is the legacy SPILL encoding; a present non-SPILL
-    // value is rejected instead of silently retaining the old source location.
+    // Direct migration supports SPILL only.
     if (req.has_type() && req.type() != MigrateType::SPILL) {
         return PrepareMigrateDataDirectError(req, rsp, StatusCode::K_INVALID,
                                              "MigrateDataDirect only supports SPILL type");

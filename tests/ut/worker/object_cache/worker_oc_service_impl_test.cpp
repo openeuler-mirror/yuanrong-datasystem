@@ -3272,6 +3272,20 @@ TEST_F(WorkerOcServiceImplTest, NotifyRemoteGetRejectsAfterIncomingMigrationAdmi
     EXPECT_EQ(impl_->NotifyRemoteGet(req, rsp).GetCode(), StatusCode::K_NOT_READY);
 }
 
+TEST_F(WorkerOcServiceImplTest, NotifyRemoteGetRejectsStaleRebalancePolicyFence)
+{
+    ASSERT_NE(impl_->gMigrateProc_, nullptr);
+    NotifyRemoteGetReqPb req;
+    req.add_object_keys("stale-fenced-notify-object");
+    req.set_has_rebalance_policy_fence(true);
+    req.set_target_eviction_policy(master::EVICTION_POLICY_HEAT);
+    req.set_target_eviction_policy_epoch(0);
+    req.set_rebalance_task_id("stale-notify-target-task");
+    NotifyRemoteGetRspPb rsp;
+
+    EXPECT_EQ(impl_->NotifyRemoteGet(req, rsp).GetCode(), StatusCode::K_NOT_READY);
+}
+
 TEST_F(WorkerOcServiceImplTest, ExitIntentRejectsClientHealthBeforeTopologyDrainStarts)
 {
     ASSERT_NE(impl_->gMigrateProc_, nullptr);

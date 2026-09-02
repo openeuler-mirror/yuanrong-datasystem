@@ -253,10 +253,20 @@
     pending signals coalesce on the existing single-thread ensure loop.
   - memory-rebalance scheduling cross-checks ResourceManager candidates against one current immutable topology
     Snapshot and assigns only `ACTIVE` sources and targets. Before the first Snapshot is available, it preserves the
-    legacy resource-readiness fallback instead of blocking scheduling. Failed workers report structured failure
+    resource-readiness fallback instead of blocking scheduling. Failed workers report structured failure
     attribution: source/no-candidate failures cool the source, target failures cool the target, control-plane failures
-    cool neither, and unknown/mixed-version reports cool only the attempted source-target pair. Cooldowns expire only
-    by their steady-clock TTL and are not erased by the affected Worker's next resource report.
+    cool neither, and unknown reports cool only the attempted source-target pair. Cooldowns expire only
+    by their steady-clock TTL and are not erased by the affected Worker's next resource report. An active topology
+    batch suspends new tasks, cached-task replay, and successor chaining. Tasks created before that batch are marked
+    topology-stale; a stable topology version jump applies the same invalidation even when the scheduler did not observe
+    the active phase. If tasks were created through the resource-readiness fallback before the first Snapshot, the first
+    stable Snapshot also marks them stale and enters the stabilization barrier; an idle scheduler still accepts its
+    first stable Snapshot without delay. Matching terminal results close task accounting, but neither the task nor its
+    cached successor is replayed after stabilization. Memory rebalance resumes only after a one-second steady-clock cooldown
+    and one fresh resource report from every `ACTIVE` member; the report that first observes the final snapshot counts
+    toward that barrier. A Worker already executing a task rechecks topology before
+    each bounded local migration batch and stops at that boundary when a topology batch starts; partial progress is
+    reported without requesting a successor.
   - NodeSelector passes the exact master address that returned each rebalance task to RebalanceExecutor. Before every
     bounded migration batch, the executor expires the task when that assigned master is `FAILED`, locally unreachable,
     or absent from the current topology; a successor master reconstructs scheduling from later resource reports rather

@@ -81,13 +81,11 @@ MigrateDataHandler::MigrateDataHandler(MigrateType type, const std::string &loca
 
 bool MigrateDataHandler::ShouldUseFastTransport() const
 {
-    // Heat metadata is carried only by the TCP request. Keep the direct wire protocol unchanged for compatibility
-    // with old authenticated peers.
-    if (!objectHeats_.empty() || rebalancePolicyFence_.enabled) {
+    // Heat metadata is carried only by the TCP request.
+    if (!objectHeats_.empty()) {
         return false;
     }
-    // REBALANCE_KEEP_LOCAL forces TCP because an old target only understands the existing SPILL/SCALE_DOWN direct
-    // migration protocol. Other rebalance modes stay on TCP so their extended metadata remains wire-compatible.
+    // Fast transport cannot preserve the source copy required by REBALANCE_KEEP_LOCAL.
     if (type_ == MigrateType::REBALANCE_KEEP_LOCAL) {
         return false;
     }

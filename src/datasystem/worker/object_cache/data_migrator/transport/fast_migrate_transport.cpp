@@ -56,43 +56,61 @@ void FastMigrateTransport::ProcessMigrateResponse(const MigrateDataDirectReqPb &
         req.batchSize, req.api->Address(), rspPb.failed_object_keys_size(), VectorToString(rspPb.failed_object_keys()));
 }
 
-Status FastMigrateTransport::MigrateDataToRemote(const Request &req, Response &rsp)
+void FastMigrateTransport::FillRequestHeader(const Request &req, MigrateDataDirectReqPb &reqPb) const
 {
-    INJECT_POINT("FastMigrateTransport.MigrateDataToRemote.delay");
-    PerfPoint point(PerfKey::WORKER_MIGRATE_DIRECT_REQ_BUILD);
-    HostPort localAddress;
-    RETURN_IF_NOT_OK(localAddress.ParseString(req.localAddr));
-    // 1. Construct request.
-    MigrateDataDirectReqPb reqPb;
     reqPb.set_worker_addr(req.localAddr);
     reqPb.set_is_slot_migration(req.isSlotMigration);
     reqPb.set_slot_id(req.slotId);
     reqPb.set_is_retry(req.isRetry);
-    // MigrateDataDirect is restricted to the legacy SPILL semantics. Do not serialize the newer type fields here:
-    // an old authenticated peer parses them as unknown fields and reserializes them after timestamp, changing the
-    // AK/SK canonical byte order during a rolling upgrade.
-    uint64_t totalDataBytes = 0;
-    for (const auto &data : *req.datas) {
-        Status s = data->LockData();
-        if (s.IsError()) {
-            LOG(ERROR) << FormatString("[Migrate Data] Lock object %s failed, it will not be sent!", data->Id());
-            (void)rsp.failedKeys.emplace(data->Id());
-            continue;
-        }
-        if (data->Data() == nullptr) {
-            LOG(ERROR) << FormatString("[Migrate Data] Data pointer of object %s is null, it will not be sent!",
-                                       data->Id());
-            (void)rsp.failedKeys.emplace(data->Id());
-            continue;
-        }
-
-        auto *objInfo = reqPb.add_objects();
-        objInfo->set_object_key(data->Id());
-        objInfo->set_version(data->Version());
-        objInfo->set_data_size(data->Size());
-        totalDataBytes += data->Size();
-        RETURN_IF_NOT_OK(FillRequestUrmaInfo(localAddress, data->Data(), data->Offset(), data->MetaSize(), *objInfo));
+    if (req.rebalancePolicyFence != nullptr) {
+        reqPb.set_has_rebalance_policy_fence(true);
+        reqPb.set_target_eviction_policy(req.rebalancePolicyFence->targetPolicy);
+        reqPb.set_target_eviction_policy_epoch(req.rebalancePolicyFence->targetEpoch);
+        reqPb.set_rebalance_task_id(req.rebalancePolicyFence->taskId);
     }
+}
+
+Status FastMigrateTransport::AppendObject(const HostPort &localAddress, BaseDataUnit &data, Response &rsp,
+                                          MigrateDataDirectReqPb &reqPb, uint64_t &totalDataBytes) const
+{
+    Status rc = data.LockData();
+    if (rc.IsError()) {
+        LOG(ERROR) << FormatString("[Migrate Data] Lock object %s failed, it will not be sent!", data.Id());
+        (void)rsp.failedKeys.emplace(data.Id());
+        return Status::OK();
+    }
+    if (data.Data() == nullptr) {
+        LOG(ERROR) << FormatString("[Migrate Data] Data pointer of object %s is null, it will not be sent!", data.Id());
+        (void)rsp.failedKeys.emplace(data.Id());
+        return Status::OK();
+    }
+    auto *objInfo = reqPb.add_objects();
+    objInfo->set_object_key(data.Id());
+    objInfo->set_version(data.Version());
+    objInfo->set_data_size(data.Size());
+    totalDataBytes += data.Size();
+    return FillRequestUrmaInfo(localAddress, data.Data(), data.Offset(), data.MetaSize(), *objInfo);
+}
+
+Status FastMigrateTransport::BuildRequest(const Request &req, Response &rsp, MigrateDataDirectReqPb &reqPb,
+                                          uint64_t &totalDataBytes) const
+{
+    HostPort localAddress;
+    RETURN_IF_NOT_OK(localAddress.ParseString(req.localAddr));
+    FillRequestHeader(req, reqPb);
+    for (const auto &data : *req.datas) {
+        RETURN_IF_NOT_OK(AppendObject(localAddress, *data, rsp, reqPb, totalDataBytes));
+    }
+    return Status::OK();
+}
+
+Status FastMigrateTransport::MigrateDataToRemote(const Request &req, Response &rsp)
+{
+    INJECT_POINT("FastMigrateTransport.MigrateDataToRemote.delay");
+    PerfPoint point(PerfKey::WORKER_MIGRATE_DIRECT_REQ_BUILD);
+    MigrateDataDirectReqPb reqPb;
+    uint64_t totalDataBytes = 0;
+    RETURN_IF_NOT_OK(BuildRequest(req, rsp, reqPb, totalDataBytes));
 
     // Compute rpc timeout from total bytes and assumed bandwidth (10GB/s), capped at 180s.
     int64_t migrateDirectTimeoutMs = CalcMigrateDataDirectTimeoutMs(totalDataBytes);

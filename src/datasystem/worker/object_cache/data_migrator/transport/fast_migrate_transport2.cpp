@@ -58,6 +58,12 @@ Status FastMigrateTransport2::MigrateDataToRemote(const Request &req, Response &
     NotifyRemoteGetReqPb reqPb;
     reqPb.set_addr(req.localAddr);
     reqPb.set_is_spill(req.type == MigrateType::SPILL);
+    if (req.rebalancePolicyFence != nullptr) {
+        reqPb.set_has_rebalance_policy_fence(true);
+        reqPb.set_target_eviction_policy(req.rebalancePolicyFence->targetPolicy);
+        reqPb.set_target_eviction_policy_epoch(req.rebalancePolicyFence->targetEpoch);
+        reqPb.set_rebalance_task_id(req.rebalancePolicyFence->taskId);
+    }
     uint64_t totalDataBytes = 0;
     for (const auto &data : *req.datas) {
         Status s = data->LockData();

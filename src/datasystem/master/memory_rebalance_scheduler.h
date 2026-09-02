@@ -25,6 +25,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <bthread/mutex.h>
@@ -107,8 +108,14 @@ private:
     // budget, and build the next 300MB batch task if the budget is not exhausted and the target is
     // still below the watermark. Caller must hold mutex_.
     void ProcessFreshFeedbackLocked(RunningTask &prevTask, const master::ReportRebalanceResultReqPb &req,
-                                    uint64_t nowMs, master::ReportRebalanceResultRspPb &rsp);
+                                    uint64_t nowMs, bool allowSuccessor,
+                                    master::ReportRebalanceResultRspPb &rsp);
     std::shared_ptr<const cluster::TopologySnapshot> GetTopologySnapshot();
+    bool AllowRebalanceForTopologyLocked(const cluster::TopologySnapshot *snapshot,
+                                         const std::string &reportingWorker, uint64_t nowMs);
+    void StartTopologyStabilizationLocked(uint64_t version, uint64_t stableSinceMs);
+    void MarkActiveTasksTopologyStaleLocked();
+    static uint64_t GetTopologyCooldownMs();
     bool IsSourceCandidateLocked(const NodeInfo &node, uint64_t nowMs,
                                  const cluster::TopologySnapshot *topologySnapshot) const;
     void CollectWorkerCandidatesLocked(const std::unordered_map<std::string, NodeInfo> &snapshot,
@@ -143,7 +150,7 @@ private:
     // return false. Caller must hold mutex_.
     Status ReplayOrIgnoreStaleLocked(std::unordered_map<std::string, RunningTask>::iterator taskIt,
                                      const master::ReportRebalanceResultReqPb &req,
-                                     master::ReportRebalanceResultRspPb &rsp);
+                                     bool allowReplay, master::ReportRebalanceResultRspPb &rsp);
     uint64_t CalculateTaskBytesLocked(const NodeInfo &source, const NodeInfo &target,
                                        uint64_t targetInflightBytes, uint64_t heldBytes,
                                        uint64_t freshUsedMemory) const;
@@ -155,6 +162,11 @@ private:
     // Non-owning read-only topology view. WorkerOCServer destroys ResourceManager before TopologyEngine.
     const cluster::MembershipEndpointView *topologyMembership_{ nullptr };
     std::unordered_map<std::string, std::unordered_map<std::string, uint64_t>> pairCooldownUntilMs_;
+    bool topologyObserved_{ false };
+    bool topologyStabilizationPending_{ false };
+    uint64_t observedTopologyVersion_{ 0 };
+    uint64_t topologyStableSinceMs_{ 0 };
+    std::unordered_set<std::string> freshTopologyReportWorkers_;
 
 #ifdef WITH_TESTS
     friend class ::datasystem::ut::MemoryRebalanceSchedulerTest;

@@ -191,6 +191,10 @@ message MigrateDataDirectReqPb {
   bool is_retry = 5;
   MigrateType type = 6;
   bool has_type = 7;
+  bool has_rebalance_policy_fence = 8;
+  uint32 target_eviction_policy = 9;
+  uint64 target_eviction_policy_epoch = 10;
+  string rebalance_task_id = 11;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -211,6 +215,10 @@ message NotifyRemoteGetReqPb {
   string addr = 2;
   repeated uint64 versions = 3;
   bool is_spill = 4;
+  bool has_rebalance_policy_fence = 5;
+  uint32 target_eviction_policy = 6;
+  uint64 target_eviction_policy_epoch = 7;
+  string rebalance_task_id = 8;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
