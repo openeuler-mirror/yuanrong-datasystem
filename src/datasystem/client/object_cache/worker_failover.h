@@ -48,8 +48,9 @@ public:
 
     ~WorkerFailover() = default;
 
-    // ObjectClientImpl nested failover-domain types, re-exposed for the migrated method set.
-    using WorkerNode = ObjectClientImpl::WorkerNode;
+    // WorkerNode comes from client_mode_types.h; the remaining failover-domain types
+    // (WorkerSwitchState/StandbySwitchAttemptResult/ShmRecoveryState) stay nested in
+    // ObjectClientImpl and are re-exposed for the migrated method set.
     using WorkerSwitchState = ObjectClientImpl::WorkerSwitchState;
     using StandbySwitchAttemptResult = ObjectClientImpl::StandbySwitchAttemptResult;
     using ShmRecoveryState = ObjectClientImpl::ShmRecoveryState;

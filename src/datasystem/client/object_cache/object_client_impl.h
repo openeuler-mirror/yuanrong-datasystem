@@ -42,6 +42,7 @@
 #include "datasystem/client/worker_api/listen_worker.h"
 #include "datasystem/client/mmap_manager/mmap_manager.h"
 #include "datasystem/client/object_cache/client_memory_ref_table.h"
+#include "datasystem/client/object_cache/client_mode_types.h"
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/client/object_cache/client_worker_api/client_worker_local_api.h"
 #include "datasystem/client/object_cache/client_worker_api/client_worker_remote_api.h"
@@ -86,6 +87,8 @@
 namespace datasystem {
 namespace object_cache {
 
+class RoutedMode;
+
 class BoundMode;
 
 class WorkerFailover;
@@ -109,6 +112,7 @@ struct FullParam : public CreateParam {
 using P2PPeerTable = tbb::concurrent_hash_map<std::string, P2PPeer>;
 
 class __attribute((visibility("default"))) ObjectClientImpl : public std::enable_shared_from_this<ObjectClientImpl> {
+    friend class RoutedMode;
     friend class BoundMode;
     friend class WorkerFailover;
 public:
@@ -686,11 +690,6 @@ public:
     Status Exist(const std::vector<std::string> &keys, std::vector<bool> &exists, const bool queryL2Cache,
                  const bool isLocal);
 
-    Status RunExist(std::shared_ptr<client::Routing> routing,
-                    std::unique_ptr<client::TransportLayer> &transportLayer,
-                    std::shared_ptr<IClientWorkerApi> &workerApi, const std::vector<std::string> &keys,
-                    std::vector<bool> &exists, const bool queryL2Cache, const bool isLocal,
-                    const SensitiveValue &token);
     /**
      * @brief Sets expiration time for key list (in seconds)
      * @param[in] key The keys to set expiration for.
@@ -735,20 +734,7 @@ public:
     std::string GetTransportType() const;
 
 private:
-    enum class SetFailureStage { CREATE, TRANSFER, PUBLISH };
-
-    struct SetRouteContext {
-        HostPort worker;
-        std::shared_ptr<IClientWorkerApi> clientApi;
-        std::shared_ptr<IClientWorkerApi> directWorkerApi;
-        std::unique_ptr<Raii> invokeGuard;
-    };
-
-    struct MSetRouteGroup {
-        HostPort worker;
-        std::vector<std::string> keys;
-        std::vector<StringView> values;
-    };
+    // SetFailureStage/SetRouteContext/MSetRouteGroup/WorkerNode moved to client_mode_types.h.
 
     Status BuildSetRouteContext(const HostPort &worker, SetRouteContext &routeContext);
     std::vector<HostPort> MergeWriteTargetExclusions(const std::vector<HostPort> &excludedWorkers) const;
@@ -758,39 +744,11 @@ private:
 
     client::TransportRequestContext BuildTransportRequestContext(const SetRouteContext &routeContext) const;
 
-    Status ProcessTransportPut(const std::string &objectKey, const uint8_t *data, uint64_t size,
-                               const FullParam &param, const std::unordered_set<std::string> &nestedObjectKeys,
-                               uint32_t ttlSecond, int existence, const SetRouteContext &routeContext,
-                               SetFailureStage &failureStage, client::TransportSetResult &transportResult,
-                               int32_t requestTimeoutMs, bool isSeal = false);
-
-    // Routed two-step Create/Publish (Component D). When local cache is off, allocate the buffer
-    // on the hash-ring-selected worker via the transport layer and bridge the result to a legacy
-    // Buffer; seal it via the transport layer on the worker pinned at Create time. The one-step
-    // equivalents are ProcessTransportPut (Create+Set) above.
-    Status CreateRoutedBuffer(const std::string &objectKey, uint64_t dataSize, const FullParam &param,
-                              std::shared_ptr<Buffer> &buffer);
-
     Status PublishRoutedBuffer(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
                                const std::unordered_set<std::string> &nestedObjectKeys, bool isSeal);
 
     Status ReplayRoutedBuffer(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
                               const std::unordered_set<std::string> &nestedObjectKeys, bool isSeal);
-
-    // Routed two-step MultiCreate (lc=false batch). Allocates buffers on hash-ring-selected workers
-    // via transportLayer_->MCreate and bridges each ObjectBufferInfo to a legacy Buffer at its
-    // original key index. Mirrors CreateRoutedBuffer for the batch case.
-    Status MultiCreateRouted(const std::vector<std::string> &objectKeyList,
-                             const std::vector<uint64_t> &dataSizeList, const FullParam &param,
-                             std::vector<std::shared_ptr<Buffer>> &bufferList, std::vector<bool> &exists);
-
-    // Build the route context for one worker, call transportLayer_->MCreate, and bridge each
-    // returned ObjectBuffer to a legacy Buffer at its original key index. Extracted from
-    // MultiCreateRouted to keep each function within the codecheck size limit.
-    Status ProcessRoutedMCreateGroup(const HostPort &worker, const std::vector<std::string> &keys,
-                                     const std::vector<uint64_t> &sizes, const FullParam &param,
-                                     const std::unordered_map<std::string, size_t> &keyIndex,
-                                     std::vector<std::shared_ptr<Buffer>> &bufferList);
 
     // Routed two-step MSet(vector<Buffer>) (lc=false batch). When every non-placeholder buffer is a
     // routed write, groups them by workerAddr and publishes per worker via transportLayer_->MSet;
@@ -818,7 +776,6 @@ private:
     friend Buffer;
     friend DeviceBuffer;
     friend ClientDeviceObjectManager;
-    enum WorkerNode : uint32_t { LOCAL_WORKER = 0, STANDBY1_WORKER, STANDBY2_WORKER };
 
     enum class WorkerSwitchState : uint8_t { AVAILABLE = 0, SWITCHING, NO_SWITCHABLE_WORKER };
 
@@ -961,35 +918,6 @@ private:
 
     Status InitTransportLayer();
 
-    void BuildTransportReadRequest(const std::vector<std::string> &objectKeys, client::ObjectReadRequest &request,
-                                   std::vector<Status> &itemStatuses, int64_t subTimeoutMs,
-                                   bool queryL2Cache);
-
-
-    Status GetFromTransportLayer(const std::vector<std::string> &objectKeys,
-                                 std::vector<std::shared_ptr<Buffer>> &buffers, bool traceEnabled,
-                                 int64_t subTimeoutMs, bool queryL2Cache);
-
-    Status BuildTransportGetResponse(
-        client::ObjectReadItemResult &item, GetRspPb &response,
-        std::unordered_map<std::string, std::shared_ptr<ObjectBufferInfo>> &ubBufferInfos, uint64_t &payloadSize);
-
-    Status MaterializeTransportItem(const std::string &objectKey, client::ObjectReadItemResult &item,
-                                    std::shared_ptr<Buffer> &buffer);
-
-    Status ApplyTransportReadResult(const std::vector<std::string> &objectKeys,
-                                    const client::ObjectReadRequest &request, client::ObjectReadResult &result,
-                                    const Status &transportStatus, std::vector<std::shared_ptr<Buffer>> &buffers,
-                                    std::vector<Status> &itemStatuses, AccessTransportKind &actualKind);
-
-    Status ReadTransportRound(const std::vector<std::string> &objectKeys, bool traceEnabled, int64_t subTimeoutMs,
-                              bool queryL2Cache, std::vector<std::shared_ptr<Buffer>> &buffers,
-                              std::vector<Status> &itemStatuses, AccessTransportKind &actualKind,
-                              Status &transportStatus);
-
-    Status FinishTransportRead(const std::vector<Status> &itemStatuses, AccessTransportKind actualKind,
-                               const Status &transportStatus);
-
 #ifdef USE_URMA
 
     /**
@@ -1088,55 +1016,6 @@ private:
     }
 
     /**
-     * @brief Check the validation of the input parameter of the multiple set.
-     * @param[in] keys The keys to be set.
-     * @param[in] vals The values for the keys.
-     * @param[in] existence Whether set if some key exists.
-     * @param[out] outFailedKeys out failed keys.
-     * @param[out] deduplicateKeys the deduplicate key .
-     * @param[out] deduplicateVals the deduplicate vals .
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status CheckMultiSetInputParamValidationNtx(const std::vector<std::string> &keys,
-                                                const std::vector<StringView> &vals,
-                                                std::vector<std::string> &outFailedKeys,
-                                                std::vector<std::string> &deduplicateKeys,
-                                                std::vector<StringView> &deduplicateVals);
-
-    /**
-     * @brief Legacy local-cache MSet path retained while SHM batch transport is not implemented in TransportLayer.
-     */
-
-    Status BuildMSetRouteGroups(const std::vector<std::string> &keys, const std::vector<StringView> &values,
-                                std::vector<MSetRouteGroup> &groups);
-
-    Status MemoryCopyTransportMSetBuffers(const MSetRouteGroup &group,
-                                          const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
-                                          uint64_t dataSizeSum);
-
-    Status ProcessTransportMSet(const MSetRouteGroup &group, const MSetParam &param,
-                                const SetRouteContext &routeContext, client::TransportMSetResult &result,
-                                SetFailureStage &failureStage, PerfPoint &point);
-
-    Status ExecuteTransportMSetGroup(const MSetRouteGroup &group, const MSetParam &param,
-                                     std::vector<std::string> &outFailedKeys, PerfPoint &point);
-
-    Status ExecuteTransportMSetGroupAttempt(const MSetRouteGroup &group, const MSetParam &param,
-                                            std::vector<HostPort> excludedWorkers, size_t attempt,
-                                            std::vector<std::string> &outFailedKeys, PerfPoint &point);
-
-    Status BuildMSetRetryRouteGroups(const MSetRouteGroup &group, const std::vector<HostPort> &excludedWorkers,
-                                     std::vector<MSetRouteGroup> &groups);
-
-    Status ExecuteTransportMSetRetryGroups(const std::vector<MSetRouteGroup> &groups, const MSetParam &param,
-                                           const std::vector<HostPort> &excludedWorkers, size_t attempt,
-                                           std::vector<std::string> &outFailedKeys, PerfPoint &point);
-
-    /** @brief Routed MSet path used when local cache is disabled; replaces the legacy path after SHM batch support. */
-    Status MSetThroughTransport(const std::vector<std::string> &keys, const std::vector<StringView> &values,
-                                const MSetParam &param, std::vector<std::string> &outFailedKeys, PerfPoint &point);
-
-    /**
      * @brief Get clientId.
      * @return The ID of the current client.
      */
@@ -1183,7 +1062,6 @@ private:
 
     static bool ShouldRefreshRoutingAfterFailure(StatusCode code);
 
-    void HandleDirectGetFailure(const std::shared_ptr<IClientWorkerApi> &workerApi, const Status &status);
 
     void MaybeSwitchWorkerRemovedFromRing(const ::datasystem::ClusterTopologyPb &ring);
 
@@ -1375,6 +1253,7 @@ private:
     // Must stay declared before the dependencies it references (mmapManager_/transportLayer_/
     // pools/ref tables below): they are destroyed before boundMode_, whose destructor must
     // never dereference them. ShutDown drains work before member destruction begins.
+    std::unique_ptr<RoutedMode> routedMode_;
     std::unique_ptr<BoundMode> boundMode_;
     // Destructed before workerApi_/listenWorker_; callbacks registered into them are cleared in ShutDown.
     std::unique_ptr<WorkerFailover> failover_;

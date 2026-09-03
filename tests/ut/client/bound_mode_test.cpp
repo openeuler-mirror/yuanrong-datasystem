@@ -87,7 +87,7 @@ protected:
         auto mock = std::make_shared<MockClientWorkerApi>();
         mockApi = mock;
         workerApi.resize(3);
-        workerApi[static_cast<BoundMode::WorkerNode>(0)] = mock;
+        workerApi[static_cast<WorkerNode>(0)] = mock;
         BoundMode::Deps deps{ workerApi,
                               nullMmap,
                               &refTable,
@@ -133,7 +133,7 @@ protected:
     std::shared_ptr<ThreadPool> asyncPipelineRH2DPool;
     re2::RE2 simpleIdRe{ "^[a-zA-Z0-9_]*$" };
     std::shared_timed_mutex shutdownMux;
-    std::atomic<BoundMode::WorkerNode> currentNode{ static_cast<BoundMode::WorkerNode>(0) };
+    std::atomic<WorkerNode> currentNode{ static_cast<WorkerNode>(0) };
     int32_t requestTimeoutMs = 1000;
     std::string tenantId = "tn0";
     SensitiveValue token;

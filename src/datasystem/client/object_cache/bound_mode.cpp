@@ -1,5 +1,5 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -83,8 +83,11 @@ void MergeTransportKind(std::atomic<AccessTransportKind> &aggregatedTransport, A
     auto current = aggregatedTransport.load(std::memory_order_relaxed);
     // Transport priority only moves upward (SHM -> UB -> TCP), so failed CAS retries either
     // observe a newer higher-priority value and exit, or eventually publish this thread's value.
-    while (static_cast<uint8_t>(kind) > static_cast<uint8_t>(current)
-           && !aggregatedTransport.compare_exchange_weak(current, kind, std::memory_order_relaxed)) {
+    // compare_exchange_weak rewrites `current` with the observed value on every failed attempt.
+    bool casSucceeded = static_cast<uint8_t>(kind) <= static_cast<uint8_t>(current);
+    while (!casSucceeded) {
+        casSucceeded = aggregatedTransport.compare_exchange_weak(current, kind, std::memory_order_relaxed)
+                       || static_cast<uint8_t>(kind) <= static_cast<uint8_t>(current);
     }
 }
 
@@ -124,12 +127,6 @@ void MergeTransportKind(std::atomic<AccessTransportKind> &aggregatedTransport, A
     return batches;
 }
 }  // namespace
-
-struct PipelineAsyncResource {
-    std::future<Status> rpcFuture;
-    std::promise<AsyncResult> promise;
-    PiplnRh2dParam piplnRh2dParam;
-};
 
 void ComputeDataSizes(const std::vector<StringView> &vals, std::vector<uint64_t> &sizes, uint64_t &sum)
 {
@@ -271,7 +268,7 @@ void BoundMode::BatchDecreaseRefCnt(const std::vector<std::pair<ShmKey, std::uin
         }
 
         PerfPoint descPoint(PerfKey::CLIENT_BATCH_DECREASE_MEM_REF);
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi_[ObjectClientImpl::LOCAL_WORKER]->DecreaseWorkerRef(decreaseShms),
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi_[LOCAL_WORKER]->DecreaseWorkerRef(decreaseShms),
                                          "DecreaseReferenceCnt failed.");
         return Status::OK();
     };
@@ -315,7 +312,7 @@ Status BoundMode::DecreaseReferenceCntImpl(const ShmKey &shmId, bool isShm, uint
 {
     bool needDecreaseWorkerRef = memoryRefCount_->DecreaseRef(shmId);
     VLOG(1) << FormatString("Try decrease ref count for shmId %s on clientId %s, needDecreaseWorkerRef %d", shmId,
-                            workerApi_[ObjectClientImpl::LOCAL_WORKER]->clientId_, needDecreaseWorkerRef);
+                            workerApi_[LOCAL_WORKER]->clientId_, needDecreaseWorkerRef);
     if (!needDecreaseWorkerRef) {
         METRIC_INC(metrics::KvMetricId::CLIENT_DEC_REF_SKIPPED_TOTAL);
         return Status::OK();
@@ -328,7 +325,7 @@ Status BoundMode::DecreaseReferenceCntImpl(const ShmKey &shmId, bool isShm, uint
     PerfPoint descPoint(PerfKey::CLIENT_DECREASE_MEM_REF);
     auto checkFunc = host_.checkConnWhileShmModify;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        workerApi_[ObjectClientImpl::LOCAL_WORKER]->DecreaseShmRef(shmId, checkFunc, shutdownMux_),
+        workerApi_[LOCAL_WORKER]->DecreaseShmRef(shmId, checkFunc, shutdownMux_),
         "DecreaseShmRef failed.");
     return Status::OK();
 }
@@ -355,7 +352,7 @@ Status BoundMode::Seal(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
     }
     PerfPoint rpcPoint(PerfKey::RPC_CLIENT_SEAL_OBJECT);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        workerApi_[ObjectClientImpl::LOCAL_WORKER]->Publish(bufferInfo, isShm, true, nestedObjectKeys),
+        workerApi_[LOCAL_WORKER]->Publish(bufferInfo, isShm, true, nestedObjectKeys),
         FormatString("Seal object %s", objectKey));
     rpcPoint.Record();
     VLOG(1) << "Finished sealing object, object_key: " << objectKey;
@@ -437,7 +434,7 @@ Status BoundMode::InvalidateBuffer(const std::string &objectKey)
     RETURN_IF_NOT_OK(host_.isClientReady());
     RETURN_IF_NOT_OK(ObjectClientImpl::CheckValidObjectKey(objectKey));
     RETURN_IF_NOT_OK(host_.checkConnection());
-    RETURN_IF_NOT_OK(workerApi_[ObjectClientImpl::LOCAL_WORKER]->InvalidateBuffer(objectKey));
+    RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->InvalidateBuffer(objectKey));
     return Status::OK();
 }
 
@@ -615,7 +612,7 @@ Status BoundMode::CheckPipelineRH2DArgs(const std::vector<std::string> &objectKe
 Status BoundMode::CheckLocalPipelineRH2DArgs(std::shared_ptr<IClientWorkerApi> &workerApi)
 {
     // client should be at same site with worker by shmem
-    workerApi = workerApi_[ObjectClientImpl::LOCAL_WORKER];
+    workerApi = workerApi_[LOCAL_WORKER];
     CHECK_FAIL_RETURN_STATUS(workerApi != nullptr, K_INVALID, "no local worker api");
     workerApi->IncreaseInvokeCount();
     CHECK_FAIL_RETURN_STATUS(workerApi->IsShmEnable(), K_NOT_SUPPORTED,
@@ -651,7 +648,7 @@ std::shared_future<AsyncResult> BoundMode::GetWithOsTransportPipeline(
     }
 
     const auto localWorkerApi =
-        workerApi_.size() > ObjectClientImpl::LOCAL_WORKER ? workerApi_[ObjectClientImpl::LOCAL_WORKER] : nullptr;
+        workerApi_.size() > LOCAL_WORKER ? workerApi_[LOCAL_WORKER] : nullptr;
     const bool hasLocalWorker = localWorkerApi != nullptr && localWorkerApi->IsShmEnable();
     if (!hasLocalWorker && enableClientDirectPipelineH2D_) {
         auto traceContext = Trace::Instance().GetContext();
@@ -779,7 +776,7 @@ Status BoundMode::RecoverWorkerAndRetryGet(const std::shared_ptr<IClientWorkerAp
                                            std::vector<std::shared_ptr<Buffer>> &buffers)
 {
     auto recoveryReason = client::WorkerRecoveryReason::CLIENT_REMOVED;
-    auto recoveryStatus = workerNode == ObjectClientImpl::LOCAL_WORKER
+    auto recoveryStatus = workerNode == LOCAL_WORKER
                               ? failover_->ProcessWorkerLost(recoveryReason)
                               : failover_->ProcessStandbyWorkerLost(workerNode, recoveryReason);
     if (recoveryStatus.IsError()) {
@@ -1526,7 +1523,7 @@ Status BoundMode::GIncreaseRef(const std::vector<std::string> &objectKeys,
     if (!remoteClientId.empty()) {
         CHECK_FAIL_RETURN_STATUS(Validator::IsRegexMatch(simpleIdRe_, remoteClientId), K_INVALID,
                                  "The remoteClientId contains illegal char(s).");
-        auto rc = workerApi_[ObjectClientImpl::LOCAL_WORKER]->GIncreaseWorkerRef(objectKeys,
+        auto rc = workerApi_[LOCAL_WORKER]->GIncreaseWorkerRef(objectKeys,
                                                                                  failedObjectKeys, remoteClientId);
         VLOG(1) << "[Ref] Global ref count GIncreaseRef end" << VectorToString(objectKeys);
         if (!failedObjectKeys.empty()) {
@@ -1565,7 +1562,7 @@ Status BoundMode::GIncreaseRef(const std::vector<std::string> &objectKeys,
 
     VLOG(1) << "[Ref] Global ref count change from 0 to 1 list: " << VectorToString(firstIncIds);
 
-    auto rc = workerApi_[ObjectClientImpl::LOCAL_WORKER]->GIncreaseWorkerRef(firstIncIds, failedObjectKeys);
+    auto rc = workerApi_[LOCAL_WORKER]->GIncreaseWorkerRef(firstIncIds, failedObjectKeys);
     if (!failedObjectKeys.empty()) {
         GIncreaseRefRollback(failedObjectKeys, accessorTable);
     }
@@ -1622,7 +1619,7 @@ Status BoundMode::ReleaseGRefs(const std::string &remoteClientId)
     }
     CHECK_FAIL_RETURN_STATUS(Validator::IsRegexMatch(simpleIdRe_, remoteClientId), K_INVALID,
                              "The remoteClientId contains illegal char(s).");
-    RETURN_IF_NOT_OK(workerApi_[ObjectClientImpl::LOCAL_WORKER]->ReleaseGRefs(remoteClientId));
+    RETURN_IF_NOT_OK(workerApi_[LOCAL_WORKER]->ReleaseGRefs(remoteClientId));
     return Status::OK();
 }
 
@@ -1642,7 +1639,7 @@ Status BoundMode::GDecreaseRef(const std::vector<std::string> &objectKeys,
     if (!remoteClientId.empty()) {
         CHECK_FAIL_RETURN_STATUS(Validator::IsRegexMatch(simpleIdRe_, remoteClientId), K_INVALID,
                                  "The remoteClientId contains illegal char(s).");
-        auto rc = workerApi_[ObjectClientImpl::LOCAL_WORKER]->GDecreaseWorkerRef(objectKeys,
+        auto rc = workerApi_[LOCAL_WORKER]->GDecreaseWorkerRef(objectKeys,
                                                                                  failedObjectKeys, remoteClientId);
         VLOG(1) << "[Ref] Global ref count GDecreaseRef end " << VectorToString(objectKeys);
         return rc;
@@ -1677,7 +1674,7 @@ Status BoundMode::GDecreaseRef(const std::vector<std::string> &objectKeys,
     RETURN_OK_IF_TRUE(finishDecIds.empty());
 
     VLOG(1) << "[Ref] Global ref count change from 1 to 0 list :" << VectorToString(finishDecIds);
-    Status rc = workerApi_[ObjectClientImpl::LOCAL_WORKER]->GDecreaseWorkerRef(finishDecIds, failedObjectKeys);
+    Status rc = workerApi_[LOCAL_WORKER]->GDecreaseWorkerRef(finishDecIds, failedObjectKeys);
     if (!failedObjectKeys.empty()) {
         GDecreaseRefRollback(failedObjectKeys, accessorTable);
     }

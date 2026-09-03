@@ -47,6 +47,7 @@ extern char **environ;
 #include "datasystem/client/object_cache/object_client_impl.h"
 #undef private
 
+#include "datasystem/client/object_cache/routed_mode.h"
 #include "datasystem/client/object_cache/transport/data_plane/data_plane_manager.h"
 #include "datasystem/client/worker_api/listen_worker.h"
 #include "datasystem/client/object_cache/transport/data_plane/shm_transporter.h"
@@ -3530,7 +3531,7 @@ TEST(ObjectClientTransportTest, ReadTransportRoundPreservesMixedItemStatusesWhen
     AccessTransportKind actualKind = AccessTransportKind::SHM;
     Status transportStatus;
 
-    ASSERT_TRUE(client
+    ASSERT_TRUE(client->routedMode_
                     ->ReadTransportRound(objectKeys, false, 1000, false, buffers, itemStatuses, actualKind,
                                          transportStatus)
                     .IsOk());
@@ -3581,7 +3582,7 @@ TEST(ObjectClientTransportTest, DrainingLocationRetriesOnlyPendingKeys)
 
     const std::vector<std::string> objectKeys{ "draining", "stable" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
-    ASSERT_TRUE(client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false).IsOk());
+    ASSERT_TRUE(client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false).IsOk());
     ASSERT_EQ(metadata->keyGroups.size(), 2u);
     EXPECT_EQ(metadata->keyGroups[0], objectKeys);
     EXPECT_EQ(metadata->keyGroups[1], std::vector<std::string>({ "draining" }));
@@ -3631,7 +3632,7 @@ TEST(ObjectClientTransportTest, PeerDeadMetadataOwnerRetriesRoutedRead)
 
     const std::vector<std::string> objectKeys{ "peer-dead" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
-    ASSERT_TRUE(client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false).IsOk());
+    ASSERT_TRUE(client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false).IsOk());
     EXPECT_EQ(metadataAttempts.load(), 2);
     EXPECT_EQ(metadata->keyGroups.size(), 2u);
     EXPECT_EQ(metadata->addresses, std::vector<HostPort>({ ownerAddress, refreshedOwnerAddress }));
@@ -3662,7 +3663,7 @@ TEST(ObjectClientTransportTest, DrainingLocationStopsAfterThreeFastRetries)
 
     const std::vector<std::string> objectKeys{ "draining" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
-    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    Status rc = client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
     EXPECT_EQ(rc.GetCode(), K_NOT_READY);
     EXPECT_NE(rc.GetMsg().find("Worker is draining for ScaleIn"), std::string::npos);
     EXPECT_EQ(metadata->keyGroups.size(), 4u);
@@ -3696,7 +3697,7 @@ TEST(ObjectClientTransportTest, AlternatingRefreshableErrorsKeepConsumedRetryBud
 
     const std::vector<std::string> objectKeys{ "alternating" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
-    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    Status rc = client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
     EXPECT_EQ(rc.GetCode(), K_NOT_READY);
     EXPECT_EQ(attempts.load(), 7);
     EXPECT_EQ(metadata->keyGroups.size(), 7u);
@@ -3727,7 +3728,7 @@ TEST(ObjectClientTransportTest, StaleLocationStopsAfterFiveRetries)
 
     const std::vector<std::string> objectKeys{ "stale" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
-    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    Status rc = client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
     EXPECT_EQ(rc.GetCode(), K_RPC_UNAVAILABLE);
     EXPECT_FALSE(IsTransportSnapshotStaleLocation(rc)) << rc.ToString();
     EXPECT_NE(rc.GetMsg().find(STALE_TRANSPORT_SNAPSHOT_MESSAGE), std::string::npos) << rc.ToString();
@@ -3775,7 +3776,7 @@ TEST(ObjectClientTransportTest, StaleLocationSlowReadDeadlineReturnsPublicDeadli
 
     const std::vector<std::string> objectKeys{ "stale" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
-    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    Status rc = client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
     EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED) << rc.ToString();
     EXPECT_FALSE(IsTransportSnapshotStaleLocation(rc)) << rc.ToString();
     EXPECT_NE(rc.GetMsg().find(STALE_TRANSPORT_SNAPSHOT_MESSAGE), std::string::npos) << rc.ToString();
@@ -3807,7 +3808,7 @@ TEST(ObjectClientTransportTest, BatchStaleLocationBudgetReturnsPublicAvailabilit
 
     const std::vector<std::string> objectKeys{ "stale-a", "stale-b" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
-    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    Status rc = client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
     EXPECT_EQ(rc.GetCode(), K_RPC_UNAVAILABLE) << rc.ToString();
     EXPECT_FALSE(IsTransportSnapshotStaleLocation(rc)) << rc.ToString();
     EXPECT_NE(rc.GetMsg().find(STALE_TRANSPORT_SNAPSHOT_MESSAGE), std::string::npos) << rc.ToString();
@@ -3843,7 +3844,7 @@ TEST(ObjectClientTransportTest, BatchStaleLocationSlowReadDeadlineReturnsPublicD
 
     const std::vector<std::string> objectKeys{ "stale-a", "stale-b" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
-    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    Status rc = client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
     EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED) << rc.ToString();
     EXPECT_FALSE(IsTransportSnapshotStaleLocation(rc)) << rc.ToString();
     EXPECT_NE(rc.GetMsg().find(STALE_TRANSPORT_SNAPSHOT_MESSAGE), std::string::npos) << rc.ToString();
@@ -3880,8 +3881,8 @@ TEST(ObjectClientTransportTest, BatchExternalOwnersMaterializeIntoIndependentSdk
     std::shared_ptr<Buffer> firstBuffer;
     std::shared_ptr<Buffer> secondBuffer;
 
-    ASSERT_TRUE(client->MaterializeTransportItem("one", first, firstBuffer).IsOk());
-    ASSERT_TRUE(client->MaterializeTransportItem("two", second, secondBuffer).IsOk());
+    ASSERT_TRUE(client->routedMode_->MaterializeTransportItem("one", first, firstBuffer).IsOk());
+    ASSERT_TRUE(client->routedMode_->MaterializeTransportItem("two", second, secondBuffer).IsOk());
     first = ObjectReadItemResult{};
     second = ObjectReadItemResult{};
     owner.reset();
@@ -3926,7 +3927,7 @@ TEST(ObjectClientTransportTest, RoutedShmBufferUsesTargetSessionLockId)
     item.data.externalMeta = meta;
     std::shared_ptr<Buffer> buffer;
 
-    ASSERT_TRUE(client->MaterializeTransportItem(item.objectKey, item, buffer).IsOk());
+    ASSERT_TRUE(client->routedMode_->MaterializeTransportItem(item.objectKey, item, buffer).IsOk());
     ASSERT_NE(buffer, nullptr);
     ASSERT_NE(buffer->bufferInfo_, nullptr);
     EXPECT_TRUE(buffer->bufferInfo_->useSessionLockId);
@@ -4001,9 +4002,9 @@ TEST(ObjectClientTransportTest, RoutedReplayKeepsBufferUsableAfterSourceWorkerRe
     workerApi->clientId_ = "routed-publish-rebind-test";
     workerApi->SetHealthy(true);
     client->workerApi_.emplace_back(workerApi);
-    client->listenWorker_.resize(object_cache::ObjectClientImpl::STANDBY2_WORKER + 1);
-    client->listenWorker_[object_cache::ObjectClientImpl::LOCAL_WORKER] = std::make_shared<client::ListenWorker>(
-        workerApi, HeartbeatType::NO_HEARTBEAT, object_cache::ObjectClientImpl::LOCAL_WORKER, nullptr);
+    client->listenWorker_.resize(object_cache::STANDBY2_WORKER + 1);
+    client->listenWorker_[object_cache::LOCAL_WORKER] = std::make_shared<client::ListenWorker>(
+        workerApi, HeartbeatType::NO_HEARTBEAT, object_cache::LOCAL_WORKER, nullptr);
     client->enableLocalCache_ = false;
     client->transportLayer_ = std::make_unique<TestTransportLayer>(manager);
     std::atomic_store(&client->routing_, MakeSingleWorkerRouting(remainingWorker));
@@ -4119,9 +4120,9 @@ TEST(ObjectClientTransportTest, LocalCacheSetRouteSkipsQuarantinedBoundWorker)
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(boundWorker);
     workerApi->clientId_ = "local-cache-write-target-test";
     client.workerApi_.emplace_back(workerApi);
-    client.listenWorker_.resize(object_cache::ObjectClientImpl::STANDBY2_WORKER + 1);
-    client.listenWorker_[object_cache::ObjectClientImpl::LOCAL_WORKER] = std::make_shared<client::ListenWorker>(
-        workerApi, HeartbeatType::NO_HEARTBEAT, object_cache::ObjectClientImpl::LOCAL_WORKER, nullptr);
+    client.listenWorker_.resize(object_cache::STANDBY2_WORKER + 1);
+    client.listenWorker_[object_cache::LOCAL_WORKER] = std::make_shared<client::ListenWorker>(
+        workerApi, HeartbeatType::NO_HEARTBEAT, object_cache::LOCAL_WORKER, nullptr);
     client.enableLocalCache_ = true;
     client.dataPlacementPolicy_ = DataPlacementPolicy::PREFERRED_SAME_NODE;
     client.ubHealthFilter_ = std::make_shared<client::UbHealthFilter>();
@@ -4132,7 +4133,7 @@ TEST(ObjectClientTransportTest, LocalCacheSetRouteSkipsQuarantinedBoundWorker)
     std::atomic_store(&client.routing_, routing);
     workerApi->SetHealthy(true);
 
-    object_cache::ObjectClientImpl::SetRouteContext route;
+    object_cache::SetRouteContext route;
     ASSERT_TRUE(client.SelectSetRoute("rerouted", {}, route).IsOk());
 
     EXPECT_EQ(route.worker, healthyWorker);
@@ -4151,9 +4152,9 @@ TEST(ObjectClientTransportTest, LocalCacheSetRouteKeepsHealthyShmPathForUbQuaran
     workerApi->clientId_ = "local-cache-shm-write-target-test";
     workerApi->shmEnableType_ = ShmEnableType::UDS;
     client.workerApi_.emplace_back(workerApi);
-    client.listenWorker_.resize(object_cache::ObjectClientImpl::STANDBY2_WORKER + 1);
-    client.listenWorker_[object_cache::ObjectClientImpl::LOCAL_WORKER] = std::make_shared<client::ListenWorker>(
-        workerApi, HeartbeatType::NO_HEARTBEAT, object_cache::ObjectClientImpl::LOCAL_WORKER, nullptr);
+    client.listenWorker_.resize(object_cache::STANDBY2_WORKER + 1);
+    client.listenWorker_[object_cache::LOCAL_WORKER] = std::make_shared<client::ListenWorker>(
+        workerApi, HeartbeatType::NO_HEARTBEAT, object_cache::LOCAL_WORKER, nullptr);
     client.enableLocalCache_ = true;
     client.dataPlacementPolicy_ = DataPlacementPolicy::PREFERRED_SAME_NODE;
     client.ubHealthFilter_ = std::make_shared<client::UbHealthFilter>();
@@ -4164,13 +4165,13 @@ TEST(ObjectClientTransportTest, LocalCacheSetRouteKeepsHealthyShmPathForUbQuaran
     std::atomic_store(&client.routing_, routing);
     workerApi->SetHealthy(true);
 
-    object_cache::ObjectClientImpl::SetRouteContext route;
+    object_cache::SetRouteContext route;
     ASSERT_TRUE(client.SelectSetRoute("local-shm", {}, route).IsOk());
 
     EXPECT_EQ(route.worker, boundWorker);
     EXPECT_EQ(route.directWorkerApi, workerApi);
 
-    object_cache::ObjectClientImpl::SetRouteContext retryRoute;
+    object_cache::SetRouteContext retryRoute;
     ASSERT_TRUE(client.SelectSetRoute("retry", { boundWorker }, retryRoute).IsOk());
 
     EXPECT_EQ(retryRoute.worker, healthyWorker);
@@ -4224,7 +4225,7 @@ TEST(ObjectClientTransportTest, ShutdownWaitsForAsyncWorkerSwitchTasks)
     });
     taskStarted.get_future().wait();
     EXPECT_TRUE(client.SubmitUnavailableWorkerSwitch(workerApi));
-    EXPECT_TRUE(client.SubmitUrmaDataPlaneSwitch(object_cache::ObjectClientImpl::LOCAL_WORKER, workerApi));
+    EXPECT_TRUE(client.SubmitUrmaDataPlaneSwitch(object_cache::LOCAL_WORKER, workerApi));
     {
         std::lock_guard<std::mutex> lock(client.asyncSwitchWorkerMutex_);
         EXPECT_EQ(client.unavailableWorkerSwitchPending_.size(), 1U);
@@ -4262,7 +4263,7 @@ TEST(ObjectClientTransportTest, DirectGetRecoveryFailureForcesRingRefreshWithout
     auto routing = MakeSingleWorkerRouting(MakeAddress(31501));
     std::atomic_store(&client.routing_, routing);
 
-    client.HandleDirectGetFailure(workerApi, Status(K_RPC_DEADLINE_EXCEEDED, "request timed out"));
+    client.routedMode_->HandleDirectGetFailure(workerApi, Status(K_RPC_DEADLINE_EXCEEDED, "request timed out"));
 
     EXPECT_GT(routing->refresher_->forceRefreshDeadlineMs_.load(), 0);
     std::lock_guard<std::mutex> lock(client.asyncSwitchWorkerMutex_);
@@ -4280,7 +4281,7 @@ TEST(ObjectClientTransportTest, DirectGetNonRecoveryFailureDoesNotForceRingRefre
     auto routing = MakeSingleWorkerRouting(MakeAddress(31501));
     std::atomic_store(&client.routing_, routing);
 
-    client.HandleDirectGetFailure(workerApi, Status(K_NOT_FOUND, "missing object"));
+    client.routedMode_->HandleDirectGetFailure(workerApi, Status(K_NOT_FOUND, "missing object"));
 
     EXPECT_EQ(routing->refresher_->forceRefreshDeadlineMs_.load(), 0);
 }
@@ -4297,7 +4298,7 @@ TEST(ObjectClientTransportTest, SetCreateMetadataOwnerUnavailableForcesRingRefre
 
     const bool retry = client.HandleSetRouteFailure(
         Status(K_METADATA_OWNER_UNAVAILABLE, "metadata owner is unavailable"),
-        object_cache::ObjectClientImpl::SetFailureStage::CREATE, MakeAddress(31501), excludedWorkers);
+        object_cache::SetFailureStage::CREATE, MakeAddress(31501), excludedWorkers);
 
     EXPECT_FALSE(retry);
     EXPECT_TRUE(excludedWorkers.empty());
@@ -4316,7 +4317,7 @@ TEST(ObjectClientTransportTest, SetCreatePeerDeadForcesRingRefreshAndKeepsSafeRe
 
     const bool retry = client.HandleSetRouteFailure(
         Status(K_RPC_PEER_DEAD, "ingress worker is unavailable"),
-        object_cache::ObjectClientImpl::SetFailureStage::CREATE, MakeAddress(31501), excludedWorkers);
+        object_cache::SetFailureStage::CREATE, MakeAddress(31501), excludedWorkers);
 
     EXPECT_TRUE(retry);
     EXPECT_EQ(excludedWorkers, std::vector<HostPort>({ MakeAddress(31501) }));
@@ -4338,7 +4339,7 @@ TEST(ObjectClientTransportTest, RoutedClientPeerDeadRefreshesRingWithoutBoundWor
     auto routing = MakeSingleWorkerRouting(MakeAddress(31501));
     std::atomic_store(&client.routing_, routing);
 
-    client.HandleDirectGetFailure(workerApi, Status(K_RPC_PEER_DEAD, "routed worker down"));
+    client.routedMode_->HandleDirectGetFailure(workerApi, Status(K_RPC_PEER_DEAD, "routed worker down"));
 
     EXPECT_GT(routing->refresher_->forceRefreshDeadlineMs_.load(), 0);
     EXPECT_FALSE(client.SubmitUnavailableWorkerSwitch(workerApi));
@@ -4565,7 +4566,7 @@ TEST(ObjectClientTransportTest, TransportMSetParallelMemoryCopyPreservesPayload)
     client.parallismNum_ = 0;
 
     const std::vector<std::string> values{ std::string(valueSize, 'a'), std::string(valueSize, 'b') };
-    object_cache::ObjectClientImpl::MSetRouteGroup group;
+    object_cache::MSetRouteGroup group;
     group.worker = MakeAddress(31501);
     group.keys = { "parallel-copy-key-0", "parallel-copy-key-1" };
     group.values = { values[0], values[1] };
@@ -4584,7 +4585,7 @@ TEST(ObjectClientTransportTest, TransportMSetParallelMemoryCopyPreservesPayload)
     }
 
     ApiDeadlineGuard deadline(5'000);
-    ASSERT_TRUE(client.MemoryCopyTransportMSetBuffers(group, buffers, valueSize * values.size()).IsOk());
+    ASSERT_TRUE(client.routedMode_->MemoryCopyTransportMSetBuffers(group, buffers, valueSize * values.size()).IsOk());
     for (size_t i = 0; i < values.size(); ++i) {
         EXPECT_EQ(memcmp(buffers[i]->ImmutableData(), values[i].data(), valueSize), 0);
     }
