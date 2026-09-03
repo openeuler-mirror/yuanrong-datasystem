@@ -108,6 +108,35 @@ TEST(LoadConfig_NegativeThreads) {
     std::remove(path.c_str());
 }
 
+TEST(LoadConfig_TotalThreadsDerivesReadThreads) {
+    auto path = WriteTempConfig(
+        R"({"etcd_address":"x:1","listen_port":9000,"num_threads":2,"num_total_threads":5})");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.numTotalThreads, 5);
+    ASSERT_EQ(cfg.NumReadThreads(), 3);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_TotalThreadsMustExceedWriteThreads) {
+    auto path = WriteTempConfig(
+        R"({"etcd_address":"x:1","listen_port":9000,"num_threads":2,"num_total_threads":2})");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_TotalThreadsDefaultsToLegacyReadConcurrency) {
+    auto path = WriteTempConfig(R"({"etcd_address":"x:1","listen_port":9000,"num_threads":7})");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.numTotalThreads, 107);
+    ASSERT_EQ(cfg.NumReadThreads(), 100);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
 TEST(LoadConfig_OutputDir) {
     auto path = WriteTempConfig(R"({"etcd_address":"192.168.1.10:2379","listen_port":9000})");
     Config cfg;

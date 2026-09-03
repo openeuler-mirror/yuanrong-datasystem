@@ -9,6 +9,7 @@
     "getBuffer"
   ],
   "num_threads": 16,
+  "num_total_threads": 116,
   "data_sizes": [
     "1MB"
   ],

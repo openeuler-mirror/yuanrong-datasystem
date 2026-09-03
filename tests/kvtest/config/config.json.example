@@ -17,6 +17,7 @@
   "data_sizes": ["1MB"],
   "set_param": {"ttl_second": 0},
   "num_threads": 16,
+  "num_total_threads": 116,
   "metrics_interval_ms": 3000,
   "cpu_affinity": "",
   "numa_node": -1,

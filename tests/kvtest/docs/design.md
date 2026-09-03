@@ -90,7 +90,7 @@ classDiagram
         +int instanceId, listenPort, targetQps
         +string role, cpuAffinity
         +vector~string~ pipeline, notifyPipeline
-        +int keyPoolSize, numSetThreads
+        +int keyPoolSize, numThreads, numTotalThreads
         +bool enableJitter
         +LoadConfig(path, cfg, outputDirOverride="") bool
     }
@@ -231,9 +231,10 @@ flowchart TB
 
 | 线程 | 数量 | 触发方式 | 职责 |
 |------|------|----------|------|
-| Pipeline Threads | `num_set_threads`（默认 16） | 循环 sleep_until | Writer：按 QPS 配额执行 KV 操作 |
-| CacheReader Threads | `num_set_threads` | 循环 sleep_until | Reader：从 keyPool 随机 GetOrFill |
-| NotifyPool | 100 | 任务队列 | Writer 端发送 / Reader 端接收处理 |
+| Pipeline Threads | `num_threads`（默认 16） | 循环 sleep_until | Writer：按 QPS 配额执行 KV 操作 |
+| CacheReader Threads | `num_threads` | 循环 sleep_until | Reader：从 keyPool 随机 GetOrFill |
+| NotifyPool（出站） | 100 | 任务队列 | Writer 端发送通知，不执行 KV 读写 |
+| NotifyPool（读） | `num_total_threads - num_threads` | 任务队列 | 收到通知后执行 `notify_pipeline`；与写线程共同受总线程数约束 |
 | HttpServer | 1 | epoll 事件 | 接收 /notify、/stop、/stats、/summary |
 | Metrics Flush | 1 | 定时 3s | 窗口指标 swap + 写入 CSV |
 | Main Loop | 1 | 定时 3s | 打印速率/队列深度，推进 QPS 阶段 |
@@ -247,7 +248,7 @@ Writer 的 PipelineLoop 通过两层机制将请求均匀分散到时间轴上�
 每个线程启动时，根据 threadId 计算一个初始偏移，将 N 个线程均匀分布在第一个 slot 内：
 
 ```
-phaseUs = (threadId / numSetThreads) * intervalUs
+phaseUs = (threadId / numThreads) * intervalUs
 nextSlot = now + phaseUs
 ```
 
@@ -538,7 +539,7 @@ ExecutePipeline(ops, ctx, metrics, verifyFailCount)
 
 ```
 PipelineLoop(threadId):
-  计算 qpsPerThread = targetQps / numSetThreads
+  计算 qpsPerThread = targetQps / numThreads
   intervalUs = 1000000 / qpsPerThread
   phaseUs = threadId / numThreads * intervalUs     ← 相位偏移
   nextSlot = now + phaseUs
@@ -561,9 +562,9 @@ PipelineLoop(threadId):
 
 #### QPS 分配策略
 
-当 `target_qps` < `num_set_threads` 时，前 `target_qps % numThreads` 个线程各多分 1 QPS，其余线程休眠（intervalUs 设为极大值）。例如：
+当 `target_qps` < `num_threads` 时，前 `target_qps % numThreads` 个线程各多分 1 QPS，其余线程休眠（intervalUs 设为极大值）。例如：
 
-| target_qps | num_set_threads | 线程分配 |
+| target_qps | num_threads | 线程分配 |
 |-----------|----------------|---------|
 | 100 | 16 | 4 线程 × 7 QPS + 12 线程 × 6 QPS |
 | 5 | 16 | 5 线程 × 1 QPS + 11 线程 × 0 QPS（休眠）|
@@ -777,7 +778,8 @@ JSON 配置文件，使用 nlohmann/json 解析。
 | `data_sizes` | string[] | ["8MB"] | 每项 > 0 | 数据大小列表，支持 GB/MB/KB/B |
 | `ttl_seconds` | uint32 | 5 | ≥ 0（0=不过期） | 数据 TTL |
 | `target_qps` | int | 100 | ≥ 0（0=不限） | 目标 QPS |
-| `num_set_threads` | int | 16 | > 0 | Writer Pipeline 线程数 |
+| `num_threads` | int | 16 | > 0 | Writer Pipeline 线程数 |
+| `num_total_threads` | int | `num_threads + 100` | > `num_threads` | Pipeline 读写总线程数；读线程数为两者之差 |
 | `batch_keys_count` | int | 1 | ≥ 1 | 批量操作的 key 数量 |
 | `notify_count` | int | 10 | ≥ 0 | 每次写入通知几个 peer |
 | `notify_interval_us` | int | 0 | ≥ 0（0=并行） | 通知间隔（微秒） |
@@ -805,7 +807,8 @@ LoadConfig 解析后执行以下校验，失败则拒绝启动：
 
 - `etcd_address` 非空
 - `listen_port` 在 (0, 65535]
-- `num_set_threads` > 0
+- `num_threads` > 0
+- `num_total_threads` > `num_threads`
 - `target_qps` >= 0
 - `data_sizes` 每项 > 0
 - `batch_keys_count` >= 1
@@ -840,7 +843,8 @@ LoadConfig 解析后执行以下校验，失败则拒绝启动：
 | 约束 | 值 | 说明 |
 |------|-----|------|
 | 指标环形缓冲区容量 | 100,000 条 | 保留最近 100000 条时延样本用于百分位计算 |
-| NotifyPool 线程数 | 100 | Writer 发送 + Reader 接收共用 100 线程 |
+| Writer 出站 NotifyPool 线程数 | 100 | 仅负责发送控制通知，不执行 KV 读写 |
+| Reader 读线程数 | `num_total_threads - num_threads` | 收到通知后执行 `notify_pipeline` |
 | 队列积压告警阈值 | 1,000 | 超过时打印 WARN 日志 |
 | 单次数据最大大小 | 无硬限制 | 受 SDK 共享内存上限约束 |
 | HTTP 通知超时 | 连接 2s / 读取 2s | httplib::Client 设置 |
@@ -970,7 +974,8 @@ python3 deploy_worker.py exec -p my-worker -c "cat /tmp/metrics.csv"
   "etcd_address": "127.0.0.1:2379",
   "data_sizes": ["1KB", "4KB"],
   "target_qps": 10,
-  "num_set_threads": 1,
+  "num_threads": 1,
+  "num_total_threads": 101,
   "ttl_seconds": 30
 }
 ```
@@ -984,7 +989,8 @@ python3 deploy_worker.py exec -p my-worker -c "cat /tmp/metrics.csv"
   "etcd_address": "192.168.0.223:2379",
   "data_sizes": ["8MB"],
   "target_qps": 100,
-  "num_set_threads": 8,
+  "num_threads": 8,
+  "num_total_threads": 108,
   "notify_count": 2,
   "nodes": [
     {"host": "192.168.0.1", "port": 9000, "instance_id": 0},
@@ -1010,7 +1016,8 @@ python3 deploy_worker.py exec -p my-worker -c "cat /tmp/metrics.csv"
 |------|------|
 | 进程级绑核而非线程级 | 一次 `sched_setaffinity`，所有子线程自动继承，实现简单 |
 | 环形缓冲区 100000 条 | 覆盖 ~27 分钟 @100 QPS 的百分位时延，内存可控（~7MB） |
-| NotifyPool 100 线程 | Reader 需要并发处理大量通知（10 个 Writer × 100 QPS = 1000 通知/s） |
+| Writer 出站 NotifyPool 100 线程 | 异步发送控制通知，避免阻塞写请求线程 |
+| Reader 读线程由总线程数派生 | 使单实例读写线程预算满足 `read + write = total` |
 | thread_local httplib::Client | 复用 TCP 连接，避免每次通知创建新连接 |
 | 数据预生成 | 避免 8MB 数据在热循环中反复分配 |
 | Fisher-Yates 部分洗牌 | O(k) 随机选 k 个 peer，不拷贝 peers 列表 |

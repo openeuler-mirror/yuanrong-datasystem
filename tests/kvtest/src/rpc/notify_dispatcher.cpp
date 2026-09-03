@@ -10,7 +10,7 @@ using namespace datasystem;
 NotifyDispatcher::NotifyDispatcher(const Config &cfg,
                                     std::shared_ptr<datasystem::KVClient> client,
                                     MetricsCollector &metrics)
-    : cfg_(cfg), client_(std::move(client)), metrics_(metrics), notifyPool_(100) {
+    : cfg_(cfg), client_(std::move(client)), metrics_(metrics), notifyPool_(cfg.NumReadThreads()) {
     for (auto &name : cfg_.notifyPipeline) {
         auto fn = GetOpFunc(name);
         if (!fn) {

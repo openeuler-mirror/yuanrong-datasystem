@@ -34,6 +34,7 @@ Pipeline 模式是 kvtest 的核心运行模式。支持 Writer/Reader 角色分
   "set_param": {"ttl_second": 0},
   "target_qps": 10,
   "num_threads": 1,
+  "num_total_threads": 101,
   "metrics_interval_ms": 3000,
   "metrics_file": "metrics_0.csv",
   "role": "writer",
