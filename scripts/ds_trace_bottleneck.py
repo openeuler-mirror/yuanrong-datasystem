@@ -1905,12 +1905,14 @@ def _apply_inline_query_urma_attribution(row: dict) -> None:
             if request.get("source_worker") in inline_workers:
                 return
             continue
-        matches = [
-            index
-            for index, attempt in enumerate(inline_candidates)
-            if request.get("source_worker") == attempt["worker"]
-            and attempt["start"] - tolerance <= request_time <= attempt["end"] + tolerance
-        ]
+        matches = []
+        for index, attempt in enumerate(inline_candidates):
+            same_worker = request.get("source_worker") == attempt["worker"]
+            inside_window = (
+                attempt["start"] - tolerance <= request_time <= attempt["end"] + tolerance
+            )
+            if same_worker and inside_window:
+                matches.append(index)
         if len(matches) > 1:
             return
         if len(matches) == 1:
