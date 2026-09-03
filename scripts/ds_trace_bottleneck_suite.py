@@ -324,23 +324,16 @@ function renderCharts(){const cs=combos(),p=base(cs);draw('problem',{...p,yAxis:
 
 
 def render_suite_html(suite: dict[str, Any], echarts_source: str) -> str:
-    active_problems = [
-        name
-        for name in PROBLEMS
-        if any(
-            band["problem_counts"].get(name)
-            for run in suite["runs"]
-            for band in run["bands"].values()
-        )
-    ]
-    scopes = sorted(
-        {
-            name
-            for run in suite["runs"]
-            for band in run["bands"].values()
-            for name in band["data_access_scope_counts"]
-        }
-    )
+    observed_problems = set()
+    scopes = set()
+    for run in suite["runs"]:
+        for band in run["bands"].values():
+            observed_problems.update(
+                name for name, count in band["problem_counts"].items() if count
+            )
+            scopes.update(band["data_access_scope_counts"])
+    active_problems = [name for name in PROBLEMS if name in observed_problems]
+    scopes = sorted(scopes)
     data_json = json.dumps(
         {**suite, "problems": active_problems or ["未解释残差"], "scopes": scopes},
         ensure_ascii=False,

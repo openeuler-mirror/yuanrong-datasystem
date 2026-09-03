@@ -207,6 +207,15 @@ def _rpc_framework_ms(fields: dict[str, int]) -> float | None:
     return max(0.0, (fields["e2e"] - explained_us) / 1000.0)
 
 
+def _max_rpc_framework(entries: list[dict[str, int]]) -> float:
+    values = []
+    for fields in entries:
+        value = _rpc_framework_ms(fields)
+        if value is not None:
+            values.append(value)
+    return max(values, default=0.0)
+
+
 def _take_focus_budget(focus: dict[str, float], donors: tuple[str, ...], amount_ms: float) -> float:
     remaining = max(0.0, amount_ms)
     moved = 0.0
@@ -348,46 +357,21 @@ def _apply_focus_breakdown(row: dict) -> None:
     }
     row["urma_scheduling_request_id"] = slowest_request_id
 
-    query_framework_ms = max(
-        (
-            value
-            for method, fields in rpc_entries
-            if _is_query_and_get_method(method)
-            for value in [_rpc_framework_ms(fields)]
-            if value is not None
-        ),
-        default=0.0,
-    )
+    query_entries = [fields for method, fields in rpc_entries if _is_query_and_get_method(method)]
+    query_framework_ms = _max_rpc_framework(query_entries)
     outer_get_entries = [
         fields
         for method, fields in rpc_entries
         if method.endswith("WorkerOCService.Get") and "GetObjectRemote" not in method
     ]
-    data_entries = [
-        fields
-        for method, fields in rpc_entries
-        if not _is_query_and_get_method(method)
-        and "ExchangeUrmaConnectInfo" not in method
-        and not (method.endswith("WorkerOCService.Get") and "GetObjectRemote" not in method)
-    ]
-    outer_framework_ms = max(
-        (
-            value
-            for fields in outer_get_entries
-            for value in [_rpc_framework_ms(fields)]
-            if value is not None
-        ),
-        default=0.0,
-    )
-    data_framework_ms = max(
-        (
-            value
-            for fields in data_entries
-            for value in [_rpc_framework_ms(fields)]
-            if value is not None
-        ),
-        default=0.0,
-    )
+    data_entries = []
+    for method, fields in rpc_entries:
+        is_outer_get = method.endswith("WorkerOCService.Get") and "GetObjectRemote" not in method
+        if not _is_query_and_get_method(method) and "ExchangeUrmaConnectInfo" not in method:
+            if not is_outer_get:
+                data_entries.append(fields)
+    outer_framework_ms = _max_rpc_framework(outer_get_entries)
+    data_framework_ms = _max_rpc_framework(data_entries)
     data_queue_ms = max(
         (fields.get("server_req_queue", 0) / 1000.0 for fields in data_entries),
         default=0.0,
@@ -449,13 +433,11 @@ def _write_rpc_group(evidence: list[str], operation: str) -> list[dict[str, int]
 
 def _write_rpc_split(parent_ms: float, entries: list[dict[str, int]]) -> dict[str, float]:
     split = {"other": parent_ms, "queue": 0.0, "network": 0.0, "framework": 0.0}
-    complete = [
-        fields
-        for fields in entries
-        if not fields.get("cntl_failed")
-        and not fields.get("cntl_error_code")
-        and _rpc_framework_ms(fields) is not None
-    ]
+    complete = []
+    for fields in entries:
+        succeeded = not fields.get("cntl_failed") and not fields.get("cntl_error_code")
+        if succeeded and _rpc_framework_ms(fields) is not None:
+            complete.append(fields)
     if not complete or parent_ms <= 0:
         return split
     fields = max(complete, key=lambda item: item.get("e2e", 0))
@@ -2058,12 +2040,14 @@ def _apply_query_urma_timeout_attribution(row: dict) -> None:
     tolerance = dt.timedelta(milliseconds=1)
     nested_groups = []
     for attempt in query_attempts:
-        nested = [
-            event
-            for event in timeout_events.values()
-            if event["worker"] == attempt["worker"]
-            and attempt["start"] - tolerance <= event["timestamp"] <= attempt["end"] + tolerance
-        ]
+        nested = []
+        for event in timeout_events.values():
+            same_worker = event["worker"] == attempt["worker"]
+            inside_window = (
+                attempt["start"] - tolerance <= event["timestamp"] <= attempt["end"] + tolerance
+            )
+            if same_worker and inside_window:
+                nested.append(event)
         if nested:
             nested_groups.append((attempt, nested))
     if len(nested_groups) != 1 or len(nested_groups[0][1]) != 1:
@@ -2142,6 +2126,9 @@ def _query_meta_detail(row: dict) -> dict | None:
         (float(request.get("total_ms", 0) or 0) for request in row.get("urma_requests", [])),
         default=None,
     )
+    local_read_dominates = local_read_ms is not None and local_read_ms >= max(
+        1.0, query_total_ms * 0.5
+    )
 
     if row.get("failure_reason") == "Data URMA建链截止超时" and not query_rpc_failed:
         category = "QueryAndGet成功·后续URMA建链失败"
@@ -2159,12 +2146,7 @@ def _query_meta_detail(row: dict) -> dict | None:
     elif slow_urma:
         category = "QueryAndGet TryGet·URMA慢"
         boundary = "同Trace本地TryGet产生慢WR，严格按URMA_ELAPSED_TOTAL >1.5ms"
-    elif (
-        worker_query_done_observed
-        and not try_get_urma_observed
-        and local_read_ms is not None
-        and local_read_ms >= max(1.0, query_total_ms * 0.5)
-    ):
+    elif worker_query_done_observed and not try_get_urma_observed and local_read_dominates:
         category = "QueryAndGet localRead慢·URMA未观测"
         boundary = (
             "Worker QueryAndGet localRead覆盖父窗口主体，但同Trace未保留URMA完成明细；"
@@ -3696,7 +3678,10 @@ def _render_dashboard_html(
             '下载当前单条 Trace</button></div><div id="trace-detail"></div>',
         )
         .replace('</main></div><div id="tooltip"', WRITE_SECTION + '</main></div><div id="tooltip"')
-        .replace('const AGG=__AGG__;', 'const AGG=__AGG__;const WRITE_ROWS=__WRITE_ROWS__;const WRITE_AGG=__WRITE_AGG__;')
+        .replace(
+            'const AGG=__AGG__;',
+            'const AGG=__AGG__;const WRITE_ROWS=__WRITE_ROWS__;const WRITE_AGG=__WRITE_AGG__;',
+        )
         .replace(
             '</style>',
             CORRELATION_STYLE

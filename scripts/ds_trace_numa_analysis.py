@@ -262,7 +262,8 @@ def classify_error_chain(record: dict) -> dict:
     has_arena_oom = any(
         marker in lowered for marker in ("out of memory", "no space in arena", "fresh_extent_unavailable")
     )
-    if operation == "GET" and status == 1004 and has_receive_buffer_failure and has_arena_oom:
+    is_failed_get = operation == "GET" and status == 1004
+    if is_failed_get and has_receive_buffer_failure and has_arena_oom:
         return {
             "family": "GET UB接收缓冲分配失败1004",
             "closed": True,
