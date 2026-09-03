@@ -235,6 +235,17 @@ class TestGenConfig(unittest.TestCase):
 
     # --- Benchmark mode ---
 
+    def test_num_total_threads_is_emitted(self):
+        """gen-config should preserve the configured read/write concurrency budget."""
+        _, config = self._run_gen_config([
+            '-m', 'pipeline',
+            '--nodes', '127.0.0.1:9000',
+            '--num-threads', '2',
+            '--num-total-threads', '5',
+        ])
+        self.assertEqual(config['num_threads'], 2)
+        self.assertEqual(config['num_total_threads'], 5)
+
     def test_benchmark_generates_deploy_json(self):
         """Benchmark mode should generate deploy.json for deployment."""
         deploy, config = self._run_gen_config([

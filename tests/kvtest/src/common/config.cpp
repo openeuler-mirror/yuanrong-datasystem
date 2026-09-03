@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <chrono>
+#include <limits>
 #include "simple_log.h"
 
 using json = nlohmann::json;
@@ -191,6 +192,13 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
         }
         if (j.contains("num_threads"))
             cfg.numThreads = j["num_threads"];
+        if (j.contains("num_total_threads")) {
+            cfg.numTotalThreads = j["num_total_threads"];
+        } else if (cfg.numThreads <= std::numeric_limits<int>::max() - Config::kDefaultNumReadThreads) {
+            cfg.numTotalThreads = cfg.numThreads + Config::kDefaultNumReadThreads;
+        } else {
+            cfg.numTotalThreads = cfg.numThreads;
+        }
         if (j.contains("notify_count"))
             cfg.notifyCount = j["notify_count"];
         if (j.contains("notify_interval_us"))
@@ -448,6 +456,11 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
         SLOG_ERROR("num_threads must be > 0, got " << cfg.numThreads);
         return false;
     }
+    if (cfg.numTotalThreads <= cfg.numThreads) {
+        SLOG_ERROR("num_total_threads must be greater than num_threads, got total="
+                   << cfg.numTotalThreads << ", write=" << cfg.numThreads);
+        return false;
+    }
     if (cfg.targetQps < 0) {
         SLOG_ERROR("target_qps must be >= 0, got " << cfg.targetQps);
         return false;
@@ -634,7 +647,8 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
             << (cfg.targetQpsStages.empty() ? ""
                                             : " [" + std::to_string(cfg.targetQpsStages.size()) + " stages x "
                                                   + std::to_string(cfg.stageDurationSeconds) + "s]")
-            << ", threads=" << cfg.numThreads << ", batch_keys_count=" << cfg.batchKeysCount
+            << ", write_threads=" << cfg.numThreads << ", read_threads=" << cfg.NumReadThreads()
+            << ", total_threads=" << cfg.numTotalThreads << ", batch_keys_count=" << cfg.batchKeysCount
             << ", key_pool_size=" << cfg.keyPoolSize;
     }
     log << ", data_sizes_count=" << cfg.dataSizes.size() << ", output_dir=" << cfg.outputDir;

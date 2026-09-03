@@ -21,8 +21,8 @@ class CacheReader;
 //
 // Threading contract: DispatchNotify may submit work to an internal
 // ThreadPool; callers (httplib handler thread, brpc bthread) must not hold
-// the request lock while dispatching. The pool is bounded (100) and stopped
-// explicitly via Stop() on server shutdown.
+// the request lock while dispatching. The pool is bounded by the configured
+// read concurrency and stopped explicitly via Stop() on server shutdown.
 class NotifyDispatcher {
 public:
     NotifyDispatcher(const Config &cfg, std::shared_ptr<datasystem::KVClient> client,
