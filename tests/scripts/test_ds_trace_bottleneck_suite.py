@@ -123,6 +123,49 @@ def test_build_suite_keeps_runs_isolated_and_builds_control_groups(tmp_path: Pat
     assert implementation_insight["band"] == "5–7ms"
     assert "true-315" in implementation_insight["text"]
     assert "档内占比" in implementation_insight["text"]
+
+
+def test_suite_prefers_focus_breakdown_and_exposes_data_access_scope(tmp_path: Path):
+    focused = row("focused", 6.2, "数据访问父窗口/未细分", urma_ms=5.8)
+    focused["focus_primary_problem"] = "URMA通信"
+    focused["focus_breakdown_ms"] = {
+        "URMA建链": 0.0,
+        "URMA通信": 5.8,
+        "URMA调度/线程开销": 0.0,
+        "QueryAndGet其他业务": 0.0,
+        "Get其他业务": 0.2,
+        "其他调度/线程开销": 0.0,
+        "RPC网络相关": 0.0,
+        "RPC框架": 0.0,
+        "未解释残差": 0.2,
+    }
+    focused["data_access_scope"] = "URMA慢完成"
+    value = {
+        "schema_version": 1,
+        "runs": [
+            run_cfg(
+                tmp_path,
+                "focused-run",
+                implementation="meta",
+                load="315",
+                size="8MB",
+                rows=[focused],
+            )
+        ],
+    }
+
+    suite = load_module().build_suite(value)
+    band = suite["runs"][0]["bands"]["5–7ms"]
+
+    assert band["dominant_problem"] == "URMA通信"
+    assert band["problem_counts"]["URMA通信"] == 1
+    assert band["stage_p90_ms"]["URMA通信"] == pytest.approx(5.8)
+    assert band["data_access_scope_counts"] == {"URMA慢完成": 1}
+    assert band["data_access_scope_shares_pct"] == {"URMA慢完成": 100.0}
+
+    html = load_module().render_suite_html(suite, "window.echarts={};")
+    assert "数据访问定位细分" in html
+    assert 'id="scope"' in html
     assert "not occurrence rates" in " ".join(suite["limitations"])
 
 

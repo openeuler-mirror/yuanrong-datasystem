@@ -15,7 +15,23 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 BANDS = ("5–7ms", "7–10ms", "10–20ms", ">20ms")
-PROBLEMS = ("RPC网络", "QueryMeta", "URMA", "远端供数处理", "数据访问父窗口/未细分", "未解释残差")
+PROBLEMS = (
+    "URMA建链",
+    "URMA通信",
+    "URMA调度/线程开销",
+    "QueryAndGet其他业务",
+    "Get其他业务",
+    "其他调度/线程开销",
+    "调度/线程等待",
+    "RPC网络相关",
+    "RPC框架",
+    "QueryMeta",
+    "URMA",
+    "远端供数处理",
+    "数据访问父窗口/未细分",
+    "未解释残差",
+    "URMA超时",
+)
 IMPL_ORDER = {"true": 0, "same": 1, "meta": 2}
 BAND_PATTERNS = (
     (re.compile(r"(?:DS_KV_CLIENT_)?GET_5000_7000"), "5–7ms"),
@@ -65,21 +81,26 @@ def _archive_trace_bands(path: Path) -> tuple[dict[str, str], Counter]:
 def _stage_observed(row: dict[str, Any], stage: str, value: Any) -> bool:
     if value is None:
         return False
-    if stage == "URMA":
+    if stage in {"URMA", "URMA通信"}:
         return bool(row.get("urma_observed"))
-    if stage == "RPC网络":
+    if stage in {"RPC网络", "RPC网络相关"}:
         return bool(row.get("rpc_observed"))
     return float(value) > 0
 
 
 def _summarize_band(rows: list[dict[str, Any]], raw_count: int, cap: int) -> dict[str, Any]:
-    problems = Counter(row.get("primary_problem") or "未解释残差" for row in rows)
+    problems = Counter(
+        row.get("focus_primary_problem") or row.get("primary_problem") or "未解释残差"
+        for row in rows
+    )
     transports = Counter(row.get("transport") or "未观测" for row in rows)
     locations = Counter(row.get("access_location") or "未观测" for row in rows)
+    scopes = Counter(row.get("data_access_scope") or "未提供定位信息" for row in rows)
     stages: dict[str, list[float]] = {name: [] for name in PROBLEMS}
     requests: list[dict[str, Any]] = []
     for row in rows:
-        for name, value in (row.get("attribution_ms") or {}).items():
+        breakdown = row.get("focus_breakdown_ms") or row.get("attribution_ms") or {}
+        for name, value in breakdown.items():
             if name in stages and _stage_observed(row, name, value):
                 stages[name].append(float(value))
         requests.extend(req for req in row.get("urma_requests", []) if req.get("total_ms") is not None)
@@ -105,6 +126,11 @@ def _summarize_band(rows: list[dict[str, Any]], raw_count: int, cap: int) -> dic
         "stage_p90_ms": {name: _percentile(values, 0.9) for name, values in stages.items()},
         "transport_counts": dict(transports),
         "access_location_counts": dict(locations),
+        "data_access_scope_counts": dict(scopes),
+        "data_access_scope_shares_pct": {
+            name: round(count * 100 / sample_count, 1) if sample_count else 0.0
+            for name, count in scopes.items()
+        },
         "urma_trace_count": sum(bool(row.get("urma_observed")) for row in rows),
         "urma_wr_count": len(requests),
         "slow_urma_wr_count": len(slow_requests),
@@ -290,15 +316,35 @@ HTML = r'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta n
 :root{--bg:#f4f7fb;--card:#fff;--ink:#172033;--muted:#68738a;--line:#dfe6f1;--blue:#2878ff;--amber:#e99b24;--red:#d94352}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}.wrap{max-width:1540px;margin:auto;padding:18px}.hero{padding:24px 28px;border-radius:16px;background:linear-gradient(135deg,#12203c,#245bb3);color:#fff}.hero h1{margin:0 0 8px}.notice{margin:16px 0;padding:14px 18px;background:#fff7e8;border-left:5px solid var(--amber);border-radius:10px}.card{margin:16px 0;padding:18px;background:var(--card);border:1px solid var(--line);border-radius:14px}.chart-title,h2{text-align:center;margin:0 0 14px}.filters{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}.filters select{padding:8px;border:1px solid var(--line);border-radius:8px;background:white}.chart{height:430px;width:100%}.chart.tall{height:560px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:13px}th,td{padding:8px 5px;border-bottom:1px solid var(--line);text-align:center;overflow-wrap:anywhere}th{background:#f1f5fb}td:first-child,th:first-child{text-align:left}a{color:var(--blue)}.small{color:var(--red)}.muted{color:var(--muted)}.group{border-left:4px solid var(--blue);padding:9px 12px;margin:8px 0;background:#f6f9ff}@media(max-width:900px){.wrap{padding:8px}.grid{grid-template-columns:1fr}.chart{height:360px}table{font-size:12px}th,td{padding:5px 2px}.optional{display:none}}
 </style></head><body><div class="wrap"><section class="hero"><h1>__REPORT_TITLE__</h1><div>控制变量：实现 × 数据大小 × QPS/Client形态 × 异常时延档</div><div>源码校正：<code id="source-ref"></code></div></section><div class="notice"><b>采样边界：</b>本报告使用 capped anomaly samples。每档达到上限只表示采集封顶，不是线上发生率；跨run不计算收益百分比。每个run独立解析并链接到自己的详细页面。</div><section class="card" id="overview-card"><h2>0. 关键结论</h2><div id="overview"></div></section>
 <section class="card"><h2>1. Run清单与详细页面</h2><div class="filters"><select id="impl"><option value="">全部实现</option></select><select id="size"><option value="">全部大小</option></select><select id="load"><option value="">全部负载</option></select><select id="band"><option value="">全部档位</option></select></div><table><thead><tr><th>Run</th><th>实现</th><th>大小</th><th>负载</th><th>Client形态</th><th>样本</th><th>主瓶颈</th><th>详细页面</th></tr></thead><tbody id="run-rows"></tbody></table></section>
-<section class="card"><h2>2. 控制变量对比组</h2><div id="groups"></div></section><section class="card"><h2>3. 控制变量关键结论</h2><div id="insights"></div></section><section class="card"><h2 class="chart-title">4. 分档主瓶颈构成（档内100%）</h2><div id="problem" class="chart tall"></div></section><section class="grid"><section class="card"><h2 class="chart-title">5. Client时延分位</h2><div id="latency" class="chart"></div></section><section class="card"><h2 class="chart-title">6. URMA WR（慢阈值 >1.5ms）</h2><div id="urma" class="chart"></div></section></section><section class="card"><h2 class="chart-title">7. 关键阶段p90</h2><div id="stages" class="chart tall"></div></section><section class="card"><h2>8. 证据与解释边界</h2><ul id="limitations"></ul></section></div>
-<script>__ECHARTS_SOURCE__</script><script>const D=__DATA_JSON__;const COLORS=['#2878ff','#8759d6','#25a77a','#e99b24','#d95d6c','#8d96a8'];const BAND_ORDER=['5–7ms','7–10ms','10–20ms','>20ms'];let charts=[];const $=id=>document.getElementById(id),uniq=a=>[...new Set(a.filter(Boolean))],esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));$('source-ref').textContent=D.source_ref;$('limitations').innerHTML=D.limitations.map(x=>`<li>${esc(x)}</li>`).join('');$('overview').innerHTML=(D.overview||[]).map(x=>`<div class="group"><b>${esc(x.title)}</b><br>${esc(x.text)}</div>`).join('');if(!(D.overview||[]).length)$('overview-card').hidden=true;
+<section class="card"><h2>2. 控制变量对比组</h2><div id="groups"></div></section><section class="card"><h2>3. 控制变量关键结论</h2><div id="insights"></div></section><section class="card"><h2 class="chart-title">4. 分档主瓶颈构成（档内100%）</h2><div id="problem" class="chart tall"></div></section><section class="card"><h2 class="chart-title">5. 数据访问定位细分（档内100%）</h2><div id="scope" class="chart tall"></div></section><section class="grid"><section class="card"><h2 class="chart-title">6. Client时延分位</h2><div id="latency" class="chart"></div></section><section class="card"><h2 class="chart-title">7. URMA WR（慢阈值 >1.5ms）</h2><div id="urma" class="chart"></div></section></section><section class="card"><h2 class="chart-title">8. 关键阶段p90</h2><div id="stages" class="chart tall"></div></section><section class="card"><h2>9. 证据与解释边界</h2><ul id="limitations"></ul></section></div>
+<script>__ECHARTS_SOURCE__</script><script>const D=__DATA_JSON__;const COLORS=['#2878ff','#8759d6','#25a77a','#e99b24','#d95d6c','#8d96a8','#0ea5a4','#b7791f','#805ad5','#2b6cb0','#c53030','#4a5568','#38a169'];const BAND_ORDER=['5–7ms','7–10ms','10–20ms','>20ms'];let charts=[];const $=id=>document.getElementById(id),uniq=a=>[...new Set(a.filter(Boolean))],esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));$('source-ref').textContent=D.source_ref;$('limitations').innerHTML=D.limitations.map(x=>`<li>${esc(x)}</li>`).join('');$('overview').innerHTML=(D.overview||[]).map(x=>`<div class="group"><b>${esc(x.title)}</b><br>${esc(x.text)}</div>`).join('');if(!(D.overview||[]).length)$('overview-card').hidden=true;
 function options(id,values){$(id).innerHTML+=uniq(values).map(v=>`<option value="${v}">${v}</option>`).join('')}options('impl',D.runs.map(r=>r.implementation));options('size',D.runs.map(r=>r.size));options('load',D.runs.map(r=>r.load));options('band',BAND_ORDER);function selectedRuns(){return D.runs.filter(r=>(!$('impl').value||r.implementation===$('impl').value)&&(!$('size').value||r.size===$('size').value)&&(!$('load').value||r.load===$('load').value))}function combos(){const band=$('band').value;return selectedRuns().flatMap(r=>(band?[band]:BAND_ORDER).map(b=>({r,b,s:r.bands[b]})).filter(x=>x.s.sample_count))}function fmtObj(o){return Object.entries(o||{}).map(x=>x.join(':')).join(' / ')||'未观测'}
 function renderRows(){const band=$('band').value;$('run-rows').innerHTML=selectedRuns().map(r=>{const bs=(band?[band]:BAND_ORDER).filter(b=>r.bands[b].sample_count),n=bs.reduce((a,b)=>a+r.bands[b].sample_count,0),ps={};bs.forEach(b=>Object.entries(r.bands[b].problem_counts).forEach(([k,v])=>ps[k]=(ps[k]||0)+v));const top=Object.entries(ps).sort((a,b)=>b[1]-a[1])[0]?.[0]||'无样本',numa=r.numa_report?` · <a href="${r.numa_report}">WR/NUMA</a>`:'';return `<tr><td><b>${r.label}</b>${r.case_study_only?'<br><span class="small">仅案例</span>':''}</td><td>${r.implementation}<br><span class="muted">${r.read_path||r.placement||''}</span></td><td>${r.size}</td><td>${r.load}</td><td>${r.client_shape}</td><td>${n}</td><td>${top}</td><td><a href="${r.triage_report}">triage</a> · <a href="${r.bottleneck_report}">瓶颈</a>${numa}</td></tr>`}).join('')}$('groups').innerHTML=D.control_groups.map(g=>`<div class="group"><b>${g.family}</b> · 固定 ${fmtObj(g.fixed)}<br><span class="muted">变化：${g.varying}；Runs：${g.run_ids.join(' / ')}</span></div>`).join('');$('insights').innerHTML=D.insights.map(x=>`<div class="group"><b>${x.title}</b><br>${x.text}</div>`).join('');function draw(id,opt){const old=echarts.getInstanceByDom($(id));if(old)old.dispose();const c=echarts.init($(id));c.setOption(opt);charts.push(c)}function base(cs){return {tooltip:{trigger:'axis'},legend:{top:2},grid:{left:58,right:18,top:52,bottom:110},xAxis:{type:'category',data:cs.map(x=>x.r.id+'\n'+x.b),axisLabel:{interval:0,rotate:28}},yAxis:{type:'value'}}}
-function renderCharts(){const cs=combos(),p=base(cs);draw('problem',{...p,yAxis:{type:'value',max:100,name:'档内占比 %'},series:D.problems.map((name,i)=>({name,type:'bar',stack:'root',data:cs.map(x=>x.s.problem_shares_pct[name]||0),itemStyle:{color:COLORS[i]}}))});draw('latency',{...p,yAxis:{type:'value',name:'ms'},series:[{name:'p50',type:'bar',data:cs.map(x=>x.s.client_p50_ms)},{name:'p90',type:'bar',data:cs.map(x=>x.s.client_p90_ms)},{name:'max',type:'line',data:cs.map(x=>x.s.client_max_ms)}]});draw('urma',{...p,yAxis:[{type:'value',name:'WR数'},{type:'value',name:'慢WR %',max:100}],series:[{name:'慢WR',type:'bar',data:cs.map(x=>x.s.slow_urma_wr_count),itemStyle:{color:'#d94352'}},{name:'慢WR占比',type:'line',yAxisIndex:1,data:cs.map(x=>x.s.slow_urma_wr_share_pct),itemStyle:{color:'#e99b24'}}]});draw('stages',{...p,yAxis:{type:'value',name:'阶段p90 ms'},series:D.problems.map((name,i)=>({name,type:'bar',data:cs.map(x=>x.s.stage_p90_ms[name]),itemStyle:{color:COLORS[i]}}))})}function render(){renderRows();renderCharts()}['impl','size','load','band'].forEach(id=>$(id).onchange=render);render();addEventListener('resize',()=>charts.forEach(c=>c.resize()));</script></body></html>'''
+function renderCharts(){const cs=combos(),p=base(cs);draw('problem',{...p,yAxis:{type:'value',max:100,name:'档内占比 %'},series:D.problems.map((name,i)=>({name,type:'bar',stack:'root',data:cs.map(x=>x.s.problem_shares_pct[name]||0),itemStyle:{color:COLORS[i%COLORS.length]}}))});draw('scope',{...p,yAxis:{type:'value',max:100,name:'档内占比 %'},series:D.scopes.map((name,i)=>({name,type:'bar',stack:'scope',data:cs.map(x=>x.s.data_access_scope_shares_pct[name]||0),itemStyle:{color:COLORS[i%COLORS.length]}}))});draw('latency',{...p,yAxis:{type:'value',name:'ms'},series:[{name:'p50',type:'bar',data:cs.map(x=>x.s.client_p50_ms)},{name:'p90',type:'bar',data:cs.map(x=>x.s.client_p90_ms)},{name:'max',type:'line',data:cs.map(x=>x.s.client_max_ms)}]});draw('urma',{...p,yAxis:[{type:'value',name:'WR数'},{type:'value',name:'慢WR %',max:100}],series:[{name:'慢WR',type:'bar',data:cs.map(x=>x.s.slow_urma_wr_count),itemStyle:{color:'#d94352'}},{name:'慢WR占比',type:'line',yAxisIndex:1,data:cs.map(x=>x.s.slow_urma_wr_share_pct),itemStyle:{color:'#e99b24'}}]});draw('stages',{...p,yAxis:{type:'value',name:'阶段p90 ms'},series:D.problems.map((name,i)=>({name,type:'bar',data:cs.map(x=>x.s.stage_p90_ms[name]),itemStyle:{color:COLORS[i%COLORS.length]}}))})}function render(){renderRows();renderCharts()}['impl','size','load','band'].forEach(id=>$(id).onchange=render);render();addEventListener('resize',()=>charts.forEach(c=>c.resize()));</script></body></html>'''
 
 
 def render_suite_html(suite: dict[str, Any], echarts_source: str) -> str:
-    data_json = json.dumps({**suite, "problems": PROBLEMS}, ensure_ascii=False).replace("</", "<\\/")
+    active_problems = [
+        name
+        for name in PROBLEMS
+        if any(
+            band["problem_counts"].get(name)
+            for run in suite["runs"]
+            for band in run["bands"].values()
+        )
+    ]
+    scopes = sorted(
+        {
+            name
+            for run in suite["runs"]
+            for band in run["bands"].values()
+            for name in band["data_access_scope_counts"]
+        }
+    )
+    data_json = json.dumps(
+        {**suite, "problems": active_problems or ["未解释残差"], "scopes": scopes},
+        ensure_ascii=False,
+    ).replace("</", "<\\/")
     template = HTML.replace("__REPORT_TITLE__", html.escape(str(suite["title"])))
     return template.replace("__ECHARTS_SOURCE__", echarts_source, 1).replace("__DATA_JSON__", data_json, 1)
 

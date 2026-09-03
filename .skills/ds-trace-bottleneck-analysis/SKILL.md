@@ -30,14 +30,15 @@ The write stacked bars are mutually exclusive:
 - `Create RPC其他`: Create e2e after explicit network, request queue, and RPC
   framework are removed; without a complete RPC trailer it remains an
   unrefined Create parent;
-- `写入MemoryCopy` and `写入URMA通信`: when both are present, URMA is nested
-  inside the memory-copy/transfer window, so use `memory - URMA` plus URMA,
-  never their sum;
+- `写入MemoryCopy`, `写入URMA通信`, and `写入URMA调度/线程开销`: when
+  they are present, URMA is nested inside the memory-copy/transfer window.
+  Split the URMA window into communication and explicit URMA scheduling, then
+  use `memory - URMA` plus those two exclusive URMA stages, never their sum;
 - `Publish RPC其他`: Publish e2e after explicit network, request queue, and
   RPC framework are removed;
 - `Worker Publish/元数据`: `worker.process.publish` plus one applicable
   `worker.rpc.create_meta` or `worker.rpc.update_meta`, carved from Publish;
-- `调度/线程等待`, `RPC网络相关`, and `RPC框架`: the same evidence
+- `其他调度/线程开销`, `RPC网络相关`, and `RPC框架`: the same evidence
   boundary as the read focus model;
 - `未解释残差`: Client Set total not closed by the observed write stages.
 
@@ -80,13 +81,19 @@ Use a compact focus breakdown for the main charts and Trace table. Keep the
 legacy attribution fields only as internal evidence and compatibility data:
 
 - `URMA建链`: explicit connect-info exchange and connection-finalize windows;
-- `URMA通信`: completed logical URMA Write/WR critical path after removing
-  explicit scheduling waits;
+- `URMA通信`: the slowest completed `URMA_ELAPSED_TOTAL` in one logical Write,
+  after removing only explicit scheduling latency that is independently observed;
+- `URMA调度/线程开销`: for the slowest WR selected as the logical Write
+  critical path, the largest compatible explicit URMA scheduling observation
+  among wake-scheduling, thread-scheduling, notify-to-awake,
+  poll-JFC, and notify. These fields can overlap, so do not sum them. Do not
+  classify the whole `wait-to-poll` or completion-wait window as scheduling;
+  it is the reap wait that encloses URMA completion;
 - `QueryAndGet其他业务`: QueryAndGet parent time left after URMA, RPC
   framework, RPC network, and explicit scheduling are removed;
 - `Get其他业务`: Get/data-access parent time left after the same removals;
-- `调度/线程等待`: explicit RPC queue, connection-lock wait, thread
-  scheduling, notify-to-awake, or wait-to-poll evidence;
+- `其他调度/线程开销`: explicit non-URMA RPC request queue,
+  connection-lock wait, or other independently observed scheduling evidence;
 - `RPC网络相关`: explicit `network_residual_us` only;
 - `RPC框架`: RPC e2e minus server handler execution, network residual, and
   explicit request queue/scheduling, only when all four timings close;
@@ -141,8 +148,8 @@ known, and the URMA evidence matches a unique same-Worker/same-attempt window.
 Treat QueryAndGet as the parent window: move the matched logical URMA Write to
 the URMA stage and retain only `parent - inline URMA` as QueryAndGet-exclusive
 time. Sequential attempts on one Worker add; parallel Worker owners take the
-maximum. Complete WR chunks use logical-Write wall span and incomplete chunks
-fall back to the slowest WR; never sum overlapping chunks. If Worker, timestamp,
+maximum. Within one logical Write, keep every WR chunk but use the slowest
+`URMA_ELAPSED_TOTAL`; never sum the WRs. If Worker, timestamp,
 attempt, or matching evidence is ambiguous, keep the split unobserved.
 
 After that inline-URMA split, a single successful QueryAndGet RPC trailer with
@@ -240,12 +247,12 @@ Set/MSet placement; it does not directly change Get routing. Describe observed r
 differences as indirect placement effects.
 
 Use three URMA levels: **Client Get → 逻辑 URMA Write → WR分片**. One
-`URMA_ELAPSED_TOTAL` request ID is one WR chunk, not one Client Get. For a complete
-chunk-index/count group, use the wall span from earliest post to latest observed as
-the logical Write duration. **WR耗时不可求和** because chunks may overlap. If chunk
-or clock evidence is incomplete, label the value as a slowest-WR fallback. Completion
-wait is per-WR waiting, not pure network; Inflight WR is the sender manager's global
-snapshot, not the Get's WR count.
+`URMA_ELAPSED_TOTAL` request ID is one WR chunk, not one Client Get. In the current
+read implementation, two WRs are posted asynchronously in order and then reaped
+together. Keep both WR rows and use `max(WR1 elapsed, WR2 elapsed)` as the logical
+Write's URMA critical duration; **WR耗时不可求和**. Completion wait and `wait-to-poll`
+are per-WR reap windows, not pure network and not automatically thread scheduling;
+Inflight WR is the sender manager's global snapshot, not the Get's WR count.
 
 For QueryMeta root analysis, group `QueryMeta` and `QueryAndGet` by local timestamp
 and emitting/initiating Worker. If the log lacks the peer/target address, state

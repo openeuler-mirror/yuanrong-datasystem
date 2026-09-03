@@ -855,9 +855,10 @@ def test_focus_breakdown_separates_connect_communication_business_sched_network_
         {
             "URMA建链": 1.3,
             "URMA通信": 3.6,
+            "URMA调度/线程开销": 0.4,
             "QueryAndGet其他业务": 4.2,
             "Get其他业务": 1.4,
-            "调度/线程等待": 1.1,
+            "其他调度/线程开销": 0.7,
             "RPC网络相关": 1.5,
             "RPC框架": 2.1,
             "未解释残差": 4.8,
@@ -865,6 +866,64 @@ def test_focus_breakdown_separates_connect_communication_business_sched_network_
     )
     assert sum(row["focus_breakdown_ms"].values()) == pytest.approx(20.0)
     assert row["focus_primary_stage"] == "未解释残差"
+
+
+def test_focus_breakdown_does_not_treat_urma_wait_to_poll_as_thread_scheduling():
+    mod = load_module()
+    row = {
+        "attribution_ms": {
+            "RPC网络": 0.0,
+            "RPC排队": 0.0,
+            "QueryMeta": 0.0,
+            "URMA超时等待": 0.0,
+            "URMA": 13.441,
+            "远端供数处理": 0.0,
+            "数据访问父窗口/未细分": 0.0,
+            "未解释残差": 0.0,
+        },
+        "evidence": [],
+        "urma_requests": [
+            {
+                "request_id": "slowest-wr",
+                "wait_to_poll_ms": 13.393,
+                "notify_to_awake_ms": 0.007,
+                "wake_sched_latency_ms": 0.007,
+                "thread_sched_ms": None,
+            },
+            {
+                "request_id": "faster-wr",
+                "wait_to_poll_ms": None,
+                "notify_to_awake_ms": 0.5,
+                "wake_sched_latency_ms": 0.5,
+                "thread_sched_ms": None,
+            },
+        ],
+        "urma_logical_writes": [
+            {
+                "wall_clock_ms": 13.441,
+                "slowest_wr_ms": 13.426,
+                "complete": True,
+            }
+        ],
+        "urma_trace": {"slowest_request_id": "slowest-wr", "slowest_total_ms": 13.426},
+        "error_family": None,
+    }
+
+    mod._apply_focus_breakdown(row)
+
+    assert row["focus_breakdown_ms"]["URMA通信"] == pytest.approx(13.419)
+    assert row["focus_breakdown_ms"]["URMA调度/线程开销"] == pytest.approx(0.007)
+    assert row["focus_breakdown_ms"]["其他调度/线程开销"] == 0.0
+    assert row["urma_scheduling_detail_ms"] == pytest.approx(
+        {
+            "wake_sched_latency": 0.007,
+            "thread_sched": 0.0,
+            "notify_to_awake": 0.007,
+            "poll_jfc": 0.0,
+            "notify": 0.0,
+        }
+    )
+    assert row["focus_breakdown_ms"]["未解释残差"] == pytest.approx(0.015)
 
 
 def test_focus_breakdown_separates_outer_and_nested_rpc_framework_windows():
@@ -895,7 +954,7 @@ def test_focus_breakdown_separates_outer_and_nested_rpc_framework_windows():
     mod._apply_focus_breakdown(row)
 
     assert row["focus_breakdown_ms"]["RPC框架"] == pytest.approx(1.2)
-    assert row["focus_breakdown_ms"]["调度/线程等待"] == pytest.approx(0.3)
+    assert row["focus_breakdown_ms"]["其他调度/线程开销"] == pytest.approx(0.3)
     assert row["focus_breakdown_ms"]["Get其他业务"] == pytest.approx(5.5)
     assert row["focus_breakdown_ms"]["未解释残差"] == pytest.approx(2.2)
     assert sum(row["focus_breakdown_ms"].values()) == pytest.approx(10.7)
@@ -1127,7 +1186,74 @@ def test_direct_read_with_closed_provider_and_urma_windows_is_classified_as_urma
     assert row["access_path_breakdown"]["provider_pull_ms"] == pytest.approx(5.132)
     assert row["access_path_breakdown"]["provider_finish_ms"] == pytest.approx(5.164)
     assert row["access_path_breakdown"]["closure_ratio_pct"] >= 90
-    assert "逻辑Write" in row["data_access_evidence"]
+    assert "最慢URMA Elapsed Time" in row["data_access_evidence"]
+
+
+def test_worker_access_parent_contains_urma_when_worker_process_get_is_leaf(run_dir: Path):
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    item = trace(
+        "worker-parent-with-urma",
+        19.088,
+        18.998,
+        timestamp="2026-08-31T15:01:05.621610",
+        urma_ms=18.902,
+        worker="data-worker",
+    )
+    item["latency_summary_us"] = {
+        "client.rpc.get": 89,
+        "worker.urma.urma_total": 18_959,
+        "worker.process.get": 5,
+        "client.process.get": 33,
+    }
+    summary["traces"]["worker-parent-with-urma"] = item
+    summary["trace_count"] += 1
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    row = next(
+        value
+        for value in load_module().build_analysis(
+            run_dir, top_n=100, deadline_ms=20, local_cache=False
+        )["traces"]
+        if value["trace_id"] == "worker-parent-with-urma"
+    )
+
+    assert row["worker_process_ms"] == pytest.approx(18.998)
+    assert row["access_path_breakdown"]["data_parent_ms"] == pytest.approx(18.998)
+    assert row["access_path_breakdown"]["closure_ratio_pct"] == pytest.approx(99.495, abs=0.01)
+    assert row["data_access_scope"] == "URMA慢完成"
+    assert row["focus_breakdown_ms"]["URMA通信"] == pytest.approx(18.902)
+    assert row["focus_breakdown_ms"]["Get其他业务"] == pytest.approx(0.096)
+    assert row["focus_breakdown_ms"]["未解释残差"] == pytest.approx(0.09)
+
+
+def test_client_direct_pipeline_remains_parent_when_larger_than_worker_window(run_dir: Path):
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    item = trace(
+        "client-direct-parent",
+        16.0,
+        10.0,
+        timestamp="2026-08-31T15:01:06.000000",
+        worker="data-worker",
+    )
+    item["latency_summary_us"] = {
+        "client.process.get": 15_000,
+        "worker.process.get": 5_000,
+    }
+    summary["traces"]["client-direct-parent"] = item
+    summary["trace_count"] += 1
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    row = next(
+        value
+        for value in load_module().build_analysis(run_dir, top_n=100, deadline_ms=20)["traces"]
+        if value["trace_id"] == "client-direct-parent"
+    )
+
+    assert row["worker_process_ms"] == pytest.approx(15.0)
+    assert row["focus_breakdown_ms"]["Get其他业务"] == pytest.approx(15.0)
+    assert row["focus_breakdown_ms"]["未解释残差"] == pytest.approx(1.0)
 
 
 def test_provider_pull_dominates_when_urma_is_fast(run_dir: Path):
@@ -1325,7 +1451,7 @@ def test_single_getobjectremote_is_client_to_data_worker_rpc_not_worker_parent(r
     assert "Worker ProcessGet" not in row["data_access_evidence"]
 
 
-def test_chunked_urma_write_uses_wall_clock_span_not_sum_of_wr_latency(run_dir: Path):
+def test_chunked_urma_write_keeps_two_wrs_and_uses_slowest_elapsed_time(run_dir: Path):
     summary_path = run_dir / "summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     item = trace(
@@ -1379,16 +1505,18 @@ def test_chunked_urma_write_uses_wall_clock_span_not_sum_of_wr_latency(run_dir: 
     assert logical["wall_clock_ms"] == pytest.approx(0.207)
     assert logical["slowest_wr_ms"] == pytest.approx(0.194)
     assert logical["sum_wr_ms"] == pytest.approx(0.332)
-    assert row["urma_trace"]["critical_path_ms"] == pytest.approx(0.207)
-    assert row["urma_trace"]["latency_basis"] == "逻辑Write墙钟跨度"
+    assert row["urma_trace"]["critical_path_ms"] == pytest.approx(0.194)
+    assert row["urma_trace"]["latency_basis"] == "最慢WR"
     assert row["urma_trace"]["wr_count"] == 2
     assert row["urma_trace"]["logical_write_count"] == 1
     assert analysis["aggregate"]["urma_analysis"]["wr_count"] >= 2
     assert analysis["aggregate"]["urma_analysis"]["logical_write_count"] >= 1
+    assert analysis["aggregate"]["urma_analysis"]["logical_write_slowest_wr_ms"]["count"] >= 1
     html_text = mod.render_html(analysis, "Chunked URMA")
     assert "Client Get → 逻辑 URMA Write → WR分片" in html_text
-    assert "WR耗时不可求和" in html_text
-    assert "逻辑Write墙钟" in html_text
+    assert "不求和" in html_text
+    assert "URMA Elapsed Time" in html_text
+    assert "两个" in html_text
 
 
 def test_worker_query_and_get_inline_urma_is_removed_from_query_parent(run_dir: Path):
@@ -1467,14 +1595,14 @@ def test_worker_query_and_get_inline_urma_is_removed_from_query_parent(run_dir: 
         if value["trace_id"] == "worker-inline-query-urma"
     )
 
-    assert row["inline_query_urma_ms"] == pytest.approx(5.242)
+    assert row["inline_query_urma_ms"] == pytest.approx(5.213)
     assert row["query_and_get_parent_ms"] == pytest.approx(5.7)
-    assert row["query_and_get_exclusive_ms"] == pytest.approx(0.458)
-    assert row["attribution_ms"]["URMA"] == pytest.approx(5.242)
-    assert row["query_and_get_exclusive_ms"] == pytest.approx(0.458)
+    assert row["query_and_get_exclusive_ms"] == pytest.approx(0.487)
+    assert row["attribution_ms"]["URMA"] == pytest.approx(5.213)
+    assert row["query_and_get_exclusive_ms"] == pytest.approx(0.487)
     assert row["attribution_ms"]["RPC网络"] == pytest.approx(0.250)
     assert row["attribution_ms"]["RPC排队"] == pytest.approx(0.008)
-    assert row["attribution_ms"]["QueryMeta"] == pytest.approx(0.200)
+    assert row["attribution_ms"]["QueryMeta"] == pytest.approx(0.229)
     assert row["data_access_scope"] == "QueryAndGet inline URMA"
     assert "同 Worker/同 attempt 唯一匹配" in row["data_access_evidence"]
     assert sum(row["attribution_ms"].values()) == pytest.approx(row["client_ms"])
@@ -1485,7 +1613,8 @@ def test_worker_query_and_get_inline_urma_is_removed_from_query_parent(run_dir: 
     assert "QueryAndGet其他" in html
     assert "URMA建链" in html
     assert "URMA通信" in html
-    assert "调度/线程等待" in html
+    assert "URMA调度/线程开销" in html
+    assert "其他调度/线程开销" in html
     assert "RPC网络相关" in html
     assert "RPC框架" in html
     assert "QueryAndGet父窗口（原始）" in html
@@ -2491,9 +2620,10 @@ def test_write_trace_has_separate_create_publish_breakdown(run_dir: Path):
             "Create RPC其他": 1.5,
             "写入MemoryCopy": 3.0,
             "写入URMA通信": 0.0,
+            "写入URMA调度/线程开销": 0.0,
             "Publish RPC其他": 2.0,
             "Worker Publish/元数据": 3.0,
-            "调度/线程等待": 0.3,
+            "其他调度/线程开销": 0.3,
             "RPC网络相关": 0.7,
             "RPC框架": 0.5,
             "未解释残差": 1.0,
@@ -2541,7 +2671,8 @@ def test_write_urma_is_split_from_enclosing_memory_copy_window(run_dir: Path):
     assert row["write_data_ms"] == 5.0
     assert row["write_breakdown_ms"]["写入MemoryCopy"] == 1.0
     assert row["write_breakdown_ms"]["写入URMA通信"] == 3.5
-    assert row["write_breakdown_ms"]["调度/线程等待"] == 0.5
+    assert row["write_breakdown_ms"]["写入URMA调度/线程开销"] == 0.5
+    assert row["write_breakdown_ms"]["其他调度/线程开销"] == 0.0
     assert sum(row["write_breakdown_ms"].values()) == pytest.approx(row["client_ms"])
 
 
