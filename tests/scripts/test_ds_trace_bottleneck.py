@@ -914,15 +914,13 @@ def test_focus_breakdown_does_not_treat_urma_wait_to_poll_as_thread_scheduling()
     assert row["focus_breakdown_ms"]["URMA通信"] == pytest.approx(13.419)
     assert row["focus_breakdown_ms"]["URMA调度/线程开销"] == pytest.approx(0.007)
     assert row["focus_breakdown_ms"]["其他调度/线程开销"] == 0.0
-    assert row["urma_scheduling_detail_ms"] == pytest.approx(
-        {
-            "wake_sched_latency": 0.007,
-            "thread_sched": 0.0,
-            "notify_to_awake": 0.007,
-            "poll_jfc": 0.0,
-            "notify": 0.0,
-        }
-    )
+    assert row["urma_scheduling_detail_ms"] == {
+        "wake_sched_latency": pytest.approx(0.007),
+        "thread_sched": None,
+        "notify_to_awake": pytest.approx(0.007),
+        "poll_jfc": None,
+        "notify": None,
+    }
     assert row["focus_breakdown_ms"]["未解释残差"] == pytest.approx(0.015)
 
 
@@ -1778,6 +1776,8 @@ def test_access_location_uses_each_client_trace_actual_transport(run_dir: Path):
     assert 'id="time-segment-scope"' in html_text
     assert 'id="time-segment-chart"' in html_text
     assert "图 1-5 Client 总时延五档问题分布" in html_text
+    assert '图 1-5 Client总时延五档' in html_text
+    assert '图 1-4 Client总时延五档' not in html_text
     assert ".time-segment-button.active" in html_text
     assert "let activeTimeSegment=null" in html_text
     assert "function scopeRows()" in html_text
@@ -1791,6 +1791,9 @@ def test_access_location_uses_each_client_trace_actual_transport(run_dir: Path):
     assert "#urma-trace-table th:nth-child(10){width:29%}" in html_text
     assert "#non-transport-table th:nth-child(11){width:21%}" in html_text
     assert "#worker-correlation-table th:nth-child(10){width:23%}" in html_text
+    assert "function evidenceMs(value)" in html_text
+    assert "Data RPC e2e/network/server: ${evidenceMs(row.data_rpc_e2e_ms)}" in html_text
+    assert "#urma-edge-table th:nth-child(2)" in html_text
 
 
 def test_missing_rpc_and_urma_evidence_stays_unobserved(run_dir: Path):
@@ -1900,6 +1903,8 @@ def test_failed_urma_wait_timeout_is_an_error_family_not_unsegmented_parent(
     }
     assert analysis["aggregate"]["problem_summary"]["URMA超时"]["metric_name"] == "URMA timeout elapsedMs"
     assert analysis["aggregate"]["problem_summary"]["URMA超时"]["stage_p50_ms"] == 15.058
+    assert analysis["aggregate"]["focus_problem_summary"]["URMA超时"]["metric_name"] == "URMA timeout elapsedMs"
+    assert analysis["aggregate"]["focus_problem_summary"]["URMA超时"]["stage_p50_ms"] == 15.058
     assert sum(row["attribution_ms"].values()) <= row["client_ms"]
 
     html_text = mod.render_html(analysis, "URMA timeout fixture")
@@ -1909,6 +1914,7 @@ def test_failed_urma_wait_timeout_is_an_error_family_not_unsegmented_parent(
     assert "error-chain-chart" in html_text
     assert "URMA超时标记" in html_text
     assert "已观测到 URMA_WAIT_TIMEOUT；失败 WR 没有完成态时不伪造 URMA 耗时" in html_text
+    assert "problem==='URMA超时'" in html_text
 
 
 def test_get_1004_receive_buffer_oom_is_not_reported_as_urma_completion_timeout(run_dir: Path):

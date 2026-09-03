@@ -35,6 +35,8 @@ def test_base_triage_skill_routes_instead_of_duplicating_specialist_workflows():
     assert "ds-trace-numa-analysis" in triage
     assert triage.count("python3 scripts/ds_trace_bottleneck.py") <= 1
     assert "python3 scripts/ds_trace_numa_analysis.py" not in triage
+    assert "读取九阶段" in triage
+    assert "七阶段" not in triage
 
 
 def test_bottleneck_skill_routes_multi_run_suite_without_reparsing_raw_logs():
