@@ -20,6 +20,7 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from deploy_common import (
+    build_install_bundle,
     check_process,
     clean_pod,
     cmd_clean_shared,
@@ -32,6 +33,7 @@ from deploy_common import (
     find_default_whl,
     find_pid_by_port,
     get_pods,
+    install_binary,
     kill_process,
     parse_config_override,
     read_remote_log_dir,
@@ -175,14 +177,187 @@ class TestUploadLauncher(unittest.TestCase):
         result = upload_launcher(pod, 'default', '/tmp')
         self.assertIsNone(result)
 
+    @patch('deploy_common.time.sleep')
     @patch('deploy_common.kubectl_cp_to', side_effect=Exception('cp boom'))
     @patch('deploy_common.kubectl_exec')
     @patch('os.path.exists', return_value=True)
-    def test_cp_failure_returns_none(self, mock_exists, mock_exec, mock_cp):
+    def test_cp_failure_returns_none(self, mock_exists, mock_exec, mock_cp,
+                                     mock_sleep):
         mock_exec.return_value = MagicMock(returncode=0)
         pod = {'name': 'test-pod', 'ip': '10.0.0.1'}
         result = upload_launcher(pod, 'default', '/tmp')
         self.assertIsNone(result)
+        # 3 attempts before giving up
+        self.assertEqual(mock_cp.call_count, 3)
+
+    @patch('deploy_common.time.sleep')
+    @patch('deploy_common.kubectl_cp_to',
+           side_effect=[Exception('cp boom'), None])
+    @patch('deploy_common.kubectl_exec')
+    @patch('os.path.exists', return_value=True)
+    def test_cp_failure_retries_then_succeeds(self, mock_exists, mock_exec,
+                                              mock_cp, mock_sleep):
+        mock_exec.return_value = MagicMock(returncode=0)
+        pod = {'name': 'test-pod', 'ip': '10.0.0.1'}
+        result = upload_launcher(pod, 'default', '/tmp')
+        self.assertEqual(result, '/tmp/standalone_launcher.py')
+        self.assertEqual(mock_cp.call_count, 2)
+
+
+class TestInstallBinary(unittest.TestCase):
+    """install_binary ships ONE bundle tar (binary + lib/*.so) per pod:
+    a single kubectl cp + a single kubectl exec unpack -- 2 round trips
+    instead of 5 (mkdir/cp/chmod/cp-tar/untar), the dominant cost of a
+    500-pod install where every kubectl process is a fresh TLS conn +
+    Rancher impersonation account. Each step is checked and retried; the
+    unpack command recovers a leftover FILE at remote_dir (kubectl cp to
+    a missing parent silently creates remote_dir as a FILE)."""
+
+    def _pod(self):
+        return {'name': 'p1', 'ip': '10.0.0.1'}
+
+    @patch('deploy_common.time.sleep')
+    @patch('deploy_common.kubectl_cp_to')
+    @patch('deploy_common.subprocess.run')
+    @patch('os.path.exists', return_value=True)
+    def test_bundle_two_round_trips(self, mock_exists, mock_run, mock_cp,
+                                    mock_sleep):
+        # happy path with a prebuilt bundle: exactly 1 cp + 1 exec.
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, 'libfoo.so'), 'wb') as f:
+                f.write(b'so-data')
+            bundle = build_install_bundle('/tmp/worker_test', d)
+            try:
+                self.assertIsNotNone(bundle)
+                mock_run.return_value = MagicMock(returncode=0, stderr='')
+                ok = install_binary(self._pod(), 'default', '/tmp/worker_test',
+                                    d, '/tmp/ds_worker',
+                                    bundle_tar_path=bundle)
+                self.assertTrue(ok)
+                # cp happens via kubectl_cp_to (patched); subprocess.run is
+                # only the unpack exec -> exactly 1 call.
+                self.assertEqual(mock_run.call_count, 1)
+                self.assertEqual(mock_cp.call_count, 1)
+                unpack_cmd = mock_run.call_args[0][0]
+                self.assertIn('tar xzf', ' '.join(unpack_cmd))
+                self.assertIn('chmod +x /tmp/ds_worker/worker_test',
+                              ' '.join(unpack_cmd))
+                self.assertIn('[ -d /tmp/ds_worker ] || rm -f /tmp/ds_worker',
+                              ' '.join(unpack_cmd))
+            finally:
+                if bundle:
+                    os.unlink(bundle)
+
+    @patch('deploy_common.time.sleep')
+    @patch('deploy_common.kubectl_cp_to')
+    @patch('deploy_common.subprocess.run')
+    @patch('os.path.exists', return_value=True)
+    def test_bundle_unpack_failure_fails_fast(self, mock_exists, mock_run,
+                                              mock_cp, mock_sleep):
+        # cp succeeds but unpack exec fails all 3 attempts -> False, no
+        # further kubectl calls.
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, 'libfoo.so'), 'wb') as f:
+                f.write(b'so-data')
+            bundle = build_install_bundle('/tmp/worker_test', d)
+            try:
+                mock_run.return_value = MagicMock(returncode=1,
+                                                  stderr='No space left')
+                ok = install_binary(self._pod(), 'default', '/tmp/worker_test',
+                                    d, '/tmp/ds_worker',
+                                    bundle_tar_path=bundle)
+                self.assertFalse(ok)
+                # unpack retried 3 times, nothing else ran
+                self.assertEqual(mock_run.call_count, 3)
+                self.assertEqual(mock_cp.call_count, 1)
+            finally:
+                if bundle:
+                    os.unlink(bundle)
+
+    @patch('deploy_common.time.sleep')
+    @patch('deploy_common.kubectl_cp_to')
+    @patch('deploy_common.subprocess.run')
+    @patch('os.path.exists', return_value=True)
+    def test_bundle_cp_retries_then_succeeds(self, mock_exists, mock_run,
+                                             mock_cp, mock_sleep):
+        # First cp raises (transient impersonation error), retry succeeds,
+        # unpack succeeds -> True with 2 cp calls.
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, 'libfoo.so'), 'wb') as f:
+                f.write(b'so-data')
+            bundle = build_install_bundle('/tmp/worker_test', d)
+            try:
+                mock_cp.side_effect = [RuntimeError('boom'), None]
+                mock_run.return_value = MagicMock(returncode=0, stderr='')
+                ok = install_binary(self._pod(), 'default', '/tmp/worker_test',
+                                    d, '/tmp/ds_worker',
+                                    bundle_tar_path=bundle)
+                self.assertTrue(ok)
+                self.assertEqual(mock_cp.call_count, 2)
+                self.assertEqual(mock_run.call_count, 1)
+            finally:
+                if bundle:
+                    os.unlink(bundle)
+
+    @patch('deploy_common.time.sleep')
+    @patch('deploy_common.subprocess.run')
+    @patch('os.path.exists', return_value=True)
+    def test_no_bundle_falls_back_to_checked_steps(self, mock_exists,
+                                                   mock_run, mock_sleep):
+        # build_install_bundle returns None (no .so, no binary file match):
+        # fall back to the checked 3-step mkdir/cp/chmod sequence.
+        mock_run.return_value = MagicMock(returncode=0, stderr='')
+        ok = install_binary(self._pod(), 'default', '/tmp/worker_test',
+                            None, '/tmp/ds_worker')
+        self.assertTrue(ok)
+        # mkdir + cp binary + chmod
+        self.assertEqual(mock_run.call_count, 3)
+        first_cmd = mock_run.call_args_list[0][0][0]
+        second_cmd = mock_run.call_args_list[1][0][0]
+        self.assertIn('mkdir', first_cmd)
+        self.assertEqual(second_cmd[:2], ['kubectl', 'cp'])
+
+    @patch('deploy_common.time.sleep')
+    @patch('deploy_common.subprocess.run')
+    @patch('os.path.exists', return_value=True)
+    def test_fallback_mkdir_failure_fails_fast(self, mock_exists, mock_run,
+                                               mock_sleep):
+        # mkdir fails (3 attempts) and the cleanup also fails (3 attempts)
+        # -> must return False without attempting the cp/chmod steps.
+        mock_run.return_value = MagicMock(returncode=1, stderr='File exists')
+        ok = install_binary(self._pod(), 'default', '/tmp/worker_test',
+                            None, '/tmp/ds_worker')
+        self.assertFalse(ok)
+        # mkdir x3 (retries) + leftover-file cleanup x3
+        self.assertEqual(mock_run.call_count, 6)
+
+    def test_build_install_bundle_layout(self):
+        # The tar must carry binary at the root and .so under lib/ -- that
+        # is the layout start_service_standalone expects on the pod
+        # (binary at {remote_dir}/, lib_path = {remote_dir}/lib).
+        import tarfile
+        with tempfile.TemporaryDirectory() as d:
+            binary = os.path.join(d, 'worker_test')
+            with open(binary, 'wb') as f:
+                f.write(b'bin-data')
+            with open(os.path.join(d, 'libfoo.so'), 'wb') as f:
+                f.write(b'so-data')
+            bundle = build_install_bundle(binary, d)
+            try:
+                self.assertIsNotNone(bundle)
+                with tarfile.open(bundle) as tar:
+                    names = sorted(tar.getnames())
+                self.assertEqual(names, ['lib/libfoo.so', 'worker_test'])
+            finally:
+                if bundle:
+                    os.unlink(bundle)
+
+    def test_build_install_bundle_nothing_to_pack_returns_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(build_install_bundle('/tmp/worker_test', d))
+        self.assertIsNone(build_install_bundle('/tmp/worker_test', None))
+        self.assertIsNone(build_install_bundle('/tmp/worker_test',
+                                               '/nonexistent-dir'))
 
 
 class TestStartServiceStandaloneTiming(unittest.TestCase):
