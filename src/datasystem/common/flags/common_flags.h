@@ -44,6 +44,7 @@ DS_DECLARE_uint32(urma_connection_size);
 DS_DECLARE_uint32(urma_send_jetty_lane_pool_size);
 DS_DECLARE_uint32(urma_send_jetty_lane_refill_extra_size);
 DS_DECLARE_bool(urma_event_mode);
+DS_DECLARE_uint32(urma_perf_interval_ms);
 // DEPRECATED: This flag is no longer used and will be removed in a future version.
 DS_DECLARE_string(urma_mode);
 DS_DECLARE_bool(enable_transport_fallback);
