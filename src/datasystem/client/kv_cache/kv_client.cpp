@@ -82,10 +82,15 @@ Status KVClient::Init(const KVClientConfig &clientConfig)
 {
     ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    (void)metrics::InitKvMetrics();
     bool needRollbackState;
     auto rc = impl_->Init(needRollbackState, true, &clientConfig);
     impl_->CompleteHandler(rc.IsError(), needRollbackState);
+    if (rc.IsOk()) {
+        // Init only after impl_->Init succeeded so the kv_metrics.log exporter resolves FLAGS_log_dir
+        // after ApplyKvClientProcessConfig/Logging::Start have set it; creating it earlier (or on a
+        // failed init whose config was never applied) writes to "/kv_metrics.log" and pins g_inited.
+        (void)metrics::InitKvMetrics();
+    }
     return rc;
 }
 
@@ -101,11 +106,13 @@ Status KVClient::InitEmbedded(const EmbeddedConfig &config)
 {
     ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    (void)metrics::InitKvMetrics();
     bool needRollbackState;
     auto &instance = KVClient::EmbeddedInstance();
     auto rc = instance.impl_->InitEmbedded(config, needRollbackState);
     instance.impl_->CompleteHandler(rc.IsError(), needRollbackState);
+    // No InitKvMetrics here: the embedded worker calls it inside WorkerOCServer::Start after
+    // FLAGS_log_dir is normalized; calling it first here would win the g_inited race and pin
+    // the exporter to the empty pre-config log_dir.
     return rc;
 }
 
