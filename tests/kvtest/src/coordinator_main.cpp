@@ -19,6 +19,7 @@
 #define BUILD_COMMIT "unknown"
 #endif
 
+#include "datasystem/common/signal/signal.h"
 #include "datasystem/coordinator_server.h"
 #include "datasystem/utils/status.h"
 
@@ -139,7 +140,7 @@ int main(int argc, char **argv)
         }
     });
 
-    while (!g_shutdownRequested.load()) {
+    while (!g_shutdownRequested.load() && !IsTermSignalReceived()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 

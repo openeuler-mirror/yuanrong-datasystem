@@ -393,6 +393,12 @@ class TestKillProcess(unittest.TestCase):
         cmd = mock_exec.call_args[0][2]
         self.assertIn('datasystem_coordinator', cmd)
         self.assertIn('procmon.py', cmd)
+        # Must use pkill (not pgrep | xargs kill): pgrep -f self-matches the
+        # sh -c wrapper (its cmdline contains process_name), and the pipeline
+        # breaks when kill -9 hits the shell before the real target receives
+        # the signal. pkill sends signals directly with no pipeline dependency
+        # and skips its own PID by default.
+        self.assertIn('pkill -9 -f', cmd)
 
     @patch('deploy_common.kubectl_exec')
     def test_timeout_returns_false(self, mock_exec):

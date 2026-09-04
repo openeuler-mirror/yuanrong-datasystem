@@ -324,8 +324,8 @@ def kill_process(pod, namespace, process_name, timeout=DEFAULT_TIMEOUT):
     pod_ip = pod['ip']
     try:
         kubectl_exec(pod_name, namespace,
-                     f'pgrep -f {process_name} | xargs -r kill -9; '
-                     f'pgrep -f procmon.py | xargs -r kill -9',
+                     f'pkill -9 -f {process_name}; '
+                     f'pkill -9 -f procmon.py',
                      check=False, timeout=timeout)
         log_info(f'  {pod_name} ({pod_ip}) -> killed')
         return True
