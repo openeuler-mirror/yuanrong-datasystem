@@ -440,14 +440,14 @@ class TestGenConfig(unittest.TestCase):
 
     # --- Connect options: enable_local_cache ---
 
-    def test_enable_local_cache_default_true(self):
-        """gen-config should emit enable_local_cache=true by default (flag omitted)."""
+    def test_enable_local_cache_default_false(self):
+        """gen-config should emit enable_local_cache=false by default (flag omitted)."""
         deploy, config = self._run_gen_config([
             '--nodes', '127.0.0.1:9000',
         ])
         self.assertIsNotNone(config)
         self.assertIn('connect_options', config)
-        self.assertTrue(config['connect_options']['enable_local_cache'])
+        self.assertFalse(config['connect_options']['enable_local_cache'])
 
     def test_enable_local_cache_bare_flag_true(self):
         """Bare --enable-local-cache (no value) should emit enable_local_cache=true."""
@@ -493,7 +493,7 @@ class TestGenConfig(unittest.TestCase):
         ])
         self.assertEqual(
             config['connect_options']['data_placement_policy'],
-            'PREFERRED_SAME_NODE')
+            'PREFERRED_META_OWNER')
 
     def test_data_placement_policy_override_emitted(self):
         """gen-config should emit an explicitly selected write placement policy."""

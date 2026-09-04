@@ -508,6 +508,11 @@ class Deployer:
                         f'cannot inject a valid node IP — check k8s node status')
                 custom_env[host_id_env] = host_ip
 
+            # SDK reads DATASYSTEM_UB_GET_DATA_SIZE_BYTES at client init (default 32MB);
+            # kvtest workloads fit in 10MB. Overridable via config 'env'.
+            if 'DATASYSTEM_UB_GET_DATA_SIZE_BYTES' not in custom_env:
+                custom_env['DATASYSTEM_UB_GET_DATA_SIZE_BYTES'] = '10485760'
+
             # Time only the actual launch. Verify (pgrep) and procmon attach
             # are intentionally excluded — caller reads start_elapsed.
             log_info(f'{tag} starting kvclient (role={role})...')
@@ -1405,15 +1410,15 @@ def _add_gen_config_args(p):
     p.add_argument('--ttl', type=int, default=0,
                    help='TTL in seconds via set_param.ttl_second (default: 0, no expiry)')
     # Connect options (applies to all modes)
-    p.add_argument('--enable-local-cache', type=_parse_bool, default=True,
+    p.add_argument('--enable-local-cache', type=_parse_bool, default=False,
                    nargs='?', const=True, dest='enable_local_cache',
                    metavar='BOOL',
-                   help='Enable SDK client local cache (default: true; bare flag = true). '
+                   help='Enable SDK client local cache (default: false; bare flag = true). '
                         'Pass false to make Get/MGet query metadata owners through the Transport layer.')
     p.add_argument('--data-placement-policy',
                    choices=['PREFERRED_SAME_NODE', 'REQUIRED_SAME_NODE', 'PREFERRED_META_OWNER'],
-                   default='PREFERRED_SAME_NODE', dest='data_placement_policy',
-                   help='Set/MSet data placement policy (default: PREFERRED_SAME_NODE).')
+                   default='PREFERRED_META_OWNER', dest='data_placement_policy',
+                   help='Set/MSet data placement policy (default: PREFERRED_META_OWNER).')
     # CPU / NUMA affinity
     p.add_argument('--cpu-affinity', default='',
                    help='CPU affinity, e.g. "0-7" or "0,2,4,6" (default: auto-detect)')
