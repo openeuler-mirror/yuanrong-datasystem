@@ -231,7 +231,7 @@ flowchart TB
 
 | 线程 | 数量 | 触发方式 | 职责 |
 |------|------|----------|------|
-| Pipeline Threads | `num_threads`（默认 16） | 循环 sleep_until | Writer：按 QPS 配额执行 KV 操作 |
+| Pipeline Threads | `num_threads`（默认 4） | 循环 sleep_until | Writer：按 QPS 配额执行 KV 操作 |
 | CacheReader Threads | `num_threads` | 循环 sleep_until | Reader：从 keyPool 随机 GetOrFill |
 | NotifyPool（出站） | 100 | 任务队列 | Writer 端发送通知，不执行 KV 读写 |
 | NotifyPool（读） | `num_total_threads - num_threads` | 任务队列 | 收到通知后执行 `notify_pipeline`；与写线程共同受总线程数约束 |
@@ -778,8 +778,8 @@ JSON 配置文件，使用 nlohmann/json 解析。
 | `data_sizes` | string[] | ["8MB"] | 每项 > 0 | 数据大小列表，支持 GB/MB/KB/B |
 | `ttl_seconds` | uint32 | 5 | ≥ 0（0=不过期） | 数据 TTL |
 | `target_qps` | int | 100 | ≥ 0（0=不限） | 目标 QPS |
-| `num_threads` | int | 16 | > 0 | Writer Pipeline 线程数 |
-| `num_total_threads` | int | `num_threads + 100` | > `num_threads` | Pipeline 读写总线程数；读线程数为两者之差 |
+| `num_threads` | int | 4 | > 0 | Writer Pipeline 线程数 |
+| `num_total_threads` | int | 16 | > `num_threads` | Pipeline 读写总线程数；读线程数为两者之差 |
 | `batch_keys_count` | int | 1 | ≥ 1 | 批量操作的 key 数量 |
 | `notify_count` | int | 10 | ≥ 0 | 每次写入通知几个 peer |
 | `notify_interval_us` | int | 0 | ≥ 0（0=并行） | 通知间隔（微秒） |
@@ -808,7 +808,7 @@ LoadConfig 解析后执行以下校验，失败则拒绝启动：
 - `etcd_address` 非空
 - `listen_port` 在 (0, 65535]
 - `num_threads` > 0
-- `num_total_threads` > `num_threads`
+- Pipeline 模式下 `num_total_threads` > `num_threads`
 - `target_qps` >= 0
 - `data_sizes` 每项 > 0
 - `batch_keys_count` >= 1
@@ -974,8 +974,8 @@ python3 deploy_worker.py exec -p my-worker -c "cat /tmp/metrics.csv"
   "etcd_address": "127.0.0.1:2379",
   "data_sizes": ["1KB", "4KB"],
   "target_qps": 10,
-  "num_threads": 1,
-  "num_total_threads": 101,
+  "num_threads": 4,
+  "num_total_threads": 16,
   "ttl_seconds": 30
 }
 ```
@@ -989,8 +989,8 @@ python3 deploy_worker.py exec -p my-worker -c "cat /tmp/metrics.csv"
   "etcd_address": "192.168.0.223:2379",
   "data_sizes": ["8MB"],
   "target_qps": 100,
-  "num_threads": 8,
-  "num_total_threads": 108,
+  "num_threads": 4,
+  "num_total_threads": 16,
   "notify_count": 2,
   "nodes": [
     {"host": "192.168.0.1", "port": 9000, "instance_id": 0},

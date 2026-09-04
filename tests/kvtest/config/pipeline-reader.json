@@ -8,8 +8,8 @@
   "notify_pipeline": [
     "getBuffer"
   ],
-  "num_threads": 16,
-  "num_total_threads": 116,
+  "num_threads": 4,
+  "num_total_threads": 16,
   "data_sizes": [
     "1MB"
   ],

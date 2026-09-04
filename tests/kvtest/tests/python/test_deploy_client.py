@@ -235,6 +235,23 @@ class TestGenConfig(unittest.TestCase):
 
     # --- Benchmark mode ---
 
+    def test_default_thread_counts_are_emitted(self):
+        """gen-config should emit the default write and total thread counts."""
+        _, config = self._run_gen_config([
+            '-m', 'pipeline',
+            '--nodes', '127.0.0.1:9000',
+        ])
+        self.assertEqual(config['num_threads'], 4)
+        self.assertEqual(config['num_total_threads'], 16)
+
+    def test_benchmark_omits_pipeline_total_threads(self):
+        """Benchmark config should use its thread count without a Pipeline total."""
+        _, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+        ])
+        self.assertEqual(config['num_threads'], 4)
+        self.assertNotIn('num_total_threads', config)
+
     def test_num_total_threads_is_emitted(self):
         """gen-config should preserve the configured read/write concurrency budget."""
         _, config = self._run_gen_config([

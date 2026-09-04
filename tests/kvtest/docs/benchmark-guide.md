@@ -225,7 +225,7 @@ Benchmark 模式通过 ServiceDiscovery 连接 etcd 发现 Worker。以下参数
 |------|------|--------|------|
 | `test_mode` | string | **必填** | 测试模式：`set_local` / `set_remote` / `get_local` / `get_cross_node` / `get_remote_direct` / `get_remote_cross` / `mixed_local_set_get` / `mixed_remote_set_get` / `mixed_local_set_cross_get` / `mixed_remote_set_remote_cross_get` / `mset_local` / `mset_remote` / `mget_local` / `mget_cross_node` / `mget_remote_direct` / `mget_remote_cross` |
 | `worker_memory_mb` | int | **必填** | Worker 共享内存上限（MB），用于计算每轮 key 数 |
-| `num_threads` | int | 16 | 并发线程数（所有模式共用，Pipeline 模式亦使用此参数） |
+| `num_threads` | int | 4 | 并发线程数（所有模式共用，Pipeline 模式亦使用此参数） |
 | `duration_seconds` | int | 0 | 总运行时长（秒），0 = 不限时 |
 | `total_rounds` | int | 0 | 总轮数，0 = 不限轮 |
 | `set_api` | string | "string_view" | Set API 路径：`"string_view"` / `"create_buffer"` / `"create_buffer_raw"`（MSet/MGet 模式忽略） |

@@ -6,7 +6,6 @@
 #include <filesystem>
 #include <iomanip>
 #include <chrono>
-#include <limits>
 #include "simple_log.h"
 
 using json = nlohmann::json;
@@ -192,13 +191,8 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
         }
         if (j.contains("num_threads"))
             cfg.numThreads = j["num_threads"];
-        if (j.contains("num_total_threads")) {
+        if (j.contains("num_total_threads"))
             cfg.numTotalThreads = j["num_total_threads"];
-        } else if (cfg.numThreads <= std::numeric_limits<int>::max() - Config::kDefaultNumReadThreads) {
-            cfg.numTotalThreads = cfg.numThreads + Config::kDefaultNumReadThreads;
-        } else {
-            cfg.numTotalThreads = cfg.numThreads;
-        }
         if (j.contains("notify_count"))
             cfg.notifyCount = j["notify_count"];
         if (j.contains("notify_interval_us"))
@@ -456,7 +450,7 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
         SLOG_ERROR("num_threads must be > 0, got " << cfg.numThreads);
         return false;
     }
-    if (cfg.numTotalThreads <= cfg.numThreads) {
+    if (cfg.runMode == RunMode::PIPELINE && cfg.numTotalThreads <= cfg.numThreads) {
         SLOG_ERROR("num_total_threads must be greater than num_threads, got total="
                    << cfg.numTotalThreads << ", write=" << cfg.numThreads);
         return false;
