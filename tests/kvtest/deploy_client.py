@@ -1073,10 +1073,11 @@ def _build_deploy_config(args, transport, nodes):
 
 def _build_config(mode, args):
     """Assemble the config.json payload for the given run mode."""
+    num_threads = args.num_threads if args.num_threads is not None else 4
     cfg = {
         'mode': mode,
         'cluster_name': args.cluster_name or '',
-        'num_threads': args.num_threads,
+        'num_threads': num_threads,
         'data_sizes': [s.strip() for s in args.data_sizes.split(',')],
         'connect_options': {
             'connect_timeout_ms': 1000,
@@ -1088,7 +1089,18 @@ def _build_config(mode, args):
         },
     }
     if mode == 'pipeline':
-        cfg['num_total_threads'] = args.num_total_threads
+        if args.num_total_threads is not None:
+            num_total_threads = args.num_total_threads
+        elif args.num_threads is not None:
+            num_total_threads = num_threads * 2
+        else:
+            num_total_threads = 16
+        if num_total_threads <= num_threads:
+            log_error(
+                f'ERROR: --num-total-threads ({num_total_threads}) must be greater than '
+                f'--num-threads ({num_threads}) for pipeline mode')
+            sys.exit(1)
+        cfg['num_total_threads'] = num_total_threads
     # Multi-stage QPS: when --stage-target-qps is provided, emit target_qps as
     # an array and stage_duration_seconds so the kvtest binary schedules stage
     # transitions. Otherwise keep the legacy single-int target_qps. Validation
@@ -1362,9 +1374,9 @@ def _add_gen_config_args(p):
                    help='Number of peers to notify per write (default: 10)')
     p.add_argument('--data-sizes', default='1MB',
                    help='Comma-separated data sizes, e.g. "1MB,512KB" (default: 1MB)')
-    p.add_argument('--num-threads', type=int, default=4,
+    p.add_argument('--num-threads', type=int,
                    help='Number of worker threads (default: 4)')
-    p.add_argument('--num-total-threads', type=int, default=16,
+    p.add_argument('--num-total-threads', type=int,
                    help='Total Pipeline read and write threads (default: 16); '
                         'read threads equal this value minus --num-threads')
     p.add_argument('--cleanup-method', default='del',

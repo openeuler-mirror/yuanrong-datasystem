@@ -312,7 +312,8 @@ Backed by `tests/kvtest/BUILD.bazel` and `tests/kvtest/build.sh`:
   cmake mode so they exercise the `std::thread` path unchanged.
 - pipeline-mode write concurrency is `num_threads` (default 4); `num_total_threads` (default 16) bounds the combined
   Set/Get concurrency, and `NotifyDispatcher::notifyPool_` derives its read-worker count as
-  `num_total_threads - num_threads`.
+  `num_total_threads - num_threads`. When a Pipeline config explicitly sets only `num_threads`, kvtest derives
+  `num_total_threads` as twice that write-thread count; configs that omit both fields retain the 4/16 defaults.
 
 Backed by `tests/kvtest/deploy_coordinator.py`, `deploy_worker.py`, `deploy_common.py`, and `deploy_pods.py`:
 
