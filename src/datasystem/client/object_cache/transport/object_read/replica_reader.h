@@ -41,7 +41,9 @@ using ReplicaReadBatch = std::vector<ReplicaReadRequest>;
 
 class ReplicaReader {
 public:
-    using ReadAdmissionCheck = std::function<Status(const HostPort &)>;
+    // On denial, the check reports the medium of the denied source via deniedKind so the caller-thread
+    // aggregation can attribute the failed attempt; it must not write the request-scoped transport tracker.
+    using ReadAdmissionCheck = std::function<Status(const HostPort &, AccessTransportKind &deniedKind)>;
     using ReadOutcomeReport = std::function<void(const HostPort &, const GetObjectRemoteRspPb &)>;
 
     ReplicaReader(std::shared_ptr<DataPlaneExecutor> executor, std::shared_ptr<DeadlineRetry> retry,

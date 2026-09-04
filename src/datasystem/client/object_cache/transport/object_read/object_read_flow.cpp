@@ -71,12 +71,6 @@ struct MetadataGroup {
     ObjectMetadataBatch items;
 };
 
-AccessTransportKind MergeTransportKind(AccessTransportKind lhs, AccessTransportKind rhs)
-{
-    return static_cast<AccessTransportKind>(
-        std::max(static_cast<uint8_t>(lhs), static_cast<uint8_t>(rhs)));
-}
-
 std::vector<MetadataGroup> GroupByMetaOwner(std::vector<ReadItem> &items)
 {
     std::vector<MetadataGroup> groups;
@@ -230,6 +224,9 @@ Status BuildResult(std::vector<ReadItem> &items, ObjectReadResult &result)
             hasSuccess = true;
             result.actualKind = MergeTransportKind(result.actualKind, item.data.kind);
         }
+        // Failed items still contribute their attempted medium so a fully-failed Get reports the
+        // highest medium actually tried (e.g. a later TCP replica attempt over an earlier UB denial).
+        result.actualKind = MergeTransportKind(result.actualKind, item.attemptedKind);
     }
     if (hasSuccess) {
         return Status::OK();

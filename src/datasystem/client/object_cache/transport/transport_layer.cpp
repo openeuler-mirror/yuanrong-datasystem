@@ -246,12 +246,8 @@ TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared
                                                         : std::move(options.readSourceFilter);
     localUbSenderState_->lateCompletionPool = lateCompletionPool_;
     localUbSenderState_->healthFilter = healthFilter_;
-    auto healthFilter = healthFilter_;
-    auto checkReadSource = [healthFilter](const HostPort &workerAddr) {
-        return healthFilter->IsAvailable(workerAddr)
-                   ? Status::OK()
-                   : Status(K_URMA_READ_SOURCE_DENIED,
-                            "Client UB read source denied: " + workerAddr.ToString());
+    auto checkReadSource = [this](const HostPort &workerAddr, AccessTransportKind &deniedKind) {
+        return CheckUbReadSource(workerAddr, deniedKind);
     };
     auto reportReadOutcome = [this](const HostPort &workerAddr, const GetObjectRemoteRspPb &response) {
         if (response.has_provider_ub_failure_detail()) {
@@ -292,6 +288,17 @@ bool TransportLayer::ReportProviderUbFailure(const HostPort &provider, const Pro
     }
     NotifyReconcile();
     return true;
+}
+
+Status TransportLayer::CheckUbReadSource(const HostPort &workerAddr, AccessTransportKind &deniedKind) const
+{
+    if (healthFilter_ != nullptr && healthFilter_->IsAvailable(workerAddr)) {
+        return Status::OK();
+    }
+    // Report the denied medium to the caller-thread aggregation instead of writing the request-scoped
+    // tracker here: a later replica may actually carry data over TCP, which must outrank this denial.
+    deniedKind = AccessTransportKind::UB;
+    return Status(K_URMA_READ_SOURCE_DENIED, "Client UB read source denied: " + workerAddr.ToString());
 }
 
 Status TransportLayer::CheckLocalUbSenderAdmission(TransportHint hint) const

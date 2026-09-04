@@ -51,6 +51,13 @@ inline int64_t SelectLocationRefreshBackoffMs(bool draining, uint8_t retryCount,
     return !draining && retryCount == 0 ? immediateRetryBackoffMs : currentBackoffMs;
 }
 
+/** @brief Merge two transport kinds by enum priority (SHM < UB < TCP), mirroring access-log semantics. */
+inline AccessTransportKind MergeTransportKind(AccessTransportKind lhs, AccessTransportKind rhs)
+{
+    return static_cast<AccessTransportKind>(std::max<uint8_t>(static_cast<uint8_t>(lhs),
+                                                              static_cast<uint8_t>(rhs)));
+}
+
 /** @brief One object and metadata owner supplied by the routing layer. */
 struct ObjectReadItem {
     size_t requestIndex = 0;
@@ -72,6 +79,8 @@ struct ObjectReadItemResult {
     std::string objectKey;
     Status status = Status(K_NOT_READY, "Object data is not read");
     DataGetResult data;
+    /** @brief Highest medium actually attempted for this item, including admission-denied sources. */
+    AccessTransportKind attemptedKind = AccessTransportKind::SHM;
 };
 
 /** @brief Object read results retained in request order. */
