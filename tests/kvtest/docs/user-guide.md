@@ -350,6 +350,22 @@ python3 scripts/generate_resource_report.py /path/to/worker-logs \
   --since "2026-05-13T10:00:00" --interval 60000 -o resource.html
 ```
 
+### 4.3 采集并渲染进程资源报表
+
+Worker 部署或启动时传入 `--enable-procmon`；Client 部署则在 `deploy.json` 中设置
+`"enable_procmon": true`。采样结果写入 `resource_monitor.csv`，执行对应的 `collect`
+命令后可生成独立 HTML 页面：
+
+```bash
+python3 parse_resource.py collected_worker_logs/<pod>/resource_monitor.csv \
+  -o resource_monitor.html
+```
+
+CSV 默认包含 CPU、RSS、匿名/共享内存、文件描述符、TCP 失败率和吞吐量。Worker 配置同时启用
+`jemalloc_stats=true` 与 `brpc_enable_builtin_services=true` 时，还会按秒采集 jemalloc 的
+allocated、active、resident、metadata、mapped、retained、dirty 和 muzzy 指标。读取失败时
+jemalloc 内存列留空，`jemalloc_stats_available` 与 `jemalloc_stats_read_failures` 用于判断缺口原因。
+
 ---
 
 ## 5. 故障排查

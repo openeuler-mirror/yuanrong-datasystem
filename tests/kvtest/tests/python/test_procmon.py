@@ -11,7 +11,10 @@ from unittest.mock import MagicMock, patch, mock_open
 # Make procmon importable
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'tools'))
-from procmon import find_pid, read_proc_stat, read_proc_mem_breakdown, read_tcp_attempt_fails_stats, read_port_traffic, _parse_netlink_diag_response, format_mb
+from procmon import (add_jemalloc_metrics, find_pid, read_jemalloc_bvars,
+                     read_proc_stat,
+                     read_proc_mem_breakdown, read_tcp_attempt_fails_stats,
+                     read_port_traffic, _parse_netlink_diag_response, format_mb)
 
 
 class TestFindPid(unittest.TestCase):
@@ -422,6 +425,66 @@ class TestFormatMb(unittest.TestCase):
         self.assertEqual(format_mb(512 * 1024), "0.5")
 
 
+class TestReadJemallocBvars(unittest.TestCase):
+    @patch('procmon.urlopen')
+    def test_reads_builtin_vars_wildcard(self, mock_urlopen):
+        response = MagicMock()
+        response.read.return_value = (
+            b'anon_jemalloc_allocated_bytes : 1048576\n'
+            b'anon_jemalloc_active_bytes : 2097152\n'
+            b'anon_jemalloc_stats_available : 1\n')
+        mock_urlopen.return_value.__enter__.return_value = response
+
+        values = read_jemalloc_bvars(31501, host='10.0.0.1')
+
+        self.assertEqual(values['anon_jemalloc_allocated_bytes'], 1048576)
+        self.assertEqual(values['anon_jemalloc_stats_available'], 1)
+        request_url = mock_urlopen.call_args[0][0]
+        self.assertEqual(request_url,
+                         'http://10.0.0.1:31501/vars/anon_jemalloc_*?console=1')
+
+    @patch('procmon.urlopen')
+    def test_brackets_ipv6_builtin_host(self, mock_urlopen):
+        response = MagicMock()
+        response.read.return_value = b'anon_jemalloc_stats_available : 1\n'
+        mock_urlopen.return_value.__enter__.return_value = response
+
+        read_jemalloc_bvars(31501, host='fd00::10')
+
+        self.assertEqual(
+            mock_urlopen.call_args[0][0],
+            'http://[fd00::10]:31501/vars/anon_jemalloc_*?console=1')
+
+    @patch('procmon.urlopen', side_effect=OSError('disabled'))
+    def test_unavailable_builtin_services_degrades_gracefully(self, _mock):
+        self.assertEqual(read_jemalloc_bvars(31501), {})
+
+
+class TestAddJemallocMetrics(unittest.TestCase):
+    def test_adds_current_values_when_stats_are_available(self):
+        row = {}
+        add_jemalloc_metrics(row, {
+            'anon_jemalloc_allocated_bytes': 1572864,
+            'anon_jemalloc_stats_available': 1,
+            'anon_jemalloc_stats_read_failures': 2,
+        })
+
+        self.assertEqual(row['jemalloc_allocated_mb'], '1.500')
+        self.assertEqual(row['jemalloc_stats_available'], 1)
+        self.assertEqual(row['jemalloc_stats_read_failures'], 2)
+
+    def test_omits_stale_values_when_stats_are_unavailable(self):
+        row = {}
+        add_jemalloc_metrics(row, {
+            'anon_jemalloc_allocated_bytes': 1572864,
+            'anon_jemalloc_stats_available': 0,
+            'anon_jemalloc_stats_read_failures': 3,
+        })
+
+        self.assertNotIn('jemalloc_allocated_mb', row)
+        self.assertEqual(row['jemalloc_stats_available'], 0)
+        self.assertEqual(row['jemalloc_stats_read_failures'], 3)
+
+
 if __name__ == '__main__':
     unittest.main()
-

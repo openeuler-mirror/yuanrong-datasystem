@@ -312,9 +312,9 @@ class Deployer:
                               f'ls {mdir}/*.csv {mdir}/*.txt {mdir}/*.log 2>/dev/null',
                               check=False)
             files.extend(f.strip() for f in (fls.stdout or '').splitlines() if f.strip())
-        # Also collect top-level run.log and resource_monitor.log
+        # Also collect top-level run.log and resource_monitor.csv
         run_log = self.run_on(node,
-                              f'ls {self.remote_work_dir}/run.log {self.remote_work_dir}/resource_monitor.log 2>/dev/null',
+                              f'ls {self.remote_work_dir}/run.log {self.remote_work_dir}/resource_monitor.csv 2>/dev/null',
                               check=False)
         files.extend(f.strip() for f in (run_log.stdout or '').splitlines() if f.strip())
 
@@ -322,7 +322,7 @@ class Deployer:
             node, local_dir, files,
             file_label='output files',
             remote_dir=self.remote_work_dir,
-            tar_pattern='metrics_* *.csv *.txt *.log run.log resource_monitor.log'
+            tar_pattern='metrics_* *.csv *.txt *.log run.log resource_monitor.csv'
         )
 
     def collect_sdk_logs(self, node, local_dir, sdk_log_dir='/root/.datasystem/logs'):
@@ -606,7 +606,7 @@ class Deployer:
                 procmon_cmd = (
                     f"cd {self.remote_work_dir} && "
                     f"python3 procmon.py --pid {pid} -i 1"
-                    f" --output resource_monitor.log --background")
+                    f" --output resource_monitor.csv --background")
                 procmon_result = self.run_on(node, procmon_cmd, check=False, timeout=10)
                 procmon_pid = procmon_result.stdout.strip() if procmon_result.returncode == 0 else ''
                 if procmon_pid.isdigit():
