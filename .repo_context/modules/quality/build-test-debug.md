@@ -357,6 +357,11 @@ Backed by `tests/kvtest/deploy_coordinator.py`, `deploy_worker.py`, `deploy_comm
   metrics without disrupting `/proc` collection when the endpoint or metrics are unavailable. When the bvar reports
   `anon_jemalloc_stats_available=0`, procmon records the status counters but leaves memory cells empty because the
   exported byte counters retain their last successful values.
+- `deploy_worker.py start` / `deploy` enable Worker heap profiling solely through an explicit
+  `--jemalloc-prof-options <MALLOC_CONF>` value; there is no separate runtime toggle. The option is forwarded to
+  `dscli start --jemalloc_prof_conf`, which verifies that the package was built with root `build.sh -x on`, adds
+  `prof:true`, and derives `<log_dir>/jemalloc/datasystem_worker` when `prof_prefix` is absent. The option is rejected
+  in standalone mode because that launch path does not use dscli's profiling environment setup.
   `deploy_common.discover_nodes` now sorts by node name so the same helper serves
   `deploy_pods` percentage distribution and `deploy_coordinator` round-robin spread deterministically.
 - `deploy_common.clean_pod` / `cmd_clean_impl` / `cmd_clean_shared` form the clean pipeline shared by

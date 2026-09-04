@@ -46,22 +46,36 @@ PROCESS_NAME_STANDALONE = 'worker_test'
 ADDRESS_KEY = 'worker_address'
 
 
+def _reject_standalone_jemalloc_profile(args):
+    if (getattr(args, 'standalone', False)
+            and getattr(args, 'jemalloc_prof_options', None) is not None):
+        log_error('ERROR: --jemalloc-prof-options is only supported in dscli mode')
+        return True
+    return False
+
+
 def start_worker(pod, namespace, config, worker_port, remote_config,
                  enable_procmon=True, procmon_remote_dir='/tmp',
-                 numactl_opts=None, timeout=DEFAULT_TIMEOUT):
+                 numactl_opts=None, jemalloc_prof_conf=None,
+                 timeout=DEFAULT_TIMEOUT):
     """Start a worker in a single pod.
 
     Delegates to deploy_common.start_service with the worker role's binding
     (datasystem_worker binary). The caller must have injected ``worker_address``
     into ``config`` already (see cmd_start).
     """
+    kwargs = {'numactl_opts': numactl_opts, 'timeout': timeout}
+    if jemalloc_prof_conf is not None:
+        kwargs['jemalloc_prof_conf'] = jemalloc_prof_conf
     return start_service(pod, namespace, config, remote_config, worker_port,
                          PROCESS_NAME, enable_procmon, procmon_remote_dir,
-                         numactl_opts=numactl_opts, timeout=timeout)
+                         **kwargs)
 
 
 def cmd_start(args, pods):
     """Start workers from a config template."""
+    if _reject_standalone_jemalloc_profile(args):
+        return 1
     if getattr(args, 'standalone', False):
         return cmd_start_standalone(args, pods)
 
@@ -95,6 +109,8 @@ def cmd_start(args, pods):
                               enable_procmon=args.enable_procmon,
                               procmon_remote_dir=args.procmon_dir,
                               numactl_opts=numactl_opts,
+                              jemalloc_prof_conf=getattr(
+                                  args, 'jemalloc_prof_options', None),
                               timeout=args.timeout)
             return ok
         finally:
@@ -110,6 +126,8 @@ def cmd_start(args, pods):
 
 def cmd_deploy(args, pods):
     """Deploy: install + start workers in one command."""
+    if _reject_standalone_jemalloc_profile(args):
+        return 1
     if getattr(args, 'standalone', False):
         if not getattr(args, 'jf', None):
             log_error('ERROR: --jf is required in standalone mode')
@@ -342,6 +360,9 @@ def main():
                               help='NUMA node(s) to bind worker to, passed to dscli start -N (e.g. "0" or "0,1")')
     parser_start.add_argument('-C', '--cpu-bind', default=None,
                               help='CPU core(s) to bind worker to (dscli mode only)')
+    parser_start.add_argument('--jemalloc-prof-options', default=None,
+                              help='Enable jemalloc profiling and pass this value to '
+                                   'dscli --jemalloc_prof_conf (dscli mode only)')
     # Standalone mode
     parser_start.add_argument('-S', '--standalone', action='store_true', default=False,
                               help='Use worker_test binary instead of dscli')
@@ -456,6 +477,9 @@ def main():
                                help='NUMA node(s) to bind worker to (non-standalone mode)')
     parser_deploy.add_argument('-C', '--cpu-bind', default=None,
                                help='CPU core(s) to bind worker to (non-standalone mode)')
+    parser_deploy.add_argument('--jemalloc-prof-options', default=None,
+                               help='Enable jemalloc profiling and pass this value to '
+                                    'dscli --jemalloc_prof_conf (dscli mode only)')
     # Common
     parser_deploy.add_argument('--enable-procmon', action='store_true', default=False,
                                dest='enable_procmon',

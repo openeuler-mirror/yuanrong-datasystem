@@ -454,7 +454,8 @@ def install_whl(pod, namespace, whl_path, timeout=DEFAULT_TIMEOUT):
 
 def start_service(pod, namespace, config, remote_config, port, process_name,
                   enable_procmon=True, procmon_remote_dir='/tmp',
-                  numactl_opts=None, timeout=DEFAULT_TIMEOUT):
+                  numactl_opts=None, jemalloc_prof_conf=None,
+                  timeout=DEFAULT_TIMEOUT):
     """Start a datasystem service in a single pod.
 
     The caller is responsible for injecting the per-pod listening address
@@ -464,8 +465,9 @@ def start_service(pod, namespace, config, remote_config, port, process_name,
     Writes the config to a temp file, copies it into the pod, runs
     ``dscli start -f <remote_config>`` for workers or
     ``dscli start -C <remote_config>`` for coordinators (optionally with
-    numactl options appended for the worker), then attaches procmon to the
-    started process. The role is selected from ``process_name``: dscli's
+    numactl and jemalloc profiling options appended for the worker), then
+    attaches procmon to the started process. The role is selected from
+    ``process_name``: dscli's
     ``-f`` flag binds to ``worker_config_path`` and ``-C`` binds to
     ``coordinator_config_path``, so a coordinator must not be started with
     ``-f`` (dscli would treat it as a worker config).
@@ -487,6 +489,8 @@ def start_service(pod, namespace, config, remote_config, port, process_name,
         cmd = f'dscli start {config_flag} {remote_config}'
         if numactl_opts and not is_coordinator:
             cmd += f' {numactl_opts}'
+        if jemalloc_prof_conf is not None and not is_coordinator:
+            cmd += f' --jemalloc_prof_conf {shlex.quote(jemalloc_prof_conf)}'
         # Time only the actual launch (dscli start). Config upload, pid
         # verify, and procmon attach are excluded — caller reads
         # pod['_start_elapsed'] to record the start stopwatch.
