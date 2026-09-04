@@ -146,6 +146,12 @@ DS_DEFINE_validator(data_migrate_rate_limit_mb, [](const char *flagName, uint32_
     (void)flagName;
     return value > 0;
 });
+DS_DEFINE_uint32(urma_perf_interval_ms, 10000,
+                 "URMA performance sampling interval in milliseconds. Default is 10000 ms.");
+DS_DEFINE_validator(urma_perf_interval_ms, [](const char *flagName, uint32_t value) {
+    (void)flagName;
+    return value > 0;
+});
 DS_DEFINE_uint32_dynamic(node_dead_timeout_s, 300, "maximum time interval for the master to determine node death");
 DS_DEFINE_uint32(hash_ring_tokens_per_member, 4,
                  "Token count allocated to each Worker for new hash-ring bootstrap and scale-out plans. "

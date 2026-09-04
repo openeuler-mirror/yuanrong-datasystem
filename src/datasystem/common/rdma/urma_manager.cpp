@@ -69,6 +69,7 @@
 DS_DECLARE_uint32(urma_poll_size);
 DS_DECLARE_uint32(urma_connection_size);
 DS_DECLARE_bool(urma_event_mode);
+DS_DECLARE_uint32(urma_perf_interval_ms);
 
 namespace datasystem {
 namespace {
@@ -966,7 +967,6 @@ Status UrmaManager::GetOrRegisterSegment(const uint64_t &segAddress, const uint6
 Status UrmaManager::PerfThreadMain()
 {
     constexpr uint32_t perfBufferLen = 16 * 1024;
-    constexpr int perfIntervalMs = 10000;  // 10s
     constexpr int sleepIntervalMs = 10;
 
     while (!serverStop_.load()) {
@@ -976,7 +976,7 @@ Status UrmaManager::PerfThreadMain()
         }
 
         Timer timer;
-        while (timer.ElapsedMilliSecond() < perfIntervalMs && !serverStop_) {
+        while (timer.ElapsedMilliSecond() < FLAGS_urma_perf_interval_ms && !serverStop_) {
             std::this_thread::sleep_for(std::chrono::milliseconds(sleepIntervalMs));
         }
 
