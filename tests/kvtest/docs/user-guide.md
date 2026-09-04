@@ -130,8 +130,8 @@ bash tests/test_standalone_mode.sh
   },
   "data_sizes": ["1MB"],
   "set_param": {"ttl_second": 0},
-  "num_threads": 16,
-  "num_total_threads": 116,
+  "num_threads": 4,
+  "num_total_threads": 16,
   "metrics_interval_ms": 3000,
   "cpu_affinity": "",
   "numa_node": -1,
@@ -163,8 +163,8 @@ bash tests/test_standalone_mode.sh
 | `connect_options.fast_transport_mem_size` | string | "512MB" | 快速传输内存大小，支持 KB/MB/GB 后缀 |
 | `data_sizes` | string[] | ["1MB"] | 数据大小列表，支持 KB/MB/GB 后缀，随机选取 |
 | `set_param.ttl_second` | uint | 0 | Set 操作 TTL（秒），0 = 永不过期。所有模式通用 |
-| `num_threads` | int | 16 | Pipeline 写线程数 / Benchmark 并发线程数 / Cache 工作线程数 |
-| `num_total_threads` | int | `num_threads + 100` | Pipeline 读写总线程数；收到通知后执行 `notify_pipeline` 的读线程数严格为 `num_total_threads - num_threads` |
+| `num_threads` | int | 4 | Pipeline 写线程数 / Benchmark 并发线程数 / Cache 工作线程数 |
+| `num_total_threads` | int | 16 | Pipeline 读写总线程数；收到通知后执行 `notify_pipeline` 的读线程数严格为 `num_total_threads - num_threads` |
 | `metrics_interval_ms` | int | 3000 | 指标刷新间隔（毫秒） |
 | `metrics_file` | string | 自动生成 | CSV 输出文件名，默认 `outputDir/latency_timeseries.csv` |
 | `cpu_affinity` | string | "" | CPU 亲和性，如 "0-7" 或 "0,2,4,6"，空 = 自动检测。所有模式（Pipeline/Cache/Benchmark）均生效 |
@@ -186,7 +186,7 @@ bash tests/test_standalone_mode.sh
 | `role` | string | "writer" | 角色：`"writer"` 或 `"reader"` |
 | `pipeline` | string[] | ["setStringView"] | 写入流水线操作列表 |
 | `notify_pipeline` | string[] | ["getBuffer"] | 收到通知后执行的操作列表 |
-| `num_total_threads` | int | `num_threads + 100` | 读写总并发线程数，必须大于 `num_threads`；未配置时保留原有 100 个读线程 |
+| `num_total_threads` | int | 16 | 读写总并发线程数；Pipeline 模式下必须大于 `num_threads` |
 | `target_qps` | int | 100 | 目标 QPS，0 = 不限速；数组 = 多阶段压测 |
 | `notify_count` | int | 10 | 每次操作后通知的 peer 数量 |
 | `notify_interval_us` | int | 0 | 通知间隔（微秒），0 = 并行发送 |
@@ -302,8 +302,8 @@ python3 deploy_client.py gen-config -p ds-worker -n datasystem \
 | `--total-rounds` | Benchmark | 总轮数 |
 | `--ttl` | 全部 | TTL 秒数（默认 0，永不过期） |
 | `--data-sizes` | 全部 | 数据大小，逗号分隔（默认 `1MB`） |
-| `--num-threads` | 全部 | 工作线程数（默认 16） |
-| `--num-total-threads` | Pipeline | 读写总线程数；读线程数为该值减去 `--num-threads`（默认不写入，kvtest 保留 100 个读线程） |
+| `--num-threads` | 全部 | 工作线程数（默认 4） |
+| `--num-total-threads` | Pipeline | 读写总线程数（默认 16）；读线程数为该值减去 `--num-threads` |
 | `--verify-level` | Pipeline/Cache | Get 数据校验级别 `off`/`size`/`sample`/`full`（默认 `size`，仅传非默认值时写入 `verify` 块） |
 | `--verify-sample-bytes` | Pipeline/Cache | `level=sample` 时每段长度（默认 `4KB`，支持 KB/MB/GB） |
 | `--verify-sample-step` | Pipeline/Cache | `level=sample` 时采样段间隔（默认 `1MB`，支持 KB/MB/GB） |

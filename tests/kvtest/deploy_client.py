@@ -1082,7 +1082,7 @@ def _build_config(mode, args):
             'fast_transport_mem_size': '512MB',
         },
     }
-    if args.num_total_threads is not None:
+    if mode == 'pipeline':
         cfg['num_total_threads'] = args.num_total_threads
     # Multi-stage QPS: when --stage-target-qps is provided, emit target_qps as
     # an array and stage_duration_seconds so the kvtest binary schedules stage
@@ -1357,10 +1357,11 @@ def _add_gen_config_args(p):
                    help='Number of peers to notify per write (default: 10)')
     p.add_argument('--data-sizes', default='1MB',
                    help='Comma-separated data sizes, e.g. "1MB,512KB" (default: 1MB)')
-    p.add_argument('--num-threads', type=int, default=16,
-                   help='Number of worker threads (default: 16)')
-    p.add_argument('--num-total-threads', type=int,
-                   help='Total read and write threads; read threads equal this value minus --num-threads')
+    p.add_argument('--num-threads', type=int, default=4,
+                   help='Number of worker threads (default: 4)')
+    p.add_argument('--num-total-threads', type=int, default=16,
+                   help='Total Pipeline read and write threads (default: 16); '
+                        'read threads equal this value minus --num-threads')
     p.add_argument('--cleanup-method', default='del',
                    choices=['del', 'ttl'],
                    help='Cleanup method: del (delete keys) or ttl (auto-expire, default: del)')

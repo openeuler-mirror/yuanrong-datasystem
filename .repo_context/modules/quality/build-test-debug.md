@@ -310,9 +310,9 @@ Backed by `tests/kvtest/BUILD.bazel` and `tests/kvtest/build.sh`:
   holding a pthread. The `ThreadPool` Submit / Stop / QueueSize contract and bounded-concurrency behavior are
   preserved verbatim in both modes; the kvtest unit tests (`tests/kvtest/tests/cxx/test_thread_pool.cpp`) run in
   cmake mode so they exercise the `std::thread` path unchanged.
-- pipeline-mode write concurrency is `num_threads`; `num_total_threads` bounds the combined Set/Get concurrency,
-  and `NotifyDispatcher::notifyPool_` derives its read-worker count as `num_total_threads - num_threads`. Omitting
-  `num_total_threads` preserves the legacy 100 read workers by deriving a total of `num_threads + 100`.
+- pipeline-mode write concurrency is `num_threads` (default 4); `num_total_threads` (default 16) bounds the combined
+  Set/Get concurrency, and `NotifyDispatcher::notifyPool_` derives its read-worker count as
+  `num_total_threads - num_threads`.
 
 Backed by `tests/kvtest/deploy_coordinator.py`, `deploy_worker.py`, `deploy_common.py`, and `deploy_pods.py`:
 

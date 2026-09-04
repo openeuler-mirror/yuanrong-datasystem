@@ -127,12 +127,26 @@ TEST(LoadConfig_TotalThreadsMustExceedWriteThreads) {
     std::remove(path.c_str());
 }
 
-TEST(LoadConfig_TotalThreadsDefaultsToLegacyReadConcurrency) {
-    auto path = WriteTempConfig(R"({"etcd_address":"x:1","listen_port":9000,"num_threads":7})");
+TEST(LoadConfig_DefaultThreadCounts) {
+    auto path = WriteTempConfig(R"({"etcd_address":"x:1","listen_port":9000})");
     Config cfg;
     ASSERT_TRUE(LoadConfig(path, cfg));
-    ASSERT_EQ(cfg.numTotalThreads, 107);
-    ASSERT_EQ(cfg.NumReadThreads(), 100);
+    ASSERT_EQ(cfg.numThreads, 4);
+    ASSERT_EQ(cfg.numTotalThreads, 16);
+    ASSERT_EQ(cfg.NumReadThreads(), 12);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_BenchmarkThreadsIgnorePipelineTotalDefault) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,"mode":"benchmark",
+        "test_mode":"set_local","worker_memory_mb":4096,"num_threads":16
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.numThreads, 16);
+    ASSERT_EQ(cfg.numTotalThreads, 16);
     CleanupDir(cfg.outputDir);
     std::remove(path.c_str());
 }

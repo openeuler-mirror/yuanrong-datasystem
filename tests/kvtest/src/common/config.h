@@ -48,8 +48,6 @@ std::optional<MixedKeyStrategy> ParseMixedKeyStrategy(const std::string &s);
 std::optional<RunMode> ParseRunMode(const std::string &s);
 
 struct Config {
-    static constexpr int kDefaultNumReadThreads = 100;
-
     RunMode runMode = RunMode::PIPELINE;
     int instanceId = 0;
     int listenPort = 9000;
@@ -67,8 +65,8 @@ struct Config {
     int targetQps = 100;                                   // 0 = unlimited
     std::vector<int> targetQpsStages;                      // QPS stages (empty = single fixed QPS)
     int stageDurationSeconds = 0;                          // seconds per stage, 0 = disabled
-    int numThreads = 16;        // write threads in pipeline mode
-    int numTotalThreads = 116;  // total read and write threads in pipeline mode
+    int numThreads = 4;        // write threads in pipeline mode
+    int numTotalThreads = 16;  // total read and write threads in pipeline mode
     int notifyCount = 10;
     int notifyIntervalUs = 0;               // delay between peer notifications in microseconds, 0 = parallel
     bool enableJitter = true;               // randomize sleep to stagger requests
