@@ -783,6 +783,48 @@ class TestStartService(unittest.TestCase):
 
     @patch('deploy_common.kubectl_exec')
     @patch('deploy_common.kubectl_cp_to')
+    def test_jemalloc_prof_conf_appended_for_worker(self, mock_cp, mock_exec):
+        mock_exec.return_value = MagicMock(returncode=0)
+        start_service(self._pod(), 'default',
+                      {'worker_address': {'value': '192.0.2.1:31501'}},
+                      '/tmp/worker.config', 31501, 'datasystem_worker',
+                      enable_procmon=False,
+                      jemalloc_prof_conf='prof_final:true,lg_prof_sample:20',
+                      timeout=10)
+        self.assertEqual(
+            mock_exec.call_args[0][2],
+            'dscli start -f /tmp/worker.config '
+            '--jemalloc_prof_conf prof_final:true,lg_prof_sample:20')
+
+    @patch('deploy_common.kubectl_exec')
+    @patch('deploy_common.kubectl_cp_to')
+    def test_jemalloc_prof_conf_is_shell_quoted(self, mock_cp, mock_exec):
+        mock_exec.return_value = MagicMock(returncode=0)
+        start_service(self._pod(), 'default',
+                      {'worker_address': {'value': '192.0.2.1:31501'}},
+                      '/tmp/worker.config', 31501, 'datasystem_worker',
+                      enable_procmon=False,
+                      jemalloc_prof_conf='prof_prefix:/tmp/heap profiles/worker',
+                      timeout=10)
+        self.assertEqual(
+            mock_exec.call_args[0][2],
+            "dscli start -f /tmp/worker.config "
+            "--jemalloc_prof_conf 'prof_prefix:/tmp/heap profiles/worker'")
+
+    @patch('deploy_common.kubectl_exec')
+    @patch('deploy_common.kubectl_cp_to')
+    def test_coordinator_ignores_jemalloc_prof_conf(self, mock_cp, mock_exec):
+        mock_exec.return_value = MagicMock(returncode=0)
+        start_service(self._pod(), 'default',
+                      {'coordinator_address': {'value': '192.0.2.1:31511'}},
+                      '/tmp/coordinator.config', 31511,
+                      'datasystem_coordinator', enable_procmon=False,
+                      jemalloc_prof_conf='prof_final:true', timeout=10)
+        self.assertEqual(mock_exec.call_args[0][2],
+                         'dscli start -C /tmp/coordinator.config')
+
+    @patch('deploy_common.kubectl_exec')
+    @patch('deploy_common.kubectl_cp_to')
     def test_coordinator_ignores_numactl_opts(self, mock_cp, mock_exec):
         # numactl is worker-only; coordinator path passes numactl_opts=None,
         # so even if a caller mistakenly passed opts they must not be

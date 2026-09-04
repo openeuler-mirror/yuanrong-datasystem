@@ -366,6 +366,24 @@ CSV 默认包含 CPU、RSS、匿名/共享内存、文件描述符、TCP 失败�
 allocated、active、resident、metadata、mapped、retained、dirty 和 muzzy 指标。读取失败时
 jemalloc 内存列留空，`jemalloc_stats_available` 与 `jemalloc_stats_read_failures` 用于判断缺口原因。
 
+### 4.4 采集 Worker jemalloc heap profile
+
+先使用仓库根目录的 `build.sh -x on` 构建带 jemalloc profiling 能力的 Worker 包。使用
+`deploy_worker.py` 的 `start` 或 `deploy` 子命令时，只需传入 `--jemalloc-prof-options`；该参数存在
+即启用 profiling，不需要额外的开关：
+
+```bash
+python3 deploy_worker.py deploy -p ds-worker -n datasystem \
+  -c worker.config --whl /path/to/datasystem.whl \
+  --jemalloc-prof-options 'prof_final:true,lg_prof_sample:20,lg_prof_interval:30'
+```
+
+脚本会把配置传给 `dscli --jemalloc_prof_conf`。`dscli` 自动补充 `prof:true`；没有显式配置
+`prof_prefix` 时，profile 默认写到 Worker `log_dir` 下的
+`jemalloc/datasystem_worker.*.heap`。`prof_final:true` 在 Worker 正常退出时生成最终 profile，
+`lg_prof_interval` 则按累计分配字节数生成周期 profile。该参数仅适用于 dscli 模式，不能与
+`-S/--standalone` 同时使用。
+
 ---
 
 ## 5. 故障排查

@@ -11,6 +11,7 @@ procmon dir resolution from the worker config.
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -24,10 +25,26 @@ from deploy_worker import (
     PROCESS_NAME,
     PROCESS_NAME_STANDALONE,
     cmd_clean,
+    cmd_deploy,
     cmd_install,
     cmd_start,
     start_worker,
 )
+
+
+class TestCliArgs(unittest.TestCase):
+    def test_profile_options_enable_profiling_without_toggle(self):
+        script = os.path.join(os.path.dirname(__file__), '..', '..',
+                              'deploy_worker.py')
+        for action in ('start', 'deploy'):
+            with self.subTest(action=action):
+                result = subprocess.run(
+                    [sys.executable, script, action, '--help'],
+                    capture_output=True, text=True, check=False)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('--jemalloc-prof-options', result.stdout)
+                self.assertNotIn('--jemalloc-profile', result.stdout)
 
 
 # Mock.call_args / call_args_list[i] are (args, kwargs) tuples in all
@@ -93,6 +110,7 @@ class TestCmdStart(unittest.TestCase):
                         remote_config='/tmp/worker.config',
                         set=[], enable_procmon=True, procmon_dir=None,
                         numa_nodes=None, cpu_bind=None, timeout=10,
+                        jemalloc_prof_options=None, standalone=False,
                         config=None)
         defaults.update(overrides)
         return SimpleNamespace(**defaults)
@@ -182,6 +200,46 @@ class TestCmdStart(unittest.TestCase):
                              '/tmp')
         finally:
             os.unlink(cfg_path)
+
+    @patch('deploy_worker.start_worker', return_value=True)
+    def test_jemalloc_prof_options_enable_profiling(self, mock_start):
+        cfg_path = _write_config({'worker_address': {'value': '0.0.0.0:0'}})
+        try:
+            options = 'prof_final:true,lg_prof_sample:20'
+            args = self._args(config=cfg_path,
+                              jemalloc_prof_options=options)
+            cmd_start(args, [{'name': 'p1', 'ip': '192.0.2.1'}])
+
+            self.assertEqual(
+                _kw(mock_start.call_args).get('jemalloc_prof_conf'), options)
+        finally:
+            os.unlink(cfg_path)
+
+    @patch('deploy_worker.cmd_start_standalone', return_value=0)
+    def test_standalone_rejects_jemalloc_prof_options(self, mock_start):
+        args = self._args(standalone=True,
+                          jemalloc_prof_options='prof_final:true')
+
+        rc = cmd_start(args, [{'name': 'p1', 'ip': '192.0.2.1'}])
+
+        self.assertEqual(rc, 1)
+        mock_start.assert_not_called()
+
+
+class TestCmdDeploy(unittest.TestCase):
+    @patch('deploy_worker.cmd_start_standalone', return_value=0)
+    @patch('deploy_worker.cmd_install_shared', return_value=0)
+    def test_standalone_rejects_jemalloc_prof_options_before_install(
+            self, mock_install, mock_start):
+        args = SimpleNamespace(
+            standalone=True, jemalloc_prof_options='prof_final:true',
+            jf='127.0.0.1:31500', timeout=10)
+
+        rc = cmd_deploy(args, [{'name': 'p1', 'ip': '192.0.2.1'}])
+
+        self.assertEqual(rc, 1)
+        mock_install.assert_not_called()
+        mock_start.assert_not_called()
 
 
 class TestCmdInstall(unittest.TestCase):
