@@ -151,6 +151,19 @@ TEST(LoadConfig_BenchmarkThreadsIgnorePipelineTotalDefault) {
     std::remove(path.c_str());
 }
 
+TEST(LoadConfig_PipelineWriteOnlyDoublesTotalThreads) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,"mode":"pipeline","num_threads":16
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.numThreads, 16);
+    ASSERT_EQ(cfg.numTotalThreads, 32);
+    ASSERT_EQ(cfg.NumReadThreads(), 16);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
 TEST(LoadConfig_OutputDir) {
     auto path = WriteTempConfig(R"({"etcd_address":"192.168.1.10:2379","listen_port":9000})");
     Config cfg;

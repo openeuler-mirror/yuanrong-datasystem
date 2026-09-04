@@ -779,7 +779,7 @@ JSON 配置文件，使用 nlohmann/json 解析。
 | `ttl_seconds` | uint32 | 5 | ≥ 0（0=不过期） | 数据 TTL |
 | `target_qps` | int | 100 | ≥ 0（0=不限） | 目标 QPS |
 | `num_threads` | int | 4 | > 0 | Writer Pipeline 线程数 |
-| `num_total_threads` | int | 16 | > `num_threads` | Pipeline 读写总线程数；读线程数为两者之差 |
+| `num_total_threads` | int | 16 | > `num_threads` | Pipeline 读写总线程数；仅显式配置 `num_threads` 时派生为其 2 倍 |
 | `batch_keys_count` | int | 1 | ≥ 1 | 批量操作的 key 数量 |
 | `notify_count` | int | 10 | ≥ 0 | 每次写入通知几个 peer |
 | `notify_interval_us` | int | 0 | ≥ 0（0=并行） | 通知间隔（微秒） |

@@ -252,6 +252,26 @@ class TestGenConfig(unittest.TestCase):
         self.assertEqual(config['num_threads'], 4)
         self.assertNotIn('num_total_threads', config)
 
+    def test_pipeline_write_only_doubles_total_threads(self):
+        """An explicit Pipeline write count should derive twice as many total threads."""
+        _, config = self._run_gen_config([
+            '-m', 'pipeline',
+            '--nodes', '127.0.0.1:9000',
+            '--num-threads', '16',
+        ])
+        self.assertEqual(config['num_threads'], 16)
+        self.assertEqual(config['num_total_threads'], 32)
+
+    def test_pipeline_rejects_explicit_total_not_greater_than_write(self):
+        """Explicit invalid Pipeline thread counts should fail during config generation."""
+        with self.assertRaises(SystemExit):
+            self._run_gen_config([
+                '-m', 'pipeline',
+                '--nodes', '127.0.0.1:9000',
+                '--num-threads', '16',
+                '--num-total-threads', '16',
+            ])
+
     def test_num_total_threads_is_emitted(self):
         """gen-config should preserve the configured read/write concurrency budget."""
         _, config = self._run_gen_config([

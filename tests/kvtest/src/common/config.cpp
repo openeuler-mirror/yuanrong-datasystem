@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <chrono>
+#include <limits>
 #include "simple_log.h"
 
 using json = nlohmann::json;
@@ -149,6 +150,8 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
         return false;
     }
 
+    bool numThreadsExplicit = false;
+    bool numTotalThreadsExplicit = false;
     try {
         json j = json::parse(f);
 
@@ -189,9 +192,11 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
         if (j.contains("stage_duration_seconds")) {
             cfg.stageDurationSeconds = j["stage_duration_seconds"];
         }
-        if (j.contains("num_threads"))
+        numThreadsExplicit = j.contains("num_threads");
+        numTotalThreadsExplicit = j.contains("num_total_threads");
+        if (numThreadsExplicit)
             cfg.numThreads = j["num_threads"];
-        if (j.contains("num_total_threads"))
+        if (numTotalThreadsExplicit)
             cfg.numTotalThreads = j["num_total_threads"];
         if (j.contains("notify_count"))
             cfg.notifyCount = j["notify_count"];
@@ -449,6 +454,13 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
     if (cfg.numThreads <= 0) {
         SLOG_ERROR("num_threads must be > 0, got " << cfg.numThreads);
         return false;
+    }
+    if (cfg.runMode == RunMode::PIPELINE && numThreadsExplicit && !numTotalThreadsExplicit) {
+        if (cfg.numThreads > std::numeric_limits<int>::max() / 2) {
+            SLOG_ERROR("num_threads is too large to derive num_total_threads: " << cfg.numThreads);
+            return false;
+        }
+        cfg.numTotalThreads = cfg.numThreads * 2;
     }
     if (cfg.runMode == RunMode::PIPELINE && cfg.numTotalThreads <= cfg.numThreads) {
         SLOG_ERROR("num_total_threads must be greater than num_threads, got total="
