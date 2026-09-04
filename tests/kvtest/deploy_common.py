@@ -20,6 +20,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
@@ -170,10 +171,15 @@ def kubectl_exec(pod, namespace, cmd, check=True, timeout=DEFAULT_TIMEOUT):
 
 
 def kubectl_cp_to(pod, namespace, src, dst, timeout=DEFAULT_TIMEOUT):
-    """Copy local file to pod."""
-    subprocess.run(
-        ['kubectl', 'cp', src, f'{namespace}/{pod}:{dst}'],
-        check=True, capture_output=True, text=True, timeout=timeout)
+    """Copy local file to pod. Raises RuntimeError on failure so callers can
+    catch a single exception type (CalledProcessError/TimeoutExpired both
+    bubble up raw otherwise and crash the whole batch)."""
+    r = subprocess.run(
+        ['kubectl', 'cp', '-n', namespace, src, f'{pod}:{dst}'],
+        capture_output=True, text=True, timeout=timeout)
+    if r.returncode != 0:
+        raise RuntimeError(
+            f'kubectl cp to {pod} failed: {(r.stderr or r.stdout).strip()}')
 
 
 def upload_procmon(pod, namespace, remote_dir='/tmp', timeout=DEFAULT_TIMEOUT):
@@ -184,14 +190,20 @@ def upload_procmon(pod, namespace, remote_dir='/tmp', timeout=DEFAULT_TIMEOUT):
         procmon_src = os.path.join(script_dir, 'tools', 'procmon.py')
     if not os.path.exists(procmon_src):
         return False
-    try:
-        kubectl_exec(pod['name'], namespace, f'mkdir -p {remote_dir}',
-                     check=False, timeout=timeout)
-        kubectl_cp_to(pod['name'], namespace, procmon_src,
-                      f'{remote_dir}/procmon.py', timeout=timeout)
-        return True
-    except Exception:
-        return False
+    # Retried like upload_launcher: a transient cp failure under heavy
+    # concurrency would silently skip procmon monitoring for this pod.
+    for attempt in range(3):
+        try:
+            kubectl_exec(pod['name'], namespace, f'mkdir -p {remote_dir}',
+                         check=False, timeout=timeout)
+            kubectl_cp_to(pod['name'], namespace, procmon_src,
+                          f'{remote_dir}/procmon.py', timeout=timeout)
+            return True
+        except Exception:
+            if attempt == 2:
+                return False
+            time.sleep(5 * (attempt + 1))
+    return False
 
 
 def upload_launcher(pod, namespace, remote_dir='/tmp', timeout=DEFAULT_TIMEOUT):
@@ -201,7 +213,11 @@ def upload_launcher(pod, namespace, remote_dir='/tmp', timeout=DEFAULT_TIMEOUT):
     or ``None`` on failure. Mirrors ``upload_procmon``: same script
     discovery, same upload mechanism. Kept separate from procmon because
     the launcher's responsibility (start a binary detached + readiness poll)
-    is distinct from procmon's (resource monitoring).
+    is distinct from procmon's (resource monitoring). The upload is retried
+    twice with backoff: under 500-way concurrency a transient cp failure
+    (Rancher impersonation InternalError / timeout) would otherwise silently
+    downgrade this pod to the slow nohup launch path, losing the readiness
+    wait.
     """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     launcher_src = os.path.join(script_dir, 'standalone_launcher.py')
@@ -211,14 +227,18 @@ def upload_launcher(pod, namespace, remote_dir='/tmp', timeout=DEFAULT_TIMEOUT):
     if not os.path.exists(launcher_src):
         return None
     remote_path = f'{remote_dir}/standalone_launcher.py'
-    try:
-        kubectl_exec(pod['name'], namespace, f'mkdir -p {remote_dir}',
-                     check=False, timeout=timeout)
-        kubectl_cp_to(pod['name'], namespace, launcher_src,
-                      remote_path, timeout=timeout)
-        return remote_path
-    except Exception:
-        return None
+    for attempt in range(3):
+        try:
+            kubectl_exec(pod['name'], namespace, f'mkdir -p {remote_dir}',
+                         check=False, timeout=timeout)
+            kubectl_cp_to(pod['name'], namespace, launcher_src,
+                          remote_path, timeout=timeout)
+            return remote_path
+        except Exception:
+            if attempt == 2:
+                return None
+            time.sleep(5 * (attempt + 1))
+    return None
 
 
 def start_procmon(pod, namespace, target_pid, remote_dir='/tmp',
@@ -284,11 +304,12 @@ def find_pid_by_port(pod, namespace, port, process_name, timeout=DEFAULT_TIMEOUT
     return None
 
 
-def do_for_all_pods(pods, do_op, desc):
+def do_for_all_pods(pods, do_op, desc, max_workers=None):
     """Execute operation for all pods in parallel."""
     log_info(f'\n{desc}...')
     results = []
-    with ThreadPoolExecutor(max_workers=len(pods)) as pool:
+    workers = max_workers or len(pods)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(do_op, pod): pod for pod in pods}
         for future in as_completed(futures):
             results.append(future.result())
@@ -864,43 +885,165 @@ def kubectl_exec_raw(pod, namespace, cmd, timeout=DEFAULT_TIMEOUT):
 import tarfile  # noqa: E402  (kept here to match the original deferred import)
 
 
+def build_install_bundle(local_binary, local_lib_dir):
+    """Pack binary + .so deps into ONE shared tar, so each pod needs a single
+    ``kubectl cp`` + a single ``kubectl exec`` instead of 5 round trips (500
+    pods x 5 = 2500 kubectl processes, each a fresh TLS conn + Rancher
+    impersonation account -- the dominant cost of a large install).
+
+    Layout inside the tar (must match what service start expects):
+      {binary_name}          <- extracted to {remote_dir}/
+      lib/<so>               <- extracted to {remote_dir}/lib/
+    Symlinks are resolved to real files via realpath. The tar is gzipped:
+    a 500-pod install fires 500 concurrent ``kubectl cp`` of this archive,
+    and the wire size (not the process count) is the bottleneck -- gzip
+    cuts it ~3x so the transfers fit inside the cp timeout. Returns the
+    tar path, or None when the binary is missing and no .so files exist.
+    """
+    has_binary = local_binary and os.path.isfile(local_binary)
+    so_files = []
+    if local_lib_dir and os.path.isdir(local_lib_dir):
+        so_files = glob.glob(os.path.join(local_lib_dir, '*.so*'))
+    if not has_binary and not so_files:
+        return None
+    fd, tar_path = tempfile.mkstemp(suffix='.tar.gz', prefix='ds_bundle_')
+    os.close(fd)
+    with tarfile.open(tar_path, 'w:gz') as tar:
+        if has_binary:
+            tar.add(os.path.realpath(local_binary),
+                    arcname=os.path.basename(local_binary))
+        for so in so_files:
+            tar.add(os.path.realpath(so),
+                    arcname=f'lib/{os.path.basename(so)}')
+    return tar_path
+
+
+_cp_stagger_window = [0.0]
+
+
+def set_cp_stagger_window(seconds):
+    """Set the random pre-cp delay window for the current batch install.
+
+    A 500-pod install fires 500 concurrent ``kubectl cp`` of the same
+    multi-MB bundle; when they all start at once, each transfer's fair
+    share of the local uplink pushes every one past the cp timeout
+    (all-or-nothing failure). A random delay per pod, drawn from a window
+    sized to the batch, spreads the transfer wave into overlapping groups
+    without reducing per-pod parallelism.
+    """
+    _cp_stagger_window[0] = max(0.0, float(seconds))
+
+
+def _cp_stagger_delay():
+    import random
+    return random.uniform(0, _cp_stagger_window[0])
+
+
 def install_binary(pod, namespace, local_binary, local_lib_dir, remote_dir,
-                   timeout=DEFAULT_TIMEOUT):
+                   timeout=DEFAULT_TIMEOUT, bundle_tar_path=None):
     """Copy a standalone binary + .so deps to a pod.
 
-    ``local_lib_dir`` is a local directory containing .so files. It is tar'd
-    and extracted into ``remote_dir/lib/`` on the pod, preserving all .so
-    variants (symlinks resolved to real files via realpath).
+    One bundle tar (binary + lib/*.so, from build_install_bundle) is copied
+    with a single ``kubectl cp`` into ``/tmp`` and unpacked with a single
+    ``kubectl exec`` that also mkdir's ``remote_dir``, recovers a leftover
+    FILE at that path (kubectl cp to a missing parent silently creates
+    remote_dir as a FILE), chmod's the binary, and removes the tar --
+    2 kubectl round trips per pod instead of 5. Pass ``bundle_tar_path``
+    when installing to many pods so the archive is built once and shared.
     """
     if not os.path.exists(local_binary):
         log_error(f'ERROR: binary not found: {local_binary}')
         return False
     name = pod['name']
-    subprocess.run(['kubectl', 'exec', '-n', namespace, name, '--', 'mkdir', '-p', remote_dir],
-                   timeout=timeout)
-    subprocess.run(['kubectl', 'cp', '-n', namespace, local_binary, f'{name}:{remote_dir}/'],
-                   timeout=timeout)
-    subprocess.run(['kubectl', 'exec', '-n', namespace, name, '--', 'chmod', '+x',
-                    f'{remote_dir}/{os.path.basename(local_binary)}'], timeout=timeout)
-    # Copy .so files via tar (preserves all .so.N variants; realpath follows symlinks)
-    if local_lib_dir and os.path.isdir(local_lib_dir):
-        so_files = glob.glob(os.path.join(local_lib_dir, '*.so*'))
-        if so_files:
-            with tempfile.NamedTemporaryFile(suffix='.tar', delete=False) as tf:
-                tar_path = tf.name
+
+    def run_checked(cmd, retries=2):
+        # Transient kubectl failures (impersonation InternalError, cp timeouts
+        # under heavy concurrency) are common on Rancher-fronted clusters;
+        # retry with backoff before declaring the pod failed.
+        for attempt in range(retries + 1):
             try:
-                with tarfile.open(tar_path, 'w') as tar:
-                    for so in so_files:
-                        tar.add(os.path.realpath(so), arcname=os.path.basename(so))
-                kubectl_cp_to(name, namespace, tar_path,
-                              f'/tmp/lib_{name}.tar', timeout=timeout)
-                kubectl_exec_raw({'name': name}, namespace,
-                                 f'mkdir -p {remote_dir}/lib && '
-                                 f'tar xf /tmp/lib_{name}.tar -C {remote_dir}/lib/ && '
-                                 f'rm /tmp/lib_{name}.tar', timeout=timeout)
-            finally:
-                os.unlink(tar_path)
-    return True
+                r = subprocess.run(cmd, capture_output=True, text=True,
+                                   timeout=timeout)
+            except subprocess.TimeoutExpired:
+                if attempt == retries:
+                    log_error(f'ERROR: {name}: {" ".join(cmd[:4])}... timed out')
+                    return False
+                time.sleep(5 * (attempt + 1))
+                continue
+            if r.returncode == 0:
+                return True
+            err = (r.stderr or r.stdout).strip()
+            if attempt == retries:
+                log_error(f'ERROR: {name}: {" ".join(cmd[:4])}... failed: {err}')
+                return False
+            time.sleep(5 * (attempt + 1))
+        return False
+
+    owns_tar = False
+    tar_path = bundle_tar_path
+    if tar_path is None:
+        tar_path = build_install_bundle(local_binary, local_lib_dir)
+        owns_tar = True
+    try:
+        if tar_path is None:
+            # No .so deps: fall back to the 3-step cp sequence (mkdir + cp
+            # binary + chmod) -- still checked, still fail-fast.
+            if not run_checked(['kubectl', 'exec', '-n', namespace, name, '--',
+                                'mkdir', '-p', remote_dir]):
+                if not run_checked(['kubectl', 'exec', '-n', namespace, name, '--',
+                                    'sh', '-c',
+                                    f'[ -d {remote_dir} ] || rm -f {remote_dir}']):
+                    return False
+                if not run_checked(['kubectl', 'exec', '-n', namespace, name, '--',
+                                    'mkdir', '-p', remote_dir]):
+                    return False
+            if not run_checked(['kubectl', 'cp', '-n', namespace, local_binary,
+                                f'{name}:{remote_dir}/']):
+                return False
+            if not run_checked(['kubectl', 'exec', '-n', namespace, name, '--',
+                                'chmod', '+x',
+                                f'{remote_dir}/{os.path.basename(local_binary)}']):
+                return False
+            return True
+
+        # Bundle path: single cp + single exec that mkdir's remote_dir
+        # (removing a leftover FILE at that path -- kubectl cp to a missing
+        # parent silently creates remote_dir as a FILE), unpacks binary +
+        # lib/*.so, chmod's the binary, and removes the tar.
+        remote_tar = f'/tmp/ds_bundle_{name}.tar.gz'
+        binary_base = os.path.basename(local_binary)
+        unpack = (f'[ -d {remote_dir} ] || rm -f {remote_dir}; '
+                  f'mkdir -p {remote_dir} && '
+                  f'tar xzf {remote_tar} -C {remote_dir} && '
+                  f'chmod +x {remote_dir}/{binary_base} && '
+                  f'rm -f {remote_tar}')
+        # Stagger the cp start across pods: a 500-pod install fires 500
+        # concurrent `kubectl cp` of the same multi-MB archive, and when they
+        # all start at once each transfer's fair share of bandwidth pushes
+        # every one past the timeout (all-or-nothing failure). A small random
+        # delay per pod spreads the transfer wave; per-pod parallelism is
+        # unchanged.
+        time.sleep(_cp_stagger_delay())
+        for attempt in range(3):
+            try:
+                kubectl_cp_to(name, namespace, tar_path, remote_tar,
+                              timeout=timeout)
+                break
+            except Exception as e:
+                if attempt == 2:
+                    log_error(f'ERROR: {name}: bundle cp failed: {e}')
+                    return False
+                # Longer backoff for timeout-shaped failures: the whole
+                # batch's cp wave is still draining, retrying into it just
+                # re-competes with the same congestion.
+                time.sleep(15 * (attempt + 1))
+        if not run_checked(['kubectl', 'exec', '-n', namespace, name, '--',
+                            'sh', '-c', unpack]):
+            return False
+        return True
+    finally:
+        if owns_tar and tar_path is not None:
+            os.unlink(tar_path)
 
 
 def start_service_standalone(pod, namespace, binary_name, remote_dir, config_path,
@@ -1209,11 +1352,21 @@ def cmd_install_shared(args, pods, process_name_standalone, label,
             script_dir, 'output', process_name_standalone)
         lib_dir = getattr(args, 'lib_dir', None) or os.path.join(
             script_dir, 'output', 'lib')
-
-        def do_op(pod):
-            return install_binary(pod, args.namespace, binary, lib_dir,
-                                  args.remote_dir, timeout)
-        return do_for_all_pods(pods, do_op, f'Installing {label} (standalone)')
+        # Build the install bundle (binary + lib/*.so) once and share it
+        # across all pod threads: one archive, and each pod needs only 2
+        # kubectl round trips (cp + unpack) instead of 5. Stagger the cp
+        # wave for large batches (see set_cp_stagger_window).
+        shared_tar = build_install_bundle(binary, lib_dir)
+        set_cp_stagger_window(min(30.0, len(pods) * 0.06))
+        try:
+            def do_op(pod):
+                return install_binary(pod, args.namespace, binary, lib_dir,
+                                      args.remote_dir, timeout,
+                                      bundle_tar_path=shared_tar)
+            return do_for_all_pods(pods, do_op, f'Installing {label} (standalone)')
+        finally:
+            if shared_tar is not None:
+                os.unlink(shared_tar)
     else:
         return cmd_install_impl(pods, args.namespace, args.whl, timeout)
 
