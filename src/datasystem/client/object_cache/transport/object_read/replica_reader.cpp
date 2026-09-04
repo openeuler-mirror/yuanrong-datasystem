@@ -117,6 +117,7 @@ struct ReadChunk {
     Status endpointStatus = Status(K_NOT_READY, "Endpoint read was not started");
     DataGetBatchResult results;
     bool attempted = false;
+    AccessTransportKind attemptedKind = AccessTransportKind::SHM;
 };
 
 struct EndpointWork {
@@ -303,18 +304,26 @@ Status ReplicaReader::ReadReplicaOnce(const ReplicaReadRequest &request, int rep
             << ", worker: " << workerAddr.ToString() << ", replica index: " << replicaIndex
             << ", replica count: " << location.object_locations_size() << ", expected size: " << location.object_size()
             << ", round: " << round << ", remaining deadline us: " << ApiDeadline::Instance().ApiRemainingUs();
-    Status rc = readAdmissionCheck_ ? readAdmissionCheck_(workerAddr) : Status::OK();
+    AccessTransportKind attemptedKind = AccessTransportKind::SHM;
+    Status rc = Status::OK();
+    if (readAdmissionCheck_) {
+        rc = readAdmissionCheck_(workerAddr, attemptedKind);
+    }
     DataGetResult data;
     if (rc.IsOk()) {
         DataGetRequest dataRequest{ location.object_key(), location.object_size(), request.context };
         rc = executor_->ExecuteForDataLocation(
             workerAddr, location.topology_version(),
-            [&dataRequest, &data](IDataTransporter &transporter) { return transporter.Get(dataRequest, data); },
+            [&dataRequest, &data, &attemptedKind](IDataTransporter &transporter) {
+                attemptedKind = MergeTransportKind(attemptedKind, transporter.Kind());
+                return transporter.Get(dataRequest, data);
+            },
             traceEnabled);
         if (readOutcomeReport_) {
             readOutcomeReport_(workerAddr, data.response);
         }
     }
+    result.attemptedKind = MergeTransportKind(result.attemptedKind, attemptedKind);
     if (rc.IsError()) {
         return rc;
     }
@@ -490,16 +499,19 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests, bool traceEnab
         const auto dispatchTime = std::chrono::steady_clock::now();
         const auto traceContext = Trace::Instance().GetContext();
         for (auto &work : endpointWorks) {
-            const Status admissionStatus = readAdmissionCheck_ ? readAdmissionCheck_(work.address) : Status::OK();
+            AccessTransportKind deniedKind = AccessTransportKind::SHM;
+            const Status admissionStatus =
+                readAdmissionCheck_ ? readAdmissionCheck_(work.address, deniedKind) : Status::OK();
             auto *endpointWork = &work;
-            futures.emplace_back(taskPool_->Submit([this, endpointWork, admissionStatus, remainingUs, dispatchTime,
-                                                    traceContext, traceEnabled]() {
+            futures.emplace_back(taskPool_->Submit([this, endpointWork, admissionStatus, deniedKind, remainingUs,
+                                                    dispatchTime, traceContext, traceEnabled]() {
                 TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
                 Status dispatchStatus = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
                 bool outcomeReported = false;
                 for (auto &chunk : endpointWork->chunks) {
                     if (admissionStatus.IsError()) {
                         chunk.attempted = true;
+                        chunk.attemptedKind = deniedKind;
                         chunk.endpointStatus = admissionStatus;
                         continue;
                     }
@@ -512,7 +524,10 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests, bool traceEnab
                         DataGetResult data;
                         Status unaryStatus = executor_->ExecuteForDataLocation(
                             endpointWork->address, endpointWork->locationTopologyVersion,
-                            [&chunk, &data](IDataTransporter &t) { return t.Get(chunk.requests.front(), data); },
+                            [&chunk, &data](IDataTransporter &t) {
+                                chunk.attemptedKind = MergeTransportKind(chunk.attemptedKind, t.Kind());
+                                return t.Get(chunk.requests.front(), data);
+                            },
                             traceEnabled);
                         chunk.results.resize(1);
                         chunk.results.front().status = unaryStatus;
@@ -525,7 +540,10 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests, bool traceEnab
                     } else {
                         chunk.endpointStatus = executor_->ExecuteForDataLocation(
                             endpointWork->address, endpointWork->locationTopologyVersion,
-                            [&chunk](IDataTransporter &t) { return t.BatchGet(chunk.requests, chunk.results); },
+                            [&chunk](IDataTransporter &t) {
+                                chunk.attemptedKind = MergeTransportKind(chunk.attemptedKind, t.Kind());
+                                return t.BatchGet(chunk.requests, chunk.results);
+                            },
                             traceEnabled);
                     }
                     if (!outcomeReported && readOutcomeReport_) {
@@ -556,6 +574,8 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests, bool traceEnab
                         continue;
                     }
                     state.hasAttempt = true;
+                    state.result->attemptedKind = MergeTransportKind(state.result->attemptedKind,
+                                                                     chunk.attemptedKind);
                     Status itemStatus = chunk.endpointStatus;
                     DataGetResult *data = nullptr;
                     if (chunk.endpointStatus.IsOk()) {

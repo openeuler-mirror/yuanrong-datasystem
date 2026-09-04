@@ -1156,7 +1156,11 @@ public:
             item->status = status == itemStatuses.end() ? Status::OK() : status->second;
             item->location.set_object_key(item->objectKey);
             item->location.set_object_size(4);
-            item->location.add_object_locations(MakeAddress(90).ToString());
+            // Tests that supply replica locations through queryAndGetHandler set keepHandlerLocations
+            // so the default healthy replica is not appended on top of them.
+            if (!keepHandlerLocations) {
+                item->location.add_object_locations(MakeAddress(90).ToString());
+            }
             auto inlineKind = inlineKinds.find(item->objectKey);
             if (item->status.IsOk() && inlineKind != inlineKinds.end()) {
                 DataGetResult data;
@@ -1181,6 +1185,7 @@ public:
     std::unordered_map<std::string, Status> groupStatuses;
     std::unordered_map<std::string, Status> itemStatuses;
     std::unordered_map<std::string, AccessTransportKind> inlineKinds;
+    bool keepHandlerLocations = false;
     std::function<Status(const HostPort &, const ObjectMetadataBatch &)> queryAndGetHandler;
 };
 
@@ -4554,6 +4559,91 @@ TEST(ObjectReadFlowTest, ReturnsFirstInputErrorWhenAllKeysFail)
     EXPECT_EQ(flow.Run(request, result).GetCode(), K_NOT_FOUND);
 }
 
+TEST(ObjectReadFlowTest, DeniedUbSourceThenFailedTcpAttemptAggregatesTcpActualKind)
+{
+    // The first replica is denied by the UB admission check, the second replica really
+    // executes over TCP and fails. BuildResult must aggregate actualKind = TCP
+    // so FinishTransportRead records TCP for the access log.
+    ApiDeadlineGuard deadline(1000);
+    AccessTransportTracker::Reset();
+    const auto deniedProvider = MakeAddress(92);
+    const auto tcpProvider = MakeAddress(93);
+    auto metadata = std::make_shared<FakeObjectMetadataClient>();
+    metadata->keepHandlerLocations = true;
+    metadata->queryAndGetHandler = [deniedProvider, tcpProvider](const HostPort &,
+                                                                 const ObjectMetadataBatch &items) {
+        for (auto *item : items) {
+            item->location.set_object_key(item->objectKey);
+            item->location.set_object_size(4);
+            item->location.add_object_locations(deniedProvider.ToString());
+            item->location.add_object_locations(tcpProvider.ToString());
+        }
+        return Status::OK();
+    };
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterGetStatuses.push_back({ Status(K_INVALID, "tcp attempt failed") });
+    auto executor = std::make_shared<DataPlaneExecutor>(
+        manager, std::make_shared<FixedTransportAdvisor>(TransportHint::TCP_ONLY));
+    auto reader = std::make_shared<ReplicaReader>(
+        std::move(executor), std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1),
+        [deniedProvider](const HostPort &address, AccessTransportKind &deniedKind) {
+            if (address != deniedProvider) {
+                return Status::OK();
+            }
+            deniedKind = AccessTransportKind::UB;
+            return Status(K_URMA_READ_SOURCE_DENIED, "client denied read source");
+        });
+    ObjectReadFlow flow(metadata, std::move(reader), std::make_shared<ThreadPool>(0, 2, "object_read_test"));
+    ObjectReadRequest request;
+    request.context = MakeReadContext();
+    request.items = { { 0, "denied-then-tcp", MakeAddress(41) } };
+    ObjectReadResult result;
+
+    EXPECT_EQ(flow.Run(request, result).GetCode(), K_INVALID);
+    ASSERT_EQ(result.items.size(), 1u);
+    EXPECT_EQ(result.items[0].attemptedKind, AccessTransportKind::TCP);
+    EXPECT_EQ(result.actualKind, AccessTransportKind::TCP);
+}
+
+TEST(ObjectReadFlowTest, UbOnlyDenialAggregatesUbActualKind)
+{
+    // With only a UB admission denial and no executed replica,
+    // actualKind must aggregate to UB instead of the SHM default.
+    ApiDeadlineGuard deadline(1000);
+    const auto deniedProvider = MakeAddress(94);
+    auto metadata = std::make_shared<FakeObjectMetadataClient>();
+    metadata->keepHandlerLocations = true;
+    metadata->queryAndGetHandler = [deniedProvider](const HostPort &, const ObjectMetadataBatch &items) {
+        for (auto *item : items) {
+            item->location.set_object_key(item->objectKey);
+            item->location.set_object_size(4);
+            item->location.add_object_locations(deniedProvider.ToString());
+        }
+        return Status::OK();
+    };
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    auto reader = std::make_shared<ReplicaReader>(
+        std::move(executor), std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1),
+        [deniedProvider](const HostPort &address, AccessTransportKind &deniedKind) {
+            if (address != deniedProvider) {
+                return Status::OK();
+            }
+            deniedKind = AccessTransportKind::UB;
+            return Status(K_URMA_READ_SOURCE_DENIED, "client denied read source");
+        });
+    ObjectReadFlow flow(metadata, std::move(reader), std::make_shared<ThreadPool>(0, 2, "object_read_test"));
+    ObjectReadRequest request;
+    request.context = MakeReadContext();
+    request.items = { { 0, "ub-only-denied", MakeAddress(41) } };
+    ObjectReadResult result;
+
+    EXPECT_EQ(flow.Run(request, result).GetCode(), K_URMA_READ_SOURCE_DENIED);
+    ASSERT_EQ(result.items.size(), 1u);
+    EXPECT_EQ(result.items[0].attemptedKind, AccessTransportKind::UB);
+    EXPECT_EQ(result.actualKind, AccessTransportKind::UB);
+}
+
 TEST(ObjectClientTransportTest, TransportMSetParallelMemoryCopyPreservesPayload)
 {
     constexpr size_t valueSize = 512 * 1024;
@@ -6269,7 +6359,7 @@ TEST(ReplicaReaderTest, StaleTransportSnapshotTriesNextReplica)
     auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
     ReplicaReader reader(
         executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1),
-        [&admissionChecks, staleAddress](const HostPort &address) {
+        [&admissionChecks, staleAddress](const HostPort &address, AccessTransportKind &) {
             ++admissionChecks[address];
             return address == staleAddress ? MakeStaleSnapshotStatus(address) : Status::OK();
         });
@@ -6306,7 +6396,7 @@ TEST(ReplicaReaderTest, StaleTransportSnapshotReturnsForMetadataRefreshAfterAllR
     auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
     ReplicaReader reader(
         executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1),
-        [staleAddress](const HostPort &address) {
+        [staleAddress](const HostPort &address, AccessTransportKind &) {
             return address == staleAddress ? MakeStaleSnapshotStatus(address) : Status::OK();
         });
     auto location = MakeReplicaLocation("key", 4, { staleAddress });
@@ -6762,7 +6852,7 @@ TEST(ReplicaReaderTest, BatchStaleTransportSnapshotAdvancesReplica)
     auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
     ReplicaReader reader(
         executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1),
-        [&admissionChecks, staleAddress](const HostPort &address) {
+        [&admissionChecks, staleAddress](const HostPort &address, AccessTransportKind &) {
             ++admissionChecks[address];
             return address == staleAddress ? MakeStaleSnapshotStatus(address) : Status::OK();
         });
@@ -6803,7 +6893,7 @@ TEST(ReplicaReaderTest, BatchStaleTransportSnapshotCompletesForMetadataRefreshAf
     auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
     ReplicaReader reader(
         executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1),
-        [staleAddress](const HostPort &address) {
+        [staleAddress](const HostPort &address, AccessTransportKind &) {
             return address == staleAddress ? MakeStaleSnapshotStatus(address) : Status::OK();
         });
     auto location = MakeReplicaLocation("key", 1, { staleAddress });

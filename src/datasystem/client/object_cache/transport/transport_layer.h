@@ -175,6 +175,7 @@ protected:
                    std::chrono::milliseconds localUbProbeBaseDelay,
                    std::shared_ptr<UbHealthFilter> readSourceFilter = nullptr);
     bool ReportProviderUbFailure(const HostPort &provider, const ProviderUbFailureDetailPb &detail);
+    Status CheckUbReadSource(const HostPort &workerAddr, AccessTransportKind &deniedKind) const;
 
 private:
     struct LocalUbSenderState;

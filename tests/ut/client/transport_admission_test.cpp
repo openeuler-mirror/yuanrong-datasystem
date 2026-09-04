@@ -447,6 +447,11 @@ public:
     {
         return ReportProviderUbFailure(provider, detail);
     }
+
+    Status CheckReadSource(const HostPort &workerAddr, AccessTransportKind &deniedKind) const
+    {
+        return CheckUbReadSource(workerAddr, deniedKind);
+    }
 };
 
 class FixedTransportAdvisor : public TransportAdvisor {
@@ -481,7 +486,7 @@ TEST(ReplicaReaderAdmissionTest, SingletonBatchProviderError4CreatesObservationA
     auto filter = std::make_shared<UbHealthFilter>();
     ReplicaReader reader(
         executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1),
-        [filter](const HostPort &address) {
+        [filter](const HostPort &address, AccessTransportKind &) {
             return filter->IsAvailable(address)
                        ? Status::OK()
                        : Status(K_URMA_DATA_WORKER_UNAVAILABLE, "read source unavailable");
@@ -518,7 +523,7 @@ TEST(ReplicaReaderAdmissionTest, BatchChecksUnavailableEndpointOnceAndContinuesH
     std::unordered_map<HostPort, size_t> admissionChecks;
     ReplicaReader reader(
         executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(2),
-        [&admissionChecks, failedProvider](const HostPort &address) {
+        [&admissionChecks, failedProvider](const HostPort &address, AccessTransportKind &) {
             ++admissionChecks[address];
             return address == failedProvider
                        ? Status(K_URMA_DATA_WORKER_UNAVAILABLE, "read source unavailable")
@@ -557,7 +562,7 @@ TEST(ReplicaReaderAdmissionTest, ClientReadSourceDeniedFastSkipsToNextReplica)
     std::unordered_map<HostPort, size_t> admissionChecks;
     ReplicaReader reader(
         executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(2),
-        [&admissionChecks, failedProvider](const HostPort &address) {
+        [&admissionChecks, failedProvider](const HostPort &address, AccessTransportKind &) {
             ++admissionChecks[address];
             return address == failedProvider
                        ? Status(K_URMA_READ_SOURCE_DENIED, "client denied read source")
@@ -581,6 +586,90 @@ TEST(ReplicaReaderAdmissionTest, ClientReadSourceDeniedFastSkipsToNextReplica)
     EXPECT_EQ(results[0].status.GetCode(), K_URMA_READ_SOURCE_DENIED);
     EXPECT_EQ(results[1].status.GetCode(), K_URMA_READ_SOURCE_DENIED);
     EXPECT_TRUE(results[2].status.IsOk());
+}
+
+TEST(TransportLayerAdmissionTest, ReadSourceDeniedReportsUbKindWithoutTouchingTracker)
+{
+    // A quarantined UB read source must surface the denial and report the denied UB medium via the
+    // out-param, while the request-scoped tracker stays untouched for caller-thread aggregation.
+    AccessTransportTracker::Reset();
+    const auto provider = MakeAddress(40);
+    auto filter = std::make_shared<UbHealthFilter>();
+    ProviderUbFailureDetailPb detail;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider write failed"), "client-receive-endpoint",
+                                provider.ToString(), 4, 4, detail);
+    ASSERT_TRUE(filter->ReportProviderFailure(provider, detail));
+
+    TestTransportLayer layer(std::make_shared<FakeDataPlaneManager>(),
+                             std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE),
+                             std::chrono::seconds(1), filter);
+
+    AccessTransportKind deniedKind = AccessTransportKind::SHM;
+    Status rc = layer.CheckReadSource(provider, deniedKind);
+    EXPECT_EQ(rc.GetCode(), K_URMA_READ_SOURCE_DENIED);
+    EXPECT_EQ(deniedKind, AccessTransportKind::UB);
+    EXPECT_EQ(AccessTransportTracker::ToString(), "SHM");
+
+    AccessTransportKind healthyKind = AccessTransportKind::SHM;
+    EXPECT_TRUE(layer.CheckReadSource(MakeAddress(41), healthyKind).IsOk());
+    EXPECT_EQ(healthyKind, AccessTransportKind::SHM);
+    EXPECT_EQ(AccessTransportTracker::ToString(), "SHM");
+}
+
+TEST(ReplicaReaderAdmissionTest, DeniedUbSourceThenFailedTcpReplicaReportsTcpAsAttemptedKind)
+{
+    // Review scenario: the first replica is denied by the UB admission check, the second replica
+    // actually executes over TCP and fails. The item's attempted kind must be TCP (the highest medium
+    // really tried), not the earlier UB denial, and the request tracker stays untouched.
+    ApiDeadlineGuard deadline(1000);
+    AccessTransportTracker::Reset();
+    const auto deniedProvider = MakeAddress(42);
+    const auto tcpProvider = MakeAddress(43);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterGetStatuses[tcpProvider] = { Status(K_INVALID, "tcp attempt failed") };
+    auto executor = std::make_shared<DataPlaneExecutor>(
+        manager, std::make_shared<FixedTransportAdvisor>(TransportHint::TCP_ONLY));
+    ReplicaReader reader(
+        executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1),
+        [deniedProvider](const HostPort &address, AccessTransportKind &deniedKind) {
+            if (address != deniedProvider) {
+                return Status::OK();
+            }
+            deniedKind = AccessTransportKind::UB;
+            return Status(K_URMA_READ_SOURCE_DENIED, "client denied read source");
+        });
+    auto location = MakeReplicaLocation("denied-then-tcp", 4, { deniedProvider, tcpProvider });
+    ObjectReadItemResult result;
+    ReplicaReadBatch requests{ { &location, &result } };
+
+    EXPECT_EQ(reader.ReadBatch(requests).GetCode(), K_INVALID);
+    EXPECT_EQ(result.attemptedKind, AccessTransportKind::TCP);
+    EXPECT_EQ(AccessTransportTracker::ToString(), "SHM");
+}
+
+TEST(ReplicaReaderAdmissionTest, UbOnlyDenialKeepsAttemptedKindAtUb)
+{
+    // Regression guard for the original bug: when only the UB admission denial happens (no replica
+    // executes), attemptedKind stays UB so the access log reports UB instead of the SHM default.
+    ApiDeadlineGuard deadline(1000);
+    const auto deniedProvider = MakeAddress(44);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(
+        executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1),
+        [deniedProvider](const HostPort &address, AccessTransportKind &deniedKind) {
+            if (address != deniedProvider) {
+                return Status::OK();
+            }
+            deniedKind = AccessTransportKind::UB;
+            return Status(K_URMA_READ_SOURCE_DENIED, "client denied read source");
+        });
+    auto location = MakeReplicaLocation("ub-only-denied", 4, { deniedProvider });
+    ObjectReadItemResult result;
+    ReplicaReadBatch requests{ { &location, &result } };
+
+    EXPECT_EQ(reader.ReadBatch(requests).GetCode(), K_URMA_READ_SOURCE_DENIED);
+    EXPECT_EQ(result.attemptedKind, AccessTransportKind::UB);
 }
 
 TEST(UbHealthFilterTest, NewTopologyIncarnationClearsOldLocalObservation)
