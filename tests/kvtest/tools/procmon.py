@@ -3,6 +3,7 @@
 
 import argparse
 import atexit
+import csv
 import os
 import signal
 import socket
@@ -10,6 +11,27 @@ import struct
 import subprocess
 import sys
 import time
+from urllib.request import urlopen
+
+
+JEMALLOC_BVAR_COLUMNS = {
+    'anon_jemalloc_allocated_bytes': 'jemalloc_allocated_mb',
+    'anon_jemalloc_active_bytes': 'jemalloc_active_mb',
+    'anon_jemalloc_resident_bytes': 'jemalloc_resident_mb',
+    'anon_jemalloc_metadata_bytes': 'jemalloc_metadata_mb',
+    'anon_jemalloc_mapped_bytes': 'jemalloc_mapped_mb',
+    'anon_jemalloc_retained_bytes': 'jemalloc_retained_mb',
+    'anon_jemalloc_dirty_bytes': 'jemalloc_dirty_mb',
+    'anon_jemalloc_muzzy_bytes': 'jemalloc_muzzy_mb',
+}
+
+CSV_FIELDS = [
+    'timestamp', 'pid', 'cpu_pct', 'rss_mb', 'anon_mb', 'shared_mb', 'fd',
+    'tcp_fails_per_sec', 'tcp_fail_rate_pct', 'bytes_in_mb_per_sec',
+    'bytes_out_mb_per_sec',
+] + list(JEMALLOC_BVAR_COLUMNS.values()) + [
+    'jemalloc_stats_available', 'jemalloc_stats_read_failures',
+]
 
 
 _NETLINK_INET_DIAG = 4
@@ -342,6 +364,47 @@ def read_port_traffic(port, timeout=5):
     return total_sent, total_recv
 
 
+def read_jemalloc_bvars(port, host='127.0.0.1', timeout=2):
+    """Read jemalloc metrics from BRPC builtin services, if available."""
+    url_host = f'[{host}]' if ':' in host and not host.startswith('[') else host
+    # BRPC renders HTML for Python's User-Agent; console=1 forces plain text.
+    url = f'http://{url_host}:{port}/vars/anon_jemalloc_*?console=1'
+    try:
+        with urlopen(url, timeout=timeout) as response:
+            body = response.read().decode('utf-8', errors='replace')
+    except (OSError, TimeoutError, ValueError):
+        return {}
+
+    values = {}
+    for line in body.splitlines():
+        name, separator, raw_value = line.partition(':')
+        if not separator:
+            continue
+        name = name.strip()
+        if not name.startswith('anon_jemalloc_'):
+            continue
+        try:
+            values[name] = float(raw_value.strip())
+        except ValueError:
+            continue
+    return values
+
+
+def add_jemalloc_metrics(row, bvars):
+    available = bvars.get('anon_jemalloc_stats_available')
+    failures = bvars.get('anon_jemalloc_stats_read_failures')
+    if available is not None:
+        row['jemalloc_stats_available'] = int(available)
+    if failures is not None:
+        row['jemalloc_stats_read_failures'] = int(failures)
+    if available != 1:
+        return
+    for bvar_name, column_name in JEMALLOC_BVAR_COLUMNS.items():
+        value = bvars.get(bvar_name)
+        if value is not None:
+            row[column_name] = f'{value / (1024 * 1024):.3f}'
+
+
 def format_mb(bytes_val):
     return f"{bytes_val / (1024 * 1024):.1f}"
 
@@ -398,6 +461,13 @@ def main():
                              "Aggregates bytes_sent / bytes_received across all "
                              "ESTABLISHED sockets on the port. When omitted, no "
                              "traffic monitoring is done.")
+    parser.add_argument("--brpc-bvar-port", type=int, default=None,
+                        help="Read anon_jemalloc_* metrics from BRPC /vars on "
+                             "this port. Missing builtin services or bvars are "
+                             "reported as empty CSV cells.")
+    parser.add_argument("--brpc-bvar-host", default="127.0.0.1",
+                        help="Host where the monitored process exposes BRPC "
+                             "builtin services (default: 127.0.0.1).")
     args = parser.parse_args()
 
     if not args.process and not args.pid:
@@ -417,14 +487,18 @@ def main():
             output_path = os.path.join(script_dir, args.output)
         else:
             output_path = args.output
-        outfile = open(output_path, "a", buffering=1)
+        needs_header = not os.path.exists(output_path) or os.path.getsize(output_path) == 0
+        outfile = open(output_path, "a", buffering=1, newline='')
         atexit.register(outfile.close)
         out = outfile
     else:
+        needs_header = True
         out = sys.stdout
 
-    def emit(msg=""):
-        print(msg, file=out, flush=True)
+    writer = csv.DictWriter(out, fieldnames=CSV_FIELDS, extrasaction='ignore')
+    if needs_header:
+        writer.writeheader()
+        out.flush()
 
     if args.pid:
         pid = args.pid
@@ -434,21 +508,6 @@ def main():
             print(f"Process '{args.process}' not found", file=sys.stderr)
             sys.exit(1)
 
-    emit(f"Monitoring PID={pid}, interval={args.interval}s"
-         + (f", duration={args.duration}s" if args.duration > 0 else "")
-         + (f", port={args.port}" if args.port else ""))
-
-    samples_cpu = []
-    samples_mem = []
-    samples_mem_anon = []
-    samples_mem_shared = []
-    samples_fd = []
-    samples_fails = []
-    samples_bytes_in = []
-    samples_bytes_out = []
-    total_fails = 0
-    total_bytes_in = 0
-    total_bytes_out = 0
     prev_cpu = read_proc_stat(pid)
     prev_time = time.monotonic()
     prev_fails, prev_opens = read_tcp_attempt_fails_stats()
@@ -477,7 +536,6 @@ def main():
         fd_count = read_proc_fd_count(pid)
 
         if cpu_ticks is None or rss_bytes is None:
-            emit(f"[{time.strftime('%Y-%m-%dT%H:%M:%S')}] Process exited")
             break
 
         dt = now - prev_time
@@ -490,15 +548,9 @@ def main():
         anon_mb = anon_bytes / (1024 * 1024)
         shared_mb = shared_bytes / (1024 * 1024)
 
-        samples_cpu.append(cpu_pct)
-        samples_mem.append(mem_mb)
-        samples_mem_anon.append(anon_mb)
-        samples_mem_shared.append(shared_mb)
-        if fd_count is not None:
-            samples_fd.append(fd_count)
-
         fails, opens = read_tcp_attempt_fails_stats()
-        tcp_str = ""
+        fails_per_sec = None
+        fail_rate = None
         if fails is not None and opens is not None:
             if prev_fails is not None and prev_opens is not None:
                 delta_fails = max(0, fails - prev_fails)
@@ -508,14 +560,11 @@ def main():
                 delta_opens = 0
             fails_per_sec = delta_fails / dt if dt > 0 else 0.0
             fail_rate = (delta_fails / delta_opens * 100) if delta_opens > 0 else 0.0
-            samples_fails.append(fails_per_sec)
-            total_fails += delta_fails
-            tcp_str = (f" Fails/s={fails_per_sec:.2f}"
-                       f" FailRate={fail_rate:.2f}%")
             prev_fails = fails
             prev_opens = opens
 
-        traffic_str = ""
+        bytes_in_per_sec = None
+        bytes_out_per_sec = None
         if args.port:
             sent, recv = read_port_traffic(args.port)
             if sent is not None and recv is not None:
@@ -527,55 +576,35 @@ def main():
                     delta_recv = 0
                 bytes_out_per_sec = delta_sent / dt if dt > 0 else 0.0
                 bytes_in_per_sec = delta_recv / dt if dt > 0 else 0.0
-                samples_bytes_in.append(bytes_in_per_sec)
-                samples_bytes_out.append(bytes_out_per_sec)
-                total_bytes_in += delta_recv
-                total_bytes_out += delta_sent
-                traffic_str = (f" BytesIn/s={format_mb(bytes_in_per_sec)}MB"
-                               f" BytesOut/s={format_mb(bytes_out_per_sec)}MB")
                 prev_sent = sent
                 prev_recv = recv
 
-        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
-        fd_str = f" FD={fd_count}" if fd_count is not None else ""
-        emit(f"[{ts}] PID={pid} CPU={cpu_pct:.1f}% MEM={format_mb(rss_bytes)}MB"
-             f" Anon={format_mb(anon_bytes)}MB Shared={format_mb(shared_bytes)}MB"
-             f"{fd_str}{tcp_str}{traffic_str}")
+        row = {
+            'timestamp': time.strftime("%Y-%m-%dT%H:%M:%S"),
+            'pid': pid,
+            'cpu_pct': f'{cpu_pct:.3f}',
+            'rss_mb': f'{mem_mb:.3f}',
+            'anon_mb': f'{anon_mb:.3f}',
+            'shared_mb': f'{shared_mb:.3f}',
+            'fd': fd_count,
+            'tcp_fails_per_sec': (f'{fails_per_sec:.3f}'
+                                  if fails_per_sec is not None else None),
+            'tcp_fail_rate_pct': (f'{fail_rate:.3f}'
+                                  if fail_rate is not None else None),
+            'bytes_in_mb_per_sec': (f'{bytes_in_per_sec / (1024 * 1024):.3f}'
+                                    if bytes_in_per_sec is not None else None),
+            'bytes_out_mb_per_sec': (f'{bytes_out_per_sec / (1024 * 1024):.3f}'
+                                     if bytes_out_per_sec is not None else None),
+        }
+        if args.brpc_bvar_port:
+            bvars = read_jemalloc_bvars(args.brpc_bvar_port,
+                                        host=args.brpc_bvar_host)
+            add_jemalloc_metrics(row, bvars)
+        writer.writerow(row)
+        out.flush()
 
         prev_cpu = cpu_ticks
         prev_time = now
-
-    elapsed = time.monotonic() - start_time
-    emit()
-    emit("=== Summary ===")
-    emit(f"Samples: {len(samples_cpu)}, Duration: {elapsed:.0f}s")
-    if samples_cpu:
-        emit(f"CPU  avg={sum(samples_cpu)/len(samples_cpu):.1f}%  peak={max(samples_cpu):.1f}%")
-        avg_mem = sum(samples_mem) / len(samples_mem)
-        peak_mem = max(samples_mem)
-        emit(f"MEM  RSS     avg={avg_mem:.1f}MB peak={peak_mem:.1f}MB")
-        avg_anon = sum(samples_mem_anon) / len(samples_mem_anon)
-        peak_anon = max(samples_mem_anon)
-        emit(f"MEM  Anon    avg={avg_anon:.1f}MB peak={peak_anon:.1f}MB")
-        avg_shared = sum(samples_mem_shared) / len(samples_mem_shared)
-        peak_shared = max(samples_mem_shared)
-        emit(f"MEM  Shared  avg={avg_shared:.1f}MB peak={peak_shared:.1f}MB")
-    if samples_fd:
-        avg_fd = sum(samples_fd) / len(samples_fd)
-        peak_fd = max(samples_fd)
-        emit(f"FD   avg={avg_fd:.0f} peak={peak_fd}")
-    if samples_fails:
-        avg_fails = sum(samples_fails) / len(samples_fails)
-        peak_fails = max(samples_fails)
-        emit(f"TCP  fails total={total_fails} avg={avg_fails:.2f}/s peak={peak_fails:.2f}/s")
-    if samples_bytes_in:
-        avg_in = sum(samples_bytes_in) / len(samples_bytes_in)
-        peak_in = max(samples_bytes_in)
-        emit(f"NET  In  total={format_mb(total_bytes_in)}MB avg={format_mb(avg_in)}MB/s peak={format_mb(peak_in)}MB/s")
-    if samples_bytes_out:
-        avg_out = sum(samples_bytes_out) / len(samples_bytes_out)
-        peak_out = max(samples_bytes_out)
-        emit(f"NET  Out total={format_mb(total_bytes_out)}MB avg={format_mb(avg_out)}MB/s peak={format_mb(peak_out)}MB/s")
 
 
 if __name__ == "__main__":

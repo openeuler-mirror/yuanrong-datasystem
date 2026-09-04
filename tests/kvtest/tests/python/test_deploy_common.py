@@ -38,6 +38,7 @@ from deploy_common import (
     parse_config_override,
     read_remote_log_dir,
     resolve_procmon_dir,
+    start_procmon,
     start_service,
     start_service_standalone,
     upload_launcher,
@@ -796,6 +797,46 @@ class TestStartService(unittest.TestCase):
                          'dscli start -C /tmp/coordinator.config')
 
 
+class TestStartProcmon(unittest.TestCase):
+    @patch('deploy_common.kubectl_exec')
+    def test_writes_csv_and_enables_bvars_when_requested(self, mock_exec):
+        mock_exec.return_value = MagicMock(returncode=0, stdout='4321\n')
+        pod = {'name': 'p1', 'ip': '10.0.0.1'}
+
+        self.assertEqual(start_procmon(pod, 'default', 1234, port=31501,
+                                       brpc_bvar_port=31501,
+                                       brpc_bvar_host='10.0.0.1'), '4321')
+
+        cmd = mock_exec.call_args[0][2]
+        self.assertIn('--output resource_monitor.csv', cmd)
+        self.assertIn('--brpc-bvar-port 31501', cmd)
+        self.assertIn('--brpc-bvar-host 10.0.0.1', cmd)
+
+    @patch('deploy_common.start_procmon', return_value='4321')
+    @patch('deploy_common.find_pid_by_port', return_value='1234')
+    @patch('deploy_common.time.sleep')
+    @patch('deploy_common.upload_procmon', return_value='/tmp/procmon.py')
+    @patch('deploy_common.kubectl_exec')
+    @patch('deploy_common.kubectl_cp_to')
+    def test_builtin_services_config_controls_bvar_collection(
+            self, _mock_cp, mock_exec, _mock_upload, _mock_sleep,
+            _mock_find, mock_start_procmon):
+        mock_exec.return_value = MagicMock(returncode=0)
+        config = {
+            'worker_address': {'value': '10.0.0.1:31501'},
+            'brpc_enable_builtin_services': {'value': True},
+        }
+
+        self.assertTrue(start_service(
+            {'name': 'p1', 'ip': '10.0.0.1'}, 'default', config,
+            '/tmp/worker.config', 31501, 'datasystem_worker', timeout=10))
+
+        self.assertEqual(mock_start_procmon.call_args[1]['brpc_bvar_port'],
+                         31501)
+        self.assertEqual(mock_start_procmon.call_args[1]['brpc_bvar_host'],
+                         '10.0.0.1')
+
+
 class TestDiscoverNodes(unittest.TestCase):
     """discover_nodes: parses kubectl get nodes JSON, sorts by name for
     deterministic cross-run distribution (shared by deploy_pods and
@@ -899,7 +940,7 @@ def _kubectl_exec_responder(log_dir_files, remote_dir_exists,
                     raise subprocess.CalledProcessError(1, cmd, b'')
                 return MagicMock(returncode=0, stdout=base64.b64encode(
                     stdout_log_content).decode())
-            if 'resource_monitor.log' in path:
+            if 'resource_monitor.csv' in path:
                 if procmon_log_content is None:
                     raise subprocess.CalledProcessError(1, cmd, b'')
                 return MagicMock(returncode=0, stdout=base64.b64encode(
@@ -1053,9 +1094,9 @@ class TestCmdCollectShared(unittest.TestCase):
 
 
 class TestCleanPod(unittest.TestCase):
-    """clean_pod: kill + log_dir + resource_monitor.log removal, plus the
+    """clean_pod: kill + log_dir + resource_monitor.csv removal, plus the
     standalone-only rm -rf remote_dir (binary + .so + stdout.log). Order is
-    kill -> log_dir -> resource_monitor.log -> remote_dir so a still-running
+    kill -> log_dir -> resource_monitor.csv -> remote_dir so a still-running
     binary does not race the rm -rf on its own files."""
 
     def _pod(self):
@@ -1064,13 +1105,13 @@ class TestCleanPod(unittest.TestCase):
     @patch('deploy_common.kill_process')
     @patch('deploy_common.kubectl_exec')
     def test_non_standalone_skips_remote_dir(self, mock_exec, mock_kill):
-        # remote_dir=None (dscli mode): only log_dir + resource_monitor.log
+        # remote_dir=None (dscli mode): only log_dir + resource_monitor.csv
         # are touched. rm -rf {remote_dir} must NOT be issued.
         clean_pod(self._pod(), 'default', '/var/log/ds', '/tmp',
                   'datasystem_coordinator', remote_dir=None, timeout=10)
         cmds = [c[0][2] for c in mock_exec.call_args_list]
         self.assertIn('rm -rf /var/log/ds', cmds)
-        self.assertIn('rm -f /tmp/resource_monitor.log', cmds)
+        self.assertIn('rm -f /tmp/resource_monitor.csv', cmds)
         self.assertFalse(any(c.startswith('rm -rf /tmp/ds') for c in cmds))
         # kill_process was the first call (before any rm)
         mock_kill.assert_called_once_with(
@@ -1080,18 +1121,18 @@ class TestCleanPod(unittest.TestCase):
     @patch('deploy_common.kubectl_exec')
     def test_standalone_removes_remote_dir_after_logs(self, mock_exec, mock_kill):
         # remote_dir set (standalone mode): rm -rf remote_dir is issued, and
-        # it comes AFTER the log_dir + resource_monitor.log cleanups so a
+        # it comes AFTER the log_dir + resource_monitor.csv cleanups so a
         # still-running binary does not see its files disappear mid-shutdown.
         clean_pod(self._pod(), 'default', '/var/log/ds', '/tmp',
                   'coordinator_test', remote_dir='/tmp/ds_coordinator',
                   timeout=10)
         cmds = [c[0][2] for c in mock_exec.call_args_list]
         self.assertIn('rm -rf /var/log/ds', cmds)
-        self.assertIn('rm -f /tmp/resource_monitor.log', cmds)
+        self.assertIn('rm -f /tmp/resource_monitor.csv', cmds)
         self.assertIn('rm -rf /tmp/ds_coordinator', cmds)
         self.assertLess(cmds.index('rm -rf /var/log/ds'),
                         cmds.index('rm -rf /tmp/ds_coordinator'))
-        self.assertLess(cmds.index('rm -f /tmp/resource_monitor.log'),
+        self.assertLess(cmds.index('rm -f /tmp/resource_monitor.csv'),
                         cmds.index('rm -rf /tmp/ds_coordinator'))
         # kill target switches to the standalone binary name
         mock_kill.assert_called_once_with(
@@ -1107,7 +1148,7 @@ class TestCleanPod(unittest.TestCase):
                   'worker_test', remote_dir='/tmp/ds_worker', timeout=10)
         cmds = [c[0][2] for c in mock_exec.call_args_list]
         self.assertNotIn('rm -rf None', cmds)
-        self.assertIn('rm -f /tmp/resource_monitor.log', cmds)
+        self.assertIn('rm -f /tmp/resource_monitor.csv', cmds)
         self.assertIn('rm -rf /tmp/ds_worker', cmds)
 
 

@@ -17,6 +17,7 @@ import glob
 import json
 import logging
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -242,7 +243,8 @@ def upload_launcher(pod, namespace, remote_dir='/tmp', timeout=DEFAULT_TIMEOUT):
 
 
 def start_procmon(pod, namespace, target_pid, remote_dir='/tmp',
-                  interval=1, timeout=30, port=None):
+                  interval=1, timeout=30, port=None, brpc_bvar_port=None,
+                  brpc_bvar_host=None):
     """Start procmon monitoring for a service process.
 
     Uses procmon.py --background for proper daemonization (os.fork +
@@ -260,9 +262,13 @@ def start_procmon(pod, namespace, target_pid, remote_dir='/tmp',
     """
     cmd = (f'cd {remote_dir} && '
            f'python3 procmon.py --pid {target_pid} -i {interval} '
-           f'--output resource_monitor.log --background')
+           f'--output resource_monitor.csv --background')
     if port:
         cmd += f' --port {port}'
+    if brpc_bvar_port:
+        cmd += f' --brpc-bvar-port {brpc_bvar_port}'
+    if brpc_bvar_host:
+        cmd += f' --brpc-bvar-host {shlex.quote(brpc_bvar_host)}'
     try:
         result = kubectl_exec(pod['name'], namespace, cmd,
                               check=False, timeout=timeout)
@@ -288,6 +294,15 @@ def resolve_procmon_dir(config_template, remote_config):
     if not procmon_dir:
         procmon_dir = os.path.dirname(remote_config)
     return procmon_dir
+
+
+def _config_enabled(config, key):
+    value = config.get(key, False)
+    if isinstance(value, dict):
+        value = value.get('value', False)
+    if isinstance(value, str):
+        return value.lower() in ('1', 'true', 'on', 'yes')
+    return bool(value)
 
 
 def find_pid_by_port(pod, namespace, port, process_name, timeout=DEFAULT_TIMEOUT):
@@ -475,7 +490,6 @@ def start_service(pod, namespace, config, remote_config, port, process_name,
         # Time only the actual launch (dscli start). Config upload, pid
         # verify, and procmon attach are excluded — caller reads
         # pod['_start_elapsed'] to record the start stopwatch.
-        import time
         t_start = time.monotonic()
         try:
             kubectl_exec(pod_name, namespace, cmd, timeout=timeout)
@@ -490,7 +504,17 @@ def start_service(pod, namespace, config, remote_config, port, process_name,
                 if pid:
                     procmon_pid = start_procmon(pod, namespace, pid,
                                                 procmon_remote_dir,
-                                                port=port)
+                                                port=port,
+                                                brpc_bvar_port=(
+                                                    port if _config_enabled(
+                                                        config,
+                                                        'brpc_enable_builtin_services')
+                                                    else None),
+                                                brpc_bvar_host=(
+                                                    pod_ip if _config_enabled(
+                                                        config,
+                                                        'brpc_enable_builtin_services')
+                                                    else None))
                     if procmon_pid:
                         log_info(f'  {pod_name} ({pod_ip}) -> procmon started '
                                  f'(pid={procmon_pid}, monitoring {process_name} '
@@ -566,7 +590,7 @@ def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
             except Exception as e:
                 log_info(f'    {os.path.basename(remote_path)} -> FAILED: {e}')
 
-        # Collect procmon resource_monitor.log from remote_config_dir
+        # Collect procmon resource_monitor.csv from remote_config_dir
         # (start's fallback) and from log_dir (when config had log_dir from
         # the start). This covers both scenarios: log_dir injected via --set
         # (procmon in remote_config_dir) and log_dir in original config
@@ -580,13 +604,13 @@ def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
         for pdir in procmon_dirs:
             if pdir in glob_dirs:
                 continue
-            procmon_log = f'{pdir}/resource_monitor.log'
+            procmon_log = f'{pdir}/resource_monitor.csv'
             try:
                 result = kubectl_exec(pod_name, namespace,
                                       f'base64 {procmon_log}', check=True, timeout=timeout)
                 content = base64.b64decode(result.stdout)
                 local_path = os.path.join(local_pod_dir,
-                                          'resource_monitor.log')
+                                          'resource_monitor.csv')
                 with open(local_path, 'wb') as f:
                     f.write(content)
             except Exception:
@@ -636,7 +660,7 @@ def clean_pod(pod, namespace, log_dir, remote_config_dir, process_name,
     ``lib/`` .so deps, and ``stdout.log``; when set it is removed entirely
     so a subsequent deploy starts from a clean state instead of stacking
     stale binaries, leftover .so variants, and appended stdout logs. When
-    ``None`` (dscli mode), only ``log_dir`` and ``resource_monitor.log`` are
+    ``None`` (dscli mode), only ``log_dir`` and ``resource_monitor.csv`` are
     touched -- the dscli install path installs into the package prefix, not
     ``remote_dir``, so there is nothing of the deploy's own to remove.
     """
@@ -649,7 +673,7 @@ def clean_pod(pod, namespace, log_dir, remote_config_dir, process_name,
             kubectl_exec(pod_name, namespace, f'rm -rf {log_dir}',
                          check=False, timeout=timeout)
         kubectl_exec(pod_name, namespace,
-                     f'rm -f {remote_config_dir}/resource_monitor.log',
+                     f'rm -f {remote_config_dir}/resource_monitor.csv',
                      check=False, timeout=timeout)
         if remote_dir:
             kubectl_exec(pod_name, namespace, f'rm -rf {remote_dir}',
@@ -843,7 +867,7 @@ def cmd_clean_impl(pods, namespace, remote_config, process_name, label,
 
     ``remote_dir`` (standalone mode) is removed entirely per pod to drop the
     standalone binary, ``lib/`` .so deps, and ``stdout.log``. ``None`` keeps
-    the legacy dscli-mode behavior (clean only ``log_dir`` + resource_monitor.log).
+    the legacy dscli-mode behavior (clean only ``log_dir`` + resource_monitor.csv).
     """
     log_dir, _ = read_remote_log_dir(namespace, pods, remote_config, timeout)
     remote_config_dir = os.path.dirname(remote_config)
@@ -1149,8 +1173,14 @@ def start_service_standalone(pod, namespace, binary_name, remote_dir, config_pat
     # Attach procmon (same logic as start_service dscli path)
     if enable_procmon:
         if upload_procmon(pod, namespace, procmon_remote_dir, timeout):
-            procmon_pid = start_procmon(pod, namespace, pid, procmon_remote_dir,
-                                        port=port)
+            procmon_pid = start_procmon(
+                pod, namespace, pid, procmon_remote_dir, port=port,
+                brpc_bvar_port=(
+                    port if config and _config_enabled(
+                        config, 'brpc_enable_builtin_services') else None),
+                brpc_bvar_host=(
+                    pod_ip if config and _config_enabled(
+                        config, 'brpc_enable_builtin_services') else None))
             if procmon_pid:
                 log_info(f'  {name} ({pod_ip}) -> procmon started '
                          f'(pid={procmon_pid}, monitoring pid={pid})')
@@ -1322,7 +1352,7 @@ def cmd_clean_shared(args, pods, process_name, process_name_standalone, label,
     (e.g. ``worker_test`` / ``coordinator_test``) and remove
     ``args.remote_dir`` so a re-deploy does not stack a new binary on top of
     a running stale one. Non-standalone: kill ``process_name`` (e.g.
-    ``datasystem_worker``) and clean only ``log_dir`` + resource_monitor.log
+    ``datasystem_worker``) and clean only ``log_dir`` + resource_monitor.csv
     (dscli installs into the package prefix, not ``remote_dir``).
     """
     if getattr(args, 'standalone', False):
