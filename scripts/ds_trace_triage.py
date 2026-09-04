@@ -94,9 +94,19 @@ class AnalyzerDeps:
     rules: Any = None
 
 
-TRACE_ID_RE = re.compile(
-    r"(?:\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|"
-    r"\b(?:getBuffer|setStringView)-\d{1,10}-\d{8};[0-9a-f]{12}\b)",
+TRACE_ID_MAX_SIZE = 49
+TRACE_ID_CHARS = r"A-Za-z0-9~.\-/_!@#%^&*()+=:;"
+TRACE_ID_FIELD_RE = re.compile(rf"^[{TRACE_ID_CHARS}]{{1,{TRACE_ID_MAX_SIZE}}}$")
+TRACE_ID_EXPLICIT_RE = re.compile(
+    rf"\btrace[_ ]?id\s*[:=]\s*([{TRACE_ID_CHARS}]{{1,{TRACE_ID_MAX_SIZE}}})",
+    re.I,
+)
+TRACE_ID_PREFIXED_SHORT_UUID_RE = re.compile(
+    rf"(?<![{TRACE_ID_CHARS}])([{TRACE_ID_CHARS}]{{1,36}};[0-9a-f]{{12}})(?![{TRACE_ID_CHARS}])",
+    re.I,
+)
+TRACE_ID_UUID_RE = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
     re.I,
 )
 TS_RE = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)")
@@ -447,15 +457,35 @@ class TraceParser:
         except ValueError:
             return None
 
+    @staticmethod
+    def trace_id(line):
+        parts = line.split(" | ")
+        trace_field = 5 if parts and TS_RE.search(parts[0]) else 4
+        if len(parts) > trace_field:
+            candidate = parts[trace_field].strip()
+            if candidate:
+                return candidate if TRACE_ID_FIELD_RE.fullmatch(candidate) else None
+            explicit = TRACE_ID_EXPLICIT_RE.search(line)
+            return explicit.group(1) if explicit else None
+
+        explicit = TRACE_ID_EXPLICIT_RE.search(line)
+        if explicit:
+            return explicit.group(1)
+        prefixed = TRACE_ID_PREFIXED_SHORT_UUID_RE.search(line)
+        if prefixed:
+            return prefixed.group(1)
+        uuid = TRACE_ID_UUID_RE.search(line)
+        return uuid.group(0) if uuid else None
+
     def parse_line(self, source, member, line_no, line):
-        match = TRACE_ID_RE.search(line)
-        if not match:
+        trace_id = self.trace_id(line)
+        if not trace_id:
             return None
         worker = self.worker_from(source, member, line)
         ts = self.timestamp(line)
         ub_ctx = UbLineContext(source, member, line_no, line, ts, worker)
         parsed = {
-            "trace_id": match.group(0),
+            "trace_id": trace_id,
             "worker": worker,
             "timestamp": ts,
             "evidence": {
@@ -2616,7 +2646,7 @@ def _render_html(report, title, site=False, manifest=None):
     "\n"
     """main{flex:1;min-width:0;width:auto;padding:22px 28px 50px}section{margin-bottom:20px}"""
     "\n"
-    """h1{font-size:26px;margin:0 0 8px}h2{font-size:21px;margin:8px 0 """
+    """h1{font-size:26px;margin:0 0 8px;overflow-wrap:anywhere;word-break:break-word}h2{font-size:21px;margin:8px 0 """
     """12px}h3{font-size:15px;text-align:center;margin:10px 0}"""
     "\n"
     """.subtitle,.note,.insight{color:var(--muted);line-height:1.65}.section-summary{background:#f8fafc;border-le"""

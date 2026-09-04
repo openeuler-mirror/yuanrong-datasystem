@@ -105,12 +105,15 @@ def manifest(tmp_path: Path) -> dict:
 
 
 def test_build_suite_keeps_runs_isolated_and_builds_control_groups(tmp_path: Path):
-    suite = load_module().build_suite(manifest(tmp_path))
+    value = manifest(tmp_path)
+    value["overview"] = [{"title": "证据结论", "text": "两个 Run 独立解析"}]
+    suite = load_module().build_suite(value)
 
     assert [item["id"] for item in suite["runs"]] == [
         "true-315", "same-315", "meta-315", "meta-3x105", "meta-105-1kb", "meta-105-8mb"
     ]
     assert [item["trace_count"] for item in suite["runs"]] == [1, 1, 1, 1, 1, 1]
+    assert suite["overview"] == [{"title": "证据结论", "text": "两个 Run 独立解析"}]
     assert suite["runs"][1]["read_path"] == "legacy-worker-pull"
     families = {group["family"] for group in suite["control_groups"]}
     assert {"implementation", "client_shape", "object_size"}.issubset(families)
@@ -120,6 +123,49 @@ def test_build_suite_keeps_runs_isolated_and_builds_control_groups(tmp_path: Pat
     assert implementation_insight["band"] == "5–7ms"
     assert "true-315" in implementation_insight["text"]
     assert "档内占比" in implementation_insight["text"]
+
+
+def test_suite_prefers_focus_breakdown_and_exposes_data_access_scope(tmp_path: Path):
+    focused = row("focused", 6.2, "数据访问父窗口/未细分", urma_ms=5.8)
+    focused["focus_primary_problem"] = "URMA通信"
+    focused["focus_breakdown_ms"] = {
+        "URMA建链": 0.0,
+        "URMA通信": 5.8,
+        "URMA调度/线程开销": 0.0,
+        "QueryAndGet其他业务": 0.0,
+        "Get其他业务": 0.2,
+        "其他调度/线程开销": 0.0,
+        "RPC网络相关": 0.0,
+        "RPC框架": 0.0,
+        "未解释残差": 0.2,
+    }
+    focused["data_access_scope"] = "URMA慢完成"
+    value = {
+        "schema_version": 1,
+        "runs": [
+            run_cfg(
+                tmp_path,
+                "focused-run",
+                implementation="meta",
+                load="315",
+                size="8MB",
+                rows=[focused],
+            )
+        ],
+    }
+
+    suite = load_module().build_suite(value)
+    band = suite["runs"][0]["bands"]["5–7ms"]
+
+    assert band["dominant_problem"] == "URMA通信"
+    assert band["problem_counts"]["URMA通信"] == 1
+    assert band["stage_p90_ms"]["URMA通信"] == pytest.approx(5.8)
+    assert band["data_access_scope_counts"] == {"URMA慢完成": 1}
+    assert band["data_access_scope_shares_pct"] == {"URMA慢完成": 100.0}
+
+    html = load_module().render_suite_html(suite, "window.echarts={};")
+    assert "数据访问定位细分" in html
+    assert 'id="scope"' in html
     assert "not occurrence rates" in " ".join(suite["limitations"])
 
 
@@ -181,6 +227,19 @@ def test_renderer_is_self_contained_and_links_every_run(tmp_path: Path):
         assert item["triage_report"] in html
         assert item["bottleneck_report"] in html
         assert item["numa_report"] in html
+
+
+def test_renderer_escapes_manifest_overview_before_inserting_html(tmp_path: Path):
+    value = manifest(tmp_path)
+    value["overview"] = [{"title": "<img onerror=alert(1)>", "text": "<script>alert(1)</script>"}]
+    module = load_module()
+    html = module.render_suite_html(
+        module.build_suite(value),
+        "window.echarts={init(){return {setOption(){},resize(){}}}};",
+    )
+
+    assert "esc(x.title)" in html
+    assert "esc(x.text)" in html
 
 
 def test_companion_skill_contract_and_base_parser_is_not_imported():

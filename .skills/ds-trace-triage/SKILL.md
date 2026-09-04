@@ -122,7 +122,7 @@ Client access 日志的 `DS_KV_CLIENT_GET transportType`：`SHM` 表示本节点
 
 标准输出：
 
-- `bottleneck.analysis.json`：TopN、七阶段互斥归因（含 RPC 网络与 RPC 排队）、主问题、时间、Worker、
+- `bottleneck.analysis.json`：TopN、读取九阶段互斥归因（URMA 建链/通信/调度、QueryAndGet/Get 其他业务、其他调度、RPC 网络/框架、未解释残差）、主问题、时间、Worker、
   RPC、URMA 和逐 Trace 诊断的机器可读模型。
 - `bottleneck.local.html`：内联 ECharts 和数据的自包含页面，包含排序、8 行分页、
   筛选、Trace/日志联动及 TopN、分类和单条 triage 保留证据下载。若上游
@@ -130,7 +130,7 @@ Client access 日志的 `DS_KV_CLIENT_GET transportType`：`SHM` 表示本节点
 - `raw-inputs/`：从 triage run 的 `raw/inputs/` 原样复制输入包并在专项页提供下载；
   保留 manifest 中的大小和 SHA256。不得从最多 200 行的 evidence 重新拼接“原始包”。
 
-当前七阶段模型面向 GET/read Trace。混合 run 中的 SET/CREATE/PUBLISH 等非 GET
+当前读取九阶段模型面向 GET/read Trace。混合 run 中的 SET/CREATE/PUBLISH 等非 GET
 Trace 会从 Client TopN 排除并计入 limitations；不得套用读链阶段名称解释写链。
 
 `--top` 接受任意正整数，例如 100、1000。页面标题、计数、下载范围和分页都从
@@ -166,7 +166,7 @@ Trace 会从 Client TopN 排除并计入 limitations；不得套用读链阶段�
 
 先从 `summary.json` 的结构化字段取值，只对已归入 Trace 的 evidence 做补充语义识别；
 不得重新读取原始 gzip/tar 来二次解析 Trace；交付时只允许复制 triage 已归档的原包。
-父窗口与子阶段不得重复相加，七阶段之和不得超过
+父窗口与子阶段不得重复相加，读取九阶段之和不得超过
 Client 总时延。字段缺失时保留为“内部未细分”或“未解释残差”，不得猜测为网络、
 CPU、锁或线程调度。
 
@@ -335,6 +335,25 @@ threads: `latencySummary` raw text and key/value fields, RPC slow server/network
 subfields, `URMA_ELAPSED_TOTAL/POLL_JFC/NOTIFY/THREAD_SHED`, and classification
 counts. When DataSystem log wording changes, update the fixture and tests in the
 same patch as parser logic.
+
+Trace ID extraction must follow the current source contract instead of a fixed
+operation-name allowlist. Prefer the sixth field of the standard log prefix
+(`... | pid:tid | traceId | az | ...`), validate it with the same character set
+and 49-character runtime limit as `Trace`, and only then use constrained
+fallbacks for unstructured input. Preserve all of these forms:
+
+- canonical UUIDs;
+- `Context::SetTraceId` prefixes followed by `;` and the 12-character UUID tail;
+- historical kvtest `<operation>-<pid>-<counter>` and current
+  `<operation>-<instanceId>-<pid>-<counter>` prefixes, for every pipeline
+  operation; the counter has a minimum display width of eight, not a maximum;
+- IDs installed directly through `Trace::SetTraceNewID`, including prefixed or
+  length-truncated UUIDs, when they occupy the structured trace field.
+
+If a structured line has an empty trace field, do not promote unrelated UUIDs
+such as `remoteInstanceId` from the message body into a request Trace. An
+explicit `traceId=` marker may still be used as a fallback. Keep focused tests
+for every newly observed ID form and for this negative boundary.
 
 For small log-format extensions, keep the analyzer stable by registering new
 markers instead of rewriting the parse loop:

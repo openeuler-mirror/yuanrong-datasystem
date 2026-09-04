@@ -253,10 +253,23 @@ def build_aggregate(records: list[dict], source: dict) -> dict:
 def classify_error_chain(record: dict) -> dict:
     """Classify only evidence-backed 1004/1010 chains."""
     joined = "\n".join(record.get("evidence") or [])
+    lowered = joined.lower()
     operation = record.get("operation")
     status = record.get("status")
     has_timeout = bool(URMA_WAIT_TIMEOUT_RE.search(joined))
     has_response_shape = "unexpectedly returned TCP payload" in joined or "fallback payload" in joined
+    has_receive_buffer_failure = "receive buffer preparation failed" in lowered
+    has_arena_oom = any(
+        marker in lowered for marker in ("out of memory", "no space in arena", "fresh_extent_unavailable")
+    )
+    is_failed_get = operation == "GET" and status == 1004
+    if is_failed_get and has_receive_buffer_failure and has_arena_oom:
+        return {
+            "family": "GET UB接收缓冲分配失败1004",
+            "closed": True,
+            "signals": ["Client UB接收缓冲准备失败", "Client arena内存不足", "Client状态1004"],
+            "missing": [],
+        }
     signals: list[str] = []
     if has_timeout:
         signals.append("URMA等待超时")
@@ -375,13 +388,18 @@ def build_insights(records: list[dict], latency_bands: list[dict], time_buckets:
     insights.append({"title": "短时延档主瓶颈", "text": short_text})
 
     status_1004 = [record for record in records if record.get("status") == 1004]
+    error_families = Counter(
+        (record.get("error_chain") or {}).get("family", "未分类") for record in status_1004
+    )
+    family_text = "、".join(f"{name}={count}" for name, count in error_families.most_common()) or "未观测"
     timeout_1004 = [record for record in status_1004 if record.get("timeout_elapsed_ms") is not None]
     insights.append(
         {
-            "title": "10–20ms错误链",
+            "title": "GET 1004错误链",
             "text": (
-                f"状态 1004 共 {len(status_1004)} 条，其中 {len(timeout_1004)} 条保留可量化的 URMA timeout elapsedMs。"
-                "超时 WR 没有完成态 URMA_ELAPSED_TOTAL，因此阶段图中的“数据父窗口/未细分”不能解释为非 URMA。"
+                f"状态 1004 共 {len(status_1004)} 条：{family_text}。"
+                f"其中 {len(timeout_1004)} 条保留可量化的 URMA timeout elapsedMs；"
+                "接收缓冲分配失败属于 Client 内存准备问题，不是已完成 WR 变慢。"
             ),
         }
     )
@@ -446,7 +464,7 @@ def build_source_chain(source: dict) -> list[dict]:
             {
                 "stage": "inflight均衡",
                 "source": "src/datasystem/common/rdma/urma_manager.cpp:GetAffinitySrcChipId",
-                "judgment": "PR 2095 仅在 chip1/chip2 inflight 差值严格大于阈值时覆盖 RR 候选；Trace 快照不是选择时刻",
+                "judgment": "当前源码仅在 chip1/chip2 inflight 差值严格大于阈值时覆盖 RR 候选；Trace 快照不是选择时刻",
                 "source_ref": head,
             },
         )
@@ -534,7 +552,11 @@ def build_analysis(
             "同一 Trace 在 Core 与时延档目录重复出现时只计一次，cohort 标签保留多值。",
             "srcChipInflight 是发送侧完成时刻的全局 inflight 快照；它不能证明当前 WR 的选片结果，也不能单独证明接收端带宽或端到端吞吐收益。",
             "缺失的 RPC、URMA、chip、CPU、锁或调度字段保持未观测，不按 0 处理。",
-            f"当前单包没有修改前同配置基线，不计算 PR {source.get('pr', '未指定')} 的性能提升百分比。",
+            (
+                f"当前单包没有修改前同配置基线，不计算 PR {source['pr']} 的性能提升百分比。"
+                if source.get("pr")
+                else "当前单包没有同配置对照基线，不计算性能提升百分比。"
+            ),
         ],
         "traces": records,
     }
@@ -553,7 +575,7 @@ HTML_TEMPLATE = r'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8
 <section class="card" id="detail"><h2>8. Trace明细</h2><div id="detail-summary"></div><pre id="detail-log"></pre></section>
 <section class="card" id="source"><h2>9. PR 2081源码链</h2><div id="source-chain"></div></section>
 <section class="card warning" id="limits"><h2>10. 证据边界</h2><ul id="limitations"></ul></section></main>
-<script>__ECHARTS_SOURCE__</script><script>const DATA=__DATA_JSON__;const $=id=>document.getElementById(id);const esc=v=>String(v??'未观测').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const entries=o=>Object.entries(o||{});let filtered=[...DATA.traces],page=1,sortKey='client_ms',sortDir=-1;const pageSize=8;const source=DATA.metadata.source;$('source-meta').textContent=`PR ${source.pr??'未指定'} · head ${source.head} · base ${source.base}`;const runtime=DATA.metadata.runtime_config||{};const fmt=v=>v==null?'未配置':Number.isInteger(v)?String(v):Number(v).toFixed(3).replace(/0+$/,'').replace(/\.$/,'');$('runtime-config').innerHTML=[['节点QPS',runtime.qps_per_node],['Client数',runtime.client_count],['线程/Client',runtime.threads_per_client],['Worker/节点',runtime.workers_per_node],['QPS/Client',runtime.qps_per_client],['Client线程/节点',runtime.client_threads_per_node]].map(x=>`<div class="load-item"><b>${fmt(x[1])}</b>${x[0]}</div>`).join('');const A=DATA.aggregate;$('judgment-text').innerHTML=DATA.insights.map(x=>`<p><b>${esc(x.title)}：</b>${esc(x.text)}</p>`).join('');$('kpis').innerHTML=[['唯一Trace',A.unique_trace_count],['归档Trace文件',A.archive_member_trace_files],['跨目录重复',A.overlap_trace_count],['Core错误',DATA.traces.filter(x=>x.status&&x.status!==0).length],['已观测chip',A.chip_observed_trace_count],['慢WR >1.5ms',A.slow_wr_count]].map(x=>`<div class="kpi"><b>${x[1]}</b>${x[0]}</div>`).join('');$('cohort-overlap').textContent=`cohort成员：${entries(A.cohort_counts).map(x=>x.join('=')).join(' · ')}`;$('limitations').innerHTML=DATA.limitations.map(x=>`<li>${esc(x)}</li>`).join('');$('source-chain').innerHTML=DATA.source_chain.map(x=>`<div class="source-step"><b>${esc(x.stage)}</b> · <code>${esc(x.source)}</code><br>${esc(x.judgment)}</div>`).join('');
+<script>__ECHARTS_SOURCE__</script><script>const DATA=__DATA_JSON__;const $=id=>document.getElementById(id);const esc=v=>String(v??'未观测').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const entries=o=>Object.entries(o||{});let filtered=[...DATA.traces],page=1,sortKey='client_ms',sortDir=-1;const pageSize=8;const source=DATA.metadata.source;$('source-meta').textContent=`${source.pr?`PR ${source.pr}`:'源码基线'} · head ${source.head} · base ${source.base}`;const runtime=DATA.metadata.runtime_config||{};const fmt=v=>v==null?'未配置':Number.isInteger(v)?String(v):Number(v).toFixed(3).replace(/0+$/,'').replace(/\.$/,'');$('runtime-config').innerHTML=[['节点QPS',runtime.qps_per_node],['Client数',runtime.client_count],['线程/Client',runtime.threads_per_client],['Worker/节点',runtime.workers_per_node],['QPS/Client',runtime.qps_per_client],['Client线程/节点',runtime.client_threads_per_node]].map(x=>`<div class="load-item"><b>${fmt(x[1])}</b>${x[0]}</div>`).join('');const A=DATA.aggregate;$('judgment-text').innerHTML=DATA.insights.map(x=>`<p><b>${esc(x.title)}：</b>${esc(x.text)}</p>`).join('');$('kpis').innerHTML=[['唯一Trace',A.unique_trace_count],['归档Trace文件',A.archive_member_trace_files],['跨目录重复',A.overlap_trace_count],['Core错误',DATA.traces.filter(x=>x.status&&x.status!==0).length],['已观测chip',A.chip_observed_trace_count],['慢WR >1.5ms',A.slow_wr_count]].map(x=>`<div class="kpi"><b>${x[1]}</b>${x[0]}</div>`).join('');$('cohort-overlap').textContent=`cohort成员：${entries(A.cohort_counts).map(x=>x.join('=')).join(' · ')}`;$('limitations').innerHTML=DATA.limitations.map(x=>`<li>${esc(x)}</li>`).join('');$('source-chain').innerHTML=DATA.source_chain.map(x=>`<div class="source-step"><b>${esc(x.stage)}</b> · <code>${esc(x.source)}</code><br>${esc(x.judgment)}</div>`).join('');
 function chart(id,opt){const dom=$(id),old=echarts.getInstanceByDom?.(dom);if(old)old.dispose();const c=echarts.init(dom);c.setOption(opt);return c}const err=entries(A.error_family_counts);chart('error-chart',{tooltip:{},xAxis:{type:'category',data:err.map(x=>x[0]),axisLabel:{rotate:20}},yAxis:{type:'value'},series:[{type:'bar',data:err.map(x=>x[1]),itemStyle:{color:'#d94352'}}]});const ops=entries(A.operation_counts);chart('error-op-chart',{tooltip:{},series:[{type:'pie',radius:['35%','68%'],data:ops.map(x=>({name:x[0],value:x[1]}))}]});const bands=DATA.latency_bands;chart('latency-chart',{tooltip:{trigger:'axis'},legend:{},grid:{left:50,right:20,bottom:100},xAxis:{type:'category',data:bands.map(x=>x.cohort.replace('time/','')),axisLabel:{rotate:20}},yAxis:{type:'value'},series:[{name:'唯一Trace',type:'bar',data:bands.map(x=>x.unique_trace_count)},{name:'慢WR',type:'bar',data:bands.map(x=>x.slow_wr_count)}]});const modes=entries(A.chip_mode_counts);chart('chip-mode-chart',{tooltip:{},series:[{type:'pie',radius:['35%','68%'],data:modes.map(x=>({name:x[0],value:x[1]}))}]});const chipRows=DATA.traces.filter(x=>x.chip_mode!=='未观测').sort((a,b)=>(b.client_ms||0)-(a.client_ms||0)).slice(0,50);chart('chip-load-chart',{tooltip:{trigger:'axis'},legend:{},grid:{left:50,right:20,bottom:100},xAxis:{type:'category',data:chipRows.map(x=>x.trace_id),axisLabel:{show:false}},yAxis:{type:'value'},series:[{name:'chip1峰值',type:'bar',stack:'chip',data:chipRows.map(x=>x.chip1_peak||0),itemStyle:{color:'#2878ff'}},{name:'chip2峰值',type:'bar',stack:'chip',data:chipRows.map(x=>x.chip2_peak||0),itemStyle:{color:'#8b5cf6'}},{name:'Client ms',type:'line',data:chipRows.map(x=>x.client_ms)}]});const workerCounts={};DATA.traces.forEach(x=>{const w=x.worker||'未明确';workerCounts[w]??={total:0,slow:0,error:0};workerCounts[w].total++;workerCounts[w].slow+=x.slow_wr_count;workerCounts[w].error+=x.status&&x.status!==0?1:0});const workers=entries(workerCounts).sort((a,b)=>b[1].total-a[1].total);chart('worker-chart',{tooltip:{trigger:'axis'},legend:{},grid:{left:50,right:20,bottom:120},xAxis:{type:'category',data:workers.map(x=>x[0]),axisLabel:{rotate:35}},yAxis:{type:'value'},series:[{name:'Trace',type:'bar',data:workers.map(x=>x[1].total)},{name:'慢WR',type:'bar',data:workers.map(x=>x[1].slow)},{name:'错误',type:'bar',data:workers.map(x=>x[1].error)}]});const tb=DATA.time_buckets;chart('time-chart',{tooltip:{trigger:'axis'},legend:{},grid:{left:50,right:20,bottom:100},xAxis:{type:'category',data:tb.map(x=>x.second.slice(11)),axisLabel:{rotate:35}},yAxis:{type:'value'},series:[{name:'Trace',type:'line',data:tb.map(x=>x.trace_count)},{name:'错误',type:'bar',data:tb.map(x=>x.error_count),itemStyle:{color:'#d94352'}},{name:'慢WR',type:'bar',data:tb.map(x=>x.slow_wr_count),itemStyle:{color:'#e99b24'}},{name:'双chip Trace',type:'line',data:tb.map(x=>x.dual_chip_count),itemStyle:{color:'#26a269'}}]});
 function options(id,values){$(id).innerHTML+= [...new Set(values.filter(x=>x!==null&&x!==undefined&&x!==''))].sort().map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('')}options('f-cohort',DATA.traces.flatMap(x=>x.cohorts));options('f-op',DATA.traces.map(x=>x.operation));options('f-status',DATA.traces.map(x=>String(x.status)));options('f-worker',DATA.traces.map(x=>x.worker));options('f-chip',DATA.traces.map(x=>x.chip_mode));function apply(){const cohort=$('f-cohort').value,op=$('f-op').value,status=$('f-status').value,worker=$('f-worker').value,chip=$('f-chip').value,min=parseFloat($('f-min').value),max=parseFloat($('f-max').value);filtered=DATA.traces.filter(x=>(!cohort||x.cohorts.includes(cohort))&&(!op||x.operation===op)&&(!status||String(x.status)===status)&&(!worker||x.worker===worker)&&(!chip||x.chip_mode===chip)&&(Number.isNaN(min)||(x.client_ms??-Infinity)>=min)&&(Number.isNaN(max)||(x.client_ms??Infinity)<=max));page=1;renderTable()}function cmp(a,b){const av=a[sortKey],bv=b[sortKey];if(av==null)return 1;if(bv==null)return -1;return (typeof av==='number'?av-bv:String(av).localeCompare(String(bv)))*sortDir}function renderTable(){filtered.sort(cmp);const pages=Math.max(1,Math.ceil(filtered.length/pageSize));page=Math.min(page,pages);const rows=filtered.slice((page-1)*pageSize,page*pageSize);$('trace-table').querySelector('tbody').innerHTML=rows.map(x=>`<tr data-id="${esc(x.trace_id)}"><td>${esc(x.trace_id)}</td><td>${esc(x.operation)}</td><td class="${x.status&&x.status!==0?'bad':'good'}">${esc(x.status)}</td><td class="${(x.client_ms||0)>10?'bad':''}">${x.client_ms==null?'未观测':x.client_ms.toFixed(3)+'ms'}</td><td>${esc(x.primary_problem)}</td><td>${esc(x.chip_mode)}</td><td class="chip1">${esc(x.chip1_peak)}</td><td class="chip2">${esc(x.chip2_peak)}</td><td>${x.slow_wr_count}</td><td>${esc(x.worker)}</td></tr>`).join('');$('page-label').textContent=`${page}/${pages} · ${filtered.length}条`;[...$('trace-table').querySelectorAll('tbody tr')].forEach(tr=>tr.onclick=()=>showDetail(tr.dataset.id));if(rows[0])showDetail(rows[0].trace_id)}function showDetail(id){const x=DATA.traces.find(r=>r.trace_id===id);if(!x)return;const timeout=x.timeout_elapsed_ms==null?'timeout未量化':`timeout ${x.timeout_elapsed_ms.toFixed(3)}ms`;$('detail-summary').innerHTML=`<b>${esc(x.trace_id)}</b> · ${esc(x.operation)} · 状态 <span class="${x.status?'bad':'good'}">${esc(x.status)}</span> · ${x.client_ms==null?'总时延未观测':x.client_ms.toFixed(3)+'ms'} · ${esc(x.error_chain.family)}<br>cohort: ${x.cohorts.map(esc).join(' / ')} · chip: ${esc(x.chip_mode)} (${esc(x.chip1_peak)} / ${esc(x.chip2_peak)}) · ${timeout}`;$('detail-log').innerHTML=x.evidence.map(line=>`<span class="evidence-line ${/TIMEOUT|failed|unexpectedly|\| E \|/i.test(line)?'bad':''}">${esc(line)}</span>`).join('')||'<span class="muted">未保留证据日志</span>'}['f-cohort','f-op','f-status','f-worker','f-chip','f-min','f-max'].forEach(id=>$(id).addEventListener('change',apply));$('prev').onclick=()=>{if(page>1){page--;renderTable()}};$('next').onclick=()=>{if(page*pageSize<filtered.length){page++;renderTable()}};[...$('trace-table').querySelectorAll('th[data-key]')].forEach(th=>th.onclick=()=>{if(sortKey===th.dataset.key)sortDir*=-1;else{sortKey=th.dataset.key;sortDir=1}renderTable()});$('download-filtered').onclick=()=>{const text=filtered.map(x=>`Trace ID: ${x.trace_id}\n${x.evidence.join('\n')}`).join('\n\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'text/plain;charset=utf-8'}));a.download='filtered-traces.txt';a.click();URL.revokeObjectURL(a.href)};renderTable();addEventListener('resize',()=>document.querySelectorAll('.chart').forEach(dom=>echarts.getInstanceByDom?.(dom)?.resize()));</script></body></html>'''
 
@@ -569,8 +591,14 @@ def _safe_json(value: object) -> str:
 
 def render_html(analysis: dict, echarts_source: str) -> str:
     source = analysis.get("metadata", {}).get("source") or {}
-    pr = source.get("pr") or "未指定"
-    template = HTML_TEMPLATE.replace("PR2081", f"PR{pr}").replace("PR 2081", f"PR {pr}")
+    pr = source.get("pr")
+    if pr:
+        template = HTML_TEMPLATE.replace("PR2081", f"PR{pr}").replace("PR 2081", f"PR {pr}")
+    else:
+        template = HTML_TEMPLATE.replace("PR2081 多NUMA", "多NUMA")
+        template = template.replace("PR2081 NUMA诊断", "NUMA诊断")
+        template = template.replace("PR 2081 · ", "")
+        template = template.replace("PR 2081源码链", "当前源码链")
     template = template.replace("__ECHARTS_SOURCE__", echarts_source, 1)
     return template.replace("__DATA_JSON__", _safe_json(analysis), 1)
 
@@ -582,7 +610,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--source-head", required=True)
     parser.add_argument("--source-base", required=True)
-    parser.add_argument("--pr", type=int, default=2081)
+    parser.add_argument("--pr", type=int)
     parser.add_argument("--qps-per-node", type=float)
     parser.add_argument("--client-count", type=int)
     parser.add_argument("--threads-per-client", type=int)

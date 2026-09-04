@@ -21,13 +21,49 @@ STAGE_NAMES = (
     "RPC网络",
     "RPC排队",
     "QueryMeta",
+    "URMA超时等待",
     "URMA",
     "远端供数处理",
     "数据访问父窗口/未细分",
     "未解释残差",
 )
-PROBLEM_NAMES = STAGE_NAMES + ("URMA超时",)
+FOCUS_STAGE_NAMES = (
+    "URMA建链",
+    "URMA通信",
+    "URMA调度/线程开销",
+    "QueryAndGet其他业务",
+    "Get其他业务",
+    "其他调度/线程开销",
+    "RPC网络相关",
+    "RPC框架",
+    "未解释残差",
+)
+WRITE_STAGE_NAMES = (
+    "Create RPC其他",
+    "写入MemoryCopy",
+    "写入URMA通信",
+    "写入URMA调度/线程开销",
+    "Publish RPC其他",
+    "Worker Publish/元数据",
+    "其他调度/线程开销",
+    "RPC网络相关",
+    "RPC框架",
+    "未解释残差",
+)
+WRITE_CLIENT_FLOWS = frozenset(
+    {
+        "DS_KV_CLIENT_SET",
+        "DS_KV_CLIENT_MSET",
+        "DS_KV_CLIENT_CREATE",
+        "DS_KV_CLIENT_PUBLISH",
+    }
+)
+WRITE_CLIENT_OPERATION_RE = "|".join(
+    re.escape(name.removeprefix("DS_KV_CLIENT_")) for name in sorted(WRITE_CLIENT_FLOWS)
+)
+PROBLEM_NAMES = tuple(stage for stage in STAGE_NAMES if stage != "URMA超时等待") + ("URMA超时",)
 NON_TRANSPORT_CATEGORIES = (
+    "Client UB接收缓冲分配失败",
     "Client/Worker观测未闭合",
     "BatchGet超时/重试",
     "Data Worker服务端处理",
@@ -39,6 +75,7 @@ SLOW_WR_THRESHOLD_MS = 1.5
 URMA_WAIT_TIMEOUT_RE = re.compile(
     r"(?:URMA(?:[_ -]WAIT[_ -]TIMEOUT)|Timed out waiting for urma_request_id)", re.I
 )
+QUERY_AND_GET_METHOD_RE = re.compile(r"(?:Master|Worker)OCService\.QueryAndGet", re.I)
 
 
 class InputContractError(ValueError):
@@ -149,6 +186,413 @@ def _rpc_fields(text: str) -> tuple[str | None, dict[str, int]]:
     return method_match.group(1), fields
 
 
+def _transport_phase_maps(evidence: list[str]) -> list[dict[str, int]]:
+    result = []
+    for text in evidence:
+        for body in re.findall(r"phasesUs=\{([^}]*)\}", text):
+            result.append(
+                {name: int(value) for name, value in re.findall(r"([A-Za-z0-9_]+):(-?\d+)", body)}
+            )
+    return result
+
+
+def _rpc_framework_ms(fields: dict[str, int]) -> float | None:
+    required = {"e2e", "server_req_queue", "server_exec", "network_residual"}
+    if not required.issubset(fields):
+        return None
+    if fields.get("cntl_failed") or fields.get("cntl_error_code"):
+        if not any(fields.get(name, 0) for name in ("server_req_queue", "server_exec", "network_residual")):
+            return None
+    explained_us = sum(fields.get(name, 0) for name in ("server_req_queue", "server_exec", "network_residual"))
+    return max(0.0, (fields["e2e"] - explained_us) / 1000.0)
+
+
+def _max_rpc_framework(entries: list[dict[str, int]]) -> float:
+    values = []
+    for fields in entries:
+        value = _rpc_framework_ms(fields)
+        if value is not None:
+            values.append(value)
+    return max(values, default=0.0)
+
+
+def _take_focus_budget(focus: dict[str, float], donors: tuple[str, ...], amount_ms: float) -> float:
+    remaining = max(0.0, amount_ms)
+    moved = 0.0
+    for donor in donors:
+        take = min(focus[donor], remaining)
+        focus[donor] -= take
+        remaining -= take
+        moved += take
+        if remaining <= 0:
+            break
+    return moved
+
+
+def _urma_scheduling_detail(
+    requests: list[dict], slowest_request_id: str | None = None
+) -> dict[str, float | None]:
+    selected = requests
+    if slowest_request_id:
+        matched = [
+            request for request in requests if request.get("request_id") == slowest_request_id
+        ]
+        if matched:
+            selected = matched
+    fields = {
+        "wake_sched_latency": "wake_sched_latency_ms",
+        "thread_sched": "thread_sched_ms",
+        "notify_to_awake": "notify_to_awake_ms",
+        "poll_jfc": "poll_jfc_ms",
+        "notify": "notify_ms",
+    }
+    detail = {}
+    for label, field in fields.items():
+        observed = [float(request[field]) for request in selected if request.get(field) is not None]
+        detail[label] = max(observed) if observed else None
+    return detail
+
+
+def _apply_focus_breakdown(row: dict) -> None:
+    legacy = row["attribution_ms"]
+    focus = {
+        "URMA建链": 0.0,
+        "URMA通信": legacy["URMA"] + legacy["URMA超时等待"],
+        "URMA调度/线程开销": 0.0,
+        "QueryAndGet其他业务": legacy["QueryMeta"],
+        "Get其他业务": legacy["远端供数处理"] + legacy["数据访问父窗口/未细分"],
+        "其他调度/线程开销": legacy["RPC排队"],
+        "RPC网络相关": legacy["RPC网络"],
+        "RPC框架": 0.0,
+        "未解释残差": legacy["未解释残差"],
+    }
+    slowest_urma_ms = (row.get("urma_trace") or {}).get("slowest_total_ms")
+    if slowest_urma_ms is not None and focus["URMA通信"] > slowest_urma_ms:
+        focus["未解释残差"] += focus["URMA通信"] - slowest_urma_ms
+        focus["URMA通信"] = slowest_urma_ms
+    evidence = row.get("evidence", [])
+    phase_maps = _transport_phase_maps(evidence)
+    leaf_connect_ms = max(
+        (
+            sum(phases.get(name, 0) for name in ("urma_connect_info_exchange", "urma_connection_finalize"))
+            / 1000.0
+            for phases in phase_maps
+        ),
+        default=0.0,
+    )
+    outer_connect_ms = max(
+        (
+            max(
+                (
+                    value
+                    for name, value in phases.items()
+                    if name in {"connection_acquire", "connection_rebuild", "ub_fallback_connection"}
+                ),
+                default=0,
+            )
+            / 1000.0
+            for phases in phase_maps
+        ),
+        default=0.0,
+    )
+    finalize_ms = max(
+        (phases.get("urma_connection_finalize", 0) / 1000.0 for phases in phase_maps),
+        default=0.0,
+    )
+    rpc_entries = []
+    for text in evidence:
+        method, fields = _rpc_fields(text)
+        if method:
+            rpc_entries.append((method, fields))
+    connect_entries = [
+        fields for method, fields in rpc_entries if "ExchangeUrmaConnectInfo" in method
+    ]
+    connect_fields = max(connect_entries, key=lambda fields: fields.get("e2e", 0), default=None)
+    connect_rpc_ms = (connect_fields.get("e2e", 0) / 1000.0) if connect_fields else 0.0
+    connect_total_ms = max(leaf_connect_ms, outer_connect_ms, connect_rpc_ms + finalize_ms)
+    connect_network_ms = (connect_fields.get("network_residual", 0) / 1000.0) if connect_fields else 0.0
+    connect_queue_ms = (connect_fields.get("server_req_queue", 0) / 1000.0) if connect_fields else 0.0
+    connect_framework_ms = _rpc_framework_ms(connect_fields) if connect_fields else None
+    if connect_framework_ms is None:
+        connect_network_ms = 0.0
+        connect_queue_ms = 0.0
+        connect_framework_ms = 0.0
+    connect_business_ms = max(
+        0.0, connect_total_ms - connect_network_ms - connect_queue_ms - connect_framework_ms
+    )
+    moved_connect_ms = _take_focus_budget(
+        focus, ("Get其他业务", "未解释残差"), connect_total_ms
+    )
+    if connect_total_ms > 0 and moved_connect_ms > 0:
+        scale = moved_connect_ms / connect_total_ms
+        focus["URMA建链"] += connect_business_ms * scale
+        focus["RPC网络相关"] += connect_network_ms * scale
+        focus["其他调度/线程开销"] += connect_queue_ms * scale
+        focus["RPC框架"] += connect_framework_ms * scale
+
+    lock_wait_ms = max(
+        (
+            sum(value for name, value in phases.items() if name.endswith("_lock_wait")) / 1000.0
+            for phases in phase_maps
+        ),
+        default=0.0,
+    )
+    focus["其他调度/线程开销"] += _take_focus_budget(
+        focus, ("Get其他业务", "未解释残差"), lock_wait_ms
+    )
+
+    slowest_request_id = (row.get("urma_trace") or {}).get("slowest_request_id")
+    urma_sched_detail = _urma_scheduling_detail(
+        row.get("urma_requests", []), slowest_request_id
+    )
+    urma_sched_ms = max(
+        (value for value in urma_sched_detail.values() if value is not None), default=0.0
+    )
+    moved_urma_sched_ms = min(focus["URMA通信"], urma_sched_ms)
+    focus["URMA通信"] -= moved_urma_sched_ms
+    focus["URMA调度/线程开销"] += moved_urma_sched_ms
+    row["urma_scheduling_detail_ms"] = {
+        name: round(value, 6) if value is not None else None
+        for name, value in urma_sched_detail.items()
+    }
+    row["urma_scheduling_request_id"] = slowest_request_id
+
+    query_entries = [fields for method, fields in rpc_entries if _is_query_and_get_method(method)]
+    query_framework_ms = _max_rpc_framework(query_entries)
+    outer_get_entries = [
+        fields
+        for method, fields in rpc_entries
+        if method.endswith("WorkerOCService.Get") and "GetObjectRemote" not in method
+    ]
+    data_entries = []
+    for method, fields in rpc_entries:
+        is_outer_get = method.endswith("WorkerOCService.Get") and "GetObjectRemote" not in method
+        if not _is_query_and_get_method(method) and "ExchangeUrmaConnectInfo" not in method:
+            if not is_outer_get:
+                data_entries.append(fields)
+    outer_framework_ms = _max_rpc_framework(outer_get_entries)
+    data_framework_ms = _max_rpc_framework(data_entries)
+    data_queue_ms = max(
+        (fields.get("server_req_queue", 0) / 1000.0 for fields in data_entries),
+        default=0.0,
+    )
+    focus["其他调度/线程开销"] += _take_focus_budget(
+        focus, ("Get其他业务",), data_queue_ms
+    )
+    focus["RPC框架"] += _take_focus_budget(
+        focus, ("QueryAndGet其他业务",), query_framework_ms
+    )
+    focus["RPC框架"] += _take_focus_budget(
+        focus, ("Get其他业务",), data_framework_ms
+    )
+    focus["RPC框架"] += _take_focus_budget(
+        focus, ("未解释残差",), outer_framework_ms
+    )
+
+    total_before = sum(legacy.values())
+    rounded = {name: round(max(0.0, focus[name]), 6) for name in FOCUS_STAGE_NAMES}
+    rounding_delta = round(total_before - sum(rounded.values()), 6)
+    rounded["未解释残差"] = round(max(0.0, rounded["未解释残差"] + rounding_delta), 6)
+    row["focus_breakdown_ms"] = rounded
+    row["focus_primary_stage"] = max(FOCUS_STAGE_NAMES, key=lambda stage: rounded[stage])
+    row["focus_primary_problem"] = (
+        row.get("error_family")
+        if row.get("error_family") and row.get("error_family") != "RPC截止超时"
+        else row["focus_primary_stage"]
+    )
+    row["focus_breakdown_observed"] = {
+        "urma_connect": connect_total_ms > 0,
+        "urma_sched": urma_sched_ms > 0,
+        "transport_lock_wait": lock_wait_ms > 0,
+        "rpc_framework": (
+            query_framework_ms > 0
+            or data_framework_ms > 0
+            or outer_framework_ms > 0
+            or connect_framework_ms > 0
+        ),
+    }
+
+
+def _is_write_flow(trace: dict) -> bool:
+    return bool(WRITE_CLIENT_FLOWS.intersection(trace.get("flows", {})))
+
+
+def _write_rpc_group(evidence: list[str], operation: str) -> list[dict[str, int]]:
+    result = []
+    for text in evidence:
+        method, fields = _rpc_fields(text)
+        if not method:
+            continue
+        leaf = method.rsplit(".", 1)[-1].lower()
+        if operation == "create" and "create" in leaf and "meta" not in leaf:
+            result.append(fields)
+        if operation == "publish" and "publish" in leaf and "meta" not in leaf:
+            result.append(fields)
+    return result
+
+
+def _write_rpc_split(parent_ms: float, entries: list[dict[str, int]]) -> dict[str, float]:
+    split = {"other": parent_ms, "queue": 0.0, "network": 0.0, "framework": 0.0}
+    complete = []
+    for fields in entries:
+        succeeded = not fields.get("cntl_failed") and not fields.get("cntl_error_code")
+        if succeeded and _rpc_framework_ms(fields) is not None:
+            complete.append(fields)
+    if not complete or parent_ms <= 0:
+        return split
+    fields = max(complete, key=lambda item: item.get("e2e", 0))
+    remaining = parent_ms
+    network = min(remaining, fields.get("network_residual", 0) / 1000.0)
+    remaining -= network
+    queue = min(remaining, fields.get("server_req_queue", 0) / 1000.0)
+    remaining -= queue
+    framework = min(remaining, _rpc_framework_ms(fields) or 0.0)
+    remaining -= framework
+    return {"other": remaining, "queue": queue, "network": network, "framework": framework}
+
+
+def _scaled_write_rpc_split(parent_ms: float, budget_ms: float, entries: list[dict[str, int]]) -> dict[str, float]:
+    split = _write_rpc_split(parent_ms, entries)
+    scale = budget_ms / parent_ms if parent_ms > 0 else 0.0
+    return {name: value * scale for name, value in split.items()}
+
+
+def _build_write_row(base: dict, trace: dict) -> dict:
+    summary = {name: int(value or 0) for name, value in trace.get("latency_summary_us", {}).items()}
+    evidence = base.get("evidence", [])
+    client_ms = float(base.get("client_ms", 0) or 0)
+    status = int(base.get("status", 0) or 0)
+    size_bytes = int(base.get("size_bytes", 0) or 0)
+    for text in evidence:
+        match = re.search(
+            rf"\| (-?\d+) \| DS_KV_CLIENT_(?:{WRITE_CLIENT_OPERATION_RE}) \| (\d+) \| (\d+) \|",
+            text,
+        )
+        if match:
+            status = int(match.group(1))
+            client_ms = int(match.group(2)) / 1000.0
+            size_bytes = int(match.group(3))
+            break
+
+    create_us = summary.get("client.rpc.create_total") or summary.get("client.rpc.create", 0)
+    publish_us = summary.get("client.rpc.publish_total") or summary.get("client.rpc.publish", 0)
+    memory_ms = summary.get("client.process.memory_copy", 0) / 1000.0
+    summary_urma_ms = summary.get("client.urma.ub_transfer", 0) / 1000.0
+    observed_urma_ms = float(base.get("urma_critical_path_ms") or 0.0)
+    urma_ms = summary_urma_ms or observed_urma_ms
+    data_parent_ms = max(memory_ms, urma_ms)
+    create_ms = create_us / 1000.0
+    publish_ms = publish_us / 1000.0
+
+    remaining = client_ms
+    create_budget = min(remaining, create_ms)
+    remaining -= create_budget
+    data_budget = min(remaining, data_parent_ms)
+    remaining -= data_budget
+    publish_budget = min(remaining, publish_ms)
+    remaining -= publish_budget
+    create_split = _scaled_write_rpc_split(
+        create_ms, create_budget, _write_rpc_group(evidence, "create")
+    )
+    publish_split = _scaled_write_rpc_split(
+        publish_ms, publish_budget, _write_rpc_group(evidence, "publish")
+    )
+    data_scale = data_budget / data_parent_ms if data_parent_ms > 0 else 0.0
+    urma_budget = min(data_parent_ms, urma_ms) * data_scale
+    memory_budget = max(0.0, data_budget - urma_budget)
+    meta_ms = max(
+        summary.get("worker.rpc.create_meta", 0),
+        summary.get("worker.rpc.update_meta", 0),
+    ) / 1000.0
+    worker_publish_ms = summary.get("worker.process.publish", 0) / 1000.0
+    worker_nested_ms = min(publish_split["other"], worker_publish_ms + meta_ms)
+    publish_split["other"] -= worker_nested_ms
+
+    slowest_request_id = (base.get("urma_trace") or {}).get("slowest_request_id")
+    urma_sched_detail = _urma_scheduling_detail(
+        base.get("urma_requests", []), slowest_request_id
+    )
+    urma_sched_ms = max(
+        (value for value in urma_sched_detail.values() if value is not None), default=0.0
+    )
+    moved_urma_sched_ms = min(urma_budget, urma_sched_ms)
+    urma_budget -= moved_urma_sched_ms
+    other_scheduling_ms = create_split["queue"] + publish_split["queue"]
+    breakdown = {
+        "Create RPC其他": create_split["other"],
+        "写入MemoryCopy": memory_budget,
+        "写入URMA通信": urma_budget,
+        "写入URMA调度/线程开销": moved_urma_sched_ms,
+        "Publish RPC其他": publish_split["other"],
+        "Worker Publish/元数据": worker_nested_ms,
+        "其他调度/线程开销": other_scheduling_ms,
+        "RPC网络相关": create_split["network"] + publish_split["network"],
+        "RPC框架": create_split["framework"] + publish_split["framework"],
+        "未解释残差": remaining,
+    }
+    rounded = {name: round(max(0.0, breakdown[name]), 6) for name in WRITE_STAGE_NAMES}
+    delta = round(client_ms - sum(rounded.values()), 6)
+    rounded["未解释残差"] = round(max(0.0, rounded["未解释残差"] + delta), 6)
+    primary = max(WRITE_STAGE_NAMES, key=lambda name: rounded[name])
+    return {
+        "trace_id": base["trace_id"],
+        "timestamp": base.get("timestamp", ""),
+        "last_ts": base.get("last_ts", ""),
+        "client_ms": round(client_ms, 6),
+        "failed": status != 0 or bool(trace.get("errors")),
+        "status": status,
+        "size_bytes": size_bytes,
+        "create_rpc_ms": round(create_ms, 6),
+        "publish_rpc_ms": round(publish_ms, 6),
+        "write_data_ms": round(data_parent_ms, 6),
+        "memory_copy_ms": round(memory_ms, 6),
+        "write_urma_ms": round(urma_ms, 6) if urma_ms else None,
+        "write_data_basis": (
+            "client.urma.ub_transfer"
+            if summary_urma_ms
+            else "URMA logical Write"
+            if observed_urma_ms
+            else "client.process.memory_copy"
+            if memory_ms
+            else "未观测"
+        ),
+        "urma_scheduling_detail_ms": {
+            name: round(value, 6) if value is not None else None
+            for name, value in urma_sched_detail.items()
+        },
+        "urma_scheduling_request_id": slowest_request_id,
+        "worker_publish_ms": round(worker_publish_ms, 6),
+        "metadata_rpc_ms": round(meta_ms, 6),
+        "write_breakdown_ms": rounded,
+        "write_primary_stage": primary,
+        "evidence": evidence,
+        "dropped_evidence": int(trace.get("dropped_evidence", 0) or 0),
+    }
+
+
+def _aggregate_write(rows: list[dict]) -> dict:
+    latencies = [row["client_ms"] for row in rows]
+    return {
+        "trace_count": len(rows),
+        "failed_count": sum(row["failed"] for row in rows),
+        "latency": {
+            "p50": round(_percentile(latencies, 0.50), 3),
+            "p90": round(_percentile(latencies, 0.90), 3),
+            "p99": round(_percentile(latencies, 0.99), 3),
+            "max": round(max(latencies, default=0.0), 3),
+        },
+        "stage_totals": {
+            name: round(sum(row["write_breakdown_ms"][name] for row in rows), 3)
+            for name in WRITE_STAGE_NAMES
+        },
+        "problem_counts": dict(collections.Counter(row["write_primary_stage"] for row in rows)),
+    }
+
+
+def _is_query_and_get_method(method: str) -> bool:
+    return bool(QUERY_AND_GET_METHOD_RE.search(method))
+
+
 def _max_rpc(rpcs: dict[str, list[dict[str, int]]], method_part: str, field: str) -> int:
     values = []
     for method, entries in rpcs.items():
@@ -244,6 +688,21 @@ def _classify_rpc_deadline_detail(status: int, evidence: list[str]) -> dict[str,
     """Classify an observed RPC deadline while keeping its unobserved interval explicit."""
 
     joined = "\n".join(evidence)
+    receive_buffer_failure = re.search(r"Receive buffer preparation failed", joined, re.I)
+    arena_oom = re.search(r"Out of memory|no space in arena|fresh_extent_unavailable", joined, re.I)
+    if status == 1004 and receive_buffer_failure and arena_oom:
+        return {
+            "error_family": "Client UB接收缓冲分配失败",
+            "error_subcategory": "Client arena fresh extent不足",
+            "error_chain_category": "Client接收缓冲分配失败→1004",
+            "error_failure_point": "Client为 UB 接收准备内存时 arena 分配失败",
+            "error_root_cause_boundary": (
+                "日志已闭合到 Client arena fresh extent 不足；"
+                "这不是 URMA completion 超时，也不能由此推断已完成 WR 变慢"
+            ),
+            "error_recovery_action": "TransportGet终止数据读取并上浮1004",
+            "error_pending_wrs": None,
+        }
     if not status or not re.search(
         r"RPC timed out|RPC deadline exceeded|cntl_error_code\s*[=:]\s*1008", joined, re.I
     ):
@@ -264,8 +723,8 @@ def _classify_rpc_deadline_detail(status: int, evidence: list[str]) -> dict[str,
             re.I,
         )
     )
-    query_timeout = any("WorkerOCService.QueryAndGet" in method for method in failed_methods) or bool(
-        re.search(r"WorkerOCService\.QueryAndGet[^\n]*RPC deadline exceeded", joined, re.I)
+    query_timeout = any(_is_query_and_get_method(method) for method in failed_methods) or bool(
+        re.search(r"(?:Master|Worker)OCService\.QueryAndGet[^\n]*RPC deadline exceeded", joined, re.I)
     )
     # Method-specific failure evidence wins over the mere presence of another
     # successful RPC in the same Trace. QueryAndGet may succeed before a later
@@ -283,12 +742,12 @@ def _classify_rpc_deadline_detail(status: int, evidence: list[str]) -> dict[str,
         chain = f"QueryMeta RPC超时→TransportGet失败→{status}"
         failure_point = "WorkerOCService.QueryAndGet未在deadline内返回"
     elif re.search(r"(?:WorkerWorkerOCService\.)?GetObjectRemote", joined, re.I) and not re.search(
-        r"WorkerOCService\.QueryAndGet", joined, re.I
+        r"(?:Master|Worker)OCService\.QueryAndGet", joined, re.I
     ):
         subcategory = "Data RPC deadline"
         chain = f"Data RPC超时→TransportGet失败→{status}"
         failure_point = "GetObjectRemote未在deadline内返回"
-    elif re.search(r"WorkerOCService\.QueryAndGet", joined, re.I):
+    elif QUERY_AND_GET_METHOD_RE.search(joined):
         subcategory = "QueryMeta RPC deadline"
         chain = f"QueryMeta RPC超时→TransportGet失败→{status}"
         failure_point = "WorkerOCService.QueryAndGet未在deadline内返回"
@@ -823,10 +1282,11 @@ def _extract_trace(trace_id: str, trace: dict) -> dict:
     worker_process_us = summary.get("worker.process.get", 0)
     if not worker_process_us:
         worker_process_us = round(_metric_max(trace.get("breakdown_ms", {}).get("worker.process.get")) * 1000)
-    worker_budget_us = worker_process_us or direct_read_us or worker_us
+    worker_budget_us = max(worker_process_us, worker_us, direct_read_us)
+    client_query_and_get_us = summary.get("client.rpc.direct_query_and_get", 0)
     query_meta_us = (
-        summary.get("worker.rpc.query_meta", 0)
-        or summary.get("client.rpc.direct_query_and_get", 0)
+        client_query_and_get_us
+        or summary.get("worker.rpc.query_meta", 0)
         or _max_rpc(rpcs, "QueryMeta", "e2e")
     )
     if not query_meta_us:
@@ -940,6 +1400,7 @@ def _extract_trace(trace_id: str, trace: dict) -> dict:
         "RPC网络": round(rpc_network_ms, 6),
         "RPC排队": round(rpc_queue_ms, 6),
         "QueryMeta": round(query_ms, 6),
+        "URMA超时等待": 0.0,
         "URMA": round(urma_attribution_ms, 6),
         "远端供数处理": round(remote_non_urma_ms, 6),
         "数据访问父窗口/未细分": round(direct_worker_other_ms, 6),
@@ -955,6 +1416,8 @@ def _extract_trace(trace_id: str, trace: dict) -> dict:
         error_family = error_detail.get("error_family")
     primary_problem = error_family if failed and error_family else primary_stage
     if error_family == "RPC截止超时":
+        primary_problem = primary_stage
+    if error_family == "Client UB接收缓冲分配失败":
         primary_problem = primary_stage
     access_location, access_location_evidence = _access_location(transport)
     failure_reason = error_detail.get("error_subcategory") or (
@@ -1030,6 +1493,7 @@ def _extract_trace(trace_id: str, trace: dict) -> dict:
         ),
         "data_rpc_observed": data_rpc_observed,
         "query_meta_ms": round(query_meta_us / 1000.0, 6),
+        "client_query_and_get_ms": round(client_query_and_get_us / 1000.0, 6),
         "urma_ms": round(urma_ms, 6),
         "urma_observed": urma_observed,
         "urma_timeout_observed": urma_timeout_observed,
@@ -1109,6 +1573,24 @@ def _non_transport_analysis(row: dict, topology: dict[str, object]) -> dict | No
         "rpc_observed": row["rpc_observed"],
         "unexplained_ms": row["attribution_ms"]["未解释残差"],
     }
+
+    if row.get("error_family") == "Client UB接收缓冲分配失败":
+        return common | {
+            "deep_category": "Client UB接收缓冲分配失败",
+            "confidence": "高",
+            "observed_ms": row["attribution_ms"]["未解释残差"],
+            "conclusion": (
+                f"Client 在 {row['client_ms']:.3f}ms 内为 UB 接收准备内存时，"
+                "arena 报 fresh_extent_unavailable / Out of memory 并上浮1004。"
+                "故障点在 Client 接收缓冲分配，不是已完成 WR 变慢。"
+            ),
+            "evidence_points": [
+                "Receive buffer preparation failed",
+                "fresh_extent_unavailable / Out of memory",
+                "Client状态1004",
+            ],
+            "next_action": "检查 Client arena 按 NUMA 的容量、fresh extent 补充/回收和同时到达的 8MiB 接收缓冲需求。",
+        }
 
     if row["primary_problem"] == "未解释残差":
         rpc_window = (
@@ -1300,12 +1782,14 @@ def _group_urma_logical_writes(requests: list[dict]) -> list[dict]:
     for request in requests:
         chunk_index = int(request.get("write_chunk_index") or 0)
         chunk_count = int(request.get("write_chunk_count") or 0)
+        current_count = int(current[0].get("write_chunk_count") or 0) if current else 0
+        current_indexes = {int(item.get("write_chunk_index") or 0) for item in current}
         starts_group = (
             not current
-            or chunk_index <= 1
             or not chunk_count
-            or int(current[-1].get("write_chunk_count") or 0) != chunk_count
-            or chunk_index != int(current[-1].get("write_chunk_index") or 0) + 1
+            or current_count != chunk_count
+            or chunk_index in current_indexes
+            or len(current) >= chunk_count
         )
         if starts_group and current:
             groups.append(current)
@@ -1318,7 +1802,7 @@ def _group_urma_logical_writes(requests: list[dict]) -> list[dict]:
     for write_index, selected in enumerate(groups, start=1):
         expected = int(selected[0].get("write_chunk_count") or 0)
         indexes = [int(item.get("write_chunk_index") or 0) for item in selected]
-        complete_chunks = expected > 0 and indexes == list(range(1, expected + 1))
+        complete_chunks = expected > 0 and sorted(indexes) == list(range(1, expected + 1))
         posts = [item.get("trace_us", {}).get("post") for item in selected]
         observed = [item.get("trace_us", {}).get("observed") for item in selected]
         complete_clock = complete_chunks and all(value is not None for value in posts + observed)
@@ -1346,6 +1830,246 @@ def _group_urma_logical_writes(requests: list[dict]) -> list[dict]:
     return result
 
 
+def _urma_critical_path(logical_writes: list[dict]) -> tuple[float, str]:
+    candidates = [
+        (item["slowest_wr_ms"], "最慢WR")
+        for item in logical_writes
+    ]
+    critical_ms, basis = max(candidates, key=lambda item: item[0])
+    return critical_ms, basis
+
+
+def _sequential_urma_path(logical_writes: list[dict]) -> tuple[float, str]:
+    durations = [item["slowest_wr_ms"] for item in logical_writes]
+    basis = f"{len(logical_writes)}个串行逻辑Write的最慢WR之和"
+    return sum(durations), basis
+
+
+def _apply_inline_query_urma_attribution(row: dict) -> None:
+    row["inline_query_urma_ms"] = None
+    row["inline_query_urma_basis"] = None
+    row["query_and_get_parent_ms"] = None
+    row["query_and_get_exclusive_ms"] = None
+    row["query_meta_exclusive_ms"] = row["attribution_ms"]["QueryMeta"]
+    inline_candidates = []
+    inline_pattern = re.compile(
+        r"QueryAndGet done,.*?inlineHits:\s*(\d+).*?transport:\s*UB\b.*?total:\s*([\d.]+)ms",
+        re.I,
+    )
+    for item in row.get("evidence_records", []):
+        match = inline_pattern.search(item.get("text", ""))
+        if not match or int(match.group(1)) <= 0:
+            continue
+        worker = item.get("worker")
+        if worker in {None, "", "unknown", "未明确"}:
+            return
+        end = _timestamp_value(_evidence_timestamp(item.get("text", "")))
+        if end is None:
+            return
+        total_ms = float(match.group(2))
+        inline_candidates.append(
+            {
+                "worker": worker,
+                "start": end - dt.timedelta(milliseconds=total_ms),
+                "end": end,
+                "total_ms": total_ms,
+            }
+        )
+    if not inline_candidates or not row.get("client_query_and_get_ms"):
+        return
+
+    requests_by_attempt = [[] for _ in inline_candidates]
+    tolerance = dt.timedelta(milliseconds=1)
+    inline_workers = {attempt["worker"] for attempt in inline_candidates}
+    for request in row.get("urma_requests", []):
+        request_time = _timestamp_value(str(request.get("timestamp") or ""))
+        if request_time is None:
+            if request.get("source_worker") in inline_workers:
+                return
+            continue
+        matches = []
+        for index, attempt in enumerate(inline_candidates):
+            same_worker = request.get("source_worker") == attempt["worker"]
+            inside_window = (
+                attempt["start"] - tolerance <= request_time <= attempt["end"] + tolerance
+            )
+            if same_worker and inside_window:
+                matches.append(index)
+        if len(matches) > 1:
+            return
+        if len(matches) == 1:
+            requests_by_attempt[matches[0]].append(request)
+
+    paths_by_worker = collections.defaultdict(list)
+    for attempt, inline_requests in zip(inline_candidates, requests_by_attempt):
+        if inline_requests:
+            logical_writes = _group_urma_logical_writes(inline_requests)
+            path_ms, basis = _sequential_urma_path(logical_writes)
+            clamped_ms = min(attempt["total_ms"], path_ms)
+            if clamped_ms < path_ms:
+                basis += "·QueryAndGet父窗口clamp"
+            paths_by_worker[attempt["worker"]].append((clamped_ms, basis))
+    if not paths_by_worker:
+        return
+
+    worker_paths = max(paths_by_worker.values(), key=lambda paths: sum(item[0] for item in paths))
+    inline_ms = sum(item[0] for item in worker_paths)
+    basis = (
+        worker_paths[0][1]
+        if len(worker_paths) == 1
+        else f"{len(worker_paths)}次QueryAndGet尝试关键路径之和"
+    )
+    query_ms = row["attribution_ms"]["QueryMeta"]
+    moved_from_query = min(query_ms, inline_ms)
+    current_urma_ms = row["attribution_ms"]["URMA"]
+    added_to_urma = min(moved_from_query, max(0.0, inline_ms - current_urma_ms))
+    row["attribution_ms"]["QueryMeta"] = round(query_ms - moved_from_query, 6)
+    row["attribution_ms"]["URMA"] = round(current_urma_ms + added_to_urma, 6)
+    row["attribution_ms"]["数据访问父窗口/未细分"] = round(
+        row["attribution_ms"]["数据访问父窗口/未细分"]
+        + moved_from_query
+        - added_to_urma,
+        6,
+    )
+    row["inline_query_urma_ms"] = round(inline_ms, 6)
+    row["inline_query_urma_basis"] = basis
+    row["query_meta_exclusive_ms"] = row["attribution_ms"]["QueryMeta"]
+    row["query_and_get_parent_ms"] = row["client_query_and_get_ms"]
+    row["query_and_get_exclusive_ms"] = row["query_meta_exclusive_ms"]
+    row["primary_stage"] = max(STAGE_NAMES, key=lambda stage: row["attribution_ms"][stage])
+    if not row.get("error_family") or row.get("error_family") == "RPC截止超时":
+        row["primary_problem"] = row["primary_stage"]
+
+
+def _apply_query_rpc_attribution(row: dict) -> None:
+    row["query_rpc_breakdown_observed"] = False
+    row["query_rpc_network_ms"] = None
+    row["query_rpc_queue_ms"] = None
+    entries = []
+    for text in row.get("evidence", []):
+        method, fields = _rpc_fields(text)
+        if method and _is_query_and_get_method(method):
+            entries.append(fields)
+    if len(entries) != 1:
+        return
+    fields = entries[0]
+    if fields.get("cntl_failed") or fields.get("cntl_error_code"):
+        return
+    if "network_residual" not in fields and "server_req_queue" not in fields:
+        return
+
+    query_ms = row["attribution_ms"]["QueryMeta"]
+    network_ms = fields.get("network_residual", 0) / 1000.0
+    queue_ms = fields.get("server_req_queue", 0) / 1000.0
+    moved_network_ms = min(query_ms, network_ms)
+    remaining_ms = query_ms - moved_network_ms
+    moved_queue_ms = min(remaining_ms, queue_ms)
+    remaining_ms -= moved_queue_ms
+    row["attribution_ms"]["RPC网络"] = round(
+        row["attribution_ms"]["RPC网络"] + moved_network_ms, 6
+    )
+    row["attribution_ms"]["RPC排队"] = round(
+        row["attribution_ms"]["RPC排队"] + moved_queue_ms, 6
+    )
+    row["attribution_ms"]["QueryMeta"] = round(remaining_ms, 6)
+    row["query_meta_exclusive_ms"] = row["attribution_ms"]["QueryMeta"]
+    row["query_rpc_breakdown_observed"] = True
+    row["query_rpc_network_ms"] = round(moved_network_ms, 6)
+    row["query_rpc_queue_ms"] = round(moved_queue_ms, 6)
+    row["primary_stage"] = max(STAGE_NAMES, key=lambda stage: row["attribution_ms"][stage])
+    if not row.get("error_family") or row.get("error_family") == "RPC截止超时":
+        row["primary_problem"] = row["primary_stage"]
+
+
+def _apply_query_urma_timeout_attribution(row: dict) -> None:
+    row["query_urma_timeout_ms"] = None
+    row["query_urma_timeout_basis"] = None
+    row["query_urma_timeout_parent_ms"] = None
+    if not row.get("urma_timeout_observed"):
+        return
+
+    query_attempts = []
+    query_pattern = re.compile(
+        r"QueryAndGet done,.*?localRead:\s*([\d.]+)ms.*?total:\s*([\d.]+)ms",
+        re.I,
+    )
+    timeout_pattern = re.compile(
+        r"\[URMA(?:[_ -]WAIT[_ -]TIMEOUT)\].*?elapsedMs\s*[=:]\s*([\d.]+)",
+        re.I,
+    )
+    request_pattern = re.compile(r"urma_request_id[:_]?(\d+)", re.I)
+    for item in row.get("evidence_records", []):
+        text = item.get("text", "")
+        match = query_pattern.search(text)
+        end = _timestamp_value(_evidence_timestamp(text))
+        worker = item.get("worker")
+        if not match or end is None or worker in {None, "", "unknown", "未明确"}:
+            continue
+        total_ms = float(match.group(2))
+        query_attempts.append(
+            {
+                "worker": worker,
+                "start": end - dt.timedelta(milliseconds=total_ms),
+                "end": end,
+                "total_ms": total_ms,
+            }
+        )
+
+    timeout_events = {}
+    for item in row.get("evidence_records", []):
+        text = item.get("text", "")
+        match = timeout_pattern.search(text)
+        timestamp = _timestamp_value(_evidence_timestamp(text))
+        worker = item.get("worker")
+        if not match or timestamp is None or worker in {None, "", "unknown", "未明确"}:
+            continue
+        request_match = request_pattern.search(text)
+        identity = (
+            worker,
+            request_match.group(1) if request_match else timestamp.isoformat(),
+        )
+        event = {
+            "worker": worker,
+            "timestamp": timestamp,
+            "elapsed_ms": float(match.group(1)),
+        }
+        current = timeout_events.get(identity)
+        if current is None or timestamp < current["timestamp"]:
+            timeout_events[identity] = event
+
+    tolerance = dt.timedelta(milliseconds=1)
+    nested_groups = []
+    for attempt in query_attempts:
+        nested = []
+        for event in timeout_events.values():
+            same_worker = event["worker"] == attempt["worker"]
+            inside_window = (
+                attempt["start"] - tolerance <= event["timestamp"] <= attempt["end"] + tolerance
+            )
+            if same_worker and inside_window:
+                nested.append(event)
+        if nested:
+            nested_groups.append((attempt, nested))
+    if len(nested_groups) != 1 or len(nested_groups[0][1]) != 1:
+        return
+
+    attempt, nested = nested_groups[0]
+    timeout = nested[0]
+    query_ms = row["attribution_ms"]["QueryMeta"]
+    moved_ms = min(query_ms, timeout["elapsed_ms"])
+    if moved_ms <= 0:
+        return
+    row["attribution_ms"]["QueryMeta"] = round(query_ms - moved_ms, 6)
+    row["attribution_ms"]["URMA超时等待"] = round(moved_ms, 6)
+    row["query_meta_exclusive_ms"] = row["attribution_ms"]["QueryMeta"]
+    row["query_urma_timeout_ms"] = round(moved_ms, 6)
+    row["query_urma_timeout_basis"] = "同Worker QueryAndGet父窗口内唯一URMA_WAIT_TIMEOUT"
+    row["query_urma_timeout_parent_ms"] = round(attempt["total_ms"], 6)
+    row["primary_stage"] = max(STAGE_NAMES, key=lambda stage: row["attribution_ms"][stage])
+    if row["primary_stage"] == "URMA超时等待":
+        row["primary_problem"] = "URMA超时"
+
+
 def _max_evidence_ms(evidence: list[str], pattern: str, *, divisor: float = 1.0) -> float | None:
     values = []
     for text in evidence:
@@ -1358,10 +2082,16 @@ def _max_evidence_ms(evidence: list[str], pattern: str, *, divisor: float = 1.0)
 def _query_meta_detail(row: dict) -> dict | None:
     """Return one exclusive QueryAndGet diagnosis plus orthogonal TryGet evidence."""
 
+    worker_query_done_observed = any(
+        re.search(r"QueryAndGet done,", text, re.I) for text in row.get("evidence", [])
+    )
+    local_read_ms = _max_evidence_ms(
+        row.get("evidence", []), r"QueryAndGet done,.*?\blocalRead:\s*([\d.]+)ms"
+    )
     entries = []
     for text in row.get("evidence", []):
         method, fields = _rpc_fields(text)
-        if method and "WorkerOCService.QueryAndGet" in method:
+        if method and _is_query_and_get_method(method):
             entries.append(fields)
     if not entries and not row.get("query_meta_ms"):
         return None
@@ -1378,17 +2108,26 @@ def _query_meta_detail(row: dict) -> dict | None:
     retry_observed = len(entries) > 1 or (
         rpc_e2e_ms and query_total_ms and rpc_e2e_ms < query_total_ms * 0.5
     )
-    try_get_urma_observed = bool(row.get("urma_requests")) and any(
+    legacy_try_get_urma_observed = bool(row.get("urma_requests")) and any(
         re.search(r"Processing pull object.*\bsrc=:-1", text, re.I)
         for text in row.get("evidence", [])
     )
-    slow_urma = try_get_urma_observed and any(
-        float(request.get("total_ms", 0) or 0) > SLOW_WR_THRESHOLD_MS
-        for request in row.get("urma_requests", [])
+    try_get_urma_observed = (
+        row.get("inline_query_urma_ms") is not None or legacy_try_get_urma_observed
     )
+    if row.get("inline_query_urma_ms") is not None:
+        slow_urma = row["inline_query_urma_ms"] > SLOW_WR_THRESHOLD_MS
+    else:
+        slow_urma = legacy_try_get_urma_observed and any(
+            float(request.get("total_ms", 0) or 0) > SLOW_WR_THRESHOLD_MS
+            for request in row.get("urma_requests", [])
+        )
     urma_max_ms = max(
         (float(request.get("total_ms", 0) or 0) for request in row.get("urma_requests", [])),
         default=None,
+    )
+    local_read_dominates = local_read_ms is not None and local_read_ms >= max(
+        1.0, query_total_ms * 0.5
     )
 
     if row.get("failure_reason") == "Data URMA建链截止超时" and not query_rpc_failed:
@@ -1407,6 +2146,18 @@ def _query_meta_detail(row: dict) -> dict | None:
     elif slow_urma:
         category = "QueryAndGet TryGet·URMA慢"
         boundary = "同Trace本地TryGet产生慢WR，严格按URMA_ELAPSED_TOTAL >1.5ms"
+    elif worker_query_done_observed and not try_get_urma_observed and local_read_dominates:
+        category = "QueryAndGet localRead慢·URMA未观测"
+        boundary = (
+            "Worker QueryAndGet localRead覆盖父窗口主体，但同Trace未保留URMA完成明细；"
+            "只能定位到localRead/EncodeLocalHit父窗口，不能确认慢WR"
+        )
+    elif not entries and not worker_query_done_observed:
+        category = "QueryAndGet父窗口·服务端未观测"
+        boundary = (
+            "仅观测到Client QueryAndGet父窗口，缺少RPC trailer和Worker QueryAndGet done；"
+            "不能区分通信残差、Worker排队/处理或inline URMA"
+        )
     elif retry_observed:
         category = "QueryAndGet成功·重试/多次尝试累计"
         boundary = "已保留的成功RPC不足以覆盖QueryAndGet总窗口；差值归入前序尝试/退避，不归网络"
@@ -1426,6 +2177,9 @@ def _query_meta_detail(row: dict) -> dict | None:
     return {
         "category": category,
         "query_total_ms": round(query_total_ms, 6),
+        "query_exclusive_ms": row.get("query_and_get_exclusive_ms"),
+        "inline_urma_ms": row.get("inline_query_urma_ms"),
+        "inline_urma_basis": row.get("inline_query_urma_basis"),
         "rpc_e2e_ms": round(rpc_e2e_ms, 6),
         "rpc_network_residual_ms": round(rpc_network_ms, 6),
         "rpc_server_ms": round(rpc_server_ms, 6),
@@ -1435,6 +2189,8 @@ def _query_meta_detail(row: dict) -> dict | None:
         "rpc_attempt_count": len(entries),
         "try_get_urma_observed": try_get_urma_observed,
         "slow_urma": slow_urma,
+        "worker_query_done_observed": worker_query_done_observed,
+        "local_read_ms": round(local_read_ms, 6) if local_read_ms is not None else None,
         "urma_max_ms": round(urma_max_ms, 6) if urma_max_ms is not None else None,
         "boundary": boundary,
     }
@@ -1480,11 +2236,50 @@ def _refine_data_access_scope(row: dict) -> None:
             else "已观测 URMA_WAIT_TIMEOUT；完成态耗时未观测"
         )
         return
+    inline_urma_ms = row.get("inline_query_urma_ms")
+    if inline_urma_ms is not None:
+        parent_ms = row.get("query_and_get_parent_ms") or 0.0
+        exclusive_ms = row.get("query_and_get_exclusive_ms") or 0.0
+        if inline_urma_ms > exclusive_ms:
+            row["data_access_scope"] = "QueryAndGet inline URMA"
+            row["data_access_evidence"] = (
+                f"同 Worker/同 attempt 唯一匹配；QueryAndGet父窗口 {parent_ms:.3f}ms，"
+                f"inline URMA关键路径 {inline_urma_ms:.3f}ms，独占 {exclusive_ms:.3f}ms；"
+                "单次逻辑Write的WR分片取最慢URMA Elapsed Time，不求和"
+            )
+            return
+        query_rpc_network_ms = row.get("query_rpc_network_ms") or 0.0
+        query_server_exclusive_ms = row.get("query_meta_exclusive_ms") or 0.0
+        if query_rpc_network_ms >= max(1.0, query_server_exclusive_ms):
+            row["data_access_scope"] = "QueryAndGet RPC通信残差慢"
+            row["data_access_evidence"] = (
+                f"QueryAndGet父窗口 {parent_ms:.3f}ms，inline URMA {inline_urma_ms:.3f}ms，"
+                f"RPC通信残差 {query_rpc_network_ms:.3f}ms，排队 "
+                f"{(row.get('query_rpc_queue_ms') or 0.0):.3f}ms；"
+                "通信残差包含网络与RPC框架，不能直接定责物理网络"
+            )
+            return
+        row["data_access_scope"] = "QueryAndGet独占窗口"
+        row["data_access_evidence"] = (
+            f"QueryAndGet父窗口 {parent_ms:.3f}ms，已剥离 inline URMA {inline_urma_ms:.3f}ms，"
+            f"剩余独占 {exclusive_ms:.3f}ms；独占窗口大于 inline URMA"
+        )
+        return
     if row.get("failure_reason") in {
         "Data RPC deadline",
         "Data URMA建链截止超时",
         "QueryMeta RPC deadline",
     }:
+        return
+
+    query_rpc_network_ms = row.get("query_rpc_network_ms") or 0.0
+    if query_rpc_network_ms >= max(1.0, row.get("query_meta_exclusive_ms") or 0.0):
+        row["data_access_scope"] = "QueryAndGet RPC通信残差慢"
+        row["data_access_evidence"] = (
+            f"RPC通信残差 {query_rpc_network_ms:.3f}ms，排队 "
+            f"{(row.get('query_rpc_queue_ms') or 0.0):.3f}ms；"
+            "已从QueryAndGet父窗口互斥剥离，但仍包含网络与RPC框架，不能直接定责物理网络"
+        )
         return
 
     queue_ms = row.get("client_rpc_queue_ms") or 0.0
@@ -1544,7 +2339,7 @@ def _refine_data_access_scope(row: dict) -> None:
         if ratio >= 70.0:
             row["data_access_scope"] = "URMA慢完成"
             row["data_access_evidence"] = (
-                f"逻辑Write墙钟 {logical_write_ms:.3f}ms，占数据窗口 {ratio:.1f}%；"
+                f"最慢URMA Elapsed Time {logical_write_ms:.3f}ms，占数据窗口 {ratio:.1f}%；"
                 + (
                     f"Client data_transfer {client_transfer_ms:.3f}ms，"
                     if client_transfer_ms is not None
@@ -1612,12 +2407,7 @@ def build_trace_rows(
         slowest = max(requests, key=lambda item: item["total_ms"])
         logical_writes = row["urma_logical_writes"]
         complete_writes = [item for item in logical_writes if item["complete"]]
-        if complete_writes:
-            critical_path_ms = max(item["wall_clock_ms"] for item in complete_writes)
-            latency_basis = "逻辑Write墙钟跨度"
-        else:
-            critical_path_ms = slowest["total_ms"]
-            latency_basis = "最慢WR回退值"
+        critical_path_ms, latency_basis = _urma_critical_path(logical_writes)
         row["urma_critical_path_ms"] = round(critical_path_ms, 6)
         old_urma = row["attribution_ms"]["URMA"]
         extra_urma = max(0.0, critical_path_ms - old_urma)
@@ -1683,9 +2473,13 @@ def build_trace_rows(
             ),
         }
     for row in rows:
+        _apply_inline_query_urma_attribution(row)
+        _apply_query_rpc_attribution(row)
+        _apply_query_urma_timeout_attribution(row)
         row["query_meta_detail"] = _query_meta_detail(row)
         _refine_data_access_scope(row)
         row["non_transport_analysis"] = _non_transport_analysis(row, topology)
+        _apply_focus_breakdown(row)
     return sorted(rows, key=lambda row: (row["timestamp"], row["trace_id"]))
 
 
@@ -1762,6 +2556,9 @@ def _aggregate_urma(rows: list[dict]) -> dict:
         "logical_write_wall_ms": _metric_summary(
             [write["wall_clock_ms"] for write in complete_logical_writes]
         ),
+        "logical_write_slowest_wr_ms": _metric_summary(
+            [write["slowest_wr_ms"] for write in logical_writes]
+        ),
         "slow_threshold_ms": SLOW_WR_THRESHOLD_MS,
         "slow_request_count": sum(item["is_slow"] for item in requests),
         "request_total_ms": _metric_summary(total_values),
@@ -1834,9 +2631,14 @@ def _build_latency_segments(rows: list[dict]) -> list[dict]:
             (row for row in rows if matches(float(row["client_ms"]))),
             key=lambda row: (row.get("timestamp") or "", row["trace_id"]),
         )
-        counts = collections.Counter(row["primary_problem"] for row in selected)
+        counts = collections.Counter(
+            row.get("focus_primary_problem", row["primary_problem"]) for row in selected
+        )
+        problem_order = list(
+            dict.fromkeys((*FOCUS_STAGE_NAMES, "URMA超时", *PROBLEM_NAMES, *sorted(counts)))
+        )
         dominant_problem = (
-            max(PROBLEM_NAMES, key=lambda problem: (counts[problem], -PROBLEM_NAMES.index(problem)))
+            max(problem_order, key=lambda problem: (counts[problem], -problem_order.index(problem)))
             if selected
             else "无Trace"
         )
@@ -1852,7 +2654,9 @@ def _build_latency_segments(rows: list[dict]) -> list[dict]:
                 "client_p50_ms": round(_percentile(latencies, 0.50), 3),
                 "client_p90_ms": round(_percentile(latencies, 0.90), 3),
                 "dominant_problem": dominant_problem,
-                "problem_counts": {problem: counts[problem] for problem in PROBLEM_NAMES},
+                "problem_counts": {
+                    problem: counts[problem] for problem in problem_order if counts[problem]
+                },
                 "trace_ids": [row["trace_id"] for row in selected],
             }
         )
@@ -1875,7 +2679,7 @@ def _aggregate_query_meta(rows: list[dict]) -> dict:
         initiator = row.get("client_observer") or "未明确"
         if initiator == "未明确":
             for record in row.get("evidence_records", []):
-                if "WorkerOCService.QueryAndGet" in record.get("text", ""):
+                if QUERY_AND_GET_METHOD_RE.search(record.get("text", "")):
                     initiator = record.get("worker") or "未明确"
                     break
         initiator_groups[initiator].append(row)
@@ -1920,7 +2724,7 @@ def _aggregate_query_meta(rows: list[dict]) -> dict:
         initiator = row.get("client_observer") or "未明确"
         if initiator == "未明确":
             for record in row.get("evidence_records", []):
-                if "WorkerOCService.QueryAndGet" in record.get("text", ""):
+                if QUERY_AND_GET_METHOD_RE.search(record.get("text", "")):
                     initiator = record.get("worker") or "未明确"
                     break
         if initiator != "未明确":
@@ -1928,7 +2732,7 @@ def _aggregate_query_meta(rows: list[dict]) -> dict:
         query_entries = []
         for text in row.get("evidence", []):
             method, fields = _rpc_fields(text)
-            if method and "WorkerOCService.QueryAndGet" in method:
+            if method and _is_query_and_get_method(method):
                 query_entries.append(fields)
             target = re.search(
                 r"(?:meta owner|targetAddress|target address|peer)\s*[:=]\s*([^,\s]+)",
@@ -1938,7 +2742,7 @@ def _aggregate_query_meta(rows: list[dict]) -> dict:
             if target:
                 timeout_targets.add(target.group(1))
         if any(
-            "WorkerOCService.QueryAndGet" in text and re.search(r"\bresp_attachment_bytes=0\b", text)
+            QUERY_AND_GET_METHOD_RE.search(text) and re.search(r"\bresp_attachment_bytes=0\b", text)
             for text in row.get("evidence", [])
         ):
             empty_response_count += 1
@@ -1972,7 +2776,7 @@ def _aggregate_query_meta(rows: list[dict]) -> dict:
         "dominant_second": {"second": dominant_second, "trace_count": dominant_count},
         "confirmed_flow": (
             "Client ObjectReadFlow::Resolve → ObjectMetadataClient::QueryAndGet/QueryWithRetry → "
-            "WorkerRpcClient::InvokeQueryAndGet → Meta Owner WorkerOCService.QueryAndGet；"
+            "WorkerRpcClient::InvokeQueryAndGet → metadata-affine WorkerOCService.QueryAndGet；"
             "超时发生在该RPC返回前，尚未进入后续独立Data Worker GetObjectRemote阶段。"
         ),
         "likely_common_mechanism": (
@@ -2039,6 +2843,15 @@ def aggregate(rows: list[dict]) -> dict:
             "failed_ms": round(failed_ms, 3),
             "total_ms": round(success_ms + failed_ms, 3),
         }
+    focus_stage_totals = {}
+    for stage in FOCUS_STAGE_NAMES:
+        success_ms = sum(row["focus_breakdown_ms"][stage] for row in rows if not row["failed"])
+        failed_ms = sum(row["focus_breakdown_ms"][stage] for row in rows if row["failed"])
+        focus_stage_totals[stage] = {
+            "success_ms": round(success_ms, 3),
+            "failed_ms": round(failed_ms, 3),
+            "total_ms": round(success_ms + failed_ms, 3),
+        }
     problem_summary = {}
     guidance_actions = {
         "RPC网络": "Worker 处理相对较快时，优先排查 bRPC 网络、调度、响应通知和 framework residual。",
@@ -2077,6 +2890,43 @@ def aggregate(rows: list[dict]) -> dict:
             "client_p90_ms": round(_percentile(client_values, 0.90), 3),
             "metric_name": metric_name,
             "action": guidance_actions[problem],
+        }
+    focus_problem_summary = {}
+    focus_problem_names = list(FOCUS_STAGE_NAMES) + sorted(
+        {
+            row["focus_primary_problem"]
+            for row in rows
+            if row["focus_primary_problem"] not in FOCUS_STAGE_NAMES
+        }
+    )
+    for problem in focus_problem_names:
+        selected = [row for row in rows if row["focus_primary_problem"] == problem]
+        if problem == "URMA超时":
+            stage_values = [
+                row["urma_timeout_max_ms"]
+                for row in selected
+                if row["urma_timeout_max_ms"] is not None
+            ]
+            metric_name = "URMA timeout elapsedMs"
+            action = "该类是错误覆盖层；用 timeout elapsedMs 和上浮链定位，不用互斥主阶段代替超时等待。"
+        else:
+            stage_values = [
+                row["focus_breakdown_ms"][row["focus_primary_stage"]] for row in selected
+            ]
+            metric_name = "主阶段耗时"
+            action = "按该互斥阶段的逐 Trace 明细和原始日志继续定位。"
+        client_values = [row["client_ms"] for row in selected]
+        focus_problem_summary[problem] = {
+            "trace_count": len(selected),
+            "success_count": sum(not row["failed"] for row in selected),
+            "failed_count": sum(row["failed"] for row in selected),
+            "stage_p50_ms": round(_percentile(stage_values, 0.50), 3),
+            "stage_p90_ms": round(_percentile(stage_values, 0.90), 3),
+            "stage_max_ms": round(max(stage_values, default=0), 3),
+            "client_p50_ms": round(_percentile(client_values, 0.50), 3),
+            "client_p90_ms": round(_percentile(client_values, 0.90), 3),
+            "metric_name": metric_name,
+            "action": action,
         }
 
     direct_groups: dict[str, list[dict]] = collections.defaultdict(list)
@@ -2142,7 +2992,8 @@ def aggregate(rows: list[dict]) -> dict:
         failures = [row for row in selected if row["failed"]]
         time_findings.append(
             f"超时最集中的分钟为 {minute}：{len(failures)} 条；"
-            f"主问题分布为 {dict(collections.Counter(row['primary_problem'] for row in failures)) or '无超时'}。"
+            f"主问题分布为 "
+            f"{dict(collections.Counter(row['focus_primary_problem'] for row in failures)) or '无超时'}。"
         )
     if latency_hot:
         minute, selected = latency_hot
@@ -2160,6 +3011,8 @@ def aggregate(rows: list[dict]) -> dict:
         "categories": categories,
         "stage_totals": stage_totals,
         "problem_summary": problem_summary,
+        "focus_stage_totals": focus_stage_totals,
+        "focus_problem_summary": focus_problem_summary,
         "error_summary": dict(collections.Counter(row["error_family"] for row in rows if row["error_family"])),
         "error_detail_summary": {
             "subcategories": dict(
@@ -2210,6 +3063,7 @@ table{width:100%;table-layout:fixed}
 #non-transport-table th:nth-child(1){width:7%}#non-transport-table th:nth-child(2){width:6%}#non-transport-table th:nth-child(3){width:11%}#non-transport-table th:nth-child(4){width:15%}#non-transport-table th:nth-child(5){width:10%}#non-transport-table th:nth-child(6),#non-transport-table th:nth-child(7),#non-transport-table th:nth-child(8),#non-transport-table th:nth-child(9),#non-transport-table th:nth-child(10){width:6%}#non-transport-table th:nth-child(11){width:21%}
 #worker-correlation-table th:nth-child(1){width:10%}#worker-correlation-table th:nth-child(2){width:7%}#worker-correlation-table th:nth-child(3){width:13%}#worker-correlation-table th:nth-child(4){width:6%}#worker-correlation-table th:nth-child(5){width:14%}#worker-correlation-table th:nth-child(6){width:7%}#worker-correlation-table th:nth-child(7){width:6%}#worker-correlation-table th:nth-child(8),#worker-correlation-table th:nth-child(9){width:7%}#worker-correlation-table th:nth-child(10){width:23%}
 #direct-worker-table th:first-child,#urma-source-table th:first-child{width:52%}#direct-worker-table th:not(:first-child),#urma-source-table th:not(:first-child){width:12%}
+#write-trace-table th:nth-child(1){width:11%}#write-trace-table th:nth-child(2){width:12%}#write-trace-table th:nth-child(3){width:8%}#write-trace-table th:nth-child(4){width:16%}#write-trace-table th:nth-child(5),#write-trace-table th:nth-child(6),#write-trace-table th:nth-child(7){width:9%}#write-trace-table th:nth-child(8){width:15%}#write-trace-table th:nth-child(9){width:11%}
 .time-segment-controls{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
 .time-segment-button{height:34px;border:1px solid #cfd8e6;border-radius:999px;background:#fff;padding:0 14px;cursor:pointer;color:var(--ink)}
 .time-segment-button:hover{border-color:var(--blue);color:var(--blue)}
@@ -2222,14 +3076,48 @@ table{width:100%;table-layout:fixed}
   #non-transport-table th:nth-child(4),#non-transport-table td:nth-child(4),#non-transport-table th:nth-child(5),#non-transport-table td:nth-child(5),#non-transport-table th:nth-child(7),#non-transport-table td:nth-child(7),#non-transport-table th:nth-child(8),#non-transport-table td:nth-child(8),#non-transport-table th:nth-child(10),#non-transport-table td:nth-child(10){display:none}
   #worker-correlation-table th:nth-child(2),#worker-correlation-table td:nth-child(2),#worker-correlation-table th:nth-child(8),#worker-correlation-table td:nth-child(8),#worker-correlation-table th:nth-child(9),#worker-correlation-table td:nth-child(9){display:none}
   #urma-trace-table th:nth-child(3),#urma-trace-table td:nth-child(3),#urma-trace-table th:nth-child(6),#urma-trace-table td:nth-child(6),#urma-trace-table th:nth-child(7),#urma-trace-table td:nth-child(7),#urma-trace-table th:nth-child(8),#urma-trace-table td:nth-child(8),#urma-trace-table th:nth-child(9),#urma-trace-table td:nth-child(9){display:none}
+  #write-trace-table th:nth-child(1),#write-trace-table td:nth-child(1),#write-trace-table th:nth-child(5),#write-trace-table td:nth-child(5),#write-trace-table th:nth-child(7),#write-trace-table td:nth-child(7){display:none}
   .urma-request-table th:nth-child(n+6):nth-child(-n+12),.urma-request-table td:nth-child(n+6):nth-child(-n+12),.urma-request-table th:nth-child(14),.urma-request-table td:nth-child(14),.urma-request-table th:nth-child(15),.urma-request-table td:nth-child(15),.urma-request-table th:nth-child(16),.urma-request-table td:nth-child(16),.urma-request-table th:nth-child(17),.urma-request-table td:nth-child(17){display:none}
 }
 @media(max-width:650px){
   .correlation-summary{grid-template-columns:repeat(2,1fr)}
   .panel table{font-size:10px}.panel th,.panel td{padding:6px 3px}
-  #trace-table th:nth-child(1),#trace-table td:nth-child(1),#trace-table th:nth-child(5),#trace-table td:nth-child(5){display:none}
+  #trace-table th:nth-child(1),#trace-table td:nth-child(1),#trace-table th:nth-child(4),#trace-table td:nth-child(4),#trace-table th:nth-child(5),#trace-table td:nth-child(5),#trace-table th:nth-child(16),#trace-table td:nth-child(16){display:none}
   #worker-correlation-table th:nth-child(3),#worker-correlation-table td:nth-child(3),#worker-correlation-table th:nth-child(7),#worker-correlation-table td:nth-child(7){display:none}
+  #write-trace-table th:nth-child(9),#write-trace-table td:nth-child(9){display:none}
   #urma-time-table th:nth-child(2),#urma-time-table td:nth-child(2),#urma-time-table th:nth-child(3),#urma-time-table td:nth-child(3),#urma-time-table th:nth-child(6),#urma-time-table td:nth-child(6),#urma-time-table th:nth-child(7),#urma-time-table td:nth-child(7){display:none}
+  #urma-edge-table th:nth-child(2),#urma-edge-table td:nth-child(2),#urma-edge-table th:nth-child(3),#urma-edge-table td:nth-child(3),#urma-edge-table th:nth-child(6),#urma-edge-table td:nth-child(6),#urma-edge-table th:nth-child(7),#urma-edge-table td:nth-child(7){display:none}
+  #direct-worker-table th:nth-child(3),#direct-worker-table td:nth-child(3),#direct-worker-table th:nth-child(4),#direct-worker-table td:nth-child(4),#direct-worker-table th:nth-child(5),#direct-worker-table td:nth-child(5){display:none}
+  #urma-source-table th:nth-child(3),#urma-source-table td:nth-child(3){display:none}
+}
+'''
+
+WRITE_SECTION = r'''
+<section class="panel" id="write-analysis">
+<h2>9. 写入瓶颈分析</h2>
+<div class="notice"><b>独立口径：</b>写入不复用读取 QueryAndGet/Get 阶段。以 Client Set 总窗口为边界，分别展示 Create RPC、MemoryCopy、Client→Worker URMA通信、URMA调度/线程开销、Publish RPC、Worker Publish/元数据、其他调度、RPC网络和RPC框架。RPC timing 不闭合时不强拆 handler/网络/框架。</div>
+<div id="write-summary" class="finding-grid"></div>
+<h3 class="chart-title">图 9-1 写入 TopN 互斥阶段</h3>
+<div id="write-timeline-chart" class="chart" style="height:430px"></div>
+<h3>表 9-1 写入 Trace</h3>
+<div class="worker-table-wrap"><table id="write-trace-table"><thead><tr><th>时间</th><th>Trace</th><th>总时延</th><th>主问题</th><th>Create RPC</th><th>写入数据</th><th>URMA通信/调度</th><th>Publish RPC</th><th>Worker Publish/元数据</th><th>RPC网络/框架</th></tr></thead><tbody></tbody></table></div>
+<div id="write-trace-pager" class="pager"></div>
+</section>
+'''
+
+WRITE_SCRIPT = r'''
+const WRITE_STAGE_COLORS={'Create RPC其他':'#2563eb','写入MemoryCopy':'#0ea5a4','写入URMA通信':'#f59e0b','写入URMA调度/线程开销':'#c026d3','Publish RPC其他':'#7c3aed','Worker Publish/元数据':'#16a34a','其他调度/线程开销':'#9333ea','RPC网络相关':'#dc2626','RPC框架':'#64748b','未解释残差':'#9aa4b2'};
+let writePage=1;const WRITE_PAGE_SIZE=8;
+function renderWriteAnalysis(){
+  const summary=$('write-summary'),body=$('write-trace-table').querySelector('tbody'),pager=$('write-trace-pager');
+  if(!WRITE_ROWS.length){summary.innerHTML='<div class="empty">本批未采集 Client 写入 Trace</div>';body.innerHTML='<tr><td colspan="10" class="empty">0条/未采集</td></tr>';pager.innerHTML='';correlationChart('write-timeline-chart',false,{});return}
+  const problems=Object.entries(WRITE_AGG.problem_counts||{}).sort((a,b)=>b[1]-a[1]),top=problems[0]||['未解释残差',0];
+  summary.innerHTML=`<div class="finding-card"><b>写入 Trace</b><br>${WRITE_AGG.trace_count}条，失败 ${WRITE_AGG.failed_count}条；Client p90 ${fmt(WRITE_AGG.latency.p90)}，max ${fmt(WRITE_AGG.latency.max)}。</div><div class="finding-card"><b>最多主问题</b><br>${esc(top[0])} ${top[1]}条。主问题按每条 Trace 最大互斥阶段计数。</div><div class="finding-card"><b>URMA / RPC 口径</b><br>URMA通信与明确的 URMA 调度分开；wait→poll/completion wait 不整体算调度。Create/Publish RPC其他在完整 trailer 缺失时保持未细分。</div>`;
+  const labels=WRITE_ROWS.map((row,index)=>`${String(index+1).padStart(3,'0')} ${row.timestamp.slice(11,19)}`),stages=Object.keys(WRITE_STAGE_COLORS),series=stages.map(name=>({name,type:'bar',stack:'write',barMaxWidth:12,data:WRITE_ROWS.map(row=>row.write_breakdown_ms[name]),itemStyle:{color:WRITE_STAGE_COLORS[name]}}));
+  const chart=chartAt('write-timeline-chart');chart.setOption({animation:false,legend:{top:0,data:stages},grid:{left:48,right:20,top:68,bottom:72},tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:params=>{const row=WRITE_ROWS[params[0]?.dataIndex||0];return `<b>${esc(row.trace_id)}</b><br>Client ${fmt(row.client_ms)}<br>Create ${fmt(row.create_rpc_ms)} / Publish ${fmt(row.publish_rpc_ms)}<br>${stages.map(name=>`${esc(name)}: ${fmt(row.write_breakdown_ms[name])}`).join('<br>')}`}},xAxis:{type:'category',data:labels,axisLabel:{interval:9,rotate:35,fontSize:10}},yAxis:{type:'value',name:'耗时 (ms)'},dataZoom:[{type:'inside',start:0,end:100},{type:'slider',height:18,bottom:10,start:0,end:100}],series});
+  const pages=Math.max(1,Math.ceil(WRITE_ROWS.length/WRITE_PAGE_SIZE));writePage=Math.min(writePage,pages);const selected=WRITE_ROWS.slice((writePage-1)*WRITE_PAGE_SIZE,writePage*WRITE_PAGE_SIZE);
+  body.innerHTML=selected.map(row=>`<tr><td class="nowrap">${esc(row.timestamp.slice(11,23))}</td><td><code>${esc(row.trace_id)}</code></td><td>${latencyValue(row.client_ms)}</td><td><span class="badge" style="background:${WRITE_STAGE_COLORS[row.write_primary_stage]}20;color:${WRITE_STAGE_COLORS[row.write_primary_stage]}">${esc(row.write_primary_stage)}</span></td><td>${latencyValue(row.create_rpc_ms)}</td><td>${latencyValue(row.write_data_ms)}<div class="caption">${esc(row.write_data_basis)}</div></td><td>${latencyValue(row.write_breakdown_ms['写入URMA通信'])} / ${latencyValue(row.write_breakdown_ms['写入URMA调度/线程开销'])}</td><td>${latencyValue(row.publish_rpc_ms)}</td><td>${latencyValue(row.write_breakdown_ms['Worker Publish/元数据'])}</td><td>${latencyValue(row.write_breakdown_ms['RPC网络相关'])} / ${latencyValue(row.write_breakdown_ms['RPC框架'])}</td></tr>`).join('');
+  pager.innerHTML=`<button id="write-prev" ${writePage<=1?'disabled':''}>上一页</button><span>${writePage}/${pages} · ${WRITE_ROWS.length}条</span><button id="write-next" ${writePage>=pages?'disabled':''}>下一页</button>`;$('write-prev').onclick=()=>{if(writePage>1){writePage--;renderWriteAnalysis()}};$('write-next').onclick=()=>{if(writePage<pages){writePage++;renderWriteAnalysis()}};
 }
 '''
 
@@ -2237,7 +3125,7 @@ table{width:100%;table-layout:fixed}
 CORRELATION_SECTION = r'''
 <section class="panel" id="query-meta-analysis">
 <h2>4-A. QueryMeta 根因分析</h2>
-<div class="notice"><b>定界口径：</b><code>WorkerOCService.QueryAndGet</code> 不只是查元数据：携带 <code>data_request</code> 时，Meta Owner Worker 会读取本地驻留副本，并通过 SHM、UB/URMA 或 TCP 内联返回数据；本地 miss 才向 Master 发起 metadata-only QueryMeta。细类按互斥优先级统计；本地读取/URMA 作为证据标签，不重复计入主类。失败且只有 <code>cntl_error_code=1008</code> 时，只能确认 Client 等待到截止点；缺少 server trailer 时，Meta Owner Worker 执行、响应发送、RPC residual 与 Client 截止观察仍未闭合。</div>
+<div class="notice"><b>定界口径：</b>当前源码为 <code>WorkerOCService.QueryAndGet</code>（分析器同时兼容历史 <code>MasterOCService.QueryAndGet</code>）。它不只查元数据：携带 <code>data_request</code> 时，metadata-affine Worker 还会准备本地数据响应，可通过 UB/URMA 内联返回数据。Worker 日志明确 <code>inlineHits &gt; 0</code>、<code>transport: UB</code>，且 URMA source Worker、Trace 和 attempt 时间窗唯一匹配时，逻辑 URMA Write 关键路径会从 QueryAndGet 父窗口剝离；同 Worker 的 QueryAndGet 父窗口内若唯一匹配到带 <code>elapsedMs</code> 的 <code>URMA_WAIT_TIMEOUT</code>，Stacked Bars 进一步拆为 QueryMeta/QueryAndGet 独占与 <b>URMA超时等待窗口</b>。该窗口是等待到超时的证据，不冒充完成态 WR 耗时。WR 分片不求和。失败且只有 <code>cntl_error_code=1008</code> 时，只能确认 Client 等待到截止点；缺少 server trailer 时，Worker 执行、响应发送、RPC residual 与 Client 截止观察仍未闭合。</div>
 <div id="query-meta-summary" class="finding-grid"></div>
 <h3>QueryAndGet 超时流程定界</h3>
 <div id="query-meta-timeout-flow" class="finding-grid"></div>
@@ -2263,7 +3151,7 @@ CORRELATION_SECTION = r'''
 </div>
 <div id="worker-correlation-summary" class="correlation-summary"></div>
 <div class="correlation-grid">
-<div><h3>图 4-B-1 RPC 网络 / 服务端 / 排队</h3><div id="worker-correlation-chart-rpc" class="chart"></div></div>
+<div><h3>图 4-B-1 RPC 通信残差 / 服务端 / 排队</h3><div class="caption">“RPC网络”桶沿用历史字段名，实际表示 bRPC 未被服务端执行和排队解释的通信残差（物理网络 + RPC framework），不能单独证明物理网络慢。</div><div id="worker-correlation-chart-rpc" class="chart"></div></div>
 <div><h3>图 4-B-2 UB WR / completion wait / Inflight</h3><div id="worker-correlation-chart-ub" class="chart"></div></div>
 <div><h3>图 4-B-3 元数据 QueryMeta</h3><div id="worker-correlation-chart-metadata" class="chart"></div></div>
 <div><h3>图 4-B-4 数据访问 Local / RemoteGet</h3><div id="worker-correlation-chart-data" class="chart"></div></div>
@@ -2336,6 +3224,7 @@ HTML_TEMPLATE = r'''<!doctype html>
 <style>
 :root{--bg:#f4f7fb;--panel:#fff;--ink:#172033;--muted:#667085;--line:#dfe6ef;--nav:#0f2747;--blue:#2f6fed;--cyan:#17a2b8;--orange:#f59e0b;--red:#dc3545;--green:#18a36b;--purple:#7c5ce7;--gray:#9aa4b2}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,"Segoe UI","Microsoft YaHei",sans-serif;font-size:14px}.layout{display:grid;grid-template-columns:238px minmax(0,1fr);min-height:100vh}aside{position:sticky;top:0;height:100vh;overflow:auto;background:var(--nav);color:#fff;padding:22px 14px}aside h2{font-size:17px;margin:0 6px 16px}aside a{display:block;color:#cbd8e8;text-decoration:none;padding:7px 9px;border-radius:7px;margin:2px 0}aside a:hover,aside a.active{background:#1a3b66;color:#fff}aside a.sub{font-size:12px;padding:5px 9px 5px 22px;color:#9fb4cc}main{padding:26px 30px 60px;min-width:0;max-width:1600px}section[id],div[id]{scroll-margin-top:18px}.hero{background:linear-gradient(125deg,#0f2747,#254f86);color:#fff;border-radius:14px;padding:24px 28px;margin-bottom:18px}.hero h1{margin:0 0 8px;font-size:26px}.hero p{margin:0;color:#d9e5f5}.kpis{display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:12px;margin:16px 0}.kpi,.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 3px 12px rgba(15,39,71,.05)}.kpi{padding:14px}.kpi b{display:block;font-size:23px;margin-top:5px}.kpi span,.muted{color:var(--muted);font-size:12px}.problem-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.panel{padding:18px;margin-bottom:14px}.panel h2{font-size:18px;margin:0 0 5px}.panel h3{font-size:15px;margin:0 0 10px}.caption{color:var(--muted);font-size:12px;margin-top:8px;line-height:1.6}.chart{width:100%;min-height:300px}.notice{border-left:4px solid var(--orange);background:#fff8e8;padding:12px 14px;border-radius:7px;margin:12px 0;color:#664d03}.controls{display:flex;gap:9px;flex-wrap:wrap;margin:12px 0}.controls select,.controls input,.controls button,.pager button{height:35px;border:1px solid #cfd8e6;border-radius:7px;background:#fff;padding:0 10px;color:var(--ink)}.controls input{min-width:270px}.controls button,.pager button{cursor:pointer}.controls button:hover,.pager button:hover{border-color:var(--blue);color:var(--blue)}.pager button:disabled{cursor:not-allowed;opacity:.45}table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:9px 8px;border-bottom:1px solid #e8edf4;text-align:left;vertical-align:top}th{background:#f7f9fc;position:sticky;top:0;z-index:1;color:#475467}tbody tr{cursor:pointer}tbody tr:hover,tbody tr.selected{background:#eef5ff}tbody tr.trace-failed td{background:#fff1f2}.badge{display:inline-block;padding:3px 7px;border-radius:999px;font-size:11px;white-space:nowrap}.b-remote{background:#e7f0ff;color:#245abf}.b-worker{background:#fff3d7;color:#9a6200}.b-rpc{background:#efe9ff;color:#6242bd}.b-fail{background:#ffe8ea;color:#bd2430}.b-ok{background:#e5f7ef;color:#147a50}.table-wrap{max-height:560px;overflow:auto;border:1px solid var(--line);border-radius:9px}.pager{display:flex;align-items:center;justify-content:flex-end;gap:9px;margin-top:10px}.worker-section{border-top:1px solid var(--line);padding-top:16px;margin-top:16px}.worker-section:first-of-type{border-top:0;padding-top:4px}.worker-table-wrap{overflow:auto;border:1px solid var(--line);border-radius:8px}.worker-name{max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.conclusion-cell{min-width:340px;line-height:1.55}.evidence-level{font-weight:700}.latency-warn{display:inline-block;background:#ffedd5;color:#9a3412;border-radius:4px;padding:1px 5px;font-weight:700}.latency-hot{display:inline-block;background:#fee2e2;color:#991b1b;border-radius:4px;padding:1px 5px;font-weight:700}.metric-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.metric{border:1px solid var(--line);border-radius:8px;padding:9px}.metric b{display:block;margin-top:3px}.phase-row{display:grid;grid-template-columns:190px 1fr 90px;gap:8px;align-items:center;margin:8px 0}.phase-track{height:17px;background:#edf1f6;border-radius:5px;overflow:hidden}.phase-fill{height:100%}.trace-panels{margin-top:14px}.trace-log-groups{display:grid;gap:12px}.trace-log-group{border:1px solid var(--line);border-left:4px solid var(--blue);border-radius:8px;overflow:hidden;background:#fff}.trace-log-group h4{display:flex;justify-content:space-between;gap:12px;margin:0;padding:10px 12px;background:#f7f9fc}.trace-log-summary{padding:8px 12px;color:var(--muted);font-size:12px;line-height:1.6}.trace-log-group pre{margin:0;padding:12px;background:#0f172a;color:#dbeafe;white-space:pre-wrap;word-break:break-word;max-height:420px;overflow:auto;font:12px/1.6 "Cascadia Code",Consolas,monospace}.trace-log-group pre .log-line{display:block;border-bottom:1px solid #1f3048;padding:3px 5px}.trace-log-group details{background:#0f172a;border-top:1px solid #334155}.trace-log-group details summary{cursor:pointer;color:#bfdbfe;padding:9px 13px;font-size:12px}.trace-log-group details pre{border-top:1px solid #334155}.log-keyword{display:inline;border-radius:3px;padding:0 3px;font-weight:700}.log-tag-error{background:#fee2e2;color:#991b1b}.log-tag-deadline{background:#ffedd5;color:#9a3412}.log-tag-rpc{background:#dbeafe;color:#1e40af}.log-tag-urma{background:#ede9fe;color:#5b21b6}.log-tag-latency{background:#dcfce7;color:#166534}.log-token{border-radius:3px;padding:0 2px;font-weight:700}.finding-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}.finding-card{border:1px solid var(--line);border-top:3px solid var(--blue);border-radius:8px;padding:11px 12px;background:#f9fbfe;line-height:1.65}.guidance-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.guidance-card{border:1px solid var(--line);border-left:4px solid var(--blue);border-radius:8px;padding:12px;background:#fff;line-height:1.6}.guidance-card b{display:block;margin-bottom:5px}.urma-summary{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:10px;margin:12px 0}.urma-summary .metric{background:#f9fbfe}.diagnosis-tags{display:flex;gap:4px;flex-wrap:wrap}.diagnosis-tag{display:inline-block;padding:2px 6px;border-radius:999px;background:#fff3d7;color:#8a5700;font-size:10px}.urma-request-table th{position:static}.nowrap{white-space:nowrap}.empty{padding:28px;text-align:center;color:var(--muted)}@media(max-width:1050px){.layout{grid-template-columns:1fr}aside{display:none}main{padding:16px}.kpis{grid-template-columns:repeat(3,1fr)}.problem-grid,.finding-grid,.guidance-grid{grid-template-columns:1fr}.metric-grid{grid-template-columns:repeat(3,1fr)}.urma-summary{grid-template-columns:repeat(3,1fr)}}@media(max-width:650px){.kpis{grid-template-columns:repeat(2,1fr)}.metric-grid,.urma-summary{grid-template-columns:repeat(2,1fr)}}
+.hero h1{overflow-wrap:anywhere;word-break:break-word}
 </style>
 </head>
 <body data-deadline-ms="20">
@@ -2350,14 +3239,14 @@ HTML_TEMPLATE = r'''<!doctype html>
 </div>
 <section class="panel"><h2>问题类型与治理指导</h2><div id="problem-guidance"></div></section>
 <section class="panel" id="error-analysis"><h2>图 1-3 错误分类与根因边界</h2><div class="notice"><b>口径：</b>“completion超时”是已确认故障点；pending WR 数和上浮链来自同 Trace 显式日志。当前证据不能继续区分接收端、链路/设备、CQ/JFC轮询或线程唤醒，不能把恢复动作当成最终根因。</div><div class="problem-grid"><div><h3 class="chart-title">图 1-3a 故障点细分</h3><div id="error-subcategory-chart" class="chart"></div></div><div><h3 class="chart-title">图 1-3b 错误上浮链</h3><div id="error-chain-chart" class="chart"></div></div></div><div id="error-analysis-summary" class="finding-grid"></div></section>
-<section class="panel"><h2>图 1-4 关键阶段耗时占比</h2><div id="stage-share-chart" class="chart" style="height:300px"></div><div class="caption">单独展示 7 个互斥阶段在 Top100 中的整体耗时占比；RPC 网络与服务端请求排队分开；用于看时间消耗，不用于表示 trace 数。</div></section>
+<section class="panel"><h2>图 1-4 关键阶段耗时占比</h2><div id="stage-share-chart" class="chart" style="height:300px"></div><div class="caption">展示 8 个关键互斥阶段及未解释残差的整体耗时占比。RPC 框架已扣除 handler、网络残差和明确调度/排队；用于看时间消耗，不表示 Trace 数。</div></section>
 <section class="panel" id="time-segments"><h2>图 1-5 Client 总时延五档问题分布</h2><div class="notice"><b>口径：</b>按 Client 总时延分为 5–6ms、6–7ms、7–10ms、10–20ms、&gt;20ms 五档；边界 20ms 归入 10–20ms，只有 &gt;20ms 归入最后一档。低于 5ms 明确列为未纳入五档。档位筛选仅过滤总览、Stacked Bars 与 Trace 表，URMA/Worker 深挖仍展示全量 TopN。</div><div id="time-segment-controls" class="time-segment-controls"></div><div id="time-segment-scope" class="time-segment-scope"></div><div id="time-segment-chart" class="chart" style="height:340px"></div><div id="time-segment-summary" class="finding-grid"></div></section>
-<section class="panel" id="timeline"><h2>2. Top100 时间序列</h2><h3>图 2-1 Stacked Bars</h3><div class="notice">Stacked bars 是裁剪后的互斥阶段耗时；红色菱形“URMA超时标记”是错误标签，不作为耗时再次堆叠。URMA 不与父窗口重复相加；未细分不等于已证明本地处理。</div><div id="timeline-chart" class="chart" style="height:430px"></div><div class="caption">按 trace 首时间从左到右；红色虚线为参考阈值，红色菱形为 URMA 超时，灰色圆点为其他失败。支持缩放并可点击选择 Trace。</div><div id="time-findings" class="finding-grid"></div></section>
-<section class="panel" id="urma-analysis"><h2>3. URMA 批量分析</h2><div class="caption">本章始终使用全量 TopN，不受总览五段筛选影响。</div><div class="notice"><b>三级口径：</b><b>Client Get → 逻辑 URMA Write → WR分片</b>。每条 <code>URMA_ELAPSED_TOTAL</code> 对应一个 WR chunk，不等于整个 Client Get；同一逻辑 Write 的多个 WR 可能重叠，<b>WR耗时不可求和</b>。分片与 trace_us 完整时使用<b>逻辑Write墙钟</b>（最早 post 到最晚 observed），否则明确回退为最慢 WR。Inflight WR 是发送端 URMA manager 的全局在途快照，不是该 Get 的 WR 数。</div><div id="urma-summary-text"></div><div id="urma-summary-kpis" class="urma-summary"></div><div class="worker-section"><h3>图 3-1 WR 时间序列</h3><div class="notice"><b>时间口径：</b>横轴使用 URMA 事件所在 <b>Worker 本地时间</b>。跨 Worker 可能存在时钟偏移，不用不同机器绝对时间戳直接相减；total、completion wait 与 trace_us 均来自同一个 WR 事件。</div><div id="urma-time-chart" class="chart" style="height:430px"></div><div class="worker-table-wrap"><table id="urma-time-table"><thead><tr><th>Worker本地分钟</th><th>Trace</th><th>WR</th><th>慢WR</th><th>total p90</th><th>wait p90</th><th>Inflight p90</th><th>max</th></tr></thead><tbody></tbody></table></div></div><div class="worker-section"><h3>图 3-2 源 Worker 与源→目标边</h3><div id="urma-worker-chart" class="chart" style="height:390px"></div><div class="worker-table-wrap"><table id="urma-edge-table"><thead><tr><th>源→目标</th><th>Trace</th><th>WR</th><th>慢WR</th><th>total p90</th><th>completion wait p90</th><th>Inflight WR p90/max</th><th>max</th></tr></thead><tbody></tbody></table></div></div><div class="worker-section"><h3>表 3-3 全部 URMA Trace</h3><div class="controls"><select id="urma-worker-filter"><option value="">全部源 Worker</option></select><select id="urma-label-filter"><option value="">全部诊断标签</option></select><input id="urma-trace-search" placeholder="搜索 Trace / Worker / Request"><button id="urma-reset-filter">清空筛选</button></div><div class="table-wrap"><table id="urma-trace-table"><thead><tr><th>时间</th><th>Trace</th><th>源→目标</th><th>Client总时延</th><th>关键路径/最慢WR</th><th>URMA占比</th><th>WR数</th><th>Inflight WR max</th><th>RemoteGet WR</th><th>诊断</th></tr></thead><tbody></tbody></table></div><div id="urma-trace-pager" class="pager"></div></div></section>
+<section class="panel" id="timeline"><h2>2. Top100 时间序列</h2><h3>图 2-1 Stacked Bars</h3><div class="notice">Stacked bars 是裁剪后的互斥阶段耗时；红色菱形“URMA超时标记”是错误标签，不作为耗时再次堆叠。URMA建链、URMA通信、URMA调度/线程开销、QueryAndGet/Get其他业务、其他调度、RPC网络和RPC框架分开展示；证据不闭合的部分保留为未解释残差。</div><div id="timeline-chart" class="chart" style="height:430px"></div><div class="caption">按 trace 首时间从左到右；红色虚线为参考阈值，红色菱形为 URMA 超时，灰色圆点为其他失败。支持缩放并可点击选择 Trace。</div><div id="time-findings" class="finding-grid"></div></section>
+<section class="panel" id="urma-analysis"><h2>3. URMA 批量分析</h2><div class="caption">本章始终使用全量 TopN，不受总览五段筛选影响。</div><div class="notice"><b>三级口径：</b><b>Client Get → 逻辑 URMA Write → WR分片</b>。每条 <code>URMA_ELAPSED_TOTAL</code> 对应一个 WR chunk。当前读取实现顺序异步 post 两个 WR、随后统一 reap；同一逻辑 Write 的关键耗时取两个 <b>URMA Elapsed Time 的最大值</b>，<b>不求和</b>，两个 WR 均在明细中展示。Inflight WR 是发送端 URMA manager 的全局在途快照，不是该 Get 的 WR 数。</div><div id="urma-summary-text"></div><div id="urma-summary-kpis" class="urma-summary"></div><div class="worker-section"><h3>图 3-1 WR 时间序列</h3><div class="notice"><b>时间口径：</b>横轴使用 URMA 事件所在 <b>Worker 本地时间</b>。跨 Worker 可能存在时钟偏移，不用不同机器绝对时间戳直接相减；URMA Elapsed Time、completion wait 与 trace_us 均来自同一个 WR 事件。</div><div id="urma-time-chart" class="chart" style="height:430px"></div><div class="worker-table-wrap"><table id="urma-time-table"><thead><tr><th>Worker本地分钟</th><th>Trace</th><th>WR</th><th>慢WR</th><th>Elapsed p90</th><th>wait p90</th><th>Inflight p90</th><th>max</th></tr></thead><tbody></tbody></table></div></div><div class="worker-section"><h3>图 3-2 源 Worker 与源→目标边</h3><div id="urma-worker-chart" class="chart" style="height:390px"></div><div class="worker-table-wrap"><table id="urma-edge-table"><thead><tr><th>源→目标</th><th>Trace</th><th>WR</th><th>慢WR</th><th>Elapsed p90</th><th>completion wait p90</th><th>Inflight WR p90/max</th><th>max</th></tr></thead><tbody></tbody></table></div></div><div class="worker-section"><h3>表 3-3 全部 URMA Trace</h3><div class="controls"><select id="urma-worker-filter"><option value="">全部源 Worker</option></select><select id="urma-label-filter"><option value="">全部诊断标签</option></select><input id="urma-trace-search" placeholder="搜索 Trace / Worker / Request"><button id="urma-reset-filter">清空筛选</button></div><div class="table-wrap"><table id="urma-trace-table"><thead><tr><th>时间</th><th>Trace</th><th>源→目标</th><th>Client总时延</th><th>最慢URMA Elapsed</th><th>URMA占比</th><th>WR数</th><th>Inflight WR max</th><th>RemoteGet WR</th><th>诊断</th></tr></thead><tbody></tbody></table></div><div id="urma-trace-pager" class="pager"></div></div></section>
 <section class="panel" id="non-transport-analysis"><h2>4. 非 RPC / 非 UB 深挖</h2><div class="notice"><b>范围：</b>本章始终使用全量 TopN，不受总览五段筛选影响。只分析主问题为“数据访问父窗口/未细分”“远端供数非 URMA”或“未解释残差”的 Trace。五类结论来自显式超时/重试、RemotePull、Local processing、bRPC 字段和 ProcessGet 父窗口；只有明确 Local processing 且 remoteObjects=0 才判为本地，缺少子阶段时保持未细分。</div><div id="non-transport-summary" class="finding-grid"></div><div class="problem-grid"><div><h3>图 4-1 精细分类</h3><div id="non-transport-count-chart" class="chart"></div></div><div><h3>图 4-2 时间分布</h3><div id="non-transport-time-chart" class="chart"></div></div></div><div class="worker-section"><h3>图 4-3 Worker 分布</h3><div id="non-transport-worker-chart" class="chart" style="height:390px"></div></div><div class="worker-section"><h3>表 4-1 逐 Trace 结论</h3><div class="controls"><select id="non-transport-category-filter"><option value="">全部精细分类</option></select><select id="non-transport-confidence-filter"><option value="">全部证据强度</option><option value="高">高</option><option value="中">中</option></select><select id="non-transport-worker-filter"><option value="">全部 Data Worker</option></select><select id="non-transport-status-filter"><option value="">全部状态</option><option value="success">成功</option><option value="failed">20ms超时</option></select><input id="non-transport-search" placeholder="搜索 Trace / 结论 / 日志"><button id="non-transport-reset-filter">清空筛选</button></div><div class="table-wrap"><table id="non-transport-table"><thead><tr><th>时间</th><th>Trace</th><th>精细分类</th><th>证据</th><th>Data Worker</th><th>总时延</th><th>ProcessGet</th><th>BatchGet</th><th>RPC网络</th><th>URMA</th><th>结论</th></tr></thead><tbody></tbody></table></div><div id="non-transport-pager" class="pager"></div></div></section>
 <section class="panel" id="workers"><h2>Data Worker 粒度分析</h2><div class="notice"><b>范围：</b>本章始终使用全量 TopN，不受总览五段筛选影响。<b>逐 Trace 位置口径：</b><code>DS_KV_CLIENT_GET transportType</code> 是本次 Client→Worker 实际传输：<b>SHM=本节点共享内存；UB=远端 Data Worker；TCP=位置不确定</b>（可能是远端，也可能是同节点 SHM 失败回退）；缺字段标“未确认”。该结论<b>仅覆盖当前 TopN 输入</b>，不外推整个运行。<code>DS_POSIX_GET</code> 仅用于标识有日志证据的处理 Worker，不能替代访问位置。异常耗时统一按 <span class="latency-warn">≥5ms</span>、<span class="latency-hot">≥20ms</span> 高亮。</div><div class="worker-section"><h3>有处理证据的 Data Worker 负载与尾延迟</h3><div id="direct-worker-chart" class="chart"></div><div class="worker-table-wrap"><table id="direct-worker-table"><thead><tr><th>Worker</th><th>Trace</th><th>超时</th><th>Client p90</th><th>Worker p50</th></tr></thead><tbody></tbody></table></div><div id="direct-worker-pager" class="pager"></div></div><div class="worker-section"><h3>URMA 源 Data Worker</h3><div id="urma-source-chart" class="chart"></div><div class="worker-table-wrap"><table id="urma-source-table"><thead><tr><th>Worker</th><th>Trace</th><th>URMA p50</th><th>URMA p90</th><th>Max</th></tr></thead><tbody></tbody></table></div><div id="urma-source-pager" class="pager"></div></div></section>
 <section class="panel" id="source-logic"><h2>最新 main/master 代码逻辑校正</h2><div class="notice"><b><code>enableLocalCache=false</code> 读取主链：</b><code>Get</code> 进入 <code>GetFromTransportLayer</code>；<code>BuildTransportReadRequest</code> 先按 hash ring 选择 metadata owner，获得对象位置后，<code>ReplicaReader::ReadReplicaOnce</code> 直接向该 Data Worker 执行读取。因此这不是“Client→入口 Worker→Data Worker”的固定代理链。Trace 中出现不同的 DS_POSIX_GET Worker 与 URMA 日志 Worker 时，页面仅作“直连请求目标”和“URMA 供数端”的证据分组。</div><div class="caption">代码逻辑校正基线：main/master@77fb2d9a46f7ba9b658f4e1f6eba74c22206f9fe；triage 数据记录的 code ref 为 d897aee13b7f20b58a60f81e1b31e094964c996d。CodeGraph 仅用于定位，结论已对照当前实际源码。</div></section>
-<section class="panel" id="traces"><h2>按分类查看 Trace</h2><div class="controls"><select id="category-filter"><option value="">全部主问题</option></select><select id="status-filter"><option value="">全部状态</option><option value="success">成功</option><option value="failed">20ms超时</option></select><select id="access-location-filter"><option value="">全部交付方式</option></select><select id="direct-worker-filter"><option value="">全部有证据 Data Worker</option></select><select id="urma-source-filter"><option value="">全部 URMA 源 Worker</option></select><input id="trace-search" placeholder="搜索 Trace / 失败原因 / 精确卡点 / 日志"><button id="reset-filter">清空筛选</button></div><div class="table-wrap"><table id="trace-table"><thead><tr><th>时间</th><th>Trace</th><th>主问题</th><th>失败原因</th><th>状态</th><th>交付方式</th><th>精确卡点</th><th>总时延</th><th>RPC网络</th><th>RPC排队</th><th>QueryMeta</th><th>URMA</th><th>Data Worker处理</th><th>未闭合窗口</th><th>未解释残差</th></tr></thead><tbody></tbody></table></div><div class="pager"><button id="prev-page">上一页</button><span id="page-label"></span><button id="next-page">下一页</button></div></section>
+<section class="panel" id="traces"><h2>按分类查看 Trace</h2><div class="controls"><select id="category-filter"><option value="">全部主问题</option></select><select id="status-filter"><option value="">全部状态</option><option value="success">成功</option><option value="failed">20ms超时</option></select><select id="access-location-filter"><option value="">全部交付方式</option></select><select id="direct-worker-filter"><option value="">全部有证据 Data Worker</option></select><select id="urma-source-filter"><option value="">全部 URMA 源 Worker</option></select><input id="trace-search" placeholder="搜索 Trace / 失败原因 / 精确卡点 / 日志"><button id="reset-filter">清空筛选</button></div><div class="table-wrap"><table id="trace-table"><thead><tr><th>时间</th><th>Trace</th><th>主问题</th><th>失败原因</th><th>状态</th><th>交付方式</th><th>精确卡点</th><th>总时延</th><th>URMA建链</th><th>URMA通信</th><th>URMA调度/线程开销</th><th>QueryAndGet其他</th><th>Get其他</th><th>其他调度/线程开销</th><th>RPC网络相关</th><th>RPC框架</th><th>未解释残差</th></tr></thead><tbody></tbody></table></div><div class="pager"><button id="prev-page">上一页</button><span id="page-label"></span><button id="next-page">下一页</button></div></section>
 <div class="trace-panels"><section class="panel" id="trace-detail-panel"><h2>Trace 阶段明细</h2><div id="trace-detail"></div></section><section class="panel" id="trace-log-panel"><h2>Trace 原始日志</h2><div class="caption">按 ds-trace-triage 证据阅读方式分组；每组默认展示最多 8 行重点，完整原始行按需展开，颜色只用于字段级辅助定位。</div><div id="trace-log-groups" class="trace-log-groups"></div></section></div>
 </main></div><div id="tooltip" class="tooltip"></div>
 <script>__ECHARTS_SOURCE__</script>
@@ -2365,12 +3254,13 @@ HTML_TEMPLATE = r'''<!doctype html>
 const ROWS=__ROWS__;
 const AGG=__AGG__;
 const COLORS={'明确远端数据阶段':'#2f6fed','数据访问处理未细分':'#f59e0b','Client→Data Worker RPC residual':'#7c5ce7'};
-const STAGE_COLORS={'RPC网络':'#dc3545','RPC排队':'#d97706','QueryMeta':'#17a2b8','URMA':'#f59e0b','远端供数非URMA':'#2f6fed','数据访问父窗口/未细分':'#7c5ce7','未解释残差':'#9aa4b2'};
+const STAGE_COLORS={'URMA建链':'#b45309','URMA通信':'#f59e0b','URMA调度/线程开销':'#c026d3','QueryAndGet其他业务':'#17a2b8','Get其他业务':'#2f6fed','其他调度/线程开销':'#7c3aed','RPC网络相关':'#dc3545','RPC框架':'#64748b','未解释残差':'#9aa4b2'};
+const FOCUS_PROBLEMS=AGG.focus_problem_summary||AGG.problem_summary;
 const PROBLEM_COLORS={...STAGE_COLORS,'URMA超时':'#b42318'};
-const NON_TRANSPORT_COLORS={'Client/Worker观测未闭合':'#dc3545','BatchGet超时/重试':'#f59e0b','Data Worker服务端处理':'#2f6fed','明确本地ProcessGet耗时':'#18a36b','Client数据获取窗口未细分':'#0ea5a4','ProcessGet内部未细分':'#7c5ce7'};
+const NON_TRANSPORT_COLORS={'Client UB接收缓冲分配失败':'#b42318','Client/Worker观测未闭合':'#dc3545','BatchGet超时/重试':'#f59e0b','Data Worker服务端处理':'#2f6fed','明确本地ProcessGet耗时':'#18a36b','Client数据获取窗口未细分':'#0ea5a4','ProcessGet内部未细分':'#7c5ce7'};
 const PAGE_SIZE=8;const WORKER_PAGE_SIZE=8;const URMA_PAGE_SIZE=8;const NON_TRANSPORT_PAGE_SIZE=8;const EDGE_PAGE_SIZE=8;let page=1;let selectedId=ROWS[0]?.trace_id||null;let filtered=[...ROWS];let activeTimeSegment=null;const workerPages={direct:1,urma:1};const URMA_ROWS=ROWS.filter(r=>r.urma_trace);let urmaFiltered=[...URMA_ROWS];let urmaPage=1;let urmaTimePage=1;let urmaEdgePage=1;const NON_TRANSPORT_ROWS=ROWS.filter(r=>r.non_transport_analysis);let nonTransportFiltered=[...NON_TRANSPORT_ROWS];let nonTransportPage=1;
 const SORT_CONFIGS={
-  'trace-table':[['timestamp',r=>r.timestamp,'text'],['trace_id',r=>r.trace_id,'text'],['primary_problem',r=>r.primary_problem,'text'],['failure_reason',r=>r.failure_reason||'','text'],['failed',r=>Number(r.failed),'number'],['access_location',r=>r.access_location,'text'],['data_access_scope',r=>r.data_access_scope||'','text'],['client_ms',r=>r.client_ms,'number'],['rpc_network',r=>r.attribution_ms['RPC网络'],'number'],['rpc_queue',r=>r.attribution_ms['RPC排队'],'number'],['query_meta_ms',r=>r.attribution_ms['QueryMeta'],'number'],['urma_ms',r=>r.attribution_ms['URMA'],'number'],['remote_non_urma',r=>r.attribution_ms['远端供数非URMA'],'number'],['worker_other',r=>r.attribution_ms['数据访问父窗口/未细分'],'number'],['unexplained',r=>r.attribution_ms['未解释残差'],'number']],
+  'trace-table':[['timestamp',r=>r.timestamp,'text'],['trace_id',r=>r.trace_id,'text'],['primary_problem',r=>r.focus_primary_problem,'text'],['failure_reason',r=>r.failure_reason||'','text'],['failed',r=>Number(r.failed),'number'],['access_location',r=>r.access_location,'text'],['data_access_scope',r=>r.data_access_scope||'','text'],['client_ms',r=>r.client_ms,'number'],...Object.keys(STAGE_COLORS).map(name=>[name,r=>r.focus_breakdown_ms[name],'number'])],
   'non-transport-table':[['timestamp',r=>r.timestamp,'text'],['trace_id',r=>r.trace_id,'text'],['deep_category',r=>r.non_transport_analysis.deep_category,'text'],['confidence',r=>r.non_transport_analysis.confidence,'text'],['direct_data_worker',r=>r.direct_data_worker,'text'],['client_ms',r=>r.client_ms,'number'],['worker_process_ms',r=>r.worker_process_ms,'number'],['batch_e2e_ms',r=>r.batch_e2e_ms,'number'],['rpc_network',r=>r.attribution_ms['RPC网络'],'number'],['urma_ms',r=>r.urma_ms,'number'],['conclusion',r=>r.non_transport_analysis.conclusion,'text']],
   'urma-trace-table':[['timestamp',r=>r.urma_requests[0]?.timestamp||r.timestamp,'text'],['trace_id',r=>r.trace_id,'text'],['direction',r=>r.urma_trace.direction,'text'],['client_ms',r=>r.client_ms,'number'],['slowest_total_ms',r=>r.urma_trace.slowest_total_ms,'number'],['ratio',r=>r.urma_trace.urma_client_ratio_pct,'number'],['request_count',r=>r.urma_trace.request_count,'number'],['max_inflight',r=>r.urma_trace.max_inflight_wr,'number'],['max_remote_get',r=>r.urma_trace.max_remote_get_wr,'number'],['conclusion',r=>r.urma_trace.conclusion,'text']],
   'urma-time-table':[['minute',r=>r.minute,'text'],['trace_count',r=>r.trace_count,'number'],['request_count',r=>r.request_count,'number'],['slow_request_count',r=>r.slow_request_count,'number'],['total_p90_ms',r=>r.total_p90_ms,'number'],['wait_p90_ms',r=>r.wait_p90_ms,'number'],['inflight_p90',r=>r.inflight_p90,'number'],['total_max_ms',r=>r.total_max_ms,'number']],
@@ -2391,11 +3281,11 @@ function latencyValue(value){const cls=latencyClass(value);return `<span${cls?` 
 function renderKpis(){const k=[['唯一 Trace',AGG.trace_count],['Client p50',`${AGG.latency.p50} ms`],['Client p90',`${AGG.latency.p90} ms`],['Client p99',`${AGG.latency.p99} ms`],['20ms 超时',AGG.failed_count],['本节点 SHM',AGG.access_locations['本节点SHM']||0]];$('kpis').innerHTML=k.map(([a,b])=>`<div class="kpi"><span>${a}</span><b>${b}</b></div>`).join('')}
 const charts=[];
 function chartAt(id){const node=$(id),old=echarts.getInstanceByDom(node);if(old){old.clear();return old}const chart=echarts.init(node,null,{renderer:'canvas'});charts.push(chart);return chart}
-function shortProblem(name){return name==='数据访问父窗口/未细分'?'Client/Worker父窗口\n未细分':name==='远端供数非URMA'?'Data Worker\n服务端处理':name}
+function shortProblem(name){return name==='QueryAndGet其他业务'?'QueryAndGet\n其他业务':name==='URMA调度/线程开销'?'URMA调度/\n线程开销':name==='其他调度/线程开销'?'其他调度/\n线程开销':name==='RPC网络相关'?'RPC网络\n相关':name==='未解释残差'?'未解释\n残差':name}
 function scopeRows(){if(activeTimeSegment===null)return ROWS;const segment=AGG.latency_segments.find(item=>item.segment_id===activeTimeSegment);if(!segment)return ROWS;const ids=new Set(segment.trace_ids);return ROWS.filter(row=>ids.has(row.trace_id))}
 function percentile(values,q){const ordered=values.map(Number).filter(Number.isFinite).sort((a,b)=>a-b);if(!ordered.length)return 0;const index=(ordered.length-1)*q,lower=Math.floor(index),upper=Math.ceil(index);return ordered[lower]+(ordered[upper]-ordered[lower])*(index-lower)}
-function scopedProblemSummary(rows){const result={};Object.keys(PROBLEM_COLORS).forEach(problem=>{const matched=rows.filter(row=>row.primary_problem===problem),stageValues=(problem==='URMA超时'?matched.map(row=>row.urma_timeout_max_ms):matched.map(row=>row.attribution_ms[row.primary_stage])).filter(value=>value!==null&&value!==undefined),clientValues=matched.map(row=>row.client_ms),metricName=problem==='URMA超时'?'URMA timeout elapsedMs':'主阶段耗时';result[problem]={trace_count:matched.length,success_count:matched.filter(row=>!row.failed).length,failed_count:matched.filter(row=>row.failed).length,stage_p50_ms:percentile(stageValues,.5),stage_p90_ms:percentile(stageValues,.9),stage_max_ms:stageValues.length?Math.max(...stageValues):0,client_p50_ms:percentile(clientValues,.5),client_p90_ms:percentile(clientValues,.9),metric_name:metricName}});return result}
-function scopedStageTotals(rows){const totals={};Object.keys(STAGE_COLORS).forEach(stage=>{totals[stage]=rows.reduce((sum,row)=>sum+Number(row.attribution_ms[stage]||0),0)});return totals}
+function scopedProblemSummary(rows){const result={};Object.keys(PROBLEM_COLORS).forEach(problem=>{const matched=rows.filter(row=>row.focus_primary_problem===problem),stageValues=matched.map(row=>problem==='URMA超时'?row.urma_timeout_max_ms:row.focus_breakdown_ms[row.focus_primary_stage]).filter(value=>value!==null&&value!==undefined),clientValues=matched.map(row=>row.client_ms);result[problem]={trace_count:matched.length,success_count:matched.filter(row=>!row.failed).length,failed_count:matched.filter(row=>row.failed).length,stage_p50_ms:percentile(stageValues,.5),stage_p90_ms:percentile(stageValues,.9),stage_max_ms:stageValues.length?Math.max(...stageValues):0,client_p50_ms:percentile(clientValues,.5),client_p90_ms:percentile(clientValues,.9),metric_name:problem==='URMA超时'?'URMA timeout elapsedMs':'主阶段耗时',action:problem==='URMA超时'?'该类是错误覆盖层；用 timeout elapsedMs 和上浮链定位，不用互斥主阶段代替超时等待。':'按该互斥阶段的逐 Trace 明细和原始日志继续定位。'}});return result}
+function scopedStageTotals(rows){const totals={};Object.keys(STAGE_COLORS).forEach(stage=>{totals[stage]=rows.reduce((sum,row)=>sum+Number(row.focus_breakdown_ms[stage]||0),0)});return totals}
 function renderTimeSegments(){
   const segments=AGG.latency_segments||[],active=segments.find(item=>item.segment_id===activeTimeSegment),covered=segments.reduce((sum,item)=>sum+item.trace_count,0),outside=ROWS.length-covered,buttons=[`<button class="time-segment-button ${activeTimeSegment===null?'active':''}" data-segment="all">全部 · ${ROWS.length}条</button>`,...segments.map(item=>`<button class="time-segment-button ${activeTimeSegment===item.segment_id?'active':''}" data-segment="${item.segment_id}">${esc(item.label)} · ${item.trace_count}条</button>`)].join('');
   $('time-segment-controls').innerHTML=buttons;$('time-segment-controls').querySelectorAll('button').forEach(button=>button.onclick=()=>selectTimeSegment(button.dataset.segment==='all'?null:Number(button.dataset.segment)));
@@ -2420,10 +3310,9 @@ function renderStageShare(){
   chart.setOption({color:Object.values(STAGE_COLORS),tooltip:{trigger:'item',formatter:p=>`${esc(p.name)}<br>${Number(p.value).toFixed(3)} ms (${p.percent}%)`},legend:{orient:'vertical',right:'8%',top:'middle',textStyle:{fontSize:11}},series:[{name:'阶段耗时占比',type:'pie',radius:['37%','68%'],center:['38%','50%'],label:{formatter:'{b}\n{d}%'},data:Object.entries(totals).map(([name,value])=>({name,value}))}]})
 }
 function renderProblemGuidance(){
-  const items=Object.entries(AGG.problem_summary).filter(([,x])=>x.trace_count>0).sort((a,b)=>b[1].failed_count-a[1].failed_count||b[1].trace_count-a[1].trace_count);
+  const items=Object.entries(FOCUS_PROBLEMS).filter(([,x])=>x.trace_count>0).sort((a,b)=>b[1].failed_count-a[1].failed_count||b[1].trace_count-a[1].trace_count);
   const top=items.slice(0,3).map(([name,x])=>`${name} ${x.trace_count}条/失败${x.failed_count}条`).join('；');
-  const queryMetaCount=AGG.problem_summary.QueryMeta?.trace_count||0,queryMetaNote=queryMetaCount===0?'QueryMeta 当前无主导 Trace。':`QueryMeta 主导 ${queryMetaCount} 条，应按失败数和阶段时延纳入治理顺序。`;
-  $('problem-guidance').innerHTML=`<div class="notice"><b>本批治理顺序：</b>${esc(top)}。失败贡献优先，其次看覆盖 trace 数；${queryMetaNote}</div><div class="guidance-grid">${items.map(([name,x])=>`<div class="guidance-card" style="border-left-color:${PROBLEM_COLORS[name]}"><b>${esc(name)} · ${x.trace_count}条 · 失败${x.failed_count}条</b><span>${esc(x.metric_name)} p50 ${fmt(x.stage_p50_ms)}，p90 ${fmt(x.stage_p90_ms)}；Client总时延 p90 ${fmt(x.client_p90_ms)}。</span><div class="caption">${esc(x.action)}</div></div>`).join('')}</div>`;
+  $('problem-guidance').innerHTML=`<div class="notice"><b>本批治理顺序：</b>${esc(top)}。九个阶段互斥展示；URMA通信与URMA调度/线程开销分开，其他RPC/锁调度单列；证据不足的时间只进入未解释残差。</div><div class="guidance-grid">${items.map(([name,x])=>`<div class="guidance-card" style="border-left-color:${PROBLEM_COLORS[name]||'#667085'}"><b>${esc(name)} · ${x.trace_count}条 · 失败${x.failed_count}条</b><span>${esc(x.metric_name)} p50 ${fmt(x.stage_p50_ms)}，p90 ${fmt(x.stage_p90_ms)}；Client总时延 p90 ${fmt(x.client_p90_ms)}。</span><div class="caption">${esc(x.action)}</div></div>`).join('')}</div>`;
 }
 function renderErrorAnalysis(){
   const errorRows=scopeRows().filter(row=>row.error_family),timeoutRows=errorRows.filter(row=>row.error_family==='URMA超时'),rpcRows=errorRows.filter(row=>row.error_family==='RPC截止超时'),countBy=key=>errorRows.reduce((result,row)=>{const value=row[key]||'未细分';result[value]=(result[value]||0)+1;return result},{}),sub=Object.entries(countBy('error_subcategory')),chains=Object.entries(countBy('error_chain_category')),subChart=chartAt('error-subcategory-chart'),chainChart=chartAt('error-chain-chart');
@@ -2461,7 +3350,13 @@ function renderUrmaTimeTable(){const all=sortRows('urma-time-table',AGG.urma_ana
 function renderUrmaEdgeTable(){const all=sortRows('urma-edge-table',AGG.urma_analysis.worker_edges),pages=Math.max(1,Math.ceil(all.length/EDGE_PAGE_SIZE));urmaEdgePage=Math.min(urmaEdgePage,pages);const rows=all.slice((urmaEdgePage-1)*EDGE_PAGE_SIZE,urmaEdgePage*EDGE_PAGE_SIZE),body=$('urma-edge-table').querySelector('tbody');body.innerHTML=rows.map(item=>`<tr><td class="worker-name" title="${esc(item.name)}">${esc(shortWorker(item.source_worker))} → ${esc(shortWorker(item.target_worker))}</td><td>${item.trace_count}</td><td>${item.request_count}</td><td>${item.slow_request_count}</td><td>${latencyValue(item.total_p90_ms)}</td><td>${latencyValue(item.wait_p90_ms)}</td><td>${item.inflight_p90} / ${item.inflight_max}</td><td>${latencyValue(item.total_max_ms)}</td></tr>`).join('');$('urma-edge-pager').innerHTML=`<button id="urma-edge-prev" ${urmaEdgePage<=1?'disabled':''}>上一页</button><span>${urmaEdgePage}/${pages} · ${all.length}条</span><button id="urma-edge-next" ${urmaEdgePage>=pages?'disabled':''}>下一页</button>`;$('urma-edge-prev').onclick=()=>{if(urmaEdgePage>1){urmaEdgePage--;renderUrmaEdgeTable()}};$('urma-edge-next').onclick=()=>{if(urmaEdgePage<pages){urmaEdgePage++;renderUrmaEdgeTable()}};updateSortableHeaders('urma-edge-table')}
 function applyUrmaFilters(){const worker=$('urma-worker-filter').value,label=$('urma-label-filter').value,q=$('urma-trace-search').value.trim().toLowerCase();urmaFiltered=URMA_ROWS.filter(row=>(!worker||row.urma_trace.source_worker===worker)&&(!label||row.urma_trace.labels.includes(label))&&(!q||row.trace_id.toLowerCase().includes(q)||row.urma_trace.direction.toLowerCase().includes(q)||row.urma_requests.some(item=>String(item.request_id).includes(q))));urmaPage=1;renderUrmaTraceTable()}
 function renderUrmaTraceTable(){const pages=Math.max(1,Math.ceil(urmaFiltered.length/URMA_PAGE_SIZE));urmaPage=Math.min(urmaPage,pages);const selected=urmaFiltered.slice((urmaPage-1)*URMA_PAGE_SIZE,urmaPage*URMA_PAGE_SIZE),body=$('urma-trace-table').querySelector('tbody');body.innerHTML=selected.map(row=>{const u=row.urma_trace;return `<tr data-id="${esc(row.trace_id)}" class="${row.trace_id===selectedId?'selected':''}"><td class="nowrap" title="Worker本地时间">${esc(row.urma_requests[0].timestamp.slice(11,23))}</td><td><code>${esc(short(row.trace_id))}</code></td><td class="worker-name" title="${esc(u.direction)}">${esc(shortWorker(u.source_worker))} → ${esc(shortWorker(u.target_worker))}</td><td>${latencyValue(row.client_ms)}</td><td title="${esc(u.latency_basis)}">${latencyValue(u.critical_path_ms)}</td><td>${u.urma_client_ratio_pct?.toFixed(1)??'—'}%</td><td>${u.request_count}</td><td>${u.max_inflight_wr}</td><td>${u.max_remote_get_wr}</td><td>${diagnosisTags(u.labels)}<div class="caption">${esc(u.conclusion)}</div></td></tr>`}).join('')||'<tr><td colspan="10" class="empty">没有匹配的 URMA Trace</td></tr>';body.querySelectorAll('tr[data-id]').forEach(tr=>tr.onclick=()=>selectUrmaTrace(tr.dataset.id));$('urma-trace-pager').innerHTML=`<button id="urma-trace-prev" ${urmaPage<=1?'disabled':''}>上一页</button><span>${urmaPage}/${pages} · ${urmaFiltered.length}条</span><button id="urma-trace-next" ${urmaPage>=pages?'disabled':''}>下一页</button>`;$('urma-trace-prev').onclick=()=>{if(urmaPage>1){urmaPage--;renderUrmaTraceTable()}};$('urma-trace-next').onclick=()=>{if(urmaPage<pages){urmaPage++;renderUrmaTraceTable()}}}
-function renderUrmaRequestSummary(row){if(!row.urma_requests?.length)return '<div id="urma-request-summary" class="empty">该 Trace 没有 URMA request 证据</div>';const writes=(row.urma_logical_writes||[]).map(w=>`<div class="metric"><span>逻辑Write ${w.write_index}</span><b>${w.complete?latencyValue(w.wall_clock_ms):'未闭合'}</b><span>${w.wr_count}/${w.expected_wr_count||'?'} WR；最慢 ${w.slowest_wr_ms.toFixed(3)}ms；WR求和 ${w.sum_wr_ms.toFixed(3)}ms 仅作证据、不可作为关键路径</span></div>`).join('');return `<div id="urma-request-summary"><h3 style="margin-top:18px">逻辑 URMA Write / WR 明细</h3><div class="notice">${esc(row.urma_trace.conclusion)} 每个 Request ID 是一个 WR chunk；<b>WR耗时不可求和</b>。完整分片用<b>逻辑Write墙钟</b>，否则标记未闭合。completion wait 是该 WR 的等待调用，不等同纯网络；Inflight WR 是发送端全局快照。</div><div class="metric-grid">${writes}</div><div class="worker-table-wrap"><table class="urma-request-table"><thead><tr><th>Worker本地时间</th><th>Request</th><th>Chunk</th><th>源→目标</th><th>total</th><th>completion wait</th><th>wait→poll</th><th>poll call</th><th>notify→awake</th><th>wake sched</th><th>poll_jfc</th><th>notify</th><th>thread sched</th><th>Inflight WR</th><th>RemoteGet WR</th><th>srcChipInflight</th><th>CPU</th><th>数据量</th><th>状态</th></tr></thead><tbody>${row.urma_requests.map(item=>`<tr><td class="nowrap">${esc(item.timestamp.slice(11,23))}</td><td><code>${esc(item.request_id||'日志未携带')}</code></td><td>${item.write_chunk_index&&item.write_chunk_count?`${item.write_chunk_index}/${item.write_chunk_count}`:'—'}</td><td class="worker-name" title="${esc(item.src_addr)} → ${esc(item.target_addr)}">${esc(shortWorker(item.source_worker))} → ${esc(shortWorker(item.target_worker))}</td><td>${latencyValue(item.total_ms)}</td><td>${maybeMs(item.wait_completion_ms)}</td><td>${maybeMs(item.wait_to_poll_ms)}</td><td>${maybeMs(item.poll_call_ms)}</td><td>${maybeMs(item.notify_to_awake_ms)}</td><td>${maybeMs(item.wake_sched_latency_ms)}</td><td>${maybeMs(item.poll_jfc_ms)}</td><td>${maybeMs(item.notify_ms)}</td><td>${maybeMs(item.thread_sched_ms)}</td><td>${item.urma_inflight_wr_count??'—'}</td><td>${item.remote_get_wr_count??'—'}</td><td><code>${esc(item.src_chip_inflight)}</code></td><td>${item.cpuid??'—'}</td><td>${item.data_size?`${(item.data_size/1048576).toFixed(0)} MiB`:'—'}</td><td>${esc(item.status)}</td></tr>`).join('')}</tbody></table></div></div>`}
+function renderUrmaRequestSummary(row){
+  if(!row.urma_requests?.length)return '<div id="urma-request-summary" class="empty">该 Trace 没有 URMA request 证据</div>';
+  const writes=(row.urma_logical_writes||[]).map(w=>`<div class="metric"><span>逻辑Write ${w.write_index}</span><b>${latencyValue(w.slowest_wr_ms)}</b><span>${w.wr_count}/${w.expected_wr_count||'?'} WR；取最慢 URMA Elapsed；WR求和 ${w.sum_wr_ms.toFixed(3)}ms 仅作证据、不可作为关键路径</span></div>`).join('');
+  const sched=row.urma_scheduling_detail_ms||{};
+  const schedMetrics=[['wake sched',sched.wake_sched_latency],['thread sched',sched.thread_sched],['notify→awake',sched.notify_to_awake],['poll JFC',sched.poll_jfc],['notify',sched.notify]].map(([name,value])=>`<div class="metric"><span>${name}</span><b>${maybeMs(value)}</b></div>`).join('');
+  return `<div id="urma-request-summary"><h3 style="margin-top:18px">逻辑 URMA Write / WR 明细</h3><div class="notice">${esc(row.urma_trace.conclusion)} 每个 Request ID 是一个 WR chunk；顺序异步 post、统一 reap 时取两个 <b>URMA Elapsed Time 的最大值</b>，不求和。completion wait / wait→poll 是 reap 等待窗口，不整体等价于线程调度；Inflight WR 是发送端全局快照。</div><h4>URMA 调度/线程显式证据</h4><div class="metric-grid">${schedMetrics}</div><div class="caption">仅取关键路径最慢 WR${row.urma_scheduling_request_id?`（request ${esc(row.urma_scheduling_request_id)}）`:''}的兼容观测最大值，不累加重叠字段；该值从 URMA Elapsed 中剥离。wait→poll 与 completion wait 仅作为等待窗口证据。</div><div class="metric-grid">${writes}</div><div class="worker-table-wrap"><table class="urma-request-table"><thead><tr><th>Worker本地时间</th><th>Request</th><th>Chunk</th><th>源→目标</th><th>URMA Elapsed Time</th><th>completion wait</th><th>wait→poll</th><th>poll call</th><th>notify→awake</th><th>wake sched</th><th>poll_jfc</th><th>notify</th><th>thread sched</th><th>Inflight WR</th><th>RemoteGet WR</th><th>srcChipInflight</th><th>CPU</th><th>数据量</th><th>状态</th></tr></thead><tbody>${row.urma_requests.map(item=>`<tr><td class="nowrap">${esc(item.timestamp.slice(11,23))}</td><td><code>${esc(item.request_id||'日志未携带')}</code></td><td>${item.write_chunk_index&&item.write_chunk_count?`${item.write_chunk_index}/${item.write_chunk_count}`:'—'}</td><td class="worker-name" title="${esc(item.src_addr)} → ${esc(item.target_addr)}">${esc(shortWorker(item.source_worker))} → ${esc(shortWorker(item.target_worker))}</td><td>${latencyValue(item.total_ms)}</td><td>${maybeMs(item.wait_completion_ms)}</td><td>${maybeMs(item.wait_to_poll_ms)}</td><td>${maybeMs(item.poll_call_ms)}</td><td>${maybeMs(item.notify_to_awake_ms)}</td><td>${maybeMs(item.wake_sched_latency_ms)}</td><td>${maybeMs(item.poll_jfc_ms)}</td><td>${maybeMs(item.notify_ms)}</td><td>${maybeMs(item.thread_sched_ms)}</td><td>${item.urma_inflight_wr_count??'—'}</td><td>${item.remote_get_wr_count??'—'}</td><td><code>${esc(item.src_chip_inflight)}</code></td><td>${item.cpuid??'—'}</td><td>${item.data_size?`${(item.data_size/1048576).toFixed(0)} MiB`:'—'}</td><td>${esc(item.status)}</td></tr>`).join('')}</tbody></table></div></div>`
+}
 function shortDeep(name){return name.replace('BatchGet','BatchGet\n').replace('Data Worker服务端','Data Worker服务端\n').replace('明确本地','明确本地\n').replace('ProcessGet内部','ProcessGet内部\n').replace('截止点','截止点\n')}
 function renderNonTransportAnalysis(){
   const a=AGG.non_transport_analysis,categories=a.categories,names=categories.map(item=>item.category);
@@ -2513,18 +3408,19 @@ function renderWorkerTables(){
 function changeWorkerPage(kind,delta){const total=kind==='direct'?AGG.direct_data_workers.length:AGG.urma_source_workers.length,pages=Math.max(1,Math.ceil(total/WORKER_PAGE_SIZE));workerPages[kind]=Math.min(pages,Math.max(1,workerPages[kind]+delta));renderWorkerTables()}
 function renderTimeline(){
   const timelineRows=scopeRows(),chart=chartAt('timeline-chart'),labels=timelineRows.map((r,i)=>`${String(i+1).padStart(3,'0')} ${r.timestamp.slice(11,19)}`),stages=Object.keys(STAGE_COLORS);
-  const series=stages.map((name,i)=>({name,type:'bar',stack:'latency',barMaxWidth:11,data:timelineRows.map(r=>r.attribution_ms[name]),itemStyle:{color:STAGE_COLORS[name]},emphasis:{focus:'series'},markLine:i===0?{silent:true,symbol:'none',lineStyle:{color:'#dc3545',type:'dashed',width:1.5},label:{formatter:'20ms deadline',color:'#dc3545'},data:[{yAxis:20}]}:undefined}));
+  const series=stages.map((name,i)=>({name,type:'bar',stack:'latency',barMaxWidth:11,data:timelineRows.map(r=>r.focus_breakdown_ms[name]),itemStyle:{color:STAGE_COLORS[name]},emphasis:{focus:'series'},markLine:i===0?{silent:true,symbol:'none',lineStyle:{color:'#dc3545',type:'dashed',width:1.5},label:{formatter:'20ms deadline',color:'#dc3545'},data:[{yAxis:20}]}:undefined}));
   series.push({name:'其他失败',type:'scatter',symbol:'circle',symbolSize:7,itemStyle:{color:'#667085'},data:timelineRows.map((r,i)=>r.failed&&!r.urma_timeout_observed?[i,r.client_ms+0.4]:null).filter(Boolean)});
   series.push({name:'URMA超时标记',type:'scatter',symbol:'diamond',symbolSize:12,itemStyle:{color:'#b42318'},data:timelineRows.map((r,i)=>r.urma_timeout_observed?[i,r.client_ms+0.4]:null).filter(Boolean)});
-  chart.setOption({animation:false,color:Object.values(STAGE_COLORS),legend:{top:0,data:[...stages,'其他失败','URMA超时标记']},grid:{left:48,right:20,top:48,bottom:72},tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:params=>{const idx=params[0]?.dataIndex??0,r=timelineRows[idx];return `<b>${esc(r.trace_id)}</b><br>${esc(r.timestamp)} · Client ${fmt(r.client_ms)}<br>${stages.map(n=>`${n}: ${fmt(r.attribution_ms[n])}`).join('<br>')}<br>主问题：${esc(r.primary_problem)} · ${r.failed?'失败':'成功'}${r.error_subcategory?`<br>错误细分：${esc(r.error_subcategory)}<br>上浮链：${esc(r.error_chain_category)}`:''}`}},xAxis:{type:'category',data:labels,axisLabel:{interval:9,rotate:35,fontSize:10}},yAxis:{type:'value',name:'归因耗时 (ms)',splitLine:{lineStyle:{color:'#e6ebf2'}}},dataZoom:[{type:'inside',start:0,end:100},{type:'slider',height:18,bottom:10,start:0,end:100}],series});
+  chart.setOption({animation:false,color:Object.values(STAGE_COLORS),legend:{top:0,data:[...stages,'其他失败','URMA超时标记']},grid:{left:48,right:20,top:48,bottom:72},tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:params=>{const idx=params[0]?.dataIndex??0,r=timelineRows[idx];return `<b>${esc(r.trace_id)}</b><br>${esc(r.timestamp)} · Client ${fmt(r.client_ms)}<br>${stages.map(n=>`${n}: ${fmt(r.focus_breakdown_ms[n])}`).join('<br>')}<br>主问题：${esc(r.focus_primary_problem)} · ${r.failed?'失败':'成功'}${r.error_subcategory?`<br>错误细分：${esc(r.error_subcategory)}<br>上浮链：${esc(r.error_chain_category)}`:''}`}},xAxis:{type:'category',data:labels,axisLabel:{interval:9,rotate:35,fontSize:10}},yAxis:{type:'value',name:'归因耗时 (ms)',splitLine:{lineStyle:{color:'#e6ebf2'}}},dataZoom:[{type:'inside',start:0,end:100},{type:'slider',height:18,bottom:10,start:0,end:100}],series});
   chart.off('click');chart.on('click',p=>{if(Number.isInteger(p.dataIndex)){selectedId=timelineRows[p.dataIndex].trace_id;renderTable();renderDetail();document.getElementById('traces').scrollIntoView({behavior:'smooth'})}})
 }
-function categoryBadge(r){const color=PROBLEM_COLORS[r.primary_problem]||'#667085';return `<span class="badge" style="background:${color}20;color:${color}">${esc(r.primary_problem)}</span>`}
-function applyFilters(){const cat=$('category-filter').value,status=$('status-filter').value,location=$('access-location-filter').value,direct=$('direct-worker-filter').value,source=$('urma-source-filter').value,q=$('trace-search').value.trim().toLowerCase();filtered=scopeRows().filter(r=>(!cat||r.primary_problem===cat)&&(!status||(status==='failed')===r.failed)&&(!location||r.access_location===location)&&(!direct||r.direct_data_worker===direct)&&(!source||r.urma_source_workers.includes(source))&&(!q||r.trace_id.toLowerCase().includes(q)||String(r.failure_reason||'').toLowerCase().includes(q)||String(r.data_access_scope||'').toLowerCase().includes(q)||String(r.error_subcategory||'').toLowerCase().includes(q)||String(r.error_chain_category||'').toLowerCase().includes(q)||r.evidence.some(x=>x.toLowerCase().includes(q))));page=1;if(!filtered.some(r=>r.trace_id===selectedId))selectedId=filtered[0]?.trace_id||null;renderTable();renderDetail()}
-function renderTable(){const body=$('trace-table').querySelector('tbody'),pages=Math.max(1,Math.ceil(filtered.length/PAGE_SIZE));page=Math.min(page,pages);const slice=filtered.slice((page-1)*PAGE_SIZE,page*PAGE_SIZE);body.innerHTML=slice.map(r=>`<tr data-id="${esc(r.trace_id)}" class="${r.trace_id===selectedId?'selected ':''}${r.failed?'trace-failed':''}"><td>${esc(r.timestamp.slice(11,23))}</td><td><code>${esc(short(r.trace_id))}</code></td><td>${categoryBadge(r)}</td><td>${esc(r.failure_reason||r.error_subcategory||'—')}</td><td>${badge(r.failed?'20ms超时':'成功',r.failed?'b-fail':'b-ok')}</td><td title="${esc(r.access_location_evidence)}">${esc(r.access_location)}</td><td title="${esc(r.data_access_evidence||'')}">${esc(r.data_access_scope||'证据不足')}</td><td>${latencyValue(r.client_ms)}</td><td>${latencyValue(r.attribution_ms['RPC网络'])}</td><td>${latencyValue(r.attribution_ms['RPC排队'])}</td><td>${latencyValue(r.attribution_ms['QueryMeta'])}</td><td>${latencyValue(r.attribution_ms['URMA'])}</td><td>${latencyValue(r.attribution_ms['远端供数非URMA'])}</td><td>${latencyValue(r.attribution_ms['数据访问父窗口/未细分'])}</td><td>${latencyValue(r.attribution_ms['未解释残差'])}</td></tr>`).join('')||`<tr><td colspan="15" class="empty">没有匹配的 Trace</td></tr>`;body.querySelectorAll('tr[data-id]').forEach(tr=>tr.onclick=()=>{selectedId=tr.dataset.id;renderTable();renderDetail()});$('page-label').textContent=`${page}/${pages} · ${filtered.length}条`;$('prev-page').disabled=page<=1;$('next-page').disabled=page>=pages}
+function categoryBadge(r){const color=PROBLEM_COLORS[r.focus_primary_problem]||'#667085';return `<span class="badge" style="background:${color}20;color:${color}">${esc(r.focus_primary_problem)}</span>`}
+function applyFilters(){const cat=$('category-filter').value,status=$('status-filter').value,location=$('access-location-filter').value,direct=$('direct-worker-filter').value,source=$('urma-source-filter').value,q=$('trace-search').value.trim().toLowerCase();filtered=scopeRows().filter(r=>(!cat||r.focus_primary_problem===cat)&&(!status||(status==='failed')===r.failed)&&(!location||r.access_location===location)&&(!direct||r.direct_data_worker===direct)&&(!source||r.urma_source_workers.includes(source))&&(!q||r.trace_id.toLowerCase().includes(q)||String(r.failure_reason||'').toLowerCase().includes(q)||String(r.data_access_scope||'').toLowerCase().includes(q)||String(r.error_subcategory||'').toLowerCase().includes(q)||String(r.error_chain_category||'').toLowerCase().includes(q)||r.evidence.some(x=>x.toLowerCase().includes(q))));page=1;if(!filtered.some(r=>r.trace_id===selectedId))selectedId=filtered[0]?.trace_id||null;renderTable();renderDetail()}
+function renderTable(){const body=$('trace-table').querySelector('tbody'),pages=Math.max(1,Math.ceil(filtered.length/PAGE_SIZE));page=Math.min(page,pages);const slice=filtered.slice((page-1)*PAGE_SIZE,page*PAGE_SIZE),stages=Object.keys(STAGE_COLORS);body.innerHTML=slice.map(r=>`<tr data-id="${esc(r.trace_id)}" class="${r.trace_id===selectedId?'selected ':''}${r.failed?'trace-failed':''}"><td>${esc(r.timestamp.slice(11,23))}</td><td><code>${esc(short(r.trace_id))}</code></td><td>${categoryBadge(r)}</td><td>${esc(r.failure_reason||r.error_subcategory||'—')}</td><td>${badge(r.failed?'20ms超时':'成功',r.failed?'b-fail':'b-ok')}</td><td title="${esc(r.access_location_evidence)}">${esc(r.access_location)}</td><td title="${esc(r.data_access_evidence||'')}">${esc(r.data_access_scope||'证据不足')}</td><td>${latencyValue(r.client_ms)}</td>${stages.map(name=>`<td>${latencyValue(r.focus_breakdown_ms[name])}</td>`).join('')}</tr>`).join('')||`<tr><td colspan="17" class="empty">没有匹配的 Trace</td></tr>`;body.querySelectorAll('tr[data-id]').forEach(tr=>tr.onclick=()=>{selectedId=tr.dataset.id;renderTable();renderDetail()});$('page-label').textContent=`${page}/${pages} · ${filtered.length}条`;$('prev-page').disabled=page<=1;$('next-page').disabled=page>=pages}
+function evidenceMs(value){const number=Number(value);return value===null||value===undefined||!Number.isFinite(number)?'未观测':`${number.toFixed(6)} ms`}
 function traceText(rows,title){
-  const dropped=rows.reduce((sum,row)=>sum+(row.dropped_evidence||0),0),header=[`# DataSystem Trace Evidence Export`,`# 范围: ${title}`,`# Trace数量: ${rows.length}`,`# 证据范围: ds-trace-triage 保留行；另有 ${dropped} 行被预处理截断，不是原始日志全量。`,`# 口径: RPC网络、服务端处理、URMA分别记录；父窗口与子阶段不可直接相加。`,`# 生成自 ds-trace-triage 后置关键瓶颈分析页。`];
-  const blocks=rows.map((row,index)=>{const d=row.non_transport_analysis,stages=Object.entries(row.attribution_ms).map(([name,value])=>`${name}: ${Number(value).toFixed(6)} ms`).join('\n'),deep=d?[`精细分类: ${d.deep_category}`,`证据强度: ${d.confidence}`,`结论: ${d.conclusion}`,`下一步: ${d.next_action}`,`证据摘要: ${d.evidence_points.join('；')}`]:[];return [`===== TRACE ${index+1}/${rows.length} =====`,`Trace ID: ${row.trace_id}`,`时间: ${row.timestamp} ~ ${row.last_ts}`,`状态: ${row.failed?'失败':'成功'} (${row.status})`,`主问题: ${row.primary_problem}`,`失败原因: ${row.failure_reason||row.error_subcategory||'无'}`,`错误上浮链: ${row.error_chain_category||'无'}`,`根因边界: ${row.error_root_cause_boundary||'无'}`,`交付方式: ${row.access_location} (${row.access_location_evidence})`,`定位侧/窗口: ${row.data_access_scope} (${row.data_access_evidence})`,`Data Worker证据: ${row.direct_data_worker}`,`URMA 源 Data Worker: ${row.urma_source_workers.join(', ')||'未明确'}`,`Client总时延: ${Number(row.client_ms).toFixed(6)} ms`,`Client/Worker数据父窗口: ${Number(row.worker_process_ms).toFixed(6)} ms`,`Data RPC e2e/network/server: ${Number(row.data_rpc_e2e_ms).toFixed(6)} / ${Number(row.data_rpc_network_ms).toFixed(6)} / ${Number(row.data_rpc_server_ms).toFixed(6)} ms`,`BatchGet e2e: ${Number(row.batch_e2e_ms).toFixed(6)} ms`,`BatchGet network residual: ${Number(row.batch_network_ms).toFixed(6)} ms`,`BatchGet server_exec: ${Number(row.batch_server_ms).toFixed(6)} ms`,`URMA关键路径: ${row.urma_critical_path_ms===null||row.urma_critical_path_ms===undefined?'未观测':`${Number(row.urma_critical_path_ms).toFixed(6)} ms`}`,`证据保留: ${row.evidence.length}行；截断: ${row.dropped_evidence}行`,...deep,`--- 互斥阶段 ---`,stages,`--- triage保留证据 ---`,...row.evidence].join('\n')}).join('\n\n');return `${header.join('\n')}\n\n${blocks}\n`}
+  const dropped=rows.reduce((sum,row)=>sum+(row.dropped_evidence||0),0),header=[`# DataSystem Trace Evidence Export`,`# 范围: ${title}`,`# Trace数量: ${rows.length}`,`# 证据范围: ds-trace-triage 保留行；另有 ${dropped} 行被预处理截断，不是原始日志全量。`,`# 口径: URMA建链、URMA通信、URMA调度/线程开销、QueryAndGet/Get其他业务、其他调度/线程开销、RPC网络、RPC框架是互斥阶段；证据不闭合的部分保留为未解释残差。`,`# 生成自 ds-trace-triage 后置关键瓶颈分析页。`];
+  const blocks=rows.map((row,index)=>{const d=row.non_transport_analysis,stages=Object.entries(row.focus_breakdown_ms).map(([name,value])=>`${name}: ${Number(value).toFixed(6)} ms`).join('\n'),deep=d?[`精细分类: ${d.deep_category}`,`证据强度: ${d.confidence}`,`结论: ${d.conclusion}`,`下一步: ${d.next_action}`,`证据摘要: ${d.evidence_points.join('；')}`]:[];return [`===== TRACE ${index+1}/${rows.length} =====`,`Trace ID: ${row.trace_id}`,`时间: ${row.timestamp} ~ ${row.last_ts}`,`状态: ${row.failed?'失败':'成功'} (${row.status})`,`主问题: ${row.focus_primary_problem}`,`失败原因: ${row.failure_reason||row.error_subcategory||'无'}`,`错误上浮链: ${row.error_chain_category||'无'}`,`根因边界: ${row.error_root_cause_boundary||'无'}`,`交付方式: ${row.access_location} (${row.access_location_evidence})`,`定位侧/窗口: ${row.data_access_scope} (${row.data_access_evidence})`,`Data Worker证据: ${row.direct_data_worker}`,`URMA 源 Data Worker: ${row.urma_source_workers.join(', ')||'未明确'}`,`Client总时延: ${evidenceMs(row.client_ms)}`,`Client/Worker数据父窗口: ${evidenceMs(row.worker_process_ms)}`,`Data RPC e2e/network/server: ${evidenceMs(row.data_rpc_e2e_ms)} / ${evidenceMs(row.data_rpc_network_ms)} / ${evidenceMs(row.data_rpc_server_ms)}`,`BatchGet e2e: ${evidenceMs(row.batch_e2e_ms)}`,`BatchGet network residual: ${evidenceMs(row.batch_network_ms)}`,`BatchGet server_exec: ${evidenceMs(row.batch_server_ms)}`,`URMA关键路径: ${evidenceMs(row.urma_critical_path_ms)}`,`证据保留: ${row.evidence.length}行；截断: ${row.dropped_evidence}行`,...deep,`--- 互斥阶段 ---`,stages,`--- triage保留证据 ---`,...row.evidence].join('\n')}).join('\n\n');return `${header.join('\n')}\n\n${blocks}\n`}
 function safeFilename(value){return String(value||'traces').replace(/[\\/:*?"<>|\s]+/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'').slice(0,100)||'traces'}
 function downloadTraceSet(rows,filename,title){if(!rows.length)return;const blob=new Blob(['\ufeff',traceText(rows,title)],{type:'text/plain;charset=utf-8'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=`${safeFilename(filename)}.txt`;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 function classifyEvidence(text){if(/URMA|UDMA|\bUB\b/i.test(text))return'urma';if(/BatchGetObjectRemote|RemotePull|WorkerWorkerOCService|remote[_ ]?get/i.test(text))return'remote';if(/DS_KV_CLIENT_GET|ds_client|ClientWorkerRemoteApi/i.test(text))return'client';if(/DS_POSIX_GET|worker_oc_service_get_impl|\[Get\]/i.test(text))return'direct';return'other'}
@@ -2535,15 +3431,46 @@ function highlightLogLine(text){let html=esc(text);html=html.replace(/(\|\s*(?:D
 function logGroupSummary(lines){const joined=lines.join('\n'),values=lines.flatMap(extractLogLatencyTokens),max=values.length?Math.max(...values):null,direction=joined.match(/src address\s*:?\s*([^,\s]+).*?target address\s*:?\s*([^,\s]+)/i);const parts=[];if(max!==null)parts.push(`最大可解析耗时 ${fmt(max)}`);if(direction)parts.push(`方向 ${direction[1]} → ${direction[2]}`);if(/deadline|timeout/i.test(joined))parts.push('包含 deadline/timeout');return parts.join(' · ')||'保留原始证据，当前无可解析耗时字段'}
 function rankLogLine(text){if(/\|\s*[EF]\s*\||ERROR|FATAL|deadline exceeded|RPC timed out|URMA(?:[_ -]WAIT[_ -]TIMEOUT)|Timed out waiting for urma_request_id/i.test(text))return 0;if(/URMA_ELAPSED_TOTAL/i.test(text))return 1;if(/urma_inflight_wr_count|srcChipInflight|inflightRemoteGet|trace_us/i.test(text))return 2;if(/RPC_FRAMEWORK_SLOW|BatchGetObjectRemote|RemotePull/i.test(text))return 3;if(/DS_KV_CLIENT_GET|DS_POSIX_GET|latencySummary/i.test(text))return 4;if(/src address|target address|dataSize|cpuid/i.test(text))return 5;return 9}
 function renderTraceLogGroups(evidence){const labels={client:'Client',direct:'Data Worker处理证据',remote:'远端取数 / RPC',urma:'URMA / UB',other:'其他证据'},groups={client:[],direct:[],remote:[],urma:[],other:[]};(evidence||[]).forEach(text=>groups[classifyEvidence(text)].push(text));const html=Object.entries(groups).filter(([,lines])=>lines.length).map(([kind,lines])=>{const keyLines=lines.map((text,index)=>({text,index,rank:rankLogLine(text)})).sort((a,b)=>a.rank-b.rank||a.index-b.index).slice(0,8).map(item=>item.text),allLines=lines.map(text=>`<span class="log-line">${highlightLogLine(text)}</span>`).join(''),disclosure=lines.length>8?`<details class="log-all-lines"><summary>展开全部 ${lines.length} 行原始日志</summary><pre>${allLines}</pre></details>`:'';return `<section class="trace-log-group trace-log-${kind}"><h4><span>${labels[kind]}</span><span>${lines.length} 行 · 默认 ${keyLines.length} 行重点</span></h4><div class="trace-log-summary">${esc(logGroupSummary(lines))}</div><pre class="log-key-lines">${keyLines.map(text=>`<span class="log-line">${highlightLogLine(text)}</span>`).join('')}</pre>${disclosure}</section>`}).join('');return html||'<div class="empty">没有原始日志证据</div>'}
-function renderDetail(){const r=ROWS.find(x=>x.trace_id===selectedId);if(!r){$('trace-detail').innerHTML='<div class="empty">请选择 Trace</div>';$('trace-log-groups').innerHTML='';return}const max=Math.max(r.client_ms,1),topStage=r.primary_stage,raw=[['总时延',r.client_ms],['Client/Worker数据父窗口',r.worker_process_ms],['Client RPC e2e',r.rpc_observed?r.client_rpc_e2e_ms:null],['Client RPC 网络',r.rpc_observed?r.client_rpc_network_ms:null],['Data RPC e2e',r.data_rpc_observed?r.data_rpc_e2e_ms:null],['Data RPC 网络',r.data_rpc_observed?r.data_rpc_network_ms:null],['Data RPC server',r.data_rpc_observed?r.data_rpc_server_ms:null],['QueryMeta',r.query_meta_ms],['URMA关键路径',r.urma_critical_path_ms],['URMA timeout',r.urma_timeout_max_ms]],errorNote=!r.error_family?'':r.urma_timeout_observed?`<div class="notice"><b>URMA超时细分：</b>${esc(r.error_subcategory)}；${esc(r.error_chain_category)}。<br><b>已确认故障点：</b>${esc(r.error_failure_point)}；<b>恢复动作：</b>${esc(r.error_recovery_action)}。<br><b>根因边界：</b>${esc(r.error_root_cause_boundary)}。<br><b>口径：</b>已观测到 URMA_WAIT_TIMEOUT；失败 WR 没有完成态时不伪造 URMA 耗时。</div>`:`<div class="notice"><b>${esc(r.error_family)}：</b>${esc(r.error_subcategory)}；${esc(r.error_chain_category)}。<br><b>已确认故障点：</b>${esc(r.error_failure_point)}；<b>根因边界：</b>${esc(r.error_root_cause_boundary)}。</div>`;$('trace-detail').innerHTML=`<div><code>${esc(r.trace_id)}</code></div><p>${categoryBadge(r)} ${badge(r.failed?'20ms超时':'成功',r.failed?'b-fail':'b-ok')}</p>${errorNote}<div class="notice"><b>定位侧/窗口：</b>${esc(r.data_access_scope||'证据不足')}。${esc(r.data_access_evidence||'')}<br><b>失败原因：</b>${esc(r.failure_reason||r.error_subcategory||'无失败')}。</div><p><b>交付方式：</b>${esc(r.access_location)} <span class="caption">${esc(r.access_location_evidence)}</span><br><b>Data Worker证据：</b>${esc(r.direct_data_worker)}<br><b>URMA 源 Data Worker：</b>${esc(r.urma_source_workers.join(', ')||'未明确')}</p><div class="metric-grid">${raw.map(([n,v])=>`<div class="metric"><span>${n}</span><b>${v===null||v===undefined?'—':latencyValue(v)}</b></div>`).join('')}</div>${renderUrmaRequestSummary(r)}<h3 style="margin-top:16px">互斥归因 Stages</h3>${Object.entries(r.attribution_ms).map(([n,v])=>{const top=n===topStage;return `<div class="phase-row"><span style="color:${top?'#dc3545':'inherit'};font-weight:${top?'700':'400'}">${n}${top?' · TOP 瓶颈':''}</span><div class="phase-track"><div class="phase-fill" style="width:${Math.min(100,v/max*100)}%;background:${top?'#dc3545':STAGE_COLORS[n]}"></div></div><b>${latencyValue(v)}</b></div>`}).join('')}<div class="caption">红色条为该 Trace 最大互斥归因阶段；数值底色按 ≥5ms 橙色、≥20ms 红色。父窗口与子阶段不可直接相加。</div>`;const truncation=r.dropped_evidence?`<div class="notice"><b>证据已截断：</b>ds-trace-triage 另有 ${r.dropped_evidence} 行未保留；本页和下载均不是原始日志全量。</div>`:'';$('trace-log-groups').innerHTML=truncation+renderTraceLogGroups(r.evidence)}
-function init(){renderKpis();renderProblemOverview();renderErrorAnalysis();renderStageShare();renderProblemGuidance();renderTimeFindings();renderUrmaAnalysis();renderNonTransportAnalysis();renderWorkers();renderTimeline();Object.keys(AGG.problem_summary).forEach(cat=>$('category-filter').insertAdjacentHTML('beforeend',`<option value="${esc(cat)}">${esc(cat)}</option>`));Object.keys(AGG.access_locations).forEach(location=>$('access-location-filter').insertAdjacentHTML('beforeend',`<option value="${esc(location)}">${esc(location)} · ${AGG.access_locations[location]}条</option>`));AGG.direct_data_workers.forEach(x=>$('direct-worker-filter').insertAdjacentHTML('beforeend',`<option value="${esc(x.worker)}">${esc(x.worker)}</option>`));AGG.urma_source_workers.forEach(x=>$('urma-source-filter').insertAdjacentHTML('beforeend',`<option value="${esc(x.worker)}">${esc(x.worker)}</option>`));['category-filter','status-filter','access-location-filter','direct-worker-filter','urma-source-filter'].forEach(id=>$(id).onchange=applyFilters);$('trace-search').oninput=applyFilters;$('reset-filter').onclick=()=>{['category-filter','status-filter','access-location-filter','direct-worker-filter','urma-source-filter'].forEach(id=>$(id).value='');$('trace-search').value='';applyFilters()};$('prev-page').onclick=()=>{if(page>1){page--;renderTable()}};$('next-page').onclick=()=>{if(page*PAGE_SIZE<filtered.length){page++;renderTable()}};$('download-all-traces').onclick=()=>downloadTraceSet(ROWS,'same-3x105qps-8mb-top100-all-100','Top100 全量 Trace');$('download-filtered-traces').onclick=()=>downloadTraceSet(filtered,`same-3x105qps-8mb-filtered-${filtered.length}`,`Top100 当前筛选 ${filtered.length} 条`);$('download-non-transport-category').onclick=()=>{const category=$('non-transport-category-filter').value||'非RPC非UB全部';downloadTraceSet(nonTransportFiltered,`same-3x105qps-8mb-${category}-${nonTransportFiltered.length}`,`${category} ${nonTransportFiltered.length} 条`)};$('download-selected-trace').onclick=()=>{const row=ROWS.find(item=>item.trace_id===selectedId);if(row)downloadTraceSet([row],`trace-${row.trace_id}`,`单条 Trace ${row.trace_id}`)};renderTable();renderDetail();initScrollSpy();window.addEventListener('resize',()=>charts.forEach(chart=>chart.resize()))}init();
+function renderErrorNote(r){
+  if(!r.error_family)return '';
+  if(!r.urma_timeout_observed)return `<div class="notice"><b>${esc(r.error_family)}：</b>${esc(r.error_subcategory)}；${esc(r.error_chain_category)}。<br><b>已确认故障点：</b>${esc(r.error_failure_point)}；<b>根因边界：</b>${esc(r.error_root_cause_boundary)}。</div>`;
+  const breakdown=r.query_urma_timeout_ms==null?'超时未与 QueryAndGet 父窗口唯一闭合，保留为错误标记，不挪动阶段。':`同 Worker QueryAndGet 父窗口内唯一匹配；从 QueryMeta/QueryAndGet 中剥离 ${fmt(r.query_urma_timeout_ms)} 的等待窗口。`;
+  return `<div class="notice"><b>URMA超时细分：</b>${esc(r.error_subcategory)}；${esc(r.error_chain_category)}。<br><b>已确认故障点：</b>${esc(r.error_failure_point)}；<b>恢复动作：</b>${esc(r.error_recovery_action)}。<br><b>根因边界：</b>${esc(r.error_root_cause_boundary)}。<br><b>口径：</b>已观测到 URMA_WAIT_TIMEOUT；失败 WR 没有完成态时不伪造 URMA 耗时。<br><b>Breakdown口径：</b>${breakdown}</div>`;
+}
+function renderMetricGrid(raw){return raw.map(([name,value])=>`<div class="metric"><span>${name}</span><b>${value===null||value===undefined?'—':latencyValue(value)}</b></div>`).join('')}
+function renderAttributionStages(r,max,topStage){return Object.entries(r.focus_breakdown_ms).map(([name,value])=>{const isTop=name===topStage,color=isTop?'#dc3545':STAGE_COLORS[name],weight=isTop?'700':'400',label=isTop?' · TOP 瓶颈':'';return `<div class="phase-row"><span style="color:${isTop?'#dc3545':'inherit'};font-weight:${weight}">${name}${label}</span><div class="phase-track"><div class="phase-fill" style="width:${Math.min(100,value/max*100)}%;background:${color}"></div></div><b>${latencyValue(value)}</b></div>`}).join('')}
+function renderDetail(){
+  const r=ROWS.find(item=>item.trace_id===selectedId);
+  if(!r){$('trace-detail').innerHTML='<div class="empty">请选择 Trace</div>';$('trace-log-groups').innerHTML='';return}
+  const max=Math.max(r.client_ms,1),topStage=r.focus_primary_stage;
+  const raw=[['总时延',r.client_ms],['Client/Worker数据父窗口',r.worker_process_ms],['Client RPC e2e',r.rpc_observed?r.client_rpc_e2e_ms:null],['Client RPC 网络',r.rpc_observed?r.client_rpc_network_ms:null],['Data RPC e2e',r.data_rpc_observed?r.data_rpc_e2e_ms:null],['Data RPC 网络',r.data_rpc_observed?r.data_rpc_network_ms:null],['Data RPC server',r.data_rpc_observed?r.data_rpc_server_ms:null],['QueryMeta/QueryAndGet原始父窗口',r.query_meta_ms],['URMA超时等待窗口',r.query_urma_timeout_ms],['URMA关键路径',r.urma_critical_path_ms],['URMA timeout最大elapsedMs',r.urma_timeout_max_ms]];
+  const status=badge(r.failed?'20ms超时':'成功',r.failed?'b-fail':'b-ok'),errorNote=renderErrorNote(r),metricGrid=renderMetricGrid(raw),stages=renderAttributionStages(r,max,topStage);
+  $('trace-detail').innerHTML=`<div><code>${esc(r.trace_id)}</code></div><p>${categoryBadge(r)} ${status}</p>${errorNote}<div class="notice"><b>定位侧/窗口：</b>${esc(r.data_access_scope||'证据不足')}。${esc(r.data_access_evidence||'')}<br><b>失败原因：</b>${esc(r.failure_reason||r.error_subcategory||'无失败')}。</div><p><b>交付方式：</b>${esc(r.access_location)} <span class="caption">${esc(r.access_location_evidence)}</span><br><b>Data Worker证据：</b>${esc(r.direct_data_worker)}<br><b>URMA 源 Data Worker：</b>${esc(r.urma_source_workers.join(', ')||'未明确')}</p><div class="metric-grid">${metricGrid}</div>${renderUrmaRequestSummary(r)}<h3 style="margin-top:16px">互斥归因 Stages</h3>${stages}<div class="caption">红色条为该 Trace 最大互斥阶段。RPC框架已扣除 handler、网络残差和明确的其他调度/排队；URMA通信已扣除明确的 URMA 调度/线程开销。证据不闭合时保留未解释残差，不强行归因。</div>`;
+  const truncation=r.dropped_evidence?`<div class="notice"><b>证据已截断：</b>ds-trace-triage 另有 ${r.dropped_evidence} 行未保留；本页和下载均不是原始日志全量。</div>`:'';
+  $('trace-log-groups').innerHTML=truncation+renderTraceLogGroups(r.evidence);
+}
+function init(){renderKpis();renderProblemOverview();renderErrorAnalysis();renderStageShare();renderProblemGuidance();renderTimeFindings();renderUrmaAnalysis();renderNonTransportAnalysis();renderWorkers();renderTimeline();Object.keys(FOCUS_PROBLEMS).forEach(cat=>$('category-filter').insertAdjacentHTML('beforeend',`<option value="${esc(cat)}">${esc(cat)}</option>`));Object.keys(AGG.access_locations).forEach(location=>$('access-location-filter').insertAdjacentHTML('beforeend',`<option value="${esc(location)}">${esc(location)} · ${AGG.access_locations[location]}条</option>`));AGG.direct_data_workers.forEach(x=>$('direct-worker-filter').insertAdjacentHTML('beforeend',`<option value="${esc(x.worker)}">${esc(x.worker)}</option>`));AGG.urma_source_workers.forEach(x=>$('urma-source-filter').insertAdjacentHTML('beforeend',`<option value="${esc(x.worker)}">${esc(x.worker)}</option>`));['category-filter','status-filter','access-location-filter','direct-worker-filter','urma-source-filter'].forEach(id=>$(id).onchange=applyFilters);$('trace-search').oninput=applyFilters;$('reset-filter').onclick=()=>{['category-filter','status-filter','access-location-filter','direct-worker-filter','urma-source-filter'].forEach(id=>$(id).value='');$('trace-search').value='';applyFilters()};$('prev-page').onclick=()=>{if(page>1){page--;renderTable()}};$('next-page').onclick=()=>{if(page*PAGE_SIZE<filtered.length){page++;renderTable()}};$('download-all-traces').onclick=()=>downloadTraceSet(ROWS,'same-3x105qps-8mb-top100-all-100','Top100 全量 Trace');$('download-filtered-traces').onclick=()=>downloadTraceSet(filtered,`same-3x105qps-8mb-filtered-${filtered.length}`,`Top100 当前筛选 ${filtered.length} 条`);$('download-non-transport-category').onclick=()=>{const category=$('non-transport-category-filter').value||'非RPC非UB全部';downloadTraceSet(nonTransportFiltered,`same-3x105qps-8mb-${category}-${nonTransportFiltered.length}`,`${category} ${nonTransportFiltered.length} 条`)};$('download-selected-trace').onclick=()=>{const row=ROWS.find(item=>item.trace_id===selectedId);if(row)downloadTraceSet([row],`trace-${row.trace_id}`,`单条 Trace ${row.trace_id}`)};renderTable();renderDetail();initScrollSpy();window.addEventListener('resize',()=>charts.forEach(chart=>chart.resize()))}init();
+const renderDetailBase=renderDetail;
+renderDetail=function(){renderDetailBase();const r=ROWS.find(x=>x.trace_id===selectedId);if(!r||r.query_and_get_parent_ms==null)return;const node=$('trace-detail');const queryMetric=[...node.querySelectorAll('.metric span')].find(x=>x.textContent==='QueryMeta');if(queryMetric)queryMetric.textContent='QueryAndGet父窗口（原始）';node.insertAdjacentHTML('afterbegin',`<div class="notice"><b>PR2165 inline 互斥归因：</b>QueryAndGet 父窗口 ${latencyValue(r.query_and_get_parent_ms)}；独占 ${latencyValue(r.query_and_get_exclusive_ms)}；已剝离 inline URMA ${latencyValue(r.inline_query_urma_ms)}（${esc(r.inline_query_urma_basis||'未观测')}）。同 Worker、同 attempt 唯一匹配；WR 分片不求和。</div>`)};
+renderDetail();
 </script>
 </body></html>'''
 
 
-def _render_dashboard_html(rows: list[dict], aggregate_data: dict, title: str, metadata: dict) -> str:
+def _render_dashboard_html(
+    rows: list[dict],
+    aggregate_data: dict,
+    title: str,
+    metadata: dict,
+    write_rows: list[dict],
+    write_aggregate: dict,
+) -> str:
     rows_json = json.dumps(rows, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
     aggregate_json = json.dumps(aggregate_data, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
+    write_rows_json = json.dumps(write_rows, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
+    write_aggregate_json = json.dumps(write_aggregate, ensure_ascii=False, separators=(",", ":")).replace(
+        "<", "\\u003c"
+    )
     echarts_path = (
         Path(__file__).resolve().parent.parent
         / ".skills"
@@ -2632,6 +3559,11 @@ def _render_dashboard_html(rows: list[dict], aggregate_data: dict, title: str, m
         .replace("Top100 中", f"Top{len(rows)} 中")
         .replace("合计 100 条", f"合计 {len(rows)} 条")
         .replace("的 40 条 Trace", f"的 {non_transport_count} 条 Trace")
+        .replace(
+            '<a class="sub" href="#trace-log-panel">日志框 7-3 Trace 证据日志</a></aside>',
+            '<a class="sub" href="#trace-log-panel">日志框 7-3 Trace 证据日志</a>'
+            '<a href="#write-analysis">9. 写入瓶颈分析</a></aside>',
+        )
         .replace('data-deadline-ms="20"', f'data-deadline-ms="{deadline:g}"')
         .replace("20ms deadline", f"{deadline:g}ms {deadline_label}")
         .replace("20ms超时", "失败")
@@ -2745,6 +3677,11 @@ def _render_dashboard_html(rows: list[dict], aggregate_data: dict, title: str, m
             '<div class="controls"><button id="download-selected-trace">'
             '下载当前单条 Trace</button></div><div id="trace-detail"></div>',
         )
+        .replace('</main></div><div id="tooltip"', WRITE_SECTION + '</main></div><div id="tooltip"')
+        .replace(
+            'const AGG=__AGG__;',
+            'const AGG=__AGG__;const WRITE_ROWS=__WRITE_ROWS__;const WRITE_AGG=__WRITE_AGG__;',
+        )
         .replace(
             '</style>',
             CORRELATION_STYLE
@@ -2775,6 +3712,7 @@ def _render_dashboard_html(rows: list[dict], aggregate_data: dict, title: str, m
             'function renderNonTransportAnalysis(){',
             CORRELATION_SCRIPT + '\nfunction renderNonTransportAnalysis(){',
         )
+        .replace('function init(){', WRITE_SCRIPT + '\nfunction init(){')
         .replace('function init(){renderKpis();', "function init(){AGG.worker_correlation.workers.forEach(item=>$('correlation-worker-filter').insertAdjacentHTML('beforeend',`<option value=\"${esc(item.worker)}\">${esc(shortWorker(item.worker))} · ${item.event_count}事件</option>`));['correlation-worker-filter','correlation-category-filter','correlation-status-filter','correlation-relation-filter','correlation-latency-band-filter'].forEach(id=>$(id).onchange=()=>{correlationPage=1;renderWorkerCorrelation()});['correlation-time-start','correlation-time-end'].forEach(id=>$(id).oninput=()=>{correlationPage=1;renderWorkerCorrelation()});$('correlation-reset-filter').onclick=()=>{['correlation-worker-filter','correlation-category-filter','correlation-relation-filter','correlation-latency-band-filter','correlation-time-start','correlation-time-end'].forEach(id=>$(id).value='');$('correlation-status-filter').value='problem';correlationPage=1;renderWorkerCorrelation()};renderKpis();")
         .replace(
             'renderKpis();renderProblemOverview();',
@@ -2784,12 +3722,12 @@ def _render_dashboard_html(rows: list[dict], aggregate_data: dict, title: str, m
         )
         .replace(
             '<a href="#timeline">2. TopN 时间序列</a>',
-            '<a class="sub" href="#time-segments">图 1-4 Client总时延五档</a>'
+            '<a class="sub" href="#time-segments">图 1-5 Client总时延五档</a>'
             '<a href="#timeline">2. TopN 时间序列</a>',
         )
         .replace(
             'renderUrmaAnalysis();renderNonTransportAnalysis();',
-            'renderUrmaAnalysis();renderQueryMetaAnalysis();renderWorkerCorrelation();'
+            'renderUrmaAnalysis();renderQueryMetaAnalysis();renderWorkerCorrelation();renderWriteAnalysis();'
             'renderNonTransportAnalysis();',
         )
         .replace('renderTable();renderDetail();initScrollSpy();', "renderTable();renderDetail();bindSortableHeaders('trace-table',()=>{page=1},renderTable);bindSortableHeaders('non-transport-table',()=>{nonTransportPage=1},renderNonTransportTable);bindSortableHeaders('urma-trace-table',()=>{urmaPage=1},renderUrmaTraceTable);bindSortableHeaders('urma-time-table',()=>{urmaTimePage=1},renderUrmaTimeTable);bindSortableHeaders('urma-edge-table',()=>{urmaEdgePage=1},renderUrmaEdgeTable);bindSortableHeaders('direct-worker-table',()=>{workerPages.direct=1},renderWorkerTables);bindSortableHeaders('urma-source-table',()=>{workerPages.urma=1},renderWorkerTables);bindSortableHeaders('worker-correlation-table',()=>{correlationPage=1},renderWorkerCorrelationTable);initScrollSpy();")
@@ -2807,10 +3745,12 @@ def _render_dashboard_html(rows: list[dict], aggregate_data: dict, title: str, m
     injections = {
         "__ROWS__": rows_json,
         "__AGG__": aggregate_json,
+        "__WRITE_ROWS__": write_rows_json,
+        "__WRITE_AGG__": write_aggregate_json,
         "__ECHARTS_SOURCE__": echarts_source,
     }
     return re.sub(
-        r"__(?:ROWS|AGG|ECHARTS_SOURCE)__",
+        r"__(?:ROWS|AGG|WRITE_ROWS|WRITE_AGG|ECHARTS_SOURCE)__",
         lambda match: injections[match.group(0)],
         template,
     )
@@ -2854,10 +3794,21 @@ def build_analysis(
     _read_json(run_dir / "triage.json")
     topology = _topology_contract(local_cache, read_path)
     all_rows = build_trace_rows(summary, local_cache=local_cache, read_path=read_path)
+    trace_inputs = summary.get("traces", {})
     get_rows = [row for row in all_rows if row["get_observed"]]
     client_rows = [row for row in get_rows if row["client_observed"]]
     ranked = sorted(client_rows, key=lambda row: (-row["client_ms"], row["timestamp"], row["trace_id"]))
     rows = ranked[:top_n]
+    write_candidates = [
+        _build_write_row(row, trace_inputs[row["trace_id"]])
+        for row in all_rows
+        if row["client_observed"] and _is_write_flow(trace_inputs[row["trace_id"]])
+    ]
+    write_rows = sorted(
+        write_candidates,
+        key=lambda row: (-row["client_ms"], row["timestamp"], row["trace_id"]),
+    )[:top_n]
+    write_aggregate = _aggregate_write(write_rows)
     aggregate_data = aggregate(rows)
     for row in rows:
         row.pop("evidence_records", None)
@@ -2890,7 +3841,8 @@ def build_analysis(
     excluded_worker_only = len(get_rows) - len(client_rows)
     if excluded_non_get:
         limitations.append(
-            f"{excluded_non_get} non-GET traces are excluded because the current six-stage model is GET-specific"
+            f"{excluded_non_get} non-GET traces are excluded from the read model; "
+            f"{len(write_rows)} Client write traces are analyzed in the separate write model"
         )
     if excluded_worker_only:
         limitations.append(
@@ -2945,6 +3897,7 @@ def build_analysis(
         "excluded_without_client_window": excluded_worker_only,
         "excluded_non_get": excluded_non_get,
         "trace_count": len(rows),
+        "write_trace_count": len(write_rows),
         "top_requested": top_n,
         "deadline_ms": deadline_ms,
         "evidence_coverage": coverage,
@@ -2953,7 +3906,9 @@ def build_analysis(
             name: values["trace_count"] for name, values in aggregate_data["problem_summary"].items()
         },
         "aggregate": aggregate_data,
+        "write_aggregate": write_aggregate,
         "traces": rows,
+        "write_traces": write_rows,
     }
 
 
@@ -2961,7 +3916,18 @@ def render_html(analysis: dict, title: str) -> str:
     """Render one self-contained report from a precomputed analysis model."""
 
     rows = sorted(analysis["traces"], key=lambda row: (row["timestamp"], row["trace_id"]))
-    output = _render_dashboard_html(rows, analysis["aggregate"], title, analysis["metadata"])
+    write_rows = sorted(
+        analysis.get("write_traces", []),
+        key=lambda row: (row["timestamp"], row["trace_id"]),
+    )
+    output = _render_dashboard_html(
+        rows,
+        analysis["aggregate"],
+        title,
+        analysis["metadata"],
+        write_rows,
+        analysis.get("write_aggregate", {}),
+    )
     return output.replace("Top100 时间序列", "TopN 时间序列").replace(
         "图 2-1 Stacked Bars", "图 2-1 TopN 时间序列 Stacked Bars"
     )

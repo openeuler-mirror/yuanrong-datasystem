@@ -219,6 +219,64 @@ def test_getbuffer_trace_id_is_grouped_across_client_and_worker_logs(tmp_path):
     assert report["traces"][trace_id]["line_count"] == 2
 
 
+@pytest.mark.parametrize("operation", ["getBuffer", "setStringView"])
+def test_client_index_trace_id_is_parsed(operation, tmp_path):
+    trace_id = f"{operation}-0-2398-00880675;e8afd4a0fc20"
+    log = tmp_path / "client-index-trace.log"
+    log.write_text(
+        f"2026-08-28T01:02:03.004005 | I | access_recorder.cpp:1065 | "
+        f"192.0.2.28 | 2398:2849 | {trace_id} |  | 1004 | "
+        "DS_KV_CLIENT_GET | 6000 | 3670016 | {transportType:UB} |\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    report = mod.analyze_inputs([str(log)], code_ref="unit-test")
+
+    assert report["trace_count"] == 1
+    assert report["dimensions"]["flow"]["DS_KV_CLIENT_GET"] == 1
+    assert report["traces"][trace_id]["line_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "trace_id",
+    [
+        "memoryCopy-0-2398-100000000;e8afd4a0fc20",
+        "cacheGetOrFill_miss-2398-00000001;E8AFD4A0FC20",
+        "request.trace/numa_2;123456789abc",
+        "P2PSend;019f807e-b084-774e-a428-84ee16885664",
+        "LeaderReconciler;019f807e-b084-774e-a428-84ee1688",
+    ],
+)
+def test_current_source_trace_id_variants_are_parsed_from_structured_column(trace_id, tmp_path):
+    log = tmp_path / "trace-id-variants.log"
+    log.write_text(
+        f"2026-09-02T01:02:03.004005 | I | access_recorder.cpp:1065 | "
+        f"192.0.2.28 | 2398:2849 | {trace_id} |  | 0 | "
+        "DS_KV_CLIENT_GET | 6000 | 3670016 | {transportType:UB} |\n",
+        encoding="utf-8",
+    )
+
+    report = _load_module().analyze_inputs([str(log)], code_ref="unit-test")
+
+    assert set(report["traces"]) == {trace_id}
+
+
+def test_empty_structured_trace_column_does_not_capture_payload_uuid(tmp_path):
+    remote_instance_id = "17fd7a83-d7ca-4bd2-bf6e-b076012876ba"
+    log = tmp_path / "no-trace.log"
+    log.write_text(
+        "2026-09-02T01:02:03.004005 | W | urma_manager.cpp:1360 | "
+        "192.0.2.28 | 2398:2849 |  | user | "
+        f"remoteInstanceId={remote_instance_id}, dataSize=4194304\n",
+        encoding="utf-8",
+    )
+
+    report = _load_module().analyze_inputs([str(log)], code_ref="unit-test")
+
+    assert report["trace_count"] == 0
+
+
 def test_ub_current_log_fields_time_buckets_and_worker_edges_are_structured(tmp_path):
     trace_id = "019f7c61-31b8-7d20-bbd7-56869c2c4c2a"
     log = tmp_path / "worker.log"
@@ -484,6 +542,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "<aside><h2>Trace 分析报告</h2><nav id=\"nav\">" in html
     assert "aside{position:sticky" in html
     assert "main{flex:1;min-width:0;width:auto" in html
+    assert "h1{font-size:26px;margin:0 0 8px;overflow-wrap:anywhere;word-break:break-word}" in html
     assert "main{margin-left:245px" not in html
     assert "class=\"subtitle\"" in html
     assert "id=\"run-metadata-table\"" in html
