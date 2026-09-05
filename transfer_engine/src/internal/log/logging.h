@@ -23,8 +23,6 @@ bool ShouldLog(LogSeverity severity) noexcept;
 bool ShouldVLog(int level, const char *file) noexcept;
 void InitializeLogging() noexcept;
 void FlushLogs() noexcept;
-void EmitExternalLog(LogSeverity severity, int vlogLevel, const char *file, int line,
-                     std::string_view message) noexcept;
 
 class LogMessage {
 public:

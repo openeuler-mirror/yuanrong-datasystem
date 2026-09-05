@@ -169,7 +169,6 @@ def get_all_dependencies():
         "libacl_plugin.so",
         "libcuda_plugin.so",
         "libds_hixl_plugin.so",
-        "libp2p_transfer.so",
     }
     src = os.path.join(os.path.dirname(__file__), "yr", "datasystem", "lib")
     service_bin_root = Path(os.path.dirname(__file__)).joinpath("yr", "datasystem")

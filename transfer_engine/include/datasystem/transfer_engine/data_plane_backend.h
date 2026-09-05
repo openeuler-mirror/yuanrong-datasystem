@@ -33,7 +33,7 @@ class IDataPlaneBackend {
 public:
     virtual ~IDataPlaneBackend() = default;
     virtual bool RequiresAclRuntime() const { return true; }
-    virtual std::string BackendKind() const { return "p2p"; }
+    virtual std::string BackendKind() const { return "hixl"; }
     virtual std::string RoutePolicy() const { return ""; }
     virtual uint64_t MemoryGeneration() const { return 0; }
     virtual bool SupportsReceiverDrivenRead() const { return false; }

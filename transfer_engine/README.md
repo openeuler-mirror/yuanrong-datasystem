@@ -26,11 +26,8 @@ from yr.datasystem import TransferEngine, Result, ErrorCode
 
 ## Backend and HIXL Route Selection
 
-TransferEngine selects the data-plane backend in this order:
-
-1. `TRANSFER_ENGINE_BACKEND=p2p|hixl`, when set.
-2. An explicit `protocol` value: `"p2p"` selects P2P-Transfer; `"hixl"` selects HIXL.
-3. An empty `protocol` or `"ascend"` selects HIXL.
+TransferEngine uses HIXL as its only data-plane backend. `protocol` accepts `"hixl"`, `"ascend"`, or an empty
+string. When set, `TRANSFER_ENGINE_BACKEND` must be `hixl`.
 
 When HIXL is selected, `TRANSFER_ENGINE_HIXL_ROUTE` accepts `auto`, `hccs`, or `roce` and defaults to `auto`.
 This value is a TransferEngine peer-consistency policy: both peers must use the same value. TransferEngine does not pass
@@ -72,8 +69,8 @@ engine = TransferEngine()
 Methods:
 
 1. `initialize(local_hostname: str, protocol: str, device_name: str) -> Result`
-   `protocol` accepts `"p2p"` for P2P-Transfer and `"hixl"`, `"ascend"`, or an empty string for HIXL.
-   `TRANSFER_ENGINE_BACKEND=p2p|hixl` overrides `protocol`. `device_name` must match `npu:${device_id}`.
+   `protocol` accepts `"hixl"`, `"ascend"`, or an empty string. `TRANSFER_ENGINE_BACKEND=hixl` overrides
+   `protocol`. `device_name` must match `npu:${device_id}`.
 2. `register_memory(buffer_addr_regisrterch: int, length: int) -> Result`
 3. `batch_register_memory(buffer_addrs: list[int], lengths: list[int]) -> Result`
 4. `unregister_memory(buffer_addr_regisrterch: int) -> Result`
@@ -133,23 +130,8 @@ owner.finalize()
 
 ### IPv6 and address selection
 
-TransferEngine accepts IPv6 endpoints in bracketed form, for example `"[::1]:60551"` or `"[fd00::1]:60551"`.
-
-The P2P host control path selects local addresses in this order:
-
-1. `P2P_IF_IP`
-2. `P2P_SOCKET_IFNAME`
-3. `HCCL_IF_IP`
-4. `HCCL_SOCKET_IFNAME`
-5. detected external, container, then loopback interfaces
-
-`P2P_IF_IP` and `HCCL_IF_IP` may be IPv4 or IPv6 addresses. Address family preference can be controlled with:
-
-- `P2P_ADDR_FAMILY=auto|ipv4|ipv6`: host-side P2P TCP bootstrap address selection.
-- `P2P_ROCE_ADDR_FAMILY=auto|ipv4|ipv6`: RoCE/RDMA NPU IP address selection.
-
-The default `auto` mode keeps IPv4 preferred for compatibility and falls back to IPv6 when no IPv4 address is available.
-Set the value to `ipv6` when the deployment must use IPv6 addresses.
+TransferEngine accepts IPv6 control-plane endpoints in bracketed form, for example `"[::1]:60551"` or
+`"[fd00::1]:60551"`.
 
 ## 5. Cross-node Smoke Example (owner/requester)
 

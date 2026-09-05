@@ -9,7 +9,7 @@ int main()
 {
     datasystem::internal::InitializeLogging();
 
-    // 中文说明：该 smoke 用例在“多节点端点”仿真下，验�?owner 同进程注册多 npu_id 内存并被 requester 读取�?
+    // This smoke test simulates multiple endpoints and NPU memory regions with the HIXL test backend.
     auto sharedState = std::make_shared<datasystem::MockDataPlaneBackend::SharedState>();
     auto ownerBackend = std::make_shared<datasystem::MockDataPlaneBackend>(sharedState);
     auto requesterBackend = std::make_shared<datasystem::MockDataPlaneBackend>(sharedState);
@@ -17,12 +17,12 @@ int main()
     datasystem::TransferEngine owner(ownerBackend);
     datasystem::TransferEngine requester(requesterBackend);
 
-    auto rc = owner.Initialize("127.0.0.1:65051", "p2p", "npu:0");
+    auto rc = owner.Initialize("127.0.0.1:65051", "hixl", "npu:0");
     if (rc.IsError()) {
         TE_LOG_ERROR << "owner initialize failed: " << rc.ToString();
         return EXIT_FAILURE;
     }
-    rc = requester.Initialize("127.0.0.1:65052", "p2p", "npu:2");
+    rc = requester.Initialize("127.0.0.1:65052", "hixl", "npu:2");
     if (rc.IsError()) {
         TE_LOG_ERROR << "requester initialize failed: " << rc.ToString();
         return EXIT_FAILURE;

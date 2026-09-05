@@ -100,7 +100,6 @@ def get_all_dependencies():
         "libds_client_py.so",
         "libacl_plugin.so",
         "libds_hixl_plugin.so",
-        "libp2p_transfer.so",
     }
     src = os.path.join(os.path.dirname(__file__), 'yr', 'datasystem', 'lib')
     transfer_engine_module_matches = list(Path(os.path.dirname(__file__)).joinpath('yr', 'datasystem').glob('_transfer_engine*.so'))

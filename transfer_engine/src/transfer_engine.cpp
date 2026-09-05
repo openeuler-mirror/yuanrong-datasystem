@@ -12,14 +12,10 @@
 
 #include "internal/connection/connection_manager.h"
 #include "internal/control_plane/control_plane.h"
-#include "internal/backend/mock_data_plane_backend.h"
 #include "internal/control_plane/transfer_control_service.h"
 #include "internal/log/logging.h"
 #include "internal/log/environment_dump.h"
 #include "internal/runtime/acl_runtime_helper.h"
-#ifdef TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY
-#include "internal/backend/ascend/p2p_transfer_backend.h"
-#endif
 #ifdef TRANSFER_ENGINE_ENABLE_HIXL
 #include "internal/backend/ascend/hixl_d2d_backend.h"
 #endif
@@ -76,8 +72,8 @@ Result ResolveBackendKind(const std::string &protocol, std::string &backendKind)
 {
     const std::string envBackend = ToLowerAscii(GetEnvString("TRANSFER_ENGINE_BACKEND"));
     if (!envBackend.empty()) {
-        TE_CHECK_OR_RETURN(envBackend == "p2p" || envBackend == "hixl", ErrorCode::kInvalid,
-                           "TRANSFER_ENGINE_BACKEND should be p2p or hixl");
+        TE_CHECK_OR_RETURN(envBackend == "hixl", ErrorCode::kInvalid,
+                           "TRANSFER_ENGINE_BACKEND only supports hixl");
         backendKind = envBackend;
         return Result::OK();
     }
@@ -87,23 +83,11 @@ Result ResolveBackendKind(const std::string &protocol, std::string &backendKind)
         backendKind = "hixl";
         return Result::OK();
     }
-    if (protocolLower == "p2p") {
-        backendKind = "p2p";
-        return Result::OK();
-    }
     return TE_MAKE_STATUS(ErrorCode::kInvalid, "unsupported transfer engine protocol: " + protocol);
 }
 
 Result CreateBackendByKind(const std::string &backendKind, std::shared_ptr<IDataPlaneBackend> &backend)
 {
-    if (backendKind == "p2p") {
-#ifdef TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY
-        backend = std::make_shared<P2PTransferBackend>();
-#else
-        backend = std::make_shared<MockDataPlaneBackend>();
-#endif
-        return Result::OK();
-    }
     if (backendKind == "hixl") {
 #ifdef TRANSFER_ENGINE_ENABLE_HIXL
         backend = std::make_shared<HixlD2DBackend>();

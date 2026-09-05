@@ -88,19 +88,6 @@ function(transfer_engine_add_no_defined_dynamic_symbol_test test_name target_nam
     )
 endfunction()
 
-function(transfer_engine_add_origin_rpath_test test_name target_name)
-    if (NOT CMAKE_READELF)
-        return()
-    endif()
-    add_test(
-        NAME ${test_name}
-        COMMAND ${CMAKE_COMMAND}
-            -DREADELF_EXECUTABLE=${CMAKE_READELF}
-            -DLIBRARY_PATH=$<TARGET_FILE:${target_name}>
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_origin_rpath.cmake
-    )
-endfunction()
-
 function(transfer_engine_add_forbidden_text_test test_name file_path forbidden_text)
     add_test(
         NAME ${test_name}
@@ -142,7 +129,7 @@ set(TRANSFER_ENGINE_SRCS
     src/internal/control_plane/transfer_control_service.cpp
 )
 
-if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY OR TRANSFER_ENGINE_ENABLE_HIXL)
+if (TRANSFER_ENGINE_ENABLE_HIXL)
     if (NOT DEFINED Ascend_ROOT)
         if (DEFINED ENV{ASCEND_HOME_PATH})
             set(Ascend_ROOT $ENV{ASCEND_HOME_PATH})
@@ -153,15 +140,7 @@ if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY OR TRANSFER_ENGINE_ENABLE_HIXL)
         endif()
     endif()
     set(_te_ascend_include_dir ${Ascend_ROOT}/include)
-    set(_te_ascend_include_dirs
-        ${_te_ascend_include_dir}
-        ${_te_ascend_include_dir}/experiment
-        ${_te_ascend_include_dir}/experiment/runtime)
     set(_te_ascend_lib_dirs ${Ascend_ROOT}/lib64 ${Ascend_ROOT}/lib)
-endif()
-
-if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY)
-    list(APPEND TRANSFER_ENGINE_SRCS src/internal/backend/ascend/p2p_transfer_backend.cpp)
 endif()
 
 if (TRANSFER_ENGINE_ENABLE_HIXL)
@@ -269,63 +248,6 @@ target_include_directories(transfer_engine_obj
 
 target_link_libraries(transfer_engine_obj PRIVATE ds_spdlog::spdlog dl)
 
-if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY)
-    if (TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
-        if (NOT TRANSFER_ENGINE_BUILD_BUNDLED_PROTOBUF)
-            find_package(Protobuf QUIET)
-            if (NOT Protobuf_FOUND)
-                message(FATAL_ERROR
-                    "Bundled P2P-Transfer requires Protobuf but it was not found. "
-                    "Install protobuf dev package, configure -DProtobuf_ROOT_DIR=<path>, "
-                    "or enable -DTRANSFER_ENGINE_BUILD_BUNDLED_PROTOBUF=ON."
-                )
-            endif()
-        endif()
-
-        set(_te_prev_build_shared_libs ${BUILD_SHARED_LIBS})
-        set(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libs for bundled third party" FORCE)
-        set(_te_prev_skip_install_rules ${CMAKE_SKIP_INSTALL_RULES})
-        set(CMAKE_SKIP_INSTALL_RULES ON)
-        add_subdirectory(
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/internal/backend/ascend/p2p_transfer
-            ${CMAKE_CURRENT_BINARY_DIR}/ascend_p2p_transfer_build
-            EXCLUDE_FROM_ALL
-        )
-        set_target_properties(p2p_transfer PROPERTIES
-            BUILD_RPATH "$ORIGIN"
-            INSTALL_RPATH "$ORIGIN"
-            BUILD_WITH_INSTALL_RPATH ON
-        )
-        if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-            # p2p_transfer is dlopen-ed directly from the wheel. Its package-local protobuf dependency
-            # must also resolve package-local Abseil without relying on process-global preloads.
-            target_link_options(p2p_transfer PRIVATE "LINKER:--disable-new-dtags")
-        endif()
-        set(CMAKE_SKIP_INSTALL_RULES ${_te_prev_skip_install_rules})
-        set(BUILD_SHARED_LIBS ${_te_prev_build_shared_libs} CACHE BOOL "Restore shared library mode" FORCE)
-        add_dependencies(transfer_engine_obj p2p_transfer)
-
-        add_custom_target(copy_p2p_transfer_so ALL
-            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/lib
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                $<TARGET_FILE:p2p_transfer>
-                ${CMAKE_CURRENT_BINARY_DIR}/lib/libp2p_transfer.so
-            DEPENDS p2p_transfer
-            VERBATIM
-        )
-        add_dependencies(transfer_engine_obj copy_p2p_transfer_so)
-
-        message(STATUS "Bundled p2p_transfer shared library output: ${CMAKE_CURRENT_BINARY_DIR}/lib")
-    endif()
-
-    target_include_directories(transfer_engine_obj PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/internal/backend/ascend/p2p_transfer/include
-        ${_te_ascend_include_dirs}
-    )
-
-    target_compile_definitions(transfer_engine_obj PRIVATE TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY=1)
-endif()
-
 if (TRANSFER_ENGINE_ENABLE_HIXL)
     target_include_directories(transfer_engine_obj PRIVATE ${TRANSFER_ENGINE_HIXL_INCLUDE_DIR})
     target_compile_definitions(transfer_engine_obj PRIVATE TRANSFER_ENGINE_ENABLE_HIXL=1)
@@ -340,20 +262,12 @@ target_include_directories(transfer_engine
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(transfer_engine PUBLIC Threads::Threads PRIVATE ds_spdlog::spdlog dl)
-if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY)
-    if (TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
-        add_dependencies(transfer_engine p2p_transfer copy_p2p_transfer_so)
-    endif()
-endif()
 if (TRANSFER_ENGINE_ENABLE_HIXL)
     target_link_libraries(transfer_engine PUBLIC ${_te_hixl_libraries})
 endif()
 
 add_executable(transfer_engine_compile_smoke tests/smoke/compile_smoke.cpp)
 target_link_libraries(transfer_engine_compile_smoke PRIVATE transfer_engine)
-if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY AND TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
-    add_dependencies(transfer_engine_compile_smoke p2p_transfer)
-endif()
 
 add_executable(transfer_engine_cross_node_smoke
     tests/smoke/cross_node_transfer_smoke.cpp
@@ -364,24 +278,13 @@ target_include_directories(transfer_engine_cross_node_smoke PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
 )
 target_link_libraries(transfer_engine_cross_node_smoke PRIVATE transfer_engine dl pthread)
-if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY AND TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
-    add_dependencies(transfer_engine_cross_node_smoke p2p_transfer)
-endif()
 
 add_executable(transfer_engine_multi_node_multi_npu_smoke tests/smoke/multi_node_multi_npu_smoke.cpp)
 target_include_directories(transfer_engine_multi_node_multi_npu_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(transfer_engine_multi_node_multi_npu_smoke PRIVATE transfer_engine)
-if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY AND TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
-    add_dependencies(transfer_engine_multi_node_multi_npu_smoke p2p_transfer)
-endif()
 
 if (TRANSFER_ENGINE_BUILD_TESTS)
     enable_testing()
-    if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY)
-        set(_te_test_with_p2p_backend 1)
-    else()
-        set(_te_test_with_p2p_backend 0)
-    endif()
 
     add_executable(transfer_engine_basic_ut
         tests/st/transfer_engine_basic_test.cpp
@@ -392,45 +295,26 @@ if (TRANSFER_ENGINE_BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/tests
     )
     target_link_libraries(transfer_engine_basic_ut PRIVATE transfer_engine GTest::gtest GTest::gtest_main dl)
-    target_compile_definitions(transfer_engine_basic_ut PRIVATE
-        TRANSFER_ENGINE_TEST_WITH_P2P_BACKEND=${_te_test_with_p2p_backend})
-    if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY AND TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
-        add_dependencies(transfer_engine_basic_ut p2p_transfer)
-    endif()
     add_test(NAME transfer_engine_basic_ut COMMAND transfer_engine_basic_ut)
 
     add_executable(transfer_engine_sync_read_ut tests/st/transfer_engine_sync_read_test.cpp)
     target_include_directories(transfer_engine_sync_read_ut PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(transfer_engine_sync_read_ut PRIVATE transfer_engine GTest::gtest GTest::gtest_main)
-    target_compile_definitions(transfer_engine_sync_read_ut PRIVATE
-        TRANSFER_ENGINE_TEST_WITH_P2P_BACKEND=${_te_test_with_p2p_backend})
-    if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY AND TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
-        add_dependencies(transfer_engine_sync_read_ut p2p_transfer)
-    endif()
     add_test(NAME transfer_engine_sync_read_ut COMMAND transfer_engine_sync_read_ut)
 
     add_executable(transfer_engine_control_plane_e2e_llt tests/llt/control_plane_e2e_llt_test.cpp)
     target_include_directories(transfer_engine_control_plane_e2e_llt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(transfer_engine_control_plane_e2e_llt PRIVATE transfer_engine GTest::gtest GTest::gtest_main)
-    if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY AND TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
-        add_dependencies(transfer_engine_control_plane_e2e_llt p2p_transfer)
-    endif()
     add_test(NAME transfer_engine_control_plane_e2e_llt COMMAND transfer_engine_control_plane_e2e_llt)
 
     add_executable(transfer_engine_control_plane_components_llt tests/llt/control_plane_components_llt_test.cpp)
     target_include_directories(transfer_engine_control_plane_components_llt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(transfer_engine_control_plane_components_llt PRIVATE transfer_engine GTest::gtest GTest::gtest_main)
-    if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY AND TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
-        add_dependencies(transfer_engine_control_plane_components_llt p2p_transfer)
-    endif()
     add_test(NAME transfer_engine_control_plane_components_llt COMMAND transfer_engine_control_plane_components_llt)
 
     add_executable(transfer_engine_core_modules_llt tests/llt/core_modules_llt_test.cpp)
     target_include_directories(transfer_engine_core_modules_llt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(transfer_engine_core_modules_llt PRIVATE transfer_engine GTest::gtest GTest::gtest_main)
-    if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY AND TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
-        add_dependencies(transfer_engine_core_modules_llt p2p_transfer)
-    endif()
     add_test(NAME transfer_engine_core_modules_llt COMMAND transfer_engine_core_modules_llt)
 
     add_executable(transfer_engine_logging_llt tests/llt/logging_llt_test.cpp)
@@ -452,27 +336,6 @@ if (TRANSFER_ENGINE_BUILD_TESTS)
         ENVIRONMENT
             "TRANSFER_ENGINE_LOG_LEVEL=INFO;TRANSFER_ENGINE_VLOG_LEVEL=0;TRANSFER_ENGINE_VMODULE=logging_llt_test=1;TRANSFER_ENGINE_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/transfer_engine_log_test;TRANSFER_ENGINE_LOG_TO_STDERR=0;TRANSFER_ENGINE_ALSO_LOG_TO_STDERR=0;TRANSFER_ENGINE_LOG_TO_STDOUT=0;TRANSFER_ENGINE_STDERR_THRESHOLD=2;TRANSFER_ENGINE_LOG_BUFFER_LEVEL=0;TRANSFER_ENGINE_LOG_BUFFER_SECONDS=0;TRANSFER_ENGINE_MAX_LOG_SIZE_MB=1800;TRANSFER_ENGINE_LOG_FILE_MODE=0664;TRANSFER_ENGINE_TIMESTAMP_IN_LOG_FILE_NAME=1;TRANSFER_ENGINE_LOG_FILE_HEADER=1;TRANSFER_ENGINE_LOG_PREFIX=1;TRANSFER_ENGINE_LOG_YEAR_IN_PREFIX=1;TRANSFER_ENGINE_LOG_UTC_TIME=0"
     )
-
-    if (TARGET p2p_transfer)
-        transfer_engine_add_no_needed_library_test(
-            transfer_engine_p2p_no_glog_needed p2p_transfer "libglog")
-        transfer_engine_add_no_needed_library_test(
-            transfer_engine_p2p_no_brpc_needed p2p_transfer "libbrpc")
-        transfer_engine_add_no_needed_library_test(
-            transfer_engine_p2p_no_upstream_spdlog_needed p2p_transfer "libspdlog")
-        transfer_engine_add_no_needed_library_test(
-            transfer_engine_p2p_no_ds_spdlog_needed p2p_transfer "libds-spdlog")
-        transfer_engine_add_no_gnu_unique_test(
-            transfer_engine_p2p_no_gnu_unique_symbols p2p_transfer)
-        transfer_engine_add_no_dynamic_symbol_test(
-            transfer_engine_p2p_no_glog_symbols p2p_transfer "google::Log")
-        transfer_engine_add_no_dynamic_symbol_test(
-            transfer_engine_p2p_no_upstream_spdlog_symbols p2p_transfer "(^|[^A-Za-z0-9_])spdlog::")
-        transfer_engine_add_no_defined_dynamic_symbol_test(
-            transfer_engine_p2p_no_fmt_symbols p2p_transfer "(^|[^A-Za-z0-9_])fmt::")
-        transfer_engine_add_origin_rpath_test(
-            transfer_engine_p2p_origin_rpath p2p_transfer)
-    endif()
 
     if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../python/yr/datasystem/__init__.py")
         transfer_engine_add_forbidden_text_test(
@@ -544,9 +407,6 @@ if (TRANSFER_ENGINE_BUILD_PYTHON)
         target_compile_options(_transfer_engine PRIVATE -fno-gnu-unique)
         target_link_options(_transfer_engine PRIVATE -Wno-error=maybe-uninitialized)
     endif()
-    if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY AND TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
-        add_dependencies(_transfer_engine p2p_transfer copy_p2p_transfer_so)
-    endif()
     if (TRANSFER_ENGINE_ENABLE_HIXL)
         target_link_libraries(_transfer_engine PRIVATE ${_te_hixl_libraries})
     endif()
@@ -581,10 +441,6 @@ if (TRANSFER_ENGINE_BUILD_PYTHON)
             "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}:${CMAKE_CURRENT_SOURCE_DIR}/python"
             "LD_LIBRARY_PATH=${_te_python_st_ld_library_path}"
         )
-        if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY AND TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
-            list(APPEND _te_python_st_environment
-                "TRANSFER_ENGINE_P2P_SO_PATH=${CMAKE_CURRENT_BINARY_DIR}/lib/libp2p_transfer.so")
-        endif()
         add_test(
             NAME transfer_engine_python_st
             COMMAND ${Python3_EXECUTABLE} -m unittest tests.python.st.test_python_api_st
@@ -617,11 +473,6 @@ if (TRANSFER_ENGINE_STANDALONE)
     install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/datasystem
         DESTINATION include
         FILES_MATCHING PATTERN "*.h")
-    if (TARGET p2p_transfer)
-        install(TARGETS p2p_transfer
-            LIBRARY DESTINATION lib
-            RUNTIME DESTINATION bin)
-    endif()
     if (TARGET _transfer_engine)
         install(TARGETS _transfer_engine
             LIBRARY DESTINATION python/yr/datasystem)

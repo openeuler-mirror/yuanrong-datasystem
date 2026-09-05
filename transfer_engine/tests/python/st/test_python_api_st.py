@@ -20,7 +20,7 @@ def _free_port() -> int:
 def _owner_worker(local_hostname: str, device_id: int, size: int, batch_count: int, ready_queue, stop_event) -> None:
     engine = TransferEngine()
     try:
-        init_rc = engine.initialize(local_hostname, "p2p", f"npu:{device_id}")
+        init_rc = engine.initialize(local_hostname, "hixl", f"npu:{device_id}")
         if init_rc.is_error():
             ready_queue.put({"ok": False, "error": init_rc.to_string()})
             return
@@ -61,7 +61,7 @@ def _requester_worker(local_hostname: str, device_id: int, owner_hostname: str, 
                       result_queue) -> None:
     engine = TransferEngine()
     try:
-        init_rc = engine.initialize(local_hostname, "p2p", f"npu:{device_id}")
+        init_rc = engine.initialize(local_hostname, "hixl", f"npu:{device_id}")
         if init_rc.is_error():
             result_queue.put({"ok": False, "error": init_rc.to_string()})
             return

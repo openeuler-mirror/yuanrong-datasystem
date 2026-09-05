@@ -438,8 +438,8 @@
 - Python `KVClient` is backed by a pybind class named `KVClient` whose underlying C++ object is `ObjectClientImpl`.
   `DsClient`, `ObjectClient`, and `HeteroClient` may still resolve a service discovery object to a static worker address
   at the Python facade unless their wrappers explicitly pass native discovery through their own pybind constructors.
-- Python package init only configures the bundled transfer-engine P2P DSO path when present; public SDK classes and
-  transfer-engine bindings are loaded on first attribute access to keep TE-only imports isolated from `libbrpc`.
+- Public SDK classes and transfer-engine bindings are loaded on first attribute access to keep TE-only imports
+  isolated from `libbrpc`.
 - Python wrappers raise exceptions on error instead of returning `Status` objects in the same way the C++ API does.
 
 ## Important Internal Neighbors
