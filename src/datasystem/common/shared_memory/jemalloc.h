@@ -87,6 +87,13 @@ public:
     static Status Allocate(unsigned arenaInd, uint64_t &bytes, void *&pointer);
 
     /**
+     * @brief Get the largest jemalloc size class that does not exceed the given size.
+     * @param[in] maxSize Maximum allocation size.
+     * @return Largest size class, or 0 if no valid size class exists.
+     */
+    static uint64_t GetLargestSizeClass(uint64_t maxSize);
+
+    /**
      * @brief Free the allocated memory via pointer. If pointer is null, it will do nothing.
      * @param[in] arenaInd Arena index.
      * @param[in] pointer Allocated memory pointer.

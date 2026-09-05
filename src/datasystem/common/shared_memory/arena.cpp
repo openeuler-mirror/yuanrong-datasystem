@@ -465,16 +465,10 @@ Status ArenaManager::ComputeArenaParams(CacheType type, uint64_t maxSize, ArenaP
     CHECK_FAIL_RETURN_STATUS(
         static_cast<uint64_t>(static_cast<long double>(std::numeric_limits<uint64_t>::max()) * rate) > maxSize,
         K_RUNTIME_ERROR, "mmapSize overflow.");
-    auto fakeAllocateSize = maxSize;
-    if (populate_ || IsFastTransportEnabled() || IsRemoteH2DEnabled() || FLAGS_enable_huge_tlb
-        || type == CacheType::UB_TRANSPORT) {
-        // Here we ensure total allocated memory
-        // does not exceed max requested by user
+    const bool useExactMmapSize = populate_ || IsFastTransportEnabled() || IsRemoteH2DEnabled()
+                                  || FLAGS_enable_huge_tlb || type == CacheType::UB_TRANSPORT;
+    if (useExactMmapSize) {
         rate = 1;
-        auto overhead = 0.8;
-        // fakeAllocate Size is decreased to
-        // account for extra Jemalloc overhead
-        fakeAllocateSize = static_cast<uint64_t>(overhead * maxSize);
     }
     uint64_t mmapSize = maxSize / rate;
     if (FLAGS_enable_huge_tlb) {
@@ -483,15 +477,21 @@ Status ArenaManager::ComputeArenaParams(CacheType type, uint64_t maxSize, ArenaP
     uint32_t arenasNum = type == CacheType::MEMORY ? FLAGS_arena_per_tenant : FLAGS_shared_disk_arena_per_tenant;
     arenasNum = (type == CacheType::DEV_DEVICE || type == CacheType::DEV_HOST) ? 1 : arenasNum;
     params.mmapSizeForArena = mmapSize;
-    params.fakeAllocateSizeForArena = fakeAllocateSize;
+    params.fakeAllocateSizeForArena = maxSize;
     if (type == CacheType::UB_TRANSPORT) {
         arenasNum = FLAGS_ub_transport_arena_num;
         CHECK_FAIL_RETURN_STATUS(arenasNum > 0, K_RUNTIME_ERROR, "Arena number must be greater than 0");
         CHECK_FAIL_RETURN_STATUS(mmapSize % arenasNum == 0, K_RUNTIME_ERROR,
                                  FormatString("mmapSize %lu must be divisible by arena num %u", mmapSize, arenasNum));
         params.mmapSizeForArena = mmapSize / arenasNum;
-        params.fakeAllocateSizeForArena = fakeAllocateSize / arenasNum;
+        params.fakeAllocateSizeForArena = maxSize / arenasNum;
     }
+    if (useExactMmapSize) {
+        params.fakeAllocateSizeForArena = Jemalloc::GetLargestSizeClass(params.fakeAllocateSizeForArena);
+        CHECK_FAIL_RETURN_STATUS(params.fakeAllocateSizeForArena > 0, K_RUNTIME_ERROR,
+                                 "No jemalloc size class fits in arena max size");
+    }
+    LOG(INFO) << "The fake allocate size for arena: " << params.fakeAllocateSizeForArena;
     CHECK_FAIL_RETURN_STATUS(arenasNum > 0, K_RUNTIME_ERROR, "Arena number must be greater than 0");
     params.arenasNum = arenasNum;
     return Status::OK();

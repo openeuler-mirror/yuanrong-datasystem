@@ -130,6 +130,34 @@ Status Jemalloc::Allocate(unsigned arenaInd, uint64_t &bytes, void *&pointer)
     return Status::OK();
 }
 
+uint64_t Jemalloc::GetLargestSizeClass(uint64_t maxSize)
+{
+    if (maxSize == 0) {
+        return 0;
+    }
+
+    const auto flags = MALLOCX_ALIGN(FLAGS_memory_alignment);
+    const auto maxSizeClass = datasystem_nallocx(maxSize, flags);
+    if (maxSizeClass != 0 && maxSizeClass <= maxSize) {
+        return maxSizeClass;
+    }
+
+    uint64_t result = 0;
+    uint64_t lower = 1;
+    uint64_t upper = maxSize;
+    while (lower <= upper) {
+        const uint64_t candidate = lower + (upper - lower) / 2;
+        const auto sizeClass = datasystem_nallocx(candidate, flags);
+        if (sizeClass != 0 && sizeClass <= maxSize) {
+            result = sizeClass;
+            lower = candidate + 1;
+        } else {
+            upper = candidate - 1;
+        }
+    }
+    return result;
+}
+
 unsigned int Jemalloc::GetAllocxFlags(unsigned int arenaInd)
 {
     auto alignBits = FLAGS_memory_alignment;
