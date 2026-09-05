@@ -1063,6 +1063,16 @@ TEST_F(AllocatorTest, TestUsedupAndFree2Disk)
     TestUsedupAndFree2();
 }
 
+TEST_F(AllocatorTest, GetLargestJemallocSizeClass)
+{
+    constexpr uint64_t bytesPerGiB = 1024ul * 1024ul * 1024ul;
+    constexpr uint64_t maxSize = 12 * bytesPerGiB;
+
+    EXPECT_EQ(memory::Jemalloc::GetLargestSizeClass(0), 0);
+    EXPECT_EQ(memory::Jemalloc::GetLargestSizeClass(maxSize), maxSize);
+    EXPECT_EQ(memory::Jemalloc::GetLargestSizeClass(maxSize + 32), maxSize);
+}
+
 void AllocatorTest::TestCreateTenantArena()
 {
     LOG(INFO) << "Test allocate memory.";
