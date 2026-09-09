@@ -13,10 +13,6 @@
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem::cluster {
-namespace {
-// Callers enforce operation-specific limits; this guard matches the largest public foreground batch contract.
-constexpr size_t MAX_BATCH_KEYS = 100'000;
-}
 
 PlacementFacade::PlacementFacade(const TopologySnapshotState &snapshots, const IRoutingAlgorithm &algorithm,
                                  std::string localAddress)
@@ -51,7 +47,7 @@ Status PlacementFacade::LocateToken(uint32_t token, PlacementDecision &decision)
 Status PlacementFacade::LocateBatch(const std::vector<std::string_view> &placementKeys,
                                     BatchPlacementDecision &decision) const
 {
-    CHECK_FAIL_RETURN_STATUS(!placementKeys.empty() && placementKeys.size() <= MAX_BATCH_KEYS, K_INVALID,
+    CHECK_FAIL_RETURN_STATUS(!placementKeys.empty() && placementKeys.size() <= kMaxBatchKeys, K_INVALID,
                              "invalid cluster placement batch size");
     std::shared_ptr<const TopologySnapshot> snapshot;
     RETURN_IF_NOT_OK(snapshots_.Load(snapshot));
@@ -112,7 +108,7 @@ Status PlacementFacade::EvaluateRedirectBatch(const std::vector<std::string_view
                                               BatchRedirectDecision &decision) const
 {
     CHECK_FAIL_RETURN_STATUS(!localAddress_.empty(), K_INVALID, "local cluster member address is empty");
-    CHECK_FAIL_RETURN_STATUS(!placementKeys.empty() && placementKeys.size() <= MAX_BATCH_KEYS, K_INVALID,
+    CHECK_FAIL_RETURN_STATUS(!placementKeys.empty() && placementKeys.size() <= kMaxBatchKeys, K_INVALID,
                              "invalid cluster redirect batch size");
     std::shared_ptr<const TopologySnapshot> snapshot;
     RETURN_IF_NOT_OK(snapshots_.Load(snapshot));

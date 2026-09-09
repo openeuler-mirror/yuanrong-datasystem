@@ -86,11 +86,20 @@ public:
     bool CheckCondition(const MigrateDataRspPb &rsp, const CacheType &type) override;
 
     /**
-     * @brief Checks if the current worker has been visited and upgrades the migration stage if a full cycle is
+     * @brief Checks whether the current worker has been visited and upgrades the migration stage if a full cycle is
      * detected.
      * @param[in] currentWorker The address of the current worker being checked.
      */
     void UpdateForRedirect(const std::string &currentWorker) override;
+
+    /**
+     * @brief Expose the current memory-cache migration stage for retry diagnostics.
+     * @return The stage applied to MEMORY cache checks.
+     */
+    Stage CurrentStage() const noexcept
+    {
+        return currentStage_;
+    }
 
 private:
 

@@ -371,6 +371,15 @@
     the leaving Worker's complete local object table once per source/batch before task-scoped metadata migration. The
     Worker callback adapter coalesces concurrent disjoint tasks behind a deadline-aware process-local gate; metadata
     migration and prepared cleanup remain constrained by each task's `IKeyFilter`.
+  - ScaleIn drain migration targets come from `MetadataRouteResolver::GroupMigrateTargets` (one
+    `EvaluateRedirectBatch` per chunk of at most `PlacementFacade::kMaxBatchKeys` keys; the L2 slot drain submits
+    through the same grouping): a key whose committed owner is the leaving Worker follows the ScaleIn redirect
+    override (its post-scale-in token takeover owner), replica keys follow their committed owner, and keys without a
+    redirect override keep the address-order standby demotion (`FindNextActiveMember`) as fallback. Redirect retries
+    pre-check target admission and track a per-target pin budget; keys whose target is not admissible or exhausts
+    the budget escape to the address-order chain instead of being pinned to a dead or failing owner. Redirect retries
+    keep a persistent per-target selector and call `UpdateForRedirect` per round, so revisiting a full target
+    escalates the stage (FIRST→FINAL) and the drain stays live.
   - topology-task ScaleIn senders accept only `ACTIVE` destinations, while receivers tolerate `PRE_LEAVING` for
     already-selected or in-flight socket/direct/NotifyRemoteGet work. At the start of its own ScaleIn data callback, a
     source atomically closes incoming migration admission and waits within the callback deadline for every admitted

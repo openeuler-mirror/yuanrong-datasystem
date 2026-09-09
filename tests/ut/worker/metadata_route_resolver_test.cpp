@@ -19,9 +19,14 @@
 #include <chrono>
 #include <functional>
 #include <future>
+#include <map>
 #include <memory>
+#include <optional>
+#include <set>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -44,12 +49,13 @@ public:
         return "metadata-route-test";
     }
 
-    uint32_t Hash(std::string_view) const noexcept override
+    uint32_t Hash(std::string_view placementKey) const noexcept override
     {
-        return 1;
+        auto iter = tokenByKey_.find(std::string(placementKey));
+        return iter == tokenByKey_.end() ? 1U : iter->second;
     }
 
-    Status LocateOwner(const cluster::TopologySnapshot &snapshot, uint32_t,
+    Status LocateOwner(const cluster::TopologySnapshot &snapshot, uint32_t token,
                        const cluster::Member *&owner) const override
     {
         versions_.emplace_back(snapshot.Version());
@@ -58,6 +64,11 @@ public:
             firstLocateHook_();
         }
         RETURN_IF_NOT_OK(locateStatus_);
+        auto iter = committedByToken_.find(token);
+        if (iter != committedByToken_.end()) {
+            owner = &iter->second;
+            return Status::OK();
+        }
         owner = &owner_;
         return Status::OK();
     }
@@ -65,13 +76,27 @@ public:
     Status LocateProspectiveOwner(const cluster::TopologySnapshot &snapshot, uint32_t token,
                                   const cluster::Member *&owner) const override
     {
-        return LocateOwner(snapshot, token, owner);
+        (void)snapshot;
+        auto iter = prospectiveByToken_.find(token);
+        if (iter != prospectiveByToken_.end()) {
+            owner = &iter->second;
+            return Status::OK();
+        }
+        owner = prospectiveEnabled_ ? &prospective_ : &owner_;
+        return Status::OK();
     }
 
     void SetOwnerAddress(std::string address)
     {
         owner_.identity.address = std::move(address);
         owner_.state = cluster::MemberState::ACTIVE;
+    }
+
+    void SetProspectiveAddress(std::string address)
+    {
+        prospective_.identity.address = std::move(address);
+        prospective_.state = cluster::MemberState::ACTIVE;
+        prospectiveEnabled_ = true;
     }
 
     void SetLocateStatus(Status status)
@@ -82,6 +107,16 @@ public:
     void SetFirstLocateHook(std::function<void()> hook)
     {
         firstLocateHook_ = std::move(hook);
+    }
+
+    void RouteToken(uint32_t token, std::string address)
+    {
+        committedByToken_.emplace(token, MakeMember(std::move(address)));
+    }
+
+    void SetKeyToken(std::string key, uint32_t token)
+    {
+        tokenByKey_[std::move(key)] = token;
     }
 
     size_t LocateCount() const
@@ -95,8 +130,21 @@ public:
     }
 
 private:
+    static cluster::Member MakeMember(std::string address)
+    {
+        cluster::Member member;
+        member.identity.address = std::move(address);
+        member.state = cluster::MemberState::ACTIVE;
+        return member;
+    }
+
     cluster::Member owner_;
+    cluster::Member prospective_;
+    bool prospectiveEnabled_{ false };
     Status locateStatus_;
+    std::map<uint32_t, cluster::Member> committedByToken_;
+    std::map<uint32_t, cluster::Member> prospectiveByToken_;
+    std::map<std::string, uint32_t> tokenByKey_;
     mutable size_t locateCount_{ 0 };
     mutable std::vector<uint64_t> versions_;
     mutable std::function<void()> firstLocateHook_;
@@ -108,10 +156,26 @@ protected:
     {
     }
 
-    Status PublishVersion(uint64_t version)
+    Status PublishVersion(uint64_t version, std::optional<cluster::ActiveBatch> batch = std::nullopt)
+    {
+        return PublishTopology(version, std::move(batch), {});
+    }
+
+    Status PublishTopology(uint64_t version, std::optional<cluster::ActiveBatch> batch,
+                           const std::vector<std::pair<std::string, cluster::MemberState>> &members)
     {
         cluster::TopologyState state;
         state.version = version;
+        state.activeBatch = std::move(batch);
+        for (size_t index = 0; index < members.size(); ++index) {
+            cluster::Member member;
+            member.identity.id = std::string(16, static_cast<char>('a' + index));
+            member.identity.address = members[index].first;
+            member.state = members[index].second;
+            member.tokens = { static_cast<uint32_t>(1000 * index + 1), static_cast<uint32_t>(1000 * index + 2),
+                              static_cast<uint32_t>(1000 * index + 3), static_cast<uint32_t>(1000 * index + 4) };
+            state.members.emplace_back(std::move(member));
+        }
         std::shared_ptr<const cluster::TopologySnapshot> snapshot;
         RETURN_IF_NOT_OK(cluster::TopologySnapshot::Create(
             std::move(state), static_cast<int64_t>(version), std::string(64, version == 1 ? 'a' : 'b'), snapshot));
@@ -283,6 +347,103 @@ TEST_F(MetadataRouteResolverTest, BatchFailureDoesNotFallbackToSingleKeyLocate)
     EXPECT_EQ(groups.failures.at(keys.front()).GetCode(), K_NOT_READY);
     EXPECT_EQ(groups.failures.at(keys.back()).GetCode(), K_NOT_READY);
     EXPECT_TRUE(groups.groups.empty());
+}
+
+TEST_F(MetadataRouteResolverTest, GroupMigrateTargetsFollowsRedirectOverrideDuringScaleIn)
+{
+    ASSERT_TRUE(PublishTopology(1, cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_IN, 1 },
+                                { { "127.0.0.1:18480", cluster::MemberState::ACTIVE },
+                                  { "127.0.0.1:18482", cluster::MemberState::ACTIVE },
+                                  { "127.0.0.1:18483", cluster::MemberState::LEAVING } })
+                    .IsOk());
+    algorithm_.SetOwnerAddress("127.0.0.1:18480");
+    algorithm_.SetProspectiveAddress("127.0.0.1:18482");
+    worker::MetadataRouteResolver resolver(&placement_, worker::MetadataRouteOptions{});
+
+    auto groups = resolver.GroupMigrateTargets({ "k0", "k1" });
+
+    EXPECT_TRUE(groups.failures.empty());
+    EXPECT_EQ(groups.topologyVersion, 1U);
+    EXPECT_EQ(groups.groups.at(HostPort("127.0.0.1", 18482)), (std::vector<std::string>{ "k0", "k1" }));
+    EXPECT_EQ(groups.groups.count(HostPort("127.0.0.1", 18480)), 0U);
+}
+
+TEST_F(MetadataRouteResolverTest, GroupMigrateTargetsKeepsCommittedOwnerWithoutOverride)
+{
+    ASSERT_TRUE(PublishVersion(1).IsOk());
+    worker::MetadataRouteResolver resolver(&placement_, worker::MetadataRouteOptions{});
+    algorithm_.RouteToken(1, "127.0.0.1:18482");
+    algorithm_.RouteToken(2, "127.0.0.1:18480");
+    algorithm_.SetKeyToken("replica-key", 2);
+
+    auto groups = resolver.GroupMigrateTargets({ "own-key", "replica-key" });
+
+    EXPECT_TRUE(groups.failures.empty());
+    EXPECT_EQ(groups.groups.at(HostPort("127.0.0.1", 18482)), std::vector<std::string>({ "own-key" }));
+    EXPECT_EQ(groups.groups.at(HostPort("127.0.0.1", 18480)), std::vector<std::string>({ "replica-key" }));
+}
+
+TEST_F(MetadataRouteResolverTest, GroupMigrateTargetsIgnoresOverrideForWaitDecision)
+{
+    ASSERT_TRUE(PublishTopology(1, cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_OUT, 1 },
+                                { { "127.0.0.1:18480", cluster::MemberState::ACTIVE },
+                                  { "127.0.0.1:18482", cluster::MemberState::ACTIVE },
+                                  { "127.0.0.1:18483", cluster::MemberState::JOINING } })
+                    .IsOk());
+    algorithm_.SetOwnerAddress("127.0.0.1:18480");
+    algorithm_.SetProspectiveAddress("127.0.0.1:18482");
+    worker::MetadataRouteResolver resolver(&placement_, worker::MetadataRouteOptions{});
+
+    auto groups = resolver.GroupMigrateTargets({ "k0" });
+
+    EXPECT_TRUE(groups.failures.empty());
+    EXPECT_EQ(groups.groups.at(HostPort("127.0.0.1", 18480)), std::vector<std::string>({ "k0" }));
+    EXPECT_EQ(groups.groups.count(HostPort("127.0.0.1", 18482)), 0U);
+}
+
+TEST_F(MetadataRouteResolverTest, GroupMigrateTargetsSplitsOversizedKeysetsIntoCompleteChunks)
+{
+    ASSERT_TRUE(PublishVersion(1).IsOk());
+    algorithm_.RouteToken(1, "127.0.0.1:18482");
+    algorithm_.RouteToken(2, "127.0.0.1:18483");
+    worker::MetadataRouteResolver resolver(&placement_, worker::MetadataRouteOptions{});
+    constexpr size_t keyCount = cluster::PlacementFacade::kMaxBatchKeys + 1;
+    std::vector<std::string> keys;
+    std::unordered_map<std::string, HostPort> expectedOwners;
+    keys.reserve(keyCount);
+    for (size_t index = 0; index < keyCount; ++index) {
+        keys.emplace_back("ck-" + std::to_string(index));
+        expectedOwners.emplace(keys.back(),
+                               HostPort("127.0.0.1", index % 2 == 0 ? 18482 : 18483));
+        if (index % 2 == 1) {
+            algorithm_.SetKeyToken(keys.back(), 2);
+        }
+    }
+
+    auto groups = resolver.GroupMigrateTargets(keys);
+
+    EXPECT_TRUE(groups.failures.empty());
+    std::unordered_set<std::string> routed;
+    for (const auto &[owner, groupKeys] : groups.groups) {
+        for (const auto &key : groupKeys) {
+            EXPECT_EQ(routed.emplace(key).second, true) << key;
+            EXPECT_EQ(expectedOwners.at(key), owner) << key;
+        }
+    }
+    EXPECT_EQ(routed.size(), keyCount);
+}
+
+TEST_F(MetadataRouteResolverTest, GroupMigrateTargetsCentralizedModeGroupsEverythingOnMaster)
+{
+    worker::MetadataRouteOptions options;
+    options.centralizedMode = true;
+    options.masterAddress = HostPort("127.0.0.1", 18481);
+    worker::MetadataRouteResolver resolver(nullptr, options);
+
+    auto groups = resolver.GroupMigrateTargets({ "a", "b" });
+
+    EXPECT_TRUE(groups.failures.empty());
+    EXPECT_EQ(groups.groups.at(options.masterAddress), (std::vector<std::string>{ "a", "b" }));
 }
 
 TEST_F(MetadataRouteResolverTest, ApiManagerUsesBoundResolverAndKeepsAddressOverload)

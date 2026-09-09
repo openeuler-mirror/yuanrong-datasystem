@@ -16,7 +16,11 @@
  */
 #include "datasystem/worker/metadata_route_resolver.h"
 
+#include <algorithm>
 #include <utility>
+
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/format.h"
 
 namespace datasystem::worker {
 namespace {
@@ -37,32 +41,32 @@ void RecordFailures(const std::vector<std::string> &keys, const Status &status, 
     }
 }
 
-Status GetParsedOwner(const cluster::PlacementDecision &decision,
+Status GetParsedOwner(const std::string &ownerAddress,
                       std::unordered_map<std::string_view, HostPort> &parsedOwners, const HostPort *&owner)
 {
-    auto cached = parsedOwners.find(decision.committedOwnerAddress);
+    auto cached = parsedOwners.find(ownerAddress);
     if (cached != parsedOwners.end()) {
         owner = &cached->second;
         return Status::OK();
     }
     HostPort parsed;
-    Status rc = parsed.ParseString(decision.committedOwnerAddress);
+    Status rc = parsed.ParseString(ownerAddress);
     if (rc.IsError()) {
         return rc;
     }
-    auto [position, inserted] = parsedOwners.emplace(decision.committedOwnerAddress, std::move(parsed));
+    auto [position, inserted] = parsedOwners.emplace(ownerAddress, std::move(parsed));
     (void)inserted;
     owner = &position->second;
     return Status::OK();
 }
 
 template <typename AddOwner>
-void AddResolvedOwner(const std::string &key, const cluster::PlacementDecision &decision,
+void AddResolvedOwner(const std::string &key, const std::string &ownerAddress,
                       std::unordered_map<std::string_view, HostPort> &parsedOwners,
                       std::unordered_map<std::string, Status> &failures, AddOwner &&addOwner)
 {
     const HostPort *owner = nullptr;
-    Status rc = GetParsedOwner(decision, parsedOwners, owner);
+    Status rc = GetParsedOwner(ownerAddress, parsedOwners, owner);
     if (rc.IsError()) {
         failures.insert_or_assign(key, std::move(rc));
         return;
@@ -142,7 +146,7 @@ MetaOwnerRouteGroups MetadataRouteResolver::GroupOwners(const std::vector<std::s
             result.failures.insert_or_assign(keys[index], std::move(item.status));
             continue;
         }
-        AddResolvedOwner(keys[index], item.decision, parsedOwners, result.failures,
+        AddResolvedOwner(keys[index], item.decision.committedOwnerAddress, parsedOwners, result.failures,
                          [&](const HostPort &owner) { result.groups[owner].emplace_back(keys[index]); });
     }
     return result;
@@ -190,10 +194,76 @@ IndexedMetaOwnerRouteGroups MetadataRouteResolver::GroupIndexedOwners(const std:
             result.failures.insert_or_assign(keys[index], std::move(item.status));
             continue;
         }
-        AddResolvedOwner(keys[index], item.decision, parsedOwners, result.failures,
+        AddResolvedOwner(keys[index], item.decision.committedOwnerAddress, parsedOwners, result.failures,
                          [&](const HostPort &owner) { result.groups[owner].emplace_back(keys[index], index); });
     }
     return result;
+}
+
+MetaOwnerRouteGroups MetadataRouteResolver::GroupMigrateTargets(const std::vector<std::string> &keys) const
+{
+    MetaOwnerRouteGroups result;
+    if (keys.empty()) {
+        return result;
+    }
+    if (options_.centralizedMode) {
+        Status rc = ValidateCentralizedOwner(options_);
+        if (rc.IsError()) {
+            RecordFailures(keys, rc, result);
+            return result;
+        }
+        result.groups[options_.masterAddress] = keys;
+        return result;
+    }
+    if (placement_ == nullptr) {
+        RecordFailures(keys, Status(K_NOT_READY, "Topology placement facade is not provided."), result);
+        return result;
+    }
+    const size_t chunkSize = cluster::PlacementFacade::kMaxBatchKeys;
+    const size_t chunkCount = (keys.size() + chunkSize - 1) / chunkSize;
+    if (chunkCount > 1) {
+        LOG(WARNING) << FormatString("[Migrate Data] GroupMigrateTargets splits %zu keys into %zu redirect batches",
+                                     keys.size(), chunkCount);
+    }
+    for (size_t offset = 0; offset < keys.size(); offset += chunkSize) {
+        const size_t count = std::min(chunkSize, keys.size() - offset);
+        std::vector<std::string> chunkKeys(keys.begin() + static_cast<std::ptrdiff_t>(offset),
+                                           keys.begin() + static_cast<std::ptrdiff_t>(offset + count));
+        AppendRedirectChunk(result, chunkKeys);
+    }
+    return result;
+}
+
+void MetadataRouteResolver::AppendRedirectChunk(MetaOwnerRouteGroups &result,
+                                                const std::vector<std::string> &chunkKeys) const
+{
+    std::vector<std::string_view> keyViews(chunkKeys.begin(), chunkKeys.end());
+    cluster::BatchRedirectDecision decision;
+    Status rc = placement_->EvaluateRedirectBatch(keyViews, decision);
+    if (rc.IsError()) {
+        RecordFailures(chunkKeys, rc, result);
+        return;
+    }
+    result.topologyVersion = result.topologyVersion == 0
+                                 ? decision.topologyVersion
+                                 : std::min(result.topologyVersion, decision.topologyVersion);
+    // The cache views decision-owned address strings, so it must not outlive one chunk's decision.
+    std::unordered_map<std::string_view, HostPort> parsedOwners;
+    for (size_t index = 0; index < chunkKeys.size(); ++index) {
+        if (index >= decision.decisions.size()) {
+            result.failures.insert_or_assign(chunkKeys[index],
+                                             Status(K_NOT_FOUND, "Placement decision is missing."));
+            continue;
+        }
+        const auto &route = decision.decisions[index];
+        // A ScaleOut WAIT or a plain LOCAL decision has no ScaleIn takeover target; the committed owner keeps
+        // such keys on the caller's standby demotion path instead of following the prospective override.
+        const std::string &targetAddress = route.action == cluster::RedirectAction::REDIRECT
+                                               ? route.GetRedirectTargetAddress()
+                                               : route.committedOwnerAddress;
+        AddResolvedOwner(chunkKeys[index], targetAddress, parsedOwners, result.failures,
+                         [&](const HostPort &owner) { result.groups[owner].emplace_back(chunkKeys[index]); });
+    }
 }
 
 }  // namespace datasystem::worker
