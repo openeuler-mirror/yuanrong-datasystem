@@ -18,6 +18,7 @@
 #ifndef DATASYSTEM_CLIENT_TRANSPORT_OBJECT_READ_OBJECT_READ_TYPES_H
 #define DATASYSTEM_CLIENT_TRANSPORT_OBJECT_READ_OBJECT_READ_TYPES_H
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -55,6 +56,23 @@ inline int64_t SelectLocationRefreshBackoffMs(bool draining, uint8_t retryCount,
 {
     constexpr int64_t immediateRetryBackoffMs = 0;
     return !draining && retryCount == 0 ? immediateRetryBackoffMs : currentBackoffMs;
+}
+
+/**
+ * @brief Clamp a stale-location retry backoff to the remaining API deadline.
+ *
+ * A stale snapshot recovers via a forced ring refresh (typically single-digit ms), so waiting longer
+ * than half the remaining budget before the next attempt only starves the retry round that would
+ * have succeeded. Keep at least one more attempt inside the budget.
+ */
+inline int64_t ClampBackoffToDeadline(int64_t backoffMs, int64_t remainingUs)
+{
+    if (remainingUs <= 0) {
+        return backoffMs;
+    }
+    constexpr int64_t US_PER_MS = 1000;
+    const int64_t halfBudgetMs = remainingUs / 2 / US_PER_MS;
+    return std::max<int64_t>(0, std::min(backoffMs, halfBudgetMs));
 }
 
 /** @brief Merge two transport kinds by enum priority (SHM < UB < TCP), mirroring access-log semantics. */

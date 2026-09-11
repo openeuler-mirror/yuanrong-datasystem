@@ -20,6 +20,7 @@
 #include "datasystem/client/object_cache/worker_failover.h"
 #include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/parallel/parallel_for.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/util/memory.h"
 
 namespace datasystem {
@@ -164,6 +165,9 @@ Status PrepareTransportReadRetry(const std::shared_ptr<client::Routing> &routing
     const bool immediateStaleRetry = !draining && retryCount == 0;
     int64_t nextBackoffMs =
         client::SelectLocationRefreshBackoffMs(draining, retryCount, TransportReadRetryBackoffMs(firstState));
+    if (!draining && !immediateStaleRetry) {
+        nextBackoffMs = client::ClampBackoffToDeadline(nextBackoffMs, ApiDeadline::Instance().ApiRemainingUs());
+    }
     LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
         << "[TransportGet][Route] Retry " << (draining ? "draining" : "stale")
         << " locations, key count: " << retryIndexes.size() << ", retry count: "

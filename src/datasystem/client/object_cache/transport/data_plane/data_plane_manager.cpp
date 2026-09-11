@@ -447,7 +447,11 @@ Status DataPlaneManager::ValidateVersionedEndpointAdmission(const std::string &w
     if (snapshot->liveWorkers->find(workerKey) != snapshot->liveWorkers->end()) {
         return Status::OK();
     }
-    CHECK_FAIL_RETURN_STATUS(topologyVersion > snapshot->ringVersion, K_NOT_READY,
+    // A stamped location (topologyVersion > 0) means the master validated this location against a
+    // topology snapshot of that version, so an equal version carries the same authority as a newer
+    // one (e.g. a worker re-joining under a same-version hostId-only ring republish). Only an
+    // unstamped (0) or older version is a stale location and keeps being rejected.
+    CHECK_FAIL_RETURN_STATUS(topologyVersion > 0 && topologyVersion >= snapshot->ringVersion, K_NOT_READY,
                              std::string(STALE_TRANSPORT_SNAPSHOT_MESSAGE) + ": observed version "
                                  + std::to_string(topologyVersion) + ", snapshot version "
                                  + std::to_string(snapshot->ringVersion));

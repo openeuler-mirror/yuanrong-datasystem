@@ -32,6 +32,7 @@
 #include "datasystem/client/object_cache/routing/i_worker_filter.h"
 #include "datasystem/client/object_cache/routing/worker_router.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/log/logging.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/protos/cluster_topology.pb.h"
@@ -1077,6 +1078,49 @@ TEST_F(HashRingRefresherTest, TestDifferentLowerVersionsAreNotConfirmed)
     EXPECT_EQ(hookCalls, callsAfterInitial);
     EXPECT_EQ(hookVersion, 31);
     EXPECT_FALSE(hookEpochReset);
+}
+
+// Measures the ForceRefresh-to-hook-publish latency with an in-memory fetch (network cost
+// excluded, so this is the lower bound clients can expect on a healthy worker). This bounds
+// how much of the 10ms scale-change latency budget the reactive stale-snapshot retry consumes
+// before the admission snapshot even sees the new ring.
+TEST_F(HashRingRefresherTest, ForceRefreshPublishesNewRingWithinRetryBudget)
+{
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    std::atomic<uint64_t> currentVersion{ 1 };
+    auto fetch = [&currentVersion](const HostPort &, uint64_t requested, ::datasystem::ClusterTopologyPb &ring,
+                                   std::string &, uint64_t &newVersion, bool &changed,
+                                   std::unordered_map<std::string, std::string> &hostIdMap) {
+        FillRing(ring, hostIdMap, "127.0.0.1:2000");
+        const uint64_t latest = currentVersion.load(std::memory_order_acquire);
+        changed = latest != requested;
+        newVersion = latest;
+        return Status::OK();
+    };
+    std::atomic<int> hookCalls{ 0 };
+    auto hook = [&hookCalls](uint64_t, const ::datasystem::ClusterTopologyPb &,
+                             const std::unordered_map<std::string, std::string> &, bool) {
+        hookCalls.fetch_add(1, std::memory_order_release);
+        return Status::OK();
+    };
+    client::HashRingRefresher refresher(router, fetch, hook);
+    DS_ASSERT_OK(refresher.InitialFetch(HostPort("127.0.0.1", 1000)));
+    ASSERT_EQ(hookCalls.load(), 1);
+    DS_ASSERT_OK(refresher.StartPeriodicRefresh(60'000));
+
+    currentVersion.store(2, std::memory_order_release);
+    const auto start = std::chrono::steady_clock::now();
+    ASSERT_TRUE(refresher.ForceRefresh());
+    const bool published = WaitUntil([&hookCalls] { return hookCalls.load() > 1; }, std::chrono::seconds(2));
+    const auto publishLatencyMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+    refresher.Stop();
+
+    ASSERT_TRUE(published);
+    // In-memory lower bound is single-digit ms; 50ms keeps the hang-detection intent while
+    // tolerating scheduler jitter on shared CI machines.
+    EXPECT_LT(publishLatencyMs, 50) << "publish latency " << publishLatencyMs << "ms";
+    LOG(INFO) << "ForceRefresh publish latency (in-memory lower bound): " << publishLatencyMs << "ms";
 }
 }  // namespace
 
