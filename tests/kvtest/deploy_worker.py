@@ -15,6 +15,9 @@ import os
 import re
 import sys
 
+from log_collect import (add_collect_filters, archive_command, filters_from_args, has_filters,
+                         pod_directory, receive_archive, select_targets)
+
 from deploy_common import (
     DEFAULT_TIMEOUT,
     apply_config_overrides,
@@ -33,6 +36,7 @@ from deploy_common import (
     kubectl_exec,
     log_error,
     log_info,
+    read_remote_log_dir,
     setup_logging,
     start_service,
     start_service_standalone,
@@ -266,7 +270,40 @@ def cmd_check_commit(args, pods):
 
 def cmd_collect(args, pods):
     """Collect worker logs from pods."""
-    return cmd_collect_shared(args, pods, 'worker logs', args.timeout)
+    try:
+        pods = select_targets(pods, getattr(args, 'pods', []), 'name')
+        options = filters_from_args(args)
+        archive_command([], options)
+        if getattr(args, 'max_workers', None) is not None and args.max_workers <= 0:
+            raise ValueError('--max-workers must be positive')
+    except ValueError as error:
+        log_error(str(error))
+        return 1
+    if not has_filters(options):
+        return cmd_collect_shared(args, pods, 'worker logs', args.timeout)
+
+    def collect(pod):
+        try:
+            log_dir, _ = read_remote_log_dir(args.namespace, [pod], args.remote_config, args.timeout)
+            if not log_dir:
+                raise ValueError('log_dir not found for ' + pod['name'])
+            sources = [['logs', log_dir, ['*.log', '*.log.*', '*.txt', 'resource_monitor.csv']],
+                       ['procmon', os.path.dirname(args.remote_config), ['resource_monitor.csv'], False]]
+            if args.remote_dir:
+                sources.append(['stdout', args.remote_dir, ['stdout.log'], False])
+            command = ['kubectl', 'exec', '-n', args.namespace, pod['name'], '--',
+                       'sh', '-c', archive_command(sources, options)]
+            name = pod_directory(pod['name'], pod['ip'], pod.get('host_ip')) if getattr(args, 'pod_info', False) else pod['name']
+            directory = os.path.join(args.output, name)
+            count = receive_archive(command, directory, args.timeout)
+            log_info(f"  {pod['name']} -> {count} files")
+            return True
+        except Exception as error:
+            log_error(f"{pod['name']} -> collection failed: {error}")
+            return False
+
+    return do_for_all_pods(pods, collect, 'Collecting worker logs',
+                           max_workers=getattr(args, 'max_workers', None))
 
 
 def cmd_clean(args, pods):
@@ -427,6 +464,7 @@ def main():
     # Collect subcommand
     parser_collect = subparsers.add_parser('collect', parents=[parent_parser],
                                            help='Collect worker logs from pods')
+    add_collect_filters(parser_collect)
     parser_collect.add_argument('--remote-config', default='/tmp/worker.config',
                                 help='Config path inside pod (default: /tmp/worker.config)')
     parser_collect.add_argument('-o', '--output', default='collected_worker_logs',
@@ -532,6 +570,8 @@ def main():
 
     # argparse with action='append' default=None won't enforce presence, so
     # validate explicitly here with a clear message.
+    if args.action == 'collect' and args.pods and not args.prefixes:
+        args.prefixes = args.pods
     if not args.prefixes:
         log_error('ERROR: at least one --prefix is required '
                   '(e.g. -p worker-a [-p worker-b])')
