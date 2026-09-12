@@ -73,7 +73,8 @@ def add_collect_filters(parser):
     parser.add_argument('--pod-info', action='store_true',
                         help='Include current Pod IP and host IP in collection directory names')
     parser.add_argument('--file-pattern', action='append', default=[], metavar='GLOB',
-                        help='Filename glob, e.g. "*access*.log"; repeatable (OR)')
+                        help='Filename glob, e.g. "*access*.log", "*INFO*.log", '
+                             '"*request*.log", "*resource*.log"; repeatable (OR)')
     parser.add_argument('--keyword', action='append', default=[], metavar='TEXT',
                         help='Literal case-sensitive line substring; repeatable (OR), filtered remotely')
     parser.add_argument('--uncompressed-only', action='store_true',
