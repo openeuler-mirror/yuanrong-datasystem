@@ -225,5 +225,21 @@ class TestLogCollect(unittest.TestCase):
                 self.assertIn('--prefix', result.stdout)
 
 
+    def test_actual_log_names_exclude_env_and_procmon_even_with_wildcard(self):
+        logs = ['ds_client_3119.INFO.log', 'ds_client_3119_operation.log',
+                'ds_client_access_3119.log', 'access.log', 'kvcache.INFO.log',
+                'kvcache_operation.log', 'kv_metrics.log', 'kv_resource.log',
+                'request_out.log', 'resource.log', 'resource_monitor.log']
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in logs + ['env', 'procmon.py']:
+                (root / name).write_bytes(b'content\n')
+            expected = {'logs/' + name for name in logs}
+            self.assertEqual(set(self.archive(root, patterns=['*'])), expected)
+            patterns = ['*access*.log', '*INFO*.log', '*operation*.log',
+                        '*metrics*.log', '*request*.log', '*resource*.log']
+            self.assertEqual(set(self.archive(root, patterns=patterns)), expected)
+
+
 if __name__ == '__main__':
     unittest.main()

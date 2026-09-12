@@ -33,6 +33,8 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode='w|gz') as archive:
             if not recursive:
                 dirs[:] = []
             for name in sorted(files):
+                if name in ('env', 'procmon.py'):
+                    continue
                 path = os.path.join(parent, name)
                 rel = os.path.relpath(path, root).replace(os.sep, '/')
                 def matches(patterns):
@@ -74,7 +76,8 @@ def add_collect_filters(parser):
                         help='Include current Pod IP and host IP in collection directory names')
     parser.add_argument('--file-pattern', action='append', default=[], metavar='GLOB',
                         help='Filename glob, e.g. "*access*.log", "*INFO*.log", '
-                             '"*request*.log", "*resource*.log"; repeatable (OR)')
+                             '"*operation*.log", "*metrics*.log", "*request*.log", '
+                             '"*resource*.log"; repeatable (OR). Excludes env and procmon.py')
     parser.add_argument('--keyword', action='append', default=[], metavar='TEXT',
                         help='Literal case-sensitive line substring; repeatable (OR), filtered remotely')
     parser.add_argument('--uncompressed-only', action='store_true',

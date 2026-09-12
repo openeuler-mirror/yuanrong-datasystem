@@ -290,3 +290,6 @@ Worker 继续使用现有 `-p/--prefix`，可重复传多个前缀或完整 Pod 
 - Worker：将每个选中 Pod 的 `--remote-config` 内容保存为 `<output>/<Pod目录>/worker_config.json`，保留实际部署参数；开启 `--pod-info` 时放入包含 IP 的 Pod 目录。读取失败会报告配置收集失败并返回非零。
 
 这是额外的配置归档；原有日志收集范围、并发默认值和 Client summary 流程继续保留。
+
+
+`--file-pattern` 示例适用于 Worker 和 Client：`'*access*.log'`、`'*INFO*.log'`、`'*operation*.log'`、`'*metrics*.log'`、`'*request*.log'`、`'*resource*.log'`。例如 `'*resource*.log'` 同时覆盖 `kv_resource.log`、`resource.log`、`resource_monitor.log`。筛选收集明确排除 `env` 和 `procmon.py`，即使传入 `--file-pattern '*'` 也不收集；原有全量日志匹配规则不变。
