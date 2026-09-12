@@ -17,7 +17,7 @@ import shlex
 import sys
 
 from log_collect import (add_collect_filters, archive_command, filters_from_args, has_filters,
-                         pod_directory, receive_archive, select_targets)
+                         pod_directory, receive_archive)
 
 from deploy_common import (
     DEFAULT_TIMEOUT,
@@ -288,7 +288,6 @@ def collect_worker_config(args, pod):
 def cmd_collect(args, pods):
     """Collect worker logs from pods."""
     try:
-        pods = select_targets(pods, getattr(args, 'pods', []), 'name')
         options = filters_from_args(args)
         archive_command([], options)
         if getattr(args, 'max_workers', None) is not None and args.max_workers <= 0:
@@ -592,8 +591,6 @@ def main():
 
     # argparse with action='append' default=None won't enforce presence, so
     # validate explicitly here with a clear message.
-    if args.action == 'collect' and args.pods and not args.prefixes:
-        args.prefixes = args.pods
     if not args.prefixes:
         log_error('ERROR: at least one --prefix is required '
                   '(e.g. -p worker-a [-p worker-b])')

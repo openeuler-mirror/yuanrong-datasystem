@@ -85,11 +85,11 @@ class TestLogCollect(unittest.TestCase):
             config = [['logs', str(root), ['*.log'], False]]
             self.assertEqual(self.archive(root, sources=config, patterns=['*']), {'logs/a.log': b'wanted\n'})
 
-    def test_worker_selection_reaches_only_requested_pod(self):
+    def test_worker_collect_uses_all_pods_selected_by_prefix(self):
         from types import SimpleNamespace
         from unittest.mock import patch
         import deploy_worker
-        args = SimpleNamespace(pods=['pod-1'], file_pattern=['*access*.log'], keyword=['URMA_PERF'],
+        args = SimpleNamespace(file_pattern=['*access*.log'], keyword=['URMA_PERF'],
                                uncompressed_only=True, namespace='default', remote_config='/tmp/worker.config',
                                remote_dir='/tmp/worker', output='unused', timeout=10, max_workers=1, pod_info=True)
         pods = [dict(name=n, ip='192.0.2.1', host_ip='192.0.2.2') for n in ('pod-1', 'pod-10')]
@@ -98,9 +98,8 @@ class TestLogCollect(unittest.TestCase):
              patch('deploy_worker.collect_worker_config', return_value=True):
             self.assertEqual(deploy_worker.cmd_collect(args, pods), 0)
         command, directory, timeout = receive.call_args.args
-        self.assertEqual(command[4], 'pod-1')
-        self.assertIn('pod-1__podip-192.0.2.1__hostip-192.0.2.2', directory)
-        receive.assert_called_once()
+        self.assertEqual({call.args[0][4] for call in receive.call_args_list}, {'pod-1', 'pod-10'})
+        self.assertEqual(receive.call_count, 2)
 
     def test_client_selection_uses_live_pod_identity_and_skips_summary(self):
         from unittest.mock import Mock, patch
@@ -169,7 +168,7 @@ class TestLogCollect(unittest.TestCase):
                                           base64.b64encode(payload.getvalue()).decode()], tmp)
 
 
-    def test_case_directory_archived_without_copying_nested_output(self):
+    def test_only_input_configs_are_archived(self):
         with tempfile.TemporaryDirectory() as tmp:
             case = Path(tmp) / 'aaa'
             case.mkdir()
@@ -180,10 +179,10 @@ class TestLogCollect(unittest.TestCase):
             output = case / 'collected'
             output.mkdir()
             (output / 'old.log').write_text('exclude')
-            self.assertTrue(hasattr(self.collect, 'copy_case_directories'))
-            self.collect.copy_case_directories([case / 'deploy.json', case / 'config.json'], output)
+            self.assertTrue(hasattr(self.collect, 'copy_case_files'))
+            self.collect.copy_case_files([case / 'deploy.json', case / 'config.json'], output)
             self.assertEqual((output / 'aaa/config.json').read_text(), '{"mode": "test"}')
-            self.assertTrue((output / 'aaa/data/input.txt').exists())
+            self.assertFalse((output / 'aaa/data').exists())
             self.assertFalse((output / 'aaa/collected').exists())
 
     def test_worker_config_is_collected_without_log_filtering(self):
@@ -200,7 +199,7 @@ class TestLogCollect(unittest.TestCase):
             self.assertEqual(json.loads((Path(tmp) / 'worker-1/worker_config.json').read_text()), {'port': 123})
 
 
-    def test_client_collect_archives_case_directory_from_constructor_paths(self):
+    def test_client_collect_archives_config_files_from_constructor_paths(self):
         from deploy_client import Deployer
         with tempfile.TemporaryDirectory() as tmp:
             case = Path(tmp) / 'aaa'
@@ -214,6 +213,16 @@ class TestLogCollect(unittest.TestCase):
             client.do_collect(output_dir=str(output))
             self.assertEqual((output / 'aaa/deploy.json').read_bytes(), deploy.read_bytes())
             self.assertEqual((output / 'aaa/config.json').read_bytes(), config.read_bytes())
+
+
+    def test_only_client_exposes_pods_option(self):
+        root = Path(__file__).resolve().parents[2]
+        for role in ('worker', 'client'):
+            result = subprocess.run([sys.executable, str(root / ('deploy_' + role + '.py')), 'collect', '--help'],
+                                    capture_output=True, text=True, check=True)
+            self.assertEqual('--pods' in result.stdout, role == 'client')
+            if role == 'worker':
+                self.assertIn('--prefix', result.stdout)
 
 
 if __name__ == '__main__':

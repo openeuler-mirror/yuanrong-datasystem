@@ -251,8 +251,8 @@ bash tests/test_standalone_mode.sh
 继续使用 `deploy_worker.py collect` 和 `deploy_client.py collect`，无需新增命令行脚本。以下命令在 `tests/kvtest` 目录执行：
 
 ```bash
-# 精确选择两个 Pod，仅收 worker.log 中包含 URMA_PERF 的行
-python3 deploy_worker.py collect --pods worker-1 worker-10 --file-pattern 'worker.log' --keyword URMA_PERF -o collected-perf
+# 使用现有 -p 选择 Pod，仅收 worker.log 中包含 URMA_PERF 的行
+python3 deploy_worker.py collect -p worker-1 -p worker-10 --file-pattern 'worker.log' --keyword URMA_PERF -o collected-perf
 
 # 精确选择 Client Pod，只收 *access*.log
 python3 deploy_client.py collect deploy.json --pods client-1 client-10 --file-pattern '*access*.log' -o collected-access
@@ -273,7 +273,7 @@ python3 deploy_worker.py collect -p worker- -o collected-all
 python3 deploy_client.py collect deploy.json -o collected-client-all
 ```
 
-`--pods` 精确匹配，避免 `pod-1` 同时选中 `pod-10`；Worker 可单独使用它，无需 `-p`。Client 只在 deploy.json 已有节点中选择，不改变实例编号；同时指定 Pod 和实例 ID 时取交集。原有 count/offset 仍用于分批，建议不要与精确 Pod 选择混用。未知目标报错，不退回全量收集。
+Worker 继续使用现有 `-p/--prefix`，可重复传多个前缀或完整 Pod 名，保持原有前缀匹配语义（`pod-1` 也可能匹配 `pod-10`），不新增 `--pods`。Client 的 `--pods` 精确匹配，只在 deploy.json 已有节点中选择，不改变实例编号；同时指定 Pod 和实例 ID 时取交集。原有 count/offset 仍用于分批，建议不要与精确 Pod 选择混用。未知目标报错，不退回全量收集。
 
 `--file-pattern` 匹配日志文件名；含 `/` 时匹配相对于对应日志根目录的路径。多个 pattern 或 keyword 可以重复传入，各自按 OR 匹配，两类条件之间取交集。keyword 为区分大小写的 UTF-8 字面子串，不是正则表达式；仅输出匹配行，无上下文行。文件名通配符须加引号，防止本地 shell 提前展开。筛选适用于日志根目录、Worker stdout/procmon、Client output/SDK；不收不匹配的附带文件。
 
@@ -286,7 +286,7 @@ python3 deploy_client.py collect deploy.json -o collected-client-all
 
 每次 collect 另外归档复现配置，不受 `--file-pattern`、`--keyword` 或 `--uncompressed-only` 影响：
 
-- Client：传入 `aaa/deploy.json aaa/config.json` 时，将整个 `aaa/` 复制为 `<output>/aaa/`。两个配置在同一目录时只复制一次；在不同目录时分别按目录名归档。日志输出目录和符号链接不复制，避免输出位于配置目录内时递归复制、或跟随链接收集目录外内容。不同配置目录同名或目标就是源目录时明确报错。
+- Client：传入 `aaa/deploy.json aaa/config.json` 时，只将这两个文件复制为 `<output>/aaa/deploy.json`、`<output>/aaa/config.json`，不复制 aaa 下其他文件或子目录。重复传入同一文件只复制一次；不同输入映射到同一归档文件名时明确报错。
 - Worker：将每个选中 Pod 的 `--remote-config` 内容保存为 `<output>/<Pod目录>/worker_config.json`，保留实际部署参数；开启 `--pod-info` 时放入包含 IP 的 Pod 目录。读取失败会报告配置收集失败并返回非零。
 
 这是额外的配置归档；原有日志收集范围、并发默认值和 Client summary 流程继续保留。

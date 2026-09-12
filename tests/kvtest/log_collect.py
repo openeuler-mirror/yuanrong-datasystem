@@ -72,8 +72,6 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode='w|gz') as archive:
 def add_collect_filters(parser):
     parser.add_argument('--pod-info', action='store_true',
                         help='Include current Pod IP and host IP in collection directory names')
-    parser.add_argument('--pods', nargs='+', default=[], metavar='POD',
-                        help='Exact Pod names to collect (space separated); no prefix matching')
     parser.add_argument('--file-pattern', action='append', default=[], metavar='GLOB',
                         help='Filename glob, e.g. "*access*.log"; repeatable (OR)')
     parser.add_argument('--keyword', action='append', default=[], metavar='TEXT',
@@ -138,25 +136,21 @@ def receive_archive(command, local_dir, timeout=120, shell=False):
         return count
 
 
-def copy_case_directories(config_paths, output_dir):
+def copy_case_files(config_paths, output_dir):
     output = Path(output_dir).resolve()
-    sources = []
+    targets = {}
     for config_path in config_paths:
-        config = Path(config_path).resolve(strict=True)
-        if config.parent not in sources:
-            sources.append(config.parent)
-    names = {}
-    for source in sources:
-        name = source.name or 'case'
-        if name in names:
-            raise ValueError('Configuration directories have the same name: ' + name)
-        names[name] = source
-        if output / name == source:
-            raise ValueError('Configuration archive destination is the source directory')
-    for name, source in names.items():
-        destination = output / name
-        def ignored(directory, children):
-            return [child for child in children
-                    if (Path(directory) / child).is_symlink()
-                    or (Path(directory) / child).resolve() in (output, destination)]
-        shutil.copytree(source, destination, ignore=ignored, dirs_exist_ok=True)
+        source = Path(config_path).resolve(strict=True)
+        if not source.is_file():
+            raise ValueError('Configuration must be a file: ' + str(source))
+        target = output / (source.parent.name or 'case') / source.name
+        if target in targets and targets[target] != source:
+            raise ValueError('Configuration archive name collision: ' + str(target))
+        if target.resolve() == source:
+            raise ValueError('Configuration archive destination is the source file')
+        if os.path.commonpath([str(target.resolve()), str(output)]) != str(output):
+            raise ValueError('Configuration archive escapes output directory')
+        targets[target] = source
+    for target, source in targets.items():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)

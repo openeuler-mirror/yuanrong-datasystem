@@ -15,7 +15,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from log_collect import (add_collect_filters, archive_command, filters_from_args, has_filters,
-                         pod_directory, receive_archive, select_targets, copy_case_directories)
+                         pod_directory, receive_archive, select_targets, copy_case_files)
 
 from deploy_common import (
     _print_timings,
@@ -1179,7 +1179,7 @@ class Deployer:
         a 2000-node collect can be manually batched.
         """
         collect_dir = output_dir
-        copy_case_directories(getattr(self, 'case_config_paths', []), collect_dir)
+        copy_case_files(getattr(self, 'case_config_paths', []), collect_dir)
         results = []
 
         filters = filters or dict(patterns=[], keywords=[], uncompressed_only=False)
@@ -1829,6 +1829,8 @@ def main():
     # collect
     p = sub.add_parser('collect', help='Collect output files and SDK logs', parents=[shared])
     add_collect_filters(p)
+    p.add_argument('--pods', nargs='+', default=[], metavar='POD',
+                   help='Exact Pod names to collect (space separated); no prefix matching')
     p.add_argument('--instance-ids', nargs='+', default=[], help='Exact client instance IDs to collect')
     p.add_argument('deploy_json')
     p.add_argument('config_template', nargs='?', default='config/config.json.example')
