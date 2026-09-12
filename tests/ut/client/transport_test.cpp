@@ -1267,6 +1267,16 @@ public:
     }
 };
 
+class TcpPublishDataPlaneManager : public FakeDataPlaneManager {
+public:
+    Status BuildTransporter(const HostPort &, TransportHint, const std::shared_ptr<WorkerRpcClient> &rpcClient,
+                            TransportPhaseLatencyRecorder *, std::shared_ptr<IDataTransporter> &output) override
+    {
+        output = std::make_shared<TcpTransporter>(rpcClient);
+        return Status::OK();
+    }
+};
+
 class FakeObjectMetadataClient : public ObjectMetadataClient {
 public:
     FakeObjectMetadataClient() : ObjectMetadataClient(nullptr, nullptr)
@@ -5453,6 +5463,57 @@ TEST(ObjectClientTransportTest, CoordinatorRoutedPublishPreservesCandidateAndSha
     EXPECT_NE(route.worker, leavingWorker);
     free(info->pointer);
     info->pointer = nullptr;
+}
+
+TEST(ObjectClientTransportTest, RoutedCreateSetPreservesTtlAndExistence)
+{
+    const auto worker = MakeAddress(31516);
+    auto manager = std::make_shared<TcpPublishDataPlaneManager>();
+    ConnectOptions options;
+    options.host = worker.Host();
+    options.port = worker.Port();
+    options.enableLocalCache = false;
+    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(worker);
+    workerApi->clientId_ = "routed-create-set-options-test";
+    workerApi->SetHealthy(true);
+    client->workerApi_.emplace_back(workerApi);
+    client->listenWorker_.resize(object_cache::STANDBY2_WORKER + 1);
+    client->listenWorker_[object_cache::LOCAL_WORKER] = std::make_shared<client::ListenWorker>(
+        workerApi, HeartbeatType::NO_HEARTBEAT, object_cache::LOCAL_WORKER, nullptr);
+    client->transportLayer_ = std::make_unique<TestTransportLayer>(
+        manager, std::make_shared<FixedTransportAdvisor>(TransportHint::TCP_ONLY));
+    std::atomic_store(&client->routing_, MakeSingleWorkerRouting(worker));
+    bool initNeedsCompletion = false;
+    ASSERT_TRUE(client->clientStateManager_->ProcessInit(initNeedsCompletion).IsOk());
+    client->clientStateManager_->CompleteHandler(false, initNeedsCompletion);
+    ScopedRequestContext requestContext;
+
+    const std::vector<std::pair<uint32_t, ExistenceOpt>> cases{ { 10, ExistenceOpt::NX }, { 0, ExistenceOpt::NONE } };
+    const std::string value = "data";
+    for (const auto &[ttl, existence] : cases) {
+        SCOPED_TRACE(ttl);
+        object_cache::FullParam param;
+        param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
+        param.consistencyType = ConsistencyType::CAUSAL;
+        param.ttlSecond = ttl;
+        param.existence = existence;
+        std::shared_ptr<Buffer> buffer;
+        ASSERT_TRUE(client->Create("routed-create-set-options", value.size(), param, buffer).IsOk());
+        param.ttlSecond = 99;
+        param.existence = existence == ExistenceOpt::NX ? ExistenceOpt::NONE : ExistenceOpt::NX;
+        ASSERT_TRUE(buffer->MemoryCopy(value.data(), value.size()).IsOk());
+        ASSERT_TRUE(client->Set(buffer).IsOk());
+
+        ASSERT_NE(manager->lastRpcClient, nullptr);
+        ASSERT_FALSE(manager->lastRpcClient->invokedSetRequests.empty());
+        const auto &request = manager->lastRpcClient->invokedSetRequests.back();
+        EXPECT_EQ(request.ttl_second(), ttl);
+        EXPECT_EQ(static_cast<int>(request.existence()), static_cast<int>(existence));
+        EXPECT_EQ(request.write_mode(), static_cast<uint32_t>(WriteMode::NONE_L2_CACHE_EVICT));
+        EXPECT_EQ(manager->lastRpcClient->invokedSetPayloadData.back(), std::vector<std::string>({ value }));
+    }
+    ASSERT_EQ(manager->lastRpcClient->invokedSetRequests.size(), cases.size());
 }
 
 TEST(ObjectClientTransportTest, RoutedReplayKeepsBufferUsableAfterSourceWorkerRemoval)
