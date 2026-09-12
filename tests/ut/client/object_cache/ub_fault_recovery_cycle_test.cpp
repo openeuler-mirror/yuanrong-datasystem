@@ -18,6 +18,7 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <utility>
 
@@ -61,6 +62,15 @@ public:
         }
         EXPECT_EQ(ubPortHealthQueryPool_->GetWaitingTasksNum(), 0u);
         EXPECT_EQ(ubPortHealthQueryPool_->GetRunningTasksNum(), 0u);
+    }
+
+    void MakeRecoveryQueryDue()
+    {
+        std::lock_guard<bthread::Mutex> lock(ubPortHealthVerifier_.mutex_);
+        auto peer = ubPortHealthVerifier_.peers_.find(WORKER);
+        ASSERT_NE(peer, ubPortHealthVerifier_.peers_.end());
+        ASSERT_FALSE(peer->second.inFlight);
+        peer->second.nextQueryMs = 0;
     }
 
     Status QueryUbPortHealth(const HostPort &workerAddr, const std::string &expectedIncarnation,
@@ -156,12 +166,14 @@ TEST(UbFaultRecoveryCycleTest, WorkerPortRecoveryRestoresClientAccess)
     const auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(
         *deadline - std::chrono::steady_clock::now());
     EXPECT_GT(delay.count(), 0);
-    EXPECT_LE(delay, UB_REMOTE_PORT_HEALTH_QUERY_INTERVAL);
+    EXPECT_LE(delay, std::chrono::milliseconds(UB_REMOTE_PORT_HEALTH_RETRY_MAX_MS));
 
     manager.workerPortHealth = ALL_PORTS_RECOVERED;
     manager.ObserveUbHealthSummary(BuildSummary(ALL_PORTS_RECOVERED));
     EXPECT_FALSE(filter.IsAvailable(WORKER));
 
+    // The verifier UT covers the randomized deadline itself. Make it due here without a real 30-second wait.
+    manager.MakeRecoveryQueryDue();
     manager.RunAndWait();
     EXPECT_EQ(manager.queryCount, 2u);
     EXPECT_TRUE(filter.IsAvailable(WORKER));

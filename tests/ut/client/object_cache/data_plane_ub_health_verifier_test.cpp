@@ -282,7 +282,7 @@ TEST(DataPlaneUbHealthVerifierTest, DispatchRefillsFreeSlotAndShutdownDrainsOuts
     EXPECT_FALSE(manager.RequestUbPortHealthVerification(WORKER));
 }
 
-TEST(DataPlaneUbHealthVerifierTest, VerifiedAllDownSchedulesOneSecondRecoveryAndRemovalCancelsIt)
+TEST(DataPlaneUbHealthVerifierTest, VerifiedAllDownSchedulesBoundedRecoveryAndRemovalCancelsIt)
 {
     std::vector<UbHealthSummary> verified;
     uint32_t wakes = 0;
@@ -303,7 +303,7 @@ TEST(DataPlaneUbHealthVerifierTest, VerifiedAllDownSchedulesOneSecondRecoveryAnd
     const auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(
         *deadline - std::chrono::steady_clock::now());
     EXPECT_GT(delay.count(), 0);
-    EXPECT_LE(delay, UB_REMOTE_PORT_HEALTH_QUERY_INTERVAL);
+    EXPECT_LE(delay, std::chrono::milliseconds(UB_REMOTE_PORT_HEALTH_RETRY_MAX_MS));
     EXPECT_GE(wakes, 2u);
 
     ASSERT_TRUE(manager.UpdateWorkerSnapshot(Snapshot(2, false)).IsOk());
