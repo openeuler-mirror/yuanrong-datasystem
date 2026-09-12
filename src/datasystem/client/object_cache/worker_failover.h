@@ -92,10 +92,12 @@ public:
                                                         const HostPort &localAddress);
     void MarkNoSwitchableWorkerIfNeeded(WorkerNode current, uint64_t switchGeneration);
     void RestoreWorkerAvailableIfNeeded(WorkerNode current, uint64_t switchGeneration);
+    bool TryRestoreBoundWorkerLocked(WorkerNode current, WorkerNode node, client::SwitchTriggerReason reason);
     void ReplacePreferredLocalWorkerLocked(std::unique_ptr<client::MmapManager> &localMmapManager,
                                            std::shared_ptr<client::ListenWorker> &oldLocalListener,
                                            std::unique_ptr<client::MmapManager> &oldMmapManager);
     bool TrySwitchBackToLocalWorker();
+    bool CommitRestoreToLocalWorker(WorkerNode current);
     bool GetPreferredLocalWorkerToRecover(WorkerNode &oldNode, HostPort &localAddress, HeartbeatType &heartbeatType);
     Status PreparePreferredLocalWorker(const HostPort &localAddress, HeartbeatType heartbeatType,
                                        std::shared_ptr<ClientWorkerRemoteApi> &localWorkerApi,
