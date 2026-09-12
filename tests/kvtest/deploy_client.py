@@ -1152,7 +1152,7 @@ class Deployer:
         log_info(f'\nClean-logs result: {ok}/{len(results)}')
 
     def do_collect(self, sdk_log_dir='/root/.datasystem/logs', output_dir='collected',
-                   summary_timeout=5, max_workers=None, node_slice=None, filters=None, pods=None,
+                   summary_timeout=5, max_workers=None, node_slice=None, filters=None, prefixes=None,
                    instance_ids=None, pod_info=False):
         """Collect output files and SDK logs from all nodes.
 
@@ -1186,7 +1186,16 @@ class Deployer:
         archive_command([], filters)
         if max_workers is not None and max_workers <= 0:
             raise ValueError('--max-workers must be positive')
-        nodes = select_targets(self.nodes, pods, 'pod_name')
+        nodes = self.nodes
+        if prefixes:
+            for prefix in prefixes:
+                if not any(node.get('pod_name', '').startswith(prefix) for node in nodes):
+                    log_error(f'WARNING: prefix "{prefix}" matched 0 pods')
+            nodes = [node for node in nodes if any(node.get('pod_name', '').startswith(prefix)
+                                                   for prefix in prefixes)]
+            if not nodes:
+                log_error('No clients found matching the requested prefixes')
+                return 1
         nodes = select_targets(nodes, instance_ids, 'instance_id')
         if node_slice is not None:
             offset, count = node_slice
@@ -1275,7 +1284,7 @@ class Deployer:
         empty = sum(1 for r in results if r == 'empty')
         fail = sum(1 for r in results if r == 'fail')
         log_info(f'\nCollect result: {ok} ok / {empty} empty / {fail} fail / {len(results)} total')
-        if has_filters(filters) or pods or instance_ids or pod_info:
+        if has_filters(filters) or prefixes or instance_ids or pod_info:
             return 1 if fail else 0
 
     def do_run(self, duration):
@@ -1829,8 +1838,9 @@ def main():
     # collect
     p = sub.add_parser('collect', help='Collect output files and SDK logs', parents=[shared])
     add_collect_filters(p)
-    p.add_argument('--pods', nargs='+', default=[], metavar='POD',
-                   help='Exact Pod names to collect (space separated); no prefix matching')
+    p.add_argument('-p', '--prefix', action='append', default=None, dest='prefixes', metavar='PREFIX',
+                   help='Pod name prefix to match (repeatable: -p client-a -p client-b). '
+                        'A pod is selected if it matches ANY prefix.')
     p.add_argument('--instance-ids', nargs='+', default=[], help='Exact client instance IDs to collect')
     p.add_argument('deploy_json')
     p.add_argument('config_template', nargs='?', default='config/config.json.example')
@@ -1926,7 +1936,7 @@ def main():
             summary_timeout=getattr(args, 'summary_timeout', 5),
             max_workers=getattr(args, 'max_workers', None),
             node_slice=node_slice, filters=filters_from_args(args),
-            pods=args.pods, instance_ids=args.instance_ids, pod_info=args.pod_info)
+            prefixes=args.prefixes, instance_ids=args.instance_ids, pod_info=args.pod_info)
         if result:
             sys.exit(result)
     elif args.command == 'clean':

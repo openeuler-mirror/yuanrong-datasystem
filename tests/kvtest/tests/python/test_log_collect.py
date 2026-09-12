@@ -215,14 +215,13 @@ class TestLogCollect(unittest.TestCase):
             self.assertEqual((output / 'aaa/config.json').read_bytes(), config.read_bytes())
 
 
-    def test_only_client_exposes_pods_option(self):
+    def test_collect_clis_expose_prefix_instead_of_pods(self):
         root = Path(__file__).resolve().parents[2]
         for role in ('worker', 'client'):
             result = subprocess.run([sys.executable, str(root / ('deploy_' + role + '.py')), 'collect', '--help'],
                                     capture_output=True, text=True, check=True)
-            self.assertEqual('--pods' in result.stdout, role == 'client')
-            if role == 'worker':
-                self.assertIn('--prefix', result.stdout)
+            self.assertNotIn('--pods', result.stdout)
+            self.assertIn('--prefix', result.stdout)
 
 
     def test_actual_log_names_exclude_env_and_procmon_even_with_wildcard(self):
@@ -239,6 +238,26 @@ class TestLogCollect(unittest.TestCase):
             patterns = ['*access*.log', '*INFO*.log', '*operation*.log',
                         '*metrics*.log', '*request*.log', '*resource*.log']
             self.assertEqual(set(self.archive(root, patterns=patterns)), expected)
+
+
+    def test_client_prefixes_match_any_prefix_without_duplicate_collection(self):
+        from unittest.mock import patch
+        from deploy_client import Deployer
+        d = Deployer.__new__(Deployer)
+        d.nodes = [dict(pod_name=name, instance_id=str(i))
+                   for i, name in enumerate(['pod-1', 'pod-10', 'other-1'])]
+        d.default_transport = 'kubectl'
+        d.remote_work_dir = '/tmp/client'
+        d.listen_port = 9000
+        options = dict(patterns=['*.log'], keywords=[], uncompressed_only=False)
+        with tempfile.TemporaryDirectory() as tmp, patch('deploy_client.receive_archive', return_value=1) as receive:
+            self.assertEqual(d.do_collect(output_dir=tmp, filters=options, prefixes=['pod-', 'pod-1']), 0)
+        self.assertEqual({c.args[0][2] for c in receive.call_args_list}, {'pod-1', 'pod-10'})
+        self.assertEqual(receive.call_count, 2)
+        self.assertEqual(len(d.nodes), 3)
+        with patch('deploy_client.receive_archive') as receive:
+            self.assertEqual(d.do_collect(filters=options, prefixes=['missing']), 1)
+            receive.assert_not_called()
 
 
 if __name__ == '__main__':
