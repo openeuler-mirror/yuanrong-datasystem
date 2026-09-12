@@ -94,7 +94,8 @@ class TestLogCollect(unittest.TestCase):
                                remote_dir='/tmp/worker', output='unused', timeout=10, max_workers=1, pod_info=True)
         pods = [dict(name=n, ip='192.0.2.1', host_ip='192.0.2.2') for n in ('pod-1', 'pod-10')]
         with patch('deploy_worker.read_remote_log_dir', return_value=('/logs', {})), \
-             patch('deploy_worker.receive_archive', return_value=1) as receive:
+             patch('deploy_worker.receive_archive', return_value=1) as receive, \
+             patch('deploy_worker.collect_worker_config', return_value=True):
             self.assertEqual(deploy_worker.cmd_collect(args, pods), 0)
         command, directory, timeout = receive.call_args.args
         self.assertEqual(command[4], 'pod-1')
@@ -129,9 +130,11 @@ class TestLogCollect(unittest.TestCase):
         args = SimpleNamespace(timeout=10, max_workers=None)
         pods = [dict(name='pod-1')]
         with patch('deploy_worker.cmd_collect_shared', return_value=0) as legacy, \
-             patch('deploy_worker.receive_archive') as receive:
+             patch('deploy_worker.receive_archive') as receive, \
+             patch('deploy_worker.collect_worker_config', return_value=True) as config:
             self.assertEqual(deploy_worker.cmd_collect(args, pods), 0)
         legacy.assert_called_once_with(args, pods, 'worker logs', 10)
+        config.assert_called_once_with(args, pods[0])
         receive.assert_not_called()
         self.assertIsNone(args.max_workers)
 
@@ -164,6 +167,53 @@ class TestLogCollect(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ValueError):
             self.collect.receive_archive([sys.executable, '-c', script,
                                           base64.b64encode(payload.getvalue()).decode()], tmp)
+
+
+    def test_case_directory_archived_without_copying_nested_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            case = Path(tmp) / 'aaa'
+            case.mkdir()
+            (case / 'deploy.json').write_text('{}')
+            (case / 'config.json').write_text('{"mode": "test"}')
+            (case / 'data').mkdir()
+            (case / 'data/input.txt').write_text('fixture')
+            output = case / 'collected'
+            output.mkdir()
+            (output / 'old.log').write_text('exclude')
+            self.assertTrue(hasattr(self.collect, 'copy_case_directories'))
+            self.collect.copy_case_directories([case / 'deploy.json', case / 'config.json'], output)
+            self.assertEqual((output / 'aaa/config.json').read_text(), '{"mode": "test"}')
+            self.assertTrue((output / 'aaa/data/input.txt').exists())
+            self.assertFalse((output / 'aaa/collected').exists())
+
+    def test_worker_config_is_collected_without_log_filtering(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import deploy_worker
+        with tempfile.TemporaryDirectory() as tmp:
+            args = SimpleNamespace(remote_config='/tmp/worker config.json', output=tmp,
+                                   namespace='default', timeout=10, pod_info=False)
+            pod = dict(name='worker-1', ip='192.0.2.1')
+            self.assertTrue(hasattr(deploy_worker, 'collect_worker_config'))
+            with patch('deploy_worker.kubectl_exec', return_value=subprocess.CompletedProcess([], 0, '{"port": 123}')):
+                self.assertTrue(deploy_worker.collect_worker_config(args, pod))
+            self.assertEqual(json.loads((Path(tmp) / 'worker-1/worker_config.json').read_text()), {'port': 123})
+
+
+    def test_client_collect_archives_case_directory_from_constructor_paths(self):
+        from deploy_client import Deployer
+        with tempfile.TemporaryDirectory() as tmp:
+            case = Path(tmp) / 'aaa'
+            case.mkdir()
+            deploy = case / 'deploy.json'
+            config = case / 'config.json'
+            deploy.write_text('{"nodes": []}')
+            config.write_text('{"listen_port": 9000}')
+            output = Path(tmp) / 'logs'
+            client = Deployer(str(deploy), str(config))
+            client.do_collect(output_dir=str(output))
+            self.assertEqual((output / 'aaa/deploy.json').read_bytes(), deploy.read_bytes())
+            self.assertEqual((output / 'aaa/config.json').read_bytes(), config.read_bytes())
 
 
 if __name__ == '__main__':

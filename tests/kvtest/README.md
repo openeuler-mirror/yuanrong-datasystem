@@ -282,3 +282,11 @@ python3 deploy_client.py collect deploy.json -o collected-client-all
 显式传入 `--pod-info` 后，Pod 收集目录为 `<Pod>__podip-<PodIP>__hostip-<HostIP>`；Client 再追加 `__client-<instance_id>`。仅在启用该参数时使用包含地址的目录；地址读取自当前 Kubernetes 状态，缺失 HostIP 时明确标为 unknown。SSH/localhost Client 保留原来的 host_instance_id 目录。筛选模式使用 logs/procmon/stdout 或 output/sdk 子目录，避免不同来源同名文件覆盖；不改变源文件。不传新增参数时完整保留原有收集范围、目录命名、目录内部布局、并发默认值和 Client summary 流程。
 
 并发默认行为不变；大量节点建议显式传 `--max-workers 16`。筛选模式需要目标节点有 Python 3，按行处理关键字，传输结果落本地临时文件再解包，避免整批日志驻留内存；匹配行临时文件使用远端临时目录，需有足够空间。筛选 Client 日志不触发 `/summary`。单个目标失败会报告失败并继续其他目标，筛选模式最终返回非零；不会改用全量下载掩盖筛选失败。请每次使用新的 `-o` 目录，避免上次收集结果混入本次分析。线上文件仍可能轮转，不保证跨节点同一时刻的日志快照。
+
+
+每次 collect 另外归档复现配置，不受 `--file-pattern`、`--keyword` 或 `--uncompressed-only` 影响：
+
+- Client：传入 `aaa/deploy.json aaa/config.json` 时，将整个 `aaa/` 复制为 `<output>/aaa/`。两个配置在同一目录时只复制一次；在不同目录时分别按目录名归档。日志输出目录和符号链接不复制，避免输出位于配置目录内时递归复制、或跟随链接收集目录外内容。不同配置目录同名或目标就是源目录时明确报错。
+- Worker：将每个选中 Pod 的 `--remote-config` 内容保存为 `<output>/<Pod目录>/worker_config.json`，保留实际部署参数；开启 `--pod-info` 时放入包含 IP 的 Pod 目录。读取失败会报告配置收集失败并返回非零。
+
+这是额外的配置归档；原有日志收集范围、并发默认值和 Client summary 流程继续保留。

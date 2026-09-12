@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import sys
 
 from log_collect import (add_collect_filters, archive_command, filters_from_args, has_filters,
@@ -268,6 +269,22 @@ def cmd_check_commit(args, pods):
     return 0
 
 
+def collect_worker_config(args, pod):
+    try:
+        result = kubectl_exec(pod['name'], args.namespace, 'cat ' + shlex.quote(args.remote_config),
+                              check=True, timeout=args.timeout)
+        json.loads(result.stdout)
+        name = pod_directory(pod['name'], pod['ip'], pod.get('host_ip')) if getattr(args, 'pod_info', False) else pod['name']
+        directory = os.path.join(args.output, name)
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, 'worker_config.json'), 'w', encoding='utf-8') as output:
+            output.write(result.stdout)
+        return True
+    except Exception as error:
+        log_error(f"{pod['name']} -> configuration collection failed: {error}")
+        return False
+
+
 def cmd_collect(args, pods):
     """Collect worker logs from pods."""
     try:
@@ -280,9 +297,14 @@ def cmd_collect(args, pods):
         log_error(str(error))
         return 1
     if not has_filters(options):
-        return cmd_collect_shared(args, pods, 'worker logs', args.timeout)
+        logs_result = cmd_collect_shared(args, pods, 'worker logs', args.timeout)
+        config_result = do_for_all_pods(pods, lambda pod: collect_worker_config(args, pod),
+                                        'Collecting worker configurations',
+                                        max_workers=getattr(args, 'max_workers', None))
+        return logs_result or config_result
 
     def collect(pod):
+        config_ok = collect_worker_config(args, pod)
         try:
             log_dir, _ = read_remote_log_dir(args.namespace, [pod], args.remote_config, args.timeout)
             if not log_dir:
@@ -297,7 +319,7 @@ def cmd_collect(args, pods):
             directory = os.path.join(args.output, name)
             count = receive_archive(command, directory, args.timeout)
             log_info(f"  {pod['name']} -> {count} files")
-            return True
+            return config_ok
         except Exception as error:
             log_error(f"{pod['name']} -> collection failed: {error}")
             return False

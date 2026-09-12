@@ -15,7 +15,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from log_collect import (add_collect_filters, archive_command, filters_from_args, has_filters,
-                         pod_directory, receive_archive, select_targets)
+                         pod_directory, receive_archive, select_targets, copy_case_directories)
 
 from deploy_common import (
     _print_timings,
@@ -34,6 +34,9 @@ _POLL_INTERVAL = 2
 
 class Deployer:
     def __init__(self, deploy_path, config_template_path=None):
+        self.case_config_paths = [os.path.abspath(deploy_path)]
+        if config_template_path:
+            self.case_config_paths.append(os.path.abspath(config_template_path))
         with open(deploy_path) as f:
             self.deploy = json.load(f)
         # config_template is optional: install does not need it, only start /
@@ -1176,6 +1179,7 @@ class Deployer:
         a 2000-node collect can be manually batched.
         """
         collect_dir = output_dir
+        copy_case_directories(getattr(self, 'case_config_paths', []), collect_dir)
         results = []
 
         filters = filters or dict(patterns=[], keywords=[], uncompressed_only=False)

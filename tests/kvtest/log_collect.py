@@ -136,3 +136,27 @@ def receive_archive(command, local_dir, timeout=120, shell=False):
                     shutil.copyfileobj(source, dest)
                 count += 1
         return count
+
+
+def copy_case_directories(config_paths, output_dir):
+    output = Path(output_dir).resolve()
+    sources = []
+    for config_path in config_paths:
+        config = Path(config_path).resolve(strict=True)
+        if config.parent not in sources:
+            sources.append(config.parent)
+    names = {}
+    for source in sources:
+        name = source.name or 'case'
+        if name in names:
+            raise ValueError('Configuration directories have the same name: ' + name)
+        names[name] = source
+        if output / name == source:
+            raise ValueError('Configuration archive destination is the source directory')
+    for name, source in names.items():
+        destination = output / name
+        def ignored(directory, children):
+            return [child for child in children
+                    if (Path(directory) / child).is_symlink()
+                    or (Path(directory) / child).resolve() in (output, destination)]
+        shutil.copytree(source, destination, ignore=ignored, dirs_exist_ok=True)
