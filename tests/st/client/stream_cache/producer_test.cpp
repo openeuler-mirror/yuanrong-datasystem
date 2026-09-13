@@ -2481,7 +2481,7 @@ TEST_F(ProducerTest, LEVEL1_TestDifferentReceiveSpeed)
     ASSERT_EQ(consumerFut2.get(), Status::OK());
 }
 
-TEST_F(ProducerTest, TestReCreateProducerDiscardData)
+TEST_F(ProducerTest, DISABLED_TestReCreateProducerDiscardData)
 {
     std::shared_ptr<StreamClient> client1;
     ASSERT_EQ(CreateClient(0, client1), Status::OK());

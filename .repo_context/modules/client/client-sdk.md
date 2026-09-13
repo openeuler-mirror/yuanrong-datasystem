@@ -869,21 +869,32 @@ handler. Clearing the Router handler synchronously excludes later callback acces
 
 - `K_URMA_NEED_CONNECT` (1006) means the worker no longer recognizes the client's UB connection
   (`UrmaManager::CheckUrmaConnectionStable`). It is returned by the metadata `QueryAndGet` **precheck**, which guards
-  only UB data requests: `worker_query_and_get_impl.cpp` returns `K_OK` when `data_request` has no `ub` field, so a TCP
-  inline retry of the same request is always served. Failure latency is single-digit microseconds, not queueing.
+  only UB data requests and runs before the Worker writes inline data.
 - Retry handling per path:
-  - metadata `QueryAndGet`: `ObjectMetadataClient::PrepareQueryRetry` drops the stale UB data plane
-    (`DataPlaneManager::ResetStaleUbDataPlane` with the serving transporter as identity guard), starts a read-path
-    rebuild cooldown, and retries the request over TCP inline.
+  - metadata `QueryAndGet`: `ObjectMetadataClient::PrepareQueryRetry` calls
+    `DataPlaneManager::RebuildStaleUbDataPlane` with the serving transporter as an identity guard, then retries once
+    over UB within the original request deadline. The existing per-endpoint rebuild slot provides single-flight;
+    the replacement handshake runs without the entry lock and a short write lock publishes the completed UB plane.
+    Concurrent stale responders wait with deadline-aware backoff. The rebuild owner claims the atomic slot under the
+  endpoint read lock; waiters observe the occupied slot without contending for the write lock, and the final lease
+  checks the same state before dispatch. A failed rebuild publishes the cooldown and detaches the known-stale UB
+  transporter under one endpoint write lock before releasing the slot, then closes it outside the lock. If teardown
+  replaces the endpoint entry during the lock-free handshake, publication returns `K_TRY_AGAIN`; the caller reacquires
+  the current admitted entry and RPC client as part of the same request and continues within the original deadline.
+  An older in-flight rebuild clears the cooldown only if the observed generation is unchanged, so persistent peer
+  rejection cannot cause one handshake per waiting request.
   - replica / direct read: `DataPlaneExecutor::PrepareRetry` calls `ResetDataPlane` and retries.
   - writes: `TransportLayer::RebuildPlaneOnSetFailure` calls `ResetDataPlane` and retries.
-- **Invariant: the read-path rebuild cooldown must stay private to the read path.** `GetOrCreate` /
-  `AcquireDataPlaneLease` / `EnsureTransporterLocked` are shared by Set, Create, direct H2D leases and replica reads,
-  and those callers treat `K_NOT_READY` as terminal (`RETURN_IF_NOT_OK`, or `transporter == nullptr` → return status).
-  A gate placed in the shared entry point converts self-healing paths into hard failures. Enforce the cooldown only in
-  `ObjectMetadataClient::PrepareUbInlineRequest`, before `GetOrCreate`.
-- The 1006 branch releases the prepared UB receive buffers **immediately** (`DisableInlineData`): the precheck rejects
-  the request before the worker writes anything, so there is nothing to quarantine. Delayed release is not used.
+- **Invariant: the read-path recovery gates must stay opt-in.** `GetOrCreate`, `AcquireDataPlaneLease` and
+  `EnsureTransporterLocked` are shared by Set, Create, direct H2D leases and replica reads, and those callers treat
+  connection errors as terminal. `ObjectMetadataClient` opts UB leases into the endpoint cooldown and rebuild-slot
+  checks; all other callers retain the default behaviour.
+- The 1006 branch releases the prepared UB receive buffers before waiting for or performing the handshake, then
+  recreates them after recovery: the precheck rejects the request before the worker writes anything, so there is
+  nothing to quarantine. Delayed release and TCP fallback are not used for that recovery attempt.
+  An undispatched transporter-replacement race before or after the Worker 1006 retries UB with deadline-aware backoff
+  instead of entering the generic inline-to-TCP fallback or consuming the one Worker reconnect attempt; a second Worker
+  response carrying 1006 is still returned.
 - The worker-entry precheck resolves a missing client-id key through the peer address
   (`fast_transport_manager_wrapper.cpp` passes `remote.request_address()` as `fallbackAddress`): a handshake that
   registered before the client id was known lives under the address. The fallback is consulted **only** when the
@@ -905,7 +916,8 @@ handler. Clearing the Router handler synchronously excludes later callback acces
   (`ShutdownStandbyConnection`) instead of restating its conditions: the teardown runs on the shared async-switch
   thread and can start seconds after the decision, during which read traffic can resume on the endpoint.
 - Ordering: the teardown resets the client's own data-plane entry **before** sending `Disconnect`, so the client never
-  keeps a transporter for a connection the peer is about to drop.
+  keeps a transporter for a connection the peer is about to drop. A new SDK can recover the resulting 1006 from an
+  old or new Worker without a protocol extension; old SDK behaviour is unchanged.
 - Last-use recording is sampled: `MarkDataPlaneUse` refreshes `lastDataPlaneUseMs` at most once per
   `DATA_PLANE_USE_REFRESH_INTERVAL_MS` (100 ms) so the read hot path does not dirty the entry on every request, and it
   records the transporter kind that **actually served** the request, so a UB candidate served by the cached TCP
@@ -929,6 +941,11 @@ handler. Clearing the Router handler synchronously excludes later callback acces
   degrades every later reader of that endpoint to TCP until the entry is reconciled or torn down. The guard is nested
   in `DataPlaneManager` and declared in `data_plane_manager.h` next to `AdmitUbRead` for that reason.
 - Resuming UB after the cooldown elapses is part of the contract: the read path must not give UB up permanently.
+- A 1006 returned by an established metadata request bypasses this initial-handshake cooldown: the existing endpoint
+  rebuild slot elects one handshake outside the entry lock. Slot acquisition uses the endpoint read lock and an atomic
+  compare-exchange; only final publication takes the write lock. Waiters therefore avoid write-lock contention while
+  the owner is handshaking, observe the completed replacement before competing again, and the original request retries
+  UB once.
 
 ## Open Questions
 

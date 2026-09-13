@@ -305,6 +305,10 @@ Status ObjectMetadataClient::InvokeQueryAndGet(const HostPort &address, QueryAnd
         if (invoked) {
             return leaseRc;
         }
+        if (context.mode == InlineTransportMode::UB
+            && (context.requireUb || leaseRc.GetCode() == K_TRY_AGAIN)) {
+            return leaseRc;
+        }
         VLOG(1) << "[TransportGet][Metadata] Inline data plane is unavailable for " << address.ToString()
                 << ", fallback to TCP: " << leaseRc.ToString();
         SwitchInlineRequestToTcp(request, payloads, context);
@@ -335,7 +339,7 @@ Status ObjectMetadataClient::InvokeInlineQueryAndGet(const HostPort &address, Qu
             invoked = true;
             return rpcClient->InvokeQueryAndGet(request, response, payloads, &rpcDispatched);
         },
-        recorder);
+        recorder, context.mode == InlineTransportMode::UB);
 }
 
 Status ObjectMetadataClient::InvokeTcpQueryAndGet(const HostPort &address, QueryAndGetReqPb &request,
@@ -366,6 +370,7 @@ Status ObjectMetadataClient::QueryWithRetry(const HostPort &address, const Objec
     CHECK_FAIL_RETURN_STATUS(!items.empty(), K_INVALID, "Metadata query items are empty");
     int64_t backoffMs = 1;
     int32_t routeDegradationRetries = 0;
+    bool ubReconnectAttempted = false;
     size_t attempt = 0;
     // The context keeps prepared data-plane state reusable across RPC retries.
     while (true) {
@@ -382,45 +387,61 @@ Status ObjectMetadataClient::QueryWithRetry(const HostPort &address, const Objec
         RETURN_OK_IF_TRUE(rc.IsOk());
         RETURN_IF_NOT_OK(
             PrepareQueryRetry(address, items, rc, rpcDispatched, context, backoffMs, routeDegradationRetries,
-                              recorder));
+                              ubReconnectAttempted, recorder));
     }
 }
 
 Status ObjectMetadataClient::PrepareQueryRetry(const HostPort &address, const ObjectMetadataBatch &items,
                                                const Status &rc, bool rpcDispatched, InlineRequestContext &context,
                                                int64_t &backoffMs, int32_t &routeDegradationRetries,
+                                               bool &ubReconnectAttempted,
                                                TransportPhaseLatencyRecorder *recorder)
 {
-    // Keep this branch ahead of the quarantine computation below. Quarantine rewrites context.mode to NONE
-    // (DisableInlineData), so evaluating this condition afterwards would silently make it depend on
-    // NeedDelayReleaseShmUnit(K_URMA_NEED_CONNECT) staying false: the day 1006 joins that set, quarantine
-    // would run first and this branch would become dead code with no assertion or log to notice. Ordering
-    // the check first makes the reachability explicit, and is equivalent today because quarantine is
-    // already false for 1006. This branch also releases the buffers itself, which is the semantically
-    // right action for a precheck rejection (no data was written) instead of a delayed release.
-    if (rc.GetCode() == K_URMA_NEED_CONNECT && context.mode == InlineTransportMode::UB) {
-        // The worker no longer recognizes this client's UB connection. Drop the stale data plane so a
-        // later request re-handshakes, and finish this request over TCP inline instead of failing it.
-        // The worker precheck only guards UB data requests, so the TCP retry is served normally.
-        // No delayed buffer release is needed here: the precheck rejects the request before the worker
-        // writes any data, so DisableInlineData() below releases the buffers immediately. (That mirrors
-        // NeedDelayReleaseShmUnit(K_URMA_NEED_CONNECT) == false today, but unlike before this branch no
-        // longer depends on it — see the note above the condition.)
-        manager_->ResetStaleUbDataPlane(address, context.ubTransporter);
-        manager_->MarkUbRebuildCooldown(address);
+    // Handle 1006 before buffer quarantine: the Worker precheck returns it before writing inline data.
+    if (rc.GetCode() == K_URMA_NEED_CONNECT && rpcDispatched && context.mode == InlineTransportMode::UB
+        && !ubReconnectAttempted) {
+        ubReconnectAttempted = true;
+        const auto staleTransporter = context.ubTransporter;
         const std::string ubInstanceId = context.transportInstanceId;
-        // The retry rebuilds the request from the context, so marking TCP is enough: BuildQueryRequest
-        // then emits a TCP inline request and the loop drops stale payloads.
         context.DisableInlineData();
-        context.mode = InlineTransportMode::TCP;
+        RETURN_RUNTIME_ERROR_IF_NULL(staleTransporter);
+        Status rebuildRc;
+        do {
+            rebuildRc = manager_->RebuildStaleUbDataPlane(address, staleTransporter, recorder);
+            if (rebuildRc.GetCode() == K_TRY_AGAIN) {
+                RETURN_IF_NOT_OK(retry_->Backoff(backoffMs));
+            }
+        } while (rebuildRc.GetCode() == K_TRY_AGAIN);
+        RETURN_IF_NOT_OK(rebuildRc);
+        context.requireUb = true;
+        RETURN_IF_NOT_OK(AllocateUbInlineBuffers(items, context));
+        context.mode = InlineTransportMode::UB;
         // Count every occurrence outside the throttle: LOG_EVERY_N only evaluates its stream on output, so
         // counting inside it would report the number of *logged* lines (1 per N events) instead of the real
         // failure volume. LOG_FIRST_AND_EVERY_N is used because it keeps thread-safe throttle state, unlike
         // LOG_EVERY_N whose non-atomic static counter races across concurrent QueryAndGet calls.
         const auto occurrences = urmaNeedConnectTotal_.fetch_add(1, std::memory_order_relaxed) + 1;
         LOG_FIRST_AND_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
-            << "[TransportGet][Metadata] Rebuild UB data plane and retry over TCP, meta owner: " << address.ToString()
+            << "[TransportGet][Metadata] Rebuild UB data plane and retry over UB, meta owner: " << address.ToString()
             << ", urma instance: " << ubInstanceId << ", occurrences: " << occurrences << ", status: " << rc.ToString();
+        return Status::OK();
+    }
+    if (rc.GetCode() == K_URMA_NEED_CONNECT && rpcDispatched && context.mode == InlineTransportMode::UB
+        && ubReconnectAttempted) {
+        RETURN_RUNTIME_ERROR_IF_NULL(context.ubTransporter);
+        const auto staleTransporter = context.ubTransporter;
+        context.DisableInlineData();
+        manager_->ResetStaleUbDataPlane(address, staleTransporter, true);
+        return rc;
+    }
+    if ((rc.GetCode() == K_URMA_NEED_CONNECT || rc.GetCode() == K_TRY_AGAIN) && !rpcDispatched
+        && context.mode == InlineTransportMode::UB && (context.requireUb || rc.GetCode() == K_TRY_AGAIN)) {
+        if (rc.GetCode() == K_URMA_NEED_CONNECT && manager_->IsUbRebuildCoolingDown(address)) {
+            return rc;
+        }
+        VLOG(1) << "[TransportGet][Metadata] Retry UB lease race, meta owner: " << address.ToString()
+                << ", status: " << rc.ToString();
+        RETURN_IF_NOT_OK(retry_->Backoff(backoffMs));
         return Status::OK();
     }
     const bool quarantineUbBuffers =
