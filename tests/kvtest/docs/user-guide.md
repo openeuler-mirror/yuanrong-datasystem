@@ -191,7 +191,7 @@ bash tests/test_standalone_mode.sh
 | `notify_count` | int | 10 | 每次操作后通知的 peer 数量 |
 | `notify_interval_us` | int | 0 | 通知间隔（微秒），0 = 并行发送 |
 | `notify_queue_max` | int | 65536 | 每个 notify 池的待处理任务上限；超出即丢弃并计数，0 = 无上限 |
-| `enable_jitter` | bool | true | 是否启用随机抖动（错开请求时间） |
+| `enable_jitter` | bool | true | 启用随机抖动（在各线程自己的 lane 内错开请求时间）；关闭后严格按 slot 栅格触发 |
 | `batch_keys_count` | int | 1 | 每次操作的 key 数量，用于 batch 操作 |
 | `stage_duration_seconds` | int | 0 | 多阶段 QPS 时每阶段时长（秒） |
 

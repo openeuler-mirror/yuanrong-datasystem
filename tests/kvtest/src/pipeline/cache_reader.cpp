@@ -1,6 +1,7 @@
 #include "cache_reader.h"
 #include "data_pattern.h"
 #include "pipeline.h"
+#include "common/rate_gate.h"
 #include "common/simple_log.h"
 #include <datasystem/utils/string_view.h>
 #include <algorithm>
@@ -124,28 +125,22 @@ void CacheReader::ReaderLoop(int threadId) {
         int myQps = base + (threadId < rem ? 1 : 0);
         intervalUs = myQps > 0 ? 1000000 / myQps : 1000000000;
     }
-    int64_t maxOffset = (cfg_.enableJitter && intervalUs > 0) ? intervalUs : 0;
-    std::uniform_int_distribution<int64_t> offsetDist(0, maxOffset > 0 ? maxOffset : 1);
-
-    int64_t phaseUs = intervalUs > 0
-        ? static_cast<int64_t>(
-            static_cast<double>(threadId) / cfg_.numThreads * intervalUs)
-        : 0;
-    auto nextSlot = std::chrono::steady_clock::now()
-                   + std::chrono::microseconds(phaseUs);
+    kvtest::RateGate gate;
+    gate.Configure(intervalUs, threadId, cfg_.numThreads, cfg_.enableJitter);
+    gate.ResetGrid(kvtest::SteadyNowUs());
 
     SLOG_INFO("Reader thread " << threadId << " started"
               << (intervalUs > 0 ? "" : " (unlimited)"));
 
     while (running_) {
-        if (intervalUs > 0) {
-            auto fireTime = nextSlot + std::chrono::microseconds(offsetDist(rng));
-            auto now = std::chrono::steady_clock::now();
-            if (fireTime > now) {
+        if (gate.Active()) {
+            int64_t nowUs = kvtest::SteadyNowUs();
+            int64_t fireUs = gate.NextFireUs(nowUs, rng);
+            if (fireUs > nowUs) {
                 // Yield the bthread (brpc mode) or sleep the std::thread
                 // (cmake mode); kvtest::sleep_until picks the right primitive
                 // so the QPS-rate idle doesn't hold a pthread worker.
-                kvtest::sleep_until(fireTime);
+                kvtest::sleep_until(kvtest::SteadyFromUs(fireUs));
             }
         }
 
@@ -161,11 +156,7 @@ void CacheReader::ReaderLoop(int threadId) {
         uint64_t size = cfg_.dataSizes[sizeDist(rng)];
         CacheGetOrFill(key, size);
 
-        if (intervalUs > 0) {
-            nextSlot += std::chrono::microseconds(intervalUs);
-            auto now2 = std::chrono::steady_clock::now();
-            if (nextSlot <= now2) nextSlot = now2;
-        }
+        gate.Advance();
     }
 
     SLOG_INFO("Reader thread " << threadId << " stopped");

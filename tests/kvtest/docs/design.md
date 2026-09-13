@@ -10,7 +10,7 @@ kvtest 是 datasystem KVClient 的独立性能压测工具，用于在真实集�
 
 - **Pipeline 模式**：可组合 10 种 KV 操作形成测试流水线，支持单 key 和批量（MCreate/MSet/MGet）操作
 - **Writer/Reader 角色**：Writer 持续写入数据并通过 HTTP 通知 Reader，Reader 接收通知后跨实例读取验证
-- **QPS 精确控制**：按线程分配 QPS 配额 + 相位偏移 + jitter，避免请求同步突发
+- **QPS 精确控制**：按线程分配 QPS 配额 + lane 划分 + lane 内 jitter，避免请求同步突发
 - **性能指标**：窗口指标（3s 粒度 CSV，P50/P90/P99/P99.9/P99.99）+ 全局汇总（环形缓冲区 100000 条样本）
 - **进程级 CPU 绑核**：自动检测容器可用 CPU 或手动指定
 - **远程部署**：deploy_client.py（SSH/Kubectl）和 deploy_worker.py（K8s Pod 管理）两种部署方式
@@ -113,7 +113,7 @@ classDiagram
 
 | 抽象 | 职责 | 关键设计决策 |
 |------|------|-------------|
-| **KVWorker** | Writer 端主循环：QPS 控制 → 执行 Pipeline → 通知 Peer | 相位偏移 + jitter 避免请求同步突发 |
+| **KVWorker** | Writer 端主循环：QPS 控制 → 执行 Pipeline → 通知 Peer | lane 划分 + lane 内 jitter 避免请求同步突发 |
 | **CacheReader** | Reader 端缓存循环：等待 warmup → GetOrFill → 命中/回填 | shared_mutex 保护 keyPool，miss 延迟排除 sleep |
 | **Pipeline** | 10 种 KV Op 的注册表与执行引擎 | 失败立即中断，每个 Op 独立计时 |
 | **MetricsCollector** | 两层指标：窗口 CSV + 全局环形缓冲区 Summary | swap 零拷贝切换，atomic 无锁计数 |
@@ -241,43 +241,62 @@ flowchart TB
 
 #### QPS 控制机制（两层打散）
 
-Writer 的 PipelineLoop 通过两层机制将请求均匀分散到时间轴上，避免所有线程同时发出请求（请求突发导致 Worker 压力尖峰）。
+Writer 的 PipelineLoop 与 Reader 的 ReaderLoop 共用 `kvtest::RateGate`（`src/common/rate_gate.h`），通过两层机制将请求均匀分散到时间轴上，避免所有线程同时发出请求（请求突发导致 Worker 压力尖峰）。
 
-**第一层：相位偏移（Phase Offset）**
+**时间轴模型**：每个线程的 slot 周期为 `intervalUs = 1e6 / qpsPerThread`，slot 起点落在一条**绝对栅格**上（`gridOrigin + k * intervalUs`）。
 
-每个线程启动时，根据 threadId 计算一个初始偏移，将 N 个线程均匀分布在第一个 slot 内：
+**第一层：Lane 划分（线程固定槽内车道）**
 
-```
-phaseUs = (threadId / numThreads) * intervalUs
-nextSlot = now + phaseUs
-```
-
-**第二层：Jitter（槽内随机偏移）**
-
-每次请求的触发时间在当前 slot 内再加一个随机偏移，进一步打散：
+每个线程在 slot 内独占一条 lane，宽度为该线程 interval 的 1/N：
 
 ```
-offsetDist = uniform(0, intervalUs)
-fireTime = nextSlot + microseconds(offsetDist(rng))
-sleep_until(fireTime)
+laneWidthUs = intervalUs / numThreads
+laneOffsetUs = threadId * laneWidthUs
 ```
+
+**第二层：Jitter（lane 内随机偏移）**
+
+随机偏移只在本线程的 lane 内取值，因此线程之间不可能互相侵占：
+
+```
+jitter = uniform(0, laneWidthUs - 1)
+fireTime = slotStart + laneOffsetUs + jitter
+```
+
+```
+时间轴 (100 QPS, 4 线程, intervalUs = 40ms, laneWidthUs = 10ms):
+
+    Thread 0:  *     *     *     *      ← 只在 [0, 10ms) 内抖动
+    Thread 1:      *     *     *     *  ← 只在 [10, 20ms) 内抖动
+    Thread 2:          *     *     *    ← 只在 [20, 30ms) 内抖动
+    Thread 3:              *     *     *← 只在 [30, 40ms) 内抖动
+              |------- slot k -------|--- slot k+1 --|
+```
+
+N 条 lane 恰好铺满一个 interval，合并后每个 lane 宽度内**有且仅有一个**请求，全局覆盖均匀；抖动的作用是打破严格周期（避免与后台周期性任务共振），而不是扩大散布范围。
+
+**迟到 slot 直接丢弃，不积攒**
+
+栅格是绝对的，不会因为某次请求变慢而被重锚定到当前时刻。每轮取「第一个 jittered 触发时刻仍在当前时间之后」的 slot；已经错过的 slot 直接跳过、**不发补发请求**：
+
+```
+for (;;) {
+    fireTime = nextSlot + laneOffsetUs + jitter
+    if (fireTime > now) break
+    nextSlot += intervalUs      // 该 slot 已错过 → 丢弃
+}
+```
+
+由此保证：
+
+- **发压速率永不超过 `target_qps`** —— 无论 Pipeline 本身多慢、有多少线程被拖慢，都不会出现背靠背补发造成的突发尖峰。
+- **落后会如实反映为 achieved QPS 缺口** —— 单请求耗时超过 interval 时，客户端给出的负载低于 target（如 interval=4ms、耗时=4.5ms 时约为 target 的一半），而不是靠补发硬撑到 target。
 
 每条线程有独立的 `mt19937` 随机引擎（种子 = threadId + instanceId * 1000），确保各线程偏移不相关。
 
-**两者结合效果**：
+> 当 `enable_jitter=false` 时，随机偏移严格为 0（`uniform(0, 0)`），请求精确落在 `slotStart + laneOffsetUs` 上，全局为间距 `laneWidthUs` 的均匀梳状。
 
-```
-时间轴 (100 QPS, 4 线程, intervalUs = 40ms):
-
-    Thread 0:  *       *    *       *     ← 在 [0, 40ms) 内随机偏移
-    Thread 1:    *        *    *      *   ← 在 [10, 50ms) 内随机偏移
-    Thread 2:      *  *       *   *    *  ← 在 [20, 60ms) 内随机偏移
-    Thread 3:         *    *    *    *    ← 在 [30, 70ms) 内随机偏移
-              |--- slot 1 ---|--- slot 2 ---|
-```
-
-> 当 `enable_jitter=false` 时，随机偏移退化为 0，请求严格按 slot 边界触发（仅保留相位偏移，不加随机抖动）。
-
+> QPS 阶段切换（`target_qps` 数组）时会重新 `Configure` 并把栅格锚定到当前时刻，lane 偏移随之按新的 interval 重算。
 #### 线程安全设计
 
 | 数据 | 保护方式 | 说明 |
@@ -468,7 +487,7 @@ stateDiagram-v2
 
     note right of Stage1
         targetQps=100, 每线程分 100/N QPS
-        相位偏移 + jitter 打散
+        lane 划分 + lane 内 jitter 打散
     end note
 
     note right of Stage2
@@ -541,13 +560,16 @@ ExecutePipeline(ops, ctx, metrics, verifyFailCount)
 PipelineLoop(threadId):
   计算 qpsPerThread = targetQps / numThreads
   intervalUs = 1000000 / qpsPerThread
-  phaseUs = threadId / numThreads * intervalUs     ← 相位偏移
-  nextSlot = now + phaseUs
+  gate.Configure(intervalUs, threadId, numThreads, enableJitter)
+  gate.ResetGrid(now)                              ← 绝对栅格锚点
 
   while running:
-    if QPS 限速:
-      fireTime = nextSlot + jitter(0, intervalUs)  ← 随机偏移
-      sleep_until(fireTime)
+    if QPS 阶段变化:
+      gate.Configure(...); gate.ResetGrid(now)
+
+    if gate.Active():
+      fireTime = gate.NextFireUs(now, rng)         ← lane 偏移 + lane 内 jitter
+      sleep_until(fireTime)                        ← 已错过的 slot 直接丢弃
 
     size = random_from(dataSizes)
     key = "kv_test_{instanceId}_{threadId}_{timestamp}_{batchIdx}"
@@ -557,8 +579,10 @@ PipelineLoop(threadId):
     if 成功:
       NotifyPeers(keys, size)     ← Fisher-Yates 随机选 peer
 
-    nextSlot += intervalUs
+    gate.Advance()                ← 栅格前进一个 slot，不重锚定到 now
 ```
+
+`RateGate` 语义详见 [2.3 Process View -- QPS 控制机制](#23-process-view--线程模型与并发)。
 
 #### QPS 分配策略
 
@@ -797,7 +821,7 @@ JSON 配置文件，使用 nlohmann/json 解析。
 | `notify_count` | int | 10 | ≥ 0 | 每次写入通知几个 peer |
 | `notify_interval_us` | int | 0 | ≥ 0（0=并行） | 通知间隔（微秒） |
 | `notify_queue_max` | int | 65536 | ≥ 0（0=无上限） | 每个 notify 池的待处理任务上限；超出即丢弃并计数 |
-| `enable_jitter` | bool | true | - | 启用随机偏移避免请求同步 |
+| `enable_jitter` | bool | true | - | 在 lane 内启用随机偏移避免请求同步；false = 严格按 slot 栅格触发 |
 | `enable_cross_node_connection` | bool | true | - | 允许跨节点 failover |
 | `enable_local_cache` | bool | false | - | 控制 Get/MGet 读路径：true 走绑定 Worker，false 按 metadata owner 走 Transport 层；同机副本且 SHM 可用时仍可使用 SHM |
 | `data_placement_policy` | string | "PREFERRED_META_OWNER" | PREFERRED_SAME_NODE / REQUIRED_SAME_NODE / PREFERRED_META_OWNER | Set/MSet 数据放置策略 |
@@ -1040,7 +1064,7 @@ python3 deploy_worker.py exec -p my-worker -c "cat /tmp/metrics.csv"
 | 静态链接 libstdc++ | 目标容器 GCC 版本可能低于编译环境 |
 | C++ 标准 `-std=c++17` | 避免 GNU 扩展与 SDK spdlog 初始化冲突 |
 | 窗口 swap 采集 | windowMutex + swap 零拷贝切换，flush 不阻塞写入线程 |
-| 相位偏移 + jitter | 线程按 ID 均匀分布在第一个 slot 内，加随机偏移避免同步突发 |
+| lane 划分 + jitter | 线程各占 slot 内 1/N 宽度的 lane，抖动限制在本 lane 内；错过的 slot 直接丢弃不补发 |
 
 ## 7. 文件清单
 

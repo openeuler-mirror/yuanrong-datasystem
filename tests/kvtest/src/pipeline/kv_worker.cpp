@@ -1,6 +1,7 @@
 #include "kv_worker.h"
 #include "data_pattern.h"
 #include <datasystem/utils/string_view.h>
+#include "common/rate_gate.h"
 #include "common/simple_log.h"
 #include <chrono>
 #include <iomanip>
@@ -143,18 +144,12 @@ void KVWorker::PipelineLoop(int threadId) {
     }
     auto sizeDist = std::uniform_int_distribution<size_t>(0, cfg_.dataSizes.size() - 1);
 
-    int64_t maxOffset = (cfg_.enableJitter && intervalUs > 0) ? intervalUs : 0;
-    std::uniform_int_distribution<int64_t> offsetDist(0, maxOffset > 0 ? maxOffset : 1);
-
     SLOG_INFO("Thread " << threadId << " started"
               << (intervalUs > 0 ? "" : " (unlimited)"));
 
-    int64_t phaseUs = intervalUs > 0
-        ? static_cast<int64_t>(
-            static_cast<double>(threadId) / cfg_.numThreads * intervalUs)
-        : 0;
-    auto nextSlot = std::chrono::steady_clock::now()
-                   + std::chrono::microseconds(phaseUs);
+    kvtest::RateGate gate;
+    gate.Configure(intervalUs, threadId, cfg_.numThreads, cfg_.enableJitter);
+    gate.ResetGrid(kvtest::SteadyNowUs());
 
     while (running_) {
         // Check for QPS stage change
@@ -169,22 +164,21 @@ void KVWorker::PipelineLoop(int threadId) {
             } else {
                 intervalUs = 0;
             }
-            maxOffset = (cfg_.enableJitter && intervalUs > 0) ? intervalUs : 0;
-            offsetDist = std::uniform_int_distribution<int64_t>(0, maxOffset > 0 ? maxOffset : 1);
-            nextSlot = std::chrono::steady_clock::now();
+            gate.Configure(intervalUs, threadId, cfg_.numThreads, cfg_.enableJitter);
+            gate.ResetGrid(kvtest::SteadyNowUs());
             SLOG_INFO("Thread " << threadId << " QPS → " << currentQps
                       << " (myQps=" << myQps << ", interval=" << intervalUs << "us)");
         }
 
-        if (intervalUs > 0) {
-            auto fireTime = nextSlot + std::chrono::microseconds(offsetDist(rng));
-            auto now = std::chrono::steady_clock::now();
-            if (fireTime > now) {
+        if (gate.Active()) {
+            int64_t nowUs = kvtest::SteadyNowUs();
+            int64_t fireUs = gate.NextFireUs(nowUs, rng);
+            if (fireUs > nowUs) {
                 // Yield the bthread (brpc mode) or sleep the std::thread
                 // (cmake mode); kvtest::sleep_until picks the right primitive
                 // so a long fire-time gap doesn't hold a pthread worker
                 // when running on a bthread.
-                kvtest::sleep_until(fireTime);
+                kvtest::sleep_until(kvtest::SteadyFromUs(fireUs));
             }
         }
 
@@ -231,14 +225,7 @@ void KVWorker::PipelineLoop(int threadId) {
             NotifyPeers(ctx.batchKeys, size);
         }
 
-        if (intervalUs > 0) {
-            // Advance to next slot boundary
-            nextSlot += std::chrono::microseconds(intervalUs);
-            auto now2 = std::chrono::steady_clock::now();
-            if (nextSlot <= now2) {
-                nextSlot = now2;
-            }
-        }
+        gate.Advance();
     }
 
     SLOG_INFO("Thread " << threadId << " stopped");
