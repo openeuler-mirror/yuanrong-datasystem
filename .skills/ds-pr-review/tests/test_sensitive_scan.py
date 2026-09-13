@@ -61,6 +61,28 @@ class SensitiveScanTests(unittest.TestCase):
         self.assertEqual(scan_text("source", credential_key + " = os.environ.get(name, '').strip()"), [])
         self.assertEqual(scan_text("source", credential_key + ": str"), [])
         self.assertEqual(scan_text("source", 'LOG(INFO) << "token=" << token'), [])
+        self.assertEqual(scan_text("source", "const auto tenant = tenantId_;"), [])
+
+    def test_allows_bazel_labels_without_allowing_sensitive_filesystem_paths(self) -> None:
+        self.assertEqual(scan_text("BUILD.bazel", '"//src/datasystem/common/token:client_access_token",'), [])
+        sensitive_root = "/" + "home/user"
+        sensitive_file = "." + "config/credentials/file"
+        self.assertEqual(
+            [match.category for match in scan_text("BUILD.bazel", f'"{sensitive_root}/{sensitive_file}"')],
+            ["local filesystem path with sensitive content"],
+        )
+
+    def test_allows_key_shaped_test_placeholders_only_in_test_files(self) -> None:
+        self.assertEqual(scan_text("tests/ut/client/example_test.cpp", 'options.token = "token-a";'), [])
+        self.assertEqual(scan_text("tests/ut/client/example_test.cpp", 'const std::string tenant = "tenant-a";'), [])
+        self.assertEqual(
+            [match.category for match in scan_text("src/client.cpp", 'options.token = "token-a";')],
+            ["credential or account assignment"],
+        )
+        self.assertEqual(
+            [match.category for match in scan_text("tests/ut/client/example_test.cpp", 'options.token = "real-value";')],
+            ["credential or account assignment"],
+        )
 
     def test_allows_repo_safe_test_endpoints_and_blocks_private_endpoint(self) -> None:
         self.assertEqual(scan_text("test", "127.0.0.1:8080"), [])
