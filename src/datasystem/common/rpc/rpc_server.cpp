@@ -21,6 +21,7 @@
 
 #include <brpc/server.h>
 #include <brpc/protocol.h>  // for brpc::FLAGS_max_body_size (DECLARE_uint64)
+#include <bthread/bthread.h>
 #include <butil/logging.h>
 // brpc only DEFINEs max_connection_pool_size in socket.cpp (inside namespace
 // brpc, no header DECLARE), so declare it here to override the global cap.
@@ -37,6 +38,18 @@ DECLARE_int32(max_connection_pool_size);
 #include "datasystem/common/util/thread_pool.h"
 
 namespace datasystem {
+
+// Strong override of the weak TBB yield hook (see
+// third_party/patches/tbb/2020.3/bthread-aware-yield.patch). TBB spin-lock
+// backoff calls __TBB_Yield(); sched_yield() never hands the pthread back to
+// the bthread M:N scheduler, so a spinning handler bthread starves a preempted
+// TBB lock holder and wedges the whole server. Kept in this always-linked TU
+// so static-archive member selection cannot drop it.
+extern "C" void __tbb_yield_hook()
+{
+    // bthread_yield() falls back to sched_yield() for non-bthread callers.
+    (void)bthread_yield();
+}
 
 RpcServer::RpcServer(Token key)
 {

@@ -1,0 +1,29 @@
+--- tbb-src/include/tbb/machine/linux_common.h
++++ tbb-src_back/include/tbb/machine/linux_common.h
+@@ -18,8 +18,25 @@
+ #error Do not #include this internal file directly; use public TBB headers instead.
+ #endif
+ 
++// Cooperative yield hook for userspace M:N (bthread) schedulers. sched_yield()
++// only releases the OS thread to the kernel; it never hands the pthread back to
++// an M:N scheduler, so a bthread spinning in a TBB lock backoff monopolizes its
++// worker pthread and starves the lock holder (which sits in the M:N run queue).
++// A binary that links an M:N scheduler defines __tbb_yield_hook (strong symbol)
++// to yield cooperatively; the weak fallback keeps sched_yield() for plain pthreads.
++extern "C" void __tbb_yield_hook(void) __attribute__((weak));
++
++static inline void __TBB_YieldImpl()
++{
++    if (__tbb_yield_hook) {
++        __tbb_yield_hook();
++    } else {
++        sched_yield();
++    }
++}
++
+ #include <sched.h>
+-#define __TBB_Yield()  sched_yield()
++#define __TBB_Yield()  __TBB_YieldImpl()
+ 
+ #include <unistd.h>
+ /* Futex definitions */

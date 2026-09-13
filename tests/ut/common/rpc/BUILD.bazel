@@ -146,6 +146,7 @@ ds_cc_test(
     srcs = ["bthread_utils_test.cpp"],
     deps = [
         "//src/datasystem/common/rpc:bthread_utils",
+        "//src/datasystem/common/rpc:rpc_server",
         "@com_github_apache_brpc//:brpc",
     ],
 )
