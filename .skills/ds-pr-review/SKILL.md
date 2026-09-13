@@ -19,9 +19,10 @@ python3 .skills/ds-pr-review/scripts/review_pr.py prepare <PR_OR_URL>
 
    `prepare` runs a mandatory sensitive-information scan before writing `bundle.json`. It scans the PR title/body,
    every changed file path, and every patch line returned by GitCode. The scanner is designed to recognize common
-   false positives automatically: C++ type declarations (`const std::string &accessKey`), enum/constant identifiers,
-   parameter names in function signatures, and test-dummy IPs (e.g. `192.0.2.x`, `127.0.0.1`, `0.0.0.0` in test
-   files). If any changed file has no scannable patch payload, or if any scanned field matches a genuine blocked
+   false positives automatically: C++ type declarations (`const std::string &accessKey`), variable forwarding,
+   enum/constant identifiers, Bazel repository labels, parameter names in function signatures, narrowly shaped test
+   credential placeholders, and test-dummy IPs (e.g. `192.0.2.x`, `127.0.0.1`, `0.0.0.0` in test files). If any
+   changed file has no scannable patch payload, or if any scanned field matches a genuine blocked
    category, stop and report only the category/location summary from the helper. Do not bypass this gate or paste
    raw sensitive values into local notes, findings, chat output, or PR comments.
 

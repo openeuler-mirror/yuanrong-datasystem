@@ -77,6 +77,8 @@ SAFE_ENDPOINT_HOST_RE = re.compile(
 HOST_PORT_RE = re.compile(
     r"\b(?P<host>(?=[a-z0-9.-]*[a-z])[a-z0-9][a-z0-9.-]{1,253}):(?P<port>\d{2,5})\b", re.IGNORECASE
 )
+BAZEL_LABEL_RE = re.compile(r"(?<![\w/])//[A-Za-z0-9_.+/-]+:[A-Za-z0-9_.+-]+")
+TEST_LOCATION_RE = re.compile(r"(?i)(?:^test$|(?:^|/)tests?/|_test\.(?:cc|cpp|cxx|h|hpp|py)$)")
 
 
 def _is_safe_ip_or_endpoint(text: str) -> bool:
@@ -176,7 +178,7 @@ def _index_inside_quoted_string(line: str, index: int) -> bool:
     return False
 
 
-def _credential_assignment_is_sensitive(line: str) -> bool:
+def _credential_assignment_is_sensitive(location: str, line: str) -> bool:
     stripped_line = line.strip()
     for match in CREDENTIAL_KEY_RE.finditer(line):
         if _index_inside_quoted_string(line, match.start()):
@@ -198,7 +200,13 @@ def _credential_assignment_is_sensitive(line: str) -> bool:
         normalized_value = _normalize_key(trimmed_value.strip("'\""))
         if normalized_value == normalized_key:
             continue
+        if TEST_LOCATION_RE.search(location):
+            placeholder = trimmed_value.strip("'\"").lower()
+            if re.fullmatch(re.escape(match.group("key").lower()) + r"[-_][a-z0-9]", placeholder):
+                continue
         if normalized_value in SAFE_CREDENTIAL_WORDS:
+            continue
+        if stripped_line.endswith(";") and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", trimmed_value):
             continue
         if value[:1].isidentifier() and "(" in value:
             continue
@@ -212,11 +220,14 @@ def _scan_line(location: str, line: str, line_number: int | None) -> list[Sensit
     matches: list[SensitiveMatch] = []
     if not _is_allowed_company_reference(line):
         matches.append(SensitiveMatch(location=location, category="company identifier", line=line_number))
-    if _credential_assignment_is_sensitive(line):
+    if _credential_assignment_is_sensitive(location, line):
         matches.append(SensitiveMatch(location=location, category="credential or account assignment", line=line_number))
 
     for category, pattern in SENSITIVE_LINE_PATTERNS:
-        if pattern.search(line):
+        line_to_scan = (
+            BAZEL_LABEL_RE.sub("", line) if category == "local filesystem path with sensitive content" else line
+        )
+        if pattern.search(line_to_scan):
             if category == "server IP or endpoint" and _is_safe_ip_or_endpoint(line):
                 continue
             matches.append(SensitiveMatch(location=location, category=category, line=line_number))
