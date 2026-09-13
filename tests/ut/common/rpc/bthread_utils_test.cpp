@@ -78,5 +78,20 @@ TEST(BthreadUtilsTest, MultipleConcurrentStartBackgroundTask)
     GTEST_SKIP() << "Requires brpc runtime (DATASYSTEM_USE_BRPC=1).";
 }
 
+// ============================================================================
+// Test 6: TBB cooperative yield hook is linked. The strong definition lives in
+// rpc_server.cpp; a null resolution means static-archive member selection
+// dropped it and TBB spin backoff degrades to sched_yield(), which starves
+// preempted bthread lock holders (worker wedge, see
+// third_party/patches/tbb/2020.3/bthread-aware-yield.patch).
+// ============================================================================
+extern "C" void __tbb_yield_hook(void) __attribute__((weak));
+
+TEST(BthreadUtilsTest, TbbYieldHookIsLinkedAndCallableFromPthread)
+{
+    EXPECT_NE(nullptr, &__tbb_yield_hook);
+    __tbb_yield_hook();  // Non-bthread callers fall back to sched_yield().
+}
+
 }  // namespace
 }  // namespace datasystem

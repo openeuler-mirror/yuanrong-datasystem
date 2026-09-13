@@ -39,6 +39,7 @@ def setup_tbb(name = "tbb"):
         patches = [
             Label("//third_party/patches/tbb:2020.3/soft-link.patch"),
             Label("//third_party/patches/tbb:2020.3/adapt-task.h-to-gcc-14.patch"),
+            Label("//third_party/patches/tbb:2020.3/bthread-aware-yield.patch"),
         ],
         patch_args = ["-p1"],
         build_file = Label("//third_party:tbb.BUILD"),
