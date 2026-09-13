@@ -99,6 +99,7 @@ ds_cc_test(
     name = "transport_test",
     srcs = [
         "object_cache/data_plane_ub_health_verifier_test.cpp",
+        "object_cache/ub_fault_recovery_cycle_test.cpp",
         "transport_test.cpp",
     ],
     deps = [

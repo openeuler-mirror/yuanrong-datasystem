@@ -263,7 +263,8 @@ private:
     // K_RPC_UNAVAILABLE -> Teardown). A non-retryable RPC error (dead peer) tears down the stale
     // connection but returns false so the caller does not retry. Returns true if rebuilt (caller
     // retries), false otherwise.
-    bool RebuildPlaneOnSetFailure(const Status &rc, const HostPort &workerAddr);
+    bool RebuildPlaneOnSetFailure(const Status &rc, const HostPort &workerAddr,
+                                  const std::shared_ptr<IDataTransporter> &stale);
     // Sampled triage log for the routed Set hot path: transport kind (SHM/UB/TCP) + result + latency,
     // so operators can localize which transport a write used and how long it took. Sampled (every N) to
     // avoid flooding; aggregate kind/byte counters are in the metrics.
@@ -275,7 +276,7 @@ private:
     // from MSet to keep MSet within the codecheck function-size limit.
     Status RetryOrReplayMSet(const HostPort &workerAddr, const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
                              const TransportSetParam &param, TransportHint hint, TransportMSetResult &result,
-                             const Status &rc);
+                             const Status &rc, const std::shared_ptr<IDataTransporter> &stale);
 
     void ScheduleRelease(const HostPort &workerAddr, const ShmKey &shmId, const TransportRequestContext &context,
                          std::optional<TransportHint> transportHint = std::nullopt);

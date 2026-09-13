@@ -313,7 +313,9 @@ TEST(UrmaConnectionInflightTest, BrokenEntryRetainsBudgetUntilCooledDownReplacem
     UrmaConnectionTestAccess::Put(entry.Key(), rebuilt);
     EXPECT_TRUE(manager.CheckUrmaConnectionStable(entry.Key(), "peer-X").IsOk());
     EXPECT_EQ(old->GetUrmaJfrInfo().uniqueInstanceId, "peer-X");
-    EXPECT_EQ(old->AcquireInflightSlot(TINY_BUDGET_US).GetCode(), K_URMA_TRY_AGAIN);
+    // Cooldown already expired and the entry was replaced: the stale connection asks for a rebuild
+    // (NEED_CONNECT) so data-plane owners replace it instead of retrying on the retired object.
+    EXPECT_EQ(old->AcquireInflightSlot(TINY_BUDGET_US).GetCode(), K_URMA_NEED_CONNECT);
 }
 
 TEST(UrmaConnectionInflightTest, RepeatedFailedGenerationsOnlyAdmitOneProbeAfterCooldown)
