@@ -319,6 +319,8 @@ Status RoutedMode::CreateRoutedBuffer(const std::string &objectKey, uint64_t dat
     // workerAddr/shmId/pointer/mmapEntry/sessionLockId/receiveBufferOwner) to a legacy Buffer.
     auto bufferInfo = ObjectBufferInternal::ExtractInfo(objBuf);
     bufferInfo->isRoutedWrite = true;  // marks a routed write buffer (not a Get'd read-only buffer)
+    bufferInfo->ttlSecond = param.ttlSecond;
+    bufferInfo->existence = static_cast<int>(param.existence);
     auto rc = Buffer::CreateBuffer(bufferInfo, host_.getSelf(), buffer);
     if (rc.IsError() && bufferInfo->receiveBufferOwner != nullptr) {
         // Buffer init failed (rare); no Buffer will release the worker allocation, so retire it here.

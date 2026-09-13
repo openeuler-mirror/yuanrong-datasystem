@@ -78,7 +78,9 @@ bool IsRemoteTransportSetCase()
     std::string suiteName;
     std::string caseName;
     GetCurTestName(suiteName, caseName);
-    return caseName == "MSetMetaOwnerGroupsUseCompiledRemoteTransport";
+    return caseName == "MSetMetaOwnerGroupsUseCompiledRemoteTransport"
+           || caseName == "RoutedBufferSetPreservesTtl"
+           || caseName == "LocalCacheBufferSetPreservesTtlOnCrossHostWorker";
 }
 
 std::string RemoteHostIdEnvName(uint32_t workerIndex)
@@ -408,6 +410,58 @@ protected:
         ASSERT_EQ(primaryWorker, expectedWorker);
     }
 
+    void AssertBufferSetTtl(const std::shared_ptr<KVClient> &client, const std::string &key,
+                            const std::string &expectedTransport)
+    {
+        const std::string persistentKey = key + "_persistent";
+        const std::string value(VALUE_SIZE, 't');
+        SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE_EVICT };
+        std::shared_ptr<Buffer> buffer;
+        DS_ASSERT_OK(client->Create(persistentKey, value.size(), param, buffer));
+        DS_ASSERT_OK(buffer->MemoryCopy(value.data(), value.size()));
+        DS_ASSERT_OK(client->Set(buffer));
+        ASSERT_EQ(AccessTransportTracker::ToString(), expectedTransport);
+        buffer.reset();
+
+        param.ttlSecond = 2;
+        DS_ASSERT_OK(client->Create(key, value.size(), param, buffer));
+        DS_ASSERT_OK(buffer->MemoryCopy(value.data(), value.size()));
+        DS_ASSERT_OK(client->Set(buffer));
+        ASSERT_EQ(AccessTransportTracker::ToString(), expectedTransport);
+        buffer.reset();
+
+        for (const auto &reader : { client, readerClient_ }) {
+            std::string actual;
+            DS_ASSERT_OK(reader->Get(key, actual));
+            ASSERT_EQ(actual, value);
+        }
+
+        constexpr int expirationWaitSec = 5;
+        DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+            [&client, this, &key, &persistentKey]() {
+                std::vector<bool> exists;
+                RETURN_IF_NOT_OK(client->Exist({ key, persistentKey }, exists));
+                CHECK_FAIL_RETURN_STATUS(exists.size() == 2 && !exists[0] && exists[1], K_NOT_READY,
+                                         "Expected only the zero-TTL object to remain");
+                for (const auto &reader : { client, readerClient_ }) {
+                    std::string actual;
+                    auto rc = reader->Get(key, actual);
+                    if (rc.IsOk()) {
+                        return Status(K_NOT_READY, "Expired object is still readable");
+                    }
+                    CHECK_FAIL_RETURN_STATUS(rc.GetCode() == K_NOT_FOUND, rc.GetCode(), rc.GetMsg());
+                }
+                return Status::OK();
+            },
+            expirationWaitSec, K_OK));
+
+        for (const auto &reader : { client, readerClient_ }) {
+            std::string actual;
+            DS_ASSERT_OK(reader->Get(persistentKey, actual));
+            ASSERT_EQ(actual, value);
+        }
+    }
+
     std::shared_ptr<KVClient> routedClient_;
     std::shared_ptr<KVClient> localClient_;
     std::shared_ptr<KVClient> readerClient_;
@@ -433,6 +487,38 @@ TEST_F(KVClientTransportSetTest, RoutedSetPublishesDataAndMetadata)
     HostPort expectedWorker;
     DS_ASSERT_OK(cluster_->GetWorkerAddr(READER_WORKER_INDEX, expectedWorker));
     ASSERT_EQ(primaryWorker, expectedWorker);
+}
+
+TEST_F(KVClientTransportSetTest, RoutedBufferSetPreservesTtl)
+{
+    ASSERT_NO_FATAL_FAILURE(AssertBufferSetTtl(routedClient_, "routed_buffer_ttl", ExpectedTransport()));
+}
+
+TEST_F(KVClientTransportSetTest, LocalCacheBufferSetPreservesTtlOnCrossHostWorker)
+{
+    ConnectOptions options;
+    InitConnectOpt(REMOTE_TRANSPORT_CLIENT_WORKER_INDEX, options);
+    options.enableLocalCache = true;
+    options.enableCrossNodeConnection = true;
+    auto crossHostClient = std::make_shared<KVClient>(options);
+    DS_ASSERT_OK(crossHostClient->Init());
+    ASSERT_NO_FATAL_FAILURE(AssertBufferSetTtl(crossHostClient, "cross_host_buffer_ttl", ExpectedTransport()));
+}
+
+TEST_F(KVClientTransportSetTest, RoutedBufferSetPreservesNx)
+{
+    const std::string key = "routed_buffer_nx";
+    const std::string original(VALUE_SIZE, 'o');
+    const std::string replacement(VALUE_SIZE, 'r');
+    SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE_EVICT, .existence = ExistenceOpt::NX };
+    for (const auto &value : { original, replacement }) {
+        std::shared_ptr<Buffer> buffer;
+        DS_ASSERT_OK(routedClient_->Create(key, value.size(), param, buffer));
+        DS_ASSERT_OK(buffer->MemoryCopy(value.data(), value.size()));
+        DS_ASSERT_OK(routedClient_->Set(buffer));
+        ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+        ASSERT_NO_FATAL_FAILURE(AssertValue(key, original));
+    }
 }
 
 TEST_F(KVClientTransportSetTest, U1U2DirectWriteReadAtMetadataOwner)
@@ -990,6 +1076,11 @@ public:
         opts.workerGflagParams.replace(pos, sizeof(DISABLED_SHM_OPTION) - 1, "-ipc_through_shared_memory=true");
     }
 };
+
+TEST_F(KVClientTransportSetWithShmTest, RoutedShmBufferSetPreservesTtl)
+{
+    ASSERT_NO_FATAL_FAILURE(AssertBufferSetTtl(routedClient_, "routed_shm_buffer_ttl", "SHM"));
+}
 
 TEST_F(KVClientTransportSetWithShmTest, MSetPreferredSameNodeGroupsUseShm)
 {
