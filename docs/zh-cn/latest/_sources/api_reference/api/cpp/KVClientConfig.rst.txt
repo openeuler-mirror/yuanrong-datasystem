@@ -103,7 +103,7 @@ KVClientConfig
     .. cpp:function:: Builder &VLogLevel(int level)
 
        设置 SDK 的 verbose（VLOG）日志级别。数值越大，输出的调试日志越详细，一般用于排查
-       内部细节。取值范围 ``[0, 10]``，默认值为 ``0``。对应环境变量 ``DATASYSTEM_LOG_V``。
+       内部细节。取值范围 ``[0, 3]``，默认值为 ``0``。对应环境变量 ``DATASYSTEM_LOG_V``。
 
     .. cpp:function:: Builder &StderrThreshold(int level)
 

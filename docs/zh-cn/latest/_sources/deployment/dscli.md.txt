@@ -1255,7 +1255,7 @@ dscli query route \
 | log_filename | string | `"datasystem_coordinator"` | 否 | Coordinator 日志文件名前缀，非空时仅允许英文字母、数字和下划线 |
 | minloglevel | int | `0` | 是 | 最低日志级别，低于该级别的日志不会被记录 |
 | log_async_queue_size | int | `2048` | 否 | 异步日志消息队列最大容量 |
-| max_log_size | int | `400` | 否 | 单个日志文件最大大小，单位为 MB |
+| max_log_size | int | `400` | 否 | 单个日志文件最大大小，单位为 MB，取值范围：[1, 4095] |
 | max_log_file_num | int | `25` | 是 | 每个日志级别最多保留的日志文件数；为 `0` 时不限制数量 |
 | log_retention_day | int | `0` | 否 | 日志保留天数；为 `0` 时不按时间删除日志 |
 | log_async | bool | `true` | 否 | 是否异步写入日志文件 |
@@ -1309,7 +1309,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | worker_address | string | `"127.0.0.1:31501"` | 否 | datasystem_worker IP地址，格式为：ip:port, 例如：127.0.0.1:31501 |
 | coordinator_address | string | `""` | 否 | Coordinator 服务地址，格式为 `host:port`；使用 Coordinator 集群管理方式时必须配置 |
 | kv_events_config | string | `""` | 否 | KV event publisher JSON 配置。为空表示关闭该功能；非空时需要填写 JSON 对象字符串，字段说明参见[表1](#table_kv_events_config)。例如：`{"bind_endpoint":"tcp://0.0.0.0:5557","backend_id":"worker-0"}` |
-| oc_worker_worker_direct_port | int | `0` | 否 | 对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延 |
+| oc_worker_worker_direct_port | int | `0` | 否 | 对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延。取值范围：[0, 65535] |
 | oc_worker_worker_pool_size | int | `3` | 否 | datasystem-worker间用于数据传输的并行连接数，用于提升节点间数据传输的吞吐量，只有当 `ocWorkerWorkerDirectPort` 指定为非0值时该配置才生效 |
 | payload_nocopy_threshold | string | `"104857600"` | 否 | datasystem-worker间数据传输时免数据拷贝的阈值（以字节为单位） |
 | rpc_thread_num | int | `16` | 否 | 配置服务端的RPC线程数，必须为大于0的数 |
@@ -1401,7 +1401,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | log_filename | string | `""` | 否 | 日志前缀名，非空时仅允许英文字母、数字和下划线；为空时前缀名为 `datasystem_worker` |
 | log_retention_day | int | `0` | 否 | 日志保留天数，当该值大于0时，最后修改时间早于 `logRetentionDay` 的日志文件将会被删除；当该值为0时表示禁用该功能 |
 | max_log_file_num | int | `5` | 是 | 最大日志文件个数，当日志文件个数超过该值时，会将最旧的日志文件删除，通过日志滚动机制保证日志文件最大个数小于等于该值 |
-| max_log_size | int | `400` | 否 | 单个日志文件最大大小（以MB为单位） |
+| max_log_size | int | `400` | 否 | 单个日志文件最大大小（以MB为单位），取值范围：[1, 4095] |
 | request_sample_rate | double | `1.0` | 是 | 请求日志主采样率（[0.0–1.0]）。仅作用于数据面请求 API（Set/Get/Del/Exist/Create/Put 等）；生命周期/控制面 API（Init/ShutDown/Connect/UpdateToken/UpdateAkSk/Close/DeleteStream 等）不参与采样，日志始终全量输出。1.0=全量保留（所有请求采中→access/diagnostic也强制输出）；0.0=丢弃请求级 INFO/VLOG，请求级 ERROR/WARNING/SLOW_LOG 由 diagnostic补采样率 控制 |
 | access_sample_rate | double | `1.0` (未显式设置时支持派生) | 是 | access日志**补采样率**（[0.0–1.0]）。仅在请求未被request采中时生效；请求采中时access日志无条件输出。实际保留率=request采中率+(1−采中率)×此值，通常高于此值。1.0=未采中请求全量保留 |
 | diagnostic_sample_rate | double | `1.0` (未显式设置时支持派生) | 是 | diagnostic日志**补采样率**（[0.0–1.0]）。仅在请求未sampled-in时生效，控制请求级 ERROR/WARNING/SLOW_LOG的补充采样；请求采中时diagnostic无条件输出。FATAL/CHECK无条件保留不受此参数影响。实际保留率=request采中率+(1−采中率)×此值。1.0=未采中请求全量保留 |
@@ -1453,7 +1453,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | 配置项 | 类型 | 默认值 | 是否支持动态修改 | 描述 |
 |-----|------|---------|-----|-------------|
 | rocksdb_store_dir | string | `"./datasystem/rocksdb"` | 否 | 配置元数据持久化目录，元数据通过RocksDB持久化在磁盘中 |
-| rocksdb_background_threads | int | `16` | 否 | RocksDB的后台线程数，用于元数据的刷盘和压缩 |
+| rocksdb_background_threads | int | `16` | 否 | RocksDB的后台线程数，用于元数据的刷盘和压缩，必须为正整数 |
 | rocksdb_max_open_file | int | `128` | 否 | RocksDB可使用的最大打开文件个数 |
 | rocksdb_write_mode | string | `async` | 否 | 配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为`async`。可选值包括：'none'（不写）、'sync'（同步）、'async'（异步） |
 | enable_meta_replica | bool | `false` | 否 | 已废弃的兼容参数，当前配置值会被忽略 |

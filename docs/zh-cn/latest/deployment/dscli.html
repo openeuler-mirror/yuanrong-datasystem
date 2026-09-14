@@ -2120,7 +2120,7 @@ Coordinator Discovery 解析全部地址并路由到当前 Leader，格式与 Wo
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">400</span></code></p></td>
 <td><p>否</p></td>
-<td><p>单个日志文件最大大小，单位为 MB</p></td>
+<td><p>单个日志文件最大大小，单位为 MB，取值范围：[1, 4095]</p></td>
 </tr>
 <tr class="row-even"><td><p>max_log_file_num</p></td>
 <td><p>int</p></td>
@@ -2314,7 +2314,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>否</p></td>
-<td><p>对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延</p></td>
+<td><p>对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延。取值范围：[0, 65535]</p></td>
 </tr>
 <tr class="row-odd"><td><p>oc_worker_worker_pool_size</p></td>
 <td><p>int</p></td>
@@ -2759,7 +2759,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">400</span></code></p></td>
 <td><p>否</p></td>
-<td><p>单个日志文件最大大小（以MB为单位）</p></td>
+<td><p>单个日志文件最大大小（以MB为单位），取值范围：[1, 4095]</p></td>
 </tr>
 <tr class="row-even"><td><p>request_sample_rate</p></td>
 <td><p>double</p></td>
@@ -2953,7 +2953,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">16</span></code></p></td>
 <td><p>否</p></td>
-<td><p>RocksDB的后台线程数，用于元数据的刷盘和压缩</p></td>
+<td><p>RocksDB的后台线程数，用于元数据的刷盘和压缩，必须为正整数</p></td>
 </tr>
 <tr class="row-even"><td><p>rocksdb_max_open_file</p></td>
 <td><p>int</p></td>
