@@ -2,6 +2,7 @@
 
 import json
 import ipaddress
+import logging
 import os
 import re
 import shlex
@@ -75,15 +76,13 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode='w|gz' if cfg.get('compress', 
 def add_collect_filters(parser):
     parser.add_argument('--host-filter', metavar='JSON',
                         help='Host IP selection JSON with include and exclude arrays')
-    parser.add_argument('--host-ip', action='append', default=None, dest='host_ips', metavar='IP',
-                        help='Collect only this host IP; repeat to select multiple hosts')
-    parser.add_argument('--exclude-host-ip', action='append', default=None, dest='exclude_host_ips', metavar='IP',
-                        help='Skip this host IP; repeat to exclude multiple hosts')
     compression = parser.add_mutually_exclusive_group()
     compression.add_argument('--compress', dest='compress', action='store_true', default=None,
-                             help='Use gzip compression for log transfer')
+                             help='Use gzip compression; --compress --no-extract keeps the archive; '
+                                  '--compress --extract unpacks it locally')
     compression.add_argument('--no-compress', dest='compress', action='store_false',
-                             help='Transfer logs without gzip compression')
+                             help='Transfer without gzip compression and extract locally by default; '
+                                  'add --no-extract to keep the tar archive')
     extraction = parser.add_mutually_exclusive_group()
     extraction.add_argument('--extract', dest='extract', action='store_true', default=None,
                             help='Extract collected logs locally (default)')
@@ -115,8 +114,8 @@ def host_selection_from_args(args):
         for key, values in selection.items():
             if not isinstance(values, list) or any(not isinstance(ip, str) for ip in values):
                 raise ValueError('Host filter ' + key + ' must be an array of IP strings')
-    included = selection.get('include', []) + (getattr(args, 'host_ips', None) or [])
-    excluded = selection.get('exclude', []) + (getattr(args, 'exclude_host_ips', None) or [])
+    included = selection.get('include', [])
+    excluded = selection.get('exclude', [])
     if not included and not excluded:
         return None
     return dict(host_ips=[str(ipaddress.ip_address(ip)) for ip in included],
@@ -135,7 +134,11 @@ def filter_collect_targets(targets, selection, host_ip=None):
             address = str(ipaddress.ip_address(address))
         except ValueError:
             name = target.get('name') or target.get('pod_name') or target.get('host') or 'unknown'
-            raise ValueError('Missing or invalid host IP for collection target: ' + str(name)) from None
+            logging.getLogger(__name__).warning(
+                'Skipping collection target %s in namespace %s: missing or invalid host IP; '
+                'check whether the Pod exists and has status.hostIP, or check host_ip for non-Kubernetes targets',
+                name, target.get('namespace', 'unspecified'))
+            continue
         if address not in excluded and (not included or address in included):
             result.append(target)
     return result

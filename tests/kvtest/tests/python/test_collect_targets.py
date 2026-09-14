@@ -26,14 +26,12 @@ class TestCollectTargets(unittest.TestCase):
         parser = argparse.ArgumentParser()
         log_collect.add_collect_filters(parser)
         self.assertIsNone(log_collect.host_selection_from_args(parser.parse_args([])))
-        args = parser.parse_args(['--host-ip', '192.0.2.1', '--host-ip', '192.0.2.2',
-                                  '--exclude-host-ip', '192.0.2.2'])
-        self.assertEqual(log_collect.host_selection_from_args(args)['host_ips'], ['192.0.2.1', '192.0.2.2'])
-        with self.assertRaises(ValueError):
-            log_collect.host_selection_from_args(parser.parse_args(['--host-ip', '192.0.2']))
+        options = {option for action in parser._actions for option in action.option_strings}
+        self.assertNotIn('--host-ip', options)
+        self.assertNotIn('--exclude-host-ip', options)
 
 
-    def test_json_host_filter_merges_with_cli_and_rejects_typos(self):
+    def test_json_host_filter_validates_addresses_and_rejects_typos(self):
         import json
         import tempfile
         parser = argparse.ArgumentParser()
@@ -41,10 +39,10 @@ class TestCollectTargets(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'hosts.json'
             path.write_text(json.dumps({'include': ['192.0.2.1'], 'exclude': ['192.0.2.2']}))
-            args = parser.parse_args(['--host-filter', str(path), '--host-ip', '192.0.2.3'])
+            args = parser.parse_args(['--host-filter', str(path)])
             self.assertEqual(log_collect.host_selection_from_args(args),
-                             dict(host_ips=['192.0.2.1', '192.0.2.3'], exclude_host_ips=['192.0.2.2']))
-            for invalid in ({'excldue': ['192.0.2.1']}, {'exclude': '192.0.2.1'}, {'include': [123]}, []):
+                             dict(host_ips=['192.0.2.1'], exclude_host_ips=['192.0.2.2']))
+            for invalid in ({'excldue': ['192.0.2.1']}, {'exclude': '192.0.2.1'}, {'include': [123]}, {'include': ['192.0.2']}, []):
                 path.write_text(json.dumps(invalid))
                 with self.assertRaises(ValueError):
                     log_collect.host_selection_from_args(args)
@@ -56,7 +54,8 @@ class TestCollectTargets(unittest.TestCase):
                 [('worker-bad', '192.0.2.1'), ('other', '192.0.2.2'),
                  ('worker-a', '192.0.2.2'), ('worker-b', '192.0.2.2')]]
         with patch.object(sys, 'argv', ['deploy_worker.py', 'collect', '-p', 'worker-',
-                                       '--exclude-host-ip', '192.0.2.1', '--count', '1', '--offset', '1']), \
+                                       '--host-filter', 'hosts.json', '--count', '1', '--offset', '1']), \
+             patch('deploy_worker.host_selection_from_args', return_value=dict(exclude_host_ips=['192.0.2.1'])), \
              patch('deploy_worker.get_pods', return_value=pods), \
              patch('deploy_worker.cmd_collect', return_value=0) as collect:
             self.assertEqual(deploy_worker.main(), 0)
@@ -72,6 +71,8 @@ class TestCollectTargets(unittest.TestCase):
         d.listen_port = 9000
         addresses = {node['pod_name']: dict(ip='198.51.100.1', host_ip='192.0.2.1' if i == 0 else '192.0.2.2')
                      for i, node in enumerate(d.nodes)}
+        d.nodes.insert(0, dict(pod_name='client-gone', instance_id='gone', host_ip='192.0.2.2'))
+        addresses['client-bad']['host_ip'] = ''
         with tempfile.TemporaryDirectory() as tmp, \
              patch.object(d, '_transport', return_value='kubectl'), \
              patch.object(d, '_namespace', return_value='default'), \
@@ -86,8 +87,26 @@ class TestCollectTargets(unittest.TestCase):
             remote.assert_not_called()
 
     def test_unknown_host_ip_is_not_silently_included(self):
-        with self.assertRaises(ValueError):
-            log_collect.filter_collect_targets([dict(name='missing')], dict(exclude_host_ips=['192.0.2.1']))
+        with self.assertLogs('log_collect', level='WARNING') as logs:
+            result = log_collect.filter_collect_targets([dict(name='missing')], dict(exclude_host_ips=['192.0.2.1']))
+        self.assertEqual(result, [])
+        self.assertIn('missing', logs.output[0])
+
+    def test_client_full_collect_returns_failure_when_no_host_can_be_selected(self):
+        import tempfile
+        from deploy_client import Deployer
+        d = Deployer.__new__(Deployer)
+        d.nodes = [dict(pod_name='gone', instance_id='0', host_ip='192.0.2.1')]
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(d, '_transport', return_value='kubectl'), \
+             patch.object(d, '_namespace', return_value='default'), \
+             patch.object(d, 'run_on') as remote, \
+             patch.object(d, 'collect_files') as collect, \
+             patch('deploy_client.read_pod_addresses', return_value={}):
+            self.assertEqual(d.do_collect(output_dir=tmp, archive_options=dict(compress=True, extract=False),
+                             host_selection=dict(host_ips=['192.0.2.1'])), 1)
+            remote.assert_not_called()
+            collect.assert_not_called()
 
 
 if __name__ == '__main__':
