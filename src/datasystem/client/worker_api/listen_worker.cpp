@@ -529,7 +529,7 @@ void ListenWorker::TrySwitchBackToLocalWorker()
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         std::shared_lock<SharedMutex> l(switchWorkerHandleMutex_);
         LOG(INFO) << "[Switch] Local worker " << clientCommonWorker_->workerId_ << " is recovering";
-        isSwitched_ = !switchWorkerHandle_(index_, SwitchTriggerReason::WORKER_UNAVAILABLE);
+        isSwitched_ = !switchWorkerHandle_(index_, SwitchTriggerReason::LOCAL_RESTORE);
     });
 }
 

@@ -21,6 +21,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <initializer_list>
 #include <map>
@@ -2175,6 +2176,534 @@ TEST_F(CoordinatorBackendRaftClusterTest, SdkConnectsWorkerThroughCoordinatorSer
     const auto values = BuildValues(keys, "raft_sdk_service_discovery");
     AssertSetKeys(discoveryClient, keys, values);
     AssertGetKeysEventually(discoveryClient, keys, values);
+}
+
+constexpr int FULL_OUTAGE_TEST_TIMEOUT_SEC = 600;
+// Issue #1188 pattern: after the restart the membership key is briefly visible, then vanishes for a
+// node_dead_timeout_s-scale window (30s captured in production) before the keepalive re-establishes it.
+// The gap bound is a few lease TTLs; the observation window must cover the stall in both compressed and
+// unscaled forms, and healthy runs exit early once visibility has stayed stable.
+constexpr int FULL_OUTAGE_OBSERVE_SEC = 45;
+constexpr int FULL_OUTAGE_STABLE_EXIT_SEC = 10;
+constexpr int FULL_OUTAGE_GAP_BOUND_SEC = 4;
+constexpr int FULL_OUTAGE_E2E_WAIT_SEC = 60;
+constexpr int FULL_OUTAGE_E2E_RECOVER_BOUND_SEC = 30;
+constexpr int FULL_OUTAGE_RECOVERY_OBSERVE_SEC = 30;
+constexpr int FULL_OUTAGE_STARTUP_READY_BOUND_SEC = 10;
+constexpr int FULL_OUTAGE_KA_FAIL_ITERS = 8;
+constexpr int FULL_OUTAGE_VANISH_BOUND_SEC = 15;
+constexpr int FULL_OUTAGE_RECOVERY_BOUND_SEC = 8;
+constexpr char KEEPALIVE_FAIL_INJECT_NAME[] = "CoordinationBackend.KeepAlive.returnError";
+constexpr int FULL_OUTAGE_DEFAULT_SETTLE_SEC = 180;
+// Restarting after this short settle lands while the switched-away listeners' recovery ticks are still
+// cycling — the interleaving that exposed the client-side failover race fixed by ResetSwitched.
+constexpr int FULL_OUTAGE_RACE_SETTLE_SEC = 8;
+constexpr size_t FULL_OUTAGE_BURST_CLIENTS = 6;
+
+// Reproduction-matrix knobs (defaults keep the production-faithful baseline):
+// FULL_OUTAGE_SETTLE_SEC     idle wait between the last kill and the restart (issue kept 3 minutes)
+// FULL_OUTAGE_WARMUP_ROUNDS  full graceful restart rounds before the outage (production cycled ~6 times)
+// FULL_OUTAGE_KILL_GAP_SEC   stagger between killing the two survivors (production kills them one by one)
+// FULL_OUTAGE_TRAFFIC        1 keeps background Set traffic running from the baseline to the asserts
+int FullOutageEnvInt(const char *name, int defaultValue)
+{
+    const char *value = getenv(name);
+    return value == nullptr || *value == '\0' ? defaultValue : atoi(value);
+}
+
+class CoordinatorBackendFullOutageTest : public CoordinatorBackendClusterThreeWorkerTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        CoordinatorBackendClusterThreeWorkerTest::SetClusterSetupOptions(opts);
+        // Match the captured production flags (node_timeout_s=3, node_dead_timeout_s=30,
+        // enable_reconciliation=true) so the coordinator-side state machine that fenced the restarted
+        // worker's keepalive is exercised with the same budgets, plus data-plane parity flags.
+        const char *originalJdHostIp = getenv("JD_HOST_IP");
+        hadJdHostIp_ = originalJdHostIp != nullptr;
+        if (hadJdHostIp_) {
+            originalJdHostIp_ = originalJdHostIp;
+        }
+        (void)setenv("JD_HOST_IP", "127.0.0.1", 1);
+        opts.workerGflagParams =
+            " -shared_memory_size_mb=64 -node_timeout_s=3 -node_dead_timeout_s=30"
+            " -add_node_wait_time_s=1 -log_async=false -enable_reconciliation=true"
+            " -enable_lossless_data_exit_mode=true -client_reconnect_wait_s=5"
+            " -ipc_through_shared_memory=false -host_id_env_name=JD_HOST_IP";
+        opts.coordinatorGflagParams = " -v=1 -node_dead_timeout_s=30 -scale_in_collect_window_ms=1000";
+    }
+
+    void TearDown() override
+    {
+        CoordinatorBackendClusterThreeWorkerTest::TearDown();
+        if (hadJdHostIp_) {
+            (void)setenv("JD_HOST_IP", originalJdHostIp_.c_str(), 1);
+        } else {
+            (void)unsetenv("JD_HOST_IP");
+        }
+    }
+
+protected:
+    bool hadJdHostIp_ = false;
+    std::string originalJdHostIp_;
+
+    int GetTestCaseTimeoutSecs() const override
+    {
+        // The collective-recovery settle plus the membership observation window exceed the shared
+        // three-worker budget in the defect path.
+        return FULL_OUTAGE_TEST_TIMEOUT_SEC;
+    }
+
+    void InitFailoverKVClient(std::shared_ptr<KVClient> &client)
+    {
+        DS_ASSERT_OK(InitFailoverKVClientStatus(client));
+    }
+
+    Status InitFailoverKVClientStatus(std::shared_ptr<KVClient> &client)
+    {
+        uint32_t leaderIndex = 0;
+        RETURN_IF_NOT_OK(WaitServingCoordinator(leaderIndex));
+        CoordinatorServiceDiscoveryOptions discoveryOptions;
+        RETURN_IF_NOT_OK(GetCoordinatorAddressList(discoveryOptions.serviceAddress, leaderIndex));
+        discoveryOptions.clusterName = GetTestClusterName();
+        discoveryOptions.affinityPolicy = ServiceAffinityPolicy::RANDOM;
+        auto serviceDiscovery = std::make_shared<CoordinatorServiceDiscovery>(discoveryOptions);
+        RETURN_IF_NOT_OK(serviceDiscovery->Init());
+
+        ConnectOptions connectOptions;
+        connectOptions.connectTimeoutMs = COORDINATOR_SD_CONNECT_TIMEOUT_MS;
+        connectOptions.accessKey = "QTWAOYTTINDUT2QVKYUC";
+        connectOptions.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
+        connectOptions.enableCrossNodeConnection = true;
+        connectOptions.serviceDiscovery = serviceDiscovery;
+        client = std::make_shared<KVClient>(connectOptions);
+        return client->Init();
+    }
+
+    Status WaitMembershipEmpty(int timeoutSec)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSec);
+        Status lastRc(K_RUNTIME_ERROR, "Membership addresses have not been read");
+        std::set<std::string> lastAddresses;
+        while (std::chrono::steady_clock::now() < deadline) {
+            lastRc = ReadMembershipAddresses(lastAddresses);
+            if (lastRc.IsOk() && lastAddresses.empty()) {
+                return Status::OK();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_TOPOLOGY_INTERVAL_MS));
+        }
+        return Status(K_RUNTIME_ERROR,
+                      "Timed out waiting for an empty membership table; last status: " + lastRc.ToString()
+                          + ", last addresses: " + AddressesToString(lastAddresses));
+    }
+
+    struct MembershipVisibilityWindow {
+        bool everReady = false;
+        std::chrono::steady_clock::duration firstReadyAfter{};
+        std::chrono::steady_clock::duration maxGapAfter{};
+        bool readyAtEnd = false;
+    };
+
+    Status ObserveMembershipVisibility(uint32_t workerIndex, const std::chrono::steady_clock::time_point &start,
+                                       std::chrono::seconds observeFor, MembershipVisibilityWindow &window)
+    {
+        HostPort workerAddress;
+        RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddress));
+        const std::string address = workerAddress.ToString();
+        const auto deadline = start + observeFor;
+        bool gapOpen = false;
+        std::chrono::steady_clock::time_point gapStart{};
+        std::chrono::steady_clock::time_point continuousReadySince{};
+        while (std::chrono::steady_clock::now() < deadline) {
+            std::map<std::string, cluster::MemberLifecycleState> states;
+            Status rc = ReadMembershipStates(states);
+            if (rc.IsOk()) {
+                const auto now = std::chrono::steady_clock::now();
+                const auto found = states.find(address);
+                const bool ready = found != states.end() && found->second == cluster::MemberLifecycleState::READY;
+                if (ready) {
+                    if (!window.everReady) {
+                        window.everReady = true;
+                        window.firstReadyAfter = now - start;
+                    }
+                    if (gapOpen) {
+                        gapOpen = false;
+                        window.maxGapAfter = std::max(window.maxGapAfter, now - gapStart);
+                    }
+                    if (continuousReadySince.time_since_epoch().count() == 0) {
+                        continuousReadySince = now;
+                    }
+                    window.readyAtEnd = true;
+                    if (now - continuousReadySince >= std::chrono::seconds(FULL_OUTAGE_STABLE_EXIT_SEC)) {
+                        return Status::OK();
+                    }
+                } else {
+                    if (window.everReady) {
+                        window.readyAtEnd = false;
+                        if (!gapOpen) {
+                            gapOpen = true;
+                            gapStart = now;
+                        }
+                    }
+                    continuousReadySince = std::chrono::steady_clock::time_point{};
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_TOPOLOGY_INTERVAL_MS));
+        }
+        if (!window.everReady) {
+            return Status(K_RUNTIME_ERROR,
+                          "The restarted worker membership never became READY within the observation window");
+        }
+        return Status::OK();
+    }
+
+    // One production-shaped bootstrap round: graceful EXITING of all workers, full restart, and a fresh
+    // bootstrap, so the failure round starts from a cycled coordinator instead of a pristine one.
+    void RunGracefulFullRestartRound(int round)
+    {
+        for (uint32_t i = 0; i < 3; ++i) {
+            DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, i));
+        }
+        DS_ASSERT_OK(WaitMembershipEmpty(WAIT_SCALE_TIMEOUT_SEC));
+        for (uint32_t i = 0; i < 3; ++i) {
+            DS_ASSERT_OK(cluster_->StartNode(WORKER, i, ""));
+        }
+        for (uint32_t i = 0; i < 3; ++i) {
+            DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, i, WAIT_SCALE_TIMEOUT_SEC));
+        }
+        DS_ASSERT_OK(WaitForReadyMemberships({ 0, 1, 2 }, WAIT_SCALE_TIMEOUT_SEC));
+        AssertWorkersInCluster({ 0, 1, 2 }, WAIT_SCALE_TIMEOUT_SEC);
+        LOG(INFO) << "[TIMING] Full outage bootstrap warmup round " << round << " done";
+    }
+
+    struct FullOutageTrafficState {
+        std::atomic<bool> stop{ false };
+        std::atomic<uint64_t> setAttempts{ 0 };
+        std::atomic<uint64_t> setFailures{ 0 };
+        std::atomic<int64_t> maxSetGapMs{ 0 };
+        std::atomic<int64_t> lastSetOkMs{ 0 };
+    };
+
+    // Joins the traffic threads on any exit path: an assertion failure between Start and Stop must not
+    // leave joinable threads behind, or the vector destructor calls std::terminate.
+    struct FullOutageTrafficGuard {
+        FullOutageTrafficState *state;
+        std::vector<std::thread> *threads;
+        ~FullOutageTrafficGuard() { StopFullOutageTraffic(*state, *threads); }
+    };
+
+    void StartFullOutageTraffic(std::vector<std::shared_ptr<KVClient>> &clients,
+                                FullOutageTrafficState &state, std::vector<std::thread> &threads)
+    {
+        const auto startMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        state.lastSetOkMs = startMs;
+        for (size_t i = 0; i < clients.size(); ++i) {
+            threads.emplace_back([&state, client = clients[i], i] {
+                uint64_t seq = 0;
+                while (!state.stop.load(std::memory_order_relaxed)) {
+                    auto rc = client->Set("full_outage_traffic_" + std::to_string(i) + "_"
+                                              + std::to_string(seq++), "traffic-value");
+                    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count();
+                    ++state.setAttempts;
+                    if (rc.IsOk()) {
+                        const auto last = state.lastSetOkMs.exchange(nowMs, std::memory_order_relaxed);
+                        const auto gap = nowMs - last;
+                        auto prev = state.maxSetGapMs.load(std::memory_order_relaxed);
+                        while (gap > prev && !state.maxSetGapMs.compare_exchange_weak(
+                                                 prev, gap, std::memory_order_relaxed)) {
+                        }
+                    } else {
+                        ++state.setFailures;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+            });
+        }
+    }
+
+    static void StopFullOutageTraffic(FullOutageTrafficState &state, std::vector<std::thread> &threads)
+    {
+        state.stop.store(true, std::memory_order_relaxed);
+        for (auto &thread : threads) {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+        threads.clear();
+        if (state.setAttempts.load(std::memory_order_relaxed) == 0) {
+            return;
+        }
+        LOG(INFO) << "FULL_OUTAGE_TRAFFIC set_attempts=" << state.setAttempts.load()
+                  << " set_failures=" << state.setFailures.load()
+                  << " max_set_gap_ms=" << state.maxSetGapMs.load();
+    }
+};
+
+// Disabled for CI: the production-faithful budget (node_dead_timeout_s=30 plus the 180s collective-recovery
+// settle) needs several minutes, while ctest enforces an 80s per-case budget for this binary, so the case is
+// killed before reaching any assertion (CI build #11340: deterministic Timeout at 80s, not a test defect).
+// Run it locally via:
+//   ./ds_st_coordinator_backend_manual --gtest_also_run_disabled_tests
+//     --gtest_filter='CoordinatorBackendFullOutageTest.DISABLED_*'
+// The matrix knobs documented above FullOutageEnvInt (settle/warmup/kill-gap/traffic) shape the variants.
+TEST_F(CoordinatorBackendFullOutageTest, DISABLED_MembershipInvisibleForNodeDeadTimeoutAfterFullOutageRestart)
+{
+    // Issue #1188: gracefully stop worker 0 (lossless exit removes it from the authoritative topology,
+    // matching dscli stop), kill the remaining workers so every membership lease expires silently, then
+    // restart worker 0 on the same address. The restarted worker must reappear in coordinator service
+    // discovery within the lease window instead of after a node_dead_timeout_s-scale keepalive stall.
+    ASSERT_EQ(cluster_->GetWorkerNum(), size_t(3));
+    DS_ASSERT_OK(WaitForReadyMemberships({ 0, 1, 2 }, WAIT_SCALE_TIMEOUT_SEC));
+
+    const int warmupRounds = FullOutageEnvInt("FULL_OUTAGE_WARMUP_ROUNDS", 0);
+    const int killGapSec = FullOutageEnvInt("FULL_OUTAGE_KILL_GAP_SEC", 0);
+    const int settleSec = FullOutageEnvInt("FULL_OUTAGE_SETTLE_SEC", FULL_OUTAGE_DEFAULT_SETTLE_SEC);
+    const bool runTraffic = FullOutageEnvInt("FULL_OUTAGE_TRAFFIC", 0) != 0;
+    const int kaFailIters = FullOutageEnvInt("FULL_OUTAGE_KA_FAIL_ITERS", 0);
+    LOG(INFO) << "FULL_OUTAGE matrix warmup_rounds=" << warmupRounds << " kill_gap_sec=" << killGapSec
+              << " settle_sec=" << settleSec << " traffic=" << (runTraffic ? 1 : 0)
+              << " ka_fail_iters=" << kaFailIters;
+    for (int round = 0; round < warmupRounds; ++round) {
+        RunGracefulFullRestartRound(round);
+    }
+
+    std::shared_ptr<KVClient> failoverClient;
+    InitFailoverKVClient(failoverClient);
+    const auto baselineKeys = BuildKeys("full_outage_baseline");
+    const auto baselineValues = BuildValues(baselineKeys, "full_outage_baseline");
+    AssertSetKeys(failoverClient, baselineKeys, baselineValues);
+
+    FullOutageTrafficState trafficState;
+    std::vector<std::thread> trafficThreads;
+    std::vector<std::shared_ptr<KVClient>> trafficClients;
+    FullOutageTrafficGuard trafficGuard{ &trafficState, &trafficThreads };
+    if (runTraffic) {
+        for (int i = 0; i < 3; ++i) {
+            std::shared_ptr<KVClient> trafficClient;
+            DS_ASSERT_OK(InitFailoverKVClientStatus(trafficClient));
+            trafficClients.emplace_back(std::move(trafficClient));
+        }
+        StartFullOutageTraffic(trafficClients, trafficState, trafficThreads);
+    }
+
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
+    AssertWorkersNotInCluster({ 0 }, WAIT_SCALE_TIMEOUT_SEC);
+
+    DS_ASSERT_OK(cluster_->KillWorker(1));
+    if (killGapSec > 0) {
+        // Production kills the survivors one by one; let the coordinator mature one absence cycle
+        // (classifier budget = node_dead_timeout_s - node_timeout_s) between the kills.
+        std::this_thread::sleep_for(std::chrono::seconds(killGapSec));
+    }
+    DS_ASSERT_OK(cluster_->KillWorker(2));
+    ASSERT_FALSE(cluster_->CheckWorkerProcess(1));
+    ASSERT_FALSE(cluster_->CheckWorkerProcess(2));
+    DS_ASSERT_OK(WaitMembershipEmpty(WAIT_SCALE_TIMEOUT_SEC));
+    // The captured failure restarted the worker long after the survivors died, when the coordinator's
+    // collective stale-topology recovery had already matured (classifier budget is
+    // node_dead_timeout_s - node_timeout_s) and immediately ran direct probes plus the exact-membership
+    // replacement at registration. Restarting earlier takes the ordinary ScaleOut path and misses the
+    // defect, so wait past the classifier budget before restarting.
+    std::this_thread::sleep_for(std::chrono::seconds(settleSec));
+
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+
+    // Defect A trigger (production): the restarted worker's READY publication races its first keepalive
+    // window while the coordinator is still degraded. Inject keepalive renewal failures from worker
+    // startup so one failure lands before the READY publication: pre-fix, that failure locally blocked
+    // the publication (IsKeepAliveTimeout) and service discovery stayed blind until the failures stopped.
+    if (kaFailIters > 0) {
+        bool injected = false;
+        const auto injectDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < injectDeadline) {
+            if (cluster_->SetInjectAction(WORKER, 0, KEEPALIVE_FAIL_INJECT_NAME,
+                                          FormatString("%d*return(K_RPC_UNAVAILABLE)", kaFailIters)).IsOk()) {
+                injected = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_TOPOLOGY_INTERVAL_MS));
+        }
+        ASSERT_TRUE(injected) << "failed to arm the keepalive failure injection on the restarting worker";
+    }
+
+    const auto restartStart = std::chrono::steady_clock::now();
+    MembershipVisibilityWindow window;
+    DS_ASSERT_OK(ObserveMembershipVisibility(0, restartStart, std::chrono::seconds(FULL_OUTAGE_OBSERVE_SEC), window));
+    const auto firstReadySecs =
+        std::chrono::duration_cast<std::chrono::seconds>(window.firstReadyAfter).count();
+    // With keepalive failures injected over the startup window, the membership must still publish READY
+    // promptly (post-fix); pre-fix the READY publication was locally blocked until the failures stopped.
+    const int startupReadyBoundSec = kaFailIters > 0 ? kaFailIters + FULL_OUTAGE_RECOVERY_BOUND_SEC
+                                                     : FULL_OUTAGE_STARTUP_READY_BOUND_SEC;
+    EXPECT_LT(firstReadySecs, startupReadyBoundSec)
+        << "Restarted worker membership published READY at +" << firstReadySecs
+        << "s with " << kaFailIters << " injected keepalive failures over its startup window";
+    EXPECT_TRUE(window.readyAtEnd) << "Restarted worker membership was still not READY at the end of the observation window";
+
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0, WAIT_SCALE_TIMEOUT_SEC));
+
+    // The captured failure window started right after the deployment brought its clients back: the
+    // ready file appeared, all pods' clients registered on the restarted worker within ~2s, and the
+    // membership view went stale ~1s later. Reproduce that registration burst before watching membership.
+    std::vector<std::shared_ptr<KVClient>> burstClients(FULL_OUTAGE_BURST_CLIENTS);
+    std::vector<Status> burstStatus(FULL_OUTAGE_BURST_CLIENTS);
+    {
+        std::vector<std::thread> creators;
+        creators.reserve(burstClients.size());
+        for (size_t i = 0; i < burstClients.size(); ++i) {
+            creators.emplace_back([this, i, &burstClients, &burstStatus]() {
+                burstStatus[i] = InitFailoverKVClientStatus(burstClients[i]);
+            });
+        }
+        for (auto &creator : creators) {
+            creator.join();
+        }
+    }
+    for (size_t i = 0; i < burstClients.size(); ++i) {
+        std::string msg = "Burst client " + std::to_string(i) + " init failed: " + burstStatus[i].ToString();
+        ASSERT_TRUE(burstStatus[i].IsOk()) << msg;
+        ASSERT_NE(burstClients[i], nullptr);
+    }
+
+    const auto recoverKeys = BuildKeys("full_outage_recovered");
+    const auto recoverValues = BuildValues(recoverKeys, "full_outage_recovered");
+    const auto recoverStart = std::chrono::steady_clock::now();
+    DS_ASSERT_OK(SetKeyEventually(*failoverClient, recoverKeys.front(), recoverValues.at(recoverKeys.front()),
+                                  FULL_OUTAGE_E2E_WAIT_SEC));
+    const auto recoveredSecs = std::chrono::duration_cast<std::chrono::seconds>(
+                                   std::chrono::steady_clock::now() - recoverStart)
+                                   .count();
+    EXPECT_LT(recoveredSecs, FULL_OUTAGE_E2E_RECOVER_BOUND_SEC)
+        << "Client failover to the restarted worker took " << recoveredSecs << "s";
+    DS_ASSERT_OK(SetKeys(*failoverClient, recoverKeys, recoverValues));
+    AssertGetKeysEventually(failoverClient, recoverKeys, recoverValues);
+
+    if (runTraffic) {
+        StopFullOutageTraffic(trafficState, trafficThreads);
+    }
+}
+
+TEST_F(CoordinatorBackendFullOutageTest, MembershipVisibleFastAfterRestartWithPeersAlive)
+{
+    // Control for the full-outage test: with both peers alive, a graceful stop and a same-address
+    // restart must restore service discovery visibility within the lease window. This isolates the
+    // full-outage trigger from generic restart slowness.
+    DS_ASSERT_OK(WaitForReadyMemberships({ 0, 1, 2 }, WAIT_SCALE_TIMEOUT_SEC));
+
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
+    AssertWorkersNotInCluster({ 0 }, WAIT_SCALE_TIMEOUT_SEC);
+    DS_ASSERT_OK(WaitForMembershipLayout({ 1, 2 }, { 0 }));
+
+    const auto restartStart = std::chrono::steady_clock::now();
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+    MembershipVisibilityWindow window;
+    DS_ASSERT_OK(ObserveMembershipVisibility(0, restartStart, std::chrono::seconds(FULL_OUTAGE_OBSERVE_SEC), window));
+    const auto firstReadySecs =
+        std::chrono::duration_cast<std::chrono::seconds>(window.firstReadyAfter).count();
+    const auto maxGapSecs = std::chrono::duration_cast<std::chrono::seconds>(window.maxGapAfter).count();
+    EXPECT_LT(maxGapSecs, FULL_OUTAGE_GAP_BOUND_SEC)
+        << "Restarted worker membership was first visible at +" << firstReadySecs << "s but then vanished for "
+        << maxGapSecs << "s with peers alive";
+    EXPECT_TRUE(window.readyAtEnd) << "Restarted worker membership was still not READY at the end of the observation window";
+}
+
+TEST_F(CoordinatorBackendFullOutageTest, ClientRecoversAfterFullOutageRestartRaceWindow)
+{
+    // CI regression for the client-side failover race: with a short settle the restarted worker's restore
+    // commit races the switched-away listeners' stale recovery ticks, and a broken client stays pinned to
+    // a dead peer for its whole retry budget while the membership is already READY. Membership recovers in
+    // well under a second here; the client must recover too. The production-budget variant of this
+    // scenario lives in the DISABLED_ heavy case above.
+    ASSERT_EQ(cluster_->GetWorkerNum(), size_t(3));
+    DS_ASSERT_OK(WaitForReadyMemberships({ 0, 1, 2 }, WAIT_SCALE_TIMEOUT_SEC));
+
+    std::shared_ptr<KVClient> failoverClient;
+    InitFailoverKVClient(failoverClient);
+    const auto baselineKeys = BuildKeys("full_outage_race_baseline");
+    const auto baselineValues = BuildValues(baselineKeys, "full_outage_race_baseline");
+    AssertSetKeys(failoverClient, baselineKeys, baselineValues);
+
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
+    AssertWorkersNotInCluster({ 0 }, WAIT_SCALE_TIMEOUT_SEC);
+    DS_ASSERT_OK(cluster_->KillWorker(1));
+    DS_ASSERT_OK(cluster_->KillWorker(2));
+    ASSERT_FALSE(cluster_->CheckWorkerProcess(1));
+    ASSERT_FALSE(cluster_->CheckWorkerProcess(2));
+    DS_ASSERT_OK(WaitMembershipEmpty(WAIT_SCALE_TIMEOUT_SEC));
+    std::this_thread::sleep_for(std::chrono::seconds(FULL_OUTAGE_RACE_SETTLE_SEC));
+
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+
+    const auto restartStart = std::chrono::steady_clock::now();
+    MembershipVisibilityWindow window;
+    DS_ASSERT_OK(ObserveMembershipVisibility(0, restartStart, std::chrono::seconds(FULL_OUTAGE_OBSERVE_SEC), window));
+    const auto firstReadySecs =
+        std::chrono::duration_cast<std::chrono::seconds>(window.firstReadyAfter).count();
+    EXPECT_LT(firstReadySecs, FULL_OUTAGE_STARTUP_READY_BOUND_SEC)
+        << "Restarted worker membership published READY at +" << firstReadySecs << "s";
+    EXPECT_TRUE(window.readyAtEnd)
+        << "Restarted worker membership was still not READY at the end of the observation window";
+
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0, WAIT_SCALE_TIMEOUT_SEC));
+
+    const auto recoverKeys = BuildKeys("full_outage_race_recovered");
+    const auto recoverValues = BuildValues(recoverKeys, "full_outage_race_recovered");
+    const auto recoverStart = std::chrono::steady_clock::now();
+    DS_ASSERT_OK(SetKeyEventually(*failoverClient, recoverKeys.front(), recoverValues.at(recoverKeys.front()),
+                                  FULL_OUTAGE_E2E_WAIT_SEC));
+    const auto recoveredSecs = std::chrono::duration_cast<std::chrono::seconds>(
+                                   std::chrono::steady_clock::now() - recoverStart)
+                                   .count();
+    EXPECT_LT(recoveredSecs, FULL_OUTAGE_E2E_RECOVER_BOUND_SEC)
+        << "Client failover to the restarted worker took " << recoveredSecs
+        << "s while the membership was already READY";
+    DS_ASSERT_OK(SetKeys(*failoverClient, recoverKeys, recoverValues));
+    ASSERT_TRUE(cluster_->CheckWorkerProcess(0));
+}
+
+TEST_F(CoordinatorBackendFullOutageTest, MembershipKeyRecoversAfterKeepAliveFailureWindow)
+{
+    // Issue #1188 defect A: a transient keepalive renewal-failure window (the production degraded state
+    // produced one) must not blind coordinator service discovery for a node_dead_timeout_s-scale period.
+    // Inject one renewal-failure window on a live worker, require the membership key to vanish (TTL
+    // expiry), then require prompt recovery once the failures stop.
+    DS_ASSERT_OK(WaitForReadyMemberships({ 0, 1, 2 }, WAIT_SCALE_TIMEOUT_SEC));
+
+    const int failureIterations = FullOutageEnvInt("FULL_OUTAGE_KA_FAIL_ITERS", FULL_OUTAGE_KA_FAIL_ITERS);
+    HostPort workerAddress;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddress));
+    const std::string address = workerAddress.ToString();
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, KEEPALIVE_FAIL_INJECT_NAME,
+                                           FormatString("%d*return(K_RPC_UNAVAILABLE)", failureIterations)));
+
+    const auto injectStart = std::chrono::steady_clock::now();
+    bool vanished = false;
+    while (std::chrono::steady_clock::now() - injectStart < std::chrono::seconds(FULL_OUTAGE_VANISH_BOUND_SEC)) {
+        std::map<std::string, cluster::MemberLifecycleState> states;
+        if (ReadMembershipStates(states).IsOk() && states.find(address) == states.end()) {
+            vanished = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_TOPOLOGY_INTERVAL_MS));
+    }
+    ASSERT_TRUE(vanished) << "membership key did not expire during the injected renewal-failure window";
+
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, KEEPALIVE_FAIL_INJECT_NAME));
+    const auto clearTime = std::chrono::steady_clock::now();
+    MembershipVisibilityWindow window;
+    DS_ASSERT_OK(ObserveMembershipVisibility(0, clearTime, std::chrono::seconds(FULL_OUTAGE_OBSERVE_SEC), window));
+    const auto firstReadySecs =
+        std::chrono::duration_cast<std::chrono::seconds>(window.firstReadyAfter).count();
+    const auto maxGapSecs = std::chrono::duration_cast<std::chrono::seconds>(window.maxGapAfter).count();
+    EXPECT_LT(maxGapSecs, FULL_OUTAGE_RECOVERY_BOUND_SEC)
+        << "membership key reappeared only " << firstReadySecs
+        << "s after the injection started and stayed gone for " << maxGapSecs
+        << "s after the failures stopped; renewal failures must not blind discovery for a"
+           " node_dead_timeout_s-scale window";
+    EXPECT_TRUE(window.readyAtEnd) << "membership was still not READY at the end of the observation window";
+    ASSERT_TRUE(cluster_->CheckWorkerProcess(0));
 }
 }  // namespace st
 }  // namespace datasystem

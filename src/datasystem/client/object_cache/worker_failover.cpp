@@ -424,6 +424,21 @@ Status WorkerFailover::NoSwitchableWorkerStatus() const
     return { K_RPC_UNAVAILABLE, "no switchable worker available" };
 }
 
+bool WorkerFailover::TryRestoreBoundWorkerLocked(WorkerNode current, WorkerNode node,
+                                                 client::SwitchTriggerReason reason)
+{
+    if (current != LOCAL_WORKER || node != LOCAL_WORKER || reason != client::SwitchTriggerReason::LOCAL_RESTORE) {
+        return false;
+    }
+    // The restore poller re-fires for the node we are already bound to. Honoring the binding is the
+    // only safe answer here: the standby search self-excludes the bound address, so with no other
+    // READY worker it would poison fail-fast again. Liveness stays owned by the listener heartbeat,
+    // which drives a fresh switch-away (WORKER_UNAVAILABLE) if the worker died after the restore.
+    LOG(INFO) << "[Switch] Redundant restore request for the bound local worker, restore availability.";
+    MarkWorkerAvailableLocked();
+    return true;
+}
+
 bool WorkerFailover::SwitchWorkerNode(WorkerNode node, client::SwitchTriggerReason reason)
 {
     if (owner_.clientStateManager_->GetState() & (uint16_t)ClientState::EXITED) {
@@ -456,6 +471,10 @@ bool WorkerFailover::SwitchWorkerNode(WorkerNode node, client::SwitchTriggerReas
                 LOG(ERROR) << "[Switch] current worker is null pointer";
                 return false;
             }
+            // Caller guarantees: under switchNodeMutex_, no in-flight switch, and the bound api is non-null.
+            if (TryRestoreBoundWorkerLocked(current, node, reason)) {
+                return true;
+            }
             next = GetNextWorkerNode(current);
             nextWorkerApi = owner_.workerApi_[next];
             nextListenWorker = owner_.listenWorker_[next];
@@ -470,11 +489,7 @@ bool WorkerFailover::SwitchWorkerNode(WorkerNode node, client::SwitchTriggerReas
     }
     // If next stub still has requests to be processed, wait for next time.
     if (!ReadyToExit(next, nextWorkerApi, nextListenWorker)) {
-        std::lock_guard<std::mutex> lock(owner_.switchNodeMutex_);
-        if (owner_.switchInProgress_ && owner_.switchGeneration_ == switchGeneration
-        && owner_.currentNode_ == current) {
-            MarkWorkerAvailableLocked();
-        }
+        RestoreWorkerAvailableIfNeeded(current, switchGeneration);
         return false;
     }
     return SwitchToStandbyWorkerImpl(workerApi, current, next, switchGeneration, reason);
@@ -793,7 +808,6 @@ bool WorkerFailover::TrySwitchBackToLocalWorker()
     WorkerNode current;
     std::shared_ptr<IClientWorkerApi> localWorkerApi;
     std::shared_ptr<client::ListenWorker> localListenWorker;
-    std::shared_ptr<client::ListenWorker> currentListenWorker;
     {
         std::lock_guard<std::mutex> lock(owner_.switchNodeMutex_);
         current = owner_.currentNode_;
@@ -802,7 +816,6 @@ bool WorkerFailover::TrySwitchBackToLocalWorker()
         }
         localWorkerApi = owner_.workerApi_[LOCAL_WORKER];
         localListenWorker = owner_.listenWorker_[LOCAL_WORKER];
-        currentListenWorker = owner_.listenWorker_[current];
     }
 
     if (localWorkerApi == nullptr || localListenWorker == nullptr) {
@@ -813,32 +826,45 @@ bool WorkerFailover::TrySwitchBackToLocalWorker()
     bool scaleDown = localListenWorker->IsWorkerVoluntaryScaleDown();
     bool healthy = localWorkerApi->healthy_;
     if (s.IsOk() && !scaleDown && healthy) {
-        {
-            std::lock_guard<std::mutex> lock(owner_.switchNodeMutex_);
-            if (owner_.currentNode_ == LOCAL_WORKER) {
-                return true;
-            }
-            if (owner_.currentNode_ != current
-        || (owner_.clientStateManager_->GetState() & (uint16_t)ClientState::EXITED)) {
-                return false;
-            }
-            LOG(INFO) << "[Switch] Restore local worker success.";
-            if (currentListenWorker != nullptr) {
-                owner_.ArmStandbyDataPlaneDrain(current);
-                currentListenWorker->SetSwitched();
-            }
-            owner_.currentNode_ = LOCAL_WORKER;
-            MarkWorkerAvailableLocked();
-        }
-        NotifySwitchToExpectedWorker(localWorkerApi->hostPort_);
-        return true;
-    } else {
-        constexpr int times = 10;
-        LOG_EVERY_T(INFO, times) << FormatString(
-            "[Switch] Restore local worker failed, connection status: %s, is scale down: %d, is healthy: %d",
-            s.ToString(), scaleDown, healthy);
-        return false;
+        return CommitRestoreToLocalWorker(current);
     }
+    constexpr int times = 10;
+    LOG_EVERY_T(INFO, times) << FormatString(
+        "[Switch] Restore local worker failed, connection status: %s, is scale down: %d, is healthy: %d",
+        s.ToString(), scaleDown, healthy);
+    return false;
+}
+
+bool WorkerFailover::CommitRestoreToLocalWorker(WorkerNode current)
+{
+    std::shared_ptr<IClientWorkerApi> localWorkerApi;
+    {
+        std::lock_guard<std::mutex> lock(owner_.switchNodeMutex_);
+        if (owner_.currentNode_ == LOCAL_WORKER) {
+            return true;
+        }
+        if (owner_.currentNode_ != current
+            || (owner_.clientStateManager_->GetState() & (uint16_t)ClientState::EXITED)) {
+            return false;
+        }
+        localWorkerApi = owner_.workerApi_[LOCAL_WORKER];
+        auto *localListen = owner_.listenWorker_[LOCAL_WORKER].get();
+        auto *currentListen = owner_.listenWorker_[current].get();
+        if (localWorkerApi == nullptr || localListen == nullptr) {
+            LOG(ERROR) << "[Switch] Local worker is not ready for switch back";
+            return false;
+        }
+        LOG(INFO) << "[Switch] Restore local worker success.";
+        if (currentListen != nullptr) {
+            owner_.ArmStandbyDataPlaneDrain(current);
+            currentListen->SetSwitched();
+        }
+        owner_.currentNode_ = LOCAL_WORKER;
+        localListen->ResetSwitched();
+        MarkWorkerAvailableLocked();
+    }
+    NotifySwitchToExpectedWorker(localWorkerApi->hostPort_);
+    return true;
 }
 
 bool WorkerFailover::IsCoordinatorReachabilityFailure(const Status &status) const

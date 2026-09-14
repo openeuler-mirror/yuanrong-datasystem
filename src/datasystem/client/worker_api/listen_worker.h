@@ -50,6 +50,7 @@ enum class SwitchTriggerReason : uint8_t {
     WORKER_UNAVAILABLE = 0,
     VOLUNTARY_SCALE_DOWN,
     URMA_DATA_PLANE_FAILURE,
+    LOCAL_RESTORE,
 };
 
 enum class WorkerRecoveryReason : uint8_t {
@@ -228,6 +229,15 @@ public:
     void SetSwitched()
     {
         isSwitched_ = true;
+    }
+
+    /**
+     * @brief Clear the switched flag after the client is restored to this worker, so the heartbeat path
+     * stops requesting redundant switch-backs.
+     */
+    void ResetSwitched()
+    {
+        isSwitched_ = false;
     }
 
     /**
