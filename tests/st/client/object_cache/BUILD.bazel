@@ -329,6 +329,38 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "ub_urma_failover_switch_test",
+    srcs = ["ub_urma_failover_switch_test.cpp"],
+    tags = ["manual", "urma_mock"],
+    deps = [
+        ":oc_client_common",
+        "//src/datasystem/common/inject:common_inject",
+        "//tests/st:st_common",
+    ],
+)
+
+ds_cc_test(
+    name = "ub_client_worker_isolate_recovery_test",
+    srcs = ["ub_client_worker_isolate_recovery_test.cpp"],
+    tags = ["manual", "urma_mock"],
+    deps = [
+        ":oc_client_common",
+        "//src/datasystem/common/rdma:common_rdma",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/worker/object_cache:worker_worker_oc_api",
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/client/object_cache/transport:client_transport",
+        "//src/datasystem/common/ak_sk:signature",
+        "//src/datasystem/common/rpc:api_deadline",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/client/object_cache/routing:routing",
+        "//src/datasystem/common/object_cache:ub_health",
+        "//tests/st:st_common",
+    ],
+)
+
+ds_cc_test(
     name = "ub_remote_port_health_propagation_test",
     srcs = ["ub_remote_port_health_propagation_test.cpp"],
     tags = ["manual"],

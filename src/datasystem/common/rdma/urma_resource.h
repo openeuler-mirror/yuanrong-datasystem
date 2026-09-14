@@ -1010,6 +1010,21 @@ public:
 private:
     friend class UrmaConnectionTestAccess;
     friend class UrmaManager;
+
+    /**
+     * @brief Shared cooldown predicate; peerState_ mutex must be held. True when the breaker is not
+     *        OPEN or its reconnect cooldown has elapsed (i.e. a replacement may be attempted).
+     */
+    bool CooldownElapsedOrNotOpenLocked() const;
+
+    /**
+     * @brief Circuit-broken acquire verdict; peerState_ mutex must be held. Reports
+     *        K_URMA_NEED_CONNECT once the cooldown elapsed so data-plane owners rebuild and the
+     *        replacement half-open probe closes the breaker, and keeps K_URMA_TRY_AGAIN while the
+     *        cooldown is still running so requests do not rebuild in a storm.
+     */
+    Status CircuitBrokenAcquireStatusLocked() const;
+
     // Connection identity is protected by the map; shared-accessor reuse can acquire owners concurrently.
     std::atomic<size_t> clientOwners_{ 0 };
     std::atomic<bool> workerOwned_{ false };

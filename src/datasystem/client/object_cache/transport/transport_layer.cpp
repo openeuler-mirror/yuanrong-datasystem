@@ -885,11 +885,14 @@ Status TransportLayer::TryCreate(const HostPort &workerAddr, const std::string &
     return rc;
 }
 
-bool TransportLayer::RebuildPlaneOnSetFailure(const Status &rc, const HostPort &workerAddr)
+bool TransportLayer::RebuildPlaneOnSetFailure(const Status &rc, const HostPort &workerAddr,
+                                              const std::shared_ptr<IDataTransporter> &stale)
 {
     if (rc.GetCode() == K_URMA_NEED_CONNECT) {
         LOG(WARNING) << "Rebuild UB data plane for worker " << workerAddr.ToString() << " after Set failed: " << rc;
-        manager_->ResetTransporter(workerAddr, AccessTransportKind::UB);
+        // Stale-guarded: a concurrent writer may already have rebuilt the plane after this request
+        // failed, and dropping that instance would undo its recovery.
+        manager_->ResetStaleUbDataPlane(workerAddr, stale);
         return true;
     }
     if (IsNonRetryableRpcError(rc)) {
@@ -951,7 +954,18 @@ Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param,
     LocalUbSenderOperation operation;
     RETURN_IF_NOT_OK(CheckLocalUbSenderAdmission(hint));
     std::shared_ptr<IDataTransporter> transporter;
-    RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
+    Status buildRc = manager_->GetOrCreate(workerAddr, hint, transporter);
+    if (buildRc.IsError() && hint == TransportHint::UB_CANDIDATE) {
+        // The UB data plane cannot be built right now (breaker cooling down, or the build failed):
+        // degrade this write to TCP instead of failing it, matching the read path's UB->TCP fallback.
+        // Each write re-asks the advisor, so a later write retries UB once the cooldown elapses.
+        LOG_FIRST_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+            << "UB data plane unavailable for worker " << workerAddr.ToString()
+            << ", degrading this write to TCP: " << buildRc;
+        hint = TransportHint::TCP_ONLY;
+        buildRc = manager_->GetOrCreate(workerAddr, hint, transporter);
+    }
+    RETURN_IF_NOT_OK(buildRc);
     RETURN_IF_NOT_OK(AcquireLocalUbSenderAdmission(hint, operation));
     auto &mutableBufferInfo = ObjectBufferInternal::GetMutableInfo(buffer);
     mutableBufferInfo.ubFailureReportRc = Status::OK();
@@ -1000,7 +1014,16 @@ Status TransportLayer::FinalizeSetPublish(const HostPort &workerAddr, ObjectBuff
         releaseRef(TransportHint::TCP_ONLY);
         return rc;
     }
-    if (!RebuildPlaneOnSetFailure(rc, workerAddr)) {
+    // A URMA write failure that fell back to TCP still reports OK from Set, so the caller never sees
+    // K_URMA_NEED_CONNECT and the breaker would stay OPEN until a payload the TCP limiter rejects.
+    // Rebuild the UB plane here as well, with the same stale guard as the error path below.
+    if (rc.IsOk() && ubFailureReport.GetCode() == K_URMA_NEED_CONNECT) {
+        LOG(WARNING) << "Rebuild UB data plane for worker " << workerAddr.ToString()
+                     << " after UB write fell back to TCP: " << ubFailureReport;
+        manager_->ResetStaleUbDataPlane(workerAddr, transporter);
+        INJECT_POINT_NO_RETURN("TransportLayer.RebuildUbAfterTcpFallback", [] {});
+    }
+    if (!RebuildPlaneOnSetFailure(rc, workerAddr, transporter)) {
         releaseRef();
         return rc;
     }
@@ -1154,7 +1177,17 @@ Status TransportLayer::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &bu
     LocalUbSenderOperation operation;
     RETURN_IF_NOT_OK(CheckLocalUbSenderAdmission(hint));
     std::shared_ptr<IDataTransporter> transporter;
-    RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
+    Status buildRc = manager_->GetOrCreate(workerAddr, hint, transporter);
+    if (buildRc.IsError() && hint == TransportHint::UB_CANDIDATE) {
+        // Same UB->TCP degradation as the single-buffer path: a UB plane that cannot be built right
+        // now (cooldown, failed build) must not fail the batch.
+        LOG_FIRST_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+            << "UB data plane unavailable for worker " << workerAddr.ToString()
+            << ", degrading this MSet to TCP: " << buildRc;
+        hint = TransportHint::TCP_ONLY;
+        buildRc = manager_->GetOrCreate(workerAddr, hint, transporter);
+    }
+    RETURN_IF_NOT_OK(buildRc);
     RETURN_IF_NOT_OK(AcquireLocalUbSenderAdmission(hint, operation));
     for (const auto &buffer : buffers) {
         PrepareLocalUbLateCompletion(ObjectBufferInternal::GetMutableInfo(*buffer), transporter->Kind());
@@ -1174,13 +1207,22 @@ Status TransportLayer::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &bu
         ScheduleMSetReleases(buffers, param.requestContext, result, TransportHint::TCP_ONLY);
         return rc;
     }
-    return RetryOrReplayMSet(workerAddr, buffers, param, hint, result, rc);
+    // Mirrors FinalizeSetPublish: a UB write failure that fell back to TCP returns OK, so the
+    // breaker needs this explicit, stale-guarded rebuild trigger.
+    if (rc.IsOk() && ubFailureReport.GetCode() == K_URMA_NEED_CONNECT) {
+        LOG(WARNING) << "Rebuild UB data plane for worker " << workerAddr.ToString()
+                     << " after MSet UB write fell back to TCP: " << ubFailureReport;
+        manager_->ResetStaleUbDataPlane(workerAddr, transporter);
+        INJECT_POINT_NO_RETURN("TransportLayer.RebuildUbAfterTcpFallback", [] {});
+    }
+    return RetryOrReplayMSet(workerAddr, buffers, param, hint, result, rc, transporter);
 }
 
 Status TransportLayer::RetryOrReplayMSet(const HostPort &workerAddr,
                                          const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
                                          const TransportSetParam &param, TransportHint hint,
-                                         TransportMSetResult &result, const Status &rc)
+                                         TransportMSetResult &result, const Status &rc,
+                                         const std::shared_ptr<IDataTransporter> &stale)
 {
     const bool retryUbWrite = rc.GetCode() == K_URMA_NEED_CONNECT;
     const bool retryUnsentPublish = IsRetryableRpcError(rc) && !result.publishAttempted;
@@ -1195,7 +1237,8 @@ Status TransportLayer::RetryOrReplayMSet(const HostPort &workerAddr,
     }
     if (retryUbWrite) {
         LOG(WARNING) << "Rebuild UB data plane for worker " << workerAddr.ToString() << " after MSet failed: " << rc;
-        manager_->ResetTransporter(workerAddr, AccessTransportKind::UB);
+        // Stale-guarded: a concurrent writer may already have rebuilt the plane after this batch failed.
+        manager_->ResetStaleUbDataPlane(workerAddr, stale);
     } else {
         LOG(WARNING) << "Rebuild RPC and data plane for worker " << workerAddr.ToString()
                      << " after MSet failed before publish: " << rc;

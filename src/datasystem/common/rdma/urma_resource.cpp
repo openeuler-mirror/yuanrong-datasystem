@@ -784,9 +784,7 @@ Status UrmaConnection::AcquireInflightSlot(int64_t remainingUs)
         const bool halfOpen = peerState_->phase.load(std::memory_order_acquire) == BreakerPhase::HALF_OPEN;
         const auto limit = halfOpen ? 1U : MAX_INFLIGHT_JETTIES;
         if (IsCircuitBroken()) {
-            return finish(Status(K_URMA_TRY_AGAIN,
-                                 "Peer circuit-broken; reconnect after cooldown before sending a recovery probe"),
-                          limit);
+            return finish(CircuitBrokenAcquireStatusLocked(), limit);
         }
         if (peerState_->inflight < limit) {
             ++peerState_->inflight;
@@ -802,6 +800,28 @@ Status UrmaConnection::AcquireInflightSlot(int64_t remainingUs)
             return finish(Status(K_URMA_TRY_AGAIN, "Peer in-flight jetty cap wait timed out"), limit);
         }
     }
+}
+
+Status UrmaConnection::CircuitBrokenAcquireStatusLocked() const
+{
+    // A broken peer only recovers through a replacement connection (PrepareReplacement moves the
+    // breaker to HALF_OPEN), so an elapsed cooldown reports NEED_CONNECT: write and read data-plane
+    // owners rebuild on it, mirroring the connection-lookup translation used by the read path.
+    if (CooldownElapsedOrNotOpenLocked()) {
+        // Mirror the read path's [URMA_NEED_CONNECT] observability: this branch is the self-heal
+        // trigger, so it must be distinguishable in production logs from a plain cooldown wait.
+        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+            << "[URMA_NEED_CONNECT] Peer circuit-broken and cooldown elapsed; rebuild to send a recovery probe"
+            << ", peer=" << urmaJfrInfo_.uniqueInstanceId;
+        return Status(K_URMA_NEED_CONNECT,
+                      "Peer circuit-broken and cooldown elapsed; rebuild to send a recovery probe");
+    }
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        peerState_->retryAfter - std::chrono::steady_clock::now());
+    LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        << "[URMA_NEED_CONNECT] Peer circuit-broken; waiting out reconnect cooldown, peer="
+        << urmaJfrInfo_.uniqueInstanceId << ", cooldownRemainingMs=" << std::max<int64_t>(remaining.count(), 0);
+    return Status(K_URMA_TRY_AGAIN, "Peer circuit-broken; reconnect cooldown has not elapsed");
 }
 
 void UrmaConnection::ReleaseInflightSlot()
@@ -842,20 +862,28 @@ bool UrmaConnection::IsCircuitBroken() const
            || peerState_->phase.load(std::memory_order_acquire) == BreakerPhase::OPEN;
 }
 
+bool UrmaConnection::CooldownElapsedOrNotOpenLocked() const
+{
+    return peerState_->phase.load(std::memory_order_relaxed) != BreakerPhase::OPEN
+           || std::chrono::steady_clock::now() >= peerState_->retryAfter;
+}
+
 bool UrmaConnection::CanReconnect() const
 {
     std::lock_guard<bthread::Mutex> lock(peerState_->mutex);
-    return peerState_->phase.load() != BreakerPhase::OPEN
-           || std::chrono::steady_clock::now() >= peerState_->retryAfter;
+    return CooldownElapsedOrNotOpenLocked();
 }
 
 void UrmaConnection::RequireReconnect()
 {
-    transportUnusable_.store(true, std::memory_order_release);
     std::lock_guard<bthread::Mutex> lock(peerState_->mutex);
     peerState_->retryAfter = std::chrono::steady_clock::now() + peerState_->backoff;
     peerState_->backoff = std::min(peerState_->backoff + peerState_->backoff, MAX_RECONNECT_BACKOFF);
     peerState_->phase.store(BreakerPhase::OPEN, std::memory_order_release);
+    // Publish the unusable flag only after the cooldown state is fully armed, still under the lock: a
+    // lock-holding reader must observe either the previous state or the consistent "OPEN + armed
+    // cooldown" pair, never "unusable while still CLOSED" (which would skip the freshly armed cooldown).
+    transportUnusable_.store(true, std::memory_order_release);
     peerState_->cv.notify_all();
 }
 
