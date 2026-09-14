@@ -18,6 +18,11 @@ namespace datasystem::cluster {
 class PlacementFacade final {
 public:
     /**
+     * @brief Batch-size ceiling shared by every facade batch evaluation.
+     */
+    static constexpr size_t kMaxBatchKeys = 100'000;
+
+    /**
      * @brief Bind non-owned Snapshot and algorithm dependencies plus immutable local identity.
      * @param[in] snapshots Snapshot state that outlives this facade.
      * @param[in] algorithm Routing algorithm that outlives this facade.
@@ -117,6 +122,7 @@ private:
      */
     Status EvaluateRedirectInSnapshot(const TopologySnapshot &snapshot, std::string_view placementKey,
                                       RedirectDecision &decision) const;
+
     const TopologySnapshotState &snapshots_;
     const IRoutingAlgorithm &algorithm_;
     const std::string localAddress_;

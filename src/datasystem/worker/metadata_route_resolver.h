@@ -99,7 +99,27 @@ public:
      */
     IndexedMetaOwnerRouteGroups GroupIndexedOwners(const std::vector<std::string> &keys) const;
 
+    /**
+     * @brief Group keys by their migration target using exactly one redirect decision per batch chunk.
+     * @param[in] keys Keys to group.
+     * @return Successful groups plus per-key failures from the oldest topology version across chunks. During a
+     *         topology ScaleIn drain the committed owner of the leaving Worker's own keys still resolves to itself,
+     *         so the redirect override (post-scale-in token owner) is the only source of the real takeover target;
+     *         keys whose committed owner is another Worker group there, and keys without a redirect override group
+     *         on the committed owner for the caller's standby demotion.
+     * @note Only call while a ScaleIn batch is draining or no topology batch is active; a ScaleOut WAIT decision
+     *         deliberately keeps keys on their committed owner instead of the prospective override.
+     */
+    MetaOwnerRouteGroups GroupMigrateTargets(const std::vector<std::string> &keys) const;
+
 private:
+    /**
+     * @brief Evaluate one redirect batch for a chunk and merge its groups, failures, and topology version.
+     * @param[in,out] result Groups and failures to append into, carrying the smallest seen topology version.
+     * @param[in] chunkKeys Keys of one chunk, not exceeding PlacementFacade::kMaxBatchKeys.
+     */
+    void AppendRedirectChunk(MetaOwnerRouteGroups &result, const std::vector<std::string> &chunkKeys) const;
+
     const cluster::PlacementFacade *placement_;
     const MetadataRouteOptions options_;
 };

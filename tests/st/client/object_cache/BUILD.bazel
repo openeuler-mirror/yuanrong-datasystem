@@ -251,6 +251,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "oc_client_scale_down_migrate_target_test",
+    srcs = ["oc_client_scale_down_migrate_target_test.cpp"],
+    tags = ["manual"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/common/util:format",
+    ],
+)
+
+ds_cc_test(
     name = "oc_client_worker_heartbeat_test",
     srcs = ["oc_client_worker_heartbeat_test.cpp"],
     tags = ["manual"],

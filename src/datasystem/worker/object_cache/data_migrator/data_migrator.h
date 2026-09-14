@@ -165,6 +165,9 @@ public:
 
 private:
     using SlotMigrateFuture = std::pair<uint32_t, std::future<MigrateDataHandler::MigrateResult>>;
+    // One same-node retry budget per slot and failed target so sibling target groups of one slot never consume
+    // each other's retries. Touched only by the thread that drives the migrate/retry loop.
+    using SlotRetryCounters = std::map<std::pair<uint32_t, std::string>, int>;
 
     void ObserveUbHealthSummary(const MigrateDataHandler::MigrateResult &result) const;
 
@@ -273,13 +276,42 @@ private:
                                    std::vector<std::future<MigrateDataHandler::MigrateResult>> &newFutures);
 
     /**
-     * @brief Redirect migration data to other node.
+     * @brief Redirect migration data to other nodes.
      * @param[in] result Failed migration result.
      * @param[in] totalSize Total data size.
-     * @return New migration task future.
+     * @param[in,out] newFutures Newly generated migrate futures, one per redirect target group.
      */
-    std::future<MigrateDataHandler::MigrateResult> RedirectMigrateData(MigrateDataHandler::MigrateResult &result,
-                                                                       uint64_t totalSize);
+    void RedirectMigrateData(MigrateDataHandler::MigrateResult &result, uint64_t totalSize,
+                             std::vector<std::future<MigrateDataHandler::MigrateResult>> &newFutures);
+
+    /**
+     * @brief Submit one migration future per GroupMigrateTargets group for a topology ScaleIn retry.
+     * @param[in] originAddr Address of the node that failed the previous attempt.
+     * @param[in] totalSize Total data size.
+     * @param[in] objectKeys Failed object keys to redirect.
+     * @param[in] lastFailure Status of the failed attempt reported for diagnostics.
+     * @param[in,out] newFutures Newly generated migrate futures.
+     * @return true when the keys were dispatched through migrate-target groups.
+     */
+    bool RedirectByMigrateTargets(const std::string &originAddr, uint64_t totalSize,
+                                  const std::vector<std::string> &objectKeys, const Status &lastFailure,
+                                  std::vector<std::future<MigrateDataHandler::MigrateResult>> &newFutures);
+
+    /**
+     * @brief Re-dispatch one pinned retry group, or divert its keys to the escape list when the target is not
+     * admissible or the per-target pin budget is exhausted.
+     */
+    void DispatchPinnedRetryGroup(const std::string &originAddr, const Status &lastFailure,
+                                  const std::string &standbyWorker, const HostPort &addr,
+                                  const std::vector<std::string> &keys, std::vector<std::string> &escapeKeys,
+                                  std::vector<std::future<MigrateDataHandler::MigrateResult>> &newFutures);
+
+    /**
+     * @brief Route escape and unroutable keys through the legacy address-order chain with a fresh selector.
+     */
+    void DispatchEscapeKeys(const std::string &originAddr, uint64_t totalSize,
+                            const std::vector<std::string> &fallbackKeys,
+                            std::vector<std::future<MigrateDataHandler::MigrateResult>> &newFutures);
 
     Status CheckSourceAdmission() const;
     Status CheckTargetAdmission(const HostPort &target, DataPlaneAdmissionRole role) const;
@@ -316,45 +348,43 @@ private:
      * @param[in] objectsBySlot Slot groups.
      * @param[in] standbyWorker Standby worker address.
      * @param[out] futures Submitted migrate tasks.
-     * @param[out] sameNodeRetryCounts Same-node retry counters by slot.
      */
     void SubmitL2CacheTasksBySlot(const std::map<uint32_t, std::vector<std::string>> &objectsBySlot,
-                                  const std::string &standbyWorker, std::vector<SlotMigrateFuture> &futures,
-                                  std::unordered_map<uint32_t, int> &sameNodeRetryCounts);
+                                  const std::string &standbyWorker, std::vector<SlotMigrateFuture> &futures);
 
     /**
      * @brief Try submit same-node retry for a slot that has entered the same-node retry flow.
      * @param[in] slot Slot id.
      * @param[in] result Migrate result.
      * @param[in] maxSameNodeRetryCount Max retry count on the same node.
-     * @param[in,out] sameNodeRetryCounts Same-node retry counters by slot.
+     * @param[in,out] sameNodeRetryCounts Same-node retry counters by slot and failed target.
      * @param[in,out] newFutures Newly generated futures.
      * @return true if handled in this method, false if caller should try redirect retry.
      */
     bool TrySubmitSameNodeRetryForL2Slot(uint32_t slot, const MigrateDataHandler::MigrateResult &result,
                                          int maxSameNodeRetryCount,
-                                         std::unordered_map<uint32_t, int> &sameNodeRetryCounts,
+                                         SlotRetryCounters &sameNodeRetryCounts,
                                          std::vector<SlotMigrateFuture> &newFutures);
 
     /**
      * @brief Try submit redirect retry for a fully failed slot.
      * @param[in] slot Slot id.
      * @param[in,out] result Migrate result.
-     * @param[in,out] sameNodeRetryCounts Same-node retry counters by slot.
+     * @param[in,out] sameNodeRetryCounts Same-node retry counters by slot and failed target.
      * @param[in,out] newFutures Newly generated futures.
      */
     void TrySubmitRedirectRetryForL2Slot(uint32_t slot, MigrateDataHandler::MigrateResult &result,
-                                         std::unordered_map<uint32_t, int> &sameNodeRetryCounts,
+                                         SlotRetryCounters &sameNodeRetryCounts,
                                          std::vector<SlotMigrateFuture> &newFutures);
 
     /**
      * @brief Process migrate futures for all slots until completion.
      * @param[in,out] futures Current futures.
      * @param[in] maxSameNodeRetryCount Max retry count on same node.
-     * @param[in,out] sameNodeRetryCounts Same-node retry counters by slot.
+     * @param[in,out] sameNodeRetryCounts Same-node retry counters by slot and failed target.
      */
     Status ProcessL2CacheSlotFutures(std::vector<SlotMigrateFuture> &futures, int maxSameNodeRetryCount,
-                                     std::unordered_map<uint32_t, int> &sameNodeRetryCounts);
+                                     SlotRetryCounters &sameNodeRetryCounts);
 
     MigrateType type_;
     const worker::MetadataRouteResolver &metadataRoute_;
@@ -374,6 +404,13 @@ private:
     std::unique_ptr<ThreadPool> threadPool_;
 
     std::shared_ptr<SelectionStrategy> strategy_;
+    // Persistent per-target selector for scale-down redirect retries: revisits of the same failed target escalate
+    // the selector stage (ScaleDownNodeSelector::UpdateForRedirect) and keep drain liveness on full targets. Only
+    // the thread that runs the migrate/retry loop touches this table; handler threads never see it.
+    std::map<std::string, std::shared_ptr<SelectionStrategy>> retryStrategies_;
+    // Consecutive failed redirect rounds per target, keyed like retryStrategies_; once a target exhausts its pin
+    // budget its keys escape to the address-order chain for one round. Same single-thread access model.
+    std::map<std::string, int> targetConsecutiveFailures_;
     std::unordered_set<ImmutableString> failedKeys_;
     std::unordered_set<ImmutableString> skippedKeys_;
     std::shared_ptr<MigrateProgress> progress_;

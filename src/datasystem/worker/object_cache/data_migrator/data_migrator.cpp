@@ -38,7 +38,9 @@ DS_DECLARE_bool(enable_transport_fallback);
 
 namespace datasystem {
 namespace object_cache {
+
 namespace {
+constexpr int K_MAX_PINNED_RETRY_ROUNDS = 4;
 constexpr auto TOPOLOGY_MIGRATION_RETRY_INTERVAL = std::chrono::milliseconds(100);
 constexpr int MIGRATION_RETRY_LOG_EVERY_N = 10;
 }
@@ -169,7 +171,11 @@ Status DataMigrator::Migrate(const std::vector<std::string> &objectKeys,
 
     PerfPoint point(PerfKey::WORKER_MIGRATE_TASK_SUBMIT);
     std::vector<std::future<MigrateDataHandler::MigrateResult>> futures;
-    auto grouped = metadataRoute_.GroupOwners(objectKeys);
+    // During a ScaleIn drain the committed owner of the leaving Worker's own keys still resolves to itself, so the
+    // redirect override (post-scale-in token owner) must decide the target; FindNextActiveMember below is only the
+    // fallback for groups without a redirect override.
+    auto grouped = type_ == MigrateType::SCALE_DOWN ? metadataRoute_.GroupMigrateTargets(objectKeys)
+                                                    : metadataRoute_.GroupOwners(objectKeys);
     AppendRouteFailures(grouped);
     auto &objKeysGrpByMaster = grouped.groups;
     INJECT_POINT("DataMigrator.GetMasterAddr", [&objKeysGrpByMaster, &objectKeys]() {
@@ -181,7 +187,7 @@ Status DataMigrator::Migrate(const std::vector<std::string> &objectKeys,
     LOG_IF_ERROR(GetStandbyWorker(standbyWorker), "[Migrate Data] Failed to select standby worker");
     for (const auto &[addr, objectKeys] : objKeysGrpByMaster) {
         auto workerAddr = addr;
-        if (workerAddr == localAddress_ && !standbyWorker.empty()) {
+        if ((workerAddr.Empty() || workerAddr == localAddress_) && !standbyWorker.empty()) {
             LOG_IF_ERROR(workerAddr.ParseString(standbyWorker), "[Migrate Data] Parse worker address failed");
             INJECT_POINT_NO_RETURN("DataMigrator.AllowLocalWorker",
                                    [this, &workerAddr]() { workerAddr = localAddress_; });
@@ -297,8 +303,8 @@ Status DataMigrator::MigrateL2CacheBySlot(const std::vector<std::string> &object
     LOG_IF_ERROR(GetStandbyWorker(standbyWorker), "[MigrateL2Cache] Failed to select standby worker");
 
     std::vector<SlotMigrateFuture> futures;
-    std::unordered_map<uint32_t, int> sameNodeRetryCounts;
-    SubmitL2CacheTasksBySlot(objectsBySlot, standbyWorker, futures, sameNodeRetryCounts);
+    SlotRetryCounters sameNodeRetryCounts;
+    SubmitL2CacheTasksBySlot(objectsBySlot, standbyWorker, futures);
     RETURN_IF_NOT_OK(ProcessL2CacheSlotFutures(futures, maxSameNodeRetryCount, sameNodeRetryCounts));
 
     LOG(INFO) << FormatString("[MigrateL2Cache] Finished");
@@ -324,44 +330,50 @@ std::map<uint32_t, std::vector<std::string>> DataMigrator::GroupL2CacheObjectsBy
 }
 
 void DataMigrator::SubmitL2CacheTasksBySlot(const std::map<uint32_t, std::vector<std::string>> &objectsBySlot,
-                                            const std::string &standbyWorker, std::vector<SlotMigrateFuture> &futures,
-                                            std::unordered_map<uint32_t, int> &sameNodeRetryCounts)
+                                            const std::string &standbyWorker, std::vector<SlotMigrateFuture> &futures)
 {
     for (const auto &[slot, objs] : objectsBySlot) {
-        HostPort currentTarget;
-        auto status = metadataRoute_.ResolveOwner(objs[0], currentTarget);
-        if (status.IsError() || currentTarget == localAddress_) {
-            status = currentTarget.ParseString(standbyWorker);
-            if (status.IsError()) {
-                LOG(ERROR) << "get target worker addr failed, status:" << status.ToString();
+        auto grouped = metadataRoute_.GroupMigrateTargets(objs);
+        AppendRouteFailures(grouped);
+        for (const auto &[addr, keys] : grouped.groups) {
+            HostPort currentTarget = addr;
+            if ((currentTarget.Empty() || currentTarget == localAddress_) && !standbyWorker.empty()) {
+                (void)currentTarget.ParseString(standbyWorker);
+            }
+            if (currentTarget.Empty() || currentTarget == localAddress_) {
+                LOG(ERROR) << FormatString("[MigrateL2Cache] Slot %u has no available standby target, drop %zu objects",
+                                           slot, keys.size());
+                failedKeys_.insert(keys.begin(), keys.end());
                 continue;
             }
-        }
 
-        auto strategy = std::make_shared<ScaleDownNodeSelector>(membership_, localAddress_);
-        LOG(INFO) << FormatString("[MigrateL2Cache] Slot %u (%zu objects) -> %s", slot, objs.size(),
-                                  currentTarget.ToString());
-        futures.emplace_back(
-            slot, MigrateToTargetNode(objs, currentTarget, strategy, { .isRetry = false, .slotId = slot }));
-        sameNodeRetryCounts[slot] = 0;
+            LOG(INFO) << FormatString("[MigrateL2Cache] Slot %u (%zu objects) -> %s", slot, keys.size(),
+                                      currentTarget.ToString());
+            futures.emplace_back(slot, MigrateToTargetNode(keys, currentTarget,
+                                                           std::make_shared<ScaleDownNodeSelector>(membership_,
+                                                                                                   localAddress_),
+                                                           { .isRetry = false, .slotId = slot }));
+        }
     }
 }
 
 bool DataMigrator::TrySubmitSameNodeRetryForL2Slot(uint32_t slot, const MigrateDataHandler::MigrateResult &result,
-                                                   int maxSameNodeRetryCount,
-                                                   std::unordered_map<uint32_t, int> &sameNodeRetryCounts,
+                                                   int maxSameNodeRetryCount, SlotRetryCounters &sameNodeRetryCounts,
                                                    std::vector<SlotMigrateFuture> &newFutures)
 {
-    const bool enteredSameNodeRetry = sameNodeRetryCounts[slot] > 0;
+    const auto retryKey = SlotRetryCounters::key_type{ slot, result.address };
+    const bool enteredSameNodeRetry = sameNodeRetryCounts[retryKey] > 0;
     if (result.successIds.empty() && !enteredSameNodeRetry) {
         return false;
     }
 
-    int retryCount = ++sameNodeRetryCounts[slot];
+    int retryCount = ++sameNodeRetryCounts[retryKey];
     if (retryCount > maxSameNodeRetryCount) {
-        LOG(WARNING) << FormatString("[MigrateL2Cache] Slot %u same-node failedIds retry exceeded max(%d), stop "
-                                     "retry on node %s",
-                                     slot, maxSameNodeRetryCount, result.address);
+        LOG(WARNING) << FormatString(
+            "[MigrateL2Cache] Slot %u same-node failedIds retry exceeded max(%d), stop retry on node %s and fail "
+            "%zu keys",
+            slot, maxSameNodeRetryCount, result.address.c_str(), result.failedIds.size());
+        failedKeys_.insert(result.failedIds.begin(), result.failedIds.end());
         return true;
     }
 
@@ -383,10 +395,10 @@ bool DataMigrator::TrySubmitSameNodeRetryForL2Slot(uint32_t slot, const MigrateD
 }
 
 void DataMigrator::TrySubmitRedirectRetryForL2Slot(uint32_t slot, MigrateDataHandler::MigrateResult &result,
-                                                   std::unordered_map<uint32_t, int> &sameNodeRetryCounts,
+                                                   SlotRetryCounters &sameNodeRetryCounts,
                                                    std::vector<SlotMigrateFuture> &newFutures)
 {
-    sameNodeRetryCounts[slot] = 0;
+    sameNodeRetryCounts[{ slot, result.address }] = 0;
     HostPort hostPort;
     Status rc = SelectRedirectTarget(result.address, 0, result.strategy, hostPort);
     if (rc.IsError()) {
@@ -402,7 +414,7 @@ void DataMigrator::TrySubmitRedirectRetryForL2Slot(uint32_t slot, MigrateDataHan
 }
 
 Status DataMigrator::ProcessL2CacheSlotFutures(std::vector<SlotMigrateFuture> &futures, int maxSameNodeRetryCount,
-                                               std::unordered_map<uint32_t, int> &sameNodeRetryCounts)
+                                               SlotRetryCounters &sameNodeRetryCounts)
 {
     while (!futures.empty()) {
         std::vector<SlotMigrateFuture> newFutures;
@@ -570,7 +582,7 @@ Status DataMigrator::HandleMigrateDataResult(const std::unordered_map<std::strin
             }
             retryWaitCompleted = true;
         }
-        newFutures.emplace_back(RedirectMigrateData(result, CalculateTotalSize(result.failedIds, objectSizes)));
+        RedirectMigrateData(result, CalculateTotalSize(result.failedIds, objectSizes), newFutures);
     }
     return Status::OK();
 }
@@ -599,20 +611,117 @@ Status DataMigrator::WaitBeforeRetry() const
     return Status::OK();
 }
 
-std::future<MigrateDataHandler::MigrateResult> DataMigrator::RedirectMigrateData(
-    MigrateDataHandler::MigrateResult &result, uint64_t totalSize)
+void DataMigrator::RedirectMigrateData(MigrateDataHandler::MigrateResult &result, uint64_t totalSize,
+                                       std::vector<std::future<MigrateDataHandler::MigrateResult>> &newFutures)
 {
     INJECT_POINT_NO_RETURN("DataMigrator.RedirectMigrationSubmitted");
     const auto &originAddr = result.address;
     const auto &needRetryIds = result.failedIds;
     auto &strategy = result.strategy;
     std::vector<std::string> objectKeys{ needRetryIds.begin(), needRetryIds.end() };
+    if (RedirectByMigrateTargets(originAddr, totalSize, objectKeys, result.status, newFutures)) {
+        return;
+    }
     HostPort hostPort;
     auto rc = SelectRedirectTarget(originAddr, totalSize, strategy, hostPort);
     if (rc.IsError()) {
-        return ConstructFailedFuture(hostPort.ToString(), rc, objectKeys, strategy);
+        newFutures.emplace_back(ConstructFailedFuture(hostPort.ToString(), rc, objectKeys, strategy));
+        return;
     }
-    return MigrateDataByNode(hostPort, objectKeys, strategy);
+    newFutures.emplace_back(MigrateDataByNode(hostPort, objectKeys, strategy));
+}
+
+bool DataMigrator::RedirectByMigrateTargets(const std::string &originAddr, uint64_t totalSize,
+                                            const std::vector<std::string> &objectKeys, const Status &lastFailure,
+                                            std::vector<std::future<MigrateDataHandler::MigrateResult>> &newFutures)
+{
+    if (type_ != MigrateType::SCALE_DOWN || objectKeys.empty()) {
+        return false;
+    }
+    auto grouped = metadataRoute_.GroupMigrateTargets(objectKeys);
+    if (grouped.groups.empty()) {
+        return false;
+    }
+    std::string standbyWorker;
+    if (grouped.groups.count(localAddress_) > 0 && GetStandbyWorker(standbyWorker).IsError()) {
+        return false;
+    }
+    std::vector<std::string> escapeKeys;
+    for (const auto &[addr, keys] : grouped.groups) {
+        DispatchPinnedRetryGroup(originAddr, lastFailure, standbyWorker, addr, keys, escapeKeys, newFutures);
+    }
+    std::vector<std::string> fallbackKeys;
+    fallbackKeys.reserve(escapeKeys.size() + grouped.failures.size());
+    fallbackKeys.insert(fallbackKeys.end(), escapeKeys.begin(), escapeKeys.end());
+    for (const auto &failure : grouped.failures) {
+        fallbackKeys.emplace_back(failure.first);
+    }
+    DispatchEscapeKeys(originAddr, totalSize, fallbackKeys, newFutures);
+    return true;
+}
+
+void DataMigrator::DispatchPinnedRetryGroup(const std::string &originAddr, const Status &lastFailure,
+                                            const std::string &standbyWorker, const HostPort &addr,
+                                            const std::vector<std::string> &keys,
+                                            std::vector<std::string> &escapeKeys,
+                                            std::vector<std::future<MigrateDataHandler::MigrateResult>> &newFutures)
+{
+    HostPort target = addr;
+    if (target == localAddress_) {
+        (void)target.ParseString(standbyWorker);
+    }
+    // An unacceptable target (leaving, failed, or transport-isolated) can never accept this batch, so its keys
+    // escape to the address-order chain instead of being pinned to the group's committed owner round after round.
+    if (CheckTargetAdmission(target, DataPlaneAdmissionRole::NEW_MIGRATION_TARGET).IsError()) {
+        escapeKeys.insert(escapeKeys.end(), keys.begin(), keys.end());
+        (void)retryStrategies_.erase(target.ToString());
+        (void)targetConsecutiveFailures_.erase(target.ToString());
+        return;
+    }
+    // The selector persists per target across retry rounds; every revisit of the same failed target escalates
+    // its stage, so a takeover target that reports low space cannot stall the drain forever.
+    auto &targetStrategy = retryStrategies_[target.ToString()];
+    if (!targetStrategy) {
+        targetStrategy = GetStrategyByType();
+    }
+    targetStrategy->UpdateForRedirect(originAddr);
+    // A probe that passes the resource gate but keeps failing to send never clears the stage ladder; the
+    // per-target budget bounds such rounds and hands the keys to the address-order chain once exhausted.
+    const int failedRounds = ++targetConsecutiveFailures_[target.ToString()];
+    const bool exhaustedBudget = failedRounds > K_MAX_PINNED_RETRY_ROUNDS;
+    if (target.ToString() == originAddr || exhaustedBudget) {
+        auto selector = std::dynamic_pointer_cast<ScaleDownNodeSelector>(targetStrategy);
+        LOG(WARNING) << FormatString(
+            "[Migrate Data] Redirect retry re-dispatches %zu keys to %s, memory stage=%d, pinned rounds=%d, "
+            "last failure: %s",
+            keys.size(), target.ToString().c_str(),
+            selector != nullptr ? static_cast<int>(selector->CurrentStage()) : -1, failedRounds,
+            lastFailure.ToString().c_str());
+    }
+    if (exhaustedBudget) {
+        targetConsecutiveFailures_[target.ToString()] = 0;
+        escapeKeys.insert(escapeKeys.end(), keys.begin(), keys.end());
+        return;
+    }
+    newFutures.emplace_back(MigrateDataByNode(target, keys, targetStrategy));
+}
+
+void DataMigrator::DispatchEscapeKeys(const std::string &originAddr, uint64_t totalSize,
+                                      const std::vector<std::string> &fallbackKeys,
+                                      std::vector<std::future<MigrateDataHandler::MigrateResult>> &newFutures)
+{
+    if (fallbackKeys.empty()) {
+        return;
+    }
+    // A fresh selector keeps this one-shot address-order escape from inheriting the pinned selector's stage.
+    auto fallbackStrategy = GetStrategyByType();
+    HostPort hostPort;
+    auto rc = SelectRedirectTarget(originAddr, totalSize, fallbackStrategy, hostPort);
+    if (rc.IsError()) {
+        newFutures.emplace_back(ConstructFailedFuture(hostPort.ToString(), rc, fallbackKeys, fallbackStrategy));
+        return;
+    }
+    newFutures.emplace_back(MigrateDataByNode(hostPort, fallbackKeys, fallbackStrategy));
 }
 
 Status DataMigrator::SelectRedirectTarget(const std::string &originAddr, uint64_t totalSize,
