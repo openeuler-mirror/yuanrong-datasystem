@@ -16,7 +16,7 @@
   - `tests/perf`
   - `tests/st`
 - Last verified against source:
-  - `2026-09-12`
+  - `2026-09-14`
 - Related design docs:
   - `.repo_context/modules/infra/observability/diagnosis-and-operations.md`
   - `.repo_context/modules/infra/logging/design.md`
@@ -103,6 +103,8 @@
   default verbosity. `scope=request` identifies request-wide validation; `objectIndex` identifies an object in a batch.
 - Phase names ending in `Total` include their nested work. In particular, `encodeLocalHitTotal` includes
   `urmaWritePayloadTotal`; use the narrowest matching phase as the owner and do not add nested durations together.
+- For SHM local hits, `phase=addShmReference` measures the `AddShmUnit` call. It is nested in `encodeLocalHitTotal`, so
+  correlate the phases by trace ID instead of adding their durations.
 - Correlate these phase logs with `QueryAndGet done` by trace ID. The latter remains the request summary for
   preprocess, local read, metadata, delivery, transport, hit/miss count and final status.
 

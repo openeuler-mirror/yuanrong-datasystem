@@ -108,6 +108,7 @@ constexpr int64_t DEGRADED_ADMISSION_TTL_MS = 120'000;
 // FLAGS_standby_drain_data_plane_quiet_ms is a dynamic uint32 with no non-zero lower bound, so
 // IsEndpointDataPlaneQuiet() must discount this bound instead of assuming it is negligible.
 constexpr int64_t DATA_PLANE_USE_REFRESH_INTERVAL_MS = 100;
+constexpr size_t SHM_MAINTENANCE_THREAD_COUNT = 4;
 
 int64_t SteadyNowMs()
 {
@@ -257,7 +258,10 @@ DataPlaneManager::DataPlaneManager(std::shared_ptr<Signature> signature, uint64_
       ubHealthWakeHook_(std::move(ubHealthWakeHook)),
       ubPortHealthCapabilityCheck_(std::move(ubPortHealthCapabilityCheck)),
       enableClientDirectPipelineH2D_(enableClientDirectPipelineH2D), pipelineThreadNum_(pipelineThreadNum),
-      releasePool_(std::move(releasePool)), hostMemoryPinManager_(std::move(hostMemoryPinManager))
+      releasePool_(std::move(releasePool)),
+      shmMaintenancePool_(
+          std::make_shared<ThreadPool>(0, SHM_MAINTENANCE_THREAD_COUNT, "shm_maintenance")),
+      hostMemoryPinManager_(std::move(hostMemoryPinManager))
 {
     ubHealthCallbackState_ = std::make_shared<UbHealthCallbackState>(this);
 }
@@ -1468,6 +1472,7 @@ void DataPlaneManager::Shutdown()
     for (auto &entry : entries) {
         entry->ResetDataPlane();
     }
+    shmMaintenancePool_.reset();
 }
 
 Status DataPlaneManager::BuildUbTransporter(const HostPort &workerAddr,
@@ -1502,7 +1507,8 @@ Status DataPlaneManager::BuildTransporter(const HostPort &workerAddr, TransportH
         CHECK_FAIL_RETURN_STATUS(rpcClient != nullptr && rpcClient->IsAlive(), K_RPC_UNAVAILABLE,
                                  "SHM_CANDIDATE worker RPC client is unavailable");
         RETURN_RUNTIME_ERROR_IF_NULL(hostMemoryPinManager_);
-        out = std::make_shared<ShmTransporter>(workerAddr, rpcClient, releasePool_, hostMemoryPinManager_);
+        out = std::make_shared<ShmTransporter>(workerAddr, rpcClient, releasePool_, hostMemoryPinManager_,
+                                               shmMaintenancePool_);
         return Status::OK();
     }
     if (hint != TransportHint::TCP_ONLY) {

@@ -377,7 +377,7 @@ Status WorkerQueryAndGetImpl::EncodeLocalHit(RequestState &state, size_t index,
             result.mutable_data_result();
         }
     } else {
-        EncodeShm(request.data_request().shm(), params, *result.mutable_data_result(), state, shmBytes);
+        EncodeShm(request.data_request().shm(), index, params, *result.mutable_data_result(), state, shmBytes);
         encoded = true;
     }
     // A complete local object remains readable in phase two when the inline buffer is too small.
@@ -474,13 +474,17 @@ Status WorkerQueryAndGetImpl::EncodeUb(const QueryAndGetUbDataReqPb &request, si
     return Status::OK();
 }
 
-void WorkerQueryAndGetImpl::EncodeShm(const QueryAndGetShmDataReqPb &request, const GetObjEntryParams &params,
-                                      QueryAndGetDataResultPb &result, RequestState &state, uint64_t &shmBytes) const
+void WorkerQueryAndGetImpl::EncodeShm(const QueryAndGetShmDataReqPb &request, size_t index,
+                                      const GetObjEntryParams &params, QueryAndGetDataResultPb &result,
+                                      RequestState &state, uint64_t &shmBytes) const
 {
     const auto clientId = ClientKey::Intern(request.client_id());
+    const auto addReferenceStartUs = GetSteadyTimeUs();
     auto shmUnit = params.shmUnit;
     memoryRefTable_->AddShmUnit(clientId, shmUnit,
                                 GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime());
+    LogQueryAndGetObjectPhase("addShmReference", index, params.dataSize, GetSteadyTimeUs() - addReferenceStartUs,
+                              Status::OK());
     state.addedShmRefs.emplace_back(params.shmUnit->GetId());
     auto *info = result.mutable_shm_info();
     info->set_store_fd(params.shmUnit->GetFd());

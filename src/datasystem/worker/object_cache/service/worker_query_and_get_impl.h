@@ -121,7 +121,7 @@ private:
                      RequestState &state, bool &encoded) const;
     Status EncodeUb(const QueryAndGetUbDataReqPb &request, size_t index, const GetObjEntryParams &params,
                     QueryAndGetResultPb &result, bool &encoded) const;
-    void EncodeShm(const QueryAndGetShmDataReqPb &request, const GetObjEntryParams &params,
+    void EncodeShm(const QueryAndGetShmDataReqPb &request, size_t index, const GetObjEntryParams &params,
                    QueryAndGetDataResultPb &result, RequestState &state, uint64_t &shmBytes) const;
     Status FillMissLocations(RequestState &state) const;
 

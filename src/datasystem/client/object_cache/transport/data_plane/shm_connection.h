@@ -76,6 +76,7 @@ class ShmSession final : public std::enable_shared_from_this<ShmSession> {
 public:
     static Status Create(const HostPort &workerAddr, const std::shared_ptr<WorkerRpcClient> &rpcClient,
                          const TransportRequestContext &context, std::weak_ptr<ThreadPool> releasePool,
+                         std::weak_ptr<ThreadPool> maintenancePool,
                          std::shared_ptr<std::atomic<bool>> scaleInDraining,
                          const std::shared_ptr<HostMemoryPinManager> &hostMemoryPinManager,
                          std::shared_ptr<ShmSession> &session,
@@ -124,7 +125,7 @@ private:
     ShmSession(HostPort workerAddr, std::shared_ptr<WorkerRpcClient> rpcClient,
                std::shared_ptr<ShmFdChannel> fdChannel, std::shared_ptr<MmapManager> mmapManager,
                std::string clientId, std::string workerStartId, uint32_t lockId,
-               std::weak_ptr<ThreadPool> releasePool,
+               std::weak_ptr<ThreadPool> releasePool, std::weak_ptr<ThreadPool> maintenancePool,
                TransportRequestContext auth, bool supportMultiRefCount,
                std::shared_ptr<std::atomic<bool>> scaleInDraining);
 
@@ -138,6 +139,8 @@ private:
     Status StartMaintenance();
 
     Status ScheduleMaintenance();
+
+    void SubmitMaintenance();
 
     void RunMaintenance();
 
@@ -153,6 +156,7 @@ private:
     std::string workerStartId_;
     uint32_t lockId_;
     std::weak_ptr<ThreadPool> releasePool_;
+    std::weak_ptr<ThreadPool> maintenancePool_;
     mutable bthread::Mutex authMutex_;
     TransportRequestContext auth_;
     bthread::Mutex refMutex_;
@@ -169,7 +173,8 @@ class ShmConnection final : public IDataPlaneConnection {
 public:
     ShmConnection(HostPort workerAddr, std::shared_ptr<WorkerRpcClient> rpcClient,
                   std::weak_ptr<ThreadPool> releasePool,
-                  std::shared_ptr<HostMemoryPinManager> hostMemoryPinManager = nullptr);
+                  std::shared_ptr<HostMemoryPinManager> hostMemoryPinManager = nullptr,
+                  std::weak_ptr<ThreadPool> maintenancePool = {});
     ~ShmConnection() override;
 
     Status Establish(const HostPort &workerAddr) override;
@@ -211,6 +216,7 @@ private:
     HostPort workerAddr_;
     std::shared_ptr<WorkerRpcClient> rpcClient_;
     std::weak_ptr<ThreadPool> releasePool_;
+    std::weak_ptr<ThreadPool> maintenancePool_;
     std::shared_ptr<HostMemoryPinManager> hostMemoryPinManager_;
     mutable bthread::Mutex mutex_;
     bthread::ConditionVariable cv_;

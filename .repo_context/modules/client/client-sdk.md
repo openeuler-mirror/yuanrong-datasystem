@@ -99,6 +99,8 @@
   - Routed same-host Get uses one endpoint-scoped SHM session per target Worker. Object metadata, reference acquisition,
     and `DecreaseReference` use the client-facing `WorkerOCService`; only fd-session bootstrap and control
     (`GetSocketPath`, `RegisterClient`, `GetClientFd`, `DisconnectClient`) use `WorkerService`.
+    Periodic session maintenance uses a dedicated client data-plane thread pool and never shares the asynchronous
+    reference-release queue, so a release backlog cannot delay Worker liveness updates.
     Voluntary scale-down, restart, heartbeat failure, and other Worker cleanup paths retain the normal five-millisecond
     CUDA host-memory unregister interval. Normal Object/KV Client shutdown sets a Client-wide exit flag before SHM
     transport cleanup, so every entry owned by that Client skips the unregister interval even when a Buffer delays entry
@@ -124,7 +126,7 @@
     the Worker `shmId`, so routed payload buffers are freed locally while the `shmId` remains available for Worker
     reference release. Active sessions schedule a bounded
     `WorkerService.Heartbeat` through the process
-    `TimerQueue` and existing release pool; this maintains the Worker liveness timestamp, removes expired fds from the
+    `TimerQueue` and dedicated maintenance pool; this maintains the Worker liveness timestamp, removes expired fds from the
     session mmap table while live Buffers retain their mmap entry, and acknowledges those fds on the next heartbeat so
     the Worker can reuse them. Routed SHM Buffers use the target session's `RegisterClientRsp.lock_id` for their metadata
     latch rather than the SDK's initially bound Worker lock id. Transport selection/admission, session, fd-channel,

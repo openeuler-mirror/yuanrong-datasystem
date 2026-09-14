@@ -1784,12 +1784,13 @@ TEST(ShmConnectionTest, VoluntaryScaleDownDoesNotReconnectSharedMemory)
     rpcClient->shmHeartbeatVoluntaryScaleDown = true;
     rpcClient->shmHeartbeatClientRemoved = true;
     auto releasePool = std::make_shared<ThreadPool>(0, 1, "scale_in_disconnect_test");
-    ShmConnection connection(MakeAddress(9001), rpcClient, releasePool);
+    auto maintenancePool = std::make_shared<ThreadPool>(0, 1, "scale_in_maintenance_test");
+    ShmConnection connection(MakeAddress(9001), rpcClient, releasePool, nullptr, maintenancePool);
     auto fdChannel = std::make_shared<ShmFdChannel>(rpcClient, ShmFd(), false, "endpoint-client");
     auto mmapManager = std::make_shared<MmapManager>(fdChannel, false, std::make_shared<HostMemoryPinManager>());
     auto session = std::shared_ptr<ShmSession>(new ShmSession(
         MakeAddress(9001), rpcClient, fdChannel, mmapManager, "endpoint-client", "worker-start", 1,
-        releasePool, MakeRequestContext(), true, connection.scaleInDraining_));
+        releasePool, maintenancePool, MakeRequestContext(), true, connection.scaleInDraining_));
     rpcClient->beforeShmHeartbeatReturn = [session] {
         session->Close(false);
     };
@@ -1804,8 +1805,59 @@ TEST(ShmConnectionTest, VoluntaryScaleDownDoesNotReconnectSharedMemory)
     EXPECT_EQ(rpcClient->shmHeartbeatInvokeCount, 1);
     EXPECT_EQ(rpcClient->getSocketPathInvokeCount, 0);
     EXPECT_EQ(acquired, nullptr);
+    maintenancePool.reset();
     releasePool.reset();
     EXPECT_EQ(rpcClient->shmDisconnectInvokeCount.load(), 1);
+}
+
+TEST(ShmConnectionTest, MaintenanceHeartbeatIsIndependentFromReferenceReleasePool)
+{
+    constexpr auto waitTimeout = std::chrono::seconds(1);
+    auto rpcClient = std::make_shared<AuthBoundaryWorkerRpcClient>(MakeSignature());
+    auto releasePool = std::make_shared<ThreadPool>(1, 1, "blocked_release_test");
+    auto maintenancePool = std::make_shared<ThreadPool>(1, 1, "independent_maintenance_test");
+    std::promise<void> releaseTaskStarted;
+    auto releaseTaskStartedFuture = releaseTaskStarted.get_future();
+    std::promise<void> unblockReleaseTask;
+    auto unblockReleaseTaskFuture = unblockReleaseTask.get_future().share();
+    releasePool->Execute([&releaseTaskStarted, unblockReleaseTaskFuture] {
+        releaseTaskStarted.set_value();
+        unblockReleaseTaskFuture.wait();
+    });
+    if (releaseTaskStartedFuture.wait_for(waitTimeout) != std::future_status::ready) {
+        unblockReleaseTask.set_value();
+        FAIL() << "Reference-release blocker did not start";
+        return;
+    }
+
+    auto fdChannel = std::make_shared<ShmFdChannel>(rpcClient, ShmFd(), false, "endpoint-client");
+    auto mmapManager = std::make_shared<MmapManager>(fdChannel, false, std::make_shared<HostMemoryPinManager>());
+    auto scaleInDraining = std::make_shared<std::atomic<bool>>(false);
+    auto session = std::shared_ptr<ShmSession>(new ShmSession(
+        MakeAddress(9001), rpcClient, fdChannel, mmapManager, "endpoint-client", "worker-start", 1,
+        releasePool, maintenancePool, MakeRequestContext(), true, scaleInDraining));
+    std::promise<void> heartbeatInvoked;
+    auto heartbeatInvokedFuture = heartbeatInvoked.get_future();
+    rpcClient->beforeShmHeartbeatReturn = [&heartbeatInvoked] { heartbeatInvoked.set_value(); };
+
+    session->SubmitMaintenance();
+
+    EXPECT_EQ(heartbeatInvokedFuture.wait_for(waitTimeout), std::future_status::ready);
+    EXPECT_EQ(rpcClient->shmHeartbeatInvokeCount, 1);
+    rpcClient->beforeShmHeartbeatReturn = nullptr;
+    session->Close(false);
+    unblockReleaseTask.set_value();
+}
+
+TEST(DataPlaneManagerTest, OwnsDedicatedShmMaintenancePool)
+{
+    auto releasePool = std::make_shared<ThreadPool>(0, 1, "release_pool_identity_test");
+    DataPlaneManager manager(MakeSignature(), 0, {}, nullptr, false, 1, releasePool, false, false,
+                             std::make_shared<HostMemoryPinManager>());
+
+    ASSERT_NE(manager.shmMaintenancePool_, nullptr);
+    EXPECT_EQ(manager.releasePool_.lock(), releasePool);
+    EXPECT_NE(manager.shmMaintenancePool_, releasePool);
 }
 
 TEST(ShmConnectionTest, TryAcquireDoesNotWaitForConcurrentConnectionAttempt)
