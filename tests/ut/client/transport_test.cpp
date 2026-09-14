@@ -3005,6 +3005,32 @@ TEST(DataPlaneManagerTest, ReconcileRemovesOnlyWorkersAbsentFromSnapshot)
     EXPECT_EQ(manager.transportBuildCount, 4);
 }
 
+// Reproduces the 17:48:02 jingpai failure shape: a worker re-joins with the SAME ring version
+// (hostId-only update or same-version republish), so master metadata already returns locations
+// pointing at it while the client admission snapshot never re-admitted it. A stamped location
+// (version > 0) carries the master's authority, so equal versions must be admitted too.
+TEST(DataPlaneManagerTest, SameVersionRejoinIsAdmittedByStampedLocation)
+{
+    constexpr uint64_t version = 10;
+    FakeDataPlaneManager manager;
+    const HostPort rejoined = MakeAddress(24);
+    const HostPort other = MakeAddress(23);
+    WorkerSnapshot snapshot;
+    snapshot.ringVersion = version;
+    snapshot.remoteTransportAddrs.push_back(other);
+    ASSERT_TRUE(manager.UpdateWorkerSnapshot(snapshot).IsOk());
+
+    std::shared_ptr<IDataTransporter> transporter;
+    // Same-version stamped location: the observed production gap, now admitted.
+    ASSERT_TRUE(manager.GetOrCreateForDataLocation(rejoined, TransportHint::TCP_ONLY, version, transporter).IsOk());
+    EXPECT_NE(transporter, nullptr);
+    // Newer-version stamped location: still admitted.
+    ASSERT_TRUE(manager.GetOrCreateForDataLocation(rejoined, TransportHint::TCP_ONLY, version + 1, transporter)
+                    .IsOk());
+    EXPECT_EQ(manager.rpcBuildCount, 1);
+    EXPECT_EQ(manager.transportBuildCount, 1);
+}
+
 TEST(DataPlaneManagerTest, PublishedSnapshotRejectsAbsentWorkersBeforeCleanup)
 {
     FakeDataPlaneManager manager;
@@ -3063,7 +3089,9 @@ TEST(DataPlaneManagerTest, OldLocationSnapshotDoesNotAdmitMissingWorker)
     ASSERT_TRUE(manager.UpdateWorkerSnapshot(snapshot).IsOk());
 
     std::shared_ptr<IDataTransporter> transporter;
-    for (uint64_t version : { legacyTopologyVersion, oldTopologyVersion, clientTopologyVersion }) {
+    // Unstamped (0) and strictly older stamped locations are stale and stay rejected; an
+    // equal-version stamp is covered by SameVersionRejoinIsAdmittedByStampedLocation.
+    for (uint64_t version : { legacyTopologyVersion, oldTopologyVersion }) {
         SCOPED_TRACE(version);
         EXPECT_EQ(manager.GetOrCreateForDataLocation(newWorker, TransportHint::TCP_ONLY, version, transporter)
                       .GetCode(),
@@ -3092,18 +3120,34 @@ TEST(DataPlaneManagerTest, SnapshotAdvanceRevokesNewLocationAdmissionDuringBuild
         EXPECT_TRUE(manager.UpdateWorkerSnapshot(advanced).IsOk());
     };
 
+    // The snapshot advances to the location's stamp mid-build while the ring still excludes
+    // newWorker. The equal-version master stamp keeps admission authority, so the bypass holds
+    // and the freshly built transporter is kept (P2 semantics; the stamp means the master
+    // validated this location against that same topology version).
     std::shared_ptr<IDataTransporter> transporter;
-    EXPECT_EQ(manager.GetOrCreateForDataLocation(newWorker, TransportHint::TCP_ONLY, locationTopologyVersion,
-                                                transporter)
-                  .GetCode(),
-              K_NOT_READY);
-    EXPECT_EQ(transporter, nullptr);
+    ASSERT_TRUE(manager.GetOrCreateForDataLocation(newWorker, TransportHint::TCP_ONLY, locationTopologyVersion,
+                                                  transporter)
+                    .IsOk());
+    EXPECT_NE(transporter, nullptr);
     EXPECT_EQ(manager.rpcBuildCount, 1);
     EXPECT_EQ(manager.transportBuildCount, 1);
     ASSERT_NE(manager.lastTransporter, nullptr);
     EXPECT_EQ(manager.lastTransporter->closeCount, 0);
-    DataPlaneManager::EntryMap::const_accessor accessor;
-    EXPECT_FALSE(manager.entries_.find(accessor, newWorker.ToString()));
+    {
+        DataPlaneManager::EntryMap::const_accessor accessor;
+        EXPECT_TRUE(manager.entries_.find(accessor, newWorker.ToString()));
+    }
+
+    // A later reconciled ring without the worker still cleans the entry up once the stamped
+    // location stops being re-admitted (version regression from the live ring's perspective).
+    manager.ReconcileWithSnapshot([&] {
+        WorkerSnapshot caught = snapshot;
+        caught.ringVersion = locationTopologyVersion;
+        return caught;
+    }());
+    EXPECT_EQ(manager.lastTransporter->closeCount, 1);
+    DataPlaneManager::EntryMap::const_accessor cleaned;
+    EXPECT_FALSE(manager.entries_.find(cleaned, newWorker.ToString()));
 }
 
 TEST(DataPlaneManagerTest, OlderReconcilePreservesLocationAdmittedEndpointUntilSnapshotCatchesUp)
@@ -3137,10 +3181,12 @@ TEST(DataPlaneManagerTest, OlderReconcilePreservesLocationAdmittedEndpointUntilS
     ASSERT_TRUE(manager.UpdateWorkerSnapshot(snapshot).IsOk());
     manager.ReconcileWithSnapshot(snapshot);
     EXPECT_EQ(admittedTransporter->closeCount, 1);
-    EXPECT_EQ(manager.GetOrCreateForDataLocation(newWorker, TransportHint::TCP_ONLY, locationTopologyVersion,
-                                                transporter)
-                  .GetCode(),
-              K_NOT_READY);
+    // The reconciled ring still does not contain newWorker, but the location keeps its master
+    // stamp of this same version, so admission trusts the stamp and rebuilds the transporter.
+    ASSERT_TRUE(manager.GetOrCreateForDataLocation(newWorker, TransportHint::TCP_ONLY, locationTopologyVersion,
+                                                  transporter)
+                    .IsOk());
+    EXPECT_EQ(manager.transportBuildCount, 2);
 }
 
 TEST(DataPlaneManagerTest, SupersededSnapshotCannotRemoveCurrentWorkers)
@@ -4844,6 +4890,15 @@ TEST(ObjectClientTransportTest, FirstStaleLocationRetryUsesZeroBackoff)
     EXPECT_EQ(SelectLocationRefreshBackoffMs(false, firstRetry, staleBackoffMs), immediateBackoffMs);
     EXPECT_EQ(SelectLocationRefreshBackoffMs(false, secondRetry, staleBackoffMs), staleBackoffMs);
     EXPECT_EQ(SelectLocationRefreshBackoffMs(true, firstRetry, drainingBackoffMs), drainingBackoffMs);
+}
+
+TEST(ObjectClientTransportTest, StaleBackoffIsClampedToRemainingDeadline)
+{
+    // A 20ms backoff under a 10ms-scale budget must shrink so at least one more retry round fits.
+    EXPECT_EQ(ClampBackoffToDeadline(20, 8'000), 4);
+    EXPECT_EQ(ClampBackoffToDeadline(20, 40'000), 20);
+    EXPECT_EQ(ClampBackoffToDeadline(20, 0), 20);
+    EXPECT_EQ(ClampBackoffToDeadline(2, 3'000), 1);
 }
 
 TEST(ObjectClientTransportTest, StaleLocationSlowReadDeadlineReturnsPublicDeadline)
