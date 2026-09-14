@@ -102,7 +102,8 @@ private:
                                                   const CoordinatorRaftEventCallbacks &)> createNode;
         std::function<Status(NodeHandle &, RaftMetadataState)> startNode;
         std::function<std::unique_ptr<MembershipHandle>(const CoordinatorMembershipOptions &, NodeHandle &,
-                                                        const std::shared_ptr<ICoordinatorDiscovery> &)>
+                                                        const std::shared_ptr<ICoordinatorDiscovery> &,
+                                                        CoordinatorMembershipManager::PeerMetadataProbe)>
             createMembership;
         std::function<Status(const NodeHandle &, CoordinatorLeadershipSnapshot &)> getLeadershipSnapshot;
         std::function<Status(MembershipHandle &)> startMembership;
@@ -134,6 +135,8 @@ private:
                                        std::chrono::steady_clock::time_point now);
     Status BuildLocalObservationLocked(std::chrono::steady_clock::time_point now,
                                        RaftBootstrapObservationPb &observation) const;
+    Status ProbePeerMetadata(const std::string &peer, RaftMetadataState &metadataState);
+    void NotifyPeerMissingRaftData(const std::string &peer);
     std::vector<std::string> BuildActivePeersLocked(std::chrono::steady_clock::time_point now) const;
     bool HasCompleteConsistentViewLocked(const std::vector<std::string> &activePeers) const;
     bool HasMatchingFrozenPlansLocked(const std::vector<std::string> &activePeers) const;
@@ -160,6 +163,9 @@ private:
     std::condition_variable bootstrapCv_;
     RaftBootstrapState bootstrapState_;
     Status bootstrapStatus_;
+    RaftMetadataState localMetadataState_{ RaftMetadataState::UNKNOWN };
+    // Protected by bootstrapMutex_; observing an existing cluster must survive observation TTL expiry.
+    bool observedExistingCluster_{ false };
     bool bootstrapStopRequested_{ false };
     bool missingLocalDataWarningLogged_{ false };
     size_t bootstrapRetryWaiters_{ 0 };

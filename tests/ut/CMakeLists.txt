@@ -87,6 +87,7 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/coordinator/coordinator_stor
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/coordinator/coordinator_server_options_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/coordinator/topology_control_perf_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/coordinator/coordinator_election_manager_test\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/coordinator/coordinator_membership_manager_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/rdma/event_bthread_wait_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/rdma/urma_port_status_provider_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/worker/data_worker_options_test\.cpp$)
@@ -283,6 +284,9 @@ add_ds_ut_executable(coordinator_server_options_test
 add_ds_ut_executable(coordinator_election_manager_test
         common/coordinator/coordinator_election_manager_test.cpp
         $<TARGET_OBJECTS:_ds_ut_main_obj>)
+add_ds_ut_executable(coordinator_membership_manager_test
+        common/coordinator/coordinator_membership_manager_test.cpp
+        $<TARGET_OBJECTS:_ds_ut_main_obj>)
 add_ds_ut_executable(data_worker_options_test
         worker/data_worker_options_test.cpp
         $<TARGET_OBJECTS:_ds_ut_main_obj>
@@ -437,6 +441,13 @@ target_link_libraries(coordinator_election_manager_test PRIVATE
         GTest::gmock
         common_log
         common_util)
+target_link_libraries(coordinator_membership_manager_test PRIVATE
+        coordinator_membership_manager
+        coordinator_raft_node
+        GTest::gtest
+        GTest::gmock
+        common_log
+        common_util)
 target_link_libraries(data_worker_options_test PRIVATE
         ${DS_UT_HEAVY_LINK_START}
         ${DS_UT_DEPEND_LIBS}
@@ -481,6 +492,7 @@ add_datasystem_test(oc_migrate_metadata_manager_test TIMEOUT 8 TEST_ENVIRONMENTS
 add_datasystem_test(ds_ut_slot_store TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_server_options_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_election_manager_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+add_datasystem_test(coordinator_membership_manager_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(data_worker_options_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(event_bthread_wait_ut TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(cluster_topology_contract_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})

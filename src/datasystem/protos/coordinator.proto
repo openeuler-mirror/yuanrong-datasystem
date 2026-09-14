@@ -261,6 +261,13 @@ message RaftBootstrapObservationPb {
   repeated string peers = 3;
   RaftBootstrapObservationPhasePb phase = 4;
   repeated string committed_peers = 5;
+  // UNKNOWN is also the default for legacy peers that do not publish current metadata state.
+  enum MetadataState {
+    UNKNOWN = 0;
+    ABSENT = 1;
+    VALID = 2;
+  }
+  MetadataState metadata_state = 6;
 }
 
 service CoordinatorService {

@@ -51,6 +51,8 @@
 #include "datasystem/utils/coordinator_discovery.h"
 #include "datasystem/utils/status.h"
 
+#include <braft/storage.h>
+
 namespace datasystem::st {
 namespace {
 using Deadline = std::chrono::steady_clock::time_point;
@@ -788,6 +790,44 @@ protected:
                && !error;
     }
 
+    void AssertPersistedRemoveAdd(size_t stoppedOwner, size_t replacedFollower) const
+    {
+        ASSERT_EQ(runtimes_[stoppedOwner].active, nullptr);
+        braft::Configuration original;
+        braft::Configuration reduced;
+        for (const auto index : BaselineIndexes()) {
+            const braft::PeerId peer(endpoints_[index]);
+            original.add_peer(peer);
+            if (index != replacedFollower) {
+                reduced.add_peer(peer);
+            }
+        }
+        // Inspect only after the owner joins: opening local storage also performs recovery.
+        braft::ConfigurationManager configurations;
+        std::unique_ptr<braft::LogStorage> storage(
+            braft::LogStorage::create("local://" + dataRoots_[stoppedOwner] + "/log"));
+        ASSERT_NE(storage, nullptr);
+        ASSERT_EQ(storage->init(&configurations), 0);
+        const std::array<braft::Configuration, 3> expected{ original, reduced, original };
+        size_t nextConfiguration = 0;
+        int64_t previousIndex = 0;
+        for (auto index = storage->first_log_index(); index <= storage->last_log_index(); ++index) {
+            braft::ConfigurationEntry entry;
+            configurations.get(index, &entry);
+            if (entry.id.index <= previousIndex || !entry.stable()
+                || !entry.conf.equals(expected[nextConfiguration])) {
+                continue;
+            }
+            previousIndex = entry.id.index;
+            if (++nextConfiguration == expected.size()) {
+                break;
+            }
+        }
+        ASSERT_EQ(nextConfiguration, expected.size())
+            << "Missing stable configuration log sequence original -> removed " << endpoints_[replacedFollower]
+            << " -> restored; matched=" << nextConfiguration << ", last matched index=" << previousIndex;
+    }
+
     bool StopAndJoin(size_t index, Deadline deadline, std::string &error)
     {
         error.clear();
@@ -1370,6 +1410,129 @@ TEST_F(CoordinatorRuntimeElectionTest, PersistedFollowerRestartMaintainsUniqueSe
     EXPECT_TRUE(BusinessGatesMatchLeader(allIndexes, recovered.leaderIndex, caseDeadline));
     for (const auto index : allIndexes) {
         EXPECT_TRUE(HasCommittedConfiguration(index, baselineEndpoints, caseDeadline));
+    }
+    EXPECT_LT(std::chrono::steady_clock::now(), caseDeadline);
+}
+
+TEST_F(CoordinatorRuntimeElectionTest, EmptyFollowerSameEndpointRecoversThroughCommittedRemoveAdd)
+{
+    const auto caseDeadline = std::chrono::steady_clock::now() + kCaseBudget;
+    const auto allIndexes = BaselineIndexes();
+    const auto baselineEndpoints = BaselineEndpointSet();
+    LeaderObservation initial;
+    ASSERT_NO_FATAL_FAILURE(StartBaselineCluster(caseDeadline, initial));
+    ASSERT_TRUE(WaitUntil(
+        [this, &allIndexes, &baselineEndpoints, caseDeadline] {
+            return std::all_of(allIndexes.begin(), allIndexes.end(),
+                               [this, &baselineEndpoints, caseDeadline](size_t index) {
+                                   return HasCommittedConfiguration(index, baselineEndpoints, caseDeadline);
+                               });
+        },
+        caseDeadline))
+        << FailureDiagnostics("stable configuration before data loss", allIndexes);
+    const auto followers = FollowersOf(initial);
+    const auto replacedFollower = followers.front();
+    std::string stopError;
+    ASSERT_TRUE(StopAndJoin(replacedFollower, caseDeadline, stopError)) << stopError;
+    ASSERT_TRUE(HasPersistedData(replacedFollower));
+    std::error_code error;
+    ASSERT_GT(std::filesystem::remove_all(dataRoots_[replacedFollower], error), 0U);
+    ASSERT_FALSE(error) << error.message();
+    ASSERT_FALSE(std::filesystem::exists(dataRoots_[replacedFollower]));
+    ASSERT_TRUE(HasPersistedData(initial.leaderIndex));
+    ASSERT_TRUE(HasPersistedData(followers.back()));
+
+    auto restartProvider = std::make_shared<CoordinatorDiscoveryMock>();
+    restartProvider->ShareRegistrationStateFrom(*discovery_);
+    ASSERT_EQ(LaunchRuntime(replacedFollower, kBaselineCoordinatorCount, restartProvider), 2U);
+    LeaderObservation recovered;
+    ASSERT_TRUE(WaitUntil(
+        [this, &allIndexes, &baselineEndpoints, &initial, &recovered, caseDeadline] {
+            return AllLifecyclesRunning(allIndexes)
+                   && ObserveUniqueServingLeader(allIndexes, recovered, caseDeadline, initial.endpoint)
+                   && std::all_of(allIndexes.begin(), allIndexes.end(),
+                                  [this, &baselineEndpoints, caseDeadline](size_t index) {
+                                      return HasCommittedConfiguration(index, baselineEndpoints, caseDeadline);
+                                  });
+        },
+        caseDeadline))
+        << FailureDiagnostics("same-endpoint empty follower recovery", allIndexes);
+    EXPECT_GT(restartProvider->DiscoveryQueryCount(), 0U);
+    EXPECT_TRUE(HasPersistedData(replacedFollower));
+    EXPECT_EQ(discovery_->CallbackEvents(endpoints_[replacedFollower]),
+              (std::vector<std::string>{ "g1:register", "g1:unregister", "g2:register" }));
+    ASSERT_TRUE(BusinessGatesMatchLeader(allIndexes, initial.leaderIndex, caseDeadline));
+    ASSERT_TRUE(StopAndJoin(initial.leaderIndex, caseDeadline, stopError)) << stopError;
+    ASSERT_NO_FATAL_FAILURE(AssertPersistedRemoveAdd(initial.leaderIndex, replacedFollower));
+    EXPECT_LT(std::chrono::steady_clock::now(), caseDeadline);
+}
+
+TEST_F(CoordinatorRuntimeElectionTest, TwoEmptySameEndpointFollowersCannotBootstrapWithoutOriginalQuorum)
+{
+    const auto caseDeadline = std::chrono::steady_clock::now() + kCaseBudget;
+    const auto allIndexes = BaselineIndexes();
+    const auto baselineEndpoints = BaselineEndpointSet();
+    LeaderObservation initial;
+    ASSERT_NO_FATAL_FAILURE(StartBaselineCluster(caseDeadline, initial));
+    const auto followers = FollowersOf(initial);
+    ASSERT_TRUE(WaitUntil(
+        [this, &allIndexes, &baselineEndpoints, caseDeadline] {
+            return std::all_of(allIndexes.begin(), allIndexes.end(),
+                               [this, &baselineEndpoints, caseDeadline](size_t index) {
+                                   return HasCommittedConfiguration(index, baselineEndpoints, caseDeadline);
+                               });
+        },
+        caseDeadline))
+        << FailureDiagnostics("stable configuration before majority data loss", allIndexes);
+    std::string stopError;
+    for (const auto index : followers) {
+        ASSERT_TRUE(StopAndJoin(index, caseDeadline, stopError)) << stopError;
+    }
+    ASSERT_TRUE(WaitUntil(
+        [this, &initial, caseDeadline] {
+            return !runtimes_[initial.leaderIndex].active->runtime->IsLeader()
+                   && !IsBusinessServing(CallBusinessRpc(initial.leaderIndex, caseDeadline));
+        },
+        caseDeadline))
+        << FailureDiagnostics("original quorum lost", { initial.leaderIndex });
+    for (const auto index : followers) {
+        ASSERT_TRUE(HasPersistedData(index));
+        std::error_code error;
+        ASSERT_GT(std::filesystem::remove_all(dataRoots_[index], error), 0U);
+        ASSERT_FALSE(error) << error.message();
+        ASSERT_FALSE(std::filesystem::exists(dataRoots_[index]));
+    }
+    ASSERT_TRUE(HasPersistedData(initial.leaderIndex));
+    for (const auto index : followers) {
+        ASSERT_EQ(LaunchRuntime(index), 2U);
+    }
+    ASSERT_TRUE(WaitUntil(
+        [this, &followers, caseDeadline] {
+            return std::all_of(followers.begin(), followers.end(), [this, caseDeadline](size_t index) {
+                return discovery_->RegisterCount(endpoints_[index], 2) == 1
+                       && CallBootstrapRpc(index, caseDeadline).status.IsOk();
+            });
+        },
+        caseDeadline));
+    const auto isolationDeadline = std::chrono::steady_clock::now() + kBootstrapIsolationWindow;
+    ASSERT_LT(isolationDeadline, caseDeadline);
+    while (std::chrono::steady_clock::now() < isolationDeadline) {
+        ASSERT_TRUE(AllLifecyclesRunning(allIndexes)) << FailureDiagnostics("majority data loss", allIndexes);
+        for (const auto index : allIndexes) {
+            ASSERT_FALSE(runtimes_[index].active->runtime->IsLeader());
+            ASSERT_FALSE(IsBusinessServing(CallBusinessRpc(index, caseDeadline)));
+            const auto bootstrap = CallBootstrapRpc(index, caseDeadline);
+            ASSERT_TRUE(bootstrap.status.IsOk()) << bootstrap.status.ToString();
+            if (index == initial.leaderIndex) {
+                EXPECT_EQ(std::vector<std::string>(bootstrap.response.committed_peers().begin(),
+                                                  bootstrap.response.committed_peers().end()),
+                          baselineEndpoints);
+            } else {
+                ASSERT_EQ(bootstrap.response.committed_peers_size(), 0)
+                    << FailureDiagnostics("empty node formed a configuration without quorum", followers);
+            }
+        }
+        std::this_thread::sleep_until(std::min(isolationDeadline, std::chrono::steady_clock::now() + kPollInterval));
     }
     EXPECT_LT(std::chrono::steady_clock::now(), caseDeadline);
 }

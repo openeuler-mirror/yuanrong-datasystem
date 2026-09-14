@@ -40,7 +40,6 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
-#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/coordinator/raft/coordinator_raft_peer.h"
 
 namespace datasystem::coordinator {
@@ -435,6 +434,9 @@ CoordinatorElectionManager::Dependencies CoordinatorElectionManager::MakeProduct
                 cached = BrpcChannelFactory::Create(config);
             }
             channel = cached;
+            if (request.phase() == RAFT_BOOTSTRAP_STARTED) {
+                bootstrapChannels->byPeer.erase(peer);
+            }
         }
         CHECK_FAIL_RETURN_STATUS(channel != nullptr, K_RPC_UNAVAILABLE,
                                  "Failed to create Coordinator bootstrap observation channel");
@@ -460,9 +462,11 @@ CoordinatorElectionManager::Dependencies CoordinatorElectionManager::MakeProduct
         return handle.node->Start(metadataState);
     };
     dependencies.createMembership = [](const CoordinatorMembershipOptions &options, NodeHandle &node,
-                                       const std::shared_ptr<ICoordinatorDiscovery> &discovery) {
+                                       const std::shared_ptr<ICoordinatorDiscovery> &discovery,
+                                       CoordinatorMembershipManager::PeerMetadataProbe probePeerMetadata) {
         auto handle = std::make_unique<MembershipHandle>();
-        handle->membership = std::make_unique<CoordinatorMembershipManager>(options, *node.node, discovery);
+        handle->membership = std::make_unique<CoordinatorMembershipManager>(
+            options, *node.node, discovery, std::move(probePeerMetadata));
         return handle;
     };
     dependencies.getLeadershipSnapshot = [](const NodeHandle &handle, CoordinatorLeadershipSnapshot &snapshot) {
@@ -573,6 +577,10 @@ void CoordinatorElectionManager::RunBootstrapControl() noexcept
     });
     RaftMetadataState metadataState = RaftMetadataState::UNKNOWN;
     auto status = dependencies_.probeLocalMetadata(options_.raftFlags.dataDir, metadataState);
+    {
+        std::lock_guard<std::mutex> lock(bootstrapMutex_);
+        localMetadataState_ = status.IsOk() ? metadataState : RaftMetadataState::UNKNOWN;
+    }
     if (status.IsError()) {
         RecordBootstrapTerminalStatus(std::move(status));
         return;
@@ -593,8 +601,7 @@ void CoordinatorElectionManager::RunBootstrapControl() noexcept
     LOG(INFO) << "COORDINATOR_RAFT_METADATA_ABSENT current_addr=" << options_.raftFlags.localAddress
               << " data_dir=" << options_.raftFlags.dataDir
               << " metadata_state=ABSENT; no local Raft persistence found. If this is a restart, check the data "
-                 "directory and volume mount; restarting an existing member without its Raft data is not a "
-                 "supported recovery path.";
+                 "directory and volume mount; an existing member must wait for committed exclusion before rejoining.";
     std::chrono::steady_clock::time_point nextWarningAt{};
     while (!IsBootstrapStopRequested()) {
         std::vector<std::string> normalizedCandidates;
@@ -781,10 +788,8 @@ Status CoordinatorElectionManager::TryBuildCommittedStartPlanLocked(const std::v
                          << " confirmations=" << vote.confirmations
                          << " required_quorum=" << QuorumSize(vote.peers.size())
                          << "; a peer reports this address as an existing member, but local Raft persistence "
-                            "is absent. Possible data loss or incorrect data directory/volume mount; in-place "
-                            "recovery is unsupported and log catch-up may stall. Check the original persistent "
-                            "volume before retrying; if data is lost, isolate this instance and replace it with a "
-                            "new endpoint through membership management only when the cluster has quorum.";
+                            "is absent. Check the data directory and volume mount. Automatic same-address recovery "
+                            "requires a healthy quorum and committed exclusion before rejoining.";
             missingLocalDataWarningLogged_ = true;
         }
         if (vote.confirmations < QuorumSize(vote.peers.size())) {
@@ -800,14 +805,13 @@ Status CoordinatorElectionManager::TryBuildCommittedStartPlanLocked(const std::v
     if (quorumConfirmedPeers != nullptr) {
         if (std::binary_search(quorumConfirmedPeers->begin(), quorumConfirmedPeers->end(),
                                options_.raftFlags.localAddress)) {
-            startPlan = BootstrapPlan{ *quorumConfirmedPeers };
-        } else {
-            startPlan = WaitingToJoinPlan{};
+            return Status(K_NOT_READY, "Coordinator missing local Raft data waits for committed exclusion");
         }
+        startPlan = WaitingToJoinPlan{};
         decided = true;
         return Status::OK();
     }
-    CHECK_FAIL_RETURN_STATUS(!observedCommittedConfiguration, K_NOT_READY,
+    CHECK_FAIL_RETURN_STATUS(!observedCommittedConfiguration && !observedExistingCluster_, K_NOT_READY,
                              "Coordinator bootstrap observed committed configuration without member quorum");
     return Status::OK();
 }
@@ -864,6 +868,9 @@ Status CoordinatorElectionManager::ExchangeBootstrapObservation(const RaftBootst
         RETURN_IF_NOT_OK(RecordPeerObservationLocked(request, dependencies_.now()));
         RETURN_IF_NOT_OK(BuildLocalObservationLocked(dependencies_.now(), response));
     }
+    if (request.metadata_state() == RaftBootstrapObservationPb::ABSENT) {
+        NotifyPeerMissingRaftData(request.sender_peer());
+    }
     return Status::OK();
 }
 
@@ -877,6 +884,12 @@ Status CoordinatorElectionManager::RecordPeerObservationLocked(const RaftBootstr
 
     RaftBootstrapPhase phase;
     RETURN_IF_NOT_OK(ParsePeerObservationPhase(observation, sender, peers, phase));
+    CHECK_FAIL_RETURN_STATUS(observation.metadata_state() >= RaftBootstrapObservationPb::UNKNOWN
+                                 && observation.metadata_state() <= RaftBootstrapObservationPb::VALID,
+                             K_INVALID, "Coordinator recovery observation has an unknown metadata state");
+    if (!committedPeers.empty()) {
+        observedExistingCluster_ = true;
+    }
     bootstrapState_.knownPeers[sender] =
         RaftBootstrapState::ReceivedObservation{ std::move(peers), std::move(committedPeers), phase, now };
     return Status::OK();
@@ -960,6 +973,11 @@ Status CoordinatorElectionManager::BuildLocalObservationLocked(std::chrono::stea
     observation.Clear();
     observation.set_sender_peer(options_.raftFlags.localAddress);
     observation.set_expected_member_count(options_.membershipOptions.expectedMemberCount);
+    observation.set_metadata_state(localMetadataState_ == RaftMetadataState::ABSENT
+                                       ? RaftBootstrapObservationPb::ABSENT
+                                       : localMetadataState_ == RaftMetadataState::VALID
+                                             ? RaftBootstrapObservationPb::VALID
+                                             : RaftBootstrapObservationPb::UNKNOWN);
     RaftBootstrapObservationPhasePb phase = RAFT_BOOTSTRAP_OBSERVING;
     const std::vector<std::string> *peers = nullptr;
     auto observedPeers = BuildActivePeersLocked(now);
@@ -996,6 +1014,41 @@ Status CoordinatorElectionManager::BuildLocalObservationLocked(std::chrono::stea
         observation.add_committed_peers(peer);
     }
     return Status::OK();
+}
+
+Status CoordinatorElectionManager::ProbePeerMetadata(const std::string &peer, RaftMetadataState &metadataState)
+{
+    CHECK_FAIL_RETURN_STATUS(peer != options_.raftFlags.localAddress, K_INVALID,
+                             "Coordinator recovery probe cannot target the local leader");
+    RaftBootstrapObservationPb request;
+    {
+        std::lock_guard<std::mutex> lock(bootstrapMutex_);
+        CHECK_FAIL_RETURN_STATUS(!bootstrapStopRequested_, K_SHUTTING_DOWN, "Coordinator recovery probe stopped");
+        RETURN_IF_NOT_OK(BuildLocalObservationLocked(dependencies_.now(), request));
+    }
+    RaftBootstrapObservationPb response;
+    RETURN_IF_NOT_OK(dependencies_.exchangeObservation(
+        peer, static_cast<int32_t>(kBootstrapRpcTimeout.count()), request, response));
+    CHECK_FAIL_RETURN_STATUS(response.sender_peer() == peer, K_INVALID,
+                             "Coordinator recovery response sender does not match probe target");
+    std::lock_guard<std::mutex> lock(bootstrapMutex_);
+    RETURN_IF_NOT_OK(RecordPeerObservationLocked(response, dependencies_.now()));
+    metadataState = response.metadata_state() == RaftBootstrapObservationPb::ABSENT
+                        ? RaftMetadataState::ABSENT
+                        : response.metadata_state() == RaftBootstrapObservationPb::VALID ? RaftMetadataState::VALID
+                                                                                        : RaftMetadataState::UNKNOWN;
+    return Status::OK();
+}
+
+void CoordinatorElectionManager::NotifyPeerMissingRaftData(const std::string &peer)
+{
+    std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    CoordinatorLeadershipSnapshot snapshot;
+    if (state_ == LifecycleState::RUNNING && node_ != nullptr
+        && membership_ != nullptr && membership_->membership != nullptr
+        && dependencies_.getLeadershipSnapshot(*node_, snapshot).IsOk() && snapshot.isLeader) {
+        membership_->membership->NotifyPeerMissingRaftData(peer);
+    }
 }
 
 std::vector<std::string> CoordinatorElectionManager::BuildActivePeersLocked(
@@ -1089,6 +1142,7 @@ CoordinatorRaftEventCallbacks CoordinatorElectionManager::BuildManagedCallbacks(
         {
             std::lock_guard<std::mutex> lock(bootstrapMutex_);
             bootstrapState_.committedPeers = normalizedPeers;
+            observedExistingCluster_ = true;
         }
         bootstrapCv_.notify_all();
         if (callback) {
@@ -1154,6 +1208,8 @@ Status CoordinatorElectionManager::StartOwnedComponents(RaftStartPlan startPlan,
         terminal = bootstrapState_.phase == RaftBootstrapPhase::TERMINAL;
         if (terminal) {
             terminalStatus = bootstrapStatus_;
+        } else {
+            localMetadataState_ = RaftMetadataState::VALID;
         }
     }
     bootstrapCv_.notify_all();
@@ -1172,7 +1228,9 @@ Status CoordinatorElectionManager::StartOwnedComponents(RaftStartPlan startPlan,
 
     std::unique_ptr<MembershipHandle> membership;
     if (!membershipDisabled) {
-        membership = dependencies_.createMembership(options_.membershipOptions, *node, discovery_);
+        membership = dependencies_.createMembership(
+            options_.membershipOptions, *node, discovery_,
+            [this](const std::string &peer, RaftMetadataState &state) { return ProbePeerMetadata(peer, state); });
         if (membership == nullptr) {
             status = Status(K_RUNTIME_ERROR, "Coordinator election manager failed to create membership manager");
         }
@@ -1252,6 +1310,7 @@ void CoordinatorElectionManager::RecordBootstrapTerminalStatus(Status status)
         if (bootstrapState_.phase != RaftBootstrapPhase::TERMINAL) {
             bootstrapStatus_ = Status(statusCode, "");
             bootstrapState_.phase = RaftBootstrapPhase::TERMINAL;
+            localMetadataState_ = RaftMetadataState::UNKNOWN;
             localPeer = options_.raftFlags.localAddress;
             firstTerminal = true;
         }

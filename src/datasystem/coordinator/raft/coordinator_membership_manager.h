@@ -32,6 +32,7 @@
 #include <thread>
 #include <vector>
 
+#include "datasystem/coordinator/raft/coordinator_raft_types.h"
 #include "datasystem/utils/service_discovery.h"
 #include "datasystem/utils/status.h"
 
@@ -54,9 +55,12 @@ struct CoordinatorMembershipOptions {
 
 class CoordinatorMembershipManager final {
 public:
+    using PeerMetadataProbe = std::function<Status(const std::string &, RaftMetadataState &)>;
+
     // raftNode is non-owning and must outlive this Manager's Shutdown; discovery is owned by the Manager.
     CoordinatorMembershipManager(CoordinatorMembershipOptions options, CoordinatorRaftNode &raftNode,
-                                 std::shared_ptr<ICoordinatorDiscovery> discovery);
+                                 std::shared_ptr<ICoordinatorDiscovery> discovery,
+                                 PeerMetadataProbe probePeerMetadata = {});
     ~CoordinatorMembershipManager() noexcept;
 
     CoordinatorMembershipManager(const CoordinatorMembershipManager &) = delete;
@@ -64,10 +68,13 @@ public:
 
     Status Start();
     Status Shutdown();
+    void NotifyPeerMissingRaftData(const std::string &peer);
 
 private:
     enum class LifecycleState : uint8_t { CONSTRUCTED, RUNNING, STOPPING, STOPPED };
-    enum class MutationKind : uint8_t { ADD_VACANCY, ADD_REPLACEMENT, REMOVE_FAILED, ROLLBACK_CANDIDATE };
+    enum class MutationKind : uint8_t {
+        ADD_VACANCY, ADD_REPLACEMENT, REMOVE_FAILED, ROLLBACK_CANDIDATE, REMOVE_MISSING_DATA
+    };
 
     using TimePoint = std::chrono::steady_clock::time_point;
     using MembershipOperationCallback = std::function<void(Status)>;
@@ -76,6 +83,7 @@ private:
         std::function<Status(CoordinatorRaftMembershipStatus &)> getStatus;
         std::function<Status(const std::string &, MembershipOperationCallback)> addPeer;
         std::function<Status(const std::string &, MembershipOperationCallback)> removePeer;
+        PeerMetadataProbe probePeerMetadata;
     };
     using NowFunction = std::function<TimePoint()>;
 
@@ -105,7 +113,8 @@ private:
     bool RefreshLeaderObservation(const CoordinatorRaftMembershipStatus &status);
     HealthSummary RefreshFollowerHealth(const CoordinatorRaftMembershipStatus &status, TimePoint now);
     void CleanupPolicyState(const CoordinatorRaftMembershipStatus &status);
-    bool HasKnownQuorum(const CoordinatorRaftMembershipStatus &status, const HealthSummary &health) const;
+    bool HasKnownQuorum(const CoordinatorRaftMembershipStatus &status, const HealthSummary &health,
+                        const std::string &excludedPeer = {}) const;
     bool TryAdmitDiscovery();
     Status SelectCandidate(const CoordinatorRaftMembershipStatus &status, TimePoint now, std::string &candidate);
     void ReconcileReplacementIntent(const CoordinatorRaftMembershipStatus &status, const HealthSummary &health);
@@ -130,6 +139,7 @@ private:
     std::condition_variable lifecycleCv_;
     LifecycleState state_{ LifecycleState::CONSTRUCTED };
     std::unique_ptr<Thread> thread_;
+    std::set<std::string> pendingMissingDataPeers_;
     // Identifies the owned reconciliation thread even while thread_ is moved for join; protected by lifecycleMutex_.
     std::thread::id reconciliationThreadId_{};
 

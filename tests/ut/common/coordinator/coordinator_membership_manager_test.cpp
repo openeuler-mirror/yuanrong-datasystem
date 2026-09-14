@@ -55,6 +55,10 @@ constexpr std::chrono::milliseconds kZeroDuration{ 0 };
 constexpr std::chrono::milliseconds kNegativeDuration{ -1 };
 constexpr std::chrono::seconds kLongHealthCheckInterval{ 5 };
 constexpr std::chrono::seconds kLongMemberFailureGrace{ 10 };
+constexpr std::chrono::seconds kNotificationHealthCheckInterval{ 1 };
+constexpr std::chrono::seconds kNotificationMemberFailureGrace{ 2 };
+constexpr std::chrono::milliseconds kIdleConfirmationTimeout{ 100 };
+constexpr std::chrono::milliseconds kNotificationWakeDeadline{ 500 };
 constexpr std::chrono::seconds kLifecycleDeadline{ 2 };
 constexpr std::chrono::milliseconds kManualClockStart{ 1'000 };
 constexpr int kSuspectedFailureErrors = kCoordinatorFollowerFailureErrorThreshold + 1;
@@ -171,6 +175,7 @@ public:
     using GetStatusAction = std::function<Status(CoordinatorRaftMembershipStatus &, int)>;
     using PeerAction = std::function<Status(const std::string &,
                                             const CoordinatorMembershipManager::MembershipOperationCallback &)>;
+    using MetadataProbeAction = std::function<Status(const std::string &, RaftMetadataState &, int)>;
 
     CoordinatorMembershipManager::Dependencies Make()
     {
@@ -184,7 +189,10 @@ public:
             [this](const std::string &peer,
                    const CoordinatorMembershipManager::MembershipOperationCallback &callback) {
                 return RemovePeer(peer, callback);
-            }
+            },
+            [this](const std::string &peer, RaftMetadataState &metadataState) {
+                return ProbePeerMetadata(peer, metadataState);
+            },
         };
     }
 
@@ -216,6 +224,12 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex_);
         removeSubmissionResult_ = std::move(result);
+    }
+
+    void SetMetadataProbeAction(MetadataProbeAction action)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        metadataProbeAction_ = std::move(action);
     }
 
     void SetAddPeerAction(PeerAction action)
@@ -255,6 +269,12 @@ public:
     {
         std::unique_lock<std::mutex> lock(mutex_);
         return callsCv_.wait_until(lock, deadline, [this, expectedCalls] { return addPeerCalls_ >= expectedCalls; });
+    }
+
+    bool WaitForStatusCalls(int expectedCalls, TimePoint deadline)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return callsCv_.wait_until(lock, deadline, [this, expectedCalls] { return getStatusCalls_ >= expectedCalls; });
     }
 
     int GetStatusCalls() const
@@ -347,12 +367,29 @@ private:
         return removeSubmissionResult_;
     }
 
+    Status ProbePeerMetadata(const std::string &peer, RaftMetadataState &metadataState)
+    {
+        MetadataProbeAction action;
+        int callNumber;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            action = metadataProbeAction_;
+            callNumber = ++metadataProbeCalls_;
+        }
+        if (!action) {
+            metadataState = RaftMetadataState::UNKNOWN;
+            return Status::OK();
+        }
+        return action(peer, metadataState, callNumber);
+    }
+
     mutable std::mutex mutex_;
     std::condition_variable callsCv_;
     CoordinatorRaftMembershipStatus status_;
     Status getStatusResult_;
     GetStatusAction getStatusAction_;
     PeerAction addPeerAction_;
+    MetadataProbeAction metadataProbeAction_;
     Status addSubmissionResult_;
     Status removeSubmissionResult_;
     CoordinatorMembershipManager::MembershipOperationCallback addCallback_;
@@ -362,6 +399,7 @@ private:
     int getStatusCalls_{ 0 };
     int addPeerCalls_{ 0 };
     int removePeerCalls_{ 0 };
+    int metadataProbeCalls_{ 0 };
     bool hasInFlightMembershipOperation_{ false };
     bool firstGetStatusSignaled_{ false };
     std::promise<void> firstGetStatus_;
@@ -447,6 +485,241 @@ void ExpectReconcileOk(CoordinatorMembershipManager &manager)
 {
     const auto status = manager.ReconcileOnce();
     EXPECT_TRUE(status.IsOk()) << status.ToString();
+}
+
+TEST(CoordinatorMembershipManagerTest, MissingDataRemovalExcludesTargetFromBothQuorums)
+{
+    for (const bool otherHealthy : { false, true }) {
+        ManualNow now;
+        ThreadSafeMembershipDependencies dependencies;
+        dependencies.SetStatus(LeaderStatus({ kPeer1, kPeer2, kPeer3 },
+                                            { Follower(kPeer2, true, 0), Follower(kPeer3, otherHealthy, 0) }));
+        dependencies.SetMetadataProbeAction([](const std::string &peer, RaftMetadataState &state, int) {
+            EXPECT_EQ(peer, kPeer2);
+            state = RaftMetadataState::ABSENT;
+            return Status::OK();
+        });
+        auto discovery = std::make_shared<ThreadSafeCoordinatorDiscovery>();
+        auto manager = MakeManager(ValidOptions(), dependencies, discovery, now);
+        manager.state_ = CoordinatorMembershipManager::LifecycleState::RUNNING;
+        manager.NotifyPeerMissingRaftData(kPeer2);
+        ExpectReconcileOk(manager);
+        EXPECT_EQ(dependencies.RemovePeerCalls(), otherHealthy ? 1 : 0);
+        EXPECT_EQ(dependencies.AddPeerCalls(), 0);
+    }
+}
+
+TEST(CoordinatorMembershipManagerTest, LiveValidOrLegacyUnknownCannotAuthorizeMissingDataRemoval)
+{
+    for (const auto currentState : { RaftMetadataState::VALID, RaftMetadataState::UNKNOWN }) {
+        ManualNow now;
+        ThreadSafeMembershipDependencies dependencies;
+        dependencies.SetStatus(HealthyFullStatus());
+        dependencies.SetMetadataProbeAction([currentState](const std::string &, RaftMetadataState &state, int) {
+            state = currentState;
+            return Status::OK();
+        });
+        auto discovery = std::make_shared<ThreadSafeCoordinatorDiscovery>();
+        auto manager = MakeManager(ValidOptions(), dependencies, discovery, now);
+        manager.state_ = CoordinatorMembershipManager::LifecycleState::RUNNING;
+        manager.NotifyPeerMissingRaftData(kPeer2);
+        ExpectReconcileOk(manager);
+        EXPECT_EQ(dependencies.RemovePeerCalls(), 0);
+        EXPECT_TRUE(manager.pendingMissingDataPeers_.empty());
+    }
+}
+
+TEST(CoordinatorMembershipManagerTest, MissingDataRemovalRevalidatesTermAndConfigurationAfterLiveProbe)
+{
+    for (const bool changedTerm : { false, true }) {
+        SCOPED_TRACE(changedTerm);
+        ManualNow now;
+        ThreadSafeMembershipDependencies dependencies;
+        dependencies.SetStatus(HealthyFullStatus());
+        dependencies.SetMetadataProbeAction([&](const std::string &peer, RaftMetadataState &state, int) {
+            EXPECT_EQ(peer, kPeer2);
+            state = RaftMetadataState::ABSENT;
+            auto status = HealthyFullStatus();
+            if (changedTerm) {
+                status.term = kNextTerm;
+            } else {
+                ++status.configurationIndex;
+            }
+            dependencies.SetStatus(std::move(status));
+            return Status::OK();
+        });
+        auto discovery = std::make_shared<ThreadSafeCoordinatorDiscovery>();
+        auto manager = MakeManager(ValidOptions(), dependencies, discovery, now);
+        manager.state_ = CoordinatorMembershipManager::LifecycleState::RUNNING;
+        manager.NotifyPeerMissingRaftData(kPeer2);
+
+        EXPECT_EQ(manager.ReconcileOnce().GetCode(), K_TRY_AGAIN);
+        EXPECT_EQ(dependencies.RemovePeerCalls(), 0);
+        EXPECT_EQ(dependencies.AddPeerCalls(), 0);
+    }
+}
+
+TEST(CoordinatorMembershipManagerTest, MissingDataRemovalRevalidatesNoInflightOperationAfterLiveProbe)
+{
+    ManualNow now;
+    ThreadSafeMembershipDependencies dependencies;
+    dependencies.SetStatus(HealthyFullStatus());
+    dependencies.SetMetadataProbeAction([&dependencies](const std::string &, RaftMetadataState &state, int) {
+        state = RaftMetadataState::ABSENT;
+        dependencies.SetInFlightMembershipOperation(true);
+        return Status::OK();
+    });
+    auto discovery = std::make_shared<ThreadSafeCoordinatorDiscovery>();
+    auto manager = MakeManager(ValidOptions(), dependencies, discovery, now);
+    manager.state_ = CoordinatorMembershipManager::LifecycleState::RUNNING;
+    manager.NotifyPeerMissingRaftData(kPeer2);
+
+    EXPECT_EQ(manager.ReconcileOnce().GetCode(), K_TRY_AGAIN);
+    EXPECT_EQ(dependencies.RemovePeerCalls(), 0);
+}
+
+TEST(CoordinatorMembershipManagerTest, MissingDataNotificationsAreBoundedAndDeduplicated)
+{
+    ManualNow now;
+    ThreadSafeMembershipDependencies dependencies;
+    auto discovery = std::make_shared<ThreadSafeCoordinatorDiscovery>();
+    auto manager = MakeManager(ValidOptions(), dependencies, discovery, now);
+    manager.NotifyPeerMissingRaftData(kPeer1);
+    EXPECT_TRUE(manager.pendingMissingDataPeers_.empty());
+    manager.state_ = CoordinatorMembershipManager::LifecycleState::RUNNING;
+    manager.NotifyPeerMissingRaftData(kPeer1);
+    manager.NotifyPeerMissingRaftData(kPeer1);
+    manager.NotifyPeerMissingRaftData(kPeer2);
+    manager.NotifyPeerMissingRaftData(kPeer3);
+    manager.NotifyPeerMissingRaftData(kCandidate4);
+    EXPECT_EQ(manager.pendingMissingDataPeers_,
+              (std::set<std::string>{ kPeer1, kPeer2, kPeer3 }));
+}
+
+TEST(CoordinatorMembershipManagerTest, FullMembershipPurgesNonmemberHintsSoMissingMemberCanBeQueued)
+{
+    ManualNow now;
+    ThreadSafeMembershipDependencies dependencies;
+    dependencies.SetStatus(HealthyFullStatus());
+    auto discovery = std::make_shared<ThreadSafeCoordinatorDiscovery>();
+    auto manager = MakeManager(ValidOptions(), dependencies, discovery, now);
+    manager.state_ = CoordinatorMembershipManager::LifecycleState::RUNNING;
+    manager.NotifyPeerMissingRaftData(kCandidate4);
+    manager.NotifyPeerMissingRaftData(kCandidate5);
+    manager.NotifyPeerMissingRaftData(kMalformedCandidate);
+    ASSERT_EQ(manager.pendingMissingDataPeers_.size(), kExpectedMemberCount);
+
+    ExpectReconcileOk(manager);
+    EXPECT_TRUE(manager.pendingMissingDataPeers_.empty());
+    manager.NotifyPeerMissingRaftData(kPeer2);
+    EXPECT_EQ(manager.pendingMissingDataPeers_, (std::set<std::string>{ kPeer2 }));
+}
+
+TEST(CoordinatorMembershipManagerTest, FailedMissingDataProbeDoesNotStarveLaterPendingPeer)
+{
+    ManualNow now;
+    ThreadSafeMembershipDependencies dependencies;
+    dependencies.SetStatus(HealthyFullStatus());
+    std::vector<std::string> probedPeers;
+    dependencies.SetMetadataProbeAction([&probedPeers](const std::string &peer, RaftMetadataState &state, int) {
+        probedPeers.emplace_back(peer);
+        if (peer == kPeer2) {
+            return Status(K_RPC_UNAVAILABLE, "first missing-data peer is unreachable");
+        }
+        state = RaftMetadataState::ABSENT;
+        return Status::OK();
+    });
+    auto discovery = std::make_shared<ThreadSafeCoordinatorDiscovery>();
+    auto manager = MakeManager(ValidOptions(), dependencies, discovery, now);
+    manager.state_ = CoordinatorMembershipManager::LifecycleState::RUNNING;
+    manager.NotifyPeerMissingRaftData(kPeer2);
+    manager.NotifyPeerMissingRaftData(kPeer3);
+
+    ExpectReconcileOk(manager);
+    EXPECT_EQ(probedPeers, (std::vector<std::string>{ kPeer2 }));
+    EXPECT_EQ(manager.pendingMissingDataPeers_, (std::set<std::string>{ kPeer3 }));
+    now.Advance(kDiscoveryRetryInterval);
+    ExpectReconcileOk(manager);
+    EXPECT_EQ(probedPeers, (std::vector<std::string>{ kPeer2, kPeer3 }));
+    EXPECT_EQ(dependencies.LastRemovedPeer(), kPeer3);
+}
+
+TEST(CoordinatorMembershipManagerTest, UnreachableMissingDataHintDoesNotBlockReplacement)
+{
+    ManualNow now;
+    ThreadSafeMembershipDependencies dependencies;
+    dependencies.SetStatus(FailedFullStatus());
+    dependencies.SetMetadataProbeAction([](const std::string &, RaftMetadataState &, int) {
+        return Status(K_RPC_UNAVAILABLE, "missing-data peer is unreachable");
+    });
+    auto discovery = std::make_shared<ThreadSafeCoordinatorDiscovery>();
+    discovery->SetCandidates({ kCandidate4 });
+    auto manager = MakeManager(ValidOptions(), dependencies, discovery, now);
+    manager.state_ = CoordinatorMembershipManager::LifecycleState::RUNNING;
+    manager.NotifyPeerMissingRaftData(kPeer2);
+    ExpectReconcileOk(manager);
+    EXPECT_EQ(dependencies.AddPeerCalls(), 0);
+    now.Advance(kMemberFailureGrace);
+    ExpectReconcileOk(manager);
+    EXPECT_EQ(dependencies.AddedPeers(), (std::vector<std::string>{ kCandidate4 }));
+    EXPECT_EQ(dependencies.RemovePeerCalls(), 0);
+}
+
+TEST(CoordinatorMembershipManagerTest, VacancyPrioritizesLiveSameAddressWithoutBlockingFallback)
+{
+    for (const bool sameAddressReachable : { true, false }) {
+        ManualNow now;
+        ThreadSafeMembershipDependencies dependencies;
+        dependencies.SetStatus(LeaderStatus({ kPeer1, kPeer3 }, { Follower(kPeer3, true, 0) }));
+        dependencies.SetMetadataProbeAction(
+            [sameAddressReachable](const std::string &, RaftMetadataState &state, int) {
+                if (!sameAddressReachable) {
+                    return Status(K_RPC_UNAVAILABLE, "same-address candidate is unreachable");
+                }
+                state = RaftMetadataState::VALID;
+                return Status::OK();
+            });
+        auto discovery = std::make_shared<ThreadSafeCoordinatorDiscovery>();
+        discovery->SetCandidates({ kCandidate4, kCandidate5 });
+        auto manager = MakeManager(ValidOptions(), dependencies, discovery, now);
+        manager.state_ = CoordinatorMembershipManager::LifecycleState::RUNNING;
+        manager.NotifyPeerMissingRaftData(kCandidate5);
+        ExpectReconcileOk(manager);
+        EXPECT_EQ(dependencies.LastAddedPeer(), sameAddressReachable ? kCandidate5 : kCandidate4);
+    }
+}
+
+TEST(CoordinatorMembershipManagerTest, MissingDataRemoveRetriesAndAddFailureFallsBackToAlternateCandidate)
+{
+    ManualNow now;
+    ThreadSafeMembershipDependencies dependencies;
+    dependencies.SetStatus(HealthyFullStatus());
+    dependencies.SetRemoveSubmissionResult(Status(K_TRY_AGAIN, "remove retry"));
+    dependencies.SetMetadataProbeAction([](const std::string &, RaftMetadataState &state, int callNumber) {
+        state = callNumber <= 2 ? RaftMetadataState::ABSENT : RaftMetadataState::VALID;
+        return Status::OK();
+    });
+    auto discovery = std::make_shared<ThreadSafeCoordinatorDiscovery>();
+    discovery->SetCandidates({ kPeer2, kCandidate4 });
+    auto manager = MakeManager(ValidOptions(), dependencies, discovery, now);
+    manager.state_ = CoordinatorMembershipManager::LifecycleState::RUNNING;
+    manager.NotifyPeerMissingRaftData(kPeer2);
+    EXPECT_EQ(manager.ReconcileOnce().GetCode(), K_TRY_AGAIN);
+    EXPECT_EQ(dependencies.LastRemovedPeer(), kPeer2);
+    now.Advance(kDiscoveryRetryInterval);
+    dependencies.SetRemoveSubmissionResult(Status::OK());
+    ExpectReconcileOk(manager);
+    EXPECT_EQ(dependencies.RemovePeerCalls(), 2);
+
+    dependencies.SetStatus(LeaderStatus({ kPeer1, kPeer3 }, { Follower(kPeer3, true, 0) }, kConfigurationIndex + 1));
+    dependencies.SetAddSubmissionResult(Status(K_TRY_AGAIN, "add retry"));
+    EXPECT_EQ(manager.ReconcileOnce().GetCode(), K_TRY_AGAIN);
+    now.Advance(kDiscoveryRetryInterval);
+    dependencies.SetAddSubmissionResult(Status::OK());
+    ExpectReconcileOk(manager);
+    EXPECT_EQ(dependencies.AddedPeers(), (std::vector<std::string>{ kPeer2, kCandidate4 }));
+    EXPECT_EQ(discovery->Calls(), 2);
+    EXPECT_EQ(dependencies.RemovePeerCalls(), 2);
 }
 
 TEST(CoordinatorMembershipManagerTest, RejectsInvalidOptions)
@@ -546,6 +819,34 @@ TEST(CoordinatorMembershipManagerTest, ShutdownInterruptsLongHealthWait)
     auto shutdown = std::async(std::launch::async, [&manager] { return manager.Shutdown(); });
     ASSERT_EQ(shutdown.wait_for(kLifecycleDeadline), std::future_status::ready);
     EXPECT_TRUE(shutdown.get().IsOk());
+}
+
+TEST(CoordinatorMembershipManagerTest, MissingDataNotificationWakesIdleReconciliationThread)
+{
+    ThreadSafeMembershipDependencies dependencies;
+    dependencies.SetStatus(HealthyFullStatus());
+    auto firstStatus = dependencies.GetFirstStatusFuture();
+    std::promise<void> probePromise;
+    auto probe = probePromise.get_future();
+    std::once_flag probeOnce;
+    dependencies.SetMetadataProbeAction([&](const std::string &, RaftMetadataState &state, int) {
+        state = RaftMetadataState::VALID;
+        std::call_once(probeOnce, [&probePromise] { probePromise.set_value(); });
+        return Status::OK();
+    });
+    auto discovery = std::make_shared<ThreadSafeCoordinatorDiscovery>();
+    auto options = ValidOptions();
+    options.healthCheckInterval = kNotificationHealthCheckInterval;
+    options.memberFailureGrace = kNotificationMemberFailureGrace;
+    auto manager = MakeManager(options, dependencies, discovery);
+    ASSERT_TRUE(manager.Start().IsOk());
+    ASSERT_EQ(firstStatus.wait_for(kLifecycleDeadline), std::future_status::ready);
+    ASSERT_FALSE(dependencies.WaitForStatusCalls(
+        2, Clock::now() + kIdleConfirmationTimeout));
+
+    manager.NotifyPeerMissingRaftData(kPeer2);
+    EXPECT_EQ(probe.wait_for(kNotificationWakeDeadline), std::future_status::ready);
+    EXPECT_TRUE(manager.Shutdown().IsOk());
 }
 
 TEST(CoordinatorMembershipManagerTest, ReentrantShutdownFromReconciliationThreadIsRejected)
@@ -1045,6 +1346,45 @@ TEST(CoordinatorMembershipManagerTest, ShutdownWhileStatusBlockedPreventsNewDisc
     EXPECT_TRUE(shutdown.get().IsOk());
     EXPECT_EQ(discovery->Calls(), 0);
     EXPECT_EQ(dependencies.AddPeerCalls(), 0);
+}
+
+TEST(CoordinatorMembershipManagerTest, ShutdownDuringBlockedRecoveryProbePreventsMutations)
+{
+    std::promise<void> probeEnteredPromise;
+    auto probeEntered = probeEnteredPromise.get_future();
+    std::promise<void> releaseProbePromise;
+    auto releaseProbe = releaseProbePromise.get_future().share();
+    ThreadSafeMembershipDependencies dependencies;
+    dependencies.SetStatus(HealthyFullStatus());
+    dependencies.SetMetadataProbeAction([&](const std::string &, RaftMetadataState &state, int) {
+        probeEnteredPromise.set_value();
+        if (releaseProbe.wait_for(kLifecycleDeadline) != std::future_status::ready) {
+            return Status(K_RUNTIME_ERROR, "blocked recovery probe test timed out");
+        }
+        state = RaftMetadataState::ABSENT;
+        return Status::OK();
+    });
+    auto discovery = std::make_shared<ThreadSafeCoordinatorDiscovery>();
+    auto manager = MakeManager(LongWaitOptions(), dependencies, discovery);
+    ASSERT_TRUE(manager.Start().IsOk());
+    manager.NotifyPeerMissingRaftData(kPeer2);
+    ASSERT_EQ(probeEntered.wait_for(kLifecycleDeadline), std::future_status::ready);
+
+    auto shutdown = std::async(std::launch::async, [&manager] { return manager.Shutdown(); });
+    bool stopping = false;
+    {
+        std::unique_lock<std::mutex> lock(manager.lifecycleMutex_);
+        stopping = manager.lifecycleCv_.wait_for(lock, kLifecycleDeadline, [&manager] {
+            return manager.state_ == CoordinatorMembershipManager::LifecycleState::STOPPING;
+        });
+    }
+    releaseProbePromise.set_value();
+    ASSERT_TRUE(stopping);
+    ASSERT_EQ(shutdown.wait_for(kLifecycleDeadline), std::future_status::ready);
+    EXPECT_TRUE(shutdown.get().IsOk());
+    EXPECT_EQ(dependencies.AddPeerCalls(), 0);
+    EXPECT_EQ(dependencies.RemovePeerCalls(), 0);
+    EXPECT_EQ(discovery->Calls(), 0);
 }
 
 TEST(CoordinatorMembershipManagerTest, ShutdownDuringBlockedDiscoveryPreventsAdd)
