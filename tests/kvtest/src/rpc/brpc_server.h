@@ -32,6 +32,7 @@ public:
     void StopNow() { dispatcher_.StopNow(); }
 
     size_t NotifyQueueSize() { return dispatcher_.QueueSize(); }
+    uint64_t NotifyDroppedCount() { return dispatcher_.DroppedCount(); }
 
     void SetCacheReader(CacheReader *reader) { dispatcher_.SetCacheReader(reader); }
 

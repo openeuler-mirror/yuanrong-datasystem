@@ -14,7 +14,7 @@ KVWorker::KVWorker(const Config &cfg, std::shared_ptr<KVClient> client,
                    MetricsCollector &metrics)
     : cfg_(cfg), client_(client), metrics_(metrics),
       currentPoolSize_(static_cast<uint64_t>(cfg.keyPoolSize)),
-      currentTargetQps_(cfg.targetQps), notifyPool_(100),
+      currentTargetQps_(cfg.targetQps), notifyPool_(100, cfg.notifyQueueMax),
       peerClient_(MakePeerControlClient()) {
     for (auto &name : cfg_.pipeline) {
         auto fn = GetOpFunc(name);
@@ -246,6 +246,15 @@ void KVWorker::PipelineLoop(int threadId) {
 
 void KVWorker::NotifyPeers(const std::vector<std::string> &keys, uint64_t size) {
     if (cfg_.peers.empty() || cfg_.notifyCount <= 0) return;
+
+    // Skip the whole fan-out (shuffle, address parsing, one allocation per
+    // target) when the notify pool is already at its bound; ThreadPool would
+    // drop those tasks anyway. Counted separately from the pool's own drops
+    // so the loss is attributable to the producer rather than the queue.
+    if (cfg_.notifyQueueMax != 0 && notifyPool_.QueueSize() >= cfg_.notifyQueueMax) {
+        notifySuppressed_.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
 
     int total = static_cast<int>(cfg_.peers.size());
     int count = std::min(cfg_.notifyCount, total);

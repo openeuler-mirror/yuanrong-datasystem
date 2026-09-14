@@ -37,6 +37,7 @@ public:
                         const std::vector<std::string> &keys, uint64_t size);
 
     size_t QueueSize() { return notifyPool_.QueueSize(); }
+    uint64_t DroppedCount() { return notifyPool_.DroppedCount(); }
 
     // Stop the internal notify pool. Must be called on server shutdown so
     // in-flight notify tasks drain before the client/metrics are torn down.

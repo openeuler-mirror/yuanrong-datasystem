@@ -32,6 +32,8 @@ public:
     void RequestStop();
 
     size_t NotifyQueueSize() { return notifyPool_.QueueSize(); }
+    uint64_t NotifyDroppedCount() { return notifyPool_.DroppedCount(); }
+    uint64_t NotifySuppressedCount() const { return notifySuppressed_.load(std::memory_order_relaxed); }
     uint64_t CurrentPoolSize() { return currentPoolSize_.load(); }
 
     // Adjust pool size based on current hit rate vs target.
@@ -56,6 +58,7 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<uint64_t> currentPoolSize_{0};
     std::atomic<int> currentTargetQps_{0};
+    std::atomic<uint64_t> notifySuppressed_{0};
     std::chrono::steady_clock::time_point stageStartTime_;
     int currentStageIndex_ = 0;
     std::vector<kvtest::thread> threads_;

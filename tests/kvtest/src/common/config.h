@@ -71,6 +71,7 @@ struct Config {
     int numTotalThreads = 16;  // total read and write threads in pipeline mode
     int notifyCount = 10;
     int notifyIntervalUs = 0;               // delay between peer notifications in microseconds, 0 = parallel
+    size_t notifyQueueMax = 65536;          // cap on pending notify tasks per pool, 0 = unbounded
     bool enableJitter = true;               // randomize sleep to stagger requests
     bool enableCrossNodeConnection = true;  // allow failover to standby workers on other nodes
     bool enableLocalCache = false;          // enable SDK client local cache, default false
