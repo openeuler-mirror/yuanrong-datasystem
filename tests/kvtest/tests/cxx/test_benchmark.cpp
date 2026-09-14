@@ -193,6 +193,36 @@ TEST(ComputePercentiles_Empty) {
     ASSERT_EQ(p.max, 0);
 }
 
+TEST(StreamingPhaseResult_MergesCountsTimingAndLatency) {
+    StreamingPhaseResult left;
+    StreamingPhaseResult right;
+    BenchmarkOpResult ok{true, false, false};
+    BenchmarkOpResult notFound{false, true, false};
+    left.Record(ok, 1.0, 100, 200);
+    right.Record(ok, 3.0, 120, 320);
+    right.Record(notFound, 2.0, 330, 430);
+    left.Merge(right);
+
+    ASSERT_EQ(left.successCount, 2);
+    ASSERT_EQ(left.failureCount, 1);
+    ASSERT_EQ(left.notFoundCount, 1);
+    ASSERT_EQ(left.firstStartNs, 100);
+    ASSERT_EQ(left.lastEndNs, 430);
+    ASSERT_EQ(left.totalLatencyMs, 4.0);
+    auto pct = left.GetPercentiles();
+    ASSERT_EQ(pct.avg, 2.0);
+    ASSERT_EQ(pct.min, 1.0);
+    ASSERT_EQ(pct.max, 3.0);
+}
+
+TEST(BenchmarkRates_UseSuccessfulOperationsAndWallTime) {
+    constexpr int64_t successCount = 200;
+    constexpr double elapsedMs = 250.0;
+    constexpr double expectedRate = 800.0;
+    ASSERT_EQ(CalcBenchmarkQps(successCount, elapsedMs), expectedRate);
+    ASSERT_EQ(CalcBenchmarkThroughputMiBps(successCount, BENCHMARK_BYTES_PER_MIB, elapsedMs), expectedRate);
+}
+
 // --- Barrier tests ---
 
 TEST(Barrier_Wait) {

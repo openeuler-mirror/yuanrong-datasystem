@@ -50,6 +50,7 @@ set(KVTEST_COMMON_SOURCES
     src/pipeline/stop.cpp
     src/rpc/notify_dispatcher.cpp
     src/rpc/peer_client.cpp
+    src/benchmark/interface_benchmark.cpp
     src/benchmark/benchmark_runner.cpp)
 
 if(KVTEST_USE_BRPC)

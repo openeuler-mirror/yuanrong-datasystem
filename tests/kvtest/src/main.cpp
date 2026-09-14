@@ -9,6 +9,7 @@
 #include "pipeline/cache_reader.h"
 #include "pipeline/stop.h"
 #include "benchmark/benchmark_runner.h"
+#include "benchmark/interface_benchmark.h"
 #include "benchmark/kv_client_adapter.h"
 #include "benchmark/subprocess.h"
 
@@ -676,6 +677,12 @@ int main(int argc, char *argv[])
         // Log to terminal BEFORE redirect takes effect for SLOG (SLOG uses std::cout)
         // This printf goes to the original fd 1, not the redirected rdbuf
         fprintf(stderr, "[INFO] Entering benchmark mode, detailed logs: %s/run.log\n", cfg.outputDir.c_str());
+        if (IsInterfaceBenchmarkMode(cfg.testMode)) {
+            std::signal(SIGTERM, SignalHandler);
+            std::signal(SIGINT, SignalHandler);
+            signal(SIGPIPE, SIG_IGN);
+            return RunInterfaceBenchmark(cfg, configPath, gRunning);
+        }
         return RunBenchmarkMode(cfg, configPath);
     }
 

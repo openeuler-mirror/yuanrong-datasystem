@@ -2,7 +2,9 @@
 
 > **相关文档：** [编译部署与通用配置](user-guide.md) | [Pipeline 模式](pipeline-guide.md) | [Cache 模式](cache-guide.md)
 
-Benchmark 模式用于精确测量 KVClient Set/Get 操作的吞吐和延迟。与 Pipeline 模式（持续运行、Writer/Reader 角色、通知机制）不同，Benchmark 模式采用轮次执行（round-based），每轮包含 Set → Get → Del 三个阶段，逐阶段计时并输出 CSV。
+Benchmark 模式用于精确测量 KVClient Set/Get 操作的吞吐和延迟。`set_local`、`set_remote`、`get_local`、
+`get_remote_direct` 使用单接口执行引擎：Set 模式循环执行 Set → Del，Get 模式只预置一次数据，然后在统一
+窗口内持续 Get。其他模式保留原有轮次流程。
 
 **适用场景：**
 - Worker 端 Set/Get 吞吐基线测量
@@ -17,12 +19,10 @@ Benchmark 模式用于精确测量 KVClient Set/Get 操作的吞吐和延迟。�
 
 配置 `test_mode` 字段选择测试模式。16 种模式对应不同的客户端-Worker 拓扑。
 
-kvtest 内部维护两个 KVClient：
-- **localClient**：通过 ServiceDiscovery（etcd + `HOST_IP`）发现本机 Worker，走 SHM 通道
-- **remoteClient**：默认通过 `remote_worker.host:port` 直连远端 Worker，走 UB/RPC 网络；
-  `get_remote_direct` 未配置 `remote_worker.host` 时通过 ServiceDiscovery 选择 Worker
-
-不同模式将 Set/Get 操作分配给不同的客户端。
+四个单接口模式创建 `num_clients` 个被测 KVClient，每个 Client 的 Set/Get 使用相同连接语义。其他模式仍按
+角色创建 localClient 和 remoteClient：localClient 通过 ServiceDiscovery 发现本机 Worker，remoteClient 默认
+通过 `remote_worker.host:port` 直连远端 Worker；`get_remote_direct` 未配置 `remote_worker.host` 时通过
+ServiceDiscovery 选择 Worker。
 
 ### set_local — 本地 Set 吞吐
 
@@ -60,7 +60,7 @@ graph LR
     end
 ```
 
-localClient → Worker A。先 Set 再 Get，测量本地端到端延迟。
+localClient → Worker A。数据只预置一次，正式窗口持续执行 Get，预置和清理不计入 Get 指标。
 
 ### get_cross_node — 跨节点 Get（Worker A 拉取 Worker B 的数据）
 
@@ -95,7 +95,7 @@ graph LR
     K -->|Get RPC| WB
 ```
 
-remoteClient → Worker B。Set 和 Get 复用同一个 KVClient，在同一 Worker 上完成，不触发 Worker 间传输。
+remoteClient → Worker B。预置和 Get 复用同一个 KVClient；正式窗口只执行 Get，不触发 Worker 间传输。
 配置 `remote_worker.host` 时固定直连该 Worker；未配置时通过 ServiceDiscovery 选择 Worker。
 
 ### get_remote_cross — 跨节点 Get（Worker B 拉取 Worker A 的数据）
@@ -226,13 +226,14 @@ Benchmark 模式通过 ServiceDiscovery 连接 etcd 发现 Worker。以下参数
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `test_mode` | string | **必填** | 测试模式：`set_local` / `set_remote` / `get_local` / `get_cross_node` / `get_remote_direct` / `get_remote_cross` / `mixed_local_set_get` / `mixed_remote_set_get` / `mixed_local_set_cross_get` / `mixed_remote_set_remote_cross_get` / `mset_local` / `mset_remote` / `mget_local` / `mget_cross_node` / `mget_remote_direct` / `mget_remote_cross` |
-| `worker_memory_mb` | int | **必填** | Worker 共享内存上限（MB），用于计算每轮 key 数 |
-| `num_threads` | int | 4 | 并发线程数（所有模式共用，Pipeline 模式亦使用此参数） |
-| `duration_seconds` | int | 0 | Benchmark 轮次启动时限（秒），0 = 不限时；已启动轮次和子进程退出仍会完成 |
-| `total_rounds` | int | 0 | 总轮数，0 = 不限轮 |
+| `worker_memory_mb` | int | **必填** | 生成负载的数据预算（MB），用于计算全局数据集 key 数 |
+| `num_clients` | int | 1 | 四个单接口模式的被测 KVClient 进程数；每个进程独占一个 KVClient |
+| `num_threads` | int | 4 | 每个被测 KVClient 的调用线程数；总并发为 `num_clients × num_threads` |
+| `duration_seconds` | int | 0 | Get 的纯测量窗口；Set 到时后不再启动下一 Set→Del 周期；0 = 不限时 |
+| `total_rounds` | int | 0 | Get 的数据集遍历次数上限或 Set→Del 周期数；与 duration 同时配置时任一先到即停 |
 | `round_cleanup_wait_ms` | int | 3000 | `del` 清理后、下一轮开始前的等待时间（毫秒），0 = 不等待；等待不超过剩余运行时长 |
 | `set_api` | string | "string_view" | Set API 路径：`"string_view"` / `"create_buffer"` / `"create_buffer_raw"`（MSet/MGet 模式忽略） |
-| `cleanup_method` | string | "del" | 清理方式：`"del"`（每轮删除）或 `"ttl"`（TTL 过期） |
+| `cleanup_method` | string | "del" | 清理方式：`"del"`（显式删除）或 `"ttl"`（等待 TTL 过期） |
 | `remote_worker.host` | string | "" | 远端 Worker 地址；`get_remote_direct` 留空时使用 ServiceDiscovery |
 | `remote_worker.port` | int | 31501 | 远端 Worker 端口 |
 | `set_ratio` | float | 0.5 | Set 操作比例 (0.0, 1.0)，仅 mixed 模式。0.7 = 70% 线程做 Set。必须保证至少 1 个 Get 线程 |
@@ -241,6 +242,8 @@ Benchmark 模式通过 ServiceDiscovery 连接 etcd 发现 Worker。以下参数
 | `mget_batch_size` | int | 8 | 每批 MGet 操作的 key 数量，仅 mget_* 模式 |
 
 > **批量模式延迟说明：** `mset_*` / `mget_*` 模式的延迟分位数（avg/p50/p99）是 **batch 粒度**（一次 MSet/MGet 调用处理多个 key 的耗时），而非单个 key 级别。QPS 计算正确（总 key 数 / 总时间），但延迟不可与单 key 模式（SET/GET）直接对比。
+
+`num_total_threads` 仅用于 Pipeline，不参与 Benchmark。Benchmark 始终全速执行，`target_qps` 不限速。
 
 ### remote_worker 说明
 
@@ -308,32 +311,43 @@ ServiceDiscovery 创建的 KVClient。ServiceDiscovery 的选址遵循 `host_id_
 
 ### Key 数量计算
 
-每轮写入的 key 数量由 `worker_memory_mb` 和 `data_sizes[0]` 自动计算：
+全局数据集的 key 数量由 `worker_memory_mb` 和 `data_sizes[0]` 自动计算：
 
 ```
 keys_per_round = floor(worker_memory_mb × 0.8 × 1024 × 1024 / data_size_bytes)
 ```
 
-例如 `worker_memory_mb=4096`、`data_sizes=["1MB"]`，则每轮写入 `4096 × 0.8 × 1024 × 1024 / 1048576 = 3276` 个 key。
+例如 `worker_memory_mb=4096`、`data_sizes=["1MB"]`，则数据集包含
+`4096 × 0.8 × 1024 × 1024 / 1048576 = 3276` 个 key。
 
 ### 执行流程
 
-每轮（round）执行三个阶段：
+四个单接口模式的执行流程如下：
 
 ```
-Round N:
-  ① Set phase:  N 个线程并发写入（共享同一个 setClient），每个线程负责不同 key range，Barrier 同步
-  ② Get phase:  N 个线程并发读取（共享同一个 getClient），Barrier 同步（仅 get_* 模式）
-  ③ Cleanup:    每个线程清理各自的 key range
+Get: 初始化 Client 组 → Set 全局数据集一次 → 每线程预热一次
+     → 所有 Client/线程统一起跑并持续 Get → 统一停止 → Cleanup 一次
+
+Set: 所有 Client/线程统一起跑并 Set → 全部完成 → Cleanup → 下一周期
 ```
 
-所有线程共享同一个 setClient/getClient 实例，通过 ThreadKeyRange 分配各自的 key 范围。线程间使用 Barrier 同步，确保所有线程完成当前阶段后统一进入下一阶段。
+每个 Client 进程内的线程共享一个 KVClient。全局 key 数仍由 `worker_memory_mb` 计算，再按 Client 和线程分片，
+不会因为增加 `num_clients` 而成倍扩大数据集。父进程等待所有工作线程 READY 后下发同一单调时钟启动点；
+Client 初始化、线程创建、预置、预热和清理均不计入接口 QPS。
+
+每个被测线程至少需要一个 key；若 `keys_per_dataset < num_clients × num_threads`，配置会在创建 Client 前被拒绝。
+使用 `cleanup_method=del` 时，工具创建同等数量的独立清理 Client，避免清理请求污染被测 Client 的连接状态。
+
+Get 配置 TTL 时，启动前会先校验配置，预置和预热完成后还会复核剩余 TTL 是否能覆盖整个测量窗口及
+一次请求超时余量，否则拒绝启动测量。
+仅配置 `total_rounds` 或无限运行时无法证明 TTL 足够，因此 Get 不允许非零 TTL。
 
 ### Benchmark 日志
 
-父进程的 kvtest 日志写入 `<output_dir>/run.log`，各角色的 kvtest 子进程日志分别写入
-`<output_dir>/child_set.log`、`child_get.log` 和 `child_del.log`。SDK 运行日志、access 日志和 operation
-日志仍写入 `DATASYSTEM_CLIENT_LOG_DIR`；每个 benchmark 子进程通过 exec 独立初始化 SDK，因此
+父进程的 kvtest 日志写入 `<output_dir>/run.log`。四个单接口模式的被测 Client 写入
+`<output_dir>/child_set.log`，独立清理 Client 写入 `child_del.log`；其他模式按角色使用 `child_set.log`、
+`child_get.log` 和 `child_del.log`。SDK 运行日志、access 日志和 operation 日志仍写入
+`DATASYSTEM_CLIENT_LOG_DIR`；每个 benchmark 子进程通过 exec 独立初始化 SDK，因此
 `ds_client_<pid>.INFO.log` 会正常记录该子进程的 SDK 运行日志。
 
 SLOG 行（`[INFO]/[WARN]/[ERROR]` 前缀）自带 `<YYYY-MM-DD HH:MM:SS.mmm>` 本地时间戳，
@@ -345,9 +359,9 @@ Benchmark 模式**不使用 `target_qps` 限速**——每轮全速执行，测�
 
 | 参数组合 | 行为 |
 |---------|------|
-| `total_rounds=5` | 运行 5 轮后停止 |
-| `duration_seconds=60` | 60 秒后不再启动新一轮；当前轮次和子进程退出仍会完成 |
-| `total_rounds=5, duration_seconds=120` | 任意条件先满足则停止 |
+| `total_rounds=5` | Get 遍历数据集 5 次；Set 执行 5 个 Set→Del 周期 |
+| `duration_seconds=60` | Get 连续测量 60 秒；Set 在 60 秒后不再启动下一周期 |
+| `total_rounds=5, duration_seconds=120` | Get 最多遍历数据集 5 次且不超过 120 秒；Set 最多执行 5 个周期且不超过 120 秒 |
 | `total_rounds=0, duration_seconds=0` | 无限运行，需 `Ctrl+C` 停止 |
 
 ### CPU / NUMA 亲和性绑定
@@ -396,11 +410,8 @@ LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH ./kvtest config/bench_set_local.json
 
 **预期输出：**
 ```
-Benchmark config: keys_per_round=3276, threads=8, data_size=1048576, ...
-Round 0 starting
-Round 0 complete
-...
-Benchmark finished: rounds=5, set=16380, get=0, del=16380
+Interface benchmark: clients=1, threads_per_client=8, total_concurrency=8, keys_per_dataset=3276
+Set benchmark finished: rounds=5, success=16380, failures=0, active_elapsed_ms=...
 ```
 
 ### 场景 B：本地 Set + Get 延迟测量
@@ -414,6 +425,7 @@ Benchmark finished: rounds=5, set=16380, get=0, del=16380
   "listen_port": 9000,
   "test_mode": "get_local",
   "worker_memory_mb": 4096,
+  "num_clients": 1,
   "num_threads": 8,
   "duration_seconds": 60,
   "data_sizes": ["1MB"],
@@ -427,7 +439,7 @@ Benchmark finished: rounds=5, set=16380, get=0, del=16380
 LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH ./kvtest config/bench_get_local.json
 ```
 
-Set 和 Get 操作均使用本地 Worker，测量本地路径的完整 Set + Get 延迟。
+Set 只用于预置数据；主 CSV 测量本地 Worker 的纯 Get 吞吐和延迟。
 
 ### 场景 C：跨节点 Get 性能（SHM vs UB 对比）
 
@@ -569,7 +581,7 @@ Client 直连远端 Worker 执行 Set（`remote_worker` 指定 Worker B 的注�
 
 | 方式 | 行为 | 适用场景 |
 |------|------|---------|
-| `del` | 每轮 Set/Get 后调用 `Del(keys)` 立即释放 Worker 内存 | 通用场景，每轮内存占用归零 |
+| `del` | Set 每周期、Get 整个测量窗口结束后调用 `Del(keys)` | 通用场景，测量结束后释放内存 |
 | `ttl` | Set 时设置 `ttl_second`，每轮结束后等待 TTL 过期 | 不可手动删除的场景，需要 Worker 自动过期 |
 
 **注意：** `cleanup_method = "ttl"` 时必须同时配置 `set_param.ttl_second`，且值 > 0。
@@ -578,32 +590,33 @@ Client 直连远端 Worker 执行 Set（`remote_worker` 指定 Worker B 的注�
 
 ## 6. 指标输出
 
-Benchmark 模式在输出目录下生成 `benchmark_phases.csv`：
+Benchmark 模式在输出目录下生成简洁的聚合结果 `benchmark_phases.csv`：
 
 ```csv
-round,phase,ops,avg_ms,p50_ms,p90_ms,p99_ms,max_ms,total_ms,qps
-0,set,3276,1.234,1.100,1.315,2.078,3.500,4042.6,810.5
-0,get,3276,0.567,0.500,0.612,0.890,1.200,1857.5,1763.7
-0,del,3276,0.123,0.100,0.145,0.200,0.350,403.0,8127.2
-1,set,3276,1.180,1.090,1.290,1.750,3.100,3865.7,847.4
+scope,round,operation,success,failures,elapsed_ms,qps,avg_ms,p50_ms,p99_ms,max_ms,throughput_mib_s,valid
+round,0,set,3276,0,4038.210,811.250,1.234,1.100,2.078,3.500,811.250,true
+total,-1,set,16380,0,20071.440,816.079,1.220,1.090,2.010,3.500,816.079,true
 ```
 
 **字段说明：**
 
 | 字段 | 说明 |
 |------|------|
-| `round` | 轮次编号（从 0 开始） |
-| `phase` | 阶段：`set` / `get` / `del` |
-| `ops` | 成功操作数 |
-| `avg_ms` | 平均延迟（单次请求平均） |
-| `p50_ms` | P50 延迟（真实分位数） |
-| `p90_ms` | P90 延迟（真实分位数） |
-| `p99_ms` | P99 延迟（真实分位数） |
+| `scope` | `round` 为单个 Set 周期；`total` 为全部有效测量阶段聚合 |
+| `round` | Set 周期编号；总计或持续 Get 为 -1 |
+| `operation` | 被测接口：`set` / `get` |
+| `success` / `failures` | 成功数与失败数；只统计被测接口，失败存在或无成功样本时 `valid=false` |
+| `elapsed_ms` | 所有被测 Client 最早请求开始到最晚请求结束的墙钟时间；Set 总计为各 Set 阶段时间之和 |
+| `qps` | `success × 1000 / elapsed_ms`，不使用各请求延迟之和作分母 |
+| `avg_ms` | 成功请求的平均延迟 |
+| `p50_ms` | 所有 Client 延迟样本合并后的 P50；使用 TDigest 近似计算 |
+| `p99_ms` | 所有 Client 延迟样本合并后的 P99；使用 TDigest 近似计算 |
 | `max_ms` | 单次请求最大延迟 |
-| `total_ms` | 阶段所有成功请求延迟之和（毫秒） |
-| `qps` | 阶段 QPS |
+| `throughput_mib_s` | 成功数据量除以相同的 `elapsed_ms`，按 1024² bytes/MiB 换算 |
 
-Set-only 模式（`set_local` / `set_remote`）没有 `get` 行。`cleanup_method = "ttl"` 没有 `del` 行。
+`benchmark_clients.csv` 使用相同口径输出各 Client 的精简结果和 `start_offset_us`，只用于定位 Client 偏斜；
+全局 QPS/P99 必须以 `benchmark_phases.csv` 为准，不能平均各 Client 的 QPS/P99。预置、预热和 Del 不写入
+主 CSV，只在日志中报告失败。
 
 ---
 

@@ -102,6 +102,7 @@ struct Config {
     // Benchmark mode fields (test_mode != NONE)
     TestMode testMode = TestMode::NONE;
     int workerMemoryMb = 0;
+    int numClients = 1;
     int durationSeconds = 0;
     int totalRounds = 0;
     int roundCleanupWaitMs = DEFAULT_ROUND_CLEANUP_WAIT_MS;
