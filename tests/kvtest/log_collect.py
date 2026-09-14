@@ -1,6 +1,8 @@
 """Shared selective collection for the existing deployment CLIs."""
 
 import json
+import ipaddress
+import logging
 import os
 import re
 import shlex
@@ -16,7 +18,7 @@ import bz2, fnmatch, gzip, json, lzma, os, stat, sys, tarfile, tempfile
 cfg = json.loads(sys.argv[1])
 keywords = [word.encode('utf-8') for word in cfg['keywords']]
 compressed = ('.gz', '.bz2', '.xz', '.zip', '.zst', '.lz4', '.tgz', '.tar', '.7z', '.rar', '.z')
-with tarfile.open(fileobj=sys.stdout.buffer, mode='w|gz') as archive:
+with tarfile.open(fileobj=sys.stdout.buffer, mode='w|gz' if cfg.get('compress', True) else 'w|') as archive:
     for entry in cfg['sources']:
         label, root, defaults = entry[:3]
         recursive = entry[3] if len(entry) > 3 else True
@@ -72,6 +74,20 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode='w|gz') as archive:
 
 
 def add_collect_filters(parser):
+    parser.add_argument('--host-filter', metavar='JSON',
+                        help='Host IP selection JSON with include and exclude arrays')
+    compression = parser.add_mutually_exclusive_group()
+    compression.add_argument('--compress', dest='compress', action='store_true', default=None,
+                             help='Use gzip compression; --compress --no-extract keeps the archive; '
+                                  '--compress --extract unpacks it locally')
+    compression.add_argument('--no-compress', dest='compress', action='store_false',
+                             help='Transfer without gzip compression and extract locally by default; '
+                                  'add --no-extract to keep the tar archive')
+    extraction = parser.add_mutually_exclusive_group()
+    extraction.add_argument('--extract', dest='extract', action='store_true', default=None,
+                            help='Extract collected logs locally (default)')
+    extraction.add_argument('--no-extract', dest='extract', action='store_false',
+                            help='Keep the received log archive without extracting it')
     parser.add_argument('--pod-info', action='store_true',
                         help='Include current Pod IP and host IP in collection directory names')
     parser.add_argument('--file-pattern', action='append', default=[], metavar='GLOB',
@@ -82,6 +98,66 @@ def add_collect_filters(parser):
                         help='Literal case-sensitive line substring; repeatable (OR), filtered remotely')
     parser.add_argument('--uncompressed-only', action='store_true',
                         help='Exclude compressed archives; retain all uncompressed rotations')
+
+
+def host_selection_from_args(args):
+    selection = {}
+    path = getattr(args, 'host_filter', None)
+    if path:
+        try:
+            with open(path, encoding='utf-8-sig') as source:
+                selection = json.load(source)
+        except (OSError, ValueError) as error:
+            raise ValueError('Cannot read host filter ' + str(path) + ': ' + str(error)) from error
+        if not isinstance(selection, dict) or set(selection) - {'include', 'exclude'}:
+            raise ValueError('Host filter must be an object containing only include and exclude')
+        for key, values in selection.items():
+            if not isinstance(values, list) or any(not isinstance(ip, str) for ip in values):
+                raise ValueError('Host filter ' + key + ' must be an array of IP strings')
+    included = selection.get('include', [])
+    excluded = selection.get('exclude', [])
+    if not included and not excluded:
+        return None
+    return dict(host_ips=[str(ipaddress.ip_address(ip)) for ip in included],
+                exclude_host_ips=[str(ipaddress.ip_address(ip)) for ip in excluded])
+
+
+def filter_collect_targets(targets, selection, host_ip=None):
+    if selection is None:
+        return list(targets)
+    included = {str(ipaddress.ip_address(ip)) for ip in selection.get('host_ips', [])}
+    excluded = {str(ipaddress.ip_address(ip)) for ip in selection.get('exclude_host_ips', [])}
+    result = []
+    for target in targets:
+        address = host_ip(target) if host_ip else target.get('host_ip')
+        try:
+            address = str(ipaddress.ip_address(address))
+        except ValueError:
+            name = target.get('name') or target.get('pod_name') or target.get('host') or 'unknown'
+            logging.getLogger(__name__).warning(
+                'Skipping collection target %s in namespace %s: missing or invalid host IP; '
+                'check whether the Pod exists and has status.hostIP, or check host_ip for non-Kubernetes targets',
+                name, target.get('namespace', 'unspecified'))
+            continue
+        if address not in excluded and (not included or address in included):
+            result.append(target)
+    return result
+
+
+def read_pod_addresses(namespace):
+    output = subprocess.check_output(['kubectl', 'get', 'pods', '-n', namespace, '-o', 'json'],
+                                     text=True, timeout=30)
+    return {item['metadata']['name']: dict(ip=item.get('status', {}).get('podIP', ''),
+                                          host_ip=item.get('status', {}).get('hostIP', ''))
+            for item in json.loads(output).get('items', [])}
+
+
+def archive_options_from_args(args):
+    compress, extract = getattr(args, 'compress', None), getattr(args, 'extract', None)
+    if compress is None and extract is None:
+        return None
+    return dict(compress=True if compress is None else compress,
+                extract=True if extract is None else extract)
 
 
 def filters_from_args(args):
@@ -108,14 +184,19 @@ def pod_directory(name, pod_ip, host_ip):
     return f'{safe(name)}__podip-{safe(pod_ip)}__hostip-{safe(host_ip)}'
 
 
-def archive_command(sources, options):
+def archive_command(sources, options, archive_options=None):
     if any(not value or '\x00' in value for key in ('patterns', 'keywords') for value in options[key]):
         raise ValueError('Collection patterns and keywords must be nonempty and contain no NUL')
-    return shlex.join(['python3', '-c', REMOTE_ARCHIVE, json.dumps(dict(sources=sources, **options))])
+    config = dict(sources=sources, **options)
+    if archive_options is not None:
+        config['compress'] = archive_options['compress']
+    return shlex.join(['python3', '-c', REMOTE_ARCHIVE, json.dumps(config)])
 
 
-def receive_archive(command, local_dir, timeout=120, shell=False):
-    """Spool transport output to disk, then extract regular files inside the destination."""
+def receive_archive(command, local_dir, timeout=120, shell=False, archive_options=None,
+                    archive_name='logs', flatten=False):
+    """Spool transfer output, then safely extract or atomically retain the archive."""
+    options = archive_options or dict(compress=True, extract=True)
     with tempfile.TemporaryFile() as spool:
         result = subprocess.run(command, shell=shell, stdout=spool, stderr=subprocess.PIPE,
                                 check=False, timeout=timeout)
@@ -125,18 +206,41 @@ def receive_archive(command, local_dir, timeout=120, shell=False):
         spool.seek(0)
         root = Path(local_dir).resolve()
         count = 0
-        with tarfile.open(fileobj=spool, mode='r:gz') as archive:
+        regular_members = set()
+        with tarfile.open(fileobj=spool, mode='r:gz' if options['compress'] else 'r:') as archive:
             for member in archive:
                 rel = PurePosixPath(member.name)
-                if not member.isfile() or rel.is_absolute() or '..' in rel.parts or '\\' in member.name:
+                if not (member.isfile() or member.islnk()) or rel.is_absolute() or '..' in rel.parts or '\\' in member.name:
                     raise ValueError('Unsafe collection archive member: ' + member.name)
-                target = root.joinpath(*rel.parts)
+                if member.islnk():
+                    link = PurePosixPath(member.linkname)
+                    if (link.is_absolute() or '..' in link.parts or '\\' in member.linkname
+                            or str(link) not in regular_members):
+                        raise ValueError('Unsafe collection hardlink: ' + member.linkname)
+                regular_members.add(str(rel))
+                count += 1
+                if not options['extract']:
+                    continue
+                target = root / rel.name if flatten else root.joinpath(*rel.parts)
                 if os.path.commonpath([str(target.resolve()), str(root)]) != str(root):
                     raise ValueError('Collection target escapes output directory')
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with archive.extractfile(member) as source, open(target, 'wb') as dest:
                     shutil.copyfileobj(source, dest)
-                count += 1
+        if not options['extract']:
+            root.mkdir(parents=True, exist_ok=True)
+            suffix = '.tar.gz' if options['compress'] else '.tar'
+            target = root / (archive_name + suffix)
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=root, suffix='.part', delete=False) as saved:
+                    temporary = saved.name
+                    spool.seek(0)
+                    shutil.copyfileobj(spool, saved)
+                os.replace(temporary, target)
+            finally:
+                if temporary and os.path.exists(temporary):
+                    os.unlink(temporary)
         return count
 
 
