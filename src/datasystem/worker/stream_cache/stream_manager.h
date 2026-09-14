@@ -796,7 +796,7 @@ public:
      */
     size_t GetLocalProducerCount() const
     {
-        std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+        std::shared_lock<SharedMutex> lock(mutex_);
         return pubs_.size();
     }
 
@@ -940,7 +940,11 @@ private:
     const std::string streamName_;
     RemoteWorkerManager *remoteWorkerManager_;
     // protect pubs_/subs_/remoteSubWorkerDict_/remotePubWorkerDict_/blockOnOOM_
-    mutable std::shared_timed_mutex mutex_;
+    // Must stay writer-fair: this lock has heavy reader traffic (scanner, ack and metrics paths),
+    // and StreamManager writers (AddCursorForProducer, CloseProducer, ...) cannot be starved.
+    // std::shared_timed_mutex is not usable here - glibc rwlocks default to reader preference, so
+    // writers wait forever; SharedMutex (bthread rwlock) blocks new readers while a writer pends.
+    mutable SharedMutex mutex_;
     mutable SharedMutex resetMutex_;
     // protect streamState_
     mutable SharedMutex streamStateMutex_;

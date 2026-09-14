@@ -62,6 +62,15 @@ static constexpr int LOCK_DEBUG_LOG_LEVEL = 3;      // Debug output log level
 static constexpr int LOCK_WAIT_TIMEOUT_LIMIT = 10;  // 10s
 static constexpr int LOCK_HOLD_TIMEOUT_LIMIT = 5;   // 5s
 
+template <typename T, typename = void>
+struct HasTryLockFor : std::false_type {
+};
+
+template <typename T>
+struct HasTryLockFor<T, std::void_t<decltype(std::declval<T &>().try_lock_for(std::chrono::seconds(1)))>>
+    : std::true_type {
+};
+
 template <typename F, typename R = typename std::result_of<F()>::type,
           typename std::enable_if<std::is_same<R, std::string>::value>::type * = nullptr>
 class TryLockHelper {
@@ -78,19 +87,32 @@ public:
         }
     }
 
+    // Acquire by retrying try_lock_for in a loop, so a slow acquisition is reported once instead of
+    // blocking silently. Lock types without a timed API (e.g. SharedMutex) fall back to a blocking
+    // acquire: they must be fair themselves, since an unbounded retry loop on a reader-preferring
+    // lock lets readers starve a writer forever.
     template <typename T>
     void AcquireLock(T &lock)
     {
-        bool isTimeout = false;
-        while (!lock.try_lock_for(std::chrono::seconds(LOCK_WAIT_TIMEOUT_LIMIT))) {
-            if (!isTimeout) {
-                LOG(WARNING) << FormatString("[%s] Acquire lock takes longer than %d s.", func_(),
-                                             LOCK_WAIT_TIMEOUT_LIMIT);
-                isTimeout = true;
+        // Probe the underlying mutex, not T: std::shared_lock/std::unique_lock declare try_lock_for
+        // for any mutex, so probing T itself would select the timed path and fail to instantiate.
+        if constexpr (HasTryLockFor<typename T::mutex_type>::value) {
+            bool isTimeout = false;
+            while (!lock.try_lock_for(std::chrono::seconds(LOCK_WAIT_TIMEOUT_LIMIT))) {
+                if (!isTimeout) {
+                    LOG(WARNING) << FormatString("[%s] Acquire lock takes longer than %d s.", func_(),
+                                                 LOCK_WAIT_TIMEOUT_LIMIT);
+                    isTimeout = true;
+                }
             }
-        }
-        if (isTimeout || VLOG_IS_ON(LOCK_DEBUG_LOG_LEVEL)) {
-            LOG(WARNING) << FormatString("[%s] Acquire lock takes [%.6lf]s", func_(), t_.ElapsedSecond());
+            if (isTimeout || VLOG_IS_ON(LOCK_DEBUG_LOG_LEVEL)) {
+                LOG(WARNING) << FormatString("[%s] Acquire lock takes [%.6lf]s", func_(), t_.ElapsedSecond());
+            }
+        } else {
+            lock.lock();
+            if (t_.ElapsedSecond() > LOCK_WAIT_TIMEOUT_LIMIT || VLOG_IS_ON(LOCK_DEBUG_LOG_LEVEL)) {
+                LOG(WARNING) << FormatString("[%s] Acquire lock takes [%.6lf]s", func_(), t_.ElapsedSecond());
+            }
         }
     }
 
