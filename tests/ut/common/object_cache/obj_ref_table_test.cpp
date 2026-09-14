@@ -17,6 +17,7 @@
 
 #include <tbb/concurrent_hash_map.h>
 #include <chrono>
+#include <limits>
 #include <thread>
 
 #include "ut/common.h"
@@ -66,6 +67,16 @@ public:
         clientIds_.clear();
         objKeys_.clear();
         refClientSets_.clear();
+    }
+
+    // Inject points are process-global and leak into the next test unless cleared. Two of them
+    // are actively dangerous when they leak: "RemoveShmUnit" sleeps 500ms per call (stretches the
+    // next test past the 1s background flush tick) and "shm_ref.GetCurrentTimeMs" ends in abort()
+    // once its match count runs out (kills the process from the background flush thread).
+    void TearDown() override
+    {
+        (void)datasystem::inject::Clear("RemoveShmUnit");
+        (void)datasystem::inject::Clear("shm_ref.GetCurrentTimeMs");
     }
 
     std::vector<std::string> GenRandomStrs(size_t dataSz, size_t arrSz);
@@ -836,6 +847,47 @@ TEST_F(ObjRefTableTest, HardReclaimDisabledWhenFlagZero)
     ASSERT_TRUE(memRefTable_.Contains(clientId, shmId))
         << "flag=0 must disable proactive hard reclaim";
     FLAGS_shm_ref_hard_reclaim_timeout_ms = 5000;  // restore default
+}
+
+// RecordMaybeExpiredShm hands items off through a lock-free staging queue that the flush tick
+// drains before popping. Concurrent producers must not lose items in that hand-off: after one
+// flush past every deadline, each client must hold all of its recorded shmIds.
+TEST_F(ObjRefTableTest, RecordMaybeExpiredShmStagingHandoffUnderConcurrency)
+{
+    const size_t numOfClients = 8;
+    const size_t numOfShmPerClient = 128;
+    const int64_t requestTimeoutMs = 1000;
+
+    std::vector<ClientKey> clientIds;
+    std::vector<std::vector<ShmKey>> shmIds(numOfClients);
+    for (size_t i = 0; i < numOfClients; i++) {
+        clientIds.emplace_back(ClientKey::Intern(GetStringUuid()));
+        for (size_t j = 0; j < numOfShmPerClient; j++) {
+            shmIds[i].emplace_back(ShmKey::Intern(GetStringUuid()));
+        }
+    }
+
+    ParallelFor(
+        numOfClients * numOfShmPerClient,
+        [this, &clientIds, &shmIds, numOfShmPerClient, requestTimeoutMs](size_t k) {
+            size_t clientIndex = k / numOfShmPerClient;
+            auto shmUnit = std::make_shared<ShmUnit>();
+            shmUnit->id = shmIds[clientIndex][k % numOfShmPerClient];
+            memRefTable_.AddShmUnit(clientIds[clientIndex], shmUnit, requestTimeoutMs);
+        },
+        numOfThreads_);
+
+    memRefTable_.FlushMaybeExpiredQueue(std::numeric_limits<uint64_t>::max());
+
+    for (size_t i = 0; i < numOfClients; i++) {
+        std::vector<ShmKey> maybeExpiredShmIds;
+        memRefTable_.GetMaybeExpiredShmIds(clientIds[i], maybeExpiredShmIds);
+        std::unordered_set<ShmKey> maybeSet(maybeExpiredShmIds.begin(), maybeExpiredShmIds.end());
+        ASSERT_EQ(maybeSet.size(), numOfShmPerClient);
+        for (const auto &shmId : shmIds[i]) {
+            ASSERT_EQ(maybeSet.count(shmId), 1) << "shmId lost during the staging hand-off";
+        }
+    }
 }
 }  // namespace ut
 }  // namespace datasystem

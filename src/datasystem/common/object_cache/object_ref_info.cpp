@@ -317,8 +317,7 @@ void SharedMemoryRefTable::RecordMaybeExpiredShm(const ClientKey &clientId, cons
     if (reclaimable && FLAGS_shm_ref_hard_reclaim_timeout_ms > 0) {
         expireTimeMs += FLAGS_shm_ref_hard_reclaim_timeout_ms;
     }
-    std::lock_guard<std::shared_mutex> lock(maybeExpiredShmQueueMutex_);
-    maybeExpiredShmQueue_.push({ requestTimeoutMs, expireTimeMs, clientId, shmId, reclaimable });
+    maybeExpiredShmStagingQueue_.push({ requestTimeoutMs, expireTimeMs, clientId, shmId, reclaimable });
     VLOG(1) << "RecordMaybeExpiredShm: clientId=" << clientId << " shmId=" << shmId
                << " requestTimeoutMs=" << requestTimeoutMs << " expireTimeMs=" << expireTimeMs
                << " reclaimable=" << reclaimable;
@@ -411,6 +410,10 @@ void SharedMemoryRefTable::FlushMaybeExpiredQueue(uint64_t nowMs)
     size_t queueSize = 0;
     {
         std::lock_guard<std::shared_mutex> lockForQueue(maybeExpiredShmQueueMutex_);
+        MaybeExpiredShmItem staged;
+        while (maybeExpiredShmStagingQueue_.try_pop(staged)) {
+            maybeExpiredShmQueue_.push(std::move(staged));
+        }
         queueSize = maybeExpiredShmQueue_.size();
         while (!maybeExpiredShmQueue_.empty() && maybeExpiredShmQueue_.top().expireTimeMs <= nowMs) {
             auto item = maybeExpiredShmQueue_.top();
