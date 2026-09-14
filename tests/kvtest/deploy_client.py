@@ -14,6 +14,9 @@ import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from log_collect import (add_collect_filters, archive_command, filters_from_args, has_filters,
+                         pod_directory, receive_archive, select_targets, copy_case_files)
+
 from deploy_common import (
     _print_timings,
     get_pods,
@@ -31,6 +34,9 @@ _POLL_INTERVAL = 2
 
 class Deployer:
     def __init__(self, deploy_path, config_template_path=None):
+        self.case_config_paths = [os.path.abspath(deploy_path)]
+        if config_template_path:
+            self.case_config_paths.append(os.path.abspath(config_template_path))
         with open(deploy_path) as f:
             self.deploy = json.load(f)
         # config_template is optional: install does not need it, only start /
@@ -1146,7 +1152,8 @@ class Deployer:
         log_info(f'\nClean-logs result: {ok}/{len(results)}')
 
     def do_collect(self, sdk_log_dir='/root/.datasystem/logs', output_dir='collected',
-                   summary_timeout=5, max_workers=None, node_slice=None):
+                   summary_timeout=5, max_workers=None, node_slice=None, filters=None, prefixes=None,
+                   instance_ids=None, pod_info=False):
         """Collect output files and SDK logs from all nodes.
 
         Single-phase pipeline: each node triggers its own /summary then
@@ -1172,9 +1179,24 @@ class Deployer:
         a 2000-node collect can be manually batched.
         """
         collect_dir = output_dir
+        copy_case_files(getattr(self, 'case_config_paths', []), collect_dir)
         results = []
 
+        filters = filters or dict(patterns=[], keywords=[], uncompressed_only=False)
+        archive_command([], filters)
+        if max_workers is not None and max_workers <= 0:
+            raise ValueError('--max-workers must be positive')
         nodes = self.nodes
+        if prefixes:
+            for prefix in prefixes:
+                if not any(node.get('pod_name', '').startswith(prefix) for node in nodes):
+                    log_error(f'WARNING: prefix "{prefix}" matched 0 pods')
+            nodes = [node for node in nodes if any(node.get('pod_name', '').startswith(prefix)
+                                                   for prefix in prefixes)]
+            if not nodes:
+                log_error('No clients found matching the requested prefixes')
+                return 1
+        nodes = select_targets(nodes, instance_ids, 'instance_id')
         if node_slice is not None:
             offset, count = node_slice
             if offset < 0:
@@ -1184,20 +1206,33 @@ class Deployer:
                 log_info('No nodes in the requested slice; nothing to collect.')
                 return
 
+        current_pods = {}
+        for namespace in {self._namespace(n) for n in nodes if self._transport(n) == 'kubectl' and pod_info}:
+            names = [n['pod_name'] for n in nodes if self._transport(n) == 'kubectl'
+                     and self._namespace(n) == namespace]
+            current_pods.update({(namespace, p['name']): p for p in get_pods(namespace, names)})
         workers = max_workers or (len(nodes) or 1)
         log_info(f'Collecting from {len(nodes)} node(s) with max_workers={workers}...')
 
         def collect_node(node):
             instance_id = node['instance_id']
             target = self._exec_target(node)
-            local_dir = os.path.join(collect_dir, f'{target}_{instance_id}')
+            if pod_info and self._transport(node) == 'kubectl':
+                pod = current_pods.get((self._namespace(node), target))
+                if pod is None:
+                    log_error(f'{target} -> Pod no longer available')
+                    return 'fail'
+                name = pod_directory(target, pod['ip'], pod.get('host_ip')) + f'__client-{instance_id}'
+            else:
+                name = f'{target}_{instance_id}'
+            local_dir = os.path.join(collect_dir, name)
             log_info(f'Collecting from {target} (instance_id={instance_id})...')
 
             # Per-node summary trigger (synchronous /summary endpoint).
             # Returns True if rc=0 (file ready), False on timeout.
             port = node.get('port', self.listen_port)
             url = f'http://localhost:{port}/summary'
-            deadline = time.monotonic() + summary_timeout
+            deadline = time.monotonic() + (0 if has_filters(filters) else summary_timeout)
             summary_ok = False
             while time.monotonic() < deadline:
                 r = self.run_on(node, f'curl -sf -X POST {url} --max-time 3',
@@ -1208,13 +1243,26 @@ class Deployer:
                 time.sleep(_POLL_INTERVAL)
             if summary_ok:
                 log_info(f'  {target} -> summary OK')
-            else:
+            elif not has_filters(filters):
                 log_info(f'  {target} -> summary timeout, collecting available files')
 
             # Immediately collect this node's files (no global barrier).
             try:
-                self.collect_files(node, local_dir)
-                self.collect_sdk_logs(node, local_dir, sdk_log_dir)
+                if has_filters(filters):
+                    sources = [['output', self.remote_work_dir, ['*.csv', '*.txt', '*.log', '*.log.*']],
+                               ['sdk', sdk_log_dir, ['*.log', '*.log.*', '*.txt']]]
+                    command = archive_command(sources, filters)
+                    transport = self._transport(node)
+                    if transport == 'kubectl':
+                        command = ['kubectl', 'exec', target, '-n', self._namespace(node), '--', 'sh', '-c', command]
+                    elif transport != 'localhost':
+                        command = self._build_ssh_cmd(node) + [f'{self._user_for(node)}@{target}', command]
+                    count_files = receive_archive(command, local_dir, shell=transport == 'localhost')
+                    log_info(f'  {target} -> {count_files} files collected to {local_dir}/')
+                    return 'ok' if count_files else 'empty'
+                else:
+                    self.collect_files(node, local_dir)
+                    self.collect_sdk_logs(node, local_dir, sdk_log_dir)
                 if not os.path.isdir(local_dir):
                     return 'empty'
                 count_files = sum(len(f) for _, _, f in os.walk(local_dir))
@@ -1236,6 +1284,8 @@ class Deployer:
         empty = sum(1 for r in results if r == 'empty')
         fail = sum(1 for r in results if r == 'fail')
         log_info(f'\nCollect result: {ok} ok / {empty} empty / {fail} fail / {len(results)} total')
+        if has_filters(filters) or prefixes or instance_ids or pod_info:
+            return 1 if fail else 0
 
     def do_run(self, duration):
         """Wait duration then auto stop + collect."""
@@ -1787,6 +1837,11 @@ def main():
 
     # collect
     p = sub.add_parser('collect', help='Collect output files and SDK logs', parents=[shared])
+    add_collect_filters(p)
+    p.add_argument('-p', '--prefix', action='append', default=None, dest='prefixes', metavar='PREFIX',
+                   help='Pod name prefix to match (repeatable: -p client-a -p client-b). '
+                        'A pod is selected if it matches ANY prefix.')
+    p.add_argument('--instance-ids', nargs='+', default=[], help='Exact client instance IDs to collect')
     p.add_argument('deploy_json')
     p.add_argument('config_template', nargs='?', default='config/config.json.example')
     p.add_argument('-o', '--output', default='collected',
@@ -1876,11 +1931,14 @@ def main():
         node_slice = None
         if getattr(args, 'count', None) is not None or getattr(args, 'offset', 0) > 0:
             node_slice = (getattr(args, 'offset', 0), getattr(args, 'count', None))
-        deployer.do_collect(
+        result = deployer.do_collect(
             args.sdk_log_dir, args.output,
             summary_timeout=getattr(args, 'summary_timeout', 5),
             max_workers=getattr(args, 'max_workers', None),
-            node_slice=node_slice)
+            node_slice=node_slice, filters=filters_from_args(args),
+            prefixes=args.prefixes, instance_ids=args.instance_ids, pod_info=args.pod_info)
+        if result:
+            sys.exit(result)
     elif args.command == 'clean':
         deployer.do_clean()
     elif args.command == 'clean-logs':

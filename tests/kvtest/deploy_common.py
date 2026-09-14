@@ -603,7 +603,7 @@ def start_service(pod, namespace, config, remote_config, port, process_name,
 
 def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
                           remote_config_dir=None, remote_dir=None,
-                          timeout=DEFAULT_TIMEOUT):
+                          timeout=DEFAULT_TIMEOUT, include_pod_info=False):
     """Collect log files from a single pod.
 
     Primary path: stream all log files + resource_monitor.csv + stdout.log
@@ -625,7 +625,9 @@ def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
     """
     pod_name = pod['name']
     pod_ip = pod['ip']
-    local_pod_dir = os.path.join(local_dir, f'{pod_name}')
+    from log_collect import pod_directory
+    directory = pod_directory(pod_name, pod_ip, pod.get('host_ip')) if include_pod_info else pod_name
+    local_pod_dir = os.path.join(local_dir, directory)
     os.makedirs(local_pod_dir, exist_ok=True)
 
     try:
@@ -991,7 +993,7 @@ def cmd_kill_impl(pods, namespace, process_name, label, timeout=DEFAULT_TIMEOUT)
 
 def cmd_collect_impl(pods, namespace, remote_config, output_dir, label,
                      remote_dir=None, timeout=DEFAULT_TIMEOUT,
-                     max_workers=None):
+                     max_workers=None, include_pod_info=False):
     """Collect service logs from all pods.
 
     ``remote_dir`` (standalone mode) is where the binary's ``stdout.log``
@@ -1017,12 +1019,13 @@ def cmd_collect_impl(pods, namespace, remote_config, output_dir, label,
     set_collect_stagger_window(min(30.0, len(pods) * 0.06))
 
     def do_op(pod):
+        kwargs = {'include_pod_info': True} if include_pod_info else {}
         delay = _collect_stagger_delay()
         if delay > 0:
             time.sleep(delay)
         return collect_logs_from_pod(pod, namespace, log_dir, local_dir,
                                      remote_config_dir=remote_config_dir,
-                                     remote_dir=remote_dir, timeout=timeout)
+                                     remote_dir=remote_dir, timeout=timeout, **kwargs)
     return do_for_all_pods(pods, do_op, f'Collecting {label}',
                            max_workers=max_workers)
 
@@ -1729,9 +1732,10 @@ def cmd_collect_shared(args, pods, label, timeout=DEFAULT_TIMEOUT):
     """
     remote_dir = getattr(args, 'remote_dir', None)
     max_workers = getattr(args, 'max_workers', None)
+    kwargs = {'include_pod_info': True} if getattr(args, 'pod_info', False) else {}
     return cmd_collect_impl(pods, args.namespace, args.remote_config,
                             args.output, label, remote_dir=remote_dir,
-                            timeout=timeout, max_workers=max_workers)
+                            timeout=timeout, max_workers=max_workers, **kwargs)
 
 
 def cmd_clean_shared(args, pods, process_name, process_name_standalone, label,

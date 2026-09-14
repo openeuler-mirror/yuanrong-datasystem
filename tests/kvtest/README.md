@@ -244,3 +244,52 @@ bash tests/test_standalone_mode.sh
 | [docs/benchmark-guide.md](docs/benchmark-guide.md) | Benchmark 模式：8 种 Set/Get/Mixed 测试模式、per-phase 计时 |
 | [docs/design.md](docs/design.md) | 架构设计：模块设计、线程模型、指标系统、QPS 控制机制 |
 | [docs/jf-integration-design.md](docs/jf-integration-design.md) | 独立部署 + 服务发现模拟：JfClient、mock server、deploy 脚本 standalone 模式、E2E 测试 |
+
+
+### 按需收集 Worker / Client 日志
+
+继续使用 `deploy_worker.py collect` 和 `deploy_client.py collect`，无需新增命令行脚本。以下命令在 `tests/kvtest` 目录执行：
+
+```bash
+# 使用现有 -p 选择 Pod，仅收 worker.log 中包含 URMA_PERF 的行
+python3 deploy_worker.py collect -p worker-1 -p worker-10 --file-pattern 'worker.log' --keyword URMA_PERF -o collected-perf
+
+# 使用 -p 选择 Client Pod，只收 *access*.log
+python3 deploy_client.py collect deploy.json -p client-1 -p client-10 --file-pattern '*access*.log' -o collected-access
+
+# 也可以按 deploy.json 中的 instance_id 选择 Client
+python3 deploy_client.py collect deploy.json --instance-ids 1 10 --file-pattern '*access*.log' --keyword URMA_PERF -o collected-client-perf
+
+# 全部目标，只收未压缩日志（含未压缩轮转文件）
+python3 deploy_worker.py collect -p worker- --uncompressed-only --max-workers 16 -o collected-recent
+python3 deploy_client.py collect deploy.json --uncompressed-only --max-workers 16 -o collected-client-recent
+
+# 全量收集并启用 Pod/IP 目录名
+python3 deploy_worker.py collect -p worker- --pod-info -o collected-with-addresses
+python3 deploy_client.py collect deploy.json --pod-info -o collected-client-with-addresses
+
+# 不传新增选项，保留原有全量收集流程
+python3 deploy_worker.py collect -p worker- -o collected-all
+python3 deploy_client.py collect deploy.json -o collected-client-all
+```
+
+Worker 继续使用现有 `-p/--prefix`，可重复传多个前缀或完整 Pod 名，保持原有前缀匹配语义（`pod-1` 也可能匹配 `pod-10`），不新增 `--pods`。Client 同样使用可重复的 `-p/--prefix`，按任一前缀匹配 deploy.json 中的 Pod，不重复收集或改变实例编号；不传 `-p` 时仍收集配置中的全部 Client。同时指定前缀和实例 ID 时取交集。原有 count/offset 仍用于分批，建议不要与前缀选择混用。前缀无匹配时告警，全部前缀无匹配时返回失败，不退回全量收集。
+
+`--file-pattern` 匹配日志文件名；含 `/` 时匹配相对于对应日志根目录的路径。多个 pattern 或 keyword 可以重复传入，各自按 OR 匹配，两类条件之间取交集。keyword 为区分大小写的 UTF-8 字面子串，不是正则表达式；仅输出匹配行，无上下文行。文件名通配符须加引号，防止本地 shell 提前展开。筛选适用于日志根目录、Worker stdout/procmon、Client output/SDK；不收不匹配的附带文件。
+
+关键字筛选在远端执行，结果文件保留相对路径并追加 `.matched` 后缀，内容为未压缩文本；无命中时不产生文件。支持读取 gzip/bzip2/xz 日志后筛选，其他压缩格式在关键字模式下明确报错。`--uncompressed-only` 按压缩后缀排除归档，不按 mtime 判断，也不会排除仍未压缩的旧轮转文件。它与关键字或文件名筛选可组合；传输本身仍使用 gzip，以减少网络流量。
+
+显式传入 `--pod-info` 后，Pod 收集目录为 `<Pod>__podip-<PodIP>__hostip-<HostIP>`；Client 再追加 `__client-<instance_id>`。仅在启用该参数时使用包含地址的目录；地址读取自当前 Kubernetes 状态，缺失 HostIP 时明确标为 unknown。SSH/localhost Client 保留原来的 host_instance_id 目录。筛选模式使用 logs/procmon/stdout 或 output/sdk 子目录，避免不同来源同名文件覆盖；不改变源文件。不传新增参数时完整保留原有收集范围、目录命名、目录内部布局、并发默认值和 Client summary 流程。
+
+并发默认行为不变；大量节点建议显式传 `--max-workers 16`。筛选模式需要目标节点有 Python 3，按行处理关键字，传输结果落本地临时文件再解包，避免整批日志驻留内存；匹配行临时文件使用远端临时目录，需有足够空间。筛选 Client 日志不触发 `/summary`。单个目标失败会报告失败并继续其他目标，筛选模式最终返回非零；不会改用全量下载掩盖筛选失败。请每次使用新的 `-o` 目录，避免上次收集结果混入本次分析。线上文件仍可能轮转，不保证跨节点同一时刻的日志快照。
+
+
+每次 collect 另外归档复现配置，不受 `--file-pattern`、`--keyword` 或 `--uncompressed-only` 影响：
+
+- Client：传入 `aaa/deploy.json aaa/config.json` 时，只将这两个文件复制为 `<output>/aaa/deploy.json`、`<output>/aaa/config.json`，不复制 aaa 下其他文件或子目录。重复传入同一文件只复制一次；不同输入映射到同一归档文件名时明确报错。
+- Worker：将每个选中 Pod 的 `--remote-config` 内容保存为 `<output>/<Pod目录>/worker_config.json`，保留实际部署参数；开启 `--pod-info` 时放入包含 IP 的 Pod 目录。读取失败会报告配置收集失败并返回非零。
+
+这是额外的配置归档；原有日志收集范围、并发默认值和 Client summary 流程继续保留。
+
+
+`--file-pattern` 示例适用于 Worker 和 Client：`'*access*.log'`、`'*INFO*.log'`、`'*operation*.log'`、`'*metrics*.log'`、`'*request*.log'`、`'*resource*.log'`。例如 `'*resource*.log'` 同时覆盖 `kv_resource.log`、`resource.log`、`resource_monitor.log`。筛选收集明确排除 `env` 和 `procmon.py`，即使传入 `--file-pattern '*'` 也不收集；原有全量日志匹配规则不变。

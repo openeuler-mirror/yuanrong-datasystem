@@ -610,3 +610,13 @@ python -m unittest test_multi_key_prefetch.TestDeviceOcClientMethods.test_device
   Group details use sparse JSON from zero-based group index to nonzero queue length. Both details use `{}` for an
   observed all-zero sample and empty cells for unavailable data; totals still cover all entries. Start a fresh CSV
   when upgrading from the older dense detail encoding. Details remain CSV inputs.
+
+
+### kvtest selective log collection
+
+`tests/kvtest/deploy_worker.py collect` and `deploy_client.py collect` support filename globs, literal keyword lines, and uncompressed-only collection. Worker reuses its existing repeatable `-p/--prefix` selection; Client uses the same repeatable `-p/--prefix` semantics within deploy.json and supports exact `--instance-ids` selection; neither collect CLI exposes `--pods`. `tests/kvtest/log_collect.py` owns shared argument semantics, remote filtering, disk-spooled archive transfer, and safe extraction. No separate collector CLI is required. Keyword filtering requires Python 3 on targets; no-filter calls retain the legacy full collection path. Opt-in `--pod-info` names Pod directories with Pod name, current Pod IP, and Host IP; Client adds its instance ID. With no new options, collection scope, directory layout, concurrency defaults, and Client summary behavior remain unchanged. Large clusters can explicitly set `--max-workers 16`. See `tests/kvtest/README.md` for options, layout, limitations, and examples.
+
+Regression entrypoints: `python3 -m unittest discover -s tests/kvtest/tests/python -p test_log_collect.py` plus `test_deploy_worker.py`, `test_deploy_client.py`, and `test_deploy_common.py`. These checks exercise temporary log archives and mocked transport orchestration; they do not substitute for a real large-cluster load test. Collection is an operator tool, outside the request hot path, with no service persistence or recovery format changes.
+
+
+Each collect additionally archives reproduction configuration: Client copies only its input deploy/config files into the output, retaining their parent directory names (for example `aaa/deploy.json` and `aaa/config.json`), without copying other directory contents; Worker saves each selected Pod's remote config as `worker_config.json` in that Pod's log directory. Log filters do not filter this configuration archive. Existing default log selection, concurrency, and summary behavior remain unchanged.
