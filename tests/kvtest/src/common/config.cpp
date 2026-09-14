@@ -202,6 +202,8 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
             cfg.notifyCount = j["notify_count"];
         if (j.contains("notify_interval_us"))
             cfg.notifyIntervalUs = j["notify_interval_us"];
+        if (j.contains("notify_queue_max"))
+            cfg.notifyQueueMax = j["notify_queue_max"];
         if (j.contains("enable_jitter"))
             cfg.enableJitter = j["enable_jitter"];
         if (j.contains("enable_cross_node_connection"))

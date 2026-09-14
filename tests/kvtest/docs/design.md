@@ -597,6 +597,19 @@ NotifyPeers(keys, size):
   5. thread_local httplib::Client 缓存，复用 TCP 连接
 ```
 
+#### 通知链路的队列上限与背压
+
+通知产生速率（`写速率 × notify_count`）可能超过消费速率（`池线程数 / 单任务耗时`），此时 `ThreadPool` 的待处理队列会持续增长。两层保护：
+
+| 层 | 位置 | 行为 |
+|----|------|------|
+| **背压（产生侧）** | `KVWorker::NotifyPeers` 开头 | 队列已达 `notify_queue_max` 时跳过整轮 fan-out（省掉洗牌、地址解析与每 target 一次分配），计入 `suppressed` |
+| **上限（队列侧）** | `ThreadPool::Submit` | 队列已达上限时丢弃该任务并计入 `dropped`；`notify_queue_max = 0` 恢复历史的无上限行为 |
+
+两者共同保证单个 notify 池的待处理任务不超过 `notify_queue_max`（默认 65536，按实测约 240 B/task 折合 ~16 MB）。接收侧池只有上限保护——它由收到的 HTTP 请求驱动，无法对上游施加背压。
+
+> 丢弃是**有意**的：没有这两个计数器时，同样的丢弃只是静默发生，且队列先无界增长（实测单实例可达 22 万任务 / 0.58 MB/s），长稳跑数小时会把客户端 OOM。监控行会打印 `dropped=` / `suppressed=`，非零即表示接收侧看到的负载低于配置值。
+
 ### 3.3 HTTP 服务 (HttpServer)
 
 **文件**: `src/rpc/http_server.{h,cpp}`（cmake 模式）、`src/rpc/brpc_server.{h,cpp}`（bazel 模式，`KVTEST_USE_BRPC`）、共享 `src/rpc/notify_dispatcher.{h,cpp}`
@@ -783,6 +796,7 @@ JSON 配置文件，使用 nlohmann/json 解析。
 | `batch_keys_count` | int | 1 | ≥ 1 | 批量操作的 key 数量 |
 | `notify_count` | int | 10 | ≥ 0 | 每次写入通知几个 peer |
 | `notify_interval_us` | int | 0 | ≥ 0（0=并行） | 通知间隔（微秒） |
+| `notify_queue_max` | int | 65536 | ≥ 0（0=无上限） | 每个 notify 池的待处理任务上限；超出即丢弃并计数 |
 | `enable_jitter` | bool | true | - | 启用随机偏移避免请求同步 |
 | `enable_cross_node_connection` | bool | true | - | 允许跨节点 failover |
 | `enable_local_cache` | bool | false | - | 控制 Get/MGet 读路径：true 走绑定 Worker，false 按 metadata owner 走 Transport 层；同机副本且 SHM 可用时仍可使用 SHM |

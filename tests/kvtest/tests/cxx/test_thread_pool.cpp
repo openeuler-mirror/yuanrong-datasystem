@@ -131,3 +131,70 @@ TEST(ConfiguredReadConcurrencyIsApplied) {
     ASSERT_EQ(queuedAtLimit, static_cast<size_t>(kTaskCount - kExpectedReadThreads));
     ASSERT_EQ(finalMaxActive, kExpectedReadThreads);
 }
+
+// A bound on the pending queue turns an outrunning producer into a counted
+// drop instead of unbounded memory growth.
+TEST(QueueBoundDropsExcessAndCounts) {
+    constexpr size_t kBound = 4;
+    constexpr int kExtra = 16;
+    ThreadPool pool(1, kBound);
+    std::atomic<bool> block{true};
+    pool.Submit([&]() {
+        while (block.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    std::atomic<int> executed{0};
+    for (int i = 0; i < kExtra; i++) pool.Submit([&]() { executed++; });
+
+    ASSERT_EQ(pool.QueueSize(), kBound);
+    ASSERT_EQ(pool.DroppedCount(), static_cast<uint64_t>(kExtra - kBound));
+
+    block = false;
+    for (int i = 0; i < 200 && pool.QueueSize() > 0; i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_EQ(pool.QueueSize(), static_cast<size_t>(0));
+    ASSERT_EQ(executed.load(), static_cast<int>(kBound));
+}
+
+// Default construction stays unbounded: existing callers see no behavior change.
+TEST(QueueBoundDefaultsToUnbounded) {
+    ThreadPool pool(1);
+    std::atomic<bool> block{true};
+    pool.Submit([&]() {
+        while (block.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    for (int i = 0; i < 200; i++) pool.Submit([&]() {});
+    ASSERT_EQ(pool.QueueSize(), static_cast<size_t>(200));
+    ASSERT_EQ(pool.DroppedCount(), static_cast<uint64_t>(0));
+    block = false;
+}
+
+TEST(QueueBoundZeroIsUnbounded) {
+    ThreadPool pool(1, 0);
+    std::atomic<bool> block{true};
+    pool.Submit([&]() {
+        while (block.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    for (int i = 0; i < 50; i++) pool.Submit([&]() {});
+    ASSERT_EQ(pool.QueueSize(), static_cast<size_t>(50));
+    ASSERT_EQ(pool.DroppedCount(), static_cast<uint64_t>(0));
+    block = false;
+}
+
+// A bound above the offered load must be invisible: nothing dropped, all run.
+TEST(NoDropsBelowQueueBound) {
+    constexpr int kTasks = 100;
+    ThreadPool pool(2, 1024);
+    std::atomic<int> executed{0};
+    for (int i = 0; i < kTasks; i++) pool.Submit([&]() { executed++; });
+    for (int i = 0; i < 200 && executed.load() < kTasks; i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_EQ(executed.load(), kTasks);
+    ASSERT_EQ(pool.DroppedCount(), static_cast<uint64_t>(0));
+    ASSERT_EQ(pool.QueueSize(), static_cast<size_t>(0));
+}
