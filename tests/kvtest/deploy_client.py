@@ -1486,9 +1486,15 @@ def cmd_gen_config(args):
             log_error(f'No running pods found matching prefixes {args.prefixes} '
                       f'in namespace "{args.namespace}"')
             sys.exit(1)
-        if mode != 'benchmark' and (args.writer_count < 0 or args.writer_count > len(pods)):
-            log_error(f'ERROR: --writer-count ({args.writer_count}) must be 0..{len(pods)}')
-            sys.exit(1)
+        # --writer-count defaults to None = all pods are writers. Resolve
+        # before validation so the range check sees a concrete number.
+        if mode != 'benchmark':
+            writer_count = args.writer_count if args.writer_count is not None else len(pods)
+            if writer_count < 0 or writer_count > len(pods):
+                log_error(f'ERROR: --writer-count ({writer_count}) must be 0..{len(pods)}')
+                sys.exit(1)
+        else:
+            writer_count = None  # benchmark mode ignores writer_count (all writers)
 
         node_pods = {}
         for i, pod in enumerate(pods):
@@ -1499,9 +1505,9 @@ def cmd_gen_config(args):
             sorted_nodes = sorted(node_pods.keys())
             pod_queues = {n: list(node_pods[n]) for n in sorted_nodes}
             assigned = 0
-            while assigned < args.writer_count:
+            while assigned < writer_count:
                 for node in sorted_nodes:
-                    if assigned >= args.writer_count:
+                    if assigned >= writer_count:
                         break
                     if pod_queues[node]:
                         writer_indices.add(pod_queues[node].pop(0))
@@ -1538,10 +1544,12 @@ def cmd_gen_config(args):
         # Assign writer/reader roles using --writer-count (consistent with kubectl mode)
         writer_indices = set()
         if mode != 'benchmark':
-            if args.writer_count < 0 or args.writer_count > len(nodes):
-                log_error(f'ERROR: --writer-count ({args.writer_count}) must be 0..{len(nodes)}')
+            # --writer-count defaults to None = all nodes are writers.
+            writer_count = args.writer_count if args.writer_count is not None else len(nodes)
+            if writer_count < 0 or writer_count > len(nodes):
+                log_error(f'ERROR: --writer-count ({writer_count}) must be 0..{len(nodes)}')
                 sys.exit(1)
-            for i in range(min(args.writer_count, len(nodes))):
+            for i in range(min(writer_count, len(nodes))):
                 writer_indices.add(i)
 
             writer_pipeline = _parse_pipeline(args.pipeline)
@@ -1616,8 +1624,8 @@ def _add_gen_config_args(p):
                    help='Manual node list for deployment, comma-separated host:port pairs '
                         '(e.g. "1.2.3.4:9000,5.6.7.8:9001"). Default: localhost single node')
     # Pipeline / Cache common
-    p.add_argument('-w', '--writer-count', type=int, default=1,
-                   help='Number of writer instances (default: 1)')
+    p.add_argument('-w', '--writer-count', type=int, default=None,
+                   help='Number of writer instances (default: all pods are writers)')
     p.add_argument('--pipeline', default='setStringView',
                    help='Comma-separated writer pipeline ops (default: setStringView)')
     p.add_argument('--notify-pipeline', default='getBuffer',
