@@ -59,11 +59,11 @@ inline int64_t SelectLocationRefreshBackoffMs(bool draining, uint8_t retryCount,
 }
 
 /**
- * @brief Clamp a stale-location retry backoff to the remaining API deadline.
+ * @brief Clamp a stale-location retry backoff to the remaining request deadline.
  *
- * A stale snapshot recovers via a forced ring refresh (typically single-digit ms), so waiting longer
- * than half the remaining budget before the next attempt only starves the retry round that would
- * have succeeded. Keep at least one more attempt inside the budget.
+ * Recovery depends on a forced ring refresh that completes in single-digit milliseconds, so waiting
+ * longer than half the remaining budget only starves the retry round that would have succeeded.
+ * Keep at least one more attempt inside the budget.
  */
 inline int64_t ClampBackoffToDeadline(int64_t backoffMs, int64_t remainingUs)
 {
