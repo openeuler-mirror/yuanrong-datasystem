@@ -26,6 +26,7 @@
 #include <unordered_set>
 #include <vector>
 #include <tbb/concurrent_hash_map.h>
+#include <tbb/concurrent_queue.h>
 
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/log/log.h"
@@ -604,9 +605,13 @@ private:
         }
     };
 
+    // Producers only touch maybeExpiredShmStagingQueue_; maybeExpiredShmQueue_ is drained and popped
+    // exclusively by FlushMaybeExpiredQueue, and maybeExpiredShmQueueMutex_ only serializes concurrent
+    // flushers. Draining precedes popping within one flush, so item visibility is unchanged.
     mutable std::shared_mutex maybeExpiredShmQueueMutex_;
     std::priority_queue<MaybeExpiredShmItem, std::vector<MaybeExpiredShmItem>, MaybeExpiredShmItemCmp>
         maybeExpiredShmQueue_;
+    tbb::concurrent_queue<MaybeExpiredShmItem> maybeExpiredShmStagingQueue_;
     mutable std::shared_mutex maybeExpiredShmTableMutex_;
     std::unordered_map<ClientKey, std::unordered_set<ShmKey>> maybeExpiredShmTable_;
     std::atomic<bool> maybeExpiredFlushExit_{ false };
