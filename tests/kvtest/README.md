@@ -293,3 +293,36 @@ Worker 继续使用现有 `-p/--prefix`，可重复传多个前缀或完整 Pod 
 
 
 `--file-pattern` 示例适用于 Worker 和 Client：`'*access*.log'`、`'*INFO*.log'`、`'*operation*.log'`、`'*metrics*.log'`、`'*request*.log'`、`'*resource*.log'`。例如 `'*resource*.log'` 同时覆盖 `kv_resource.log`、`resource.log`、`resource_monitor.log`。筛选收集明确排除 `env` 和 `procmon.py`，即使传入 `--file-pattern '*'` 也不收集；原有全量日志匹配规则不变。
+
+
+### collect 的传输压缩与本地解包
+
+Worker 和 Client 均支持 `--compress/--no-compress`、`--extract/--no-extract`。不传这些参数时保持原有流程，包括全量收集的传输与回退行为；筛选收集默认 gzip 传输并自动解包。显式使用任一参数时，未指定的另一项默认为启用。
+
+```bash
+# 压缩传输，收回后保留归档，不解包
+python3 deploy_worker.py collect -p worker- --compress --no-extract -o worker-archives
+python3 deploy_client.py collect aaa/deploy.json aaa/config.json -p client- --compress --no-extract -o client-archives
+
+# 压缩传输，收回后解包（不另外保留传输归档）
+python3 deploy_worker.py collect -p worker- --compress --extract -o worker-logs
+
+# 不使用 gzip 压缩，收回后解包
+python3 deploy_client.py collect aaa/deploy.json aaa/config.json --no-compress -o client-logs
+
+# 可与已有日志筛选组合
+python3 deploy_worker.py collect -p worker- --file-pattern '*access*.log' --keyword URMA_PERF --no-compress --no-extract -o access-archives
+```
+
+| 选项组合 | 本地结果 |
+| --- | --- |
+| `--compress --extract` | 解包后的日志文件 |
+| `--compress --no-extract` | `.tar.gz` 归档 |
+| `--no-compress --extract` | 解包后的日志文件，传输不做 gzip 压缩 |
+| `--no-compress --no-extract` | 未压缩的 `.tar` 归档 |
+
+不解包时，Worker 每个 Pod 目录保存 `logs.tar.gz`（或 `logs.tar`）；Client 全量收集分别保存 `output.tar.gz`、`sdk.tar.gz`，筛选收集将两个来源放入一个 `logs.tar.gz`，未压缩时后缀均为 `.tar`。Worker 全量归档保留远端文件路径（无开头 `/`），自动解包仍按原有规则取文件名；Client 全量归档保留对应 output/SDK 根目录内的相对路径，筛选归档保留来源子目录。
+
+这些参数控制传输归档，不改变源日志，也不改变 `--uncompressed-only` 对源文件的筛选。原有 `.log.gz` 文件不会因 `--extract` 自动展开；该参数只解包收集生成的外层归档。Client 的 deploy/config 文件及 Worker 的 worker_config.json 仍按现有规则单独归档，不放进日志压缩包。
+
+显式压缩/解包模式下，全量收集需要目标环境提供 tar（gzip 模式还需 tar 支持 gzip），筛选收集使用目标 Python 3。下载失败不回退到其他传输模式，也不会覆盖已有的完整归档；每个归档通过临时文件完成后原子替换。建议每次使用新的 `-o`，避免此前解包的日志或其他模式的归档混入当前结果。大集群仍可用 `--max-workers` 控制并发，默认并发规则不变。

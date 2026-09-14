@@ -17,7 +17,7 @@ import shlex
 import sys
 
 from log_collect import (add_collect_filters, archive_command, filters_from_args, has_filters,
-                         pod_directory, receive_archive)
+                         pod_directory, receive_archive, archive_options_from_args)
 
 from deploy_common import (
     DEFAULT_TIMEOUT,
@@ -289,6 +289,8 @@ def cmd_collect(args, pods):
     """Collect worker logs from pods."""
     try:
         options = filters_from_args(args)
+        archive_options = archive_options_from_args(args)
+        transfer_kwargs = {'archive_options': archive_options} if archive_options is not None else {}
         archive_command([], options)
         if getattr(args, 'max_workers', None) is not None and args.max_workers <= 0:
             raise ValueError('--max-workers must be positive')
@@ -313,10 +315,10 @@ def cmd_collect(args, pods):
             if args.remote_dir:
                 sources.append(['stdout', args.remote_dir, ['stdout.log'], False])
             command = ['kubectl', 'exec', '-n', args.namespace, pod['name'], '--',
-                       'sh', '-c', archive_command(sources, options)]
+                       'sh', '-c', archive_command(sources, options, **transfer_kwargs)]
             name = pod_directory(pod['name'], pod['ip'], pod.get('host_ip')) if getattr(args, 'pod_info', False) else pod['name']
             directory = os.path.join(args.output, name)
-            count = receive_archive(command, directory, args.timeout)
+            count = receive_archive(command, directory, args.timeout, **transfer_kwargs)
             log_info(f"  {pod['name']} -> {count} files")
             return config_ok
         except Exception as error:
