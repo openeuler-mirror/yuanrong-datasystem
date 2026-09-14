@@ -175,16 +175,32 @@ freezes the sorted full set, enters `PROPOSED`, and never recalculates or resets
 | all `N` active members publish the same frozen plan | start braft with the complete `N`-peer configuration |
 | a different frozen plan is observed | fail closed; do not change proposal and do not call `reset_peers` |
 | one quorum-confirmed valid non-empty committed configuration excludes local `ABSENT` endpoint | `WaitingToJoinPlan` |
-| one quorum-confirmed valid non-empty committed configuration includes local `ABSENT` endpoint | `BootstrapPlan` with the full authoritative peer list to rebuild local election/membership metadata |
+| one quorum-confirmed valid non-empty committed configuration includes local `ABSENT` endpoint | wait for membership-managed committed exclusion; never recreate that configuration locally |
 | observed committed configurations have no member quorum, or quorum-confirmed configurations conflict | retry with `K_NOT_READY` until one normalized configuration reaches its own member quorum |
 
 After braft successfully initializes a non-empty `BootstrapPlan`, the Node publishes `STARTED`. Only braft configuration callbacks update the local committed-membership snapshot. Bootstrap observation state is process-local and ephemeral; durable Raft metadata and quorum-confirmed committed configuration remain authoritative across restart.
+
+An accepted nonempty committed observation latches the existing-cluster barrier for the process lifetime, independently of
+observation expiry. Recovery observations carry only current metadata state. Election forwards accepted `ABSENT` senders
+to Membership's bounded, deduplicated pending set after releasing the bootstrap mutex. Membership probes only pending
+addresses through the existing Exchange RPC and performs network work without its lifecycle mutex held.
+
+A missing-data removal requires the current Leader, the notified target in the current committed configuration, a live
+`ABSENT` response, no in-flight membership operation, and target-excluded healthy quorums for both the current and resulting
+configurations. Term, configuration index, and exact peers are revalidated after the probe. The existing
+`discoveryRetryInterval` bounds retries. A pending address that later reports `VALID` receives first-attempt vacancy priority;
+subsequent attempts use the existing candidate fairness policy.
+An unrelated, unknown, or unreachable hint does not block ordinary Add/replacement selection. Pending hints are process-local
+and are neither durable intent nor a permanent candidate reservation. Successful Node startup publishes local `VALID`,
+including `WaitingToJoinPlan`; terminal or uncertain state publishes `UNKNOWN`. Legacy peers therefore cannot authorize
+missing-data removal.
 
 Committed configuration B is the only membership authority. Before reading B or generating policy, the Manager skips the reconciliation round while `CoordinatorRaftNode` reports an in-flight membership operation. The Node admits at most one Add/Remove through the same operation token used for shutdown drain; braft publishes committed configuration before completion releases that token, so the next admitted reconciliation rebuilds its decision from the new Leader/term, committed B, and follower health. A concurrent submission returns `K_TRY_AGAIN`, while `discoveryRetryInterval` bounds repeated Manager submissions after failed completion. Add/Remove completion callbacks remain diagnostic-only and capture no Manager state.
 
 | Committed state | Membership action |
 | --- | --- |
-| `B.size() < N` | Discover and add one eligible candidate; remove no committed member. |
+| notified missing-data target in `B`, viable target-excluded old/new quorums, live `ABSENT` | Submit scoped removal through the existing Node singleflight. |
+| `B.size() < N` | Prefer a pending same-address candidate only when a live probe reports `VALID`; otherwise use ordinary Discovery selection. |
 | `B.size() == N` without confirmed failure | Perform local health polling and do not call Discovery. |
 | `B.size() == N` with confirmed failure | Discover and submit one replacement candidate. |
 | `B.size() > N` with confirmed failure | Remove the exact confirmed failed peer. |
@@ -258,7 +274,11 @@ Coordinator braft currently governs election state and committed voting membersh
 
 ## Identity And Persistence
 
-Each Runtime uses a distinct numeric loopback endpoint and exclusive data root. The endpoint and data/timing values are immutable for that attempt because the Runtime calls virtual `GetRaftFlags()` and captures `CoordinatorRaftFlags` before constructing the Service, including across retries and independent Runtime instances. Production exposes only `coordinator_raft_heartbeat_interval_ms`, `coordinator_raft_election_timeout_ms`, `coordinator_discovery_retry_interval_ms`, and `coordinator_member_failure_grace_ms`; membership health-check and bootstrap retry-warning intervals are internal defaults that tests can override through `CoordinatorRaftFlags`. Fresh roots require a stable full-member observation and a unanimously published frozen plan; valid existing roots recover locally, and quorum-confirmed committed configuration remains authoritative. The persisted old-Leader and follower restart STs relaunch generation 2 with the same endpoint/data root and a generation-specific provider that shares registration semantics with the cluster provider; recovery reaches the valid committed configuration while that provider's Discovery query count remains zero, excluding queries from other running Managers from the assertion. During persisted-follower downtime the original Leader remains serving; after restart any unique Leader is valid if the observed Leader serves successfully, non-Leaders return only readiness-compatible business statuses, and all members expose the committed configuration. Deleting one member's braft data and restarting it in place is not a supported recovery path because an empty local log cannot catch up from a Leader whose first retained entry requires a nonzero previous-log term; see braft issue #340. Container recovery replaces the failed instance, allowing the existing Leader's membership manager to remove the failed peer and add the replacement.
+Each Runtime uses a distinct numeric loopback endpoint and exclusive data root. The endpoint and data/timing values are immutable for that attempt because the Runtime calls virtual `GetRaftFlags()` and captures `CoordinatorRaftFlags` before constructing the Service, including across retries and independent Runtime instances. Production exposes only `coordinator_raft_heartbeat_interval_ms`, `coordinator_raft_election_timeout_ms`, `coordinator_discovery_retry_interval_ms`, and `coordinator_member_failure_grace_ms`; membership health-check and bootstrap retry-warning intervals are internal defaults that tests can override through `CoordinatorRaftFlags`. Fresh roots require a stable full-member observation and a unanimously published frozen plan; valid existing roots recover locally, and quorum-confirmed committed configuration remains authoritative. The persisted old-Leader and follower restart STs relaunch generation 2 with the same endpoint/data root and a generation-specific provider that shares registration semantics with the cluster provider; recovery reaches the valid committed configuration while that provider's Discovery query count remains zero, excluding queries from other running Managers from the assertion. During persisted-follower downtime the original Leader remains serving; after restart any unique Leader is valid if the observed Leader serves successfully, non-Leaders return only readiness-compatible business statuses, and all members expose the committed configuration.
+
+An empty local log cannot directly catch up as an existing member when the Leader requires a nonzero previous-log term
+(braft issue #340). Missing-data same-endpoint restart therefore waits for scoped committed removal and rejoins through
+normal AddPeer, with quorum retained by the other members. It never bootstraps the old member configuration locally.
 
 ## Validation Surface
 

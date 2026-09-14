@@ -108,6 +108,7 @@ round or enter the active view. Each round prioritizes active peers and probes a
 through other Discovery targets so stale entries cannot extend the round linearly. Per-peer BRPC channels are reused for
 the bootstrap worker lifetime. After outstanding exchanges drain, the worker's exit hook releases cached channels outside
 the cache mutex on success, failure, or cancellation, so bootstrap references cannot keep removed peers' sockets alive.
+Metadata probes from a `STARTED` node release their channel after each exchange instead of retaining it in that cache.
 Successful responses are validated and recorded exactly like inbound requests.
 `coordinator_discovery_retry_interval_ms` continues to govern Membership Discovery after Node startup.
 
@@ -138,7 +139,7 @@ The membership health-check interval and bootstrap retry-warning interval are in
 - Discovery supplies only exchange targets. Every bootstrap worker prioritizes active peers, then rotates through other
   normalized targets within the bounded concurrent fanout. Fresh-plan decisions use validated request and successful
   response observations with their local receive times.
-- Valid non-empty committed configurations take precedence only after the same normalized committed peer list is confirmed by that committed list's own quorum (`size / 2 + 1`), counting only reports from peers that are themselves members of that committed list. A quorum-confirmed configuration containing an `ABSENT` local endpoint becomes the explicit `BootstrapPlan` used to rebuild local election/membership metadata; a quorum-confirmed configuration excluding local produces `WaitingToJoinPlan`.
+- Valid non-empty committed configurations take precedence only after the same normalized committed peer list is confirmed by that committed list's own quorum (`size / 2 + 1`), counting only reports from peers that are themselves members of that committed list. An `ABSENT` local endpoint waits while that configuration contains it; only quorum-confirmed exclusion permits `WaitingToJoinPlan`.
 - Observed committed configurations without any quorum-confirmed peer list are retryable `K_NOT_READY`; conflicting
   quorum-confirmed configurations are also retryable. A committed configuration always takes priority over a fresh
   observation plan.
@@ -174,9 +175,10 @@ response: sender, expected count, peers, phase, and committed peers. `peers` is 
 frozen plan in `PROPOSED`. A fresh-bootstrap `STARTED` node continues to publish its frozen plan, while a recovered
 `STARTED` node leaves `peers` empty and publishes its independently bounded committed configuration in
 `committed_peers`; this permits the membership manager's transient `N + 1` replacement configuration. Receiver-local
-timestamps, stability state, terminal Status details, and local metadata state never cross the wire.
+timestamps, stability state, and terminal Status details never cross the wire. The appended `metadata_state` field publishes
+the current local metadata state: `UNKNOWN` for legacy or uncertain state, `ABSENT`, or `VALID`.
 
-Missing-data startup diagnostics are emitted before braft Node creation:
+Same-endpoint missing-data recovery:
 
 - `COORDINATOR_RAFT_METADATA_ABSENT` (INFO) records the endpoint and configured data directory once per empty-data
   startup, including static bootstrap and bootstrap waiting for quorum. Absence alone cannot distinguish a fresh
@@ -184,12 +186,26 @@ Missing-data startup diagnostics are emitted before braft Node creation:
 - `COORDINATOR_RAFT_EXISTING_MEMBER_WITHOUT_LOCAL_DATA` (WARNING) is emitted once per Manager when an active member
   reports a committed configuration containing the empty-data local endpoint, even without quorum. It records the
   reported configuration, confirmation count, required quorum, endpoint and data directory. This is suspected data
-  loss, not quorum-confirmed membership. Check the original volume; in-place recovery is unsupported and catch-up
-  may stall. Replacement with a new endpoint requires quorum. Deduplication is protected by `bootstrapMutex_`;
-  startup-plan selection still requires the same configuration quorum.
+  loss, not quorum-confirmed membership. Automatic recovery requires healthy quorum and committed exclusion.
+  Deduplication is protected by `bootstrapMutex_`.
 - Static bootstrap does not exchange committed configurations and therefore emits only the absence diagnostic.
-  Neither diagnostic proves that files were deleted or that replication is already stalled; neither changes startup,
-  election, membership, or serving behavior.
+  Neither diagnostic proves that files were deleted or that replication is already stalled.
+- Any accepted nonempty committed configuration latches a process-local existing-cluster barrier, including after
+  observation TTL expiry. Missing quorum cannot become permission for fresh bootstrap.
+- Only the current Leader forwards accepted peer `ABSENT` observations to Membership through a bounded, deduplicated in-memory set.
+  Membership performs a live Exchange probe immediately before `REMOVE_MISSING_DATA`, then revalidates leadership, term,
+  configuration index, exact committed peers, no in-flight operation, and healthy quorums for both the original and
+  target-excluded configurations.
+- After committed exclusion, the target starts empty with `WaitingToJoinPlan`; the normal AddPeer path fills the vacancy
+  with that address on its first attempt when the pending hint remains reachable and reports `VALID`; subsequent attempts
+  use ordinary candidate fairness. Hints are not persisted and do not reserve a permanent candidate.
+- Successful Node startup publishes local `VALID`, including an empty waiting node. Probe/startup failures and terminal
+  state publish `UNKNOWN`.
+- Exchange RPC handling remains serialized by the Service lifecycle mutex. Outbound live probes run in Membership's
+  reconciliation thread without Membership or Election locks held; Shutdown releases the Service lifecycle mutex before
+  joining that thread.
+- Legacy observations resolve to `UNKNOWN` and cannot authorize scoped removal. Static bootstrap is unchanged. Rollback to old
+  binaries restores their previous startup policy, so do not restart an empty-data old-version member during rollback.
 
 The Coordinator protobuf service order is a wire contract for the custom ZMQ transport. Legacy
 `ReportTopologyRecoveryCandidate` and `GetClusterRawSnapshot` remain method indexes 7 and 8;
@@ -201,6 +217,9 @@ move. The protocol change requires a full Coordinator-version rollout rather tha
 The current braft state machine rejects management-log apply and the Node exposes only voting-membership `AddPeer`/`RemovePeer` operations. Coordinator Raft therefore persists election state and committed voting configuration; it does not replicate Coordinator business key/value or topology data. Business RPC admission in election mode is determined by `CoordinatorServiceImpl`'s local `raftServing_` gate, which is opened and closed by braft leadership lifecycle callbacks.
 
 ## Build And Test
+
+`coordinator_election_manager_test` and `coordinator_membership_manager_test` are standalone CMake UT targets;
+the membership suite is excluded from the monolithic `ds_ut` target.
 
 | Level | Path | Coverage |
 | --- | --- | --- |
@@ -238,7 +257,7 @@ Each Runtime election case body has a 6-second deadline; mandatory teardown Stop
 - Keep local address/data/timing in one per-Runtime `GetRaftFlags()` snapshot for every startup attempt.
 - Keep `CoordinatorRuntime` instances one-shot by interface contract; retry requires constructing a new Runtime instance.
 - Keep Manager publication and bootstrap RPC availability ahead of asynchronous Node startup; Service lifecycle `RUNNING` must remain distinct from Leader-only business readiness.
-- Keep peer-assisted rebuild limited to local `ABSENT`, keep conflicting authoritative full-list observations retryable,
+- Keep missing-data removal limited to explicit local `ABSENT`, keep conflicting authoritative full-list observations retryable,
   and keep local metadata probe errors terminal without automatically deleting the Raft data root.
 - Preserve Coordinator ZMQ method indexes 7 and 8 and append bootstrap diagnostics at index 9; expose only phase and stable numeric status code, never raw Status text or data paths.
 - Keep Coordinator Raft limited to election and voting membership, keep business payloads outside its state machine, and keep business admission determined by the local `raftServing_` gate driven by braft leadership lifecycle callbacks.

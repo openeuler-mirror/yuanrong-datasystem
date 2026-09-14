@@ -86,6 +86,8 @@ const char *CoordinatorMembershipManager::MutationKindName(MutationKind kind) no
             return "ADD_REPLACEMENT";
         case MutationKind::REMOVE_FAILED:
             return "REMOVE_FAILED";
+        case MutationKind::REMOVE_MISSING_DATA:
+            return "REMOVE_MISSING_DATA";
         case MutationKind::ROLLBACK_CANDIDATE:
             return "ROLLBACK_CANDIDATE";
     }
@@ -99,7 +101,8 @@ bool CoordinatorMembershipOptions::IsValid() const noexcept
 
 CoordinatorMembershipManager::CoordinatorMembershipManager(CoordinatorMembershipOptions options,
                                                            CoordinatorRaftNode &raftNode,
-                                                           std::shared_ptr<ICoordinatorDiscovery> discovery)
+                                                           std::shared_ptr<ICoordinatorDiscovery> discovery,
+                                                           PeerMetadataProbe probePeerMetadata)
     : CoordinatorMembershipManager(
           options,
           Dependencies{
@@ -110,7 +113,8 @@ CoordinatorMembershipManager::CoordinatorMembershipManager(CoordinatorMembership
               },
               [&raftNode](const std::string &peer, MembershipOperationCallback callback) {
                   return raftNode.RemovePeer(peer, std::move(callback));
-              } },
+              },
+              std::move(probePeerMetadata) },
           std::move(discovery), [] { return std::chrono::steady_clock::now(); })
 {
 }
@@ -130,6 +134,15 @@ CoordinatorMembershipManager::CoordinatorMembershipManager(CoordinatorMembership
 CoordinatorMembershipManager::~CoordinatorMembershipManager() noexcept
 {
     LOG_IF_ERROR(Shutdown(), "Shutdown Coordinator membership manager failed");
+}
+
+void CoordinatorMembershipManager::NotifyPeerMissingRaftData(const std::string &peer)
+{
+    std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    if (state_ == LifecycleState::RUNNING && pendingMissingDataPeers_.size() < options_.expectedMemberCount
+        && pendingMissingDataPeers_.emplace(peer).second) {
+        lifecycleCv_.notify_all();
+    }
 }
 
 Status CoordinatorMembershipManager::Start()
@@ -218,6 +231,7 @@ Status CoordinatorMembershipManager::Shutdown()
     failureSince_.clear();
     candidateLastAttemptAt_.clear();
     replacementIntent_.reset();
+    pendingMissingDataPeers_.clear();
     if (stopConstructedManager) {
         return Status::OK();
     }
@@ -255,10 +269,10 @@ void CoordinatorMembershipManager::Run()
         }
 
         std::unique_lock<std::mutex> lock(lifecycleMutex_);
-        lifecycleCv_.wait_for(lock, options_.healthCheckInterval, [this] { return state_ != LifecycleState::RUNNING; });
         if (state_ != LifecycleState::RUNNING) {
             return;
         }
+        lifecycleCv_.wait_for(lock, options_.healthCheckInterval);
     }
 }
 
@@ -281,6 +295,32 @@ Status CoordinatorMembershipManager::ReconcileOnce()
     ReconcileReplacementIntent(status, health);
     if (!HasKnownQuorum(status, health)) {
         return Status::OK();
+    }
+
+    if (dependencies_.probePeerMetadata && now >= nextMembershipSubmissionAt_ && TryAdmitDiscovery()) {
+        const std::set<std::string> committedPeers(status.committedPeers.begin(), status.committedPeers.end());
+        std::set<std::string> pendingPeers;
+        {
+            std::lock_guard<std::mutex> lock(lifecycleMutex_);
+            pendingPeers = pendingMissingDataPeers_;
+        }
+        for (const auto &peer : pendingPeers) {
+            if (committedPeers.count(peer) == 0 || !HasKnownQuorum(status, health, peer)) {
+                continue;
+            }
+            RaftMetadataState metadataState = RaftMetadataState::UNKNOWN;
+            const auto probeStatus = dependencies_.probePeerMetadata(peer, metadataState);
+            nextMembershipSubmissionAt_ = now_() + options_.discoveryRetryInterval;
+            if (probeStatus.IsOk() && metadataState == RaftMetadataState::ABSENT) {
+                return SubmitRemove(CaptureSubmissionSnapshot(status), peer, {},
+                                    MutationKind::REMOVE_MISSING_DATA, now);
+            }
+            {
+                std::lock_guard<std::mutex> lock(lifecycleMutex_);
+                pendingMissingDataPeers_.erase(peer);
+            }
+            break;
+        }
     }
 
     const auto committedCount = status.committedPeers.size();
@@ -434,13 +474,20 @@ void CoordinatorMembershipManager::CleanupPolicyState(const CoordinatorRaftMembe
             ++it;
         }
     }
+    if (committedPeers.size() >= options_.expectedMemberCount) {
+        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        for (auto it = pendingMissingDataPeers_.begin(); it != pendingMissingDataPeers_.end();) {
+            it = committedPeers.count(*it) == 0 ? pendingMissingDataPeers_.erase(it) : std::next(it);
+        }
+    }
 }
 
 bool CoordinatorMembershipManager::HasKnownQuorum(const CoordinatorRaftMembershipStatus &status,
-                                                  const HealthSummary &health) const
+                                                  const HealthSummary &health,
+                                                  const std::string &excludedPeer) const
 {
     const size_t requiredQuorum = (status.committedPeers.size() / 2) + 1;
-    return health.knownHealthyMembers >= requiredQuorum;
+    return health.knownHealthyMembers - health.explicitlyHealthyPeers.count(excludedPeer) >= requiredQuorum;
 }
 
 bool CoordinatorMembershipManager::TryAdmitDiscovery()
@@ -496,6 +543,31 @@ Status CoordinatorMembershipManager::SelectCandidate(const CoordinatorRaftMember
             it = candidateLastAttemptAt_.erase(it);
         } else {
             ++it;
+        }
+    }
+
+    if (dependencies_.probePeerMetadata && status.committedPeers.size() < options_.expectedMemberCount) {
+        std::set<std::string> pendingPeers;
+        {
+            std::lock_guard<std::mutex> lock(lifecycleMutex_);
+            pendingPeers = pendingMissingDataPeers_;
+        }
+        for (const auto &peer : pendingPeers) {
+            if (eligibleCandidates.count(peer) == 0 || candidateLastAttemptAt_.count(peer) != 0
+                || !TryAdmitDiscovery()) {
+                continue;
+            }
+            RaftMetadataState metadataState = RaftMetadataState::UNKNOWN;
+            if (dependencies_.probePeerMetadata(peer, metadataState).IsOk()
+                && metadataState == RaftMetadataState::VALID) {
+                candidate = peer;
+                return Status::OK();
+            }
+            {
+                std::lock_guard<std::mutex> lock(lifecycleMutex_);
+                pendingMissingDataPeers_.erase(peer);
+            }
+            break;
         }
     }
 
@@ -598,7 +670,9 @@ Status CoordinatorMembershipManager::RevalidateSubmissionPolicy(const Submission
 
     CleanupPolicyState(current);
     const auto health = RefreshFollowerHealth(current, now);
-    const bool hasKnownQuorum = HasKnownQuorum(current, health);
+    const bool hasKnownQuorum = kind == MutationKind::REMOVE_MISSING_DATA
+                                    ? HasKnownQuorum(current, health, targetPeer)
+                                    : HasKnownQuorum(current, health);
     const auto containsCommittedPeer = [&current](const std::string &peer) {
         return std::find(current.committedPeers.begin(), current.committedPeers.end(), peer)
                != current.committedPeers.end();
@@ -624,6 +698,9 @@ Status CoordinatorMembershipManager::RevalidateSubmissionPolicy(const Submission
             policyStillHolds = current.committedPeers.size() > options_.expectedMemberCount
                                && containsCommittedPeer(targetPeer) && isConfirmedFailed(targetPeer);
             break;
+        case MutationKind::REMOVE_MISSING_DATA:
+            policyStillHolds = containsCommittedPeer(targetPeer);
+            break;
         case MutationKind::ROLLBACK_CANDIDATE: {
             const auto committedCandidate = FindCommittedReplacementCandidate(current);
             policyStillHolds = current.committedPeers.size() > options_.expectedMemberCount
@@ -633,7 +710,7 @@ Status CoordinatorMembershipManager::RevalidateSubmissionPolicy(const Submission
             break;
         }
     }
-    if (hasKnownQuorum && policyStillHolds) {
+    if (hasKnownQuorum && policyStillHolds && !dependencies_.hasInFlightMembershipOperation()) {
         return Status::OK();
     }
 
@@ -698,7 +775,8 @@ Status CoordinatorMembershipManager::SubmitRemove(const SubmissionSnapshot &expe
 {
     RETURN_IF_NOT_OK(RevalidateSubmissionPolicy(expected, kind, targetPeer, failedPeer, now));
     std::unique_lock<std::mutex> lifecycleLock(lifecycleMutex_);
-    if (state_ == LifecycleState::STOPPING || state_ == LifecycleState::STOPPED) {
+    if (state_ == LifecycleState::STOPPING || state_ == LifecycleState::STOPPED
+        || dependencies_.hasInFlightMembershipOperation()) {
         return Status::OK();
     }
     nextMembershipSubmissionAt_ = now + options_.discoveryRetryInterval;
