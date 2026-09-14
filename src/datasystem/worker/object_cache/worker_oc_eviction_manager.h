@@ -169,8 +169,11 @@ public:
      * @brief Trigger asynchronous eviction task.
      * @param[in] needSize The need size.
      * @param[in] cacheType The type of cache.
+     * @param[in] forceEvict Bypass the low-water-mark gate. Only allowed for extent-unavailable OOM
+     *            (memory::IsExtentUnavailableOom), where contiguous space is exhausted while usage stays
+     *            below the water mark; eviction then continues until needSize bytes are freed.
      */
-    void Evict(uint64_t needSize = 0, CacheType cacheType = CacheType::MEMORY);
+    void Evict(uint64_t needSize = 0, CacheType cacheType = CacheType::MEMORY, bool forceEvict = false);
 
     /**
      * @brief Estimates the pre-trigger margin: the average cached object size (>= 1 MiB).
@@ -376,9 +379,9 @@ public:
     bool IsObjectBeingRebalanced(const std::string &objectKey) const;
 
 #ifdef WITH_TESTS
-    void EvictionTaskForTest(uint64_t needSize, CacheType cacheType = CacheType::MEMORY)
+    void EvictionTaskForTest(uint64_t needSize, CacheType cacheType = CacheType::MEMORY, bool forceEvict = false)
     {
-        EvictionTask(needSize, cacheType);
+        EvictionTask(needSize, cacheType, forceEvict);
     }
 
     Status EvictDeleteObjectForTest(ObjectKV &objectKV)
@@ -487,6 +490,10 @@ private:
         double elapsed;
         std::shared_ptr<ObjectLocation> location;
         std::shared_ptr<AsyncSpillContext> context;
+        // True only when this spill actually released the local shared memory copy. A spill can resolve
+        // with OK while releasing nothing (object already gone or changed, lock lost). Reclaimed bytes
+        // must be counted from this flag, not from rc.IsOk().
+        bool released = false;
     };
 
     struct AsyncSpillContext : public std::enable_shared_from_this<AsyncSpillContext> {
@@ -519,6 +526,10 @@ private:
         uint64_t version;
         CacheType cacheType;
         uint64_t needSize{ 0 };
+        // True when the task came from force eviction for an extent-unavailable OOM: below the low
+        // water mark it must still be processed (see PreparePrimaryEndLifeCandidates), otherwise the
+        // drain lane would requeue it forever exactly in the state force eviction exists to relieve.
+        bool forceEvict{ false };
         // True when master metadata was already deleted and only local cleanup should be retried.
         bool metaDeleted{ false };
         uint64_t queuedAtMs{ 0 };
@@ -601,6 +612,33 @@ private:
         uint8_t counter{ 0 };
     };
     using EvictionRetryList = std::vector<EvictionRetry>;
+
+    enum class EvictOneResult : uint8_t { SKIPPED, FAILED, EVICTED };
+
+    // Per-task state shared by EvictionTask and its loop helpers. deletedObjects and
+    // deletedObjectsFlushTimer are owned by RunEvictionLoop and wired there.
+    struct EvictionLoopState {
+        std::shared_ptr<EvictionStrategy> strategy;
+        EvictionList *evictionList = nullptr;
+        EvictionTraceAggregator *aggregator = nullptr;
+        std::unordered_map<std::string, SpillTask> *spillTasks = nullptr;
+        EvictionRetryList *evictFailedIds = nullptr;
+        EvictionRoundState round;
+        EvictDeletedObjects *deletedObjects = nullptr;
+        Timer *deletedObjectsFlushTimer = nullptr;
+        size_t pendingSpillSize = 0;
+        uint64_t needSize = 0;
+        bool forceEvict = false;
+        Action lastAction = Action::UNKNOWN;
+        // Force-mode budget counts only confirmed reclaims: synchronous DELETE/FREE_MEMORY plus spill
+        // futures observed successful. END_LIFE acceptance is exempted from the primary-end-life
+        // water-mark gate instead of being counted here, so a queued promise never passes for freed
+        // memory; a spill failure resolves its future without contributing to the budget.
+        uint64_t forceEvictedSize = 0;
+        uint64_t forceSyncFreedSize = 0;
+        uint64_t forceEndLifeAcceptedSize = 0;
+        CacheType cacheType = CacheType::MEMORY;
+    };
 
     struct PolicyRoute {
         uint64_t epoch{ 0 };
@@ -733,7 +771,7 @@ private:
      */
     Status EvictObject(ObjectKV &objectKV, Action nextAction, EvictDeletedObjects *deletedObjects = nullptr,
                        CacheType cacheType = CacheType::MEMORY, uint64_t needSize = 0,
-                       const EvictionCandidate *candidate = nullptr);
+                       const EvictionCandidate *candidate = nullptr, bool forceEvict = false);
 
     /**
      * @brief Run eviction for one locked object and update async spill bookkeeping.
@@ -747,14 +785,80 @@ private:
     Status TryEvictObject(std::shared_ptr<SafeObjType> &entry, std::unique_ptr<EvictionTrace> trace,
                           size_t &pendingSpillSize, std::unordered_map<std::string, SpillTask> &spillTasks,
                           bool &locked, const EvictionCandidate &candidate, CacheType cacheType = CacheType::MEMORY,
-                          EvictDeletedObjects *deletedObjects = nullptr, uint64_t needSize = 0);
+                          EvictDeletedObjects *deletedObjects = nullptr, uint64_t needSize = 0,
+                          bool forceEvict = false);
 
     /**
      * @brief Eviction task, asynchronous.
      * @param[in] needSize The need size.
      * @param[in] cacheType The type of cache.
+     * @param[in] forceEvict Evict even below the low water mark until needSize bytes are freed.
      */
-    void EvictionTask(uint64_t needSize, CacheType cacheType = CacheType::MEMORY);
+    void EvictionTask(uint64_t needSize, CacheType cacheType = CacheType::MEMORY, bool forceEvict = false);
+
+    /**
+     * @brief Run the eviction candidate loop until the water mark gate or the force target is met.
+     * @param[in,out] st Per-task loop state (pendingSpillSize/forceEvictedSize updated in place).
+     * @param[in] forceEvict Keep evicting until st.needSize bytes are freed even below the low water mark.
+     */
+    void RunEvictionLoop(EvictionLoopState &st);
+
+    /**
+     * @brief Poll (blocking=false) or drain (blocking=true) spill futures and fold the outcome
+     *        into the pending-spill ledger and, in force mode, the confirmed-freed budget.
+     */
+    void ResolveSpillFutures(EvictionLoopState &st, bool blocking);
+
+    /**
+     * @brief Merge the pending force need of st.cacheType into a task that is certain to run.
+     *
+     * Called after the phase gate: a task that returns early must not consume the slot, otherwise the
+     * need would be dropped with its stack frame.
+     */
+    void MergePendingForceIntoTask(EvictionLoopState &st);
+
+    /**
+     * @brief Fold one successfully evicted candidate into the force-mode reclamation ledgers.
+     */
+    void AccountForceEviction(EvictionLoopState &st, uint64_t candidateSize);
+
+    /**
+     * @brief Log the per-action breakdown of a force eviction round.
+     */
+    void LogForceEvictionSummary(const EvictionLoopState &st);
+
+    /**
+     * @brief Select, lock, validate and evict a single eviction candidate.
+     * @param[in,out] st Per-task loop state.
+     * @param[out] candidateSize Size of the evicted object (only valid for EVICTED).
+     * @return EVICTED on success, FAILED when evict was attempted but failed, SKIPPED otherwise.
+     */
+    EvictOneResult EvictOneObject(EvictionLoopState &st, uint64_t &candidateSize);
+
+    /**
+     * @brief Take the object write lock for an eviction candidate and create its trace.
+     * @param[in,out] st Per-task loop state.
+     * @param[in] candidate Candidate selected by the strategy.
+     * @param[out] trace Trace owned by this eviction attempt.
+     * @param[out] entry Locked object entry.
+     * @return Status of GetAndLockEntry.
+     */
+    Status PrepareEvictionEntry(EvictionLoopState &st, const EvictionCandidate &candidate,
+                                std::unique_ptr<EvictionTrace> &trace, std::shared_ptr<SafeObjType> &entry);
+
+    /**
+     * @brief Revalidate a locked entry before eviction (snapshot freshness, rebalance, evictability).
+     * @param[in,out] st Per-task loop state.
+     * @param[in] candidate Candidate selected by the strategy.
+     * @param[in] entry Locked object entry.
+     * @param[in] objectKV Object key/entry pair of the candidate.
+     * @param[out] trace Trace owned by this eviction attempt.
+     * @param[out] candidateSize Size of the candidate object.
+     * @return True when the entry is still evictable.
+     */
+    bool ValidateLockedCandidate(EvictionLoopState &st, const EvictionCandidate &candidate, SafeObjType &entry,
+                                 const ObjectKV &objectKV, std::unique_ptr<EvictionTrace> &trace,
+                                 uint64_t &candidateSize);
 
     /**
      * @brief Indicate if now is above low water mark.
@@ -781,10 +885,47 @@ private:
      * @param[in] cacheType The cache type being evicted.
      * @param[in] needSize The foreground memory demand that triggered this eviction round.
      * @param[out] accepted Whether this object is newly accepted into the pending set.
+     * @param[in] forceEvict True when submitted by force eviction; the task then bypasses the
+     *            drain lane's low-water skip so it completes instead of requeueing forever.
      * @return Status of the submit operation.
      */
     Status SubmitPrimaryEndLifeTask(const ObjectKV &objectKV, CacheType cacheType, uint64_t needSize, bool &accepted,
-                                    const EvictionCandidate *candidate);
+                                    const EvictionCandidate *candidate, bool forceEvict = false);
+
+    /**
+     * @brief Record a force-eviction need that lost the single-flight race, keyed by cache type.
+     *
+     * Merging is per cache type because each type is its own water mark domain: one shared slot
+     * would let a larger need of one type hide a smaller need of another and drop it silently.
+     */
+    void MergePendingForceNeed(uint64_t needSize, CacheType cacheType);
+
+    /**
+     * @brief Take one still-fresh pending force need of any cache type.
+     */
+    bool TakeAnyPendingForceNeed(uint64_t &needSize, CacheType &cacheType);
+
+    static bool IsPendingForceNeedExpired(uint64_t arrivalMs, uint64_t nowMs);
+
+    /**
+     * @brief Re-claim the single-flight slot and resubmit a force eviction for a pending need.
+     *
+     * Called from the eviction task exit hook. Ordering contract with Evict(): the loser merges
+     * before its retry CAS, this hook takes after isDone_ was stored true, so a pending need is
+     * picked up either by the next task's entry merge or by this resubmission, never dropped.
+     * A need older than PENDING_FORCE_NEED_TTL_MS is dropped instead of replayed: it describes a
+     * memory state that no longer holds and would force an unrelated round below the water mark.
+     */
+    void ResubmitPendingForceEviction();
+
+    /**
+     * @brief Submit one eviction task, returning the single-flight slot if the pool rejects it.
+     *
+     * ThreadPool::Execute throws once the pool is shutting down and can throw bad_alloc under the
+     * very memory pressure this path exists for. The caller has already claimed isDone_, so leaving
+     * it false on the way out would disable eviction for the rest of this manager's lifetime.
+     */
+    void SubmitEvictionTask(uint64_t needSize, CacheType cacheType, bool forceEvict);
 
     Status StartPrimaryEndLifeWorkers();
 
@@ -1152,9 +1293,20 @@ private:
      * @param[in] version The object version.
      * @return Status
      */
-    Status SpillImpl(const std::string &objectKey, uint64_t version);
+    Status SpillImpl(const std::string &objectKey, uint64_t version, bool &released);
     void PrepareAsyncSpill(const std::shared_ptr<AsyncSpillContext> &context);
-    Status FinalizeAsyncSpill(const SpillResult &result);
+    Status FinalizeAsyncSpill(const SpillResult &result, bool &released);
+
+    /**
+     * @brief Mark an object spilled and release its local shared memory copy.
+     * @param[in] objectKey The spilled object, for logging.
+     * @param[in] entryPtr Object entry holding the write lock whose data was published to L2.
+     * @param[out] released True only when the local copy was really released.
+     * @return Status of the release. On failure the entry stays marked spilled, so a retry frees the
+     *         local copy through the FREE_MEMORY path instead of spilling the same object again.
+     */
+    Status FinishSpillAndRelease(const std::string &objectKey, const std::shared_ptr<SafeObjType> &entryPtr,
+                                 bool &released);
 
     /**
      * @brief Release finished spill task.
@@ -1163,8 +1315,16 @@ private:
      * @param[in] last Whether to wait for all spill threads to complete.
      * @return The spilled size.
      */
-    size_t ReleaseSpillFutures(std::unordered_map<std::string, SpillTask> &spillTasks,
-                               EvictionRetryList &evictFailedIds, bool last);
+    // Result of polling spill futures. resolvedSize leaves the pending-spill ledger whether the
+    // spill succeeded or failed (the failed object is re-added separately); freedSize counts only
+    // successes, i.e. shared memory the spill actually released.
+    struct SpillReclaim {
+        size_t resolvedSize = 0;
+        size_t freedSize = 0;
+    };
+
+    SpillReclaim ReleaseSpillFutures(std::unordered_map<std::string, SpillTask> &spillTasks,
+                                     EvictionRetryList &evictFailedIds, bool last);
 
     /**
      * @brief Submit async evict task to evict spilled objects when spill happen.
@@ -1299,6 +1459,16 @@ private:
     HostPort localAddress_;
     HostPort masterAddress_;
     std::atomic<bool> isDone_;
+    // Force-eviction needs that arrived while another task held the isDone_ single-flight slot.
+    // Guarded by pendingForceMutex_. A task merges the need of its own cache type at entry; needs
+    // arriving mid-task (e.g. while it blocks draining spill futures) are resubmitted from its exit
+    // hook. Keyed by CacheType because each type is an independent water mark domain.
+    struct PendingForceNeed {
+        uint64_t needSize = 0;
+        uint64_t arrivalMs = 0;
+    };
+    std::mutex pendingForceMutex_;
+    std::unordered_map<CacheType, PendingForceNeed> pendingForceNeeds_;
     master::MasterOCServiceImpl *masterOc_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     const worker::MetadataRouteResolver &metadataRoute_;

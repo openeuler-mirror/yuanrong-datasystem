@@ -210,6 +210,22 @@ static Status InitializeMetadataMemory(const std::string &objectKey, uint64_t me
     return Status::OK();
 }
 
+namespace {
+// Extent-unavailable OOM means contiguous space is exhausted while usage may stay below the low
+// water mark; only then must eviction bypass the water-mark gate (force). The inject seam exists
+// because the inject framework can only set a status code, not the "reason=" text such an OOM
+// carries, so this is what lets tests drive the production wiring below the water mark.
+bool ShouldForceEvict(const Status &rc)
+{
+    bool forceEvict = memory::IsExtentUnavailableOom(rc);
+    INJECT_POINT("worker.AllocateMemory.forceEvict", [&forceEvict]() {
+        forceEvict = true;
+        return forceEvict;
+    });
+    return forceEvict;
+}
+}  // namespace
+
 Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t dataSize, uint64_t metadataSize,
                                bool populate, std::shared_ptr<WorkerOcEvictionManager> evictionManager,
                                ShmUnit &shmUnit, CacheType cacheType, bool retryOnOOM)
@@ -239,7 +255,7 @@ Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t data
                     remainingTime, objectKey, needSize);
                 break;
             }
-            evictionManager->Evict(needSize, cacheType);
+            evictionManager->Evict(needSize, cacheType, ShouldForceEvict(rc));
             auto retryBudget = remainingTime - K_MIN_OOM_RETRY_TIMEOUT_MS;
             auto backoff = std::min(maxOomBackoffMs, int64_t{ 1 } << retry);
             auto sleepTime = std::min(retryBudget, backoff);

@@ -25,6 +25,7 @@
 #include <future>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -155,6 +156,13 @@ private:
     DeleteAllCopyMetaHandler handler_;
 };
 
+// Re-exposes the protected shutdown so tests can simulate a pool that rejects submissions.
+class EvictionTestPool : public ThreadPool {
+public:
+    using ThreadPool::ThreadPool;
+    using ThreadPool::ShutDown;
+};
+
 class EvictionManagerTest : public CommonTest, public EvictionManagerCommon {
 public:
     void SetUp() override
@@ -172,6 +180,23 @@ public:
             objectTable_, HostPort("127.0.0.1", 31501), HostPort("127.0.0.1", 31500), GetTestMetadataRoute());
         globalRefs = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
         DS_ASSERT_OK(manager->Init(globalRefs, akSkManager_));
+    }
+
+    void CreateObjectsBelowLowWaterMark(const std::shared_ptr<WorkerOcEvictionManager> &manager, size_t objectCount,
+                                        uint64_t objectSize, const std::string &keyPrefix);
+
+    size_t GetEvictionListCount(const std::shared_ptr<WorkerOcEvictionManager> &manager);
+
+    bool AboveLowWaterMark(const std::shared_ptr<WorkerOcEvictionManager> &manager, uint64_t needSize)
+    {
+        return manager->IsAboveLowWaterMark(needSize, 0, CacheType::MEMORY);
+    }
+
+    void DrainEvictionPool(const std::shared_ptr<WorkerOcEvictionManager> &manager)
+    {
+        auto drained = manager->memEvictTaskThreadPool_->Submit([] {});
+        ASSERT_EQ(drained.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+        drained.get();
     }
 
     void CheckAllocationEviction(StatusCode allocationError, bool retryOnOOM, bool aboveLowWater, bool expectEviction)
@@ -281,6 +306,260 @@ public:
         DS_ASSERT_OK(DeleteObject("id1"));
         DS_ASSERT_OK(DeleteObject("id2"));
         DS_ASSERT_OK(DeleteObject("id3"));
+    }
+
+    // Fixture method (not TEST_F body) so the friend declaration covers private-member access.
+    void TestPrimaryEndLifeWatermarkSkipExemptsForceTasks()
+    {
+        std::unique_ptr<WorkerOcEvictionManager> uniqueManager;
+        std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefs;
+        InitEvictionManager(uniqueManager, globalRefs);
+        std::shared_ptr<WorkerOcEvictionManager> manager(std::move(uniqueManager));
+        const std::string key = "end-life-watermark-exempt";
+        constexpr uint64_t needSize = 1024 * 1024;
+        DS_ASSERT_OK(CreateObject(key, 16 * 1024 * 1024, WriteMode::NONE_L2_CACHE_EVICT, true, false));
+        manager->Add(key);
+        ASSERT_FALSE(AboveLowWaterMark(manager, needSize));
+
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeTask> tasks;
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeCandidate> candidates;
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeTask> skipped;
+        tasks.emplace_back(WorkerOcEvictionManager::PrimaryEndLifeTask{ key, 1, CacheType::MEMORY });
+        DS_ASSERT_OK(manager->PreparePrimaryEndLifeCandidates(tasks, candidates, skipped));
+        EXPECT_EQ(skipped.size(), 1U);
+        EXPECT_TRUE(candidates.empty());
+
+        tasks.front().forceEvict = true;
+        skipped.clear();
+        DS_ASSERT_OK(manager->PreparePrimaryEndLifeCandidates(tasks, candidates, skipped));
+        EXPECT_TRUE(skipped.empty());
+        ASSERT_EQ(candidates.size(), 1U);
+        EXPECT_EQ(candidates.front().task.objectKey, key);
+        EXPECT_TRUE(candidates.front().task.forceEvict);
+        // The candidate takes over the entry write lock from PreparePrimaryEndLifeCandidates.
+        candidates.front().entry->WUnlock();
+    }
+
+    // Fixture method (not TEST_F body) so the friend declaration covers private-member access.
+    void TestEvictMergesPendingForceNeedIntoRunningTask()
+    {
+        std::unique_ptr<WorkerOcEvictionManager> uniqueManager;
+        std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefs;
+        InitEvictionManager(uniqueManager, globalRefs);
+        std::shared_ptr<WorkerOcEvictionManager> manager(std::move(uniqueManager));
+        constexpr uint64_t objectSize = 16 * 1024 * 1024;
+        constexpr uint64_t needSize = 1024 * 1024;
+        constexpr size_t objectCount = 4;
+        CreateObjectsBelowLowWaterMark(manager, objectCount, objectSize, "force-pending-merge-");
+        ASSERT_FALSE(AboveLowWaterMark(manager, needSize));
+        const auto usedBefore = GetAllocatedSize();
+
+        std::promise<void> releaseEviction;
+        auto released = releaseEviction.get_future().share();
+        std::atomic<bool> unblocked = false;
+        auto unblock = [&releaseEviction, &unblocked]() {
+            if (!unblocked.exchange(true)) {
+                releaseEviction.set_value();
+            }
+        };
+        Raii unblockGuard([unblock]() { unblock(); });
+        manager->memEvictTaskThreadPool_->Execute([released] { released.wait(); });
+        manager->Evict();
+        ASSERT_FALSE(manager->isDone_.load());
+        // A force request that loses the single-flight race must merge into the queued task instead of
+        // being dropped.
+        manager->Evict(needSize, CacheType::MEMORY, true);
+        unblock();
+        DrainEvictionPool(manager);
+        EXPECT_LT(GetAllocatedSize(), usedBefore);
+        EXPECT_LT(GetEvictionListCount(manager), objectCount);
+    }
+
+    WorkerOcEvictionManager::SpillTask MakeSpillTask(const std::string &key, uint64_t objectSize, const Status &rc,
+                                                     bool released)
+    {
+        std::promise<WorkerOcEvictionManager::SpillResult> promise;
+        promise.set_value(WorkerOcEvictionManager::SpillResult{ .rc = rc,
+                                                                .elapsed = 0,
+                                                                .location = nullptr,
+                                                                .context = nullptr,
+                                                                .released = released });
+        auto trace = std::make_unique<WorkerOcEvictionManager::EvictionTrace>(key);
+        trace->objectSize = objectSize;
+        return WorkerOcEvictionManager::SpillTask{ promise.get_future(), std::move(trace), {} };
+    }
+
+    // Fixture method (not TEST_F body) so the friend declaration covers private-member access.
+    void TestPendingForceNeedsAreHeldPerCacheType()
+    {
+        std::unique_ptr<WorkerOcEvictionManager> uniqueManager;
+        std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefs;
+        InitEvictionManager(uniqueManager, globalRefs);
+        std::shared_ptr<WorkerOcEvictionManager> manager(std::move(uniqueManager));
+        constexpr uint64_t bigNeed = 8 * 1024 * 1024;
+        constexpr uint64_t smallNeed = 1024 * 1024;
+
+        // Every cache type is its own water mark domain: a smaller need must not be swallowed by a
+        // larger one of another type, or the producer would drop it before any task could serve it.
+        manager->MergePendingForceNeed(bigNeed, CacheType::MEMORY);
+        manager->MergePendingForceNeed(smallNeed, CacheType::DISK);
+        ASSERT_EQ(manager->pendingForceNeeds_.size(), 2U);
+        EXPECT_EQ(manager->pendingForceNeeds_.at(CacheType::MEMORY).needSize, bigNeed);
+        EXPECT_EQ(manager->pendingForceNeeds_.at(CacheType::DISK).needSize, smallNeed);
+
+        // Both survive a resubmit round each: the exit hook serves one per round and chains on.
+        uint64_t taken = 0;
+        CacheType takenType = CacheType::MEMORY;
+        ASSERT_TRUE(manager->TakeAnyPendingForceNeed(taken, takenType));
+        ASSERT_TRUE(manager->TakeAnyPendingForceNeed(taken, takenType));
+        EXPECT_TRUE(manager->pendingForceNeeds_.empty());
+        EXPECT_FALSE(manager->TakeAnyPendingForceNeed(taken, takenType));
+    }
+
+    // Fixture method (not TEST_F body) so the friend declaration covers private-member access.
+    void TestExpiredPendingForceNeedIsDropped()
+    {
+        std::unique_ptr<WorkerOcEvictionManager> uniqueManager;
+        std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefs;
+        InitEvictionManager(uniqueManager, globalRefs);
+        std::shared_ptr<WorkerOcEvictionManager> manager(std::move(uniqueManager));
+        constexpr uint64_t needSize = 1024 * 1024;
+        auto makeStale = [&manager]() {
+            std::lock_guard<std::mutex> lock(manager->pendingForceMutex_);
+            manager->pendingForceNeeds_[CacheType::MEMORY].arrivalMs = 0;
+        };
+
+        manager->MergePendingForceNeed(needSize, CacheType::MEMORY);
+        makeStale();
+        uint64_t need = 0;
+        CacheType needType = CacheType::MEMORY;
+        EXPECT_FALSE(manager->TakeAnyPendingForceNeed(need, needType));
+        EXPECT_TRUE(manager->pendingForceNeeds_.empty());
+
+        // A stale need must not be replayed either: upgrading an unrelated round below the water
+        // mark for a memory state that no longer holds is exactly what the TTL prevents.
+        manager->MergePendingForceNeed(needSize, CacheType::MEMORY);
+        makeStale();
+        WorkerOcEvictionManager::EvictionLoopState st;
+        st.needSize = needSize;
+        st.cacheType = CacheType::MEMORY;
+        manager->MergePendingForceIntoTask(st);
+        EXPECT_FALSE(st.forceEvict);
+        EXPECT_TRUE(manager->pendingForceNeeds_.empty());
+    }
+
+    // Fixture method (not TEST_F body) so the friend declaration covers private-member access.
+    void TestMergePendingForceIntoTaskOnlyConsumesOwnCacheType()
+    {
+        std::unique_ptr<WorkerOcEvictionManager> uniqueManager;
+        std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefs;
+        InitEvictionManager(uniqueManager, globalRefs);
+        std::shared_ptr<WorkerOcEvictionManager> manager(std::move(uniqueManager));
+        constexpr uint64_t needSize = 4 * 1024 * 1024;
+        constexpr uint64_t smallNeed = 1024 * 1024;
+
+        // A smaller need of the same type is covered by the running task: consumed, task turns force.
+        manager->MergePendingForceNeed(smallNeed, CacheType::MEMORY);
+        WorkerOcEvictionManager::EvictionLoopState sameType;
+        sameType.needSize = needSize;
+        sameType.cacheType = CacheType::MEMORY;
+        manager->MergePendingForceIntoTask(sameType);
+        EXPECT_TRUE(sameType.forceEvict);
+        EXPECT_EQ(sameType.needSize, needSize);
+        EXPECT_TRUE(manager->pendingForceNeeds_.empty());
+
+        // A need of another type stays pending so the exit hook resubmits it as its own task.
+        manager->MergePendingForceNeed(smallNeed, CacheType::DISK);
+        WorkerOcEvictionManager::EvictionLoopState otherType;
+        otherType.needSize = needSize;
+        otherType.cacheType = CacheType::MEMORY;
+        manager->MergePendingForceIntoTask(otherType);
+        EXPECT_FALSE(otherType.forceEvict);
+        EXPECT_EQ(otherType.needSize, needSize);
+        ASSERT_EQ(manager->pendingForceNeeds_.count(CacheType::DISK), 1U);
+        EXPECT_EQ(manager->pendingForceNeeds_.at(CacheType::DISK).needSize, smallNeed);
+
+        // A bigger need of the same type raises the budget.
+        manager->MergePendingForceNeed(2 * needSize, CacheType::MEMORY);
+        WorkerOcEvictionManager::EvictionLoopState bigger;
+        bigger.needSize = needSize;
+        bigger.cacheType = CacheType::MEMORY;
+        manager->MergePendingForceIntoTask(bigger);
+        EXPECT_TRUE(bigger.forceEvict);
+        EXPECT_EQ(bigger.needSize, 2 * needSize);
+        EXPECT_EQ(bigger.cacheType, CacheType::MEMORY);
+        EXPECT_EQ(manager->pendingForceNeeds_.count(CacheType::MEMORY), 0U);
+    }
+
+    // Fixture method (not TEST_F body) so the friend declaration covers private-member access.
+    void TestReleaseSpillFuturesCountsOnlyReleasedFutures()
+    {
+        std::unique_ptr<WorkerOcEvictionManager> uniqueManager;
+        std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefs;
+        InitEvictionManager(uniqueManager, globalRefs);
+        std::shared_ptr<WorkerOcEvictionManager> manager(std::move(uniqueManager));
+        std::unordered_map<std::string, WorkerOcEvictionManager::SpillTask> spillTasks;
+        WorkerOcEvictionManager::EvictionRetryList failedIds;
+        spillTasks.emplace("released", MakeSpillTask("released", 40, Status::OK(), true));
+        // OK without a local release is the shape of the "object gone or changed" no-op paths: the
+        // future resolves but no byte returns to the arena.
+        spillTasks.emplace("ok-not-released", MakeSpillTask("ok-not-released", 30, Status::OK(), false));
+        spillTasks.emplace("failed", MakeSpillTask("failed", 20, Status(K_RUNTIME_ERROR, "spill failed"), false));
+
+        auto reclaim = manager->ReleaseSpillFutures(spillTasks, failedIds, true);
+        EXPECT_EQ(reclaim.resolvedSize, 90U);
+        EXPECT_EQ(reclaim.freedSize, 40U);
+        ASSERT_EQ(failedIds.size(), 1U);
+    }
+
+    // Fixture method (not TEST_F body) so the friend declaration covers private-member access.
+    void TestResubmitPendingForceEvictionRunsTheTask()
+    {
+        std::unique_ptr<WorkerOcEvictionManager> uniqueManager;
+        std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefs;
+        InitEvictionManager(uniqueManager, globalRefs);
+        std::shared_ptr<WorkerOcEvictionManager> manager(std::move(uniqueManager));
+        constexpr uint64_t objectSize = 16 * 1024 * 1024;
+        constexpr uint64_t needSize = 1024 * 1024;
+        constexpr size_t objectCount = 4;
+        CreateObjectsBelowLowWaterMark(manager, objectCount, objectSize, "force-resubmit-run-");
+        ASSERT_FALSE(AboveLowWaterMark(manager, needSize));
+        const auto usedBefore = GetAllocatedSize();
+
+        // No task is running, so the exit-hook resubmit wins the single-flight slot and must really
+        // run the forced round, not just hand the slot back.
+        manager->MergePendingForceNeed(needSize, CacheType::MEMORY);
+        ASSERT_TRUE(manager->isDone_.load());
+        manager->ResubmitPendingForceEviction();
+        DrainEvictionPool(manager);
+        EXPECT_LT(GetAllocatedSize(), usedBefore);
+        EXPECT_LT(GetEvictionListCount(manager), objectCount);
+        EXPECT_TRUE(manager->isDone_.load());
+        EXPECT_TRUE(manager->pendingForceNeeds_.empty());
+    }
+
+    // Fixture method (not TEST_F body) so the friend declaration covers private-member access.
+    void TestResubmitPendingForceEvictionSurvivesPoolShutdown()
+    {
+        std::unique_ptr<WorkerOcEvictionManager> uniqueManager;
+        std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefs;
+        InitEvictionManager(uniqueManager, globalRefs);
+        std::shared_ptr<WorkerOcEvictionManager> manager(std::move(uniqueManager));
+        constexpr uint64_t needSize = 1024 * 1024;
+        auto keepAlive = std::move(manager->memEvictTaskThreadPool_);
+        auto *shutdownPool = new EvictionTestPool(1, 1, "ut_force_resubmit");
+        shutdownPool->ShutDown();
+        manager->memEvictTaskThreadPool_.reset(shutdownPool);
+        manager->MergePendingForceNeed(needSize, CacheType::MEMORY);
+        ASSERT_TRUE(manager->isDone_.load());
+        // The resubmit runs in the eviction task exit hook: a submission rejected by the shutting
+        // down pool must not escape it as an exception and must hand the slot back.
+        manager->ResubmitPendingForceEviction();
+        EXPECT_TRUE(manager->isDone_.load());
+        EXPECT_TRUE(manager->pendingForceNeeds_.empty());
+        // ThreadPool's destructor is not virtual; delete the derived pool through its own type.
+        delete static_cast<EvictionTestPool *>(manager->memEvictTaskThreadPool_.release());
+        manager->memEvictTaskThreadPool_ = std::move(keepAlive);
     }
 
     void InsertNoneL2EvictableMetadata(const std::string &objectKey)
@@ -1119,6 +1398,295 @@ TEST_F(EvictionManagerTest, AllocationOomReservesReplyTime)
 {
     CheckOomRetryLimit(5, 0);
 }
+
+void EvictionManagerTest::CreateObjectsBelowLowWaterMark(
+    const std::shared_ptr<WorkerOcEvictionManager> &manager, size_t objectCount, uint64_t objectSize,
+    const std::string &keyPrefix)
+{
+    for (size_t i = 0; i < objectCount; ++i) {
+        auto key = keyPrefix + std::to_string(i);
+        DS_ASSERT_OK(CreateObject(key, objectSize - GetMetaSize(objectSize), WriteMode::NONE_L2_CACHE, true, true));
+        manager->Add(key);
+    }
+}
+
+size_t EvictionManagerTest::GetEvictionListCount(const std::shared_ptr<WorkerOcEvictionManager> &manager)
+{
+    std::vector<EvictionList::Node> nodes;
+    EvictionList::Node oldest;
+    DS_EXPECT_OK(manager->GetAllObjectsInfo(nodes, oldest));
+    return nodes.size();
+}
+
+// Extent-unavailable OOM (issue #1211): usage stays below the low water mark while no contiguous
+// extent can serve the request. Forced eviction must still run in that state, but stay bounded.
+TEST_F(EvictionManagerTest, EvictionTaskForceEvictsBelowLowWaterMark)
+{
+    std::unique_ptr<WorkerOcEvictionManager> uniqueManager;
+    std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefs;
+    InitEvictionManager(uniqueManager, globalRefs);
+    std::shared_ptr<WorkerOcEvictionManager> manager(std::move(uniqueManager));
+    constexpr uint64_t objectSize = 16 * 1024 * 1024;
+    constexpr uint64_t needSize = 1024 * 1024;
+    constexpr size_t objectCount = 13;
+    CreateObjectsBelowLowWaterMark(manager, objectCount, objectSize, "force-evict-sync-");
+    ASSERT_FALSE(AboveLowWaterMark(manager, needSize));
+    const auto usedBefore = GetAllocatedSize();
+
+    manager->EvictionTaskForTest(needSize, CacheType::MEMORY, false);
+    EXPECT_EQ(GetAllocatedSize(), usedBefore);
+    EXPECT_EQ(GetEvictionListCount(manager), objectCount);
+
+    manager->EvictionTaskForTest(needSize, CacheType::MEMORY, true);
+    EXPECT_LT(GetAllocatedSize(), usedBefore);
+    EXPECT_LT(GetEvictionListCount(manager), objectCount);
+    // Force eviction stops once needSize is covered by one candidate, it must not drain the cache.
+    EXPECT_GT(GetEvictionListCount(manager), objectCount / 2);
+}
+
+TEST_F(EvictionManagerTest, EvictAsyncPropagatesForceBelowLowWaterMark)
+{
+    std::unique_ptr<WorkerOcEvictionManager> uniqueManager;
+    std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefs;
+    InitEvictionManager(uniqueManager, globalRefs);
+    std::shared_ptr<WorkerOcEvictionManager> manager(std::move(uniqueManager));
+    constexpr uint64_t objectSize = 16 * 1024 * 1024;
+    constexpr uint64_t needSize = 1024 * 1024;
+    constexpr size_t objectCount = 13;
+    CreateObjectsBelowLowWaterMark(manager, objectCount, objectSize, "force-evict-async-");
+    ASSERT_FALSE(AboveLowWaterMark(manager, needSize));
+    const auto usedBefore = GetAllocatedSize();
+
+    manager->Evict(needSize, CacheType::MEMORY, true);
+    // A barrier on the single eviction executor observes completion without racing its asynchronous release.
+    DrainEvictionPool(manager);
+    EXPECT_LT(GetAllocatedSize(), usedBefore);
+    EXPECT_LT(GetEvictionListCount(manager), objectCount);
+}
+
+TEST_F(EvictionManagerTest, ForceEvictionEndLifeIsNotCountedAndExemptedTasksFreeMemory)
+{
+    size_t deleteCalls = 0;
+    auto fakeApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+        HostPort("127.0.0.1", 31500),
+        [&deleteCalls](master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &) {
+            ++deleteCalls;
+            return Status::OK();
+        });
+    BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi, (testing::_, testing::_, testing::_, testing::_))
+        .WillRepeatedly(testing::Invoke(
+            [&](const HostPort &, const HostPort &, std::shared_ptr<AkSkManager>,
+                master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> { return fakeApi; }));
+    Raii releaseStubs([]() { RELEASE_STUBS });
+
+    std::unique_ptr<WorkerOcEvictionManager> uniqueManager;
+    std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefs;
+    InitEvictionManager(uniqueManager, globalRefs);
+    std::shared_ptr<WorkerOcEvictionManager> manager(std::move(uniqueManager));
+    constexpr uint64_t objectSize = 16 * 1024 * 1024;
+    constexpr uint64_t needSize = 1024 * 1024;
+    constexpr size_t objectCount = 4;
+    for (size_t i = 0; i < objectCount; ++i) {
+        auto key = "force-end-life-" + std::to_string(i);
+        DS_ASSERT_OK(
+            CreateObject(key, objectSize - GetMetaSize(objectSize), WriteMode::NONE_L2_CACHE_EVICT, true, false));
+        manager->Add(key);
+    }
+    ASSERT_FALSE(AboveLowWaterMark(manager, needSize));
+    const auto usedBefore = GetAllocatedSize();
+
+    manager->EvictionTaskForTest(needSize, CacheType::MEMORY, true);
+    // END_LIFE acceptance is a queued promise, not a synchronous release: the confirmed budget must
+    // stay untouched and nothing may be freed yet.
+    EXPECT_EQ(GetAllocatedSize(), usedBefore);
+    // The accepted bytes count as a promise against the obligation, so a 1MiB need stops after the
+    // first 16MiB acceptance instead of handing the whole list to the end-life lane.
+    EXPECT_EQ(GetEvictionListCount(manager), objectCount - 1);
+
+    const auto waitDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (GetAllocatedSize() >= usedBefore && std::chrono::steady_clock::now() < waitDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    // The exempted tasks really release memory through the drain lane even below the water mark.
+    EXPECT_LT(GetAllocatedSize(), usedBefore);
+    EXPECT_GT(deleteCalls, 0U);
+}
+
+TEST_F(EvictionManagerTest, PrimaryEndLifeWatermarkSkipExemptsForceTasks)
+{
+    TestPrimaryEndLifeWatermarkSkipExemptsForceTasks();
+}
+
+TEST_F(EvictionManagerTest, ForceEvictionDoesNotCountFailedSpill)
+{
+    std::unique_ptr<WorkerOcEvictionManager> uniqueManager;
+    std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefs;
+    InitEvictionManager(uniqueManager, globalRefs);
+    std::shared_ptr<WorkerOcEvictionManager> manager(std::move(uniqueManager));
+    constexpr uint64_t objectSize = 16 * 1024 * 1024;
+    constexpr uint64_t needSize = 1024 * 1024;
+    constexpr size_t objectCount = 4;
+    CreateObjectsBelowLowWaterMark(manager, objectCount, objectSize, "force-spill-fail-");
+    ASSERT_FALSE(AboveLowWaterMark(manager, needSize));
+    DS_ASSERT_OK(inject::Set("evictAction.setSpill", "call()"));
+    DS_ASSERT_OK(inject::Set("worker.SubmitSpillTask", "return(K_NO_SPACE)"));
+    Raii clearInjection([]() {
+        (void)inject::Clear("evictAction.setSpill");
+        (void)inject::Clear("worker.SubmitSpillTask");
+    });
+    const auto usedBefore = GetAllocatedSize();
+
+    manager->EvictionTaskForTest(needSize, CacheType::MEMORY, true);
+    // Every spill failed: no byte was reclaimed, so nothing may be counted as freed and all
+    // candidates must be back in the eviction list for the next retry.
+    EXPECT_EQ(GetAllocatedSize(), usedBefore);
+    EXPECT_EQ(GetEvictionListCount(manager), objectCount);
+}
+
+TEST_F(EvictionManagerTest, ForceEvictionCountsSpillOnlyOnFutureSuccess)
+{
+    std::unique_ptr<WorkerOcEvictionManager> uniqueManager;
+    std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefs;
+    InitEvictionManager(uniqueManager, globalRefs);
+    std::shared_ptr<WorkerOcEvictionManager> manager(std::move(uniqueManager));
+    constexpr uint64_t objectSize = 16 * 1024 * 1024;
+    constexpr uint64_t needSize = 1024 * 1024;
+    constexpr size_t objectCount = 4;
+    CreateObjectsBelowLowWaterMark(manager, objectCount, objectSize, "force-spill-ok-");
+    ASSERT_FALSE(AboveLowWaterMark(manager, needSize));
+    DS_ASSERT_OK(inject::Set("evictAction.setSpill", "call()"));
+    DS_ASSERT_OK(inject::Set("worker.SubmitSpillTask", "return()"));
+    Raii clearInjection([]() {
+        (void)inject::Clear("evictAction.setSpill");
+        (void)inject::Clear("worker.SubmitSpillTask");
+    });
+    const auto usedBefore = GetAllocatedSize();
+
+    manager->EvictionTaskForTest(needSize, CacheType::MEMORY, true);
+    // Successful futures resolve without re-adding candidates (mocked spill frees nothing, so the
+    // accounting is future-based); the loop stops without over-draining the list.
+    EXPECT_EQ(GetAllocatedSize(), usedBefore);
+    EXPECT_LT(GetEvictionListCount(manager), objectCount);
+}
+
+TEST_F(EvictionManagerTest, EvictMergesPendingForceNeedIntoRunningTask)
+{
+    TestEvictMergesPendingForceNeedIntoRunningTask();
+}
+
+TEST_F(EvictionManagerTest, PendingForceNeedsAreHeldPerCacheType)
+{
+    TestPendingForceNeedsAreHeldPerCacheType();
+}
+
+TEST_F(EvictionManagerTest, ExpiredPendingForceNeedIsDropped)
+{
+    TestExpiredPendingForceNeedIsDropped();
+}
+
+TEST_F(EvictionManagerTest, MergePendingForceIntoTaskOnlyConsumesOwnCacheType)
+{
+    TestMergePendingForceIntoTaskOnlyConsumesOwnCacheType();
+}
+
+TEST_F(EvictionManagerTest, ReleaseSpillFuturesCountsOnlyReleasedFutures)
+{
+    TestReleaseSpillFuturesCountsOnlyReleasedFutures();
+}
+
+TEST_F(EvictionManagerTest, ResubmitPendingForceEvictionRunsTheTask)
+{
+    TestResubmitPendingForceEvictionRunsTheTask();
+}
+
+TEST_F(EvictionManagerTest, ResubmitPendingForceEvictionSurvivesPoolShutdown)
+{
+    TestResubmitPendingForceEvictionSurvivesPoolShutdown();
+}
+
+TEST_F(EvictionManagerTest, IsExtentUnavailableOomMatchesOnlyExtentReasons)
+{
+    const std::string arenaOom = "MEMORY no space in arena: 3, reason=";
+    EXPECT_TRUE(
+        memory::IsExtentUnavailableOom(Status(K_OUT_OF_MEMORY, arenaOom + memory::FRESH_EXTENT_UNAVAILABLE_REASON)));
+    EXPECT_TRUE(memory::IsExtentUnavailableOom(
+        Status(K_OUT_OF_MEMORY, arenaOom + memory::REUSABLE_EXTENT_UNAVAILABLE_REASON)));
+    // The reason token must match exactly; a trailing suffix keeps the token intact.
+    EXPECT_TRUE(memory::IsExtentUnavailableOom(
+        Status(K_OUT_OF_MEMORY, arenaOom + memory::FRESH_EXTENT_UNAVAILABLE_REASON + ", arena stats")));
+    // Status::AppendMsg joins with ". ", so a diagnostic appended downstream must not turn the token
+    // into a near miss and silently disable the force path.
+    EXPECT_TRUE(memory::IsExtentUnavailableOom(
+        Status(K_OUT_OF_MEMORY, arenaOom + memory::FRESH_EXTENT_UNAVAILABLE_REASON + ". arena stats")));
+    EXPECT_FALSE(memory::IsExtentUnavailableOom(
+        Status(K_OUT_OF_MEMORY, "Upper to the size limit, reason=logical_size_limit_reached")));
+    EXPECT_FALSE(
+        memory::IsExtentUnavailableOom(Status(K_OUT_OF_MEMORY, "Status inject by worker.Allocator.AllocateMemory")));
+    EXPECT_FALSE(memory::IsExtentUnavailableOom(Status::OK()));
+    // The code check is the first line of defence: the same text under another code must not qualify.
+    EXPECT_FALSE(
+        memory::IsExtentUnavailableOom(Status(K_RUNTIME_ERROR, arenaOom + memory::FRESH_EXTENT_UNAVAILABLE_REASON)));
+    // Near-miss or missing reason tokens must not act as a control signal.
+    EXPECT_FALSE(memory::IsExtentUnavailableOom(
+        Status(K_OUT_OF_MEMORY, "MEMORY no space in arena: 3, reason=fresh_extent_unavailabl")));
+    EXPECT_FALSE(memory::IsExtentUnavailableOom(
+        Status(K_OUT_OF_MEMORY, "MEMORY no space in arena: 3, reason=extent_unavailable")));
+    EXPECT_FALSE(memory::IsExtentUnavailableOom(
+        Status(K_OUT_OF_MEMORY, "MEMORY no space in arena: 3, reason=FRESH_EXTENT_UNAVAILABLE")));
+    EXPECT_FALSE(memory::IsExtentUnavailableOom(
+        Status(K_OUT_OF_MEMORY, "MEMORY no space in arena: 3 extent_unavailable diagnostics")));
+}
+
+TEST_F(EvictionManagerTest, ExtentOomStatusFromProducerDrivesTheParser)
+{
+    // Drive the parser with the producer's own output instead of a hand-written string: changing the
+    // extent-OOM format in FormatExtentOomMessage now breaks this test rather than silently darkening
+    // the force path in production.
+    EXPECT_TRUE(memory::IsExtentUnavailableOom(Status(
+        K_OUT_OF_MEMORY, memory::FormatExtentOomMessage("Shared memory", 3, /*freshExtentUnavailable=*/true))));
+    EXPECT_TRUE(memory::IsExtentUnavailableOom(Status(
+        K_OUT_OF_MEMORY, memory::FormatExtentOomMessage("Shared memory", 3, /*freshExtentUnavailable=*/false))));
+    auto appended = Status(K_OUT_OF_MEMORY, memory::FormatExtentOomMessage("Shared memory", 3, true));
+    appended.AppendMsg("arena stats");
+    EXPECT_TRUE(memory::IsExtentUnavailableOom(appended));
+}
+
+TEST_F(EvictionManagerTest, AllocateMemoryWiringForcesEvictionBelowLowWaterMark)
+{
+    std::unique_ptr<WorkerOcEvictionManager> uniqueManager;
+    std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefs;
+    InitEvictionManager(uniqueManager, globalRefs);
+    std::shared_ptr<WorkerOcEvictionManager> manager(std::move(uniqueManager));
+    constexpr uint64_t objectSize = 16 * 1024 * 1024;
+    constexpr uint64_t requestSize = 1024 * 1024;
+    CreateObjectsBelowLowWaterMark(manager, 4, objectSize, "wiring-force-");
+    ASSERT_FALSE(AboveLowWaterMark(manager, requestSize));
+    const auto usedBefore = GetAllocatedSize();
+
+    auto &timeout = GetRequestContext()->reqTimeoutDuration;
+    const auto savedTimeout = timeout;
+    Raii clearInjection([&timeout, savedTimeout] {
+        (void)inject::Clear("worker.Allocator.AllocateMemory");
+        (void)inject::Clear("worker.AllocateMemory.sleepTime");
+        (void)inject::Clear("worker.AllocateMemory.forceEvict");
+        timeout = savedTimeout;
+    });
+    DS_ASSERT_OK(inject::Set("worker.Allocator.AllocateMemory", "return(K_OUT_OF_MEMORY)"));
+    DS_ASSERT_OK(inject::Set("worker.AllocateMemory.sleepTime", "call(0)"));
+    DS_ASSERT_OK(inject::Set("worker.AllocateMemory.forceEvict", "call()"));
+    timeout = TimeoutDuration(2000);
+
+    ShmUnit unit;
+    auto rc = AllocateMemoryForObject("wiring-force", requestSize, 0, false, manager, unit, CacheType::MEMORY, true);
+    EXPECT_EQ(rc.GetCode(), K_OUT_OF_MEMORY);
+    // A barrier on the single eviction executor observes completion without racing its asynchronous release.
+    DrainEvictionPool(manager);
+    // The injected OOM carries no reason token, so only the production call site can have forced this
+    // round: without it the low-water gate would have made Evict a no-op.
+    EXPECT_LT(GetAllocatedSize(), usedBefore);
+    EXPECT_LT(GetEvictionListCount(manager), 4U);
+}
+
 
 TEST_F(EvictionManagerTest, PretriggerMarginAutoReservesAverageObjectSize)
 {
