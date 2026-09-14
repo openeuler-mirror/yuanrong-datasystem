@@ -101,6 +101,7 @@ cc_library(
     ],
     hdrs = [
         "src/common/config.h",
+        "src/common/rate_gate.h",
         "src/common/jf_service_discovery.h",
         "src/common/simple_log.h",
         "src/common/bthread_compat.h",

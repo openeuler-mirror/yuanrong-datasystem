@@ -45,6 +45,12 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_pipeline.cpp")
     )
 endif()
 
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_rate_gate.cpp")
+    list(APPEND PHASE4_SOURCES
+        test_rate_gate.cpp
+    )
+endif()
+
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_benchmark.cpp")
     list(APPEND PHASE4_SOURCES
         test_benchmark.cpp

@@ -7,7 +7,7 @@ Pipeline 模式是 kvtest 的核心运行模式。支持 Writer/Reader 角色分
 **核心特性：**
 - Writer/Reader 角色分离，Writer 持续写入并通过 HTTP 通知 Reader
 - 10 种操作类型（setStringView、getBuffer、exist、createBuffer、mCreate 等）
-- QPS 控制：相位偏移 + Jitter 打散，避免请求同步突发
+- QPS 控制：lane 划分 + lane 内 Jitter 打散，避免请求同步突发；错过的 slot 直接丢弃不补发
 - 多阶段 QPS 压测（target_qps 数组）
 - 进程级 CPU 绑核
 
