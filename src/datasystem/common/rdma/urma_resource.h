@@ -180,6 +180,16 @@ public:
         }
     }
 
+    void SetPostSrcChipInflight(std::string postSrcChipInflight)
+    {
+        postSrcChipInflight_ = std::move(postSrcChipInflight);
+    }
+
+    std::string GetPostSrcChipInflight() const
+    {
+        return postSrcChipInflight_;
+    }
+
     void SetWriteChunkInfo(uint64_t chunkIndex, uint64_t chunkCount)
     {
         if (operationType_ == OperationType::WRITE) {
@@ -471,6 +481,7 @@ private:
     std::atomic<uint64_t> completionObservationLatencyUs_{ 0 };
     std::atomic<uint64_t> eventProcessingAndWaitLatencyUs_{ 0 };
     UrmaWriteTrace writeTrace_;
+    std::string postSrcChipInflight_;
     std::atomic<int> *srcChipInflightCounter_{ nullptr };
     bool observeGatherInflightDrain_{ false };
     Lifecycle lifecycle_{ Lifecycle::WAITING };

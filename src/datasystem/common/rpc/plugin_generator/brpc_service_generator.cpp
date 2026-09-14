@@ -426,7 +426,11 @@ void RpcGenerator::ImplementBrpcCallMethodPlain(io::Printer &printer,
         "$indent$::datasystem::BrpcPerfTrace rpcTrace(::datasystem::Trace::Instance().GetTraceID(),\n"
         "$indent$    method->full_name());\n"
         "$indent$rpcTrace.MarkServerRecv();\n"
-        "$indent$VLOG(1) << FormatString(\"ServerRecv ts %llu tid %d cpu %d bid %llu\\n\", rpcTrace.ServerRecvTs(), BrpcTraceGetTid(), sched_getcpu(), static_cast<unsigned long long>(bthread_self()));\n"
+        "$indent$SLOW_LOG_IF_OR_VLOG(\n"
+        "$indent$    INFO, FLAGS_enable_perf_trace_log, 1,\n"
+        "$indent$    FormatString(\"ServerRecv ts %llu tid %d cpu %d bid %llu\\n\", rpcTrace.ServerRecvTs(),\n"
+        "$indent$                 BrpcTraceGetTid(), sched_getcpu(),\n"
+        "$indent$                 static_cast<unsigned long long>(bthread_self())));\n"
         "$indent$";
     impl += BuildScTimeoutDurationInitSnippet();
     impl +=
@@ -439,7 +443,11 @@ void RpcGenerator::ImplementBrpcCallMethodPlain(io::Printer &printer,
         "$indent$}\n";
     impl +=
         "$indent$rpcTrace.MarkServerSend();\n"
-        "$indent$VLOG(1) << FormatString(\"ServerSend ts %llu tid %d cpu %d bid %llu\\n\", rpcTrace.ServerSendTs(), BrpcTraceGetTid(), sched_getcpu(), static_cast<unsigned long long>(bthread_self()));\n"
+        "$indent$SLOW_LOG_IF_OR_VLOG(\n"
+        "$indent$    INFO, FLAGS_enable_perf_trace_log, 1,\n"
+        "$indent$    FormatString(\"ServerSend ts %llu tid %d cpu %d bid %llu\\n\", rpcTrace.ServerSendTs(),\n"
+        "$indent$                 BrpcTraceGetTid(), sched_getcpu(),\n"
+        "$indent$                 static_cast<unsigned long long>(bthread_self())));\n"
         "$indent$::datasystem::AppendBrpcServerTraceTrailer(rpcTrace, cntl->response_attachment());\n";
     printer.Print(vars, impl.c_str());
 }
@@ -471,7 +479,11 @@ void RpcGenerator::ImplementBrpcCallMethodSendPayload(io::Printer &printer,
         "$indent$::datasystem::BrpcPerfTrace rpcTrace(::datasystem::Trace::Instance().GetTraceID(),\n"
         "$indent$    method->full_name());\n"
         "$indent$rpcTrace.MarkServerRecv();\n"
-        "$indent$VLOG(1) << FormatString(\"ServerRecv ts %llu tid %d cpu %d bid %llu\\n\", rpcTrace.ServerRecvTs(), BrpcTraceGetTid(), sched_getcpu(), static_cast<unsigned long long>(bthread_self()));\n"
+        "$indent$SLOW_LOG_IF_OR_VLOG(\n"
+        "$indent$    INFO, FLAGS_enable_perf_trace_log, 1,\n"
+        "$indent$    FormatString(\"ServerRecv ts %llu tid %d cpu %d bid %llu\\n\", rpcTrace.ServerRecvTs(),\n"
+        "$indent$                 BrpcTraceGetTid(), sched_getcpu(),\n"
+        "$indent$                 static_cast<unsigned long long>(bthread_self())));\n"
         "$indent$std::vector<::datasystem::RpcMessage> payload;\n"
         "$indent$butil::IOBuf &attachment = cntl->request_attachment();\n"
         "$indent$do {\n"
@@ -502,7 +514,11 @@ void RpcGenerator::ImplementBrpcCallMethodSendPayload(io::Printer &printer,
         "std::to_string(static_cast<int>(st.GetCode())) + \"\\x02\");\n"
         "$indent$}\n"
         "$indent$rpcTrace.MarkServerSend();\n"
-        "$indent$VLOG(1) << FormatString(\"ServerSend ts %llu tid %d cpu %d bid %llu\\n\", rpcTrace.ServerSendTs(), BrpcTraceGetTid(), sched_getcpu(), static_cast<unsigned long long>(bthread_self()));\n"
+        "$indent$SLOW_LOG_IF_OR_VLOG(\n"
+        "$indent$    INFO, FLAGS_enable_perf_trace_log, 1,\n"
+        "$indent$    FormatString(\"ServerSend ts %llu tid %d cpu %d bid %llu\\n\", rpcTrace.ServerSendTs(),\n"
+        "$indent$                 BrpcTraceGetTid(), sched_getcpu(),\n"
+        "$indent$                 static_cast<unsigned long long>(bthread_self())));\n"
         "$indent$::datasystem::AppendBrpcServerTraceTrailer(rpcTrace, cntl->response_attachment());\n";
     printer.Print(vars, impl.c_str());
 }
