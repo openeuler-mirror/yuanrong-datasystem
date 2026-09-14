@@ -460,6 +460,83 @@ def cmd_deploy(args):
     # no pods to deploy).
     nodes = discover_nodes(timeout=args.timeout)
     ip_to_node = {node['ip']: node['name'] for node in nodes}
+    # Save the original cluster IP set before whitelist filtering shrinks
+    # ip_to_node; the blacklist stage checks against this full set so a typo
+    # in the blacklist is caught even when the IP was never in the whitelist.
+    all_cluster_ips = set(ip_to_node.keys())
+
+    # Optional node filter: --nodes-file is a whitelist (only listed nodes
+    # get pods), --exclude-nodes-file is a blacklist (listed nodes are
+    # skipped). Both can be used together: whitelist first, then exclude
+    # from the whitelist. IPs in either file that are not present in the
+    # cluster are a HARD ERROR (typically a typo or stale inventory) so the
+    # operator notices before a partial deploy.
+    nodes_file = getattr(args, 'nodes_file', None)
+    exclude_nodes_file = getattr(args, 'exclude_nodes_file', None)
+
+    def _read_ip_file(path):
+        """Read IPs from a file (one per line, skip # comments and blanks)."""
+        try:
+            with open(path) as f:
+                return {line.strip() for line in f
+                        if line.strip() and not line.strip().startswith('#')}
+        except OSError as e:
+            log_error(f'ERROR: cannot read nodes file {path}: {e}')
+            return None
+
+    # --- Stage 1: whitelist (--nodes-file) ---
+    if nodes_file:
+        wanted = _read_ip_file(nodes_file)
+        if wanted is None:
+            return 1
+        if not wanted:
+            log_error(f'ERROR: --nodes-file {nodes_file} contains no IPs '
+                      f'(after skipping blank/comment lines)')
+            return 1
+        # HARD ERROR: IPs in the whitelist that are not in the cluster.
+        unknown = sorted(wanted - ip_to_node.keys())
+        if unknown:
+            log_error(f'ERROR: --nodes-file {nodes_file} contains IPs not in '
+                      f'cluster: {", ".join(unknown)}. Known cluster IPs: '
+                      f'{", ".join(sorted(ip_to_node))}')
+            return 1
+        before = len(nodes)
+        nodes = [n for n in nodes if n['ip'] in wanted]
+        log_info(f'--nodes-file {nodes_file}: {len(wanted)} IPs listed, '
+                 f'{len(nodes)}/{before} cluster nodes matched')
+        ip_to_node = {node['ip']: node['name'] for node in nodes}
+
+    # --- Stage 2: blacklist (--exclude-nodes-file) ---
+    # Applied AFTER whitelist so "whitelist minus blacklist" semantics work.
+    if exclude_nodes_file:
+        excluded = _read_ip_file(exclude_nodes_file)
+        if excluded is None:
+            return 1
+        if not excluded:
+            log_error(f'ERROR: --exclude-nodes-file {exclude_nodes_file} '
+                      f'contains no IPs (after skipping blank/comment lines)')
+            return 1
+        # HARD ERROR: IPs in the blacklist that are not in the cluster.
+        # all_cluster_ips is the full discovered set (saved before whitelist
+        # filtering), so this catches blacklisted IPs that were never in the
+        # whitelist too.
+        unknown_excl = sorted(excluded - all_cluster_ips)
+        if unknown_excl:
+            log_error(f'ERROR: --exclude-nodes-file {exclude_nodes_file} '
+                      f'contains IPs not in cluster: {", ".join(unknown_excl)}. '
+                      f'Known cluster IPs: {", ".join(sorted(all_cluster_ips))}')
+            return 1
+        before = len(nodes)
+        # IPs that are in the blacklist AND in the current node set (post
+        # whitelist) — these are the ones actually being kicked.
+        kicked = sorted({n['ip'] for n in nodes if n['ip'] in excluded})
+        nodes = [n for n in nodes if n['ip'] not in excluded]
+        log_info(f'--exclude-nodes-file {exclude_nodes_file}: '
+                 f'{len(excluded)} IPs listed, {len(kicked)}/{before} '
+                 f'whitelisted nodes excluded, {len(nodes)} nodes kept')
+        if kicked:
+            log_info(f'  WARNING: kicked from whitelist: {", ".join(kicked)}')
+        ip_to_node = {node['ip']: node['name'] for node in nodes}
 
     # Parse specs. The mutually-exclusive CLI group guarantees only one is
     # set when invoked via argparse; the precedence below also handles the
@@ -778,6 +855,24 @@ Examples:
                                help='Show manifest without applying')
     deploy_parser.add_argument('--force', '-f', action='store_true',
                                help='Delete existing pods with same prefix before deploying')
+    deploy_parser.add_argument('--nodes-file',
+                               help='File with one node IP per line (lines starting with # '
+                                    'are comments, blank lines ignored). When set, pods are '
+                                    'scheduled only on listed nodes; other discovered nodes '
+                                    'are skipped. IPs not present in the cluster are a HARD '
+                                    'ERROR (typo/stale inventory guard). Can be combined with '
+                                    '--exclude-nodes-file: whitelist first, then exclude from '
+                                    'the whitelist. Combine with --pods-per-node / --replicas '
+                                    'to control per-node counts.')
+    deploy_parser.add_argument('--exclude-nodes-file',
+                               help='File with one node IP per line to EXCLUDE (lines starting '
+                                    'with # are comments, blank lines ignored). When set, pods '
+                                    'are scheduled on all discovered nodes EXCEPT those listed. '
+                                    'IPs in the file that are not present in the cluster are a '
+                                    'HARD ERROR. Can be combined with --nodes-file: whitelist '
+                                    'first, then exclude from the whitelist. Example: 100-node '
+                                    'cluster, --nodes-file lists 60 IPs, --exclude-nodes-file '
+                                    'lists 10 of those 60 → pods run on the remaining 50.')
     deploy_parser.add_argument('--wait', action='store_true',
                                help='Wait for pods to be ready')
     deploy_parser.add_argument('--timeout', type=int, default=300,
