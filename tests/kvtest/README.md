@@ -325,4 +325,25 @@ python3 deploy_worker.py collect -p worker- --file-pattern '*access*.log' --keyw
 
 这些参数控制传输归档，不改变源日志，也不改变 `--uncompressed-only` 对源文件的筛选。原有 `.log.gz` 文件不会因 `--extract` 自动展开；该参数只解包收集生成的外层归档。Client 的 deploy/config 文件及 Worker 的 worker_config.json 仍按现有规则单独归档，不放进日志压缩包。
 
+#### 按宿主机 IP 收集或排除
+
+节点较多时，使用 `--host-filter hosts.json`。可参考 `config/collect_hosts.json.example`，例如排除两个故障宿主机：
+
+```json
+{
+  "include": [],
+  "exclude": ["192.0.2.10", "192.0.2.11"]
+}
+```
+
+```bash
+python3 deploy_worker.py collect -p worker- --host-filter hosts.json -o worker-logs
+python3 deploy_client.py collect aaa/deploy.json aaa/config.json -p client- --host-filter hosts.json -o client-logs
+python3 deploy_worker.py collect -p worker- --host-ip 192.0.2.10 --host-ip 192.0.2.11 --exclude-host-ip 192.0.2.11
+```
+
+`include` 为空或省略表示不限制宿主机范围，`exclude` 可省略；两者均为空时不启用 IP 筛选。文件列表与重复传入的 `--host-ip` / `--exclude-host-ip` 合并，排除优先。只接受完整宿主机 IPv4/IPv6 地址，不匹配 Pod IP、IP 前缀或网段；字段拼写、列表类型、IP 地址或文件读取错误会终止操作。
+
+启用后先按宿主机 IP 筛选，再按 `-p/--prefix`，最后按实例 ID（Client）和 count/offset 分批。Kubernetes 使用 API 返回的当前 HostIP；Client 的 SSH/本地节点使用配置中的 host_ip 或 host IP。无法确定目标宿主机 IP 时终止收集。被排除的目标不执行 summary、远程配置读取或日志传输；Client 仍只从 deploy.json 的实例中选择。未配置筛选参数时保持原有行为。
+
 显式压缩/解包模式下，全量收集需要目标环境提供 tar（gzip 模式还需 tar 支持 gzip），筛选收集使用目标 Python 3。下载失败不回退到其他传输模式，也不会覆盖已有的完整归档；每个归档通过临时文件完成后原子替换。建议每次使用新的 `-o`，避免此前解包的日志或其他模式的归档混入当前结果。大集群仍可用 `--max-workers` 控制并发，默认并发规则不变。

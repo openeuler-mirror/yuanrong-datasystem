@@ -1,6 +1,7 @@
 """Shared selective collection for the existing deployment CLIs."""
 
 import json
+import ipaddress
 import os
 import re
 import shlex
@@ -72,6 +73,12 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode='w|gz' if cfg.get('compress', 
 
 
 def add_collect_filters(parser):
+    parser.add_argument('--host-filter', metavar='JSON',
+                        help='Host IP selection JSON with include and exclude arrays')
+    parser.add_argument('--host-ip', action='append', default=None, dest='host_ips', metavar='IP',
+                        help='Collect only this host IP; repeat to select multiple hosts')
+    parser.add_argument('--exclude-host-ip', action='append', default=None, dest='exclude_host_ips', metavar='IP',
+                        help='Skip this host IP; repeat to exclude multiple hosts')
     compression = parser.add_mutually_exclusive_group()
     compression.add_argument('--compress', dest='compress', action='store_true', default=None,
                              help='Use gzip compression for log transfer')
@@ -92,6 +99,54 @@ def add_collect_filters(parser):
                         help='Literal case-sensitive line substring; repeatable (OR), filtered remotely')
     parser.add_argument('--uncompressed-only', action='store_true',
                         help='Exclude compressed archives; retain all uncompressed rotations')
+
+
+def host_selection_from_args(args):
+    selection = {}
+    path = getattr(args, 'host_filter', None)
+    if path:
+        try:
+            with open(path, encoding='utf-8-sig') as source:
+                selection = json.load(source)
+        except (OSError, ValueError) as error:
+            raise ValueError('Cannot read host filter ' + str(path) + ': ' + str(error)) from error
+        if not isinstance(selection, dict) or set(selection) - {'include', 'exclude'}:
+            raise ValueError('Host filter must be an object containing only include and exclude')
+        for key, values in selection.items():
+            if not isinstance(values, list) or any(not isinstance(ip, str) for ip in values):
+                raise ValueError('Host filter ' + key + ' must be an array of IP strings')
+    included = selection.get('include', []) + (getattr(args, 'host_ips', None) or [])
+    excluded = selection.get('exclude', []) + (getattr(args, 'exclude_host_ips', None) or [])
+    if not included and not excluded:
+        return None
+    return dict(host_ips=[str(ipaddress.ip_address(ip)) for ip in included],
+                exclude_host_ips=[str(ipaddress.ip_address(ip)) for ip in excluded])
+
+
+def filter_collect_targets(targets, selection, host_ip=None):
+    if selection is None:
+        return list(targets)
+    included = {str(ipaddress.ip_address(ip)) for ip in selection.get('host_ips', [])}
+    excluded = {str(ipaddress.ip_address(ip)) for ip in selection.get('exclude_host_ips', [])}
+    result = []
+    for target in targets:
+        address = host_ip(target) if host_ip else target.get('host_ip')
+        try:
+            address = str(ipaddress.ip_address(address))
+        except ValueError:
+            name = target.get('name') or target.get('pod_name') or target.get('host') or 'unknown'
+            raise ValueError('Missing or invalid host IP for collection target: ' + str(name)) from None
+        if address not in excluded and (not included or address in included):
+            result.append(target)
+    return result
+
+
+def read_pod_addresses(namespace):
+    output = subprocess.check_output(['kubectl', 'get', 'pods', '-n', namespace, '-o', 'json'],
+                                     text=True, timeout=30)
+    return {item['metadata']['name']: dict(ip=item.get('status', {}).get('podIP', ''),
+                                          host_ip=item.get('status', {}).get('hostIP', ''))
+            for item in json.loads(output).get('items', [])}
 
 
 def archive_options_from_args(args):

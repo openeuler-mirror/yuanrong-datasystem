@@ -16,7 +16,8 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from log_collect import (add_collect_filters, archive_command, filters_from_args, has_filters,
-                         pod_directory, receive_archive, select_targets, copy_case_files, archive_options_from_args)
+                         pod_directory, receive_archive, select_targets, copy_case_files, archive_options_from_args,
+                         host_selection_from_args, filter_collect_targets, read_pod_addresses)
 
 from deploy_common import (
     _print_timings,
@@ -1172,7 +1173,7 @@ class Deployer:
 
     def do_collect(self, sdk_log_dir='/root/.datasystem/logs', output_dir='collected',
                    summary_timeout=5, max_workers=None, node_slice=None, filters=None, prefixes=None,
-                   instance_ids=None, pod_info=False, archive_options=None):
+                   instance_ids=None, pod_info=False, archive_options=None, host_selection=None):
         """Collect output files and SDK logs from all nodes.
 
         Single-phase pipeline: each node triggers its own /summary then
@@ -1207,6 +1208,19 @@ class Deployer:
         if max_workers is not None and max_workers <= 0:
             raise ValueError('--max-workers must be positive')
         nodes = self.nodes
+        current_pods = {}
+        if host_selection is not None:
+            for namespace in {self._namespace(n) for n in nodes if self._transport(n) == 'kubectl'}:
+                current_pods.update({(namespace, name): addresses
+                                     for name, addresses in read_pod_addresses(namespace).items()})
+            def host_ip(node):
+                if self._transport(node) == 'kubectl':
+                    return current_pods.get((self._namespace(node), node['pod_name']), {}).get('host_ip')
+                return node.get('host_ip') or node.get('host')
+            nodes = filter_collect_targets(nodes, host_selection, host_ip)
+            if not nodes:
+                log_error('No clients remain after host IP selection')
+                return 1
         if prefixes:
             for prefix in prefixes:
                 if not any(node.get('pod_name', '').startswith(prefix) for node in nodes):
@@ -1226,8 +1240,8 @@ class Deployer:
                 log_info('No nodes in the requested slice; nothing to collect.')
                 return
 
-        current_pods = {}
-        for namespace in {self._namespace(n) for n in nodes if self._transport(n) == 'kubectl' and pod_info}:
+        for namespace in {self._namespace(n) for n in nodes
+                          if self._transport(n) == 'kubectl' and pod_info and host_selection is None}:
             names = [n['pod_name'] for n in nodes if self._transport(n) == 'kubectl'
                      and self._namespace(n) == namespace]
             current_pods.update({(namespace, p['name']): p for p in get_pods(namespace, names)})
@@ -1304,7 +1318,7 @@ class Deployer:
         empty = sum(1 for r in results if r == 'empty')
         fail = sum(1 for r in results if r == 'fail')
         log_info(f'\nCollect result: {ok} ok / {empty} empty / {fail} fail / {len(results)} total')
-        if has_filters(filters) or prefixes or instance_ids or pod_info or archive_options is not None:
+        if has_filters(filters) or prefixes or instance_ids or pod_info or archive_options is not None or host_selection is not None:
             return 1 if fail else 0
 
     def do_run(self, duration):
@@ -1957,7 +1971,7 @@ def main():
             max_workers=getattr(args, 'max_workers', None),
             node_slice=node_slice, filters=filters_from_args(args),
             prefixes=args.prefixes, instance_ids=args.instance_ids, pod_info=args.pod_info,
-            archive_options=archive_options_from_args(args))
+            archive_options=archive_options_from_args(args), host_selection=host_selection_from_args(args))
         if result:
             sys.exit(result)
     elif args.command == 'clean':

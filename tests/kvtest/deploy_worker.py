@@ -17,7 +17,8 @@ import shlex
 import sys
 
 from log_collect import (add_collect_filters, archive_command, filters_from_args, has_filters,
-                         pod_directory, receive_archive, archive_options_from_args)
+                         pod_directory, receive_archive, archive_options_from_args,
+                         host_selection_from_args, filter_collect_targets)
 
 from deploy_common import (
     DEFAULT_TIMEOUT,
@@ -598,8 +599,20 @@ def main():
                   '(e.g. -p worker-a [-p worker-b])')
         return 1
 
-    # Get pods
-    pods = get_pods(args.namespace, args.prefixes)
+    try:
+        host_selection = host_selection_from_args(args) if args.action == 'collect' else None
+    except ValueError as error:
+        log_error(str(error))
+        return 1
+    # Host selection precedes prefixes and count/offset for collect.
+    pods = get_pods(args.namespace, [''] if host_selection is not None else args.prefixes)
+    if host_selection is not None:
+        try:
+            pods = filter_collect_targets(pods, host_selection)
+        except ValueError as error:
+            log_error(str(error))
+            return 1
+        pods = [pod for pod in pods if any(pod['name'].startswith(prefix) for prefix in args.prefixes)]
     if not pods:
         log_info(f'No running pods found matching prefixes {args.prefixes} '
                  f'in namespace "{args.namespace}"')
