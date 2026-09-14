@@ -1081,9 +1081,9 @@ TEST_F(HashRingRefresherTest, TestDifferentLowerVersionsAreNotConfirmed)
 }
 
 // Measures the ForceRefresh-to-hook-publish latency with an in-memory fetch (network cost
-// excluded, so this is the lower bound clients can expect on a healthy worker). This bounds
-// how much of the 10ms scale-change latency budget the reactive stale-snapshot retry consumes
-// before the admission snapshot even sees the new ring.
+// excluded, so this is the lower bound clients can expect on a healthy Worker). This bounds how
+// much of a client request deadline the stale-location retry consumes before the published
+// WorkerSnapshot sees the new ring.
 TEST_F(HashRingRefresherTest, ForceRefreshPublishesNewRingWithinRetryBudget)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");

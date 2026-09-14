@@ -3005,11 +3005,10 @@ TEST(DataPlaneManagerTest, ReconcileRemovesOnlyWorkersAbsentFromSnapshot)
     EXPECT_EQ(manager.transportBuildCount, 4);
 }
 
-// Reproduces the 17:48:02 jingpai failure shape: a worker re-joins with the SAME ring version
-// (hostId-only update or same-version republish), so master metadata already returns locations
-// pointing at it while the client admission snapshot never re-admitted it. A stamped location
-// (version > 0) carries the master's authority, so equal versions must be admitted too.
-TEST(DataPlaneManagerTest, SameVersionRejoinIsAdmittedByStampedLocation)
+// A Worker re-joining under the SAME ring version (hostId-only republish) is absent from the
+// published WorkerSnapshot while the Master already returns locations pointing at it. A non-zero
+// location admission version carries the Master's provenance, so an equal version is admitted too.
+TEST(DataPlaneManagerTest, SameVersionRejoinLocationIsAdmitted)
 {
     constexpr uint64_t version = 10;
     FakeDataPlaneManager manager;
@@ -3021,10 +3020,10 @@ TEST(DataPlaneManagerTest, SameVersionRejoinIsAdmittedByStampedLocation)
     ASSERT_TRUE(manager.UpdateWorkerSnapshot(snapshot).IsOk());
 
     std::shared_ptr<IDataTransporter> transporter;
-    // Same-version stamped location: the observed production gap, now admitted.
+    // Equal location admission version: the observed production gap, now admitted.
     ASSERT_TRUE(manager.GetOrCreateForDataLocation(rejoined, TransportHint::TCP_ONLY, version, transporter).IsOk());
     EXPECT_NE(transporter, nullptr);
-    // Newer-version stamped location: still admitted.
+    // Newer location admission version: still admitted.
     ASSERT_TRUE(manager.GetOrCreateForDataLocation(rejoined, TransportHint::TCP_ONLY, version + 1, transporter)
                     .IsOk());
     EXPECT_EQ(manager.rpcBuildCount, 1);
@@ -3089,8 +3088,8 @@ TEST(DataPlaneManagerTest, OldLocationSnapshotDoesNotAdmitMissingWorker)
     ASSERT_TRUE(manager.UpdateWorkerSnapshot(snapshot).IsOk());
 
     std::shared_ptr<IDataTransporter> transporter;
-    // Unstamped (0) and strictly older stamped locations are stale and stay rejected; an
-    // equal-version stamp is covered by SameVersionRejoinIsAdmittedByStampedLocation.
+    // Version 0 (no evidence) and strictly older versions stay rejected; an equal version is
+    // covered by SameVersionRejoinLocationIsAdmitted.
     for (uint64_t version : { legacyTopologyVersion, oldTopologyVersion }) {
         SCOPED_TRACE(version);
         EXPECT_EQ(manager.GetOrCreateForDataLocation(newWorker, TransportHint::TCP_ONLY, version, transporter)
@@ -3120,10 +3119,9 @@ TEST(DataPlaneManagerTest, SnapshotAdvanceRevokesNewLocationAdmissionDuringBuild
         EXPECT_TRUE(manager.UpdateWorkerSnapshot(advanced).IsOk());
     };
 
-    // The snapshot advances to the location's stamp mid-build while the ring still excludes
-    // newWorker. The equal-version master stamp keeps admission authority, so the bypass holds
-    // and the freshly built transporter is kept (P2 semantics; the stamp means the master
-    // validated this location against that same topology version).
+    // The snapshot advances to the location's version mid-build while the ring still excludes
+    // newWorker. The equal-version provenance keeps the exceptional admission valid, so the
+    // freshly built transporter is retained.
     std::shared_ptr<IDataTransporter> transporter;
     ASSERT_TRUE(manager.GetOrCreateForDataLocation(newWorker, TransportHint::TCP_ONLY, locationTopologyVersion,
                                                   transporter)
@@ -3138,8 +3136,8 @@ TEST(DataPlaneManagerTest, SnapshotAdvanceRevokesNewLocationAdmissionDuringBuild
         EXPECT_TRUE(manager.entries_.find(accessor, newWorker.ToString()));
     }
 
-    // A later reconciled ring without the worker still cleans the entry up once the stamped
-    // location stops being re-admitted (version regression from the live ring's perspective).
+    // A later reconciled ring without the worker still cleans the entry up once the exceptional
+    // admission stops applying (the ring caught up and still omits the endpoint).
     manager.ReconcileWithSnapshot([&] {
         WorkerSnapshot caught = snapshot;
         caught.ringVersion = locationTopologyVersion;
@@ -3181,8 +3179,8 @@ TEST(DataPlaneManagerTest, OlderReconcilePreservesLocationAdmittedEndpointUntilS
     ASSERT_TRUE(manager.UpdateWorkerSnapshot(snapshot).IsOk());
     manager.ReconcileWithSnapshot(snapshot);
     EXPECT_EQ(admittedTransporter->closeCount, 1);
-    // The reconciled ring still does not contain newWorker, but the location keeps its master
-    // stamp of this same version, so admission trusts the stamp and rebuilds the transporter.
+    // The reconciled ring still does not contain newWorker, but the location keeps an equal
+    // provenance version, so admission trusts it and rebuilds the transporter.
     ASSERT_TRUE(manager.GetOrCreateForDataLocation(newWorker, TransportHint::TCP_ONLY, locationTopologyVersion,
                                                   transporter)
                     .IsOk());
