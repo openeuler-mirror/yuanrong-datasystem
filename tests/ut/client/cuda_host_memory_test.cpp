@@ -35,8 +35,12 @@
 #include "datasystem/client/mmap_manager/host_memory_pin_manager.h"
 #include "datasystem/client/mmap_manager/shm_mmap_table.h"
 #include "datasystem/client/mmap_manager/shm_mmap_table_entry.h"
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/raii.h"
+
+DS_DECLARE_bool(alsologtostderr);
+DS_DECLARE_int32(v);
 
 namespace datasystem {
 namespace {
@@ -55,12 +59,21 @@ std::atomic<int> secondHostRegisterCalls{ 0 };
 std::atomic<int> secondHostUnregisterCalls{ 0 };
 std::atomic<int> secondGetErrorStringCalls{ 0 };
 std::atomic<int> secondMemcpyCalls{ 0 };
+std::atomic<bool> slowCallbacks{ false };
 std::atomic<bool> markClientExitingOnRegister{ false };
 std::atomic<client::ShmMmapTableEntry *> retireEntryOnRegister{ nullptr };
 const std::shared_ptr<std::atomic<bool>> clientExiting = std::make_shared<std::atomic<bool>>(false);
 
+void DelaySlowCallback()
+{
+    if (slowCallbacks.load()) {
+        std::this_thread::sleep_for(std::chrono::microseconds(CUDA_SLOW_OPERATION_THRESHOLD_US + 1));
+    }
+}
+
 int FirstHostRegister(void *, size_t, unsigned int)
 {
+    DelaySlowCallback();
     ++firstHostRegisterCalls;
     if (markClientExitingOnRegister.load(std::memory_order_acquire)) {
         clientExiting->store(true, std::memory_order_release);
@@ -74,12 +87,14 @@ int FirstHostRegister(void *, size_t, unsigned int)
 
 int FirstHostUnregister(void *)
 {
+    DelaySlowCallback();
     ++firstHostUnregisterCalls;
     return kCudaSuccess;
 }
 
 int FirstMemcpyAsync(void *, const void *, size_t, DsCudaMemcpyKind, void *)
 {
+    DelaySlowCallback();
     ++firstMemcpyCalls;
     return 17;
 }
@@ -111,6 +126,38 @@ int SecondMemcpyAsync(void *, const void *, size_t, DsCudaMemcpyKind, void *)
 {
     ++secondMemcpyCalls;
     return 18;
+}
+
+void VerifySlowCallbacksLogWithoutVlog()
+{
+    const auto oldV = FLAGS_v;
+    const auto oldStderr = FLAGS_alsologtostderr;
+    Raii restore([oldV, oldStderr] {
+        slowCallbacks.store(false);
+        FLAGS_v = oldV;
+        FLAGS_alsologtostderr = oldStderr;
+    });
+    FLAGS_v = 0;
+    FLAGS_alsologtostderr = true;
+    slowCallbacks.store(true);
+    char source = 0;
+    char destination = 0;
+    testing::internal::CaptureStderr();
+    const bool registered = RegisterCudaHostMemory(&source, sizeof(source));
+    const bool unregistered = UnregisterCudaHostMemory(&source);
+    const auto status = DsCudaMemcpyAsync(&destination, &source, sizeof(source),
+                                         DsCudaMemcpyKind::DEVICE_TO_HOST, nullptr);
+    const auto output = testing::internal::GetCapturedStderr();
+    EXPECT_TRUE(registered);
+    EXPECT_TRUE(unregistered);
+    EXPECT_EQ(status.GetCode(), K_RUNTIME_ERROR);
+    EXPECT_NE(output.find("[CUDA_HOST_SLOW] operation=register"), std::string::npos) << output;
+    EXPECT_NE(output.find("[CUDA_HOST_SLOW] operation=unregister"), std::string::npos) << output;
+    EXPECT_NE(output.find("[CUDA_MEMCPY_SLOW] direction=D2H"), std::string::npos) << output;
+    EXPECT_NE(output.find("callback_us="), std::string::npos) << output;
+    EXPECT_NE(output.find("end_timestamp_us="), std::string::npos) << output;
+    EXPECT_NE(output.find("suppressed_count="), std::string::npos) << output;
+    EXPECT_NE(output.find("suppressed_max_us="), std::string::npos) << output;
 }
 
 #ifdef __linux__
@@ -300,6 +347,7 @@ TEST(CudaHostMemoryTest, RegisteredCallbacksAreFrozenAndStopSignalsControlPinFra
     VerifyEntryRetirementStopsRemainingPinFragments();
     VerifyWorkerRetirementCancelsPinWaitingForUnpin();
 #endif
+    VerifySlowCallbacksLogWithoutVlog();
 }
 
 TEST(CudaHostMemoryTest, ImmutableRegistrySnapshotPreservesPublishedMappings)
@@ -309,5 +357,69 @@ TEST(CudaHostMemoryTest, ImmutableRegistrySnapshotPreservesPublishedMappings)
 #else
     GTEST_SKIP() << "Linux memfd + ShmMmapTableEntry path only";
 #endif
+}
+
+TEST(CudaHostMemoryTest, SlowLogLimiterIntervalAndIndependentCategories)
+{
+    CudaSlowLogState limiter;
+    CudaSlowLogState otherCategory;
+    const std::chrono::steady_clock::time_point start{};
+    const auto interval = std::chrono::microseconds(CUDA_SLOW_LOG_INTERVAL_US);
+    uint64_t suppressed = 0;
+    int64_t maxUs = 0;
+    EXPECT_TRUE(TryAcquireCudaSlowLog(limiter, 900000, suppressed, maxUs, start));
+    EXPECT_EQ(suppressed, 0);
+    EXPECT_EQ(maxUs, 0);
+    EXPECT_FALSE(TryAcquireCudaSlowLog(limiter, 500000, suppressed, maxUs, start));
+    EXPECT_FALSE(TryAcquireCudaSlowLog(limiter, 200000, suppressed, maxUs,
+                                      start + interval - std::chrono::microseconds(1)));
+    EXPECT_TRUE(TryAcquireCudaSlowLog(otherCategory, 900000, suppressed, maxUs, start));
+    EXPECT_EQ(suppressed, 0);
+    EXPECT_EQ(maxUs, 0);
+    EXPECT_TRUE(TryAcquireCudaSlowLog(limiter, 900000, suppressed, maxUs, start + interval));
+    EXPECT_EQ(suppressed, 2);
+    EXPECT_EQ(maxUs, 500000);
+    EXPECT_TRUE(TryAcquireCudaSlowLog(limiter, 900000, suppressed, maxUs, start + interval + interval));
+    EXPECT_EQ(suppressed, 0);
+    EXPECT_EQ(maxUs, 0);
+}
+
+TEST(CudaHostMemoryTest, SlowLogLimiterConcurrentCallsHaveOneWinner)
+{
+    constexpr size_t threadCount = 16;
+    CudaSlowLogState limiter;
+    const std::chrono::steady_clock::time_point start{};
+    std::atomic<size_t> ready{ 0 };
+    std::atomic<size_t> winners{ 0 };
+    std::atomic<uint64_t> reported{ 0 };
+    std::atomic<bool> run{ false };
+    std::vector<std::thread> threads;
+    for (size_t i = 0; i < threadCount; ++i) {
+        threads.emplace_back([&limiter, start, &ready, &winners, &reported, &run] {
+            ready.fetch_add(1);
+            while (!run.load()) {
+                std::this_thread::yield();
+            }
+            uint64_t suppressed = 0;
+            int64_t maxUs = 0;
+            if (TryAcquireCudaSlowLog(limiter, 200000, suppressed, maxUs, start)) {
+                winners.fetch_add(1);
+                reported.fetch_add(suppressed);
+            }
+        });
+    }
+    while (ready.load() != threadCount) {
+        std::this_thread::yield();
+    }
+    run.store(true);
+    for (auto &thread : threads) {
+        thread.join();
+    }
+    EXPECT_EQ(winners.load(), 1);
+    uint64_t suppressed = 0;
+    int64_t maxUs = 0;
+    EXPECT_TRUE(TryAcquireCudaSlowLog(limiter, 900000, suppressed, maxUs,
+                                     start + std::chrono::microseconds(CUDA_SLOW_LOG_INTERVAL_US)));
+    EXPECT_EQ(reported.load() + suppressed, threadCount - 1);
 }
 }  // namespace datasystem

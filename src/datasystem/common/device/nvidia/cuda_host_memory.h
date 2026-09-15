@@ -20,13 +20,30 @@
 #ifndef DATASYSTEM_COMMON_DEVICE_NVIDIA_CUDA_HOST_MEMORY_H
 #define DATASYSTEM_COMMON_DEVICE_NVIDIA_CUDA_HOST_MEMORY_H
 
+#include <atomic>
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <string>
 
 #include "datasystem/utils/cuda_funcs.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
+
+constexpr int64_t CUDA_SLOW_OPERATION_THRESHOLD_US = 100000;
+constexpr int64_t CUDA_SLOW_LOG_INTERVAL_US = 10000000;
+
+struct CudaSlowLogState {
+    std::atomic<int64_t> nextAllowedUs{ std::numeric_limits<int64_t>::min() };
+    std::atomic<uint64_t> suppressedCount{ 0 };
+    std::atomic<int64_t> suppressedMaxUs{ 0 };
+};
+
+bool TryAcquireCudaSlowLog(CudaSlowLogState &state, int64_t elapsedUs, uint64_t &suppressedCount,
+                           int64_t &suppressedMaxUs,
+                           std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 
 void *GetCudaRuntimeSymbol(const std::string &name);
 
