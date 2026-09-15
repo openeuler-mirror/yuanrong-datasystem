@@ -76,6 +76,17 @@ constexpr uint32_t MASTER_TASK_THREAD_NUM = 8;
 
 constexpr uint32_t SPILL_EVICT_THREAD_NUM = 1;
 constexpr uint32_t MEM_EVICT_THREAD_NUM = 1;
+// In force mode, back off one beat after this many consecutive skipped candidates instead of
+// spinning on the eviction list write lock until the caller's retry budget is exhausted.
+constexpr uint32_t FORCE_SKIP_BACKOFF_THRESHOLD = 64;
+// Wall-clock backstop for one force round. The round normally ends as soon as the obligation is
+// covered (see forceObligationCovered), so this only bounds a round whose candidates keep being
+// skipped without any of them making progress.
+constexpr uint64_t FORCE_EVICT_MAX_DURATION_MS = 1000;
+// A pending force need older than this describes a memory state that no longer holds: replaying it
+// would force an unrelated round below the water mark. The foreground OOM retry re-issues its need
+// every round, so an expired entry is superseded rather than lost.
+constexpr uint64_t PENDING_FORCE_NEED_TTL_MS = 10 * 1000;
 // Number of concurrent drain workers for primary end-life tasks. End-life involves
 // master RPC (DeleteAllCopyMeta) which is the eviction throughput bottleneck under
 // high write load (issue #750). Multiple workers drain the queue in parallel so the
@@ -1027,18 +1038,20 @@ void WorkerOcEvictionManager::GetObjectNextAction(SafeObjType &entry, std::uniqu
         nextAction = Action::RETAIN;
     }
     INJECT_POINT("evictAction.setDelete", [&nextAction]() { nextAction = Action::DELETE; });
+    INJECT_POINT("evictAction.setSpill", [&nextAction]() { nextAction = Action::SPILL; });
     trace->info = info;
     trace->action = nextAction;
 }
 
 Status WorkerOcEvictionManager::EvictObject(ObjectKV &objectKV, Action nextAction, EvictDeletedObjects *deletedObjects,
-                                            CacheType cacheType, uint64_t needSize, const EvictionCandidate *candidate)
+                                            CacheType cacheType, uint64_t needSize, const EvictionCandidate *candidate,
+                                            bool forceEvict)
 {
     const auto &objectKey = objectKV.GetObjKey();
     SafeObjType &entry = objectKV.GetObjEntry();
     if (nextAction == Action::END_LIFE) {
         bool accepted = false;
-        Status rc = SubmitPrimaryEndLifeTask(objectKV, cacheType, needSize, accepted, candidate);
+        Status rc = SubmitPrimaryEndLifeTask(objectKV, cacheType, needSize, accepted, candidate, forceEvict);
         Erase(objectKey);
         RETURN_IF_NOT_OK(rc);
         VLOG(1) << FormatString("[ObjectKey %s] Object will be end of life, accepted: %d", objectKey, accepted);
@@ -1123,40 +1136,68 @@ bool WorkerOcEvictionManager::IsAboveLowWaterMark(uint64_t needSize, size_t pend
     return realMemoryUsage > lowWater;
 }
 
-void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheType)
+void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheType, bool forceEvict)
 {
     Raii finishTask([this]() {
         isDone_.store(true, std::memory_order_release);
         NotifyEvictionStopped();
+        ResubmitPendingForceEviction();
     });
-    std::shared_ptr<EvictionStrategy> strategy;
-    EvictionList *evictionList = nullptr;
+    EvictionLoopState st;
+    st.needSize = needSize;
+    st.cacheType = cacheType;
+    st.forceEvict = forceEvict;
     {
         std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
         if (policyUpdatePhase_.load(std::memory_order_acquire) != PolicyUpdatePhase::STABLE) {
+            // This task will not run, so it must not consume the pending slot: an early return here
+            // would take the need with the stack frame and drop it.
             return;
         }
-        strategy = policyRoute_.sourceStrategy;
-        evictionList = policyRoute_.sourceList;
+        st.strategy = policyRoute_.sourceStrategy;
+        st.evictionList = policyRoute_.sourceList;
     }
+    // Past the phase gate the task is certain to run, so it may take over the pending need.
+    MergePendingForceIntoTask(st);
     Timer evictionTaskTimer;
     EvictionRetryList evictFailedIds;
-    EvictionRoundState evictionRound;
-    // IMPORTANT — declaration order:
-    // evictionAggregator MUST be declared before spillTasks.
-    // spillTasks entries hold EvictionTrace objects whose aggregator_ pointer
-    // points to evictionAggregator (set at line ~trace->aggregator_ = &evictionAggregator).
-    // C++ destroys local variables in reverse declaration order, so spillTasks
-    // (and the EvictionTrace objects inside it) are destroyed BEFORE evictionAggregator.
-    // When an EvictionTrace is destroyed, its destructor calls
-    // aggregator_->Add(*this), which appends data into evictionAggregator.
-    // If evictionAggregator were destroyed first, this would be a use-after-free.
-    // Additionally, async spill futures may hold EvictionTrace objects whose
-    // destructors fire when the future completes. ReleaseSpillFutures(..., true)
-    // at the end of this function blocks until ALL futures are ready, ensuring
-    // every trace destructor runs before evictionAggregator goes out of scope.
+    // IMPORTANT — declaration order: evictionAggregator MUST be declared before spillTasks.
+    // spillTasks entries hold EvictionTrace objects whose aggregator_ points to evictionAggregator;
+    // reverse destruction order destroys them before the aggregator. Async spill futures hold more such
+    // traces: the blocking ReleaseSpillFutures(..., true) at the end of RunEvictionLoop drains every
+    // future before this scope ends, so no trace destructor can touch a dangling aggregator.
     EvictionTraceAggregator evictionAggregator;
     std::unordered_map<std::string, SpillTask> spillTasks;
+    st.evictFailedIds = &evictFailedIds;
+    st.aggregator = &evictionAggregator;
+    st.spillTasks = &spillTasks;
+    LOG(INFO) << "EvictionList size before evict: " << st.evictionList->Size();
+    VLOG(DEBUG_LOG_LEVEL) << "PRIMARY_END_LIFE_DIAG stage=eviction_summary, event=start, eviction_list_size="
+                          << memEvictionList_.Size() << ", pressure=" << GetPrimaryEndLifePressure();
+    RunEvictionLoop(st);
+    for (const auto &retry : evictFailedIds) {
+        st.strategy->ReaddCandidate(retry.candidate, retry.counter);
+    }
+    if (st.forceEvict) {
+        LogForceEvictionSummary(st);
+    }
+    LOG(INFO) << "EvictionList size after evict:" << st.evictionList->Size()
+              << ", failed size:" << evictFailedIds.size();
+    auto evictionElapsedMs = evictionTaskTimer.ElapsedMilliSecond();
+    if (evictionElapsedMs >= PRIMARY_END_LIFE_SLOW_LOG_THRESHOLD_MS) {
+        LOG(WARNING) << "PRIMARY_END_LIFE_DIAG stage=eviction_summary, event=complete, elapsed_ms="
+                     << evictionElapsedMs << ", eviction_list_size=" << st.evictionList->Size()
+                     << ", failed_keys=" << evictFailedIds.size() << ", pressure=" << GetPrimaryEndLifePressure();
+    } else {
+        VLOG(DEBUG_LOG_LEVEL) << "PRIMARY_END_LIFE_DIAG stage=eviction_summary, event=complete, elapsed_ms="
+                              << evictionElapsedMs << ", eviction_list_size=" << st.evictionList->Size()
+                              << ", failed_keys=" << evictFailedIds.size()
+                              << ", pressure=" << GetPrimaryEndLifePressure();
+    }
+}
+
+void WorkerOcEvictionManager::RunEvictionLoop(EvictionLoopState &st)
+{
     EvictDeletedObjects deletedObjects;
     Timer deletedObjectsFlushTimer(BATCH_DELETE_META_MAX_DELAY_MS);
     auto flushDeletedObjects = [this, &deletedObjects, &deletedObjectsFlushTimer]() {
@@ -1167,114 +1208,195 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
         deletedObjects.clear();
         deletedObjectsFlushTimer.Reset();
     };
-    LOG(INFO) << "EvictionList size before evict: " << evictionList->Size();
-    VLOG(DEBUG_LOG_LEVEL) << "PRIMARY_END_LIFE_DIAG stage=eviction_summary, event=start, eviction_list_size="
-                          << memEvictionList_.Size() << ", pressure=" << GetPrimaryEndLifePressure();
-    size_t pendingSpillSize = 0;
-    // The size of low water mark memory usage is not fixed. It varies on the size of shared memory available.
-    // Share memory release is delayed due to asynchronous spill, so the pending spill data size needs to be counted to
-    // prevent all objects from being spilled.
+    st.deletedObjects = &deletedObjects;
+    st.deletedObjectsFlushTimer = &deletedObjectsFlushTimer;
+    // Force mode (extent-unavailable OOM) keeps evicting below the water mark until needSize bytes
+    // are reclaimed. The obligation counts confirmed reclaims (synchronous DELETE/FREE_MEMORY plus
+    // spill futures observed successful) together with the bytes already promised to asynchronous
+    // reclaim (in-flight spill, accepted END_LIFE); when usage is above the water mark force mode is
+    // a superset of the normal gate, never less. Counting the promised bytes is what bounds a round:
+    // a candidate mix of END_LIFE and in-flight spill never advances the confirmed budget, so
+    // stopping on confirmed bytes alone would drain the whole list for a 1MiB need.
+    auto forceObligationCovered = [&st]() {
+        return st.forceEvictedSize + st.pendingSpillSize + st.forceEndLifeAcceptedSize >= st.needSize;
+    };
+    const auto forceDeadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(FORCE_EVICT_MAX_DURATION_MS);
+    uint32_t consecutiveSkipped = 0;
     while (!evictionCancelRequested_.load(std::memory_order_acquire)
-           && IsAboveLowWaterMark(needSize, pendingSpillSize, cacheType) && evictionList->Size() != 0) {
-        EvictionCandidate candidate;
-        if (strategy->SelectCandidate(evictionRound, candidate).IsError()) {
-            LOG(ERROR) << "FindEvictCandidate failed, EvictionList is empty.";
-            continue;
-        }
-        const auto &candidateId = candidate.objectKey;
-        if (evictionCancelRequested_.load(std::memory_order_acquire)) {
-            break;
-        }
-        auto trace = std::make_unique<EvictionTrace>(candidateId);
-        trace->aggregator_ = &evictionAggregator;
-        std::shared_ptr<SafeObjType> entry;
-        std::optional<EvictionList::Node> retrySnapshot;
-        Status rc = GetAndLockEntry(candidateId, entry, retrySnapshot);
-        if (rc.IsError()) {
-            if (retrySnapshot.has_value()) {
-                evictFailedIds.push_back(
-                    { MakeEvictionCandidate(candidate.policy, *retrySnapshot), static_cast<uint8_t>(Q1) });
+           && (IsAboveLowWaterMark(st.needSize, st.pendingSpillSize, st.cacheType)
+               || (st.forceEvict && !forceObligationCovered()
+                   && std::chrono::steady_clock::now() < forceDeadline))
+           && st.evictionList->Size() != 0) {
+        uint64_t candidateSize = 0;
+        auto result = EvictOneObject(st, candidateSize);
+        if (result == EvictOneResult::SKIPPED) {
+            // All-skip spins hammer the list write lock and starve foreground cache hits.
+            if (st.forceEvict && ++consecutiveSkipped >= FORCE_SKIP_BACKOFF_THRESHOLD) {
+                consecutiveSkipped = 0;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
-            trace->rc = Status(rc.GetCode(), FormatString("GetAndLockEntry failed %s.", rc.GetMsg()));
             continue;
         }
-        ObjectKV objectKV(candidateId, *entry);
-        bool locked = true;
-        Raii unLockRaii([entry, &locked]() {
-            if (locked) {
-                entry->WUnlock();
-            }
-        });
-        // Heat selection consumes a bounded snapshot batch. Revalidate after taking the object write lock so a cache
-        // hit, decay, reinsert, or same-key recreation cannot evict a stale snapshot.
-        if (!strategy->ValidateCandidate(evictionRound, candidate)) {
-            trace->rc = Status(K_NOT_READY, "Eviction candidate changed after selection");
-            continue;
-        }
-        // Pair with RebalanceCandidateProvider, which marks candidates while holding the object read lock. A prior mark
-        // is visible after this write lock is acquired; later rebalance validation waits until eviction ends.
-        if (IsObjectBeingRebalanced(candidateId)) {
-            trace->rc = Status(K_NOT_READY, "Object is being rebalanced");
-            (void)evictionList->Erase(candidateId);
-            evictFailedIds.push_back({ candidate, READD_COUNTER });
-            continue;
-        }
-        trace->AddObjectKeySize(candidateId, (*entry)->GetDataSize());
-        // This moment object key may not in EvictionList.
-        // It may be erased in other place after we got candidateId.
-        // So we need to check it before do evict.
-        if (!IsObjectEvictable(objectKV)) {
-            trace->rc = Status(K_RUNTIME_ERROR, "IsObjectEvictable return false");
-            continue;
-        }
-        GetObjectNextAction(*entry, trace, pendingSpillSize);
-        bool wasDeletedObjectsEmpty = deletedObjects.empty();
-        rc = TryEvictObject(entry, std::move(trace), pendingSpillSize, spillTasks, locked, candidate, cacheType,
-                            &deletedObjects, needSize);
-        if (wasDeletedObjectsEmpty && !deletedObjects.empty()) {
-            deletedObjectsFlushTimer.Reset();
-        }
+        consecutiveSkipped = 0;
         if (deletedObjects.size() >= BATCH_DELETE_META_THRESHOLD
             || (!deletedObjects.empty() && deletedObjectsFlushTimer.IsTimeout())) {
             flushDeletedObjects();
         }
-        if (rc.IsError()) {
-            // K_TRY_AGAIN (e.g. primary end-life queue full) is a transient capacity issue;
-            // Transient failures like end-life queue-full (K_TRY_AGAIN) use Q1 for fast
-            // retry since the condition clears quickly. Persistent errors (e.g. master
-            // RPC failure) use READD_COUNTER=5 as backoff to avoid a tight retry loop.
-            // With push_back the object lands at the tail, so the 5-round backoff
-            // (~list_size / write_rate per round) is a reasonable delay (issue #750).
-            uint8_t counter = (rc.GetCode() == StatusCode::K_TRY_AGAIN) ? Q1 : READD_COUNTER;
-            evictFailedIds.push_back({ candidate, counter });
-        }
-        auto spilledSize = ReleaseSpillFutures(spillTasks, evictFailedIds, false);
-        pendingSpillSize -= std::min(pendingSpillSize, spilledSize);
-        INJECT_POINT("worker.Evict", [&pendingSpillSize](size_t size) { pendingSpillSize = size; });
+        ResolveSpillFutures(st, false);
+        INJECT_POINT("worker.Evict", [&st](size_t size) { st.pendingSpillSize = size; });
     }
     flushDeletedObjects();
-    // Blocking wait (last=true) for ALL remaining async spill futures.
-    // This must be blocking because evictionAggregator (declared above) will go
-    // out of scope when this function returns. Futures that complete after the
-    // aggregator is destroyed would call aggregator_->Add() on a dangling pointer
-    // in ~EvictionTrace(), causing use-after-free.
-    (void)ReleaseSpillFutures(spillTasks, evictFailedIds, true);
+    // Blocking wait (last=true) for ALL remaining async spill futures, so that every EvictionTrace
+    // destructor runs before EvictionTask's aggregator goes out of scope.
+    ResolveSpillFutures(st, true);
+}
 
-    for (const auto &retry : evictFailedIds) {
-        strategy->ReaddCandidate(retry.candidate, retry.counter);
+void WorkerOcEvictionManager::ResolveSpillFutures(EvictionLoopState &st, bool blocking)
+{
+    auto reclaim = ReleaseSpillFutures(*st.spillTasks, *st.evictFailedIds, blocking);
+    st.pendingSpillSize -= std::min(st.pendingSpillSize, reclaim.resolvedSize);
+    if (st.forceEvict) {
+        // Only successful futures released shared memory; failed ones re-add for retry.
+        st.forceEvictedSize += reclaim.freedSize;
     }
-    LOG(INFO) << "EvictionList size after evict:" << evictionList->Size() << ", failed size:" << evictFailedIds.size();
-    auto evictionElapsedMs = evictionTaskTimer.ElapsedMilliSecond();
-    if (evictionElapsedMs >= PRIMARY_END_LIFE_SLOW_LOG_THRESHOLD_MS) {
-        LOG(WARNING) << "PRIMARY_END_LIFE_DIAG stage=eviction_summary, event=complete, elapsed_ms="
-                     << evictionElapsedMs << ", eviction_list_size=" << evictionList->Size()
-                     << ", failed_keys=" << evictFailedIds.size() << ", pressure=" << GetPrimaryEndLifePressure();
-    } else {
-        VLOG(DEBUG_LOG_LEVEL) << "PRIMARY_END_LIFE_DIAG stage=eviction_summary, event=complete, elapsed_ms="
-                              << evictionElapsedMs << ", eviction_list_size=" << evictionList->Size()
-                              << ", failed_keys=" << evictFailedIds.size()
-                              << ", pressure=" << GetPrimaryEndLifePressure();
+}
+
+void WorkerOcEvictionManager::MergePendingForceIntoTask(EvictionLoopState &st)
+{
+    // A force need that lost the single-flight race to this task must run with it, not after the
+    // next OOM retry. Only the slot of this task's own cache type can be served here: another type
+    // is an independent water mark domain and stays pending for the exit hook to resubmit.
+    std::lock_guard<std::mutex> lock(pendingForceMutex_);
+    auto iter = pendingForceNeeds_.find(st.cacheType);
+    if (iter == pendingForceNeeds_.end()) {
+        return;
     }
+    auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    if (IsPendingForceNeedExpired(iter->second.arrivalMs, nowMs)) {
+        pendingForceNeeds_.erase(iter);
+        return;
+    }
+    st.needSize = std::max(st.needSize, iter->second.needSize);
+    st.forceEvict = true;
+    pendingForceNeeds_.erase(iter);
+}
+
+void WorkerOcEvictionManager::LogForceEvictionSummary(const EvictionLoopState &st)
+{
+    LOG(INFO) << "Force eviction for extent OOM confirmed freed " << st.forceEvictedSize << " bytes (sync "
+              << st.forceSyncFreedSize << ", spill " << (st.forceEvictedSize - st.forceSyncFreedSize)
+              << "), end-life accepted " << st.forceEndLifeAcceptedSize
+              << " bytes (exempted from low-water gate, freed asynchronously), needSize " << st.needSize;
+}
+
+WorkerOcEvictionManager::EvictOneResult WorkerOcEvictionManager::EvictOneObject(EvictionLoopState &st,
+                                                                                uint64_t &candidateSize)
+{
+    EvictionCandidate candidate;
+    if (st.strategy->SelectCandidate(st.round, candidate).IsError()) {
+        LOG(ERROR) << "FindEvictCandidate failed, EvictionList is empty.";
+        return EvictOneResult::SKIPPED;
+    }
+    if (evictionCancelRequested_.load(std::memory_order_acquire)) {
+        return EvictOneResult::SKIPPED;
+    }
+    std::unique_ptr<EvictionTrace> trace;
+    std::shared_ptr<SafeObjType> entry;
+    Status rc = PrepareEvictionEntry(st, candidate, trace, entry);
+    if (rc.IsError()) {
+        return EvictOneResult::SKIPPED;
+    }
+    ObjectKV objectKV(candidate.objectKey, *entry);
+    bool locked = true;
+    Raii unLockRaii([entry, &locked]() {
+        if (locked) {
+            entry->WUnlock();
+        }
+    });
+    if (!ValidateLockedCandidate(st, candidate, *entry, objectKV, trace, candidateSize)) {
+        return EvictOneResult::SKIPPED;
+    }
+    GetObjectNextAction(*entry, trace, st.pendingSpillSize);
+    st.lastAction = trace->action;
+    bool wasDeletedObjectsEmpty = st.deletedObjects->empty();
+    rc = TryEvictObject(entry, std::move(trace), st.pendingSpillSize, *st.spillTasks, locked, candidate,
+                        st.cacheType, st.deletedObjects, st.needSize, st.forceEvict);
+    if (wasDeletedObjectsEmpty && !st.deletedObjects->empty()) {
+        st.deletedObjectsFlushTimer->Reset();
+    }
+    if (rc.IsError()) {
+        // K_TRY_AGAIN (e.g. primary end-life queue full) uses Q1 for fast retry since the condition
+        // clears quickly; persistent errors (e.g. master RPC failure) use READD_COUNTER=5 as backoff
+        // to avoid a tight retry loop (issue #750).
+        uint8_t counter = (rc.GetCode() == StatusCode::K_TRY_AGAIN) ? Q1 : READD_COUNTER;
+        st.evictFailedIds->push_back({ candidate, counter });
+        return EvictOneResult::FAILED;
+    }
+    if (st.forceEvict) {
+        AccountForceEviction(st, candidateSize);
+    }
+    return EvictOneResult::EVICTED;
+}
+
+void WorkerOcEvictionManager::AccountForceEviction(EvictionLoopState &st, uint64_t candidateSize)
+{
+    // Only synchronous DELETE/FREE_MEMORY reclaim now; SPILL counts via ResolveSpillFutures on
+    // future success, END_LIFE acceptance is tracked separately as an async reclaim.
+    if (st.lastAction == Action::DELETE || st.lastAction == Action::FREE_MEMORY) {
+        st.forceEvictedSize += candidateSize;
+        st.forceSyncFreedSize += candidateSize;
+    } else if (st.lastAction == Action::END_LIFE) {
+        st.forceEndLifeAcceptedSize += candidateSize;
+    }
+}
+
+Status WorkerOcEvictionManager::PrepareEvictionEntry(EvictionLoopState &st, const EvictionCandidate &candidate,
+                                                     std::unique_ptr<EvictionTrace> &trace,
+                                                     std::shared_ptr<SafeObjType> &entry)
+{
+    const auto &candidateId = candidate.objectKey;
+    trace = std::make_unique<EvictionTrace>(candidateId);
+    trace->aggregator_ = st.aggregator;
+    std::optional<EvictionList::Node> retrySnapshot;
+    Status rc = GetAndLockEntry(candidateId, entry, retrySnapshot);
+    if (rc.IsError()) {
+        if (retrySnapshot.has_value()) {
+            st.evictFailedIds->push_back(
+                { MakeEvictionCandidate(candidate.policy, *retrySnapshot), static_cast<uint8_t>(Q1) });
+        }
+        trace->rc = Status(rc.GetCode(), FormatString("GetAndLockEntry failed %s.", rc.GetMsg()));
+    }
+    return rc;
+}
+
+bool WorkerOcEvictionManager::ValidateLockedCandidate(EvictionLoopState &st, const EvictionCandidate &candidate,
+                                                      SafeObjType &entry, const ObjectKV &objectKV,
+                                                      std::unique_ptr<EvictionTrace> &trace, uint64_t &candidateSize)
+{
+    // Heat selection consumes a bounded snapshot batch. Revalidate after taking the object write lock so a cache
+    // hit, decay, reinsert, or same-key recreation cannot evict a stale snapshot.
+    // Pair with RebalanceCandidateProvider, which marks candidates while holding the object read lock. A prior mark
+    // is visible after this write lock is acquired; later rebalance validation waits until eviction ends.
+    if (!st.strategy->ValidateCandidate(st.round, candidate)) {
+        trace->rc = Status(K_NOT_READY, "Eviction candidate changed after selection");
+        return false;
+    }
+    if (IsObjectBeingRebalanced(candidate.objectKey)) {
+        trace->rc = Status(K_NOT_READY, "Object is being rebalanced");
+        (void)st.evictionList->Erase(candidate.objectKey);
+        st.evictFailedIds->push_back({ candidate, READD_COUNTER });
+        return false;
+    }
+    candidateSize = entry->GetDataSize();
+    trace->AddObjectKeySize(candidate.objectKey, candidateSize);
+    // The object key may have been erased from the EvictionList elsewhere after candidate selection,
+    // so recheck evictability under the lock before evicting.
+    if (!IsObjectEvictable(objectKV)) {
+        trace->rc = Status(K_RUNTIME_ERROR, "IsObjectEvictable return false");
+        return false;
+    }
+    return true;
 }
 
 void WorkerOcEvictionManager::NotifyEvictionStopped()
@@ -1286,12 +1408,13 @@ Status WorkerOcEvictionManager::TryEvictObject(std::shared_ptr<SafeObjType> &ent
                                                std::unique_ptr<EvictionTrace> trace, size_t &pendingSpillSize,
                                                std::unordered_map<std::string, SpillTask> &spillTasks, bool &locked,
                                                const EvictionCandidate &candidate, CacheType cacheType,
-                                               EvictDeletedObjects *deletedObjects, uint64_t needSize)
+                                               EvictDeletedObjects *deletedObjects, uint64_t needSize,
+                                               bool forceEvict)
 {
     const auto &objectKey = trace->taskId;
     ObjectKV objectKV(objectKey, *entry);
     PerfPoint point(PerfKey::WORKER_EVICT_ONE_OBJECT);
-    Status rc = EvictObject(objectKV, trace->action, deletedObjects, cacheType, needSize, &candidate);
+    Status rc = EvictObject(objectKV, trace->action, deletedObjects, cacheType, needSize, &candidate, forceEvict);
     if (rc.IsError()) {
         trace->rc = rc;
         if (rc.GetCode() != K_NOT_READY) {
@@ -1316,7 +1439,7 @@ Status WorkerOcEvictionManager::TryEvictObject(std::shared_ptr<SafeObjType> &ent
     return Status::OK();
 }
 
-void WorkerOcEvictionManager::Evict(uint64_t needSize, CacheType cacheType)
+void WorkerOcEvictionManager::Evict(uint64_t needSize, CacheType cacheType, bool forceEvict)
 {
     LOG_EVERY_T(INFO, LOG_TIME_LIMIT_LEVEL3) << "Eviction start.";
     if (policyUpdatePhase_.load(std::memory_order_acquire) != PolicyUpdatePhase::STABLE) {
@@ -1330,14 +1453,101 @@ void WorkerOcEvictionManager::Evict(uint64_t needSize, CacheType cacheType)
             NotifyEvictionStopped();
             return;
         }
-        std::unique_lock<std::mutex> lk(cvMutex_);
-        auto traceID = Trace::Instance().GetTraceID();
-        memEvictTaskThreadPool_->Execute([this, traceID, needSize, cacheType] {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-            EvictionTask(needSize, cacheType);
-        });
+        SubmitEvictionTask(needSize, cacheType, forceEvict);
+        return;
+    }
+    if (forceEvict) {
+        MergePendingForceNeed(needSize, cacheType);
+        // The winner may have finished between the failed CAS and the merge above; retry the CAS
+        // once so the need runs immediately. If it fails again the active task is still running:
+        // it merged before our CAS, so its exit hook (which takes after storing isDone_) sees the
+        // need and resubmits — a force request is never silently dropped.
+        expected = true;
+        if (isDone_.compare_exchange_strong(expected, false)) {
+            SubmitEvictionTask(needSize, cacheType, true);
+            return;
+        }
+        LOG_EVERY_T(INFO, LOG_TIME_LIMIT_LEVEL3)
+            << "Force eviction is going on, needSize " << needSize << " merged into pending.";
     } else {
         LOG_EVERY_T(INFO, LOG_TIME_LIMIT_LEVEL3) << "Evict is going on...";
+    }
+}
+
+void WorkerOcEvictionManager::MergePendingForceNeed(uint64_t needSize, CacheType cacheType)
+{
+    std::lock_guard<std::mutex> lock(pendingForceMutex_);
+    auto &pending = pendingForceNeeds_[cacheType];
+    if (needSize > pending.needSize) {
+        pending.needSize = needSize;
+    }
+    // Refresh the arrival time even for a smaller need: it is a fresh observation that the pressure
+    // this slot describes is still present.
+    pending.arrivalMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+}
+
+bool WorkerOcEvictionManager::IsPendingForceNeedExpired(uint64_t arrivalMs, uint64_t nowMs)
+{
+    return nowMs - arrivalMs > PENDING_FORCE_NEED_TTL_MS;
+}
+
+bool WorkerOcEvictionManager::TakeAnyPendingForceNeed(uint64_t &needSize, CacheType &cacheType)
+{
+    std::lock_guard<std::mutex> lock(pendingForceMutex_);
+    auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    for (auto iter = pendingForceNeeds_.begin(); iter != pendingForceNeeds_.end();) {
+        if (IsPendingForceNeedExpired(iter->second.arrivalMs, nowMs)) {
+            iter = pendingForceNeeds_.erase(iter);
+            continue;
+        }
+        needSize = iter->second.needSize;
+        cacheType = iter->first;
+        pendingForceNeeds_.erase(iter);
+        return true;
+    }
+    return false;
+}
+
+void WorkerOcEvictionManager::ResubmitPendingForceEviction()
+{
+    if (policyUpdatePhase_.load(std::memory_order_acquire) != PolicyUpdatePhase::STABLE
+        || evictionCancelRequested_.load(std::memory_order_acquire)) {
+        // Leave the need pending; the next task that wins the single-flight slot merges it at entry.
+        return;
+    }
+    uint64_t pendingNeed = 0;
+    CacheType pendingCacheType = CacheType::MEMORY;
+    if (!TakeAnyPendingForceNeed(pendingNeed, pendingCacheType)) {
+        return;
+    }
+    bool expected = true;
+    if (!isDone_.compare_exchange_strong(expected, false)) {
+        // Another caller won the slot; its task merges the pending need at entry. If that entry
+        // merge already ran, put the need back — that task's own exit hook will pick it up.
+        MergePendingForceNeed(pendingNeed, pendingCacheType);
+        return;
+    }
+    LOG(INFO) << "Resubmit force eviction for extent OOM, needSize " << pendingNeed
+              << ", cacheType " << static_cast<int>(pendingCacheType);
+    SubmitEvictionTask(pendingNeed, pendingCacheType, true);
+}
+
+void WorkerOcEvictionManager::SubmitEvictionTask(uint64_t needSize, CacheType cacheType, bool forceEvict)
+{
+    std::unique_lock<std::mutex> lk(cvMutex_);
+    auto traceID = Trace::Instance().GetTraceID();
+    try {
+        memEvictTaskThreadPool_->Execute([this, traceID, needSize, cacheType, forceEvict] {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+            EvictionTask(needSize, cacheType, forceEvict);
+        });
+    } catch (const std::exception &e) {
+        // The caller has already claimed isDone_ (and this may be a destructor-driven resubmit, where
+        // an escaping exception would terminate the process). Hand the slot back and wake anyone
+        // waiting for the drain so eviction is not wedged for this manager's whole lifetime.
+        LOG(WARNING) << "Eviction task rejected, releasing the single-flight slot: " << e.what();
+        isDone_.store(true, std::memory_order_release);
+        NotifyEvictionStopped();
     }
 }
 
@@ -1425,10 +1635,11 @@ void WorkerOcEvictionManager::AsyncMasterTask(const EvictDeletedObjects &objectK
 
 Status WorkerOcEvictionManager::SubmitPrimaryEndLifeTask(const ObjectKV &objectKV, CacheType cacheType,
                                                          uint64_t needSize, bool &accepted,
-                                                         const EvictionCandidate *candidate)
+                                                         const EvictionCandidate *candidate, bool forceEvict)
 {
     const auto &objectKey = objectKV.GetObjKey();
     PrimaryEndLifeTask task{ objectKey, objectKV.GetObjEntry()->GetCreateTime(), cacheType, needSize };
+    task.forceEvict = forceEvict;
     task.queuedAtMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
     if (candidate != nullptr) {
         task.evictionCandidate = *candidate;
@@ -2287,7 +2498,9 @@ Status WorkerOcEvictionManager::PreparePrimaryEndLifeCandidates(const std::vecto
         candidates.resize(candidateBegin);
     });
     for (const auto &task : tasks) {
-        if (!IsAboveLowWaterMark(task.needSize, 0, task.cacheType)) {
+        // Force tasks exist precisely because usage sits below the low water mark; skipping them
+        // here would requeue them forever and wedge the exact state force eviction must relieve.
+        if (!task.forceEvict && !IsAboveLowWaterMark(task.needSize, 0, task.cacheType)) {
             skippedTasks.emplace_back(task);
             continue;
         }
@@ -2686,8 +2899,9 @@ void WorkerOcEvictionManager::UnlockPrimaryEndLifeCandidates(const std::vector<P
     }
 }
 
-Status WorkerOcEvictionManager::SpillImpl(const std::string &objectKey, uint64_t version)
+Status WorkerOcEvictionManager::SpillImpl(const std::string &objectKey, uint64_t version, bool &released)
 {
+    released = false;
     INJECT_POINT("worker.SubmitSpillTask");
     // Retry case: 1. try lock failed; 2. Spill failed;
     // Ignore case: 1. object not exists; 2. Shm released; 3. version changed.
@@ -2743,9 +2957,21 @@ Status WorkerOcEvictionManager::SpillImpl(const std::string &objectKey, uint64_t
     }
 
     Raii wUnlockRaii([entryPtr] { entryPtr->WUnlock(); });
-    LOG_IF_ERROR((*entryPtr)->FreeResources(), "SafeObj free failed");
-    (*entryPtr)->stateInfo.SetSpillState(true);
+    return FinishSpillAndRelease(objectKey, entryPtr, released);
+}
 
+Status WorkerOcEvictionManager::FinishSpillAndRelease(const std::string &objectKey,
+                                                      const std::shared_ptr<SafeObjType> &entryPtr, bool &released)
+{
+    released = false;
+    (*entryPtr)->stateInfo.SetSpillState(true);
+    Status freeRc = (*entryPtr)->FreeResources();
+    if (freeRc.IsError()) {
+        LOG(WARNING) << "SafeObj free failed for " << objectKey << ": " << freeRc.ToString()
+                     << ", re-adding for retry";
+        return freeRc;
+    }
+    released = true;
     return Status::OK();
 }
 
@@ -2803,8 +3029,9 @@ void WorkerOcEvictionManager::PrepareAsyncSpill(const std::shared_ptr<AsyncSpill
     }
 }
 
-Status WorkerOcEvictionManager::FinalizeAsyncSpill(const SpillResult &result)
+Status WorkerOcEvictionManager::FinalizeAsyncSpill(const SpillResult &result, bool &released)
 {
+    released = false;
     auto context = result.context;
     RETURN_RUNTIME_ERROR_IF_NULL(context);
     if (result.rc.IsError()) {
@@ -2825,7 +3052,8 @@ Status WorkerOcEvictionManager::FinalizeAsyncSpill(const SpillResult &result)
     RETURN_RUNTIME_ERROR_IF_NULL(result.location);
     // The object may disappear or change before the preparation thread acquires
     // its read lock. That is an intentional no-op and has no file reservation to
-    // publish or roll back.
+    // publish or roll back — and no local shared memory was released either, so
+    // `released` stays false.
     if (result.location->path.empty()) {
         return Status::OK();
     }
@@ -2843,10 +3071,11 @@ Status WorkerOcEvictionManager::FinalizeAsyncSpill(const SpillResult &result)
     if (publishRc.IsError()) {
         return publishRc;
     }
-    LOG_IF_ERROR((*entryPtr)->FreeResources(), "SafeObj free failed");
-    (*entryPtr)->stateInfo.SetSpillState(true);
-    context->shmGuard.reset();
-    return Status::OK();
+    Status releaseRc = FinishSpillAndRelease(context->objectKey, entryPtr, released);
+    if (releaseRc.IsOk()) {
+        context->shmGuard.reset();
+    }
+    return releaseRc;
 }
 
 std::future<WorkerOcEvictionManager::SpillResult> WorkerOcEvictionManager::SubmitSpillTask(const std::string &objectKey,
@@ -2882,18 +3111,20 @@ std::future<WorkerOcEvictionManager::SpillResult> WorkerOcEvictionManager::Submi
     return spillTaskThreadPool_->Submit([this, objectKey, version, traceId] {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         Timer timer;
-        auto rc = SpillImpl(objectKey, version);
+        bool released = false;
+        auto rc = SpillImpl(objectKey, version, released);
         return SpillResult{ .rc = rc,
                             .elapsed = timer.ElapsedMilliSecond(),
                             .location = nullptr,
-                            .context = nullptr };
+                            .context = nullptr,
+                            .released = released };
     });
 }
 
-size_t WorkerOcEvictionManager::ReleaseSpillFutures(std::unordered_map<std::string, SpillTask> &spillTasks,
-                                                    EvictionRetryList &evictFailedIds, bool last)
+WorkerOcEvictionManager::SpillReclaim WorkerOcEvictionManager::ReleaseSpillFutures(
+    std::unordered_map<std::string, SpillTask> &spillTasks, EvictionRetryList &evictFailedIds, bool last)
 {
-    size_t spilledSize = 0;
+    SpillReclaim reclaim;
     for (auto iter = spillTasks.begin(); iter != spillTasks.end();) {
         auto &future = iter->second.future;
         if (!future.valid()) {
@@ -2911,18 +3142,27 @@ size_t WorkerOcEvictionManager::ReleaseSpillFutures(std::unordered_map<std::stri
             future.wait();
         }
         auto result = future.get();
-        Status spillRc = result.context == nullptr ? result.rc : FinalizeAsyncSpill(result);
-        spilledSize += trace->objectSize;
+        bool released = false;
+        Status spillRc = result.context == nullptr ? result.rc : FinalizeAsyncSpill(result, released);
+        if (result.context == nullptr) {
+            released = result.released;
+        }
+        reclaim.resolvedSize += trace->objectSize;
         if (spillRc.IsError()) {
             // Transient spill lock contention uses Q1, persistent spill failure uses READD.
             auto counter = spillRc.GetCode() == StatusCode::K_TRY_AGAIN ? Q1 : READD_COUNTER;
             evictFailedIds.push_back({ iter->second.candidate, counter });
+        } else if (released) {
+            // A spill can resolve OK without releasing anything (object already gone or changed,
+            // lock lost). Only the futures that really released local shared memory may advance the
+            // freed-bytes accounting, otherwise the force budget stops on bytes still in the arena.
+            reclaim.freedSize += trace->objectSize;
         }
         trace->rc = spillRc;
         trace->spillCost = result.elapsed;
         spillTasks.erase(iter++);
     }
-    return spilledSize;
+    return reclaim;
 }
 
 void WorkerOcEvictionManager::TryEvictSpilledObjects(uint64_t objectSize)

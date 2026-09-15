@@ -179,16 +179,44 @@ void ArenaGroup::QueryAllocNumaId(const std::shared_ptr<Arena> &arena, void *poi
     }
 }
 
-Status ArenaGroup::BuildExtentOomStatus(uint32_t arenaId, bool freshExtentUnavailable) const
+bool IsExtentUnavailableOom(const Status &rc)
+{
+    // Contract with BuildExtentOomStatus: only the exact "reason=" tokens it emits may bypass the
+    // eviction water-mark gate. A loose substring match would let near-miss diagnostic text act as
+    // a control signal, so parse the token and compare it in full.
+    if (rc.GetCode() != StatusCode::K_OUT_OF_MEMORY) {
+        return false;
+    }
+    const std::string &msg = rc.GetMsg();
+    const std::string reasonToken = "reason=";
+    auto pos = msg.find(reasonToken);
+    if (pos == std::string::npos) {
+        return false;
+    }
+    auto reason = msg.substr(pos + reasonToken.size());
+    // '.' is in the delimiter set because Status::AppendMsg joins with ". ", so a diagnostic suffix
+    // must not leak into the token and silently disable the force path.
+    auto end = reason.find_first_of(" ,;.");
+    if (end != std::string::npos) {
+        reason = reason.substr(0, end);
+    }
+    return reason == FRESH_EXTENT_UNAVAILABLE_REASON || reason == REUSABLE_EXTENT_UNAVAILABLE_REASON;
+}
+
+std::string FormatExtentOomMessage(const std::string &cacheTypeHint, uint32_t arenaId, bool freshExtentUnavailable)
 {
     // "reusable" means no extent-provision failure was observed, not a jemalloc free-list inspection.
-    auto reason = freshExtentUnavailable ? "fresh_extent_unavailable" : "reusable_extent_unavailable";
+    auto reason = freshExtentUnavailable ? FRESH_EXTENT_UNAVAILABLE_REASON : REUSABLE_EXTENT_UNAVAILABLE_REASON;
+    return FormatString("%s no space in arena: %d, reason=%s", cacheTypeHint, arenaId, reason);
+}
+
+Status ArenaGroup::BuildExtentOomStatus(uint32_t arenaId, bool freshExtentUnavailable) const
+{
     METRIC_INC(freshExtentUnavailable ? metrics::KvMetricId::SHM_FRESH_EXTENT_OOM_TOTAL
                                       : metrics::KvMetricId::SHM_REUSABLE_EXTENT_OOM_TOTAL);
     auto it = CACHE_TYPE_STR.find(cacheType_);
     auto errHint = it == CACHE_TYPE_STR.end() ? "UnknownType" : it->second;
-    return Status(StatusCode::K_OUT_OF_MEMORY,
-                  FormatString("%s no space in arena: %d, reason=%s", errHint, arenaId, reason));
+    return Status(StatusCode::K_OUT_OF_MEMORY, FormatExtentOomMessage(errHint, arenaId, freshExtentUnavailable));
 }
 
 Status ArenaGroup::AllocateMemoryImpl(bool retry, bool populate, uint64_t &size, size_t &index, void *&pointer,

@@ -23,6 +23,7 @@
 #include <memory>
 #include <set>
 #include <shared_mutex>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -59,6 +60,31 @@ private:
     bool previousActive_;
     bool previousFreshExtentUnavailable_;
 };
+
+// Reason tokens of the extent-unavailable OOM flavour. BuildExtentOomStatus emits them and
+// IsExtentUnavailableOom parses them, so both sides share these definitions instead of spelling the
+// text twice: the token is a control signal, not just diagnostics.
+constexpr char FRESH_EXTENT_UNAVAILABLE_REASON[] = "fresh_extent_unavailable";
+constexpr char REUSABLE_EXTENT_UNAVAILABLE_REASON[] = "reusable_extent_unavailable";
+
+/**
+ * @brief Build the message of an extent-unavailable OOM.
+ *
+ * Kept next to the parser so the producer/parser contract has one source of truth, and exposed so
+ * tests can drive IsExtentUnavailableOom with the real producer output rather than a hand-written
+ * string that would keep passing if the format above changed.
+ */
+std::string FormatExtentOomMessage(const std::string &cacheTypeHint, uint32_t arenaId, bool freshExtentUnavailable);
+
+// True when the OOM status was built by BuildExtentOomStatus: contiguous extent space is exhausted
+// while total usage may still be below the eviction low water mark. Only this OOM flavor can be
+// relieved by evicting below the water mark, so callers use it to gate forced eviction.
+// NOTE: the gate assumes the failing cache type's own logical size limit is not the binding
+// constraint. STREAM and OBJECT share a tenant arena group keyed by {tenantId, cacheType}
+// (allocator.cpp), so a STREAM-heavy tenant can exhaust the shared logical limit while the object
+// real usage stays below the low water mark; that OOM carries reason=logical_size_limit_reached and
+// is deliberately not treated as force-evictable here.
+bool IsExtentUnavailableOom(const Status &rc);
 
 class ArenaGroup {
 public:
