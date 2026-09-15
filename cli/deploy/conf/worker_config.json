@@ -611,6 +611,10 @@
         "value": "0",
         "description": "[DEPRECATED] Retained for compatibility only and ignored internally. JFS/JFR are now created per connection."
     },
+    "urma_send_lane_count_per_peer": {
+        "value": "8",
+        "description": "Maximum concurrent URMA send lanes occupied by one remote peer. The effective value does not exceed urma_send_jetty_lane_pool_size."
+    },
     "urma_event_mode": {
         "value": "false",
         "description": "Uses interrupt mode to poll completion events."

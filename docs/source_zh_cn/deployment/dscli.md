@@ -1505,6 +1505,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | ub_numa_inflight_wr_diff_threshold | int | `15` | 两个源芯片 inflight WR 数量的最大允许差值。差值严格大于该值时，后续逻辑写改用 inflight 较低的芯片；`0` 表示关闭深度纠偏和机会式亲和覆盖，保留纯轮询。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。 |
 | shared_memory_distribution_policy | string | `none` | 共享内存在 NUMA 上的分布策略。可选值：`none`、`interleave_all_numa`、`interleave_affinity_numa`。仅在 `enable_urma=true` 且 `urma_register_whole_arena=true` 时生效。 |
 | urma_connection_size | int | `0` | [已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建 |
+| urma_send_lane_count_per_peer | int | `8` | 单个远端 peer 可并发占用的 URMA send lane 上限，必须大于 0；实际值不超过 `urma_send_jetty_lane_pool_size`。静态配置，修改后需重启 Worker。 |
 | urma_event_mode | bool | `false` | 是否使用中断模式轮询完成事件 |
 | urma_poll_size | int | `8` | 一次可轮询的完整记录数量，该设备最多可轮询16条记录 |
 | urma_max_write_size_mb | int | `4` | URMA 单次写入大小上限，单位为 MB，取值范围：[1, 2048] |

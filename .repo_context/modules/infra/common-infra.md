@@ -155,7 +155,10 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
   - URMA send-side Jetty reuse is managed by a process-level send Jetty pool under `src/datasystem/common/rdma`.
     `urma_send_jetty_lane_pool_size` is the target active pool size and must be positive; explicit provider/error
     retirement is bounded by `urma_send_jetty_lane_refill_extra_size`, so the intended live-plus-retiring default cap
-    is `200 + 200`. An upper-layer timeout deletes its business Event immediately and records the first timeout context
+    is `200 + 200`. Each `UrmaConnection` snapshots `urma_send_lane_count_per_peer` at construction; its effective
+    normal-phase cap is the smaller of that positive value and the process pool size (default `min(8, 200)`). This
+    bounds one peer without adding a flag read to lane acquisition; HALF_OPEN probes remain limited to one lane.
+    An upper-layer timeout deletes its business Event immediately and records the first timeout context
     on the RPC lane. Timeout and producer `Seal` form a two-sided handshake: whichever path observes both states calls
     force release synchronously, so an already-sealed lane does not wait for a timer and a still-producing lane cannot
     be reused early. Normal completion still releases the lane immediately. Force release is rejected for an unsealed

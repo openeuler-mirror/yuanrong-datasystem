@@ -13,6 +13,9 @@
     "enable_cross_node_connection": true,
     "fast_transport_mem_size": "512MB"
   },
+  "client_config": {
+    "urma_send_lane_count_per_peer": 8
+  },
 
   "data_sizes": ["1MB"],
   "set_param": {"ttl_second": 0},

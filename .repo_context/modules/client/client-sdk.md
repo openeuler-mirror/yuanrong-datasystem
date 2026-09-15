@@ -51,6 +51,9 @@
   - `datasystem` shared library is built from `src/datasystem/client/*` and is the main user-facing client library.
   - `DsClient` is only a convenience aggregator. It constructs `KVClient`, `HeteroClient`, and `ObjectClient`, then initializes and shuts them down in order.
   - `ConnectOptions` is the common connection/auth/config carrier for C++ clients.
+  - `KVClientConfig` carries first-Init process settings. In addition to logging and monitoring, its
+    `UrmaSendLaneCountPerPeer` Builder setter configures the Client's outbound per-peer URMA send-lane cap; the
+    connection snapshots `min(configured cap, process lane-pool size)` when it is constructed.
   - `ConnectOptions::enableLocalCache` defaults to `true`; setting it to `false` routes full-object `Get` through
     `TransportLayer`, which batches metadata queries by meta owner and reads successful keys independently, while the
     default path keeps the existing client-worker behavior.

@@ -1,4 +1,5 @@
 #include "common/config.h"
+#include "common/client_config.h"
 #include "common/jemalloc_prof.h"
 #include "common/jf_service_discovery.h"
 #include "common/simple_log.h"
@@ -460,7 +461,7 @@ static int RunServerMode(const Config &cfg)
     connOpts.fastTransportMemSize = cfg.fastTransportMemSize;
 
     auto client = std::make_shared<KVClient>(connOpts);
-    rc = client->Init();
+    rc = InitKvtestClient(cfg, *client);
     if (!rc.IsOk()) {
         SLOG_ERROR("KVClient init failed: " << rc.GetMsg());
         return 1;

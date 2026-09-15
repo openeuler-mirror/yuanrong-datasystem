@@ -1,5 +1,6 @@
 #pragma once
 #include "common/config.h"
+#include "common/client_config.h"
 #include "common/cpu_affinity.h"
 #include "common/simple_log.h"
 #include "benchmark/benchmark_runner.h"
@@ -260,7 +261,7 @@ inline std::shared_ptr<datasystem::KVClient> CreateClientForRole(
     }
 
     auto client = std::make_shared<KVClient>(opts);
-    Status rc = client->Init();
+    Status rc = InitKvtestClient(cfg, *client);
     if (!rc.IsOk()) {
         SLOG_ERROR("Child KVClient init failed: " << rc.GetMsg());
         return nullptr;

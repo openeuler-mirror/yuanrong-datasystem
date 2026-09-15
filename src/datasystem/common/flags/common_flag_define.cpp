@@ -24,6 +24,7 @@
 
 namespace {
 constexpr uint32_t DEFAULT_SCALE_IN_COLLECT_WINDOW_MS = 3'000;
+constexpr uint32_t DEFAULT_URMA_SEND_LANE_COUNT_PER_PEER = 8;
 }
 
 DS_DEFINE_string(l2_cache_type, "none",
@@ -62,6 +63,9 @@ DS_DEFINE_uint32(urma_connection_size, 0, "[DEPRECATED] No longer used. JFS/JFR 
 DS_DEFINE_uint32(urma_send_jetty_lane_pool_size, 200,
                  "Process-level target number of reusable URMA send Jetty lanes. Each lane is leased by one logical "
                  "transfer and may carry multiple chunk WRs until that transfer settles.");
+DS_DEFINE_uint32(urma_send_lane_count_per_peer, DEFAULT_URMA_SEND_LANE_COUNT_PER_PEER,
+                 "Maximum number of concurrent URMA send lanes occupied by one remote peer. The effective limit is "
+                 "capped by urma_send_jetty_lane_pool_size.");
 DS_DEFINE_uint32(urma_send_jetty_lane_refill_extra_size, 200,
                  "Maximum number of retiring or pending URMA send Jetty lanes allowed above the active pool size.");
 DS_DEFINE_bool(urma_register_whole_arena, true,

@@ -1834,10 +1834,7 @@ Status UrmaManager::AcquireSendLaneFromConnection(const std::shared_ptr<UrmaConn
                                                   std::shared_ptr<UrmaJetty> &jetty, urma_target_jetty_t *&targetJetty)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(connection != nullptr, K_RUNTIME_ERROR, "Urma connection is null");
-    // Cap per-peer in-flight jetty usage so a bad peer cannot drain the pool: at most
-    // MAX_INFLIGHT_JETTIES are occupied concurrently per peer, blocking further acquire until one
-    // is released. Bound the wait by the remaining API deadline so a peer whose jetties are stuck
-    // in cqe9 does not block callers indefinitely.
+    // Bound the per-peer wait by the remaining API deadline so stuck Jettys cannot block callers indefinitely.
     const int64_t remainingUs = ApiDeadline::Instance().ApiRemainingUs();
     RETURN_IF_NOT_OK(connection->AcquireInflightSlot(remainingUs));
     const auto acquireJettyStartUs = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
