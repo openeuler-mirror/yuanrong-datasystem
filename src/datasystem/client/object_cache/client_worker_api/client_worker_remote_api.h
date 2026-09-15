@@ -139,6 +139,17 @@ public:
                   std::vector<std::string> &failedKeys) override;
     Status GetMetaInfo(const std::vector<std::string> &keys, const bool isDevKey, GetMetaInfoRspPb &metaInfos) override;
     Status ReconnectWorker(const std::vector<std::string> &gRefIds) override;
+    /**
+     * @brief Drop the cached OC brpc session (channel + stub) and build a fresh one.
+     */
+    void RecreateOCStub();
+    /**
+     * @brief RecreateOCStub with a bounded socket-availability wait.
+     * @param[in] maxWaitUs Upper bound for waiting on the new socket; used by the
+     *            Publish rebuild-retry path so the wait cannot consume the caller's
+     *            request deadline.
+     */
+    void RecreateOCStub(int64_t maxWaitUs);
     Status PrepareForDecreaseShmRef(
         std::function<Status(const std::string &, const std::shared_ptr<ShmUnitInfo> &)> mmapFunc) override;
     Status InitPipelineRH2DQueue(ShmConvertHookFunc hook) override;
@@ -219,6 +230,18 @@ private:
     
     Status DoPublishRpc(PublishReqPb& req, PublishRspPb& rsp,
                         std::vector<MemView>& payloads, bool& isRetry, int32_t realRpcTimeout);
+    /**
+     * @brief Run DoPublishRpc with retry, rebuilding the OC brpc session and replaying
+     * only definitely-not-sent peer-dead results within the request budget.
+     * @param[in,out] req Publish request (is_retry flag updated across attempts).
+     * @param[out] rsp Publish response from the last RPC attempt.
+     * @param[in] payloads RPC payloads built by the caller.
+     * @param[in] rpcBudgetMs Aggregate retry budget in milliseconds.
+     * @return Final status; peer-dead preserved over budget-expiry rewrites, and an
+     *         ambiguous earlier failure takes precedence over a not-sent later one.
+     */
+    Status PublishWithSessionRebuild(PublishReqPb &req, PublishRspPb &rsp, std::vector<MemView> &payloads,
+                                     int32_t rpcBudgetMs);
     Status HandlePublishResponse(Status status, const PublishRspPb& rsp,
                                  bool traceEnabled, const char* path, uint64_t elapsedUs);
 
