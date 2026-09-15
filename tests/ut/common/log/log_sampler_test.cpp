@@ -49,53 +49,44 @@ protected:
     }
 };
 
-// Test #1: request-only派生
-TEST_F(LogSamplerTest, RequestOnlyDerivation)
+// Test #1: each rate independently controls its own category
+TEST_F(LogSamplerTest, IndependentRates)
 {
     LogSampler &s = LogSampler::Instance();
     s.ResetForTest();
 
     LogSampleUserConfig cfg;
     cfg.requestSampleRate = 0.2;
-    cfg.requestSampleRateExplicit = true;
-    cfg.accessSampleRateExplicit = false;
-    cfg.diagnosticSampleRateExplicit = false;
+    cfg.accessSampleRate = 0.3;
+    cfg.diagnosticSampleRate = 0.4;
 
     ASSERT_TRUE(s.UpdateConfigFromFlags(cfg));
 
     auto *snap = s.GetSnapshotForTest();
     ASSERT_NE(snap, nullptr);
 
-    // request ppm = 200000 (0.2 * 1000000)
     EXPECT_EQ(snap->config.requestRate.ppm, 200000);
-    // access = min(1.0, 0.2*3) = 0.6 → ppm=600000
-    EXPECT_EQ(snap->config.accessRate.ppm, 600000);
-    // diagnostic = min(1.0, 0.2*4) = 0.8 → ppm=800000
-    EXPECT_EQ(snap->config.diagnosticRate.ppm, 800000);
+    EXPECT_EQ(snap->config.accessRate.ppm, 300000);
+    EXPECT_EQ(snap->config.diagnosticRate.ppm, 400000);
     EXPECT_TRUE(snap->config.enabled);
 }
 
-// Test #3: explicit覆盖派生
-TEST_F(LogSamplerTest, ExplicitOverrideDerivation)
+// Test #3: only request set — access/diagnostic default to full retention (1.0)
+TEST_F(LogSamplerTest, OnlyRequestSetOthersDefaultFull)
 {
     LogSampler &s = LogSampler::Instance();
     s.ResetForTest();
 
     LogSampleUserConfig cfg;
     cfg.requestSampleRate = 0.2;
-    cfg.requestSampleRateExplicit = true;
-    cfg.accessSampleRate = 0.3;
-    cfg.accessSampleRateExplicit = true;
-    cfg.diagnosticSampleRateExplicit = false;
 
     ASSERT_TRUE(s.UpdateConfigFromFlags(cfg));
 
     auto *snap = s.GetSnapshotForTest();
     ASSERT_NE(snap, nullptr);
 
-    // access ppm = 300000 (from explicit 0.3, not derived 0.6)
-    EXPECT_EQ(snap->config.accessRate.ppm, 300000);
-    // diagnostic ppm = 1000000 (default 1.0, not explicit)
+    EXPECT_EQ(snap->config.requestRate.ppm, 200000);
+    EXPECT_EQ(snap->config.accessRate.ppm, kSamplePpmBase);
     EXPECT_EQ(snap->config.diagnosticRate.ppm, kSamplePpmBase);
     EXPECT_TRUE(snap->config.enabled);
 }
@@ -106,14 +97,11 @@ TEST_F(LogSamplerTest, EnabledNormalization)
     LogSampler &s = LogSampler::Instance();
     s.ResetForTest();
 
-    // All 1.0 explicit → enabled=false
+    // All 1.0 → enabled=false
     LogSampleUserConfig cfg;
     cfg.requestSampleRate = 1.0;
-    cfg.requestSampleRateExplicit = true;
     cfg.accessSampleRate = 1.0;
-    cfg.accessSampleRateExplicit = true;
     cfg.diagnosticSampleRate = 1.0;
-    cfg.diagnosticSampleRateExplicit = true;
 
     ASSERT_TRUE(s.UpdateConfigFromFlags(cfg));
     EXPECT_FALSE(s.IsSamplerEnabledFast());
@@ -134,7 +122,6 @@ TEST_F(LogSamplerTest, InvalidConfigRejected)
     // First: valid config
     LogSampleUserConfig validCfg;
     validCfg.requestSampleRate = 0.5;
-    validCfg.requestSampleRateExplicit = true;
     ASSERT_TRUE(s.UpdateConfigFromFlags(validCfg));
 
     auto *snap1 = s.GetSnapshotForTest();
@@ -144,7 +131,6 @@ TEST_F(LogSamplerTest, InvalidConfigRejected)
     // Second: invalid config (negative)
     LogSampleUserConfig invalidCfg;
     invalidCfg.requestSampleRate = -0.1;
-    invalidCfg.requestSampleRateExplicit = true;
     EXPECT_FALSE(s.UpdateConfigFromFlags(invalidCfg));
 
     // Previous-good config should remain
@@ -156,14 +142,12 @@ TEST_F(LogSamplerTest, InvalidConfigRejected)
     s.ResetForTest();
     LogSampleUserConfig nanCfg;
     nanCfg.requestSampleRate = std::nan("");
-    nanCfg.requestSampleRateExplicit = true;
     EXPECT_FALSE(s.UpdateConfigFromFlags(nanCfg));
 
     // > 1.0
     s.ResetForTest();
     LogSampleUserConfig overflowCfg;
     overflowCfg.requestSampleRate = 1.5;
-    overflowCfg.requestSampleRateExplicit = true;
     EXPECT_FALSE(s.UpdateConfigFromFlags(overflowCfg));
 }
 
@@ -177,7 +161,6 @@ TEST_F(LogSamplerTest, HashThresholdDecision)
     // Configure ppm=500000 (50%)
     LogSampleUserConfig cfg;
     cfg.requestSampleRate = 0.5;
-    cfg.requestSampleRateExplicit = true;
     ASSERT_TRUE(s.UpdateConfigFromFlags(cfg));
 
     TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
@@ -200,12 +183,10 @@ TEST_F(LogSamplerTest, HashThresholdDecision)
     EXPECT_EQ(admitted2, firstResult);  // Same cached result
 }
 
-// Test #10: ShouldSampleEvent随机分布
+// Test #10: shared trace-hash threshold distribution (Mix64 + BuildThreshold)
 TEST_F(LogSamplerTest, RandomDistribution)
 {
-    LogSampler &s = LogSampler::Instance();
-    s.ResetForTest();
-    s.SetSaltForTest(42);
+    constexpr uint64_t kSalt = 42;
 
     SampleRate halfRate;
     halfRate.ppm = 500000;
@@ -214,47 +195,14 @@ TEST_F(LogSamplerTest, RandomDistribution)
     int hits = 0;
     constexpr int kNumKeys = 100000;
     for (int i = 0; i < kNumKeys; ++i) {
-        // Use i as traceHash to ensure different keys per event
-        uint64_t traceHash = static_cast<uint64_t>(i * 1000);  // Spread out traceHash values
-        if (s.ShouldSampleEvent(traceHash, LogSampleKind::DIAGNOSTIC, halfRate)) {
+        uint64_t traceHash = static_cast<uint64_t>(i * 1000);
+        if (Mix64(traceHash ^ kSalt) <= halfRate.threshold) {
             ++hits;
         }
     }
 
     double ratio = static_cast<double>(hits) / kNumKeys;
     EXPECT_NEAR(ratio, 0.5, 0.01);  // 50% ± 1% (LS-015b design spec)
-}
-
-// Test #11: Same-trace sequential events (去相关验证)
-TEST_F(LogSamplerTest, SameTraceSequentialEvents)
-{
-    LogSampler &s = LogSampler::Instance();
-    s.ResetForTest();
-    s.SetSaltForTest(0);
-
-    SampleRate halfRate;
-    halfRate.ppm = 500000;
-    halfRate.threshold = BuildThreshold(500000);
-
-    uint64_t traceHash = 12345;
-
-    // Multiple calls with same traceHash should produce different results
-    // due to thread_local sequence increment
-    int hits = 0;
-    constexpr int kNumCalls = 1000;
-    for (int i = 0; i < kNumCalls; ++i) {
-        if (s.ShouldSampleEvent(traceHash, LogSampleKind::DIAGNOSTIC, halfRate)) {
-            ++hits;
-        }
-    }
-
-    double ratio = static_cast<double>(hits) / kNumCalls;
-    EXPECT_NEAR(ratio, 0.5, 0.05);  // Should not be 100% or 0%
-
-    // If sequence worked, ratio should be close to 50%
-    // If sequence didn't work (all same key), ratio would be 0% or 100%
-    EXPECT_GT(ratio, 0.1);
-    EXPECT_LT(ratio, 0.9);
 }
 
 // Test #12: FATAL bypass
@@ -266,11 +214,8 @@ TEST_F(LogSamplerTest, FatalAlwaysPass)
     // Configure sampler with non-zero rates
     LogSampleUserConfig cfg;
     cfg.requestSampleRate = 0.0;
-    cfg.requestSampleRateExplicit = true;
     cfg.accessSampleRate = 0.0;
-    cfg.accessSampleRateExplicit = true;
     cfg.diagnosticSampleRate = 0.0;
-    cfg.diagnosticSampleRateExplicit = true;
     ASSERT_TRUE(s.UpdateConfigFromFlags(cfg));
 
     EXPECT_TRUE(s.ShouldCreateRuntimeLog(LogSeverity::FATAL, false));
@@ -293,9 +238,7 @@ TEST_F(LogSamplerTest, DisabledFastPath)
 // Test #14: Random distribution proportion 0.1 (LS-015a)
 TEST_F(LogSamplerTest, RandomDistribution_0_1)
 {
-    LogSampler &s = LogSampler::Instance();
-    s.ResetForTest();
-    s.SetSaltForTest(42);
+    constexpr uint64_t kSalt = 42;
 
     SampleRate rate;
     rate.ppm = 100000;
@@ -305,7 +248,7 @@ TEST_F(LogSamplerTest, RandomDistribution_0_1)
     constexpr int kNumKeys = 100000;
     for (int i = 0; i < kNumKeys; ++i) {
         uint64_t traceHash = static_cast<uint64_t>(i * 1000);
-        if (s.ShouldSampleEvent(traceHash, LogSampleKind::DIAGNOSTIC, rate)) {
+        if (Mix64(traceHash ^ kSalt) <= rate.threshold) {
             ++hits;
         }
     }
@@ -317,9 +260,7 @@ TEST_F(LogSamplerTest, RandomDistribution_0_1)
 // Test #15: Random distribution proportion 0.9 (LS-015c)
 TEST_F(LogSamplerTest, RandomDistribution_0_9)
 {
-    LogSampler &s = LogSampler::Instance();
-    s.ResetForTest();
-    s.SetSaltForTest(42);
+    constexpr uint64_t kSalt = 42;
 
     SampleRate rate;
     rate.ppm = 900000;
@@ -329,7 +270,7 @@ TEST_F(LogSamplerTest, RandomDistribution_0_9)
     constexpr int kNumKeys = 100000;
     for (int i = 0; i < kNumKeys; ++i) {
         uint64_t traceHash = static_cast<uint64_t>(i * 1000);
-        if (s.ShouldSampleEvent(traceHash, LogSampleKind::DIAGNOSTIC, rate)) {
+        if (Mix64(traceHash ^ kSalt) <= rate.threshold) {
             ++hits;
         }
     }
@@ -341,9 +282,7 @@ TEST_F(LogSamplerTest, RandomDistribution_0_9)
 // Test #16: 20-bucket distribution (LS-015d)
 TEST_F(LogSamplerTest, RandomBucketDistribution)
 {
-    LogSampler &s = LogSampler::Instance();
-    s.ResetForTest();
-    s.SetSaltForTest(42);
+    constexpr uint64_t kSalt = 42;
 
     SampleRate halfRate;
     halfRate.ppm = 500000;
@@ -358,7 +297,7 @@ TEST_F(LogSamplerTest, RandomBucketDistribution)
         uint64_t traceHash = static_cast<uint64_t>(i * 997);
         int bucket = static_cast<int>(i % kNumBuckets);
         bucketTotal[bucket]++;
-        if (s.ShouldSampleEvent(traceHash, LogSampleKind::DIAGNOSTIC, halfRate)) {
+        if (Mix64(traceHash ^ kSalt) <= halfRate.threshold) {
             bucketHits[bucket]++;
         }
     }
@@ -386,7 +325,6 @@ TEST_F(LogSamplerTest, ConcurrentConfigUpdateAndHotPathRead)
 {
     LogSampler &s = LogSampler::Instance();
     s.ResetForTest();
-    s.Init();
 
     constexpr int kConfigThreads = 4;
     constexpr int kHotPathThreads = 8;
@@ -402,9 +340,6 @@ TEST_F(LogSamplerTest, ConcurrentConfigUpdateAndHotPathRead)
                 LogSampleUserConfig cfg;
                 double rate = 0.1 + 0.1 * ((threadIdx + i) % 10);
                 cfg.requestSampleRate = rate;
-                cfg.requestSampleRateExplicit = true;
-                cfg.accessSampleRateExplicit = false;
-                cfg.diagnosticSampleRateExplicit = false;
                 s.UpdateConfigFromFlags(cfg);
             } else {
                 LogSampleConfigPb proto;

@@ -149,42 +149,32 @@ public:
      * @brief Request log sample rate for embedded worker.
      * @param[in] rate Equivalent to flag request_sample_rate. Valid range [0.0, 1.0]. Default 1.0 (all retained).
      *
-     * Effective behavior:
-     * - If only RequestSampleRate is set (without AccessSampleRate/DiagnosticSampleRate),
-     *   access_rate = min(1.0, rate * 3), diagnostic_rate = min(1.0, rate * 4)
-     * - Explicitly setting access=1.0 or diagnostic=1.0 blocks derivation
-     * - Once explicitly configured, subsequent request-only updates won't override
+     * Sampled-in traces keep full-link INFO/VLOG logs across client/worker hops.
      * @return Reference to self for chaining.
      */
     EmbeddedConfig &RequestSampleRate(double rate);
 
     /**
-     * @brief Supplement access log sample rate for embedded worker.
-     * Only applies when request is NOT sampled-in; request sampled-in always outputs access logs.
-     * Final access retention can exceed this rate.
+     * @brief Access log sample rate for embedded worker.
+     * Independent of request sampling: each trace keeps access logs by its own
+     * per-trace threshold on the shared trace hash.
      * @param[in] rate Equivalent to flag access_sample_rate. Valid range [0.0, 1.0]. Default 1.0 (all retained).
      *
-     * Effective behavior:
-     * - If not explicitly set and only RequestSampleRate is provided,
-     *   auto-derived as min(1.0, request_rate * 3)
-     * - Explicitly setting this (including 1.0) blocks auto-derivation
-     * - Once set, subsequent request-only updates won't override this value
+     * When >= request_sample_rate, sampled-in traces always keep access logs;
+     * when lower, the access budget still covers sampled-in traces first.
      * @return Reference to self for chaining.
      */
     EmbeddedConfig &AccessSampleRate(double rate);
 
     /**
      * @brief Diagnostic log sample rate for embedded worker.
+     * Independent of request sampling; controls request-context ERROR/WARNING logs and
+     * the SLOW_LOG below-threshold fallback (threshold-hit SLOW_LOG is always emitted)
+     * on a per-trace threshold.
      * @param[in] rate Equivalent to flag diagnostic_sample_rate. Valid range [0.0, 1.0]. Default 1.0 (all retained).
      *
-     * Controls request-level ERROR/WARNING/SLOW_LOG supplement sampling when request is not sampled-in.
-     * FATAL/CHECK are always retained regardless of this rate.
-     *
-     * Effective behavior:
-     * - If not explicitly set and only RequestSampleRate is provided,
-     *   auto-derived as min(1.0, request_rate * 4)
-     * - Explicitly setting this (including 1.0) blocks auto-derivation
-     * - Once set, subsequent request-only updates won't override this value
+     * FATAL/CHECK are always retained regardless of this rate. When >= request_sample_rate,
+     * sampled-in traces always keep diagnostics.
      * @return Reference to self for chaining.
      */
     EmbeddedConfig &DiagnosticSampleRate(double rate);

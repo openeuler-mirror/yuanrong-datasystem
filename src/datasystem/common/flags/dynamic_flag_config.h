@@ -218,8 +218,7 @@ private:
 
     bool ValidateAndCommitSamplerFlags(const std::unordered_map<std::string, std::string> &flagMap);
 
-    bool CommitSamplerFlagsTransaction(
-        const std::unordered_map<std::string, std::string> &candidates, const LogSampleUserConfig &cfg);
+    bool CommitSamplerFlagsTransaction(const std::unordered_map<std::string, std::string> &candidates);
 };
 };      // namespace datasystem
 #endif  // DATASYSTEM_COMMON_FLAGS_DYNAMIC_FLAG_CONFIG_H

@@ -46,7 +46,6 @@ protected:
     {
         CommonTest::SetUp();
         LogSampler::Instance().ResetForTest();
-        LogSampler::Instance().Init();
     }
 
     void TearDown() override
@@ -234,11 +233,8 @@ TEST_F(LogSamplerConfigTest, PopulateConfigProtoEnabled)
 {
     LogSampleUserConfig cfg;
     cfg.requestSampleRate = 0.5;
-    cfg.requestSampleRateExplicit = true;
     cfg.accessSampleRate = 0.3;
-    cfg.accessSampleRateExplicit = true;
     cfg.diagnosticSampleRate = 0.4;
-    cfg.diagnosticSampleRateExplicit = true;
     ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(cfg));
 
     LogSampleConfigPb proto;
@@ -282,7 +278,6 @@ TEST_F(LogSamplerConfigTest, IsCurrentRequestSampledInNoArgRandom)
 {
     LogSampleUserConfig cfg;
     cfg.requestSampleRate = 0.5;
-    cfg.requestSampleRateExplicit = true;
     ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(cfg));
     LogSampler::Instance().SetSaltForTest(UINT64_MAX);
 
@@ -298,11 +293,8 @@ TEST_F(LogSamplerConfigTest, ConfigFailureRetainsPreviousGood)
 {
     LogSampleUserConfig goodCfg;
     goodCfg.requestSampleRate = 0.0;
-    goodCfg.requestSampleRateExplicit = true;
     goodCfg.accessSampleRate = 0.0;
-    goodCfg.accessSampleRateExplicit = true;
     goodCfg.diagnosticSampleRate = 0.0;
-    goodCfg.diagnosticSampleRateExplicit = true;
     ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(goodCfg));
     EXPECT_TRUE(LogSampler::Instance().IsSamplerEnabledFast());
 
@@ -321,7 +313,6 @@ TEST_F(LogSamplerConfigTest, ConfigFailureRetainsPreviousGood)
     // Invalid dynamic update must fail and keep previous-good
     LogSampleUserConfig invalidCfg;
     invalidCfg.requestSampleRate = -0.5;
-    invalidCfg.requestSampleRateExplicit = true;
     EXPECT_FALSE(LogSampler::Instance().UpdateConfigFromFlags(invalidCfg));
 
     // Previous-good config still active — INFO still rejected
@@ -347,11 +338,8 @@ TEST_F(LogSamplerConfigTest, MissingLogSampleConfigKeepsClientConfig)
 {
     LogSampleUserConfig goodCfg;
     goodCfg.requestSampleRate = 0.5;
-    goodCfg.requestSampleRateExplicit = true;
     goodCfg.accessSampleRate = 0.3;
-    goodCfg.accessSampleRateExplicit = true;
     goodCfg.diagnosticSampleRate = 0.4;
-    goodCfg.diagnosticSampleRateExplicit = true;
     ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(goodCfg));
     EXPECT_TRUE(LogSampler::Instance().IsSamplerEnabledFast());
 
@@ -371,92 +359,10 @@ TEST_F(LogSamplerConfigTest, MissingLogSampleConfigKeepsClientConfig)
 
     LogSampleUserConfig restoreCfg;
     restoreCfg.requestSampleRate = 0.5;
-    restoreCfg.requestSampleRateExplicit = true;
     restoreCfg.accessSampleRate = 0.3;
-    restoreCfg.accessSampleRateExplicit = true;
     restoreCfg.diagnosticSampleRate = 0.4;
-    restoreCfg.diagnosticSampleRateExplicit = true;
     ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(restoreCfg));
     EXPECT_EQ(LogSampler::Instance().GetSnapshotForTest()->config.requestRate.ppm, ppmBefore);
-}
-
-// Derivation end-to-end: only requestSampleRate explicit → access/diagnostic derive
-TEST_F(LogSamplerConfigTest, DerivationOnlyRequestExplicit)
-{
-    LogSampleUserConfig cfg;
-    cfg.requestSampleRate = 0.2;
-    cfg.requestSampleRateExplicit = true;
-    cfg.accessSampleRate = 1.0;
-    cfg.accessSampleRateExplicit = false;
-    cfg.diagnosticSampleRate = 1.0;
-    cfg.diagnosticSampleRateExplicit = false;
-
-    ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(cfg));
-
-    auto *snap = LogSampler::Instance().GetSnapshotForTest();
-    ASSERT_NE(snap, nullptr);
-
-    // kAccessDeriveMultiplier=3.0 → access=min(1.0, 0.2*3)=0.6 → ppm=600000
-    EXPECT_EQ(snap->config.accessRate.ppm, 600000);
-    // kDiagnosticDeriveMultiplier=4.0 → diagnostic=min(1.0, 0.2*4)=0.8 → ppm=800000
-    EXPECT_EQ(snap->config.diagnosticRate.ppm, 800000);
-}
-
-// Derivation end-to-end: access explicitly set → no derivation for access
-TEST_F(LogSamplerConfigTest, DerivationAccessExplicitStopsDerivation)
-{
-    LogSampleUserConfig cfg;
-    cfg.requestSampleRate = 0.5;
-    cfg.requestSampleRateExplicit = true;
-    cfg.accessSampleRate = 0.3;
-    cfg.accessSampleRateExplicit = true;
-    cfg.diagnosticSampleRate = 1.0;
-    cfg.diagnosticSampleRateExplicit = false;
-
-    ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(cfg));
-
-    auto *snap = LogSampler::Instance().GetSnapshotForTest();
-    ASSERT_NE(snap, nullptr);
-
-    // access is explicit → use 0.3
-    EXPECT_EQ(snap->config.accessRate.ppm, 300000);
-    // diagnostic not explicit but access is explicit (which means derivation is disabled),
-    // and there's no derivation for diagnostic either → default 1.0
-    EXPECT_EQ(snap->config.diagnosticRate.ppm, kSamplePpmBase);
-}
-
-// Derivation: persistent explicit blocks subsequent derivation
-TEST_F(LogSamplerConfigTest, DerivationPersistentExplicitBlocks)
-{
-    LogSampleUserConfig cfg1;
-    cfg1.requestSampleRate = 0.5;
-    cfg1.requestSampleRateExplicit = true;
-    cfg1.accessSampleRate = 0.3;
-    cfg1.accessSampleRateExplicit = true;  // explicitly set access
-    cfg1.diagnosticSampleRate = 1.0;
-    cfg1.diagnosticSampleRateExplicit = false;
-
-    ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(cfg1));
-
-    // Second update: request only explicit (access/diagnostic not explicit)
-    LogSampleUserConfig cfg2;
-    cfg2.requestSampleRate = 0.7;
-    cfg2.requestSampleRateExplicit = true;
-    cfg2.accessSampleRate = 1.0;
-    cfg2.accessSampleRateExplicit = false;
-    cfg2.diagnosticSampleRate = 1.0;
-    cfg2.diagnosticSampleRateExplicit = false;
-
-    ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(cfg2));
-
-    auto *snap = LogSampler::Instance().GetSnapshotForTest();
-    ASSERT_NE(snap, nullptr);
-
-    // access was ever explicit → no derivation, falls back to 1.0
-    EXPECT_EQ(snap->config.accessRate.ppm, kSamplePpmBase);
-    // diagnostic was never explicit → but derivation is blocked because
-    // access was ever explicit, so diagnostic also falls back to 1.0
-    EXPECT_EQ(snap->config.diagnosticRate.ppm, kSamplePpmBase);
 }
 
 }  // namespace ut

@@ -327,13 +327,9 @@ bool DynamicFlagConfig::ValidateAndCommitSamplerFlags(const std::unordered_map<s
     static const std::unordered_set<std::string> samplerFlagNames = {
         "request_sample_rate", "access_sample_rate", "diagnostic_sample_rate"
     };
-    LogSampleUserConfig cfg;
-    cfg.requestSampleRate = FLAGS_request_sample_rate;
-    cfg.accessSampleRate = FLAGS_access_sample_rate;
-    cfg.diagnosticSampleRate = FLAGS_diagnostic_sample_rate;
-    cfg.requestSampleRateExplicit = (flagMap.count("request_sample_rate") > 0);
-    cfg.accessSampleRateExplicit = (flagMap.count("access_sample_rate") > 0);
-    cfg.diagnosticSampleRateExplicit = (flagMap.count("diagnostic_sample_rate") > 0);
+    bool hasSamplerFlag = flagMap.count("request_sample_rate") > 0
+        || flagMap.count("access_sample_rate") > 0
+        || flagMap.count("diagnostic_sample_rate") > 0;
 
     std::unordered_map<std::string, std::string> candidates;
     for (const auto &name : samplerFlagNames) {
@@ -347,16 +343,20 @@ bool DynamicFlagConfig::ValidateAndCommitSamplerFlags(const std::unordered_map<s
         candidates[name] = newVal;
     }
     if (candidates.empty()) {
-        if (cfg.requestSampleRateExplicit || cfg.accessSampleRateExplicit || cfg.diagnosticSampleRateExplicit) {
+        if (hasSamplerFlag) {
+            LogSampleUserConfig cfg;
+            cfg.requestSampleRate = FLAGS_request_sample_rate;
+            cfg.accessSampleRate = FLAGS_access_sample_rate;
+            cfg.diagnosticSampleRate = FLAGS_diagnostic_sample_rate;
             LogSampler::Instance().UpdateConfigFromFlags(cfg);
         }
         return true;
     }
-    return CommitSamplerFlagsTransaction(candidates, cfg);
+    return CommitSamplerFlagsTransaction(candidates);
 }
 
 bool DynamicFlagConfig::CommitSamplerFlagsTransaction(
-    const std::unordered_map<std::string, std::string> &candidates, const LogSampleUserConfig &cfg)
+    const std::unordered_map<std::string, std::string> &candidates)
 {
     std::unordered_map<std::string, std::string> prevVals;
     std::string errMsg;
@@ -377,9 +377,6 @@ bool DynamicFlagConfig::CommitSamplerFlagsTransaction(
     updatedCfg.requestSampleRate = FLAGS_request_sample_rate;
     updatedCfg.accessSampleRate = FLAGS_access_sample_rate;
     updatedCfg.diagnosticSampleRate = FLAGS_diagnostic_sample_rate;
-    updatedCfg.requestSampleRateExplicit = cfg.requestSampleRateExplicit;
-    updatedCfg.accessSampleRateExplicit = cfg.accessSampleRateExplicit;
-    updatedCfg.diagnosticSampleRateExplicit = cfg.diagnosticSampleRateExplicit;
     if (!LogSampler::Instance().UpdateConfigFromFlags(updatedCfg)) {
         for (const auto &prev : prevVals) {
             std::string revertErrMsg;

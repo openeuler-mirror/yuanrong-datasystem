@@ -155,79 +155,49 @@ LogSampler 提供统一随机哈希阈值采样，替代旧的 `log_rate_limit` 
 
 ### 工作原理
 
-- 三类采样率：`request_sample_rate`（请求主采样）、`access_sample_rate`（access 补采样）、`diagnostic_sample_rate`（diagnostic 补采样）（各 [0.0–1.0]，默认 1.0=全量保留）
-- 采样粒度是"请求（traceId）"，不是"单条日志"
+- 三类采样率：`request_sample_rate`（请求主采样）、`access_sample_rate`（access 采样）、`diagnostic_sample_rate`（diagnostic 采样）（各 [0.0–1.0]，默认 1.0=全量保留）。**三个参数相互独立，各自精确控制自己类别的保留率**
+- 采样粒度是"请求（traceId）"，不是"单条日志"：同一请求的所有 access 日志（以及所有 ERROR/WARNING 日志）同保同弃
+- 三类共用同一个由 traceID 决定的 per-trace 哈希，各自与自己的阈值比较（嵌套阈值模型）。采样决策跨进程、跨重启确定：同一 traceID + 同一配置永远得到相同结果，便于复现
 - 请求采样决策随 RPC 元数据传播（LogSampleState），跨 client/worker 保持同一 trace 的一致结果
-- request sampled-in 时，该请求的 INFO/VLOG/ERROR/WARNING/SLOW_LOG 和 access 日志都直接输出（请求日志完整性优先）
-- request reject 只直接阻断 INFO/VLOG；diagnostic/access 不把 reject 当作直接丢弃条件，继续各自补采样
 - 仅 SDK **数据面请求** trace 参与采样（如 Set/Get/Del/Exist/Expire/Create/Put/MSet/MGet/Read 等）；生命周期与控制面 API（Init/ShutDown/Connect/UpdateToken/UpdateAkSk/Close/DeleteStream/PreRegisterDeviceMemory 等）使用普通 trace，不参与请求采样，其 client 与 worker 侧日志始终全量输出（边界：仅在线程无活跃请求 trace 的**顶层调用**时生效；嵌套在数据面请求作用域内调用时继承外层请求采样决策，排障时若生命周期日志仍被采样应先排查嵌套调用）；后台线程日志不受本方案控制，始终全量输出
+- **VLOG**：在请求 trace 上下文内按 INFO 归入 REQUEST 类，参与 `request_sample_rate` 采样（生产 `v=0` 下静默）；后台 VLOG 不采样
+- **SLOW_LOG**：阈值命中必打，不参与任何采样（这是慢日志的设计契约）；仅显式 `SLOW_LOG_IF(sev, false)` 的未命中降级形态按 `diagnostic_sample_rate` 采样（当前代码无该调用点）
 - 配置权威源：worker；client 通过 register/heartbeat 接收 worker 下发的 `LogSampleConfigPb`
 
-### 参数语义与 OR 规则
+### 链路完整性（阈值嵌套）
 
-三个参数不是完全独立的——`access_sample_rate` 和 `diagnostic_sample_rate` 是**补采样率**，仅在请求未被 `request_sample_rate` 采中时生效。请求一旦采中，该请求的所有 access 和 diagnostic 日志**无条件强制输出**。
+三类阈值作用在同一个 per-trace 哈希上，access/diagnostic 的采样预算**优先覆盖被采中的请求**：
 
-实际日志保留率公式：
+- 当 `access_sample_rate >= request_sample_rate`（diagnostic 同理）：被采中的请求**自动保有**该类日志，链路完整——由阈值嵌套自然保证，无需强制保留逻辑
+- 当 `access_sample_rate < request_sample_rate`：该类预算全部落在被采中的请求上，链路破坏段（约为 `request_sample_rate - access_sample_rate`）是保留率约束下的最小值，且确定可复现。**需要链路零破坏，请把该类采样率配置为 >= request_sample_rate（或保持默认 1.0）**
 
-- **access 保留率** = `request_sample_rate` + (1 − `request_sample_rate`) × `access_sample_rate`
-- **diagnostic 保留率** = `request_sample_rate` + (1 − `request_sample_rate`) × `diagnostic_sample_rate`
+**配置示例与实际保留率对照**（每类保留率精确等于自身配置值，不受其他参数影响）：
 
-> **注意**：`access_sample_rate=0.3` 不是"30% 的 access 日志被保留"，而是"未被 request 采中的请求中，30% 的 access 日志作为补充被保留"。实际保留率通常高于此值。
+| 配置 | request采中率 | access保留率 | diagnostic保留率 | 链路完整性 |
+|------|--------------|--------------|------------------|-----------|
+| `request=0.5, access=0.3, diagnostic=0.4` | 50% | **30%** | **40%** | 两者均低于 request：部分采中请求缺 access/diag（预算仍优先给采中请求） |
+| `request=1.0, access=0.0, diagnostic=0.0` | 100% | **0%** | **0%** | 按 0.0 语义全部丢弃 |
+| `request=0.0, access=0.5, diagnostic=0.5` | 0% | **50%** | **50%** | access/diag 独立保留，与 request 无关 |
+| 仅 `request=0.2`（其余默认 1.0） | 20% | **100%** | **100%** | 完整（默认 1.0 >= request） |
+| `request=0.5, access=0.5, diagnostic=0.5` | 50% | **50%** | **50%** | 等速率：access/diag 恰好出现在被采中的请求上 |
 
-**配置示例与实际保留率对照**：
+> 注意：`request=1.0` 时若把 `access` 配成 `0.0`，access 日志会全部丢弃（access 独立控制）；旧版本"请求采中即强制输出 access/diagnostic"的补采样行为已移除。
 
-| 配置 | request采中率 | access补采样率 | **access实际保留率** | diagnostic补采样率 | **diagnostic实际保留率** |
-|------|--------------|--------------|--------------------|--------------------|----------------------|
-| `request=0.5, access=0.3, diagnostic=0.4` | 50% | 30% | **65%** (0.5+0.5×0.3) | 40% | **70%** (0.5+0.5×0.4) |
-| `request=1.0, access=0.0, diagnostic=0.0` | 100% | 0% | **100%** (采中→强制输出) | 0% | **100%** (采中→强制输出) |
-| `request=0.0, access=0.5, diagnostic=0.5` | 0% | 50% | **50%** (全靠补采样) | 50% | **50%** (全靠补采样) |
-| 仅 `request=0.2`（派生） | 20% | 60%(3r派生) | **68%** (0.2+0.8×0.6) | 80%(4r派生) | **84%** (0.2+0.8×0.8) |
-| `request=0.5, access=0.0` | 50% | 0% | **50%** (仅采中请求输出) | 100%(4r派生) | **100%** (0.5+0.5×1.0) |
+### logSampled 标记
 
-> `request=1.0` 时无论 access/diagnostic 设多少，实际保留率都是 100%（所有请求采中→强制输出）。此时 `access=0.0` 仅影响 access log 中的 `logSampled` 标记，不影响日志输出。
-
-### 派生规则（request-only derivation）
-
-当仅显式配置 `request_sample_rate`，而未显式设置 `access_sample_rate` 或 `diagnostic_sample_rate` 时，两者自动按以下公式派生：
-
-- `access_sample_rate = min(1.0, request_sample_rate × 3)` （简称 3r 规则）
-- `diagnostic_sample_rate = min(1.0, request_sample_rate × 4)` （简称 4r 规则）
-
-**示例：** 仅设置 `request_sample_rate=0.2` → effective `access=0.6`, `diagnostic=0.8`
-
-### 显式 1.0 阻止派生
-
-即使 `access_sample_rate=1.0` 与默认值相同，显式设置也意味着"用户明确要求全量保留 access 日志"，**阻止自动派生**。这与"未设置时默认 1.0"有本质区别：
-
-| 配置 | access effective 值 | 派生行为 |
-|------|---------------------|----------|
-| 仅 `request_sample_rate=0.2` | 0.6 (派生) | 派生生效 |
-| `request_sample_rate=0.2` + `access_sample_rate=1.0`(显式) | 1.0 (显式) | 派生被阻止 |
-| `request_sample_rate=0.2` + `access_sample_rate=0.3`(显式) | 0.3 (显式) | 派生被阻止 |
-
-### Sticky Explicit 行为
-
-一旦某个采样率被显式设置（如 `access_sample_rate=0.3`），后续仅修改 `request_sample_rate` 的动态更新不会覆盖已显式设置的值。这防止了配置漂移导致的意外日志量变化。
-
-**示例：**
-1. 首次配置 `request=0.2` → access 派生 0.6
-2. 动态更新显式 `access=0.3` → access 固定 0.3，标记为 ever-explicit
-3. 再次更新 `request=0.1` → access 仍为 0.3（不会被派生覆盖为 0.3×3=0.3，而是保持显式值）
+access log 中的 `logSampled:true` 表示该请求的 INFO 日志可见（request 采样未拒绝该 trace），与该条 access 是否被 access 采样保留无关。未带标记的 access 记录说明其 request.log 链路不可查。
 
 ### 配置方式
 
 | 场景 | 配置方式 | 示例 |
 |------|----------|------|
-| Worker 命令行 | `--request_sample_rate=0.5`（仅 request 触发派生） | `./datasystem_worker --request_sample_rate=0.5` |
-| Worker 命令行（阻止派生） | `--request_sample_rate=0.5 --access_sample_rate=1.0` | access=1.0（显式），阻止 3r 派生 |
-| K8s Helm | `values.yaml` 中仅设置 `requestSampleRate: 0.5`（access/diagnostic 留空） | 自动派生 |
-| K8s Helm（阻止派生） | `values.yaml` 中设置 `accessSampleRate: 1.0` | access=1.0（显式） |
-| dscli | `dscli start --request_sample_rate 0.2`（仅传 request） | 自动派生 |
-| Embedded Worker | `config.RequestSampleRate(0.5)`（仅 request 触发派生） | `config.RequestSampleRate(0.5)` |
-| Embedded Worker（阻止派生） | `config.RequestSampleRate(0.5).AccessSampleRate(1.0)` | access=1.0（显式） |
+| Worker 命令行 | `--request_sample_rate=0.5 --access_sample_rate=0.3 --diagnostic_sample_rate=0.4` | `./datasystem_worker --request_sample_rate=0.5` |
+| K8s Helm | `values.yaml` 中设置 `requestSampleRate` / `accessSampleRate` / `diagnosticSampleRate` | 各参数独立生效 |
+| dscli | `dscli start --request_sample_rate 0.2` | — |
+| Embedded Worker | `config.RequestSampleRate(0.5).AccessSampleRate(0.3).DiagnosticSampleRate(0.4)` | 各参数独立生效 |
 | 运行时动态修改 | 修改 `datasystem.config` 中 `request_sample_rate` 等 | — |
 
-默认值均为 `1.0`（全量保留），完全向后兼容。
+默认值均为 `1.0`（全量保留）。
 
 ---
 

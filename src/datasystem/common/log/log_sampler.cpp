@@ -17,9 +17,6 @@
 #include "datasystem/common/log/log_sampler.h"
 
 #include <cmath>
-#include <random>
-#include <unistd.h>
-#include <chrono>
 
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/log/access_recorder.h"
@@ -36,20 +33,6 @@ inline bool ShouldPassRandom(const SampleRate &rate, uint64_t key, uint64_t samp
         return false;
     }
     return Mix64(key ^ sampleSalt) <= rate.threshold;
-}
-
-uint64_t GenerateSampleSalt()
-{
-    std::random_device rd;
-    uint64_t salt = (static_cast<uint64_t>(rd()) << kSaltHighShift) | static_cast<uint64_t>(rd());
-    if (salt == 0) {
-        // Fallback: PID + steady_clock hash
-        salt = static_cast<uint64_t>(getpid()) |
-             (static_cast<uint64_t>(
-                   std::chrono::steady_clock::now().time_since_epoch().count()) << kSaltHighShift);
-        salt = Mix64(salt);
-    }
-    return salt;
 }
 
 bool IsValidRate(double rate)
@@ -105,11 +88,6 @@ void LogSampler::Shutdown()
     samplerEnabled_.store(false, std::memory_order_release);
 }
 
-void LogSampler::Init()
-{
-    sampleSalt_.store(GenerateSampleSalt());
-}
-
 void LogSampler::SetSaltForTest(uint64_t salt)
 {
     sampleSalt_.store(salt);
@@ -127,7 +105,6 @@ void LogSampler::ResetForTest()
     auto *current = snapshot_.exchange(nullptr, std::memory_order_acq_rel);
     delete current;
     samplerEnabled_.store(false, std::memory_order_release);
-    persistentExplicit_ = LogSamplerPersistentExplicitState{};
     sampleSalt_.store(0);
 }
 
@@ -152,36 +129,13 @@ bool LogSampler::BuildAndPublishSnapshot(const LogSampleUserConfig &userConfig)
     bool enabled;
     {
         std::lock_guard<std::mutex> lk(snapshotsMu_);
-        bool canDeriveFromRequest = userConfig.requestSampleRateExplicit
-            && !userConfig.accessSampleRateExplicit
-            && !userConfig.diagnosticSampleRateExplicit
-            && !persistentExplicit_.accessSampleRateEverExplicit
-            && !persistentExplicit_.diagnosticSampleRateEverExplicit;
-
-        double effectiveAccess;
-        double effectiveDiagnostic;
-        if (canDeriveFromRequest) {
-            effectiveAccess = std::min(1.0, userConfig.requestSampleRate * kAccessDeriveMultiplier);
-            effectiveDiagnostic = std::min(1.0, userConfig.requestSampleRate * kDiagnosticDeriveMultiplier);
-        } else {
-            effectiveAccess = userConfig.accessSampleRateExplicit ? userConfig.accessSampleRate : 1.0;
-            effectiveDiagnostic = userConfig.diagnosticSampleRateExplicit ? userConfig.diagnosticSampleRate : 1.0;
-        }
-
-        if (userConfig.accessSampleRateExplicit) {
-            persistentExplicit_.accessSampleRateEverExplicit = true;
-        }
-        if (userConfig.diagnosticSampleRateExplicit) {
-            persistentExplicit_.diagnosticSampleRateEverExplicit = true;
-        }
-
         enabled = (std::abs(userConfig.requestSampleRate - 1.0) > 1e-12
-                   || std::abs(effectiveAccess - 1.0) > 1e-12
-                   || std::abs(effectiveDiagnostic - 1.0) > 1e-12);
+                   || std::abs(userConfig.accessSampleRate - 1.0) > 1e-12
+                   || std::abs(userConfig.diagnosticSampleRate - 1.0) > 1e-12);
 
         uint32_t requestPpm = RateToPpm(userConfig.requestSampleRate);
-        uint32_t accessPpm = RateToPpm(effectiveAccess);
-        uint32_t diagnosticPpm = RateToPpm(effectiveDiagnostic);
+        uint32_t accessPpm = RateToPpm(userConfig.accessSampleRate);
+        uint32_t diagnosticPpm = RateToPpm(userConfig.diagnosticSampleRate);
 
         auto *current = snapshot_.load(std::memory_order_acquire);
         if (current != nullptr && current->config.enabled
@@ -242,20 +196,17 @@ bool LogSampler::ShouldCreateRuntimeLog(LogSeverity severity, bool isPlog)
         return IsCurrentRequestSampledIn(snap->config.requestRate);
     }
 
-    // DIAGNOSTIC
-    const SampleRate &rate = GetRate(snap->config, kind);
+    // DIAGNOSTIC: independent per-trace threshold on the shared trace hash. A diagnostic
+    // rate >= request_rate keeps diagnostics for all sampled-in traces by nesting.
+    const SampleRate &rate = snap->config.diagnosticRate;
     if (rate.ppm == kSamplePpmBase) {
-        return true;
-    }
-    if (kind == LogSampleKind::DIAGNOSTIC && IsCurrentRequestSampledIn(snap->config.requestRate)) {
         return true;
     }
     if (rate.ppm == 0) {
         return false;
     }
-
-    uint64_t traceHash = Trace::Instance().GetCachedHash();
-    return ShouldSampleEvent(traceHash, kind, rate);
+    return ShouldPassRandom(rate, Trace::Instance().GetCachedHash(),
+                            sampleSalt_.load(std::memory_order_relaxed));
 }
 
 bool LogSampler::IsCurrentRequestSampledIn(const SampleRate &requestRate)
@@ -286,13 +237,6 @@ bool LogSampler::IsCurrentRequestSampledIn(const SampleRate &requestRate)
     return result;
 }
 
-bool LogSampler::ShouldSampleEvent(uint64_t traceHash, LogSampleKind kind, const SampleRate &rate)
-{
-    static thread_local uint64_t tlSequence = 0;
-    uint64_t key = traceHash ^ (static_cast<uint64_t>(kind) << 32) ^ (++tlSequence);
-    return ShouldPassRandom(rate, key, sampleSalt_.load(std::memory_order_relaxed));
-}
-
 LogSampleKind LogSampler::ClassifyRuntime(LogSeverity severity, bool isPlog) const
 {
     if (severity == LogSeverity::FATAL) {
@@ -305,20 +249,6 @@ LogSampleKind LogSampler::ClassifyRuntime(LogSeverity severity, bool isPlog) con
         return LogSampleKind::DIAGNOSTIC;
     }
     return LogSampleKind::REQUEST;
-}
-
-const SampleRate &LogSampler::GetRate(const LogSampleConfig &config, LogSampleKind kind) const
-{
-    switch (kind) {
-        case LogSampleKind::REQUEST:
-            return config.requestRate;
-        case LogSampleKind::DIAGNOSTIC:
-            return config.diagnosticRate;
-        case LogSampleKind::ACCESS:
-            return config.accessRate;
-        default:
-            return config.requestRate;
-    }
 }
 
 bool LogSampler::ShouldRecordAccess(AccessRecorderKey key)
@@ -340,14 +270,11 @@ bool LogSampler::ShouldRecordAccess(AccessRecorderKey key)
         return true;
     }
 
-    if (IsCurrentRequestSampledIn(snap->config.requestRate)) {
-        return true;
-    }
     if (snap->config.accessRate.ppm == 0) {
         return false;
     }
-    uint64_t traceHash = Trace::Instance().GetCachedHash();
-    return ShouldSampleEvent(traceHash, LogSampleKind::ACCESS, snap->config.accessRate);
+    return ShouldPassRandom(snap->config.accessRate, Trace::Instance().GetCachedHash(),
+                            sampleSalt_.load(std::memory_order_relaxed));
 }
 
 bool LogSampler::ShouldRecordAccessType(AccessKeyType type)
@@ -368,14 +295,11 @@ bool LogSampler::ShouldRecordAccessType(AccessKeyType type)
         return true;
     }
 
-    if (IsCurrentRequestSampledIn(snap->config.requestRate)) {
-        return true;
-    }
     if (accessRate.ppm == 0) {
         return false;
     }
-    uint64_t traceHash = Trace::Instance().GetCachedHash();
-    return ShouldSampleEvent(traceHash, LogSampleKind::ACCESS, accessRate);
+    return ShouldPassRandom(accessRate, Trace::Instance().GetCachedHash(),
+                            sampleSalt_.load(std::memory_order_relaxed));
 }
 
 }  // namespace datasystem

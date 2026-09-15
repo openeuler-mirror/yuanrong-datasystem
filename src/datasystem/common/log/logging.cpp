@@ -141,20 +141,19 @@ DS_DEFINE_bool(enable_perf_trace_log, GetBoolFromEnv(PERF_TRACE_LOG_ENV.c_str(),
                "Enable perf log output, When true always output perf related log.");
 
 DS_DEFINE_double_dynamic(request_sample_rate, 1.0,
-                         "Request log sample rate per trace [0.0-1.0]. "
-                         "1.0=all retained; sampled-in request also forces access/diagnostic output.");
+                         "Per-trace request log sample rate [0.0-1.0]. "
+                         "Sampled-in traces keep full-link INFO/VLOG logs.");
 DS_DEFINE_double_dynamic(access_sample_rate, 1.0,
-                         "Supplement access log sample rate [0.0-1.0]. "
-                         "Only applies when request is NOT sampled-in; "
-                         "request sampled-in always outputs access logs. "
-                         "Final retention can exceed this rate. "
-                         "1.0=not-sampled-in requests fully retained.");
+                         "Per-trace access log sample rate [0.0-1.0], independent of request "
+                         "sampling. When >= request_sample_rate, sampled-in traces always keep "
+                         "access logs; when lower, the access budget still covers sampled-in "
+                         "traces first.");
 DS_DEFINE_double_dynamic(diagnostic_sample_rate, 1.0,
-                         "Supplement diagnostic log sample rate [0.0-1.0]. "
-                         "Only applies when request is NOT sampled-in for "
-                         "ERROR/WARNING/SLOW_LOG; request sampled-in always outputs "
-                         "diagnostics. FATAL/CHECK always retained. "
-                         "1.0=not-sampled-in requests fully retained.");
+                         "Per-trace diagnostic log sample rate [0.0-1.0] for request-context "
+                         "ERROR/WARNING logs and the SLOW_LOG below-threshold fallback "
+                         "(threshold-hit SLOW_LOG is always emitted), independent of request "
+                         "sampling. FATAL/CHECK always retained. When >= request_sample_rate, "
+                         "sampled-in traces always keep diagnostics.");
 
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_bool(log_only_write_info_file);
@@ -240,22 +239,10 @@ AccessRecorderManager *Logging::AccessRecorderManagerInstance()
 
 bool Logging::InitLogSampler()
 {
-    LogSampler::Instance().Init();
-
     LogSampleUserConfig cfg;
     cfg.requestSampleRate = FLAGS_request_sample_rate;
     cfg.accessSampleRate = FLAGS_access_sample_rate;
     cfg.diagnosticSampleRate = FLAGS_diagnostic_sample_rate;
-    std::vector<FlagInfo> allFlags;
-    GetAllFlags(allFlags);
-    for (const auto &fi : allFlags) {
-        if (fi.name == "request_sample_rate")
-            cfg.requestSampleRateExplicit = fi.wasSpecified;
-        if (fi.name == "access_sample_rate")
-            cfg.accessSampleRateExplicit = fi.wasSpecified;
-        if (fi.name == "diagnostic_sample_rate")
-            cfg.diagnosticSampleRateExplicit = fi.wasSpecified;
-    }
     if (!LogSampler::Instance().UpdateConfigFromFlags(cfg)) {
         LOG(FATAL) << "Illegal log sampler config at startup: "
                    << "request_sample_rate=" << FLAGS_request_sample_rate
@@ -270,10 +257,7 @@ bool Logging::InitLogSampler()
               << (LogSampler::Instance().IsSamplerEnabledFast() ? 1 : 0)
               << " request_sample_rate=" << FLAGS_request_sample_rate
               << " access_sample_rate=" << FLAGS_access_sample_rate
-              << " diagnostic_sample_rate=" << FLAGS_diagnostic_sample_rate
-              << " (explicit r=" << cfg.requestSampleRateExplicit
-              << " a=" << cfg.accessSampleRateExplicit
-              << " d=" << cfg.diagnosticSampleRateExplicit << ")";
+              << " diagnostic_sample_rate=" << FLAGS_diagnostic_sample_rate;
     return true;
 }
 

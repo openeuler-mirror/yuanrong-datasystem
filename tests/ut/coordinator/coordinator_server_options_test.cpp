@@ -389,7 +389,6 @@ public:
         FLAGS_access_sample_rate = 1.0;
         FLAGS_diagnostic_sample_rate = 1.0;
         LogSampler::Instance().ResetForTest();
-        LogSampler::Instance().Init();
         ConfigMonitorState::Instance().SetFileMonitorEnabled(false);
     }
 
@@ -399,7 +398,6 @@ public:
         FLAGS_access_sample_rate = originalAccessSampleRate_;
         FLAGS_diagnostic_sample_rate = originalDiagnosticSampleRate_;
         LogSampler::Instance().ResetForTest();
-        LogSampler::Instance().Init();
         LogSampleUserConfig config;
         config.requestSampleRate = originalRequestSampleRate_;
         config.accessSampleRate = originalAccessSampleRate_;

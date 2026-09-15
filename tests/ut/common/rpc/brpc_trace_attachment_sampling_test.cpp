@@ -86,13 +86,12 @@ protected:
         LogSampler::Instance().ResetForTest();
     }
 
-    // Enable the sampler with an explicit non-1.0 request rate so the ADMIT /
+    // Enable the sampler with a non-1.0 request rate so the ADMIT /
     // REJECT decision paths in GetOrCreateLogSampleState() are exercised.
     void EnableSampler()
     {
         LogSampleUserConfig cfg;
         cfg.requestSampleRate = 0.5;
-        cfg.requestSampleRateExplicit = true;
         LogSampler::Instance().UpdateConfigFromFlags(cfg);
     }
 };

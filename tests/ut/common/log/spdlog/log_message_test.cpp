@@ -226,7 +226,6 @@ TEST_F(LogMessageTest, AllowedLogsEvaluateStreamExpression)
     // sampler enabled with full request rate: request sampled-in
     LogSampler::Instance().SetSaltForTest(12345);
     LogSampleUserConfig config;
-    config.requestSampleRateExplicit = true;
     config.requestSampleRate = 1.0;
     ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(config));
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
@@ -239,12 +238,10 @@ TEST_F(LogMessageTest, AllowedLogsEvaluateStreamExpression)
 TEST_F(LogMessageTest, RejectedRequestLogsSkipStreamExpression)
 {
     // Configure sampler with request_rate=0: all requests rejected
-    // diagnostic_rate=0: no diagnostic补采样 (otherwise ERROR/WARNING could still pass)
+    // diagnostic_rate=0: no diagnostics for any trace (ERROR/WARNING always dropped)
     LogSampler::Instance().SetSaltForTest(12345);
     LogSampleUserConfig config;
-    config.requestSampleRateExplicit = true;
     config.requestSampleRate = 0.0;
-    config.diagnosticSampleRateExplicit = true;
     config.diagnosticSampleRate = 0.0;
     ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(config));
 
@@ -259,12 +256,11 @@ TEST_F(LogMessageTest, RejectedRequestLogsSkipStreamExpression)
 
 TEST_F(LogMessageTest, PropagatedRejectSkipsStreamExpressionWhenDiagnosticRateIsZero)
 {
-    // Configure sampler with diagnostic_rate=0 so that diagnostic补采样 also rejects
+    // Configure sampler with diagnostic_rate=0 so that diagnostics are dropped
+    // regardless of the propagated request decision
     LogSampler::Instance().SetSaltForTest(12345);
     LogSampleUserConfig config;
-    config.requestSampleRateExplicit = true;
     config.requestSampleRate = 0.0;
-    config.diagnosticSampleRateExplicit = true;
     config.diagnosticSampleRate = 0.0;
     ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(config));
 

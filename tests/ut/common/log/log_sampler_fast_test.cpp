@@ -77,11 +77,8 @@ public:
         StartLogging();
         LogSampleUserConfig cfg;
         cfg.requestSampleRate = requestRate;
-        cfg.requestSampleRateExplicit = true;
         cfg.accessSampleRate = accessRate;
-        cfg.accessSampleRateExplicit = true;
         cfg.diagnosticSampleRate = diagnosticRate;
-        cfg.diagnosticSampleRateExplicit = true;
         LogSampler::Instance().UpdateConfigFromFlags(cfg);
     }
 
@@ -225,6 +222,138 @@ TEST_F(LogSamplerFastTest, LEVEL1_AccessRecorderSampledOutDoesNotBuildFields)
     }
 
     EXPECT_EQ(providerCalls.load(), 0);
+}
+
+// Nested thresholds: category rate >= request rate keeps the category for every
+// sampled-in trace, across rate combinations
+TEST_F(LogSamplerFastTest, NestingInvariantAcrossRates)
+{
+    struct RateCombo {
+        double request;
+        double category;
+    };
+    const std::vector<RateCombo> combos = { { 0.3, 0.7 }, { 0.5, 0.5 }, { 0.2, 0.9 } };
+    constexpr int kNumTraces = 500;
+
+    LogSampler &s = LogSampler::Instance();
+    for (const auto &combo : combos) {
+        s.ResetForTest();
+        s.SetSaltForTest(0);
+        LogSampleUserConfig cfg;
+        cfg.requestSampleRate = combo.request;
+        cfg.accessSampleRate = combo.category;
+        cfg.diagnosticSampleRate = combo.category;
+        ASSERT_TRUE(s.UpdateConfigFromFlags(cfg));
+
+        int sampledIn = 0;
+        for (int i = 0; i < kNumTraces; ++i) {
+            Trace::Instance().Invalidate();
+            TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
+            if (s.IsCurrentRequestSampledIn()) {
+                ++sampledIn;
+                EXPECT_TRUE(s.ShouldRecordAccess(AccessRecorderKey::DS_KV_CLIENT_SET));
+                EXPECT_TRUE(s.ShouldCreateRuntimeLog(LogSeverity::ERROR, false));
+            }
+        }
+        EXPECT_GT(sampledIn, 0);
+    }
+}
+
+// Retention precision: each category keeps exactly its configured ratio, independent
+// of the other rates
+TEST_F(LogSamplerFastTest, ExactRetentionIndependence)
+{
+    LogSampler &s = LogSampler::Instance();
+    s.ResetForTest();
+    s.SetSaltForTest(0);
+    LogSampleUserConfig cfg;
+    cfg.requestSampleRate = 0.1;
+    cfg.accessSampleRate = 0.3;
+    cfg.diagnosticSampleRate = 1.0;
+    ASSERT_TRUE(s.UpdateConfigFromFlags(cfg));
+
+    constexpr int kNumTraces = 10000;
+    int reqHits = 0;
+    int accHits = 0;
+    for (int i = 0; i < kNumTraces; ++i) {
+        Trace::Instance().Invalidate();
+        TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
+        if (s.IsCurrentRequestSampledIn()) {
+            ++reqHits;
+        }
+        if (s.ShouldRecordAccess(AccessRecorderKey::DS_KV_CLIENT_SET)) {
+            ++accHits;
+        }
+    }
+    EXPECT_NEAR(static_cast<double>(reqHits) / kNumTraces, 0.1, 0.03);
+    EXPECT_NEAR(static_cast<double>(accHits) / kNumTraces, 0.3, 0.03);
+}
+
+// Determinism: same traceID + same config → same decisions across resets
+TEST_F(LogSamplerFastTest, DeterministicAcrossReset)
+{
+    LogSampler &s = LogSampler::Instance();
+    s.ResetForTest();
+    s.SetSaltForTest(0);
+    LogSampleUserConfig cfg;
+    cfg.requestSampleRate = 0.5;
+    cfg.accessSampleRate = 0.5;
+    cfg.diagnosticSampleRate = 0.5;
+    ASSERT_TRUE(s.UpdateConfigFromFlags(cfg));
+
+    const std::string traceID = "determinism_trace";
+    bool reqIn1 = false;
+    bool accIn1 = false;
+    {
+        TraceGuard guard = Trace::Instance().SetTraceNewID(traceID);
+        Trace::Instance().SetRequestLogTrace(true);
+        reqIn1 = s.IsCurrentRequestSampledIn();
+        accIn1 = s.ShouldRecordAccess(AccessRecorderKey::DS_KV_CLIENT_SET);
+    }
+
+    s.ResetForTest();
+    s.SetSaltForTest(0);
+    ASSERT_TRUE(s.UpdateConfigFromFlags(cfg));
+    bool reqIn2 = false;
+    bool accIn2 = false;
+    {
+        TraceGuard guard = Trace::Instance().SetTraceNewID(traceID);
+        Trace::Instance().SetRequestLogTrace(true);
+        reqIn2 = s.IsCurrentRequestSampledIn();
+        accIn2 = s.ShouldRecordAccess(AccessRecorderKey::DS_KV_CLIENT_SET);
+    }
+
+    EXPECT_EQ(reqIn1, reqIn2);
+    EXPECT_EQ(accIn1, accIn2);
+}
+
+// Nesting holds under any salt: a nonzero test salt shifts all categories uniformly
+TEST_F(LogSamplerFastTest, NestingHoldsUnderSaltPerturbation)
+{
+    LogSampler &s = LogSampler::Instance();
+    const uint64_t salts[] = { 1, 0xDEADBEEF, UINT64_MAX };
+    constexpr int kNumTraces = 300;
+    for (uint64_t salt : salts) {
+        s.ResetForTest();
+        s.SetSaltForTest(salt);
+        LogSampleUserConfig cfg;
+        cfg.requestSampleRate = 0.4;
+        cfg.accessSampleRate = 0.6;
+        cfg.diagnosticSampleRate = 0.6;
+        ASSERT_TRUE(s.UpdateConfigFromFlags(cfg));
+
+        int sampledIn = 0;
+        for (int i = 0; i < kNumTraces; ++i) {
+            Trace::Instance().Invalidate();
+            TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
+            if (s.IsCurrentRequestSampledIn()) {
+                ++sampledIn;
+                EXPECT_TRUE(s.ShouldRecordAccess(AccessRecorderKey::DS_KV_CLIENT_SET));
+                EXPECT_TRUE(s.ShouldCreateRuntimeLog(LogSeverity::ERROR, false));
+            }
+        }
+        EXPECT_GT(sampledIn, 0);
+    }
 }
 
 }  // namespace ut
