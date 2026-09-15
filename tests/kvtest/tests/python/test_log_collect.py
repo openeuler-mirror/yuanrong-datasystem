@@ -224,6 +224,23 @@ class TestLogCollect(unittest.TestCase):
             self.assertIn('--prefix', result.stdout)
 
 
+    def test_collect_pod_names_with_host_filter_without_prefix(self):
+        from unittest.mock import patch
+        import deploy_worker
+        pods = [{'name': 'worker-a-0', 'ip': '192.0.2.1', 'node': 'n', 'host_ip': '192.0.2.2'}]
+        with patch.object(sys, 'argv', ['deploy_worker.py', 'collect',
+                                        '--pod-names', 'worker-a-0',
+                                        '--host-filter', '/nonexistent/hosts.json']), \
+             patch('deploy_worker.host_selection_from_args',
+                   return_value={'host_ips': ['192.0.2.2'], 'exclude_host_ips': []}), \
+             patch('deploy_worker.get_pods', return_value=pods) as get_pods, \
+             patch('deploy_worker.filter_collect_targets', return_value=pods), \
+             patch('deploy_worker.cmd_collect', return_value=0) as cmd_collect:
+            self.assertEqual(deploy_worker.main(), 0)
+        cmd_collect.assert_called_once()
+        self.assertEqual(get_pods.call_args.args[1], [''])
+
+
     def test_actual_log_names_exclude_env_and_procmon_even_with_wildcard(self):
         logs = ['ds_client_3119.INFO.log', 'ds_client_3119_operation.log',
                 'ds_client_access_3119.log', 'access.log', 'kvcache.INFO.log',

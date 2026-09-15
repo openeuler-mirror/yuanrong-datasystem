@@ -131,16 +131,19 @@ def log_error(msg, *args):
 DEFAULT_TIMEOUT = 300
 
 
-def get_pods(namespace, prefixes):
-    """Get running pods matching any of the given name prefixes.
+def get_pods(namespace, prefixes, pod_names=None):
+    """Get running pods matching any name prefix or exact pod name.
 
-    OR semantics: a pod is selected if its name starts with any prefix.
-    Dedup by name (defensive; pod names are unique within a namespace, so
-    a pod matching multiple prefixes is still added once). The final list is
+    OR semantics: a pod is selected if its name starts with any prefix OR its
+    name exactly equals any entry in ``pod_names``. ``pod_names`` entries may
+    themselves be space-separated (so a single ``--pod-names "a b c"`` value and a
+    repeated ``--pod-names a --pod-names b`` both work); they are split on whitespace.
+    Dedup by name (defensive; pod names are unique within a namespace, so a
+    pod matching multiple selectors is still added once). The final list is
     sorted by name globally so instance_id assignment is deterministic
-    regardless of the order prefixes were passed on the CLI. A WARNING is
-    printed for each prefix that matched zero pods; callers decide whether
-    an all-zero result is fatal.
+    regardless of the order selectors were passed on the CLI. A WARNING is
+    printed for each prefix/exact name that matched zero pods; callers decide
+    whether an all-zero result is fatal.
 
     Returns ``[{'name', 'ip', 'node', 'host_ip'}, ...]``. ``node`` is
     ``spec.nodeName`` (the k8s node hostname) and ``host_ip`` is
@@ -162,11 +165,16 @@ def get_pods(namespace, prefixes):
         sys.exit(1)
 
     prefixes = list(prefixes or [])
+    # Flatten space-separated values so callers can pass either
+    # --pod-names "a b" (one value) or --pod-names a --pod-names b (many values).
+    exact = set()
+    for v in (pod_names or []):
+        exact.update(str(v).split())
     pods = []
     seen = set()
     for item in json.loads(out).get('items', []):
         name = item['metadata']['name']
-        if not any(name.startswith(p) for p in prefixes):
+        if name not in exact and not any(name.startswith(p) for p in prefixes):
             continue
         pod_ip = item.get('status', {}).get('podIP', '')
         if not pod_ip:
@@ -184,6 +192,9 @@ def get_pods(namespace, prefixes):
     for p in prefixes:
         if not any(pod['name'].startswith(p) for pod in pods):
             log_error(f'WARNING: prefix "{p}" matched 0 pods')
+    for n in sorted(exact):
+        if not any(pod['name'] == n for pod in pods):
+            log_error(f'WARNING: pod "{n}" matched 0 pods')
     return pods
 
 

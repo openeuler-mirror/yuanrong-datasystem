@@ -276,7 +276,7 @@ python3 deploy_worker.py collect -p worker- -o collected-all
 python3 deploy_client.py collect deploy.json -o collected-client-all
 ```
 
-Worker 继续使用现有 `-p/--prefix`，可重复传多个前缀或完整 Pod 名，保持原有前缀匹配语义（`pod-1` 也可能匹配 `pod-10`），不新增 `--pods`。Client 同样使用可重复的 `-p/--prefix`，按任一前缀匹配 deploy.json 中的 Pod，不重复收集或改变实例编号；不传 `-p` 时仍收集配置中的全部 Client。同时指定前缀和实例 ID 时取交集。原有 count/offset 仍用于分批，建议不要与前缀选择混用。前缀无匹配时告警，全部前缀无匹配时返回失败，不退回全量收集。
+Worker 继续使用现有 `-p/--prefix`，可重复传多个前缀或完整 Pod 名，保持原有前缀匹配语义（`pod-1` 也可能匹配 `pod-10`）；需要精确匹配多个 Pod（避免前缀误匹配）时，用 `--pod-names "worker-a-0 worker-b-1"`（空格分隔，可重复传，与前缀取并集，适用于 deploy/start/stop/collect 等所有子命令）。Client 同样使用可重复的 `-p/--prefix`，按任一前缀匹配 deploy.json 中的 Pod，不重复收集或改变实例编号；不传 `-p` 时仍收集配置中的全部 Client。同时指定前缀和实例 ID 时取交集。原有 count/offset 仍用于分批，建议不要与前缀选择混用。前缀无匹配时告警，全部前缀无匹配时返回失败，不退回全量收集。
 
 `--file-pattern` 匹配日志文件名；含 `/` 时匹配相对于对应日志根目录的路径。多个 pattern 或 keyword 可以重复传入，各自按 OR 匹配，两类条件之间取交集。keyword 为区分大小写的 UTF-8 字面子串，不是正则表达式；仅输出匹配行，无上下文行。文件名通配符须加引号，防止本地 shell 提前展开。筛选适用于日志根目录、Worker stdout/procmon、Client output/SDK；不收不匹配的附带文件。
 

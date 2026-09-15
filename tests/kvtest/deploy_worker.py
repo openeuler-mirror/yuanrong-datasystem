@@ -376,6 +376,13 @@ def main():
                                help='Pod name prefix to match (repeatable: '
                                     '-p worker-a -p worker-b). A pod is '
                                     'selected if it matches ANY prefix.')
+    parent_parser.add_argument('--pod-names', action='append', default=None,
+                               dest='pod_names', metavar='POD_NAMES',
+                               help='Exact pod name(s) to match, space-separated '
+                                    '(repeatable: --pod-names "worker-a-0 worker-b-1"). '
+                                    'A pod is selected if its name exactly equals '
+                                    'ANY listed name. Combined with -p/--prefix '
+                                    'using OR (union).')
     parent_parser.add_argument('-n', '--namespace', default='default',
                                help='k8s namespace (default: default)')
     parent_parser.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT,
@@ -594,9 +601,9 @@ def main():
 
     # argparse with action='append' default=None won't enforce presence, so
     # validate explicitly here with a clear message.
-    if not args.prefixes:
-        log_error('ERROR: at least one --prefix is required '
-                  '(e.g. -p worker-a [-p worker-b])')
+    if not args.prefixes and not args.pod_names:
+        log_error('ERROR: at least one --prefix or --pod-names is required '
+                  '(e.g. -p worker-a, or --pod-names "worker-a-0 worker-b-1")')
         return 1
 
     try:
@@ -605,17 +612,24 @@ def main():
         log_error(str(error))
         return 1
     # Host selection precedes prefixes and count/offset for collect.
-    pods = get_pods(args.namespace, [''] if host_selection is not None else args.prefixes)
+    pods = get_pods(args.namespace,
+                    [''] if host_selection is not None else args.prefixes,
+                    args.pod_names)
     if host_selection is not None:
         try:
             pods = filter_collect_targets(pods, host_selection)
         except ValueError as error:
             log_error(str(error))
             return 1
-        pods = [pod for pod in pods if any(pod['name'].startswith(prefix) for prefix in args.prefixes)]
+        exact = set()
+        for v in (args.pod_names or []):
+            exact.update(str(v).split())
+        pods = [pod for pod in pods
+                if any(pod['name'].startswith(prefix) for prefix in (args.prefixes or []))
+                or pod['name'] in exact]
     if not pods:
         log_info(f'No running pods found matching prefixes {args.prefixes} '
-                 f'in namespace "{args.namespace}"')
+                 f'or pods {args.pod_names} in namespace "{args.namespace}"')
         return 1
 
     if args.count is not None:
@@ -627,12 +641,13 @@ def main():
             return 1
         if args.offset >= len(pods):
             log_error(f'ERROR: --offset {args.offset} reaches end of the '
-                      f'{len(pods)} pods matching prefixes {args.prefixes}')
+                      f'{len(pods)} pods matching prefixes {args.prefixes} '
+                      f'or pods {args.pod_names}')
             return 1
         if args.offset + args.count > len(pods):
             log_error(f'ERROR: --offset {args.offset} + --count {args.count} '
                       f'exceeds the {len(pods)} pods matching prefixes '
-                      f'{args.prefixes}')
+                      f'{args.prefixes} or pods {args.pod_names}')
             return 1
         pods = pods[args.offset:args.offset + args.count]
 
