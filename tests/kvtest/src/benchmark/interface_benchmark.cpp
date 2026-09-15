@@ -46,6 +46,11 @@ struct GroupResult {
     std::vector<StreamingPhaseResult> clients;
 };
 
+struct CleanupResult {
+    bool executionOk = false;
+    int64_t operationFailureCount = 0;
+};
+
 class InterfaceCsvWriter {
 public:
     explicit InterfaceCsvWriter(const std::string &outputDir)
@@ -294,19 +299,19 @@ void ShutdownAllChildren(std::vector<ChildProcess> &children)
     }
 }
 
-bool CleanupDataset(const Config &cfg, const std::vector<ChildProcess> &children,
-                    const std::vector<size_t> &cleanupIndices, int round, int keysPerDataset,
-                    const std::atomic<bool> &running)
+CleanupResult CleanupDataset(const Config &cfg, const std::vector<ChildProcess> &children,
+                             const std::vector<size_t> &cleanupIndices, int round, int keysPerDataset,
+                             const std::atomic<bool> &running)
 {
     if (cleanupIndices.empty()) {
-        return true;
+        return { true, 0 };
     }
     GroupResult cleanup;
     if (!ExecuteGroup(children, cleanupIndices, CMD_PREPARE_DEL, round, cfg.numThreads, keysPerDataset, 1, 0, false,
                       cleanup, running)) {
-        return false;
+        return {};
     }
-    return cleanup.total.failureCount == 0;
+    return { true, cleanup.total.failureCount };
 }
 
 bool TtlCoversGetWindow(const Config &cfg, const StreamingPhaseResult &setup)
@@ -353,11 +358,21 @@ int RunGetBenchmark(const Config &cfg, std::vector<ChildProcess> &children, cons
                       setup, running)) {
         return 1;
     }
-    if (setup.total.failureCount != 0 || setup.total.successCount != keysPerDataset) {
-        SLOG_ERROR("Get setup failed: success=" << setup.total.successCount
-                                                 << ", failures=" << setup.total.failureCount);
+    csv.WriteGroup("setup", 0, "set", setup, cfg.dataSizes[0]);
+    if (setup.total.successCount == 0) {
+        SLOG_ERROR("Get setup produced no keys: failures=" << setup.total.failureCount);
         (void)CleanupDataset(cfg, children, cleanupIndices, 0, keysPerDataset, running);
         return MEASUREMENT_FAILURE_EXIT_CODE;
+    }
+    if (setup.total.failureCount != 0) {
+        int64_t effectiveConcurrency = 0;
+        for (const auto &client : setup.clients) {
+            effectiveConcurrency += std::min<int64_t>(cfg.numThreads, client.successCount);
+        }
+        SLOG_WARN("Get setup partially succeeded: success=" << setup.total.successCount
+                                                              << ", failures=" << setup.total.failureCount
+                                                              << ", effective_concurrency="
+                                                              << effectiveConcurrency);
     }
 
     GroupResult warmup;
@@ -381,13 +396,13 @@ int RunGetBenchmark(const Config &cfg, std::vector<ChildProcess> &children, cons
         return 1;
     }
     csv.WriteGroup("total", -1, "get", measured, cfg.dataSizes[0]);
-    const bool cleanupOk = CleanupDataset(cfg, children, cleanupIndices, 0, keysPerDataset, running);
+    const auto cleanup = CleanupDataset(cfg, children, cleanupIndices, 0, keysPerDataset, running);
     SLOG_INFO("Get benchmark finished: success=" << measured.total.successCount
                                                    << ", failures=" << measured.total.failureCount
                                                    << ", not_found=" << measured.total.notFoundCount
                                                    << ", timeouts=" << measured.total.timeoutCount
                                                    << ", elapsed_ms=" << measured.total.ElapsedMs());
-    if (!cleanupOk) {
+    if (!cleanup.executionOk || cleanup.operationFailureCount != 0) {
         return CLEANUP_FAILURE_EXIT_CODE;
     }
     return measured.total.failureCount == 0 ? 0 : MEASUREMENT_FAILURE_EXIT_CODE;
@@ -423,12 +438,16 @@ int RunSetBenchmark(const Config &cfg, std::vector<ChildProcess> &children, cons
         activeElapsedMs += measured.total.ElapsedMs();
         summary.Merge(measured.total);
         ++completedRounds;
-        if (!CleanupDataset(cfg, children, cleanupIndices, round, keysPerDataset, running)) {
+        const auto cleanup = CleanupDataset(cfg, children, cleanupIndices, round, keysPerDataset, running);
+        if (!cleanup.executionOk) {
             cleanupFailed = true;
             break;
         }
-        if (summary.failureCount != 0) {
-            break;
+        if (cleanup.operationFailureCount != 0) {
+            cleanupFailed = true;
+            SLOG_WARN("Set cleanup had failures in round " << round
+                                                             << ": failures=" << cleanup.operationFailureCount
+                                                             << "; continuing benchmark");
         }
         if (cfg.cleanupMethod == "ttl") {
             std::this_thread::sleep_for(std::chrono::seconds(cfg.ttlSeconds));
@@ -471,11 +490,14 @@ int RunInterfaceBenchmark(const Config &cfg, const std::string &configPath, std:
     std::vector<size_t> cleanupIndices;
     children.reserve(static_cast<size_t>(cfg.numClients) * 2);
     if (!SpawnGroup(cfg, ROLE_SET, cfg.numClients, configPath, children, measuredIndices)
-        || (cfg.cleanupMethod == "del"
+        || (cfg.cleanupMethod == "del" && !IsGetMode(cfg.testMode)
             && !SpawnGroup(cfg, ROLE_DEL, cfg.numClients, configPath, children, cleanupIndices))
         || !WaitForAllChildren(children)) {
         KillAllChildren(children);
         return 1;
+    }
+    if (cfg.cleanupMethod == "del" && IsGetMode(cfg.testMode)) {
+        cleanupIndices = measuredIndices;
     }
 
     InterfaceCsvWriter csv(cfg.outputDir);

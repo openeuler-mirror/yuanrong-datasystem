@@ -325,7 +325,7 @@ keys_per_round = floor(worker_memory_mb × 0.8 × 1024 × 1024 / data_size_bytes
 四个单接口模式的执行流程如下：
 
 ```
-Get: 初始化 Client 组 → Set 全局数据集一次 → 每线程预热一次
+Get: 初始化 Client 组 → Set 全局数据集一次 → 对成功 Set 的 key 每线程预热一次
      → 所有 Client/线程统一起跑并持续 Get → 统一停止 → Cleanup 一次
 
 Set: 所有 Client/线程统一起跑并 Set → 全部完成 → Cleanup → 下一周期
@@ -336,7 +336,10 @@ Set: 所有 Client/线程统一起跑并 Set → 全部完成 → Cleanup → �
 Client 初始化、线程创建、预置、预热和清理均不计入接口 QPS。
 
 每个被测线程至少需要一个 key；若 `keys_per_dataset < num_clients × num_threads`，配置会在创建 Client 前被拒绝。
-使用 `cleanup_method=del` 时，工具创建同等数量的独立清理 Client，避免清理请求污染被测 Client 的连接状态。
+Get 预置不重试失败的 Set：只要至少一个 key 成功，预热、测量和清理就仅使用成功 key；全部失败才终止。
+部分成功时实际活跃并发可能低于配置值，日志记录 `effective_concurrency`，预置结果写入 CSV 的 `setup` 行。
+使用 `cleanup_method=del` 时，Set 模式使用同等数量的独立清理 Client；Get 模式在测量结束后，
+由各被测子进程惰性创建独立清理 Client，精确清理成功 Set 的 key。
 
 Get 配置 TTL 时，启动前会先校验配置，预置和预热完成后还会复核剩余 TTL 是否能覆盖整个测量窗口及
 一次请求超时余量，否则拒绝启动测量。
@@ -363,6 +366,10 @@ Benchmark 模式**不使用 `target_qps` 限速**——每轮全速执行，测�
 | `duration_seconds=60` | Get 连续测量 60 秒；Set 在 60 秒后不再启动下一周期 |
 | `total_rounds=5, duration_seconds=120` | Get 最多遍历数据集 5 次且不超过 120 秒；Set 最多执行 5 个周期且不超过 120 秒 |
 | `total_rounds=0, duration_seconds=0` | 无限运行，需 `Ctrl+C` 停止 |
+
+Set 单轮中的接口失败和清理业务失败会计入最终结果，但不会提前结束后续周期；Benchmark 仍运行到上述轮数、
+时长或主动停止条件。父子进程通信、同步等执行失败无法保证下一周期正确执行，因此仍会立即终止。
+只要运行期间出现过 Set 失败，或者清理业务失败，进程最终仍返回非零退出码。
 
 ### CPU / NUMA 亲和性绑定
 
