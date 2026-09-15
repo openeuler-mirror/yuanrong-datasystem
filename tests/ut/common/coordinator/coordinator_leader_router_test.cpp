@@ -443,6 +443,38 @@ TEST_F(CoordinatorLeaderRouterTest, RecoveringLeaderRetainsApplicationStatusAtDe
     EXPECT_EQ(publishedIdentities.size(), 1);
 }
 
+TEST_F(CoordinatorLeaderRouterTest, RecoveryEvidenceSurvivesFinalTransportTimeout)
+{
+    snapshots = { { "127.0.0.1:30001", "127.0.0.1:30002", "127.0.0.1:30003" } };
+    Router router(Dependencies());
+    constexpr auto budget = std::chrono::milliseconds(3'000);
+    constexpr auto retryInterval = std::chrono::milliseconds(100);
+    constexpr auto firstResponseElapsed = std::chrono::milliseconds(98);
+    constexpr auto timerOvershoot = std::chrono::milliseconds(1);
+    size_t calls = 0;
+    std::vector<std::chrono::milliseconds> timeouts;
+    const auto status = router.Execute(
+        [&](const HostPort &, std::chrono::milliseconds timeout) {
+            timeouts.emplace_back(timeout);
+            ++calls;
+            if (timeout > timerOvershoot) {
+                if (calls == 1) {
+                    now += firstResponseElapsed;
+                }
+                return Response(State::RECOVERING, Status(K_NOT_READY, "injected recovery"));
+            }
+            now += timeout + timerOvershoot;
+            return TransportError(K_RPC_DEADLINE_EXCEEDED);
+        },
+        Deadline(budget), budget, retryInterval);
+
+    constexpr size_t expectedCalls = 30;
+    ASSERT_EQ(calls, expectedCalls);
+    ASSERT_EQ(timeouts.back(), std::chrono::milliseconds(1));
+    ASSERT_TRUE(router.GetLeaderIdentity().has_value());
+    EXPECT_EQ(status.GetCode(), K_NOT_READY) << status.ToString();
+}
+
 TEST_F(CoordinatorLeaderRouterTest, RecoveryControlAcceptsRecoveringLeader)
 {
     snapshots = { { "127.0.0.1:30001", "127.0.0.1:30002" } };

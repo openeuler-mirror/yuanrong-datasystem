@@ -819,8 +819,13 @@ Status TopologyEngine::WaitForCoordinatorReady()
     coordinatorReadyWaitActive_.store(true, std::memory_order_release);
     Raii clearWaitState([this] { coordinatorReadyWaitActive_.store(false, std::memory_order_release); });
     while (!startupCancellationRequested_.load(std::memory_order_acquire)) {
-        auto status = ReloadTopology(true);
-        if (status.GetCode() != K_NOT_READY) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            startupDeadline - std::chrono::steady_clock::now());
+        CHECK_FAIL_RETURN_STATUS(remaining.count() > 0, K_RPC_DEADLINE_EXCEEDED,
+                                 "Coordinator did not become ready before the Worker startup deadline");
+        const auto timeoutMs = static_cast<int32_t>(std::min<int64_t>(remaining.count(), ENGINE_READ_TIMEOUT_MS));
+        auto status = ReloadTopology(true, timeoutMs);
+        if (status.GetCode() != K_NOT_READY && !IsRetryableRpcError(status)) {
             return status;
         }
         if (!waitingLogged) {
@@ -1275,15 +1280,15 @@ TopologyDiagnostics TopologyEngine::GetDiagnostics() const
     return diagnostics;
 }
 
-Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed)
+Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed, int32_t timeoutMs)
 {
     std::shared_ptr<const TopologySnapshot> previous;
     const bool hasPrevious = snapshots_.Load(previous).IsOk();
     auto candidate = previous;
     bool unchanged = false;
     auto rc = !options_.unifiedEtcdWatch && hasPrevious && previous->AuthorityRevision() > 0
-                  ? reader_.ReadIfChanged(ENGINE_READ_TIMEOUT_MS, *previous, candidate, unchanged)
-                  : reader_.Read(ENGINE_READ_TIMEOUT_MS, candidate);
+                  ? reader_.ReadIfChanged(timeoutMs, *previous, candidate, unchanged)
+                  : reader_.Read(timeoutMs, candidate);
     if (rc.IsError()) {
         std::shared_ptr<const TopologySnapshot> lastGood;
         const bool hasLastGood = snapshots_.Load(lastGood).IsOk();

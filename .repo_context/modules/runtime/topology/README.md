@@ -440,8 +440,10 @@
     `//src/datasystem/common/object_cache:ub_health` target. Keep this boundary free of the full `common_object_cache`
     dependency so the coordinator does not inherit shared-memory and data-plane link requirements.
 - Coordinator uses the same keepalive-init-then-single-reload-before-watch call order. Its watch descriptor revision
-  remains zero because `WatchRange` ignores the field and returns `initial_kvs` plus a RESET doorbell. `K_NOT_FOUND` and
-  `K_NOT_READY` allow bootstrap waiting; other reload errors fail before any `WatchRange` call. A successful reload
+  remains zero because `WatchRange` ignores the field and returns `initial_kvs` plus a RESET doorbell.
+  `K_NOT_FOUND` allows bootstrap waiting. Coordinator readiness waiting retries `K_NOT_READY` and
+  `IsRetryableRpcError` failures with bounded backoff and cancellation; each read is capped by the remaining startup
+  deadline. Other reload errors fail before any `WatchRange` call. A successful reload
   synchronously publishes the Snapshot before watches are registered.
 - A Coordinator-mode Worker whose restart-fact exact read returns `K_NOT_READY` during initial Coordinator recovery is
   provisionally initialized as a fresh start so membership and recovery reporting can bootstrap. Simultaneous
@@ -616,7 +618,8 @@
   key kinds, default/named cluster parsing, malformed keys, and cross-keyspace ranges; `CoordinatorStoreTest` keeps the
   generic Store contract independent of ingress policy.
 - Router/consumer coverage: `CoordinatorLeaderRouterTest` and `CoordinatorServiceProxyTest` cover follower redirects,
-  ordinary `RECOVERING` fast `K_NOT_READY`, recovery-control/`SERVING` route hits, business-status propagation, header
+  ordinary `RECOVERING` bounded retry and preservation of accepted recovery status across terminal transport errors,
+  recovery-control/`SERVING` route hits, business-status propagation, header
   validation, and identity fencing.
 - Manual scale/performance coverage: `topology_control_perf_test`.
 - Core CTest selection:
