@@ -489,6 +489,7 @@ private:
     bthread::Mutex lifecycleMutex_;
     std::atomic<bool> initialized_{ false };
     std::weak_ptr<ThreadPool> releasePool_;
+    std::shared_ptr<ThreadPool> shmMaintenancePool_;
     std::shared_ptr<HostMemoryPinManager> hostMemoryPinManager_;
 };
 }  // namespace client

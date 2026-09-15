@@ -289,7 +289,8 @@ void ShmFdChannel::Close()
 ShmSession::ShmSession(HostPort workerAddr, std::shared_ptr<WorkerRpcClient> rpcClient,
                        std::shared_ptr<ShmFdChannel> fdChannel, std::shared_ptr<MmapManager> mmapManager,
                        std::string clientId, std::string workerStartId, uint32_t lockId,
-                       std::weak_ptr<ThreadPool> releasePool, TransportRequestContext auth,
+                       std::weak_ptr<ThreadPool> releasePool, std::weak_ptr<ThreadPool> maintenancePool,
+                       TransportRequestContext auth,
                        bool supportMultiRefCount, std::shared_ptr<std::atomic<bool>> scaleInDraining)
     : workerAddr_(std::move(workerAddr)),
       rpcClient_(std::move(rpcClient)),
@@ -299,6 +300,7 @@ ShmSession::ShmSession(HostPort workerAddr, std::shared_ptr<WorkerRpcClient> rpc
       workerStartId_(std::move(workerStartId)),
       lockId_(lockId),
       releasePool_(std::move(releasePool)),
+      maintenancePool_(std::move(maintenancePool)),
       auth_(std::move(auth)),
       supportMultiRefCount_(supportMultiRefCount),
       scaleInDraining_(std::move(scaleInDraining))
@@ -307,6 +309,7 @@ ShmSession::ShmSession(HostPort workerAddr, std::shared_ptr<WorkerRpcClient> rpc
 
 Status ShmSession::Create(const HostPort &workerAddr, const std::shared_ptr<WorkerRpcClient> &rpcClient,
                           const TransportRequestContext &context, std::weak_ptr<ThreadPool> releasePool,
+                          std::weak_ptr<ThreadPool> maintenancePool,
                           std::shared_ptr<std::atomic<bool>> scaleInDraining,
                           const std::shared_ptr<HostMemoryPinManager> &hostMemoryPinManager,
                           std::shared_ptr<ShmSession> &session, TransportPhaseLatencyRecorder *recorder)
@@ -337,7 +340,8 @@ Status ShmSession::Create(const HostPort &workerAddr, const std::shared_ptr<Work
         std::make_shared<MmapManager>(fdChannel, response.enable_huge_tlb(), hostMemoryPinManager);
     auto candidate = std::shared_ptr<ShmSession>(
         new ShmSession(workerAddr, rpcClient, std::move(fdChannel), std::move(mmapManager), response.client_id(),
-                       response.worker_start_id(), response.lock_id(), std::move(releasePool), context,
+                       response.worker_start_id(), response.lock_id(), std::move(releasePool),
+                       std::move(maintenancePool), context,
                        response.support_multi_shm_ref_count(), std::move(scaleInDraining)));
     const uint64_t deadTimeoutSeconds =
         std::max<uint64_t>(response.client_dead_timeout_s(), SHM_MAINTENANCE_MIN_INTERVAL_S);
@@ -702,19 +706,24 @@ Status ShmSession::ScheduleMaintenance()
             if (session == nullptr || !session->IsAlive()) {
                 return;
             }
-            auto pool = session->releasePool_.lock();
-            if (pool == nullptr) {
-                session->Close(false);
-                return;
-            }
-            try {
-                pool->Execute([session]() { session->RunMaintenance(); });
-            } catch (const std::exception &e) {
-                LOG(WARNING) << "Submit routed SHM maintenance failed: " << e.what();
-                session->Close(false);
-            }
+            session->SubmitMaintenance();
         },
         timer);
+}
+
+void ShmSession::SubmitMaintenance()
+{
+    auto pool = maintenancePool_.lock();
+    if (pool == nullptr) {
+        Close(false);
+        return;
+    }
+    try {
+        pool->Execute([session = shared_from_this()] { session->RunMaintenance(); });
+    } catch (const std::exception &e) {
+        LOG(WARNING) << "Submit routed SHM maintenance failed: " << e.what();
+        Close(false);
+    }
 }
 
 void ShmSession::RunMaintenance()
@@ -763,9 +772,10 @@ void ShmSession::RunMaintenance()
 
 ShmConnection::ShmConnection(HostPort workerAddr, std::shared_ptr<WorkerRpcClient> rpcClient,
                              std::weak_ptr<ThreadPool> releasePool,
-                             std::shared_ptr<HostMemoryPinManager> hostMemoryPinManager)
+                             std::shared_ptr<HostMemoryPinManager> hostMemoryPinManager,
+                             std::weak_ptr<ThreadPool> maintenancePool)
     : workerAddr_(std::move(workerAddr)), rpcClient_(std::move(rpcClient)), releasePool_(std::move(releasePool)),
-      hostMemoryPinManager_(std::move(hostMemoryPinManager))
+      maintenancePool_(std::move(maintenancePool)), hostMemoryPinManager_(std::move(hostMemoryPinManager))
 {
 }
 
@@ -925,8 +935,8 @@ Status ShmConnection::AcquireImpl(const TransportRequestContext &context, bool w
 
     std::shared_ptr<ShmSession> candidate;
     const auto connectBegin = std::chrono::steady_clock::now();
-    Status result = ShmSession::Create(workerAddr_, rpcClient_, context, releasePool_, scaleInDraining_,
-                                       hostMemoryPinManager_, candidate, recorder);
+    Status result = ShmSession::Create(workerAddr_, rpcClient_, context, releasePool_, maintenancePool_,
+                                       scaleInDraining_, hostMemoryPinManager_, candidate, recorder);
     const auto connectUs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
                                                     std::chrono::steady_clock::now() - connectBegin)
                                                     .count());
