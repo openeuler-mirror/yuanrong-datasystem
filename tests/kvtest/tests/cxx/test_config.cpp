@@ -340,7 +340,53 @@ TEST(LoadConfig_TestMode_SetLocal) {
     ASSERT_EQ(cfg.testMode, TestMode::SET_LOCAL);
     ASSERT_EQ(cfg.workerMemoryMb, 4096);
     ASSERT_EQ(cfg.numThreads, 4);
+    ASSERT_EQ(cfg.numClients, 1);
     CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_BenchmarkNumClients) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"set_local","worker_memory_mb":4096,
+        "num_clients":3,"num_threads":8
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.numClients, 3);
+    ASSERT_EQ(cfg.numThreads, 8);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_BenchmarkRejectsInvalidNumClients) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"set_local","worker_memory_mb":4096,"num_clients":0
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_BenchmarkRejectsNumClientsForLegacyModes) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"get_cross_node","worker_memory_mb":4096,
+        "num_clients":2,"remote_worker":{"host":"127.0.0.1","port":31501}
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_BenchmarkRejectsNegativeLimits) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"set_local","worker_memory_mb":4096,"duration_seconds":-1
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
     std::remove(path.c_str());
 }
 

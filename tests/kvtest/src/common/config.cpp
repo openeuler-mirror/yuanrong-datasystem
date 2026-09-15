@@ -311,6 +311,8 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
             cfg.testMode = ParseTestMode(j["test_mode"].get<std::string>());
         if (j.contains("worker_memory_mb"))
             cfg.workerMemoryMb = j["worker_memory_mb"];
+        if (j.contains("num_clients"))
+            cfg.numClients = j["num_clients"];
         if (j.contains("duration_seconds"))
             cfg.durationSeconds = j["duration_seconds"];
         if (j.contains("total_rounds"))
@@ -567,6 +569,25 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
             SLOG_ERROR("worker_memory_mb required for benchmark mode");
             return false;
         }
+        if (cfg.numClients <= 0) {
+            SLOG_ERROR("num_clients must be > 0 for benchmark mode, got " << cfg.numClients);
+            return false;
+        }
+        if (cfg.numThreads > std::numeric_limits<int>::max() / cfg.numClients) {
+            SLOG_ERROR("num_clients * num_threads exceeds the supported concurrency range");
+            return false;
+        }
+        if (cfg.durationSeconds < 0 || cfg.totalRounds < 0) {
+            SLOG_ERROR("duration_seconds and total_rounds must be >= 0");
+            return false;
+        }
+        const bool interfaceMode = cfg.testMode == TestMode::SET_LOCAL || cfg.testMode == TestMode::SET_REMOTE
+                                   || cfg.testMode == TestMode::GET_LOCAL
+                                   || cfg.testMode == TestMode::GET_REMOTE_DIRECT;
+        if (!interfaceMode && cfg.numClients != 1) {
+            SLOG_ERROR("num_clients is supported only by set_local, set_remote, get_local, and get_remote_direct");
+            return false;
+        }
         if (NeedsRemoteWorker(cfg.testMode) && cfg.remoteWorker.host.empty()) {
             SLOG_ERROR("remote_worker required for test_mode " << static_cast<int>(cfg.testMode));
             return false;
@@ -648,7 +669,8 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
         static_assert(sizeof(modeNames) / sizeof(modeNames[0]) == static_cast<int>(TestMode::MGET_REMOTE_CROSS) + 1,
                       "modeNames must cover all TestMode values");
         log << ", test_mode=" << modeNames[static_cast<int>(cfg.testMode)]
-            << ", worker_memory_mb=" << cfg.workerMemoryMb << ", num_threads=" << cfg.numThreads
+            << ", worker_memory_mb=" << cfg.workerMemoryMb << ", num_clients=" << cfg.numClients
+            << ", threads_per_client=" << cfg.numThreads
             << ", total_rounds=" << cfg.totalRounds << ", duration_seconds=" << cfg.durationSeconds
             << ", round_cleanup_wait_ms=" << cfg.roundCleanupWaitMs << ", set_api=" << cfg.setApi
             << ", cleanup_method=" << cfg.cleanupMethod;

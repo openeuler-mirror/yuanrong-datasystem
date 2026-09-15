@@ -4,7 +4,9 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -12,6 +14,8 @@
 #include <vector>
 #include "common/simple_log.h"
 #include "common/config.h"
+#include "benchmark/benchmark_result.h"
+#include "vendor/TDigest.h"
 
 // Key calculation utilities
 int CalcKeysPerRound(int workerMemoryMb, uint64_t dataSize);
@@ -45,6 +49,143 @@ struct Percentiles {
     double p999 = 0;
     double p9999 = 0;
     double max = 0;
+};
+
+inline constexpr size_t BENCHMARK_TDIGEST_COMPRESSION = 10000;
+inline constexpr int64_t BENCHMARK_MILLISECONDS_PER_SECOND = 1000;
+inline constexpr int64_t BENCHMARK_NANOSECONDS_PER_MICROSECOND = 1000;
+inline constexpr int64_t BENCHMARK_NANOSECONDS_PER_MILLISECOND = 1'000'000;
+inline constexpr int64_t BENCHMARK_NANOSECONDS_PER_SECOND = 1'000'000'000;
+inline constexpr uint64_t BENCHMARK_BYTES_PER_MIB = 1024 * 1024;
+
+/** @brief Calculate successful operations per second from a measured wall-clock span. */
+inline double CalcBenchmarkQps(int64_t successCount, double elapsedMs)
+{
+    return elapsedMs > 0
+               ? static_cast<double>(successCount) * BENCHMARK_MILLISECONDS_PER_SECOND / elapsedMs
+               : 0;
+}
+
+/** @brief Calculate successful payload throughput in MiB/s from the same measured span. */
+inline double CalcBenchmarkThroughputMiBps(int64_t successCount, uint64_t dataSize, double elapsedMs)
+{
+    return elapsedMs > 0
+               ? static_cast<double>(successCount) * dataSize * BENCHMARK_MILLISECONDS_PER_SECOND
+                     / (elapsedMs * BENCHMARK_BYTES_PER_MIB)
+               : 0;
+}
+
+/** @brief Accumulates bounded-memory latency and operation counts for one measured phase. */
+struct StreamingPhaseResult {
+    int64_t successCount = 0;
+    int64_t failureCount = 0;
+    int64_t notFoundCount = 0;
+    int64_t timeoutCount = 0;
+    double totalLatencyMs = 0;
+    double minLatencyMs = std::numeric_limits<double>::max();
+    double maxLatencyMs = 0;
+    int64_t firstStartNs = 0;
+    int64_t lastEndNs = 0;
+    tdigest::TDigest latencyDigest{ BENCHMARK_TDIGEST_COMPRESSION };
+
+    StreamingPhaseResult() = default;
+    StreamingPhaseResult(const StreamingPhaseResult &) = delete;
+    StreamingPhaseResult &operator=(const StreamingPhaseResult &) = delete;
+    StreamingPhaseResult(StreamingPhaseResult &&) = default;
+    StreamingPhaseResult &operator=(StreamingPhaseResult &&) = default;
+
+    /** @brief Record one SDK operation. */
+    void Record(const BenchmarkOpResult &op, double latencyMs, int64_t startNs, int64_t endNs)
+    {
+        if (firstStartNs == 0 || startNs < firstStartNs) {
+            firstStartNs = startNs;
+        }
+        lastEndNs = std::max(lastEndNs, endNs);
+        if (!op.success) {
+            ++failureCount;
+            if (op.notFound) {
+                ++notFoundCount;
+            }
+            if (op.timeout) {
+                ++timeoutCount;
+            }
+            return;
+        }
+        ++successCount;
+        totalLatencyMs += latencyMs;
+        minLatencyMs = std::min(minLatencyMs, latencyMs);
+        maxLatencyMs = std::max(maxLatencyMs, latencyMs);
+        latencyDigest.add(latencyMs);
+    }
+
+    /** @brief Record one batch as per-key samples. */
+    void RecordBatch(const BenchmarkOpResult &op, int64_t count, double batchLatencyMs, int64_t startNs, int64_t endNs)
+    {
+        if (count <= 0) {
+            return;
+        }
+        if (firstStartNs == 0 || startNs < firstStartNs) {
+            firstStartNs = startNs;
+        }
+        lastEndNs = std::max(lastEndNs, endNs);
+        if (!op.success) {
+            failureCount += count;
+            return;
+        }
+        const double perKeyLatencyMs = batchLatencyMs / static_cast<double>(count);
+        successCount += count;
+        totalLatencyMs += batchLatencyMs;
+        minLatencyMs = std::min(minLatencyMs, perKeyLatencyMs);
+        maxLatencyMs = std::max(maxLatencyMs, perKeyLatencyMs);
+        latencyDigest.add(perKeyLatencyMs, static_cast<double>(count));
+    }
+
+    /** @brief Merge another phase result into this result. */
+    void Merge(StreamingPhaseResult &other)
+    {
+        successCount += other.successCount;
+        failureCount += other.failureCount;
+        notFoundCount += other.notFoundCount;
+        timeoutCount += other.timeoutCount;
+        totalLatencyMs += other.totalLatencyMs;
+        if (other.successCount > 0) {
+            minLatencyMs = std::min(minLatencyMs, other.minLatencyMs);
+            maxLatencyMs = std::max(maxLatencyMs, other.maxLatencyMs);
+        }
+        if (firstStartNs == 0 || (other.firstStartNs != 0 && other.firstStartNs < firstStartNs)) {
+            firstStartNs = other.firstStartNs;
+        }
+        lastEndNs = std::max(lastEndNs, other.lastEndNs);
+        other.latencyDigest.compress();
+        latencyDigest.merge(&other.latencyDigest);
+    }
+
+    /** @brief Return the wall-clock span from the first request start to the last request end. */
+    double ElapsedMs() const
+    {
+        return firstStartNs == 0
+                   ? 0
+                   : static_cast<double>(lastEndNs - firstStartNs) / BENCHMARK_NANOSECONDS_PER_MILLISECOND;
+    }
+
+    /** @brief Return latency statistics for successful operations. */
+    Percentiles GetPercentiles()
+    {
+        Percentiles result;
+        if (successCount == 0) {
+            return result;
+        }
+        latencyDigest.compress();
+        result.avg = totalLatencyMs / static_cast<double>(successCount);
+        result.min = minLatencyMs;
+        result.p50 = latencyDigest.quantile(0.5);
+        result.p90 = latencyDigest.quantile(0.9);
+        result.p99 = latencyDigest.quantile(0.99);
+        result.p999 = latencyDigest.quantile(0.999);
+        result.p9999 = latencyDigest.quantile(0.9999);
+        result.max = maxLatencyMs;
+        return result;
+    }
 };
 
 inline Percentiles ComputePercentiles(std::vector<double> latencies) {

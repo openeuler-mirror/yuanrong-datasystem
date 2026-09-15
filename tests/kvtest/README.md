@@ -189,7 +189,8 @@ curl -X POST http://127.0.0.1:9000/stop
 
 ## Benchmark Set/Get 模式
 
-用于精确测量 Set/Get 吞吐和延迟，支持 8 种测试模式：
+用于精确测量 Set/Get 吞吐和延迟。`set_local`、`set_remote`、`get_local`、`get_remote_direct` 支持
+多 Client 同步单接口测量；其他 Benchmark 模式保留原有轮次流程。
 
 ```bash
 # 本地 Set 吞吐基线（8线程，5轮）
@@ -199,6 +200,7 @@ cat > config/bench.json << 'EOF'
   "listen_port": 9000,
   "test_mode": "set_local",
   "worker_memory_mb": 4096,
+  "num_clients": 1,
   "num_threads": 8,
   "total_rounds": 5,
   "data_sizes": ["8MB"],
@@ -214,12 +216,13 @@ LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH ./kvtest config/bench.json
 
 **Set API：** `string_view`（直接写入）/ `create_buffer`（SHM Buffer + latch）/ `create_buffer_raw`（SHM Buffer，无锁 memcpy）
 
-**输出：** `benchmark_phases.csv`（per-round per-phase 延迟和 QPS）
+**输出：** 上述四种单接口模式生成 `benchmark_phases.csv`（聚合接口指标）和
+`benchmark_clients.csv`（Client 偏斜诊断）；聚合 CSV 是性能结论的唯一口径。
 
 ## 测试
 
 ```bash
-# C++ 单元测试 (68) + Python 单元测试 (53)
+# C++ + Python 单元测试
 cd tests/kvtest
 bash tests/run_all_tests.sh
 

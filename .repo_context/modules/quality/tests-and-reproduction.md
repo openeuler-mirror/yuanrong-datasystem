@@ -618,6 +618,16 @@ python -m unittest test_multi_key_prefetch.TestDeviceOcClientMethods.test_device
 
 Regression entrypoints: `python3 -m unittest discover -s tests/kvtest/tests/python -p test_log_collect.py` plus `test_deploy_worker.py`, `test_deploy_client.py`, and `test_deploy_common.py`. These checks exercise temporary log archives and mocked transport orchestration; they do not substitute for a real large-cluster load test. Collection is an operator tool, outside the request hot path, with no service persistence or recovery format changes.
 
+### kvtest synchronized single-interface benchmark
+
+`set_local`, `set_remote`, `get_local`, and `get_remote_direct` use `num_clients` measured processes with
+`num_threads` threads sharing each process-local KVClient. Get preloads once and then runs a synchronized Get-only
+window; Set alternates synchronized Set and cleanup phases. `benchmark_phases.csv` is the aggregate source of truth,
+while `benchmark_clients.csv` diagnoses Client start or throughput skew. Regression coverage starts with
+`tests/kvtest/tests/cxx/test_benchmark.cpp`, `test_config.cpp`, and `tests/python/test_deploy_client.py`; runtime transport
+and synchronization claims still require the focused benchmark integration script. The global data set is partitioned,
+not multiplied by Client count, and must contain at least one key per measured thread.
+
 
 Each collect additionally archives reproduction configuration: Client copies only its input deploy/config files into the output, retaining their parent directory names (for example `aaa/deploy.json` and `aaa/config.json`), without copying other directory contents; Worker saves each selected Pod's remote config as `worker_config.json` in that Pod's log directory. Log filters do not filter this configuration archive. Existing default log selection, concurrency, and summary behavior remain unchanged.
 

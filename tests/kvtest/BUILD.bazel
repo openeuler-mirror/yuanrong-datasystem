@@ -98,6 +98,7 @@ cc_library(
         "src/rpc/brpc_server.cpp",
         "src/rpc/peer_client.cpp",
         "src/benchmark/benchmark_runner.cpp",
+        "src/benchmark/interface_benchmark.cpp",
     ],
     hdrs = [
         "src/common/config.h",
@@ -119,6 +120,8 @@ cc_library(
         "src/rpc/brpc_server.h",
         "src/rpc/peer_client.h",
         "src/benchmark/benchmark_runner.h",
+        "src/benchmark/benchmark_result.h",
+        "src/benchmark/interface_benchmark.h",
         "src/benchmark/kv_client_adapter.h",
         "src/benchmark/subprocess.h",
         "src/vendor/httplib.h",

@@ -22,13 +22,15 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
 // --- Pipe protocol types ---
 
 enum ChildCmd : int32_t { CMD_EXIT = 0, CMD_RUN_SET = 1, CMD_RUN_GET = 2,
-                          CMD_RUN_DEL = 3, CMD_RUN_MSET = 4, CMD_RUN_MGET = 5 };
+                          CMD_RUN_DEL = 3, CMD_RUN_MSET = 4, CMD_RUN_MGET = 5,
+                          CMD_PREPARE_SET = 6, CMD_PREPARE_GET = 7, CMD_PREPARE_DEL = 8 };
 enum ChildRole : int32_t { ROLE_SET = 0, ROLE_GET = 1, ROLE_DEL = 2 };
 
 constexpr char BENCHMARK_CHILD_MODE[] = "--benchmark-child";
@@ -39,6 +41,37 @@ struct CmdMsg {
     int32_t cmd = 0;
     int32_t round = 0;
     int32_t numThreads = 0;
+    int32_t startKey = 0;
+    int32_t numKeys = 0;
+    int32_t maxPasses = 1;
+    int32_t oneOpPerThread = 0;
+};
+
+struct ArmMsg {
+    int64_t startAtNs = 0;
+    int64_t stopAtNs = 0;
+};
+
+struct ReadyMsg {
+    int32_t ready = 0;
+};
+
+struct StreamingResultHeader {
+    int64_t successCount = 0;
+    int64_t failureCount = 0;
+    int64_t notFoundCount = 0;
+    int64_t timeoutCount = 0;
+    double totalLatencyMs = 0;
+    double minLatencyMs = 0;
+    double maxLatencyMs = 0;
+    int64_t firstStartNs = 0;
+    int64_t lastEndNs = 0;
+    uint64_t centroidCount = 0;
+};
+
+struct CentroidMsg {
+    double mean = 0;
+    double weight = 0;
 };
 
 struct ResultMsg {
@@ -69,6 +102,7 @@ inline bool WriteExact(int fd, const void *buf, size_t len) {
     size_t written = 0;
     while (written < len) {
         ssize_t n = write(fd, p + written, len - written);
+        if (n < 0 && errno == EINTR) continue;
         if (n <= 0) return false;
         written += static_cast<size_t>(n);
     }
@@ -80,6 +114,7 @@ inline bool ReadExact(int fd, void *buf, size_t len) {
     size_t got = 0;
     while (got < len) {
         ssize_t n = read(fd, p + got, len - got);
+        if (n < 0 && errno == EINTR) continue;
         if (n <= 0) return false;
         got += static_cast<size_t>(n);
     }
@@ -286,6 +321,224 @@ inline PhaseResult RunPhaseMultiThread(
     return merged;
 }
 
+/** @brief Return the current steady-clock timestamp in nanoseconds. */
+inline int64_t SteadyNowNs()
+{
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+/** @brief Invoke the configured single-key Set API. */
+inline BenchmarkOpResult RunStreamingSet(KVClientAdapter *adapter, const Config &cfg, const std::string &key,
+                                         const std::string &data)
+{
+    if (cfg.setApi == "string_view") {
+        return adapter->SetWithStatus(key, data);
+    }
+    if (cfg.setApi == "create_buffer") {
+        return adapter->CreateAndSetWithStatus(key, data.size(), data);
+    }
+    return adapter->CreateAndSetRawWithStatus(key, data.size(), data);
+}
+
+/** @brief Delete one thread's key partition in bounded batches. */
+inline void RunStreamingDelete(KVClientAdapter *adapter, const std::vector<std::string> &keys, int startKey,
+                               int numKeys, StreamingPhaseResult &result)
+{
+    constexpr int DELETE_BATCH_SIZE = 1000;
+    constexpr int DELETE_MAX_ATTEMPTS = 3;
+    constexpr int DELETE_RETRY_WAIT_MS = 100;
+    for (int offset = 0; offset < numKeys; offset += DELETE_BATCH_SIZE) {
+        const int count = std::min(DELETE_BATCH_SIZE, numKeys - offset);
+        std::vector<std::string> batchKeys;
+        batchKeys.reserve(count);
+        for (int i = 0; i < count; ++i) {
+            batchKeys.push_back(keys[startKey + offset + i]);
+        }
+        const int64_t startNs = SteadyNowNs();
+        BenchmarkOpResult op{ false, false, false };
+        for (int attempt = 0; attempt < DELETE_MAX_ATTEMPTS && !op.success; ++attempt) {
+            std::vector<std::string> failedKeys;
+            op = adapter->DelWithStatus(batchKeys, &failedKeys);
+            if (!failedKeys.empty()) {
+                batchKeys = std::move(failedKeys);
+            }
+            if (!op.success && attempt + 1 < DELETE_MAX_ATTEMPTS) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(DELETE_RETRY_WAIT_MS));
+            }
+        }
+        const int64_t endNs = SteadyNowNs();
+        result.RecordBatch(op, count,
+                           static_cast<double>(endNs - startNs) / BENCHMARK_NANOSECONDS_PER_MILLISECOND,
+                           startNs, endNs);
+    }
+}
+
+/** @brief Execute one thread's scheduled benchmark partition. */
+inline void RunStreamingThread(KVClientAdapter *adapter, const Config &cfg, const CmdMsg &cmd, int threadId,
+                               const ArmMsg &arm, const std::vector<std::string> &keys,
+                               StreamingPhaseResult &result, const std::string &data)
+{
+    auto range = ThreadKeyRange(cmd.numKeys, cmd.numThreads, threadId);
+    if (range.second == 0) {
+        return;
+    }
+    const int startKey = range.first;
+    if (cmd.cmd == CMD_PREPARE_DEL) {
+        RunStreamingDelete(adapter, keys, startKey, range.second, result);
+        return;
+    }
+
+    const int passLimit = cmd.oneOpPerThread != 0 ? 1 : cmd.maxPasses;
+    for (int pass = 0; passLimit == 0 || pass < passLimit; ++pass) {
+        const int keyCount = cmd.oneOpPerThread != 0 ? 1 : range.second;
+        for (int i = 0; i < keyCount; ++i) {
+            const int64_t startNs = SteadyNowNs();
+            if (arm.stopAtNs > 0 && startNs >= arm.stopAtNs) {
+                return;
+            }
+            const std::string &key = keys[startKey + i];
+            auto op = cmd.cmd == CMD_PREPARE_SET ? RunStreamingSet(adapter, cfg, key, data)
+                                                 : adapter->GetWithStatus(key);
+            const int64_t endNs = SteadyNowNs();
+            result.Record(op, static_cast<double>(endNs - startNs) / BENCHMARK_NANOSECONDS_PER_MILLISECOND,
+                          startNs, endNs);
+        }
+    }
+}
+
+/** @brief Serialize one bounded-memory phase result to the parent. */
+inline bool WriteStreamingResult(int fd, StreamingPhaseResult &result)
+{
+    result.latencyDigest.compress();
+    const auto &centroids = result.latencyDigest.processed();
+    StreamingResultHeader header;
+    header.successCount = result.successCount;
+    header.failureCount = result.failureCount;
+    header.notFoundCount = result.notFoundCount;
+    header.timeoutCount = result.timeoutCount;
+    header.totalLatencyMs = result.totalLatencyMs;
+    header.minLatencyMs = result.successCount == 0 ? 0 : result.minLatencyMs;
+    header.maxLatencyMs = result.maxLatencyMs;
+    header.firstStartNs = result.firstStartNs;
+    header.lastEndNs = result.lastEndNs;
+    header.centroidCount = centroids.size();
+    if (!WriteExact(fd, &header, sizeof(header))) {
+        return false;
+    }
+    for (const auto &centroid : centroids) {
+        CentroidMsg msg{ centroid.mean(), centroid.weight() };
+        if (!WriteExact(fd, &msg, sizeof(msg))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+struct ScheduledPhaseGate {
+    std::mutex mutex;
+    std::condition_variable condition;
+    int readyThreads = 0;
+    bool armed = false;
+    ArmMsg arm;
+};
+
+/** @brief Build this Client's key partition before entering the measurement window. */
+inline std::vector<std::string> BuildScheduledKeys(const Config &cfg, const CmdMsg &cmd)
+{
+    std::vector<std::string> keys;
+    keys.reserve(cmd.numKeys);
+    for (int i = 0; i < cmd.numKeys; ++i) {
+        keys.push_back(MakeBenchKey(cfg.instanceId, cmd.round, cmd.startKey + i));
+    }
+    return keys;
+}
+
+/** @brief Start workers and hold them at the local ready gate. */
+inline bool StartScheduledThreads(KVClientAdapter *adapter, const Config &cfg, const CmdMsg &cmd,
+                                  const std::vector<std::string> &keys, const std::string &data,
+                                  ScheduledPhaseGate &gate, std::vector<StreamingPhaseResult> &results,
+                                  std::vector<std::thread> &threads)
+{
+    try {
+        for (int threadId = 0; threadId < cmd.numThreads; ++threadId) {
+            threads.emplace_back([&, threadId]() {
+                std::unique_lock<std::mutex> lock(gate.mutex);
+                ++gate.readyThreads;
+                gate.condition.notify_all();
+                gate.condition.wait(lock, [&] { return gate.armed; });
+                lock.unlock();
+                std::this_thread::sleep_until(
+                    std::chrono::steady_clock::time_point(std::chrono::nanoseconds(gate.arm.startAtNs)));
+                RunStreamingThread(adapter, cfg, cmd, threadId, gate.arm, keys, results[threadId], data);
+            });
+        }
+        return true;
+    } catch (const std::system_error &error) {
+        SLOG_ERROR("Failed to start benchmark thread: " << error.what());
+        {
+            std::lock_guard<std::mutex> lock(gate.mutex);
+            gate.arm.startAtNs = SteadyNowNs();
+            gate.arm.stopAtNs = gate.arm.startAtNs;
+            gate.armed = true;
+        }
+        gate.condition.notify_all();
+        for (auto &thread : threads) {
+            thread.join();
+        }
+        return false;
+    }
+}
+
+/** @brief Complete the child ready/arm handshake and release local workers. */
+inline bool ArmScheduledThreads(int readFd, int writeFd, const CmdMsg &cmd, ScheduledPhaseGate &gate)
+{
+    {
+        std::unique_lock<std::mutex> lock(gate.mutex);
+        gate.condition.wait(lock, [&] { return gate.readyThreads == cmd.numThreads; });
+    }
+    ReadyMsg ready{ 1 };
+    const bool protocolOk = WriteExact(writeFd, &ready, sizeof(ready))
+                            && ReadExact(readFd, &gate.arm, sizeof(gate.arm));
+    if (!protocolOk) {
+        gate.arm.startAtNs = SteadyNowNs();
+        gate.arm.stopAtNs = gate.arm.startAtNs;
+    }
+    {
+        std::lock_guard<std::mutex> lock(gate.mutex);
+        gate.armed = true;
+    }
+    gate.condition.notify_all();
+    return protocolOk;
+}
+
+/** @brief Run one prepared phase after every local thread and Client is ready. */
+inline bool RunScheduledPhase(KVClientAdapter *adapter, const Config &cfg, const CmdMsg &cmd, int readFd, int writeFd,
+                              const std::string &data)
+{
+    auto keys = BuildScheduledKeys(cfg, cmd);
+    ScheduledPhaseGate gate;
+    std::vector<StreamingPhaseResult> threadResults(cmd.numThreads);
+    std::vector<std::thread> threads;
+    threads.reserve(cmd.numThreads);
+    if (!StartScheduledThreads(adapter, cfg, cmd, keys, data, gate, threadResults, threads)) {
+        return false;
+    }
+    const bool protocolOk = ArmScheduledThreads(readFd, writeFd, cmd, gate);
+    for (auto &thread : threads) {
+        thread.join();
+    }
+    if (!protocolOk) {
+        return false;
+    }
+    StreamingPhaseResult merged;
+    for (auto &result : threadResults) {
+        merged.Merge(result);
+    }
+    return WriteStreamingResult(writeFd, merged);
+}
+
 inline ResultMsg PhaseResultToMsg(const PhaseResult &result) {
     ResultMsg msg{};
     msg.successCount = result.successCount;
@@ -312,8 +565,7 @@ inline ResultMsg PhaseResultToMsg(const PhaseResult &result) {
 
 inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRole role) {
     SetKvtestClientInitialized(false);
-    // Ignore SIGINT/SIGPIPE — parent controls shutdown via CMD_EXIT
-    signal(SIGINT, SIG_IGN);
+    // The child keeps SIGINT so a terminal stop also interrupts an unbounded phase.
     signal(SIGPIPE, SIG_IGN);
 
     const char *roleName = GetChildRoleName(role);
@@ -363,7 +615,10 @@ inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRo
     KVClientAdapter adapter(client, param);
 
     uint64_t dataSize = cfg.dataSizes[0];
-    std::string data(dataSize, 'A');
+    std::string data;
+    if (role != ROLE_DEL) {
+        data.assign(dataSize, 'A');
+    }
     int keysPerRound = CalcKeysPerRound(cfg.workerMemoryMb, dataSize);
 
     // 5. Command loop
@@ -371,6 +626,13 @@ inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRo
         CmdMsg cmd{};
         if (!ReadExact(readFd, &cmd, sizeof(cmd))) break;
         if (cmd.cmd == CMD_EXIT) break;
+
+        if (cmd.cmd == CMD_PREPARE_SET || cmd.cmd == CMD_PREPARE_GET || cmd.cmd == CMD_PREPARE_DEL) {
+            if (!RunScheduledPhase(&adapter, cfg, cmd, readFd, writeFd, data)) {
+                break;
+            }
+            continue;
+        }
 
         ChildCmd phase = static_cast<ChildCmd>(cmd.cmd);
         PhaseResult result;

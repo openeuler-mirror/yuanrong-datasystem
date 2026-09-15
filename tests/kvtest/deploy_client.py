@@ -1509,6 +1509,7 @@ def _build_config(mode, args):
     if mode == 'benchmark':
         cfg['test_mode'] = args.test_mode
         cfg['worker_memory_mb'] = args.worker_memory_mb
+        cfg['num_clients'] = args.num_clients
         cfg['set_api'] = args.set_api
         cfg['cleanup_method'] = args.cleanup_method
         if args.total_rounds > 0:
@@ -1761,8 +1762,10 @@ def _add_gen_config_args(p):
                    help='Benchmark test mode (required for benchmark mode)')
     p.add_argument('--worker-memory-mb', type=int, default=0,
                    help='Worker shared memory in MB (required for benchmark mode)')
+    p.add_argument('--num-clients', type=int, default=1,
+                   help='Measured KVClient processes per benchmark instance (default: 1)')
     p.add_argument('--set-api', default='string_view',
-                   choices=['string_view', 'create_buffer'],
+                   choices=['string_view', 'create_buffer', 'create_buffer_raw'],
                    help='Set API path (default: string_view)')
     p.add_argument('--set-ratio', type=float, default=0.5,
                    help='Set thread ratio for mixed modes (default: 0.5)')

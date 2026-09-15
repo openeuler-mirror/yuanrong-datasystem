@@ -258,6 +258,16 @@ class TestGenConfig(unittest.TestCase):
         self.assertEqual(config['num_threads'], 4)
         self.assertNotIn('num_total_threads', config)
 
+    def test_benchmark_emits_client_concurrency(self):
+        """Benchmark config should separate Client count from threads per Client."""
+        _, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+            '--num-clients', '3',
+            '--num-threads', '8',
+        ])
+        self.assertEqual(config['num_clients'], 3)
+        self.assertEqual(config['num_threads'], 8)
+
     def test_pipeline_write_only_doubles_total_threads(self):
         """An explicit Pipeline write count should derive twice as many total threads."""
         _, config = self._run_gen_config([

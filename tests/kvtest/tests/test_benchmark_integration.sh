@@ -121,6 +121,10 @@ EOFCFG
 run_test_case() {
     local test_id=$1 test_mode=$2 set_api=$3 cleanup=$4 threads=$5 mem_mb=$6
     local is_get=$([[ "$test_mode" == get_* ]] && echo 1 || echo 0)
+    local is_interface=0
+    case "$test_mode" in
+        set_local|set_remote|get_local|get_remote_direct) is_interface=1 ;;
+    esac
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -166,13 +170,36 @@ run_test_case() {
         pass=false
     fi
 
-    # 2. Parse "Benchmark finished" line
+    # 2. Validate the completion summary and measured operation count
     local finished_line
-    finished_line=$(grep "Benchmark finished:" "$local_dir/run.log" 2>/dev/null | tail -1)
-    if [ -z "$finished_line" ]; then
-        echo "  FAIL: no 'Benchmark finished' line found"
-        pass=false
+    if [ "$is_interface" -eq 1 ]; then
+        local operation="set"
+        if [ "$is_get" -eq 1 ]; then
+            operation="get"
+        fi
+        finished_line=$(grep -i "${operation} benchmark finished:" "$local_dir/run.log" 2>/dev/null | tail -1 || true)
+        local keys_per_round
+        if [ $# -eq 6 ]; then
+            keys_per_round=$(calc_keys_per_round "$mem_mb")
+        else
+            keys_per_round=$(calc_keys_per_round 4096)
+        fi
+        local expected_success=$(( keys_per_round * TOTAL_ROUNDS ))
+        local actual_success actual_failures
+        actual_success=$(echo "$finished_line" | grep -oP 'success=\K[0-9]+' || true)
+        actual_failures=$(echo "$finished_line" | grep -oP 'failures=\K[0-9]+' || true)
+        echo "  Measured $operation: success=${actual_success:-missing} failures=${actual_failures:-missing}"
+        if [ -z "$finished_line" ] || [ "${actual_success:-0}" -ne "$expected_success" ] \
+            || [ "${actual_failures:-1}" -ne 0 ]; then
+            echo "  FAIL: expected $expected_success successful $operation operations and no failures"
+            pass=false
+        fi
     else
+        finished_line=$(grep "Benchmark finished:" "$local_dir/run.log" 2>/dev/null | tail -1 || true)
+        if [ -z "$finished_line" ]; then
+            echo "  FAIL: no 'Benchmark finished' line found"
+            pass=false
+        else
         local actual_rounds actual_set actual_get actual_del
         actual_rounds=$(echo "$finished_line" | grep -oP 'rounds=\K[0-9]+')
         actual_set=$(echo "$finished_line" | grep -oP 'set=\K[0-9]+')
@@ -214,10 +241,20 @@ run_test_case() {
             echo "  FAIL: del count mismatch (expected=$expected_del actual=${actual_del:-0})"
             pass=false
         fi
+        fi
     fi
 
     # 3. Check benchmark_phases.csv exists and has data
     if [ -f "$local_dir/benchmark_phases.csv" ]; then
+        if [ "$is_interface" -eq 1 ]; then
+            local expected_header
+            expected_header="scope,round,operation,success,failures,elapsed_ms,qps,avg_ms,p50_ms,p99_ms,max_ms,"
+            expected_header+="throughput_mib_s,valid"
+            if [ "$(head -1 "$local_dir/benchmark_phases.csv")" != "$expected_header" ]; then
+                echo "  FAIL: unexpected aggregate CSV schema"
+                pass=false
+            fi
+        fi
         local rows
         rows=$(tail -n +2 "$local_dir/benchmark_phases.csv" | wc -l)
         echo "  CSV: $rows phase records"
@@ -229,15 +266,25 @@ run_test_case() {
         echo "  WARN: benchmark_phases.csv not found"
     fi
 
-    # 4. Latency sanity check from CSV
+    # 4. Latency sanity check from the measured operation row
     if [ -f "$local_dir/benchmark_phases.csv" ]; then
-        local set_avg
-        set_avg=$(tail -n +2 "$local_dir/benchmark_phases.csv" | awk -F, '$2=="set"{sum+=$4; cnt++} END{if(cnt>0) printf "%.1f", sum/cnt}')
-        if [ -n "$set_avg" ]; then
-            echo "  Set avg latency: ${set_avg}ms"
+        local operation_avg
+        operation_avg=$(awk -F, -v wanted="$([[ "$is_get" -eq 1 ]] && echo get || echo set)" '
+            NR == 1 {
+                for (i = 1; i <= NF; ++i) {
+                    if ($i == "operation" || $i == "phase") op_col = i
+                    if ($i == "avg_ms") avg_col = i
+                    if ($i == "scope") scope_col = i
+                }
+                next
+            }
+            $op_col == wanted && (scope_col == 0 || $scope_col == "total") { print $avg_col; exit }
+        ' "$local_dir/benchmark_phases.csv")
+        if [ -n "$operation_avg" ]; then
+            echo "  Operation avg latency: ${operation_avg}ms"
             # Basic sanity: avg should be positive and < 1s
-            if (( $(echo "$set_avg <= 0" | bc -l) )) || (( $(echo "$set_avg > 1000" | bc -l) )); then
-                echo "  WARN: set avg latency out of range: ${set_avg}ms"
+            if (( $(echo "$operation_avg <= 0" | bc -l) )) || (( $(echo "$operation_avg > 1000" | bc -l) )); then
+                echo "  WARN: operation avg latency out of range: ${operation_avg}ms"
             fi
         fi
     fi
