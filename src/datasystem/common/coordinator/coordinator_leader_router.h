@@ -102,6 +102,7 @@ private:
 
     struct CandidateAttemptResult {
         RpcResult rpc;
+        std::optional<Status> recoveryStatus;
         ResponseObservation observation{ ResponseObservation::ACCEPTED };
         bool hasResponse{ false };
         bool rpcAttempted{ false };

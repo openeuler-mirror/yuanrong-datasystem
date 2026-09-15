@@ -558,9 +558,9 @@ TEST(TopologyEngineTest, CoordinatorBootstrapReadFailurePreventsWatchRegistratio
     PutTopology(proxy, clusterName, MakeTopology());
     auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
     ASSERT_NE(engine, nullptr);
-    proxy.FailNextRangeForKey(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE);
+    proxy.FailNextRangeForKey(TopologyStorageKey(*keys), K_INVALID);
 
-    EXPECT_EQ(engine->Start().GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_EQ(engine->Start().GetCode(), K_INVALID);
     EXPECT_TRUE(proxy.WatchCalls().empty());
     EXPECT_FALSE(ingress.IsBound());
     EXPECT_EQ(engine->GetState(), TopologyEngineState::STOPPED);
@@ -617,6 +617,25 @@ TEST(TopologyEngineTest, ShutdownCancelsCoordinatorReadyWait)
     EXPECT_EQ(engine->GetState(), TopologyEngineState::STOPPED);
 }
 
+TEST(TopologyEngineTest, ShutdownCancelsCoordinatorTransportRetry)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "cancel-transport-retry";
+    auto keys = MakeKeys(clusterName);
+    auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
+    constexpr size_t persistentFailures = 1'000;
+    proxy.FailRangeForKeyTimes(TopologyStorageKey(*keys), K_RPC_DEADLINE_EXCEEDED, persistentFailures);
+
+    auto start = std::async(std::launch::async, [&] { return engine->Start(); });
+    ASSERT_EQ(start.wait_for(std::chrono::milliseconds(200)), std::future_status::timeout);
+
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+    EXPECT_EQ(start.get().GetCode(), K_SHUTTING_DOWN);
+    EXPECT_EQ(engine->GetState(), TopologyEngineState::STOPPED);
+}
+
 TEST(TopologyEngineTest, CoordinatorReadyWaitContinuesStartupAfterServing)
 {
     testing::FakeCoordinatorServiceProxy proxy;
@@ -631,6 +650,86 @@ TEST(TopologyEngineTest, CoordinatorReadyWaitContinuesStartupAfterServing)
     DS_ASSERT_OK(engine->Start());
     EXPECT_EQ(engine->GetState(), TopologyEngineState::RUNNING);
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, CoordinatorReadyWaitSurvivesTransientTimeout)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "recovery-timeout-repro";
+    auto keys = MakeKeys(clusterName);
+    PutTopology(proxy, clusterName, MakeTopology());
+    auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
+    ASSERT_NE(engine, nullptr);
+    const auto topologyKey = TopologyStorageKey(*keys);
+    std::atomic<size_t> reads{ 0 };
+    constexpr size_t timeoutRead = 2;
+    proxy.SetRangeEntryInterceptor([&](const std::string &key) {
+        if (key != topologyKey) {
+            return;
+        }
+        const auto read = ++reads;
+        if (read == 1) {
+            proxy.FailNextRangeForKey(key, K_NOT_READY);
+        } else if (read == timeoutRead) {
+            proxy.FailNextRangeForKey(key, K_RPC_DEADLINE_EXCEEDED);
+        }
+    });
+
+    const auto started = std::chrono::steady_clock::now();
+    const auto status = engine->Start();
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    proxy.SetRangeEntryInterceptor(nullptr);
+    EXPECT_TRUE(status.IsOk()) << "reads=" << reads.load() << " elapsed_ms="
+                              << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
+                              << " " << status.ToString();
+    EXPECT_EQ(engine->GetState(), TopologyEngineState::RUNNING);
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, CoordinatorReadyWaitRetriesInitialTransportFailure)
+{
+    for (const auto code : { K_RPC_DEADLINE_EXCEEDED, K_RPC_UNAVAILABLE, K_RPC_NETWORK_BLIP }) {
+        testing::FakeCoordinatorServiceProxy proxy;
+        TestWatchIngress ingress;
+        NoopTopologyCallbacks callbacks;
+        const std::string clusterName = "initial-transport-retry";
+        auto keys = MakeKeys(clusterName);
+        PutTopology(proxy, clusterName, MakeTopology());
+        auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
+        ASSERT_NE(engine, nullptr);
+        proxy.FailNextRangeForKey(TopologyStorageKey(*keys), code);
+
+        DS_ASSERT_OK(engine->Start());
+        EXPECT_EQ(engine->GetState(), TopologyEngineState::RUNNING);
+        DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+    }
+}
+
+TEST(TopologyEngineTest, CoordinatorReadyWaitBoundsPersistentTransportFailure)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "transport-retry-deadline";
+    auto keys = MakeKeys(clusterName);
+    TopologyEngine::Builder builder;
+    ConfigureBuilder(builder, proxy, ingress, callbacks, clusterName);
+    builder.SetCoordinatorReadyTimeout(std::chrono::seconds::zero());
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(builder.Build(engine));
+    constexpr size_t persistentFailures = 1'000;
+    proxy.FailRangeForKeyTimes(TopologyStorageKey(*keys), K_RPC_DEADLINE_EXCEEDED, persistentFailures);
+
+    const auto started = std::chrono::steady_clock::now();
+    const auto status = engine->Start();
+    constexpr auto maxWait = std::chrono::seconds(4);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, maxWait);
+    EXPECT_EQ(status.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_NE(status.ToString().find("Worker startup deadline"), std::string::npos);
+    EXPECT_EQ(engine->GetState(), TopologyEngineState::STOPPED);
+    EXPECT_TRUE(proxy.WatchCalls().empty());
 }
 
 TEST(TopologyEngineTest, StartPublishesCapabilitiesAndShutdownDrainsOwnedRoles)
@@ -1883,9 +1982,9 @@ TEST(TopologyEngineTest, StartRollbackRemovesPublishedCoordinatorMembership)
     const auto keys = MakeKeys(clusterName);
     PutTopology(proxy, clusterName, MakeTopology());
     auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
-    proxy.FailNextRangeForKey(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE);
+    proxy.FailNextRangeForKey(TopologyStorageKey(*keys), K_INVALID);
 
-    EXPECT_EQ(engine->Start().GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_EQ(engine->Start().GetCode(), K_INVALID);
     std::vector<KeyValueEntry> entries;
     int64_t revision = 0;
     DS_ASSERT_OK(proxy.Range(keys->MembershipTable() + "/" + LOCAL_ADDRESS, "", entries, revision, 0, nullptr));

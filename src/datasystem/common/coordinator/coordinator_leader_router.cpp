@@ -172,10 +172,13 @@ CoordinatorLeaderRouter::CandidateRoundResult CoordinatorLeaderRouter::TryCandid
         const bool readinessOnly = attempt.rpcAttempted && !attempt.rpc.header.has_value()
                                    && attempt.rpc.status.GetCode() == K_NOT_READY;
         const bool acceptedResponse =
-            readinessOnly || (attempt.rpc.header.has_value() && attempt.observation == ResponseObservation::ACCEPTED);
+            readinessOnly || attempt.recoveryStatus.has_value()
+            || (attempt.rpc.header.has_value() && attempt.observation == ResponseObservation::ACCEPTED);
         if ((attempt.rpcAttempted || !attempt.deadlineReached) && (acceptedResponse || !hasCoordinatorResponse)) {
-            lastStatus = attempt.rpc.status.IsOk() ? Status(K_NOT_READY, "Coordinator is not serving business RPCs")
-                                                   : attempt.rpc.status;
+            const auto &status = attempt.recoveryStatus.has_value() && !attempt.rpc.header.has_value()
+                                     ? *attempt.recoveryStatus
+                                     : attempt.rpc.status;
+            lastStatus = status.IsOk() ? Status(K_NOT_READY, "Coordinator is not serving business RPCs") : status;
         }
         hasCoordinatorResponse = hasCoordinatorResponse || acceptedResponse;
         hasResponse = hasResponse || attempt.hasResponse;
@@ -227,6 +230,7 @@ CoordinatorLeaderRouter::CandidateAttemptResult CoordinatorLeaderRouter::TryCand
         attempt.hasResponse = true;
         attempt.observation = ObserveResponse(parsedAddress, *attempt.rpc.header, attemptRouteEpoch);
         if (attempt.observation != ResponseObservation::ACCEPTED) {
+            attempt.recoveryStatus.reset();
             attempt.rpc.header.reset();
             attempt.rpc.status = Status(K_TRY_AGAIN, "Stale Coordinator response from " + address);
             return attempt;
@@ -237,6 +241,7 @@ CoordinatorLeaderRouter::CandidateAttemptResult CoordinatorLeaderRouter::TryCand
         if (attempt.rpc.status.IsOk()) {
             attempt.rpc.status = Status(K_NOT_READY, "Coordinator leader at " + address + " is recovering");
         }
+        attempt.recoveryStatus = attempt.rpc.status;
         if (!WaitForRetry(deadline, retryInterval)) {
             attempt.deadlineReached = true;
             return attempt;

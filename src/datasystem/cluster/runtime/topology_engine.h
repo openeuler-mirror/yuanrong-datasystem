@@ -554,7 +554,7 @@ private:
      * @param[in] fullRebuildAllowed Whether a version gap may replace the local Snapshot.
      * @return Read, validation, publish, or evidence status.
      */
-    Status ReloadTopology(bool fullRebuildAllowed);
+    Status ReloadTopology(bool fullRebuildAllowed, int32_t timeoutMs = ENGINE_READ_TIMEOUT_MS);
     void RestoreReadyAfterCoordinatorTopologyUpdate(const TopologySnapshot &snapshot) noexcept;
 
     /**
