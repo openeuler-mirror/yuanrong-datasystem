@@ -620,7 +620,7 @@ Status DataPlaneManager::QueryUbPortHealth(const HostPort &workerAddr, const std
 
 bool DataPlaneManager::RequestUbPortHealthVerification(const HostPort &workerAddr)
 {
-    if (shutdown_.load(std::memory_order_acquire)) {
+    if (!IsClientUbFaultIsolationEnabled() || shutdown_.load(std::memory_order_acquire)) {
         return false;
     }
     auto snapshot = std::atomic_load(&endpointAdmissionSnapshot_);
@@ -642,7 +642,7 @@ bool DataPlaneManager::RequestUbPortHealthVerification(const HostPort &workerAdd
 
 void DataPlaneManager::ObserveUbHealthSummary(const UbHealthSummary &summary)
 {
-    if (shutdown_.load(std::memory_order_acquire)) {
+    if (!IsClientUbFaultIsolationEnabled() || shutdown_.load(std::memory_order_acquire)) {
         return;
     }
     auto topology = std::atomic_load(&endpointAdmissionSnapshot_);
@@ -685,7 +685,7 @@ void DataPlaneManager::ObserveUbHealthSummary(const UbHealthSummary &summary)
 void DataPlaneManager::RunDueUbPortHealthVerification()
 {
     std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
-    if (shutdown_.load(std::memory_order_acquire)) {
+    if (!IsClientUbFaultIsolationEnabled() || shutdown_.load(std::memory_order_acquire)) {
         return;
     }
     const auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());

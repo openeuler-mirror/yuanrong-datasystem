@@ -1212,6 +1212,9 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, con
     if (clientConfig != nullptr) {
         RETURN_IF_NOT_OK(ApplyKvClientProcessConfig(*clientConfig));
     }
+    // The switch is process wide and resolves exactly once, so every client kind funnels through here: an Init that
+    // arrives later with a different value must not flip a client that is already serving.
+    FreezeClientUbFaultIsolation();
     Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, LogProcessRole::CLIENT);
     FlagsMonitor::GetInstance()->Start();
     LOG_IF_ERROR(PreExpandFdPool(FLAGS_fd_pool_prewarm_size), "Failed to pre-expand fd pool.");

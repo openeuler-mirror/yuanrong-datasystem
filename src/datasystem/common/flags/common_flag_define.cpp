@@ -16,6 +16,7 @@
 
 #include "datasystem/common/flags/flags.h"
 
+#include <atomic>
 #include <cstdint>
 
 // In the co-process scenario of client and worker, the following flags variables are redefined in both libdatasystem.so
@@ -98,6 +99,37 @@ DS_DEFINE_string(remote_h2d_hccs_buffer_pool, "0:0",
 DS_DEFINE_bool(hixl_cs_enable, false, "Enable HIXL CS with LocalCommRes version 1.3 for Remote H2D.");
 DS_DEFINE_string(urma_mode, "UB", "[DEPRECATED] This flag is no longer used and will be removed in a future version.");
 DS_DEFINE_bool(enable_urma, false, "Option to turn on urma for OC worker to worker data transfer, default false.");
+DS_DEFINE_bool(enable_ub_fault_isolation, GetBoolFromEnv("DATASYSTEM_ENABLE_UB_FAULT_ISOLATION", true),
+               "Whether the Client SDK process applies UB fault isolation results. It only controls whether this "
+               "Client process rejects requests, filters Workers, weights scheduling or runs isolation recovery on "
+               "UB port health; it does not disable Worker-side isolation. The first Client Init freezes the value.");
+
+namespace datasystem {
+namespace {
+// The switch resolves once per process. Until a Client Init freezes it the getter mirrors the flag, so the value stays
+// observable beforehand; after that the frozen state wins and no later Client Init can flip it.
+enum class UbFaultIsolationState : uint8_t { UNRESOLVED, ENABLED, DISABLED };
+std::atomic<UbFaultIsolationState> g_clientUbFaultIsolationState{ UbFaultIsolationState::UNRESOLVED };
+}  // namespace
+
+void FreezeClientUbFaultIsolation()
+{
+    const auto resolved =
+        FLAGS_enable_ub_fault_isolation ? UbFaultIsolationState::ENABLED : UbFaultIsolationState::DISABLED;
+    auto expected = UbFaultIsolationState::UNRESOLVED;
+    g_clientUbFaultIsolationState.compare_exchange_strong(expected, resolved, std::memory_order_acq_rel);
+}
+
+bool IsClientUbFaultIsolationEnabled()
+{
+    const auto state = g_clientUbFaultIsolationState.load(std::memory_order_acquire);
+    if (state != UbFaultIsolationState::UNRESOLVED) {
+        return state == UbFaultIsolationState::ENABLED;
+    }
+    return FLAGS_enable_ub_fault_isolation;
+}
+}  // namespace datasystem
+
 DS_DEFINE_bool(enable_transport_fallback, true, "Enable the fast transport fallback to tcp transport.");
 DS_DEFINE_double_dynamic(urma_failover_success_rate_ratio, 0.5,
                  "Client-side URMA data-plane success-rate ratio threshold for worker failover. If the window success "

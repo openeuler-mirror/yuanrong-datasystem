@@ -11,6 +11,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/util/timer.h"
@@ -38,6 +39,9 @@ UbHealthFilter::UbHealthFilter(std::shared_ptr<WorkerUbHealthRegistry> ubHealthR
 bool UbHealthFilter::ObserveSummary(const UbHealthSummary &summary,
                                     const std::string &expectedIncarnation)
 {
+    if (!IsClientUbFaultIsolationEnabled()) {
+        return false;
+    }
     std::string expected = expectedIncarnation;
     {
         std::lock_guard<bthread::Mutex> lock(incarnationMutex_);
@@ -353,6 +357,9 @@ void UbHealthFilter::EnablePortHealthVerificationIfSupportedLocked(const HostPor
 
 bool UbHealthFilter::IsAvailable(const HostPort &addr) const
 {
+    if (!IsClientUbFaultIsolationEnabled()) {
+        return true;
+    }
     if (localAdmission_.CheckReadSource(addr).IsError()) {
         INJECT_POINT_NO_RETURN("client.ub_health_filter.local_read_denied");
         return false;
@@ -366,6 +373,9 @@ bool UbHealthFilter::IsAvailable(const HostPort &addr) const
 
 bool UbHealthFilter::IsWriteTargetAvailable(const HostPort &addr) const
 {
+    if (!IsClientUbFaultIsolationEnabled()) {
+        return true;
+    }
     return !ubHealthRegistry_->IsVerifiedUnavailable(addr)
            && writeTargetAdmission_->CheckWriteTarget(addr, UbOperationKind::CLIENT_PUT).IsOk();
 }
@@ -385,7 +395,8 @@ bool UbHealthFilter::SupportsPortHealthVerification(const HostPort &addr) const
 std::vector<HostPort> UbHealthFilter::GetUnavailableWriteTargets() const
 {
     std::vector<HostPort> unavailable;
-    if (writeTargetObservationCount_.load(std::memory_order_acquire) == 0) {
+    if (!IsClientUbFaultIsolationEnabled()
+        || writeTargetObservationCount_.load(std::memory_order_acquire) == 0) {
         return unavailable;
     }
     std::lock_guard<bthread::Mutex> lock(incarnationMutex_);

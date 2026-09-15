@@ -78,6 +78,17 @@
     non-SHM routed Set path and keeps one worker address fixed across Create, payload transfer, and Publish.
     Transport-owned BRPC channels use the SDK request and connection timeouts; foreground RPCs further clamp the
     per-call timeout to the remaining API deadline.
+  - `enable_ub_fault_isolation`, set through `KVClientConfig::Builder::UbFaultIsolationEnable` or the
+    `DATASYSTEM_ENABLE_UB_FAULT_ISOLATION` environment variable, decides whether this Client SDK process applies UB
+    port-health results as policy. The first Client `Init` of any kind resolves the value once and every later Client
+    reuses it, so a later `Init` cannot flip a Client that is already serving; before that resolution the switch
+    mirrors the flag. The default is enabled, and the switch never disables Worker-side UB isolation. When it is off,
+    Client components
+    are still created and still receive health summaries, but the results stay inert at five boundaries: local port
+    admission always accepts, `UbHealthFilter` availability always accepts, the failure-report entries never quarantine
+    the current request's Provider or write target, local UB writes arm no late-completion observer, and the routing
+    snapshot publishes no port health, so scheduling keeps every UB path UNKNOWN. Recovery entries are no-ops as well,
+    so no verification or recovery RPC is sent.
   - Client-direct Get preserves structured Provider UB failure details even when the data RPC fails. A hard Provider
     ERROR 4 immediately creates requester-local read-source admission evidence; a later request checks each endpoint
     group once, skips the quarantined source with `K_URMA_DATA_WORKER_UNAVAILABLE`, and continues with the next replica.

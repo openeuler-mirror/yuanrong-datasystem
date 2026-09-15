@@ -190,6 +190,14 @@ public:
         Builder &UrmaSendLaneCountPerPeer(uint32_t count);
 
         /**
+         * @brief Whether this Client SDK process applies UB fault isolation results.
+         * @param[in] enable Equivalent to flag enable_ub_fault_isolation. The switch only controls this Client SDK
+         * process; Worker-side UB isolation keeps running. The first Client Init freezes the value for the process.
+         * @return Reference to self for chaining.
+         */
+        Builder &UbFaultIsolationEnable(bool enable);
+
+        /**
          * @brief Validate and build KVClientConfig.
          * @param[out] config Built config.
          * @return K_OK on success; the error code otherwise.

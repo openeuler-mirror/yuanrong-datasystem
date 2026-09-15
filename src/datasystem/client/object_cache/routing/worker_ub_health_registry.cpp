@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/log/log.h"
 
 namespace datasystem::client {
@@ -288,6 +289,11 @@ bool WorkerUbHealthRegistry::IsVerifiedUnavailable(const HostPort &worker) const
 
 std::shared_ptr<const UbRoutingHealthSnapshot> WorkerUbHealthRegistry::GetRoutingSnapshot() const
 {
+    if (!IsClientUbFaultIsolationEnabled()) {
+        // Disabled: publish no port health at all, so scheduling treats every UB path as UNKNOWN.
+        static const auto emptySnapshot = std::make_shared<const UbRoutingHealthSnapshot>();
+        return emptySnapshot;
+    }
     auto state = std::atomic_load(&state_);
     return std::shared_ptr<const UbRoutingHealthSnapshot>(state, &state->routing);
 }

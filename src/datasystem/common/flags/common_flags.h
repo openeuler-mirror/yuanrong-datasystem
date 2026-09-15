@@ -32,6 +32,7 @@ DS_DECLARE_bool(json_log_monitor);
 DS_DECLARE_bool(enable_data_replication);
 DS_DECLARE_bool(enable_worker_worker_batch_get);
 DS_DECLARE_bool(enable_urma);
+DS_DECLARE_bool(enable_ub_fault_isolation);
 DS_DECLARE_bool(enable_ub_numa_affinity);
 DS_DECLARE_uint32(ub_numa_rr_type);
 DS_DECLARE_uint32(ub_numa_src_chip_policy);
@@ -117,4 +118,12 @@ DS_DECLARE_string(brpc_connection_type);
 DS_DECLARE_int32(brpc_max_connection_pool_size);
 DS_DECLARE_int32(brpc_event_dispatcher_num);
 DS_DECLARE_bool(enable_load_aware_scheduler);
+
+namespace datasystem {
+/** @brief Resolve enable_ub_fault_isolation into the process-level freeze; the first Client Init of any kind wins. */
+void FreezeClientUbFaultIsolation();
+/** @brief Read the process-level UB fault isolation switch; it mirrors the flag until a Client Init freezes it. */
+bool IsClientUbFaultIsolationEnabled();
+}  // namespace datasystem
+
 #endif  // DATASYSTEM_COMMON_FLAGS_COMMON_FLAGS_H

@@ -1820,5 +1820,52 @@ TEST(DataPlaneManagerAdmissionTest, ConfirmedPublicationRevokesAnInFlightGraceDe
     EXPECT_EQ(reader.get().GetCode(), K_NOT_READY);
 }
 
+namespace {
+// Exit code = index of the failing check. Nothing in this binary freezes the switch, so setting the flag is enough and
+// no child process is needed; the frozen path is covered by KVClientInitTest. The enabled counterpart of every
+// assertion below is covered by the UbHealthFilterTest and late-completion cases in this file.
+int CheckDisabledUbFaultIsolation(UbHealthFilter &filter, TestTransportLayer &layer, WorkerUbHealthRegistry &registry)
+{
+    const auto provider = MakeAddress(60);
+    const auto writeTarget = MakeAddress(61);
+    ProviderUbFailureDetailPb detail;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider write failed"), "client-receive-endpoint",
+                                provider.ToString(), 4, 4, detail);
+    // Real evidence first: the filter still records it, only the policy application is off.
+    if (!filter.ReportProviderFailure(provider, detail) || !filter.GetLocalObservation(provider).has_value()
+        || !filter.ReportWriteTargetFailure(writeTarget, Status(K_URMA_ERROR, "ack timeout"), std::nullopt,
+                                           URMA_REMOTE_ACK_TIMEOUT_STATUS)
+        || !registry.ApplyLocalClientPortHealth(UbPortHealthSummary{ true, 4, 4, 1, false })) {
+        return 1;
+    }
+    const Status failure(K_URMA_ERROR, "ub write failed");
+    ObjectBufferInfo bufferInfo;
+    bufferInfo.workerAddr = writeTarget;
+    const Status writeRc = layer.RunClientLocalUbWrite(writeTarget, bufferInfo, [&failure] { return failure; });
+    // Capacity, exclusion list, scheduling snapshot, failure entries and the late-completion observer all stay inert.
+    if (!filter.IsAvailable(provider) || !filter.IsWriteTargetAvailable(writeTarget)
+        || !filter.GetUnavailableWriteTargets().empty()
+        || HasKnownUbPortHealth(registry.GetRoutingSnapshot()->localClient)
+        || layer.ReportProviderFailure(provider, detail)
+        || writeRc.GetCode() != K_URMA_ERROR || bufferInfo.ubLateCompletionContext.has_value()) {
+        return 2;
+    }
+    return 0;
+}
+}  // namespace
+
+TEST(TransportLayerAdmissionTest, DisabledUbFaultIsolationKeepsLegacyRequestBehaviour)
+{
+    auto registry = std::make_shared<WorkerUbHealthRegistry>();
+    auto filter = std::make_shared<UbHealthFilter>(registry);
+    TestTransportLayer layer(std::make_shared<FakeDataPlaneManager>(), std::make_shared<TransportAdvisor>(), filter);
+
+    const bool wasEnabled = FLAGS_enable_ub_fault_isolation;
+    FLAGS_enable_ub_fault_isolation = false;
+    const int failedCheck = CheckDisabledUbFaultIsolation(*filter, layer, *registry);
+    FLAGS_enable_ub_fault_isolation = wasEnabled;
+    EXPECT_EQ(failedCheck, 0) << "failed check index " << failedCheck;
+}
+
 }  // namespace client
 }  // namespace datasystem

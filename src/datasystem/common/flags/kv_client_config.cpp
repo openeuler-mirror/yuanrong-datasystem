@@ -285,6 +285,12 @@ KVClientConfig::Builder &KVClientConfig::Builder::UrmaSendLaneCountPerPeer(uint3
     return *this;
 }
 
+KVClientConfig::Builder &KVClientConfig::Builder::UbFaultIsolationEnable(bool enable)
+{
+    args_["enable_ub_fault_isolation"] = ConfigBoolToString(enable);
+    return *this;
+}
+
 Status KVClientConfig::Builder::Build(KVClientConfig &config) const
 {
     std::vector<std::string> errors;
