@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <algorithm>
 #include <cerrno>
 #include <climits>
 #include <cstdlib>
@@ -376,9 +377,11 @@ inline void RunStreamingDelete(KVClientAdapter *adapter, const std::vector<std::
 }
 
 /** @brief Execute one thread's scheduled benchmark partition. */
+template <bool CaptureSetSuccess>
 inline void RunStreamingThread(KVClientAdapter *adapter, const Config &cfg, const CmdMsg &cmd, int threadId,
                                const ArmMsg &arm, const std::vector<std::string> &keys,
-                               StreamingPhaseResult &result, const std::string &data)
+                               StreamingPhaseResult &result, const std::string &data,
+                               std::vector<uint8_t> *successfulSetMask)
 {
     auto range = ThreadKeyRange(cmd.numKeys, cmd.numThreads, threadId);
     if (range.second == 0) {
@@ -404,6 +407,11 @@ inline void RunStreamingThread(KVClientAdapter *adapter, const Config &cfg, cons
             const int64_t endNs = SteadyNowNs();
             result.Record(op, static_cast<double>(endNs - startNs) / BENCHMARK_NANOSECONDS_PER_MILLISECOND,
                           startNs, endNs);
+            if constexpr (CaptureSetSuccess) {
+                if (op.success) {
+                    (*successfulSetMask)[startKey + i] = 1;
+                }
+            }
         }
     }
 }
@@ -444,6 +452,12 @@ struct ScheduledPhaseGate {
     ArmMsg arm;
 };
 
+/** @brief Holds the successful preload keys for later Get phases. */
+struct ScheduledDataset {
+    bool initialized = false;
+    std::vector<std::string> keys;
+};
+
 /** @brief Build this Client's key partition before entering the measurement window. */
 inline std::vector<std::string> BuildScheduledKeys(const Config &cfg, const CmdMsg &cmd)
 {
@@ -455,11 +469,29 @@ inline std::vector<std::string> BuildScheduledKeys(const Config &cfg, const CmdM
     return keys;
 }
 
+/** @brief Retain the keys whose Set operations succeeded. */
+inline void RetainSuccessfulSetKeys(std::vector<std::string> &keys, const std::vector<uint8_t> &successMask,
+                                    ScheduledDataset &dataset)
+{
+    size_t retained = 0;
+    for (size_t i = 0; i < keys.size(); ++i) {
+        if (successMask[i] != 0) {
+            if (retained != i) {
+                keys[retained] = std::move(keys[i]);
+            }
+            ++retained;
+        }
+    }
+    keys.resize(retained);
+    dataset.keys = std::move(keys);
+    dataset.initialized = true;
+}
+
 /** @brief Start workers and hold them at the local ready gate. */
 inline bool StartScheduledThreads(KVClientAdapter *adapter, const Config &cfg, const CmdMsg &cmd,
                                   const std::vector<std::string> &keys, const std::string &data,
                                   ScheduledPhaseGate &gate, std::vector<StreamingPhaseResult> &results,
-                                  std::vector<std::thread> &threads)
+                                  std::vector<std::thread> &threads, std::vector<uint8_t> *successfulSetMask)
 {
     try {
         for (int threadId = 0; threadId < cmd.numThreads; ++threadId) {
@@ -471,7 +503,13 @@ inline bool StartScheduledThreads(KVClientAdapter *adapter, const Config &cfg, c
                 lock.unlock();
                 std::this_thread::sleep_until(
                     std::chrono::steady_clock::time_point(std::chrono::nanoseconds(gate.arm.startAtNs)));
-                RunStreamingThread(adapter, cfg, cmd, threadId, gate.arm, keys, results[threadId], data);
+                if (successfulSetMask == nullptr) {
+                    RunStreamingThread<false>(adapter, cfg, cmd, threadId, gate.arm, keys, results[threadId], data,
+                                              successfulSetMask);
+                } else {
+                    RunStreamingThread<true>(adapter, cfg, cmd, threadId, gate.arm, keys, results[threadId], data,
+                                             successfulSetMask);
+                }
             });
         }
         return true;
@@ -515,17 +553,31 @@ inline bool ArmScheduledThreads(int readFd, int writeFd, const CmdMsg &cmd, Sche
 
 /** @brief Run one prepared phase after every local thread and Client is ready. */
 inline bool RunScheduledPhase(KVClientAdapter *adapter, const Config &cfg, const CmdMsg &cmd, int readFd, int writeFd,
-                              const std::string &data)
+                              const std::string &data, ScheduledDataset &dataset)
 {
-    auto keys = BuildScheduledKeys(cfg, cmd);
+    CmdMsg effectiveCmd = cmd;
+    std::vector<std::string> generatedKeys;
+    const std::vector<std::string> *keys = &dataset.keys;
+    if (cmd.cmd == CMD_PREPARE_SET || !dataset.initialized) {
+        generatedKeys = BuildScheduledKeys(cfg, cmd);
+        keys = &generatedKeys;
+    } else {
+        effectiveCmd.numKeys = static_cast<int32_t>(dataset.keys.size());
+    }
+    const bool shouldRetainSetKeys = cmd.cmd == CMD_PREPARE_SET && IsGetMode(cfg.testMode);
+    std::vector<uint8_t> successfulSetMask;
+    if (shouldRetainSetKeys) {
+        successfulSetMask.resize(keys->size());
+    }
     ScheduledPhaseGate gate;
-    std::vector<StreamingPhaseResult> threadResults(cmd.numThreads);
+    std::vector<StreamingPhaseResult> threadResults(effectiveCmd.numThreads);
     std::vector<std::thread> threads;
-    threads.reserve(cmd.numThreads);
-    if (!StartScheduledThreads(adapter, cfg, cmd, keys, data, gate, threadResults, threads)) {
+    threads.reserve(effectiveCmd.numThreads);
+    auto *successMask = successfulSetMask.empty() ? nullptr : &successfulSetMask;
+    if (!StartScheduledThreads(adapter, cfg, effectiveCmd, *keys, data, gate, threadResults, threads, successMask)) {
         return false;
     }
-    const bool protocolOk = ArmScheduledThreads(readFd, writeFd, cmd, gate);
+    const bool protocolOk = ArmScheduledThreads(readFd, writeFd, effectiveCmd, gate);
     for (auto &thread : threads) {
         thread.join();
     }
@@ -535,6 +587,9 @@ inline bool RunScheduledPhase(KVClientAdapter *adapter, const Config &cfg, const
     StreamingPhaseResult merged;
     for (auto &result : threadResults) {
         merged.Merge(result);
+    }
+    if (shouldRetainSetKeys) {
+        RetainSuccessfulSetKeys(generatedKeys, successfulSetMask, dataset);
     }
     return WriteStreamingResult(writeFd, merged);
 }
@@ -620,6 +675,8 @@ inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRo
         data.assign(dataSize, 'A');
     }
     int keysPerRound = CalcKeysPerRound(cfg.workerMemoryMb, dataSize);
+    ScheduledDataset scheduledDataset;
+    std::unique_ptr<KVClientAdapter> cleanupAdapter;
 
     // 5. Command loop
     while (true) {
@@ -628,7 +685,19 @@ inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRo
         if (cmd.cmd == CMD_EXIT) break;
 
         if (cmd.cmd == CMD_PREPARE_SET || cmd.cmd == CMD_PREPARE_GET || cmd.cmd == CMD_PREPARE_DEL) {
-            if (!RunScheduledPhase(&adapter, cfg, cmd, readFd, writeFd, data)) {
+            KVClientAdapter *phaseAdapter = &adapter;
+            if (cmd.cmd == CMD_PREPARE_DEL && role != ROLE_DEL) {
+                if (cleanupAdapter == nullptr) {
+                    auto cleanupClient = CreateClientForRole(ROLE_DEL, cfg);
+                    if (cleanupClient != nullptr) {
+                        cleanupAdapter = std::make_unique<KVClientAdapter>(std::move(cleanupClient), param);
+                    }
+                }
+                if (cleanupAdapter != nullptr) {
+                    phaseAdapter = cleanupAdapter.get();
+                }
+            }
+            if (!RunScheduledPhase(phaseAdapter, cfg, cmd, readFd, writeFd, data, scheduledDataset)) {
                 break;
             }
             continue;

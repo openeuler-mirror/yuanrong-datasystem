@@ -622,11 +622,16 @@ Regression entrypoints: `python3 -m unittest discover -s tests/kvtest/tests/pyth
 
 `set_local`, `set_remote`, `get_local`, and `get_remote_direct` use `num_clients` measured processes with
 `num_threads` threads sharing each process-local KVClient. Get preloads once and then runs a synchronized Get-only
-window; Set alternates synchronized Set and cleanup phases. `benchmark_phases.csv` is the aggregate source of truth,
-while `benchmark_clients.csv` diagnoses Client start or throughput skew. Regression coverage starts with
+window; failed preload Set operations are not retried, and warmup, measurement, and cleanup use only successfully
+preloaded keys. A fully failed preload stops the run; partial success continues with lower effective concurrency and
+is recorded as a `setup` CSV row. Set alternates synchronized Set and cleanup phases. `benchmark_phases.csv` is the
+aggregate source of truth, while `benchmark_clients.csv` diagnoses Client start or throughput skew. Regression coverage
+starts with
 `tests/kvtest/tests/cxx/test_benchmark.cpp`, `test_config.cpp`, and `tests/python/test_deploy_client.py`; runtime transport
 and synchronization claims still require the focused benchmark integration script. The global data set is partitioned,
 not multiplied by Client count, and must contain at least one key per measured thread.
+Set operation and cleanup business failures are accumulated without shortening the configured rounds or duration;
+execution and synchronization failures remain terminal, and any accumulated failure keeps the final exit status nonzero.
 
 
 Each collect additionally archives reproduction configuration: Client copies only its input deploy/config files into the output, retaining their parent directory names (for example `aaa/deploy.json` and `aaa/config.json`), without copying other directory contents; Worker saves each selected Pod's remote config as `worker_config.json` in that Pod's log directory. Log filters do not filter this configuration archive. Existing default log selection, concurrency, and summary behavior remain unchanged.
