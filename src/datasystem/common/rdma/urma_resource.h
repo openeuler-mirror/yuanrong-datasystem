@@ -915,12 +915,7 @@ public:
      * @param[in] tjetty Imported remote target Jetty.
      * @param[in] urmaJfrInfo Remote Jetty metadata used for reconnect and logging.
      */
-    UrmaConnection(std::unique_ptr<UrmaTargetJetty> tjetty, const UrmaJfrInfo &urmaJfrInfo)
-        : targetJetty_(std::move(tjetty)), urmaJfrInfo_(urmaJfrInfo)
-    {
-        LOG(INFO) << "[URMA_CONNECTION] Created connection, remote Jetty=" << urmaJfrInfo_.jfrId
-                  << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
-    }
+    UrmaConnection(std::unique_ptr<UrmaTargetJetty> tjetty, const UrmaJfrInfo &urmaJfrInfo);
 
     ~UrmaConnection();
 
@@ -975,9 +970,9 @@ public:
 
     /**
      * @brief Reserve one in-flight Jetty slot for this peer. Blocks when the peer already holds
-     *        MAX_INFLIGHT_JETTIES concurrent slots until one is released or the deadline elapses.
-     *        Bounds a bad peer's pool footprint: it can occupy at most MAX_INFLIGHT_JETTIES, the
-     *        rest of the pool stays available to other peers.
+     *        the configured number of concurrent slots until one is released or the deadline elapses.
+     *        A peer can occupy at most its effective per-peer limit, leaving the rest of the pool available
+     *        to other peers.
      * @param[in] remainingUs API deadline remaining, in microseconds. <= 0 returns K_RPC_DEADLINE_EXCEEDED.
      * @return Status::OK on success, K_RPC_DEADLINE_EXCEEDED on timeout.
      */
@@ -1031,9 +1026,7 @@ private:
     std::unique_ptr<UrmaTargetJetty> targetJetty_;
     UrmaJfrInfo urmaJfrInfo_;
     UrmaRemoteSegmentMap tsegs_;
-    // Per-peer in-flight jetty concurrency cap. Bounds the blast radius of a bad peer: at most
-    // MAX_INFLIGHT_JETTIES of the pool can be simultaneously occupied by requests to one peer.
-    static constexpr uint32_t MAX_INFLIGHT_JETTIES = 8;
+    const uint32_t maxInflightJetties_;
     static constexpr uint32_t MAX_RETIRED_JETTIES = 8;
     static constexpr std::chrono::milliseconds BASE_RECONNECT_BACKOFF{ 1000 };
     static constexpr std::chrono::milliseconds MAX_RECONNECT_BACKOFF{ 30000 };

@@ -240,6 +240,26 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
             cfg.metricsFile = j["metrics_file"];
         if (j.contains("output_dir"))
             cfg.outputDir = j["output_dir"].get<std::string>();
+        if (j.contains("client_config")) {
+            const auto &clientConfig = j["client_config"];
+            if (!clientConfig.is_object()) {
+                SLOG_ERROR("client_config must be an object");
+                return false;
+            }
+            if (clientConfig.contains("urma_send_lane_count_per_peer")) {
+                const auto &laneCount = clientConfig["urma_send_lane_count_per_peer"];
+                if (!laneCount.is_number_unsigned()) {
+                    SLOG_ERROR("client_config.urma_send_lane_count_per_peer must be a positive integer");
+                    return false;
+                }
+                const auto value = laneCount.get<uint64_t>();
+                if (value == 0 || value > std::numeric_limits<uint32_t>::max()) {
+                    SLOG_ERROR("client_config.urma_send_lane_count_per_peer is outside the uint32 range");
+                    return false;
+                }
+                cfg.urmaSendLaneCountPerPeer = static_cast<uint32_t>(value);
+            }
+        }
 
         if (j.contains("data_sizes")) {
             for (auto &s : j["data_sizes"]) {
@@ -689,6 +709,9 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
             << ", write_threads=" << cfg.numThreads << ", read_threads=" << cfg.NumReadThreads()
             << ", total_threads=" << cfg.numTotalThreads << ", batch_keys_count=" << cfg.batchKeysCount
             << ", key_pool_size=" << cfg.keyPoolSize;
+    }
+    if (cfg.urmaSendLaneCountPerPeer.has_value()) {
+        log << ", client_urma_send_lane_count_per_peer=" << cfg.urmaSendLaneCountPerPeer.value();
     }
     log << ", data_sizes_count=" << cfg.dataSizes.size() << ", output_dir=" << cfg.outputDir;
     log << ", verify=" << cfg.verifyLevel << (cfg.verifyFailOp ? "+fail" : "")

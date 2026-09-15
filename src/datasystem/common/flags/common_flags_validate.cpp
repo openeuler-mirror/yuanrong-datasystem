@@ -283,6 +283,7 @@ DS_DEFINE_validator(ub_numa_rr_type, &ValidateUbNumaRrType);
 DS_DEFINE_validator(ub_numa_src_chip_policy, &ValidateUbNumaSrcChipPolicy);
 DS_DEFINE_validator(urma_max_write_size_mb, &ValidateUrmaMaxWriteSize);
 DS_DEFINE_validator(urma_send_jetty_lane_pool_size, &Validator::ValidateUint32);
+DS_DEFINE_validator(urma_send_lane_count_per_peer, &Validator::ValidateUint32);
 DS_DEFINE_validator(urma_send_jetty_lane_refill_extra_size, &Validator::ValidateUint32);
 DS_DEFINE_validator(urma_failover_success_rate_ratio, &ValidateUrmaFailoverSuccessRateRatio);
 DS_DEFINE_validator(urma_failover_min_sample_count, &ValidateUrmaFailoverMinSampleCount);

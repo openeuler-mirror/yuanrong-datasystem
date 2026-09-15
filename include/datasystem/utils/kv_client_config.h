@@ -24,7 +24,7 @@
 
 namespace datasystem {
 /**
- * @brief KV client initialization config for logging and monitoring.
+ * @brief KV client initialization config for logging, monitoring, and process-level transport settings.
  *
  * Build via Builder and pass to KVClient::Init. Does not cover ConnectOptions.
  * The first Init in a process freezes the config snapshot; per-field priority on that
@@ -181,6 +181,13 @@ public:
          * @return Reference to self for chaining.
          */
         Builder &MonitorConfigPath(const std::string &path);
+
+        /**
+         * @brief Set the maximum concurrent URMA send lanes occupied by one remote peer.
+         * @param[in] count Positive lane count. The effective value does not exceed the process send-lane pool size.
+         * @return Reference to self for chaining.
+         */
+        Builder &UrmaSendLaneCountPerPeer(uint32_t count);
 
         /**
          * @brief Validate and build KVClientConfig.

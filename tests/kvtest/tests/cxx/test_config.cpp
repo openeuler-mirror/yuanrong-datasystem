@@ -72,8 +72,34 @@ TEST(LoadConfig_Minimal) {
     ASSERT_EQ(cfg.dataSizes.size(), 1u);
     ASSERT_EQ(cfg.dataSizes[0], 8ULL * 1024 * 1024);
     ASSERT_EQ(cfg.hostIdEnvName, "HOST_IP");
+    ASSERT_FALSE(cfg.urmaSendLaneCountPerPeer.has_value());
     CleanupDir(cfg.outputDir);
     std::remove(path.c_str());
+}
+
+TEST(LoadConfig_ClientUrmaSendLaneCountPerPeer) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "client_config":{"urma_send_lane_count_per_peer":16}
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_TRUE(cfg.urmaSendLaneCountPerPeer.has_value());
+    ASSERT_EQ(cfg.urmaSendLaneCountPerPeer.value(), 16u);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_RejectsInvalidClientConfig) {
+    for (const auto &clientConfig : { "[]", R"({"urma_send_lane_count_per_peer":0})",
+                                      R"({"urma_send_lane_count_per_peer":-1})",
+                                      R"({"urma_send_lane_count_per_peer":"8"})" }) {
+        auto path = WriteTempConfig("{\"etcd_address\":\"x:1\",\"listen_port\":9000,\"client_config\":"
+                                    + std::string(clientConfig) + "}");
+        Config cfg;
+        ASSERT_FALSE(LoadConfig(path, cfg));
+        std::remove(path.c_str());
+    }
 }
 
 TEST(LoadConfig_DataSizes) {

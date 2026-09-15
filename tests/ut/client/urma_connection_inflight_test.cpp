@@ -14,10 +14,8 @@
  * limitations under the License.
  */
 
-// Per-peer in-flight jetty concurrency cap UT. Validates the blast-radius guarantee of issue #93:
-// a peer can occupy at most MAX_INFLIGHT_JETTIES of the pool concurrently, so a bad peer cannot
-// drain the whole pool. These tests touch only the in-flight counter/condvar (no URMA hardware),
-// so they build and run under both BUILD_WITH_URMA and BUILD_WITH_URMA_MOCK.
+// Per-peer in-flight jetty concurrency cap UT. These tests touch only the in-flight
+// counter/condvar (no URMA hardware), so they run with real or mock URMA builds.
 
 #include <atomic>
 #include <cstdio>
@@ -32,14 +30,23 @@
 
 #include "datasystem/common/rdma/urma_manager.h"
 #include "datasystem/common/rdma/urma_resource.h"
+#include "datasystem/common/util/raii.h"
+
+DS_DECLARE_uint32(urma_send_jetty_lane_pool_size);
+DS_DECLARE_uint32(urma_send_lane_count_per_peer);
 
 namespace datasystem {
 class UrmaConnectionTestAccess {
 public:
     UrmaConnectionTestAccess() = delete;
     ~UrmaConnectionTestAccess() = delete;
-    static constexpr auto MaxInflight = UrmaConnection::MAX_INFLIGHT_JETTIES;
+    static constexpr uint32_t MaxInflight = 8;
     static constexpr auto MaxRetired = UrmaConnection::MAX_RETIRED_JETTIES;
+
+    static uint32_t ConfiguredMaxInflight(const UrmaConnection &connection)
+    {
+        return connection.maxInflightJetties_;
+    }
 
     static uint32_t Inflight(const UrmaConnection &connection)
     {
@@ -152,6 +159,48 @@ TEST(UrmaConnectionInflightTest, AcquireRespectsPerPeerCap)
                 static_cast<int>(rc.GetCode()), rc.GetMsg().c_str(), UrmaConnectionTestAccess::Inflight(*conn));
     EXPECT_EQ(rc.GetCode(), StatusCode::K_URMA_TRY_AGAIN);
     EXPECT_EQ(UrmaConnectionTestAccess::Inflight(*conn), UrmaConnectionTestAccess::MaxInflight);
+}
+
+TEST(UrmaConnectionInflightTest, ConfiguredCapIsClampedByPoolSize)
+{
+    constexpr uint32_t CONFIGURED_LANE_COUNT = 4;
+    constexpr uint32_t POOL_LANE_COUNT = 2;
+    const auto savedLaneCount = FLAGS_urma_send_lane_count_per_peer;
+    const auto savedPoolSize = FLAGS_urma_send_jetty_lane_pool_size;
+    Raii restoreFlags([savedLaneCount, savedPoolSize] {
+        FLAGS_urma_send_lane_count_per_peer = savedLaneCount;
+        FLAGS_urma_send_jetty_lane_pool_size = savedPoolSize;
+    });
+    FLAGS_urma_send_lane_count_per_peer = CONFIGURED_LANE_COUNT;
+    FLAGS_urma_send_jetty_lane_pool_size = POOL_LANE_COUNT;
+
+    auto conn = MakeConnection();
+    EXPECT_EQ(UrmaConnectionTestAccess::ConfiguredMaxInflight(*conn), POOL_LANE_COUNT);
+    for (uint32_t i = 0; i < POOL_LANE_COUNT; ++i) {
+        ASSERT_TRUE(conn->AcquireInflightSlot(LONG_BUDGET_US).IsOk());
+    }
+    EXPECT_EQ(conn->AcquireInflightSlot(TINY_BUDGET_US).GetCode(), StatusCode::K_URMA_TRY_AGAIN);
+}
+
+TEST(UrmaConnectionInflightTest, ConfiguredCapIsAppliedAtConnectionCreation)
+{
+    constexpr uint32_t INITIAL_LANE_COUNT = 2;
+    constexpr uint32_t UPDATED_LANE_COUNT = 4;
+    const auto savedLaneCount = FLAGS_urma_send_lane_count_per_peer;
+    const auto savedPoolSize = FLAGS_urma_send_jetty_lane_pool_size;
+    Raii restoreFlags([savedLaneCount, savedPoolSize] {
+        FLAGS_urma_send_lane_count_per_peer = savedLaneCount;
+        FLAGS_urma_send_jetty_lane_pool_size = savedPoolSize;
+    });
+    FLAGS_urma_send_jetty_lane_pool_size = UPDATED_LANE_COUNT;
+    FLAGS_urma_send_lane_count_per_peer = INITIAL_LANE_COUNT;
+
+    auto initial = MakeConnection();
+    FLAGS_urma_send_lane_count_per_peer = UPDATED_LANE_COUNT;
+    auto updated = MakeConnection();
+
+    EXPECT_EQ(UrmaConnectionTestAccess::ConfiguredMaxInflight(*initial), INITIAL_LANE_COUNT);
+    EXPECT_EQ(UrmaConnectionTestAccess::ConfiguredMaxInflight(*updated), UPDATED_LANE_COUNT);
 }
 
 TEST(UrmaConnectionInflightTest, ReleaseUnblocksWaiter)

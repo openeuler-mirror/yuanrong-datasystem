@@ -51,12 +51,18 @@
 DS_DECLARE_bool(urma_event_mode);
 DS_DECLARE_uint64(urma_max_write_size_mb);
 DS_DECLARE_uint32(urma_send_jetty_lane_pool_size);
+DS_DECLARE_uint32(urma_send_lane_count_per_peer);
 DS_DECLARE_uint32(urma_send_jetty_lane_refill_extra_size);
 
 namespace datasystem {
 namespace {
 constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 constexpr const char *URMA_ERROR_SUGGEST = "check URMA";
+
+uint32_t GetEffectiveSendLaneCountPerPeer()
+{
+    return std::min(FLAGS_urma_send_lane_count_per_peer, FLAGS_urma_send_jetty_lane_pool_size);
+}
 
 /** @brief Log peer slot acquisition details using the configured slow-log threshold. */
 void LogInflightSlotAcquire(const UrmaJfrInfo &jfrInfo, std::chrono::steady_clock::time_point start,
@@ -677,6 +683,15 @@ const UrmaJfrInfo &UrmaConnection::GetUrmaJfrInfo() const
     return urmaJfrInfo_;
 }
 
+UrmaConnection::UrmaConnection(std::unique_ptr<UrmaTargetJetty> tjetty, const UrmaJfrInfo &urmaJfrInfo)
+    : targetJetty_(std::move(tjetty)), urmaJfrInfo_(urmaJfrInfo),
+      maxInflightJetties_(GetEffectiveSendLaneCountPerPeer())
+{
+    LOG(INFO) << "[URMA_CONNECTION] Created connection, remote Jetty=" << urmaJfrInfo_.jfrId
+              << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId
+              << ", maxInflightJetties=" << maxInflightJetties_;
+}
+
 UrmaConnection::~UrmaConnection()
 {
     Clear();
@@ -782,7 +797,7 @@ Status UrmaConnection::AcquireInflightSlot(int64_t remainingUs)
     };
     for (;;) {
         const bool halfOpen = peerState_->phase.load(std::memory_order_acquire) == BreakerPhase::HALF_OPEN;
-        const auto limit = halfOpen ? 1U : MAX_INFLIGHT_JETTIES;
+        const auto limit = halfOpen ? 1U : maxInflightJetties_;
         if (IsCircuitBroken()) {
             return finish(CircuitBrokenAcquireStatusLocked(), limit);
         }
@@ -1429,9 +1444,7 @@ Status UrmaResource::ApplyActiveSendLaneAction(const std::shared_ptr<UrmaSendLan
     if (jetty == nullptr) {
         return Status::OK();
     }
-    // Release the per-peer in-flight slot so a blocked peer (at the MAX_INFLIGHT_JETTIES cap) can
-    // proceed. Both RELEASE (normal completion) and RETIRE (cqe9 failure) paths must release it;
-    // a RETIRE that skipped release would permanently exhaust the peer's slot and block it.
+    // Both normal completion and retirement must release the peer slot or the peer can remain blocked.
     auto connection = jetty->GetConnection().lock();
     if (action == UrmaSendLaneLease::SettleAction::RELEASE) {
         INJECT_POINT("UrmaManager.ApplySendLaneAction.Release");

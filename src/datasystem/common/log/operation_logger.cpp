@@ -133,7 +133,7 @@ const std::unordered_set<std::string> &ClientUsedFlagNames()
         // ---- client slow-log thresholds (GetClientLatencyTraceConfig on client path) ----
         "client_slow_log_process_slower_than", "client_slow_log_rpc_slower_than",
         // ---- URMA data-plane (client UB transport + failover) ----
-        "enable_urma", "urma_send_jetty_lane_pool_size",
+        "enable_urma", "urma_send_jetty_lane_pool_size", "urma_send_lane_count_per_peer",
         "urma_failover_success_rate_ratio", "urma_failover_min_sample_count",
         // ---- conditionally reached by client ----
         "encrypt_kit", "shared_memory_distribution_policy", "ub_transport_arena_num",

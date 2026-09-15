@@ -128,6 +128,9 @@ bash tests/test_standalone_mode.sh
     "data_placement_policy": "PREFERRED_META_OWNER",
     "fast_transport_mem_size": "512MB"
   },
+  "client_config": {
+    "urma_send_lane_count_per_peer": 8
+  },
   "data_sizes": ["1MB"],
   "set_param": {"ttl_second": 0},
   "num_threads": 4,
@@ -161,6 +164,7 @@ bash tests/test_standalone_mode.sh
 | `connect_options.enable_local_cache` | bool | false | Get/MGet 走绑定 Worker；`false` 时按 metadata owner 走 Transport 层 |
 | `connect_options.data_placement_policy` | string | "PREFERRED_META_OWNER" | Set/MSet 数据放置策略 |
 | `connect_options.fast_transport_mem_size` | string | "512MB" | 快速传输内存大小，支持 KB/MB/GB 后缀 |
+| `client_config.urma_send_lane_count_per_peer` | uint | SDK 默认值 8 | 单个远端 peer 可并发占用的 URMA send lane 上限，必须大于 0；实际值不超过 SDK 进程级 lane 池。省略 `client_config` 时不覆盖 SDK 配置。 |
 | `data_sizes` | string[] | ["1MB"] | 数据大小列表，支持 KB/MB/GB 后缀，随机选取 |
 | `set_param.ttl_second` | uint | 0 | Set 操作 TTL（秒），0 = 永不过期。所有模式通用 |
 | `num_threads` | int | 4 | Pipeline 写线程数 / Benchmark 并发线程数 / Cache 工作线程数 |

@@ -101,6 +101,7 @@ cc_library(
         "src/benchmark/interface_benchmark.cpp",
     ],
     hdrs = [
+        "src/common/client_config.h",
         "src/common/config.h",
         "src/common/rate_gate.h",
         "src/common/jf_service_discovery.h",

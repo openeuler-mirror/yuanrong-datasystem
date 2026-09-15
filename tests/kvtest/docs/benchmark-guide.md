@@ -309,6 +309,22 @@ ServiceDiscovery 创建的 KVClient。ServiceDiscovery 的选址遵循 `host_id_
 | `data_placement_policy` | `PREFERRED_META_OWNER` | Set/MSet 数据放置策略 |
 | `fast_transport_mem_size` | "512MB" | 快速传输内存大小 |
 
+### KVClientConfig 覆盖
+
+通过 `client_config` 设置进程级 SDK 参数：
+
+```json
+{
+  "client_config": {
+    "urma_send_lane_count_per_peer": 16
+  }
+}
+```
+
+`urma_send_lane_count_per_peer` 必须大于 0，控制每个 kvtest Client 进程向单个远端 peer 并发占用的
+URMA send lane 上限，实际值不超过 SDK 的进程级 lane 池。未配置时不调用对应 Builder setter，保留 SDK
+默认值 `8`。Worker 响应 QueryAndGet 时使用 Worker 自身的同名配置，两端取值无需一致。
+
 ### Key 数量计算
 
 全局数据集的 key 数量由 `worker_memory_mb` 和 `data_sizes[0]` 自动计算：

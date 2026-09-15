@@ -15,6 +15,7 @@
  */
 #include "datasystem/utils/kv_client_config.h"
 
+#include <limits>
 #include <sstream>
 #include <vector>
 
@@ -156,6 +157,10 @@ void ValidateKvClientNumericFields(const std::unordered_map<std::string, std::st
                                        MAX_LOG_ASYNC_QUEUE_SIZE, reason)) {
         AddError(errors, "LogAsyncQueueSize", reason);
     }
+    if (!ValidateOptionalUint32InRange(args, "urma_send_lane_count_per_peer", 1,
+                                       std::numeric_limits<uint32_t>::max(), reason)) {
+        AddError(errors, "UrmaSendLaneCountPerPeer", reason);
+    }
 }
 
 void CollectKvClientBuildErrors(const std::unordered_map<std::string, std::string> &args,
@@ -271,6 +276,12 @@ KVClientConfig::Builder &KVClientConfig::Builder::LogMonitorEnable(bool enable)
 KVClientConfig::Builder &KVClientConfig::Builder::MonitorConfigPath(const std::string &path)
 {
     args_["monitor_config_file"] = path;
+    return *this;
+}
+
+KVClientConfig::Builder &KVClientConfig::Builder::UrmaSendLaneCountPerPeer(uint32_t count)
+{
+    args_["urma_send_lane_count_per_peer"] = std::to_string(count);
     return *this;
 }
 

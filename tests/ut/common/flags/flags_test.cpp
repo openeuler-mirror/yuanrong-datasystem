@@ -627,6 +627,7 @@ TEST_F(FlagsTest, KVClientConfigBuilderStoresExplicitValues)
                         .LogAsyncQueueSize(4096)
                         .LogMonitorEnable(false)
                         .MonitorConfigPath("/tmp/ds.config")
+                        .UrmaSendLaneCountPerPeer(16)
                         .Build(config);
     ASSERT_EQ(status, Status::OK());
     ASSERT_EQ(config.GetArgs().at("log_dir"), "/tmp/ds_logs");
@@ -647,6 +648,7 @@ TEST_F(FlagsTest, KVClientConfigBuilderStoresExplicitValues)
     ASSERT_EQ(config.GetArgs().at("log_async_queue_size"), "4096");
     ASSERT_EQ(config.GetArgs().at("log_monitor"), "false");
     ASSERT_EQ(config.GetArgs().at("monitor_config_file"), "/tmp/ds.config");
+    ASSERT_EQ(config.GetArgs().at("urma_send_lane_count_per_peer"), "16");
 }
 
 TEST_F(FlagsTest, KVClientConfigBuilderAggregatesInvalidValues)
@@ -657,12 +659,14 @@ TEST_F(FlagsTest, KVClientConfigBuilderAggregatesInvalidValues)
                         .MinLogLevel(4)
                         .MaxLogSize(0)
                         .LogAsyncQueueSize(255)
+                        .UrmaSendLaneCountPerPeer(0)
                         .Build(config);
     ASSERT_EQ(status.GetCode(), StatusCode::K_INVALID);
     EXPECT_THAT(status.GetMsg(), testing::HasSubstr("LogName"));
     EXPECT_THAT(status.GetMsg(), testing::HasSubstr("MinLogLevel"));
     EXPECT_THAT(status.GetMsg(), testing::HasSubstr("MaxLogSize"));
     EXPECT_THAT(status.GetMsg(), testing::HasSubstr("LogAsyncQueueSize"));
+    EXPECT_THAT(status.GetMsg(), testing::HasSubstr("UrmaSendLaneCountPerPeer"));
     EXPECT_TRUE(config.GetArgs().empty());
 }
 
@@ -1217,6 +1221,20 @@ TEST_F(FlagsTest, TestDoubleFlagAcceptsScientificNotation)
 TEST_F(FlagsTest, UbTransportArenaNumDefaultsToFour)
 {
     EXPECT_EQ(FLAGS_ub_transport_arena_num, 4u);
+}
+
+TEST_F(FlagsTest, UrmaSendLaneCountPerPeerMustBePositive)
+{
+    const uint32_t oldLaneCount = FLAGS_urma_send_lane_count_per_peer;
+    std::string errMsg;
+
+    EXPECT_EQ(FLAGS_urma_send_lane_count_per_peer, 8u);
+    ASSERT_TRUE(SetCommandLineOption("urma_send_lane_count_per_peer", "16", errMsg));
+    EXPECT_EQ(FLAGS_urma_send_lane_count_per_peer, 16u);
+    ASSERT_FALSE(SetCommandLineOption("urma_send_lane_count_per_peer", "0", errMsg));
+    EXPECT_EQ(FLAGS_urma_send_lane_count_per_peer, 16u);
+
+    FLAGS_urma_send_lane_count_per_peer = oldLaneCount;
 }
 
 TEST_F(FlagsTest, UbTransportArenaNumAccepts32AndRejects33)
