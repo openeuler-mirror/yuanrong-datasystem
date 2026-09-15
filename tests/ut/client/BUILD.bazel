@@ -319,3 +319,17 @@ ds_cc_test(
         "//conditions:default": [],
     }),
 )
+
+ds_cc_test(
+    name = "client_worker_remote_api_reconnect_test",
+    srcs = ["client_worker_remote_api_reconnect_test.cpp"],
+    deps = [
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/common/ak_sk:signature",
+        "//src/datasystem/common/rpc:api_deadline",
+        "//src/datasystem/common/rpc:rpc_server",
+        "//src/datasystem/protos:object_posix_brpc",
+        "//src/datasystem/protos:share_memory_brpc",
+        "//tests/ut:ut_common",
+    ],
+)

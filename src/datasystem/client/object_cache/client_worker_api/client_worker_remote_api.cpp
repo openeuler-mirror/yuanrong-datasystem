@@ -71,6 +71,10 @@ const std::unordered_set<StatusCode> RETRY_ERROR_CODE{ StatusCode::K_TRY_AGAIN, 
                                                        StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_OUT_OF_MEMORY };
 static constexpr uint64_t P2P_TIMEOUT_MS = 60000;
 constexpr uint64_t P2P_SUBSCRIBE_TIMEOUT_MS = 20000;
+// Hard cap on Publish OC-session rebuild attempts inside one call's request budget.
+// Each attempt needs at least one socket-availability interval, so the budget check
+// already bounds it; this guards against pathological fast peer-dead loops.
+constexpr uint32_t MAX_PUBLISH_SESSION_REBUILD_ATTEMPTS = 32;
 
 namespace {
 bool IsUrmaFallbackPayload(const std::shared_ptr<ObjectBufferInfo> &bufferInfo)
@@ -234,6 +238,47 @@ Status ClientWorkerRemoteApi::Init(int32_t requestTimeoutMs, int32_t connectTime
     return Status::OK();
 }
 
+void ClientWorkerRemoteApi::RecreateOCStub()
+{
+    // Default socket-availability window (30 * 100ms). Reconnection from the recovery
+    // loop can afford the full window; the Publish rebuild-retry path passes a shorter
+    // budget so the wait cannot consume the caller's request deadline.
+    RecreateOCStub(kBrpcConnMaxRetries * kBrpcConnRetryIntervalUs);
+}
+
+void ClientWorkerRemoteApi::RecreateOCStub(int64_t maxWaitUs)
+{
+    int32_t stubTimeout = connectTimeoutMs_;
+    if (clientDeadTimeoutMs_ > 0) {
+        stubTimeout = std::min(clientDeadTimeoutMs_, static_cast<uint64_t>(requestTimeoutMs_));
+    }
+    HostPort brpcAddr(hostPort_.Host(), hostPort_.Port());
+    BrpcChannelConfig cfg;
+    cfg.endpoint = brpcAddr.ToString();
+    cfg.timeout_ms = requestTimeoutMs_;
+    cfg.connect_timeout_ms = stubTimeout;
+    cfg.max_retry = 0;
+    std::shared_ptr<brpc::Channel> newChannel(BrpcChannelFactory::Create(cfg));
+    if (newChannel == nullptr) {
+        LOG(ERROR) << "Failed to init brpc channel for WorkerOCService stub, endpoint=" << brpcAddr.ToString();
+        return;
+    }
+    // If the brpc socket is not reachable, keep the old session as fallback rather
+    // than swapping in a dead stub; the caller's reconnect/retry loop retries later.
+    int maxRetries = static_cast<int>(maxWaitUs / kBrpcConnRetryIntervalUs);
+    if (maxRetries < 1) {
+        maxRetries = 1;
+    }
+    if (!WaitForBrpcSocketAvailable(brpcAddr, maxRetries, kBrpcConnRetryIntervalUs)) {
+        LOG(ERROR) << "brpc socket not available for WorkerOCService stub, endpoint=" << brpcAddr.ToString();
+        return;
+    }
+    auto newStub = std::make_shared<WorkerOCService_BrpcGenericStub>(newChannel.get(), stubTimeout);
+    auto newSession = std::make_shared<BrpcSession>(std::move(newStub), std::move(newChannel));
+    std::atomic_store(&brpcSession_, newSession);
+    LOG(INFO) << "Recreated WorkerOCService brpc session, endpoint=" << brpcAddr.ToString();
+}
+
 Status ClientWorkerRemoteApi::InitDecreaseQueue()
 {
     QueueInfo defaultMeta;
@@ -286,6 +331,7 @@ Status ClientWorkerRemoteApi::ReconnectWorker(const std::vector<std::string> &gR
     req.add_extend()->PackFrom(extendPb);
     req.set_client_id(clientId_);
     RETURN_IF_NOT_OK(Connect(req, connectTimeoutMs_, true));
+    RecreateOCStub();
     RETURN_IF_NOT_OK(TryFastTransportAfterHeartbeat());
     return Status::OK();
 }
@@ -660,26 +706,9 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
     }
     PublishRspPb rsp;
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_PUBLISH_OBJECT);
-    bool isRetry = false;
-    std::optional<Status> firstAmbiguousPublish;
     Timer rpcTimer;
-    auto status =
-        RetryOnError(
-            static_cast<int32_t>(std::min<int64_t>(
-            TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()), MAX_RPC_TIMEOUT_MS)),
-            [this, &req, &rsp, &payloads, &isRetry, &firstAmbiguousPublish](int32_t realRpcTimeout) {
-            auto rc = DoPublishRpc(req, rsp, payloads, isRetry, realRpcTimeout);
-            if (!firstAmbiguousPublish.has_value() && IsRetryableRpcError(rc)
-                && !IsBrpcRequestDefinitelyNotSent(rc) && !IsBrpcServerApplicationError(rc)) {
-                firstAmbiguousPublish = rc;
-            }
-            return rc;
-        },
-        []() { return Status::OK(); }, RETRY_ERROR_CODE,
-        requestTimeoutMs > 0 ? requestTimeoutMs : rpcTimeoutMs_);
-    if (status.IsError() && firstAmbiguousPublish.has_value()) {
-        status = *firstAmbiguousPublish;
-    }
+    const int32_t rpcBudgetMs = requestTimeoutMs > 0 ? requestTimeoutMs : rpcTimeoutMs_;
+    auto status = PublishWithSessionRebuild(req, rsp, payloads, rpcBudgetMs);
     const auto *path = isShm ? "SHM" : (bufferInfo->ubUrmaDataInfo != nullptr ? "UB" : "TCP");
     RETURN_IF_NOT_OK(HandlePublishResponse(status, rsp, traceEnabled, path, rpcTimer.ElapsedMicroSecond()));
     RecordPublishWriteBytes(bufferInfo, isShm);
@@ -687,6 +716,62 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
         : (bufferInfo->ubDataSentByMemoryCopy ? AccessTransportKind::UB : AccessTransportKind::TCP);
     AccessTransportTracker::Record(publishKind);
     return Status::OK();
+}
+
+Status ClientWorkerRemoteApi::PublishWithSessionRebuild(PublishReqPb &req, PublishRspPb &rsp,
+                                                        std::vector<MemView> &payloads, int32_t rpcBudgetMs)
+{
+    Status status;
+    bool isRetry = false;
+    std::optional<Status> firstAmbiguousPublish;
+    std::optional<Status> lastPeerDead;
+    Timer rpcTimer;
+    for (uint32_t rebuildAttempt = 0; rebuildAttempt <= MAX_PUBLISH_SESSION_REBUILD_ATTEMPTS; ++rebuildAttempt) {
+        status =
+            RetryOnError(
+                static_cast<int32_t>(std::min<int64_t>(
+                TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()), MAX_RPC_TIMEOUT_MS)),
+                [this, &req, &rsp, &payloads, &isRetry, &firstAmbiguousPublish](int32_t realRpcTimeout) {
+                auto rc = DoPublishRpc(req, rsp, payloads, isRetry, realRpcTimeout);
+                if (!firstAmbiguousPublish.has_value() && IsRetryableRpcError(rc)
+                    && !IsBrpcRequestDefinitelyNotSent(rc) && !IsBrpcServerApplicationError(rc)) {
+                    firstAmbiguousPublish = rc;
+                }
+                return rc;
+            },
+            []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcBudgetMs);
+        // Publish is non-idempotent: only a peer-dead result proven definitely-not-sent
+        // by brpc connection diagnostics may be replayed after rebuilding the OC
+        // session. Ambiguous failures keep the existing no-replay contract.
+        if (status.GetCode() != StatusCode::K_RPC_PEER_DEAD || !IsBrpcRequestDefinitelyNotSent(status)
+            || rebuildAttempt == MAX_PUBLISH_SESSION_REBUILD_ATTEMPTS) {
+            break;
+        }
+        const int64_t remainingUs =
+            std::min<int64_t>(ApiDeadline::Instance().IsInitialized()
+                                  ? ApiDeadline::Instance().ApiRemainingUs()
+                                  : (rpcBudgetMs - rpcTimer.ElapsedMilliSecond()) * 1000LL,
+                              (rpcBudgetMs - rpcTimer.ElapsedMilliSecond()) * 1000LL);
+        if (remainingUs <= kBrpcConnRetryIntervalUs) {
+            break;
+        }
+        LOG(WARNING) << "Publish to " << hostPort_.ToString()
+                     << " hit a dead OC session before the request was sent, rebuilding session and retrying: "
+                     << status.ToString();
+        lastPeerDead = status;
+        RecreateOCStub(remainingUs);
+    }
+    // The rebuild loop can end on K_RPC_DEADLINE_EXCEEDED (RetryOnError's deadline
+    // check fired right after a rebuild wait) even though every observed RPC failure
+    // was peer-dead. The caller's failure class must reflect the real transport
+    // state, so restore the last peer-dead status over a pure budget-expiry result.
+    if (status.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED && lastPeerDead.has_value()) {
+        status = *lastPeerDead;
+    }
+    if (status.IsError() && firstAmbiguousPublish.has_value()) {
+        status = *firstAmbiguousPublish;
+    }
+    return status;
 }
 
 Status ClientWorkerRemoteApi::DoPublishRpc(PublishReqPb& req, PublishRspPb& rsp, std::vector<MemView>& payloads,
