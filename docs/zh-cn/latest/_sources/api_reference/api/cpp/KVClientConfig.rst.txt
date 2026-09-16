@@ -9,7 +9,7 @@ KVClientConfig
     KV 客户端初始化配置。通过嵌套类 :cpp:class:`KVClientConfig::Builder` 构建，
     并在 ``KVClient::Init(const KVClientConfig &clientConfig)`` 中传入。
 
-    本配置仅覆盖客户端日志与监控参数，不包含 :cpp:class:`ConnectOptions` 中的连接选项。
+    本配置覆盖客户端日志、监控及进程级传输参数，不包含 :cpp:class:`ConnectOptions` 中的连接选项。
 
     **配置生效规则**
 
@@ -59,7 +59,7 @@ KVClientConfig
     :header-file: #include <datasystem/utils/kv_client_config.h>
     :namespace: datasystem
 
-    KV 客户端配置构建器，支持链式设置日志和监控参数。
+    KV 客户端配置构建器，支持链式设置日志、监控及进程级传输参数。
 
     **公共函数**
 
@@ -173,6 +173,12 @@ KVClientConfig
        对应环境变量 ``DATASYSTEM_CLIENT_CONFIG_PATH``，默认值为
        ``~/datasystem/config/datasystem.config``。设为空字符串时禁用文件监控，
        此时可通过 :cpp:func:`KVClient::UpdateConfig` 动态更新配置；两者互斥，不能同时使用。
+
+    .. cpp:function:: Builder &UrmaSendLaneCountPerPeer(uint32_t count)
+
+       设置客户端发送到单个远端 peer 时可并发占用的 URMA send lane 上限。``count`` 必须大于 ``0``，
+       默认值为 ``8``，实际生效值为该值与进程级 ``urma_send_jetty_lane_pool_size`` 的较小值。
+       该配置由进程内首次 ``KVClient::Init`` 固化，不支持运行时热更新。
 
     .. cpp:function:: Status Build(KVClientConfig &config) const
 
