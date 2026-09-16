@@ -1691,6 +1691,7 @@ void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shar
             << ", " << wakeSchedMetricName << ":" << wakeSchedLatencyUs
             << ", completionObservationLatencyUs:" << completionObservationLatencyUs
             << ", urmaEventProcessingAndWaitLatencyUs:" << eventProcessingAndWaitLatencyUs
+            << ", postSrcChipInflight:" << event->GetPostSrcChipInflight()
             << ", srcChipInflight:" << GetSrcChipInflightWrCountsString()
             << ", trace_us:{post:" << trace.postUs << ", wait:" << trace.waitUs
             << ", poll_begin:" << trace.pollBeginUs << ", sleep_start:" << trace.sleepStartUs
@@ -2590,6 +2591,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
                                            static_cast<uint32_t>(args.dstChipId), useNumaAffinity ? "true" : "false",
                                            URMA_ERROR_SUGGEST));
         }
+        event->SetPostSrcChipInflight(GetSrcChipInflightWrCountsString());
         t.Stop();
         auto elapsedUs = t.ElapsedMicroSecond();
         auto vlogLevel = elapsedUs > URMA_WRITE_VLOG0_LIMIT_US ? 0 : 1;
