@@ -4905,9 +4905,10 @@ Status ObjectClientImpl::DsCudaMemcpyAsync(void *dst, const void *src, size_t si
     CHECK_FAIL_RETURN_STATUS(kind == DsCudaMemcpyKind::HOST_TO_DEVICE || kind == DsCudaMemcpyKind::DEVICE_TO_HOST,
                              K_INVALID, "Invalid CUDA memcpy direction");
     RETURN_RUNTIME_ERROR_IF_NULL(hostMemoryPinManager_);
+    const auto prepareBegin = std::chrono::steady_clock::now();
     const void *hostPointer = kind == DsCudaMemcpyKind::HOST_TO_DEVICE ? src : dst;
     std::vector<size_t> segmentSizes;
-    RETURN_IF_NOT_OK(hostMemoryPinManager_->GetMemcpySegmentSizes(hostPointer, size, segmentSizes));
+    const auto prepareStatus = hostMemoryPinManager_->GetMemcpySegmentSizes(hostPointer, size, segmentSizes);
     if (segmentSizes.size() > 1) {
         const char *direction = kind == DsCudaMemcpyKind::HOST_TO_DEVICE ? "H2D" : "D2H";
         VLOG(1) << "[CudaMemcpyAsync] Worker shared memory copy crosses pin fragment boundaries, direction: "
@@ -4916,6 +4917,25 @@ Status ObjectClientImpl::DsCudaMemcpyAsync(void *dst, const void *src, size_t si
                 << ", firstSegmentSize: " << segmentSizes.front()
                 << ", lastSegmentSize: " << segmentSizes.back();
     }
+    const auto prepareUs = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - prepareBegin).count();
+    static CudaSlowLogState h2dPrepareLimiter;
+    static CudaSlowLogState d2hPrepareLimiter;
+    auto &prepareLimiter = kind == DsCudaMemcpyKind::HOST_TO_DEVICE ? h2dPrepareLimiter : d2hPrepareLimiter;
+    uint64_t suppressedCount = 0;
+    int64_t suppressedMaxUs = 0;
+    if (prepareUs > CUDA_SLOW_OPERATION_THRESHOLD_US
+        && TryAcquireCudaSlowLog(prepareLimiter, prepareUs, suppressedCount, suppressedMaxUs)) {
+        const auto endTimestampUs = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        LOG(INFO) << "[CUDA_MEMCPY_PREPARE_SLOW] direction="
+                  << (kind == DsCudaMemcpyKind::HOST_TO_DEVICE ? "H2D" : "D2H")
+                  << " hostPointer=" << hostPointer << " size=" << size << " stream=" << stream
+                  << " segmentCount=" << segmentSizes.size() << " prepare_us=" << prepareUs
+                  << " end_timestamp_us=" << endTimestampUs << " status=" << prepareStatus.ToString()
+                  << " suppressed_count=" << suppressedCount << " suppressed_max_us=" << suppressedMaxUs;
+    }
+    RETURN_IF_NOT_OK(prepareStatus);
     size_t offset = 0;
     for (size_t segmentSize : segmentSizes) {
         auto *segmentDst = static_cast<uint8_t *>(dst) + offset;

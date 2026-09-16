@@ -152,7 +152,27 @@
     cannot unpin or unmap it while registration is still running. Per-fragment register/unregister start and finish
     details are `VLOG(1)`; failures remain `ERROR`, while each whole Worker mapping emits `INFO` start/finish summaries
     with elapsed time and failure counts. A `DsCudaMemcpyAsync` crossing fragment boundaries emits one `VLOG(1)`
-    summary. Worker mapping publication copies live weak entries under a writer-only mutex and atomically publishes an
+    summary. With VLOG disabled, operations exceeding 100 ms still emit thresholded `INFO` diagnostics:
+    `CUDA_HOST_SLOW` measures a register/unregister callback, `CUDA_MEMCPY_SLOW` measures each memcpy callback,
+    and `CUDA_MEMCPY_PREPARE_SLOW` measures registry lookup, split preparation, and the existing cross-fragment log.
+    Each process independently rate-limits six categories: register, unregister, memcpy H2D/D2H, and prepare H2D/D2H.
+    The first slow event is admitted immediately; later admissions are at least 10 seconds apart per category.
+    The limiter uses `CudaSlowLogState` and `TryAcquireCudaSlowLog` in the existing
+    `common/device/nvidia/cuda_host_memory.h/.cpp`. It uses relaxed atomics and one CAS attempt without a mutex or
+    retry loop, only for slow events.
+    Each admitted log includes `suppressed_count`; concurrent suppressions may be attributed to this or the next log.
+    `suppressed_max_us` reports the best-effort maximum suppressed duration, excluding the admitted operation.
+    It uses one relaxed atomic CAS attempt without retry; contention may underestimate the maximum. Count and maximum
+    are independently exchanged with zero on admission and may be attributed to adjacent logs at concurrent boundaries.
+    Suppressed events do not trigger a timer-based summary: they are reported only on a later admitted slow event.
+    Admission does not bypass the existing INFO severity or request-sampling filters.
+    Host callback timing starts after the start log; slow diagnostics include elapsed microseconds and an end Unix
+    timestamp in microseconds captured before log emission. These are host-side durations, not GPU execution times;
+    reconstructing the start from the end timestamp is approximate. Unregister reports size zero because its callback
+    has no size argument. A callback exception makes its return-code field invalid. Diagnostics appear only after
+    the call returns or throws, do not detect permanently stuck calls, and do not change CUDA synchronization.
+    Fast fragments retain their existing VLOG level; whole-mapping summaries and error logs remain unchanged.
+    Worker mapping publication copies live weak entries under a writer-only mutex and atomically publishes an
     immutable registry Snapshot. Concurrent `DsCudaMemcpyAsync` range lookups atomically retain and scan one Snapshot,
     so they neither block publication nor invoke a CUDA callback while holding an internal registry lock.
     CUDA-enabled applications must call `KVClient::RegisterCudaFuncs` before initializing any `KVClient`; the first

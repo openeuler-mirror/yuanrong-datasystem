@@ -33,7 +33,54 @@
 #include "datasystem/common/log/log.h"
 
 namespace datasystem {
+
+bool TryAcquireCudaSlowLog(CudaSlowLogState &state, int64_t elapsedUs, uint64_t &suppressedCount,
+                           int64_t &suppressedMaxUs,
+                           std::chrono::steady_clock::time_point now)
+{
+    const auto nowUs = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+    auto nextAllowedUs = state.nextAllowedUs.load(std::memory_order_relaxed);
+    if (nowUs < nextAllowedUs
+        || !state.nextAllowedUs.compare_exchange_strong(nextAllowedUs, nowUs + CUDA_SLOW_LOG_INTERVAL_US,
+                                                       std::memory_order_relaxed)) {
+        state.suppressedCount.fetch_add(1, std::memory_order_relaxed);
+        auto maxUs = state.suppressedMaxUs.load(std::memory_order_relaxed);
+        if (elapsedUs > maxUs) {
+            // Best effort: do not retry on contention for diagnostic-only statistics.
+            (void)state.suppressedMaxUs.compare_exchange_strong(maxUs, elapsedUs, std::memory_order_relaxed);
+        }
+        return false;
+    }
+    // Concurrent counts and maxima may be attributed to adjacent emissions independently.
+    suppressedCount = state.suppressedCount.exchange(0, std::memory_order_relaxed);
+    suppressedMaxUs = state.suppressedMaxUs.exchange(0, std::memory_order_relaxed);
+    return true;
+}
+
 namespace {
+void LogSlowHostMemoryCallback(bool registering, void *pointer, size_t size, int64_t elapsedUs, int rc,
+                               bool callbackException = false)
+{
+    if (elapsedUs <= CUDA_SLOW_OPERATION_THRESHOLD_US) {
+        return;
+    }
+    static CudaSlowLogState registerLimiter;
+    static CudaSlowLogState unregisterLimiter;
+    auto &limiter = registering ? registerLimiter : unregisterLimiter;
+    uint64_t suppressedCount = 0;
+    int64_t suppressedMaxUs = 0;
+    if (!TryAcquireCudaSlowLog(limiter, elapsedUs, suppressedCount, suppressedMaxUs)) {
+        return;
+    }
+    const auto endTimestampUs = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    LOG(INFO) << "[CUDA_HOST_SLOW] operation=" << (registering ? "register" : "unregister")
+              << " pointer=" << pointer << " size=" << size
+              << " callback_us=" << elapsedUs << " end_timestamp_us=" << endTimestampUs
+              << " rc=" << rc << " callback_exception=" << callbackException
+              << " suppressed_count=" << suppressedCount << " suppressed_max_us=" << suppressedMaxUs;
+}
+
 class CudaRuntimeApi {
 public:
     static CudaRuntimeApi &Instance()
@@ -89,14 +136,15 @@ public:
             LOG(ERROR) << "[CudaHostMemory] Invalid CUDA host memory range, pointer: " << pointer << ", size: " << size;
             return false;
         }
-        auto begin = std::chrono::steady_clock::now();
         VLOG(1) << "[CudaHostMemory] cudaHostRegister started, pointer: " << pointer << ", size: " << size;
         int rc = kCudaSuccess;
+        const auto begin = std::chrono::steady_clock::now();
         try {
             rc = funcs.hostRegister(pointer, size, kCudaHostRegisterPortable);
         } catch (const std::exception &e) {
             const auto elapsedUs =
                 std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin);
+            LogSlowHostMemoryCallback(true, pointer, size, elapsedUs.count(), rc, true);
             VLOG(1) << "[CudaHostMemory] cudaHostRegister finished, pointer: " << pointer << ", size: " << size
                     << ", elapsedUs: " << elapsedUs.count() << ", callbackException: true";
             LOG(ERROR) << "[CudaHostMemory] cudaHostRegister callback threw an exception, pointer: " << pointer
@@ -105,6 +153,7 @@ public:
         } catch (...) {
             const auto elapsedUs =
                 std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin);
+            LogSlowHostMemoryCallback(true, pointer, size, elapsedUs.count(), rc, true);
             VLOG(1) << "[CudaHostMemory] cudaHostRegister finished, pointer: " << pointer << ", size: " << size
                     << ", elapsedUs: " << elapsedUs.count() << ", callbackException: true";
             LOG(ERROR) << "[CudaHostMemory] cudaHostRegister callback threw an unknown exception, pointer: " << pointer
@@ -113,6 +162,7 @@ public:
         }
         auto elapsedUs =
             std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin);
+        LogSlowHostMemoryCallback(true, pointer, size, elapsedUs.count(), rc);
         VLOG(1) << "[CudaHostMemory] cudaHostRegister finished, pointer: " << pointer << ", size: " << size
                 << ", elapsedUs: " << elapsedUs.count() << ", return: " << rc;
         if (rc != kCudaSuccess && rc != kCudaErrorHostMemoryAlreadyRegistered) {
@@ -135,14 +185,15 @@ public:
             LOG(ERROR) << "[CudaHostMemory] Invalid CUDA host memory unregister pointer: " << pointer;
             return false;
         }
-        auto begin = std::chrono::steady_clock::now();
         VLOG(1) << "[CudaHostMemory] cudaHostUnregister started, pointer: " << pointer;
         int rc = kCudaSuccess;
+        const auto begin = std::chrono::steady_clock::now();
         try {
             rc = funcs.hostUnregister(pointer);
         } catch (const std::exception &e) {
             const auto elapsedUs =
                 std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin);
+            LogSlowHostMemoryCallback(false, pointer, 0, elapsedUs.count(), rc, true);
             VLOG(1) << "[CudaHostMemory] cudaHostUnregister finished, pointer: " << pointer
                     << ", elapsedUs: " << elapsedUs.count() << ", callbackException: true";
             LOG(ERROR) << "[CudaHostMemory] cudaHostUnregister callback threw an exception, pointer: " << pointer
@@ -151,6 +202,7 @@ public:
         } catch (...) {
             const auto elapsedUs =
                 std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin);
+            LogSlowHostMemoryCallback(false, pointer, 0, elapsedUs.count(), rc, true);
             VLOG(1) << "[CudaHostMemory] cudaHostUnregister finished, pointer: " << pointer
                     << ", elapsedUs: " << elapsedUs.count() << ", callbackException: true";
             LOG(ERROR) << "[CudaHostMemory] cudaHostUnregister callback threw an unknown exception, pointer: "
@@ -159,6 +211,7 @@ public:
         }
         auto elapsedUs =
             std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin);
+        LogSlowHostMemoryCallback(false, pointer, 0, elapsedUs.count(), rc);
         VLOG(1) << "[CudaHostMemory] cudaHostUnregister finished, pointer: " << pointer
                 << ", elapsedUs: " << elapsedUs.count() << ", return: " << rc;
         if (rc != kCudaSuccess) {
@@ -176,13 +229,39 @@ public:
             return Status(K_NOT_SUPPORTED, "CUDA memcpyAsync callback is not registered");
         }
         int rc = kCudaSuccess;
+        const auto begin = std::chrono::steady_clock::now();
+        const auto logSlow = [begin, kind, dst, src, size, stream, &rc](bool callbackException = false) {
+            const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - begin).count();
+            if (elapsedUs > CUDA_SLOW_OPERATION_THRESHOLD_US) {
+                static CudaSlowLogState h2dLimiter;
+                static CudaSlowLogState d2hLimiter;
+                auto &limiter = kind == DsCudaMemcpyKind::HOST_TO_DEVICE ? h2dLimiter : d2hLimiter;
+                uint64_t suppressedCount = 0;
+                int64_t suppressedMaxUs = 0;
+                if (!TryAcquireCudaSlowLog(limiter, elapsedUs, suppressedCount, suppressedMaxUs)) {
+                    return;
+                }
+                const auto endTimestampUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                LOG(INFO) << "[CUDA_MEMCPY_SLOW] direction="
+                          << (kind == DsCudaMemcpyKind::HOST_TO_DEVICE ? "H2D" : "D2H")
+                          << " dst=" << dst << " src=" << src << " size=" << size << " stream=" << stream
+                          << " callback_us=" << elapsedUs << " end_timestamp_us=" << endTimestampUs
+                          << " rc=" << rc << " callback_exception=" << callbackException
+                          << " suppressed_count=" << suppressedCount << " suppressed_max_us=" << suppressedMaxUs;
+            }
+        };
         try {
             rc = funcs.memcpyAsync(dst, src, size, kind, stream);
         } catch (const std::exception &e) {
+            logSlow(true);
             return Status(K_RUNTIME_ERROR, std::string("CUDA memcpyAsync callback threw an exception: ") + e.what());
         } catch (...) {
+            logSlow(true);
             return Status(K_RUNTIME_ERROR, "CUDA memcpyAsync callback threw an unknown exception");
         }
+        logSlow();
         if (rc != kCudaSuccess) {
             return Status(K_RUNTIME_ERROR,
                           "CUDA memcpyAsync failed, return: " + std::to_string(rc) +

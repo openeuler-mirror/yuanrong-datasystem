@@ -811,8 +811,8 @@ void ClientWorkerRemoteCommonApi::ConstructPipelineDataShmUnits(const RegisterCl
         shmUnit->id = ShmKey::Intern("");  // not must
         pipelineDataShmUnits_.emplace_back(std::move(shmUnit));
     }
-    LOG(INFO) << PIPLN_LOG_PREFIX "RegisterClient received " << pipelineDataShmUnits_.size()
-              << " shm fds for cudaHostRegister";
+    VLOG(1) << PIPLN_LOG_PREFIX "RegisterClient received " << pipelineDataShmUnits_.size()
+            << " shm fds for cudaHostRegister";
 }
 
 void ClientWorkerRemoteCommonApi::CloseSocketFd()
