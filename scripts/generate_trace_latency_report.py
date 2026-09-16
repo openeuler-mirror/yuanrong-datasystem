@@ -134,7 +134,7 @@ _RE_EXCEED = re.compile(r"(\w[\w\s]*?):\s+(\d+)\s*ms")
 _RE_MASTER_DONE = re.compile(r"\[Get\] Master query done.*?cost:\s+([\d.]+)ms")
 _RE_REMOTE_DONE = re.compile(r"\[Get\] Remote done.*?cost:\s+([\d.]+)ms")
 _RE_REMOTE_PULL = re.compile(r"\[Get/RemotePull\] finish.*?cost:\s+([\d.]+)ms")
-_RE_URMA = re.compile(r"\[URMA_ELAPSED_TOTAL\].*?cost\s+([\d.]+)ms")
+_RE_URMA = re.compile(r"\[URMA_ELAPSED_TOTAL\].*?cost:\s*([\d.]+)ms")
 _RE_ZMQ = re.compile(
     r"\[ZMQ_RPC_FRAMEWORK_SLOW\].*?e2e_us=(\d+)\s+"
     r"client_req_framework_us=(\d+)\s+remote_processing_us=(\d+)\s+"

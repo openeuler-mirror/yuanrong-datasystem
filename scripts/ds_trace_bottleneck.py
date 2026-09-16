@@ -822,7 +822,7 @@ def _request_from_event(
         "total_ms": total_ms,
         "is_slow": _is_slow_wr(total_ms),
         "wait_completion_ms": _raw_float(
-            raw, r"wait bthread completion time\([^)]*\):\s*([\d.]+)ms"
+            raw, r"condition wait\([^)]*\):\s*([\d.]+)ms"
         ),
         "wake_sched_latency_ms": round(float(wake_us) / 1000.0, 6) if wake_us is not None else None,
         "poll_jfc_ms": event.get("poll_jfc_ms"),
@@ -831,12 +831,12 @@ def _request_from_event(
         "trace_us": trace_us,
         "write_chunk_index": int(
             event.get("write_chunk_index")
-            or _raw_float(raw, r"writeChunkIndex\s*:\s*(\d+)")
+            or _raw_float(raw, r"writeChunkIdx\s*:\s*(\d+)")
             or 0
         ),
         "write_chunk_count": int(
             event.get("write_chunk_count")
-            or _raw_float(raw, r"writeChunkCount\s*:\s*(\d+)")
+            or _raw_float(raw, r"writeChunkCnt\s*:\s*(\d+)")
             or 0
         ),
         "post_to_wait_ms": _delta_ms(trace_us, "post", "wait"),
@@ -1255,7 +1255,7 @@ def _extract_trace(trace_id: str, trace: dict) -> dict:
 
         urma_match = re.search(r"URMA_ELAPSED_TOTAL.*?total cost ([\d.]+)ms", text)
         if not urma_match:
-            urma_match = re.search(r"URMA_ELAPSED_TOTAL.*?cost\s+([\d.]+)ms", text)
+            urma_match = re.search(r"URMA_ELAPSED_TOTAL.*?cost:\s*([\d.]+)ms", text)
         if urma_match:
             urma_cost = float(urma_match.group(1))
             urma_values.append(urma_cost)
@@ -1853,7 +1853,7 @@ def _apply_inline_query_urma_attribution(row: dict) -> None:
     row["query_meta_exclusive_ms"] = row["attribution_ms"]["QueryMeta"]
     inline_candidates = []
     inline_pattern = re.compile(
-        r"QueryAndGet done,.*?inlineHits:\s*(\d+).*?transport:\s*UB\b.*?total:\s*([\d.]+)ms",
+        r"QueryAndGet done,.*?inlineHit:\s*(\d+).*?transport:\s*UB\b.*?total:\s*([\d.]+)ms",
         re.I,
     )
     for item in row.get("evidence_records", []):
@@ -2109,7 +2109,7 @@ def _query_meta_detail(row: dict) -> dict | None:
         rpc_e2e_ms and query_total_ms and rpc_e2e_ms < query_total_ms * 0.5
     )
     legacy_try_get_urma_observed = bool(row.get("urma_requests")) and any(
-        re.search(r"Processing pull object.*\bsrc=:-1", text, re.I)
+        re.search(r"Processing pull obj.*\bsrc=:-1", text, re.I)
         for text in row.get("evidence", [])
     )
     try_get_urma_observed = (
@@ -2204,10 +2204,10 @@ def _refine_data_access_scope(row: dict) -> None:
         evidence, r"\[TransportGet\].*?phasesUs=\{[^}]*\bdata_transfer:(\d+)", divisor=1000.0
     )
     provider_pull_ms = _max_evidence_ms(
-        evidence, r"Processing pull object.*?\bcost:\s*([\d.]+)ms"
+        evidence, r"Processing pull obj.*?\bcost:\s*([\d.]+)ms"
     )
     provider_finish_ms = _max_evidence_ms(
-        evidence, r"\[GetObjectRemote\]\s+finish.*?\bcost:\s*([\d.]+)ms"
+        evidence, r"\[GetObjRemote\]\s+finish.*?\bcost:\s*([\d.]+)ms"
     )
     data_parent_ms = row.get("direct_get_data_ms") or row.get("worker_process_ms") or 0.0
     logical_write_ms = row.get("urma_critical_path_ms")
@@ -3428,8 +3428,8 @@ function toLogLatencyMs(key,raw,unit='',kind='field'){const value=Number(raw),u=
 function extractLogLatencyTokens(text){const source=String(text),values=[];for(const match of source.matchAll(/\|\s*(?:DS_KV_CLIENT_GET|DS_POSIX_GET)\s*\|\s*(\d+)\s*\|/g)){const ms=toLogLatencyMs('access',match[1],'us','access');if(ms!==null)values.push(ms)}for(const match of source.matchAll(/\b(totalCost|costUs|cost|ProcessGetObjectRequest|QueryMeta|[A-Za-z][A-Za-z0-9_]*_us|(?:client|worker)\.[A-Za-z0-9_.]+)\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(ms|us)?/gi)){const ms=toLogLatencyMs(match[1],match[2],match[3]||'');if(ms!==null)values.push(ms)}return values}
 function problemLatencyToken(display,ms,kind){const cls=latencyClass(ms);return cls?`<span class="log-token problem-latency ${cls}" data-latency-ms="${Number(ms).toFixed(3)}" data-latency-kind="${kind}" title="异常耗时 ${Number(ms).toFixed(3)}ms">${display}</span>`:display}
 function highlightLogLine(text){let html=esc(text);html=html.replace(/(\|\s*(?:DS_KV_CLIENT_GET|DS_POSIX_GET)\s*\|\s*)(\d+)(\s*\|)/g,(all,prefix,raw,suffix)=>`${prefix}${problemLatencyToken(raw,toLogLatencyMs('access',raw,'us','access'),'access')}${suffix}`);html=html.replace(/\b(totalCost|costUs|cost|ProcessGetObjectRequest|QueryMeta|[A-Za-z][A-Za-z0-9_]*_us|(?:client|worker)\.[A-Za-z0-9_.]+)(\s*[:=]?\s*)(\d+(?:\.\d+)?)(\s*(?:ms|us))?/gi,(all,key,sep,raw,unit='')=>{const kind=/^(?:client|worker)\./i.test(key)?'summary':/_us$/i.test(key)?'rpc':'stage',ms=toLogLatencyMs(key,raw,unit,kind);return `${key}${sep}${problemLatencyToken(`${raw}${unit}`,ms,kind)}`});return html.replace(/(\|\s*[EF]\s*\||\bERROR\b|\bFATAL\b|status[:=]?\s*1001|RPC failed)/gi,'<span class="log-keyword log-tag-error">$1</span>').replace(/(deadline exceeded|RPC timed out|\btimeout\b|20ms deadline)/gi,'<span class="log-keyword log-tag-deadline">$1</span>').replace(/(\[?URMA_ELAPSED_(?:TOTAL|POLL_JFC|NOTIFY|THREAD_SHED)\]?|URMA(?:[_ -]WAIT[_ -]TIMEOUT))/gi,'<span class="log-keyword log-tag-urma">$1</span>').replace(/(\[?(?:(?:ZMQ|BRPC)_)?RPC_FRAMEWORK_SLOW\]?)/gi,'<span class="log-keyword log-tag-rpc">$1</span>').replace(/(latencySummary)/gi,'<span class="log-keyword log-tag-latency">$1</span>').replace(/(BatchGetObjectRemote|RemotePull|DS_KV_CLIENT_GET|DS_POSIX_GET)/gi,'<span class="log-keyword log-tag-rpc">$1</span>').replace(/(urma_request_id|urma_inflight_wr_count|srcChipInflight|inflightRemoteGet|trace_us|dataSize|cpuid|src address|target address)/gi,'<span class="log-keyword log-tag-urma">$1</span>')}
-function logGroupSummary(lines){const joined=lines.join('\n'),values=lines.flatMap(extractLogLatencyTokens),max=values.length?Math.max(...values):null,direction=joined.match(/src address\s*:?\s*([^,\s]+).*?target address\s*:?\s*([^,\s]+)/i);const parts=[];if(max!==null)parts.push(`最大可解析耗时 ${fmt(max)}`);if(direction)parts.push(`方向 ${direction[1]} → ${direction[2]}`);if(/deadline|timeout/i.test(joined))parts.push('包含 deadline/timeout');return parts.join(' · ')||'保留原始证据，当前无可解析耗时字段'}
-function rankLogLine(text){if(/\|\s*[EF]\s*\||ERROR|FATAL|deadline exceeded|RPC timed out|URMA(?:[_ -]WAIT[_ -]TIMEOUT)|Timed out waiting for urma_request_id/i.test(text))return 0;if(/URMA_ELAPSED_TOTAL/i.test(text))return 1;if(/urma_inflight_wr_count|srcChipInflight|inflightRemoteGet|trace_us/i.test(text))return 2;if(/RPC_FRAMEWORK_SLOW|BatchGetObjectRemote|RemotePull/i.test(text))return 3;if(/DS_KV_CLIENT_GET|DS_POSIX_GET|latencySummary/i.test(text))return 4;if(/src address|target address|dataSize|cpuid/i.test(text))return 5;return 9}
+function logGroupSummary(lines){const joined=lines.join('\n'),values=lines.flatMap(extractLogLatencyTokens),max=values.length?Math.max(...values):null,direction=joined.match(/src addr\s*:?\s*([^,\s]+).*?tgt addr\s*:?\s*([^,\s]+)/i);const parts=[];if(max!==null)parts.push(`最大可解析耗时 ${fmt(max)}`);if(direction)parts.push(`方向 ${direction[1]} → ${direction[2]}`);if(/deadline|timeout/i.test(joined))parts.push('包含 deadline/timeout');return parts.join(' · ')||'保留原始证据，当前无可解析耗时字段'}
+function rankLogLine(text){if(/\|\s*[EF]\s*\||ERROR|FATAL|deadline exceeded|RPC timed out|URMA(?:[_ -]WAIT[_ -]TIMEOUT)|Timed out waiting for urma_request_id/i.test(text))return 0;if(/URMA_ELAPSED_TOTAL/i.test(text))return 1;if(/urma_inflight_wr_cnt|srcChipInflight|inflightRemoteGet|trace_us/i.test(text))return 2;if(/RPC_FRAMEWORK_SLOW|BatchGetObjectRemote|RemotePull/i.test(text))return 3;if(/DS_KV_CLIENT_GET|DS_POSIX_GET|latencySummary/i.test(text))return 4;if(/src addr|tgt addr|dataSize|cpuid/i.test(text))return 5;return 9}
 function renderTraceLogGroups(evidence){const labels={client:'Client',direct:'Data Worker处理证据',remote:'远端取数 / RPC',urma:'URMA / UB',other:'其他证据'},groups={client:[],direct:[],remote:[],urma:[],other:[]};(evidence||[]).forEach(text=>groups[classifyEvidence(text)].push(text));const html=Object.entries(groups).filter(([,lines])=>lines.length).map(([kind,lines])=>{const keyLines=lines.map((text,index)=>({text,index,rank:rankLogLine(text)})).sort((a,b)=>a.rank-b.rank||a.index-b.index).slice(0,8).map(item=>item.text),allLines=lines.map(text=>`<span class="log-line">${highlightLogLine(text)}</span>`).join(''),disclosure=lines.length>8?`<details class="log-all-lines"><summary>展开全部 ${lines.length} 行原始日志</summary><pre>${allLines}</pre></details>`:'';return `<section class="trace-log-group trace-log-${kind}"><h4><span>${labels[kind]}</span><span>${lines.length} 行 · 默认 ${keyLines.length} 行重点</span></h4><div class="trace-log-summary">${esc(logGroupSummary(lines))}</div><pre class="log-key-lines">${keyLines.map(text=>`<span class="log-line">${highlightLogLine(text)}</span>`).join('')}</pre>${disclosure}</section>`}).join('');return html||'<div class="empty">没有原始日志证据</div>'}
 function renderErrorNote(r){
   if(!r.error_family)return '';

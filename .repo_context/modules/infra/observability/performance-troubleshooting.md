@@ -82,7 +82,7 @@
     before `urma_post_jetty_send_wr` submission to write completion confirmation. The timestamp is captured when the
     event is created immediately before submit, so for chunked writes this is per-event lifetime latency rather than
     only the local blocking wait duration. The log includes request id, local source address, remote target address,
-    data size, CPU id, status, and an embedded next-step suggestion.
+    data size, CPU id, and status.
   - If `[URMA_ELAPSED_TOTAL]` appears, check whether companion logs appear in the same time window:
     `[URMA_ELAPSED_THREAD_SHED]`, `[URMA_ELAPSED_POLL_JFC]`, and `[URMA_ELAPSED_NOTIFY]`.
   - `[URMA_ELAPSED_THREAD_SHED]` means `nanosleep(1us)` wake-up cost exceeded 100 us; route to OS scheduling

@@ -137,7 +137,7 @@ RPC_SLOW_FIELD_RE = re.compile(
 )
 LATENCY_SUMMARY_RE = re.compile(r"latencySummary:\{([^}]*)\}")
 SUMMARY_ITEM_RE = re.compile(r"([A-Za-z][A-Za-z0-9_.-]*)\s*:\s*(\d+)")
-URMA_TOTAL_RE = re.compile(r"\[URMA_ELAPSED_TOTAL\].*?(?:total\s+)?cost\s+([\d.]+)ms", re.I)
+URMA_TOTAL_RE = re.compile(r"\[URMA_ELAPSED_TOTAL\].*?cost:\s*([\d.]+)ms", re.I)
 URMA_POLL_RE = re.compile(r"\[URMA_ELAPSED_POLL_JFC\].*?cost\s+([\d.]+)\s*(us|ms)", re.I)
 URMA_NOTIFY_RE = re.compile(r"\[URMA_ELAPSED_NOTIFY\].*?cost\s+([\d.]+)\s*(us|ms)", re.I)
 URMA_THREAD_RE = re.compile(r"\[URMA_ELAPSED_THREAD_SHED\].*?cost\s+([\d.]+)\s*(us|ms)", re.I)
@@ -281,8 +281,8 @@ class UrmaFieldParser:
             INFLIGHT_WR_RE,
             re.compile(r"\b(?:urma_inflight_wr_count|inflightWrCount|wrInflightCount)[:=]\s*(\d+)", re.I),
         ],
-        "write_chunk_index": [re.compile(r"\bwriteChunkIndex[:=]\s*(\d+)", re.I)],
-        "write_chunk_count": [re.compile(r"\bwriteChunkCount[:=]\s*(\d+)", re.I)],
+        "write_chunk_index": [re.compile(r"\bwriteChunkIdx[:=]\s*(\d+)", re.I)],
+        "write_chunk_count": [re.compile(r"\bwriteChunkCnt[:=]\s*(\d+)", re.I)],
     }
     FLOAT_FIELDS = {
         "wait_os_sched_ms": [
@@ -4123,8 +4123,8 @@ def _render_html(report, title, site=False, manifest=None):
     """|wait os sched[^:,]*?(?:\\([^)]*\\))?:\\s*[\\d.]+ms"""
     """|(?:firstUrmaWrite|secondUrmaWrite|urmaWrite)?WakeSchedLatencyUs:\\s*[\\d.]+"""
     """|srcChipInflight:\\s*\\{"""
-    """[^}]*\\}|request id[:=]?\\s*\\d+|src address:\\s*[^,\\s]+|target """
-    """address:\\s*[^,\\s]+|dataSize[:=]?\\s*\\d+|cpuid[:=]?\\s*\\d+|inflight[_a-z]*[:=]?\\s*\\d+)/gi, '<span """
+    """[^}]*\\}|urma_request_id[:=]?\\s*\\d+|src addr:\\s*[^,\\s]+|tgt """
+    """addr:\\s*[^,\\s]+|dataSize[:=]?\\s*\\d+|cpuid[:=]?\\s*\\d+|inflight[_a-z]*[:=]?\\s*\\d+)/gi, '<span """
     """class="log-tag log-urma">$1</span>')"""
     "\n"
     """      .replace(/(\\[?(?:(?:ZMQ|BRPC)_)?RPC_FRAMEWORK_SLOW\\]?|server_exec_us=\\d+|network_residual_us=\\d+"""
@@ -4167,7 +4167,7 @@ def _render_html(report, title, site=False, manifest=None):
     "\n"
     """    const text = `${e.member || ''} ${e.text || ''}`;"""
     "\n"
-    """    if (/URMA_ELAPSED|urma_manager|urma_|target address|src address/i.test(text)) return 'data_worker';"""
+    """    if (/URMA_ELAPSED|urma_manager|urma_|tgt addr|src addr/i.test(text)) return 'data_worker';"""
     "\n"
     """    if (/MasterOCService\\.QueryMeta|Query metadata from master|GetObjMetaInfo|meta[_ """
     """-]?worker/i.test(text)) return 'meta_worker';"""
@@ -4335,7 +4335,7 @@ def _render_html(report, title, site=False, manifest=None):
     "\n"
     """      /\\bsrc=([^,\\s]+),\\s*dst=([^,\\s]+)/gi,"""
     "\n"
-    """      /\\bsrc address:\\s*([^,\\s]+),\\s*target address:\\s*([^,\\s]+)/gi,"""
+    """      /\\bsrc addr:\\s*([^,\\s]+),\\s*tgt addr:\\s*([^,\\s]+)/gi,"""
     "\n"
     """      /\\bsource address:\\s*([^,\\s]+),\\s*dst address:\\s*([^,\\s]+)/gi,"""
     "\n"
@@ -7195,8 +7195,8 @@ def _make_self_test_bundle(path):
         ),
         (
             f"2026-07-18T19:20:03.200000 | WARN | worker | 192.0.2.20 | 42 | {trace_id} | "
-            f"[URMA_ELAPSED_TOTAL] cost 517.732ms, request id:77, "
-            f"src address: 192.0.2.20, target address: 192.0.2.10, "
+            f"[URMA_ELAPSED_TOTAL] cost: 517.732ms, urma_request_id:77, "
+            f"src addr: 192.0.2.20, tgt addr: 192.0.2.10, "
             f"dataSize:4194304, cpuid:12, status: OK"
         ),
         (

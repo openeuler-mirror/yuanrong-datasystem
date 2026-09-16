@@ -90,9 +90,6 @@ constexpr uint8_t URMA_AFFINITY_SRC_CHIP_MAX = URMA_AFFINITY_SRC_CHIP_MIN + URMA
 constexpr uint64_t URMA_RECOVERY_PROBE_SEGMENT_SIZE = 4096;
 constexpr uint64_t URMA_FIRST_WRITE_CHUNK_INDEX = 1;
 constexpr uint64_t URMA_SECOND_WRITE_CHUNK_INDEX = 2;
-constexpr const char *URMA_ELAPSED_TOTAL_SUGGEST =
-    "check whether URMA_ELAPSED_THREAD_SHED/URMA_ELAPSED_POLL_JFC/URMA_ELAPSED_NOTIFY logs appear in the "
-    "same time window; if none appear, check URMA and UDMA";
 constexpr const char *URMA_ELAPSED_THREAD_SCHED_SUGGEST = "check OS scheduling overhead";
 constexpr const char *URMA_ELAPSED_POLL_JFC_SUGGEST = "check URMA";
 constexpr const char *URMA_ELAPSED_NOTIFY_SUGGEST = "check OS scheduling overhead";
@@ -1680,14 +1677,14 @@ void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shar
     SLOW_LOG_IF_OR_VLOG(
         INFO, (config.rpcSlowerThanUs > 0 && totalElapsedUs >= config.rpcSlowerThanUs) || FLAGS_enable_perf_trace_log,
         1,
-        "[URMA_ELAPSED_TOTAL]: [urma_request_id:"
-            << requestId << "] Time from urma_post_jetty_send_wr to urma_write completion total cost " << totalElapsedMs
-            << "ms, wait bthread completion time(bthread::ConditionVariable.wait_for): " << waitElapsedMs
-            << "ms, src address:" << localUrmaInfo_.localAddress.ToString()
-            << ", target address:" << event->GetRemoteAddress() << ", dataSize:" << event->GetDataSize()
-            << ", writeChunkIndex:" << trace.writeChunkIndex << ", writeChunkCount:" << trace.writeChunkCount
+        "[URMA_ELAPSED_TOTAL] [urma_request_id:"
+            << requestId << "] urma post to completion cost: " << totalElapsedMs
+            << "ms, condition wait: " << waitElapsedMs
+            << "ms, src addr:" << localUrmaInfo_.localAddress.ToString()
+            << ", tgt addr:" << event->GetRemoteAddress() << ", dataSize:" << event->GetDataSize()
+            << ", writeChunkIdx:" << trace.writeChunkIndex << ", writeChunkCnt:" << trace.writeChunkCount
             << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString()
-            << ", urma_inflight_wr_count: " << tbbEventMap_.size()
+            << ", urma_inflight_wr_cnt: " << tbbEventMap_.size()
             << ", " << wakeSchedMetricName << ":" << wakeSchedLatencyUs
             << ", completionObservationLatencyUs:" << completionObservationLatencyUs
             << ", urmaEventProcessingAndWaitLatencyUs:" << eventProcessingAndWaitLatencyUs
@@ -1700,8 +1697,7 @@ void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shar
             << ", waited_for_notification:" << trace.waitedForNotification
             << ", pre_completed_before_wait:" << trace.preCompletedBeforeWait
             << ", woken_by_previous_event:" << trace.wokenByPreviousEvent
-            << ", event_processing_and_wait_latency_valid:" << trace.eventProcessingAndWaitLatencyValid
-            << ", suggest: " << URMA_ELAPSED_TOTAL_SUGGEST);
+            << ", event_processing_and_wait_latency_valid:" << trace.eventProcessingAndWaitLatencyValid);
 }
 
 Status UrmaManager::CreateUrmaWaitTimeoutStatus(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,

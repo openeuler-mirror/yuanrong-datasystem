@@ -39,7 +39,7 @@ Overview statistic definitions (the overview table and trend chart use different
 | SDK/Worker/RPC 阶段 | client/worker access 与 `RPC_FRAMEWORK_SLOW` | 每 Trace 保留对应阶段值；RPC 非服务端=`max(0,e2e_us-server_exec_us)`，网络=`network_residual_us`，框架=非服务端-网络 | 仅该阶段有效正值样本；样本数为有效值数；占比=阶段平均/全请求端到端平均 |
 | URMA 通信/调度 | `URMA_ELAPSED_TOTAL`、调度字段 | 每 Trace 取 URMA `cost` 最大值（ms→us）；调度取最大值 | 仅有效正值样本；属于诊断阶段，不保证与其它阶段可加 |
 | Worker Access | worker `access*.log` | 同 Trace 多条记录取 `latency_us` 最大值 | 仅有效正值样本；可能与内部阶段重叠 |
-| URMA 并发数 | URMA 记录 `urma_inflight_wr_count` | 同 Trace 取最大值 | 仅有效正值样本；单位为个，不是时延 |
+| URMA 并发数 | URMA 记录 `urma_inflight_wr_cnt` | 同 Trace 取最大值 | 仅有效正值样本；单位为个，不是时延 |
 | sleep 时间 | worker `.info` nanosleep | 窗口基数=`2 × UB 通信数`；真实样本不足补 0 | avg/P99 等按补零后的基数；样本数列显示真实记录数，非请求时延 |
 | URMA PERF 采样 | worker `.info` 周期采样 | 每条采样先按指标读取 avg/max/P99/P99.99；窗口内取各统计量最大值 | 独立运行时采样，非请求级数据；不能与请求阶段相加 |
 | 趋势窗口 | 过滤后的请求及 `.info` | 请求阶段每窗口以全部请求为分母，缺失阶段按 0；窗口宽度由 `--window-ms` 决定 | 趋势 avg/P99/P99.99/max 仅反映该窗口，和总览阶段统计口径不同 |
@@ -337,8 +337,8 @@ def parse_client_info_line(line: bytes, fp: str) -> Optional[Tuple[bytes, bytes]
             '_cat': 'ci', '_sub': 'ur',
             'timestamp': ts_str,
             'timestamp_us': ts_to_us(line[:ts_end]) if ts_end > 0 else 0,
-            'urma_total_ms': extract_float(b'cost '),
-            'urma_inflight': extract_int(b'urma_inflight_wr_count:'),
+            'urma_total_ms': extract_float(b'cost:'),
+            'urma_inflight': extract_int(b'urma_inflight_wr_cnt:'),
             'data_size': extract_int(b'dataSize:'),
             'urma_sched_us': (extract_int(b'wakeSchedLatencyUs:')
                               or extract_int(b'urmaWriteWakeSchedLatencyUs:')
@@ -493,17 +493,17 @@ def parse_worker_info_line(line: bytes, fp: str) -> Optional[Tuple[bytes, bytes]
         # Extract src/target addresses for network path analysis
         src_addr = None
         tgt_addr = None
-        src_start = line.find(b'src address:')
+        src_start = line.find(b'src addr:')
         if src_start != -1:
-            src_start += len(b'src address:')
+            src_start += len(b'src addr:')
             src_end = line.find(b',', src_start)
             if src_end == -1:
                 src_end = line.find(b' ', src_start)
             if src_end != -1:
                 src_addr = line[src_start:src_end].strip().decode('utf-8', errors='replace')
-        tgt_start = line.find(b'target address:')
+        tgt_start = line.find(b'tgt addr:')
         if tgt_start != -1:
-            tgt_start += len(b'target address:')
+            tgt_start += len(b'tgt addr:')
             tgt_end = line.find(b',', tgt_start)
             if tgt_end == -1:
                 tgt_end = line.find(b' ', tgt_start)
@@ -514,8 +514,8 @@ def parse_worker_info_line(line: bytes, fp: str) -> Optional[Tuple[bytes, bytes]
             '_cat': 'wi', '_sub': 'ur',
             'timestamp': ts_str, 'timestamp_us': ts_us,
             'local_ip': local_ip,
-            'urma_total_ms': extract_float(b'cost '),
-            'urma_inflight': extract_int(b'urma_inflight_wr_count:'),
+            'urma_total_ms': extract_float(b'cost:'),
+            'urma_inflight': extract_int(b'urma_inflight_wr_cnt:'),
             'data_size': extract_int(b'dataSize:'),
             'src_address': src_addr,
             'target_address': tgt_addr,
