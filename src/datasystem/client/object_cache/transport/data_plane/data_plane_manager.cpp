@@ -373,7 +373,8 @@ Status DataPlaneManager::GetOrCreateForDataLocation(const HostPort &workerAddr, 
 
 Status DataPlaneManager::AcquireDataPlaneLease(const HostPort &workerAddr, TransportHint hint,
                                                std::unique_ptr<DataPlaneLease> &lease,
-                                               TransportPhaseLatencyRecorder *recorder)
+                                               TransportPhaseLatencyRecorder *recorder,
+                                               bool respectUbReadRecovery)
 {
     lease.reset();
     const AccessTransportKind expectedKind = KindForHint(hint);
@@ -386,7 +387,7 @@ Status DataPlaneManager::AcquireDataPlaneLease(const HostPort &workerAddr, Trans
     }
     RETURN_IF_NOT_OK(status);
     std::shared_ptr<IDataTransporter> transporter;
-    const TransportBuildContext context{ workerAddr, hint, expectedKind, recorder };
+    const TransportBuildContext context{ workerAddr, hint, expectedKind, recorder, respectUbReadRecovery };
     RETURN_IF_NOT_OK(GetOrBuildTransporter(context, entry, transporter));
 
     auto acquired = std::unique_ptr<DataPlaneLease>(new DataPlaneLease());
@@ -399,9 +400,13 @@ Status DataPlaneManager::AcquireDataPlaneLease(const HostPort &workerAddr, Trans
     }
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
-    CHECK_FAIL_RETURN_STATUS(entry->GetTransporter(expectedKind) == transporter
-                                 && entry->HasAliveTransporter(expectedKind),
-                             K_URMA_NEED_CONNECT, "Data-plane transporter changed before lease acquisition");
+    CHECK_FAIL_RETURN_STATUS(!(respectUbReadRecovery && expectedKind == AccessTransportKind::UB
+                               && entry->ubRebuildSlotOwner.load(std::memory_order_acquire) != 0),
+                             K_TRY_AGAIN, "UB data plane rebuild started before lease acquisition");
+    if (entry->GetTransporter(expectedKind) != transporter || !entry->HasAliveTransporter(expectedKind)) {
+        RETURN_STATUS(respectUbReadRecovery ? K_TRY_AGAIN : K_URMA_NEED_CONNECT,
+                      "Data-plane transporter changed before lease acquisition");
+    }
     CHECK_FAIL_RETURN_STATUS(entry->rpcClient != nullptr && entry->rpcClient->IsAlive(), K_RPC_UNAVAILABLE,
                              "RPC client is unavailable while acquiring lease");
     acquired->transporter_ = std::move(transporter);
@@ -414,11 +419,11 @@ Status DataPlaneManager::WithDataPlaneLease(
     const HostPort &workerAddr, TransportHint hint,
     const std::function<Status(const std::shared_ptr<IDataTransporter> &,
                                const std::shared_ptr<WorkerRpcClient> &)> &operation,
-    TransportPhaseLatencyRecorder *recorder)
+    TransportPhaseLatencyRecorder *recorder, bool respectUbReadRecovery)
 {
     CHECK_FAIL_RETURN_STATUS(static_cast<bool>(operation), K_INVALID, "Data-plane lease operation is empty");
     std::unique_ptr<DataPlaneLease> lease;
-    RETURN_IF_NOT_OK(AcquireDataPlaneLease(workerAddr, hint, lease, recorder));
+    RETURN_IF_NOT_OK(AcquireDataPlaneLease(workerAddr, hint, lease, recorder, respectUbReadRecovery));
     return operation(lease->GetTransporter(), lease->GetRpcClient());
 }
 
@@ -915,6 +920,14 @@ Status DataPlaneManager::GetOrBuildTransporter(const TransportBuildContext &cont
         }
         CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                                  "DataPlaneManager is shutting down");
+        CHECK_FAIL_RETURN_STATUS(!(context.respectUbReadRecovery
+                                   && context.expectedKind == AccessTransportKind::UB
+                                   && entry->UbRebuildCoolingDown(SteadyNowMs())),
+                                 K_URMA_NEED_CONNECT, "UB data plane rebuild is cooling down");
+        CHECK_FAIL_RETURN_STATUS(!(context.respectUbReadRecovery
+                                   && context.expectedKind == AccessTransportKind::UB
+                                   && entry->ubRebuildSlotOwner.load(std::memory_order_acquire) != 0),
+                                 K_TRY_AGAIN, "UB data plane rebuild is already in flight");
         if (entry->HasAliveTransporter(context.expectedKind)) {
             out = entry->GetTransporter(context.expectedKind);
             MarkDataPlaneUse(entry, out->Kind());
@@ -930,6 +943,14 @@ Status DataPlaneManager::GetOrBuildTransporter(const TransportBuildContext &cont
         }
         CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                                  "DataPlaneManager is shutting down");
+        CHECK_FAIL_RETURN_STATUS(!(context.respectUbReadRecovery
+                                   && context.expectedKind == AccessTransportKind::UB
+                                   && entry->UbRebuildCoolingDown(SteadyNowMs())),
+                                 K_URMA_NEED_CONNECT, "UB data plane rebuild is cooling down");
+        CHECK_FAIL_RETURN_STATUS(!(context.respectUbReadRecovery
+                                   && context.expectedKind == AccessTransportKind::UB
+                                   && entry->ubRebuildSlotOwner.load(std::memory_order_acquire) != 0),
+                                 K_TRY_AGAIN, "UB data plane rebuild is already in flight");
         if (entry->HasAliveTransporter(context.expectedKind)) {
             out = entry->GetTransporter(context.expectedKind);
             MarkDataPlaneUse(entry, out->Kind());
@@ -1039,7 +1060,9 @@ void DataPlaneManager::ResetTransporter(const HostPort &workerAddr, AccessTransp
     }
 }
 
-void DataPlaneManager::ResetStaleUbDataPlane(const HostPort &workerAddr, const std::shared_ptr<IDataTransporter> &stale)
+void DataPlaneManager::ResetStaleUbDataPlane(const HostPort &workerAddr,
+                                             const std::shared_ptr<IDataTransporter> &stale,
+                                             bool markCooldown)
 {
     if (shutdown_.load(std::memory_order_acquire)) {
         return;
@@ -1055,13 +1078,149 @@ void DataPlaneManager::ResetStaleUbDataPlane(const HostPort &workerAddr, const s
     if (entry == nullptr) {
         return;
     }
-    bthread::RWLockWrGuard lock(entry->mutex);
-    // A concurrent caller may have rebuilt the data plane after this request failed; dropping that
-    // instance would undo its recovery, so only drop the one that served the request.
-    if (stale != nullptr && entry->GetTransporter(AccessTransportKind::UB) != stale) {
-        return;
+    std::shared_ptr<IDataTransporter> retired;
+    {
+        bthread::RWLockWrGuard lock(entry->mutex);
+        // A concurrent caller may have rebuilt the data plane after this request failed; dropping that
+        // instance would undo its recovery, so only drop the one that served the request.
+        if (stale != nullptr && entry->GetTransporter(AccessTransportKind::UB) != stale) {
+            return;
+        }
+        if (markCooldown && FLAGS_ub_rebuild_cooldown_ms != 0) {
+            entry->ubRebuildAllowedAfterMs.store(SteadyNowMs() + static_cast<int64_t>(FLAGS_ub_rebuild_cooldown_ms),
+                                                 std::memory_order_relaxed);
+        }
+        retired = std::move(entry->GetTransporterSlot(AccessTransportKind::UB));
     }
-    entry->ResetTransporterLocked(AccessTransportKind::UB);
+    if (retired != nullptr) {
+        retired->CloseDataPlane();
+    }
+}
+
+Status DataPlaneManager::RebuildStaleUbDataPlane(const HostPort &workerAddr,
+                                                 const std::shared_ptr<IDataTransporter> &stale,
+                                                 TransportPhaseLatencyRecorder *recorder)
+{
+    CHECK_FAIL_RETURN_STATUS(stale != nullptr, K_INVALID, "Stale UB data plane is missing");
+    CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+                             "DataPlaneManager is shutting down");
+    std::shared_ptr<WorkerTransportEntry> entry;
+    const std::string workerKey = workerAddr.ToString();
+    RETURN_IF_NOT_OK(GetOrCreateEntry(workerKey, entry));
+
+    std::shared_ptr<WorkerRpcClient> rpcClient;
+    int64_t observedCooldown = 0;
+    uint64_t slotOwner = 0;
+    {
+        bthread::RWLockRdGuard lock(entry->mutex);
+        CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+                                 "DataPlaneManager is shutting down");
+        observedCooldown = entry->ubRebuildAllowedAfterMs.load(std::memory_order_relaxed);
+        CHECK_FAIL_RETURN_STATUS(SteadyNowMs() >= observedCooldown, K_URMA_NEED_CONNECT,
+                                 "UB data plane rebuild is cooling down");
+        if (entry->GetTransporter(AccessTransportKind::UB) != stale
+            && entry->HasAliveTransporter(AccessTransportKind::UB)) {
+            return Status::OK();
+        }
+        CHECK_FAIL_RETURN_STATUS(entry->ubRebuildSlotOwner.load(std::memory_order_acquire) == 0, K_TRY_AGAIN,
+                                 "UB data plane rebuild is already in flight");
+        slotOwner = nextUbRebuildSlotId_.fetch_add(1, std::memory_order_relaxed);
+        uint64_t expected = 0;
+        CHECK_FAIL_RETURN_STATUS(entry->ubRebuildSlotOwner.compare_exchange_strong(
+                                     expected, slotOwner, std::memory_order_acq_rel, std::memory_order_relaxed),
+                                 K_TRY_AGAIN, "UB data plane rebuild is already in flight");
+        rpcClient = entry->rpcClient;
+    }
+    auto releaseSlot = [entry, slotOwner] {
+        uint64_t owned = slotOwner;
+        (void)entry->ubRebuildSlotOwner.compare_exchange_strong(owned, 0, std::memory_order_release,
+                                                                std::memory_order_relaxed);
+    };
+    Raii releaseSlotOnReturn(releaseSlot);
+    auto finishFailedRebuild = [&](const Status &failure,
+                                   const std::shared_ptr<WorkerRpcClient> &expectedRpcClient) -> Status {
+        std::shared_ptr<IDataTransporter> retired;
+        {
+            EntryMap::const_accessor accessor;
+            CHECK_FAIL_RETURN_STATUS(entries_.find(accessor, workerKey) && accessor->second == entry, K_TRY_AGAIN,
+                                     "UB data-plane entry changed during rebuild");
+            bthread::RWLockWrGuard lock(entry->mutex);
+            CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+                                     "DataPlaneManager is shutting down");
+            if (entry->GetTransporter(AccessTransportKind::UB) != stale
+                && entry->HasAliveTransporter(AccessTransportKind::UB)) {
+                return Status::OK();
+            }
+            CHECK_FAIL_RETURN_STATUS(entry->rpcClient == expectedRpcClient, K_TRY_AGAIN,
+                                     "RPC client changed during UB data-plane rebuild");
+            if (FLAGS_ub_rebuild_cooldown_ms != 0) {
+                const int64_t cooldownUntil =
+                    SteadyNowMs() + static_cast<int64_t>(FLAGS_ub_rebuild_cooldown_ms);
+                auto currentCooldown = entry->ubRebuildAllowedAfterMs.load(std::memory_order_relaxed);
+                while (currentCooldown < cooldownUntil
+                       && !entry->ubRebuildAllowedAfterMs.compare_exchange_weak(
+                           currentCooldown, cooldownUntil, std::memory_order_relaxed)) {
+                }
+            }
+            if (entry->GetTransporter(AccessTransportKind::UB) == stale) {
+                retired = std::move(entry->fallbackTransporter);
+            }
+        }
+        releaseSlot();
+        if (retired != nullptr) {
+            retired->CloseDataPlane();
+        }
+        return failure;
+    };
+    if (rpcClient == nullptr) {
+        Status rpcRc = GetOrCreateRpcClient(workerAddr, rpcClient);
+        if (rpcRc.IsError()) {
+            return finishFailedRebuild(rpcRc, nullptr);
+        }
+        EntryMap::const_accessor accessor;
+        CHECK_FAIL_RETURN_STATUS(entries_.find(accessor, workerKey) && accessor->second == entry, K_TRY_AGAIN,
+                                 "UB data-plane entry changed while rebuilding RPC client");
+        bthread::RWLockRdGuard lock(entry->mutex);
+        CHECK_FAIL_RETURN_STATUS(entry->rpcClient == rpcClient && rpcClient->IsAlive(), K_TRY_AGAIN,
+                                 "RPC client changed during UB data-plane rebuild");
+    } else if (!rpcClient->IsAlive()) {
+        return finishFailedRebuild(Status(K_RPC_UNAVAILABLE, "RPC client is unavailable while rebuilding UB data plane"),
+                                   rpcClient);
+    }
+
+    std::shared_ptr<IDataTransporter> candidate;
+    Status buildRc = BuildTransporter(workerAddr, TransportHint::UB_CANDIDATE, rpcClient, recorder, candidate);
+    if (buildRc.IsError() || candidate == nullptr) {
+        const Status failure =
+            buildRc.IsError() ? buildRc : Status(K_RUNTIME_ERROR, "UB transporter missing after rebuild");
+        return finishFailedRebuild(failure, rpcClient);
+    }
+
+    std::shared_ptr<IDataTransporter> retired;
+    {
+        EntryMap::const_accessor accessor;
+        CHECK_FAIL_RETURN_STATUS(entries_.find(accessor, workerKey) && accessor->second == entry,
+                                 K_TRY_AGAIN, "UB data-plane entry changed during rebuild");
+        bthread::RWLockWrGuard lock(entry->mutex);
+        CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+                                 "DataPlaneManager is shutting down");
+        if (entry->GetTransporter(AccessTransportKind::UB) != stale
+            && entry->HasAliveTransporter(AccessTransportKind::UB)) {
+            return Status::OK();
+        }
+        CHECK_FAIL_RETURN_STATUS(entry->rpcClient == rpcClient && rpcClient->IsAlive(), K_TRY_AGAIN,
+                                 "RPC client changed during UB data-plane rebuild");
+        retired = std::move(entry->fallbackTransporter);
+        entry->fallbackTransporter = std::move(candidate);
+        entry->fallbackKind = AccessTransportKind::UB;
+        (void)entry->ubRebuildAllowedAfterMs.compare_exchange_strong(observedCooldown, 0,
+                                                                     std::memory_order_relaxed);
+    }
+    releaseSlot();
+    if (retired != nullptr) {
+        retired->CloseDataPlane();
+    }
+    return Status::OK();
 }
 
 void DataPlaneManager::MarkUbRebuildCooldown(const HostPort &workerAddr)
@@ -1132,35 +1291,28 @@ DataPlaneManager::UbReadAdmission DataPlaneManager::AdmitUbRead(const HostPort &
     if (entry == nullptr) {
         return UbReadAdmission::PROCEED;
     }
-    // Cooldown first, mirroring the read path's original order: while the endpoint is cooling down the peer
-    // has just rejected this client, so even an apparently alive transporter is not worth trusting and the
-    // request finishes over TCP inline without a fresh handshake. Evaluated from the entry already held (so
-    // both gates share one lookup) but through the same predicate the IsUbRebuildCoolingDown() accessor uses.
-    if (entry->UbRebuildCoolingDown(SteadyNowMs())) {
-        if (degradedByCooldown != nullptr) {
-            *degradedByCooldown = true;
-        }
-        return UbReadAdmission::DEGRADE;
-    }
     {
-        // Steady state fast path: an already usable data plane needs no slot, so concurrent readers never
-        // contend with each other and the read path pays no coordination cost when nothing is being rebuilt.
         bthread::RWLockRdGuard lock(entry->mutex);
+        if (entry->UbRebuildCoolingDown(SteadyNowMs())) {
+            if (degradedByCooldown != nullptr) {
+                *degradedByCooldown = true;
+            }
+            return UbReadAdmission::DEGRADE;
+        }
+        if (entry->ubRebuildSlotOwner.load(std::memory_order_acquire) != 0) {
+            return UbReadAdmission::DEGRADE;
+        }
         if (entry->HasAliveTransporter(AccessTransportKind::UB)) {
             return UbReadAdmission::PROCEED;
         }
+        const uint64_t owner = nextUbRebuildSlotId_.fetch_add(1, std::memory_order_relaxed);
+        uint64_t expected = 0;
+        if (!entry->ubRebuildSlotOwner.compare_exchange_strong(expected, owner, std::memory_order_acq_rel,
+                                                               std::memory_order_relaxed)) {
+            return UbReadAdmission::DEGRADE;
+        }
+        slotOwner = owner;
     }
-    // The data plane is missing, so this request would trigger a handshake. Only the request that wins the
-    // slot runs it; the rest degrade to TCP inline instead of each paying for a handshake that the peer is
-    // likely to reject again. Entry insertion mirrors MarkUbRebuildCooldown: the endpoint is about to be
-    // used, and the entry is also the storage for the slot itself.
-    const uint64_t owner = nextUbRebuildSlotId_.fetch_add(1, std::memory_order_relaxed);
-    uint64_t expected = 0;
-    if (!entry->ubRebuildSlotOwner.compare_exchange_strong(expected, owner, std::memory_order_acq_rel,
-                                                           std::memory_order_relaxed)) {
-        return UbReadAdmission::DEGRADE;
-    }
-    slotOwner = owner;
     return UbReadAdmission::REBUILD;
 }
 

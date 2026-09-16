@@ -146,11 +146,13 @@ public:
      * @param[in] hint Transport suggestion from the advisor.
      * @param[out] lease Lease owning the selected transporter and RPC client.
      * @param[in] recorder Optional request-scoped phase recorder.
+     * @param[in] respectUbReadRecovery Whether a metadata UB read must honor the endpoint recovery gates.
      * @return K_OK when the endpoint is ready and leased; the error code otherwise.
      */
     Status AcquireDataPlaneLease(const HostPort &workerAddr, TransportHint hint,
                                  std::unique_ptr<DataPlaneLease> &lease,
-                                 TransportPhaseLatencyRecorder *recorder = nullptr);
+                                 TransportPhaseLatencyRecorder *recorder = nullptr,
+                                 bool respectUbReadRecovery = false);
 
     /**
      * @brief Run an operation while the selected data plane cannot be torn down.
@@ -158,12 +160,14 @@ public:
      * @param[in] hint Transport suggestion from the advisor.
      * @param[in] operation Operation executed with the endpoint data-plane lease held.
      * @param[in] recorder Optional request-scoped phase recorder.
+     * @param[in] respectUbReadRecovery Whether a metadata UB read must honor the endpoint recovery gates.
      * @return K_OK when the operation succeeds; the connection or operation error otherwise.
      */
     Status WithDataPlaneLease(const HostPort &workerAddr, TransportHint hint,
                               const std::function<Status(const std::shared_ptr<IDataTransporter> &,
                                                          const std::shared_ptr<WorkerRpcClient> &)> &operation,
-                              TransportPhaseLatencyRecorder *recorder = nullptr);
+                              TransportPhaseLatencyRecorder *recorder = nullptr,
+                              bool respectUbReadRecovery = false);
 
     /**
      * @brief Get or lazily create the shared RPC client for an endpoint without creating a data transporter.
@@ -209,8 +213,20 @@ public:
      * @param[in] workerAddr Target worker address.
      * @param[in] stale Drop only when the entry still holds this transporter; nullptr drops unconditionally.
      *                   Guards against discarding a data plane that a concurrent writer has just rebuilt.
+     * @param[in] markCooldown Whether to arm the read-path rebuild cooldown before dropping the plane.
      */
-    virtual void ResetStaleUbDataPlane(const HostPort &workerAddr, const std::shared_ptr<IDataTransporter> &stale);
+    virtual void ResetStaleUbDataPlane(const HostPort &workerAddr, const std::shared_ptr<IDataTransporter> &stale,
+                                       bool markCooldown = false);
+
+    /**
+     * @brief Build and atomically publish a replacement for a stale UB data plane.
+     * @param[in] workerAddr Target worker address.
+     * @param[in] stale Transporter that triggered recovery; a newer healthy transporter is preserved.
+     * @param[in] recorder Optional request-scoped phase recorder.
+     * @return K_TRY_AGAIN when another request owns the rebuild slot or the endpoint generation changes.
+     */
+    Status RebuildStaleUbDataPlane(const HostPort &workerAddr, const std::shared_ptr<IDataTransporter> &stale,
+                                   TransportPhaseLatencyRecorder *recorder = nullptr);
 
     /**
      * @brief Suppress read-path UB rebuild attempts for an endpoint until the cooldown elapses.
@@ -402,6 +418,7 @@ private:
         TransportHint hint;
         AccessTransportKind expectedKind;
         TransportPhaseLatencyRecorder *recorder;
+        bool respectUbReadRecovery = false;
     };
 
     Status GetOrCreateEntry(const std::string &workerKey, std::shared_ptr<WorkerTransportEntry> &entry,

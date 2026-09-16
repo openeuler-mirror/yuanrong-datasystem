@@ -82,6 +82,7 @@ private:
         // Transporter that served this request; used to avoid discarding a concurrently rebuilt one.
         std::shared_ptr<IDataTransporter> ubTransporter;
         std::shared_ptr<const TransportReadContext> readContext;
+        bool requireUb = false;
 
         /** @brief Disable inline transfer and release prepared receive buffers. */
         void DisableInlineData()
@@ -93,6 +94,7 @@ private:
             shmSession.reset();
             ubTransporter.reset();
             readContext.reset();
+            requireUb = false;
         }
     };
 
@@ -120,7 +122,8 @@ private:
                                   InlineRequestContext &context) const;
     Status PrepareQueryRetry(const HostPort &address, const ObjectMetadataBatch &items, const Status &rc,
                              bool rpcDispatched, InlineRequestContext &context, int64_t &backoffMs,
-                             int32_t &routeDegradationRetries, TransportPhaseLatencyRecorder *recorder);
+                             int32_t &routeDegradationRetries, bool &ubReconnectAttempted,
+                             TransportPhaseLatencyRecorder *recorder);
     Status HandleMetadataRouteFailure(const HostPort &address, const ObjectMetadataBatch &items, const Status &rc,
                                       bool rpcDispatched, bool quarantineUbBuffers, InlineRequestContext &context,
                                       int32_t &routeDegradationRetries, TransportPhaseLatencyRecorder *recorder);

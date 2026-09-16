@@ -1210,14 +1210,18 @@ public:
         return Status::OK();
     }
 
-    void ResetStaleUbDataPlane(const HostPort &address, const std::shared_ptr<IDataTransporter> &stale) override
+    void ResetStaleUbDataPlane(const HostPort &address, const std::shared_ptr<IDataTransporter> &stale,
+                               bool markCooldown = false) override
     {
         {
             std::lock_guard<std::mutex> lock(mutex);
             ++resetStaleUbCount;
             lastStaleUbTransporter = stale;
+            if (markCooldown) {
+                ++ubCooldownMarkCount;
+            }
         }
-        DataPlaneManager::ResetStaleUbDataPlane(address, stale);
+        DataPlaneManager::ResetStaleUbDataPlane(address, stale, markCooldown);
     }
 
     void MarkUbRebuildCooldown(const HostPort &address) override
@@ -3874,20 +3878,38 @@ TEST(ObjectMetadataClientTest, UbConnectionFailureFallsBackToTcp)
     EXPECT_TRUE(bufferProvider->lastOwner.expired());
 }
 
-TEST(ObjectMetadataClientTest, DispatchedUbReconnectFallsBackToTcp)
+TEST(ObjectMetadataClientTest, UndispatchedUbLeaseRacesPreserveWorkerReconnect)
 {
     ApiDeadlineGuard deadline(1000);
     auto manager = std::make_shared<FakeDataPlaneManager>();
     auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    manager->transportBuildStatuses = { Status::OK(),
+                                        Status(K_TRY_AGAIN, "transporter changed before lease acquisition"),
+                                        Status::OK(), Status::OK(),
+                                        Status(K_TRY_AGAIN, "transporter changed before lease acquisition"),
+                                        Status::OK() };
+    int allocationCount = 0;
+    bufferProvider->allocateHandler = [manager, &allocationCount](uint64_t) {
+        if (++allocationCount <= 2) {
+            manager->ResetDataPlane(MakeAddress(41));
+        }
+        return Status::OK();
+    };
+    int configureCount = 0;
+    manager->configureTransporter = [bufferProvider, &configureCount](const HostPort &, FakeTransporter &) {
+        if (++configureCount == 3) {
+            EXPECT_TRUE(bufferProvider->lastOwner.expired());
+        }
+    };
     int invokeCount = 0;
     manager->queryAndGetHandler = [&invokeCount](const HostPort &address, const QueryAndGetReqPb &request,
-                                                 QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
+                                                QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
         ++invokeCount;
         if (invokeCount == 1) {
             EXPECT_TRUE(request.data_request().has_ub());
             return Status(K_URMA_NEED_CONNECT, "provider connection requires rebuild");
         }
-        EXPECT_TRUE(request.data_request().has_tcp());
+        EXPECT_TRUE(request.data_request().has_ub());
         AddLocation(response, "key", address, 6);
         return Status::OK();
     };
@@ -3899,9 +3921,14 @@ TEST(ObjectMetadataClientTest, DispatchedUbReconnectFallsBackToTcp)
 
     ASSERT_TRUE(metadata.QueryAndGet(MakeAddress(41), batch, nullptr).IsOk());
     EXPECT_EQ(invokeCount, 2);
-    EXPECT_EQ(manager->transportBuildCount, 1);
-    ASSERT_EQ(manager->builtTransporters.size(), 1u);
+    EXPECT_EQ(manager->transportBuildCount, 6);
+    ASSERT_EQ(manager->builtTransporters.size(), 4u);
     EXPECT_EQ(manager->builtTransporters.front()->closeCount, 1);
+    EXPECT_EQ(manager->builtTransporters[1]->closeCount, 1);
+    EXPECT_EQ(manager->builtTransporters[2]->closeCount, 1);
+    EXPECT_EQ(manager->builtTransporters.back()->closeCount, 0);
+    EXPECT_EQ(bufferProvider->allocateCount, 2);
+    EXPECT_FALSE(manager->IsUbRebuildCoolingDown(MakeAddress(41)));
     EXPECT_TRUE(bufferProvider->lastOwner.expired());
 }
 
@@ -3950,6 +3977,16 @@ public:
         }
         accessor->second->ubRebuildAllowedAfterMs.store(ms, std::memory_order_relaxed);
         return true;
+    }
+
+    static std::unique_ptr<bthread::RWLockRdGuard> AcquireEntryReadLock(DataPlaneManager &manager,
+                                                                        const HostPort &address)
+    {
+        DataPlaneManager::EntryMap::const_accessor accessor;
+        if (!manager.entries_.find(accessor, address.ToString())) {
+            return nullptr;
+        }
+        return std::make_unique<bthread::RWLockRdGuard>(accessor->second->mutex);
     }
 };
 
@@ -4148,23 +4185,60 @@ TEST(DataPlaneManagerTest, ResetStaleUbDataPlaneKeepsConcurrentlyRebuiltTranspor
     EXPECT_EQ(manager->transportBuildCount, 3);
 }
 
-TEST(ObjectMetadataClientTest, RetriesOverTcpAfterUrmaNeedConnect)
+TEST(DataPlaneManagerTest, ResetStaleUbDataPlaneClosesOutsideEntryLock)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    const HostPort address = MakeAddress(41);
+    std::shared_ptr<IDataTransporter> stale;
+    ASSERT_TRUE(manager->GetOrCreate(address, TransportHint::UB_CANDIDATE, stale).IsOk());
+    auto fakeStale = std::dynamic_pointer_cast<FakeTransporter>(stale);
+    ASSERT_NE(fakeStale, nullptr);
+
+    std::promise<void> closeStarted;
+    std::promise<void> allowClose;
+    auto allowCloseFuture = allowClose.get_future().share();
+    fakeStale->onClose = [&] {
+        closeStarted.set_value();
+        EXPECT_EQ(allowCloseFuture.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    };
+    auto reset = std::async(std::launch::async, [&] { manager->ResetStaleUbDataPlane(address, stale, true); });
+    auto closeStartedFuture = closeStarted.get_future();
+    const auto closeEntered = closeStartedFuture.wait_for(std::chrono::seconds(1));
+    if (closeEntered != std::future_status::ready) {
+        allowClose.set_value();
+        EXPECT_EQ(closeEntered, std::future_status::ready);
+        EXPECT_EQ(reset.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+        return;
+    }
+
+    std::shared_ptr<WorkerRpcClient> rpcClient;
+    auto rpcAccess = std::async(std::launch::async, [&] { return manager->GetOrCreateRpcClient(address, rpcClient); });
+    const auto rpcAccessed = rpcAccess.wait_for(std::chrono::seconds(1));
+    allowClose.set_value();
+    EXPECT_EQ(rpcAccessed, std::future_status::ready);
+    ASSERT_EQ(rpcAccess.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    EXPECT_TRUE(rpcAccess.get().IsOk());
+    EXPECT_NE(rpcClient, nullptr);
+    ASSERT_EQ(reset.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    reset.get();
+    EXPECT_EQ(fakeStale->closeCount, 1);
+}
+
+TEST(ObjectMetadataClientTest, ReturnsRepeatedUrmaNeedConnectAfterOneReconnect)
 {
     ApiDeadlineGuard deadline(1000);
     auto manager = std::make_shared<FakeDataPlaneManager>();
     auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
     bufferProvider->maxGetSize = 32;
     int queryCount = 0;
-    bool firstAttemptUsedUb = false;
-    bool retryUsedTcp = false;
+    bool allAttemptsUsedUb = true;
     manager->queryAndGetHandler = [&](const HostPort &, const QueryAndGetReqPb &request, QueryAndGetRspPb &response,
                                       std::vector<RpcMessage> &) {
         ++queryCount;
-        if (queryCount == 1) {
-            firstAttemptUsedUb = request.has_data_request() && request.data_request().has_ub();
-            return Status(K_URMA_NEED_CONNECT, "worker does not recognize the client UB connection");
+        if (request.has_data_request() && request.data_request().has_ub()) {
+            return Status(K_URMA_NEED_CONNECT, "worker still does not recognize the client UB connection");
         }
-        retryUsedTcp = request.has_data_request() && request.data_request().has_tcp();
+        allAttemptsUsedUb = false;
         AddLocation(response, "key", MakeAddress(51), 6);
         return Status::OK();
     };
@@ -4174,20 +4248,231 @@ TEST(ObjectMetadataClientTest, RetriesOverTcpAfterUrmaNeedConnect)
     auto results = MakeMetadataItems({ { 0, "key", MakeAddress(41) } });
     auto batch = MakeMetadataBatch(results);
 
-    ASSERT_TRUE(metadata.QueryAndGet(MakeAddress(41), batch, nullptr).IsOk());
-    EXPECT_TRUE(firstAttemptUsedUb);
-    EXPECT_TRUE(retryUsedTcp);
+    EXPECT_EQ(metadata.QueryAndGet(MakeAddress(41), batch, nullptr).GetCode(), K_URMA_NEED_CONNECT);
     EXPECT_EQ(queryCount, 2);
-    EXPECT_EQ(manager->resetStaleUbCount, 1);
-    // The identity guard must receive the transporter this request actually used. Passing nullptr would mean
-    // "drop unconditionally", which destroys the "never discard a concurrently rebuilt data plane" defence
-    // while still incrementing the counter, so assert the identity rather than just the call count.
-    EXPECT_EQ(manager->lastStaleUbTransporter, manager->lastTransporter);
-    EXPECT_NE(manager->lastStaleUbTransporter, nullptr);
+    EXPECT_TRUE(allAttemptsUsedUb);
+    EXPECT_EQ(manager->transportBuildCount, 2);
     EXPECT_EQ(manager->ubCooldownMarkCount, 1);
-    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(manager->resetStaleUbCount, 1);
+
+    auto retryResults = MakeMetadataItems({ { 0, "key", MakeAddress(41) } });
+    auto retryBatch = MakeMetadataBatch(retryResults);
+    ASSERT_TRUE(metadata.QueryAndGet(MakeAddress(41), retryBatch, nullptr).IsOk());
+    EXPECT_EQ(queryCount, 3);
+    EXPECT_FALSE(allAttemptsUsedUb);
+    EXPECT_EQ(manager->transportBuildCount, 2);
+}
+
+TEST(DataPlaneManagerTest, StaleUbRebuildDoesNotHoldEntryLockAcrossHandshake)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    const HostPort address = MakeAddress(41);
+    std::shared_ptr<IDataTransporter> stale;
+    ASSERT_TRUE(manager->GetOrCreate(address, TransportHint::UB_CANDIDATE, stale).IsOk());
+
+    std::promise<void> rebuildStarted;
+    std::promise<void> allowRebuild;
+    auto allowRebuildFuture = allowRebuild.get_future().share();
+    manager->configureTransporter = [&](const HostPort &, FakeTransporter &) {
+        rebuildStarted.set_value();
+        EXPECT_EQ(allowRebuildFuture.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    };
+    auto rebuild = std::async(std::launch::async, [&] { return manager->RebuildStaleUbDataPlane(address, stale); });
+    auto rebuildStartedFuture = rebuildStarted.get_future();
+    const auto rebuildEntered = rebuildStartedFuture.wait_for(std::chrono::seconds(1));
+    if (rebuildEntered != std::future_status::ready) {
+        allowRebuild.set_value();
+        EXPECT_EQ(rebuildEntered, std::future_status::ready);
+        EXPECT_EQ(rebuild.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+        return;
+    }
+
+    std::promise<void> rpcAccessStarted;
+    auto rpcAccessStartedFuture = rpcAccessStarted.get_future();
+    auto rpcAccess = std::async(std::launch::async, [&] {
+        rpcAccessStarted.set_value();
+        std::shared_ptr<WorkerRpcClient> rpcClient;
+        return manager->GetOrCreateRpcClient(address, rpcClient);
+    });
+    const auto rpcAccessThreadStarted = rpcAccessStartedFuture.wait_for(std::chrono::seconds(1));
+    if (rpcAccessThreadStarted != std::future_status::ready) {
+        allowRebuild.set_value();
+        EXPECT_EQ(rpcAccessThreadStarted, std::future_status::ready);
+        EXPECT_EQ(rpcAccess.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+        EXPECT_EQ(rebuild.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+        return;
+    }
+    const auto rpcAccessed = rpcAccess.wait_for(std::chrono::seconds(1));
+    uint64_t waiterOwner = 0;
+    EXPECT_EQ(manager->AdmitUbRead(address, waiterOwner), DataPlaneManager::UbReadAdmission::DEGRADE);
+    EXPECT_EQ(waiterOwner, 0u);
+    std::unique_ptr<DataPlaneManager::DataPlaneLease> lease;
+    EXPECT_EQ(manager->AcquireDataPlaneLease(address, TransportHint::UB_CANDIDATE, lease, nullptr, true).GetCode(),
+              K_TRY_AGAIN);
+    auto entryReadLock = DataPlaneManagerQuietTestPeer::AcquireEntryReadLock(*manager, address);
+    ASSERT_NE(entryReadLock, nullptr);
+    auto waiter = std::async(std::launch::async,
+                             [&] { return manager->RebuildStaleUbDataPlane(address, stale); });
+    const auto waiterCompleted = waiter.wait_for(std::chrono::seconds(1));
+    entryReadLock.reset();
+    if (waiterCompleted == std::future_status::ready) {
+        EXPECT_EQ(waiter.get().GetCode(), K_TRY_AGAIN);
+    }
+    allowRebuild.set_value();
+    ASSERT_EQ(waiterCompleted, std::future_status::ready);
+
+    EXPECT_EQ(rpcAccessed, std::future_status::ready);
+    ASSERT_EQ(rpcAccess.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    EXPECT_TRUE(rpcAccess.get().IsOk());
+    ASSERT_EQ(rebuild.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    EXPECT_TRUE(rebuild.get().IsOk());
+    EXPECT_EQ(manager->transportBuildCount, 2);
+    ASSERT_EQ(manager->builtTransporters.size(), 2u);
+    EXPECT_EQ(manager->builtTransporters[0], stale);
+    EXPECT_EQ(manager->builtTransporters[0]->closeCount, 1);
+    EXPECT_EQ(manager->builtTransporters[1]->kind, AccessTransportKind::UB);
+    EXPECT_TRUE(manager->RebuildStaleUbDataPlane(address, stale).IsOk());
+    EXPECT_EQ(manager->transportBuildCount, 2);
+    EXPECT_EQ(manager->builtTransporters[1]->closeCount, 0);
+}
+
+TEST(DataPlaneManagerTest, StaleUbRebuildPreservesNewerCooldown)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    const HostPort address = MakeAddress(41);
+    std::shared_ptr<IDataTransporter> stale;
+    ASSERT_TRUE(manager->GetOrCreate(address, TransportHint::UB_CANDIDATE, stale).IsOk());
+
+    std::promise<void> rebuildStarted;
+    std::promise<void> allowRebuild;
+    auto allowRebuildFuture = allowRebuild.get_future().share();
+    manager->configureTransporter = [&](const HostPort &, FakeTransporter &) {
+        rebuildStarted.set_value();
+        EXPECT_EQ(allowRebuildFuture.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    };
+    auto rebuild = std::async(std::launch::async, [&] { return manager->RebuildStaleUbDataPlane(address, stale); });
+    auto rebuildStartedFuture = rebuildStarted.get_future();
+    const auto rebuildEntered = rebuildStartedFuture.wait_for(std::chrono::seconds(1));
+    if (rebuildEntered != std::future_status::ready) {
+        allowRebuild.set_value();
+        EXPECT_EQ(rebuildEntered, std::future_status::ready);
+        EXPECT_EQ(rebuild.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+        return;
+    }
+
+    manager->DataPlaneManager::ResetStaleUbDataPlane(address, stale, true);
+    EXPECT_TRUE(manager->IsUbRebuildCoolingDown(address));
+    allowRebuild.set_value();
+
+    ASSERT_EQ(rebuild.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    EXPECT_TRUE(rebuild.get().IsOk());
+    EXPECT_TRUE(manager->IsUbRebuildCoolingDown(address));
+    std::unique_ptr<DataPlaneManager::DataPlaneLease> lease;
+    EXPECT_EQ(manager->AcquireDataPlaneLease(address, TransportHint::UB_CANDIDATE, lease, nullptr, true).GetCode(),
+              K_URMA_NEED_CONNECT);
+    EXPECT_EQ(manager->transportBuildCount, 2);
+}
+
+TEST(ObjectMetadataClientTest, StaleUbRebuildRetriesAfterEntryReplacement)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    const HostPort address = MakeAddress(41);
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 32;
+
+    std::promise<void> rebuildStarted;
+    std::promise<void> allowRebuild;
+    auto allowRebuildFuture = allowRebuild.get_future().share();
+    int configureCount = 0;
+    manager->configureTransporter = [&](const HostPort &, FakeTransporter &) {
+        if (++configureCount == 2) {
+            rebuildStarted.set_value();
+            EXPECT_EQ(allowRebuildFuture.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+        }
+    };
+    int queryCount = 0;
+    bool allAttemptsUsedUb = true;
+    manager->queryAndGetHandler = [&](const HostPort &, const QueryAndGetReqPb &request,
+                                      QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
+        ++queryCount;
+        allAttemptsUsedUb = allAttemptsUsedUb && request.has_data_request() && request.data_request().has_ub();
+        if (queryCount == 1) {
+            return Status(K_URMA_NEED_CONNECT, "provider connection requires rebuild");
+        }
+        AddLocation(response, "key", address, 6);
+        return Status::OK();
+    };
+    ObjectMetadataClient metadata(manager, std::make_shared<DeadlineRetry>(),
+                                  std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE),
+                                  bufferProvider, 16);
+    auto results = MakeMetadataItems({ { 0, "key", address } });
+    auto batch = MakeMetadataBatch(results);
+    auto query = std::async(std::launch::async, [&] {
+        ApiDeadlineGuard deadline(2000);
+        return metadata.QueryAndGet(address, batch, nullptr);
+    });
+    auto rebuildStartedFuture = rebuildStarted.get_future();
+    const auto rebuildEntered = rebuildStartedFuture.wait_for(std::chrono::seconds(1));
+    if (rebuildEntered != std::future_status::ready) {
+        allowRebuild.set_value();
+        EXPECT_EQ(rebuildEntered, std::future_status::ready);
+        EXPECT_EQ(query.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+        return;
+    }
+
+    manager->Teardown(address);
+    allowRebuild.set_value();
+
+    ASSERT_EQ(query.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    EXPECT_TRUE(query.get().IsOk());
+    EXPECT_EQ(queryCount, 2);
+    EXPECT_TRUE(allAttemptsUsedUb);
+    EXPECT_EQ(manager->rpcBuildCount, 2);
+    EXPECT_EQ(manager->transportBuildCount, 3);
     EXPECT_TRUE(results[0].status.IsOk());
-    EXPECT_EQ(results[0].location.object_locations(0), MakeAddress(51).ToString());
+}
+
+TEST(DataPlaneManagerTest, StaleUbRebuildFailureRetiresStaleAndArmsCooldown)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    const HostPort address = MakeAddress(41);
+    std::shared_ptr<IDataTransporter> stale;
+    ASSERT_TRUE(manager->GetOrCreate(address, TransportHint::UB_CANDIDATE, stale).IsOk());
+    manager->transportBuildStatuses.emplace_back(K_URMA_ERROR, "rebuild failed");
+
+    EXPECT_EQ(manager->RebuildStaleUbDataPlane(address, stale).GetCode(), K_URMA_ERROR);
+    EXPECT_EQ(manager->builtTransporters[0]->closeCount, 1);
+    EXPECT_TRUE(manager->IsUbRebuildCoolingDown(address));
+    bool degradedByCooldown = false;
+    uint64_t slotOwner = 0;
+    EXPECT_EQ(manager->AdmitUbRead(address, slotOwner, &degradedByCooldown),
+              DataPlaneManager::UbReadAdmission::DEGRADE);
+    EXPECT_TRUE(degradedByCooldown);
+    EXPECT_EQ(slotOwner, 0u);
+
+    ASSERT_TRUE(
+        DataPlaneManagerQuietTestPeer::SetUbRebuildAllowedAfterMs(*manager, address, SteadyNowMsForTest() - 1));
+    std::shared_ptr<IDataTransporter> rebuilt;
+    ASSERT_TRUE(manager->GetOrCreate(address, TransportHint::UB_CANDIDATE, rebuilt).IsOk());
+    EXPECT_NE(rebuilt, stale);
+    EXPECT_EQ(manager->transportBuildCount, 3);
+}
+
+TEST(DataPlaneManagerTest, StaleUbRebuildReplacesConcurrentTcpFallback)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    const HostPort address = MakeAddress(41);
+    std::shared_ptr<IDataTransporter> stale;
+    ASSERT_TRUE(manager->GetOrCreate(address, TransportHint::UB_CANDIDATE, stale).IsOk());
+    std::shared_ptr<IDataTransporter> tcp;
+    ASSERT_TRUE(manager->GetOrCreate(address, TransportHint::TCP_ONLY, tcp).IsOk());
+
+    ASSERT_TRUE(manager->RebuildStaleUbDataPlane(address, stale).IsOk());
+    std::shared_ptr<IDataTransporter> rebuilt;
+    ASSERT_TRUE(manager->GetOrCreate(address, TransportHint::UB_CANDIDATE, rebuilt).IsOk());
+    EXPECT_EQ(rebuilt->Kind(), AccessTransportKind::UB);
+    EXPECT_EQ(manager->transportBuildCount, 3);
+    EXPECT_EQ(manager->builtTransporters[1]->closeCount, 1);
 }
 
 TEST(ObjectMetadataClientTest, SkipsUbWhileRebuildCoolingDown)
