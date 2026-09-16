@@ -1137,6 +1137,38 @@ TEST(UbHealthFilterTest, OnDemandRecoveryRequiresWritableSummaryAndDirectionalPr
     EXPECT_TRUE(filter.IsAvailable(provider));
 }
 
+// TransportLayer binds the remote port-health verifier unconditionally, so on the client every
+// Provider recovery probe ends in CompleteProviderRecovery's diagnostic branch. It must advance
+// the probe backoff; otherwise ReconcileLoop re-arms the same peer every RPC round trip.
+TEST(UbHealthFilterTest, VerifierBoundProviderProbeBacksOffAfterDiagnosticCompletion)
+{
+    const auto provider = MakeAddress(40);
+    UbHealthFilter filter;
+    uint32_t verifications = 0;
+    filter.SetRemotePortHealthVerificationTrigger([&verifications](const HostPort &) { ++verifications; });
+    ClusterTopologyPb topology;
+    (*topology.mutable_members())[provider.ToString()].set_id("incarnation-a");
+    filter.ApplyTopologyIncarnations(topology);
+    ProviderUbFailureDetailPb detail;
+    FillProviderUbFailureDetail(Status(K_RPC_DEADLINE_EXCEEDED, "provider read timed out"),
+                                "client-receive-endpoint", provider.ToString(), std::nullopt, std::nullopt, detail);
+    EXPECT_FALSE(filter.ReportProviderFailure(provider, detail));
+
+    auto deadline = filter.NextProviderRecoveryDeadlineMs();
+    ASSERT_TRUE(deadline.has_value());
+    auto candidate = filter.TryBeginProviderRecovery(*deadline);
+    ASSERT_TRUE(candidate.has_value());
+    UbHealthSummary summary;
+    summary.worker = provider;
+    summary.incarnation = "incarnation-a";
+    summary.writable = true;
+    EXPECT_FALSE(filter.CompleteProviderRecovery(*candidate, summary, Status::OK(), *deadline));
+    EXPECT_EQ(verifications, 1U);
+
+    ASSERT_EQ(filter.NextProviderRecoveryDeadlineMs(), std::optional<uint64_t>{ *deadline + 1'000 });
+    EXPECT_FALSE(filter.TryBeginProviderRecovery(*deadline + 999).has_value());
+}
+
 TEST(UbHealthFilterTest, NewFailureInvalidatesInFlightProviderRecovery)
 {
     const auto provider = MakeAddress(39);
@@ -1253,6 +1285,48 @@ TEST(TransportLayerAdmissionTest, ProviderRecoveryDoesNotDependOnHeartbeatSummar
     EXPECT_EQ(manager->providerProbeExpectedIncarnations, std::vector<std::string>{ "incarnation-a" });
     EXPECT_EQ(manager->providerProbeTimeouts, std::vector<int32_t>{ 3'000 });
     EXPECT_TRUE(filter->IsAvailable(provider));
+}
+
+// End-to-end rate check through the real ReconcileLoop. With the port-health verifier bound, a
+// completed probe carries no verdict, so it must not re-arm the peer before the probe backoff
+// elapses. The loop is woken once through the same ApplyWorkerSnapshot path the client uses, then
+// runs unattended: the 1s base backoff keeps this under 2 probes, while a missing backoff lets the
+// loop spin on the probe RPC and reach the threshold almost immediately after the first probe.
+TEST(TransportLayerAdmissionTest, VerifierBoundProviderProbeDoesNotSpinOnReconcileLoop)
+{
+    constexpr int SPIN_THRESHOLD = 6;
+    constexpr std::chrono::seconds OBSERVATION_WINDOW(2);
+    const auto provider = MakeAddress(45);
+    auto filter = std::make_shared<UbHealthFilter>();
+    std::atomic<int> verifications{ 0 };
+    filter->SetRemotePortHealthVerificationTrigger(
+        [&verifications](const HostPort &) { verifications.fetch_add(1, std::memory_order_acq_rel); });
+    ClusterTopologyPb topology;
+    (*topology.mutable_members())[provider.ToString()].set_id("incarnation-a");
+    filter->ApplyTopologyIncarnations(topology);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->providerProbeSummary.worker = provider;
+    manager->providerProbeSummary.incarnation = "incarnation-a";
+    manager->providerProbeSummary.writable = true;
+    TestTransportLayer layer(manager, std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE),
+                             filter);
+    ASSERT_TRUE(layer.Init().IsOk());
+
+    ProviderUbFailureDetailPb detail;
+    FillProviderUbFailureDetail(Status(K_RPC_DEADLINE_EXCEEDED, "provider read timed out"),
+                                "client-receive-endpoint", provider.ToString(), std::nullopt, std::nullopt, detail);
+    EXPECT_FALSE(filter->ReportProviderFailure(provider, detail));
+
+    WorkerSnapshot snapshot;
+    snapshot.ringVersion = 1;
+    snapshot.remoteTransportAddrs = { provider };
+    snapshot.workerIncarnations = { { provider, "incarnation-a" } };
+    ASSERT_TRUE(layer.ApplyWorkerSnapshot(snapshot).IsOk());
+
+    EXPECT_FALSE(manager->WaitForProviderProbeCount(SPIN_THRESHOLD, OBSERVATION_WINDOW));
+    LOG(INFO) << "[UB_PROBE_RATE] probes_in_" << OBSERVATION_WINDOW.count()
+              << "s=" << manager->providerProbeCount.load(std::memory_order_acquire)
+              << " verifierWakeups=" << verifications.load(std::memory_order_acquire);
 }
 
 TEST(TransportLayerAdmissionTest, Cqe4DoesNotDirectlyCloseAdmission)

@@ -256,6 +256,7 @@ private:
     static bool ShouldBlock(const UbPathState &state);
     static Status BuildUnavailableStatus(const HostPort &peer, StatusCode code);
     static uint64_t ProbeBackoffMs(uint32_t level);
+    static void ApplyProbeRetryBackoff(UbPathState &state, uint64_t nowMs);
     bool IsGlobalWritableLocked(const HostPort &peer) const;
     bool IsReplayLocked(const HostPort &worker, const std::string &incarnation) const;
     void ApplyGlobalRecoveryTransitionLocked(const UbHealthSummary &summary, uint64_t nowMs);

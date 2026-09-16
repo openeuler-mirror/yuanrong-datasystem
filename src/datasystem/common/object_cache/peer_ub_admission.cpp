@@ -620,8 +620,7 @@ bool PeerUbAdmission::CancelProbe(const UbProbeToken &token, uint64_t nowMs)
                              || IsPortHealthManagedState(token.peer, state);
     state.state = softFailure ? UbAdmissionState::SUSPECT : UbAdmissionState::UNAVAILABLE;
     state.probeInFlight = false;
-    state.backoffLevel = std::max(state.backoffLevel, 1U);
-    state.backoffDeadlineMs = UbProbeRetryAt(nowMs, ProbeBackoffMs(state.backoffLevel));
+    ApplyProbeRetryBackoff(state, nowMs);
     ++state.epoch;
     return true;
 }
@@ -645,6 +644,9 @@ bool PeerUbAdmission::CompleteProbe(const UbProbeToken &token, const Status &sta
                 return false;
             }
             state->second.probeInFlight = false;
+            // A verifier-owned verdict yields no admission decision here; without the backoff
+            // NextProbeCandidate re-arms on the next scheduler turn and the probe loop never sleeps.
+            ApplyProbeRetryBackoff(state->second, nowMs);
             ++state->second.epoch;
         }
     }
@@ -1126,6 +1128,12 @@ uint64_t PeerUbAdmission::ProbeBackoffMs(uint32_t level)
 {
     const uint32_t bounded = std::clamp<uint32_t>(level, 1, MAX_PROBE_BACKOFF_LEVEL);
     return PROBE_BASE_DELAY_MS * (1ULL << (bounded - 1));
+}
+
+void PeerUbAdmission::ApplyProbeRetryBackoff(UbPathState &state, uint64_t nowMs)
+{
+    state.backoffLevel = std::max(state.backoffLevel, 1U);
+    state.backoffDeadlineMs = UbProbeRetryAt(nowMs, ProbeBackoffMs(state.backoffLevel));
 }
 
 bool PeerUbAdmission::UsesVerifiedPortHealth() const
