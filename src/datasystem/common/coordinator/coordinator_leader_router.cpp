@@ -20,6 +20,7 @@
 #include <utility>
 
 #include "datasystem/common/log/logging.h"
+#include "datasystem/common/rpc/brpc_status_util.h"
 
 namespace datasystem {
 namespace {
@@ -188,6 +189,11 @@ CoordinatorLeaderRouter::CandidateRoundResult CoordinatorLeaderRouter::TryCandid
         }
         if (attempt.deadlineReached) {
             return { RoundAction::COMPLETE, hasCoordinatorResponse ? lastStatus : DeadlineExceeded(), {} };
+        }
+        if (!attempt.rpc.header.has_value() && attempt.rpc.status.IsError()
+            && attempt.rpc.status.GetCode() != K_NOT_READY
+            && IsBrpcServerApplicationError(attempt.rpc.status)) {
+            return { RoundAction::COMPLETE, attempt.rpc.status, {} };
         }
         if (!attempt.rpc.header.has_value()) {
             continue;

@@ -73,7 +73,10 @@
   failure. Rejected responses never retain a successful status. Every RPC, including RECOVERING retries, shares the
   remaining budget with the current and unattempted unique candidates.
   Accepted nonterminal Coordinator results survive candidate rounds and deadline exhaustion. A candidate skipped
-  for lack of budget is not a new RPC result; headerless failures cannot overwrite an accepted Coordinator result.
+  for lack of budget is not a new RPC result; headerless transport failures cannot overwrite an accepted Coordinator
+  result. Headerless errors explicitly marked as server application responses return directly, except `K_NOT_READY`,
+  which retains readiness routing. This preserves membership `K_TRY_AGAIN`/`K_NOT_FOUND` for renewal repair instead of
+  replacing them with follower redirects.
   Coordinator-side membership loss only re-ensures the current Worker payload and does not publish `RESTARTING` or run
   the local rejoin cleanup. Only `TopologyEngine` confirmation that the local Worker must rejoin uses the explicit
   destructive rejoin path. This keeps a new Coordinator lifetime from being mistaken for a new Worker incarnation.

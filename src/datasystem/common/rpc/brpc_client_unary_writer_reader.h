@@ -215,9 +215,11 @@ private:
         MergeBrpcServerTraceTrailer(errorAttachment, trace);
         trace.MarkClientEnd();
         trace.SetCntlDiagnostics(timeoutMs_, -1, cntl.ErrorCode(), true, errorAttachment.size());
-        RecordBrpcRpcTrace(trace);
         Status embedded = TryExtractStatusFromResponse(response_);
         const auto &errorText = cntl.ErrorText();
+        auto status = embedded.IsError() ? embedded : TryExtractStatusFromControllerError(errorText, cntl.ErrorCode());
+        trace.SetDsErrorCode(static_cast<int>(status.GetCode()));
+        RecordBrpcRpcTrace(trace);
         VLOG(1) << "[BRPC_UNARY_READ_FAILED] method="
                 << (method_ == nullptr ? "UNKNOWN" : method_->full_name())
                 << ", errorCode=" << cntl.ErrorCode()
@@ -230,7 +232,7 @@ private:
                                   << (method_ == nullptr ? "UNKNOWN" : method_->full_name())
                                   << ", timeoutMs=" << timeoutMs_
                                   << ", responseDebug=" << response_.ShortDebugString();
-        return embedded.IsError() ? embedded : TryExtractStatusFromControllerError(errorText, cntl.ErrorCode());
+        return status;
     }
 
     void AppendMemViewToRequestAttachment(const std::vector<MemView> &payload)
