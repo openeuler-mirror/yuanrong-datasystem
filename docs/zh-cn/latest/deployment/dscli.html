@@ -3204,62 +3204,67 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，<code class
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>[已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建</p></td>
 </tr>
-<tr class="row-odd"><td><p>urma_event_mode</p></td>
+<tr class="row-odd"><td><p>urma_send_lane_count_per_peer</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
+<td><p>单个远端 peer 可并发占用的 URMA send lane 上限，必须大于 0；实际值不超过 <code class="docutils literal notranslate"><span class="pre">urma_send_jetty_lane_pool_size</span></code>。静态配置，修改后需重启 Worker。</p></td>
+</tr>
+<tr class="row-even"><td><p>urma_event_mode</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否使用中断模式轮询完成事件</p></td>
 </tr>
-<tr class="row-even"><td><p>urma_poll_size</p></td>
+<tr class="row-odd"><td><p>urma_poll_size</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>一次可轮询的完整记录数量，该设备最多可轮询16条记录</p></td>
 </tr>
-<tr class="row-odd"><td><p>urma_max_write_size_mb</p></td>
+<tr class="row-even"><td><p>urma_max_write_size_mb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">4</span></code></p></td>
 <td><p>URMA 单次写入大小上限，单位为 MB，取值范围：[1, 2048]</p></td>
 </tr>
-<tr class="row-even"><td><p>urma_register_whole_arena</p></td>
+<tr class="row-odd"><td><p>urma_register_whole_arena</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否在初始化时将整个arena注册为一个段，如果设置为<code class="docutils literal notranslate"><span class="pre">false</span></code>，将每个对象分别注册为一个段</p></td>
 </tr>
-<tr class="row-odd"><td><p>enable_rdma</p></td>
+<tr class="row-even"><td><p>enable_rdma</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否开启RDMA以实现对象worker之间的数据传输</p></td>
 </tr>
-<tr class="row-even"><td><p>rdma_register_whole_arena</p></td>
+<tr class="row-odd"><td><p>rdma_register_whole_arena</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否在RDMA初始化时将整个arena注册为一个段，如果设置为<code class="docutils literal notranslate"><span class="pre">false</span></code>，将每个对象分别注册为一个段</p></td>
 </tr>
-<tr class="row-odd"><td><p>oc_shm_transfer_threshold_kb</p></td>
+<tr class="row-even"><td><p>oc_shm_transfer_threshold_kb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">500</span></code></p></td>
 <td><p>在客户端和worker之间通过共享内存传输对象数据的阈值，单位为KB</p></td>
 </tr>
-<tr class="row-even"><td><p>shared_disk_arena_per_tenant</p></td>
+<tr class="row-odd"><td><p>shared_disk_arena_per_tenant</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32]</p></td>
 </tr>
-<tr class="row-odd"><td><p>shared_disk_directory</p></td>
+<tr class="row-even"><td><p>shared_disk_directory</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
 <td><p>磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存</p></td>
 </tr>
-<tr class="row-even"><td><p>shared_disk_size_mb</p></td>
+<tr class="row-odd"><td><p>shared_disk_size_mb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存</p></td>
 </tr>
-<tr class="row-odd"><td><p>memory_alignment</p></td>
+<tr class="row-even"><td><p>memory_alignment</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">64</span></code></p></td>
 <td><p>jemalloc分配内存使用的字节对齐大小。更大的对齐可能提升性能，但也会因碎片化而增加内存占用。</p></td>
 </tr>
-<tr class="row-even"><td><p>oc_metadata_header</p></td>
+<tr class="row-odd"><td><p>oc_metadata_header</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否为对象缓存共享内存分配元数据头，如果设置为<code class="docutils literal notranslate"><span class="pre">false</span></code>则关闭此功能（此时shm latch/可见性将不可用）</p></td>
