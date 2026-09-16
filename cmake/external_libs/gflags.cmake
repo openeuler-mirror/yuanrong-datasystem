@@ -3,14 +3,9 @@ set(gflags_VERSION 2.2.2)
 if (NOT "$ENV{DS_LOCAL_LIBS_DIR}" STREQUAL "")
     set(gflags_URL "$ENV{DS_LOCAL_LIBS_DIR}/opensource_third_party/v2.2.2.tar.gz")
 else()
-    # Default: upstream GitHub. Set DATASYSTEM_GITHUB_PROXY to use gh-proxy.com mirror.
-    if (NOT "$ENV{DATASYSTEM_GITHUB_PROXY}" STREQUAL "")
-        set(gflags_URL "https://gh-proxy.com/https://github.com/gflags/gflags/archive/refs/tags/v2.2.2.tar.gz")
-    else()
-        set(gflags_URL "https://github.com/gflags/gflags/archive/refs/tags/v2.2.2.tar.gz")
-    endif()
+    set(gflags_URL "https://gitee.com/mirrors/gflags/repository/archive/v2.2.2.zip")
 endif()
-set(gflags_SHA256 "34af2f15cf7367513b352bdcd2493ab14ce43692d2dcd9dfc499492966c64dcf")
+set(gflags_SHA256 "dfd9d3ee0c92e92d2b550e56322d1237324e000c72306802b81c32a1231769df")
 
 set(gflags_CMAKE_OPTIONS
     -DCMAKE_BUILD_TYPE:STRING=Release
