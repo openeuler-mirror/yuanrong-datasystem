@@ -51,11 +51,23 @@ struct CleanupResult {
     int64_t operationFailureCount = 0;
 };
 
+/** @brief Calculate active Set concurrency across partially successful Clients. */
+int64_t CalcGroupSetConcurrency(const GroupResult &group, int threadsPerClient)
+{
+    int64_t concurrency = 0;
+    for (const auto &client : group.clients) {
+        concurrency += std::min<int64_t>(threadsPerClient, client.successCount);
+    }
+    return concurrency;
+}
+
 class InterfaceCsvWriter {
 public:
-    explicit InterfaceCsvWriter(const std::string &outputDir)
+    InterfaceCsvWriter(const std::string &outputDir, int threadsPerClient, bool measureSetBufferOnly)
         : phases_(outputDir + "/benchmark_phases.csv", std::ios::trunc),
-          clients_(outputDir + "/benchmark_clients.csv", std::ios::trunc)
+          clients_(outputDir + "/benchmark_clients.csv", std::ios::trunc),
+          threadsPerClient_(threadsPerClient),
+          measureSetBufferOnly_(measureSetBufferOnly)
     {
         phases_ << "scope,round,operation,success,failures,elapsed_ms,qps,avg_ms,p50_ms,p99_ms,max_ms,"
                    "throughput_mib_s,valid\n";
@@ -69,7 +81,7 @@ public:
     }
 
     void WriteGroup(const std::string &scope, int round, const std::string &operation, GroupResult &group,
-                    uint64_t dataSize, double elapsedOverrideMs = 0)
+                    uint64_t dataSize, double elapsedOverrideMs = -1)
     {
         WritePhase(scope, round, operation, group.total, dataSize, elapsedOverrideMs);
         const int64_t firstStartNs = group.total.firstStartNs;
@@ -91,7 +103,7 @@ private:
     void WritePhase(const std::string &scope, int round, const std::string &operation,
                     StreamingPhaseResult &result, uint64_t dataSize, double elapsedOverrideMs)
     {
-        const double elapsedMs = elapsedOverrideMs > 0 ? elapsedOverrideMs : result.ElapsedMs();
+        const double elapsedMs = elapsedOverrideMs >= 0 ? elapsedOverrideMs : result.ElapsedMs();
         const double throughput = CalcBenchmarkThroughputMiBps(result.successCount, dataSize, elapsedMs);
         auto pct = result.GetPercentiles();
         phases_ << std::fixed << std::setprecision(3) << scope << ',' << round << ',' << operation << ','
@@ -104,7 +116,9 @@ private:
     void WriteClient(int round, const std::string &operation, int clientId, StreamingPhaseResult &result,
                      int64_t groupStartNs)
     {
-        const double elapsedMs = result.ElapsedMs();
+        const double elapsedMs = operation == "set" && measureSetBufferOnly_
+                                     ? CalcSetOnlyElapsedMs(result, threadsPerClient_)
+                                     : result.ElapsedMs();
         const double offsetUs = result.firstStartNs == 0
                                     ? 0
                                     : static_cast<double>(result.firstStartNs - groupStartNs)
@@ -119,6 +133,8 @@ private:
 
     std::ofstream phases_;
     std::ofstream clients_;
+    int threadsPerClient_;
+    bool measureSetBufferOnly_;
 };
 
 bool ReadExactUntilStopped(int fd, void *buffer, size_t length, const std::atomic<bool> &running)
@@ -358,7 +374,13 @@ int RunGetBenchmark(const Config &cfg, std::vector<ChildProcess> &children, cons
                       setup, running)) {
         return 1;
     }
-    csv.WriteGroup("setup", 0, "set", setup, cfg.dataSizes[0]);
+    const int64_t setConcurrency = CalcGroupSetConcurrency(setup, cfg.numThreads);
+    if (cfg.setApi == "string_view") {
+        csv.WriteGroup("setup", 0, "set", setup, cfg.dataSizes[0]);
+    } else {
+        csv.WriteGroup("setup", 0, "set", setup, cfg.dataSizes[0],
+                       CalcSetOnlyElapsedMs(setup.total, setConcurrency));
+    }
     if (setup.total.successCount == 0) {
         SLOG_ERROR("Get setup produced no keys: failures=" << setup.total.failureCount);
         (void)CleanupDataset(cfg, children, cleanupIndices, 0, keysPerDataset, running);
@@ -434,8 +456,11 @@ int RunSetBenchmark(const Config &cfg, std::vector<ChildProcess> &children, cons
                           false, measured, running)) {
             return 1;
         }
-        csv.WriteGroup("round", round, "set", measured, cfg.dataSizes[0]);
-        activeElapsedMs += measured.total.ElapsedMs();
+        const int64_t setConcurrency = CalcGroupSetConcurrency(measured, cfg.numThreads);
+        const double setElapsedMs = cfg.setApi == "string_view" ? measured.total.ElapsedMs()
+                                                               : CalcSetOnlyElapsedMs(measured.total, setConcurrency);
+        csv.WriteGroup("round", round, "set", measured, cfg.dataSizes[0], setElapsedMs);
+        activeElapsedMs += setElapsedMs;
         summary.Merge(measured.total);
         ++completedRounds;
         const auto cleanup = CleanupDataset(cfg, children, cleanupIndices, round, keysPerDataset, running);
@@ -456,9 +481,10 @@ int RunSetBenchmark(const Config &cfg, std::vector<ChildProcess> &children, cons
         }
     }
     csv.WriteSummary("set", summary, cfg.dataSizes[0], activeElapsedMs);
+    const char *elapsedName = cfg.setApi == "string_view" ? "active_elapsed_ms" : "set_only_elapsed_ms";
     SLOG_INFO("Set benchmark finished: rounds=" << completedRounds << ", success=" << summary.successCount
-                                                 << ", failures=" << summary.failureCount
-                                                 << ", active_elapsed_ms=" << activeElapsedMs);
+                                                 << ", failures=" << summary.failureCount << ", " << elapsedName
+                                                 << '=' << activeElapsedMs);
     if (cleanupFailed) {
         return CLEANUP_FAILURE_EXIT_CODE;
     }
@@ -500,7 +526,7 @@ int RunInterfaceBenchmark(const Config &cfg, const std::string &configPath, std:
         cleanupIndices = measuredIndices;
     }
 
-    InterfaceCsvWriter csv(cfg.outputDir);
+    InterfaceCsvWriter csv(cfg.outputDir, cfg.numThreads, cfg.setApi != "string_view");
     if (!csv.IsOpen()) {
         SLOG_ERROR("Failed to open benchmark CSV outputs in " << cfg.outputDir);
         KillAllChildren(children);

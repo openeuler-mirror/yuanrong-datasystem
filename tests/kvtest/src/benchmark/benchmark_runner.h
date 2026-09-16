@@ -118,6 +118,18 @@ struct StreamingPhaseResult {
         latencyDigest.add(latencyMs);
     }
 
+    /** @brief Record a failure that occurred before the measured operation started. */
+    void RecordUnmeasuredFailure(const BenchmarkOpResult &op)
+    {
+        ++failureCount;
+        if (op.notFound) {
+            ++notFoundCount;
+        }
+        if (op.timeout) {
+            ++timeoutCount;
+        }
+    }
+
     /** @brief Record one batch as per-key samples. */
     void RecordBatch(const BenchmarkOpResult &op, int64_t count, double batchLatencyMs, int64_t startNs, int64_t endNs)
     {
@@ -187,6 +199,13 @@ struct StreamingPhaseResult {
         return result;
     }
 };
+
+/** @brief Calculate Set-only elapsed time from concurrent successful Set calls. */
+inline double CalcSetOnlyElapsedMs(const StreamingPhaseResult &result, int64_t maxConcurrency)
+{
+    const int64_t effectiveConcurrency = std::min(maxConcurrency, result.successCount);
+    return effectiveConcurrency > 0 ? result.totalLatencyMs / static_cast<double>(effectiveConcurrency) : 0;
+}
 
 inline Percentiles ComputePercentiles(std::vector<double> latencies) {
     Percentiles p;

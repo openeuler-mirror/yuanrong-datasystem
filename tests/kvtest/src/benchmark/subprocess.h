@@ -331,17 +331,29 @@ inline int64_t SteadyNowNs()
         .count();
 }
 
-/** @brief Invoke the configured single-key Set API. */
-inline BenchmarkOpResult RunStreamingSet(KVClientAdapter *adapter, const Config &cfg, const std::string &key,
-                                         const std::string &data)
+/** @brief Describes one benchmark operation and its measured interval. */
+struct TimedBenchmarkOpResult {
+    BenchmarkOpResult op;
+    int64_t startNs = 0;
+    int64_t endNs = 0;
+    bool measured = false;
+};
+
+/** @brief Invoke the configured single-key Set API and measure only the Set call. */
+inline TimedBenchmarkOpResult RunStreamingSet(KVClientAdapter *adapter, const Config &cfg, const std::string &key,
+                                             const std::string &data)
 {
     if (cfg.setApi == "string_view") {
-        return adapter->SetWithStatus(key, data);
+        const int64_t startNs = SteadyNowNs();
+        auto op = adapter->SetWithStatus(key, data);
+        const int64_t endNs = SteadyNowNs();
+        return { op, startNs, endNs, true };
     }
-    if (cfg.setApi == "create_buffer") {
-        return adapter->CreateAndSetWithStatus(key, data.size(), data);
-    }
-    return adapter->CreateAndSetRawWithStatus(key, data.size(), data);
+    BenchmarkOpTiming timing;
+    auto op = cfg.setApi == "create_buffer"
+                  ? adapter->CreateAndSetWithStatus(key, data.size(), data, &timing)
+                  : adapter->CreateAndSetRawWithStatus(key, data.size(), data, &timing);
+    return { op, timing.startNs, timing.endNs, timing.startNs != 0 };
 }
 
 /** @brief Delete one thread's key partition in bounded batches. */
@@ -398,18 +410,30 @@ inline void RunStreamingThread(KVClientAdapter *adapter, const Config &cfg, cons
     for (int pass = 0; passLimit == 0 || pass < passLimit; ++pass) {
         const int keyCount = cmd.oneOpPerThread != 0 ? 1 : range.second;
         for (int i = 0; i < keyCount; ++i) {
-            const int64_t startNs = SteadyNowNs();
-            if (arm.stopAtNs > 0 && startNs >= arm.stopAtNs) {
+            const int64_t dispatchNs = SteadyNowNs();
+            if (arm.stopAtNs > 0 && dispatchNs >= arm.stopAtNs) {
                 return;
             }
             const std::string &key = keys[startKey + i];
-            auto op = cmd.cmd == CMD_PREPARE_SET ? RunStreamingSet(adapter, cfg, key, data)
-                                                 : adapter->GetWithStatus(key);
-            const int64_t endNs = SteadyNowNs();
-            result.Record(op, static_cast<double>(endNs - startNs) / BENCHMARK_NANOSECONDS_PER_MILLISECOND,
-                          startNs, endNs);
+            TimedBenchmarkOpResult timed{};
+            if (cmd.cmd == CMD_PREPARE_SET) {
+                timed = RunStreamingSet(adapter, cfg, key, data);
+            } else {
+                timed.startNs = dispatchNs;
+                timed.op = adapter->GetWithStatus(key);
+                timed.endNs = SteadyNowNs();
+                timed.measured = true;
+            }
+            if (timed.measured) {
+                result.Record(timed.op,
+                              static_cast<double>(timed.endNs - timed.startNs)
+                                  / BENCHMARK_NANOSECONDS_PER_MILLISECOND,
+                              dispatchNs, timed.endNs);
+            } else {
+                result.RecordUnmeasuredFailure(timed.op);
+            }
             if constexpr (CaptureSetSuccess) {
-                if (op.success) {
+                if (timed.op.success) {
                     (*successfulSetMask)[startKey + i] = 1;
                 }
             }

@@ -17,9 +17,17 @@
 /** Description: Defines the result of one kvtest benchmark SDK operation. */
 #pragma once
 
+#include <cstdint>
+
 /** @brief Describes one benchmark SDK operation result. */
 struct BenchmarkOpResult {
     bool success;
     bool notFound = false;
     bool timeout = false;
+};
+
+/** @brief Holds an optional measured interval for one benchmark operation. */
+struct BenchmarkOpTiming {
+    int64_t startNs = 0;
+    int64_t endNs = 0;
 };

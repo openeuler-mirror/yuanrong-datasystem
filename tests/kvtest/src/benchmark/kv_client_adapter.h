@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <datasystem/kv_client.h>
 #include <datasystem/utils/string_view.h>
 #include "benchmark/benchmark_result.h"
@@ -40,8 +41,19 @@ public:
         return CreateAndSetWithStatus(key, size, data).success;
     }
 
-    /** @brief Create and publish one buffer while preserving benchmark status categories. */
-    BenchmarkOpResult CreateAndSetWithStatus(const std::string &key, uint64_t size, const std::string &data) {
+    /**
+     * @brief Create and publish one buffer while optionally measuring only Set.
+     * @param[in] key Object key.
+     * @param[in] size Object size.
+     * @param[in] data Object data.
+     * @param[out] setTiming Set interval, or null when separate timing is not needed.
+     * @return Benchmark operation result.
+     */
+    BenchmarkOpResult CreateAndSetWithStatus(const std::string &key, uint64_t size, const std::string &data,
+                                             BenchmarkOpTiming *setTiming = nullptr) {
+        if (setTiming != nullptr) {
+            *setTiming = {};
+        }
         datasystem::SetParam cparam = param_;
         std::shared_ptr<datasystem::Buffer> buffer;
         auto rc = client_->Create(key, size, cparam, buffer);
@@ -53,7 +65,13 @@ public:
         // buffer->WLatch();
         // buffer->MemoryCopy(data.data(), size);
         // buffer->UnWLatch();
+        if (setTiming != nullptr) {
+            setTiming->startNs = SteadyNowNs();
+        }
         rc = client_->Set(buffer);
+        if (setTiming != nullptr) {
+            setTiming->endNs = SteadyNowNs();
+        }
         return ToResult(rc);
     }
 
@@ -61,8 +79,19 @@ public:
         return CreateAndSetRawWithStatus(key, size, data).success;
     }
 
-    /** @brief Create and publish one raw buffer while preserving benchmark status categories. */
-    BenchmarkOpResult CreateAndSetRawWithStatus(const std::string &key, uint64_t size, const std::string &data) {
+    /**
+     * @brief Create and publish one raw buffer while optionally measuring only Set.
+     * @param[in] key Object key.
+     * @param[in] size Object size.
+     * @param[in] data Object data.
+     * @param[out] setTiming Set interval, or null when separate timing is not needed.
+     * @return Benchmark operation result.
+     */
+    BenchmarkOpResult CreateAndSetRawWithStatus(const std::string &key, uint64_t size, const std::string &data,
+                                                BenchmarkOpTiming *setTiming = nullptr) {
+        if (setTiming != nullptr) {
+            *setTiming = {};
+        }
         datasystem::SetParam cparam = param_;
         std::shared_ptr<datasystem::Buffer> buffer;
         auto rc = client_->Create(key, size, cparam, buffer);
@@ -72,7 +101,13 @@ public:
         // No-copy benchmark: publish the freshly created Buffer directly.
         // Restore the write below when content validation is needed again.
         // memcpy(buffer->MutableData(), data.data(), size);
+        if (setTiming != nullptr) {
+            setTiming->startNs = SteadyNowNs();
+        }
         rc = client_->Set(buffer);
+        if (setTiming != nullptr) {
+            setTiming->endNs = SteadyNowNs();
+        }
         return ToResult(rc);
     }
 
@@ -123,6 +158,12 @@ public:
     datasystem::KVClient *RawClient() { return client_.get(); }
 
 private:
+    static int64_t SteadyNowNs() {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    }
+
     static BenchmarkOpResult ToResult(const datasystem::Status &rc) {
         const auto code = rc.GetCode();
         return { rc.IsOk(), code == datasystem::StatusCode::K_NOT_FOUND,
