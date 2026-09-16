@@ -126,6 +126,8 @@ public:
     int64_t CntlTimeoutMs() const { return cntlTimeoutMs_; }
     int64_t CntlDeadlineUs() const { return cntlDeadlineUs_; }
     int CntlErrorCode() const { return cntlErrorCode_; }
+    void SetDsErrorCode(int errorCode) { dsErrorCode_ = errorCode; }
+    int DsErrorCode() const { return dsErrorCode_; }
     bool CntlFailed() const { return cntlFailed_; }
     uint64_t RespAttachmentSize() const { return respAttachmentSize_; }
     // Latency-bucketing failure flag. Set by SetCntlDiagnostics on the client path; may also be set
@@ -160,6 +162,7 @@ private:
     int64_t cntlTimeoutMs_ { -1 };
     int64_t cntlDeadlineUs_ { -1 };
     int cntlErrorCode_ { 0 };
+    int dsErrorCode_ { -1 };  // Unavailable until the client decodes the failed RPC status.
     bool cntlFailed_ { false };
     // Latency-bucketing flag; see MarkFailed()/Failed().
     bool failed_ { false };
@@ -386,6 +389,7 @@ inline void RecordBrpcRpcTrace(const BrpcPerfTrace &trace)
                     << " cntl_timeout_ms=" << trace.CntlTimeoutMs()
                     << " cntl_deadline_us=" << trace.CntlDeadlineUs()
                     << " cntl_error_code=" << trace.CntlErrorCode()
+                    << " ds_error_code=" << trace.DsErrorCode()
                     << " cntl_failed=" << (trace.CntlFailed() ? 1 : 0)
                     << " resp_attachment_bytes=" << trace.RespAttachmentSize()
                     << " ClientSend=" << trace.ClientSendTs() << " ClientRecv=" << trace.ClientRecvTs()

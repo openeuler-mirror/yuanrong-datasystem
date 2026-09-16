@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "datasystem/common/rpc/brpc_status_util.h"
 
 namespace datasystem {
 namespace {
@@ -755,6 +756,52 @@ TEST_F(CoordinatorLeaderRouterTest, ConcurrentObservationOfSameIdentityDoesNotRe
     EXPECT_EQ(calls, 1);
     EXPECT_EQ(publishedIdentities.size(), 1);
     EXPECT_TRUE(waits.empty());
+}
+
+TEST_F(CoordinatorLeaderRouterTest, HeaderlessMembershipErrorReturnsWithoutTryingFollowers)
+{
+    snapshots = { { "127.0.0.1:30001", "127.0.0.1:30002", "127.0.0.1:30003" } };
+    for (auto code : { K_TRY_AGAIN, K_NOT_FOUND }) {
+        Router router(Dependencies());
+        size_t calls = 0;
+        Status error(code, "membership incarnation is stale");
+        error.WithExtra(kBrpcServerRespondedExtra);
+        const auto status = router.Execute(
+            [&](const HostPort &address, std::chrono::milliseconds) -> Router::RpcResult {
+                ++calls;
+                if (address.ToString() == "127.0.0.1:30001") {
+                    return { error, std::nullopt };
+                }
+                return Response(State::NOT_LEADER, Status::OK(), "127.0.0.1:30001");
+            },
+            Deadline(std::chrono::seconds(3)), std::chrono::seconds(3),
+            std::chrono::milliseconds(1), true);
+        EXPECT_EQ(status.GetCode(), code);
+        EXPECT_EQ(status.GetMsg(), error.GetMsg());
+        EXPECT_TRUE(IsBrpcServerApplicationError(status));
+        EXPECT_EQ(calls, 1);
+        EXPECT_TRUE(waits.empty());
+    }
+}
+
+TEST_F(CoordinatorLeaderRouterTest, HeaderlessServerNotReadyStillTriesOtherCandidates)
+{
+    snapshots = { { "127.0.0.1:30001", "127.0.0.1:30002" } };
+    Router router(Dependencies());
+    size_t calls = 0;
+    const auto status = router.Execute(
+        [&](const HostPort &address, std::chrono::milliseconds) -> Router::RpcResult {
+            ++calls;
+            if (address.ToString() == "127.0.0.1:30001") {
+                Status error(K_NOT_READY, "coordinator is recovering");
+                error.WithExtra(kBrpcServerRespondedExtra);
+                return { error, std::nullopt };
+            }
+            return Response(State::SERVING);
+        },
+        Deadline(std::chrono::seconds(3)), std::chrono::seconds(3), std::chrono::milliseconds(1));
+    EXPECT_TRUE(status.IsOk());
+    EXPECT_EQ(calls, 2);
 }
 
 TEST_F(CoordinatorLeaderRouterTest, HeaderlessBusinessErrorWithFollowersRetainsNotReady)
