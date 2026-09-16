@@ -516,7 +516,7 @@ Status ClientWorkerRemoteApi::PrepareGetUrmaBuffer(const GetParam &getParam, Get
     if (totalRequiredSize > 0) {
         PrepareUrmaBuffer(req, ubBufferHandle, ubBufferPtr, ubBufferSize, totalRequiredSize);
     } else if (fallbackToTcp) {
-        LOG(WARNING) << "UB meta unavailable, fallback to TCP/IP payload: " << VectorToString(getParam.objectKeys);
+        LOG(WARNING) << "UB meta unavailable, object key: " << VectorToString(getParam.objectKeys);
     }
     return Status::OK();
 }

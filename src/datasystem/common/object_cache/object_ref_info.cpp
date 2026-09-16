@@ -227,8 +227,7 @@ Status SharedMemoryRefTable::RemoveShmUnit(const ClientKey &clientId, const ShmK
         return Status::OK();
     }
     if (!shmRefTable_.find(shmAccessor, shmId)) {
-        LOG_EVERY_N(WARNING, SHM_ID_NOT_FOUND_LOG_EVERY_N)
-            << FormatString("The shmId not exists in shmRefTable_, clientId: %s, shmId: %s", clientId, shmId);
+        VLOG(1) << FormatString("The shmId not exists in shmRefTable_, clientId: %s, shmId: %s", clientId, shmId);
         return Status::OK();
     }
     auto shmUnit = shmAccessor->second.first;
@@ -486,6 +485,9 @@ void SharedMemoryRefTable::HardReclaimExpiredShmUnits(const std::vector<MaybeExp
             ++reclaimedThisTick;
         }
         ClearMaybeExpiredShmIds(item.clientId, { item.shmId });
+    }
+    if (reclaimedThisTick == 0 && requeuedThisTick == 0) {
+        return;
     }
     LOG_EVERY_T(WARNING, LOG_TIME_LIMIT_LEVEL2)
         << "[SHM_REF_HARD_RECLAIM] tick reclaimed=" << reclaimedThisTick
