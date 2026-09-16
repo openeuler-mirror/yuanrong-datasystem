@@ -21,6 +21,58 @@ static void CleanupDir(const std::string &dir) {
 
 // --- ParseSize tests ---
 
+TEST(CudaConfig_DefaultsAndDisabledOps) {
+    Config cfg;
+    std::string error;
+    ASSERT_FALSE(cfg.cuda.transferEnabled);
+    ASSERT_TRUE(cfg.cuda.pin);
+    ASSERT_EQ(cfg.cuda.clientInitWaitSeconds, 0);
+    ASSERT_TRUE(ValidateCudaConfig(cfg, error));
+    cfg.pipeline = {"createBuffer", "d2h", "setBuffer"};
+    ASSERT_FALSE(ValidateCudaConfig(cfg, error));
+}
+
+TEST(CudaConfig_OrderAndModes) {
+    Config cfg;
+    std::string error;
+    cfg.cuda.transferEnabled = true;
+    cfg.pipeline = {"mCreate", "mD2h", "mSet", "mGet", "mH2d"};
+    cfg.notifyPipeline = {"getBuffer", "h2d"};
+    ASSERT_TRUE(ValidateCudaConfig(cfg, error));
+    cfg.pipeline = {"mCreate", "mSet", "mD2h"};
+    ASSERT_FALSE(ValidateCudaConfig(cfg, error));
+    cfg.pipeline = {"h2d", "getBuffer"};
+    ASSERT_FALSE(ValidateCudaConfig(cfg, error));
+    cfg.pipeline = {"getBuffer", "h2d"};
+    cfg.runMode = RunMode::CACHE;
+    ASSERT_FALSE(ValidateCudaConfig(cfg, error));
+}
+
+TEST(CudaConfig_Json) {
+    const auto path = WriteTempConfig(R"({"etcd_address":"127.0.0.1:2379","data_sizes":["1KB"],
+        "cuda":{"transfer_enabled":true,"pin":false,"device_id":1,"runtime_library":"/opt/cuda/libcudart.so",
+                "client_init_wait_seconds":60},
+        "pipeline":["createBuffer","d2h","setBuffer"],"notify_pipeline":["getBuffer","h2d"]})");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_TRUE(cfg.cuda.transferEnabled);
+    ASSERT_FALSE(cfg.cuda.pin);
+    ASSERT_EQ(cfg.cuda.deviceId, 1);
+    ASSERT_EQ(cfg.cuda.clientInitWaitSeconds, 60);
+    ASSERT_EQ(cfg.cuda.runtimeLibrary, "/opt/cuda/libcudart.so");
+    std::remove(path.c_str());
+    CleanupDir(cfg.outputDir);
+}
+
+TEST(CudaConfig_ClientInitWaitValidation) {
+    Config cfg;
+    std::string error;
+    cfg.cuda.clientInitWaitSeconds = -1;
+    ASSERT_FALSE(ValidateCudaConfig(cfg, error));
+    cfg.cuda.clientInitWaitSeconds = 60;
+    ASSERT_TRUE(ValidateCudaConfig(cfg, error));
+}
+
 TEST(ParseSize_MB) {
     ASSERT_EQ(ParseSize("8MB"), 8ULL * 1024 * 1024);
 }

@@ -50,6 +50,13 @@ std::optional<MixedKeyStrategy> ParseMixedKeyStrategy(const std::string &s);
 std::optional<RunMode> ParseRunMode(const std::string &s);
 
 struct Config {
+    struct CudaOptions {
+        bool transferEnabled = false;
+        bool pin = true;
+        int deviceId = 0;
+        int clientInitWaitSeconds = 0;
+        std::string runtimeLibrary;
+    } cuda;
     RunMode runMode = RunMode::PIPELINE;
     int instanceId = 0;
     int listenPort = 9000;
@@ -144,3 +151,5 @@ uint64_t ParseSize(const std::string &str);
  * @return True on success.
  */
 bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputDirOverride = "");
+
+bool ValidateCudaConfig(const Config &cfg, std::string &error);

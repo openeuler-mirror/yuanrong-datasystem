@@ -326,6 +326,15 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
             }
         }
 
+        if (j.contains("cuda")) {
+            const auto &cuda = j.at("cuda");
+            cfg.cuda.transferEnabled = cuda.value("transfer_enabled", false);
+            cfg.cuda.pin = cuda.value("pin", true);
+            cfg.cuda.deviceId = cuda.value("device_id", 0);
+            cfg.cuda.clientInitWaitSeconds = cuda.value("client_init_wait_seconds", 0);
+            cfg.cuda.runtimeLibrary = cuda.value("runtime_library", std::string());
+        }
+
         // Benchmark mode fields
         if (j.contains("test_mode"))
             cfg.testMode = ParseTestMode(j["test_mode"].get<std::string>());
@@ -717,5 +726,49 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
     log << ", verify=" << cfg.verifyLevel << (cfg.verifyFailOp ? "+fail" : "")
         << ", sample_bytes=" << cfg.verifySampleBytes << ", sample_step=" << cfg.verifySampleStepBytes;
     SLOG_INFO(log.str());
+    std::string cudaError;
+    if (!ValidateCudaConfig(cfg, cudaError)) {
+        SLOG_ERROR(cudaError);
+        return false;
+    }
     return true;
+}
+
+namespace {
+bool ValidateCudaPipeline(const std::vector<std::string> &ops, bool enabled, std::string &error)
+{
+    bool created = false, batchCreated = false, filled = false, batchFilled = false;
+    bool fetched = false, batchFetched = false;
+    for (const auto &op : ops) {
+        const bool gpu = op == "d2h" || op == "h2d" || op == "mD2h" || op == "mH2d";
+        if (gpu && !enabled) { error = "CUDA pipeline ops require cuda.transfer_enabled=true"; return false; }
+        if (!enabled) continue;
+        if (op == "createBuffer") { created = true; filled = false; }
+        else if (op == "mCreate") { batchCreated = true; batchFilled = false; }
+        else if (op == "getBuffer") fetched = true;
+        else if (op == "mGet") batchFetched = true;
+        else if (op == "d2h" && created) filled = true;
+        else if (op == "mD2h" && batchCreated) batchFilled = true;
+        else if ((op == "h2d" && fetched) || (op == "mH2d" && batchFetched)) continue;
+        else if ((op == "setBuffer" && filled) || (op == "mSet" && batchFilled)) continue;
+        else if (op == "setStringView" || op == "exist") continue;
+        else { error = "Invalid CUDA pipeline order or unsupported op: " + op; return false; }
+    }
+    return true;
+}
+}
+
+bool ValidateCudaConfig(const Config &cfg, std::string &error)
+{
+    if (cfg.cuda.clientInitWaitSeconds < 0) {
+        error = "cuda.client_init_wait_seconds must be non-negative";
+        return false;
+    }
+    if (cfg.cuda.deviceId < 0) { error = "cuda.device_id must be non-negative"; return false; }
+    if (cfg.cuda.transferEnabled && (cfg.runMode != RunMode::PIPELINE || cfg.keyPoolSize != 0)) {
+        error = "CUDA transfers support pipeline mode without key_pool_size only";
+        return false;
+    }
+    return ValidateCudaPipeline(cfg.pipeline, cfg.cuda.transferEnabled, error)
+        && ValidateCudaPipeline(cfg.notifyPipeline, cfg.cuda.transferEnabled, error);
 }

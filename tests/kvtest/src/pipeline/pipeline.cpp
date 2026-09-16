@@ -55,6 +55,10 @@ static Status OpGetBuffer(PipelineContext &ctx, double &latencyMs) {
     }, latencyMs);
     if (!rc.IsOk()) return rc;
     if (!optBuf) return Status(K_RUNTIME_ERROR, "getBuffer: Get returned OK but buffer is empty");
+    if (ctx.cudaReadback) {
+        ctx.readBuffer = std::move(optBuf);
+        return Status::OK();
+    }
 
     VerifyFailReason reason = VerifyFailReason::NONE;
     std::optional<uint64_t> mismatchPos;
@@ -174,6 +178,10 @@ static Status OpMGet(PipelineContext &ctx, double &latencyMs) {
         return ctx.client->Get(ctx.batchKeys, ctx.batchResults);
     }, latencyMs);
     if (!rc.IsOk()) return rc;
+    if (ctx.batchResults.size() != ctx.batchKeys.size()) {
+        return Status(K_RUNTIME_ERROR, "mGet: result/key count mismatch");
+    }
+    if (ctx.cudaBatchReadback) return Status::OK();
     bool anyFail = false;
     for (size_t i = 0; i < ctx.batchResults.size(); i++) {
         if (!ctx.batchResults[i]) {
@@ -280,6 +288,65 @@ static Status OpCacheGetOrCreate(PipelineContext &ctx, double &latencyMs) {
     return setRc;
 }
 
+static Status CollectCudaHosts(PipelineContext &ctx, bool h2d, bool batch, std::vector<void *> &hosts) {
+    const size_t count = batch ? ctx.batchKeys.size() : 1;
+    if (count == 0 || (batch && (h2d ? ctx.batchResults.size() : ctx.batchBuffers.size()) != count)) {
+        return Status(K_INVALID, "CUDA transfer buffer/key count mismatch");
+    }
+    hosts.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        Buffer *buffer = nullptr;
+        if (h2d) {
+            auto &result = batch ? ctx.batchResults[i] : ctx.readBuffer;
+            if (result) buffer = &*result;
+        } else {
+            buffer = batch ? ctx.batchBuffers[i].get() : ctx.buffer.get();
+        }
+        if (!buffer || buffer->GetSize() <= 0 || static_cast<uint64_t>(buffer->GetSize()) != ctx.size) {
+            return Status(K_INVALID, "CUDA transfer requires a present Buffer of the expected size");
+        }
+        void *host = h2d ? const_cast<void *>(buffer->ImmutableData()) : buffer->MutableData();
+        if (!host) return Status(K_INVALID, "CUDA transfer received null Host address");
+        hosts.push_back(host);
+    }
+    return Status::OK();
+}
+
+static Status OpCudaCopy(PipelineContext &ctx, double &latencyMs, bool h2d, bool batch) {
+    if (!kvtest::CudaTransfersEnabled() || !ctx.cudaLane) return Status(K_INVALID, "CUDA transfer not initialized");
+    std::vector<void *> hosts;
+    Status rc = CollectCudaHosts(ctx, h2d, batch, hosts);
+    if (!rc.IsOk()) return rc;
+    if (!h2d && ctx.cudaLane->sourceSenderId != ctx.senderId) {
+        double prepareMs = 0;
+        rc = Measure([&ctx]() { return kvtest::PrepareCudaSource(*ctx.cudaLane, ctx.senderId); }, prepareMs);
+        if (ctx.metrics) ctx.metrics->Record("cuda_prepare", prepareMs, rc.GetCode());
+        if (!rc.IsOk()) return rc;
+    }
+    const std::string name = h2d ? (batch ? "mH2d" : "h2d") : (batch ? "mD2h" : "d2h");
+    kvtest::CudaTiming timing;
+    rc = kvtest::CopyCudaBuffers(*ctx.client, *ctx.cudaLane, hosts, ctx.size, h2d, timing);
+    latencyMs = timing.totalMs;
+    if (ctx.metrics) {
+        ctx.metrics->Record(name + "_enqueue", timing.enqueueMs, rc.GetCode());
+        ctx.metrics->Record(name + "_event", timing.eventMs, rc.GetCode());
+        ctx.metrics->Record(name + "_wait", timing.waitMs, rc.GetCode());
+    }
+    if (!rc.IsOk() || !h2d || ctx.verifyCfg.level == VerifyLevel::OFF || ctx.verifyCfg.level == VerifyLevel::SIZE) return rc;
+    bool matches = true;
+    double verifyMs = 0;
+    rc = Measure([&ctx, &hosts, &matches]() {
+        return kvtest::VerifyCudaBuffers(*ctx.cudaLane, hosts.size(), ctx.size, ctx.senderId, ctx.verifyCfg, matches);
+    }, verifyMs);
+    if (!matches) {
+        if (ctx.verifyFailCount) ++(*ctx.verifyFailCount);
+        SLOG_WARN("CUDA content verification failed: key=" << ctx.key << " senderId=" << ctx.senderId);
+    }
+    if (ctx.metrics) ctx.metrics->Record("cuda_verify", verifyMs, !matches ? K_INVALID : rc.GetCode());
+    if (rc.IsOk() && !matches && ctx.verifyCfg.failOp) return Status(K_INVALID, "CUDA content verification failed");
+    return rc;
+}
+
 // ---- Registry ----
 
 static const std::vector<std::pair<std::string, OpFunc>> kOpRegistry = {
@@ -293,6 +360,10 @@ static const std::vector<std::pair<std::string, OpFunc>> kOpRegistry = {
     {kOpMSet, OpMSet},
     {kOpMGet, OpMGet},
     {kOpCacheGetOrCreate, OpCacheGetOrCreate},
+    {"d2h", [](PipelineContext &ctx, double &ms) { return OpCudaCopy(ctx, ms, false, false); }},
+    {"h2d", [](PipelineContext &ctx, double &ms) { return OpCudaCopy(ctx, ms, true, false); }},
+    {"mD2h", [](PipelineContext &ctx, double &ms) { return OpCudaCopy(ctx, ms, false, true); }},
+    {"mH2d", [](PipelineContext &ctx, double &ms) { return OpCudaCopy(ctx, ms, true, true); }},
 };
 
 const std::vector<const char *> &GetAllOpNames(bool cacheMode) {
@@ -321,12 +392,61 @@ OpFunc GetOpFunc(const std::string &name) {
     return nullptr;
 }
 
+Status WarmupCudaPipeline(const Config &cfg, const std::shared_ptr<KVClient> &client) {
+    if (!kvtest::CudaTransfersEnabled()) return Status::OK();
+    if (!client || cfg.dataSizes.empty()) return Status(K_INVALID, "CUDA warmup requires client and data size");
+    kvtest::CudaLaneGuard lane(true);
+    if (!lane.Get()) return Status(K_RUNTIME_ERROR, "CUDA warmup lane unavailable");
+    const auto epoch = std::chrono::system_clock::now().time_since_epoch().count();
+    const auto key = GenerateTraceId("kvtest_cuda_warmup", cfg.instanceId) + "-" + std::to_string(epoch);
+    Status result;
+    {
+        PipelineContext ctx;
+        ctx.client = client;
+        ctx.key = key;
+        ctx.size = cfg.dataSizes.front();
+        ctx.senderId = cfg.instanceId;
+        ctx.param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
+        ctx.param.ttlSecond = 60;
+        ctx.cudaLane = lane.Get();
+        ctx.cudaReadback = true;
+        ctx.verifyCfg = BuildVerifyConfig(cfg.verifyLevel, cfg.verifySampleBytes, cfg.verifySampleStepBytes, true);
+        for (const char *op : {"createBuffer", "d2h", "setBuffer", "getBuffer", "h2d"}) {
+            double latencyMs = 0;
+            result = GetOpFunc(op)(ctx, latencyMs);
+            SLOG_INFO("CUDA warmup: key=" << key << " op=" << op << " latency_ms=" << latencyMs
+                      << " status=" << result.ToString());
+            if (!result.IsOk()) break;
+        }
+    }
+    const Status cleanup = client->Del(key);
+    if (!cleanup.IsOk()) SLOG_ERROR("CUDA warmup cleanup failed: key=" << key << " status=" << cleanup.ToString());
+    if (!result.IsOk()) return result;
+    return cleanup;
+}
+
 bool ExecutePipeline(
     const std::vector<std::pair<std::string, OpFunc>> &ops,
     PipelineContext &ctx,
     MetricsCollector &metrics,
     std::atomic<uint64_t> &verifyFailCount,
     int instanceId) {
+    bool needsCuda = false;
+    ctx.cudaReadback = false;
+    ctx.cudaBatchReadback = false;
+    for (const auto &op : ops) {
+        if (op.first == "h2d") ctx.cudaReadback = true;
+        if (op.first == "mH2d") ctx.cudaBatchReadback = true;
+        if (op.first == "d2h" || op.first == "mD2h" || ctx.cudaReadback || ctx.cudaBatchReadback) needsCuda = true;
+    }
+    kvtest::CudaLaneGuard lane(needsCuda);
+    ctx.cudaLane = lane.Get();
+    ctx.metrics = &metrics;
+    ctx.verifyFailCount = &verifyFailCount;
+    if (needsCuda && !ctx.cudaLane) {
+        SLOG_ERROR("CUDA lane unavailable: check transfer_enabled and concurrent executor count");
+        return false;
+    }
     bool allOk = true;
     for (auto &[name, fn] : ops) {
         const bool isGetOperation = name == kOpGetBuffer || name == kOpMGet || name == kOpCacheGetOrCreate;
@@ -341,7 +461,8 @@ bool ExecutePipeline(
 
         double latencyMs = 0;
         Status rc = fn(ctx, latencyMs);
-        metrics.Record(name, latencyMs, rc.GetCode(), ctx.size);
+        const bool batch = name == "mCreate" || name == "mSet" || name == "mGet" || name == "mD2h" || name == "mH2d";
+        metrics.Record(name, latencyMs, rc.GetCode(), ctx.size * (batch ? ctx.batchKeys.size() : 1));
         if (!rc.IsOk()) {
             SLOG_WARN("Pipeline op failed: " << name
                       << " key=" << ctx.key
@@ -353,6 +474,6 @@ bool ExecutePipeline(
             break;
         }
     }
-    (void)verifyFailCount;
+    ctx.cudaLane = nullptr;
     return allOk;
 }

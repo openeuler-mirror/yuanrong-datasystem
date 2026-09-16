@@ -5,6 +5,7 @@
 #include <datasystem/utils/optional.h>
 #include <datasystem/utils/string_view.h>
 #include "data_pattern.h"
+#include "cuda_workload.h"
 #include <chrono>
 #include <atomic>
 #include <functional>
@@ -33,6 +34,10 @@ struct PipelineContext {
     datasystem::SetParam param;
     std::shared_ptr<datasystem::KVClient> client;
     std::shared_ptr<datasystem::Buffer> buffer;
+    datasystem::Optional<datasystem::Buffer> readBuffer;
+    kvtest::CudaLane *cudaLane = nullptr;
+    bool cudaReadback = false;
+    bool cudaBatchReadback = false;
     std::vector<std::string> batchKeys;
     std::vector<std::shared_ptr<datasystem::Buffer>> batchBuffers;
     std::vector<datasystem::Optional<datasystem::Buffer>> batchResults;
@@ -72,6 +77,8 @@ const std::vector<const char *> &GetAllOpNames(bool cacheMode = false);
 
 // Look up op function by name. Returns nullptr for unknown ops.
 OpFunc GetOpFunc(const std::string &name);
+
+datasystem::Status WarmupCudaPipeline(const Config &cfg, const std::shared_ptr<datasystem::KVClient> &client);
 
 // Execute a pipeline: run each op in order, record metrics via its name.
 // Returns true if all ops succeeded.

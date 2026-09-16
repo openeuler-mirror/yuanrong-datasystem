@@ -21,6 +21,7 @@ package:
 	@cp src/mock_jf_server.py $(OUTPUT)/ 2>/dev/null || true
 	@cp tests/test_deploy.sh tests/test_standalone_mode.sh $(OUTPUT)/ 2>/dev/null || true
 	@cp config/config.json.example $(OUTPUT)/config/
+	@cp config/config.cuda.json.example $(OUTPUT)/config/
 	@cp config/deploy.json.example $(OUTPUT)/config/
 	@echo "Packaged to $(OUTPUT)/:"
 	@ls -R $(OUTPUT)

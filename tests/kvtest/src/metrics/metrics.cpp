@@ -76,6 +76,9 @@ void MetricsCollector::Start() {
     for (auto *name : GetAllOpNames(cacheModeEnabled_)) {
         (void)GetOrCreateOp(name);
     }
+    if (cudaMetricsEnabled_) {
+        for (auto *name : kvtest::GetCudaMetricNames()) (void)GetOrCreateOp(name);
+    }
 
     startTime_ = std::chrono::steady_clock::now();
     running_ = true;

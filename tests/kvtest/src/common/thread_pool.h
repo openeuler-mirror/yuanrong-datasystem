@@ -66,7 +66,8 @@ public:
     void Stop() {
         {
             std::lock_guard<kvtest::mutex> lock(mutex_);
-            if (stopped_) return;
+            // StopNow may already have signalled shutdown; still join in-flight
+            // pipelines before destroying their metrics or CUDA resources.
             stopped_ = true;
         }
         cv_.notify_all();

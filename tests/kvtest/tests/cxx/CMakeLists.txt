@@ -42,6 +42,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_pipeline.cpp")
     list(APPEND PHASE4_SOURCES
         test_pipeline.cpp
         ${KVTEST_ROOT}/src/pipeline/pipeline.cpp
+        ${KVTEST_ROOT}/src/pipeline/cuda_workload.cpp
     )
 endif()
 
@@ -69,6 +70,7 @@ target_include_directories(kvtest_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/stubs
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${KVTEST_ROOT}/src
+    ${KVTEST_ROOT}/../../include
 )
 
 # Optional NUMA support — match main CMakeLists.txt detection
@@ -79,4 +81,20 @@ if(LIBNUMA_LIB)
     message(STATUS "NUMA support enabled for tests: ${LIBNUMA_LIB}")
 endif()
 
-target_link_libraries(kvtest_tests PRIVATE pthread)
+target_link_libraries(kvtest_tests PRIVATE pthread ${CMAKE_DL_LIBS})
+
+enable_testing()
+add_library(kvtest_fake_cudart SHARED fake_cudart.cpp)
+target_link_libraries(kvtest_fake_cudart PRIVATE pthread)
+add_executable(kvtest_cuda_tests test_cuda_workload.cpp
+    ${KVTEST_ROOT}/src/pipeline/cuda_workload.cpp
+    ${KVTEST_ROOT}/src/pipeline/pipeline.cpp
+    ${KVTEST_ROOT}/src/common/config.cpp
+    ${KVTEST_ROOT}/src/metrics/metrics.cpp)
+target_include_directories(kvtest_cuda_tests PRIVATE stubs . ${KVTEST_ROOT}/src ${KVTEST_ROOT}/../../include)
+target_link_libraries(kvtest_cuda_tests PRIVATE pthread ${CMAKE_DL_LIBS} kvtest_fake_cudart)
+foreach(mode cpu required_no_gpu load_fail pin_only pin_on pin_off partial_fail fragment_fail event_fail capacity verify_corrupt
+             concurrent verify_off verify_sample warmup warmup_fail warmup_pin_off)
+    add_test(NAME cuda_${mode} COMMAND kvtest_cuda_tests $<TARGET_FILE:kvtest_fake_cudart> ${mode})
+    set_tests_properties(cuda_${mode} PROPERTIES TIMEOUT 8)
+endforeach()

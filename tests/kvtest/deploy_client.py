@@ -427,7 +427,7 @@ class Deployer:
                 for n in self.nodes if n['instance_id'] != my_id]
 
     def build_node_overrides(self, node):
-        override_keys = ('role', 'pipeline', 'notify_pipeline', 'listen_port')
+        override_keys = ('role', 'pipeline', 'notify_pipeline', 'listen_port', 'cuda')
         return {k: v for k, v in node.items() if k in override_keys}
 
     def generate_config(self, node):
@@ -442,6 +442,8 @@ class Deployer:
         config['nodes'] = self.build_config_nodes()
         config['peers'] = self.build_peers(node)
         config.update(self.build_node_overrides(node))
+        if 'cuda' in node:
+            config['cuda'] = dict(self.config_template.get('cuda', {}), **node['cuda'])
         if self.jemalloc_prof_conf is not None and not config.get('output_dir'):
             config['output_dir'] = f'metrics_{node["instance_id"]}_{time.strftime("%Y%m%d_%H%M%S")}'
         return config
@@ -703,15 +705,18 @@ class Deployer:
                     # (which prints a misleading "not ready within 2.0s" on
                     # every client that takes >2s to bind).
                     port = node.get('port', self.listen_port)
+                    init_wait = (config.get('cuda', {}).get('client_init_wait_seconds', 0)
+                                 if config.get('mode') == 'pipeline' else 0)
+                    ready_timeout = getattr(self, 'start_timeout', 5) + max(0, init_wait)
                     if port:
                         launcher_parts.extend(['--port', str(port),
                                                '--host', '127.0.0.1',
                                                '--ready-timeout',
-                                               str(getattr(self, 'start_timeout', 5))])
+                                               str(ready_timeout)])
                     launcher_parts.extend(['--', f'config_{instance_id}.json'])
                     start_cmd = ' '.join(launcher_parts)
                     result = self.run_on(node, start_cmd, check=False,
-                                         timeout=20, allow_timeout=True)
+                                         timeout=max(20, ready_timeout + 10), allow_timeout=True)
                     if result and result.stdout:
                         out = result.stdout.strip()
                         if out:
@@ -1423,6 +1428,9 @@ def _build_deploy_config(args, transport, nodes):
 
 def _build_config(mode, args):
     """Assemble the config.json payload for the given run mode."""
+    if mode != 'pipeline' and getattr(args, 'cuda_transfer', False):
+        log_error('ERROR: --cuda-transfer supports pipeline mode only')
+        sys.exit(1)
     num_threads = args.num_threads if args.num_threads is not None else 4
     cfg = {
         'mode': mode,
@@ -1439,6 +1447,16 @@ def _build_config(mode, args):
         },
     }
     if mode == 'pipeline':
+        cfg['cuda'] = {
+            'transfer_enabled': getattr(args, 'cuda_transfer', False),
+            'pin': getattr(args, 'cuda_pin', True),
+            'device_id': getattr(args, 'cuda_device_id', 0),
+            'runtime_library': getattr(args, 'cuda_runtime_library', ''),
+            'client_init_wait_seconds': getattr(args, 'cuda_client_init_wait_seconds', 0),
+        }
+        if cfg['cuda']['client_init_wait_seconds'] < 0:
+            log_error('ERROR: --cuda-client-init-wait-seconds must be non-negative')
+            sys.exit(1)
         if args.num_total_threads is not None:
             num_total_threads = args.num_total_threads
         elif args.num_threads is not None:
@@ -1717,6 +1735,16 @@ def _add_gen_config_args(p):
                    help='Comma-separated notify pipeline ops (default: getBuffer)')
     p.add_argument('--batch-keys-count', type=int, default=1,
                    help='batch_keys_count for batch ops (default: 1)')
+    p.add_argument('--cuda-transfer', action='store_true',
+                   help='Enable explicit d2h/h2d/mD2h/mH2d pipeline ops; requires a visible GPU')
+    p.add_argument('--cuda-pin', type=_parse_bool, default=True,
+                   help='Register Pin callbacks when a GPU is available (true/false, default: true)')
+    p.add_argument('--cuda-device-id', type=int, default=0,
+                   help='CUDA visible device ordinal, not host GPU index (default: 0)')
+    p.add_argument('--cuda-runtime-library', default='',
+                   help='Optional absolute libcudart.so path inside the client container')
+    p.add_argument('--cuda-client-init-wait-seconds', type=int, default=0,
+                   help='Wait after KVClient init before pipeline requests and metrics (default: 0)')
     p.add_argument('--target-qps', type=int, default=100,
                    help='Target QPS, 0=unlimited (default: 100). Use --stage-target-qps '
                         'for multi-stage QPS instead of this single value.')
