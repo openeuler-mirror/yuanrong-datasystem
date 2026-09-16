@@ -183,6 +183,28 @@ TEST(ComputePercentiles_Single) {
     ASSERT_EQ(p.max, 3.14);
 }
 
+TEST(CalcSetOnlyElapsed_UsesConcurrentSetLatency) {
+    StreamingPhaseResult result;
+    result.successCount = 32;
+    result.totalLatencyMs = 48;
+    ASSERT_EQ(CalcSetOnlyElapsedMs(result, 16), 3.0);
+}
+
+TEST(CalcSetOnlyElapsed_CapsConcurrencyBySuccessCount) {
+    StreamingPhaseResult result;
+    result.successCount = 4;
+    result.totalLatencyMs = 8;
+    ASSERT_EQ(CalcSetOnlyElapsedMs(result, 16), 2.0);
+}
+
+TEST(StreamingPhaseResult_UnmeasuredFailureDoesNotExtendElapsedTime) {
+    StreamingPhaseResult result;
+    result.RecordUnmeasuredFailure({false, false, true});
+    ASSERT_EQ(result.failureCount, 1);
+    ASSERT_EQ(result.timeoutCount, 1);
+    ASSERT_EQ(result.ElapsedMs(), 0);
+}
+
 TEST(ComputePercentiles_Empty) {
     auto p = ComputePercentiles({});
     ASSERT_EQ(p.avg, 0);

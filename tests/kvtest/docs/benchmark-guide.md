@@ -350,6 +350,8 @@ Set: 所有 Client/线程统一起跑并 Set → 全部完成 → Cleanup → �
 每个 Client 进程内的线程共享一个 KVClient。全局 key 数仍由 `worker_memory_mb` 计算，再按 Client 和线程分片，
 不会因为增加 `num_clients` 而成倍扩大数据集。父进程等待所有工作线程 READY 后下发同一单调时钟启动点；
 Client 初始化、线程创建、预置、预热和清理均不计入接口 QPS。
+`create_buffer` 和 `create_buffer_raw` 仍会为每个 key 先调用 `Create`，但 Set 延迟只测量随后的
+`Set(buffer)`；Set QPS 使用成功 Set 延迟之和除以有效并发数得到 Set-only 时间，不包含 Create。
 
 每个被测线程至少需要一个 key；若 `keys_per_dataset < num_clients × num_threads`，配置会在创建 Client 前被拒绝。
 Get 预置不重试失败的 Set：只要至少一个 key 成功，预热、测量和清理就仅使用成功 key；全部失败才终止。
@@ -565,9 +567,9 @@ Client 直连远端 Worker 执行 Set（`remote_worker` 指定 Worker B 的注�
 }
 ```
 
-使用 `Create → WLatch → MemoryCopy → UnWLatch → Set(buffer)` 路径写入，与 `string_view` 路径对比延迟。
+当前使用 `Create → Set(buffer)` 的 no-copy 路径；Create 用于准备 Buffer，但不计入 Set 延迟和 QPS。
 
-### 场景 G：create_buffer_raw API 路径（无锁 memcpy）
+### 场景 G：create_buffer_raw API 路径
 
 **配置 `config/bench_create_buffer_raw.json`：**
 ```json
@@ -586,7 +588,7 @@ Client 直连远端 Worker 执行 Set（`remote_worker` 指定 Worker B 的注�
 }
 ```
 
-使用 `Create → memcpy(MutableData) → Set(buffer)` 路径写入，跳过 WLatch/UnWLatch 和 MemoryCopy 封装，直接用 `memcpy` 写入 SHM Buffer。用于测量 latch 和 MemoryCopy 封装的开销。
+当前使用 `Create → Set(buffer)` 的 no-copy 路径；Create 用于准备 raw Buffer，但不计入 Set 延迟和 QPS。
 
 ---
 
@@ -595,8 +597,8 @@ Client 直连远端 Worker 执行 Set（`remote_worker` 指定 Worker B 的注�
 | 路径 | SDK 调用序列 | 特点 |
 |------|-------------|------|
 | `string_view` | `Set(key, StringView(data), param)` | 直接写入，API 简洁，延迟较低 |
-| `create_buffer` | `Create(key, size, param, buf)` → `buf.WLatch()` → `buf.MemoryCopy(data, size)` → `buf.UnWLatch()` → `Set(buf)` | 显式 SHM Buffer 路径，含 latch 保护，可测量 Create + MemoryCopy 开销 |
-| `create_buffer_raw` | `Create(key, size, param, buf)` → `memcpy(buf.MutableData(), data, size)` → `Set(buf)` | SHM Buffer 路径，跳过 latch 和 MemoryCopy 封装，直接 memcpy 写入 |
+| `create_buffer` | `Create(key, size, param, buf)` → `Set(buf)` | no-copy Buffer 路径；仅 `Set(buf)` 进入 Set 指标 |
+| `create_buffer_raw` | `Create(key, size, param, buf)` → `Set(buf)` | no-copy raw Buffer 路径；仅 `Set(buf)` 进入 Set 指标 |
 
 ---
 
@@ -617,8 +619,8 @@ Benchmark 模式在输出目录下生成简洁的聚合结果 `benchmark_phases.
 
 ```csv
 scope,round,operation,success,failures,elapsed_ms,qps,avg_ms,p50_ms,p99_ms,max_ms,throughput_mib_s,valid
-round,0,set,3276,0,4038.210,811.250,1.234,1.100,2.078,3.500,811.250,true
-total,-1,set,16380,0,20071.440,816.079,1.220,1.090,2.010,3.500,816.079,true
+round,0,set,3276,0,505.323,6482.980,1.234,1.100,2.078,3.500,6482.980,true
+total,-1,set,16380,0,2526.615,6482.980,1.234,1.100,2.078,3.500,6482.980,true
 ```
 
 **字段说明：**
@@ -629,17 +631,19 @@ total,-1,set,16380,0,20071.440,816.079,1.220,1.090,2.010,3.500,816.079,true
 | `round` | Set 周期编号；总计或持续 Get 为 -1 |
 | `operation` | 被测接口：`set` / `get` |
 | `success` / `failures` | 成功数与失败数；只统计被测接口，失败存在或无成功样本时 `valid=false` |
-| `elapsed_ms` | 所有被测 Client 最早请求开始到最晚请求结束的墙钟时间；Set 总计为各 Set 阶段时间之和 |
-| `qps` | `success × 1000 / elapsed_ms`，不使用各请求延迟之和作分母 |
+| `elapsed_ms` | Get 和 `string_view` Set 为最早请求开始到最晚请求结束的墙钟时间；Buffer Set 为 `成功 Set(buffer) 延迟之和 / 有效并发数`，总计为各轮 Set-only 时间之和 |
+| `qps` | `success × 1000 / elapsed_ms`；Buffer Set 表示排除 Create 后的 Set-only QPS |
 | `avg_ms` | 成功请求的平均延迟 |
 | `p50_ms` | 所有 Client 延迟样本合并后的 P50；使用 TDigest 近似计算 |
 | `p99_ms` | 所有 Client 延迟样本合并后的 P99；使用 TDigest 近似计算 |
 | `max_ms` | 单次请求最大延迟 |
 | `throughput_mib_s` | 成功数据量除以相同的 `elapsed_ms`，按 1024² bytes/MiB 换算 |
 
-`benchmark_clients.csv` 使用相同口径输出各 Client 的精简结果和 `start_offset_us`，只用于定位 Client 偏斜；
-全局 QPS/P99 必须以 `benchmark_phases.csv` 为准，不能平均各 Client 的 QPS/P99。预置、预热和 Del 不写入
-主 CSV，只在日志中报告失败。
+Set 的有效并发数取配置并发与成功数的较小值；无成功 Set 时 `elapsed_ms=0`。Create 失败仍计入
+`failures` 并使结果无效，但不会进入 Set-only 时间。`benchmark_clients.csv` 使用相同口径输出各 Client 的
+精简结果和 `start_offset_us`，只用于定位 Client 偏斜；
+全局 QPS/P99 必须以 `benchmark_phases.csv` 为准，不能平均各 Client 的 QPS/P99。Get 预置以 `setup` 行写入
+主 CSV；预热和 Del 不写入主 CSV，只在日志中报告失败。
 
 ---
 
