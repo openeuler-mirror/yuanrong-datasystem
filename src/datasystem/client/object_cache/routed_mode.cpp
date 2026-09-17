@@ -306,19 +306,8 @@ void RoutedMode::HandleDirectGetFailure(const std::shared_ptr<IClientWorkerApi> 
 Status RoutedMode::CreateRoutedBuffer(const std::string &objectKey, uint64_t dataSize,
                                       const FullParam &param, std::shared_ptr<Buffer> &buffer)
 {
-    RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
-    SetRouteContext routeContext;
-    RETURN_IF_NOT_OK(host_.selectSetRoute(objectKey, {}, routeContext));
-    const auto requestContext = host_.buildTransportRequestContext(routeContext);
-    client::TransportCreateParam createParam;
-    createParam.requestContext = requestContext;
-    createParam.cacheType = param.cacheType;
-    createParam.consistencyType = param.consistencyType;
-    createParam.writeMode = param.writeMode;
-    createParam.subTimeoutMs = requestTimeoutMs_;
     std::shared_ptr<ObjectBuffer> objBuf;
-    RETURN_IF_NOT_OK(transportLayer_->Create(routeContext.worker, objectKey, dataSize, std::move(createParam),
-                                             objBuf));
+    RETURN_IF_NOT_OK(host_.executeCreateFlow(objectKey, dataSize, param, objBuf));
     // Bridge: transfer the routed ObjectBufferInfo (populated by ShmTransporter::Create with
     // workerAddr/shmId/pointer/mmapEntry/sessionLockId/receiveBufferOwner) to a legacy Buffer.
     auto bufferInfo = ObjectBufferInternal::ExtractInfo(objBuf);

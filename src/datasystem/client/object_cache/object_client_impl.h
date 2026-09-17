@@ -777,8 +777,11 @@ private:
                                std::vector<HostPort> &excludedWorkers, bool safeWriteTargetReplay = false);
 
 
-    Status ExpandSetRedirectBudget(const std::vector<HostPort> &excludedWorkers,
+    Status ExpandWriteRedirectBudget(const std::vector<HostPort> &excludedWorkers,
                                    size_t &maxAttempts, bool &initialized);
+
+    Status ExecuteCreateFlow(const std::string &objectKey, uint64_t dataSize, const FullParam &param,
+                             std::shared_ptr<ObjectBuffer> &buffer);
 
     Status ExecuteSetFlow(const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
                           const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence,
