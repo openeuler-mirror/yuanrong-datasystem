@@ -231,8 +231,8 @@
     - `log_async_queue_size`
     - `log_only_write_info_file`
     - `request_sample_rate` (complete request-log sampling ratio per request trace; local decision cached in `Trace`)
-    - `access_sample_rate` (supplemental client/access log sampling ratio; request sampled-in forces access emission)
-    - `diagnostic_sample_rate` (request-context ERROR/WARNING/PLOG supplement sampling when request is not sampled in)
+    - `access_sample_rate` (access log sampling ratio, independent of request sampling; shared per-trace hash with nested thresholds keeps sampled-in traces complete when >= request rate)
+    - `diagnostic_sample_rate` (request-context ERROR/WARNING/PLOG sampling ratio, independent of request sampling)
     - `log_dir`
     - `log_filename`
   - client environment overrides:

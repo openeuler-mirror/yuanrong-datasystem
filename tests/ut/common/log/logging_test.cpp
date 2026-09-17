@@ -681,11 +681,8 @@ TEST_F(LoggingTest, TestAccessLogSampledMarker)
         TraceGuard sampledGuard = Trace::Instance().SetRequestTraceUUID();
         LogSampleUserConfig sampledCfg;
         sampledCfg.requestSampleRate = 1.0;
-        sampledCfg.requestSampleRateExplicit = true;
         sampledCfg.accessSampleRate = 1.0;
-        sampledCfg.accessSampleRateExplicit = true;
         sampledCfg.diagnosticSampleRate = 1.0;
-        sampledCfg.diagnosticSampleRateExplicit = true;
         ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(sampledCfg));
         DS_ASSERT_OK(clientManager.LogPerformance("sampled", AccessKeyType::CLIENT, 1, 0, "1",
                                                   "{Object_key:" + sampledKey + "}", ""));
@@ -698,11 +695,8 @@ TEST_F(LoggingTest, TestAccessLogSampledMarker)
         TraceGuard rejectedGuard = Trace::Instance().SetRequestTraceUUID();
         LogSampleUserConfig rejectedCfg;
         rejectedCfg.requestSampleRate = 0.0;
-        rejectedCfg.requestSampleRateExplicit = true;
         rejectedCfg.accessSampleRate = 0.0;
-        rejectedCfg.accessSampleRateExplicit = true;
         rejectedCfg.diagnosticSampleRate = 1.0;
-        rejectedCfg.diagnosticSampleRateExplicit = true;
         ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(rejectedCfg));
         DS_ASSERT_OK(clientManager.LogPerformance("rejected", AccessKeyType::CLIENT, 1, 0, "1",
                                                   "{Object_key:" + rejectedKey + "}", ""));
@@ -723,11 +717,8 @@ TEST_F(LoggingTest, TestAccessLogSampledMarker)
         TraceGuard workerGuard = Trace::Instance().SetRequestTraceUUID();
         LogSampleUserConfig workerCfg;
         workerCfg.requestSampleRate = 1.0;
-        workerCfg.requestSampleRateExplicit = true;
         workerCfg.accessSampleRate = 1.0;
-        workerCfg.accessSampleRateExplicit = true;
         workerCfg.diagnosticSampleRate = 1.0;
-        workerCfg.diagnosticSampleRateExplicit = true;
         ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(workerCfg));
         DS_ASSERT_OK(workerManager.LogPerformance("worker", AccessKeyType::ACCESS, 1, 0, "1",
                                                   "{Object_key:access-log-worker}", ""));

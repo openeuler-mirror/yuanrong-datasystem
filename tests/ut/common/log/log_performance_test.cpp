@@ -103,7 +103,6 @@ public:
         StartLogging();
         LogSampleUserConfig cfg;
         cfg.requestSampleRate = requestRate;
-        cfg.requestSampleRateExplicit = true;
         LogSampler::Instance().UpdateConfigFromFlags(cfg);
     }
 
@@ -122,11 +121,8 @@ public:
         StartLogging();
         LogSampleUserConfig cfg;
         cfg.requestSampleRate = requestRate;
-        cfg.requestSampleRateExplicit = true;
         cfg.accessSampleRate = accessRate;
-        cfg.accessSampleRateExplicit = true;
         cfg.diagnosticSampleRate = diagnosticRate;
-        cfg.diagnosticSampleRateExplicit = true;
         LogSampler::Instance().UpdateConfigFromFlags(cfg);
     }
 

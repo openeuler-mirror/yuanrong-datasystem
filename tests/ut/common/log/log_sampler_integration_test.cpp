@@ -86,11 +86,8 @@ public:
     LogSampleUserConfig MakeConfig(double requestRate, double diagnosticRate, double accessRate)
     {
         LogSampleUserConfig config;
-        config.requestSampleRateExplicit = true;
         config.requestSampleRate = requestRate;
-        config.diagnosticSampleRateExplicit = true;
         config.diagnosticSampleRate = diagnosticRate;
-        config.accessSampleRateExplicit = true;
         config.accessSampleRate = accessRate;
         return config;
     }
@@ -125,7 +122,7 @@ TEST_F(LogSamplerIntegrationTest, FATALAlwaysPassBackstop)
 TEST_F(LogSamplerIntegrationTest, RequestSampledInDoesNotAffectSlowLogBypass)
 {
     LogSampler::Instance().SetSaltForTest(12345);
-    ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(MakeConfig(1.0, 0.0, 0.0)));
+    ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(MakeConfig(1.0, 1.0, 0.0)));
 
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
 
@@ -137,7 +134,7 @@ TEST_F(LogSamplerIntegrationTest, RequestSampledInDoesNotAffectSlowLogBypass)
     EXPECT_EQ(evaluations, 4);
 }
 
-TEST_F(LogSamplerIntegrationTest, DiagnosticSupplementSampling)
+TEST_F(LogSamplerIntegrationTest, DiagnosticIndependentSampling)
 {
     LogSampler::Instance().SetSaltForTest(0);
     ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(MakeConfig(0.0, 0.5, 0.0)));

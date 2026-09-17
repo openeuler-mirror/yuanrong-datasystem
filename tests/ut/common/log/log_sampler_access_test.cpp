@@ -40,16 +40,12 @@ protected:
         CommonTest::TearDown();
     }
 
-    void EnableSampler(double requestRate, double accessRate, double diagnosticRate,
-                       bool reqExplicit = true, bool accExplicit = true, bool diagExplicit = true)
+    void EnableSampler(double requestRate, double accessRate, double diagnosticRate)
     {
         LogSampleUserConfig cfg;
         cfg.requestSampleRate = requestRate;
-        cfg.requestSampleRateExplicit = reqExplicit;
         cfg.accessSampleRate = accessRate;
-        cfg.accessSampleRateExplicit = accExplicit;
         cfg.diagnosticSampleRate = diagnosticRate;
-        cfg.diagnosticSampleRateExplicit = diagExplicit;
         ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(cfg));
     }
 };
@@ -76,8 +72,8 @@ TEST_F(LogSamplerAccessTest, RequestOutAlwaysPass)
     EXPECT_TRUE(LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_ETCD_PUT));
 }
 
-// ShouldRecordAccess: request sampled-in forces access output
-TEST_F(LogSamplerAccessTest, RequestSampledInForcesAccess)
+// ShouldRecordAccess: accessRate=0 drops access even when request sampling admits every trace
+TEST_F(LogSamplerAccessTest, AccessRateZeroDropsEvenWhenRequestFull)
 {
     EnableSampler(1.0, 0.0, 1.0);
     LogSampler::Instance().SetSaltForTest(0);
@@ -85,9 +81,8 @@ TEST_F(LogSamplerAccessTest, RequestSampledInForcesAccess)
     TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
     ASSERT_TRUE(Trace::Instance().IsRequestLogTrace());
 
-    // request_sample_rate=1.0 → IsCurrentRequestSampledIn returns true (no decision created)
-    EXPECT_TRUE(LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_KV_CLIENT_SET));
-    EXPECT_TRUE(LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_POSIX_CREATE));
+    EXPECT_FALSE(LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_KV_CLIENT_SET));
+    EXPECT_FALSE(LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_POSIX_CREATE));
 }
 
 // ShouldRecordAccess: accessRate=0 → false (no reject creation)
@@ -109,28 +104,29 @@ TEST_F(LogSamplerAccessTest, AccessRateZeroDrop)
     EXPECT_FALSE(hasDecision);
 }
 
-// ShouldRecordAccess: per-event access sampling when request not sampled-in
-TEST_F(LogSamplerAccessTest, AccessPerEventSampling)
+// ShouldRecordAccess: per-trace access sampling independent of the request decision
+TEST_F(LogSamplerAccessTest, AccessPerTraceSampling)
 {
     EnableSampler(0.0, 0.5, 1.0);
     LogSampler::Instance().SetSaltForTest(42);
 
-    TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
-    ASSERT_TRUE(Trace::Instance().IsRequestLogTrace());
-
     int hits = 0;
-    constexpr int kNumCalls = 1000;
-    for (int i = 0; i < kNumCalls; ++i) {
-        if (LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_KV_CLIENT_SET)) {
+    constexpr int kNumTraces = 1000;
+    for (int i = 0; i < kNumTraces; ++i) {
+        Trace::Instance().Invalidate();
+        TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
+        bool firstCall = LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_KV_CLIENT_SET);
+        // Per-trace decision: repeated calls within one trace are stable
+        EXPECT_EQ(firstCall, LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_KV_CLIENT_SET));
+        if (firstCall) {
             ++hits;
         }
     }
 
-    double ratio = static_cast<double>(hits) / kNumCalls;
-    EXPECT_NEAR(ratio, 0.5, 0.05);
+    double ratio = static_cast<double>(hits) / kNumTraces;
+    EXPECT_NEAR(ratio, 0.5, 0.08);
 }
 
-// LS-007b: Background access bypasses sampler unconditionally — no request context, all rates=0.0
 TEST_F(LogSamplerAccessTest, NoRequestContextAccessBypassSampler)
 {
     EnableSampler(0.0, 0.0, 0.0);
@@ -148,19 +144,18 @@ TEST_F(LogSamplerAccessTest, NoRequestContextAccessBypassSampler)
     EXPECT_TRUE(LogSampler::Instance().ShouldRecordAccessType(AccessKeyType::REQUEST_OUT));
 }
 
-// ShouldRecordAccessType: CLIENT/ACCESS per-event (with request context)
+// ShouldRecordAccessType: CLIENT/ACCESS per-trace (with request context)
 TEST_F(LogSamplerAccessTest, ShouldRecordAccessTypeClientAccess)
 {
     EnableSampler(0.0, 0.5, 1.0);
     LogSampler::Instance().SetSaltForTest(42);
 
-    TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
-    ASSERT_TRUE(Trace::Instance().IsRequestLogTrace());
-
     int clientHits = 0;
     int accessHits = 0;
-    constexpr int kNumCalls = 1000;
-    for (int i = 0; i < kNumCalls; ++i) {
+    constexpr int kNumTraces = 1000;
+    for (int i = 0; i < kNumTraces; ++i) {
+        Trace::Instance().Invalidate();
+        TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
         if (LogSampler::Instance().ShouldRecordAccessType(AccessKeyType::CLIENT)) {
             ++clientHits;
         }
@@ -169,10 +164,10 @@ TEST_F(LogSamplerAccessTest, ShouldRecordAccessTypeClientAccess)
         }
     }
 
-    double clientRatio = static_cast<double>(clientHits) / kNumCalls;
-    double accessRatio = static_cast<double>(accessHits) / kNumCalls;
-    EXPECT_NEAR(clientRatio, 0.5, 0.05);
-    EXPECT_NEAR(accessRatio, 0.5, 0.05);
+    double clientRatio = static_cast<double>(clientHits) / kNumTraces;
+    double accessRatio = static_cast<double>(accessHits) / kNumTraces;
+    EXPECT_NEAR(clientRatio, 0.5, 0.08);
+    EXPECT_NEAR(accessRatio, 0.5, 0.08);
 }
 
 // LS-007b: LOG_SAMPLE_NONE receiving side — background cross-node RPC access bypass
@@ -227,13 +222,13 @@ TEST_F(LogSamplerAccessTest, AccessGuardIntegrationPattern)
     EnableSampler(0.0, 0.5, 1.0);
     LogSampler::Instance().SetSaltForTest(42);
 
-    TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
-
     int recorded = 0;
     int skipped = 0;
-    constexpr int kNumCalls = 1000;
+    constexpr int kNumTraces = 1000;
     constexpr double kSamplingTolerance = 0.08;
-    for (int i = 0; i < kNumCalls; ++i) {
+    for (int i = 0; i < kNumTraces; ++i) {
+        Trace::Instance().Invalidate();
+        TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
         if (LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_KV_CLIENT_SET)) {
             auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
             access.ObjectKeyRef("key").Result(0).DataSize(100).Record();
@@ -243,9 +238,9 @@ TEST_F(LogSamplerAccessTest, AccessGuardIntegrationPattern)
         }
     }
 
-    double ratio = static_cast<double>(recorded) / kNumCalls;
+    double ratio = static_cast<double>(recorded) / kNumTraces;
     EXPECT_NEAR(ratio, 0.5, kSamplingTolerance);
-    EXPECT_EQ(recorded + skipped, kNumCalls);
+    EXPECT_EQ(recorded + skipped, kNumTraces);
 }
 
 TEST_F(LogSamplerAccessTest, AccessGuardSkipsConstructionWhenDropped)
@@ -262,36 +257,71 @@ TEST_F(LogSamplerAccessTest, AccessGuardSkipsConstructionWhenDropped)
     EXPECT_TRUE(LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_KV_CLIENT_SET));
 }
 
-// LS-003d: Access OR rule boundary — request_rate=0.5 + access_rate=0
-TEST_F(LogSamplerAccessTest, AccessOrRuleBoundary)
+// Nested thresholds: access_rate >= request_rate keeps access for every sampled-in trace
+TEST_F(LogSamplerAccessTest, NestingAccessAboveRequest)
 {
-    EnableSampler(0.5, 0.0, 1.0);
+    EnableSampler(0.5, 0.8, 1.0);
     LogSampler::Instance().SetSaltForTest(0);
 
     constexpr int kAttempts = 1000;
     constexpr double kSamplingTolerance = 0.08;
     int sampledInCount = 0;
-    int sampledOutCount = 0;
+    int accessCount = 0;
     for (int i = 0; i < kAttempts; ++i) {
         Trace::Instance().Invalidate();
         TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
 
         bool sampledIn = LogSampler::Instance().IsCurrentRequestSampledIn();
         bool accessAllowed = LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_KV_CLIENT_SET);
-
         if (sampledIn) {
             ++sampledInCount;
             EXPECT_TRUE(accessAllowed);
-        } else {
-            ++sampledOutCount;
-            EXPECT_FALSE(accessAllowed);
+        }
+        if (accessAllowed) {
+            ++accessCount;
         }
     }
 
-    EXPECT_GT(sampledInCount, 0);
-    EXPECT_GT(sampledOutCount, 0);
-    double ratio = static_cast<double>(sampledInCount) / kAttempts;
-    EXPECT_NEAR(ratio, 0.5, kSamplingTolerance);
+    EXPECT_GE(accessCount, sampledInCount);
+    double reqRatio = static_cast<double>(sampledInCount) / kAttempts;
+    double accRatio = static_cast<double>(accessCount) / kAttempts;
+    EXPECT_NEAR(reqRatio, 0.5, kSamplingTolerance);
+    EXPECT_NEAR(accRatio, 0.8, kSamplingTolerance);
+}
+
+// Nested thresholds: access_rate < request_rate — the whole access budget lands on
+// sampled-in traces (access-kept ⊆ sampled-in); the broken band is the minimum
+// under the volume constraint
+TEST_F(LogSamplerAccessTest, AccessBelowRequestBreaksLink)
+{
+    EnableSampler(0.5, 0.2, 1.0);
+    LogSampler::Instance().SetSaltForTest(0);
+
+    constexpr int kAttempts = 1000;
+    constexpr double kSamplingTolerance = 0.08;
+    int sampledInCount = 0;
+    int sampledInWithAccess = 0;
+    int nonSampledInWithAccess = 0;
+    for (int i = 0; i < kAttempts; ++i) {
+        Trace::Instance().Invalidate();
+        TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
+
+        bool sampledIn = LogSampler::Instance().IsCurrentRequestSampledIn();
+        bool accessAllowed = LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_KV_CLIENT_SET);
+        if (sampledIn) {
+            ++sampledInCount;
+            if (accessAllowed) {
+                ++sampledInWithAccess;
+            }
+        } else if (accessAllowed) {
+            ++nonSampledInWithAccess;
+        }
+    }
+
+    EXPECT_EQ(nonSampledInWithAccess, 0);
+    EXPECT_GT(sampledInCount, sampledInWithAccess);
+    double accRatio = static_cast<double>(sampledInWithAccess) / kAttempts;
+    EXPECT_NEAR(accRatio, 0.2, kSamplingTolerance);
 }
 
 // LS-014: logSampled:true marker — sampler disabled, request context → true

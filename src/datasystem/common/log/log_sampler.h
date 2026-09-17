@@ -33,9 +33,6 @@ namespace datasystem {
 
 constexpr uint32_t kSamplePpmBase = 1000000;
 constexpr uint64_t kAlwaysSampleThreshold = UINT64_MAX;
-constexpr uint64_t kSaltHighShift = 32;
-constexpr double kAccessDeriveMultiplier = 3.0;
-constexpr double kDiagnosticDeriveMultiplier = 4.0;
 constexpr int kMix64Shift1 = 30;
 constexpr int kMix64Shift2 = 27;
 constexpr int kMix64Shift3 = 31;
@@ -45,7 +42,7 @@ enum class AccessKeyType : int;
 
 class LogSampleConfigPb;
 
-enum class LogSampleKind { BYPASS, REQUEST, DIAGNOSTIC, ACCESS };
+enum class LogSampleKind { BYPASS, REQUEST, DIAGNOSTIC };
 
 // Precomputed sample rate with ppm and threshold
 struct SampleRate {
@@ -53,17 +50,14 @@ struct SampleRate {
     uint64_t threshold = kAlwaysSampleThreshold;
 };
 
-// User configuration input (before derivation)
+// User configuration input; each rate independently controls its own log category
 struct LogSampleUserConfig {
-    bool requestSampleRateExplicit = false;
-    bool accessSampleRateExplicit = false;
-    bool diagnosticSampleRateExplicit = false;
     double requestSampleRate = 1.0;
     double accessSampleRate = 1.0;
     double diagnosticSampleRate = 1.0;
 };
 
-// Effective configuration (after derivation and normalization)
+// Effective configuration (after normalization)
 struct LogSampleConfig {
     bool enabled = false;
     SampleRate requestRate;
@@ -76,12 +70,11 @@ struct LogSamplerSnapshot {
     LogSampleConfig config;
 };
 
-// Persistent explicit state (sticky across updates)
-struct LogSamplerPersistentExplicitState {
-    bool accessSampleRateEverExplicit = false;
-    bool diagnosticSampleRateEverExplicit = false;
-};
-
+// All three categories compare the same per-trace hash H = Mix64(traceHash ^ sampleSalt)
+// against their own precomputed threshold. BuildThreshold is monotonic in ppm, so a
+// category rate >= request_rate means sampled-in traces (H <= request threshold) always
+// keep that category: each category's budget covers sampled-in traces first, and the
+// full-link guarantee emerges from threshold nesting without any forced-retention code.
 class LogSampler {
 public:
     static LogSampler &Instance();
@@ -91,7 +84,6 @@ public:
     enum class ConfigUpdateResult { CHANGED, UNCHANGED, INVALID };
     ConfigUpdateResult UpdateConfigFromProto(const LogSampleConfigPb &proto);
     void PopulateConfigProto(LogSampleConfigPb *proto);
-    void Init();
     void SetSaltForTest(uint64_t salt);
     void ResetForTest();
     LogSamplerSnapshot *GetSnapshotForTest() const;
@@ -105,7 +97,6 @@ public:
     bool ShouldCreateRuntimeLog(LogSeverity severity, bool isPlog);
     bool IsCurrentRequestSampledIn();
     bool IsCurrentRequestSampledIn(const SampleRate &requestRate);
-    bool ShouldSampleEvent(uint64_t traceHash, LogSampleKind kind, const SampleRate &rate);
     bool ShouldRecordAccess(AccessRecorderKey key);
     bool ShouldRecordAccessType(AccessKeyType type);
 
@@ -121,14 +112,15 @@ private:
         return !Trace::Instance().IsRequestLogTrace();
     }
     LogSampleKind ClassifyRuntime(LogSeverity severity, bool isPlog) const;
-    const SampleRate &GetRate(const LogSampleConfig &config, LogSampleKind kind) const;
     bool BuildAndPublishSnapshot(const LogSampleUserConfig &userConfig);
 
     std::atomic<LogSamplerSnapshot *> snapshot_{ nullptr };
     std::atomic<bool> samplerEnabled_{ false };
     std::vector<LogSamplerSnapshot *> oldSnapshots_;
     std::mutex snapshotsMu_;
-    LogSamplerPersistentExplicitState persistentExplicit_;
+    // Always 0 in production so every process computes the same H = Mix64(traceHash ^ salt)
+    // for a given traceID; nonzero values are test-only and shift all categories uniformly,
+    // preserving the threshold-nesting invariant.
     std::atomic<uint64_t> sampleSalt_{ 0 };
 };
 

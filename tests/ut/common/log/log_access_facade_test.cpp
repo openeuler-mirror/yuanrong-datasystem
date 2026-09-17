@@ -50,11 +50,8 @@ protected:
     {
         LogSampleUserConfig cfg;
         cfg.requestSampleRate = requestRate;
-        cfg.requestSampleRateExplicit = true;
         cfg.accessSampleRate = accessRate;
-        cfg.accessSampleRateExplicit = true;
         cfg.diagnosticSampleRate = diagnosticRate;
-        cfg.diagnosticSampleRateExplicit = true;
         ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(cfg));
     }
 };
