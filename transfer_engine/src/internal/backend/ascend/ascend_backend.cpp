@@ -319,23 +319,31 @@ AscendBackend::~AscendBackend()
 void AscendBackend::FinalizeLocal()
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    DisconnectAllLocked();
-    for (auto &entry : registeredMems_) {
-        if (entry.second.handle != nullptr) {
-            const hixl::Status status = impl_->engine.DeregisterMem(entry.second.handle);
-            if (status != hixl::SUCCESS) {
-                TE_LOG_WARNING << "Hixl::DeregisterMem during finalize failed"
-                               << ", addr=0x" << std::hex << entry.second.addr << std::dec
-                               << ", length=" << entry.second.length << ", local_device_id=" << localDeviceId_
-                               << ", hixl_status=" << status;
+    const Result disconnectRc = DisconnectAllLocked();
+    if (disconnectRc.IsOk()) {
+        for (auto &entry : registeredMems_) {
+            if (entry.second.handle != nullptr) {
+                const hixl::Status status = impl_->engine.DeregisterMem(entry.second.handle);
+                if (status != hixl::SUCCESS) {
+                    TE_LOG_WARNING << "Hixl::DeregisterMem during finalize failed"
+                                   << ", addr=0x" << std::hex << entry.second.addr << std::dec
+                                   << ", length=" << entry.second.length << ", local_device_id=" << localDeviceId_
+                                   << ", hixl_status=" << status;
+                }
             }
         }
+    } else {
+        TE_LOG_WARNING << "skip Hixl::DeregisterMem during finalize because disconnect-all failed"
+                       << ", registered_region_count=" << registeredMems_.size()
+                       << ", reason=" << disconnectRc.ToString();
     }
     registeredMems_.clear();
     if (impl_->initialized) {
         impl_->engine.Finalize();
         impl_->initialized = false;
     }
+    connectedEndpoints_.clear();
+    peerEndpointByConnection_.clear();
     engineMode_ = HixlEngineMode::kLegacy;
     autoConnectEnabled_ = false;
 }
@@ -416,7 +424,7 @@ Result AscendBackend::RegisterLocalMemory(uint64_t addr, uint64_t length)
     TE_RETURN_IF_ERROR(RegisterOneLocked(addr, length, &registeredNew));
     if (registeredNew) {
         ++memGeneration_;
-        DisconnectAllLocked();
+        (void)DisconnectAllLocked();
     }
     return Result::OK();
 }
@@ -429,7 +437,6 @@ Result AscendBackend::UnregisterLocalMemory(uint64_t addr, uint64_t length)
     Result rc = UnregisterOneLocked(addr, length, true, &unregistered);
     if (unregistered) {
         ++memGeneration_;
-        DisconnectAllLocked();
     }
     return rc;
 }
@@ -600,8 +607,10 @@ Result AscendBackend::TransferReadBatchLocked(const ConnectionSpec &spec, const 
         const hixl::Status disconnectStatus =
             impl_->engine.Disconnect(hixl::AscendString(endpoint.c_str()), connectTimeoutMs_);
         LogDisconnectFailure(disconnectStatus, "Hixl::Disconnect after transfer failure", endpoint, connectTimeoutMs_);
+        if (disconnectStatus == hixl::SUCCESS || disconnectStatus == hixl::NOT_CONNECTED) {
+            connectedEndpoints_.erase(endpoint);
+        }
     }
-    connectedEndpoints_.erase(endpoint);
     peerEndpointByConnection_.erase(ConnectionKey(spec));
     return rc;
 }
@@ -617,7 +626,9 @@ void AscendBackend::AbortConnection(const ConnectionSpec &spec)
     const std::string endpoint = iter->second;
     const hixl::Status status = impl_->engine.Disconnect(hixl::AscendString(endpoint.c_str()), connectTimeoutMs_);
     LogDisconnectFailure(status, "Hixl::Disconnect during abort", endpoint, connectTimeoutMs_);
-    connectedEndpoints_.erase(endpoint);
+    if (status == hixl::SUCCESS || status == hixl::NOT_CONNECTED) {
+        connectedEndpoints_.erase(endpoint);
+    }
     peerEndpointByConnection_.erase(iter);
 }
 
@@ -781,6 +792,8 @@ Result AscendBackend::UnregisterOneLocked(uint64_t addr, uint64_t length, bool f
     }
     TE_CHECK_OR_RETURN(iter->second.addr == addr && iter->second.length == length, ErrorCode::kInvalid,
                        "hixl unregister memory length mismatch");
+    // HIXL rejects DeregisterMem while any client manager is still connected.
+    TE_RETURN_IF_ERROR(DisconnectAllLocked());
     hixl::MemHandle handle = iter->second.handle;
     const hixl::Status status = impl_->engine.DeregisterMem(handle);
     if (status != hixl::SUCCESS) {
@@ -801,14 +814,23 @@ Result AscendBackend::UnregisterOneLocked(uint64_t addr, uint64_t length, bool f
     return Result::OK();
 }
 
-void AscendBackend::DisconnectAllLocked()
+Result AscendBackend::DisconnectAllLocked()
 {
-    for (const auto &endpoint : connectedEndpoints_) {
-        const hixl::Status status = impl_->engine.Disconnect(hixl::AscendString(endpoint.c_str()), connectTimeoutMs_);
-        LogDisconnectFailure(status, "Hixl::Disconnect during disconnect-all", endpoint, connectTimeoutMs_);
+    hixl::Status firstFailure = hixl::SUCCESS;
+    for (auto iter = connectedEndpoints_.begin(); iter != connectedEndpoints_.end();) {
+        const hixl::Status status = impl_->engine.Disconnect(hixl::AscendString(iter->c_str()), connectTimeoutMs_);
+        LogDisconnectFailure(status, "Hixl::Disconnect during disconnect-all", *iter, connectTimeoutMs_);
+        if (status == hixl::SUCCESS || status == hixl::NOT_CONNECTED) {
+            iter = connectedEndpoints_.erase(iter);
+            continue;
+        }
+        if (firstFailure == hixl::SUCCESS) {
+            firstFailure = status;
+        }
+        ++iter;
     }
-    connectedEndpoints_.clear();
     peerEndpointByConnection_.clear();
+    return HixlStatusToResult(firstFailure, "Hixl::Disconnect during disconnect-all");
 }
 
 Result AscendBackend::ConnectLocked(const std::string &connectionKey, const std::string &endpoint)

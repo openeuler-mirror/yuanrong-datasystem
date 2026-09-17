@@ -69,6 +69,14 @@ def _requester_worker(local_hostname: str, device_id: int, owner_hostname: str, 
         dev = torch.device(f"npu:{device_id}")
         dst_tensors = [torch.zeros((int(lengths[i]),), dtype=torch.uint8, device=dev) for i in range(len(remote_addrs))]
         dst_addrs = [int(t.data_ptr()) for t in dst_tensors]
+        single_dst = torch.zeros((int(lengths[0]),), dtype=torch.uint8, device=dev)
+        local_addrs = dst_addrs + [int(single_dst.data_ptr())]
+        local_lengths = list(lengths) + [int(lengths[0])]
+
+        reg_rc = engine.batch_register_memory(local_addrs, local_lengths, "*")
+        if reg_rc.is_error():
+            result_queue.put({"ok": False, "error": reg_rc.to_string()})
+            return
 
         batch_rc = engine.batch_transfer_sync_read(owner_hostname, dst_addrs, remote_addrs, lengths, "")
         if batch_rc.is_error():
@@ -76,7 +84,6 @@ def _requester_worker(local_hostname: str, device_id: int, owner_hostname: str, 
             return
 
         # Also validate single-transfer API on the first item.
-        single_dst = torch.zeros((int(lengths[0]),), dtype=torch.uint8, device=dev)
         single_rc = engine.transfer_sync_read(
             owner_hostname,
             int(single_dst.data_ptr()),
@@ -96,6 +103,12 @@ def _requester_worker(local_hostname: str, device_id: int, owner_hostname: str, 
         single_expected = torch.full((int(lengths[0]),), int(expected_values[0]), dtype=torch.uint8)
         if not torch.equal(single_dst.cpu(), single_expected):
             result_queue.put({"ok": False, "error": "single transfer verify failed"})
+            return
+
+        # Regression: HIXL requires all clients to disconnect before local memory is deregistered.
+        unregister_rc = engine.batch_unregister_memory(local_addrs)
+        if unregister_rc.is_error():
+            result_queue.put({"ok": False, "error": unregister_rc.to_string()})
             return
 
         result_queue.put({"ok": True})

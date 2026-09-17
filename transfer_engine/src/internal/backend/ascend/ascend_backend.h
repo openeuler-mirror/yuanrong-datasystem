@@ -60,7 +60,7 @@ private:
     Result RegisterOneLocked(uint64_t addr, uint64_t length, bool *registeredNew);
     Result ValidateBackingAlignmentLocked(uint64_t addr, uint64_t length) const;
     Result UnregisterOneLocked(uint64_t addr, uint64_t length, bool failIfMissing, bool *unregistered = nullptr);
-    void DisconnectAllLocked();
+    Result DisconnectAllLocked();
     Result ConnectLocked(const std::string &connectionKey, const std::string &endpoint);
     Result TransferReadBatchLocked(const ConnectionSpec &spec, const std::vector<TransferReadOp> &ops, size_t base,
                                    size_t end, const std::string &endpoint, uint64_t timeoutMs);
