@@ -18,7 +18,7 @@ time series with useNumaAffinity statistics. The output is an interactive HTML
 report with range sliders for selecting time windows.
 
 == Log sources (urma_manager.cpp) ==
-  - [URMA_ELAPSED_TOTAL]: ... total cost 1.25ms, ... srcChipInflight:{1:5,2:3} ...
+  - [URMA_ELAPSED_TOTAL]: ... cost: 1.25ms, ... srcChipInflight:{1:5,2:3} ...
   - URMA write useNumaAffinity:1, src:1, dst:2, ..., numa_write_counts:{src1:...,src2:...,dst1:...,dst2:...,src1_src2:...,src2_src1:...}
 
 == Required log directory layout ==
@@ -135,7 +135,7 @@ GLOG_TS_RE = re.compile(
 INFLIGHT_RE = re.compile(r"srcChipInflight:\{([^}]*)\}")
 CHIP_CNT_RE = re.compile(r"(\d+):(-?\d+)")
 TOTAL_ELAPSED_MS_RE = re.compile(
-    r"\btotal cost\s+(?P<elapsed>-?(?:\d+(?:\.\d*)?|\.\d+))ms\b", re.IGNORECASE
+    r"\bcost:\s*(?P<elapsed>-?(?:\d+(?:\.\d*)?|\.\d+))ms\b", re.IGNORECASE
 )
 # URMA write useNumaAffinity:1, src:1, dst:2,
 NUMA_RE = re.compile(

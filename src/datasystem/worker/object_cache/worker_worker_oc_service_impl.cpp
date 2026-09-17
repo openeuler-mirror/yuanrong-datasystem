@@ -249,8 +249,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     SLOW_LOG_IF_OR_VLOG(
         INFO, config.processSlowerThanUs > 0 && elapsedUs >= config.processSlowerThanUs, 1,
         AppendRequesterProviderForLog(
-            FormatString("[GetObjectRemote] finish, objectKey: %s, requestTransport: %s, dataSource: %d, "
-                         "payloadCount: %zu, cost: %.3fms",
+            FormatString("[GetObjRemote] finish, objKey: %s, reqTransport: %s, dataSrc: %d, "
+                         "payloadCnt: %zu, cost: %.3fms",
                          req.object_key(), requestTransport, static_cast<int>(rsp.data_source()), payload.size(),
                          elapsedMs),
             GetRemoteAddressForLog(req), FLAGS_worker_address));
@@ -293,7 +293,7 @@ Status WorkerWorkerOCServiceImpl::ProcessSingleGetObjectRemote(GetObjectRemoteRe
         INFO,
         (config.processSlowerThanUs > 0 && elapsedUs >= config.processSlowerThanUs) || FLAGS_enable_perf_trace_log, 1,
         AppendRequesterProviderForLog(
-            FormatString("Processing pull object[%s] offset[%ld] size[%ld], expectedDataSize[%ld], version[%ld], "
+            FormatString("Processing pull obj[%s] offset[%ld] size[%ld], expectDataSize[%ld], ver[%ld], "
                          "hasUrmaInfo[%d], cost: %.3fms",
                          req.object_key(), req.read_offset(), req.read_size(), req.data_size(), req.version(),
                          req.has_urma_info(), static_cast<double>(elapsedUs) / US_PER_MS),

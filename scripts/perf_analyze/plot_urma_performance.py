@@ -57,7 +57,7 @@ GLOG_TS_RE = re.compile(
 INFLIGHT_RE = re.compile(r"srcChipInflight:\{([^}]*)\}")
 CHIP_CNT_RE = re.compile(r"(\d+):(-?\d+)")
 TOTAL_ELAPSED_MS_RE = re.compile(
-    r"\btotal cost\s+(?P<elapsed>-?(?:\d+(?:\.\d*)?|\.\d+))ms\b", re.IGNORECASE
+    r"\bcost:\s*(?P<elapsed>-?(?:\d+(?:\.\d*)?|\.\d+))ms\b", re.IGNORECASE
 )
 CURRENT_YEAR = datetime.now().year
 

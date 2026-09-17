@@ -235,8 +235,8 @@ void WorkerQueryAndGetImpl::LogCompletion(const RequestState &state, const Statu
     const auto config = GetServerLatencyTraceConfig();
     SLOW_LOG_IF_OR_VLOG(
         INFO, config.processSlowerThanUs > 0 && totalUs >= config.processSlowerThanUs, 1,
-        FormatString("QueryAndGet done, keyCount: %d, inlineHits: %zu, misses: %zu, transport: %s, "
-                     "preprocess: %.3fms, localRead: %.3fms, metadata: %.3fms, delivery: %.3fms, "
+        FormatString("QueryAndGet done, keyCnt: %d, inlineHit: %zu, miss: %zu, transport: %s, "
+                     "preproc: %.3fms, localRead: %.3fms, metadata: %.3fms, delivery: %.3fms, "
                      "total: %.3fms, status: %s",
                      state.request.object_keys_size(), stats.inlineHits, stats.misses,
                      GetTransportName(state.request),
