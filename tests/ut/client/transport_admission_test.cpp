@@ -1137,10 +1137,7 @@ TEST(UbHealthFilterTest, OnDemandRecoveryRequiresWritableSummaryAndDirectionalPr
     EXPECT_TRUE(filter.IsAvailable(provider));
 }
 
-// TransportLayer binds the remote port-health verifier unconditionally, so on the client every
-// Provider recovery probe ends in CompleteProviderRecovery's diagnostic branch. It must advance
-// the probe backoff; otherwise ReconcileLoop re-arms the same peer every RPC round trip.
-TEST(UbHealthFilterTest, VerifierBoundProviderProbeBacksOffAfterDiagnosticCompletion)
+TEST(UbHealthFilterTest, VerifierDoesNotOverrideTimeoutProviderProbeCompletion)
 {
     const auto provider = MakeAddress(40);
     UbHealthFilter filter;
@@ -1162,11 +1159,10 @@ TEST(UbHealthFilterTest, VerifierBoundProviderProbeBacksOffAfterDiagnosticComple
     summary.worker = provider;
     summary.incarnation = "incarnation-a";
     summary.writable = true;
-    EXPECT_FALSE(filter.CompleteProviderRecovery(*candidate, summary, Status::OK(), *deadline));
-    EXPECT_EQ(verifications, 1U);
-
-    ASSERT_EQ(filter.NextProviderRecoveryDeadlineMs(), std::optional<uint64_t>{ *deadline + 1'000 });
-    EXPECT_FALSE(filter.TryBeginProviderRecovery(*deadline + 999).has_value());
+    EXPECT_TRUE(filter.CompleteProviderRecovery(*candidate, summary, Status::OK(), *deadline));
+    EXPECT_EQ(verifications, 0U);
+    EXPECT_TRUE(filter.IsAvailable(provider));
+    EXPECT_FALSE(filter.NextProviderRecoveryDeadlineMs().has_value());
 }
 
 TEST(UbHealthFilterTest, NewFailureInvalidatesInFlightProviderRecovery)
@@ -1287,12 +1283,7 @@ TEST(TransportLayerAdmissionTest, ProviderRecoveryDoesNotDependOnHeartbeatSummar
     EXPECT_TRUE(filter->IsAvailable(provider));
 }
 
-// End-to-end rate check through the real ReconcileLoop. With the port-health verifier bound, a
-// completed probe carries no verdict, so it must not re-arm the peer before the probe backoff
-// elapses. The loop is woken once through the same ApplyWorkerSnapshot path the client uses, then
-// runs unattended: the 1s base backoff keeps this under 2 probes, while a missing backoff lets the
-// loop spin on the probe RPC and reach the threshold almost immediately after the first probe.
-TEST(TransportLayerAdmissionTest, VerifierBoundProviderProbeDoesNotSpinOnReconcileLoop)
+TEST(TransportLayerAdmissionTest, ProviderProbeCompletionDoesNotSpinOnReconcileLoop)
 {
     constexpr int SPIN_THRESHOLD = 6;
     constexpr std::chrono::seconds OBSERVATION_WINDOW(2);
@@ -1324,6 +1315,7 @@ TEST(TransportLayerAdmissionTest, VerifierBoundProviderProbeDoesNotSpinOnReconci
     ASSERT_TRUE(layer.ApplyWorkerSnapshot(snapshot).IsOk());
 
     EXPECT_FALSE(manager->WaitForProviderProbeCount(SPIN_THRESHOLD, OBSERVATION_WINDOW));
+    EXPECT_EQ(verifications.load(std::memory_order_acquire), 0);
     LOG(INFO) << "[UB_PROBE_RATE] probes_in_" << OBSERVATION_WINDOW.count()
               << "s=" << manager->providerProbeCount.load(std::memory_order_acquire)
               << " verifierWakeups=" << verifications.load(std::memory_order_acquire);
