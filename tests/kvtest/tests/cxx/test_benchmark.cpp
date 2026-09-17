@@ -1,7 +1,41 @@
 #include "test_harness.h"
 #include "benchmark/benchmark_runner.h"
+#include "benchmark/remote_worker_resolver.h"
 #include "common/config.h"
 #include <thread>
+
+TEST(ParseRemoteWorkerEndpoint_Ipv4) {
+    RemoteWorkerEndpoint endpoint;
+    ASSERT_TRUE(ParseRemoteWorkerEndpoint("192.0.2.10:31501", endpoint));
+    ASSERT_EQ(endpoint.host, std::string("192.0.2.10"));
+    ASSERT_EQ(endpoint.port, 31501);
+    ASSERT_EQ(endpoint.ToString(), std::string("192.0.2.10:31501"));
+}
+
+TEST(ParseRemoteWorkerEndpoint_Ipv6) {
+    RemoteWorkerEndpoint endpoint;
+    ASSERT_TRUE(ParseRemoteWorkerEndpoint("[2001:db8::10]:31501", endpoint));
+    ASSERT_EQ(endpoint.host, std::string("2001:db8::10"));
+    ASSERT_EQ(endpoint.ToString(), std::string("[2001:db8::10]:31501"));
+}
+
+TEST(ParseRemoteWorkerEndpoint_RejectsInvalidPort) {
+    RemoteWorkerEndpoint endpoint;
+    ASSERT_FALSE(ParseRemoteWorkerEndpoint("192.0.2.10:0", endpoint));
+    ASSERT_FALSE(ParseRemoteWorkerEndpoint("192.0.2.10:70000", endpoint));
+    ASSERT_FALSE(ParseRemoteWorkerEndpoint("192.0.2.10:not-a-port", endpoint));
+}
+
+TEST(SelectRemoteWorkerEndpoint_IsDeterministic) {
+    RemoteWorkerEndpoint endpoint;
+    ASSERT_TRUE(SelectRemoteWorkerEndpoint({ "invalid", "192.0.2.20:31501", "192.0.2.10:31501" }, endpoint));
+    ASSERT_EQ(endpoint.ToString(), std::string("192.0.2.10:31501"));
+}
+
+TEST(SelectRemoteWorkerEndpoint_RejectsEmptyRemoteSet) {
+    RemoteWorkerEndpoint endpoint;
+    ASSERT_FALSE(SelectRemoteWorkerEndpoint({}, endpoint));
+}
 
 // --- Key calculation tests ---
 

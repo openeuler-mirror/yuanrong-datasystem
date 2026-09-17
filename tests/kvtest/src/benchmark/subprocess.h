@@ -5,6 +5,7 @@
 #include "common/simple_log.h"
 #include "benchmark/benchmark_runner.h"
 #include "benchmark/kv_client_adapter.h"
+#include "benchmark/remote_worker_resolver.h"
 
 #include <datasystem/kv_client.h>
 #include <datasystem/utils/connection.h>
@@ -38,6 +39,7 @@ enum ChildRole : int32_t { ROLE_SET = 0, ROLE_GET = 1, ROLE_DEL = 2 };
 constexpr char BENCHMARK_CHILD_MODE[] = "--benchmark-child";
 constexpr int BENCHMARK_CHILD_ARG_COUNT = 7;
 constexpr int BENCHMARK_CHILD_EXEC_FAILURE_EXIT_CODE = 127;
+constexpr size_t BENCHMARK_INIT_FIELD_SIZE = 256;
 
 struct CmdMsg {
     int32_t cmd = 0;
@@ -93,7 +95,8 @@ struct ResultMsg {
 // INIT_OK handshake: child sends this after KVClient::Init succeeds.
 struct InitMsg {
     int32_t ok = 0;   // 1 = success, 0 = failure
-    char errorMsg[256] = {};
+    char errorMsg[BENCHMARK_INIT_FIELD_SIZE] = {};
+    char selectedWorker[BENCHMARK_INIT_FIELD_SIZE] = {};
 };
 
 
@@ -131,6 +134,7 @@ struct ChildProcess {
     int fromChildFd = -1;  // parent reads, child writes
     ChildRole role{};
     bool initOk = false;
+    std::string selectedWorker;
 };
 
 /**
@@ -216,10 +220,74 @@ inline bool NeedsSeparateGetChild(TestMode testMode) {
 
 // --- Create KVClient for a role ---
 
+/**
+ * @brief Create and initialize the configured ServiceDiscovery implementation.
+ * @param[in] cfg Benchmark configuration.
+ * @return Initialized ServiceDiscovery, or null on failure.
+ */
+inline std::shared_ptr<datasystem::IServiceDiscovery> CreateBenchmarkServiceDiscovery(const Config &cfg)
+{
+    using namespace datasystem;
+    std::shared_ptr<IServiceDiscovery> serviceDiscovery;
+    if (!cfg.coordinatorAddress.empty()) {
+        CoordinatorServiceDiscoveryOptions opts;
+        opts.serviceAddress = cfg.coordinatorAddress;
+        opts.clusterName = cfg.clusterName;
+        opts.hostIdEnvName = cfg.hostIdEnvName;
+        serviceDiscovery = std::make_shared<CoordinatorServiceDiscovery>(opts);
+    } else {
+        ServiceDiscoveryOptions opts;
+        opts.etcdAddress = cfg.etcdAddress;
+        opts.clusterName = cfg.clusterName;
+        opts.hostIdEnvName = cfg.hostIdEnvName;
+        serviceDiscovery = std::make_shared<ServiceDiscovery>(opts);
+    }
+    Status rc = serviceDiscovery->Init();
+    if (!rc.IsOk()) {
+        SLOG_ERROR("Child ServiceDiscovery init failed: " << rc.GetMsg());
+        return nullptr;
+    }
+    return serviceDiscovery;
+}
+
+/**
+ * @brief Discover one non-local Worker and keep the selection deterministic across benchmark Clients.
+ * @param[in] cfg Benchmark configuration.
+ * @param[out] endpoint Selected remote Worker endpoint.
+ * @return True when a remote Worker is selected.
+ */
+inline bool DiscoverRemoteWorker(const Config &cfg, RemoteWorkerEndpoint &endpoint)
+{
+    auto serviceDiscovery = CreateBenchmarkServiceDiscovery(cfg);
+    if (serviceDiscovery == nullptr) {
+        return false;
+    }
+    if (!serviceDiscovery->HasHostAffinity()) {
+        SLOG_ERROR("set_remote ServiceDiscovery requires a valid SDK host ID from host_id_env_name");
+        return false;
+    }
+    std::vector<std::string> sameHostWorkers;
+    std::vector<std::string> remoteWorkers;
+    auto rc = serviceDiscovery->GetAllWorkers(sameHostWorkers, remoteWorkers);
+    if (!rc.IsOk()) {
+        SLOG_ERROR("Failed to discover Workers for set_remote: " << rc.GetMsg());
+        return false;
+    }
+    if (!SelectRemoteWorkerEndpoint(std::move(remoteWorkers), endpoint)) {
+        SLOG_ERROR("No valid remote Worker is available for set_remote");
+        return false;
+    }
+    SLOG_INFO("set_remote discovered and pinned remote Worker " << endpoint.ToString());
+    return true;
+}
+
 inline std::shared_ptr<datasystem::KVClient> CreateClientForRole(
-    ChildRole role, const Config &cfg) {
+    ChildRole role, const Config &cfg, std::string *selectedWorker = nullptr) {
     using namespace datasystem;
 
+    if (selectedWorker != nullptr) {
+        selectedWorker->clear();
+    }
     bool useSD = RoleUsesServiceDiscovery(role, cfg);
     ConnectOptions opts;
     opts.connectTimeoutMs = cfg.connectTimeoutMs;
@@ -234,27 +302,21 @@ inline std::shared_ptr<datasystem::KVClient> CreateClientForRole(
         opts.requestTimeoutMs = cfg.requestTimeoutMs;
     }
 
-    if (useSD) {
-        std::shared_ptr<IServiceDiscovery> sd;
-        if (!cfg.coordinatorAddress.empty()) {
-            CoordinatorServiceDiscoveryOptions cdOpts;
-            cdOpts.serviceAddress = cfg.coordinatorAddress;
-            cdOpts.clusterName = cfg.clusterName;
-            cdOpts.hostIdEnvName = cfg.hostIdEnvName;
-            sd = std::make_shared<CoordinatorServiceDiscovery>(cdOpts);
-        } else {
-            ServiceDiscoveryOptions sdOpts;
-            sdOpts.etcdAddress = cfg.etcdAddress;
-            sdOpts.clusterName = cfg.clusterName;
-            sdOpts.hostIdEnvName = cfg.hostIdEnvName;
-            sd = std::make_shared<ServiceDiscovery>(sdOpts);
-        }
-        Status rc = sd->Init();
-        if (!rc.IsOk()) {
-            SLOG_ERROR("Child ServiceDiscovery init failed: " << rc.GetMsg());
+    if (cfg.ShouldDiscoverRemoteWorkerForSet() && (role == ROLE_SET || role == ROLE_DEL)) {
+        RemoteWorkerEndpoint endpoint;
+        if (!DiscoverRemoteWorker(cfg, endpoint)) {
             return nullptr;
         }
-        opts.serviceDiscovery = sd;
+        opts.host = endpoint.host;
+        opts.port = endpoint.port;
+        if (selectedWorker != nullptr) {
+            *selectedWorker = endpoint.ToString();
+        }
+    } else if (useSD) {
+        opts.serviceDiscovery = CreateBenchmarkServiceDiscovery(cfg);
+        if (opts.serviceDiscovery == nullptr) {
+            return nullptr;
+        }
     } else {
         opts.host = cfg.remoteWorker.host;
         opts.port = cfg.remoteWorker.port;
@@ -672,7 +734,8 @@ inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRo
     }
 
     // 2. Create KVClient for this role
-    auto client = CreateClientForRole(role, cfg);
+    std::string selectedWorker;
+    auto client = CreateClientForRole(role, cfg, &selectedWorker);
 
     // 3. Send INIT_OK/INIT_FAILED
     InitMsg init{};
@@ -685,6 +748,7 @@ inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRo
     SLOG_INFO("Child " << roleName << " KVClient initialized OK, waiting 3s for init to settle...");
     SetKvtestClientInitialized(true);
     init.ok = 1;
+    snprintf(init.selectedWorker, sizeof(init.selectedWorker), "%s", selectedWorker.c_str());
     if (!WriteExact(writeFd, &init, sizeof(init))) _exit(1);
     std::this_thread::sleep_for(std::chrono::seconds(3));
 
@@ -902,6 +966,8 @@ inline bool WaitForInit(ChildProcess &cp) {
     cp.initOk = (init.ok == 1);
     if (!cp.initOk) {
         SLOG_ERROR("Child (pid=" << cp.pid << ") init failed: " << init.errorMsg);
+    } else {
+        cp.selectedWorker = init.selectedWorker;
     }
     return cp.initOk;
 }
