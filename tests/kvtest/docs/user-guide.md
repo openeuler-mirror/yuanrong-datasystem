@@ -78,10 +78,9 @@ kvtest 不会动态加载外部 `libdatasystem.so`，所以 URMA 必须在 kvtes
 ./build.sh -b cmake --use-httplib
 ```
 
-**第三方件离线 / 缓存**：cmake+brpc 模式默认从 gitee/github 下载第三方源码。如需离线或加速：
+**第三方件离线 / 缓存**：cmake+brpc 模式默认从国内镜像下载第三方源码。如需离线或加速：
 - `export DS_LOCAL_LIBS_DIR=/path/to/opensource_third_party` 指向主仓 `cmake/external_libs/*.cmake` 约定的本地源码包目录
 - `export DS_OPENSOURCE_DIR=/persistent/cache/dir` 持久化编译产物缓存，避免重复编译
-- `export DATASYSTEM_GITHUB_PROXY=1` 走 gh-proxy.com 镜像（brpc/leveldb/gflags 从 GitHub 下载时）
 
 编译产物位于 `output/`：`kvtest` 可执行文件（静态链接 libstdc++ + 第三方件）、`deploy_client.py` 等。不再需要 `output/lib/` ---- kvtest 只动态依赖 `libdatasystem.so`（由部署环境的 container SDK 提供）。bazel 模式自包含二进制，无任何动态依赖。
 

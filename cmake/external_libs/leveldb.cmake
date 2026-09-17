@@ -3,14 +3,9 @@ set(leveldb_VERSION 1.23)
 if (NOT "$ENV{DS_LOCAL_LIBS_DIR}" STREQUAL "")
     set(leveldb_URL "$ENV{DS_LOCAL_LIBS_DIR}/opensource_third_party/1.23.tar.gz")
 else()
-    # Default: upstream GitHub. Set DATASYSTEM_GITHUB_PROXY to use gh-proxy.com mirror.
-    if (NOT "$ENV{DATASYSTEM_GITHUB_PROXY}" STREQUAL "")
-        set(leveldb_URL "https://gh-proxy.com/https://github.com/google/leveldb/archive/refs/tags/1.23.tar.gz")
-    else()
-        set(leveldb_URL "https://github.com/google/leveldb/archive/refs/tags/1.23.tar.gz")
-    endif()
+    set(leveldb_URL "https://gitee.com/mirrors/leveldb/repository/archive/1.23.zip")
 endif()
-set(leveldb_SHA256 "9a37f8a6174f09bd622bc723b55881dc541cd50747cbd08831c2a82d620f6d76")
+set(leveldb_SHA256 "4ee1dab7719fb5e357854c380c0d297a5857e98102f8bff2b93639326ac030ec")
 
 set(leveldb_CMAKE_OPTIONS
     -DCMAKE_BUILD_TYPE:STRING=Release
