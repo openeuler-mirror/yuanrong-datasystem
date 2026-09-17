@@ -268,12 +268,30 @@ bool ExecuteGroup(const std::vector<ChildProcess> &children, const std::vector<s
            && ReceiveGroup(children, indices, group, running);
 }
 
-bool WaitForAllChildren(std::vector<ChildProcess> &children)
+bool WaitForAllChildren(std::vector<ChildProcess> &children, const Config &cfg)
 {
+    std::string selectedWorker;
     for (auto &child : children) {
         if (!WaitForInit(child)) {
             return false;
         }
+        if (!cfg.ShouldDiscoverRemoteWorkerForSet()) {
+            continue;
+        }
+        if (child.selectedWorker.empty()) {
+            SLOG_ERROR("set_remote child did not report its discovered Worker");
+            return false;
+        }
+        if (selectedWorker.empty()) {
+            selectedWorker = child.selectedWorker;
+        } else if (selectedWorker != child.selectedWorker) {
+            SLOG_ERROR("set_remote Clients selected different Workers: " << selectedWorker << " and "
+                                                                          << child.selectedWorker);
+            return false;
+        }
+    }
+    if (!selectedWorker.empty()) {
+        SLOG_INFO("All set_remote Clients pinned Worker " << selectedWorker);
     }
     return true;
 }
@@ -518,7 +536,7 @@ int RunInterfaceBenchmark(const Config &cfg, const std::string &configPath, std:
     if (!SpawnGroup(cfg, ROLE_SET, cfg.numClients, configPath, children, measuredIndices)
         || (cfg.cleanupMethod == "del" && !IsGetMode(cfg.testMode)
             && !SpawnGroup(cfg, ROLE_DEL, cfg.numClients, configPath, children, cleanupIndices))
-        || !WaitForAllChildren(children)) {
+        || !WaitForAllChildren(children, cfg)) {
         KillAllChildren(children);
         return 1;
     }

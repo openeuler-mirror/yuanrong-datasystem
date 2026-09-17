@@ -21,8 +21,9 @@ Benchmark 模式用于精确测量 KVClient Set/Get 操作的吞吐和延迟。`
 
 四个单接口模式创建 `num_clients` 个被测 KVClient，每个 Client 的 Set/Get 使用相同连接语义。其他模式仍按
 角色创建 localClient 和 remoteClient：localClient 通过 ServiceDiscovery 发现本机 Worker，remoteClient 默认
-通过 `remote_worker.host:port` 直连远端 Worker；`get_remote_direct` 未配置 `remote_worker.host` 时通过
-ServiceDiscovery 选择 Worker。
+通过 `remote_worker.host:port` 直连远端 Worker。`set_remote` 未配置 `remote_worker.host` 时从
+ServiceDiscovery 的非本机 Worker 中固定选择一个目标；`get_remote_direct` 未配置时由 SDK ServiceDiscovery
+选择 Worker。
 
 ### set_local — 本地 Set 吞吐
 
@@ -48,7 +49,8 @@ graph LR
     K -->|Set RPC| WB
 ```
 
-remoteClient → Worker B（RPC）。测量远端 Set 吞吐。
+remoteClient → Worker B（RPC）。配置 `remote_worker.host` 时固定直连该 Worker；未配置时通过
+ServiceDiscovery 发现一个非本机 Worker，并让全部 Set/Del Client 固定使用同一目标。
 
 ### get_local — 本地 Get 延迟
 
@@ -234,7 +236,7 @@ Benchmark 模式通过 ServiceDiscovery 连接 etcd 发现 Worker。以下参数
 | `round_cleanup_wait_ms` | int | 3000 | `del` 清理后、下一轮开始前的等待时间（毫秒），0 = 不等待；等待不超过剩余运行时长 |
 | `set_api` | string | "string_view" | Set API 路径：`"string_view"` / `"create_buffer"` / `"create_buffer_raw"`（MSet/MGet 模式忽略） |
 | `cleanup_method` | string | "del" | 清理方式：`"del"`（显式删除）或 `"ttl"`（等待 TTL 过期） |
-| `remote_worker.host` | string | "" | 远端 Worker 地址；`get_remote_direct` 留空时使用 ServiceDiscovery |
+| `remote_worker.host` | string | "" | 远端 Worker 地址；`set_remote` 和 `get_remote_direct` 留空时使用 ServiceDiscovery |
 | `remote_worker.port` | int | 31501 | 远端 Worker 端口 |
 | `set_ratio` | float | 0.5 | Set 操作比例 (0.0, 1.0)，仅 mixed 模式。0.7 = 70% 线程做 Set。必须保证至少 1 个 Get 线程 |
 | `mixed_key_strategy` | string | "same_keys" | Key 策略：`"same_keys"` / `"read_prev"` / `"independent"`，仅 mixed 模式。非法值会被拒绝 |
@@ -247,16 +249,16 @@ Benchmark 模式通过 ServiceDiscovery 连接 etcd 发现 Worker。以下参数
 
 ### remote_worker 说明
 
-`remote_worker` 用于直连指定 Worker，**绕过 ServiceDiscovery**。kvtest 会用 `host:port` 直接创建 KVClient，不经过 etcd 发现。
-`get_remote_direct` 是例外：配置 `remote_worker.host` 时保持固定地址直连；省略时，Set 和 Get 复用通过
-ServiceDiscovery 创建的 KVClient。ServiceDiscovery 的选址遵循 `host_id_env_name` 对应的 Host ID 和 SDK
-默认亲和策略。
+配置 `remote_worker` 时，kvtest 使用 `host:port` 直连指定 Worker，并绕过 ServiceDiscovery。
+`set_remote` 省略 `remote_worker.host` 时，kvtest 根据 `host_id_env_name` 对应的 SDK Host ID，从
+ServiceDiscovery 的 `otherAddrs` 中确定性选择一个非本机 Worker，再固定直连；若 Host ID 无效、没有远端
+Worker，或多个 Client 得到的目标不一致，测量开始前即失败。`get_remote_direct` 省略地址时，Set 和 Get
+复用由 SDK ServiceDiscovery 按默认亲和策略创建的 KVClient。
 
-**需要 remote_worker 的模式（7 种）：**
+**需要 remote_worker 的模式（6 种）：**
 
 | 模式 | Set 执行方 | Get 执行方 | remote_worker 用途 |
 |------|-----------|-----------|-------------------|
-| `set_remote` | remoteClient（直连） | — | Set 写入远端 Worker |
 | `mset_remote` | remoteClient（直连） | — | MSet 批量写入远端 Worker |
 | `get_cross_node` | remoteClient（直连） | localClient（SD） | Set 写入远端，Get 从本地 Worker 读（触发跨节点拉取） |
 | `get_remote_cross` | localClient（SD） | remoteClient（直连） | Set 写入本地，Get 从远端 Worker 读（触发跨节点拉取） |
@@ -264,8 +266,8 @@ ServiceDiscovery 创建的 KVClient。ServiceDiscovery 的选址遵循 `host_id_
 | `mget_remote_direct` | remoteClient（直连） | remoteClient（直连） | MSet+MGet 都在远端 Worker 本地完成 |
 | `mget_remote_cross` | localClient（SD） | remoteClient（直连） | MSet 写入本地，MGet 从远端 Worker 读（触发跨节点拉取） |
 
-**不需要 remote_worker 的模式：** `set_local`、`get_local` 只使用 localClient；`get_remote_direct` 可选择
-省略 `remote_worker.host` 并使用 ServiceDiscovery。
+**可省略 remote_worker 的模式：** `set_local`、`get_local` 只使用 localClient；`set_remote` 可通过
+ServiceDiscovery 发现并固定一个非本机 Worker；`get_remote_direct` 可由 SDK ServiceDiscovery 选择 Worker。
 
 **填写要求：** `host` 必须是 Worker 的实际监听地址（etcd 中注册的地址），不是宿主机外网 IP。可用 `etcdctl get "" --prefix` 查看：
 
@@ -653,7 +655,7 @@ Set 的有效并发数取配置并发与成功数的较小值；无成功 Set �
 |---------|------|---------|
 | `No available worker is detected` | ServiceDiscovery 找不到匹配的 Worker | 见下方详细排查步骤 |
 | `worker_memory_mb required when test_mode is set` | 未配置 `worker_memory_mb` | 添加 `"worker_memory_mb": 4096` |
-| `remote_worker required for test_mode` | 跨节点模式未配置远端 Worker | 添加 `"remote_worker": {"host": "...", "port": 31501}` |
+| `remote_worker required for test_mode` | 需要固定远端地址的模式未配置 Worker | 添加 `"remote_worker": {"host": "...", "port": 31501}`；`set_remote` 可改用服务发现 |
 | `set_param.ttl_second must be > 0 when cleanup_method=ttl` | TTL 模式未设置过期时间 | 添加 `"set_param": {"ttl_second": 10}` |
 | `set_api must be 'string_view', 'create_buffer', or 'create_buffer_raw'` | set_api 值非法 | 使用 `"string_view"` / `"create_buffer"` / `"create_buffer_raw"` |
 | Set 成功数 < keys_per_round | Worker 内存不足或请求超时 | 增大 `worker_memory_mb` 或检查 Worker 状态 |

@@ -124,6 +124,7 @@ cc_library(
         "src/benchmark/benchmark_result.h",
         "src/benchmark/interface_benchmark.h",
         "src/benchmark/kv_client_adapter.h",
+        "src/benchmark/remote_worker_resolver.h",
         "src/benchmark/subprocess.h",
         "src/vendor/httplib.h",
         "src/vendor/nlohmann_json.hpp",

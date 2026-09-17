@@ -131,6 +131,15 @@ struct Config {
     {
         return testMode == TestMode::GET_REMOTE_DIRECT && remoteWorker.host.empty();
     }
+
+    /**
+     * @brief Whether set_remote should discover and pin one remote Worker.
+     * @return True when no explicit remote Worker is configured.
+     */
+    bool ShouldDiscoverRemoteWorkerForSet() const
+    {
+        return testMode == TestMode::SET_REMOTE && remoteWorker.host.empty();
+    }
 };
 
 // Parse "8MB" -> 8388608, "512KB" -> 524288, "1024" -> 1024
