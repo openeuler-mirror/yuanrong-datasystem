@@ -401,6 +401,17 @@ Backed by `tests/kvtest/deploy_coordinator.py`, `deploy_worker.py`, `deploy_comm
   the shared tool capability/directory checks and MALLOC_CONF startup environment described above.
   `deploy_common.discover_nodes` now sorts by node name so the same helper serves
   `deploy_pods` percentage distribution and `deploy_coordinator` round-robin spread deterministically.
+- `deploy_worker.py start` / `deploy` accept repeatable `--env NAME=VALUE` and pass the pairs to
+  `deploy_common.start_service`, which emits them as leading `NAME=<shell-quoted value>` assignments on the
+  `sh -c` line that runs `dscli start`. dscli copies its own environment into the service it forks
+  (`cli/start.py` uses `env = os.environ.copy()` then `Popen(env=env)`), so the assignments reach the Worker
+  binary for settings dscli has no flag for (`ASAN_OPTIONS`, `MALLOC_CONF`, ...). Names are restricted to shell
+  identifiers because the shell recognizes a leading assignment only while the name stays unquoted; values are
+  `shlex.quote`d and may contain spaces and `=`. Rejected in standalone mode, where `start_service_standalone`
+  derives its own `MALLOC_CONF` environment. Note that in dscli mode the Worker's stderr is a pipe owned by the
+  `dscli start` process, which exits once the service is ready, so reports written to stderr mid-run are lost;
+  sanitizer runs must set `ASAN_OPTIONS=log_path=<log_dir>/asan.%p.log` (a `*.log` name inside the Worker
+  `log_dir`) and collect it with `collect`.
 - `deploy_common.clean_pod` / `cmd_clean_impl` / `cmd_clean_shared` form the clean pipeline shared by
   `deploy_worker.py cmd_clean` and `deploy_coordinator.py cmd_clean`. Both role CLIs now accept
   `-S/--standalone` + `--remote-dir` on the `clean` subcommand; under `--standalone`, `cmd_clean_shared`

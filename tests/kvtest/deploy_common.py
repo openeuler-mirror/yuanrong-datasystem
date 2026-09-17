@@ -510,6 +510,7 @@ def install_whl(pod, namespace, whl_path, timeout=DEFAULT_TIMEOUT):
 def start_service(pod, namespace, config, remote_config, port, process_name,
                   enable_procmon=True,
                   numactl_opts=None, jemalloc_prof_conf=None,
+                  env=None,
                   timeout=DEFAULT_TIMEOUT):
     """Start a datasystem service in a single pod.
 
@@ -526,6 +527,13 @@ def start_service(pod, namespace, config, remote_config, port, process_name,
     ``-f`` flag binds to ``worker_config_path`` and ``-C`` binds to
     ``coordinator_config_path``, so a coordinator must not be started with
     ``-f`` (dscli would treat it as a worker config).
+
+    ``env`` is a ``{name: value}`` mapping emitted as leading shell
+    assignments. dscli forwards its own environment to the service it
+    forks, so this is how callers reach the service process with settings
+    dscli has no flag for (ASAN_OPTIONS, MALLOC_CONF, ...). Names must be
+    shell identifier words — the assignment prefix is only recognized by
+    the shell when the name is unquoted.
     """
     pod_name = pod['name']
     pod_ip = pod['ip']
@@ -541,7 +549,9 @@ def start_service(pod, namespace, config, remote_config, port, process_name,
         kubectl_cp_to(pod_name, namespace, tmp_path, remote_config, timeout=timeout)
         is_coordinator = process_name == 'datasystem_coordinator'
         config_flag = '-C' if is_coordinator else '-f'
-        cmd = f'dscli start {config_flag} {remote_config}'
+        env_prefix = ''.join(
+            f'{name}={shlex.quote(value)} ' for name, value in (env or {}).items())
+        cmd = f'{env_prefix}dscli start {config_flag} {remote_config}'
         if numactl_opts and not is_coordinator:
             cmd += f' {numactl_opts}'
         if jemalloc_prof_conf is not None and not is_coordinator:

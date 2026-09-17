@@ -54,6 +54,15 @@ config_setting(
     visibility = ["//visibility:public"],
 )
 
+# Keeps debug symbols in packaged binaries. Profiling builds need it to symbolize
+# heap profiles; `-s off` selects it on its own. Only the packaging selects below
+# read it -- enable_jemalloc_prof still decides which jemalloc build is packaged.
+config_setting(
+    name = "retain_symbols",
+    define_values = {"retain_symbols": "true"},
+    visibility = ["//visibility:public"],
+)
+
 config_setting(
     name = "with_tests",
     define_values = {"with_tests": "true"},
@@ -360,7 +369,10 @@ objcopy --strip-all $@
 
 copy_file(
     name = "datasystem_worker_file",
-    src = ":datasystem_worker_stripped",
+    src = select({
+        ":retain_symbols": "//src/datasystem/worker:datasystem_worker",
+        "//conditions:default": ":datasystem_worker_stripped",
+    }),
     out = "yr/datasystem/datasystem_worker",
     visibility = [
         "//bazel:__pkg__",
@@ -412,7 +424,10 @@ objcopy --strip-all $@
 
 copy_file(
     name = "datasystem_coordinator_file",
-    src = ":datasystem_coordinator_stripped",
+    src = select({
+        ":retain_symbols": "//src/datasystem/coordinator:datasystem_coordinator",
+        "//conditions:default": ":datasystem_coordinator_stripped",
+    }),
     out = "yr/datasystem/datasystem_coordinator",
     visibility = [
         "//bazel:__pkg__",
@@ -483,7 +498,10 @@ objcopy --strip-all $@
 
 copy_file(
     name = "libds_client_py_file",
-    src = ":libds_client_py_stripped",
+    src = select({
+        ":retain_symbols": "//src/datasystem/pybind_api:libds_client_py",
+        "//conditions:default": ":libds_client_py_stripped",
+    }),
     out = "yr/datasystem/lib/libds_client_py.so",
     visibility = [
         "//bazel:__pkg__",
@@ -518,7 +536,10 @@ objcopy --strip-all $@
 
 copy_file(
     name = "dsbench_file",
-    src = ":dsbench_cpp_stripped",
+    src = select({
+        ":retain_symbols": "//dsbench/src:dsbench_cpp",
+        "//conditions:default": ":dsbench_cpp_stripped",
+    }),
     out = "yr/datasystem/dsbench_cpp",
     visibility = [
         "//bazel:__pkg__",
@@ -552,7 +573,10 @@ objcopy --strip-all $@
 
 copy_file(
     name = "libdatasystem_file",
-    src = ":libdatasystem_stripped",
+    src = select({
+        ":retain_symbols": ":datasystem",
+        "//conditions:default": ":libdatasystem_stripped",
+    }),
     out = "yr/datasystem/lib/libdatasystem.so",
     visibility = [
         "//bazel:__pkg__",

@@ -53,9 +53,28 @@ PROCESS_NAME_STANDALONE = 'worker_test'
 ADDRESS_KEY = 'worker_address'
 
 
+_ENV_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
+
+
+def validate_env_assignment(value):
+    """Validate one KEY=VALUE environment assignment for --env.
+
+    The name is restricted to a shell identifier because start_service
+    emits the assignment as an unquoted ``NAME=value`` word: quoting the
+    name would stop the shell from recognizing it as an assignment, and a
+    name that is not an identifier would be a syntax error.
+    """
+    name, separator, assignment = value.partition('=')
+    if not separator or not _ENV_NAME.match(name):
+        raise argparse.ArgumentTypeError(
+            'environment entries must use NAME=VALUE, for example '
+            'ASAN_OPTIONS=log_path=/tmp/asan.%p.log')
+    return name, assignment
+
+
 def start_worker(pod, namespace, config, worker_port, remote_config,
                   enable_procmon=True,
-                 numactl_opts=None, jemalloc_prof_conf=None,
+                 numactl_opts=None, jemalloc_prof_conf=None, env=None,
                  timeout=DEFAULT_TIMEOUT):
     """Start a worker in a single pod.
 
@@ -66,6 +85,8 @@ def start_worker(pod, namespace, config, worker_port, remote_config,
     kwargs = {'numactl_opts': numactl_opts, 'timeout': timeout}
     if jemalloc_prof_conf is not None:
         kwargs['jemalloc_prof_conf'] = jemalloc_prof_conf
+    if env is not None:
+        kwargs['env'] = env
     return start_service(pod, namespace, config, remote_config, worker_port,
                           PROCESS_NAME, enable_procmon,
                          **kwargs)
@@ -74,6 +95,9 @@ def start_worker(pod, namespace, config, worker_port, remote_config,
 def cmd_start(args, pods):
     """Start workers from a config template."""
     if getattr(args, 'standalone', False):
+        if getattr(args, 'env', None):
+            log_error('ERROR: --env is supported only in dscli mode')
+            return 1
         return cmd_start_standalone(args, pods)
 
     with open(args.config) as f:
@@ -84,6 +108,7 @@ def cmd_start(args, pods):
     else:
         log_info('\nNo config overrides specified')
 
+    env = dict(args.env) if getattr(args, 'env', None) else None
     timings = []
 
     def do_op(pod):
@@ -102,6 +127,7 @@ def cmd_start(args, pods):
                               numactl_opts=numactl_opts,
                               jemalloc_prof_conf=getattr(
                                   args, 'jemalloc_prof_options', None),
+                              env=env,
                               timeout=args.timeout)
             return ok
         finally:
@@ -118,6 +144,9 @@ def cmd_start(args, pods):
 def cmd_deploy(args, pods):
     """Deploy: install + start workers in one command."""
     if getattr(args, 'standalone', False):
+        if getattr(args, 'env', None):
+            log_error('ERROR: --env is supported only in dscli mode')
+            return 1
         if not getattr(args, 'jf', None):
             log_error('ERROR: --jf is required in standalone mode')
             return 1
@@ -431,6 +460,15 @@ def main():
                               dest='jemalloc_prof_options', default=None,
                               type=validate_jemalloc_prof_conf,
                               help='Jemalloc MALLOC_CONF for dscli or standalone mode')
+    parser_start.add_argument('--env', action='append', default=None,
+                              type=validate_env_assignment,
+                              metavar='NAME=VALUE',
+                              help='Set an environment variable for the worker '
+                                   'process (repeatable, dscli mode only). '
+                                   'dscli forwards its own environment to the '
+                                   'service it forks, so the variable reaches '
+                                   'the worker binary. Example: --env '
+                                   'ASAN_OPTIONS=log_path=/tmp/asan.%%p.log')
     # Standalone mode
     parser_start.add_argument('-S', '--standalone', action='store_true', default=False,
                               help='Use worker_test binary instead of dscli')
@@ -580,6 +618,15 @@ def main():
                                dest='jemalloc_prof_options', default=None,
                                type=validate_jemalloc_prof_conf,
                                help='Jemalloc MALLOC_CONF for dscli or standalone mode')
+    parser_deploy.add_argument('--env', action='append', default=None,
+                               type=validate_env_assignment,
+                               metavar='NAME=VALUE',
+                               help='Set an environment variable for the worker '
+                                    'process (repeatable, dscli mode only). '
+                                    'dscli forwards its own environment to the '
+                                    'service it forks, so the variable reaches '
+                                    'the worker binary. Example: --env '
+                                    'ASAN_OPTIONS=log_path=/tmp/asan.%%p.log')
     # Common
     parser_deploy.add_argument('--enable-procmon', action='store_true', default=False,
                                dest='enable_procmon',

@@ -97,6 +97,11 @@ function _bazel_build_configs() {
     echo "--config=jeprof"
   fi
 
+  # Packaging keeps debug symbols instead of the stripped artifacts
+  if ! is_on "${ENABLE_STRIP}"; then
+    echo "--config=retain_symbols"
+  fi
+
   # URMA
   if is_on "${BUILD_WITH_URMA}"; then
     echo "--config=urma"

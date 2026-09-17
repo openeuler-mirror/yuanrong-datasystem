@@ -953,6 +953,73 @@ class TestStartService(unittest.TestCase):
 
     @patch('deploy_common.kubectl_exec')
     @patch('deploy_common.kubectl_cp_to')
+    def test_env_prepended_before_dscli(self, mock_cp, mock_exec):
+        mock_exec.return_value = self._exec_ok()
+        start_service(self._pod(), 'default',
+                      {'worker_address': {'value': '10.0.0.1:31501'}},
+                      '/tmp/worker.config', 31501, 'datasystem_worker',
+                      enable_procmon=False, timeout=10,
+                      env={'ASAN_OPTIONS': 'log_path=/tmp/asan.%p.log'})
+        self.assertEqual(
+            mock_exec.call_args_list[0][0][2],
+            'ASAN_OPTIONS=log_path=/tmp/asan.%p.log '
+            'dscli start -f /tmp/worker.config')
+
+    @patch('deploy_common.kubectl_exec')
+    @patch('deploy_common.kubectl_cp_to')
+    def test_env_is_shell_quoted_and_applies_to_coordinator(self, mock_cp,
+                                                            mock_exec):
+        mock_exec.return_value = self._exec_ok()
+        start_service(
+            self._pod(), 'default',
+            {'coordinator_address': {'value': '10.0.0.1:31511'}},
+            '/tmp/coordinator.config', 31511, 'datasystem_coordinator',
+            enable_procmon=False, timeout=10,
+            env={'MALLOC_CONF': 'prof_prefix:/tmp/heap profiles/worker'})
+        self.assertEqual(
+            mock_exec.call_args_list[0][0][2],
+            "MALLOC_CONF='prof_prefix:/tmp/heap profiles/worker' "
+            'dscli start -C /tmp/coordinator.config')
+
+    @patch('deploy_common.kubectl_exec')
+    @patch('deploy_common.kubectl_cp_to')
+    def test_env_reaches_the_forked_process(self, mock_cp, mock_exec):
+        # The prefix sets an environment variable only while the name stays an
+        # unquoted shell word. Run the generated command against a stub dscli
+        # that prints its own environment to prove the value arrives intact.
+        mock_exec.return_value = self._exec_ok()
+        start_service(self._pod(), 'default',
+                      {'worker_address': {'value': '10.0.0.1:31501'}},
+                      '/tmp/worker.config', 31501, 'datasystem_worker',
+                      enable_procmon=False, timeout=10,
+                      env={'ASAN_OPTIONS': 'log_path=/tmp/asan log/%p.log'})
+        cmd = mock_exec.call_args_list[0][0][2]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            stub = os.path.join(tmp, 'dscli')
+            with open(stub, 'w') as f:
+                f.write('#!/bin/sh\necho "$ASAN_OPTIONS"\n')
+            os.chmod(stub, 0o755)
+            child_env = dict(os.environ)
+            child_env['PATH'] = tmp + os.pathsep + child_env['PATH']
+            result = subprocess.run(['sh', '-c', cmd], capture_output=True,
+                                    text=True, env=child_env, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'log_path=/tmp/asan log/%p.log')
+
+    @patch('deploy_common.kubectl_exec')
+    @patch('deploy_common.kubectl_cp_to')
+    def test_no_env_by_default(self, mock_cp, mock_exec):
+        mock_exec.return_value = self._exec_ok()
+        start_service(self._pod(), 'default',
+                      {'worker_address': {'value': '10.0.0.1:31501'}},
+                      '/tmp/worker.config', 31501, 'datasystem_worker',
+                      enable_procmon=False, timeout=10)
+        self.assertEqual(mock_exec.call_args_list[0][0][2],
+                         'dscli start -f /tmp/worker.config')
+
+    @patch('deploy_common.kubectl_exec')
+    @patch('deploy_common.kubectl_cp_to')
     def test_coordinator_ignores_jemalloc_prof_conf(self, mock_cp, mock_exec):
         mock_exec.return_value = self._exec_ok()
         start_service(self._pod(), 'default',
