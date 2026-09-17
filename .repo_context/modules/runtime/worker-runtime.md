@@ -221,6 +221,9 @@
     Consumers reject stale epochs, retired incarnations, and summaries whose incarnation does not match the registered
     Worker. Accepting a trusted new incarnation clears process-local evidence for that endpoint so the restarted Worker
     can be readmitted. Lease expiry alone removes only the global quarantine and retains process-local evidence.
+  - Remote Worker UB-port verification owns a fixed four-thread `worker-ub-health` pool, matching the four-query
+    concurrency limit. The threads remain available until pool shutdown instead of being retired while idle and
+    recreated during a later fault probe.
   - Multi-Worker URMA startup begins non-blocking local-sender verification only after the local topology member is
     `ACTIVE`; `INITIAL` and `JOINING` do not create UB failure evidence, and a single Worker skips this peer-dependent
     verification. Startup verification stays `SUSPECT` and writable unless an authoritative CQE status `4` or `9`

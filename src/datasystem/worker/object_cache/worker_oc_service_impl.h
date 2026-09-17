@@ -1588,7 +1588,8 @@ private:
         std::make_shared<cluster::RemoteUbPortHealthVerifier>()
     };
     std::shared_ptr<ThreadPool> remoteUbPortHealthQueryPool_{ std::make_shared<ThreadPool>(
-        0, cluster::REMOTE_UB_PORT_HEALTH_MAX_CONCURRENT_QUERIES, "worker-ub-health") };
+        cluster::REMOTE_UB_PORT_HEALTH_MAX_CONCURRENT_QUERIES,
+        cluster::REMOTE_UB_PORT_HEALTH_MAX_CONCURRENT_QUERIES, "worker-ub-health") };
     std::shared_ptr<std::atomic<bool>> remoteUbQueryTaskScheduled_{
         std::make_shared<std::atomic<bool>>(false)
     };
