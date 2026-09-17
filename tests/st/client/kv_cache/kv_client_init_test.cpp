@@ -87,12 +87,16 @@ public:
 
     void TearDown() override
     {
+        // A Client Init freezes the process-wide UB fault isolation switch for good, so the flag is restored here even
+        // when an assertion aborted the test body.
+        FLAGS_enable_ub_fault_isolation = ubFaultIsolation_;
         client_.reset();
         ExternalClusterTest::TearDown();
     }
 
 protected:
     std::shared_ptr<KVClient> client_;
+    bool ubFaultIsolation_ = true;
 
     void RunInChildProcess(const std::function<int()> &func)
     {
@@ -176,6 +180,23 @@ TEST_F(KVClientInitTest, DifferentKVClientConfigDoesNotOverrideProcessConfig)
         }
         return 0;
     });
+}
+
+TEST_F(KVClientInitTest, UbFaultIsolationSwitchIsProcessWide)
+{
+    ubFaultIsolation_ = FLAGS_enable_ub_fault_isolation;
+    KVClientConfig config;
+    ASSERT_EQ(KVClientConfig::Builder().UbFaultIsolationEnable(false).Build(config), Status::OK());
+    KVClient firstClient(GetConnectOptions());
+    ASSERT_EQ(firstClient.Init(config), Status::OK());
+    ASSERT_FALSE(IsClientUbFaultIsolationEnabled());
+
+    // A later Client cannot override the frozen value, and later flag writes cannot change it either.
+    ASSERT_EQ(KVClientConfig::Builder().UbFaultIsolationEnable(true).Build(config), Status::OK());
+    KVClient secondClient(GetConnectOptions());
+    ASSERT_EQ(secondClient.Init(config), Status::OK());
+    FLAGS_enable_ub_fault_isolation = true;
+    EXPECT_FALSE(IsClientUbFaultIsolationEnabled());
 }
 
 TEST_F(KVClientInitTest, ConfigAfterDefaultInitDoesNotOverrideProcessConfig)

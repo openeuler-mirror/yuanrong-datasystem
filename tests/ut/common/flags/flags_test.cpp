@@ -628,6 +628,7 @@ TEST_F(FlagsTest, KVClientConfigBuilderStoresExplicitValues)
                         .LogMonitorEnable(false)
                         .MonitorConfigPath("/tmp/ds.config")
                         .UrmaSendLaneCountPerPeer(16)
+                        .UbFaultIsolationEnable(false)
                         .Build(config);
     ASSERT_EQ(status, Status::OK());
     ASSERT_EQ(config.GetArgs().at("log_dir"), "/tmp/ds_logs");
@@ -649,6 +650,7 @@ TEST_F(FlagsTest, KVClientConfigBuilderStoresExplicitValues)
     ASSERT_EQ(config.GetArgs().at("log_monitor"), "false");
     ASSERT_EQ(config.GetArgs().at("monitor_config_file"), "/tmp/ds.config");
     ASSERT_EQ(config.GetArgs().at("urma_send_lane_count_per_peer"), "16");
+    ASSERT_EQ(config.GetArgs().at("enable_ub_fault_isolation"), "false");
 }
 
 TEST_F(FlagsTest, KVClientConfigBuilderAggregatesInvalidValues)

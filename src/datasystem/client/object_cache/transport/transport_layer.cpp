@@ -38,6 +38,7 @@
 #include "datasystem/client/object_cache/transport/rpc/exist_request_builder.h"
 #include "datasystem/client/object_cache/transport/rpc/mset_request_builder.h"
 #include "datasystem/client/object_cache/transport/transport_advisor.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
@@ -390,6 +391,9 @@ TransportLayer::TransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManage
 
 bool TransportLayer::ReportProviderUbFailure(const HostPort &provider, const ProviderUbFailureDetailPb &detail)
 {
+    if (!IsClientUbFaultIsolationEnabled()) {
+        return false;
+    }
     ReportClientGetWritebackFailure(provider, detail);
     if (healthFilter_ == nullptr) {
         return false;
@@ -440,7 +444,7 @@ Status TransportLayer::CheckUbReadSource(const HostPort &workerAddr, AccessTrans
 
 bool TransportLayer::ScheduleProviderRecoveryFromGlobalSummary(const HostPort &provider)
 {
-    if (localUbSenderState_->IsShuttingDown() || healthFilter_ == nullptr
+    if (!IsClientUbFaultIsolationEnabled() || localUbSenderState_->IsShuttingDown() || healthFilter_ == nullptr
         || !healthFilter_->SeedProviderRecoveryFromGlobalSummary(provider)) {
         return false;
     }
@@ -528,7 +532,9 @@ Status TransportLayer::AcquireLocalUbSenderAdmission(TransportHint hint, LocalUb
 
 void TransportLayer::PrepareLocalUbLateCompletion(ObjectBufferInfo &bufferInfo, AccessTransportKind kind) const
 {
-    if (kind != AccessTransportKind::UB) {
+    // Arming this context is what lets a late CQE arm write-target quarantine and schedule a recovery probe, so the
+    // disabled policy must leave the buffer without an observer.
+    if (!IsClientUbFaultIsolationEnabled() || kind != AccessTransportKind::UB) {
         bufferInfo.ubLateCompletionContext.reset();
         return;
     }
@@ -540,8 +546,9 @@ void TransportLayer::PrepareLocalUbLateCompletion(ObjectBufferInfo &bufferInfo, 
 
 bool TransportLayer::ReportWriteTargetUbFailure(const LocalUbSenderFailureView &failure)
 {
-    if (healthFilter_ == nullptr || failure.kind != AccessTransportKind::UB || failure.status.IsOk()
-        || !failure.cqeStatus.has_value() || *failure.cqeStatus != URMA_REMOTE_ACK_TIMEOUT_STATUS) {
+    if (!IsClientUbFaultIsolationEnabled() || healthFilter_ == nullptr || failure.kind != AccessTransportKind::UB
+        || failure.status.IsOk() || !failure.cqeStatus.has_value()
+        || *failure.cqeStatus != URMA_REMOTE_ACK_TIMEOUT_STATUS) {
         return false;
     }
     const bool quarantined = healthFilter_->ReportWriteTargetFailure(
@@ -559,7 +566,7 @@ bool TransportLayer::ReportWriteTargetUbFailure(const LocalUbSenderFailureView &
 
 bool TransportLayer::ReportLocalUbSenderFailure(const LocalUbSenderFailureView &failure)
 {
-    if (failure.kind != AccessTransportKind::UB || failure.status.IsOk()) {
+    if (!IsClientUbFaultIsolationEnabled() || failure.kind != AccessTransportKind::UB || failure.status.IsOk()) {
         return false;
     }
     UbOpOutcome outcome(failure.workerAddr, UbOperationKind::CLIENT_PUT, failure.status);

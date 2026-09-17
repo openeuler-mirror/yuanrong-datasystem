@@ -150,6 +150,9 @@ Status InitializeFastTransportManager(const HostPort &hostport)
 
 Status CheckClientLocalUbPortHealth()
 {
+    if (!IsClientUbFaultIsolationEnabled()) {
+        return Status::OK();
+    }
 #ifdef USE_URMA
     if (IsUrmaRuntimeConfigured()) {
         return UrmaManager::Instance().CheckClientPortHealthAdmission();
@@ -160,6 +163,9 @@ Status CheckClientLocalUbPortHealth()
 
 void TriggerClientLocalUbPortHealthQuery()
 {
+    if (!IsClientUbFaultIsolationEnabled()) {
+        return;
+    }
 #ifdef USE_URMA
     if (IsUrmaRuntimeConfigured()) {
         UrmaManager::Instance().TriggerClientPortHealthQuery();
