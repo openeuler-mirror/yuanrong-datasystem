@@ -75,6 +75,11 @@ TEST(TopologyDiagnosticsTest, FormatsWorkerProbeIdFromCoordinatorEpochAndRound)
     EXPECT_STREQ(WorkerLivenessResultName(WorkerLivenessResult::UNREACHABLE), "UNREACHABLE");
 }
 
+TEST(TopologyDiagnosticsTest, PreservesTextWorkerProbeEpoch)
+{
+    EXPECT_EQ(WorkerProbeIdForLog("worker-probe-epoch", WORKER_PROBE_ROUND), "worker-probe-epoch-42");
+}
+
 TEST(TopologyDiagnosticsTest, PrintsAllCurrentOperationalMembersByDefault)
 {
     const auto members = MakeIdentities(CURRENT_OPERATIONAL_MEMBER_COUNT);

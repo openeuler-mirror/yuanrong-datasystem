@@ -24,6 +24,7 @@
 #include <exception>
 #include <thread>
 
+#include "datasystem/common/coordinator/coordinator_log.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
@@ -45,7 +46,6 @@ DS_DECLARE_uint32(node_timeout_s);
 
 namespace datasystem::cluster {
 namespace {
-constexpr size_t COORDINATOR_ID_LOG_PREFIX_SIZE = 8;
 constexpr int64_t KEEP_ALIVE_INTERVAL_DIVISOR = 3;
 constexpr int64_t PEER_RPC_FAILURE_WINDOW_DIVISOR = 2;
 constexpr uint64_t MIN_PEER_RPC_FAILURES_TO_REPORT = 3;
@@ -497,7 +497,7 @@ void DsCoordinationBackend::CommitWatchPlan(const std::vector<WatchKey> &watchKe
     }
     LOG(INFO) << "CLUSTER_WATCH_REGISTERED watcher=" << watcherAddr_ << ", scope_count=" << watchKeys.size()
               << ", coordinator_id="
-              << BytesUuidToString(coordinatorId).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE);
+              << CoordinatorIdLogPrefix(coordinatorId);
     if (previousCoordinatorId == coordinatorId && !previousWatchIds.empty()) {
         LOG_IF_ERROR(proxy_->CancelWatch(watcherAddr_, previousWatchIds, previousCoordinatorId),
                      "Cancel replaced Coordinator watches");
@@ -1088,7 +1088,7 @@ void DsCoordinationBackend::HandleMembershipSuccess(const std::string &coordinat
     }
     if (identityChanged || recreated) {
         LOG(INFO) << "CLUSTER_COORDINATOR_ID role=worker watcher=" << watcherAddr_
-                  << ", id=" << BytesUuidToString(coordinatorId).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+                  << ", id=" << CoordinatorIdLogPrefix(coordinatorId)
                   << ", membership_recreated=" << recreated << ", watches_invalidated=" << invalidated;
     }
     if (handler != nullptr) {

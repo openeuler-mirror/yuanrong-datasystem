@@ -24,10 +24,31 @@
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "datasystem/common/coordinator/coordinator_log.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
 
 namespace datasystem {
 namespace {
+TEST(CoordinatorLogTest, FormatsBinaryUuidAsEightHexCharacters)
+{
+    std::string id(UUID_SIZE, '\0');
+    id[1] = '\n';
+    id[2] = static_cast<char>(0x80);
+    id[3] = static_cast<char>(0xff);
+    const auto original = id;
+    EXPECT_EQ(CoordinatorIdLogPrefix(id), "000a80ff");
+    EXPECT_EQ(id, original);
+    EXPECT_EQ(CoordinatorIdLogPrefix(std::string(UUID_SIZE, '\0')), "00000000");
+    EXPECT_EQ(CoordinatorIdLogPrefix(std::string(UUID_SIZE, static_cast<char>(0xff))), "ffffffff");
+}
+
+TEST(CoordinatorLogTest, NeverEmitsMalformedBinaryInput)
+{
+    EXPECT_EQ(CoordinatorIdLogPrefix(""), "");
+    EXPECT_EQ(CoordinatorIdLogPrefix(std::string(UUID_SIZE - 1, '\n')), "invalid");
+    EXPECT_EQ(CoordinatorIdLogPrefix(std::string(UUID_SIZE + 1, static_cast<char>(0xff))), "invalid");
+}
+
 using Router = CoordinatorLeaderRouter;
 using State = Router::RpcResponseHeader::State;
 

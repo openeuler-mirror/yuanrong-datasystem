@@ -22,6 +22,7 @@
 #include <memory>
 #include <utility>
 
+#include "datasystem/common/coordinator/coordinator_log.h"
 #include "datasystem/common/coordinator/key_value_entry.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/flags/flags.h"
@@ -79,7 +80,6 @@ DS_DEFINE_validator(coordinator_discovery_retry_interval_ms, &Validator::Validat
 namespace datasystem {
 namespace coordinator {
 namespace {
-constexpr size_t COORDINATOR_ID_LOG_PREFIX_SIZE = 8;
 constexpr size_t MAX_CLUSTER_RAW_SNAPSHOT_BYTES = 16 * 1'024 * 1'024;
 constexpr size_t MAX_CLUSTER_RAW_MEMBERSHIPS = 10'000;
 constexpr size_t MIN_ACTIVE_CLUSTERS = 2;
@@ -430,7 +430,7 @@ Status CoordinatorServiceImpl::InitInternal()
                              "Coordinator Raft snapshot localAddress must match the Coordinator service address");
     coordinatorId_ = GetBytesUuid();
     LOG(INFO) << "CLUSTER_COORDINATOR_ID role=coordinator id="
-              << BytesUuidToString(coordinatorId_).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE) << " state=created";
+              << CoordinatorIdLogPrefix(coordinatorId_) << " state=created";
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(FLAGS_coordinator_rpc_stub_cache_size, coordinatorAddr_));
     RETURN_IF_NOT_OK(BuildComponentTree());
     ConfigureRpcService();

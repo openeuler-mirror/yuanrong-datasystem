@@ -16,6 +16,7 @@ ds_cc_test(
     srcs = ["coordinator_leader_router_test.cpp"],
     deps = [
         "//src/datasystem/common/coordinator:coordinator_leader_router",
+        "//src/datasystem/common/coordinator:coordinator_log",
         "//src/datasystem/common/rpc:brpc_status_util",
     ],
 )

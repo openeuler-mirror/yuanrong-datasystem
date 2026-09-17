@@ -25,6 +25,7 @@
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
+#include "datasystem/common/coordinator/coordinator_log.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log.h"
@@ -622,7 +623,7 @@ Status TopologyEngine::RouteCoordinatorWatchEvent(const std::string &coordinator
     LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
         << "CLUSTER_WATCH_EVENT cluster=" << options_.clusterName
         << " role=worker ingress=coordinator owner_role=member"
-        << " watch_id=" << watchId << " coordinator_id_prefix=" << TopologyDiagnosticPrefix(coordinatorId)
+        << " watch_id=" << watchId << " coordinator_id_prefix=" << CoordinatorIdLogPrefix(coordinatorId)
         << " event=" << event.ToString();
     member->HandleWatchEvent(coordinatorId, watchId, std::move(event));
     return Status::OK();

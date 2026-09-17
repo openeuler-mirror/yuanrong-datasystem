@@ -19,6 +19,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include "datasystem/common/coordinator/coordinator_log.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
 
@@ -359,7 +360,7 @@ CoordinatorLeaderRouter::ResponseObservation CoordinatorLeaderRouter::ObserveRes
     }
     if (identityToPublish.has_value()) {
         LOG(INFO) << "Observed new Coordinator leader at " << identityToPublish->address.ToString()
-                  << ", coordinatorId: " << identityToPublish->coordinatorId
+                  << ", coordinatorId: " << CoordinatorIdLogPrefix(identityToPublish->coordinatorId)
                   << ", leaderTerm: " << identityToPublish->leaderTerm
                   << ", routeEpoch: " << identityToPublish->routeEpoch;
         dependencies_.publishLeaderIdentity(*identityToPublish);

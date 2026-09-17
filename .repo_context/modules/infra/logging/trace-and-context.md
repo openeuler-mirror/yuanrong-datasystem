@@ -102,6 +102,10 @@
 
 ## Bugfix And Review Notes
 
+- Coordinator identities are binary UUIDs. Use `CoordinatorIdLogPrefix()` from
+  `src/datasystem/common/coordinator/coordinator_log.h` at Coordinator identity log boundaries, including
+  watch diagnostics: valid IDs print eight hex characters, empty IDs stay empty,
+  and malformed lengths print `invalid`. Never use the log prefix for identity comparison or fencing.
 - Good first files when trace continuity looks wrong:
   - `src/datasystem/common/log/trace.cpp`
   - `src/datasystem/client/context/context.cpp`
