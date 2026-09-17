@@ -18,6 +18,7 @@
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/ak_sk/hasher.h"
+#include "datasystem/common/coordinator/coordinator_log.h"
 #include "datasystem/common/coordinator/coordinator_store.h"
 #include "datasystem/common/coordinator/key_value_entry.h"
 #include "datasystem/common/coordinator/steady_clock.h"
@@ -34,17 +35,11 @@ namespace datasystem::coordinator {
 namespace {
 constexpr size_t SHA256_HEX_SIZE = 64;
 constexpr size_t DIGEST_LOG_PREFIX_SIZE = 8;
-constexpr size_t COORDINATOR_ID_LOG_PREFIX_SIZE = 8;
 constexpr size_t TOPOLOGY_KEYSPACE_KIND_COUNT = 9;
 constexpr size_t MAX_ENCODED_SCALE_IN_SOURCE_SIZE = 256;
 constexpr uint64_t MEMBER_LIMIT_LOG_INTERVAL = 1'024;
 constexpr auto FAST_RECOVERY_WINDOW = std::chrono::seconds(3);
 constexpr char PHYSICAL_ROOT[] = "/datasystem/";
-
-std::string CoordinatorIdLogPrefix(const std::string &coordinatorId)
-{
-    return BytesUuidToString(coordinatorId).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE);
-}
 
 TraceContext GetRecoveryTraceContext()
 {
@@ -970,7 +965,7 @@ void TopologyRecoveryManager::CompleteRecoveryWorkLocked()
     // shutdown wait bug by wrapping the counter.
     if (pendingRecoveryWork_ == 0) {
         LOG(ERROR) << "CLUSTER_RECOVERY_PENDING_UNDERFLOW, coordinator_id="
-                   << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE);
+                   << CoordinatorIdLogPrefix(coordinatorId_);
         return;
     }
     --pendingRecoveryWork_;

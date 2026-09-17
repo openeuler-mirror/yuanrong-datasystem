@@ -20,6 +20,7 @@
 #include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
+#include "datasystem/common/coordinator/coordinator_log.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/raii.h"
@@ -41,7 +42,6 @@ constexpr auto RUNTIME_STOP_SLICE = std::chrono::milliseconds(10);
 constexpr auto COORDINATOR_JANITOR_INTERVAL = std::chrono::seconds(10);
 constexpr size_t COORDINATOR_JANITOR_SCAN_LIMIT = 8'192;
 constexpr size_t COORDINATOR_JANITOR_DELETE_BATCH = 8'192;
-constexpr size_t COORDINATOR_ID_LOG_PREFIX_SIZE = 8;
 constexpr size_t HOST_CAPACITY_LOG_INTERVAL = 128;
 constexpr size_t HOST_LIFECYCLE_LOG_INTERVAL = 100;
 constexpr size_t MAX_PENDING_LIVENESS_REPORTS = 1'024;
@@ -153,7 +153,7 @@ Status TopologyControlHost::Start()
         RETURN_STATUS(K_RUNTIME_ERROR, std::string("start topology Control Host failed: ") + error.what());
     }
     LOG(INFO) << "CLUSTER_CONTROL_HOST state=started coordinator_id="
-              << BytesUuidToString(coordinatorId_).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+              << CoordinatorIdLogPrefix(coordinatorId_)
               << " cluster_limit=" << options_.maxClusters;
     return Status::OK();
 }
@@ -848,7 +848,7 @@ void TopologyControlHost::ReconcileWaitingEntry(const std::string &clusterName, 
         entry.state = EntryState::RUNNING;
         entry.retryBackoff = options_.startRetryInitial;
         LOG(INFO) << "CLUSTER_CONTROL_HOST cluster=" << clusterName << " state=running coordinator_id="
-                  << BytesUuidToString(coordinatorId_).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+                  << CoordinatorIdLogPrefix(coordinatorId_)
                   << " start_elapsed_ms=" << elapsedMs;
         if (elapsedMs > RUNTIME_START_WARN_MS) {
             LOG(WARNING) << "CLUSTER_CONTROL_HOST cluster=" << clusterName

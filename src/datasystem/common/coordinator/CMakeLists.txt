@@ -28,6 +28,7 @@ set(COORDINATOR_STORE_SRCS
 set(COORDINATOR_STORE_HDRS
     coordinator_discovery_cache.h
     coordinator_leader_router.h
+    coordinator_log.h
     coordinator_service_proxy.h
     coordinator_store.h
     event_notify_executor.h

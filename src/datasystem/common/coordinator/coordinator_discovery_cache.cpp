@@ -18,6 +18,7 @@
 #include <utility>
 
 #include "datasystem/common/log/logging.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/util/net_util.h"
 
 namespace datasystem {

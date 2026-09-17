@@ -25,6 +25,7 @@ ds_cc_library(
         ":coordinator_topology_recovery_manager",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/common/coordinator:coordinator_log",
         "//src/datasystem/common/coordinator:coordinator_store",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:common_log",
@@ -41,6 +42,7 @@ ds_cc_library(
     deps = [
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/common/ak_sk:hasher",
+        "//src/datasystem/common/coordinator:coordinator_log",
         "//src/datasystem/common/coordinator:coordinator_store",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/util:status_helper",
@@ -66,6 +68,7 @@ ds_cc_library(
         "//src/datasystem/coordinator/raft:coordinator_raft_types",
         "//src/datasystem/cluster:cluster_topology_keyspace",
         "//src/datasystem/cluster:cluster_membership_codec",
+        "//src/datasystem/common/coordinator:coordinator_log",
         "//src/datasystem/common/coordinator:coordinator_store",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/flags:dynamic_flag_config",

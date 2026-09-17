@@ -16,17 +16,16 @@
 #include <utility>
 
 #include "datasystem/common/ak_sk/hasher.h"
+#include "datasystem/common/coordinator/coordinator_log.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/log/trace.h"
 
 namespace datasystem::cluster {
 namespace {
 constexpr size_t REPORT_POOL_SIZE = 1;
 constexpr int RETRY_BACKOFF_MULTIPLIER = 2;
-constexpr size_t COORDINATOR_ID_LOG_PREFIX_SIZE = 8;
 
 /**
  * @brief Derive deterministic per-Worker jitter without shared random state.
@@ -68,7 +67,7 @@ void LogReportRetry(const std::string &cluster, const std::string &reporter, uin
 {
     VLOG(1) << "CLUSTER_RECOVERY_REPORT_RETRY cluster=" << cluster << ", reporter=" << reporter
             << ", version=" << version << ", coordinator_id="
-            << BytesUuidToString(coordinatorId).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+            << CoordinatorIdLogPrefix(coordinatorId)
             << ", backoff_ms=" << backoff.count() << ", status=" << status.ToString();
 }
 
@@ -84,7 +83,7 @@ void LogReportDeferred(const std::string &cluster, const std::string &reporter, 
 {
     VLOG(1) << "CLUSTER_RECOVERY_REPORT_DEFERRED cluster=" << cluster << ", reporter=" << reporter
             << ", coordinator_id="
-            << BytesUuidToString(coordinatorId).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+            << CoordinatorIdLogPrefix(coordinatorId)
             << ", result=" << response.result() << ", state=" << response.recovery_state();
 }
 
@@ -101,7 +100,7 @@ void LogReportComplete(const std::string &cluster, const std::string &reporter, 
     LOG(INFO) << "CLUSTER_RECOVERY_REPORT_COMPLETE cluster=" << cluster << ", reporter=" << reporter
               << ", version=" << version
               << ", coordinator_id="
-              << BytesUuidToString(coordinatorId).substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE);
+              << CoordinatorIdLogPrefix(coordinatorId);
 }
 }  // namespace
 
