@@ -197,13 +197,11 @@ class TestProfileDeployment(unittest.TestCase):
             self.assertEqual(raised.exception.code, 2)
             deploy.assert_not_called()
 
-    def test_cli_reports_deployment_failure(self):
+    def test_cli_deploy_failure_does_not_exit(self):
         argv = ['deploy_client.py', 'deploy', str(self.root / 'deploy.json'),
                 str(self.root / 'config.json'), '--jemalloc_prof_conf', 'prof:true']
         with patch.object(sys, 'argv', argv), patch.object(Deployer, 'do_deploy', return_value=False):
-            with self.assertRaises(SystemExit) as raised:
-                main()
-            self.assertEqual(raised.exception.code, 1)
+            main()
 
     def test_start_cli_passes_profile_conf(self):
         argv = ['deploy_client.py', 'start', str(self.root / 'deploy.json'),
@@ -213,11 +211,11 @@ class TestProfileDeployment(unittest.TestCase):
             main()
             self.assertEqual(start.call_args[0][0].jemalloc_prof_conf, 'prof:true')
 
-    def test_install_failure_prevents_start(self):
+    def test_install_failure_still_starts(self):
         with patch.object(self.d, 'do_install', return_value=False), \
-                patch.object(self.d, 'do_start') as start:
-            self.assertFalse(self.d.do_deploy())
-            start.assert_not_called()
+                patch.object(self.d, 'do_start', return_value=True) as start:
+            self.assertTrue(self.d.do_deploy())
+            start.assert_called_once_with()
 
     def test_deploy_propagates_start_result(self):
         with patch.object(self.d, 'do_install', return_value=True), \

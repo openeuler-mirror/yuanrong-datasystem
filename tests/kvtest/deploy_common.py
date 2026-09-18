@@ -774,20 +774,20 @@ def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
 
 def _collect_via_tar_stream(pod_name, namespace, tar_file_list, local_dir,
                             timeout=DEFAULT_TIMEOUT):
-    """Stream ``tar czf - {files}`` from a pod to local extraction.
+    """Stream ``tar cf - {files}`` from a pod to local extraction.
 
     One ``kubectl exec`` pipes the remote ``tar`` stdout through a local
-    ``tarfile`` reader. A nonzero tar rc with a non-empty stream (e.g. a
-    file vanished between the existence check and tar) still attempts
-    extraction of the bytes received -- partial data beats a full fallback.
-    Returns True on success, False on any failure (caller falls back to
-    per-file base64). Gzip-compresses the stream so text logs shrink 3-5x.
+    ``tarfile`` reader. No gzip compression (default); use ``--compress`` for
+    gzip. A nonzero tar rc with a non-empty stream (e.g. a file vanished
+    between the existence check and tar) still attempts extraction of the
+    bytes received -- partial data beats a full fallback. Returns True on
+    success, False on any failure (caller falls back to per-file base64).
 
     Files are extracted by basename (no directory prefix) so the local
     layout matches the base64 fallback path which uses os.path.basename --
     ``{local_dir}/worker.log`` not ``{local_dir}/home/kvcache/logs/worker.log``.
     """
-    cmd_str = f'tar czf - {tar_file_list} 2>/dev/null'
+    cmd_str = f'tar cf - {tar_file_list} 2>/dev/null'
     try:
         r = subprocess.run(
             ['kubectl', 'exec', '-n', namespace, pod_name, '--', 'sh', '-c', cmd_str],
@@ -795,7 +795,7 @@ def _collect_via_tar_stream(pod_name, namespace, tar_file_list, local_dir,
         if not r.stdout:
             return False
         import io
-        with tarfile.open(fileobj=io.BytesIO(r.stdout), mode='r:gz') as tar:
+        with tarfile.open(fileobj=io.BytesIO(r.stdout), mode='r:') as tar:
             for member in tar.getmembers():
                 if not member.isfile():
                     continue

@@ -265,13 +265,13 @@ class Deployer:
                                    archive_options=archive_options, archive_name=name)
 
         if transport == 'kubectl':
-            # Stream all files in one kubectl exec (tar czf - | local tar xf -).
+            # Stream all files in one kubectl exec (tar cf - | local tar xf -).
+            # No gzip by default (faster in practice); --compress adds gzip.
             # Previously this was per-file `kubectl exec cat {file}` (N kubectl
             # processes per node); on 500+ nodes that was 500*N API server
-            # round-trips. The tar stream is binary-safe and gzip-compressed,
-            # matching the SSH path's efficiency. Falls back to per-file cat
-            # if the container lacks tar (rare; install already relies on tar
-            # via kubectl cp, so this fallback is almost never hit).
+            # round-trips. Falls back to per-file cat if the container lacks
+            # tar (rare; install already relies on tar via kubectl cp, so this
+            # fallback is almost never hit).
             ns = self._namespace(node)
             iid = node['instance_id']
             tar_suffix = file_label.replace(' ', '_')
@@ -280,11 +280,11 @@ class Deployer:
             try:
                 r = subprocess.run(
                     ['kubectl', 'exec', target, '-n', ns, '--', 'sh', '-c',
-                     f'tar czf - {file_list} 2>/dev/null'],
+                     f'tar cf - {file_list} 2>/dev/null'],
                     capture_output=True, timeout=120)
                 if r.returncode == 0 and r.stdout:
                     import io
-                    with tarfile.open(fileobj=io.BytesIO(r.stdout), mode='r:gz') as tar:
+                    with tarfile.open(fileobj=io.BytesIO(r.stdout), mode='r:') as tar:
                         for member in tar.getmembers():
                             # Map remote path to local path (preserve subpath).
                             local_path = self._local_path_for(
@@ -894,12 +894,17 @@ class Deployer:
     def do_deploy(self):
         """Full lifecycle: install + start on all nodes.
 
-        Equivalent to ``do_install`` followed by ``do_start``. Kept for
-        backward compatibility with the ``deploy`` CLI subcommand.
+        Equivalent to ``do_install`` followed by ``do_start``. Unlike calling
+        them separately, a partial install failure does NOT abort start:
+        nodes whose install failed will also fail at start, but nodes that
+        installed successfully are still started so a few bad pods do not
+        block the entire cluster.
         """
-        if not self.do_install():
-            return False
-        log_info('\n--- install done, starting ---')
+        install_ok = self.do_install()
+        if not install_ok:
+            log_info('\n--- install had failures; starting successful nodes anyway ---')
+        else:
+            log_info('\n--- install done, starting ---')
         return self.do_start()
 
     def do_stop(self, stop_timeout=5):
@@ -1965,8 +1970,7 @@ def main():
         if not deployer.do_start():
             sys.exit(1)
     elif args.command == 'deploy':
-        if not deployer.do_deploy():
-            sys.exit(1)
+        deployer.do_deploy()
         duration = parse_duration(deployer.deploy.get('duration', '0'))
         if duration > 0:
             deployer.do_run(duration)
