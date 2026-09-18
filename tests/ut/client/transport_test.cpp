@@ -2103,11 +2103,15 @@ TEST(ShmConnectionTest, MaintenanceHeartbeatIsIndependentFromReferenceReleasePoo
         releasePool, maintenancePool, MakeRequestContext(), true, scaleInDraining));
     std::promise<void> heartbeatInvoked;
     auto heartbeatInvokedFuture = heartbeatInvoked.get_future();
-    rpcClient->beforeShmHeartbeatReturn = [&heartbeatInvoked] { heartbeatInvoked.set_value(); };
+    rpcClient->beforeShmHeartbeatReturn = [session, &heartbeatInvoked] {
+        session->Close(false);
+        heartbeatInvoked.set_value();
+    };
 
     session->SubmitMaintenance();
 
     EXPECT_EQ(heartbeatInvokedFuture.wait_for(waitTimeout), std::future_status::ready);
+    maintenancePool.reset();
     EXPECT_EQ(rpcClient->shmHeartbeatInvokeCount, 1);
     rpcClient->beforeShmHeartbeatReturn = nullptr;
     session->Close(false);
@@ -5802,6 +5806,194 @@ TEST(ObjectClientTransportTest, RoutedShmBufferUsesTargetSessionLockId)
     EXPECT_TRUE(buffer->bufferInfo_->useSessionLockId);
     EXPECT_EQ(buffer->bufferInfo_->sessionLockId, TARGET_SESSION_LOCK_ID);
     EXPECT_EQ(std::string(static_cast<const char *>(buffer->ImmutableData()), DATA_SIZE), "data");
+}
+
+class RoutedCreateRedirectTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        ConnectOptions options;
+        options.host = workers.front().Host();
+        options.port = workers.front().Port();
+        client = std::make_shared<object_cache::ObjectClientImpl>(options);
+        auto api = std::make_shared<object_cache::ClientWorkerRemoteApi>(workers.front());
+        api->clientId_ = "create-redirect-test";
+        client->workerApi_.emplace_back(api);
+        client->enableLocalCache_ = false;
+        client->dataPlacementPolicy_ = DataPlacementPolicy::PREFERRED_META_OWNER;
+        manager = std::make_shared<FakeDataPlaneManager>();
+        client->transportLayer_ = std::make_unique<TestTransportLayer>(manager);
+        auto routing = MakeRouting(workers);
+        std::atomic_store(&client->routing_, routing);
+        for (size_t i = 0; i < workers.size(); ++i) {
+            HostPort selected;
+            ASSERT_TRUE(routing->SelectWorker(key, DataPlacementPolicy::PREFERRED_META_OWNER,
+                                              selected, routeOrder).IsOk());
+            routeOrder.emplace_back(selected);
+        }
+    }
+
+    static Status Reject(const std::vector<HostPort> &candidates = {})
+    {
+        WorkerRedirectPb redirect;
+        redirect.set_request_not_executed(true);
+        for (const auto &candidate : candidates) {
+            redirect.add_candidate_addresses(candidate.ToString());
+        }
+        return Status(K_SCALE_DOWN, "Worker rejected write before execution")
+            .WithExtra(redirect.SerializeAsString());
+    }
+
+    Status Create(std::shared_ptr<Buffer> &buffer)
+    {
+        object_cache::FullParam param;
+        param.ttlSecond = 10;
+        auto rc = client->routedMode_->CreateRoutedBuffer(key, 4, param, buffer);
+        if (rc.IsOk()) {
+            allocations.emplace_back(buffer->bufferInfo_);
+        }
+        return rc;
+    }
+
+    void TearDown() override
+    {
+        for (const auto &info : allocations) {
+            free(info->pointer);
+            info->pointer = nullptr;
+        }
+    }
+
+    const std::vector<HostPort> workers = {
+        MakeAddress(31621), MakeAddress(31622), MakeAddress(31623), MakeAddress(31624)
+    };
+    const std::string key = "create-during-scale-in";
+    std::vector<HostPort> routeOrder;
+    std::vector<std::shared_ptr<ObjectBufferInfo>> allocations;
+    std::shared_ptr<object_cache::ObjectClientImpl> client;
+    std::shared_ptr<FakeDataPlaneManager> manager;
+};
+
+TEST_F(RoutedCreateRedirectTest, PrefersReadyCandidateAndAvoidsLeavingWorkerOnNextCreate)
+{
+    manager->configureTransporter = [this](const HostPort &address, FakeTransporter &transporter) {
+        if (address == routeOrder.front()) {
+            transporter.createStatuses.emplace_back(Reject({ routeOrder.back() }));
+        }
+    };
+    ScopedRequestContext context;
+    ApiDeadlineGuard deadline(1000);
+    std::shared_ptr<Buffer> buffer;
+    const auto rc = Create(buffer);
+    ASSERT_TRUE(rc.IsOk()) << rc.ToString();
+    ASSERT_NE(buffer, nullptr);
+    EXPECT_EQ(buffer->bufferInfo_->workerAddr, routeOrder.back());
+    EXPECT_TRUE(buffer->bufferInfo_->isRoutedWrite);
+    EXPECT_EQ(buffer->bufferInfo_->ttlSecond, 10U);
+    ASSERT_EQ(manager->builtTransporters.size(), 2U);
+    EXPECT_EQ(manager->builtTransporters.front()->createCount, 1);
+    EXPECT_EQ(manager->builtTransporters.back()->createCount, 1);
+    EXPECT_EQ(manager->builtTransporters.back()->setCount, 0);
+    buffer.reset();
+    ASSERT_TRUE(Create(buffer).IsOk());
+    EXPECT_NE(buffer->bufferInfo_->workerAddr, routeOrder.front());
+    EXPECT_EQ(manager->builtTransporters.front()->createCount, 1);
+}
+
+TEST_F(RoutedCreateRedirectTest, EmptyCandidatesReachFourthWorkerAfterThreeRejections)
+{
+    manager->configureTransporter = [this](const HostPort &address, FakeTransporter &transporter) {
+        if (address != routeOrder.back()) {
+            transporter.createStatuses.emplace_back(Reject());
+        }
+    };
+    ScopedRequestContext context;
+    ApiDeadlineGuard deadline(1000);
+    std::shared_ptr<Buffer> buffer;
+    const auto rc = Create(buffer);
+    ASSERT_TRUE(rc.IsOk()) << rc.ToString();
+    ASSERT_NE(buffer, nullptr);
+    EXPECT_EQ(buffer->bufferInfo_->workerAddr, routeOrder.back());
+    ASSERT_EQ(manager->builtTransporters.size(), workers.size());
+    for (size_t i = 0; i < routeOrder.size(); ++i) {
+        EXPECT_EQ(manager->builtTransporters[i]->rpcClient->WorkerAddress(), routeOrder[i]);
+        EXPECT_EQ(manager->builtTransporters[i]->createCount, 1);
+    }
+}
+
+TEST_F(RoutedCreateRedirectTest, AllWorkersRejectWithoutRevisitingOrAllocatingBuffer)
+{
+    manager->configureTransporter = [this](const HostPort &, FakeTransporter &transporter) {
+        transporter.createStatuses.emplace_back(Reject(routeOrder));
+    };
+    ScopedRequestContext context;
+    ApiDeadlineGuard deadline(1000);
+    std::shared_ptr<Buffer> buffer;
+    EXPECT_EQ(Create(buffer).GetCode(), K_SCALE_DOWN);
+    EXPECT_EQ(buffer, nullptr);
+    ASSERT_EQ(manager->builtTransporters.size(), workers.size());
+    for (const auto &transporter : manager->builtTransporters) {
+        EXPECT_EQ(transporter->createCount, 1);
+        EXPECT_EQ(transporter->setCount, 0);
+    }
+}
+
+TEST_F(RoutedCreateRedirectTest, ExpiredDeadlineStopsBeforeTryingCandidate)
+{
+    manager->configureTransporter = [this](const HostPort &, FakeTransporter &transporter) {
+        transporter.createStatuses.emplace_back(Reject({ routeOrder.back() }));
+        ApiDeadline::Instance().InitUs(0);
+    };
+    ScopedRequestContext context;
+    ApiDeadlineGuard deadline(1000);
+    std::shared_ptr<Buffer> buffer;
+    EXPECT_EQ(Create(buffer).GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(buffer, nullptr);
+    ASSERT_EQ(manager->builtTransporters.size(), 1U);
+}
+
+TEST_F(RoutedCreateRedirectTest, DoesNotReplayUnmarkedOrAmbiguousFailures)
+{
+    WorkerRedirectPb executed;
+    executed.set_request_not_executed(false);
+    executed.add_candidate_addresses(routeOrder.back().ToString());
+    const std::vector<Status> failures = {
+        Status(K_SCALE_DOWN, "unmarked rejection"),
+        Status(K_SCALE_DOWN, "malformed rejection").WithExtra("invalid-protobuf"),
+        Status(K_SCALE_DOWN, "not safe to replay").WithExtra(executed.SerializeAsString()),
+        Status(K_RPC_NETWORK_BLIP, "allocation outcome unknown"),
+    };
+    ScopedRequestContext context;
+    ApiDeadlineGuard deadline(1000);
+    for (const auto &failure : failures) {
+        manager = std::make_shared<FakeDataPlaneManager>();
+        manager->configureTransporter = [&failure](const HostPort &, FakeTransporter &transporter) {
+            transporter.createStatuses.emplace_back(failure);
+        };
+        client->transportLayer_ = std::make_unique<TestTransportLayer>(manager);
+        std::shared_ptr<Buffer> buffer;
+        EXPECT_EQ(Create(buffer).GetCode(), failure.GetCode());
+        EXPECT_EQ(buffer, nullptr);
+        ASSERT_EQ(manager->builtTransporters.size(), 1U);
+        EXPECT_EQ(manager->builtTransporters.front()->rpcClient->WorkerAddress(), routeOrder.front());
+        EXPECT_EQ(manager->builtTransporters.front()->createCount, 1);
+    }
+}
+
+TEST_F(RoutedCreateRedirectTest, StaleCandidateFallsBackToRemainingRoute)
+{
+    manager->configureTransporter = [this](const HostPort &address, FakeTransporter &transporter) {
+        if (address == routeOrder.front()) {
+            transporter.createStatuses.emplace_back(Reject({ routeOrder.front(), MakeAddress(31999) }));
+        }
+    };
+    ScopedRequestContext context;
+    ApiDeadlineGuard deadline(1000);
+    std::shared_ptr<Buffer> buffer;
+    const auto rc = Create(buffer);
+    ASSERT_TRUE(rc.IsOk()) << rc.ToString();
+    ASSERT_NE(buffer, nullptr);
+    EXPECT_EQ(buffer->bufferInfo_->workerAddr, routeOrder[1]);
+    EXPECT_EQ(manager->builtTransporters.size(), 2U);
 }
 
 TEST(ObjectClientTransportTest, CoordinatorSetReachesFourthWorkerAfterThreeAdmissionRejections)

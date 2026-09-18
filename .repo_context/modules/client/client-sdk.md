@@ -1011,3 +1011,12 @@ handler. Clearing the Router handler synchronously excludes later callback acces
 ## Coordinator Set admission redirects
 
 `ObjectClientImpl::ExecuteSetFlow` consumes typed pre-execution `WorkerRedirectPb` from Create / Publish. Each rejection carries at most three request-key-rotated candidates. Routing validates those candidates directly against its immutable ring, placement policy, health filters, and hard exclusions; it does not build an exclusion list for every other Worker. The SDK retains the request deadline and immediately isolates a rejecting Worker through the existing routing filter until the next ring update. Only typed Coordinator admission rejections expand the distinct-address budget; ordinary errors keep the existing bound. `ClientWorkerRemoteApi::Publish` preserves ambiguous earlier RPC failures so a later redirect cannot authorize unsafe replay. Transport UT covers candidate preference, cross-request isolation, retry budgets, and ambiguous Publish results.
+
+`Create(Buffer)` uses the same typed redirect parser, candidate-aware route selection, and distinct-worker budget
+through `ObjectClientImpl::ExecuteCreateFlow`. Only a valid `request_not_executed` redirect authorizes another Create;
+unmarked, malformed, or ambiguous failures retain their original status. The API deadline is checked before each
+attempt, and Buffer ownership is established only after a successful allocation. `RoutedCreateRedirectTest.*` in
+`tests/ut/client/transport_test.cpp` reproduces the old single-attempt failure and covers candidate preference, empty or
+stale hints, three consecutive rejecting workers, exhaustion, and deadline/non-replay boundaries.
+The manual Coordinator backend ST `CoordinatorWriteRedirectTest.ThreeExitingWorkersReturnLiveCandidateAndWritesSucceed`
+checks both two-step SHM Create/Publish and Set while three exiting workers are still ACTIVE in the committed ring.

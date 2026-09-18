@@ -46,6 +46,7 @@
 #include "datasystem/common/coordinator/key_value_entry.h"
 #include "datasystem/common/coordinator/static_coordinator_discovery.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
@@ -1580,11 +1581,19 @@ TEST_F(CoordinatorBackendClusterThreeWorkerTest, GracefulWorkerExitKeepsExisting
 
 class CoordinatorWriteRedirectTest : public CoordinatorBackendClusterTest, public CommonDistributedExt {
 public:
+    void TearDown() override
+    {
+        ExternalClusterTest::TearDown();
+        (void)unsetenv("DS_TEST_WRITE_REDIRECT_HOST_ID");
+    }
+
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         CoordinatorBackendClusterTest::SetClusterSetupOptions(opts);
         opts.numWorkers = 4;
-        opts.workerGflagParams += " -enable_urma=false -ipc_through_shared_memory=false";
+        ASSERT_EQ(setenv("DS_TEST_WRITE_REDIRECT_HOST_ID", "write-redirect-host", 1), 0);
+        opts.workerGflagParams += " -enable_urma=false -ipc_through_shared_memory=true"
+                                  " -host_id_env_name=DS_TEST_WRITE_REDIRECT_HOST_ID";
         opts.coordinatorGflagParams += " -scale_in_collect_window_ms=5000";
     }
 
@@ -1594,7 +1603,7 @@ public:
     }
 };
 
-TEST_F(CoordinatorWriteRedirectTest, ThreeExitingWorkersReturnLiveCandidateAndSetSucceeds)
+TEST_F(CoordinatorWriteRedirectTest, ThreeExitingWorkersReturnLiveCandidateAndWritesSucceed)
 {
     ConnectOptions options;
     InitConnectOpt(3, options);
@@ -1603,6 +1612,8 @@ TEST_F(CoordinatorWriteRedirectTest, ThreeExitingWorkersReturnLiveCandidateAndSe
     options.requestTimeoutMs = 1000;
     KVClient kvClient(options);
     DS_ASSERT_OK(kvClient.Init());
+    KVClient createClient(options);
+    DS_ASSERT_OK(createClient.Init());
     HostPort leaving;
     HostPort remaining;
     DS_ASSERT_OK(cluster_->GetWorkerAddr(0, leaving));
@@ -1670,6 +1681,19 @@ TEST_F(CoordinatorWriteRedirectTest, ThreeExitingWorkersReturnLiveCandidateAndSe
         ASSERT_EQ(member.second.state(), MembershipPb::ACTIVE);
     }
     const std::string value(1024 * 1024, 'r');
+    std::shared_ptr<Buffer> buffer;
+    {
+        ScopedRequestContext context;
+        DS_ASSERT_OK(createClient.Create(key, value.size(), {}, buffer));
+        ASSERT_NE(buffer, nullptr);
+        DS_ASSERT_OK(buffer->MemoryCopy(value.data(), value.size()));
+        DS_ASSERT_OK(createClient.Set(buffer));
+        ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+    }
+    buffer.reset();
+    std::string createdValue;
+    DS_ASSERT_OK(createClient.Get(key, createdValue));
+    ASSERT_EQ(createdValue, value);
     for (int i = 0; i < 10; ++i) {
         DS_ASSERT_OK(kvClient.Set(key, value));
         std::string actual;

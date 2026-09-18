@@ -469,9 +469,9 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
             return BuildSetRouteContext(worker, routeContext);
         },
         [this](const std::vector<HostPort> &excludedWorkers) { return MergeWriteTargetExclusions(excludedWorkers); },
-        [this](const std::string &objectKey, const std::vector<HostPort> &excludedWorkers,
-               SetRouteContext &routeContext) {
-            return SelectSetRoute(objectKey, excludedWorkers, routeContext);
+        [this](const std::string &objectKey, uint64_t dataSize, const FullParam &param,
+               std::shared_ptr<ObjectBuffer> &buffer) {
+            return ExecuteCreateFlow(objectKey, dataSize, param, buffer);
         },
         [this](StatusCode code) { return ShouldRefreshRoutingAfterFailure(code); },
         [this](const Status &rc, SetFailureStage failureStage, const HostPort &worker,
@@ -2654,7 +2654,7 @@ bool ParseWorkerRedirectCandidates(const Status &status, std::vector<HostPort> &
 }
 }  // namespace
 
-Status ObjectClientImpl::ExpandSetRedirectBudget(
+Status ObjectClientImpl::ExpandWriteRedirectBudget(
     const std::vector<HostPort> &excludedWorkers, size_t &maxAttempts, bool &initialized)
 {
     if (initialized) {
@@ -2668,6 +2668,38 @@ Status ObjectClientImpl::ExpandSetRedirectBudget(
     maxAttempts = std::max(maxAttempts, budgetWorkers.size());
     initialized = true;
     return Status::OK();
+}
+
+Status ObjectClientImpl::ExecuteCreateFlow(const std::string &objectKey, uint64_t dataSize,
+                                           const FullParam &param, std::shared_ptr<ObjectBuffer> &buffer)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
+    std::vector<HostPort> excludedWorkers;
+    std::vector<HostPort> preferredWorkers;
+    size_t maxAttempts = 1;
+    bool redirectBudgetInitialized = false;
+    Status rc;
+    for (size_t attempt = 0; attempt < maxAttempts; ++attempt) {
+        RETURN_IF_NOT_OK(ApiDeadline::Instance().CheckApiDeadline());
+        SetRouteContext routeContext;
+        RETURN_IF_NOT_OK(SelectSetRoute(objectKey, excludedWorkers, routeContext, preferredWorkers));
+        client::TransportCreateParam createParam;
+        createParam.requestContext = BuildTransportRequestContext(routeContext);
+        createParam.cacheType = param.cacheType;
+        createParam.consistencyType = param.consistencyType;
+        createParam.writeMode = param.writeMode;
+        createParam.subTimeoutMs = requestTimeoutMs_;
+        rc = transportLayer_->Create(routeContext.worker, objectKey, dataSize, std::move(createParam), buffer);
+        if (!ParseWorkerRedirectCandidates(rc, preferredWorkers)) {
+            return rc;
+        }
+        excludedWorkers.emplace_back(routeContext.worker);
+        auto routing = std::atomic_load(&routing_);
+        RETURN_RUNTIME_ERROR_IF_NULL(routing);
+        routing->UpdateState(routeContext.worker, K_SCALE_DOWN);
+        RETURN_IF_NOT_OK(ExpandWriteRedirectBudget(excludedWorkers, maxAttempts, redirectBudgetInitialized));
+    }
+    return rc;
 }
 
 Status ObjectClientImpl::ExecuteSetFlow(
@@ -2728,7 +2760,7 @@ Status ObjectClientImpl::ExecuteSetFlow(
             auto routing = std::atomic_load(&routing_);
             RETURN_RUNTIME_ERROR_IF_NULL(routing);
             routing->UpdateState(routeContext.worker, K_SCALE_DOWN);
-            RETURN_IF_NOT_OK(ExpandSetRedirectBudget(excludedWorkers, maxAttempts, redirectBudgetInitialized));
+            RETURN_IF_NOT_OK(ExpandWriteRedirectBudget(excludedWorkers, maxAttempts, redirectBudgetInitialized));
         } else if (++ordinaryFailures >= SET_ROUTE_MAX_ATTEMPTS) {
             return rc;
         }

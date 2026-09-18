@@ -60,7 +60,8 @@ public:
         std::function<client::TransportRequestContext(const SetRouteContext &)> buildTransportRequestContext;
         std::function<Status(const HostPort &, SetRouteContext &)> buildSetRouteContext;
         std::function<std::vector<HostPort>(const std::vector<HostPort> &)> mergeWriteTargetExclusions;
-        std::function<Status(const std::string &, const std::vector<HostPort> &, SetRouteContext &)> selectSetRoute;
+        std::function<Status(const std::string &, uint64_t, const FullParam &, std::shared_ptr<ObjectBuffer> &)>
+            executeCreateFlow;
         std::function<bool(StatusCode)> shouldRefreshRoutingAfterFailure;
         std::function<bool(const Status &, SetFailureStage, const HostPort &, std::vector<HostPort> &, const bool &)>
             handleSetRouteFailure;
