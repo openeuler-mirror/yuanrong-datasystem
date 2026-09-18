@@ -658,10 +658,22 @@ Status UrmaManager::UrmaUninit()
 Status UrmaManager::RegisterUrmaLog()
 {
     urmaLogCallback_ = [](int level, char *message) {
+        // Provider messages can repeat once per call on a hot path (e.g. perf slot exhaustion logs on
+        // every perf timestamp read). Throttle by severity so the first occurrence is still visible.
+        // Slot exhaustion silently disables URMA latency instrumentation for the affected threads
+        // (liburma URMA_PERF_THREAD_MAX_NUM). Flag it explicitly: otherwise the missing samples are
+        // indistinguishable from "no traffic", and perf data from this process reads as complete.
+        if (message != nullptr && strstr(message, "no available thread slot") != nullptr) {
+            LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N)
+                << "[URMA_PERF_INCOMPLETE] liburma ran out of perf thread slots: URMA latency instrumentation "
+                   "is disabled for the affected threads, so URMA_ELAPSED/URMA_PERF data from this process is "
+                   "partial. Original: " << message;
+            return;
+        }
         if (level <= (int)URMA_VLOG_LEVEL_ERR) {
-            LOG(ERROR) << message;
+            LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N) << message;
         } else if (level <= (int)URMA_VLOG_LEVEL_NOTICE) {
-            LOG(WARNING) << message;
+            LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N) << message;
         } else if (level <= (int)URMA_VLOG_LEVEL_INFO) {
             VLOG(INFO) << message;
         } else if (level <= (int)URMA_VLOG_LEVEL_DEBUG) {
