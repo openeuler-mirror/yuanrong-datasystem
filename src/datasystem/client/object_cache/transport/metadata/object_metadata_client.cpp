@@ -559,18 +559,31 @@ Status ObjectMetadataClient::ApplyResults(const HostPort &provider, const Object
                                           const QueryAndGetRspPb &response,
                                           std::vector<RpcMessage> &payloads, InlineRequestContext &context) const
 {
+    const auto session = context.mode == InlineTransportMode::SHM ? context.shmSession : nullptr;
+    if (session != nullptr) {
+        RETURN_IF_NOT_OK(session->RegisterReadReferences(response));
+    }
+    ShmReadResponseGuard<QueryAndGetRspPb> releaseUnread(session, response, context.readContext);
     // Keep the count check because results are accessed positionally below.
     CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(response.results_size()) == items.size(), K_RUNTIME_ERROR,
                              "QueryAndGet result count does not match requested keys");
     for (size_t i = 0; i < items.size(); ++i) {
-        RETURN_IF_NOT_OK(ApplyResult(provider, *items[i], response.results(static_cast<int>(i)), payloads, context));
+        const auto &result = response.results(static_cast<int>(i));
+        std::shared_ptr<IReceiveBufferOwner> owner;
+        if (session != nullptr && result.has_data_result() && result.data_result().has_shm_info()) {
+            RETURN_IF_NOT_OK(session->OwnReadReference(result.data_result().shm_info().shm_id(),
+                                                       context.readContext, owner));
+        }
+        releaseUnread.Consume();
+        RETURN_IF_NOT_OK(ApplyResult(provider, *items[i], result, payloads, context, std::move(owner)));
     }
     return Status::OK();
 }
 
 Status ObjectMetadataClient::ApplyResult(const HostPort &provider, ObjectMetadataItem &item,
                                          const QueryAndGetResultPb &result, std::vector<RpcMessage> &payloads,
-                                         InlineRequestContext &context) const
+                                         InlineRequestContext &context,
+                                         std::shared_ptr<IReceiveBufferOwner> owner) const
 {
     const auto &location = result.location();
     CHECK_FAIL_RETURN_STATUS(location.object_key() == item.objectKey, K_RUNTIME_ERROR,
@@ -613,7 +626,7 @@ Status ObjectMetadataClient::ApplyResult(const HostPort &provider, ObjectMetadat
                                  "SHM QueryAndGet did not return shared-memory data");
         CHECK_FAIL_RETURN_STATUS(result.data_result().payload_indexes_size() == 0, K_RUNTIME_ERROR,
                                  "SHM QueryAndGet returned TCP payload indexes");
-        rc = BuildShmInlineData(item, result.data_result().shm_info(), context, data);
+        rc = BuildShmInlineData(item, result.data_result().shm_info(), context, data, std::move(owner));
     }
     if (rc.IsError() && context.mode == InlineTransportMode::SHM) {
         VLOG(1) << "[ObjectKey " << item.objectKey
@@ -648,7 +661,8 @@ Status ObjectMetadataClient::BuildTcpInlineData(const QueryAndGetDataResultPb &d
 }
 
 Status ObjectMetadataClient::BuildShmInlineData(ObjectMetadataItem &item, const QueryAndGetShmInfoPb &shmInfo,
-                                                InlineRequestContext &context, DataGetResult &data) const
+                                                InlineRequestContext &context, DataGetResult &data,
+                                                std::shared_ptr<IReceiveBufferOwner> owner) const
 {
     INJECT_POINT("client.transport.query_and_get.shm_materialization_failure");
     CHECK_FAIL_RETURN_STATUS(context.shmSession != nullptr && context.shmTransporter != nullptr
@@ -658,7 +672,7 @@ Status ObjectMetadataClient::BuildShmInlineData(ObjectMetadataItem &item, const 
                                  && static_cast<uint64_t>(shmInfo.data_size()) == item.location.object_size(),
                              K_RUNTIME_ERROR, "SHM QueryAndGet data size does not match object size");
     DataGetRequest input{ item.objectKey, static_cast<uint64_t>(shmInfo.data_size()), context.readContext };
-    return context.shmSession->BuildQueryAndGetResult(shmInfo, input, data);
+    return context.shmSession->BuildQueryAndGetResult(shmInfo, input, data, std::move(owner));
 }
 
 Status ObjectMetadataClient::BuildUbInlineData(ObjectMetadataItem &item,

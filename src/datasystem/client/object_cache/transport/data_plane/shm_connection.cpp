@@ -34,6 +34,7 @@
 #include <unistd.h>
 
 #include "datasystem/common/eventloop/timer_queue.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/rpc_constants.h"
@@ -53,6 +54,7 @@ namespace client {
 namespace {
 
 constexpr int64_t SHM_REFERENCE_RELEASE_TIMEOUT_MS = 1000;
+constexpr uint32_t SHM_FD_ERROR_LOG_RATE = 100;
 constexpr uint64_t SHM_MAINTENANCE_MAX_INTERVAL_S = 5;
 constexpr uint64_t SHM_MAINTENANCE_MIN_INTERVAL_S = 1;
 constexpr uint64_t SHM_MAINTENANCE_INTERVAL_MS_PER_S = 1000;
@@ -245,7 +247,17 @@ Status ShmFdChannel::GetClientFd(const std::vector<int> &workerFds, std::vector<
     uint64_t receivedRequestId = 0;
     rc = SockRecvFd(socketNumber, isScmTcp_, clientFds, receivedRequestId);
     LOG_IF_ERROR(socket.SetTimeout(0), "Restore shared-memory fd socket timeout failed");
+#ifdef WITH_TESTS
+    INJECT_POINT_NO_RETURN("client.shm_fd.received_request_id_mismatch", [&receivedRequestId]() {
+        ++receivedRequestId;
+    });
+#endif
     if (rc.IsError() || receivedRequestId != requestId_ || clientFds.size() != workerFds.size()) {
+        LOG_FIRST_AND_EVERY_N(WARNING, SHM_FD_ERROR_LOG_RATE)
+            << "SHM fd validation failed, clientId=" << clientId_
+            << ", expectedRequestId=" << requestId_ << ", receivedRequestId=" << receivedRequestId
+            << ", expectedFdCount=" << workerFds.size() << ", receivedFdCount=" << clientFds.size()
+            << ", isScmTcp=" << isScmTcp_ << ", status=" << rc;
         CloseFds(clientFds);
         if (rc.IsError()) {
             return rc;
@@ -422,8 +434,112 @@ Status ShmSession::ValidateObjectInfo(const GetRspPb::ObjectInfoPb &info, uint64
     return Status::OK();
 }
 
-Status ShmSession::BuildResult(const GetRspPb::ObjectInfoPb &info, const DataGetRequest &input, DataGetResult &result)
+Status ShmSession::RegisterReadReferences(const GetRspPb &response)
 {
+    if (supportMultiRefCount_) {
+        return Status::OK();
+    }
+    try {
+        for (const auto &info : response.objects()) {
+            if (!info.shm_id().empty()) {
+                Status rc = RegisterReference(ShmKey::Intern(info.shm_id()));
+                if (rc.IsError()) {
+                    Close(false);
+                    return rc;
+                }
+            }
+        }
+    } catch (const std::bad_alloc &error) {
+        Close(false);
+        return Status(K_OUT_OF_MEMORY, error.what());
+    }
+    return Status::OK();
+}
+
+void ShmSession::ReleaseUnreadReferences(const GetRspPb &response, int begin,
+                                         const std::shared_ptr<const TransportReadContext> &context) noexcept
+{
+    try {
+        for (int i = begin; i < response.objects_size(); ++i) {
+            const auto &info = response.objects(i);
+            if (info.shm_id().empty()) {
+                continue;
+            }
+            std::shared_ptr<IReceiveBufferOwner> owner;
+            if (OwnReadReference(info.shm_id(), context, owner).IsError()) {
+                return;
+            }
+        }
+    } catch (...) {
+        Close(false);
+    }
+}
+
+Status ShmSession::RegisterReadReferences(const QueryAndGetRspPb &response)
+{
+    if (supportMultiRefCount_) {
+        return Status::OK();
+    }
+    try {
+        for (const auto &info : response.results()) {
+            if (info.has_data_result() && info.data_result().has_shm_info()
+                && !info.data_result().shm_info().shm_id().empty()) {
+                Status rc = RegisterReference(ShmKey::Intern(info.data_result().shm_info().shm_id()));
+                if (rc.IsError()) {
+                    Close(false);
+                    return rc;
+                }
+            }
+        }
+    } catch (const std::bad_alloc &error) {
+        Close(false);
+        return Status(K_OUT_OF_MEMORY, error.what());
+    }
+    return Status::OK();
+}
+
+void ShmSession::ReleaseUnreadReferences(const QueryAndGetRspPb &response, int begin,
+                                         const std::shared_ptr<const TransportReadContext> &context) noexcept
+{
+    try {
+        for (int i = begin; i < response.results_size(); ++i) {
+            const auto &info = response.results(i);
+            if (!info.has_data_result() || !info.data_result().has_shm_info()
+                || info.data_result().shm_info().shm_id().empty()) {
+                continue;
+            }
+            std::shared_ptr<IReceiveBufferOwner> owner;
+            if (OwnReadReference(info.data_result().shm_info().shm_id(), context, owner).IsError()) {
+                return;
+            }
+        }
+    } catch (...) {
+        Close(false);
+    }
+}
+
+Status ShmSession::OwnReadReference(const std::string &shmId, std::shared_ptr<const TransportReadContext> context,
+                                    std::shared_ptr<IReceiveBufferOwner> &owner)
+{
+    if (shmId.empty() || context == nullptr) {
+        Close(false);
+        RETURN_STATUS(K_RUNTIME_ERROR, "SHM read reference identity or context is missing");
+    }
+    try {
+        owner = std::make_shared<ShmReceiveBufferOwner>(
+            shared_from_this(), nullptr, ShmKey::Intern(shmId), std::move(context), releasePool_);
+    } catch (const std::bad_alloc &error) {
+        // No owner exists yet; delegate all session references to client-lost cleanup.
+        Close(false);
+        return Status(K_OUT_OF_MEMORY, error.what());
+    }
+    return Status::OK();
+}
+
+Status ShmSession::BuildResult(const GetRspPb::ObjectInfoPb &info, const DataGetRequest &input, DataGetResult &result,
+                               std::shared_ptr<IReceiveBufferOwner> owner)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(owner);
     CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE, "Shared-memory session is closed");
     CHECK_FAIL_RETURN_STATUS(input.context != nullptr, K_INVALID, "Transport read context is missing");
     uint64_t offset = 0;
@@ -437,7 +553,9 @@ Status ShmSession::BuildResult(const GetRspPb::ObjectInfoPb &info, const DataGet
     unit->mmapSize = mmapSize;
     unit->offset = static_cast<ptrdiff_t>(info.offset());
     unit->size = dataSize;
-    unit->id = ShmKey::Intern(info.shm_id());
+    // OwnReadReference is the factory for owners passed to this SHM-only builder.
+    auto *shmOwner = static_cast<ShmReceiveBufferOwner *>(owner.get());
+    unit->id = shmOwner->ShmId();
     RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd(input.context->requestContext.tenantId, unit));
     auto mmapEntry = mmapManager_->GetMmapEntryByFd(unit->fd);
     CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr && unit->pointer != nullptr, K_RUNTIME_ERROR,
@@ -461,13 +579,8 @@ Status ShmSession::BuildResult(const GetRspPb::ObjectInfoPb &info, const DataGet
     meta.mode.SetCacheType(CacheType(info.cache_type()));
     meta.workerAddr = workerAddr_;
     built.externalMeta = std::move(meta);
-    RETURN_IF_NOT_OK(RegisterReference(unit->id));
-    try {
-        built.externalOwner = std::make_shared<ShmReceiveBufferOwner>(
-            shared_from_this(), std::move(mmapEntry), unit->id, input.context, releasePool_);
-    } catch (const std::bad_alloc &e) {
-        RETURN_STATUS(K_RUNTIME_ERROR, e.what());
-    }
+    shmOwner->BindMmapEntry(std::move(mmapEntry));
+    built.externalOwner = std::move(owner);
     CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
                              "Shared-memory session closed while materializing the result");
     built.kind = AccessTransportKind::SHM;
@@ -476,7 +589,7 @@ Status ShmSession::BuildResult(const GetRspPb::ObjectInfoPb &info, const DataGet
 }
 
 Status ShmSession::BuildQueryAndGetResult(const QueryAndGetShmInfoPb &info, const DataGetRequest &input,
-                                          DataGetResult &result)
+                                          DataGetResult &result, std::shared_ptr<IReceiveBufferOwner> owner)
 {
     GetRspPb::ObjectInfoPb objectInfo;
     objectInfo.set_store_fd(info.store_fd());
@@ -489,7 +602,7 @@ Status ShmSession::BuildQueryAndGetResult(const QueryAndGetShmInfoPb &info, cons
     objectInfo.set_write_mode(info.write_mode());
     objectInfo.set_consistency_type(info.consistency_type());
     objectInfo.set_cache_type(info.cache_type());
-    return BuildResult(objectInfo, input, result);
+    return BuildResult(objectInfo, input, result, std::move(owner));
 }
 
 Status ShmSession::MmapWriteRegion(const CreateRspPb &createRsp, const TransportRequestContext &context,
