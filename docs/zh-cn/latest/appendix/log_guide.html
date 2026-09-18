@@ -1071,127 +1071,75 @@ document.addEventListener('DOMContentLoaded', function() {
 <section id="id8">
 <h3>工作原理<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
 <ul class="simple">
-<li><p>三类采样率：<code class="docutils literal notranslate"><span class="pre">request_sample_rate</span></code>（请求主采样）、<code class="docutils literal notranslate"><span class="pre">access_sample_rate</span></code>（access 补采样）、<code class="docutils literal notranslate"><span class="pre">diagnostic_sample_rate</span></code>（diagnostic 补采样）（各 [0.0–1.0]，默认 1.0=全量保留）</p></li>
-<li><p>采样粒度是”请求（traceId）“，不是”单条日志”</p></li>
+<li><p>三类采样率：<code class="docutils literal notranslate"><span class="pre">request_sample_rate</span></code>（请求主采样）、<code class="docutils literal notranslate"><span class="pre">access_sample_rate</span></code>（access 采样）、<code class="docutils literal notranslate"><span class="pre">diagnostic_sample_rate</span></code>（diagnostic 采样）（各 [0.0–1.0]，默认 1.0=全量保留）。<strong>三个参数相互独立，各自精确控制自己类别的保留率</strong></p></li>
+<li><p>采样粒度是”请求（traceId）“，不是”单条日志”：同一请求的所有 access 日志（以及所有 ERROR/WARNING 日志）同保同弃</p></li>
+<li><p>三类共用同一个由 traceID 决定的 per-trace 哈希，各自与自己的阈值比较（嵌套阈值模型）。采样决策跨进程、跨重启确定：同一 traceID + 同一配置永远得到相同结果，便于复现</p></li>
 <li><p>请求采样决策随 RPC 元数据传播（LogSampleState），跨 client/worker 保持同一 trace 的一致结果</p></li>
-<li><p>request sampled-in 时，该请求的 INFO/VLOG/ERROR/WARNING/SLOW_LOG 和 access 日志都直接输出（请求日志完整性优先）</p></li>
-<li><p>request reject 只直接阻断 INFO/VLOG；diagnostic/access 不把 reject 当作直接丢弃条件，继续各自补采样</p></li>
 <li><p>仅 SDK <strong>数据面请求</strong> trace 参与采样（如 Set/Get/Del/Exist/Expire/Create/Put/MSet/MGet/Read 等）；生命周期与控制面 API（Init/ShutDown/Connect/UpdateToken/UpdateAkSk/Close/DeleteStream/PreRegisterDeviceMemory 等）使用普通 trace，不参与请求采样，其 client 与 worker 侧日志始终全量输出（边界：仅在线程无活跃请求 trace 的<strong>顶层调用</strong>时生效；嵌套在数据面请求作用域内调用时继承外层请求采样决策，排障时若生命周期日志仍被采样应先排查嵌套调用）；后台线程日志不受本方案控制，始终全量输出</p></li>
+<li><p><strong>VLOG</strong>：在请求 trace 上下文内按 INFO 归入 REQUEST 类，参与 <code class="docutils literal notranslate"><span class="pre">request_sample_rate</span></code> 采样（生产 <code class="docutils literal notranslate"><span class="pre">v=0</span></code> 下静默）；后台 VLOG 不采样</p></li>
+<li><p><strong>SLOW_LOG</strong>：阈值命中必打，不参与任何采样（这是慢日志的设计契约）；仅显式 <code class="docutils literal notranslate"><span class="pre">SLOW_LOG_IF(sev,</span> <span class="pre">false)</span></code> 的未命中降级形态按 <code class="docutils literal notranslate"><span class="pre">diagnostic_sample_rate</span></code> 采样（当前代码无该调用点）</p></li>
 <li><p>配置权威源：worker；client 通过 register/heartbeat 接收 worker 下发的 <code class="docutils literal notranslate"><span class="pre">LogSampleConfigPb</span></code></p></li>
 </ul>
 </section>
-<section id="or">
-<h3>参数语义与 OR 规则<a class="headerlink" href="#or" title="Link to this heading">¶</a></h3>
-<p>三个参数不是完全独立的——<code class="docutils literal notranslate"><span class="pre">access_sample_rate</span></code> 和 <code class="docutils literal notranslate"><span class="pre">diagnostic_sample_rate</span></code> 是<strong>补采样率</strong>，仅在请求未被 <code class="docutils literal notranslate"><span class="pre">request_sample_rate</span></code> 采中时生效。请求一旦采中，该请求的所有 access 和 diagnostic 日志<strong>无条件强制输出</strong>。</p>
-<p>实际日志保留率公式：</p>
+<section id="id9">
+<h3>链路完整性（阈值嵌套）<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<p>三类阈值作用在同一个 per-trace 哈希上，access/diagnostic 的采样预算<strong>优先覆盖被采中的请求</strong>：</p>
 <ul class="simple">
-<li><p><strong>access 保留率</strong> = <code class="docutils literal notranslate"><span class="pre">request_sample_rate</span></code> + (1 − <code class="docutils literal notranslate"><span class="pre">request_sample_rate</span></code>) × <code class="docutils literal notranslate"><span class="pre">access_sample_rate</span></code></p></li>
-<li><p><strong>diagnostic 保留率</strong> = <code class="docutils literal notranslate"><span class="pre">request_sample_rate</span></code> + (1 − <code class="docutils literal notranslate"><span class="pre">request_sample_rate</span></code>) × <code class="docutils literal notranslate"><span class="pre">diagnostic_sample_rate</span></code></p></li>
+<li><p>当 <code class="docutils literal notranslate"><span class="pre">access_sample_rate</span> <span class="pre">&gt;=</span> <span class="pre">request_sample_rate</span></code>（diagnostic 同理）：被采中的请求<strong>自动保有</strong>该类日志，链路完整——由阈值嵌套自然保证，无需强制保留逻辑</p></li>
+<li><p>当 <code class="docutils literal notranslate"><span class="pre">access_sample_rate</span> <span class="pre">&lt;</span> <span class="pre">request_sample_rate</span></code>：该类预算全部落在被采中的请求上，链路破坏段（约为 <code class="docutils literal notranslate"><span class="pre">request_sample_rate</span> <span class="pre">-</span> <span class="pre">access_sample_rate</span></code>）是保留率约束下的最小值，且确定可复现。<strong>需要链路零破坏，请把该类采样率配置为 &gt;= request_sample_rate（或保持默认 1.0）</strong></p></li>
 </ul>
-<blockquote>
-<div><p><strong>注意</strong>：<code class="docutils literal notranslate"><span class="pre">access_sample_rate=0.3</span></code> 不是”30% 的 access 日志被保留”，而是”未被 request 采中的请求中，30% 的 access 日志作为补充被保留”。实际保留率通常高于此值。</p>
-</div></blockquote>
-<p><strong>配置示例与实际保留率对照</strong>：</p>
+<p><strong>配置示例与实际保留率对照</strong>（每类保留率精确等于自身配置值，不受其他参数影响）：</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head"><p>配置</p></th>
 <th class="head"><p>request采中率</p></th>
-<th class="head"><p>access补采样率</p></th>
-<th class="head"><p><strong>access实际保留率</strong></p></th>
-<th class="head"><p>diagnostic补采样率</p></th>
-<th class="head"><p><strong>diagnostic实际保留率</strong></p></th>
+<th class="head"><p>access保留率</p></th>
+<th class="head"><p>diagnostic保留率</p></th>
+<th class="head"><p>链路完整性</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">request=0.5,</span> <span class="pre">access=0.3,</span> <span class="pre">diagnostic=0.4</span></code></p></td>
 <td><p>50%</p></td>
-<td><p>30%</p></td>
-<td><p><strong>65%</strong> (0.5+0.5×0.3)</p></td>
-<td><p>40%</p></td>
-<td><p><strong>70%</strong> (0.5+0.5×0.4)</p></td>
+<td><p><strong>30%</strong></p></td>
+<td><p><strong>40%</strong></p></td>
+<td><p>两者均低于 request：部分采中请求缺 access/diag（预算仍优先给采中请求）</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">request=1.0,</span> <span class="pre">access=0.0,</span> <span class="pre">diagnostic=0.0</span></code></p></td>
 <td><p>100%</p></td>
-<td><p>0%</p></td>
-<td><p><strong>100%</strong> (采中→强制输出)</p></td>
-<td><p>0%</p></td>
-<td><p><strong>100%</strong> (采中→强制输出)</p></td>
+<td><p><strong>0%</strong></p></td>
+<td><p><strong>0%</strong></p></td>
+<td><p>按 0.0 语义全部丢弃</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">request=0.0,</span> <span class="pre">access=0.5,</span> <span class="pre">diagnostic=0.5</span></code></p></td>
 <td><p>0%</p></td>
-<td><p>50%</p></td>
-<td><p><strong>50%</strong> (全靠补采样)</p></td>
-<td><p>50%</p></td>
-<td><p><strong>50%</strong> (全靠补采样)</p></td>
+<td><p><strong>50%</strong></p></td>
+<td><p><strong>50%</strong></p></td>
+<td><p>access/diag 独立保留，与 request 无关</p></td>
 </tr>
-<tr class="row-odd"><td><p>仅 <code class="docutils literal notranslate"><span class="pre">request=0.2</span></code>（派生）</p></td>
+<tr class="row-odd"><td><p>仅 <code class="docutils literal notranslate"><span class="pre">request=0.2</span></code>（其余默认 1.0）</p></td>
 <td><p>20%</p></td>
-<td><p>60%(3r派生)</p></td>
-<td><p><strong>68%</strong> (0.2+0.8×0.6)</p></td>
-<td><p>80%(4r派生)</p></td>
-<td><p><strong>84%</strong> (0.2+0.8×0.8)</p></td>
+<td><p><strong>100%</strong></p></td>
+<td><p><strong>100%</strong></p></td>
+<td><p>完整（默认 1.0 &gt;= request）</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">request=0.5,</span> <span class="pre">access=0.0</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">request=0.5,</span> <span class="pre">access=0.5,</span> <span class="pre">diagnostic=0.5</span></code></p></td>
 <td><p>50%</p></td>
-<td><p>0%</p></td>
-<td><p><strong>50%</strong> (仅采中请求输出)</p></td>
-<td><p>100%(4r派生)</p></td>
-<td><p><strong>100%</strong> (0.5+0.5×1.0)</p></td>
+<td><p><strong>50%</strong></p></td>
+<td><p><strong>50%</strong></p></td>
+<td><p>等速率：access/diag 恰好出现在被采中的请求上</p></td>
 </tr>
 </tbody>
 </table>
 </div>
 <blockquote>
-<div><p><code class="docutils literal notranslate"><span class="pre">request=1.0</span></code> 时无论 access/diagnostic 设多少，实际保留率都是 100%（所有请求采中→强制输出）。此时 <code class="docutils literal notranslate"><span class="pre">access=0.0</span></code> 仅影响 access log 中的 <code class="docutils literal notranslate"><span class="pre">logSampled</span></code> 标记，不影响日志输出。</p>
+<div><p>注意：<code class="docutils literal notranslate"><span class="pre">request=1.0</span></code> 时若把 <code class="docutils literal notranslate"><span class="pre">access</span></code> 配成 <code class="docutils literal notranslate"><span class="pre">0.0</span></code>，access 日志会全部丢弃（access 独立控制）；旧版本”请求采中即强制输出 access/diagnostic”的补采样行为已移除。</p>
 </div></blockquote>
 </section>
-<section id="request-only-derivation">
-<h3>派生规则（request-only derivation）<a class="headerlink" href="#request-only-derivation" title="Link to this heading">¶</a></h3>
-<p>当仅显式配置 <code class="docutils literal notranslate"><span class="pre">request_sample_rate</span></code>，而未显式设置 <code class="docutils literal notranslate"><span class="pre">access_sample_rate</span></code> 或 <code class="docutils literal notranslate"><span class="pre">diagnostic_sample_rate</span></code> 时，两者自动按以下公式派生：</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">access_sample_rate</span> <span class="pre">=</span> <span class="pre">min(1.0,</span> <span class="pre">request_sample_rate</span> <span class="pre">×</span> <span class="pre">3)</span></code> （简称 3r 规则）</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">diagnostic_sample_rate</span> <span class="pre">=</span> <span class="pre">min(1.0,</span> <span class="pre">request_sample_rate</span> <span class="pre">×</span> <span class="pre">4)</span></code> （简称 4r 规则）</p></li>
-</ul>
-<p><strong>示例：</strong> 仅设置 <code class="docutils literal notranslate"><span class="pre">request_sample_rate=0.2</span></code> → effective <code class="docutils literal notranslate"><span class="pre">access=0.6</span></code>, <code class="docutils literal notranslate"><span class="pre">diagnostic=0.8</span></code></p>
-</section>
-<section id="id9">
-<h3>显式 1.0 阻止派生<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
-<p>即使 <code class="docutils literal notranslate"><span class="pre">access_sample_rate=1.0</span></code> 与默认值相同，显式设置也意味着”用户明确要求全量保留 access 日志”，<strong>阻止自动派生</strong>。这与”未设置时默认 1.0”有本质区别：</p>
-<div class="table-wrapper colwidths-auto docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>配置</p></th>
-<th class="head"><p>access effective 值</p></th>
-<th class="head"><p>派生行为</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>仅 <code class="docutils literal notranslate"><span class="pre">request_sample_rate=0.2</span></code></p></td>
-<td><p>0.6 (派生)</p></td>
-<td><p>派生生效</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">request_sample_rate=0.2</span></code> + <code class="docutils literal notranslate"><span class="pre">access_sample_rate=1.0</span></code>(显式)</p></td>
-<td><p>1.0 (显式)</p></td>
-<td><p>派生被阻止</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">request_sample_rate=0.2</span></code> + <code class="docutils literal notranslate"><span class="pre">access_sample_rate=0.3</span></code>(显式)</p></td>
-<td><p>0.3 (显式)</p></td>
-<td><p>派生被阻止</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-</section>
-<section id="sticky-explicit">
-<h3>Sticky Explicit 行为<a class="headerlink" href="#sticky-explicit" title="Link to this heading">¶</a></h3>
-<p>一旦某个采样率被显式设置（如 <code class="docutils literal notranslate"><span class="pre">access_sample_rate=0.3</span></code>），后续仅修改 <code class="docutils literal notranslate"><span class="pre">request_sample_rate</span></code> 的动态更新不会覆盖已显式设置的值。这防止了配置漂移导致的意外日志量变化。</p>
-<p><strong>示例：</strong></p>
-<ol class="arabic simple">
-<li><p>首次配置 <code class="docutils literal notranslate"><span class="pre">request=0.2</span></code> → access 派生 0.6</p></li>
-<li><p>动态更新显式 <code class="docutils literal notranslate"><span class="pre">access=0.3</span></code> → access 固定 0.3，标记为 ever-explicit</p></li>
-<li><p>再次更新 <code class="docutils literal notranslate"><span class="pre">request=0.1</span></code> → access 仍为 0.3（不会被派生覆盖为 0.3×3=0.3，而是保持显式值）</p></li>
-</ol>
+<section id="logsampled">
+<h3>logSampled 标记<a class="headerlink" href="#logsampled" title="Link to this heading">¶</a></h3>
+<p>access log 中的 <code class="docutils literal notranslate"><span class="pre">logSampled:true</span></code> 表示该请求的 INFO 日志可见（request 采样未拒绝该 trace），与该条 access 是否被 access 采样保留无关。未带标记的 access 记录说明其 request.log 链路不可查。</p>
 </section>
 <section id="id10">
 <h3>配置方式<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
@@ -1205,41 +1153,29 @@ document.addEventListener('DOMContentLoaded', function() {
 </thead>
 <tbody>
 <tr class="row-even"><td><p>Worker 命令行</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--request_sample_rate=0.5</span></code>（仅 request 触发派生）</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--request_sample_rate=0.5</span> <span class="pre">--access_sample_rate=0.3</span> <span class="pre">--diagnostic_sample_rate=0.4</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">./datasystem_worker</span> <span class="pre">--request_sample_rate=0.5</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>Worker 命令行（阻止派生）</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--request_sample_rate=0.5</span> <span class="pre">--access_sample_rate=1.0</span></code></p></td>
-<td><p>access=1.0（显式），阻止 3r 派生</p></td>
-</tr>
-<tr class="row-even"><td><p>K8s Helm</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">values.yaml</span></code> 中仅设置 <code class="docutils literal notranslate"><span class="pre">requestSampleRate:</span> <span class="pre">0.5</span></code>（access/diagnostic 留空）</p></td>
-<td><p>自动派生</p></td>
-</tr>
-<tr class="row-odd"><td><p>K8s Helm（阻止派生）</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">values.yaml</span></code> 中设置 <code class="docutils literal notranslate"><span class="pre">accessSampleRate:</span> <span class="pre">1.0</span></code></p></td>
-<td><p>access=1.0（显式）</p></td>
+<tr class="row-odd"><td><p>K8s Helm</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">values.yaml</span></code> 中设置 <code class="docutils literal notranslate"><span class="pre">requestSampleRate</span></code> / <code class="docutils literal notranslate"><span class="pre">accessSampleRate</span></code> / <code class="docutils literal notranslate"><span class="pre">diagnosticSampleRate</span></code></p></td>
+<td><p>各参数独立生效</p></td>
 </tr>
 <tr class="row-even"><td><p>dscli</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">--request_sample_rate</span> <span class="pre">0.2</span></code>（仅传 request）</p></td>
-<td><p>自动派生</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">--request_sample_rate</span> <span class="pre">0.2</span></code></p></td>
+<td><p>—</p></td>
 </tr>
 <tr class="row-odd"><td><p>Embedded Worker</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">config.RequestSampleRate(0.5)</span></code>（仅 request 触发派生）</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">config.RequestSampleRate(0.5)</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">config.RequestSampleRate(0.5).AccessSampleRate(0.3).DiagnosticSampleRate(0.4)</span></code></p></td>
+<td><p>各参数独立生效</p></td>
 </tr>
-<tr class="row-even"><td><p>Embedded Worker（阻止派生）</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">config.RequestSampleRate(0.5).AccessSampleRate(1.0)</span></code></p></td>
-<td><p>access=1.0（显式）</p></td>
-</tr>
-<tr class="row-odd"><td><p>运行时动态修改</p></td>
+<tr class="row-even"><td><p>运行时动态修改</p></td>
 <td><p>修改 <code class="docutils literal notranslate"><span class="pre">datasystem.config</span></code> 中 <code class="docutils literal notranslate"><span class="pre">request_sample_rate</span></code> 等</p></td>
 <td><p>—</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>默认值均为 <code class="docutils literal notranslate"><span class="pre">1.0</span></code>（全量保留），完全向后兼容。</p>
+<p>默认值均为 <code class="docutils literal notranslate"><span class="pre">1.0</span></code>（全量保留）。</p>
 </section>
 </section>
 <hr class="docutils" />
@@ -1516,10 +1452,8 @@ query-and-get、get-data 和 materialize 子阶段。</p>
 </li>
 <li><a class="reference internal" href="#id7">日志采样</a><ul>
 <li><a class="reference internal" href="#id8">工作原理</a></li>
-<li><a class="reference internal" href="#or">参数语义与 OR 规则</a></li>
-<li><a class="reference internal" href="#request-only-derivation">派生规则（request-only derivation）</a></li>
-<li><a class="reference internal" href="#id9">显式 1.0 阻止派生</a></li>
-<li><a class="reference internal" href="#sticky-explicit">Sticky Explicit 行为</a></li>
+<li><a class="reference internal" href="#id9">链路完整性（阈值嵌套）</a></li>
+<li><a class="reference internal" href="#logsampled">logSampled 标记</a></li>
 <li><a class="reference internal" href="#id10">配置方式</a></li>
 </ul>
 </li>
