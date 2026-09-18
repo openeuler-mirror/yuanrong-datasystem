@@ -64,6 +64,35 @@ def _make_deployer(nodes, config_template, transport='ssh'):
     return d
 
 
+class TestCudaStartupWait(unittest.TestCase):
+    def test_launcher_budget_includes_node_wait(self):
+        for wait in (0, 60):
+            with self.subTest(wait=wait):
+                node = {'pod_name': 'test-client', 'instance_id': 0, 'host_ip': '192.0.2.1',
+                        'cuda': {'client_init_wait_seconds': wait}}
+                d = _make_deployer([node], {'mode': 'pipeline', 'listen_port': 9000,
+                                           'cuda': {'client_init_wait_seconds': 10}}, transport='kubectl')
+                d.start_timeout = 60
+                d.binary_path = '/tmp/kvtest/kvtest'
+                d.scp_to = MagicMock()
+                launches = []
+
+                def run_on(node, cmd, check=True, timeout=60, allow_timeout=False):
+                    if cmd == 'pgrep -x kvtest':
+                        return subprocess.CompletedProcess([], 1, '', '')
+                    if '--ready-timeout' in cmd:
+                        launches.append((cmd, timeout))
+                        return subprocess.CompletedProcess([], 0, '123 0.1\n', '')
+                    return subprocess.CompletedProcess([], 0, '', '')
+
+                d.run_on = run_on
+                ok, _ = d.start_node(node)
+                self.assertTrue(ok)
+                self.assertEqual(len(launches), 1)
+                self.assertIn('--ready-timeout ' + str(60 + wait), launches[0][0])
+                self.assertEqual(launches[0][1], 70 + wait)
+
+
 class TestBuildConfigNodes(unittest.TestCase):
     def test_basic(self):
         nodes = [
@@ -194,6 +223,46 @@ class TestCommHost(unittest.TestCase):
 
 class TestGenConfig(unittest.TestCase):
     """Tests for cmd_gen_config output correctness."""
+
+    def test_cuda_pipeline_options(self):
+        _, config = self._run_gen_config([
+            '-m', 'pipeline', '--nodes', '127.0.0.1:9000',
+            '--cuda-transfer', '--cuda-pin', 'false', '--cuda-device-id', '1',
+            '--cuda-runtime-library', '/opt/cuda/libcudart.so',
+            '--cuda-client-init-wait-seconds', '60',
+            '--pipeline', 'mCreate,mD2h,mSet', '--notify-pipeline', 'mGet,mH2d',
+            '--batch-keys-count', '8',
+        ])
+        self.assertEqual(config['cuda'], {'transfer_enabled': True, 'pin': False,
+                                         'device_id': 1, 'runtime_library': '/opt/cuda/libcudart.so',
+                                         'client_init_wait_seconds': 60})
+        self.assertEqual(config['pipeline'], ['mCreate', 'mD2h', 'mSet'])
+        self.assertEqual(config['notify_pipeline'], ['mGet', 'mH2d'])
+
+    def test_cuda_default_and_node_override(self):
+        _, config = self._run_gen_config(['-m', 'pipeline', '--nodes', '127.0.0.1:9000'])
+        self.assertFalse(config['cuda']['transfer_enabled'])
+        self.assertTrue(config['cuda']['pin'])
+        self.assertEqual(config['cuda']['client_init_wait_seconds'], 0)
+        node = {'host': 'pod-gpu', 'instance_id': 0, 'cuda': {'pin': False}}
+        deployer = _make_deployer([node], config, transport='kubectl')
+        generated = deployer.generate_config(node)
+        self.assertFalse(generated['cuda']['pin'])
+        self.assertFalse(generated['cuda']['transfer_enabled'])
+        self.assertTrue(config['cuda']['pin'])
+
+    def test_cuda_not_emitted_for_benchmark(self):
+        _, config = self._run_gen_config(['--nodes', '127.0.0.1:9000'])
+        self.assertNotIn('cuda', config)
+
+    def test_cuda_negative_init_wait_rejected(self):
+        with self.assertRaises(SystemExit):
+            self._run_gen_config(['-m', 'pipeline', '--nodes', '127.0.0.1:9000',
+                                  '--cuda-client-init-wait-seconds', '-1'])
+
+    def test_cuda_transfer_rejected_for_benchmark(self):
+        with self.assertRaises(SystemExit):
+            self._run_gen_config(['--nodes', '127.0.0.1:9000', '--cuda-transfer'])
 
     def _run_gen_config(self, extra_args):
         """Run gen-config with mocked get_pods and return (deploy, config) dicts."""

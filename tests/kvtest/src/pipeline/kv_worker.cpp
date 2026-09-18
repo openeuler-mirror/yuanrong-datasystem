@@ -17,6 +17,9 @@ KVWorker::KVWorker(const Config &cfg, std::shared_ptr<KVClient> client,
       currentPoolSize_(static_cast<uint64_t>(cfg.keyPoolSize)),
       currentTargetQps_(cfg.targetQps), notifyPool_(100, cfg.notifyQueueMax),
       peerClient_(MakePeerControlClient()) {
+    if (cfg_.cuda.transferEnabled) {
+        pipelineNeedsData_ = std::find(cfg_.pipeline.begin(), cfg_.pipeline.end(), kOpSetStringView) != cfg_.pipeline.end();
+    }
     for (auto &name : cfg_.pipeline) {
         auto fn = GetOpFunc(name);
         if (!fn) {
@@ -27,7 +30,7 @@ KVWorker::KVWorker(const Config &cfg, std::shared_ptr<KVClient> client,
     }
 
     for (auto size : cfg_.dataSizes) {
-        pregenData_[size] = GeneratePatternData(size, cfg_.instanceId);
+        if (pipelineNeedsData_) pregenData_[size] = GeneratePatternData(size, cfg_.instanceId);
     }
 }
 
@@ -209,7 +212,7 @@ void KVWorker::PipelineLoop(int threadId) {
         ctx.key = ctx.batchKeys[0];
         ctx.size = size;
         ctx.senderId = cfg_.instanceId;
-        ctx.data = pregenData_[size];
+        if (pipelineNeedsData_) ctx.data = pregenData_[size];
         ctx.client = client_;
         ctx.param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
         ctx.param.ttlSecond = cfg_.ttlSeconds;

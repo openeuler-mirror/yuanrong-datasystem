@@ -90,6 +90,7 @@ cc_library(
         "src/common/config.cpp",
         "src/metrics/metrics.cpp",
         "src/pipeline/pipeline.cpp",
+        "src/pipeline/cuda_workload.cpp",
         "src/pipeline/kv_worker.cpp",
         "src/pipeline/cache_reader.cpp",
         "src/pipeline/stop.cpp",
@@ -112,6 +113,7 @@ cc_library(
         "src/metrics/metrics.h",
         "src/vendor/TDigest.h",
         "src/pipeline/pipeline.h",
+        "src/pipeline/cuda_workload.h",
         "src/pipeline/kv_worker.h",
         "src/pipeline/cache_reader.h",
         "src/pipeline/data_pattern.h",
@@ -150,6 +152,7 @@ cc_library(
         "-static-libstdc++",
         "-static-libgcc",
         "-pthread",
+        "-ldl",
     ],
     alwayslink = True,
     deps = [

@@ -410,6 +410,20 @@ static int RunBenchmarkMode(Config &cfg, const std::string &configPath)
     return 0;
 }
 
+static bool WaitAfterClientInit(const Config &cfg)
+{
+    if (cfg.runMode != RunMode::PIPELINE || cfg.cuda.clientInitWaitSeconds == 0) return gRunning.load();
+    SLOG_INFO("Waiting " << cfg.cuda.clientInitWaitSeconds
+              << "s after KVClient init before starting metrics and pipeline requests");
+    const auto deadline = std::chrono::steady_clock::now()
+        + std::chrono::seconds(cfg.cuda.clientInitWaitSeconds);
+    while (gRunning && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    SLOG_INFO("Client init wait " << (gRunning ? "completed" : "interrupted"));
+    return gRunning.load();
+}
+
 static int RunServerMode(const Config &cfg)
 {
     SetKvtestClientInitialized(false);
@@ -418,6 +432,15 @@ static int RunServerMode(const Config &cfg)
 
     // Apply CPU/NUMA affinity before creating any threads
     ApplyAffinityFromConfig(cfg.cpuAffinity, cfg.numaNode, cfg.randomNumaNode);
+
+    const Status cudaStatus = kvtest::InitCudaWorkload(cfg);
+    if (!cudaStatus.IsOk()) {
+        SLOG_ERROR("CUDA workload init failed: " << cudaStatus.GetMsg());
+        return 1;
+    }
+    // Destroy after server/workers/client; callbacks and libcudart stay loaded.
+    const auto closeCuda = [](void *) { kvtest::CloseCudaWorkload(); };
+    std::unique_ptr<void, decltype(closeCuda)> cudaCleanup(reinterpret_cast<void *>(1), closeCuda);
 
     SLOG_INFO("Initializing ServiceDiscovery...");
 
@@ -469,16 +492,24 @@ static int RunServerMode(const Config &cfg)
     SLOG_INFO("KVClient initialized");
     SetKvtestClientInitialized(true);
 
+    std::signal(SIGTERM, SignalHandler);
+    std::signal(SIGINT, SignalHandler);
+    std::signal(SIGPIPE, SIG_IGN);
+    if (!WaitAfterClientInit(cfg)) return 0;
+    rc = WarmupCudaPipeline(cfg, client);
+    if (!rc.IsOk()) {
+        SLOG_ERROR("CUDA pipeline warmup failed: " << rc.ToString());
+        return 1;
+    }
+    if (!gRunning.load()) return 0;
+
     bool cacheMode = cfg.keyPoolSize > 0;
     MetricsCollector metrics(cfg.instanceId, cfg.metricsIntervalMs, cfg.outputDir, cacheMode, cfg.metricsFile);
+    if (cfg.cuda.transferEnabled) metrics.EnableCudaMetrics();
     if (!cfg.targetQpsStages.empty()) {
         metrics.SetQpsStages(cfg.targetQpsStages, cfg.stageDurationSeconds);
     }
     metrics.Start();
-
-    std::signal(SIGTERM, SignalHandler);
-    std::signal(SIGINT, SignalHandler);
-    std::signal(SIGPIPE, SIG_IGN);
 
     ControlServer server(cfg, client, metrics, gRunning);
 

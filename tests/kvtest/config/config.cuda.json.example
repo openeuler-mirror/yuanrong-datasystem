@@ -1,0 +1,27 @@
+{
+  "mode": "pipeline",
+  "instance_id": 0,
+  "role": "writer",
+  "coordinator_address": "127.0.0.1:12269",
+  "host_id_env_name": "HOST_IP",
+  "listen_port": 9000,
+  "cuda": {
+    "transfer_enabled": true,
+    "pin": true,
+    "device_id": 0,
+    "client_init_wait_seconds": 0,
+    "runtime_library": ""
+  },
+  "pipeline": ["mCreate", "mD2h", "mSet", "mGet", "mH2d"],
+  "notify_pipeline": ["mGet", "mH2d"],
+  "batch_keys_count": 8,
+  "data_sizes": ["3670016"],
+  "target_qps": 100,
+  "num_threads": 8,
+  "num_total_threads": 16,
+  "notify_count": 0,
+  "metrics_interval_ms": 3000,
+  "set_param": {"ttl_second": 300},
+  "verify": {"level": "size", "fail_op": false},
+  "peers": []
+}

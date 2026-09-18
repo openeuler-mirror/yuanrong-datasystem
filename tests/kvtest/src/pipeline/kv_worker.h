@@ -64,5 +64,6 @@ private:
     std::vector<kvtest::thread> threads_;
     ThreadPool notifyPool_;
     std::vector<std::pair<std::string, OpFunc>> pipelineOps_;
+    bool pipelineNeedsData_ = true;
     std::unordered_map<uint64_t, std::string> pregenData_;
 };

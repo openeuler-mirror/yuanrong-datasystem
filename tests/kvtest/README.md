@@ -243,6 +243,7 @@ bash tests/test_standalone_mode.sh
 |------|------|
 | [docs/user-guide.md](docs/user-guide.md) | 编译部署、配置参数、远程部署、指标采集、故障排查 |
 | [docs/pipeline-guide.md](docs/pipeline-guide.md) | Pipeline 模式：Writer/Reader 角色、QPS 控制、多实例部署 |
+| [docs/cuda-pipeline-guide.md](docs/cuda-pipeline-guide.md) | Pipeline CUDA/Pin：可选运行时、搬运步骤、指标与 K8s 配置 |
 | [docs/cache-guide.md](docs/cache-guide.md) | Cache 模式：cacheGetOrCreate、命中率控制、Key Pool 管理 |
 | [docs/benchmark-guide.md](docs/benchmark-guide.md) | Benchmark 模式：8 种 Set/Get/Mixed 测试模式、per-phase 计时 |
 | [docs/design.md](docs/design.md) | 架构设计：模块设计、线程模型、指标系统、QPS 控制机制 |

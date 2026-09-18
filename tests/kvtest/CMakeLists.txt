@@ -45,6 +45,7 @@ set(KVTEST_COMMON_SOURCES
     src/common/jemalloc_prof.cpp
     src/metrics/metrics.cpp
     src/pipeline/pipeline.cpp
+    src/pipeline/cuda_workload.cpp
     src/pipeline/kv_worker.cpp
     src/pipeline/cache_reader.cpp
     src/pipeline/stop.cpp
@@ -173,7 +174,7 @@ else()
 
     target_link_libraries(kvtest PRIVATE
         ${DATASYSTEM_SDK_DIR}/lib/libdatasystem.so
-        pthread)
+        pthread ${CMAKE_DL_LIBS})
 endif()
 
 # Optional NUMA support — link libnuma if available (header detection by __has_include)

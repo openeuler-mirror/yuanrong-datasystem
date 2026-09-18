@@ -1,4 +1,5 @@
 #include "test_harness.h"
+#include <future>
 #include "common/config.h"
 #include "common/thread_pool.h"
 #include <algorithm>
@@ -197,4 +198,20 @@ TEST(NoDropsBelowQueueBound) {
     ASSERT_EQ(executed.load(), kTasks);
     ASSERT_EQ(pool.DroppedCount(), static_cast<uint64_t>(0));
     ASSERT_EQ(pool.QueueSize(), static_cast<size_t>(0));
+}
+TEST(StopAfterStopNowJoinsInflightTask) {
+    ThreadPool pool(1);
+    std::promise<void> started, release;
+    auto released = release.get_future();
+    std::atomic<bool> completed{false};
+    pool.Submit([&started, &released, &completed]() {
+        started.set_value();
+        released.wait();
+        completed = true;
+    });
+    started.get_future().wait();
+    pool.StopNow();
+    release.set_value();
+    pool.Stop();
+    ASSERT_TRUE(completed.load());
 }

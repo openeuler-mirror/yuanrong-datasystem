@@ -60,6 +60,16 @@
 
 ## CTest Registration Model
 
+- `tests/kvtest` pipeline CUDA support is test-tool-only: optional runtime `dlopen`, default Pin on
+  when CUDA is available, and opt-in explicit `d2h/h2d/mD2h/mH2d` stages. Benchmark/cache paths are unchanged.
+  See `tests/kvtest/docs/cuda-pipeline-guide.md` for flags, resource ownership, metrics and GPU validation.
+  `cuda.client_init_wait_seconds` optionally delays pipeline metrics/control server/workload startup after Client Init;
+  it defaults to zero, is signal-interruptible, and does not assert Pin completion. The deploy launcher adds this
+  delay to its readiness timeout budget.
+- `tests/kvtest/tests/cxx` registers `kvtest_cuda_tests` against a fake CUDA runtime in CTest so these
+  tests build without CUDA headers/hardware. They do not verify real GPU performance or SDK failover.
+  The thread-pool test also covers `StopNow -> Stop` joining in-flight tasks.
+
 - `tests/CMakeLists.txt` adds `ut`, `st`, `perf`, and `common`.
 - `cmake/util.cmake` defines `ADD_DATASYSTEM_TEST`.
 - Each registered gtest binary runs `--gtest_list_tests` at build time through

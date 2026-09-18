@@ -50,6 +50,7 @@ public:
 
     void Record(const std::string &op, double latencyMs, uint32_t code, uint64_t bytes = 0);
     void RecordVerifyFail();
+    void EnableCudaMetrics() { cudaMetricsEnabled_ = true; }
 
     std::atomic<uint64_t> &VerifyFailCounter() { return verifyFailCount_; }
 
@@ -84,6 +85,7 @@ private:
     std::atomic<uint64_t> cacheHitCount_{0};
     std::atomic<uint64_t> cacheMissCount_{0};
     bool cacheModeEnabled_ = false;
+    bool cudaMetricsEnabled_ = false;
     std::vector<int> qpsStages_;
     int stageDurationSec_ = 0;
     std::atomic<bool> running_{false};
