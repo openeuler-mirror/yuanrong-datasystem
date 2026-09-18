@@ -1,5 +1,30 @@
 # Client SDK
 
+## Routed SHM read-reference handoff
+
+- `ShmTransporter::Get/BatchGet` and `ObjectMetadataClient::ApplyResults` register response references before
+  validation/materialization. Legacy per-client reference accounting registers the whole response first, including
+  duplicate shm IDs; modern per-read accounting skips that extra registration scan.
+- `ShmReadResponseGuard` is a stack-only response cursor. Unconsumed response entries are released on early return;
+  consumed entries transfer their reference to `ShmReceiveBufferOwner` before FD reception or mmap. The same owner
+  binds the mmap entry and reaches the successful Buffer; failed construction destroys it and schedules release.
+- Release uses the endpoint SHM session identity, not the primary SDK identity used by routed Create. Unknown outcomes
+  of decrement RPCs are not retried: existing session close/client-lost cleanup remains the fallback, including owner
+  allocation failure and unavailable release pools. This does not add a public API, protocol field, or Worker reclaim
+  policy. Rolling back the client change restores the previous behavior without persistent-state migration.
+- Source: `transport/data_plane/shm_connection.{h,cpp}`, `shm_receive_buffer_owner.{h,cpp}`,
+  `shm_transporter.h`, and `transport/metadata/object_metadata_client.cpp`, under
+  `src/datasystem/client/object_cache/`.
+- Regression entry: `tests/ut/client/transport_test.cpp`, `ReferenceCountingModes/ShmReadReferenceTest.*`.
+  It covers both negotiated reference-counting modes, actual SCM_RIGHTS request-ID mismatch, successful owner lifetime,
+  batch partial construction/validation failure, QueryAndGet fallback, and release failure. Linux build/run is required.
+- End-to-end regression: `tests/st/client/kv_cache/kv_client_get_fd_cleanup_test.cpp`,
+  `KVClientGetFdCleanupTest.LEVEL2_FailedGetsDoNotExhaustWorkerShm`. It injects a received FD request-ID mismatch
+  after real FD reception, repeatedly writes/failed-reads/deletes 8 MiB objects beyond a 128 MiB Worker quota,
+  and asserts subsequent Set/Get success plus empty Worker reference metrics without replacing the SHM session.
+  Hard reclaim and object TTL are disabled. Baseline reproduction requires the same test-only injection hook;
+  the original socket desynchronization trigger is outside this test's scope.
+
 ## Scope
 
 - Paths:

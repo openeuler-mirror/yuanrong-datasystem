@@ -23,6 +23,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -50,6 +51,8 @@ extern char **environ;
 
 #define private public
 #include "datasystem/client/object_cache/object_client_impl.h"
+#include "datasystem/client/object_cache/transport/data_plane/shm_connection.h"
+#include "datasystem/client/object_cache/transport/metadata/object_metadata_client.h"
 #undef private
 
 #include "datasystem/client/object_cache/routed_mode.h"
@@ -61,9 +64,9 @@ extern char **environ;
 #include "datasystem/client/object_cache/transport/data_plane/tcp_transporter.h"
 #include "datasystem/client/object_cache/transport/data_plane/ub_transporter.h"
 #include "datasystem/client/object_cache/transport/data_plane/shm_send_buffer_owner.h"
+#include "datasystem/client/object_cache/transport/data_plane/shm_receive_buffer_owner.h"
 #include "datasystem/client/object_cache/transport/common/deadline_retry.h"
 #include "datasystem/client/object_cache/transport/data_plane/data_plane_executor.h"
-#include "datasystem/client/object_cache/transport/metadata/object_metadata_client.h"
 #include "datasystem/client/object_cache/transport/object_buffer_internal.h"
 #include "datasystem/client/object_cache/transport/object_read/object_read_flow.h"
 #include "datasystem/client/object_cache/transport/object_read/replica_reader.h"
@@ -86,6 +89,7 @@ extern char **environ;
 #include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/fd_pass.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/protos/cluster_topology.pb.h"
@@ -1781,6 +1785,263 @@ TEST(WorkerRpcClientTest, ShmMaintenanceHeartbeatUsesSignedWorkerServiceRequest)
     EXPECT_EQ(client.invokedShmHeartbeatRequest.access_key(), "access-1");
     EXPECT_FALSE(client.invokedShmHeartbeatRequest.signature().empty());
 }
+
+class ReadFailureWorkerRpcClient final : public FakeWorkerRpcClient {
+public:
+    Status InvokeClientGet(GetReqPb &, GetRspPb &response, std::vector<RpcMessage> &) override
+    {
+        response = readResponse;
+        return Status::OK();
+    }
+
+    Status InvokeGetClientFd(GetClientFdReqPb &request, GetClientFdRspPb &) override
+    {
+        ++fdRequests;
+        return SockSendFd(peerFd, false, { peerFd }, request.request_id() + 1);
+    }
+
+    int peerFd = -1;
+    GetRspPb readResponse;
+    int fdRequests = 0;
+};
+
+class ShmReadReferenceTest : public ::testing::TestWithParam<bool> {
+protected:
+    void SetUp() override
+    {
+        int sockets[2];
+        ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets), 0);
+        peer_ = ShmFd(sockets[1]);
+        rpc_ = std::make_shared<ReadFailureWorkerRpcClient>();
+        rpc_->peerFd = peer_.Get();
+        pool_ = std::make_shared<ThreadPool>(0, 1, "read_reference_test");
+        transporter_ = std::make_shared<ShmTransporter>(MakeAddress(9000), rpc_, pool_);
+        auto channel = std::make_shared<ShmFdChannel>(rpc_, ShmFd(sockets[0]), false, "read-session");
+        auto mmap = std::make_shared<MmapManager>(channel, false, std::make_shared<HostMemoryPinManager>());
+        session_ = std::shared_ptr<ShmSession>(new ShmSession(
+            MakeAddress(9000), rpc_, channel, mmap, "read-session", "worker-start", 1,
+            pool_, pool_, MakeRequestContext(), GetParam(), std::make_shared<std::atomic<bool>>(false)));
+        transporter_->shmConnection_->session_ = session_;
+    }
+
+    void TearDown() override
+    {
+        Drain();
+        session_->Close(false);
+        transporter_.reset();
+        session_.reset();
+        pool_.reset();
+    }
+
+    void Drain()
+    {
+        pool_->Submit([] {}).get();
+    }
+
+    void AddResponse(const std::string &id, int index)
+    {
+        auto *info = rpc_->readResponse.add_objects();
+        info->set_shm_id(id);
+        info->set_object_index(index);
+        info->set_store_fd(42);
+        info->set_mmap_size(4096);
+        info->set_data_size(8);
+    }
+
+    Status WarmMapping(int workerFd)
+    {
+        const auto closeFile = [](FILE *file) { (void)std::fclose(file); };
+        std::unique_ptr<FILE, decltype(closeFile)> file(std::tmpfile(), closeFile);
+        CHECK_FAIL_RETURN_STATUS(file != nullptr, K_RUNTIME_ERROR, "Create mapping fixture failed");
+        CHECK_FAIL_RETURN_STATUS(ftruncate(fileno(file.get()), 4096) == 0, K_RUNTIME_ERROR,
+                                 "Resize mapping fixture failed");
+        CHECK_FAIL_RETURN_STATUS(pwrite(fileno(file.get()), "contents", 8, 0) == 8, K_RUNTIME_ERROR,
+                                 "Write mapping fixture failed");
+        ShmFd fd(dup(fileno(file.get())));
+        RETURN_IF_NOT_OK(session_->mmapManager_->mmapTable_->MmapAndStoreFd(
+            fd.Get(), workerFd, 4096, "tenant-1", "read-session"));
+        (void)fd.Release();
+        return Status::OK();
+    }
+
+    QueryAndGetRspPb MakeQueryResponse(int count)
+    {
+        QueryAndGetRspPb response;
+        for (int i = 0; i < count; ++i) {
+            auto *result = response.add_results();
+            result->mutable_location()->set_object_key("key" + std::to_string(i));
+            result->mutable_location()->set_object_size(8);
+            result->mutable_location()->add_object_locations(MakeAddress(9000).ToString());
+            auto *info = result->mutable_data_result()->mutable_shm_info();
+            info->set_shm_id("shm" + std::to_string(i));
+            info->set_store_fd(42);
+            info->set_mmap_size(4096);
+            info->set_data_size(8);
+        }
+        return response;
+    }
+
+    ObjectMetadataClient::InlineRequestContext InlineContext()
+    {
+        ObjectMetadataClient::InlineRequestContext context;
+        context.mode = ObjectMetadataClient::InlineTransportMode::SHM;
+        context.shmSession = session_;
+        context.shmTransporter = transporter_;
+        context.readContext = MakeReadContext();
+        return context;
+    }
+
+    ShmFd peer_;
+    std::shared_ptr<ReadFailureWorkerRpcClient> rpc_;
+    std::shared_ptr<ThreadPool> pool_;
+    std::shared_ptr<ShmTransporter> transporter_;
+    std::shared_ptr<ShmSession> session_;
+};
+
+TEST_P(ShmReadReferenceTest, GetFdFailureReleasesSessionReference)
+{
+    ApiDeadlineGuard deadline(1000);
+    AddResponse("shm", 0);
+    DataGetResult result;
+    EXPECT_EQ(transporter_->Get({ "key", 8, MakeReadContext() }, result).GetCode(), K_RUNTIME_ERROR);
+    Drain();
+    EXPECT_EQ(rpc_->fdRequests, 1);
+    ASSERT_EQ(rpc_->decreaseReferenceCount, 1);
+    EXPECT_EQ(rpc_->decreaseReferenceContexts.front().clientId, "read-session");
+    EXPECT_EQ(rpc_->decreaseReferenceShmIds.front(), ShmKey::Intern("shm"));
+    EXPECT_TRUE(session_->IsAlive());
+}
+
+TEST_P(ShmReadReferenceTest, BatchFailureReleasesFailedAndUnvisitedObjects)
+{
+    ApiDeadlineGuard deadline(1000);
+    AddResponse("first", 0);
+    AddResponse("second", 1);
+    DataGetBatchResult output;
+    DataGetBatchRequest input{ { "a", 8, MakeReadContext() }, { "b", 8, MakeReadContext() } };
+    EXPECT_EQ(transporter_->BatchGet(input, output).GetCode(), K_RUNTIME_ERROR);
+    Drain();
+    EXPECT_EQ(rpc_->fdRequests, 1);
+    EXPECT_EQ(rpc_->decreaseReferenceCount, 2);
+    EXPECT_TRUE(output.empty());
+}
+
+TEST_P(ShmReadReferenceTest, InvalidResponseReleasesReferencesBeforeMaterialization)
+{
+    ApiDeadlineGuard deadline(1000);
+    AddResponse("first", 0);
+    AddResponse("second", 0);
+    DataGetBatchResult output;
+    DataGetBatchRequest input{ { "a", 8, MakeReadContext() }, { "b", 8, MakeReadContext() } };
+    EXPECT_EQ(transporter_->BatchGet(input, output).GetCode(), K_RUNTIME_ERROR);
+    Drain();
+    EXPECT_EQ(rpc_->fdRequests, 0);
+    EXPECT_EQ(rpc_->decreaseReferenceCount, 2);
+}
+
+TEST_P(ShmReadReferenceTest, DuplicateFailedReadsDoNotReleaseLiveOwner)
+{
+    AddResponse("same", 0);
+    ASSERT_TRUE(session_->RegisterReadReferences(rpc_->readResponse).IsOk());
+    std::shared_ptr<IReceiveBufferOwner> live;
+    ASSERT_TRUE(session_->OwnReadReference("same", MakeReadContext(), live).IsOk());
+    AddResponse("same", 1);
+    ASSERT_TRUE(session_->RegisterReadReferences(rpc_->readResponse).IsOk());
+    session_->ReleaseUnreadReferences(rpc_->readResponse, 0, MakeReadContext());
+    Drain();
+    EXPECT_EQ(rpc_->decreaseReferenceCount, GetParam() ? 2 : 0);
+    EXPECT_TRUE(live->CheckAlive().IsOk());
+    live.reset();
+    Drain();
+    EXPECT_EQ(rpc_->decreaseReferenceCount, GetParam() ? 3 : 1);
+}
+
+TEST_P(ShmReadReferenceTest, QueryCountMismatchReleasesEntireResponse)
+{
+    ObjectMetadataClient metadata(nullptr, std::make_shared<DeadlineRetry>());
+    auto context = InlineContext();
+    auto response = MakeQueryResponse(2);
+    std::vector<RpcMessage> payloads;
+    EXPECT_EQ(metadata.ApplyResults(MakeAddress(9000), {}, response, payloads, context).GetCode(), K_RUNTIME_ERROR);
+    Drain();
+    EXPECT_EQ(rpc_->decreaseReferenceCount, 2);
+}
+
+TEST_P(ShmReadReferenceTest, QueryFdFailureReleasesReferenceBeforeFallback)
+{
+    ApiDeadlineGuard deadline(1000);
+    ObjectMetadataClient metadata(nullptr, std::make_shared<DeadlineRetry>());
+    auto context = InlineContext();
+    auto response = MakeQueryResponse(1);
+    ObjectMetadataItem item;
+    item.objectKey = "key0";
+    std::vector<RpcMessage> payloads;
+    EXPECT_TRUE(metadata.ApplyResults(MakeAddress(9000), { &item }, response, payloads, context).IsOk());
+    Drain();
+    EXPECT_EQ(rpc_->fdRequests, 1);
+    EXPECT_EQ(rpc_->decreaseReferenceCount, 1);
+    EXPECT_FALSE(item.inlineData.has_value());
+    EXPECT_TRUE(session_->IsAlive());
+}
+
+TEST_P(ShmReadReferenceTest, AmbiguousReleaseClosesSessionWithoutRepeatingDecrement)
+{
+    rpc_->decreaseReferenceStatus = Status(K_RPC_DEADLINE_EXCEEDED, "release response lost");
+    AddResponse("shm", 0);
+    ASSERT_TRUE(session_->RegisterReadReferences(rpc_->readResponse).IsOk());
+    session_->ReleaseUnreadReferences(rpc_->readResponse, 0, MakeReadContext());
+    Drain();
+    EXPECT_EQ(rpc_->decreaseReferenceCount, 1);
+    EXPECT_FALSE(session_->IsAlive());
+}
+
+TEST_P(ShmReadReferenceTest, SuccessfulResultRetainsReferenceUntilOwnerRelease)
+{
+    ApiDeadlineGuard deadline(1000);
+    ASSERT_TRUE(WarmMapping(42).IsOk());
+    AddResponse("live", 0);
+    DataGetResult result;
+    ASSERT_TRUE(transporter_->Get({ "key", 8, MakeReadContext() }, result).IsOk());
+    Drain();
+    EXPECT_EQ(rpc_->fdRequests, 0);
+    EXPECT_EQ(rpc_->decreaseReferenceCount, 0);
+    EXPECT_EQ(std::memcmp(result.externalData, "contents", 8), 0);
+    result.externalOwner.reset();
+    Drain();
+    EXPECT_EQ(rpc_->decreaseReferenceCount, 1);
+}
+
+TEST_P(ShmReadReferenceTest, BatchReleasesBuiltFailedAndUnvisitedObjects)
+{
+    ApiDeadlineGuard deadline(1000);
+    ASSERT_TRUE(WarmMapping(42).IsOk());
+    AddResponse("built", 0);
+    AddResponse("failed", 1);
+    AddResponse("unvisited", 2);
+    rpc_->readResponse.mutable_objects(1)->set_store_fd(43);
+    rpc_->readResponse.mutable_objects(2)->set_store_fd(44);
+    DataGetBatchResult output;
+    DataGetBatchRequest input{ { "a", 8, MakeReadContext() }, { "b", 8, MakeReadContext() },
+                              { "c", 8, MakeReadContext() } };
+    EXPECT_EQ(transporter_->BatchGet(input, output).GetCode(), K_RUNTIME_ERROR);
+    Drain();
+    EXPECT_EQ(rpc_->fdRequests, 1);
+    EXPECT_EQ(rpc_->decreaseReferenceCount, 3);
+    EXPECT_TRUE(output.empty());
+}
+
+TEST_P(ShmReadReferenceTest, MissingReleasePoolDelegatesToClientLostCleanup)
+{
+    AddResponse("shm", 0);
+    ASSERT_TRUE(session_->RegisterReadReferences(rpc_->readResponse).IsOk());
+    session_->releasePool_.reset();
+    session_->ReleaseUnreadReferences(rpc_->readResponse, 0, MakeReadContext());
+    EXPECT_FALSE(session_->IsAlive());
+    EXPECT_EQ(rpc_->decreaseReferenceCount, 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(ReferenceCountingModes, ShmReadReferenceTest, ::testing::Bool());
+
 
 TEST(ShmConnectionTest, VoluntaryScaleDownDoesNotReconnectSharedMemory)
 {

@@ -255,6 +255,18 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "kv_client_get_fd_cleanup_test",
+    srcs = ["kv_client_get_fd_cleanup_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:raii",
+        "@nlohmann_json//:json",
+    ],
+)
+
+ds_cc_test(
     name = "routing_failure_switch_test",
     srcs = ["routing_failure_switch_test.cpp"],
     tags = ["manual"],

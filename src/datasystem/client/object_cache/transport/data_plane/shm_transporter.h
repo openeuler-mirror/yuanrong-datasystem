@@ -103,6 +103,8 @@ public:
         const DataGetBatchRequest inputs{ input };
         Status rc = session->Get(inputs, response, payloads);
         RETURN_IF_NOT_OK(rc);
+        RETURN_IF_NOT_OK(session->RegisterReadReferences(response));
+        ShmReadResponseGuard<GetRspPb> releaseUnread(session, response, input.context);
         rc = ValidateShmResponse(response, payloads, 1);
         RETURN_IF_NOT_OK(rc);
         const auto &info = response.objects(0);
@@ -114,7 +116,10 @@ public:
             output.response.mutable_error()->set_error_code(static_cast<int>(missingStatus.GetCode()));
             return missingStatus;
         }
-        return session->BuildResult(info, input, output);
+        std::shared_ptr<IReceiveBufferOwner> owner;
+        RETURN_IF_NOT_OK(session->OwnReadReference(info.shm_id(), input.context, owner));
+        releaseUnread.Consume();
+        return session->BuildResult(info, input, output, std::move(owner));
     }
 
     Status BatchGet(const DataGetBatchRequest &inputs, DataGetBatchResult &outputs) override
@@ -138,22 +143,34 @@ public:
         std::vector<RpcMessage> payloads;
         Status rc = session->Get(inputs, response, payloads);
         RETURN_IF_NOT_OK(rc);
+        RETURN_IF_NOT_OK(session->RegisterReadReferences(response));
+        ShmReadResponseGuard<GetRspPb> releaseUnread(session, response, inputs.front().context);
         rc = ValidateShmResponse(response, payloads, inputs.size());
         RETURN_IF_NOT_OK(rc);
 
         outputs.resize(inputs.size());
         const Status missingStatus = MissingObjectStatus(response);
         for (const auto &info : response.objects()) {
+            std::shared_ptr<IReceiveBufferOwner> owner;
+            if (!info.shm_id().empty()) {
+                rc = session->OwnReadReference(info.shm_id(), inputs.front().context, owner);
+                if (rc.IsError()) {
+                    outputs.clear();
+                    return rc;
+                }
+            }
+            releaseUnread.Consume();
             const uint32_t index = info.object_index();
             auto &item = outputs[index];
             if (info.store_fd() <= 0) {
                 item.status = missingStatus;
                 continue;
             }
-            item.status = session->BuildResult(info, inputs[index], item.data);
+            item.status = session->BuildResult(info, inputs[index], item.data, std::move(owner));
             if (item.status.IsError()) {
+                Status failure = item.status;
                 outputs.clear();
-                return item.status;
+                return failure;
             }
         }
         return Status::OK();

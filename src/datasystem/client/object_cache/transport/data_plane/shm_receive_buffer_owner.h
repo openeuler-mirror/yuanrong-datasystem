@@ -39,6 +39,14 @@ public:
                           std::weak_ptr<ThreadPool> releasePool);
     ~ShmReceiveBufferOwner() override;
 
+    const ShmKey &ShmId() const
+    {
+        return shmId_;
+    }
+
+    // Bind before publishing the owner to a Buffer; no concurrent Release is permitted during construction.
+    void BindMmapEntry(std::shared_ptr<IMmapTableEntry> mmapEntry);
+
     void Release() override;
     bool ManagesWorkerReference() const override;
     Status CheckAlive() const override;

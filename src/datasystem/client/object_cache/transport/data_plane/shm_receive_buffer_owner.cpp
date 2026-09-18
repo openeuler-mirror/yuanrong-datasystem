@@ -45,6 +45,11 @@ ShmReceiveBufferOwner::~ShmReceiveBufferOwner()
     Release();
 }
 
+void ShmReceiveBufferOwner::BindMmapEntry(std::shared_ptr<IMmapTableEntry> mmapEntry)
+{
+    mmapEntry_ = std::move(mmapEntry);
+}
+
 void ShmReceiveBufferOwner::Release()
 {
     if (released_.exchange(true, std::memory_order_acq_rel)) {

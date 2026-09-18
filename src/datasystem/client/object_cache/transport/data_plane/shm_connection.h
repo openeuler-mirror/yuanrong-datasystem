@@ -33,6 +33,7 @@
 #include "datasystem/client/object_cache/transport/rpc/worker_rpc_client.h"
 #include "datasystem/client/object_cache/transport/shm_fd.h"
 #include "datasystem/client/object_cache/transport/transport_phase_latency_recorder.h"
+#include "datasystem/common/object_cache/ireceive_buffer_owner.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/util/thread_pool.h"
 
@@ -86,7 +87,20 @@ public:
 
     Status Get(const DataGetBatchRequest &inputs, GetRspPb &response, std::vector<RpcMessage> &payloads);
 
-    Status BuildResult(const GetRspPb::ObjectInfoPb &info, const DataGetRequest &input, DataGetResult &result);
+    // Register the complete response before any owner can release a legacy per-client reference.
+    Status RegisterReadReferences(const GetRspPb &response);
+    Status RegisterReadReferences(const QueryAndGetRspPb &response);
+    // OwnReadReference and unread cleanup consume references registered by RegisterReadReferences exactly once.
+    Status OwnReadReference(const std::string &shmId, std::shared_ptr<const TransportReadContext> context,
+                            std::shared_ptr<IReceiveBufferOwner> &owner);
+    void ReleaseUnreadReferences(const GetRspPb &response, int begin,
+                                 const std::shared_ptr<const TransportReadContext> &context) noexcept;
+    void ReleaseUnreadReferences(const QueryAndGetRspPb &response, int begin,
+                                 const std::shared_ptr<const TransportReadContext> &context) noexcept;
+
+    // Both read builders require an owner returned by this session's OwnReadReference.
+    Status BuildResult(const GetRspPb::ObjectInfoPb &info, const DataGetRequest &input, DataGetResult &result,
+                        std::shared_ptr<IReceiveBufferOwner> owner);
 
     /**
      * @brief Materialize a QueryAndGet shared-memory result through this session.
@@ -96,7 +110,7 @@ public:
      * @return K_OK on success; the error code otherwise.
      */
     Status BuildQueryAndGetResult(const QueryAndGetShmInfoPb &info, const DataGetRequest &input,
-                                  DataGetResult &result);
+                                  DataGetResult &result, std::shared_ptr<IReceiveBufferOwner> owner);
 
     /** Maps the shared-memory region allocated by a routed Create into the client address space (PROT_WRITE)
      * so the caller can write zero-copy, registers the worker reference, and attaches a send-side owner that
@@ -167,6 +181,35 @@ private:
     std::vector<int64_t> releasedWorkerFds_;
     std::atomic<bool> alive_{ true };
     std::atomic<bool> disconnectScheduled_{ false };
+};
+
+// The response outlives this cursor. Each consumed entry is owned by an owner or has no SHM reference.
+template <typename Response>
+class ShmReadResponseGuard final {
+public:
+    ShmReadResponseGuard(const std::shared_ptr<ShmSession> &session, const Response &response,
+                         const std::shared_ptr<const TransportReadContext> &context)
+        : session_(session), response_(response), context_(context)
+    {
+    }
+    ShmReadResponseGuard(const ShmReadResponseGuard &) = delete;
+    ShmReadResponseGuard &operator=(const ShmReadResponseGuard &) = delete;
+    ~ShmReadResponseGuard()
+    {
+        if (session_ != nullptr) {
+            session_->ReleaseUnreadReferences(response_, consumed_, context_);
+        }
+    }
+    void Consume()
+    {
+        ++consumed_;
+    }
+
+private:
+    const std::shared_ptr<ShmSession> &session_;
+    const Response &response_;
+    const std::shared_ptr<const TransportReadContext> &context_;
+    int consumed_{ 0 };
 };
 
 class ShmConnection final : public IDataPlaneConnection {

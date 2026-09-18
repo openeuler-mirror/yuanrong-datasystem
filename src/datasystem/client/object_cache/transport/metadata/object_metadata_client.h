@@ -31,6 +31,7 @@
 #include "datasystem/client/object_cache/transport/data_plane/data_plane_manager.h"
 #include "datasystem/client/object_cache/transport/data_plane/ub_transporter.h"
 #include "datasystem/client/object_cache/transport/transport_advisor.h"
+#include "datasystem/common/object_cache/ireceive_buffer_owner.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/object_posix.pb.h"
 
@@ -199,7 +200,8 @@ private:
      * @return K_OK on success; the error code otherwise.
      */
     Status ApplyResult(const HostPort &provider, ObjectMetadataItem &item, const QueryAndGetResultPb &result,
-                       std::vector<RpcMessage> &payloads, InlineRequestContext &context) const;
+                       std::vector<RpcMessage> &payloads, InlineRequestContext &context,
+                       std::shared_ptr<IReceiveBufferOwner> owner) const;
 
     /**
      * @brief Move TCP inline payloads into a data-read result.
@@ -212,7 +214,8 @@ private:
                               std::vector<RpcMessage> &payloads, DataGetResult &data) const;
 
     Status BuildShmInlineData(ObjectMetadataItem &item, const QueryAndGetShmInfoPb &shmInfo,
-                              InlineRequestContext &context, DataGetResult &data) const;
+                              InlineRequestContext &context, DataGetResult &data,
+                              std::shared_ptr<IReceiveBufferOwner> owner) const;
 
     /**
      * @brief Move ownership of a prepared UB receive buffer into a data-read result.
