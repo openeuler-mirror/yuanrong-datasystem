@@ -628,17 +628,20 @@ bool PeerUbAdmission::CancelProbe(const UbProbeToken &token, uint64_t nowMs)
 bool PeerUbAdmission::CompleteProbe(const UbProbeToken &token, const Status &status, uint64_t nowMs,
                                     bool requireGlobalAvailable)
 {
-    // Diagnostic writes do not carry node-health authority once a port verifier is bound.
+    // Diagnostic writes do not carry node-health authority for failures managed by port verification.
     std::shared_ptr<const RemotePortHealthVerificationTrigger> verifier;
     std::function<void()> refreshSelf;
     {
         bthread::RWLockWrGuard lock(mutex_);
-        verifier = token.peer == self_ ? nullptr : std::atomic_load(&remotePortHealthVerificationTrigger_);
-        if (token.peer == self_ && UsesVerifiedPortHealth()) {
+        auto state = states_.find(token.peer);
+        const bool portHealthManaged = state != states_.end()
+                                       && IsPortHealthManagedState(token.peer, state->second);
+        verifier = token.peer != self_ && portHealthManaged
+                       ? std::atomic_load(&remotePortHealthVerificationTrigger_) : nullptr;
+        if (token.peer == self_ && portHealthManaged && UsesVerifiedPortHealth()) {
             refreshSelf = selfPortHealthRefreshTrigger_;
         }
         if (verifier != nullptr || refreshSelf) {
-            auto state = states_.find(token.peer);
             if (state == states_.end() ||
                 !MatchesUbProbe(state->second.probeInFlight, state->second.epoch, token.epoch)) {
                 return false;

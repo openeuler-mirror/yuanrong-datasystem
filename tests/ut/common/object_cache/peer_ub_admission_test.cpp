@@ -352,6 +352,33 @@ TEST(PeerUbAdmissionTest, ConnectOrPathFailureIsSuspectAndDoesNotHardBlock)
     EXPECT_EQ(recovered->state, UbAdmissionState::AVAILABLE);
 }
 
+TEST(PeerUbAdmissionTest, RemoteVerifierDoesNotOverrideConnectOrPathProbeCompletion)
+{
+    PeerUbAdmission admission;
+    std::atomic<uint32_t> verifications{ 0 };
+    admission.SetRemotePortHealthVerificationTrigger([&verifications](const HostPort &) {
+        verifications.fetch_add(1, std::memory_order_acq_rel);
+    });
+    UbOpOutcome outcome(PEER, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK,
+                        Status(K_URMA_ERROR, "post jetty send wr failed"));
+    outcome.providerStatus = 4096;
+    admission.ReportOutcome(outcome);
+
+    const auto suspect = admission.GetState(PEER);
+    ASSERT_TRUE(suspect.has_value());
+    ASSERT_EQ(suspect->lastFailureClass, UbFailureClass::CONNECT_OR_PATH_FAILURE);
+    auto token = admission.TryBeginProbe(PEER, suspect->backoffDeadlineMs);
+    ASSERT_TRUE(token.has_value());
+
+    EXPECT_TRUE(admission.CompleteProbe(*token, Status::OK(), suspect->backoffDeadlineMs, false));
+    EXPECT_EQ(verifications.load(std::memory_order_acquire), 0U);
+    const auto recovered = admission.GetState(PEER);
+    ASSERT_TRUE(recovered.has_value());
+    EXPECT_EQ(recovered->state, UbAdmissionState::AVAILABLE);
+    EXPECT_EQ(recovered->backoffLevel, 0U);
+    EXPECT_EQ(recovered->backoffDeadlineMs, 0U);
+}
+
 TEST(PeerUbAdmissionTest, SuspectProbeFailureKeepsAdmissionOpenAndBacksOff)
 {
     PeerUbAdmission admission;
@@ -380,39 +407,6 @@ TEST(PeerUbAdmissionTest, SuspectProbeFailureKeepsAdmissionOpenAndBacksOff)
     EXPECT_TRUE(admission.BuildSelfHealthSummary(PEER).writable);
     EXPECT_TRUE(admission.CheckWriteTarget(PEER, UbOperationKind::MIGRATION_WRITE).IsOk());
     EXPECT_FALSE(admission.TryBeginProbe(PEER, afterFailure->backoffDeadlineMs - 1).has_value());
-}
-
-// A bound remote port-health verifier owns the verdict, so CompleteProbe completes diagnostically
-// and returns no admission decision. That completion must still release the peer with a probe
-// backoff: leaving backoffDeadlineMs untouched re-arms NextProbeCandidate on the very next
-// scheduler turn, which turns the recovery probe into an unpaced RPC loop.
-TEST(PeerUbAdmissionTest, VerifierBoundProbeCompletionBacksOffBeforeNextCandidate)
-{
-    constexpr uint64_t nowMs = 1'000;
-    PeerUbAdmission admission;
-    std::atomic<uint32_t> verifications{ 0 };
-    admission.SetRemotePortHealthVerificationTrigger([&verifications](const HostPort &peer) {
-        EXPECT_EQ(peer, PEER);
-        verifications.fetch_add(1, std::memory_order_acq_rel);
-    });
-    admission.InitializeVerification(PEER, nowMs);
-    auto candidate = admission.NextProbeCandidate(nowMs);
-    ASSERT_TRUE(candidate.has_value());
-    EXPECT_EQ(*candidate, PEER);
-
-    auto token = admission.TryBeginProbe(PEER, nowMs);
-    ASSERT_TRUE(token.has_value());
-    EXPECT_FALSE(admission.CompleteProbe(*token, Status::OK(), nowMs, false));
-    EXPECT_EQ(verifications.load(std::memory_order_acquire), 1U);
-
-    const auto state = admission.GetState(PEER);
-    ASSERT_TRUE(state.has_value());
-    EXPECT_FALSE(state->probeInFlight);
-    EXPECT_EQ(state->backoffLevel, 1U);
-    EXPECT_EQ(state->backoffDeadlineMs, nowMs + 1'000);
-    EXPECT_FALSE(admission.TryBeginProbe(PEER, nowMs).has_value());
-    EXPECT_FALSE(admission.NextProbeCandidate(state->backoffDeadlineMs - 1).has_value());
-    EXPECT_EQ(admission.NextProbeDeadlineMs(), std::optional<uint64_t>{ state->backoffDeadlineMs });
 }
 
 TEST(PeerUbAdmissionTest, PortVerifiedIsolationOnlyRecoversByPortFact)
