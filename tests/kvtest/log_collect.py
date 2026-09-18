@@ -78,16 +78,17 @@ def add_collect_filters(parser):
                         help='Host IP selection JSON with include and exclude arrays')
     compression = parser.add_mutually_exclusive_group()
     compression.add_argument('--compress', dest='compress', action='store_true', default=None,
-                             help='Use gzip compression; --compress --no-extract keeps the archive; '
-                                  '--compress --extract unpacks it locally')
+                             help='Gzip-compress in pod and extract locally (default is tar without gzip). '
+                                  '--compress --no-extract keeps the .tar.gz archive')
     compression.add_argument('--no-compress', dest='compress', action='store_false',
-                             help='Transfer without gzip compression and extract locally by default; '
-                                  'add --no-extract to keep the tar archive')
+                             help='Tar in pod without gzip (default). Pair with --no-extract '
+                                  'to keep the .tar archive')
     extraction = parser.add_mutually_exclusive_group()
     extraction.add_argument('--extract', dest='extract', action='store_true', default=None,
                             help='Extract collected logs locally (default)')
     extraction.add_argument('--no-extract', dest='extract', action='store_false',
-                            help='Keep the received log archive without extracting it')
+                            help='Keep the received archive without extracting it '
+                                 '(pair with --compress/--no-compress)')
     parser.add_argument('--pod-info', action='store_true',
                         help='Include current Pod IP and host IP in collection directory names')
     parser.add_argument('--file-pattern', action='append', default=[], metavar='GLOB',

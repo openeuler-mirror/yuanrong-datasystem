@@ -1272,20 +1272,19 @@ class TestCollectLogsFromPod(unittest.TestCase):
 
 
 class TestCollectLogsFromPodTarStream(unittest.TestCase):
-    """collect_logs_from_pod tar-stream path: one ``tar czf - {files}`` via
-    ``kubectl exec`` replaces the prior ``N_files + 5`` per-file ``base64``
-    round-trips. Covers the primary path, the base64 fallback (container
-    without tar), and that the tar stream carries stdout.log when
-    remote_dir exists."""
+    """collect_logs_from_pod tar-stream path: one ``tar cf - {files}`` via
+    ``kubectl exec`` (no gzip by default). Covers the primary path, the
+    base64 fallback (container without tar), and that the tar stream carries
+    stdout.log when remote_dir exists."""
 
     def _pod(self):
         return {'name': 'p1', 'ip': '10.0.0.1'}
 
     def _tar_bytes(self, files):
-        """Build a tar.gz from {name: content} and return its bytes."""
+        """Build a tar (no gzip) from {name: content} and return its bytes."""
         import io
         buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode='w:gz') as tar:
+        with tarfile.open(fileobj=buf, mode='w:') as tar:
             for name, content in files.items():
                 data = content if isinstance(content, bytes) else content.encode()
                 info = tarfile.TarInfo(name=name)
@@ -1297,7 +1296,7 @@ class TestCollectLogsFromPodTarStream(unittest.TestCase):
     @patch('deploy_common.subprocess.run')
     @patch('deploy_common._collect_stagger_delay', return_value=0)
     def test_tar_stream_primary_path(self, mock_stagger, mock_run, mock_exec):
-        # Primary path: kubectl exec tar czf - | local tar extract.
+        # Primary path: kubectl exec tar cf - | local tar extract (no gzip).
         # The kubectl_exec mocks handle ls -d / ls / base64 (fallback should
         # NOT be hit). subprocess.run mocks the tar stream download.
         log_content = b'worker log line\n'
