@@ -9,6 +9,7 @@ injection, NUMA option construction, --set override application, and
 procmon dir resolution from the worker config.
 """
 
+import argparse
 import json
 import os
 import subprocess
@@ -30,6 +31,7 @@ from deploy_worker import (
     cmd_install,
     cmd_start,
     start_worker,
+    validate_env_assignment,
 )
 
 
@@ -45,7 +47,21 @@ class TestCliArgs(unittest.TestCase):
 
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn('--jemalloc-prof-options', result.stdout)
+                self.assertIn('--env', result.stdout)
                 self.assertNotIn('--jemalloc-profile', result.stdout)
+
+    def test_env_assignment_validation(self):
+        self.assertEqual(validate_env_assignment('ASAN_OPTIONS=log_path=/a.%p.log'),
+                         ('ASAN_OPTIONS', 'log_path=/a.%p.log'))
+        # An empty value is a legal assignment (unsets/blank in the child).
+        self.assertEqual(validate_env_assignment('MALLOC_CONF='),
+                         ('MALLOC_CONF', ''))
+        # '=' inside the value is preserved verbatim.
+        self.assertEqual(validate_env_assignment('A=b=c'), ('A', 'b=c'))
+        for value in ('ASAN_OPTIONS', '=x', '1A=x', 'A-B=x', 'A B=x', ''):
+            with self.subTest(value=value):
+                with self.assertRaises(argparse.ArgumentTypeError):
+                    validate_env_assignment(value)
 
 
 # Mock.call_args / call_args_list[i] are (args, kwargs) tuples in all
@@ -100,6 +116,27 @@ class TestStartWorker(unittest.TestCase):
                      timeout=10)
         # positional arg index 5 is process_name
         self.assertEqual(_pos(mock_start.call_args)[5], 'datasystem_worker')
+
+    @patch('deploy_worker.start_service', return_value=True)
+    def test_forwards_env(self, mock_start):
+        pod = {'name': 'p1', 'ip': '10.0.0.1'}
+        start_worker(pod, 'default', {}, 31501, '/tmp/worker.config',
+                     env={'ASAN_OPTIONS': 'log_path=/tmp/asan.%p.log'},
+                     timeout=10)
+
+        self.assertEqual(
+            _kw(mock_start.call_args)['env'],
+            {'ASAN_OPTIONS': 'log_path=/tmp/asan.%p.log'})
+
+    @patch('deploy_worker.start_service', return_value=True)
+    def test_omits_env_by_default(self, mock_start):
+        # env must not be forwarded as None: start_service's env defaults to
+        # None anyway, but passing it explicitly would break the kwargs
+        # contract asserted by the older delegation tests.
+        pod = {'name': 'p1', 'ip': '10.0.0.1'}
+        start_worker(pod, 'default', {}, 31501, '/tmp/worker.config', timeout=10)
+
+        self.assertNotIn('env', _kw(mock_start.call_args))
 
 
 class TestCmdStart(unittest.TestCase):
@@ -200,6 +237,29 @@ class TestCmdStart(unittest.TestCase):
                 _kw(mock_start.call_args).get('jemalloc_prof_conf'), options)
         finally:
             os.unlink(cfg_path)
+
+    @patch('deploy_worker.start_worker', return_value=True)
+    def test_env_is_forwarded_per_pod(self, mock_start):
+        cfg_path = _write_config({'worker_address': {'value': '0.0.0.0:0'}})
+        try:
+            args = self._args(config=cfg_path,
+                              env=[('ASAN_OPTIONS', 'log_path=/tmp/asan.%p.log')])
+            cmd_start(args, [{'name': 'p1', 'ip': '192.0.2.1'}])
+
+            self.assertEqual(
+                _kw(mock_start.call_args).get('env'),
+                {'ASAN_OPTIONS': 'log_path=/tmp/asan.%p.log'})
+        finally:
+            os.unlink(cfg_path)
+
+    @patch('deploy_worker.cmd_start_standalone', return_value=0)
+    def test_standalone_rejects_env(self, mock_start):
+        args = self._args(standalone=True, env=[('ASAN_OPTIONS', 'x=1')])
+
+        rc = cmd_start(args, [{'name': 'p1', 'ip': '192.0.2.1'}])
+
+        self.assertEqual(rc, 1)
+        mock_start.assert_not_called()
 
     @patch('deploy_worker.cmd_start_standalone', return_value=0)
     def test_standalone_accepts_jemalloc_prof_options(self, mock_start):

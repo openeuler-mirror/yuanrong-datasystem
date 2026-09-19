@@ -440,6 +440,30 @@ python3 deploy_worker.py deploy -p ds-worker -n datasystem \
 `lg_prof_interval` 则按累计分配字节数生成周期 profile。该参数仅适用于 dscli 模式，不能与
 `-S/--standalone` 同时使用。
 
+### 4.5 向 Worker 进程注入环境变量
+
+`deploy_worker.py` 的 `start` 或 `deploy` 子命令支持 `--env NAME=VALUE`（可重复），用于设置
+`dscli` 没有对应命令行开关的环境变量。`dscli` 会把自己的环境原样传给 fork 出的服务进程，
+因此该参数可以直达 Worker 二进制：
+
+```bash
+python3 deploy_worker.py deploy -p ds-worker -n datasystem \
+  -c worker.config --whl /path/to/datasystem.whl \
+  --env ASAN_OPTIONS=log_path=/var/log/datasystem/asan.%p.log
+```
+
+典型用途是让 ASan/UBSan 构建在运行期输出报告（构建方式见
+`docs/source_zh_cn/installation/build_guide/bazel_build.md` 的 `-S address`）。这里应使用
+`log_path` 而不是依赖 stderr：dscli 模式下 Worker 的 stderr 是 `dscli` 进程持有的管道，
+`dscli start` 就绪退出后管道读端随之关闭，此后写入 stderr 的 sanitizer 报告不会落到任何地方。
+`log_path` 直接写文件，`%p` 展开为 PID，多个 Worker 不会互相覆盖。
+
+把 `log_path` 放在 Worker `log_dir` 下（上面的 `/var/log/datasystem` 需替换为配置里实际的
+`log_dir`），`deploy_worker.py collect` 就能把它和其他日志一起收回来。
+
+变量名必须是 shell 标识符（字母或下划线开头，只含字母、数字、下划线）；变量值由脚本做 shell
+转义，可包含空格与 `=`。该参数仅适用于 dscli 模式，不能与 `-S/--standalone` 同时使用。
+
 ---
 
 ## 5. 故障排查

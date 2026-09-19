@@ -258,6 +258,11 @@ coordinator_service_impl -> coordinator_election_manager -> coordinator_raft_nod
 - `setup.py` prunes unused shared libraries with `ldd`, explicitly retains `libdatasystem_coordinator.so`, keeps UCX
   plugin-style libraries under `lib/ucx`, and strips the worker and coordinator binaries.
 - `scripts/build_cmake.sh` strips installed ELF artifacts but skips JSON service configuration files.
+- Bazel packaging follows `-s off` on its own: `scripts/build_bazel.sh` adds `--config=retain_symbols`, whose
+  `retain_symbols` define makes the packaging `copy_file` selects (`datasystem_worker`, `datasystem_coordinator`,
+  `libdatasystem`, `libds_client_py`, `dsbench_cpp`) stage raw ELF targets instead of the strip genrules, and the
+  install stage copies those same unstripped binaries. `--config=jeprof` implies `retain_symbols`, so direct bazel
+  profiling builds stay symbolized; jemalloc selection is still governed by `--define=enable_jemalloc_prof` alone.
 - `scripts/build_cmake.sh` creates the final tarball with `tar --remove-files`, so post-build tests that need
   `datasystem/service` or `datasystem/sdk` extract the tarball again.
 - Plugin libraries `libacl_plugin.so` and `libcuda_plugin.so` are special: runtime hash checking means package scripts
