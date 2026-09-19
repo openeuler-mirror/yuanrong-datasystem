@@ -27,7 +27,9 @@ namespace {
 
 constexpr uint64_t K_REGISTER_BASE_ALIGNMENT = 2ULL * 1024ULL * 1024ULL;
 
-constexpr int32_t K_DEFAULT_HIXL_BASE_PORT = 20000;
+// Mooncake ADXL shares the 20000 + 100 * device_id segment convention; 22000 keeps 20 device
+// segments clear so co-located Mooncake and YuanRong engines never probe the same ports.
+constexpr int32_t K_DEFAULT_HIXL_BASE_PORT = 22000;
 constexpr int32_t K_PORT_SEGMENT_SIZE = 100;
 constexpr int32_t K_DEFAULT_CONNECT_TIMEOUT_MS = 10000;
 constexpr int32_t K_DEFAULT_TRANSFER_TIMEOUT_MS = 10000;
@@ -210,9 +212,9 @@ bool QueryHixlAutoConnectCapability()
 
 Result BuildHixlInitConfig(const std::string &routePolicy, HixlInitConfig &config)
 {
-    config.bufferPool = GetEnvOrDefault("TRANSFER_ENGINE_HIXL_BUFFER_POOL", "0:0");
+    config.bufferPool = GetEnvOrDefault("YR_TE_HIXL_BUFFER_POOL", "0:0");
     config.options[hixl::AscendString(hixl::OPTION_BUFFER_POOL)] = hixl::AscendString(config.bufferPool.c_str());
-    config.requestedAutoConnect = GetEnvOrDefault("TRANSFER_ENGINE_HIXL_AUTO_CONNECT", "auto");
+    config.requestedAutoConnect = GetEnvOrDefault("YR_TE_HIXL_AUTO_CONNECT", "auto");
     HixlAutoConnectConfig autoConnectConfig;
     TE_RETURN_IF_ERROR(ResolveHixlAutoConnectConfig(config.requestedAutoConnect, QueryHixlAutoConnectCapability(),
                                                     &autoConnectConfig));
@@ -221,12 +223,12 @@ Result BuildHixlInitConfig(const std::string &routePolicy, HixlInitConfig &confi
     config.options[hixl::AscendString(K_OPTION_AUTO_CONNECT)] =
         hixl::AscendString(config.autoConnectOption.c_str());
     config.globalResourceConfigUserConfigured =
-        GetEnvIfSet("TRANSFER_ENGINE_HIXL_GLOBAL_RESOURCE_CONFIG", config.globalResourceConfig);
-    config.requestedCsMode = GetEnvOrDefault("TRANSFER_ENGINE_HIXL_CS_MODE", K_DEFAULT_HIXL_CS_MODE);
+        GetEnvIfSet("YR_TE_HIXL_GLOBAL_RESOURCE_CONFIG", config.globalResourceConfig);
+    config.requestedCsMode = GetEnvOrDefault("YR_TE_HIXL_CS_MODE", K_DEFAULT_HIXL_CS_MODE);
     HixlCsConfigInput csInput;
     csInput.requestedMode = config.requestedCsMode;
     csInput.routePolicy = routePolicy;
-    GetEnvIfSet("TRANSFER_ENGINE_HIXL_LOCAL_COMM_RES", csInput.localCommRes);
+    GetEnvIfSet("YR_TE_HIXL_LOCAL_COMM_RES", csInput.localCommRes);
     csInput.globalResourceConfig = config.globalResourceConfig;
     csInput.capabilityAvailable = QueryHixlCsCapability();
     csInput.legacyRoceEnabled = GetEnvOrDefault("HCCL_INTRA_ROCE_ENABLE", "0") == "1";
@@ -245,14 +247,14 @@ Result BuildHixlInitConfig(const std::string &routePolicy, HixlInitConfig &confi
             hixl::AscendString(config.globalResourceConfig.c_str());
     }
     config.rdmaTrafficClassConfigured =
-        GetEnvIfSet("ASCEND_RDMA_TC", config.rdmaTrafficClass) ||
+        GetEnvIfSet("YR_TE_HIXL_RDMA_TC", config.rdmaTrafficClass) ||
         GetEnvIfSet("HCCL_RDMA_TC", config.rdmaTrafficClass);
     if (config.rdmaTrafficClassConfigured) {
         config.options[hixl::AscendString(hixl::OPTION_RDMA_TRAFFIC_CLASS)] =
             hixl::AscendString(config.rdmaTrafficClass.c_str());
     }
     config.rdmaServiceLevelConfigured =
-        GetEnvIfSet("ASCEND_RDMA_SL", config.rdmaServiceLevel) ||
+        GetEnvIfSet("YR_TE_HIXL_RDMA_SL", config.rdmaServiceLevel) ||
         GetEnvIfSet("HCCL_RDMA_SL", config.rdmaServiceLevel);
     if (config.rdmaServiceLevelConfigured) {
         config.options[hixl::AscendString(hixl::OPTION_RDMA_SERVICE_LEVEL)] =
@@ -371,10 +373,10 @@ Result AscendBackend::InitializeLocal(const std::string &localHost, uint16_t loc
     HixlInitConfig config;
     TE_RETURN_IF_ERROR(BuildHixlInitConfig(routePolicy, config));
 
-    connectTimeoutMs_ = GetEnvI32("TRANSFER_ENGINE_HIXL_CONNECT_TIMEOUT_MS", K_DEFAULT_CONNECT_TIMEOUT_MS);
-    transferTimeoutMs_ = GetEnvI32("TRANSFER_ENGINE_HIXL_TRANSFER_TIMEOUT_MS", K_DEFAULT_TRANSFER_TIMEOUT_MS);
+    connectTimeoutMs_ = GetEnvI32("YR_TE_HIXL_CONNECT_TIMEOUT_MS", K_DEFAULT_CONNECT_TIMEOUT_MS);
+    transferTimeoutMs_ = GetEnvI32("YR_TE_HIXL_TRANSFER_TIMEOUT_MS", K_DEFAULT_TRANSFER_TIMEOUT_MS);
     const int32_t readLeaseTtlMs =
-        GetEnvI32("TRANSFER_ENGINE_HIXL_READ_LEASE_TTL_MS", K_DEFAULT_READ_LEASE_TTL_MS);
+        GetEnvI32("YR_TE_HIXL_READ_LEASE_TTL_MS", K_DEFAULT_READ_LEASE_TTL_MS);
     TE_CHECK_OR_RETURN(transferTimeoutMs_ <= readLeaseTtlMs - K_READ_LEASE_TIMEOUT_MARGIN_MS, ErrorCode::kInvalid,
                        "hixl read lease ttl should exceed transfer timeout by at least 1000 ms");
 
@@ -641,16 +643,16 @@ std::string AscendBackend::ConnectionKey(const ConnectionSpec &spec)
 Result AscendBackend::ParseRoutePolicy(std::string *routePolicy)
 {
     TE_CHECK_PTR_OR_RETURN(routePolicy);
-    std::string route = GetEnvOrDefault("TRANSFER_ENGINE_HIXL_ROUTE", K_DEFAULT_HIXL_ROUTE);
+    std::string route = GetEnvOrDefault("YR_TE_HIXL_ROUTE", K_DEFAULT_HIXL_ROUTE);
     std::transform(route.begin(), route.end(), route.begin(), [](unsigned char ch) {
         return static_cast<char>(std::tolower(ch));
     });
     TE_CHECK_OR_RETURN(IsSupportedRoute(route), ErrorCode::kInvalid,
-                       "TRANSFER_ENGINE_HIXL_ROUTE should be auto, hccs or roce");
+                       "YR_TE_HIXL_ROUTE should be auto, hccs or roce");
     const char *forceRoce = std::getenv("HCCL_INTRA_ROCE_ENABLE");
     if (route == "hccs" && forceRoce != nullptr && std::string(forceRoce) == "1") {
         return TE_MAKE_STATUS(ErrorCode::kNotSupported,
-                              "TRANSFER_ENGINE_HIXL_ROUTE=hccs conflicts with HCCL_INTRA_ROCE_ENABLE=1");
+                              "YR_TE_HIXL_ROUTE=hccs conflicts with HCCL_INTRA_ROCE_ENABLE=1");
     }
     *routePolicy = route;
     return Result::OK();
@@ -660,15 +662,12 @@ Result AscendBackend::BuildEndpoint(const std::string &localHost, int32_t localD
 {
     TE_CHECK_PTR_OR_RETURN(endpoint);
     std::string explicitEndpoint;
-    if (GetEnvIfSet("TRANSFER_ENGINE_HIXL_ENDPOINT", explicitEndpoint)) {
+    if (GetEnvIfSet("YR_TE_HIXL_ENDPOINT", explicitEndpoint)) {
         *endpoint = explicitEndpoint;
         return Result::OK();
     }
 
-    int32_t basePort = GetEnvI32("TRANSFER_ENGINE_HIXL_BASE_PORT", -1);
-    if (basePort < 0) {
-        basePort = GetEnvI32("ASCEND_BASE_PORT", K_DEFAULT_HIXL_BASE_PORT);
-    }
+    int32_t basePort = GetEnvI32("YR_TE_HIXL_BASE_PORT", K_DEFAULT_HIXL_BASE_PORT);
     TE_CHECK_OR_RETURN(basePort > 0 && basePort <= K_MAX_TCP_PORT, ErrorCode::kInvalid, "invalid hixl base port");
     const int32_t physicalDeviceId = ResolvePhysicalDeviceId(localDeviceId);
     const int64_t segmentStart =

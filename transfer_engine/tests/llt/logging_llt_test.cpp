@@ -148,7 +148,7 @@ TEST(TransferEngineLoggingStderrTest, FatalLogFlushesAndAborts)
 
 TEST(TransferEngineLoggingFileTest, PreservesSeverityFilesAndStderrThreshold)
 {
-    const char *logDir = std::getenv("TRANSFER_ENGINE_LOG_DIR");
+    const char *logDir = std::getenv("YR_TE_LOG_DIR");
     ASSERT_NE(logDir, nullptr);
     const std::filesystem::path directory(logDir);
     std::filesystem::remove_all(directory);

@@ -12,6 +12,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "internal/control_plane/socket_rpc_transport.h"
 #include "datasystem/transfer_engine/control_plane_messages.h"
 #include "datasystem/transfer_engine/status.h"
 
@@ -67,6 +68,8 @@ public:
     SocketControlServer();
     ~SocketControlServer();
 
+    Result Bind(const std::string &host, uint16_t port, uint16_t *boundPort,
+                ListenSocketFailureLogLevel failureLogLevel = ListenSocketFailureLogLevel::kError);
     Result Start(const std::string &host, uint16_t port, std::shared_ptr<ITransferControlService> service,
                  int32_t workerThreads = 4);
     void Stop();
@@ -78,6 +81,8 @@ private:
 
     std::atomic<bool> running_{ false };
     int listenFd_ = -1;
+    std::string boundHost_;
+    uint16_t boundPort_ = 0;
     int32_t workerCount_ = 0;
     std::thread acceptThread_;
     std::vector<std::thread> workerThreads_;

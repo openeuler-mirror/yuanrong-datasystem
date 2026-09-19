@@ -38,23 +38,23 @@ namespace datasystem {
 namespace internal {
 namespace {
 
-constexpr char K_LOG_LEVEL_ENV[] = "TRANSFER_ENGINE_LOG_LEVEL";
-constexpr char K_VLOG_LEVEL_ENV[] = "TRANSFER_ENGINE_VLOG_LEVEL";
-constexpr char K_VMODULE_ENV[] = "TRANSFER_ENGINE_VMODULE";
-constexpr char K_LOG_DIR_ENV[] = "TRANSFER_ENGINE_LOG_DIR";
-constexpr char K_LOG_TO_STDERR_ENV[] = "TRANSFER_ENGINE_LOG_TO_STDERR";
-constexpr char K_ALSO_LOG_TO_STDERR_ENV[] = "TRANSFER_ENGINE_ALSO_LOG_TO_STDERR";
-constexpr char K_LOG_TO_STDOUT_ENV[] = "TRANSFER_ENGINE_LOG_TO_STDOUT";
-constexpr char K_STDERR_THRESHOLD_ENV[] = "TRANSFER_ENGINE_STDERR_THRESHOLD";
-constexpr char K_LOG_BUFFER_LEVEL_ENV[] = "TRANSFER_ENGINE_LOG_BUFFER_LEVEL";
-constexpr char K_LOG_BUFFER_SECONDS_ENV[] = "TRANSFER_ENGINE_LOG_BUFFER_SECONDS";
-constexpr char K_MAX_LOG_SIZE_MB_ENV[] = "TRANSFER_ENGINE_MAX_LOG_SIZE_MB";
-constexpr char K_LOG_FILE_MODE_ENV[] = "TRANSFER_ENGINE_LOG_FILE_MODE";
-constexpr char K_TIMESTAMP_IN_LOG_FILE_NAME_ENV[] = "TRANSFER_ENGINE_TIMESTAMP_IN_LOG_FILE_NAME";
-constexpr char K_LOG_FILE_HEADER_ENV[] = "TRANSFER_ENGINE_LOG_FILE_HEADER";
-constexpr char K_LOG_PREFIX_ENV[] = "TRANSFER_ENGINE_LOG_PREFIX";
-constexpr char K_LOG_YEAR_IN_PREFIX_ENV[] = "TRANSFER_ENGINE_LOG_YEAR_IN_PREFIX";
-constexpr char K_LOG_UTC_TIME_ENV[] = "TRANSFER_ENGINE_LOG_UTC_TIME";
+constexpr char K_LOG_LEVEL_ENV[] = "YR_TE_LOG_LEVEL";
+constexpr char K_VLOG_LEVEL_ENV[] = "YR_TE_VLOG_LEVEL";
+constexpr char K_VMODULE_ENV[] = "YR_TE_VMODULE";
+constexpr char K_LOG_DIR_ENV[] = "YR_TE_LOG_DIR";
+constexpr char K_LOG_TO_STDERR_ENV[] = "YR_TE_LOG_TO_STDERR";
+constexpr char K_ALSO_LOG_TO_STDERR_ENV[] = "YR_TE_ALSO_LOG_TO_STDERR";
+constexpr char K_LOG_TO_STDOUT_ENV[] = "YR_TE_LOG_TO_STDOUT";
+constexpr char K_STDERR_THRESHOLD_ENV[] = "YR_TE_STDERR_THRESHOLD";
+constexpr char K_LOG_BUFFER_LEVEL_ENV[] = "YR_TE_LOG_BUFFER_LEVEL";
+constexpr char K_LOG_BUFFER_SECONDS_ENV[] = "YR_TE_LOG_BUFFER_SECONDS";
+constexpr char K_MAX_LOG_SIZE_MB_ENV[] = "YR_TE_MAX_LOG_SIZE_MB";
+constexpr char K_LOG_FILE_MODE_ENV[] = "YR_TE_LOG_FILE_MODE";
+constexpr char K_TIMESTAMP_IN_LOG_FILE_NAME_ENV[] = "YR_TE_TIMESTAMP_IN_LOG_FILE_NAME";
+constexpr char K_LOG_FILE_HEADER_ENV[] = "YR_TE_LOG_FILE_HEADER";
+constexpr char K_LOG_PREFIX_ENV[] = "YR_TE_LOG_PREFIX";
+constexpr char K_LOG_YEAR_IN_PREFIX_ENV[] = "YR_TE_LOG_YEAR_IN_PREFIX";
+constexpr char K_LOG_UTC_TIME_ENV[] = "YR_TE_LOG_UTC_TIME";
 constexpr char K_PROGRAM_NAME[] = "transfer_engine";
 constexpr char K_LOGGER_NAME[] = "yuanrong_transfer_engine";
 constexpr size_t K_SEVERITY_FILE_COUNT = 4;
@@ -824,11 +824,11 @@ void LogInvalidConfigOnce() noexcept
     const LogConfig &config = GetLogConfig();
     if (config.invalidLogLevel) {
         EmitLog(LogSeverity::WARNING, __FILE__, __LINE__,
-                "invalid TRANSFER_ENGINE_LOG_LEVEL; falling back to INFO");
+                "invalid YR_TE_LOG_LEVEL; falling back to INFO");
     }
     if (config.invalidVlogLevel) {
         EmitLog(LogSeverity::WARNING, __FILE__, __LINE__,
-                "invalid TRANSFER_ENGINE_VLOG_LEVEL; falling back to 0");
+                "invalid YR_TE_VLOG_LEVEL; falling back to 0");
     }
 }
 

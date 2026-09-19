@@ -8,6 +8,7 @@
   - [Package Layout](#package-layout)
   - [Quick Start](#quick-start)
   - [Protocol, backend, and route compatibility](#protocol-backend-and-route-compatibility)
+  - [Environment variables](#environment-variables)
   - [API Reference](#api-reference)
     - [Class: TransferEngine](#class-transferengine)
       - [Constructor](#constructor)
@@ -97,13 +98,14 @@ engine.finalize()
 `ascend` is the only public protocol name. It replaced the former public `hixl` selector; HIXL remains the internal
 data-plane implementation. Pass `"ascend"` (case-insensitive) to `initialize()`. `"hixl"`, the empty protocol, and
 the former `TRANSFER_ENGINE_BACKEND` selector are not accepted aliases. Peers upgraded from the old selector must be
-upgraded together: the control-plane handshake requires backend kind `ascend` on both sides.
+upgraded together: the control-plane handshake requires backend kind `ascend` on both sides. Data-plane peer-info
+parsing rejects a non-`ascend` backend tag earlier with `ErrorCode.kInvalid`.
 
 The C++ `IDataPlaneBackend::BackendKind()` default is also `"ascend"`. Applications that inject a custom backend
 through the C++ API must update an old `"hixl"` override to `"ascend"`; an injected backend with another kind is
 rejected with `ErrorCode.kNotSupported`, and peers with different kinds cannot connect.
 
-`TRANSFER_ENGINE_HIXL_CS_MODE` defaults to `on`, and `TRANSFER_ENGINE_HIXL_ROUTE` defaults to `roce`. This default
+`YR_TE_HIXL_CS_MODE` defaults to `on`, and `YR_TE_HIXL_ROUTE` defaults to `roce`. This default
 combination requires HIXL client-server capability and selects CS Device RoCE; initialization fails with
 `ErrorCode.kNotSupported` when CS is unavailable. Set CS mode to `auto` explicitly to restore capability-driven legacy
 fallback, or `off` to require legacy. Set the route to `auto` explicitly to let HIXL match HCCS or RoCE endpoints.
@@ -112,16 +114,50 @@ base address must be aligned to 2 MiB. Registration lengths remain byte-granular
 backing base.
 
 CANN/HIXL 9.1.0 is the minimum fully supported version. HIXL 8.5.2 through 9.0.x remains available only through the
-legacy compatibility path; set `TRANSFER_ENGINE_HIXL_CS_MODE=off` on both peers. Use
-`TRANSFER_ENGINE_HIXL_ROUTE=auto` with `HCCL_INTRA_ROCE_ENABLE` unset, or set the route to `roce` together with
+legacy compatibility path; set `YR_TE_HIXL_CS_MODE=off` on both peers. Use
+`YR_TE_HIXL_ROUTE=auto` with `HCCL_INTRA_ROCE_ENABLE` unset, or set the route to `roce` together with
 `HCCL_INTRA_ROCE_ENABLE=1`. The core `hixl::Hixl` Engine supports AutoConnect from HIXL 9.1.0; set it to `off` on the
 legacy compatibility path.
 
 The 2 MiB rule also applies in legacy mode because `route=auto` can select HCCS. A legacy deployment that previously
 reached cross-instance RoCE through `auto` with an unaligned allocation can therefore fail registration after an
-upgrade. For a RoCE-only legacy deployment, configure `TRANSFER_ENGINE_HIXL_ROUTE=roce` on both peers and set
+upgrade. For a RoCE-only legacy deployment, configure `YR_TE_HIXL_ROUTE=roce` on both peers and set
 `HCCL_INTRA_ROCE_ENABLE=1`; in CS mode, explicit `roce` uses the HIXL `roce:device` filter and does not require that
 variable.
+
+### Environment variables
+
+`initialize()` reads the following variables. Route, CS-mode, and AutoConnect semantics are described above.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `YR_TE_HIXL_CS_MODE` | `on` | `auto`/`on`/`off` client-server mode selection |
+| `YR_TE_HIXL_ROUTE` | `roce` | `auto`/`hccs`/`roce` route selection |
+| `YR_TE_HIXL_AUTO_CONNECT` | `auto` | `auto`/`on`/`off` (`1`/`0` accepted) HIXL AutoConnect selection |
+| `YR_TE_HIXL_GLOBAL_RESOURCE_CONFIG` | unset | Additional HIXL JSON options; an explicit route injects `protocol_desc` into it |
+| `YR_TE_HIXL_LOCAL_COMM_RES` | unset | Explicit HIXL 1.3 JSON with `net_instance_id` and an endpoint list; CS mode only |
+| `YR_TE_HIXL_ENDPOINT` | unset | Overrides the auto-derived HIXL endpoint |
+| `YR_TE_HIXL_BASE_PORT` | `22000` | Listening-port segment base; each physical device owns 100 ports. The default stays 2000 above Mooncake ADXL's `20000`-based segments so co-located engines never probe the same ports |
+| `YR_TE_HIXL_BUFFER_POOL` | `0:0` | HIXL buffer-pool option |
+| `YR_TE_HIXL_CONNECT_TIMEOUT_MS` | `10000` | HIXL connection timeout in milliseconds |
+| `YR_TE_HIXL_TRANSFER_TIMEOUT_MS` | `10000` | HIXL transfer timeout in milliseconds; the read-lease TTL must exceed it by at least 1000 ms |
+| `YR_TE_HIXL_READ_LEASE_TTL_MS` | `30000` | Remote READ lease TTL in milliseconds |
+| `YR_TE_ENABLE_ENV_DUMP` | unset | Dumps the process environment once when set to `1`/`true`/`on`/`yes` |
+| `ASCEND_RT_VISIBLE_DEVICES` / `RT_ASCEND_VISIBLE_DEVICES` | unset | CANN-wide device visibility, not YuanRong-specific: maps the logical `npu:${device_id}` to a physical device id for endpoint port selection. Shared with the CANN runtime, HCCL, and torch_npu in the same process; `RT_ASCEND_VISIBLE_DEVICES` is the legacy spelling fallback |
+| `YR_TE_HIXL_RDMA_TC` / `HCCL_RDMA_TC` | unset | RDMA traffic-class override for YuanRong TE. `YR_TE_HIXL_RDMA_TC` wins when both are set; `HCCL_RDMA_TC` is the official CANN/HCCL variable that also configures HCCL itself (for example torch_npu) so QoS stays aligned |
+| `YR_TE_HIXL_RDMA_SL` / `HCCL_RDMA_SL` | unset | RDMA service-level override with the same precedence and HCCL-sharing semantics as `YR_TE_HIXL_RDMA_TC` / `HCCL_RDMA_TC` |
+
+Logging behavior (level, destination, buffering, rotation, and format) is controlled by `YR_TE_LOG_LEVEL`,
+`YR_TE_VLOG_LEVEL`, `YR_TE_VMODULE`, `YR_TE_LOG_DIR`, `YR_TE_LOG_TO_STDERR`,
+`YR_TE_ALSO_LOG_TO_STDERR`, `YR_TE_LOG_TO_STDOUT`, `YR_TE_STDERR_THRESHOLD`,
+`YR_TE_LOG_BUFFER_LEVEL`, `YR_TE_LOG_BUFFER_SECONDS`, `YR_TE_MAX_LOG_SIZE_MB`,
+`YR_TE_LOG_FILE_MODE`, `YR_TE_TIMESTAMP_IN_LOG_FILE_NAME`, `YR_TE_LOG_FILE_HEADER`,
+`YR_TE_LOG_PREFIX`, `YR_TE_LOG_YEAR_IN_PREFIX`, and `YR_TE_LOG_UTC_TIME`.
+
+YuanRong TE reads only the `YR_TE_*` names above plus the CANN/HCCL ecosystem variables listed here. It never reads
+Mooncake TE's `MC_*` variables, so YuanRong TE and Mooncake TE can run in the same process or container with fully
+independent configuration: use the private `YR_TE_*` names for YuanRong-only control, and the
+`HCCL_*`/CANN names only when the setting must also apply to HCCL or the CANN runtime.
 
 ## API Reference
 
@@ -150,7 +186,8 @@ Initializes the transfer engine control plane and binds the engine instance to a
 
 Parameters:
 
-- `local_hostname` (`str`): Local endpoint in `host:port` format, for example `"127.0.0.1:60551"`
+- `local_hostname` (`str`): Local endpoint in `host:port` format, for example `"127.0.0.1:60551"`. Use port `0`
+  (for example, `"127.0.0.1:0"`) to let the operating system atomically select and bind an available port.
 - `protocol` (`str`): The only supported value is `"ascend"` (case-insensitive). The Ascend backend uses HIXL
   internally.
 - `device_name` (`str`): Device identifier string. It must match `npu:${device_id}`, for example `"npu:0"` or `"npu:1"`.
@@ -167,8 +204,15 @@ Notes:
 - malformed `device_name` returns `ErrorCode.kInvalid`
 - Python does not expose `rpc_threads`; the engine uses a fixed internal value
 - IPv6 endpoints must use bracketed host syntax, for example `"[::1]:60551"` or `"[fd00::1]:60551"`.
-- On CANN/HIXL 9.1.0 or newer, set `TRANSFER_ENGINE_HIXL_CS_MODE=on` and
-  `TRANSFER_ENGINE_HIXL_ROUTE=roce` on both peers to require CS Device RoCE. This path does not require
+- When port `0` is requested, initialization resolves the actual nonzero port before initializing the data-plane
+  backend or starting control-plane threads. Call `get_rpc_port()` after successful initialization and advertise that
+  returned port to peers.
+- When port `0` is requested and `YR_TE_RPC_PORT_MIN`/`YR_TE_RPC_PORT_MAX` are both set to valid values, the engine
+  binds a randomly selected available port from that range (up to 500 attempts) instead of an OS-assigned ephemeral
+  port. Valid ports are within `1024-65535` and outside the ephemeral range `32768-60999`. Invalid or partial
+  configuration logs a warning and falls back to OS assignment; explicit nonzero ports are never remapped.
+- On CANN/HIXL 9.1.0 or newer, set `YR_TE_HIXL_CS_MODE=on` and
+  `YR_TE_HIXL_ROUTE=roce` on both peers to require CS Device RoCE. This path does not require
   `HCCL_INTRA_ROCE_ENABLE`; see [Backend and HIXL Route Selection](README.md#backend-and-hixl-route-selection).
 
 The three-argument form is the compatibility form used by existing callers. The four-argument form is accepted for
@@ -182,7 +226,9 @@ callers that still provide the historical metadata-server slot; both forms initi
 get_rpc_port()
 ```
 
-Returns the local RPC listening port after successful initialization.
+Returns the actual local RPC listening port after successful initialization. If initialization requested port `0`, this
+is the resolved nonzero port rather than `0`: an OS-assigned port by default, or a port within the configured
+`YR_TE_RPC_PORT_MIN`/`YR_TE_RPC_PORT_MAX` range when that range is valid.
 
 Returns:
 
@@ -289,8 +335,8 @@ batch_register_memory_ex(registrations, location="*")
 
 Registers multiple `MemoryRegistration` objects atomically from the Python caller's perspective. The list must not be
 empty; each logical range must be positive and contained by its positive backing range, and overlapping backing ranges
-are rejected unless they are the same range. Registration and unregistration batch methods accept at most 4096 items
-per call.
+are rejected unless they are the same range. Batch registration, unregistration, and read methods accept at most 4096
+items per call.
 
 #### `unregister_memory()`
 
@@ -341,7 +387,7 @@ Parameters:
 - `peer_buffer_address` (`int`): Remote registered buffer address
 - `length` (`int`): Number of bytes to read
 - `transport_hint` (`str`): Compatibility hint; only empty string or `"ascend"` is accepted. It does not select HCCS
-  or RoCE; use `TRANSFER_ENGINE_HIXL_ROUTE` before initialization.
+  or RoCE; use `YR_TE_HIXL_ROUTE` before initialization.
 
 Returns:
 
@@ -379,6 +425,7 @@ Common validation:
 - all three lists must have the same length
 - each address must be positive
 - each length must be positive
+- at most 4096 items per call
 
 Behavior:
 
@@ -394,14 +441,14 @@ finalize()
 
 Shuts down the engine instance and releases internal runtime state.
 
-The call releases the Python GIL while native shutdown is running. It first stops new read-lease admission, waits for
-in-flight reads, and then waits for active owner-side remote READ leases. If leases do not drain within the 30-second
+The call releases the Python GIL while native shutdown is running. It waits for in-flight synchronous reads, stops new
+read-lease admission, and then waits for active remote READ leases. If leases do not drain within the 30-second
 shutdown wait window, it returns `ErrorCode.kNotReady`; keep every registered backing allocation alive and retry
 `finalize()` until it returns `ErrorCode.kOk`.
 
 The native destructor retries `finalize()` after a `kNotReady` result. Therefore, relying on Python reference counting or
 garbage collection for shutdown can block until existing leases expire (the read-lease TTL defaults to 30 seconds and
-is configurable with `TRANSFER_ENGINE_HIXL_READ_LEASE_TTL_MS`). Do not free, reuse, or let the tensor/array owning a
+is configurable with `YR_TE_HIXL_READ_LEASE_TTL_MS`). Do not free, reuse, or let the tensor/array owning a
 registered address be collected while finalization is pending.
 
 Returns:
@@ -603,5 +650,4 @@ Typical failure cases:
   [Backend and HIXL Route Selection](README.md#backend-and-hixl-route-selection).
 - Backing bases must be 2 MiB-aligned for `auto` and `hccs`; explicit `roce` does not require this alignment.
 - `device_name` must use the `npu:${device_id}` format.
-- The loader in `yr.datasystem` preloads several runtime shared libraries when available.
 - The transfer_engine wheel is no longer published separately, and the installed Python import path remains `yr.datasystem`.

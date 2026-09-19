@@ -47,6 +47,8 @@ public:
     explicit TransferEngine(std::shared_ptr<IDataPlaneBackend> backend);
     ~TransferEngine();
 
+    /// @param[in] localHostname Local endpoint in host:port form. Port 0 requests an OS-assigned port, optionally
+    ///            constrained to the YR_TE_RPC_PORT_MIN/YR_TE_RPC_PORT_MAX range. Read the bound port via GetRpcPort().
     /// @param[in] protocol The only supported value is "ascend" (case-insensitive).
     Result Initialize(const std::string &localHostname, const std::string &protocol, const std::string &deviceName);
     Result Initialize(const std::string &localHostname, const std::string &metadataServer, const std::string &protocol,
@@ -91,6 +93,7 @@ private:
                                    uint64_t *ownerMemGeneration);
     Result BuildConnectionOnce(const std::string &peerHost, uint16_t peerPort, int32_t *ownerDeviceId,
                                uint64_t *ownerMemGeneration);
+    Result BindControlPortLocked();
     Result InitializeAscendBackendLocked(const std::string &protocol);
     Result StartControlServerLocked();
     bool TryReuseCachedConnection(const std::string &peerHost, uint16_t peerPort, int32_t cachedOwnerDeviceId,

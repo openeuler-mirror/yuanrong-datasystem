@@ -68,7 +68,7 @@ int32_t ResolveAclMallocPolicy()
     constexpr int32_t kHugeOnly = 1;
     constexpr int32_t kNormalOnly = 2;
 
-    const char *env = std::getenv("TRANSFER_ENGINE_ACL_MALLOC_POLICY");
+    const char *env = std::getenv("YR_TE_ACL_MALLOC_POLICY");
     if (env == nullptr || env[0] == '\0') {
         return kHugeFirst;
     }

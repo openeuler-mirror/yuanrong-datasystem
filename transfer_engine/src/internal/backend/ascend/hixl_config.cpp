@@ -47,10 +47,10 @@ Result ParseGlobalResourceConfig(const std::string &raw, nlohmann::json *config)
         *config = nlohmann::json::parse(raw);
     } catch (const nlohmann::json::exception &e) {
         return TE_MAKE_STATUS(ErrorCode::kInvalid,
-                              std::string("invalid TRANSFER_ENGINE_HIXL_GLOBAL_RESOURCE_CONFIG: ") + e.what());
+                              std::string("invalid YR_TE_HIXL_GLOBAL_RESOURCE_CONFIG: ") + e.what());
     }
     TE_CHECK_OR_RETURN(config->is_object(), ErrorCode::kInvalid,
-                       "TRANSFER_ENGINE_HIXL_GLOBAL_RESOURCE_CONFIG should be a JSON object");
+                       "YR_TE_HIXL_GLOBAL_RESOURCE_CONFIG should be a JSON object");
     return Result::OK();
 }
 
@@ -66,14 +66,14 @@ Result ResolveLocalCommRes(const std::string &raw, std::string *localCommRes)
         config = nlohmann::json::parse(raw);
     } catch (const nlohmann::json::exception &e) {
         return TE_MAKE_STATUS(ErrorCode::kInvalid,
-                              std::string("invalid TRANSFER_ENGINE_HIXL_LOCAL_COMM_RES: ") + e.what());
+                              std::string("invalid YR_TE_HIXL_LOCAL_COMM_RES: ") + e.what());
     }
     TE_CHECK_OR_RETURN(config.is_object(), ErrorCode::kInvalid,
-                       "TRANSFER_ENGINE_HIXL_LOCAL_COMM_RES should be a JSON object");
+                       "YR_TE_HIXL_LOCAL_COMM_RES should be a JSON object");
     const auto version = config.find("version");
     TE_CHECK_OR_RETURN(version != config.end() && version->is_string() && version->get<std::string>() == "1.3",
                        ErrorCode::kInvalid,
-                       "TRANSFER_ENGINE_HIXL_LOCAL_COMM_RES requires string version 1.3");
+                       "YR_TE_HIXL_LOCAL_COMM_RES requires string version 1.3");
     *localCommRes = config.dump();
     return Result::OK();
 }
@@ -117,7 +117,7 @@ Result ApplyExplicitRoute(const std::string &routePolicy, nlohmann::json *global
     if (!configuredDescriptors.empty()) {
         TE_CHECK_OR_RETURN(configuredDescriptors.size() == 1 && configuredDescriptors.front() == expectedDescriptor,
                            ErrorCode::kInvalid,
-                           "TRANSFER_ENGINE_HIXL_ROUTE conflicts with comm_resource_config.protocol_desc");
+                           "YR_TE_HIXL_ROUTE conflicts with comm_resource_config.protocol_desc");
     }
     (*globalResourceConfig)[K_PROTOCOL_DESC_KEY] = expectedDescriptor;
     return Result::OK();
@@ -151,7 +151,7 @@ Result ResolveHixlCsConfig(const HixlCsConfigInput &input, HixlCsConfig *config)
         ToLowerAscii(input.requestedMode.empty() ? K_DEFAULT_HIXL_CS_MODE : input.requestedMode);
     TE_CHECK_OR_RETURN(
         requestedMode == K_CS_MODE_AUTO || requestedMode == K_CS_MODE_ON || requestedMode == K_CS_MODE_OFF,
-        ErrorCode::kInvalid, "TRANSFER_ENGINE_HIXL_CS_MODE should be auto, on or off");
+        ErrorCode::kInvalid, "YR_TE_HIXL_CS_MODE should be auto, on or off");
     TE_CHECK_OR_RETURN(input.routePolicy == "auto" || input.routePolicy == "hccs" || input.routePolicy == "roce",
                        ErrorCode::kInvalid, "invalid HIXL route policy");
 
@@ -169,7 +169,7 @@ Result ResolveHixlCsConfig(const HixlCsConfigInput &input, HixlCsConfig *config)
     if (!enableCs) {
         TE_CHECK_OR_RETURN(input.localCommRes.empty(),
                            requestedMode == K_CS_MODE_OFF ? ErrorCode::kInvalid : ErrorCode::kNotSupported,
-                           "TRANSFER_ENGINE_HIXL_LOCAL_COMM_RES requires HIXL client-server mode");
+                           "YR_TE_HIXL_LOCAL_COMM_RES requires HIXL client-server mode");
         TE_CHECK_OR_RETURN(configuredDescriptors.empty(),
                            requestedMode == K_CS_MODE_OFF ? ErrorCode::kInvalid : ErrorCode::kNotSupported,
                            "comm_resource_config.protocol_desc requires HIXL client-server mode");
@@ -196,7 +196,7 @@ Result ResolveHixlAutoConnectConfig(const std::string &requestedMode, bool capab
     TE_CHECK_OR_RETURN(mode == K_AUTO_CONNECT_AUTO || mode == K_AUTO_CONNECT_ON || mode == K_AUTO_CONNECT_OFF ||
                            mode == "1" || mode == "0",
                        ErrorCode::kInvalid,
-                       "TRANSFER_ENGINE_HIXL_AUTO_CONNECT should be auto, on or off");
+                       "YR_TE_HIXL_AUTO_CONNECT should be auto, on or off");
     const bool explicitlyEnabled = mode == K_AUTO_CONNECT_ON || mode == "1";
     if (explicitlyEnabled) {
         TE_CHECK_OR_RETURN(capabilityAvailable, ErrorCode::kNotSupported,

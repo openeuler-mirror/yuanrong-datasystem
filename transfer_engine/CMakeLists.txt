@@ -207,8 +207,8 @@ if (TRANSFER_ENGINE_ENABLE_HIXL)
         message(WARNING
             "cann_hixl version ${TRANSFER_ENGINE_HIXL_VERSION} is lower than the supported minimum "
             "${TRANSFER_ENGINE_HIXL_MIN_VERSION}; enabling the legacy compatibility path only. "
-            "Set TRANSFER_ENGINE_HIXL_CS_MODE=off. Use TRANSFER_ENGINE_HIXL_ROUTE=auto, or set "
-            "TRANSFER_ENGINE_HIXL_ROUTE=roce together with HCCL_INTRA_ROCE_ENABLE=1.")
+            "Set YR_TE_HIXL_CS_MODE=off. Use YR_TE_HIXL_ROUTE=auto, or set "
+            "YR_TE_HIXL_ROUTE=roce together with HCCL_INTRA_ROCE_ENABLE=1.")
     elseif (TRANSFER_ENGINE_HIXL_VERSION)
         message(WARNING
             "cann_hixl version ${TRANSFER_ENGINE_HIXL_VERSION} is lower than "
@@ -329,6 +329,11 @@ if (TRANSFER_ENGINE_BUILD_TESTS)
     target_link_libraries(transfer_engine_core_modules_llt PRIVATE transfer_engine GTest::gtest GTest::gtest_main)
     add_test(NAME transfer_engine_core_modules_llt COMMAND transfer_engine_core_modules_llt)
 
+    add_executable(transfer_engine_initialization_llt tests/llt/transfer_engine_initialization_llt_test.cpp)
+    target_include_directories(transfer_engine_initialization_llt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(transfer_engine_initialization_llt PRIVATE transfer_engine GTest::gtest GTest::gtest_main)
+    add_test(NAME transfer_engine_initialization_llt COMMAND transfer_engine_initialization_llt)
+
     if (TRANSFER_ENGINE_ENABLE_HIXL)
         add_executable(transfer_engine_hixl_config_ut tests/llt/hixl_config_llt_test.cpp)
         target_include_directories(transfer_engine_hixl_config_ut PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -345,7 +350,7 @@ if (TRANSFER_ENGINE_BUILD_TESTS)
     )
     set_tests_properties(transfer_engine_logging_stderr_llt PROPERTIES
         ENVIRONMENT
-            "TRANSFER_ENGINE_LOG_LEVEL=WARNING;TRANSFER_ENGINE_VLOG_LEVEL=0;TRANSFER_ENGINE_LOG_TO_STDERR=1"
+            "YR_TE_LOG_LEVEL=WARNING;YR_TE_VLOG_LEVEL=0;YR_TE_LOG_TO_STDERR=1"
     )
     add_test(
         NAME transfer_engine_logging_file_llt
@@ -353,7 +358,7 @@ if (TRANSFER_ENGINE_BUILD_TESTS)
     )
     set_tests_properties(transfer_engine_logging_file_llt PROPERTIES
         ENVIRONMENT
-            "TRANSFER_ENGINE_LOG_LEVEL=INFO;TRANSFER_ENGINE_VLOG_LEVEL=0;TRANSFER_ENGINE_VMODULE=logging_llt_test=1;TRANSFER_ENGINE_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/transfer_engine_log_test;TRANSFER_ENGINE_LOG_TO_STDERR=0;TRANSFER_ENGINE_ALSO_LOG_TO_STDERR=0;TRANSFER_ENGINE_LOG_TO_STDOUT=0;TRANSFER_ENGINE_STDERR_THRESHOLD=2;TRANSFER_ENGINE_LOG_BUFFER_LEVEL=0;TRANSFER_ENGINE_LOG_BUFFER_SECONDS=0;TRANSFER_ENGINE_MAX_LOG_SIZE_MB=1800;TRANSFER_ENGINE_LOG_FILE_MODE=0664;TRANSFER_ENGINE_TIMESTAMP_IN_LOG_FILE_NAME=1;TRANSFER_ENGINE_LOG_FILE_HEADER=1;TRANSFER_ENGINE_LOG_PREFIX=1;TRANSFER_ENGINE_LOG_YEAR_IN_PREFIX=1;TRANSFER_ENGINE_LOG_UTC_TIME=0"
+            "YR_TE_LOG_LEVEL=INFO;YR_TE_VLOG_LEVEL=0;YR_TE_VMODULE=logging_llt_test=1;YR_TE_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/transfer_engine_log_test;YR_TE_LOG_TO_STDERR=0;YR_TE_ALSO_LOG_TO_STDERR=0;YR_TE_LOG_TO_STDOUT=0;YR_TE_STDERR_THRESHOLD=2;YR_TE_LOG_BUFFER_LEVEL=0;YR_TE_LOG_BUFFER_SECONDS=0;YR_TE_MAX_LOG_SIZE_MB=1800;YR_TE_LOG_FILE_MODE=0664;YR_TE_TIMESTAMP_IN_LOG_FILE_NAME=1;YR_TE_LOG_FILE_HEADER=1;YR_TE_LOG_PREFIX=1;YR_TE_LOG_YEAR_IN_PREFIX=1;YR_TE_LOG_UTC_TIME=0"
     )
 
     if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../python/yr/datasystem/__init__.py")

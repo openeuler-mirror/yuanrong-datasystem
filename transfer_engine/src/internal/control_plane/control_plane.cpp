@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -82,6 +83,28 @@ SocketControlServer::~SocketControlServer()
     Stop();
 }
 
+Result SocketControlServer::Bind(const std::string &host, uint16_t port, uint16_t *boundPort,
+                                 ListenSocketFailureLogLevel failureLogLevel)
+{
+    TE_CHECK_PTR_OR_RETURN(boundPort);
+    TE_CHECK_OR_RETURN(!running_, ErrorCode::kInvalid, "control server already running");
+    TE_CHECK_OR_RETURN(listenFd_ < 0, ErrorCode::kInvalid, "control server already bound");
+
+    int fd = -1;
+    TE_RETURN_IF_ERROR(CreateListenSocket(host, port, K_LISTEN_SOCKET_BACKLOG, fd, failureLogLevel));
+    uint16_t actualPort = 0;
+    Result portRc = GetSocketLocalPort(fd, &actualPort);
+    if (portRc.IsError()) {
+        ::close(fd);
+        return portRc;
+    }
+    listenFd_ = fd;
+    boundHost_ = host;
+    boundPort_ = actualPort;
+    *boundPort = actualPort;
+    return Result::OK();
+}
+
 Result SocketControlServer::Start(const std::string &host, uint16_t port, std::shared_ptr<ITransferControlService> service,
                                   int32_t workerThreads)
 {
@@ -89,27 +112,37 @@ Result SocketControlServer::Start(const std::string &host, uint16_t port, std::s
     TE_CHECK_OR_RETURN(service != nullptr, ErrorCode::kInvalid, "service is null");
     TE_CHECK_OR_RETURN(workerThreads > 0, ErrorCode::kInvalid, "worker_threads should be positive");
 
-    int fd = -1;
-    TE_RETURN_IF_ERROR(CreateListenSocket(host, port, K_LISTEN_SOCKET_BACKLOG, fd));
+    if (listenFd_ < 0) {
+        uint16_t boundPort = 0;
+        TE_RETURN_IF_ERROR(Bind(host, port, &boundPort));
+    } else {
+        TE_CHECK_OR_RETURN(host == boundHost_ && port == boundPort_, ErrorCode::kInvalid,
+                           "control server endpoint differs from bound endpoint");
+    }
 
-    listenFd_ = fd;
     workerCount_ = workerThreads;
     service_ = std::move(service);
     running_ = true;
-    workerThreads_.reserve(static_cast<size_t>(workerCount_));
-    for (int32_t i = 0; i < workerCount_; ++i) {
-        workerThreads_.emplace_back([this]() { WorkerLoop(); });
+    try {
+        workerThreads_.reserve(static_cast<size_t>(workerCount_));
+        for (int32_t i = 0; i < workerCount_; ++i) {
+            workerThreads_.emplace_back([this]() { WorkerLoop(); });
+        }
+        acceptThread_ = std::thread([this]() { AcceptLoop(); });
+    } catch (const std::system_error &e) {
+        TE_LOG_ERROR << "control server thread start failed, reason=" << e.what();
+        Stop();
+        return TE_MAKE_STATUS(ErrorCode::kRuntimeError, "control server thread start failed");
     }
-    acceptThread_ = std::thread([this]() { AcceptLoop(); });
     TE_LOG_INFO << "control server started"
-              << ", host=" << host << ", port=" << port
+              << ", host=" << host << ", port=" << boundPort_
               << ", worker_threads=" << workerThreads;
     return Result::OK();
 }
 
 void SocketControlServer::Stop()
 {
-    if (!running_) {
+    if (!running_ && listenFd_ < 0) {
         return;
     }
     running_ = false;
@@ -119,6 +152,8 @@ void SocketControlServer::Stop()
         ::close(listenFd_);
         listenFd_ = -1;
     }
+    boundHost_.clear();
+    boundPort_ = 0;
 
     if (acceptThread_.joinable()) {
         acceptThread_.join();

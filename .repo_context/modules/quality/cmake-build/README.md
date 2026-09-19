@@ -227,7 +227,7 @@ Rules for updating baselines:
     HIXL link libraries; only the plugin target owns those link items. The
     transfer_engine Ascend backend uses CANN/HIXL `9.1.0+` as its fully supported baseline and is disabled during
     configure when HIXL is missing, lower than `8.5.2`, or has an unknown version. Detected `8.5.2` through `9.0.x`
-    versions retain a warning-backed legacy compatibility path that requires `TRANSFER_ENGINE_HIXL_CS_MODE=off`.
+    versions retain a warning-backed legacy compatibility path that requires `YR_TE_HIXL_CS_MODE=off`.
     HIXL `9.1.0+` independently enables the AutoConnect and CS runtime capability probes and option paths.
 - Good first files when a build regression appears:
   - `scripts/build_cmake.sh`

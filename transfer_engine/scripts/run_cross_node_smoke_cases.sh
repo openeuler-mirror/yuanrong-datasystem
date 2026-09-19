@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${TE_ROOT}/.." && pwd)"
 
-if [[ -n "${TRANSFER_ENGINE_CROSS_NODE_SMOKE_BIN:-}" ]]; then
-  BIN="${TRANSFER_ENGINE_CROSS_NODE_SMOKE_BIN}"
+if [[ -n "${YR_TE_CROSS_NODE_SMOKE_BIN:-}" ]]; then
+  BIN="${YR_TE_CROSS_NODE_SMOKE_BIN}"
 elif [[ -x "${TE_ROOT}/build/transfer_engine_cross_node_smoke" ]]; then
   BIN="${TE_ROOT}/build/transfer_engine_cross_node_smoke"
 else
@@ -52,7 +52,7 @@ if [[ ! -x "${BIN}" ]]; then
   echo "[ERROR] binary not found: ${BIN}" >&2
   echo "[INFO] build first with repository build.sh: bash build.sh -X on" >&2
   echo "[INFO] or standalone: cmake -S ${TE_ROOT} -B ${TE_ROOT}/build -DTRANSFER_ENGINE_ENABLE_HIXL=ON && cmake --build ${TE_ROOT}/build -j" >&2
-  echo "[INFO] override binary path with TRANSFER_ENGINE_CROSS_NODE_SMOKE_BIN=/path/to/transfer_engine_cross_node_smoke" >&2
+  echo "[INFO] override binary path with YR_TE_CROSS_NODE_SMOKE_BIN=/path/to/transfer_engine_cross_node_smoke" >&2
   exit 1
 fi
 

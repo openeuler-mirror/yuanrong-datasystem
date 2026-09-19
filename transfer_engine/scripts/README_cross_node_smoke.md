@@ -53,6 +53,7 @@ scripts/run_cross_node_smoke_cases.sh concurrent requester \
 - 每个子进程都会发一次 `BatchTransferSyncRead`。
 - `--remote-addrs` 支持逗号分隔：`a0,a1,a2`，传几个地址就做几项 batch。
 - `concurrent requester` 脚本默认启用 `--auto-verify-data`。
+- `--requester-count` 默认 1（不 fork 子进程）；`--requester-port-step`、`--requester-device-step` 默认均为 1。
 
 ## 4) TransferEngine 注册多个内存配置
 
