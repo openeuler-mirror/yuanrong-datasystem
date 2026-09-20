@@ -32,6 +32,7 @@ ds_cc_library(
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:thread",
         "//src/datasystem/common/util:uuid_generator",
+        "@com_github_apache_brpc//:brpc",
     ],
 )
 
@@ -40,6 +41,8 @@ ds_cc_library(
     srcs = ["topology_recovery_manager.cpp"],
     hdrs = ["topology_recovery_manager.h"],
     deps = [
+        "//src/datasystem/common/rpc:bthread_utils",
+        "//src/datasystem/common/util:locks",
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/common/ak_sk:hasher",
         "//src/datasystem/common/coordinator:coordinator_log",
@@ -49,6 +52,7 @@ ds_cc_library(
         "//src/datasystem/common/util:strings_util",
         "//src/datasystem/common/util:thread_pool",
         "//src/datasystem/common/util:uuid_generator",
+        "@com_github_apache_brpc//:brpc",
     ],
 )
 
@@ -59,6 +63,7 @@ ds_cc_library(
         "coordinator_service_impl.h",
     ],
     deps = [
+        "//src/datasystem/common/util:locks",
         ":coordinator_watch_dispatcher_impl",
         ":coordinator_topology_control_host",
         ":coordinator_topology_recovery_manager",
@@ -87,6 +92,7 @@ ds_cc_library(
         "//src/datasystem/server:common_server",
         "//src/datasystem/protos:coordinator_zmq_cc_proto",
         "//src/datasystem/protos:coordinator_brpc",
+        "@com_github_apache_brpc//:brpc",
     ],
 )
 

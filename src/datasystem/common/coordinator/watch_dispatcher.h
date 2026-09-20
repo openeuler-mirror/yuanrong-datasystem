@@ -22,7 +22,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -39,6 +38,7 @@
 #include "datasystem/common/coordinator/event_notify_executor.h"
 #include "datasystem/common/coordinator/watch_event.h"
 #include "datasystem/common/coordinator/watch_registry.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/utils/status.h"
 
@@ -48,7 +48,7 @@ struct WatcherChannel {
     std::string watcherAddr;
 
     // Protects queue, backpressureLimit, snapshotRevision, needReWatch, dispatchQueued and retryDelayMs.
-    std::mutex mutex;
+    bthread::Mutex mutex;
     std::deque<std::shared_ptr<WatchEvent>> queue;
     size_t backpressureLimit = 1024;
 
@@ -251,9 +251,9 @@ private:
     void RemoveRewatchRequiredWatcher(int64_t watchId, const std::string &watcherAddr);
 
     // The mutex protects pendingQueue_.
-    std::mutex pendingMutex_;
+    bthread::Mutex pendingMutex_;
     std::deque<std::shared_ptr<WatchEvent>> pendingQueue_;
-    std::condition_variable pendingEmptyCv_;
+    bthread::ConditionVariable pendingEmptyCv_;
     Thread fanOutThread_;
 
     std::atomic<uint64_t> droppedPendingEvents_{ 0 };
@@ -262,7 +262,7 @@ private:
     std::atomic<bool> pendingOverflow_{ false };
 
     // The mutex protects channels_ and watchIdsByWatcher_.
-    std::shared_mutex channelsMutex_;
+    SharedMutex channelsMutex_;
     std::unordered_map<int64_t, std::shared_ptr<WatcherChannel>> channels_;
     std::unordered_map<std::string, std::unordered_set<int64_t>> watchIdsByWatcher_;
 

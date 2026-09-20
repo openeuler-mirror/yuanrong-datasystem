@@ -82,6 +82,7 @@ ds_cc_library(
     ],
     copts=["-std=c++17"],
     deps=[
+        "//src/datasystem/common/util:locks",
         ":coordinator_discovery_cache",
         ":coordinator_leader_router",
         "//include/datasystem/utils:utils_headers",

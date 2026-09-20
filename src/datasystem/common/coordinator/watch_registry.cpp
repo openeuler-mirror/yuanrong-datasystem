@@ -54,7 +54,7 @@ int64_t WatchRegistry::Register(const std::string &key, const std::string &range
 Status WatchRegistry::Register(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
                                const std::string &registrationId, int64_t &watchId, bool &created)
 {
-    std::unique_lock<std::shared_mutex> lock(mutex_);
+    std::unique_lock<SharedMutex> lock(mutex_);
     if (!registrationId.empty()) {
         auto registered = watchIdsByRegistrationId_.find(registrationId);
         if (registered != watchIdsByRegistrationId_.end()) {
@@ -106,7 +106,7 @@ Status WatchRegistry::Register(const std::string &key, const std::string &rangeE
 
 Status WatchRegistry::Cancel(int64_t watchId, const std::string &watcherAddr)
 {
-    std::unique_lock<std::shared_mutex> lock(mutex_);
+    std::unique_lock<SharedMutex> lock(mutex_);
     auto it = watchers_.find(watchId);
     if (it == watchers_.end()) {
         return Status(StatusCode::K_NOT_FOUND, "watch not found");
@@ -147,7 +147,7 @@ Status WatchRegistry::Cancel(int64_t watchId, const std::string &watcherAddr)
 
 void WatchRegistry::MatchWatchers(const std::string &key, std::vector<std::shared_ptr<WatcherEntry>> &matched)
 {
-    std::shared_lock<std::shared_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     auto exact = exactWatchIdsByKey_.find(key);
     if (exact != exactWatchIdsByKey_.end()) {
         for (auto watchId : exact->second) {
@@ -172,7 +172,7 @@ void WatchRegistry::MatchWatchers(const std::string &key, std::vector<std::share
 
 bool WatchRegistry::IsWatchInScopes(int64_t watchId, const std::vector<std::string> &tableScopes) const
 {
-    std::shared_lock<std::shared_mutex> lock(mutex_);
+    std::shared_lock<SharedMutex> lock(mutex_);
     auto scope = watchScopesById_.find(watchId);
     if (scope == watchScopesById_.end()) {
         return false;

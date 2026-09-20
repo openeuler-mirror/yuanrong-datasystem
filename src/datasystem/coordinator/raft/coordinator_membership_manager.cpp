@@ -138,7 +138,7 @@ CoordinatorMembershipManager::~CoordinatorMembershipManager() noexcept
 
 void CoordinatorMembershipManager::NotifyPeerMissingRaftData(const std::string &peer)
 {
-    std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
     if (state_ == LifecycleState::RUNNING && pendingMissingDataPeers_.size() < options_.expectedMemberCount
         && pendingMissingDataPeers_.emplace(peer).second) {
         lifecycleCv_.notify_all();
@@ -147,7 +147,7 @@ void CoordinatorMembershipManager::NotifyPeerMissingRaftData(const std::string &
 
 Status CoordinatorMembershipManager::Start()
 {
-    std::unique_lock<std::mutex> lock(lifecycleMutex_);
+    std::unique_lock<bthread::Mutex> lock(lifecycleMutex_);
     if (state_ != LifecycleState::CONSTRUCTED) {
         return Status(K_INVALID, "Coordinator membership manager can only be started once");
     }
@@ -197,7 +197,7 @@ Status CoordinatorMembershipManager::Start()
 Status CoordinatorMembershipManager::Shutdown()
 {
     {
-        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
         if (reconciliationThreadId_ == std::this_thread::get_id()) {
             return Status(K_INVALID, "Coordinator membership manager Shutdown cannot run on its reconciliation thread");
         }
@@ -206,9 +206,11 @@ Status CoordinatorMembershipManager::Shutdown()
     std::unique_ptr<Thread> threadToJoin;
     bool stopConstructedManager = false;
     {
-        std::unique_lock<std::mutex> lock(lifecycleMutex_);
+        std::unique_lock<bthread::Mutex> lock(lifecycleMutex_);
         if (state_ == LifecycleState::STOPPING) {
-            lifecycleCv_.wait(lock, [this] { return state_ == LifecycleState::STOPPED; });
+            while (state_ != LifecycleState::STOPPED) {
+                lifecycleCv_.wait(lock);
+            }
             return Status::OK();
         }
         if (state_ == LifecycleState::STOPPED) {
@@ -237,7 +239,7 @@ Status CoordinatorMembershipManager::Shutdown()
     }
 
     {
-        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
         state_ = LifecycleState::STOPPED;
         reconciliationThreadId_ = {};
     }
@@ -250,7 +252,7 @@ void CoordinatorMembershipManager::Run()
     TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId_, true);
     while (true) {
         {
-            std::lock_guard<std::mutex> lock(lifecycleMutex_);
+            std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
             if (state_ != LifecycleState::RUNNING) {
                 return;
             }
@@ -268,11 +270,12 @@ void CoordinatorMembershipManager::Run()
             LOG(ERROR) << kReconcileExceptionMarker;
         }
 
-        std::unique_lock<std::mutex> lock(lifecycleMutex_);
+        std::unique_lock<bthread::Mutex> lock(lifecycleMutex_);
         if (state_ != LifecycleState::RUNNING) {
             return;
         }
-        lifecycleCv_.wait_for(lock, options_.healthCheckInterval);
+        lifecycleCv_.wait_for(
+            lock, std::chrono::duration_cast<std::chrono::microseconds>(options_.healthCheckInterval).count());
     }
 }
 
@@ -301,7 +304,7 @@ Status CoordinatorMembershipManager::ReconcileOnce()
         const std::set<std::string> committedPeers(status.committedPeers.begin(), status.committedPeers.end());
         std::set<std::string> pendingPeers;
         {
-            std::lock_guard<std::mutex> lock(lifecycleMutex_);
+            std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
             pendingPeers = pendingMissingDataPeers_;
         }
         for (const auto &peer : pendingPeers) {
@@ -316,7 +319,7 @@ Status CoordinatorMembershipManager::ReconcileOnce()
                                     MutationKind::REMOVE_MISSING_DATA, now);
             }
             {
-                std::lock_guard<std::mutex> lock(lifecycleMutex_);
+                std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
                 pendingMissingDataPeers_.erase(peer);
             }
             break;
@@ -475,7 +478,7 @@ void CoordinatorMembershipManager::CleanupPolicyState(const CoordinatorRaftMembe
         }
     }
     if (committedPeers.size() >= options_.expectedMemberCount) {
-        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
         for (auto it = pendingMissingDataPeers_.begin(); it != pendingMissingDataPeers_.end();) {
             it = committedPeers.count(*it) == 0 ? pendingMissingDataPeers_.erase(it) : std::next(it);
         }
@@ -492,7 +495,7 @@ bool CoordinatorMembershipManager::HasKnownQuorum(const CoordinatorRaftMembershi
 
 bool CoordinatorMembershipManager::TryAdmitDiscovery()
 {
-    std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
     return state_ == LifecycleState::CONSTRUCTED || state_ == LifecycleState::RUNNING;
 }
 
@@ -549,7 +552,7 @@ Status CoordinatorMembershipManager::SelectCandidate(const CoordinatorRaftMember
     if (dependencies_.probePeerMetadata && status.committedPeers.size() < options_.expectedMemberCount) {
         std::set<std::string> pendingPeers;
         {
-            std::lock_guard<std::mutex> lock(lifecycleMutex_);
+            std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
             pendingPeers = pendingMissingDataPeers_;
         }
         for (const auto &peer : pendingPeers) {
@@ -564,7 +567,7 @@ Status CoordinatorMembershipManager::SelectCandidate(const CoordinatorRaftMember
                 return Status::OK();
             }
             {
-                std::lock_guard<std::mutex> lock(lifecycleMutex_);
+                std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
                 pendingMissingDataPeers_.erase(peer);
             }
             break;
@@ -725,7 +728,7 @@ Status CoordinatorMembershipManager::SubmitAdd(const SubmissionSnapshot &expecte
                                                const std::string &failedPeer, MutationKind kind, TimePoint now)
 {
     RETURN_IF_NOT_OK(RevalidateSubmissionPolicy(expected, kind, candidate, failedPeer, now));
-    std::unique_lock<std::mutex> lifecycleLock(lifecycleMutex_);
+    std::unique_lock<bthread::Mutex> lifecycleLock(lifecycleMutex_);
     if (state_ == LifecycleState::STOPPING || state_ == LifecycleState::STOPPED) {
         return Status::OK();
     }
@@ -774,7 +777,7 @@ Status CoordinatorMembershipManager::SubmitRemove(const SubmissionSnapshot &expe
                                                   const std::string &failedPeer, MutationKind kind, TimePoint now)
 {
     RETURN_IF_NOT_OK(RevalidateSubmissionPolicy(expected, kind, targetPeer, failedPeer, now));
-    std::unique_lock<std::mutex> lifecycleLock(lifecycleMutex_);
+    std::unique_lock<bthread::Mutex> lifecycleLock(lifecycleMutex_);
     if (state_ == LifecycleState::STOPPING || state_ == LifecycleState::STOPPED
         || dependencies_.hasInFlightMembershipOperation()) {
         return Status::OK();

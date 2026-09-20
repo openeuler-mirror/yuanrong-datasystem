@@ -19,7 +19,6 @@
 #define DATASYSTEM_COORDINATOR_RAFT_COORDINATOR_MEMBERSHIP_MANAGER_H
 
 #include <chrono>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -31,6 +30,9 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#include <bthread/condition_variable.h>
+#include <bthread/mutex.h>
 
 #include "datasystem/coordinator/raft/coordinator_raft_types.h"
 #include "datasystem/utils/service_discovery.h"
@@ -135,8 +137,8 @@ private:
     std::shared_ptr<ICoordinatorDiscovery> discovery_;
     NowFunction now_;
     std::string traceId_;
-    std::mutex lifecycleMutex_;
-    std::condition_variable lifecycleCv_;
+    bthread::Mutex lifecycleMutex_;
+    bthread::ConditionVariable lifecycleCv_;
     LifecycleState state_{ LifecycleState::CONSTRUCTED };
     std::unique_ptr<Thread> thread_;
     std::set<std::string> pendingMissingDataPeers_;

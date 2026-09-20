@@ -15,7 +15,6 @@
 #ifndef DATASYSTEM_COORDINATOR_RAFT_COORDINATOR_RAFT_OPERATION_H
 #define DATASYSTEM_COORDINATOR_RAFT_COORDINATOR_RAFT_OPERATION_H
 
-#include <condition_variable>
 #include <cstddef>
 #include <exception>
 #include <functional>
@@ -23,6 +22,9 @@
 #include <mutex>
 #include <optional>
 #include <utility>
+
+#include <bthread/condition_variable.h>
+#include <bthread/mutex.h>
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/coordinator/raft/coordinator_raft_state_machine.h"
@@ -57,20 +59,22 @@ public:
 
     void StopAcceptingNewTokens()
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         acceptingNewTokens_ = false;
     }
 
     void WaitForDrain()
     {
         NotifyDrainEntryObserver();
-        std::unique_lock<std::mutex> lock(mutex_);
-        drained_.wait(lock, [this] { return inFlight_ == 0; });
+        std::unique_lock<bthread::Mutex> lock(mutex_);
+        while (inFlight_ != 0) {
+            drained_.wait(lock);
+        }
     }
 
     bool HasInFlight() const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         return inFlight_ != 0;
     }
 
@@ -82,7 +86,7 @@ private:
     {
         auto ownedObserver =
             observer ? std::make_shared<RaftOperationDrainEntryObserver>(std::move(observer)) : nullptr;
-        std::lock_guard<std::mutex> lock(observerMutex_);
+        std::lock_guard<bthread::Mutex> lock(observerMutex_);
         drainEntryObserver_ = std::move(ownedObserver);
     }
 
@@ -90,7 +94,7 @@ private:
     {
         std::shared_ptr<RaftOperationDrainEntryObserver> observer;
         {
-            std::lock_guard<std::mutex> lock(observerMutex_);
+            std::lock_guard<bthread::Mutex> lock(observerMutex_);
             observer = drainEntryObserver_;
         }
         if (observer != nullptr) {
@@ -106,7 +110,7 @@ private:
 
     bool TryAcquire()
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         if (!acceptingNewTokens_ || inFlight_ != 0) {
             return false;
         }
@@ -118,7 +122,7 @@ private:
     {
         bool drained = false;
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<bthread::Mutex> lock(mutex_);
             --inFlight_;
             drained = inFlight_ == 0;
         }
@@ -127,11 +131,11 @@ private:
         }
     }
 
-    mutable std::mutex mutex_;
-    std::condition_variable drained_;
+    mutable bthread::Mutex mutex_;
+    bthread::ConditionVariable drained_;
     bool acceptingNewTokens_{ true };
     size_t inFlight_{ 0 };
-    std::mutex observerMutex_;
+    bthread::Mutex observerMutex_;
     std::shared_ptr<RaftOperationDrainEntryObserver> drainEntryObserver_;
 };
 
@@ -190,7 +194,7 @@ public:
     {
         std::optional<PendingRaftOperationCallback> pendingCallback;
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<bthread::Mutex> lock(mutex_);
             submissionComplete_ = true;
             if (pendingResult_.has_value()) {
                 pendingCallback.emplace(
@@ -207,7 +211,7 @@ private:
     void DispatchOrDeferInternal(RaftOperationCallback callback, Status result)
     {
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<bthread::Mutex> lock(mutex_);
             if (resultReceived_) {
                 return;
             }
@@ -224,7 +228,7 @@ private:
         InvokeRaftOperationCallback(std::move(callback), std::move(result));
     }
 
-    std::mutex mutex_;
+    bthread::Mutex mutex_;
     bool submissionComplete_{ false };
     bool resultReceived_{ false };
     RaftOperationCallback callback_;

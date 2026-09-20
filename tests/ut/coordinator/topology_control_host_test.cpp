@@ -51,7 +51,7 @@ public:
 
     static void AddRunningEntry(TopologyControlHost &host, const std::string &clusterName)
     {
-        std::lock_guard<std::mutex> lock(host.mutex_);
+        std::lock_guard lock(host.mutex_);
         auto entry = std::make_unique<TopologyControlHost::ClusterEntry>(clusterName);
         entry->state = TopologyControlHost::EntryState::RUNNING;
         entry->clusterGeneration = host.nextClusterGeneration_++;
@@ -71,7 +71,7 @@ public:
 
     static uint64_t ClusterGeneration(TopologyControlHost &host, const std::string &clusterName)
     {
-        std::lock_guard<std::mutex> lock(host.mutex_);
+        std::lock_guard lock(host.mutex_);
         return host.entries_.at(clusterName)->clusterGeneration;
     }
 
@@ -80,7 +80,7 @@ public:
         TopologyControlHost::ClusterEntry *entry = nullptr;
         uint64_t mutationGeneration = 0;
         {
-            std::lock_guard<std::mutex> lock(host.mutex_);
+            std::lock_guard lock(host.mutex_);
             entry = host.entries_.at(clusterName).get();
             mutationGeneration = entry->mutationGeneration;
         }
@@ -89,7 +89,7 @@ public:
 
     static bool HasFailureReports(TopologyControlHost &host, const std::string &clusterName)
     {
-        std::lock_guard<std::mutex> lock(host.failureReportMutex_);
+        std::lock_guard lock(host.failureReportMutex_);
         return host.failureReportsByCluster_.count(clusterName) > 0;
     }
 };

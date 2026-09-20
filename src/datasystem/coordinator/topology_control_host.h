@@ -10,7 +10,6 @@
 #define DATASYSTEM_COORDINATOR_TOPOLOGY_CONTROL_HOST_H
 
 #include <chrono>
-#include <condition_variable>
 #include <deque>
 #include <cstddef>
 #include <cstdint>
@@ -20,6 +19,9 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#include <bthread/condition_variable.h>
+#include <bthread/mutex.h>
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/control/topology_controller_runtime.h"
@@ -181,7 +183,7 @@ private:
         bool emptyCheckPending{ false };
         bool releaseAfterStop{ false };
         bool activeFailureCommitInProgress{ false };
-        std::shared_ptr<std::mutex> failureReportMutex{ std::make_shared<std::mutex>() };
+        std::shared_ptr<bthread::Mutex> failureReportMutex{ std::make_shared<bthread::Mutex>() };
         uint64_t clusterGeneration{ 0 };
         uint64_t mutationGeneration{ 0 };
         std::deque<cluster::WorkerLivenessReport> pendingLivenessReports;
@@ -225,7 +227,7 @@ private:
     static bool ActiveFailureCandidatesContainExpected(const std::vector<cluster::MemberIdentity> &candidates,
                                                        const std::vector<cluster::MemberIdentity> &expected);
 
-    std::shared_ptr<std::mutex> GetFailureReportClusterMutex(const std::string &clusterName);
+    std::shared_ptr<bthread::Mutex> GetFailureReportClusterMutex(const std::string &clusterName);
 
     bool UpdateFailureReports(const std::string &clusterName, const cluster::MembershipRecord &reporter,
                               const std::vector<cluster::MembershipRecord> &targets,
@@ -378,14 +380,14 @@ private:
 
     // Protects lifecycle flags, entries_, counters and mutable admission fields. Runtime/Store calls and thread joins
     // are forbidden while this mutex is held. Runtime ownership is changed only by the Host thread or after it joins.
-    mutable std::mutex mutex_;
-    std::condition_variable wakeCv_;
+    mutable bthread::Mutex mutex_;
+    bthread::ConditionVariable wakeCv_;
     std::unordered_map<std::string, std::unique_ptr<ClusterEntry>> entries_;
     uint64_t nextClusterGeneration_{ 1 };
     uint64_t nextRuntimeGeneration_{ 1 };
     std::unordered_map<std::string, ClusterFailureReports> failureReportsByCluster_;
     // The map lock is held only for report access; each ClusterEntry serializes its own validation and commit.
-    std::mutex failureReportMutex_;
+    bthread::Mutex failureReportMutex_;
     size_t reconcileCursor_{ 0 };
     Thread thread_;
     bool started_{ false };

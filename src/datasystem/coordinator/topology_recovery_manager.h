@@ -6,7 +6,6 @@
 #define DATASYSTEM_COORDINATOR_TOPOLOGY_RECOVERY_MANAGER_H
 
 #include <chrono>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -17,7 +16,11 @@
 #include <string>
 #include <unordered_map>
 
+#include <bthread/condition_variable.h>
+#include <bthread/mutex.h>
+
 #include "datasystem/cluster/membership/membership_types.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -202,7 +205,7 @@ public:
      */
     void EndLeaderRound(const TopologyRecoveryRoundIdentity &identity);
 
-    void SetLeaderRoundFence(std::shared_mutex *fenceMutex,
+    void SetLeaderRoundFence(SharedMutex *fenceMutex,
                              std::function<bool(const TopologyRecoveryRoundIdentity &)> isCurrent);
 
     /**
@@ -480,8 +483,8 @@ private:
     std::unique_ptr<ThreadPool> delayedReconcilePool_;
     bool delayedReconcileStarted_{ false };
     // Protects lifecycle flags, work/byte counters and contexts_. No codec or Store operation is allowed while held.
-    mutable std::mutex mutex_;
-    std::condition_variable shutdownCv_;
+    mutable bthread::Mutex mutex_;
+    bthread::ConditionVariable shutdownCv_;
     bool stopping_{ false };
     bool shutdownComplete_{ false };
     size_t pendingRecoveryWork_{ 0 };
@@ -490,7 +493,7 @@ private:
     uint64_t nextContextGeneration_{ 1 };
     std::optional<TopologyRecoveryRound> activeRound_;
     // Owned by CoordinatorServiceImpl; serializes a Store installation with leader-stop revocation.
-    std::shared_mutex *leaderRoundFenceMutex_{ nullptr };
+    SharedMutex *leaderRoundFenceMutex_{ nullptr };
     std::function<bool(const TopologyRecoveryRoundIdentity &)> isLeaderRoundCurrent_;
     std::unordered_map<std::string, std::unique_ptr<ClusterRecoveryContext>> contexts_;
 };
