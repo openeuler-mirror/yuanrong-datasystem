@@ -299,36 +299,37 @@ Worker 继续使用现有 `-p/--prefix`，可重复传多个前缀或完整 Pod 
 `--file-pattern` 示例适用于 Worker 和 Client：`'*access*.log'`、`'*INFO*.log'`、`'*operation*.log'`、`'*metrics*.log'`、`'*request*.log'`、`'*resource*.log'`。例如 `'*resource*.log'` 同时覆盖 `kv_resource.log`、`resource.log`、`resource_monitor.log`。筛选收集明确排除 `env` 和 `procmon.py`，即使传入 `--file-pattern '*'` 也不收集；原有全量日志匹配规则不变。
 
 
-### collect 的传输压缩与本地解包
+### Worker collect 指定远端日志目录
 
-Worker 和 Client 均支持 `--compress/--no-compress`、`--extract/--no-extract`。不传这些参数时默认 tar 打包但不 gzip 压缩（一次 kubectl exec 传全 Pod 文件，本地解包）；显式 `--compress` 加 gzip，`--no-compress` 不加 gzip。筛选收集默认 gzip 传输并自动解包。显式使用任一压缩/解包参数时，未指定的另一项默认为启用。
+Worker 支持 `--log-dir DIR`，对所有选中 Pod 生效，普通收集和筛选收集均优先使用该目录。不传时保留原逻辑：从 `--remote-config` 指定的远端配置读取 `log_dir`。
 
 ```bash
-# 压缩传输，收回后保留归档，不解包
-python3 deploy_worker.py collect -p worker- --compress --no-extract -o worker-archives
-python3 deploy_client.py collect aaa/deploy.json aaa/config.json -p client- --compress --no-extract -o client-archives
-
-# 压缩传输，收回后解包（不另外保留传输归档）
-python3 deploy_worker.py collect -p worker- --compress --extract -o worker-logs
-
-# 不使用 gzip 压缩，收回后解包（默认行为，--no-compress 可省略）
-python3 deploy_client.py collect aaa/deploy.json aaa/config.json --no-compress -o client-logs
-
-# 可与已有日志筛选组合
-python3 deploy_worker.py collect -p worker- --file-pattern '*access*.log' --keyword URMA_PERF --no-compress --no-extract -o access-archives
+python3 deploy_worker.py collect -p worker- --log-dir /data/worker-logs -o collected-worker
+python3 deploy_worker.py collect -p worker- --log-dir /data/worker-logs --file-pattern '*access*.log' -o collected-access
 ```
 
-| 选项组合 | 本地结果 |
-| --- | --- |
-| （默认，不传） | tar 传输不 gzip，本地解包 |
-| `--compress --extract` | 解包后的日志文件（gzip 传输） |
-| `--compress --no-extract` | `.tar.gz` 归档 |
-| `--no-compress --extract` | 解包后的日志文件，tar 传输不 gzip |
-| `--no-compress --no-extract` | 未压缩的 `.tar` 归档 |
+此参数只覆盖日志来源，不修改远端配置；`worker_config.json` 仍会收集，配置读取失败仍报告失败。`--remote-dir` 继续指定 `stdout.log` 所在目录，`-o` 指定本地输出目录。
 
-不解包时，Worker 每个 Pod 目录保存 `logs.tar.gz`（或 `logs.tar`）；Client 全量收集分别保存 `output.tar.gz`、`sdk.tar.gz`，筛选收集将两个来源放入一个 `logs.tar.gz`，未压缩时后缀均为 `.tar`。Worker 全量归档保留远端文件路径（无开头 `/`），自动解包仍按原有规则取文件名；Client 全量归档保留对应 output/SDK 根目录内的相对路径，筛选归档保留来源子目录。
+### collect 的传输压缩与本地解包
 
-这些参数控制传输归档，不改变源日志，也不改变 `--uncompressed-only` 对源文件的筛选。原有 `.log.gz` 文件不会因 `--extract` 自动展开；该参数只解包收集生成的外层归档。Client 的 deploy/config 文件及 Worker 的 worker_config.json 仍按现有规则单独归档，不放进日志压缩包。
+collect 使用各传输路径的固定默认行为，不提供压缩或解包开关：
+
+| 收集路径 | 传输方式 | 本地结果 |
+| --- | --- | --- |
+| Worker / Client 普通 Kubernetes 收集 | tar 打包，不做 gzip 压缩 | 自动解包 |
+| Client 普通 SSH 收集 | 远端 tar.gz 打包，通过 SCP 下载 | 自动解包并清理传输临时包 |
+| Client 普通本机收集 | 直接复制 | 原始文件 |
+| Worker / Client 筛选收集 | gzip 压缩传输 | 自动解包 |
+
+筛选收集指使用 `--file-pattern`、`--keyword` 或 `--uncompressed-only`；仅筛选 Pod、实例或宿主机不会改变传输方式。`--uncompressed-only` 只排除源文件中的压缩文件，不禁用传输压缩。原有 `.log.gz` 文件不会因外层归档解包而自动展开。
+
+```bash
+python3 deploy_worker.py collect -p worker- -o worker-logs
+python3 deploy_client.py collect aaa/deploy.json aaa/config.json -p client- -o client-logs
+python3 deploy_worker.py collect -p worker- --file-pattern '*access*.log' --keyword URMA_PERF -o access-logs
+```
+
+Client 的 deploy/config 文件及 Worker 的 worker_config.json 仍按现有规则单独保存。日志范围、summary、并发、失败处理和清理行为保持不变。
 
 #### 按宿主机 IP 收集或排除
 
@@ -350,4 +351,4 @@ python3 deploy_client.py collect aaa/deploy.json aaa/config.json -p client- --ho
 
 启用后先按宿主机 IP 筛选，再按 `-p/--prefix`，最后按实例 ID（Client）和 count/offset 分批。Kubernetes 使用 API 返回的当前 HostIP；Client 的 SSH/本地节点使用配置中的 host_ip 或 host IP。无法确定目标宿主机 IP 时输出包含目标和 namespace 的警告并跳过，继续收集其他匹配目标；不使用配置中的旧 HostIP 代替 Kubernetes 当前值。筛选后无目标时返回失败；查询 Kubernetes API 失败仍终止操作。被排除的目标不执行 summary、远程配置读取或日志传输；Client 仍只从 deploy.json 的实例中选择。未配置筛选参数时保持原有行为。
 
-显式压缩/解包模式下，全量收集需要目标环境提供 tar（`--compress` 模式还需 tar 支持 gzip），筛选收集使用目标 Python 3。下载失败不回退到其他传输模式，也不会覆盖已有的完整归档；每个归档通过临时文件完成后原子替换。建议每次使用新的 `-o`，避免此前解包的日志或其他模式的归档混入当前结果。大集群仍可用 `--max-workers` 控制并发，默认并发规则不变。
+普通远端收集需要目标环境提供 tar（SSH 路径还需 gzip），筛选收集使用目标 Python 3。建议每次使用新的 `-o`，避免此前收集的文件混入当前结果。大集群仍可用 `--max-workers` 控制并发，默认并发规则不变。

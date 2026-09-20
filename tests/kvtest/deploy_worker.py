@@ -337,7 +337,9 @@ def cmd_collect(args, pods):
     def collect(pod):
         config_ok = collect_worker_config(args, pod)
         try:
-            log_dir, _ = read_remote_log_dir(args.namespace, [pod], args.remote_config, args.timeout)
+            log_dir = getattr(args, 'log_dir', None)
+            if log_dir is None:
+                log_dir, _ = read_remote_log_dir(args.namespace, [pod], args.remote_config, args.timeout)
             if not log_dir:
                 raise ValueError('log_dir not found for ' + pod['name'])
             sources = [['logs', log_dir, ['*.log', '*.log.*', '*.txt', 'resource_monitor.csv']],
@@ -534,6 +536,8 @@ def main():
     parser_collect = subparsers.add_parser('collect', parents=[parent_parser],
                                            help='Collect worker logs from pods')
     add_collect_filters(parser_collect)
+    parser_collect.add_argument('--log-dir', default=None,
+                                help='Remote worker log directory; defaults to log_dir in remote config')
     parser_collect.add_argument('--remote-config', default='/tmp/worker.config',
                                 help='Config path inside pod (default: /tmp/worker.config)')
     parser_collect.add_argument('-o', '--output', default='collected_worker_logs',
