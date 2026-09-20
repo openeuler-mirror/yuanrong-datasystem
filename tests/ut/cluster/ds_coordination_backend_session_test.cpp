@@ -57,6 +57,7 @@ public:
         std::string key;
         std::string rangeEnd;
         int64_t watchId;
+        std::string registrationId;
     };
 
     struct CancelCall {
@@ -180,7 +181,7 @@ public:
         return status;
     }
 
-    Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &, const std::string &,
+    Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &, const std::string &registrationId,
                       int64_t &watchId, std::vector<KeyValueEntry> &initialKvs, int32_t,
                       std::string *coordinatorId, bool skipInitialKvs = false) override
     {
@@ -195,7 +196,7 @@ public:
                 step = watchSteps_[nextWatchStep_++];
             }
             watchId = nextWatchId_++;
-            watchCalls_.push_back({ key, rangeEnd, watchId });
+            watchCalls_.push_back({ key, rangeEnd, watchId, registrationId });
             hook = beforeWatchReturn_;
             if (step.status.IsOk()) {
                 observedCoordinatorId_ = step.coordinatorId;
@@ -768,6 +769,22 @@ TEST(DsCoordinationBackendSessionTest, CrossCoordinatorBatchRollsBackAndPreserve
     EXPECT_EQ(newGeneration->watchIds, (std::vector<int64_t>{ 4 }));
 }
 
+TEST(DsCoordinationBackendSessionTest, WatchRegistrationRetriesTransientFailures)
+{
+    DeterministicCoordinatorProxy proxy;
+    for (auto code : { K_RPC_DEADLINE_EXCEEDED, K_RPC_UNAVAILABLE, K_NOT_READY, K_RPC_PEER_DEAD, K_TRY_AGAIN }) {
+        proxy.AddWatchStep(Status(code, "transient registration failure"), COORDINATOR_A);
+    }
+    AddSuccessfulBatch(proxy, COORDINATOR_A);
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.WatchEvents(TwoWatchPlan()).IsOk());
+    ASSERT_EQ(proxy.WatchCalls().size(), 7UL);
+    EXPECT_EQ(proxy.WatchCalls().front().registrationId, proxy.WatchCalls()[5].registrationId);
+    EXPECT_TRUE(proxy.CancelCalls().empty());
+    EXPECT_TRUE(backend.OwnsWatchIdentity(COORDINATOR_A, 6));
+    EXPECT_TRUE(backend.OwnsWatchIdentity(COORDINATOR_A, 7));
+}
+
 TEST(DsCoordinationBackendSessionTest, PartialRegistrationFailureRollsBackAndPreservesOldBatch)
 {
     DeterministicCoordinatorProxy proxy;
@@ -775,9 +792,9 @@ TEST(DsCoordinationBackendSessionTest, PartialRegistrationFailureRollsBackAndPre
     DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
     ASSERT_TRUE(backend.WatchEvents(TwoWatchPlan()).IsOk());
     proxy.AddWatchStep(Status::OK(), COORDINATOR_A);
-    proxy.AddWatchStep(Status(K_RPC_UNAVAILABLE, "injected registration failure"), COORDINATOR_A);
+    proxy.AddWatchStep(Status(K_INVALID, "injected registration failure"), COORDINATOR_A);
 
-    EXPECT_EQ(backend.WatchEvents(TwoWatchPlan()).GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_EQ(backend.WatchEvents(TwoWatchPlan()).GetCode(), K_INVALID);
 
     EXPECT_TRUE(backend.OwnsWatchIdentity(COORDINATOR_A, 1));
     EXPECT_TRUE(backend.OwnsWatchIdentity(COORDINATOR_A, 2));

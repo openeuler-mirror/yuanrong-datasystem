@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "ut/common.h"
+#include "datasystem/common/coordinator/coordinator_leader_router.h"
 #include "datasystem/common/coordinator/event_notify_executor.h"
 #include "datasystem/common/coordinator/coordinator_store.h"
 #include "datasystem/common/flags/common_flags.h"
@@ -1979,6 +1980,103 @@ TEST_F(CoordinatorStoreTest, RegistrationIdMakesAmbiguousWatchRetryIdempotent)
     registry_->MatchWatchers("/idempotent", matched);
     ASSERT_EQ(matched.size(), 1UL);
     EXPECT_EQ(matched.front()->watchId, firstWatchId);
+}
+
+TEST_F(CoordinatorStoreTest, RouterRecoversLostWatchResponseWithoutDuplicateRegistration)
+{
+    using Router = CoordinatorLeaderRouter;
+    Router::TimePoint now{};
+    Router router({
+        [] { return std::vector<std::string>{ "127.0.0.1:30001" }; },
+        [] {},
+        [](const Router::LeaderIdentity &) {},
+        [&] { return now; },
+        [&](std::chrono::milliseconds delay) { now += delay; },
+    });
+    Router::RpcResponseHeader header;
+    header.state = Router::RpcResponseHeader::State::SERVING;
+    header.coordinatorId = "0123456789abcdef";
+    header.leaderTerm = 1;
+    const auto deadline = now + std::chrono::seconds(3);
+    DS_ASSERT_OK(router.Execute(
+        [&](const HostPort &, std::chrono::milliseconds) { return Router::RpcResult{ Status::OK(), header }; },
+        deadline, std::chrono::milliseconds(100), std::chrono::milliseconds(1)));
+
+    int64_t firstWatchId = 0;
+    int64_t watchId = 0;
+    int64_t version = 0;
+    int64_t revision = 0;
+    std::vector<KeyValueEntry> initial;
+    size_t attempts = 0;
+    DS_ASSERT_OK(store_->Put("/lost-response", "v1", 0, 0, version, revision));
+    const auto status = router.Execute(
+        [&](const HostPort &, std::chrono::milliseconds timeout) -> Router::RpcResult {
+            ++attempts;
+            initial.clear();
+            auto rc = store_->WatchRange("/lost-response", "", "worker", "same-registration", watchId, initial);
+            if (rc.IsError()) {
+                return { rc, header };
+            }
+            if (attempts == 1) {
+                firstWatchId = watchId;
+                rc = store_->Put("/lost-response", "v2", 0, version, version, revision);
+                if (rc.IsError()) {
+                    return { rc, header };
+                }
+                now += timeout;
+                return { Status(K_RPC_DEADLINE_EXCEEDED, "lost registration response"), std::nullopt };
+            }
+            return { Status::OK(), header };
+        },
+        deadline, std::chrono::milliseconds(100), std::chrono::milliseconds(1), false);
+    DS_ASSERT_OK(status);
+    EXPECT_EQ(attempts, 2U);
+    EXPECT_EQ(watchId, firstWatchId);
+    ASSERT_EQ(initial.size(), 1U);
+    EXPECT_EQ(initial.front().value, "v2");
+    std::vector<std::shared_ptr<WatcherEntry>> matched;
+    registry_->MatchWatchers("/lost-response", matched);
+    ASSERT_EQ(matched.size(), 1U);
+    EXPECT_EQ(matched.front()->watchId, watchId);
+}
+
+TEST_F(CoordinatorStoreTest, LostConditionalPutResponseReturnsConflictWithoutRepeatingMutation)
+{
+    using Router = CoordinatorLeaderRouter;
+    Router::TimePoint now{};
+    Router router({
+        [] { return std::vector<std::string>{ "127.0.0.1:30001" }; },
+        [] {},
+        [](const Router::LeaderIdentity &) {},
+        [&] { return now; },
+        [&](std::chrono::milliseconds delay) { now += delay; },
+    });
+    Router::RpcResponseHeader header;
+    header.state = Router::RpcResponseHeader::State::SERVING;
+    header.coordinatorId = "0123456789abcdef";
+    header.leaderTerm = 1;
+    int64_t version = 0;
+    int64_t revision = 0;
+    DS_ASSERT_OK(store_->Put("/conditional-retry", "before", 0, COORDINATOR_KEY_NOT_EXISTS_VERSION, version, revision));
+    const auto expectedVersion = version;
+    size_t attempts = 0;
+    const auto status = router.Execute(
+        [&](const HostPort &, std::chrono::milliseconds timeout) -> Router::RpcResult {
+            ++attempts;
+            auto rc = store_->Put("/conditional-retry", "after", 0, expectedVersion, version, revision);
+            if (rc.IsError()) {
+                return { rc, header };
+            }
+            now += timeout;
+            return { Status(K_RPC_DEADLINE_EXCEEDED, "lost put response"), std::nullopt };
+        }, now + std::chrono::seconds(3), std::chrono::milliseconds(100), std::chrono::milliseconds(1));
+    EXPECT_EQ(status.GetCode(), K_INVALID);
+    EXPECT_EQ(attempts, 2U);
+    std::vector<KeyValueEntry> current;
+    DS_ASSERT_OK(store_->Range("/conditional-retry", "", current, revision));
+    ASSERT_EQ(current.size(), 1U);
+    EXPECT_EQ(current.front().value, "after");
+    EXPECT_EQ(current.front().version, expectedVersion + 1);
 }
 
 TEST_F(CoordinatorStoreTest, RegistrationIdCannotBeReusedForAnotherRange)

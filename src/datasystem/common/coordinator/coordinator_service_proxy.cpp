@@ -224,7 +224,7 @@ Status CoordinatorServiceProxyBase::CallRaw(RpcOptions &options, const ReqT &req
 {
     CHECK_FAIL_RETURN_STATUS(router_ != nullptr, K_NOT_READY, "Coordinator leader router is not initialized");
     const auto timeout = std::chrono::milliseconds(options.GetTimeout());
-    return router_->Execute(
+    auto status = router_->Execute(
         [this, &req, &rsp, &call](const HostPort &address, std::chrono::milliseconds attemptTimeout) {
             rsp.Clear();
             RpcOptions attemptOptions;
@@ -233,6 +233,10 @@ Status CoordinatorServiceProxyBase::CallRaw(RpcOptions &options, const ReqT &req
             return RouteResult(std::move(status), rsp.header());
         },
         std::chrono::steady_clock::now() + timeout, timeout, COORDINATOR_ROUTE_RETRY_INTERVAL, recoveryControl);
+    if (status.IsError()) {
+        status.AppendMsg("Coordinator request=" + req.GetTypeName());
+    }
+    return status;
 }
 
 CoordinatorServiceProxyBase::InFlightScope CoordinatorServiceProxyBase::BeginRpc(int32_t timeoutMs)
@@ -480,9 +484,12 @@ Status CoordinatorServiceProxyBase::WatchRange(const std::string &key, const std
     coordinator::WatchRangeRspPb rsp;
     RpcOptions options;
     options.SetTimeout(timeoutMs);
-    RETURN_IF_NOT_OK(CallRaw(options, req, rsp, [](auto &stub, auto &opts, const auto &request, auto &response) {
-        return stub.WatchRange(opts, request, response);
-    }));
+    RETURN_IF_NOT_OK(CallRaw(
+        options, req, rsp,
+        [](auto &stub, auto &opts, const auto &request, auto &response) {
+            return stub.WatchRange(opts, request, response);
+        },
+        false));
     RETURN_IF_NOT_OK(inFlight.Accept(rsp.header(), coordinatorId));
     watchId = rsp.watch_id();
     FillKeyValueEntries(rsp.initial_kvs(), initialKvs);

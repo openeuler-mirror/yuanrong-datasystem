@@ -14,8 +14,10 @@
  */
 #include "datasystem/common/coordinator/coordinator_discovery_cache.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <set>
 #include <thread>
 
 #include "gtest/gtest.h"
@@ -55,6 +57,59 @@ TEST(CoordinatorDiscoveryCacheTest, RefreshesSnapshotOffTheCallingThread)
 
     EXPECT_EQ(discovery->Calls(), 1);
     EXPECT_EQ(cache.GetCandidateSnapshot(), (std::vector<std::string>{ "127.0.0.1:30002" }));
+}
+
+class OrderedDiscovery final : public ICoordinatorDiscovery {
+public:
+    const std::vector<std::string> candidates{
+        "127.0.0.1:30001", "127.0.0.1:30002", "127.0.0.1:30003", "127.0.0.1:30004", "127.0.0.1:30005"
+    };
+
+    Status GetCoordinators(std::vector<std::string> &serviceList) override
+    {
+        serviceList = candidates;
+        serviceList.push_back("invalid");
+        serviceList.push_back(candidates.front());
+        return Status::OK();
+    }
+};
+
+TEST(CoordinatorDiscoveryCacheTest, SpreadsInitialCandidatesWithoutChangingMembership)
+{
+    auto discovery = std::make_shared<OrderedDiscovery>();
+    std::vector<std::string> initial;
+    ASSERT_TRUE(discovery->GetCoordinators(initial).IsOk());
+    std::set<std::vector<std::string>> orders;
+    for (size_t i = 0; i < 16; ++i) {
+        CoordinatorDiscoveryCache cache(discovery, initial);
+        auto snapshot = cache.GetCandidateSnapshot();
+        orders.insert(snapshot);
+        EXPECT_EQ(snapshot, cache.GetCandidateSnapshot());
+        std::sort(snapshot.begin(), snapshot.end());
+        EXPECT_EQ(snapshot, discovery->candidates);
+    }
+    EXPECT_GT(orders.size(), 1U);
+}
+
+TEST(CoordinatorDiscoveryCacheTest, SpreadsRefreshedCandidatesWithoutChangingMembership)
+{
+    auto discovery = std::make_shared<OrderedDiscovery>();
+    std::set<std::vector<std::string>> orders;
+    for (size_t i = 0; i < 16; ++i) {
+        CoordinatorDiscoveryCache cache(discovery, { "127.0.0.1:30006" });
+        cache.RefreshAsync();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        auto snapshot = cache.GetCandidateSnapshot();
+        while (snapshot.size() != discovery->candidates.size() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            snapshot = cache.GetCandidateSnapshot();
+        }
+        ASSERT_EQ(snapshot.size(), discovery->candidates.size());
+        orders.insert(snapshot);
+        std::sort(snapshot.begin(), snapshot.end());
+        EXPECT_EQ(snapshot, discovery->candidates);
+    }
+    EXPECT_GT(orders.size(), 1U);
 }
 
 }  // namespace
