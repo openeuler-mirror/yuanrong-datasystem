@@ -456,23 +456,23 @@ TransferEngine reuses the same patched `libds-spdlog.so` ABI but constructs its 
 | `KVClientConfig::AccessLogName` | client initialization config | explicit value takes priority over `DATASYSTEM_CLIENT_ACCESS_LOG_NAME`; explicit empty selects the default name | changes client access-log base name | config presence must remain distinct from an empty value |
 | `DATASYSTEM_LOG_MONITOR_ENABLE` | environment | client-only override | enables or disables client monitor logging | may create client and server observability mismatch |
 | `log_only_write_info_file` / `DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE` | gflag or client-only env override | default `true` | INFO files always receive all severities; `true` suppresses additional WARNING/ERROR files, while `false` restores dedicated WARNING/ERROR files and severity fanout | changes file discovery assumptions and disk usage |
-| `TRANSFER_ENGINE_LOG_DIR` | environment | unset; then `TEST_TMPDIR`, `TMPDIR`, `TMP`, `/tmp`, `.` | changes TransferEngine severity-log destination | invalid or unwritable paths fall through to stderr fallback and reduce persisted diagnostics |
-| `TRANSFER_ENGINE_LOG_LEVEL` | environment | `INFO`; accepts `DEBUG`, `INFO`, `WARNING`, `ERROR`, `FATAL`, `OFF` | filters TransferEngine severity logs | raising the threshold can hide initialization and transfer diagnostics |
-| `TRANSFER_ENGINE_VLOG_LEVEL` | environment | `0` | enables TransferEngine verbose logs globally | high verbosity increases formatting, lock, and filesystem IO cost |
-| `TRANSFER_ENGINE_VMODULE` | environment | unset; comma-separated `module=level` rules | overrides verbose level by source module | broad patterns can unexpectedly enable high-volume logs |
-| `TRANSFER_ENGINE_LOG_TO_STDERR` | environment | `false` | routes all enabled logs only to stderr instead of files | disables persisted severity files |
-| `TRANSFER_ENGINE_ALSO_LOG_TO_STDERR` | environment | `false` | mirrors file-routed logs to stderr | increases console volume and duplicate ingestion risk |
-| `TRANSFER_ENGINE_LOG_TO_STDOUT` | environment | `false` | routes logs below the stderr threshold to stdout and higher levels to stderr | changes container collector stream assumptions |
-| `TRANSFER_ENGINE_STDERR_THRESHOLD` | environment | `2` (`ERROR`) | mirrors this severity rank and above to stderr during file logging | a low value can flood stderr |
-| `TRANSFER_ENGINE_LOG_BUFFER_LEVEL` | environment | `0` (`INFO`) | forces severities above this rank to flush immediately | lower buffering increases foreground IO |
-| `TRANSFER_ENGINE_LOG_BUFFER_SECONDS` | environment | `30` | bounds buffered file-log duration | larger values increase crash-time loss exposure |
-| `TRANSFER_ENGINE_MAX_LOG_SIZE_MB` | environment | `1800` | rotates each active severity file at the configured size | large values consume disk; small values increase rotation overhead |
-| `TRANSFER_ENGINE_LOG_FILE_MODE` | environment | `0664` | sets created severity-file permissions | overly broad permissions expose diagnostics |
-| `TRANSFER_ENGINE_TIMESTAMP_IN_LOG_FILE_NAME` | environment | `true` | includes startup timestamp and PID in severity filenames | disabling it increases collision and overwrite risk |
-| `TRANSFER_ENGINE_LOG_FILE_HEADER` | environment | `true` | writes process and format metadata when opening a file | disabling it removes useful incident context |
-| `TRANSFER_ENGINE_LOG_PREFIX` | environment | `true` | emits severity, timestamp, PID/TID, source file, and line prefix | disabling it reduces diagnosability |
-| `TRANSFER_ENGINE_LOG_YEAR_IN_PREFIX` | environment | `true` | includes the year in each log-line timestamp | disabling it can complicate long-retention parsing |
-| `TRANSFER_ENGINE_LOG_UTC_TIME` | environment | `false` | uses UTC instead of local time for file names, headers, and prefixes | changes correlation assumptions with local-time logs |
+| `YR_TE_LOG_DIR` | environment | unset; then `TEST_TMPDIR`, `TMPDIR`, `TMP`, `/tmp`, `.` | changes TransferEngine severity-log destination | invalid or unwritable paths fall through to stderr fallback and reduce persisted diagnostics |
+| `YR_TE_LOG_LEVEL` | environment | `INFO`; accepts `DEBUG`, `INFO`, `WARNING`, `ERROR`, `FATAL`, `OFF` | filters TransferEngine severity logs | raising the threshold can hide initialization and transfer diagnostics |
+| `YR_TE_VLOG_LEVEL` | environment | `0` | enables TransferEngine verbose logs globally | high verbosity increases formatting, lock, and filesystem IO cost |
+| `YR_TE_VMODULE` | environment | unset; comma-separated `module=level` rules | overrides verbose level by source module | broad patterns can unexpectedly enable high-volume logs |
+| `YR_TE_LOG_TO_STDERR` | environment | `false` | routes all enabled logs only to stderr instead of files | disables persisted severity files |
+| `YR_TE_ALSO_LOG_TO_STDERR` | environment | `false` | mirrors file-routed logs to stderr | increases console volume and duplicate ingestion risk |
+| `YR_TE_LOG_TO_STDOUT` | environment | `false` | routes logs below the stderr threshold to stdout and higher levels to stderr | changes container collector stream assumptions |
+| `YR_TE_STDERR_THRESHOLD` | environment | `2` (`ERROR`) | mirrors this severity rank and above to stderr during file logging | a low value can flood stderr |
+| `YR_TE_LOG_BUFFER_LEVEL` | environment | `0` (`INFO`) | forces severities above this rank to flush immediately | lower buffering increases foreground IO |
+| `YR_TE_LOG_BUFFER_SECONDS` | environment | `30` | bounds buffered file-log duration | larger values increase crash-time loss exposure |
+| `YR_TE_MAX_LOG_SIZE_MB` | environment | `1800` | rotates each active severity file at the configured size | large values consume disk; small values increase rotation overhead |
+| `YR_TE_LOG_FILE_MODE` | environment | `0664` | sets created severity-file permissions | overly broad permissions expose diagnostics |
+| `YR_TE_TIMESTAMP_IN_LOG_FILE_NAME` | environment | `true` | includes startup timestamp and PID in severity filenames | disabling it increases collision and overwrite risk |
+| `YR_TE_LOG_FILE_HEADER` | environment | `true` | writes process and format metadata when opening a file | disabling it removes useful incident context |
+| `YR_TE_LOG_PREFIX` | environment | `true` | emits severity, timestamp, PID/TID, source file, and line prefix | disabling it reduces diagnosability |
+| `YR_TE_LOG_YEAR_IN_PREFIX` | environment | `true` | includes the year in each log-line timestamp | disabling it can complicate long-retention parsing |
+| `YR_TE_LOG_UTC_TIME` | environment | `false` | uses UTC instead of local time for file names, headers, and prefixes | changes correlation assumptions with local-time logs |
 
 ## Examples And Migration Notes
 

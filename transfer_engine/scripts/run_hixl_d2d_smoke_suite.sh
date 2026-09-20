@@ -6,10 +6,10 @@ RUNNER="${SCRIPT_DIR}/run_cross_node_smoke_cases.sh"
 
 LOCAL_IP="${LOCAL_IP:-127.0.0.1}"
 RPC_BASE_PORT="${RPC_BASE_PORT:-65051}"
-HIXL_BASE_PORT="${TRANSFER_ENGINE_HIXL_BASE_PORT:-21000}"
-ROUTE="${TRANSFER_ENGINE_HIXL_ROUTE:-roce}"
-CS_MODE="${TRANSFER_ENGINE_HIXL_CS_MODE:-on}"
-LOG_DIR="${TRANSFER_ENGINE_HIXL_SMOKE_LOG_DIR:-/tmp/te_hixl_d2d_smoke_$(date +%Y%m%d_%H%M%S)}"
+HIXL_BASE_PORT="${YR_TE_HIXL_BASE_PORT:-22000}"
+ROUTE="${YR_TE_HIXL_ROUTE:-roce}"
+CS_MODE="${YR_TE_HIXL_CS_MODE:-on}"
+LOG_DIR="${YR_TE_HIXL_SMOKE_LOG_DIR:-/tmp/te_hixl_d2d_smoke_$(date +%Y%m%d_%H%M%S)}"
 OWNER_HOLD_SECONDS="${OWNER_HOLD_SECONDS:-600}"
 OWNER_READY_TIMEOUT_S="${OWNER_READY_TIMEOUT_S:-30}"
 REQUESTER_COUNT="${REQUESTER_COUNT:-2}"
@@ -28,10 +28,10 @@ Usage:
 Environment overrides:
   LOCAL_IP                         default: ${LOCAL_IP}
   RPC_BASE_PORT                    default: ${RPC_BASE_PORT}
-  TRANSFER_ENGINE_HIXL_BASE_PORT   default: ${HIXL_BASE_PORT}
-  TRANSFER_ENGINE_HIXL_ROUTE       default: ${ROUTE}
-  TRANSFER_ENGINE_HIXL_CS_MODE     default: ${CS_MODE}
-  TRANSFER_ENGINE_HIXL_SMOKE_LOG_DIR
+  YR_TE_HIXL_BASE_PORT   default: ${HIXL_BASE_PORT}
+  YR_TE_HIXL_ROUTE       default: ${ROUTE}
+  YR_TE_HIXL_CS_MODE     default: ${CS_MODE}
+  YR_TE_HIXL_SMOKE_LOG_DIR
   OWNER_HOLD_SECONDS               default: ${OWNER_HOLD_SECONDS}
   OWNER_READY_TIMEOUT_S            default: ${OWNER_READY_TIMEOUT_S}
   REQUESTER_COUNT                  default: ${REQUESTER_COUNT}
@@ -240,8 +240,8 @@ set_case_hixl_base_port() {
   if (( case_base <= 0 || case_base > 65000 )); then
     fail "${case_name} HIXL base port is out of supported smoke range: ${case_base}"
   fi
-  export TRANSFER_ENGINE_HIXL_BASE_PORT="${case_base}"
-  echo "[INFO] case ${case_name}: TRANSFER_ENGINE_HIXL_BASE_PORT=${TRANSFER_ENGINE_HIXL_BASE_PORT}"
+  export YR_TE_HIXL_BASE_PORT="${case_base}"
+  echo "[INFO] case ${case_name}: YR_TE_HIXL_BASE_PORT=${YR_TE_HIXL_BASE_PORT}"
 }
 
 main() {
@@ -256,19 +256,19 @@ main() {
   require_nonnegative_int "${REQUESTER_DEVICE_STEP}" "REQUESTER_DEVICE_STEP"
   case "${CS_MODE}" in
     auto|on|off) ;;
-    *) fail "TRANSFER_ENGINE_HIXL_CS_MODE must be auto, on, or off: ${CS_MODE}" ;;
+    *) fail "YR_TE_HIXL_CS_MODE must be auto, on, or off: ${CS_MODE}" ;;
   esac
   mkdir -p "${LOG_DIR}"
-  export TRANSFER_ENGINE_HIXL_ROUTE="${ROUTE}"
-  export TRANSFER_ENGINE_HIXL_CS_MODE="${CS_MODE}"
-  export TRANSFER_ENGINE_HIXL_BASE_PORT="${HIXL_BASE_PORT}"
-  export TRANSFER_ENGINE_ACL_MALLOC_POLICY="${TRANSFER_ENGINE_ACL_MALLOC_POLICY:-huge_only}"
+  export YR_TE_HIXL_ROUTE="${ROUTE}"
+  export YR_TE_HIXL_CS_MODE="${CS_MODE}"
+  export YR_TE_HIXL_BASE_PORT="${HIXL_BASE_PORT}"
+  export YR_TE_ACL_MALLOC_POLICY="${YR_TE_ACL_MALLOC_POLICY:-huge_only}"
   if [[ "${ROUTE}" == "hccs" || ( "${ROUTE}" == "roce" && "${CS_MODE}" != "off" ) ]]; then
     unset HCCL_INTRA_ROCE_ENABLE
   fi
 
   echo "[INFO] log dir: ${LOG_DIR}"
-  echo "[INFO] env: TRANSFER_ENGINE_HIXL_ROUTE=${TRANSFER_ENGINE_HIXL_ROUTE}, TRANSFER_ENGINE_HIXL_CS_MODE=${TRANSFER_ENGINE_HIXL_CS_MODE}, TRANSFER_ENGINE_HIXL_BASE_PORT=${TRANSFER_ENGINE_HIXL_BASE_PORT}, TRANSFER_ENGINE_ACL_MALLOC_POLICY=${TRANSFER_ENGINE_ACL_MALLOC_POLICY}, HCCL_INTRA_ROCE_ENABLE=${HCCL_INTRA_ROCE_ENABLE:-<unset>}"
+  echo "[INFO] env: YR_TE_HIXL_ROUTE=${YR_TE_HIXL_ROUTE}, YR_TE_HIXL_CS_MODE=${YR_TE_HIXL_CS_MODE}, YR_TE_HIXL_BASE_PORT=${YR_TE_HIXL_BASE_PORT}, YR_TE_ACL_MALLOC_POLICY=${YR_TE_ACL_MALLOC_POLICY}, HCCL_INTRA_ROCE_ENABLE=${HCCL_INTRA_ROCE_ENABLE:-<unset>}"
   echo "[INFO] devices: OWNER_DEVICE=${OWNER_DEVICE}, REQUESTER_DEVICE=${REQUESTER_DEVICE}, REQUESTER_COUNT=${REQUESTER_COUNT}, REQUESTER_DEVICE_STEP=${REQUESTER_DEVICE_STEP}"
   trap cleanup EXIT
 

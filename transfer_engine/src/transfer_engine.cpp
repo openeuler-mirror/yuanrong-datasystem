@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cstdlib>
 #include <functional>
 #include <iomanip>
 #include <limits>
 #include <map>
+#include <random>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -40,6 +42,78 @@ constexpr uint64_t K_MAX_TCP_PORT = 65535;
 constexpr uint64_t K_DECIMAL_BASE = 10;
 // ']' and ':' separate the bracketed IPv6 host from the port in "[host]:port".
 constexpr size_t K_IPV6_PORT_SEPARATOR_LEN = 2;
+constexpr int32_t K_RPC_PORT_RANGE_BIND_ATTEMPTS = 500;
+constexpr int K_MIN_CONFIGURABLE_RPC_PORT = 1024;
+constexpr int K_EPHEMERAL_PORT_START = 32768;
+constexpr int K_EPHEMERAL_PORT_END = 60999;
+
+struct RpcPortRange {
+    bool enabled = false;
+    int minPort = 0;
+    int maxPort = 0;
+};
+
+bool IsConfigurableRpcPort(int port)
+{
+    return port >= K_MIN_CONFIGURABLE_RPC_PORT && port <= static_cast<int>(K_MAX_TCP_PORT) &&
+        !(port >= K_EPHEMERAL_PORT_START && port <= K_EPHEMERAL_PORT_END);
+}
+
+// Parses a strictly positive decimal integer; rejects any non-digit character, overflow, and zero
+// so that misspelled values (for example "25000abc") never take effect silently.
+bool ParseRpcPortEnv(const char *env, int *port)
+{
+    int64_t value = 0;
+    for (const char *p = env; *p != '\0'; ++p) {
+        if (*p < '0' || *p > '9') {
+            return false;
+        }
+        value = value * K_DECIMAL_BASE + static_cast<int64_t>(*p - '0');
+        if (value > std::numeric_limits<int>::max()) {
+            return false;
+        }
+    }
+    if (value <= 0) {
+        return false;
+    }
+    *port = static_cast<int>(value);
+    return true;
+}
+
+// YR_TE_RPC_PORT_MIN/YR_TE_RPC_PORT_MAX constrain OS-assigned (port 0) RPC ports to a fixed range.
+// They mirror Mooncake's MC_MIN_RPC_PORT/MC_MAX_RPC_PORT: unset means OS assignment, and any invalid
+// or partial configuration warns and keeps OS assignment.
+RpcPortRange ReadRpcPortRangeFromEnv()
+{
+    const char *minEnv = std::getenv("YR_TE_RPC_PORT_MIN");
+    const char *maxEnv = std::getenv("YR_TE_RPC_PORT_MAX");
+    if (minEnv == nullptr && maxEnv == nullptr) {
+        return RpcPortRange{};
+    }
+    auto fallback = [](const std::string &reason) {
+        TE_LOG_WARNING << "ignoring YR_TE_RPC_PORT_MIN/YR_TE_RPC_PORT_MAX configuration (" << reason <<
+                       "); using an OS-assigned RPC port";
+        return RpcPortRange{};
+    };
+    if (minEnv == nullptr || maxEnv == nullptr) {
+        return fallback("both variables must be set together");
+    }
+    if (minEnv[0] == '\0' || maxEnv[0] == '\0') {
+        return fallback("both variables must be non-empty");
+    }
+    int minPort = 0;
+    int maxPort = 0;
+    if (!ParseRpcPortEnv(minEnv, &minPort) || !ParseRpcPortEnv(maxEnv, &maxPort)) {
+        return fallback("both variables must be decimal integers");
+    }
+    if (!IsConfigurableRpcPort(minPort) || !IsConfigurableRpcPort(maxPort)) {
+        return fallback("ports must be in 1024-65535 and outside the ephemeral range 32768-60999");
+    }
+    if (minPort > maxPort) {
+        return fallback("min port exceeds max port");
+    }
+    return RpcPortRange{ true, minPort, maxPort };
+}
 
 std::string ToLowerAscii(std::string value)
 {
@@ -105,7 +179,8 @@ Result RpcCodeToStatus(int32_t code, const std::string &msg)
     }
 }
 
-Result ParseTargetHostname(const std::string &targetHostname, std::string *peerHost, uint16_t *peerPort)
+Result ParseTargetHostname(const std::string &targetHostname, std::string *peerHost, uint16_t *peerPort,
+                           bool allowZeroPort = false)
 {
     TE_CHECK_PTR_OR_RETURN(peerHost);
     TE_CHECK_PTR_OR_RETURN(peerPort);
@@ -137,7 +212,8 @@ Result ParseTargetHostname(const std::string &targetHostname, std::string *peerH
         portValue = portValue * K_DECIMAL_BASE + static_cast<uint64_t>(c - '0');
         TE_CHECK_OR_RETURN(portValue <= K_MAX_TCP_PORT, ErrorCode::kInvalid, "targetHostname port is invalid");
     }
-    TE_CHECK_OR_RETURN(portValue > 0, ErrorCode::kInvalid, "targetHostname port should be positive");
+    TE_CHECK_OR_RETURN(allowZeroPort || portValue > 0, ErrorCode::kInvalid,
+                       "targetHostname port should be positive");
 
     *peerHost = host;
     *peerPort = static_cast<uint16_t>(portValue);
@@ -423,7 +499,7 @@ Result TransferEngine::Initialize(const std::string &localHostname, const std::s
     std::string localHost;
     uint16_t localPort = 0;
     int32_t deviceId = -1;
-    TE_RETURN_IF_ERROR(ParseTargetHostname(localHostname, &localHost, &localPort));
+    TE_RETURN_IF_ERROR(ParseTargetHostname(localHostname, &localHost, &localPort, true));
     TE_RETURN_IF_ERROR(ParseDeviceId(deviceName, &deviceId));
 
     std::lock_guard<std::mutex> lock(apiMutex_);
@@ -436,7 +512,15 @@ Result TransferEngine::Initialize(const std::string &localHostname, const std::s
     localPort_ = localPort;
     deviceId_ = deviceId;
     rpcThreads_ = kDefaultRpcThreads;
-    TE_RETURN_IF_ERROR(InitializeAscendBackendLocked(protocol));
+    TE_RETURN_IF_ERROR(BindControlPortLocked());
+    Result backendRc = InitializeAscendBackendLocked(protocol);
+    if (backendRc.IsError()) {
+        controlServer_->Stop();
+        if (backend_ != nullptr) {
+            backend_->FinalizeLocal();
+        }
+        return backendRc;
+    }
     Result startRc = StartControlServerLocked();
     if (startRc.IsError()) {
         return startRc;
@@ -455,6 +539,32 @@ Result TransferEngine::Initialize(const std::string &localHostname, const std::s
     TE_CHECK_OR_RETURN(metadataServerLower.empty() || metadataServerLower == "p2phandshake", ErrorCode::kNotSupported,
                        "metadata_server should be empty or P2PHANDSHAKE for YuanRong TransferEngine");
     return Initialize(localHostname, protocol, deviceName);
+}
+
+Result TransferEngine::BindControlPortLocked()
+{
+    if (localPort_ != 0) {
+        return controlServer_->Bind(localHost_, localPort_, &localPort_);
+    }
+    const RpcPortRange range = ReadRpcPortRangeFromEnv();
+    if (!range.enabled) {
+        return controlServer_->Bind(localHost_, 0, &localPort_);
+    }
+    TE_LOG_INFO << "transfer engine RPC port probing range"
+                << ", min_port=" << range.minPort << ", max_port=" << range.maxPort;
+    std::random_device randGen;
+    std::uniform_int_distribution<int> portDist(range.minPort, range.maxPort);
+    for (int attempt = 0; attempt < K_RPC_PORT_RANGE_BIND_ATTEMPTS; ++attempt) {
+        const auto candidate = static_cast<uint16_t>(portDist(randGen));
+        // Bind holds the listening socket, so a successful bind is race-free; occupied candidates
+        // only log at vlog level during probing.
+        Result rc = controlServer_->Bind(localHost_, candidate, &localPort_, ListenSocketFailureLogLevel::kVlog1);
+        if (rc.IsOk()) {
+            return rc;
+        }
+    }
+    return TE_MAKE_STATUS(ErrorCode::kRuntimeError,
+                          "no available RPC port within YR_TE_RPC_PORT_MIN/YR_TE_RPC_PORT_MAX range");
 }
 
 Result TransferEngine::InitializeAscendBackendLocked(const std::string &protocol)
@@ -500,6 +610,7 @@ Result TransferEngine::StartControlServerLocked()
                      << ", local_host=" << localHost_ << ", local_port=" << localPort_ << ", device_id=" << deviceId_
                      << ", reason=" << startRc.ToString();
         controlService_.reset();
+        controlServer_->Stop();
         backend_->FinalizeLocal();
         return startRc;
     }

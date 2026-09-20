@@ -846,6 +846,10 @@ handler. Clearing the Router handler synchronously excludes later callback acces
 
 ## Transfer Engine Registration Contract
 
+- `TransferEngine.Initialize` accepts `host:0` for dynamic control-plane port selection. The control server binds first
+  and resolves the OS-assigned nonzero port before backend initialization, service construction, or worker-thread
+  startup; `GetRpcPort` returns that same bound port for peer advertisement. Explicit nonzero ports keep their existing
+  behavior, and initialization failure closes the prepared listener and finalizes a partially initialized backend.
 - The legacy `RegisterMemory(address, length)` API remains available and means that
   the remotely authorized logical range and the backend-registered physical backing
   are identical.
@@ -868,15 +872,15 @@ handler. Clearing the Router handler synchronously excludes later callback acces
   `auto` and `hccs` policies require a 2 MiB-aligned backing base before calling HIXL. Explicit `roce` preserves
   byte-addressed legacy registration. Registration length and transfer address/length remain byte-granular.
 - The HIXL backend uses `9.1.0+` as its fully supported baseline. Detected `8.5.2` through `9.0.x` retains a
-  warning-backed legacy compatibility path that requires `TRANSFER_ENGINE_HIXL_CS_MODE=off`; lower or unknown versions
+  warning-backed legacy compatibility path that requires `YR_TE_HIXL_CS_MODE=off`; lower or unknown versions
   disable the backend. The default CS mode remains `on` and fails closed when `CLIENT_SERVER_COMM` is unavailable;
   `auto` enables CS when the capability is reported and otherwise falls back to legacy. In CS mode an
-  explicit `TRANSFER_ENGINE_HIXL_ROUTE=roce` injects the
+  explicit `YR_TE_HIXL_ROUTE=roce` injects the
   `roce:device` protocol filter and does not require `HCCL_INTRA_ROCE_ENABLE`. Legacy explicit RoCE still requires the
   HCCL switch. Both peers exchange and validate effective engine mode and route before HIXL Connect.
-- `TRANSFER_ENGINE_HIXL_LOCAL_COMM_RES` optionally supplies a validated HIXL 1.3 JSON object for deployments that need
+- `YR_TE_HIXL_LOCAL_COMM_RES` optionally supplies a validated HIXL 1.3 JSON object for deployments that need
   explicit `net_instance_id` and endpoint lists. The core `hixl::Hixl` Engine and its AutoConnect capability probe are
-  available from HIXL `9.1.0`. `TRANSFER_ENGINE_HIXL_AUTO_CONNECT=auto|on|off` defaults to auto mode; `off` retains
+  available from HIXL `9.1.0`. `YR_TE_HIXL_AUTO_CONNECT=auto|on|off` defaults to auto mode; `off` retains
   explicit vendor Connect as the rollback path. AutoConnect does not bypass TE authorization or generation checks.
 - Receiver-driven READ retries one `kNotReady` or `kRuntimeError` failure after releasing the old lease, clearing the
   route and generation cache, and rebuilding the full connection/authorization chain. Other errors are not retried.

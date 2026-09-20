@@ -32,7 +32,7 @@ std::string NormalizeBackendKind(const std::string &backendKind)
 
 uint64_t GetReadLeaseTtlMs()
 {
-    const char *env = std::getenv("TRANSFER_ENGINE_HIXL_READ_LEASE_TTL_MS");
+    const char *env = std::getenv("YR_TE_HIXL_READ_LEASE_TTL_MS");
     if (env == nullptr || env[0] == '\0') {
         return K_DEFAULT_READ_LEASE_TTL_MS;
     }

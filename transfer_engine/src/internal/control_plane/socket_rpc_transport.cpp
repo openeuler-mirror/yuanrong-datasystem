@@ -302,6 +302,28 @@ Result CreateListenSocket(const std::string &host, uint16_t port, int backlog, i
     return TE_MAKE_STATUS(ErrorCode::kRuntimeError, "listen failed");
 }
 
+Result GetSocketLocalPort(int fd, uint16_t *port)
+{
+    TE_CHECK_OR_RETURN(fd >= 0, ErrorCode::kInvalid, "invalid fd");
+    TE_CHECK_PTR_OR_RETURN(port);
+
+    sockaddr_storage addr{};
+    socklen_t addrLen = sizeof(addr);
+    TE_CHECK_OR_RETURN(::getsockname(fd, reinterpret_cast<sockaddr *>(&addr), &addrLen) == 0,
+                       ErrorCode::kRuntimeError, "getsockname failed");
+    if (addr.ss_family == AF_INET) {
+        const auto *addrV4 = static_cast<const sockaddr_in *>(static_cast<const void *>(&addr));
+        *port = ntohs(addrV4->sin_port);
+    } else if (addr.ss_family == AF_INET6) {
+        const auto *addrV6 = static_cast<const sockaddr_in6 *>(static_cast<const void *>(&addr));
+        *port = ntohs(addrV6->sin6_port);
+    } else {
+        return TE_MAKE_STATUS(ErrorCode::kRuntimeError, "unsupported socket address family");
+    }
+    TE_CHECK_OR_RETURN(*port != 0, ErrorCode::kRuntimeError, "bound socket has zero port");
+    return Result::OK();
+}
+
 Result SetSocketTimeoutSec(int fd, int timeoutSec)
 {
     TE_CHECK_OR_RETURN(fd >= 0, ErrorCode::kInvalid, "invalid fd");
