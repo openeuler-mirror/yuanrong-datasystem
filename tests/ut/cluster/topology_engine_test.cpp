@@ -1866,6 +1866,7 @@ TEST(TopologyEngineTest, CoordinatorTopologyWatchPublishesCompletePayloadWithout
         return engine->GetSnapshot(snapshot).IsOk() && snapshot->Version() == 3
                && snapshot->AuthorityRevision() == 10;
     }));
+    EXPECT_EQ(snapshot->CoordinatorId(), "coordinator-test");
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 

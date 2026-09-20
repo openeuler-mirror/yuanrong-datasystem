@@ -1335,7 +1335,7 @@ Status TopologyEngine::ApplyCoordinatorTopologyEvent(const CoordinationEvent &ev
     (void)repository_.ReadHostIds(hostIds, &hostIdsRevision);
     RETURN_IF_NOT_OK(
         TopologyReader::BuildFromEncodedTopology(event.value, event.revision, std::move(hostIds), candidate,
-                                                 hostIdsRevision));
+                                                 hostIdsRevision, event.sourceAuthorityId));
     INJECT_POINT("TopologyEngine.ApplyCoordinatorTopologyEvent.beforeCommit");
     std::shared_ptr<const TopologySnapshot> previous;
     (void)snapshots_.Load(previous);

@@ -73,6 +73,7 @@ struct WatchKey {
     std::string tableName;
     std::string key;
     int64_t startRevision{ 0 };
+    bool skipInitialKvs{ false };
 };
 
 /**
@@ -143,13 +144,14 @@ public:
      * @param[in] tableName Logical table name.
      * @param[in] key Exact relative key.
      * @param[in] knownModRevision Exact-key revision already held by the caller.
-     * @param[out] res Returned result when changed; unchanged otherwise.
+     * @param[in] knownCoordinatorId Coordinator that supplied the cached revision; empty for ETCD.
+     * @param[out] res Response authority; value and revision are valid when changed.
      * @param[out] unchanged Whether the key still has knownModRevision.
      * @param[in] timeoutMs Operation timeout in milliseconds.
      * @return Backend operation status.
      */
     virtual Status GetIfChanged(const std::string &tableName, const std::string &key, int64_t knownModRevision,
-                                RangeSearchResult &res, bool &unchanged,
+                                const std::string &knownCoordinatorId, RangeSearchResult &res, bool &unchanged,
                                 int32_t timeoutMs = SEND_RPC_TIMEOUT_MS_DEFAULT)
     {
         unchanged = false;
@@ -158,10 +160,8 @@ public:
         if (status.IsError()) {
             return status;
         }
-        if (knownModRevision > 0 && candidate.modRevision == knownModRevision) {
-            unchanged = true;
-            return Status::OK();
-        }
+        unchanged = knownModRevision > 0 && candidate.modRevision == knownModRevision
+                    && candidate.coordinatorId == knownCoordinatorId;
         res = std::move(candidate);
         return Status::OK();
     }

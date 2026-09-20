@@ -182,7 +182,7 @@ public:
 
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &, const std::string &,
                       int64_t &watchId, std::vector<KeyValueEntry> &initialKvs, int32_t,
-                      std::string *coordinatorId) override
+                      std::string *coordinatorId, bool skipInitialKvs = false) override
     {
         WatchStep step{ Status::OK(), COORDINATOR_A, {} };
         std::function<void()> hook;
@@ -199,7 +199,7 @@ public:
             hook = beforeWatchReturn_;
             if (step.status.IsOk()) {
                 observedCoordinatorId_ = step.coordinatorId;
-                initialKvs = step.initialKvs;
+                initialKvs = skipInitialKvs ? std::vector<KeyValueEntry>{} : step.initialKvs;
                 if (coordinatorId != nullptr) {
                     *coordinatorId = step.coordinatorId;
                 }

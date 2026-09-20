@@ -782,6 +782,36 @@ TEST_F(CoordinatorIdTest, WatchRangeCannotCrossClusterOrTopologyRoot)
     DS_ASSERT_OK(service.Shutdown());
 }
 
+TEST_F(CoordinatorIdTest, WatchRangeForwardsSkipInitialKvs)
+{
+    coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", WATCH_RANGE_VALIDATION_TEST_PORT));
+    DS_ASSERT_OK(service.Init());
+    SetRecoveryReady(service);
+    DS_ASSERT_OK(service.Start());
+    coordinator::PutReqPb putReq;
+    putReq.set_key("/datasystem/a/cluster/127.0.0.1:31502");
+    putReq.set_value("membership");
+    coordinator::PutRspPb putRsp;
+    DS_ASSERT_OK(service.Put(putReq, putRsp));
+
+    coordinator::WatchRangeReqPb watchReq;
+    watchReq.set_key(putReq.key());
+    watchReq.set_watcher_addr("127.0.0.1:31502");
+    watchReq.set_registration_id("with-initial");
+    coordinator::WatchRangeRspPb watchRsp;
+    DS_ASSERT_OK(service.WatchRange(watchReq, watchRsp));
+    ASSERT_EQ(watchRsp.initial_kvs_size(), 1);
+    EXPECT_EQ(watchRsp.initial_kvs(0).value(), "membership");
+
+    watchReq.set_registration_id("without-initial");
+    watchReq.set_skip_initial_kvs(true);
+    watchRsp.Clear();
+    DS_ASSERT_OK(service.WatchRange(watchReq, watchRsp));
+    EXPECT_GT(watchRsp.watch_id(), 0);
+    EXPECT_TRUE(watchRsp.initial_kvs().empty());
+    DS_ASSERT_OK(service.Shutdown());
+}
+
 TEST_F(CoordinatorStoreTest, CoordinatorServiceForwardsStoreOperationsAndMarksLeader)
 {
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18480));
@@ -1599,6 +1629,28 @@ TEST_F(CoordinatorStoreTest, WatchRangeSnapshotDoesNotReplayInitialData)
     auto events = dispatcher_->GetEvents(watchId);
     ASSERT_EQ(events.size(), 1ul);
     ASSERT_EQ(events[0]->entry.value, "v2");
+}
+
+TEST_F(CoordinatorStoreTest, WatchRangeSkipsInitialSnapshotAndDeliversSubsequentChanges)
+{
+    int64_t version = 0;
+    int64_t revision = 0;
+    DS_ASSERT_OK(store_->Put("/skip/key", "v1", 0, 0, version, revision));
+
+    int64_t watchId = 0;
+    std::vector<KeyValueEntry> initial(1);
+    DS_ASSERT_OK(store_->WatchRange("/skip/", "/skip0", "addr", "skip-initial", watchId, initial, true));
+    EXPECT_TRUE(initial.empty());
+    int64_t retriedWatchId = 0;
+    DS_ASSERT_OK(store_->WatchRange("/skip/", "/skip0", "addr", "skip-initial", retriedWatchId, initial, true));
+    EXPECT_EQ(retriedWatchId, watchId);
+    EXPECT_TRUE(initial.empty());
+
+    DS_ASSERT_OK(store_->Put("/skip/key", "v2", 0, version, version, revision));
+    ASSERT_TRUE(dispatcher_->WaitEventCount(watchId, 1));
+    auto events = dispatcher_->GetEvents(watchId);
+    ASSERT_EQ(events.size(), 1ul);
+    EXPECT_EQ(events[0]->entry.value, "v2");
 }
 
 TEST_F(CoordinatorStoreTest, DeleteRangeUsesOneRevisionForDeliveredDeleteEvents)

@@ -25,8 +25,9 @@ Status TopologyReader::ReadTopologyOnly(int32_t timeoutMs, std::shared_ptr<const
     CHECK_FAIL_RETURN_STATUS(timeoutMs > 0, K_INVALID, "cluster topology read timeout must be positive");
     TopologyState state;
     int64_t revision = 0;
-    RETURN_IF_NOT_OK(repository_.ReadTopology(timeoutMs, state, revision));
-    return BuildFromState(std::move(state), revision, {}, snapshot, 0);
+    std::string coordinatorId;
+    RETURN_IF_NOT_OK(repository_.ReadTopology(timeoutMs, state, revision, &coordinatorId));
+    return BuildFromState(std::move(state), revision, {}, snapshot, 0, std::move(coordinatorId));
 }
 
 Status TopologyReader::Read(int32_t timeoutMs, std::shared_ptr<const TopologySnapshot> &snapshot) const
@@ -34,27 +35,31 @@ Status TopologyReader::Read(int32_t timeoutMs, std::shared_ptr<const TopologySna
     CHECK_FAIL_RETURN_STATUS(timeoutMs > 0, K_INVALID, "cluster topology read timeout must be positive");
     TopologyState state;
     int64_t revision = 0;
-    RETURN_IF_NOT_OK(repository_.ReadTopology(timeoutMs, state, revision));
+    std::string coordinatorId;
+    RETURN_IF_NOT_OK(repository_.ReadTopology(timeoutMs, state, revision, &coordinatorId));
     std::unordered_map<std::string, std::string> hostIds;
     int64_t hostIdsRevision = 0;
     (void)repository_.ReadHostIds(hostIds, &hostIdsRevision);
-    return BuildFromState(std::move(state), revision, std::move(hostIds), snapshot, hostIdsRevision);
+    return BuildFromState(std::move(state), revision, std::move(hostIds), snapshot, hostIdsRevision,
+                          std::move(coordinatorId));
 }
 
 Status TopologyReader::BuildFromEncodedTopology(const std::string &value, int64_t authorityRevision,
                                                 std::unordered_map<std::string, std::string> hostIds,
                                                 std::shared_ptr<const TopologySnapshot> &snapshot,
-                                                int64_t hostIdsRevision)
+                                                int64_t hostIdsRevision, std::string coordinatorId)
 {
     CHECK_FAIL_RETURN_STATUS(authorityRevision > 0, K_INVALID, "topology authority revision must be positive");
     TopologyState state;
     RETURN_IF_NOT_OK(TopologyRepositoryCodec::DecodeTopology(value, state));
-    return BuildFromState(std::move(state), authorityRevision, std::move(hostIds), snapshot, hostIdsRevision);
+    return BuildFromState(std::move(state), authorityRevision, std::move(hostIds), snapshot, hostIdsRevision,
+                          std::move(coordinatorId));
 }
 
 Status TopologyReader::BuildFromState(TopologyState state, int64_t authorityRevision,
                                       std::unordered_map<std::string, std::string> hostIds,
-                                      std::shared_ptr<const TopologySnapshot> &snapshot, int64_t hostIdsRevision)
+                                      std::shared_ptr<const TopologySnapshot> &snapshot, int64_t hostIdsRevision,
+                                      std::string coordinatorId)
 {
     std::string canonical;
     RETURN_IF_NOT_OK(TopologyRepositoryCodec::EncodeTopology(state, canonical));
@@ -63,7 +68,7 @@ Status TopologyReader::BuildFromState(TopologyState state, int64_t authorityRevi
     RETURN_IF_NOT_OK(hasher.GetSha256Hex(canonical, digest));
     std::shared_ptr<const TopologySnapshot> candidate;
     RETURN_IF_NOT_OK(TopologySnapshot::Create(std::move(state), authorityRevision, std::move(digest), candidate,
-                                              std::move(hostIds), hostIdsRevision));
+                                              std::move(hostIds), hostIdsRevision, std::move(coordinatorId)));
     snapshot = std::move(candidate);
     return Status::OK();
 }
@@ -76,8 +81,9 @@ Status TopologyReader::ReadIfChanged(int32_t timeoutMs, const TopologySnapshot &
     CHECK_FAIL_RETURN_STATUS(knownAuthorityRevision > 0, K_INVALID, "known authority revision must be positive");
     TopologyState state;
     int64_t revision = 0;
-    RETURN_IF_NOT_OK(
-        repository_.ReadTopologyIfChanged(timeoutMs, knownAuthorityRevision, state, revision, unchanged));
+    std::string coordinatorId;
+    RETURN_IF_NOT_OK(repository_.ReadTopologyIfChanged(timeoutMs, knownAuthorityRevision, knownSnapshot.CoordinatorId(),
+                                                       state, revision, coordinatorId, unchanged));
     std::unordered_map<std::string, std::string> hostIds;
     int64_t hostIdsRevision = 0;
     (void)repository_.ReadHostIds(hostIds, &hostIdsRevision);
@@ -90,7 +96,8 @@ Status TopologyReader::ReadIfChanged(int32_t timeoutMs, const TopologySnapshot &
         revision = knownAuthorityRevision;
         unchanged = false;
     }
-    return BuildFromState(std::move(state), revision, std::move(hostIds), snapshot, hostIdsRevision);
+    return BuildFromState(std::move(state), revision, std::move(hostIds), snapshot, hostIdsRevision,
+                          std::move(coordinatorId));
 }
 
 }  // namespace datasystem::cluster

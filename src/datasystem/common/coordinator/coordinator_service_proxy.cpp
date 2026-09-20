@@ -391,6 +391,7 @@ Status CoordinatorServiceProxyBase::Range(const std::string &key, const std::str
 }
 
 Status CoordinatorServiceProxyBase::RangeIfChanged(const std::string &key, int64_t knownModRevision,
+                                                   const std::string &knownCoordinatorId,
                                                    std::vector<KeyValueEntry> &kvs, int64_t &revision, bool &unchanged,
                                                    int32_t timeoutMs, std::string *coordinatorId)
 {
@@ -398,7 +399,7 @@ Status CoordinatorServiceProxyBase::RangeIfChanged(const std::string &key, int64
     auto inFlight = BeginRpc(timeoutMs);
     coordinator::RangeReqPb req;
     req.set_key(key);
-    req.set_known_mod_revision(knownModRevision);
+    req.set_known_mod_revision(knownCoordinatorId.empty() ? 0 : knownModRevision);
     coordinator::RangeRspPb rsp;
     RpcOptions options;
     options.SetTimeout(timeoutMs);
@@ -407,7 +408,7 @@ Status CoordinatorServiceProxyBase::RangeIfChanged(const std::string &key, int64
     }));
     std::string responseCoordinatorId;
     RETURN_IF_NOT_OK(inFlight.Accept(rsp.header(), &responseCoordinatorId));
-    if (rsp.unchanged() && !CanAcceptUnchangedRange(inFlight.StartedCoordinatorId(), responseCoordinatorId)) {
+    if (rsp.unchanged() && !CanAcceptUnchangedRange(knownCoordinatorId, responseCoordinatorId)) {
         unchanged = false;
         return Range(key, "", kvs, revision, timeoutMs, coordinatorId);
     }
@@ -420,10 +421,10 @@ Status CoordinatorServiceProxyBase::RangeIfChanged(const std::string &key, int64
     return Status::OK();
 }
 
-bool CoordinatorServiceProxyBase::CanAcceptUnchangedRange(const std::string &startedCoordinatorId,
+bool CoordinatorServiceProxyBase::CanAcceptUnchangedRange(const std::string &knownCoordinatorId,
                                                           const std::string &responseCoordinatorId)
 {
-    return !startedCoordinatorId.empty() && startedCoordinatorId == responseCoordinatorId;
+    return !knownCoordinatorId.empty() && knownCoordinatorId == responseCoordinatorId;
 }
 
 Status CoordinatorServiceProxyBase::DeleteRange(
@@ -467,7 +468,7 @@ Status CoordinatorServiceProxyBase::DeleteRangeInternal(
 Status CoordinatorServiceProxyBase::WatchRange(const std::string &key, const std::string &rangeEnd,
                                                const std::string &watcherAddr, const std::string &registrationId,
                                                int64_t &watchId, std::vector<KeyValueEntry> &initialKvs,
-                                               int32_t timeoutMs, std::string *coordinatorId)
+                                               int32_t timeoutMs, std::string *coordinatorId, bool skipInitialKvs)
 {
     auto inFlight = BeginRpc(timeoutMs);
     coordinator::WatchRangeReqPb req;
@@ -475,6 +476,7 @@ Status CoordinatorServiceProxyBase::WatchRange(const std::string &key, const std
     req.set_range_end(rangeEnd);
     req.set_watcher_addr(watcherAddr);
     req.set_registration_id(registrationId);
+    req.set_skip_initial_kvs(skipInitialKvs);
     coordinator::WatchRangeRspPb rsp;
     RpcOptions options;
     options.SetTimeout(timeoutMs);

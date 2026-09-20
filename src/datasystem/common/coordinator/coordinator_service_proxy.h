@@ -100,6 +100,7 @@ public:
      * @brief Conditionally read one exact key.
      * @param[in] key Physical exact key.
      * @param[in] knownModRevision Exact-key revision already held by the caller.
+     * @param[in] knownCoordinatorId Authority that supplied the cached revision; empty forces a full read.
      * @param[out] kvs Result entry when changed.
      * @param[out] revision Result store revision.
      * @param[out] unchanged Whether the key still has knownModRevision.
@@ -107,17 +108,23 @@ public:
      * @param[out] coordinatorId Exact response CoordinatorId; nullptr ignores it.
      * @return Existing Range status contract.
      */
-    virtual Status RangeIfChanged(const std::string &key, int64_t knownModRevision, std::vector<KeyValueEntry> &kvs,
+    virtual Status RangeIfChanged(const std::string &key, int64_t knownModRevision,
+                                  const std::string &knownCoordinatorId, std::vector<KeyValueEntry> &kvs,
                                   int64_t &revision, bool &unchanged,
                                   int32_t timeoutMs = DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
                                   std::string *coordinatorId = nullptr)
     {
         unchanged = false;
-        auto status = Range(key, "", kvs, revision, timeoutMs, coordinatorId);
+        std::string responseCoordinatorId;
+        auto status = Range(key, "", kvs, revision, timeoutMs, &responseCoordinatorId);
         if (status.IsError()) {
             return status;
         }
-        if (knownModRevision > 0 && kvs.size() == 1 && kvs.front().modRevision == knownModRevision) {
+        if (coordinatorId != nullptr) {
+            *coordinatorId = responseCoordinatorId;
+        }
+        if (!knownCoordinatorId.empty() && knownCoordinatorId == responseCoordinatorId
+            && knownModRevision > 0 && kvs.size() == 1 && kvs.front().modRevision == knownModRevision) {
             kvs.clear();
             unchanged = true;
         }
@@ -164,13 +171,14 @@ public:
      * @param[out] initialKvs Initial snapshot.
      * @param[in] timeoutMs RPC deadline in milliseconds.
      * @param[out] coordinatorId Exact response CoordinatorId; nullptr ignores it.
+     * @param[in] skipInitialKvs Skip the initial snapshot; the caller must reconcile after registration.
      * @return Existing WatchRange status contract.
      */
     virtual Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
                               const std::string &registrationId, int64_t &watchId,
                               std::vector<KeyValueEntry> &initialKvs,
                               int32_t timeoutMs = DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
-                              std::string *coordinatorId = nullptr) = 0;
+                              std::string *coordinatorId = nullptr, bool skipInitialKvs = false) = 0;
 
     /**
      * @brief Cancel watches owned by one callback address.
@@ -313,7 +321,8 @@ public:
     /**
      * @copydoc ICoordinatorServiceProxy::RangeIfChanged
      */
-    Status RangeIfChanged(const std::string &key, int64_t knownModRevision, std::vector<KeyValueEntry> &kvs,
+    Status RangeIfChanged(const std::string &key, int64_t knownModRevision,
+                          const std::string &knownCoordinatorId, std::vector<KeyValueEntry> &kvs,
                           int64_t &revision, bool &unchanged, int32_t timeoutMs,
                           std::string *coordinatorId) override;
 
@@ -335,7 +344,7 @@ public:
      */
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
                       const std::string &registrationId, int64_t &watchId, std::vector<KeyValueEntry> &initialKvs,
-                      int32_t timeoutMs, std::string *coordinatorId) override;
+                      int32_t timeoutMs, std::string *coordinatorId, bool skipInitialKvs = false) override;
 
     /**
      * @copydoc ICoordinatorServiceProxy::CancelWatch
@@ -398,7 +407,7 @@ private:
     Status DeleteRangeInternal(const std::string &key, const std::string &rangeEnd, int64_t &deleted,
                                int64_t &revision, int32_t timeoutMs, int64_t expectedModRevision,
                                bool recoveryControl, const std::string &expectedCoordinatorId = "");
-    static bool CanAcceptUnchangedRange(const std::string &startedCoordinatorId,
+    static bool CanAcceptUnchangedRange(const std::string &knownCoordinatorId,
                                         const std::string &responseCoordinatorId);
     class InFlightScope;
 

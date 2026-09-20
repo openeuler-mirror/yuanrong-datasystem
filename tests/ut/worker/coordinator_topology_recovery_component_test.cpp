@@ -163,7 +163,7 @@ public:
     }
 
     Status WatchRange(const std::string &, const std::string &, const std::string &, const std::string &, int64_t &,
-                      std::vector<KeyValueEntry> &, int32_t, std::string *) override
+                      std::vector<KeyValueEntry> &, int32_t, std::string *, bool = false) override
     {
         return Unused();
     }

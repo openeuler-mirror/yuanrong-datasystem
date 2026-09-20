@@ -175,7 +175,7 @@ public:
 
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
                       const std::string &, int64_t &watchId, std::vector<KeyValueEntry> &initialKvs, int32_t,
-                      std::string *coordinatorId) override
+                      std::string *coordinatorId, bool skipInitialKvs = false) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (key == nextWatchFailureKey_ && nextWatchFailureCode_ != K_OK) {
@@ -186,7 +186,9 @@ public:
         }
         watchId = nextWatchId_++;
         initialKvs.clear();
-        AppendRange(key, rangeEnd, initialKvs);
+        if (!skipInitialKvs) {
+            AppendRange(key, rangeEnd, initialKvs);
+        }
         if (key == emptyWatchSnapshotKey_) {
             initialKvs.clear();
         }
@@ -294,6 +296,14 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex_);
         nextPutStatus_ = std::move(status);
+    }
+
+    void ResetCoordinatorStore(std::string coordinatorId)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        coordinatorId_ = std::move(coordinatorId);
+        entries_.clear();
+        revision_ = 1;
     }
 
     void SetRangeEntryInterceptor(std::function<void(const std::string &key)> interceptor)

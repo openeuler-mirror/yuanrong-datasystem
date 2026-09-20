@@ -160,7 +160,8 @@ Status ValidateAndCanonicalizeTopologyState(TopologyState &state)
 
 Status TopologySnapshot::Create(TopologyState state, int64_t authorityRevision, std::string canonicalDigest,
                                 std::shared_ptr<const TopologySnapshot> &snapshot,
-                                std::unordered_map<std::string, std::string> hostIds, int64_t hostIdsRevision)
+                                std::unordered_map<std::string, std::string> hostIds, int64_t hostIdsRevision,
+                                std::string coordinatorId)
 {
     CHECK_FAIL_RETURN_STATUS(authorityRevision >= 0 && hostIdsRevision >= 0 && IsSha256Hex(canonicalDigest), K_INVALID,
                              "invalid topology evidence");
@@ -170,6 +171,7 @@ Status TopologySnapshot::Create(TopologyState state, int64_t authorityRevision, 
     Hasher hasher;
     RETURN_IF_NOT_OK(hasher.GetStringMapSha256Hex(candidate->hostIds_, candidate->hostIdsDigest_));
     candidate->hostIdsRevision_ = hostIdsRevision;
+    candidate->coordinatorId_ = std::move(coordinatorId);
     candidate->BuildIndexes();
     snapshot = std::move(candidate);
     return Status::OK();
@@ -245,6 +247,11 @@ uint64_t TopologySnapshot::Version() const noexcept
 int64_t TopologySnapshot::AuthorityRevision() const noexcept
 {
     return authorityRevision_;
+}
+
+const std::string &TopologySnapshot::CoordinatorId() const noexcept
+{
+    return coordinatorId_;
 }
 
 const std::string &TopologySnapshot::CanonicalDigest() const noexcept

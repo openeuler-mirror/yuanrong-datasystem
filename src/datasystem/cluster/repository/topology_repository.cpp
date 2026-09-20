@@ -188,7 +188,8 @@ TopologyRepository::TopologyRepository(ICoordinationBackend &backend, const Topo
 {
 }
 
-Status TopologyRepository::ReadTopology(int32_t timeoutMs, TopologyState &state, int64_t &authorityRevision) const
+Status TopologyRepository::ReadTopology(int32_t timeoutMs, TopologyState &state, int64_t &authorityRevision,
+                                        std::string *coordinatorId) const
 {
     CHECK_FAIL_RETURN_STATUS(timeoutMs > 0, K_INVALID, "invalid topology read timeout");
     RangeSearchResult result;
@@ -197,18 +198,23 @@ Status TopologyRepository::ReadTopology(int32_t timeoutMs, TopologyState &state,
     RETURN_IF_NOT_OK(TopologyRepositoryCodec::DecodeTopology(result.value, decoded));
     state = std::move(decoded);
     authorityRevision = result.modRevision;
+    if (coordinatorId != nullptr) {
+        *coordinatorId = std::move(result.coordinatorId);
+    }
     return Status::OK();
 }
 
 Status TopologyRepository::ReadTopologyIfChanged(int32_t timeoutMs, int64_t knownAuthorityRevision,
-                                                 TopologyState &state, int64_t &authorityRevision,
+                                                 const std::string &knownCoordinatorId, TopologyState &state,
+                                                 int64_t &authorityRevision, std::string &coordinatorId,
                                                  bool &unchanged) const
 {
     CHECK_FAIL_RETURN_STATUS(timeoutMs > 0, K_INVALID, "invalid topology read timeout");
     CHECK_FAIL_RETURN_STATUS(knownAuthorityRevision > 0, K_INVALID, "known authority revision must be positive");
     RangeSearchResult result;
     RETURN_IF_NOT_OK(backend_.GetIfChanged(keys_.TopologyTable(), TopologyKeyHelper::TopologyKey(),
-                                           knownAuthorityRevision, result, unchanged, timeoutMs));
+                                           knownAuthorityRevision, knownCoordinatorId, result, unchanged, timeoutMs));
+    coordinatorId = std::move(result.coordinatorId);
     if (unchanged) {
         return Status::OK();
     }

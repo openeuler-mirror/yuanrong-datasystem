@@ -94,8 +94,14 @@ TEST(TopologyRoleWatchPlanTest, BuildsOnlyRoleRequiredExactAndPrefixWatches)
     EXPECT_EQ(watches[1].key, "127.0.0.1:1");
     EXPECT_EQ(watches[2].tableName, keys->ProbeTable());
     EXPECT_EQ(watches[2].key, "127.0.0.1:1");
+    EXPECT_TRUE(watches[0].skipInitialKvs);
+    for (size_t i = 1; i < watches.size(); ++i) {
+        EXPECT_FALSE(watches[i].skipInitialKvs);
+    }
     DS_ASSERT_OK(BuildTopologyRoleWatchPlan(TopologyRuntimeRole::CONTROLLER, "", *keys, 7, watches));
     ASSERT_EQ(watches.size(), 2);
+    EXPECT_FALSE(watches[0].skipInitialKvs);
+    EXPECT_FALSE(watches[1].skipInitialKvs);
     EXPECT_EQ(watches[0].tableName, keys->TopologyTable());
     EXPECT_EQ(watches[1].tableName, keys->MembershipTable());
     EXPECT_TRUE(watches[1].key.empty());

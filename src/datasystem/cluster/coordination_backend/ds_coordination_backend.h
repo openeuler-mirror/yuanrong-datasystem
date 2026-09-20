@@ -108,7 +108,7 @@ public:
      * @brief Conditionally read one exact key from Coordinator.
      */
     Status GetIfChanged(const std::string &tableName, const std::string &key, int64_t knownModRevision,
-                        RangeSearchResult &res, bool &unchanged,
+                        const std::string &knownCoordinatorId, RangeSearchResult &res, bool &unchanged,
                         int32_t timeoutMs = SEND_RPC_TIMEOUT_MS_DEFAULT) override;
 
     /**
