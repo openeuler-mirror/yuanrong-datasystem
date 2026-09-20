@@ -89,6 +89,8 @@ struct RangeSearchResult {
     std::string value;
     int64_t modRevision = 0;
     int64_t version = 0;
+    // Empty for ETCD; Coordinator revisions are scoped to the response process identity.
+    std::string coordinatorId{};
 
     std::string ToString() const
     {
@@ -99,6 +101,7 @@ struct RangeSearchResult {
 
     void ParseKeyValue(const ::mvccpb::KeyValue &kv)
     {
+        coordinatorId.clear();
         key = kv.key();
         value = kv.value();
         version = kv.version();

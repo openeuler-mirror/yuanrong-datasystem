@@ -3,6 +3,24 @@ load("//bazel:build_defs.bzl", "ds_cc_test")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_test(
+    name = "coordination_backend_contract_test",
+    srcs = ["coordination_backend_contract_test.cpp"],
+    deps = [
+        "//src/datasystem/cluster/coordination_backend:coordination_backend",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "coordination_event_dispatcher_test",
+    srcs = ["coordination_event_dispatcher_test.cpp"],
+    deps = [
+        "//src/datasystem/cluster:cluster_topology",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "remote_ub_port_health_verifier_test",
     srcs = ["remote_ub_port_health_verifier_test.cpp"],
     deps = [

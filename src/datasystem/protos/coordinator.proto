@@ -214,6 +214,7 @@ message WatchRangeReqPb {
   string watcher_addr = 3;
   // Client-assigned idempotency key; an identical retry returns the original watch_id.
   bytes registration_id = 4;
+  bool skip_initial_kvs = 5;
 }
 
 message WatchRangeRspPb {

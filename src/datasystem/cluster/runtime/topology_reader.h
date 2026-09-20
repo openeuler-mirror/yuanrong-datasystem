@@ -65,17 +65,19 @@ public:
      * @param[in] hostIds Worker-address to host-id map read from the membership table.
      * @param[out] snapshot Snapshot unchanged on failure.
      * @param[in] hostIdsRevision Membership read revision, or zero when the projection is unknown.
+     * @param[in] coordinatorId CoordinatorId carried with the topology value; empty for ETCD.
      * @return Decode, digest, or Snapshot validation status.
      */
     static Status BuildFromEncodedTopology(const std::string &value, int64_t authorityRevision,
                                            std::unordered_map<std::string, std::string> hostIds,
                                            std::shared_ptr<const TopologySnapshot> &snapshot,
-                                           int64_t hostIdsRevision = 0);
+                                           int64_t hostIdsRevision = 0, std::string coordinatorId = {});
 
 private:
     static Status BuildFromState(TopologyState state, int64_t authorityRevision,
                                  std::unordered_map<std::string, std::string> hostIds,
-                                 std::shared_ptr<const TopologySnapshot> &snapshot, int64_t hostIdsRevision);
+                                 std::shared_ptr<const TopologySnapshot> &snapshot, int64_t hostIdsRevision,
+                                 std::string coordinatorId);
 
     TopologyRepository &repository_;
 };

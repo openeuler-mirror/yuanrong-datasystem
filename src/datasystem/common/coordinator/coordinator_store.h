@@ -100,11 +100,12 @@ public:
      * @param[in] registrationId Stable token for an ambiguous registration retry.
      * @param[out] watchId Assigned watch ID.
      * @param[out] initialKvs Current snapshot of the watched range.
+     * @param[in] skipInitialKvs Skip snapshot materialization; the caller must reconcile after registration.
      * @return Status of the operation.
      */
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
                       const std::string &registrationId, int64_t &watchId,
-                      std::vector<KeyValueEntry> &initialKvs);
+                      std::vector<KeyValueEntry> &initialKvs, bool skipInitialKvs = false);
 
     /**
      * @brief Cancel watches for a watcher address.

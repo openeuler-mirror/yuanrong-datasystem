@@ -611,6 +611,15 @@
   `last_processed_revision` (`none` or the numeric revision). Observer keeps its existing revision-zero watch behavior
   and reports `start_mode=after_revision last_processed_revision=0`; logs must not imply revision zero for every
   backend.
+- Coordinator-backed Worker topology watches set `skip_initial_kvs`; registration establishes the current revision
+  boundary without materializing the snapshot. The post-registration `RESET` retains conditional topology/notify
+  reconciliation, including rewatch gaps. Membership, notify, and probe watches retain their initial snapshots.
+  The protobuf flag defaults to false, preserving existing callers and safe fallback to older Coordinators.
+  Conditional reconciliation binds the cached revision to the snapshot's response CoordinatorId, not the proxy's
+  latest observed identity. Equal revisions from a different Coordinator trigger a full read. Failed reads retain
+  the old paired evidence for retry; topology and Watch values carry their exact source identity through publication.
+  Same-version/same-digest publication updates changed authority evidence without replaying topology callbacks,
+  retaining last-good hostIds when the membership read failed.
 
 ## Tests
 

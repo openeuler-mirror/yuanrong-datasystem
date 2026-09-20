@@ -137,7 +137,7 @@ Status CoordinatorStore::DeleteRange(const std::string &key, const std::string &
 
 Status CoordinatorStore::WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
                                     const std::string &registrationId, int64_t &watchId,
-                                    std::vector<KeyValueEntry> &initialKvs)
+                                    std::vector<KeyValueEntry> &initialKvs, bool skipInitialKvs)
 {
     RETURN_IF_NOT_OK(CheckInitialized());
     bool created = false;
@@ -148,7 +148,12 @@ Status CoordinatorStore::WatchRange(const std::string &key, const std::string &r
     }
 
     int64_t snapshotRevision = 0;
-    memKvStore_->Range(key, rangeEnd, initialKvs, snapshotRevision);
+    if (skipInitialKvs) {
+        initialKvs.clear();
+        snapshotRevision = memKvStore_->CurrentRevision();
+    } else {
+        memKvStore_->Range(key, rangeEnd, initialKvs, snapshotRevision);
+    }
     watchDispatcher_->SetSnapshotRevision(watchId, snapshotRevision);
     return Status::OK();
 }

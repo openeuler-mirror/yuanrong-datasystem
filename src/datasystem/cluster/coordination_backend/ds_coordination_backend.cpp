@@ -252,7 +252,8 @@ Status DsCoordinationBackend::Get(const std::string &tableName, const std::strin
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     std::vector<KeyValueEntry> kvs;
     int64_t revision = 0;
-    auto rc = proxy_->Range(BuildRealKey(tableName, key), "", kvs, revision, timeoutMs);
+    std::string coordinatorId;
+    auto rc = proxy_->Range(BuildRealKey(tableName, key), "", kvs, revision, timeoutMs, &coordinatorId);
     RefreshWatchIdentity(rc);
     RETURN_IF_NOT_OK(rc);
     if (kvs.empty()) {
@@ -261,23 +262,27 @@ Status DsCoordinationBackend::Get(const std::string &tableName, const std::strin
     CHECK_FAIL_RETURN_STATUS(kvs.size() == 1, K_KVSTORE_ERROR, "Coordinator key value is not unique. key:" + key);
     res.key = kvs.front().key;
     res.value = kvs.front().value;
+    res.coordinatorId = std::move(coordinatorId);
     res.version = kvs.front().version;
     res.modRevision = kvs.front().modRevision;
     return Status::OK();
 }
 
 Status DsCoordinationBackend::GetIfChanged(const std::string &tableName, const std::string &key,
-                                           int64_t knownModRevision, RangeSearchResult &res, bool &unchanged,
+                                           int64_t knownModRevision, const std::string &knownCoordinatorId,
+                                           RangeSearchResult &res, bool &unchanged,
                                            int32_t timeoutMs)
 {
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     CHECK_FAIL_RETURN_STATUS(knownModRevision > 0, K_INVALID, "known modification revision must be positive");
     std::vector<KeyValueEntry> kvs;
     int64_t revision = 0;
-    auto rc =
-        proxy_->RangeIfChanged(BuildRealKey(tableName, key), knownModRevision, kvs, revision, unchanged, timeoutMs);
+    std::string coordinatorId;
+    auto rc = proxy_->RangeIfChanged(BuildRealKey(tableName, key), knownModRevision, knownCoordinatorId, kvs,
+                                     revision, unchanged, timeoutMs, &coordinatorId);
     RefreshWatchIdentity(rc);
     RETURN_IF_NOT_OK(rc);
+    res.coordinatorId = std::move(coordinatorId);
     if (unchanged) {
         CHECK_FAIL_RETURN_STATUS(kvs.empty(), K_RUNTIME_ERROR, "unchanged Coordinator Range returned values");
         return Status::OK();
@@ -450,8 +455,8 @@ Status DsCoordinationBackend::PrepareWatchPlan(const std::vector<WatchKey> &watc
         int64_t watchId = 0;
         std::string responseCoordinatorId;
         auto rc = proxy_->WatchRange(realKey, rangeEnd, watcherAddr_, pendingWatchRegistrationId_ + realKey,
-                                     watchId, initialKvs,
-                                     DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &responseCoordinatorId);
+                                     watchId, initialKvs, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &responseCoordinatorId,
+                                     watchKey.skipInitialKvs);
         if (rc.IsOk() && !coordinatorId.empty() && coordinatorId != responseCoordinatorId) {
             LOG_IF_ERROR(proxy_->CancelWatch(watcherAddr_, { watchId }, responseCoordinatorId),
                          "Cancel current-generation watch");

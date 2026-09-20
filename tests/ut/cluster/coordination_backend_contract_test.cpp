@@ -63,10 +63,10 @@ public:
 
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
                       const std::string &, int64_t &watchId, std::vector<KeyValueEntry> &initialKvs, int32_t,
-                      std::string *coordinatorId) override
+                      std::string *coordinatorId, bool skipInitialKvs = false) override
     {
         watchId = nextWatchId_++;
-        initialKvs = initialKvs_;
+        initialKvs = skipInitialKvs ? std::vector<KeyValueEntry>{} : initialKvs_;
         watchCalls_.push_back({ key, rangeEnd, watcherAddr, watchId });
         observedCoordinatorId_ = "coordinator-a";
         if (coordinatorId != nullptr) {
@@ -222,6 +222,21 @@ TEST(CoordinationBackendContractTest, DsBackendPreservesClusterScopedMembershipT
     EXPECT_EQ(prefix, "/datasystem/cluster");
     EXPECT_TRUE(backend.GetStorePrefix("/datasystem/cluster-a/topology", prefix).IsOk());
     EXPECT_EQ(prefix, "/datasystem/cluster-a/topology");
+}
+
+TEST(CoordinationBackendContractTest, SkipInitialSnapshotStillDispatchesReset)
+{
+    FakeCoordinatorServiceProxy proxy;
+    proxy.initialKvs_.resize(1);
+    proxy.initialKvs_[0].key = "/datasystem/c/topology/current";
+    proxy.initialKvs_[0].value = "topology";
+    DsCoordinationBackend backend(&proxy, "127.0.0.1:1");
+    std::vector<CoordinationEventType> events;
+    backend.SetEventHandler([&](CoordinationEvent &&event) { events.push_back(event.type); });
+
+    ASSERT_TRUE(backend.WatchEvents({ { "/datasystem/c/topology", "current", 0, true } }).IsOk());
+    ASSERT_EQ(events.size(), 1U);
+    EXPECT_EQ(events.front(), CoordinationEventType::RESET);
 }
 
 TEST(CoordinationBackendContractTest, DsBackendPrefixWatchAcceptsCoordinatorChildEvents)

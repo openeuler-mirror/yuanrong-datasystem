@@ -60,12 +60,14 @@ public:
      * @param[in] canonicalDigest Digest of canonical topology bytes.
      * @param[in] hostIds Worker-address to host-id map carried from the membership table; empty when unknown.
      * @param[in] hostIdsRevision Membership read revision, or zero when the projection is unknown.
+     * @param[in] coordinatorId Coordinator that supplied authorityRevision; empty for ETCD.
      * @param[out] snapshot New snapshot; unchanged on failure.
      * @return K_OK on success; K_INVALID for illegal state or evidence.
      */
     static Status Create(TopologyState state, int64_t authorityRevision, std::string canonicalDigest,
                          std::shared_ptr<const TopologySnapshot> &snapshot,
-                         std::unordered_map<std::string, std::string> hostIds = {}, int64_t hostIdsRevision = 0);
+                         std::unordered_map<std::string, std::string> hostIds = {}, int64_t hostIdsRevision = 0,
+                         std::string coordinatorId = {});
 
     ~TopologySnapshot() = default;
     TopologySnapshot(const TopologySnapshot &) = delete;
@@ -73,6 +75,7 @@ public:
 
     uint64_t Version() const noexcept;
     int64_t AuthorityRevision() const noexcept;
+    const std::string &CoordinatorId() const noexcept;
     const std::string &CanonicalDigest() const noexcept;
     bool ClusterHasInit() const noexcept;
     uint32_t TokensPerMember() const noexcept;
@@ -180,6 +183,7 @@ private:
 
     TopologyState state_;
     int64_t authorityRevision_{ 0 };
+    std::string coordinatorId_;
     std::string canonicalDigest_;
     std::unordered_map<std::string, std::string> hostIds_;
     int64_t hostIdsRevision_{ 0 };

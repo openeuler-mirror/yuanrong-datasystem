@@ -52,7 +52,7 @@ Status RetainLastGoodHostIds(const std::shared_ptr<const TopologySnapshot> &prev
     }
     return TopologySnapshot::Create(candidate->CopyState(), candidate->AuthorityRevision(),
                                     candidate->CanonicalDigest(), candidate, std::move(hostIds),
-                                    previous->HostIdsRevision());
+                                    previous->HostIdsRevision(), candidate->CoordinatorId());
 }
 
 std::vector<TokenRange> MergeRanges(std::vector<TokenRange> ranges)
@@ -121,9 +121,12 @@ Status TopologySnapshotState::Publish(std::shared_ptr<const TopologySnapshot> sn
     } else if (snapshot->Version() > current->Version()) {
         outcome = SnapshotUpdateOutcome::VERSION_GAP;
     } else if (snapshot->CanonicalDigest() == current->CanonicalDigest()) {
-        // Owners serialize exact reads. Membership revisions can restart with a new Coordinator lifetime.
-        if (snapshot->HostIdsRevision() > 0
-            && (snapshot->HostIds() != current->HostIds() || current->HostIdsRevision() == 0)) {
+        // Owners serialize exact reads; authority revisions are scoped to one Coordinator lifetime.
+        if (snapshot->CoordinatorId() != current->CoordinatorId()
+            || snapshot->AuthorityRevision() != current->AuthorityRevision()
+            || (snapshot->HostIdsRevision() > 0
+                && (snapshot->HostIds() != current->HostIds() || current->HostIdsRevision() == 0))) {
+            RETURN_IF_NOT_OK(RetainLastGoodHostIds(current, snapshot));
             std::atomic_store_explicit(&current_, std::move(snapshot), std::memory_order_release);
             publicationGeneration_.fetch_add(1, std::memory_order_release);
         }

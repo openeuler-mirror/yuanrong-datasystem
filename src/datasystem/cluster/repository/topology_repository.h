@@ -85,21 +85,26 @@ public:
      * @param[in] timeoutMs Positive backend timeout.
      * @param[out] state Decoded topology; unchanged on failure.
      * @param[out] authorityRevision Exact-read revision.
+     * @param[out] coordinatorId Exact-read CoordinatorId; nullptr ignores it.
      * @return Backend, K_NOT_FOUND, or validation status.
      */
-    Status ReadTopology(int32_t timeoutMs, TopologyState &state, int64_t &authorityRevision) const;
+    Status ReadTopology(int32_t timeoutMs, TopologyState &state, int64_t &authorityRevision,
+                        std::string *coordinatorId = nullptr) const;
 
     /**
      * @brief Conditionally exact-read authoritative topology.
      * @param[in] timeoutMs Positive backend timeout.
      * @param[in] knownAuthorityRevision Authority revision already held by the caller.
+     * @param[in] knownCoordinatorId Coordinator that supplied the cached revision; empty for ETCD.
      * @param[out] state Decoded topology when changed; unchanged otherwise.
      * @param[out] authorityRevision Exact-read revision when changed; unchanged otherwise.
+     * @param[out] coordinatorId Exact-read CoordinatorId.
      * @param[out] unchanged Whether topology still has knownAuthorityRevision.
      * @return Backend, K_NOT_FOUND, or validation status.
      */
-    Status ReadTopologyIfChanged(int32_t timeoutMs, int64_t knownAuthorityRevision, TopologyState &state,
-                                 int64_t &authorityRevision, bool &unchanged) const;
+    Status ReadTopologyIfChanged(int32_t timeoutMs, int64_t knownAuthorityRevision,
+                                 const std::string &knownCoordinatorId, TopologyState &state,
+                                 int64_t &authorityRevision, std::string &coordinatorId, bool &unchanged) const;
 
     /**
      * @brief CAS topology by expected version with exact unknown read-back.

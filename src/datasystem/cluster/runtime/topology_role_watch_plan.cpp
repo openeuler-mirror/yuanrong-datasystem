@@ -25,6 +25,7 @@ Status BuildTopologyRoleWatchPlan(TopologyRuntimeRole role, const std::string &l
         built.emplace_back(WatchKey{ keys.NotifyTable(), std::move(notifyKey), startRevision });
     }
     if (role == TopologyRuntimeRole::WORKER) {
+        built.front().skipInitialKvs = true;
         std::string probeKey;
         RETURN_IF_NOT_OK(TopologyKeyHelper::ProbeKey(localAddress, probeKey));
         built.emplace_back(WatchKey{ keys.ProbeTable(), std::move(probeKey), startRevision });
