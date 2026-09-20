@@ -59,6 +59,24 @@ bool IsControlMutation(const ParsedTopologyCoordinationKey &parsed)
            || parsed.kind == TopologyCoordinationKeyKind::DELETE_TASK;
 }
 
+template <typename Predicate>
+bool WaitForHostCondition(bthread::ConditionVariable &cv, std::unique_lock<bthread::Mutex> &lock,
+                          std::chrono::steady_clock::time_point deadline, const Predicate &ready)
+{
+    while (!ready()) {
+        if (deadline == std::chrono::steady_clock::time_point::max()) {
+            cv.wait(lock);
+            continue;
+        }
+        const auto remaining = deadline - std::chrono::steady_clock::now();
+        if (remaining <= std::chrono::steady_clock::duration::zero()) {
+            return ready();
+        }
+        cv.wait_for(lock, std::chrono::duration_cast<std::chrono::microseconds>(remaining).count());
+    }
+    return true;
+}
+
 void PreserveFirstError(const Status &candidate, Status &firstError)
 {
     if (firstError.IsOk() && candidate.IsError()) {
@@ -130,7 +148,7 @@ Status TopologyControlHost::Start()
 {
     CHECK_FAIL_RETURN_STATUS(coordinatorId_.size() == UUID_SIZE && options_.IsValid(), K_INVALID,
                              "invalid topology Control Host identity or options");
-    std::unique_lock<std::mutex> lock(mutex_);
+    std::unique_lock<bthread::Mutex> lock(mutex_);
     CHECK_FAIL_RETURN_STATUS(!started_ && !stopping_, K_INVALID, "topology Control Host Start is one-shot");
     started_ = true;
     threadExited_ = false;
@@ -162,7 +180,7 @@ Status TopologyControlHost::PrepareMembershipPut(const std::string &clusterName)
 {
     std::unique_ptr<cluster::TopologyKeyHelper> keys;
     RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(clusterName, keys));
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     CHECK_FAIL_RETURN_STATUS(started_ && !stopping_, K_SHUTTING_DOWN,
                              "topology Control Host does not accept membership admission");
     auto found = entries_.find(clusterName);
@@ -192,7 +210,7 @@ Status TopologyControlHost::PrepareMembershipPut(const std::string &clusterName)
 
 void TopologyControlHost::CompleteMembershipPut(const std::string &clusterName, bool committed) noexcept
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     auto found = entries_.find(clusterName);
     if (found == entries_.end()) {
         return;
@@ -217,7 +235,7 @@ void TopologyControlHost::NotifyStoreMutation(WatchEvent::Type type,
     if (!IsControlMutation(parsed)) {
         return;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     auto found = entries_.find(parsed.clusterName);
     if (found == entries_.end()) {
         return;
@@ -241,7 +259,7 @@ void TopologyControlHost::NotifyStoreMutation(WatchEvent::Type type,
 Status TopologyControlHost::EnqueueWorkerLivenessReport(const std::string &clusterName,
                                                         cluster::WorkerLivenessReport report)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     CHECK_FAIL_RETURN_STATUS(started_ && !stopping_, K_SHUTTING_DOWN,
                              "topology Control Host does not accept liveness reports");
     auto found = entries_.find(clusterName);
@@ -278,7 +296,7 @@ void TopologyControlHost::RecordWorkerFailureSummaries(const std::string &cluste
     }
     uint64_t clusterGeneration = 0;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         const auto entry = entries_.find(clusterName);
         if (entry != entries_.end()) {
             clusterGeneration = entry->second->clusterGeneration;
@@ -300,7 +318,7 @@ void TopologyControlHost::RecordWorkerFailureSummaries(const std::string &cluste
                                                  now, newTargets, clearedTargets);
     bool currentGeneration = false;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         auto entry = entries_.find(clusterName);
         currentGeneration = entry != entries_.end() && entry->second->clusterGeneration == clusterGeneration;
         if (currentGeneration && shouldWake) {
@@ -333,16 +351,16 @@ bool TopologyControlHost::UpdateFailureReports(const std::string &clusterName,
     if (clusterMutex == nullptr) {
         return false;
     }
-    std::lock_guard<std::mutex> clusterLock(*clusterMutex);
+    std::lock_guard<bthread::Mutex> clusterLock(*clusterMutex);
     {
-        std::lock_guard<std::mutex> hostLock(mutex_);
+        std::lock_guard<bthread::Mutex> hostLock(mutex_);
         const auto entry = entries_.find(clusterName);
         if (entry == entries_.end() || entry->second->state != EntryState::RUNNING
             || entry->second->clusterGeneration != clusterGeneration) {
             return false;
         }
     }
-    std::lock_guard<std::mutex> lock(failureReportMutex_);
+    std::lock_guard<bthread::Mutex> lock(failureReportMutex_);
     auto clusterIter = failureReportsByCluster_.find(clusterName);
     if (clusterIter == failureReportsByCluster_.end()) {
         if (reportedTargets.empty()) {
@@ -534,9 +552,9 @@ std::vector<cluster::MemberIdentity> TopologyControlHost::GetIsolationCandidates
     if (clusterMutex == nullptr) {
         return {};
     }
-    std::lock_guard<std::mutex> clusterLock(*clusterMutex);
+    std::lock_guard<bthread::Mutex> clusterLock(*clusterMutex);
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         auto entry = entries_.find(clusterName);
         if (entry == entries_.end() || entry->second->state != EntryState::RUNNING) {
             return {};
@@ -545,14 +563,14 @@ std::vector<cluster::MemberIdentity> TopologyControlHost::GetIsolationCandidates
     }
     const auto eligibleReporters = BuildEligibleFailureReporters(latest, memberships);
     const auto membershipsByAddress = IndexMembershipsByAddress(memberships);
-    std::lock_guard<std::mutex> lock(failureReportMutex_);
+    std::lock_guard<bthread::Mutex> lock(failureReportMutex_);
     return GetIsolationCandidatesLocked(clusterName, latest, eligibleReporters, membershipsByAddress,
                                         CountFailurePopulation(latest), clusterGeneration, now);
 }
 
-std::shared_ptr<std::mutex> TopologyControlHost::GetFailureReportClusterMutex(const std::string &clusterName)
+std::shared_ptr<bthread::Mutex> TopologyControlHost::GetFailureReportClusterMutex(const std::string &clusterName)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     const auto entry = entries_.find(clusterName);
     return entry == entries_.end() ? nullptr : entry->second->failureReportMutex;
 }
@@ -625,10 +643,10 @@ Status TopologyControlHost::RunUnderActiveFailureCommitFence(const std::string &
     const auto validateAndCommit = [&]() {
         auto clusterMutex = GetFailureReportClusterMutex(clusterName);
         CHECK_FAIL_RETURN_STATUS(clusterMutex != nullptr, K_NOT_READY, "Cluster failure report state is unavailable");
-        std::lock_guard<std::mutex> clusterLock(*clusterMutex);
+        std::lock_guard<bthread::Mutex> clusterLock(*clusterMutex);
         std::vector<cluster::MemberIdentity> candidates;
         {
-            std::lock_guard<std::mutex> lock(failureReportMutex_);
+            std::lock_guard<bthread::Mutex> lock(failureReportMutex_);
             candidates = GetIsolationCandidatesLocked(clusterName, latest, eligibleReporters, membershipsByAddress,
                                                       CountFailurePopulation(latest), reservation.clusterGeneration,
                                                       options_.controller.now());
@@ -673,7 +691,7 @@ Status TopologyControlHost::ReadCurrentMemberships(const std::string &clusterNam
 bool TopologyControlHost::TryReserveActiveFailureCommit(const std::string &clusterName,
                                                         ActiveFailureReservation &reservation)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     auto entry = entries_.find(clusterName);
     if (entry == entries_.end() || entry->second->state != EntryState::RUNNING
         || entry->second->pendingMembershipPuts > 0 || entry->second->activeFailureCommitInProgress) {
@@ -687,7 +705,7 @@ bool TopologyControlHost::TryReserveActiveFailureCommit(const std::string &clust
 bool TopologyControlHost::IsActiveFailureReservationCurrent(const std::string &clusterName,
                                                             const ActiveFailureReservation &reservation)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     const auto entry = entries_.find(clusterName);
     return entry != entries_.end() && entry->second->state == EntryState::RUNNING
            && entry->second->activeFailureCommitInProgress && entry->second->pendingMembershipPuts == 0
@@ -697,7 +715,7 @@ bool TopologyControlHost::IsActiveFailureReservationCurrent(const std::string &c
 
 void TopologyControlHost::ReleaseActiveFailureCommit(const std::string &clusterName, uint64_t clusterGeneration)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     auto entry = entries_.find(clusterName);
     if (entry != entries_.end() && entry->second->clusterGeneration == clusterGeneration) {
         entry->second->activeFailureCommitInProgress = false;
@@ -727,8 +745,9 @@ void TopologyControlHost::Run() noexcept
     while (true) {
         try {
             {
-                std::unique_lock<std::mutex> lock(mutex_);
-                wakeCv_.wait_for(lock, options_.reconcileInterval);
+                std::unique_lock<bthread::Mutex> lock(mutex_);
+                wakeCv_.wait_for(
+                    lock, std::chrono::duration_cast<std::chrono::microseconds>(options_.reconcileInterval).count());
                 if (stopping_) {
                     break;
                 }
@@ -739,12 +758,12 @@ void TopologyControlHost::Run() noexcept
                 << "CLUSTER_CONTROL_HOST action=reconcile_exception status=" << error.what();
         } catch (...) {
             LOG(ERROR) << "CLUSTER_CONTROL_HOST action=reconcile_exception status=unknown";
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<bthread::Mutex> lock(mutex_);
             stopping_ = true;
             break;
         }
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     threadExited_ = true;
     wakeCv_.notify_all();
 }
@@ -757,7 +776,7 @@ void TopologyControlHost::ReconcileEntries()
     });
     std::vector<std::string> clusterNames;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         clusterNames.reserve(entries_.size());
         for (const auto &item : entries_) {
             clusterNames.emplace_back(item.first);
@@ -780,7 +799,7 @@ void TopologyControlHost::ReconcileCluster(const std::string &clusterName)
     bool releaseReserved = false;
     uint64_t mutationGeneration = 0;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         auto found = entries_.find(clusterName);
         if (found == entries_.end()) {
             return;
@@ -809,7 +828,7 @@ void TopologyControlHost::ReconcileWaitingEntry(const std::string &clusterName, 
     const auto now = std::chrono::steady_clock::now();
     size_t pendingMembershipPuts = 0;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         pendingMembershipPuts = entry.pendingMembershipPuts;
     }
     if (recoveryState == TopologyRecoveryState::RECOVERING && pendingMembershipPuts == 0) {
@@ -819,7 +838,7 @@ void TopologyControlHost::ReconcileWaitingEntry(const std::string &clusterName, 
         if (status.IsOk() && released) {
             bool observationCurrent = false;
             {
-                std::lock_guard<std::mutex> lock(mutex_);
+                std::lock_guard<bthread::Mutex> lock(mutex_);
                 auto found = entries_.find(clusterName);
                 observationCurrent = found != entries_.end() && found->second.get() == &entry
                                      && IsEmptyObservationCurrent(entry, observationGeneration);
@@ -843,7 +862,7 @@ void TopologyControlHost::ReconcileWaitingEntry(const std::string &clusterName, 
         status = Status(K_RUNTIME_ERROR, "start topology Runtime threw an unknown exception");
     }
     const auto elapsedMs = cluster::DurationMs(startedAt, std::chrono::steady_clock::now());
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     if (status.IsOk()) {
         entry.state = EntryState::RUNNING;
         entry.retryBackoff = options_.startRetryInitial;
@@ -873,7 +892,7 @@ void TopologyControlHost::ReconcileRunningEntry(const std::string &clusterName, 
     if (controllerMayRun && diagnostics.running) {
         bool inspectEmpty = false;
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<bthread::Mutex> lock(mutex_);
             inspectEmpty = entry.emptyCheckPending;
             entry.emptyCheckPending = false;
         }
@@ -883,14 +902,14 @@ void TopologyControlHost::ReconcileRunningEntry(const std::string &clusterName, 
             inspectEmpty ? ReleaseClusterIfEmpty(entry, released, observationGeneration) : Status::OK();
         if (releaseStatus.IsError()) {
             {
-                std::lock_guard<std::mutex> lock(mutex_);
+                std::lock_guard<bthread::Mutex> lock(mutex_);
                 entry.emptyCheckPending = true;
             }
             LOG_FIRST_AND_EVERY_N(WARNING, HOST_LIFECYCLE_LOG_INTERVAL)
                 << "CLUSTER_CONTROL_HOST cluster=" << clusterName
                 << " action=inspect_empty_failed status=" << releaseStatus.ToString();
         } else if (released) {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<bthread::Mutex> lock(mutex_);
             if (IsEmptyObservationCurrent(entry, observationGeneration)) {
                 entry.state = EntryState::STOPPING;
                 entry.releaseAfterStop = true;
@@ -909,7 +928,7 @@ void TopologyControlHost::ReconcileRunningEntry(const std::string &clusterName, 
         SubmitDoorbell(entry);
         return;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     entry.state = EntryState::STOPPING;
     entry.releaseAfterStop = recoveryState == TopologyRecoveryState::RECOVERING;
     entry.stopReason = diagnostics.running ? "recovery_not_ready" : "runtime_not_running";
@@ -922,7 +941,7 @@ void TopologyControlHost::SubmitWorkerLivenessReports(ClusterEntry &entry)
 {
     std::deque<cluster::WorkerLivenessReport> reports;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         reports.swap(entry.pendingLivenessReports);
         entry.deliveringLivenessReports += reports.size();
     }
@@ -938,7 +957,7 @@ void TopologyControlHost::SubmitWorkerLivenessReports(ClusterEntry &entry)
                       << " witness=" << report.witnessAddress << " target=" << report.target.address
                       << " result=" << cluster::WorkerLivenessResultName(report.result)
                       << " attempts=" << report.deliveryAttempts;
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<bthread::Mutex> lock(mutex_);
             --entry.deliveringLivenessReports;
             continue;
         }
@@ -947,7 +966,7 @@ void TopologyControlHost::SubmitWorkerLivenessReports(ClusterEntry &entry)
                      << " witness=" << report.witnessAddress << " target=" << report.target.address
                      << " result=" << cluster::WorkerLivenessResultName(report.result)
                      << " attempts=" << report.deliveryAttempts << " retry=false status=" << status.ToString();
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         --entry.deliveringLivenessReports;
     }
 }
@@ -1041,7 +1060,7 @@ Status TopologyControlHost::ReleaseClusterIfEmpty(ClusterEntry &entry, bool &rel
 {
     released = false;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         observationGeneration = entry.mutationGeneration;
         if (entry.pendingMembershipPuts > 0) {
             return Status::OK();
@@ -1077,9 +1096,9 @@ bool TopologyControlHost::EraseClusterIfCurrent(const std::string &clusterName, 
     if (clusterMutex == nullptr) {
         return false;
     }
-    std::lock_guard<std::mutex> clusterLock(*clusterMutex);
+    std::lock_guard<bthread::Mutex> clusterLock(*clusterMutex);
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         auto found = entries_.find(clusterName);
         if (found == entries_.end() || found->second.get() != expected
             || found->second->mutationGeneration != mutationGeneration) {
@@ -1087,7 +1106,7 @@ bool TopologyControlHost::EraseClusterIfCurrent(const std::string &clusterName, 
         }
         entries_.erase(found);
     }
-    std::lock_guard<std::mutex> lock(failureReportMutex_);
+    std::lock_guard<bthread::Mutex> lock(failureReportMutex_);
     failureReportsByCluster_.erase(clusterName);
     return true;
 }
@@ -1101,7 +1120,7 @@ bool TopologyControlHost::IsEmptyObservationCurrent(const ClusterEntry &entry,
 void TopologyControlHost::SubmitDoorbell(ClusterEntry &entry)
 {
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         if (!entry.storeDirty || entry.runtime == nullptr) {
             return;
         }
@@ -1110,12 +1129,12 @@ void TopologyControlHost::SubmitDoorbell(ClusterEntry &entry)
     const auto status = entry.runtime->SubmitCoordinationEvent(
         { cluster::CoordinationEventType::RESET, "", "", 0, 0 });
     if (status.IsOk()) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         ++runtimeResyncs_;
         return;
     }
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         entry.storeDirty = true;
     }
     LOG_FIRST_AND_EVERY_N(WARNING, HOST_LIFECYCLE_LOG_INTERVAL)
@@ -1128,7 +1147,7 @@ void TopologyControlHost::FinishStoppedEntry(const std::string &clusterName, Clu
     bool released = false;
     uint64_t observationGeneration = 0;
     const auto releaseStatus = ReleaseClusterIfEmpty(entry, released, observationGeneration);
-    std::unique_lock<std::mutex> lock(mutex_);
+    std::unique_lock<bthread::Mutex> lock(mutex_);
     auto found = entries_.find(clusterName);
     if (found == entries_.end()) {
         return;
@@ -1170,12 +1189,12 @@ Status TopologyControlHost::StopAllRuntimes(std::chrono::steady_clock::time_poin
 
 Status TopologyControlHost::Shutdown(std::chrono::steady_clock::time_point deadline)
 {
-    std::unique_lock<std::mutex> lock(mutex_);
+    std::unique_lock<bthread::Mutex> lock(mutex_);
     if (!started_ && entries_.empty()) {
         return Status::OK();
     }
     if (shutdownInProgress_) {
-        const bool completed = wakeCv_.wait_until(lock, deadline, [this] { return !shutdownInProgress_; });
+        const bool completed = WaitForHostCondition(wakeCv_, lock, deadline, [this] { return !shutdownInProgress_; });
         CHECK_FAIL_RETURN_STATUS(completed, K_RPC_DEADLINE_EXCEEDED, "topology Control Host shutdown wait timed out");
         if (!started_ && entries_.empty()) {
             return Status::OK();
@@ -1184,7 +1203,7 @@ Status TopologyControlHost::Shutdown(std::chrono::steady_clock::time_point deadl
     shutdownInProgress_ = true;
     stopping_ = true;
     wakeCv_.notify_all();
-    const bool exited = wakeCv_.wait_until(lock, deadline, [this] { return threadExited_; });
+    const bool exited = WaitForHostCondition(wakeCv_, lock, deadline, [this] { return threadExited_; });
     if (!exited) {
         shutdownInProgress_ = false;
         wakeCv_.notify_all();
@@ -1215,7 +1234,7 @@ Status TopologyControlHost::Shutdown(std::chrono::steady_clock::time_point deadl
 
 bool TopologyControlHost::IsStopped() const noexcept
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     return threadExited_ && threadJoined_ && entries_.empty() && !shutdownInProgress_;
 }
 

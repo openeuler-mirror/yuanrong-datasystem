@@ -553,6 +553,12 @@
 
 ## Invariants And Risks
 
+- Coordinator RPC state uses bthread-aware synchronization: service lifecycle and leader fences, recovery and
+  Control Host state, Store/TTL/watch registry and dispatcher queues, and election/Raft lifecycle and configuration.
+  Condition variables paired with those mutexes must also be bthread-aware. Registration may yield while scheduling
+  a watch channel; contention must not consume the default bthread pool needed by Raft. Preserve the lock order leader fence -> membership/watch gate -> channel
+  map -> channel -> dispatch group, and drain RPCs/recovery/watch tasks before destroying their locks.
+
 - Do not reintroduce the deleted legacy topology module/schema, legacy ring keys, dual-read/write, fallback parsing, or
   local snapshot authority.
 - Normal scale-out/scale-in must keep business traffic lossless. Data or metadata loss is accepted only after confirmed
@@ -615,6 +621,9 @@
 ## Tests
 
 - Main contract/component binary: `cluster_topology_contract_ut`.
+- `CoordinatorServiceImplTest.*ContentionPreservesBthreadProgress` saturates lock waiters for membership/watch,
+  watch channel/map, lifecycle, recovery/Control Host/Store/TTL/registry/queue dependencies, and leader-stop paths.
+  It checks unrelated bthread progress before releasing the held lock.
 - Coordinator host/adapter coverage: `CoordinatorStoreBackendTest` and `TopologyControlHostTest` in `ds_ut`.
 - Coordinator admission/key-boundary coverage: `CoordinatorServiceImplTest` exercises per-cluster header mapping,
   typed control admission, and side-effect-free ordinary RPC rejection; `TopologyRecoveryManagerTest` covers the seven

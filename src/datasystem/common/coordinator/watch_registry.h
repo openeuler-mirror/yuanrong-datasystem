@@ -30,6 +30,7 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/util/locks.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -103,7 +104,7 @@ private:
     std::unordered_map<std::string, std::unordered_set<int64_t>> exactWatchIdsByKey_;
     std::vector<WatchRange> rangeWatches_;
     std::atomic<int64_t> nextWatchId_{ 1 };
-    mutable std::shared_mutex mutex_;
+    mutable SharedMutex mutex_;
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_COORDINATOR_WATCH_REGISTRY_H

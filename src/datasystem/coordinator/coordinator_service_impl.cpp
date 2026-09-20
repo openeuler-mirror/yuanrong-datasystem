@@ -382,7 +382,7 @@ void CoordinatorServiceImpl::OnLeaderStart(int64_t term)
         return;
     }
     const auto leaderTerm = static_cast<uint64_t>(term);
-    std::unique_lock<std::shared_mutex> operationLock(leaderOperationMutex_);
+    std::unique_lock<SharedMutex> operationLock(leaderOperationMutex_);
     if (lifecycleState_.load(std::memory_order_acquire) == LifecycleState::STOPPED
         || leaderTerm_.load(std::memory_order_acquire) != 0) {
         return;
@@ -396,7 +396,7 @@ void CoordinatorServiceImpl::OnLeaderStart(int64_t term)
 
 void CoordinatorServiceImpl::OnLeaderStop(const Status &status)
 {
-    std::unique_lock<std::shared_mutex> operationLock(leaderOperationMutex_);
+    std::unique_lock<SharedMutex> operationLock(leaderOperationMutex_);
     const uint64_t leaderTerm = leaderTerm_.exchange(0, std::memory_order_acq_rel);
     if (topologyRecoveryManager_ != nullptr && leaderTerm != 0) {
         topologyRecoveryManager_->EndLeaderRound({ leaderTerm, coordinatorId_ });
@@ -406,7 +406,7 @@ void CoordinatorServiceImpl::OnLeaderStop(const Status &status)
 
 Status CoordinatorServiceImpl::Init()
 {
-    std::unique_lock<std::mutex> lock(lifecycleMutex_);
+    std::unique_lock<bthread::Mutex> lock(lifecycleMutex_);
     if (lifecycleState_.load(std::memory_order_acquire) == LifecycleState::STOPPED) {
         return Status(K_SHUTTING_DOWN, "Coordinator service cannot initialize after shutdown has started");
     }
@@ -468,7 +468,7 @@ void CoordinatorServiceImpl::ConfigureTopologyHostOptions(TopologyControlHost::O
 
 std::optional<uint64_t> CoordinatorServiceImpl::GetCollectiveControlEpoch() const
 {
-    std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+    std::shared_lock<SharedMutex> leaderLock(leaderOperationMutex_);
     const auto state = lifecycleState_.load(std::memory_order_acquire);
     if (!IsElectionConfigured()) {
         return state == LifecycleState::STOPPED ? std::nullopt : std::optional<uint64_t>{ 1 };
@@ -483,7 +483,7 @@ std::optional<uint64_t> CoordinatorServiceImpl::GetCollectiveControlEpoch() cons
 Status CoordinatorServiceImpl::RunUnderCollectiveReplacementFence(
     uint64_t expectedEpoch, const std::function<Status()> &mutation) const
 {
-    std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+    std::shared_lock<SharedMutex> leaderLock(leaderOperationMutex_);
     const auto state = lifecycleState_.load(std::memory_order_acquire);
     if (!IsElectionConfigured()) {
         CHECK_FAIL_RETURN_STATUS(expectedEpoch == 1 && state != LifecycleState::STOPPED, K_NOT_READY,
@@ -601,7 +601,7 @@ void CoordinatorServiceImpl::HandleCommittedMembershipMutation(const std::string
         || parsed.kind != TopologyCoordinationKeyKind::MEMBERSHIP) {
         return;
     }
-    std::lock_guard<std::mutex> lock(membershipWatchMutex_);
+    std::lock_guard<bthread::Mutex> lock(membershipWatchMutex_);
     std::vector<KeyValueEntry> current;
     int64_t revision = 0;
     auto rangeStatus = store_->Range(key, "", current, revision);
@@ -657,7 +657,7 @@ Status CoordinatorServiceImpl::FinishSuccessfulStart()
 
 Status CoordinatorServiceImpl::Start()
 {
-    std::unique_lock<std::mutex> lock(lifecycleMutex_);
+    std::unique_lock<bthread::Mutex> lock(lifecycleMutex_);
     if (lifecycleState_.load(std::memory_order_acquire) == LifecycleState::STOPPED) {
         return Status(K_SHUTTING_DOWN, "Coordinator service cannot start after shutdown has started");
     }
@@ -725,7 +725,7 @@ Status CoordinatorServiceImpl::StartInternal()
 Status CoordinatorServiceImpl::StartElectionManager()
 {
     {
-        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
         if (lifecycleState_.load(std::memory_order_acquire) == LifecycleState::STOPPED) {
             return Status(K_SHUTTING_DOWN, "Coordinator election manager cannot start after shutdown has started");
         }
@@ -753,7 +753,7 @@ Status CoordinatorServiceImpl::StartElectionManager()
             std::move(electionOptions), BuildRaftEventCallbacks(), coordinatorDiscovery_);
         auto *managerView = electionManager.get();
         {
-            std::lock_guard<std::mutex> lock(lifecycleMutex_);
+            std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
             electionManager_ = std::move(electionManager);
         }
 #ifdef WITH_TESTS
@@ -766,7 +766,7 @@ Status CoordinatorServiceImpl::StartElectionManager()
 
     if (startStatus.IsOk()) {
         {
-            std::lock_guard<std::mutex> lock(lifecycleMutex_);
+            std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
             startStatus = FinishSuccessfulStart();
             electionStartInProgress_ = false;
         }
@@ -776,7 +776,7 @@ Status CoordinatorServiceImpl::StartElectionManager()
 
     std::unique_ptr<CoordinatorElectionManager> failedManager;
     {
-        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
         failedManager = std::move(electionManager_);
     }
     const auto cleanupStatus = ShutdownElectionManager(std::move(failedManager));
@@ -785,7 +785,7 @@ Status CoordinatorServiceImpl::StartElectionManager()
                    << cleanupStatus.ToString();
     }
 
-    std::unique_lock<std::mutex> lock(lifecycleMutex_);
+    std::unique_lock<bthread::Mutex> lock(lifecycleMutex_);
     electionStartInProgress_ = false;
     LOG_IF_ERROR(ShutdownInternal(lock), "Coordinator cleanup after election startup failure also failed");
     return startStatus;
@@ -794,7 +794,7 @@ Status CoordinatorServiceImpl::StartElectionManager()
 Status CoordinatorServiceImpl::GetLeadershipSnapshot(CoordinatorLeadershipSnapshot &snapshot) const
 {
     snapshot = {};
-    std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
     const auto state = lifecycleState_.load(std::memory_order_acquire);
     if (state == LifecycleState::CREATED) {
         return Status(K_NOT_READY, "Coordinator service is not ready to report leadership");
@@ -847,13 +847,17 @@ Status CoordinatorServiceImpl::GetLeader(std::string &leaderAddress) const
 
 Status CoordinatorServiceImpl::Shutdown()
 {
-    std::unique_lock<std::mutex> lock(lifecycleMutex_);
-    lifecycleCv_.wait(lock, [this] { return !electionStartInProgress_; });
+    std::unique_lock<bthread::Mutex> lock(lifecycleMutex_);
+    while (electionStartInProgress_) {
+        lifecycleCv_.wait(lock);
+    }
     if (shutdownComplete_) {
         return shutdownStatus_;
     }
     if (shutdownInProgress_) {
-        lifecycleCv_.wait(lock, [this] { return shutdownComplete_; });
+        while (!shutdownComplete_) {
+            lifecycleCv_.wait(lock);
+        }
         return shutdownStatus_;
     }
     return ShutdownInternal(lock);
@@ -939,7 +943,7 @@ Status CoordinatorServiceImpl::ShutdownRemainingComponents(Status firstError)
     return firstError;
 }
 
-Status CoordinatorServiceImpl::ShutdownInternal(std::unique_lock<std::mutex> &lifecycleLock)
+Status CoordinatorServiceImpl::ShutdownInternal(std::unique_lock<bthread::Mutex> &lifecycleLock)
 {
     shutdownInProgress_ = true;
     lifecycleState_.store(LifecycleState::STOPPED, std::memory_order_release);
@@ -961,7 +965,7 @@ Status CoordinatorServiceImpl::ShutdownInternal(std::unique_lock<std::mutex> &li
 Status CoordinatorServiceImpl::Put(const PutReqPb &req, PutRspPb &rsp)
 {
     METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_PUT_REQUEST_TOTAL);
-    std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+    std::shared_lock<SharedMutex> leaderLock(leaderOperationMutex_);
     RETURN_IF_NOT_OK(RequireTopologyRecoveryManager());
     ParsedTopologyCoordinationKey parsed;
     RETURN_IF_NOT_OK(topologyRecoveryManager_->ParseKey(req.key(), parsed));
@@ -1006,7 +1010,7 @@ Status CoordinatorServiceImpl::PrepareTopologyMembershipPut(const ParsedTopology
 Status CoordinatorServiceImpl::Range(const RangeReqPb &req, RangeRspPb &rsp)
 {
     METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_RANGE_REQUEST_TOTAL);
-    std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+    std::shared_lock<SharedMutex> leaderLock(leaderOperationMutex_);
     RETURN_IF_NOT_OK(RequireTopologyRecoveryManager());
     ParsedTopologyCoordinationKey parsed;
     RETURN_IF_NOT_OK(topologyRecoveryManager_->ParseKey(req.key(), parsed));
@@ -1037,7 +1041,7 @@ Status CoordinatorServiceImpl::Range(const RangeReqPb &req, RangeRspPb &rsp)
 Status CoordinatorServiceImpl::DeleteRange(const DeleteRangeReqPb &req, DeleteRangeRspPb &rsp)
 {
     METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_DELETE_RANGE_REQUEST_TOTAL);
-    std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+    std::shared_lock<SharedMutex> leaderLock(leaderOperationMutex_);
     RETURN_IF_NOT_OK(RequireTopologyRecoveryManager());
     ParsedTopologyCoordinationKey parsed;
     RETURN_IF_NOT_OK(topologyRecoveryManager_->ParseKey(req.key(), parsed));
@@ -1069,7 +1073,7 @@ Status CoordinatorServiceImpl::DeleteRange(const DeleteRangeReqPb &req, DeleteRa
 Status CoordinatorServiceImpl::WatchRange(const WatchRangeReqPb &req, WatchRangeRspPb &rsp)
 {
     METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_WATCH_RANGE_REQUEST_TOTAL);
-    std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+    std::shared_lock<SharedMutex> leaderLock(leaderOperationMutex_);
     RETURN_IF_NOT_OK(RequireTopologyRecoveryManager());
     ParsedTopologyCoordinationKey parsed;
     RETURN_IF_NOT_OK(topologyRecoveryManager_->ParseKey(req.key(), parsed));
@@ -1078,7 +1082,7 @@ Status CoordinatorServiceImpl::WatchRange(const WatchRangeReqPb &req, WatchRange
     RETURN_OK_IF_TRUE(!AllowContinue<WatchRangeReqPb>(rsp.header()));
     CHECK_FAIL_RETURN_STATUS(!req.registration_id().empty(), K_INVALID, "watch registration ID is empty");
     RETURN_IF_NOT_OK(CheckCoordinatorStore(store_));
-    std::lock_guard<std::mutex> lock(membershipWatchMutex_);
+    std::lock_guard<bthread::Mutex> lock(membershipWatchMutex_);
     RETURN_IF_NOT_OK(CheckWatcherMembership(req, parsed));
 
     int64_t watchId = 0;
@@ -1110,7 +1114,7 @@ Status CoordinatorServiceImpl::CheckWatcherMembership(const WatchRangeReqPb &req
 Status CoordinatorServiceImpl::CancelWatch(const CancelWatchReqPb &req, CancelWatchRspPb &rsp)
 {
     METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_CANCEL_WATCH_REQUEST_TOTAL);
-    std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+    std::shared_lock<SharedMutex> leaderLock(leaderOperationMutex_);
     RETURN_IF_NOT_OK(PrepareResponseHeader(rsp.mutable_header()));
     RETURN_OK_IF_TRUE(!AllowContinue<CancelWatchReqPb>(rsp.header()));
     RETURN_IF_NOT_OK(CheckCoordinatorStore(store_));
@@ -1125,7 +1129,7 @@ Status CoordinatorServiceImpl::CancelWatch(const CancelWatchReqPb &req, CancelWa
 Status CoordinatorServiceImpl::KeepAlive(const KeepAliveReqPb &req, KeepAliveRspPb &rsp)
 {
     METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_KEEP_ALIVE_REQUEST_TOTAL);
-    std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+    std::shared_lock<SharedMutex> leaderLock(leaderOperationMutex_);
     RETURN_IF_NOT_OK(RequireTopologyRecoveryManager());
     ParsedTopologyCoordinationKey parsed;
     RETURN_IF_NOT_OK(topologyRecoveryManager_->ParseKey(req.key(), parsed));
@@ -1184,7 +1188,7 @@ Status CoordinatorServiceImpl::KeepAlive(const KeepAliveReqPb &req, KeepAliveRsp
 Status CoordinatorServiceImpl::GetCoordinatorId(const GetCoordinatorIdReqPb &req, GetCoordinatorIdRspPb &rsp)
 {
     METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_GET_COORDINATOR_ID_REQUEST_TOTAL);
-    std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+    std::shared_lock<SharedMutex> leaderLock(leaderOperationMutex_);
     (void)req;
     RETURN_IF_NOT_OK(PrepareResponseHeader(rsp.mutable_header()));
     RETURN_OK_IF_TRUE(!AllowContinue<GetCoordinatorIdReqPb>(rsp.header()));
@@ -1203,7 +1207,7 @@ Status CoordinatorServiceImpl::ExchangeBootstrapObservation(const RaftBootstrapO
 #endif
 
     {
-        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
         if (lifecycleState_.load(std::memory_order_acquire) == LifecycleState::STOPPED) {
             return Status(K_SHUTTING_DOWN, "Coordinator bootstrap state is unavailable during shutdown");
         }
@@ -1227,7 +1231,7 @@ Status CoordinatorServiceImpl::ReportTopologyRecoveryCandidate(const ReportTopol
     // Reject oversized wire payloads before identity and leadership handling so every request path is bounded.
     CHECK_FAIL_RETURN_STATUS(req.canonical_topology().size() <= MAX_TOPOLOGY_RECOVERY_PAYLOAD_BYTES, K_INVALID,
                              "candidate topology payload exceeds limit");
-    std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+    std::shared_lock<SharedMutex> leaderLock(leaderOperationMutex_);
     std::unique_ptr<cluster::TopologyKeyHelper> keys;
     RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(req.cluster_name(), keys));
     RETURN_IF_NOT_OK(PrepareResponseHeader(req.cluster_name(), rsp.mutable_header()));
@@ -1263,7 +1267,7 @@ Status CoordinatorServiceImpl::EnsureLeaderMembership(const EnsureLeaderMembersh
                                                       EnsureLeaderMembershipRspPb &rsp)
 {
     METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_ENSURE_LEADER_MEMBERSHIP_REQUEST_TOTAL);
-    std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+    std::shared_lock<SharedMutex> leaderLock(leaderOperationMutex_);
     std::unique_ptr<cluster::TopologyKeyHelper> clusterKeys;
     RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(req.cluster_name(), clusterKeys));
     RETURN_IF_NOT_OK(PrepareResponseHeader(req.cluster_name(), rsp.mutable_header()));
@@ -1307,7 +1311,7 @@ Status CoordinatorServiceImpl::ReportWorkerLiveness(const ReportWorkerLivenessRe
                                                     ReportWorkerLivenessRspPb &rsp)
 {
     METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_REPORT_WORKER_LIVENESS_REQUEST_TOTAL);
-    std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+    std::shared_lock<SharedMutex> leaderLock(leaderOperationMutex_);
     std::unique_ptr<cluster::TopologyKeyHelper> keys;
     RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(req.cluster_name(), keys));
     RETURN_IF_NOT_OK(PrepareResponseHeader(req.cluster_name(), rsp.mutable_header()));
@@ -1349,7 +1353,7 @@ Status CoordinatorServiceImpl::GetClusterRawSnapshot(const GetClusterRawSnapshot
                                                      GetClusterRawSnapshotRspPb &rsp)
 {
     METRIC_INC(metrics::KvMetricId::COORDINATOR_RPC_GET_CLUSTER_RAW_SNAPSHOT_REQUEST_TOTAL);
-    std::shared_lock<std::shared_mutex> leaderLock(leaderOperationMutex_);
+    std::shared_lock<SharedMutex> leaderLock(leaderOperationMutex_);
     std::string topologyKey;
     std::string membershipKey;
     std::string membershipEnd;

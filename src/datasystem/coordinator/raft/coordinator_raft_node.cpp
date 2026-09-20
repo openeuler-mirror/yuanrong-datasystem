@@ -204,7 +204,7 @@ void CoordinatorRaftNode::HandleConfigurationCommitted(
     std::sort(snapshot.peers.begin(), snapshot.peers.end());
     auto callbackPeers = snapshot.peers;
     {
-        std::lock_guard<std::mutex> lock(committedConfigurationMutex_);
+        std::lock_guard<bthread::Mutex> lock(committedConfigurationMutex_);
         committedConfiguration_ = std::move(snapshot);
     }
     if (onConfigurationCommitted) {
@@ -214,7 +214,7 @@ void CoordinatorRaftNode::HandleConfigurationCommitted(
 
 Status CoordinatorRaftNode::Start(RaftMetadataState metadataState)
 {
-    std::unique_lock<std::mutex> lock(lifecycleMutex_);
+    std::unique_lock<bthread::Mutex> lock(lifecycleMutex_);
     if (state_ != LifecycleState::CONSTRUCTED) {
         return Status(K_INVALID, "Coordinator raft node cannot be started more than once or after shutdown");
     }
@@ -254,7 +254,7 @@ Status CoordinatorRaftNode::Start(RaftMetadataState metadataState)
         node.reset();
         stateMachine.reset();
         {
-            std::lock_guard<std::mutex> configurationLock(committedConfigurationMutex_);
+            std::lock_guard<bthread::Mutex> configurationLock(committedConfigurationMutex_);
             committedConfiguration_.reset();
         }
         lock.lock();
@@ -274,7 +274,7 @@ void CoordinatorRaftNode::ShutdownInternal() noexcept
     std::unique_ptr<CoordinatorRaftStateMachine> stateMachine;
     std::unique_ptr<braft::Node> node;
     {
-        std::unique_lock<std::mutex> lock(lifecycleMutex_);
+        std::unique_lock<bthread::Mutex> lock(lifecycleMutex_);
         operationDrainState_->StopAcceptingNewTokens();
         if (state_ == LifecycleState::STOPPED) {
             return;
@@ -294,11 +294,11 @@ void CoordinatorRaftNode::ShutdownInternal() noexcept
     node.reset();
     stateMachine.reset();
     {
-        std::lock_guard<std::mutex> lock(committedConfigurationMutex_);
+        std::lock_guard<bthread::Mutex> lock(committedConfigurationMutex_);
         committedConfiguration_.reset();
     }
     {
-        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
         state_ = LifecycleState::STOPPED;
     }
 }
@@ -306,7 +306,7 @@ void CoordinatorRaftNode::ShutdownInternal() noexcept
 Status CoordinatorRaftNode::GetLeadershipSnapshot(CoordinatorLeadershipSnapshot &snapshot) const
 {
     snapshot = {};
-    std::unique_lock<std::mutex> lock(lifecycleMutex_);
+    std::unique_lock<bthread::Mutex> lock(lifecycleMutex_);
     if (state_ != LifecycleState::STARTED || node_ == nullptr) {
         return NotReadyStatus("report a leadership snapshot");
     }
@@ -368,12 +368,12 @@ Status CoordinatorRaftNode::GetCommittedConfiguration(std::vector<std::string> &
 {
     peers.clear();
     index = 0;
-    std::lock_guard<std::mutex> lifecycleLock(lifecycleMutex_);
+    std::lock_guard<bthread::Mutex> lifecycleLock(lifecycleMutex_);
     if (state_ != LifecycleState::STARTED || node_ == nullptr) {
         return NotReadyStatus("report a committed configuration");
     }
 
-    std::lock_guard<std::mutex> configurationLock(committedConfigurationMutex_);
+    std::lock_guard<bthread::Mutex> configurationLock(committedConfigurationMutex_);
     if (!committedConfiguration_.has_value()) {
         return Status(K_NOT_READY, "Coordinator raft committed configuration is not known yet");
     }
@@ -385,7 +385,7 @@ Status CoordinatorRaftNode::GetCommittedConfiguration(std::vector<std::string> &
 Status CoordinatorRaftNode::GetMembershipStatus(CoordinatorRaftMembershipStatus &status) const
 {
     status = {};
-    std::unique_lock<std::mutex> lifecycleLock(lifecycleMutex_);
+    std::unique_lock<bthread::Mutex> lifecycleLock(lifecycleMutex_);
     if (state_ != LifecycleState::STARTED || node_ == nullptr) {
         return NotReadyStatus("report membership status");
     }
@@ -405,7 +405,7 @@ Status CoordinatorRaftNode::GetMembershipStatus(CoordinatorRaftMembershipStatus 
 
     CommittedConfigurationSnapshot committedConfiguration;
     {
-        std::lock_guard<std::mutex> configurationLock(committedConfigurationMutex_);
+        std::lock_guard<bthread::Mutex> configurationLock(committedConfigurationMutex_);
         if (!committedConfiguration_.has_value()) {
             return Status(K_NOT_READY, "Coordinator raft committed configuration is not known yet");
         }
@@ -472,7 +472,7 @@ Status CoordinatorRaftNode::SubmitPeerMembershipChange(const std::string &peer, 
             break;
     }
 
-    std::unique_lock<std::mutex> lock(lifecycleMutex_);
+    std::unique_lock<bthread::Mutex> lock(lifecycleMutex_);
     if (state_ != LifecycleState::STARTED || node_ == nullptr) {
         return NotReadyStatus(notReadyOperation);
     }
@@ -483,7 +483,7 @@ Status CoordinatorRaftNode::SubmitPeerMembershipChange(const std::string &peer, 
     braft::PeerId targetPeer;
     RETURN_IF_NOT_OK(ParseCoordinatorRaftPeer(peer, targetPeer));
     if (operation == PeerMembershipOperation::REMOVE) {
-        std::lock_guard<std::mutex> configurationLock(committedConfigurationMutex_);
+        std::lock_guard<bthread::Mutex> configurationLock(committedConfigurationMutex_);
         if (!committedConfiguration_.has_value()) {
             return Status(K_NOT_READY, "Coordinator raft committed configuration is not known yet");
         }

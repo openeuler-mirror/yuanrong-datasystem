@@ -22,7 +22,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -30,6 +29,9 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+
+#include <bthread/condition_variable.h>
+#include <bthread/mutex.h>
 
 #include "datasystem/common/coordinator/steady_clock.h"
 #include "datasystem/utils/status.h"
@@ -83,8 +85,8 @@ private:
 
     ExpiryMap expiryMap_;
     std::unordered_map<std::string, ExpiryMap::iterator> expiryIndex_;
-    std::mutex mutex_;
-    std::condition_variable cv_;
+    bthread::Mutex mutex_;
+    bthread::ConditionVariable cv_;
     std::thread expirationThread_;
     std::function<bool(const std::string &, int64_t, uint64_t)> expireCallback_;
     std::shared_ptr<SteadyClock> clock_;

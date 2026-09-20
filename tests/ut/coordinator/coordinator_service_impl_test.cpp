@@ -20,6 +20,8 @@
 #include <chrono>
 #include <functional>
 #include <future>
+#include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -38,8 +40,8 @@
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/rpc/bthread_utils.h"
-#include "datasystem/coordinator/topology_recovery_manager.h"
 #define private public
+#include "datasystem/coordinator/topology_recovery_manager.h"
 #include "datasystem/coordinator/coordinator_service_impl.h"
 #undef private
 #include "datasystem/coordinator/topology_control_host.h"
@@ -222,6 +224,173 @@ void EnableElection(coordinator::CoordinatorServiceImpl &service)
 }
 
 class CoordinatorServiceImplTest : public CommonTest {};
+
+namespace {
+void ExpectBthreadProgressWhileBlocked(const std::function<void(size_t)> &operation,
+                                      const std::function<void()> &release)
+{
+    constexpr auto timeout = std::chrono::seconds(2);
+    bthread_t warmup;
+    const int warmupStatus = StartBackgroundTask(&warmup, [] {});
+    if (warmupStatus != 0) {
+        release();
+        FAIL() << "Failed to initialize bthread workers: " << warmupStatus;
+    }
+    bthread_join(warmup, nullptr);
+    const auto workerCount = static_cast<size_t>(bthread_getconcurrency_by_tag(BTHREAD_TAG_DEFAULT));
+    std::atomic<size_t> entered{ 0 };
+    std::promise<void> allEntered;
+    auto enteredFuture = allEntered.get_future();
+    std::vector<bthread_t> tasks;
+    tasks.reserve(workerCount);
+    for (size_t index = 0; index < workerCount; ++index) {
+        bthread_t task;
+        const int rc = StartBackgroundTask(&task, [&, index] {
+            if (entered.fetch_add(1) + 1 == workerCount) {
+                allEntered.set_value();
+            }
+            operation(index);
+        });
+        EXPECT_EQ(rc, 0);
+        if (rc != 0) {
+            break;
+        }
+        tasks.push_back(task);
+    }
+    const bool enteredAll = enteredFuture.wait_for(timeout) == std::future_status::ready;
+    std::promise<void> probe;
+    auto probeFuture = probe.get_future();
+    bthread_t probeTask;
+    const int probeStatus = StartBackgroundTask(&probeTask, [&] { probe.set_value(); });
+    const bool progressed = probeStatus == 0 && probeFuture.wait_for(timeout) == std::future_status::ready;
+    // Release from the native test thread even on failure so the old blocking implementation can drain.
+    release();
+    for (auto task : tasks) {
+        bthread_join(task, nullptr);
+    }
+    if (probeStatus == 0) {
+        bthread_join(probeTask, nullptr);
+    }
+    EXPECT_TRUE(enteredAll);
+    EXPECT_TRUE(progressed) << "Contended Coordinator locks exhausted the Raft bthread worker pool";
+}
+}  // namespace
+
+TEST_F(CoordinatorServiceImplTest, MembershipWatchContentionPreservesBthreadProgress)
+{
+    auto service = MakeService();
+    DS_ASSERT_OK(InitializeRunning(*service));
+    service->recoveryStateProvider_ = [](const std::string &) { return coordinator::TopologyRecoveryState::READY; };
+    coordinator::PutReqPb put;
+    put.set_key("/datasystem/contention/cluster/" + std::string(MEMBER_ADDRESS));
+    put.set_expected_version(-1);
+    put.set_value(EncodeMembershipValue());
+    coordinator::PutRspPb putResponse;
+    DS_ASSERT_OK(service->Put(put, putResponse));
+    coordinator::WatchRangeReqPb watch;
+    watch.set_key("/datasystem/contention/topology/");
+    watch.set_watcher_addr(MEMBER_ADDRESS);
+    watch.set_registration_id("contention-watch");
+    std::unique_lock membershipLock(service->membershipWatchMutex_);
+    ExpectBthreadProgressWhileBlocked(
+        [&](size_t index) {
+            constexpr size_t operationKinds = 2;
+            if (index % operationKinds == 0) {
+                coordinator::WatchRangeRspPb response;
+                EXPECT_TRUE(service->WatchRange(watch, response).IsOk());
+            } else {
+                coordinator::PutRspPb response;
+                EXPECT_TRUE(service->Put(put, response).IsOk());
+            }
+        },
+        [&] { membershipLock.unlock(); });
+    DS_ASSERT_OK(service->Shutdown());
+}
+
+TEST_F(CoordinatorServiceImplTest, LifecycleContentionPreservesBthreadProgress)
+{
+    auto service = MakeService();
+    DS_ASSERT_OK(InitializeRunning(*service));
+    std::unique_lock lifecycleLock(service->lifecycleMutex_);
+    ExpectBthreadProgressWhileBlocked(
+        [&](size_t) {
+            coordinator::GetCoordinatorIdReqPb request;
+            coordinator::GetCoordinatorIdRspPb response;
+            EXPECT_TRUE(service->GetCoordinatorId(request, response).IsOk());
+        },
+        [&] { lifecycleLock.unlock(); });
+    DS_ASSERT_OK(service->Shutdown());
+}
+
+TEST_F(CoordinatorServiceImplTest, RpcDependenciesContentionPreservesBthreadProgress)
+{
+    auto service = MakeService();
+    DS_ASSERT_OK(InitializeRunning(*service));
+    const auto check = [&](const char *name, auto &mutex, const auto &operation) {
+        SCOPED_TRACE(name);
+        std::unique_lock lock(mutex);
+        ExpectBthreadProgressWhileBlocked(operation, [&] { lock.unlock(); });
+    };
+    check("recovery", service->topologyRecoveryManager_->mutex_, [&](size_t) {
+        (void)service->topologyRecoveryManager_->GetState("contention");
+    });
+    check("control host", service->topologyControlHost_->mutex_, [&](size_t) {
+        (void)service->topologyControlHost_->IsStopped();
+    });
+    check("memory store", service->store_->memKvStore_->mutex_, [&](size_t) {
+        std::vector<KeyValueEntry> entries;
+        int64_t revision = 0;
+        EXPECT_TRUE(service->store_->Range("key", "", entries, revision).IsOk());
+    });
+    check("watch registry", service->watchRegistry_->mutex_, [&](size_t) {
+        std::vector<std::shared_ptr<WatcherEntry>> matched;
+        service->watchRegistry_->MatchWatchers("key", matched);
+    });
+    check("TTL", service->ttlManager_->mutex_, [&](size_t) {
+        EXPECT_TRUE(service->ttlManager_->Schedule("key", 1000, 1, 1).IsOk());
+    });
+    check("watch pending queue", service->watchDispatcher_->pendingMutex_, [&](size_t) {
+        service->watchDispatcher_->Enqueue(std::make_shared<WatchEvent>());
+    });
+    DS_ASSERT_OK(service->Shutdown());
+}
+
+TEST_F(CoordinatorServiceImplTest, LeaderStopContentionPreservesBthreadProgress)
+{
+    auto service = MakeService();
+    SetRunning(*service);
+    service->OnLeaderStart(LEADER_TERM);
+    std::shared_lock leaderLock(service->leaderOperationMutex_);
+    ExpectBthreadProgressWhileBlocked(
+        [&](size_t) { service->OnLeaderStop(Status(K_RUNTIME_ERROR, "test leadership lost")); },
+        [&] { leaderLock.unlock(); });
+    EXPECT_EQ(service->leaderTerm_.load(), 0);
+}
+
+TEST_F(CoordinatorServiceImplTest, WatchChannelContentionPreservesBthreadProgress)
+{
+    auto service = MakeService();
+    DS_ASSERT_OK(InitializeRunning(*service));
+    constexpr int64_t watchId = 1;
+    service->watchDispatcher_->AddChannel(watchId, MEMBER_ADDRESS);
+    auto channel = service->watchDispatcher_->channels_.at(watchId);
+    std::unique_lock channelLock(channel->mutex);
+    ExpectBthreadProgressWhileBlocked(
+        [&](size_t) { service->watchDispatcher_->SetSnapshotRevision(watchId, 1); },
+        [&] { channelLock.unlock(); });
+    DS_ASSERT_OK(service->Shutdown());
+}
+
+TEST_F(CoordinatorServiceImplTest, WatchMapContentionPreservesBthreadProgress)
+{
+    auto service = MakeService();
+    DS_ASSERT_OK(InitializeRunning(*service));
+    std::unique_lock channelsLock(service->watchDispatcher_->channelsMutex_);
+    ExpectBthreadProgressWhileBlocked(
+        [&](size_t index) { service->watchDispatcher_->AddChannel(static_cast<int64_t>(index) + 1, MEMBER_ADDRESS); },
+        [&] { channelsLock.unlock(); });
+    DS_ASSERT_OK(service->Shutdown());
+}
 
 TEST_F(CoordinatorServiceImplTest, CoordinatorServiceConstructAndInitRemainCreated)
 {

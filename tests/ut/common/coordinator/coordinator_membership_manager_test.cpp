@@ -1335,10 +1335,17 @@ TEST(CoordinatorMembershipManagerTest, ShutdownWhileStatusBlockedPreventsNewDisc
     auto shutdown = std::async(std::launch::async, [&manager] { return manager.Shutdown(); });
     bool stopping = false;
     {
-        std::unique_lock<std::mutex> lock(manager.lifecycleMutex_);
-        stopping = manager.lifecycleCv_.wait_for(lock, kLifecycleDeadline, [&manager] {
-            return manager.state_ == CoordinatorMembershipManager::LifecycleState::STOPPING;
-        });
+        std::unique_lock<bthread::Mutex> lock(manager.lifecycleMutex_);
+        stopping = [&] {
+            const auto deadline = butil::microseconds_from_now(
+                std::chrono::duration_cast<std::chrono::microseconds>(kLifecycleDeadline).count());
+            while (manager.state_ != CoordinatorMembershipManager::LifecycleState::STOPPING) {
+                if (manager.lifecycleCv_.wait_until(lock, deadline) == ETIMEDOUT) {
+                    return manager.state_ == CoordinatorMembershipManager::LifecycleState::STOPPING;
+                }
+            }
+            return true;
+        }();
     }
     releaseStatusPromise.set_value();
     ASSERT_TRUE(stopping);
@@ -1373,10 +1380,17 @@ TEST(CoordinatorMembershipManagerTest, ShutdownDuringBlockedRecoveryProbePrevent
     auto shutdown = std::async(std::launch::async, [&manager] { return manager.Shutdown(); });
     bool stopping = false;
     {
-        std::unique_lock<std::mutex> lock(manager.lifecycleMutex_);
-        stopping = manager.lifecycleCv_.wait_for(lock, kLifecycleDeadline, [&manager] {
-            return manager.state_ == CoordinatorMembershipManager::LifecycleState::STOPPING;
-        });
+        std::unique_lock<bthread::Mutex> lock(manager.lifecycleMutex_);
+        stopping = [&] {
+            const auto deadline = butil::microseconds_from_now(
+                std::chrono::duration_cast<std::chrono::microseconds>(kLifecycleDeadline).count());
+            while (manager.state_ != CoordinatorMembershipManager::LifecycleState::STOPPING) {
+                if (manager.lifecycleCv_.wait_until(lock, deadline) == ETIMEDOUT) {
+                    return manager.state_ == CoordinatorMembershipManager::LifecycleState::STOPPING;
+                }
+            }
+            return true;
+        }();
     }
     releaseProbePromise.set_value();
     ASSERT_TRUE(stopping);
@@ -1399,10 +1413,17 @@ TEST(CoordinatorMembershipManagerTest, ShutdownDuringBlockedDiscoveryPreventsAdd
 
     auto shutdown = std::async(std::launch::async, [&manager] { return manager.Shutdown(); });
     {
-        std::unique_lock<std::mutex> lock(manager.lifecycleMutex_);
-        ASSERT_TRUE(manager.lifecycleCv_.wait_for(lock, kLifecycleDeadline, [&manager] {
-            return manager.state_ == CoordinatorMembershipManager::LifecycleState::STOPPING;
-        }));
+        std::unique_lock<bthread::Mutex> lock(manager.lifecycleMutex_);
+        ASSERT_TRUE([&] {
+            const auto deadline = butil::microseconds_from_now(
+                std::chrono::duration_cast<std::chrono::microseconds>(kLifecycleDeadline).count());
+            while (manager.state_ != CoordinatorMembershipManager::LifecycleState::STOPPING) {
+                if (manager.lifecycleCv_.wait_until(lock, deadline) == ETIMEDOUT) {
+                    return manager.state_ == CoordinatorMembershipManager::LifecycleState::STOPPING;
+                }
+            }
+            return true;
+        }());
     }
     discovery->Release();
     ASSERT_EQ(shutdown.wait_for(kLifecycleDeadline), std::future_status::ready);

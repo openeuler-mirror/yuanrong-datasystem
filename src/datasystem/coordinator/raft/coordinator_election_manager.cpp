@@ -406,7 +406,7 @@ CoordinatorElectionManager::MembershipHandle::~MembershipHandle() noexcept
 CoordinatorElectionManager::Dependencies CoordinatorElectionManager::MakeProductionDependencies()
 {
     struct BootstrapChannels {
-        std::mutex mutex;
+        bthread::Mutex mutex;
         std::map<std::string, std::shared_ptr<brpc::Channel>> byPeer;
     };
 
@@ -422,7 +422,7 @@ CoordinatorElectionManager::Dependencies CoordinatorElectionManager::MakeProduct
                                                            RaftBootstrapObservationPb &response) {
         std::shared_ptr<brpc::Channel> channel;
         {
-            std::lock_guard<std::mutex> lock(bootstrapChannels->mutex);
+            std::lock_guard<bthread::Mutex> lock(bootstrapChannels->mutex);
             auto &cached = bootstrapChannels->byPeer[peer];
             if (cached == nullptr) {
                 BrpcChannelConfig config;
@@ -447,7 +447,7 @@ CoordinatorElectionManager::Dependencies CoordinatorElectionManager::MakeProduct
     dependencies.onBootstrapWorkerExit = [bootstrapChannels] {
         decltype(bootstrapChannels->byPeer) channels;
         {
-            std::lock_guard<std::mutex> lock(bootstrapChannels->mutex);
+            std::lock_guard<bthread::Mutex> lock(bootstrapChannels->mutex);
             channels.swap(bootstrapChannels->byPeer);
         }
     };
@@ -543,7 +543,7 @@ Status CoordinatorElectionManager::Start()
 {
     RETURN_IF_NOT_OK(ValidateStartupInput());
 
-    std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
     if (state_ != LifecycleState::CONSTRUCTED || lifecycleOperationInProgress_) {
         return Status(K_INVALID, "Coordinator election manager cannot be started more than once or after shutdown");
     }
@@ -578,7 +578,7 @@ void CoordinatorElectionManager::RunBootstrapControl() noexcept
     RaftMetadataState metadataState = RaftMetadataState::UNKNOWN;
     auto status = dependencies_.probeLocalMetadata(options_.raftFlags.dataDir, metadataState);
     {
-        std::lock_guard<std::mutex> lock(bootstrapMutex_);
+        std::lock_guard<bthread::Mutex> lock(bootstrapMutex_);
         localMetadataState_ = status.IsOk() ? metadataState : RaftMetadataState::UNKNOWN;
     }
     if (status.IsError()) {
@@ -671,7 +671,7 @@ Status CoordinatorElectionManager::ExchangeBootstrapRound(const std::vector<std:
     RaftBootstrapObservationPb request;
     std::vector<std::string> probeTargets;
     {
-        std::lock_guard<std::mutex> lock(bootstrapMutex_);
+        std::lock_guard<bthread::Mutex> lock(bootstrapMutex_);
         const auto now = dependencies_.now();
         RETURN_IF_NOT_OK(BuildLocalObservationLocked(now, request));
         probeTargets = BuildBootstrapProbeTargetsLocked(normalizedCandidates, now);
@@ -702,7 +702,7 @@ Status CoordinatorElectionManager::ExchangeBootstrapRound(const std::vector<std:
         }
         CHECK_FAIL_RETURN_STATUS(result.response.sender_peer() == result.peer, K_INVALID,
                                  "Coordinator bootstrap response sender does not match the target peer");
-        std::lock_guard<std::mutex> lock(bootstrapMutex_);
+        std::lock_guard<bthread::Mutex> lock(bootstrapMutex_);
         RETURN_IF_NOT_OK(RecordPeerObservationLocked(result.response, dependencies_.now()));
     }
     return Status::OK();
@@ -750,7 +750,7 @@ std::vector<std::string> CoordinatorElectionManager::BuildBootstrapProbeTargetsL
 
 Status CoordinatorElectionManager::TryBuildStartPlan(RaftStartPlan &startPlan)
 {
-    std::lock_guard<std::mutex> lock(bootstrapMutex_);
+    std::lock_guard<bthread::Mutex> lock(bootstrapMutex_);
     const auto now = dependencies_.now();
     const auto activePeers = BuildActivePeersLocked(now);
     bool decided = false;
@@ -864,7 +864,7 @@ Status CoordinatorElectionManager::ExchangeBootstrapObservation(const RaftBootst
     CHECK_FAIL_RETURN_STATUS(options_.bootstrapMode == RaftBootstrapMode::DISCOVERY_OBSERVATION, K_INVALID,
                              "Coordinator bootstrap observation exchange is disabled for static initial peers");
     {
-        std::lock_guard<std::mutex> lock(bootstrapMutex_);
+        std::lock_guard<bthread::Mutex> lock(bootstrapMutex_);
         RETURN_IF_NOT_OK(RecordPeerObservationLocked(request, dependencies_.now()));
         RETURN_IF_NOT_OK(BuildLocalObservationLocked(dependencies_.now(), response));
     }
@@ -1022,7 +1022,7 @@ Status CoordinatorElectionManager::ProbePeerMetadata(const std::string &peer, Ra
                              "Coordinator recovery probe cannot target the local leader");
     RaftBootstrapObservationPb request;
     {
-        std::lock_guard<std::mutex> lock(bootstrapMutex_);
+        std::lock_guard<bthread::Mutex> lock(bootstrapMutex_);
         CHECK_FAIL_RETURN_STATUS(!bootstrapStopRequested_, K_SHUTTING_DOWN, "Coordinator recovery probe stopped");
         RETURN_IF_NOT_OK(BuildLocalObservationLocked(dependencies_.now(), request));
     }
@@ -1031,7 +1031,7 @@ Status CoordinatorElectionManager::ProbePeerMetadata(const std::string &peer, Ra
         peer, static_cast<int32_t>(kBootstrapRpcTimeout.count()), request, response));
     CHECK_FAIL_RETURN_STATUS(response.sender_peer() == peer, K_INVALID,
                              "Coordinator recovery response sender does not match probe target");
-    std::lock_guard<std::mutex> lock(bootstrapMutex_);
+    std::lock_guard<bthread::Mutex> lock(bootstrapMutex_);
     RETURN_IF_NOT_OK(RecordPeerObservationLocked(response, dependencies_.now()));
     metadataState = response.metadata_state() == RaftBootstrapObservationPb::ABSENT
                         ? RaftMetadataState::ABSENT
@@ -1042,7 +1042,7 @@ Status CoordinatorElectionManager::ProbePeerMetadata(const std::string &peer, Ra
 
 void CoordinatorElectionManager::NotifyPeerMissingRaftData(const std::string &peer)
 {
-    std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
     CoordinatorLeadershipSnapshot snapshot;
     if (state_ == LifecycleState::RUNNING && node_ != nullptr
         && membership_ != nullptr && membership_->membership != nullptr
@@ -1107,7 +1107,7 @@ CoordinatorRaftEventCallbacks CoordinatorElectionManager::BuildManagedCallbacks(
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callbackTraceId);
         std::vector<std::string> committedPeers;
         {
-            std::lock_guard<std::mutex> lock(bootstrapMutex_);
+            std::lock_guard<bthread::Mutex> lock(bootstrapMutex_);
             committedPeers = bootstrapState_.committedPeers;
         }
         LOG(INFO) << "COORDINATOR_RAFT_LEADER_ELECTED current_addr=" << options_.raftFlags.localAddress
@@ -1140,7 +1140,7 @@ CoordinatorRaftEventCallbacks CoordinatorElectionManager::BuildManagedCallbacks(
         LOG(INFO) << "COORDINATOR_RAFT_CONFIGURATION_COMMITTED current_addr=" << options_.raftFlags.localAddress
                   << " peers=" << VectorToString(normalizedPeers) << " index=" << index;
         {
-            std::lock_guard<std::mutex> lock(bootstrapMutex_);
+            std::lock_guard<bthread::Mutex> lock(bootstrapMutex_);
             bootstrapState_.committedPeers = normalizedPeers;
             observedExistingCluster_ = true;
         }
@@ -1204,7 +1204,7 @@ Status CoordinatorElectionManager::StartOwnedComponents(RaftStartPlan startPlan,
         return terminalStatus;
     }
     {
-        std::lock_guard<std::mutex> lock(bootstrapMutex_);
+        std::lock_guard<bthread::Mutex> lock(bootstrapMutex_);
         terminal = bootstrapState_.phase == RaftBootstrapPhase::TERMINAL;
         if (terminal) {
             terminalStatus = bootstrapStatus_;
@@ -1219,7 +1219,7 @@ Status CoordinatorElectionManager::StartOwnedComponents(RaftStartPlan startPlan,
 
     bool membershipDisabled = false;
     {
-        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
         if (state_ != LifecycleState::RUNNING || shutdownInProgress_) {
             return LifecycleInterruptedStatus("finish raft node startup");
         }
@@ -1255,10 +1255,10 @@ Status CoordinatorElectionManager::StartOwnedComponents(RaftStartPlan startPlan,
 
     bool interrupted = false;
     {
-        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
         interrupted = state_ != LifecycleState::RUNNING || shutdownInProgress_;
         if (!interrupted) {
-            std::lock_guard<std::mutex> bootstrapLock(bootstrapMutex_);
+            std::lock_guard<bthread::Mutex> bootstrapLock(bootstrapMutex_);
             terminal = bootstrapState_.phase == RaftBootstrapPhase::TERMINAL;
             if (terminal) {
                 terminalStatus = bootstrapStatus_;
@@ -1292,7 +1292,7 @@ Status CoordinatorElectionManager::StartOwnedComponents(RaftStartPlan startPlan,
 
 bool CoordinatorElectionManager::GetBootstrapTerminalStatus(Status &status) const
 {
-    std::lock_guard<std::mutex> lock(bootstrapMutex_);
+    std::lock_guard<bthread::Mutex> lock(bootstrapMutex_);
     if (bootstrapState_.phase != RaftBootstrapPhase::TERMINAL) {
         return false;
     }
@@ -1306,7 +1306,7 @@ void CoordinatorElectionManager::RecordBootstrapTerminalStatus(Status status)
     std::string localPeer;
     bool firstTerminal = false;
     {
-        std::lock_guard<std::mutex> lock(bootstrapMutex_);
+        std::lock_guard<bthread::Mutex> lock(bootstrapMutex_);
         if (bootstrapState_.phase != RaftBootstrapPhase::TERMINAL) {
             bootstrapStatus_ = Status(statusCode, "");
             bootstrapState_.phase = RaftBootstrapPhase::TERMINAL;
@@ -1326,10 +1326,16 @@ void CoordinatorElectionManager::RecordBootstrapTerminalStatus(Status status)
 
 bool CoordinatorElectionManager::WaitForBootstrapRetryOrStop()
 {
-    std::unique_lock<std::mutex> lock(bootstrapMutex_);
+    std::unique_lock<bthread::Mutex> lock(bootstrapMutex_);
     ++bootstrapRetryWaiters_;
     bootstrapCv_.notify_all();
-    bootstrapCv_.wait_for(lock, kBootstrapExchangeInterval, [this] { return bootstrapStopRequested_; });
+    const auto deadline = butil::microseconds_from_now(
+        std::chrono::duration_cast<std::chrono::microseconds>(kBootstrapExchangeInterval).count());
+    while (!bootstrapStopRequested_) {
+        if (bootstrapCv_.wait_until(lock, deadline) == ETIMEDOUT) {
+            break;
+        }
+    }
     --bootstrapRetryWaiters_;
     bootstrapCv_.notify_all();
     return bootstrapStopRequested_;
@@ -1337,7 +1343,7 @@ bool CoordinatorElectionManager::WaitForBootstrapRetryOrStop()
 
 bool CoordinatorElectionManager::IsBootstrapStopRequested() const
 {
-    std::lock_guard<std::mutex> lock(bootstrapMutex_);
+    std::lock_guard<bthread::Mutex> lock(bootstrapMutex_);
     return bootstrapStopRequested_;
 }
 
@@ -1354,7 +1360,7 @@ void CoordinatorElectionManager::WarnBootstrapRetry(const Status &status,
 
 Status CoordinatorElectionManager::GetBootstrapState(RaftBootstrapState &state) const
 {
-    std::lock_guard<std::mutex> lock(bootstrapMutex_);
+    std::lock_guard<bthread::Mutex> lock(bootstrapMutex_);
     state = bootstrapState_;
     return Status::OK();
 }
@@ -1373,7 +1379,7 @@ void CoordinatorElectionManager::RecordPendingCleanupStatus(const Status &status
     if (status.IsOk()) {
         return;
     }
-    std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
     if (pendingCleanupStatus_.IsOk()) {
         pendingCleanupStatus_ = status;
     }
@@ -1394,11 +1400,13 @@ void CoordinatorElectionManager::RecordShutdownCleanupStatusLocked(uint64_t gene
     }
 }
 
-Status CoordinatorElectionManager::WaitForShutdownResultLocked(std::unique_lock<std::mutex> &lock)
+Status CoordinatorElectionManager::WaitForShutdownResultLocked(std::unique_lock<bthread::Mutex> &lock)
 {
     ++stopMembershipShutdownWaiters_;
     lifecycleCv_.notify_all();
-    lifecycleCv_.wait(lock, [this] { return shutdownComplete_; });
+    while (!shutdownComplete_) {
+        lifecycleCv_.wait(lock);
+    }
     --stopMembershipShutdownWaiters_;
     return shutdownStatus_;
 }
@@ -1408,13 +1416,15 @@ Status CoordinatorElectionManager::StopMembership()
     std::unique_ptr<MembershipHandle> membership;
     uint64_t generation = 0;
     {
-        std::unique_lock<std::mutex> lock(lifecycleMutex_);
+        std::unique_lock<bthread::Mutex> lock(lifecycleMutex_);
         const uint64_t observedShutdownGeneration = shutdownGeneration_;
         const bool shutdownObservedAtEntry = shutdownInProgress_;
         if (lifecycleOperationInProgress_) {
             ++stopMembershipLifecycleWaiters_;
             lifecycleCv_.notify_all();
-            lifecycleCv_.wait(lock, [this] { return !lifecycleOperationInProgress_; });
+            while (lifecycleOperationInProgress_) {
+                lifecycleCv_.wait(lock);
+            }
             --stopMembershipLifecycleWaiters_;
         }
         if (shutdownInProgress_) {
@@ -1427,7 +1437,9 @@ Status CoordinatorElectionManager::StopMembership()
             generation = membershipStopGeneration_;
             ++membershipStopWaiters_;
             lifecycleCv_.notify_all();
-            lifecycleCv_.wait(lock, [this, generation] { return completedMembershipStopGeneration_ >= generation; });
+            while (completedMembershipStopGeneration_ < generation) {
+                lifecycleCv_.wait(lock);
+            }
             --membershipStopWaiters_;
             return membershipStopStatus_;
         }
@@ -1447,7 +1459,7 @@ Status CoordinatorElectionManager::StopMembership()
 
     const auto result = StopOwnedMembership(std::move(membership));
     {
-        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
         membershipStopStatus_ = result;
         completedMembershipStopGeneration_ = generation;
         if (shutdownInProgress_) {
@@ -1466,12 +1478,14 @@ Status CoordinatorElectionManager::Shutdown()
     std::unique_ptr<NodeHandle> node;
     uint64_t generation = 0;
     {
-        std::unique_lock<std::mutex> lock(lifecycleMutex_);
+        std::unique_lock<bthread::Mutex> lock(lifecycleMutex_);
         if (shutdownComplete_) {
             return shutdownStatus_;
         }
         if (shutdownInProgress_) {
-            lifecycleCv_.wait(lock, [this] { return shutdownComplete_; });
+            while (!shutdownComplete_) {
+                lifecycleCv_.wait(lock);
+            }
             return shutdownStatus_;
         }
 
@@ -1481,12 +1495,14 @@ Status CoordinatorElectionManager::Shutdown()
         shutdownStatus_ = pendingCleanupStatus_;
         state_ = LifecycleState::STOPPING;
         {
-            std::lock_guard<std::mutex> bootstrapLock(bootstrapMutex_);
+            std::lock_guard<bthread::Mutex> bootstrapLock(bootstrapMutex_);
             bootstrapStopRequested_ = true;
         }
         bootstrapCv_.notify_all();
         lifecycleCv_.notify_all();
-        lifecycleCv_.wait(lock, [this] { return !lifecycleOperationInProgress_; });
+        while (lifecycleOperationInProgress_) {
+            lifecycleCv_.wait(lock);
+        }
         bootstrapThread = std::move(bootstrapThread_);
     }
 
@@ -1495,17 +1511,24 @@ Status CoordinatorElectionManager::Shutdown()
     }
 
     {
-        std::unique_lock<std::mutex> lock(lifecycleMutex_);
-        lifecycleCv_.wait(lock, [this] { return !membershipStopInProgress_; });
+        std::unique_lock<bthread::Mutex> lock(lifecycleMutex_);
+        while (membershipStopInProgress_) {
+            lifecycleCv_.wait(lock);
+        }
         membership = std::move(membership_);
         node = std::move(node_);
     }
     const auto cleanupResult = StopOwnedMembership(std::move(membership));
     node.reset();
 
+    return CompleteShutdown(generation, cleanupResult);
+}
+
+Status CoordinatorElectionManager::CompleteShutdown(uint64_t generation, const Status &cleanupResult)
+{
     Status result;
     {
-        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
         RecordShutdownCleanupStatusLocked(generation, cleanupResult);
         state_ = LifecycleState::STOPPED;
         shutdownComplete_ = true;
@@ -1519,7 +1542,7 @@ Status CoordinatorElectionManager::Shutdown()
 Status CoordinatorElectionManager::GetLeadershipSnapshot(CoordinatorLeadershipSnapshot &snapshot) const
 {
     snapshot = {};
-    std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
     if (state_ != LifecycleState::RUNNING || node_ == nullptr) {
         return Status(K_NOT_READY, "Coordinator election manager cannot report leadership before raft startup");
     }

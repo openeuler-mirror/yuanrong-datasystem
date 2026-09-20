@@ -21,7 +21,6 @@
 #define DATASYSTEM_COORDINATOR_COORDINATOR_SERVICE_IMPL_H
 
 #include <atomic>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -33,6 +32,9 @@
 #include <string_view>
 #include <vector>
 
+#include <bthread/condition_variable.h>
+#include <bthread/mutex.h>
+
 #include "datasystem/cluster/control/topology_controller.h"
 #include "datasystem/common/coordinator/coordinator_store.h"
 #include "datasystem/common/coordinator/memory_kv_store.h"
@@ -40,6 +42,7 @@
 #include "datasystem/common/coordinator/ttl_manager.h"
 #include "datasystem/common/coordinator/watch_registry.h"
 #include "datasystem/common/rpc/rpc_server.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/coordinator/topology_control_host.h"
@@ -298,7 +301,7 @@ private:
     Status StartInternal();
     Status ShutdownElectionManager(std::unique_ptr<CoordinatorElectionManager> electionManager);
     Status ShutdownRemainingComponents(Status firstError);
-    Status ShutdownInternal(std::unique_lock<std::mutex> &lifecycleLock);
+    Status ShutdownInternal(std::unique_lock<bthread::Mutex> &lifecycleLock);
 
     HostPort coordinatorAddr_;
     std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery_;
@@ -315,8 +318,9 @@ private:
     std::shared_ptr<CoordinatorStore> store_;
     std::unique_ptr<TopologyRecoveryManager> topologyRecoveryManager_;
     std::unique_ptr<TopologyControlHost> topologyControlHost_;
-    // Serializes membership-current-value checks, stale-channel cleanup and new watch registration.
-    std::mutex membershipWatchMutex_;
+    // Serializes membership checks, stale-channel cleanup and watch registration. Registration can yield;
+    // waiters must not block the Raft bthread worker pool.
+    bthread::Mutex membershipWatchMutex_;
     // brpc mode address (set in Init, consumed in Start)
     std::string brpcAddr_;
     int brpcPort_ = 0;
@@ -325,8 +329,8 @@ private:
     // for election startup publication, then publishes STOPPED and transfers Manager ownership under this mutex. It
     // releases the mutex before taking leaderOperationMutex_ or performing any blocking cleanup and reacquires it only
     // to publish the cleanup result.
-    mutable std::mutex lifecycleMutex_;
-    std::condition_variable lifecycleCv_;
+    mutable bthread::Mutex lifecycleMutex_;
+    bthread::ConditionVariable lifecycleCv_;
     bool initialized_{ false };
     bool rpcStartInProgress_{ false };
     bool rpcStarted_{ false };
@@ -338,7 +342,7 @@ private:
     std::atomic<LifecycleState> lifecycleState_{ LifecycleState::CREATED };
     // This fence linearizes operations with Raft Leader round transitions; CoordinatorElectionManager remains the
     // Raft source of truth.
-    mutable std::shared_mutex leaderOperationMutex_;
+    mutable SharedMutex leaderOperationMutex_;
     std::atomic<uint64_t> leaderTerm_{ 0 };
 
 #ifdef WITH_TESTS

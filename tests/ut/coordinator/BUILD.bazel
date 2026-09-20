@@ -16,6 +16,7 @@ ds_cc_test(
     name = "coordinator_service_impl_test",
     srcs = ["coordinator_service_impl_test.cpp"],
     deps = [
+        "//src/datasystem/common/rdma:common_rdma",
         "//src/datasystem/cluster:cluster_membership_codec",
         "//src/datasystem/common/rpc:bthread_utils",
         "//src/datasystem/common/metrics:common_metrics",
@@ -28,6 +29,7 @@ ds_cc_test(
     name = "topology_control_host_test",
     srcs = ["topology_control_host_test.cpp"],
     deps = [
+        "//src/datasystem/common/rdma:common_rdma",
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/common/coordinator:coordinator_store",
         "//src/datasystem/common/inject:common_inject",
@@ -40,6 +42,7 @@ ds_cc_test(
     name = "topology_recovery_manager_test",
     srcs = ["topology_recovery_manager_test.cpp"],
     deps = [
+        "//src/datasystem/common/rdma:common_rdma",
         "//src/datasystem/coordinator:coordinator_topology_recovery_manager",
         "//tests/ut:ut_common",
     ],

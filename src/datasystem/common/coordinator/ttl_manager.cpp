@@ -49,7 +49,7 @@ Status TtlManager::Schedule(const std::string &key, int64_t ttlMs, int64_t revis
         return Status::OK();
     }
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
 
     auto expireTime = clock_->Now() + std::chrono::milliseconds(ttlMs);
     auto [indexIt, inserted] = expiryIndex_.try_emplace(key, expiryMap_.end());
@@ -103,16 +103,13 @@ void TtlManager::CheckExpiration()
     while (running_) {
         std::vector<ExpiredTtlRecord> expiredKeys;
         {
-            std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait_for(lock, std::chrono::milliseconds(EXPIRY_POLL_INTERVAL_MS), [this] {
-                if (!running_) {
-                    return true;
+            std::unique_lock<bthread::Mutex> lock(mutex_);
+            const auto deadline = butil::milliseconds_from_now(EXPIRY_POLL_INTERVAL_MS);
+            while (running_ && (expiryMap_.empty() || expiryMap_.begin()->first > clock_->Now())) {
+                if (cv_.wait_until(lock, deadline) == ETIMEDOUT) {
+                    break;
                 }
-                if (expiryMap_.empty()) {
-                    return false;
-                }
-                return expiryMap_.begin()->first <= clock_->Now();
-            });
+            }
 
             if (!running_) {
                 break;

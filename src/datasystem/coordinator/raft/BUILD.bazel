@@ -71,6 +71,7 @@ ds_cc_library(
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",
         "@braft//:braft",
+        "@com_github_apache_brpc//:brpc",
     ],
 )
 
@@ -86,6 +87,7 @@ ds_cc_library(
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",
         "//src/datasystem/common/util:thread",
+        "@com_github_apache_brpc//:brpc",
     ],
 )
 

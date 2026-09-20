@@ -32,6 +32,7 @@
 
 #include "datasystem/common/coordinator/key_value_entry.h"
 #include "datasystem/common/coordinator/watch_event.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -125,7 +126,7 @@ private:
         uint64_t ttlGeneration = 0;
     };
 
-    mutable std::shared_mutex mutex_;
+    mutable SharedMutex mutex_;
     std::map<std::string, ValueEntry> data_;
     std::function<void(std::shared_ptr<WatchEvent>)> mutationCallback_;
     std::atomic<int64_t> revision_{ 1 };

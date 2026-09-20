@@ -76,7 +76,7 @@ void WatchDispatcher::Enqueue(std::shared_ptr<WatchEvent> event)
 {
     bool wasEmpty = false;
     {
-        std::lock_guard<std::mutex> lock(pendingMutex_);
+        std::lock_guard<bthread::Mutex> lock(pendingMutex_);
         if (pendingQueue_.size() >= MAX_PENDING_EVENTS) {
             const uint64_t dropped = droppedPendingEvents_.fetch_add(1, std::memory_order_relaxed) + 1;
             pendingOverflow_.store(true, std::memory_order_release);
@@ -96,7 +96,7 @@ void WatchDispatcher::Enqueue(std::shared_ptr<WatchEvent> event)
 
 size_t WatchDispatcher::GetPendingEventCount()
 {
-    std::lock_guard<std::mutex> lock(pendingMutex_);
+    std::lock_guard<bthread::Mutex> lock(pendingMutex_);
     return pendingQueue_.size();
 }
 
@@ -107,7 +107,7 @@ void WatchDispatcher::AddChannel(int64_t watchId, const std::string &watcherAddr
     channel->watcherAddr = watcherAddr;
 
     {
-        std::unique_lock<std::shared_mutex> lock(channelsMutex_);
+        std::unique_lock<SharedMutex> lock(channelsMutex_);
         auto oldChannel = channels_.find(watchId);
         if (oldChannel != channels_.end()) {
             CancelChannel(oldChannel->second);
@@ -120,7 +120,7 @@ void WatchDispatcher::AddChannel(int64_t watchId, const std::string &watcherAddr
 
 void WatchDispatcher::RemoveChannel(int64_t watchId)
 {
-    std::unique_lock<std::shared_mutex> lock(channelsMutex_);
+    std::unique_lock<SharedMutex> lock(channelsMutex_);
     auto it = channels_.find(watchId);
     if (it == channels_.end()) {
         return;
@@ -134,7 +134,7 @@ void WatchDispatcher::RemoveChannelsByWatcher(const std::string &watcherAddr)
 {
     std::vector<int64_t> watchIds;
     {
-        std::shared_lock<std::shared_mutex> lock(channelsMutex_);
+        std::shared_lock<SharedMutex> lock(channelsMutex_);
         auto reverseIt = watchIdsByWatcher_.find(watcherAddr);
         if (reverseIt == watchIdsByWatcher_.end()) {
             return;
@@ -154,7 +154,7 @@ void WatchDispatcher::RemoveChannelsByWatcher(const std::string &watcherAddr)
             }
         }
     }
-    std::unique_lock<std::shared_mutex> lock(channelsMutex_);
+    std::unique_lock<SharedMutex> lock(channelsMutex_);
     for (int64_t watchId : watchIds) {
         auto channel = channels_.find(watchId);
         if (channel == channels_.end()) {
@@ -171,7 +171,7 @@ void WatchDispatcher::RemoveChannelsByWatcherInScopes(const std::string &watcher
 {
     std::vector<int64_t> watchIds;
     {
-        std::shared_lock<std::shared_mutex> lock(channelsMutex_);
+        std::shared_lock<SharedMutex> lock(channelsMutex_);
         auto reverseIt = watchIdsByWatcher_.find(watcherAddr);
         if (reverseIt == watchIdsByWatcher_.end()) {
             return;
@@ -197,7 +197,7 @@ void WatchDispatcher::RemoveChannelsByWatcherInScopes(const std::string &watcher
 void WatchDispatcher::CancelChannel(const std::shared_ptr<WatcherChannel> &channel)
 {
     channel->cancelled.store(true, std::memory_order_release);
-    std::lock_guard<std::mutex> lock(channel->mutex);
+    std::lock_guard<bthread::Mutex> lock(channel->mutex);
     channel->queue.clear();
     channel->dispatchQueued = false;
     channel->retryDelayMs = 0;
@@ -217,14 +217,14 @@ void WatchDispatcher::RemoveReverseIndexLocked(const std::shared_ptr<WatcherChan
 
 void WatchDispatcher::SetSnapshotRevision(int64_t watchId, int64_t revision)
 {
-    std::shared_lock<std::shared_mutex> lock(channelsMutex_);
+    std::shared_lock<SharedMutex> lock(channelsMutex_);
     auto it = channels_.find(watchId);
     if (it == channels_.end()) {
         return;
     }
     auto &channel = it->second;
     {
-        std::lock_guard<std::mutex> chLock(channel->mutex);
+        std::lock_guard<bthread::Mutex> chLock(channel->mutex);
         channel->snapshotRevision = revision;
         if (!channel->queue.empty()) {
             ScheduleChannelLocked(channel);
@@ -284,9 +284,14 @@ void WatchDispatcher::FanOutLoop()
     while (running_.load()) {
         std::deque<std::shared_ptr<WatchEvent>> batch;
         {
-            std::unique_lock<std::mutex> lock(pendingMutex_);
-            pendingEmptyCv_.wait_for(lock, FAN_OUT_IDLE_WAIT,
-                                     [this] { return !pendingQueue_.empty() || !running_.load(); });
+            std::unique_lock<bthread::Mutex> lock(pendingMutex_);
+            const auto deadline = butil::microseconds_from_now(
+                std::chrono::duration_cast<std::chrono::microseconds>(FAN_OUT_IDLE_WAIT).count());
+            while (pendingQueue_.empty() && running_.load()) {
+                if (pendingEmptyCv_.wait_until(lock, deadline) == ETIMEDOUT) {
+                    break;
+                }
+            }
             if (!running_.load() && pendingQueue_.empty()) {
                 break;
             }
@@ -305,7 +310,7 @@ void WatchDispatcher::FanOutLoop()
 
         size_t channelCount;
         {
-            std::shared_lock<std::shared_mutex> lock(channelsMutex_);
+            std::shared_lock<SharedMutex> lock(channelsMutex_);
             channelCount = channels_.size();
         }
         metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::COORDINATOR_WATCH_CHANNELS)).Set(channelCount);
@@ -318,7 +323,7 @@ void WatchDispatcher::FanOutLoop()
             std::vector<std::shared_ptr<WatcherEntry>> matched;
             watchRegistry_->MatchWatchers(event->entry.key, matched);
 
-            std::shared_lock<std::shared_mutex> chLock(channelsMutex_);
+            std::shared_lock<SharedMutex> chLock(channelsMutex_);
             for (auto &watcher : matched) {
                 auto it = channels_.find(watcher->watchId);
                 if (it == channels_.end()) {
@@ -326,7 +331,7 @@ void WatchDispatcher::FanOutLoop()
                 }
                 auto &channel = it->second;
                 {
-                    std::lock_guard<std::mutex> qLock(channel->mutex);
+                    std::lock_guard<bthread::Mutex> qLock(channel->mutex);
                     if (channel->cancelled.load(std::memory_order_acquire) || channel->needReWatch) {
                         continue;
                     }
@@ -449,7 +454,7 @@ bool WatchDispatcher::PrepareRetry(const std::shared_ptr<WatcherChannel> &channe
     if (!running_.load() || channel->cancelled.load(std::memory_order_acquire)) {
         return false;
     }
-    std::lock_guard<std::mutex> lock(channel->mutex);
+    std::lock_guard<bthread::Mutex> lock(channel->mutex);
     if (!running_.load() || channel->cancelled.load(std::memory_order_acquire)) {
         return false;
     }
@@ -481,7 +486,7 @@ bool WatchDispatcher::PrepareChannelEvents(const std::shared_ptr<WatcherChannel>
     if (!running_.load() || channel->cancelled.load(std::memory_order_acquire)) {
         return true;
     }
-    std::lock_guard<std::mutex> qLock(channel->mutex);
+    std::lock_guard<bthread::Mutex> qLock(channel->mutex);
     if (!running_.load() || channel->cancelled.load(std::memory_order_acquire) || channel->queue.empty()) {
         channel->dispatchQueued = false;
         return true;
@@ -559,7 +564,7 @@ WatchDispatcher::HandleResult WatchDispatcher::HandleChannelEvents(const std::sh
         return HandleResult::NONE;
     }
     {
-        std::lock_guard<std::mutex> qLock(channel->mutex);
+        std::lock_guard<bthread::Mutex> qLock(channel->mutex);
         if (channel->cancelled.load(std::memory_order_acquire)) {
             return HandleResult::NONE;
         }
@@ -589,10 +594,10 @@ void WatchDispatcher::RemoveRewatchRequiredWatcher(int64_t watchId, const std::s
 
 void WatchDispatcher::ScheduleAllChannelsForRewatch()
 {
-    std::shared_lock<std::shared_mutex> lock(channelsMutex_);
+    std::shared_lock<SharedMutex> lock(channelsMutex_);
     for (const auto &[watchId, channel] : channels_) {
         static_cast<void>(watchId);
-        std::lock_guard<std::mutex> queueLock(channel->mutex);
+        std::lock_guard<bthread::Mutex> queueLock(channel->mutex);
         if (channel->cancelled.load(std::memory_order_acquire) || channel->needReWatch) {
             continue;
         }

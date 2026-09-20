@@ -19,7 +19,6 @@
 #define DATASYSTEM_COORDINATOR_RAFT_COORDINATOR_ELECTION_MANAGER_H
 
 #include <chrono>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -28,6 +27,9 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#include <bthread/condition_variable.h>
+#include <bthread/mutex.h>
 
 #include "datasystem/coordinator/raft/coordinator_membership_manager.h"
 #include "datasystem/coordinator/raft/coordinator_raft_node.h"
@@ -151,7 +153,8 @@ private:
     Status StopOwnedMembership(std::unique_ptr<MembershipHandle> membership);
     void RecordPendingCleanupStatus(const Status &status);
     Status LifecycleInterruptedStatus(const char *operation) const;
-    Status WaitForShutdownResultLocked(std::unique_lock<std::mutex> &lock);
+    Status CompleteShutdown(uint64_t generation, const Status &cleanupResult);
+    Status WaitForShutdownResultLocked(std::unique_lock<bthread::Mutex> &lock);
     void RecordShutdownCleanupStatusLocked(uint64_t generation, const Status &status);
 
     CoordinatorElectionOptions options_;
@@ -159,8 +162,8 @@ private:
     std::shared_ptr<ICoordinatorDiscovery> discovery_;
     Dependencies dependencies_;
 
-    mutable std::mutex bootstrapMutex_;
-    std::condition_variable bootstrapCv_;
+    mutable bthread::Mutex bootstrapMutex_;
+    bthread::ConditionVariable bootstrapCv_;
     RaftBootstrapState bootstrapState_;
     Status bootstrapStatus_;
     RaftMetadataState localMetadataState_{ RaftMetadataState::UNKNOWN };
@@ -172,8 +175,8 @@ private:
     size_t bootstrapProbeCursor_{ 0 };
     std::thread bootstrapThread_;
 
-    mutable std::mutex lifecycleMutex_;
-    std::condition_variable lifecycleCv_;
+    mutable bthread::Mutex lifecycleMutex_;
+    bthread::ConditionVariable lifecycleCv_;
     LifecycleState state_{ LifecycleState::CONSTRUCTED };
     bool lifecycleOperationInProgress_{ false };
     bool membershipStartDisabled_{ false };

@@ -28,6 +28,8 @@
 
 #include <braft/raft.h>
 
+#include <bthread/mutex.h>
+
 #include "datasystem/coordinator/raft/coordinator_raft_state_machine.h"
 #include "datasystem/coordinator/raft/coordinator_raft_types.h"
 #include "datasystem/utils/status.h"
@@ -108,10 +110,10 @@ private:
     CoordinatorRaftEventCallbacks callbacks_;
     std::shared_ptr<detail::RaftOperationDrainState> operationDrainState_;
     braft::PeerId localPeer_;
-    mutable std::mutex lifecycleMutex_;
+    mutable bthread::Mutex lifecycleMutex_;
     LifecycleState state_{ LifecycleState::CONSTRUCTED };
     mutable std::string lastObservedLeader_;
-    mutable std::mutex committedConfigurationMutex_;
+    mutable bthread::Mutex committedConfigurationMutex_;
     std::optional<CommittedConfigurationSnapshot> committedConfiguration_;
     // Wrapped FSM callbacks borrow this and the Node borrows the FSM; declaration order destroys the Node first.
     std::unique_ptr<CoordinatorRaftStateMachine> stateMachine_;
