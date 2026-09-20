@@ -653,13 +653,14 @@ def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
 
     try:
         ls_result = kubectl_exec(pod_name, namespace,
-                                 f'ls -d {log_dir} 2>/dev/null', check=False, timeout=timeout)
+                                 f'ls -d -- {shlex.quote(log_dir)} 2>/dev/null', check=False, timeout=timeout)
         if ls_result.returncode != 0:
             log_info(f'  {pod_name} ({pod_ip}) -> log dir {log_dir} does not exist')
             return True
 
         ls_result = kubectl_exec(pod_name, namespace,
-                                 f'ls {log_dir}/*.log {log_dir}/*.log.gz {log_dir}/*.txt 2>/dev/null',
+                                 f'ls -- {shlex.quote(log_dir)}/*.log {shlex.quote(log_dir)}/*.log.gz '
+                                 f'{shlex.quote(log_dir)}/*.txt 2>/dev/null',
                                  check=False, timeout=timeout)
         log_files = [f.strip() for f in (ls_result.stdout or '').splitlines()
                      if f.strip()]
@@ -742,7 +743,7 @@ def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
                 fname = os.path.basename(remote_path)
                 local_path = os.path.join(local_pod_dir, fname)
                 result = kubectl_exec(pod_name, namespace,
-                                      f'base64 {remote_path}', check=True, timeout=timeout)
+                                      f'base64 -- {shlex.quote(remote_path)}', check=True, timeout=timeout)
                 content = base64.b64decode(result.stdout)
                 with open(local_path, 'wb') as f:
                     f.write(content)
@@ -787,8 +788,8 @@ def _collect_via_tar_stream(pod_name, namespace, tar_file_list, local_dir,
     """Stream ``tar cf - {files}`` from a pod to local extraction.
 
     One ``kubectl exec`` pipes the remote ``tar`` stdout through a local
-    ``tarfile`` reader. No gzip compression (default); use ``--compress`` for
-    gzip. A nonzero tar rc with a non-empty stream (e.g. a file vanished
+    ``tarfile`` reader without gzip compression.
+    A nonzero tar rc with a non-empty stream (e.g. a file vanished
     between the existence check and tar) still attempts extraction of the
     bytes received -- partial data beats a full fallback. Returns True on
     success, False on any failure (caller falls back to per-file base64).
@@ -1022,7 +1023,7 @@ def cmd_kill_impl(pods, namespace, process_name, label, timeout=DEFAULT_TIMEOUT)
 
 def cmd_collect_impl(pods, namespace, remote_config, output_dir, label,
                      remote_dir=None, timeout=DEFAULT_TIMEOUT,
-                     max_workers=None, include_pod_info=False, archive_options=None):
+                     max_workers=None, include_pod_info=False, archive_options=None, log_dir=None):
     """Collect service logs from all pods.
 
     ``remote_dir`` (standalone mode) is where the binary's ``stdout.log``
@@ -1033,13 +1034,14 @@ def cmd_collect_impl(pods, namespace, remote_config, output_dir, label,
     with concurrent TLS+impersonation connections, so callers should pass
     ``--max-workers`` (defaults to ``len(pods)`` for backward compat).
     """
-    log_dir, _ = read_remote_log_dir(namespace, pods, remote_config, timeout)
+    if log_dir is None:
+        log_dir, _ = read_remote_log_dir(namespace, pods, remote_config, timeout)
     if not log_dir:
         log_error('ERROR: log_dir not found in remote config')
         return 1
 
     remote_config_dir = os.path.dirname(remote_config)
-    log_info(f'Using log directory from remote config: {log_dir}')
+    log_info(f'Using log directory: {log_dir}')
     local_dir = output_dir
 
     # Size the collect stagger window to the batch: a 500-pod collect fires
@@ -1768,6 +1770,8 @@ def cmd_collect_shared(args, pods, label, timeout=DEFAULT_TIMEOUT):
     archive_options = archive_options_from_args(args)
     if archive_options is not None:
         kwargs['archive_options'] = archive_options
+    if getattr(args, 'log_dir', None) is not None:
+        kwargs['log_dir'] = args.log_dir
     return cmd_collect_impl(pods, args.namespace, args.remote_config,
                             args.output, label, remote_dir=remote_dir,
                             timeout=timeout, max_workers=max_workers, **kwargs)

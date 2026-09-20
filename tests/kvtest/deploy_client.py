@@ -266,7 +266,7 @@ class Deployer:
 
         if transport == 'kubectl':
             # Stream all files in one kubectl exec (tar cf - | local tar xf -).
-            # No gzip by default (faster in practice); --compress adds gzip.
+            # Preserve the ordinary Kubernetes path: tar without gzip.
             # Previously this was per-file `kubectl exec cat {file}` (N kubectl
             # processes per node); on 500+ nodes that was 500*N API server
             # round-trips. Falls back to per-file cat if the container lacks

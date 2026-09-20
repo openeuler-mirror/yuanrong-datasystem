@@ -12,17 +12,21 @@ import log_collect
 
 
 class TestCollectCompression(unittest.TestCase):
-    def test_cli_defaults_and_explicit_combinations(self):
+    def test_cli_uses_defaults_and_rejects_removed_flags(self):
+        import contextlib
+        import io
         parser = argparse.ArgumentParser()
         log_collect.add_collect_filters(parser)
-        self.assertTrue(hasattr(log_collect, 'archive_options_from_args'))
-        self.assertIsNone(log_collect.archive_options_from_args(parser.parse_args([])))
-        for compress in (True, False):
-            for extract in (True, False):
-                args = parser.parse_args(['--compress' if compress else '--no-compress',
-                                          '--extract' if extract else '--no-extract'])
-                self.assertEqual(log_collect.archive_options_from_args(args),
-                                 dict(compress=compress, extract=extract))
+        args = parser.parse_args([])
+        self.assertFalse(hasattr(args, 'compress'))
+        self.assertFalse(hasattr(args, 'extract'))
+        self.assertFalse(args.uncompressed_only)
+        self.assertTrue(parser.parse_args(['--uncompressed-only']).uncompressed_only)
+        for flag in ('--compress', '--no-compress', '--extract', '--no-extract'):
+            with self.subTest(flag=flag), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    parser.parse_args([flag])
+                self.assertEqual(error.exception.code, 2)
 
     def test_filtered_archives_compressed_or_raw_extracted_or_retained(self):
         for compress in (True, False):
