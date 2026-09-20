@@ -50,7 +50,7 @@ public:
                                   std::optional<int> providerStatus, std::optional<int> cqeStatus);
     uint64_t CaptureWriteTargetCompletionGeneration(const HostPort &worker);
     void ReportLateWriteTargetFailure(const UrmaLateCompletion &completion, uint64_t peerToken) noexcept;
-    bool IsAvailable(const HostPort &addr) const override;
+    bool IsAvailable(const HostPort &addr, WorkerAccessAction action) const override;
     bool IsWriteTargetAvailable(const HostPort &addr) const;
     bool SupportsPortHealthVerification(const HostPort &addr) const;
     std::vector<HostPort> GetUnavailableWriteTargets() const;
@@ -79,6 +79,10 @@ private:
     void EnablePortHealthVerificationIfSupportedLocked(const HostPort &worker);
     void PublishWriteTargetCompletionGenerationsLocked(const std::unordered_set<HostPort> &workers);
     void RefreshWriteTargetCompletionGenerationLocked(const HostPort &worker);
+    // Applies a verified port-health fact to the write-target admission and re-derives the write exclusion
+    // entry from the resulting admission verdict, so both quarantine and release follow the same epoch.
+    void ApplyVerifiedWriteTargetPortHealth(const HostPort &worker, const std::string &incarnation,
+                                            const UbPortHealthSummary &portHealth);
 
     std::shared_ptr<WorkerUbHealthRegistry> ubHealthRegistry_;
     PeerUbAdmission localAdmission_;

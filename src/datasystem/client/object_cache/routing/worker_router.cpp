@@ -154,10 +154,10 @@ const std::shared_ptr<const TokenIndex> &PreparedClusterTopology::GetTokenIndex(
     return tokenIndex_;
 }
 
-bool WorkerRouter::IsWorkerAvailable(const HostPort &addr) const
+bool WorkerRouter::IsWorkerAvailable(const HostPort &addr, WorkerAccessAction action) const
 {
     return std::all_of(filters_.begin(), filters_.end(),
-        [&](const std::shared_ptr<IWorkerFilter> &f) { return f->IsAvailable(addr); });
+        [&](const std::shared_ptr<IWorkerFilter> &f) { return f->IsAvailable(addr, action); });
 }
 
 bool WorkerRouter::IsExcluded(const HostPort &addr, const std::vector<HostPort> &exclude) const
@@ -166,27 +166,30 @@ bool WorkerRouter::IsExcluded(const HostPort &addr, const std::vector<HostPort> 
         [&](const HostPort &e) { return e == addr; });
 }
 
-Status WorkerRouter::SelectWorkerByScheduling(const std::string &key, DataPlacementPolicy policy, HostPort &worker,
+Status WorkerRouter::SelectWorkerByScheduling(const std::string &key, DataPlacementPolicy policy,
+                                              WorkerAccessAction action, HostPort &worker,
                                               const std::vector<HostPort> &exclude) const
 {
     CHECK_FAIL_RETURN_STATUS(initialized_.load(std::memory_order_acquire), K_NOT_READY, "Routing is not initialized");
 
     auto view = std::atomic_load(&ringView_);
-    auto status = SelectWorkerFromView(key, policy, worker, exclude, view);
+    auto status = SelectWorkerFromView(key, policy, action, worker, exclude, view);
     if (!bandwidthScheduler_ || !bandwidthScheduler_->Enabled()) {
         return status;
     }
 
-    // The scheduler reads live UB port faults from the registry snapshot; a null snapshot
-    // would make every worker's health unknown and permanently keep affinity.
-    std::shared_ptr<const UbRoutingHealthSnapshot> healthSnapshot = ubHealthRegistry_->GetRoutingSnapshot();
+    // UB port health steers selection only where the verdict is authoritative: GET consumes the registry snapshot,
+    // passive hints included, while SET must ignore unverified hints so that only the verified exclusions of the
+    // SET filter chain apply. A null snapshot leaves every worker's health unknown, which keeps affinity.
+    std::shared_ptr<const UbRoutingHealthSnapshot> healthSnapshot =
+        action == WorkerAccessAction::SET ? nullptr : ubHealthRegistry_->GetRoutingSnapshot();
     uint64_t taskId = 0;
     if (bandwidthScheduler_->ShouldKeepAffinity(worker, key, healthSnapshot, taskId)) {
         return status;
     }
 
     HostPort selected;
-    if (bandwidthScheduler_->SelectWorker(key, filters_, exclude, worker, healthSnapshot, taskId, selected)) {
+    if (bandwidthScheduler_->SelectWorker(key, filters_, exclude, worker, healthSnapshot, taskId, selected, action)) {
         if (selected != worker) {
             worker = std::move(selected);
         }
@@ -195,18 +198,19 @@ Status WorkerRouter::SelectWorkerByScheduling(const std::string &key, DataPlacem
     return status;
 }
 
-Status WorkerRouter::SelectWorker(const std::string &key, DataPlacementPolicy policy, HostPort &worker,
-                                  const std::vector<HostPort> &exclude) const
+Status WorkerRouter::SelectWorker(const std::string &key, DataPlacementPolicy policy, WorkerAccessAction action,
+                                  HostPort &worker, const std::vector<HostPort> &exclude) const
 {
     if (policy == DataPlacementPolicy::PREFERRED_META_OWNER) {
-        return SelectWorkerByScheduling(key, policy, worker, exclude);
+        return SelectWorkerByScheduling(key, policy, action, worker, exclude);
     }
     auto view = std::atomic_load(&ringView_);
-    return SelectWorkerFromView(key, policy, worker, exclude, view);
+    return SelectWorkerFromView(key, policy, action, worker, exclude, view);
 }
 
 Status WorkerRouter::SelectWorkerFromCandidates(const std::vector<HostPort> &candidates,
-                                                DataPlacementPolicy policy, HostPort &worker,
+                                                DataPlacementPolicy policy, WorkerAccessAction action,
+                                                HostPort &worker,
                                                 const std::vector<HostPort> &exclude) const
 {
     CHECK_FAIL_RETURN_STATUS(initialized_.load(std::memory_order_acquire), K_NOT_READY, "Routing is not initialized");
@@ -218,7 +222,7 @@ Status WorkerRouter::SelectWorkerFromCandidates(const std::vector<HostPort> &can
         const bool routable = ringMember != view->ring->members().end()
                               && (ringMember->second.state() == ::datasystem::MembershipPb::ACTIVE
                                   || ringMember->second.state() == ::datasystem::MembershipPb::LEAVING);
-        if (!routable || IsExcluded(candidate, exclude) || !IsWorkerAvailable(candidate)) {
+        if (!routable || IsExcluded(candidate, exclude) || !IsWorkerAvailable(candidate, action)) {
             continue;
         }
         const bool sameNode = std::find(sameNodeWorkers.begin(), sameNodeWorkers.end(), candidate)
@@ -238,7 +242,8 @@ Status WorkerRouter::SelectWorkerFromCandidates(const std::vector<HostPort> &can
     return Status(K_NO_AVAILABLE_WORKER, "No redirect candidate satisfies routing policy");
 }
 
-Status WorkerRouter::SelectWorkerFromView(const std::string &key, DataPlacementPolicy policy, HostPort &worker,
+Status WorkerRouter::SelectWorkerFromView(const std::string &key, DataPlacementPolicy policy,
+                                          WorkerAccessAction action, HostPort &worker,
                                           const std::vector<HostPort> &exclude,
                                           const std::shared_ptr<const RingView> &view) const
 {
@@ -254,7 +259,7 @@ Status WorkerRouter::SelectWorkerFromView(const std::string &key, DataPlacementP
             if (IsExcluded(w, exclude)) {
                 continue;
             }
-            if (IsWorkerAvailable(w)) {
+            if (IsWorkerAvailable(w, action)) {
                 worker = w;
                 return Status::OK();
             }
@@ -282,7 +287,7 @@ Status WorkerRouter::SelectWorkerFromView(const std::string &key, DataPlacementP
         if (IsExcluded(candidate, exclude)) {
             continue;
         }
-        if (IsWorkerAvailable(candidate)) {
+        if (IsWorkerAvailable(candidate, action)) {
             worker = candidate;
             return Status::OK();
         }
@@ -292,6 +297,7 @@ Status WorkerRouter::SelectWorkerFromView(const std::string &key, DataPlacementP
 }
 
 Status WorkerRouter::SelectWorkers(const std::vector<std::string> &keys, DataPlacementPolicy policy,
+                                   WorkerAccessAction action,
                                    std::unordered_map<HostPort, std::vector<std::string>> &groups,
                                    const std::vector<HostPort> &exclude) const
 {
@@ -303,7 +309,7 @@ Status WorkerRouter::SelectWorkers(const std::vector<std::string> &keys, DataPla
     std::unordered_map<HostPort, std::vector<std::string>> newGroups;
     for (const auto &key : keys) {
         HostPort owner;
-        Status s = SelectWorkerFromView(key, policy, owner, exclude, view);
+        Status s = SelectWorkerFromView(key, policy, action, owner, exclude, view);
         if (s.IsError()) {
             return s;
         }
@@ -318,7 +324,7 @@ std::vector<HostPort> WorkerRouter::GetAvailableSameNodeWorkers() const
     auto view = std::atomic_load(&ringView_);
     std::vector<HostPort> workers;
     for (const auto &worker : *view->sameNodeWorkers) {
-        if (IsWorkerAvailable(worker)) {
+        if (IsWorkerAvailable(worker, WorkerAccessAction::CONTROL)) {
             workers.emplace_back(worker);
         }
     }
@@ -330,7 +336,7 @@ std::vector<HostPort> WorkerRouter::GetAvailableWorkers() const
     auto view = std::atomic_load(&ringView_);
     std::vector<HostPort> result;
     for (const auto &w : view->tokenIndex->workers) {
-        if (IsWorkerAvailable(w)) {
+        if (IsWorkerAvailable(w, WorkerAccessAction::CONTROL)) {
             result.push_back(w);
         }
     }

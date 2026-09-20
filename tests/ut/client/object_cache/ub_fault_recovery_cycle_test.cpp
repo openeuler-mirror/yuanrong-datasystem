@@ -144,7 +144,7 @@ void IsolateWorkerViaWriteTargetFault(UbHealthFilter &filter, FaultCycleDataPlan
                                           URMA_REMOTE_ACK_TIMEOUT_STATUS);
     manager.RunAndWait();
     ASSERT_EQ(manager.queryCount, 1u);
-    EXPECT_FALSE(filter.IsAvailable(WORKER));
+    EXPECT_FALSE(filter.IsAvailable(WORKER, client::WorkerAccessAction::CONTROL));
     EXPECT_FALSE(filter.IsWriteTargetAvailable(WORKER));
 }
 }  // namespace
@@ -157,7 +157,7 @@ TEST(UbFaultRecoveryCycleTest, WorkerPortRecoveryRestoresClientAccess)
     const auto ring = BuildRing(INCARNATION);
     harness.registry->ReconcileTopology(ring);
     filter.ApplyTopologyIncarnations(ring);
-    EXPECT_TRUE(filter.IsAvailable(WORKER));
+    EXPECT_TRUE(filter.IsAvailable(WORKER, client::WorkerAccessAction::CONTROL));
     EXPECT_TRUE(filter.IsWriteTargetAvailable(WORKER));
 
     IsolateWorkerViaWriteTargetFault(filter, manager);
@@ -170,13 +170,13 @@ TEST(UbFaultRecoveryCycleTest, WorkerPortRecoveryRestoresClientAccess)
 
     manager.workerPortHealth = ALL_PORTS_RECOVERED;
     manager.ObserveUbHealthSummary(BuildSummary(ALL_PORTS_RECOVERED));
-    EXPECT_FALSE(filter.IsAvailable(WORKER));
+    EXPECT_FALSE(filter.IsAvailable(WORKER, client::WorkerAccessAction::CONTROL));
 
     // The verifier UT covers the randomized deadline itself. Make it due here without a real 30-second wait.
     manager.MakeRecoveryQueryDue();
     manager.RunAndWait();
     EXPECT_EQ(manager.queryCount, 2u);
-    EXPECT_TRUE(filter.IsAvailable(WORKER));
+    EXPECT_TRUE(filter.IsAvailable(WORKER, client::WorkerAccessAction::CONTROL));
     EXPECT_TRUE(filter.IsWriteTargetAvailable(WORKER));
 }
 
@@ -190,7 +190,7 @@ TEST(UbFaultRecoveryCycleTest, WorkerRestartIncarnationClearsIsolation)
     const auto ring = BuildRing(NEXT_INCARNATION);
     harness.registry->ReconcileTopology(ring);
     filter.ApplyTopologyIncarnations(ring);
-    EXPECT_TRUE(filter.IsAvailable(WORKER));
+    EXPECT_TRUE(filter.IsAvailable(WORKER, client::WorkerAccessAction::CONTROL));
     EXPECT_TRUE(filter.IsWriteTargetAvailable(WORKER));
     EXPECT_EQ(manager.queryCount, 1u);
 }
@@ -207,7 +207,7 @@ TEST(UbFaultRecoveryCycleTest, StalePortEpochRecoveryDoesNotRestoreAccess)
     manager.ObserveUbHealthSummary(BuildSummary(staleRecovery));
     manager.RunAndWait();
     EXPECT_EQ(manager.queryCount, 1u);
-    EXPECT_FALSE(filter.IsAvailable(WORKER));
+    EXPECT_FALSE(filter.IsAvailable(WORKER, client::WorkerAccessAction::CONTROL));
     EXPECT_FALSE(filter.IsWriteTargetAvailable(WORKER));
 }
 

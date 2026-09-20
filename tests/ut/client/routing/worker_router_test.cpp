@@ -26,10 +26,13 @@
 #include <gtest/gtest.h>
 
 #include "datasystem/client/object_cache/routing/broken_filter.h"
+#include "datasystem/client/object_cache/routing/client_read_bandwidth_scheduler.h"
 #include "datasystem/client/object_cache/routing/i_worker_filter.h"
 #include "datasystem/client/object_cache/routing/routing.h"
 #include "datasystem/client/object_cache/routing/state_filter.h"
 #include "datasystem/client/object_cache/routing/worker_router.h"
+#include "datasystem/client/object_cache/routing/worker_ub_health_registry.h"
+#include "datasystem/common/object_cache/ub_port_health.h"
 #include "datasystem/common/util/hash_ring_token.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/rpc_util.h"
@@ -43,8 +46,9 @@ class RejectAllFilter : public client::IWorkerFilter {
 public:
     ~RejectAllFilter() override = default;
 
-    bool IsAvailable(const HostPort &) const override
+    bool IsAvailable(const HostPort &, client::WorkerAccessAction action) const override
     {
+        (void)action;
         return false;
     }
 };
@@ -95,7 +99,7 @@ TEST_F(RoutingTest, TestSelectWorkerEmptyRing)
 {
     auto router = CreateRouter();
     HostPort worker;
-    auto st = router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, worker);
+    auto st = router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, worker);
     EXPECT_FALSE(st.IsOk());
 }
 
@@ -105,7 +109,7 @@ TEST_F(RoutingTest, TestSelectWorkerReturnsActive)
     DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
 
     HostPort worker;
-    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, worker));
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, worker));
     std::string addr = worker.ToString();
     EXPECT_TRUE(addr == "127.0.0.1:1000" || addr == "127.0.0.1:2000");
 }
@@ -116,8 +120,8 @@ TEST_F(RoutingTest, TestSelectWorkerConsistency)
     DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
 
     HostPort w1, w2;
-    DS_ASSERT_OK(router->SelectWorker("consistency_key", client::DataPlacementPolicy::PREFERRED_META_OWNER, w1));
-    DS_ASSERT_OK(router->SelectWorker("consistency_key", client::DataPlacementPolicy::PREFERRED_META_OWNER, w2));
+    DS_ASSERT_OK(router->SelectWorker("consistency_key", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, w1));
+    DS_ASSERT_OK(router->SelectWorker("consistency_key", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, w2));
     EXPECT_EQ(w1.ToString(), w2.ToString());
 }
 
@@ -130,19 +134,19 @@ TEST_F(RoutingTest, RedirectCandidatesPreservePlacementExclusionsAndHealth)
     const std::vector<HostPort> candidates{ remote, sameNode };
     HostPort selected;
     DS_ASSERT_OK(router->SelectWorkerFromCandidates(
-        candidates, client::DataPlacementPolicy::PREFERRED_META_OWNER, selected));
+        candidates, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, selected));
     EXPECT_EQ(selected, remote);
     DS_ASSERT_OK(router->SelectWorkerFromCandidates(
-        candidates, client::DataPlacementPolicy::PREFERRED_SAME_NODE, selected));
+        candidates, client::DataPlacementPolicy::PREFERRED_SAME_NODE, client::WorkerAccessAction::CONTROL, selected));
     EXPECT_EQ(selected, sameNode);
     EXPECT_EQ(router
-                  ->SelectWorkerFromCandidates(candidates, client::DataPlacementPolicy::REQUIRED_SAME_NODE,
+                  ->SelectWorkerFromCandidates(candidates, client::DataPlacementPolicy::REQUIRED_SAME_NODE, client::WorkerAccessAction::CONTROL,
                                                selected, { sameNode })
                   .GetCode(),
               K_NO_AVAILABLE_WORKER);
     router->UpdateState(remote, K_SCALE_DOWN);
     DS_ASSERT_OK(router->SelectWorkerFromCandidates(
-        candidates, client::DataPlacementPolicy::PREFERRED_META_OWNER, selected));
+        candidates, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, selected));
     EXPECT_EQ(selected, sameNode);
 }
 
@@ -151,7 +155,7 @@ TEST_F(RoutingTest, InvalidSeedOverrideDoesNotReplaceLastGoodRing)
     auto router = CreateRouter();
     DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
     HostPort before;
-    DS_ASSERT_OK(router->SelectWorker("stable-key", client::DataPlacementPolicy::PREFERRED_META_OWNER, before));
+    DS_ASSERT_OK(router->SelectWorker("stable-key", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, before));
 
     auto invalidRing = BuildRing();
     auto *seedOverride = invalidRing->mutable_members()->at("127.0.0.1:1000").add_token_seed_overrides();
@@ -160,7 +164,7 @@ TEST_F(RoutingTest, InvalidSeedOverrideDoesNotReplaceLastGoodRing)
     EXPECT_EQ(UpdateHashRing(router, invalidRing, BuildHostIdMap()).GetCode(), K_INVALID);
 
     HostPort after;
-    DS_ASSERT_OK(router->SelectWorker("stable-key", client::DataPlacementPolicy::PREFERRED_META_OWNER, after));
+    DS_ASSERT_OK(router->SelectWorker("stable-key", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, after));
     EXPECT_EQ(after, before);
 }
 
@@ -200,11 +204,11 @@ TEST_F(RoutingTest, TestSelectWorkerExclude)
     DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
 
     HostPort first;
-    DS_ASSERT_OK(router->SelectWorker("exclude_key", client::DataPlacementPolicy::PREFERRED_META_OWNER, first));
+    DS_ASSERT_OK(router->SelectWorker("exclude_key", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, first));
 
     // Exclude the first result, should get a different one
     HostPort second;
-    DS_ASSERT_OK(router->SelectWorker("exclude_key", client::DataPlacementPolicy::PREFERRED_META_OWNER, second,
+    DS_ASSERT_OK(router->SelectWorker("exclude_key", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, second,
                                       { first }));
     EXPECT_NE(first.ToString(), second.ToString());
 }
@@ -216,7 +220,7 @@ TEST_F(RoutingTest, TestSelectWorkersBatch)
 
     std::vector<std::string> keys = { "k1", "k2", "k3", "k4", "k5" };
     std::unordered_map<HostPort, std::vector<std::string>> groups;
-    DS_ASSERT_OK(router->SelectWorkers(keys, client::DataPlacementPolicy::PREFERRED_META_OWNER, groups));
+    DS_ASSERT_OK(router->SelectWorkers(keys, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, groups));
 
     // All keys should be grouped
     size_t totalKeys = 0;
@@ -234,7 +238,7 @@ TEST_F(RoutingTest, TestSelectWorkersFailureDoesNotMutateOutput)
 
     HostPort existing("127.0.0.1", 3000);
     std::unordered_map<HostPort, std::vector<std::string>> groups{ { existing, { "existing" } } };
-    auto rc = router->SelectWorkers({ "k1", "k2" }, client::DataPlacementPolicy::PREFERRED_META_OWNER, groups);
+    auto rc = router->SelectWorkers({ "k1", "k2" }, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, groups);
 
     EXPECT_TRUE(rc.IsError());
     ASSERT_EQ(groups.size(), 1u);
@@ -247,7 +251,7 @@ TEST_F(RoutingTest, TestSelectWorkersEmptyInputClearsOutput)
     HostPort existing("127.0.0.1", 3000);
     std::unordered_map<HostPort, std::vector<std::string>> groups{ { existing, { "existing" } } };
 
-    DS_ASSERT_OK(router->SelectWorkers({}, client::DataPlacementPolicy::PREFERRED_META_OWNER, groups));
+    DS_ASSERT_OK(router->SelectWorkers({}, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, groups));
     EXPECT_TRUE(groups.empty());
 }
 
@@ -261,7 +265,7 @@ TEST_F(RoutingTest, TestSelectWorkersUsesSameNodeWorkersWithoutHashTokens)
     DS_ASSERT_OK(UpdateHashRing(router, ring, BuildHostIdMap()));
 
     std::unordered_map<HostPort, std::vector<std::string>> groups;
-    DS_ASSERT_OK(router->SelectWorkers({ "k1", "k2" }, client::DataPlacementPolicy::REQUIRED_SAME_NODE, groups));
+    DS_ASSERT_OK(router->SelectWorkers({ "k1", "k2" }, client::DataPlacementPolicy::REQUIRED_SAME_NODE, client::WorkerAccessAction::CONTROL, groups));
     ASSERT_EQ(groups.size(), 1u);
     EXPECT_EQ(groups.begin()->first.ToString(), "127.0.0.1:1000");
     EXPECT_EQ(groups.begin()->second.size(), 2u);
@@ -273,7 +277,7 @@ TEST_F(RoutingTest, TestSameNodePreferred)
     DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
 
     HostPort worker;
-    DS_ASSERT_OK(router->SelectWorker("samenode_key", client::DataPlacementPolicy::PREFERRED_SAME_NODE, worker));
+    DS_ASSERT_OK(router->SelectWorker("samenode_key", client::DataPlacementPolicy::PREFERRED_SAME_NODE, client::WorkerAccessAction::CONTROL, worker));
     EXPECT_EQ(worker.ToString(), "127.0.0.1:1000");  // host-a's worker
 }
 
@@ -283,7 +287,7 @@ TEST_F(RoutingTest, TestRequiredSameNodeDoesNotFallback)
     DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
 
     HostPort worker;
-    auto rc = router->SelectWorker("key", client::DataPlacementPolicy::REQUIRED_SAME_NODE, worker);
+    auto rc = router->SelectWorker("key", client::DataPlacementPolicy::REQUIRED_SAME_NODE, client::WorkerAccessAction::CONTROL, worker);
     EXPECT_EQ(rc.GetCode(), K_NO_AVAILABLE_WORKER);
 }
 
@@ -293,9 +297,9 @@ TEST_F(RoutingTest, TestPreferredSameNodeFallsBackToMetaOwner)
     DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
 
     HostPort expected;
-    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, expected));
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, expected));
     HostPort selected;
-    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_SAME_NODE, selected));
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_SAME_NODE, client::WorkerAccessAction::CONTROL, selected));
     EXPECT_EQ(selected, expected);
 }
 
@@ -307,9 +311,9 @@ TEST_F(RoutingTest, TestPreferredSameNodeHonorsExclude)
     DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), hostIdMap));
 
     HostPort first;
-    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_SAME_NODE, first));
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_SAME_NODE, client::WorkerAccessAction::CONTROL, first));
     HostPort second;
-    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_SAME_NODE, second, { first }));
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_SAME_NODE, client::WorkerAccessAction::CONTROL, second, { first }));
     EXPECT_NE(first, second);
 }
 
@@ -325,7 +329,7 @@ TEST_F(RoutingTest, TestHashEqualTokenSelectsTokenOwner)
     auto router = CreateRouter();
     DS_ASSERT_OK(UpdateHashRing(router, ring, BuildHostIdMap()));
     HostPort selected;
-    DS_ASSERT_OK(router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, selected));
+    DS_ASSERT_OK(router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, selected));
     EXPECT_EQ(selected.ToString(), address);
 }
 
@@ -340,7 +344,7 @@ TEST_F(RoutingTest, TestSameNodePreferredDistributesByKey)
     for (int i = 0; i < 64; ++i) {
         HostPort worker;
         DS_ASSERT_OK(router->SelectWorker("same-node-" + std::to_string(i),
-                                         client::DataPlacementPolicy::PREFERRED_SAME_NODE, worker));
+                                         client::DataPlacementPolicy::PREFERRED_SAME_NODE, client::WorkerAccessAction::CONTROL, worker));
         selected.emplace(worker.ToString());
     }
     EXPECT_EQ(selected.size(), 2u);
@@ -361,10 +365,10 @@ TEST_F(RoutingTest, TestEmptyHostIdDoesNotTreatMissingWorkerHostIdAsSameNode)
     for (int i = 0; i < 100; ++i) {
         std::string key = "empty-hostid-key-" + std::to_string(i);
         HostPort hashOwner;
-        DS_ASSERT_OK(router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, hashOwner));
+        DS_ASSERT_OK(router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, hashOwner));
 
         HostPort selected;
-        DS_ASSERT_OK(router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_SAME_NODE, selected));
+        DS_ASSERT_OK(router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_SAME_NODE, client::WorkerAccessAction::CONTROL, selected));
         EXPECT_EQ(selected, hashOwner)
             << "Key " << key << ": PREFERRED_SAME_NODE diverged from PREFERRED_META_OWNER";
     }
@@ -378,21 +382,21 @@ TEST_F(RoutingTest, TestStateFilterRejectsLeavingWorker)
 
     const std::string key = "leaving-owner";
     HostPort original;
-    DS_ASSERT_OK(router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, original));
+    DS_ASSERT_OK(router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, original));
 
     auto updatedRing = BuildRing();
     (*updatedRing->mutable_members())[original.ToString()].set_state(::datasystem::MembershipPb::LEAVING);
     DS_ASSERT_OK(UpdateHashRing(router, updatedRing, BuildHostIdMap()));
 
     HostPort selected;
-    DS_ASSERT_OK(router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, selected));
+    DS_ASSERT_OK(router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, selected));
     EXPECT_NE(selected, original);
 }
 
 TEST_F(RoutingTest, TestStateFilterRejectsWhenRouterIsMissing)
 {
     client::StateFilter filter(nullptr);
-    EXPECT_FALSE(filter.IsAvailable(HostPort("127.0.0.1", 1000)));
+    EXPECT_FALSE(filter.IsAvailable(HostPort("127.0.0.1", 1000), client::WorkerAccessAction::CONTROL));
 }
 
 TEST_F(RoutingTest, TestConcurrentSelectAndHashRingUpdate)
@@ -413,7 +417,7 @@ TEST_F(RoutingTest, TestConcurrentSelectAndHashRingUpdate)
             for (int i = 0; i < 500; ++i) {
                 HostPort selected;
                 auto rc = router->SelectWorker("key-" + std::to_string(threadIndex) + "-" + std::to_string(i),
-                                               client::DataPlacementPolicy::PREFERRED_META_OWNER, selected);
+                                               client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, selected);
                 if (rc.IsError() || selected.Empty()) {
                     failed.store(true);
                 }
@@ -462,14 +466,14 @@ TEST_F(RoutingTest, TestBrokenFilter)
     client::BrokenFilter filter;
 
     HostPort addr("127.0.0.1", 1000);
-    EXPECT_TRUE(filter.IsAvailable(addr));
+    EXPECT_TRUE(filter.IsAvailable(addr, client::WorkerAccessAction::CONTROL));
 
     MarkWorkerBroken(filter, addr);
-    EXPECT_FALSE(filter.IsAvailable(addr));
+    EXPECT_FALSE(filter.IsAvailable(addr, client::WorkerAccessAction::CONTROL));
 
     // Other status should be ignored
     filter.OnWorkerStateChange(addr, K_RUNTIME_ERROR);
-    EXPECT_FALSE(filter.IsAvailable(addr));  // Still broken from the disconnect burst
+    EXPECT_FALSE(filter.IsAvailable(addr, client::WorkerAccessAction::CONTROL));  // Still broken from the disconnect burst
 }
 
 TEST_F(RoutingTest, TestBrokenFilterIgnoresOtherWorkers)
@@ -480,8 +484,8 @@ TEST_F(RoutingTest, TestBrokenFilterIgnoresOtherWorkers)
     HostPort b("127.0.0.1", 2000);
 
     MarkWorkerBroken(filter, a);
-    EXPECT_FALSE(filter.IsAvailable(a));
-    EXPECT_TRUE(filter.IsAvailable(b));  // b unaffected
+    EXPECT_FALSE(filter.IsAvailable(a, client::WorkerAccessAction::CONTROL));
+    EXPECT_TRUE(filter.IsAvailable(b, client::WorkerAccessAction::CONTROL));  // b unaffected
 }
 
 TEST_F(RoutingTest, TestBrokenFilterClearsOnHashRingUpdate)
@@ -490,10 +494,10 @@ TEST_F(RoutingTest, TestBrokenFilterClearsOnHashRingUpdate)
     HostPort addr("127.0.0.1", 1000);
 
     MarkWorkerBroken(filter, addr);
-    EXPECT_FALSE(filter.IsAvailable(addr));
+    EXPECT_FALSE(filter.IsAvailable(addr, client::WorkerAccessAction::CONTROL));
 
     filter.OnHashRingUpdated(*BuildRing());
-    EXPECT_TRUE(filter.IsAvailable(addr));
+    EXPECT_TRUE(filter.IsAvailable(addr, client::WorkerAccessAction::CONTROL));
 }
 
 TEST_F(RoutingTest, TestBrokenFilterConcurrentUpdatesAreNotLost)
@@ -511,7 +515,7 @@ TEST_F(RoutingTest, TestBrokenFilterConcurrentUpdatesAreNotLost)
         thread.join();
     }
     for (int i = 0; i < workerCount; ++i) {
-        EXPECT_FALSE(filter.IsAvailable(HostPort("127.0.0.1", 1000 + i)));
+        EXPECT_FALSE(filter.IsAvailable(HostPort("127.0.0.1", 1000 + i), client::WorkerAccessAction::CONTROL));
     }
 }
 
@@ -523,14 +527,14 @@ TEST_F(RoutingTest, TestBrokenFilterIntegrationWithRouter)
     DS_ASSERT_OK(UpdateHashRing(router, BuildRing(), BuildHostIdMap()));
 
     HostPort first;
-    DS_ASSERT_OK(router->SelectWorker("broken_key", client::DataPlacementPolicy::PREFERRED_META_OWNER, first));
+    DS_ASSERT_OK(router->SelectWorker("broken_key", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, first));
 
     // Mark first worker as broken (reach the debounce threshold)
     MarkWorkerBroken(*router, first);
 
     // Subsequent SelectWorker should skip broken worker
     HostPort second;
-    DS_ASSERT_OK(router->SelectWorker("broken_key", client::DataPlacementPolicy::PREFERRED_META_OWNER, second));
+    DS_ASSERT_OK(router->SelectWorker("broken_key", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, second));
     EXPECT_NE(first.ToString(), second.ToString());
 }
 
@@ -559,7 +563,7 @@ TEST_F(RoutingTest, U7RoutesWithFiveThousandWorkerSnapshot)
     };
     HostPort redirectWorker;
     DS_ASSERT_OK(router->SelectWorkerFromCandidates(
-        redirectCandidates, client::DataPlacementPolicy::PREFERRED_META_OWNER, redirectWorker));
+        redirectCandidates, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, redirectWorker));
     EXPECT_NE(std::find(redirectCandidates.begin(), redirectCandidates.end(), redirectWorker),
               redirectCandidates.end());
 
@@ -569,7 +573,7 @@ TEST_F(RoutingTest, U7RoutesWithFiveThousandWorkerSnapshot)
         keys.emplace_back("u7-scale-key-" + std::to_string(i));
     }
     std::unordered_map<HostPort, std::vector<std::string>> groups;
-    DS_ASSERT_OK(router->SelectWorkers(keys, client::DataPlacementPolicy::PREFERRED_META_OWNER, groups));
+    DS_ASSERT_OK(router->SelectWorkers(keys, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, groups));
 
     size_t selectedKeyCount = 0;
     for (const auto &group : groups) {
@@ -625,10 +629,10 @@ TEST_F(RoutingTest, U7BatchSelectionNeverMixesConcurrentSnapshots)
     }
     std::unordered_map<HostPort, std::vector<std::string>> expectedA;
     router->UpdateHashRing(*preparedA, *hostIdMap);
-    DS_ASSERT_OK(router->SelectWorkers(keys, client::DataPlacementPolicy::PREFERRED_META_OWNER, expectedA));
+    DS_ASSERT_OK(router->SelectWorkers(keys, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, expectedA));
     std::unordered_map<HostPort, std::vector<std::string>> expectedB;
     router->UpdateHashRing(*preparedB, *hostIdMap);
-    DS_ASSERT_OK(router->SelectWorkers(keys, client::DataPlacementPolicy::PREFERRED_META_OWNER, expectedB));
+    DS_ASSERT_OK(router->SelectWorkers(keys, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, expectedB));
     ASSERT_NE(expectedA, expectedB);
 
     std::atomic<bool> stop{ false };
@@ -644,7 +648,7 @@ TEST_F(RoutingTest, U7BatchSelectionNeverMixesConcurrentSnapshots)
     for (size_t iteration = 0; iteration < 200; ++iteration) {
         std::unordered_map<HostPort, std::vector<std::string>> groups;
         selectionStatus =
-            router->SelectWorkers(keys, client::DataPlacementPolicy::PREFERRED_META_OWNER, groups);
+            router->SelectWorkers(keys, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, groups);
         if (selectionStatus.IsError() || (groups != expectedA && groups != expectedB)) {
             snapshotsConsistent = false;
             break;
@@ -673,7 +677,7 @@ TEST_F(RoutingTest, AllWorkersBrokenExhaustsRingAndReturnsCode37)
 
     // Sanity: routing succeeds before any worker is marked broken.
     HostPort healthy;
-    DS_ASSERT_OK(router->SelectWorker("k", client::DataPlacementPolicy::PREFERRED_META_OWNER, healthy));
+    DS_ASSERT_OK(router->SelectWorker("k", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, healthy));
 
     const std::vector<HostPort> allWorkers{ HostPort("127.0.0.1", 1000), HostPort("127.0.0.1", 2000) };
     // Mark every candidate broken via the genuine-disconnect path that HandleSetRouteFailure
@@ -684,7 +688,7 @@ TEST_F(RoutingTest, AllWorkersBrokenExhaustsRingAndReturnsCode37)
 
     // Every candidate filtered by BrokenFilter -> K_NO_AVAILABLE_WORKER (code 37).
     HostPort selected;
-    auto rc = router->SelectWorker("k", client::DataPlacementPolicy::PREFERRED_META_OWNER, selected);
+    auto rc = router->SelectWorker("k", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, selected);
     EXPECT_EQ(rc.GetCode(), K_NO_AVAILABLE_WORKER);
 }
 
@@ -731,6 +735,74 @@ TEST_F(RoutingTest, TestStatusWithExtraEmpty)
     Status st(K_NOT_OWNER, "not owner");
     st.WithExtra("");
     EXPECT_FALSE(st.HasExtra());
+}
+
+// A passive health summary (plain business response) only feeds the registry routing snapshot. SET selection must
+// ignore that unverified hint and keep the affinity worker; GET keeps consuming the snapshot, which is what proves
+// the hint really reaches the scheduler.
+TEST_F(RoutingTest, WriteSelectionIgnoresPassivePortHealthHint)
+{
+    // WorkerRouter::UpdateHashRing reconciles the UB health registry from its own ring, so the ring fed to the router
+    // must carry the same incarnation ids, otherwise the registry drops every summary as an unknown incarnation.
+    auto registryRing = BuildRing();
+    (*registryRing->mutable_members())["127.0.0.1:1000"].set_id("inc-1000");
+    (*registryRing->mutable_members())["127.0.0.1:2000"].set_id("inc-2000");
+    auto registry = std::make_shared<client::WorkerUbHealthRegistry>();
+    registry->ReconcileTopology(*registryRing);
+
+    client::ClientReadBandwidthScheduler::Config config;
+    config.enabled = true;
+    config.clientSalt = "router-purpose-test";
+    config.latencyCandidateRefreshMs = 60000;
+    config.latencyClientStaleMs = 60000;
+    config.latencyWorkerRecycleCheckMs = 60000;
+    config.latencyWorkerInactiveRecycleMs = 60000;
+    config.latencyStarvationProtectMs = 60000;
+    auto scheduler = std::make_shared<client::ClientReadBandwidthScheduler>(config);
+    auto router = std::make_shared<client::WorkerRouter>(
+        "host-a", registry, std::vector<std::shared_ptr<client::IWorkerFilter>>{}, scheduler);
+    ASSERT_TRUE(
+        UpdateHashRing(router, std::make_shared<::datasystem::ClusterTopologyPb>(*registryRing), BuildHostIdMap())
+            .IsOk());
+
+    const HostPort workerA("127.0.0.1", 1000);
+    const HostPort workerB("127.0.0.1", 2000);
+    scheduler->Observe(workerA, 1'000'000, 1'200'000, 1, "test");
+    scheduler->Observe(workerB, 1'000'000, 1'200'000, 1, "test");
+
+    const std::string key = "passive-hint-key";
+    HostPort affinity;
+    ASSERT_TRUE(
+        router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                             client::WorkerAccessAction::SET, affinity)
+            .IsOk());
+
+    UbHealthSummary passive;
+    passive.worker = affinity;
+    passive.incarnation = affinity.Port() == 1000 ? "inc-1000" : "inc-2000";
+    passive.epoch = 1;
+    passive.portHealth = UbPortHealthSummary{ true, 4, 4, 1, false };
+    ASSERT_TRUE(registry->ApplySummary(passive, passive.incarnation));
+
+    auto snapshot = registry->GetRoutingSnapshot();
+    ASSERT_NE(snapshot, nullptr);
+    ASSERT_EQ(snapshot->workers.count(affinity), 1U);
+    uint64_t taskId = 0;
+    EXPECT_FALSE(scheduler->ShouldKeepAffinity(affinity, key, snapshot, taskId));
+
+    HostPort writePick;
+    ASSERT_TRUE(
+        router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                             client::WorkerAccessAction::SET, writePick)
+            .IsOk());
+    EXPECT_EQ(writePick, affinity);
+
+    HostPort readPick;
+    ASSERT_TRUE(
+        router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                             client::WorkerAccessAction::GET, readPick)
+            .IsOk());
+    EXPECT_NE(readPick, affinity);
 }
 
 }  // namespace ut

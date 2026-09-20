@@ -139,7 +139,7 @@ public:
     bool SelectWorkerFast(const std::string &requestKey, const std::vector<HostPort> &exclude,
                           const HostPort &preferredWorker, const std::vector<std::shared_ptr<IWorkerFilter>> &filters,
                           const std::shared_ptr<const UbRoutingHealthSnapshot> &snapshot, uint64_t taskId,
-                          HostPort &selected);
+                          HostPort &selected, WorkerAccessAction action);
     void SetCutInGuardNs(uint64_t latencyHardLimitMs)
     {
         if (latencyHardLimitMs > 0) {
@@ -342,28 +342,33 @@ private:
                                        size_t rejectedCount, uint64_t nowNs, SelectionMode mode) const;
     CandidateEntry *TryUseWeightedProbe(const WeightedProbe &probe, const std::vector<HostPort> &exclude,
                                         const std::vector<std::shared_ptr<IWorkerFilter>> &filters,
+                                        WorkerAccessAction action,
                                         std::array<const WorkerSlot *, kRejectedSlotCapacity> &rejected,
                                         size_t &rejectedCount, uint64_t nowNs, size_t rejectLimit, bool &stop) const;
     CandidateEntry *TryPickStarvedCandidate(CandidateTable &table, const std::vector<HostPort> &exclude,
                                             const HostPort &preferredWorker,
                                             const std::vector<std::shared_ptr<IWorkerFilter>> &filters,
+                                            WorkerAccessAction action,
                                             const UbRoutingHealthSnapshot *snapshot,
                                             std::array<const WorkerSlot *, kRejectedSlotCapacity> &rejected,
                                             size_t &rejectedCount, uint64_t nowNs, size_t rejectLimit);
     CandidateEntry *PickWeightedCandidate(const std::string &requestKey, CandidateTable &table,
                                           const std::vector<HostPort> &exclude, const HostPort &preferredWorker,
                                           const std::vector<std::shared_ptr<IWorkerFilter>> &filters,
+                                          WorkerAccessAction action,
                                           const UbRoutingHealthSnapshot *snapshot,
                                           std::array<const WorkerSlot *, kRejectedSlotCapacity> &rejected,
                                           size_t &rejectedCount, uint64_t nowNs, size_t rejectLimit);
     CandidateEntry *PickOneCandidate(const std::string &requestKey, CandidateTable &table,
                                      const std::vector<HostPort> &exclude, const HostPort &preferredWorker,
                                      const std::vector<std::shared_ptr<IWorkerFilter>> &filters,
+                                     WorkerAccessAction action,
                                      const UbRoutingHealthSnapshot *snapshot,
                                      std::array<const WorkerSlot *, kRejectedSlotCapacity> &rejected,
                                      size_t &rejectedCount, uint64_t nowNs, size_t rejectLimit, SelectionMode &mode);
 
-    bool IsWorkerAvailable(const HostPort &worker, const std::vector<std::shared_ptr<IWorkerFilter>> &filters) const;
+    bool IsWorkerAvailable(const HostPort &worker, const std::vector<std::shared_ptr<IWorkerFilter>> &filters,
+                           WorkerAccessAction action) const;
     uint64_t GenerateSelectionSeed(const std::string &requestKey) noexcept;
     static uint64_t GenerateAttemptValue(uint64_t seed, uint32_t attempt, uint64_t streamSalt) noexcept;
 
@@ -1100,7 +1105,7 @@ ClientReadBandwidthScheduler::Impl::WeightedProbe ClientReadBandwidthScheduler::
 
 ClientReadBandwidthScheduler::Impl::CandidateEntry *ClientReadBandwidthScheduler::Impl::TryUseWeightedProbe(
     const WeightedProbe &probe, const std::vector<HostPort> &exclude,
-    const std::vector<std::shared_ptr<IWorkerFilter>> &filters,
+    const std::vector<std::shared_ptr<IWorkerFilter>> &filters, WorkerAccessAction action,
     std::array<const WorkerSlot *, kRejectedSlotCapacity> &rejected, size_t &rejectedCount, uint64_t nowNs,
     size_t rejectLimit, bool &stop) const
 {
@@ -1116,7 +1121,7 @@ ClientReadBandwidthScheduler::Impl::CandidateEntry *ClientReadBandwidthScheduler
         != CandidateCheckResult::kUsable) {
         return nullptr;
     }
-    if (IsWorkerAvailable(probe.entry->worker, filters)) {
+    if (IsWorkerAvailable(probe.entry->worker, filters, action)) {
         return probe.entry;
     }
     AddRejectedSlot(probe.entry->slot, rejected, rejectedCount);
@@ -1126,7 +1131,8 @@ ClientReadBandwidthScheduler::Impl::CandidateEntry *ClientReadBandwidthScheduler
 
 ClientReadBandwidthScheduler::Impl::CandidateEntry *ClientReadBandwidthScheduler::Impl::TryPickStarvedCandidate(
     CandidateTable &table, const std::vector<HostPort> &exclude, const HostPort &preferredWorker,
-    const std::vector<std::shared_ptr<IWorkerFilter>> &filters, const UbRoutingHealthSnapshot *snapshot,
+    const std::vector<std::shared_ptr<IWorkerFilter>> &filters, WorkerAccessAction action,
+    const UbRoutingHealthSnapshot *snapshot,
     std::array<const WorkerSlot *, kRejectedSlotCapacity> &rejected, size_t &rejectedCount, uint64_t nowNs,
     size_t rejectLimit)
 {
@@ -1145,7 +1151,7 @@ ClientReadBandwidthScheduler::Impl::CandidateEntry *ClientReadBandwidthScheduler
             continue;
         }
         AtomicByteReleaseGuard claimGuard(entry.slot->starvationClaimed);
-        if (!IsWorkerAvailable(entry.worker, filters)) {
+        if (!IsWorkerAvailable(entry.worker, filters, action)) {
             AddRejectedSlot(entry.slot, rejected, rejectedCount);
             if (rejectedCount >= rejectLimit) {
                 return nullptr;
@@ -1166,8 +1172,9 @@ ClientReadBandwidthScheduler::Impl::CandidateEntry *ClientReadBandwidthScheduler
 ClientReadBandwidthScheduler::Impl::CandidateEntry *ClientReadBandwidthScheduler::Impl::PickWeightedCandidate(
     const std::string &requestKey, CandidateTable &table, const std::vector<HostPort> &exclude,
     const HostPort &preferredWorker, const std::vector<std::shared_ptr<IWorkerFilter>> &filters,
-    const UbRoutingHealthSnapshot *snapshot, std::array<const WorkerSlot *, kRejectedSlotCapacity> &rejected,
-    size_t &rejectedCount, uint64_t nowNs, size_t rejectLimit)
+    WorkerAccessAction action, const UbRoutingHealthSnapshot *snapshot,
+    std::array<const WorkerSlot *, kRejectedSlotCapacity> &rejected, size_t &rejectedCount, uint64_t nowNs,
+    size_t rejectLimit)
 {
     const uint64_t seed = GenerateSelectionSeed(requestKey);
 
@@ -1189,7 +1196,7 @@ ClientReadBandwidthScheduler::Impl::CandidateEntry *ClientReadBandwidthScheduler
 
         bool stop = false;
         CandidateEntry *selected =
-            TryUseWeightedProbe(probe, exclude, filters, rejected, rejectedCount, nowNs, rejectLimit, stop);
+            TryUseWeightedProbe(probe, exclude, filters, action, rejected, rejectedCount, nowNs, rejectLimit, stop);
         if (selected != nullptr || stop) {
             return selected;
         }
@@ -1201,25 +1208,27 @@ ClientReadBandwidthScheduler::Impl::CandidateEntry *ClientReadBandwidthScheduler
 ClientReadBandwidthScheduler::Impl::CandidateEntry *ClientReadBandwidthScheduler::Impl::PickOneCandidate(
     const std::string &requestKey, CandidateTable &table, const std::vector<HostPort> &exclude,
     const HostPort &preferredWorker, const std::vector<std::shared_ptr<IWorkerFilter>> &filters,
-    const UbRoutingHealthSnapshot *snapshot, std::array<const WorkerSlot *, kRejectedSlotCapacity> &rejected,
-    size_t &rejectedCount, uint64_t nowNs, size_t rejectLimit, SelectionMode &mode)
+    WorkerAccessAction action, const UbRoutingHealthSnapshot *snapshot,
+    std::array<const WorkerSlot *, kRejectedSlotCapacity> &rejected, size_t &rejectedCount, uint64_t nowNs,
+    size_t rejectLimit, SelectionMode &mode)
 {
-    CandidateEntry *candidate = TryPickStarvedCandidate(table, exclude, preferredWorker, filters, snapshot, rejected,
-                                                        rejectedCount, nowNs, rejectLimit);
+    CandidateEntry *candidate = TryPickStarvedCandidate(table, exclude, preferredWorker, filters, action, snapshot,
+                                                        rejected, rejectedCount, nowNs, rejectLimit);
     if (candidate != nullptr) {
         mode = SelectionMode::kStarvation;
         return candidate;
     }
     mode = SelectionMode::kWeighted;
-    return PickWeightedCandidate(requestKey, table, exclude, preferredWorker, filters, snapshot, rejected,
+    return PickWeightedCandidate(requestKey, table, exclude, preferredWorker, filters, action, snapshot, rejected,
                                  rejectedCount, nowNs, rejectLimit);
 }
 
 bool ClientReadBandwidthScheduler::Impl::IsWorkerAvailable(
-    const HostPort &worker, const std::vector<std::shared_ptr<IWorkerFilter>> &filters) const
+    const HostPort &worker, const std::vector<std::shared_ptr<IWorkerFilter>> &filters,
+    WorkerAccessAction action) const
 {
     for (const std::shared_ptr<IWorkerFilter> &filter : filters) {
-        if (filter != nullptr && !filter->IsAvailable(worker)) {
+        if (filter != nullptr && !filter->IsAvailable(worker, action)) {
             return false;
         }
     }
@@ -1326,7 +1335,8 @@ bool ClientReadBandwidthScheduler::Impl::ShouldKeepAffinity(
 bool ClientReadBandwidthScheduler::Impl::SelectWorkerFast(
     const std::string &requestKey, const std::vector<HostPort> &exclude, const HostPort &preferredWorker,
     const std::vector<std::shared_ptr<IWorkerFilter>> &filters,
-    const std::shared_ptr<const UbRoutingHealthSnapshot> &snapshot, uint64_t taskId, HostPort &selected)
+    const std::shared_ptr<const UbRoutingHealthSnapshot> &snapshot, uint64_t taskId, HostPort &selected,
+    WorkerAccessAction action)
 {
     if (!Enabled()) {
         return false;
@@ -1341,8 +1351,8 @@ bool ClientReadBandwidthScheduler::Impl::SelectWorkerFast(
             size_t rejectedCount = 0;
             const size_t rejectLimit = std::min<size_t>(config_.latencyAvailabilityRetryCount, kRejectedSlotCapacity);
             CandidateEntry *candidate =
-                PickOneCandidate(requestKey, *table, exclude, preferredWorker, filters, snapshot.get(), rejected,
-                                 rejectedCount, nowNs, rejectLimit, mode);
+                PickOneCandidate(requestKey, *table, exclude, preferredWorker, filters, action, snapshot.get(),
+                                 rejected, rejectedCount, nowNs, rejectLimit, mode);
             if (candidate != nullptr) {
                 selected = candidate->worker;
                 MarkSelected(*candidate->slot, nowNs);
@@ -1454,18 +1464,19 @@ bool ClientReadBandwidthScheduler::SelectWorkerFast(
     const std::string &requestKey, const std::vector<HostPort> &exclude, const HostPort &preferredWorker,
     const std::vector<std::shared_ptr<IWorkerFilter>> &filters,
     const std::shared_ptr<const UbRoutingHealthSnapshot> &healthSnapshot, std::uint64_t taskId,
-    HostPort &selected)
+    HostPort &selected, WorkerAccessAction action)
 {
-    return impl_->SelectWorkerFast(requestKey, exclude, preferredWorker, filters, healthSnapshot, taskId, selected);
+    return impl_->SelectWorkerFast(requestKey, exclude, preferredWorker, filters, healthSnapshot, taskId, selected,
+                                   action);
 }
 
 bool ClientReadBandwidthScheduler::SelectWorker(
     const std::string &requestKey, const std::vector<std::shared_ptr<IWorkerFilter>> &filters,
     const std::vector<HostPort> &exclude, const HostPort &preferredWorker,
     const std::shared_ptr<const UbRoutingHealthSnapshot> &healthSnapshot, std::uint64_t taskId,
-    HostPort &selected)
+    HostPort &selected, WorkerAccessAction action)
 {
-    return SelectWorkerFast(requestKey, exclude, preferredWorker, filters, healthSnapshot, taskId, selected);
+    return SelectWorkerFast(requestKey, exclude, preferredWorker, filters, healthSnapshot, taskId, selected, action);
 }
 
 void ClientReadBandwidthScheduler::SetCutInGuardNs(std::uint64_t latencyHardLimitMs)

@@ -236,7 +236,8 @@ public:
                          const std::vector<HostPort> &exclude) override
     {
         RETURN_RUNTIME_ERROR_IF_NULL(routing_);
-        return routing_->SelectWorkers(keys, policy, groups, exclude);
+        // Exist is neither a data-plane Get nor Set: keep the CONTROL behavior.
+        return routing_->SelectWorkers(keys, policy, client::WorkerAccessAction::CONTROL, groups, exclude);
     }
 
     void UpdateState(const HostPort &addr, StatusCode status) override
@@ -336,7 +337,8 @@ Status RoutedMode::MultiCreateRouted(const std::vector<std::string> &objectKeyLi
     auto routing = std::atomic_load(&routing_);
     RETURN_RUNTIME_ERROR_IF_NULL(routing);
     std::unordered_map<HostPort, std::vector<std::string>> groupedKeys;
-    RETURN_IF_NOT_OK(routing->SelectWorkers(objectKeyList, dataPlacementPolicy_, groupedKeys,
+    RETURN_IF_NOT_OK(routing->SelectWorkers(objectKeyList, dataPlacementPolicy_,
+                                            client::WorkerAccessAction::SET, groupedKeys,
                                             host_.mergeWriteTargetExclusions({})));
     // Map each key back to its original position so results land in the caller's order.
     std::unordered_map<std::string, size_t> keyIndex;
@@ -510,11 +512,12 @@ void RoutedMode::BuildTransportReadRequest(const std::vector<std::string> &objec
     }
     std::unordered_map<HostPort, std::vector<std::string>> groupedKeys;
     Status routeStatus = routing->SelectWorkers(objectKeys, client::DataPlacementPolicy::PREFERRED_META_OWNER,
-        groupedKeys, excludedWorkers);
+        client::WorkerAccessAction::GET, groupedKeys, excludedWorkers);
     if (routeStatus.GetCode() == K_NO_AVAILABLE_WORKER && !excludedWorkers.empty()) {
         // Preserve the bounded single-Worker retry when no survivor is currently routable.
         routeStatus =
-            routing->SelectWorkers(objectKeys, client::DataPlacementPolicy::PREFERRED_META_OWNER, groupedKeys);
+            routing->SelectWorkers(objectKeys, client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                                   client::WorkerAccessAction::GET, groupedKeys);
     }
     if (routeStatus.IsError()) {
         std::fill(itemStatuses.begin(), itemStatuses.end(), routeStatus);
@@ -872,8 +875,8 @@ Status RoutedMode::BuildMSetRouteGroups(const std::vector<std::string> &keys,
     auto routing = std::atomic_load(&routing_);
     RETURN_RUNTIME_ERROR_IF_NULL(routing);
     std::unordered_map<HostPort, std::vector<std::string>> groupedKeys;
-    RETURN_IF_NOT_OK(routing->SelectWorkers(keys, dataPlacementPolicy_, groupedKeys,
-                                            host_.mergeWriteTargetExclusions({})));
+    RETURN_IF_NOT_OK(routing->SelectWorkers(keys, dataPlacementPolicy_, client::WorkerAccessAction::SET,
+                                            groupedKeys, host_.mergeWriteTargetExclusions({})));
     std::unordered_map<std::string, size_t> valueIndexes;
     valueIndexes.reserve(keys.size());
     for (size_t i = 0; i < keys.size(); ++i) {
@@ -950,8 +953,8 @@ Status RoutedMode::BuildMSetRetryRouteGroups(const MSetRouteGroup &group,
     auto routing = std::atomic_load(&routing_);
     RETURN_RUNTIME_ERROR_IF_NULL(routing);
     std::unordered_map<HostPort, std::vector<std::string>> groupedKeys;
-    RETURN_IF_NOT_OK(routing->SelectWorkers(group.keys, dataPlacementPolicy_, groupedKeys,
-                                            host_.mergeWriteTargetExclusions(excludedWorkers)));
+    RETURN_IF_NOT_OK(routing->SelectWorkers(group.keys, dataPlacementPolicy_, client::WorkerAccessAction::SET,
+                                            groupedKeys, host_.mergeWriteTargetExclusions(excludedWorkers)));
     std::unordered_map<std::string, size_t> valueIndexes;
     valueIndexes.reserve(group.keys.size());
     for (size_t i = 0; i < group.keys.size(); ++i) {

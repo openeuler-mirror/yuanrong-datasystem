@@ -351,16 +351,16 @@ TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared
     });
     localUbSenderState_->lateCompletionPool = lateCompletionPool_;
     localUbSenderState_->healthFilter = healthFilter_;
-    auto checkReadSource = [this](const HostPort &workerAddr, AccessTransportKind &deniedKind) {
-        return CheckUbReadSource(workerAddr, deniedKind);
-    };
     auto reportReadOutcome = [this](const HostPort &workerAddr, const GetObjectRemoteRspPb &response) {
         if (response.has_provider_ub_failure_detail()) {
             (void)ReportProviderUbFailure(workerAddr, response.provider_ub_failure_detail());
         }
     };
-    auto replicas = std::make_shared<ReplicaReader>(std::move(executor), std::move(retry), taskPool,
-                                                    std::move(checkReadSource), std::move(reportReadOutcome));
+    // A remote Worker's UB isolation must not gate reads: the Worker owns the UB writeback verdict and the read path
+    // reacts to the response (TCP fallback or another replica). The client-local port admission still runs before
+    // routing, in TransportLayer::Get and AcquireDirectUbEndpointLease.
+    auto replicas = std::make_shared<ReplicaReader>(std::move(executor), std::move(retry), taskPool, nullptr,
+                                                    std::move(reportReadOutcome));
     objectRead_ = std::make_unique<ObjectReadFlow>(std::move(metadata), std::move(replicas), std::move(taskPool));
     localPortHealthObserver_ = std::move(options.localPortHealthObserver);
 }
@@ -433,7 +433,7 @@ void TransportLayer::ReportClientGetWritebackFailure(const HostPort &provider,
 
 Status TransportLayer::CheckUbReadSource(const HostPort &workerAddr, AccessTransportKind &deniedKind) const
 {
-    if (healthFilter_ != nullptr && healthFilter_->IsAvailable(workerAddr)) {
+    if (healthFilter_ != nullptr && healthFilter_->IsAvailable(workerAddr, WorkerAccessAction::CONTROL)) {
         return Status::OK();
     }
     // Report the denied medium to the caller-thread aggregation instead of writing the request-scoped

@@ -528,7 +528,7 @@ TEST(ReplicaReaderAdmissionTest, SingletonBatchProviderError4CreatesObservationA
     ReplicaReader reader(
         executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1),
         [filter](const HostPort &address, AccessTransportKind &) {
-            return filter->IsAvailable(address)
+            return filter->IsAvailable(address, client::WorkerAccessAction::CONTROL)
                        ? Status::OK()
                        : Status(K_URMA_DATA_WORKER_UNAVAILABLE, "read source unavailable");
         },
@@ -850,14 +850,14 @@ TEST(UbHealthFilterTest, NewTopologyIncarnationClearsOldLocalObservation)
                                 provider.ToString(), 4, 4, detail);
 
     ASSERT_TRUE(filter.ReportProviderFailure(provider, detail));
-    EXPECT_FALSE(filter.IsAvailable(provider));
+    EXPECT_FALSE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
     filter.ApplyTopologyIncarnations(initial);
-    EXPECT_FALSE(filter.IsAvailable(provider));
+    EXPECT_FALSE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
 
     ClusterTopologyPb restarted = initial;
     (*restarted.mutable_members())[provider.ToString()].set_id("incarnation-b");
     filter.ApplyTopologyIncarnations(restarted);
-    EXPECT_TRUE(filter.IsAvailable(provider));
+    EXPECT_TRUE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
     EXPECT_FALSE(filter.GetLocalObservation(provider).has_value());
 }
 
@@ -868,7 +868,7 @@ TEST(UbHealthFilterTest, Cqe9QuarantinesOnlyWriteTargetAndProbeRecoversIt)
     EXPECT_TRUE(filter.ReportWriteTargetFailure(worker, Status(K_URMA_ERROR, "remote ack timeout"),
                                                 std::nullopt, URMA_REMOTE_ACK_TIMEOUT_STATUS));
     EXPECT_FALSE(filter.IsWriteTargetAvailable(worker));
-    EXPECT_TRUE(filter.IsAvailable(worker));
+    EXPECT_TRUE(filter.IsAvailable(worker, client::WorkerAccessAction::CONTROL));
     ASSERT_EQ(filter.GetUnavailableWriteTargets().size(), 1U);
 
     auto state = filter.GetWriteTargetObservation(worker);
@@ -877,6 +877,139 @@ TEST(UbHealthFilterTest, Cqe9QuarantinesOnlyWriteTargetAndProbeRecoversIt)
     ASSERT_TRUE(candidate.has_value());
     EXPECT_FALSE(filter.IsWriteTargetAvailable(worker));
     EXPECT_TRUE(filter.CompleteWriteTargetRecovery(*candidate, Status::OK(), state->backoffDeadlineMs));
+    EXPECT_TRUE(filter.IsWriteTargetAvailable(worker));
+    EXPECT_TRUE(filter.GetUnavailableWriteTargets().empty());
+}
+
+// A verified port fact is authoritative for the write direction only: reads keep the Worker routable while Set/MSet
+// avoid it, and the exclusion entry is derived from the write-target admission verdict.
+TEST(UbHealthFilterTest, VerifiedAllBadPortFactQuarantinesWriteTargetOnly)
+{
+    const auto worker = MakeAddress(60);
+    UbHealthFilter filter;
+    ClusterTopologyPb topology;
+    (*topology.mutable_members())[worker.ToString()].set_id("incarnation-a");
+    filter.ApplyTopologyIncarnations(topology);
+    UbHealthSummary summary;
+    summary.worker = worker;
+    summary.incarnation = "incarnation-a";
+    summary.epoch = 1;
+    summary.writable = false;
+    summary.portHealth = UbPortHealthSummary{ true, 4, 4, 1, false };
+
+    ASSERT_TRUE(filter.ApplySummary(summary, summary.incarnation));
+
+    EXPECT_FALSE(filter.IsAvailable(worker, client::WorkerAccessAction::SET));
+    EXPECT_TRUE(filter.IsAvailable(worker, client::WorkerAccessAction::GET));
+    auto state = filter.GetWriteTargetObservation(worker);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state->state, UbAdmissionState::UNAVAILABLE);
+    EXPECT_TRUE(state->portHealthGoverned);
+    ASSERT_EQ(filter.GetUnavailableWriteTargets().size(), 1U);
+    EXPECT_EQ(filter.GetUnavailableWriteTargets().front(), worker);
+
+    // A newer epoch carrying a healthy fact releases the exclusion through the same path.
+    UbHealthSummary recovered = summary;
+    recovered.epoch = 2;
+    recovered.writable = true;
+    recovered.portHealth = UbPortHealthSummary{ true, 4, 0, 2, false };
+    ASSERT_TRUE(filter.ApplySummary(recovered, recovered.incarnation));
+
+    EXPECT_TRUE(filter.IsAvailable(worker, client::WorkerAccessAction::SET));
+    EXPECT_TRUE(filter.GetUnavailableWriteTargets().empty());
+    state = filter.GetWriteTargetObservation(worker);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_EQ(state->state, UbAdmissionState::AVAILABLE);
+}
+
+// A released write target must not be re-quarantined by a stale all-BAD fact: applying the port fact (instead of
+// clearing the admission on recovery) keeps the health-epoch watermark.
+TEST(UbHealthFilterTest, StaleAllBadPortFactCannotReQuarantineReleasedWriteTarget)
+{
+    const auto worker = MakeAddress(61);
+    UbHealthFilter filter;
+    ClusterTopologyPb topology;
+    (*topology.mutable_members())[worker.ToString()].set_id("incarnation-a");
+    filter.ApplyTopologyIncarnations(topology);
+    UbHealthSummary allBad;
+    allBad.worker = worker;
+    allBad.incarnation = "incarnation-a";
+    allBad.epoch = 1;
+    allBad.writable = false;
+    allBad.portHealth = UbPortHealthSummary{ true, 4, 4, 1, false };
+    ASSERT_TRUE(filter.ApplySummary(allBad, allBad.incarnation));
+
+    UbHealthSummary recovered = allBad;
+    recovered.epoch = 2;
+    recovered.writable = true;
+    recovered.portHealth = UbPortHealthSummary{ true, 4, 0, 2, false };
+    ASSERT_TRUE(filter.ApplySummary(recovered, recovered.incarnation));
+    ASSERT_TRUE(filter.GetUnavailableWriteTargets().empty());
+
+    (void)filter.ApplySummary(allBad, allBad.incarnation);
+
+    EXPECT_TRUE(filter.GetUnavailableWriteTargets().empty());
+    auto state = filter.GetWriteTargetObservation(worker);
+    ASSERT_TRUE(state.has_value());
+    EXPECT_NE(state->state, UbAdmissionState::UNAVAILABLE);
+}
+
+// The passive path may only trigger verification: a plain business response must never change the write admission
+// or the write exclusion list.
+TEST(UbHealthFilterTest, PassiveAllBadSummaryDoesNotQuarantineWriteTarget)
+{
+    const auto worker = MakeAddress(62);
+    UbHealthFilter filter;
+    ClusterTopologyPb topology;
+    (*topology.mutable_members())[worker.ToString()].set_id("incarnation-a");
+    filter.ApplyTopologyIncarnations(topology);
+    UbHealthSummary allBad;
+    allBad.worker = worker;
+    allBad.incarnation = "incarnation-a";
+    allBad.epoch = 1;
+    allBad.writable = false;
+    allBad.portHealth = UbPortHealthSummary{ true, 4, 4, 1, false };
+
+    (void)filter.ObserveSummary(allBad, allBad.incarnation);
+
+    EXPECT_TRUE(filter.IsWriteTargetAvailable(worker));
+    EXPECT_TRUE(filter.IsAvailable(worker, WorkerAccessAction::SET));
+    EXPECT_TRUE(filter.GetUnavailableWriteTargets().empty());
+    auto state = filter.GetWriteTargetObservation(worker);
+    if (state.has_value()) {
+        EXPECT_NE(state->state, UbAdmissionState::UNAVAILABLE);
+    }
+}
+
+// A passive healthy summary must not release a verified write quarantine: only the verified query path releases it.
+TEST(UbHealthFilterTest, PassiveHealthySummaryDoesNotReleaseVerifiedWriteQuarantine)
+{
+    const auto worker = MakeAddress(63);
+    UbHealthFilter filter;
+    ClusterTopologyPb topology;
+    (*topology.mutable_members())[worker.ToString()].set_id("incarnation-a");
+    filter.ApplyTopologyIncarnations(topology);
+    UbHealthSummary allBad;
+    allBad.worker = worker;
+    allBad.incarnation = "incarnation-a";
+    allBad.epoch = 1;
+    allBad.writable = false;
+    allBad.portHealth = UbPortHealthSummary{ true, 4, 4, 1, false };
+    ASSERT_TRUE(filter.ApplySummary(allBad, allBad.incarnation));
+    ASSERT_FALSE(filter.GetUnavailableWriteTargets().empty());
+
+    UbHealthSummary healthy;
+    healthy.worker = worker;
+    healthy.incarnation = "incarnation-a";
+    healthy.epoch = 2;
+    healthy.writable = true;
+    healthy.portHealth = UbPortHealthSummary{ true, 4, 0, 2, false };
+    (void)filter.ObserveSummary(healthy, healthy.incarnation);
+
+    EXPECT_FALSE(filter.IsWriteTargetAvailable(worker));
+    EXPECT_FALSE(filter.GetUnavailableWriteTargets().empty());
+
+    ASSERT_TRUE(filter.ApplySummary(healthy, healthy.incarnation));
     EXPECT_TRUE(filter.IsWriteTargetAvailable(worker));
     EXPECT_TRUE(filter.GetUnavailableWriteTargets().empty());
 }
@@ -931,12 +1064,12 @@ TEST(UbHealthFilterTest, FirstTrustedTopologyIncarnationClearsUnversionedObserva
                                 provider.ToString(), 4, 4, detail);
 
     ASSERT_TRUE(filter.ReportProviderFailure(provider, detail));
-    EXPECT_FALSE(filter.IsAvailable(provider));
+    EXPECT_FALSE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
 
     ClusterTopologyPb admitted;
     (*admitted.mutable_members())[provider.ToString()].set_id("incarnation-a");
     filter.ApplyTopologyIncarnations(admitted);
-    EXPECT_TRUE(filter.IsAvailable(provider));
+    EXPECT_TRUE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
     EXPECT_FALSE(filter.GetLocalObservation(provider).has_value());
 }
 
@@ -951,11 +1084,11 @@ TEST(UbHealthFilterTest, AuthoritativeTopologyRemovalClearsClientObservation)
     FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider write failed"), "client-receive-endpoint",
                                 provider.ToString(), 4, 4, detail);
     ASSERT_TRUE(filter.ReportProviderFailure(provider, detail));
-    ASSERT_FALSE(filter.IsAvailable(provider));
+    ASSERT_FALSE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
 
     filter.ApplyTopologyIncarnations(ClusterTopologyPb{});
 
-    EXPECT_TRUE(filter.IsAvailable(provider));
+    EXPECT_TRUE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
     EXPECT_FALSE(filter.GetLocalObservation(provider).has_value());
     UbHealthSummary staleSummary;
     staleSummary.worker = provider;
@@ -963,7 +1096,7 @@ TEST(UbHealthFilterTest, AuthoritativeTopologyRemovalClearsClientObservation)
     staleSummary.epoch = 2;
     staleSummary.writable = false;
     EXPECT_FALSE(filter.ApplySummary(staleSummary, staleSummary.incarnation));
-    EXPECT_TRUE(filter.IsAvailable(provider));
+    EXPECT_TRUE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
 }
 
 TEST(UbHealthFilterTest, FirstTrustedSummaryIncarnationClearsUnversionedObservation)
@@ -979,9 +1112,9 @@ TEST(UbHealthFilterTest, FirstTrustedSummaryIncarnationClearsUnversionedObservat
     summary.incarnation = "incarnation-a";
 
     EXPECT_FALSE(filter.ApplySummary(summary, "incarnation-b"));
-    EXPECT_FALSE(filter.IsAvailable(provider));
+    EXPECT_FALSE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
     EXPECT_TRUE(filter.ApplySummary(summary, summary.incarnation));
-    EXPECT_TRUE(filter.IsAvailable(provider));
+    EXPECT_TRUE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
     EXPECT_FALSE(filter.GetLocalObservation(provider).has_value());
 }
 
@@ -1000,7 +1133,7 @@ TEST(UbHealthFilterTest, SummaryIncarnationFencesLocalObservation)
     ASSERT_TRUE(filter.ReportProviderFailure(provider, detail));
     ++summary.epoch;
     EXPECT_TRUE(filter.ApplySummary(summary, summary.incarnation));
-    EXPECT_FALSE(filter.IsAvailable(provider));
+    EXPECT_FALSE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
     EXPECT_TRUE(filter.GetLocalObservation(provider).has_value());
 
     summary.incarnation = "incarnation-b";
@@ -1008,12 +1141,12 @@ TEST(UbHealthFilterTest, SummaryIncarnationFencesLocalObservation)
     summary.writable = false;
     EXPECT_TRUE(filter.ApplySummary(summary, summary.incarnation));
     EXPECT_FALSE(filter.GetLocalObservation(provider).has_value());
-    EXPECT_FALSE(filter.IsAvailable(provider));
+    EXPECT_FALSE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
 
     ++summary.epoch;
     summary.writable = true;
     EXPECT_TRUE(filter.ApplySummary(summary, summary.incarnation));
-    EXPECT_TRUE(filter.IsAvailable(provider));
+    EXPECT_TRUE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
 }
 
 TEST(UbHealthFilterTest, SameIncarnationWritableRecoveryClearsClientObservation)
@@ -1032,13 +1165,13 @@ TEST(UbHealthFilterTest, SameIncarnationWritableRecoveryClearsClientObservation)
                                 provider.ToString(), 4, 4, detail);
     ASSERT_TRUE(filter.ReportProviderFailure(provider, detail));
     ASSERT_TRUE(filter.GetLocalObservation(provider).has_value());
-    ASSERT_FALSE(filter.IsAvailable(provider));
+    ASSERT_FALSE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
 
     ++summary.epoch;
     summary.writable = true;
     ASSERT_TRUE(filter.ApplySummary(summary, summary.incarnation));
     EXPECT_FALSE(filter.GetLocalObservation(provider).has_value());
-    EXPECT_TRUE(filter.IsAvailable(provider));
+    EXPECT_TRUE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
 }
 
 TEST(TransportLayerAdmissionTest, GlobalUnavailableSchedulesProviderRecoveryOnce)
@@ -1067,10 +1200,10 @@ TEST(TransportLayerAdmissionTest, GlobalUnavailableSchedulesProviderRecoveryOnce
     EXPECT_EQ(manager->providerProbedWorkers, std::vector<HostPort>{ provider });
     // The fake records a probe before TransportLayer applies its successful result.
     const auto deadline = std::chrono::steady_clock::now() + PROBE_OBSERVATION_TIMEOUT;
-    while (!filter->IsAvailable(provider) && std::chrono::steady_clock::now() < deadline) {
+    while (!filter->IsAvailable(provider, client::WorkerAccessAction::CONTROL) && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    EXPECT_TRUE(filter->IsAvailable(provider));
+    EXPECT_TRUE(filter->IsAvailable(provider, client::WorkerAccessAction::CONTROL));
 }
 
 TEST(TransportLayerAdmissionTest, SummaryRecoveryCallbackStopsAtShutdownAndSurvivesDestruction)
@@ -1118,7 +1251,7 @@ TEST(UbHealthFilterTest, OnDemandRecoveryRequiresWritableSummaryAndDirectionalPr
     summary.incarnation = "incarnation-a";
     summary.writable = false;
     EXPECT_FALSE(filter.CompleteProviderRecovery(*first, summary, Status::OK(), *firstDeadline));
-    EXPECT_FALSE(filter.IsAvailable(provider));
+    EXPECT_FALSE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
 
     auto secondDeadline = filter.NextProviderRecoveryDeadlineMs();
     ASSERT_TRUE(secondDeadline.has_value());
@@ -1127,14 +1260,14 @@ TEST(UbHealthFilterTest, OnDemandRecoveryRequiresWritableSummaryAndDirectionalPr
     summary.writable = true;
     EXPECT_FALSE(filter.CompleteProviderRecovery(*second, summary, Status(K_URMA_ERROR, "probe failed"),
                                                  *secondDeadline));
-    EXPECT_FALSE(filter.IsAvailable(provider));
+    EXPECT_FALSE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
 
     auto thirdDeadline = filter.NextProviderRecoveryDeadlineMs();
     ASSERT_TRUE(thirdDeadline.has_value());
     auto third = filter.TryBeginProviderRecovery(*thirdDeadline);
     ASSERT_TRUE(third.has_value());
     EXPECT_TRUE(filter.CompleteProviderRecovery(*third, summary, Status::OK(), *thirdDeadline));
-    EXPECT_TRUE(filter.IsAvailable(provider));
+    EXPECT_TRUE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
 }
 
 TEST(UbHealthFilterTest, VerifierDoesNotOverrideTimeoutProviderProbeCompletion)
@@ -1161,7 +1294,7 @@ TEST(UbHealthFilterTest, VerifierDoesNotOverrideTimeoutProviderProbeCompletion)
     summary.writable = true;
     EXPECT_TRUE(filter.CompleteProviderRecovery(*candidate, summary, Status::OK(), *deadline));
     EXPECT_EQ(verifications, 0U);
-    EXPECT_TRUE(filter.IsAvailable(provider));
+    EXPECT_TRUE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
     EXPECT_FALSE(filter.NextProviderRecoveryDeadlineMs().has_value());
 }
 
@@ -1186,7 +1319,7 @@ TEST(UbHealthFilterTest, NewFailureInvalidatesInFlightProviderRecovery)
     summary.worker = provider;
     summary.incarnation = "incarnation-a";
     EXPECT_FALSE(filter.CompleteProviderRecovery(*stale, summary, Status::OK(), *deadline));
-    EXPECT_FALSE(filter.IsAvailable(provider));
+    EXPECT_FALSE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
 }
 
 TEST(DataPlaneManagerAdmissionTest, ProviderProbeErrorPreservesValidatedSummaryAndTopologyFence)
@@ -1231,7 +1364,7 @@ TEST(DataPlaneManagerAdmissionTest, ProviderProbeErrorPreservesValidatedSummaryA
     EXPECT_TRUE(actual.writable);
     EXPECT_EQ(actual.epoch, 7u);
     EXPECT_FALSE(filter.CompleteProviderRecovery(*candidate, actual, rc, *deadline));
-    EXPECT_FALSE(filter.IsAvailable(provider));
+    EXPECT_FALSE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
 
     fakeRpcClient->providerProbeResponse.Clear();
     fakeRpcClient->providerProbeStatus = Status(K_RPC_DEADLINE_EXCEEDED, "Provider probe timed out");
@@ -1253,7 +1386,7 @@ TEST(DataPlaneManagerAdmissionTest, ProviderProbeErrorPreservesValidatedSummaryA
     auto mismatchCandidate = filter.TryBeginProviderRecovery(*mismatchDeadline);
     ASSERT_TRUE(mismatchCandidate.has_value());
     EXPECT_FALSE(filter.CompleteProviderRecovery(*mismatchCandidate, actual, Status::OK(), *mismatchDeadline));
-    EXPECT_FALSE(filter.IsAvailable(provider));
+    EXPECT_FALSE(filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL));
 }
 
 TEST(TransportLayerAdmissionTest, ProviderRecoveryDoesNotDependOnHeartbeatSummary)
@@ -1280,7 +1413,7 @@ TEST(TransportLayerAdmissionTest, ProviderRecoveryDoesNotDependOnHeartbeatSummar
     EXPECT_EQ(manager->providerProbedWorkers, std::vector<HostPort>{ provider });
     EXPECT_EQ(manager->providerProbeExpectedIncarnations, std::vector<std::string>{ "incarnation-a" });
     EXPECT_EQ(manager->providerProbeTimeouts, std::vector<int32_t>{ 3'000 });
-    EXPECT_TRUE(filter->IsAvailable(provider));
+    EXPECT_TRUE(filter->IsAvailable(provider, client::WorkerAccessAction::CONTROL));
 }
 
 TEST(TransportLayerAdmissionTest, ProviderProbeCompletionDoesNotSpinOnReconcileLoop)
@@ -1429,7 +1562,7 @@ TEST(TransportLayerAdmissionTest, FailureNotificationCannotBeLostAfterDeadlineCh
         [] { return inject::GetExecuteCount(RECONCILE_AFTER_DEADLINE_CHECK_INJECT) == 1; }));
 
     reportFuture = std::async(std::launch::async, [&] { return layer.ReportProviderFailure(provider, detail); });
-    ASSERT_TRUE(WaitUntil([&] { return !filter->IsAvailable(provider); }));
+    ASSERT_TRUE(WaitUntil([&] { return !filter->IsAvailable(provider, client::WorkerAccessAction::CONTROL); }));
     EXPECT_EQ(reportFuture.wait_for(std::chrono::milliseconds(50)), std::future_status::timeout);
     ASSERT_TRUE(inject::Clear(RECONCILE_AFTER_DEADLINE_CHECK_INJECT).IsOk());
 
@@ -1909,7 +2042,7 @@ int CheckDisabledUbFaultIsolation(UbHealthFilter &filter, TestTransportLayer &la
     bufferInfo.workerAddr = writeTarget;
     const Status writeRc = layer.RunClientLocalUbWrite(writeTarget, bufferInfo, [&failure] { return failure; });
     // Capacity, exclusion list, scheduling snapshot, failure entries and the late-completion observer all stay inert.
-    if (!filter.IsAvailable(provider) || !filter.IsWriteTargetAvailable(writeTarget)
+    if (!filter.IsAvailable(provider, client::WorkerAccessAction::CONTROL) || !filter.IsWriteTargetAvailable(writeTarget)
         || !filter.GetUnavailableWriteTargets().empty()
         || HasKnownUbPortHealth(registry.GetRoutingSnapshot()->localClient)
         || layer.ReportProviderFailure(provider, detail)

@@ -250,7 +250,7 @@ protected:
         const auto deadline =
             std::chrono::steady_clock::now() + std::chrono::milliseconds(ROUTING_CONVERGENCE_TIMEOUT_MS);
         while (std::chrono::steady_clock::now() < deadline) {
-            lastRc = routing_->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, selectedWorker);
+            lastRc = routing_->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, selectedWorker);
             if (lastRc.IsOk() && selectedWorker != leavingWorker_) {
                 return;
             }
@@ -265,7 +265,7 @@ protected:
         for (size_t i = 0; i < KEY_SEARCH_LIMIT; ++i) {
             std::string key = ROUTED_KEY_PREFIX + std::to_string(i);
             HostPort selectedWorker;
-            lastRc = routing_->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, selectedWorker);
+            lastRc = routing_->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, selectedWorker);
             if (lastRc.IsOk() && selectedWorker == targetWorker) {
                 VLOG(1) << "Found routing key for " << targetWorker << " after " << i + 1 << " attempts";
                 return key;
@@ -349,7 +349,7 @@ TEST_F(RoutingTopologyConvergenceTest, U6ScaleDownRejectsWritesAndConvergesRouti
     ASSERT_FALSE(routedKey.empty());
     const std::string routedValue(VALUE_SIZE, 'r');
     HostPort selectedWorker;
-    DS_ASSERT_OK(routing_->SelectWorker(routedKey, client::DataPlacementPolicy::PREFERRED_META_OWNER, selectedWorker));
+    DS_ASSERT_OK(routing_->SelectWorker(routedKey, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, selectedWorker));
     ASSERT_EQ(selectedWorker, leavingWorker_);
     ClusterTopologyPb initialTopology;
     GetClusterTopologyPb(initialTopology);

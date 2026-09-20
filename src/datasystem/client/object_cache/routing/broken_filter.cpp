@@ -28,8 +28,9 @@ BrokenFilter::BrokenFilter()
     std::atomic_store(&healthMap_, std::shared_ptr<const HealthMap>(std::make_shared<HealthMap>()));
 }
 
-bool BrokenFilter::IsAvailable(const HostPort &addr) const
+bool BrokenFilter::IsAvailable(const HostPort &addr, WorkerAccessAction action) const
 {
+    (void)action;
     auto map = std::atomic_load(&healthMap_);
     auto it = map->find(addr.ToString());
     if (it == map->end()) {

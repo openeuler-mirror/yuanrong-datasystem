@@ -335,8 +335,9 @@ public:
     {
     }
 
-    bool IsAvailable(const HostPort &) const override
+    bool IsAvailable(const HostPort &, client::WorkerAccessAction action) const override
     {
+        (void)action;
         return checks_.fetch_add(1) >= rejectCount_;
     }
 
@@ -5250,7 +5251,7 @@ TEST(ObjectClientTransportTest, DrainingMetadataOwnerRetriesThroughSurvivorBefor
         const std::string objectKey = "draining-owner";
         auto routing = MakeRouting({ firstWorker, secondWorker });
         HostPort drainingOwner;
-        auto routeStatus = routing->SelectWorker(objectKey, DataPlacementPolicy::PREFERRED_META_OWNER, drainingOwner);
+        auto routeStatus = routing->SelectWorker(objectKey, DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, drainingOwner);
         ASSERT_TRUE(routeStatus.IsOk()) << routeStatus.ToString();
         const auto survivor = drainingOwner == firstWorker ? secondWorker : firstWorker;
 
@@ -5827,7 +5828,7 @@ protected:
         std::atomic_store(&client->routing_, routing);
         for (size_t i = 0; i < workers.size(); ++i) {
             HostPort selected;
-            ASSERT_TRUE(routing->SelectWorker(key, DataPlacementPolicy::PREFERRED_META_OWNER,
+            ASSERT_TRUE(routing->SelectWorker(key, DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL,
                                               selected, routeOrder).IsOk());
             routeOrder.emplace_back(selected);
         }
@@ -6007,7 +6008,7 @@ TEST(ObjectClientTransportTest, CoordinatorSetReachesFourthWorkerAfterThreeAdmis
     std::vector<HostPort> routeOrder;
     for (size_t i = 0; i < workers.size(); ++i) {
         HostPort selected;
-        ASSERT_TRUE(routing->SelectWorker(key, DataPlacementPolicy::PREFERRED_META_OWNER, selected, routeOrder).IsOk());
+        ASSERT_TRUE(routing->SelectWorker(key, DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, selected, routeOrder).IsOk());
         routeOrder.emplace_back(selected);
     }
     auto manager = std::make_shared<FakeDataPlaneManager>();
@@ -6059,7 +6060,7 @@ TEST(ObjectClientTransportTest, CoordinatorSetCountsPreviouslyEvictedWorkerInRet
     std::vector<HostPort> routeOrder;
     for (size_t i = 0; i < workers.size(); ++i) {
         HostPort selected;
-        ASSERT_TRUE(routing->SelectWorker(key, DataPlacementPolicy::PREFERRED_META_OWNER, selected, routeOrder).IsOk());
+        ASSERT_TRUE(routing->SelectWorker(key, DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, selected, routeOrder).IsOk());
         routeOrder.emplace_back(selected);
     }
     auto manager = std::make_shared<FakeDataPlaneManager>();

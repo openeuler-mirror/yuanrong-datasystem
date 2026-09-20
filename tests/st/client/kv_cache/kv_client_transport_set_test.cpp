@@ -660,7 +660,7 @@ TEST_F(KVClientTransportSetTest, RequiredSameNodeRejectsBeforeBusinessRpc)
 
     HostPort selectedWorker;
     EXPECT_EQ(routing
-                  .SelectWorker("routing_required_same_node", client::DataPlacementPolicy::REQUIRED_SAME_NODE,
+                  .SelectWorker("routing_required_same_node", client::DataPlacementPolicy::REQUIRED_SAME_NODE, client::WorkerAccessAction::CONTROL,
                                 selectedWorker)
                   .GetCode(),
               K_NO_AVAILABLE_WORKER);

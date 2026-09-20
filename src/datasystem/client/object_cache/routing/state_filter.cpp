@@ -20,8 +20,9 @@
 namespace datasystem {
 namespace client {
 
-bool StateFilter::IsAvailable(const HostPort &addr) const
+bool StateFilter::IsAvailable(const HostPort &addr, WorkerAccessAction action) const
 {
+    (void)action;
     return router_ != nullptr && router_->GetRingState(addr) == WorkerRingState::ACTIVE;
 }
 
