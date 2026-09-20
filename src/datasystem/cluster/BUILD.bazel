@@ -9,6 +9,7 @@ ds_cc_library(
     deps = [
         "//src/datasystem/common/object_cache:ub_health",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:random_data",
     ],
 )
 

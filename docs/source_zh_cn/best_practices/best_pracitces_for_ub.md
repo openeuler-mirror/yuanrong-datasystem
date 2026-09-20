@@ -286,6 +286,26 @@ print("[OK] Get value")
 
 为确保灵衢（UB）组件在生产环境中达到最佳性能与稳定性，请参考以下配置建议。
 
+### 远端端口健康验证与隔离
+
+远端验证的隔离以 `QueryUbPortHealth` 返回的有效端口事实为准：全部端口 BAD 才确认隔离，任一端口 GOOD 即恢复可用性并停止待重试查询。
+CQE 错误和被动健康摘要只是验证线索，不能替代查询结果。Client 和 Worker 复用公共
+`RemoteUbPortHealthVerifier`、既有查询线程池及总计 4 个并发槽，不新增轮询线程或查询协议。
+
+| 状态或事件 | 调度行为 |
+| --- | --- |
+| 新 peer、新 incarnation，或 GOOD 后空闲状态的新验证轮次 | 首次查询立即到期；实际执行仍受并发槽限制 |
+| RPC 失败、UNKNOWN、pending、过期或冲突响应 | 验证需求仍存在时，下一次重试在 `[1000, 30000]` ms 内均匀随机 |
+| 有效全 BAD 查询结果 | 保持隔离，并按相同随机规则继续查询恢复状态 |
+| 有效 GOOD 查询结果 | 立即清除隔离；若无新的 trigger 或摘要 hint 则停止后续查询，否则按随机规则排入下一轮 |
+| 不支持查询 RPC | 当前固定等待 30s，不缩短为普通随机重试 |
+| 被动摘要 hint | 不缩短或延后已有 deadline；空闲 peer 的新全 BAD 线索立即开启验证；隔离且无 deadline 时只补排一次随机重试；查询在途时仅置 `summaryHintPending`，待本次查询完成后按随机规则排程 |
+
+RPC timeout 与本地 `urma_user_ctl` 监控仍为 1s；30s 只约束下一次恢复查询的排程间隔，不是端到端恢复承诺。
+随机重试区间为 `[1000, 30000]` ms：单次恢复查询的额外等待最长为 30 秒、平均约 15.5 秒。
+一个 peer 的结果不会压缩其他 peer 的 deadline。拓扑移除或 incarnation 变化会淘汰旧状态，owner 生命周期内单调递增的 generation 会拒绝迟到 ticket。
+每个 verifier 只初始化一次随机 seed，再由 seed、HostPort、incarnation 和 generation 派生延迟；测试可使用私有固定 seed/区间入口，生产接口不暴露随机策略。
+
 
 ### 关闭LPI
 

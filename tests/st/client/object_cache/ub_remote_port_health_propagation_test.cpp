@@ -195,6 +195,23 @@ public:
         ASSERT_EQ(buffers.front()->GetSize(), data.size());
         EXPECT_EQ(std::memcmp(buffers.front()->MutableData(), data.data(), data.size()), 0);
     }
+
+    Status GetAfterRandomizedRecovery(const std::shared_ptr<ObjectClient> &requester, const std::string &key,
+                                      std::vector<Optional<Buffer>> &buffers)
+    {
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(UB_REMOTE_PORT_HEALTH_RETRY_MAX_MS + 5'000);
+        Status lastStatus;
+        while (std::chrono::steady_clock::now() < deadline) {
+            buffers.clear();
+            lastStatus = requester->Get({ key }, 0, buffers);
+            if (lastStatus.IsOk()) {
+                return lastStatus;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+        return Status(K_RUNTIME_ERROR, "Worker UB recovery query did not converge: " + lastStatus.ToString());
+    }
 };
 
 TEST_F(UbWorkerPeerPortHealthTest, WorkerRpcQueryUsesTheCachedPortHealthContract)
@@ -273,8 +290,7 @@ TEST_F(UbWorkerPeerPortHealthTest, Cqe9IsolatesRequesterAndStopsRemoteGetWhenFal
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 1, cqePoint));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaMock.QueryPortStatus", "call(4,3)"));
     DS_ASSERT_OK(WaitForPorts(incarnation, 3, health));
-    buffers.clear();
-    DS_ASSERT_OK(requester->Get({ keys.back() }, 0, buffers));
+    DS_ASSERT_OK(GetAfterRandomizedRecovery(requester, keys.back(), buffers));
     CheckValue(buffers, data);
 }
 class UbClientWritebackPortHealthTest : public UbPortHealthRpcPropagationTest {

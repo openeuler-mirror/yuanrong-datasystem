@@ -46,8 +46,7 @@ struct RemoteUbQueryCompletion {
 
 class RemoteUbPortHealthVerifier {
 public:
-    explicit RemoteUbPortHealthVerifier(
-        uint64_t queryIntervalMs = static_cast<uint64_t>(UB_REMOTE_PORT_HEALTH_QUERY_INTERVAL.count()));
+    RemoteUbPortHealthVerifier();
     ~RemoteUbPortHealthVerifier() = default;
 
     bool RequestVerification(const HostPort &peer, const std::string &incarnation,
@@ -61,14 +60,17 @@ public:
     std::optional<uint64_t> NextQueryDeadlineMs() const;
 
 private:
+    RemoteUbPortHealthVerifier(uint64_t seed, uint64_t retryMinMs, uint64_t retryMaxMs) noexcept;
+
     struct AcceptedSummaryTransition {
         bool logResponse;
-        bool recoveredAfterRetry;
         const char *decision;
     };
 
     struct PeerState {
         std::string incarnation;
+        // Assigned by the verifier-wide monotonic probe counter in TryBeginDue; globally
+        // unique within the verifier lifetime, not a per-peer epoch.
         uint64_t generation = 0;
         uint64_t nextQueryMs = 0;
         std::optional<uint64_t> lastQueryMs;
@@ -81,14 +83,18 @@ private:
         std::optional<StatusCode> lastLoggedRetryStatus;
     };
 
-    void ScheduleAfterCompletion(PeerState &state, uint64_t nowMs,
+    uint64_t RetryDeadlineMs(const HostPort &peer, const PeerState &state, uint64_t nowMs) const;
+    uint64_t NextGenerationLocked();
+    void ScheduleAfterCompletion(const HostPort &peer, PeerState &state, uint64_t nowMs,
                                  RemoteUbQueryCompletion &completion) const;
-    AcceptedSummaryTransition ApplyAcceptedSummaryLocked(
-        PeerState &state, const UbPortHealthSummary &portHealth, uint64_t nowMs,
-        RemoteUbQueryCompletion &completion) const;
-    void CompressIsolatedDeadlinesLocked(const HostPort &completedPeer, uint64_t nowMs);
+    AcceptedSummaryTransition ApplyAcceptedSummaryLocked(const HostPort &peer, PeerState &state,
+                                                         const UbPortHealthSummary &portHealth, uint64_t nowMs,
+                                                         RemoteUbQueryCompletion &completion) const;
 
-    const uint64_t queryIntervalMs_;
+    const uint64_t seed_;
+    const uint64_t retryMinMs_;
+    const uint64_t retryMaxMs_;
+    uint64_t nextGeneration_ = 0;
     mutable bthread::Mutex mutex_;
     std::unordered_map<HostPort, PeerState> peers_;
 };
