@@ -341,6 +341,10 @@ python3 deploy_client.py collect deploy.json --sdk-only \
 仅扫描 SDK 目录，匹配文件保存在各节点收集目录的 `sdk/` 子目录中。
 过滤在传输前执行，支持 SSH、kubectl 和 localhost；没有匹配文件时跳过日志传输。
 
+使用 `--keyword` 时，远端默认通过 `grep -F` 做大小写敏感的固定字符串匹配；
+可传 `--keyword-engine rg` 改用 `rg -F`。目标 Pod 或主机必须安装所选工具，
+工具缺失或执行失败会将该目标标记为失败，不会退回 Python 匹配或全量下载。
+
 ---
 
 ## 4. 指标采集与分析

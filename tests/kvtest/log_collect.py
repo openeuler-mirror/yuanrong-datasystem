@@ -14,10 +14,55 @@ from pathlib import Path, PurePosixPath
 
 
 REMOTE_ARCHIVE = r"""
-import bz2, fnmatch, gzip, json, lzma, os, stat, sys, tarfile, tempfile
+import bz2, fnmatch, gzip, json, lzma, os, stat, subprocess, sys, tarfile, tempfile
 cfg = json.loads(sys.argv[1])
-keywords = [word.encode('utf-8') for word in cfg['keywords']]
+keywords = cfg['keywords']
+keyword_engine = cfg.get('keyword_engine', 'grep')
 compressed = ('.gz', '.bz2', '.xz', '.zip', '.zst', '.lz4', '.tgz', '.tar', '.7z', '.rar', '.z')
+
+def filter_keywords(path, source, output):
+    if keyword_engine == 'grep':
+        command = ['grep', '-F', '-a']
+    elif keyword_engine == 'rg':
+        command = ['rg', '-F', '-a', '--no-config', '--no-heading', '--no-filename', '--color', 'never']
+    else:
+        raise ValueError('Unsupported keyword engine: ' + keyword_engine)
+    for word in cfg['keywords']:
+        command.extend(['-e', word])
+    command.append('--')
+    if path is not None:
+        command.append(path)
+    env = os.environ.copy()
+    env['LC_ALL'] = 'C'
+    env.pop('GREP_OPTIONS', None)
+    with tempfile.TemporaryFile() as errors:
+        try:
+            if source is None:
+                returncode = subprocess.run(command, stdout=output, stderr=errors, env=env).returncode
+            else:
+                process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=output, stderr=errors, env=env)
+                try:
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        process.stdin.write(chunk)
+                except BrokenPipeError:
+                    pass
+                finally:
+                    try:
+                        process.stdin.close()
+                    except BrokenPipeError:
+                        pass
+                returncode = process.wait()
+        except FileNotFoundError as error:
+            raise RuntimeError('Keyword engine not found: ' + keyword_engine) from error
+        if returncode not in (0, 1):
+            errors.seek(0)
+            detail = errors.read().decode('utf-8', errors='replace')[-2000:]
+            raise RuntimeError(keyword_engine + ' keyword filtering failed with exit code '
+                               + str(returncode) + ': ' + detail)
+
 with tarfile.open(fileobj=sys.stdout.buffer, mode='w|gz' if cfg.get('compress', True) else 'w|') as archive:
     for entry in cfg['sources']:
         label, root, defaults = entry[:3]
@@ -53,16 +98,16 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode='w|gz' if cfg.get('compress', 
                 if not keywords:
                     archive.add(path, arcname=arcname, recursive=False)
                     continue
-                opener = open
-                if packed:
-                    suffix = next((s for s in ('.gz', '.bz2', '.xz') if lower.endswith(s)), None)
-                    if suffix is None:
-                        raise ValueError('Keyword filtering unsupported for archive: ' + path)
-                    opener = {'.gz': gzip.open, '.bz2': bz2.open, '.xz': lzma.open}[suffix]
-                with opener(path, 'rb') as source, tempfile.TemporaryFile() as filtered:
-                    for line in source:
-                        if any(word in line for word in keywords):
-                            filtered.write(line)
+                with tempfile.TemporaryFile() as filtered:
+                    if packed:
+                        suffix = next((s for s in ('.gz', '.bz2', '.xz') if lower.endswith(s)), None)
+                        if suffix is None:
+                            raise ValueError('Keyword filtering unsupported for archive: ' + path)
+                        opener = {'.gz': gzip.open, '.bz2': bz2.open, '.xz': lzma.open}[suffix]
+                        with opener(path, 'rb') as source:
+                            filter_keywords(None, source, filtered)
+                    else:
+                        filter_keywords(path, None, filtered)
                     size = filtered.tell()
                     if not size:
                         continue
@@ -84,6 +129,8 @@ def add_collect_filters(parser):
                              '"*resource*.log"')
     parser.add_argument('--keyword', action='append', default=[], metavar='TEXT',
                         help='Literal case-sensitive line substring; repeatable (OR), filtered remotely')
+    parser.add_argument('--keyword-engine', choices=('grep', 'rg'), default='grep',
+                        help='Remote fixed-string keyword matcher (default: grep)')
     parser.add_argument('--uncompressed-only', action='store_true',
                         help='Exclude compressed archives; retain all uncompressed rotations')
 
@@ -150,11 +197,12 @@ def archive_options_from_args(args):
 
 def filters_from_args(args):
     return dict(patterns=getattr(args, 'file_pattern', []), keywords=getattr(args, 'keyword', []),
-                uncompressed_only=getattr(args, 'uncompressed_only', False))
+                uncompressed_only=getattr(args, 'uncompressed_only', False),
+                keyword_engine=getattr(args, 'keyword_engine', 'grep'))
 
 
 def has_filters(options):
-    return any(options.values())
+    return any(options.get(key) for key in ('patterns', 'keywords', 'uncompressed_only'))
 
 
 def select_targets(targets, names, key):
@@ -175,6 +223,8 @@ def pod_directory(name, pod_ip, host_ip):
 def archive_command(sources, options, archive_options=None):
     if any(not value or '\x00' in value for key in ('patterns', 'keywords') for value in options[key]):
         raise ValueError('Collection patterns and keywords must be nonempty and contain no NUL')
+    if options.get('keyword_engine', 'grep') not in ('grep', 'rg'):
+        raise ValueError('Unsupported keyword engine: ' + str(options['keyword_engine']))
     config = dict(sources=sources, **options)
     if archive_options is not None:
         config['compress'] = archive_options['compress']
