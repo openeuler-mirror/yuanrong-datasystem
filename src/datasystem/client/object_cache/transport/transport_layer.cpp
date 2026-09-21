@@ -29,6 +29,7 @@
 #include <utility>
 
 #include "datasystem/client/object_cache/transport/common/deadline_retry.h"
+#include "datasystem/client/object_cache/transport/data_plane/client_ub_probe_cooldown.h"
 #include "datasystem/client/object_cache/transport/data_plane/data_plane_executor.h"
 #include "datasystem/client/object_cache/transport/data_plane/data_plane_manager.h"
 #include "datasystem/client/object_cache/transport/data_plane/ub_transporter.h"
@@ -240,59 +241,75 @@ struct TransportLayer::LocalUbSenderState final : public UrmaLateCompletionObser
         return inFlightGate.load(std::memory_order_acquire) & IN_FLIGHT_COUNT_MASK;
     }
 
-    void DispatchLateWriteTargetCompletion(const UrmaLateCompletion &completion, uint64_t peerToken)
+    void RequestProbe(const HostPort &destination, ClientUbProbeScope scope, uint64_t generation = 0) noexcept
     {
-        auto pool = lateCompletionPool.lock();
-        auto filter = healthFilter.lock();
-        auto mutex = reconcileMutex.lock();
-        auto cv = reconcileCv.lock();
-        if (pool == nullptr || filter == nullptr || mutex == nullptr || cv == nullptr || IsShuttingDown()) {
-            return;
+        try {
+            auto filter = healthFilter.lock();
+            if (IsShuttingDown() ||
+                (scope == ClientUbProbeScope::REMOTE_WORKER
+                 && (filter == nullptr || !requestRemoteVerification))) {
+                return;
+            }
+            const auto observedAtMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+            if (generation == 0 && filter != nullptr) {
+                generation = filter->CaptureWriteTargetCompletionGeneration(destination);
+            }
+            if ((scope == ClientUbProbeScope::REMOTE_WORKER && generation == 0) ||
+                !probeCooldown.TryAcquire(destination, scope, generation, observedAtMs) || !TryAdmitOperation()) {
+                return;
+            }
+            LocalUbSenderOperation operation;
+            operation.state = this;
+            if (scope == ClientUbProbeScope::LOCAL_NODE) {
+                INJECT_POINT_NO_RETURN("TransportLayer.ClientUbProbeCooldown.localAccepted");
+                TriggerClientLocalUbPortHealthQuery();
+                return;
+            }
+            if (filter->IsWriteTargetCompletionCurrent(destination, generation)) {
+                INJECT_POINT_NO_RETURN("TransportLayer.ClientUbProbeCooldown.remoteAccepted");
+                const bool requested = requestRemoteVerification(destination);
+                if (!requested) {
+                    LOG_FIRST_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+                        << "CLIENT_UB_PROBE action=request_not_accepted scope=remote_worker peer="
+                        << destination.ToString() << " generation=" << generation
+                        << " cooldown_ms=" << ClientUbProbeCooldown::COOLDOWN_MS;
+                }
+            }
+        } catch (const std::exception &error) {
+            LOG(ERROR) << "Failed to schedule UB port-health probe: " << error.what();
+        } catch (...) {
+            LOG(ERROR) << "Failed to schedule UB port-health probe: unknown exception";
         }
-        auto weakState = weak_from_this();
-        pool->Execute([weakState, filter, mutex, cv, completion, peerToken]() {
-            auto state = weakState.lock();
-            if (state == nullptr || state->IsShuttingDown()) {
-                return;
-            }
-            filter->ReportLateWriteTargetFailure(completion, peerToken);
-            std::lock_guard<bthread::Mutex> lock(*mutex);
-            state = weakState.lock();
-            if (state == nullptr || state->IsShuttingDown()) {
-                return;
-            }
-            cv->notify_all();
-        });
+    }
+
+    void ReconcileProbeDestinations(const std::unordered_set<HostPort> &destinations)
+    {
+        probeCooldown.Reconcile(destinations);
     }
 
     void OnLateUrmaCompletion(const UrmaLateCompletion &completion, uint64_t,
                               uint64_t peerToken) noexcept override
     {
-        try {
-            if (completion.cqeStatus == URMA_REMOTE_ACK_TIMEOUT_STATUS) {
-                DispatchLateWriteTargetCompletion(completion, peerToken);
-                return;
-            }
-            HostPort workerAddr;
-            if (completion.cqeStatus != URMA_PORT_UNAVAILABLE_STATUS
-                || workerAddr.ParseString(completion.remoteAddress).IsError()) {
-                return;
-            }
-            if (IsShuttingDown()) {
-                return;
-            }
-            TriggerClientLocalUbPortHealthQuery();
-        } catch (const std::exception &error) {
-            LOG(ERROR) << "Failed to process late Client URMA completion: " << error.what();
-        } catch (...) {
-            LOG(ERROR) << "Failed to process late Client URMA completion: unknown exception";
+        HostPort destination;
+        if (completion.cqeStatus != URMA_REMOTE_ACK_TIMEOUT_STATUS
+            && completion.cqeStatus != URMA_PORT_UNAVAILABLE_STATUS) {
+            return;
+        }
+        if (destination.ParseString(completion.remoteAddress).IsError()) {
+            return;
+        }
+        if (completion.cqeStatus == URMA_REMOTE_ACK_TIMEOUT_STATUS) {
+            RequestProbe(destination, ClientUbProbeScope::REMOTE_WORKER, peerToken);
+        } else {
+            RequestProbe(destination, ClientUbProbeScope::LOCAL_NODE, peerToken);
         }
     }
 
     std::weak_ptr<bthread::Mutex> reconcileMutex;
     std::weak_ptr<bthread::ConditionVariable> reconcileCv;
-    std::weak_ptr<ThreadPool> lateCompletionPool;
     std::weak_ptr<UbHealthFilter> healthFilter;
+    std::function<bool(const HostPort &)> requestRemoteVerification;
+    ClientUbProbeCooldown probeCooldown;
     bthread::Mutex inFlightDrainMutex;
     bthread::ConditionVariable inFlightCv;
     std::atomic<uint64_t> inFlightGate{ 0 };
@@ -307,6 +324,23 @@ TransportLayer::LocalUbSenderOperation::~LocalUbSenderOperation()
         std::lock_guard<bthread::Mutex> lock(state->inFlightDrainMutex);
         state->inFlightCv.notify_all();
     }
+}
+
+void TransportLayer::ConfigureUbHealthTriggers()
+{
+    localUbSenderState_->healthFilter = healthFilter_;
+    std::weak_ptr<DataPlaneManager> weakManager(manager_);
+    localUbSenderState_->requestRemoteVerification = [weakManager](const HostPort &peer) {
+        auto manager = weakManager.lock();
+        return manager != nullptr && manager->RequestUbPortHealthVerification(peer);
+    };
+    std::weak_ptr<LocalUbSenderState> weakState(localUbSenderState_);
+    healthFilter_->SetRemotePortHealthVerificationTrigger([weakState](const HostPort &peer) {
+        auto state = weakState.lock();
+        if (state != nullptr) {
+            state->RequestProbe(peer, ClientUbProbeScope::REMOTE_WORKER);
+        }
+    });
 }
 
 TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared_ptr<ThreadPool> taskPool,
@@ -337,20 +371,16 @@ TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared
                                                   std::move(options.verifiedUbHealthSummaryHook),
                                                   [this] { NotifyReconcile(); },
                                                   std::move(supportsPortHealthVerification));
+    ConfigureUbHealthTriggers();
     auto retry = std::make_shared<DeadlineRetry>(std::move(options.retryAdmissionCheck));
+    auto ubFailureHandler = [this](const HostPort &provider, const ProviderUbFailureDetailPb &detail) {
+        (void)ReportProviderUbFailure(provider, detail);
+    };
     auto metadata = std::make_shared<ObjectMetadataClient>(manager_, retry, advisor_, std::move(ubBufferProvider),
                                                            GetConfiguredUbInlineBufferSize(),
-                                                           std::move(options.metadataFailureHandler));
+                                                           std::move(options.metadataFailureHandler),
+                                                           std::move(ubFailureHandler));
     auto executor = std::make_shared<DataPlaneExecutor>(manager_, advisor_, std::move(options.drainingFallbackHandler));
-    std::weak_ptr<DataPlaneManager> weakManager(manager_);
-    healthFilter_->SetRemotePortHealthVerificationTrigger([weakManager](const HostPort &peer) {
-        auto manager = weakManager.lock();
-        if (manager != nullptr) {
-            (void)manager->RequestUbPortHealthVerification(peer);
-        }
-    });
-    localUbSenderState_->lateCompletionPool = lateCompletionPool_;
-    localUbSenderState_->healthFilter = healthFilter_;
     auto reportReadOutcome = [this](const HostPort &workerAddr, const GetObjectRemoteRspPb &response) {
         if (response.has_provider_ub_failure_detail()) {
             (void)ReportProviderUbFailure(workerAddr, response.provider_ub_failure_detail());
@@ -385,7 +415,6 @@ TransportLayer::TransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManage
     localUbSenderState_ = std::make_shared<LocalUbSenderState>();
     localUbSenderState_->reconcileMutex = reconcileMutex_;
     localUbSenderState_->reconcileCv = reconcileCv_;
-    localUbSenderState_->lateCompletionPool = lateCompletionPool_;
     localUbSenderState_->healthFilter = healthFilter_;
 }
 
@@ -394,7 +423,9 @@ bool TransportLayer::ReportProviderUbFailure(const HostPort &provider, const Pro
     if (!IsClientUbFaultIsolationEnabled()) {
         return false;
     }
-    ReportClientGetWritebackFailure(provider, detail);
+    if (IsClientUbWritebackAckTimeout(provider, detail)) {
+        localUbSenderState_->RequestProbe(provider, ClientUbProbeScope::LOCAL_NODE);
+    }
     if (healthFilter_ == nullptr) {
         return false;
     }
@@ -421,14 +452,6 @@ UbHealthSummaryApplyHook TransportLayer::GetUbHealthSummaryApplyHook() const
             manager->ObserveUbHealthSummary(summary);
         }
     };
-}
-
-void TransportLayer::ReportClientGetWritebackFailure(const HostPort &provider,
-                                                     const ProviderUbFailureDetailPb &detail)
-{
-    if (IsClientUbWritebackAckTimeout(provider, detail)) {
-        ReportLocalPortHealthTrigger();
-    }
 }
 
 Status TransportLayer::CheckUbReadSource(const HostPort &workerAddr, AccessTransportKind &deniedKind) const
@@ -509,7 +532,7 @@ Status TransportLayer::RunClientLocalUbWrite(const HostPort &workerAddr, ObjectB
     bufferInfo.ubFailureReportRc = Status::OK();
     bufferInfo.ubProviderStatus.reset();
     bufferInfo.ubCqeStatus.reset();
-    PrepareLocalUbLateCompletion(bufferInfo, AccessTransportKind::UB);
+    PrepareLocalUbLateCompletion(bufferInfo, AccessTransportKind::UB, &workerAddr);
     Status rc = write();
     const Status &failureRc = bufferInfo.ubFailureReportRc.IsError() ? bufferInfo.ubFailureReportRc : rc;
     (void)ReportLocalUbSenderFailure({ workerAddr, AccessTransportKind::UB, failureRc,
@@ -530,18 +553,19 @@ Status TransportLayer::AcquireLocalUbSenderAdmission(TransportHint hint, LocalUb
     return Status::OK();
 }
 
-void TransportLayer::PrepareLocalUbLateCompletion(ObjectBufferInfo &bufferInfo, AccessTransportKind kind) const
+void TransportLayer::PrepareLocalUbLateCompletion(ObjectBufferInfo &bufferInfo, AccessTransportKind kind,
+                                                  const HostPort *explicitWorker) const
 {
-    // Arming this context is what lets a late CQE arm write-target quarantine and schedule a recovery probe, so the
-    // disabled policy must leave the buffer without an observer.
+    // The context attributes an actual WR completion to its destination and generation. The completion only requests
+    // verification; a current all-BAD query result remains the isolation authority.
     if (!IsClientUbFaultIsolationEnabled() || kind != AccessTransportKind::UB) {
         bufferInfo.ubLateCompletionContext.reset();
         return;
     }
-    const uint64_t peerToken = healthFilter_ == nullptr
-                                   ? 0
-                                   : healthFilter_->CaptureWriteTargetCompletionGeneration(bufferInfo.workerAddr);
-    bufferInfo.ubLateCompletionContext = UrmaLateCompletionContext{ localUbSenderState_, 0, peerToken };
+    const HostPort &worker = explicitWorker == nullptr ? bufferInfo.workerAddr : *explicitWorker;
+    const uint64_t peerToken =
+        healthFilter_ == nullptr ? 0 : healthFilter_->CaptureWriteTargetCompletionGeneration(worker);
+    bufferInfo.ubLateCompletionContext = UrmaLateCompletionContext{ localUbSenderState_, 0, peerToken, true };
 }
 
 bool TransportLayer::ReportWriteTargetUbFailure(const LocalUbSenderFailureView &failure)
@@ -551,17 +575,8 @@ bool TransportLayer::ReportWriteTargetUbFailure(const LocalUbSenderFailureView &
         || *failure.cqeStatus != URMA_REMOTE_ACK_TIMEOUT_STATUS) {
         return false;
     }
-    const bool quarantined = healthFilter_->ReportWriteTargetFailure(
-        failure.workerAddr, failure.status, failure.providerStatus, failure.cqeStatus);
-    if (quarantined) {
-        NotifyReconcile();
-    }
-    if (quarantined) {
-        LOG(ERROR) << "[CLIENT_UB_WRITE_TARGET_ISOLATION] Client UB write target quarantined, worker="
-                   << failure.workerAddr.ToString() << ", status=" << failure.status.ToString()
-                   << ", cqeStatus=" << *failure.cqeStatus;
-    }
-    return quarantined;
+    // The WR completion observer owns CQE9 probing. The aggregate Set/MSet status is not a second observation.
+    return !healthFilter_->IsWriteTargetAvailable(failure.workerAddr);
 }
 
 bool TransportLayer::ReportLocalUbSenderFailure(const LocalUbSenderFailureView &failure)
@@ -576,10 +591,7 @@ bool TransportLayer::ReportLocalUbSenderFailure(const LocalUbSenderFailureView &
     if (UbFailureClassifier().Classify(outcome) != UbFailureClass::PORT_UNAVAILABLE_ERROR4) {
         return false;
     }
-    if (localUbSenderState_->IsShuttingDown()) {
-        return false;
-    }
-    TriggerClientLocalUbPortHealthQuery();
+    localUbSenderState_->RequestProbe(failure.workerAddr, ClientUbProbeScope::LOCAL_NODE);
     return true;
 }
 
@@ -1459,6 +1471,13 @@ Status TransportLayer::ApplyWorkerSnapshot(WorkerSnapshot snapshot)
     // reconcile thread (which touches entries_ under reconcileMutex_) never blocks on the advisor
     // write lock.
     std::vector<HostPort> shmCandidateAddrs = snapshot.shmCandidateAddrs;
+    std::unordered_set<HostPort> probeDestinations;
+    probeDestinations.reserve(snapshot.remoteTransportAddrs.size() + snapshot.workerIncarnations.size());
+    probeDestinations.insert(snapshot.remoteTransportAddrs.begin(), snapshot.remoteTransportAddrs.end());
+    for (const auto &[worker, incarnation] : snapshot.workerIncarnations) {
+        (void)incarnation;
+        probeDestinations.emplace(worker);
+    }
     {
         std::lock_guard<bthread::Mutex> lock(*reconcileMutex_);
         CHECK_FAIL_RETURN_STATUS(reconcileStarted_, K_NOT_READY, "Transport reconcile thread is not initialized");
@@ -1470,6 +1489,7 @@ Status TransportLayer::ApplyWorkerSnapshot(WorkerSnapshot snapshot)
         // shm ref. With manager-first, the advisor only marks as same-host workers the manager can
         // already hand out a transporter for.
         RETURN_IF_NOT_OK(manager_->UpdateWorkerSnapshot(snapshot));
+        localUbSenderState_->ReconcileProbeDestinations(probeDestinations);
         pendingSnapshot_ = std::move(snapshot);
         reconcileCv_->notify_one();
     }

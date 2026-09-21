@@ -172,6 +172,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "client_ub_probe_cooldown_test",
+    srcs = ["client_ub_probe_cooldown_test.cpp"],
+    deps = [
+        "//src/datasystem/client/object_cache/transport:client_transport",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "object_client_impl_exist_test",
     srcs = ["object_client_impl_exist_test.cpp"],
     deps = [

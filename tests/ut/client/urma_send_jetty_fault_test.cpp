@@ -160,6 +160,7 @@ public:
     void OnLateUrmaCompletion(const UrmaLateCompletion &completion, uint64_t ownerToken,
                               uint64_t peerToken) noexcept override
     {
+        ++observationCount;
         observed = completion;
         observedOwnerToken = ownerToken;
         observedPeerToken = peerToken;
@@ -168,6 +169,7 @@ public:
     std::optional<UrmaLateCompletion> observed;
     uint64_t observedOwnerToken{ 0 };
     uint64_t observedPeerToken{ 0 };
+    size_t observationCount{ 0 };
 };
 
 TEST(UrmaSendJettyFaultTest, TimedOutWriteRetainsEventButReleasesWaiterForLateCqe4)
@@ -225,6 +227,31 @@ TEST(UrmaSendJettyFaultTest, TimedOutWriteDispatchesLateCqe9WithPeerFence)
     EXPECT_EQ(observer->observed->cqeStatus, URMA_REMOTE_ACK_TIMEOUT_STATUS);
     EXPECT_EQ(observer->observedOwnerToken, kOwnerToken);
     EXPECT_EQ(observer->observedPeerToken, kPeerToken);
+}
+
+TEST(UrmaSendJettyFaultTest, ImmediateCqe9DispatchHonorsContextOptInAndRunsOnce)
+{
+    for (const bool optIn : { false, true }) {
+        constexpr uint64_t PEER_TOKEN = 92;
+        auto observer = std::make_shared<RecordingLateCompletionObserver>();
+        UrmaLateCompletionContext context{ observer, 79, PEER_TOKEN, optIn };
+        auto event = std::make_shared<UrmaEvent>(1009 + optIn, nullptr, "127.0.0.1:29102",
+                                                 "remote-instance", 4096, UrmaEvent::OperationType::WRITE,
+                                                 nullptr, nullptr, context);
+        event->SetFailed(URMA_REMOTE_ACK_TIMEOUT_STATUS);
+        const auto disposition = event->NotifyAllAndGetDisposition();
+        ASSERT_EQ(disposition, UrmaEvent::CompletionDisposition::WAKE_WAITER);
+
+        UrmaManager::DispatchObservedCompletion(event, URMA_REMOTE_ACK_TIMEOUT_STATUS, disposition, false);
+        UrmaManager::DispatchObservedCompletion(event, URMA_REMOTE_ACK_TIMEOUT_STATUS,
+                                                event->NotifyAllAndGetDisposition(), false);
+
+        EXPECT_EQ(observer->observationCount, optIn ? 1U : 0U);
+        if (optIn) {
+            ASSERT_TRUE(observer->observed.has_value());
+            EXPECT_EQ(observer->observedPeerToken, PEER_TOKEN);
+        }
+    }
 }
 
 TEST(UrmaSendJettyFaultTest, TimedOutWriteWithoutManagerRegistrationIsDiscarded)

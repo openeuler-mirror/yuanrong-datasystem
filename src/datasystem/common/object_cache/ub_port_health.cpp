@@ -39,6 +39,7 @@ using Clock = std::chrono::steady_clock;
 constexpr size_t HEX_CHAR_COUNT_PER_BYTE = 2;
 constexpr size_t HEX_HIGH_NIBBLE_SHIFT = 4;
 constexpr uint8_t HEX_LOW_NIBBLE_MASK = 0x0f;
+constexpr int UB_PORT_HEALTH_QUERY_FAILURE_LOG_RATE = 100;
 constexpr char HEX_DIGITS[] = "0123456789abcdef";
 
 std::string EncodeHexPrefix(const uint8_t *bytes, size_t size)
@@ -585,6 +586,10 @@ private:
         }
         if (queryStatus.IsOk()) {
             lastConfirmedSnapshot_ = published;
+        } else {
+            LOG_FIRST_AND_EVERY_N(WARNING, UB_PORT_HEALTH_QUERY_FAILURE_LOG_RATE)
+                << "UB_PORT_HEALTH action=query_failed owner=" << PortHealthOwnerName(owner_)
+                << " status_code=" << queryStatus.GetCode() << " status=" << queryStatus;
         }
         if (!lastLoggedSnapshot_.has_value() || !HasSameLoggedSnapshot(*lastLoggedSnapshot_, *published)) {
             LOG(INFO) << "UB_PORT_HEALTH action=snapshot_changed owner=" << PortHealthOwnerName(owner_)

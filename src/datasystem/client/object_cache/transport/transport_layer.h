@@ -107,8 +107,8 @@ public:
     /** @brief E4/E9 local path evidence: requests a merged monitor refresh; does not isolate by itself. */
     void ReportLocalPortHealthTrigger();
 
-    /** Observe CQE-9 evidence that a Worker writeback could not reach this Client. */
-    void ReportClientGetWritebackFailure(const HostPort &provider, const ProviderUbFailureDetailPb &detail);
+    /** Observe complete Provider UB failure evidence from a Get response. */
+    bool ReportProviderUbFailure(const HostPort &provider, const ProviderUbFailureDetailPb &detail);
 
     std::optional<UbPortHealthSummary> GetLocalPortHealthSummary() const;
 
@@ -206,12 +206,13 @@ public:
     void Shutdown();
 
 protected:
+    void ConfigureUbHealthTriggers();
+
     /** @brief Construct the facade with injected collaborators for focused orchestration tests. */
     TransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManager, std::shared_ptr<TransportAdvisor> advisor);
     TransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManager, std::shared_ptr<TransportAdvisor> advisor,
                    std::shared_ptr<UbHealthFilter> readSourceFilter,
                    std::shared_ptr<ThreadPool> releasePool = nullptr);
-    bool ReportProviderUbFailure(const HostPort &provider, const ProviderUbFailureDetailPb &detail);
     Status CheckUbReadSource(const HostPort &workerAddr, AccessTransportKind &deniedKind) const;
 
 private:
@@ -239,7 +240,8 @@ private:
     Status AcquireLocalUbSenderAdmission(TransportHint hint, LocalUbSenderOperation &operation) const;
     bool ReportWriteTargetUbFailure(const LocalUbSenderFailureView &failure);
     bool ReportLocalUbSenderFailure(const LocalUbSenderFailureView &failure);
-    void PrepareLocalUbLateCompletion(ObjectBufferInfo &bufferInfo, AccessTransportKind kind) const;
+    void PrepareLocalUbLateCompletion(ObjectBufferInfo &bufferInfo, AccessTransportKind kind,
+                                      const HostPort *explicitWorker = nullptr) const;
     std::optional<std::chrono::steady_clock::time_point> GetProviderUbProbeDeadline() const;
     void TryRecoverProviderUbSource();
     std::optional<std::chrono::steady_clock::time_point> GetWriteTargetUbProbeDeadline() const;
@@ -317,7 +319,6 @@ private:
     std::weak_ptr<IUbPortHealthObserver> localPortHealthObserver_;
     bool allowUbRuntimeFailure_{ false };
     std::shared_ptr<LocalUbSenderState> localUbSenderState_;
-    std::shared_ptr<ThreadPool> lateCompletionPool_{ std::make_shared<ThreadPool>(1, 1, "ub-late-cqe") };
     // ApplyWorkerSnapshot serializes admission publication with shutdown through reconcileMutex_.
     std::shared_ptr<bthread::Mutex> reconcileMutex_{ std::make_shared<bthread::Mutex>() };
     std::shared_ptr<bthread::ConditionVariable> reconcileCv_{ std::make_shared<bthread::ConditionVariable>() };
