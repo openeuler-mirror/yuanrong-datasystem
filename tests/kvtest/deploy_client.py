@@ -1167,7 +1167,7 @@ class Deployer:
 
     def do_collect(self, sdk_log_dir='/root/.datasystem/logs', output_dir='collected',
                    summary_timeout=5, max_workers=None, node_slice=None, filters=None, prefixes=None,
-                   instance_ids=None, pod_info=False, archive_options=None, host_selection=None):
+                   instance_ids=None, pod_info=False, archive_options=None, host_selection=None, sdk_only=False):
         """Collect output files and SDK logs from all nodes.
 
         Single-phase pipeline: each node triggers its own /summary then
@@ -1194,7 +1194,8 @@ class Deployer:
         """
         transfer_kwargs = {'archive_options': archive_options} if archive_options is not None else {}
         collect_dir = output_dir
-        copy_case_files(getattr(self, 'case_config_paths', []), collect_dir)
+        if not sdk_only:
+            copy_case_files(getattr(self, 'case_config_paths', []), collect_dir)
         results = []
 
         filters = filters or dict(patterns=[], keywords=[], uncompressed_only=False)
@@ -1260,7 +1261,7 @@ class Deployer:
             # Returns True if rc=0 (file ready), False on timeout.
             port = node.get('port', self.listen_port)
             url = f'http://localhost:{port}/summary'
-            deadline = time.monotonic() + (0 if has_filters(filters) else summary_timeout)
+            deadline = time.monotonic() + (0 if sdk_only or has_filters(filters) else summary_timeout)
             summary_ok = False
             while time.monotonic() < deadline:
                 r = self.run_on(node, f'curl -sf -X POST {url} --max-time 3',
@@ -1271,14 +1272,16 @@ class Deployer:
                 time.sleep(_POLL_INTERVAL)
             if summary_ok:
                 log_info(f'  {target} -> summary OK')
-            elif not has_filters(filters):
+            elif not sdk_only and not has_filters(filters):
                 log_info(f'  {target} -> summary timeout, collecting available files')
 
             # Immediately collect this node's files (no global barrier).
             try:
-                if has_filters(filters):
+                if sdk_only or has_filters(filters):
                     sources = [['output', self.remote_work_dir, ['*.csv', '*.txt', '*.log', '*.log.*']],
                                ['sdk', sdk_log_dir, ['*.log', '*.log.*', '*.txt']]]
+                    if sdk_only:
+                        sources = sources[1:]
                     command = archive_command(sources, filters, **transfer_kwargs)
                     transport = self._transport(node)
                     if transport == 'kubectl':
@@ -1312,7 +1315,7 @@ class Deployer:
         empty = sum(1 for r in results if r == 'empty')
         fail = sum(1 for r in results if r == 'fail')
         log_info(f'\nCollect result: {ok} ok / {empty} empty / {fail} fail / {len(results)} total')
-        if has_filters(filters) or prefixes or instance_ids or pod_info or archive_options is not None or host_selection is not None:
+        if sdk_only or has_filters(filters) or prefixes or instance_ids or pod_info or archive_options is not None or host_selection is not None:
             return 1 if fail else 0
 
     def do_run(self, duration):
@@ -1900,6 +1903,11 @@ def main():
     # collect
     p = sub.add_parser('collect', help='Collect output files and SDK logs', parents=[shared])
     add_collect_filters(p)
+    p.add_argument('--sdk-only', action='store_true',
+                   help='Collect only SDK logs; skip summary, case configs and kvtest outputs')
+    p.add_argument('--log-pattern', action='append', dest='file_pattern', metavar='GLOB',
+                   help='Alias for --file-pattern; repeatable, quote wildcards. '
+                        'Use with --sdk-only to collect only matching SDK logs')
     p.add_argument('-p', '--prefix', action='append', default=None, dest='prefixes', metavar='PREFIX',
                    help='Pod name prefix to match (repeatable: -p client-a -p client-b). '
                         'A pod is selected if it matches ANY prefix.')
@@ -1996,7 +2004,7 @@ def main():
             args.sdk_log_dir, args.output,
             summary_timeout=getattr(args, 'summary_timeout', 5),
             max_workers=getattr(args, 'max_workers', None),
-            node_slice=node_slice, filters=filters_from_args(args),
+            node_slice=node_slice, filters=filters_from_args(args), sdk_only=args.sdk_only,
             prefixes=args.prefixes, instance_ids=args.instance_ids, pod_info=args.pod_info,
             archive_options=archive_options_from_args(args), host_selection=host_selection_from_args(args))
         if result:

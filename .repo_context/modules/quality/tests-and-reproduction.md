@@ -41,6 +41,11 @@
 
 ## Test Layout
 
+- `tests/kvtest/deploy_client.py collect --sdk-only` skips summary, case configs and kvtest outputs.
+  Repeatable `--log-pattern` aliases the shared `--file-pattern` filter; use both switches to
+  collect only matching SDK logs through the existing archive transport. Patterns are OR-combined
+  and recursive under `--sdk-log-dir`. Coverage: `tests/kvtest/tests/python/test_deploy_client.py`.
+
 - Verified current top-level structure:
 
 | Path | Role | Source-backed notes |
