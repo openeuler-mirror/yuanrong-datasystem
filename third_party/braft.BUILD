@@ -48,6 +48,7 @@ cc_library(
         ],
         "//conditions:default": [],
     }),
+    defines = ["USE_BTHREAD_MUTEX"],
     local_defines = [
         "BRAFT_REVISION=\\\"v1.1.2\\\"",
         "BRPC_WITH_GLOG=0",

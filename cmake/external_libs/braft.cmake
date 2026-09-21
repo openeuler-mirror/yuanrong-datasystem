@@ -50,7 +50,7 @@ set(braft_CMAKE_OPTIONS
     -DZLIB_INCLUDE_PATH:PATH=${ZLIB_INCLUDE_DIRS}
     -DZLIB_LIB:FILEPATH=${ZLIB_LIBRARIES})
 
-set(braft_CXX_FLAGS "${THIRDPARTY_SAFE_FLAGS} -I${absl_INCLUDE_DIR}")
+set(braft_CXX_FLAGS "${THIRDPARTY_SAFE_FLAGS} -I${absl_INCLUDE_DIR} -DUSE_BTHREAD_MUTEX")
 set(braft_C_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 set(braft_PATCHES
     ${CMAKE_SOURCE_DIR}/third_party/patches/braft/modern-toolchain-compat.patch
@@ -95,6 +95,7 @@ set(BRAFT_LIBRARIES
     rt)
 
 add_library(datasystem_braft INTERFACE)
+target_compile_definitions(datasystem_braft INTERFACE USE_BTHREAD_MUTEX)
 target_include_directories(datasystem_braft SYSTEM INTERFACE ${BRAFT_INCLUDE_DIR})
 target_link_libraries(datasystem_braft INTERFACE ${BRAFT_LIBRARIES})
 

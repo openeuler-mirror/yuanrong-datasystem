@@ -8,6 +8,16 @@
 - `CoordinatorServiceImpl` owns the two-stage service startup and shared-server generation. `CoordinatorElectionManager` is the sole owner of bootstrap state/control plus Node and Membership lifecycles.
 - CMake and Bazel both provide production targets and dedicated election ST targets.
 
+Both dependency builds enable braft's existing `USE_BTHREAD_MUTEX` macro so `braft::raft_mutex_t` uses
+`bthread::Mutex`. CMake sets it in braft's compilation flags and propagates it through the `datasystem_braft`
+interface; Bazel uses transitive `defines` on `@braft//:braft`. Keep the library and every header consumer consistent:
+changing this setting requires rebuilding the complete dependency closure, including on rollback. CMake includes
+compilation flags in its dependency cache key. When changing this option in an existing CMake build tree, first remove
+its generated `_deps/braft-src`, `_deps/braft-build`, and `_deps/braft-subbuild` directories: dependency rebuilds reapply
+the existing patches and must start from an unpatched source extraction. Raft disk and wire formats are unchanged.
+`BraftMutexTest.ContentionPreservesBthreadProgress` guards scheduler progress, and the existing Braft cluster/replay
+and Coordinator election tests cover lifecycle and recovery integration.
+
 ## Current Components
 
 | Component | Responsibility |
