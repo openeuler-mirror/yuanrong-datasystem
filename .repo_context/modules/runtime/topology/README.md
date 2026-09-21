@@ -70,13 +70,22 @@
   Worker can recreate membership after the Coordinator deployment is rebuilt.
   Each RPC captures the current route epoch. A response crossing a route change cannot replace the new identity;
   Router retries the current route within the original deadline, without exposing the conflict as an immediate Proxy
-  failure. Rejected responses never retain a successful status. Every RPC, including RECOVERING retries, shares the
-  remaining budget with the current and unattempted unique candidates.
+  failure. Rejected responses never retain a successful status. All routed RPCs use one deadline-driven retry policy.
+  The first RPC to a cached Leader receives half the original budget, with a 1-second floor, capped by the remaining
+  deadline and caller maximum. Later attempts share the remaining time with queued candidates. There is no fixed
+  attempt limit, per-address budget ledger, or failed-address blacklist. Follower hints may revisit a failed Leader;
+  redirects wait for the retry interval and exhausted candidate lists refresh with bounded jittered backoff.
+  Terminal business errors retain their existing contract, including CAS version-conflict handling by the caller.
+  Discovery cache construction and successful refresh shuffle validated, deduplicated candidates before publication.
+  Snapshot reads preserve that order, and Router still prioritizes its cached Leader. Initial candidates are logged once;
+  refresh logs only membership changes, not permutations of the same addresses.
   Accepted nonterminal Coordinator results survive candidate rounds and deadline exhaustion. A candidate skipped
   for lack of budget is not a new RPC result; headerless transport failures cannot overwrite an accepted Coordinator
   result. Headerless errors explicitly marked as server application responses return directly, except `K_NOT_READY`,
   which retains readiness routing. This preserves membership `K_TRY_AGAIN`/`K_NOT_FOUND` for renewal repair instead of
-  replacing them with follower redirects.
+  replacing them with follower redirects. Failed calls that encountered transport timeouts append a compact routing
+  summary (first timeout address/budget, attempts, retry rounds, elapsed time, and last response header);
+  Proxy appends the request type without logging request keys or values.
   Coordinator-side membership loss only re-ensures the current Worker payload and does not publish `RESTARTING` or run
   the local rejoin cleanup. Only `TopologyEngine` confirmation that the local Worker must rejoin uses the explicit
   destructive rejoin path. This keeps a new Coordinator lifetime from being mistaken for a new Worker incarnation.

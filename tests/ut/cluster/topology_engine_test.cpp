@@ -1951,6 +1951,21 @@ TEST(TopologyEngineTest, InvalidCoordinatorTopologyWatchFallsBackToRange)
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 
+TEST(TopologyEngineTest, WorkerWatchTransientFailureRetriesStartup)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const auto keys = MakeKeys("start-watch-retry");
+    PutTopology(proxy, "start-watch-retry", MakeTopology());
+    auto engine = BuildEngine(proxy, ingress, callbacks, "start-watch-retry");
+    proxy.FailNextWatchForKey(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE);
+
+    DS_ASSERT_OK(engine->Start());
+    EXPECT_TRUE(ingress.IsBound());
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
 TEST(TopologyEngineTest, WorkerWatchStartFailureNeverPublishesHostAdmission)
 {
     testing::FakeCoordinatorServiceProxy proxy;
@@ -1968,9 +1983,9 @@ TEST(TopologyEngineTest, WorkerWatchStartFailureNeverPublishesHostAdmission)
     });
     std::unique_ptr<TopologyEngine> engine;
     DS_ASSERT_OK(builder.Build(engine));
-    proxy.FailNextWatchForKey(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE);
+    proxy.FailNextWatchForKey(TopologyStorageKey(*keys), K_INVALID);
 
-    EXPECT_EQ(engine->Start().GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_EQ(engine->Start().GetCode(), K_INVALID);
     EXPECT_EQ(normalAdmissions.load(), 0U);
 }
 
@@ -2024,10 +2039,10 @@ TEST(TopologyEngineTest, StartRollbackCleanupFailureRemainsRetryable)
     const auto keys = MakeKeys("start-rollback");
     PutTopology(proxy, "start-rollback", MakeTopology());
     auto engine = BuildEngine(proxy, ingress, callbacks, "start-rollback");
-    proxy.FailNextWatchForKey(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE);
+    proxy.FailNextWatchForKey(TopologyStorageKey(*keys), K_INVALID);
     ingress.FailNextUnbind();
 
-    EXPECT_EQ(engine->Start().GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_EQ(engine->Start().GetCode(), K_INVALID);
     EXPECT_EQ(engine->GetState(), TopologyEngineState::STOPPING);
     EXPECT_TRUE(ingress.IsBound());
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));

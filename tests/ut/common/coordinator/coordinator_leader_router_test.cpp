@@ -240,23 +240,23 @@ TEST_F(CoordinatorLeaderRouterTest, ReturnsUnspecifiedProtocolErrorWithoutRetry)
     EXPECT_EQ(refreshCalls, 0);
 }
 
-TEST_F(CoordinatorLeaderRouterTest, StopsAfterOneRoundWhenAllCandidatesHaveTransportErrors)
+TEST_F(CoordinatorLeaderRouterTest, RefreshesAndRetriesTransportFailuresUntilDeadline)
 {
     snapshots = { { "127.0.0.1:30001", "127.0.0.1:30002" } };
     Router router(Dependencies());
     size_t attempts = 0;
-
+    const auto deadline = Deadline(std::chrono::milliseconds(10));
     const auto status = router.Execute(
-        [&attempts](const HostPort &, std::chrono::milliseconds) {
-            return TransportError(++attempts == 1 ? K_RPC_DEADLINE_EXCEEDED : K_RPC_PEER_DEAD);
-        },
-        Deadline(std::chrono::seconds(1)), std::chrono::milliseconds(10), std::chrono::milliseconds(1));
-
+        [&](const HostPort &, std::chrono::milliseconds timeout) {
+            ++attempts;
+            EXPECT_LE(now + timeout, deadline);
+            return TransportError(K_RPC_PEER_DEAD);
+        }, deadline, std::chrono::milliseconds(10), std::chrono::milliseconds(1));
     EXPECT_EQ(status.GetCode(), K_RPC_PEER_DEAD);
-    EXPECT_EQ(attempts, 2);
-    EXPECT_EQ(snapshotCalls, 1);
-    EXPECT_EQ(refreshCalls, 1);
-    EXPECT_TRUE(waits.empty());
+    EXPECT_GT(attempts, 3U);
+    EXPECT_EQ(now, deadline);
+    EXPECT_EQ(refreshCalls, waits.size());
+    EXPECT_FALSE(waits.empty());
 }
 
 TEST_F(CoordinatorLeaderRouterTest, ReadsFreshSnapshotForNextRoundAfterCoordinatorResponse)
@@ -281,68 +281,41 @@ TEST_F(CoordinatorLeaderRouterTest, ReadsFreshSnapshotForNextRoundAfterCoordinat
     EXPECT_EQ(waits, (std::vector<std::chrono::milliseconds>{ std::chrono::milliseconds(1) }));
 }
 
-TEST_F(CoordinatorLeaderRouterTest, DefersRedirectCycleToTheNextLogicalCall)
+TEST_F(CoordinatorLeaderRouterTest, RedirectsBackToPreviouslyFailedLeader)
 {
     snapshots = { { "127.0.0.1:30001", "127.0.0.1:30002" } };
     Router router(Dependencies());
     std::vector<std::string> attempts;
-    bool hasLeader = false;
-    const auto rpc = [&attempts, &hasLeader](const HostPort &address, std::chrono::milliseconds) {
-        attempts.emplace_back(address.ToString());
-        if (hasLeader) {
-            return Response(State::SERVING);
-        }
-        const auto redirect =
-            address.ToString() == "127.0.0.1:30001" ? "127.0.0.1:30002" : "127.0.0.1:30001";
-        return Response(State::NOT_LEADER, Status(K_NOT_READY, "injected redirect cycle"), redirect);
-    };
-
-    // The redirect cycle dials each candidate exactly once; already-attempted addresses are
-    // deferred to the next logical call instead of being re-dialed within this one.
-    const auto status = router.Execute(rpc, Deadline(std::chrono::milliseconds(20)),
-                                       std::chrono::milliseconds(10), std::chrono::milliseconds(1));
-
-    EXPECT_EQ(status.GetCode(), K_NOT_READY);
-    EXPECT_EQ(attempts, (std::vector<std::string>{ "127.0.0.1:30001", "127.0.0.1:30002" }));
-
-    hasLeader = true;
-    EXPECT_TRUE(router.Execute(rpc, Deadline(std::chrono::seconds(1)), std::chrono::milliseconds(10),
-                               std::chrono::milliseconds(1))
-                    .IsOk());
+    const auto status = router.Execute(
+        [&](const HostPort &address, std::chrono::milliseconds) {
+            attempts.push_back(address.ToString());
+            if (attempts.size() == 1) {
+                return TransportError(K_RPC_PEER_DEAD);
+            }
+            return address.Port() == 30002
+                ? Response(State::NOT_LEADER, Status::OK(), "127.0.0.1:30001")
+                : Response(State::SERVING);
+        }, Deadline(std::chrono::milliseconds(20)), std::chrono::milliseconds(10), std::chrono::milliseconds(1));
+    EXPECT_TRUE(status.IsOk());
+    EXPECT_EQ(attempts, (std::vector<std::string>{ "127.0.0.1:30001", "127.0.0.1:30002", "127.0.0.1:30001" }));
 }
 
-TEST_F(CoordinatorLeaderRouterTest, RetriesFollowerCandidateInNextLogicalCall)
+TEST_F(CoordinatorLeaderRouterTest, RetriesFollowerCandidateWithinOriginalDeadline)
 {
     snapshots = { { "127.0.0.1:30001" } };
     Router router(Dependencies());
     size_t attempts = 0;
-    bool isLeader = false;
-    const auto rpc = [&attempts, &isLeader](const HostPort &, std::chrono::milliseconds) {
-        ++attempts;
-        return isLeader ? Response(State::SERVING)
-                        : Response(State::NOT_LEADER, Status(K_NOT_READY, "injected follower"));
-    };
-
-    // The candidate answers as follower and the static discovery refresh brings no new
-    // address, so the same candidate is not dialed again within this logical call.
-    EXPECT_EQ(router.Execute(rpc, Deadline(std::chrono::milliseconds(20)), std::chrono::milliseconds(10),
-                             std::chrono::milliseconds(1))
-                  .GetCode(),
-              K_NOT_READY);
-    EXPECT_EQ(attempts, 1);
-
-    // A freshly elected leader is picked up by the next logical call.
-    isLeader = true;
-    EXPECT_TRUE(router.Execute(rpc, Deadline(std::chrono::seconds(1)), std::chrono::milliseconds(10),
-                               std::chrono::milliseconds(1))
-                    .IsOk());
-    EXPECT_EQ(attempts, 2);
+    const auto status = router.Execute(
+        [&](const HostPort &, std::chrono::milliseconds) {
+            return ++attempts < 5 ? Response(State::NOT_LEADER, Status(K_NOT_READY, "election pending"))
+                                  : Response(State::SERVING);
+        }, Deadline(std::chrono::milliseconds(20)), std::chrono::milliseconds(10), std::chrono::milliseconds(1));
+    EXPECT_TRUE(status.IsOk());
+    EXPECT_EQ(attempts, 5U);
+    EXPECT_EQ(waits.size(), 4U);
 }
 
-// A static discovery snapshot must not reset the failed-candidate memory of one logical call:
-// with three dead replicas and two reachable followers (loss of majority), every candidate,
-// dead or alive, is dialed exactly once while the call still spends its whole budget.
-TEST_F(CoordinatorLeaderRouterTest, DoesNotRedialCandidatesAfterStaticDiscoveryRefresh)
+TEST_F(CoordinatorLeaderRouterTest, RetriesCandidatesAfterStaticDiscoveryRefresh)
 {
     snapshots = { { "127.0.0.1:30001", "127.0.0.1:30002", "127.0.0.1:30003", "127.0.0.1:30004",
                     "127.0.0.1:30005" } };
@@ -365,10 +338,10 @@ TEST_F(CoordinatorLeaderRouterTest, DoesNotRedialCandidatesAfterStaticDiscoveryR
     ASSERT_EQ(dialCount.size(), 5UL);
     size_t totalDials = 0;
     for (const auto &[address, count] : dialCount) {
-        EXPECT_EQ(count, 1UL) << address;
+        EXPECT_GT(count, 1UL) << address;
         totalDials += count;
     }
-    EXPECT_EQ(totalDials, 5UL);
+    EXPECT_GT(totalDials, 5UL);
     EXPECT_GE(snapshotCalls, 2UL);
 }
 
@@ -754,7 +727,7 @@ TEST_F(CoordinatorLeaderRouterTest, RedirectDuplicateDoesNotDiluteRecoveringBudg
         std::chrono::milliseconds(1));
     EXPECT_TRUE(status.IsOk());
     EXPECT_EQ(budgets, (std::vector<std::chrono::milliseconds>{
-                          std::chrono::milliseconds(4), std::chrono::milliseconds(6),
+                          std::chrono::milliseconds(4), std::chrono::milliseconds(5),
                           std::chrono::milliseconds(5) }));
 }
 
@@ -842,9 +815,7 @@ TEST_F(CoordinatorLeaderRouterTest, HeaderlessBusinessErrorWithFollowersRetainsN
         Deadline(std::chrono::milliseconds(3)), std::chrono::milliseconds(3),
         std::chrono::milliseconds(1));
     EXPECT_EQ(status.GetCode(), K_NOT_READY);
-    // One dial per candidate: the static snapshot refresh does not reset failed-candidate
-    // memory, so the headerless error never overwrites the followers' NOT_LEADER verdict.
-    EXPECT_EQ(calls, 3);
+    EXPECT_GE(calls, 3U);
 }
 
 TEST_F(CoordinatorLeaderRouterTest, UnattemptedCandidateCannotOverwriteAcceptedResponse)
@@ -883,7 +854,7 @@ TEST_F(CoordinatorLeaderRouterTest, LaterCandidateTransportFailurePreservesAccep
         std::chrono::milliseconds(1));
     EXPECT_EQ(status.GetCode(), K_NOT_READY);
     EXPECT_EQ(status.GetMsg(), "leader election pending");
-    EXPECT_EQ(calls, 2);
+    EXPECT_GT(calls, 2U);
 }
 
 TEST_F(CoordinatorLeaderRouterTest, DeadlineWithoutAcceptedResponseRemainsTimeout)
@@ -941,7 +912,8 @@ TEST_F(CoordinatorLeaderRouterTest, HeaderlessNotReadySurvivesLaterCandidateTime
         },
         Deadline(std::chrono::milliseconds(3)), std::chrono::milliseconds(3), std::chrono::milliseconds(1));
     EXPECT_EQ(status.GetCode(), K_NOT_READY);
-    EXPECT_EQ(status.GetMsg(), "candidate recovering");
+    EXPECT_EQ(status.GetMsg().find("candidate recovering"), 0U);
+    EXPECT_NE(status.GetMsg().find("first_timeout_address=127.0.0.1:30002"), std::string::npos);
     EXPECT_EQ(attempts, 2U);
 }
 
@@ -986,6 +958,236 @@ TEST_F(CoordinatorLeaderRouterTest, RepeatedRouteChangesRespectOriginalDeadline)
     EXPECT_EQ(calls, 3);
     EXPECT_EQ(now, deadline);
     EXPECT_EQ(router.GetLeaderIdentity()->coordinatorId, "3");
+}
+
+TEST_F(CoordinatorLeaderRouterTest, RetriesTimedOutLeaderImmediatelyAfterRedirect)
+{
+    snapshots = { { "127.0.0.1:30001", "127.0.0.1:30002", "127.0.0.1:30003",
+                    "127.0.0.1:30004", "127.0.0.1:30005" } };
+    Router router(Dependencies());
+    ASSERT_TRUE(router.Execute([](const HostPort &, std::chrono::milliseconds) { return Response(State::SERVING); },
+                               Deadline(std::chrono::seconds(3)), std::chrono::seconds(3),
+                               std::chrono::milliseconds(50)).IsOk());
+    std::vector<std::string> attempts;
+    std::vector<std::chrono::milliseconds> budgets;
+    const auto deadline = Deadline(std::chrono::seconds(3));
+    const auto status = router.Execute(
+        [&](const HostPort &address, std::chrono::milliseconds timeout) {
+            attempts.push_back(address.ToString());
+            budgets.push_back(timeout);
+            if (attempts.size() == 1) {
+                now += timeout;
+                return TransportError(K_RPC_DEADLINE_EXCEEDED);
+            }
+            return address.ToString() == "127.0.0.1:30001"
+                       ? Response(State::SERVING)
+                       : Response(State::NOT_LEADER, Status::OK(), "127.0.0.1:30001");
+        },
+        deadline, std::chrono::seconds(3), std::chrono::milliseconds(50), false);
+
+    EXPECT_TRUE(status.IsOk()) << status.ToString();
+    EXPECT_EQ(attempts, (std::vector<std::string>{ "127.0.0.1:30001", "127.0.0.1:30002", "127.0.0.1:30001" }));
+    EXPECT_EQ(budgets.front(), std::chrono::milliseconds(1500));
+    ASSERT_EQ(waits.size(), 1U);
+    EXPECT_GE(waits.front(), std::chrono::milliseconds(50));
+    EXPECT_LE(waits.front(), std::chrono::milliseconds(75));
+    EXPECT_LT(now, deadline);
+}
+
+TEST_F(CoordinatorLeaderRouterTest, RedirectCanRetryAnInitiallyUnknownTimedOutLeader)
+{
+    snapshots = { { "127.0.0.1:30001", "127.0.0.1:30002" } };
+    Router router(Dependencies());
+    size_t leaderCalls = 0;
+    size_t followerCalls = 0;
+    const auto status = router.Execute(
+        [&](const HostPort &address, std::chrono::milliseconds timeout) {
+            if (address.ToString() == "127.0.0.1:30002") {
+                ++followerCalls;
+                return Response(State::NOT_LEADER, Status::OK(), "127.0.0.1:30001");
+            }
+            if (++leaderCalls < 3) {
+                now += timeout;
+                return TransportError(K_RPC_DEADLINE_EXCEEDED);
+            }
+            return Response(State::SERVING);
+        },
+        Deadline(std::chrono::seconds(3)), std::chrono::milliseconds(100), std::chrono::milliseconds(1),
+        false);
+    EXPECT_TRUE(status.IsOk()) << status.ToString();
+    EXPECT_EQ(leaderCalls, 3U);
+    EXPECT_EQ(followerCalls, 1U);
+}
+
+TEST_F(CoordinatorLeaderRouterTest, CachedLeaderRetriesWithoutCountLimit)
+{
+    snapshots = { { "127.0.0.1:30001" } };
+    Router router(Dependencies());
+    ASSERT_TRUE(router.Execute([](const HostPort &, std::chrono::milliseconds) { return Response(State::SERVING); },
+                               Deadline(std::chrono::seconds(3)), std::chrono::seconds(3),
+                               std::chrono::milliseconds(1)).IsOk());
+    size_t attempts = 0;
+    const auto deadline = Deadline(std::chrono::seconds(3));
+    const auto status = router.Execute(
+        [&](const HostPort &, std::chrono::milliseconds timeout) {
+            ++attempts;
+            now += timeout;
+            return TransportError(K_RPC_DEADLINE_EXCEEDED);
+        },
+        deadline, std::chrono::milliseconds(100), std::chrono::milliseconds(1), false);
+    EXPECT_EQ(status.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_GT(attempts, 3U);
+    EXPECT_GT(waits.size(), 2U);
+    EXPECT_EQ(now, deadline);
+    EXPECT_NE(status.ToString().find("first_timeout_address=127.0.0.1:30001"), std::string::npos);
+    EXPECT_NE(status.ToString().find("first_timeout_ms=100"), std::string::npos);
+    EXPECT_NE(status.ToString().find("retry_rounds="), std::string::npos);
+}
+
+TEST_F(CoordinatorLeaderRouterTest, DefaultRequestRetriesMoreThanTwice)
+{
+    snapshots = { { "127.0.0.1:30001" } };
+    Router router(Dependencies());
+    size_t calls = 0;
+    const auto deadline = Deadline(std::chrono::milliseconds(20));
+    const auto status = router.Execute(
+        [&](const HostPort &, std::chrono::milliseconds timeout) {
+            EXPECT_LE(now + timeout, deadline);
+            return ++calls < 5 ? TransportError(K_RPC_DEADLINE_EXCEEDED) : Response(State::SERVING);
+        }, deadline, std::chrono::milliseconds(10), std::chrono::milliseconds(1));
+    EXPECT_TRUE(status.IsOk());
+    EXPECT_EQ(calls, 5U);
+    EXPECT_LT(now, deadline);
+}
+
+TEST_F(CoordinatorLeaderRouterTest, UnreachableLeaderImmediatelyAdvancesToFollower)
+{
+    snapshots = { { "127.0.0.1:30001", "127.0.0.1:30002" } };
+    Router router(Dependencies());
+    ASSERT_TRUE(router.Execute([](const HostPort &, std::chrono::milliseconds) { return Response(State::SERVING); },
+        Deadline(std::chrono::seconds(3)), std::chrono::seconds(3), std::chrono::milliseconds(1)).IsOk());
+    const auto started = now;
+    std::vector<std::string> attempts;
+    const auto status = router.Execute(
+        [&](const HostPort &address, std::chrono::milliseconds) {
+            EXPECT_EQ(now, started);
+            attempts.push_back(address.ToString());
+            return address.Port() == 30001 ? TransportError(K_RPC_PEER_DEAD) : Response(State::SERVING);
+        }, Deadline(std::chrono::seconds(3)), std::chrono::seconds(3), std::chrono::milliseconds(1));
+    EXPECT_TRUE(status.IsOk());
+    EXPECT_EQ(attempts.size(), 2U);
+    EXPECT_TRUE(waits.empty());
+}
+
+TEST_F(CoordinatorLeaderRouterTest, TimeoutDoesNotOverrideTerminalBusinessError)
+{
+    snapshots = { { "127.0.0.1:30001", "127.0.0.1:30002" } };
+    Router router(Dependencies());
+    size_t attempts = 0;
+    const auto status = router.Execute(
+        [&](const HostPort &, std::chrono::milliseconds timeout) {
+            if (++attempts == 1) {
+                now += timeout;
+                return TransportError(K_RPC_DEADLINE_EXCEEDED);
+            }
+            return Response(State::SERVING, Status(K_INVALID, "invalid watch"));
+        },
+        Deadline(std::chrono::seconds(3)), std::chrono::milliseconds(100), std::chrono::milliseconds(1),
+        false);
+    EXPECT_EQ(status.GetCode(), K_INVALID);
+    EXPECT_EQ(attempts, 2U);
+    EXPECT_TRUE(waits.empty());
+}
+
+TEST_F(CoordinatorLeaderRouterTest, KnownLeaderBudgetIsIndependentOfReplicaCount)
+{
+    for (size_t replicas : { 3U, 5U, 7U }) {
+        std::vector<std::string> candidates;
+        for (size_t i = 0; i < replicas; ++i) {
+            candidates.push_back("127.0.0.1:" + std::to_string(30001 + i));
+        }
+        snapshots = { candidates };
+        Router router(Dependencies());
+        const auto rpc = [](const HostPort &, std::chrono::milliseconds) { return Response(State::SERVING); };
+        ASSERT_TRUE(router.Execute(rpc, Deadline(std::chrono::seconds(3)), std::chrono::seconds(3),
+                                   std::chrono::milliseconds(1)).IsOk());
+        ASSERT_TRUE(router.Execute(
+            [](const HostPort &, std::chrono::milliseconds timeout) {
+                EXPECT_EQ(timeout, std::chrono::milliseconds(1500));
+                return Response(State::SERVING);
+            },
+            Deadline(std::chrono::seconds(3)), std::chrono::seconds(3), std::chrono::milliseconds(1)).IsOk());
+    }
+}
+
+TEST_F(CoordinatorLeaderRouterTest, LeaderTimeoutRetriesRespectOriginalDeadline)
+{
+    snapshots = { { "127.0.0.1:30001" } };
+    Router router(Dependencies());
+    ASSERT_TRUE(router.Execute([](const HostPort &, std::chrono::milliseconds) { return Response(State::SERVING); },
+                               Deadline(std::chrono::seconds(3)), std::chrono::seconds(3),
+                               std::chrono::milliseconds(1)).IsOk());
+    size_t attempts = 0;
+    const auto deadline = Deadline(std::chrono::milliseconds(150));
+    const auto status = router.Execute(
+        [&](const HostPort &, std::chrono::milliseconds timeout) {
+            ++attempts;
+            EXPECT_LE(now + timeout, deadline);
+            now += timeout;
+            return TransportError(K_RPC_DEADLINE_EXCEEDED);
+        },
+        deadline, std::chrono::milliseconds(100), std::chrono::milliseconds(50), false);
+    EXPECT_EQ(status.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(attempts, 1U);
+    EXPECT_EQ(now, deadline);
+}
+
+TEST_F(CoordinatorLeaderRouterTest, InitialLeaderBudgetHonorsFloorDeadlineAndMaximum)
+{
+    snapshots = { { "127.0.0.1:30001" } };
+    Router router(Dependencies());
+    ASSERT_TRUE(router.Execute([](const HostPort &, std::chrono::milliseconds) { return Response(State::SERVING); },
+        Deadline(std::chrono::seconds(3)), std::chrono::seconds(3), std::chrono::milliseconds(1)).IsOk());
+    struct BudgetCase { int total; int maximum; int expected; };
+    for (const auto test : { BudgetCase{ 3000, 3000, 1500 }, BudgetCase{ 5000, 5000, 2500 },
+                             BudgetCase{ 1500, 1500, 1000 }, BudgetCase{ 800, 800, 800 },
+                             BudgetCase{ 3000, 100, 100 } }) {
+        const auto status = router.Execute(
+            [&](const HostPort &, std::chrono::milliseconds timeout) {
+                EXPECT_EQ(timeout.count(), test.expected);
+                now += timeout - std::chrono::milliseconds(1);
+                return Response(State::SERVING);
+            }, Deadline(std::chrono::milliseconds(test.total)), std::chrono::milliseconds(test.maximum),
+            std::chrono::milliseconds(1));
+        EXPECT_TRUE(status.IsOk());
+    }
+}
+
+TEST_F(CoordinatorLeaderRouterTest, RedirectCanUseRemainingTimeAfterInitialLeaderBudgetExpires)
+{
+    snapshots = { { "127.0.0.1:30001", "127.0.0.1:30002" } };
+    Router router(Dependencies());
+    ASSERT_TRUE(router.Execute([](const HostPort &, std::chrono::milliseconds) { return Response(State::SERVING); },
+        Deadline(std::chrono::seconds(3)), std::chrono::seconds(3), std::chrono::milliseconds(1)).IsOk());
+    size_t calls = 0;
+    const auto deadline = Deadline(std::chrono::seconds(3));
+    const auto status = router.Execute(
+        [&](const HostPort &address, std::chrono::milliseconds timeout) {
+            ++calls;
+            EXPECT_LE(now + timeout, deadline);
+            if (calls == 1) {
+                EXPECT_EQ(timeout.count(), 1500);
+                now += timeout;
+                return TransportError(K_RPC_DEADLINE_EXCEEDED);
+            }
+            if (address.Port() == 30002) {
+                return Response(State::NOT_LEADER, Status::OK(), "127.0.0.1:30001");
+            }
+            EXPECT_EQ(timeout.count(), 1499);
+            return Response(State::SERVING);
+        }, deadline, std::chrono::seconds(3), std::chrono::milliseconds(1));
+    EXPECT_TRUE(status.IsOk());
+    EXPECT_EQ(calls, 3U);
 }
 
 }  // namespace

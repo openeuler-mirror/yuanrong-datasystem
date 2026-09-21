@@ -22,7 +22,6 @@
 #include <mutex>
 #include <optional>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 #include "datasystem/common/util/net_util.h"
@@ -82,6 +81,14 @@ public:
     std::optional<LeaderIdentity> GetLeaderIdentity() const;
 
 private:
+    struct CallState {
+        size_t attempts{ 0 };
+        size_t retryRounds{ 0 };
+        std::string firstTimeoutAddress;
+        std::chrono::milliseconds firstTimeoutBudget{ 0 };
+        std::optional<RpcResponseHeader> lastHeader;
+    };
+
     enum class RoundAction {
         COMPLETE,
         RETRY,
@@ -97,7 +104,6 @@ private:
     struct CandidateRoundResult {
         RoundAction action;
         Status status;
-        std::optional<std::string> leaderHint;
     };
 
     struct CandidateAttemptResult {
@@ -118,20 +124,20 @@ private:
 
     Status Validate(const RpcCall &rpc, TimePoint deadline, std::chrono::milliseconds maxRpcTimeout,
                     std::chrono::milliseconds retryInterval) const;
+    Status ExecuteImpl(const RpcCall &rpc, TimePoint deadline, std::chrono::milliseconds maxRpcTimeout,
+                       std::chrono::milliseconds retryInterval, bool recoveryControl,
+                       CallState &call);
     CandidateRoundResult TryCandidates(std::deque<std::string> candidates, const RpcCall &rpc, TimePoint deadline,
                                        std::chrono::milliseconds maxRpcTimeout,
                                        std::chrono::milliseconds retryInterval, bool recoveryControl,
-                                       std::unordered_set<std::string> &attempted, Status &lastStatus,
-                                       bool &hasCoordinatorResponse);
+                                       Status &lastStatus, bool &hasCoordinatorResponse);
     CandidateAttemptResult TryCandidate(const std::string &address, const RpcCall &rpc, TimePoint deadline,
                                         std::chrono::milliseconds maxRpcTimeout,
                                         std::chrono::milliseconds retryInterval, bool recoveryControl,
                                         size_t remainingCandidateCount);
-    CandidateRoundResult FinishRound(bool hasResponse, Status status,
-                                     std::optional<std::string> nextRoundLeaderHint);
     std::optional<CandidateRoundResult> HandleResponse(
-        const RpcResult &result, bool recoveryControl, const std::unordered_set<std::string> &attempted,
-        std::deque<std::string> &candidates, std::optional<std::string> &nextRoundLeaderHint) const;
+        const RpcResult &result, bool recoveryControl, std::deque<std::string> &candidates,
+        TimePoint deadline, std::chrono::milliseconds retryInterval) const;
     bool WaitForRetry(TimePoint deadline, std::chrono::milliseconds retryInterval) const;
     std::optional<std::chrono::milliseconds> GetAttemptTimeout(
         TimePoint deadline, std::chrono::milliseconds maxRpcTimeout, size_t remainingCandidateCount) const;

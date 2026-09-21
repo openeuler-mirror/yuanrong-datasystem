@@ -14,18 +14,21 @@
  */
 #include "datasystem/common/coordinator/coordinator_discovery_cache.h"
 
+#include <algorithm>
+#include <random>
 #include <unordered_set>
 #include <utility>
 
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/strings_util.h"
 
 namespace datasystem {
 namespace {
 constexpr uint32_t DISCOVERY_FAILURE_LOG_EVERY_N = 100;
 
-std::vector<std::string> ValidCandidates(const std::vector<std::string> &candidates)
+std::vector<std::string> ShuffledValidCandidates(const std::vector<std::string> &candidates)
 {
     std::vector<std::string> valid;
     valid.reserve(candidates.size());
@@ -36,6 +39,10 @@ std::vector<std::string> ValidCandidates(const std::vector<std::string> &candida
             valid.emplace_back(address.ToString());
         }
     }
+    if (valid.size() > 1) {
+        thread_local std::mt19937 generator{ std::random_device{}() };
+        std::shuffle(valid.begin(), valid.end(), generator);
+    }
     return valid;
 }
 }  // namespace
@@ -43,9 +50,10 @@ std::vector<std::string> ValidCandidates(const std::vector<std::string> &candida
 CoordinatorDiscoveryCache::CoordinatorDiscoveryCache(std::shared_ptr<ICoordinatorDiscovery> discovery,
                                                      std::vector<std::string> initialCandidates)
     : discovery_(std::move(discovery)),
-      candidates_(ValidCandidates(initialCandidates)),
+      candidates_(ShuffledValidCandidates(initialCandidates)),
       thread_([this] { Run(); })
 {
+    LOG(INFO) << "Coordinator Discovery initial candidates: " << VectorToString(candidates_, false);
 }
 
 CoordinatorDiscoveryCache::~CoordinatorDiscoveryCache()
@@ -95,13 +103,16 @@ void CoordinatorDiscoveryCache::Run()
                 << "Coordinator Discovery refresh failed: " << status.ToString();
             continue;
         }
-        auto valid = ValidCandidates(discovered);
+        auto valid = ShuffledValidCandidates(discovered);
         if (valid.empty()) {
             LOG_EVERY_N(WARNING, DISCOVERY_FAILURE_LOG_EVERY_N)
                 << "Coordinator Discovery refresh returned no valid candidates";
             continue;
         }
         std::lock_guard<std::mutex> lock(mutex_);
+        if (!std::is_permutation(valid.begin(), valid.end(), candidates_.begin(), candidates_.end())) {
+            LOG(INFO) << "Coordinator Discovery candidates changed: " << VectorToString(valid, false);
+        }
         candidates_ = std::move(valid);
     }
 }

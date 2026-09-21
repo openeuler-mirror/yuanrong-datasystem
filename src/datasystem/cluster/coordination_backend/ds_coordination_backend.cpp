@@ -36,6 +36,7 @@
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "butil/time.h"
 
@@ -454,9 +455,26 @@ Status DsCoordinationBackend::PrepareWatchPlan(const std::vector<WatchKey> &watc
         std::vector<KeyValueEntry> initialKvs;
         int64_t watchId = 0;
         std::string responseCoordinatorId;
-        auto rc = proxy_->WatchRange(realKey, rangeEnd, watcherAddr_, pendingWatchRegistrationId_ + realKey,
-                                     watchId, initialKvs, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &responseCoordinatorId,
-                                     watchKey.skipInitialKvs);
+        constexpr int64_t watchRetryBudgetMs = 30'000;
+        constexpr int64_t watchRetryIntervalMs = 200;
+        Timer retryTimer(watchRetryBudgetMs);
+        Status rc;
+        do {
+            initialKvs.clear();
+            responseCoordinatorId.clear();
+            rc = proxy_->WatchRange(realKey, rangeEnd, watcherAddr_, pendingWatchRegistrationId_ + realKey,
+                                    watchId, initialKvs,
+                                    std::min<int64_t>(DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
+                                                      retryTimer.GetRemainingTimeMs()),
+                                    &responseCoordinatorId, watchKey.skipInitialKvs);
+            if ((!IsRetryableRpcError(rc) && rc.GetCode() != K_RPC_PEER_DEAD
+                 && rc.GetCode() != K_NOT_READY && rc.GetCode() != K_TRY_AGAIN)
+                || retryTimer.GetRemainingTimeMs() <= watchRetryIntervalMs) {
+                break;
+            }
+            LOG(WARNING) << "Retry Coordinator WatchRange key=" << realKey << ": " << rc.ToString();
+            std::this_thread::sleep_for(std::chrono::milliseconds(watchRetryIntervalMs));
+        } while (retryTimer.GetRemainingTimeMs() > 0);
         if (rc.IsOk() && !coordinatorId.empty() && coordinatorId != responseCoordinatorId) {
             LOG_IF_ERROR(proxy_->CancelWatch(watcherAddr_, { watchId }, responseCoordinatorId),
                          "Cancel current-generation watch");

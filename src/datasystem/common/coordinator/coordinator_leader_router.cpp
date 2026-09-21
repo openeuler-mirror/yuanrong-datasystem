@@ -16,6 +16,8 @@
 
 #include <algorithm>
 #include <deque>
+#include <random>
+#include <sstream>
 #include <unordered_set>
 #include <utility>
 
@@ -25,6 +27,18 @@
 
 namespace datasystem {
 namespace {
+constexpr auto MIN_INITIAL_LEADER_TIMEOUT = std::chrono::milliseconds(1'000);
+
+std::chrono::milliseconds RouteRetryDelay(std::chrono::milliseconds interval)
+{
+    constexpr auto maxDelay = std::chrono::milliseconds(200);
+    constexpr int jitterDivisor = 2;
+    const auto base = std::min(interval, maxDelay);
+    thread_local std::mt19937 generator{ std::random_device{}() };
+    return base + std::chrono::milliseconds(
+        std::uniform_int_distribution<int64_t>(0, base.count() / jitterDivisor)(generator));
+}
+
 Status DeadlineExceeded()
 {
     return Status(K_RPC_DEADLINE_EXCEEDED, "Coordinator routing deadline exceeded");
@@ -37,17 +51,6 @@ void AddCandidate(const std::string &candidate, std::unordered_set<std::string> 
         candidates.emplace_back(candidate);
     }
 }
-
-size_t CountUnattemptedCandidates(const std::deque<std::string> &candidates,
-                                  const std::unordered_set<std::string> &attempted)
-{
-    auto seen = attempted;
-    size_t count = 0;
-    for (const auto &candidate : candidates) {
-        count += seen.emplace(candidate).second;
-    }
-    return count;
-}
 }  // namespace
 
 CoordinatorLeaderRouter::CoordinatorLeaderRouter(Dependencies dependencies) : dependencies_(std::move(dependencies))
@@ -57,25 +60,70 @@ CoordinatorLeaderRouter::CoordinatorLeaderRouter(Dependencies dependencies) : de
 Status CoordinatorLeaderRouter::Execute(const RpcCall &rpc, TimePoint deadline, std::chrono::milliseconds maxRpcTimeout,
                                         std::chrono::milliseconds retryInterval, bool recoveryControl)
 {
-    auto status = Validate(rpc, deadline, maxRpcTimeout, retryInterval);
-    if (status.IsError()) {
-        return status;
-    }
+    RETURN_IF_NOT_OK(Validate(rpc, deadline, maxRpcTimeout, retryInterval));
 
-    std::optional<std::string> leaderHint;
+    const auto started = dependencies_.now();
+    CallState call;
+    const auto initialLeader = GetCachedLeaderAddress();
+    constexpr int leaderBudgetDivisor = 2;
+    const auto totalBudget = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - started);
+    const auto initialLeaderTimeout = std::min(
+        { maxRpcTimeout, totalBudget, std::max(totalBudget / leaderBudgetDivisor, MIN_INITIAL_LEADER_TIMEOUT) });
+    const auto trackedRpc = [&](const HostPort &address, std::chrono::milliseconds timeout) {
+        if (call.attempts == 0 && initialLeader.has_value() && address.ToString() == *initialLeader) {
+            const auto remaining =
+                std::chrono::duration_cast<std::chrono::milliseconds>(deadline - dependencies_.now());
+            if (remaining <= std::chrono::milliseconds::zero()) {
+                return RpcResult{ DeadlineExceeded(), std::nullopt };
+            }
+            timeout = std::min(initialLeaderTimeout, remaining);
+        }
+        ++call.attempts;
+        auto result = rpc(address, timeout);
+        const bool timedOut = !result.header.has_value()
+                              && result.status.GetCode() == K_RPC_DEADLINE_EXCEEDED
+                              && !IsBrpcServerApplicationError(result.status);
+        if (timedOut && call.firstTimeoutAddress.empty()) {
+            call.firstTimeoutAddress = address.ToString();
+            call.firstTimeoutBudget = timeout;
+        }
+        if (result.header.has_value() && !call.firstTimeoutAddress.empty()) {
+            call.lastHeader = result.header;
+        }
+        return result;
+    };
+    auto status = ExecuteImpl(trackedRpc, deadline, maxRpcTimeout, retryInterval, recoveryControl, call);
+    if (status.IsError() && !call.firstTimeoutAddress.empty()) {
+        std::ostringstream summary;
+        summary << "Coordinator route: first_timeout_address=" << call.firstTimeoutAddress
+                << " first_timeout_ms=" << call.firstTimeoutBudget.count() << " attempts=" << call.attempts
+                << " retry_rounds=" << call.retryRounds
+                << " elapsed_ms="
+                << std::chrono::duration_cast<std::chrono::milliseconds>(dependencies_.now() - started).count()
+                << " deadline_reached=" << (dependencies_.now() >= deadline);
+        if (call.lastHeader.has_value()) {
+            summary << " last_response_state=" << static_cast<int>(call.lastHeader->state)
+                    << " leader_hint=" << call.lastHeader->leaderAddress
+                    << " coordinator_id=" << CoordinatorIdLogPrefix(call.lastHeader->coordinatorId)
+                    << " term=" << call.lastHeader->leaderTerm;
+        }
+        status.AppendMsg(summary.str());
+    }
+    return status;
+}
+
+Status CoordinatorLeaderRouter::ExecuteImpl(const RpcCall &rpc, TimePoint deadline,
+                                            std::chrono::milliseconds maxRpcTimeout,
+                                            std::chrono::milliseconds retryInterval, bool recoveryControl,
+                                            CallState &call)
+{
     Status lastStatus = DeadlineExceeded();
-    // Failed-candidate memory spans refresh rounds of one logical call, so a static discovery
-    // snapshot cannot re-dial dead replicas every round; a new logical call starts fresh.
-    std::unordered_set<std::string> attempted;
     bool hasCoordinatorResponse = false;
     while (dependencies_.now() < deadline) {
         std::deque<std::string> candidates;
         std::unordered_set<std::string> seenCandidates;
         if (auto cached = GetCachedLeaderAddress(); cached.has_value()) {
             AddCandidate(*cached, seenCandidates, candidates);
-        }
-        if (leaderHint.has_value()) {
-            AddCandidate(*leaderHint, seenCandidates, candidates);
         }
         for (const auto &candidate : dependencies_.getCandidateSnapshot()) {
             AddCandidate(candidate, seenCandidates, candidates);
@@ -85,19 +133,16 @@ Status CoordinatorLeaderRouter::Execute(const RpcCall &rpc, TimePoint deadline, 
         }
 
         auto result = TryCandidates(std::move(candidates), rpc, deadline, maxRpcTimeout, retryInterval, recoveryControl,
-                                    attempted, lastStatus, hasCoordinatorResponse);
+                                    lastStatus, hasCoordinatorResponse);
         if (result.action == RoundAction::COMPLETE) {
             return result.status;
         }
         if (result.action == RoundAction::RETRY_CURRENT_ROUTE) {
-            // Leadership changed mid-call; the same address may now serve, so allow one re-dial.
-            attempted.clear();
-            leaderHint.reset();
             continue;
         }
-        leaderHint = std::move(result.leaderHint);
+        ++call.retryRounds;
         dependencies_.refreshCandidates();
-        if (!WaitForRetry(deadline, retryInterval)) {
+        if (!WaitForRetry(deadline, RouteRetryDelay(retryInterval))) {
             return result.status;
         }
     }
@@ -155,20 +200,14 @@ Status CoordinatorLeaderRouter::Validate(const RpcCall &rpc, TimePoint deadline,
 
 CoordinatorLeaderRouter::CandidateRoundResult CoordinatorLeaderRouter::TryCandidates(
     std::deque<std::string> candidates, const RpcCall &rpc, TimePoint deadline, std::chrono::milliseconds maxRpcTimeout,
-    std::chrono::milliseconds retryInterval, bool recoveryControl, std::unordered_set<std::string> &attempted,
-    Status &lastStatus, bool &hasCoordinatorResponse)
+    std::chrono::milliseconds retryInterval, bool recoveryControl, Status &lastStatus, bool &hasCoordinatorResponse)
 {
     bool hasResponse = false;
     bool headerlessNotReady = false;
-    std::optional<std::string> nextRoundLeaderHint;
     while (!candidates.empty()) {
         auto address = std::move(candidates.front());
         candidates.pop_front();
-        if (!attempted.emplace(address).second) {
-            continue;
-        }
-
-        const auto remainingCandidateCount = 1 + CountUnattemptedCandidates(candidates, attempted);
+        const auto remainingCandidateCount = 1 + candidates.size();
         auto attempt = TryCandidate(address, rpc, deadline, maxRpcTimeout, retryInterval, recoveryControl,
                                     remainingCandidateCount);
         const bool readinessOnly = attempt.rpcAttempted && !attempt.rpc.header.has_value()
@@ -186,30 +225,30 @@ CoordinatorLeaderRouter::CandidateRoundResult CoordinatorLeaderRouter::TryCandid
         hasResponse = hasResponse || attempt.hasResponse;
         headerlessNotReady = headerlessNotReady || readinessOnly;
         if (attempt.observation == ResponseObservation::ROUTE_CHANGED) {
-            return { RoundAction::RETRY_CURRENT_ROUTE, lastStatus, {} };
+            return { RoundAction::RETRY_CURRENT_ROUTE, lastStatus };
         }
         if (attempt.deadlineReached) {
-            return { RoundAction::COMPLETE, hasCoordinatorResponse ? lastStatus : DeadlineExceeded(), {} };
+            return { RoundAction::COMPLETE, hasCoordinatorResponse ? lastStatus : DeadlineExceeded() };
         }
         if (!attempt.rpc.header.has_value() && attempt.rpc.status.IsError()
             && attempt.rpc.status.GetCode() != K_NOT_READY
             && IsBrpcServerApplicationError(attempt.rpc.status)) {
-            return { RoundAction::COMPLETE, attempt.rpc.status, {} };
+            return { RoundAction::COMPLETE, attempt.rpc.status };
         }
         if (!attempt.rpc.header.has_value()) {
             continue;
         }
 
-        if (auto completed = HandleResponse(attempt.rpc, recoveryControl, attempted, candidates, nextRoundLeaderHint);
+        if (auto completed = HandleResponse(attempt.rpc, recoveryControl, candidates, deadline, retryInterval);
             completed.has_value()) {
             return std::move(*completed);
         }
     }
 
     if (headerlessNotReady && !hasResponse) {
-        return { RoundAction::COMPLETE, lastStatus, {} };
+        return { RoundAction::COMPLETE, lastStatus };
     }
-    return FinishRound(hasResponse || hasCoordinatorResponse, lastStatus, std::move(nextRoundLeaderHint));
+    return { RoundAction::RETRY, lastStatus };
 }
 
 CoordinatorLeaderRouter::CandidateAttemptResult CoordinatorLeaderRouter::TryCandidate(
@@ -258,33 +297,25 @@ CoordinatorLeaderRouter::CandidateAttemptResult CoordinatorLeaderRouter::TryCand
     return attempt;
 }
 
-CoordinatorLeaderRouter::CandidateRoundResult CoordinatorLeaderRouter::FinishRound(
-    bool hasResponse, Status status, std::optional<std::string> nextRoundLeaderHint)
-{
-    if (hasResponse) {
-        return { RoundAction::RETRY, std::move(status), std::move(nextRoundLeaderHint) };
-    }
-    dependencies_.refreshCandidates();
-    return { RoundAction::COMPLETE, std::move(status), {} };
-}
-
 std::optional<CoordinatorLeaderRouter::CandidateRoundResult> CoordinatorLeaderRouter::HandleResponse(
-    const RpcResult &result, bool recoveryControl, const std::unordered_set<std::string> &attempted,
-    std::deque<std::string> &candidates, std::optional<std::string> &nextRoundLeaderHint) const
+    const RpcResult &result, bool recoveryControl, std::deque<std::string> &candidates,
+    TimePoint deadline, std::chrono::milliseconds retryInterval) const
 {
     if (result.header->state == RpcResponseHeader::State::UNSPECIFIED
         || result.header->state == RpcResponseHeader::State::SERVING
         || (result.header->state == RpcResponseHeader::State::RECOVERING && recoveryControl)) {
-        return CandidateRoundResult{ RoundAction::COMPLETE, result.status, {} };
+        return CandidateRoundResult{ RoundAction::COMPLETE, result.status };
     }
     if (result.header->state != RpcResponseHeader::State::NOT_LEADER || result.header->leaderAddress.empty()) {
         return std::nullopt;
     }
-    if (attempted.count(result.header->leaderAddress) != 0) {
-        nextRoundLeaderHint = result.header->leaderAddress;
-    } else {
-        candidates.emplace_front(result.header->leaderAddress);
+    if (!WaitForRetry(deadline, retryInterval)) {
+        return CandidateRoundResult{ RoundAction::COMPLETE,
+            result.status.IsOk() ? Status(K_NOT_READY, "Coordinator leader redirect deadline exceeded")
+                                 : result.status };
     }
+    candidates.erase(std::remove(candidates.begin(), candidates.end(), result.header->leaderAddress), candidates.end());
+    candidates.emplace_front(result.header->leaderAddress);
     return std::nullopt;
 }
 
