@@ -25,6 +25,7 @@ Usage:
 
 import argparse
 import bisect
+import concurrent.futures
 import html
 import heapq
 import json
@@ -59,6 +60,9 @@ SEGMENT_DEFS = [
      "client_user_to_kernel_delay", "client 用户态发起 → client 内核 tcp 发送入口"),
     ("wire_c2s", "ClientTcpSendIn", "ServerTcpRecvFirst", 200,
      "network_c2s_transmission", "client 内核发送 → server 内核收包（线路传输+软中断）"),
+    ("server_recvq_to_recv", "ServerTcpRecvQue", "ServerTcpRecvFirst", 100,
+     "server_business_recv_slow",
+     "server 协议栈收包入队 → 业务调用 recv（业务收包；阻塞收包时 First 先于 Que 自动跳过）"),
     ("server_kernel_to_user", "ServerTcpRecvLast", "ServerRecv", 100,
      "server_kernel_to_user_delay", "server 内核收包完成 → server 用户态 ServerRecv（唤醒/调度）"),
     ("server_processing", "ServerRecv", "ServerSend", None,
@@ -67,6 +71,9 @@ SEGMENT_DEFS = [
      "server_user_to_kernel_delay", "server 用户态 ServerSend → server 内核 tcp 发送入口"),
     ("wire_s2c", "ServerTcpSendIn", "ClientTcpRecvFirst", 200,
      "network_s2c_transmission", "server 内核发送 → client 内核收包（线路传输+软中断）"),
+    ("client_recvq_to_recv", "ClientTcpRecvQue", "ClientTcpRecvFirst", 1000,
+     "client_business_recv_slow",
+     "client 协议栈收包入队 → 业务调用 recv（业务收包；阻塞收包时 First 先于 Que 自动跳过）"),
     ("client_kernel_to_user", "ClientTcpRecvLast", "ClientRecv", 1000,
      "client_kernel_to_user_delay", "client 内核收包完成 → client 用户态 ClientRecv（唤醒/调度）"),
 ]
@@ -100,11 +107,18 @@ CATEGORY_LABELS = {
     "server_processing_slow": "server 业务处理慢",
     "server_user_to_kernel_delay": "server 发送路径慢",
     "network_s2c_transmission": "server→client 网络传输慢",
+    "server_business_recv_slow": "server 业务收包慢（协议栈已收包入队，业务迟迟未调用 recv 取包）",
+    "client_business_recv_slow": "client 业务收包慢（协议栈已收包入队，业务迟迟未调用 recv 取包）",
+    "server_node_ingress_delay": "server 节点内收包→协议栈交付慢（veth 转发/软中断/排队）",
+    "client_node_ingress_delay": "client 节点内收包→协议栈交付慢（veth 转发/软中断/排队）",
+    "client_node_egress_delay": "client 节点内协议栈发送→驱动慢（qdisc 排队/协议栈处理）",
+    "server_node_egress_delay": "server 节点内协议栈发送→驱动慢（qdisc 排队/协议栈处理）",
     "client_kernel_to_user_delay": "client 收包后唤醒/用户态取包慢",
     "client_to_server_path": "client→server 方向整体异常（含网络/server 内核）",
     "server_to_client_path": "server→client 方向整体异常（含网络/client 内核）",
     "network_c2s_phys_wire_delay": "client→server 物理网卡间传输慢（网卡处理/物理线路，两侧节点内已排除）",
     "network_s2c_phys_wire_delay": "server→client 物理网卡间传输慢（网卡处理/物理线路，两侧节点内已排除）",
+    "interrupt_off_delay": "关中断过长导致收包/调度被推迟（irqoff 窗口定量归因）",
     "unknown": "无法定界（证据不足）",
 }
 
@@ -112,6 +126,23 @@ CATEGORY_LABELS = {
 # 线路耗时超下限 且 占线路段（TcpSendIn→对端 TcpRecvFirst）比例达标 → 判主导
 PHYS_WIRE_MIN_US = 1000     # 物理网卡间线路耗时下限(us)
 PHYS_WIRE_SHARE_PCT = 70.0  # 占线路段比例阈值(%)
+
+# tcp 收包类里程碑（TcpRecvFirst/Last/Que/SockReadable）的请求时间窗：
+# 长连接同五元组上存在多次请求交互，"first 出现即定格 / last 持续更新"的
+# 全生命周期语义会被相邻请求的同连接事件污染（典型：本请求 ClientRecv 之后
+# 下一请求的 recv_in 把 ClientTcpRecvLast 推后，慢段时间窗起点后移，真正
+# 慢的 seq 事件被挤出窗口）。窗口按本请求锚点区间限定：
+#   client 侧（响应收包）: [ClientSend, ClientRecv]
+#   server 侧（请求收包）: [ClientSend, max(ServerRecv, ServerSend)]
+# 锚点缺失的侧不加窗（保持旧全量行为）。client 侧锚点与 bpf 同节点，容差
+# 收紧；server 侧下界为跨节点锚点（ClientSend），容差放宽吸收节点间钟差。
+RECV_WIN_TOL_SAME_MS = 50    # 同节点容差（日志写出延迟 / 合成锚点 ±ms 级偏差）
+RECV_WIN_TOL_CROSS_MS = 200  # 跨节点容差（节点间时钟偏差）
+
+# 节点内定界（网卡↔协议栈）判定阈值：传输类瓶颈（network_*）命中时，
+# 瓶颈侧节点内段耗时超下限 且 占 wire 段比例达标 → 细分改写为节点内根因
+NODE_INTERNAL_MIN_US = 1000     # 节点内段耗时下限(us)
+NODE_INTERNAL_SHARE_PCT = 70.0  # 占 wire 段比例阈值(%)
 
 # 物理网卡间传输慢（seq 关联定界）排查建议（c2s/s2c 共用）
 _PHYS_WIRE_SUGGESTIONS = [
@@ -151,8 +182,38 @@ CATEGORY_SUGGESTIONS = {
         "检查 server→client 方向链路质量与时钟偏差",
         "查看 client 节点软中断负载",
     ],
+    "server_business_recv_slow": [
+        "检查 server 工作线程/协程是否被长任务或前序协程占用（收包处理不及时）",
+        "结合 server 侧唤醒链与线程调度轨迹，定位业务线程在入队→recv 之间的阻塞点（锁/IO/协程排队）",
+        "确认 bRPC worker 线程数与收包线程配置是否充足",
+    ],
+    "client_business_recv_slow": [
+        "检查 client 业务线程是否阻塞（锁/IO/协程排队），未及时调用 recv 取包",
+        "结合 client 侧唤醒链定位业务线程的调度与阻塞情况",
+    ],
+    "server_node_ingress_delay": [
+        "排查 server 节点收包路径：软中断负载（NET_RX 分布/CPU 占用）、veth 转发队列",
+        "检查 server 节点网卡中断/RSS 配置与 CPU 亲和性（收包软中断是否被挤压）",
+    ],
+    "client_node_ingress_delay": [
+        "排查 client 节点收包路径：软中断负载（NET_RX 分布/CPU 占用）、veth 转发队列",
+        "检查 client 节点网卡中断/RSS 配置与 CPU 亲和性（收包软中断是否被挤压）",
+    ],
+    "client_node_egress_delay": [
+        "检查 client 节点 qdisc 排队（tc -s qdisc show，队列打满/限速）与协议栈发送路径",
+        "结合问题窗口全景查看发送线程所在 cpu 的负载与软中断占用",
+    ],
+    "server_node_egress_delay": [
+        "检查 server 节点 qdisc 排队（tc -s qdisc show，队列打满/限速）与协议栈发送路径",
+        "结合问题窗口全景查看发送线程所在 cpu 的负载与软中断占用",
+    ],
     "network_c2s_phys_wire_delay": _PHYS_WIRE_SUGGESTIONS,
     "network_s2c_phys_wire_delay": _PHYS_WIRE_SUGGESTIONS,
+    "interrupt_off_delay": [
+        "结合 irqoff 日志中该 comm 的完整调用栈，定位长关中断临界区（spin_lock_irqsave 等）",
+        "检查该 cpu 上中断处理与软中断的相互影响（ksoftirqd 积压 / softirq 延迟）",
+        "考虑将业务线程/收包中断分布到不同 cpu，或缩短临界区",
+    ],
     "client_kernel_to_user_delay": [
         "重点核查 client 节点调度：结合 latency_warn 与 wakeup 链证据",
         "检查 client 进程 epoll/brpc 工作线程是否被抢占、CPU 是否被抢占或迁移",
@@ -182,6 +243,13 @@ INFO_LINE_RE = re.compile(
 SLOW_MARK = "[BRPC_RPC_FRAMEWORK_SLOW]"
 KV_RE = re.compile(r"(\w+)=([^\s|]+)")
 
+# 预热阶段 trace_id（UUID 格式，如 d855850b-54c6-4968-8cc2-1d4b974d88bc）：
+# 不计入业务 p99 统计，性能分析默认过滤（正常业务 trace 为 setStringView-/
+# getBuffer- 等前缀格式）；--trace 显式指定时不滤（用户主动要求）。
+WARMUP_TRACE_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE)
+
 # 锚点行尾可选扩展（新格式）：`... tid N cpu N bid N`（bid 为 bRPC bthread 协程号）
 _ANCHOR_TAIL = r"(?:\s+cpu\s+(?P<cpu>\d+))?(?:\s+bid\s+(?P<bid>\d+))?"
 CLIENT_SEND_RE = re.compile(r"ClientSend ts (\d+) tid (\d+)" + _ANCHOR_TAIL)
@@ -189,8 +257,11 @@ CLIENT_RECV_RE = re.compile(r"ClientRecv ts (\d+) tid (\d+)" + _ANCHOR_TAIL)
 SERVER_RECV_RE = re.compile(r"ServerRecv ts (\d+) tid (\d+)" + _ANCHOR_TAIL)
 SERVER_SEND_RE = re.compile(r"ServerSend ts (\d+) tid (\d+)" + _ANCHOR_TAIL)
 
-# bpf log: 21:31:21:060777 <event...>
-BPF_TS_RE = re.compile(r"^(?P<h>\d{2}):(?P<m>\d{2}):(?P<s>\d{2}):(?P<us>\d{6})\s+(?P<rest>.*)$")
+# bpf log: 21:31:21:060777 <event...>；新格式行首带序号：
+# 16438196 18:03:09:028931 <event...>（序号 + 空格 + tod）
+BPF_TS_RE = re.compile(r"^(?:\d+\s+)?(?P<h>\d{2}):(?P<m>\d{2}):(?P<s>\d{2}):(?P<us>\d{6})\s+(?P<rest>.*)$")
+# 新格式行的字节级 tod 提取（seek/全扫模式共用，老格式零开销）
+_BPF_SEQ_TOD_RE = re.compile(rb"^\d+\s+(?P<tod>\d{2}:\d{2}:\d{2}:\d{6})(?=\s|$)")
 
 BPF_TCP_RE = re.compile(
     r"^tcp\s+(?P<dir>recv|send)\s+(?P<phase>in|out|que)\s+tid\s+(?P<tid>\d+)\s+"
@@ -237,7 +308,7 @@ SOFTIRQ_LOOKBACK_MS = 50
 # 接收侧线路段（wire_*_phys）≥ 该值才做 wire 模式 softirq 回溯定位（us）
 SOFTIRQ_WIRE_MIN_US = 1000
 # kstack 续行（raise 行之后的无时间戳行）：8 空格 + symbol+offset
-KSTACK_FRAME_RE = re.compile(rb"^\s+[\w.:@$/\-]+\+\d+\s*$")
+KSTACK_FRAME_RE = re.compile(rb"^(?:\d+\s+)?\s+[\w.:@$/\-]+\+\d+\s*$")
 
 
 def _append_kstack_frame(ev, raw_line):
@@ -286,12 +357,14 @@ WARN_FILE_RE = re.compile(r"^(?P<name>.+)_(?P<ip>\d+\.\d+\.\d+\.\d+)$")
 # 发现阶段就地解压（等价 tar zxvf *.tar.gz .）后按普通文件匹配
 IRQOFF_FILE_RE = re.compile(r"^irqoff_latency_(?P<ip>\d+\.\d+\.\d+\.\d+)\.log$")
 NIC_FILE_RE = re.compile(r"^nic-(?P<ip>\d+\.\d+\.\d+\.\d+)\.log$")
+# NUMA 访存监控（dscollect_log/<ip>-<ip>-data_*/，节点身份在父目录名）
+NUMA_FILE_RE = re.compile(r"^(?P<kind>numafast|memory|perf)_\d{8}-\d{6}\.log$")
 BRPC_FILE_RE = re.compile(r"^(?P<pod>.+?)-brpc.*\.log$")
 TAR_SUFFIXES = (".tar.gz", ".tgz")
 # 应用日志按文件名识别（目录名不参与分类——采集目录名后续可能变化）：
 #   ds_client*（client）/ kvcache*（worker）；未知名 *.log 按内容嗅探兜底
 CLIENT_LOG_RE = re.compile(r"^ds_client.*\.log$")
-WORKER_LOG_RE = re.compile(r"^kvcache.*\.log$")
+WORKER_LOG_RE = re.compile(r"^(kvcache.*|access)\.log$")
 SNIFF_BYTES = 1 << 20  # 未知名日志角色嗅探读取的文件头大小（1MB）
 # 节点探测兜底：pod IP → 宿主机节点的 bpf 探测窗口前后余量(s)——
 # 目录名不可识别（无节点子串/IP/env/Host ID）时，用 trace 窗口探测
@@ -467,6 +540,10 @@ def _scan_file_job(job):
                 continue
             if only_traces and not any(t in trace_id for t in only_traces):
                 continue
+            # 预热阶段 UUID trace 默认过滤（不计入 p99）；--trace 显式指定
+            # 已通过上方 only 检查 = 用户主动要求，不再过滤
+            if not only_traces and WARMUP_TRACE_RE.match(trace_id):
+                continue
             try:
                 residual = int(kv.get("network_residual_us", "0"))
             except ValueError:
@@ -474,7 +551,7 @@ def _scan_file_job(job):
             if residual <= threshold_us:
                 continue
             recs.append(SlowRecord(trace_id, info["ts"], kv, str(p),
-                                   p.parent.name))
+                                   p.parent.name, host=info.get("host")))
         return ("slow", path_str, None, recs, None)
     # anchor_info 模式：锚点行 + 问题 trace 的全部 INFO 行一并收集；
     # 另提取日志正文 Host ID 行（pod→宿主机映射，不参与 trace 过滤）
@@ -601,7 +678,11 @@ def parse_bpf_line(line, day):
         sm = re.search(r"copied_seq:(\d+)", tail)
         if sm:
             ev["copied_seq"] = int(sm.group(1))
-        rn = re.search(r"rcv_nxt:(\d+)", tail)
+        tn = re.search(r"tp_rcv_nxt:(\d+)", tail)
+        if tn:
+            ev["tp_rcv_nxt"] = int(tn.group(1))
+        # 负向后顾：避免从 tp_rcv_nxt 前缀里误取 rcv_nxt
+        rn = re.search(r"(?<![a-z_])rcv_nxt:(\d+)", tail)
         if rn:
             ev["rcv_nxt"] = int(rn.group(1))
         return ev
@@ -1042,6 +1123,245 @@ def _nic_dev_stats(d):
     return out
 
 
+# ── NUMA 访存监控日志（dscollect_log/<ip>-<ip>-data_*/）───────────────────────
+# 三类物理机访存指标（可选输入，缺失自动降级）：
+#   numafast_*.log : NUMAFAST Report-N 块（numa score + 按 NID 的 RMA/LMA/%CPU）
+#   memory_*.log   : Memory Summary Report-N 块（cache miss% + DDR 带宽）
+#   perf_*.log     : perf stat round N 块（dTLB/iTLB-load-misses，1s/轮）
+NUMAFAST_REPORT_RE = re.compile(
+    r"NUMAFAST Report-\d+\(.*?\)\s+Time:(\d{8}-\d{6})")
+NUMAFAST_SCORE_RE = re.compile(r"System's numa score\s*:\s*([\d.]+)")
+# NID 表数据行：小整数 NID + 3 个 GB 流量 + %RMA + 2 个 GB 内存 + %MEM + %CPU
+# （PID 表行第二列后带 %，不会误匹配）
+NUMAFAST_NID_RE = re.compile(
+    r"^\s*(\d+)\s+([\d.]+)GB\s+([\d.]+)GB\s+([\d.]+)GB\s+([\d.]+)\s+"
+    r"([\d.]+)GB\s+([\d.]+)GB\s+([\d.]+)\s+([\d.]+)\s*$")
+MEMORY_REPORT_RE = re.compile(
+    r"Memory Summary Report-\d+\s+Time:(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})")
+MEMORY_MISS_RE = re.compile(r"^(L1D|L1I|L2D|L2I)\s+([\d.]+)%\s*$")
+MEMORY_DDRC_RE = re.compile(
+    r"^ddrc_(read|write)\s+([\d.]+)MB/s\s*$")
+# Memory metrics of the Cache：all 行六列 X|Y（带宽|命中率，带宽可 N/A）
+MEMORY_CACHE_RE = re.compile(r"^\s*all\s+(.+?)\s*$")
+MEMORY_CACHE_CELL_RE = re.compile(r"(\S+?)\|(\S+)")
+# L3 Read Bandwidth and Hit Rate：仅 NODE 汇总行（CCL=--）
+MEMORY_L3_RE = re.compile(
+    r"^\s*(\d+)\s+--\s+([\d.]+)MB/s\s+([\d.]+)MB/s\s+([\d.]+)%\s*$")
+# numafast 第 3 章 top 进程行（缩进不固定；树前缀 ├─/└─ 的线程行不匹配；
+# NID 表行第二列带 GB，也不会误匹配）
+NUMAFAST_PROC_RE = re.compile(
+    r"^\s*(\d+)\s+([\d.]+)\s+([\d.]+)%\s+([\d.]+)GB\s+([\d.]+)GB\s+"
+    r"([\d.]+)GB\s+([\d.]+)\s+(\S+)\s+(\S+|--)\s+(.+?)\s*$")
+# numafast 第 1 章访存矩阵：DST 表头行 + SRC 数据行
+# （单元格格式 traffic|numa distance|access percentage，如 0.12GB|10|78.71%）
+NUMAFAST_MX_DST_RE = re.compile(r"^\s*DST_\d+(\s+DST_\d+)*\s*$")
+NUMAFAST_MX_SRC_RE = re.compile(r"^SRC_(\d+)\s+(.+?)\s*$")
+NUMAFAST_MX_CELL_RE = re.compile(r"([\d.]+)GB\|(\d+)\|([\d.]+)%")
+PERF_ROUND_RE = re.compile(
+    r"==== perf stat round \d+/\d+ 开始时间 (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) ====")
+# 事件头（采集方列出的完整事件目录，新增指标据此动态识别）
+PERF_EVENTS_RE = re.compile(r"^==== 事件: (.+?) ====")
+# 通用数据行：<计数> <事件名> [注释（# 开头）/ 缩放标注 ((NN.NN%))]
+PERF_VALUE_RE = re.compile(
+    r"^\s*([\d,]+)\s+(\S+)\s*(?:#\s*(.+?)\s*)?\s*(?:\([\d.]+%\))?\s*$")
+PERF_COUNT_RE = re.compile(
+    r"^\s*([\d,]+)\s+(dTLB|iTLB)-load-misses\s*(?:\([\d.]+%\))?\s*$")
+PERF_UMMU_RE = re.compile(
+    r"^\s*([\d,]+)\s+ummu_pmcg_(\d)/tbu_tlb_cache_hit_rate/\s*$")
+
+
+def parse_numafast_log(path):
+    """逐 NUMAFAST Report 块解析 numafast_*.log → 时序记录列表。
+
+    每条：{ts, score, nids: {nid: {rma_die_gb, rma_skt_gb, lma_gb,
+    rma_pct, mem_all_gb, mem_free_gb, mem_pct, cpu_pct}},
+    procs: [{pid, command, score, access_pct, rma_die_gb, rma_skt_gb,
+    lma_gb, rma_pct, migrated, cpu_pct}]}（第 3 章 top 进程，
+    只取进程行，线程行 ├─/└─ 不解析），
+    matrix: {"s_d": {gb, dist, pct}}（第 1 章 SRC→DST 访存矩阵，
+    无矩阵段的报告无该键）。
+    文件小（每 2s 一报告），全量解析一次供概览图 / JSON 用。
+    """
+    out = []
+    try:
+        fh = open(path, "r", errors="replace")
+    except OSError:
+        return out
+    with fh:
+        cur = None
+        mx_ncols = 0
+        for line in fh:
+            m = NUMAFAST_REPORT_RE.search(line)
+            if m:
+                cur = {"ts": datetime.strptime(m.group(1), "%Y%m%d-%H%M%S"),
+                       "score": None, "nids": {}, "procs": []}
+                out.append(cur)
+                continue
+            if cur is None:
+                continue
+            m = NUMAFAST_SCORE_RE.search(line)
+            if m:
+                cur["score"] = float(m.group(1))
+                continue
+            # 第 1 章访存矩阵：DST 表头记录列数，SRC 行按列数拆单元格
+            if NUMAFAST_MX_DST_RE.match(line):
+                mx_ncols = len(re.findall(r"DST_\d+", line))
+                continue
+            m = NUMAFAST_MX_SRC_RE.match(line)
+            if m and mx_ncols:
+                cells = NUMAFAST_MX_CELL_RE.findall(m.group(2))
+                if len(cells) == mx_ncols:
+                    mx = cur.setdefault("matrix", {})
+                    for dst, (gb, dist, pct) in enumerate(cells):
+                        mx["%s_%d" % (m.group(1), dst)] = {
+                            "gb": float(gb), "dist": int(dist),
+                            "pct": float(pct)}
+                continue
+            m = NUMAFAST_NID_RE.match(line)
+            if m:
+                cur["nids"][m.group(1)] = {
+                    "rma_die_gb": float(m.group(2)),
+                    "rma_skt_gb": float(m.group(3)),
+                    "lma_gb": float(m.group(4)),
+                    "rma_pct": float(m.group(5)),
+                    "mem_all_gb": float(m.group(6)),
+                    "mem_free_gb": float(m.group(7)),
+                    "mem_pct": float(m.group(8)),
+                    "cpu_pct": float(m.group(9))}
+                continue
+            # 第 3 章 top 进程行（线程行 ├─/└─ 树前缀不匹配）
+            m = NUMAFAST_PROC_RE.match(line)
+            if m:
+                cur["procs"].append({
+                    "pid": int(m.group(1)),
+                    "score": float(m.group(2)),
+                    "access_pct": float(m.group(3)),
+                    "rma_die_gb": float(m.group(4)),
+                    "rma_skt_gb": float(m.group(5)),
+                    "lma_gb": float(m.group(6)),
+                    "rma_pct": float(m.group(7)),
+                    "migrated": m.group(8),
+                    "cpu_pct": (None if m.group(9) == "--"
+                                else float(m.group(9))),
+                    "command": m.group(10)})
+    return out
+
+
+def parse_memory_log(path):
+    """逐 Memory Summary Report 块解析 memory_*.log → 时序记录列表。
+
+    每条：{ts, l1d/l1i/l2d/l2i_miss_pct, ddrc_read_mb_s, ddrc_write_mb_s,
+    l1d/l1i/l2d/l2i/l2dtlb/l2itlb_bw_mb_s + _hit_pct（Cache 带宽/命中率，
+    N/A → None）, l3_nid{n}_hit_bw_mb_s / _read_bw_mb_s / _hit_pct
+    （L3 读带宽与命中率，仅 NODE 汇总行）}。
+    """
+    out = []
+    try:
+        fh = open(path, "r", errors="replace")
+    except OSError:
+        return out
+    with fh:
+        cur = None
+        for line in fh:
+            m = MEMORY_REPORT_RE.search(line)
+            if m:
+                cur = {"ts": datetime.strptime(m.group(1), "%Y/%m/%d %H:%M:%S")}
+                out.append(cur)
+                continue
+            if cur is None:
+                continue
+            m = MEMORY_MISS_RE.match(line)
+            if m:
+                cur["%s_miss_pct" % m.group(1).lower()] = float(m.group(2))
+                continue
+            m = MEMORY_DDRC_RE.match(line)
+            if m:
+                cur["ddrc_%s_mb_s" % m.group(1)] = float(m.group(2))
+                continue
+            # Memory metrics of the Cache：all 行六列 X|Y（带宽|命中率）
+            m = MEMORY_CACHE_RE.match(line)
+            if m:
+                cells = MEMORY_CACHE_CELL_RE.findall(m.group(1))
+                cols = ("l1d", "l1i", "l2d", "l2i", "l2dtlb", "l2itlb")
+                if len(cells) == len(cols):
+                    for col, (bw, hit) in zip(cols, cells):
+                        cur["%s_bw_mb_s" % col] = (
+                            None if bw == "N/A"
+                            else float(bw.replace("MB/s", "")))
+                        cur["%s_hit_pct" % col] = (
+                            None if hit == "N/A"
+                            else float(hit.rstrip("%")))
+                continue
+            # L3 Read Bandwidth and Hit Rate（仅 NODE 汇总行，CCL=--）
+            m = MEMORY_L3_RE.match(line)
+            if m:
+                nid = m.group(1)
+                cur["l3_nid%s_hit_bw_mb_s" % nid] = float(m.group(2))
+                cur["l3_nid%s_read_bw_mb_s" % nid] = float(m.group(3))
+                cur["l3_nid%s_hit_pct" % nid] = float(m.group(4))
+    return out
+
+
+def parse_perf_log(path):
+    """逐 perf stat round 块解析 perf_*.log → 时序记录列表。
+
+    perf stat 事件会不断增加（如 ummu_pmcg_*/tcu_cntx_cache_miss_num/ 等），
+    解析不写死事件清单，动态识别 round 块内的全部数据行：
+      - `==== 事件: e1,e2,... ====` 事件头注册事件目录（无头时接受全部
+        匹配行，"N.NNN seconds time elapsed" 等小数行天然不匹配）；
+      - 每条记录：{ts, values: {事件名: 计数}, comments: {事件名: 注释}}
+        （1s/轮，计数去千分位逗号；行缺失的事件不在 values 中）；
+      - 已知事件额外填充旧字段（dtlb/itlb_load_misses、
+        ummu_pmcg_N_tlb_hit_rate）保持向后兼容。
+    """
+    out = []
+    try:
+        fh = open(path, "r", errors="replace")
+    except OSError:
+        return out
+    with fh:
+        cur = None
+        events = set()   # 事件头注册的事件目录（新指标动态识别依据）
+        for line in fh:
+            m = PERF_EVENTS_RE.match(line)
+            if m:
+                events.update(e.strip() for e in m.group(1).split(",")
+                              if e.strip())
+                continue
+            m = PERF_ROUND_RE.search(line)
+            if m:
+                cur = {"ts": datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"),
+                       "values": {}, "comments": {},
+                       "dtlb_load_misses": None, "itlb_load_misses": None,
+                       "ummu_pmcg_0_tlb_hit_rate": None,
+                       "ummu_pmcg_1_tlb_hit_rate": None}
+                out.append(cur)
+                continue
+            if cur is None:
+                continue
+            m = PERF_VALUE_RE.match(line)
+            if not m:
+                continue
+            evt = m.group(2)
+            if events and evt not in events:
+                continue   # 不在事件目录中的行不收（防误匹配）
+            val = int(m.group(1).replace(",", ""))
+            cur["values"][evt] = val
+            if m.group(3):
+                cur["comments"][evt] = m.group(3).strip()
+            # 已知事件旧字段（向后兼容旧消费者）
+            if evt == "dTLB-load-misses":
+                cur["dtlb_load_misses"] = val
+            elif evt == "iTLB-load-misses":
+                cur["itlb_load_misses"] = val
+            else:
+                mm = re.fullmatch(r"ummu_pmcg_(\d+)/tbu_tlb_cache_hit_rate/",
+                                  evt)
+                if mm:
+                    cur["ummu_pmcg_%s_tlb_hit_rate" % mm.group(1)] = val
+    return [r for r in out if r["values"]]
+
+
 def _parse_bthread_event(line, dt):
     """brpc bthread 日志行 → 事件 dict（不匹配返回 None）。
 
@@ -1136,14 +1456,15 @@ def scan_bthread_windows(path, windows):
 # ── Data containers ───────────────────────────────────────────────────────────
 
 class SlowRecord:
-    __slots__ = ("trace_id", "ts", "fields", "log_path", "pod_dir")
+    __slots__ = ("trace_id", "ts", "fields", "log_path", "pod_dir", "host")
 
-    def __init__(self, trace_id, ts, fields, log_path, pod_dir):
+    def __init__(self, trace_id, ts, fields, log_path, pod_dir, host=None):
         self.trace_id = trace_id
         self.ts = ts
         self.fields = fields
         self.log_path = log_path
         self.pod_dir = pod_dir
+        self.host = host   # SLOW 行 host 列（client pod IP；新格式锚点合成用）
 
 
 class TraceContext:
@@ -1154,8 +1475,11 @@ class TraceContext:
         self.client_pod_dir = slow.pod_dir
         self.client_node = None
         self.server_node = None
+        self.server_pod_dir = None
         self.client_node_note = None  # client 无法映射时的诊断（如宿主机 IP 已知但 bpf 未采集）
         self.server_node_note = None  # server 同上
+        self.client_host_ip = None    # client 节点宿主机 IP（ip_by_node 反查，报告/JSON 展示）
+        self.server_host_ip = None    # server 同上
         self.conn_source = None  # 连接五元组识别来源：client_tcp（确证）/ client_nic（推测）/ server_tcp（回退）/ client_port（端口+时间配对推测）
         self.client_only = False  # server IP 未知（worker 日志未收集）：client 侧单侧关联
         self.client_ip = None
@@ -1194,6 +1518,14 @@ class TraceContext:
         # 慢段窗口：瓶颈段时间窗内该侧全部连接的 bpf 事件（高亮问题五元组 +
         # 过滤选择），bpf 事件明细"慢段时间窗事件"子项数据源
         self.slow_seg = {}
+        # 窗口级定量归因（irqoff/nic/numa 从"展示"升级为参与推理）：
+        # quant_evidence 定量文本；irqoff_quant/numa_quant/nic_quant 命中详情
+        self.quant_evidence = []
+        self.irqoff_quant = None
+        self.numa_quant = None
+        self.nic_quant = None
+        # 推测链路证据（锚点日志缺失时的内核事件推测/client 单侧推测，◇ 前缀）
+        self.infer_evidence = []
 
 
 # ── Phase 0: log discovery ────────────────────────────────────────────────────
@@ -1214,7 +1546,10 @@ class LogDiscovery:
         self.nic_by_node = {}      # nodeName -> path（sar 网卡利用率日志）
         self.nic_by_ip = {}        # nodeIp -> path（同上）
         self.brpc_by_pod = {}      # podName -> path（bRPC bthread 日志）
-        self.aux_stats = {"irqoff": {}, "nic": {}}  # 辅助日志全周期统计
+        self.numa_by_node = {}     # node/IP -> {numafast/memory/perf: path}
+        self.ip_by_node = {}       # 节点名 -> IP（node_by_ip 反向，宿主机 IP 反查用）
+        self.aux_stats = {"irqoff": {}, "nic": {}, "numa": {},
+                          "nodes": {}}  # 辅助日志全周期统计 + 概览节点信息表
         self._discover()
 
     @staticmethod
@@ -1233,16 +1568,23 @@ class LogDiscovery:
     def _extract_archives(directory, workers=1):
         """就地解压目录下的 *.tar.gz（超大日志归档，等价 tar zxvf *.tar.gz .）。
 
-        pigz/tar 可用时优先并行解压（--use-compress-program="pigz -p N"，
-        N 与 --workers 一致）；否则/失败时回退 Python tarfile。
-        解压失败（坏包/权限）时告警并跳过，不影响其余日志发现。
+        pigz 解压单个归档近似单线程，多归档并行才是主要收益：
+        ThreadPoolExecutor 并发解压多个归档，并发数 = min(归档数, workers)，
+        单归档 pigz -p = workers // 并发数（workers 与 --workers 一致）。
+        pigz/tar 不可用或单归档失败时回退 Python tarfile；
+        解压失败（坏包/权限）告警并跳过，不影响其余日志发现。
         """
         use_pigz = bool(shutil.which("pigz")) and bool(shutil.which("tar"))
-        for f in sorted(directory.iterdir()):
-            if not f.is_file() or not f.name.endswith(TAR_SUFFIXES):
-                continue
-            if use_pigz and LogDiscovery._extract_via_tar(f, directory, workers):
-                continue
+        archives = [f for f in sorted(directory.iterdir())
+                    if f.is_file() and f.name.endswith(TAR_SUFFIXES)]
+        if not archives:
+            return
+        n_parallel = min(len(archives), max(1, workers))
+        per_pigz = max(1, workers // n_parallel)
+
+        def _extract_one(f):
+            if use_pigz and LogDiscovery._extract_via_tar(f, directory, per_pigz):
+                return
             try:
                 with tarfile.open(f, "r:*") as tf:
                     try:
@@ -1251,6 +1593,9 @@ class LogDiscovery:
                         tf.extractall(directory)
             except (tarfile.TarError, OSError) as exc:
                 print("warning: 解压失败 %s: %s" % (f, exc), file=sys.stderr)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_parallel) as pool:
+            list(pool.map(_extract_one, archives))
 
     def _scan_env_file(self, path):
         """解析 collected*_logs/<pod>/env：pod_ip / 宿主机 IP 映射。
@@ -1286,6 +1631,7 @@ class LogDiscovery:
         canon = self.node_by_ip.get(ip)
         if canon is None:
             self.node_by_ip[ip] = name
+            self.ip_by_node[name] = ip
             return name
         if name != canon:
             self.node_alias[name] = canon
@@ -1338,7 +1684,7 @@ class LogDiscovery:
         for d in archive_dirs:
             self._extract_archives(d, self.workers)
         # 2) 全树分类
-        irqoff_pending, nic_pending = [], []
+        irqoff_pending, nic_pending, numa_pending = [], [], []
         for f in sorted(root.rglob("*")):
             if not f.is_file() or f.name.endswith(TAR_SUFFIXES):
                 continue
@@ -1358,6 +1704,17 @@ class LogDiscovery:
             m = NIC_FILE_RE.match(name)
             if m:
                 nic_pending.append((m.group("ip"), f))
+                continue
+            m = NUMA_FILE_RE.match(name)
+            if m:
+                # 节点身份取父目录名首 IP（<ip>-<ip>-data_<ts>，numa 文件
+                # 本身无节点信息；目录其余部分可任意变化）
+                pm = re.search(r"\d+\.\d+\.\d+\.\d+", f.parent.name)
+                if pm:
+                    numa_pending.append((pm.group(0), m.group("kind"), f))
+                else:
+                    print("warning: numa 日志目录名无 IP，跳过 %s" % f,
+                          file=sys.stderr)
                 continue
             m = BRPC_FILE_RE.match(name)
             if m:
@@ -1393,6 +1750,9 @@ class LogDiscovery:
                 self.nic_by_node[node] = f
             else:
                 self.nic_by_ip[ip] = f
+        for ip, kind, f in numa_pending:
+            node = self.node_by_ip.get(ip) or ip
+            self.numa_by_node.setdefault(node, {})[kind] = f
 
     def resolve_node(self, pod_dir_name):
         """pod 目录名 → 节点名（规范名）。
@@ -1431,6 +1791,16 @@ class LogDiscovery:
             return None
         m = re.search(r"\d+\.\d+\.\d+\.\d+", pod_dir_name)
         return self.host_by_podip.get(m.group(0)) if m else None
+
+    def host_ip_of_node(self, node):
+        """节点名 → 宿主机 IP（ip_by_node 反查；节点名本身是 IP 时直接返回）。
+
+        报告/JSON 中 worker/client 节点对应宿主机 IP 展示用。
+        """
+        if not node:
+            return None
+        return self.ip_by_node.get(node) or (
+            node if re.match(r"^\d+\.\d+\.\d+\.\d+$", node) else None)
 
 
 # ── Phase 1: client log scan for slow records ─────────────────────────────────
@@ -1614,6 +1984,15 @@ def build_anchors(ctx, client_lines, worker_lines):
         ctx.missing.append("worker 日志中未找到该 trace 的 ServerRecv/ServerSend 锚点"
                            "（对应 worker 的日志可能未收集，无法计算 server 侧与跨节点分段）")
 
+    _finalize_anchors(ctx)
+
+
+def _finalize_anchors(ctx):
+    """锚点收尾：client/server IP 解析 + 宏观三段 + 里程碑填充。
+
+    build_anchors（锚点行匹配）与 _synthesize_anchors_from_slow（SLOW 行
+    内嵌时间戳合成）完成后都调用，保证两条路径的 ctx 状态一致。
+    """
     cs = ctx.anchors.get("ClientSend")
     cr = ctx.anchors.get("ClientRecv")
     sr = ctx.anchors.get("ServerRecv")
@@ -1642,6 +2021,210 @@ def _anchor(info, m):
             "host": info["host"],
             "pod_dir": info["_pod_dir"], "log_path": info["_path"],
             "raw": info["raw"]}
+
+
+def _recover_server_from_info(ctx, trace_info_lines):
+    """ServerRecv/ServerSend 锚点行缺失（锚点日志为可选项）时的 server 侧恢复。
+
+    worker 日志中存在该 trace 的业务行（任意 INFO 行）→ host 列即 worker pod
+    IP：恢复 server_ip / server_pod_dir，使 server 节点解析与 bpf 窗口构建
+    照常进行，server 侧链路按 bpf 内核事件推测（ServerTcpRecvFirst≈请求交付、
+    ServerTcpSendIn≈响应发出）。锚点行缺失原因：worker 日志级别未打/轮转/采样。
+    返回是否恢复成功。
+    """
+    for source, path_str, line in (trace_info_lines or []):
+        if source != "worker":
+            continue
+        info = parse_info_line(line)
+        if not info or not info.get("host"):
+            continue
+        ctx.server_ip = info["host"]
+        ctx.server_pod_dir = Path(path_str).parent.name
+        ctx.missing.append(
+            "worker 日志中未找到该 trace 的 ServerRecv/ServerSend 锚点行"
+            "（锚点日志为可选项，新日志格式不再输出锚点行，或因日志级别/轮转缺失）："
+            "已从 worker 业务行（%s，host=%s）恢复 server pod，server 侧链路将按"
+            " SLOW 行内嵌时间戳合成锚点或 bpf 内核事件推测"
+            "（ServerTcpRecvFirst≈请求交付业务、ServerTcpSendIn≈响应发出）"
+            % (Path(path_str).name, info["host"]))
+        return True
+    return False
+
+
+# worker 侧 URMA（RDMA 数据面）[SLOW LOG] 行的 trace_us 单调钟参考（us）：
+# trace_us:{post:..., wait:..., observed:..., ...}——行墙钟与其中最近的
+# 单调钟值（优先 observed，缺省取最大值）之差即 worker 单调钟→墙钟偏移
+_URMA_TRACE_US_RE = re.compile(r"trace_us:\{([^}]*)\}")
+_URMA_TRACE_KV_RE = re.compile(r"(\w+):(\d+)")
+
+
+def _urma_trace_us_ref(msg):
+    """worker URMA 行 trace_us 内最接近行写出时刻的单调钟值（us）。
+
+    URMA_ELAPSED_TOTAL 行在完成（observed）后写出，优先取 observed；
+    无 observed 时取全部数值的最大值（最晚事件）。返回 int 或 None。
+    """
+    m = _URMA_TRACE_US_RE.search(msg or "")
+    if not m:
+        return None
+    kvs = _URMA_TRACE_KV_RE.findall(m.group(1))
+    if not kvs:
+        return None
+    obs = dict(kvs).get("observed")
+    if obs is not None:
+        return int(obs)
+    return max(int(v) for _k, v in kvs)
+
+
+def _synth_anchor(ts, host, tid, pod_dir, log_path, note):
+    """合成锚点 dict（与锚点行锚点结构兼容 + synth 标记区分来源）。"""
+    return {"ts": ts, "tid": tid, "cpu": None, "bid": None, "host": host,
+            "pod_dir": pod_dir, "log_path": log_path, "raw": note,
+            "synth": True}
+
+
+def _synthesize_anchors_from_slow(ctx, trace_info_lines):
+    """锚点行缺失（新日志格式不再输出 ClientSend/ServerRecv ts 锚点行）时，
+    从 SLOW 行内嵌的四个 ns 时间戳合成锚点。
+
+    ClientSend/ClientRecv 为 client 机器单调钟（差值 = e2e 精确时长），
+    ServerRecv/ServerSend 为 worker 机器单调钟（差值 = server 处理精确时长），
+    跨机器单调钟不可直接比较，各自换算墙钟：
+      - client：SLOW 行墙钟 ≈ ClientRecv + 日志写出延迟 ε（< 窗口 pad）；
+        ClientSend = SLOW 行墙钟 - e2e（两 ns 值精确差值）
+      - server：优先 worker URMA 行 trace_us（worker 单调钟→墙钟偏移，
+        精度 ±ms 内）；无 URMA 行时用 worker 首个 trace 行墙钟近似
+        （业务行在处理期间写出，±ms 级，够窗口扫描）
+    sr/ss 超出 [cs-60s, cr+60s] 合理性窗 → 放弃 server 合成（换算参考有误）。
+    合成锚点带 synth 标记，◇ 推测证据说明方法与精度。
+    """
+    f = ctx.slow.fields
+
+    # ── client 侧：ClientSend/ClientRecv ──
+    cs, cr = (ctx.anchors.get("ClientSend"), ctx.anchors.get("ClientRecv"))
+    if not (cs and cr):
+        cs_ns, cr_ns = f.get("ClientSend"), f.get("ClientRecv")
+        if cs_ns and cr_ns and cs_ns.isdigit() and cr_ns.isdigit():
+            e2e_us = (int(cr_ns) - int(cs_ns)) / 1000.0
+            if e2e_us >= 0:
+                cr_wall = ctx.slow.ts
+                cs_wall = cr_wall - timedelta(microseconds=e2e_us)
+                host = ctx.slow.host
+                tid = f.get("tid")
+                note = ("(SLOW 行内嵌时间戳合成：ClientRecv≈SLOW 行墙钟，"
+                        "ClientSend=墙钟-e2e %s us)" % fmt_us(e2e_us))
+                ctx.anchors["ClientSend"] = _synth_anchor(
+                    cs_wall, host, tid, ctx.slow.pod_dir,
+                    ctx.slow.log_path, note)
+                ctx.anchors["ClientRecv"] = _synth_anchor(
+                    cr_wall, host, tid, ctx.slow.pod_dir,
+                    ctx.slow.log_path, note)
+                ctx.client_ip = host
+                ctx.infer_evidence.append(
+                    "锚点行缺失（新日志格式）：ClientSend/ClientRecv 由 SLOW 行"
+                    "内嵌 ns 时间戳合成——e2e=%s（client 单调钟精确差值），墙钟以 "
+                    "SLOW 行时间（%s）为 ClientRecv 基准（±日志写出延迟）"
+                    % (fmt_us(e2e_us), fmt_dt(cr_wall)))
+            else:
+                ctx.missing.append(
+                    "SLOW 行 ClientSend/ClientRecv 内嵌时间戳差值为负"
+                    "（%s → %s），不合成 client 锚点" % (cs_ns, cr_ns))
+        elif not (cs or cr):
+            ctx.missing.append(
+                "SLOW 行无 ClientSend/ClientRecv 内嵌时间戳（新日志格式外的"
+                "异常行），无法合成 client 锚点")
+
+    # ── server 侧：ServerRecv/ServerSend ──
+    sr, ss = (ctx.anchors.get("ServerRecv"), ctx.anchors.get("ServerSend"))
+    if not (sr and ss) and ctx.server_ip:
+        sr_ns, ss_ns = f.get("ServerRecv"), f.get("ServerSend")
+        if not (sr_ns and ss_ns and sr_ns.isdigit() and ss_ns.isdigit()):
+            ctx.missing.append(
+                "SLOW 行无 ServerRecv/ServerSend 内嵌时间戳，无法合成 server 锚点"
+                "（server 侧链路将按 bpf 内核事件推测）")
+        else:
+            sr_ns_i, ss_ns_i = int(sr_ns), int(ss_ns)
+            worker_infos = []
+            for source, path_str, line in (trace_info_lines or []):
+                if source != "worker":
+                    continue
+                info = parse_info_line(line)
+                if info:
+                    info["_path"] = path_str
+                    worker_infos.append(info)
+            if not worker_infos:
+                ctx.missing.append(
+                    "worker 日志中无该 trace 的业务行，无法换算 ServerRecv/"
+                    "ServerSend 墙钟（worker 单调钟→墙钟无参考），不合成 server 锚点")
+            else:
+                # worker 单调钟→墙钟偏移：优先 URMA trace_us，兜底首行墙钟
+                offset, method = None, None
+                for info in worker_infos:
+                    mono = _urma_trace_us_ref(info["msg"])
+                    if mono is not None:
+                        offset = info["ts"] - timedelta(microseconds=mono)
+                        method = ("worker URMA 行 trace_us 换算"
+                                  "（observed≈行写出时刻，精度 ±ms）")
+                        break
+                if offset is not None:
+                    sr_wall = offset + timedelta(
+                        microseconds=sr_ns_i / 1000.0)
+                    ss_wall = offset + timedelta(
+                        microseconds=ss_ns_i / 1000.0)
+                else:
+                    sr_wall = min(i["ts"] for i in worker_infos)
+                    ss_wall = sr_wall + timedelta(
+                        microseconds=(ss_ns_i - sr_ns_i) / 1000.0)
+                    method = ("worker 首行业务行墙钟近似（±ms 级）")
+                # 合理性校验：sr 必须落在 [cs-60s, cr+60s] 内
+                cs_t = (ctx.anchors.get("ClientSend") or {}).get("ts")
+                cr_t = (ctx.anchors.get("ClientRecv") or {}).get("ts")
+                lo = (cs_t or ctx.slow.ts) - timedelta(seconds=60)
+                hi = (cr_t or ctx.slow.ts) + timedelta(seconds=60)
+                if not (lo <= sr_wall <= hi):
+                    ctx.missing.append(
+                        "ServerRecv/ServerSend 墙钟换算结果（%s）超出 client 窗"
+                        "±60s 合理性范围（%s ~ %s），换算参考可能有误"
+                        "（URMA 行采样/时钟异常），放弃合成 server 锚点"
+                        % (fmt_dt(sr_wall), fmt_dt(lo), fmt_dt(hi)))
+                else:
+                    first = min(worker_infos, key=lambda i: i["ts"])
+                    note = ("(SLOW 行内嵌时间戳合成：ServerRecv/ServerSend "
+                            "由 worker 单调钟经 %s 换算墙钟)" % method)
+                    ctx.anchors["ServerRecv"] = _synth_anchor(
+                        sr_wall, ctx.server_ip, first.get("tid"),
+                        ctx.server_pod_dir, first.get("_path"), note)
+                    ctx.anchors["ServerSend"] = _synth_anchor(
+                        ss_wall, ctx.server_ip, first.get("tid"),
+                        ctx.server_pod_dir, first.get("_path"), note)
+                    ctx.infer_evidence.append(
+                        "锚点行缺失（新日志格式）：ServerRecv/ServerSend 由 SLOW "
+                        "行内嵌 worker 单调钟 ns 时间戳经 %s 换算墙钟——"
+                        "server 处理 %s（两 ns 值精确差值），ServerRecv≈%s、"
+                        "ServerSend≈%s" % (method, fmt_us(
+                            (ss_ns_i - sr_ns_i) / 1000.0),
+                            fmt_dt(sr_wall), fmt_dt(ss_wall)))
+
+    _finalize_anchors(ctx)
+
+
+def _build_context_anchors(ctx, client_anchor_lines, worker_anchor_lines,
+                           trace_info_lines):
+    """单 trace 锚点构建全流程（analyze 主循环调用）：
+
+    1. build_anchors：锚点行匹配（老日志格式）；
+    2. _recover_server_from_info：锚点行缺失但 worker 业务行存在 →
+       恢复 server pod IP（新格式 server 合成的前提）；
+    3. _synthesize_anchors_from_slow：新日志格式（无锚点行）→ SLOW 行
+       内嵌 ns 时间戳合成锚点。
+    """
+    build_anchors(ctx, client_anchor_lines, worker_anchor_lines)
+    if not (ctx.anchors.get("ServerRecv") or ctx.anchors.get("ServerSend")):
+        _recover_server_from_info(ctx, trace_info_lines)
+    if not (ctx.anchors.get("ClientSend") and ctx.anchors.get("ClientRecv")) \
+            or not (ctx.anchors.get("ServerRecv")
+                    and ctx.anchors.get("ServerSend")):
+        _synthesize_anchors_from_slow(ctx, trace_info_lines)
 
 
 # ── Phase 3: bpf correlation ──────────────────────────────────────────────────
@@ -1688,6 +2271,22 @@ def _fmt_tod(us):
     m, rem = divmod(rem, 60000000)
     s, u = divmod(rem, 1000000)
     return ("%02d:%02d:%02d:%06d" % (h, m, s, u)).encode("ascii")
+
+
+def _extract_tod_b(raw):
+    """从原始行提取 15 字节 tod（兼容新格式前导序号），无效返回 None。
+
+    老格式行首即 tod（零成本快路径）；新格式 "NNN HH:MM:SS:uuuuuu ..."
+    先序号后 tod。无时间戳行（bpftrace BEGIN 头 / kstack 续行）返回 None。
+    """
+    if len(raw) >= 15:
+        head = raw[:15]
+        if _parse_tod_us(head) is not None:
+            return head
+    m = _BPF_SEQ_TOD_RE.match(raw)
+    if m:
+        return m.group("tod")
+    return None
 
 
 class TraceWindow:
@@ -1826,6 +2425,9 @@ class BpfScanner:
         self.max_window_net_events = max_window_net_events
         # softirq 定位回溯扫描：只收 softirq 探针事件（其余 kind 直接丢弃）
         self.softirq_only = softirq_only
+        # 新格式 bpf（行首带序号）：_read_file_tod_range 嗅探置位，
+        # 全扫模式逐行提取 tod 走兼容分支（老格式保持零开销快路径）
+        self.seq_prefixed = False
         # 窗口全景：窗口内全部连接类事件（tcp/nic/sock，不限 IP），供
         # "问题窗口 bpf 事件全景 + cpu 侵占分析"使用（其他请求穿插展示）
         self.window_results = {}      # (trace_id, side) -> [events]
@@ -1879,7 +2481,9 @@ class BpfScanner:
         """读取文件首/末有效 tod 行（诊断用，开销可忽略）。
 
         首/末行可能是 bpftrace BEGIN printf 的无时间戳头（或 END 尾注），
-        向后/向前最多回看 64 行找有效 tod。
+        向后/向前最多回看 64 行找有效 tod。同时嗅探新格式（行首带序号）：
+        命中则置 self.seq_prefixed，全扫模式逐行提取 tod 时走兼容分支
+        （老格式保持 raw[:15] 零开销快路径）。
         """
         try:
             size = self.path.stat().st_size
@@ -1891,23 +2495,29 @@ class BpfScanner:
                     line = fh.readline()
                     if not line:
                         break
-                    if _parse_tod_us(line[:15]) is not None:
+                    tod_b = _extract_tod_b(line)
+                    if tod_b is not None:
                         first = line
+                        if _BPF_SEQ_TOD_RE.match(line):
+                            self.seq_prefixed = True
                         break
                     if first is None and not self.diag["file_first_tod"]:
                         self.diag["file_first_tod"] = line[:15].decode(
                             "ascii", "replace").strip()
                 if first:
-                    self.diag["file_first_tod"] = first[:15].decode(
-                        "ascii", "replace").strip()
+                    self.diag["file_first_tod"] = _extract_tod_b(
+                        first).decode("ascii", "replace").strip()
                 if size > len(first or b""):
                     fh.seek(max(0, size - 8192))
                     tail_lines = [l for l in fh.read().split(b"\n") if l]
                     for tl in reversed(tail_lines[-64:] if len(tail_lines) > 64
                                         else tail_lines):
-                        if _parse_tod_us(tl[:15]) is not None:
-                            self.diag["file_last_tod"] = tl[:15].decode(
+                        tod_b = _extract_tod_b(tl)
+                        if tod_b is not None:
+                            self.diag["file_last_tod"] = tod_b.decode(
                                 "ascii", "replace").strip()
+                            if _BPF_SEQ_TOD_RE.match(tl):
+                                self.seq_prefixed = True
                             break
                 elif first:
                     self.diag["file_last_tod"] = self.diag["file_first_tod"]
@@ -1929,7 +2539,14 @@ class BpfScanner:
                 if len(raw) < 16:
                     continue
                 self.diag["n_read"] += 1
-                tod = raw[:15].decode("ascii", "replace")
+                if self.seq_prefixed:
+                    # 新格式：行首序号 + tod，提取失败（头/续行）按旧规则跳过
+                    tod_b = _extract_tod_b(raw)
+                    if tod_b is None:
+                        continue
+                    tod = tod_b.decode("ascii", "replace")
+                else:
+                    tod = raw[:15].decode("ascii", "replace")
                 i = bisect.bisect_right(starts, tod) - 1
                 if i < 0:
                     continue
@@ -1970,6 +2587,12 @@ class BpfScanner:
                     head = raw[:15]
                     t = _parse_tod_us(head)
                     if t is None:
+                        # 新格式（行首序号 + tod）：回退提取序号后的 tod
+                        m = _BPF_SEQ_TOD_RE.match(raw)
+                        if m:
+                            head = m.group("tod")
+                            t = _parse_tod_us(head)
+                    if t is None:
                         # 无时间戳行（bpftrace BEGIN printf 头等）：
                         # 不参与有序 break 判断，直接跳过
                         continue
@@ -2009,6 +2632,11 @@ class BpfScanner:
                 hi = mid
                 continue
             t = _parse_tod_us(line[:15])
+            if t is None:
+                # 新格式（行首序号 + tod）：回退提取序号后的 tod
+                m = _BPF_SEQ_TOD_RE.match(line)
+                if m:
+                    t = _parse_tod_us(m.group("tod"))
             if t is None:
                 hi = mid
             elif t <= target_us:
@@ -2094,6 +2722,12 @@ class BpfScanner:
                     continue
                 counts[key] = counts.get(key, 0) + 1
                 attach = True
+            # 内存三桶优化：window 桶与 results 桶共享同一事件 dict
+            # （同一事件同一窗口只存一份；softirq_raise_delay 直接共享 ev，
+            # kstack 续行在读循环中追加、同步到已存事件；lookback 桶
+            # 亦共享 ev）。ts 按窗口 base_date 归一（重写幂等）。
+            e2 = ev if kind == "softirq_raise_delay" else dict(ev)
+            e2["ts"] = datetime.combine(w.base_date, ts.time())
             # 窗口全景：连接类事件（tcp/nic/sock，不限 IP）+ softirq 探针事件
             # 全部保留（配额内），供问题窗口"其他请求穿插"全景展示与
             # cpu 侵占 / 软中断延迟分析使用
@@ -2104,14 +2738,8 @@ class BpfScanner:
                     self.window_truncated.add(wkey)
                 else:
                     self.window_counts[wkey] = self.window_counts.get(wkey, 0) + 1
-                    # softirq_raise_delay 共享同一 dict：kstack 续行在读循环
-                    # 中追加，同步到已存事件
-                    we2 = ev if kind == "softirq_raise_delay" else dict(ev)
-                    we2["ts"] = datetime.combine(w.base_date, ts.time())
-                    self.window_results.setdefault(wkey, []).append(we2)
+                    self.window_results.setdefault(wkey, []).append(e2)
             if attach:
-                e2 = ev if kind == "softirq_raise_delay" else dict(ev)
-                e2["ts"] = datetime.combine(w.base_date, ts.time())
                 results.setdefault((w.trace_id, w.side), []).append(e2)
         return ev if kind == "softirq_raise_delay" else None
 
@@ -2202,6 +2830,44 @@ class BpfCorrelator:
                     (e["ts"] - server_recv_ts).total_seconds()))
             return (cip, best["peer_port"], sip, best["local_port"])
         return None
+
+    @staticmethod
+    def _identify_conn_from_response(client_events, client_recv_ts, cip, sip):
+        """请求方向事件全缺（如 UB 传输：RPC 请求走 verbs/URMA，bpf 仅观测到
+        响应方向数据）时，从 client 侧响应方向收包事件识别连接。
+
+        tcp recv（que/in，local=client & peer=server）优先，无则退回 nic 层
+        rx（dst=client & src=server，raw 含完整五元组），取离 ClientRecv 最近
+        的一条。
+        """
+        cands = []   # (事件, client_port, server_port)
+        for e in client_events:
+            kind = e["kind"]
+            if kind in ("tcp_recv_que", "tcp_recv_in"):
+                if e.get("local_ip") == cip and e.get("peer_ip") == sip:
+                    cands.append((e, e["local_port"], e["peer_port"]))
+            elif kind == "nic_rx_skb":
+                if e.get("dst_ip") == cip and e.get("src_ip") == sip:
+                    cands.append((e, e["dst_port"], e["src_port"]))
+        if not cands:
+            return None
+        best = min(cands, key=lambda c: abs(
+            (c[0]["ts"] - client_recv_ts).total_seconds()))
+        return (cip, best[1], sip, best[2])
+
+    @staticmethod
+    def _identify_conn_from_server_nic(server_events, server_send_ts, cip, sip):
+        """server 侧 tcp 探针丢失（如 URMA 写只有 nic 层发送事件）时，用
+        nic 层发送事件（响应方向 src=server → dst=client）推测连接五元组，
+        取离 ServerSend 最近的一条。"""
+        cands = [e for e in server_events
+                 if e["kind"] in ("nic_dev_xmit_start", "nic_dev_xmit")
+                 and e.get("src_ip") == sip and e.get("dst_ip") == cip]
+        if not cands:
+            return None
+        best = min(cands, key=lambda e: abs(
+            (e["ts"] - server_send_ts).total_seconds()))
+        return (cip, best["dst_port"], sip, best["src_port"])
 
     @staticmethod
     def _identify_conn_from_nic(client_events, client_send_ts, cip, sip):
@@ -2332,7 +2998,54 @@ class BpfCorrelator:
                 "可能混入其他请求连接的事件）" % ", ".join(sorted(filled_keys)))
 
     @staticmethod
-    def _fill_milestone(ms, ev, cip, cport, sip, sport, side):
+    def _recv_window(ms, side):
+        """该侧 tcp 收包类里程碑的请求时间窗 (lo, hi)。
+
+        长连接同五元组多次请求交互时，收包里程碑限定在本请求锚点区间内，
+        避免相邻请求的同连接事件污染（详见模块级 RECV_WIN_TOL_* 注释）。
+        锚点缺失的侧返回 None（不加窗，保持旧全量行为）。
+        """
+        cs = ms.get("ClientSend")
+        if side == "Client":
+            cr = ms.get("ClientRecv")
+            if not (cs and cr):
+                return None
+            return (cs - timedelta(milliseconds=RECV_WIN_TOL_SAME_MS),
+                    cr + timedelta(milliseconds=RECV_WIN_TOL_SAME_MS))
+        # server 侧上界取 max(ServerRecv, ServerSend)：请求收包事件最晚到
+        # 响应发出（大请求分包读取可晚于 ServerRecv 锚点，但不晚于 ServerSend）
+        hi = None
+        for k in ("ServerRecv", "ServerSend"):
+            t = ms.get(k)
+            if t and (hi is None or t > hi):
+                hi = t
+        if not (cs and hi):
+            return None
+        return (cs - timedelta(milliseconds=RECV_WIN_TOL_CROSS_MS),
+                hi + timedelta(milliseconds=RECV_WIN_TOL_SAME_MS))
+
+    @staticmethod
+    def _fill_milestones_side(ms, events, side, cip, cport, sip, sport):
+        """单侧里程碑填充（请求时间窗限定 + 空窗回退）。
+
+        先按 _recv_window 限定收包类里程碑；若过滤后该侧 TcpRecvFirst 仍
+        缺失但存在同连接 recv_in 事件（锚点偏差超容差的极端场景），回退为
+        不加窗的旧全量行为，避免收包里程碑整体丢失。
+        """
+        for ev in events:
+            BpfCorrelator._fill_milestone(ms, ev, cip, cport, sip, sport, side)
+        if side + "TcpRecvFirst" in ms:
+            return
+        if not any(e["kind"] == "tcp_recv_in"
+                   and _ev_conn_side(e, cip, cport, sip, sport) == side
+                   for e in events):
+            return
+        for ev in events:
+            BpfCorrelator._fill_milestone(ms, ev, cip, cport, sip, sport,
+                                          side, no_recv_win=True)
+
+    @staticmethod
+    def _fill_milestone(ms, ev, cip, cport, sip, sport, side, no_recv_win=False):
         # 网卡层里程碑（src→dst 方向四元组，与连接 IP+侧别联合判定方向）
         if ev["kind"].startswith("nic_"):
             s, d = ev.get("src_ip"), ev.get("dst_ip")
@@ -2350,31 +3063,30 @@ class BpfCorrelator:
             if key and key not in ms:  # first 出现即定格（多 dev 重复取最早）
                 ms[key] = ev["ts"]
             return
-        if not ev.get("local_ip"):
-            return
-        is_client_local = ev["local_ip"] == cip and ev["local_port"] == cport \
-            and ev["peer_ip"] == sip and ev["peer_port"] == sport
-        is_server_local = ev["local_ip"] == sip and ev["local_port"] == sport \
-            and ev["peer_ip"] == cip and ev["peer_port"] == cport
-        if not (is_client_local or is_server_local):
+        conn_side = _ev_conn_side(ev, cip, cport, sip, sport)
+        if conn_side is None:
             return
         # 方向校验：同节点 bpf 文件同时含双向事件，非本侧方向不填里程碑
         # （如 client/worker 同宿主机时，client 事件列表含 server 方向收包）
-        dir_ok = (side == "Client" and is_client_local) \
-            or (side == "Server" and is_server_local)
+        dir_ok = conn_side == side
         key = None
         if ev["kind"] == "tcp_send_in" and dir_ok:
             key = side + "TcpSendIn"
-        elif ev["kind"] == "tcp_recv_in" and dir_ok:
-            first, last = (side + "TcpRecvFirst", side + "TcpRecvLast")
-            if first not in ms:
-                ms[first] = ev["ts"]
-            ms[last] = ev["ts"]  # keep updating → last
-            return
-        elif ev["kind"] == "tcp_recv_que" and dir_ok:
-            key = side + "TcpRecvQue"
-        elif ev["kind"] == "sock_readable" and dir_ok:
-            key = side + "SockReadable"
+        elif ev["kind"] in ("tcp_recv_in", "tcp_recv_que",
+                            "sock_readable") and dir_ok:
+            # 长连接多请求污染防护：收包类里程碑限定在本请求锚点区间内
+            if not no_recv_win:
+                win = BpfCorrelator._recv_window(ms, side)
+                if win and not (win[0] <= ev["ts"] <= win[1]):
+                    return
+            if ev["kind"] == "tcp_recv_in":
+                first, last = (side + "TcpRecvFirst", side + "TcpRecvLast")
+                if first not in ms:
+                    ms[first] = ev["ts"]
+                ms[last] = ev["ts"]  # keep updating → last（窗内最后一条）
+                return
+            key = side + "TcpRecvQue" if ev["kind"] == "tcp_recv_que" \
+                else side + "SockReadable"
         if key and key not in ms:
             ms[key] = ev["ts"]
 
@@ -2526,6 +3238,20 @@ def _match_conn_5tuple(ev, cip, cport, sip, sport):
                     and ev["dst_ip"] == cip and ev["dst_port"] == cport))
     # 无 IP 信息的事件（sched 等）保留
     return True
+
+
+def _ev_conn_side(ev, cip, cport, sip, sport):
+    """事件五元组所属连接侧别："Client"（local=client 端口对）/ "Server"
+    （local=server 端口对）/ None（无地址或不匹配本连接）。"""
+    if not ev.get("local_ip"):
+        return None
+    if (ev["local_ip"] == cip and ev.get("local_port") == cport
+            and ev["peer_ip"] == sip and ev.get("peer_port") == sport):
+        return "Client"
+    if (ev["local_ip"] == sip and ev.get("local_port") == sport
+            and ev["peer_ip"] == cip and ev.get("peer_port") == cport):
+        return "Server"
+    return None
 
 
 def _thread_sched_trace(events, tid, win_lo, win_hi):
@@ -2904,6 +3630,30 @@ def correlate_kernel(ctx, kernel_results, window_net_results=None,
             ctx.missing.append("client 侧未找到 ClientSend 后的 tcp send 事件，"
                                "已从 server 侧 bpf 事件回退识别连接")
     if not ctx.conn:
+        # 响应方向兜底（如 UB 传输：RPC 请求走 verbs/URMA，bpf 仅观测到
+        # 响应方向数据）：client 侧响应收包事件（tcp recv / nic rx）识别连接
+        ctx.conn = BpfCorrelator._identify_conn_from_response(
+            ctx.kernel_events["client"], cr["ts"], cip, sip)
+        if ctx.conn:
+            ctx.conn_source = "client_resp"
+            ctx.missing.append(
+                "client 侧未找到请求方向（%s→%s）的 tcp/nic 发送事件（如 UB 传输："
+                "RPC 请求走 verbs/URMA，bpf 仅观测到响应方向数据），已按响应方向"
+                "收包事件推测连接五元组 %s:%d ↔ %s:%d"
+                % ((cip, sip) + ctx.conn))
+    if not ctx.conn:
+        # server 侧 nic 层兜底（URMA 写仅有 nic 发送事件，无 tcp 探针）
+        ss_ref = ctx.anchors.get("ServerSend") or ctx.anchors.get("ServerRecv")
+        if ss_ref:
+            ctx.conn = BpfCorrelator._identify_conn_from_server_nic(
+                ctx.kernel_events["server"], ss_ref["ts"], cip, sip)
+            if ctx.conn:
+                ctx.conn_source = "server_nic"
+                ctx.missing.append(
+                    "tcp 层探针未覆盖该连接（URMA 写仅有 nic 层发送事件），已按 "
+                    "server 侧响应方向 nic 发送事件推测连接五元组 "
+                    "%s:%d ↔ %s:%d" % ctx.conn)
+    if not ctx.conn:
         ctx.missing.append("client 节点 bpf 日志未找到 ClientSend 后 %s→%s 的 tcp send / nic 发送事件"
                            "（server 侧回退识别连接亦失败）" % (cip, sip))
         return
@@ -2936,11 +3686,12 @@ def correlate_kernel(ctx, kernel_results, window_net_results=None,
         ctx.bpf_window_events[side] = merged
 
     # milestones from kernel events for this connection
+    # （收包类里程碑限定本请求时间窗，防长连接相邻请求污染）
     ms = ctx.milestones
-    for ev in ctx.kernel_events["client"]:
-        BpfCorrelator._fill_milestone(ms, ev, cip, cport, sip, sport, "Client")
-    for ev in ctx.kernel_events["server"]:
-        BpfCorrelator._fill_milestone(ms, ev, cip, cport, sip, sport, "Server")
+    BpfCorrelator._fill_milestones_side(ms, ctx.kernel_events["client"],
+                                        "Client", cip, cport, sip, sport)
+    BpfCorrelator._fill_milestones_side(ms, ctx.kernel_events["server"],
+                                        "Server", cip, cport, sip, sport)
 
     # wakeup-chain evidence: client side, sock_readable/sched events in
     # [first client tcp recv event, ClientRecv]
@@ -2975,6 +3726,177 @@ def correlate_kernel(ctx, kernel_results, window_net_results=None,
             e["kind"].startswith("sched") for e in ctx.kernel_events["client"]):
         ctx.missing.append("bpf 日志中无 sched_waking/wakeup/switch 唤醒链事件"
                            "（该类采集可能已关闭），无法重建内核→用户态唤醒链")
+
+    # 锚点日志缺失（可选收集）：ServerRecv/ServerSend 均无但 server 侧内核
+    # 事件已关联（如 worker 业务行恢复 server pod 的场景）→ 按内核点位推测
+    # 宏观三段（ServerTcpRecvFirst≈请求交付、ServerTcpSendIn≈响应发出）；
+    # client_only 的推测在补扫/兜底阶段统一进行
+    if not ctx.client_only and not (ctx.anchors.get("ServerRecv")
+                                    or ctx.anchors.get("ServerSend")):
+        _inferred_link_evidence(ctx)
+
+
+def _fill_server_side_from_scan(ctx, kernel_results, window_net_results):
+    """client_only（server IP 从端口+时间推测）连接五元组识别后：
+    server 侧 bpf 窗口扫描结果回填、里程碑填充、五元组过滤、全景标注。
+
+    事件来源：_supplement_server_scan 补扫结果（kernel_results /
+    window_net_results 的 (idx, "server") 桶）。回填后调用
+    _inferred_link_evidence 生成推测链路证据；无事件时降级 client 单侧推测。
+    """
+    cip, cport, sip, sport = ctx.conn
+    evs = sorted(kernel_results.get((ctx.idx, "server"), []),
+                 key=lambda e: e["ts"])
+    if not evs:
+        ctx.missing.append(
+            "server 侧 bpf 补扫未命中该连接的任何事件（连接五元组推测可能有误，"
+            "或 server 节点 bpf 探针未覆盖该窗口）")
+        _client_only_infer_evidence(ctx)
+        return
+    ctx.kernel_events["server"] = evs
+    BpfCorrelator._fill_milestones_side(ctx.milestones, evs, "Server",
+                                        cip, cport, sip, sport)
+    ctx.filtered_events["server"] = [
+        e for e in evs if _match_conn_5tuple(e, cip, cport, sip, sport)]
+    # 问题窗口全景：补扫窗口桶（全部连接流量）+ 本连接过滤事件去重合并，
+    # 标注 match5t（True 问题连接 / False 其他连接 / None 无 IP 调度类事件）
+    net_evs = (window_net_results or {}).get((ctx.idx, "server"), [])
+    seen, merged = set(), []
+    for e in list(net_evs) + evs:
+        key = (e["ts"], e["kind"], e.get("raw"))
+        if key in seen:
+            continue
+        seen.add(key)
+        d = dict(e)
+        if d.get("local_ip") or d.get("src_ip"):
+            d["match5t"] = bool(_match_conn_5tuple(d, cip, cport, sip, sport))
+        else:
+            d["match5t"] = None
+        merged.append(d)
+    merged.sort(key=lambda e: e["ts"])
+    ctx.bpf_window_events["server"] = merged
+    _inferred_link_evidence(ctx)
+
+
+def _inferred_link_evidence(ctx):
+    """按 bpf 内核里程碑推测宏观三段等价耗时，填充 macro，生成推测证据文本。
+
+    ServerRecv/ServerSend 锚点缺失（锚点日志为可选收集）时的推测：
+      CS  = ClientSend（client 锚点，已有）
+      SR  = ServerTcpRecvFirst（内核最早收包点 ≈ 请求交付业务）
+      SS  = ServerTcpSendIn（内核最早发送点 ≈ 响应发出）
+      CR  = ClientRecv（client 锚点，已有）
+    宏观三段按等价内核点位计算耗时，供结论引擎宏观回退使用。
+    server 侧内核点位也缺失时，降级 client 单侧推测。
+    """
+    cs = ctx.anchors.get("ClientSend")
+    cr = ctx.anchors.get("ClientRecv")
+    if not (cs and cr):
+        return
+    ms = ctx.milestones
+    sr = ms.get("ServerTcpRecvFirst")
+    ss = ms.get("ServerTcpSendIn")
+    if sr and ss:
+        ctx.macro["cs_sr"] = (sr - cs["ts"]).total_seconds() * 1e6
+        ctx.macro["sr_ss"] = (ss - sr).total_seconds() * 1e6
+        ctx.macro["ss_cr"] = (cr["ts"] - ss).total_seconds() * 1e6
+        neg_note = ("（出现负值：连接推测配对可能有误或节点间时钟偏差，仅供参考）"
+                    if min(ctx.macro["cs_sr"], ctx.macro["sr_ss"],
+                           ctx.macro["ss_cr"]) < 0 else "")
+        ctx.infer_evidence.append(
+            "推测链路（ServerRecv/ServerSend 锚点缺失，从 bpf 内核事件推测）："
+            "ServerTcpRecvFirst≈请求交付业务（%s）、ServerTcpSendIn≈响应发出（%s），"
+            "宏观三段等价耗时 CS→SR %s / SR→SS %s / SS→CR %s%s"
+            % (fmt_dt(sr), fmt_dt(ss), fmt_us(ctx.macro["cs_sr"]),
+               fmt_us(ctx.macro["sr_ss"]), fmt_us(ctx.macro["ss_cr"]), neg_note))
+        return
+    _client_only_infer_evidence(ctx)
+
+
+def _client_only_infer_evidence(ctx):
+    """server 侧完全无 bpf 证据 → 从 client 单侧内核事件推测方向。
+
+    client 侧已知：发出时刻（ClientTcpSendIn ≈ 业务发起；tcp 探针未启用时
+    回退 nic 层 ClientDevStartXmit / ClientNetDevXmit）与到达时刻
+    （ClientNetifRx ≈ 响应回到 client 网卡），二者间隔覆盖 网络传输 +
+    server 业务处理，无法进一步区分——给出方向性推测与已有证据
+    （TCP 重传提示线路丢包、client 网卡→业务取包耗时），避免直接落入 unknown。
+    """
+    ms = ctx.milestones
+    tstart, tstart_lbl = None, None
+    for key, lbl in (("ClientTcpSendIn", "tcp 发送入口"),
+                     ("ClientDevStartXmit", "驱动发送入口"),
+                     ("ClientNetDevXmit", "驱动发送完成")):
+        if ms.get(key):
+            tstart, tstart_lbl = ms[key], "%s（%s）" % (key, lbl)
+            break
+    rstart = ms.get("ClientNetifRx")
+    if not (tstart and rstart):
+        ctx.infer_evidence.append(
+            "完全无 server 侧 bpf 内核事件，client 侧内核点位亦缺失，"
+            "无法推测链路分段（根因定界证据不足）")
+        return
+    dur = (rstart - tstart).total_seconds() * 1e6
+    n_re = sum(1 for e in ctx.kernel_events.get("client", [])
+               if e["kind"] == "tcp_retransmit")
+    pickup = ms.get("ClientRecv")
+    pickup_txt = ("；response 到达 client 网卡 → ClientRecv 业务取包耗时 %s"
+                  % fmt_us((pickup - rstart).total_seconds() * 1e6)
+                  if pickup and pickup >= rstart else "")
+    ctx.infer_evidence.append(
+        "完全无 server 侧 bpf 内核事件，仅 client 单侧推测：request 发出 %s → "
+        "response 到达 client 网卡（ClientNetifRx）耗时 %s（覆盖 网络传输 + "
+        "server 业务处理，无法区分二者）%s，%s"
+        % (tstart_lbl, fmt_us(dur), pickup_txt,
+           ("存在 %d 次 TCP 重传，提示线路丢包" % n_re) if n_re
+           else "未检测到 TCP 重传"))
+
+
+def _supplement_server_scan(ctx, disc, cache, bpf_off, pad, bpf_full_scan,
+                            max_sched_events, verbose, slack_us,
+                            kernel_results, window_net_results,
+                            softirq_lookback_results):
+    """client_only trace 连接五元组推测识别后，补扫 server 侧 bpf 窗口。
+
+    窗口构建阶段 server IP 未知（worker 日志未收集）→ server 侧窗口未构建；
+    correlate_kernel 按「端口+双向时间配对」推测出连接（含 server pod IP）后：
+    1. 用推测 IP 探测 server 节点（pod IP 作为 local_ip 只出现在所在节点
+       的 bpf 日志，_probe_node_by_podip）；
+    2. 命中则按 ClientSend→ClientRecv 窗口补扫该节点 bpf 文件；
+    3. _fill_server_side_from_scan 回填事件/里程碑/全景并生成推测链路证据。
+    节点未定位 / 无 bpf 文件 → 降级 client 单侧推测。
+    """
+    cs, cr = ctx.anchors.get("ClientSend"), ctx.anchors.get("ClientRecv")
+    sip = ctx.conn[2]
+    node = _probe_node_by_podip(disc, sip, cs["ts"], cr["ts"], cache, bpf_off)
+    if not node or not disc.bpf_by_node.get(node):
+        ctx.missing.append(
+            "server pod IP %s（连接推测）无法定位到 bpf 节点"
+            "（宿主机 bpf 日志未采集或窗口内无该 pod 事件）：保持 client 单侧推测"
+            % sip)
+        _client_only_infer_evidence(ctx)
+        return
+    ctx.server_node = node
+    ctx.server_ip = sip
+    ctx.server_host_ip = disc.host_ip_of_node(node)
+    win = (cs["ts"] + bpf_off - pad, cr["ts"] + bpf_off + pad)
+    lb = timedelta(milliseconds=SOFTIRQ_LOOKBACK_MS)
+    windows = list(split_window_at_midnight(ctx.idx, "server", win[0] - lb,
+                                            win[1], ctx.client_ip, sip,
+                                            data_start_dt=win[0]))
+    res, _trunc, wres, _wtrunc, lres, _diag = _bpf_scan_job(
+        (str(disc.bpf_by_node[node]), windows, bpf_full_scan,
+         max_sched_events, verbose, slack_us))
+    kernel_results.update(res)
+    window_net_results.update(wres)
+    softirq_lookback_results.update(lres)
+    if lres.get((ctx.idx, "server")):
+        ctx.softirq_lookback["server"] = [dict(e) for e in lres[(ctx.idx, "server")]]
+    ctx.missing.append(
+        "worker 日志未收集（server IP 从端口+时间推测=%s）：已补扫 server 节点"
+        " %s 的 bpf 窗口，server 侧链路按内核事件推测"
+        "（ServerTcpRecvFirst≈请求交付、ServerTcpSendIn≈响应发出）" % (sip, node))
+    _fill_server_side_from_scan(ctx, kernel_results, window_net_results)
 
 
 def build_kernel_segments(ctx):
@@ -3042,6 +3964,8 @@ def _nic_segments(ctx):
 
     client_stack_to_nic : ClientTcpSendIn → ClientDevStartXmit 协议栈发送处理（含 qdisc 排队）
     client_nic_xmit     : ClientDevStartXmit → ClientNetDevXmit 驱动发送耗时
+    server_stack_to_nic : ServerTcpSendIn → ServerDevStartXmit server 发送侧同上（qdisc 排队）
+    server_nic_xmit     : ServerDevStartXmit → ServerNetDevXmit server 驱动发送耗时
     server_nic_to_stack : ServerNetifRx → ServerTcpRecvFirst 网卡收包→协议栈交付（含 veth 转发/排队/唤醒）
     client_nic_to_stack : ClientNetifRx → ClientTcpRecvFirst client 侧同上
     任一端点缺失则跳过。窗口内 TCP 重传写入 ctx.nic_evidence。
@@ -3052,6 +3976,10 @@ def _nic_segments(ctx):
          ms.get("ClientDevStartXmit"), "client 协议栈发送→驱动（含 qdisc 排队）"),
         ("client_nic_xmit", ms.get("ClientDevStartXmit"),
          ms.get("ClientNetDevXmit"), "client 驱动发送耗时"),
+        ("server_stack_to_nic", ms.get("ServerTcpSendIn"),
+         ms.get("ServerDevStartXmit"), "server 协议栈发送→驱动（含 qdisc 排队）"),
+        ("server_nic_xmit", ms.get("ServerDevStartXmit"),
+         ms.get("ServerNetDevXmit"), "server 驱动发送耗时"),
         ("server_nic_to_stack", ms.get("ServerNetifRx"),
          ms.get("ServerTcpRecvFirst"),
          "server 网卡收包→协议栈交付（含 veth 转发/排队/唤醒）"),
@@ -3064,10 +3992,14 @@ def _nic_segments(ctx):
             continue
         start_name = {"client_stack_to_nic": "ClientTcpSendIn",
                       "client_nic_xmit": "ClientDevStartXmit",
+                      "server_stack_to_nic": "ServerTcpSendIn",
+                      "server_nic_xmit": "ServerDevStartXmit",
                       "server_nic_to_stack": "ServerNetifRx",
                       "client_nic_to_stack": "ClientNetifRx"}[key]
         end_name = {"client_stack_to_nic": "ClientDevStartXmit",
                     "client_nic_xmit": "ClientNetDevXmit",
+                    "server_stack_to_nic": "ServerDevStartXmit",
+                    "server_nic_xmit": "ServerNetDevXmit",
                     "server_nic_to_stack": "ServerTcpRecvFirst",
                     "client_nic_to_stack": "ClientTcpRecvFirst"}[key]
         ctx.kernel_segments.append({
@@ -3416,6 +4348,233 @@ def _softirq_vec_txt(ev):
         return "?"
     label = SOFTIRQ_VEC_LABELS.get(vec)
     return "%d(%s)" % (vec, label) if label else str(vec)
+
+
+# 窗口级定量归因阈值：irqoff 最长关中断 ≥ max(2ms, 50% 段耗时) → 改写 category
+IRQOFF_QUANT_MIN_US = 2000
+IRQOFF_QUANT_SHARE_PCT = 50.0
+# numa：问题窗口 DDR 带宽均值超全周期基线（均值+2σ）→ 内存带宽饱和证据
+NUMA_DDR_Z = 2.0
+NUMA_DDR_MIN_SAMPLES = 8
+# nic：窗口 ifutil 峰值阈值（与 NIC_HIGH_IFUTIL_PCT 对齐）
+NIC_QUANT_HIGH_IFUTIL_PCT = 80.0
+
+
+def _quant_window(ctx):
+    """问题窗口（慢段级）：取 abnormal kernel_segments 的 start~end
+    （多个 abnormal 段取并集的外包络），无则回退 trace 首尾锚点。"""
+    ab = [s for s in ctx.kernel_segments
+          if s.get("abnormal") and ctx.milestones.get(s.get("start"))
+          and ctx.milestones.get(s.get("end"))]
+    if not ab:
+        anchors_ts = [a["ts"] for a in ctx.anchors.values() if a.get("ts")]
+        if len(anchors_ts) < 2:
+            return None
+        return min(anchors_ts), max(anchors_ts)
+    starts = [ctx.milestones[s["start"]] for s in ab]
+    ends = [ctx.milestones[s["end"]] for s in ab]
+    return min(starts), max(ends)
+
+
+def _window_quant_attribution(ctx, numa_stats):
+    """窗口级定量归因：把 irqoff/sar nic/NUMA DDR 数据切片到问题窗口，
+    与异常段耗时做定量对比——命中即写入 ctx.quant_*（conclude 消费，
+    irqoff 命中会改写 category 为 interrupt_off_delay）。
+
+    numa_stats: disc.aux_stats["numa"]（node -> {memory: [时序记录]}，
+    全周期数据，本函数做窗口切片 vs 基线对比）。
+    """
+    win = _quant_window(ctx)
+    if not win:
+        return
+    win_start, win_end = win
+    win_us = (win_end - win_start).total_seconds() * 1e6
+
+    # ── irqoff：cpu 匹配（业务 cpu 或 SMT 姊妹核 cpu^1）的最长关中断 ──
+    for side, anchor_name, seg_key in (
+            ("client", "ClientRecv", "client_kernel_to_user"),
+            ("server", "ServerRecv", "server_kernel_to_user")):
+        seg = next((s for s in ctx.kernel_segments
+                    if s["key"] == seg_key and s.get("abnormal")), None)
+        if not seg:
+            continue
+        anchor = ctx.anchors.get(anchor_name)
+        cpu_val = None
+        if anchor and anchor.get("cpu"):
+            try:
+                cpu_val = int(anchor["cpu"])
+            except (TypeError, ValueError):
+                cpu_val = None
+        if cpu_val is None:
+            continue
+        evs = [e for e in (ctx.irqoff_events.get(side) or [])
+               if win_start <= e["ts"] <= win_end
+               and e.get("cpu") is not None
+               and e["cpu"] in (cpu_val, cpu_val ^ 1)]
+        if not evs:
+            continue
+        mx = max(evs, key=lambda e: e["latency_us"])
+        seg_us = seg["dur_us"] or 0
+        need = max(IRQOFF_QUANT_MIN_US,
+                   seg_us * IRQOFF_QUANT_SHARE_PCT / 100.0)
+        if mx["latency_us"] >= need and seg_us > 0:
+            node = ctx.client_node if side == "client" else ctx.server_node
+            share = mx["latency_us"] * 100.0 / seg_us
+            smt = "（该 cpu 为业务 cpu %d 的 SMT 姊妹核）" % cpu_val \
+                if mx["cpu"] != cpu_val else ""
+            ctx.irqoff_quant = {
+                "side": side, "node": node, "cpu": mx["cpu"],
+                "anchor_cpu": cpu_val, "comm": mx["comm"], "pid": mx["pid"],
+                "irq": mx.get("irq"), "max_us": mx["latency_us"],
+                "seg_us": seg_us, "share_pct": share, "ts": mx["ts"],
+                "n_records": len(evs),
+            }
+            ctx.quant_evidence.append(
+                "◆ 定量归因（irqoff）：%s 节点（%s）问题窗口 [%s，%s] 内，"
+                "cpu %s%s 被 %s(pid %s) 关中断最长 %s，占异常段"
+                "（%s → %s，%s）耗时的 %.1f%%（窗口内匹配记录 %d 条）"
+                "—— 关中断直接推迟该 cpu 上的收包/软中断处理与线程调度"
+                % (side, node or "?", fmt_dt(win_start), fmt_dt(win_end),
+                   mx["cpu"], smt, mx["comm"], mx["pid"],
+                   fmt_us(mx["latency_us"]), seg["start"], seg["end"],
+                   fmt_us(seg_us), share, len(evs)))
+            break   # 一侧命中即归因
+
+    # ── nic：窗口 ifutil 峰值 × 重传并发 联合定量（传输类佐证） ──
+    nic_txts = [s for s in ctx.nic_evidence if "重传" in s]
+    if nic_txts:
+        for side in ("client", "server"):
+            samples = [s for s in (ctx.nic_samples.get(side) or [])
+                       if win_start <= s.get("ts", win_start) <= win_end]
+            if not samples:
+                continue
+            by_dev = {}
+            for s in samples:
+                by_dev.setdefault(s.get("dev") or "?", []).append(s)
+            for dev, ss in sorted(by_dev.items()):
+                mx = max(s["ifutil"] for s in ss)
+                if mx < NIC_QUANT_HIGH_IFUTIL_PCT:
+                    continue
+                node = ctx.client_node if side == "client" else ctx.server_node
+                ctx.nic_quant = {
+                    "side": side, "node": node, "dev": dev,
+                    "peak_ifutil": mx, "n_samples": len(ss)}
+                ctx.quant_evidence.append(
+                    "◆ 定量归因（sar nic）：%s 节点（%s）问题窗口 [%s，%s] 内"
+                    "网卡 %s sar 采样 %d 条，%%ifutil 峰值 %.1f%% 且窗口内"
+                    "存在 TCP 重传 —— 带宽/队列瓶颈与丢包重传并发，"
+                    "佐证传输类定界"
+                    % (side, node or "?", fmt_dt(win_start), fmt_dt(win_end),
+                       dev, len(ss), mx))
+                break
+            if ctx.nic_quant:
+                break
+
+    # ── numa：问题窗口 DDR 带宽均值 vs 全周期基线（均值+2σ） ──
+    for side in ("server", "client"):
+        node = ctx.server_node if side == "server" else ctx.client_node
+        if not node:
+            continue
+        mem = ((numa_stats or {}).get(node) or {}).get("memory") or []
+        recs = [r for r in mem
+                if r.get("ddrc_read_mb_s") is not None
+                or r.get("ddrc_write_mb_s") is not None]
+        if len(recs) < NUMA_DDR_MIN_SAMPLES:
+            continue
+
+        def _bw(r):
+            return (r.get("ddrc_read_mb_s") or 0.0) + \
+                (r.get("ddrc_write_mb_s") or 0.0)
+
+        win_recs = [r for r in recs if win_start <= r["ts"] <= win_end]
+        if len(win_recs) < 2:
+            continue
+        import math
+        base_vals = [_bw(r) for r in recs if r not in win_recs] \
+            if len(win_recs) < len(recs) else []
+        # 基线 = 窗口外样本（不足时用全周期样本）
+        if len(base_vals) < NUMA_DDR_MIN_SAMPLES // 2:
+            base_vals = [_bw(r) for r in recs]
+        if len(base_vals) < 2:
+            continue
+        mean = sum(base_vals) / len(base_vals)
+        var = sum((v - mean) ** 2 for v in base_vals) / len(base_vals)
+        sd = math.sqrt(var)
+        win_mean = sum(_bw(r) for r in win_recs) / len(win_recs)
+        # 无波动（sd≈0）时用 20% 相对阈值兜底，避免除零
+        limit = mean + NUMA_DDR_Z * sd if sd > 1e-9 else mean * 1.2
+        if win_mean > limit and win_mean > mean * 1.2:
+            ctx.numa_quant = {
+                "side": side, "node": node,
+                "win_ddr_mb_s": win_mean, "base_ddr_mb_s": mean,
+                "base_sd_mb_s": sd, "n_win": len(win_recs),
+                "n_base": len(base_vals)}
+            ctx.quant_evidence.append(
+                "◆ 定量归因（NUMA DDR）：%s 节点（%s）问题窗口 [%s，%s] 内"
+                "DDR 带宽均值 %.0f MB/s（%d 个采样），高于全周期基线 "
+                "%.0f±%.0f MB/s（%d 个采样）—— 问题窗口内存带宽饱和，"
+                "可能拖慢业务访存/协议栈处理"
+                % (side, node, fmt_dt(win_start), fmt_dt(win_end),
+                   win_mean, len(win_recs), mean, sd, len(base_vals)))
+            break
+
+
+def _preemptor_wakeup_trace(ctx):
+    """抢占任务唤醒者回溯：对 softirq 定位命中的占用任务（comm+cpu），
+    在问题窗口 bpf 事件流中回溯 sched_wakeup → sched_switch 切入链，
+    回答"该任务为何在该 cpu 运行"（被谁在哪个 cpu 唤醒、何时上 cpu、
+    距收包点多久、唤醒前同 cpu 的相邻事件=触发源提示）。
+
+    结果写入 softirq_localization[side]["wakeup_trace"]；
+    无 wakeup/switch 事件时置 None（降级，结论保留人工建议）。
+    """
+    for side, loc in (ctx.softirq_localization or {}).items():
+        comm = loc.get("comm")
+        cpu = loc.get("cpu")
+        if not comm or cpu is None:
+            loc["wakeup_trace"] = None
+            continue
+        evs = sorted((ctx.bpf_window_events.get(side) or [])
+                     + (ctx.softirq_lookback or {}).get(side, []),
+                     key=lambda e: e["ts"])
+        # 1) 该 comm 的唤醒事件（sched_wakeup/waking，target_cpu 匹配），
+        #    取定位时刻之前最近一条
+        wakeup = None
+        for e in evs:
+            if e["kind"] in ("sched_wakeup", "sched_waking") \
+                    and e.get("comm") == comm and e.get("target_cpu") == cpu \
+                    and e["ts"] <= loc["ts"]:
+                wakeup = e   # 保留最近一条
+        if wakeup is None:
+            loc["wakeup_trace"] = None
+            continue
+        # 2) 唤醒之后该任务在该 cpu 的切入（sched_switch next_comm/next_pid）
+        switch_in = None
+        for e in evs:
+            if e["kind"] == "sched_switch" and e["ts"] >= wakeup["ts"] \
+                    and e.get("cpu") == cpu and e.get("next_comm") == comm \
+                    and e["ts"] <= loc["ts"]:
+                switch_in = e
+                break
+        if switch_in is None:
+            loc["wakeup_trace"] = None
+            continue
+        # 3) 唤醒事件前同 cpu 的相邻事件 → 触发源提示（如收包/软中断）
+        trigger = None
+        for e in reversed(evs):
+            if e["ts"] < wakeup["ts"] and e.get("cpu") == cpu \
+                    and e["kind"] not in ("sched_wakeup", "sched_waking"):
+                trigger = e
+                break
+        delta_us = int((loc["ts"] - switch_in["ts"]).total_seconds() * 1e6)
+        loc["wakeup_trace"] = {
+            "wakeup_ts": wakeup["ts"], "waker_cpu": wakeup.get("cpu"),
+            "switch_in_ts": switch_in["ts"],
+            "prev_comm": switch_in.get("prev_comm"),
+            "delta_to_recv_us": delta_us,
+            "trigger_kind": trigger["kind"] if trigger else None,
+            "trigger_ts": trigger["ts"] if trigger else None,
+        }
 
 
 def _cpu_busy_analysis(ctx):
@@ -3995,11 +5154,53 @@ def _bthread_html(ctx):
     return "<h3>bthread 协程事件（问题窗口内）</h3>" + "".join(parts)
 
 
-def _window_event_row(ev, cpu_val=None):
-    """全景事件 → 表格行（归属列 + 问题连接黄底高亮 + 业务 cpu 红色标注）。
+# 事件序号字段（问题包序号高亮：同一问题包跨 nic/tcp 层事件可追踪）
+_SEQ_FIELD_KEYS = ("seq", "tx_seq", "snd_una", "snd_nxt",
+                   "copied_seq", "rcv_nxt", "tp_rcv_nxt")
 
-    行带 data-o 归属属性（mine/other/none），供慢段时间窗表的 evf 过滤 JS
-    做"全部 / 仅问题连接 / 仅其他连接 + 关键字"过滤选择。
+
+def _collect_problem_seqs(events, cip, cport, sip, sport):
+    """从问题连接事件（match5t=True）收集全部序号字段值，供事件表红色高亮。
+
+    cip/cport/sip/sport 为问题连接四元组（match5t 已按它标注，此处仅
+    作语义说明）；返回 int 序号集合。
+    """
+    seqs = set()
+    for ev in events:
+        if not ev.get("match5t"):
+            continue
+        for k in _SEQ_FIELD_KEYS:
+            v = ev.get(k)
+            if v is None:
+                continue
+            try:
+                seqs.add(int(v))
+            except (TypeError, ValueError):
+                pass
+    return seqs
+
+
+def _ctx_hl_seqs(ctx, evs):
+    """问题连接序号集合（供事件表红色高亮）；无连接/无序号时返回 None。"""
+    conn = getattr(ctx, "conn", None)
+    if not conn or not evs:
+        return None
+    seqs = _collect_problem_seqs(evs, *conn)
+    return seqs or None
+
+
+def _event_row_html(ev, with_owner=False, cpu_val=None, inferred=False,
+                    hl_seqs=None):
+    """统一事件行渲染（明细 6 列 / 全景 7 列，_events_table 与全景表共用）。
+
+    - with_owner=True → 加归属列（问题/其他连接/-）+ hl5t 黄底高亮 +
+      data-o 归属属性（全景表，供 evf 过滤 JS 做"全部 / 仅问题连接 /
+      仅其他连接 + 关键字"过滤选择）；
+    - cpu_val != None → ev.cpu == cpu_val 时业务 cpu 红色标注；
+    - inferred=True → 事件名后加"推测"badge（五元组经推测识别，明细表）；
+    - hl_seqs → 问题包序号集合：事件任一序号字段命中时，该事件全部序号
+      字段值红色标注（seqhl）——同一问题包在 dev_start_xmit /
+      netif_receive_skb / tcp recv que/in 等事件中跨层可追踪。
     """
     if ev.get("local_ip"):
         addr = "%s:%s %s %s:%s" % (ev["local_ip"], ev.get("local_port"),
@@ -4010,49 +5211,81 @@ def _window_event_row(ev, cpu_val=None):
                                    ev["dst_ip"], ev.get("dst_port"))
     else:
         addr = ""
-    if ev.get("kind") == "softirq_raise_delay":
+    kind = ev.get("kind")
+    # 问题序号高亮：事件任一序号字段命中问题序号集合 → 全部序号字段红色标注
+    seq_hit = bool(hl_seqs) and any(
+        ev.get(k) is not None and ev.get(k) in hl_seqs
+        for k in _SEQ_FIELD_KEYS)
+
+    def sq(key):
+        s = html.escape(str(ev.get(key)))
+        return '<span class="seqhl">%s</span>' % s if seq_hit else s
+
+    if kind == "softirq_raise_delay":
         extra = "vec=%s raise→entry=%dus comm=%s kstack=%s" % (
             _softirq_vec_txt(ev), ev.get("latency_us", 0),
-            ev.get("comm", "-"), ev.get("kstack") or "-")
-    elif ev.get("kind") == "softirq_exit_delay":
+            html.escape(str(ev.get("comm", "-"))),
+            html.escape(str(ev.get("kstack") or "-")))
+    elif kind == "softirq_exit_delay":
         extra = "vec=%s entry→exit=%dus timercnt:%s/%s" % (
             _softirq_vec_txt(ev), ev.get("latency_us", 0),
             ev.get("timer_cnt"), ev.get("timer_large_cnt"))
+    elif kind == "tcp_retransmit":
+        extra = "seq=%s tx_seq=%s snd_una=%s snd_nxt=%s" % (
+            sq("seq"), sq("tx_seq"), sq("snd_una"), sq("snd_nxt"))
     elif "comm" in ev:
-        extra = "comm=%s pid=%s" % (ev.get("comm"), ev.get("pid"))
+        extra = "comm=%s pid=%s" % (html.escape(str(ev.get("comm"))),
+                                    ev.get("pid"))
     elif "prev_comm" in ev:
-        extra = "prev=%s/%s next=%s/%s" % (ev.get("prev_comm"),
+        extra = "prev=%s/%s next=%s/%s" % (html.escape(str(ev.get("prev_comm"))),
                                            ev.get("prev_pid"),
-                                           ev.get("next_comm"),
+                                           html.escape(str(ev.get("next_comm"))),
                                            ev.get("next_pid"))
     elif "dev" in ev:
-        extra = "dev=%s seq=%s len=%s" % (ev.get("dev"), ev.get("seq"),
-                                          ev.get("len"))
-    elif "copied_seq" in ev:
-        extra = "copied_seq:%s rcv_nxt:%s" % (ev.get("copied_seq"),
-                                              ev.get("rcv_nxt"))
+        extra = "dev=%s seq=%s len=%s" % (html.escape(str(ev.get("dev"))),
+                                          sq("seq"), ev.get("len"))
+        if "rc" in ev:  # 网卡层发送：驱动返回码
+            extra += " rc=%s" % ev["rc"]
+    elif "copied_seq" in ev or "rcv_nxt" in ev or "tp_rcv_nxt" in ev:
+        seq_parts = []
+        if "copied_seq" in ev:
+            seq_parts.append("copied_seq:%s" % sq("copied_seq"))
+        if "rcv_nxt" in ev:
+            seq_parts.append("rcv_nxt:%s" % sq("rcv_nxt"))
+        if "tp_rcv_nxt" in ev:
+            seq_parts.append("tp_rcv_nxt:%s" % sq("tp_rcv_nxt"))
+        extra = " ".join(seq_parts)
     else:
         extra = ""
-    match = ev.get("match5t")
-    owner = "问题连接" if match else ("其他连接" if match is False else "-")
-    cls = ' class="hl5t"' if match else ""
-    data_o = ' data-o="%s"' % ("mine" if match
-                               else ("other" if match is False else "none"))
     cpu_txt = str(ev.get("cpu", "-"))
     if cpu_val is not None and ev.get("cpu") == cpu_val:
         cpu_txt = '<span class="cpuflag">%s</span>' % cpu_txt
-    return ('<tr%s%s><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>'
-            "<td>%s</td><td>%s</td></tr>"
-            % (cls, data_o, fmt_dt(ev["ts"]), html.escape(str(ev["kind"])),
+    if with_owner:
+        match = ev.get("match5t")
+        owner = "问题连接" if match else ("其他连接" if match is False else "-")
+        cls = ' class="hl5t"' if match else ""
+        data_o = ' data-o="%s"' % ("mine" if match
+                                   else ("other" if match is False else "none"))
+        return ('<tr%s%s><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>'
+                "<td>%s</td><td>%s</td></tr>"
+                % (cls, data_o, fmt_dt(ev["ts"]), html.escape(str(ev["kind"])),
+                   ev.get("tid", "-"), cpu_txt, html.escape(addr),
+                   extra, owner))
+    badge = (' <span class="inf-badge" title="连接五元组经推测识别，'
+             '本事件为推测关联">推测</span>') if inferred else ""
+    return ("<tr><td>%s</td><td>%s%s</td><td>%s</td><td>%s</td><td>%s</td>"
+            "<td>%s</td></tr>"
+            % (fmt_dt(ev["ts"]), html.escape(str(kind)), badge,
                ev.get("tid", "-"), cpu_txt, html.escape(addr),
-               html.escape(extra), owner))
+               extra))
 
 
 # 事件表：列宽按内容自适应（连接端口/事件名称等关键信息不截断），
 # 超宽由 .table-wrap 横向滚动；视口外行由 CSS content-visibility 跳过渲染
 
 
-def _window_events_table(evs, title, cpu_val=None, note=None, with_filter=False):
+def _window_events_table(evs, title, cpu_val=None, note=None, with_filter=False,
+                         hl_seqs=None):
     """问题窗口全景事件表（全部连接 + sched，含归属列与五元组高亮）。
 
     包 .table-wrap 滚动容器（参考 skill 风格，兼作大表性能优化）：
@@ -4062,12 +5295,16 @@ def _window_events_table(evs, title, cpu_val=None, note=None, with_filter=False)
     按钮 + 关键字输入框），配合行 data-o 归属属性与报告级 evf 过滤 JS
     （事件委托，无逐表注册）做客户端过滤选择（事件过多时使用）；
     此时不输出 h3 标题（由外层 details summary 承载）。
+
+    hl_seqs → 问题包序号集合：命中事件的序号字段红色标注（seqhl）。
     """
     if not evs:
         return '<p class="muted">%s：无匹配事件</p>' % html.escape(title)
     total = len(evs)
     shown = evs[:EVENTS_TABLE_MAX_ROWS]
-    rows = "".join(_window_event_row(e, cpu_val) for e in shown)
+    rows = "".join(_event_row_html(e, cpu_val=cpu_val, with_owner=True,
+                                   hl_seqs=hl_seqs)
+                   for e in shown)
     cap_note = ""
     if total > EVENTS_TABLE_MAX_ROWS:
         cap_note = ('<tr><td colspan="7" class="muted">共 %d 条，仅列前 %d 条'
@@ -4116,7 +5353,13 @@ def _side_events_html(ctx, side):
         or getattr(ctx, "client_only", False))
     if not wevs:
         return _events_table((ctx.filtered_events or {}).get(side) or [],
-                             "%s 节点 bpf 事件" % side, inferred=inferred)
+                             "%s 节点 bpf 事件" % side, inferred=inferred,
+                             hl_seqs=_ctx_hl_seqs(
+                                 ctx, (ctx.filtered_events or {}).get(side) or []))
+    # 问题包序号集合（两侧窗口事件合并收集，跨层/跨侧高亮可追踪）
+    hl_seqs = _ctx_hl_seqs(
+        ctx, ((ctx.bpf_window_events or {}).get("client") or [])
+        + ((ctx.bpf_window_events or {}).get("server") or []))
     parts = []
     # 子项1：问题请求相关事件（仅问题连接五元组 + 关键线程调度）
     req_evs = _problem_request_events(ctx, side)
@@ -4126,7 +5369,7 @@ def _side_events_html(ctx, side):
             "关键线程调度，%d 条）</summary>%s</details>"
             % (len(req_evs),
                _events_table(req_evs, "%s 侧问题请求相关事件" % side,
-                             inferred=inferred)))
+                             inferred=inferred, hl_seqs=hl_seqs)))
     # 子项2：慢段时间窗事件（瓶颈段窗口内全部连接，高亮 + 过滤选择）
     sw = getattr(ctx, "slow_seg", None) or {}
     sw_side = (sw.get("sides") or {}).get(side)
@@ -4138,23 +5381,28 @@ def _side_events_html(ctx, side):
                     fmt_us(sw.get("dur_us") or 0),
                     len(sw_side["events"]), sw_side["n_mine"], sw_side["n_other"]))
         note = ("瓶颈段时间窗内该节点全部连接的 bpf 事件（含穿插的其他请求）；"
-                "黄底 = 问题连接五元组；事件过多时可用上方按钮 / 关键字过滤选择")
+                "黄底 = 问题连接五元组；红色序号 = 问题包序号（跨事件可追踪）；"
+                "事件过多时可用上方按钮 / 关键字过滤选择")
         parts.append(
             "<details><summary>%s</summary>%s</details>"
             % (html.escape(title),
                _window_events_table(sw_side["events"], title, note=note,
-                                    with_filter=True)))
-    # 子项3：问题时间窗全景（ClientSend→ClientRecv 整窗）
-    n_mine = sum(1 for e in wevs if e.get("match5t"))
-    n_other = sum(1 for e in wevs if e.get("match5t") is False)
-    pano_title = "%s 节点 bpf 事件（%s，问题时间窗全景）" % (side, node or "节点未定位")
-    pano_note = ("共 %d 条：问题连接 %d 条 / 其他连接 %d 条（其他请求事件直接混排展示）；"
-                 "黄底行 = 问题连接五元组事件；事件过多时可用上方按钮 / 关键字过滤选择"
-                 % (len(wevs), n_mine, n_other))
-    parts.append("<details><summary>%s</summary>%s</details>"
-                 % (html.escape(pano_title),
-                    _window_events_table(wevs, pano_title, note=pano_note,
-                                         with_filter=True)))
+                                    with_filter=True, hl_seqs=hl_seqs)))
+    # 子项3：问题时间窗全景（ClientSend→ClientRecv 整窗）；
+    # cpu_busy 已渲染该侧问题窗口全景（含归属/高亮/业务 cpu 标注）时
+    # 不再重复输出，无 cpu_busy 时保留兜底
+    if not (getattr(ctx, "cpu_busy", None) or {}).get(side):
+        n_mine = sum(1 for e in wevs if e.get("match5t"))
+        n_other = sum(1 for e in wevs if e.get("match5t") is False)
+        pano_title = "%s 节点 bpf 事件（%s，问题时间窗全景）" % (side, node or "节点未定位")
+        pano_note = ("共 %d 条：问题连接 %d 条 / 其他连接 %d 条（其他请求事件直接混排展示）；"
+                     "黄底行 = 问题连接五元组事件；红色序号 = 问题包序号（跨事件可追踪）；"
+                     "事件过多时可用上方按钮 / 关键字过滤选择"
+                     % (len(wevs), n_mine, n_other))
+        parts.append("<details><summary>%s</summary>%s</details>"
+                     % (html.escape(pano_title),
+                        _window_events_table(wevs, pano_title, note=pano_note,
+                                             with_filter=True, hl_seqs=hl_seqs)))
     return "".join(parts)
 
 
@@ -4167,6 +5415,10 @@ def _cpu_busy_html(ctx):
     - 摘要：窗口/业务线程/事件统计 + 业务 cpu 上其他请求处理结论。
     """
     cpu_busy = getattr(ctx, "cpu_busy", None) or {}
+    # 问题包序号集合（两侧窗口事件合并收集，跨层/跨侧高亮可追踪）
+    hl_seqs = _ctx_hl_seqs(
+        ctx, [e for s in ("client", "server") if cpu_busy.get(s)
+              for e in (cpu_busy[s].get("events") or [])])
     parts = []
     for side in ("client", "server"):
         info = cpu_busy.get(side)
@@ -4260,9 +5512,11 @@ def _cpu_busy_html(ctx):
                     "下一步分析该任务为何在该 cpu 执行</span>"
                     % (side, cpu_txt, html.escape(loc["comm"] or "?"),
                        loc["vec_txt"], loc["latency_us"]))
-        # 事件表（问题五元组高亮 + 业务 cpu 标注）
+        # 事件表（问题五元组高亮 + 业务 cpu 标注 + 问题序号红色标注）
         shown = evs[:EVENTS_TABLE_MAX_ROWS]
-        rows = "".join(_window_event_row(e, cpu_val) for e in shown)
+        rows = "".join(_event_row_html(e, cpu_val=cpu_val, with_owner=True,
+                                       hl_seqs=hl_seqs)
+                       for e in shown)
         cap_note = ""
         if len(evs) > EVENTS_TABLE_MAX_ROWS:
             cap_note = ('<tr><td colspan="7" class="muted">共 %d 条，仅列前 %d 条'
@@ -4275,7 +5529,7 @@ def _cpu_busy_html(ctx):
             '<tr><th>时间</th><th>事件</th><th>tid</th><th>cpu</th>'
             "<th>连接</th><th>附加</th><th>归属</th></tr>%s%s</table></div>"
             '<p class="muted">黄底行 = 问题连接五元组事件（%s）；'
-            "红色 cpu = 业务线程所在 cpu</p>"
+            "红色 cpu = 业务线程所在 cpu；红色序号 = 问题包序号（跨事件可追踪）</p>"
             % (side, node or "?", "<br>".join(sum_rows),
                rows, cap_note, html.escape(info.get("conn") or "?")))
         # 定位结论块（收包 cpu 被任务占用）：完整 kstack 用 <pre> 展示不截断
@@ -4320,104 +5574,36 @@ def _cpu_busy_html(ctx):
             "（收包后业务处理开始晚 → 软中断抢占定界）</h3>" + "".join(parts))
 
 
-def _irqoff_svg(series, width=880, height=220):
-    """irqoff 时长散点（纯 Python 内联 SVG，无 JS）：x=时间，y=关中断时长。
+def _os_monitor_summary_html(aux_stats):
+    """主报告周期监控摘要卡：结论性摘要行 + 指向独立 os_monitor_report.html。
 
-    series: [(ts, latency_us, comm, cpu)]（已按时长降序截断）。
+    全量交互探索（irqoff 分桶/进程 top/散点、sar 趋势、NUMA 访存）收敛到
+    独立报告，主报告只保留一行结论摘要，不再重复静态渲染。
     """
-    pts = [(ts, lu, comm, cpu) for ts, lu, comm, cpu in series
-           if ts is not None and lu is not None]
-    if not pts:
+    aux_stats = aux_stats or {}
+    irqoff = aux_stats.get("irqoff") or {}
+    nic = aux_stats.get("nic") or {}
+    if not irqoff and not nic:
         return ""
-    t_lo = min(p[0] for p in pts)
-    t_hi = max(p[0] for p in pts)
-    if t_hi <= t_lo:  # 单点/同刻：给 1s 展开区间，避免除零
-        t_hi = t_lo + timedelta(seconds=1)
-    y_hi = max(p[1] for p in pts) or 1.0
-    pad_l, pad_r, pad_t, pad_b = 70, 12, 10, 22
-    w = width - pad_l - pad_r
-    h = height - pad_t - pad_b
-
-    def X(ts):
-        return pad_l + w * (ts - t_lo).total_seconds() / (t_hi - t_lo).total_seconds()
-
-    def Y(lu):
-        return pad_t + h * (1 - lu / y_hi)
-
-    grid = []
-    for i in range(5):
-        val = y_hi * i / 4.0
-        y = Y(val)
-        grid.append(
-            '<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="#e1e4e8" '
-            'stroke-width="1"/>'
-            '<text x="%d" y="%.1f" font-size="10" fill="#57606a" '
-            'text-anchor="end">%s</text>'
-            % (pad_l, y, width - pad_r, y, pad_l - 6, y + 3, fmt_us(val)))
-    dots = "".join(
-        '<circle cx="%.1f" cy="%.1f" r="2.5" fill="#d63384">'
-        "<title>%s cpu%s %s</title></circle>"
-        % (X(ts), Y(lu), fmt_dt(ts), cpu, fmt_us(lu))
-        for ts, lu, comm, cpu in pts)
-    x_labels = (
-        '<text x="%d" y="%d" font-size="10" fill="#57606a">%s</text>'
-        '<text x="%d" y="%d" font-size="10" fill="#57606a" text-anchor="end">%s</text>'
-        % (pad_l, height - 6, t_lo.strftime("%m-%d %H:%M:%S"),
-           width - pad_r, height - 6, t_hi.strftime("%m-%d %H:%M:%S")))
-    return ('<svg viewBox="0 0 %d %d" style="max-width:100%%;height:auto" '
-            'role="img" aria-label="关中断时长散点">%s%s%s</svg>'
-            % (width, height, "".join(grid), dots, x_labels))
-
-
-def _irqoff_overview_html(aux_stats):
-    """关中断统计卡（全采集周期）：分桶直方图 + 按进程 top10 + SVG 散点 + Top20。"""
-    stats_by_node = (aux_stats or {}).get("irqoff") or {}
-    if not stats_by_node:
-        return ""
-    parts = []
-    for node in sorted(stats_by_node):
-        st = stats_by_node[node]
-        if not st.get("total"):
-            continue
-        # 分桶直方图（≥ 阈值累计计数，条宽按最大桶归一）
-        buckets = st.get("buckets") or {}
-        bmax = max(buckets.values()) if buckets else 0
-        hist_rows = "".join(
-            "<tr><td>≥%s</td><td>%d</td><td>%s</td></tr>"
-            % (fmt_us(b), buckets.get(b, 0),
-               ('<div style="background:#0969da;height:10px;width:%.1f%%;'
-                'max-width:280px"></div>' % (100.0 * buckets.get(b, 0) / bmax))
-               if bmax else "")
-            for b in IRQOFF_BUCKETS_US if buckets.get(b))
-        comm_rows = "".join(
-            "<tr><td>%s</td><td>%d</td><td>%s</td><td>%s</td></tr>"
-            % (html.escape(c), v["n"], fmt_us(v["max_us"]), fmt_us(v["total_us"]))
-            for c, v in sorted((st.get("by_comm") or {}).items(),
-                               key=lambda kv: -kv[1]["max_us"])[:10])
-        top_rows = "".join(
-            "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
-            % (fmt_dt(ts), fmt_us(lu), html.escape(str(comm)), cpu)
-            for ts, lu, comm, cpu in (st.get("series") or [])[:20])
-        parts.append(
-            "<h3>%s 节点：%d 条（hardirq %d / softirq %d），最长 %s</h3>"
-            '<table><tr><th>时长分桶</th><th>记录数</th><th></th></tr>%s</table>'
-            '<table><tr><th>进程 top10（按最长）</th><th>次数</th><th>最长</th>'
-            "<th>累计</th></tr>%s</table>"
-            '<details open><summary>关中断时长散点（x=时间 y=时长，'
-            "top %d 条最长记录）</summary>%s</details>"
-            '<details><summary>Top20 最长记录</summary>'
-            "<table><tr><th>时间</th><th>时长</th><th>进程</th><th>cpu</th></tr>"
-            "%s</table></details>"
-            % (html.escape(str(node)), st["total"], st["hardirq_n"], st["softirq_n"],
-               fmt_us(st["max_us"]), hist_rows, comm_rows,
-               len(st.get("series") or []), _irqoff_svg(st.get("series") or []),
-               top_rows))
-    if not parts:
-        return ""
-    return ('<div class="card"><h2>关中断统计（全采集周期，&gt;1ms）</h2>'
-            '<p class="muted">来源：irqoff_latency_&lt;nodeIp&gt;.log。'
-            "定界中断相关问题（如网卡收包慢因关中断导致），"
-            "问题时刻的窗口内记录见各 trace 卡。</p>%s</div>" % "".join(parts))
+    lines = []
+    if irqoff:
+        n_nodes = sum(1 for st in irqoff.values() if st.get("total"))
+        total = sum(st.get("total", 0) for st in irqoff.values())
+        max_us = max((st.get("max_us") or 0) for st in irqoff.values())
+        lines.append("关中断：%d 个节点共 %d 条记录（&gt;1ms），"
+                     "全周期最长 %s" % (n_nodes, total, fmt_us(max_us)))
+    if nic:
+        peaks = [d.get("max_ifutil") or 0.0
+                 for devs in nic.values() for d in devs.values()]
+        if peaks:
+            lines.append("网卡利用率：全周期峰值 %%ifutil %.2f%%" % max(peaks))
+    return ('<div class="card"><h2>OS 资源周期监控（全采集周期，摘要）</h2>'
+            "<ul>%s</ul>"
+            '<p class="muted">分桶 / 进程 top / 散点与趋势等全量交互探索见'
+            '独立报告 <a href="os_monitor_report.html">os_monitor_report.html'
+            "</a>（与主报告同目录生成）；问题时刻窗口内记录见各 trace 卡。</p>"
+            "</div>"
+            % "".join("<li>%s</li>" % l for l in lines))
 
 
 def _nic_overview_html(aux_stats):
@@ -4447,6 +5633,819 @@ def _nic_overview_html(aux_stats):
             "<th>链路</th><th>采样数</th><th>峰值 %%ifutil</th><th>均值 %%ifutil</th>"
             "<th>峰值时刻</th><th>峰值 rxpck/s</th></tr>%s</table></div>"
             % "".join(rows))
+
+
+# NUMA 访存监控交互探索器：单图 + 节点选择 + 指标勾选 + 悬浮透明提示窗 +
+# 拖拽时间段缩放（原生 JS，离线自包含；替代逐节点平铺多子图，报告不再过长）
+# 工厂形式 window.XEXP(P)：报告级 <script> 定义一次，numa/irq 卡只留
+# XEXP('numa') / XEXP('irq') init 调用（P 为 DOM id 前缀，同页多实例隔离）
+_EXPLORER_JS_TPL = r"""
+window.XEXP = function (P) {
+"use strict";
+var DATA = JSON.parse(document.getElementById(P + '-data').textContent);
+var COLORS = ["#5470c6", "#c62828", "#2e7d32", "#ef6c00",
+              "#7b1fa2", "#00838f", "#c2185b", "#5d4037"];
+var MODE = DATA.mode || 'line';          // line=折线（周期采样）/ scatter=散点（事件）
+var GROUPS = DATA.groups || {};          // group -> 分组标题（顺序即面板顺序）
+var MKEYS = Object.keys(DATA.metrics);
+var svg = document.getElementById(P + '-svg');
+var tip = document.getElementById(P + '-tooltip');
+var W = 960, H = 340, PL = 72, PR = 16, PT = 14, PB = 40;
+var state = {node: DATA.nodes[0], t0: null, t1: null};
+var view = {tmin: 0, tmax: 1};
+var kinfo = {};           // key -> {mn, mx, pts, color}（当前渲染可见点）
+var checked = null;       // 勾选指标 key 列表（null = 首次默认）
+var Xf = null;            // 当前渲染的 t -> x 像素映射
+var hoverG = null, drag = {on: false, x0: 0}, zoomRect = null;
+var Yf = null;             // 当前渲染的 (key, value) -> y 像素映射
+
+function colorOf(k) { return COLORS[MKEYS.indexOf(k) % COLORS.length]; }
+function avail() { return DATA.series[state.node] || {}; }
+function el(n) { return document.createElementNS('http://www.w3.org/2000/svg', n); }
+function sline(x1, y1, x2, y2, c, w, dash) {
+    var l = el('line');
+    l.setAttribute('x1', x1); l.setAttribute('y1', y1);
+    l.setAttribute('x2', x2); l.setAttribute('y2', y2);
+    l.setAttribute('stroke', c); l.setAttribute('stroke-width', w);
+    if (dash) { l.setAttribute('stroke-dasharray', dash); }
+    return l;
+}
+function stext(x, y, s, anchor) {
+    var t = el('text');
+    t.setAttribute('x', x); t.setAttribute('y', y);
+    t.setAttribute('font-size', '10'); t.setAttribute('fill', '#57606a');
+    t.setAttribute('text-anchor', anchor || 'start');
+    t.textContent = s;
+    return t;
+}
+function svgX(evt) {
+    var r = svg.getBoundingClientRect();
+    return (evt.clientX - r.left) / r.width * W;
+}
+function fmtVal(v) {
+    if (v == null) { return '-'; }
+    if (Number.isInteger(v)) { return v.toLocaleString('en-US'); }
+    return String(Math.round(v * 100) / 100);
+}
+function fmtTime(t) {
+    var d = new Date(t * 1000);
+    function p(n) { return (n < 10 ? '0' : '') + n; }
+    if ((view.tmax - view.tmin) > 86400) {
+        return (d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' +
+               p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+    return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// 节点下拉（选项已在服务端渲染，此处只挂事件）：
+// 切换节点保留已勾选指标（checked 是用户选择的完整记忆，不随节点重置；
+// 指标字段多、逐个勾选成本高，跨节点对比时勾选直接沿用）
+var sel = document.getElementById(P + '-node-sel');
+sel.addEventListener('change', function () {
+    state.node = sel.value;
+    state.t0 = state.t1 = null;
+    buildMetrics(false);
+    render();
+});
+
+// 指标勾选面板：按分组渲染，颜色块与图中序列一致；
+// 分组标题带组级复选框，支持整组批量选中/取消（部分勾选显示半选状态）
+function defaultKeys(av) {
+    var d = (DATA.default || []).filter(function (k) {
+        return av[k] && av[k].length;
+    });
+    if (!d.length) {
+        for (var i = 0; i < MKEYS.length; i++) {
+            if (av[MKEYS[i]] && av[MKEYS[i]].length) { d = [MKEYS[i]]; break; }
+        }
+    }
+    return d;
+}
+function collectChecked(box) {
+    return [].map.call(
+        box.querySelectorAll('.xexp-mitem input:checked'),
+        function (c) { return c.value; });
+}
+function syncGroupChecks(box) {
+    [].forEach.call(box.querySelectorAll('.xexp-gcheck'), function (gc) {
+        var g = gc.getAttribute('data-g');
+        var gks = [].map.call(
+            box.querySelectorAll('.xexp-mitem input'),
+            function (c) { return c.value; })
+            .filter(function (k) { return DATA.metrics[k].group === g; });
+        var nsel = gks.filter(function (k) {
+            return checked.indexOf(k) >= 0; }).length;
+        gc.checked = gks.length > 0 && nsel === gks.length;
+        gc.indeterminate = nsel > 0 && nsel < gks.length;
+    });
+}
+function buildMetrics(resetDefault) {
+    var box = document.getElementById(P + '-metrics');
+    box.innerHTML = '';
+    var av = avail();
+    if (checked === null || resetDefault) { checked = defaultKeys(av); }
+    else if (!checked.some(function (k) { return av[k] && av[k].length; })) {
+        // 当前节点与已勾选无交集：并集补默认（原勾选保留在记忆中，
+        // 切回有该指标的节点即恢复显示，不覆盖不丢弃）
+        checked = checked.concat(defaultKeys(av));
+    }
+    var groups = {};
+    MKEYS.forEach(function (k) {
+        if (av[k] && av[k].length) {
+            var g = DATA.metrics[k].group;
+            (groups[g] = groups[g] || []).push(k);
+        }
+    });
+    function addItems(container, ks) {
+        ks.forEach(function (k) {
+            var lb = document.createElement('label');
+            lb.className = 'xexp-mitem';
+            var cb = document.createElement('input');
+            cb.type = 'checkbox'; cb.value = k;
+            cb.checked = checked.indexOf(k) >= 0;
+            cb.addEventListener('change', function () {
+                checked = collectChecked(box);
+                syncGroupChecks(box);
+                render();
+            });
+            var sw = document.createElement('span');
+            sw.className = 'xexp-swatch';
+            sw.style.background = colorOf(k);
+            var sp = document.createElement('span');
+            sp.textContent = DATA.metrics[k].label;
+            lb.appendChild(cb); lb.appendChild(sw); lb.appendChild(sp);
+            container.appendChild(lb);
+        });
+    }
+    Object.keys(GROUPS).forEach(function (g) {
+        if (!groups[g]) { return; }
+        var gks = groups[g];
+        // 组内常用/全部两级：common=0 的指标收进 xexp-more（默认隐藏，
+        // 点"展开"后勾选；勾选状态与折叠状态独立）
+        var commonKs = gks.filter(function (k) {
+            return DATA.metrics[k].common !== 0; });
+        var moreKs = gks.filter(function (k) {
+            return DATA.metrics[k].common === 0; });
+        var div = document.createElement('div');
+        div.className = 'xexp-mgroup';
+        var tl = document.createElement('label');
+        tl.className = 'xexp-mtitle';
+        var gc = document.createElement('input');
+        gc.type = 'checkbox';
+        gc.className = 'xexp-gcheck';
+        gc.setAttribute('data-g', g);
+        gc.title = '批量选中/取消本组全部指标';
+        var nsel0 = gks.filter(function (k) {
+            return checked.indexOf(k) >= 0; }).length;
+        gc.checked = nsel0 === gks.length;
+        gc.indeterminate = nsel0 > 0 && nsel0 < gks.length;
+        gc.addEventListener('change', function () {
+            var on = gc.checked;
+            gks.forEach(function (k) {
+                var i = checked.indexOf(k);
+                if (on && i < 0) { checked.push(k); }
+                if (!on && i >= 0) { checked.splice(i, 1); }
+            });
+            [].forEach.call(
+                box.querySelectorAll('.xexp-mitem input'),
+                function (c) {
+                    if (gks.indexOf(c.value) >= 0) { c.checked = on; }
+                });
+            render();
+        });
+        var tt = document.createElement('span');
+        tt.textContent = GROUPS[g] || g;
+        tl.appendChild(gc); tl.appendChild(tt);
+        div.appendChild(tl);
+        addItems(div, commonKs);
+        if (moreKs.length) {
+            var moreBox = document.createElement('div');
+            moreBox.className = 'xexp-more';
+            moreBox.style.display = 'none';
+            var tg = document.createElement('button');
+            tg.type = 'button';
+            tg.className = 'xexp-toggle';
+            function syncTg() {
+                var nsel = moreKs.filter(function (k) {
+                    return checked.indexOf(k) >= 0; }).length;
+                tg.textContent = (moreBox.style.display === 'none' ?
+                        '展开 ' + moreKs.length + ' 项 ▾' : '收起 ▴') +
+                    (nsel ? '（' + nsel + ' 项已选）' : '');
+            }
+            tg.addEventListener('click', function () {
+                moreBox.style.display =
+                    moreBox.style.display === 'none' ? 'block' : 'none';
+                syncTg();
+            });
+            div.appendChild(tg);
+            addItems(moreBox, moreKs);
+            div.appendChild(moreBox);
+            syncTg();
+        }
+        box.appendChild(div);
+    });
+}
+
+// 主渲染：网格 + 轴刻度 + 折线/散点 + 悬停/拖拽捕获层
+function render() {
+    var av = avail();
+    // 渲染键 = 勾选记忆 ∩ 当前节点可用序列（checked 不做破坏性裁剪）
+    var keys = checked.filter(function (k) { return av[k] && av[k].length; });
+    while (svg.firstChild) { svg.removeChild(svg.firstChild); }
+    if (!keys.length) {
+        svg.appendChild(stext(PL + 20, PT + 30,
+            '未勾选任何指标（点击分组标题复选框可整组批量选中）'));
+        Xf = Yf = null;
+        return;
+    }
+    var tmin = Infinity, tmax = -Infinity;
+    keys.forEach(function (k) {
+        av[k].forEach(function (p) {
+            if (p[0] < tmin) { tmin = p[0]; }
+            if (p[0] > tmax) { tmax = p[0]; }
+        });
+    });
+    if (!isFinite(tmin)) { return; }
+    if (state.t0 != null) { tmin = state.t0; tmax = state.t1; }
+    view.tmin = tmin; view.tmax = tmax;
+    var span = (tmax - tmin) || 1;
+    Xf = function (t) { return PL + (t - tmin) / span * (W - PL - PR); };
+    var vis = {};
+    keys.forEach(function (k) {
+        vis[k] = av[k].filter(function (p) { return p[0] >= tmin && p[0] <= tmax; });
+    });
+    var units = [];
+    keys.forEach(function (k) {
+        var u = DATA.metrics[k].unit;
+        if (units.indexOf(u) < 0) { units.push(u); }
+    });
+    var norm = units.length > 1;   // 混合单位 → 各序列归一化 0-100
+    var gmin = Infinity, gmax = -Infinity;
+    kinfo = {};
+    keys.forEach(function (k) {
+        var ys = vis[k].map(function (p) { return p[1]; });
+        var mn = ys.length ? Math.min.apply(null, ys) : 0;
+        var mx = ys.length ? Math.max.apply(null, ys) : 0;
+        kinfo[k] = {mn: mn, mx: mx, pts: vis[k], color: colorOf(k)};
+        if (!norm) { gmin = Math.min(gmin, mn); gmax = Math.max(gmax, mx); }
+    });
+    if (!norm && gmin === gmax) { gmax = gmin + 1; }
+    Yf = function (k, v) {
+        if (norm) {
+            var i = kinfo[k];
+            if (i.mx === i.mn) { return PT + (H - PB - PT) / 2; }
+            return PT + (1 - (v - i.mn) / (i.mx - i.mn)) * (H - PB - PT);
+        }
+        return PT + (1 - (v - gmin) / (gmax - gmin)) * (H - PB - PT);
+    };
+    for (var i = 0; i <= 4; i++) {
+        var yy = PT + (H - PB - PT) * i / 4;
+        svg.appendChild(sline(PL, yy, W - PR, yy, '#e1e4e8', 1));
+        var val = norm ? (100 - 25 * i) : (gmax - (gmax - gmin) * i / 4);
+        svg.appendChild(stext(PL - 6, yy + 3,
+                              fmtVal(norm ? Math.round(val) : Math.round(val * 100) / 100),
+                              'end'));
+    }
+    svg.appendChild(stext(PL - 6, PT - 3, norm ?
+        '相对幅度（混合单位归一化 0-100）' : ('单位：' + units[0]), 'end'));
+    for (i = 0; i <= 5; i++) {
+        var t = tmin + span * i / 5, xx = Xf(t);
+        svg.appendChild(sline(xx, PT, xx, H - PB, '#e1e4e8', 1));
+        svg.appendChild(stext(xx, H - PB + 14, fmtTime(t), 'middle'));
+    }
+    keys.forEach(function (k) {
+        if (MODE === 'scatter') {
+            kinfo[k].pts.forEach(function (p) {
+                var c = el('circle');
+                c.setAttribute('cx', Xf(p[0]).toFixed(1));
+                c.setAttribute('cy', Yf(k, p[1]).toFixed(1));
+                c.setAttribute('r', '2.5');
+                c.setAttribute('fill', kinfo[k].color);
+                c.setAttribute('fill-opacity', '0.75');
+                svg.appendChild(c);
+            });
+        } else {
+            var pts = kinfo[k].pts.map(function (p) {
+                return Xf(p[0]).toFixed(1) + ',' + Yf(k, p[1]).toFixed(1);
+            }).join(' ');
+            var pl = el('polyline');
+            pl.setAttribute('points', pts);
+            pl.setAttribute('fill', 'none');
+            pl.setAttribute('stroke', kinfo[k].color);
+            pl.setAttribute('stroke-width', '1.5');
+            svg.appendChild(pl);
+        }
+    });
+    hoverG = el('g');
+    svg.appendChild(hoverG);
+    var cap = el('rect');
+    cap.setAttribute('x', PL); cap.setAttribute('y', PT);
+    cap.setAttribute('width', W - PL - PR); cap.setAttribute('height', H - PB - PT);
+    cap.setAttribute('fill', 'transparent');
+    cap.style.cursor = 'crosshair';
+    svg.appendChild(cap);
+}
+
+// 悬停：竖直参考线 + 各可见序列最近点 + 悬浮透明窗口（时间 + 原始值 + 附加信息）
+function hideTip() {
+    tip.style.display = 'none';
+    if (hoverG) { while (hoverG.firstChild) { hoverG.removeChild(hoverG.firstChild); } }
+}
+svg.addEventListener('mousemove', function (e) {
+    if (drag.on) { updateDrag(e); return; }
+    var x = svgX(e);
+    if (x < PL || x > W - PR || !Xf || !Yf) { hideTip(); return; }
+    var t = view.tmin + (x - PL) / (W - PL - PR) * (view.tmax - view.tmin);
+    hideTip();
+    var rows = [];
+    checked.forEach(function (k) {
+        var pts = kinfo[k] && kinfo[k].pts;
+        if (!pts || !pts.length) { return; }
+        var best = pts[0], bd = Math.abs(pts[0][0] - t);
+        for (var j = 1; j < pts.length; j++) {
+            var d = Math.abs(pts[j][0] - t);
+            if (d < bd) { bd = d; best = pts[j]; }
+        }
+        rows.push({k: k, p: best});
+        var c = el('circle');
+        c.setAttribute('cx', Xf(best[0]).toFixed(1));
+        c.setAttribute('cy', Yf(k, best[1]).toFixed(1));
+        c.setAttribute('r', '3.5');
+        c.setAttribute('fill', kinfo[k].color);
+        hoverG.appendChild(c);
+    });
+    if (!rows.length) { return; }
+    var gx = Xf(rows[0].p[0]);
+    hoverG.appendChild(sline(gx, PT, gx, H - PB, '#666', 1, '4 3'));
+    tip.innerHTML = '<div class="ntt">' + esc(fmtTime(rows[0].p[0])) + '</div>' +
+        rows.map(function (r) {
+            var extra = (r.p.length > 2 && r.p[2]) ?
+                ' (' + esc(r.p[2]) + ')' : '';
+            return '<div><span style="color:' + kinfo[r.k].color + '">●</span> ' +
+                esc(DATA.metrics[r.k].label) + '：<b>' + fmtVal(r.p[1]) + '</b> ' +
+                esc(DATA.metrics[r.k].unit || '') + extra + '</div>';
+        }).join('');
+    tip.style.display = 'block';
+    var tw = tip.offsetWidth, th = tip.offsetHeight;
+    var lx = e.clientX + 14, ly = e.clientY + 14;
+    if (lx + tw > window.innerWidth - 8) { lx = e.clientX - tw - 14; }
+    if (ly + th > window.innerHeight - 8) { ly = e.clientY - th - 14; }
+    tip.style.left = lx + 'px';
+    tip.style.top = ly + 'px';
+});
+svg.addEventListener('mouseleave', hideTip);
+
+// 拖拽缩放：图上横向拖拽选时间段（半透明选区），双击/按钮恢复全量
+function updateDrag(e) {
+    var x = Math.max(PL, Math.min(W - PR, svgX(e)));
+    var a = Math.min(drag.x0, x), b = Math.max(drag.x0, x);
+    if (zoomRect) { svg.removeChild(zoomRect); }
+    zoomRect = el('rect');
+    zoomRect.setAttribute('x', a); zoomRect.setAttribute('y', PT);
+    zoomRect.setAttribute('width', Math.max(0, b - a));
+    zoomRect.setAttribute('height', H - PB - PT);
+    zoomRect.setAttribute('fill', 'rgba(84,112,198,0.18)');
+    svg.appendChild(zoomRect);
+}
+svg.addEventListener('mousedown', function (e) {
+    var x = svgX(e);
+    if (x < PL || x > W - PR) { return; }
+    drag.on = true; drag.x0 = x;
+    hideTip();
+    e.preventDefault();
+});
+window.addEventListener('mouseup', function (e) {
+    if (!drag.on) { return; }
+    drag.on = false;
+    if (zoomRect) { svg.removeChild(zoomRect); zoomRect = null; }
+    var x = svgX(e);
+    var a = Math.min(drag.x0, x), b = Math.max(drag.x0, x);
+    if (b - a < 5) { return; }   // 视为点击，不缩放
+    var t0 = view.tmin + (a - PL) / (W - PL - PR) * (view.tmax - view.tmin);
+    var t1 = view.tmin + (b - PL) / (W - PL - PR) * (view.tmax - view.tmin);
+    if (t1 - t0 < 0.5) { return; }   // 最小 0.5s
+    state.t0 = t0; state.t1 = t1;
+    render();
+});
+function resetZoom() { state.t0 = state.t1 = null; render(); }
+svg.addEventListener('dblclick', resetZoom);
+document.getElementById(P + '-reset').addEventListener('click', resetZoom);
+
+buildMetrics();
+render();
+};
+"""
+
+
+def _explorer_js(prefix):
+    """探索器 init 调用（工厂 window.XEXP 在报告级定义一次）。"""
+    return "XEXP('%s')" % prefix
+
+
+# 探索器通用样式（类前缀 xexp-，numa / irq 多实例共享同一套）
+_EXPLORER_CSS = (
+    "<style>"
+    ".xexp-exp{margin-top:8px}"
+    ".xexp-ctl{display:flex;gap:12px;align-items:center;"
+    "flex-wrap:wrap;margin:8px 0}"
+    ".xexp-ctl select{padding:4px 8px;border:1px solid #d0d7de;"
+    "border-radius:6px}"
+    ".xexp-reset{padding:4px 10px;border:1px solid #d0d7de;"
+    "border-radius:6px;background:#f6f8fa;cursor:pointer}"
+    ".xexp-reset:hover{background:#eef1f4}"
+    ".xexp-metrics{display:flex;gap:18px;flex-wrap:wrap;"
+    "margin:6px 0 10px}"
+    ".xexp-mgroup{border:1px solid #e1e4e8;border-radius:8px;"
+    "padding:8px 12px}"
+    ".xexp-mtitle{display:flex;align-items:center;gap:6px;"
+    "font-size:12px;color:#57606a;margin-bottom:6px;"
+    "font-weight:600;cursor:pointer}"
+    ".xexp-mitem{display:inline-flex;align-items:center;gap:4px;"
+    "margin:2px 10px 2px 0;font-size:13px;white-space:nowrap;"
+    "cursor:pointer}"
+    ".xexp-swatch{display:inline-block;width:10px;height:10px;"
+    "border-radius:2px}"
+    ".xexp-toggle{border:none;background:none;color:#0969da;"
+    "font-size:12px;cursor:pointer;padding:0 0 0 4px;"
+    "text-decoration:underline}"
+    ".xexp-toggle:hover{color:#0550ae}"
+    ".xexp-more{margin-top:4px;"
+    "border-top:1px dashed #e1e4e8;padding-top:4px}"
+    ".xexp-svg{width:100%;height:auto;display:block;background:#fff;"
+    "border:1px solid #e1e4e8;border-radius:8px}"
+    ".xexp-tooltip{position:fixed;display:none;"
+    "background:rgba(26,26,46,.92);color:#fff;padding:8px 10px;"
+    "font-size:12px;border-radius:6px;pointer-events:none;"
+    "z-index:99;box-shadow:0 4px 12px rgba(0,0,0,.35);"
+    "max-width:460px}"
+    ".xexp-tooltip .ntt{font-weight:600;margin-bottom:4px;"
+    "border-bottom:1px solid rgba(255,255,255,.25);padding-bottom:3px}"
+    "</style>")
+
+
+def _numa_explorer_html(aux_stats):
+    """NUMA 访存监控交互探索器（单图，替代逐节点平铺多子图）。
+
+    物理机多、每机指标多，平铺展示报告过长 → 汇总到一张交互图：
+      - 节点下拉选择（按需看某个 worker）；
+      - 指标分组勾选（numafast / memory / perf，颜色与序列一致）；
+      - 鼠标悬停：竖直参考线 + 各序列最近点 + 悬浮透明窗口
+        （时间 + 各指标原始值 + 单位）；
+      - 时间轴缩放：图上横向拖拽选择时间段（10 分钟级跨度可放大到秒级），
+        双击或"重置缩放"恢复全量；
+      - 混合单位同图时各序列归一化 0-100（悬浮窗始终显示原始值）。
+    原生 JS，无 CDN 依赖，离线自包含。数据嵌入 <script type="application/json">。
+    """
+    numa_by_node = (aux_stats or {}).get("numa") or {}
+    if not numa_by_node:
+        return ""
+    metrics = {}   # key -> {group, label, unit, common}（目录，跨节点合并）
+    series = {}    # node -> key -> [[epoch, val, extra?], ...]
+
+    def _add(node, key, group, label, unit, pts, common=1):
+        if not pts:
+            return
+        metrics.setdefault(key, {"group": group, "label": label,
+                                 "unit": unit, "common": common})
+        series.setdefault(node, {})[key] = pts
+
+    for node in sorted(numa_by_node):
+        st = numa_by_node[node]
+        nf = st.get("numafast") or []
+        if nf:
+            _add(node, "score", "numafast", "NUMA score(×100)", "%",
+                 [[r["ts"].timestamp(), r["score"] * 100]
+                  for r in nf if r.get("score") is not None])
+            nids = sorted({nid for r in nf for nid in (r.get("nids") or {})})
+            # NID 表全量指标：常用 %RMA 直接展示，其余（RMA_Die/RMA_Skt/
+            # LMA/MEM_all/MEM_free/%MEM/%CPU）默认收起，展开后勾选
+            for nid in nids:
+                def _nid_pts(f):
+                    return [[r["ts"].timestamp(),
+                             (r.get("nids") or {}).get(nid, {}).get(f)]
+                            for r in nf
+                            if (r.get("nids") or {}).get(nid, {}).get(f)
+                            is not None]
+                _add(node, "rma_%s" % nid, "numafast", "NID%s %%RMA" % nid,
+                     "%", _nid_pts("rma_pct"))
+                for key_s, fld, lbl, unit, com in (
+                        ("rma_die_%s", "rma_die_gb", "NID%s RMA_Die",
+                         "GB", 0),
+                        ("rma_skt_%s", "rma_skt_gb", "NID%s RMA_Skt",
+                         "GB", 0),
+                        ("lma_%s", "lma_gb", "NID%s LMA", "GB", 0),
+                        ("mem_all_%s", "mem_all_gb", "NID%s MEM_all",
+                         "GB", 0),
+                        ("mem_free_%s", "mem_free_gb", "NID%s MEM_free",
+                         "GB", 0),
+                        ("mem_%s", "mem_pct", "NID%s %%MEM", "%", 0),
+                        ("cpu_%s", "cpu_pct", "NID%s %%CPU", "%", 0)):
+                    _add(node, key_s % nid, "numafast", lbl % nid, unit,
+                         _nid_pts(fld), common=com)
+            # 第 3 章 top 进程（按访存排序，只进程行；悬浮窗显示进程名）
+            def _proc_pts(f):
+                return [[r["ts"].timestamp(), p.get(f), "cmd=%s" % p["command"]]
+                        for r in nf for p in (r.get("procs") or [])
+                        if p.get(f) is not None]
+            _add(node, "proc_access", "numafastproc",
+                 "top1 进程 ACCESS%", "%", _proc_pts("access_pct"))
+            _add(node, "proc_rma", "numafastproc", "top1 进程 %RMA",
+                 "%", _proc_pts("rma_pct"))
+            _add(node, "proc_cpu", "numafastproc", "top1 进程 %CPU",
+                 "%", _proc_pts("cpu_pct"))
+            _add(node, "proc_lma", "numafastproc", "top1 进程 LMA",
+                 "GB", _proc_pts("lma_gb"), common=0)
+            # 第 1 章访存矩阵 SRC→DST：每对一条访存占比序列（默认收起，
+            # 全程占比恒为 0 的对不展示；悬浮窗显示 traffic + 距离）
+            def _mx_pts(key):
+                return [[r["ts"].timestamp(), c["pct"],
+                         "%.2fGB|dist%s" % (c["gb"], c["dist"])]
+                        for r in nf
+                        for c in [(r.get("matrix") or {}).get(key)] if c]
+            for pr in sorted({k for r in nf for k in (r.get("matrix") or {})}):
+                pts = _mx_pts(pr)
+                if not any(p[1] for p in pts):
+                    continue
+                s, d = pr.split("_")
+                _add(node, "mx_%s" % pr, "numafastmx",
+                     "SRC%s→DST%s 访存%%" % (s, d), "%", pts, common=0)
+        mem = st.get("memory") or []
+        if mem:
+            for k, lbl in (("l1d", "L1D miss"), ("l1i", "L1I miss"),
+                           ("l2d", "L2D miss"), ("l2i", "L2I miss")):
+                _add(node, k, "memory", lbl, "%",
+                     [[r["ts"].timestamp(), r.get("%s_miss_pct" % k)]
+                      for r in mem if r.get("%s_miss_pct" % k) is not None])
+            for k in ("ddrc_read", "ddrc_write"):
+                _add(node, k, "memory", k, "MB/s",
+                     [[r["ts"].timestamp(), r.get("%s_mb_s" % k)]
+                      for r in mem if r.get("%s_mb_s" % k) is not None])
+            # Memory metrics of the Cache：按带宽和命中率两维（默认收起）
+            for col, lbl in (("l1d", "L1D"), ("l1i", "L1I"),
+                             ("l2d", "L2D"), ("l2i", "L2I"),
+                             ("l2dtlb", "L2D_TLB"), ("l2itlb", "L2I_TLB")):
+                _add(node, "%s_bw" % col, "memory", "%s 带宽" % lbl,
+                     "MB/s",
+                     [[r["ts"].timestamp(), r.get("%s_bw_mb_s" % col)]
+                      for r in mem if r.get("%s_bw_mb_s" % col) is not None],
+                     common=0)
+                _add(node, "%s_hit" % col, "memory", "%s 命中率" % lbl,
+                     "%",
+                     [[r["ts"].timestamp(), r.get("%s_hit_pct" % col)]
+                      for r in mem if r.get("%s_hit_pct" % col) is not None],
+                     common=0)
+            # L3 Read Bandwidth and Hit Rate（NODE 汇总行）
+            l3_nids = sorted({m.group(1) for r in mem
+                              for k in r
+                              for m in [re.match(r"l3_nid(\d+)_", k)] if m})
+            for nid in l3_nids:
+                for key_s, fld, lbl, unit, com in (
+                        ("l3_%s_read_bw", "l3_nid%s_read_bw_mb_s",
+                         "NID%s L3 读带宽", "MB/s", 1),
+                        ("l3_%s_hit", "l3_nid%s_hit_pct",
+                         "NID%s L3 命中率", "%", 1),
+                        ("l3_%s_hit_bw", "l3_nid%s_hit_bw_mb_s",
+                         "NID%s L3 命中带宽", "MB/s", 0)):
+                    _add(node, key_s % nid, "l3", lbl % nid, unit,
+                         [[r["ts"].timestamp(), r.get(fld % nid)]
+                          for r in mem if r.get(fld % nid) is not None],
+                         common=com)
+        perf = st.get("perf") or []
+        if perf:
+            # perf stat 事件持续增加 → 动态识别全部事件，报告完整体现：
+            # 已知事件沿用旧 key + 友好标签 + 默认展示；新事件自动进
+            # perf 分组（事件名做 label，默认收起，展开后勾选）
+            def _perf_values(r):
+                v = r.get("values")
+                if v is not None:
+                    return v
+                # 旧格式记录（无 values）→ 从旧字段合成
+                v = {}
+                if r.get("dtlb_load_misses") is not None:
+                    v["dTLB-load-misses"] = r["dtlb_load_misses"]
+                if r.get("itlb_load_misses") is not None:
+                    v["iTLB-load-misses"] = r["itlb_load_misses"]
+                for i in (0, 1):
+                    if r.get("ummu_pmcg_%d_tlb_hit_rate" % i) is not None:
+                        v["ummu_pmcg_%d/tbu_tlb_cache_hit_rate/" % i] = \
+                            r["ummu_pmcg_%d_tlb_hit_rate" % i]
+                return v
+
+            # 已知事件 → (序列 key, unit)；label 一律与原始指标名一致
+            # （ummu 类附友好说明括号后缀，原始名在前）。其余事件
+            # perf_evt:<事件名>（label=原始事件名含尾斜杠，恒 0 指标照常展示）
+            known = {"dTLB-load-misses": ("dtlb", "次/s"),
+                     "iTLB-load-misses": ("itlb", "次/s")}
+            for i in (0, 1):
+                known["ummu_pmcg_%d/tbu_tlb_cache_hit_rate/" % i] = (
+                    "ummu_%d" % i, "计数")
+            evts = []
+            for r in perf:
+                for evt in _perf_values(r):
+                    if evt not in evts:
+                        evts.append(evt)
+            for evt in sorted(evts):
+                if evt in known:
+                    key, unit = known[evt]
+                    lbl = ("ummu_pmcg_%d/tbu_tlb_cache_hit_rate/"
+                           "（TBU TLB 命中率）" % int(evt[10])
+                           if evt.startswith("ummu_pmcg_") else evt)
+                    common = 1
+                else:
+                    key, lbl, unit = ("perf_evt:%s" % evt, evt, "计数")
+                    common = 0
+                pts = []
+                for r in perf:
+                    val = _perf_values(r).get(evt)
+                    if val is None:
+                        continue
+                    cmt = (r.get("comments") or {}).get(evt)
+                    pts.append([r["ts"].timestamp(), val, cmt] if cmt
+                               else [r["ts"].timestamp(), val])
+                _add(node, key, "perf", lbl, unit, pts, common=common)
+    if not any(series.get(n) for n in series):
+        return ""
+    data = {"nodes": sorted(series),
+            "groups": {"numafast": "numafast（NUMA score / %RMA / 节点详情）",
+                       "numafastproc": "numafast top进程（按访存排序）",
+                       "numafastmx": "numafast 访存矩阵（SRC→DST 访存占比）",
+                       "memory": "memory（DDR 带宽 / Cache miss / 命中率）",
+                       "l3": "L3（读带宽 / 命中率）",
+                       "perf": "perf（perf stat 事件，新增指标自动识别）"},
+            "mode": "line",
+            "default": ["score", "proc_access"] + sorted(
+                k for k in metrics if re.match(r"rma_\d+$", k)),
+            "metrics": metrics, "series": series}
+    payload = json.dumps(data, ensure_ascii=False,
+                         separators=(",", ":")).replace("</", "<\\/")
+    options = "".join('<option value="%s"%s>%s</option>'
+                      % (html.escape(str(n)),
+                         " selected" if i == 0 else "", html.escape(str(n)))
+                      for i, n in enumerate(sorted(series)))
+    return ('<div class="card"><h2>NUMA 访存监控（全采集周期，交互探索）</h2>'
+            '<p class="muted">来源：dscollect_log/&lt;ip&gt;-&lt;ip&gt;-data_*/'
+            "（numafast / memory / perf）。选择节点与指标后单图对比"
+            "（切换节点保留已勾选指标，跨节点对比无需重新勾选）；"
+            "鼠标悬停查看该时刻各指标数值（悬浮窗）；在图上横向"
+            "<b>拖拽选择时间段缩放</b>（双击或“重置缩放”恢复全量）；"
+            "分组标题复选框可整组批量选中/取消；"
+            "常用指标直接展示，其余（NID 详情 / cache 带宽与命中率等）"
+            "点“展开”后勾选；top 进程序列悬停显示进程名。"
+            "观察访存类瓶颈（远程访存占比、DDR 带宽、cache/TLB miss 趋势），"
+            "与问题时刻对照。</p>"
+            '<script type="application/json" id="numa-data">' + payload +
+            '</script>'
+            '<div class="xexp-exp">'
+            '<div class="xexp-ctl"><label>节点 '
+            '<select id="numa-node-sel">' + options + '</select></label>'
+            '<button id="numa-reset" type="button" class="xexp-reset">'
+            '重置缩放</button></div>'
+            '<div id="numa-metrics" class="xexp-metrics"></div>'
+            '<svg id="numa-svg" class="xexp-svg" viewBox="0 0 960 340" '
+            'preserveAspectRatio="xMidYMid meet"></svg>'
+            '<div id="numa-tooltip" class="xexp-tooltip"></div>'
+            "</div>"
+            "<script>" + _explorer_js("numa") + "</script></div>")
+
+
+# 关中断统计交互探索器：序列勾选面板最多展示的进程数（其余合并"其他"）
+_IRQOFF_TOP_COMMS = 20
+
+
+def _irqoff_explorer_html(aux_stats):
+    """关中断统计交互探索器（单图，替代逐节点平铺散点）。
+
+    与 NUMA 访存监控同风格（通用探索器，散点模式）：
+      - 节点下拉选择（多物理机不平铺）；
+      - 按进程（comm）序列勾选，分组标题复选框支持整组批量选中/取消；
+      - 鼠标悬停：竖直参考线 + 各序列最近点 + 悬浮透明窗口
+        （时间 + 关中断时长 + cpu）；
+      - 时间轴拖拽缩放（双击或"重置缩放"恢复全量）。
+    下方保留跨节点汇总统计表（概览 / 分桶 / 进程 top10 / Top20）。
+    """
+    stats_by_node = (aux_stats or {}).get("irqoff") or {}
+    series = {}      # node -> comm -> [[epoch, us, "cpu=N"], ...]
+    comm_total = {}  # comm -> total_us（跨节点，top 排序用）
+    for node in sorted(stats_by_node):
+        by = {}
+        for ts, lu, comm, cpu in (stats_by_node[node].get("series") or []):
+            c = str(comm) if comm else "(未知)"
+            by.setdefault(c, []).append(
+                [ts.timestamp(), lu, "cpu=%s" % cpu])
+            comm_total[c] = comm_total.get(c, 0) + lu
+        if by:
+            series[node] = by
+    if not series:
+        return ""
+    top = [c for c, _ in sorted(comm_total.items(), key=lambda kv: -kv[1])
+           [:_IRQOFF_TOP_COMMS]]
+    topset = set(top)
+    metrics = {}   # comm（序列 key）-> {group, label, unit}
+    merged = {}    # node -> comm key -> pts（非 top 进程合并 __other__）
+    for node, by in series.items():
+        m = {}
+        for comm, pts in by.items():
+            key = comm if comm in topset else "__other__"
+            m.setdefault(key, []).extend(pts)
+        merged[node] = m
+    for comm in top:
+        metrics[comm] = {"group": "comm", "label": comm, "unit": "us"}
+    if any("__other__" in m for m in merged.values()):
+        metrics["__other__"] = {"group": "comm",
+                                "label": "(其他进程，共 %d 个)"
+                                % (len(comm_total) - len(topset)),
+                                "unit": "us"}
+    data = {"nodes": sorted(merged),
+            "groups": {"comm": "按进程（comm）"},
+            "mode": "scatter",
+            "default": top[:5],
+            "metrics": metrics, "series": merged}
+    payload = json.dumps(data, ensure_ascii=False,
+                         separators=(",", ":")).replace("</", "<\\/")
+    options = "".join('<option value="%s"%s>%s</option>'
+                      % (html.escape(str(n)),
+                         " selected" if i == 0 else "", html.escape(str(n)))
+                      for i, n in enumerate(sorted(merged)))
+    # 跨节点汇总统计表（概览 + 分桶 details + 进程 top10 + Top20）
+    ov_rows = "".join(
+        "<tr><td>%s</td><td>%d</td><td>%d</td><td>%d</td><td>%s</td>"
+        "<td>%s</td></tr>"
+        % (html.escape(str(node)), st["total"], st["hardirq_n"],
+           st["softirq_n"], fmt_us(st["max_us"]), fmt_us(st["total_us"]))
+        for node, st in sorted(stats_by_node.items()) if st.get("total"))
+    bucket_parts = []
+    for node, st in sorted(stats_by_node.items()):
+        buckets = st.get("buckets") or {}
+        if not buckets:
+            continue
+        bmax = max(buckets.values())
+        rows = "".join(
+            "<tr><td>≥%s</td><td>%d</td><td>%s</td></tr>"
+            % (fmt_us(b), buckets.get(b, 0),
+               ('<div style="background:#0969da;height:10px;width:%.1f%%;'
+                'max-width:280px"></div>' % (100.0 * buckets.get(b, 0) / bmax))
+               if bmax else "")
+            for b in IRQOFF_BUCKETS_US if buckets.get(b))
+        bucket_parts.append(
+            "<h4>%s</h4>"
+            '<table><tr><th>时长分桶</th><th>记录数</th><th></th></tr>%s</table>'
+            % (html.escape(str(node)), rows))
+    flat_comm = [(node, c, v)
+                 for node, st in sorted(stats_by_node.items())
+                 for c, v in sorted((st.get("by_comm") or {}).items(),
+                                    key=lambda kv: -kv[1]["max_us"])]
+    comm_rows = "".join(
+        "<tr><td>%s</td><td>%s</td><td>%d</td><td>%s</td><td>%s</td></tr>"
+        % (html.escape(str(node)), html.escape(str(c)), v["n"],
+           fmt_us(v["max_us"]), fmt_us(v["total_us"]))
+        for node, c, v in sorted(flat_comm, key=lambda x: -x[2]["max_us"])[:10])
+    flat_top = [(node, ts, lu, comm, cpu)
+                for node, st in sorted(stats_by_node.items())
+                for ts, lu, comm, cpu in (st.get("series") or [])]
+    top_rows = "".join(
+        "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
+        % (html.escape(str(node)), fmt_dt(ts), fmt_us(lu),
+           html.escape(str(comm)), cpu)
+        for node, ts, lu, comm, cpu in
+        sorted(flat_top, key=lambda x: -x[2])[:20])
+    return ('<div class="card"><h2>关中断统计（全采集周期，&gt;1ms，交互探索）'
+            "</h2>"
+            '<p class="muted">来源：irqoff_latency_&lt;nodeIp&gt;.log。'
+            "定界中断相关问题（如网卡收包慢因关中断导致）。"
+            "选择节点与进程后单图查看散点（x=时间 y=关中断时长）；"
+            "鼠标悬停查看该点详情（时间/时长/cpu，悬浮窗）；在图上横向"
+            "<b>拖拽选择时间段缩放</b>（双击或“重置缩放”恢复全量）；"
+            "分组标题复选框可整组批量选中/取消。</p>"
+            '<script type="application/json" id="irq-data">' + payload +
+            '</script>'
+            '<div class="xexp-exp">'
+            '<div class="xexp-ctl"><label>节点 '
+            '<select id="irq-node-sel">' + options + '</select></label>'
+            '<button id="irq-reset" type="button" class="xexp-reset">'
+            '重置缩放</button></div>'
+            '<div id="irq-metrics" class="xexp-metrics"></div>'
+            '<svg id="irq-svg" class="xexp-svg" viewBox="0 0 960 340" '
+            'preserveAspectRatio="xMidYMid meet"></svg>'
+            '<div id="irq-tooltip" class="xexp-tooltip"></div>'
+            "</div>"
+            "<script>" + _explorer_js("irq") + "</script>"
+            + '<table><tr><th>节点</th><th>记录数</th><th>hardirq</th>'
+              "<th>softirq</th><th>最长</th><th>累计</th></tr>" + ov_rows +
+            "</table>"
+            + '<details><summary>时长分桶（按节点，≥ 阈值累计计数）</summary>'
+              + "".join(bucket_parts) + "</details>"
+            + '<details><summary>进程 top10（跨节点，按最长）</summary>'
+              "<table><tr><th>节点</th><th>进程</th><th>次数</th>"
+              "<th>最长</th><th>累计</th></tr>" + comm_rows + "</table>"
+            + "</details>"
+            + '<details><summary>Top20 最长记录（跨节点）</summary>'
+              "<table><tr><th>节点</th><th>时间</th><th>时长</th>"
+              "<th>进程</th><th>cpu</th></tr>" + top_rows + "</table>"
+            "</details></div>")
 
 
 # ── Phase 5/6: conclusion ─────────────────────────────────────────────────────
@@ -4507,6 +6506,45 @@ class ConclusionEngine:
                     "大于 内核唤醒→线程上CPU（调度等待）耗时 %s —— 瓶颈在协程调度排队"
                     % (fmt_us(ocu["dur_us"]), fmt_us(roc["dur_us"])))
 
+        # 细分定界：传输类瓶颈且瓶颈侧节点内段（网卡↔协议栈）占主导 →
+        # 改写为节点内根因（节点内点位为直接 bpf 证据，排除物理线路）
+        for base_cat, wire_key, rules in (
+                ("network_c2s_transmission", "wire_c2s", (
+                    # (证据段 key, 改写类别, 节点名, 段描述)
+                    ("server_nic_to_stack", "server_node_ingress_delay",
+                     "server", "网卡收包→协议栈交付（含 veth 转发/软中断/排队）"),
+                    ("client_stack_to_nic", "client_node_egress_delay",
+                     "client", "协议栈发送→驱动（含 qdisc 排队）"))),
+                ("network_s2c_transmission", "wire_s2c", (
+                    ("client_nic_to_stack", "client_node_ingress_delay",
+                     "client", "网卡收包→协议栈交付（含 veth 转发/软中断/排队）"),
+                    ("server_stack_to_nic", "server_node_egress_delay",
+                     "server", "协议栈发送→驱动（含 qdisc 排队）")))):
+            if category != base_cat:
+                continue
+            wire_seg = next((s for s in ctx.kernel_segments
+                             if s["key"] == wire_key), None)
+            if not wire_seg or not wire_seg["dur_us"]:
+                continue
+            cands = []
+            for seg_key, refined_cat, node_lbl, seg_desc in rules:
+                seg = next((s for s in ctx.kernel_segments
+                            if s["key"] == seg_key), None)
+                if not seg or seg["dur_us"] < NODE_INTERNAL_MIN_US:
+                    continue
+                share = 100.0 * seg["dur_us"] / wire_seg["dur_us"]
+                if share >= NODE_INTERNAL_SHARE_PCT:
+                    cands.append((seg, refined_cat, node_lbl, seg_desc, share))
+            if cands:
+                seg, refined, node_lbl, seg_desc, share = max(
+                    cands, key=lambda c: c[0]["dur_us"])
+                category = refined
+                evidence.append(
+                    "◆ 细分定界：%s 段耗时 %s 中，%s 节点内 %s 耗时 %s"
+                    "（占 %.1f%%）—— 瓶颈定界为 %s 节点内处理，物理线路已排除"
+                    % (wire_seg["desc"], fmt_us(wire_seg["dur_us"]), node_lbl,
+                       seg_desc, fmt_us(seg["dur_us"]), share, node_lbl))
+
         # 细分定界：传输类瓶颈且物理网卡间线路占主导（seq 关联双侧物理网卡点位）
         # → 明确定界为物理网卡间传输慢（网卡处理/物理线路），两侧节点内耗时已排除
         pw = getattr(ctx, "phys_wire", None) or {}
@@ -4531,6 +6569,20 @@ class ConclusionEngine:
                    fmt_us(info["wire_us"]), share_txt,
                    info["egress_side"], fmt_us(info.get("egress_internal_us")),
                    info["ingress_side"], fmt_us(info.get("ingress_internal_us"))))
+
+        # 窗口级定量归因（irqoff/nic/numa）：irqoff 命中直接改写 category；
+        # nic/numa 定量文本并入证据（参与置信度）
+        if getattr(ctx, "irqoff_quant", None) and category in (
+                "client_kernel_to_user_delay", "server_kernel_to_user_delay"):
+            category = "interrupt_off_delay"
+            evidence.append(
+                "◆ 定量归因：瓶颈段（%s → %s，%s）耗时中，关中断占比 %.1f%%"
+                "（详见定量证据）—— 瓶颈定界为关中断过长"
+                % (bott["start"], bott["end"], fmt_us(bott["dur_us"]),
+                   ctx.irqoff_quant["share_pct"]))
+        for s in (getattr(ctx, "quant_evidence", None) or []):
+            if s not in evidence:
+                evidence.append(s)
 
         # corroborating scheduling evidence
         cwarn = ctx.warn_events.get("client") or []
@@ -4558,6 +6610,9 @@ class ConclusionEngine:
             evidence.append("◆ " + s)
         for s in (getattr(ctx, "cpu_evidence", None) or []):
             evidence.append("◎ " + s)
+        # 推测链路证据（锚点日志缺失时的内核事件推测 / client 单侧兜底推测）
+        for s in (getattr(ctx, "infer_evidence", None) or []):
+            evidence.append("◇ " + s)
         if category in ("client_kernel_to_user_delay", "server_kernel_to_user_delay",
                         "coroutine_schedule_delay") \
                 and (cwarn or swarn or sched_ev or ctx.server_wakeup_chain
@@ -4566,8 +6621,13 @@ class ConclusionEngine:
                      or getattr(ctx, "cpu_busy_preempt", False)):
             # 窗口内有调度告警/唤醒链/协程排队/关中断/软中断抢占证据佐证 → 高置信
             confidence = "高"
+        elif category == "interrupt_off_delay":
+            # irqoff 窗口定量归因命中（关中断占比达标）→ 高置信
+            confidence = "高"
         elif category in ("network_c2s_transmission", "network_s2c_transmission",
-                          "network_c2s_phys_wire_delay", "network_s2c_phys_wire_delay") \
+                          "network_c2s_phys_wire_delay", "network_s2c_phys_wire_delay",
+                          "server_node_ingress_delay", "client_node_ingress_delay",
+                          "client_node_egress_delay", "server_node_egress_delay") \
                 and (nic_ev or ctx.milestones.get("ClientNetifRx")
                      or ctx.milestones.get("ServerNetifRx")):
             # 传输类定界且有网卡层点位佐证（收发点位或重传证据）→ 高置信；
@@ -4599,28 +6659,45 @@ class ConclusionEngine:
                 "考虑调整网卡 RSS/中断亲和性将收包分散到非业务 cpu，"
                 "或为业务线程绑定独立 cpu / 调整 CPU 隔离（isolcpus）配置")
         # softirq 定位命中（收包 cpu/SMT 姊妹核被任务占用）：直接给出
-        # 占用任务与下一步方向（分析该任务为何在该 cpu 执行）
+        # 占用任务与下一步方向（分析该任务为何在该 cpu 执行）；
+        # 唤醒者回溯成功时以自动回溯结果替代人工下一步建议
+        preemptor_origin = None
         for side in ("client", "server"):
             loc = (getattr(ctx, "softirq_localization", None) or {}).get(side)
             if loc:
                 smt_txt = ("（该 cpu 为业务 cpu %s 的 SMT 姊妹核，共享物理核）"
                            % loc["anchor_cpu"]) if loc["smt"] else ""
-                if loc.get("mode") == "wire":
+                wt = loc.get("wakeup_trace")
+                base_txt = (
+                    "已定位到占用收包 cpu 的任务 %s（cpu %s%s，vec=%s 软中断 "
+                    "raise→entry 延迟 %d us，调用栈见定位结论）"
+                    % (loc["comm"], loc["cpu"], smt_txt, loc["vec_txt"],
+                       loc["latency_us"])) if loc.get("mode") != "wire" else (
+                    "已定位到占用收包 cpu 的任务 %s（cpu %s，NET_RX 软中断 "
+                    "raise→entry 延迟 %d us，调用栈见定位结论）"
+                    % (loc["comm"], loc["cpu"], loc["latency_us"]))
+                if wt:
+                    trigger_txt = ("，唤醒前同 cpu 相邻事件 %s"
+                                   % wt["trigger_kind"]) if wt.get("trigger_kind") else ""
+                    preemptor_origin = (
+                        "唤醒链：任务 %s 于 %s 在 cpu %s 被唤醒（target cpu %s），"
+                        "%s 从 %s 切换上 cpu %s，距收包点 %s%s —— 该任务由"
+                        "调度器按 target_cpu 放置到该 cpu，结合其 comm/kstack"
+                        "判断来源（内核 worker / 其他进程）与亲和性配置"
+                        % (loc["comm"], fmt_dt(wt["wakeup_ts"]),
+                           wt.get("waker_cpu"), loc["cpu"],
+                           fmt_dt(wt["switch_in_ts"]), wt.get("prev_comm"),
+                           loc["cpu"], fmt_us(wt["delta_to_recv_us"]),
+                           trigger_txt))
                     suggestions.append(
-                        "已定位到占用收包 cpu 的任务 %s（cpu %s，NET_RX 软中断 "
-                        "raise→entry 延迟 %d us，调用栈见定位结论）：物理网卡间"
-                        "线路段慢实为收包软中断被该任务占用，下一步分析该任务"
-                        "为何在该 cpu 执行（调度来源 / 绑核与亲和性配置 / 触发路径），"
-                        "必要时限制其运行或将收包软中断迁移到其他 cpu"
-                        % (loc["comm"], loc["cpu"], loc["latency_us"]))
+                        "%s：%s；必要时限制其运行或将收包软中断迁移到其他 cpu"
+                        % (base_txt, preemptor_origin))
                 else:
                     suggestions.append(
-                        "已定位到占用收包 cpu 的任务 %s（cpu %s%s，vec=%s 软中断 "
-                        "raise→entry 延迟 %d us，调用栈见定位结论）：下一步分析该任务"
-                        "为何在该 cpu 执行（调度来源 / 绑核与亲和性配置 / 触发路径），"
+                        "%s：下一步分析该任务为何在该 cpu 执行"
+                        "（调度来源 / 绑核与亲和性配置 / 触发路径），"
                         "必要时限制其运行或将收包软中断迁移到其他 cpu"
-                        % (loc["comm"], loc["cpu"], smt_txt, loc["vec_txt"],
-                           loc["latency_us"]))
+                        % base_txt)
                 break
 
         ctx.conclusion = {
@@ -4630,6 +6707,7 @@ class ConclusionEngine:
             "evidence": evidence,
             "confidence": confidence,
             "suggestions": suggestions,
+            "preemptor_origin": preemptor_origin,
         }
 
 
@@ -4692,12 +6770,16 @@ tr:hover td{background:#f0f4ff}
 /* 列宽按内容自适应（连接端口/事件名称等关键信息不截断），
    超宽由 .table-wrap 横向滚动；视口外行仍由 content-visibility 跳过渲染 */
 .ev-tbl tr{content-visibility:auto;contain-intrinsic-size:auto 28px}
+/* 分段表宏观组头行（宏观三段并入内核分段表） */
+tr.seg-grp td{background:#f0f4ff;font-weight:600}
 tr.hl5t td{background:#fff3bf!important}
 tr.hl5t:hover td{background:#ffe98a!important}
 .inf-badge{display:inline-block;padding:0 6px;border-radius:8px;font-size:11px;
   line-height:16px;background:#ffe0b2;color:#8d5000;border:1px solid #f0b060;
   vertical-align:middle;margin-left:4px;font-weight:600}
 .cpuflag{color:#cf222e;font-weight:700}
+/* 问题包序号高亮（同一问题包跨 nic/tcp 层事件红色可追踪） */
+.seqhl{color:#cf222e;font-weight:700}
 /* 慢段时间窗事件过滤工具条（事件过多时的过滤选择） */
 .evf-bar{display:flex;align-items:center;gap:8px;margin:8px 0;flex-wrap:wrap}
 .evf-btn{padding:4px 13px;background:#fff;border:1px solid #c9d4e8;
@@ -4816,40 +6898,14 @@ def _timeline_html(ms, segments):
     return '<div class="tl">%s</div>%s' % (bar_html, pt_tbl)
 
 
-def _events_table(events, title, inferred=False):
+def _events_table(events, title, inferred=False, hl_seqs=None):
     if not events:
         return '<p class="muted">%s：无匹配事件</p>' % html.escape(title)
     total = len(events)
     if total > EVENTS_TABLE_MAX_ROWS:
         events = events[:EVENTS_TABLE_MAX_ROWS]
-    badge = ' <span class="inf-badge" title="连接五元组经推测识别，本事件为推测关联">推测</span>' \
-        if inferred else ""
-    rows = []
-    for ev in events:
-        addr = ""
-        if ev.get("local_ip"):
-            arrow = ev.get("dir_arrow", "")
-            addr = "%s:%d %s %s:%d" % (ev["local_ip"], ev["local_port"], arrow,
-                                       ev["peer_ip"], ev["peer_port"])
-        elif ev.get("src_ip"):  # 网卡层事件：方向四元组
-            addr = "%s:%d -> %s:%d" % (ev["src_ip"], ev["src_port"],
-                                       ev["dst_ip"], ev["dst_port"])
-        extra = ""
-        if "copied_seq" in ev:
-            extra = "copied_seq:%s rcv_nxt:%s" % (ev.get("copied_seq"), ev.get("rcv_nxt"))
-        if "comm" in ev:
-            extra = "comm=%s pid=%s" % (ev.get("comm"), ev.get("pid"))
-        if "dev" in ev:  # 网卡层：dev + seq/len/rc
-            extra = "dev=%s seq=%s len=%s" % (ev.get("dev"), ev.get("seq"), ev.get("len"))
-            if "rc" in ev:
-                extra += " rc=%s" % ev["rc"]
-        elif ev["kind"] == "tcp_retransmit":
-            extra = "seq=%s tx_seq=%s snd_una=%s snd_nxt=%s" % (
-                ev.get("seq"), ev.get("tx_seq"), ev.get("snd_una"), ev.get("snd_nxt"))
-        rows.append("<tr><td>%s</td><td>%s%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
-                    % (fmt_dt(ev["ts"]), html.escape(str(ev["kind"])), badge,
-                       ev.get("tid", "-"), ev.get("cpu", "-"), html.escape(addr),
-                       html.escape(extra)))
+    rows = "".join(_event_row_html(e, inferred=inferred, hl_seqs=hl_seqs)
+                   for e in events)
     cap_note = ""
     if total > EVENTS_TABLE_MAX_ROWS:
         cap_note = ('<tr><td colspan="6" class="muted">共 %d 条，仅列前 %d 条</td></tr>'
@@ -4858,7 +6914,7 @@ def _events_table(events, title, inferred=False):
     return ('<h3>%s%s</h3><div class="table-wrap"><table class="ev-tbl">'
             '<tr><th>时间</th><th>事件</th><th>tid</th><th>cpu</th>'
             '<th>连接</th><th>附加</th></tr>%s%s</table></div>'
-            % (html.escape(title), title_note, "".join(rows), cap_note))
+            % (html.escape(title), title_note, rows, cap_note))
 
 
 def _ctx_softirq_locs(ctx):
@@ -4912,8 +6968,10 @@ def _trace_html(ctx, idx):
         ("trace_id", ctx.trace_id),
         ("client 日志", ctx.slow.log_path),
         ("client pod / 节点", "%s / %s" % (ctx.client_pod_dir, ctx.client_node or "未知")),
+        ("client 宿主机 IP", ctx.client_host_ip or "-"),
         ("server pod / 节点", "%s / %s" % (getattr(ctx, "server_pod_dir", None) or "未定位",
                                        ctx.server_node or "未知")),
+        ("server 宿主机 IP", ctx.server_host_ip or "-"),
         ("client/server pod IP", "%s / %s" % (ctx.client_ip or "-", ctx.server_ip or "-")),
         ("连接四元组", "%s:%s → %s:%s" % ctx.conn if ctx.conn else "未识别"),
         ("method", f.get("method", "-")),
@@ -4926,22 +6984,45 @@ def _trace_html(ctx, idx):
     meta_html = "".join("<tr><th>%s</th><td>%s</td></tr>" % (html.escape(k), html.escape(str(v)))
                         for k, v in rows_meta)
 
-    macro_rows = "".join(
-        "<tr><td>%s</td><td>%s</td><td>%s</td></tr>" % (
-            {"cs_sr": "ClientSend→ServerRecv", "sr_ss": "ServerRecv→ServerSend",
-             "ss_cr": "ServerSend→ClientRecv"}[k],
-            fmt_us(ctx.macro.get(k)),
-            _abnormal_badge(ctx.macro.get(k, 0) > MACRO_THRESHOLDS_US[k]))
-        for k in ("cs_sr", "sr_ss", "ss_cr") if k in ctx.macro)
+    # 分段表：宏观三段作组头行并入（独立"RPC 宏观分段"表已删除）。
+    # 内核分段按段起点时间归入宏观相位（< ServerRecv → cs_sr，
+    # < ServerSend → sr_ss，其余 → ss_cr），无法定位的段附于表尾。
+    a_sr = (ctx.anchors.get("ServerRecv") or {}).get("ts")
+    a_ss = (ctx.anchors.get("ServerSend") or {}).get("ts")
+    groups = {"cs_sr": [], "sr_ss": [], "ss_cr": []}
+    ungrouped = []
+    for s in ctx.kernel_segments:
+        t = ctx.milestones.get(s["start"])
+        if t is None:
+            ungrouped.append(s)
+        elif a_sr is not None and t < a_sr:
+            groups["cs_sr"].append(s)
+        elif a_ss is not None and t < a_ss:
+            groups["sr_ss"].append(s)
+        else:
+            groups["ss_cr"].append(s)
 
-    seg_rows = "".join(
-        "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
-        % (html.escape(s["desc"]), s["start"] + " → " + s["end"], fmt_us(s["dur_us"]),
-           fmt_us(s["threshold_us"]) if s["threshold_us"] else
-           (("BRPC queue+exec=%s" % fmt_us(s.get("brpc_queue_exec_us")))
-            if "brpc_queue_exec_us" in s else "证据段（无阈值）"),
-           _abnormal_badge(s["abnormal"]))
-        for s in ctx.kernel_segments)
+    def _seg_row(s):
+        return ("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
+                % (html.escape(s["desc"]), s["start"] + " → " + s["end"],
+                   fmt_us(s["dur_us"]),
+                   fmt_us(s["threshold_us"]) if s["threshold_us"] else
+                   (("BRPC queue+exec=%s" % fmt_us(s.get("brpc_queue_exec_us")))
+                    if "brpc_queue_exec_us" in s else "证据段（无阈值）"),
+                   _abnormal_badge(s["abnormal"])))
+
+    seg_parts = []
+    for mkey in ("cs_sr", "sr_ss", "ss_cr"):
+        if mkey in ctx.macro:
+            seg_parts.append(
+                '<tr class="seg-grp"><td colspan="5"><b>%s</b>（宏观段）　'
+                "耗时 %s　%s</td></tr>"
+                % (MACRO_LABELS[mkey], fmt_us(ctx.macro[mkey]),
+                   _abnormal_badge(ctx.macro[mkey] > MACRO_THRESHOLDS_US[mkey])))
+        seg_parts.append("".join(_seg_row(s) for s in groups[mkey]))
+    seg_parts.append("".join(_seg_row(s) for s in ungrouped))
+    seg_rows = "".join(seg_parts) or \
+        '<tr><td colspan="5" class="muted">内核事件不足，未生成分段</td></tr>'
 
     warn_html = ""
     for side, evs in ctx.warn_events.items():
@@ -5016,8 +7097,7 @@ def _trace_html(ctx, idx):
 %(locbanner)s
 <div class="concl"><b>定界结论：%(label)s</b><ul>%(evid)s</ul>%(sugg)s</div>
 <table>%(meta)s</table>
-<h3>RPC 宏观分段</h3><table><tr><th>阶段</th><th>耗时</th><th>判定</th></tr>%(macro)s</table>
-<h3>全路径时间线与内核级分段（业务 ↔ 协议栈 ↔ 网卡）</h3>
+<h3>全路径时间线与内核级分段（业务 ↔ 协议栈 ↔ 网卡，宏观三段作组头）</h3>
 %(timeline)s
 %(pwire)s
 <table><tr><th>阶段</th><th>区间</th><th>耗时</th><th>阈值</th><th>判定</th></tr>%(segs)s</table>
@@ -5031,8 +7111,8 @@ def _trace_html(ctx, idx):
 %(bthread)s
 %(cpubusy)s
 %(traces)s
-<details><summary>client 节点 bpf 事件明细（问题请求相关 / 慢段时间窗 / 问题时间窗全景）</summary>%(cev)s</details>
-<details><summary>server 节点 bpf 事件明细（问题请求相关 / 慢段时间窗 / 问题时间窗全景）</summary>%(sev)s</details>
+<details><summary>client 节点 bpf 事件明细（问题请求相关 / 慢段时间窗 / 问题窗口全景，按命中渲染）</summary>%(cev)s</details>
+<details><summary>server 节点 bpf 事件明细（问题请求相关 / 慢段时间窗 / 问题窗口全景，按命中渲染）</summary>%(sev)s</details>
 </div>
 </div>""" % {
         "idx": idx, "trace": html.escape(ctx.trace_id), "conf_cls": conf_cls,
@@ -5049,8 +7129,7 @@ def _trace_html(ctx, idx):
             for e in c.get("evidence", [])),
         "sugg": "<b>建议：</b><ul>%s</ul>" % "".join(
             "<li>%s</li>" % html.escape(s) for s in c.get("suggestions", [])),
-        "meta": meta_html, "macro": macro_rows, "segs": seg_rows or
-        '<tr><td colspan="5" class="muted">内核事件不足，未生成分段</td></tr>',
+        "meta": meta_html, "segs": seg_rows,
         "timeline": _timeline_html(ctx.milestones, ctx.kernel_segments),
         "pwire": _phys_wire_html(ctx),
         "anchors": anchor_html, "warn": warn_html, "chain": chain_html,
@@ -5060,6 +7139,26 @@ def _trace_html(ctx, idx):
         "cev": _side_events_html(ctx, "client"),
         "sev": _side_events_html(ctx, "server"),
     }
+
+
+def _nodes_table_html(aux_stats):
+    """概览节点信息表：节点 / 宿主机 IP / bpf / 调度告警 / irqoff / nic / NUMA 监控。
+
+    数据来自 aux_stats["nodes"]（analyze 时由 disc 构建）；无节点数据时返回空。
+    """
+    nodes = (aux_stats or {}).get("nodes") or {}
+    if not nodes:
+        return ""
+    rows = []
+    for node, st in sorted(nodes.items()):
+        cells = [node] + [str(st.get(k) or "—")
+                          for k in ("host_ip", "bpf", "warn", "irqoff", "nic", "numa")]
+        rows.append("<tr>%s</tr>" % "".join(
+            "<td>%s</td>" % html.escape(c) for c in cells))
+    return ('<h2>节点信息</h2><div class="table-wrap"><table>'
+            "<tr><th>节点</th><th>宿主机 IP</th><th>bpf 日志</th>"
+            "<th>调度告警</th><th>irqoff</th><th>nic</th><th>NUMA 监控</th></tr>"
+            "%s</table></div>" % "".join(rows))
 
 
 def generate_report(contexts, args, log_root, aux_stats=None):
@@ -5086,7 +7185,7 @@ def generate_report(contexts, args, log_root, aux_stats=None):
            if _ctx_softirq_locs(ctx) else "")
         for i, ctx in enumerate(contexts))
     body = "".join(_trace_html(ctx, i + 1) for i, ctx in enumerate(contexts))
-    aux_cards = _irqoff_overview_html(aux_stats) + _nic_overview_html(aux_stats)
+    aux_cards = _os_monitor_summary_html(aux_stats)
     # 汇总统计卡（参考 skill summary-cards 风格）
     cards = [
         ("问题请求总数", total, "#1a1a2e"),
@@ -5117,6 +7216,7 @@ def generate_report(contexts, args, log_root, aux_stats=None):
 <h2>概览</h2>
 <p>共识别 <b>%(total)d</b> 条问题请求（network_residual_us 超阈值）。</p>
 <table><tr><th>定界结论分布</th><th>数量</th></tr>%(dist)s</table>
+%(nodes)s
 <h2>问题请求索引</h2>
 <ol>%(idx)s</ol>
 %(idx_note)s
@@ -5173,7 +7273,44 @@ document.addEventListener('input',function(e){
         "gen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "total": total,
         "cards": cards_html,
         "dist": dist_rows, "idx": idx_links, "idx_note": idx_note, "body": body,
-        "aux": aux_cards,
+        "aux": aux_cards, "nodes": _nodes_table_html(aux_stats),
+    }
+
+
+def generate_os_monitor_report(aux_stats, log_root):
+    """OS 资源类周期监控独立报告（自包含单文件 HTML，离线可用）。
+
+    采集到任一类周期监控日志（irqoff / sar nic / NUMA 访存）即默认分析渲染；
+    后续新增周期监控指标统一在本报告扩展，不再进入定界主报告。
+    无任何周期监控数据时返回空串（不生成空报告）。
+    """
+    aux_stats = aux_stats or {}
+    # 探索器公共 CSS + window.XEXP 工厂 JS 报告级定义一次，
+    # numa / irq 卡内只保留 XEXP('...') init 调用
+    parts = (_EXPLORER_CSS + "<script>" + _EXPLORER_JS_TPL + "</script>"
+             + _nodes_table_html(aux_stats) + _irqoff_explorer_html(aux_stats)
+             + _nic_overview_html(aux_stats) + _numa_explorer_html(aux_stats))
+    has_data = any(aux_stats.get(k) for k in ("numa", "irqoff", "nic"))
+    if not has_data:
+        return ""
+    return """<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8">
+<title>OS 资源周期监控报告</title><style>%(css)s</style></head>
+<body>
+<div class="header">
+<h1>OS 资源周期监控报告</h1>
+<div class="meta">日志目录：%(root)s　|　生成时间：%(gen)s</div>
+</div>
+<div class="wrap">
+<p class="muted">本报告汇总全采集周期的 OS 资源类周期监控指标
+（关中断 / sar 网卡利用率 / NUMA 访存），与问题时刻无关，独立于定界主报告；
+后续新增周期监控指标统一在本报告呈现。</p>
+%(parts)s
+</div>
+</body></html>""" % {
+        "css": CSS, "root": html.escape(str(log_root)),
+        "gen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "parts": parts,
     }
 
 
@@ -5191,7 +7328,7 @@ def _event_json(ev):
         d["raw"] = ev["raw"]
     for k in ("tid", "cpu", "size", "pid", "comm", "target_cpu",
               "prev_comm", "prev_pid", "next_comm", "next_pid",
-              "copied_seq", "rcv_nxt", "wakeup_n",
+              "copied_seq", "rcv_nxt", "tp_rcv_nxt", "wakeup_n",
               "seq", "len", "dev", "rc", "tx_seq", "snd_una", "snd_nxt",
               "vec", "latency_us", "kstack", "timer_cnt", "timer_large_cnt"):
         if k in ev:
@@ -5240,14 +7377,30 @@ def _bthread_json(e):
             "creation_mode": e.get("creation_mode"), "raw": e.get("raw")}
 
 
-def _softirq_loc_json(loc):
+def _softirq_loc_json(loc, ke_index=None):
     """收包慢 softirq 定位结论 → JSON dict（无定位时 None）。
 
     含占用 cpu 任务的 comm 与完整 kstack（多帧 \n 连接，不截断），
     以及定位依据（vec/延迟/收包点/候选数/回溯窗口内全部候选事件）。
+    schema v2 去重：events 中与 kernel_events 重复的事件去 raw（ts 引用，
+    ke_index 为该侧 kernel_events 的 (ts, kind) 索引），窗口外回溯事件
+    （kernel_events 无）保留 raw；kstack/vec/latency_us 始终保留。
     """
     if not loc:
         return None
+
+    def ref(e):
+        d = {"ts": e["ts"].isoformat(), "kind": e.get("kind")}
+        for k in ("cpu", "comm", "vec", "latency_us"):
+            if e.get(k) is not None:
+                d[k] = e[k]
+        if e.get("kstack"):
+            d["kstack"] = e["kstack"]
+        if ke_index is None or (d["ts"], d["kind"]) not in ke_index:
+            if e.get("raw"):
+                d["raw"] = e["raw"]
+        return d
+
     return {
         "mode": loc.get("mode") or "kernel_to_user",
         "wire_key": loc.get("wire_key"),
@@ -5262,23 +7415,27 @@ def _softirq_loc_json(loc):
         "recv_ts": loc["recv_ts"].isoformat() if loc.get("recv_ts") else None,
         "lookback_ms": SOFTIRQ_LOOKBACK_MS,
         "n_candidates": loc.get("n_candidates"),
-        "events": [dict(_event_json(e), kstack=e.get("kstack") or "")
-                   for e in loc.get("events") or []],
+        "events": [ref(e) for e in loc.get("events") or []],
     }
 
 
-def _cpu_busy_json(info):
+def _ev_ts_summary(evs):
+    """事件列表 → {n, ts_list} 摘要（schema v2 去重：明细见 kernel_events，
+    按 ts 对齐；ts_list 保留时序供窗口/间隔分析）。"""
+    return {"n": len(evs), "ts_list": [e["ts"].isoformat() for e in evs]}
+
+
+def _cpu_busy_json(info, ke_index=None):
     """问题窗口 cpu 侵占分析结果 → JSON dict。
 
-    window_events 为问题窗口内全部连接的内核事件（match5t：true 问题连接 /
-    false 其他连接 / null 无 IP 调度类事件），软中断抢占定界的原始明细。
-    softirq_localization 为收包慢定位结论（占用 cpu 任务 comm + 完整 kstack）。
+    schema v2 去重：事件明细（含 raw）仅在 kernel_events 全量存一份，
+    本结构内各事件列表（other_on_cpu / switches_on_cpu / switched_out /
+    softirq_raise_on_cpu / softirq_exit_on_cpu）改 {n, ts_list} 引用；
+    window_events 改 {n, first_ts, last_ts} 摘要（n_mine/n_other/other_conns
+    归属统计保留）。softirq_localization 为收包慢定位结论（占用 cpu 任务
+    comm + 完整 kstack，events 为 ts 引用 + kstack/vec/latency）。
     """
-    def evj(e):
-        d = _event_json(e)
-        d["match5t"] = e.get("match5t")
-        return d
-
+    win_evs = info.get("events") or []
     return {
         "seg_key": info.get("seg_key"), "seg_desc": info.get("seg_desc"),
         "seg_dur_us": info.get("seg_dur_us"),
@@ -5289,32 +7446,42 @@ def _cpu_busy_json(info):
         "n_mine": info.get("n_mine"), "n_other": info.get("n_other"),
         "other_conns": dict(info.get("other_conns") or {}),
         "other_by_cpu": {str(c): n for c, n in (info.get("other_by_cpu") or {}).items()},
-        "other_on_cpu": [evj(e) for e in info.get("other_on_cpu") or []],
-        "switches_on_cpu": [evj(e) for e in info.get("switches_on_cpu") or []],
-        "switched_out": [evj(e) for e in info.get("switched_out") or []],
-        "softirq_raise_on_cpu": [evj(e) for e in
-                                 info.get("softirq_raise_on_cpu") or []],
-        "softirq_exit_on_cpu": [evj(e) for e in
-                                info.get("softirq_exit_on_cpu") or []],
-        "softirq_localization": _softirq_loc_json(info.get("softirq_localization")),
+        "other_on_cpu": _ev_ts_summary(info.get("other_on_cpu") or []),
+        "switches_on_cpu": _ev_ts_summary(info.get("switches_on_cpu") or []),
+        "switched_out": _ev_ts_summary(info.get("switched_out") or []),
+        "softirq_raise_on_cpu": _ev_ts_summary(
+            info.get("softirq_raise_on_cpu") or []),
+        "softirq_exit_on_cpu": _ev_ts_summary(
+            info.get("softirq_exit_on_cpu") or []),
+        "softirq_localization": _softirq_loc_json(
+            info.get("softirq_localization"), ke_index),
         "preempt": bool(info.get("preempt")),
-        "window_events": [evj(e) for e in info.get("events") or []],
+        "window_events": {
+            "n": len(win_evs),
+            "first_ts": min(e["ts"] for e in win_evs).isoformat()
+            if win_evs else None,
+            "last_ts": max(e["ts"] for e in win_evs).isoformat()
+            if win_evs else None,
+        },
     }
 
 
 def _slow_seg_json(sw):
     """慢段窗口分析结果 → JSON dict（无瓶颈段/窗口不可得时为 None）。
 
-    sides.<side>.events 为瓶颈段时间窗内该侧全部连接的内核事件（match5t：
-    true 问题连接 / false 其他连接 / null 调度类），慢段定位的原始明细。
+    schema v2 去重：保留窗口定义（起止 ts / 段描述 / 瓶颈 category）与
+    各侧事件归属计数（n_mine / n_other / by_kind 各类事件数），事件明细
+    删——问题连接事件 = kernel_events 按窗口过滤可得（ts 对齐）。
     """
     if not sw:
         return None
 
-    def evj(e):
-        d = _event_json(e)
-        d["match5t"] = e.get("match5t")
-        return d
+    def sidej(d):
+        by_kind = {}
+        for e in d["events"]:
+            by_kind[e.get("kind") or "?"] = by_kind.get(e.get("kind") or "?", 0) + 1
+        return {"n_mine": d["n_mine"], "n_other": d["n_other"],
+                "by_kind": by_kind}
 
     return {
         "seg_key": sw.get("seg_key"), "seg_desc": sw.get("seg_desc"),
@@ -5322,9 +7489,7 @@ def _slow_seg_json(sw):
         "window_start": sw["window_start"].isoformat(),
         "window_end": sw["window_end"].isoformat(),
         "dur_us": sw.get("dur_us"),
-        "sides": {side: {"events": [evj(e) for e in d["events"]],
-                         "n_mine": d["n_mine"], "n_other": d["n_other"]}
-                  for side, d in (sw.get("sides") or {}).items()},
+        "sides": {side: sidej(d) for side, d in (sw.get("sides") or {}).items()},
     }
 
 
@@ -5374,9 +7539,10 @@ def generate_json(contexts, args, log_root, aux_stats=None):
             "slow": {"ts": ctx.slow.ts.isoformat(), "log_path": ctx.slow.log_path,
                      "pod_dir": ctx.slow.pod_dir, "fields": ctx.slow.fields},
             "client": {"pod_dir": ctx.client_pod_dir, "node": ctx.client_node,
-                       "ip": ctx.client_ip},
+                       "ip": ctx.client_ip, "host_ip": ctx.client_host_ip},
             "server": {"pod_dir": getattr(ctx, "server_pod_dir", None),
-                       "node": ctx.server_node, "ip": ctx.server_ip},
+                       "node": ctx.server_node, "ip": ctx.server_ip,
+                       "host_ip": ctx.server_host_ip},
             "conn": ({"client_ip": ctx.conn[0], "client_port": ctx.conn[1],
                       "server_ip": ctx.conn[2], "server_port": ctx.conn[3],
                       "source": getattr(ctx, "conn_source", None)}
@@ -5384,7 +7550,8 @@ def generate_json(contexts, args, log_root, aux_stats=None):
             "anchors": {k: {"ts": a["ts"].isoformat(), "tid": a.get("tid"),
                             "cpu": a.get("cpu"), "bid": a.get("bid"),
                             "host": a.get("host"), "pod_dir": a.get("pod_dir"),
-                            "log_path": a.get("log_path"), "raw": a.get("raw")}
+                            "log_path": a.get("log_path"), "raw": a.get("raw"),
+                            "synth": a.get("synth", False)}
                         for k, a in sorted(ctx.anchors.items(),
                                            key=lambda kv: kv[1]["ts"])},
             # 全路径时间线点位（按时间序；缺失点位不在此 dict 中，
@@ -5420,16 +7587,19 @@ def generate_json(contexts, args, log_root, aux_stats=None):
                             for side, ss in ctx.nic_samples.items()},
             "bthread_events": {side: [_bthread_json(e) for e in evs]
                                for side, evs in ctx.bthread_events.items()},
-            # 问题窗口内 softirq 探针事件（raise→entry / entry→exit >1ms，
-            # kernel_to_user 段异常的侧才有；收包慢的软中断定界明细）
-            "softirq_events": {side: [_event_json(e) for e in
-                                      info.get("softirq_events") or []]
-                               for side, info in
-                               (getattr(ctx, "cpu_busy", None) or {}).items()},
-            # 问题窗口全景 + cpu 侵占分析（kernel_to_user 段异常的侧才有）
-            "cpu_busy": {side: _cpu_busy_json(info)
+            # 问题窗口全景 + cpu 侵占分析（kernel_to_user 段异常的侧才有）。
+            # schema v2 去重：事件明细（含 raw）仅在 kernel_events 全量存一份，
+            # cpu_busy 内各事件列表改 {n, ts_list} / 摘要引用（ts 对齐）；
+            # 原 softirq_events 顶层字段已删除（cpu_busy.softirq_* 摘要 +
+            # kernel_events 明细 + softirq_localization 定位证据覆盖）。
+            "cpu_busy": {side: _cpu_busy_json(
+                             info,
+                             ke_index={(e["ts"].isoformat(), e["kind"])
+                                       for e in (ctx.filtered_events or {})
+                                       .get(side) or []})
                          for side, info in (getattr(ctx, "cpu_busy", None) or {}).items()},
-            # 慢段窗口：瓶颈段时间窗内全部连接的 bpf 事件（含其他连接）
+            # 慢段窗口：瓶颈段时间窗定义 + 各侧事件归属计数（schema v2
+            # 去重：事件明细 = kernel_events 按窗口过滤，ts 对齐）
             "slow_seg_window": _slow_seg_json(getattr(ctx, "slow_seg", None)),
             "missing_evidence": list(ctx.missing),
             "conclusion": {
@@ -5443,7 +7613,7 @@ def generate_json(contexts, args, log_root, aux_stats=None):
         })
     doc = {
         "schema": "ds-network-latency-analysis/result",
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "log_root": str(log_root),
         "residual_threshold_us": args.residual_threshold,
@@ -5453,12 +7623,22 @@ def generate_json(contexts, args, log_root, aux_stats=None):
                          for node, st in ((aux_stats or {}).get("irqoff") or {}).items()},
         "nic_stats": {node: {dev: dict(d) for dev, d in devs.items()}
                       for node, devs in ((aux_stats or {}).get("nic") or {}).items()},
+        "numa_stats": {
+            node: {kind: [dict(r, ts=r["ts"].isoformat(timespec="seconds"))
+                          for r in recs if r.get("ts") is not None]
+                   for kind, recs in st.items()}
+            for node, st in ((aux_stats or {}).get("numa") or {}).items()},
         "notes": ["跨节点耗时基于各节点日志 wall clock 相减，节点间时钟偏差时仅供参考",
                   "kernel_events/sched_warnings/wakeup_chain 为全量输出（未截断）",
                   "irqoff_stats/nic_stats 为全采集周期统计；irqoff_events/"
                   "nic_samples/bthread_events 为各 trace 问题窗口内明细",
                   "cpu_busy 为问题窗口全景 + cpu 侵占分析（kernel_to_user 段异常的侧），"
-                  "window_events 含窗口内全部连接的内核事件（match5t 标注归属）"],
+                  "窗口内其他连接穿插以 n_other/other_conns/other_by_cpu 归属统计呈现",
+                  "schema v2 事件去重：事件明细（含 raw 行）仅在 kernel_events 全量"
+                  "存一份，cpu_busy 各事件列表改 {n, ts_list} 引用、window_events / "
+                  "slow_seg_window 改摘要（按 ts 与 kernel_events 对齐取明细）；"
+                  "顶层 softirq_events 已删除（cpu_busy.softirq_* 摘要 + "
+                  "softirq_localization 定位证据覆盖）"],
         "traces": traces,
     }
     return json.dumps(doc, ensure_ascii=False, indent=2)
@@ -5762,18 +7942,86 @@ def _bpf_zero_event_diag(node, windows, results, diag):
     sys.stderr.write(hint)
 
 
+def _scan_os_monitor_stats(disc, node_irqoff_wins=None):
+    """全周期 OS 资源周期监控统计（irqoff/nic/numa）→ 写入 disc.aux_stats。
+
+    返回 (node_irqoff_blocks, node_nic_devs)（窗口数据，供 trace 关联；
+    os_monitor_only 独立模式下无窗口，仅需全周期统计）。
+    """
+    node_irqoff_blocks, node_nic_devs = {}, {}
+    for node, path in disc.irqoff_by_node.items():
+        stats, blocks = scan_irqoff(path, (node_irqoff_wins or {}).get(node) or {})
+        disc.aux_stats["irqoff"][node] = stats
+        node_irqoff_blocks[node] = blocks
+    for ip, path in disc.irqoff_by_ip.items():  # IP 未映射到节点的也做全周期统计
+        disc.aux_stats["irqoff"].setdefault(
+            ip, scan_irqoff(path, {})[0])
+    for node, path in disc.nic_by_node.items():
+        devs = parse_nic_log(path)
+        node_nic_devs[node] = devs
+        disc.aux_stats["nic"][node] = {dev: _nic_dev_stats(d)
+                                       for dev, d in devs.items()}
+    for ip, path in disc.nic_by_ip.items():
+        disc.aux_stats["nic"].setdefault(
+            ip, {dev: _nic_dev_stats(d) for dev, d in parse_nic_log(path).items()})
+    for node, files in disc.numa_by_node.items():
+        st = disc.aux_stats["numa"].setdefault(
+            node, {"numafast": [], "memory": [], "perf": []})
+        for kind, parser in (("numafast", parse_numafast_log),
+                             ("memory", parse_memory_log),
+                             ("perf", parse_perf_log)):
+            p = files.get(kind)
+            if p:
+                st[kind] = parser(p)
+    return node_irqoff_blocks, node_nic_devs
+
+
+def _build_nodes_table_stats(disc):
+    """概览节点信息表数据：全部节点（bpf/告警/irqoff/nic/numa 键并集）
+    + 宿主机 IP + 日志可用性 → disc.aux_stats["nodes"]。"""
+    for node in (set(disc.bpf_by_node) | set(disc.warn_by_node)
+                 | set(disc.irqoff_by_node) | set(disc.irqoff_by_ip)
+                 | set(disc.nic_by_node) | set(disc.nic_by_ip)
+                 | set(disc.numa_by_node)):
+        numa_kinds = sorted(k for k, p in (disc.numa_by_node.get(node) or {}).items() if p)
+        irqoff_p = disc.irqoff_by_node.get(node) or disc.irqoff_by_ip.get(node)
+        nic_p = disc.nic_by_node.get(node) or disc.nic_by_ip.get(node)
+        disc.aux_stats["nodes"][node] = {
+            "host_ip": disc.host_ip_of_node(node) or "",
+            "bpf": disc.bpf_by_node[node].name if disc.bpf_by_node.get(node) else "",
+            "warn": disc.warn_by_node[node].name if disc.warn_by_node.get(node) else "",
+            "irqoff": irqoff_p.name if irqoff_p else "",
+            "nic": nic_p.name if nic_p else "",
+            "numa": " / ".join(numa_kinds),
+        }
+
+
 def analyze(log_root, residual_threshold=DEFAULT_RESIDUAL_THRESHOLD_US,
             top=None, only_traces=None, window_pad_ms=DEFAULT_WINDOW_PAD_MS,
             sched_pad_ms=DEFAULT_SCHED_PAD_MS, bpf_full_scan=False,
             max_sched_events=DEFAULT_MAX_SCHED_EVENTS, verbose=False,
-            workers=1, seek_slack_s=2.0, bpf_time_offset_ms=0):
+            workers=1, seek_slack_s=2.0, bpf_time_offset_ms=0,
+            os_monitor_only=False):
     """返回 (disc, contexts, trace_lines)。
 
     trace_lines: {trace_id: [(source, path, line)...]}（问题 trace 的全部
     INFO 行，阶段2+7 合并扫描的副产物，供 --raw 使用）。
+
+    os_monitor_only=True：独立周期监控分析——跳过慢请求/锚点/bpf 关联
+    （可无 client 日志），只做发现 + 全周期统计 + 节点表，
+    供 generate_os_monitor_report 输出 OS 资源周期监控报告。
     """
     t_start = time.monotonic()
     disc = LogDiscovery(log_root, workers=workers)
+    if os_monitor_only:
+        t0 = time.monotonic()
+        _scan_os_monitor_stats(disc)
+        _build_nodes_table_stats(disc)
+        _stage("阶段0 OS 周期监控统计: irqoff %d / nic %d / numa %d 个文件, %.1fs"
+               % (len(disc.irqoff_by_node) + len(disc.irqoff_by_ip),
+                  len(disc.nic_by_node) + len(disc.nic_by_ip),
+                  len(disc.numa_by_node), time.monotonic() - t0))
+        return disc, [], {}
     if not disc.client_logs:
         raise FileNotFoundError("在 %s/collected 下未找到 client 日志" % log_root)
 
@@ -5806,8 +8054,12 @@ def analyze(log_root, residual_threshold=DEFAULT_RESIDUAL_THRESHOLD_US,
         ctx = TraceContext(rec)
         ctx.idx = i
         ctx.server_pod_dir = None
-        build_anchors(ctx, anchor_idx[rec.trace_id]["client"],
-                      anchor_idx[rec.trace_id]["worker"])
+        # 锚点构建全流程：锚点行匹配（老格式）→ worker 业务行恢复 server pod
+        # → SLOW 行内嵌时间戳合成锚点（新格式无锚点行，锚点日志为可选）
+        _build_context_anchors(
+            ctx, anchor_idx[rec.trace_id]["client"],
+            anchor_idx[rec.trace_id]["worker"],
+            trace_lines.get(rec.trace_id))
         contexts.append(ctx)
 
     # bpf 窗口化预扫描：每节点文件只读一遍（seek 模式仅读窗口簇字节）；
@@ -5829,6 +8081,7 @@ def analyze(log_root, residual_threshold=DEFAULT_RESIDUAL_THRESHOLD_US,
                 node_probe_cache, bpf_off)
         if not ctx.client_node:
             ctx.client_node_note = disc.host_ip_of(ctx.client_pod_dir)
+        ctx.client_host_ip = disc.host_ip_of_node(ctx.client_node)
         if ctx.server_pod_dir:
             ctx.server_node = disc.resolve_node(ctx.server_pod_dir)
             if not ctx.server_node and ctx.server_ip:
@@ -5837,6 +8090,7 @@ def analyze(log_root, residual_threshold=DEFAULT_RESIDUAL_THRESHOLD_US,
                     node_probe_cache, bpf_off)
             if not ctx.server_node:
                 ctx.server_node_note = disc.host_ip_of(ctx.server_pod_dir)
+            ctx.server_host_ip = disc.host_ip_of_node(ctx.server_node)
         if not ctx.client_ip:
             continue
         win = (cs["ts"] + bpf_off - pad, cr["ts"] + bpf_off + pad)
@@ -5927,22 +8181,9 @@ def analyze(log_root, residual_threshold=DEFAULT_RESIDUAL_THRESHOLD_US,
             for bp in _brpc_files_for_pod(disc.brpc_by_pod, pod,
                                           disc.node_names_for(node), role=side):
                 node_brpc_wins.setdefault(bp, {})[(ctx.idx, side)] = win
-    node_irqoff_blocks, node_nic_devs, node_brpc_events = {}, {}, {}
-    for node, path in disc.irqoff_by_node.items():
-        stats, blocks = scan_irqoff(path, node_irqoff_wins.get(node) or {})
-        disc.aux_stats["irqoff"][node] = stats
-        node_irqoff_blocks[node] = blocks
-    for ip, path in disc.irqoff_by_ip.items():  # IP 未映射到节点的也做全周期统计
-        disc.aux_stats["irqoff"].setdefault(
-            ip, scan_irqoff(path, {})[0])
-    for node, path in disc.nic_by_node.items():
-        devs = parse_nic_log(path)
-        node_nic_devs[node] = devs
-        disc.aux_stats["nic"][node] = {dev: _nic_dev_stats(d)
-                                       for dev, d in devs.items()}
-    for ip, path in disc.nic_by_ip.items():
-        disc.aux_stats["nic"].setdefault(
-            ip, {dev: _nic_dev_stats(d) for dev, d in parse_nic_log(path).items()})
+    node_irqoff_blocks, node_nic_devs = _scan_os_monitor_stats(
+        disc, node_irqoff_wins)
+    node_brpc_events = {}
     for path, wins in node_brpc_wins.items():
         node_brpc_events[path] = scan_bthread_windows(path, wins)
     _stage("阶段4b 辅助日志扫描: irqoff %d / nic %d / brpc %d 个文件, %.1fs"
@@ -5980,6 +8221,16 @@ def analyze(log_root, residual_threshold=DEFAULT_RESIDUAL_THRESHOLD_US,
     for ctx in contexts:
         correlate_kernel(ctx, kernel_results, window_net_results,
                          known_server_ports, softirq_lookback_results)
+        if getattr(ctx, "client_only", False):
+            # client_only（worker 日志未收集）：连接五元组推测识别后补扫
+            # server 侧 bpf 窗口回填；补扫失败 → client 单侧兜底推测
+            if ctx.conn and not ctx.kernel_events.get("server"):
+                _supplement_server_scan(
+                    ctx, disc, node_probe_cache, bpf_off, pad, bpf_full_scan,
+                    max_sched_events, verbose, slack_us, kernel_results,
+                    window_net_results, softirq_lookback_results)
+            if not ctx.infer_evidence:
+                _client_only_infer_evidence(ctx)
         build_kernel_segments(ctx)
         _server_pickup_segments(ctx)
         _coroutine_evidence(ctx)
@@ -6014,6 +8265,8 @@ def analyze(log_root, residual_threshold=DEFAULT_RESIDUAL_THRESHOLD_US,
         _irqoff_evidence(ctx)
         _nic_util_evidence(ctx)
         _bthread_evidence(ctx)
+        _window_quant_attribution(ctx, disc.aux_stats.get("numa"))  # 窗口级定量归因
+        _preemptor_wakeup_trace(ctx)  # 抢占任务唤醒者回溯（定位结论自动回溯）
         if ctx.idx in ctx_warn_windows:
             for side, node in (("client", ctx.client_node), ("server", ctx.server_node)):
                 if node:
@@ -6024,6 +8277,8 @@ def analyze(log_root, residual_threshold=DEFAULT_RESIDUAL_THRESHOLD_US,
         _slow_seg_window_analysis(ctx)  # 慢段窗口提取（依赖结论瓶颈段）
     _stage("阶段5/6 关联与结论: %d 条问题请求, 总耗时 %.1fs"
            % (len(contexts), time.monotonic() - t_start))
+    # 概览节点信息表数据：全部节点 + 宿主机 IP + 日志可用性
+    _build_nodes_table_stats(disc)
     return disc, contexts, trace_lines
 
 
@@ -6061,6 +8316,12 @@ def main(argv=None):
                     help="输出结构化 JSON 结果路径（原始数据不截断，供其他工具/skill 二次消费）")
     ap.add_argument("--raw", default=None, dest="raw_path",
                     help="输出原始日志汇总路径（每问题请求一节，标注日志来源，供对照报告查看）")
+    ap.add_argument("--os-monitor-report", default=None, dest="os_monitor_report",
+                    help="OS 资源周期监控报告输出路径（默认 -o 同目录 os_monitor_report.html，"
+                         "采集到周期监控日志即自动生成）")
+    ap.add_argument("--os-monitor-only", action="store_true", default=False,
+                    help="只分析 OS 资源周期监控（irqoff/sar nic/NUMA 访存），跳过问题请求"
+                         "定界分析（可无 client 日志），输出周期监控报告")
     ns = ap.parse_args(argv)
 
     disc, contexts, trace_lines = analyze(
@@ -6071,12 +8332,28 @@ def main(argv=None):
         verbose=ns.verbose,
         workers=ns.workers,
         seek_slack_s=ns.seek_slack_s,
-        bpf_time_offset_ms=ns.bpf_time_offset_ms)
+        bpf_time_offset_ms=ns.bpf_time_offset_ms,
+        os_monitor_only=ns.os_monitor_only)
+    aux_stats = disc.aux_stats if disc is not None else None
+
+    # OS 资源周期监控报告：采集到任一类周期监控日志即默认生成
+    # （独立于定界主报告；--os-monitor-only 时为唯一输出）
+    os_report_path = None
+    if aux_stats and any(aux_stats.get(k) for k in ("numa", "irqoff", "nic")):
+        os_report_path = (Path(ns.os_monitor_report) if ns.os_monitor_report
+                          else Path(ns.output).with_name("os_monitor_report.html"))
+        os_report_path.parent.mkdir(parents=True, exist_ok=True)
+        os_report_path.write_text(
+            generate_os_monitor_report(aux_stats, ns.log_root), encoding="utf-8")
+        print("OS 资源周期监控报告已生成: %s" % os_report_path.resolve())
+
+    if ns.os_monitor_only:
+        return 0
+
     if not contexts:
         print("未发现 network_residual_us > %d 的问题请求" % ns.residual_threshold)
         return 1
 
-    aux_stats = disc.aux_stats if disc is not None else None
     report = generate_report(contexts, ns, ns.log_root, aux_stats=aux_stats)
     out = Path(ns.output)
     out.write_text(report, encoding="utf-8")
