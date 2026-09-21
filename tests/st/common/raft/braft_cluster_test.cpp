@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <future>
@@ -21,13 +22,16 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include <unistd.h>
 
+#include <braft/macros.h>
 #include <braft/raft.h>
 #include <brpc/server.h>
+#include <bthread/bthread.h>
 #include <butil/at_exit.h>
 #include <butil/endpoint.h>
 #include <butil/iobuf.h>
@@ -41,6 +45,66 @@
 namespace datasystem {
 namespace st {
 namespace {
+static_assert(std::is_same<braft::raft_mutex_t, bthread::Mutex>::value,
+              "braft and its consumers must use cooperative mutexes");
+
+TEST(BraftMutexTest, ContentionPreservesBthreadProgress)
+{
+    constexpr auto timeout = std::chrono::seconds(2);
+    bthread_t warmup;
+    ASSERT_EQ(bthread_start_background(&warmup, nullptr, [](void *) -> void * { return nullptr; }, nullptr), 0);
+    ASSERT_EQ(bthread_join(warmup, nullptr), 0);
+    // The registered per-tag count can lag worker startup; cover the configured total instead.
+    const auto workerCount = static_cast<size_t>(bthread_getconcurrency());
+    struct ContentionState {
+        braft::raft_mutex_t mutex;
+        std::atomic<size_t> entered{ 0 };
+        size_t workerCount;
+        std::promise<void> allEntered;
+    } state;
+    state.workerCount = workerCount;
+    auto enteredFuture = state.allEntered.get_future();
+    std::unique_lock<braft::raft_mutex_t> lock(state.mutex);
+    std::vector<bthread_t> tasks;
+    tasks.reserve(workerCount);
+    for (size_t index = 0; index < workerCount; ++index) {
+        bthread_t task;
+        const int rc = bthread_start_background(&task, nullptr, [](void *arg) -> void * {
+            auto &state = *static_cast<ContentionState *>(arg);
+            if (state.entered.fetch_add(1) + 1 == state.workerCount) {
+                state.allEntered.set_value();
+            }
+            std::lock_guard<braft::raft_mutex_t> lock(state.mutex);
+            return nullptr;
+        }, &state);
+        EXPECT_EQ(rc, 0);
+        if (rc != 0) {
+            break;
+        }
+        tasks.push_back(task);
+    }
+    const bool enteredAll = enteredFuture.wait_for(timeout) == std::future_status::ready;
+    std::promise<void> probe;
+    auto probeFuture = probe.get_future();
+    bthread_t probeTask;
+    const int probeStatus = bthread_start_background(&probeTask, nullptr, [](void *arg) -> void * {
+        static_cast<std::promise<void> *>(arg)->set_value();
+        return nullptr;
+    }, &probe);
+    const bool progressed = probeStatus == 0 && probeFuture.wait_for(timeout) == std::future_status::ready;
+    // Unlock from the native thread before joining, including when the blocking-mutex regression is present.
+    lock.unlock();
+    for (auto task : tasks) {
+        EXPECT_EQ(bthread_join(task, nullptr), 0);
+    }
+    if (probeStatus == 0) {
+        EXPECT_EQ(bthread_join(probeTask, nullptr), 0);
+    }
+    EXPECT_EQ(probeStatus, 0);
+    EXPECT_TRUE(enteredAll);
+    EXPECT_TRUE(progressed) << "Contended braft mutexes exhausted the bthread worker pool";
+}
+
 constexpr size_t kClusterNodeCount = 3;
 constexpr int kElectionTimeoutMs = 300;
 constexpr int kLeaderPollIntervalMs = 20;
