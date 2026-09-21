@@ -102,7 +102,9 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(ev["kind"], "tcp_recv_que")
         self.assertEqual(ev["local_ip"], "192.168.102.161")
         self.assertEqual(ev["peer_port"], 37868)
-        self.assertEqual(ev["rcv_nxt"], 4187256525)
+        # que 行序号字段为 tp_rcv_nxt（显式解析，不再从 tp_ 前缀误取为 rcv_nxt）
+        self.assertEqual(ev["tp_rcv_nxt"], 4187256525)
+        self.assertNotIn("rcv_nxt", ev)
 
     def test_parse_bpf_no_addr(self):
         ev = nla.parse_bpf_line(BPF_NOADDR, DAY)
@@ -222,6 +224,625 @@ class TestSlowRecordScan(unittest.TestCase):
                 self.assertEqual(len(recs2), 2)
         finally:
             os.unlink(path)
+
+
+class TestWarmupTraceFilter(unittest.TestCase):
+    """预热阶段 UUID 格式 trace_id（如 d855850b-54c6-4968-8cc2-1d4b974d88bc，
+    不计入 p99）在慢请求扫描时过滤；正常业务 trace（setStringView-/getBuffer-
+    等前缀）保留；--trace 显式指定的 UUID trace 保留（用户主动要求）。"""
+
+    UUID_TRACE = "d855850b-54c6-4968-8cc2-1d4b974d88bc"
+    NORMAL_TRACE = "setStringView-106-96-00082604;abcdef012345"
+
+    def _log(self, trace, residual):
+        slow = (SLOW_MSG.replace("network_residual_us=15989",
+                                 "network_residual_us=%d" % residual)
+                .replace("getBuffer-25487-00004775;117c5c4a91c7", trace))
+        return ("2026-08-21T21:31:21.077013 | I | brpc_perf_trace.h:368 | 1.1.1.1 | "
+                "1:1 | tr | u |  " + slow + "\n")
+
+    def _scan(self, content, only=None):
+        with tempfile.NamedTemporaryFile("wb", suffix=".log", delete=False) as fh:
+            fh.write(content.encode())
+            path = Path(fh.name)
+        try:
+            return nla.scan_slow_records([path], 1000, only_traces=only)
+        finally:
+            os.unlink(path)
+
+    def test_uuid_trace_filtered(self):
+        recs = self._scan(self._log(self.UUID_TRACE, 5000))
+        self.assertEqual(recs, [])
+
+    def test_normal_trace_kept(self):
+        recs = self._scan(self._log(self.NORMAL_TRACE, 5000))
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0].trace_id, self.NORMAL_TRACE)
+
+    def test_mixed_only_normal_survives(self):
+        recs = self._scan(self._log(self.UUID_TRACE, 9000)
+                          + self._log(self.NORMAL_TRACE, 5000))
+        self.assertEqual([r.trace_id for r in recs], [self.NORMAL_TRACE])
+
+    def test_uuid_trace_explicit_only_kept(self):
+        """--trace 显式指定 UUID 子串 = 用户主动要求，不过滤。"""
+        recs = self._scan(self._log(self.UUID_TRACE, 5000),
+                          only=[self.UUID_TRACE[:8]])
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0].trace_id, self.UUID_TRACE)
+
+
+class TestBusinessRecvSlow(unittest.TestCase):
+    """业务收包慢根因：tcp_recv_que（协议栈收包入队）→ tcp_recv_in（业务调 recv）
+    耗时长 → 归类 server/client_business_recv_slow，参与异常竞争成为定界根因。"""
+
+    CIP, CPORT = "192.168.32.61", 39776
+    SIP, SPORT = "192.168.52.197", 31501
+    T0 = datetime(2026, 8, 23, 20, 45, 39)
+
+    def _ctx(self, milestones):
+        slow = nla.SlowRecord(
+            "tr", self.T0,
+            {"network_residual_us": "2000", "e2e_us": "3000", "framework_us": "2500",
+             "method": "m", "remote_processing_us": "0", "server_req_queue_us": "0",
+             "server_exec_us": "0"},
+            "/tmp/x.log", "pod")
+        ctx = nla.TraceContext(slow)
+        ctx.idx = 0
+        ctx.client_ip, ctx.server_ip = self.CIP, self.SIP
+        ctx.conn = (self.CIP, self.CPORT, self.SIP, self.SPORT)
+        ctx.milestones = milestones
+        ctx.kernel_events = {"client": [], "server": []}
+        return ctx
+
+    def _seg(self, ctx, key):
+        return next((s for s in ctx.kernel_segments if s["key"] == key), None)
+
+    def test_server_recvq_to_recv_segment_built(self):
+        """ServerTcpRecvQue → ServerTcpRecvFirst 段构建；超阈值 abnormal。"""
+        ms = {
+            "ServerTcpRecvQue": self.T0.replace(microsecond=100000),
+            "ServerTcpRecvFirst": self.T0.replace(microsecond=150000),
+            "ServerTcpRecvLast": self.T0.replace(microsecond=150100),
+        }
+        ctx = self._ctx(ms)
+        nla.build_kernel_segments(ctx)
+        seg = self._seg(ctx, "server_recvq_to_recv")
+        self.assertIsNotNone(seg)
+        self.assertAlmostEqual(seg["dur_us"], 50000)  # 100000 → 150000
+        self.assertTrue(seg["abnormal"])              # 50000 > 100
+        self.assertEqual(seg["category"], "server_business_recv_slow")
+        self.assertFalse(seg.get("evidence"))
+
+    def test_client_recvq_to_recv_segment_built(self):
+        ms = {
+            "ClientTcpRecvQue": self.T0.replace(microsecond=100000),
+            "ClientTcpRecvFirst": self.T0.replace(microsecond=105000),
+            "ClientTcpRecvLast": self.T0.replace(microsecond=105100),
+        }
+        ctx = self._ctx(ms)
+        nla.build_kernel_segments(ctx)
+        seg = self._seg(ctx, "client_recvq_to_recv")
+        self.assertIsNotNone(seg)
+        self.assertAlmostEqual(seg["dur_us"], 5000)   # 5000 > 1000 阈值
+        self.assertTrue(seg["abnormal"])
+        self.assertEqual(seg["category"], "client_business_recv_slow")
+
+    def test_recvq_to_recv_normal_not_abnormal(self):
+        """入队→业务 recv 在阈值内（server 100us / client 1000us）不异常。"""
+        ms = {
+            "ServerTcpRecvQue": self.T0.replace(microsecond=100000),
+            "ServerTcpRecvFirst": self.T0.replace(microsecond=100080),
+            "ServerTcpRecvLast": self.T0.replace(microsecond=100100),
+        }
+        ctx = self._ctx(ms)
+        nla.build_kernel_segments(ctx)
+        seg = self._seg(ctx, "server_recvq_to_recv")
+        self.assertIsNotNone(seg)
+        self.assertFalse(seg["abnormal"])
+
+    def test_blocking_recv_first_before_que_skipped(self):
+        """阻塞收包场景 recvmsg 先于入队（TcpRecvFirst < TcpRecvQue）→ 跳过该段。"""
+        ms = {
+            "ServerTcpRecvQue": self.T0.replace(microsecond=200000),
+            "ServerTcpRecvFirst": self.T0.replace(microsecond=100000),
+            "ServerTcpRecvLast": self.T0.replace(microsecond=200500),
+        }
+        ctx = self._ctx(ms)
+        nla.build_kernel_segments(ctx)
+        self.assertIsNone(self._seg(ctx, "server_recvq_to_recv"))
+
+    def test_conclusion_picks_business_recv_slow(self):
+        """业务收包段为最大异常段 → 定界 server_business_recv_slow。"""
+        ms = {
+            "ServerTcpRecvQue": self.T0.replace(microsecond=100000),
+            "ServerTcpRecvFirst": self.T0.replace(microsecond=160000),
+            "ServerTcpRecvLast": self.T0.replace(microsecond=160100),
+            "ServerRecv": self.T0.replace(microsecond=160200),
+        }
+        ctx = self._ctx(ms)
+        nla.build_kernel_segments(ctx)
+        nla.ConclusionEngine.conclude(ctx)
+        self.assertEqual(ctx.conclusion["category"], "server_business_recv_slow")
+        self.assertIn("server_business_recv_slow", nla.CATEGORY_LABELS)
+        self.assertIn("server_business_recv_slow", nla.CATEGORY_SUGGESTIONS)
+        self.assertIn("client_business_recv_slow", nla.CATEGORY_LABELS)
+        self.assertIn("client_business_recv_slow", nla.CATEGORY_SUGGESTIONS)
+
+
+class TestNodeInternalAttribution(unittest.TestCase):
+    """传输类瓶颈（network_*）命中且瓶颈侧节点内段（网卡↔协议栈）占主导时，
+    细分改写为节点内根因（不再笼统归"网络传输"）。"""
+
+    T0 = datetime(2026, 8, 23, 20, 45, 39)
+
+    def _ctx(self, base_cat, wire_key, internal_key, wire_us, internal_us):
+        slow = nla.SlowRecord(
+            "tr", self.T0,
+            {"network_residual_us": "2000", "e2e_us": "3000", "framework_us": "2500",
+             "method": "m", "remote_processing_us": "0", "server_req_queue_us": "0",
+             "server_exec_us": "0"},
+            "/tmp/x.log", "pod")
+        ctx = nla.TraceContext(slow)
+        ctx.idx = 0
+        ctx.client_ip, ctx.server_ip = "1.1.1.1", "2.2.2.2"
+        ctx.kernel_segments = [
+            {"key": wire_key, "start": "A", "end": "B", "dur_us": wire_us,
+             "threshold_us": 200, "category": base_cat, "desc": "wire",
+             "abnormal": True, "evidence": False},
+            {"key": internal_key, "start": "C", "end": "D", "dur_us": internal_us,
+             "threshold_us": None, "category": "nic_evidence", "desc": "节点内",
+             "abnormal": False, "evidence": True},
+        ]
+        return ctx
+
+    def test_c2s_server_ingress_dominant_rewrites(self):
+        """wire_c2s 慢且 server_nic_to_stack 占 80% → server_node_ingress_delay。"""
+        ctx = self._ctx("network_c2s_transmission", "wire_c2s",
+                        "server_nic_to_stack", 10000, 8000)
+        nla.ConclusionEngine.conclude(ctx)
+        self.assertEqual(ctx.conclusion["category"], "server_node_ingress_delay")
+        self.assertEqual(ctx.conclusion["confidence"], "高")
+        self.assertTrue(any("节点内" in s and "80.0%" in s
+                            for s in ctx.conclusion["evidence"]))
+
+    def test_c2s_client_egress_dominant_rewrites(self):
+        ctx = self._ctx("network_c2s_transmission", "wire_c2s",
+                        "client_stack_to_nic", 12000, 9000)
+        nla.ConclusionEngine.conclude(ctx)
+        self.assertEqual(ctx.conclusion["category"], "client_node_egress_delay")
+
+    def test_s2c_client_ingress_dominant_rewrites(self):
+        ctx = self._ctx("network_s2c_transmission", "wire_s2c",
+                        "client_nic_to_stack", 10000, 7500)
+        nla.ConclusionEngine.conclude(ctx)
+        self.assertEqual(ctx.conclusion["category"], "client_node_ingress_delay")
+
+    def test_s2c_server_egress_dominant_rewrites(self):
+        ctx = self._ctx("network_s2c_transmission", "wire_s2c",
+                        "server_stack_to_nic", 10000, 9500)
+        nla.ConclusionEngine.conclude(ctx)
+        self.assertEqual(ctx.conclusion["category"], "server_node_egress_delay")
+
+    def test_share_below_threshold_keeps_network(self):
+        """节点内占比 <70% → 维持 network_* 不改写。"""
+        ctx = self._ctx("network_c2s_transmission", "wire_c2s",
+                        "server_nic_to_stack", 10000, 5000)
+        nla.ConclusionEngine.conclude(ctx)
+        self.assertEqual(ctx.conclusion["category"], "network_c2s_transmission")
+
+    def test_absolute_below_1ms_keeps_network(self):
+        """节点内占比达标但绝对值 <1ms → 不改写（避免小段噪声）。"""
+        ctx = self._ctx("network_c2s_transmission", "wire_c2s",
+                        "server_nic_to_stack", 1200, 900)
+        nla.ConclusionEngine.conclude(ctx)
+        self.assertEqual(ctx.conclusion["category"], "network_c2s_transmission")
+
+    def test_categories_have_labels_and_suggestions(self):
+        for cat in ("server_node_ingress_delay", "client_node_ingress_delay",
+                    "client_node_egress_delay", "server_node_egress_delay"):
+            self.assertIn(cat, nla.CATEGORY_LABELS)
+            self.assertIn(cat, nla.CATEGORY_SUGGESTIONS)
+
+
+class TestServerIpRecover(unittest.TestCase):
+    """ServerRecv/ServerSend 锚点行缺失（日志可选）但 worker 日志中有该 trace 的
+    业务行时：从业务行恢复 server pod IP（host 列），server 侧链路可正常关联。"""
+
+    T0 = "2026-08-21T21:31:21.077013"
+    WORKER_IP = "192.168.52.197"
+
+    def _worker_line(self, msg="handle request step1"):
+        # iter_marker_lines 产出的命中行为 str（已按 utf-8 解码）
+        return ("%s | I | svc.cpp:88 | %s | 6289:6289 | tr | u |  %s\n"
+                % (self.T0, self.WORKER_IP, msg))
+
+    def _ctx(self):
+        slow = nla.SlowRecord(
+            "tr", datetime(2026, 8, 21, 21, 31, 21),
+            {"network_residual_us": "2000", "ClientSend": "100",
+             "ClientRecv": "200", "method": "m"},
+            "/tmp/c.log", "pod")
+        return nla.TraceContext(slow)
+
+    def test_recover_from_worker_info_line(self):
+        """锚点缺失 + worker 业务行存在 → server_ip/pod_dir 恢复 + 推测说明。"""
+        ctx = self._ctx()
+        lines = [("worker", "/tmp/w/worker_192.168.52.197/kvcache.INFO.log",
+                  self._worker_line())]
+        ok = nla._recover_server_from_info(ctx, lines)
+        self.assertTrue(ok)
+        self.assertEqual(ctx.server_ip, self.WORKER_IP)
+        self.assertEqual(ctx.server_pod_dir, "worker_192.168.52.197")
+        self.assertTrue(any("ServerRecv/ServerSend" in m and "业务行" in m
+                            for m in ctx.missing))
+
+    def test_no_worker_lines_returns_false(self):
+        ctx = self._ctx()
+        ok = nla._recover_server_from_info(
+            ctx, [("client", "/tmp/c/pod/ds_client.INFO.log",
+                   self._worker_line())])
+        self.assertFalse(ok)
+        self.assertIsNone(ctx.server_ip)
+
+    def test_garbage_line_skipped(self):
+        ctx = self._ctx()
+        ok = nla._recover_server_from_info(
+            ctx, [("worker", "/tmp/w/x/kvcache.INFO.log", "not an info line\n")])
+        self.assertFalse(ok)
+        self.assertIsNone(ctx.server_ip)
+
+
+class TestSynthesizedAnchors(unittest.TestCase):
+    """锚点行缺失（新日志格式不再输出 ClientSend/ServerRecv ts 锚点行）时，
+    从 SLOW 行内嵌的四个 ns 时间戳合成锚点：
+
+    - ClientSend/ClientRecv 为 client 机器单调钟（差值 = e2e 精确）；
+      墙钟换算：ClientRecv ≈ SLOW 行墙钟，ClientSend = 其减 e2e
+    - ServerRecv/ServerSend 为 worker 机器单调钟；墙钟换算优先 worker
+      URMA 行 trace_us（observed），无 URMA 行时用 worker 首行墙钟近似
+    - sr/ss 超出 [cs-60s, cr+60s] 合理性窗 → 放弃合成 + 原因
+    - 合成锚点带 synth 标记 + ◇ 推测证据说明方法
+    夹具数值取自真实新格式日志（getBuffer UB 场景）。
+    """
+
+    SLOW_TS = datetime(2026, 9, 15, 18, 3, 9, 42342)   # SLOW 行墙钟
+    CS_NS, CR_NS = "68710416514425", "68710430287853"  # client 单调钟 ns
+    SR_NS, SS_NS = "68709892262763", "68709892509813"  # worker 单调钟 ns
+    E2E_US = (68710430287853 - 68710416514425) / 1000.0      # 13773.428
+    SRSS_US = (68709892509813 - 68709892262763) / 1000.0     # 247.05
+    CIP, SIP = "192.168.219.103", "192.168.100.195"
+
+    def _slow(self, with_ns=True, with_client_ns=True):
+        fields = {"network_residual_us": "13526", "e2e_us": "13774",
+                  "framework_us": "13531", "method": "datasystem.WorkerOCService.QueryAndGet",
+                  "tid": "187"}
+        if with_ns:
+            fields.update({"ServerSend": self.SS_NS, "ServerRecv": self.SR_NS})
+        if with_client_ns:
+            fields.update({"ClientSend": self.CS_NS, "ClientRecv": self.CR_NS})
+        return nla.SlowRecord(
+            "getBuffer-86-96-00051136;b34ccc369f0b", self.SLOW_TS, fields,
+            "/tmp/collected/SDK_%s/ds_client_96.INFO.log" % self.CIP,
+            "SDK_%s" % self.CIP, host=self.CIP)
+
+    def _urma_line(self, observed="68709892491",
+                   wall="2026-09-15T18:03:09.028903"):
+        return ("%s | I | urma_manager.cpp:1680 | %s | 9:248 | "
+                "getBuffer-86-96-00051136;b34ccc369f0b | lzw-jingpai |  "
+                "[SLOW LOG] [URMA_ELAPSED_TOTAL]: [urma_request_id:699618] "
+                "total cost 0.188ms, trace_us:{post:68709892293, "
+                "wait:68709892491, poll_begin:68709892474, "
+                "observed:%s, waited_for_notification:1}"
+                % (wall, self.SIP, observed))
+
+    def _plain_worker_line(self, wall="2026-09-15T18:03:09.028959"):
+        return ("%s | I | access_recorder.cpp:1066 | %s | 9:248 | "
+                "getBuffer-86-96-00051136;b34ccc369f0b | lzw-jingpai | "
+                "0 | DS_POSIX_QUERY_AND_GET | 283"
+                % (wall, self.SIP))
+
+    def _ctx(self, with_ns=True, with_client_ns=True):
+        ctx = nla.TraceContext(self._slow(with_ns, with_client_ns))
+        ctx.idx = 0
+        return ctx
+
+    def test_client_anchors_synthesized(self):
+        """锚点行缺失 + SLOW 内嵌 client ns → cs/cr 合成（e2e 精确、墙钟≈SLOW）。"""
+        ctx = self._ctx()
+        nla._synthesize_anchors_from_slow(ctx, [])
+        cs, cr = ctx.anchors.get("ClientSend"), ctx.anchors.get("ClientRecv")
+        self.assertIsNotNone(cs)
+        self.assertIsNotNone(cr)
+        self.assertEqual(cr["ts"], self.SLOW_TS)
+        # datetime 精度为微秒级，断言放宽到 ±1us
+        self.assertAlmostEqual(
+            (self.SLOW_TS - cs["ts"]).total_seconds() * 1e6,
+            self.E2E_US, delta=1.0)
+        self.assertTrue(cs.get("synth") and cr.get("synth"))
+        self.assertEqual(cs["host"], self.CIP)
+        self.assertEqual(ctx.client_ip, self.CIP)
+        self.assertTrue(any("SLOW" in s and "合成" in s
+                            for s in ctx.infer_evidence))
+
+    def test_server_anchors_urma_reference(self):
+        """worker URMA 行 trace_us → worker 单调钟→墙钟换算 sr/ss。"""
+        ctx = self._ctx()
+        ctx.server_ip = self.SIP
+        ctx.server_pod_dir = "worker_%s" % self.SIP
+        lines = [("worker", "/tmp/w/worker_%s/kvcache.INFO.log" % self.SIP,
+                  self._urma_line())]
+        nla._synthesize_anchors_from_slow(ctx, lines)
+        sr, ss = ctx.anchors.get("ServerRecv"), ctx.anchors.get("ServerSend")
+        self.assertIsNotNone(sr)
+        self.assertIsNotNone(ss)
+        # offset = 行墙钟 - observed(us)；sr = offset + sr_ns/1000
+        off = datetime(2026, 9, 15, 18, 3, 9, 28903) - \
+            timedelta(microseconds=68709892491)
+        self.assertEqual(sr["ts"], off + timedelta(
+            microseconds=int(self.SR_NS) / 1000.0))
+        self.assertAlmostEqual(
+            (ss["ts"] - sr["ts"]).total_seconds() * 1e6,
+            self.SRSS_US, delta=1.0)
+        self.assertTrue(sr.get("synth"))
+        self.assertEqual(sr["host"], self.SIP)
+        self.assertTrue(any("URMA" in s for s in ctx.infer_evidence))
+        # macro / milestones 已由 _finalize_anchors 填充
+        self.assertAlmostEqual(ctx.macro["sr_ss"], self.SRSS_US, delta=1.0)
+        self.assertIn("ServerRecv", ctx.milestones)
+
+    def test_server_anchors_first_line_fallback(self):
+        """无 URMA 行 → worker 首行业务行墙钟近似 + ns 差值。"""
+        ctx = self._ctx()
+        ctx.server_ip = self.SIP
+        first = datetime(2026, 9, 15, 18, 3, 9, 28959)
+        lines = [("worker", "/tmp/w/worker_%s/kvcache.INFO.log" % self.SIP,
+                  self._plain_worker_line())]
+        nla._synthesize_anchors_from_slow(ctx, lines)
+        sr, ss = ctx.anchors.get("ServerRecv"), ctx.anchors.get("ServerSend")
+        self.assertIsNotNone(sr)
+        self.assertEqual(sr["ts"], first)
+        self.assertAlmostEqual(
+            (ss["ts"] - sr["ts"]).total_seconds() * 1e6,
+            self.SRSS_US, delta=1.0)
+        self.assertTrue(any("首行" in s for s in ctx.infer_evidence))
+
+    def test_server_sanity_check_skips(self):
+        """URMA observed 异常（换算出 sr 超出 ±60s 窗）→ 放弃 server 合成。"""
+        ctx = self._ctx()
+        ctx.server_ip = self.SIP
+        lines = [("worker", "/tmp/w/x/kvcache.INFO.log",
+                  self._urma_line(observed="67609892491"))]  # 偏 10000s
+        nla._synthesize_anchors_from_slow(ctx, lines)
+        self.assertIsNone(ctx.anchors.get("ServerRecv"))
+        self.assertIsNone(ctx.anchors.get("ServerSend"))
+        # client 侧不受影响
+        self.assertIsNotNone(ctx.anchors.get("ClientSend"))
+        self.assertTrue(any("换算" in m for m in ctx.missing))
+
+    def test_missing_ns_fields_no_synth(self):
+        """SLOW 行无内嵌 ns 字段 → 不合成 + 原因说明。"""
+        ctx = self._ctx(with_ns=False, with_client_ns=False)
+        nla._synthesize_anchors_from_slow(ctx, [])
+        self.assertEqual(ctx.anchors, {})
+        self.assertTrue(any("内嵌时间戳" in m for m in ctx.missing))
+
+    def test_build_context_anchors_integration(self):
+        """主流程接入：锚点行全缺 + SLOW ns + worker URMA 行 → 四锚点齐全。"""
+        ctx = self._ctx()
+        lines = [("worker", "/tmp/w/worker_%s/kvcache.INFO.log" % self.SIP,
+                  self._urma_line())]
+        nla._build_context_anchors(
+            ctx, [], [], lines)   # 锚点行为空（新日志格式）
+        for k in ("ClientSend", "ClientRecv", "ServerRecv", "ServerSend"):
+            self.assertIn(k, ctx.anchors, k)
+        self.assertEqual(ctx.client_ip, self.CIP)
+        self.assertEqual(ctx.server_ip, self.SIP)
+        self.assertAlmostEqual(ctx.macro["sr_ss"], self.SRSS_US, delta=1.0)
+
+    def test_slow_record_host_field(self):
+        """SlowRecord 携带 SLOW 行 host 列（client pod IP）。"""
+        slow = self._slow()
+        self.assertEqual(slow.host, self.CIP)
+
+    def test_worker_log_re_matches_access_log(self):
+        """worker 日志发现纳入 access.log（worker 目录访问日志含 trace 行）。"""
+        self.assertTrue(nla.WORKER_LOG_RE.match("access.log"))
+        self.assertTrue(nla.WORKER_LOG_RE.match("kvcache.INFO.20260911.log"))
+        self.assertFalse(nla.WORKER_LOG_RE.match("ds_client_96.INFO.log"))
+
+    def test_build_anchors_unchanged_with_anchor_lines(self):
+        """老格式回归：锚点行存在时行为不变（无 synth、macro 照常）。"""
+        ctx = self._ctx()
+        t = "2026-09-15T18:03:09.028529"
+        cline = ("%s | I | a.cpp:1 | %s | 96:187 | "
+                 "getBuffer-86-96-00051136;b34ccc369f0b | u |  "
+                 "ClientSend ts %s tid 187" % (t, self.CIP, self.CS_NS))
+        info = nla.parse_info_line(cline)
+        info["_path"] = "/tmp/c.log"
+        info["_pod_dir"] = "SDK_%s" % self.CIP
+        nla.build_anchors(ctx, [info], [])
+        self.assertIn("ClientSend", ctx.anchors)
+        self.assertNotIn("synth", ctx.anchors["ClientSend"])
+        self.assertEqual(ctx.client_ip, self.CIP)
+
+
+class TestInferredLinkEvidence(unittest.TestCase):
+    """锚点日志缺失（可选）时的推测链路证据。
+
+    - _inferred_link_evidence：server 侧 bpf 事件补扫后，按内核点位推测链路
+      （请求交付/响应发出/宏观三段等价）+ 原因；
+    - _client_only_infer_evidence：server 侧完全无证据时，client 单侧事件
+      推测方向 + 原因（server 处理与线路不可区分）。
+    """
+
+    CIP, CPORT = "192.168.32.61", 39776
+    SIP, SPORT = "192.168.52.197", 31501
+    T0 = datetime(2026, 8, 23, 20, 45, 39)
+
+    def _ctx(self, milestones=None, client_events=None):
+        slow = nla.SlowRecord(
+            "tr", self.T0,
+            {"network_residual_us": "2000", "e2e_us": "3000", "framework_us": "2500",
+             "method": "m", "remote_processing_us": "0", "server_req_queue_us": "0",
+             "server_exec_us": "0"},
+            "/tmp/x.log", "pod")
+        ctx = nla.TraceContext(slow)
+        ctx.idx = 0
+        ctx.client_ip, ctx.server_ip = self.CIP, self.SIP
+        ctx.conn = (self.CIP, self.CPORT, self.SIP, self.SPORT)
+        ctx.milestones = milestones or {}
+        ctx.kernel_events = {"client": list(client_events or []), "server": []}
+        ctx.filtered_events = {"client": [], "server": []}
+        ctx.bpf_window_events = {"client": [], "server": []}
+        ctx.anchors["ClientSend"] = {"ts": self.T0, "tid": "1", "cpu": "1",
+                                     "bid": None, "host": self.CIP,
+                                     "pod_dir": "pod", "log_path": "p", "raw": "r"}
+        ctx.anchors["ClientRecv"] = {"ts": self.T0, "tid": "1", "cpu": "1",
+                                     "bid": None, "host": self.CIP,
+                                     "pod_dir": "pod", "log_path": "p", "raw": "r"}
+        return ctx
+
+    def test_inferred_link_with_server_milestones(self):
+        """server 侧里程碑齐 → 推测链路文本含请求交付/响应发出/三段等价。"""
+        ms = {
+            "ClientTcpSendIn": self.T0.replace(microsecond=100000),
+            "ServerTcpRecvFirst": self.T0.replace(microsecond=105000),
+            "ServerTcpSendIn": self.T0.replace(microsecond=300000),
+            "ClientTcpRecvFirst": self.T0.replace(microsecond=400000),
+        }
+        ctx = self._ctx(ms)
+        nla._inferred_link_evidence(ctx)
+        self.assertTrue(ctx.infer_evidence)
+        joined = "\n".join(ctx.infer_evidence)
+        self.assertIn("推测", joined)
+        self.assertIn("请求交付", joined)          # ServerTcpRecvFirst
+        self.assertIn("响应发出", joined)          # ServerTcpSendIn
+        self.assertIn("CS→SR", joined)             # 宏观三段等价
+        self.assertIn("SR→SS", joined)
+        self.assertIn("SS→CR", joined)
+        # 结论 evidence 带 ◇ 前缀
+        nla.ConclusionEngine.conclude(ctx)
+        self.assertTrue(any(s.startswith("◇") for s in ctx.conclusion["evidence"]))
+
+    def test_client_only_infer_direction(self):
+        """无 server 侧证据 → client 单侧推测：发出/到达时刻 + 不可区分说明。"""
+        ms = {
+            "ClientTcpSendIn": self.T0.replace(microsecond=100000),
+            "ClientNetifRx": self.T0.replace(microsecond=400000),
+        }
+        retrans = {"kind": "tcp_retransmit", "ts": self.T0, "raw": "r",
+                   "local_ip": self.CIP, "local_port": self.CPORT,
+                   "peer_ip": self.SIP, "peer_port": self.SPORT}
+        ctx = self._ctx(ms, client_events=[retrans])
+        nla._client_only_infer_evidence(ctx)
+        joined = "\n".join(ctx.infer_evidence)
+        self.assertIn("发出", joined)
+        self.assertIn("到达", joined)
+        self.assertIn("无法区分", joined)
+        self.assertIn("重传", joined)               # 1 次重传 → 线路丢包提示
+
+    def test_client_only_infer_no_events(self):
+        """client 侧点位也缺 → 说明证据不足原因。"""
+        ctx = self._ctx()
+        nla._client_only_infer_evidence(ctx)
+        joined = "\n".join(ctx.infer_evidence)
+        self.assertIn("无法推测", joined)
+
+    def test_client_only_infer_nic_fallback(self):
+        """tcp 层点位缺失（SDK 直连 tcp 探针未启用）→ nic 层点位兜底推测：
+        发出点位回退 ClientDevStartXmit，并给出 client 网卡→业务取包耗时。"""
+        ms = {
+            "ClientDevStartXmit": self.T0.replace(microsecond=100000),
+            "ClientNetDevXmit": self.T0.replace(microsecond=101000),
+            "ClientNetifRx": self.T0.replace(microsecond=400000),
+        }
+        ctx = self._ctx(ms)
+        ctx.milestones["ClientRecv"] = self.T0.replace(microsecond=500000)
+        nla._client_only_infer_evidence(ctx)
+        joined = "\n".join(ctx.infer_evidence)
+        self.assertIn("ClientDevStartXmit", joined)   # nic 层发出点位兜底
+        self.assertIn("无法区分", joined)
+        self.assertIn("业务取包", joined)              # 网卡→业务取包耗时
+
+
+class TestSupplementServerScan(unittest.TestCase):
+    """client_only（worker 日志未收集）且连接五元组经端口+时间推测识别后：
+    server 节点 bpf 补扫结果的回填（事件/里程碑/全景/五元组过滤）。"""
+
+    CIP, CPORT = "192.168.32.61", 39776
+    SIP, SPORT = "192.168.52.197", 31501
+    T0 = datetime(2026, 8, 23, 20, 45, 39)
+
+    def _ctx(self):
+        slow = nla.SlowRecord(
+            "tr", self.T0,
+            {"network_residual_us": "2000", "e2e_us": "3000", "framework_us": "2500",
+             "method": "m", "remote_processing_us": "0", "server_req_queue_us": "0",
+             "server_exec_us": "0"},
+            "/tmp/x.log", "pod")
+        ctx = nla.TraceContext(slow)
+        ctx.idx = 0
+        ctx.client_only = True
+        ctx.client_ip, ctx.server_ip = self.CIP, self.SIP
+        ctx.conn = (self.CIP, self.CPORT, self.SIP, self.SPORT)
+        ctx.milestones = {}
+        ctx.kernel_events = {"client": [], "server": []}
+        ctx.filtered_events = {"client": [], "server": []}
+        ctx.bpf_window_events = {"client": [], "server": []}
+        ctx.anchors["ClientSend"] = {"ts": self.T0, "tid": "1", "cpu": "1",
+                                     "bid": None, "host": self.CIP,
+                                     "pod_dir": "pod", "log_path": "p", "raw": "r"}
+        ctx.anchors["ClientRecv"] = {"ts": self.T0, "tid": "1", "cpu": "1",
+                                     "bid": None, "host": self.CIP,
+                                     "pod_dir": "pod", "log_path": "p", "raw": "r"}
+        return ctx
+
+    @staticmethod
+    def _srv_ev(kind, us, match=True):
+        ip, port = (TestSupplementServerScan.SIP,
+                    TestSupplementServerScan.SPORT) if match else ("10.0.0.9", 1234)
+        return {"kind": kind, "ts": TestSupplementServerScan.T0.replace(
+                    microsecond=us), "cpu": 3, "tid": 9,
+                "local_ip": ip, "local_port": port,
+                "peer_ip": TestSupplementServerScan.CIP,
+                "peer_port": TestSupplementServerScan.CPORT, "raw": "r"}
+
+    def test_fill_server_side_from_scan(self):
+        """补扫事件回填：kernel_events/里程碑/五元组过滤/全景标注。"""
+        ctx = self._ctx()
+        kernel_results = {(0, "server"): [
+            self._srv_ev("tcp_recv_in", 50000),
+            self._srv_ev("tcp_recv_in", 50100),
+            self._srv_ev("tcp_recv_que", 49000),
+            self._srv_ev("tcp_send_in", 200000),
+            self._srv_ev("tcp_recv_in", 60000, match=False),  # 其他连接
+        ]}
+        window_net_results = {(0, "server"): [self._srv_ev("nic_rx_skb", 48000)]}
+        nla._fill_server_side_from_scan(ctx, kernel_results, window_net_results)
+        # 里程碑填充（含推测说明）
+        self.assertIn("ServerTcpRecvQue", ctx.milestones)
+        self.assertIn("ServerTcpRecvFirst", ctx.milestones)
+        self.assertIn("ServerTcpRecvLast", ctx.milestones)
+        self.assertIn("ServerTcpSendIn", ctx.milestones)
+        # 五元组过滤：其他连接事件不进 filtered
+        self.assertTrue(all(e["local_ip"] == self.SIP
+                            for e in ctx.filtered_events["server"]))
+        self.assertEqual(len(ctx.filtered_events["server"]), 4)
+        # 全景事件带 match5t 标注
+        self.assertTrue(all("match5t" in e for e in ctx.bpf_window_events["server"]))
+        self.assertTrue(any(e["match5t"] is False
+                            for e in ctx.bpf_window_events["server"]))
+        # 推测链路证据生成
+        self.assertTrue(ctx.infer_evidence)
+
+    def test_fill_server_side_empty_events(self):
+        """补扫无事件 → 不填充，注明原因（连接推测可能有误）。"""
+        ctx = self._ctx()
+        nla._fill_server_side_from_scan(ctx, {}, {})
+        self.assertEqual(ctx.kernel_events["server"], [])
+        self.assertTrue(any("无该连接" in m or "未命中" in m
+                            for m in ctx.missing))
 
 
 class TestAnchorIndex(unittest.TestCase):
@@ -452,6 +1073,125 @@ class TestBpfScanner(unittest.TestCase):
             os.unlink(path)
 
 
+class TestBpfSeqPrefix(unittest.TestCase):
+    """新格式 bpf 日志：行首带序号（"16438196 18:03:09:028931 dev_start_xmit: ..."）。
+
+    解析层（parse_bpf_line）与扫描层（BpfScanner seek/full）都必须兼容，
+    老格式（行首直接是 HH:MM:SS:uuuuuu）行为不变。
+    """
+
+    CIP, SIP = "192.168.219.103", "192.168.100.195"
+
+    def _win(self, s, e, trace="A", side="client"):
+        return nla.TraceWindow(trace, side, s, e, self.CIP, self.SIP)
+
+    def _write_bpf(self, lines):
+        with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as fh:
+            fh.write("\n".join(lines) + "\n")
+            return fh.name
+
+    def test_parse_bpf_line_seq_prefix(self):
+        # 用户实测新格式：前导序号 + nic/tcp 事件（数值取自真实示例）
+        day = datetime(2026, 9, 15)
+        nic = nla.parse_bpf_line(
+            "16438196 18:03:09:028931 dev_start_xmit: sip:192.168.100.195, "
+            "sport:31402 -> dip:192.168.219.103, dport:55064, seq:1316402115, "
+            "len:276, dev:eth0 cpu:25", day)
+        self.assertIsNotNone(nic)
+        self.assertEqual(nic["kind"], "nic_dev_xmit_start")
+        self.assertEqual(nic["ts"], datetime(2026, 9, 15, 18, 3, 9, 28931))
+        self.assertEqual(nic["src_ip"], "192.168.100.195")
+        self.assertEqual(nic["dst_ip"], "192.168.219.103")
+        self.assertEqual(nic["dev"], "eth0")
+        tcp = nla.parse_bpf_line(
+            "16360719 18:03:09:036307 tcp  recv que tid 3913697 cpu 193 size 210 "
+            "tp_rcv_nxt:1316402115, 192.168.219.103:55064 <- 192.168.100.195:31402",
+            day)
+        self.assertIsNotNone(tcp)
+        self.assertEqual(tcp["kind"], "tcp_recv_que")
+        self.assertEqual(tcp["local_ip"], "192.168.219.103")
+        self.assertEqual(tcp["local_port"], 55064)
+        self.assertEqual(tcp["peer_ip"], "192.168.100.195")
+        self.assertEqual(tcp["peer_port"], 31402)
+
+    def test_parse_bpf_line_old_format_unchanged(self):
+        ev = nla.parse_bpf_line(
+            "21:31:21:060000 tcp  send in  tid 1 cpu 1 size 10 10.0.0.1:1 -> 10.0.0.2:2",
+            datetime(2026, 8, 21))
+        self.assertEqual(ev["kind"], "tcp_send_in")
+        self.assertEqual(ev["ts"], datetime(2026, 8, 21, 21, 31, 21, 60000))
+
+    def _seq_events(self):
+        # 噪声（前后）+ 窗口内 nic/tcp 事件，全部带前导序号
+        return (["16430000 18:03:08:900000 dev_start_xmit: sip:192.168.100.195, "
+                 "sport:31402 -> dip:192.168.219.103, dport:55064, seq:1, "
+                 "len:60, dev:eth0 cpu:25",
+                 "16430001 18:03:08:950000 tcp  recv in  tid 1 cpu 1 size 10 "
+                 "192.168.219.103:55064 <- 192.168.100.195:31402",
+                 "16360715 18:03:09:036286 netif_receive_skb: sip:192.168.100.195, "
+                 "sport:31402 -> dip:192.168.219.103, dport:55064, seq:1316402115, "
+                 "len:262, dev:enp38s0f0np0 cpu:193",
+                 "16360719 18:03:09:036307 tcp  recv que tid 3913697 cpu 193 size 210 "
+                 "tp_rcv_nxt:1316402115, 192.168.219.103:55064 <- 192.168.100.195:31402",
+                 "16363100 18:03:09:042216 tcp  recv in  tid 3905867 cpu 255 size 4096 "
+                 "192.168.219.103:55064 <- 192.168.100.195:31402, "
+                 "copied_seq:1316402115, rcv_nxt:1316402325"]
+                + ["1636%04d 18:03:09:03%04d tcp  recv in  tid 4 cpu 4 size 10 "
+                   "192.168.219.103:55064 <- 192.168.100.195:31402" % (i, i)
+                   for i in range(700, 780)]
+                + ["16369999 18:03:09:900000 tcp  recv in  tid 9 cpu 9 size 10 "
+                   "192.168.219.103:55064 <- 192.168.100.195:31402"])
+
+    def test_full_scan_seq_prefix(self):
+        path = self._write_bpf(self._seq_events())
+        try:
+            w = self._win(datetime(2026, 9, 15, 18, 3, 9, 30000),
+                          datetime(2026, 9, 15, 18, 3, 9, 50000))
+            sc = nla.BpfScanner(path, [w], full_scan=True)
+            res, _ = sc.scan()
+            evs = res[("A", "client")]
+            kinds = [e["kind"] for e in evs]
+            self.assertIn("nic_rx_skb", kinds)
+            self.assertIn("tcp_recv_que", kinds)
+            self.assertEqual(len(evs), 3 + 80)
+            # 诊断 tod 范围取自序号行内的 tod（而非把序号当 tod）
+            self.assertEqual(sc.diag["file_first_tod"], "18:03:08:900000")
+        finally:
+            os.unlink(path)
+
+    def test_seek_equals_full_seq_prefix(self):
+        path = self._write_bpf(self._seq_events())
+        try:
+            w = self._win(datetime(2026, 9, 15, 18, 3, 9, 30000),
+                          datetime(2026, 9, 15, 18, 3, 9, 50000))
+            full = nla.BpfScanner(path, [w], full_scan=True).scan()
+            seek = nla.BpfScanner(path, [w], full_scan=False).scan()
+            key = lambda r: {k: [(e["kind"], e["ts"].isoformat()) for e in v]
+                             for k, v in r.items()}
+            self.assertEqual(key(full[0]), key(seek[0]))
+            self.assertEqual(len(seek[0][("A", "client")]), 3 + 80)
+        finally:
+            os.unlink(path)
+
+    def test_seek_header_plus_seq_lines(self):
+        # bpftrace 无时间戳头 + 序号行：头行不得触发 seek 提前 break
+        lines = (["Tracing brpc_wkr & datasystem network events... (no IP filter)"]
+                 + self._seq_events())
+        path = self._write_bpf(lines)
+        try:
+            w = self._win(datetime(2026, 9, 15, 18, 3, 9, 30000),
+                          datetime(2026, 9, 15, 18, 3, 9, 50000))
+            for full in (False, True):
+                scanner = nla.BpfScanner(path, [w], full_scan=full)
+                res, _ = scanner.scan()
+                kinds = [e["kind"] for e in res[("A", "client")]]
+                self.assertIn("tcp_recv_que", kinds)
+                self.assertEqual(scanner.diag["file_first_tod"],
+                                 "18:03:08:900000")
+        finally:
+            os.unlink(path)
+
+
 class TestWarnWindowScan(unittest.TestCase):
     """warn 流式窗口扫描：替代整文件解析驻留内存。"""
 
@@ -639,6 +1379,68 @@ class TestConnIdentify(unittest.TestCase):
         self.assertIsNone(
             nla.BpfCorrelator._identify_conn_from_nic(evs3, cs, CIP, SIP))
 
+    def test_identify_conn_from_response(self):
+        """请求方向事件全缺（UB 传输：bpf 仅观测响应方向数据）时：
+        client 侧响应方向收包事件（tcp recv / nic rx）兜底识别连接。"""
+        CIP, SIP = "192.168.219.103", "192.168.100.195"
+        cr = datetime(2026, 9, 15, 18, 3, 9, 42342)
+
+        def recv(ts_us, lport, pport, kind="recv que"):
+            line = ("18:03:09:%06d tcp  %s tid 1 cpu 1 size 210 %s:%d <- %s:%d\n"
+                    % (ts_us, kind, CIP, lport, SIP, pport))
+            return nla.parse_bpf_line(line, cr.date())
+
+        def rx(ts_us, dport, sport):
+            line = ("18:03:09:%06d netif_receive_skb: sip:%s, sport:%d -> "
+                    "dip:%s, dport:%d, seq:1316402115, len:262, "
+                    "dev:enp38s0f0np0\n" % (ts_us, SIP, sport, CIP, dport))
+            return nla.parse_bpf_line(line, cr.date())
+
+        # 1) tcp recv（que/in）local=client peer=server：取离 ClientRecv 最近
+        evs = [recv(36307, 55064, 31402),
+               recv(36310, 55065, 31403),          # 另一条连接（远离 ClientRecv）
+               recv(42216, 55064, 31402, kind="recv in")]
+        conn = nla.BpfCorrelator._identify_conn_from_response(evs, cr, CIP, SIP)
+        self.assertEqual(conn, (CIP, 55064, SIP, 31402))
+        # 2) 无 tcp 事件 → nic rx（dst=client src=server）兜底
+        evs2 = [rx(36286, 55064, 31402), rx(36200, 55065, 31403)]
+        conn2 = nla.BpfCorrelator._identify_conn_from_response(evs2, cr, CIP, SIP)
+        self.assertEqual(conn2, (CIP, 55064, SIP, 31402))
+        # 3) 其他方向 / 其他 IP 的事件不参与 → None
+        evs3 = [recv(42216, 55064, 31402, kind="recv in")]
+        for bad_ip in ("9.9.9.9",):
+            self.assertIsNone(nla.BpfCorrelator._identify_conn_from_response(
+                evs3, cr, bad_ip, SIP))
+        line = ("18:03:09:042216 tcp  send in  tid 1 cpu 1 size 210 "
+                "%s:55064 -> %s:31402\n" % (CIP, SIP))
+        evs4 = [nla.parse_bpf_line(line, cr.date())]
+        self.assertIsNone(nla.BpfCorrelator._identify_conn_from_response(
+            evs4, cr, CIP, SIP))
+
+    def test_identify_conn_from_server_nic(self):
+        """server 侧 tcp 探针丢失（UB/URMA 发送仅有 nic 层事件）时：
+        server 侧响应方向 nic 发送事件兜底识别连接。"""
+        CIP, SIP = "192.168.219.103", "192.168.100.195"
+        ss = datetime(2026, 9, 15, 18, 3, 9, 29139)
+
+        def xmit(ts_us, sport, dport, sip=SIP, dip=CIP, kind="dev_start_xmit"):
+            line = ("18:03:09:%06d %s: sip:%s, sport:%d -> dip:%s, dport:%d, "
+                    "seq:1316402115, len:276, dev:eth0\n"
+                    % (ts_us, kind, sip, sport, dip, dport))
+            return nla.parse_bpf_line(line, ss.date())
+
+        # 1) 响应方向（server→client）xmit：取离 ServerSend 最近
+        evs = [xmit(28800, 31403, 55065),          # 另一条连接（远离 ServerSend）
+               xmit(28931, 31402, 55064),
+               xmit(28935, 31402, 55064, kind="net_dev_xmit")]
+        conn = nla.BpfCorrelator._identify_conn_from_server_nic(
+            evs, ss, CIP, SIP)
+        self.assertEqual(conn, (CIP, 55064, SIP, 31402))
+        # 2) 请求方向（client→server）xmit 不参与 → None
+        evs2 = [xmit(28931, 55064, 31402, sip=CIP, dip=SIP)]
+        self.assertIsNone(nla.BpfCorrelator._identify_conn_from_server_nic(
+            evs2, ss, CIP, SIP))
+
 
 class TestKernelSegments(unittest.TestCase):
     def test_segments_and_flags(self):
@@ -648,11 +1450,13 @@ class TestKernelSegments(unittest.TestCase):
         ctx.milestones = {
             "ClientSend": datetime(2026, 8, 21, 21, 31, 21, 60757),
             "ClientTcpSendIn": datetime(2026, 8, 21, 21, 31, 21, 60777),
+            "ServerTcpRecvQue": datetime(2026, 8, 21, 21, 31, 21, 60821),
             "ServerTcpRecvFirst": datetime(2026, 8, 21, 21, 31, 21, 60822),
             "ServerTcpRecvLast": datetime(2026, 8, 21, 21, 31, 21, 60827),
             "ServerRecv": datetime(2026, 8, 21, 21, 31, 21, 60848),
             "ServerSend": datetime(2026, 8, 21, 21, 31, 21, 61096),
             "ServerTcpSendIn": datetime(2026, 8, 21, 21, 31, 21, 61100),
+            "ClientTcpRecvQue": datetime(2026, 8, 21, 21, 31, 21, 61193),
             "ClientTcpRecvFirst": datetime(2026, 8, 21, 21, 31, 21, 61195),
             "ClientTcpRecvLast": datetime(2026, 8, 21, 21, 31, 21, 61203),
             "ClientRecv": datetime(2026, 8, 21, 21, 31, 21, 77001),
@@ -732,7 +1536,7 @@ class TestJsonOutput(unittest.TestCase):
     def test_meta_and_summary(self):
         data = self._dump()
         self.assertEqual(data["schema"], "ds-network-latency-analysis/result")
-        self.assertEqual(data["schema_version"], 1)
+        self.assertEqual(data["schema_version"], 2)
         self.assertEqual(data["log_root"], SAMPLE_LOG_ROOT)
         self.assertEqual(data["residual_threshold_us"], 1000)
         self.assertEqual(data["total_traces"], 6)
@@ -969,6 +1773,7 @@ class TestRawOutput(unittest.TestCase):
             fake_disc.worker_logs = []
             fake_disc.bpf_by_node = {}
             fake_disc.warn_by_node = {}
+            fake_disc.aux_stats = {}
             with mock.patch.object(nla, "analyze", return_value=(fake_disc, self.contexts[:2], {})), \
                  mock.patch.object(nla, "generate_report", return_value="<html>x</html>"):
                 rc = nla.main([SAMPLE_LOG_ROOT, "-o", out_html, "--raw", out_raw])
@@ -1780,6 +2585,113 @@ class TestNicMilestones(unittest.TestCase):
         self.assertIn("seg gap", old_html)                     # 跨缺段斜纹样式
 
 
+class TestRecvMilestoneRequestWindow(unittest.TestCase):
+    """收包里程碑请求时间窗：长连接同五元组多次请求交互时，
+    TcpRecvFirst/Last/Que/SockReadable 限定在本请求锚点区间内——
+    相邻请求的同连接 recv 事件不再污染（典型：本请求 ClientRecv 之后
+    下一请求的 recv_in 把 ClientTcpRecvLast 推后，慢段时间窗起点后移，
+    真正慢的 seq 事件被挤出窗口）。"""
+
+    CIP, CPORT = "192.168.32.61", 39776
+    SIP, SPORT = "192.168.52.197", 31501
+    T0 = datetime(2026, 8, 23, 20, 45, 39)
+
+    def _ev(self, kind, us, side="Client"):
+        """同连接事件（local=client 端口对 → Client 侧；local=server → Server 侧）。"""
+        if side == "Client":
+            lip, lport, pip, pport = self.CIP, self.CPORT, self.SIP, self.SPORT
+        else:
+            lip, lport, pip, pport = self.SIP, self.SPORT, self.CIP, self.CPORT
+        return {"kind": kind, "ts": self.T0.replace(microsecond=us),
+                "cpu": 1, "tid": 7, "local_ip": lip, "local_port": lport,
+                "peer_ip": pip, "peer_port": pport, "raw": "r"}
+
+    def _ms(self, **kw):
+        ms = {"ClientSend": self.T0.replace(microsecond=100000),
+              "ClientRecv": self.T0.replace(microsecond=200000)}
+        for k, us in kw.items():
+            ms[k] = self.T0.replace(microsecond=us)
+        return ms
+
+    def _fill(self, ms, evs, side):
+        nla.BpfCorrelator._fill_milestones_side(
+            ms, evs, side, self.CIP, self.CPORT, self.SIP, self.SPORT)
+        return ms
+
+    def test_client_recv_last_not_polluted_by_next_request(self):
+        # 本请求响应 .150/.180 收包；下一请求响应 .400（ClientRecv 后
+        # 200ms，超 50ms 容差）→ 不得更新 ClientTcpRecvLast
+        ms = self._ms()
+        self._fill(ms, [self._ev("tcp_recv_in", 150000),
+                        self._ev("tcp_recv_in", 180000),
+                        self._ev("tcp_recv_in", 400000)], "Client")
+        self.assertEqual(ms["ClientTcpRecvFirst"].microsecond, 150000)
+        self.assertEqual(ms["ClientTcpRecvLast"].microsecond, 180000)
+
+    def test_client_recv_first_not_polluted_by_prev_request(self):
+        # 上一请求响应 .010（ClientSend 前 90ms，超 50ms 容差）→ 不得定格 First
+        ms = self._ms()
+        self._fill(ms, [self._ev("tcp_recv_in", 10000),
+                        self._ev("tcp_recv_in", 150000),
+                        self._ev("tcp_recv_in", 180000)], "Client")
+        self.assertEqual(ms["ClientTcpRecvFirst"].microsecond, 150000)
+        self.assertEqual(ms["ClientTcpRecvLast"].microsecond, 180000)
+
+    def test_client_window_tolerance(self):
+        # 容差边界：ClientSend−40ms / ClientRecv+40ms 计入；
+        # ClientSend−60ms / ClientRecv+70ms 排除
+        ms = self._ms()
+        self._fill(ms, [self._ev("tcp_recv_in", 40000),
+                        self._ev("tcp_recv_in", 60000),
+                        self._ev("tcp_recv_in", 240000),
+                        self._ev("tcp_recv_in", 270000)], "Client")
+        self.assertEqual(ms["ClientTcpRecvFirst"].microsecond, 60000)
+        self.assertEqual(ms["ClientTcpRecvLast"].microsecond, 240000)
+
+    def test_server_recv_window_bounded_by_server_anchors(self):
+        # server 侧窗口上界 = max(ServerRecv, ServerSend)：本请求 .120/.145
+        # 收包；下一请求 .500（ServerSend 后 320ms）→ 排除
+        ms = self._ms(ServerRecv=150000, ServerSend=180000)
+        self._fill(ms, [self._ev("tcp_recv_in", 120000, "Server"),
+                        self._ev("tcp_recv_in", 145000, "Server"),
+                        self._ev("tcp_recv_in", 500000, "Server")], "Server")
+        self.assertEqual(ms["ServerTcpRecvFirst"].microsecond, 120000)
+        self.assertEqual(ms["ServerTcpRecvLast"].microsecond, 145000)
+
+    def test_no_anchors_no_window(self):
+        # 锚点缺失（如 client_only 补扫场景）→ 不加窗，保持旧全量行为
+        ms = {}
+        self._fill(ms, [self._ev("tcp_recv_in", 10000),
+                        self._ev("tcp_recv_in", 500000)], "Client")
+        self.assertEqual(ms["ClientTcpRecvFirst"].microsecond, 10000)
+        self.assertEqual(ms["ClientTcpRecvLast"].microsecond, 500000)
+
+    def test_all_outside_window_falls_back(self):
+        # 全部事件在窗外（锚点偏差超容差的极端场景）→ 回退旧全量行为，
+        # 避免收包里程碑整体丢失
+        ms = self._ms()
+        self._fill(ms, [self._ev("tcp_recv_in", 900000)], "Client")
+        self.assertEqual(ms["ClientTcpRecvFirst"].microsecond, 900000)
+        self.assertEqual(ms["ClientTcpRecvLast"].microsecond, 900000)
+
+    def test_recv_que_sock_readable_bounded(self):
+        # 收包类里程碑（Que/SockReadable）同样限定请求窗口
+        ms = self._ms()
+        self._fill(ms, [self._ev("tcp_recv_que", 10000),
+                        self._ev("sock_readable", 12000),
+                        self._ev("tcp_recv_que", 150000),
+                        self._ev("sock_readable", 155000)], "Client")
+        self.assertEqual(ms["ClientTcpRecvQue"].microsecond, 150000)
+        self.assertEqual(ms["ClientSockReadable"].microsecond, 155000)
+
+    def test_send_milestone_unaffected(self):
+        # 发送类里程碑（TcpSendIn）不加窗：维持原有 first 语义
+        ms = self._ms()
+        self._fill(ms, [self._ev("tcp_send_in", 10000),
+                        self._ev("tcp_send_in", 150000)], "Client")
+        self.assertEqual(ms["ClientTcpSendIn"].microsecond, 10000)
+
+
 class TestNicSegments(unittest.TestCase):
     """网卡证据分段 + TCP 重传证据 + 传输类置信度提升。"""
 
@@ -1823,6 +2735,26 @@ class TestNicSegments(unittest.TestCase):
         self.assertAlmostEqual(self._seg(ctx, "server_nic_to_stack")["dur_us"], 432)
         self.assertIsNone(self._seg(ctx, "client_nic_to_stack"))  # 缺 ClientNetifRx
         self.assertEqual(ctx.nic_evidence, [])  # 无重传 → 无证据行
+
+    def test_server_egress_segments_built(self):
+        """server 发送侧证据段对称补全：stack_to_nic（qdisc）/ nic_xmit（驱动）。"""
+        ms = {
+            "ServerTcpSendIn": datetime(2026, 8, 23, 20, 45, 39, 700100),
+            "ServerDevStartXmit": datetime(2026, 8, 23, 20, 45, 39, 700900),
+            "ServerNetDevXmit": datetime(2026, 8, 23, 20, 45, 39, 700905),
+        }
+        ctx = self._ctx(milestones=ms)
+        nla._nic_segments(ctx)
+        seg = self._seg(ctx, "server_stack_to_nic")
+        self.assertIsNotNone(seg)
+        self.assertAlmostEqual(seg["dur_us"], 800)
+        self.assertTrue(seg["evidence"])
+        self.assertEqual(seg["start"], "ServerTcpSendIn")
+        self.assertEqual(seg["end"], "ServerDevStartXmit")
+        xmit = self._seg(ctx, "server_nic_xmit")
+        self.assertIsNotNone(xmit)
+        self.assertAlmostEqual(xmit["dur_us"], 5)
+        self.assertEqual(xmit["start"], "ServerDevStartXmit")
 
     def test_retransmit_evidence_collected(self):
         ev = nla.parse_bpf_line(TCP_RETRANS, NIC_DAY)
@@ -1887,6 +2819,97 @@ class TestNicRenderJson(unittest.TestCase):
         out = nla._events_table([ev], "client 节点 bpf 事件")
         self.assertIn("tcp_retransmit", out)
         self.assertIn("tx_seq=1150439944", out)
+
+
+class TestProblemSeqHighlight(unittest.TestCase):
+    """问题包序号高亮：问题连接事件的 seq 族序号在事件表中红色标注。
+
+    用户需求：出问题的 seq 号换个颜色/高亮标识——同一问题包在
+    dev_start_xmit / netif_receive_skb / tcp recv que/in 的
+    seq / tp_rcv_nxt / copied_seq / rcv_nxt 等字段中可追踪。
+    """
+
+    DAY = datetime(2026, 9, 15)
+
+    def _nic(self, seq=1316402115):
+        return nla.parse_bpf_line(
+            "16438196 18:03:09:028931 dev_start_xmit: sip:192.168.100.195, "
+            "sport:31402 -> dip:192.168.219.103, dport:55064, seq:%d, "
+            "len:276, dev:enp38s0f0np0 cpu:25" % seq, self.DAY)
+
+    def _recv_que(self, rcv_nxt=1316402115):
+        return nla.parse_bpf_line(
+            "16360719 18:03:09:036307 tcp  recv que tid 3913697 cpu 193 "
+            "size 210 tp_rcv_nxt:%d, 192.168.219.103:55064 <- "
+            "192.168.100.195:31402" % rcv_nxt, self.DAY)
+
+    def _recv_in(self, copied=1316402115, rcv_nxt=1316402325):
+        return nla.parse_bpf_line(
+            "16363100 18:03:09:042216 tcp  recv in  tid 3905867 cpu 255 "
+            "size 4096 192.168.219.103:55064 <- 192.168.100.195:31402, "
+            "copied_seq:%d, rcv_nxt:%d" % (copied, rcv_nxt), self.DAY)
+
+    def test_row_html_highlights_problem_seq(self):
+        ev = self._nic()
+        row = nla._event_row_html(ev, hl_seqs={1316402115})
+        self.assertIn('<span class="seqhl">1316402115</span>', row)
+        # 其他 seq（别的包）不高亮
+        ev2 = self._nic(seq=999)
+        row2 = nla._event_row_html(ev2, hl_seqs={1316402115})
+        self.assertNotIn("seqhl", row2)
+
+    def test_row_html_highlights_tcp_seq_fields(self):
+        # tcp recv que（rcv_nxt）与 recv in（copied_seq/rcv_nxt）
+        row = nla._event_row_html(self._recv_que(), hl_seqs={1316402115})
+        self.assertIn('<span class="seqhl">1316402115</span>', row)
+        row = nla._event_row_html(self._recv_in(), hl_seqs={1316402115})
+        self.assertIn('copied_seq:<span class="seqhl">1316402115</span>', row)
+        self.assertIn('rcv_nxt:<span class="seqhl">1316402325</span>', row)
+
+    def test_row_html_no_seqs_unchanged(self):
+        # 不传 hl_seqs（默认）时输出与旧格式完全一致
+        ev = self._nic()
+        row = nla._event_row_html(ev)
+        self.assertIn("seq=1316402115", row)
+        self.assertNotIn("seqhl", row)
+
+    def test_events_table_and_window_table_pass_seqs(self):
+        evs = [self._nic(), self._recv_que()]
+        out = nla._events_table(evs, "t", hl_seqs={1316402115})
+        self.assertEqual(out.count('<span class="seqhl">1316402115</span>'), 2)
+        evs[0]["match5t"] = True
+        evs[1]["match5t"] = False
+        out2 = nla._window_events_table(evs, "t", hl_seqs={1316402115})
+        self.assertEqual(out2.count('<span class="seqhl">1316402115</span>'), 2)
+
+    def test_collect_problem_seqs(self):
+        CIP, CPORT, SIP, SPORT = "192.168.219.103", 55064, "192.168.100.195", 31402
+        mine = [self._nic(), self._recv_que(), self._recv_in()]
+        for e in mine:
+            e["match5t"] = True
+        other = self._nic(seq=777)
+        other["match5t"] = False
+        seqs = nla._collect_problem_seqs(
+            mine + [other], CIP, CPORT, SIP, SPORT)
+        self.assertIn(1316402115, seqs)     # nic seq / tp_rcv_nxt / copied_seq
+        self.assertIn(1316402325, seqs)     # rcv_nxt
+        self.assertNotIn(777, seqs)         # 其他连接不参与
+
+    def test_row_html_tp_rcv_nxt_displayed(self):
+        # que 行序号字段显式展示为 tp_rcv_nxt（不再误显示为 rcv_nxt）
+        ev = self._recv_que()
+        row = nla._event_row_html(ev)
+        self.assertIn("tp_rcv_nxt:1316402115", row)
+        self.assertNotIn(" rcv_nxt:", row)
+        # 命中问题序号 → tp_rcv_nxt 红色高亮
+        row2 = nla._event_row_html(ev, hl_seqs={1316402115})
+        self.assertIn('tp_rcv_nxt:<span class="seqhl">1316402115</span>', row2)
+
+    def test_event_json_tp_rcv_nxt(self):
+        ev = self._recv_que()
+        d = nla._event_json(ev)
+        self.assertEqual(d["tp_rcv_nxt"], 1316402115)
+        self.assertNotIn("rcv_nxt", d)
 
 
 class TestGlobalTimeline(unittest.TestCase):
@@ -3330,12 +4353,15 @@ class TestAuxEndToEnd(unittest.TestCase):
         disc, contexts, trace_lines = nla.analyze(str(self._root))
         ctx = contexts[0]
         ns = argparse.Namespace(residual_threshold=1000)
-        # HTML 概览两卡
+        # HTML 摘要卡（全量交互探索收敛到独立 os_monitor 报告）
         rep = nla.generate_report(contexts, ns, str(self._root),
                                   aux_stats=disc.aux_stats)
-        self.assertIn("关中断统计", rep)
-        self.assertIn("网卡利用率统计", rep)
-        self.assertIn("kubelet", rep)
+        self.assertIn("关中断", rep)
+        self.assertIn("网卡利用率", rep)
+        self.assertIn("os_monitor_report.html", rep)
+        osr = nla.generate_os_monitor_report(disc.aux_stats, str(self._root))
+        self.assertIn("kubelet", osr)
+        self.assertIn("关中断统计", osr)
         # trace 卡三块
         h = nla._trace_html(ctx, 1)
         self.assertIn("关中断记录", h)
@@ -3596,7 +4622,7 @@ class TestCpuBusyEndToEnd(unittest.TestCase):
         self.assertIn("其他连接", h)
         self.assertIn('<span class="cpuflag">50</span>', h)
         self.assertIn("192.168.219.200:40000", h)
-        # JSON：cpu_busy 结构 + window_events match5t 标注
+        # JSON：cpu_busy 结构（schema v2 摘要 + 归属统计）
         doc = json.loads(nla.generate_json(contexts, ns, str(root),
                                            aux_stats=disc.aux_stats))
         cb = doc["traces"][0]["cpu_busy"]["client"]
@@ -3604,10 +4630,14 @@ class TestCpuBusyEndToEnd(unittest.TestCase):
         self.assertTrue(cb["preempt"])
         self.assertEqual(cb["n_mine"], 2)
         self.assertEqual(cb["n_other"], 2)
-        self.assertEqual(len(cb["window_events"]), 4)
-        self.assertEqual([e["match5t"] for e in cb["window_events"]],
-                         [True, True, False, False])
-        self.assertEqual(len(cb["other_on_cpu"]), 2)
+        # window_events → {n, first_ts, last_ts} 摘要（明细按 ts 对齐 kernel_events）
+        we = cb["window_events"]
+        self.assertEqual(we["n"], 4)
+        self.assertTrue(we["first_ts"])
+        self.assertTrue(we["last_ts"])
+        # other_on_cpu → {n, ts_list}
+        self.assertEqual(cb["other_on_cpu"]["n"], 2)
+        self.assertEqual(len(cb["other_on_cpu"]["ts_list"]), 2)
         self.assertIn("192.168.219.200:40000", "".join(cb["other_conns"]))
         # raw：全景节 + 问题五元组 ▶ 标注
         raw = nla.generate_raw(contexts, ns, str(root), disc, trace_lines)
@@ -3742,20 +4772,22 @@ class TestSoftirqEndToEnd(TestCpuBusyEndToEnd):
         self.assertIn("NET_RX", h)
         self.assertIn("2300", h)
         self.assertIn("软中断本身处理", h)
-        # JSON：cpu_busy.softirq_* + 顶层 softirq_events（含 vec/latency_us 字段）
+        # JSON：cpu_busy.softirq_* 摘要（schema v2：顶层 softirq_events 已删，
+        # 明细在 kernel_events 全量含 raw）
         doc = json.loads(nla.generate_json(contexts, ns, str(root),
                                            aux_stats=disc.aux_stats))
         tr = doc["traces"][0]
         cb = tr["cpu_busy"]["client"]
-        self.assertEqual(len(cb["softirq_exit_on_cpu"]), 1)
-        self.assertEqual(len(tr["softirq_events"]["client"]), 2)
-        kinds = {e["kind"] for e in tr["softirq_events"]["client"]}
-        self.assertEqual(kinds, {"softirq_raise_delay", "softirq_exit_delay"})
-        ev = next(e for e in tr["softirq_events"]["client"]
+        self.assertEqual(cb["softirq_exit_on_cpu"]["n"], 1)
+        self.assertNotIn("softirq_events", tr)
+        kinds = {e["kind"] for e in tr["kernel_events"]["client"]}
+        self.assertTrue({"softirq_raise_delay", "softirq_exit_delay"} <= kinds)
+        ev = next(e for e in tr["kernel_events"]["client"]
                   if e["kind"] == "softirq_exit_delay")
         self.assertEqual(ev["vec"], 3)
         self.assertEqual(ev["latency_us"], 2300)
         self.assertEqual(ev["timer_cnt"], 5)
+        self.assertTrue(ev["raw"])
         # raw：softirq 原始行进全景节
         raw = nla.generate_raw(contexts, ns, str(root), disc, trace_lines)
         self.assertIn("high irq-to-softirq", raw)
@@ -4435,7 +5467,9 @@ class TestSlowSegWindowView(unittest.TestCase):
                          self.T("10:00:00.300000").isoformat())
         self.assertEqual(sw["sides"]["client"]["n_mine"], 1)
         self.assertEqual(sw["sides"]["client"]["n_other"], 1)
-        self.assertTrue(sw["sides"]["client"]["events"][0]["match5t"])
+        # schema v2：事件明细改 by_kind 计数（明细按 ts 对齐 kernel_events）
+        self.assertEqual(sw["sides"]["client"]["by_kind"], {"tcp_send_in": 2})
+        self.assertNotIn("events", sw["sides"]["client"])
         # 无慢段时输出 null
         doc2 = json.loads(nla.generate_json([self._ctx()], ns, "/tmp"))
         self.assertIsNone(doc2["traces"][0]["slow_seg_window"])
@@ -4465,6 +5499,431 @@ class TestSlowSegWindowView(unittest.TestCase):
         # 无慢段时不输出该节
         raw2 = nla.generate_raw([self._ctx()], ns, "/tmp", disc, {})
         self.assertNotIn("慢段时间窗 bpf 事件", raw2)
+
+
+class TestJsonDedup(unittest.TestCase):
+    """schema v2：JSON 事件去重保原始（A1）。
+
+    事件明细（含 raw 行）仅在 kernel_events 全量存一份；其余位置改引用：
+    - cpu_busy.other_on_cpu / switches_on_cpu / switched_out /
+      softirq_raise_on_cpu / softirq_exit_on_cpu → {n, ts_list}；
+    - cpu_busy.window_events → {n, first_ts, last_ts} 摘要；
+    - slow_seg_window → 窗口定义 + 各 kind 计数（事件明细删）；
+    - 顶层 softirq_events 字段删除（cpu_busy 摘要已覆盖）；
+    - softirq_localization.events 保留（kstack 独有）：与 kernel_events
+      重复的事件去 raw（ts 引用），窗口外回溯事件（kernel_events 无）保 raw。
+    """
+
+    def T(self, s):
+        return datetime.combine(DAY, datetime.strptime(s, "%H:%M:%S.%f").time())
+
+    def _ctx(self):
+        slow = nla.SlowRecord("t1;abc", DAY,
+                              {"network_residual_us": "2000", "e2e_us": "3000",
+                               "framework_us": "2500", "method": "m"},
+                              "x.log", "pod")
+        ctx = nla.TraceContext(slow)
+        ctx.client_ip, ctx.server_ip = "10.0.0.1", "10.0.0.2"
+        ctx.client_node, ctx.server_node = "node1", "node2"
+        ctx.conn = ("10.0.0.1", 1111, "10.0.0.2", 2222)
+        ctx.anchors = {
+            "ClientSend": {"ts": self.T("10:00:00.100000"), "tid": 100, "cpu": 1,
+                           "bid": None, "raw": "cs"},
+            "ClientRecv": {"ts": self.T("10:00:00.400000"), "tid": 100, "cpu": 1,
+                           "bid": None, "raw": "cr"},
+            "ServerRecv": {"ts": self.T("10:00:00.200000"), "tid": 200, "cpu": 2,
+                           "bid": None, "raw": "sr"},
+            "ServerSend": {"ts": self.T("10:00:00.300000"), "tid": 200, "cpu": 2,
+                           "bid": None, "raw": "ss"},
+        }
+        ctx.conclusion = {"category": "c", "label": "测试结论", "confidence": "高",
+                          "bottleneck": None, "evidence": [], "suggestions": []}
+        return ctx
+
+    def _ev(self, **kw):
+        ev = {"ts": self.T("10:00:00.310000"), "kind": "tcp_send_in", "tid": 1,
+              "cpu": 1, "raw": "raw-line", "local_ip": "10.0.0.1",
+              "local_port": 1111, "peer_ip": "10.0.0.2", "peer_port": 2222,
+              "dir_arrow": "->", "match5t": True}
+        ev.update(kw)
+        return ev
+
+    def _dump(self, ctx):
+        import argparse
+        ns = argparse.Namespace(residual_threshold=1000)
+        return json.loads(nla.generate_json([ctx], ns, "/tmp"))
+
+    def test_schema_v2(self):
+        doc = self._dump(self._ctx())
+        self.assertEqual(doc["schema_version"], 2)
+        self.assertTrue(any("kernel_events" in n and "去重" in n
+                            for n in doc["notes"]))
+
+    def test_kernel_events_keeps_full_raw(self):
+        ctx = self._ctx()
+        ctx.filtered_events = {"client": [self._ev()], "server": []}
+        tr = self._dump(ctx)["traces"][0]
+        self.assertEqual(len(tr["kernel_events"]["client"]), 1)
+        ev = tr["kernel_events"]["client"][0]
+        self.assertEqual(ev["raw"], "raw-line")
+        self.assertEqual(ev["kind"], "tcp_send_in")
+
+    def test_cpu_busy_lists_are_ts_refs(self):
+        ctx = self._ctx()
+        ctx.filtered_events = {"client": [], "server": []}
+        ctx.cpu_busy = {"client": {
+            "seg_key": "client_kernel_to_user", "seg_desc": "d",
+            "seg_dur_us": 5000,
+            "window_start": self.T("10:00:00.300000"),
+            "window_end": self.T("10:00:00.305000"),
+            "anchor_name": "ClientRecv", "anchor_tid": 100, "anchor_cpu": 1,
+            "conn": ctx.conn, "n_mine": 2, "n_other": 2,
+            "other_conns": {"9.9.9.9:9 <-> 8.8.8.8:8": 2},
+            "other_by_cpu": {1: 2},
+            "other_on_cpu": [self._ev(match5t=False),
+                             self._ev(match5t=False, raw="raw2")],
+            "switches_on_cpu": [
+                {"ts": self.T("10:00:00.301000"), "kind": "sched_switch",
+                 "cpu": 1, "raw": "sw1", "prev_pid": 100, "next_pid": 7,
+                 "prev_comm": "biz", "next_comm": "other"}],
+            "switched_out": [
+                {"ts": self.T("10:00:00.301000"), "kind": "sched_switch",
+                 "cpu": 1, "raw": "sw1", "prev_pid": 100, "next_pid": 7,
+                 "prev_comm": "biz", "next_comm": "other"}],
+            "softirq_raise_on_cpu": [
+                {"ts": self.T("10:00:00.302000"), "kind": "softirq_raise_delay",
+                 "cpu": 1, "raw": "sr1", "vec": 3, "latency_us": 1500,
+                 "comm": "kvclient", "kstack": "k"}],
+            "softirq_exit_on_cpu": [
+                {"ts": self.T("10:00:00.303000"), "kind": "softirq_exit_delay",
+                 "cpu": 1, "raw": "se1", "vec": 3, "latency_us": 2300,
+                 "timer_cnt": 5}],
+            "softirq_localization": None,
+            "preempt": True,
+            "events": [self._ev(), self._ev(raw="m2"),
+                       self._ev(match5t=False), self._ev(match5t=False,
+                                                         ts=self.T("10:00:00.304000"))],
+        }}
+        cb = self._dump(ctx)["traces"][0]["cpu_busy"]["client"]
+        # 各事件列表 → {n, ts_list}（计数 + 时间戳引用，无 raw）
+        for key, n in (("other_on_cpu", 2), ("switches_on_cpu", 1),
+                       ("switched_out", 1), ("softirq_raise_on_cpu", 1),
+                       ("softirq_exit_on_cpu", 1)):
+            self.assertEqual(cb[key]["n"], n, key)
+            self.assertEqual(len(cb[key]["ts_list"]), n, key)
+            self.assertNotIn("raw", json.dumps(cb[key]), key)
+        self.assertEqual(cb["other_on_cpu"]["ts_list"][0],
+                         self.T("10:00:00.310000").isoformat())
+        # window_events → {n, first_ts, last_ts} 摘要（first/last 按时间序）
+        we = cb["window_events"]
+        self.assertEqual(we["n"], 4)
+        self.assertEqual(we["first_ts"], self.T("10:00:00.304000").isoformat())
+        self.assertEqual(we["last_ts"], self.T("10:00:00.310000").isoformat())
+        self.assertNotIn("raw", json.dumps(we))
+        # 计数与归属摘要保留
+        self.assertEqual(cb["n_mine"], 2)
+        self.assertEqual(cb["n_other"], 2)
+        self.assertIn("9.9.9.9:9 <-> 8.8.8.8:8", cb["other_conns"])
+
+    def test_softirq_events_field_removed(self):
+        ctx = self._ctx()
+        ctx.filtered_events = {"client": [], "server": []}
+        ctx.cpu_busy = {"client": {
+            "seg_key": "client_kernel_to_user", "seg_desc": "d",
+            "seg_dur_us": 5000,
+            "window_start": self.T("10:00:00.300000"),
+            "window_end": self.T("10:00:00.305000"),
+            "anchor_name": "ClientRecv", "anchor_tid": 100, "anchor_cpu": 1,
+            "conn": None, "n_mine": 0, "n_other": 0,
+            "other_conns": {}, "other_by_cpu": {},
+            "other_on_cpu": [], "switches_on_cpu": [], "switched_out": [],
+            "softirq_raise_on_cpu": [], "softirq_exit_on_cpu": [],
+            "softirq_localization": None, "preempt": False, "events": [],
+        }}
+        tr = self._dump(ctx)["traces"][0]
+        self.assertNotIn("softirq_events", tr)
+        self.assertIn("cpu_busy", tr)
+
+    def test_slow_seg_window_summary(self):
+        ctx = self._ctx()
+        seg = {"key": "wire_s2c", "start": "ServerTcpSendIn",
+               "end": "ClientTcpRecvFirst", "dur_us": 50000,
+               "threshold_us": 200, "category": "c", "desc": "瓶颈段",
+               "abnormal": True}
+        ctx.milestones["ServerTcpSendIn"] = self.T("10:00:00.300000")
+        ctx.milestones["ClientTcpRecvFirst"] = self.T("10:00:00.350000")
+        ctx.conclusion["bottleneck"] = seg
+        ctx.bpf_window_events["client"] = [
+            self._ev(match5t=True),
+            self._ev(match5t=False, local_ip="9.9.9.9", local_port=9,
+                     peer_ip="8.8.8.8", peer_port=8),
+        ]
+        ctx.bpf_window_events["server"] = [self._ev(match5t=True)]
+        nla._slow_seg_window_analysis(ctx)
+        sw = self._dump(ctx)["traces"][0]["slow_seg_window"]
+        self.assertEqual(sw["seg_key"], "wire_s2c")
+        self.assertEqual(sw["window_start"],
+                         self.T("10:00:00.300000").isoformat())
+        self.assertEqual(sw["window_end"],
+                         self.T("10:00:00.350000").isoformat())
+        self.assertEqual(sw["sides"]["client"]["n_mine"], 1)
+        self.assertEqual(sw["sides"]["client"]["n_other"], 1)
+        # 各 kind 计数替代事件明细
+        self.assertEqual(sw["sides"]["client"]["by_kind"], {"tcp_send_in": 2})
+        self.assertNotIn("events", sw["sides"]["client"])
+        self.assertNotIn("raw", json.dumps(sw))
+
+    def test_softirq_loc_events_ts_ref(self):
+        ctx = self._ctx()
+        # 窗口内 raise 事件同时进 kernel_events（可 ts 引用）；
+        # 回溯区事件（窗口外）kernel_events 没有 → 保留 raw
+        in_win = {"ts": self.T("10:00:00.302000"),
+                  "kind": "softirq_raise_delay", "cpu": 1, "raw": "in-win-raw",
+                  "vec": 3, "latency_us": 1500, "comm": "kvclient",
+                  "kstack": "in-kstack"}
+        lookback = {"ts": self.T("10:00:00.280000"),
+                    "kind": "softirq_raise_delay", "cpu": 1,
+                    "raw": "lookback-raw", "vec": 3, "latency_us": 5044,
+                    "comm": "ubctl", "kstack": "lookback-kstack"}
+        ctx.filtered_events = {"client": [dict(in_win)], "server": []}
+        ctx.cpu_busy = {"client": {
+            "seg_key": "client_kernel_to_user", "seg_desc": "d",
+            "seg_dur_us": 5000,
+            "window_start": self.T("10:00:00.300000"),
+            "window_end": self.T("10:00:00.305000"),
+            "anchor_name": "ClientRecv", "anchor_tid": 100, "anchor_cpu": 1,
+            "conn": None, "n_mine": 0, "n_other": 0,
+            "other_conns": {}, "other_by_cpu": {},
+            "other_on_cpu": [], "switches_on_cpu": [], "switched_out": [],
+            "softirq_raise_on_cpu": [], "softirq_exit_on_cpu": [],
+            "softirq_localization": {
+                "mode": "kernel_to_user", "comm": "ubctl",
+                "kstack": "lookback-kstack", "latency_us": 5044, "vec": 3,
+                "vec_txt": "3(NET_RX)", "cpu": 1, "anchor_cpu": 1,
+                "smt": False, "ts": self.T("10:00:00.280000"),
+                "recv_ts": self.T("10:00:00.300000"), "n_candidates": 2,
+                "events": [lookback, in_win]},
+            "preempt": True, "events": [],
+        }}
+        loc = self._dump(ctx)["traces"][0]["cpu_busy"]["client"][
+            "softirq_localization"]
+        # kstack / vec / latency 保留（定位核心证据）
+        self.assertEqual(loc["comm"], "ubctl")
+        self.assertIn("kstack", loc["events"][0])
+        evs = {e["ts"]: e for e in loc["events"]}
+        # 窗口内事件（kernel_events 有）→ raw 删（ts 引用）
+        in_ref = evs[self.T("10:00:00.302000").isoformat()]
+        self.assertNotIn("raw", in_ref)
+        self.assertEqual(in_ref["kind"], "softirq_raise_delay")
+        # 回溯区事件（kernel_events 无）→ raw 保留
+        lb = evs[self.T("10:00:00.280000").isoformat()]
+        self.assertEqual(lb["raw"], "lookback-raw")
+        self.assertEqual(lb["kstack"], "lookback-kstack")
+
+
+class TestTraceCardMerge(unittest.TestCase):
+    """A2 HTML trace 卡收敛：
+
+    - 宏观三段表并入内核分段表（宏观段作组头行，点位明细时间线保留）；
+    - _side_events_html 子项3"问题时间窗全景"与 _cpu_busy_html 问题窗口
+      全景重复 → cpu_busy 已覆盖该侧时删除，无 cpu_busy 时保留兜底；
+    - 行渲染合一：_events_table 与全景表共用 _event_row_html
+      （明细 6 列 / 全景 7 列带归属+高亮+cpu 标注）；
+    - 主报告 irqoff/nic 周期监控卡收敛为摘要行 + 指向 os_monitor_report.html；
+    - 探索器 JS 提取公共工厂（XEXP），numa/irq 卡只留 init 调用，CSS 一份。
+    """
+
+    def T(self, s):
+        return datetime.combine(DAY, datetime.strptime(s, "%H:%M:%S.%f").time())
+
+    def _ctx(self):
+        slow = nla.SlowRecord("t1;abc", DAY,
+                              {"network_residual_us": "2000", "e2e_us": "3000",
+                               "framework_us": "2500", "method": "m"},
+                              "x.log", "pod")
+        ctx = nla.TraceContext(slow)
+        ctx.client_ip, ctx.server_ip = "10.0.0.1", "10.0.0.2"
+        ctx.client_node, ctx.server_node = "node1", "node2"
+        ctx.conn = ("10.0.0.1", 1111, "10.0.0.2", 2222)
+        ctx.anchors = {
+            "ClientSend": {"ts": self.T("10:00:00.100000"), "tid": 100, "cpu": 1,
+                           "bid": None, "raw": "cs"},
+            "ClientRecv": {"ts": self.T("10:00:00.400000"), "tid": 100, "cpu": 1,
+                           "bid": None, "raw": "cr"},
+            "ServerRecv": {"ts": self.T("10:00:00.200000"), "tid": 200, "cpu": 2,
+                           "bid": None, "raw": "sr"},
+            "ServerSend": {"ts": self.T("10:00:00.300000"), "tid": 200, "cpu": 2,
+                           "bid": None, "raw": "ss"},
+        }
+        ctx.conclusion = {"category": "c", "label": "测试结论", "confidence": "高",
+                          "bottleneck": None, "evidence": [], "suggestions": []}
+        return ctx
+
+    def _ev(self, **kw):
+        ev = {"ts": self.T("10:00:00.310000"), "kind": "tcp_send_in", "tid": 1,
+              "cpu": 1, "raw": "raw-line", "local_ip": "10.0.0.1",
+              "local_port": 1111, "peer_ip": "10.0.0.2", "peer_port": 2222,
+              "dir_arrow": "->", "match5t": True}
+        ev.update(kw)
+        return ev
+
+    def _seg(self, key, start, end, dur_us=100, desc="段", abnormal=False):
+        return {"key": key, "start": start, "end": end, "dur_us": dur_us,
+                "threshold_us": 100, "category": "c", "desc": desc,
+                "abnormal": abnormal}
+
+    # -- 宏观三段并入分段表 ------------------------------------------------
+
+    def test_macro_merged_into_seg_table(self):
+        ctx = self._ctx()
+        ctx.macro = {"cs_sr": 100000, "sr_ss": 100000, "ss_cr": 100000}
+        ctx.milestones.update({
+            "ClientTcpSendIn": self.T("10:00:00.110000"),
+            "ServerTcpRecvFirst": self.T("10:00:00.150000"),
+            "ServerTcpRecvLast": self.T("10:00:00.160000"),
+            "ServerTcpSendIn": self.T("10:00:00.310000"),
+            "ClientTcpRecvFirst": self.T("10:00:00.350000"),
+            "ClientTcpRecvLast": self.T("10:00:00.360000"),
+        })
+        ctx.kernel_segments = [
+            self._seg("client_user_to_kernel", "ClientSend", "ClientTcpSendIn"),
+            self._seg("wire_c2s", "ClientTcpSendIn", "ServerTcpRecvFirst"),
+            self._seg("server_kernel_to_user", "ServerTcpRecvLast", "ServerRecv"),
+            self._seg("server_user_to_kernel", "ServerSend", "ServerTcpSendIn"),
+            self._seg("client_kernel_to_user", "ClientTcpRecvLast", "ClientRecv",
+                      abnormal=True),
+        ]
+        h = nla._trace_html(ctx, 1)
+        # 独立"RPC 宏观分段"表删除（信息并入分段表组头）
+        self.assertNotIn("RPC 宏观分段", h)
+        # 分段表带宏观组头行（3 组，含段名与耗时）
+        self.assertEqual(h.count('class="seg-grp"'), 3)
+        self.assertIn("ClientSend→ServerRecv", h)
+        self.assertIn("ServerRecv→ServerSend", h)
+        self.assertIn("ServerSend→ClientRecv", h)
+        # 组头含宏观段耗时与异常判定（cs_sr 100ms > 500us 阈值 → 异常）
+        self.assertIn("异常", h)
+        # 点位明细时间线保留
+        self.assertIn("全路径时间线", h)
+
+    # -- 整窗全景去重 ------------------------------------------------------
+
+    def test_pano_removed_when_cpu_busy_present(self):
+        ctx = self._ctx()
+        ctx.bpf_window_events["client"] = [self._ev(match5t=True)]
+        ctx.cpu_busy = {"client": {
+            "seg_key": "client_kernel_to_user", "seg_desc": "d",
+            "seg_dur_us": 5000,
+            "window_start": self.T("10:00:00.350000"),
+            "window_end": self.T("10:00:00.400000"),
+            "anchor_name": "ClientRecv", "anchor_tid": 100, "anchor_cpu": 1,
+            "conn": None, "n_mine": 1, "n_other": 0,
+            "other_conns": {}, "other_by_cpu": {},
+            "other_on_cpu": [], "switches_on_cpu": [], "switched_out": [],
+            "softirq_raise_on_cpu": [], "softirq_exit_on_cpu": [],
+            "softirq_localization": None, "preempt": False,
+            "events": [self._ev(match5t=True)]}}
+        out = nla._side_events_html(ctx, "client")
+        # cpu_busy 已渲染该侧问题窗口全景 → 整窗全景子项删除
+        self.assertNotIn("问题时间窗全景", out)
+        self.assertIn("问题请求相关事件", out)
+
+    def test_pano_kept_when_no_cpu_busy(self):
+        ctx = self._ctx()
+        ctx.bpf_window_events["client"] = [self._ev(match5t=True)]
+        out = nla._side_events_html(ctx, "client")
+        # 无 cpu_busy 分析（kernel_to_user 段不异常）→ 整窗全景保留兜底
+        self.assertIn("问题时间窗全景", out)
+
+    # -- 行渲染合一 --------------------------------------------------------
+
+    def test_unified_event_row_renderer(self):
+        self.assertTrue(callable(nla._event_row_html))
+        # 明细表 6 列（无归属列/高亮/data-o）
+        row6 = nla._event_row_html(self._ev())
+        self.assertEqual(row6.count("<td>"), 6)
+        self.assertNotIn("data-o=", row6)
+        # 全景表 7 列：归属列 + 问题连接高亮 + data-o 过滤属性
+        row7 = nla._event_row_html(self._ev(), with_owner=True)
+        self.assertEqual(row7.count("<td>"), 7)
+        self.assertIn('class="hl5t"', row7)
+        self.assertIn('data-o="mine"', row7)
+        self.assertIn("问题连接", row7)
+        # cpu 标注（业务 cpu 红色）
+        row_cpu = nla._event_row_html(self._ev(), cpu_val=1, with_owner=True)
+        self.assertIn('class="cpuflag"', row_cpu)
+        # 推测 badge（明细表）
+        row_inf = nla._event_row_html(self._ev(), inferred=True)
+        self.assertIn("推测", row_inf)
+        # nic 事件 rc 字段不丢（两套行渲染合一后信息保留）
+        nic = self._ev(kind="nic_rx", local_ip=None, local_port=None,
+                       peer_ip=None, peer_port=None, dir_arrow=None,
+                       match5t=None, src_ip="1.1.1.1", src_port=1,
+                       dst_ip="2.2.2.2", dst_port=2, dev="eth0", seq=7,
+                       len=100, rc=0)
+        self.assertIn("rc=0", nla._event_row_html(nic))
+        self.assertIn("rc=0", nla._event_row_html(nic, with_owner=True))
+
+    # -- 主报告周期监控卡收敛 ----------------------------------------------
+
+    def test_main_report_os_monitor_summary(self):
+        import argparse
+        aux = {"irqoff": {"10.1.2.3": {"total": 3, "hardirq_n": 2,
+                                        "softirq_n": 1, "max_us": 4200,
+                                        "total_us": 7700, "buckets": {"1000": 3},
+                                        "by_comm": {}, "series": []}},
+               "nic": {"10.1.2.3": {"eth0": {"n_samples": 10,
+                                             "max_ifutil": 91.5,
+                                             "avg_ifutil": 12.0,
+                                             "peak_hms": "10:00:05"}}}}
+        ctx = self._ctx()
+        ns = argparse.Namespace(residual_threshold=1000)
+        out = nla.generate_report([ctx], ns, "/tmp", aux_stats=aux)
+        # 收敛为摘要卡：一行结论 + 指向独立报告
+        self.assertIn("os_monitor_report.html", out)
+        self.assertIn("关中断", out)
+        self.assertIn("4.200 ms", out)
+        # 旧静态卡（分桶直方图 / 进程 top10 表 / SVG 散点）不再进主报告
+        self.assertNotIn("时长分桶", out)
+        self.assertNotIn("进程 top10", out)
+        self.assertNotIn("<svg", out)
+        self.assertFalse(hasattr(nla, "_irqoff_overview_html"))
+
+    # -- 探索器 JS 提取公共工厂 ---------------------------------------------
+
+    @staticmethod
+    def _numa_aux():
+        return {"numa": {"141.61.91.189": {
+            "memory": [{"ts": DAY, "ddrc_read_mb_s": 214.49,
+                        "ddrc_write_mb_s": 1258.2}]}}}
+
+    @staticmethod
+    def _irqoff_aux():
+        return {"irqoff": {"10.1.2.3": {
+            "total": 1, "hardirq_n": 1, "softirq_n": 0, "max_us": 2000,
+            "total_us": 2000, "buckets": {"1000": 1},
+            "by_comm": {"kubelet": {"n": 1, "max_us": 2000, "total_us": 2000}},
+            "series": [[DAY, 2000, "kubelet", 4]]}}}
+
+    def test_explorer_js_factory(self):
+        h_numa = nla._numa_explorer_html(self._numa_aux())
+        h_irq = nla._irqoff_explorer_html(self._irqoff_aux())
+        # 卡内只保留 init 调用，不再各嵌一份完整 JS/CSS
+        self.assertIn("XEXP('numa')", h_numa)
+        self.assertIn("XEXP('irq')", h_irq)
+        self.assertNotIn("mousemove", h_numa)
+        self.assertNotIn("mousemove", h_irq)
+        self.assertNotIn("<style>", h_numa)
+        self.assertNotIn("<style>", h_irq)
+        # 报告级：工厂 JS 与 CSS 各只出现一次
+        aux = {"numa": self._numa_aux()["numa"],
+               "irqoff": self._irqoff_aux()["irqoff"]}
+        rep = nla.generate_os_monitor_report(aux, "/tmp/fake")
+        self.assertEqual(rep.count("window.XEXP"), 1)
+        self.assertEqual(rep.count(".xexp-tooltip{"), 1)
+        self.assertIn("mousemove", rep)
+        self.assertIn("XEXP('numa')", rep)
+        self.assertIn("XEXP('irq')", rep)
 
 
 class TestSlowSegEndToEnd(unittest.TestCase):
@@ -5580,6 +7039,1318 @@ class TestNodeProbeFallback(TestSoftirqWireLocalization):
         ctx = contexts[0]
         self.assertIsNone(ctx.client_node)
         self.assertFalse(ctx.kernel_events["client"])
+
+
+class TestNumaLogParse(unittest.TestCase):
+    """NUMA 访存监控三类日志解析（numafast / memory / perf）。
+
+    样例取自 /home/wcy/minilog/dscollect_log/<ip>-<ip>-data_*/：
+      - numafast：NUMAFAST Report-N 块（score + NID 表）；
+      - memory：Memory Summary Report-N 块（cache miss% + DDR 带宽）；
+      - perf：perf stat round N 块（dTLB/iTLB-load-misses，1s/轮）。
+    """
+
+    NUMAFAST_SAMPLE = """================================================================================
+Version     : DevKit 26.0.RC1
+CPU Model   : Kunpeng 950 7592C To Be Filled By O.E.M. CPU @ 2.3GHz
+Command     : devkit tuner numafast -d N -i 1 -n 30 -t 5
+================================================================================
+
+NUMAFAST ANALYSIS(Press Ctrl+C or Ctrl+\\ to exit and generate the summary report)
+
+NUMAFAST Report-1(Press Ctrl+C or Ctrl+\\ to exit)                     Time:20260910-202917
+==========================================================================================
+1. System's numa score : 0.84
+
+              DST_0               DST_1               DST_2               DST_3
+SRC_0   0.12GB|10|78.71%    0.00GB|15|0.00%     0.00GB|20|0.00%     0.00GB|20|0.00%
+SRC_1   0.00GB|15|0.00%     0.00GB|10|0.00%     0.00GB|20|0.00%     0.02GB|20|14.19%
+
+==========================================================================================
+2. System node detail information of memory access traffic:
+
+ NID  RMA_Die  RMA_Skt      LMA    %RMA   MEM_all  MEM_free   %MEM      %CPU
+   0   0.00GB   0.00GB   0.12GB    0.00  163.05GB    4.46GB  97.26    158.73
+   1   0.00GB   0.02GB   0.00GB  100.00  201.02GB   16.54GB  91.77     38.21
+
+==========================================================================================
+3. Show top 1 processes and top 5 threads which sorted by memory access:
+
+ PID(TID)  SCORE  ACCESS  RMA_Die  RMA_Skt      LMA    %RMA  MIGRATED    %CPU    COMMAND
+   6381     0.84 100.00%   0.01GB   0.02GB   0.13GB   17.74    0|7        --     containerd
+├─3107874   1.00  78.71%   0.00GB   0.00GB   0.12GB    0.00    -|-        --     containerd
+
+==========================================================================================
+
+NUMAFAST Report-2(Press Ctrl+C or Ctrl+\\ to exit)                     Time:20260910-202919
+==========================================================================================
+1. System's numa score : 0.28
+
+ NID  RMA_Die  RMA_Skt      LMA    %RMA   MEM_all  MEM_free   %MEM      %CPU
+   0   0.00GB   0.00GB   0.00GB    0.00  163.05GB    3.65GB  97.76    147.47
+   3   0.00GB   0.22GB   0.09GB   71.88  166.45GB   26.08GB  84.33    245.92
+"""
+
+    MEMORY_SAMPLE = """================================================================================
+Version     : DevKit 26.0.RC1
+Command     : devkit tuner memory -d N -i 1 -P 100 -m 1
+================================================================================
+Memory Summary Report-1                                 Time:2026/09/10 20:29:17
+================================================================================
+
+System Information
+--------------------------------------------------------------------------------
+Linux Kernel Version  6.6.0-159.4.1.151.oe2403sp4+64k.aarch64
+NUMA NODE(cpus)       0(0-83)    1(84-153)  2(154-223) 3(224-307)
+
+Percentage of core Cache miss
+--------------------------------------------------------------------------------
+L1D         1.23%
+L1I         0.00%
+L2D         0.57%
+L2I        16.25%
+
+
+DDR Bandwidth (system wide)
+--------------------------------------------------------------------------------
+ddrc_write        1258.20MB/s
+ddrc_read          214.49MB/s
+
+Memory metrics of the Cache
+--------------------------------------------------------------------------------
+1. L1/L2/TLB Access Bandwidth and Hit Rate
+Value Format: X|Y = Bandwidth | Hit Rate
+--------------------------------------------------------------------------------
+  CPU                       L1D                        L1I                     L2D                  L2I       L2D_TLB       L2I_TLB
+--------------------------------------------------------------------------------
+  all    18413958.00MB/s|98.77%    18751420.00MB/s|100.00%    454447.88MB/s|99.43%    727.05MB/s|83.75%    N/A|85.53%    N/A|94.57%
+
+2. L3 Read Bandwidth and Hit Rate
+--------------------------------------------------------------------------------
+  NODE    CCL     Read Hit Bandwidth    Read Bandwidth    Read Hit Rate
+--------------------------------------------------------------------------------
+  0       --              691.08MB/s       1027.04MB/s           67.29%
+  0       0               174.83MB/s        233.23MB/s           74.96%
+  1       --              124.49MB/s        201.00MB/s           61.93%
+
+Memory Summary Report-2                                 Time:2026/09/10 20:29:18
+================================================================================
+
+Percentage of core Cache miss
+--------------------------------------------------------------------------------
+L1D         2.34%
+L1I         0.01%
+L2D         0.61%
+L2I        17.25%
+
+DDR Bandwidth (system wide)
+--------------------------------------------------------------------------------
+ddrc_write         987.60MB/s
+ddrc_read          301.05MB/s
+"""
+
+    PERF_SAMPLE = """==== perf 采集开始 2026-09-11 10:03:25 循环=3600次 间隔=1s ====
+==== 事件: ummu_pmcg_0/tbu_tlb_cache_hit_rate/,ummu_pmcg_1/tbu_tlb_cache_hit_rate/,dTLB-load-misses,iTLB-load-misses ====
+
+==== perf stat round 1/3600 开始时间 2026-09-11 10:03:25 ====
+
+ Performance counter stats for 'system wide':
+
+                 0      ummu_pmcg_0/tbu_tlb_cache_hit_rate/
+                 0      ummu_pmcg_1/tbu_tlb_cache_hit_rate/
+         6,314,507      dTLB-load-misses                                      (91.45%)
+            52,128      iTLB-load-misses                                      (91.81%)
+
+       1.024003390 seconds time elapsed
+
+==== perf stat round 1/3600 结束时间 2026-09-11 10:03:26 ====
+
+==== perf stat round 2/3600 开始时间 2026-09-11 10:03:26 ====
+
+ Performance counter stats for 'system wide':
+
+                 0      ummu_pmcg_0/tbu_tlb_cache_hit_rate/
+         5,880,377      dTLB-load-misses                                      (19.03%)
+           551,634      iTLB-load-misses                                      (18.92%)
+
+       1.044025930 seconds time elapsed
+
+==== perf stat round 2/3600 结束时间 2026-09-11 10:03:27 ====
+"""
+
+    def setUp(self):
+        import shutil
+        self._root = Path(tempfile.mkdtemp(prefix="numaparse_"))
+        self.addCleanup(shutil.rmtree, self._root, ignore_errors=True)
+
+    def _write(self, name, text):
+        p = self._root / name
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    def test_parse_numafast(self):
+        recs = nla.parse_numafast_log(self._write("numafast_x.log",
+                                                  self.NUMAFAST_SAMPLE))
+        self.assertEqual(len(recs), 2)
+        r1 = recs[0]
+        self.assertEqual(r1["ts"].strftime("%Y%m%d-%H%M%S"), "20260910-202917")
+        self.assertAlmostEqual(r1["score"], 0.84)
+        self.assertEqual(r1["nids"]["0"]["rma_pct"], 0.0)
+        self.assertEqual(r1["nids"]["1"]["rma_pct"], 100.0)
+        self.assertAlmostEqual(r1["nids"]["0"]["cpu_pct"], 158.73)
+        self.assertAlmostEqual(r1["nids"]["1"]["mem_pct"], 91.77)
+        # PID 表行不误入 NID 表
+        self.assertNotIn("6381", r1["nids"])
+        r2 = recs[1]
+        self.assertAlmostEqual(r2["score"], 0.28)
+        self.assertEqual(r2["nids"]["3"]["rma_pct"], 71.88)
+
+    def test_parse_memory(self):
+        recs = nla.parse_memory_log(self._write("memory_x.log",
+                                                self.MEMORY_SAMPLE))
+        self.assertEqual(len(recs), 2)
+        r1 = recs[0]
+        self.assertEqual(r1["ts"].strftime("%Y/%m/%d %H:%M:%S"),
+                         "2026/09/10 20:29:17")
+        self.assertAlmostEqual(r1["l1d_miss_pct"], 1.23)
+        self.assertAlmostEqual(r1["l2i_miss_pct"], 16.25)
+        self.assertAlmostEqual(r1["ddrc_write_mb_s"], 1258.20)
+        self.assertAlmostEqual(r1["ddrc_read_mb_s"], 214.49)
+        self.assertAlmostEqual(recs[1]["l1d_miss_pct"], 2.34)
+        self.assertAlmostEqual(recs[1]["ddrc_write_mb_s"], 987.60)
+
+    def test_parse_memory_cache_l3(self):
+        """Memory metrics of the Cache（L1/L2/TLB 带宽+命中率）与
+        L3 Read Bandwidth / Hit Rate（NODE 汇总行，CCL 明细行不取）。
+        """
+        recs = nla.parse_memory_log(self._write("memory_c.log",
+                                                self.MEMORY_SAMPLE))
+        r1 = recs[0]
+        # L1/L2/TLB Access Bandwidth and Hit Rate（all 行，X|Y 六列）
+        self.assertAlmostEqual(r1["l1d_bw_mb_s"], 18413958.00)
+        self.assertAlmostEqual(r1["l1d_hit_pct"], 98.77)
+        self.assertAlmostEqual(r1["l2d_bw_mb_s"], 454447.88)
+        self.assertAlmostEqual(r1["l2i_hit_pct"], 83.75)
+        # TLB 带宽 N/A → None；命中率照常
+        self.assertIsNone(r1["l2dtlb_bw_mb_s"])
+        self.assertAlmostEqual(r1["l2dtlb_hit_pct"], 85.53)
+        self.assertAlmostEqual(r1["l2itlb_hit_pct"], 94.57)
+        # L3 Read（仅 NODE 汇总行 CCL=--；CCL 明细行不解析）
+        self.assertAlmostEqual(r1["l3_nid0_hit_bw_mb_s"], 691.08)
+        self.assertAlmostEqual(r1["l3_nid0_read_bw_mb_s"], 1027.04)
+        self.assertAlmostEqual(r1["l3_nid0_hit_pct"], 67.29)
+        self.assertAlmostEqual(r1["l3_nid1_hit_pct"], 61.93)
+        self.assertNotIn("l3_nid0_ccl0_read_bw_mb_s", r1)
+        # report-2 无 cache/L3 段 → 字段缺失（不误留上一轮值）
+        self.assertNotIn("l1d_bw_mb_s", recs[1])
+        self.assertNotIn("l3_nid0_hit_pct", recs[1])
+
+    def test_parse_numafast_procs(self):
+        """numafast 第 3 章 top 进程（按访存排序）：只解析进程行，
+        线程行（├─/└─ 树前缀）不解析；%CPU "--" → None。
+        """
+        recs = nla.parse_numafast_log(self._write("numafast_p.log",
+                                                  self.NUMAFAST_SAMPLE))
+        r1 = recs[0]
+        self.assertEqual(len(r1["procs"]), 1)
+        p = r1["procs"][0]
+        self.assertEqual(p["pid"], 6381)
+        self.assertAlmostEqual(p["score"], 0.84)
+        self.assertAlmostEqual(p["access_pct"], 100.0)
+        self.assertAlmostEqual(p["rma_die_gb"], 0.01)
+        self.assertAlmostEqual(p["lma_gb"], 0.13)
+        self.assertAlmostEqual(p["rma_pct"], 17.74)
+        self.assertEqual(p["migrated"], "0|7")
+        self.assertIsNone(p["cpu_pct"])          # 首轮 %CPU 为 "--"
+        self.assertEqual(p["command"], "containerd")
+        # 线程行（├─3107874 …）不进 procs
+        self.assertNotEqual(p["pid"], 3107874)
+        # report-2 无第 3 章 → procs 为空列表
+        self.assertEqual(recs[1]["procs"], [])
+
+    def test_parse_numafast_proc_cpu_value(self):
+        """进程行 %CPU 有值时正常解析（如 java 0.00）。"""
+        recs = nla.parse_numafast_log(self._write("numafast_pc.log", (
+            "NUMAFAST Report-1(x)                     Time:20260910-202917\n"
+            " PID(TID)  SCORE  ACCESS  RMA_Die  RMA_Skt      LMA    %RMA"
+            "  MIGRATED    %CPU    COMMAND\n"
+            "2712305     0.28 100.00%   0.00GB   0.22GB   0.09GB   71.88"
+            "    0|3       0.00    java\n")))
+        p = recs[0]["procs"][0]
+        self.assertEqual(p["pid"], 2712305)
+        self.assertAlmostEqual(p["cpu_pct"], 0.00)
+        self.assertEqual(p["command"], "java")
+
+    def test_parse_numafast_matrix(self):
+        """第 1 章访存矩阵：DST 表头 + SRC 行（traffic|distance|access%）。
+        键 "s_d"（SRC→DST）；report 无矩阵段 → 无 matrix 键。
+        """
+        recs = nla.parse_numafast_log(self._write("numafast_m.log",
+                                                  self.NUMAFAST_SAMPLE))
+        r1 = recs[0]
+        # 对角线本地访存 SRC_0→DST_0
+        self.assertAlmostEqual(r1["matrix"]["0_0"]["gb"], 0.12)
+        self.assertEqual(r1["matrix"]["0_0"]["dist"], 10)
+        self.assertAlmostEqual(r1["matrix"]["0_0"]["pct"], 78.71)
+        # 远程访存 SRC_1→DST_3
+        self.assertAlmostEqual(r1["matrix"]["1_3"]["gb"], 0.02)
+        self.assertEqual(r1["matrix"]["1_3"]["dist"], 20)
+        self.assertAlmostEqual(r1["matrix"]["1_3"]["pct"], 14.19)
+        # 全 4×4 单元格都解析
+        self.assertEqual(len(r1["matrix"]), 8)   # 2 SRC 行 × 4 DST 列
+        # report-2 无矩阵段 → 无 matrix 键
+        self.assertNotIn("matrix", recs[1])
+
+    def test_parse_perf(self):
+        recs = nla.parse_perf_log(self._write("perf_x.log", self.PERF_SAMPLE))
+        self.assertEqual(len(recs), 2)
+        r1 = recs[0]
+        self.assertEqual(r1["ts"].strftime("%Y-%m-%d %H:%M:%S"),
+                         "2026-09-11 10:03:25")
+        self.assertEqual(r1["dtlb_load_misses"], 6314507)
+        self.assertEqual(r1["itlb_load_misses"], 52128)
+        # ummu_pmcg TBU TLB 命中率（真实样例恒 0，照常解析）
+        self.assertEqual(r1["ummu_pmcg_0_tlb_hit_rate"], 0)
+        self.assertEqual(r1["ummu_pmcg_1_tlb_hit_rate"], 0)
+        # round 2 缺 ummu_pmcg_1 行 → None（数据缺失断线）
+        self.assertEqual(recs[1]["dtlb_load_misses"], 5880377)
+        self.assertEqual(recs[1]["itlb_load_misses"], 551634)
+        self.assertEqual(recs[1]["ummu_pmcg_0_tlb_hit_rate"], 0)
+        self.assertIsNone(recs[1]["ummu_pmcg_1_tlb_hit_rate"])
+
+    def test_parse_perf_ummu_nonzero(self):
+        """ummu_pmcg 非零值 + 千分位逗号 + 行尾空格。"""
+        recs = nla.parse_perf_log(self._write("perf_nz.log", (
+            "==== perf stat round 1/3600 开始时间 2026-09-11 10:03:25 ====\n"
+            "             1,234      ummu_pmcg_0/tbu_tlb_cache_hit_rate/    \n"
+            "                56      ummu_pmcg_1/tbu_tlb_cache_hit_rate/\n"
+            "         6,314,507      dTLB-load-misses                    (91.45%)\n")))
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["ummu_pmcg_0_tlb_hit_rate"], 1234)
+        self.assertEqual(recs[0]["ummu_pmcg_1_tlb_hit_rate"], 56)
+
+    def test_parse_perf_dynamic_events(self):
+        """perf stat 事件持续增加：事件头目录 + 通用数据行动态识别。
+
+        真实样例（141.61.91.189 perf_20260914-152704.log）：事件头列出
+        dTLB-loads / dTLB-load-misses / ummu_pmcg_{0,1}/tcu_cntx_cache_miss_num/
+        / tcu_pptw_req_num/ / tbu_tlb_cache_hit_rate/ —— 全部事件必须进
+        values（新增指标不丢失），已知事件旧字段照常填充，`#` 注释进
+        comments，`(91.45%)` 缩放标注不误当注释。
+        """
+        sample = (
+            "==== perf 采集开始 2026-09-14 15:27:04 循环=10次 间隔=1s ====\n"
+            "==== 事件: dTLB-loads,dTLB-load-misses,"
+            "ummu_pmcg_0/tcu_cntx_cache_miss_num/,"
+            "ummu_pmcg_1/tcu_cntx_cache_miss_num/,"
+            "ummu_pmcg_0/tcu_pptw_req_num/,ummu_pmcg_1/tcu_pptw_req_num/,"
+            "ummu_pmcg_0/tbu_tlb_cache_hit_rate/,"
+            "ummu_pmcg_1/tbu_tlb_cache_hit_rate/ ====\n"
+            "\n"
+            "==== perf stat round 1/10 开始时间 2026-09-14 15:27:04 ====\n"
+            "\n"
+            " Performance counter stats for 'system wide':\n"
+            "\n"
+            "     1,090,095,445      dTLB-loads\n"
+            "           951,082      dTLB-load-misses                 "
+            "#    0.09% of all dTLB cache accesses\n"
+            "                 0      ummu_pmcg_0/tcu_cntx_cache_miss_num/\n"
+            "                 0      ummu_pmcg_1/tcu_cntx_cache_miss_num/\n"
+            "                 0      ummu_pmcg_0/tcu_pptw_req_num/\n"
+            "                 0      ummu_pmcg_1/tcu_pptw_req_num/\n"
+            "                 7      ummu_pmcg_0/tbu_tlb_cache_hit_rate/\n"
+            "                 0      ummu_pmcg_1/tbu_tlb_cache_hit_rate/\n"
+            "\n"
+            "       1.006413289 seconds time elapsed\n"
+            "\n"
+            "==== perf stat round 1/10 结束时间 2026-09-14 15:27:05 ====\n")
+        recs = nla.parse_perf_log(self._write("perf_dyn.log", sample))
+        self.assertEqual(len(recs), 1)
+        r1 = recs[0]
+        # 事件头列出的全部事件动态识别进 values（含新增的
+        # tcu_cntx_cache_miss_num / tcu_pptw_req_num 与 dTLB-loads）
+        self.assertEqual(r1["values"]["dTLB-loads"], 1090095445)
+        self.assertEqual(r1["values"]["dTLB-load-misses"], 951082)
+        self.assertEqual(
+            r1["values"]["ummu_pmcg_0/tcu_cntx_cache_miss_num/"], 0)
+        self.assertEqual(
+            r1["values"]["ummu_pmcg_1/tcu_pptw_req_num/"], 0)
+        self.assertEqual(r1["values"]["ummu_pmcg_0/tbu_tlb_cache_hit_rate/"], 7)
+        self.assertEqual(r1["values"]["ummu_pmcg_1/tbu_tlb_cache_hit_rate/"], 0)
+        self.assertEqual(len(r1["values"]), 8)   # 事件头全部 8 个事件
+        # `#` 注释进 comments；(91.45%) 缩放标注不产生注释
+        self.assertEqual(r1["comments"]["dTLB-load-misses"],
+                         "0.09% of all dTLB cache accesses")
+        self.assertNotIn("dTLB-loads", r1["comments"])
+        # 已知事件旧字段照常填充（向后兼容）
+        self.assertEqual(r1["dtlb_load_misses"], 951082)
+        self.assertEqual(r1["ummu_pmcg_0_tlb_hit_rate"], 7)
+        # "1.006413289 seconds time elapsed" 不误入 values
+        self.assertNotIn("seconds", " ".join(r1["values"]))
+
+    def test_parse_perf_dynamic_no_header(self):
+        """无事件头（老格式）时通用数据行照常识别（不依赖事件目录）。"""
+        recs = nla.parse_perf_log(self._write("perf_nohdr.log", (
+            "==== perf stat round 1/3600 开始时间 2026-09-11 10:03:25 ====\n"
+            "     1,090,095,445      dTLB-loads\n"
+            "           951,082      dTLB-load-misses\n"
+            "       1.006413289 seconds time elapsed\n")))
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["values"]["dTLB-loads"], 1090095445)
+        self.assertEqual(recs[0]["values"]["dTLB-load-misses"], 951082)
+        self.assertNotIn("seconds", " ".join(recs[0]["values"]))
+
+
+class TestNumaDiscovery(unittest.TestCase):
+    """NUMA 监控日志发现：numafast_/memory_/perf_*.log 任意目录，
+    父目录名 IP → 节点（node_by_ip 命中用规范名，未命中以 IP 为键）。
+    """
+
+    def setUp(self):
+        import shutil
+        root = Path(tempfile.mkdtemp(prefix="numadisc_"))
+        self._root = root
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "dscollect_log").mkdir()
+
+    def _write_numa_logs(self, parent):
+        d = self._root / "dscollect_log" / parent
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "numafast_20260911-100325.log").write_text(
+            "NUMAFAST Report-1(x)                     Time:20260910-202917\n"
+            "1. System's numa score : 0.84\n", encoding="utf-8")
+        (d / "memory_20260911-100325.log").write_text(
+            "Memory Summary Report-1                                 "
+            "Time:2026/09/10 20:29:17\n"
+            "L1D         1.23%\nddrc_write        1258.20MB/s\n",
+            encoding="utf-8")
+        (d / "perf_20260911-100325.log").write_text(
+            "==== perf stat round 1/3600 开始时间 2026-09-11 10:03:25 ====\n"
+            "         6,314,507      dTLB-load-misses\n", encoding="utf-8")
+
+    def test_known_node_ip_maps_to_canonical(self):
+        # 父目录 IP 141.62.32.59 对应 bpf-worker12 → 归到规范节点 worker12
+        (self._root / "dscollect_log" / "bpf-worker12-141.62.32.59.log").write_text(
+            "", encoding="utf-8")
+        self._write_numa_logs("141.62.32.59-141.62.32.59-data_20260911-100322")
+        disc = nla.LogDiscovery(str(self._root))
+        self.assertIn("worker12", disc.numa_by_node)
+        entry = disc.numa_by_node["worker12"]
+        self.assertIn("numafast", entry)
+        self.assertIn("memory", entry)
+        self.assertIn("perf", entry)
+
+    def test_unknown_ip_keyed_by_ip(self):
+        # IP 不在任何已知节点 → 以 IP 为键独立呈现
+        self._write_numa_logs("141.61.91.189-141.61.91.189-data_20260911-100322")
+        disc = nla.LogDiscovery(str(self._root))
+        self.assertIn("141.61.91.189", disc.numa_by_node)
+
+    def test_arbitrary_dir_name_with_ip_still_found(self):
+        # 目录名改掉（保留 IP）→ 照常发现（目录名无关约定）
+        self._write_numa_logs("随便改名-141.61.91.189")
+        disc = nla.LogDiscovery(str(self._root))
+        self.assertIn("141.61.91.189", disc.numa_by_node)
+
+    def test_no_ip_dir_skipped(self):
+        # 父目录无 IP → 跳过（无节点身份来源）
+        self._write_numa_logs("no_ip_here")
+        disc = nla.LogDiscovery(str(self._root))
+        self.assertEqual(disc.numa_by_node, {})
+
+
+class TestNumaOverviewHtml(unittest.TestCase):
+    """NUMA 指标交互探索器：aux_stats["numa"] → _numa_explorer_html
+    （单图 + 节点选择 + 指标勾选 + 悬浮透明提示窗 + 拖拽时间段缩放，
+    原生 JS 离线自包含）+ generate_json 的 numa_stats。
+    """
+
+    @staticmethod
+    def _aux_stats():
+        from datetime import datetime as _dt
+        return {"numa": {
+            "141.61.91.189": {
+                "numafast": [
+                    {"ts": _dt(2026, 9, 10, 20, 29, 17), "score": 0.84,
+                     "nids": {"0": {"rma_pct": 0.0, "cpu_pct": 158.73,
+                                    "mem_pct": 97.26, "rma_die_gb": 0.0,
+                                    "rma_skt_gb": 0.0, "lma_gb": 0.12,
+                                    "mem_all_gb": 163.05,
+                                    "mem_free_gb": 4.46},
+                              "1": {"rma_pct": 100.0, "cpu_pct": 38.21,
+                                    "mem_pct": 91.77, "rma_die_gb": 0.0,
+                                    "rma_skt_gb": 0.02, "lma_gb": 0.0,
+                                    "mem_all_gb": 201.02,
+                                    "mem_free_gb": 16.54}},
+                     "procs": [
+                         {"pid": 6381, "command": "containerd",
+                          "score": 0.84, "access_pct": 100.0,
+                          "rma_die_gb": 0.01, "rma_skt_gb": 0.02,
+                          "lma_gb": 0.13, "rma_pct": 17.74,
+                          "migrated": "0|7", "cpu_pct": None}],
+                     "matrix": {"0_0": {"gb": 0.12, "dist": 10,
+                                        "pct": 78.71},
+                                "1_3": {"gb": 0.02, "dist": 20,
+                                        "pct": 14.19}}},
+                    {"ts": _dt(2026, 9, 10, 20, 29, 19), "score": 0.28,
+                     "nids": {"0": {"rma_pct": 0.0, "cpu_pct": 147.47,
+                                    "mem_pct": 97.76, "rma_die_gb": 0.0,
+                                    "rma_skt_gb": 0.0, "lma_gb": 0.0,
+                                    "mem_all_gb": 163.05,
+                                    "mem_free_gb": 3.65},
+                              "3": {"rma_pct": 71.88, "cpu_pct": 245.92,
+                                    "mem_pct": 84.33, "rma_die_gb": 0.0,
+                                    "rma_skt_gb": 0.22, "lma_gb": 0.09,
+                                    "mem_all_gb": 166.45,
+                                    "mem_free_gb": 26.08}},
+                     "procs": [
+                         {"pid": 2712305, "command": "java",
+                          "score": 0.28, "access_pct": 100.0,
+                          "rma_die_gb": 0.0, "rma_skt_gb": 0.22,
+                          "lma_gb": 0.09, "rma_pct": 71.88,
+                          "migrated": "0|3", "cpu_pct": 0.0}],
+                     "matrix": {"3_0": {"gb": 0.22, "dist": 20,
+                                        "pct": 71.88}}},
+                ],
+                "memory": [
+                    {"ts": _dt(2026, 9, 10, 20, 29, 17),
+                     "l1d_miss_pct": 1.23, "l1i_miss_pct": 0.0,
+                     "l2d_miss_pct": 0.57, "l2i_miss_pct": 16.25,
+                     "ddrc_read_mb_s": 214.49, "ddrc_write_mb_s": 1258.20,
+                     "l1d_bw_mb_s": 18413958.0, "l1d_hit_pct": 98.77,
+                     "l1i_bw_mb_s": 18751420.0, "l1i_hit_pct": 100.0,
+                     "l2d_bw_mb_s": 454447.88, "l2d_hit_pct": 99.43,
+                     "l2i_bw_mb_s": 727.05, "l2i_hit_pct": 83.75,
+                     "l2dtlb_bw_mb_s": None, "l2dtlb_hit_pct": 85.53,
+                     "l2itlb_bw_mb_s": None, "l2itlb_hit_pct": 94.57,
+                     "l3_nid0_hit_bw_mb_s": 691.08,
+                     "l3_nid0_read_bw_mb_s": 1027.04,
+                     "l3_nid0_hit_pct": 67.29,
+                     "l3_nid1_hit_bw_mb_s": 124.49,
+                     "l3_nid1_read_bw_mb_s": 201.00,
+                     "l3_nid1_hit_pct": 61.93},
+                ],
+                "perf": [
+                    {"ts": _dt(2026, 9, 11, 10, 3, 25),
+                     "dtlb_load_misses": 6314507, "itlb_load_misses": 52128,
+                     "ummu_pmcg_0_tlb_hit_rate": 1234,
+                     "ummu_pmcg_1_tlb_hit_rate": 56},
+                ],
+            }}}
+
+    def test_overview_html(self):
+        h = nla._numa_explorer_html(self._aux_stats())
+        # 卡片标题 + 来源说明
+        self.assertIn("NUMA 访存监控", h)
+        self.assertIn("141.61.91.189", h)
+        # 节点下拉选择
+        self.assertIn('id="numa-node-sel"', h)
+        self.assertIn("<option", h)
+        # 指标分组勾选（numafast / numafast top进程 / memory / L3 / perf）
+        self.assertIn("numafast", h)
+        self.assertIn("memory", h)
+        self.assertIn("perf", h)
+        self.assertIn("top进程", h)             # numafast 第 3 章进程指标分组
+        self.assertIn("L3", h)                  # L3 读带宽/命中率分组
+        self.assertIn("NUMA score(×100)", h)     # 指标 label
+        self.assertIn("NID0 %RMA", h)
+        self.assertIn("ddrc_write", h)
+        self.assertIn("L2I", h)
+        self.assertIn("dTLB", h)
+        self.assertIn("TBU TLB 命中率", h)
+        self.assertIn("ummu_pmcg_0", h)
+        # numafast 全量指标（非常用的先隐藏，展开后勾选）
+        self.assertIn("NID0 %CPU", h)
+        self.assertIn("NID0 %MEM", h)
+        self.assertIn("NID0 RMA_Skt", h)
+        self.assertIn("NID0 MEM_free", h)
+        # 常用/隐藏两级展示：common 标记（展开/收起交互由报告级工厂 JS 渲染）
+        self.assertIn('"common"', h)
+        # top 进程指标（ACCESS% 默认勾选；悬浮窗显示进程名 cmd=…）
+        self.assertIn("top1 进程 ACCESS%", h)
+        self.assertIn("top1 进程 %RMA", h)
+        self.assertIn("cmd=containerd", h)
+        self.assertIn("cmd=java", h)
+        # memory cache 带宽 + 命中率、L3 读带宽/命中率
+        self.assertIn("L1D 带宽", h)
+        self.assertIn("L1D 命中率", h)
+        self.assertIn("L2D_TLB 命中率", h)
+        self.assertIn("NID0 L3 读带宽", h)
+        self.assertIn("NID0 L3 命中率", h)
+        # 嵌入数据（epoch + 数值）：<script type="application/json">
+        self.assertIn('id="numa-data"', h)
+        self.assertIn("1258.2", h)        # DDR 带宽值
+        self.assertIn("6314507", h)       # dTLB 值
+        self.assertIn("1234", h)          # ummu_pmcg_0 值
+        self.assertIn("18413958", h)      # L1D 带宽值
+        self.assertIn("1027.04", h)       # L3 NID0 读带宽值
+        # 默认勾选：score + %RMA + top1 进程 ACCESS%（其余默认隐藏不勾选）
+        import json as _json
+        import re as _re
+        m = _re.search(r'<script type="application/json" id="numa-data">'
+                       r"(.*?)</script>", h, _re.S)
+        data = _json.loads(m.group(1))
+        self.assertIn("score", data["default"])
+        self.assertIn("rma_0", data["default"])
+        self.assertIn("proc_access", data["default"])
+        self.assertNotIn("l1d_bw", data["default"])
+        # common 标记：常用直接展示，非常用默认收起（xexp-more）
+        self.assertEqual(data["metrics"]["score"]["common"], 1)
+        self.assertEqual(data["metrics"]["rma_0"]["common"], 1)
+        self.assertEqual(data["metrics"]["proc_access"]["common"], 1)
+        self.assertEqual(data["metrics"]["cpu_0"]["common"], 0)
+        self.assertEqual(data["metrics"]["l1d_bw"]["common"], 0)
+        # top 进程序列点带 cmd= 附加信息（悬浮窗展示进程名）
+        self.assertIn("cmd=containerd",
+                      [p[2] for p in data["series"]["141.61.91.189"]
+                       ["proc_access"]])
+        # L3 序列嵌入（NID 汇总行）
+        self.assertEqual(
+            data["series"]["141.61.91.189"]["l3_0_read_bw"][0][1],
+            1027.04)
+        # 访存矩阵（SRC→DST，第 1 章）：分组 + 序列（含 traffic/dist 附加信息）
+        self.assertIn("numafast 访存矩阵", h)
+        self.assertIn("SRC0→DST0 访存%", h)
+        self.assertIn("SRC1→DST3 访存%", h)
+        self.assertEqual(
+            data["series"]["141.61.91.189"]["mx_0_0"][0][2],
+            "0.12GB|dist10")
+        self.assertEqual(
+            data["series"]["141.61.91.189"]["mx_3_0"][0][1], 71.88)
+        self.assertEqual(data["metrics"]["mx_0_0"]["common"], 0)
+        self.assertNotIn("mx_0_0", data["default"])
+        # 展开修复 + 交互动能收敛到报告级工厂 JS（卡内只留 init 调用）：
+        # JS 切换用 'block'（不能用 ''，否则 CSS display:none 生效导致
+        # 展开后仍不可见），CSS 不再强制隐藏 xexp-more
+        self.assertIn('id="numa-tooltip"', h)     # 悬浮提示容器
+        self.assertIn("重置缩放", h)               # 缩放重置按钮
+        self.assertIn("拖拽", h)                   # 操作提示文案
+        self.assertIn("XEXP('numa')", h)          # 卡内 init 调用
+        self.assertNotIn("<polyline", h)          # 不再服务端平铺渲染折线
+        rep = nla.generate_os_monitor_report(self._aux_stats(), "/tmp/fake")
+        self.assertIn("xexp-toggle", rep)         # 展开按钮（工厂 JS）
+        self.assertIn("xexp-more", rep)           # 隐藏指标容器（默认收起）
+        self.assertIn("'block' : 'none'", rep)    # 展开切换实现
+        self.assertNotIn(".xexp-more{display:none", rep)
+        self.assertIn("mousemove", rep)           # 悬停联动
+        self.assertIn("mousedown", rep)           # 拖拽选择时间段
+        # 分组批量选中/取消（组级复选框 + 部分勾选半选状态）
+        self.assertIn("xexp-gcheck", rep)
+        self.assertIn("indeterminate", rep)
+        # 空 aux_stats / 无 numa → 空串（可选输入降级）
+        self.assertEqual(nla._numa_explorer_html({}), "")
+        self.assertEqual(nla._numa_explorer_html(None), "")
+
+    def test_node_switch_keeps_selection(self):
+        """交互探索器切换节点时记住已勾选指标，不重置为默认。
+
+        NUMA 卡指标字段多，逐个勾选成本高；切节点对比各物理机时勾选
+        应保留：
+        - 节点切换调 buildMetrics(false)（保留勾选）而非 true（重置默认）；
+        - buildMetrics 不做破坏性过滤（checked 是用户选择的完整记忆，
+          切到无该指标的节点再切回，勾选恢复）；
+        - render 按当前节点可用序列过滤渲染，新节点完全无交集时
+          补默认勾选（并集，不丢原记忆）。
+        """
+        rep = nla.generate_os_monitor_report(self._aux_stats(), "/tmp/fake")
+        # 节点切换保留勾选（resetDefault=false）
+        self.assertIn("buildMetrics(false)", rep)
+        self.assertNotIn("buildMetrics(true)", rep)
+        # render 按当前节点可用序列过滤（checked 完整记忆不被裁剪）
+        self.assertIn("checked.filter", rep)
+        # 完全无交集时并集补默认（而非覆盖 checked 记忆）
+        self.assertIn("checked.concat(defaultKeys(av))", rep)
+
+    def test_overview_html_perf_dynamic(self):
+        """perf stat 事件持续增加：报告动态识别新事件进 perf 分组。
+
+        - 新事件（tcu_cntx_cache_miss_num / tcu_pptw_req_num / dTLB-loads）
+          自动出现在勾选面板（默认收起，展开后勾选），序列值完整嵌入；
+        - 已知事件沿用旧 key + 友好标签 + 默认展示；
+        - 旧格式记录（无 values，仅旧字段）照常合成已知事件序列；
+        - `#` 注释进序列点附加信息（悬浮窗展示）。
+        """
+        from datetime import datetime as _dt
+        aux = self._aux_stats()
+        aux["numa"]["141.61.91.189"]["perf"] = [
+            {"ts": _dt(2026, 9, 14, 15, 27, 4),
+             "values": {
+                 "dTLB-loads": 1090095445,
+                 "dTLB-load-misses": 951082,
+                 "iTLB-load-misses": 52128,
+                 "ummu_pmcg_0/tcu_cntx_cache_miss_num/": 3,
+                 "ummu_pmcg_1/tcu_pptw_req_num/": 0,
+                 "ummu_pmcg_0/tbu_tlb_cache_hit_rate/": 7,
+                 "ummu_pmcg_1/tbu_tlb_cache_hit_rate/": 8},
+             "comments": {"dTLB-load-misses":
+                          "0.09% of all dTLB cache accesses"}},
+            # 旧格式记录（无 values）→ 已知事件从旧字段合成序列
+            {"ts": _dt(2026, 9, 14, 15, 27, 5),
+             "dtlb_load_misses": 588037, "itlb_load_misses": 55163,
+             "ummu_pmcg_0_tlb_hit_rate": 1234,
+             "ummu_pmcg_1_tlb_hit_rate": 56}]
+        h = nla._numa_explorer_html(aux)
+        # 新事件自动进勾选面板；label 与原始指标名完全一致（含尾斜杠）
+        self.assertIn("tcu_cntx_cache_miss_num", h)
+        self.assertIn("tcu_pptw_req_num", h)
+        self.assertIn("dTLB-loads", h)
+        import json as _json
+        import re as _re
+        m = _re.search(r'<script type="application/json" id="numa-data">'
+                       r"(.*?)</script>", h, _re.S)
+        data = _json.loads(m.group(1))
+        s = data["series"]["141.61.91.189"]
+        # label 与原始指标名一致（含尾斜杠，不改写）
+        self.assertEqual(
+            data["metrics"]["perf_evt:dTLB-loads"]["label"], "dTLB-loads")
+        self.assertEqual(
+            data["metrics"]["perf_evt:ummu_pmcg_0/tcu_cntx_cache_miss_num/"]
+            ["label"], "ummu_pmcg_0/tcu_cntx_cache_miss_num/")
+        # 新事件序列完整嵌入（值不丢，含全 0 序列）
+        self.assertEqual(s["perf_evt:dTLB-loads"][0][1], 1090095445)
+        self.assertEqual(
+            s["perf_evt:ummu_pmcg_0/tcu_cntx_cache_miss_num/"][0][1], 3)
+        # 恒 0 指标也如实展示：序列点完整（0 值不过滤）
+        self.assertEqual(
+            s["perf_evt:ummu_pmcg_1/tcu_pptw_req_num/"],
+            [[s["perf_evt:ummu_pmcg_1/tcu_pptw_req_num/"][0][0], 0]])
+        self.assertIn("perf_evt:ummu_pmcg_1/tcu_pptw_req_num/",
+                      data["metrics"])
+        self.assertEqual(data["metrics"]["perf_evt:dTLB-loads"]["group"],
+                         "perf")
+        # 新事件默认收起（common=0，展开后勾选）
+        self.assertEqual(data["metrics"]["perf_evt:dTLB-loads"]["common"], 0)
+        self.assertEqual(
+            data["metrics"]["perf_evt:ummu_pmcg_0/tcu_cntx_cache_miss_num/"]
+            ["common"], 0)
+        # 已知事件沿用旧 key + 默认展示；label 与原始指标名一致
+        # （友好说明放括号后缀，原始名在前）
+        self.assertEqual(data["metrics"]["dtlb"]["common"], 1)
+        self.assertEqual(data["metrics"]["dtlb"]["label"], "dTLB-load-misses")
+        self.assertEqual(data["metrics"]["ummu_0"]["label"],
+                         "ummu_pmcg_0/tbu_tlb_cache_hit_rate/（TBU TLB 命中率）")
+        self.assertEqual(s["dtlb"][0][1], 951082)
+        self.assertEqual(s["dtlb"][1][1], 588037)   # 旧格式记录合成
+        self.assertEqual(s["itlb"][1][1], 55163)
+        self.assertEqual(s["ummu_0"][0][1], 7)
+        self.assertEqual(s["ummu_0"][1][1], 1234)
+        self.assertEqual(s["ummu_1"][1][1], 56)
+        # `#` 注释进序列点附加信息（悬浮窗展示）；无注释点不带附加段
+        self.assertEqual(s["dtlb"][0][2],
+                         "0.09% of all dTLB cache accesses")
+        self.assertEqual(s["dtlb"][1], [s["dtlb"][1][0], 588037])
+
+    def test_json_numa_stats(self):
+        import argparse
+        import json
+        ns = argparse.Namespace(residual_threshold=1000)
+        doc = json.loads(nla.generate_json([], ns, "/tmp/fake_root",
+                                           aux_stats=self._aux_stats()))
+        numa = doc["numa_stats"]["141.61.91.189"]
+        self.assertEqual(numa["numafast"][0]["score"], 0.84)
+        self.assertEqual(numa["numafast"][0]["ts"],
+                         "2026-09-10T20:29:17")
+        self.assertEqual(numa["memory"][0]["ddrc_write_mb_s"], 1258.2)
+        self.assertEqual(numa["perf"][0]["dtlb_load_misses"], 6314507)
+        # top 进程（第 3 章）+ cache/L3 指标进 JSON
+        self.assertEqual(numa["numafast"][0]["procs"][0]["command"],
+                         "containerd")
+        self.assertEqual(numa["memory"][0]["l3_nid0_read_bw_mb_s"], 1027.04)
+        self.assertAlmostEqual(numa["memory"][0]["l1d_hit_pct"], 98.77)
+
+    def test_report_places_numa_at_beginning(self):
+        """NUMA 周期监控改为独立 OS 资源周期监控报告：
+        原（定界）报告不再包含 NUMA 卡（聚焦问题请求定界）；
+        irqoff/nic 概览保持在原报告（概览 TOC 之后，与 trace 定界联动）。
+        """
+        import argparse
+        rec = nla.SlowRecord("t1", DAY, {"network_residual_us": "2000"},
+                             "x.log", "pod")
+        ctx = nla.TraceContext(rec)
+        ctx.conclusion = {"label": "L", "confidence": "低"}
+        ns = argparse.Namespace(residual_threshold=1000)
+        aux = self._aux_stats()
+        aux["irqoff"] = {"10.1.2.3": {"total": 1, "hardirq_n": 1,
+                                      "softirq_n": 0, "max_us": 2000,
+                                      "total_us": 2000, "buckets": {},
+                                      "by_comm": {}, "series": []}}
+        out = nla.generate_report([ctx], ns, "/tmp", aux_stats=aux)
+        # 原（定界）报告不再体现周期监控（NUMA）
+        self.assertNotIn("NUMA 访存监控", out)
+        # irqoff 概览保持在概览 TOC 之后
+        self.assertGreater(out.index("关中断"),
+                           out.index("<h2>概览</h2>"))
+
+
+class TestIrqoffExplorerHtml(unittest.TestCase):
+    """关中断统计交互探索器：与 NUMA 访存监控同风格（单图 + 节点选择 +
+    按进程（comm）序列勾选 + 组级批量选中/取消 + 悬浮透明提示窗 +
+    拖拽时间段缩放），替代逐节点平铺散点，报告不再过长。
+    """
+
+    @staticmethod
+    def _aux_stats():
+        from datetime import datetime as _dt
+        return {"irqoff": {
+            "10.1.2.3": {
+                "total": 3, "hardirq_n": 2, "softirq_n": 1,
+                "max_us": 4200, "total_us": 7700,
+                "buckets": {"1000": 3, "2000": 1, "4000": 1},
+                "by_comm": {"kubelet": {"n": 2, "max_us": 2000,
+                                        "total_us": 3500},
+                            "svc": {"n": 1, "max_us": 4200,
+                                    "total_us": 4200}},
+                "series": [
+                    [_dt(2026, 9, 11, 10, 0, 1), 2000, "kubelet", 4],
+                    [_dt(2026, 9, 11, 10, 0, 5), 1500, "kubelet", 7],
+                    [_dt(2026, 9, 11, 10, 0, 9), 4200, "svc", 9]]},
+            "10.1.2.4": {
+                "total": 1, "hardirq_n": 1, "softirq_n": 0,
+                "max_us": 1200, "total_us": 1200,
+                "buckets": {"1000": 1},
+                "by_comm": {"kubelet": {"n": 1, "max_us": 1200,
+                                        "total_us": 1200}},
+                "series": [[_dt(2026, 9, 11, 10, 1, 2), 1200,
+                            "kubelet", 2]]}}}
+
+    def test_explorer_html(self):
+        h = nla._irqoff_explorer_html(self._aux_stats())
+        # 卡片标题 + 节点下拉选择
+        self.assertIn("关中断统计", h)
+        self.assertIn('id="irq-node-sel"', h)
+        self.assertIn("<option", h)
+        self.assertIn("10.1.2.3", h)
+        self.assertIn("10.1.2.4", h)
+        # 按进程（comm）序列勾选（组级批量勾选由报告级工厂 JS 渲染）
+        self.assertIn("kubelet", h)
+        self.assertIn("按进程", h)
+        # 嵌入数据（散点模式 + epoch/时长/cpu 附加信息）
+        self.assertIn('id="irq-data"', h)
+        self.assertIn('"scatter"', h)
+        self.assertIn("4200", h)                 # 时长值
+        self.assertIn("cpu=9", h)                # 事件附加信息
+        # 悬浮透明提示窗 + 拖拽缩放（原生 JS，离线自包含）
+        self.assertIn('id="irq-tooltip"', h)
+        self.assertIn("XEXP('irq')", h)          # 卡内 init 调用
+        self.assertIn("重置缩放", h)
+        self.assertIn("拖拽", h)
+        # 交互动能（悬停/拖拽/组级勾选）在报告级工厂 JS 定义一次
+        rep = nla.generate_os_monitor_report(self._aux_stats(), "/tmp/fake")
+        self.assertIn("mousemove", rep)
+        self.assertIn("mousedown", rep)
+        self.assertIn("xexp-gcheck", rep)        # 组级批量勾选
+        self.assertIn("indeterminate", rep)      # 部分勾选半选状态
+        # 汇总统计表（跨节点，不再逐节点平铺）
+        self.assertIn("hardirq", h)
+        self.assertIn("Top20", h)
+        self.assertNotIn("_irqoff_svg", h)       # 旧平铺散点不再使用
+        # 空 aux_stats / 无 series → 空串（可选输入降级）
+        self.assertEqual(nla._irqoff_explorer_html({}), "")
+        self.assertEqual(nla._irqoff_explorer_html(None), "")
+        self.assertEqual(nla._irqoff_explorer_html(
+            {"irqoff": {"10.1.2.3": {"total": 0, "series": []}}}), "")
+
+
+class TestPigzParallelExtract(unittest.TestCase):
+    """多归档并行解压：并发数 = min(归档数, workers)，单归档 pigz -p
+    = workers // 并发数（pigz 解压近似单线程，多归档并行才是主要收益）。
+    """
+
+    def setUp(self):
+        import shutil
+        import tarfile
+        root = Path(tempfile.mkdtemp(prefix="pigzpar_"))
+        self._root = root
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        self._bdir = root / "dscollect_log"
+        self._bdir.mkdir()
+        for name, text in (("bpf-worker1-192.168.219.1.log", "hello1\n"),
+                           ("bpf-worker2-192.168.219.2.log", "hello2\n")):
+            inner = self._bdir / name
+            inner.write_text(text, encoding="utf-8")
+            with tarfile.open(self._bdir / (name + ".tar.gz"), "w:gz") as tf:
+                tf.add(inner, arcname=name)
+            inner.unlink()
+
+    def test_parallel_pigz_threads_split(self):
+        """2 归档 + workers=4 → 各归档 pigz -p 2，且两次 tar 调用。"""
+        import subprocess
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0)
+
+        with mock.patch.object(nla.shutil, "which",
+                               lambda p: "/usr/bin/%s" % p), \
+             mock.patch.object(nla.subprocess, "run", fake_run):
+            nla.LogDiscovery._extract_archives(self._bdir, workers=4)
+        self.assertEqual(len(calls), 2)
+        for cmd in calls:
+            self.assertIn("--use-compress-program=pigz -p 2", " ".join(cmd))
+
+    def test_parallel_extraction_correct(self):
+        """并行解压后两个归档内容均正确落地。"""
+        nla.LogDiscovery._extract_archives(self._bdir, workers=4)
+        self.assertEqual((self._bdir / "bpf-worker1-192.168.219.1.log")
+                         .read_text(encoding="utf-8"), "hello1\n")
+        self.assertEqual((self._bdir / "bpf-worker2-192.168.219.2.log")
+                         .read_text(encoding="utf-8"), "hello2\n")
+
+    def test_single_archive_keeps_full_workers(self):
+        """单归档：pigz -p = workers（与旧行为一致，不因并行分摊）。"""
+        import subprocess
+        (self._bdir / "bpf-worker2-192.168.219.2.log.tar.gz").unlink()
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0)
+
+        with mock.patch.object(nla.shutil, "which",
+                               lambda p: "/usr/bin/%s" % p), \
+             mock.patch.object(nla.subprocess, "run", fake_run):
+            nla.LogDiscovery._extract_archives(self._bdir, workers=6)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("--use-compress-program=pigz -p 6", " ".join(calls[0]))
+
+    def test_failed_archive_does_not_block_others(self):
+        """一个归档 tar 失败回退 tarfile，另一个走 pigz 成功。"""
+        import subprocess
+        real_run = subprocess.run
+
+        def fake_run(cmd, **kw):
+            # worker2 的归档 tar 失败（回退 tarfile），worker1 走真实 pigz/tar
+            if "worker2" in " ".join(cmd):
+                return subprocess.CompletedProcess(cmd, 1)
+            return real_run(cmd, **kw)
+
+        with mock.patch.object(nla.shutil, "which",
+                               lambda p: "/usr/bin/%s" % p), \
+             mock.patch.object(nla.subprocess, "run", fake_run):
+            nla.LogDiscovery._extract_archives(self._bdir, workers=4)
+        self.assertEqual((self._bdir / "bpf-worker1-192.168.219.1.log")
+                         .read_text(encoding="utf-8"), "hello1\n")
+        self.assertEqual((self._bdir / "bpf-worker2-192.168.219.2.log")
+                         .read_text(encoding="utf-8"), "hello2\n")
+
+
+class TestHostIpInReport(unittest.TestCase):
+    """worker/client 宿主机 IP 入报告 + JSON（节点名 → IP 反查）。"""
+
+    def test_host_ip_of_node(self):
+        import shutil
+        root = Path(tempfile.mkdtemp(prefix="hostip_"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        bdir = root / "dscollect_log"
+        bdir.mkdir()
+        (bdir / "bpf-worker1-192.168.219.1.log").write_text("", encoding="utf-8")
+        (bdir / "bpf-master-192.168.219.2.log").write_text("", encoding="utf-8")
+        disc = nla.LogDiscovery(root)
+        self.assertEqual(disc.host_ip_of_node("worker1"), "192.168.219.1")
+        self.assertEqual(disc.host_ip_of_node("master"), "192.168.219.2")
+        # 节点名本身是 IP（irqoff/nic 兜底键）时直接返回
+        self.assertEqual(disc.host_ip_of_node("10.1.2.3"), "10.1.2.3")
+        self.assertIsNone(disc.host_ip_of_node("unknown"))
+        self.assertIsNone(disc.host_ip_of_node(None))
+
+    def test_e2e_report_and_json(self):
+        import argparse
+        _, contexts, _ = nla.analyze(SAMPLE_LOG_ROOT)
+        ctx = next(c for c in contexts if c.trace_id.endswith("117c5c4a91c7"))
+        self.assertEqual(ctx.client_node, "master")
+        self.assertEqual(ctx.server_node, "worker13")
+        self.assertEqual(ctx.client_host_ip, "141.62.32.3")
+        self.assertEqual(ctx.server_host_ip, "141.62.32.63")
+        ns = argparse.Namespace(residual_threshold=1000)
+        html_out = nla.generate_report(contexts, ns, SAMPLE_LOG_ROOT)
+        self.assertIn("client 宿主机 IP", html_out)
+        self.assertIn("141.62.32.3", html_out)
+        self.assertIn("server 宿主机 IP", html_out)
+        self.assertIn("141.62.32.63", html_out)
+        data = json.loads(nla.generate_json(contexts, ns, SAMPLE_LOG_ROOT))
+        tr = next(t for t in data["traces"] if t["trace_id"].endswith("117c5c4a91c7"))
+        self.assertEqual(tr["client"]["host_ip"], "141.62.32.3")
+        self.assertEqual(tr["server"]["host_ip"], "141.62.32.63")
+
+    def test_overview_node_table(self):
+        """概览节点信息表：节点 / 宿主机 IP / bpf / 告警 / irqoff / nic / NUMA。"""
+        import argparse
+        aux = {"nodes": {
+            "worker12": {"host_ip": "192.168.0.59", "bpf": "bpf-worker12-192.168.0.59.log",
+                         "warn": "worker12_192.168.0.59", "irqoff": "", "nic": "",
+                         "numa": "numafast / memory / perf"},
+            "10.1.2.3": {"host_ip": "10.1.2.3", "bpf": "", "warn": "",
+                         "irqoff": "irqoff_latency_10.1.2.3.log", "nic": "", "numa": ""}}}
+        rec = nla.SlowRecord("t1", DAY, {"network_residual_us": "2000"}, "x.log", "pod")
+        ctx = nla.TraceContext(rec)
+        ctx.conclusion = {"label": "L", "confidence": "低"}
+        ns = argparse.Namespace(residual_threshold=1000)
+        out = nla.generate_report([ctx], ns, "/tmp", aux_stats=aux)
+        self.assertIn("节点信息", out)
+        self.assertIn("worker12", out)
+        self.assertIn("192.168.0.59", out)
+        self.assertIn("bpf-worker12-192.168.0.59.log", out)
+        self.assertIn("irqoff_latency_10.1.2.3.log", out)
+        self.assertIn("numafast / memory / perf", out)
+        # 无节点数据时不渲染空表
+        out2 = nla.generate_report([ctx], ns, "/tmp", aux_stats={})
+        self.assertNotIn("节点信息", out2)
+
+
+class TestOsMonitorReport(unittest.TestCase):
+    """OS 资源类周期监控独立报告（后续新增周期监控指标统一在此扩展）：
+
+    1) generate_os_monitor_report：节点表 + irqoff/nic/NUMA 概览集中渲染，
+       自包含单文件 HTML；无任何周期监控数据 → 空串；
+    2) analyze(os_monitor_only=True)：仅有周期监控日志（无 client 日志）时
+       照常发现并全周期统计，跳过慢请求分析；
+    3) CLI --os-monitor-only / --os-monitor-report：独立分析周期监控输出报告；
+       正常分析模式下采集到周期监控数据也默认自动生成。
+    """
+
+    NUMA_DIR = "141.61.91.189-141.61.91.189-data_20260911-100322"
+
+    def _write_numa_logs(self, root):
+        d = Path(root) / "dscollect_log" / self.NUMA_DIR
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "numafast_20260911-100325.log").write_text(
+            "NUMAFAST Report-1(x)                     Time:20260910-202917\n"
+            "1. System's numa score : 0.84\n", encoding="utf-8")
+        (d / "memory_20260911-100325.log").write_text(
+            "Memory Summary Report-1                                 "
+            "Time:2026/09/10 20:29:17\n"
+            "L1D         1.23%\nddrc_write        1258.20MB/s\n",
+            encoding="utf-8")
+        (d / "perf_20260911-100325.log").write_text(
+            "==== perf stat round 1/3600 开始时间 2026-09-11 10:03:25 ====\n"
+            "         6,314,507      dTLB-load-misses\n", encoding="utf-8")
+
+    @staticmethod
+    def _full_aux_stats():
+        return {"numa": {
+            "141.61.91.189": {
+                "numafast": [{"ts": DAY, "score": 0.84, "nids": {}}],
+                "memory": [{"ts": DAY, "l1d_miss_pct": 1.23,
+                            "ddrc_read_mb_s": 214.49, "ddrc_write_mb_s": 1258.2}],
+                "perf": [{"ts": DAY, "dtlb_load_misses": 6314507,
+                          "itlb_load_misses": 52128}]}},
+                "irqoff": {"10.1.2.3": {"total": 1, "hardirq_n": 1,
+                                        "softirq_n": 0, "max_us": 2000,
+                                        "total_us": 2000,
+                                        "buckets": {"1000": 1},
+                                        "by_comm": {"kubelet":
+                                                    {"n": 1, "max_us": 2000,
+                                                     "total_us": 2000}},
+                                        "series": [[DAY, 2000,
+                                                    "kubelet", 4]]}},
+                "nic": {},
+                "nodes": {"141.61.91.189": {"host_ip": "141.61.91.189",
+                                            "bpf": "", "warn": "", "irqoff": "",
+                                            "nic": "",
+                                            "numa": "memory / numafast / perf"}}}
+
+    def test_generate_os_monitor_report(self):
+        h = nla.generate_os_monitor_report(self._full_aux_stats(), "/tmp/fake")
+        self.assertIn("OS 资源周期监控报告", h)
+        self.assertIn("<html", h)          # 自包含单文件 HTML
+        self.assertIn("NUMA 访存监控", h)
+        self.assertIn("关中断统计", h)
+        self.assertIn('id="irq-node-sel"', h)   # 关中断交互探索器
+        self.assertIn("节点信息", h)
+        # 无任何周期监控数据 → 空串（不生成空报告）
+        self.assertEqual(nla.generate_os_monitor_report({}, "/tmp"), "")
+        self.assertEqual(nla.generate_os_monitor_report(None, "/tmp"), "")
+
+    def test_analyze_os_monitor_only(self):
+        import shutil
+        root = Path(tempfile.mkdtemp(prefix="osmon_"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        self._write_numa_logs(root)   # 只有周期监控日志，无 collected client 日志
+        disc, contexts, trace_lines = nla.analyze(str(root), os_monitor_only=True)
+        self.assertEqual(contexts, [])
+        self.assertEqual(trace_lines, {})
+        self.assertIn("141.61.91.189", disc.aux_stats["numa"])
+        self.assertEqual(disc.aux_stats["numa"]["141.61.91.189"]["numafast"][0]
+                         ["score"], 0.84)
+        # 节点信息表数据也已构建
+        self.assertIn("141.61.91.189", disc.aux_stats["nodes"])
+        # 默认模式（非独立）无 client 日志 → 仍报错
+        with self.assertRaises(FileNotFoundError):
+            nla.analyze(str(root))
+
+    def test_main_os_monitor_only(self):
+        import shutil
+        root = Path(tempfile.mkdtemp(prefix="osmoncli_"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        self._write_numa_logs(root)
+        out_html = root / "r.html"
+        rc = nla.main([str(root), "--os-monitor-only", "-o", str(out_html)])
+        self.assertEqual(rc, 0)
+        os_report = root / "os_monitor_report.html"   # 默认 -o 同目录
+        self.assertTrue(os_report.exists())
+        content = os_report.read_text(encoding="utf-8")
+        self.assertIn("OS 资源周期监控报告", content)
+        self.assertIn("NUMA 访存监控", content)
+        # 独立模式：无问题请求分析，主（定界）报告不生成
+        self.assertFalse(out_html.exists())
+
+    def test_main_generates_os_report_when_data(self):
+        """正常分析模式：采集到周期监控数据即默认生成 OS 监控报告。"""
+        import shutil
+        import types
+        root = Path(tempfile.mkdtemp(prefix="osmonauto_"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        self._write_numa_logs(root)
+        fake_disc = types.SimpleNamespace(aux_stats=self._full_aux_stats())
+        with mock.patch.object(nla, "analyze",
+                               return_value=(fake_disc, [], {})) as _:
+            rc = nla.main([str(root), "-o", str(root / "r.html")])
+        # 无问题请求 → 定界分析退出码 1，但 OS 监控报告已默认生成
+        self.assertEqual(rc, 1)
+        self.assertFalse((root / "r.html").exists())
+        os_report = root / "os_monitor_report.html"
+        self.assertTrue(os_report.exists())
+        self.assertIn("NUMA 访存监控",
+                      os_report.read_text(encoding="utf-8"))
+
+    def test_main_os_monitor_report_custom_path(self):
+        import shutil
+        root = Path(tempfile.mkdtemp(prefix="osmonpath_"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        self._write_numa_logs(root)
+        custom = root / "sub" / "my_os.html"
+        rc = nla.main([str(root), "--os-monitor-only",
+                       "--os-monitor-report", str(custom),
+                       "-o", str(root / "r.html")])
+        self.assertEqual(rc, 0)
+        self.assertTrue(custom.exists())
+        self.assertFalse((root / "os_monitor_report.html").exists())
+
+
+class TestWindowQuantAttribution(unittest.TestCase):
+    """窗口级定量归因：irqoff/nic/numa 从"展示+置信度"升级为参与推理。"""
+
+    CIP, CPORT = "192.168.32.61", 39776
+    SIP, SPORT = "192.168.52.197", 31501
+    T0 = datetime(2026, 8, 23, 20, 45, 39)
+
+    def _ctx(self):
+        slow = nla.SlowRecord(
+            "tr", self.T0,
+            {"network_residual_us": "2000", "e2e_us": "3000", "framework_us": "2500",
+             "method": "m", "remote_processing_us": "0", "server_req_queue_us": "0",
+             "server_exec_us": "0"},
+            "/tmp/x.log", "pod")
+        ctx = nla.TraceContext(slow)
+        ctx.idx = 0
+        ctx.client_node, ctx.server_node = "m1", "w1"
+        ctx.client_ip, ctx.server_ip = self.CIP, self.SIP
+        ctx.conn = (self.CIP, self.CPORT, self.SIP, self.SPORT)
+        # server kernel_to_user 段异常：8000us（NetifRx → ServerRecv）
+        ctx.milestones = {
+            "ServerNetifRx": self.T0.replace(microsecond=650000),
+            "ServerTcpRecvFirst": self.T0.replace(microsecond=651000),
+            "ServerRecv": self.T0.replace(microsecond=658000)}
+        ctx.kernel_segments = [{
+            "key": "server_kernel_to_user", "start": "ServerNetifRx",
+            "end": "ServerRecv", "dur_us": 8000, "threshold_us": 1000,
+            "category": "server_kernel_to_user_delay", "desc": "d",
+            "abnormal": True, "evidence": False}]
+        ctx.anchors["ServerRecv"] = {"ts": self.T0.replace(microsecond=658000),
+                                     "tid": "123", "cpu": "4", "bid": "b"}
+        return ctx
+
+    @staticmethod
+    def _irqoff_ev(cpu, lat_us, ts):
+        return {"ts": ts, "irq": "hardirq", "cpu": cpu, "comm": "kubelet",
+                "pid": 99, "latency_us": lat_us,
+                "raw": ["head %dus" % lat_us]}
+
+    def test_irqoff_quant_hit_rewrites_category(self):
+        """cpu 匹配的最长关中断 ≥ max(2ms, 50% 段耗时) → category 改写
+        interrupt_off_delay，结论带定量文本。"""
+        ctx = self._ctx()
+        t = self.T0.replace(microsecond=653000)
+        ctx.irqoff_events["server"] = [
+            self._irqoff_ev(4, 5000, t),        # 命中：5000 ≥ max(2000, 4000)
+            self._irqoff_ev(9, 6000, t)]        # cpu 不匹配不计
+        nla._window_quant_attribution(ctx, {})
+        self.assertTrue(ctx.irqoff_quant)
+        self.assertEqual(ctx.irqoff_quant["max_us"], 5000)
+        nla.ConclusionEngine.conclude(ctx)
+        self.assertEqual(ctx.conclusion["category"], "interrupt_off_delay")
+        self.assertEqual(ctx.conclusion["confidence"], "高")
+        self.assertTrue(any("占" in s and "62.5%" in s
+                            for s in ctx.conclusion["evidence"]))
+
+    def test_irqoff_quant_smt_sibling_cpu(self):
+        """SMT 姊妹核（cpu^1）上的关中断同样计入。"""
+        ctx = self._ctx()
+        ctx.irqoff_events["server"] = [
+            self._irqoff_ev(5, 4200, self.T0.replace(microsecond=653000))]
+        nla._window_quant_attribution(ctx, {})
+        self.assertTrue(ctx.irqoff_quant)
+        nla.ConclusionEngine.conclude(ctx)
+        self.assertEqual(ctx.conclusion["category"], "interrupt_off_delay")
+
+    def test_irqoff_quant_no_hit_below_thresholds(self):
+        """低于 2ms 或不足段耗时 50% → 不改写。"""
+        ctx = self._ctx()
+        ctx.irqoff_events["server"] = [
+            self._irqoff_ev(4, 1500, self.T0.replace(microsecond=653000)),
+            self._irqoff_ev(4, 3000, self.T0.replace(microsecond=653000))]
+        nla._window_quant_attribution(ctx, {})
+        self.assertIsNone(ctx.irqoff_quant)
+        nla.ConclusionEngine.conclude(ctx)
+        self.assertEqual(ctx.conclusion["category"], "server_kernel_to_user_delay")
+
+    def test_irqoff_quant_window_filter(self):
+        """慢段窗口外的关中断记录不参与归因（trace 窗口 ≠ 段窗口）。"""
+        ctx = self._ctx()
+        ctx.irqoff_events["server"] = [
+            self._irqoff_ev(4, 6000, self.T0.replace(microsecond=700000))]
+        nla._window_quant_attribution(ctx, {})
+        self.assertIsNone(ctx.irqoff_quant)
+
+    def test_numa_window_ddr_saturation(self):
+        """问题窗口 DDR 带宽 vs 全周期基线（均值+2σ）超限 → 定量证据。"""
+        ctx = self._ctx()
+        from datetime import timedelta
+        base = [{"ts": self.T0.replace(microsecond=650000) - timedelta(seconds=60 * i),
+                 "ddrc_read_mb_s": 900.0, "ddrc_write_mb_s": 100.0}
+                for i in range(1, 11)]
+        # 全周期含基线 10 点 + 窗口内 2 点飙高（各 10000MB/s）
+        win_hi = [{"ts": self.T0.replace(microsecond=652000),
+                   "ddrc_read_mb_s": 9500.0, "ddrc_write_mb_s": 500.0},
+                  {"ts": self.T0.replace(microsecond=656000),
+                   "ddrc_read_mb_s": 10500.0, "ddrc_write_mb_s": 500.0}]
+        numa = {"w1": {"memory": win_hi + base}}
+        nla._window_quant_attribution(ctx, numa)
+        self.assertTrue(ctx.numa_quant)
+        self.assertTrue(any("DDR" in s for s in ctx.quant_evidence))
+        nla.ConclusionEngine.conclude(ctx)
+        self.assertTrue(any("DDR" in s and "带宽" in s
+                            for s in ctx.conclusion["evidence"]))
+
+    def test_numa_window_no_saturation(self):
+        """窗口带宽在基线范围内 → 无 numa 定量证据。"""
+        ctx = self._ctx()
+        from datetime import timedelta
+        recs = ([{"ts": self.T0.replace(microsecond=652000),
+                  "ddrc_read_mb_s": 950.0, "ddrc_write_mb_s": 100.0}] +
+                [{"ts": self.T0.replace(microsecond=650000) - timedelta(seconds=60 * i),
+                  "ddrc_read_mb_s": 900.0 + i * 5.0, "ddrc_write_mb_s": 100.0}
+                 for i in range(1, 11)])
+        nla._window_quant_attribution(ctx, {"w1": {"memory": recs}})
+        self.assertIsNone(ctx.numa_quant)
+
+    def test_nic_quant_text(self):
+        """窗口 ifutil 峰值 ≥80% 且有重传 → 定量文本进结论证据。"""
+        ctx = self._ctx()
+        ctx.kernel_segments = [{
+            "key": "wire_c2s", "start": "ClientTcpSendIn", "end": "ServerTcpRecvFirst",
+            "dur_us": 900, "threshold_us": 200,
+            "category": "network_c2s_transmission", "desc": "d",
+            "abnormal": True, "evidence": False}]
+        ctx.milestones = {
+            "ClientTcpSendIn": self.T0.replace(microsecond=640000),
+            "ServerTcpRecvFirst": self.T0.replace(microsecond=650000)}
+        ctx.nic_samples["client"] = [
+            {"ts": self.T0.replace(microsecond=645000), "dev": "eth0",
+             "ifutil": 85.0, "rxkB": 100.0, "txkB": 200.0}]
+        ctx.nic_evidence.append("窗口内检测到 2 次 TCP 重传（client 侧 2）")
+        nla._window_quant_attribution(ctx, {})
+        self.assertTrue(ctx.nic_quant)
+        nla.ConclusionEngine.conclude(ctx)
+        self.assertEqual(ctx.conclusion["category"], "network_c2s_transmission")
+        self.assertTrue(any("峰值" in s and "85.0%" in s
+                            for s in ctx.conclusion["evidence"]))
+
+
+class TestPreemptorWakeupTrace(unittest.TestCase):
+    """抢占任务唤醒者回溯：回答"该任务为何在该 cpu 运行"。"""
+
+    T0 = datetime(2026, 8, 23, 20, 45, 39)
+
+    def _ctx(self, events):
+        slow = nla.SlowRecord(
+            "tr", self.T0, {"network_residual_us": "2000"}, "/tmp/x.log", "pod")
+        ctx = nla.TraceContext(slow)
+        ctx.idx = 0
+        ctx.server_node = "w1"
+        evs = sorted(events, key=lambda e: e["ts"])
+        ctx.bpf_window_events["server"] = evs
+        ctx.softirq_localization["server"] = {
+            "comm": "kworker/6:1", "kstack": "ks", "latency_us": 2500,
+            "vec": 3, "vec_txt": "3(NET_RX)", "cpu": 6, "anchor_cpu": 7,
+            "smt": True, "ts": self.T0.replace(microsecond=655000),
+            "recv_ts": self.T0.replace(microsecond=655000),
+            "n_candidates": 1, "events": []}
+        return ctx
+
+    def _ev(self, kind, us, **kw):
+        ev = {"ts": self.T0.replace(microsecond=us), "kind": kind, "cpu": kw.pop("cpu", 6),
+              "raw": "%s@%d" % (kind, us)}
+        ev.update(kw)
+        return ev
+
+    def test_wakeup_trace_found(self):
+        """sched_wakeup（target_cpu 匹配）→ sched_switch 切入链可回溯。"""
+        ctx = self._ctx([
+            self._ev("netif_receive", 649900),
+            self._ev("sched_wakeup", 651000, comm="kworker/6:1", pid=777,
+                     target_cpu=6),
+            self._ev("sched_switch", 652000, prev_comm="swapper/6",
+                     prev_pid=0, next_comm="kworker/6:1", next_pid=777),
+            self._ev("softirq_raise_delay", 655000, vec=3, latency_us=2500,
+                     comm="kworker/6:1", kstack="ks")])
+        nla._preemptor_wakeup_trace(ctx)
+        wt = ctx.softirq_localization["server"]["wakeup_trace"]
+        self.assertIsNotNone(wt)
+        self.assertEqual(wt["wakeup_ts"], self.T0.replace(microsecond=651000))
+        self.assertEqual(wt["switch_in_ts"], self.T0.replace(microsecond=652000))
+        self.assertEqual(wt["delta_to_recv_us"], 3000)  # 652000 → 655000
+        self.assertEqual(wt["waker_cpu"], 6)
+
+    def test_wakeup_trace_trigger_source(self):
+        """唤醒事件前同 cpu 相邻事件作为触发源提示。"""
+        ctx = self._ctx([
+            self._ev("netif_receive", 650900),
+            self._ev("sched_wakeup", 651000, comm="kworker/6:1", pid=777,
+                     target_cpu=6),
+            self._ev("sched_switch", 652000, prev_comm="swapper/6",
+                     prev_pid=0, next_comm="kworker/6:1", next_pid=777),
+            self._ev("softirq_raise_delay", 655000, vec=3, latency_us=2500,
+                     comm="kworker/6:1", kstack="ks")])
+        nla._preemptor_wakeup_trace(ctx)
+        wt = ctx.softirq_localization["server"]["wakeup_trace"]
+        self.assertEqual(wt["trigger_kind"], "netif_receive")
+
+    def test_wakeup_trace_missing_degrades(self):
+        """无 wakeup/switch 事件 → wakeup_trace 为 None（降级，不报错）。"""
+        ctx = self._ctx([
+            self._ev("softirq_raise_delay", 655000, vec=3, latency_us=2500,
+                     comm="kworker/6:1", kstack="ks")])
+        nla._preemptor_wakeup_trace(ctx)
+        self.assertIsNone(
+            ctx.softirq_localization["server"].get("wakeup_trace"))
+
+    def test_wakeup_trace_in_conclusion(self):
+        """回溯结果进 conclusion.preemptor_origin + 建议文本替换。"""
+        ctx = self._ctx([
+            self._ev("sched_wakeup", 651000, comm="kworker/6:1", pid=777,
+                     target_cpu=6),
+            self._ev("sched_switch", 652000, prev_comm="swapper/6",
+                     prev_pid=0, next_comm="kworker/6:1", next_pid=777),
+            self._ev("softirq_raise_delay", 655000, vec=3, latency_us=2500,
+                     comm="kworker/6:1", kstack="ks")])
+        nla._preemptor_wakeup_trace(ctx)
+        nla.ConclusionEngine.conclude(ctx)
+        po = ctx.conclusion.get("preemptor_origin")
+        self.assertIsNotNone(po)
+        self.assertIn("3.000", po)         # 距收包点时间差（fmt_us 格式）
+        self.assertTrue(any("唤醒链" in s for s in ctx.conclusion["suggestions"]))
 
 
 if __name__ == "__main__":
