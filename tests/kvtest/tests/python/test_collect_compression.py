@@ -1,6 +1,7 @@
 import argparse
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -37,7 +38,8 @@ class TestCollectCompression(unittest.TestCase):
                     source.mkdir()
                     (source / 'access.log').write_bytes(b'noise\nURMA_PERF selected\n')
                     cfg = dict(sources=[['logs', str(source), ['*.log']]], patterns=[],
-                               keywords=['URMA_PERF'], uncompressed_only=False, compress=compress)
+                               keywords=['URMA_PERF'], uncompressed_only=False, compress=compress,
+                               keyword_engine='grep' if shutil.which('grep') else 'rg')
                     command = [sys.executable, '-c', log_collect.REMOTE_ARCHIVE, json.dumps(cfg)]
                     options = dict(compress=compress, extract=extract)
                     self.assertEqual(log_collect.receive_archive(command, root / 'out', archive_options=options), 1)

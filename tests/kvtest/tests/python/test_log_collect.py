@@ -1,3 +1,5 @@
+import argparse
+import contextlib
 import importlib
 import importlib.util
 import io
@@ -5,6 +7,7 @@ import json
 import gzip
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -18,12 +21,15 @@ class TestLogCollect(unittest.TestCase):
     def setUp(self):
         self.assertIsNotNone(importlib.util.find_spec('log_collect'), 'Shared collection filters are missing')
         self.collect = importlib.import_module('log_collect')
+        self.keyword_engine = 'grep' if shutil.which('grep') else 'rg' if shutil.which('rg') else None
 
     def archive(self, root, **options):
-        config = dict(sources=[['logs', str(root), ['*']]], patterns=[], keywords=[], uncompressed_only=False)
+        env = options.pop('_env', None)
+        config = dict(sources=[['logs', str(root), ['*']]], patterns=[], keywords=[], uncompressed_only=False,
+                      keyword_engine=self.keyword_engine or 'grep')
         config.update(options)
         result = subprocess.run([sys.executable, '-c', self.collect.REMOTE_ARCHIVE,
-                                 json.dumps(config)], capture_output=True, check=True)
+                                 json.dumps(config)], capture_output=True, check=True, env=env)
         with tarfile.open(fileobj=io.BytesIO(result.stdout), mode='r:gz') as archive:
             return {m.name: archive.extractfile(m).read() for m in archive if m.isfile()}
 
@@ -51,6 +57,39 @@ class TestLogCollect(unittest.TestCase):
             self.assertEqual(self.archive(root, keywords=['URMA_PERF']),
                              {'logs/a.log.gz.matched': b'URMA_PERF yes\n'})
             self.assertEqual(self.archive(root, keywords=['absent']), {})
+
+    def test_keyword_engine_cli_contract(self):
+        parser = argparse.ArgumentParser()
+        self.collect.add_collect_filters(parser)
+        defaults = parser.parse_args([])
+        self.assertEqual(defaults.keyword_engine, 'grep')
+        self.assertEqual(self.collect.filters_from_args(defaults)['keyword_engine'], 'grep')
+        self.assertFalse(self.collect.has_filters(self.collect.filters_from_args(defaults)))
+        self.assertEqual(parser.parse_args(['--keyword-engine', 'rg']).keyword_engine, 'rg')
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parser.parse_args(['--keyword-engine', 'python'])
+        with self.assertRaisesRegex(ValueError, 'Unsupported keyword engine'):
+            self.collect.archive_command([], dict(patterns=[], keywords=['match'],
+                                                  uncompressed_only=False, keyword_engine='python'))
+
+    @unittest.skipUnless(shutil.which('rg'), 'ripgrep is not installed')
+    def test_explicit_rg_engine_keeps_literal_or_semantics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'a.log').write_bytes(b'plain\na.* literal\nsecond hit\n')
+            self.assertEqual(
+                self.archive(root, keywords=['a.*', 'second'], keyword_engine='rg'),
+                {'logs/a.log.matched': b'a.* literal\nsecond hit\n'})
+
+    def test_missing_keyword_engine_fails_instead_of_falling_back(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'a.log').write_bytes(b'match\n')
+            env = os.environ.copy()
+            env['PATH'] = ''
+            with self.assertRaises(subprocess.CalledProcessError) as error:
+                self.archive(root, keywords=['match'], keyword_engine='rg', _env=env)
+            self.assertIn(b'Keyword engine not found: rg', error.exception.stderr)
 
     def test_selection_is_exact_and_rejects_unknown(self):
         nodes = [{'name': 'pod-1'}, {'name': 'pod-10'}]
