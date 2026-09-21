@@ -418,6 +418,10 @@ Status TopologyEngine::Builder::ReadRestartFact()
     auto rc = reader.Read(TopologyEngine::ENGINE_READ_TIMEOUT_MS, snapshot);
     if (rc.GetCode() == K_NOT_FOUND) {
         config_->isRestart = false;
+        LOG(INFO) << "CLUSTER_LIFECYCLE cluster=" << config_->clusterName
+                  << " role=worker action=read_restart_fact"
+                  << " local_address=" << config_->localAddress
+                  << " restart=false reason=topology_missing";
         return Status::OK();
     }
     if (config_->backendKind == Config::BackendKind::COORDINATOR
@@ -620,11 +624,22 @@ Status TopologyEngine::RouteCoordinatorWatchEvent(const std::string &coordinator
         member->InvalidateWatches();
         return Status::OK();
     }
-    LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
-        << "CLUSTER_WATCH_EVENT cluster=" << options_.clusterName
-        << " role=worker ingress=coordinator owner_role=member"
-        << " watch_id=" << watchId << " coordinator_id_prefix=" << CoordinatorIdLogPrefix(coordinatorId)
-        << " event=" << event.ToString();
+    const auto kind = keys_->ClassifyPhysicalKey(event.key, options_.localAddress);
+    if (kind == TopologyPhysicalKeyKind::LOCAL_NOTIFY
+        || kind == TopologyPhysicalKeyKind::LOCAL_PROBE) {
+        LOG(INFO) << "CLUSTER_WATCH_EVENT cluster=" << options_.clusterName
+                  << " role=worker ingress=coordinator owner_role=member"
+                  << " watch_id=" << watchId
+                  << " coordinator_id_prefix=" << CoordinatorIdLogPrefix(coordinatorId)
+                  << " event=" << event.ToString();
+    } else {
+        LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
+            << "CLUSTER_WATCH_EVENT cluster=" << options_.clusterName
+            << " role=worker ingress=coordinator owner_role=member"
+            << " watch_id=" << watchId
+            << " coordinator_id_prefix=" << CoordinatorIdLogPrefix(coordinatorId)
+            << " event=" << event.ToString();
+    }
     member->HandleWatchEvent(coordinatorId, watchId, std::move(event));
     return Status::OK();
 }

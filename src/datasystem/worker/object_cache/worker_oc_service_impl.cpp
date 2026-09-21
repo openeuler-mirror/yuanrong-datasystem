@@ -1161,6 +1161,12 @@ Status WorkerOCServiceImpl::DrainTopologyScaleInData(const cluster::TopologyPhas
     RETURN_IF_NOT_OK(SelectTopologyScaleInObjects(copies, primaries));
     RETURN_IF_NOT_OK(PrepareTopologyScaleInData(copies, primaries, migrateIds, waitIds, l2Ids, businessOperationId,
                                                 deadline, cancellation));
+
+    LOG(INFO) << "CLUSTER_SCALE_IN prepare data, source=" << localAddress_.ToString()
+              << " task_id=" << action.taskId << " operation_id=" << businessOperationId
+              << " copy_count=" << copies.size() << " primary_count=" << primaries.size()
+              << " migrate_count=" << migrateIds.size() << " wait_clear_count=" << waitIds.size()
+              << " l2_count=" << l2Ids.size();
     RETURN_IF_NOT_OK(MigrateData(migrateIds, action.taskId, deadline, cancellation));
     std::vector<std::string> failures;
     GroupAndRemoveMeta(migrateIds, master::RemoveMetaReqPb::NORMAL, failures, migrateIds, waitIds, l2Ids,
@@ -3037,15 +3043,20 @@ std::vector<std::string> WorkerOCServiceImpl::StopAndGetAllUnfinishedObjects()
 
 Status WorkerOCServiceImpl::WhetherNonRestart()
 {
-    LOG(INFO) << "Determining startup path for restart: reconciliation and local slot recovery.";
+    LOG(INFO) << "WORKER_STARTUP action=select_reconciliation"
+              << " local_address=" << localAddress_.ToString()
+              << " is_restart=" << isRestart_
+              << " control_backend_available=" << controlBackendAvailableAtStartup_
+              << " enable_reconciliation=" << FLAGS_enable_reconciliation;
     healthPublicationEnabled_.store(true, std::memory_order_release);
     const bool isRestart = isRestart_;
     if (!isRestart || !controlBackendAvailableAtStartup_ || !FLAGS_enable_reconciliation) {
-        LOG(INFO) << "Startup reconciliation is not required. Keep health gated by committed topology.";
+        LOG(INFO) << "WORKER_STARTUP action=skip_reconciliation"
+                  << " reason=startup_conditions_do_not_require_reconciliation";
         reconciliationReady_.store(true, std::memory_order_release);
         RETURN_IF_NOT_OK(RefreshStartupHealth());
     } else {
-        LOG(INFO) << "Local node restarted. Need reconciliation.";
+        LOG(INFO) << "WORKER_STARTUP action=start_reconciliation";
         RETURN_IF_NOT_OK(ReconcileMembershipChange());
     }
     LOG_IF_ERROR(slotRecoveryManager_->ScheduleLocalPendingTasksFromStore(), "Recover slot failed");

@@ -1225,10 +1225,21 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, con
     }
 
     if (serviceDiscovery_ != nullptr) {
-        return InitWithServiceDiscovery(enableHeartbeat);
+        rc = InitWithServiceDiscovery(enableHeartbeat);
+    } else {
+        rc = InitWorkerClientAtCurrentAddress(enableHeartbeat, true);
     }
-
-    return InitWorkerClientAtCurrentAddress(enableHeartbeat, true);
+    LOG(INFO) << FormatString(
+        "Init client with: request timeout %d ms, connection timeout %d ms, "
+        "fast transport memory size %llu bytes, local cache %d, cross node connection %d, "
+        "data placement policy %d, parallelism num %d, parallel memcpy threshold %llu bytes, "
+        "parallel set memcpy threshold %llu bytes, remote h2d %d, direct pipeline h2d %d, "
+        "h2d pipeline thread num %d.",
+        requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_, enableLocalCache_,
+        enableCrossNodeConnection_, static_cast<int>(dataPlacementPolicy_), parallismNum_,
+        memcpyParallelThreshold_, setMemcpyParallelThreshold_, enableRemoteH2D_,
+        enableClientDirectPipelineH2D_, clientDirectPipelineH2DThreadNum_);
+    return rc;
 }
 
 Status ObjectClientImpl::InitWorkerClientAtCurrentAddress(bool enableHeartbeat, bool isSameNode,

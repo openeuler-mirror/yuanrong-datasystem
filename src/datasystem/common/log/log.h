@@ -24,6 +24,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <string>
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log_sampler.h"
@@ -40,6 +41,21 @@ DS_DECLARE_bool(enable_perf_trace_log);
 #define PIPLN_LOG_PREFIX "[PIPLN RH2D] "
 
 namespace datasystem {
+
+template <typename Pb>
+inline bool ParseProtoToLogString(const std::string &value, std::string &text)
+{
+    Pb pb;
+    if (!pb.ParseFromString(value)) {
+        text.clear();
+        return false;
+    }
+    text = pb.ShortDebugString();
+    if (text.empty()) {
+        text = "{}";
+    }
+    return true;
+}
 
 // Default when FLAGS_log_monitor_interval_ms <= 0 (must match gflag default in res_metric_collector.cpp).
 static constexpr int DEFAULT_LOG_MONITOR_INTERVAL_MS = 10000;

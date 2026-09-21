@@ -170,8 +170,10 @@ private:
      * @param[in] step Stable diagnostic step name.
      * @param[in] status Step status.
      * @param[in,out] firstError First observed error.
+     * @param[in] context Callback identity for diagnostics.
      */
-    void RecordFailureStep(const std::string &step, const Status &status, Status &firstError) const;
+    void RecordFailureStep(const std::string &step, const Status &status, Status &firstError,
+                           const cluster::TopologyCallbackContext &context) const;
 
     /**
      * @brief Run one complete bounded Failure attempt.

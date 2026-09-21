@@ -837,9 +837,11 @@ Status WorkerOcServiceGetImpl::SendBatchGetRemoteRequest(const std::string &addr
     const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
     SLOW_LOG_IF_OR_VLOG(
         INFO, rpcSlowerThanUs > 0 && elapsedUs >= rpcSlowerThanUs, 1,
-        AppendSrcDstForLog(FormatString("[Get] Remote done, count: %d, path: %s, cost: %.3fms", reqPb.requests_size(),
-                                        useFastTransport ? (IsUrmaEnabled() ? "UB" : "RDMA") : "TCP", elapsedMs),
-                           localAddress_.ToString(), address));
+        AppendSrcDstForLog(
+            FormatString("[Get] Remote done, count: %d, path: %s, cost: %.3fms, requester=%s, provider=%s",
+                         reqPb.requests_size(), useFastTransport ? (IsUrmaEnabled() ? "UB" : "RDMA") : "TCP",
+                         elapsedMs, localAddress_.ToString(), address),
+            localAddress_.ToString(), address));
     return rc;
 }
 

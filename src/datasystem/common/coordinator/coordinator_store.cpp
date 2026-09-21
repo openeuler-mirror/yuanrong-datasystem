@@ -17,13 +17,64 @@
 #include "datasystem/common/coordinator/coordinator_store.h"
 
 #include <exception>
+#include <string_view>
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/protos/cluster_topology.pb.h"
+#include "datasystem/protos/coordinator.pb.h"
 
 namespace datasystem {
+namespace {
+
+void LogClusterKvChange(const WatchEvent &event)
+{
+    const auto &key = event.entry.key;
+    const auto table = std::string_view(key).substr(0, key.rfind('/'));
+    auto isTable = [table](std::string_view suffix) {
+        return table.size() >= suffix.size()
+               && table.substr(table.size() - suffix.size()) == suffix;
+    };
+
+    const bool isMembership = isTable("/cluster");
+    const bool isMigrateTask = isTable("/tasks/migrate");
+    const bool isDeleteTask = isTable("/tasks/delete");
+    const bool isNotify = isTable("/notify");
+    if (!isMembership && !isMigrateTask && !isDeleteTask && !isNotify) {
+        return;
+    }
+
+    const auto &value = event.entry.value;
+    std::string text;
+    bool parsed = true;
+    if (value.rfind("cluster-task-delete-tombstone-v1-", 0) == 0
+        || value.rfind("cluster-notify-delete-tombstone-v1-", 0) == 0) {
+        text = "tombstone=" + value;
+    } else if (value.empty()) {
+        text = "<empty>";
+    } else if (isMembership) {
+        parsed = ParseProtoToLogString<coordinator::WorkerServiceInfoPb>(value, text);
+    } else if (isMigrateTask) {
+        parsed = ParseProtoToLogString<MigrateTaskPb>(value, text);
+    } else if (isDeleteTask) {
+        parsed = ParseProtoToLogString<DeleteNodeTaskPb>(value, text);
+    } else {
+        parsed = ParseProtoToLogString<TaskNotifyPb>(value, text);
+    }
+    if (!parsed) {
+        text = "decode_failed hex=" + BytesToHex(value);
+    }
+
+    LOG(INFO) << "CLUSTER_KV_CHANGE backend=coordinator" << " event_type=" << static_cast<int>(event.type)
+        << " key=" << key << " revision=" << event.revision << " version=" << event.entry.version
+        << " value_mod_revision=" << event.entry.modRevision << " value=" << text;
+}
+
+}  // namespace
+
 CoordinatorStore::CoordinatorStore(std::shared_ptr<MemoryKvStore> memKvStore,
                                    std::shared_ptr<WatchRegistry> watchRegistry,
                                    std::shared_ptr<WatchDispatcher> watchDispatcher,
@@ -54,6 +105,9 @@ void CoordinatorStore::BindCallbacks()
     if (memKvStore_ && watchDispatcher_) {
         std::weak_ptr<WatchDispatcher> weakDispatcher = watchDispatcher_;
         memKvStore_->SetMutationCallback([this, weakDispatcher](std::shared_ptr<WatchEvent> event) {
+            if (event != nullptr) {
+                LogClusterKvChange(*event);
+            }
             if (event != nullptr && committedMutationObserver_) {
                 try {
                     committedMutationObserver_(event->type, event->entry.key);

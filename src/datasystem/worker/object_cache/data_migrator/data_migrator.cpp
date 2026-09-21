@@ -79,7 +79,7 @@ Status DataMigrator::CheckUbAdmission(const HostPort &worker, UbOperationKind op
     auto status = ubAdmission_->CheckWriteTarget(worker, operation);
     const bool canUseTcpFallback = FLAGS_enable_transport_fallback && FLAGS_data_migrate_urma_transport_mode == "write";
     if (status.IsError() && canUseTcpFallback) {
-        LOG_EVERY_N(WARNING, MIGRATION_RETRY_LOG_EVERY_N)
+        LOG_FIRST_AND_EVERY_N(WARNING, MIGRATION_RETRY_LOG_EVERY_N)
             << "[Migrate Data] UB admission denied for " << worker.ToString()
             << "; continue through the existing TCP fallback: " << status.ToString();
         return Status::OK();
@@ -433,7 +433,9 @@ Status DataMigrator::ProcessL2CacheSlotFutures(std::vector<SlotMigrateFuture> &f
                 continue;
             }
 
-            LOG_EVERY_N(WARNING, MIGRATION_RETRY_LOG_EVERY_N) << MigrateDataHandler::ResultToString(result);
+            LOG_FIRST_AND_EVERY_N(WARNING, MIGRATION_RETRY_LOG_EVERY_N)
+                << MigrateDataHandler::ResultToString(result) << ", source=" << localAddress_.ToString()
+                << ", task_id=" << taskId_ << ", slot=" << slot;
             VLOG(1) << FormatString(
                 "[MigrateL2Cache] Slot %u migration to %s failed, status: %s, failed count: %zu", slot, result.address,
                 result.status.ToString(), result.failedIds.size());
@@ -557,7 +559,10 @@ Status DataMigrator::HandleMigrateDataResult(const std::unordered_map<std::strin
             LOG(INFO) << MigrateDataHandler::ResultToString(result);
             continue;
         }
-        LOG_EVERY_N(WARNING, MIGRATION_RETRY_LOG_EVERY_N) << MigrateDataHandler::ResultToString(result);
+        LOG_FIRST_AND_EVERY_N(WARNING, MIGRATION_RETRY_LOG_EVERY_N)
+            << MigrateDataHandler::ResultToString(result)
+            << ", source=" << localAddress_.ToString()
+            << ", task_id=" << taskId_;
         bool localOperator = false;
         if ((LearnStructuredUbFailure(result, localOperator) && localOperator)
             || IsLocalMigrationOperatorUnavailable()) {

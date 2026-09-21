@@ -18,6 +18,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/master/object_cache/master_oc_service_impl.h"
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <type_traits>
@@ -862,7 +863,11 @@ Status MasterOCServiceImpl::MigrateMetadata(const MigrateMetadataReqPb &req, Mig
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
-    LOG(INFO) << GetWorkerId() << " save migrate data";
+    LOG(INFO) << "[MigrateMetadata] Receive request: source=" << req.source_addr()
+              << ", target=" << localAddress_
+              << ", topology_version=" << req.topology_version()
+              << ", batch_epoch=" << req.batch_epoch()
+              << ", metadata_count=" << req.object_metas_size();
     if (!ocMetadataManager->GetDeviceOcManager()->CheckDeviceMetasMigrateInfoIsEmpty(req)) {
         LOG(ERROR) << "Receive device meta, start to save.";
         ocMetadataManager->GetDeviceOcManager()->SaveMigrationDeviceMeta(req);
@@ -875,7 +880,18 @@ Status MasterOCServiceImpl::MigrateMetadata(const MigrateMetadataReqPb &req, Mig
         ocMetadataManager->SaveSubscribeData(req);
     }
     GetMasterTimeCost().Append("Total MigrateMetadata", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master MigrateMetadata %s", GetMasterTimeCost().GetInfo());
+    const auto failedCount =
+        std::count(rsp.results().begin(), rsp.results().end(), MigrateMetadataRspPb::FAILED);
+
+    LOG(INFO) << "[MigrateMetadata] Finished: source=" << req.source_addr()
+              << ", target=" << localAddress_
+              << ", topology_version=" << req.topology_version()
+              << ", batch_epoch=" << req.batch_epoch()
+              << ", metadata_count=" << req.object_metas_size()
+              << ", response_success_count=" << rsp.results_size() - failedCount
+              << ", response_failed_count=" << failedCount
+              << ", elapsed_ms=" << timer.ElapsedMilliSecond()
+              << ", breakdown=" << GetMasterTimeCost().GetInfo();
     return Status::OK();
 }
 

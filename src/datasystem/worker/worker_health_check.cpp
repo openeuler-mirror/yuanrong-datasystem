@@ -59,7 +59,6 @@ Status SetHealthProbe()
         g_health.store(true, std::memory_order_release);
         return Status::OK();
     }
-    LOG(INFO) << "Worker is healthy, health probe set.";
     auto rc = AtomicWriteTextFile(FLAGS_health_check_path, "health check success\n");
     if (rc.IsError()) {
         auto rollbackRc = RevokeHealthProbe();
@@ -70,6 +69,7 @@ Status SetHealthProbe()
         return rc;
     }
     g_health.store(true, std::memory_order_release);
+    LOG(INFO) << "Worker health probe published.";
     return Status::OK();
 }
 

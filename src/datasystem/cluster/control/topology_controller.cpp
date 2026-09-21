@@ -2347,7 +2347,11 @@ Status TopologyController::CommitExpiredBatch(const TopologySnapshot &latest,
         LOG(WARNING) << "CLUSTER_CHANGE_BATCH cluster=" << keys_.ClusterName()
                      << " action=deadline_expired batch_type=" << TopologyChangeTypeName(batch.type)
                      << " batch_epoch=" << batch.epoch << " version=" << latest.Version()
-                     << " failed_joining_count=" << failedJoining.size();
+                     << " failed_joining_count=" << failedJoining.size()
+                     << " expected_task_count=" << expectedDerivedState_.tasks.size()
+                     << " finished_task_count=" << finishedTaskIds_.size()
+                     << " pending_task_count="
+                     << expectedDerivedState_.tasks.size() - finishedTaskIds_.size();
     }
     if (batch.type == TopologyChangeType::SCALE_OUT) {
         return CommitScaleOutExhaustion(latest, failedJoining, memberships);

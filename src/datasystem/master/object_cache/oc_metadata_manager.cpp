@@ -4355,9 +4355,6 @@ bool OCMetadataManager::SaveOneMeta(const MetaForMigrationPb &objMeta, Status &s
 
 Status OCMetadataManager::SaveMigrationMetadata(const MigrateMetadataReqPb &req, MigrateMetadataRspPb &rsp)
 {
-    LOG(INFO) << "Recv migrate metadata msg. source:" << req.source_addr()
-              << ", object count:" << req.object_metas().size();
-
     auto injectTest = []() {
         INJECT_POINT("master.save_minration_data_failed", []() { return true; });
         return false;
