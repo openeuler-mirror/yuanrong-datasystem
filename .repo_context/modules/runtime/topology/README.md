@@ -502,11 +502,17 @@
 - Coordinator watches bind both `CoordinatorId` and `watch_id`. Watch registration uses a client registration ID so an
   ambiguous WatchRange result retries idempotently. Initial/recreated membership invalidates both Worker and Controller
   role plans using O(1) RESET doorbells; lease threads never wait for watch-registration RPCs.
-- For every cluster-scoped request, a known follower returns `NOT_LEADER` without reading recovery state. A Leader reads
-  that cluster's state once through O(1) `TopologyRecoveryManager::GetState`: `READY` maps to `SERVING`, while
+- For every cluster-scoped request, a known follower returns `NOT_LEADER` without reading recovery state. A Leader,
+  including a standalone no-election Coordinator, reads that cluster's published RPC admission state once through
+  `TopologyRecoveryManager::GetRpcAdmissionState`: `READY` maps to `SERVING`, while
   `RECOVERING`, `INSTALLING`, and `BLOCKED` map to `RECOVERING`. Only membership `KeepAlive`,
   `EnsureLeaderMembership`, and topology recovery-candidate reporting are recovery-control RPCs. Ordinary `Put`,
-  including membership `Put`, has no Store/reservation side effect while `RECOVERING`.
+  including membership `Put`, has no Store/reservation side effect while `RECOVERING`. An unseen cluster stays
+  `RECOVERING` through the initial recovery window. In standalone mode only, it becomes `READY` after the fixed hard
+  deadline so a missing membership prefix retains its legacy empty result; later membership activity creates a context
+  and restores the recovery gate. Election rounds keep unseen clusters fail-closed after the deadline. The RPC view is
+  a recovery-owned projection guarded by a bthread read-write lock, so concurrent brpc readers do not take the recovery
+  lifecycle mutex or serialize with each other; `GetState` retains strict internal semantics for Control Host lifecycle.
 - An ETCD canceled watch, including compaction cancellation, exits the producer and enters the existing whole-stream
   `WatchRun` recovery path. A RESET first makes both serialized consumers rebuild or retain last-good state; active
   compensation then reads current state, emits value-bearing fake PUT/DELETE events, advances every unified target

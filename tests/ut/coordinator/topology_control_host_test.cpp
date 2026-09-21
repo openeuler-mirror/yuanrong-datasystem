@@ -92,6 +92,12 @@ public:
         std::lock_guard lock(host.failureReportMutex_);
         return host.failureReportsByCluster_.count(clusterName) > 0;
     }
+
+    static bool HasEntry(TopologyControlHost &host, const std::string &clusterName)
+    {
+        std::lock_guard lock(host.mutex_);
+        return host.entries_.count(clusterName) != 0;
+    }
 };
 
 namespace {
@@ -100,6 +106,7 @@ constexpr char MEMBER_A[] = "127.0.0.1:12001";
 constexpr auto TEST_DEADLINE = std::chrono::seconds(2);
 constexpr auto TEST_RECONCILE_INTERVAL = std::chrono::milliseconds(10);
 constexpr auto TEST_DISCOVERY_WINDOW = std::chrono::milliseconds(10);
+constexpr auto TEST_RECOVERY_TIMEOUT = std::chrono::seconds(10);
 constexpr auto TEST_BURST_COLLECT_WINDOW = std::chrono::milliseconds(500);
 constexpr auto TEST_PURE_CONTROL_BUDGET = std::chrono::seconds(3);
 constexpr auto TEST_LARGE_BATCH_DEADLINE = std::chrono::seconds(5);
@@ -201,7 +208,7 @@ protected:
         recoveryOptions.maxClusters = TEST_CLUSTER_LIMIT;
         recovery_ =
             std::make_unique<TopologyRecoveryManager>(COORDINATOR_ID, *store_, clock_, recoveryOptions);
-        recovery_->BeginLeaderRound({ 0, COORDINATOR_ID }, std::chrono::seconds(10));
+        recovery_->BeginLeaderRound({ 0, COORDINATOR_ID }, TEST_RECOVERY_TIMEOUT);
     }
 
     void TearDown() override
@@ -963,6 +970,33 @@ TEST_F(TopologyControlHostTest, StartsIndependentRuntimesAfterRecoveryReadiness)
 
     DS_ASSERT_OK(host_->Shutdown(std::chrono::steady_clock::now() + TEST_DEADLINE));
     EXPECT_TRUE(host_->IsStopped());
+}
+
+TEST_F(TopologyControlHostTest, ReleasesLateClusterThatBecomesEmptyAfterStandaloneDeadline)
+{
+    constexpr char reconcileInjectPoint[] = "TopologyControlHost.ReconcileEntries.enter";
+    constexpr char startInjectPoint[] = "TopologyControlHost.StartRuntime";
+    host_ = std::make_unique<TopologyControlHost>(COORDINATOR_ID, *store_, *recovery_, MakeOptions());
+    DS_ASSERT_OK(inject::Set(reconcileInjectPoint, "pause"));
+    Raii clearReconcileInject([&] { (void)inject::Clear(reconcileInjectPoint); });
+    DS_ASSERT_OK(inject::Set(startInjectPoint, "call()"));
+    Raii clearStartInject([&] { (void)inject::Clear(startInjectPoint); });
+    clock_->AdvanceMs(std::chrono::duration_cast<std::chrono::milliseconds>(TEST_RECOVERY_TIMEOUT).count());
+    DS_ASSERT_OK(host_->Start());
+    ASSERT_TRUE(WaitUntil([&] { return inject::GetExecuteCount(reconcileInjectPoint) > 0; }));
+    CommitMembership("late-empty");
+
+    const auto membershipKey = PhysicalMembershipKey("late-empty");
+    int64_t deleted = 0;
+    int64_t revision = 0;
+    DS_ASSERT_OK(store_->DeleteRange(membershipKey, "", deleted, revision));
+    recovery_->ObserveMembershipChange(membershipKey, std::nullopt);
+    NotifyHost(membershipKey, WatchEvent::Type::DELETE);
+    DS_ASSERT_OK(inject::Clear(reconcileInjectPoint));
+
+    ASSERT_TRUE(WaitUntil([&] { return !TopologyControlHostTestPeer::HasEntry(*host_, "late-empty"); }));
+    EXPECT_EQ(inject::GetExecuteCount(startInjectPoint), 0);
+    DS_ASSERT_OK(host_->Shutdown(std::chrono::steady_clock::now() + TEST_DEADLINE));
 }
 
 TEST_F(TopologyControlHostTest, RuntimeStartFailureRetriesWithoutReleasingClusterSlots)

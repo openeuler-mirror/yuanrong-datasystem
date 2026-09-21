@@ -557,6 +557,85 @@ TEST_F(CoordinatorServiceImplTest, RangeUsesPreparedRecoveryAdmission)
     DS_ASSERT_OK(service->Shutdown());
 }
 
+TEST_F(CoordinatorServiceImplTest, NoElectionRecoveringClusterUsesTypedAdmission)
+{
+    auto service = MakeService();
+    DS_ASSERT_OK(InitializeRunning(*service));
+    int recoveryStateCalls = 0;
+    service->recoveryStateProvider_ = [&](const std::string &clusterName) {
+        ++recoveryStateCalls;
+        EXPECT_EQ(clusterName, "standalone-recovery");
+        return coordinator::TopologyRecoveryState::RECOVERING;
+    };
+    auto store = std::move(service->store_);
+
+    coordinator::RangeReqPb request;
+    request.set_key("/datasystem/standalone-recovery/topology/");
+    coordinator::RangeRspPb response;
+    DS_ASSERT_OK(service->Range(request, response));
+
+    ExpectHeaderState(response.header(), coordinator::ResponseHeader::RECOVERING, service->coordinatorId_, 0);
+    EXPECT_EQ(recoveryStateCalls, 1);
+    service->store_ = std::move(store);
+    DS_ASSERT_OK(service->Shutdown());
+}
+
+TEST_F(CoordinatorServiceImplTest, NoElectionReadyClusterServesOrdinaryRpc)
+{
+    auto service = MakeService();
+    DS_ASSERT_OK(InitializeRunning(*service));
+    int recoveryStateCalls = 0;
+    service->recoveryStateProvider_ = [&](const std::string &clusterName) {
+        ++recoveryStateCalls;
+        EXPECT_EQ(clusterName, "standalone-ready");
+        return coordinator::TopologyRecoveryState::READY;
+    };
+    const std::string key = "/datasystem/standalone-ready/topology/";
+    int64_t version = 0;
+    int64_t revision = 0;
+    DS_ASSERT_OK(service->store_->Put(key, "topology", 0, COORDINATOR_KEY_NOT_EXISTS_VERSION, version, revision));
+
+    coordinator::RangeReqPb request;
+    request.set_key(key);
+    coordinator::RangeRspPb response;
+    DS_ASSERT_OK(service->Range(request, response));
+
+    ExpectHeaderState(response.header(), coordinator::ResponseHeader::SERVING, service->coordinatorId_, 0);
+    EXPECT_EQ(recoveryStateCalls, 1);
+    ASSERT_EQ(response.kvs_size(), 1);
+    EXPECT_EQ(response.kvs(0).value(), "topology");
+    DS_ASSERT_OK(service->Shutdown());
+}
+
+TEST_F(CoordinatorServiceImplTest, NoElectionRecoveryControlRpcExecutesWithRecoveringHeader)
+{
+    const std::string clusterName = "standalone-recovery-control";
+    auto service = MakeService();
+    DS_ASSERT_OK(InitializeRunning(*service));
+    int recoveryStateCalls = 0;
+    service->recoveryStateProvider_ = [&](const std::string &observedClusterName) {
+        ++recoveryStateCalls;
+        EXPECT_EQ(observedClusterName, clusterName);
+        return coordinator::TopologyRecoveryState::RECOVERING;
+    };
+
+    coordinator::EnsureLeaderMembershipReqPb request;
+    request.set_cluster_name(clusterName);
+    request.set_reporter_address(MEMBER_ADDRESS);
+    request.set_coordinator_id(service->coordinatorId_);
+    request.set_leader_term(0);
+    request.set_membership_value(EncodeMembershipValue());
+    request.set_ttl_ms(MEMBERSHIP_TTL_MS);
+    coordinator::EnsureLeaderMembershipRspPb response;
+    DS_ASSERT_OK(service->EnsureLeaderMembership(request, response));
+
+    ExpectHeaderState(response.header(), coordinator::ResponseHeader::RECOVERING, service->coordinatorId_, 0);
+    EXPECT_EQ(response.result(), coordinator::EnsureLeaderMembershipRspPb::ACCEPTED);
+    EXPECT_GT(response.membership_mod_revision(), 0);
+    EXPECT_EQ(recoveryStateCalls, 1);
+    DS_ASSERT_OK(service->Shutdown());
+}
+
 TEST_F(CoordinatorServiceImplTest, PrepareClusterResponseHeaderRejectsMissingRecoveryManager)
 {
     auto service = MakeService();

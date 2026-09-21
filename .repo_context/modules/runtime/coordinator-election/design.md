@@ -115,11 +115,18 @@ For each RPC, the Service builds one complete `ResponseHeader` from that coheren
 | --- | --- | --- | --- |
 | coherent follower, Leader address known or unknown | `NOT_LEADER` | none | return the header without business side effects |
 | Leader snapshot before matching nonzero callback-term publication in election mode | none; `K_NOT_READY` | none | perform no business side effect |
-| Leader and cluster state `READY` | `SERVING` | one O(1) `GetState(cluster)` for cluster-scoped RPCs | ordinary and recovery-control policy may continue |
-| Leader and cluster state `RECOVERING`, `INSTALLING`, or `BLOCKED` | `RECOVERING` | one O(1) `GetState(cluster)` | only typed recovery-control policy may continue |
-| no-election Leader (any cluster) | `SERVING` | none; per-cluster gate skipped | ordinary and recovery-control policy may continue |
+| Leader, with or without election, and cluster state `READY` | `SERVING` | one O(1) `GetRpcAdmissionState(cluster)` for cluster-scoped RPCs | ordinary and recovery-control policy may continue |
+| Leader, with or without election, and cluster state `RECOVERING`, `INSTALLING`, or `BLOCKED` | `RECOVERING` | one O(1) `GetRpcAdmissionState(cluster)` | only typed recovery-control policy may continue |
 
 Only `KeepAlive`, `EnsureLeaderMembership`, and `ReportTopologyRecoveryCandidate` are recovery-control RPCs. They accept `RECOVERING` and `SERVING`; topology-scoped ordinary RPCs require `SERVING`. Exact eviction-policy rollout `Range` and `Put` operations use the leadership-only Header because this singleton does not read or mutate topology authority and must be available while a fresh cluster is recovering. An ordinary topology `Put`—including a membership `Put`—returns its `RECOVERING` header before Store mutation, Controller reservation, watch notification, or other business side effects. `EnsureLeaderMembership` validates cluster scope first, performs header/recovery admission next, and only then validates TTL, reporter address, membership payload, and exact physical key. A semantic `INVALID_MEMBERSHIP` is therefore a `K_OK` route hit carrying the complete admitted Header, with no Store or Host side effect.
+
+An unseen cluster is fail-closed as `RECOVERING` during the initial recovery window. In standalone mode only, it maps to
+`READY` after that round's fixed hard deadline so an authoritative missing membership prefix can retain the legacy empty
+result. Later membership activity creates a cluster context and gates the cluster as `RECOVERING` again. Election rounds
+keep unseen clusters fail-closed after their hard deadline. RPC handlers read a recovery-owned state projection guarded
+by a bthread read-write lock, so concurrent brpc readers neither take the recovery lifecycle mutex nor serialize with one
+another. Internal Control Host lifecycle decisions continue to use strict `GetState`: a missing context is always
+`RECOVERING` and cannot start an empty runtime after late membership is removed.
 
 `OnLeaderStart` snapshots `node_dead_timeout_s` once and starts a recovery round whose monotonic hard deadline is never moved by later membership or evidence activity. A cluster context created by a committed `STARTING` membership receives one fixed three-second fast-recovery deadline. KeepAlive-created contexts and non-`STARTING` memberships use only the hard deadline; a later non-`STARTING` membership or any valid member candidate report, including `NO_SNAPSHOT`, clears an existing fast deadline permanently for that context generation. With no report, the fast deadline marks the cluster `READY` without writing topology after the existing Store-authority check. Once a report is observed, the delayed scheduler uses the earlier eligible discovery deadline or the round hard deadline. At the hard deadline, a legal Store authority remains first priority, followed by installation of a unique already-validated candidate. Missing evidence/reporters/payload, pending validation, same-version conflict, invalid or unavailable Store authority, or an installation failure causes no replacement topology write and forces that cluster to `READY`. Deadline-time conflict voting is outside the current implementation.
 

@@ -17,6 +17,7 @@
 /**
  * Description: ST for SDK coordinator-backed service discovery.
  */
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -46,6 +47,7 @@ constexpr char COORDINATOR_SD_HOST_ID_VALUE_MISSING[] = "coordinator_sd_host_id_
 constexpr char COORDINATOR_SD_MISSING_CLUSTER[] = "coordinator_sd_missing_cluster";
 constexpr int COORDINATOR_SD_SELECT_LOOP_COUNT = 5;
 constexpr int COORDINATOR_SD_EMPTY_CLUSTER_CONNECT_TIMEOUT_MS = 4000;
+constexpr int COORDINATOR_SD_EMPTY_CLUSTER_RECOVERY_WAIT_S = 10;
 constexpr int COORDINATOR_SD_CONNECT_TIMEOUT_MS = 60000;
 constexpr int COORDINATOR_SD_BACKOFF_WINDOW_S = 20;
 constexpr int COORDINATOR_SD_BACKOFF_MAX_PROBES = 6;
@@ -96,7 +98,7 @@ public:
         opts.workerGflagParams =
             " -shared_memory_size_mb=64 -node_timeout_s=2 -node_dead_timeout_s=4 -add_node_wait_time_s=1"
             " -log_async=false -enable_reconciliation=false -enable_lossless_data_exit_mode=true";
-        opts.coordinatorGflagParams = " -v=1";
+        opts.coordinatorGflagParams = " -v=1 -node_dead_timeout_s=4";
 
         ASSERT_EQ(setenv(COORDINATOR_SD_HOST_ID_ENV0, COORDINATOR_SD_HOST_ID_VALUE0, 1), 0);
         ASSERT_EQ(setenv(COORDINATOR_SD_HOST_ID_ENV1, COORDINATOR_SD_HOST_ID_VALUE1, 1), 0);
@@ -214,12 +216,45 @@ TEST_F(CoordinatorServiceDiscoveryTest, RestartedCoordinatorRecoversMembershipAn
     std::shared_ptr<KVClient> originalClient;
     InitKVClientWithCoordinatorServiceDiscovery(originalClient, ServiceAffinityPolicy::RANDOM);
     const std::string key = "coordinator_restart_route_key";
-    const std::string value = "coordinator_restart_route_value";
-    DS_ASSERT_OK(originalClient->Set(key, value));
-    DS_ASSERT_OK(cluster_->StartNode(COORDINATOR, 0, ""));
+    DS_ASSERT_OK(originalClient->Set(key, "warmup"));
 
     std::shared_ptr<CoordinatorServiceDiscovery> serviceDiscovery;
     GetCoordinatorServiceDiscovery("", ServiceAffinityPolicy::RANDOM, serviceDiscovery);
+    std::atomic<bool> stopTraffic{ false };
+    std::atomic<size_t> trafficIterations{ 0 };
+    size_t trafficFailures = 0;
+    std::string firstTrafficFailure;
+    std::thread traffic([&] {
+        while (!stopTraffic.load(std::memory_order_acquire)) {
+            const auto iteration = trafficIterations.load(std::memory_order_relaxed);
+            const auto expected = "value-" + std::to_string(iteration);
+            auto rc = originalClient->Set(key, expected);
+            if (rc.IsError()) {
+                if (trafficFailures++ == 0) {
+                    firstTrafficFailure = rc.ToString();
+                }
+            } else {
+                std::string actual;
+                rc = originalClient->Get(key, actual);
+                if (rc.IsError() || actual != expected) {
+                    if (trafficFailures++ == 0) {
+                        firstTrafficFailure = rc.IsError() ? rc.ToString() : "read-after-write value mismatch";
+                    }
+                }
+            }
+            trafficIterations.fetch_add(1, std::memory_order_release);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    });
+
+    const auto trafficStartDeadline = std::chrono::steady_clock::now() + COORDINATOR_RESTART_WAIT;
+    while (trafficIterations.load(std::memory_order_acquire) < 10
+           && std::chrono::steady_clock::now() < trafficStartDeadline) {
+        std::this_thread::sleep_for(COORDINATOR_RETRY_INTERVAL);
+    }
+    const auto beforeRestart = trafficIterations.load(std::memory_order_acquire);
+    const auto restartRc = cluster_->StartNode(COORDINATOR, 0, "");
+
     const auto deadline = std::chrono::steady_clock::now() + COORDINATOR_RESTART_WAIT;
     bool membershipRecovered = false;
     while (std::chrono::steady_clock::now() < deadline) {
@@ -232,22 +267,24 @@ TEST_F(CoordinatorServiceDiscoveryTest, RestartedCoordinatorRecoversMembershipAn
         }
         std::this_thread::sleep_for(COORDINATOR_RETRY_INTERVAL);
     }
+    while (trafficIterations.load(std::memory_order_acquire) < beforeRestart + 20
+           && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(COORDINATOR_RETRY_INTERVAL);
+    }
+    stopTraffic.store(true, std::memory_order_release);
+    traffic.join();
+
+    EXPECT_GE(beforeRestart, 10U);
+    DS_ASSERT_OK(restartRc);
     ASSERT_TRUE(membershipRecovered);
+    EXPECT_GE(trafficIterations.load(std::memory_order_acquire), beforeRestart + 20);
+    EXPECT_EQ(trafficFailures, 0U) << firstTrafficFailure;
 
     std::shared_ptr<KVClient> recoveredClient;
     InitKVClientWithCoordinatorServiceDiscovery(recoveredClient, ServiceAffinityPolicy::RANDOM);
     std::string actual;
-    Status getRc;
-    do {
-        actual.clear();
-        getRc = recoveredClient->Get(key, actual);
-        if (getRc.IsOk()) {
-            break;
-        }
-        std::this_thread::sleep_for(COORDINATOR_RETRY_INTERVAL);
-    } while (std::chrono::steady_clock::now() < deadline);
-    DS_ASSERT_OK(getRc);
-    EXPECT_EQ(actual, value);
+    DS_ASSERT_OK(recoveredClient->Get(key, actual));
+    EXPECT_FALSE(actual.empty());
 }
 
 TEST_F(CoordinatorServiceDiscoveryTest, RandomSelectsReadyWorker)
@@ -265,7 +302,18 @@ TEST_F(CoordinatorServiceDiscoveryTest, EmptyClusterMembershipReturnsNotReadyOnC
 
     std::vector<std::string> sameHost;
     std::vector<std::string> other;
-    DS_ASSERT_OK(serviceDiscovery->GetAllWorkers(sameHost, other));
+    const auto deadline = std::chrono::steady_clock::now()
+                          + std::chrono::seconds(COORDINATOR_SD_EMPTY_CLUSTER_RECOVERY_WAIT_S);
+    Status discoveryStatus(K_NOT_READY, "Standalone Coordinator recovery has not completed");
+    while (std::chrono::steady_clock::now() < deadline) {
+        discoveryStatus = serviceDiscovery->GetAllWorkers(sameHost, other);
+        if (discoveryStatus.IsOk()) {
+            break;
+        }
+        ASSERT_EQ(discoveryStatus.GetCode(), K_NOT_READY) << discoveryStatus.ToString();
+        std::this_thread::sleep_for(COORDINATOR_RETRY_INTERVAL);
+    }
+    DS_ASSERT_OK(discoveryStatus);
     EXPECT_TRUE(sameHost.empty());
     EXPECT_TRUE(other.empty());
 
