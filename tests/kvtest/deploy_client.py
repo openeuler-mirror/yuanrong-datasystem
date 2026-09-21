@@ -266,40 +266,24 @@ class Deployer:
 
         if transport == 'kubectl':
             # Stream all files in one kubectl exec (tar cf - | local tar xf -).
-            # Preserve the ordinary Kubernetes path: tar without gzip.
-            # Previously this was per-file `kubectl exec cat {file}` (N kubectl
-            # processes per node); on 500+ nodes that was 500*N API server
-            # round-trips. Falls back to per-file cat if the container lacks
-            # tar (rare; install already relies on tar via kubectl cp, so this
-            # fallback is almost never hit).
+            # No gzip by default (faster in practice); --compress adds gzip.
+            # Packs relative paths (tar -C root) so extraction preserves the
+            # same subpath layout as the --compress branch.
             ns = self._namespace(node)
-            iid = node['instance_id']
-            tar_suffix = file_label.replace(' ', '_')
-            tar_local = f'/tmp/collect_{tar_suffix}_{iid}.tar.gz'
-            file_list = ' '.join(shlex.quote(f) for f in files)
-            try:
-                r = subprocess.run(
-                    ['kubectl', 'exec', target, '-n', ns, '--', 'sh', '-c',
-                     f'tar cf - {file_list} 2>/dev/null'],
-                    capture_output=True, timeout=120)
-                if r.returncode == 0 and r.stdout:
-                    import io
-                    with tarfile.open(fileobj=io.BytesIO(r.stdout), mode='r:') as tar:
-                        for member in tar.getmembers():
-                            # Map remote path to local path (preserve subpath).
-                            local_path = self._local_path_for(
-                                member.name, local_dir, remote_dir)
-                            if member.isdir():
-                                os.makedirs(local_path, exist_ok=True)
-                            elif member.isfile():
-                                tar.extract(member, path=os.path.dirname(local_path))
-                                # extractall uses member.name; rename to local_path.
-                                extracted = os.path.join(os.path.dirname(local_path), member.name)
-                                if os.path.exists(extracted) and extracted != local_path:
-                                    os.rename(extracted, local_path)
-                    return
-            except Exception as e:
-                log_info(f'    {target} -> tar stream failed: {e}; falling back to cat')
+            root = remote_dir or '/'
+            relative_files = [posixpath.relpath(path, root) for path in files]
+            if any(path == '..' or path.startswith('../') for path in relative_files):
+                log_info(f'    {target} -> collected file outside remote dir; falling back to cat')
+            else:
+                tar_args = shlex.join(['tar', 'cf', '-', '-C', root, '--'] + relative_files)
+                command = ['kubectl', 'exec', target, '-n', ns, '--', 'sh', '-c', tar_args]
+                try:
+                    count = receive_archive(command, local_dir, timeout=120,
+                                            archive_options=dict(compress=False, extract=True))
+                    if count > 0:
+                        return
+                except Exception as e:
+                    log_info(f'    {target} -> tar stream failed: {e}; falling back to cat')
 
             # Fallback: per-file cat (for containers without tar).
             for remote_path in files:
