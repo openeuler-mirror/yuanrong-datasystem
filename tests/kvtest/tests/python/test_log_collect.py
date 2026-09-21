@@ -95,11 +95,45 @@ class TestLogCollect(unittest.TestCase):
         pods = [dict(name=n, ip='192.0.2.1', host_ip='192.0.2.2') for n in ('pod-1', 'pod-10')]
         with patch('deploy_worker.read_remote_log_dir', return_value=('/logs', {})), \
              patch('deploy_worker.receive_archive', return_value=1) as receive, \
-             patch('deploy_worker.collect_worker_config', return_value=True):
+             patch('deploy_worker.collect_worker_config', return_value=True) as config:
             self.assertEqual(deploy_worker.cmd_collect(args, pods), 0)
         command, directory, timeout = receive.call_args.args
         self.assertEqual({call.args[0][4] for call in receive.call_args_list}, {'pod-1', 'pod-10'})
         self.assertEqual(receive.call_count, 2)
+        self.assertEqual(config.call_count, 2)
+
+    def test_worker_keyword_no_match_does_not_create_pod_directory(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import deploy_worker
+        pod = dict(name='pod-1', ip='192.0.2.1', host_ip='192.0.2.2')
+        with tempfile.TemporaryDirectory() as output:
+            args = SimpleNamespace(file_pattern=['*INFO.log'], keyword=['missing'],
+                                   uncompressed_only=False, namespace='default',
+                                   remote_config='/tmp/worker.config', remote_dir=None,
+                                   output=output, timeout=10, max_workers=1, pod_info=True,
+                                   log_dir='/logs')
+            with patch('deploy_worker.receive_archive', return_value=0), \
+                 patch('deploy_worker.collect_worker_config', return_value=True) as config:
+                self.assertEqual(deploy_worker.cmd_collect(args, [pod]), 0)
+            config.assert_not_called()
+            self.assertFalse((Path(output) /
+                              'pod-1__podip-192.0.2.1__hostip-192.0.2.2').exists())
+
+    def test_client_keyword_no_match_does_not_create_node_directory(self):
+        from unittest.mock import Mock, patch
+        from deploy_client import Deployer
+        d = Deployer.__new__(Deployer)
+        d.nodes = [dict(host='localhost', instance_id='1')]
+        d.default_transport = 'ssh'
+        d.remote_work_dir = '/tmp/client'
+        d.listen_port = 9000
+        d.run_on = Mock(side_effect=AssertionError('Keyword collection must not trigger summary'))
+        options = dict(patterns=['*INFO.log'], keywords=['missing'], uncompressed_only=False)
+        with tempfile.TemporaryDirectory() as output, \
+             patch('deploy_client.receive_archive', return_value=0):
+            self.assertEqual(d.do_collect(output_dir=output, filters=options), 0)
+            self.assertFalse((Path(output) / 'localhost_1').exists())
 
     def test_client_selection_uses_live_pod_identity_and_skips_summary(self):
         from unittest.mock import Mock, patch

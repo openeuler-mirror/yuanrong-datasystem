@@ -335,7 +335,10 @@ def cmd_collect(args, pods):
         return logs_result or config_result
 
     def collect(pod):
-        config_ok = collect_worker_config(args, pod)
+        keyword_filter = bool(options['keywords'])
+        config_ok = True
+        if not keyword_filter:
+            config_ok = collect_worker_config(args, pod)
         try:
             log_dir = getattr(args, 'log_dir', None)
             if log_dir is None:
@@ -352,6 +355,11 @@ def cmd_collect(args, pods):
             directory = os.path.join(args.output, name)
             count = receive_archive(command, directory, args.timeout, **transfer_kwargs)
             log_info(f"  {pod['name']} -> {count} files")
+            if keyword_filter:
+                if count == 0:
+                    log_info(f"  {pod['name']} -> no keyword matches, directory skipped")
+                    return True
+                config_ok = collect_worker_config(args, pod)
             return config_ok
         except Exception as error:
             log_error(f"{pod['name']} -> collection failed: {error}")

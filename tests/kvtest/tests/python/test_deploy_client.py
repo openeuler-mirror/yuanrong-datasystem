@@ -64,6 +64,55 @@ def _make_deployer(nodes, config_template, transport='ssh'):
     return d
 
 
+class TestSdkOnlyCollect(unittest.TestCase):
+    def test_sdk_only_archive_excludes_outputs_and_configs(self):
+        from log_collect import REMOTE_ARCHIVE, receive_archive
+        for patterns in ([], ['*access*.log', '*access*.gz']):
+            with self.subTest(patterns=patterns), tempfile.TemporaryDirectory() as tmp:
+                sdk = os.path.join(tmp, 'sdk')
+                output = os.path.join(tmp, 'collected')
+                os.mkdir(sdk)
+                for name in ('access.log', 'access.1.gz', 'client.log'):
+                    with open(os.path.join(sdk, name), 'wb') as f:
+                        f.write(name.encode())
+                d = _make_deployer([{'host': 'localhost', 'instance_id': 0}], {})
+                def archive(sources, filters, **kwargs):
+                    if sources:
+                        self.assertEqual([entry[0] for entry in sources], ['sdk'])
+                    return json.dumps(dict(sources=sources, **filters))
+                def receive(command, local_dir, **kwargs):
+                    return receive_archive([sys.executable, '-c', REMOTE_ARCHIVE, command], local_dir)
+                with patch('deploy_client.archive_command', side_effect=archive), \
+                        patch('deploy_client.receive_archive', side_effect=receive), \
+                        patch('deploy_client.copy_case_files') as configs, \
+                        patch.object(d, 'run_on') as run:
+                    result = d.do_collect(sdk, output, sdk_only=True,
+                                          filters=dict(patterns=patterns, keywords=[], uncompressed_only=False))
+                self.assertEqual(result, 0)
+                configs.assert_not_called()
+                run.assert_not_called()
+                actual = os.listdir(os.path.join(output, 'localhost_0', 'sdk'))
+                self.assertEqual(set(actual), {'access.log', 'access.1.gz'} if patterns
+                                 else {'access.log', 'client.log'})
+
+    def test_sdk_only_transfer_failure_returns_failure(self):
+        d = _make_deployer([{'host': 'localhost', 'instance_id': 0}], {})
+        with tempfile.TemporaryDirectory() as out, \
+                patch('deploy_client.receive_archive', side_effect=RuntimeError('transfer failed')):
+            self.assertEqual(d.do_collect('/logs', out, sdk_only=True), 1)
+
+    def test_cli_log_pattern_alias_combines_with_file_pattern(self):
+        from deploy_client import main
+        d = _make_deployer([], {})
+        args = ['deploy_client.py', 'collect', 'deploy.json', '--sdk-only',
+                '--log-pattern', '*access*.log', '--file-pattern', '*access*.gz']
+        with patch.object(sys, 'argv', args), patch('deploy_client.Deployer', return_value=d), \
+                patch.object(d, 'do_collect', return_value=0) as collect:
+            main()
+        self.assertTrue(collect.call_args.kwargs['sdk_only'])
+        self.assertEqual(collect.call_args.kwargs['filters']['patterns'], ['*access*.log', '*access*.gz'])
+
+
 class TestCudaStartupWait(unittest.TestCase):
     def test_launcher_budget_includes_node_wait(self):
         for wait in (0, 60):

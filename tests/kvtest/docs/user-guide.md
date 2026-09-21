@@ -10,6 +10,8 @@
 | **Cache 模式** | cacheGetOrCreate 流水线，Key Pool 管理，动态命中率控制 | [cache-guide.md](cache-guide.md) |
 | **Benchmark 模式** | 16 种 Set/Get 测试模式（含 mixed 混合 + MSet/MGet 批量），round-based 执行 | [benchmark-guide.md](benchmark-guide.md) |
 
+日志定向收集的完整命令示例见 [log-collection-guide.md](log-collection-guide.md)。
+
 **共同特性：** 多节点部署、内置指标采集（CSV + HTML 报告）、CPU 亲和性、远程部署。
 
 ---
@@ -319,7 +321,25 @@ python3 deploy_client.py gen-config -p ds-worker -n datasystem \
 
 ### 3.4 收集结果
 
-`collect` 从每个节点收集到 `collected/` 目录：`metrics_{id}.csv`、`summary_{id}_{ts}.txt`、`stdout_{id}.log`。
+`collect` 默认触发 summary 生成，并将各节点的 `metrics_*` 输出、`run.log`、
+`resource_monitor.csv` 和 SDK 日志收集到 `collected/<节点>_<instance_id>/`。
+SDK 日志目录默认为 `/root/.datasystem/logs`，默认收集 `*.log`、`*.log.gz`、`*.txt`。
+
+只收集 access 接口日志及其 gzip 轮转文件：
+
+```bash
+python3 deploy_client.py collect deploy.json --sdk-only \
+  --log-pattern '*access*.log' --log-pattern '*access*.gz' -o collected_access
+```
+
+`--sdk-only` 跳过 summary 生成、case 配置和 kvtest 输出收集。`--log-pattern` 是
+共享选项 `--file-pattern` 的别名，可重复指定，
+按文件名区分大小写匹配，多个模式取并集，递归扫描子目录；通配符需要加引号。
+例如上述模式匹配 `access.log`、`client.access.log`、`access.log.1.gz`、`access.20260921.gz`，
+不收集其他日志。使用 `--sdk-log-dir /path/to/logs` 可修改源目录。
+单独使用 `--log-pattern` 会同时筛选 kvtest 输出和 SDK 日志；搭配 `--sdk-only`
+仅扫描 SDK 目录，匹配文件保存在各节点收集目录的 `sdk/` 子目录中。
+过滤在传输前执行，支持 SSH、kubectl 和 localhost；没有匹配文件时跳过日志传输。
 
 ---
 
