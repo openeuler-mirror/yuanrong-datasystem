@@ -913,7 +913,7 @@ static void ClearUBPayloadPlaceholders(GetRspPb &rsp, std::vector<RpcMessage> &p
 void BoundMode::ObserveGetProviderUbFailure(const std::shared_ptr<IClientWorkerApi> &workerApi, const GetRspPb &rsp)
 {
     if (transportLayer_ != nullptr && workerApi != nullptr && rsp.has_provider_ub_failure_detail()) {
-        transportLayer_->ReportClientGetWritebackFailure(workerApi->hostPort_, rsp.provider_ub_failure_detail());
+        (void)transportLayer_->ReportProviderUbFailure(workerApi->hostPort_, rsp.provider_ub_failure_detail());
     }
 }
 

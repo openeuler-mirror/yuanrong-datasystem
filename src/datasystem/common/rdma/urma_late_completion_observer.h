@@ -40,6 +40,7 @@ struct UrmaLateCompletionContext {
     std::weak_ptr<UrmaLateCompletionObserver> observer;
     uint64_t ownerToken = 0;
     uint64_t peerToken = 0;
+    bool notifyRemoteAckTimeout = false;
 };
 }  // namespace datasystem
 

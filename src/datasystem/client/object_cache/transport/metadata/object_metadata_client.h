@@ -54,7 +54,9 @@ public:
                          std::shared_ptr<TransportAdvisor> advisor = nullptr,
                          std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider = nullptr,
                          uint64_t ubBufferSize = 0,
-                         std::function<void(const HostPort &, const Status &)> metadataFailureHandler = {});
+                         std::function<void(const HostPort &, const Status &)> metadataFailureHandler = {},
+                         std::function<void(const HostPort &, const ProviderUbFailureDetailPb &)>
+                             ubFailureHandler = {});
     virtual ~ObjectMetadataClient() = default;
 
     /**
@@ -130,8 +132,9 @@ private:
                                       int32_t &routeDegradationRetries, TransportPhaseLatencyRecorder *recorder);
     void DelayReleaseUbBuffers(InlineRequestContext &context, const Status &reason,
                                const std::string &reasonSource) const;
-    bool HandleUbTransportStatus(const HostPort &provider, ObjectMetadataItem &item, const QueryAndGetResultPb &result,
-                                 InlineRequestContext &context) const;
+    Status HandleUbTransportStatus(const HostPort &provider, ObjectMetadataItem &item,
+                                   const QueryAndGetResultPb &result, InlineRequestContext &context,
+                                   bool &hasUbTransportError) const;
 
     /**
      * @brief Select and initialize the inline transport for one metadata-owner request.
@@ -234,6 +237,7 @@ private:
     std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider_;
     uint64_t ubBufferSize_ = 0;
     std::function<void(const HostPort &, const Status &)> metadataFailureHandler_;
+    std::function<void(const HostPort &, const ProviderUbFailureDetailPb &)> ubFailureHandler_;
     // Total K_URMA_NEED_CONNECT responses seen by this client; surfaced in throttled logs so operators
     // can size an incident from the first emitted line.
     std::atomic<uint64_t> urmaNeedConnectTotal_{ 0 };

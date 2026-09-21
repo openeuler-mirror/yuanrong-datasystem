@@ -28,7 +28,6 @@
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
@@ -100,13 +99,16 @@ ObjectMetadataClient::ObjectMetadataClient(std::shared_ptr<DataPlaneManager> man
                                            std::shared_ptr<TransportAdvisor> advisor,
                                            std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider,
                                            uint64_t ubBufferSize,
-                                           std::function<void(const HostPort &, const Status &)> metadataFailureHandler)
+                                           std::function<void(const HostPort &, const Status &)> metadataFailureHandler,
+                                           std::function<void(const HostPort &,
+                                                              const ProviderUbFailureDetailPb &)> ubFailureHandler)
     : manager_(std::move(manager)),
       retry_(std::move(retry)),
       advisor_(std::move(advisor)),
       ubBufferProvider_(std::move(ubBufferProvider)),
       ubBufferSize_(ubBufferSize),
-      metadataFailureHandler_(std::move(metadataFailureHandler))
+      metadataFailureHandler_(std::move(metadataFailureHandler)),
+      ubFailureHandler_(std::move(ubFailureHandler))
 {
 }
 
@@ -516,24 +518,31 @@ void ObjectMetadataClient::DelayReleaseUbBuffers(InlineRequestContext &context, 
     }
 }
 
-bool ObjectMetadataClient::HandleUbTransportStatus(const HostPort &provider, ObjectMetadataItem &item,
-                                                   const QueryAndGetResultPb &result,
-                                                   InlineRequestContext &context) const
+Status ObjectMetadataClient::HandleUbTransportStatus(const HostPort &provider, ObjectMetadataItem &item,
+                                                     const QueryAndGetResultPb &result,
+                                                     InlineRequestContext &context,
+                                                     bool &hasUbTransportError) const
 {
+    hasUbTransportError = false;
     if (context.mode != InlineTransportMode::UB || !result.has_status()
         || result.status().error_code() == K_OK) {
-        return false;
+        return Status::OK();
     }
-    if (result.has_provider_ub_failure_detail()
-        && IsClientUbWritebackAckTimeout(provider, result.provider_ub_failure_detail())) {
-        TriggerClientLocalUbPortHealthQuery();
+    hasUbTransportError = true;
+    Status handlerStatus = Status::OK();
+    if (result.has_provider_ub_failure_detail()) {
+        if (ubFailureHandler_) {
+            ubFailureHandler_(provider, result.provider_ub_failure_detail());
+        } else {
+            handlerStatus = Status(K_RUNTIME_ERROR, "Provider UB failure handler is not configured");
+        }
     }
     auto buffer = context.ubBuffers.find(&item);
     if (buffer != context.ubBuffers.end()) {
         const Status status(static_cast<StatusCode>(result.status().error_code()), result.status().error_msg());
         ubBufferProvider_->DelayReleaseIfNeeded(buffer->second, status, "QueryAndGet", "response_status");
     }
-    return true;
+    return handlerStatus;
 }
 
 Status ObjectMetadataClient::BuildQueryRequest(const HostPort &address, const ObjectMetadataBatch &items,
@@ -589,7 +598,8 @@ Status ObjectMetadataClient::ApplyResult(const HostPort &provider, ObjectMetadat
     const auto &location = result.location();
     CHECK_FAIL_RETURN_STATUS(location.object_key() == item.objectKey, K_RUNTIME_ERROR,
                              "QueryAndGet result key does not match request order");
-    const bool hasUbTransportError = HandleUbTransportStatus(provider, item, result, context);
+    bool hasUbTransportError = false;
+    RETURN_IF_NOT_OK(HandleUbTransportStatus(provider, item, result, context, hasUbTransportError));
     if (location.object_locations_size() == 0) {
         item.status = Status(K_NOT_FOUND, "Object was not found");
         return Status::OK();
