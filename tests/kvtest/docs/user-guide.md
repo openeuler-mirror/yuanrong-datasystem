@@ -10,6 +10,8 @@
 | **Cache 模式** | cacheGetOrCreate 流水线，Key Pool 管理，动态命中率控制 | [cache-guide.md](cache-guide.md) |
 | **Benchmark 模式** | 16 种 Set/Get 测试模式（含 mixed 混合 + MSet/MGet 批量），round-based 执行 | [benchmark-guide.md](benchmark-guide.md) |
 
+日志定向收集的完整命令示例见 [log-collection-guide.md](log-collection-guide.md)。
+
 **共同特性：** 多节点部署、内置指标采集（CSV + HTML 报告）、CPU 亲和性、远程部署。
 
 ---
