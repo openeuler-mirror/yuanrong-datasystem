@@ -665,7 +665,9 @@ Status DsCoordinationBackend::CreateKeepAliveKeyWithRetry()
                                                 * KEEP_ALIVE_INTERVAL_DIVISOR));
     const auto retryDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(retryBudgetMs);
     uint32_t retryAttempts = 0;
-    while (IsRetryableRpcError(createStatus) && std::chrono::steady_clock::now() < retryDeadline) {
+    while ((IsRetryableRpcError(createStatus) || createStatus.GetCode() == K_DUPLICATED
+            || createStatus.GetCode() == K_NOT_FOUND || createStatus.GetCode() == K_DATA_INCONSISTENCY)
+           && std::chrono::steady_clock::now() < retryDeadline) {
         ++retryAttempts;
         LOG(WARNING) << "CLUSTER_MEMBERSHIP role=worker action=initial_keepalive_retry address=" << watcherAddr_
                      << " attempt=" << retryAttempts << " status=" << createStatus.ToString();

@@ -33,23 +33,26 @@ Status MemoryKvStore::Put(const std::string &key, const std::string &value, int6
 
         if (expectedGlobalRevision != COORDINATOR_NO_GLOBAL_REVISION_CHECK
             && revision_.load(std::memory_order_relaxed) != expectedGlobalRevision) {
-            return Status(StatusCode::K_TRY_AGAIN, "global revision mismatch");
+            return Status(StatusCode::K_DATA_INCONSISTENCY, "global revision mismatch");
         }
         if (expectedModRevision != COORDINATOR_NO_MOD_REVISION_CHECK) {
-            if (!exists || it->second.modRevision != expectedModRevision) {
-                return Status(StatusCode::K_TRY_AGAIN, "modification revision mismatch");
+            if (!exists) {
+                return Status(StatusCode::K_NOT_FOUND, "key not found for CAS");
+            }
+            if (it->second.modRevision != expectedModRevision) {
+                return Status(StatusCode::K_DATA_INCONSISTENCY, "modification revision mismatch");
             }
         }
         if (expectedVersion == COORDINATOR_KEY_NOT_EXISTS_VERSION) {
             if (exists) {
-                return Status(StatusCode::K_INVALID, "key already exists for CAS");
+                return Status(StatusCode::K_DUPLICATED, "key already exists for CAS");
             }
         } else if (expectedVersion != COORDINATOR_NO_VERSION_CHECK) {
             if (!exists) {
                 return Status(StatusCode::K_NOT_FOUND, "key not found for CAS");
             }
             if (it->second.version != expectedVersion) {
-                return Status(StatusCode::K_INVALID, "version mismatch");
+                return Status(StatusCode::K_DATA_INCONSISTENCY, "version mismatch");
             }
         }
 

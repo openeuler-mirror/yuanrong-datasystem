@@ -72,6 +72,8 @@ ds_cc_library(
 # Both are kept out of the glob and handled via select() conditional deps.
 ds_cc_library(
     name="common_rdma",
+    # shared_memory references these callbacks through a header-only dependency to avoid a target cycle.
+    alwayslink = True,
     srcs=[
         "fast_transport_base.cpp",
         "fast_transport_manager_wrapper.cpp",

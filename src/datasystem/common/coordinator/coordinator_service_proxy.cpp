@@ -714,8 +714,8 @@ Status CoordinatorServiceProxyBase::CAS(const std::string &key, const CasProcess
         if (rc.IsOk()) {
             return Status::OK();
         }
-        if (rc.GetCode() != StatusCode::K_TRY_AGAIN && rc.GetCode() != StatusCode::K_INVALID
-            && rc.GetCode() != StatusCode::K_NOT_FOUND) {
+        if (rc.GetCode() != StatusCode::K_TRY_AGAIN && rc.GetCode() != StatusCode::K_DUPLICATED
+            && rc.GetCode() != StatusCode::K_DATA_INCONSISTENCY && rc.GetCode() != StatusCode::K_NOT_FOUND) {
             return rc;
         }
         lastErr = rc;

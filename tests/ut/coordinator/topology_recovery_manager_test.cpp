@@ -1226,6 +1226,7 @@ TEST_F(TopologyRecoveryManagerTest, ExistingTopologyWinsCreateOnceInstallFence)
     int64_t revision = 0;
     DS_ASSERT_OK(store_->Put(TopologyKey(clusterName), EXISTING_TOPOLOGY, 0, COORDINATOR_KEY_NOT_EXISTS_VERSION,
                              storedVersion, revision));
+    const int64_t existingRevision = revision;
     ObserveMember(clusterName, MEMBER_A);
     auto payload = SnapshotEvidence(MEMBER_A, TOPOLOGY_VERSION, 'a');
     TopologyRecoveryReportDecision decision;
@@ -1239,6 +1240,7 @@ TEST_F(TopologyRecoveryManagerTest, ExistingTopologyWinsCreateOnceInstallFence)
     DS_ASSERT_OK(store_->Range(TopologyKey(clusterName), "", entries, revision));
     ASSERT_EQ(entries.size(), 1);
     EXPECT_EQ(entries.front().value, EXISTING_TOPOLOGY);
+    EXPECT_EQ(entries.front().modRevision, existingRevision);
 }
 
 TEST_F(TopologyRecoveryManagerTest, ReturningMemberReusesCurrentProcessTopologyAuthority)
