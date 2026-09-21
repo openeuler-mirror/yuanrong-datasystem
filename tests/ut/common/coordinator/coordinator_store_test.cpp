@@ -610,7 +610,7 @@ TEST_F(CoordinatorIdTest, MembershipPutRejectsAStaleModificationRevision)
     request.set_value("stale");
     request.set_expected_mod_revision(first.revision());
     coordinator::PutRspPb stale;
-    EXPECT_EQ(service.Put(request, stale).GetCode(), K_TRY_AGAIN);
+    EXPECT_EQ(service.Put(request, stale).GetCode(), K_DATA_INCONSISTENCY);
     coordinator::RangeReqPb range;
     range.set_key(request.key());
     coordinator::RangeRspPb response;
@@ -903,7 +903,7 @@ TEST_F(CoordinatorStoreTest, MemoryKvStoreRejectsPutFromStaleMembershipIncarnati
     EXPECT_EQ(store.Put("/membership", "stale", 100, COORDINATOR_NO_VERSION_CHECK, staleVersion, staleRevision,
                         staleTtlGeneration, firstRevision)
                   .GetCode(),
-              K_TRY_AGAIN);
+              K_DATA_INCONSISTENCY);
 
     std::vector<KeyValueEntry> entries;
     int64_t snapshotRevision = 0;
@@ -932,7 +932,7 @@ TEST_F(CoordinatorStoreTest, MemoryKvStoreRejectsPutAfterGlobalRevisionChanges)
                         topologyRevision, topologyTtlGeneration, COORDINATOR_NO_MOD_REVISION_CHECK,
                         membershipSnapshotRevision)
                   .GetCode(),
-              K_TRY_AGAIN);
+              K_DATA_INCONSISTENCY);
 
     std::vector<KeyValueEntry> entries;
     int64_t rangeRevision = 0;
@@ -1005,7 +1005,7 @@ TEST_F(CoordinatorStoreTest, MemoryKvStorePutWithZeroVersionRequiresMissingKey)
     int64_t overwriteRevision = 0;
     uint64_t overwriteTtlGeneration = 0;
     auto status = store.Put("/cas/create", "2", 0, 0, overwriteVersion, overwriteRevision, overwriteTtlGeneration);
-    ASSERT_EQ(status.GetCode(), K_INVALID);
+    ASSERT_EQ(status.GetCode(), K_DUPLICATED);
 
     std::vector<KeyValueEntry> kvs;
     int64_t rangeRevision = 0;
@@ -1046,7 +1046,7 @@ TEST_F(CoordinatorStoreTest, CoordinatorStorePutPropagatesExpectedVersionSemanti
     int64_t overwriteVersion = 0;
     int64_t overwriteRevision = 0;
     auto status = store_->Put("/coordinator/cas", "2", 0, 0, overwriteVersion, overwriteRevision);
-    ASSERT_EQ(status.GetCode(), K_INVALID);
+    ASSERT_EQ(status.GetCode(), K_DUPLICATED);
 
     DS_ASSERT_OK(store_->Put("/coordinator/cas", "2", 0, COORDINATOR_NO_VERSION_CHECK, version, revision));
     ASSERT_EQ(version, 2);
@@ -1073,7 +1073,7 @@ TEST_F(CoordinatorStoreTest, CoordinatorStoreCreateIfAbsentAllowsOnlyOneConcurre
                 ASSERT_EQ(version, 1);
                 successCount.fetch_add(1);
             } else {
-                ASSERT_EQ(status.GetCode(), K_INVALID);
+                ASSERT_EQ(status.GetCode(), K_DUPLICATED);
             }
         });
     }
@@ -2071,7 +2071,7 @@ TEST_F(CoordinatorStoreTest, LostConditionalPutResponseReturnsConflictWithoutRep
             now += timeout;
             return { Status(K_RPC_DEADLINE_EXCEEDED, "lost put response"), std::nullopt };
         }, now + std::chrono::seconds(3), std::chrono::milliseconds(100), std::chrono::milliseconds(1));
-    EXPECT_EQ(status.GetCode(), K_INVALID);
+    EXPECT_EQ(status.GetCode(), K_DATA_INCONSISTENCY);
     EXPECT_EQ(attempts, 2U);
     std::vector<KeyValueEntry> current;
     DS_ASSERT_OK(store_->Range("/conditional-retry", "", current, revision));
@@ -2647,6 +2647,48 @@ TEST_F(CoordinatorStoreTest, TtlManagerStartStopAreIdempotent)
     manager.Start();
     manager.Stop();
     manager.Stop();
+}
+
+TEST_F(CoordinatorStoreTest, MemoryKvStoreCasConflictsPreserveCommittedRecord)
+{
+    MemoryKvStore store;
+    size_t eventCount = 0;
+    store.SetMutationCallback([&eventCount](std::shared_ptr<WatchEvent>) { ++eventCount; });
+    int64_t version = 0;
+    int64_t revision = 0;
+    uint64_t ttlGeneration = 0;
+    constexpr int64_t ttlMs = 1'000;
+    DS_ASSERT_OK(store.Put("/cas/key", "committed", ttlMs, COORDINATOR_KEY_NOT_EXISTS_VERSION,
+                           version, revision, ttlGeneration));
+    const auto committedRevision = revision;
+    const auto committedVersion = version;
+    const auto committedTtlGeneration = ttlGeneration;
+    EXPECT_EQ(store.Put("/cas/key", "duplicate", 0, COORDINATOR_KEY_NOT_EXISTS_VERSION,
+                        version, revision, ttlGeneration).GetCode(), K_DUPLICATED);
+    EXPECT_EQ(store.Put("/cas/key", "stale", 0, committedVersion + 1,
+                        version, revision, ttlGeneration).GetCode(), K_DATA_INCONSISTENCY);
+    EXPECT_EQ(store.Put("/cas/key", "stale", 0, COORDINATOR_NO_VERSION_CHECK,
+                        version, revision, ttlGeneration, committedRevision + 1).GetCode(), K_DATA_INCONSISTENCY);
+    EXPECT_EQ(store.Put("/cas/key", "stale", 0, COORDINATOR_NO_VERSION_CHECK,
+                        version, revision, ttlGeneration, COORDINATOR_NO_MOD_REVISION_CHECK,
+                        committedRevision + 1).GetCode(), K_DATA_INCONSISTENCY);
+    EXPECT_EQ(store.Put("/missing", "stale", 0, committedVersion,
+                        version, revision, ttlGeneration).GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(store.Put("/missing", "stale", 0, COORDINATOR_NO_VERSION_CHECK,
+                        version, revision, ttlGeneration, committedRevision).GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(store.CurrentRevision(), committedRevision);
+    EXPECT_EQ(eventCount, 1U);
+    EXPECT_EQ(version, committedVersion);
+    EXPECT_EQ(revision, committedRevision);
+    EXPECT_EQ(ttlGeneration, committedTtlGeneration);
+    std::vector<KeyValueEntry> entries;
+    store.Range("/cas/key", "", entries, revision);
+    ASSERT_EQ(entries.size(), 1U);
+    EXPECT_EQ(entries.front().value, "committed");
+    int64_t currentTtlMs = 0;
+    int64_t remainingTtlMs = 0;
+    DS_ASSERT_OK(store.KeepAlive("/cas/key", currentTtlMs, remainingTtlMs, revision, ttlGeneration));
+    EXPECT_EQ(currentTtlMs, ttlMs);
 }
 
 TEST_F(CoordinatorStoreTest, MemoryKvStoreCasMissingKeyDoesNotBumpRevisionOrEmitEvent)

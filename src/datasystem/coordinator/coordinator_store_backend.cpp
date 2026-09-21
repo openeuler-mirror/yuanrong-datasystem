@@ -40,7 +40,8 @@ std::string RemoveTablePrefix(const std::string &physicalKey, const std::string 
 
 bool IsRetryableCasConflict(const Status &status)
 {
-    return status.GetCode() == K_INVALID || status.GetCode() == K_TRY_AGAIN || status.GetCode() == K_NOT_FOUND;
+    return status.GetCode() == K_DUPLICATED || status.GetCode() == K_DATA_INCONSISTENCY
+           || status.GetCode() == K_TRY_AGAIN || status.GetCode() == K_NOT_FOUND;
 }
 
 RangeSearchResult BuildResult(const KeyValueEntry &entry)
@@ -287,7 +288,8 @@ Status CoordinatorStoreBackend::RunCas(const std::string &physicalKey, const Pro
             result = std::move(committed);
             return Status::OK();
         }
-        if (expectedRevision != COORDINATOR_NO_GLOBAL_REVISION_CHECK && putStatus.GetCode() == K_TRY_AGAIN) {
+        if (expectedRevision != COORDINATOR_NO_GLOBAL_REVISION_CHECK
+            && putStatus.GetCode() == K_DATA_INCONSISTENCY) {
             return putStatus;
         }
         if (!IsRetryableCasConflict(putStatus)) {

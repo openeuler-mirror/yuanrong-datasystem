@@ -140,7 +140,7 @@ TEST_F(CoordinatorStoreBackendTest, RevisionFencedCasRejectsConcurrentStoreMutat
         return Status::OK();
     };
 
-    EXPECT_EQ(backend_->CASAtRevision(BLUE_TABLE, "", commitV3, staleRevision, result).GetCode(), K_TRY_AGAIN);
+    EXPECT_EQ(backend_->CASAtRevision(BLUE_TABLE, "", commitV3, staleRevision, result).GetCode(), K_DATA_INCONSISTENCY);
     std::string value;
     DS_ASSERT_OK(backend_->Get(BLUE_TABLE, "", value));
     EXPECT_EQ(value, "topology-v2");
@@ -247,7 +247,7 @@ TEST_F(CoordinatorStoreBackendTest, VersionConflictExhaustionIsBoundedWithoutCha
     const auto begin = std::chrono::steady_clock::now();
     const auto rc = backend_->CAS(BLUE_TABLE, TEST_KEY, process, result);
     const auto elapsed = std::chrono::steady_clock::now() - begin;
-    EXPECT_EQ(rc.GetCode(), K_INVALID);
+    EXPECT_EQ(rc.GetCode(), K_DATA_INCONSISTENCY);
     EXPECT_EQ(attempts, MAX_CAS_ATTEMPTS);
     EXPECT_EQ(result.value, "unchanged");
     EXPECT_LT(elapsed, std::chrono::seconds(1));

@@ -33,6 +33,14 @@
 - Headers under `src/datasystem/cluster` are repository-internal composition interfaces, not installed SDK headers or
   a cross-release source-compatibility surface. Bazel visibility and CMake public include propagation support monorepo
   consumers; external client compatibility is owned by installed headers under `include/datasystem`.
+- Coordinator Store `Put` reports create-only collisions as `K_DUPLICATED`, missing version/revision-fenced keys as
+  `K_NOT_FOUND`, and version/modification/global revision mismatches as `K_DATA_INCONSISTENCY`. Initial membership
+  publication retries these three outcomes by repeating the full read-and-CAS operation within its existing retry
+  window. Both Coordinator CAS helpers recognize these conflicts; revision-fenced Controller CAS returns a stale
+  snapshot conflict immediately so its caller can recompute from fresh authority state. Router behavior is unchanged.
+  This error contract is specific to `Put`; KeepAlive/Delete identity and revision fences retain their existing codes.
+  Recovery create-once installation treats `K_DUPLICATED` as blocked before the hard deadline, preserving the
+  existing topology instead of retrying installation over it; the hard-deadline fallback is unchanged.
 - `DsCoordinationBackend` preserves the topology architecture while using the in-memory Coordinator transport. A
   restarted Coordinator fences its new lifetime with `CoordinatorId`, gates topology/task/notify access, accepts
   Worker-reported last-good topology candidates, installs one canonical highest version, and regenerates derived work.
@@ -661,6 +669,9 @@
 - Core CTest selection:
   - `ctest -R 'ClusterTopology|TopologyRepository|TopologyObserver|PlacementFacade'`
   - `ctest -R 'TopologyController|TopologyTaskExecutor|TopologyEngine|TopologyDfx|TopologyShutdown'`
+- Bazel membership session, Coordinator Store, Store backend, and Proxy regression targets use static linking
+  and include `common_rdma` to resolve the shared-memory allocator and transport dependencies. `common_rdma`
+  retains its objects during static linking because shared-memory transport callbacks use a header-only dependency.
 - Business adapter coverage lives in `ds_ut_object`, `ds_ut_stream`, and selected Worker/object/stream ST binaries.
 - Operator-query coverage includes `CoordinatorStoreTest` raw RPC cases, `ClusterQueryProjectorTest`, Python
   `test_cli_query.py`, and a packaged-wheel real-backend smoke test.

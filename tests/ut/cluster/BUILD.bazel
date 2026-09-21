@@ -47,7 +47,9 @@ ds_cc_test(
 ds_cc_test(
     name = "ds_coordination_backend_session_test",
     srcs = ["ds_coordination_backend_session_test.cpp"],
+    linkstatic = True,
     deps = [
+        "//src/datasystem/common/rdma:common_rdma",
         "//src/datasystem/cluster/coordination_backend:coordination_backend",
         "//tests/ut:ut_common",
     ],

@@ -1570,7 +1570,7 @@ void TopologyRecoveryManager::CompleteInstallationLocked(const std::string &clus
                      << ", version=" << version << ", status=" << installStatus.ToString();
         ForceReadyLocked(clusterName, context,
                          installStatus.GetCode() == K_INVALID ? "install_invalid" : "install_failure");
-    } else if (installStatus.GetCode() == K_INVALID) {
+    } else if (installStatus.GetCode() == K_INVALID || installStatus.GetCode() == K_DUPLICATED) {
         SetStateLocked(clusterName, context, TopologyRecoveryState::BLOCKED);
         LOG(WARNING) << "CLUSTER_RECOVERY_INSTALL_BLOCKED, cluster=" << clusterName
                      << ", coordinator_id=" << CoordinatorIdLogPrefix(coordinatorId_)

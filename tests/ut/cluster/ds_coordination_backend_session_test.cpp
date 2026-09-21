@@ -130,6 +130,7 @@ public:
                  int32_t, std::string *coordinatorId) override
     {
         std::unique_lock<std::mutex> lock(mutex_);
+        ++rangeCalls_;
         if (blockNextRange_) {
             blockNextRange_ = false;
             rangeEntered_ = true;
@@ -500,6 +501,12 @@ public:
         return keepAliveCalls_;
     }
 
+    size_t RangeCalls() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return rangeCalls_;
+    }
+
     size_t PutCalls() const
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -577,6 +584,7 @@ private:
     int64_t lastDeleteModRevision_{ 0 };
     bool membershipDeleteUsed_{ false };
     size_t putCalls_{ 0 };
+    size_t rangeCalls_{ 0 };
     size_t keepAliveCalls_{ 0 };
     std::vector<std::string> lastFailedTargets_;
     int64_t putVersion_{ 0 };
@@ -916,6 +924,35 @@ TEST(DsCoordinationBackendSessionTest, InitialKeepAliveRetriesRoutingDeadlineExc
 
     ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
     EXPECT_EQ(proxy.PutCalls(), 2U);
+}
+
+TEST(DsCoordinationBackendSessionTest, InitialKeepAliveRereadsAfterCasConflicts)
+{
+    for (const auto code : { K_DUPLICATED, K_NOT_FOUND, K_DATA_INCONSISTENCY }) {
+        SCOPED_TRACE(static_cast<int>(code));
+        DeterministicCoordinatorProxy proxy;
+        proxy.SetKeepAliveStatus(Status::OK());
+        proxy.AddPutStatus(Status(code, "injected CAS conflict"));
+        proxy.AddPutStatus(Status::OK());
+        DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+
+        ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+        ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
+        constexpr size_t expectedAttempts = 2;
+        EXPECT_EQ(proxy.PutCalls(), expectedAttempts);
+        EXPECT_EQ(proxy.RangeCalls(), expectedAttempts);
+    }
+}
+
+TEST(DsCoordinationBackendSessionTest, InitialKeepAliveDoesNotRetryInvalidParameter)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.AddPutStatus(Status(K_INVALID, "invalid membership"));
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+
+    EXPECT_EQ(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).GetCode(), K_INVALID);
+    EXPECT_EQ(proxy.PutCalls(), 1U);
+    EXPECT_EQ(proxy.RangeCalls(), 1U);
 }
 
 TEST(DsCoordinationBackendSessionTest, RecreatedMembershipIsBlockedUntilCleanupGatePasses)
