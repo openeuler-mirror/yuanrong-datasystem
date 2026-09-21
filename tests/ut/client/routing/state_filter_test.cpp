@@ -68,7 +68,7 @@ TEST_F(StateFilterTest, ActiveWorkerIsAvailable)
 {
     DS_ASSERT_OK(UpdateHashRing(router_, BuildTopology(MembershipPb::ACTIVE), BuildHostIdMap()));
 
-    EXPECT_TRUE(filter_.IsAvailable(worker_));
+    EXPECT_TRUE(filter_.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
 }
 
 TEST_F(StateFilterTest, NonActiveWorkersAreUnavailable)
@@ -83,7 +83,7 @@ TEST_F(StateFilterTest, NonActiveWorkersAreUnavailable)
 
     for (auto state : unavailableStates) {
         DS_ASSERT_OK(UpdateHashRing(router_, BuildTopology(state), BuildHostIdMap()));
-        EXPECT_FALSE(filter_.IsAvailable(worker_)) << "state=" << state;
+        EXPECT_FALSE(filter_.IsAvailable(worker_, client::WorkerAccessAction::CONTROL)) << "state=" << state;
     }
 }
 
@@ -91,21 +91,21 @@ TEST_F(StateFilterTest, MissingRouterOrWorkerIsUnavailable)
 {
     client::StateFilter missingRouter(nullptr);
 
-    EXPECT_FALSE(missingRouter.IsAvailable(worker_));
-    EXPECT_FALSE(filter_.IsAvailable(worker_));
+    EXPECT_FALSE(missingRouter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
+    EXPECT_FALSE(filter_.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
 }
 
 TEST_F(StateFilterTest, ReflectsUpdatedHashRingWithoutCachedState)
 {
     DS_ASSERT_OK(UpdateHashRing(router_, BuildTopology(MembershipPb::ACTIVE), BuildHostIdMap()));
-    EXPECT_TRUE(filter_.IsAvailable(worker_));
+    EXPECT_TRUE(filter_.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
 
     auto leavingTopology = BuildTopology(MembershipPb::LEAVING);
     filter_.OnHashRingUpdated(*leavingTopology);
-    EXPECT_TRUE(filter_.IsAvailable(worker_));
+    EXPECT_TRUE(filter_.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
 
     DS_ASSERT_OK(UpdateHashRing(router_, leavingTopology, BuildHostIdMap()));
-    EXPECT_FALSE(filter_.IsAvailable(worker_));
+    EXPECT_FALSE(filter_.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
 }
 
 }  // namespace ut

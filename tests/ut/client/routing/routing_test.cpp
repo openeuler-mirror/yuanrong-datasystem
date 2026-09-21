@@ -119,7 +119,7 @@ TEST_F(RoutingFacadeTest, TestInitFetchesRingAndStartsFacade)
     EXPECT_GE(fetchCount.load(), 1);
 
     HostPort worker;
-    DS_ASSERT_OK(routing.SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, worker));
+    DS_ASSERT_OK(routing.SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, worker));
     EXPECT_EQ(worker.ToString(), "127.0.0.1:1000");
     routing.Shutdown();
 }
@@ -148,11 +148,11 @@ TEST_F(RoutingFacadeTest, TestExplicitHostIdPreservesLocalityWithRemoteInitialWo
 
     DS_ASSERT_OK(routing.Init("host-local", remoteWorker, false));
     HostPort selected;
-    DS_ASSERT_OK(routing.SelectWorker("key", client::DataPlacementPolicy::PREFERRED_SAME_NODE, selected));
+    DS_ASSERT_OK(routing.SelectWorker("key", client::DataPlacementPolicy::PREFERRED_SAME_NODE, client::WorkerAccessAction::CONTROL, selected));
     EXPECT_EQ(selected, localWorker);
 
     std::unordered_map<HostPort, std::vector<std::string>> groups;
-    DS_ASSERT_OK(routing.SelectWorkers({ "key-a", "key-b" }, client::DataPlacementPolicy::PREFERRED_SAME_NODE, groups));
+    DS_ASSERT_OK(routing.SelectWorkers({ "key-a", "key-b" }, client::DataPlacementPolicy::PREFERRED_SAME_NODE, client::WorkerAccessAction::CONTROL, groups));
     ASSERT_EQ(groups.size(), 1);
     EXPECT_EQ(groups.begin()->first, localWorker);
     routing.Shutdown();
@@ -167,11 +167,11 @@ TEST_F(RoutingFacadeTest, TestCallsBeforeInitFail)
     client::Routing routing(router, refresher);
 
     HostPort worker;
-    EXPECT_EQ(routing.SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, worker).GetCode(),
+    EXPECT_EQ(routing.SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, worker).GetCode(),
               K_NOT_READY);
 
     std::unordered_map<HostPort, std::vector<std::string>> groups;
-    EXPECT_EQ(routing.SelectWorkers({ "key" }, client::DataPlacementPolicy::PREFERRED_META_OWNER, groups).GetCode(),
+    EXPECT_EQ(routing.SelectWorkers({ "key" }, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, groups).GetCode(),
               K_NOT_READY);
 }
 
@@ -230,7 +230,7 @@ TEST_F(RoutingFacadeTest, TestHostIdResolvesOnLaterRingChangeWhenFirstFetchMisse
     const std::vector<std::string> keys = { "k0", "k1", "k2", "k3", "k4" };
     EXPECT_TRUE(WaitForCondition([&] {
         std::unordered_map<HostPort, std::vector<std::string>> groups;
-        if (routing.SelectWorkers(keys, client::DataPlacementPolicy::PREFERRED_SAME_NODE, groups).IsError()) {
+        if (routing.SelectWorkers(keys, client::DataPlacementPolicy::PREFERRED_SAME_NODE, client::WorkerAccessAction::CONTROL, groups).IsError()) {
             return false;
         }
         // When same-node affinity resolves, all keys route to the local worker in a single group.
@@ -361,7 +361,7 @@ TEST_F(RoutingFacadeTest, TestForwardsPolicyBatchAndStateUpdates)
     DS_ASSERT_OK(routing.Init("host-a", HostPort("127.0.0.1", 1000)));
 
     std::unordered_map<HostPort, std::vector<std::string>> groups;
-    DS_ASSERT_OK(routing.SelectWorkers({ "key-a", "key-b" }, client::DataPlacementPolicy::PREFERRED_META_OWNER,
+    DS_ASSERT_OK(routing.SelectWorkers({ "key-a", "key-b" }, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL,
                                        groups));
     ASSERT_EQ(groups.size(), 1u);
     EXPECT_EQ(groups.begin()->first.ToString(), "127.0.0.1:1000");
@@ -372,7 +372,7 @@ TEST_F(RoutingFacadeTest, TestForwardsPolicyBatchAndStateUpdates)
     for (int i = 0; i < EVICTION_THRESHOLD; ++i) {
         routing.UpdateState(worker, K_CLIENT_WORKER_DISCONNECT);
     }
-    EXPECT_EQ(routing.SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, worker).GetCode(),
+    EXPECT_EQ(routing.SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, worker).GetCode(),
               K_NO_AVAILABLE_WORKER);
 }
 
@@ -422,7 +422,7 @@ TEST_F(RoutingFacadeTest, TestShutdownRejectsSubsequentCalls)
     routing.Shutdown();
 
     HostPort worker;
-    EXPECT_EQ(routing.SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, worker).GetCode(),
+    EXPECT_EQ(routing.SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, worker).GetCode(),
               K_NOT_READY);
 }
 

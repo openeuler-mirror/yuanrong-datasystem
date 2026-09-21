@@ -292,6 +292,13 @@ print("[OK] Get value")
 CQE 错误和被动健康摘要只是验证线索，不能替代查询结果。Client 和 Worker 复用公共
 `RemoteUbPortHealthVerifier`、既有查询线程池及总计 4 个并发槽，不新增轮询线程或查询协议。
 
+**隔离的作用范围**：远端 Worker 的 UB 隔离只影响**写路由**（Set/MSet 不再选择该 Worker），不拦截读请求。
+Get 是否成功由 Worker 的权威判决决定：Worker 本机允许 UB 回写则正常返回，本机确认全部端口 BAD 则不提交 UB 写入，
+并按既有策略走 TCP fallback 或返回 UB 读源不可用（Client 可继续尝试其他副本）。
+只有 **Client 本机全部 UB 端口 BAD** 才会在 Client 入口直接拒绝 Get/Set（不发送 RPC）。
+隔离由探测结果驱动、异步生效：业务响应携带的全 BAD 摘要只触发端口查询，查询确认（并通过对端、incarnation 与
+health epoch 校验）后才建立/解除写隔离，生效延迟约为一次查询 RPC 往返。
+
 | 状态或事件 | 调度行为 |
 | --- | --- |
 | 新 peer、新 incarnation，或 GOOD 后空闲状态的新验证轮次 | 首次查询立即到期；实际执行仍受并发槽限制 |

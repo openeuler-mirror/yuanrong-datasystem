@@ -2480,7 +2480,8 @@ Status ObjectClientImpl::SelectSetRoute(const std::string &objectKey,
     auto routing = std::atomic_load(&routing_);
     RETURN_RUNTIME_ERROR_IF_NULL(routing);
     HostPort selected;
-    auto rc = routing->SelectWorkerFromCandidates(preferredWorkers, dataPlacementPolicy_, selected,
+    auto rc = routing->SelectWorkerFromCandidates(preferredWorkers, dataPlacementPolicy_,
+                                                  client::WorkerAccessAction::SET, selected,
                                                   MergeWriteTargetExclusions(excludedWorkers));
     if (rc.IsOk()) {
         return BuildSetRouteContext(selected, routeContext);
@@ -2514,7 +2515,8 @@ Status ObjectClientImpl::SelectSetRouteWithoutHints(
     auto routing = std::atomic_load(&routing_);
     RETURN_RUNTIME_ERROR_IF_NULL(routing);
     HostPort worker;
-    RETURN_IF_NOT_OK(routing->SelectWorker(objectKey, dataPlacementPolicy_, worker, effectiveExclusions));
+    RETURN_IF_NOT_OK(routing->SelectWorker(objectKey, dataPlacementPolicy_, client::WorkerAccessAction::SET,
+                                           worker, effectiveExclusions));
     return BuildSetRouteContext(worker, routeContext);
 }
 
@@ -5080,7 +5082,8 @@ Status ObjectClientImpl::WarmupSameNodeClientWorkerConnections(
         Status rc;
         do {
             key = keyPrefix + "_" + std::to_string(keyIndex++);
-            rc = routing->SelectWorker(key, client::DataPlacementPolicy::REQUIRED_SAME_NODE, selectedWorker);
+            rc = routing->SelectWorker(key, client::DataPlacementPolicy::REQUIRED_SAME_NODE,
+                                       client::WorkerAccessAction::SET, selectedWorker);
         } while (rc.IsOk() && warmedWorkers.find(selectedWorker) != warmedWorkers.end()
                  && warmupBudget.CalcRealRemainingTime() > 0);
         if (rc.IsOk()) {

@@ -1629,7 +1629,7 @@ TEST_F(CoordinatorWriteRedirectTest, ThreeExitingWorkersReturnLiveCandidateAndWr
     for (size_t i = 0; i < 10000; ++i) {
         HostPort selected;
         auto candidate = "coordinator-write-redirect-" + std::to_string(i);
-        DS_ASSERT_OK(routing.SelectWorker(candidate, client::DataPlacementPolicy::PREFERRED_META_OWNER, selected));
+        DS_ASSERT_OK(routing.SelectWorker(candidate, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, selected));
         if (selected == leaving) {
             key = std::move(candidate);
             break;

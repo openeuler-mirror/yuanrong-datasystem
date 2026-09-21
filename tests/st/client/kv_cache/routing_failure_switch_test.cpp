@@ -104,7 +104,7 @@ protected:
         for (size_t i = 0; i < KEY_SEARCH_LIMIT; ++i) {
             std::string key = ROUTE_KEY_PREFIX + std::to_string(i);
             HostPort selectedWorker;
-            Status rc = router.SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, selectedWorker);
+            Status rc = router.SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, selectedWorker);
             if (rc.IsOk() && selectedWorker == targetWorker) {
                 return key;
             }
@@ -119,7 +119,7 @@ protected:
                            const HostPort &targetWorker, const std::string &key)
     {
         HostPort selectedWorker;
-        DS_ASSERT_OK(router.SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, selectedWorker));
+        DS_ASSERT_OK(router.SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, selectedWorker));
         EXPECT_EQ(selectedWorker, targetWorker);
 
         auto leavingTopology = std::make_shared<ClusterTopologyPb>(topology);
@@ -127,7 +127,7 @@ protected:
         std::unique_ptr<client::PreparedClusterTopology> prepared;
         DS_ASSERT_OK(client::PreparedClusterTopology::Create(std::move(*leavingTopology), prepared));
         router.UpdateHashRing(*prepared, *hostIdMap);
-        DS_ASSERT_OK(router.SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, selectedWorker));
+        DS_ASSERT_OK(router.SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, selectedWorker));
         EXPECT_EQ(selectedWorker, remainingWorker);
     }
 
@@ -140,13 +140,13 @@ protected:
             router.UpdateState(targetWorker, K_CLIENT_WORKER_DISCONNECT);
         }
         HostPort selectedWorker;
-        DS_ASSERT_OK(router.SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, selectedWorker));
+        DS_ASSERT_OK(router.SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, selectedWorker));
         ASSERT_EQ(selectedWorker, remainingWorker);
 
         const auto deadline =
             std::chrono::steady_clock::now() + std::chrono::milliseconds(BROKEN_FILTER_RECOVERY_TIMEOUT_MS);
         while (std::chrono::steady_clock::now() < deadline) {
-            DS_ASSERT_OK(router.SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, selectedWorker));
+            DS_ASSERT_OK(router.SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::CONTROL, selectedWorker));
             if (selectedWorker == targetWorker) {
                 return;
             }

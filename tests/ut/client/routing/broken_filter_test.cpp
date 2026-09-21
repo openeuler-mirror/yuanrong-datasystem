@@ -44,15 +44,15 @@ TEST_F(BrokenFilterTest, DisconnectsBelowThresholdDoNotEvict)
 {
     client::BrokenFilter filter;
 
-    EXPECT_TRUE(filter.IsAvailable(worker_));
+    EXPECT_TRUE(filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
     // A few transient blips (e.g. jitter-induced K_RPC_PEER_DEAD) must not evict the worker.
     for (int i = 0; i < EVICT_THRESHOLD - 1; ++i) {
         filter.OnWorkerStateChange(worker_, K_CLIENT_WORKER_DISCONNECT);
-        EXPECT_TRUE(filter.IsAvailable(worker_)) << "evicted after only " << (i + 1) << " failures";
+        EXPECT_TRUE(filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL)) << "evicted after only " << (i + 1) << " failures";
     }
     // Reaching the threshold within the burst window evicts the worker.
     filter.OnWorkerStateChange(worker_, K_CLIENT_WORKER_DISCONNECT);
-    EXPECT_FALSE(filter.IsAvailable(worker_));
+    EXPECT_FALSE(filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
 }
 
 TEST_F(BrokenFilterTest, OtherStatusCodesAreIgnored)
@@ -60,13 +60,13 @@ TEST_F(BrokenFilterTest, OtherStatusCodesAreIgnored)
     client::BrokenFilter filter;
 
     filter.OnWorkerStateChange(worker_, K_RUNTIME_ERROR);
-    EXPECT_TRUE(filter.IsAvailable(worker_));
+    EXPECT_TRUE(filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
 
     for (int i = 0; i < EVICT_THRESHOLD; ++i) {
         filter.OnWorkerStateChange(worker_, K_CLIENT_WORKER_DISCONNECT);
     }
     filter.OnWorkerStateChange(worker_, K_NOT_OWNER);  // non-disconnect status is ignored
-    EXPECT_FALSE(filter.IsAvailable(worker_));  // still broken from the disconnect burst
+    EXPECT_FALSE(filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));  // still broken from the disconnect burst
 }
 
 TEST_F(BrokenFilterTest, WorkerBecomesAvailableAfterTtl)
@@ -76,13 +76,13 @@ TEST_F(BrokenFilterTest, WorkerBecomesAvailableAfterTtl)
     for (int i = 0; i < EVICT_THRESHOLD; ++i) {
         filter.OnWorkerStateChange(worker_, K_CLIENT_WORKER_DISCONNECT);
     }
-    EXPECT_FALSE(filter.IsAvailable(worker_));
+    EXPECT_FALSE(filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
 
     const auto deadline = std::chrono::steady_clock::now() + BROKEN_FILTER_RECOVERY_TIMEOUT;
-    while (!filter.IsAvailable(worker_) && std::chrono::steady_clock::now() < deadline) {
+    while (!filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL) && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(BROKEN_FILTER_POLL_INTERVAL);
     }
-    EXPECT_TRUE(filter.IsAvailable(worker_));
+    EXPECT_TRUE(filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
 }
 
 TEST_F(BrokenFilterTest, ScaleDownIsolatesUntilHashRingUpdate)
@@ -90,11 +90,11 @@ TEST_F(BrokenFilterTest, ScaleDownIsolatesUntilHashRingUpdate)
     client::BrokenFilter filter;
 
     filter.OnWorkerStateChange(worker_, K_SCALE_DOWN);
-    EXPECT_FALSE(filter.IsAvailable(worker_));
+    EXPECT_FALSE(filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
 
     ClusterTopologyPb ring;
     filter.OnHashRingUpdated(ring);
-    EXPECT_TRUE(filter.IsAvailable(worker_));
+    EXPECT_TRUE(filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
 }
 
 TEST_F(BrokenFilterTest, ConcurrentUpdatesAreNotLost)
@@ -116,7 +116,7 @@ TEST_F(BrokenFilterTest, ConcurrentUpdatesAreNotLost)
         thread.join();
     }
     for (int i = 0; i < workerCount; ++i) {
-        EXPECT_FALSE(filter.IsAvailable(HostPort("127.0.0.1", 1000 + i)));
+        EXPECT_FALSE(filter.IsAvailable(HostPort("127.0.0.1", 1000 + i), client::WorkerAccessAction::CONTROL));
     }
 }
 

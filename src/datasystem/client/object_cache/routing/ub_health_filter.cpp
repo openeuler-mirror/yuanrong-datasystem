@@ -103,17 +103,15 @@ bool UbHealthFilter::ApplySummary(const UbHealthSummary &summary, const std::str
     if (summary.portHealth.has_value()) {
         localAdmission_.SetRemotePortHealthCapability(summary.worker, true, summary.incarnation);
         writeTargetAdmission_->SetRemotePortHealthCapability(summary.worker, true, summary.incarnation);
+        // The verified port fact is authoritative for the write direction. Applying it on recovery too (instead of
+        // clearing the write admission) keeps the health epoch watermark, so a stale all-BAD fact cannot re-quarantine
+        // a recovered Worker, and quarantine and release follow one code path.
+        ApplyVerifiedWriteTargetPortHealth(summary.worker, summary.incarnation, *summary.portHealth);
     }
 
     if (verifiedRecovery && (summary.portHealth.has_value() || legacyReadRecovery)) {
         localAdmission_.ClearLocalState(summary.worker);
         localObservationIncarnations_.erase(summary.worker);
-        if (summary.portHealth.has_value()) {
-            writeTargetAdmission_->ClearLocalState(summary.worker);
-            writeTargetObservationIncarnations_.erase(summary.worker);
-            writeTargetObservationCount_.store(writeTargetObservationIncarnations_.size(), std::memory_order_release);
-            RefreshWriteTargetCompletionGenerationLocked(summary.worker);
-        }
     } else {
         ReconcileLocalObservationWithTrustedIncarnationLocked(summary.worker, summary.incarnation);
     }
@@ -300,6 +298,22 @@ void UbHealthFilter::RefreshWriteTargetCompletionGenerationLocked(const HostPort
                       std::shared_ptr<const WriteTargetCompletionGenerations>(std::move(generations)));
 }
 
+void UbHealthFilter::ApplyVerifiedWriteTargetPortHealth(const HostPort &worker, const std::string &incarnation,
+                                                        const UbPortHealthSummary &portHealth)
+{
+    (void)writeTargetAdmission_->ApplyPortHealth(worker, portHealth, UbPortHealthEvidenceSource::QUERY_RESPONSE);
+    // The exclusion entry follows the final admission verdict, not the ApplyPortHealth return value: a repeated
+    // fact with an unchanged epoch reports "not applied" while the Worker is still quarantined.
+    const bool unavailable = writeTargetAdmission_->CheckWriteTarget(worker, UbOperationKind::CLIENT_PUT).IsError();
+    if (unavailable) {
+        writeTargetObservationIncarnations_[worker] = incarnation;
+    } else {
+        writeTargetObservationIncarnations_.erase(worker);
+    }
+    writeTargetObservationCount_.store(writeTargetObservationIncarnations_.size(), std::memory_order_release);
+    RefreshWriteTargetCompletionGenerationLocked(worker);
+}
+
 void UbHealthFilter::ReportLateWriteTargetFailure(const UrmaLateCompletion &completion, uint64_t peerToken) noexcept
 {
     try {
@@ -355,10 +369,19 @@ void UbHealthFilter::EnablePortHealthVerificationIfSupportedLocked(const HostPor
     }
 }
 
-bool UbHealthFilter::IsAvailable(const HostPort &addr) const
+bool UbHealthFilter::IsAvailable(const HostPort &addr, WorkerAccessAction action) const
 {
     if (!IsClientUbFaultIsolationEnabled()) {
         return true;
+    }
+    if (action == WorkerAccessAction::GET) {
+        // A remote Worker's UB health must not deny reads: the Worker owns the UB writeback verdict and the read
+        // path reacts to the response (TCP fallback or another replica). Only the client-local port admission
+        // closes reads, and that gate runs before routing.
+        return true;
+    }
+    if (action == WorkerAccessAction::SET) {
+        return IsWriteTargetAvailable(addr);
     }
     if (localAdmission_.CheckReadSource(addr).IsError()) {
         INJECT_POINT_NO_RETURN("client.ub_health_filter.local_read_denied");

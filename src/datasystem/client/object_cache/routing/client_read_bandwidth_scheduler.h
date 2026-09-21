@@ -94,12 +94,12 @@ public:
     bool SelectWorkerFast(const std::string &requestKey, const std::vector<HostPort> &exclude,
                           const HostPort &preferredWorker, const std::vector<std::shared_ptr<IWorkerFilter>> &filters,
                           const std::shared_ptr<const UbRoutingHealthSnapshot> &healthSnapshot,
-                          std::uint64_t taskId, HostPort &selected);
+                          std::uint64_t taskId, HostPort &selected, WorkerAccessAction action);
 
     bool SelectWorker(const std::string &requestKey, const std::vector<std::shared_ptr<IWorkerFilter>> &filters,
                       const std::vector<HostPort> &exclude, const HostPort &preferredWorker,
-                      const std::shared_ptr<const UbRoutingHealthSnapshot> &healthSnapshot,
-                      std::uint64_t taskId, HostPort &selected);
+                      const std::shared_ptr<const UbRoutingHealthSnapshot> &healthSnapshot, std::uint64_t taskId,
+                      HostPort &selected, WorkerAccessAction action);
 
     // Initialization-only setting. Call exactly once, in nanoseconds, before
     // Observe(), RefreshCandidates(), or any selection can run concurrently.

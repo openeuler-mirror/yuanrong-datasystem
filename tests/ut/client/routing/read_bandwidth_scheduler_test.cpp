@@ -57,8 +57,9 @@ void PopulateHealth(const std::vector<HostPort> &workers, UbRoutingHealthSnapsho
 
 class AllowAllFilter final : public IWorkerFilter {
 public:
-    bool IsAvailable(const HostPort &) const override
+    bool IsAvailable(const HostPort &, client::WorkerAccessAction action) const override
     {
+        (void)action;
         return true;
     }
 };
@@ -66,8 +67,9 @@ public:
 class TrackingFilter final : public IWorkerFilter {
 public:
     explicit TrackingFilter(bool available) : available_(available) {}
-    bool IsAvailable(const HostPort &) const override
+    bool IsAvailable(const HostPort &, client::WorkerAccessAction action) const override
     {
+        (void)action;
         calls_.fetch_add(1, std::memory_order_relaxed);
         return available_;
     }
@@ -169,14 +171,14 @@ TEST_F(ClientReadBandwidthSchedulerTest, FallbackReturnsPreferredWorkerWithTrue)
     PopulateHealth(workers, *health_, 2, 2);
     HostPort selected;
     auto filters = std::make_shared<AllowAllFilter>();
-    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {preferred_}, preferred_, {filters}, health_, taskId_, selected));
+    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {preferred_}, preferred_, {filters}, health_, taskId_, selected, client::WorkerAccessAction::CONTROL));
     EXPECT_EQ(selected, preferred_);
 }
 
 TEST_F(ClientReadBandwidthSchedulerTest, FallbackWithEmptyCandidateTable) {
     HostPort selected;
     auto filters = std::make_shared<AllowAllFilter>();
-    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {}, preferred_, {filters}, nullptr, taskId_, selected));
+    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {}, preferred_, {filters}, nullptr, taskId_, selected, client::WorkerAccessAction::CONTROL));
     EXPECT_EQ(selected, preferred_);
 }
 
@@ -186,7 +188,7 @@ TEST_F(ClientReadBandwidthSchedulerTest, FallbackWithFiltersAllRejecting) {
     PopulateHealth(workers, *health_, 4, 0);
     HostPort selected;
     auto rejecting = std::make_shared<TrackingFilter>(false);
-    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {}, preferred_, {rejecting}, health_, taskId_, selected));
+    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {}, preferred_, {rejecting}, health_, taskId_, selected, client::WorkerAccessAction::CONTROL));
     EXPECT_EQ(selected, preferred_);
     EXPECT_LE(rejecting->Calls(), 4U);
 }
@@ -197,7 +199,7 @@ TEST_F(ClientReadBandwidthSchedulerTest, FallbackBypassesExcludeForPreferredWork
     RegisterWorkers(workers);
     PopulateHealth(workers, *health_, 2, 2);
     HostPort selected;
-    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {preferred_}, preferred_, {}, health_, taskId_, selected));
+    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {preferred_}, preferred_, {}, health_, taskId_, selected, client::WorkerAccessAction::CONTROL));
     EXPECT_EQ(selected, preferred_);
 }
 
@@ -206,7 +208,7 @@ TEST_F(ClientReadBandwidthSchedulerTest, ExcludeAppliedDuringWeightedSelection) 
     RegisterWorkers(workers);
     PopulateHealth(workers, *health_, 4, 0);
     HostPort selected;
-    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {preferred_}, preferred_, {}, health_, taskId_, selected));
+    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {preferred_}, preferred_, {}, health_, taskId_, selected, client::WorkerAccessAction::CONTROL));
     EXPECT_EQ(selected, candidate_);
 }
 
@@ -215,7 +217,7 @@ TEST_F(ClientReadBandwidthSchedulerTest, ExcludeAppliesAfterPickWeightedCandidat
     RegisterWorkers(workers);
     PopulateHealth(workers, *health_, 4, 0);
     HostPort selected;
-    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {preferred_, candidate_}, preferred_, {}, health_, taskId_, selected));
+    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {preferred_, candidate_}, preferred_, {}, health_, taskId_, selected, client::WorkerAccessAction::CONTROL));
     EXPECT_EQ(selected, preferred_);
 }
 
@@ -226,14 +228,14 @@ TEST_F(ClientReadBandwidthSchedulerTest, ReturnsFalseWhenDisabled) {
     ClientReadBandwidthScheduler disabledScheduler(disabledConfig);
     HostPort selected;
     uint64_t tid = 0;
-    EXPECT_FALSE(disabledScheduler.SelectWorkerFast("key", {}, HostPort("a", 1), {}, nullptr, tid, selected));
+    EXPECT_FALSE(disabledScheduler.SelectWorkerFast("key", {}, HostPort("a", 1), {}, nullptr, tid, selected, client::WorkerAccessAction::CONTROL));
 }
 
 TEST_F(ClientReadBandwidthSchedulerTest, FallsBackWhenNoStateExistsForPreferred) {
     RegisterWorkers({candidate_});
     PopulateHealth({candidate_}, *health_, 4, 0);
     HostPort selected;
-    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {candidate_}, preferred_, {}, health_, taskId_, selected));
+    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {candidate_}, preferred_, {}, health_, taskId_, selected, client::WorkerAccessAction::CONTROL));
     EXPECT_EQ(selected, preferred_);
 }
 
@@ -243,7 +245,7 @@ TEST_F(ClientReadBandwidthSchedulerTest, WeightedPathSelectsHealthyCandidate) {
     RegisterWorkers(workers);
     PopulateHealth(workers, *health_, 4, 0);
     HostPort selected;
-    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {}, candidate2_, {}, health_, taskId_, selected));
+    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {}, candidate2_, {}, health_, taskId_, selected, client::WorkerAccessAction::CONTROL));
     EXPECT_TRUE(selected == candidate_ || selected == preferred_);
 }
 
@@ -254,7 +256,7 @@ TEST_F(ClientReadBandwidthSchedulerTest, WeightedPathRejectsCandidateAboveCutInG
     RefreshWith(workers);
     PopulateHealth(workers, *health_, 4, 0);
     HostPort selected;
-    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {}, preferred_, {}, health_, taskId_, selected));
+    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {}, preferred_, {}, health_, taskId_, selected, client::WorkerAccessAction::CONTROL));
     EXPECT_EQ(selected, candidate_);
 }
 
@@ -263,7 +265,7 @@ TEST_F(ClientReadBandwidthSchedulerTest, WeightedPathRejectsAllPortsFailed) {
     RegisterWorkers(workers);
     PopulateHealth(workers, *health_, 3, 3);
     HostPort selected;
-    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {}, preferred_, {}, health_, taskId_, selected));
+    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {}, preferred_, {}, health_, taskId_, selected, client::WorkerAccessAction::CONTROL));
     EXPECT_EQ(selected, preferred_);
 }
 
@@ -277,7 +279,7 @@ TEST_F(ClientReadBandwidthSchedulerTest, RefreshedCandidateTableAfterRefresh) {
     RefreshWith(newSet);
     PopulateHealth(newSet, *health_, 4, 0);
     HostPort selected;
-    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {}, candidate2_, {}, health_, taskId_, selected));
+    EXPECT_TRUE(scheduler_->SelectWorkerFast("key", {}, candidate2_, {}, health_, taskId_, selected, client::WorkerAccessAction::CONTROL));
     EXPECT_EQ(selected, preferred_);
     ClientReadBandwidthScheduler::WorkerStatus removed;
     scheduler_->GetWorkerStatus(candidate_, health_, removed);
@@ -314,7 +316,7 @@ TEST_F(ClientReadBandwidthSchedulerTest, ConcurrentRefreshAndSelectionReturnsKno
                 const size_t idx = (v + ti) % workers.size();
                 HostPort selected;
                 bool ok = scheduler_->SelectWorkerFast("concurrent", {workers.front()}, candidate2_,
-                                                       {filter}, health, v, selected);
+                                                       {filter}, health, v, selected, client::WorkerAccessAction::CONTROL);
                 totalCalls.fetch_add(1, std::memory_order_relaxed);
                 EXPECT_TRUE(ok);
                 const bool isCandidate = std::find(workers.begin(), workers.end(), selected) != workers.end();
@@ -484,7 +486,7 @@ TEST_F(WeightedSelectionTest, LowWeightCanStillBeSelectedInMultipleTries) {
     for (uint32_t i = 0; i < kTrials; ++i) {
         HostPort selected;
         std::string key = "trial-" + std::to_string(i);
-        ASSERT_TRUE(scheduler.SelectWorkerFast(key, {}, preferred_, {}, health, taskId_++, selected));
+        ASSERT_TRUE(scheduler.SelectWorkerFast(key, {}, preferred_, {}, health, taskId_++, selected, client::WorkerAccessAction::CONTROL));
         ASSERT_TRUE(selected == candidate_ || selected == preferred_);
         if (selected == candidate_) {
             ++successes;
@@ -502,7 +504,7 @@ TEST_F(WeightedSelectionTest, HighWeightSelectsCandidate) {
     auto health = std::make_shared<UbRoutingHealthSnapshot>();
     PopulateHealth({candidate_}, *health, 4, 0);
     HostPort selected;
-    ASSERT_TRUE(scheduler.SelectWorkerFast("high-weight-key", {}, preferred_, {}, health, taskId_++, selected));
+    ASSERT_TRUE(scheduler.SelectWorkerFast("high-weight-key", {}, preferred_, {}, health, taskId_++, selected, client::WorkerAccessAction::CONTROL));
     EXPECT_TRUE(selected == candidate_ || selected == preferred_);
 }
 
@@ -512,7 +514,7 @@ TEST_F(WeightedSelectionTest, ZeroWeightNeverSelected) {
     auto health = std::make_shared<UbRoutingHealthSnapshot>();
     PopulateHealth({candidate_}, *health, 2, 2);
     HostPort selected;
-    EXPECT_TRUE(scheduler.SelectWorkerFast("zero-weight", {}, preferred_, {}, health, taskId_++, selected));
+    EXPECT_TRUE(scheduler.SelectWorkerFast("zero-weight", {}, preferred_, {}, health, taskId_++, selected, client::WorkerAccessAction::CONTROL));
     EXPECT_EQ(selected, preferred_);
 }
 
@@ -526,7 +528,7 @@ TEST_F(WeightedSelectionTest, NearMaximumWeightSelectsCandidate) {
     auto health = std::make_shared<UbRoutingHealthSnapshot>();
     PopulateHealth({candidate_}, *health, 4, 0);
     HostPort selected;
-    ASSERT_TRUE(scheduler.SelectWorkerFast("max-weight", {}, preferred_, {}, health, taskId_++, selected));
+    ASSERT_TRUE(scheduler.SelectWorkerFast("max-weight", {}, preferred_, {}, health, taskId_++, selected, client::WorkerAccessAction::CONTROL));
     EXPECT_TRUE(selected == candidate_ || selected == preferred_);
 }
 
@@ -539,7 +541,7 @@ TEST_F(WeightedSelectionTest, StarvationDoesNotBypassAllPortsFailed) {
     auto health = std::make_shared<UbRoutingHealthSnapshot>();
     PopulateHealth({candidate_}, *health, 2, 2);
     HostPort selected;
-    EXPECT_TRUE(scheduler.SelectWorkerFast("starve-key", {}, preferred_, {}, health, taskId_++, selected));
+    EXPECT_TRUE(scheduler.SelectWorkerFast("starve-key", {}, preferred_, {}, health, taskId_++, selected, client::WorkerAccessAction::CONTROL));
     EXPECT_EQ(selected, preferred_);
 }
 
@@ -552,7 +554,7 @@ TEST_F(WeightedSelectionTest, StarvationSelectsHealthyLowWeightCandidate) {
     PopulateHealth({candidate_}, *health, 4, 0);
     for (uint32_t i = 0; i < 32; ++i) {
         HostPort selected;
-        ASSERT_TRUE(scheduler.SelectWorkerFast("starved", {}, preferred_, {}, health, taskId_++, selected));
+        ASSERT_TRUE(scheduler.SelectWorkerFast("starved", {}, preferred_, {}, health, taskId_++, selected, client::WorkerAccessAction::CONTROL));
         EXPECT_EQ(selected, candidate_);
     }
 }
@@ -569,7 +571,7 @@ TEST_F(WeightedSelectionTest, FilterRejectionFallsBackToSeparatePreferredWorker)
     auto filter = std::make_shared<TrackingFilter>(false);
     HostPort selected;
     EXPECT_TRUE(scheduler.SelectWorkerFast("filter-healthy", {},
-                                          preferred_, {filter}, health, taskId_++, selected));
+                                          preferred_, {filter}, health, taskId_++, selected, client::WorkerAccessAction::CONTROL));
     EXPECT_EQ(selected, preferred_);
     EXPECT_EQ(filter->Calls(), 1U);
 }
@@ -594,7 +596,7 @@ TEST_F(WeightedSelectionTest, DeterministicSelectionWithKnownKey) {
     auto health = std::make_shared<UbRoutingHealthSnapshot>();
     PopulateHealth({preferred_, candidate_}, *health, 4, 0);
     HostPort first;
-    ASSERT_TRUE(scheduler.SelectWorkerFast("deterministic", {}, preferred_, {}, health, taskId_++, first));
+    ASSERT_TRUE(scheduler.SelectWorkerFast("deterministic", {}, preferred_, {}, health, taskId_++, first, client::WorkerAccessAction::CONTROL));
     // Fresh scheduler with same state → same key gives same behaviour.
     ClientReadBandwidthScheduler scheduler2(StableWeightedConfig());
     RegisterWorkers(scheduler2, {preferred_, candidate_});
@@ -602,7 +604,7 @@ TEST_F(WeightedSelectionTest, DeterministicSelectionWithKnownKey) {
     PopulateHealth({preferred_, candidate_}, *health2, 4, 0);
     HostPort freshFirst;
     uint64_t freshTaskId = 0;
-    ASSERT_TRUE(scheduler2.SelectWorkerFast("deterministic", {}, preferred_, {}, health2, freshTaskId, freshFirst));
+    ASSERT_TRUE(scheduler2.SelectWorkerFast("deterministic", {}, preferred_, {}, health2, freshTaskId, freshFirst, client::WorkerAccessAction::CONTROL));
     EXPECT_EQ(freshFirst, first);
     EXPECT_TRUE(freshFirst == preferred_ || freshFirst == candidate_);
 }
@@ -621,7 +623,7 @@ TEST_F(WeightedSelectionTest, SelectFromLargeTable) {
     auto health = std::make_shared<UbRoutingHealthSnapshot>();
     PopulateHealth(workers, *health, 4, 0);
     HostPort selected;
-    ASSERT_TRUE(scheduler.SelectWorkerFast("large-table", {}, preferred_, {}, health, taskId_++, selected));
+    ASSERT_TRUE(scheduler.SelectWorkerFast("large-table", {}, preferred_, {}, health, taskId_++, selected, client::WorkerAccessAction::CONTROL));
     EXPECT_TRUE(selected == preferred_ || std::find(workers.begin(), workers.end(), selected) != workers.end());
 }
 

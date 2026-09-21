@@ -30,15 +30,24 @@
 namespace datasystem {
 namespace client {
 
+/**
+ * @brief Which request action the worker is being selected for. Filters decide per action which state may deny a
+ * candidate: GET must not be denied by remote Worker UB isolation, SET must skip quarantined write targets, and
+ * CONTROL preserves the behavior for callers that are neither a data-plane Get nor Set.
+ */
+enum class WorkerAccessAction { GET, SET, CONTROL };
+
 class IWorkerFilter {
 public:
     virtual ~IWorkerFilter() = default;
 
     /**
      * @brief Called by WorkerRouter when traversing the filter chain.
+     * @param action which request action the worker is being selected for. It has no default so every call site
+     * classifies itself.
      * @return false to skip this worker (not available for routing).
      */
-    virtual bool IsAvailable(const HostPort &addr) const = 0;
+    virtual bool IsAvailable(const HostPort &addr, WorkerAccessAction action) const = 0;
 
     /**
      * @brief Called when WorkerRouter receives UpdateState.

@@ -97,19 +97,22 @@ public:
     void SetHostId(std::string hostId);
 
     // Single key selection. exclude list avoids specific workers (e.g., LEAVING on write retry).
-    Status SelectWorker(const std::string &key, DataPlacementPolicy policy, HostPort &worker,
-                        const std::vector<HostPort> &exclude = {}) const;
+    // action is required so every call site classifies the selection (see WorkerAccessAction).
+    Status SelectWorker(const std::string &key, DataPlacementPolicy policy, WorkerAccessAction action,
+                        HostPort &worker, const std::vector<HostPort> &exclude = {}) const;
 
     Status SelectWorkerFromCandidates(const std::vector<HostPort> &candidates, DataPlacementPolicy policy,
-                                      HostPort &worker, const std::vector<HostPort> &exclude = {}) const;
+                                      WorkerAccessAction action, HostPort &worker,
+                                      const std::vector<HostPort> &exclude = {}) const;
 
     // Batch selection: group keys by owner, return map<worker, keys>.
     Status SelectWorkers(const std::vector<std::string> &keys, DataPlacementPolicy policy,
+                         WorkerAccessAction action,
                          std::unordered_map<HostPort, std::vector<std::string>> &groups,
                          const std::vector<HostPort> &exclude = {}) const;
 
-    Status SelectWorkerByScheduling(const std::string &key, DataPlacementPolicy policy, HostPort &worker,
-                                    const std::vector<HostPort> &exclude = {}) const;
+    Status SelectWorkerByScheduling(const std::string &key, DataPlacementPolicy policy, WorkerAccessAction action,
+                                    HostPort &worker, const std::vector<HostPort> &exclude = {}) const;
 
     std::vector<HostPort> GetAvailableSameNodeWorkers() const;
 
@@ -148,10 +151,10 @@ private:
     };
     std::shared_ptr<const RingView> ringView_;
 
-    bool IsWorkerAvailable(const HostPort &addr) const;
+    bool IsWorkerAvailable(const HostPort &addr, WorkerAccessAction action) const;
     bool IsExcluded(const HostPort &addr, const std::vector<HostPort> &exclude) const;
-    Status SelectWorkerFromView(const std::string &key, DataPlacementPolicy policy, HostPort &worker,
-                                const std::vector<HostPort> &exclude,
+    Status SelectWorkerFromView(const std::string &key, DataPlacementPolicy policy, WorkerAccessAction action,
+                                HostPort &worker, const std::vector<HostPort> &exclude,
                                 const std::shared_ptr<const RingView> &view) const;
 };
 

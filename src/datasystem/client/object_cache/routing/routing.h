@@ -65,13 +65,16 @@ public:
     Status Init(const std::string &hostId, const HostPort &initialWorkerAddr, bool initialWorkerIsLocal = false);
 
     // Routing owns only its GetHashRing control channel. The caller owns business RPC execution and retries.
-    Status SelectWorker(const std::string &key, DataPlacementPolicy policy, HostPort &worker,
-                        const std::vector<HostPort> &exclude = {});
+    // action classifies the caller so filters can scope their state (see WorkerAccessAction).
+    Status SelectWorker(const std::string &key, DataPlacementPolicy policy, WorkerAccessAction action,
+                        HostPort &worker, const std::vector<HostPort> &exclude = {});
 
     Status SelectWorkerFromCandidates(const std::vector<HostPort> &candidates, DataPlacementPolicy policy,
-                                      HostPort &worker, const std::vector<HostPort> &exclude = {});
+                                      WorkerAccessAction action, HostPort &worker,
+                                      const std::vector<HostPort> &exclude = {});
 
     Status SelectWorkers(const std::vector<std::string> &keys, DataPlacementPolicy policy,
+                         WorkerAccessAction action,
                          std::unordered_map<HostPort, std::vector<std::string>> &groups,
                          const std::vector<HostPort> &exclude = {});
 

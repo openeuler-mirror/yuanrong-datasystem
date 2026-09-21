@@ -40,7 +40,7 @@ public:
     BrokenFilter();
     ~BrokenFilter() override = default;
 
-    bool IsAvailable(const HostPort &addr) const override;
+    bool IsAvailable(const HostPort &addr, WorkerAccessAction action) const override;
     void OnWorkerStateChange(const HostPort &addr, StatusCode status) override;
     void OnHashRingUpdated(const ::datasystem::ClusterTopologyPb &ring) override;
 

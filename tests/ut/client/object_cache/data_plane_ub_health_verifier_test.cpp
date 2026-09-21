@@ -337,14 +337,14 @@ TEST(DataPlaneUbHealthVerifierTest, FirstCqe9WithoutPassiveSummaryRequiresIndepe
 
     EXPECT_FALSE(filter.ReportWriteTargetFailure(
         WORKER, Status(K_URMA_ERROR, "CQE9 without prior summary"), std::nullopt, URMA_REMOTE_ACK_TIMEOUT_STATUS));
-    EXPECT_TRUE(filter.IsAvailable(WORKER));
+    EXPECT_TRUE(filter.IsAvailable(WORKER, client::WorkerAccessAction::CONTROL));
     EXPECT_TRUE(filter.IsWriteTargetAvailable(WORKER));
     EXPECT_EQ(manager.queryCount, 0u);
 
     manager.RunAndWait();
 
     EXPECT_EQ(manager.queryCount, 1u);
-    EXPECT_FALSE(filter.IsAvailable(WORKER));
+    EXPECT_FALSE(filter.IsAvailable(WORKER, client::WorkerAccessAction::CONTROL));
     EXPECT_FALSE(filter.IsWriteTargetAvailable(WORKER));
 }
 

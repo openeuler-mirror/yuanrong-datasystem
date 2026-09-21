@@ -131,7 +131,7 @@ TEST_F(UbPortHealthRpcPropagationTest, UserCtlPortMatrixTravelsThroughRpcToWorke
         UbHealthSummary summary;
         DS_ASSERT_OK(WaitForPorts(incarnation, bad, summary));
         (void)filter->ObserveSummary(summary, incarnation);
-        EXPECT_EQ(filter->IsAvailable(worker_), !previouslyIsolated);
+        EXPECT_EQ(filter->IsAvailable(worker_, client::WorkerAccessAction::CONTROL), !previouslyIsolated);
         ASSERT_TRUE(filter->ApplySummary(summary, incarnation));
         auto snapshot = router.GetUbRoutingHealthSnapshot();
         ASSERT_NE(snapshot->workers.find(worker_), snapshot->workers.end());
@@ -140,7 +140,7 @@ TEST_F(UbPortHealthRpcPropagationTest, UserCtlPortMatrixTravelsThroughRpcToWorke
         EXPECT_EQ(health.portHealth.badPortCount, bad);
         EXPECT_EQ(health.HealthyPortCount(), 4u - bad);
         previouslyIsolated = bad == 4;
-        EXPECT_EQ(filter->IsAvailable(worker_), !previouslyIsolated);
+        EXPECT_EQ(filter->IsAvailable(worker_, client::WorkerAccessAction::CONTROL), !previouslyIsolated);
     }
 }
 class UbWorkerPeerPortHealthTest : public UbPortHealthRpcPropagationTest {

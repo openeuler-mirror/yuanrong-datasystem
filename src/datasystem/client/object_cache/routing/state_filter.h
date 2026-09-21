@@ -35,7 +35,7 @@ public:
     explicit StateFilter(WorkerRouter *router) : router_(router) {}
     ~StateFilter() override = default;
 
-    bool IsAvailable(const HostPort &addr) const override;
+    bool IsAvailable(const HostPort &addr, WorkerAccessAction action) const override;
 
 private:
     WorkerRouter *router_;  // Non-owning: WorkerRouter owns the filter, so no cycle
