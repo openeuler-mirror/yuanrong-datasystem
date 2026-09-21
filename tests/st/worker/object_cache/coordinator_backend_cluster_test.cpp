@@ -2218,6 +2218,7 @@ constexpr int FULL_OUTAGE_KA_FAIL_ITERS = 8;
 constexpr int FULL_OUTAGE_VANISH_BOUND_SEC = 15;
 constexpr int FULL_OUTAGE_RECOVERY_BOUND_SEC = 8;
 constexpr char KEEPALIVE_FAIL_INJECT_NAME[] = "CoordinationBackend.KeepAlive.returnError";
+constexpr char FULL_OUTAGE_ADMISSION_PROBE_CLUSTER[] = "full_outage_admission_probe";
 constexpr int FULL_OUTAGE_DEFAULT_SETTLE_SEC = 180;
 // Restarting after this short settle lands while the switched-away listeners' recovery ticks are still
 // cycling — the interleaving that exposed the client-side failover race fixed by ResetSwitched.
@@ -2319,6 +2320,35 @@ protected:
         return Status(K_RUNTIME_ERROR,
                       "Timed out waiting for an empty membership table; last status: " + lastRc.ToString()
                           + ", last addresses: " + AddressesToString(lastAddresses));
+    }
+
+    Status WaitStandaloneInitialRecoveryComplete(int timeoutSec)
+    {
+        RETURN_IF_NOT_OK(GetCoordinatorProxy());
+        CHECK_FAIL_RETURN_STATUS(coordinatorProxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator proxy is null");
+        std::unique_ptr<cluster::TopologyKeyHelper> topologyKeys;
+        RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(FULL_OUTAGE_ADMISSION_PROBE_CLUSTER, topologyKeys));
+        const std::string prefix = topologyKeys->MembershipTable() + "/";
+        const std::string rangeEnd = StringPlusOne(prefix);
+        CHECK_FAIL_RETURN_STATUS(!rangeEnd.empty(), K_RUNTIME_ERROR, "Failed to build admission probe range end");
+
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSec);
+        Status lastRc(K_NOT_READY, "Standalone Coordinator recovery has not completed");
+        while (std::chrono::steady_clock::now() < deadline) {
+            std::vector<KeyValueEntry> kvs;
+            int64_t revision = 0;
+            lastRc = coordinatorProxy_->Range(prefix, rangeEnd, kvs, revision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS);
+            if (lastRc.IsOk()) {
+                CHECK_FAIL_RETURN_STATUS(kvs.empty(), K_RUNTIME_ERROR,
+                                         "Admission probe cluster unexpectedly contains memberships");
+                return Status::OK();
+            }
+            CHECK_FAIL_RETURN_STATUS(lastRc.GetCode() == K_NOT_READY, lastRc.GetCode(),
+                                     "Unexpected admission probe status: " + lastRc.ToString());
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_TOPOLOGY_INTERVAL_MS));
+        }
+        return Status(K_RUNTIME_ERROR,
+                      "Timed out waiting for standalone initial recovery: " + lastRc.ToString());
     }
 
     struct MembershipVisibilityWindow {
@@ -2642,6 +2672,7 @@ TEST_F(CoordinatorBackendFullOutageTest, ClientRecoversAfterFullOutageRestartRac
     // scenario lives in the DISABLED_ heavy case above.
     ASSERT_EQ(cluster_->GetWorkerNum(), size_t(3));
     DS_ASSERT_OK(WaitForReadyMemberships({ 0, 1, 2 }, WAIT_SCALE_TIMEOUT_SEC));
+    DS_ASSERT_OK(WaitStandaloneInitialRecoveryComplete(FULL_OUTAGE_E2E_WAIT_SEC));
 
     std::shared_ptr<KVClient> failoverClient;
     InitFailoverKVClient(failoverClient);

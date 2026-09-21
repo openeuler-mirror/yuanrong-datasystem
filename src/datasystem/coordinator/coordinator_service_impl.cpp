@@ -312,11 +312,6 @@ Status CoordinatorServiceImpl::PrepareResponseHeader(const std::string &clusterN
     if (header->state() != ResponseHeader::SERVING) {
         return Status::OK();
     }
-    if (!IsElectionConfigured()) {
-        // A single-node non-election Coordinator never switches Leaders and has no competing authorities, so the
-        // per-cluster topology recovery gate does not apply; the base header already reports SERVING.
-        return Status::OK();
-    }
 
     TopologyRecoveryState recoveryState;
 #ifdef WITH_TESTS
@@ -326,7 +321,7 @@ Status CoordinatorServiceImpl::PrepareResponseHeader(const std::string &clusterN
 #endif
         CHECK_FAIL_RETURN_STATUS(topologyRecoveryManager_ != nullptr, K_NOT_READY,
                                  "topology recovery manager is not bound");
-        recoveryState = topologyRecoveryManager_->GetState(clusterName);
+        recoveryState = topologyRecoveryManager_->GetRpcAdmissionState(clusterName);
 #ifdef WITH_TESTS
     }
 #endif

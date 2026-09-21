@@ -205,7 +205,36 @@ TEST_F(TopologyRecoveryManagerTest, NoSnapshotMakesClusterReadyAfterFixedWindow)
 
     clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
     ASSERT_TRUE(DriveUntil(clusterName, MEMBER_A, TopologyRecoveryState::READY));
+    EXPECT_EQ(manager_->GetRpcAdmissionState(clusterName), TopologyRecoveryState::READY);
     EXPECT_TRUE(manager_->CheckReadAllowed(TopologyKey(clusterName), "").IsOk());
+}
+
+TEST_F(TopologyRecoveryManagerTest, StandaloneUnseenClusterOpensOnlyRpcAdmissionAfterHardDeadline)
+{
+    const std::string clusterName = "standalone-unseen";
+    EXPECT_EQ(manager_->GetState(clusterName), TopologyRecoveryState::RECOVERING);
+    EXPECT_EQ(manager_->GetRpcAdmissionState(clusterName), TopologyRecoveryState::RECOVERING);
+
+    clock_->AdvanceMs(ROUND_TIMEOUT.count() * 1'000 - 1);
+    EXPECT_EQ(manager_->GetState(clusterName), TopologyRecoveryState::RECOVERING);
+    EXPECT_EQ(manager_->GetRpcAdmissionState(clusterName), TopologyRecoveryState::RECOVERING);
+
+    clock_->AdvanceMs(1);
+    EXPECT_EQ(manager_->GetState(clusterName), TopologyRecoveryState::RECOVERING);
+    EXPECT_EQ(manager_->GetRpcAdmissionState(clusterName), TopologyRecoveryState::READY);
+
+    ObserveMember(clusterName, MEMBER_A);
+    EXPECT_EQ(manager_->GetState(clusterName), TopologyRecoveryState::RECOVERING);
+    EXPECT_EQ(manager_->GetRpcAdmissionState(clusterName), TopologyRecoveryState::RECOVERING);
+}
+
+TEST_F(TopologyRecoveryManagerTest, ElectionUnseenClusterRemainsRecoveringAfterHardDeadline)
+{
+    manager_->BeginLeaderRound({ 1, COORDINATOR_ID }, HARD_DEADLINE_TIMEOUT);
+    clock_->AdvanceMs(HARD_DEADLINE_TIMEOUT.count());
+
+    EXPECT_EQ(manager_->GetState("election-unseen"), TopologyRecoveryState::RECOVERING);
+    EXPECT_EQ(manager_->GetRpcAdmissionState("election-unseen"), TopologyRecoveryState::RECOVERING);
 }
 
 TEST_F(TopologyRecoveryManagerTest, ClusterWithoutRecoveryReportBecomesReadyAfterFastWindow)

@@ -325,8 +325,17 @@ Status TopologyRecoveryManager::EnsureContext(const std::string &clusterName, bo
     if (enableFastRecovery) {
         candidate->fastRecoveryDeadline = clock_->Now() + FAST_RECOVERY_WINDOW;
     }
-    auto inserted = contexts_.emplace(clusterName, std::move(candidate));
-    context = inserted.first->second.get();
+    {
+        bthread::RWLockWrGuard admissionLock(rpcAdmissionMutex_);
+        auto inserted = contexts_.emplace(clusterName, std::move(candidate));
+        const auto admissionInserted =
+            rpcAdmissionStates_.emplace(clusterName, TopologyRecoveryState::RECOVERING);
+        if (!admissionInserted.second) {
+            contexts_.erase(inserted.first);
+            RETURN_STATUS(K_RUNTIME_ERROR, "RPC admission state already exists without recovery context");
+        }
+        context = inserted.first->second.get();
+    }
     LOG(INFO) << "CLUSTER_RECOVERY_STATE cluster=" << clusterName << ", coordinator_id="
               << CoordinatorIdLogPrefix(coordinatorId_)
               << ", old=UNSEEN, new=RECOVERING, reason=membership_admitted";
@@ -360,11 +369,19 @@ std::chrono::steady_clock::time_point TopologyRecoveryManager::GetReconcileDeadl
     return deadline;
 }
 
+void TopologyRecoveryManager::SetStateLocked(const std::string &clusterName, ClusterRecoveryContext &context,
+                                             TopologyRecoveryState state)
+{
+    bthread::RWLockWrGuard admissionLock(rpcAdmissionMutex_);
+    rpcAdmissionStates_.at(clusterName) = state;
+    context.state = state;
+}
+
 void TopologyRecoveryManager::ForceReadyLocked(const std::string &clusterName, ClusterRecoveryContext &context,
                                                const char *reason)
 {
     const auto oldState = context.state;
-    context.state = TopologyRecoveryState::READY;
+    SetStateLocked(clusterName, context, TopologyRecoveryState::READY);
     const auto memberCount = context.observedMembers.size();
     const auto evidenceCount = context.reporterEvidence.size();
     context.reporterEvidence.clear();
@@ -486,7 +503,7 @@ void TopologyRecoveryManager::UpdateMembership(const ParsedTopologyCoordinationK
         LOG(INFO) << "CLUSTER_RECOVERY_STATE cluster=" << parsed.clusterName << ", coordinator_id="
                   << CoordinatorIdLogPrefix(coordinatorId_)
                   << ", old=BLOCKED_OR_STALE, new=RECOVERING, reason=membership_removed";
-        context->state = TopologyRecoveryState::RECOVERING;
+        SetStateLocked(parsed.clusterName, *context, TopologyRecoveryState::RECOVERING);
         context->discoveryDeadline = context->reporterEvidence.empty()
                                          ? std::nullopt
                                          : std::make_optional(clock_->Now() + options_.discoveryWindow);
@@ -497,6 +514,8 @@ void TopologyRecoveryManager::UpdateMembership(const ParsedTopologyCoordinationK
     }
     if (context->observedMembers.empty() && context->state != TopologyRecoveryState::INSTALLING) {
         ReleaseSelectedPayload(*context);
+        bthread::RWLockWrGuard admissionLock(rpcAdmissionMutex_);
+        rpcAdmissionStates_.erase(parsed.clusterName);
         contexts_.erase(parsed.clusterName);
     }
 }
@@ -547,10 +566,16 @@ void TopologyRecoveryManager::BeginLeaderRound(TopologyRecoveryRoundIdentity ide
         static_cast<void>(clusterName);
         ReleaseSelectedPayload(*context);
     }
-    contexts_.clear();
+    const auto hardDeadline = clock_->Now() + nodeDeadTimeout;
+    {
+        bthread::RWLockWrGuard admissionLock(rpcAdmissionMutex_);
+        contexts_.clear();
+        rpcAdmissionStates_.clear();
+        standaloneRpcAdmissionDeadline_ =
+            identity.leaderTerm == 0 ? std::make_optional(hardDeadline) : std::nullopt;
+    }
     // Old-round async closures own their pendingRecoveryWork_ counters until they drain.
     retainedCandidateBytes_ = 0;
-    const auto hardDeadline = clock_->Now() + nodeDeadTimeout;
     activeRound_ = TopologyRecoveryRound{ std::move(identity), hardDeadline };
     shutdownCv_.notify_all();
 }
@@ -565,7 +590,12 @@ void TopologyRecoveryManager::EndLeaderRound(const TopologyRecoveryRoundIdentity
         static_cast<void>(clusterName);
         ReleaseSelectedPayload(*context);
     }
-    contexts_.clear();
+    {
+        bthread::RWLockWrGuard admissionLock(rpcAdmissionMutex_);
+        contexts_.clear();
+        rpcAdmissionStates_.clear();
+        standaloneRpcAdmissionDeadline_.reset();
+    }
     retainedCandidateBytes_ = 0;
     activeRound_.reset();
     shutdownCv_.notify_all();
@@ -715,7 +745,8 @@ Status TopologyRecoveryManager::RecordEvidence(const std::string &clusterName,
                                  "leader round changed during evidence admission");
         auto found = contexts_.find(clusterName);
         CHECK_FAIL_RETURN_STATUS(found != contexts_.end(), K_TRY_AGAIN, "recovery context disappeared");
-        RETURN_IF_NOT_OK(UpdateEvidenceLocked(*found->second, std::move(report), decision, schedule));
+        RETURN_IF_NOT_OK(
+            UpdateEvidenceLocked(clusterName, *found->second, std::move(report), decision, schedule));
     }
     if (schedule) {
         ScheduleReconcile(clusterName);
@@ -723,7 +754,8 @@ Status TopologyRecoveryManager::RecordEvidence(const std::string &clusterName,
     return Status::OK();
 }
 
-Status TopologyRecoveryManager::UpdateEvidenceLocked(ClusterRecoveryContext &context,
+Status TopologyRecoveryManager::UpdateEvidenceLocked(const std::string &clusterName,
+                                                     ClusterRecoveryContext &context,
                                                      TopologyRecoveryCandidateReport report,
                                                      TopologyRecoveryReportDecision &decision, bool &schedule)
 {
@@ -749,7 +781,7 @@ Status TopologyRecoveryManager::UpdateEvidenceLocked(ClusterRecoveryContext &con
         return Status::OK();
     }
     if (context.state == TopologyRecoveryState::BLOCKED) {
-        context.state = TopologyRecoveryState::RECOVERING;
+        SetStateLocked(clusterName, context, TopologyRecoveryState::RECOVERING);
         context.discoveryDeadline.reset();
     }
     const bool evidenceChanged =
@@ -946,7 +978,7 @@ Status TopologyRecoveryManager::RejectPayload(const std::string &clusterName,
     auto evidence = context.reporterEvidence.find(report.reporterAddress);
     if (context.state != TopologyRecoveryState::INSTALLING && evidence != context.reporterEvidence.end()
         && SameEvidence(evidence->second, report) && evidence->second.payloadRequested) {
-        context.state = TopologyRecoveryState::BLOCKED;
+        SetStateLocked(clusterName, context, TopologyRecoveryState::BLOCKED);
         ReleaseSelectedPayload(context);
         ScheduleDelayedReconcileLocked(clusterName, context);
         LOG(WARNING) << "CLUSTER_RECOVERY_INVALID_HIGHEST_CANDIDATE, cluster=" << clusterName
@@ -1403,13 +1435,13 @@ void TopologyRecoveryManager::ApplyStoredAuthorityLocked(const std::string &clus
     context.reporterEvidence.clear();
     context.discoveryDeadline.reset();
     if (decodeStatus.IsError()) {
-        context.state = TopologyRecoveryState::BLOCKED;
+        SetStateLocked(clusterName, context, TopologyRecoveryState::BLOCKED);
         LOG(ERROR) << "CLUSTER_RECOVERY_STORED_AUTHORITY_INVALID cluster=" << clusterName
                    << ", coordinator_id=" << CoordinatorIdLogPrefix(coordinatorId_)
                    << ", revision=" << revision << ", status=" << decodeStatus.ToString();
         return;
     }
-    context.state = TopologyRecoveryState::READY;
+    SetStateLocked(clusterName, context, TopologyRecoveryState::READY);
     LOG(INFO) << "CLUSTER_RECOVERY_READY_STORED_AUTHORITY cluster=" << clusterName
               << ", coordinator_id=" << CoordinatorIdLogPrefix(coordinatorId_)
               << ", topology_version=" << topology.version << ", store_revision=" << revision
@@ -1429,7 +1461,7 @@ bool TopologyRecoveryManager::ResolveCandidateSelectionLocked(const std::string 
         if (hardDeadlineReached) {
             ForceReadyLocked(clusterName, context, "candidate_conflict");
         } else {
-            context.state = TopologyRecoveryState::BLOCKED;
+            SetStateLocked(clusterName, context, TopologyRecoveryState::BLOCKED);
             ReleaseSelectedPayload(context);
             LOG(WARNING) << "CLUSTER_RECOVERY_CONFLICT, cluster=" << clusterName
                          << ", coordinator_id=" << CoordinatorIdLogPrefix(coordinatorId_)
@@ -1447,7 +1479,7 @@ bool TopologyRecoveryManager::ResolveCandidateSelectionLocked(const std::string 
         LOG(INFO) << "CLUSTER_RECOVERY_READY_NO_SNAPSHOT, cluster=" << clusterName << ", coordinator_id="
                   << CoordinatorIdLogPrefix(coordinatorId_) << ", members=" << context.observedMembers.size()
                   << ", evidence=" << context.reporterEvidence.size();
-        context.state = TopologyRecoveryState::READY;
+        SetStateLocked(clusterName, context, TopologyRecoveryState::READY);
         context.reporterEvidence.clear();
         context.discoveryDeadline.reset();
         ReleaseSelectedPayload(context);
@@ -1498,7 +1530,7 @@ Status TopologyRecoveryManager::PrepareInstallationLocked(const std::string &clu
         return Status::OK();
     }
     const auto oldState = context.state;
-    context.state = TopologyRecoveryState::INSTALLING;
+    SetStateLocked(clusterName, context, TopologyRecoveryState::INSTALLING);
     payload = context.selectedCanonicalTopology;
     version = highestVersion;
     traceContext = context.selectedPayloadTraceContext;
@@ -1523,7 +1555,7 @@ void TopologyRecoveryManager::CompleteInstallationLocked(const std::string &clus
     }
     auto &context = *found->second;
     if (installStatus.IsOk()) {
-        context.state = TopologyRecoveryState::READY;
+        SetStateLocked(clusterName, context, TopologyRecoveryState::READY);
         context.reporterEvidence.clear();
         context.discoveryDeadline.reset();
         LOG(INFO) << "CLUSTER_RECOVERY_READY, cluster=" << clusterName << ", version=" << version
@@ -1539,12 +1571,12 @@ void TopologyRecoveryManager::CompleteInstallationLocked(const std::string &clus
         ForceReadyLocked(clusterName, context,
                          installStatus.GetCode() == K_INVALID ? "install_invalid" : "install_failure");
     } else if (installStatus.GetCode() == K_INVALID) {
-        context.state = TopologyRecoveryState::BLOCKED;
+        SetStateLocked(clusterName, context, TopologyRecoveryState::BLOCKED);
         LOG(WARNING) << "CLUSTER_RECOVERY_INSTALL_BLOCKED, cluster=" << clusterName
                      << ", coordinator_id=" << CoordinatorIdLogPrefix(coordinatorId_)
                      << ", version=" << version << ", status=" << installStatus.ToString();
     } else {
-        context.state = TopologyRecoveryState::RECOVERING;
+        SetStateLocked(clusterName, context, TopologyRecoveryState::RECOVERING);
         LOG(WARNING) << "CLUSTER_RECOVERY_INSTALL_RETRY, cluster=" << clusterName
                      << ", coordinator_id=" << CoordinatorIdLogPrefix(coordinatorId_)
                      << ", version=" << version << ", status=" << installStatus.ToString();
@@ -1576,6 +1608,20 @@ TopologyRecoveryState TopologyRecoveryManager::GetState(const std::string &clust
     std::lock_guard<bthread::Mutex> lock(mutex_);
     auto found = contexts_.find(clusterName);
     return found == contexts_.end() ? TopologyRecoveryState::RECOVERING : found->second->state;
+}
+
+TopologyRecoveryState TopologyRecoveryManager::GetRpcAdmissionState(const std::string &clusterName) const
+{
+    bthread::RWLockRdGuard admissionLock(rpcAdmissionMutex_);
+    auto found = rpcAdmissionStates_.find(clusterName);
+    if (found != rpcAdmissionStates_.end()) {
+        return found->second;
+    }
+    if (standaloneRpcAdmissionDeadline_.has_value()
+        && clock_->Now() >= *standaloneRpcAdmissionDeadline_) {
+        return TopologyRecoveryState::READY;
+    }
+    return TopologyRecoveryState::RECOVERING;
 }
 
 Status TopologyRecoveryManager::Shutdown()

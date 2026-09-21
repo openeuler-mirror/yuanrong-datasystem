@@ -18,6 +18,7 @@
 
 #include <bthread/condition_variable.h>
 #include <bthread/mutex.h>
+#include <bthread/rwlock.h>
 
 #include "datasystem/cluster/membership/membership_types.h"
 #include "datasystem/common/util/locks.h"
@@ -225,9 +226,17 @@ public:
     /**
      * @brief Read one cluster state without creating a context.
      * @param[in] clusterName Cluster scope.
-     * @return Current state or RECOVERING when unseen.
+     * @return Current state. An unseen cluster is RECOVERING.
      */
     TopologyRecoveryState GetState(const std::string &clusterName) const;
+
+    /**
+     * @brief Read one cluster state for an RPC admission decision.
+     * @param[in] clusterName Cluster scope.
+     * @return Published state. An unseen standalone cluster is READY after the initial recovery hard deadline; other
+     * unseen clusters are RECOVERING.
+     */
+    TopologyRecoveryState GetRpcAdmissionState(const std::string &clusterName) const;
 
     /**
      * @brief Stop new work and drain started work idempotently.
@@ -299,7 +308,8 @@ private:
      * @param[out] schedule Whether reconciliation should be scheduled.
      * @return Evidence admission status.
      */
-    Status UpdateEvidenceLocked(ClusterRecoveryContext &context, TopologyRecoveryCandidateReport report,
+    Status UpdateEvidenceLocked(const std::string &clusterName, ClusterRecoveryContext &context,
+                                TopologyRecoveryCandidateReport report,
                                 TopologyRecoveryReportDecision &decision, bool &schedule);
 
     /**
@@ -394,6 +404,12 @@ private:
      */
     std::chrono::steady_clock::time_point GetReconcileDeadlineLocked(
         const ClusterRecoveryContext &context) const;
+
+    /**
+     * @brief Publish a cluster state transition while mutex_ is held.
+     */
+    void SetStateLocked(const std::string &clusterName, ClusterRecoveryContext &context,
+                        TopologyRecoveryState state);
 
     /**
      * @brief Force one unresolved cluster to READY at an eligible recovery deadline while mutex_ is held.
@@ -496,6 +512,11 @@ private:
     SharedMutex *leaderRoundFenceMutex_{ nullptr };
     std::function<bool(const TopologyRecoveryRoundIdentity &)> isLeaderRoundCurrent_;
     std::unordered_map<std::string, std::unique_ptr<ClusterRecoveryContext>> contexts_;
+
+    // RPC handlers read this projection through a bthread-aware lock instead of contending on the recovery mutex.
+    mutable bthread::RWLock rpcAdmissionMutex_;
+    std::optional<std::chrono::steady_clock::time_point> standaloneRpcAdmissionDeadline_;
+    std::unordered_map<std::string, TopologyRecoveryState> rpcAdmissionStates_;
 };
 
 }  // namespace coordinator

@@ -504,6 +504,7 @@ TEST_F(CoordinatorIdTest, ExactRangeOmitsUnchangedValueByModificationRevision)
 {
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18510));
     DS_ASSERT_OK(service.Init());
+    SetRecoveryReady(service);
     DS_ASSERT_OK(service.Start());
 
     coordinator::PutReqPb put;

@@ -122,6 +122,11 @@ public:
         return engine.progressPool_ != nullptr;
     }
 
+    static void PublishCurrentAvailability(TopologyEngine &engine)
+    {
+        engine.publishedAvailability_.store(engine.availability_.load());
+    }
+
     static uint64_t ExecutorStaleCount(const TopologyEngine &engine)
     {
         return engine.executor_.GetDiagnostics().stale;
@@ -597,6 +602,43 @@ TEST(TopologyEngineTest, CoordinatorNotReadyTopologyContinuesToWatchAndStart)
     EXPECT_TRUE(ingress.IsBound());
     EXPECT_GE(proxy.WatchCalls().size(), 2U);
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, CoordinatorRecoveringKeepsLastGoodSnapshotAdmitted)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "recovering-last-good";
+    auto keys = MakeKeys(clusterName);
+    PutTopology(proxy, clusterName, MakeTopology(1));
+    auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
+    ASSERT_NE(engine, nullptr);
+    DS_ASSERT_OK(TopologyEngineTestPeer::ReloadTopology(*engine));
+    TopologyEngineTestPeer::PublishCurrentAvailability(*engine);
+
+    std::shared_ptr<const TopologySnapshot> beforeRecovery;
+    DS_ASSERT_OK(engine->GetSnapshot(beforeRecovery));
+    ASSERT_NE(beforeRecovery, nullptr);
+    EXPECT_EQ(engine->GetAvailability(), TopologyAvailabilityLevel::NORMAL);
+
+    proxy.FailNextRangeForKey(TopologyStorageKey(*keys), K_NOT_READY);
+    EXPECT_EQ(TopologyEngineTestPeer::ReloadTopology(*engine).GetCode(), K_NOT_READY);
+
+    std::shared_ptr<const TopologySnapshot> duringRecovery;
+    DS_ASSERT_OK(engine->GetSnapshot(duringRecovery));
+    ASSERT_NE(duringRecovery, nullptr);
+    EXPECT_EQ(duringRecovery->Version(), beforeRecovery->Version());
+    EXPECT_EQ(duringRecovery->CanonicalDigest(), beforeRecovery->CanonicalDigest());
+    EXPECT_EQ(engine->GetAvailability(), TopologyAvailabilityLevel::NORMAL);
+
+    PutTopology(proxy, clusterName, MakeTopology(2));
+    DS_ASSERT_OK(TopologyEngineTestPeer::ReloadTopology(*engine));
+    std::shared_ptr<const TopologySnapshot> afterRecovery;
+    DS_ASSERT_OK(engine->GetSnapshot(afterRecovery));
+    ASSERT_NE(afterRecovery, nullptr);
+    EXPECT_EQ(afterRecovery->Version(), 2U);
+    EXPECT_EQ(engine->GetAvailability(), TopologyAvailabilityLevel::NORMAL);
 }
 
 TEST(TopologyEngineTest, ShutdownCancelsCoordinatorReadyWait)
