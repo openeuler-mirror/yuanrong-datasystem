@@ -41,6 +41,8 @@ python3 deploy_worker.py collect \
 
 该命令只扫描文件名匹配 `*INFO.log` 的日志，并保留包含任一关键字的行。过滤在 Worker Pod 内执行，本地收到的过滤结果文件以 `.matched` 结尾。
 
+某个 Pod 没有任何关键字命中时，该 Pod 不会创建本地日志目录，也不会收集 `worker_config.json`。因此在大规模集群中，本地输出目录只保留实际命中的 Pod；有命中时仍会同时保存对应的 Worker 配置。
+
 当前 `--keyword` 执行大小写敏感的字面子串匹配，不解析正则表达式。例如，要匹配包含 `ERROR` 或 `TIMEOUT` 的行，应重复传入两个参数：
 
 ```bash
