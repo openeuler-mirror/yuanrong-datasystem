@@ -3486,11 +3486,11 @@ void WorkerOCServer::WaitClientsExit()
         if (checkThreadRunning_) {
             return IsClientsExist() ? Status(K_NOT_READY, "Still exists clients on the worker.") : Status::OK();
         } else {
-            LOG(ERROR) << "Give up waiting for clients' exiting, the worker is unhealthy.";
+            LOG(ERROR) << "[Graceful exit] Stop waiting for clients: check_thread_running=false.";
             return Status::OK();
         }
     });
-    LOG(INFO) << "[Graceful exit] All clients on this node have exited.";
+    LOG(INFO) << "[Graceful exit] Client exit wait finished.";
 
     allClientsExited_ = true;
     checkAsyncTasksDoneCv_.notify_all();
@@ -3731,7 +3731,7 @@ void WorkerOCServer::StopRebalanceExecutor()
 Status WorkerOCServer::Shutdown()
 {
     INJECT_POINT("worker.BeforeShutdown");
-    LOG(INFO) << "Worker process executing a shutdown.";
+    LOG(INFO) << "WorkerOCServer::Shutdown started.";
     StopConnectionWarmup();
     StopWorkerMasterRpcWarmup();
     // Join the resource-report thread before destroying callbacks and the executor they borrow. Unregistering a
@@ -3779,7 +3779,7 @@ Status WorkerOCServer::Shutdown()
         LOG(WARNING) << FormatString("Open file %s failed, errno: %d", checkFilePath_, errno);
     }
     ofs.close();
-    LOG(INFO) << "Worker shutdown success.";
+    LOG(INFO) << "WorkerOCServer::Shutdown finished.";
     return Status::OK();
 }
 

@@ -296,13 +296,17 @@ object_cache::WorkerOCServiceImpl *WorkerTopologyPhaseCallbacks::GetObjectCacheS
 }
 
 void WorkerTopologyPhaseCallbacks::RecordFailureStep(const std::string &step, const Status &status,
-                                                     Status &firstError) const
+                                                     Status &firstError,
+                                                     const cluster::TopologyCallbackContext &context) const
 {
     if (status.IsOk()) {
         return;
     }
-    LOG(ERROR) << "CLUSTER_FAILURE action=callback_step step=" << step << " outcome=failed status="
-               << status.ToString();
+    LOG(ERROR) << "CLUSTER_FAILURE action=callback_step step=" << step << " outcome=failed"
+               << " topology_version=" << context.action.topologyVersion
+               << " batch_epoch=" << context.action.batchEpoch
+               << " " << CallbackScopeForLog(context)
+               << " status=" << status.ToString();
     if (firstError.IsOk()) {
         firstError = status;
     }
@@ -315,24 +319,26 @@ Status WorkerTopologyPhaseCallbacks::RunFailureBestEffort(const cluster::Topolog
     Status firstError;
     const bool localMetadata = !centralizedMetadata_ || localMetadataMaster_;
     if (localMetadata) {
-        RecordFailureStep("get-object-metadata", metadataManagers_.GetOcMetadataManager(ocMetadata), firstError);
+        RecordFailureStep("get-object-metadata", metadataManagers_.GetOcMetadataManager(ocMetadata), firstError,
+                          context);
     }
     if (localMetadata && streamMetadataEnabled_) {
-        RecordFailureStep("get-stream-metadata", metadataManagers_.GetScMetadataManager(scMetadata), firstError);
+        RecordFailureStep("get-stream-metadata", metadataManagers_.GetScMetadataManager(scMetadata), firstError,
+                          context);
     }
     if (!centralizedMetadata_ && ocMetadata != nullptr) {
         RecordFailureStep(
             "recover-object",
             ocMetadata->RecoverTopologyFailure(context.action, context.keyFilter, context.storageScanPlan,
                                                context.businessOperationId, context.deadline, context.cancellation),
-            firstError);
+            firstError, context);
     }
     if (!centralizedMetadata_ && streamMetadataEnabled_ && scMetadata != nullptr) {
         RecordFailureStep(
             "recover-stream",
             scMetadata->RecoverTopologyFailure(context.action, context.keyFilter, context.businessOperationId,
                                                context.deadline, context.cancellation),
-            firstError);
+            firstError, context);
     }
     RunFailureCleanup(context, ocMetadata, scMetadata, firstError);
     return firstError;
@@ -348,13 +354,13 @@ void WorkerTopologyPhaseCallbacks::RunFailureCleanup(const cluster::TopologyCall
         RecordFailureStep("cleanup-stream",
                           scMetadata->CleanupTopologyFailedMember(context.action, context.businessOperationId,
                                                                   context.deadline, context.cancellation),
-                          firstError);
+                          firstError, context);
     }
     if (localMetadata && ocMetadata != nullptr) {
         RecordFailureStep("cleanup-object",
                           ocMetadata->CleanupTopologyFailedMember(context.action, context.businessOperationId,
                                                                   context.deadline, context.cancellation),
-                          firstError);
+                          firstError, context);
     }
     auto *objectCacheService = GetObjectCacheService();
     if (objectCacheService != nullptr) {
@@ -362,16 +368,16 @@ void WorkerTopologyPhaseCallbacks::RunFailureCleanup(const cluster::TopologyCall
             "cleanup-local-data",
             objectCacheService->SubmitTopologyFailureCleanup(
                 context.action, context.keyFilter, context.businessOperationId, context.deadline, context.cancellation),
-            firstError);
+            firstError, context);
     } else {
         RecordFailureStep("cleanup-local-data", Status(K_NOT_READY, "object-cache service is not initialized"),
-                          firstError);
+                          firstError, context);
     }
     if (!centralizedMetadata_ && ocMetadata != nullptr) {
         RecordFailureStep("cleanup-device",
                           ocMetadata->CleanupTopologyDeviceClientMeta(context.action, context.businessOperationId,
                                                                       context.deadline, context.cancellation),
-                          firstError);
+                          firstError, context);
     }
     // Drop cached worker<->worker RPC stubs to the failed member so that no
     // healthy worker keeps reconnecting (and retransmitting TCP SYNs) to a
@@ -379,7 +385,7 @@ void WorkerTopologyPhaseCallbacks::RunFailureCleanup(const cluster::TopologyCall
     // TCP link info and kept retrying the 25 kill-9'd workers.
     // Unconditional: every worker owns its own RpcStubCacheMgr regardless of
     // metadata mode. Remove is idempotent (K_NOT_FOUND is benign).
-    RecordFailureStep("cleanup-rpc-stub", EraseFailedWorkerWorkerStub(context.action), firstError);
+    RecordFailureStep("cleanup-rpc-stub", EraseFailedWorkerWorkerStub(context.action), firstError, context);
 }
 
 }  // namespace datasystem::worker

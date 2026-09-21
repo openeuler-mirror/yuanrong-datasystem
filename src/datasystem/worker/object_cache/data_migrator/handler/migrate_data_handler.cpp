@@ -474,14 +474,19 @@ void MigrateDataHandler::SendDataToRemote(bool isSlotMigration)
     auto transportStartUs = GetSteadyClockTimeStampUs();
     Status s = transport_->MigrateDataToRemote(req, rsp);
     auto transportUs = GetSteadyClockTimeStampUs() - transportStartUs;
-    constexpr int64_t slowTransportThresholdUs = 5'000'000;
-    constexpr uint32_t slowTransportLogEveryN = 10;
-    if (transportUs >= slowTransportThresholdUs) {
-        LOG_FIRST_EVERY_N(INFO, slowTransportLogEveryN)
-            << "event=MIGRATE_TRANSPORT_SLOW target=" << remoteApi_->Address() << " batch_count=" << datas_.size()
-            << " batch_bytes=" << currBatchSize_ << " elapsed_ms=" << transportUs / SECS_TO_MS
-            << " limit_rate=" << rsp.limitRate << " status=" << s.ToString();
-    }
+
+    LOG(INFO) << "[Migrate Data] Batch finished: source=" << localAddr_
+              << ", target=" << remoteApi_->Address()
+              << ", type=" << static_cast<int>(type_)
+              << ", object_count=" << datas_.size()
+              << ", batch_bytes=" << currBatchSize_
+              << ", response_success_count=" << rsp.successKeys.size()
+              << ", response_failed_count=" << rsp.failedKeys.size()
+              << ", response_skipped_count=" << rsp.skipKeys.size()
+              << ", response_expired_count=" << rsp.expiredKeys.size()
+              << ", limit_rate=" << rsp.limitRate
+              << ", elapsed_ms=" << transportUs / SECS_TO_MS;
+
     point.Record();
     HandleMigrationTransportResponse(s, rsp);
     Clear();

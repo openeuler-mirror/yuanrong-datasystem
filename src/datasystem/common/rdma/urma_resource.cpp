@@ -430,7 +430,7 @@ Status UrmaJetty::Create(UrmaResource &resource, JettyType jettyType, std::share
                                                       "suggest: %s",
                                                       errno, URMA_ERROR_SUGGEST));
     jetty = std::make_shared<UrmaJetty>(raw, sharedJfr, &resource, jettyType);
-    LOG(INFO) << "urma create jetty id " << jetty->GetJettyId() << " success. jetty count: " << counter_.load();
+    VLOG(1) << "urma create jetty id " << jetty->GetJettyId() << " success. jetty count: " << counter_.load();
     return Status::OK();
 }
 
@@ -1705,7 +1705,7 @@ Status UrmaResource::RegisterJetty(const std::shared_ptr<UrmaJetty> &jetty)
         }
     }
     jettyRegistry_[jettyId] = jetty;
-    LOG(INFO) << "[UrmaResource] Registered Jetty " << jettyId << " in registry";
+    VLOG(1) << "[UrmaResource] Registered Jetty " << jettyId << " in registry";
     return Status::OK();
 }
 

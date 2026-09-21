@@ -1459,9 +1459,15 @@ Status WorkerWorkerOCServiceImpl::ParallelBatchGetObject(
 Status WorkerWorkerOCServiceImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp)
 {
     ScopedRequestContext ctx;
-    LOG(INFO) << PIPLN_LOG_PREFIX "NotifyRemoteGet request: object_count=" << req.object_keys_size();
+    LOG(INFO) << "[NotifyRemoteGet] Receive request: source=" << req.addr()
+              << ", target=" << localAddress_.ToString()
+              << ", object_count=" << req.object_keys_size();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocClientWorkerSvc_->NotifyRemoteGet(req, rsp), "NotifyRemoteGet failed");
-    LOG(INFO) << PIPLN_LOG_PREFIX "NotifyRemoteGet success";
+    LOG(INFO) << "[NotifyRemoteGet] Finished: source=" << req.addr()
+              << ", target=" << localAddress_.ToString()
+              << ", object_count=" << req.object_keys_size()
+              << ", failed_count=" << rsp.failed_object_keys_size()
+              << ", skipped_count=" << rsp.skipped_object_keys_size();
     return Status::OK();
 }
 }  // namespace object_cache
