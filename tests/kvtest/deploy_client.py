@@ -558,36 +558,71 @@ class Deployer:
             log_info(f'  {target} -> FAILED: {e}')
             return False, time.monotonic() - t0
 
-    def start_node(self, node):
+    def start_node(self, node, keep_remote_config=False):
         """Start kvtest on a node (assumes install_node already ran).
 
-        Generates and uploads the per-node config, then launches the binary
-        via standalone_launcher.py (nohup fallback). Does NOT upload the
-        binary, .so, procmon.py, or launcher.py — install phase owns those.
-        Returns ``(ok, start_elapsed)`` where ``start_elapsed`` is the
-        launcher-reported Popen→ready elapsed when available (excludes
-        kubectl exec / ssh overhead), else the outer wall-clock.
+        When ``keep_remote_config`` is False (default), generates and uploads
+        the per-node config, then launches the binary via
+        standalone_launcher.py (nohup fallback). When True, skips the
+        generate+upload step and reuses the remote ``config_{instance_id}.json``
+        already placed by a prior ``deploy`` — used for rolling upgrades where
+        the deploy.json is split into batches but the per-node config (which
+        contains the full peer topology) must remain intact. ``env`` block
+        and ``host_id_env_name`` are still read from the local
+        ``config_template`` so launcher-side HOST_IP injection stays correct.
+
+        Does NOT upload the binary, .so, procmon.py, or launcher.py — install
+        phase owns those. Returns ``(ok, start_elapsed)`` where
+        ``start_elapsed`` is the launcher-reported Popen→ready elapsed when
+        available (excludes kubectl exec / ssh overhead), else the outer
+        wall-clock.
         """
         target = self._exec_target(node)
         instance_id = node['instance_id']
         tag = f'  [{target}:{instance_id}]'
 
-        config = self.generate_config(node)
-        role = config.get('role', 'writer')
+        remote_config = f'{self.remote_work_dir}/config_{instance_id}.json'
 
-        with tempfile.NamedTemporaryFile(
-            mode='w', suffix='.json', prefix=f'config_{instance_id}_',
-            delete=False
-        ) as tf:
-            json.dump(config, tf, indent=2)
-            tmp_config = tf.name
+        if keep_remote_config:
+            # Reuse the remote config left by a prior deploy. We still need
+            # the env block + host_id_env_name from the local template so the
+            # launcher injects HOST_IP correctly; everything else (peers,
+            # nodes topology) stays as previously deployed.
+            config = dict(self.config_template)
+            config['role'] = node.get('role', config.get('role', 'writer'))
+            role = config.get('role', 'writer')
 
-        try:
+            # Pre-flight: the remote config must exist. A missing file means
+            # either install never ran, clean-logs wiped it, or instance_id
+            # changed — fail loudly instead of letting the launcher error out.
+            check_cfg = self.run_on(
+                node, f'test -f {shlex.quote(remote_config)}',
+                check=False, timeout=10)
+            if check_cfg.returncode != 0:
+                log_info(f'{tag} FAILED: remote config not found at '
+                         f'{remote_config}; run a full deploy first '
+                         f'(keep_remote_config requires prior config upload)')
+                return False, 0.0
+
+            log_info(f'{tag} reusing remote config (role={role})')
+            tmp_config = None
+        else:
+            config = self.generate_config(node)
+            role = config.get('role', 'writer')
+
+            with tempfile.NamedTemporaryFile(
+                mode='w', suffix='.json', prefix=f'config_{instance_id}_',
+                delete=False
+            ) as tf:
+                json.dump(config, tf, indent=2)
+                tmp_config = tf.name
+
             # Upload config (small file; filename contains instance_id so
             # same-host instances do not collide — no host_lock needed).
-            remote_config = f'{self.remote_work_dir}/config_{instance_id}.json'
             log_info(f'{tag} uploading config (role={role}, peers={len(config.get("peers", []))})')
             self.scp_to(node, tmp_config, remote_config)
+
+        try:
 
             # Resolve SDK lib path (set by install phase on the node).
             remote_sdk = node.get('remote_sdk_dir', self.deploy.get('remote_sdk_dir', ''))
@@ -792,9 +827,10 @@ class Deployer:
             log_info(f'  {target} -> FAILED: {e}')
             return False, 0.0
         finally:
-            os.unlink(tmp_config)
+            if tmp_config is not None:
+                os.unlink(tmp_config)
 
-    def deploy_node(self, node):
+    def deploy_node(self, node, keep_remote_config=False):
         """Legacy single-call install + start (kept for backward compat).
 
         Equivalent to ``install_node`` followed by ``start_node`` on the same
@@ -804,7 +840,7 @@ class Deployer:
         ok, _ = self.install_node(node)
         if not ok:
             return False, 0.0
-        return self.start_node(node)
+        return self.start_node(node, keep_remote_config=keep_remote_config)
 
     def do_install(self):
         """Install binary + .so + procmon + launcher on all nodes (no start).
@@ -846,13 +882,19 @@ class Deployer:
         _print_timings('install', timings)
         return ok == total
 
-    def do_start(self):
+    def do_start(self, keep_remote_config=False):
         """Start kvtest on all nodes (assumes install completed).
 
         Launches all nodes concurrently; with uploads already done in
         ``do_install``, all processes enter Popen within milliseconds of
         each other, giving a true simultaneous-start for cluster-scale
         startup profiling.
+
+        When ``keep_remote_config`` is True, skips per-node config
+        generation/upload and reuses the remote ``config_{instance_id}.json``
+        left by a prior ``deploy``. Used for rolling upgrades where the
+        deploy.json is split into batches but the per-node config (containing
+        the full peer topology) must stay intact.
         """
         log_info(f'\nStarting on {len(self.nodes)} node(s)...')
 
@@ -861,7 +903,7 @@ class Deployer:
         def _start_with_timing(node):
             target = self._exec_target(node)
             try:
-                ok, elapsed = self.start_node(node)
+                ok, elapsed = self.start_node(node, keep_remote_config=keep_remote_config)
             except Exception as e:
                 log_info(f'  {target} -> FAILED: {e}')
                 ok, elapsed = False, 0.0
@@ -888,13 +930,19 @@ class Deployer:
         nodes whose install failed will also fail at start, but nodes that
         installed successfully are still started so a few bad pods do not
         block the entire cluster.
+
+        Always regenerates and uploads per-node config (calls
+        ``do_start(keep_remote_config=False)``) so the started binary runs
+        with a config matching the current config_template. Use the ``start``
+        subcommand directly (with ``--keep-remote-config``) for rolling
+        upgrades where the remote config must be preserved across batches.
         """
         install_ok = self.do_install()
         if not install_ok:
             log_info('\n--- install had failures; starting successful nodes anyway ---')
         else:
             log_info('\n--- install done, starting ---')
-        return self.do_start()
+        return self.do_start(keep_remote_config=False)
 
     def do_stop(self, stop_timeout=5):
         """Stop all kvtest instances.
@@ -1545,6 +1593,17 @@ def _build_config(mode, args):
             cfg['batch_keys_count'] = args.batch_keys_count
         if args.ttl > 0:
             cfg['set_param'] = {'ttl_second': args.ttl}
+        # Reader-side probabilistic mGet batch sizing (C2 non-blocking).
+        # Active when single_prob < 1.0. Requires notify_pipeline to contain
+        # mGet for the distribution to actually take effect.
+        if args.mget_single_prob < 1.0:
+            cfg['mget_size_distribution'] = {
+                'single_prob': args.mget_single_prob,
+                'min_batch': args.mget_min_batch,
+                'max_batch': args.mget_max_batch,
+            }
+            if args.mget_pending_queue_max > 0:
+                cfg['mget_size_distribution']['pending_queue_max'] = args.mget_pending_queue_max
         if mode == 'cache':
             cfg['key_pool_size'] = args.key_pool_size
             if args.target_hit_rate > 0:
@@ -1751,6 +1810,26 @@ def _add_gen_config_args(p):
                         'transitions; deploy_client only writes the value to config.json.')
     p.add_argument('--notify-count', type=int, default=10,
                    help='Number of peers to notify per write (default: 10)')
+    # Reader-side probabilistic mGet batch sizing (C2 non-blocking variant).
+    # When --mget-single-prob < 1.0, each notify-triggered mGet samples a
+    # target batch size: with probability --mget-single-prob it is 1,
+    # otherwise a uniform draw from [--mget-min-batch, --mget-max-batch].
+    # The actual batch is min(target, pending queue depth); no waiting.
+    # Requires --notify-pipeline to contain mGet.
+    p.add_argument('--mget-single-prob', type=float, default=1.0,
+                   help='Probability that a notify-triggered mGet fetches a single key '
+                        '(default: 1.0 = disabled, always single-key). Set < 1.0 to enable '
+                        'probabilistic batch sizing, e.g. 0.95 for 95%% single / 5%% batch.')
+    p.add_argument('--mget-min-batch', type=int, default=2,
+                   help='Minimum mGet batch size in the batch branch (default: 2). '
+                        'Only used when --mget-single-prob < 1.0.')
+    p.add_argument('--mget-max-batch', type=int, default=5,
+                   help='Maximum mGet batch size in the batch branch (default: 5). '
+                        'Only used when --mget-single-prob < 1.0.')
+    p.add_argument('--mget-pending-queue-max', type=int, default=65536,
+                   help='Cap on the reader-side pending keys queue (default: 65536, 0 = '
+                        'unbounded). Oldest keys are dropped when full. Only used when '
+                        '--mget-single-prob < 1.0.')
     p.add_argument('--data-sizes', default='1MB',
                    help='Comma-separated data sizes, e.g. "1MB,512KB" (default: 1MB)')
     p.add_argument('--num-threads', type=int,
@@ -1872,16 +1951,30 @@ def main():
                    help='Max seconds to wait for a kvtest client to become '
                         'ready after launch (default: 5). The launcher polls '
                         'TCP connect on the HTTP control port.')
+    p.add_argument('--keep-remote-config', dest='keep_remote_config',
+                   action='store_true', default=True,
+                   help='Reuse the remote config_{instance_id}.json left by a prior '
+                        'deploy instead of regenerating/uploading (default: True). '
+                        'Used for rolling upgrades where deploy.json is split into '
+                        'batches but the per-node config (full peer topology) must '
+                        'stay intact. Env block and HOST_IP injection are still read '
+                        'from the local config_template. Pre-flight fails if the '
+                        'remote config is missing (run a full deploy first). Pass '
+                        '--no-keep-remote-config to force config regeneration.')
+    p.add_argument('--no-keep-remote-config', dest='keep_remote_config',
+                   action='store_false',
+                   help='Regenerate and upload per-node config (legacy behavior).')
     p.add_argument('deploy_json', help='Path to deploy.json')
     p.add_argument('config_template', nargs='?', default='config/config.json.example',
-                   help='Config template (default: config/config.json.example)')
+                   help='Config template (default: config/config.json.example). Required '
+                        'for HOST_IP/env injection even with --keep-remote-config.')
 
     # deploy
     p = sub.add_parser('deploy', help='Install + start (auto stop+collect if duration set)',
                        parents=[shared])
     p.add_argument('deploy_json', help='Path to deploy.json')
     p.add_argument('config_template', nargs='?', default='config/config.json.example',
-                   help='Config template (default: config/config.json.example)')
+                   help='Config template (default: config/config.json.example).')
     p.add_argument('--jemalloc_prof_conf',
                    help='Jemalloc MALLOC_CONF for a kvtest built with -b bazel -x on; '
                         'default prof_prefix is <output_dir>/jemalloc/kvtest_<instance_id>')
@@ -1987,7 +2080,7 @@ def main():
         if not deployer.do_install():
             sys.exit(1)
     elif args.command == 'start':
-        if not deployer.do_start():
+        if not deployer.do_start(keep_remote_config=getattr(args, 'keep_remote_config', False)):
             sys.exit(1)
     elif args.command == 'deploy':
         deployer.do_deploy()

@@ -215,13 +215,13 @@ class TestProfileDeployment(unittest.TestCase):
         with patch.object(self.d, 'do_install', return_value=False), \
                 patch.object(self.d, 'do_start', return_value=True) as start:
             self.assertTrue(self.d.do_deploy())
-            start.assert_called_once_with()
+            start.assert_called_once_with(keep_remote_config=False)
 
     def test_deploy_propagates_start_result(self):
         with patch.object(self.d, 'do_install', return_value=True), \
                 patch.object(self.d, 'do_start', return_value=False) as start:
             self.assertFalse(self.d.do_deploy())
-            start.assert_called_once_with()
+            start.assert_called_once_with(keep_remote_config=False)
 
     def test_start_only_does_not_upload_runtime(self):
         with patch.object(self.d, 'run_on', side_effect=self.run_on), \
