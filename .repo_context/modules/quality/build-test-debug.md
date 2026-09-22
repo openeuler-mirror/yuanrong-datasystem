@@ -350,6 +350,16 @@ Backed by `tests/kvtest/BUILD.bazel` and `tests/kvtest/build.sh`:
   Set/Get concurrency, and `NotifyDispatcher::notifyPool_` derives its read-worker count as
   `num_total_threads - num_threads`. When a Pipeline config explicitly sets only `num_threads`, kvtest derives
   `num_total_threads` as twice that write-thread count; configs that omit both fields retain the 4/16 defaults.
+- reader-side probabilistic mGet batch sizing (C2 non-blocking variant) is opt-in via the
+  `mget_size_distribution` config block (active when `single_prob < 1.0`). When enabled, `NotifyDispatcher`
+  buffers incoming notify keys in a bounded `pendingQueue_` and triggers one probability-sampled mGet batch per
+  notify on a dedicated `mgetPool_` (same read-thread count as `notifyPool_`); the actual batch size is
+  `min(sampled_target, queue_depth)` so no artificial waiting is introduced. Defaults (`single_prob=1.0`) preserve
+  the legacy one-pipeline-per-notify behavior. Metrics `mget_actual_batch_size` (bytes = batch size) and
+  `mget_degraded` (count) record the realized distribution and queue-depth shortfalls. CLI flags
+  `--mget-single-prob` / `--mget-min-batch` / `--mget-max-batch` / `--mget-pending-queue-max` on
+  `deploy_client.py gen-config` populate the block; regression coverage is in
+  `tests/kvtest/tests/cxx/test_pipeline.cpp` (`SampleMgetBatchSize_*`).
 
 Backed by `tests/kvtest/deploy_coordinator.py`, `deploy_worker.py`, `deploy_common.py`, and `deploy_pods.py`:
 

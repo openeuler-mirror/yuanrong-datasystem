@@ -120,7 +120,7 @@ class TestCudaStartupWait(unittest.TestCase):
                 node = {'pod_name': 'test-client', 'instance_id': 0, 'host_ip': '192.0.2.1',
                         'cuda': {'client_init_wait_seconds': wait}}
                 d = _make_deployer([node], {'mode': 'pipeline', 'listen_port': 9000,
-                                           'cuda': {'client_init_wait_seconds': 10}}, transport='kubectl')
+                                            'cuda': {'client_init_wait_seconds': 10}}, transport='kubectl')
                 d.start_timeout = 60
                 d.binary_path = '/tmp/kvtest/kvtest'
                 d.scp_to = MagicMock()
@@ -140,6 +140,128 @@ class TestCudaStartupWait(unittest.TestCase):
                 self.assertEqual(len(launches), 1)
                 self.assertIn('--ready-timeout ' + str(60 + wait), launches[0][0])
                 self.assertEqual(launches[0][1], 70 + wait)
+
+
+class TestStartKeepRemoteConfig(unittest.TestCase):
+    """Tests for start_node(keep_remote_config=...) — rolling-upgrade path."""
+
+    def _make_deployer(self, node, template=None):
+        d = _make_deployer([node], template or {'mode': 'pipeline', 'listen_port': 9000},
+                           transport='kubectl')
+        d.start_timeout = 5
+        d.binary_path = '/tmp/kvtest/kvtest'
+        return d
+
+    def test_keep_remote_config_skips_scp_and_preflight_ok(self):
+        """keep_remote_config=True: no scp_to for config, reuses remote config."""
+        node = {'pod_name': 'c-0', 'instance_id': 0, 'host_ip': '192.0.2.1',
+                'port': 9000, 'role': 'writer'}
+        d = self._make_deployer(node, {'mode': 'pipeline', 'listen_port': 9000,
+                                       'host_id_env_name': 'HOST_IP'})
+        scp_calls = []
+        d.scp_to = MagicMock(side_effect=lambda n, s, dst: scp_calls.append((s, dst)))
+        launches = []
+
+        def run_on(node, cmd, check=True, timeout=60, allow_timeout=False):
+            if cmd == 'pgrep -x kvtest':
+                return subprocess.CompletedProcess([], 1, '', '')
+            if 'test -f' in cmd and 'config_' in cmd:
+                return subprocess.CompletedProcess([], 0, '', '')  # remote config exists
+            if 'test -x' in cmd:
+                return subprocess.CompletedProcess([], 0, '', '')  # binary exists
+            if '--ready-timeout' in cmd:
+                launches.append(cmd)
+                return subprocess.CompletedProcess([], 0, '123 0.1\n', '')
+            return subprocess.CompletedProcess([], 0, '', '')
+
+        d.run_on = run_on
+        ok, _ = d.start_node(node, keep_remote_config=True)
+        self.assertTrue(ok)
+        # No config upload happened (binary/launcher uploads are in install phase, not here)
+        for src, dst in scp_calls:
+            self.assertNotIn('config_0', dst)
+        # Launch happened with the remote config filename
+        self.assertTrue(any('config_0.json' in c for c in launches))
+
+    def test_keep_remote_config_fails_when_remote_config_missing(self):
+        """keep_remote_config=True with missing remote config: clear error, no launch."""
+        node = {'pod_name': 'c-0', 'instance_id': 0, 'host_ip': '192.0.2.1',
+                'port': 9000, 'role': 'writer'}
+        d = self._make_deployer(node)
+        d.scp_to = MagicMock()
+        launches = []
+
+        def run_on(node, cmd, check=True, timeout=60, allow_timeout=False):
+            if cmd == 'pgrep -x kvtest':
+                return subprocess.CompletedProcess([], 1, '', '')
+            if 'test -f' in cmd and 'config_' in cmd:
+                return subprocess.CompletedProcess([], 1, '', '')  # remote config MISSING
+            if '--ready-timeout' in cmd:
+                launches.append(cmd)
+                return subprocess.CompletedProcess([], 0, '123 0.1\n', '')
+            return subprocess.CompletedProcess([], 0, '', '')
+
+        d.run_on = run_on
+        ok, elapsed = d.start_node(node, keep_remote_config=True)
+        self.assertFalse(ok)
+        self.assertEqual(elapsed, 0.0)
+        self.assertEqual(launches, [])  # No launch attempted
+
+    def test_keep_remote_config_still_injects_env_from_template(self):
+        """keep_remote_config=True reads env block + host_id_env_name from template."""
+        node = {'pod_name': 'c-0', 'instance_id': 0, 'host_ip': '192.0.2.1',
+                'port': 9000, 'role': 'writer'}
+        template = {'mode': 'pipeline', 'listen_port': 9000,
+                    'env': {'FOO': 'bar', 'DATASYSTEM_UB_GET_DATA_SIZE_BYTES': '5242880'},
+                    'host_id_env_name': 'HOST_IP'}
+        d = self._make_deployer(node, template)
+        d.scp_to = MagicMock()
+        launch_cmds = []
+
+        def run_on(node, cmd, check=True, timeout=60, allow_timeout=False):
+            if cmd == 'pgrep -x kvtest':
+                return subprocess.CompletedProcess([], 1, '', '')
+            if 'test -f' in cmd and 'config_' in cmd:
+                return subprocess.CompletedProcess([], 0, '', '')
+            if 'test -x' in cmd:
+                return subprocess.CompletedProcess([], 0, '', '')
+            if '--ready-timeout' in cmd:
+                launch_cmds.append(cmd)
+                return subprocess.CompletedProcess([], 0, '123 0.1\n', '')
+            return subprocess.CompletedProcess([], 0, '', '')
+
+        d.run_on = run_on
+        ok, _ = d.start_node(node, keep_remote_config=True)
+        self.assertTrue(ok)
+        self.assertEqual(len(launch_cmds), 1)
+        # FOO from template env, HOST_IP from host_ip, DATASYSTEM_UB_GET_DATA_SIZE_BYTES
+        # is NOT re-injected because it's already in custom_env from template.
+        self.assertIn('FOO=bar', launch_cmds[0])
+        self.assertIn('HOST_IP=192.0.2.1', launch_cmds[0])
+        self.assertIn('DATASYSTEM_UB_GET_DATA_SIZE_BYTES=5242880', launch_cmds[0])
+
+    def test_default_regenerates_and_uploads_config(self):
+        """keep_remote_config=False (explicit): generate_config + scp_to called."""
+        node = {'pod_name': 'c-0', 'instance_id': 0, 'host_ip': '192.0.2.1',
+                'port': 9000, 'role': 'writer'}
+        d = self._make_deployer(node, {'mode': 'pipeline', 'listen_port': 9000})
+        scp_calls = []
+        d.scp_to = MagicMock(side_effect=lambda n, s, dst: scp_calls.append(dst))
+
+        def run_on(node, cmd, check=True, timeout=60, allow_timeout=False):
+            if cmd == 'pgrep -x kvtest':
+                return subprocess.CompletedProcess([], 1, '', '')
+            if 'test -x' in cmd:
+                return subprocess.CompletedProcess([], 0, '', '')
+            if '--ready-timeout' in cmd:
+                return subprocess.CompletedProcess([], 0, '123 0.1\n', '')
+            return subprocess.CompletedProcess([], 0, '', '')
+
+        d.run_on = run_on
+        ok, _ = d.start_node(node, keep_remote_config=False)
+        self.assertTrue(ok)
+        self.assertTrue(any('config_0' in dst for dst in scp_calls))
+
 
 
 class TestBuildConfigNodes(unittest.TestCase):
