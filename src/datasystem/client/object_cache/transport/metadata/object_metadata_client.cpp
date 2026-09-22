@@ -32,6 +32,7 @@
 #include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
+#include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 
@@ -701,20 +702,23 @@ Status ObjectMetadataClient::Query(const HostPort &address, const ObjectMetadata
                                    bool traceEnabled)
 {
     RETURN_IF_NOT_OK(ValidateAndResetItems(items));
+    const auto method = enableInlineData ? "QueryAndGet" : "QueryMetadata";
     std::optional<TransportPhaseLatencyRecorder> recorder;
     if (traceEnabled) {
         recorder.emplace(address);
     }
     InlineRequestContext context;
     if (enableInlineData) {
-        RETURN_IF_NOT_OK(
-            InitializeInlineRequest(address, items, std::move(readContext), context, recorder ? &*recorder : nullptr));
+        RETURN_IF_NOT_OK(WithRpcDiag(
+            InitializeInlineRequest(address, items, std::move(readContext), context, recorder ? &*recorder : nullptr),
+            method, address));
     }
 
     QueryAndGetRspPb response;
     std::vector<RpcMessage> payloads;
-    RETURN_IF_NOT_OK(QueryWithRetry(address, items, response, payloads, context, recorder ? &*recorder : nullptr));
-    return ApplyResults(address, items, response, payloads, context);
+    RETURN_IF_NOT_OK(WithRpcDiag(
+        QueryWithRetry(address, items, response, payloads, context, recorder ? &*recorder : nullptr), method, address));
+    return WithRpcDiag(ApplyResults(address, items, response, payloads, context), method, address);
 }
 
 Status ObjectMetadataClient::QueryAndGet(const HostPort &address, const ObjectMetadataBatch &items,

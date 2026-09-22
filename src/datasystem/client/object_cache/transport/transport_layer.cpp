@@ -48,6 +48,7 @@
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
+#include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/timer.h"
@@ -965,7 +966,7 @@ Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param,
     }
     const auto setStart = std::chrono::steady_clock::now();
     LocalUbSenderOperation operation;
-    RETURN_IF_NOT_OK(CheckLocalUbSenderAdmission(hint));
+    RETURN_IF_NOT_OK(WithRpcDiag(CheckLocalUbSenderAdmission(hint), "Set", workerAddr));
     std::shared_ptr<IDataTransporter> transporter;
     Status buildRc = manager_->GetOrCreate(workerAddr, hint, transporter);
     if (buildRc.IsError() && hint == TransportHint::UB_CANDIDATE) {
@@ -978,15 +979,16 @@ Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param,
         hint = TransportHint::TCP_ONLY;
         buildRc = manager_->GetOrCreate(workerAddr, hint, transporter);
     }
-    RETURN_IF_NOT_OK(buildRc);
-    RETURN_IF_NOT_OK(AcquireLocalUbSenderAdmission(hint, operation));
+    RETURN_IF_NOT_OK(WithRpcDiag(buildRc, "Set", workerAddr));
+    RETURN_IF_NOT_OK(WithRpcDiag(AcquireLocalUbSenderAdmission(hint, operation), "Set", workerAddr));
     auto &mutableBufferInfo = ObjectBufferInternal::GetMutableInfo(buffer);
     mutableBufferInfo.ubFailureReportRc = Status::OK();
     mutableBufferInfo.ubProviderStatus.reset();
     mutableBufferInfo.ubCqeStatus.reset();
     PrepareLocalUbLateCompletion(mutableBufferInfo, transporter->Kind());
     Status rc = transporter->Set(buffer, param, &result);
-    return FinalizeSetPublish(workerAddr, buffer, param, hint, transporter, rc, result, setStart);
+    return WithRpcDiag(FinalizeSetPublish(workerAddr, buffer, param, hint, transporter, rc, result, setStart), "Set",
+                       workerAddr);
 }
 
 Status TransportLayer::FinalizeSetPublish(const HostPort &workerAddr, ObjectBuffer &buffer,
