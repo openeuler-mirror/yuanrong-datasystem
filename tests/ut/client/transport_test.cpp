@@ -3635,7 +3635,9 @@ TEST(ObjectMetadataClientTest, DoesNotReportDeadlineExpiredBeforeAccess)
     auto batch = MakeMetadataBatch(results);
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
 
-    EXPECT_EQ(metadata.QueryAndGet(MakeAddress(41), batch, nullptr).GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    const auto rc = metadata.QueryAndGet(MakeAddress(41), batch, nullptr);
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_NE(rc.GetMsg().find("QueryAndGet->[" + MakeAddress(41).ToString() + "]"), std::string::npos);
     EXPECT_EQ(invokeCount, 0u);
     EXPECT_EQ(failureCount, 0u);
 }
@@ -10520,6 +10522,7 @@ TEST(TransportLayerTest, SetPeerDeadTearsDownWithoutRetry)
     TransportSetParam setParam = MakeSetParam();
     Status rc = layer.Set(*buffer, setParam);
     EXPECT_EQ(rc.GetCode(), K_RPC_PEER_DEAD) << rc.ToString();
+    EXPECT_NE(rc.GetMsg().find("Set->[" + MakeAddress(35).ToString() + "]"), std::string::npos);
     int setCount = 0;
     int releaseCount = 0;
     for (const auto &transporter : manager->builtTransporters) {
