@@ -516,6 +516,9 @@ private:
      * @brief Worker serial event and tick loop.
      */
     void Run();
+    Status RefreshMemberships();
+    void RefreshMembershipsIfDue(std::chrono::steady_clock::time_point &deadline,
+                                std::chrono::steady_clock::time_point now);
 
     /**
      * @brief Dispatch one task-progress completion to the bounded pool or the legacy inline path.
@@ -565,6 +568,7 @@ private:
     Status ApplyCoordinatorTopologyEvent(const CoordinationEvent &event);
 
     Status ApplyCoordinatorMembershipEvent(const CoordinationEvent &event);
+    Status ApplyMembershipEvent(const CoordinationEvent &event, const std::string &prefix);
 
     void ClearMembershipCandidatesLocked();
 

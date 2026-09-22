@@ -12,19 +12,21 @@
   - `src/datasystem/worker/metadata_route_resolver.{h,cpp}`
 - The module owns authoritative cluster membership state, immutable routing snapshots, topology planning, task
   materialization/execution, and the backend-specific control loop.
-- `TopologySnapshot` carries the membership hostId projection and its read revision separately from the canonical
-  topology digest. Revision zero means no successful membership read. Background readers retry this projection even
-  when topology authority revision is unchanged; a successful empty map clears old mappings.
-  A failed read does not block a newer topology: publication retains last-good hostIds only for unchanged member
-  identities. Same-version, same-topology publication can atomically replace the projection without replaying topology
-  callbacks. Exact reads and publication are serialized by the owning runtime; membership revision numbers are not
-  compared across Coordinator lifetimes.
-- Controller uses topology-only reads for planning and CAS read-back; it owns membership facts separately.
-  External topology watch values do not trigger membership Range reads. HostId projection reads remain owned by
-  routing snapshot readers, preserving Controller watch watermarks and bounded resync/backoff behavior.
-- Worker `GetHashRing` builds the ring and hostId map from the same held snapshot. `GetRoutingHostIds` only reads the
-  published snapshot, with no foreground membership Range, cache miss or failure retry. Coordinator and ETCD adapters
-  expose the membership Range revision through the existing revision-bearing `GetAll` overload.
+- `TopologyEngine` owns the membership cache in `MembershipEndpointView`, protected by its existing shared mutex.
+  Initial Coordinator watch values and PUT/DELETE events update it; a Range rebuilds the table every 30 seconds after
+  a random initial delay in [0, 30) seconds, removing absent entries and covered deletion tombstones,
+  preserving events newer than the Range revision. ETCD additionally bootstraps the cache before installing its watch.
+  Coordinator watch ownership fences refresh commits; changing watch identity clears the previous cache.
+- Tests asserting same-host SHM must wait for the published `GetHashRing.host_id_map` before initializing SDK routing.
+  Worker readiness alone does not guarantee this projection. `CoordinatorWriteRedirectTest` overrides only the first
+  refresh delay through `TopologyEngine.initialMembershipRefreshDelayMs` and verifies all expected address/hostId pairs;
+  the production jitter and periodic refresh interval remain unchanged.
+- Topology readers and watch callbacks obtain hostIds locally; standalone readers without a view read topology only.
+  `GetRoutingHostIds` reads the view. `GetHashRing` uses the published snapshot, without foreground map rebuilding.
+  Local hostId queries expose no revision; the snapshot uses `HostIdsKnown()` to distinguish unknown from known-empty maps,
+  with revision ordering confined to the membership view. After construction or clearing, the projection stays unknown
+  until a full Range commits; individual initial-watch values do not prove completeness. Last-good published hostIds
+  survive this window; a fresh Coordinator worker waits for the first successful periodic refresh to publish hostIds.
   Snapshots precompute a separate SHA256 hostId content digest through `Hasher::GetStringMapSha256Hex`: sort by key,
   then encode decimal byte length, colon and bytes for each key and value. Empty maps have a nonempty digest.
   GetHashRing compares both topology version and the SDK's accepted hostId digest, returning a complete
@@ -36,7 +38,12 @@
 - Coordinator Store `Put` reports create-only collisions as `K_DUPLICATED`, missing version/revision-fenced keys as
   `K_NOT_FOUND`, and version/modification/global revision mismatches as `K_DATA_INCONSISTENCY`. Initial membership
   publication retries these three outcomes by repeating the full read-and-CAS operation within its existing retry
-  window. Both Coordinator CAS helpers recognize these conflicts; revision-fenced Controller CAS returns a stale
+  window. Worker startup READY publication also retries these conflicts within its existing deadline and poll interval;
+  `CoordinatorReadyMembershipRetryTest` injects repeated conflicts before the lifecycle update and checks cross-worker IO.
+  `common/coordinator/coordinator_status.h::IsCoordinatorCasConflict` classifies conditional-write conflicts only.
+  Leader reconciliation retries CAS conflicts; lifecycle retries require an advanced same-process, same-Coordinator revision.
+  ScaleIn metadata-marker CAS conflicts preserve the executor retry ledger without broadening business callback retries.
+  Both Coordinator CAS helpers recognize these conflicts; revision-fenced Controller CAS returns a stale
   snapshot conflict immediately so its caller can recompute from fresh authority state. Router behavior is unchanged.
   This error contract is specific to `Put`; KeepAlive/Delete identity and revision fences retain their existing codes.
   Recovery create-once installation treats `K_DUPLICATED` as blocked before the hard deadline, preserving the

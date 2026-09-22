@@ -69,15 +69,25 @@ ds_cc_test(
 
 ds_cc_test(
     name = "topology_engine_test",
-    srcs = ["topology_engine_test.cpp"],
+    srcs = ["topology_engine_test.cpp", "membership_contract_test.cpp", "topology_reader_test.cpp"],
     deps = [
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/common/flags:dynamic_flag_config",
         "//tests/ut/cluster/testing:fake_coordinator_service_proxy",
+        "//tests/ut/cluster/testing:fake_coordination_backend",
         "//tests/ut:ut_common",
     ],
 )
 
+ds_cc_test(
+    name = "topology_task_executor_test",
+    srcs = ["topology_task_executor_test.cpp"],
+    deps = [
+        "//src/datasystem/cluster:cluster_topology",
+        "//tests/ut/cluster/testing:fake_coordination_backend",
+        "//tests/ut:ut_common",
+    ],
+)
 test_suite(
     name = "all_cluster_tests",
     tests = [

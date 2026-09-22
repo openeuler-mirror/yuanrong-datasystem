@@ -10,6 +10,7 @@
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/cluster/runtime/topology_reader.h"
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/cluster/runtime/topology_snapshot_state.h"
 #include "ut/cluster/testing/fake_coordination_backend.h"
 #include "ut/cluster/testing/fake_coordinator_service_proxy.h"
@@ -118,7 +119,7 @@ TEST_F(CoordinatorTopologyReaderTest, FailedReconciliationRetainsOldEvidenceForR
     EXPECT_EQ(snapshot->CoordinatorId(), "coordinator-b");
 }
 
-TEST_F(CoordinatorTopologyReaderTest, MembershipReadCannotRelabelTopologyResponseAuthority)
+TEST_F(CoordinatorTopologyReaderTest, LocalMembershipProjectionPreservesTopologyResponseAuthority)
 {
     DS_ASSERT_OK(WriteTopology(1));
     std::shared_ptr<const TopologySnapshot> snapshot;
@@ -126,23 +127,31 @@ TEST_F(CoordinatorTopologyReaderTest, MembershipReadCannotRelabelTopologyRespons
     proxy_.ResetCoordinatorStore("coordinator-b");
     DS_ASSERT_OK(WriteTopology(2));
     DS_ASSERT_OK(RegisterWatch());
+    TopologySnapshotState snapshots;
+    MembershipEndpointView membership(snapshots);
+    DS_ASSERT_OK(membership.RefreshMemberships({ { "127.0.0.1:1", MemberLifecycleState::READY, 0, "host-a" } }, 100));
+    reader_ = std::make_unique<TopologyReader>(*repository_, &membership);
+    size_t membershipReads = 0;
     proxy_.SetRangeEntryInterceptor([&](const std::string &key) {
-        if (key == keys_->MembershipTable() + "/") {
-            proxy_.SetRangeEntryInterceptor({});
-            proxy_.ResetCoordinatorStore("coordinator-c");
-            DS_ASSERT_OK(WriteTopology(3));
-        }
+        membershipReads += key == keys_->MembershipTable() + "/";
     });
 
     bool unchanged = true;
     DS_ASSERT_OK(reader_->ReadIfChanged(100, *snapshot, snapshot, unchanged));
     EXPECT_FALSE(unchanged);
+    EXPECT_EQ(membershipReads, 0U);
+    EXPECT_TRUE(snapshot->HostIdsKnown());
+    EXPECT_EQ(snapshot->HostIds().at("127.0.0.1:1"), "host-a");
+    EXPECT_NE(snapshot->AuthorityRevision(), 100);
     EXPECT_EQ(snapshot->Version(), 2U);
     EXPECT_EQ(snapshot->CoordinatorId(), "coordinator-b");
+    DS_ASSERT_OK(membership.UpdateMembership("127.0.0.1:1", { 0, MemberLifecycleState::READY, "host-b", {} }, 101));
     DS_ASSERT_OK(reader_->ReadIfChanged(100, *snapshot, snapshot, unchanged));
     EXPECT_FALSE(unchanged);
-    EXPECT_EQ(snapshot->Version(), 3U);
-    EXPECT_EQ(snapshot->CoordinatorId(), "coordinator-c");
+    EXPECT_EQ(snapshot->HostIds().at("127.0.0.1:1"), "host-b");
+    EXPECT_EQ(membershipReads, 0U);
+    EXPECT_EQ(snapshot->Version(), 2U);
+    EXPECT_EQ(snapshot->CoordinatorId(), "coordinator-b");
 }
 
 TEST_F(CoordinatorTopologyReaderTest, SameAuthorityAndRevisionKeepCachedSnapshot)
@@ -197,7 +206,7 @@ TEST(TopologyReaderTest, TopologyOnlyReadDoesNotReadMembership)
 
     DS_ASSERT_OK(reader.ReadTopologyOnly(100, snapshot));
     EXPECT_EQ(snapshot->Version(), 1U);
-    EXPECT_EQ(snapshot->HostIdsRevision(), 0);
+    EXPECT_FALSE(snapshot->HostIdsKnown());
     EXPECT_TRUE(snapshot->HostIds().empty());
     EXPECT_EQ(backend.RevisionGetAllCount(keys->MembershipTable()), 0U);
     std::unordered_map<std::string, std::string> hostIds;
@@ -210,7 +219,9 @@ TEST(TopologyReaderTest, ReadCarriesMembershipHostIds)
     std::unique_ptr<TopologyKeyHelper> keys;
     DS_ASSERT_OK(TopologyKeyHelper::Create("reader-host-ids", keys));
     TopologyRepository repository(backend, *keys);
-    TopologyReader reader(repository);
+    TopologySnapshotState localSnapshots;
+    MembershipEndpointView view(localSnapshots);
+    TopologyReader reader(repository, &view);
     TopologyState state;
     state.version = 1;
     state.members.push_back(Member{ { std::string(16, 'a'), "127.0.0.1:10001" }, MemberState::ACTIVE, { 0 } });
@@ -221,6 +232,7 @@ TEST(TopologyReaderTest, ReadCarriesMembershipHostIds)
     DS_ASSERT_OK(MembershipValueCodec::Encode(membership, bytes));
     backend.PutBytes(keys->MembershipTable(), "127.0.0.1:10001", std::move(bytes));
 
+    DS_ASSERT_OK(view.RefreshMemberships({ { "127.0.0.1:10001", membership.lifecycleState, 0, "host-a" } }, 1));
     std::shared_ptr<const TopologySnapshot> snapshot;
     DS_ASSERT_OK(reader.Read(100, snapshot));
     const auto &hostIds = snapshot->HostIds();
@@ -234,21 +246,23 @@ TEST(TopologyReaderTest, MembershipProjectionRecoversAndChangesWithoutTopologyAd
     std::unique_ptr<TopologyKeyHelper> keys;
     DS_ASSERT_OK(TopologyKeyHelper::Create("reader-host-recovery", keys));
     TopologyRepository repository(backend, *keys);
-    TopologyReader reader(repository);
+    TopologySnapshotState localSnapshots;
+    MembershipEndpointView view(localSnapshots);
+    TopologyReader reader(repository, &view);
     TopologyState topology;
     topology.version = 1;
     backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), topology);
     std::string bytes;
     DS_ASSERT_OK(MembershipValueCodec::Encode({ 0, MemberLifecycleState::READY, "host-a", "v1" }, bytes));
     backend.PutBytes(keys->MembershipTable(), "127.0.0.1:10001", bytes);
-    backend.FailNextGetAll();
     std::shared_ptr<const TopologySnapshot> snapshot;
     DS_ASSERT_OK(reader.Read(100, snapshot));
-    EXPECT_EQ(snapshot->HostIdsRevision(), 0);
+    EXPECT_FALSE(snapshot->HostIdsKnown());
     TopologySnapshotState published;
     SnapshotUpdateOutcome outcome;
     DS_ASSERT_OK(published.Publish(snapshot, outcome));
 
+    DS_ASSERT_OK(view.RefreshMemberships({ { "127.0.0.1:10001", MemberLifecycleState::READY, 0, "host-a" } }, 2));
     bool unchanged = true;
     DS_ASSERT_OK(reader.ReadIfChanged(100, *snapshot, snapshot, unchanged));
     EXPECT_FALSE(unchanged);
@@ -256,6 +270,7 @@ TEST(TopologyReaderTest, MembershipProjectionRecoversAndChangesWithoutTopologyAd
     DS_ASSERT_OK(published.Load(snapshot));
     EXPECT_EQ(snapshot->HostIds().at("127.0.0.1:10001"), "host-a");
     const auto first = snapshot;
+    DS_ASSERT_OK(view.UpdateMembership("127.0.0.1:10001", { 0, MemberLifecycleState::READY, "host-b", "v1" }, 3));
 
     DS_ASSERT_OK(MembershipValueCodec::Encode({ 0, MemberLifecycleState::READY, "host-b", "v1" }, bytes));
     backend.PutBytes(keys->MembershipTable(), "127.0.0.1:10001", bytes);
@@ -266,13 +281,30 @@ TEST(TopologyReaderTest, MembershipProjectionRecoversAndChangesWithoutTopologyAd
     EXPECT_EQ(snapshot->Version(), first->Version());
     EXPECT_EQ(snapshot->CanonicalDigest(), first->CanonicalDigest());
     EXPECT_EQ(snapshot->HostIds().at("127.0.0.1:10001"), "host-b");
-    EXPECT_GT(snapshot->HostIdsRevision(), first->HostIdsRevision());
+    EXPECT_NE(snapshot->HostIdsDigest(), first->HostIdsDigest());
     EXPECT_EQ(first->HostIds().at("127.0.0.1:10001"), "host-a");
 
-    backend.FailNextGetAll();
+    view.ClearMemberships();
+    DS_ASSERT_OK(view.UpdateMembership("127.0.0.1:10001", { 0, MemberLifecycleState::READY, "partial", {} }, 4));
+    std::unordered_map<std::string, std::string> hostIds;
+    EXPECT_EQ(view.GetHostIds(hostIds).GetCode(), K_NOT_READY);
+    EXPECT_EQ(view.RefreshMemberships({}, 0).GetCode(), K_INVALID);
     DS_ASSERT_OK(reader.ReadIfChanged(100, *snapshot, snapshot, unchanged));
     EXPECT_TRUE(unchanged);
     EXPECT_EQ(snapshot->HostIds().at("127.0.0.1:10001"), "host-b");
+    DS_ASSERT_OK(reader.Read(100, snapshot));
+    EXPECT_FALSE(snapshot->HostIdsKnown());
+    DS_ASSERT_OK(published.Publish(snapshot, outcome));
+    DS_ASSERT_OK(published.Load(snapshot));
+    EXPECT_EQ(snapshot->HostIds().at("127.0.0.1:10001"), "host-b");
+    DS_ASSERT_OK(view.RefreshMemberships({}, 5));
+    DS_ASSERT_OK(reader.ReadIfChanged(100, *snapshot, snapshot, unchanged));
+    EXPECT_FALSE(unchanged);
+    EXPECT_TRUE(snapshot->HostIdsKnown());
+    EXPECT_TRUE(snapshot->HostIds().empty());
+    DS_ASSERT_OK(published.Publish(snapshot, outcome));
+    DS_ASSERT_OK(published.Load(snapshot));
+    EXPECT_TRUE(snapshot->HostIds().empty());
 }
 
 TEST(TopologySnapshotStateTest, HostIdFailurePreservesOnlyUnchangedMemberIdentities)
@@ -285,7 +317,7 @@ TEST(TopologySnapshotStateTest, HostIdFailurePreservesOnlyUnchangedMemberIdentit
     };
     std::shared_ptr<const TopologySnapshot> snapshot;
     DS_ASSERT_OK(TopologySnapshot::Create(topology, 1, std::string(64, 'a'), snapshot,
-                                          { { "127.0.0.1:1", "host-a" }, { "127.0.0.1:2", "host-b" } }, 10));
+                                          { { "127.0.0.1:1", "host-a" }, { "127.0.0.1:2", "host-b" } }, true));
     TopologySnapshotState published;
     SnapshotUpdateOutcome outcome;
     DS_ASSERT_OK(published.Publish(snapshot, outcome));
@@ -298,17 +330,17 @@ TEST(TopologySnapshotStateTest, HostIdFailurePreservesOnlyUnchangedMemberIdentit
     EXPECT_EQ(snapshot->HostIds().size(), 1U);
     EXPECT_EQ(snapshot->HostIds().at("127.0.0.1:1"), "host-a");
 
-    DS_ASSERT_OK(TopologySnapshot::Create(topology, 2, std::string(64, 'b'), snapshot, {}, 11));
+    DS_ASSERT_OK(TopologySnapshot::Create(topology, 2, std::string(64, 'b'), snapshot, {}, true));
     DS_ASSERT_OK(published.Publish(snapshot, outcome));
     DS_ASSERT_OK(published.Load(snapshot));
     EXPECT_TRUE(snapshot->HostIds().empty());
-    EXPECT_EQ(snapshot->HostIdsRevision(), 11);
+    EXPECT_TRUE(snapshot->HostIdsKnown());
 
     DS_ASSERT_OK(TopologySnapshot::Create(topology, 2, std::string(64, 'b'), snapshot,
-                                          { { "127.0.0.1:1", "host-after-recovery" } }, 1));
+                                          { { "127.0.0.1:1", "host-after-recovery" } }, true));
     DS_ASSERT_OK(published.Publish(snapshot, outcome));
     DS_ASSERT_OK(published.Load(snapshot));
-    EXPECT_EQ(snapshot->HostIdsRevision(), 1);
+    EXPECT_TRUE(snapshot->HostIdsKnown());
     EXPECT_EQ(snapshot->HostIds().at("127.0.0.1:1"), "host-after-recovery");
 }
 
@@ -319,12 +351,12 @@ TEST(TopologySnapshotStateTest, IdempotentPublicationRefreshesAuthorityAndRetain
     topology.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 0 } } };
     std::shared_ptr<const TopologySnapshot> snapshot;
     DS_ASSERT_OK(TopologySnapshot::Create(topology, 7, std::string(64, 'a'), snapshot,
-                                          { { "127.0.0.1:1", "host-a" } }, 8, "coordinator-a"));
+                                          { { "127.0.0.1:1", "host-a" } }, true, "coordinator-a"));
     const auto previous = snapshot;
     TopologySnapshotState published;
     SnapshotUpdateOutcome outcome;
     DS_ASSERT_OK(published.Publish(snapshot, outcome));
-    DS_ASSERT_OK(TopologySnapshot::Create(topology, 1, std::string(64, 'a'), snapshot, {}, 0, "coordinator-b"));
+    DS_ASSERT_OK(TopologySnapshot::Create(topology, 1, std::string(64, 'a'), snapshot, {}, false, "coordinator-b"));
     DS_ASSERT_OK(published.Publish(snapshot, outcome));
     EXPECT_EQ(outcome, SnapshotUpdateOutcome::IDEMPOTENT);
     DS_ASSERT_OK(published.Load(snapshot));

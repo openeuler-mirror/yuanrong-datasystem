@@ -124,6 +124,14 @@ void FillKeyValuePb(const KeyValueEntry &entry, KeyValue *kv)
     kv->set_mod_revision(entry.modRevision);
 }
 
+void FillKeyValuePb(KeyValueEntry &&entry, KeyValue *kv)
+{
+    kv->set_key(std::move(entry.key));
+    kv->set_value(std::move(entry.value));
+    kv->set_version(entry.version);
+    kv->set_mod_revision(entry.modRevision);
+}
+
 void FillKeyValuePbs(const std::vector<KeyValueEntry> &entries, google::protobuf::RepeatedPtrField<KeyValue> *output)
 {
     for (const auto &entry : entries) {
@@ -1027,8 +1035,9 @@ Status CoordinatorServiceImpl::Range(const RangeReqPb &req, RangeRspPb &rsp)
         store_->Range(req.key(), req.range_end(), kvs, revision, req.known_mod_revision(), &unchanged));
     rsp.set_revision(revision);
     rsp.set_unchanged(unchanged);
-    for (const auto &entry : kvs) {
-        FillKeyValuePb(entry, rsp.add_kvs());
+    rsp.mutable_kvs()->Reserve(static_cast<int>(kvs.size()));
+    for (auto &entry : kvs) {
+        FillKeyValuePb(std::move(entry), rsp.add_kvs());
     }
     return Status::OK();
 }
