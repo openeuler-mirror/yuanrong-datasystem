@@ -87,6 +87,20 @@ struct Config {
     int batchKeysCount = 1;  // batch 操作的 key 数量，1 = 单 key 兼容
     int msetBatchSize = 8;   // keys per MSet call
     int mgetBatchSize = 8;   // keys per MGet call
+
+    // Reader-side probabilistic mGet batch sizing (C2 non-blocking variant).
+    // When enabled (singleProb < 1.0), each notify-triggered mGet samples a
+    // target batch size: with probability singleProb it is 1, otherwise it is
+    // uniformly drawn from [minBatch, maxBatch]. The actual batch is
+    // min(target, pending queue depth) so no artificial waiting is
+    // introduced. Defaults preserve legacy behavior (always 1).
+    struct MgetSizeDistribution {
+        bool enabled = false;
+        double singleProb = 1.0;
+        int minBatch = 2;
+        int maxBatch = 5;
+        size_t pendingQueueMax = 65536;  // 0 = unbounded
+    } mgetSizeDist;
     int metricsIntervalMs = 3000;
     std::string metricsFile;  // resolved in LoadConfig: outputDir_/latency_timeseries.csv
     std::string outputDir;    // e.g. metrics_192.168.1.10_20260519_171440
