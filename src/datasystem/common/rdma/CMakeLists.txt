@@ -25,18 +25,15 @@ if (BUILD_WITH_URMA OR BUILD_WITH_URMA_MOCK)
         urma_dlopen_util.cpp
         urma_port_status_provider.cpp
     )
-    # Real URMA: link liburma at compile time (the 44 ds_urma_* shims call
-    # symbols resolved by -lurma directly). liburma_ubagg/liburma-udma are
-    # liburma's transitive DT_NEEDED dependencies; they are NOT linked
-    # explicitly to avoid recursively validating their own transitive deps
-    # (e.g. libummu needs GLIBCXX_3.4.29 which may exceed the build host's
-    # libstdc++). They are shipped in the package (see cmake/package.cmake)
-    # and resolved by the runtime dynamic linker.
+    # Real URMA: link liburma at compile time (the ds_urma_* shims call
+    # symbols resolved by -lurma directly). The bonding CR query is exported
+    # by liburma_ubagg, so link that library explicitly as well. liburma-udma
+    # remains a transitive runtime dependency and is shipped in the package.
     # libtpsa provides ub_str_to_* symbols that liburma.so references but does
     # not declare in its DT_NEEDED, so it must be linked explicitly.
     # Mock URMA: no real library needed (weak-symbol dispatch, no dlopen).
     if (BUILD_WITH_URMA)
-        list(APPEND URMA_DEPEND_LIBS ${URMA_LIBRARY})
+        list(APPEND URMA_DEPEND_LIBS ${URMA_LIBRARY} ${URMA_UBAGG_LIBRARY})
         find_library(URMA_TPSA_LIBRARY tpsa PATHS ${URMA_LIB_LOCATION} DOC "URMA tpsa library")
         if (URMA_TPSA_LIBRARY)
             list(APPEND URMA_DEPEND_LIBS ${URMA_TPSA_LIBRARY})

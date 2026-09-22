@@ -180,6 +180,13 @@ int ds_urma_poll_jfc(urma_jfc_t *jfc, int max_cr, urma_cr_t *complete_records)
     return urma_poll_jfc(jfc, max_cr, complete_records);
 }
 
+#ifdef BONDP_HAS_DATAPATH_QUERY
+bondp_port_id_t ds_bondp_get_cr_local_port_id(const urma_cr_t *cr)
+{
+    return bondp_get_cr_local_port_id(cr);
+}
+#endif
+
 void ds_urma_ack_jfc(urma_jfc_t **ev_jfc, uint32_t *ack_cnt, int num)
 {
     urma_ack_jfc(ev_jfc, ack_cnt, num);
@@ -557,6 +564,14 @@ int ds_urma_poll_jfc(urma_jfc_t *jfc, int max_cr, urma_cr_t *complete_records)
     return CallRet< int, decltype(&ds_urma_poll_jfc)>(
         "urma_poll_jfc", -1, jfc, max_cr, complete_records);
 }
+
+#ifdef BONDP_HAS_DATAPATH_QUERY
+bondp_port_id_t ds_bondp_get_cr_local_port_id(const urma_cr_t *cr)
+{
+    return CallRet<bondp_port_id_t, decltype(&ds_bondp_get_cr_local_port_id)>(
+        "bondp_get_cr_local_port_id", bondp_port_id_t{}, cr);
+}
+#endif
 
 void ds_urma_ack_jfc(urma_jfc_t **ev_jfc, uint32_t *ack_cnt, int num)
 {

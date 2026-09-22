@@ -1885,7 +1885,12 @@ void UrmaResource::MaybeTriggerRefill()
 
 void UrmaResource::RemoveFromPoolLocked(const std::shared_ptr<UrmaJetty> &jetty)
 {
+    const auto before = sendJettyPool_.GetStats();
     if (sendJettyPool_.Remove(jetty)) {
+        const auto after = sendJettyPool_.GetStats();
+        if (before.inUseCount > after.inUseCount) {
+            activeSendJettyCount_.fetch_sub(1, std::memory_order_relaxed);
+        }
         const auto stats = sendJettyPool_.GetStats();
         LOG(INFO) << "[URMA_SEND_LANE_POOL] Removed jetty " << jetty->GetJettyId()
                   << " from pool, poolSize=" << stats.poolSize << ", idleCount=" << stats.idleCount;
@@ -1904,6 +1909,7 @@ Status UrmaResource::AcquireJetty(std::shared_ptr<UrmaJetty> &jetty)
     // entries are skipped defensively (e.g. a Jetty invalidated between release and acquire).
     while (sendJettyPool_.PopIdle(jetty)) {
         if (jetty != nullptr && jetty->IsValid()) {
+            activeSendJettyCount_.fetch_add(1, std::memory_order_relaxed);
             const auto stats = sendJettyPool_.GetStats();
             VLOG(1) << "[URMA_SEND_LANE_POOL] Acquired jetty " << jetty->GetJettyId()
                     << ", idleCount=" << stats.idleCount << ", poolSize=" << stats.poolSize;
@@ -1935,7 +1941,12 @@ void UrmaResource::ReleaseJetty(const std::shared_ptr<UrmaJetty> &jetty)
         return;
     }
 
+    const auto before = sendJettyPool_.GetStats();
     if (sendJettyPool_.Release(jetty)) {
+        const auto after = sendJettyPool_.GetStats();
+        if (before.inUseCount > after.inUseCount) {
+            activeSendJettyCount_.fetch_sub(1, std::memory_order_relaxed);
+        }
         const auto stats = sendJettyPool_.GetStats();
         VLOG(1) << "[URMA_SEND_LANE_POOL] Released jetty " << jetty->GetJettyId() << ", idleCount=" << stats.idleCount;
         return;
