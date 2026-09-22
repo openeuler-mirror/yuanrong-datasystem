@@ -7,6 +7,8 @@
 #include "pipeline/pipeline.h"
 #include <datasystem/kv_client.h>
 #include <atomic>
+#include <deque>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -23,6 +25,13 @@ class CacheReader;
 // ThreadPool; callers (httplib handler thread, brpc bthread) must not hold
 // the request lock while dispatching. The pool is bounded by the configured
 // read concurrency and stopped explicitly via Stop() on server shutdown.
+//
+// mGet distribution mode: when cfg.mgetSizeDist.enabled, normal notify keys
+// are buffered in a pending queue and dispatched in probability-sampled
+// batches (95% single-key, 5% multi-key) rather than one pipeline per notify.
+// This realizes the C2 non-blocking variant: no artificial waiting, actual
+// batch = min(sampled target, queue depth). A dedicated mGetPool_ runs the
+// sampled batches so notify reception never blocks on mGet execution.
 class NotifyDispatcher {
 public:
     NotifyDispatcher(const Config &cfg, std::shared_ptr<datasystem::KVClient> client,
@@ -41,7 +50,7 @@ public:
 
     // Stop the internal notify pool. Must be called on server shutdown so
     // in-flight notify tasks drain before the client/metrics are torn down.
-    void Stop() { notifyPool_.Stop(); }
+    void Stop() { notifyPool_.Stop(); mgetPool_.Stop(); }
 
     // Stop without draining: drop queued notify-pipeline tasks so no new Get
     // requests are issued from received notifies, and signal the cache reader
@@ -50,10 +59,17 @@ public:
     void StopNow();
 
 private:
+    // Run one batched mGet over `keys` with pipeline `ops`. Records actual
+    // batch size + degraded (target > actual) counters.
+    void RunMgetBatch(const std::vector<std::string> &keys, uint64_t size, int sender);
+
     Config cfg_;
     std::shared_ptr<datasystem::KVClient> client_;
     MetricsCollector &metrics_;
     ThreadPool notifyPool_;
+    // Dedicated pool for batched mGet in distribution mode; decouples notify
+    // reception from mGet execution so a slow mGet never blocks notify recv.
+    ThreadPool mgetPool_;
     std::vector<std::pair<std::string, OpFunc>> notifyOps_;
     bool notifyNeedsData_ = false;
     // Protects pregenData_ from concurrent notify-pipeline tasks. Acquired
@@ -62,4 +78,17 @@ private:
     kvtest::mutex pregenMutex_;
     std::unordered_map<std::string, std::string> pregenData_;
     CacheReader *cacheReader_ = nullptr;
+
+    // Pending key queue for distribution mode. Each pending entry carries
+    // the sender + size so a sampled mGet batch can mix keys from different
+    // senders without losing per-key context.
+    struct PendingKey {
+        std::string key;
+        int sender = 0;
+        uint64_t size = 0;
+    };
+    kvtest::mutex pendingMutex_;
+    std::deque<PendingKey> pendingQueue_;
+    // per-worker RNG for SampleMgetBatchSize; index = worker id modulo size
+    std::vector<std::mt19937> mgetRngs_;
 };

@@ -214,6 +214,23 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
             cfg.msetBatchSize = j["mset_batch_size"];
         if (j.contains("mget_batch_size"))
             cfg.mgetBatchSize = j["mget_batch_size"];
+        if (j.contains("mget_size_distribution")) {
+            const auto &d = j["mget_size_distribution"];
+            if (!d.is_object()) {
+                SLOG_ERROR("mget_size_distribution must be an object");
+                return false;
+            }
+            if (d.contains("single_prob"))
+                cfg.mgetSizeDist.singleProb = d["single_prob"].get<double>();
+            if (d.contains("min_batch"))
+                cfg.mgetSizeDist.minBatch = d["min_batch"].get<int>();
+            if (d.contains("max_batch"))
+                cfg.mgetSizeDist.maxBatch = d["max_batch"].get<int>();
+            if (d.contains("pending_queue_max"))
+                cfg.mgetSizeDist.pendingQueueMax = d["pending_queue_max"].get<size_t>();
+            // enabled is derived: any non-trivial probability activates it
+            cfg.mgetSizeDist.enabled = cfg.mgetSizeDist.singleProb < 1.0;
+        }
         if (j.contains("cpu_affinity"))
             cfg.cpuAffinity = j["cpu_affinity"].get<std::string>();
         if (j.contains("numa_node"))
@@ -534,6 +551,23 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
         SLOG_ERROR("mget_batch_size must be >= 1 for MGet modes, got " << cfg.mgetBatchSize);
         return false;
     }
+    if (cfg.mgetSizeDist.enabled) {
+        if (cfg.mgetSizeDist.singleProb < 0.0 || cfg.mgetSizeDist.singleProb > 1.0) {
+            SLOG_ERROR("mget_size_distribution.single_prob must be in [0.0, 1.0], got "
+                       << cfg.mgetSizeDist.singleProb);
+            return false;
+        }
+        if (cfg.mgetSizeDist.minBatch < 2) {
+            SLOG_ERROR("mget_size_distribution.min_batch must be >= 2, got "
+                       << cfg.mgetSizeDist.minBatch);
+            return false;
+        }
+        if (cfg.mgetSizeDist.maxBatch < cfg.mgetSizeDist.minBatch) {
+            SLOG_ERROR("mget_size_distribution.max_batch (" << cfg.mgetSizeDist.maxBatch
+                       << ") must be >= min_batch (" << cfg.mgetSizeDist.minBatch << ")");
+            return false;
+        }
+    }
     if (cfg.connectTimeoutMs <= 0) {
         SLOG_ERROR("connect_timeout_ms must be > 0, got " << cfg.connectTimeoutMs);
         return false;
@@ -720,6 +754,11 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
             << ", write_threads=" << cfg.numThreads << ", read_threads=" << cfg.NumReadThreads()
             << ", total_threads=" << cfg.numTotalThreads << ", batch_keys_count=" << cfg.batchKeysCount
             << ", key_pool_size=" << cfg.keyPoolSize;
+        if (cfg.mgetSizeDist.enabled) {
+            log << ", mget_size_distribution={single_prob=" << cfg.mgetSizeDist.singleProb
+                << ", batch=[" << cfg.mgetSizeDist.minBatch << ".." << cfg.mgetSizeDist.maxBatch
+                << "], pending_queue_max=" << cfg.mgetSizeDist.pendingQueueMax << "}";
+        }
     }
     if (cfg.urmaSendLaneCountPerPeer.has_value()) {
         log << ", client_urma_send_lane_count_per_peer=" << cfg.urmaSendLaneCountPerPeer.value();

@@ -4,12 +4,14 @@
 #include <datasystem/object/buffer.h>
 #include <datasystem/utils/optional.h>
 #include <datasystem/utils/string_view.h>
+#include "common/config.h"
 #include "data_pattern.h"
 #include "cuda_workload.h"
 #include <chrono>
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -65,6 +67,20 @@ inline constexpr const char *kOpMCreate = "mCreate";
 inline constexpr const char *kOpMSet = "mSet";
 inline constexpr const char *kOpMGet = "mGet";
 inline constexpr const char *kOpCacheGetOrCreate = "cacheGetOrCreate";
+
+// Sample the next mGet target batch size per the configured probability
+// distribution. Returns 1 with probability singleProb; otherwise a uniform
+// draw from [minBatch, maxBatch]. Used by the reader-side notify-driven mGet
+// (C2 non-blocking variant) where the actual batch is min(target, queue
+// depth). Distribution-disabled configs (singleProb >= 1.0) always return 1.
+// The caller-owned rng avoids shared-state contention on the hot path.
+inline int SampleMgetBatchSize(const Config::MgetSizeDistribution &d, std::mt19937 &rng) {
+    if (!d.enabled) return 1;
+    std::uniform_real_distribution<double> pd(0.0, 1.0);
+    if (pd(rng) < d.singleProb) return 1;
+    std::uniform_int_distribution<int> bd(d.minBatch, d.maxBatch);
+    return bd(rng);
+}
 
 // Cache mode sub-step names (not in kOpRegistry, for metrics pre-allocation only)
 inline constexpr const char *kOpCacheGetOrFillHit  = "cacheGetOrFill_hit";
