@@ -411,7 +411,7 @@ class Deployer:
                 for n in self.nodes if n['instance_id'] != my_id]
 
     def build_node_overrides(self, node):
-        override_keys = ('role', 'pipeline', 'notify_pipeline', 'listen_port', 'cuda')
+        override_keys = ('role', 'pipeline', 'notify_pipeline', 'listen_port', 'cuda', 'numa_node')
         return {k: v for k, v in node.items() if k in override_keys}
 
     def generate_config(self, node):
@@ -426,6 +426,8 @@ class Deployer:
         config['nodes'] = self.build_config_nodes()
         config['peers'] = self.build_peers(node)
         config.update(self.build_node_overrides(node))
+        if 'numa_node' in node:
+            config['random_numa_node'] = False
         if 'cuda' in node:
             config['cuda'] = dict(self.config_template.get('cuda', {}), **node['cuda'])
         if self.jemalloc_prof_conf is not None and not config.get('output_dir'):
