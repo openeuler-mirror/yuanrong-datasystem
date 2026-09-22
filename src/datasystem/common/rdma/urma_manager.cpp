@@ -1202,7 +1202,6 @@ Status UrmaManager::CheckAndNotify(const UrmaWriteTrace &pollTrace)
             // we dont need lock for finishedRequests_ as its accessed only by single thread
             it = finishedRequests_.erase(it);
         } else {
-            LOG(INFO) << "[UrmaEventHandler] [urma_request_id:" << requestId << "] Event is missing, dropping request";
             // The event may already be removed by waiter cleanup; drop this finished request id.
             failedRequests_.erase(requestId);
             it = finishedRequests_.erase(it);
@@ -1701,6 +1700,9 @@ void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shar
             << ", completionObservationLatencyUs:" << completionObservationLatencyUs
             << ", urmaEventProcessingAndWaitLatencyUs:" << eventProcessingAndWaitLatencyUs
             << ", postSrcChipInflight:" << event->GetPostSrcChipInflight()
+            << ", sendChipId:" << static_cast<uint32_t>(event->GetSendChipId())
+            << ", port_id:" << event->GetLocalPortId()
+            << ", activeJetty:" << urmaResource_->GetActiveSendJettyCount()
             << ", srcChipInflight:" << GetSrcChipInflightWrCountsString()
             << ", trace_us:{post:" << trace.postUs << ", wait:" << trace.waitUs
             << ", poll_begin:" << trace.pollBeginUs << ", sleep_start:" << trace.sleepStartUs
@@ -1956,6 +1958,18 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
                          FormatString("[URMA_FLUSH_JETTY_FAILED] jettyId=%u", jettyId));
             continue;
         }
+#ifdef BONDP_HAS_DATAPATH_QUERY
+        const auto portId = ds_bondp_get_cr_local_port_id(&completeRecords[i]).bs.port_idx;
+#else
+        const auto portId = UINT8_MAX;
+#endif
+        std::shared_ptr<UrmaEvent> event;
+        if (GetEvent(userCtx, event).IsOk()) {
+            event->SetLocalPortId(portId);
+        } else {
+            LOG(INFO) << "[UrmaEventHandler] [urma_request_id:" << userCtx
+                      << "] Event is missing, dropping request, port_id=" << portId;
+        }
 
         // Settle transport ownership by Jetty identity and request generation before notifying
         // the business request. This prevents an old CQE from consuming a reused lane's WR count.
@@ -1993,8 +2007,9 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
             successCompletedReqs.insert(userCtx);
         } else {
             LOG(ERROR) << FormatString(
-                "[URMA_POLL_JFC]: [urma_request_id:%zu] urma_poll_jfc return failed completion record, CR.status: %d",
-                userCtx, crStatus);
+                "[URMA_POLL_JFC]: [urma_request_id:%zu] urma_poll_jfc return failed completion record, "
+                "CR.status: %d, port_id: %u",
+                userCtx, crStatus, portId);
             failedCompletedReqs[userCtx] = crStatus;
         }
     }
@@ -2543,6 +2558,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
             return createRc;
         }
         event->SetWriteChunkInfo(writeChunkIndex, writeChunkCount);
+        event->SetSendChipId(srcChipId);
         laneLease->AddWr();
         urma_status_t ret;
         Timer t;
