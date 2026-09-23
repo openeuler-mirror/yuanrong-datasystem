@@ -33,6 +33,8 @@
 #include <bthread/condition_variable.h>
 #include <bthread/mutex.h>
 
+#include "datasystem/common/log/log.h"
+
 namespace datasystem {
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -40,6 +42,7 @@ constexpr size_t HEX_CHAR_COUNT_PER_BYTE = 2;
 constexpr size_t HEX_HIGH_NIBBLE_SHIFT = 4;
 constexpr uint8_t HEX_LOW_NIBBLE_MASK = 0x0f;
 constexpr char HEX_DIGITS[] = "0123456789abcdef";
+constexpr int PORT_QUERY_LOG_RATE = 60;
 
 std::string EncodeHexPrefix(const uint8_t *bytes, size_t size)
 {
@@ -568,6 +571,11 @@ private:
             next.verificationPending = true;
             next.lastQueryStatus = queryStatus;
         }
+        LOG_EVERY_N(INFO, PORT_QUERY_LOG_RATE)
+            << "[PORT_QUERY_LOG] owner=" << PortHealthOwnerName(owner_) << " bad=" << next.badPortCount
+            << " total=" << next.totalPortCount << " valid=" << next.valid
+            << " pending=" << next.verificationPending << " health_epoch=" << next.healthEpoch
+            << " query_status_code=" << queryStatus.GetCode();
 
         const auto published = std::make_shared<const UbPortHealthSnapshot>(std::move(next));
         return PublishQuerySnapshot(previous, published, queryStatus);
