@@ -37,46 +37,101 @@ bool MembershipEndpointView::SupportsWriteRedirect() const noexcept
     return writeRedirectEnabled_;
 }
 
-Status MembershipEndpointView::UpdateWriteCandidate(const std::string &address, bool ready, int64_t revision)
+Status MembershipEndpointView::UpdateMembership(const std::string &address, MembershipValue value, int64_t revision)
 {
-    CHECK_FAIL_RETURN_STATUS(revision > 0, K_INVALID, "Membership candidate revision must be positive");
-    std::lock_guard<std::shared_mutex> lock(writeCandidatesMutex_);
-    const auto found = writeCandidates_.find(address);
-    if (found != writeCandidates_.end() && found->second.revision >= revision) {
+    CHECK_FAIL_RETURN_STATUS(revision > 0, K_INVALID, "Membership revision must be positive");
+    std::lock_guard<std::shared_mutex> lock(membershipMutex_);
+    RETURN_OK_IF_TRUE(revision <= snapshotRevision_);
+    return SetMembershipLocked(address, std::move(value), revision);
+}
+
+Status MembershipEndpointView::DeleteMembership(const std::string &address, int64_t revision)
+{
+    CHECK_FAIL_RETURN_STATUS(revision > 0, K_INVALID, "Membership revision must be positive");
+    std::lock_guard<std::shared_mutex> lock(membershipMutex_);
+    RETURN_OK_IF_TRUE(revision <= snapshotRevision_);
+    // Until a periodic Range reaches this DELETE revision, older PUTs can still pass the snapshot revision fence.
+    return SetMembershipLocked(address, std::nullopt, revision);
+}
+
+Status MembershipEndpointView::SetMembershipLocked(const std::string &address, std::optional<MembershipValue> value,
+                                                   int64_t revision)
+{
+    const bool ready = value.has_value() && value->lifecycleState == MemberLifecycleState::READY;
+    const auto found = memberships_.find(address);
+    if (found != memberships_.end() && found->second.revision >= revision) {
         return Status::OK();
     }
     constexpr size_t MAX_WRITE_CANDIDATES = 20'000;
-    CHECK_FAIL_RETURN_STATUS(found != writeCandidates_.end() || writeCandidates_.size() < MAX_WRITE_CANDIDATES,
+    CHECK_FAIL_RETURN_STATUS(found != memberships_.end() || memberships_.size() < MAX_WRITE_CANDIDATES,
                              K_TRY_AGAIN, "Membership candidate view requires a new snapshot");
-    auto [current, inserted] = writeCandidates_.try_emplace(address);
+    auto [current, inserted] = memberships_.try_emplace(address);
     (void)inserted;
     auto &state = current->second;
-    if (state.ready != ready) {
+    if ((state.value.has_value() && state.value->lifecycleState == MemberLifecycleState::READY) != ready) {
         if (ready) {
             state.readyIndex = readyCandidateAddresses_.size();
             readyCandidateAddresses_.emplace_back(address);
         } else {
             const auto lastIndex = readyCandidateAddresses_.size() - 1;
             if (state.readyIndex != lastIndex) {
-                auto moved = writeCandidates_.find(readyCandidateAddresses_.back());
-                CHECK_FAIL_RETURN_STATUS(moved != writeCandidates_.end(), K_RUNTIME_ERROR,
+                auto moved = memberships_.find(readyCandidateAddresses_.back());
+                CHECK_FAIL_RETURN_STATUS(moved != memberships_.end(), K_RUNTIME_ERROR,
                                          "Membership ready candidate index is inconsistent");
                 readyCandidateAddresses_[state.readyIndex] = std::move(readyCandidateAddresses_.back());
                 moved->second.readyIndex = state.readyIndex;
             }
             readyCandidateAddresses_.pop_back();
         }
-        state.ready = ready;
     }
+    state.value = std::move(value);
     state.revision = revision;
     return Status::OK();
 }
 
-void MembershipEndpointView::ClearWriteCandidates()
+void MembershipEndpointView::ClearMemberships()
 {
-    std::lock_guard<std::shared_mutex> lock(writeCandidatesMutex_);
-    writeCandidates_.clear();
+    std::lock_guard<std::shared_mutex> lock(membershipMutex_);
+    snapshotRevision_ = 0;
+    memberships_.clear();
     readyCandidateAddresses_.clear();
+}
+
+Status MembershipEndpointView::GetHostIds(std::unordered_map<std::string, std::string> &hostIds) const
+{
+    std::shared_lock<std::shared_mutex> lock(membershipMutex_);
+    hostIds.clear();
+    CHECK_FAIL_RETURN_STATUS(snapshotRevision_ > 0, K_NOT_READY, "Membership snapshot is not ready");
+    hostIds.reserve(memberships_.size());
+    for (const auto &[address, state] : memberships_) {
+        if (state.value.has_value() && !state.value->hostId.empty()) {
+            hostIds.emplace(address, state.value->hostId);
+        }
+    }
+    return Status::OK();
+}
+
+Status MembershipEndpointView::RefreshMemberships(const std::vector<MembershipRecord> &members, int64_t revision)
+{
+    CHECK_FAIL_RETURN_STATUS(revision > 0, K_INVALID, "Membership snapshot revision must be positive");
+    std::lock_guard<std::shared_mutex> lock(membershipMutex_);
+    RETURN_OK_IF_TRUE(revision < snapshotRevision_);
+    MembershipEndpointView refreshed(snapshots_, writeRedirectEnabled_);
+    refreshed.memberships_.reserve(members.size());
+    refreshed.readyCandidateAddresses_.reserve(members.size());
+    for (const auto &[address, state] : memberships_) {
+        if (state.revision > revision) {
+            RETURN_IF_NOT_OK(refreshed.SetMembershipLocked(address, state.value, state.revision));
+        }
+    }
+    for (const auto &member : members) {
+        RETURN_IF_NOT_OK(refreshed.SetMembershipLocked(
+            member.address, MembershipValue{ member.timestamp, member.state, member.hostId, {} }, revision));
+    }
+    memberships_.swap(refreshed.memberships_);
+    readyCandidateAddresses_.swap(refreshed.readyCandidateAddresses_);
+    snapshotRevision_ = revision;
+    return Status::OK();
 }
 
 std::vector<std::string> MembershipEndpointView::GetWriteCandidates(
@@ -95,7 +150,7 @@ std::vector<std::string> MembershipEndpointView::GetWriteCandidates(
     }
     std::vector<std::string> candidates;
     candidates.reserve(maxCandidates);
-    std::shared_lock<std::shared_mutex> candidateLock(writeCandidatesMutex_);
+    std::shared_lock<std::shared_mutex> candidateLock(membershipMutex_);
     if (readyCandidateAddresses_.empty()) {
         return {};
     }

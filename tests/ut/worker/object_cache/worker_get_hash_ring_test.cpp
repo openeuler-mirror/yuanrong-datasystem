@@ -120,7 +120,7 @@ TEST_F(WorkerGetHashRingTest, SameVersionHostIdChangesReturnCompleteSnapshot)
     EXPECT_EQ(rsp.host_ids_digest(), snapshot->HostIdsDigest());
 
     DS_ASSERT_OK(cluster::TopologySnapshot::Create(original->CopyState(), TOPOLOGY_VERSION,
-                                                  original->CanonicalDigest(), snapshot, {}, 1));
+                                                  original->CanonicalDigest(), snapshot, {}, true));
     DS_ASSERT_OK(BuildGetHashRingResponse(*snapshot, TOPOLOGY_VERSION, "", rsp, original->HostIdsDigest()));
     EXPECT_TRUE(rsp.hash_ring_changed());
     EXPECT_TRUE(rsp.has_hash_ring());

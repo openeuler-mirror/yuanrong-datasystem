@@ -14,6 +14,7 @@
 /**
  * Description: Implementation of worker server.
  */
+#include "datasystem/common/coordinator/coordinator_status.h"
 #include "datasystem/worker/worker_oc_server.h"
 
 #include <algorithm>
@@ -2318,6 +2319,7 @@ Status WorkerOCServer::PublishReadyMembership()
             lastStatus = topologyEngine_->MarkReady();
             if (lastStatus.IsOk()
                 || (lastStatus.GetCode() != K_NOT_READY && lastStatus.GetCode() != K_TRY_AGAIN
+                    && !IsCoordinatorCasConflict(lastStatus)
                     && !IsRetryableRpcError(lastStatus) && !IsNonRetryableRpcError(lastStatus))) {
                 return lastStatus;
             }

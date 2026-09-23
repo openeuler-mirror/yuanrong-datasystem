@@ -6,6 +6,7 @@
 /**
  * Description: Fenced worker-local exact topology task executor.
  */
+#include "datasystem/common/coordinator/coordinator_status.h"
 #include "datasystem/cluster/executor/topology_task_executor.h"
 
 #include <algorithm>
@@ -1097,7 +1098,7 @@ Status TopologyTaskExecutor::CompleteScaleInMetadata(TopologyCallbackCompletion 
     auto rc = repository_.MarkScaleInMetadataDone({ completion.fence.batchEpoch, completion.fence.source->id,
                                                     completion.fence.taskId, operation });
     if (rc.IsError()) {
-        return CompleteFailure(completion.fence, operation, rc, false);
+        return CompleteFailure(completion.fence, operation, rc, IsCoordinatorCasConflict(rc));
     }
     std::string gate;
     RETURN_IF_NOT_OK(ScaleInMetadataGateKey(completion.fence, gate));

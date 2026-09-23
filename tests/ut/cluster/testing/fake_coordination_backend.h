@@ -59,7 +59,7 @@ public:
     void PutBytes(const std::string &table, const std::string &key, std::string value);
     void PutRaw(const std::string &table, const std::string &key, const TopologyState &state);
     void FailNextCasAfterCommit();
-    void FailNextCasBeforeCommit();
+    void FailNextCasBeforeCommit(StatusCode code = K_RPC_UNAVAILABLE);
     void FailNextWatch();
     void FailNextGet();
     void FailNextGetAll();
@@ -94,7 +94,7 @@ private:
     std::vector<WatchKey> watchKeys_;
     std::vector<std::string> lifecycleCalls_;
     bool failNextCasAfterCommit_{ false };
-    bool failNextCasBeforeCommit_{ false };
+    StatusCode failNextCasBeforeCommit_{ K_OK };
     bool failNextWatch_{ false };
     bool failNextGet_{ false };
     bool failNextGetAll_{ false };

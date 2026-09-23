@@ -14,6 +14,7 @@
 /**
  * Description: Process-local Coordinator Store adapter for cluster topology control.
  */
+#include "datasystem/common/coordinator/coordinator_status.h"
 #include "datasystem/coordinator/coordinator_store_backend.h"
 
 #include <cstddef>
@@ -40,8 +41,7 @@ std::string RemoveTablePrefix(const std::string &physicalKey, const std::string 
 
 bool IsRetryableCasConflict(const Status &status)
 {
-    return status.GetCode() == K_DUPLICATED || status.GetCode() == K_DATA_INCONSISTENCY
-           || status.GetCode() == K_TRY_AGAIN || status.GetCode() == K_NOT_FOUND;
+    return status.GetCode() == K_TRY_AGAIN || IsCoordinatorCasConflict(status);
 }
 
 RangeSearchResult BuildResult(const KeyValueEntry &entry)

@@ -23,6 +23,7 @@
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/coordination_backend/ds_coordination_backend.h"
+#include "datasystem/cluster/control/topology_controller_runtime.h"
 #include "datasystem/cluster/control/topology_task_materializer.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
@@ -40,6 +41,37 @@ namespace datasystem::cluster {
 
 class TopologyEngineTestPeer final {
 public:
+    static Status WatchMembership(TopologyEngine &engine)
+    {
+        engine.memberBackend_->SetEventHandler([&engine](CoordinationEvent &&event) {
+            if (event.type == CoordinationEventType::PUT) {
+                EXPECT_TRUE(engine.ApplyCoordinatorMembershipEvent(event).IsOk());
+            }
+        });
+        return engine.memberBackend_->WatchEvents({ { engine.keys_->MembershipTable(), "", 0, false } });
+    }
+
+    static void RefreshIfDue(TopologyEngine &engine, std::chrono::steady_clock::time_point &deadline,
+                             std::chrono::steady_clock::time_point now)
+    {
+        engine.RefreshMembershipsIfDue(deadline, now);
+    }
+
+    static Status RouteEtcdMembership(TopologyEngine &engine, CoordinationEvent event)
+    {
+        TopologyControllerRuntime::Options options;
+        options.clusterName = engine.options_.clusterName;
+        options.controller.eventSourceMode = TopologyEventSourceMode::EXTERNAL_ETCD;
+        RETURN_IF_NOT_OK(TopologyControllerRuntime::Create(
+            options, *engine.memberBackend_, *engine.algorithm_, engine.controllerRuntime_));
+        return engine.RouteUnifiedEtcdWatchEvent(std::move(event));
+    }
+
+    static MembershipEndpointView &Membership(TopologyEngine &engine)
+    {
+        return engine.membershipView_;
+    }
+
     static Status ReloadTopology(TopologyEngine &engine)
     {
         return engine.ReloadTopology(true);
@@ -2113,7 +2145,80 @@ TEST(TopologyEngineTest, ShutdownRejectsConcurrentStartWithoutCorruptingLifecycl
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 
-TEST(TopologyEngineTest, GetRoutingHostIdsReadsPublishedSnapshotWithoutCoordinatorAccess)
+TEST(TopologyEngineTest, EtcdMembershipCacheFailureStillReachesControllerIngress)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    auto engine = BuildEngine(proxy, ingress, callbacks, "etcd-membership");
+    ASSERT_NE(engine, nullptr);
+    const auto key = MakeKeys("etcd-membership")->EtcdMembershipTablePrefix() + "/" + LOCAL_ADDRESS;
+    auto &view = TopologyEngineTestPeer::Membership(*engine);
+    DS_ASSERT_OK(view.RefreshMemberships({}, 1));
+    std::string value;
+    DS_ASSERT_OK(MembershipValueCodec::Encode({ 0, MemberLifecycleState::READY, "host-a", {} }, value));
+    auto put = TopologyEngineTestPeer::RouteEtcdMembership(
+        *engine, { CoordinationEventType::PUT, key, value, 0, 2 });
+    EXPECT_EQ(put.GetCode(), K_NOT_READY);
+    std::unordered_map<std::string, std::string> hosts;
+    DS_ASSERT_OK(view.GetHostIds(hosts));
+    EXPECT_EQ(hosts.at(LOCAL_ADDRESS), "host-a");
+    auto malformed = TopologyEngineTestPeer::RouteEtcdMembership(
+        *engine, { CoordinationEventType::PUT, key, "invalid", 0, 3 });
+    EXPECT_EQ(malformed.GetMsg(), put.GetMsg());
+    EXPECT_EQ(malformed.GetCode(), K_NOT_READY);
+    EXPECT_EQ(TopologyEngineTestPeer::RouteEtcdMembership(
+        *engine, { CoordinationEventType::DELETE, key, {}, 0, 4 }).GetCode(), K_NOT_READY);
+    DS_ASSERT_OK(view.GetHostIds(hosts));
+    EXPECT_TRUE(hosts.empty());
+}
+
+TEST(TopologyEngineTest, MembershipRefreshHonorsDeadlineAndWatchOwnership)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    auto engine = BuildEngine(proxy, ingress, callbacks, "membership-refresh");
+    const auto prefix = MakeKeys("membership-refresh")->MembershipTable() + "/";
+    std::string encoded;
+    DS_ASSERT_OK(MembershipValueCodec::Encode({ 0, MemberLifecycleState::READY, "host-a", {} }, encoded));
+    DS_ASSERT_OK(proxy.PutRaw(prefix + LOCAL_ADDRESS, encoded));
+    DS_ASSERT_OK(TopologyEngineTestPeer::WatchMembership(*engine));
+    auto deadline = std::chrono::steady_clock::now();
+    size_t reads = 0;
+    bool invalidate = false;
+    proxy.SetRangeEntryInterceptor([&](const std::string &key) {
+        if (key == prefix) {
+            ++reads;
+            if (invalidate) {
+                TopologyEngineTestPeer::InvalidateCoordinatorWatches(*engine);
+            }
+        }
+    });
+    TopologyEngineTestPeer::RefreshIfDue(*engine, deadline, deadline - std::chrono::milliseconds(1));
+    EXPECT_EQ(reads, 0U);
+    const auto before = std::chrono::steady_clock::now();
+    TopologyEngineTestPeer::RefreshIfDue(*engine, deadline, deadline);
+    EXPECT_EQ(reads, 1U);
+    EXPECT_GE(deadline, before + std::chrono::seconds(30));
+    EXPECT_LE(deadline, std::chrono::steady_clock::now() + std::chrono::seconds(30));
+    std::unordered_map<std::string, std::string> hostIds;
+    DS_ASSERT_OK(TopologyEngineTestPeer::Membership(*engine).GetHostIds(hostIds));
+    EXPECT_EQ(hostIds.at(LOCAL_ADDRESS), "host-a");
+    DS_ASSERT_OK(MembershipValueCodec::Encode({ 0, MemberLifecycleState::READY, "host-b", {} }, encoded));
+    DS_ASSERT_OK(proxy.PutRaw(prefix + LOCAL_ADDRESS, encoded));
+    invalidate = true;
+    TopologyEngineTestPeer::RefreshIfDue(*engine, deadline, deadline);
+    EXPECT_EQ(reads, 2U);
+    EXPECT_EQ(TopologyEngineTestPeer::Membership(*engine).GetHostIds(hostIds).GetCode(), K_NOT_READY);
+    invalidate = false;
+    TopologyEngineTestPeer::RefreshIfDue(*engine, deadline, deadline);
+    EXPECT_EQ(reads, 3U);
+    DS_ASSERT_OK(TopologyEngineTestPeer::Membership(*engine).GetHostIds(hostIds));
+    EXPECT_EQ(hostIds.at(LOCAL_ADDRESS), "host-b");
+}
+
+TEST(TopologyEngineTest, GetRoutingHostIdsReadsLocalMembershipWithoutCoordinatorAccess)
 {
     constexpr char CLUSTER_NAME[] = "host-id-from-snapshot";
     testing::FakeCoordinatorServiceProxy proxy;
@@ -2130,10 +2235,10 @@ TEST(TopologyEngineTest, GetRoutingHostIdsReadsPublishedSnapshotWithoutCoordinat
 
     auto engine = BuildEngine(proxy, ingress, callbacks, CLUSTER_NAME);
     ASSERT_NE(engine, nullptr);
+    DS_ASSERT_OK(TopologyEngineTestPeer::Membership(*engine).RefreshMemberships(
+        { { LOCAL_ADDRESS, membership.lifecycleState, 0, "host-a" } }, 1));
     DS_ASSERT_OK(TopologyEngineTestPeer::ReloadTopology(*engine));
 
-    // After the snapshot carries host ids, a coordinator membership read failure must not affect
-    // GetRoutingHostIds, which now serves from the local snapshot instead of re-reading the backend.
     proxy.FailRangeForKeyTimes(keys->MembershipTable() + "/", K_RPC_UNAVAILABLE, 1);
     std::unordered_map<std::string, std::string> hostIds;
     DS_ASSERT_OK(engine->GetRoutingHostIds(hostIds));
@@ -2160,15 +2265,18 @@ TEST(TopologyEngineTest, HostIdsRecoverAtTheSameTopologyVersion)
     proxy.FailRangeForKeyTimes(keys->MembershipTable() + "/", K_RPC_UNAVAILABLE, 1);
     DS_ASSERT_OK(TopologyEngineTestPeer::ReloadTopology(*engine));
     std::unordered_map<std::string, std::string> hostIds;
-    DS_ASSERT_OK(engine->GetRoutingHostIds(hostIds));
+    EXPECT_EQ(engine->GetRoutingHostIds(hostIds).GetCode(), K_NOT_READY);
     EXPECT_TRUE(hostIds.empty());
     std::shared_ptr<const TopologySnapshot> first;
     DS_ASSERT_OK(engine->GetSnapshot(first));
 
+    DS_ASSERT_OK(TopologyEngineTestPeer::Membership(*engine).RefreshMemberships(
+        { { LOCAL_ADDRESS, membership.lifecycleState, 0, "host-a" } }, 2));
     DS_ASSERT_OK(TopologyEngineTestPeer::ReloadTopology(*engine));
     DS_ASSERT_OK(engine->GetRoutingHostIds(hostIds));
     EXPECT_EQ(hostIds.at(LOCAL_ADDRESS), "host-a");
     membership.hostId = "host-b";
+    DS_ASSERT_OK(TopologyEngineTestPeer::Membership(*engine).UpdateMembership(LOCAL_ADDRESS, membership, 3));
     DS_ASSERT_OK(MembershipValueCodec::Encode(membership, encoded));
     DS_ASSERT_OK(proxy.PutRaw(keys->MembershipTable() + "/" + LOCAL_ADDRESS, encoded));
     DS_ASSERT_OK(TopologyEngineTestPeer::ReloadTopology(*engine));
@@ -2260,7 +2368,12 @@ TEST(TopologyEngineTest, ProgressDoorbellWakesLoopWithoutBackendRoundTrip)
     DS_ASSERT_OK(engine->Start());
 
     std::atomic<size_t> rangeCalls{ 0 };
-    proxy.SetRangeEntryInterceptor([&](const std::string &) { rangeCalls.fetch_add(1); });
+    const auto caller = std::this_thread::get_id();
+    proxy.SetRangeEntryInterceptor([&, caller](const std::string &) {
+        if (std::this_thread::get_id() == caller) {
+            rangeCalls.fetch_add(1);
+        }
+    });
     const auto before = rangeCalls.load();
     DS_ASSERT_OK(TopologyEngineTestPeer::HandleRuntimeEvent(
         *engine, { CoordinationEventType::PUT, "topology/progress-doorbell", "", 0, 0 }));

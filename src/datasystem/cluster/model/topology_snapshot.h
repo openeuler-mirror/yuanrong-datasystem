@@ -59,14 +59,14 @@ public:
      * @param[in] authorityRevision Revision of the authoritative exact read.
      * @param[in] canonicalDigest Digest of canonical topology bytes.
      * @param[in] hostIds Worker-address to host-id map carried from the membership table; empty when unknown.
-     * @param[in] hostIdsRevision Membership read revision, or zero when the projection is unknown.
+     * @param[in] hostIdsKnown Whether the hostId map is known, including a successfully read empty map.
      * @param[in] coordinatorId Coordinator that supplied authorityRevision; empty for ETCD.
      * @param[out] snapshot New snapshot; unchanged on failure.
      * @return K_OK on success; K_INVALID for illegal state or evidence.
      */
     static Status Create(TopologyState state, int64_t authorityRevision, std::string canonicalDigest,
                          std::shared_ptr<const TopologySnapshot> &snapshot,
-                         std::unordered_map<std::string, std::string> hostIds = {}, int64_t hostIdsRevision = 0,
+                         std::unordered_map<std::string, std::string> hostIds = {}, bool hostIdsKnown = false,
                          std::string coordinatorId = {});
 
     ~TopologySnapshot() = default;
@@ -97,10 +97,10 @@ public:
         return hostIdsDigest_;
     }
 
-    // Zero means no successful membership read; it is distinct from a successfully read empty map.
-    int64_t HostIdsRevision() const noexcept
+    // False means no successful membership read; an empty map can still be known.
+    bool HostIdsKnown() const noexcept
     {
-        return hostIdsRevision_;
+        return hostIdsKnown_;
     }
 
     /**
@@ -186,7 +186,7 @@ private:
     std::string coordinatorId_;
     std::string canonicalDigest_;
     std::unordered_map<std::string, std::string> hostIds_;
-    int64_t hostIdsRevision_{ 0 };
+    bool hostIdsKnown_{ false };
     std::string hostIdsDigest_;
     // Views reference immutable strings in state_.members and avoid duplicating every address/id in the indexes.
     std::unordered_map<std::string_view, size_t> addressIndex_;

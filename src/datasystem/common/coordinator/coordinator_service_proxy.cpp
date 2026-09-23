@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "datasystem/common/coordinator/coordinator_status.h"
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
 
 #include <chrono>
@@ -714,8 +715,7 @@ Status CoordinatorServiceProxyBase::CAS(const std::string &key, const CasProcess
         if (rc.IsOk()) {
             return Status::OK();
         }
-        if (rc.GetCode() != StatusCode::K_TRY_AGAIN && rc.GetCode() != StatusCode::K_DUPLICATED
-            && rc.GetCode() != StatusCode::K_DATA_INCONSISTENCY && rc.GetCode() != StatusCode::K_NOT_FOUND) {
+        if (rc.GetCode() != StatusCode::K_TRY_AGAIN && !IsCoordinatorCasConflict(rc)) {
             return rc;
         }
         lastErr = rc;

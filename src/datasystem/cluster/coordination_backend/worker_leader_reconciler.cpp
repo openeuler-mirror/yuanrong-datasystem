@@ -10,6 +10,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "datasystem/common/coordinator/coordinator_status.h"
 #include "datasystem/cluster/coordination_backend/worker_leader_reconciler.h"
 
 #include <algorithm>
@@ -34,7 +35,7 @@ constexpr size_t SYNC_ENSURE_MAX_ATTEMPTS = 3;
 bool IsRetryableEnsureStatus(const Status &status)
 {
     return status.GetCode() == K_TRY_AGAIN || status.GetCode() == K_NOT_READY || status.GetCode() == K_RPC_UNAVAILABLE
-           || status.GetCode() == K_RPC_DEADLINE_EXCEEDED;
+           || status.GetCode() == K_RPC_DEADLINE_EXCEEDED || IsCoordinatorCasConflict(status);
 }
 
 std::chrono::milliseconds EnsureRetryBackoff(const CoordinatorLeaderIdentity &identity, std::string_view workerAddress,
@@ -182,7 +183,7 @@ Status WorkerLeaderReconciler::ReconcileMembership(bool waitForCompletion, bool 
             pendingIdentity_ = *identity;
         }
         lastStatus = ReconcileIdentity(*identity, true, false);
-        if (lastStatus.IsOk() || lastStatus.GetCode() != K_TRY_AGAIN) {
+        if (lastStatus.IsOk() || !IsRetryableEnsureStatus(lastStatus)) {
             return lastStatus;
         }
         if (attempt + 1 < SYNC_ENSURE_MAX_ATTEMPTS) {

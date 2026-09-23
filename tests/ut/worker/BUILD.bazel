@@ -654,6 +654,7 @@ ds_cc_test(
     name = "worker_leader_reconciler_test",
     srcs = ["worker_leader_reconciler_test.cpp"],
     deps = [
+        "//src/datasystem/protos:worker_object_cc_proto",
         "//src/datasystem/cluster/coordination_backend:worker_leader_reconciler",
         "//tests/ut:ut_common",
     ],

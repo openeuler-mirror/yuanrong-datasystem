@@ -32,6 +32,7 @@
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/rpc/bthread_utils.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
@@ -40,6 +41,7 @@
 namespace datasystem::cluster {
 namespace {
 constexpr auto BACKEND_EVIDENCE_MAX_AGE = std::chrono::seconds(10);
+constexpr uint64_t MEMBERSHIP_REFRESH_INTERVAL_MS = 30'000;
 constexpr uint32_t LOCAL_ISOLATION_CONFIRMATIONS = 3;
 constexpr int TOPOLOGY_WATCH_EVENT_LOG_INTERVAL = 1'024;
 constexpr int CONTROL_DEGRADED_ERROR_LOG_INTERVAL = 60;
@@ -489,7 +491,7 @@ TopologyEngine::TopologyEngine(std::unique_ptr<Builder::Config> config)
       membershipRestartHandler_(std::move(config->membershipRestartHandler)),
       keys_(std::move(config->keys)),
       repository_(*memberBackend_, *keys_),
-      reader_(repository_),
+      reader_(repository_, &membershipView_),
       dispatcher_(options_.eventQueueCapacity),
       membershipView_(snapshots_, coordinatorProxy_ != nullptr),
       placement_(snapshots_, *algorithm_, options_.localAddress),
@@ -686,6 +688,10 @@ Status TopologyEngine::RouteUnifiedEtcdWatchEvent(CoordinationEvent &&event)
     if (kind == TopologyPhysicalKeyKind::LOCAL_NOTIFY) {
         return EnqueueCoordinationEvent(std::move(event));
     }
+    if (kind == TopologyPhysicalKeyKind::MEMBERSHIP) {
+        auto rc = ApplyMembershipEvent(event, keys_->EtcdMembershipTablePrefix() + "/");
+        LOG_IF_ERROR(rc, "Apply local ETCD membership event failed");
+    }
     if (kind == TopologyPhysicalKeyKind::MEMBERSHIP || kind == TopologyPhysicalKeyKind::MIGRATE_TASK
         || kind == TopologyPhysicalKeyKind::DELETE_TASK) {
         return controllerRuntime_->SubmitCoordinationEvent(std::move(event));
@@ -766,6 +772,9 @@ Status TopologyEngine::StartMemberRole()
         }
     }
 
+    if (options_.unifiedEtcdWatch) {
+        RETURN_IF_NOT_OK(RefreshMemberships());
+    }
     const int64_t controllerRevision =
         options_.unifiedEtcdWatch ? controllerRuntime_->GetBootstrapRevision() : 0;
     CHECK_FAIL_RETURN_STATUS(!options_.unifiedEtcdWatch || controllerRevision > 0, K_INVALID,
@@ -1105,6 +1114,7 @@ Status TopologyEngine::MarkReady()
     CHECK_FAIL_RETURN_STATUS(!localVoluntaryExitRequested_.load(), K_NOT_READY, "local membership is exiting");
     CHECK_FAIL_RETURN_STATUS(HasEstablishedMemberLease(), K_NOT_READY,
                              "cluster topology member lease is not established");
+    INJECT_POINT("TopologyEngine.MarkReady.beforeUpdateNodeState");
     auto rc = memberBackend_->UpdateNodeState(MemberLifecycleState::READY);
     if (rc.IsOk() && state_.load() == TopologyEngineState::RUNNING
         && !localVoluntaryExitRequested_.load()) {
@@ -1234,10 +1244,7 @@ bool TopologyEngine::IsPeerRpcFailureReported(const HostPort &target) const
 
 Status TopologyEngine::GetRoutingHostIds(std::unordered_map<std::string, std::string> &hostIds) const
 {
-    std::shared_ptr<const TopologySnapshot> snapshot;
-    RETURN_IF_NOT_OK(snapshots_.Load(snapshot));
-    hostIds = snapshot->HostIds();
-    return Status::OK();
+    return membershipView_.GetHostIds(hostIds);
 }
 
 Status TopologyEngine::GetSnapshot(std::shared_ptr<const TopologySnapshot> &snapshot) const
@@ -1346,11 +1353,10 @@ Status TopologyEngine::ApplyCoordinatorTopologyEvent(const CoordinationEvent &ev
                              K_NOT_READY, "Coordinator topology event requires an exact rebuild");
     std::shared_ptr<const TopologySnapshot> candidate;
     std::unordered_map<std::string, std::string> hostIds;
-    int64_t hostIdsRevision = 0;
-    (void)repository_.ReadHostIds(hostIds, &hostIdsRevision);
+    const bool hostIdsKnown = membershipView_.GetHostIds(hostIds).IsOk();
     RETURN_IF_NOT_OK(
         TopologyReader::BuildFromEncodedTopology(event.value, event.revision, std::move(hostIds), candidate,
-                                                 hostIdsRevision, event.sourceAuthorityId));
+                                                 hostIdsKnown, event.sourceAuthorityId));
     INJECT_POINT("TopologyEngine.ApplyCoordinatorTopologyEvent.beforeCommit");
     std::shared_ptr<const TopologySnapshot> previous;
     (void)snapshots_.Load(previous);
@@ -1567,7 +1573,7 @@ bool TopologyEngine::RequireMembershipRejoinOnce(const char *reason)
 
 void TopologyEngine::ClearMembershipCandidatesLocked()
 {
-    membershipView_.ClearWriteCandidates();
+    membershipView_.ClearMemberships();
     membershipWatchAuthority_.clear();
     membershipWatchId_ = 0;
 }
@@ -1594,24 +1600,6 @@ void TopologyEngine::ClearStaleMembershipCandidates()
 Status TopologyEngine::ApplyCoordinatorMembershipEvent(const CoordinationEvent &event)
 {
     auto *backend = static_cast<DsCoordinationBackend *>(memberBackend_.get());
-    CHECK_FAIL_RETURN_STATUS(backend->OwnsWatchIdentity(event.sourceAuthorityId, event.sourceWatchId),
-                             K_NOT_READY, "Membership event belongs to an expired watch");
-    const auto prefix = keys_->MembershipTable() + "/";
-    CHECK_FAIL_RETURN_STATUS(event.key.rfind(prefix, 0) == 0 && event.revision > 0, K_INVALID,
-                             "Membership event key or revision is invalid");
-    const auto address = event.key.substr(prefix.size());
-    std::string canonicalAddress;
-    RETURN_IF_NOT_OK(TopologyKeyHelper::MembershipKey(address, canonicalAddress));
-    CHECK_FAIL_RETURN_STATUS(address == canonicalAddress, K_INVALID, "Membership address is not canonical");
-    bool ready = false;
-    if (event.type == CoordinationEventType::PUT) {
-        MembershipValue value;
-        RETURN_IF_NOT_OK(MembershipValueCodec::Decode(event.value, value));
-        ready = value.lifecycleState == MemberLifecycleState::READY;
-    } else {
-        CHECK_FAIL_RETURN_STATUS(event.type == CoordinationEventType::DELETE, K_INVALID,
-                                 "Unsupported membership event");
-    }
     return backend->CommitIfCurrentWatch(event.sourceAuthorityId, event.sourceWatchId, [&] {
         std::lock_guard<std::mutex> lock(membershipEventsMutex_);
         if (membershipWatchAuthority_ != event.sourceAuthorityId || membershipWatchId_ != event.sourceWatchId) {
@@ -1619,8 +1607,25 @@ Status TopologyEngine::ApplyCoordinatorMembershipEvent(const CoordinationEvent &
             membershipWatchAuthority_ = event.sourceAuthorityId;
             membershipWatchId_ = event.sourceWatchId;
         }
-        return membershipView_.UpdateWriteCandidate(address, ready, event.revision);
+        return ApplyMembershipEvent(event, keys_->MembershipTable() + "/");
     });
+}
+
+Status TopologyEngine::ApplyMembershipEvent(const CoordinationEvent &event, const std::string &prefix)
+{
+    CHECK_FAIL_RETURN_STATUS(event.key.rfind(prefix, 0) == 0 && event.revision > 0, K_INVALID,
+                             "Membership event key or revision is invalid");
+    const auto address = event.key.substr(prefix.size());
+    std::string canonicalAddress;
+    RETURN_IF_NOT_OK(TopologyKeyHelper::MembershipKey(address, canonicalAddress));
+    CHECK_FAIL_RETURN_STATUS(address == canonicalAddress, K_INVALID, "Membership address is not canonical");
+    if (event.type == CoordinationEventType::PUT) {
+        MembershipValue value;
+        RETURN_IF_NOT_OK(MembershipValueCodec::Decode(event.value, value));
+        return membershipView_.UpdateMembership(address, std::move(value), event.revision);
+    }
+    CHECK_FAIL_RETURN_STATUS(event.type == CoordinationEventType::DELETE, K_INVALID, "Unsupported membership event");
+    return membershipView_.DeleteMembership(address, event.revision);
 }
 
 Status TopologyEngine::HandleRuntimeEvent(RuntimeEvent event)
@@ -1995,14 +2000,45 @@ void TopologyEngine::RecordError(const Status &status)
     LOG(WARNING) << "CLUSTER_RUNTIME_OPERATION_FAILED status=" << status.ToString();
 }
 
+Status TopologyEngine::RefreshMemberships()
+{
+    std::string authority;
+    int64_t watchId = 0;
+    {
+        std::lock_guard<std::mutex> lock(membershipEventsMutex_);
+        authority = membershipWatchAuthority_;
+        watchId = membershipWatchId_;
+    }
+    std::vector<MembershipRecord> members;
+    int64_t revision = 0;
+    RETURN_IF_NOT_OK(repository_.ReadMemberships(members, &revision));
+    auto apply = [&] { return membershipView_.RefreshMemberships(members, revision); };
+    auto *backend = dynamic_cast<DsCoordinationBackend *>(memberBackend_.get());
+    return backend == nullptr ? apply() : backend->CommitIfCurrentWatch(authority, watchId, apply);
+}
+
+void TopologyEngine::RefreshMembershipsIfDue(std::chrono::steady_clock::time_point &deadline,
+                                             std::chrono::steady_clock::time_point now)
+{
+    if (now >= deadline) {
+        LOG_IF_ERROR(RefreshMemberships(), "Refresh local membership table failed");
+        deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(MEMBERSHIP_REFRESH_INTERVAL_MS);
+    }
+}
+
 void TopologyEngine::Run()
 {
     auto nextExactRefresh = std::chrono::steady_clock::now() + options_.scopeProbeInterval;
+    RandomData random;
+    auto initialRefreshDelayMs = random.GetRandomUint64(0, MEMBERSHIP_REFRESH_INTERVAL_MS);
+    INJECT_POINT_NO_RETURN("TopologyEngine.initialMembershipRefreshDelayMs",
+                           [&initialRefreshDelayMs](uint64_t delayMs) { initialRefreshDelayMs = delayMs; });
+    auto nextMembershipRefresh = std::chrono::steady_clock::now() + std::chrono::milliseconds(initialRefreshDelayMs);
     while (state_.load() != TopologyEngineState::STOPPING) {
         RuntimeEvent event;
+        const auto refreshDeadline = std::min(nextExactRefresh, nextMembershipRefresh);
         const auto waitDeadline = isolationKillDeadline_.has_value()
-                                      ? std::min(nextExactRefresh, *isolationKillDeadline_)
-                                      : nextExactRefresh;
+                                      ? std::min(refreshDeadline, *isolationKillDeadline_) : refreshDeadline;
         auto rc = dispatcher_.WaitPop(waitDeadline, event);
         if (rc.IsOk()) {
             rc = HandleRuntimeEvent(std::move(event));
@@ -2029,6 +2065,7 @@ void TopologyEngine::Run()
             }
             nextExactRefresh = std::chrono::steady_clock::now() + options_.scopeProbeInterval;
         }
+        RefreshMembershipsIfDue(nextMembershipRefresh, std::chrono::steady_clock::now());
         KillSelfIfIsolationExpired();
     }
     std::lock_guard<std::mutex> lock(stateMutex_);

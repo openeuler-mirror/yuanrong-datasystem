@@ -1290,6 +1290,28 @@ TEST_F(CoordinatorBackendClusterTest, TwoWorkersCanReadKeysAcrossWorkers)
     AssertGetKeysEventually(client1, keys, values);
 }
 
+class CoordinatorReadyMembershipRetryTest : public CoordinatorBackendClusterTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        CoordinatorBackendClusterTest::SetClusterSetupOptions(opts);
+        opts.injectActions = "TopologyEngine.MarkReady.beforeUpdateNodeState:"
+                             "2*return(K_DATA_INCONSISTENCY)->2*return(K_DUPLICATED)->2*return(K_NOT_FOUND)";
+    }
+};
+
+TEST_F(CoordinatorReadyMembershipRetryTest, WorkersStartAfterMembershipCasConflicts)
+{
+    std::shared_ptr<KVClient> client0;
+    std::shared_ptr<KVClient> client1;
+    InitKVClient(0, client0);
+    InitKVClient(1, client1);
+    const auto keys = BuildKeys("ready_membership_retry");
+    const auto values = BuildValues(keys, "ready_membership_retry");
+    AssertSetKeys(client0, keys, values);
+    AssertGetKeysEventually(client1, keys, values);
+}
+
 TEST_F(CoordinatorBackendClusterTest, WorkersStayAliveDuringCoordinatorOutageAndRecover)
 {
     auto t0 = std::chrono::steady_clock::now();
@@ -1595,6 +1617,7 @@ public:
         opts.workerGflagParams += " -enable_urma=false -ipc_through_shared_memory=true"
                                   " -host_id_env_name=DS_TEST_WRITE_REDIRECT_HOST_ID";
         opts.coordinatorGflagParams += " -scale_in_collect_window_ms=5000";
+        opts.injectActions = "TopologyEngine.initialMembershipRefreshDelayMs:call(0)";
     }
 
     BaseCluster *GetCluster() override
@@ -1610,6 +1633,29 @@ TEST_F(CoordinatorWriteRedirectTest, ThreeExitingWorkersReturnLiveCandidateAndWr
     options.enableLocalCache = false;
     options.dataPlacementPolicy = DataPlacementPolicy::PREFERRED_META_OWNER;
     options.requestTimeoutMs = 1000;
+    // SHM assertions require the asynchronous membership projection before clients cache the routing snapshot.
+    auto hostIdSignature = std::make_shared<Signature>(options.accessKey, options.secretKey);
+    BrpcChannelConfig hostIdConfig;
+    hostIdConfig.timeout_ms = 1000;
+    hostIdConfig.max_retry = 0;
+    for (int i = 0; i < 4; ++i) {
+        HostPort address;
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(i, address));
+        client::WorkerRpcClient hostIdRpc(address, hostIdSignature, hostIdConfig);
+        DS_ASSERT_OK(hostIdRpc.Init());
+        DS_ASSERT_OK(cluster_->WaitForExpectedResult([&] {
+            GetHashRingRspPb response;
+            RETURN_IF_NOT_OK(hostIdRpc.InvokeGetHashRing(0, response));
+            CHECK_FAIL_RETURN_STATUS(response.host_id_map_size() == 4 && response.hash_ring().members_size() == 4,
+                                     K_TRY_AGAIN, "Waiting for complete hostId projection");
+            for (const auto &member : response.hash_ring().members()) {
+                const auto host = response.host_id_map().find(member.first);
+                CHECK_FAIL_RETURN_STATUS(host != response.host_id_map().end() && host->second == "write-redirect-host",
+                                         K_TRY_AGAIN, "Waiting for same-host membership projection");
+            }
+            return Status::OK();
+        }, WAIT_TOPOLOGY_TIMEOUT_SEC, K_OK));
+    }
     KVClient kvClient(options);
     DS_ASSERT_OK(kvClient.Init());
     KVClient createClient(options);

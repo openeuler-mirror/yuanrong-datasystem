@@ -27,6 +27,8 @@
 #include <utility>
 #include <vector>
 
+#include <google/protobuf/arena.h>
+
 #include "ut/common.h"
 
 #include <array>
@@ -634,6 +636,71 @@ TEST_F(CoordinatorServiceImplTest, NoElectionRecoveryControlRpcExecutesWithRecov
     EXPECT_GT(response.membership_mod_revision(), 0);
     EXPECT_EQ(recoveryStateCalls, 1);
     DS_ASSERT_OK(service->Shutdown());
+}
+
+TEST_F(CoordinatorServiceImplTest, RangeResponsesOwnBinaryValuesWithoutChangingStore)
+{
+    auto service = MakeService();
+    DS_ASSERT_OK(InitializeRunning(*service));
+    service->recoveryStateProvider_ = [](const std::string &) {
+        return coordinator::TopologyRecoveryState::READY;
+    };
+    const std::string prefix = "/datasystem/range-owned/cluster/";
+    std::vector<KeyValueEntry> entries{
+        { prefix + "127.0.0.1:31501", std::string(4096, '\0') },
+        { prefix + "127.0.0.1:31502", std::string(4096, '\xff') },
+        { prefix + "127.0.0.1:31503", "" },
+    };
+    for (auto &entry : entries) {
+        DS_ASSERT_OK(service->store_->Put(entry.key, entry.value, 0, COORDINATOR_KEY_NOT_EXISTS_VERSION,
+                                          entry.version, entry.modRevision));
+    }
+    coordinator::RangeReqPb request;
+    request.set_key(prefix);
+    request.set_range_end("/datasystem/range-owned/cluster0");
+    coordinator::RangeRspPb response;
+    google::protobuf::Arena arena;
+    auto *arenaResponse = google::protobuf::Arena::CreateMessage<coordinator::RangeRspPb>(&arena);
+    for (auto *result : { &response, arenaResponse }) {
+        DS_ASSERT_OK(service->Range(request, *result));
+        ASSERT_EQ(result->kvs_size(), static_cast<int>(entries.size()));
+        EXPECT_EQ(result->revision(), entries.back().modRevision);
+        EXPECT_FALSE(result->unchanged());
+    }
+    for (const auto &entry : entries) {
+        coordinator::RangeReqPb exact;
+        exact.set_key(entry.key);
+        coordinator::RangeRspPb exactResponse;
+        DS_ASSERT_OK(service->Range(exact, exactResponse));
+        ASSERT_EQ(exactResponse.kvs_size(), 1);
+        EXPECT_EQ(exactResponse.kvs(0).value(), entry.value);
+        exact.set_known_mod_revision(entry.modRevision);
+        coordinator::RangeRspPb unchangedResponse;
+        DS_ASSERT_OK(service->Range(exact, unchangedResponse));
+        EXPECT_TRUE(unchangedResponse.unchanged());
+        EXPECT_EQ(unchangedResponse.kvs_size(), 0);
+    }
+    int64_t deleted = 0;
+    int64_t revision = 0;
+    DS_ASSERT_OK(service->store_->DeleteRange(prefix, request.range_end(), deleted, revision));
+    EXPECT_EQ(deleted, static_cast<int64_t>(entries.size()));
+    coordinator::RangeRspPb emptyResponse;
+    DS_ASSERT_OK(service->Range(request, emptyResponse));
+    EXPECT_EQ(emptyResponse.kvs_size(), 0);
+    DS_ASSERT_OK(service->Shutdown());
+    service.reset();
+    for (auto *result : { &response, arenaResponse }) {
+        coordinator::RangeRspPb decoded;
+        ASSERT_TRUE(decoded.ParseFromString(result->SerializeAsString()));
+        ASSERT_EQ(decoded.kvs_size(), static_cast<int>(entries.size()));
+        for (size_t i = 0; i < entries.size(); ++i) {
+            const auto &actual = decoded.kvs(static_cast<int>(i));
+            EXPECT_EQ(actual.key(), entries[i].key);
+            EXPECT_EQ(actual.value(), entries[i].value);
+            EXPECT_EQ(actual.version(), entries[i].version);
+            EXPECT_EQ(actual.mod_revision(), entries[i].modRevision);
+        }
+    }
 }
 
 TEST_F(CoordinatorServiceImplTest, PrepareClusterResponseHeaderRejectsMissingRecoveryManager)

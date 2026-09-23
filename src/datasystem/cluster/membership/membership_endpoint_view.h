@@ -20,6 +20,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
@@ -51,7 +52,7 @@ struct MemberEndpoint {
 
 /**
  * @brief Thread-safe composition of immutable topology identity and local endpoint observations.
- * The view owns only transient observations. It does not own membership watches,
+ * The view owns transient observations and a membership cache. It does not own membership watches,
  * decide Failure, select placement owners or write backend state.
  */
 class MembershipEndpointView final {
@@ -65,9 +66,13 @@ public:
     bool SupportsWriteRedirect() const noexcept;
 
     // The runtime commits these advisory updates only while owning the source watch.
-    Status UpdateWriteCandidate(const std::string &address, bool ready, int64_t revision);
+    Status UpdateMembership(const std::string &address, MembershipValue value, int64_t revision);
+    Status DeleteMembership(const std::string &address, int64_t revision);
 
-    void ClearWriteCandidates();
+    void ClearMemberships();
+    // A full refresh establishes completeness; individual watch events cannot prove it after a clear.
+    Status GetHostIds(std::unordered_map<std::string, std::string> &hostIds) const;
+    Status RefreshMemberships(const std::vector<MembershipRecord> &members, int64_t revision);
 
     std::vector<std::string> GetWriteCandidates(const std::string &excludedAddress,
                                                 const std::string &selectionKey,
@@ -134,6 +139,7 @@ public:
                                   std::shared_ptr<const TopologySnapshot> &snapshot) const;
 
 private:
+    Status SetMembershipLocked(const std::string &address, std::optional<MembershipValue> value, int64_t revision);
     /**
      * @brief Resolve a current member's usable local observation.
      * @param[in] member Current immutable topology member.
@@ -144,13 +150,15 @@ private:
 
     const TopologySnapshotState &snapshots_;
     const bool writeRedirectEnabled_;
-    struct WriteCandidateState {
+    struct MembershipState {
+        std::optional<MembershipValue> value;
         int64_t revision{ 0 };
-        bool ready{ false };
         size_t readyIndex{ 0 };
     };
-    mutable std::shared_mutex writeCandidatesMutex_;
-    std::unordered_map<std::string, WriteCandidateState> writeCandidates_;
+    // Reject delayed events for entries already removed by a full snapshot, which no longer have per-member revisions.
+    int64_t snapshotRevision_{ 0 };
+    mutable std::shared_mutex membershipMutex_;
+    std::unordered_map<std::string, MembershipState> memberships_;
     std::vector<std::string> readyCandidateAddresses_;
     // Mirrors whether observationsByAddress_ is empty so empty-table readers can avoid mutex_.
     std::atomic<bool> hasObservations_{ false };
