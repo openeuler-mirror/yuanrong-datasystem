@@ -50,7 +50,7 @@
 - Verified:
   - `common_log` builds from `log_manager.cpp`, `logging.cpp`, `access_recorder.cpp`, `trace.cpp`, and `failure_handler.cpp`.
   - `butil_log_sink` is a separate target that adapts process-global butil logging to `common_log` without adding a brpc dependency to `common_log`.
-  - `log.h` provides the main logging macros used across the repository, including `LOG`, `VLOG`, `LOG_EVERY_N`, `LOG_FIRST_N`, and `CHECK`.
+  - `log.h` provides the main logging macros used across the repository, including `LOG`, `VLOG`, `CHECK`, `LOG_FIRST_N`, `LOG_EVERY_N`, and `LOG_EVERY_T`.
   - `Logging` is the main lifecycle singleton that initializes log directories, configures the spdlog-backed provider, starts background maintenance, and creates the access-recorder manager.
   - `LogManager` runs background work for log rolling, compression, and periodic monitor-log flush.
   - `Trace` is thread-local and is used pervasively to attach trace IDs to logs and cross-thread work.

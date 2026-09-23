@@ -472,7 +472,7 @@ void TopologyRecoveryManager::UpdateMembership(const ParsedTopologyCoordinationK
             return;
         }
         if (context->observedMembers.size() >= options_.maxMembersPerCluster) {
-            LOG_FIRST_AND_EVERY_N(WARNING, MEMBER_LIMIT_LOG_INTERVAL)
+            LOG_EVERY_N(WARNING, MEMBER_LIMIT_LOG_INTERVAL)
                 << "CLUSTER_RECOVERY_MEMBER_LIMIT_REACHED, cluster=" << parsed.clusterName
                 << ", coordinator_id=" << CoordinatorIdLogPrefix(coordinatorId_)
                 << ", members=" << context->observedMembers.size()

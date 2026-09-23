@@ -87,7 +87,7 @@ DsCoordinationBackend::MembershipMutationGuard::~MembershipMutationGuard()
     const auto phase = backend_.ClearMembershipMutationOwner();
     lock_.unlock();
     if (heldMs >= MEMBERSHIP_MUTATION_SLOW_HOLD_MS) {
-        LOG_FIRST_EVERY_N(WARNING, MEMBERSHIP_MUTATION_SLOW_LOG_EVERY_N)
+        LOG_EVERY_N(WARNING, MEMBERSHIP_MUTATION_SLOW_LOG_EVERY_N)
             << "event=CLUSTER_MEMBERSHIP_MUTATION action=slow_hold owner="
             << DsCoordinationBackend::MembershipMutationOperationName(operation_)
             << " phase=" << DsCoordinationBackend::MembershipMutationPhaseName(phase) << " held_ms=" << heldMs;

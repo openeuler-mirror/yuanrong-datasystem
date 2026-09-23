@@ -2244,7 +2244,7 @@ void WorkerOCServer::RunScaleInExitPublisher()
         ++consecutiveFailures;
         const auto retryDelay = ComputeScaleInExitRetryDelay(hostPort_.ToString(), consecutiveFailures);
         lock.unlock();
-        LOG_FIRST_AND_EVERY_N(WARNING, RECOVERED_EXIT_PUBLISH_LOG_INTERVAL)
+        LOG_EVERY_N(WARNING, RECOVERED_EXIT_PUBLISH_LOG_INTERVAL)
             << "Failed to publish EXITING membership for scale-in; will retry after " << retryDelay.count()
             << " ms: " << rc.ToString();
         lock.lock();
@@ -2382,7 +2382,7 @@ Status WorkerOCServer::WaitForTopologyReady()
         if (rc.IsOk()) {
             return rc;
         }
-        LOG_FIRST_AND_EVERY_N(INFO, logEveryCount)
+        LOG_EVERY_N(INFO, logEveryCount)
             << "External readiness remains closed while topology serving is unavailable: " << rc.ToString();
         std::this_thread::sleep_for(TOPOLOGY_MEMBERSHIP_POLL_INTERVAL);
     }
@@ -2804,7 +2804,7 @@ Status WorkerOCServer::WaitForStartupHealth(const std::function<Status()> &recon
                 return Status::OK();
             }
         }
-        LOG_FIRST_AND_EVERY_N(INFO, readinessRetryLogEveryCount)
+        LOG_EVERY_N(INFO, readinessRetryLogEveryCount)
             << "Readiness probe retrying, detail: " << lastStatus.ToString();
         std::this_thread::sleep_for(retryInterval);
     }

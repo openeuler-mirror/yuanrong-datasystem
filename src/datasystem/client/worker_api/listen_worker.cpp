@@ -299,11 +299,10 @@ bool ListenWorker::HandleScaleDownOrIdle(bool isWorkerVoluntaryScaleDown)
         if (CanDisconnectStandby()) {
             TryShutdownStandbyConnection();
         } else {
-            // LOG_EVERY_T keeps its "last emitted" timestamp in a non-atomic static, which races across the
-            // multiple listener threads that reach this branch. LOG_FIRST_AND_EVERY_N keeps thread-safe
-            // atomic throttle state and additionally guarantees the first deferral is visible.
+            // LOG_EVERY_N keeps thread-safe atomic throttle state across the multiple listener
+            // threads that reach this branch and guarantees the first deferral is visible.
             constexpr int drainDeferLogRate = 10;
-            LOG_FIRST_AND_EVERY_N(INFO, drainDeferLogRate)
+            LOG_EVERY_N(INFO, drainDeferLogRate)
                 << "[Switch] Standby drain deferred, data plane still active, worker: "
                 << clientCommonWorker_->hostPort_.ToString() << ", client id: " << clientId_;
         }
@@ -649,11 +648,10 @@ void ListenWorker::ShutdownStandbyConnection()
     // apply here and reopen the check-then-act window. This single read also governs both the reset below and
     // the Disconnect, so the two cannot straddle the queueing delay.
     if (!CanDisconnectStandby()) {
-        // LOG_EVERY_T keeps its "last emitted" timestamp in a non-atomic static, which races across the
-        // multiple listener threads that reach this branch. LOG_FIRST_AND_EVERY_N keeps thread-safe atomic
-        // throttle state and additionally guarantees the first deferral is visible.
+        // LOG_EVERY_N keeps thread-safe atomic throttle state across the multiple listener
+        // threads that reach this branch and guarantees the first deferral is visible.
         constexpr int drainDeferLogRate = 10;
-        LOG_FIRST_AND_EVERY_N(INFO, drainDeferLogRate)
+        LOG_EVERY_N(INFO, drainDeferLogRate)
             << "[Switch] Standby teardown deferred, endpoint data plane became active before disconnect, worker: "
             << clientCommonWorker_->hostPort_.ToString() << ", client id: " << clientId_;
         return;

@@ -67,7 +67,6 @@ constexpr int AMBIGUOUS_CREATE_CLEANUP_ATTEMPTS = 3;
 constexpr int AMBIGUOUS_CREATE_CLEANUP_BACKOFF_MS[] = { 0, 100, 400 };
 constexpr int AMBIGUOUS_CREATE_CLEANUP_RPC_TIMEOUT_MS = 500;
 constexpr size_t AMBIGUOUS_CREATE_CLEANUP_THREAD_NUM = 4;
-constexpr int AMBIGUOUS_CREATE_CLEANUP_DROP_LOG_RATE = 100;
 constexpr int64_t MCREATE_RESERVATION_RETRY_BACKOFF_MS = 1;
 
 Status GenerateAllocationId(TransportCreateParam &param)
@@ -639,8 +638,7 @@ void TransportLayer::TryRecoverProviderUbSource()
     } else {
         // A probe that succeeds while the port-health verifier owns the verdict produces no recovery and
         // no error, so this branch is otherwise silent even when the probe keeps firing.
-        LOG_FIRST_EVERY_N(INFO, TRANSPORT_DIAG_LOG_RATE)
-            << "Client Provider UB source probe deferred to port-health verification for "
+        SLOW_LOG(INFO) << "Client Provider UB source probe deferred to port-health verification for "
             << candidate->token.peer.ToString();
     }
 }
@@ -710,8 +708,8 @@ Status TransportLayer::ConfigureLocalPortHealth()
         if (!allowUbRuntimeFailure_) {
             return status;
         }
-        LOG_FIRST_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
-            << "Optional Client UB port-health monitor is unavailable; continue with SHM/TCP: " << status;
+        SLOW_LOG(WARNING) << "Optional Client UB port-health monitor is unavailable; continue with SHM/TCP: "
+            << status;
         return Status::OK();
     }
     if (!localPortHealthObserver_.expired()) {
@@ -720,8 +718,8 @@ Status TransportLayer::ConfigureLocalPortHealth()
             return status;
         }
         if (status.IsError()) {
-            LOG_FIRST_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
-                << "Optional Client UB port-health observer registration failed; continue with SHM/TCP: " << status;
+            SLOW_LOG(WARNING) << "Optional Client UB port-health observer registration failed; continue with SHM/TCP: "
+                << status;
         }
     }
     return Status::OK();
@@ -855,8 +853,7 @@ Status TransportLayer::Create(const HostPort &workerAddr, const std::string &obj
     }
     if (rc.GetCode() == K_NOT_SUPPORTED) {
         for (const auto &fallbackHint : advisor_->GetFallbackHints(hint)) {
-            LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
-                << "Create SHM unavailable on worker " << workerAddr.ToString() << ", fall back to "
+            SLOW_LOG(WARNING) << "Create SHM unavailable on worker " << workerAddr.ToString() << ", fall back to "
                 << TransportHintName(fallbackHint);
             rc = TryCreate(workerAddr, objectKey, dataSize, param, fallbackHint, buffer, ambiguousShmIds);
             if (rc.IsOk()) {
@@ -868,8 +865,7 @@ Status TransportLayer::Create(const HostPort &workerAddr, const std::string &obj
     if (rc.IsError()) {
         // Throttle this terminal diagnostic like the SHM-unavailable fallback log above so a sustained UB
         // outage (e.g. client-local all-port isolation) does not emit one WARN per request.
-        LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
-            << "Create still failed for worker " << workerAddr.ToString() << ": " << rc;
+        SLOW_LOG(WARNING) << "Create still failed for worker " << workerAddr.ToString() << ": " << rc;
         ScheduleAmbiguousCreateCleanup(workerAddr, ambiguousShmIds, param.requestContext);
     }
     return rc;
@@ -926,10 +922,6 @@ bool TransportLayer::RebuildPlaneOnSetFailure(const Status &rc, const HostPort &
 }
 
 namespace {
-// Sampling interval for the routed Set triage log below: one line per N publish attempts so the Set
-// hot path is not flooded; aggregate transport-kind/byte counters live in the metrics.
-constexpr int ROUTED_SET_TRIAGE_LOG_RATE = 1000;
-
 bool IsUbWriteAllocation(const ObjectBuffer &buffer)
 {
     return ObjectBufferInternal::GetInfo(buffer).ubUrmaDataInfo != nullptr;
@@ -939,10 +931,10 @@ bool IsUbWriteAllocation(const ObjectBuffer &buffer)
 void TransportLayer::LogSetResult(const HostPort &workerAddr, TransportHint hint, const Status &rc,
                                   std::chrono::steady_clock::time_point start)
 {
-    LOG_EVERY_N(INFO, ROUTED_SET_TRIAGE_LOG_RATE) << "[TransportSet] worker=" << workerAddr.ToString()
-                            << " transport=" << TransportHintName(hint) << " rc=" << rc.GetCode()
-                            << " latency_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
-                                   std::chrono::steady_clock::now() - start).count();
+    LOG(INFO) << "[TransportSet] worker=" << workerAddr.ToString()
+        << " transport=" << TransportHintName(hint) << " rc=" << rc.GetCode()
+        << " latency_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - start).count();
 }
 
 Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param)
@@ -972,7 +964,7 @@ Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param,
         // The UB data plane cannot be built right now (breaker cooling down, or the build failed):
         // degrade this write to TCP instead of failing it, matching the read path's UB->TCP fallback.
         // Each write re-asks the advisor, so a later write retries UB once the cooldown elapses.
-        LOG_FIRST_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+        LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
             << "UB data plane unavailable for worker " << workerAddr.ToString()
             << ", degrading this write to TCP: " << buildRc;
         hint = TransportHint::TCP_ONLY;
@@ -1161,8 +1153,7 @@ Status TransportLayer::TryMCreateFallbacks(const HostPort &workerAddr,
 {
     Status rc(K_NOT_SUPPORTED, "No MCreate fallback transport is available");
     for (const auto &fallbackHint : advisor_->GetFallbackHints(hint)) {
-        LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
-            << "MCreate SHM unavailable on worker " << workerAddr.ToString() << ", fall back to "
+        SLOW_LOG(WARNING) << "MCreate SHM unavailable on worker " << workerAddr.ToString() << ", fall back to "
             << TransportHintName(fallbackHint);
         rc = TryMCreate(workerAddr, objectKeys, dataSizes, param, fallbackHint, buffers, ambiguousShmIds);
         if (rc.IsOk()) {
@@ -1194,8 +1185,7 @@ Status TransportLayer::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &bu
     if (buildRc.IsError() && hint == TransportHint::UB_CANDIDATE) {
         // Same UB->TCP degradation as the single-buffer path: a UB plane that cannot be built right
         // now (cooldown, failed build) must not fail the batch.
-        LOG_FIRST_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
-            << "UB data plane unavailable for worker " << workerAddr.ToString()
+        SLOW_LOG(WARNING) << "UB data plane unavailable for worker " << workerAddr.ToString()
             << ", degrading this MSet to TCP: " << buildRc;
         hint = TransportHint::TCP_ONLY;
         buildRc = manager_->GetOrCreate(workerAddr, hint, transporter);
@@ -1352,14 +1342,14 @@ void TransportLayer::ScheduleAmbiguousCreateCleanup(const HostPort &workerAddr,
         }
         if (dropReason != nullptr) {
             METRIC_INC(metrics::KvMetricId::CLIENT_AMBIGUOUS_CREATE_CLEANUP_DROPPED_TOTAL);
-            LOG_EVERY_N(WARNING, AMBIGUOUS_CREATE_CLEANUP_DROP_LOG_RATE)
+            SLOW_LOG(WARNING)
                 << "Drop ambiguous Create cleanup because " << dropReason << ", worker=" << workerAddr.ToString()
                 << ", clientId=" << context.clientId << ", allocationCount=" << allocationCount
                 << "; worker hard reclaim applies only when these allocations were marked reclaimable";
         }
     } catch (const std::exception &error) {
         METRIC_INC(metrics::KvMetricId::CLIENT_AMBIGUOUS_CREATE_CLEANUP_DROPPED_TOTAL);
-        LOG_EVERY_N(WARNING, AMBIGUOUS_CREATE_CLEANUP_DROP_LOG_RATE)
+        SLOW_LOG(WARNING)
             << "Drop ambiguous Create cleanup because scheduling failed, worker=" << workerAddr.ToString()
             << ", clientId=" << context.clientId << ", error=" << error.what()
             << "; worker hard reclaim applies only when these allocations were marked reclaimable";

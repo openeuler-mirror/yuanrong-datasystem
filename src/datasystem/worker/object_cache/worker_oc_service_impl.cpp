@@ -2408,8 +2408,7 @@ Status WorkerOCServiceImpl::DecreaseMemoryRef(const ClientKey &clientId, const s
             decResult = rc;
         } else if (delayRelease) {
             if (shmUnit != nullptr) {
-                LOG_EVERY_T(WARNING, DELAY_RELEASE_LOG_INTERVAL_SEC)
-                    << "[DECREASE_REF_DELAY_RELEASE_ADD] id=" << shmUnit->id
+                LOG(WARNING) << "[DECREASE_REF_DELAY_RELEASE_ADD] id=" << shmUnit->id
                     << ", identity=" << shmUnit->GetIdentity() << ", bytes=" << shmUnit->size
                     << ", delayMs=" << DEFAULT_SHM_DELAY_RELEASE_MS << ", clientId=" << clientId;
             }
@@ -2810,7 +2809,7 @@ Status WorkerOCServiceImpl::HandleTopologyServingFailure(const Status &failure)
         return Status(rollbackRc.GetCode(), rollbackRc.GetMsg() + "; topology failure: " + failure.ToString());
     }
     if (IsTopologyPending(failure)) {
-        LOG_FIRST_AND_EVERY_N(INFO, STARTUP_HEALTH_LOG_EVERY_COUNT)
+        LOG_EVERY_N(INFO, STARTUP_HEALTH_LOG_EVERY_COUNT)
             << "WORKER_STARTUP state=BLOCKED gate=topology reason=placement_pending detail=" << failure.ToString();
         return Status::OK();
     }
@@ -2908,7 +2907,7 @@ void WorkerOCServiceImpl::RunTopologyHealthCoordinator()
         }
         topologyHealthProcessedGeneration_ = generation;
         if (!reconciled) {
-            LOG_FIRST_AND_EVERY_N(WARNING, STARTUP_HEALTH_LOG_EVERY_COUNT)
+            LOG_EVERY_N(WARNING, STARTUP_HEALTH_LOG_EVERY_COUNT)
                 << "Topology health coordination retrying, detail: " << rc.ToString();
         }
         if (!allowBusiness && reconciled) {
@@ -2933,7 +2932,7 @@ Status WorkerOCServiceImpl::RefreshStartupHealth()
         return Status::OK();
     }
     if (!reconciliationReady_.load(std::memory_order_acquire)) {
-        LOG_FIRST_AND_EVERY_N(INFO, STARTUP_HEALTH_LOG_EVERY_COUNT)
+        LOG_EVERY_N(INFO, STARTUP_HEALTH_LOG_EVERY_COUNT)
             << "WORKER_STARTUP state=BLOCKED gate=reconciliation reason=incomplete health_published="
             << (setHealthFile_.load(std::memory_order_acquire) ? "true" : "false");
         return Status::OK();
@@ -3167,7 +3166,7 @@ Status WorkerOCServiceImpl::GiveUpReconciliation()
     std::string finishReason = "unknown";
     Raii logReconFlagCost([&holdReconFlagTimer, &finishReason, this]() {
         constexpr int logPerCount = 10;
-        LOG_FIRST_AND_EVERY_N(INFO, logPerCount)
+        LOG_EVERY_N(INFO, logPerCount)
             << "WORKER_STARTUP state=WAITING gate=reconciliation reason=" << finishReason
             << " completed=" << numRecon_ << " check_elapsed_ms=" << holdReconFlagTimer.ElapsedMilliSecond();
     });

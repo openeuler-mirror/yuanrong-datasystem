@@ -237,7 +237,7 @@ void ClientWorkerCommonApiAttribute::ConsumeUbHealthSummary(const UbHealthSummar
     auto status = DecodeUbHealthSummary(encoded, summary);
     if (status.IsError() || summary.worker != hostPort_) {
         constexpr uint32_t invalidSummaryLogEveryN = 100;
-        LOG_FIRST_EVERY_N(WARNING, invalidSummaryLogEveryN)
+        LOG_EVERY_N(WARNING, invalidSummaryLogEveryN)
             << source << ": " << (status.IsError() ? status.ToString() : "Worker endpoint mismatch");
         return;
     }

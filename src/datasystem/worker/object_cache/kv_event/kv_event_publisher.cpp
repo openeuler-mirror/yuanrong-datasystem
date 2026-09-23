@@ -425,7 +425,7 @@ void KvEventPublisher::Enqueue(PendingEvent event)
     }
     if (droppedCount != 0) {
         METRIC_INC(metrics::KvMetricId::WORKER_KV_EVENT_DROPPED_TOTAL);
-        LOG_FIRST_AND_EVERY_N(WARNING, K_QUEUE_FULL_WARNING_LOG_EVERY_N)
+        LOG_EVERY_N(WARNING, K_QUEUE_FULL_WARNING_LOG_EVERY_N)
             << "KV event publisher queue is full; event dropped, eventType="
             << ResolveEventKind(event.kind).eventType << ", objectKey=" << event.objectKey
             << ", droppedEvents=" << droppedCount

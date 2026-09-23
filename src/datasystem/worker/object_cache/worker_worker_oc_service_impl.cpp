@@ -67,7 +67,6 @@ DS_DECLARE_uint64(oc_worker_aggregate_merge_size);
 
 namespace datasystem {
 namespace {
-constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 constexpr char URMA_WARMUP_KEY_PREFIX[] = "_urma_";
 constexpr char BATCH_GET_RUNTIME_ERROR_KEY_PREFIX[] = "transport_get_inject_runtime_";
 constexpr char BATCH_GET_NOT_FOUND_KEY_PREFIX[] = "transport_get_inject_not_found_";
@@ -945,9 +944,8 @@ Status WorkerWorkerOCServiceImpl::HandlePayloadFallback(
             // the response's provider_ub_failure_detail above (UpdateProviderUbFailureDetailForWrappedStatus),
             // so this WARN is only the fallback notice -- throttle it like the batch-level fallback log,
             // not a root-cause signal.
-            LOG_IF_EVERY_N(WARNING, fastTransportStatus.IsError(), K_URMA_WARNING_LOG_EVERY_N)
-                << FormatString("%s[%s] fallback to tcp, rc = %s", fastTransportName, objectKey,
-                                fastTransportStatus.ToString());
+            SLOW_LOG(WARNING) << FormatString("%s[%s] fallback to tcp, rc = %s", fastTransportName, objectKey,
+                fastTransportStatus.ToString());
             RETURN_IF_NOT_OK(shmGuard.TransferTo(outPayload, objKv.GetReadOffset(), objKv.GetReadSize()));
         }
     }
@@ -1093,8 +1091,7 @@ Status WorkerWorkerOCServiceImpl::CheckConnectionStable(const GetObjectRemoteReq
             && !remoteEndpoint.identity.id.empty()) {
             remoteWorkerId = remoteEndpoint.identity.id;
         }
-        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_NEED_CONNECT] CheckConnectionStable failed, remoteAddress=" << requestAddressStr
+        SLOW_LOG(WARNING) << "[URMA_NEED_CONNECT] CheckConnectionStable failed, remoteAddress=" << requestAddressStr
             << ", remoteWorkerId=" << remoteWorkerId
             << ", remoteInstanceId=" << (req.urma_instance_id().empty() ? "UNKNOWN" : req.urma_instance_id())
             << ", rc=" << rc.ToString();
@@ -1382,12 +1379,8 @@ Status WorkerWorkerOCServiceImpl::HandleBatchWaitFailure(BatchWaitContext &conte
     HostPort requestAddress;
     LOG_IF_ERROR(GetRemoteAddressFromBatchGetReq(context.req, requestAddress),
                  "GetRemoteAddressFromBatchGetReq failed");
-    // Throttle the per-batch fallback diagnostic: under a sustained URMA provider fault every
-    // BatchGetObjectRemote RPC falls back to TCP here, emitting one WARN per batch. Reuse the file's
-    // K_URMA_WARNING_LOG_EVERY_N convention (also used at the URMA_NEED_CONNECT site above).
-    LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-        << FormatString("fallback to tcp, srcAddress = %s, targetAddress = %s, rc = %s",
-                        localAddress_.ToString(), requestAddress.ToString(), status.ToString());
+    LOG(WARNING) << FormatString("fallback to tcp, srcAddress = %s, targetAddress = %s, rc = %s",
+        localAddress_.ToString(), requestAddress.ToString(), status.ToString());
     return Status::OK();
 }
 

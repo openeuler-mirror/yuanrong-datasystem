@@ -47,7 +47,6 @@ namespace client {
 namespace {
 constexpr size_t MAX_BATCH_OBJECT_COUNT = 1024;
 constexpr uint64_t MAX_BATCH_EXPECTED_BYTES = 100ULL * 1024ULL * 1024ULL;
-constexpr int TRANSPORT_DIAG_LOG_RATE = 100;
 
 struct RefreshableLocationState {
     bool hasStaleLocation = false;
@@ -269,9 +268,9 @@ void LogReplicaReadFailure(const master::ObjectLocationInfoPb &location, const H
                    << ", status: " << status.ToString();
         return;
     }
-    LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
-        << "[TransportGet][Data] Replica read failed, try another replica, key: " << location.object_key()
-        << ", worker: " << workerAddr.ToString() << ", round: " << round << ", status: " << status.ToString();
+    SLOW_LOG(WARNING) << "[TransportGet][Data] Replica read failed, try another replica, key: "
+        << location.object_key() << ", worker: " << workerAddr.ToString() << ", round: " << round
+        << ", status: " << status.ToString();
 }
 }  // namespace
 

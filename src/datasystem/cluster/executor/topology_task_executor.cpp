@@ -496,7 +496,7 @@ void TopologyTaskExecutor::FinishRestartEffects(const std::map<std::string, int6
         const auto firstFact = restartFacts.begin();
         const std::string firstAddress = firstFact == restartFacts.end() ? std::string() : firstFact->first;
         const int64_t firstTimestamp = firstFact == restartFacts.end() ? 0 : firstFact->second;
-        LOG_FIRST_AND_EVERY_N(WARNING, RESTART_EFFECT_FAILURE_LOG_INTERVAL)
+        LOG_EVERY_N(WARNING, RESTART_EFFECT_FAILURE_LOG_INTERVAL)
             << "CLUSTER_RESTART_NOTIFY action=retry local_address=" << localAddress_
             << " fact_count=" << restartFacts.size() << " first_address=" << firstAddress
             << " first_timestamp=" << firstTimestamp << " status=" << status.ToString();

@@ -128,7 +128,7 @@ AccessTransportKind KindForHint(TransportHint hint)
 void LogTransporterReady(const HostPort &workerAddr, AccessTransportKind kind, bool retainedShm)
 {
     if (retainedShm) {
-        LOG_FIRST_AND_EVERY_N(INFO, TRANSPORT_STATE_LOG_RATE)
+        LOG_EVERY_N(INFO, TRANSPORT_STATE_LOG_RATE)
             << "[TransportGet][Connection] Cached fallback while retaining SHM, endpoint: "
             << workerAddr.ToString() << ", fallback: " << AccessTransportTracker::KindToName(kind);
     }

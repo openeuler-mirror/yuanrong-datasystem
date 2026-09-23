@@ -511,7 +511,7 @@ Status CoordinatorMembershipManager::SelectCandidate(const CoordinatorRaftMember
     std::vector<std::string> discoveredCandidates;
     const auto discoveryStatus = discovery_->GetCoordinators(discoveredCandidates);
     if (discoveryStatus.IsError()) {
-        LOG_FIRST_AND_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << kDiscoveryErrorMarker;
+        LOG_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << kDiscoveryErrorMarker;
         return Status::OK();
     }
 
@@ -520,12 +520,12 @@ Status CoordinatorMembershipManager::SelectCandidate(const CoordinatorRaftMember
     for (const auto &discoveredCandidate : discoveredCandidates) {
         braft::PeerId peer;
         if (ParseCoordinatorRaftPeer(discoveredCandidate, peer).IsError()) {
-            LOG_FIRST_AND_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << kInvalidCandidateMarker;
+            LOG_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << kInvalidCandidateMarker;
             continue;
         }
         auto normalizedCandidate = CoordinatorRaftPeerAddress(peer);
         if (normalizedCandidate.empty()) {
-            LOG_FIRST_AND_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << kInvalidCandidateMarker;
+            LOG_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << kInvalidCandidateMarker;
             continue;
         }
         normalizedCandidates.emplace_back(std::move(normalizedCandidate));
@@ -764,11 +764,11 @@ Status CoordinatorMembershipManager::SubmitAdd(const SubmissionSnapshot &expecte
     } catch (const std::exception &e) {
         rollbackNewOwnership();
         const auto error = FormatString("%s: %s", kAddSubmissionExceptionMarker, e.what());
-        LOG_FIRST_AND_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << error;
+        LOG_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << error;
         return Status(K_RUNTIME_ERROR, error);
     } catch (...) {
         rollbackNewOwnership();
-        LOG_FIRST_AND_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << kAddSubmissionExceptionMarker;
+        LOG_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << kAddSubmissionExceptionMarker;
         return Status(K_RUNTIME_ERROR, kAddSubmissionExceptionMarker);
     }
 }
@@ -790,10 +790,10 @@ Status CoordinatorMembershipManager::SubmitRemove(const SubmissionSnapshot &expe
         });
     } catch (const std::exception &e) {
         const auto error = FormatString("%s: %s", kRemoveSubmissionExceptionMarker, e.what());
-        LOG_FIRST_AND_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << error;
+        LOG_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << error;
         return Status(K_RUNTIME_ERROR, error);
     } catch (...) {
-        LOG_FIRST_AND_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << kRemoveSubmissionExceptionMarker;
+        LOG_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount) << kRemoveSubmissionExceptionMarker;
         return Status(K_RUNTIME_ERROR, kRemoveSubmissionExceptionMarker);
     }
 }
@@ -802,7 +802,7 @@ void CoordinatorMembershipManager::LogUnsafeOverTargetConfiguration(const Coordi
 {
     auto committedPeers = status.committedPeers;
     std::sort(committedPeers.begin(), committedPeers.end());
-    LOG_FIRST_AND_EVERY_N(ERROR, kPolicyDiagnosticLogEveryCount)
+    LOG_EVERY_N(ERROR, kPolicyDiagnosticLogEveryCount)
         << kUnsafeOverTargetMarker << ", group=" << kCoordinatorRaftGroupId
         << ", committed_size=" << committedPeers.size() << ", expected_size=" << options_.expectedMemberCount
         << ", term=" << status.term << ", configuration_index=" << status.configurationIndex << ", committed_peers=["
@@ -814,7 +814,7 @@ void CoordinatorMembershipManager::LogMembershipOperationCompletion(const char *
     if (status.IsOk()) {
         return;
     }
-    LOG_FIRST_AND_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount)
+    LOG_EVERY_N(WARNING, kPolicyDiagnosticLogEveryCount)
         << kOperationCompletionErrorMarker << ", operation=" << operation << ", status=" << status;
 }
 

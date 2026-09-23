@@ -54,7 +54,6 @@ namespace client {
 namespace {
 
 constexpr int64_t SHM_REFERENCE_RELEASE_TIMEOUT_MS = 1000;
-constexpr uint32_t SHM_FD_ERROR_LOG_RATE = 100;
 constexpr uint64_t SHM_MAINTENANCE_MAX_INTERVAL_S = 5;
 constexpr uint64_t SHM_MAINTENANCE_MIN_INTERVAL_S = 1;
 constexpr uint64_t SHM_MAINTENANCE_INTERVAL_MS_PER_S = 1000;
@@ -253,8 +252,7 @@ Status ShmFdChannel::GetClientFd(const std::vector<int> &workerFds, std::vector<
     });
 #endif
     if (rc.IsError() || receivedRequestId != requestId_ || clientFds.size() != workerFds.size()) {
-        LOG_FIRST_AND_EVERY_N(WARNING, SHM_FD_ERROR_LOG_RATE)
-            << "SHM fd validation failed, clientId=" << clientId_
+        SLOW_LOG(WARNING) << "SHM fd validation failed, clientId=" << clientId_
             << ", expectedRequestId=" << requestId_ << ", receivedRequestId=" << receivedRequestId
             << ", expectedFdCount=" << workerFds.size() << ", receivedFdCount=" << clientFds.size()
             << ", isScmTcp=" << isScmTcp_ << ", status=" << rc;

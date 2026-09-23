@@ -93,7 +93,7 @@ Implementation direction:
 - Skip `LogRateLimiter::ShouldLog(...)` only when `forceLog` is true.
 - Make the public macro preserve the original log condition separately from the slow force condition, so existing sampled
   logs do not disappear for fast requests.
-- Keep normal `LOG`, `VLOG`, `LOG_EVERY_N`, and error/fatal behavior unchanged.
+- Keep normal `LOG`, `VLOG`, `LOG_EVERY_N`, `LOG_EVERY_T`, and error/fatal behavior unchanged.
 
 ## `v=0` Compatibility
 

@@ -34,9 +34,6 @@ namespace client {
 namespace {
 constexpr size_t INITIAL_ATTEMPT = 1;
 constexpr size_t REBUILD_ATTEMPT = 2;
-// Rebuild/teardown events are recoverable and can recur on every request during sustained instability;
-// sample them like the other transport degradation WARNINGs. Terminal failures stay unsampled.
-constexpr int TRANSPORT_DIAG_LOG_RATE = 100;
 
 bool IsShmFallbackError(const Status &status)
 {
@@ -102,10 +99,9 @@ bool DataPlaneExecutor::PrepareRetry(const HostPort &workerAddr, const std::shar
 {
     retryHint = hint;
     auto logRebuild = [&](const char *what) {
-        LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE) << "[TransportGet][Connection] " << what << ", worker: "
-                                                       << workerAddr.ToString() << ", transport: "
-                                                       << AccessTransportTracker::KindToName(transporter->Kind())
-                                                       << ", status: " << rc.ToString();
+        SLOW_LOG(WARNING) << "[TransportGet][Connection] " << what << ", worker: " << workerAddr.ToString()
+            << ", transport: " << AccessTransportTracker::KindToName(transporter->Kind())
+            << ", status: " << rc.ToString();
     };
     if (rc.GetCode() == K_URMA_NEED_CONNECT) {
         logRebuild("Rebuild data plane");
@@ -173,8 +169,7 @@ Status DataPlaneExecutor::ExecuteFallbacks(const HostPort &workerAddr, const Ope
     size_t attempt = REBUILD_ATTEMPT;
     for (auto iter = fallbackHints.begin(); iter != fallbackHints.end(); ++iter) {
         const auto hint = *iter;
-        LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
-            << "[TransportGet][DataPlane] Fall back transport, worker: " << workerAddr.ToString()
+        SLOW_LOG(WARNING) << "[TransportGet][DataPlane] Fall back transport, worker: " << workerAddr.ToString()
             << ", transport: " << TransportHintName(hint);
         const bool ubFallback = hint == TransportHint::UB_CANDIDATE;
         const AttemptPlan plan{ hint, attempt,
