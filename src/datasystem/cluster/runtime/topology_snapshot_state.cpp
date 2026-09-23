@@ -37,7 +37,7 @@ struct ThreadSnapshotCache {
 Status RetainLastGoodHostIds(const std::shared_ptr<const TopologySnapshot> &previous,
                              std::shared_ptr<const TopologySnapshot> &candidate)
 {
-    if (previous == nullptr || candidate->HostIdsRevision() > 0 || previous->HostIdsRevision() == 0) {
+    if (previous == nullptr || candidate->HostIdsKnown() || !previous->HostIdsKnown()) {
         return Status::OK();
     }
     std::unordered_map<std::string, std::string> hostIds;
@@ -52,7 +52,7 @@ Status RetainLastGoodHostIds(const std::shared_ptr<const TopologySnapshot> &prev
     }
     return TopologySnapshot::Create(candidate->CopyState(), candidate->AuthorityRevision(),
                                     candidate->CanonicalDigest(), candidate, std::move(hostIds),
-                                    previous->HostIdsRevision(), candidate->CoordinatorId());
+                                    previous->HostIdsKnown(), candidate->CoordinatorId());
 }
 
 std::vector<TokenRange> MergeRanges(std::vector<TokenRange> ranges)
@@ -124,8 +124,8 @@ Status TopologySnapshotState::Publish(std::shared_ptr<const TopologySnapshot> sn
         // Owners serialize exact reads; authority revisions are scoped to one Coordinator lifetime.
         if (snapshot->CoordinatorId() != current->CoordinatorId()
             || snapshot->AuthorityRevision() != current->AuthorityRevision()
-            || (snapshot->HostIdsRevision() > 0
-                && (snapshot->HostIds() != current->HostIds() || current->HostIdsRevision() == 0))) {
+            || (snapshot->HostIdsKnown()
+                && (snapshot->HostIds() != current->HostIds() || !current->HostIdsKnown()))) {
             RETURN_IF_NOT_OK(RetainLastGoodHostIds(current, snapshot));
             std::atomic_store_explicit(&current_, std::move(snapshot), std::memory_order_release);
             publicationGeneration_.fetch_add(1, std::memory_order_release);

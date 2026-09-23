@@ -16,6 +16,7 @@
  */
 #include "datasystem/cluster/coordination_backend/ds_coordination_backend.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
+#include "datasystem/common/coordinator/coordinator_status.h"
 
 #include <algorithm>
 #include <atomic>
@@ -40,6 +41,16 @@ DS_DECLARE_uint32(node_dead_timeout_s);
 
 namespace datasystem::cluster {
 namespace {
+
+TEST(CoordinatorCasConflictTest, OnlyConditionalWriteConflictCodesMatch)
+{
+    for (auto code : { K_DATA_INCONSISTENCY, K_DUPLICATED, K_NOT_FOUND }) {
+        EXPECT_TRUE(IsCoordinatorCasConflict(Status(code, "conflict")));
+    }
+    for (auto code : { K_OK, K_TRY_AGAIN, K_NOT_READY, K_INVALID, K_RPC_UNAVAILABLE }) {
+        EXPECT_FALSE(IsCoordinatorCasConflict(Status(code, "not a CAS conflict")));
+    }
+}
 
 constexpr char COORDINATOR_A[] = "coordinator-a";
 constexpr char COORDINATOR_B[] = "coordinator-b";
@@ -1556,9 +1567,12 @@ TEST(DsCoordinationBackendSessionTest, FailedReadyPublicationDoesNotClearRenewal
     ASSERT_TRUE(backend.IsKeepAliveTimeout());
     ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
     const auto valueBefore = proxy.LastPutValue();
-    proxy.SetPutStatus(Status(K_RPC_DEADLINE_EXCEEDED, "injected publication failure"));
-
-    EXPECT_EQ(backend.UpdateNodeState(MemberLifecycleState::READY).GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    for (auto code : { K_RPC_DEADLINE_EXCEEDED, K_DATA_INCONSISTENCY, K_DUPLICATED, K_NOT_FOUND }) {
+        proxy.SetPutStatus(Status(code, "injected publication failure"));
+        const auto calls = proxy.PutCalls();
+        EXPECT_EQ(backend.UpdateNodeState(MemberLifecycleState::READY).GetCode(), code);
+        EXPECT_EQ(proxy.PutCalls(), calls + 1);
+    }
     EXPECT_EQ(proxy.LastPutValue(), valueBefore);
     EXPECT_TRUE(backend.IsKeepAliveTimeout());
 }
@@ -1792,11 +1806,12 @@ TEST(DsCoordinationBackendSessionTest, BlockingMembershipPutDoesNotDelayExitingP
         return backend.UpdateNodeStateWithTimeout(MemberLifecycleState::EXITING, operationTimeoutMs);
     });
     const auto completion = exiting.wait_for(promptCompletionTimeout);
+    proxy.AddPutStatus(Status(K_DATA_INCONSISTENCY, "stale revision"));
     proxy.ReleaseBlockedPut();
 
     EXPECT_EQ(completion, std::future_status::ready);
     EXPECT_TRUE(exiting.get().IsOk());
-    EXPECT_EQ(ready.get().GetCode(), K_TRY_AGAIN);
+    EXPECT_TRUE(ready.get().IsOk());
 }
 
 TEST(DsCoordinationBackendSessionTest, SupersededReadyResponseRepublishesReady)

@@ -26,6 +26,7 @@
 
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "ut/common.h"
+#include "datasystem/protos/worker_object.pb.h"
 
 namespace datasystem::cluster {
 namespace {
@@ -38,8 +39,7 @@ constexpr char kNextCoordinatorId[] = "fedcba9876543210";
 
 TEST(WorkerWorkerOCServiceProtocolTest, KeepsLegacyMethodIndexesStable)
 {
-    const auto *service =
-        google::protobuf::DescriptorPool::generated_pool()->FindServiceByName("datasystem.WorkerWorkerOCService");
+    const auto *service = GetObjectRemoteReqPb::descriptor()->file()->FindServiceByName("WorkerWorkerOCService");
     ASSERT_NE(service, nullptr);
     const auto *batchGetObjectRemote = service->FindMethodByName("BatchGetObjectRemote");
     const auto *migrateDataDirect = service->FindMethodByName("MigrateDataDirect");
@@ -105,6 +105,11 @@ public:
                int64_t &revision, int32_t, std::string *coordinatorId, const std::string &, int64_t) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (!putFailures_.empty()) {
+            auto code = putFailures_.back();
+            putFailures_.pop_back();
+            return Status(code, "injected membership conflict");
+        }
         version = ++membershipVersion_;
         revision = ++membershipRevision_;
         remoteMembershipKey_ = key;
@@ -176,6 +181,11 @@ public:
     {
         std::unique_lock<std::mutex> lock(mutex_);
         ensureRequests_.push_back(request);
+        if (!ensureFailures_.empty()) {
+            auto code = ensureFailures_.back();
+            ensureFailures_.pop_back();
+            return Status(code, "injected ensure conflict");
+        }
         cv_.notify_all();
         cv_.wait(lock, [this] { return !blockEnsure_ || releaseEnsure_; });
         remoteMembershipValue_ = request.membership_value();
@@ -200,6 +210,12 @@ public:
     }
     void GetObservedCoordinatorId(std::string &id) const override { id.clear(); }
 
+    void FailMembershipPuts()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        putFailures_ = { K_NOT_FOUND, K_DUPLICATED, K_DATA_INCONSISTENCY };
+    }
+    std::vector<StatusCode> putFailures_, ensureFailures_;
     FakeRoutes routes_;
     coordinator::EnsureLeaderMembershipRspPb::ResultPb ensureResult_{
         coordinator::EnsureLeaderMembershipRspPb::ACCEPTED };
@@ -496,19 +512,20 @@ TEST(WorkerLeaderReconcilerTest, ExplicitMembershipLossResubmitsEnsureForSameLea
 TEST(WorkerLeaderReconcilerTest, SynchronousForceEnsureDoesNotPublishRestarting)
 {
     FakeProxy proxy;
+    proxy.ensureFailures_ = { K_NOT_FOUND, K_DATA_INCONSISTENCY };
     DsCoordinationBackend backend(&proxy, kWorkerAddress);
-    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/cluster/cluster-a", kWorkerAddress, false, true).IsOk());
     TopologyRecoveryReporter reporter(proxy, kClusterName, kWorkerAddress,
                                       [](uint64_t &, std::string &) { return Status(K_NOT_FOUND, "no snapshot"); },
                                       ReporterOptions());
     proxy.routes_.Set(Identity(9, 2));
     WorkerLeaderReconciler reconciler(proxy, backend, reporter, kClusterName);
     DS_ASSERT_OK(reconciler.Init());
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/cluster/cluster-a", kWorkerAddress, false, true).IsOk());
 
     ASSERT_TRUE(reconciler.Reconcile(true).IsOk());
-    ASSERT_EQ(proxy.EnsureCount(), 1UL);
+    ASSERT_EQ(proxy.EnsureCount(), 3UL);
     MembershipValue payload;
-    ASSERT_TRUE(MembershipValueCodec::Decode(proxy.EnsureAt(0).membership_value(), payload).IsOk());
+    ASSERT_TRUE(MembershipValueCodec::Decode(proxy.EnsureAt(2).membership_value(), payload).IsOk());
     EXPECT_NE(payload.lifecycleState, MemberLifecycleState::RESTARTING);
 
     reconciler.Shutdown();
@@ -531,9 +548,10 @@ TEST(WorkerLeaderReconcilerTest, AsyncRejoinCompletesMembershipReadyAfterEnsure)
     ASSERT_TRUE(proxy.WaitForEnsures(1));
     ASSERT_TRUE(proxy.WaitForReports(1));
 
+    proxy.FailMembershipPuts();
     ASSERT_TRUE(reconciler.Rejoin().IsOk());
 
-    ASSERT_TRUE(proxy.WaitForEnsures(2));
+    ASSERT_TRUE(proxy.WaitForEnsures(5));
     ASSERT_TRUE(proxy.WaitForMembershipState(MemberLifecycleState::READY));
 
     reconciler.Shutdown();
@@ -656,10 +674,10 @@ TEST(WorkerLeaderReconcilerTest, ExitingMembershipWinsAgainstInflightLeaderEnsur
     exitThread.join();
 
     ASSERT_TRUE(exitStatus.IsOk()) << exitStatus.ToString();
+    reconciler.Shutdown();
     MembershipValue remoteValue;
     ASSERT_TRUE(MembershipValueCodec::Decode(proxy.RemoteMembershipValue(), remoteValue).IsOk());
     EXPECT_EQ(remoteValue.lifecycleState, MemberLifecycleState::EXITING);
-    reconciler.Shutdown();
     EXPECT_TRUE(reporter.Shutdown().IsOk());
     EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
 }

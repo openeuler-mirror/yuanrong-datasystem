@@ -71,6 +71,7 @@ ds_cc_library(
         "coordinator_discovery_cache.h",
         "coordinator_leader_router.h",
         "coordinator_service_proxy.h",
+        "coordinator_status.h",
         "event_notify_executor.h",
         "key_value_entry.h",
         "coordinator_store.h",

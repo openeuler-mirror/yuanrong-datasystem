@@ -166,9 +166,10 @@ Status FakeCoordinationBackend::CAS(const std::string &table, const std::string 
     auto fullKey = FullKey(table, key);
     auto iter = values_.find(fullKey);
     const std::string oldValue = iter == values_.end() ? "" : iter->second.first;
-    if (failNextCasBeforeCommit_) {
-        failNextCasBeforeCommit_ = false;
-        return Status(K_RPC_UNAVAILABLE, "injected pre-commit unknown");
+    if (failNextCasBeforeCommit_ != K_OK) {
+        auto code = failNextCasBeforeCommit_;
+        failNextCasBeforeCommit_ = K_OK;
+        return Status(code, "injected pre-commit failure");
     }
     std::unique_ptr<std::string> newValue;
     bool retry = false;
@@ -330,9 +331,9 @@ void FakeCoordinationBackend::FailNextCasAfterCommit()
     failNextCasAfterCommit_ = true;
 }
 
-void FakeCoordinationBackend::FailNextCasBeforeCommit()
+void FakeCoordinationBackend::FailNextCasBeforeCommit(StatusCode code)
 {
-    failNextCasBeforeCommit_ = true;
+    failNextCasBeforeCommit_ = code;
 }
 
 void FakeCoordinationBackend::FailNextWatch()

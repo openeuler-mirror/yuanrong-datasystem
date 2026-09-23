@@ -787,8 +787,11 @@ TEST(TopologyTaskExecutorTest, ScaleInMetadataGatePrecedesDataDrainAndTaskProgre
     DS_ASSERT_OK(executor.Start());
     DS_ASSERT_OK(executor.HandleNotify(scenario.expected.notifiesByAddress.at(task.executorAddress)));
 
+    scenario.backend.FailNextCasBeforeCommit(K_DATA_INCONSISTENCY);
+    EXPECT_EQ(executor.HandleCompletion(WaitCompletion(scenario.dispatcher)).GetCode(), K_DATA_INCONSISTENCY);
+    DS_ASSERT_OK(executor.HandleTick(std::chrono::steady_clock::now() + RETRY_TICK_ADVANCE));
     DS_ASSERT_OK(executor.HandleCompletion(WaitCompletion(scenario.dispatcher)));
-    EXPECT_EQ(scenario.callbacks.scaleInCalls.load(), 1);
+    EXPECT_EQ(scenario.callbacks.scaleInCalls.load(), 2);
     EXPECT_EQ(scenario.callbacks.scaleInDataDrainCalls.load(), 0);
     EXPECT_EQ(scenario.callbacks.cleanupAuthorizations.load(), 0);
     TopologyTask observed;
@@ -806,7 +809,7 @@ TEST(TopologyTaskExecutorTest, ScaleInMetadataGatePrecedesDataDrainAndTaskProgre
     EXPECT_TRUE(std::all_of(std::get<TopologyMigrateTask>(observed).sourceRanges.begin(),
                             std::get<TopologyMigrateTask>(observed).sourceRanges.end(),
                             [](const auto &range) { return range.finished; }));
-    EXPECT_EQ(scenario.callbacks.scaleInCalls.load(), 1);
+    EXPECT_EQ(scenario.callbacks.scaleInCalls.load(), 2);
     EXPECT_EQ(scenario.callbacks.scaleInDataDrainCalls.load(), 1);
     EXPECT_EQ(scenario.callbacks.cleanupAuthorizations.load(), 1);
     EXPECT_EQ(scenario.callbacks.cleanupEffects.load(), 1);

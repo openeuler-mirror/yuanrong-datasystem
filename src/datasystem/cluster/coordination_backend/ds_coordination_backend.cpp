@@ -17,6 +17,7 @@
 /**
  * Description: Coordinator-backed cluster coordination implementation.
  */
+#include "datasystem/common/coordinator/coordinator_status.h"
 #include "datasystem/cluster/coordination_backend/ds_coordination_backend.h"
 
 #include <algorithm>
@@ -665,8 +666,7 @@ Status DsCoordinationBackend::CreateKeepAliveKeyWithRetry()
                                                 * KEEP_ALIVE_INTERVAL_DIVISOR));
     const auto retryDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(retryBudgetMs);
     uint32_t retryAttempts = 0;
-    while ((IsRetryableRpcError(createStatus) || createStatus.GetCode() == K_DUPLICATED
-            || createStatus.GetCode() == K_NOT_FOUND || createStatus.GetCode() == K_DATA_INCONSISTENCY)
+    while ((IsRetryableRpcError(createStatus) || IsCoordinatorCasConflict(createStatus))
            && std::chrono::steady_clock::now() < retryDeadline) {
         ++retryAttempts;
         LOG(WARNING) << "CLUSTER_MEMBERSHIP role=worker action=initial_keepalive_retry address=" << watcherAddr_
@@ -1325,11 +1325,22 @@ Status DsCoordinationBackend::PublishNodeStateMutation(MemberLifecycleState &sta
     int64_t version = 0;
     int64_t revision = 0;
     std::string coordinatorId;
-    RETURN_IF_NOT_OK(proxy_->Put(BuildRealKey(keepAliveTableName_, keepAliveKey_), mutation.encodedValue,
-                                 keepAliveTtlMs_,
-                                 COORDINATOR_NO_VERSION_CHECK, version, revision,
-                                 rpcTimeoutMs, &coordinatorId,
-                                 mutation.startedFrom.coordinatorId, mutation.startedFrom.modRevision));
+    auto status = proxy_->Put(BuildRealKey(keepAliveTableName_, keepAliveKey_), mutation.encodedValue,
+                              keepAliveTtlMs_, COORDINATOR_NO_VERSION_CHECK, version, revision,
+                              rpcTimeoutMs, &coordinatorId,
+                              mutation.startedFrom.coordinatorId, mutation.startedFrom.modRevision);
+    if (IsCoordinatorCasConflict(status)) {
+        MembershipMutationGuard guard(*this, MembershipMutationOperation::UPDATE_MEMBERSHIP_STATE);
+        std::lock_guard<std::mutex> lock(keepAliveMutex_);
+        // Retry only an already refreshed local revision; unchanged or replaced incarnations need reconciliation.
+        retry = membershipCoordinatorId_ == mutation.startedFrom.coordinatorId
+                && keepAliveModRevision_ > mutation.startedFrom.modRevision
+                && keepAliveValue_.timestamp == mutation.value.timestamp;
+        if (retry) {
+            return Status::OK();
+        }
+    }
+    RETURN_IF_NOT_OK(status);
     RETURN_IF_NOT_OK(CommitNodeStateMutation(mutation, coordinatorId, revision, retry));
     if (retry && exitMembershipRequested_.load(std::memory_order_acquire)) {
         state = MemberLifecycleState::EXITING;

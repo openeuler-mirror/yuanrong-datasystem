@@ -146,20 +146,20 @@ TEST(MembershipEndpointViewTest, CoordinatorWriteCandidatesRequireReadyActiveRea
     MembershipEndpointView view(snapshots, true);
     EXPECT_TRUE(view.SupportsWriteRedirect());
     EXPECT_TRUE(view.GetWriteCandidates("127.0.0.1:1", "key", 3).empty());
-    EXPECT_EQ(view.UpdateWriteCandidate("127.0.0.1:1", true, 0).GetCode(), K_INVALID);
-    DS_ASSERT_OK(view.UpdateWriteCandidate("127.0.0.1:1", true, 1));
-    DS_ASSERT_OK(view.UpdateWriteCandidate("127.0.0.1:2", true, 1));
-    DS_ASSERT_OK(view.UpdateWriteCandidate("127.0.0.1:3", true, 1));
+    EXPECT_EQ(view.UpdateMembership("127.0.0.1:1", { 0, MemberLifecycleState::READY, {}, {} }, 0).GetCode(), K_INVALID);
+    DS_ASSERT_OK(view.UpdateMembership("127.0.0.1:1", { 0, MemberLifecycleState::READY, {}, {} }, 1));
+    DS_ASSERT_OK(view.UpdateMembership("127.0.0.1:2", { 0, MemberLifecycleState::READY, {}, {} }, 1));
+    DS_ASSERT_OK(view.UpdateMembership("127.0.0.1:3", { 0, MemberLifecycleState::READY, {}, {} }, 1));
     EXPECT_EQ(view.GetWriteCandidates("127.0.0.1:1", "key", 3),
               std::vector<std::string>({ "127.0.0.1:2" }));
-    DS_ASSERT_OK(view.UpdateWriteCandidate("127.0.0.1:2", false, 2));
+    DS_ASSERT_OK(view.DeleteMembership("127.0.0.1:2", 2));
     EXPECT_TRUE(view.GetWriteCandidates("127.0.0.1:1", "key", 3).empty());
-    DS_ASSERT_OK(view.UpdateWriteCandidate("127.0.0.1:2", true, 1));
+    DS_ASSERT_OK(view.UpdateMembership("127.0.0.1:2", { 0, MemberLifecycleState::READY, {}, {} }, 1));
     EXPECT_TRUE(view.GetWriteCandidates("127.0.0.1:1", "key", 3).empty());
-    DS_ASSERT_OK(view.UpdateWriteCandidate("127.0.0.1:2", true, 3));
+    DS_ASSERT_OK(view.UpdateMembership("127.0.0.1:2", { 0, MemberLifecycleState::READY, {}, {} }, 3));
     DS_ASSERT_OK(view.UpdateObservation({ topology.members[1].identity, 1, EndpointAvailability::UNREACHABLE }));
     EXPECT_TRUE(view.GetWriteCandidates("127.0.0.1:1", "key", 3).empty());
-    view.ClearWriteCandidates();
+    view.ClearMemberships();
     EXPECT_TRUE(view.GetWriteCandidates("", "key", 3).empty());
 }
 
@@ -179,7 +179,7 @@ TEST(MembershipEndpointViewTest, BoundsAndDistributesCoordinatorWriteCandidates)
     DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
     MembershipEndpointView view(snapshots, true);
     for (const auto &member : topology.members) {
-        DS_ASSERT_OK(view.UpdateWriteCandidate(member.identity.address, true, 1));
+        DS_ASSERT_OK(view.UpdateMembership(member.identity.address, { 0, MemberLifecycleState::READY, {}, {} }, 1));
     }
     const auto selected = view.GetWriteCandidates("127.0.0.1:10000", "object-a", 3);
     EXPECT_EQ(selected.size(), 3U);
@@ -190,7 +190,7 @@ TEST(MembershipEndpointViewTest, BoundsAndDistributesCoordinatorWriteCandidates)
                       || view.GetWriteCandidates("127.0.0.1:10000", "object-" + std::to_string(i), 3) != selected;
     }
     EXPECT_TRUE(distributed);
-    DS_ASSERT_OK(view.UpdateWriteCandidate(selected.front(), false, 2));
+    DS_ASSERT_OK(view.DeleteMembership(selected.front(), 2));
     const auto afterRemoval = view.GetWriteCandidates("127.0.0.1:10000", "object-a", 3);
     EXPECT_EQ(afterRemoval.size(), 3U);
     EXPECT_EQ(std::find(afterRemoval.begin(), afterRemoval.end(), selected.front()), afterRemoval.end());
@@ -290,6 +290,86 @@ TEST(MembershipEndpointViewTest, WaitsForMinimumTopologyVersion)
         2, std::chrono::steady_clock::now() + std::chrono::seconds(1), observed));
     ASSERT_NE(observed, nullptr);
     EXPECT_EQ(observed->Version(), 2U);
+}
+
+TEST(MembershipEndpointViewTest, MembershipRefreshPreservesNewEventsAndRemovesAbsentMembers)
+{
+    TopologySnapshotState snapshots;
+    MembershipEndpointView view(snapshots);
+    DS_ASSERT_OK(view.UpdateMembership("127.0.0.1:1", { 0, MemberLifecycleState::READY, "new", {} }, 12));
+    DS_ASSERT_OK(view.RefreshMemberships({ { "127.0.0.1:1", MemberLifecycleState::READY, 0, "old" } }, 10));
+    std::unordered_map<std::string, std::string> hosts;
+    DS_ASSERT_OK(view.GetHostIds(hosts));
+    EXPECT_EQ(hosts.at("127.0.0.1:1"), "new");
+    DS_ASSERT_OK(view.DeleteMembership("127.0.0.1:1", 13));
+    DS_ASSERT_OK(view.RefreshMemberships({ { "127.0.0.1:1", MemberLifecycleState::READY, 0, "old" } }, 12));
+    DS_ASSERT_OK(view.GetHostIds(hosts));
+    EXPECT_TRUE(hosts.empty());
+    DS_ASSERT_OK(view.RefreshMemberships({}, 13));
+    DS_ASSERT_OK(view.UpdateMembership("127.0.0.1:1", { 0, MemberLifecycleState::READY, "late", {} }, 12));
+    DS_ASSERT_OK(view.GetHostIds(hosts));
+    EXPECT_TRUE(hosts.empty());
+}
+
+TEST(MembershipEndpointViewTest, DeleteRejectsPutNewerThanLastSnapshotButOlderThanDelete)
+{
+    TopologySnapshotState snapshots;
+    MembershipEndpointView view(snapshots);
+    DS_ASSERT_OK(view.RefreshMemberships({ { "127.0.0.1:1", MemberLifecycleState::READY, 0, "old" } }, 10));
+    DS_ASSERT_OK(view.DeleteMembership("127.0.0.1:1", 13));
+    DS_ASSERT_OK(view.UpdateMembership("127.0.0.1:1", { 0, MemberLifecycleState::READY, "late", {} }, 12));
+    std::unordered_map<std::string, std::string> hosts;
+    DS_ASSERT_OK(view.GetHostIds(hosts));
+    EXPECT_TRUE(hosts.empty());
+    DS_ASSERT_OK(view.RefreshMemberships({}, 13));
+    DS_ASSERT_OK(view.UpdateMembership("127.0.0.1:1", { 0, MemberLifecycleState::READY, "rejoined", {} }, 14));
+    DS_ASSERT_OK(view.GetHostIds(hosts));
+    EXPECT_EQ(hosts.at("127.0.0.1:1"), "rejoined");
+}
+
+TEST(MembershipEndpointViewTest, FullRefreshReplacesHostIdsAndReadyCandidates)
+{
+    TopologyState topology;
+    topology.version = 1;
+    topology.members = {
+        Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } },
+        Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::ACTIVE, { 2 } }
+    };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(topology, 1, std::string(64, 'a'), snapshot));
+    TopologySnapshotState snapshots;
+    SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
+    MembershipEndpointView view(snapshots, true);
+    DS_ASSERT_OK(view.UpdateMembership("127.0.0.1:1", { 0, MemberLifecycleState::READY, "absent", {} }, 1));
+    DS_ASSERT_OK(view.UpdateMembership("127.0.0.1:2", { 0, MemberLifecycleState::READY, "old", {} }, 1));
+    DS_ASSERT_OK(view.RefreshMemberships({ { "127.0.0.1:2", MemberLifecycleState::STARTING, 0, "fresh" } }, 2));
+    std::unordered_map<std::string, std::string> hosts;
+    DS_ASSERT_OK(view.GetHostIds(hosts));
+    EXPECT_EQ(hosts, (std::unordered_map<std::string, std::string>{ { "127.0.0.1:2", "fresh" } }));
+    EXPECT_TRUE(view.GetWriteCandidates("", "key", 3).empty());
+    DS_ASSERT_OK(view.UpdateMembership("127.0.0.1:1", { 0, MemberLifecycleState::READY, "late", {} }, 1));
+    DS_ASSERT_OK(view.UpdateMembership("127.0.0.1:2", { 0, MemberLifecycleState::READY, "fresh", {} }, 3));
+    EXPECT_EQ(view.GetWriteCandidates("", "key", 3), std::vector<std::string>({ "127.0.0.1:2" }));
+    DS_ASSERT_OK(view.RefreshMemberships({}, 4));
+    DS_ASSERT_OK(view.GetHostIds(hosts));
+    EXPECT_TRUE(hosts.empty());
+    EXPECT_TRUE(view.GetWriteCandidates("", "key", 3).empty());
+}
+
+TEST(MembershipEndpointViewTest, FullRefreshReclaimsDeletionTombstones)
+{
+    TopologySnapshotState snapshots;
+    MembershipEndpointView view(snapshots);
+    for (size_t index = 0; index < 20'000; ++index) {
+        DS_ASSERT_OK(view.DeleteMembership("127.0.0.1:" + std::to_string(index + 1), 1));
+    }
+    DS_ASSERT_OK(view.RefreshMemberships({}, 2));
+    DS_ASSERT_OK(view.UpdateMembership("127.0.0.1:20001", { 0, MemberLifecycleState::READY, "new", {} }, 3));
+    DS_ASSERT_OK(view.UpdateMembership("127.0.0.1:1", { 0, MemberLifecycleState::READY, "late", {} }, 1));
+    std::unordered_map<std::string, std::string> hosts;
+    DS_ASSERT_OK(view.GetHostIds(hosts));
+    EXPECT_EQ(hosts, (std::unordered_map<std::string, std::string>{ { "127.0.0.1:20001", "new" } }));
 }
 
 }  // namespace
