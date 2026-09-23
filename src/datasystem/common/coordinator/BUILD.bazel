@@ -42,6 +42,7 @@ ds_cc_library(
     hdrs = ["static_coordinator_discovery.h"],
     visibility = [
         "//src/datasystem/client:__pkg__",
+        "//src/datasystem/client/cluster_admin:__pkg__",
         "//src/datasystem/client/cluster_query:__pkg__",
         "//src/datasystem/coordinator:__pkg__",
         "//src/datasystem/worker:__pkg__",
