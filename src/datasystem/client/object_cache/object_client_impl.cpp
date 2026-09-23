@@ -2597,10 +2597,12 @@ bool ObjectClientImpl::HandleSetRouteFailure(const Status &status, SetFailureSta
     if (routing == nullptr) {
         return false;
     }
-    auto excludeWorker = [&excludedWorkers, &worker]() {
+    auto excludeWorker = [&excludedWorkers, &worker, &status, failureStage]() {
         if (std::find(excludedWorkers.begin(), excludedWorkers.end(), worker) == excludedWorkers.end()) {
             excludedWorkers.emplace_back(worker);
         }
+        LOG(INFO) << "[WriteRoute] retry" << ", worker: " << worker.ToString()
+                  << ", stage: " << static_cast<int>(failureStage) << ", status: " << status.ToString();
     };
     if (status.GetCode() == K_METADATA_OWNER_UNAVAILABLE) {
         if (routing->ForceRefresh()) {

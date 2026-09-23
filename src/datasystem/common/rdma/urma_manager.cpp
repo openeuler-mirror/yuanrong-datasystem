@@ -1696,6 +1696,7 @@ void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shar
             << ", tgt addr:" << event->GetRemoteAddress() << ", dataSize:" << event->GetDataSize()
             << ", writeChunkIdx:" << trace.writeChunkIndex << ", writeChunkCnt:" << trace.writeChunkCount
             << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString()
+            << ", cqeStatus:" << event->GetStatusCode()
             << ", urma_inflight_wr_cnt: " << tbbEventMap_.size()
             << ", " << wakeSchedMetricName << ":" << wakeSchedLatencyUs
             << ", completionObservationLatencyUs:" << completionObservationLatencyUs
@@ -1840,7 +1841,16 @@ Status UrmaManager::HandleUrmaEvent(uint64_t requestId, const std::shared_ptr<Ur
     auto errMsg =
         FormatString("[urma_request_id:%zu] Polling failed with an error, cqe status: %d", requestId, statusCode);
 
-    return Status(K_URMA_ERROR, errMsg);
+    Status rc(K_URMA_ERROR, errMsg);
+    LOG(ERROR) << "[URMA_COMPLETION_FAILED] urma_request_id=" << requestId
+               << ", localAddress=" << localUrmaInfo_.localAddress.ToString()
+               << ", remoteAddress=" << event->GetRemoteAddress()
+               << ", remoteInstanceId=" << event->GetRemoteInstanceId()
+               << ", op=" << UrmaEvent::OperationTypeName(event->GetOperationType())
+               << ", dataSize=" << event->GetDataSize()
+               << ", cqeStatus=" << statusCode
+               << ", status=" << rc.ToString();
+    return rc;
 }
 
 Status UrmaManager::AcquireSendLaneFromConnection(const std::shared_ptr<UrmaConnection> &connection,
