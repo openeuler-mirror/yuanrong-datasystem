@@ -24,6 +24,7 @@
 #else
 #include <ub/umdk/urma/urma_api.h>
 #include <ub/umdk/urma/urma_perf.h>
+#include <ub/umdk/urma/urma_ubagg.h>
 #endif
 
 // Init API - must call before using any URMA functions via dlopen
@@ -65,6 +66,9 @@ urma_status_t ds_urma_modify_jetty(urma_jetty_t *jetty, urma_jetty_attr_t *attr)
 urma_target_seg_t *ds_urma_register_seg(urma_context_t *context, const urma_seg_cfg_t *config);
 int ds_urma_wait_jfc(urma_jfce_t *jfce, int max_events, int timeout_ms, urma_jfc_t **ev_jfc);
 int ds_urma_poll_jfc(urma_jfc_t *jfc, int max_cr, urma_cr_t *complete_records);
+#ifdef BONDP_HAS_DATAPATH_QUERY
+bondp_port_id_t ds_bondp_get_cr_local_port_id(const urma_cr_t *cr);
+#endif
 void ds_urma_ack_jfc(urma_jfc_t **ev_jfc, uint32_t *ack_cnt, int num);
 urma_target_jetty_t *ds_urma_import_jetty(urma_context_t *context, urma_rjetty_t *remote_jetty,
                                           urma_token_t *token);

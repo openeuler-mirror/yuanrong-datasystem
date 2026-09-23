@@ -190,6 +190,9 @@ public:
         return postSrcChipInflight_;
     }
 
+    void SetSendChipId(uint8_t chipId) { sendChipId_ = chipId; }
+    uint8_t GetSendChipId() const { return sendChipId_; }
+
     void SetWriteChunkInfo(uint64_t chunkIndex, uint64_t chunkCount)
     {
         if (operationType_ == OperationType::WRITE) {
@@ -229,6 +232,9 @@ public:
         failed_ = true;
         statusCode_ = statusCode;
     }
+
+    void SetLocalPortId(uint16_t portId) { localPortId_ = portId; }
+    uint16_t GetLocalPortId() const { return localPortId_; }
 
     /**
      * @brief Get the connection that owned the Jetty at request-submit time.
@@ -482,7 +488,9 @@ private:
     std::atomic<uint64_t> eventProcessingAndWaitLatencyUs_{ 0 };
     UrmaWriteTrace writeTrace_;
     std::string postSrcChipInflight_;
+    uint8_t sendChipId_{ 0 };
     std::atomic<int> *srcChipInflightCounter_{ nullptr };
+    uint16_t localPortId_{ UINT16_MAX };
     bool observeGatherInflightDrain_{ false };
     Lifecycle lifecycle_{ Lifecycle::WAITING };
     std::optional<UrmaLateCompletionContext> lateCompletionContext_;
@@ -1272,6 +1280,13 @@ public:
 
     SendJettyPool::Stats GetSendJettyPoolStats();
 
+    size_t GetActiveSendJettyCount() const
+    {
+        return activeSendJettyCount_.load(std::memory_order_relaxed);
+    }
+
+    size_t GetRetiringOrPendingJettyCount();
+
     /**
      * @brief Get or lazily create the context-level shared JFR for send-only Jetty.
      * @param[out] jfr Shared JFR used by all Jetty under one urma context.
@@ -1332,8 +1347,6 @@ private:
      */
     void RemoveFromPoolLocked(const std::shared_ptr<UrmaJetty> &jetty);
 
-    size_t GetRetiringOrPendingJettyCount();
-
     const urma_token_t urmaToken_ = { 0xACFE };  // default token
     uint8_t jettyPriority_ = 0;
     urma_device_attr_t urmaDeviceAttribute_ = {};
@@ -1361,6 +1374,7 @@ private:
     std::mutex jettyPoolMutex_;
     // All send Jetties managed by the pool (both idle and in-use). Only valid Jetties live here.
     SendJettyPool sendJettyPool_;
+    std::atomic<size_t> activeSendJettyCount_{ 0 };
 
     // ---- Background refill thread ----
     std::unique_ptr<std::thread> refillThread_;
