@@ -37,8 +37,9 @@ UbHealthFilter::UbHealthFilter(std::shared_ptr<WorkerUbHealthRegistry> ubHealthR
 }
 
 bool UbHealthFilter::ObserveSummary(const UbHealthSummary &summary,
-                                    const std::string &expectedIncarnation)
+                                    const std::string &expectedIncarnation, bool &recovered)
 {
+    recovered = false;
     if (!IsClientUbFaultIsolationEnabled()) {
         return false;
     }
@@ -53,7 +54,21 @@ bool UbHealthFilter::ObserveSummary(const UbHealthSummary &summary,
             expected = trusted->second;
         }
     }
-    const bool updated = ubHealthRegistry_->ApplySummary(summary, expected);
+    const auto recoveryCommit = [this](const UbHealthSummary &accepted) {
+        if (!accepted.portHealth.has_value()) {
+            return false;
+        }
+        std::lock_guard<bthread::Mutex> lock(incarnationMutex_);
+        auto trusted = trustedIncarnations_.find(accepted.worker);
+        if (topologyInitialized_
+            && (trusted == trustedIncarnations_.end() || trusted->second != accepted.incarnation)) {
+            return false;
+        }
+        writeTargetAdmission_->SetRemotePortHealthCapability(accepted.worker, true, accepted.incarnation);
+        return ApplyWriteTargetPortHealth(accepted.worker, accepted.incarnation, *accepted.portHealth,
+                                          UbPortHealthEvidenceSource::PASSIVE_RECOVERY);
+    };
+    const bool updated = ubHealthRegistry_->ApplySummary(summary, expected, recoveryCommit, recovered);
     auto accepted = ubHealthRegistry_->GetSummary(summary.worker);
     if (!accepted.has_value() || accepted->incarnation != expected) {
         return false;
@@ -106,7 +121,8 @@ bool UbHealthFilter::ApplySummary(const UbHealthSummary &summary, const std::str
         // The verified port fact is authoritative for the write direction. Applying it on recovery too (instead of
         // clearing the write admission) keeps the health epoch watermark, so a stale all-BAD fact cannot re-quarantine
         // a recovered Worker, and quarantine and release follow one code path.
-        ApplyVerifiedWriteTargetPortHealth(summary.worker, summary.incarnation, *summary.portHealth);
+        ApplyWriteTargetPortHealth(summary.worker, summary.incarnation, *summary.portHealth,
+                                   UbPortHealthEvidenceSource::QUERY_RESPONSE);
     }
 
     if (verifiedRecovery && (summary.portHealth.has_value() || legacyReadRecovery)) {
@@ -310,10 +326,11 @@ void UbHealthFilter::RefreshWriteTargetCompletionGenerationLocked(const HostPort
                       std::shared_ptr<const WriteTargetCompletionGenerations>(std::move(generations)));
 }
 
-void UbHealthFilter::ApplyVerifiedWriteTargetPortHealth(const HostPort &worker, const std::string &incarnation,
-                                                        const UbPortHealthSummary &portHealth)
+bool UbHealthFilter::ApplyWriteTargetPortHealth(const HostPort &worker, const std::string &incarnation,
+                                                const UbPortHealthSummary &portHealth,
+                                                UbPortHealthEvidenceSource source)
 {
-    (void)writeTargetAdmission_->ApplyPortHealth(worker, portHealth, UbPortHealthEvidenceSource::QUERY_RESPONSE);
+    const bool applied = writeTargetAdmission_->ApplyPortHealth(worker, portHealth, source);
     // The exclusion entry follows the final admission verdict, not the ApplyPortHealth return value: a repeated
     // fact with an unchanged epoch reports "not applied" while the Worker is still quarantined.
     const bool unavailable = writeTargetAdmission_->CheckWriteTarget(worker, UbOperationKind::CLIENT_PUT).IsError();
@@ -324,6 +341,7 @@ void UbHealthFilter::ApplyVerifiedWriteTargetPortHealth(const HostPort &worker, 
     }
     writeTargetObservationCount_.store(writeTargetObservationIncarnations_.size(), std::memory_order_release);
     RefreshWriteTargetCompletionGenerationLocked(worker);
+    return applied && !unavailable;
 }
 
 void UbHealthFilter::ReconcileLocalObservationWithTrustedIncarnationLocked(const HostPort &worker,

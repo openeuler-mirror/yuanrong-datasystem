@@ -760,9 +760,11 @@ void ObjectClientImpl::ConfigureTransportUbHealthCallbacks(client::TransportLaye
     options.ubHealthSummaryHook = [weakUbHealthFilter](const UbHealthSummary &summary) {
         auto filter = weakUbHealthFilter.lock();
         if (filter == nullptr) {
-            return;
+            return false;
         }
-        (void)filter->ObserveSummary(summary, summary.incarnation);
+        bool recovered = false;
+        (void)filter->ObserveSummary(summary, summary.incarnation, recovered);
+        return recovered;
     };
     options.verifiedUbHealthSummaryHook = [weakUbHealthFilter](const UbHealthSummary &summary) {
         auto filter = weakUbHealthFilter.lock();

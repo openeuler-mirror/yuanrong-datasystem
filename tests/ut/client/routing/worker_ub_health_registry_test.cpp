@@ -197,7 +197,7 @@ TEST(WorkerUbHealthRegistryTest, LogsOnlyRoutingHealthTransitionsWithSafeIncarna
     EXPECT_NE(logs.find("old_writable=1 writable=0"), std::string::npos) << logs;
 }
 
-TEST(WorkerUbHealthRegistryTest, PassiveFactsDoNotChangeVerifiedAdmission)
+TEST(WorkerUbHealthRegistryTest, NewerPassiveRecoveryClearsVerifiedAdmission)
 {
     client::WorkerUbHealthRegistry registry;
     registry.ReconcileTopology(BuildTopology(1));
@@ -209,10 +209,50 @@ TEST(WorkerUbHealthRegistryTest, PassiveFactsDoNotChangeVerifiedAdmission)
     ASSERT_TRUE(registry.ApplyVerifiedSummary(allDown, allDown.incarnation));
     EXPECT_TRUE(registry.IsVerifiedUnavailable(allDown.worker));
 
+    bool recovered = false;
+    auto pendingRecovery = BuildSummary(0, KnownPortHealth(4, 3, 2), 2);
+    pendingRecovery.portHealth->verificationPending = true;
+    const auto acceptRecovery = [](const UbHealthSummary &) { return true; };
+    ASSERT_TRUE(registry.ApplySummary(pendingRecovery, pendingRecovery.incarnation, acceptRecovery, recovered));
+    EXPECT_FALSE(recovered);
+    EXPECT_TRUE(registry.IsVerifiedUnavailable(pendingRecovery.worker));
+
+    auto anyUp = pendingRecovery;
+    anyUp.portHealth->verificationPending = false;
+    ASSERT_TRUE(registry.ApplySummary(anyUp, anyUp.incarnation, acceptRecovery, recovered));
+    EXPECT_TRUE(recovered);
+    EXPECT_FALSE(registry.IsVerifiedUnavailable(anyUp.worker));
+
+    auto allDownAgain = BuildSummary(0, KnownPortHealth(4, 4, 3), 3);
+    ASSERT_TRUE(registry.ApplySummary(allDownAgain, allDownAgain.incarnation, acceptRecovery, recovered));
+    EXPECT_FALSE(recovered);
+    EXPECT_FALSE(registry.IsVerifiedUnavailable(allDownAgain.worker));
+}
+
+TEST(WorkerUbHealthRegistryTest, RejectedPassiveRecoveryKeepsVerifiedAdmission)
+{
+    client::WorkerUbHealthRegistry registry;
+    registry.ReconcileTopology(BuildTopology(1));
+    auto allDown = BuildSummary(0, KnownPortHealth(4, 4, 1));
+    allDown.writable = false;
+    ASSERT_TRUE(registry.ApplyVerifiedSummary(allDown, allDown.incarnation));
+
     auto anyUp = BuildSummary(0, KnownPortHealth(4, 3, 2), 2);
-    ASSERT_TRUE(registry.ApplySummary(anyUp, anyUp.incarnation));
+    bool recovered = false;
+    EXPECT_FALSE(registry.ApplySummary(anyUp, anyUp.incarnation,
+                                      [](const UbHealthSummary &) { return false; }, recovered));
+
+    EXPECT_FALSE(recovered);
     EXPECT_TRUE(registry.IsVerifiedUnavailable(anyUp.worker));
-    ASSERT_TRUE(registry.ApplyVerifiedSummary(anyUp, anyUp.incarnation));
+    auto retained = registry.GetSummary(anyUp.worker);
+    ASSERT_TRUE(retained.has_value());
+    ASSERT_TRUE(retained->portHealth.has_value());
+    EXPECT_EQ(retained->portHealth->healthEpoch, 1u);
+    EXPECT_EQ(retained->portHealth->badPortCount, 4u);
+
+    ASSERT_TRUE(registry.ApplySummary(anyUp, anyUp.incarnation,
+                                     [](const UbHealthSummary &) { return true; }, recovered));
+    EXPECT_TRUE(recovered);
     EXPECT_FALSE(registry.IsVerifiedUnavailable(anyUp.worker));
 }
 

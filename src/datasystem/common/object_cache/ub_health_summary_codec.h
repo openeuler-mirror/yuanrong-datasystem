@@ -16,6 +16,7 @@
 
 namespace datasystem {
 using UbHealthSummaryApplyHook = std::function<void(const UbHealthSummary &)>;
+using UbHealthSummaryObserveHook = std::function<bool(const UbHealthSummary &)>;
 using UbHealthSummaryProvider = std::function<std::shared_ptr<const UbHealthSummaryPb>()>;
 
 void EncodeUbPortHealthSummary(const UbPortHealthSummary &summary, UbPortHealthSummaryPb &pb);

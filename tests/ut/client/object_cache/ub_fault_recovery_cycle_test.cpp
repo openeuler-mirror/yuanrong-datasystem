@@ -42,7 +42,7 @@ const UbPortHealthSummary ALL_PORTS_RECOVERED{ true, 4, 0, 2, false };
 
 class FaultCycleDataPlaneManager final : public DataPlaneManager {
 public:
-    FaultCycleDataPlaneManager(UbHealthSummaryApplyHook passiveHook, UbHealthSummaryApplyHook verifiedHook,
+    FaultCycleDataPlaneManager(UbHealthSummaryObserveHook passiveHook, UbHealthSummaryApplyHook verifiedHook,
                                std::function<void()> wakeHook)
         : DataPlaneManager(nullptr, 0, {}, nullptr, false, 1, nullptr, false, true, nullptr,
                            std::move(passiveHook), std::move(verifiedHook), std::move(wakeHook))
@@ -103,7 +103,11 @@ RecoveryHarness BuildHarness()
     harness.filter = std::make_unique<UbHealthFilter>(harness.registry);
     UbHealthFilter &filter = *harness.filter;
     harness.manager = std::make_unique<FaultCycleDataPlaneManager>(
-        [&filter](const UbHealthSummary &summary) { (void)filter.ObserveSummary(summary, summary.incarnation); },
+        [&filter](const UbHealthSummary &summary) {
+            bool recovered = false;
+            (void)filter.ObserveSummary(summary, summary.incarnation, recovered);
+            return recovered;
+        },
         [&filter](const UbHealthSummary &summary) { (void)filter.ApplySummary(summary, summary.incarnation); },
         std::function<void()>{});
     FaultCycleDataPlaneManager &manager = *harness.manager;
@@ -170,14 +174,27 @@ TEST(UbFaultRecoveryCycleTest, WorkerPortRecoveryRestoresClientAccess)
 
     manager.workerPortHealth = ALL_PORTS_RECOVERED;
     manager.ObserveUbHealthSummary(BuildSummary(ALL_PORTS_RECOVERED));
-    EXPECT_FALSE(filter.IsAvailable(WORKER, client::WorkerAccessAction::CONTROL));
+    EXPECT_TRUE(filter.IsAvailable(WORKER, client::WorkerAccessAction::CONTROL));
+    EXPECT_TRUE(filter.IsWriteTargetAvailable(WORKER));
+    EXPECT_EQ(manager.queryCount, 1u);
+    EXPECT_FALSE(manager.GetUbPortHealthQueryDeadline().has_value());
+}
 
-    // The verifier UT covers the randomized deadline itself. Make it due here without a real 30-second wait.
+TEST(UbFaultRecoveryCycleTest, ScheduledQueryStillRestoresClientAccessWithoutPassiveResponse)
+{
+    auto harness = BuildHarness();
+    auto &filter = *harness.filter;
+    auto &manager = *harness.manager;
+    IsolateWorkerViaWriteTargetFault(filter, manager);
+
+    manager.workerPortHealth = ALL_PORTS_RECOVERED;
     manager.MakeRecoveryQueryDue();
     manager.RunAndWait();
+
     EXPECT_EQ(manager.queryCount, 2u);
     EXPECT_TRUE(filter.IsAvailable(WORKER, client::WorkerAccessAction::CONTROL));
     EXPECT_TRUE(filter.IsWriteTargetAvailable(WORKER));
+    EXPECT_FALSE(manager.GetUbPortHealthQueryDeadline().has_value());
 }
 
 TEST(UbFaultRecoveryCycleTest, WorkerRestartIncarnationClearsIsolation)

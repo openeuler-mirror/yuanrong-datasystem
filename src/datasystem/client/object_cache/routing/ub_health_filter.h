@@ -40,7 +40,8 @@ public:
     explicit UbHealthFilter(std::shared_ptr<WorkerUbHealthRegistry> ubHealthRegistry);
     ~UbHealthFilter() override = default;
 
-    bool ObserveSummary(const UbHealthSummary &summary, const std::string &expectedIncarnation);
+    bool ObserveSummary(const UbHealthSummary &summary, const std::string &expectedIncarnation,
+                        bool &recovered);
     bool ApplySummary(const UbHealthSummary &summary, const std::string &expectedIncarnation);
     void SetRemotePortHealthVerificationTrigger(
         PeerUbAdmission::RemotePortHealthVerificationTrigger trigger);
@@ -79,10 +80,11 @@ private:
     void EnablePortHealthVerificationIfSupportedLocked(const HostPort &worker);
     void PublishWriteTargetCompletionGenerationsLocked(const std::unordered_set<HostPort> &workers);
     void RefreshWriteTargetCompletionGenerationLocked(const HostPort &worker);
-    // Applies a verified port-health fact to the write-target admission and re-derives the write exclusion
+    // Applies an admissible port-health fact to the write-target admission and re-derives the write exclusion
     // entry from the resulting admission verdict, so both quarantine and release follow the same epoch.
-    void ApplyVerifiedWriteTargetPortHealth(const HostPort &worker, const std::string &incarnation,
-                                            const UbPortHealthSummary &portHealth);
+    bool ApplyWriteTargetPortHealth(const HostPort &worker, const std::string &incarnation,
+                                    const UbPortHealthSummary &portHealth,
+                                    UbPortHealthEvidenceSource source);
 
     std::shared_ptr<WorkerUbHealthRegistry> ubHealthRegistry_;
     PeerUbAdmission localAdmission_;

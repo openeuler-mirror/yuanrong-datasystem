@@ -116,7 +116,7 @@ public:
                               std::shared_ptr<ThreadPool> releasePool = nullptr, bool initializeUbRuntime = true,
                               bool allowUbRuntimeFailure = false,
                               std::shared_ptr<HostMemoryPinManager> hostMemoryPinManager = nullptr,
-                              UbHealthSummaryApplyHook ubHealthSummaryHook = {},
+                              UbHealthSummaryObserveHook ubHealthSummaryHook = {},
                               UbHealthSummaryApplyHook verifiedUbHealthSummaryHook = {},
                               std::function<void()> ubHealthWakeHook = {},
                               std::function<bool(const HostPort &)> ubPortHealthCapabilityCheck = {});
@@ -490,7 +490,7 @@ private:
     uint64_t fastTransportMemSize_ = 0;
     bool initializeUbRuntime_ = true;
     bool allowUbRuntimeFailure_ = false;
-    UbHealthSummaryApplyHook ubHealthSummaryHook_;
+    UbHealthSummaryObserveHook ubHealthSummaryHook_;
     UbHealthSummaryApplyHook verifiedUbHealthSummaryHook_;
     std::function<void()> ubHealthWakeHook_;
     std::function<bool(const HostPort &)> ubPortHealthCapabilityCheck_;

@@ -93,7 +93,8 @@ void WorkerFailover::ConfigureUrmaDataPlaneFailureCallback(WorkerNode node,
             auto filter = weakUbHealthFilter.lock();
             if (filter != nullptr) {
                 if (summary.portHealth.has_value()) {
-                    (void)filter->ObserveSummary(summary, summary.incarnation);
+                    bool recovered = false;
+                    (void)filter->ObserveSummary(summary, summary.incarnation, recovered);
                 } else {
                     (void)filter->ApplySummary(summary, summary.incarnation);
                 }

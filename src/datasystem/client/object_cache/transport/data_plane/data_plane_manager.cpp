@@ -246,7 +246,7 @@ DataPlaneManager::DataPlaneManager(std::shared_ptr<Signature> signature, uint64_
                                    std::shared_ptr<ThreadPool> releasePool, bool initializeUbRuntime,
                                    bool allowUbRuntimeFailure,
                                    std::shared_ptr<HostMemoryPinManager> hostMemoryPinManager,
-                                   UbHealthSummaryApplyHook ubHealthSummaryHook,
+                                   UbHealthSummaryObserveHook ubHealthSummaryHook,
                                    UbHealthSummaryApplyHook verifiedUbHealthSummaryHook,
                                    std::function<void()> ubHealthWakeHook,
                                    std::function<bool(const HostPort &)> ubPortHealthCapabilityCheck)
@@ -661,9 +661,10 @@ void DataPlaneManager::ObserveUbHealthSummary(const UbHealthSummary &summary)
         || !observedUbHealthSummaries_.Apply(summary, incarnation->second, accepted)) {
         return;
     }
+    bool admissionRecovered = false;
     if (ubHealthSummaryHook_) {
         try {
-            ubHealthSummaryHook_(accepted);
+            admissionRecovered = ubHealthSummaryHook_(accepted);
         } catch (const std::exception &error) {
             LOG(ERROR) << "Client passive UB health hook threw: " << error.what();
         } catch (...) {
@@ -673,8 +674,11 @@ void DataPlaneManager::ObserveUbHealthSummary(const UbHealthSummary &summary)
     if (!accepted.portHealth.has_value()) {
         return;
     }
-    const bool hinted = ubPortHealthVerifier_.NotifySummaryHint(
-        accepted, static_cast<uint64_t>(GetSteadyClockTimeStampMs()));
+    const bool recovered = admissionRecovered && ubPortHealthVerifier_.AcceptPassiveRecovery(accepted);
+    const bool hinted = recovered
+                            ? false
+                            : ubPortHealthVerifier_.NotifySummaryHint(
+                                accepted, static_cast<uint64_t>(GetSteadyClockTimeStampMs()));
     if (ShouldIsolateForUbPortHealth(*accepted.portHealth)) {
         const bool requested = RequestUbPortHealthVerification(accepted.worker);
         if (hinted && !requested && ubHealthWakeHook_) {

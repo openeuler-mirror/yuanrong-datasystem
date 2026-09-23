@@ -19,6 +19,7 @@
 #define DATASYSTEM_CLIENT_ROUTING_WORKER_UB_HEALTH_REGISTRY_H
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -34,6 +35,8 @@ namespace datasystem::client {
 
 class WorkerUbHealthRegistry : public IUbPortHealthObserver {
 public:
+    using PassiveRecoveryCommit = std::function<bool(const UbHealthSummary &)>;
+
     WorkerUbHealthRegistry();
     ~WorkerUbHealthRegistry() override = default;
 
@@ -42,6 +45,8 @@ public:
 
     void ReconcileTopology(const ::datasystem::ClusterTopologyPb &topology);
     bool ApplySummary(const UbHealthSummary &summary, const std::string &expectedIncarnation);
+    bool ApplySummary(const UbHealthSummary &summary, const std::string &expectedIncarnation,
+                      const PassiveRecoveryCommit &recoveryCommit, bool &recovered);
     bool ApplyVerifiedSummary(const UbHealthSummary &summary, const std::string &expectedIncarnation);
     bool ApplyLocalClientPortHealth(const UbPortHealthSummary &portHealth);
     void OnUbPortHealthChanged(const UbPortHealthSummary &portHealth) override;
@@ -52,6 +57,10 @@ public:
 
 private:
     enum class ApplyResult { REJECTED, ACCEPTED, UPDATED };
+    struct ApplyOutcome {
+        ApplyResult result = ApplyResult::REJECTED;
+        bool recovered = false;
+    };
     struct WorkerState;
     struct State;
 
@@ -62,9 +71,9 @@ private:
                                        const HostPort &worker,
                                        const ::datasystem::MembershipPb &member,
                                        State &next, WorkerState &workers) const;
-    ApplyResult ApplySummaryInternal(const UbHealthSummary &summary,
-                                     const std::string &expectedIncarnation,
-                                     bool verified, const char *source);
+    ApplyOutcome ApplySummaryInternal(const UbHealthSummary &summary,
+                                      const std::string &expectedIncarnation,
+                                      bool verified, const PassiveRecoveryCommit &recoveryCommit = {});
     bool ResolveExpectedIncarnationLocked(const State &current, const HostPort &worker,
                                           const std::string &fallback, std::string &expected) const;
 

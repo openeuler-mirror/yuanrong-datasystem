@@ -327,6 +327,54 @@ TEST(RemoteUbPortHealthVerifierTest, PassiveHintAndPeerRecoveryPreserveIndepende
     EXPECT_EQ(verifier.NextQueryDeadlineMs(), 17'020u);
 }
 
+TEST(RemoteUbPortHealthVerifierTest, SameEpochConfirmedPassiveRecoveryCancelsIsolationRetry)
+{
+    RemoteUbPortHealthVerifier verifier(12345, 17'000, 17'000);
+    ASSERT_TRUE(verifier.RequestVerification(WORKER, INCARNATION, 0));
+    auto ticket = verifier.TryBeginDue(0);
+    ASSERT_TRUE(ticket.has_value());
+    verifier.Complete(*ticket, Summary(4, 4, 1), Status::OK(), 10);
+    ASSERT_TRUE(verifier.NextQueryDeadlineMs().has_value());
+
+    EXPECT_FALSE(verifier.AcceptPassiveRecovery(Summary(4, 3, 1)));
+    auto pending = Summary(4, 3, 2, true);
+    EXPECT_FALSE(verifier.AcceptPassiveRecovery(pending));
+    EXPECT_FALSE(verifier.NotifySummaryHint(pending, 20));
+    EXPECT_TRUE(verifier.AcceptPassiveRecovery(Summary(4, 3, 2)));
+    EXPECT_FALSE(verifier.NextQueryDeadlineMs().has_value());
+}
+
+TEST(RemoteUbPortHealthVerifierTest, SameEpochConflictingPassiveRecoveryKeepsIsolationRetry)
+{
+    RemoteUbPortHealthVerifier verifier(12345, 17'000, 17'000);
+    ASSERT_TRUE(verifier.RequestVerification(WORKER, INCARNATION, 0));
+    auto ticket = verifier.TryBeginDue(0);
+    ASSERT_TRUE(ticket.has_value());
+    verifier.Complete(*ticket, Summary(4, 4, 1), Status::OK(), 10);
+
+    auto pending = Summary(4, 3, 2, true);
+    EXPECT_FALSE(verifier.NotifySummaryHint(pending, 20));
+    EXPECT_FALSE(verifier.AcceptPassiveRecovery(Summary(4, 2, 2)));
+    EXPECT_EQ(verifier.NextQueryDeadlineMs(), 17'010u);
+}
+
+TEST(RemoteUbPortHealthVerifierTest, PassiveRecoveryFencesOlderInFlightQuery)
+{
+    RemoteUbPortHealthVerifier verifier(12345, 1'000, 1'000);
+    ASSERT_TRUE(verifier.RequestVerification(WORKER, INCARNATION, 0));
+    auto isolation = verifier.TryBeginDue(0);
+    ASSERT_TRUE(isolation.has_value());
+    verifier.Complete(*isolation, Summary(4, 4, 1), Status::OK(), 10);
+    auto retry = verifier.TryBeginDue(1'010);
+    ASSERT_TRUE(retry.has_value());
+
+    EXPECT_TRUE(verifier.AcceptPassiveRecovery(Summary(4, 0, 2)));
+    auto completion = verifier.Complete(*retry, std::nullopt, Status(K_NOT_SUPPORTED, "old Worker"), 1'020);
+    EXPECT_FALSE(completion.evidenceAccepted);
+    EXPECT_FALSE(completion.retryScheduled);
+    EXPECT_FALSE(verifier.NextQueryDeadlineMs().has_value());
+}
+
 TEST(RemoteUbPortHealthVerifierTest, RandomBoundsAndUnsupportedBackoffRemainExact)
 {
     for (const auto delay : { UB_REMOTE_PORT_HEALTH_RETRY_MIN_MS, UB_REMOTE_PORT_HEALTH_RETRY_MAX_MS }) {

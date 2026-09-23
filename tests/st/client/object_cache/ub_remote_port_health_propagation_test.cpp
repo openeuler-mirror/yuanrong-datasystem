@@ -130,8 +130,11 @@ TEST_F(UbPortHealthRpcPropagationTest, UserCtlPortMatrixTravelsThroughRpcToWorke
                                                "call(4," + std::to_string(bad) + ")"));
         UbHealthSummary summary;
         DS_ASSERT_OK(WaitForPorts(incarnation, bad, summary));
-        (void)filter->ObserveSummary(summary, incarnation);
-        EXPECT_EQ(filter->IsAvailable(worker_, client::WorkerAccessAction::CONTROL), !previouslyIsolated);
+        bool recovered = false;
+        (void)filter->ObserveSummary(summary, incarnation, recovered);
+        EXPECT_EQ(recovered, previouslyIsolated && bad < 4);
+        EXPECT_EQ(filter->IsAvailable(worker_, client::WorkerAccessAction::CONTROL),
+                  !previouslyIsolated || recovered);
         ASSERT_TRUE(filter->ApplySummary(summary, incarnation));
         auto snapshot = router.GetUbRoutingHealthSnapshot();
         ASSERT_NE(snapshot->workers.find(worker_), snapshot->workers.end());

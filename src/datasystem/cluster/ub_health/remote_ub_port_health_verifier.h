@@ -55,6 +55,7 @@ public:
     RemoteUbQueryCompletion Complete(const RemoteUbQueryTicket &ticket,
                                      const std::optional<UbHealthSummary> &summary,
                                      const Status &queryStatus, uint64_t nowMs);
+    bool AcceptPassiveRecovery(const UbHealthSummary &summary);
     bool NotifySummaryHint(const UbHealthSummary &summary, uint64_t nowMs);
     void ReconcileTopology(const std::unordered_map<HostPort, std::string> &incarnations);
     std::optional<uint64_t> NextQueryDeadlineMs() const;
