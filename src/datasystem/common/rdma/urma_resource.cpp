@@ -55,6 +55,7 @@ DS_DECLARE_uint32(urma_send_lane_count_per_peer);
 DS_DECLARE_uint32(urma_send_jetty_lane_refill_extra_size);
 
 namespace datasystem {
+constexpr int FAILURE_LOG_RATE = 100;
 namespace {
 constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 constexpr const char *URMA_ERROR_SUGGEST = "check URMA";
@@ -1302,7 +1303,7 @@ void UrmaResource::ScheduleTimedOutSendLane(const std::shared_ptr<UrmaSendLaneLe
     if (!laneLease->TryMarkTimedOut(std::move(timeoutInfo))) {
         return;
     }
-    LOG(WARNING) << "[URMA_SEND_LANE_TIMEOUT_OBSERVED] [urma_request_id:" << requestId
+    LOG_FIRST_AND_EVERY_N(WARNING, FAILURE_LOG_RATE) << "[URMA_SEND_LANE_TIMEOUT_OBSERVED] [urma_request_id:" << requestId
                  << "] jettyId=" << jetty->GetJettyId()
                  << ", floor_urma_request_id=" << laneLease->GetRequestIdFloor()
                  << ", pendingWrs=" << laneLease->GetPendingWrCount() << ", sealed=" << laneLease->IsSealed()

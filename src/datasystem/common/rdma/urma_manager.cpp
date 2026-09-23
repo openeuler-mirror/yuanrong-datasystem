@@ -75,6 +75,7 @@ DS_DECLARE_uint32(urma_perf_interval_ms);
 DS_DECLARE_bool(enable_urma_perf);
 
 namespace datasystem {
+constexpr int FAILURE_LOG_RATE = 100;
 namespace {
 constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 constexpr uint32_t K_URMA_ERROR_LOG_EVERY_N = 100;
@@ -1725,7 +1726,8 @@ Status UrmaManager::CreateUrmaWaitTimeoutStatus(uint64_t requestId, const std::s
         requestId, elapsedMs, srcAddress.c_str(), event->GetRemoteAddress().c_str(),
         event->GetRemoteInstanceId().c_str(), static_cast<size_t>(event->GetDataSize()),
         UrmaEvent::OperationTypeName(event->GetOperationType()), reason.c_str());
-    LOG(WARNING) << message;
+    // Message also propagates inside the returned Status; keep a throttled full-detail record here.
+    LOG_FIRST_AND_EVERY_N(WARNING, FAILURE_LOG_RATE) << message;
     return Status(K_URMA_WAIT_TIMEOUT, message);
 }
 
@@ -2006,7 +2008,7 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
             VLOG(1) << "[URMA_POLL_JFC] [urma_request_id:" << userCtx << "] Got event";
             successCompletedReqs.insert(userCtx);
         } else {
-            LOG(ERROR) << FormatString(
+            LOG_FIRST_AND_EVERY_N(ERROR, FAILURE_LOG_RATE) << FormatString(
                 "[URMA_POLL_JFC]: [urma_request_id:%zu] urma_poll_jfc return failed completion record, "
                 "CR.status: %d, port_id: %u",
                 userCtx, crStatus, portId);
@@ -2605,15 +2607,17 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
             const auto srcAddress = localUrmaInfo_.localAddress.ToString();
             const auto remoteInstanceId =
                 args.connection == nullptr ? "" : args.connection->GetUrmaJfrInfo().uniqueInstanceId.c_str();
-            RETURN_STATUS_LOG_ERROR(
-                K_URMA_ERROR, FormatString("[URMA_WRITE]: [urma_request_id:%zu] call urma_post_jetty_send_wr failed, "
-                                           "ret: %d, srcAddress=%s, targetAddress=%s, remoteInstanceId=%s, "
-                                           "dataSize=%zu, srcChipId=%u, dstChipId=%u, useNumaAffinity=%s, "
-                                           "suggest: %s",
-                                           key, ret, srcAddress.c_str(), args.remoteAddress.c_str(), remoteInstanceId,
-                                           static_cast<size_t>(writeSize), static_cast<uint32_t>(srcChipId),
-                                           static_cast<uint32_t>(args.dstChipId), useNumaAffinity ? "true" : "false",
-                                           URMA_ERROR_SUGGEST));
+            // Failure storms repeat per WR; the returned Status still reaches every caller, so only
+            // the 1st and every 100th occurrence is logged here.
+            const std::string writeErrMsg = FormatString(
+                "[URMA_WRITE]: [urma_request_id:%zu] call urma_post_jetty_send_wr failed, "
+                "ret: %d, srcAddress=%s, targetAddress=%s, remoteInstanceId=%s, "
+                "dataSize=%zu, srcChipId=%u, dstChipId=%u, useNumaAffinity=%s, suggest: %s",
+                key, ret, srcAddress.c_str(), args.remoteAddress.c_str(), remoteInstanceId,
+                static_cast<size_t>(writeSize), static_cast<uint32_t>(srcChipId),
+                static_cast<uint32_t>(args.dstChipId), useNumaAffinity ? "true" : "false", URMA_ERROR_SUGGEST);
+            LOG_FIRST_AND_EVERY_N(ERROR, FAILURE_LOG_RATE) << writeErrMsg;
+            return Status(K_URMA_ERROR, std::move(writeErrMsg));
         }
         event->SetPostSrcChipInflight(GetSrcChipInflightWrCountsString());
         t.Stop();
@@ -2948,12 +2952,13 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
             DeleteEvent(key);
             cleanupSubmittedEvents();
             const auto srcAddress = localUrmaInfo_.localAddress.ToString();
-            RETURN_STATUS_LOG_ERROR(
-                K_URMA_ERROR, FormatString("[URMA_READ]: [urma_request_id:%zu] call urma_post_jetty_send_wr failed, "
-                                           "ret: %d, srcAddress=%s, targetAddress=%s, dataSize=%zu, "
-                                           "suggest: %s",
-                                           key, ret, srcAddress.c_str(), remoteAddress.c_str(),
-                                           static_cast<size_t>(readSize), URMA_ERROR_SUGGEST));
+            const std::string readErrMsg = FormatString(
+                "[URMA_READ]: [urma_request_id:%zu] call urma_post_jetty_send_wr failed, "
+                "ret: %d, srcAddress=%s, targetAddress=%s, dataSize=%zu, suggest: %s",
+                key, ret, srcAddress.c_str(), remoteAddress.c_str(), static_cast<size_t>(readSize),
+                URMA_ERROR_SUGGEST);
+            LOG_FIRST_AND_EVERY_N(ERROR, FAILURE_LOG_RATE) << readErrMsg;
+            return Status(K_URMA_ERROR, std::move(readErrMsg));
         }
 
         remainSize -= readSize;
