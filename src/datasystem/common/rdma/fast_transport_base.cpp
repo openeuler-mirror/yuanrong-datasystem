@@ -33,6 +33,7 @@
 #endif
 
 namespace datasystem {
+constexpr int FAILURE_LOG_RATE = 100;
 Status RegisterFastTransportMemory(void *segAddress, const uint64_t &segSize)
 {
     (void)segAddress;
@@ -216,7 +217,10 @@ Status WaitFastTransportEventWithFailure(std::vector<uint64_t> &keys, std::funct
                 firstError = errorHandler(rc);
             }
         }
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(firstError, "Failed to wait for URMA event.");
+        if (firstError.IsError()) {
+            LOG_FIRST_AND_EVERY_N(ERROR, FAILURE_LOG_RATE) << "Failed to wait for URMA event. Detail: " << firstError;
+            return firstError;
+        }
     }
 #endif
 

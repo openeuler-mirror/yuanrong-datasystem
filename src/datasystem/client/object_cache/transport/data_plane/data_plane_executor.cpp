@@ -30,6 +30,7 @@
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
+constexpr int FAILURE_LOG_RATE = 100;
 namespace client {
 namespace {
 constexpr size_t INITIAL_ATTEMPT = 1;
@@ -77,7 +78,8 @@ void LogDataPlaneOperation(const HostPort &workerAddr, TransportHint hint, size_
                            bool terminalFailure)
 {
     if (status.IsError() && terminalFailure) {
-        LOG(ERROR) << "[TransportGet][DataPlane] Operation failed, worker: " << workerAddr.ToString()
+        LOG_FIRST_AND_EVERY_N(ERROR, FAILURE_LOG_RATE)
+            << "[TransportGet][DataPlane] Operation failed, worker: " << workerAddr.ToString()
                    << ", transport: " << TransportHintName(hint) << ", attempt: " << attempt
                    << ", status: " << status.ToString();
     } else {
