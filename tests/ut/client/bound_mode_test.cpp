@@ -280,7 +280,8 @@ TEST_F(BoundModeTest, ProviderCqe4AndClientCqe9UseUnifiedProbeEntry)
     summary.worker = provider;
     summary.incarnation = "incarnation-a";
     summary.portHealth = UbPortHealthSummary{ true, 4, 0, 1, false };
-    ASSERT_TRUE(filter->ObserveSummary(summary, summary.incarnation));
+    bool recovered = false;
+    ASSERT_TRUE(filter->ObserveSummary(summary, summary.incarnation, recovered));
     client::TransportLayerOptions options;
     options.initializeUbRuntime = false;
     options.readSourceFilter = filter;

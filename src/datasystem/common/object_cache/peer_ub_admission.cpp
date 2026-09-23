@@ -134,11 +134,38 @@ struct PortHealthApplyResult {
     std::optional<uint32_t> previousBadPortCount;
 };
 
+bool IsApplicablePassiveRecovery(UbPortHealthEvidenceSource source, const UbPathState *state,
+                                 const UbPortHealthSummary &summary)
+{
+    return source != UbPortHealthEvidenceSource::PASSIVE_RECOVERY
+           || (state != nullptr && state->portHealthGoverned && state->state == UbAdmissionState::UNAVAILABLE
+               && state->portHealth.has_value() && CanApplyPassiveUbRecovery(*state->portHealth, summary));
+}
+
+bool CanApplyPortHealthUpdate(const UbPathState &state, const UbPortHealthSummary &summary,
+                              UbAdmissionState nextState)
+{
+    if (!state.portHealth.has_value()) {
+        return true;
+    }
+    const auto &previous = *state.portHealth;
+    if (summary.healthEpoch != previous.healthEpoch) {
+        return summary.healthEpoch > previous.healthEpoch;
+    }
+    const bool sameCounts = summary.valid == previous.valid && summary.totalPortCount == previous.totalPortCount
+                            && summary.badPortCount == previous.badPortCount;
+    return sameCounts && (summary.verificationPending != previous.verificationPending
+                          || (!summary.verificationPending && state.state != nextState));
+}
+
 void LogPortHealthApply(const HostPort &subject, const UbPortHealthSummary &summary,
                         UbPortHealthEvidenceSource source, const PortHealthApplyResult &result)
 {
-    const char *sourceName = source == UbPortHealthEvidenceSource::QUERY_RESPONSE ? "query_response"
-                                                                                   : "local_snapshot";
+    const char *sourceName = source == UbPortHealthEvidenceSource::QUERY_RESPONSE
+                                 ? "query_response"
+                                 : (source == UbPortHealthEvidenceSource::PASSIVE_RECOVERY
+                                        ? "passive_recovery"
+                                        : "local_snapshot");
     if (result.isolatedTransition) {
         LOG(WARNING) << "UB admission marked peer UNAVAILABLE, peer=" << subject.ToString()
                      << ", previous_state=" << static_cast<int>(result.previousState)
@@ -344,10 +371,7 @@ bool PeerUbAdmission::IsApplicablePortHealth(const HostPort &subject, const UbPo
     if (selfSubject && !UsesVerifiedPortHealth()) {
         return false;
     }
-    if (!selfSubject && source != UbPortHealthEvidenceSource::QUERY_RESPONSE) {
-        return false;
-    }
-    if (summary.verificationPending && !selfSubject) {
+    if (!selfSubject && !CanUpdateRemoteUbAdmission(source, summary)) {
         return false;
     }
     return true;
@@ -362,7 +386,12 @@ bool PeerUbAdmission::ApplyPortHealth(const HostPort &subject, const UbPortHealt
     PortHealthApplyResult result;
     {
         bthread::RWLockWrGuard lock(mutex_);
-        auto &state = states_[subject];
+        auto stateIter = states_.find(subject);
+        const auto *current = stateIter == states_.end() ? nullptr : &stateIter->second;
+        if (!IsApplicablePassiveRecovery(source, current, summary)) {
+            return false;
+        }
+        auto &state = stateIter == states_.end() ? states_[subject] : stateIter->second;
         const auto nextState = summary.badPortCount == summary.totalPortCount ? UbAdmissionState::UNAVAILABLE
                                                                                : UbAdmissionState::AVAILABLE;
         const auto previousState = state.state;
@@ -370,21 +399,8 @@ bool PeerUbAdmission::ApplyPortHealth(const HostPort &subject, const UbPortHealt
         if (state.portHealth.has_value()) {
             result.previousBadPortCount = state.portHealth->badPortCount;
         }
-        if (state.portHealth.has_value()) {
-            if (summary.healthEpoch < state.portHealth->healthEpoch) {
-                return false;
-            }
-            if (summary.healthEpoch == state.portHealth->healthEpoch) {
-                const auto &previous = *state.portHealth;
-                const bool sameCounts = summary.valid == previous.valid
-                                        && summary.totalPortCount == previous.totalPortCount
-                                        && summary.badPortCount == previous.badPortCount;
-                if (!sameCounts
-                    || (summary.verificationPending == previous.verificationPending
-                        && (summary.verificationPending || state.state == nextState))) {
-                    return false;
-                }
-            }
+        if (!CanApplyPortHealthUpdate(state, summary, nextState)) {
+            return false;
         }
         if (summary.verificationPending) {
             state.portHealth = summary;

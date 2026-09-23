@@ -71,6 +71,14 @@ std::optional<bool> GetVerifiedUnavailable(const UbHealthSummary &summary, bool 
     }
     return std::nullopt;
 }
+
+bool IsPassiveRecoveryCandidate(bool verified, bool currentlyVerified, const UbHealthSummary *previous,
+                                const UbHealthSummary &summary, const UbHealthSummary &accepted)
+{
+    return !verified && currentlyVerified && previous != nullptr && previous->portHealth.has_value()
+           && summary.portHealth.has_value() && IsSameUbPortHealth(summary.portHealth, accepted.portHealth)
+           && CanApplyPassiveUbRecovery(*previous->portHealth, *summary.portHealth);
+}
 }  // namespace
 
 struct WorkerUbHealthRegistry::WorkerState {
@@ -154,42 +162,60 @@ void WorkerUbHealthRegistry::ReconcileTopologyMemberLocked(
 
 bool WorkerUbHealthRegistry::ApplySummary(const UbHealthSummary &summary, const std::string &expectedIncarnation)
 {
-    return ApplySummaryInternal(summary, expectedIncarnation, false, "rpc_response") == ApplyResult::UPDATED;
+    return ApplySummaryInternal(summary, expectedIncarnation, false).result == ApplyResult::UPDATED;
+}
+
+bool WorkerUbHealthRegistry::ApplySummary(const UbHealthSummary &summary,
+                                          const std::string &expectedIncarnation,
+                                          const PassiveRecoveryCommit &recoveryCommit, bool &recovered)
+{
+    const auto outcome = ApplySummaryInternal(summary, expectedIncarnation, false, recoveryCommit);
+    recovered = outcome.recovered;
+    return outcome.result == ApplyResult::UPDATED;
 }
 
 bool WorkerUbHealthRegistry::ApplyVerifiedSummary(const UbHealthSummary &summary,
                                                   const std::string &expectedIncarnation)
 {
-    return ApplySummaryInternal(summary, expectedIncarnation, true, "query_response") != ApplyResult::REJECTED;
+    return ApplySummaryInternal(summary, expectedIncarnation, true).result != ApplyResult::REJECTED;
 }
 
-WorkerUbHealthRegistry::ApplyResult WorkerUbHealthRegistry::ApplySummaryInternal(
+WorkerUbHealthRegistry::ApplyOutcome WorkerUbHealthRegistry::ApplySummaryInternal(
     const UbHealthSummary &summary, const std::string &expectedIncarnation, bool verified,
-    const char *source)
+    const PassiveRecoveryCommit &recoveryCommit)
 {
     std::shared_ptr<const State> current;
     std::unique_lock<bthread::Mutex> lock(writeMutex_);
     current = std::atomic_load(&state_);
     std::string expected;
     if (!ResolveExpectedIncarnationLocked(*current, summary.worker, expectedIncarnation, expected)) {
-        return ApplyResult::REJECTED;
+        return {};
     }
     UbHealthSummary accepted;
     if (!current->workers->health.Prepare(summary, expected, accepted)) {
-        return ApplyResult::REJECTED;
+        return {};
     }
+    const auto *previous = current->workers->health.Find(summary.worker);
     const bool evidenceAccepted = !verified || !summary.portHealth.has_value()
                                   || IsSameUbPortHealth(summary.portHealth, accepted.portHealth);
-    const auto *previous = current->workers->health.Find(summary.worker);
     const bool summaryChanged = previous == nullptr || !IsSameUbHealthSummary(*previous, accepted);
-    const auto unavailable = GetVerifiedUnavailable(accepted, verified && evidenceAccepted);
     auto marked = current->workers->verifiedUnavailable.find(summary.worker);
     const bool identityChanged = marked != current->workers->verifiedUnavailable.end()
                                  && marked->second != summary.incarnation;
     const bool currentlyVerified = marked != current->workers->verifiedUnavailable.end() && !identityChanged;
+    const bool passiveRecoveryCandidate =
+        IsPassiveRecoveryCandidate(verified, currentlyVerified, previous, summary, accepted);
+    // Publish recovery only after the write admission accepts the same fact. A rejection keeps the previous
+    // isolation evidence intact so a later passive response can retry the complete transition.
+    if (passiveRecoveryCandidate && (!recoveryCommit || !recoveryCommit(accepted))) {
+        return {};
+    }
+    const bool passiveRecovery = passiveRecoveryCandidate;
+    const auto unavailable = passiveRecovery ? std::optional<bool>{ false }
+                                             : GetVerifiedUnavailable(accepted, verified && evidenceAccepted);
     if (!summaryChanged && !identityChanged
         && (!unavailable.has_value() || *unavailable == currentlyVerified)) {
-        return verified && evidenceAccepted ? ApplyResult::ACCEPTED : ApplyResult::REJECTED;
+        return { verified && evidenceAccepted ? ApplyResult::ACCEPTED : ApplyResult::REJECTED, false };
     }
     auto next = std::make_shared<State>(*current);
     auto workers = std::make_shared<WorkerState>(*current->workers);
@@ -206,8 +232,9 @@ WorkerUbHealthRegistry::ApplyResult WorkerUbHealthRegistry::ApplySummaryInternal
     next->workers = std::move(workers);
     std::atomic_store(&state_, std::shared_ptr<const State>(next));
     lock.unlock();
+    const char *source = passiveRecovery ? "passive_recovery" : (verified ? "query_response" : "rpc_response");
     LogRoutingChange(*current, *next, summary.worker, source);
-    return evidenceAccepted ? ApplyResult::UPDATED : ApplyResult::REJECTED;
+    return { evidenceAccepted ? ApplyResult::UPDATED : ApplyResult::REJECTED, passiveRecovery };
 }
 
 bool WorkerUbHealthRegistry::ResolveExpectedIncarnationLocked(const State &current, const HostPort &worker,

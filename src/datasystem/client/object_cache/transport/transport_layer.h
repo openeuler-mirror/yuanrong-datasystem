@@ -66,7 +66,7 @@ struct TransportLayerOptions {
     // A same-host endpoint remains usable through SHM when optional UB prewarming fails.
     bool allowUbRuntimeFailure = false;
     std::shared_ptr<UbHealthFilter> readSourceFilter;
-    UbHealthSummaryApplyHook ubHealthSummaryHook;
+    UbHealthSummaryObserveHook ubHealthSummaryHook;
     UbHealthSummaryApplyHook verifiedUbHealthSummaryHook;
     // Synchronous client-lifecycle admission checked around transport retry backoff.
     std::function<Status()> retryAdmissionCheck;
