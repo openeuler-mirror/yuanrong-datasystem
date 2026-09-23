@@ -49,7 +49,7 @@ public:
     bool ReportWriteTargetFailure(const HostPort &worker, const Status &status,
                                   std::optional<int> providerStatus, std::optional<int> cqeStatus);
     uint64_t CaptureWriteTargetCompletionGeneration(const HostPort &worker);
-    void ReportLateWriteTargetFailure(const UrmaLateCompletion &completion, uint64_t peerToken) noexcept;
+    bool IsWriteTargetCompletionCurrent(const HostPort &worker, uint64_t peerToken) const;
     bool IsAvailable(const HostPort &addr, WorkerAccessAction action) const override;
     bool IsWriteTargetAvailable(const HostPort &addr) const;
     bool SupportsPortHealthVerification(const HostPort &addr) const;

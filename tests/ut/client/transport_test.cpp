@@ -68,6 +68,7 @@ extern char **environ;
 #include "datasystem/client/object_cache/transport/common/deadline_retry.h"
 #include "datasystem/client/object_cache/transport/data_plane/data_plane_executor.h"
 #include "datasystem/client/object_cache/transport/object_buffer_internal.h"
+#include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/client/object_cache/transport/object_read/object_read_flow.h"
 #include "datasystem/client/object_cache/transport/object_read/replica_reader.h"
 #include "datasystem/client/object_cache/transport/worker_snapshot.h"
@@ -4022,6 +4023,68 @@ TEST(ObjectMetadataClientTest, UbWriteFailureStatusDelaysOnlyAffectedInlineBuffe
     EXPECT_TRUE(results[1].status.IsOk());
     EXPECT_FALSE(results[0].inlineData.has_value());
     EXPECT_FALSE(results[1].inlineData.has_value());
+}
+
+TEST(ObjectMetadataClientTest, UbWriteFailureForwardsProviderDetailToSharedProbeHandler)
+{
+    ApiDeadlineGuard deadline(1000);
+    const auto provider = MakeAddress(41);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 32;
+    manager->queryAndGetHandler = [](const HostPort &, const QueryAndGetReqPb &request,
+                                     QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
+        EXPECT_TRUE(request.data_request().has_ub());
+        auto *failed = AddLocation(response, "failed", MakeAddress(51), 6);
+        failed->mutable_status()->set_error_code(K_URMA_ERROR);
+        auto *detail = failed->mutable_provider_ub_failure_detail();
+        FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider CQE4"), "client-endpoint",
+                                    MakeAddress(41).ToString(), std::nullopt,
+                                    URMA_PORT_UNAVAILABLE_STATUS, *detail);
+        return Status::OK();
+    };
+    size_t failureReports = 0;
+    ObjectMetadataClient metadata(
+        manager, std::make_shared<DeadlineRetry>(),
+        std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE), bufferProvider, 16, {},
+        [&](const HostPort &reportedProvider, const ProviderUbFailureDetailPb &detail) {
+            EXPECT_EQ(reportedProvider, provider);
+            EXPECT_EQ(detail.failure_side(), PROVIDER_LOCAL_UB_WRITE_FAILURE_SIDE);
+            ++failureReports;
+        });
+    auto results = MakeMetadataItems({ { 0, "failed", provider } });
+    auto batch = MakeMetadataBatch(results);
+
+    ASSERT_TRUE(metadata.QueryAndGet(provider, batch, nullptr).IsOk());
+    EXPECT_EQ(failureReports, 1U);
+}
+
+TEST(ObjectMetadataClientTest, UbFailureDetailWithoutHandlerReturnsError)
+{
+    ApiDeadlineGuard deadline(1000);
+    const auto provider = MakeAddress(41);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 32;
+    manager->queryAndGetHandler = [](const HostPort &, const QueryAndGetReqPb &request,
+                                     QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
+        EXPECT_TRUE(request.data_request().has_ub());
+        auto *failed = AddLocation(response, "failed", MakeAddress(51), 6);
+        failed->mutable_status()->set_error_code(K_URMA_ERROR);
+        auto *detail = failed->mutable_provider_ub_failure_detail();
+        FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider CQE4"), "client-endpoint",
+                                    MakeAddress(41).ToString(), std::nullopt,
+                                    URMA_PORT_UNAVAILABLE_STATUS, *detail);
+        return Status::OK();
+    };
+    ObjectMetadataClient metadata(manager, std::make_shared<DeadlineRetry>(),
+                                  std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE),
+                                  bufferProvider, 16);
+    auto results = MakeMetadataItems({ { 0, "failed", provider } });
+    auto batch = MakeMetadataBatch(results);
+
+    EXPECT_EQ(metadata.QueryAndGet(provider, batch, nullptr).GetCode(), K_RUNTIME_ERROR);
+    EXPECT_EQ(bufferProvider->delayReleaseCount, 1);
 }
 
 TEST(ObjectMetadataClientTest, UbWriteFailureStatusDelaysBufferBeforeReturningMetadataMiss)

@@ -923,6 +923,8 @@ private:
     void PruneRetainedTimeoutEvents(uint64_t nowMs);
     void ClearRetainedTimeoutEvents();
     static void DispatchLateCompletion(const std::shared_ptr<UrmaEvent> &event, int cqeStatus);
+    static void DispatchObservedCompletion(const std::shared_ptr<UrmaEvent> &event, int cqeStatus,
+                                           UrmaEvent::CompletionDisposition disposition, bool retained);
 
     /** @brief Build allocator callbacks for the client UB transport memory pool. */
     void BuildTransportRegFunc(AllocatorFuncRegister &regFunc);
