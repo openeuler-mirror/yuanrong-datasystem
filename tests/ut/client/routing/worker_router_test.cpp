@@ -488,7 +488,7 @@ TEST_F(RoutingTest, TestBrokenFilterIgnoresOtherWorkers)
     EXPECT_TRUE(filter.IsAvailable(b, client::WorkerAccessAction::CONTROL));  // b unaffected
 }
 
-TEST_F(RoutingTest, TestBrokenFilterClearsOnHashRingUpdate)
+TEST_F(RoutingTest, TestBrokenFilterKeepsConnectionIsolationOnHashRingUpdate)
 {
     client::BrokenFilter filter;
     HostPort addr("127.0.0.1", 1000);
@@ -497,7 +497,7 @@ TEST_F(RoutingTest, TestBrokenFilterClearsOnHashRingUpdate)
     EXPECT_FALSE(filter.IsAvailable(addr, client::WorkerAccessAction::CONTROL));
 
     filter.OnHashRingUpdated(*BuildRing());
-    EXPECT_TRUE(filter.IsAvailable(addr, client::WorkerAccessAction::CONTROL));
+    EXPECT_FALSE(filter.IsAvailable(addr, client::WorkerAccessAction::CONTROL));
 }
 
 TEST_F(RoutingTest, TestBrokenFilterConcurrentUpdatesAreNotLost)
@@ -704,6 +704,7 @@ TEST_F(RoutingTest, IsRoutingEvictionFailureExcludesTransientRetryableErrors)
     EXPECT_FALSE(IsRoutingEvictionFailure(Status(K_RPC_DEADLINE_EXCEEDED, "deadline")));
     EXPECT_FALSE(IsRoutingEvictionFailure(Status(K_RPC_NETWORK_BLIP, "blip")));
     EXPECT_FALSE(IsRoutingEvictionFailure(Status(K_RPC_UNAVAILABLE, "unavailable")));
+    EXPECT_FALSE(IsRoutingEvictionFailure(Status(K_METADATA_OWNER_UNAVAILABLE, "metadata owner unavailable")));
     EXPECT_FALSE(IsRoutingEvictionFailure(Status(K_URMA_WAIT_TIMEOUT, "urma wait")));
     EXPECT_FALSE(IsRoutingEvictionFailure(Status(K_URMA_NEED_CONNECT, "urma need connect")));
     EXPECT_FALSE(IsRoutingEvictionFailure(Status(K_RPC_CANCELLED, "cancelled")));

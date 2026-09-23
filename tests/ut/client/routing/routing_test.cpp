@@ -38,8 +38,8 @@
 
 namespace datasystem {
 namespace ut {
-// Matches BrokenFilter::EVICT_CONSECUTIVE_FAILURES (a worker is evicted only after this many
-// consecutive K_CLIENT_WORKER_DISCONNECT signals).
+// Matches BrokenFilter::EVICT_CONSECUTIVE_FAILURES for generic disconnect notifications.
+// K_RPC_PEER_DEAD bypasses this debounce threshold.
 constexpr int EVICTION_THRESHOLD = 100;
 namespace {
 bool WaitForCondition(const std::function<bool()> &predicate, std::chrono::milliseconds timeout)
@@ -402,6 +402,40 @@ TEST_F(RoutingFacadeTest, TestWorkerDisconnectForcesHashRingRefresh)
     EXPECT_TRUE(WaitForCondition([&fetchCount, beforeDisconnect] {
         return fetchCount.load(std::memory_order_acquire) > beforeDisconnect;
     }, std::chrono::seconds(2)));
+    routing.Shutdown();
+}
+
+TEST_F(RoutingFacadeTest, TestPeerDeadEvictsWithoutForcingHashRingRefresh)
+{
+    auto router = std::make_shared<client::WorkerRouter>("");
+    std::atomic<int> fetchCount{ 0 };
+    auto fetch = [&fetchCount](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+                               uint64_t &newVersion, bool &changed,
+                               std::unordered_map<std::string, std::string> &hostIdMap) {
+        const int current = fetchCount.fetch_add(1, std::memory_order_acq_rel) + 1;
+        FillRing(ring, hostIdMap);
+        newVersion = static_cast<uint64_t>(current);
+        changed = true;
+        return Status::OK();
+    };
+    auto refresher = std::make_shared<client::HashRingRefresher>(router, fetch);
+    client::Routing routing(router, refresher, 60'000);
+    const HostPort worker("127.0.0.1", 1000);
+    DS_ASSERT_OK(routing.Init("host-a", worker));
+    ASSERT_TRUE(WaitForCondition([&fetchCount] {
+        return fetchCount.load(std::memory_order_acquire) >= 2;
+    }, std::chrono::seconds(2)));
+    const int beforePeerDead = fetchCount.load(std::memory_order_acquire);
+
+    routing.UpdateState(worker, K_RPC_PEER_DEAD);
+
+    HostPort selected;
+    EXPECT_EQ(routing.SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                                   client::WorkerAccessAction::CONTROL, selected)
+                  .GetCode(),
+              K_NO_AVAILABLE_WORKER);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    EXPECT_EQ(fetchCount.load(std::memory_order_acquire), beforePeerDead);
     routing.Shutdown();
 }
 

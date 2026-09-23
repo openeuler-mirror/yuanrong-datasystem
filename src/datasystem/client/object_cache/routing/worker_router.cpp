@@ -34,6 +34,7 @@ namespace datasystem {
 namespace client {
 namespace {
 constexpr size_t DEFAULT_FILTER_COUNT = 2;
+constexpr size_t BROKEN_FILTER_INDEX = 1;
 constexpr size_t MAX_ROUTING_TOKENS = 640'000;
 }  // namespace
 
@@ -158,6 +159,12 @@ bool WorkerRouter::IsWorkerAvailable(const HostPort &addr, WorkerAccessAction ac
 {
     return std::all_of(filters_.begin(), filters_.end(),
         [&](const std::shared_ptr<IWorkerFilter> &f) { return f->IsAvailable(addr, action); });
+}
+
+bool WorkerRouter::IsWorkerConnectionBroken(const HostPort &addr) const
+{
+    return filters_.size() > BROKEN_FILTER_INDEX
+           && !filters_[BROKEN_FILTER_INDEX]->IsAvailable(addr, WorkerAccessAction::CONTROL);
 }
 
 bool WorkerRouter::IsExcluded(const HostPort &addr, const std::vector<HostPort> &exclude) const

@@ -118,6 +118,8 @@ public:
 
     std::vector<HostPort> GetAvailableWorkers() const;
 
+    bool IsWorkerConnectionBroken(const HostPort &addr) const;
+
     // The returned immutable snapshot remains valid independently of later health updates.
     std::shared_ptr<const UbRoutingHealthSnapshot> GetUbRoutingHealthSnapshot() const;
 

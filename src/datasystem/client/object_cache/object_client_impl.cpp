@@ -949,10 +949,14 @@ void ObjectClientImpl::HandleMetadataOwnerFailure(const HostPort &owner, const S
         return;
     }
     auto routing = std::atomic_load(&routing_);
-    if (routing == nullptr || !ShouldForceRefreshRouting(owner)) {
+    if (routing == nullptr) {
         return;
     }
-    if (routing->ForceRefresh()) {
+    const bool refreshed = ShouldForceRefreshRouting(owner) && routing->ForceRefresh();
+    if (IsRoutingEvictionFailure(status)) {
+        routing->UpdateState(owner, status.GetCode());
+    }
+    if (refreshed) {
         LOG(INFO) << "[Routing] Force hash ring refresh after metadata owner access failure, metadata owner: "
                   << owner.ToString() << ", status: " << status.ToString();
     }
@@ -2393,6 +2397,12 @@ Status ObjectClientImpl::PublishRoutedBuffer(const std::shared_ptr<ObjectBufferI
     setParam.isSeal = isSeal;
     setParam.subTimeoutMs = requestTimeoutMs_;
     auto setRc = transportLayer_->Set(*objBuf, setParam);
+    if (IsRoutingEvictionFailure(setRc)) {
+        auto routing = std::atomic_load(&routing_);
+        if (routing != nullptr) {
+            routing->UpdateState(bufferInfo->workerAddr, setRc.GetCode());
+        }
+    }
     if (setRc.GetCode() == K_SCALE_DOWN) {
         setRc = ReplayRoutedBuffer(bufferInfo, nestedObjectKeys, isSeal, setRc);
     }
@@ -2504,13 +2514,15 @@ Status ObjectClientImpl::SelectSetRouteWithoutHints(
     const std::string &objectKey, const std::vector<HostPort> &excludedWorkers, SetRouteContext &routeContext)
 {
     const auto effectiveExclusions = MergeWriteTargetExclusions(excludedWorkers);
+    auto routing = std::atomic_load(&routing_);
     SetRouteContext selected;
     if (enableLocalCache_) {
         RETURN_IF_NOT_OK(GetAvailableWorkerApi(selected.clientApi, selected.invokeGuard));
         selected.worker = selected.clientApi->hostPort_;
         const bool excludedForThisRequest =
             std::find(excludedWorkers.begin(), excludedWorkers.end(), selected.worker) != excludedWorkers.end();
-        if (!excludedForThisRequest) {
+        const bool connectionBroken = routing != nullptr && routing->IsWorkerConnectionBroken(selected.worker);
+        if (!excludedForThisRequest && !connectionBroken) {
             const bool ubWriteTargetQuarantined =
                 std::find(effectiveExclusions.begin(), effectiveExclusions.end(), selected.worker)
                 != effectiveExclusions.end();
@@ -2523,7 +2535,6 @@ Status ObjectClientImpl::SelectSetRouteWithoutHints(
         selected.invokeGuard.reset();
         selected.clientApi.reset();
     }
-    auto routing = std::atomic_load(&routing_);
     RETURN_RUNTIME_ERROR_IF_NULL(routing);
     HostPort worker;
     RETURN_IF_NOT_OK(routing->SelectWorker(objectKey, dataPlacementPolicy_, client::WorkerAccessAction::SET,
@@ -2631,10 +2642,10 @@ bool ObjectClientImpl::HandleSetRouteFailure(const Status &status, SetFailureSta
                                     || failureStage == SetFailureStage::PUBLISH);
     const bool publishNotSent = failureStage == SetFailureStage::PUBLISH
                                 && IsBrpcRequestDefinitelyNotSent(status);
-    // Global eviction (BrokenFilter, 3s TTL): only genuine peer failures (IsRoutingEvictionFailure)
-    // or K_NOT_READY. Transient errors still steer THIS request via retry/excludeWorker but must not
-    // evict globally (code=37, 083cc75bd4 regression).
-    if (IsRoutingEvictionFailure(status) || workerNotReady) {
+    if (IsRoutingEvictionFailure(status)) {
+        routing->UpdateState(worker, status.GetCode());
+    }
+    if (workerNotReady) {
         routing->UpdateState(worker, K_CLIENT_WORKER_DISCONNECT);
     }
     const bool retry = safeWriteTargetReplay
@@ -2705,6 +2716,12 @@ Status ObjectClientImpl::ExecuteCreateFlow(const std::string &objectKey, uint64_
         createParam.writeMode = param.writeMode;
         createParam.subTimeoutMs = requestTimeoutMs_;
         rc = transportLayer_->Create(routeContext.worker, objectKey, dataSize, std::move(createParam), buffer);
+        if (IsRoutingEvictionFailure(rc)) {
+            auto routing = std::atomic_load(&routing_);
+            if (routing != nullptr) {
+                routing->UpdateState(routeContext.worker, rc.GetCode());
+            }
+        }
         if (!ParseWorkerRedirectCandidates(rc, preferredWorkers)) {
             return rc;
         }
@@ -3956,6 +3973,12 @@ Status ObjectClientImpl::ProcessRoutedMSetGroup(const HostPort &worker,
     setParam.subTimeoutMs = requestTimeoutMs_;
     client::TransportMSetResult result;
     auto rc = transportLayer_->MSet(objBufs, setParam, result);
+    if (IsRoutingEvictionFailure(rc)) {
+        auto routing = std::atomic_load(&routing_);
+        if (routing != nullptr) {
+            routing->UpdateState(worker, rc.GetCode());
+        }
+    }
     if (rc.GetCode() == K_SCALE_DOWN) {
         return ReplayRoutedMSetGroup(infos, failedCount);
     }

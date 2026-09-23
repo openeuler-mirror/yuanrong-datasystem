@@ -22,6 +22,7 @@
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/util/memory.h"
+#include "datasystem/common/util/rpc_util.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -291,10 +292,13 @@ RoutedMode::RoutedMode(const Deps &deps, const HostServices &host)
 void RoutedMode::HandleDirectGetFailure(const std::shared_ptr<IClientWorkerApi> &workerApi,
                                         const Status &status)
 {
+    auto routing = std::atomic_load(&routing_);
+    if (routing != nullptr && IsRoutingEvictionFailure(status)) {
+        routing->UpdateState(workerApi->hostPort_, status.GetCode());
+    }
     if (!host_.shouldRefreshRoutingAfterFailure(status.GetCode())) {
         return;
     }
-    auto routing = std::atomic_load(&routing_);
     if (routing != nullptr && routing->ForceRefresh()) {
         LOG(INFO) << "[Routing] Force hash ring refresh after direct Get failure, worker: "
                   << workerApi->hostPort_.ToString() << ", status: " << status.ToString();
@@ -365,6 +369,10 @@ Status RoutedMode::MultiCreateRouted(const std::vector<std::string> &objectKeyLi
         }
         auto rc = ProcessRoutedMCreateGroup(entry.first, entry.second, sizes, param, keyIndex, bufferList);
         if (rc.IsError()) {
+            auto routing = std::atomic_load(&routing_);
+            if (routing != nullptr && IsRoutingEvictionFailure(rc)) {
+                routing->UpdateState(entry.first, rc.GetCode());
+            }
             releaseAllocated();
             bufferList.clear();
             return rc;

@@ -519,9 +519,24 @@ Status WorkerOcServicePublishImpl::RollbackPublishFailure(ObjectKV &objectKV, Ob
     objectKV.GetObjEntry()->stateInfo.SetCacheInvalid(true);
     if (newLifeState == ObjectLifeState::OBJECT_SEALED) {
         std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
-        RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApi(objectKey, workerMasterApi));
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApi->RollbackSeal(objectKey, static_cast<uint32_t>(oldLifeState)),
-                                         FormatString("RollbackSeal failed."));
+        auto rc = workerMasterApiManager_->GetWorkerMasterApi(objectKey, workerMasterApi);
+        if (rc.IsError()) {
+            const auto code = rc.GetCode();
+            if (code == K_RPC_PEER_DEAD || code == K_RPC_UNAVAILABLE || code == K_CLIENT_WORKER_DISCONNECT) {
+                return Status(K_METADATA_OWNER_UNAVAILABLE,
+                              FormatString("Resolve metadata owner for RollbackSeal failed. detail: %s", rc.ToString()))
+                    .WithExtra(rc.GetExtra());
+            }
+            return rc;
+        }
+        rc = workerMasterApi->RollbackSeal(objectKey, static_cast<uint32_t>(oldLifeState));
+        const auto extra = rc.GetExtra();
+        ObserveMetadataRpc(workerMasterApi, rc);
+        rc = TranslateMetadataOwnerRpcFailure(workerMasterApi, rc, true);
+        if (!extra.empty()) {
+            rc.WithExtra(extra);
+        }
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, FormatString("RollbackSeal failed."));
     }
     return Status::OK();
 }
