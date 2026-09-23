@@ -586,7 +586,7 @@ void WorkerRpcClient::ObserveUbHealthSummary(const UbHealthSummaryPb &encoded)
     auto rc = DecodeUbHealthSummary(encoded, summary);
     if (rc.IsError() || summary.worker != workerAddress_) {
         const auto reason = rc.IsError() ? rc.ToString() : "Worker endpoint mismatch";
-        LOG_FIRST_EVERY_N(WARNING, INVALID_UB_HEALTH_SIDECAR_LOG_EVERY_N)
+        LOG_EVERY_N(WARNING, INVALID_UB_HEALTH_SIDECAR_LOG_EVERY_N)
             << "Ignore invalid business UB health sidecar from " << workerAddress_.ToString() << ": " << reason;
         return;
     }
@@ -605,7 +605,7 @@ void WorkerRpcClient::ObserveUbHealthSummary(const UbHealthSummaryPb &encoded)
         if (current != nullptr) {
             UbHealthSummary merged;
             if (!MergeUbHealthSummary(current.get(), summary, merged)) {
-                LOG_FIRST_EVERY_N(WARNING, INVALID_UB_HEALTH_SIDECAR_LOG_EVERY_N)
+                LOG_EVERY_N(WARNING, INVALID_UB_HEALTH_SIDECAR_LOG_EVERY_N)
                     << "Ignore conflicting business UB health sidecar from " << workerAddress_.ToString()
                     << ": same health epoch carries different port counts";
                 return;

@@ -74,8 +74,7 @@ void DelayReleaseUbBufferIfNeeded(const std::shared_ptr<ShmUnit> &shmUnit, const
     if (!NeedDelayReleaseShmUnit(status)) {
         return;
     }
-    LOG_EVERY_T(WARNING, DELAY_RELEASE_LOG_INTERVAL_SEC)
-        << "[QUERY_AND_GET_DELAY_RELEASE_ADD] id=" << shmUnit->id
+    LOG(WARNING) << "[QUERY_AND_GET_DELAY_RELEASE_ADD] id=" << shmUnit->id
         << ", identity=" << shmUnit->GetIdentity() << ", bytes=" << shmUnit->size
         << ", delayMs=" << DEFAULT_SHM_DELAY_RELEASE_MS << ", reason=" << status;
     DelayedReleaseShmManager::Instance().Add(shmUnit, std::chrono::milliseconds(DEFAULT_SHM_DELAY_RELEASE_MS));

@@ -401,7 +401,7 @@ void UrmaManager::TriggerClientPortHealthQuery()
     if (monitor != nullptr) {
         monitor->TriggerRefresh();
     } else {
-        LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N)
+        LOG_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N)
             << "Ignored client-local CQE 4 because the UB port health monitor is unavailable";
     }
 }
@@ -410,7 +410,7 @@ Status UrmaManager::CheckClientPortHealthAdmission() const
 {
     const uint64_t state = clientPortHealthAdmissionState_.load(std::memory_order_acquire);
     if ((state & CLIENT_PORT_HEALTH_READY_MASK) == 0) {
-        LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N)
+        LOG_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N)
             << "Client-local UB port health admission is unavailable";
         return Status::OK();
     }
@@ -665,16 +665,16 @@ Status UrmaManager::RegisterUrmaLog()
         // (liburma URMA_PERF_THREAD_MAX_NUM). Flag it explicitly: otherwise the missing samples are
         // indistinguishable from "no traffic", and perf data from this process reads as complete.
         if (message != nullptr && strstr(message, "no available thread slot") != nullptr) {
-            LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N)
+            LOG_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N)
                 << "[URMA_PERF_INCOMPLETE] liburma ran out of perf thread slots: URMA latency instrumentation "
                    "is disabled for the affected threads, so URMA_ELAPSED/URMA_PERF data from this process is "
                    "partial. Original: " << message;
             return;
         }
         if (level <= (int)URMA_VLOG_LEVEL_ERR) {
-            LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N) << message;
+            LOG_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N) << message;
         } else if (level <= (int)URMA_VLOG_LEVEL_NOTICE) {
-            LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N) << message;
+            LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N) << message;
         } else if (level <= (int)URMA_VLOG_LEVEL_INFO) {
             VLOG(INFO) << message;
         } else if (level <= (int)URMA_VLOG_LEVEL_DEBUG) {
@@ -1135,7 +1135,7 @@ Status UrmaManager::ServerEventHandleThreadMain()
         Status rc = PollJfcWait(urmaResource_->GetJfc(), MAX_POLL_JFC_TRY_CNT, successCompletedReqs,
                                 failedCompletedReqs, pollTrace, FLAGS_urma_poll_size);
         if (rc.IsError() && rc.GetCode() != K_TRY_AGAIN) {
-            LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N)
+            LOG_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N)
                 << "[URMA_POLL_ERROR] PollJfcWait failed: " << rc.ToString()
                 << ", successCount=" << successCompletedReqs.size() << ", failedCount=" << failedCompletedReqs.size();
         }
@@ -1250,7 +1250,7 @@ void UrmaManager::RegisterRetainedTimeoutEvent(uint64_t requestId)
     }
     for (const auto eventId : evicted) {
         DeleteEvent(eventId);
-        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
             << "[URMA_RETAINED_EVENT_EVICTED] Evict oldest timed-out URMA Event, requestId=" << eventId
             << ", capacity=" << MAX_RETAINED_TIMEOUT_EVENTS;
     }
@@ -1294,7 +1294,7 @@ void UrmaManager::PruneRetainedTimeoutEvents(uint64_t nowMs)
     }
     for (const auto requestId : expired) {
         DeleteEvent(requestId);
-        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
             << "[URMA_RETAINED_EVENT_EXPIRED] Delete timed-out URMA Event without completion, requestId="
             << requestId << ", ttlMs=" << RETAINED_TIMEOUT_EVENT_TTL_MS;
     }
@@ -1567,7 +1567,7 @@ bool UrmaManager::ShouldLogSrcChipSelection(const SrcChipSelectionDecision &deci
 void UrmaManager::ObserveSrcChipSelection(const SrcChipSelectionDecision &decision)
 {
     if (ShouldLogSrcChipSelection(decision)) {
-        LOG_FIRST_AND_EVERY_N(INFO, K_URMA_WARNING_LOG_EVERY_N)
+        LOG_EVERY_N(INFO, K_URMA_WARNING_LOG_EVERY_N)
             << "[URMA_SRC_CHIP_BALANCE] override policy candidate " << static_cast<uint32_t>(decision.candidate)
             << " with chip " << static_cast<uint32_t>(decision.selected) << ", policy=" << decision.policy
             << ", chip1Inflight=" << decision.chip1Inflight << ", chip2Inflight=" << decision.chip2Inflight
@@ -1875,7 +1875,7 @@ Status UrmaManager::AcquireSendLaneFromConnection(const std::shared_ptr<UrmaConn
                              "srcAddress=%s, targetAddress=%s, remoteInstanceId=%s, cause=%s",
                              stats.poolSize, stats.idleCount, stats.inUseCount, srcAddress.c_str(),
                              targetAddress.c_str(), jfrInfo.uniqueInstanceId.c_str(), rc.ToString().c_str()));
-            LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_POOL_EXHAUSTED_LOG_EVERY_N) << backpressure.ToString();
+            LOG_EVERY_N(ERROR, K_URMA_POOL_EXHAUSTED_LOG_EVERY_N) << backpressure.ToString();
             return backpressure;
         }
         return rc;
@@ -1908,7 +1908,7 @@ Status UrmaManager::TryRecoverFailedJettyFromCompletion(uint64_t requestId, int 
 
     const auto activeRetireRc = urmaResource_->RetireActiveSendLane(jettyId);
     if (activeRetireRc.IsOk()) {
-        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
             << "[URMA_RECREATE_JETTY] [urma_request_id:" << requestId
             << "] Retired active lane from completion, jettyId=" << jettyId << ", cqeStatus=" << statusCode;
         return Status::OK();
@@ -1919,13 +1919,13 @@ Status UrmaManager::TryRecoverFailedJettyFromCompletion(uint64_t requestId, int 
     std::shared_ptr<UrmaJetty> failedJetty;
     auto lookupRc = urmaResource_->GetJettyById(jettyId, failedJetty);
     if (lookupRc.IsError() || failedJetty == nullptr) {
-        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
             << "[URMA_RECREATE_JETTY_SKIP] [urma_request_id:" << requestId << "] Completion Jetty " << jettyId
             << " is not found, cqeStatus=" << statusCode << ", rc=" << lookupRc.ToString();
         return Status::OK();
     }
 
-    LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+    LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
         << "[URMA_RECREATE_JETTY] [urma_request_id:" << requestId << "] Trigger from completion, jettyId=" << jettyId
         << ", cqeStatus=" << statusCode;
     return urmaResource_->RetireJetty(failedJetty);
@@ -1982,7 +1982,7 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
         } else {
             uint64_t requestIdFloor = 0;
             if (urmaResource_->IsStaleSendCompletion(jettyId, userCtx, requestIdFloor)) {
-                LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+                LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
                     << "[URMA_STALE_FATAL_CQE] [urma_request_id:" << userCtx
                     << "] A stale fatal CQE still invalidates the physical Jetty, jettyId=" << jettyId
                     << ", floor_urma_request_id=" << requestIdFloor << ", cqeStatus=" << crStatus;
@@ -3309,13 +3309,13 @@ void UrmaManager::ReleaseClientConnection(const std::string &address,
                                           const std::shared_ptr<UrmaConnection> &owner)
 {
     if (owner == nullptr) {
-        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
             << "Skip releasing URMA client connection with an empty owner, remoteAddress: " << address;
         return;
     }
     TbbUrmaConnectionMap::accessor accessor;
     if (!urmaConnectionMap_.find(accessor, address)) {
-        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
             << "Skip releasing URMA client connection absent from the map, remoteAddress: " << address;
         return;
     }
@@ -3324,7 +3324,7 @@ void UrmaManager::ReleaseClientConnection(const std::string &address,
         return;
     }
     if (owner->clientOwners_ == 0) {
-        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
             << "Skip releasing URMA client connection with zero retained owners, remoteAddress: " << address;
         return;
     }
@@ -3391,13 +3391,13 @@ Status UrmaManager::CheckUrmaConnectionStable(const std::string &hostAddress, co
         found = urmaConnectionMap_.find(constAccessor, fallbackAddress);
         resolvedByFallback = found;
         if (found) {
-            LOG_FIRST_AND_EVERY_N(INFO, K_URMA_WARNING_LOG_EVERY_N)
+            LOG_EVERY_N(INFO, K_URMA_WARNING_LOG_EVERY_N)
                 << "[URMA] Connection resolved by fallback address, connection key: " << hostAddress
                 << ", fallback: " << fallbackAddress;
         }
     }
     if (!found) {
-        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
             << "[URMA_NEED_CONNECT] No existing connection for remoteAddress: " << hostAddress
             << ", fallbackAddress: " << (fallbackAddress.empty() ? "NONE" : fallbackAddress)
             << ", remoteInstanceId=" << (instanceId.empty() ? "UNKNOWN" : instanceId) << ", requires creation.";
@@ -3417,7 +3417,7 @@ Status UrmaManager::CheckUrmaConnectionStable(const std::string &hostAddress, co
             CHECK_FAIL_RETURN_STATUS(resolvedByFallback || constAccessor->second->CanReconnect(), K_URMA_TRY_AGAIN,
                                      "Peer circuit-broken; reconnect cooldown has not elapsed");
         }
-        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
             << "[URMA_NEED_CONNECT] Connection circuit-broken for remoteAddress: " << hostAddress
             << ", remoteInstanceId=" << (instanceId.empty() ? "UNKNOWN" : instanceId) << ", need reconnect.";
         RETURN_STATUS(K_URMA_NEED_CONNECT, "Urma connection is circuit-broken and needs to be reconnected!");
@@ -3425,7 +3425,7 @@ Status UrmaManager::CheckUrmaConnectionStable(const std::string &hostAddress, co
     if (!instanceId.empty()) {
         const auto &cachedInstanceId = constAccessor->second->GetUrmaJfrInfo().uniqueInstanceId;
         if (cachedInstanceId != instanceId) {
-            LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+            LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
                 << "[URMA_NEED_CONNECT] Connection stale for remoteAddress: " << hostAddress
                 << ", cachedRemoteInstanceId=" << cachedInstanceId << ", requestRemoteInstanceId=" << instanceId
                 << ", need reconnect.";
@@ -3433,7 +3433,7 @@ Status UrmaManager::CheckUrmaConnectionStable(const std::string &hostAddress, co
         }
         return Status::OK();
     }
-    LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+    LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
         << "[URMA_NEED_CONNECT] Connection unstable for remoteAddress: " << hostAddress
         << ", remoteInstanceId=UNKNOWN, need to reconnect.";
     RETURN_STATUS(K_URMA_NEED_CONNECT, "Urma connect unstable, need to reconnect!");

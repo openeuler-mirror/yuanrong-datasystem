@@ -204,8 +204,8 @@ Status MasterOCServiceImpl::CreateMeta(const CreateMetaReqPb &req, CreateMetaRsp
         Trace::Instance().AddLatencyTick(LatencyTickKey::META_CREATE_META_START);
     }
     const std::string localAddr = GetLocalAddr().ToString();
-    LOG_FIRST_AND_EVERY_N(INFO, 1000) << FormatString("Processing CreateMetaReq, redirect: %d", req.redirect())
-                                      << AppendSrcDstForLog(req.address(), localAddr);
+    LOG(INFO) << FormatString("Processing CreateMetaReq, redirect: %d", req.redirect())
+        << AppendSrcDstForLog(req.address(), localAddr);
 
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
@@ -273,8 +273,8 @@ Status MasterOCServiceImpl::CreateCopyMeta(const CreateCopyMetaReqPb &req, Creat
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     PerfPoint point(PerfKey::MASTER_CREATE_COPY_META);
     const std::string localAddr = GetLocalAddr().ToString();
-    LOG_FIRST_AND_EVERY_N(INFO, 1000) << FormatString("Processing CreateCopyMetaReq, redirect: %d", req.redirect())
-                                      << AppendSrcDstForLog(req.address(), localAddr);
+    LOG(INFO) << FormatString("Processing CreateCopyMetaReq, redirect: %d", req.redirect())
+        << AppendSrcDstForLog(req.address(), localAddr);
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
@@ -288,7 +288,7 @@ Status MasterOCServiceImpl::CreateCopyMeta(const CreateCopyMetaReqPb &req, Creat
             LOG(ERROR) << FormatString("CreateCopyMeta failed: %s", status.ToString());
         }
     } else {
-        LOG_FIRST_AND_EVERY_N(INFO, 1000) << "CreateCopyMeta success";
+        LOG(INFO) << "CreateCopyMeta success";
         INJECT_POINT("MasterOCServiceImpl.CreateCopyMeta.idempotence");
     }
     VLOG(1) << FormatString("Master %s CreateCopyMeta rsp: %s", GetLocalAddr().ToString(),

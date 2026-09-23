@@ -94,7 +94,6 @@ namespace datasystem {
 namespace object_cache {
 
 static constexpr int DEBUG_LOG_LEVEL = 2;
-static constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 static constexpr int32_t GET_LOCATION_ROLLBACK_MAX_RETRY = 3;
 static constexpr double EXIST_LOCAL_CHECK_TIMEOUT_US = 50.0;
 static constexpr RemoveMetaReqPb::Cause GET_LOCATION_ROLLBACK_CAUSE = RemoveMetaReqPb::ROLLBACK_UNACK;
@@ -1448,8 +1447,7 @@ Status WorkerOcServiceGetImpl::TryReconnectRemoteWorker(const std::string &endPo
     if (!workerId.empty()) {
         remoteWorkerId = workerId;
     }
-    LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-        << "[URMA_NEED_CONNECT] TryReconnectRemoteWorker triggered, remoteAddress=" << endPoint
+    SLOW_LOG(WARNING) << "[URMA_NEED_CONNECT] TryReconnectRemoteWorker triggered, remoteAddress=" << endPoint
         << ", remoteWorkerId=" << remoteWorkerId
         << ", realRemainingTimeMs=" << GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime()
         << ", lastResult=" << lastResult.ToString();
@@ -1739,8 +1737,7 @@ Status WorkerOcServiceGetImpl::CheckRemoteReadAdmission(const std::string &addre
     if (status.GetCode() == K_URMA_DATA_WORKER_UNAVAILABLE && FLAGS_enable_transport_fallback
         && fallback == ReadTransportFallback::ALLOWED) {
         useFastTransport = false;
-        LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[Get] UB read source is unavailable; continue through the existing TCP fallback, peer: "
+        SLOW_LOG(WARNING) << "[Get] UB read source is unavailable; continue through the existing TCP fallback, peer: "
             << peer.ToString() << ", status: " << status.ToString();
         return Status::OK();
     }
@@ -3014,8 +3011,8 @@ void WorkerOcServiceGetImpl::ClearObjectsByObjectKeys(const std::unordered_map<s
         LOG(WARNING) << FormatString("Clear objects by update location: total %d, cleared %d, failed %d",
                                      static_cast<int>(clearKeyVersions.size()), clearCount, failCount);
     } else if (clearCount > 0) {
-        LOG_EVERY_N(INFO, 100) << FormatString("Clear objects by update location: total %d, cleared %d",
-                                               static_cast<int>(clearKeyVersions.size()), clearCount);
+        LOG(INFO) << FormatString("Clear objects by update location: total %d, cleared %d",
+            static_cast<int>(clearKeyVersions.size()), clearCount);
     }
 }
 

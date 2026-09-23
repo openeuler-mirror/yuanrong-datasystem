@@ -92,6 +92,10 @@ DIAGNOSTIC: H <= T_diag
   min-log-level when the slow condition is true; the exemption covers the slow log itself only
   and never mutates Trace sampling state. The non-hit fallback (`SLOW_LOG_IF(sev, false)`) is
   classified DIAGNOSTIC and follows the diagnostic rate.
+- **No EVERY-family throttling inside data-plane request flows** — a frequency macro's condition is
+  ANDed with the sample decision, so the effective rate is (throttle ratio × sample rate), far below
+  the sampling expectation. Request-flow logs use `LOG`/`SLOW_LOG` and let the sampler
+  own frequency control; EVERY-family macros are background-thread-only.
 - **Random, not first-N** — deterministic hash-threshold decisions; no windows, queues, or global
   counters.
 

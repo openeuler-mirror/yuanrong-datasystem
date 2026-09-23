@@ -200,7 +200,7 @@
 ## Entry Points, External Interfaces, And Integration Points
 
 - Public APIs:
-  - logging macros from `src/datasystem/common/log/log.h`, including `LOG`, `VLOG`, `CHECK`, `LOG_EVERY_N`, and `LOG_FIRST_N`;
+  - logging macros from `src/datasystem/common/log/log.h`, including `LOG`, `VLOG`, `CHECK`, `LOG_FIRST_N`, `LOG_EVERY_N`, and `LOG_EVERY_T`;
 
   - `Trace::SetTraceUUID`, `Trace::SetTraceNewID`, `Trace::SetSubTraceID`, and `Trace::GetTraceID`;
   - `datasystem::Context::SetTraceId` from `include/datasystem/context/context.h`;

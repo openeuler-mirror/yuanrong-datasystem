@@ -333,11 +333,11 @@ void ThreadPool::WarnIfNeed()
         const int eightyPercentFreq = 500;
         const int sixtyPercentFreq = 1000;
         if (ratio >= oneHundredPercent) {
-            LOG_FIRST_AND_EVERY_N(WARNING, oneHundredFreq) << msg << ", thread full";
+            LOG_EVERY_N(WARNING, oneHundredFreq) << msg << ", thread full";
         } else if (ratio >= eightyPercentThreshold) {
-            LOG_FIRST_AND_EVERY_N(WARNING, eightyPercentFreq) << msg << ", exceeds 80%";
+            LOG_EVERY_N(WARNING, eightyPercentFreq) << msg << ", exceeds 80%";
         } else if (ratio >= sixtyPercentThreshold) {
-            LOG_FIRST_AND_EVERY_N(WARNING, sixtyPercentFreq) << msg << ", exceeds 60%";
+            LOG_EVERY_N(WARNING, sixtyPercentFreq) << msg << ", exceeds 60%";
         }
     }
 }

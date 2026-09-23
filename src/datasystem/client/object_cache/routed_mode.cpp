@@ -33,9 +33,6 @@ constexpr size_t DRAINING_LOCATION_REFRESH_ATTEMPTS = 3;
 constexpr int64_t DRAINING_LOCATION_REFRESH_INITIAL_BACKOFF_MS = 1;
 constexpr int64_t STALE_LOCATION_REFRESH_INITIAL_BACKOFF_MS = 20;
 
-
-constexpr int TRANSPORT_DIAG_LOG_RATE = 100;
-
 enum class TransportReadRetryPolicy : uint8_t { NONE, DRAINING, STALE };
 
 struct TransportReadRetryState {
@@ -168,8 +165,7 @@ Status PrepareTransportReadRetry(const std::shared_ptr<client::Routing> &routing
     if (!draining && !immediateStaleRetry) {
         nextBackoffMs = client::ClampBackoffToDeadline(nextBackoffMs, ApiDeadline::Instance().ApiRemainingUs());
     }
-    LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
-        << "[TransportGet][Route] Retry " << (draining ? "draining" : "stale")
+    SLOW_LOG(WARNING) << "[TransportGet][Route] Retry " << (draining ? "draining" : "stale")
         << " locations, key count: " << retryIndexes.size() << ", retry count: "
         << (static_cast<int>(retryCount) + 1) << ", backoff ms: " << nextBackoffMs
         << ", remaining deadline us: " << ApiDeadline::Instance().ApiRemainingUs();
@@ -506,8 +502,7 @@ void RoutedMode::BuildTransportReadRequest(const std::vector<std::string> &objec
     auto routing = std::atomic_load(&routing_);
     if (routing == nullptr) {
         std::fill(itemStatuses.begin(), itemStatuses.end(), Status(K_NOT_READY, "Object route is not ready"));
-        LOG_EVERY_N(ERROR, TRANSPORT_DIAG_LOG_RATE)
-            << "[TransportGet][Route] Route is not ready, key count: " << objectKeys.size();
+        SLOW_LOG(ERROR) << "[TransportGet][Route] Route is not ready, key count: " << objectKeys.size();
         return;
     }
     std::unordered_map<HostPort, std::vector<std::string>> groupedKeys;
@@ -536,8 +531,7 @@ void RoutedMode::BuildTransportReadRequest(const std::vector<std::string> &objec
         auto owner = metaOwners.find(objectKeys[i]);
         if (owner == metaOwners.end()) {
             itemStatuses[i] = Status(K_RUNTIME_ERROR, "Batch route result is incomplete");
-            LOG_EVERY_N(ERROR, TRANSPORT_DIAG_LOG_RATE)
-                << "[TransportGet][Route] Route result is incomplete, key: " << objectKeys[i]
+            SLOW_LOG(ERROR) << "[TransportGet][Route] Route result is incomplete, key: " << objectKeys[i]
                 << ", request index: " << i << ", status: " << itemStatuses[i].ToString();
             continue;
         }
@@ -677,8 +671,7 @@ Status RoutedMode::ApplyTransportReadResult(const std::vector<std::string> &obje
             itemStatuses[item.requestIndex] = transportStatus.IsError()
                                                   ? transportStatus
                                                   : Status(K_RUNTIME_ERROR, "Cannot get objects from worker");
-            LOG_EVERY_N(ERROR, TRANSPORT_DIAG_LOG_RATE)
-                << "[TransportGet][Result] Object result is missing, key: " << item.objectKey
+            SLOW_LOG(ERROR) << "[TransportGet][Result] Object result is missing, key: " << item.objectKey
                 << ", request index: " << item.requestIndex
                 << ", status: " << itemStatuses[item.requestIndex].ToString();
         }

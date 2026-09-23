@@ -206,7 +206,7 @@ std::unique_ptr<brpc::Channel> BrpcChannelFactory::Create(const BrpcChannelConfi
         LOG(ERROR) << "Failed to create brpc channel to " << cfg.endpoint;
         return nullptr;
     }
-    LOG_FIRST_AND_EVERY_N(INFO, BRPC_CHANNEL_CREATION_LOG_EVERY_N)
+    LOG_EVERY_N(INFO, BRPC_CHANNEL_CREATION_LOG_EVERY_N)
         << "BrpcChannel created: " << cfg.endpoint << " timeout=" << cfg.timeout_ms
         << "ms connect_timeout=" << cfg.connect_timeout_ms << "ms retry=" << cfg.max_retry
         << " cb=" << (opts.enable_circuit_breaker ? "on" : "off");

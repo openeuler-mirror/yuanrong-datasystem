@@ -1218,7 +1218,7 @@ TEST(CoordinatorMembershipManagerTest, RecoveredPeerWithoutProvenCandidateFailsC
     auto manager = MakeManager(ValidOptions(), dependencies, discovery, now);
 
     testing::internal::CaptureStderr();
-    // The marker is logged via LOG_FIRST_AND_EVERY_N(ERROR, 100): its per-line counter is process-global, and
+    // The marker is logged via LOG_EVERY_N(ERROR, 100): its per-line counter is process-global, and
     // earlier tests in this binary (e.g. RejectedReplacementDoesNotOwnExternallyCommittedCandidate) may advance
     // it, so a single ReconcileOnce is not guaranteed to emit. Replaying up to 100 times always hits an
     // emission (counter == 1 or counter % 100 == 0) regardless of the counter position.

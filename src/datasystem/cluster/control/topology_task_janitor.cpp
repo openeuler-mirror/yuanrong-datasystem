@@ -305,7 +305,7 @@ void TopologyTaskJanitor::Run()
             VLOG(1) << "CLUSTER_DERIVED_CLEANUP cluster=" << clusterName_
                     << " state=waiting_for_topology_authority";
         } else if (rc.IsError()) {
-            LOG_FIRST_AND_EVERY_N(WARNING, CLEANUP_FAILURE_LOG_INTERVAL)
+            LOG_EVERY_N(WARNING, CLEANUP_FAILURE_LOG_INTERVAL)
                 << "CLUSTER_DERIVED_CLEANUP cluster=" << clusterName_
                 << " state=pass_failed status=" << rc.ToString();
         }

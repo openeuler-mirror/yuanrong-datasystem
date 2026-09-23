@@ -45,7 +45,7 @@ Status TopologyObserver::Start()
 void TopologyObserver::InstallEventHandler()
 {
     backend_.SetEventHandler([this](CoordinationEvent &&event) {
-        LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
+        LOG_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
             << "CLUSTER_WATCH_EVENT cluster=" << keys_.ClusterName() << " role=observer event="
             << event.ToString();
         auto rc = dispatcher_.SubmitCoordination(std::move(event));
