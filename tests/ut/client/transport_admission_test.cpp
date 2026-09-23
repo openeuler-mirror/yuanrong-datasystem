@@ -960,7 +960,8 @@ TEST(UbHealthFilterTest, PassiveAllBadSummaryDoesNotQuarantineWriteTarget)
     allBad.writable = false;
     allBad.portHealth = UbPortHealthSummary{ true, 4, 4, 1, false };
 
-    (void)filter.ObserveSummary(allBad, allBad.incarnation);
+    bool recovered = false;
+    (void)filter.ObserveSummary(allBad, allBad.incarnation, recovered);
 
     EXPECT_TRUE(filter.IsWriteTargetAvailable(worker));
     EXPECT_TRUE(filter.IsAvailable(worker, WorkerAccessAction::SET));
@@ -971,8 +972,8 @@ TEST(UbHealthFilterTest, PassiveAllBadSummaryDoesNotQuarantineWriteTarget)
     }
 }
 
-// A passive healthy summary must not release a verified write quarantine: only the verified query path releases it.
-TEST(UbHealthFilterTest, PassiveHealthySummaryDoesNotReleaseVerifiedWriteQuarantine)
+// A newer passive healthy summary releases an existing verified write quarantine.
+TEST(UbHealthFilterTest, NewerPassiveHealthySummaryReleasesVerifiedWriteQuarantine)
 {
     const auto worker = MakeAddress(63);
     UbHealthFilter filter;
@@ -994,14 +995,78 @@ TEST(UbHealthFilterTest, PassiveHealthySummaryDoesNotReleaseVerifiedWriteQuarant
     healthy.epoch = 2;
     healthy.writable = true;
     healthy.portHealth = UbPortHealthSummary{ true, 4, 0, 2, false };
-    (void)filter.ObserveSummary(healthy, healthy.incarnation);
-
-    EXPECT_FALSE(filter.IsWriteTargetAvailable(worker));
-    EXPECT_FALSE(filter.GetUnavailableWriteTargets().empty());
-
-    ASSERT_TRUE(filter.ApplySummary(healthy, healthy.incarnation));
+    bool recovered = false;
+    ASSERT_TRUE(filter.ObserveSummary(healthy, healthy.incarnation, recovered));
+    EXPECT_TRUE(recovered);
     EXPECT_TRUE(filter.IsWriteTargetAvailable(worker));
     EXPECT_TRUE(filter.GetUnavailableWriteTargets().empty());
+}
+
+TEST(UbHealthFilterTest, PassiveWriteRecoveryPreservesLocalReadSourceEvidence)
+{
+    const auto worker = MakeAddress(64);
+    UbHealthFilter filter;
+    ClusterTopologyPb topology;
+    (*topology.mutable_members())[worker.ToString()].set_id("incarnation-a");
+    filter.ApplyTopologyIncarnations(topology);
+    ProviderUbFailureDetailPb detail;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider write failed"), "client-receive-endpoint",
+                                worker.ToString(), 4, 4, detail);
+    ASSERT_TRUE(filter.ReportProviderFailure(worker, detail));
+    ASSERT_TRUE(filter.GetLocalObservation(worker).has_value());
+
+    UbHealthSummary allBad;
+    allBad.worker = worker;
+    allBad.incarnation = "incarnation-a";
+    allBad.epoch = 1;
+    allBad.writable = false;
+    allBad.portHealth = UbPortHealthSummary{ true, 4, 4, 1, false };
+    ASSERT_TRUE(filter.ApplySummary(allBad, allBad.incarnation));
+
+    UbHealthSummary healthy = allBad;
+    healthy.epoch = 2;
+    healthy.writable = true;
+    healthy.portHealth = UbPortHealthSummary{ true, 4, 0, 2, false };
+    bool recovered = false;
+    ASSERT_TRUE(filter.ObserveSummary(healthy, healthy.incarnation, recovered));
+
+    EXPECT_TRUE(recovered);
+    EXPECT_TRUE(filter.IsWriteTargetAvailable(worker));
+    EXPECT_FALSE(filter.IsAvailable(worker, WorkerAccessAction::CONTROL));
+    EXPECT_TRUE(filter.GetLocalObservation(worker).has_value());
+}
+
+TEST(UbHealthFilterTest, PassiveRecoveryRejectedByWriteAdmissionKeepsRegistryIsolation)
+{
+    const auto worker = MakeAddress(65);
+    auto registry = std::make_shared<WorkerUbHealthRegistry>();
+    UbHealthFilter filter(registry);
+    ClusterTopologyPb topology;
+    auto &member = (*topology.mutable_members())[worker.ToString()];
+    member.set_id("incarnation-a");
+    member.set_state(MembershipPb::ACTIVE);
+    registry->ReconcileTopology(topology);
+    filter.ApplyTopologyIncarnations(topology);
+    UbHealthSummary allBad;
+    allBad.worker = worker;
+    allBad.incarnation = "incarnation-a";
+    allBad.epoch = 1;
+    allBad.writable = false;
+    allBad.portHealth = UbPortHealthSummary{ true, 4, 4, 1, false };
+    ASSERT_TRUE(filter.ReportWriteTargetFailure(worker, Status(K_URMA_ERROR, "remote ack timeout"),
+                                                std::nullopt, URMA_REMOTE_ACK_TIMEOUT_STATUS));
+    ASSERT_TRUE(registry->ApplyVerifiedSummary(allBad, allBad.incarnation));
+
+    UbHealthSummary healthy = allBad;
+    healthy.epoch = 2;
+    healthy.writable = true;
+    healthy.portHealth = UbPortHealthSummary{ true, 4, 0, 2, false };
+    bool recovered = false;
+    EXPECT_FALSE(filter.ObserveSummary(healthy, healthy.incarnation, recovered));
+
+    EXPECT_FALSE(recovered);
+    EXPECT_TRUE(registry->IsVerifiedUnavailable(worker));
+    EXPECT_FALSE(filter.IsWriteTargetAvailable(worker));
 }
 
 TEST(UbHealthFilterTest, FirstTrustedTopologyIncarnationClearsUnversionedObservation)
@@ -1806,7 +1871,8 @@ TEST(TransportLayerAdmissionTest, GetCqe4AndCqe9UseTheSameProbeCooldownInterface
     summary.worker = provider;
     summary.incarnation = "incarnation-a";
     summary.portHealth = UbPortHealthSummary{ true, 4, 0, 1, false };
-    ASSERT_TRUE(filter->ObserveSummary(summary, summary.incarnation));
+    bool recovered = false;
+    ASSERT_TRUE(filter->ObserveSummary(summary, summary.incarnation, recovered));
 
     ProviderUbFailureDetailPb providerCqe4;
     FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider CQE4"), "client-endpoint", provider.ToString(),

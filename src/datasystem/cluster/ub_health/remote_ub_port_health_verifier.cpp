@@ -296,6 +296,32 @@ RemoteUbQueryCompletion RemoteUbPortHealthVerifier::Complete(
     return completion;
 }
 
+bool RemoteUbPortHealthVerifier::AcceptPassiveRecovery(const UbHealthSummary &summary)
+{
+    if (!summary.portHealth.has_value() || !ShouldRecoverFromUbIsolation(*summary.portHealth)) {
+        return false;
+    }
+    std::lock_guard<bthread::Mutex> lock(mutex_);
+    auto iter = peers_.find(summary.worker);
+    if (iter == peers_.end() || iter->second.incarnation != summary.incarnation) {
+        return false;
+    }
+    auto &state = iter->second;
+    if (!state.isolated || !state.lastPortHealth.has_value()
+        || !CanApplyPassiveUbRecovery(*state.lastPortHealth, *summary.portHealth)) {
+        return false;
+    }
+    state.lastPortHealth = *summary.portHealth;
+    state.isolated = false;
+    state.summaryHintPending = false;
+    state.triggerPending = false;
+    state.verificationPending = false;
+    state.inFlight = false;
+    state.nextQueryMs = std::numeric_limits<uint64_t>::max();
+    state.lastLoggedRetryStatus.reset();
+    return true;
+}
+
 bool RemoteUbPortHealthVerifier::NotifySummaryHint(const UbHealthSummary &summary, uint64_t nowMs)
 {
     if (!summary.portHealth.has_value() || !HasKnownUbPortHealth(*summary.portHealth)) {

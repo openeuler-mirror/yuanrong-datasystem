@@ -118,9 +118,16 @@
     ERROR 4 immediately creates requester-local read-source admission evidence; a later request checks each endpoint
     group once, skips the quarantined source with `K_URMA_DATA_WORKER_UNAVAILABLE`, and continues with the next replica.
     Heartbeat health summaries share the same filter but are bound to the responding Worker endpoint and fenced by
-    Worker incarnation plus monotonically increasing epoch before they can affect routing or replica admission. The
-    requester tags local evidence with the latest trusted incarnation learned from topology membership or a validated
-    heartbeat. Evidence learned before either source establishes the endpoint identity is unversioned and is cleared
+    Worker incarnation plus monotonically increasing epoch before they can affect routing or replica admission. A
+    same-incarnation passive summary with a non-pending, non-all-BAD port-health fact directly clears an existing
+    verified write-target isolation and its scheduled recovery query when the fact has a strictly newer health epoch,
+    or completes a cached same-epoch pending fact with identical port counts. This path only benefits Clients that
+    receive a business response from the isolated Worker; Clients without that carrier retain the existing scheduled
+    query fallback, and passive all-BAD summaries still only trigger verification. Passive write recovery does not clear
+    requester-local read-source evidence. The requester tags local evidence with the latest trusted incarnation learned
+    from topology
+    membership or a validated heartbeat. Evidence learned before either source establishes the endpoint identity is
+    unversioned and is cleared
     when the first trusted incarnation arrives. A different trusted incarnation clears evidence belonging to the old
     Worker process. For the same incarnation, repeated writable summaries preserve newer hard local evidence, while a
     validated global unavailable-to-writable epoch transition clears the matching client-local quarantine. Ordinary

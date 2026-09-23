@@ -111,12 +111,32 @@ inline bool ShouldRecoverFromUbIsolation(const UbPortHealthSummary &summary)
            && summary.badPortCount < summary.totalPortCount;
 }
 
-enum class UbPortHealthEvidenceSource : uint8_t { PASSIVE_SUMMARY = 0, QUERY_RESPONSE = 1 };
+inline bool CanApplyPassiveUbRecovery(const UbPortHealthSummary &current,
+                                      const UbPortHealthSummary &incoming)
+{
+    if (!ShouldRecoverFromUbIsolation(incoming)) {
+        return false;
+    }
+    return incoming.healthEpoch > current.healthEpoch
+           || (incoming.healthEpoch == current.healthEpoch && current.verificationPending
+               && incoming.valid == current.valid && incoming.totalPortCount == current.totalPortCount
+               && incoming.badPortCount == current.badPortCount);
+}
+
+enum class UbPortHealthEvidenceSource : uint8_t {
+    PASSIVE_SUMMARY = 0,
+    QUERY_RESPONSE = 1,
+    PASSIVE_RECOVERY = 2
+};
 
 inline bool CanUpdateRemoteUbAdmission(UbPortHealthEvidenceSource source, const UbPortHealthSummary &summary)
 {
-    return source == UbPortHealthEvidenceSource::QUERY_RESPONSE && HasKnownUbPortHealth(summary)
-           && !summary.verificationPending;
+    if (!HasKnownUbPortHealth(summary) || summary.verificationPending) {
+        return false;
+    }
+    return source == UbPortHealthEvidenceSource::QUERY_RESPONSE
+           || (source == UbPortHealthEvidenceSource::PASSIVE_RECOVERY
+               && summary.badPortCount < summary.totalPortCount);
 }
 
 class IUbPortStatusProvider {

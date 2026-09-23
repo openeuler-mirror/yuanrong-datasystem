@@ -266,9 +266,15 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     and preserve pending state in the encoded response. Cache validity spans one provider interval plus one remote
     verification interval (two seconds), so a completed asynchronous refresh is observable at a one-second RPC cadence.
     The provider and isolated-peer query intervals remain one second; invalid/pending facts cannot change admission.
-    Client read/write fault callbacks feed the shared `RemoteUbPortHealthVerifier`; passive sidecars only update
-    `WorkerUbHealthRegistry` or request verification. Sidecar callbacks may overlap; registry incarnation and
-    health-epoch fences reject stale observations before one complete state is published. The router Getter atomically
+    Client read/write fault callbacks feed the shared `RemoteUbPortHealthVerifier`; passive all-BAD sidecars update
+    `WorkerUbHealthRegistry` and request verification. While a Worker is already isolated, a same-incarnation,
+    non-pending, non-all-BAD sidecar newer than the isolation fact also releases the Client write admission and cancels
+    the scheduled verifier retry. A confirmed sidecar may share the cached pending fact's health epoch only when its
+    port counts are identical. Direct recovery requires a business-response carrier from that Worker; otherwise the
+    existing scheduled query remains the fallback, and no extra query is created for the passive summary. Passive write
+    recovery preserves requester-local read-source evidence. Sidecar callbacks may overlap; registry incarnation and
+    health-epoch fences reject
+    stale observations before one complete state is published. The router Getter atomically
     aliases the frozen DTO from that immutable state for observed routable (`ACTIVE` or `LEAVING`) workers;
     topology reconciliation prunes departed workers and stale incarnations without creating UNKNOWN entries for
     workers the Client has never contacted. A verified write-target recovery advances its late-CQE generation fence.
@@ -276,9 +282,9 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     each completion frees one of four outstanding query slots and wakes reconcile. A CQE arriving during an in-flight
     query retains one rate-limited follow-up. Workers without the Query capability retry after 30 seconds rather than
     consuming a slot every second, and the first successful response after a retry compresses other isolated-peer
-    deadlines to bound recovery spread. Passive summary hints only accelerate peers already tracked by the verifier;
-    they are not a discovery path. Shutdown drains at most the current four-query wave, whose RPC deadline is one
-    second, before destroying endpoint dependencies. Registry publication COW-updates topology, health, verified
+    deadlines to bound recovery spread. Other passive summary hints only accelerate peers already tracked by the
+    verifier; they are not a discovery path. Shutdown drains at most the current four-query wave, whose RPC deadline is
+    one second, before destroying endpoint dependencies. Registry publication COW-updates topology, health, verified
     admission, and the routing DTO together; an unchanged topology returns before those copies. Retired snapshots
     release after unlock.
     The private client admission observer is declared in `common/rdma/client_port_health_admission_observer.h`;

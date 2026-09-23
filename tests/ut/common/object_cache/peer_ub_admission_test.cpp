@@ -55,6 +55,7 @@ UbPortHealthSummary PortSummary(uint32_t totalPortCount, uint32_t badPortCount, 
 
 constexpr UbPortHealthEvidenceSource QUERY = UbPortHealthEvidenceSource::QUERY_RESPONSE;
 constexpr UbPortHealthEvidenceSource PASSIVE = UbPortHealthEvidenceSource::PASSIVE_SUMMARY;
+constexpr UbPortHealthEvidenceSource PASSIVE_RECOVERY = UbPortHealthEvidenceSource::PASSIVE_RECOVERY;
 constexpr UbPortHealthVerificationMode VERIFIED = UbPortHealthVerificationMode::VERIFIED_PORT_HEALTH;
 
 void EnablePeerPortHealth(PeerUbAdmission &admission)
@@ -442,6 +443,23 @@ TEST(PeerUbAdmissionTest, PortHealthEpochRejectsOlderAndConflictingFacts)
     EXPECT_EQ(admission.GetState(PEER)->state, UbAdmissionState::AVAILABLE);
     ASSERT_TRUE(admission.GetState(PEER)->portHealth.has_value());
     EXPECT_EQ(admission.GetState(PEER)->portHealth->healthEpoch, 3u);
+}
+
+TEST(PeerUbAdmissionTest, PassiveRecoveryOnlyReleasesNewerPortFactIsolation)
+{
+    PeerUbAdmission admission(VERIFIED);
+    ASSERT_TRUE(admission.ApplyPortHealth(PEER, PortSummary(4, 4, 2), QUERY));
+
+    EXPECT_FALSE(admission.ApplyPortHealth(PEER, PortSummary(4, 3, 2), PASSIVE_RECOVERY));
+    EXPECT_FALSE(admission.ApplyPortHealth(PEER, PortSummary(4, 4, 3), PASSIVE_RECOVERY));
+    EXPECT_FALSE(admission.ApplyPortHealth(PEER, PortSummary(4, 3, 3, true), PASSIVE_RECOVERY));
+    EXPECT_EQ(admission.GetState(PEER)->state, UbAdmissionState::UNAVAILABLE);
+
+    EXPECT_TRUE(admission.ApplyPortHealth(PEER, PortSummary(4, 3, 3), PASSIVE_RECOVERY));
+    EXPECT_EQ(admission.GetState(PEER)->state, UbAdmissionState::AVAILABLE);
+    EXPECT_FALSE(admission.GetState(PEER)->portHealthGoverned);
+
+    EXPECT_FALSE(admission.ApplyPortHealth(PEER, PortSummary(4, 2, 4), PASSIVE_RECOVERY));
 }
 
 TEST(PeerUbAdmissionTest, TrustedIncarnationReplacementResetsPortHealthEpoch)
