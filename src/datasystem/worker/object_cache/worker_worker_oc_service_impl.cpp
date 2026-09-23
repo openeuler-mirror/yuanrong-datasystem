@@ -66,6 +66,7 @@ DS_DECLARE_uint64(oc_worker_aggregate_single_max);
 DS_DECLARE_uint64(oc_worker_aggregate_merge_size);
 
 namespace datasystem {
+constexpr int FAILURE_LOG_RATE = 100;
 namespace {
 constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 constexpr char URMA_WARMUP_KEY_PREFIX[] = "_urma_";
@@ -553,9 +554,13 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteRe
         rsp.set_data_source(DataTransferSource::DATA_ALREADY_TRANSFERRED);
         return Status::OK();
     }
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        status, FormatString("[ObjectKey %s] Get object remote failed, requestId: %s, workerAddr: %s", objectKey,
-                             requestId, localAddress_.ToString()));
+    if (status.IsError()) {
+        LOG_FIRST_AND_EVERY_N(ERROR, FAILURE_LOG_RATE)
+            << FormatString("[ObjectKey %s] Get object remote failed, requestId: %s, workerAddr: %s", objectKey,
+                            requestId, localAddress_.ToString())
+            << ", Detail: " << status;
+        return status;
+    }
     point.Record();
     return Status::OK();
 }

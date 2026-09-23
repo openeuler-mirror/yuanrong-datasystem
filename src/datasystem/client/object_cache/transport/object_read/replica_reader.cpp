@@ -43,6 +43,7 @@
 DS_DECLARE_bool(enable_transport_fallback);
 
 namespace datasystem {
+constexpr int FAILURE_LOG_RATE = 100;
 namespace client {
 namespace {
 constexpr size_t MAX_BATCH_OBJECT_COUNT = 1024;
@@ -264,7 +265,8 @@ void LogReplicaReadFailure(const master::ObjectLocationInfoPb &location, const H
                            const Status &status, bool retryable)
 {
     if (!retryable) {
-        LOG(ERROR) << "[TransportGet][Data] Replica read failed without retry, key: " << location.object_key()
+        LOG_FIRST_AND_EVERY_N(ERROR, FAILURE_LOG_RATE)
+            << "[TransportGet][Data] Replica read failed without retry, key: " << location.object_key()
                    << ", worker: " << workerAddr.ToString() << ", round: " << round
                    << ", status: " << status.ToString();
         return;
