@@ -635,7 +635,7 @@ void TransportLayer::TryRecoverProviderUbSource()
         LOG(INFO) << "Client Provider UB source recovered via dedicated probe from "
                   << candidate->token.peer.ToString();
     } else if (probeRc.IsError()) {
-        LOG_FIRST_AND_EVERY_N(WARNING, FAILURE_LOG_RATE) << "Client Provider UB source recovery probe failed for "
+        LOG_EVERY_N(WARNING, FAILURE_LOG_RATE) << "Client Provider UB source recovery probe failed for "
                                             << candidate->token.peer.ToString() << ": " << probeRc;
     } else {
         // A probe that succeeds while the port-health verifier owns the verdict produces no recovery and

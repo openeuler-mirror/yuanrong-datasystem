@@ -1728,7 +1728,7 @@ Status UrmaManager::CreateUrmaWaitTimeoutStatus(uint64_t requestId, const std::s
         event->GetRemoteInstanceId().c_str(), static_cast<size_t>(event->GetDataSize()),
         UrmaEvent::OperationTypeName(event->GetOperationType()), reason.c_str());
     // Message also propagates inside the returned Status; keep a throttled full-detail record here.
-    LOG_FIRST_AND_EVERY_N(WARNING, FAILURE_LOG_RATE) << message;
+    LOG_EVERY_N(WARNING, FAILURE_LOG_RATE) << message;
     return Status(K_URMA_WAIT_TIMEOUT, message);
 }
 
@@ -2018,7 +2018,7 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
             VLOG(1) << "[URMA_POLL_JFC] [urma_request_id:" << userCtx << "] Got event";
             successCompletedReqs.insert(userCtx);
         } else {
-            LOG_FIRST_AND_EVERY_N(ERROR, FAILURE_LOG_RATE) << FormatString(
+            LOG_EVERY_N(ERROR, FAILURE_LOG_RATE) << FormatString(
                 "[URMA_POLL_JFC]: [urma_request_id:%zu] urma_poll_jfc return failed completion record, "
                 "CR.status: %d, port_id: %u",
                 userCtx, crStatus, portId);
@@ -2626,7 +2626,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
                 key, ret, srcAddress.c_str(), args.remoteAddress.c_str(), remoteInstanceId,
                 static_cast<size_t>(writeSize), static_cast<uint32_t>(srcChipId),
                 static_cast<uint32_t>(args.dstChipId), useNumaAffinity ? "true" : "false", URMA_ERROR_SUGGEST);
-            LOG_FIRST_AND_EVERY_N(ERROR, FAILURE_LOG_RATE) << writeErrMsg;
+            LOG_EVERY_N(ERROR, FAILURE_LOG_RATE) << writeErrMsg;
             return Status(K_URMA_ERROR, std::move(writeErrMsg));
         }
         event->SetPostSrcChipInflight(GetSrcChipInflightWrCountsString());
@@ -2967,7 +2967,7 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
                 "ret: %d, srcAddress=%s, targetAddress=%s, dataSize=%zu, suggest: %s",
                 key, ret, srcAddress.c_str(), remoteAddress.c_str(), static_cast<size_t>(readSize),
                 URMA_ERROR_SUGGEST);
-            LOG_FIRST_AND_EVERY_N(ERROR, FAILURE_LOG_RATE) << readErrMsg;
+            LOG_EVERY_N(ERROR, FAILURE_LOG_RATE) << readErrMsg;
             return Status(K_URMA_ERROR, std::move(readErrMsg));
         }
 

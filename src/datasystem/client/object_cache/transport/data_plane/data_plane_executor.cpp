@@ -75,7 +75,7 @@ void LogDataPlaneOperation(const HostPort &workerAddr, TransportHint hint, size_
                            bool terminalFailure)
 {
     if (status.IsError() && terminalFailure) {
-        LOG_FIRST_AND_EVERY_N(ERROR, FAILURE_LOG_RATE)
+        LOG_EVERY_N(ERROR, FAILURE_LOG_RATE)
             << "[TransportGet][DataPlane] Operation failed, worker: " << workerAddr.ToString()
                    << ", transport: " << TransportHintName(hint) << ", attempt: " << attempt
                    << ", status: " << status.ToString();
