@@ -559,6 +559,42 @@ TEST(LoadConfig_CleanupTTL_NoTTLSecond) {
     std::remove(path.c_str());
 }
 
+TEST(LoadConfig_CleanupNoneForSet) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"set_remote","worker_memory_mb":131072,
+        "set_api":"create_buffer_raw","cleanup_method":"none"
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.cleanupMethod, std::string("none"));
+    ASSERT_EQ(cfg.workerMemoryMb, 131072);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_CleanupNoneRejectsGet) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"get_local","worker_memory_mb":4096,
+        "cleanup_method":"none"
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_CleanupNoneRejectsTTL) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"set_local","worker_memory_mb":4096,
+        "cleanup_method":"none","set_param":{"ttl_second":10}
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
+    std::remove(path.c_str());
+}
+
 TEST(LoadConfig_DurationAndRounds) {
     auto path = WriteTempConfig(R"({
         "etcd_address":"x:1","listen_port":9000,

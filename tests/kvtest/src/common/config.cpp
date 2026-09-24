@@ -655,16 +655,25 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
             SLOG_ERROR("remote_worker required for test_mode " << static_cast<int>(cfg.testMode));
             return false;
         }
-        if (cfg.cleanupMethod == "ttl" && cfg.ttlSeconds == 0) {
-            SLOG_ERROR("set_param.ttl_second must be > 0 when cleanup_method=ttl");
-            return false;
-        }
         if (cfg.setApi != "string_view" && cfg.setApi != "create_buffer" && cfg.setApi != "create_buffer_raw") {
             SLOG_ERROR("set_api must be 'string_view', 'create_buffer', or 'create_buffer_raw'");
             return false;
         }
-        if (cfg.cleanupMethod != "del" && cfg.cleanupMethod != "ttl") {
-            SLOG_ERROR("cleanup_method must be 'del' or 'ttl'");
+        if (cfg.cleanupMethod != "del" && cfg.cleanupMethod != "ttl" && cfg.cleanupMethod != "none") {
+            SLOG_ERROR("cleanup_method must be 'del', 'ttl', or 'none'");
+            return false;
+        }
+        if (cfg.cleanupMethod == "ttl" && cfg.ttlSeconds == 0) {
+            SLOG_ERROR("set_param.ttl_second must be > 0 when cleanup_method=ttl");
+            return false;
+        }
+        const bool continuousSetMode = cfg.testMode == TestMode::SET_LOCAL || cfg.testMode == TestMode::SET_REMOTE;
+        if (cfg.cleanupMethod == "none" && !continuousSetMode) {
+            SLOG_ERROR("cleanup_method=none is supported only by set_local and set_remote");
+            return false;
+        }
+        if (cfg.cleanupMethod == "none" && cfg.ttlSeconds != 0) {
+            SLOG_ERROR("set_param.ttl_second must be 0 when cleanup_method=none");
             return false;
         }
         if (cfg.roundCleanupWaitMs < 0) {

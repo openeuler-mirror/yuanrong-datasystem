@@ -231,11 +231,11 @@ Benchmark 模式通过 ServiceDiscovery 连接 etcd 发现 Worker。以下参数
 | `worker_memory_mb` | int | **必填** | 生成负载的数据预算（MB），用于计算全局数据集 key 数 |
 | `num_clients` | int | 1 | 四个单接口模式的被测 KVClient 进程数；每个进程独占一个 KVClient |
 | `num_threads` | int | 4 | 每个被测 KVClient 的调用线程数；总并发为 `num_clients × num_threads` |
-| `duration_seconds` | int | 0 | Get 的纯测量窗口；Set 到时后不再启动下一 Set→Del 周期；0 = 不限时 |
-| `total_rounds` | int | 0 | Get 的数据集遍历次数上限或 Set→Del 周期数；与 duration 同时配置时任一先到即停 |
+| `duration_seconds` | int | 0 | Get 或 `cleanup_method=none` Set 的纯测量窗口；其他 Set 到时后不再启动下一 Set→Cleanup 周期；0 = 不限时 |
+| `total_rounds` | int | 0 | Get/持续 Set 的数据集遍历次数上限或普通 Set→Cleanup 周期数；与 duration 同时配置时任一先到即停 |
 | `round_cleanup_wait_ms` | int | 3000 | `del` 清理后、下一轮开始前的等待时间（毫秒），0 = 不等待；等待不超过剩余运行时长 |
 | `set_api` | string | "string_view" | Set API 路径：`"string_view"` / `"create_buffer"` / `"create_buffer_raw"`（MSet/MGet 模式忽略） |
-| `cleanup_method` | string | "del" | 清理方式：`"del"`（显式删除）或 `"ttl"`（等待 TTL 过期） |
+| `cleanup_method` | string | "del" | 清理方式：`"del"`、`"ttl"`，或仅用于 `set_local` / `set_remote` 固定工作集持续覆盖的 `"none"` |
 | `remote_worker.host` | string | "" | 远端 Worker 地址；`set_remote` 和 `get_remote_direct` 留空时使用 ServiceDiscovery |
 | `remote_worker.port` | int | 31501 | 远端 Worker 端口 |
 | `set_ratio` | float | 0.5 | Set 操作比例 (0.0, 1.0)，仅 mixed 模式。0.7 = 70% 线程做 Set。必须保证至少 1 个 Get 线程 |
@@ -346,7 +346,8 @@ keys_per_round = floor(worker_memory_mb × 0.8 × 1024 × 1024 / data_size_bytes
 Get: 初始化 Client 组 → Set 全局数据集一次 → 对成功 Set 的 key 每线程预热一次
      → 所有 Client/线程统一起跑并持续 Get → 统一停止 → Cleanup 一次
 
-Set: 所有 Client/线程统一起跑并 Set → 全部完成 → Cleanup → 下一周期
+Set(del/ttl): 所有 Client/线程统一起跑并 Set → 全部完成 → Cleanup → 下一周期
+Set(none): 用固定 key 集铺满 80% 工作集 → 相同 key 上持续 Create→Set(buffer) → 统一停止并删除
 ```
 
 每个 Client 进程内的线程共享一个 KVClient。全局 key 数仍由 `worker_memory_mb` 计算，再按 Client 和线程分片，
@@ -358,8 +359,12 @@ Client 初始化、线程创建、预置、预热和清理均不计入接口 QPS
 每个被测线程至少需要一个 key；若 `keys_per_dataset < num_clients × num_threads`，配置会在创建 Client 前被拒绝。
 Get 预置不重试失败的 Set：只要至少一个 key 成功，预热、测量和清理就仅使用成功 key；全部失败才终止。
 部分成功时实际活跃并发可能低于配置值，日志记录 `effective_concurrency`，预置结果写入 CSV 的 `setup` 行。
+预热 Get 的业务失败只记录告警，不阻止正式测量；进程通信或同步失败仍会终止用例。
 使用 `cleanup_method=del` 时，Set 模式使用同等数量的独立清理 Client；Get 模式在测量结束后，
 由各被测子进程惰性创建独立清理 Client，精确清理成功 Set 的 key。
+`cleanup_method=none` 的铺底只要至少成功一个 key 就进入测量；测量使用相同的 `round=0` key，后续循环
+会再次尝试铺底失败的 key，因此 Worker 对象数最多达到配置规模且不随轮数增长。测量期间不执行 Delete，
+测量完成后由被测 Client 统一删除固定 key 集，清理不进入性能指标。
 
 Get 配置 TTL 时，启动前会先校验配置，预置和预热完成后还会复核剩余 TTL 是否能覆盖整个测量窗口及
 一次请求超时余量，否则拒绝启动测量。
@@ -592,6 +597,30 @@ Client 直连远端 Worker 执行 Set（`remote_worker` 指定 Worker B 的注�
 
 当前使用 `Create → Set(buffer)` 的 no-copy 路径；Create 用于准备 raw Buffer，但不计入 Set 延迟和 QPS。
 
+### 场景 H：128GiB Worker 上持续覆盖 `set_remote`
+
+```json
+{
+  "mode": "benchmark",
+  "etcd_address": "127.0.0.1:2379",
+  "cluster_name": "your_cluster",
+  "test_mode": "set_remote",
+  "worker_memory_mb": 131072,
+  "num_clients": 1,
+  "num_threads": 32,
+  "duration_seconds": 60,
+  "total_rounds": 0,
+  "data_sizes": ["8MB"],
+  "set_api": "create_buffer_raw",
+  "cleanup_method": "none",
+  "set_param": {"ttl_second": 0}
+}
+```
+
+该配置生成 13,107 个全局 key，铺底约 102.4GiB 后持续覆盖。每次操作仍创建新的 8MiB Buffer 并调用
+`Set(buffer)`；测量窗口内没有 Delete 或 eviction 阶段，结束后统一删除。16/32 线程只改变并发，不改变
+全局工作集大小。
+
 ---
 
 ## 4. Set API 路径说明
@@ -610,8 +639,12 @@ Client 直连远端 Worker 执行 Set（`remote_worker` 指定 Worker B 的注�
 |------|------|---------|
 | `del` | Set 每周期、Get 整个测量窗口结束后调用 `Del(keys)` | 通用场景，测量结束后释放内存 |
 | `ttl` | Set 时设置 `ttl_second`，每轮结束后等待 TTL 过期 | 不可手动删除的场景，需要 Worker 自动过期 |
+| `none` | 固定 key 集铺底后持续覆盖，测量完成后统一 Delete | 仅 `set_local` / `set_remote`；隔离清理对测量的影响 |
 
-**注意：** `cleanup_method = "ttl"` 时必须同时配置 `set_param.ttl_second`，且值 > 0。
+**注意：** `cleanup_method = "ttl"` 时 `ttl_second` 必须大于 0；`none` 时必须为 0。
+`none` 铺底部分成功时会记录 warning 并继续使用完整 key 集进行测量，后续循环会再次尝试铺底失败的 key；
+只有铺底全部失败时才终止。铺底和正式测量中的失败都会保留在 CSV 中，存在失败的对应行
+`valid=false`。
 
 ---
 
@@ -640,12 +673,11 @@ total,-1,set,16380,0,2526.615,6482.980,1.234,1.100,2.078,3.500,6482.980,true
 | `p99_ms` | 所有 Client 延迟样本合并后的 P99；使用 TDigest 近似计算 |
 | `max_ms` | 单次请求最大延迟 |
 | `throughput_mib_s` | 成功数据量除以相同的 `elapsed_ms`，按 1024² bytes/MiB 换算 |
-
 Set 的有效并发数取配置并发与成功数的较小值；无成功 Set 时 `elapsed_ms=0`。Create 失败仍计入
 `failures` 并使结果无效，但不会进入 Set-only 时间。`benchmark_clients.csv` 使用相同口径输出各 Client 的
 精简结果和 `start_offset_us`，只用于定位 Client 偏斜；
 全局 QPS/P99 必须以 `benchmark_phases.csv` 为准，不能平均各 Client 的 QPS/P99。Get 预置以 `setup` 行写入
-主 CSV；预热和 Del 不写入主 CSV，只在日志中报告失败。
+主 CSV；`none` 模式铺底也以 `setup` 行记录，预热和 Del 不写入主 CSV，只在日志中报告失败。
 
 ---
 
@@ -657,6 +689,8 @@ Set 的有效并发数取配置并发与成功数的较小值；无成功 Set �
 | `worker_memory_mb required when test_mode is set` | 未配置 `worker_memory_mb` | 添加 `"worker_memory_mb": 4096` |
 | `remote_worker required for test_mode` | 需要固定远端地址的模式未配置 Worker | 添加 `"remote_worker": {"host": "...", "port": 31501}`；`set_remote` 可改用服务发现 |
 | `set_param.ttl_second must be > 0 when cleanup_method=ttl` | TTL 模式未设置过期时间 | 添加 `"set_param": {"ttl_second": 10}` |
+| `cleanup_method=none is supported only by set_local and set_remote` | 在非单 key Set 模式使用持续覆盖 | 改用 `set_local` / `set_remote`，或选择 `del` / `ttl` |
+| `set_param.ttl_second must be 0 when cleanup_method=none` | 持续覆盖工作集配置了 TTL | 将 `ttl_second` 设为 0 |
 | `set_api must be 'string_view', 'create_buffer', or 'create_buffer_raw'` | set_api 值非法 | 使用 `"string_view"` / `"create_buffer"` / `"create_buffer_raw"` |
 | Set 成功数 < keys_per_round | Worker 内存不足或请求超时 | 增大 `worker_memory_mb` 或检查 Worker 状态 |
 | 跨节点 Get 全部失败 | Worker 间网络不通 | 检查 UB/网络连通性，确认 `enable_cross_node_connection` |
