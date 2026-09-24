@@ -270,7 +270,7 @@ struct TransportLayer::LocalUbSenderState final : public UrmaLateCompletionObser
                 INJECT_POINT_NO_RETURN("TransportLayer.ClientUbProbeCooldown.remoteAccepted");
                 const bool requested = requestRemoteVerification(destination);
                 if (!requested) {
-                    LOG_FIRST_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+                    LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
                         << "CLIENT_UB_PROBE action=request_not_accepted scope=remote_worker peer="
                         << destination.ToString() << " generation=" << generation
                         << " cooldown_ms=" << ClientUbProbeCooldown::COOLDOWN_MS;
