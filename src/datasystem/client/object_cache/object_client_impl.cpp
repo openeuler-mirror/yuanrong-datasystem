@@ -953,7 +953,7 @@ void ObjectClientImpl::HandleMetadataOwnerFailure(const HostPort &owner, const S
         return;
     }
     const bool refreshed = ShouldForceRefreshRouting(owner) && routing->ForceRefresh();
-    if (IsRoutingEvictionFailure(status)) {
+    if (IsRoutingEvictionFailure(status) && !routing->IsWorkerConnectionBroken(owner)) {
         routing->UpdateState(owner, status.GetCode());
     }
     if (refreshed) {
@@ -2397,7 +2397,7 @@ Status ObjectClientImpl::PublishRoutedBuffer(const std::shared_ptr<ObjectBufferI
     setParam.isSeal = isSeal;
     setParam.subTimeoutMs = requestTimeoutMs_;
     auto setRc = transportLayer_->Set(*objBuf, setParam);
-    if (IsRoutingEvictionFailure(setRc)) {
+    if (!isSeal && IsRoutingEvictionFailure(setRc)) {
         auto routing = std::atomic_load(&routing_);
         if (routing != nullptr) {
             routing->UpdateState(bufferInfo->workerAddr, setRc.GetCode());
@@ -3980,6 +3980,10 @@ Status ObjectClientImpl::ProcessRoutedMSetGroup(const HostPort &worker,
         }
     }
     if (rc.GetCode() == K_SCALE_DOWN) {
+        auto routing = std::atomic_load(&routing_);
+        if (routing != nullptr) {
+            routing->UpdateState(worker, K_SCALE_DOWN);
+        }
         return ReplayRoutedMSetGroup(infos, failedCount);
     }
     failedCount += rc.IsError() ? infos.size() : result.failedKeys.size();

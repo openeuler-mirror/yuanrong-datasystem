@@ -164,7 +164,7 @@ public:
                                           bool queryL2Cache);
     Status RecoverWorkerAndRetryGet(const std::shared_ptr<IClientWorkerApi> &workerApi, GetParam &getParam,
                                     WorkerNode workerNode, const std::vector<std::string> &objectKeys,
-                                    std::vector<std::shared_ptr<Buffer>> &buffers, Status *ingressRpcStatus);
+                                    std::vector<std::shared_ptr<Buffer>> &buffers);
     Status GetFromLocalWorker(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs,
                               std::vector<std::shared_ptr<Buffer>> &buffers, bool queryL2Cache, bool isRH2DSupported,
                               int32_t requestTimeoutMs);
@@ -183,15 +183,16 @@ public:
     Status GetBuffersFromWorkerBatched(std::shared_ptr<IClientWorkerApi> workerApi, const GetParam &getParam,
                                        std::vector<std::shared_ptr<Buffer>> &buffers,
                                        const std::vector<ObjMetaInfo> &objMetas, uint64_t ubMaxGetSize,
-                                       AccessTransportKind *requestTransportKind, Status *ingressRpcStatus);
+                                       AccessTransportKind *requestTransportKind, Status *ingressRpcStatus = nullptr);
     Status GetOversizedBufferFromWorkerByChunks(std::shared_ptr<IClientWorkerApi> workerApi, const GetParam &getParam,
                                                 size_t objectIndex, uint64_t objectSize, uint64_t ubMaxGetSize,
                                                 std::shared_ptr<Buffer> &buffer,
-                                                AccessTransportKind *requestTransportKind, Status *ingressRpcStatus);
+                                                AccessTransportKind *requestTransportKind,
+                                                Status *ingressRpcStatus = nullptr);
     Status GetOversizedBufferChunk(std::shared_ptr<IClientWorkerApi> workerApi, const GetParam &getParam,
                                    const std::string &objectKey, uint64_t offset, uint64_t chunkSize,
                                    std::shared_ptr<Buffer> &chunkBuffer, uint32_t &version,
-                                   AccessTransportKind *requestTransportKind, Status *ingressRpcStatus);
+                                   AccessTransportKind *requestTransportKind, Status *ingressRpcStatus = nullptr);
     Status CopyOversizedBufferChunk(const std::string &objectKey, uint64_t objectSize, uint64_t offset,
                                     const std::shared_ptr<Buffer> &chunkBuffer, std::shared_ptr<Buffer> &buffer,
                                     uint64_t &copiedSize);

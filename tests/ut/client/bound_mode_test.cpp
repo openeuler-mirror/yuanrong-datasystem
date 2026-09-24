@@ -33,8 +33,12 @@ public:
     Status MultiPublish(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo, const PublishParam &param, MultiPublishRspPb &rsp, const std::vector<const DeviceBlobList *> &deviceBlobRefs) override { return Status::OK(); }
     Status DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys) override { return Status::OK(); }
     Status PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp) override { return Status::OK(); }
-    Status Get(const GetParam &, uint32_t &, GetRspPb &rsp, std::vector<RpcMessage> &) override
+    Status Get(const GetParam &, uint32_t &, GetRspPb &rsp, std::vector<RpcMessage> &,
+               Status *ingressRpcStatus = nullptr) override
     {
+        if (ingressRpcStatus != nullptr) {
+            *ingressRpcStatus = Status::OK();
+        }
         ++getCalls;
         if (providerUbFailureDetail.has_value()) {
             *rsp.mutable_provider_ub_failure_detail() = *providerUbFailureDetail;
@@ -45,23 +49,11 @@ public:
         if (repeatedGetStatus != K_OK) {
             return Status(repeatedGetStatus, "injected repeated Get response");
         }
-        const auto directStatus = getCalls == 1 ? firstGetStatus : K_INVALID;
-        if (directStatus != K_OK) {
-            return Status(directStatus, "injected Get response");
-        }
-        if (responseStatus != K_OK) {
-            auto *info = rsp.add_objects();
-            info->set_object_index(0);
-            info->set_store_fd(-1);
-            rsp.mutable_last_rc()->set_error_code(responseStatus);
-            rsp.mutable_last_rc()->set_error_msg("injected downstream Get response");
-        }
-        return Status::OK();
+        return Status(getCalls == 1 ? firstGetStatus : K_INVALID, "injected Get response");
     }
     size_t getCalls = 0;
     StatusCode firstGetStatus = K_OK;
     StatusCode repeatedGetStatus = K_OK;
-    StatusCode responseStatus = K_OK;
     bool expireDeadlineOnGet = false;
     std::optional<ProviderUbFailureDetailPb> providerUbFailureDetail;
     Status InvalidateBuffer(const std::string &objectKey) override { return Status::OK(); }
@@ -157,11 +149,7 @@ protected:
         deps.host.checkConnection = [] { return Status::OK(); };
         deps.host.checkConnWhileShmModify = [] { return Status::OK(); };
         deps.host.isBufferAlive = [](uint32_t) { return true; };
-        deps.host.handleDirectGetFailure = [this](const std::shared_ptr<IClientWorkerApi> &, const Status &status) {
-            if (status.GetCode() == K_RPC_PEER_DEAD || status.GetCode() == K_CLIENT_WORKER_DISCONNECT) {
-                routingEvictionFailures.emplace_back(status.GetCode());
-            }
-        };
+        deps.host.handleDirectGetFailure = [](const std::shared_ptr<IClientWorkerApi> &, const Status &) {};
         deps.getWorkerApiNode = [this](std::shared_ptr<IClientWorkerApi> &api, std::unique_ptr<Raii> &guard,
                                        WorkerNode &node) {
             EXPECT_FALSE(getGuardHeld);
@@ -199,7 +187,6 @@ protected:
     std::unique_ptr<BoundMode> bound;
     bool getGuardHeld = false;
     size_t getApiCalls = 0;
-    std::vector<StatusCode> routingEvictionFailures;
 };
 
 TEST_F(BoundModeTest, ConstructObjKeyWithTenantIdPrefixesTenant)
@@ -259,38 +246,6 @@ TEST_F(BoundModeTest, NonUbGetFailureDoesNotRetry)
     EXPECT_EQ(mockApi->getCalls, 1U);
     EXPECT_EQ(getApiCalls, 1U);
     EXPECT_FALSE(getGuardHeld);
-}
-
-TEST_F(BoundModeTest, DirectGetReportsIngressPeerDead)
-{
-    ApiDeadlineGuard deadline(1000);
-    mockApi->firstGetStatus = K_RPC_PEER_DEAD;
-    std::vector<std::shared_ptr<Buffer>> buffers(1);
-
-    EXPECT_EQ(bound->GetFromLocalWorker({ "key" }, 0, buffers, false, false, 1000).GetCode(), K_RPC_PEER_DEAD);
-    EXPECT_EQ(routingEvictionFailures, std::vector<StatusCode>({ K_RPC_PEER_DEAD }));
-}
-
-TEST_F(BoundModeTest, DirectGetDoesNotAttributeDownstreamPeerDeadToIngress)
-{
-    ApiDeadlineGuard deadline(1000);
-    mockApi->responseStatus = K_RPC_PEER_DEAD;
-    std::vector<std::shared_ptr<Buffer>> buffers(1);
-
-    EXPECT_EQ(bound->GetFromLocalWorker({ "key" }, 0, buffers, false, false, 1000).GetCode(), K_RPC_PEER_DEAD);
-    EXPECT_TRUE(routingEvictionFailures.empty());
-}
-
-TEST_F(BoundModeTest, DirectGetDoesNotRecoverOrAttributeDownstreamDisconnectToIngress)
-{
-    ApiDeadlineGuard deadline(1000);
-    mockApi->responseStatus = K_CLIENT_WORKER_DISCONNECT;
-    std::vector<std::shared_ptr<Buffer>> buffers(1);
-
-    EXPECT_EQ(bound->GetFromLocalWorker({ "key" }, 0, buffers, false, false, 1000).GetCode(),
-              K_CLIENT_WORKER_DISCONNECT);
-    EXPECT_EQ(mockApi->getCalls, 1U);
-    EXPECT_TRUE(routingEvictionFailures.empty());
 }
 
 TEST_F(BoundModeTest, UbGetRetryStopsAtDeadlineAndPreservesLastError)

@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "datasystem/client/object_cache/routing/client_read_bandwidth_scheduler.h"
+#include "datasystem/client/object_cache/routing/broken_filter.h"
 #include "datasystem/client/object_cache/routing/data_placement_policy.h"
 #include "datasystem/client/object_cache/routing/i_worker_filter.h"
 #include "datasystem/client/object_cache/routing/worker_ub_health_registry.h"
@@ -142,6 +143,7 @@ private:
     std::string myHostId_;
     std::shared_ptr<WorkerUbHealthRegistry> ubHealthRegistry_;
     std::vector<std::shared_ptr<IWorkerFilter>> filters_;
+    std::shared_ptr<BrokenFilter> brokenFilter_;
     std::atomic<bool> initialized_{ false };
     std::shared_ptr<ClientReadBandwidthScheduler> bandwidthScheduler_;
 

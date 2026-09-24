@@ -154,7 +154,6 @@ public:
     using RemoveMetaHandler = std::function<Status(master::RemoveMetaReqPb &, master::RemoveMetaRspPb &)>;
     using PushMetaHandler =
         std::function<Status(master::PushMetaToMasterReqPb &, master::PushMetaToMasterRspPb &)>;
-    using RollbackSealHandler = std::function<Status(const std::string &, uint32_t)>;
     using CheckLocationHandler =
         std::function<Status(master::CheckObjectDataLocationReqPb &, master::CheckObjectDataLocationRspPb &)>;
 
@@ -292,13 +291,6 @@ public:
         return status;
     }
 
-    Status RollbackSeal(const std::string &objectKey, uint32_t oldLifeState) override
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        ++rollbackSealCallCount_;
-        return rollbackSealHandler_ == nullptr ? Status::OK() : rollbackSealHandler_(objectKey, oldLifeState);
-    }
-
     Status CheckObjectDataLocation(master::CheckObjectDataLocationReqPb &req,
                                    master::CheckObjectDataLocationRspPb &rsp) override
     {
@@ -400,12 +392,6 @@ public:
         removeMetaHandler_ = std::move(handler);
     }
 
-    void SetRollbackSealHandler(RollbackSealHandler handler)
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        rollbackSealHandler_ = std::move(handler);
-    }
-
     PushMetaHandler pushMetaHandler_;
     bool acknowledgeRecoveryErrors_{ true };
     CheckLocationHandler checkLocationHandler_;
@@ -414,12 +400,6 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex_);
         return createMetaCallCount_;
-    }
-
-    int RollbackSealCallCount() const
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return rollbackSealCallCount_;
     }
 
     std::vector<master::CreateMultiMetaReqPb> CreateMultiMetaRequests() const
@@ -473,14 +453,12 @@ private:
     CreateMetaHandler createMetaHandler_;
     QueryMetaHandler queryMetaHandler_;
     RemoveMetaHandler removeMetaHandler_;
-    RollbackSealHandler rollbackSealHandler_;
     std::vector<master::CreateMultiMetaReqPb> createMultiMetaRequests_;
     std::vector<master::RemoveMetaReqPb> removeMetaRequests_;
     int queryMetaCallCount_{ 0 };
     int getObjectLocationsCallCount_{ 0 };
     int pureQueryMetaCallCount_{ 0 };
     int createMetaCallCount_{ 0 };
-    int rollbackSealCallCount_{ 0 };
 };
 
 class FakeWorkerMasterApiManager final : public worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi> {
@@ -1408,53 +1386,6 @@ TEST_F(WorkerOcServiceImplTest, CreateMetadataMapsUndispatchedOwnerPeerDead)
     EXPECT_EQ(rc.GetCode(), K_METADATA_OWNER_UNAVAILABLE);
     EXPECT_EQ(rc.GetExtra(), K_METADATA_FAILURE_TEST_EXTRA);
     EXPECT_EQ(api->CreateMetaCallCount(), 0);
-}
-
-TEST_F(WorkerOcServiceImplTest, RollbackSealMapsDispatchedOwnerPeerDead)
-{
-    ScopedRequestContext requestContext;
-    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
-    const std::string objectKey = "rollback-seal-peer-dead";
-    placement_.SetOwner(objectKey, localAddress_);
-    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
-    api->SetRollbackSealHandler([](const std::string &, uint32_t) {
-        return Status(K_RPC_PEER_DEAD, "metadata owner peer dead").WithExtra(K_METADATA_FAILURE_TEST_EXTRA);
-    });
-    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
-    apiManager->SetApi(api);
-    auto publish = MakePublishProcessor(apiManager);
-    auto safeObj = MakeMetadataFailureObject(ObjectLifeState::OBJECT_PUBLISHED);
-    ObjectKV objectKV(objectKey, *safeObj);
-
-    auto rc =
-        publish->RollbackPublishFailure(objectKV, ObjectLifeState::OBJECT_PUBLISHED, ObjectLifeState::OBJECT_SEALED);
-
-    EXPECT_EQ(rc.GetCode(), K_METADATA_OWNER_UNAVAILABLE);
-    EXPECT_EQ(rc.GetExtra(), K_METADATA_FAILURE_TEST_EXTRA);
-    EXPECT_EQ(api->RollbackSealCallCount(), 1);
-}
-
-TEST_F(WorkerOcServiceImplTest, RollbackSealMapsOwnerLookupPeerDead)
-{
-    ScopedRequestContext requestContext;
-    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
-    const std::string objectKey = "rollback-seal-route-peer-dead";
-    placement_.SetOwner(objectKey, localAddress_);
-    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
-    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
-    apiManager->SetApi(api);
-    apiManager->SetLookupStatus(
-        Status(K_RPC_PEER_DEAD, "metadata route peer dead").WithExtra(K_METADATA_FAILURE_TEST_EXTRA));
-    auto publish = MakePublishProcessor(apiManager);
-    auto safeObj = MakeMetadataFailureObject(ObjectLifeState::OBJECT_PUBLISHED);
-    ObjectKV objectKV(objectKey, *safeObj);
-
-    auto rc =
-        publish->RollbackPublishFailure(objectKV, ObjectLifeState::OBJECT_PUBLISHED, ObjectLifeState::OBJECT_SEALED);
-
-    EXPECT_EQ(rc.GetCode(), K_METADATA_OWNER_UNAVAILABLE);
-    EXPECT_EQ(rc.GetExtra(), K_METADATA_FAILURE_TEST_EXTRA);
-    EXPECT_EQ(api->RollbackSealCallCount(), 0);
 }
 
 TEST_F(WorkerOcServiceImplTest, MultiPublishCreateMultiMetaFollowsRedirectToTarget)

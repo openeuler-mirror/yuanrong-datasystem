@@ -262,7 +262,7 @@ Status ClientWorkerLocalApi::PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRsp
 }
 
 Status ClientWorkerLocalApi::Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp,
-                                 std::vector<RpcMessage> &payloads)
+                                 std::vector<RpcMessage> &payloads, Status *ingressRpcStatus)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_GET_LATENCY);
     const int64_t &subTimeoutMs = getParam.subTimeoutMs;
@@ -289,6 +289,9 @@ Status ClientWorkerLocalApi::Get(const GetParam &getParam, uint32_t &version, Ge
         return Status(K_RPC_DEADLINE_EXCEEDED,
                       FormatString("Local get deadline exceeded, remaining %ld us",
                                    ApiDeadline::Instance().ApiRemainingUs()));
+    }
+    if (ingressRpcStatus != nullptr) {
+        *ingressRpcStatus = result.second;
     }
     RETURN_IF_NOT_OK(result.second);
     version = workerVersion_.load(std::memory_order_relaxed);

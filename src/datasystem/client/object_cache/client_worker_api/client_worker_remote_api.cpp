@@ -523,7 +523,7 @@ Status ClientWorkerRemoteApi::PrepareGetUrmaBuffer(const GetParam &getParam, Get
 #endif
 
 Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp,
-                                  std::vector<RpcMessage> &payloads)
+                                  std::vector<RpcMessage> &payloads, Status *ingressRpcStatus)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_GET_LATENCY);
     auto config = GetClientLatencyTraceConfig();
@@ -620,6 +620,9 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
         ConsumeUbHealthSummary(rsp.ub_health_summary(), "Ignore invalid Get UB health summary");
     }
     const Status &finalStatus = uncertainGetStatus.IsError() ? uncertainGetStatus : getStatus;
+    if (ingressRpcStatus != nullptr) {
+        *ingressRpcStatus = getStatus;
+    }
 #ifdef USE_URMA
     if (NeedDelayReleaseShmUnit(finalStatus)) {
         std::shared_ptr<ShmUnit> shmUnit;

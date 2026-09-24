@@ -293,7 +293,8 @@ void RoutedMode::HandleDirectGetFailure(const std::shared_ptr<IClientWorkerApi> 
                                         const Status &status)
 {
     auto routing = std::atomic_load(&routing_);
-    if (routing != nullptr && IsRoutingEvictionFailure(status)) {
+    if (routing != nullptr && IsRoutingEvictionFailure(status)
+        && !routing->IsWorkerConnectionBroken(workerApi->hostPort_)) {
         routing->UpdateState(workerApi->hostPort_, status.GetCode());
     }
     if (!host_.shouldRefreshRoutingAfterFailure(status.GetCode())) {

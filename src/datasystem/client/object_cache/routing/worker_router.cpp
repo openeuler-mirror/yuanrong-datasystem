@@ -34,7 +34,6 @@ namespace datasystem {
 namespace client {
 namespace {
 constexpr size_t DEFAULT_FILTER_COUNT = 2;
-constexpr size_t BROKEN_FILTER_INDEX = 1;
 constexpr size_t MAX_ROUTING_TOKENS = 640'000;
 }  // namespace
 
@@ -56,7 +55,8 @@ WorkerRouter::WorkerRouter(std::string myHostId, std::shared_ptr<WorkerUbHealthR
     }
     filters_.reserve(additionalFilters.size() + DEFAULT_FILTER_COUNT);
     filters_.emplace_back(std::make_shared<StateFilter>(this));
-    filters_.emplace_back(std::make_shared<BrokenFilter>());
+    brokenFilter_ = std::make_shared<BrokenFilter>();
+    filters_.emplace_back(brokenFilter_);
     filters_.insert(filters_.end(), std::make_move_iterator(additionalFilters.begin()),
                     std::make_move_iterator(additionalFilters.end()));
 
@@ -163,8 +163,7 @@ bool WorkerRouter::IsWorkerAvailable(const HostPort &addr, WorkerAccessAction ac
 
 bool WorkerRouter::IsWorkerConnectionBroken(const HostPort &addr) const
 {
-    return filters_.size() > BROKEN_FILTER_INDEX
-           && !filters_[BROKEN_FILTER_INDEX]->IsAvailable(addr, WorkerAccessAction::CONTROL);
+    return brokenFilter_ != nullptr && !brokenFilter_->IsAvailable(addr, WorkerAccessAction::CONTROL);
 }
 
 bool WorkerRouter::IsExcluded(const HostPort &addr, const std::vector<HostPort> &exclude) const

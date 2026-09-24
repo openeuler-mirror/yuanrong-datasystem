@@ -26,6 +26,7 @@
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/common/object_cache/provider_ub_failure_detail.h"
+#include "datasystem/common/util/rpc_util.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -775,8 +776,7 @@ void BoundMode::BuildClientDirectRH2DReadRequest(const std::vector<std::string> 
 Status BoundMode::RecoverWorkerAndRetryGet(const std::shared_ptr<IClientWorkerApi> &workerApi,
                                            GetParam &getParam, WorkerNode workerNode,
                                            const std::vector<std::string> &objectKeys,
-                                           std::vector<std::shared_ptr<Buffer>> &buffers,
-                                           Status *ingressRpcStatus)
+                                           std::vector<std::shared_ptr<Buffer>> &buffers)
 {
     auto recoveryReason = client::WorkerRecoveryReason::CLIENT_REMOVED;
     auto recoveryStatus = workerNode == LOCAL_WORKER
@@ -786,7 +786,7 @@ Status BoundMode::RecoverWorkerAndRetryGet(const std::shared_ptr<IClientWorkerAp
         return recoveryStatus;
     }
     buffers.assign(objectKeys.size(), nullptr);
-    return GetBuffersFromWorker(workerApi, getParam, buffers, ingressRpcStatus);
+    return GetBuffersFromWorker(workerApi, getParam, buffers);
 }
 
 Status BoundMode::GetFromLocalWorker(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs,
@@ -811,13 +811,12 @@ Status BoundMode::GetFromLocalWorker(const std::vector<std::string> &objectKeys,
                            .requestTimeoutMs = requestTimeoutMs };
         Status ingressRpcStatus;
         rc = GetBuffersFromWorker(workerApi, getParam, buffers, &ingressRpcStatus);
+        Status routingFailure = ingressRpcStatus;
         if (ingressRpcStatus.GetCode() == K_CLIENT_WORKER_DISCONNECT) {
-            ingressRpcStatus = Status::OK();
-            rc = RecoverWorkerAndRetryGet(workerApi, getParam, workerNode, objectKeys, buffers, &ingressRpcStatus);
+            rc = RecoverWorkerAndRetryGet(workerApi, getParam, workerNode, objectKeys, buffers);
+            routingFailure = rc;
         }
-        if (ingressRpcStatus.IsError()) {
-            host_.handleDirectGetFailure(workerApi, ingressRpcStatus);
-        }
+        host_.handleDirectGetFailure(workerApi, routingFailure);
         const bool ubUnavailable = rc.GetCode() == K_URMA_ERROR || rc.GetCode() == K_URMA_WORKER_UNAVAILABLE
                                    || rc.GetCode() == K_URMA_DATA_WORKER_UNAVAILABLE;
         if (isRH2DSupported || !ubUnavailable) {
@@ -964,7 +963,7 @@ Status BoundMode::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> workerA
         std::string tenantId = GetRequestContext()->tenantId.empty() ? tenantId_ : GetRequestContext()->tenantId;
         Timer metaTimer;
         Status metaRc = workerApi->GetObjMetaInfo(tenantId, objectsNeedToGet, objMetas);
-        if (metaRc.IsError() && ingressRpcStatus != nullptr) {
+        if (ingressRpcStatus != nullptr && metaRc.IsError()) {
             *ingressRpcStatus = metaRc;
         }
         getParam.ubGetObjMetaElapsedMs = static_cast<int64_t>(metaTimer.ElapsedMilliSecond());
@@ -1028,10 +1027,7 @@ Status BoundMode::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> workerA
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_GET_RPC_START);
     }
-    Status getRc = workerApi->Get(getParam, version, rsp, payloads);
-    if (getRc.IsError() && ingressRpcStatus != nullptr) {
-        *ingressRpcStatus = getRc;
-    }
+    Status getRc = workerApi->Get(getParam, version, rsp, payloads, ingressRpcStatus);
     ObserveGetProviderUbFailure(workerApi, rsp);
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_GET_RPC_END);
@@ -1113,9 +1109,6 @@ Status BoundMode::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWorkerApi> 
                                               const std::vector<ObjMetaInfo> &objMetas, uint64_t ubMaxGetSize,
                                               AccessTransportKind *requestTransportKind, Status *ingressRpcStatus)
 {
-    if (ingressRpcStatus != nullptr) {
-        *ingressRpcStatus = Status::OK();
-    }
     PerfPoint totalPoint(PerfKey::CLIENT_GET_BUFFERS_FROM_WORKER);
     const auto &objectKeys = getParam.objectKeys;
     const auto &readParams = getParam.readParams;
@@ -1125,19 +1118,16 @@ Status BoundMode::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWorkerApi> 
 
     size_t totalSuccessCount = 0;
     Status lastError;
-    Status lastIngressRpcStatus;
 
     for (const auto &batch : batches) {
         if (batch.indices.size() == 1 && objMetas[batch.indices[0]].objSize > ubMaxGetSize) {
             const size_t idx = batch.indices[0];
-            Status chunkIngressRpcStatus;
             Status rc = GetOversizedBufferFromWorkerByChunks(workerApi, getParam, idx, objMetas[idx].objSize,
                                                              ubMaxGetSize, buffers[idx], requestTransportKind,
-                                                             &chunkIngressRpcStatus);
+                                                             ingressRpcStatus);
             if (rc.IsError()) {
                 LOG(WARNING) << "Chunked Get failed for " << objectKeys[idx] << ": " << rc.ToString();
                 lastError = rc;
-                lastIngressRpcStatus = std::move(chunkIngressRpcStatus);
                 continue;
             }
             totalSuccessCount++;
@@ -1177,7 +1167,11 @@ Status BoundMode::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWorkerApi> 
         uint32_t version = 0;
 
         PerfPoint stagePoint(PerfKey::CLIENT_GET_BUFFERS_FROM_WORKER_RPC);
-        Status rc = workerApi->Get(subGetParam, version, rsp, payloads);
+        Status batchIngress;
+        Status rc = workerApi->Get(subGetParam, version, rsp, payloads, &batchIngress);
+        if (ingressRpcStatus != nullptr && batchIngress.IsError() && ingressRpcStatus->IsOk()) {
+            *ingressRpcStatus = batchIngress;
+        }
         ObserveGetProviderUbFailure(workerApi, rsp);
         if (requestTransportKind != nullptr) {
             *requestTransportKind = MergeTransportKind(*requestTransportKind, batchTransportKind);
@@ -1185,7 +1179,6 @@ Status BoundMode::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWorkerApi> 
         if (rc.IsError()) {
             LOG(WARNING) << "Batch Get failed for " << subKeys.size() << " objects: " << rc.ToString();
             lastError = rc;
-            lastIngressRpcStatus = rc;
             continue;
         }
         stagePoint.RecordAndReset(PerfKey::CLIENT_GET_BUFFERS_FROM_WORKER_PROCESS_RESPONSE);
@@ -1196,7 +1189,6 @@ Status BoundMode::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWorkerApi> 
         if (rc.IsError()) {
             LOG(WARNING) << "ProcessGetResponse failed in batch: " << rc.ToString();
             lastError = rc;
-            lastIngressRpcStatus = Status::OK();
             continue;
         }
 
@@ -1206,20 +1198,13 @@ Status BoundMode::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWorkerApi> 
         const size_t batchSuccessCount = subKeys.size() - failedObjectKey.size();
         if (batchSuccessCount == 0) {
             lastError = GetWorkerGetFailure(rsp, workerApi->hostPort_, "Cannot get objects from worker");
-            lastIngressRpcStatus = Status::OK();
         }
         totalSuccessCount += batchSuccessCount;
     }
 
     if (totalSuccessCount > 0) {
-        if (ingressRpcStatus != nullptr) {
-            *ingressRpcStatus = Status::OK();
-        }
         totalPoint.Record();
         return Status::OK();
-    }
-    if (ingressRpcStatus != nullptr) {
-        *ingressRpcStatus = std::move(lastIngressRpcStatus);
     }
     totalPoint.Record();
     return lastError.IsOk() ? Status(K_NOT_FOUND, "Cannot get objects from worker") : lastError;
@@ -1234,9 +1219,6 @@ Status BoundMode::GetOversizedBufferFromWorkerByChunks(std::shared_ptr<IClientWo
                                                        AccessTransportKind *requestTransportKind,
                                                        Status *ingressRpcStatus)
 {
-    if (ingressRpcStatus != nullptr) {
-        *ingressRpcStatus = Status::OK();
-    }
     CHECK_FAIL_RETURN_STATUS(ubMaxGetSize > 0, K_INVALID, "UB max get size is 0");
     const auto &objectKey = getParam.objectKeys[objectIndex];
     OffsetInfo offsetInfo;
@@ -1261,16 +1243,9 @@ Status BoundMode::GetOversizedBufferFromWorkerByChunks(std::shared_ptr<IClientWo
         uint64_t chunkSize = std::min(ubMaxGetSize, offsetInfo.readSize - copiedSize);
         std::shared_ptr<Buffer> chunkBuffer;
         uint32_t chunkVersion = 0;
-        Status chunkIngressRpcStatus;
-        auto rc = GetOversizedBufferChunk(workerApi, getParam, objectKey, offsetInfo.readOffset + copiedSize,
-                                          chunkSize, chunkBuffer, chunkVersion, requestTransportKind,
-                                          &chunkIngressRpcStatus);
-        if (rc.IsError()) {
-            if (ingressRpcStatus != nullptr) {
-                *ingressRpcStatus = std::move(chunkIngressRpcStatus);
-            }
-            return rc;
-        }
+        RETURN_IF_NOT_OK(GetOversizedBufferChunk(workerApi, getParam, objectKey, offsetInfo.readOffset + copiedSize,
+                                                 chunkSize, chunkBuffer, chunkVersion, requestTransportKind,
+                                                 ingressRpcStatus));
         if (!hasVersion) {
             firstVersion = chunkVersion;
             hasVersion = true;
@@ -1296,9 +1271,6 @@ Status BoundMode::GetOversizedBufferChunk(std::shared_ptr<IClientWorkerApi> work
                                           std::shared_ptr<Buffer> &chunkBuffer, uint32_t &version,
                                           AccessTransportKind *requestTransportKind, Status *ingressRpcStatus)
 {
-    if (ingressRpcStatus != nullptr) {
-        *ingressRpcStatus = Status::OK();
-    }
     ReadParam readParam{ objectKey, offset, chunkSize };
     std::vector<std::string> subKeys{ objectKey };
     std::vector<ReadParam> subReadParams{ readParam };
@@ -1315,10 +1287,7 @@ Status BoundMode::GetOversizedBufferChunk(std::shared_ptr<IClientWorkerApi> work
                           .requestTimeoutMs = getParam.requestTimeoutMs };
     GetRspPb rsp;
     std::vector<RpcMessage> payloads;
-    Status getRc = workerApi->Get(subGetParam, version, rsp, payloads);
-    if (getRc.IsError() && ingressRpcStatus != nullptr) {
-        *ingressRpcStatus = getRc;
-    }
+    Status getRc = workerApi->Get(subGetParam, version, rsp, payloads, ingressRpcStatus);
     ObserveGetProviderUbFailure(workerApi, rsp);
     RETURN_IF_NOT_OK(getRc);
     if (requestTransportKind != nullptr) {
