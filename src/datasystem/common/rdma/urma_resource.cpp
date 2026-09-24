@@ -700,11 +700,15 @@ UrmaConnection::~UrmaConnection()
 Status UrmaConnection::GetRemoteSeg(uint64_t segVa, UrmaRemoteSegmentMap::const_accessor &accessor) const
 {
     if (!tsegs_.find(accessor, segVa)) {
-        RETURN_STATUS(K_NOT_FOUND, FormatString("Remote segment is not found, segment VA: %lu", segVa));
+        RETURN_STATUS_LOG_ERROR(
+            K_NOT_FOUND, FormatString("Remote segment is not found, segment VA: %lu, remoteAddress=%s", segVa,
+                urmaJfrInfo_.localAddress.Empty() ? "unknown" : urmaJfrInfo_.localAddress.ToString()));
     }
     auto *segment = accessor->second == nullptr ? nullptr : accessor->second->Raw();
-    CHECK_FAIL_RETURN_STATUS(segment != nullptr, K_RUNTIME_ERROR,
-                             FormatString("Remote segment entry is empty, segment VA: %lu", segVa));
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        segment != nullptr, K_RUNTIME_ERROR,
+        FormatString("Remote segment entry is empty, segment VA: %lu, remoteAddress=%s", segVa,
+                     urmaJfrInfo_.localAddress.Empty() ? "unknown" : urmaJfrInfo_.localAddress.ToString()));
     return Status::OK();
 }
 
