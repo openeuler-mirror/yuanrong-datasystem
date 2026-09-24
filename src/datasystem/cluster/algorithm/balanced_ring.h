@@ -38,7 +38,7 @@ struct PlacementOwner {
 // budget: past that, per-take landing error (ring/(2K) against ideal ring/(members*tokens)) exceeds the
 // take itself, residual quality collapses back to pure-hash levels, and the dense per-token seed
 // overrides keep inflating both planning cost and serialized topology size.
-inline constexpr uint32_t BALANCED_PLACEMENT_MAX_RING_TOKENS = 8'000;
+inline constexpr uint32_t BALANCED_PLACEMENT_MAX_RING_TOKENS = 2'000;
 
 struct ArcRecord {
     uint64_t length;
