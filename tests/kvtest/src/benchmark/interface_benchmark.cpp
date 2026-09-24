@@ -417,11 +417,20 @@ int RunGetBenchmark(const Config &cfg, std::vector<ChildProcess> &children, cons
 
     GroupResult warmup;
     if (!ExecuteGroup(children, measuredIndices, CMD_PREPARE_GET, 0, cfg.numThreads, keysPerDataset, 1, 0, true,
-                      warmup, running)
-        || warmup.total.failureCount != 0) {
-        SLOG_ERROR("Get warmup failed");
+                      warmup, running)) {
+        SLOG_ERROR("Get warmup execution failed");
         (void)CleanupDataset(cfg, children, cleanupIndices, 0, keysPerDataset, running);
         return MEASUREMENT_FAILURE_EXIT_CODE;
+    }
+    if (warmup.total.successCount == 0) {
+        SLOG_ERROR("Get warmup produced no successful reads: failures=" << warmup.total.failureCount);
+        (void)CleanupDataset(cfg, children, cleanupIndices, 0, keysPerDataset, running);
+        return MEASUREMENT_FAILURE_EXIT_CODE;
+    }
+    if (warmup.total.failureCount != 0) {
+        SLOG_WARN("Get warmup had failures: success=" << warmup.total.successCount
+                                                        << ", failures=" << warmup.total.failureCount
+                                                        << "; continuing benchmark");
     }
     if (!TtlCoversGetWindow(cfg, setup.total)) {
         SLOG_ERROR("TTL cannot cover the complete Get measurement window");
@@ -456,10 +465,64 @@ bool DurationReached(const Config &cfg, const std::chrono::steady_clock::time_po
     return std::chrono::steady_clock::now() - start >= std::chrono::seconds(cfg.durationSeconds);
 }
 
+double GetSetElapsedMs(const Config &cfg, const GroupResult &group)
+{
+    if (cfg.setApi == "string_view") {
+        return group.total.ElapsedMs();
+    }
+    return CalcSetOnlyElapsedMs(group.total, CalcGroupSetConcurrency(group, cfg.numThreads));
+}
+
+int RunContinuousSetBenchmark(const Config &cfg, const std::vector<ChildProcess> &children,
+                              const std::vector<size_t> &measuredIndices,
+                              const std::vector<size_t> &cleanupIndices, int keysPerDataset, InterfaceCsvWriter &csv,
+                              const std::atomic<bool> &running)
+{
+    GroupResult setup;
+    if (!ExecuteGroup(children, measuredIndices, CMD_PREPARE_SET, 0, cfg.numThreads, keysPerDataset, 1, 0, false,
+                      setup, running)) {
+        return 1;
+    }
+    csv.WriteGroup("setup", 0, "set", setup, cfg.dataSizes[0], GetSetElapsedMs(cfg, setup));
+    if (!HasRunnableContinuousSetSetup(setup.total.successCount)) {
+        SLOG_ERROR("Continuous Set setup produced no keys: failures=" << setup.total.failureCount);
+        (void)CleanupDataset(cfg, children, cleanupIndices, 0, keysPerDataset, running);
+        return MEASUREMENT_FAILURE_EXIT_CODE;
+    }
+    if (setup.total.failureCount != 0 || setup.total.successCount != keysPerDataset) {
+        SLOG_WARN("Continuous Set setup partially succeeded: expected=" << keysPerDataset
+                                                                          << ", success="
+                                                                          << setup.total.successCount
+                                                                          << ", failures="
+                                                                          << setup.total.failureCount
+                                                                          << "; continuing benchmark");
+    }
+    GroupResult measured;
+    const int64_t durationMs = static_cast<int64_t>(cfg.durationSeconds) * BENCHMARK_MILLISECONDS_PER_SECOND;
+    if (!ExecuteGroup(children, measuredIndices, CMD_PREPARE_SET, 0, cfg.numThreads, keysPerDataset, cfg.totalRounds,
+                      durationMs, false, measured, running)) {
+        return 1;
+    }
+    csv.WriteGroup("total", -1, "set", measured, cfg.dataSizes[0], GetSetElapsedMs(cfg, measured));
+    const auto cleanup = CleanupDataset(cfg, children, cleanupIndices, 0, keysPerDataset, running);
+    SLOG_INFO("Continuous Set benchmark finished: resident_keys=" << keysPerDataset
+                                                                    << ", success=" << measured.total.successCount
+                                                                    << ", failures=" << measured.total.failureCount
+                                                                    << ", set_only_elapsed_ms="
+                                                                    << GetSetElapsedMs(cfg, measured));
+    if (!cleanup.executionOk || cleanup.operationFailureCount != 0) {
+        return CLEANUP_FAILURE_EXIT_CODE;
+    }
+    return setup.total.failureCount == 0 && measured.total.failureCount == 0 ? 0 : MEASUREMENT_FAILURE_EXIT_CODE;
+}
+
 int RunSetBenchmark(const Config &cfg, std::vector<ChildProcess> &children, const std::vector<size_t> &measuredIndices,
                     const std::vector<size_t> &cleanupIndices, int keysPerDataset, InterfaceCsvWriter &csv,
                     std::atomic<bool> &running)
 {
+    if (cfg.cleanupMethod == "none") {
+        return RunContinuousSetBenchmark(cfg, children, measuredIndices, cleanupIndices, keysPerDataset, csv, running);
+    }
     StreamingPhaseResult summary;
     double activeElapsedMs = 0;
     bool cleanupFailed = false;
@@ -474,9 +537,7 @@ int RunSetBenchmark(const Config &cfg, std::vector<ChildProcess> &children, cons
                           false, measured, running)) {
             return 1;
         }
-        const int64_t setConcurrency = CalcGroupSetConcurrency(measured, cfg.numThreads);
-        const double setElapsedMs = cfg.setApi == "string_view" ? measured.total.ElapsedMs()
-                                                               : CalcSetOnlyElapsedMs(measured.total, setConcurrency);
+        const double setElapsedMs = GetSetElapsedMs(cfg, measured);
         csv.WriteGroup("round", round, "set", measured, cfg.dataSizes[0], setElapsedMs);
         activeElapsedMs += setElapsedMs;
         summary.Merge(measured.total);
@@ -542,6 +603,8 @@ int RunInterfaceBenchmark(const Config &cfg, const std::string &configPath, std:
     }
     if (cfg.cleanupMethod == "del" && IsGetMode(cfg.testMode)) {
         cleanupIndices = measuredIndices;
+    } else if (cfg.cleanupMethod == "none") {
+        cleanupIndices = measuredIndices;
     }
 
     InterfaceCsvWriter csv(cfg.outputDir, cfg.numThreads, cfg.setApi != "string_view");
@@ -553,6 +616,9 @@ int RunInterfaceBenchmark(const Config &cfg, const std::string &configPath, std:
     SLOG_INFO("Interface benchmark: clients=" << cfg.numClients << ", threads_per_client=" << cfg.numThreads
                                                << ", total_concurrency=" << totalConcurrency
                                                << ", keys_per_dataset=" << keysPerDataset
+                                               << ", resident_data_gib=" << std::fixed << std::setprecision(3)
+                                               << static_cast<long double>(keysPerDataset) * cfg.dataSizes[0]
+                                                      / (1024.0L * 1024.0L * 1024.0L)
                                                << "; target_qps is not used in benchmark mode");
     int rc = IsGetMode(cfg.testMode)
                  ? RunGetBenchmark(cfg, children, measuredIndices, cleanupIndices, keysPerDataset, csv, running)

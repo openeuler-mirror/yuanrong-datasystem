@@ -601,6 +601,19 @@ class TestGenConfig(unittest.TestCase):
         self.assertIn('set_param', config)
         self.assertEqual(config['set_param']['ttl_second'], 5)
 
+    def test_benchmark_cleanup_none(self):
+        """Benchmark should emit continuous Set overwrite cleanup mode."""
+        _, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+            '--cleanup-method', 'none',
+            '--test-mode', 'set_remote',
+            '--set-api', 'create_buffer_raw',
+            '--worker-memory-mb', '131072',
+        ])
+        self.assertEqual(config['cleanup_method'], 'none')
+        self.assertEqual(config['set_api'], 'create_buffer_raw')
+        self.assertEqual(config['worker_memory_mb'], 131072)
+
     # --- Pipeline mode with kubectl ---
 
     def test_pipeline_generates_deploy_json(self):

@@ -228,7 +228,7 @@ bash tests/test_standalone_mode.sh
 | `total_rounds` | int | 0 | 总轮数，0 = 不限轮 |
 | `round_cleanup_wait_ms` | int | 3000 | `del` 清理后、下一轮开始前的等待时间（毫秒），0 = 不等待；等待不超过剩余运行时长 |
 | `set_api` | string | "string_view" | Set API 路径：`"string_view"` 或 `"create_buffer"` |
-| `cleanup_method` | string | "del" | 清理方式：`"del"`（每轮删除）或 `"ttl"`（TTL 过期） |
+| `cleanup_method` | string | "del" | 清理方式：`"del"`（每轮删除）、`"ttl"`（TTL 过期）或 `"none"`（仅 Set 模式，测量期间不清理，结束后统一删除） |
 | `remote_worker.host` | string | "" | 远端 Worker 地址（部分模式必填）；`get_remote_direct` 留空时使用 ServiceDiscovery |
 | `remote_worker.port` | int | 31501 | 远端 Worker 端口 |
 

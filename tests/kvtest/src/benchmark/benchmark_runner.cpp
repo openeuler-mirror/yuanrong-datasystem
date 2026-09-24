@@ -15,6 +15,11 @@ int CalcKeysPerRound(int workerMemoryMb, uint64_t dataSize) {
     return static_cast<int>(std::max(keys64, static_cast<uint64_t>(1)));
 }
 
+bool HasRunnableContinuousSetSetup(int64_t successCount)
+{
+    return successCount > 0;
+}
+
 int64_t CalcRoundCleanupWaitMs(int configuredWaitMs, int64_t maxDurationMs, int64_t elapsedMs) {
     if (configuredWaitMs <= 0) return 0;
     if (maxDurationMs <= 0) return configuredWaitMs;
