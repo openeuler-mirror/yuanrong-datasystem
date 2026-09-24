@@ -1195,8 +1195,9 @@ Status UrmaManager::CheckAndNotify(const UrmaWriteTrace &pollTrace)
             if (retainedTimeout || disposition == UrmaEvent::CompletionDisposition::DISCARDED_TIMEOUT) {
                 DeleteEvent(requestId);
             }
-            if (retained) {
-                DispatchLateCompletion(event, cqeStatus);
+            if (retained || (cqeStatus == URMA_REMOTE_ACK_TIMEOUT_STATUS &&
+                             disposition == UrmaEvent::CompletionDisposition::WAKE_WAITER)) {
+                DispatchObservedCompletion(event, cqeStatus, disposition, retained);
             }
             VLOG(1) << "[UrmaEventHandler] [urma_request_id:" << requestId << "] Notifying the request";
             // remove request id from finishedRequests_ set
@@ -1316,6 +1317,18 @@ void UrmaManager::ClearRetainedTimeoutEvents()
     }
     for (const auto requestId : retained) {
         DeleteEvent(requestId);
+    }
+}
+
+void UrmaManager::DispatchObservedCompletion(const std::shared_ptr<UrmaEvent> &event, int cqeStatus,
+                                             UrmaEvent::CompletionDisposition disposition, bool retained)
+{
+    const auto &context = event->GetLateCompletionContext();
+    const bool immediateAckTimeout = disposition == UrmaEvent::CompletionDisposition::WAKE_WAITER &&
+                                     cqeStatus == URMA_REMOTE_ACK_TIMEOUT_STATUS && context.has_value() &&
+                                     context->notifyRemoteAckTimeout;
+    if (retained || immediateAckTimeout) {
+        DispatchLateCompletion(event, cqeStatus);
     }
 }
 

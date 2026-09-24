@@ -63,6 +63,8 @@ namespace {
 constexpr std::chrono::seconds PROBE_OBSERVATION_TIMEOUT(3);
 constexpr char RECONCILE_AFTER_DEADLINE_CHECK_INJECT[] =
     "TransportLayer.WaitForSnapshotOrStop.afterDeadlineCheck";
+constexpr char LOCAL_PROBE_ACCEPTED_INJECT[] = "TransportLayer.ClientUbProbeCooldown.localAccepted";
+constexpr char REMOTE_PROBE_ACCEPTED_INJECT[] = "TransportLayer.ClientUbProbeCooldown.remoteAccepted";
 
 template <typename Predicate>
 bool WaitUntil(Predicate predicate, std::chrono::milliseconds timeout = PROBE_OBSERVATION_TIMEOUT)
@@ -479,9 +481,13 @@ private:
 class TestTransportLayer : public TransportLayer {
 public:
     TestTransportLayer(std::shared_ptr<DataPlaneManager> manager, std::shared_ptr<TransportAdvisor> advisor,
-                       std::shared_ptr<UbHealthFilter> readSourceFilter = nullptr)
+                       std::shared_ptr<UbHealthFilter> readSourceFilter = nullptr,
+                       bool configureUbHealthTriggers = false)
         : TransportLayer(std::move(manager), std::move(advisor), std::move(readSourceFilter))
     {
+        if (configureUbHealthTriggers) {
+            ConfigureUbHealthTriggers();
+        }
     }
 
     bool ReportProviderFailure(const HostPort &provider, const ProviderUbFailureDetailPb &detail)
@@ -861,26 +867,6 @@ TEST(UbHealthFilterTest, NewTopologyIncarnationClearsOldLocalObservation)
     EXPECT_FALSE(filter.GetLocalObservation(provider).has_value());
 }
 
-TEST(UbHealthFilterTest, Cqe9QuarantinesOnlyWriteTargetAndProbeRecoversIt)
-{
-    UbHealthFilter filter;
-    const auto worker = MakeAddress(54);
-    EXPECT_TRUE(filter.ReportWriteTargetFailure(worker, Status(K_URMA_ERROR, "remote ack timeout"),
-                                                std::nullopt, URMA_REMOTE_ACK_TIMEOUT_STATUS));
-    EXPECT_FALSE(filter.IsWriteTargetAvailable(worker));
-    EXPECT_TRUE(filter.IsAvailable(worker, client::WorkerAccessAction::CONTROL));
-    ASSERT_EQ(filter.GetUnavailableWriteTargets().size(), 1U);
-
-    auto state = filter.GetWriteTargetObservation(worker);
-    ASSERT_TRUE(state.has_value());
-    auto candidate = filter.TryBeginWriteTargetRecovery(state->backoffDeadlineMs);
-    ASSERT_TRUE(candidate.has_value());
-    EXPECT_FALSE(filter.IsWriteTargetAvailable(worker));
-    EXPECT_TRUE(filter.CompleteWriteTargetRecovery(*candidate, Status::OK(), state->backoffDeadlineMs));
-    EXPECT_TRUE(filter.IsWriteTargetAvailable(worker));
-    EXPECT_TRUE(filter.GetUnavailableWriteTargets().empty());
-}
-
 // A verified port fact is authoritative for the write direction only: reads keep the Worker routable while Set/MSet
 // avoid it, and the exclusion entry is derived from the write-target admission verdict.
 TEST(UbHealthFilterTest, VerifiedAllBadPortFactQuarantinesWriteTargetOnly)
@@ -890,6 +876,7 @@ TEST(UbHealthFilterTest, VerifiedAllBadPortFactQuarantinesWriteTargetOnly)
     ClusterTopologyPb topology;
     (*topology.mutable_members())[worker.ToString()].set_id("incarnation-a");
     filter.ApplyTopologyIncarnations(topology);
+    const uint64_t beforeIsolation = filter.CaptureWriteTargetCompletionGeneration(worker);
     UbHealthSummary summary;
     summary.worker = worker;
     summary.incarnation = "incarnation-a";
@@ -907,8 +894,10 @@ TEST(UbHealthFilterTest, VerifiedAllBadPortFactQuarantinesWriteTargetOnly)
     EXPECT_TRUE(state->portHealthGoverned);
     ASSERT_EQ(filter.GetUnavailableWriteTargets().size(), 1U);
     EXPECT_EQ(filter.GetUnavailableWriteTargets().front(), worker);
+    EXPECT_FALSE(filter.IsWriteTargetCompletionCurrent(worker, beforeIsolation));
 
     // A newer epoch carrying a healthy fact releases the exclusion through the same path.
+    const uint64_t beforeRecovery = filter.CaptureWriteTargetCompletionGeneration(worker);
     UbHealthSummary recovered = summary;
     recovered.epoch = 2;
     recovered.writable = true;
@@ -920,6 +909,7 @@ TEST(UbHealthFilterTest, VerifiedAllBadPortFactQuarantinesWriteTargetOnly)
     state = filter.GetWriteTargetObservation(worker);
     ASSERT_TRUE(state.has_value());
     EXPECT_EQ(state->state, UbAdmissionState::AVAILABLE);
+    EXPECT_FALSE(filter.IsWriteTargetCompletionCurrent(worker, beforeRecovery));
 }
 
 // A released write target must not be re-quarantined by a stale all-BAD fact: applying the port fact (instead of
@@ -1010,47 +1000,6 @@ TEST(UbHealthFilterTest, PassiveHealthySummaryDoesNotReleaseVerifiedWriteQuarant
     EXPECT_FALSE(filter.GetUnavailableWriteTargets().empty());
 
     ASSERT_TRUE(filter.ApplySummary(healthy, healthy.incarnation));
-    EXPECT_TRUE(filter.IsWriteTargetAvailable(worker));
-    EXPECT_TRUE(filter.GetUnavailableWriteTargets().empty());
-}
-
-TEST(UbHealthFilterTest, LateCqe9UsesPeerGenerationFence)
-{
-    UbHealthFilter filter;
-    const auto worker = MakeAddress(55);
-    const uint64_t peerToken = filter.CaptureWriteTargetCompletionGeneration(worker);
-    ASSERT_NE(peerToken, 0U);
-    filter.ReportLateWriteTargetFailure(
-        UrmaLateCompletion{ 5005, URMA_REMOTE_ACK_TIMEOUT_STATUS, worker.ToString(), "worker-incarnation" },
-        peerToken);
-    EXPECT_FALSE(filter.IsWriteTargetAvailable(worker));
-
-    auto state = filter.GetWriteTargetObservation(worker);
-    ASSERT_TRUE(state.has_value());
-    auto candidate = filter.TryBeginWriteTargetRecovery(state->backoffDeadlineMs);
-    ASSERT_TRUE(candidate.has_value());
-    ASSERT_TRUE(filter.CompleteWriteTargetRecovery(*candidate, Status::OK(), state->backoffDeadlineMs));
-    filter.ReportLateWriteTargetFailure(
-        UrmaLateCompletion{ 5006, URMA_REMOTE_ACK_TIMEOUT_STATUS, worker.ToString(), "old-incarnation" }, peerToken);
-    EXPECT_TRUE(filter.IsWriteTargetAvailable(worker));
-}
-
-TEST(UbHealthFilterTest, TopologyIncarnationChangeInvalidatesLateWriteTargetCompletion)
-{
-    UbHealthFilter filter;
-    const auto worker = MakeAddress(58);
-    ClusterTopologyPb initial;
-    (*initial.mutable_members())[worker.ToString()].set_id("incarnation-a");
-    filter.ApplyTopologyIncarnations(initial);
-    const uint64_t peerToken = filter.CaptureWriteTargetCompletionGeneration(worker);
-    ASSERT_NE(peerToken, 0U);
-
-    ClusterTopologyPb restarted = initial;
-    (*restarted.mutable_members())[worker.ToString()].set_id("incarnation-b");
-    filter.ApplyTopologyIncarnations(restarted);
-    filter.ReportLateWriteTargetFailure(
-        UrmaLateCompletion{ 5007, URMA_REMOTE_ACK_TIMEOUT_STATUS, worker.ToString(), "incarnation-a" }, peerToken);
-
     EXPECT_TRUE(filter.IsWriteTargetAvailable(worker));
     EXPECT_TRUE(filter.GetUnavailableWriteTargets().empty());
 }
@@ -1413,7 +1362,8 @@ TEST(TransportLayerAdmissionTest, ProviderRecoveryDoesNotDependOnHeartbeatSummar
     EXPECT_EQ(manager->providerProbedWorkers, std::vector<HostPort>{ provider });
     EXPECT_EQ(manager->providerProbeExpectedIncarnations, std::vector<std::string>{ "incarnation-a" });
     EXPECT_EQ(manager->providerProbeTimeouts, std::vector<int32_t>{ 3'000 });
-    EXPECT_TRUE(filter->IsAvailable(provider, client::WorkerAccessAction::CONTROL));
+    EXPECT_TRUE(WaitUntil(
+        [&] { return filter->IsAvailable(provider, client::WorkerAccessAction::CONTROL); }));
 }
 
 TEST(TransportLayerAdmissionTest, ProviderProbeCompletionDoesNotSpinOnReconcileLoop)
@@ -1809,27 +1759,73 @@ TEST(TransportLayerAdmissionTest, LateCqe4DoesNotDirectlyCloseAdmission)
     EXPECT_EQ(manager->builtTransporters.front()->setCount, 2);
 }
 
-TEST(TransportLayerAdmissionTest, LateCqe9DoesNotCloseClientLocalSender)
+TEST(TransportLayerAdmissionTest, LateCqe4AndCqe9SharePerScopeCooldown)
 {
-    const auto worker = MakeAddress(41);
+    const auto worker = MakeAddress(42);
     auto manager = std::make_shared<FakeDataPlaneManager>();
     auto filter = std::make_shared<UbHealthFilter>();
-    TestTransportLayer layer(manager, std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE),
-                             filter);
+    TestTransportLayer layer(manager, std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE), filter,
+                             true);
     std::shared_ptr<ObjectBuffer> buffer;
-    ASSERT_TRUE(layer.Create(worker, "late-cqe9", 4, MakeCreateParam(), buffer).IsOk());
+    ASSERT_TRUE(layer.Create(worker, "probe-cooldown", 4, MakeCreateParam(), buffer).IsOk());
     ASSERT_TRUE(layer.Set(*buffer, MakeSetParam()).IsOk());
-    const auto lateContext = ObjectBufferInternal::GetInfo(*buffer).ubLateCompletionContext;
-    ASSERT_TRUE(lateContext.has_value());
-    auto observer = lateContext->observer.lock();
+    const auto context = ObjectBufferInternal::GetInfo(*buffer).ubLateCompletionContext;
+    ASSERT_TRUE(context.has_value());
+    auto observer = context->observer.lock();
     ASSERT_NE(observer, nullptr);
 
-    observer->OnLateUrmaCompletion(
-        UrmaLateCompletion{ 4002, URMA_REMOTE_ACK_TIMEOUT_STATUS, worker.ToString(), "worker-incarnation" },
-        lateContext->ownerToken, lateContext->peerToken);
+    ASSERT_TRUE(inject::Set(LOCAL_PROBE_ACCEPTED_INJECT, "10*call()").IsOk());
+    Raii clearLocalInject([] { (void)inject::Clear(LOCAL_PROBE_ACCEPTED_INJECT); });
+    ASSERT_TRUE(inject::Set(REMOTE_PROBE_ACCEPTED_INJECT, "10*call()").IsOk());
+    Raii clearRemoteInject([] { (void)inject::Clear(REMOTE_PROBE_ACCEPTED_INJECT); });
+    for (uint64_t requestId : { 10'000U, 10'001U }) {
+        observer->OnLateUrmaCompletion(
+            UrmaLateCompletion{ requestId, URMA_REMOTE_ACK_TIMEOUT_STATUS, worker.ToString(),
+                                "worker-incarnation" },
+            context->ownerToken, context->peerToken);
+        observer->OnLateUrmaCompletion(
+            UrmaLateCompletion{ requestId, URMA_PORT_UNAVAILABLE_STATUS, worker.ToString(),
+                                "worker-incarnation" },
+            context->ownerToken, context->peerToken);
+    }
 
+    EXPECT_EQ(inject::GetExecuteCount(REMOTE_PROBE_ACCEPTED_INJECT), 1U);
+    EXPECT_EQ(inject::GetExecuteCount(LOCAL_PROBE_ACCEPTED_INJECT), 1U);
     EXPECT_TRUE(layer.CheckLocalUbSenderAdmission().IsOk());
-    ASSERT_TRUE(WaitUntil([&] { return !filter->IsWriteTargetAvailable(worker); }));
+    EXPECT_TRUE(filter->IsWriteTargetAvailable(worker));
+}
+
+TEST(TransportLayerAdmissionTest, GetCqe4AndCqe9UseTheSameProbeCooldownInterface)
+{
+    const auto provider = MakeAddress(43);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto filter = std::make_shared<UbHealthFilter>();
+    TestTransportLayer layer(manager, std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE), filter,
+                             true);
+    UbHealthSummary summary;
+    summary.worker = provider;
+    summary.incarnation = "incarnation-a";
+    summary.portHealth = UbPortHealthSummary{ true, 4, 0, 1, false };
+    ASSERT_TRUE(filter->ObserveSummary(summary, summary.incarnation));
+
+    ProviderUbFailureDetailPb providerCqe4;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider CQE4"), "client-endpoint", provider.ToString(),
+                                URMA_PORT_UNAVAILABLE_STATUS, URMA_PORT_UNAVAILABLE_STATUS, providerCqe4);
+    ProviderUbFailureDetailPb clientCqe9;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "client CQE9"), "client-endpoint", provider.ToString(),
+                                std::nullopt, URMA_REMOTE_ACK_TIMEOUT_STATUS, clientCqe9);
+
+    ASSERT_TRUE(inject::Set(LOCAL_PROBE_ACCEPTED_INJECT, "10*call()").IsOk());
+    Raii clearLocalInject([] { (void)inject::Clear(LOCAL_PROBE_ACCEPTED_INJECT); });
+    ASSERT_TRUE(inject::Set(REMOTE_PROBE_ACCEPTED_INJECT, "10*call()").IsOk());
+    Raii clearRemoteInject([] { (void)inject::Clear(REMOTE_PROBE_ACCEPTED_INJECT); });
+    (void)layer.ReportProviderFailure(provider, providerCqe4);
+    (void)layer.ReportProviderFailure(provider, providerCqe4);
+    (void)layer.ReportProviderFailure(provider, clientCqe9);
+    (void)layer.ReportProviderFailure(provider, clientCqe9);
+
+    EXPECT_EQ(inject::GetExecuteCount(REMOTE_PROBE_ACCEPTED_INJECT), 1U);
+    EXPECT_EQ(inject::GetExecuteCount(LOCAL_PROBE_ACCEPTED_INJECT), 1U);
 }
 
 TEST(TransportLayerAdmissionTest, SynchronousCqe9ReportsSafeWriteTargetReplay)
@@ -1848,9 +1844,9 @@ TEST(TransportLayerAdmissionTest, SynchronousCqe9ReportsSafeWriteTargetReplay)
 
     TransportSetResult result;
     EXPECT_EQ(layer.Set(*buffer, MakeSetParam(), result).GetCode(), K_URMA_ERROR);
-    EXPECT_TRUE(result.writeTargetQuarantined);
+    EXPECT_FALSE(result.writeTargetQuarantined);
     EXPECT_FALSE(result.publishAttempted);
-    EXPECT_FALSE(filter->IsWriteTargetAvailable(worker));
+    EXPECT_TRUE(filter->IsWriteTargetAvailable(worker));
     EXPECT_TRUE(layer.CheckLocalUbSenderAdmission().IsOk());
 }
 
@@ -1868,9 +1864,9 @@ TEST(TransportLayerAdmissionTest, MSetCqe9ReportsSafeWriteTargetReplay)
 
     TransportMSetResult result;
     EXPECT_TRUE(layer.MSet(buffers, MakeSetParam(), result).IsOk());
-    EXPECT_TRUE(result.writeTargetQuarantined);
+    EXPECT_FALSE(result.writeTargetQuarantined);
     EXPECT_FALSE(result.publishAttempted);
-    EXPECT_FALSE(filter->IsWriteTargetAvailable(worker));
+    EXPECT_TRUE(filter->IsWriteTargetAvailable(worker));
     EXPECT_TRUE(layer.CheckLocalUbSenderAdmission().IsOk());
 }
 

@@ -5,7 +5,10 @@
 #include <gtest/gtest.h>
 
 #include "datasystem/client/object_cache/bound_mode.h"
+#include "datasystem/client/object_cache/routing/ub_health_filter.h"
+#include "datasystem/client/object_cache/transport/transport_layer.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/rpc/api_deadline.h"
 
 namespace datasystem {
@@ -13,10 +16,14 @@ namespace object_cache {
 
 class MockClientWorkerApi : public IClientWorkerApi {
 public:
-    MockClientWorkerApi()
-        : client::IClientWorkerCommonApi(HostPort{}, HeartbeatType::RPC_HEARTBEAT, false,
+    MockClientWorkerApi() : MockClientWorkerApi(HostPort())
+    {
+    }
+
+    explicit MockClientWorkerApi(const HostPort &hostPort)
+        : client::IClientWorkerCommonApi(hostPort, HeartbeatType::RPC_HEARTBEAT, false,
                                          static_cast<Signature *>(nullptr)),
-          IClientWorkerApi(HostPort{}, HeartbeatType::RPC_HEARTBEAT, false, static_cast<Signature *>(nullptr))
+          IClientWorkerApi(hostPort, HeartbeatType::RPC_HEARTBEAT, false, static_cast<Signature *>(nullptr))
     {
     }
 
@@ -26,9 +33,12 @@ public:
     Status MultiPublish(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo, const PublishParam &param, MultiPublishRspPb &rsp, const std::vector<const DeviceBlobList *> &deviceBlobRefs) override { return Status::OK(); }
     Status DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys) override { return Status::OK(); }
     Status PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp) override { return Status::OK(); }
-    Status Get(const GetParam &, uint32_t &, GetRspPb &, std::vector<RpcMessage> &) override
+    Status Get(const GetParam &, uint32_t &, GetRspPb &rsp, std::vector<RpcMessage> &) override
     {
         ++getCalls;
+        if (providerUbFailureDetail.has_value()) {
+            *rsp.mutable_provider_ub_failure_detail() = *providerUbFailureDetail;
+        }
         if (expireDeadlineOnGet) {
             ApiDeadline::Instance().InitUs(0);
         }
@@ -41,6 +51,7 @@ public:
     StatusCode firstGetStatus = K_OK;
     StatusCode repeatedGetStatus = K_OK;
     bool expireDeadlineOnGet = false;
+    std::optional<ProviderUbFailureDetailPb> providerUbFailureDetail;
     Status InvalidateBuffer(const std::string &objectKey) override { return Status::OK(); }
     Status GIncreaseWorkerRef(const std::vector<std::string> &firstIncIds, std::vector<std::string> &failedObjectKeys, const std::string &remoteClientId) override { return Status::OK(); }
     Status ReleaseGRefs(const std::string &remoteClientId) override { return Status::OK(); }
@@ -95,6 +106,9 @@ public:
 };
 
 namespace {
+constexpr char LOCAL_PROBE_ACCEPTED_INJECT[] = "TransportLayer.ClientUbProbeCooldown.localAccepted";
+constexpr char REMOTE_PROBE_ACCEPTED_INJECT[] = "TransportLayer.ClientUbProbeCooldown.remoteAccepted";
+
 class BoundModeTest : public ::testing::Test {
 protected:
     void SetUp() override
@@ -253,6 +267,52 @@ TEST_F(BoundModeTest, PersistentUbGetFailureStopsAtIndependentAttemptLimit)
     EXPECT_EQ(getApiCalls, 4U);
     EXPECT_GT(ApiDeadline::Instance().ApiRemainingUs(), 0);
     EXPECT_FALSE(getGuardHeld);
+}
+
+TEST_F(BoundModeTest, ProviderCqe4AndClientCqe9UseUnifiedProbeEntry)
+{
+    const HostPort provider("127.0.0.1", 19103);
+    mockApi = std::make_shared<MockClientWorkerApi>(provider);
+    workerApi[static_cast<WorkerNode>(0)] = mockApi;
+
+    auto filter = std::make_shared<client::UbHealthFilter>();
+    UbHealthSummary summary;
+    summary.worker = provider;
+    summary.incarnation = "incarnation-a";
+    summary.portHealth = UbPortHealthSummary{ true, 4, 0, 1, false };
+    ASSERT_TRUE(filter->ObserveSummary(summary, summary.incarnation));
+    client::TransportLayerOptions options;
+    options.initializeUbRuntime = false;
+    options.readSourceFilter = filter;
+    nullTransport = std::make_unique<client::TransportLayer>(std::make_shared<Signature>(),
+                                                             std::make_shared<ThreadPool>(1), 0,
+                                                             std::move(options));
+
+    ASSERT_TRUE(inject::Set(LOCAL_PROBE_ACCEPTED_INJECT, "10*call()").IsOk());
+    Raii clearLocalInject([] { (void)inject::Clear(LOCAL_PROBE_ACCEPTED_INJECT); });
+    ASSERT_TRUE(inject::Set(REMOTE_PROBE_ACCEPTED_INJECT, "10*call()").IsOk());
+    Raii clearRemoteInject([] { (void)inject::Clear(REMOTE_PROBE_ACCEPTED_INJECT); });
+
+    const std::vector<std::string> objectKeys{ "key" };
+    const std::vector<ReadParam> readParams;
+    GetParam getParam{ objectKeys, 0, readParams, false };
+    getParam.requestTimeoutMs = 1'000;
+    std::vector<std::shared_ptr<Buffer>> buffers(1);
+    ProviderUbFailureDetailPb providerCqe4;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider CQE4"), "client-endpoint", provider.ToString(),
+                                URMA_PORT_UNAVAILABLE_STATUS, URMA_PORT_UNAVAILABLE_STATUS, providerCqe4);
+    mockApi->providerUbFailureDetail = providerCqe4;
+    mockApi->firstGetStatus = K_URMA_ERROR;
+    EXPECT_EQ(bound->GetBuffersFromWorker(mockApi, getParam, buffers).GetCode(), K_URMA_ERROR);
+    EXPECT_EQ(inject::GetExecuteCount(REMOTE_PROBE_ACCEPTED_INJECT), 1U);
+
+    ProviderUbFailureDetailPb clientCqe9;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "client CQE9"), "client-endpoint", provider.ToString(),
+                                std::nullopt, URMA_REMOTE_ACK_TIMEOUT_STATUS, clientCqe9);
+    mockApi->providerUbFailureDetail = clientCqe9;
+    mockApi->getCalls = 0;
+    EXPECT_EQ(bound->GetBuffersFromWorker(mockApi, getParam, buffers).GetCode(), K_URMA_ERROR);
+    EXPECT_EQ(inject::GetExecuteCount(LOCAL_PROBE_ACCEPTED_INJECT), 1U);
 }
 }  // namespace
 }  // namespace object_cache

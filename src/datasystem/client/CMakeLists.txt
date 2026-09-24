@@ -51,6 +51,7 @@ list(APPEND CLIENT_SRCS
         object_cache/transport/transport_layer.cpp
         object_cache/transport/worker_snapshot.cpp
         object_cache/transport/data_plane/data_plane_executor.cpp
+        object_cache/transport/data_plane/client_ub_probe_cooldown.cpp
         object_cache/transport/data_plane/data_plane_manager.cpp
         object_cache/transport/data_plane/shm_connection.cpp
         object_cache/transport/data_plane/shm_receive_buffer_owner.cpp

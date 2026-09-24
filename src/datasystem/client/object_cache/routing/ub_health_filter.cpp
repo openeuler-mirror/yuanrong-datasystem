@@ -270,6 +270,13 @@ uint64_t UbHealthFilter::CaptureWriteTargetCompletionGeneration(const HostPort &
     return generation == generations->end() ? 0 : generation->second;
 }
 
+bool UbHealthFilter::IsWriteTargetCompletionCurrent(const HostPort &worker, uint64_t peerToken) const
+{
+    const auto generations = std::atomic_load(&writeTargetCompletionGenerations_);
+    auto generation = generations->find(worker);
+    return generation != generations->end() && generation->second == peerToken;
+}
+
 void UbHealthFilter::PublishWriteTargetCompletionGenerationsLocked(const std::unordered_set<HostPort> &workers)
 {
     auto generations = std::make_shared<WriteTargetCompletionGenerations>();
@@ -287,8 +294,13 @@ void UbHealthFilter::PublishWriteTargetCompletionGenerationsLocked(const std::un
 void UbHealthFilter::RefreshWriteTargetCompletionGenerationLocked(const HostPort &worker)
 {
     auto current = std::atomic_load(&writeTargetCompletionGenerations_);
-    auto generations = std::make_shared<WriteTargetCompletionGenerations>(*current);
     auto context = writeTargetAdmission_->BuildLateCompletionContext(UbOperationKind::CLIENT_PUT, worker);
+    auto found = current->find(worker);
+    if ((context.has_value() && found != current->end() && found->second == context->peerToken) ||
+        (!context.has_value() && found == current->end())) {
+        return;
+    }
+    auto generations = std::make_shared<WriteTargetCompletionGenerations>(*current);
     if (context.has_value()) {
         (*generations)[worker] = context->peerToken;
     } else {
@@ -312,38 +324,6 @@ void UbHealthFilter::ApplyVerifiedWriteTargetPortHealth(const HostPort &worker, 
     }
     writeTargetObservationCount_.store(writeTargetObservationIncarnations_.size(), std::memory_order_release);
     RefreshWriteTargetCompletionGenerationLocked(worker);
-}
-
-void UbHealthFilter::ReportLateWriteTargetFailure(const UrmaLateCompletion &completion, uint64_t peerToken) noexcept
-{
-    try {
-        auto context = writeTargetAdmission_->BuildLateCompletionContext(UbOperationKind::CLIENT_PUT);
-        if (!context.has_value()) {
-            return;
-        }
-        HostPort worker;
-        const bool validWorker = worker.ParseString(completion.remoteAddress).IsOk();
-        if (validWorker) {
-            std::lock_guard<bthread::Mutex> lock(incarnationMutex_);
-            EnablePortHealthVerificationIfSupportedLocked(worker);
-        }
-        writeTargetAdmission_->OnLateUrmaCompletion(completion, context->ownerToken, peerToken);
-        if (validWorker) {
-            const auto state = writeTargetAdmission_->GetState(worker);
-            if (state.has_value() && state->state == UbAdmissionState::UNAVAILABLE) {
-                std::lock_guard<bthread::Mutex> lock(incarnationMutex_);
-                auto incarnation = trustedIncarnations_.find(worker);
-                writeTargetObservationIncarnations_[worker] =
-                    incarnation == trustedIncarnations_.end() ? std::string{} : incarnation->second;
-                writeTargetObservationCount_.store(writeTargetObservationIncarnations_.size(),
-                                                   std::memory_order_release);
-            }
-        }
-    } catch (const std::exception &error) {
-        LOG(ERROR) << "Failed to process late Client write-target completion: " << error.what();
-    } catch (...) {
-        LOG(ERROR) << "Failed to process late Client write-target completion: unknown exception";
-    }
 }
 
 void UbHealthFilter::ReconcileLocalObservationWithTrustedIncarnationLocked(const HostPort &worker,
