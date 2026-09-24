@@ -358,21 +358,28 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
     CreateRspPb rsp;
     PerfPoint partPoint(PerfKey::RPC_CLIENT_CREATE_OBJECT);
     Timer rpcTimer;
+    bool ambiguousAttempt = false;
     auto status = RetryOnError(
         static_cast<int32_t>(std::min<int64_t>(
             TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()), MAX_RPC_TIMEOUT_MS)),
-        [this, &req, &rsp](int32_t realRpcTimeout) {
+        [this, &req, &rsp, &ambiguousAttempt](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
             GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                              "Fail to generate signature when create data.");
             VLOG(1) << "Start to send rpc to create object: " << req.object_key();
-            return DS_OC_DISPATCH(Create, opts, req, rsp);
+            auto rc = DS_OC_DISPATCH(Create, opts, req, rsp);
+            ambiguousAttempt |= (IsRetryableRpcError(rc) || IsNonRetryableRpcError(rc))
+                                && !IsBrpcRequestDefinitelyNotSent(rc) && !IsBrpcServerApplicationError(rc);
+            return rc;
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE,
         requestTimeoutMs > 0 ? requestTimeoutMs : rpcTimeoutMs_);
     ApplyCreateWorkerRedirectStatus(rsp, status);
+    if (ambiguousAttempt && (IsBrpcRequestDefinitelyNotSent(status) || status.GetCode() == K_SCALE_DOWN)) {
+        status.WithExtra("");
+    }
     status = WithRpcDiag(status, "Create", hostPort_);
     LogClientWorkerRpcDone("Create", 1, IsUrmaEnabled() && rsp.has_urma_info() ? "UB" : "SHM",
                            static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond()), status);

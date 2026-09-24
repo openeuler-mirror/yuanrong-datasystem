@@ -2724,10 +2724,16 @@ Status ObjectClientImpl::ExecuteCreateFlow(const std::string &objectKey, uint64_
                 routing->UpdateState(routeContext.worker, rc.GetCode());
             }
         }
-        if (!ParseWorkerRedirectCandidates(rc, preferredWorkers)) {
+        const bool redirected = ParseWorkerRedirectCandidates(rc, preferredWorkers);
+        const bool requestNotSent = rc.GetCode() == K_RPC_PEER_DEAD && IsBrpcRequestDefinitelyNotSent(rc);
+        if (!redirected && !requestNotSent) {
             return rc;
         }
         excludedWorkers.emplace_back(routeContext.worker);
+        if (requestNotSent) {
+            RETURN_IF_NOT_OK(ExpandWriteRedirectBudget(excludedWorkers, maxAttempts, redirectBudgetInitialized));
+            continue;
+        }
         auto routing = std::atomic_load(&routing_);
         RETURN_RUNTIME_ERROR_IF_NULL(routing);
         routing->UpdateState(routeContext.worker, K_SCALE_DOWN);
