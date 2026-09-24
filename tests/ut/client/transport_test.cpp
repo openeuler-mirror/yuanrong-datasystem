@@ -6126,6 +6126,7 @@ TEST_F(RoutedCreateRedirectTest, DoesNotReplayUnmarkedOrAmbiguousFailures)
         Status(K_SCALE_DOWN, "malformed rejection").WithExtra("invalid-protobuf"),
         Status(K_SCALE_DOWN, "not safe to replay").WithExtra(executed.SerializeAsString()),
         Status(K_RPC_NETWORK_BLIP, "allocation outcome unknown"),
+        Status(K_RPC_PEER_DEAD, "response outcome unknown"),
     };
     ScopedRequestContext context;
     ApiDeadlineGuard deadline(1000);
@@ -6278,6 +6279,27 @@ TEST_F(RoutedCreateRedirectTest, TransientFailuresDoNotEvictCreateTarget)
     EXPECT_EQ(buffer->bufferInfo_->workerAddr, routeOrder.front());
     ASSERT_EQ(manager->builtTransporters.size(), 1U);
     EXPECT_EQ(manager->builtTransporters.front()->createCount, CREATE_EVICTION_THRESHOLD + 1);
+}
+
+TEST_F(RoutedCreateRedirectTest, RetriesOnlyUnsentPeerDeadOnAnotherWorker)
+{
+    manager->configureTransporter = [this](const HostPort &address, FakeTransporter &transporter) {
+        if (address != routeOrder.back()) {
+            transporter.createStatuses.emplace_back(
+                Status(K_RPC_PEER_DEAD, "connection refused").WithExtra(kBrpcRequestNotSentExtra));
+        }
+    };
+    ScopedRequestContext context;
+    ApiDeadlineGuard deadline(1000);
+    std::shared_ptr<Buffer> buffer;
+    ASSERT_TRUE(Create(buffer).IsOk());
+    ASSERT_NE(buffer, nullptr);
+    EXPECT_EQ(buffer->bufferInfo_->workerAddr, routeOrder.back());
+    ASSERT_EQ(manager->builtTransporters.size(), routeOrder.size());
+    for (size_t i = 0; i < routeOrder.size(); ++i) {
+        EXPECT_EQ(manager->builtTransporters[i]->rpcClient->WorkerAddress(), routeOrder[i]);
+        EXPECT_EQ(manager->builtTransporters[i]->createCount, 1);
+    }
 }
 
 TEST_F(RoutedCreateRedirectTest, StaleCandidateFallsBackToRemainingRoute)
@@ -11320,6 +11342,25 @@ TEST(TransportLayerTest, CreateReplayConflictPreservesAmbiguousRpcFailure)
     ASSERT_EQ(cleanupFuture.wait_for(std::chrono::seconds(2)), std::future_status::ready);
     ASSERT_NE(manager->lastRpcClient, nullptr);
     EXPECT_EQ(manager->lastRpcClient->decreaseReferenceCount, 3);
+}
+
+TEST(TransportLayerTest, AmbiguousCreateThenUnsentFailureIsNotReplayable)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterCreateStatuses = {
+        { Status(K_RPC_UNAVAILABLE, "response lost") },
+        { Status(K_RPC_PEER_DEAD, "connection refused").WithExtra(kBrpcRequestNotSentExtra) }
+    };
+    auto advisor = std::make_shared<FixedTransportAdvisor>(TransportHint::SHM_CANDIDATE);
+    TestTransportLayer layer(manager, advisor);
+    std::shared_ptr<ObjectBuffer> buffer;
+
+    const Status rc = layer.Create(MakeAddress(44), "ambiguous-then-refused", 64, MakeCreateParam(), buffer);
+
+    EXPECT_EQ(rc.GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_FALSE(IsBrpcRequestDefinitelyNotSent(rc));
+    EXPECT_EQ(buffer, nullptr);
+    EXPECT_EQ(manager->builtTransporters.size(), 2u);
 }
 
 TEST(TransportLayerTest, TcpFallbackKeepsAmbiguousShmAllocationForCleanup)
