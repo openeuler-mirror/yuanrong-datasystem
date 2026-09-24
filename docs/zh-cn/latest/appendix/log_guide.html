@@ -331,6 +331,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l2"><a class="reference internal" href="../design_document/shm_get_fd_passing.html">同节点多 Worker SHM Get fd-passing 方案设计</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../design_document/cann_dynamic_loading.html">CANN 运行时依赖隔离概要设计</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../design_document/cann_dynamic_loading_detailed.html">子模块：HIXL 动态加载（CANN 运行时依赖隔离）</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../design_document/dscli_cluster_member_cleanup_detailed.html">子模块：dscli 集群成员清理命令（按 worker 地址精确清理拓扑残留）</a></li>
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../api_reference/index.html">API 参考</a><input aria-label="Toggle navigation of API 参考" class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" role="switch" type="checkbox"/><label for="toctree-checkbox-6"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
@@ -1181,13 +1182,21 @@ document.addEventListener('DOMContentLoaded', function() {
 </div>
 <p>默认值均为 <code class="docutils literal notranslate"><span class="pre">1.0</span></code>（全量保留）。</p>
 </section>
+<section id="id11">
+<h3>开发约定：数据面流程与限频宏<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>数据面请求流程内不得使用 EVERY 家族限频宏</strong>。限频条件与日志采样是串联关系：实际输出频率 = 限频比例 × 采样率，会远低于采样预期。</p></li>
+<li><p>这类日志应改用 <code class="docutils literal notranslate"><span class="pre">LOG(severity)</span></code>（频率控制交给采样器：请求上下文中 INFO 归 <code class="docutils literal notranslate"><span class="pre">request_sample_rate</span></code>，ERROR/WARNING 归 <code class="docutils literal notranslate"><span class="pre">diagnostic_sample_rate</span></code>），或 <code class="docutils literal notranslate"><span class="pre">SLOW_LOG(severity)</span></code>（慢/降级等必须可见的诊断信号，阈值命中时绕过采样）。</p></li>
+<li><p><strong>仅后台线程</strong>（无活跃请求 trace，采样 BYPASS、全量输出）可使用 EVERY 家族限频宏控制输出频率。</p></li>
+</ul>
+</section>
 </section>
 <hr class="docutils" />
 <section id="latencysummary">
 <h2>慢日志与 latencySummary<a class="headerlink" href="#latencysummary" title="Link to this heading">¶</a></h2>
 <p>当请求的处理或 RPC 阶段时延超过配置阈值时，access log 中会额外输出 <code class="docutils literal notranslate"><span class="pre">latencySummary</span></code> 字段，包含各阶段耗时明细，便于快速定位慢请求瓶颈。</p>
-<section id="id11">
-<h3>配置参数<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
+<section id="id12">
+<h3>配置参数<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -1232,8 +1241,8 @@ document.addEventListener('DOMContentLoaded', function() {
 query-and-get、get-data 和 materialize 子阶段。</p>
 </div></blockquote>
 </section>
-<section id="id12">
-<h3>latencySummary 格式<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
+<section id="id13">
+<h3>latencySummary 格式<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
 <p>latencySummary 字段以预计算字符串形式写入 access log 的 request param 区域，格式示例：</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">latencySummary</span><span class="p">:{</span><span class="n">client</span><span class="o">.</span><span class="n">process</span><span class="o">.</span><span class="n">get</span><span class="p">:</span><span class="mi">200</span><span class="p">,</span><span class="n">client</span><span class="o">.</span><span class="n">rpc</span><span class="o">.</span><span class="n">get</span><span class="p">:</span><span class="mi">896</span><span class="p">,</span><span class="n">worker</span><span class="o">.</span><span class="n">process</span><span class="o">.</span><span class="n">get</span><span class="p">:</span><span class="mi">768</span><span class="p">,</span><span class="n">worker</span><span class="o">.</span><span class="n">rpc</span><span class="o">.</span><span class="n">query_meta</span><span class="p">:</span><span class="mi">512</span><span class="p">}</span>
 </pre></div>
@@ -1339,8 +1348,8 @@ query-and-get、get-data 和 materialize 子阶段。</p>
 </table>
 </div>
 </section>
-<section id="id13">
-<h3>配置方式<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
+<section id="id14">
+<h3>配置方式<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -1459,12 +1468,13 @@ query-and-get、get-data 和 materialize 子阶段。</p>
 <li><a class="reference internal" href="#id9">链路完整性（阈值嵌套）</a></li>
 <li><a class="reference internal" href="#logsampled">logSampled 标记</a></li>
 <li><a class="reference internal" href="#id10">配置方式</a></li>
+<li><a class="reference internal" href="#id11">开发约定：数据面流程与限频宏</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#latencysummary">慢日志与 latencySummary</a><ul>
-<li><a class="reference internal" href="#id11">配置参数</a></li>
-<li><a class="reference internal" href="#id12">latencySummary 格式</a></li>
-<li><a class="reference internal" href="#id13">配置方式</a></li>
+<li><a class="reference internal" href="#id12">配置参数</a></li>
+<li><a class="reference internal" href="#id13">latencySummary 格式</a></li>
+<li><a class="reference internal" href="#id14">配置方式</a></li>
 </ul>
 </li>
 </ul>

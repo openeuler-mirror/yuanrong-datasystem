@@ -3,11 +3,11 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="brpc 健康探针与诊断接口" href="brpc_health_probe.html"><link rel="prev" title="Client环境变量" href="client_env_guide.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="API 参考" href="../api_reference/index.html"><link rel="prev" title="子模块：HIXL 动态加载（CANN 运行时依赖隔离）" href="cann_dynamic_loading_detailed.html">
         <link rel="prefetch" href="../_static/logo-small.png" as="image">
 
     <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>大页内存配置指南 - openYuanrong datasystem documentation</title>
+        <title>子模块：dscli 集群成员清理命令（按 worker 地址精确清理拓扑残留） - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
@@ -326,12 +326,12 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_kvcache.html">vLLM Ascend使用OpenYuanrong作为多级缓存最佳实践</a></li>
 </ul>
 </li>
-<li class="toctree-l1 has-children"><a class="reference internal" href="../design_document/index.html">设计文档</a><input aria-label="Toggle navigation of 设计文档" class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" role="switch" type="checkbox"/><label for="toctree-checkbox-5"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
-<li class="toctree-l2"><a class="reference internal" href="../design_document/cluster_management.html">集群管理</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../design_document/shm_get_fd_passing.html">同节点多 Worker SHM Get fd-passing 方案设计</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../design_document/cann_dynamic_loading.html">CANN 运行时依赖隔离概要设计</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../design_document/cann_dynamic_loading_detailed.html">子模块：HIXL 动态加载（CANN 运行时依赖隔离）</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../design_document/dscli_cluster_member_cleanup_detailed.html">子模块：dscli 集群成员清理命令（按 worker 地址精确清理拓扑残留）</a></li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="index.html">设计文档</a><input aria-label="Toggle navigation of 设计文档" checked="" class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" role="switch" type="checkbox"/><label for="toctree-checkbox-5"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="cluster_management.html">集群管理</a></li>
+<li class="toctree-l2"><a class="reference internal" href="shm_get_fd_passing.html">同节点多 Worker SHM Get fd-passing 方案设计</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cann_dynamic_loading.html">CANN 运行时依赖隔离概要设计</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cann_dynamic_loading_detailed.html">子模块：HIXL 动态加载（CANN 运行时依赖隔离）</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">子模块：dscli 集群成员清理命令（按 worker 地址精确清理拓扑残留）</a></li>
 </ul>
 </li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../api_reference/index.html">API 参考</a><input aria-label="Toggle navigation of API 参考" class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" role="switch" type="checkbox"/><label for="toctree-checkbox-6"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
@@ -556,13 +556,13 @@ document.addEventListener('DOMContentLoaded', function() {
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../contributor_guide/contribution.html">贡献者指南</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../contributor_guide/ai_development_workflow.html">AI 开发流程</a></li>
-<li class="toctree-l1 current has-children"><a class="reference internal" href="index.html">附录</a><input aria-label="Toggle navigation of 附录" checked="" class="toctree-checkbox" id="toctree-checkbox-25" name="toctree-checkbox-25" role="switch" type="checkbox"/><label for="toctree-checkbox-25"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
-<li class="toctree-l2"><a class="reference internal" href="log_guide.html">openYuanrong datasystem 日志</a></li>
-<li class="toctree-l2"><a class="reference internal" href="cluster_log_diagnosis_guide.html">集群日志定位指南</a></li>
-<li class="toctree-l2"><a class="reference internal" href="client_env_guide.html">Client环境变量</a></li>
-<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">大页内存配置指南</a></li>
-<li class="toctree-l2"><a class="reference internal" href="brpc_health_probe.html">brpc 健康探针与诊断接口</a></li>
-<li class="toctree-l2"><a class="reference internal" href="trace_triage_methodology.html">DataSystem 慢时延与错误 Trace 分析方法论</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../appendix/index.html">附录</a><input aria-label="Toggle navigation of 附录" class="toctree-checkbox" id="toctree-checkbox-25" name="toctree-checkbox-25" role="switch" type="checkbox"/><label for="toctree-checkbox-25"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/log_guide.html">openYuanrong datasystem 日志</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/cluster_log_diagnosis_guide.html">集群日志定位指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/client_env_guide.html">Client环境变量</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/hugepage_guide.html">大页内存配置指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/brpc_health_probe.html">brpc 健康探针与诊断接口</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/trace_triage_methodology.html">DataSystem 慢时延与错误 Trace 分析方法论</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../FAQ/FAQ.html">FAQ</a></li>
@@ -598,91 +598,799 @@ document.addEventListener('DOMContentLoaded', function() {
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section class="tex2jax_ignore mathjax_ignore" id="id1">
-<h1>大页内存配置指南<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h1>
-<p>适用系统：openEuler 22.03 / Ubuntu 22.04 及以上，内核 ≥ 5.10</p>
-<p>重要性与风险提示
-为何需要配置大页内存：大页内存能显著减少TLB未命中，提升内存访问效率，对数据密集型应用至关重要。
-风险：错误配置可能导致系统内存不足、内核OOM或系统不稳定。请遵循以下步骤做前置检查，以2MB单个大页*1024个大页数量为例。</p>
+          <section class="tex2jax_ignore mathjax_ignore" id="dscli-worker">
+<h1>子模块：dscli 集群成员清理命令（按 worker 地址精确清理拓扑残留）<a class="headerlink" href="#dscli-worker" title="Link to this heading">¶</a></h1>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>属性</p></th>
+<th class="head"><p>值</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>创建</p></td>
+<td><p>2026-09-23（来源：etcd 后端下 DaemonSet 地址复用导致拓扑残留的延迟删除问题分析）</p></td>
+</tr>
+<tr class="row-odd"><td><p>修改</p></td>
+<td><p>2026-09-23</p></td>
+</tr>
+<tr class="row-even"><td><p>阶段</p></td>
+<td><p>P1 dscli delete cluster 命令 + cluster_admin_client 后端抽象</p></td>
+</tr>
+<tr class="row-odd"><td><p>前置</p></td>
+<td><p>已有 dscli query cluster（只读查询）、cluster_query_client（etcd/coordinator 双后端只读客户端）</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<hr class="docutils" />
+<section id="id1">
+<h2>§1 需求背景与目标<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
 <section id="id2">
-<h2>数据系统配置大页内存步骤<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
+<h3>背景<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<p>当前 datasystem worker 退出时不会主动删除自己在协调后端（etcd 或 Coordinator）中的 membership key，也不主动 revoke lease，完全依赖 lease TTL 过期（默认 60s）+ topology controller 的 failure 确认（默认 300s）兜底清理。</p>
+<p>在 DaemonSet 部署、地址复用场景下，新 worker 用新 lease 覆盖同一 membership key，controller 看不到 member 缺席，topologyTable 里的死 worker token 不会被及时移除，导致路由持续指向异常节点。实测 4 个测试用例跨 4 分钟，membership key 全程存在，最后一个 worker 死亡后还要等 60s lease 过期才清理。</p>
+<p>现状代码证据：</p>
+<ul class="simple">
+<li><p>worker 退出时不主动删 membership key：<code class="docutils literal notranslate"><span class="pre">src/datasystem/cluster/runtime/topology_engine.cpp:1002-1052</span></code> 的 <code class="docutils literal notranslate"><span class="pre">TopologyEngine::Shutdown</span></code> 注释明确写道”lease expiry removes any READY write that raced the STOPPING transition”，依赖 lease 过期兜底</p></li>
+<li><p>worker 退出时不主动 revoke lease：<code class="docutils literal notranslate"><span class="pre">src/datasystem/common/kvstore/etcd/etcd_keep_alive.cpp:68-132</span></code> 的 <code class="docutils literal notranslate"><span class="pre">EtcdKeepAlive::Shutdown</span></code> 只做 gRPC stream 的 <code class="docutils literal notranslate"><span class="pre">WritesDone</span></code>+<code class="docutils literal notranslate"><span class="pre">Finish</span></code>，无 <code class="docutils literal notranslate"><span class="pre">LeaseRevoke</span></code> 调用；全仓库 grep <code class="docutils literal notranslate"><span class="pre">RevokeLease|LeaseRevoke</span></code> 0 命中</p></li>
+<li><p>helm uninstall 场景不走 graceful exit：<code class="docutils literal notranslate"><span class="pre">src/datasystem/worker/worker_oc_server.cpp:3449-3472</span></code> 的 <code class="docutils literal notranslate"><span class="pre">IsScaleIn()</span></code> 在 <code class="docutils literal notranslate"><span class="pre">enable_lossless_data_exit_mode=false</span></code>（默认，<code class="docutils literal notranslate"><span class="pre">k8s/helm_chart/datasystem/values.yaml:418</span></code>）且无 <code class="docutils literal notranslate"><span class="pre">worker-status</span></code> 文件时返回 false，<code class="docutils literal notranslate"><span class="pre">PreShutDown</span></code>（<code class="docutils literal notranslate"><span class="pre">:3559-3588</span></code>）跳过 <code class="docutils literal notranslate"><span class="pre">PublishExitingMembershipAndWaitForTopologyRemoval</span></code></p></li>
+<li><p>topologyTable 是持久 key 不绑 lease：<code class="docutils literal notranslate"><span class="pre">src/datasystem/cluster/repository/topology_repository.cpp:228-256</span></code> 的 <code class="docutils literal notranslate"><span class="pre">CompareAndSwapTopology</span></code> 用普通 CAS 写入，不传 leaseId</p></li>
+<li><p>controller 的 failure 确认要等 300s：<code class="docutils literal notranslate"><span class="pre">src/datasystem/cluster/control/topology_failure_classifier.cpp:56-65</span></code>，<code class="docutils literal notranslate"><span class="pre">node_dead_timeout_s</span></code> 默认 300（<code class="docutils literal notranslate"><span class="pre">k8s/helm_chart/datasystem/values.yaml:399</span></code>）</p></li>
+<li><p>现有 <code class="docutils literal notranslate"><span class="pre">datasystem_worker</span> <span class="pre">--get/set_cluster_topology</span></code>（<code class="docutils literal notranslate"><span class="pre">src/datasystem/worker/worker_cli.cpp:100-128</span></code>）只支持 etcd 直连，不支持 Coordinator 后端</p></li>
+<li><p>现有 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">query</span> <span class="pre">cluster</span></code>（<code class="docutils literal notranslate"><span class="pre">cli/query.py</span></code>）只读，无写能力</p></li>
+</ul>
+</section>
 <section id="id3">
-<h3>第一步：内存资源评估<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
-<ol class="arabic">
-<li><p>检查当前可用内存</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>grep<span class="w"> </span>MemAvailable<span class="w"> </span>/proc/meminfo
-</pre></div>
+<h3>目标<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>#</p></th>
+<th class="head"><p>目标</p></th>
+<th class="head"><p>验收</p></th>
+<th class="head"><p>阶段</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>1</p></td>
+<td><p>提供 dscli 子命令，按 worker 地址精确清理其在协调后端中的所有拓扑残留</p></td>
+<td><p>删除指定 address 的 membership/notify/probe/ub_health key + 从 topologyTable 的 members map 中移除该 address</p></td>
+<td><p>P1</p></td>
+</tr>
+<tr class="row-odd"><td><p>2</p></td>
+<td><p>同时支持 etcd/metastore 后端和 Coordinator 后端</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--etcd_address</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--coordinator_address</span></code> 二选一，两种后端行为一致</p></td>
+<td><p>P1</p></td>
+</tr>
+<tr class="row-even"><td><p>3</p></td>
+<td><p>topologyTable 更新走 CAS，与 topology controller 无竞争</p></td>
+<td><p>CAS 冲突时 CLI 重试，不直接 Put 覆盖</p></td>
+<td><p>P1</p></td>
+</tr>
+<tr class="row-odd"><td><p>4</p></td>
+<td><p>tasks / scale-in-metadata-done 不由 CLI 直接删，交给 controller janitor 自动清理</p></td>
+<td><p>CLI 执行后 topologyTable version 推进，janitor 下一周期自动清理 stale tasks</p></td>
+<td><p>P1</p></td>
+</tr>
+<tr class="row-even"><td><p>5</p></td>
+<td><p>输出结构化 JSON，与现有 dscli query 风格一致</p></td>
+<td><p>每个被清理的 address 输出各 key 的删除结果 + topologyTable version</p></td>
+<td><p>P1</p></td>
+</tr>
+</tbody>
+</table>
 </div>
-</li>
-</ol>
-<p>要求： MemAvailable 的值 必须大于 3 GB。这是为了给大页分配和系统正常运行预留足够的安全边界。</p>
-<p>如果不足：关闭其他占用内存的应用程序，或考虑在系统空闲时进行操作。</p>
-<ol class="arabic" start="2">
-<li><p>检查内存碎片程度</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cat<span class="w"> </span>/proc/buddyinfo
-</pre></div>
-</div>
-</li>
-</ol>
-<p>找到您架构对应的行（如 Node 0， DMA32 或 Normal）。
-从左到右，数字代表连续页块的数量。需要找到 order 为 9 的连续页块（因为 2^9 * 4KB = 2MB）。
-简易判断：查看第10列（从0开始计数）的数字。如果这个数字 大于 100，则认为碎片化程度较低，分配成功率高。如果很小（如 &lt; 10），则分配可能失败或非常缓慢。</p>
-<p>若节点内存分布不均匀可定向扩池，或先整理内存再扩池。</p>
+</section>
 </section>
 <section id="id4">
-<h3>第二步：执行动态分配<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
-<p>方法A：适用于单路（UMA）或简单环境
-分配大页(需要root权限)</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 分配1280个大页(为系统预留256个)</span>
-sudo<span class="w"> </span>su<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;echo 1280 &gt; /proc/sys/vm/nr_hugepages&quot;</span>
-</pre></div>
-</div>
-<p>方法B：适用于多路服务器（NUMA架构）</p>
-<ol class="arabic">
-<li><p>查看NUMA节点信息</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>lscpu<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>NUMA
-</pre></div>
-</div>
-</li>
-<li><p>在指定节点上分配
-在node0分配768个，node1分配512个</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sudo<span class="w"> </span>su<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;echo 768 &gt; /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages&quot;</span>
-sudo<span class="w"> </span>su<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;echo 512 &gt; /sys/devices/system/node/node1/hugepages/hugepages-2048kB/nr_hugepages&quot;</span>
-</pre></div>
-</div>
-</li>
-</ol>
-</section>
+<h2>§2 需求边界<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h2>
+<p>本模块是一个 dscli 管理子命令，用于在 worker 异常退出后、controller 自动清理完成前，手动按 worker 地址精确清理协调后端中的拓扑残留记录，使后续用例不会路由到异常节点。</p>
 <section id="id5">
-<h3>第三步：验证分配结果<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
-<p>分配命令是异步的，内核需要时间整理内存。请等待并验证。</p>
-<ol class="arabic">
-<li><p>等待并检查：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 等待30秒内分配完成</span>
-timeout<span class="w"> </span><span class="m">30</span><span class="w"> </span>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;while [[ $(grep HugePages_Total /proc/meminfo | awk &quot;{print \$2}&quot;) -lt 1280 ]]; do sleep 1; done&#39;</span>
-</pre></div>
+<h3>关键概念定义<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>术语</p></th>
+<th class="head"><p>含义</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>协调后端</p></td>
+<td><p>etcd、metastore 或 Coordinator，存储拓扑元数据的外部系统</p></td>
+</tr>
+<tr class="row-odd"><td><p>topologyTable</p></td>
+<td><p>协调后端中的 <code class="docutils literal notranslate"><span class="pre">/datasystem/topology/</span></code> key，持久存储 <code class="docutils literal notranslate"><span class="pre">ClusterTopologyPb</span></code>（含 members map + hash ring token 分配）</p></td>
+</tr>
+<tr class="row-even"><td><p>membershipTable</p></td>
+<td><p>协调后端中的 <code class="docutils literal notranslate"><span class="pre">/datasystem/cluster/&lt;addr&gt;</span></code> key，lease-bound，存储 <code class="docutils literal notranslate"><span class="pre">MembershipValue</span></code>（worker 心跳/状态）</p></td>
+</tr>
+<tr class="row-odd"><td><p>per-address table</p></td>
+<td><p>notify（<code class="docutils literal notranslate"><span class="pre">/datasystem/notify/&lt;addr&gt;</span></code>）、probe（<code class="docutils literal notranslate"><span class="pre">/datasystem/probe/&lt;addr&gt;</span></code>）、ub_health（<code class="docutils literal notranslate"><span class="pre">/datasystem/ub_health/&lt;addr&gt;</span></code>），均以 address 为 key</p></td>
+</tr>
+<tr class="row-even"><td><p>janitor</p></td>
+<td><p>topology controller 内的 <code class="docutils literal notranslate"><span class="pre">TopologyTaskJanitor</span></code>（<code class="docutils literal notranslate"><span class="pre">src/datasystem/cluster/control/topology_task_janitor.cpp</span></code>），周期扫描 stale tasks/notify/markers 并自动清理</p></td>
+</tr>
+</tbody>
+</table>
 </div>
-</li>
-<li><p>查看详细信息：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>grep<span class="w"> </span>-i<span class="w"> </span>huge<span class="w"> </span>/proc/meminfo
-</pre></div>
-</div>
-</li>
-</ol>
-<p>关注 HugePages_Total、HugePages_Free 和 HugePages_Rsvd。
-成功标志：HugePages_Total 达到或接近目标值（1280）。</p>
-</section>
-<section id="worker">
-<h3>第四步：部署数据系统worker开启大页内存<a class="headerlink" href="#worker" title="Link to this heading">¶</a></h3>
-<p>启动数据系统时将enable_huge_tlb配置选项设置为true。
-示例：
-<code class="docutils literal notranslate"><span class="pre">bash</span>&#160;&#160;&#160;&#160; <span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">-w</span> <span class="pre">--worker_address</span> <span class="pre">&quot;${host}:${worker_port}&quot;</span> <span class="pre">--etcd_address</span> <span class="pre">&quot;${host}:${etcd_port}&quot;</span> <span class="pre">--shared_memory_size_mb</span> <span class="pre">{shared_memory}</span> <span class="pre">--enable_huge_tlb</span> <span class="pre">true</span>&#160;&#160;&#160;&#160; </code></p>
 </section>
 <section id="id6">
-<h3>第五步：确认应用在使用大页<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
-<p>数据系统部署后再次运行:
-<code class="docutils literal notranslate"><span class="pre">bash</span>&#160;&#160;&#160;&#160; <span class="pre">grep</span> <span class="pre">-i</span> <span class="pre">huge</span> <span class="pre">/proc/meminfo</span>&#160;&#160;&#160;&#160; </code>
-成功标志： HugePages_Free 的数量明显减少，HugePages_Rsvd 可能增加。这表明您的大页已经被应用成功申请和使用。</p>
+<h3>做什么<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>组件名</p></th>
+<th class="head"><p>职责</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">delete</span> <span class="pre">cluster</span></code></p></td>
+<td><p>dscli 子命令，接收 <code class="docutils literal notranslate"><span class="pre">--worker_address</span></code> 列表，调用 native 层清理</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ClusterAdminClient</span></code>（C++）</p></td>
+<td><p>后端抽象客户端，内部按 options 选择 etcd 或 Coordinator 路径，执行 per-address key 删除 + topologyTable CAS 更新</p></td>
+</tr>
+<tr class="row-even"><td><p>pybind 暴露层</p></td>
+<td><p>将 <code class="docutils literal notranslate"><span class="pre">ClusterAdminClient</span></code> 暴露给 Python，供 <code class="docutils literal notranslate"><span class="pre">cli/delete.py</span></code> 调用</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id7">
+<h3>不做什么<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>事项</p></th>
+<th class="head"><p>归属</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>tasks 表（migrate/delete）的清理</p></td>
+<td><p>controller <code class="docutils literal notranslate"><span class="pre">TopologyTaskJanitor</span></code> 自动清理（CLI 推进 topologyTable version 后，janitor 下一周期扫描自动删 stale tasks）</p></td>
+</tr>
+<tr class="row-odd"><td><p>scale-in-metadata-done 表的清理</p></td>
+<td><p>同上，janitor 自动清理</p></td>
+</tr>
+<tr class="row-even"><td><p>rollout 表（<code class="docutils literal notranslate"><span class="pre">/datasystem/control/eviction-policy-rollout</span></code>）的清理</p></td>
+<td><p>全局单 key，不是 per-address，不在此命令职责内</p></td>
+</tr>
+<tr class="row-odd"><td><p>worker 数据迁移（scale-in 时 object 搬迁）</p></td>
+<td><p>不在 CLI 职责内，CLI 只清拓扑元数据</p></td>
+</tr>
+<tr class="row-even"><td><p>替代 topology controller 的正常运行路径</p></td>
+<td><p>健康集群下拓扑变更仍由 controller 通过 CAS 管理</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+<section id="usecase">
+<h2>§3 UseCase<a class="headerlink" href="#usecase" title="Link to this heading">¶</a></h2>
+<section id="worker-etcd">
+<h3>场景 1：测试用例间清理残留 worker（etcd 后端）<a class="headerlink" href="#worker-etcd" title="Link to this heading">¶</a></h3>
+<div class="highlight-mermaid notranslate"><div class="highlight"><pre><span></span>flowchart LR
+    Operator[测试框架] --&gt;|dscli delete cluster --etcd_address| Dscli
+    Dscli --&gt;|gRPC| Etcd[(etcd)]
+    Etcd -.membership/notify/probe/ub_health key.-&gt; Etcd
+    Etcd -.topologyTable CAS.-&gt; Etcd
+    NewWorker[下个用例的 worker] --&gt;|helm install| Etcd
+</pre></div>
+</div>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>操作</p></th>
+<th class="head"><p>行为</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>测试框架卸载 worker（helm uninstall）后</p></td>
+<td><p>调用 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">delete</span> <span class="pre">cluster</span> <span class="pre">--etcd_address</span> <span class="pre">&lt;addr&gt;</span> <span class="pre">--worker_address</span> <span class="pre">&lt;addr1&gt;</span> <span class="pre">--worker_address</span> <span class="pre">&lt;addr2&gt;</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>dscli 执行</p></td>
+<td><p>对每个 address：删 4 个 per-address key + CAS 更新 topologyTable 移除 member</p></td>
+</tr>
+<tr class="row-even"><td><p>下个用例 helm install</p></td>
+<td><p>新 worker 启动，controller 发现 topologyTable 里没有这个 address → 走 ScaleOut 加入</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="worker-coordinator">
+<h3>场景 2：测试用例间清理残留 worker（Coordinator 后端）<a class="headerlink" href="#worker-coordinator" title="Link to this heading">¶</a></h3>
+<div class="highlight-mermaid notranslate"><div class="highlight"><pre><span></span>flowchart LR
+    Operator[测试框架] --&gt;|dscli delete cluster --coordinator_address| Dscli
+    Dscli --&gt;|gRPC| Coordinator[Coordinator 服务]
+    Coordinator -.membership/notify/probe/ub_health key.-&gt; MemoryKVStore[(MemoryKvStore)]
+    Coordinator -.topologyTable CAS.-&gt; MemoryKVStore
+    NewWorker[下个用例的 worker] --&gt;|helm install| Coordinator
+</pre></div>
+</div>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>操作</p></th>
+<th class="head"><p>行为</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>测试框架卸载 worker 后</p></td>
+<td><p>调用 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">delete</span> <span class="pre">cluster</span> <span class="pre">--coordinator_address</span> <span class="pre">&lt;addr&gt;</span> <span class="pre">--worker_address</span> <span class="pre">&lt;addr1&gt;</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>dscli 执行</p></td>
+<td><p>通过 <code class="docutils literal notranslate"><span class="pre">CoordinatorServiceProxy</span></code> 调 <code class="docutils literal notranslate"><span class="pre">DeleteRange</span></code> 删 per-address key + <code class="docutils literal notranslate"><span class="pre">CAS</span></code> 更新 topologyTable</p></td>
+</tr>
+<tr class="row-even"><td><p>Coordinator 处理</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">MemoryKvStore</span></code> 删 key + <code class="docutils literal notranslate"><span class="pre">TtlManager</span></code> 清理过期定时器 + <code class="docutils literal notranslate"><span class="pre">mutationCallback_</span></code> 发 watch 事件</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id8">
+<h3>UseCase 总表<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>UseCase</p></th>
+<th class="head"><p>使用者</p></th>
+<th class="head"><p>场景</p></th>
+<th class="head"><p>需要什么</p></th>
+<th class="head"><p>设计响应</p></th>
+<th class="head"><p>验收</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>UC1 清理残留 worker</p></td>
+<td><p>测试框架/运维</p></td>
+<td><p>worker 异常退出后，controller 自动清理完成前</p></td>
+<td><p>按 address 精确删 membership/notify/probe/ub_health + topologyTable member 条目</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">delete</span> <span class="pre">cluster</span> <span class="pre">--worker_address</span></code> 命令</p></td>
+<td><p>指定 address 的 4 个 key 被删 + topologyTable 不含该 member</p></td>
+</tr>
+<tr class="row-odd"><td><p>UC2 支持两种后端</p></td>
+<td><p>测试框架/运维</p></td>
+<td><p>etcd 部署或 Coordinator 部署</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--etcd_address</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--coordinator_address</span></code> 二选一</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ClusterAdminClient</span></code> 内部按 options 分支</p></td>
+<td><p>两种后端行为一致，输出格式一致</p></td>
+</tr>
+<tr class="row-even"><td><p>UC3 多 address 批量清理</p></td>
+<td><p>测试框架/运维</p></td>
+<td><p>多节点 DaemonSet 一次清理多个残留 worker</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--worker_address</span></code> 可重复</p></td>
+<td><p>命令接受 <code class="docutils literal notranslate"><span class="pre">action=append</span></code></p></td>
+<td><p>多个 address 在一次 CAS 中一起从 topologyTable 移除</p></td>
+</tr>
+<tr class="row-odd"><td><p>UC4 结构化输出</p></td>
+<td><p>测试框架/运维</p></td>
+<td><p>脚本化判断清理结果</p></td>
+<td><p>JSON 输出每个 address 的清理详情</p></td>
+<td><p>输出 <code class="docutils literal notranslate"><span class="pre">deleted_members</span></code> 数组，每项含各 key 删除结果 + topology version</p></td>
+<td><p>输出可被 <code class="docutils literal notranslate"><span class="pre">jq</span></code> 解析，字段与 <code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">query</span></code> 风格一致</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+<section id="id9">
+<h2>§4 方案设计<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h2>
+<section id="id10">
+<h3>§4.1 类图<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
+<div class="highlight-mermaid notranslate"><div class="highlight"><pre><span></span>classDiagram
+    class ClusterAdminClient {
+        +ClusterAdminClient(ClusterAdminOptions options)
+        +Init() Status
+        +DeleteClusterMembers(addresses, results) Status
+        -Impl impl_
+    }
+    class ClusterAdminOptions {
+        +string clusterName
+        +string etcdAddress
+        +string coordinatorAddress
+    }
+    class ClusterAdminClient__Impl {
+        -InitEtcd() Status
+        -InitCoordinator() Status
+        -DeleteClusterMembersEtcd(addresses, results) Status
+        -DeleteClusterMembersCoordinator(addresses, results) Status
+        -UpdateTopologyRemoveMembers(addresses, results) Status
+    }
+    class DeleteClusterMemberResult {
+        +string address
+        +bool membershipDeleted
+        +bool notifyDeleted
+        +bool probeDeleted
+        +bool ubHealthDeleted
+        +bool topologyMemberRemoved
+        +uint64 topologyVersion
+        +string error
+    }
+    class EtcdStore {
+        &lt;&lt;existing&gt;&gt;
+        +Delete(tableName, key) Status
+        +CAS(tableName, key, processFunc) Status
+        +Get(tableName, key, value) Status
+    }
+    class ICoordinatorServiceProxy {
+        &lt;&lt;existing&gt;&gt;
+        +DeleteRange(key, rangeEnd, ...) Status
+        +CAS(key, processFunc, version, revision) Status
+        +GetClusterRawSnapshot(req, rsp, timeout) Status
+    }
+    ClusterAdminClient *-- ClusterAdminClient__Impl : owns
+    ClusterAdminClient__Impl ..&gt; EtcdStore : etcd path uses
+    ClusterAdminClient__Impl ..&gt; ICoordinatorServiceProxy : coordinator path uses
+    ClusterAdminClient__Impl ..&gt; DeleteClusterMemberResult : produces
+</pre></div>
+</div>
+</section>
+<section id="id11">
+<h3>§4.2 开发视图<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>cli/
+├── delete.py                          # dscli delete 子命令（新增）
+├── command.py                         # COMMAND_MODULES 加 &quot;delete&quot;（修改）
+
+src/datasystem/client/cluster_admin/   # 新增目录
+├── CMakeLists.txt                     # 构建配置（新增）
+├── cluster_admin_client.h             # 客户端头文件（新增）
+├── cluster_admin_client.cpp           # 实现：etcd + coordinator 双路径（新增）
+
+src/datasystem/pybind_api/
+├── CMakeLists.txt                     # 加源文件 + link cluster_admin_client（修改）
+├── BUILD.bazel                        # 对应 Bazel 改动（修改）
+├── pybind_register_cluster_admin.cpp  # pybind 暴露（新增）
+
+tests/python/
+└── test_cli_delete.py                 # Python 单元测试（新增）
+</pre></div>
+</div>
+</section>
+<section id="id12">
+<h3>§4.3 关键交互<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
+<section id="dscli-delete-cluster-etcd">
+<h4>场景：dscli delete cluster 执行流程（etcd 后端）<a class="headerlink" href="#dscli-delete-cluster-etcd" title="Link to this heading">¶</a></h4>
+<div class="highlight-mermaid notranslate"><div class="highlight"><pre><span></span>sequenceDiagram
+    participant CLI as cli/delete.py
+    participant Native as libds_client_py
+    participant Client as ClusterAdminClient
+    participant Etcd as EtcdStore
+    participant TC as topology controller
+
+    CLI-&gt;&gt;Native: delete_cluster_members
+    Native-&gt;&gt;Client: DeleteClusterMembers
+    Client-&gt;&gt;Client: InitEtcd + CreateTable
+
+    loop 每个 address
+        Client-&gt;&gt;Etcd: Delete MembershipTable
+        Etcd--&gt;&gt;Client: OK or NOT_FOUND
+        Client-&gt;&gt;Etcd: Delete NotifyTable
+        Etcd--&gt;&gt;Client: OK or NOT_FOUND
+        Client-&gt;&gt;Etcd: Delete ProbeTable
+        Etcd--&gt;&gt;Client: OK or NOT_FOUND
+        Client-&gt;&gt;Etcd: Delete UbHealthTable
+        Etcd--&gt;&gt;Client: OK or NOT_FOUND
+    end
+
+    Client-&gt;&gt;Etcd: CAS TopologyTable
+    Note over Client,Etcd: processFunc: 读 current ClusterTopologyPb&lt;br/&gt;erase 所有指定 address&lt;br/&gt;version+1&lt;br/&gt;若 members 变空则返回 nullptr 触发删除
+    Etcd--&gt;&gt;Client: committed or CONFLICT
+
+    alt CONFLICT
+        Client-&gt;&gt;Client: 重试 最多5次 随机sleep 0-10ms
+        Client-&gt;&gt;Etcd: CAS 重试
+    end
+
+    Note over TC: watch 事件感知 membership DELETE + topologyTable CAS&lt;br/&gt;failure classifier 开始计时但 topologyTable 已被 CLI 更新
+    Client--&gt;&gt;Native: results[]
+    Native--&gt;&gt;CLI: JSON
+</pre></div>
+</div>
+</section>
+<section id="dscli-delete-cluster-coordinator">
+<h4>场景：dscli delete cluster 执行流程（Coordinator 后端）<a class="headerlink" href="#dscli-delete-cluster-coordinator" title="Link to this heading">¶</a></h4>
+<div class="highlight-mermaid notranslate"><div class="highlight"><pre><span></span>sequenceDiagram
+    participant CLI as cli/delete.py
+    participant Native as libds_client_py
+    participant Client as ClusterAdminClient
+    participant Proxy as CoordinatorServiceProxy
+    participant Coord as Coordinator 进程
+
+    CLI-&gt;&gt;Native: delete_cluster_members
+    Native-&gt;&gt;Client: DeleteClusterMembers
+    Client-&gt;&gt;Client: InitCoordinator + StaticDiscovery
+
+    loop 每个 address
+        Client-&gt;&gt;Proxy: DeleteRange physicalKey
+        Proxy-&gt;&gt;Coord: DeleteRangeReqPb
+        Coord--&gt;&gt;Proxy: DeleteRangeRspPb
+        Proxy--&gt;&gt;Client: OK or NOT_FOUND
+    end
+
+    Client-&gt;&gt;Proxy: CAS physicalKey processFunc
+    Proxy-&gt;&gt;Coord: CASReqPb
+    Coord--&gt;&gt;Proxy: CASRspPb
+    Proxy--&gt;&gt;Client: OK or CONFLICT
+
+    alt CONFLICT
+        Client-&gt;&gt;Client: 重试
+        Client-&gt;&gt;Proxy: CAS 重试
+    end
+
+    Client--&gt;&gt;Native: results[]
+    Native--&gt;&gt;CLI: JSON
+</pre></div>
+</div>
+</section>
+<section id="id13">
+<h4>错误码映射<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h4>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>错误码</p></th>
+<th class="head"><p>含义</p></th>
+<th class="head"><p>CLI 处理</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">K_NOT_FOUND</span></code></p></td>
+<td><p>per-address key 不存在（lease 过期已删 / 从未注册）</p></td>
+<td><p>记录 <code class="docutils literal notranslate"><span class="pre">deleted=false</span></code>，继续下一个，不中断</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">K_TRY_AGAIN</span></code></p></td>
+<td><p>topologyTable CAS 版本冲突</p></td>
+<td><p>重试（最多 5 次）</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">K_RPC_UNAVAILABLE</span></code></p></td>
+<td><p>协调后端不可达</p></td>
+<td><p>整体失败，返回 JSON 错误</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">K_NOT_READY</span></code></p></td>
+<td><p>Coordinator 未初始化 / lease 未建立</p></td>
+<td><p>整体失败，返回 JSON 错误</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+<section id="id14">
+<h3>§4.4 模块依赖图<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
+<div class="highlight-mermaid notranslate"><div class="highlight"><pre><span></span>flowchart TD
+    DeleteCLI[cli/delete.py] --&gt;|pybind| ClusterAdminPy[pybind_register_cluster_admin.cpp]
+    ClusterAdminPy --&gt; ClusterAdminClient[cluster_admin_client]
+    ClusterAdminClient --&gt;|etcd 路径| EtcdStore[common_etcd_client: EtcdStore]
+    ClusterAdminClient --&gt;|coordinator 路径| CoordProxy[common_coordinator_store: CoordinatorServiceProxy]
+    ClusterAdminClient --&gt;|key 构造| TopologyKeyHelper[cluster_topology_keyspace: TopologyKeyHelper]
+    ClusterAdminClient --&gt;|protobuf 编解码| ClusterTopology[cluster_topology: ClusterTopologyPb]
+    EtcdStore --&gt; EtcdServer[(etcd server)]
+    CoordProxy --&gt; CoordinatorService[(Coordinator 进程)]
+</pre></div>
+</div>
+</section>
+<section id="id15">
+<h3>§4.5 关键数据结构<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
+<section id="clusteradminoptions">
+<h4><code class="docutils literal notranslate"><span class="pre">ClusterAdminOptions</span></code><a class="headerlink" href="#clusteradminoptions" title="Link to this heading">¶</a></h4>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">ClusterAdminOptions</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="n">clusterName</span><span class="p">;</span><span class="w">        </span><span class="c1">// 控制 /datasystem[/cluster_name]/... 前缀</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="n">etcdAddress</span><span class="p">;</span><span class="w">        </span><span class="c1">// 互斥于 coordinatorAddress</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="n">coordinatorAddress</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>与 <code class="docutils literal notranslate"><span class="pre">cluster_query_client.h:28-32</span></code> 的 <code class="docutils literal notranslate"><span class="pre">ClusterQueryOptions</span></code> 结构一致。并发安全：构造后只读，无需锁。</p>
+</section>
+<section id="deleteclustermemberresult">
+<h4><code class="docutils literal notranslate"><span class="pre">DeleteClusterMemberResult</span></code><a class="headerlink" href="#deleteclustermemberresult" title="Link to this heading">¶</a></h4>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">DeleteClusterMemberResult</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="n">address</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">membershipDeleted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">notifyDeleted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">probeDeleted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">ubHealthDeleted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">topologyMemberRemoved</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">topologyVersion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w">   </span><span class="c1">// CAS 写入后的 version，0 表示 topologyTable 已删除</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="n">error</span><span class="p">;</span><span class="w">              </span><span class="c1">// 非空表示该 address 清理失败</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>并发安全：每个 address 的 result 独立，无共享状态。</p>
+</section>
+<section id="topologytable-clustertopologypb">
+<h4>topologyTable 的 <code class="docutils literal notranslate"><span class="pre">ClusterTopologyPb</span></code><a class="headerlink" href="#topologytable-clustertopologypb" title="Link to this heading">¶</a></h4>
+<p>来自 <code class="docutils literal notranslate"><span class="pre">src/datasystem/protos/cluster_topology.proto:78-85</span></code>，CLI 操作的核心字段是 <code class="docutils literal notranslate"><span class="pre">map&lt;string,</span> <span class="pre">MembershipPb&gt;</span> <span class="pre">members</span></code>，以 address 为键。CLI 从 members 中 erase 指定 address，version+1 后 CAS 写回。</p>
+</section>
+</section>
+<section id="id16">
+<h3>§4.6 组件接口设计<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
+<section id="id17">
+<h4>总览<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h4>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>接口</p></th>
+<th class="head"><p>调用方</p></th>
+<th class="head"><p>被调方</p></th>
+<th class="head"><p>数据载体</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Python <code class="docutils literal notranslate"><span class="pre">delete_cluster_members(options,</span> <span class="pre">addresses)</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">cli/delete.py</span></code></p></td>
+<td><p>pybind 层</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ClusterAdminOptions</span></code> + <code class="docutils literal notranslate"><span class="pre">list[str]</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>C++ <code class="docutils literal notranslate"><span class="pre">ClusterAdminClient::DeleteClusterMembers(addresses,</span> <span class="pre">results)</span></code></p></td>
+<td><p>pybind 层</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ClusterAdminClient</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">vector&lt;string&gt;</span></code> + <code class="docutils literal notranslate"><span class="pre">vector&lt;DeleteClusterMemberResult&gt;</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>C++ <code class="docutils literal notranslate"><span class="pre">EtcdStore::Delete(tableName,</span> <span class="pre">key)</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ClusterAdminClient::Impl</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">EtcdStore</span></code>（已有）</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">string</span> <span class="pre">tableName,</span> <span class="pre">string</span> <span class="pre">key</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>C++ <code class="docutils literal notranslate"><span class="pre">EtcdStore::CAS(tableName,</span> <span class="pre">key,</span> <span class="pre">processFunc)</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ClusterAdminClient::Impl</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">EtcdStore</span></code>（已有）</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">string</span> <span class="pre">tableName,</span> <span class="pre">string</span> <span class="pre">key,</span> <span class="pre">ProcessFunction</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>C++ <code class="docutils literal notranslate"><span class="pre">proxy_-&gt;DeleteRange(key,</span> <span class="pre">rangeEnd,</span> <span class="pre">...)</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ClusterAdminClient::Impl</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ICoordinatorServiceProxy</span></code>（已有）</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">string</span> <span class="pre">key,</span> <span class="pre">string</span> <span class="pre">rangeEnd</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>C++ <code class="docutils literal notranslate"><span class="pre">proxy_-&gt;CAS(key,</span> <span class="pre">processFunc,</span> <span class="pre">version,</span> <span class="pre">revision)</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ClusterAdminClient::Impl</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ICoordinatorServiceProxy</span></code>（已有）</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">string</span> <span class="pre">key,</span> <span class="pre">CasProcessFunc</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>所有后端接口都是已有的，不需要新增 RPC。</p>
+</section>
+</section>
+</section>
+<section id="id18">
+<h2>§5 对外接口<a class="headerlink" href="#id18" title="Link to this heading">¶</a></h2>
+<section id="sdk">
+<h3>§5.1 SDK 接口<a class="headerlink" href="#sdk" title="Link to this heading">¶</a></h3>
+<p>本模块不提供 SDK 接口，只提供 CLI 命令。</p>
+</section>
+<section id="id19">
+<h3>§5.2 部署参数<a class="headerlink" href="#id19" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>参数名</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--etcd_address</span></code></p></td>
+<td><p>string</p></td>
+<td><p>无</p></td>
+<td><p>etcd/metastore 后端地址，互斥于 <code class="docutils literal notranslate"><span class="pre">--coordinator_address</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--coordinator_address</span></code></p></td>
+<td><p>string</p></td>
+<td><p>无</p></td>
+<td><p>Coordinator 后端地址，互斥于 <code class="docutils literal notranslate"><span class="pre">--etcd_address</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--cluster_name</span></code></p></td>
+<td><p>string</p></td>
+<td><p>“”</p></td>
+<td><p>控制拓扑 key 前缀，默认 “” 对应 <code class="docutils literal notranslate"><span class="pre">/datasystem/...</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--worker_address</span></code></p></td>
+<td><p>string（可重复）</p></td>
+<td><p>无（必填）</p></td>
+<td><p>要清理的 worker 地址，如 <code class="docutils literal notranslate"><span class="pre">7.218.76.39:20010</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id20">
+<h3>§5.3 环境变量<a class="headerlink" href="#id20" title="Link to this heading">¶</a></h3>
+<p>无新增环境变量。pybind 库加载复用 <code class="docutils literal notranslate"><span class="pre">query.py</span></code> 的 <code class="docutils literal notranslate"><span class="pre">_load_native()</span></code> 机制。</p>
+</section>
+</section>
+<section id="id21">
+<h2>§6 约束 + 风险<a class="headerlink" href="#id21" title="Link to this heading">¶</a></h2>
+<section id="id22">
+<h3>约束<a class="headerlink" href="#id22" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>#</p></th>
+<th class="head"><p>约束</p></th>
+<th class="head"><p>违规后果</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>C1</p></td>
+<td><p>topologyTable 更新必须走 CAS，不能直接 Put 覆盖</p></td>
+<td><p>与 topology controller 的 CAS 竞争，CLI 的修改被 controller 覆盖，导致死 member token 残留在 hash ring</p></td>
+</tr>
+<tr class="row-odd"><td><p>C2</p></td>
+<td><p>执行顺序必须先删 per-address key，再 CAS topologyTable</p></td>
+<td><p>若先改 topologyTable，controller 的 failure classifier 观察到 member 缺席后可能并发 CAS，导致 CLI CAS 冲突</p></td>
+</tr>
+<tr class="row-even"><td><p>C3</p></td>
+<td><p>per-address key 的 <code class="docutils literal notranslate"><span class="pre">K_NOT_FOUND</span></code> 不能中断流程</p></td>
+<td><p>key 可能已被 lease 过期自动删除，<code class="docutils literal notranslate"><span class="pre">K_NOT_FOUND</span></code> 是正常情况</p></td>
+</tr>
+<tr class="row-odd"><td><p>C4</p></td>
+<td><p>topologyTable members 变空时必须删除 key，不能写空 protobuf</p></td>
+<td><p>下个 worker 启动时 controller 需要检测到 key 不存在才能走 <code class="docutils literal notranslate"><span class="pre">BuildBootstrap</span></code> 重建拓扑</p></td>
+</tr>
+<tr class="row-even"><td><p>C5</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--worker_address</span></code> 必须通过 <code class="docutils literal notranslate"><span class="pre">TopologyKeyHelper::ValidateAddress</span></code> 校验</p></td>
+<td><p>非法 address 会构造出错误的 etcd key，可能误删其它数据</p></td>
+</tr>
+<tr class="row-odd"><td><p>C6</p></td>
+<td><p>cluster_name 隔离必须通过 <code class="docutils literal notranslate"><span class="pre">TopologyKeyHelper</span></code> 构造 key</p></td>
+<td><p>直接拼字符串可能跨集群误删</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id23">
+<h3>风险<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>#</p></th>
+<th class="head"><p>风险</p></th>
+<th class="head"><p>缓解</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>R1</p></td>
+<td><p>CLI CAS 和 controller CAS 竞争导致饥饿</p></td>
+<td><p>最多 5 次重试 + 随机 sleep 0-10ms，与 <code class="docutils literal notranslate"><span class="pre">EtcdStore::CAS</span></code> 的 <code class="docutils literal notranslate"><span class="pre">CAS_ERROR_MAX_RETRY_NUM</span></code> 一致</p></td>
+</tr>
+<tr class="row-odd"><td><p>R2</p></td>
+<td><p>CLI 在删 per-address key 后、CAS topologyTable 前崩溃</p></td>
+<td><p>eventual consistent：membership key 已删 → lease 不再续约 → 60s 后 controller 自动确认缺席 → 300s 后清理 topologyTable</p></td>
+</tr>
+<tr class="row-even"><td><p>R3</p></td>
+<td><p>DaemonSet 地址复用导致新 worker 在 CLI 操作期间启动</p></td>
+<td><p>CLI 操作幂等：key 删除后新 worker 用新 lease 重建，topologyTable CAS 后 controller 通过 watch 事件感知</p></td>
+</tr>
+<tr class="row-odd"><td><p>R4</p></td>
+<td><p>tasks 残留</p></td>
+<td><p>janitor 在下一周期（默认几十秒）自动清理，不需要 CLI 等待</p></td>
+</tr>
+<tr class="row-even"><td><p>R5</p></td>
+<td><p>删错 address</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--worker_address</span></code> 指定的 address 如果不在 topologyTable 的 members 里，CAS processFunc 发现 erase 0 个 member → 不写回 → 输出 <code class="docutils literal notranslate"><span class="pre">topology_member_removed=false</span></code>，用户可审计</p></td>
+</tr>
+<tr class="row-odd"><td><p>R6</p></td>
+<td><p>Coordinator <code class="docutils literal notranslate"><span class="pre">DeleteRange</span></code> 的 fence</p></td>
+<td><p>CLI 不传 <code class="docutils literal notranslate"><span class="pre">expectedCoordinatorId</span></code>/<code class="docutils literal notranslate"><span class="pre">expectedModRevision</span></code>（置零禁用 fence），因为 CLI 不是 membership incarnation 持有者</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+<section id="id24">
+<h2>§7 落地步骤<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h2>
+<section id="dscli">
+<h3>dscli 端<a class="headerlink" href="#dscli" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>PR</p></th>
+<th class="head"><p>内容</p></th>
+<th class="head"><p>阶段</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>PR1</p></td>
+<td><p>新增 <code class="docutils literal notranslate"><span class="pre">src/datasystem/client/cluster_admin/cluster_admin_client.{h,cpp}</span></code> + <code class="docutils literal notranslate"><span class="pre">CMakeLists.txt</span></code>，实现 etcd + Coordinator 双路径</p></td>
+<td><p>P1</p></td>
+</tr>
+<tr class="row-odd"><td><p>PR2</p></td>
+<td><p>新增 <code class="docutils literal notranslate"><span class="pre">src/datasystem/pybind_api/pybind_register_cluster_admin.cpp</span></code>，更新 <code class="docutils literal notranslate"><span class="pre">CMakeLists.txt</span></code> 和 <code class="docutils literal notranslate"><span class="pre">BUILD.bazel</span></code></p></td>
+<td><p>P1</p></td>
+</tr>
+<tr class="row-even"><td><p>PR3</p></td>
+<td><p>新增 <code class="docutils literal notranslate"><span class="pre">cli/delete.py</span></code>，更新 <code class="docutils literal notranslate"><span class="pre">cli/command.py</span></code> 的 <code class="docutils literal notranslate"><span class="pre">COMMAND_MODULES</span></code></p></td>
+<td><p>P1</p></td>
+</tr>
+<tr class="row-odd"><td><p>PR4</p></td>
+<td><p>新增 <code class="docutils literal notranslate"><span class="pre">tests/python/test_cli_delete.py</span></code>（mock native，仿 <code class="docutils literal notranslate"><span class="pre">test_cli_query.py</span></code>）</p></td>
+<td><p>P1</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id25">
+<h3>服务端<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h3>
+<p>无服务端改动。所有后端接口（<code class="docutils literal notranslate"><span class="pre">EtcdStore::Delete/CAS/Get</span></code>、<code class="docutils literal notranslate"><span class="pre">ICoordinatorServiceProxy::DeleteRange/CAS/GetClusterRawSnapshot</span></code>）都是已有的。</p>
+</section>
+</section>
+<section id="id26">
+<h2>§8 测试方案<a class="headerlink" href="#id26" title="Link to this heading">¶</a></h2>
+<section id="ut">
+<h3>UT<a class="headerlink" href="#ut" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>文件</p></th>
+<th class="head"><p>覆盖点</p></th>
+<th class="head"><p>覆盖率</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">tests/python/test_cli_delete.py</span></code></p></td>
+<td><p>mock native 层，验证 CLI 输出格式、多 address、后端互斥、RPC 失败、空 address 列表</p></td>
+<td><p>≥90%</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="it">
+<h3>IT<a class="headerlink" href="#it" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>IT</p></th>
+<th class="head"><p>对应 UseCase</p></th>
+<th class="head"><p>场景</p></th>
+<th class="head"><p>断言</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>IT1</p></td>
+<td><p>UC1</p></td>
+<td><p>etcd 后端，启动 2 worker 集群 → <code class="docutils literal notranslate"><span class="pre">DeleteClusterMembers([worker1])</span></code> → 验证 4 个 per-address key 消失 + topologyTable 不含 worker1</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">etcdctl</span> <span class="pre">get</span> <span class="pre">/datasystem/cluster/&lt;addr1&gt;</span></code> 返回 NOT_FOUND；<code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">query</span> <span class="pre">cluster</span></code> 不含 worker1</p></td>
+</tr>
+<tr class="row-odd"><td><p>IT2</p></td>
+<td><p>UC2</p></td>
+<td><p>Coordinator 后端，同 IT1 流程</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">query</span> <span class="pre">cluster</span> <span class="pre">--coordinator_address</span></code> 不含 worker1</p></td>
+</tr>
+<tr class="row-even"><td><p>IT3</p></td>
+<td><p>UC3</p></td>
+<td><p>多 address 批量清理</p></td>
+<td><p>一次 CAS 中两个 member 都被移除</p></td>
+</tr>
+<tr class="row-odd"><td><p>IT4</p></td>
+<td><p>C1</p></td>
+<td><p>CAS 冲突重试：CLI 操作期间人为触发 controller CAS</p></td>
+<td><p>CLI 重试成功，最终 topologyTable 不含目标 member</p></td>
+</tr>
+<tr class="row-even"><td><p>IT5</p></td>
+<td><p>C4</p></td>
+<td><p>topologyTable 变空：删所有 member</p></td>
+<td><p>topologyTable key 被删除，<code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">query</span> <span class="pre">cluster</span></code> 返回 topology unavailable</p></td>
+</tr>
+<tr class="row-odd"><td><p>IT6</p></td>
+<td><p>C3</p></td>
+<td><p>per-address key 不存在：先手动 <code class="docutils literal notranslate"><span class="pre">etcdctl</span> <span class="pre">del</span></code> membership key，再跑 CLI</p></td>
+<td><p>CLI 不报错，输出 <code class="docutils literal notranslate"><span class="pre">membership_deleted=false</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
 </section>
 </section>
 </section>
@@ -692,23 +1400,23 @@ timeout<span class="w"> </span><span class="m">30</span><span class="w"> </span>
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="brpc_health_probe.html">
+          <a class="next-page" href="../api_reference/index.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">brpc 健康探针与诊断接口</div>
+                <div class="title">API 参考</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
-          <a class="prev-page" href="client_env_guide.html">
+          <a class="prev-page" href="cann_dynamic_loading_detailed.html">
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
               <div class="page-info">
                 <div class="context">
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">Client环境变量</div>
+                <div class="title">子模块：HIXL 动态加载（CANN 运行时依赖隔离）</div>
                 
               </div>
             </a>
@@ -742,13 +1450,65 @@ timeout<span class="w"> </span><span class="m">30</span><span class="w"> </span>
         <div class="toc-tree-container">
           <div class="toc-tree">
             <ul>
-<li><a class="reference internal" href="#">大页内存配置指南</a><ul>
-<li><a class="reference internal" href="#id2">数据系统配置大页内存步骤</a><ul>
-<li><a class="reference internal" href="#id3">第一步：内存资源评估</a></li>
-<li><a class="reference internal" href="#id4">第二步：执行动态分配</a></li>
-<li><a class="reference internal" href="#id5">第三步：验证分配结果</a></li>
-<li><a class="reference internal" href="#worker">第四步：部署数据系统worker开启大页内存</a></li>
-<li><a class="reference internal" href="#id6">第五步：确认应用在使用大页</a></li>
+<li><a class="reference internal" href="#">子模块：dscli 集群成员清理命令（按 worker 地址精确清理拓扑残留）</a><ul>
+<li><a class="reference internal" href="#id1">§1 需求背景与目标</a><ul>
+<li><a class="reference internal" href="#id2">背景</a></li>
+<li><a class="reference internal" href="#id3">目标</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id4">§2 需求边界</a><ul>
+<li><a class="reference internal" href="#id5">关键概念定义</a></li>
+<li><a class="reference internal" href="#id6">做什么</a></li>
+<li><a class="reference internal" href="#id7">不做什么</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#usecase">§3 UseCase</a><ul>
+<li><a class="reference internal" href="#worker-etcd">场景 1：测试用例间清理残留 worker（etcd 后端）</a></li>
+<li><a class="reference internal" href="#worker-coordinator">场景 2：测试用例间清理残留 worker（Coordinator 后端）</a></li>
+<li><a class="reference internal" href="#id8">UseCase 总表</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id9">§4 方案设计</a><ul>
+<li><a class="reference internal" href="#id10">§4.1 类图</a></li>
+<li><a class="reference internal" href="#id11">§4.2 开发视图</a></li>
+<li><a class="reference internal" href="#id12">§4.3 关键交互</a><ul>
+<li><a class="reference internal" href="#dscli-delete-cluster-etcd">场景：dscli delete cluster 执行流程（etcd 后端）</a></li>
+<li><a class="reference internal" href="#dscli-delete-cluster-coordinator">场景：dscli delete cluster 执行流程（Coordinator 后端）</a></li>
+<li><a class="reference internal" href="#id13">错误码映射</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id14">§4.4 模块依赖图</a></li>
+<li><a class="reference internal" href="#id15">§4.5 关键数据结构</a><ul>
+<li><a class="reference internal" href="#clusteradminoptions"><code class="docutils literal notranslate"><span class="pre">ClusterAdminOptions</span></code></a></li>
+<li><a class="reference internal" href="#deleteclustermemberresult"><code class="docutils literal notranslate"><span class="pre">DeleteClusterMemberResult</span></code></a></li>
+<li><a class="reference internal" href="#topologytable-clustertopologypb">topologyTable 的 <code class="docutils literal notranslate"><span class="pre">ClusterTopologyPb</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id16">§4.6 组件接口设计</a><ul>
+<li><a class="reference internal" href="#id17">总览</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id18">§5 对外接口</a><ul>
+<li><a class="reference internal" href="#sdk">§5.1 SDK 接口</a></li>
+<li><a class="reference internal" href="#id19">§5.2 部署参数</a></li>
+<li><a class="reference internal" href="#id20">§5.3 环境变量</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id21">§6 约束 + 风险</a><ul>
+<li><a class="reference internal" href="#id22">约束</a></li>
+<li><a class="reference internal" href="#id23">风险</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id24">§7 落地步骤</a><ul>
+<li><a class="reference internal" href="#dscli">dscli 端</a></li>
+<li><a class="reference internal" href="#id25">服务端</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id26">§8 测试方案</a><ul>
+<li><a class="reference internal" href="#ut">UT</a></li>
+<li><a class="reference internal" href="#it">IT</a></li>
 </ul>
 </li>
 </ul>
