@@ -95,8 +95,6 @@ void DataPlaneManager::UbHealthCallbackState::ObserveSummary(const UbHealthSumma
 }
 
 namespace {
-
-constexpr uint32_t TRANSPORT_STATE_LOG_RATE = 100;
 // Ring-health grace: admission keeps rejecting unknown endpoints while a confirmed publish is this
 // recent; a longer gap means the ring refresh itself is lost.
 constexpr int64_t SNAPSHOT_REFRESH_GRACE_MS = 60'000;
@@ -128,8 +126,7 @@ AccessTransportKind KindForHint(TransportHint hint)
 void LogTransporterReady(const HostPort &workerAddr, AccessTransportKind kind, bool retainedShm)
 {
     if (retainedShm) {
-        LOG_EVERY_N(INFO, TRANSPORT_STATE_LOG_RATE)
-            << "[TransportGet][Connection] Cached fallback while retaining SHM, endpoint: "
+        LOG(INFO) << "[TransportGet][Connection] Cached fallback while retaining SHM, endpoint: "
             << workerAddr.ToString() << ", fallback: " << AccessTransportTracker::KindToName(kind);
     }
     VLOG(1) << "[TransportGet][Connection] Data transporter ready, endpoint: " << workerAddr.ToString()

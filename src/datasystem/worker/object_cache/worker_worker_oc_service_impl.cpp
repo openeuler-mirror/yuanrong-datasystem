@@ -66,7 +66,6 @@ DS_DECLARE_uint64(oc_worker_aggregate_single_max);
 DS_DECLARE_uint64(oc_worker_aggregate_merge_size);
 
 namespace datasystem {
-constexpr int FAILURE_LOG_RATE = 100;
 namespace {
 constexpr char URMA_WARMUP_KEY_PREFIX[] = "_urma_";
 constexpr char BATCH_GET_RUNTIME_ERROR_KEY_PREFIX[] = "transport_get_inject_runtime_";
@@ -554,10 +553,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteRe
         return Status::OK();
     }
     if (status.IsError()) {
-        LOG_EVERY_N(ERROR, FAILURE_LOG_RATE)
-            << FormatString("[ObjectKey %s] Get object remote failed, requestId: %s, workerAddr: %s", objectKey,
-                            requestId, localAddress_.ToString())
-            << ", Detail: " << status;
+        LOG(ERROR) << FormatString("[ObjectKey %s] Get object remote failed, requestId: %s, workerAddr: %s", objectKey,
+            requestId, localAddress_.ToString()) << ", Detail: " << status;
         return status;
     }
     point.Record();

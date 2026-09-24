@@ -410,8 +410,7 @@ Status UrmaManager::CheckClientPortHealthAdmission() const
 {
     const uint64_t state = clientPortHealthAdmissionState_.load(std::memory_order_acquire);
     if ((state & CLIENT_PORT_HEALTH_READY_MASK) == 0) {
-        LOG_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N)
-            << "Client-local UB port health admission is unavailable";
+        LOG(ERROR) << "Client-local UB port health admission is unavailable";
         return Status::OK();
     }
     const auto totalPortCount = static_cast<uint32_t>((state >> CLIENT_PORT_COUNT_SHIFT) & CLIENT_PORT_COUNT_MASK);
@@ -1580,8 +1579,7 @@ bool UrmaManager::ShouldLogSrcChipSelection(const SrcChipSelectionDecision &deci
 void UrmaManager::ObserveSrcChipSelection(const SrcChipSelectionDecision &decision)
 {
     if (ShouldLogSrcChipSelection(decision)) {
-        LOG_EVERY_N(INFO, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_SRC_CHIP_BALANCE] override policy candidate " << static_cast<uint32_t>(decision.candidate)
+        LOG(INFO) << "[URMA_SRC_CHIP_BALANCE] override policy candidate " << static_cast<uint32_t>(decision.candidate)
             << " with chip " << static_cast<uint32_t>(decision.selected) << ", policy=" << decision.policy
             << ", chip1Inflight=" << decision.chip1Inflight << ", chip2Inflight=" << decision.chip2Inflight
             << ", difference=" << decision.difference << ", threshold=" << decision.threshold;
@@ -1740,8 +1738,8 @@ Status UrmaManager::CreateUrmaWaitTimeoutStatus(uint64_t requestId, const std::s
         requestId, elapsedMs, srcAddress.c_str(), event->GetRemoteAddress().c_str(),
         event->GetRemoteInstanceId().c_str(), static_cast<size_t>(event->GetDataSize()),
         UrmaEvent::OperationTypeName(event->GetOperationType()), reason.c_str());
-    // Message also propagates inside the returned Status; keep a throttled full-detail record here.
-    LOG_EVERY_N(WARNING, FAILURE_LOG_RATE) << message;
+    // Message also propagates inside the returned Status.
+    LOG(WARNING) << message;
     return Status(K_URMA_WAIT_TIMEOUT, message);
 }
 
