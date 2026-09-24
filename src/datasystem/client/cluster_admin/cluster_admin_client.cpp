@@ -21,14 +21,20 @@
 #include "datasystem/client/cluster_admin/cluster_admin_client.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include "datasystem/cluster/membership/membership_value_codec.h"
+#include "datasystem/cluster/membership/membership_types.h"
+#include "datasystem/cluster/model/topology_types.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
+#include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
+#include "datasystem/common/coordinator/key_value_entry.h"
 #include "datasystem/common/coordinator/static_coordinator_discovery.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/util/status_helper.h"
@@ -69,56 +75,45 @@ bool IsAddressNotFound(const Status &status)
     return status.GetCode() == K_NOT_FOUND;
 }
 
-ClusterTopologyPb ParseOrEmpty(const std::string &bytes)
+Status DecodeTopologyValue(const std::string &value, cluster::TopologyState &state)
 {
-    ClusterTopologyPb pb;
-    if (!bytes.empty()) {
-        pb.ParseFromString(bytes);
+    if (value.empty()) {
+        return Status(K_NOT_FOUND, "topology table is empty");
     }
-    return pb;
+    return cluster::TopologyRepositoryCodec::DecodeTopology(value, state);
 }
 
-Status RemoveMembersFromTopology(const ClusterTopologyPb &current,
-    const std::vector<std::string> &addresses, ClusterTopologyPb &next, bool &changed)
+Status RemoveMembersFromTopology(const cluster::TopologyState &current,
+    const std::vector<std::string> &addresses, cluster::TopologyState &next, bool &changed)
 {
     next = current;
     changed = false;
-    for (const auto &address : addresses) {
-        if (next.mutable_members()->erase(address) > 0) {
-            changed = true;
-        }
-    }
+    std::unordered_set<std::string> toRemove(addresses.begin(), addresses.end());
+    auto &members = next.members;
+    members.erase(std::remove_if(members.begin(), members.end(),
+        [&](const cluster::Member &m) {
+            if (toRemove.count(m.identity.address) > 0) {
+                changed = true;
+                return true;
+            }
+            return false;
+        }), members.end());
     if (changed) {
-        next.set_version(current.version() + 1);
+        next.version = current.version + 1;
     }
     return Status::OK();
 }
 
-Status BuildTopologyCasMutation(const std::string &current,
-    const std::vector<std::string> &addresses, std::unique_ptr<std::string> &next)
-{
-    ClusterTopologyPb pb = ParseOrEmpty(current);
-    if (pb.members().empty()) {
-        return Status::OK();
-    }
-    ClusterTopologyPb updated;
-    bool changed = false;
-    RETURN_IF_NOT_OK(RemoveMembersFromTopology(pb, addresses, updated, changed));
-    if (!changed || updated.members().empty()) {
-        return Status::OK();
-    }
-    next = std::make_unique<std::string>();
-    updated.SerializeToString(next.get());
-    return Status::OK();
-}
-
-void FillTopologyResult(std::vector<DeleteClusterMemberResult> &results,
-    bool removed, uint64_t version)
+void FillResults(std::vector<DeleteClusterMemberResult> &results,
+    bool removed, uint64_t version, const std::string &error = "")
 {
     for (auto &result : results) {
         if (result.error.empty()) {
             result.topologyMemberRemoved = removed;
             result.topologyVersion = version;
+            if (!error.empty()) {
+                result.error = error;
+            }
         }
     }
 }
@@ -137,13 +132,25 @@ public:
 private:
     Status InitEtcd();
     Status InitCoordinator();
+    Status CheckMemberAbsentEtcd(const std::string &address, bool &absent);
+    Status CheckMemberAbsentCoordinator(const std::string &address, bool &absent);
+    Status DeletePerAddressKeysEtcd(const std::vector<std::string> &addresses,
+        std::vector<DeleteClusterMemberResult> &results);
+    Status DeletePerAddressKeysCoordinator(const std::vector<std::string> &addresses,
+        std::vector<DeleteClusterMemberResult> &results);
     Status DeleteClusterMembersEtcd(const std::vector<std::string> &addresses,
         std::vector<DeleteClusterMemberResult> &results);
     Status DeleteClusterMembersCoordinator(const std::vector<std::string> &addresses,
         std::vector<DeleteClusterMemberResult> &results);
-    Status DeletePerAddressKeysEtcd(const std::vector<std::string> &addresses,
-        std::vector<DeleteClusterMemberResult> &results);
-    Status DeletePerAddressKeysCoordinator(const std::vector<std::string> &addresses,
+    Status ReadTopologyEtcd(std::string &value);
+    Status ReadTopologyCoordinator(std::string &value);
+    void PreCheckAddresses(const std::vector<std::string> &addresses,
+        const std::function<Status(const std::string &, bool &)> &absentChecker,
+        std::vector<DeleteClusterMemberResult> &results, std::vector<std::string> &toDelete);
+    Status CommitTopologyUpdate(const std::vector<std::string> &toDelete,
+        const std::function<Status(std::string &)> &topologyReader,
+        const std::function<Status()> &topologyDeleter,
+        const std::function<Status(std::string &)> &casWriter,
         std::vector<DeleteClusterMemberResult> &results);
 
     ClusterAdminOptions options_;
@@ -162,6 +169,9 @@ Status ClusterAdminClient::Impl::InitEtcd()
     RETURN_IF_NOT_OK(etcdStore_->CreateTableWithExactPrefix(keys_->MembershipTable(),
         keys_->EtcdMembershipTablePrefix()));
     RETURN_IF_NOT_OK(etcdStore_->CreateTableWithExactPrefix(keys_->TopologyTable(), keys_->TopologyTable()));
+    RETURN_IF_NOT_OK(etcdStore_->CreateTableWithExactPrefix(keys_->NotifyTable(), keys_->NotifyTable()));
+    RETURN_IF_NOT_OK(etcdStore_->CreateTableWithExactPrefix(keys_->ProbeTable(), keys_->ProbeTable()));
+    RETURN_IF_NOT_OK(etcdStore_->CreateTableWithExactPrefix(keys_->UbHealthTable(), keys_->UbHealthTable()));
     return Status::OK();
 }
 
@@ -187,175 +197,296 @@ Status ClusterAdminClient::Impl::Init()
     return rc;
 }
 
+Status ClusterAdminClient::Impl::CheckMemberAbsentEtcd(const std::string &address, bool &absent)
+{
+    std::string key;
+    RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::MembershipKey(address, key));
+    std::string value;
+    auto rc = etcdStore_->Get(keys_->MembershipTable(), key, value);
+    if (rc.IsOk()) {
+        absent = false;
+        return Status::OK();
+    }
+    if (IsAddressNotFound(rc)) {
+        absent = true;
+        return Status::OK();
+    }
+    return rc;
+}
+
+Status ClusterAdminClient::Impl::CheckMemberAbsentCoordinator(const std::string &address, bool &absent)
+{
+    std::string key;
+    RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::MembershipKey(address, key));
+    std::string physicalKey = keys_->MembershipTable() + "/" + key;
+    std::vector<KeyValueEntry> kvs;
+    int64_t revision = 0;
+    auto rc = coordinatorProxy_->Range(physicalKey, "", kvs, revision, ADMIN_RPC_TIMEOUT_MS);
+    if (rc.IsError()) {
+        return rc;
+    }
+    absent = kvs.empty();
+    return Status::OK();
+}
+
 Status ClusterAdminClient::Impl::DeletePerAddressKeysEtcd(const std::vector<std::string> &addresses,
     std::vector<DeleteClusterMemberResult> &results)
 {
-    auto deleteKey = [this](const std::string &tableName, const std::string &address) {
+    auto deleteKey = [this](const std::string &tableName, const std::string &address, bool &deleted) {
         std::string key;
         RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::MembershipKey(address, key));
         auto rc = etcdStore_->Delete(tableName, key);
-        if (rc.IsError() && !IsAddressNotFound(rc)) {
-            return rc;
+        if (rc.IsOk()) {
+            deleted = true;
+            return Status::OK();
         }
-        return Status::OK();
+        if (IsAddressNotFound(rc)) {
+            deleted = false;
+            return Status::OK();
+        }
+        return rc;
     };
     for (const auto &address : addresses) {
         DeleteClusterMemberResult result;
         result.address = address;
-        auto rc = deleteKey(keys_->MembershipTable(), address);
+        auto rc = deleteKey(keys_->MembershipTable(), address, result.membershipDeleted);
         if (rc.IsError()) {
             result.error = rc.ToString();
             results.push_back(std::move(result));
             continue;
         }
-        result.membershipDeleted = true;
-        rc = deleteKey(keys_->NotifyTable(), address);
+        rc = deleteKey(keys_->NotifyTable(), address, result.notifyDeleted);
         if (rc.IsError()) {
             result.error = rc.ToString();
             results.push_back(std::move(result));
             continue;
         }
-        result.notifyDeleted = true;
-        rc = deleteKey(keys_->ProbeTable(), address);
+        rc = deleteKey(keys_->ProbeTable(), address, result.probeDeleted);
         if (rc.IsError()) {
             result.error = rc.ToString();
             results.push_back(std::move(result));
             continue;
         }
-        result.probeDeleted = true;
-        rc = deleteKey(keys_->UbHealthTable(), address);
+        rc = deleteKey(keys_->UbHealthTable(), address, result.ubHealthDeleted);
         if (rc.IsError()) {
             result.error = rc.ToString();
             results.push_back(std::move(result));
             continue;
         }
-        result.ubHealthDeleted = true;
         results.push_back(std::move(result));
     }
+    return Status::OK();
+}
+
+Status ClusterAdminClient::Impl::ReadTopologyEtcd(std::string &value)
+{
+    return etcdStore_->Get(keys_->TopologyTable(), cluster::TopologyKeyHelper::TopologyKey(), value);
+}
+
+void ClusterAdminClient::Impl::PreCheckAddresses(const std::vector<std::string> &addresses,
+    const std::function<Status(const std::string &, bool &)> &absentChecker,
+    std::vector<DeleteClusterMemberResult> &results, std::vector<std::string> &toDelete)
+{
+    for (const auto &address : addresses) {
+        bool absent = false;
+        auto rc = absentChecker(address, absent);
+        if (rc.IsError()) {
+            DeleteClusterMemberResult result;
+            result.address = address;
+            result.error = "membership check failed: " + rc.ToString();
+            results.push_back(std::move(result));
+            continue;
+        }
+        if (!absent && !options_.force) {
+            DeleteClusterMemberResult result;
+            result.address = address;
+            result.error = "worker is still online; use --force to override";
+            results.push_back(std::move(result));
+            continue;
+        }
+        if (options_.dryRun) {
+            DeleteClusterMemberResult result;
+            result.address = address;
+            result.error = "dry-run: no changes applied";
+            results.push_back(std::move(result));
+            continue;
+        }
+        toDelete.push_back(address);
+    }
+}
+
+Status ClusterAdminClient::Impl::CommitTopologyUpdate(const std::vector<std::string> &toDelete,
+    const std::function<Status(std::string &)> &topologyReader,
+    const std::function<Status()> &topologyDeleter,
+    const std::function<Status(std::string &)> &casWriter,
+    std::vector<DeleteClusterMemberResult> &results)
+{
+    std::string topologyValue;
+    auto getRc = topologyReader(topologyValue);
+    if (getRc.IsError() && !IsAddressNotFound(getRc)) {
+        FillResults(results, false, 0, "topology read failed: " + getRc.ToString());
+        return getRc;
+    }
+    cluster::TopologyState current;
+    if (!topologyValue.empty()) {
+        RETURN_IF_NOT_OK(DecodeTopologyValue(topologyValue, current));
+    }
+    cluster::TopologyState next;
+    bool changed = false;
+    RETURN_IF_NOT_OK(RemoveMembersFromTopology(current, toDelete, next, changed));
+    if (!changed) {
+        FillResults(results, false, current.version);
+        return Status::OK();
+    }
+    if (next.members.empty()) {
+        auto delRc = topologyDeleter();
+        if (delRc.IsError()) {
+            return delRc;
+        }
+        FillResults(results, true, 0);
+        return Status::OK();
+    }
+    std::string nextValue;
+    RETURN_IF_NOT_OK(cluster::TopologyRepositoryCodec::EncodeTopology(next, nextValue));
+    std::string committedValue;
+    auto casRc = casWriter(committedValue);
+    if (casRc.IsError()) {
+        FillResults(results, false, 0, "topology CAS failed: " + casRc.ToString());
+        return casRc;
+    }
+    cluster::TopologyState committed;
+    if (!committedValue.empty()) {
+        RETURN_IF_NOT_OK(DecodeTopologyValue(committedValue, committed));
+    } else {
+        committed = next;
+    }
+    FillResults(results, true, committed.version);
     return Status::OK();
 }
 
 Status ClusterAdminClient::Impl::DeleteClusterMembersEtcd(const std::vector<std::string> &addresses,
     std::vector<DeleteClusterMemberResult> &results)
 {
-    RETURN_IF_NOT_OK(DeletePerAddressKeysEtcd(addresses, results));
-    std::vector<std::string> remaining(addresses.begin(), addresses.end());
-    EtcdStore::EtcdProcessFunction process =
-        [&remaining](const std::string &current, std::unique_ptr<std::string> &next, bool &retry) {
-            retry = false;
-            return BuildTopologyCasMutation(current, remaining, next);
-        };
-    auto casRc = etcdStore_->CAS(keys_->TopologyTable(), cluster::TopologyKeyHelper::TopologyKey(), process);
-    if (casRc.IsError()) {
-        for (auto &result : results) {
-            if (result.error.empty()) {
-                result.error = "topology CAS failed: " + casRc.ToString();
-            }
-        }
-        return casRc;
+    std::vector<std::string> toDelete;
+    PreCheckAddresses(addresses, [this](const std::string &addr, bool &absent) {
+        return CheckMemberAbsentEtcd(addr, absent);
+    }, results, toDelete);
+    if (toDelete.empty()) {
+        return Status::OK();
     }
-    std::string topologyValue;
-    auto getRc = etcdStore_->Get(keys_->TopologyTable(), cluster::TopologyKeyHelper::TopologyKey(), topologyValue);
-    bool topologyEmpty = getRc.IsOk() && ParseOrEmpty(topologyValue).members().empty();
-    if (topologyEmpty) {
-        (void)etcdStore_->Delete(keys_->TopologyTable(), cluster::TopologyKeyHelper::TopologyKey());
+    RETURN_IF_NOT_OK(DeletePerAddressKeysEtcd(toDelete, results));
+    auto deleter = [this]() {
+        auto rc = etcdStore_->Delete(keys_->TopologyTable(), cluster::TopologyKeyHelper::TopologyKey());
+        return (rc.IsError() && !IsAddressNotFound(rc)) ? rc : Status::OK();
+    };
+    std::string nextValue;
+    auto casWriter = [this, &nextValue](std::string &) {
+        return etcdStore_->CAS(keys_->TopologyTable(), cluster::TopologyKeyHelper::TopologyKey(),
+            [&nextValue](const std::string &,
+                std::unique_ptr<std::string> &newValue, bool &retry) {
+                retry = false;
+                newValue = std::make_unique<std::string>(nextValue);
+                return Status::OK();
+            });
+    };
+    return CommitTopologyUpdate(toDelete,
+        [this](std::string &v) { return ReadTopologyEtcd(v); }, deleter, casWriter, results);
+}
+
+Status ClusterAdminClient::Impl::DeleteClusterMembersCoordinator(
+    const std::vector<std::string> &addresses, std::vector<DeleteClusterMemberResult> &results)
+{
+    std::vector<std::string> toDelete;
+    PreCheckAddresses(addresses, [this](const std::string &addr, bool &absent) {
+        return CheckMemberAbsentCoordinator(addr, absent);
+    }, results, toDelete);
+    if (toDelete.empty()) {
+        return Status::OK();
     }
-    if (getRc.IsOk()) {
-        const auto version = ParseOrEmpty(topologyValue).version();
-        FillTopologyResult(results, true, topologyEmpty ? 0 : static_cast<uint64_t>(version));
-    }
-    return Status::OK();
+    RETURN_IF_NOT_OK(DeletePerAddressKeysCoordinator(toDelete, results));
+    auto deleter = [this]() {
+        std::string pk = keys_->TopologyTable() + "/";
+        int64_t delCount = 0;
+        int64_t revision = 0;
+        return coordinatorProxy_->DeleteRange(pk, "", delCount, revision, ADMIN_RPC_TIMEOUT_MS);
+    };
+    std::string nextValue;
+    auto casWriter = [this, &nextValue](std::string &) {
+        std::string pk = keys_->TopologyTable() + "/";
+        int64_t version = 0;
+        int64_t revision = 0;
+        return coordinatorProxy_->CAS(pk,
+            [&nextValue](const std::string &, std::unique_ptr<std::string> &newValue, bool &retry) {
+                retry = true;
+                newValue = std::make_unique<std::string>(nextValue);
+                return Status::OK();
+            }, version, revision);
+    };
+    return CommitTopologyUpdate(toDelete,
+        [this](std::string &v) { return ReadTopologyCoordinator(v); }, deleter, casWriter, results);
 }
 
 Status ClusterAdminClient::Impl::DeletePerAddressKeysCoordinator(const std::vector<std::string> &addresses,
     std::vector<DeleteClusterMemberResult> &results)
 {
-    auto deleteKey = [this](const std::string &tableName, const std::string &address) {
+    auto deleteKey = [this](const std::string &tableName, const std::string &address, bool &deleted) {
         std::string key;
         RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::MembershipKey(address, key));
         std::string physicalKey = tableName + "/" + key;
-        int64_t deleted = 0;
+        int64_t delCount = 0;
         int64_t revision = 0;
-        auto rc = coordinatorProxy_->DeleteRange(physicalKey, "", deleted, revision, ADMIN_RPC_TIMEOUT_MS);
-        if (rc.IsError() && !IsAddressNotFound(rc)) {
+        auto rc = coordinatorProxy_->DeleteRange(physicalKey, "", delCount, revision, ADMIN_RPC_TIMEOUT_MS);
+        if (rc.IsError()) {
             return rc;
         }
+        deleted = delCount > 0;
         return Status::OK();
     };
     for (const auto &address : addresses) {
         DeleteClusterMemberResult result;
         result.address = address;
-        auto rc = deleteKey(keys_->MembershipTable(), address);
+        auto rc = deleteKey(keys_->MembershipTable(), address, result.membershipDeleted);
         if (rc.IsError()) {
             result.error = rc.ToString();
             results.push_back(std::move(result));
             continue;
         }
-        result.membershipDeleted = true;
-        rc = deleteKey(keys_->NotifyTable(), address);
+        rc = deleteKey(keys_->NotifyTable(), address, result.notifyDeleted);
         if (rc.IsError()) {
             result.error = rc.ToString();
             results.push_back(std::move(result));
             continue;
         }
-        result.notifyDeleted = true;
-        rc = deleteKey(keys_->ProbeTable(), address);
+        rc = deleteKey(keys_->ProbeTable(), address, result.probeDeleted);
         if (rc.IsError()) {
             result.error = rc.ToString();
             results.push_back(std::move(result));
             continue;
         }
-        result.probeDeleted = true;
-        rc = deleteKey(keys_->UbHealthTable(), address);
+        rc = deleteKey(keys_->UbHealthTable(), address, result.ubHealthDeleted);
         if (rc.IsError()) {
             result.error = rc.ToString();
             results.push_back(std::move(result));
             continue;
         }
-        result.ubHealthDeleted = true;
         results.push_back(std::move(result));
     }
     return Status::OK();
 }
 
-Status ClusterAdminClient::Impl::DeleteClusterMembersCoordinator(const std::vector<std::string> &addresses,
-    std::vector<DeleteClusterMemberResult> &results)
+Status ClusterAdminClient::Impl::ReadTopologyCoordinator(std::string &value)
 {
-    RETURN_IF_NOT_OK(DeletePerAddressKeysCoordinator(addresses, results));
-    std::vector<std::string> remaining(addresses.begin(), addresses.end());
-    ICoordinatorServiceProxy::CasProcessFunc process =
-        [&remaining](const std::string &current, std::unique_ptr<std::string> &next, bool &retry) {
-            retry = true;
-            return BuildTopologyCasMutation(current, remaining, next);
-        };
-    std::string topologyPhysicalKey = keys_->TopologyTable() + "/";
-    int64_t version = 0;
+    std::string physicalKey = keys_->TopologyTable() + "/";
+    std::vector<KeyValueEntry> kvs;
     int64_t revision = 0;
-    auto casRc = coordinatorProxy_->CAS(topologyPhysicalKey, process, version, revision);
-    if (casRc.IsError()) {
-        for (auto &result : results) {
-            if (result.error.empty()) {
-                result.error = "topology CAS failed: " + casRc.ToString();
-            }
-        }
-        return casRc;
+    auto rc = coordinatorProxy_->Range(physicalKey, "", kvs, revision, ADMIN_RPC_TIMEOUT_MS);
+    if (rc.IsError()) {
+        return rc;
     }
-    coordinator::GetClusterRawSnapshotReqPb req;
-    req.set_cluster_name(options_.clusterName);
-    coordinator::GetClusterRawSnapshotRspPb rsp;
-    auto getRc = coordinatorProxy_->GetClusterRawSnapshot(req, rsp, ADMIN_RPC_TIMEOUT_MS);
-    if (getRc.IsOk() && !rsp.topology_kvs().empty()) {
-        const auto &topoValue = rsp.topology_kvs(0).value();
-        const auto committedVersion = ParseOrEmpty(topoValue).version();
-        bool topologyEmpty = ParseOrEmpty(topoValue).members().empty();
-        if (topologyEmpty) {
-            int64_t deleted = 0;
-            int64_t dummyRevision = 0;
-            (void)coordinatorProxy_->DeleteRange(topologyPhysicalKey, "", deleted, dummyRevision,
-                ADMIN_RPC_TIMEOUT_MS);
-        }
-        FillTopologyResult(results, true, topologyEmpty ? 0 : static_cast<uint64_t>(committedVersion));
+    if (kvs.empty()) {
+        return Status(K_NOT_FOUND, "topology table is empty");
     }
+    value = kvs.front().value;
     return Status::OK();
 }
 

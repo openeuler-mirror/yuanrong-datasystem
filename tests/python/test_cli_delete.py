@@ -45,10 +45,12 @@ class FakeNative:
 def make_args(**overrides):
     values = {
         "delete_command": "cluster",
-        "etcd_address": "127.0.0.1:2379",
+        "etcd_address": "192.0.2.10:2379",
         "coordinator_address": None,
         "cluster_name": "",
-        "worker_address": ["127.0.0.1:20010"],
+        "worker_address": ["192.0.2.10:20010"],
+        "force": False,
+        "dry_run": False,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -67,7 +69,7 @@ class CliDeleteTest(unittest.TestCase):
         FakeNative.error = ""
         FakeNative.deleted_members = [
             {
-                "address": "127.0.0.1:20010",
+                "address": "192.0.2.10:20010",
                 "membership_deleted": True,
                 "notify_deleted": True,
                 "probe_deleted": False,
@@ -84,27 +86,27 @@ class CliDeleteTest(unittest.TestCase):
         self.assertEqual(list(payload),
                          ["schema_version", "cluster_name", "status", "deleted_members"])
         member = payload["deleted_members"][0]
-        self.assertEqual(member["address"], "127.0.0.1:20010")
+        self.assertEqual(member["address"], "192.0.2.10:20010")
         self.assertTrue(member["membership_deleted"])
         self.assertEqual(member["topology_version"], 6)
 
     def test_delete_accepts_multiple_addresses(self):
         FakeNative.deleted_members = [
-            {"address": "10.0.0.1:20010", "membership_deleted": True, "notify_deleted": True,
+            {"address": "192.0.2.10:20010", "membership_deleted": True, "notify_deleted": True,
              "probe_deleted": True, "ub_health_deleted": True, "topology_member_removed": True,
              "topology_version": 5, "error": ""},
-            {"address": "10.0.0.2:20010", "membership_deleted": True, "notify_deleted": False,
+            {"address": "192.0.2.11:20010", "membership_deleted": True, "notify_deleted": False,
              "probe_deleted": False, "ub_health_deleted": False, "topology_member_removed": True,
              "topology_version": 5, "error": ""},
         ]
-        args = make_args(worker_address=["10.0.0.1:20010", "10.0.0.2:20010"])
+        args = make_args(worker_address=["192.0.2.10:20010", "192.0.2.11:20010"])
         exit_code, _, payload = self.run_command(args)
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(payload["deleted_members"]), 2)
-        self.assertEqual(FakeNative.captured_addresses, ["10.0.0.1:20010", "10.0.0.2:20010"])
+        self.assertEqual(FakeNative.captured_addresses, ["192.0.2.10:20010", "192.0.2.11:20010"])
 
     def test_backend_selection_error_when_both_specified(self):
-        args = make_args(coordinator_address="127.0.0.1:31511")
+        args = make_args(coordinator_address="192.0.2.10:31511")
         exit_code, _, payload = self.run_command(args)
         self.assertEqual(exit_code, 1)
         self.assertEqual(list(payload), ["schema_version", "cluster_name", "status", "error"])
@@ -126,10 +128,10 @@ class CliDeleteTest(unittest.TestCase):
         self.assertEqual(payload["status"], "RPC unavailable")
 
     def test_coordinator_backend_is_forwarded(self):
-        args = make_args(etcd_address=None, coordinator_address="127.0.0.1:31511")
+        args = make_args(etcd_address=None, coordinator_address="192.0.2.10:31511")
         exit_code, _, payload = self.run_command(args)
         self.assertEqual(exit_code, 0)
-        self.assertEqual(FakeNative.captured_options.coordinator_address, "127.0.0.1:31511")
+        self.assertEqual(FakeNative.captured_options.coordinator_address, "192.0.2.10:31511")
         self.assertEqual(FakeNative.captured_options.etcd_address, "")
 
     def test_cluster_name_is_forwarded(self):
@@ -137,6 +139,46 @@ class CliDeleteTest(unittest.TestCase):
         exit_code, _, payload = self.run_command(args)
         self.assertEqual(exit_code, 0)
         self.assertEqual(FakeNative.captured_options.cluster_name, "test-cluster")
+
+    def test_partial_failure_returns_nonzero_exit_code(self):
+        FakeNative.status = "Partial"
+        FakeNative.error = "one or more addresses failed; check deleted_members for details"
+        FakeNative.deleted_members = [
+            {"address": "192.0.2.10:20010", "membership_deleted": True, "notify_deleted": True,
+             "probe_deleted": True, "ub_health_deleted": True, "topology_member_removed": True,
+             "topology_version": 5, "error": ""},
+            {"address": "192.0.2.11:20010", "membership_deleted": False, "notify_deleted": False,
+             "probe_deleted": False, "ub_health_deleted": False, "topology_member_removed": False,
+             "topology_version": 0, "error": "worker is still online; use --force to override"},
+        ]
+        exit_code, _, payload = self.run_command(make_args(worker_address=["192.0.2.10:20010", "192.0.2.11:20010"]))
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(payload["status"], "Partial")
+        self.assertEqual(len(payload["deleted_members"]), 2)
+        self.assertIn("force", payload["deleted_members"][1]["error"])
+
+    def test_force_flag_is_forwarded(self):
+        args = make_args(force=True)
+        exit_code, _, payload = self.run_command(args)
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(FakeNative.captured_options.force)
+
+    def test_dry_run_flag_is_forwarded(self):
+        args = make_args(dry_run=True)
+        exit_code, _, payload = self.run_command(args)
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(FakeNative.captured_options.dry_run)
+
+    def test_value_error_is_converted_to_json(self):
+        with patch.object(delete, "_load_native", side_effect=ValueError("pybind boundary error")):
+            args = make_args()
+            command = delete.Command.__new__(delete.Command)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                exit_code = command.run(args)
+            payload = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(payload["status"], "Runtime error")
 
 
 if __name__ == "__main__":

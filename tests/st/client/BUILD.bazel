@@ -45,3 +45,16 @@ ds_cc_test(
         "//tests/st/client/object_cache:oc_client_common",
     ],
 )
+
+ds_cc_test(
+    name = "cluster_admin_test",
+    srcs = ["cluster_admin_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/client/cluster_admin:cluster_admin_client",
+        "//src/datasystem/client/cluster_query:cluster_query_client",
+        "//src/datasystem/common/util:status_helper",
+        "//tests/st:st_common",
+    ],
+)

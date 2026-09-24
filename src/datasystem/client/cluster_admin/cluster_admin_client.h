@@ -34,6 +34,8 @@ struct ClusterAdminOptions {
     std::string clusterName;
     std::string etcdAddress;
     std::string coordinatorAddress;
+    bool force = false;
+    bool dryRun = false;
 };
 
 struct DeleteClusterMemberResult {
@@ -58,7 +60,7 @@ public:
 
     Status Init();
     Status DeleteClusterMembers(const std::vector<std::string> &addresses,
-                                 std::vector<DeleteClusterMemberResult> &results);
+        std::vector<DeleteClusterMemberResult> &results);
 
 private:
     class Impl;

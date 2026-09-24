@@ -27,6 +27,7 @@
     - [dscli generate_config](#dscli-generate_config)
     - [dscli collect_log](#dscli-collect_log)
     - [dscli query](#dscli-query)
+    - [dscli delete](#dscli-delete)
 - [配置项说明](#配置项说明)
     - [集群配置项](#集群配置项)
     - [命令行参数配置项](#命令行参数配置项)
@@ -1214,6 +1215,126 @@ dscli query route \
 ```
 
 查询不会猜测或输出部分节点、部分路由。只有 `status=OK` 且退出码为 0 的结果可用于自动化。
+
+### dscli delete
+
+`dscli delete cluster` 按指定 worker 地址精确清理协调后端中该 worker 的全部拓扑残留记录，包括
+membership、notify、probe、ub_health 四类 per-address key 以及 topologyTable 中的 member 条目。
+该命令是破坏性操作：被清理的 worker 如果仍在线，会触发其 rejoin 流程（关闭迁移准入、清理本地
+metadata）。因此命令默认检查 membership key 是否仍然存在，只有已缺席的 address 才允许清理。
+对于仍在线的 address，必须显式传入 `--force` 才会执行清理；`--dry-run` 可预览将要清理的
+address 而不实际执行任何删除。
+
+与 `dscli query` 一样，命令不读取 `worker_config.json`，用户必须显式传入 ETCD 或 Coordinator 地址。
+当前 ETCD 清理仅支持未启用认证和 TLS 的集群。
+
+topologyTable 的更新通过 CAS 完成，不会与 topology controller 的 CAS 写竞争。tasks 和
+scale-in-metadata-done 等派生记录不由 CLI 直接删除，而是由 controller 的 Janitor 在
+topologyTable version 推进后自动清理。
+
+清理 ETCD 后端的残留 worker：
+
+```bash
+dscli delete cluster \
+  --etcd_address 192.0.2.10:2379 \
+  --worker_address 192.0.2.20:31501 \
+  --worker_address 192.0.2.21:31501
+```
+
+清理 Coordinator 后端的残留 worker（多实例部署时传入全部节点地址）：
+
+```bash
+dscli delete cluster \
+  --coordinator_address 192.0.2.10:31511,192.0.2.11:31511 \
+  --worker_address 192.0.2.20:31501
+```
+
+预览将要清理的 address（不执行实际删除）：
+
+```bash
+dscli delete cluster \
+  --etcd_address 192.0.2.10:2379 \
+  --worker_address 192.0.2.20:31501 \
+  --dry-run
+```
+
+强制清理仍在线的 worker（谨慎使用，会触发 worker rejoin）：
+
+```bash
+dscli delete cluster \
+  --etcd_address 192.0.2.10:2379 \
+  --worker_address 192.0.2.20:31501 \
+  --force
+```
+
+成功输出示例：
+
+```json
+{
+  "schema_version": "1.0",
+  "cluster_name": "",
+  "status": "OK",
+  "deleted_members": [
+    {
+      "address": "192.0.2.20:31501",
+      "membership_deleted": true,
+      "notify_deleted": true,
+      "probe_deleted": false,
+      "ub_health_deleted": true,
+      "topology_member_removed": true,
+      "topology_version": 6,
+      "error": ""
+    }
+  ]
+}
+```
+
+部分失败时 `status` 为 `Partial`，退出码为 1，`deleted_members` 仍包含逐地址明细：
+
+```json
+{
+  "schema_version": "1.0",
+  "cluster_name": "",
+  "status": "Partial",
+  "error": "one or more addresses failed; check deleted_members for details",
+  "deleted_members": [
+    {
+      "address": "192.0.2.20:31501",
+      "membership_deleted": true,
+      "notify_deleted": true,
+      "probe_deleted": true,
+      "ub_health_deleted": true,
+      "topology_member_removed": true,
+      "topology_version": 6,
+      "error": ""
+    },
+    {
+      "address": "192.0.2.21:31501",
+      "membership_deleted": false,
+      "notify_deleted": false,
+      "probe_deleted": false,
+      "ub_health_deleted": false,
+      "topology_member_removed": false,
+      "topology_version": 0,
+      "error": "worker is still online; use --force to override"
+    }
+  ]
+}
+```
+
+整体 RPC 失败时输出最小错误对象并返回退出码 1：
+
+```json
+{
+  "schema_version": "1.0",
+  "cluster_name": "",
+  "status": "RPC unavailable",
+  "error": "failed to connect to coordination backend"
+}
+```
+
+只有 `status=OK` 且退出码为 0 的结果表示全部 address 清理成功；`status=Partial` 表示部分
+address 清理失败，需检查 `deleted_members` 中的 `error` 字段。
 
 ## 配置项说明
 
