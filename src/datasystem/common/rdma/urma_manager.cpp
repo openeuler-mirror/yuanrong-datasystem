@@ -1851,18 +1851,16 @@ Status UrmaManager::HandleUrmaEvent(uint64_t requestId, const std::shared_ptr<Ur
     RETURN_OK_IF_TRUE(!event->IsFailed());
 
     const auto statusCode = event->GetStatusCode();
-    auto errMsg =
-        FormatString("[urma_request_id:%zu] Polling failed with an error, cqe status: %d", requestId, statusCode);
+    auto errMsg = FormatString(
+        "Polling failed with an error, urma_request_id=%zu, localAddress=%s, remoteAddress=%s, "
+        "remoteInstanceId=%s, op=%s, dataSize=%zu, cqeStatus=%d",
+        requestId, localUrmaInfo_.localAddress.ToString(),
+        event->GetRemoteAddress().empty() ? "unknown" : event->GetRemoteAddress().c_str(),
+        event->GetRemoteInstanceId(), UrmaEvent::OperationTypeName(event->GetOperationType()),
+        static_cast<size_t>(event->GetDataSize()), statusCode);
 
     Status rc(K_URMA_ERROR, errMsg);
-    LOG(ERROR) << "[URMA_COMPLETION_FAILED] urma_request_id=" << requestId
-               << ", localAddress=" << localUrmaInfo_.localAddress.ToString()
-               << ", remoteAddress=" << event->GetRemoteAddress()
-               << ", remoteInstanceId=" << event->GetRemoteInstanceId()
-               << ", op=" << UrmaEvent::OperationTypeName(event->GetOperationType())
-               << ", dataSize=" << event->GetDataSize()
-               << ", cqeStatus=" << statusCode
-               << ", status=" << rc.ToString();
+    LOG(ERROR) << "[URMA_COMPLETION_FAILED] " << rc.ToString();
     return rc;
 }
 
@@ -2716,8 +2714,13 @@ Status UrmaManager::UrmaWritePayloadWithLane(const UrmaRemoteAddrPb &urmaInfo, c
                                              std::shared_ptr<EventWaiter> waiter, UrmaWriteFailure *failure,
                                              std::optional<UrmaLateCompletionContext> lateCompletionContext)
 {
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(laneLease != nullptr, K_RUNTIME_ERROR,
-                                         "Batch Get URMA send lane lease is null");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        laneLease != nullptr, K_RUNTIME_ERROR,
+        FormatString("Batch Get URMA send lane lease is null, remoteAddress=%s, clientId=%s",
+                     urmaInfo.request_address().host().empty()
+                         ? "unknown"
+                         : HostPort(urmaInfo.request_address().host(), urmaInfo.request_address().port()).ToString(),
+                     urmaInfo.client_id()));
     return UrmaWritePayloadImpl(urmaInfo, localSegAddress, localSegSize, localObjectAddress, readOffset, readSize,
                                 metaDataSize, srcChipId, dstChipId, blocking, eventKeys, laneLease, waiter, failure,
                                 std::move(lateCompletionContext));
@@ -2748,14 +2751,19 @@ Status UrmaManager::UrmaWritePayloadImpl(const UrmaRemoteAddrPb &urmaInfo, const
         remoteConnectionId = requestAddress.ToString();
         res = urmaConnectionMap_.find(constAccessor, remoteConnectionId);
     }
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(res, K_RUNTIME_ERROR,
-                                         FormatString("Failed to find jfr from %s", remoteConnectionId));
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        res, K_RUNTIME_ERROR,
+        FormatString("Failed to find jfr, remoteAddress=%s, clientId=%s",
+                     requestAddress.Empty() ? "unknown" : remoteAddress, urmaInfo.client_id()));
     connection = constAccessor->second;
     constAccessor.release();
     if (externalLaneLease != nullptr && externalLaneLease->GetJetty() != nullptr) {
         connection = externalLaneLease->GetConnection();
     }
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(connection != nullptr, K_RUNTIME_ERROR, "Urma connection is null");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        connection != nullptr, K_RUNTIME_ERROR,
+        FormatString("Urma connection is null, remoteAddress=%s",
+                     requestAddress.Empty() ? "unknown" : remoteAddress));
     const auto findConnectionEndUs = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
 
     point.RecordAndReset(PerfKey::URMA_WRITE_FIND_REMOTE_SEGMENT);
@@ -2765,8 +2773,16 @@ Status UrmaManager::UrmaWritePayloadImpl(const UrmaRemoteAddrPb &urmaInfo, const
 
     point.RecordAndReset(PerfKey::URMA_WRITE_REGISTER_LOCAL_SEGMENT);
     UrmaLocalSegmentMap::const_accessor localSegAccessor;
-    RETURN_IF_NOT_OK(GetOrRegisterSegment(localSegAddress, localSegSize, localSegAccessor));
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(localSegAccessor->second != nullptr, K_RUNTIME_ERROR, "Local segment is null");
+    auto segmentRc = GetOrRegisterSegment(localSegAddress, localSegSize, localSegAccessor);
+    if (segmentRc.IsError()) {
+        segmentRc.AppendMsg(FormatString("remoteAddress=%s", requestAddress.Empty() ? "unknown" : remoteAddress));
+        LOG(ERROR) << segmentRc.ToString();
+        return segmentRc;
+    }
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        localSegAccessor->second != nullptr, K_RUNTIME_ERROR,
+        FormatString("Local segment is null, remoteAddress=%s",
+                     requestAddress.Empty() ? "unknown" : remoteAddress));
     const auto registerLocalSegmentEndUs = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
 
     point.RecordAndReset(PerfKey::URMA_WRITE_LOOP);
@@ -3006,8 +3022,10 @@ Status UrmaManager::UrmaGatherWriteWithLane(const RemoteSegInfo &remoteInfo,
                                             const std::shared_ptr<UrmaSendLaneLease> &laneLease,
                                             std::optional<UrmaLateCompletionContext> lateCompletionContext)
 {
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(laneLease != nullptr, K_RUNTIME_ERROR,
-                                         "Batch Get URMA send lane lease is null");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        laneLease != nullptr, K_RUNTIME_ERROR,
+        FormatString("Batch Get URMA send lane lease is null, remoteAddress=%s",
+                     remoteInfo.host.empty() ? "unknown" : HostPort(remoteInfo.host, remoteInfo.port).ToString()));
     return UrmaGatherWriteImpl(remoteInfo, objInfos, blocking, eventKeys, laneLease,
                                std::move(lateCompletionContext));
 }
@@ -3028,7 +3046,10 @@ Status UrmaManager::InitGatherWriteContext(const RemoteSegInfo &remoteInfo, size
     if (externalLaneLease != nullptr && externalLaneLease->GetJetty() != nullptr) {
         context.connection = externalLaneLease->GetConnection();
     }
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(context.connection != nullptr, K_RUNTIME_ERROR, "Urma connection is null");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        context.connection != nullptr, K_RUNTIME_ERROR,
+        FormatString("Urma connection is null, remoteAddress=%s",
+                     requestAddress.Empty() ? "unknown" : context.remoteAddress));
     RETURN_IF_NOT_OK(context.connection->GetRemoteSeg(remoteInfo.segAddr, context.remoteSegAccessor));
 
     const size_t dstSgeNum = (sgeNum + wrSgeMaxNum - 1) / wrSgeMaxNum;
@@ -3105,9 +3126,17 @@ Status UrmaManager::AppendGatherWriteRequest(
     while (srcSgeIdx < objInfos.size()) {
         const auto &element = objInfos[srcSgeIdx];
         UrmaLocalSegmentMap::const_accessor localSegAccessor;
-        RETURN_IF_NOT_OK(GetOrRegisterSegment(element.segAddr, element.segSize, localSegAccessor));
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(localSegAccessor->second != nullptr, K_RUNTIME_ERROR,
-                                             "Local segment is null");
+        auto segmentRc = GetOrRegisterSegment(element.segAddr, element.segSize, localSegAccessor);
+        if (segmentRc.IsError()) {
+            segmentRc.AppendMsg(FormatString("remoteAddress=%s",
+                remoteInfo.host.empty() ? "unknown" : context.remoteAddress));
+            LOG(ERROR) << segmentRc.ToString();
+            return segmentRc;
+        }
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+            localSegAccessor->second != nullptr, K_RUNTIME_ERROR,
+            FormatString("Local segment is null, remoteAddress=%s",
+                remoteInfo.host.empty() ? "unknown" : context.remoteAddress));
         auto &srcSge = context.srcSgeList[srcSgeIdx];
         srcSge = {};
         srcSge.addr = element.sgeAddr + element.metaDataSize + element.readOffset;

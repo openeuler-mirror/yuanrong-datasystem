@@ -130,4 +130,19 @@ Status WithRpcDiag(const Status &status, const RpcDiagnosticInfo &info)
     }
     return diagnosed;
 }
+
+Status WithRpcDiag(const Status &status, const RpcDiagnosticInfo &info, std::string_view stage)
+{
+    if (status.IsOk()) {
+        return status;
+    }
+
+    Status diagnosed = WithRpcDiag(status, info);
+    std::string context = "rpc_peer=";
+    context.append(info.dst);
+    context.append(", rpc_stage=");
+    context.append(stage);
+    diagnosed.AppendMsg(context);
+    return diagnosed;
+}
 }  // namespace datasystem
