@@ -116,7 +116,7 @@ void AppendRouteFailures(worker::MetaOwnerRouteGroups &grouped, const HostPort &
     if (grouped.failures.empty()) {
         return;
     }
-    LOG_FIRST_AND_EVERY_N(WARNING, ROUTE_FAILURE_LOG_EVERY_N)
+    LOG_EVERY_N(WARNING, ROUTE_FAILURE_LOG_EVERY_N)
         << "CLUSTER_ROUTE_FAILURE component=object_endpoint_policy failure_count=" << grouped.failures.size()
         << " status_counts=" << SummarizeRouteFailureCodes(grouped.failures);
     auto &keys = grouped.groups[failureOwner];

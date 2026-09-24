@@ -52,9 +52,6 @@ bool IsAmbiguousMetadataOwnerRouteFailure(StatusCode code)
     return code == K_RPC_DEADLINE_EXCEEDED || code == K_RPC_UNAVAILABLE || code == K_CLIENT_WORKER_DISCONNECT;
 }
 
-// Matches the per-file diagnostic log throttle used by the other transport components.
-constexpr int TRANSPORT_DIAG_LOG_RATE = 100;
-
 bool IsMetadataOwnerRouteFailure(StatusCode code)
 {
     return IsConfirmedMetadataOwnerRouteFailure(code) || IsAmbiguousMetadataOwnerRouteFailure(code);
@@ -419,14 +416,12 @@ Status ObjectMetadataClient::PrepareQueryRetry(const HostPort &address, const Ob
         context.requireUb = true;
         RETURN_IF_NOT_OK(AllocateUbInlineBuffers(items, context));
         context.mode = InlineTransportMode::UB;
-        // Count every occurrence outside the throttle: LOG_EVERY_N only evaluates its stream on output, so
-        // counting inside it would report the number of *logged* lines (1 per N events) instead of the real
-        // failure volume. LOG_FIRST_AND_EVERY_N is used because it keeps thread-safe throttle state, unlike
-        // LOG_EVERY_N whose non-atomic static counter races across concurrent QueryAndGet calls.
+        // Dedicated atomic so each log line reports the cumulative failure volume; log streams are only
+        // evaluated on output, so in-stream counting cannot accumulate across calls.
         const auto occurrences = urmaNeedConnectTotal_.fetch_add(1, std::memory_order_relaxed) + 1;
-        LOG_FIRST_AND_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
-            << "[TransportGet][Metadata] Rebuild UB data plane and retry over UB, meta owner: " << address.ToString()
-            << ", urma instance: " << ubInstanceId << ", occurrences: " << occurrences << ", status: " << rc.ToString();
+        SLOW_LOG(WARNING) << "[TransportGet][Metadata] Rebuild UB data plane and retry over UB, meta owner: "
+            << address.ToString() << ", urma instance: " << ubInstanceId << ", occurrences: " << occurrences
+            << ", status: " << rc.ToString();
         return Status::OK();
     }
     if (rc.GetCode() == K_URMA_NEED_CONNECT && rpcDispatched && context.mode == InlineTransportMode::UB

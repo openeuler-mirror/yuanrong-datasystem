@@ -218,7 +218,7 @@ Status WaitFastTransportEventWithFailure(std::vector<uint64_t> &keys, std::funct
             }
         }
         if (firstError.IsError()) {
-            LOG_FIRST_AND_EVERY_N(ERROR, FAILURE_LOG_RATE) << "Failed to wait for URMA event. Detail: " << firstError;
+            LOG_EVERY_N(ERROR, FAILURE_LOG_RATE) << "Failed to wait for URMA event. Detail: " << firstError;
             return firstError;
         }
     }

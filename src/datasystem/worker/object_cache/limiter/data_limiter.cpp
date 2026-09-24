@@ -192,7 +192,7 @@ uint64_t MigrateDataRateController::CalculateNewRate(const std::string &workerAd
     constexpr uint64_t lowRateDivisor = 10;
     constexpr uint32_t lowRateLogEveryN = 100;
     if (newRate == 0 || newRate <= maxBandwidth / lowRateDivisor) {
-        LOG_FIRST_EVERY_N(INFO, lowRateLogEveryN)
+        LOG_EVERY_N(INFO, lowRateLogEveryN)
             << "event=MIGRATE_RATE_HINT_LOW source=" << workerAddr << " last_rate_bps=" << lastRate
             << " available_bandwidth=" << availableBandwidth << " max_bandwidth=" << maxBandwidth
             << " new_rate_bps=" << newRate;

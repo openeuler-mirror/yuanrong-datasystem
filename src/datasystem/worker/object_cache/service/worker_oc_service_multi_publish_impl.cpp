@@ -53,7 +53,6 @@ static constexpr int RETRY_INTERNAL_MS_META_MOVING = 200;
 static constexpr int THREAD_WAIT_TIME_MS = 10;
 static constexpr int64_t CREATE_MULTI_META_ATTEMPT_TIMEOUT_MS = 2 * 1000;
 static constexpr int64_t CREATE_MULTI_META_ROUTE_RETRY_INTERVAL_MS = 100;
-static constexpr uint32_t CREATE_MULTI_META_RETRY_LOG_EVERY_N = 10;
 static constexpr uint32_t CREATE_MULTI_META_MAX_ATTEMPTS = 10;
 
 namespace {
@@ -629,8 +628,7 @@ void WorkerOcServiceMultiPublishImpl::MergeCreateMultiMetaResult(
 {
     const auto &objects = objGroup.at(result.masterAddr);
     if (result.rc.IsError()) {
-        LOG_EVERY_N(WARNING, CREATE_MULTI_META_RETRY_LOG_EVERY_N)
-            << "CreateMultiMeta attempt failed: " << result.rc.ToString();
+        LOG(WARNING) << "CreateMultiMeta attempt failed: " << result.rc.ToString();
         for (const auto &object : objects) {
             if (IsCreateMultiMetaRetryable(result.rc)) {
                 attemptResult.retryIndexes.emplace_back(originalIndexes[object.second]);

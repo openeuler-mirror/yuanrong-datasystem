@@ -514,7 +514,7 @@ bool UbHealthFilter::CompleteProviderRecovery(const ProviderUbRecoveryCandidate 
     if (recovered) {
         INJECT_POINT_NO_RETURN("client.ub_health_filter.provider_probe_recovered");
     } else if (completion.IsError()) {
-        LOG_FIRST_EVERY_N(WARNING, UB_RECOVERY_REJECT_LOG_EVERY_N)
+        LOG_EVERY_N(WARNING, UB_RECOVERY_REJECT_LOG_EVERY_N)
             << "Provider UB recovery rejected for " << candidate.token.peer.ToString()
             << ": " << completion.ToString();
     }
@@ -569,7 +569,7 @@ bool UbHealthFilter::CompleteWriteTargetRecovery(const WriteTargetUbRecoveryCand
         }
     }
     if (!recovered && completion.IsError()) {
-        LOG_FIRST_EVERY_N(WARNING, UB_RECOVERY_REJECT_LOG_EVERY_N)
+        LOG_EVERY_N(WARNING, UB_RECOVERY_REJECT_LOG_EVERY_N)
             << "Write-target UB recovery rejected for " << candidate.token.peer.ToString()
             << ": " << completion.ToString();
     }

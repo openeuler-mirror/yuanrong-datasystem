@@ -199,6 +199,12 @@ access log 中的 `logSampled:true` 表示该请求的 INFO 日志可见（reque
 
 默认值均为 `1.0`（全量保留）。
 
+### 开发约定：数据面流程与限频宏
+
+- **数据面请求流程内不得使用 EVERY 家族限频宏**。限频条件与日志采样是串联关系：实际输出频率 = 限频比例 × 采样率，会远低于采样预期。
+- 这类日志应改用 `LOG(severity)`（频率控制交给采样器：请求上下文中 INFO 归 `request_sample_rate`，ERROR/WARNING 归 `diagnostic_sample_rate`），或 `SLOW_LOG(severity)`（慢/降级等必须可见的诊断信号，阈值命中时绕过采样）。
+- **仅后台线程**（无活跃请求 trace，采样 BYPASS、全量输出）可使用 EVERY 家族限频宏控制输出频率。
+
 ---
 
 ## 慢日志与 latencySummary

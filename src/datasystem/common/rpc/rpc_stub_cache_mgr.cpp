@@ -340,7 +340,7 @@ void RpcStubCacheMgr::MaybeEvictStaleBrpcStub(const HostPort &hostPort, StubType
     if (!WaitForBrpcSocketAvailable(brpcAddr, 1, 0)) {
         auto rc = Remove(hostPort, type);
         if (rc.IsOk()) {
-            LOG_FIRST_AND_EVERY_N(WARNING, RPC_STUB_TRANSIENT_LOG_EVERY_N)
+            LOG_EVERY_N(WARNING, RPC_STUB_TRANSIENT_LOG_EVERY_N)
                 << FormatString("RPC_STUB_EVICTION action=evicted dst=%s type=%d", hostPort.ToString(),
                                 static_cast<int>(type));
         }
@@ -441,7 +441,7 @@ Status RpcStubCacheMgr::Remove(const HostPort &hostPort, StubType type)
     Status rc = lruCache_->Remove(HashKeyForRpcStubCacheMgr(hostPort, type));
     auto totalElapsedMs = static_cast<int64_t>(timer.ElapsedMilliSecond());
     if (rc.GetCode() == StatusCode::K_TRY_AGAIN) {
-        LOG_FIRST_AND_EVERY_N(INFO, RPC_STUB_TRANSIENT_LOG_EVERY_N)
+        LOG_EVERY_N(INFO, RPC_STUB_TRANSIENT_LOG_EVERY_N)
             << FormatString("[SLOW_RPC_STUB_REMOVE] event=eviction_deferred dst=%s type=%d total=%ldms error=%s "
                             "trace=%s",
                             hostPort.ToString(), static_cast<int>(type), totalElapsedMs, rc.ToString(),

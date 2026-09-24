@@ -125,11 +125,11 @@ Status UrmaAsyncEventHandler::Run(const std::atomic<bool> &stopFlag)
             continue;
         }
         if (nevent < 0) {
-            LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N) << "[URMA_AE] epoll_wait failed: " << errno;
+            LOG_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N) << "[URMA_AE] epoll_wait failed: " << errno;
             continue;
         }
         if ((epollEvent.events & (EPOLLERR | EPOLLHUP | EPOLLRDBAND)) != 0) {
-            LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N)
+            LOG_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N)
                 << "[URMA_AE] async fd epoll event invalid: " << epollEvent.events;
             continue;
         }
@@ -138,7 +138,7 @@ Status UrmaAsyncEventHandler::Run(const std::atomic<bool> &stopFlag)
         auto traceGuard = Trace::Instance().SetTraceUUID();
         auto rc = GetAsyncEvent(event);
         if (rc.IsError()) {
-            LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N)
+            LOG_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N)
                 << "[URMA_AE] GetAsyncEvent failed: " << rc.ToString();
             continue;
         }

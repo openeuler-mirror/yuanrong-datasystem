@@ -54,7 +54,7 @@ HashRingRefresher::TimedFetchRpc AdaptFetchRpc(HashRingRefresher::FetchRpc fetch
 void LogTopologyPublishFailure(const HostPort &worker, uint64_t requestedVersion, uint64_t responseVersion,
                                uint64_t currentVersion, const Status &status)
 {
-    LOG_FIRST_EVERY_N(WARNING, TOPOLOGY_PUBLISH_FAILURE_LOG_EVERY_N)
+    LOG_EVERY_N(WARNING, TOPOLOGY_PUBLISH_FAILURE_LOG_EVERY_N)
         << "[Routing] Reject hash ring refresh from " << worker.ToString()
         << ", requested version: " << requestedVersion << ", response version: " << responseVersion
         << ", current version: " << currentVersion << ", status: " << status.ToString();

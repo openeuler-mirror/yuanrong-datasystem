@@ -476,7 +476,7 @@ void WorkerOcServiceClearDataFlow::PartitionTopologyCleanupObjects(
         ordinaryClearIds.emplace_back(objectKey);
     }
     if (!unconfirmedMigrationIds.empty()) {
-        LOG_FIRST_AND_EVERY_N(WARNING, MIGRATION_RECOVERY_LOG_EVERY_N)
+        LOG_EVERY_N(WARNING, MIGRATION_RECOVERY_LOG_EVERY_N)
             << "Partition complete unconfirmed migration payloads during topology cleanup, object size: "
             << unconfirmedMigrationIds.size();
     }

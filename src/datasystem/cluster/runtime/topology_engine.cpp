@@ -620,7 +620,7 @@ Status TopologyEngine::RouteCoordinatorWatchEvent(const std::string &coordinator
         RETURN_STATUS(K_NOT_READY, "Coordinator topology watch registration is in progress");
     }
     if (!member->OwnsWatchIdentity(coordinatorId, watchId)) {
-        LOG_FIRST_AND_EVERY_N(WARNING, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
+        LOG_EVERY_N(WARNING, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
             << "CLUSTER_WATCH cluster=" << options_.clusterName << " watch_id=" << watchId
             << " owner_state=missing action=rewatch";
         member->InvalidateWatches();
@@ -635,7 +635,7 @@ Status TopologyEngine::RouteCoordinatorWatchEvent(const std::string &coordinator
                   << " coordinator_id_prefix=" << CoordinatorIdLogPrefix(coordinatorId)
                   << " event=" << event.ToString();
     } else {
-        LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
+        LOG_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
             << "CLUSTER_WATCH_EVENT cluster=" << options_.clusterName
             << " role=worker ingress=coordinator owner_role=member"
             << " watch_id=" << watchId
@@ -648,7 +648,7 @@ Status TopologyEngine::RouteCoordinatorWatchEvent(const std::string &coordinator
 
 Status TopologyEngine::EnqueueCoordinationEvent(CoordinationEvent &&event)
 {
-    LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
+    LOG_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
         << "CLUSTER_WATCH_EVENT cluster=" << options_.clusterName << " role=worker event=" << event.ToString();
     const auto kind = keys_->ClassifyPhysicalKey(event.key, options_.localAddress);
     if (coordinatorProxy_ != nullptr && kind == TopologyPhysicalKeyKind::MEMBERSHIP) {
@@ -1144,7 +1144,7 @@ Status TopologyEngine::MarkExiting(int32_t timeoutMs)
                   << " role=worker action=mark_exiting address=" << options_.localAddress
                   << " status=" << rc.ToString();
     } else {
-        LOG_FIRST_AND_EVERY_N(WARNING, MARK_EXITING_FAILURE_LOG_INTERVAL)
+        LOG_EVERY_N(WARNING, MARK_EXITING_FAILURE_LOG_INTERVAL)
             << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
             << " role=worker action=mark_exiting address=" << options_.localAddress << " status=" << rc.ToString();
     }
@@ -1416,7 +1416,7 @@ void TopologyEngine::RestoreReadyAfterCoordinatorTopologyUpdate(const TopologySn
     std::string encoded;
     auto rc = memberBackend_->Get(keys_->MembershipTable(), options_.localAddress, encoded);
     if (rc.IsError()) {
-        LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
+        LOG_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
             << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
             << " role=worker action=restore_ready_after_topology_reload status=" << rc.ToString();
         return;
@@ -1653,7 +1653,7 @@ Status TopologyEngine::HandleRuntimeEvent(RuntimeEvent event)
         if (rc.IsOk()) {
             return Status::OK();
         }
-        LOG_FIRST_AND_EVERY_N(WARNING, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
+        LOG_EVERY_N(WARNING, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
             << "CLUSTER_WATCH cluster=" << options_.clusterName
             << " role=worker scope=topology action=range_fallback status=" << rc.ToString();
     }

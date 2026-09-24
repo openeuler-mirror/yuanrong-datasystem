@@ -49,7 +49,6 @@ constexpr uint64_t SHM_REF_RECONCILE_MIN_EXPIRE_MS = 1000UL;
 constexpr uint64_t SHM_REF_RECONCILE_MAX_EXPIRE_MS = RPC_TIMEOUT;
 constexpr uint64_t SHM_REF_FLUSH_INTERVAL_MS = 1000UL;
 constexpr size_t MAX_MAYBE_EXPIRED_SHM_IDS_PER_RECONCILE = 1024;
-constexpr int SHM_ID_NOT_FOUND_LOG_EVERY_N = 10'000;
 uint64_t GetCurrentTimeMs()
 {
     INJECT_POINT("shm_ref.GetCurrentTimeMs", [](uint64_t value) { return value; });

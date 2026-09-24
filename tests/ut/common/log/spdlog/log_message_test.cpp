@@ -123,6 +123,24 @@ protected:
 
         return false;
     }
+
+    int CountFileOccurrences(const std::string &filename, const std::string &content)
+    {
+        std::ifstream file(filename);
+        if (!file.is_open()) {
+            return 0;
+        }
+
+        int count = 0;
+        std::string line;
+        while (std::getline(file, line)) {
+            if (line.find(content) != std::string::npos) {
+                ++count;
+            }
+        }
+
+        return count;
+    }
 };
 
 TEST_F(LogMessageTest, BasicLogging)
@@ -341,13 +359,6 @@ TEST_F(LogMessageTest, FrequencyLogging)
     // Set verbosity level for VLOG tests
     FLAGS_v = 1;
 
-    // Test: LOG_EVERY_N - logs every N occurrences
-    constexpr int kEveryNCount = 5;
-    constexpr int kNumIterationsEveryN = 10;
-    for (int i = 0; i < kNumIterationsEveryN; ++i) {
-        LOG_EVERY_N(INFO, kEveryNCount) << "This logs every " << kEveryNCount << " iterations. Iteration: " << i;
-    }
-
     // Test: LOG_FIRST_N - logs only the first N occurrences
     constexpr int kFirstNCount = 3;
     constexpr int kNumIterationsFirstN = 10;
@@ -355,12 +366,21 @@ TEST_F(LogMessageTest, FrequencyLogging)
         LOG_FIRST_N(INFO, kFirstNCount) << "This logs only first " << kFirstNCount << " times. Iteration: " << i;
     }
 
-    // Test: LOG_EVERY_T - logs every T seconds
+    // Test: LOG_EVERY_N - logs the first call and every N-th occurrence
+    constexpr int kEveryNCount = 5;
+    constexpr int kNumIterationsEveryN = 10;
+    for (int i = 0; i < kNumIterationsEveryN; ++i) {
+        LOG_EVERY_N(INFO, kEveryNCount) << "This logs first and every " << kEveryNCount
+                                         << " occurrences. Iteration: " << i;
+    }
+
+    // Test: LOG_EVERY_T - logs the first call, then at most once per T seconds
     constexpr int kEveryTSeconds = 2;
     constexpr int kNumIterationsEveryT = 30;
     constexpr auto kSleepIntervalMs = std::chrono::milliseconds(100);
     for (int i = 0; i < kNumIterationsEveryT; ++i) {
-        LOG_EVERY_T(INFO, kEveryTSeconds) << "This logs every " << kEveryTSeconds << " seconds. Iteration: " << i;
+        LOG_EVERY_T(INFO, kEveryTSeconds)
+            << "This logs first and every " << kEveryTSeconds << " seconds. Iteration: " << i;
         std::this_thread::sleep_for(kSleepIntervalMs);
     }
 
@@ -389,6 +409,48 @@ TEST_F(LogMessageTest, FrequencyLogging)
     for (int i = 0; i < kNumIterationsVlog; ++i) {
         VLOG_EVERY_N(kVerboseLevelDetailed, kVlogEveryNCount)
             << "Verbose log at level 2, every " << kVlogEveryNCount << " iterations. Iteration: " << i;
+    }
+
+    const std::string firstNLog = "This logs only first " + std::to_string(kFirstNCount) + " times. Iteration: ";
+    const std::string everyNLog =
+        "This logs first and every " + std::to_string(kEveryNCount) + " occurrences. Iteration: ";
+    const std::string everyTLog =
+        "This logs first and every " + std::to_string(kEveryTSeconds) + " seconds. Iteration: ";
+    const std::string ifEveryNLog = "Even number: ";
+    const std::string ifEveryNSuffix = " (logged every " + std::to_string(kIfEveryNCount) + " even numbers)";
+    const std::string vlogEveryNLog = "Verbose log at level 1, every " + std::to_string(kVlogEveryNCount)
+        + " iterations. Iteration: ";
+    for (const auto &filename : GetFilesInDirectory(FLAGS_log_dir)) {
+        if (filename.find("ds_llt") == std::string::npos || filename.find(".INFO.log") == std::string::npos) {
+            continue;
+        }
+        // LOG_FIRST_N(3): only iterations 0-2 are logged.
+        ASSERT_TRUE(FileContains(filename, firstNLog + "0"));
+        ASSERT_TRUE(FileContains(filename, firstNLog + "2"));
+        ASSERT_FALSE(FileContains(filename, firstNLog + "3"));
+        ASSERT_FALSE(FileContains(filename, firstNLog + "9"));
+        // LOG_EVERY_N(5): the first call and iterations 4, 9 are logged; 1 and 5 are suppressed.
+        ASSERT_TRUE(FileContains(filename, everyNLog + "0"));
+        ASSERT_TRUE(FileContains(filename, everyNLog + "4"));
+        ASSERT_TRUE(FileContains(filename, everyNLog + "9"));
+        ASSERT_FALSE(FileContains(filename, everyNLog + "1"));
+        ASSERT_FALSE(FileContains(filename, everyNLog + "5"));
+        // LOG_EVERY_T(2s): the first call is logged, and at most one more within the 3s loop.
+        ASSERT_TRUE(FileContains(filename, everyTLog + "0"));
+        const int everyTCount = CountFileOccurrences(filename, everyTLog);
+        ASSERT_GE(everyTCount, 1);
+        ASSERT_LE(everyTCount, 2);
+        // LOG_IF_EVERY_N(even, 3): the 3rd, 6th, ... even numbers (4, 10, ..., 28) are logged.
+        ASSERT_TRUE(FileContains(filename, ifEveryNLog + "4" + ifEveryNSuffix));
+        ASSERT_TRUE(FileContains(filename, ifEveryNLog + "28" + ifEveryNSuffix));
+        ASSERT_FALSE(FileContains(filename, ifEveryNLog + "0" + ifEveryNSuffix));
+        ASSERT_FALSE(FileContains(filename, ifEveryNLog + "2" + ifEveryNSuffix));
+        // VLOG_EVERY_N(1, 10): iterations 9 and 19 are logged; iteration 0 is suppressed.
+        ASSERT_TRUE(FileContains(filename, vlogEveryNLog + "9"));
+        ASSERT_TRUE(FileContains(filename, vlogEveryNLog + "19"));
+        ASSERT_FALSE(FileContains(filename, vlogEveryNLog + "0"));
+        // VLOG_EVERY_N(2, 10) is below FLAGS_v=1, so nothing is logged.
+        ASSERT_FALSE(FileContains(filename, "Verbose log at level 2"));
     }
 }
 
