@@ -82,6 +82,8 @@ public:
 
     std::vector<HostPort> GetAvailableWorkers() const;
 
+    bool IsWorkerConnectionBroken(const HostPort &addr) const;
+
     void UpdateState(const HostPort &addr, StatusCode status);
 
     bool ForceRefresh();

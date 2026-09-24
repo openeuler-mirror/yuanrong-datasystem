@@ -1591,6 +1591,7 @@ TEST_F(KVCacheClientQueryMetaDeadPeerTest, QueryMetaFastFailsAfterMetadataWorker
     Status status = reader->Get(key, value);
 
     ASSERT_EQ(status.GetCode(), K_RPC_PEER_DEAD) << status.ToString();
+    ASSERT_NE(status.GetMsg().find("RPC peer dead"), std::string::npos) << status.ToString();
     ASSERT_LT(timer.ElapsedMilliSecond(), kFastFailMaxMs) << status.ToString();
 }
 

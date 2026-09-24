@@ -201,7 +201,7 @@ public:
      * @return Status of the call.
      */
     virtual Status Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp,
-                       std::vector<RpcMessage> &payloads) = 0;
+                       std::vector<RpcMessage> &payloads, Status *ingressRpcStatus = nullptr) = 0;
 
     /**
      * @brief Send invalidate buffer rpc request to worker.
