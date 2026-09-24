@@ -37,6 +37,8 @@ std::string FormatRpcDiag(const RpcDiagnosticInfo &info, const Status &status);
 
 Status WithRpcDiag(const Status &status, const RpcDiagnosticInfo &info);
 
+Status WithRpcDiag(const Status &status, const RpcDiagnosticInfo &info, std::string_view stage);
+
 inline Status WithRpcDiag(const Status &status, std::string_view method, std::string_view src, std::string_view dst)
 {
     if (status.IsOk()) {

@@ -205,10 +205,22 @@ Status WorkerRpcClient::DoInvokeDecreaseReference(const RpcOptions &options,
 Status WorkerRpcClient::InvokeGetObject(GetObjectRemoteReqPb &request, GetObjectRemoteRspPb &response,
                                         std::vector<RpcMessage> &payloads)
 {
-    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
-                             "Routed worker data client is not initialized");
+    if (!IsAlive()) {
+        return WithRpcDiag(
+            Status(K_RPC_UNAVAILABLE, __LINE__, __FILE__,
+                   "Routed worker data client is not initialized"),
+            RpcDiagnosticInfo{ "GetObjectRemote", "", workerAddress_.ToString() },
+            "before_rpc.check_client");
+    }
+
     int32_t rpcTimeout;
-    RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));
+    const auto timeoutRc = GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout);
+    if (timeoutRc.IsError()) {
+        return WithRpcDiag(
+            timeoutRc, RpcDiagnosticInfo{ "GetObjectRemote", "", workerAddress_.ToString() },
+            "before_rpc.timeout");
+    }
+
     RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
@@ -217,15 +229,33 @@ Status WorkerRpcClient::InvokeGetObject(GetObjectRemoteReqPb &request, GetObject
     if (response.has_ub_health_summary()) {
         ObserveUbHealthSummary(response.ub_health_summary());
     }
-    return rc.IsError() ? WithRpcDiag(rc, "GetObjectRemote", workerAddress_) : Status::OK();
+    if (rc.IsError()) {
+        return WithRpcDiag(
+            rc, RpcDiagnosticInfo{ "GetObjectRemote", "", workerAddress_.ToString() },
+            "rpc_return");
+    }
+    return Status::OK();
 }
 
 Status WorkerRpcClient::InvokeClientGet(GetReqPb &request, GetRspPb &response, std::vector<RpcMessage> &payloads)
 {
-    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE, "Routed WorkerOCService client is not initialized");
+    if (!IsAlive()) {
+        return WithRpcDiag(
+            Status(K_RPC_UNAVAILABLE, __LINE__, __FILE__,
+                   "Routed WorkerOCService client is not initialized"),
+            RpcDiagnosticInfo{ "WorkerOCService.Get", "", workerAddress_.ToString() },
+            "before_rpc.check_client");
+    }
+
     CHECK_FAIL_RETURN_STATUS(!request.client_id().empty(), K_INVALID, "WorkerOCService Get client ID is empty");
     int32_t rpcTimeout;
-    RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));
+    const auto timeoutRc = GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout);
+    if (timeoutRc.IsError()) {
+        return WithRpcDiag(
+            timeoutRc, RpcDiagnosticInfo{ "WorkerOCService.Get", "", workerAddress_.ToString() },
+            "before_rpc.timeout");
+    }
+
     RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
@@ -234,17 +264,34 @@ Status WorkerRpcClient::InvokeClientGet(GetReqPb &request, GetRspPb &response, s
     if (response.has_ub_health_summary()) {
         ObserveUbHealthSummary(response.ub_health_summary());
     }
-    return rc.IsError() ? WithRpcDiag(rc, "WorkerOCService.Get", workerAddress_) : Status::OK();
+    if (rc.IsError()) {
+        return WithRpcDiag(
+            rc, RpcDiagnosticInfo{ "WorkerOCService.Get", "", workerAddress_.ToString() },
+            "rpc_return");
+    }
+    return Status::OK();
 }
 
 Status WorkerRpcClient::InvokeBatchGetObject(BatchGetObjectRemoteReqPb &request, BatchGetObjectRemoteRspPb &response,
                                              std::vector<RpcMessage> &payloads)
 {
-    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
-                             "Routed worker data client is not initialized");
+    if (!IsAlive()) {
+        return WithRpcDiag(
+            Status(K_RPC_UNAVAILABLE, __LINE__, __FILE__,
+                   "Routed worker data client is not initialized"),
+            RpcDiagnosticInfo{ "BatchGetObjectRemote", "", workerAddress_.ToString() },
+            "before_rpc.check_client");
+    }
+
     CHECK_FAIL_RETURN_STATUS(request.requests_size() > 0, K_INVALID, "BatchGetObjectRemote request is empty");
     int32_t rpcTimeout;
-    RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));
+    const auto timeoutRc = GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout);
+    if (timeoutRc.IsError()) {
+        return WithRpcDiag(
+            timeoutRc, RpcDiagnosticInfo{ "BatchGetObjectRemote", "", workerAddress_.ToString() },
+            "before_rpc.timeout");
+    }
+
     RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
@@ -253,7 +300,12 @@ Status WorkerRpcClient::InvokeBatchGetObject(BatchGetObjectRemoteReqPb &request,
     if (response.has_ub_health_summary()) {
         ObserveUbHealthSummary(response.ub_health_summary());
     }
-    return rc.IsError() ? WithRpcDiag(rc, "BatchGetObjectRemote", workerAddress_) : Status::OK();
+    if (rc.IsError()) {
+        return WithRpcDiag(
+            rc, RpcDiagnosticInfo{ "BatchGetObjectRemote", "", workerAddress_.ToString() },
+            "rpc_return");
+    }
+    return Status::OK();
 }
 
 Status WorkerRpcClient::InvokeQueryAndGet(QueryAndGetReqPb &request, QueryAndGetRspPb &response,
@@ -262,10 +314,22 @@ Status WorkerRpcClient::InvokeQueryAndGet(QueryAndGetReqPb &request, QueryAndGet
     if (rpcDispatched != nullptr) {
         *rpcDispatched = false;
     }
-    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
-                             "Routed worker RPC client is not initialized");
+    if (!IsAlive()) {
+        return WithRpcDiag(
+            Status(K_RPC_UNAVAILABLE, __LINE__, __FILE__,
+                   "Routed worker RPC client is not initialized"),
+            RpcDiagnosticInfo{ "QueryAndGet", "", workerAddress_.ToString() },
+            "before_rpc.check_client");
+    }
+
     int32_t rpcTimeout;
-    RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));
+    const auto timeoutRc = GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout);
+    if (timeoutRc.IsError()) {
+        return WithRpcDiag(
+            timeoutRc, RpcDiagnosticInfo{ "QueryAndGet", "", workerAddress_.ToString() },
+            "before_rpc.timeout");
+    }
+
     RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
@@ -278,7 +342,12 @@ Status WorkerRpcClient::InvokeQueryAndGet(QueryAndGetReqPb &request, QueryAndGet
     if (response.has_ub_health_summary()) {
         ObserveUbHealthSummary(response.ub_health_summary());
     }
-    return rc.IsError() ? WithRpcDiag(rc, "QueryAndGet", workerAddress_) : Status::OK();
+    if (rc.IsError()) {
+        return WithRpcDiag(
+            rc, RpcDiagnosticInfo{ "QueryAndGet", "", workerAddress_.ToString() },
+            "rpc_return");
+    }
+    return Status::OK();
 }
 
 Status WorkerRpcClient::InvokeExist(int64_t subTimeoutMs, ExistReqPb &request, ExistRspPb &response)
@@ -375,10 +444,23 @@ Status WorkerRpcClient::InvokeDisconnectShmClient(DisconnectClientReqPb &request
 Status WorkerRpcClient::InvokeCreate(int64_t subTimeoutMs, CreateReqPb &request, CreateRspPb &response,
                                      uint32_t &workerVersion)
 {
-    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
-                             "Routed worker RPC client is not initialized");
+    if (!IsAlive()) {
+        return WithRpcDiag(
+            Status(K_RPC_UNAVAILABLE, __LINE__, __FILE__,
+                   "Routed worker RPC client is not initialized"),
+            RpcDiagnosticInfo{ "Create", "", workerAddress_.ToString() },
+            "before_rpc.check_client");
+    }
+
     int32_t rpcTimeout;
-    RETURN_IF_NOT_OK(GetRpcTimeout(std::max<int64_t>(subTimeoutMs, channelConfig_.timeout_ms), rpcTimeout));
+    const auto timeoutRc =
+        GetRpcTimeout(std::max<int64_t>(subTimeoutMs, channelConfig_.timeout_ms), rpcTimeout);
+    if (timeoutRc.IsError()) {
+        return WithRpcDiag(
+            timeoutRc, RpcDiagnosticInfo{ "Create", "", workerAddress_.ToString() },
+            "before_rpc.timeout");
+    }
+
     RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
@@ -388,7 +470,9 @@ Status WorkerRpcClient::InvokeCreate(int64_t subTimeoutMs, CreateReqPb &request,
     Status rc = DoInvokeCreate(options, request, response);
     RecordRpcTotalLatency(LatencySummaryPhase::CLIENT_RPC_CREATE_TOTAL, traceEnabled, rpcStart);
     if (rc.IsError()) {
-        return WithRpcDiag(rc, "Create", workerAddress_);
+        return WithRpcDiag(
+            rc, RpcDiagnosticInfo{ "Create", "", workerAddress_.ToString() },
+            "rpc_return");
     }
     if (response.has_worker_redirect()) {
         return Status(K_SCALE_DOWN, "Worker rejected write before execution")
@@ -403,10 +487,23 @@ Status WorkerRpcClient::InvokeSet(int64_t subTimeoutMs, PublishReqPb &request,
                                   const std::vector<MemView> &payloads, PublishRspPb &response,
                                   uint32_t &workerVersion)
 {
-    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
-                             "Routed worker RPC client is not initialized");
+    if (!IsAlive()) {
+        return WithRpcDiag(
+            Status(K_RPC_UNAVAILABLE, __LINE__, __FILE__,
+                   "Routed worker RPC client is not initialized"),
+            RpcDiagnosticInfo{ "Publish", "", workerAddress_.ToString() },
+            "before_rpc.check_client");
+    }
+
     int32_t rpcTimeout;
-    RETURN_IF_NOT_OK(GetRpcTimeout(std::max<int64_t>(subTimeoutMs, channelConfig_.timeout_ms), rpcTimeout));
+    const auto timeoutRc =
+        GetRpcTimeout(std::max<int64_t>(subTimeoutMs, channelConfig_.timeout_ms), rpcTimeout);
+    if (timeoutRc.IsError()) {
+        return WithRpcDiag(
+            timeoutRc, RpcDiagnosticInfo{ "Publish", "", workerAddress_.ToString() },
+            "before_rpc.timeout");
+    }
+
     RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
@@ -425,7 +522,9 @@ Status WorkerRpcClient::InvokeSet(int64_t subTimeoutMs, PublishReqPb &request,
             perfPoint.Record();
             return Status::OK();
         }
-        return WithRpcDiag(rc, "Publish", workerAddress_);
+        return WithRpcDiag(
+            rc, RpcDiagnosticInfo{ "Publish", "", workerAddress_.ToString() },
+            "rpc_return");
     }
     if (response.has_worker_redirect()) {
         return Status(K_SCALE_DOWN, "Worker rejected write before execution")
@@ -520,16 +619,33 @@ Status WorkerRpcClient::InvokeDecreaseReferences(const TransportRequestContext &
 
 Status WorkerRpcClient::ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &response)
 {
-    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
-                             "Routed worker RPC client is not initialized");
+    if (!IsAlive()) {
+        return WithRpcDiag(
+            Status(K_RPC_UNAVAILABLE, __LINE__, __FILE__,
+                   "Routed worker RPC client is not initialized"),
+            RpcDiagnosticInfo{ "WorkerWorkerExchangeUrmaConnectInfo", "", workerAddress_.ToString() },
+            "before_rpc.check_client");
+    }
+
     UrmaHandshakeReqPb request;
     RETURN_IF_NOT_OK(ConstructHandshakePb(workerAddress_.ToString(), request, ""));
     int32_t rpcTimeout;
-    RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));
+    const auto timeoutRc = GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout);
+    if (timeoutRc.IsError()) {
+        return WithRpcDiag(
+            timeoutRc, RpcDiagnosticInfo{ "WorkerWorkerExchangeUrmaConnectInfo", "", workerAddress_.ToString() },
+            "before_rpc.timeout");
+    }
+
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
     Status rc = transportStub_->WorkerWorkerExchangeUrmaConnectInfo(options, request, response);
-    return rc.IsError() ? WithRpcDiag(rc, "WorkerWorkerExchangeUrmaConnectInfo", workerAddress_) : Status::OK();
+    if (rc.IsError()) {
+        return WithRpcDiag(
+            rc, RpcDiagnosticInfo{ "WorkerWorkerExchangeUrmaConnectInfo", "", workerAddress_.ToString() },
+            "rpc_return");
+    }
+    return Status::OK();
 }
 
 Status WorkerRpcClient::ProbeProviderUbRecovery(const std::string &expectedWorkerIncarnation,
