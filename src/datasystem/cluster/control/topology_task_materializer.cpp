@@ -287,7 +287,7 @@ Status TopologyTaskMaterializer::BuildExpected(const TopologySnapshot &latest, c
         (void)notify;
         built.notifyRecipients.push_back(address);
     }
-    LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_TASK_MATERIALIZE_LOG_INTERVAL)
+    LOG_EVERY_N(INFO, TOPOLOGY_TASK_MATERIALIZE_LOG_INTERVAL)
         << "CLUSTER_TASK action=materialize type=" << static_cast<uint32_t>(type)
         << " type_name=" << TopologyChangeTypeName(type) << " epoch=" << epoch
         << " task_count=" << built.tasks.size() << " notify_count=" << built.notifiesByAddress.size();

@@ -830,7 +830,7 @@ Status UrmaConnection::CircuitBrokenAcquireStatusLocked() const
     if (CooldownElapsedOrNotOpenLocked()) {
         // Mirror the read path's [URMA_NEED_CONNECT] observability: this branch is the self-heal
         // trigger, so it must be distinguishable in production logs from a plain cooldown wait.
-        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
             << "[URMA_NEED_CONNECT] Peer circuit-broken and cooldown elapsed; rebuild to send a recovery probe"
             << ", peer=" << urmaJfrInfo_.uniqueInstanceId;
         return Status(K_URMA_NEED_CONNECT,
@@ -838,7 +838,7 @@ Status UrmaConnection::CircuitBrokenAcquireStatusLocked() const
     }
     const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
         peerState_->retryAfter - std::chrono::steady_clock::now());
-    LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+    LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
         << "[URMA_NEED_CONNECT] Peer circuit-broken; waiting out reconnect cooldown, peer="
         << urmaJfrInfo_.uniqueInstanceId << ", cooldownRemainingMs=" << std::max<int64_t>(remaining.count(), 0);
     return Status(K_URMA_TRY_AGAIN, "Peer circuit-broken; reconnect cooldown has not elapsed");
@@ -1307,7 +1307,7 @@ void UrmaResource::ScheduleTimedOutSendLane(const std::shared_ptr<UrmaSendLaneLe
     if (!laneLease->TryMarkTimedOut(std::move(timeoutInfo))) {
         return;
     }
-    LOG_FIRST_AND_EVERY_N(WARNING, FAILURE_LOG_RATE) << "[URMA_SEND_LANE_TIMEOUT_OBSERVED] [urma_request_id:" << requestId
+    LOG_EVERY_N(WARNING, FAILURE_LOG_RATE) << "[URMA_SEND_LANE_TIMEOUT_OBSERVED] [urma_request_id:" << requestId
                  << "] jettyId=" << jetty->GetJettyId()
                  << ", floor_urma_request_id=" << laneLease->GetRequestIdFloor()
                  << ", pendingWrs=" << laneLease->GetPendingWrCount() << ", sealed=" << laneLease->IsSealed()
@@ -1356,7 +1356,7 @@ void UrmaResource::TryForceReleaseTimedOutSendLane(const std::shared_ptr<UrmaSen
             return;
         }
         if (laneLease->IsRetireRequested()) {
-            LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+            LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
                 << "[URMA_SEND_LANE_TIMEOUT_SKIP] [urma_request_id:" << timeoutInfo.requestId
                 << "] jettyId=" << jettyId << ", pendingWrs=" << pendingWrs << ", heldMs=" << heldMs
                 << ", reason=retire_already_requested, targetAddress=" << timeoutInfo.remoteAddress
@@ -1402,14 +1402,14 @@ void UrmaResource::TryForceReleaseTimedOutSendLane(const std::shared_ptr<UrmaSen
                  << ", targetAddress=" << timeoutInfo.remoteAddress
                  << ", remoteInstanceId=" << timeoutInfo.remoteInstanceId;
     if (retireForOrphanPressure) {
-        LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_WARNING_LOG_EVERY_N)
+        LOG_EVERY_N(ERROR, K_URMA_WARNING_LOG_EVERY_N)
             << "[URMA_SEND_JETTY_ORPHAN_RETIRE] [urma_request_id:" << timeoutInfo.requestId
             << "] Asynchronously retiring Jetty after force-released WR pressure, jettyId=" << jettyId
             << ", orphanWrsAtDecision=" << orphanWrsAtDecision << ", remainingOrphanWrs=" << orphanWrs
             << ", retireThreshold=" << K_SEND_JETTY_ORPHAN_WR_RETIRE_THRESHOLD << ", jfsDepth=" << JETTY_SIZE
             << ", targetAddress=" << timeoutInfo.remoteAddress << ", remoteInstanceId=" << timeoutInfo.remoteInstanceId;
     } else if (orphanWrsAtDecision > K_SEND_JETTY_ORPHAN_WR_WARNING_THRESHOLD) {
-        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
             << "[URMA_SEND_JETTY_ORPHAN_PRESSURE] [urma_request_id:" << timeoutInfo.requestId
             << "] Outstanding timed-out WRs exceeded the warning threshold, jettyId=" << jettyId
             << ", orphanWrsAtDecision=" << orphanWrsAtDecision << ", remainingOrphanWrs=" << orphanWrs
@@ -1499,7 +1499,7 @@ Status UrmaResource::CompleteActiveSendLane(uint32_t jettyId, uint64_t requestId
         if (GetJettyById(jettyId, jetty).IsOk() && jetty != nullptr) {
             orphanTracked = jetty->CompleteOrphanWr();
         }
-        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
             << "[URMA_STALE_CQE_DROPPED] [urma_request_id:" << requestId << "] jettyId=" << jettyId
             << ", floor_urma_request_id=" << requestIdFloor << ", cqeStatus=" << cqeStatus
             << ", orphanTracked=" << orphanTracked
@@ -1685,7 +1685,7 @@ void UrmaResource::QuarantineJetty(const std::shared_ptr<UrmaJetty> &jetty)
         pendingDeleteJettys_.erase(jettyId);
         quarantinedJettys_[jettyId] = jetty;
     }
-    LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_WARNING_LOG_EVERY_N)
+    LOG_EVERY_N(ERROR, K_URMA_WARNING_LOG_EVERY_N)
         << "Quarantined URMA Jetty " << jettyId
         << "; provider cleanup remains fail-closed and the registry identity stays reserved";
     // FLUSH_ERR_DONE carries only local_id, without a generation. Keep the weak registry identity
@@ -1844,7 +1844,7 @@ bool UrmaResource::RefillSendJettyPool(size_t deficit)
         std::shared_ptr<UrmaJetty> jetty;
         auto rc = CreateSendJettyForRefill(jetty);
         if (rc.IsError()) {
-            LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_WARNING_LOG_EVERY_N)
+            LOG_EVERY_N(ERROR, K_URMA_WARNING_LOG_EVERY_N)
                 << "[URMA_SEND_LANE_POOL] Refill CreateJetty failed: " << rc.ToString() << ", created "
                 << created.size() << "/" << deficit << ", will retry next tick";
             break;
@@ -1957,7 +1957,7 @@ void UrmaResource::ReleaseJetty(const std::shared_ptr<UrmaJetty> &jetty)
         return;
     }
 
-    LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+    LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
         << "[URMA_SEND_LANE_POOL] Jetty " << jetty->GetJettyId() << " not found in pool during release";
 }
 

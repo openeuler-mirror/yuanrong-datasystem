@@ -143,8 +143,7 @@ void WorkerOcServiceGetImpl::DelayReleaseRemoteGetShmUnit(SafeObjType &entry, co
     }
     shmUnit->SetHardFreeMemory();
     object->SetShmUnit(nullptr);
-    LOG_EVERY_T(WARNING, DELAY_RELEASE_LOG_INTERVAL_SEC)
-        << "[REMOTE_GET_DELAY_RELEASE_ADD] id=" << shmUnit->id << ", identity=" << shmUnit->GetIdentity()
+    LOG(WARNING) << "[REMOTE_GET_DELAY_RELEASE_ADD] id=" << shmUnit->id << ", identity=" << shmUnit->GetIdentity()
         << ", bytes=" << shmUnit->size << ", delayMs=" << REMOTE_GET_SHM_DELAY_RELEASE_MS
         << ", reason=" << reason;
     DelayedReleaseShmManager::Instance().Add(

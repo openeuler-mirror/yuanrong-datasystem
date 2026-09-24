@@ -595,7 +595,7 @@ private:
         if (queryStatus.IsOk()) {
             lastConfirmedSnapshot_ = published;
         } else {
-            LOG_FIRST_AND_EVERY_N(WARNING, UB_PORT_HEALTH_QUERY_FAILURE_LOG_RATE)
+            LOG_EVERY_N(WARNING, UB_PORT_HEALTH_QUERY_FAILURE_LOG_RATE)
                 << "UB_PORT_HEALTH action=query_failed owner=" << PortHealthOwnerName(owner_)
                 << " status_code=" << queryStatus.GetCode() << " status=" << queryStatus;
         }

@@ -237,7 +237,7 @@ void LogDirectFailureConfirmation(const std::string &clusterName, uint64_t versi
         members.emplace_back(observation.identity);
         maximumMissingMs = std::max(maximumMissingMs, observation.missingMs);
     }
-    LOG_FIRST_AND_EVERY_N(WARNING, TOPOLOGY_RECONCILE_LOG_INTERVAL)
+    LOG_EVERY_N(WARNING, TOPOLOGY_RECONCILE_LOG_INTERVAL)
         << "CLUSTER_FAILURE_DETECT cluster=" << clusterName << " version=" << version
         << " action=absence_timeout_direct confirmed_count=" << observations.size()
         << " sample=" << MemberIdentitySample(members) << " maximum_missing_ms=" << maximumMissingMs
@@ -377,7 +377,7 @@ Status TopologyController::Stop(std::chrono::steady_clock::time_point deadline)
 
 Status TopologyController::EnqueueCoordinationEvent(CoordinationEvent &&event)
 {
-    LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
+    LOG_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
         << "CLUSTER_WATCH_EVENT cluster=" << keys_.ClusterName() << " role=controller event=" << event.ToString();
     LOG_IF_ERROR(ObserveMembershipRestart(event), "Failed to observe membership restart event");
     auto rc = dispatcher_.SubmitCoordination(std::move(event));
@@ -760,7 +760,7 @@ void TopologyController::RecordReconcileResult(const Status &status, std::chrono
     }
     if (status.IsOk() && (drained > 0 || topologyCommittedThisTick_)) {
         const auto stats = dispatcher_.GetStats();
-        LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_RECONCILE_LOG_INTERVAL)
+        LOG_EVERY_N(INFO, TOPOLOGY_RECONCILE_LOG_INTERVAL)
             << "CLUSTER_RECONCILE cluster=" << keys_.ClusterName() << " role=controller drained_events=" << drained
             << " committed=" << topologyCommittedThisTick_
             << " elapsed_ms=" << DurationMs(startedAt, std::chrono::steady_clock::now())
@@ -885,7 +885,7 @@ Status TopologyController::RestoreReadyAfterLocalRecovery(
     }
     auto rc = options_.localMembershipRecoveryHandler();
     if (rc.GetCode() == K_NOT_READY) {
-        LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_RECONCILE_LOG_INTERVAL)
+        LOG_EVERY_N(INFO, TOPOLOGY_RECONCILE_LOG_INTERVAL)
             << "CLUSTER_MEMBERSHIP cluster=" << keys_.ClusterName()
             << " role=controller action=restore_ready_after_local_recovery address=" << options_.localAddress
             << " status=" << rc.ToString();
@@ -1111,7 +1111,7 @@ Status TopologyController::TryConfirmFailures(const TopologySnapshot &latest,
         const bool ambiguousTwoWorkerCandidates =
             latest.ActiveMembers().size() == TWO_WORKER_CLUSTER_SIZE && activeCandidateCount != 1;
         if (ambiguousTwoWorkerCandidates && activeCandidateCount > 0) {
-            LOG_FIRST_AND_EVERY_N(WARNING, TOPOLOGY_RECONCILE_LOG_INTERVAL)
+            LOG_EVERY_N(WARNING, TOPOLOGY_RECONCILE_LOG_INTERVAL)
                 << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " version=" << latest.Version()
                 << " action=active_summary_ambiguous candidate_count=" << activeCandidateCount << " decision=preserve";
         }
@@ -1612,7 +1612,7 @@ void TopologyController::LogCollectiveDecision(
             << " progress=" << progress << "/" << sampleCount << " decision=" << decision
             << " reason=" << reason << details;
     if (sampled) {
-        LOG_FIRST_AND_EVERY_N(WARNING, TOPOLOGY_RECONCILE_LOG_INTERVAL) << message.str();
+        LOG_EVERY_N(WARNING, TOPOLOGY_RECONCILE_LOG_INTERVAL) << message.str();
     } else {
         LOG(WARNING) << message.str();
     }

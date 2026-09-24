@@ -19,9 +19,6 @@
 #include "datasystem/common/util/format.h"
 
 namespace datasystem {
-// Rate-limit the "ApiDeadline uninitialized" fallback log for request-receive threads.
-constexpr uint32_t K_API_DEADLINE_FALLBACK_LOG_EVERY_N = 100;
-
 // The common RPC layer must not depend on RequestContext because RequestContext already depends on ApiDeadline.
 // request_context.cpp provides the strong BRPC-aware implementation when that target is linked.
 __attribute__((weak)) ApiDeadline *GetBthreadApiDeadline()

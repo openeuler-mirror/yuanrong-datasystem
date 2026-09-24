@@ -37,9 +37,6 @@
 namespace datasystem {
 namespace client {
 namespace {
-constexpr uint32_t INVALID_UB_HEALTH_SIDECAR_LOG_EVERY_N = 100;
-
-
 Status GetRpcTimeout(int64_t maxRpcTimeoutMs, int32_t &rpcTimeoutMs)
 {
     CHECK_FAIL_RETURN_STATUS(maxRpcTimeoutMs > 0, K_INVALID, "RPC timeout must be positive");
@@ -702,8 +699,8 @@ void WorkerRpcClient::ObserveUbHealthSummary(const UbHealthSummaryPb &encoded)
     auto rc = DecodeUbHealthSummary(encoded, summary);
     if (rc.IsError() || summary.worker != workerAddress_) {
         const auto reason = rc.IsError() ? rc.ToString() : "Worker endpoint mismatch";
-        LOG_FIRST_EVERY_N(WARNING, INVALID_UB_HEALTH_SIDECAR_LOG_EVERY_N)
-            << "Ignore invalid business UB health sidecar from " << workerAddress_.ToString() << ": " << reason;
+        LOG(WARNING) << "Ignore invalid business UB health sidecar from " << workerAddress_.ToString() << ": "
+            << reason;
         return;
     }
     auto current = std::atomic_load(&lastUbHealthSummary_);
@@ -721,8 +718,7 @@ void WorkerRpcClient::ObserveUbHealthSummary(const UbHealthSummaryPb &encoded)
         if (current != nullptr) {
             UbHealthSummary merged;
             if (!MergeUbHealthSummary(current.get(), summary, merged)) {
-                LOG_FIRST_EVERY_N(WARNING, INVALID_UB_HEALTH_SIDECAR_LOG_EVERY_N)
-                    << "Ignore conflicting business UB health sidecar from " << workerAddress_.ToString()
+                LOG(WARNING) << "Ignore conflicting business UB health sidecar from " << workerAddress_.ToString()
                     << ": same health epoch carries different port counts";
                 return;
             }

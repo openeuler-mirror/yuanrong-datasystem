@@ -193,7 +193,7 @@ Status TopologyControlHost::PrepareMembershipPut(const std::string &clusterName)
         return Status::OK();
     }
     if (entries_.size() >= options_.maxClusters) {
-        LOG_FIRST_AND_EVERY_N(WARNING, HOST_CAPACITY_LOG_INTERVAL)
+        LOG_EVERY_N(WARNING, HOST_CAPACITY_LOG_INTERVAL)
             << "CLUSTER_CONTROL_HOST cluster=" << clusterName
             << " action=admission_rejected reason=capacity_exhausted"
             << " active_clusters=" << entries_.size() << " cluster_limit=" << options_.maxClusters;
@@ -754,7 +754,7 @@ void TopologyControlHost::Run() noexcept
             }
             ReconcileEntries();
         } catch (const std::exception &error) {
-            LOG_FIRST_AND_EVERY_N(ERROR, HOST_LIFECYCLE_LOG_INTERVAL)
+            LOG_EVERY_N(ERROR, HOST_LIFECYCLE_LOG_INTERVAL)
                 << "CLUSTER_CONTROL_HOST action=reconcile_exception status=" << error.what();
         } catch (...) {
             LOG(ERROR) << "CLUSTER_CONTROL_HOST action=reconcile_exception status=unknown";
@@ -905,7 +905,7 @@ void TopologyControlHost::ReconcileRunningEntry(const std::string &clusterName, 
                 std::lock_guard<bthread::Mutex> lock(mutex_);
                 entry.emptyCheckPending = true;
             }
-            LOG_FIRST_AND_EVERY_N(WARNING, HOST_LIFECYCLE_LOG_INTERVAL)
+            LOG_EVERY_N(WARNING, HOST_LIFECYCLE_LOG_INTERVAL)
                 << "CLUSTER_CONTROL_HOST cluster=" << clusterName
                 << " action=inspect_empty_failed status=" << releaseStatus.ToString();
         } else if (released) {
@@ -920,7 +920,7 @@ void TopologyControlHost::ReconcileRunningEntry(const std::string &clusterName, 
             }
             entry.emptyCheckPending = true;
         } else if (inspectEmpty && recoveryState == TopologyRecoveryState::RECOVERING) {
-            LOG_FIRST_AND_EVERY_N(WARNING, HOST_LIFECYCLE_LOG_INTERVAL)
+            LOG_EVERY_N(WARNING, HOST_LIFECYCLE_LOG_INTERVAL)
                 << "CLUSTER_CONTROL_HOST cluster=" << clusterName
                 << " action=retain_runtime reason=topology_authority_not_empty recovery_state=RECOVERING";
         }
@@ -977,7 +977,7 @@ void TopologyControlHost::ReconcileStoppingEntry(const std::string &clusterName,
     const auto status = StopRuntime(entry, startedAt + RUNTIME_STOP_SLICE);
     if (status.GetCode() == K_RPC_DEADLINE_EXCEEDED || entry.runtime != nullptr) {
         if (status.IsError()) {
-            LOG_FIRST_AND_EVERY_N(WARNING, HOST_LIFECYCLE_LOG_INTERVAL)
+            LOG_EVERY_N(WARNING, HOST_LIFECYCLE_LOG_INTERVAL)
                 << "CLUSTER_CONTROL_HOST cluster=" << clusterName
                 << " state=stopping action=retry_same_runtime"
                 << " elapsed_ms=" << cluster::DurationMs(startedAt, std::chrono::steady_clock::now())
@@ -1137,7 +1137,7 @@ void TopologyControlHost::SubmitDoorbell(ClusterEntry &entry)
         std::lock_guard<bthread::Mutex> lock(mutex_);
         entry.storeDirty = true;
     }
-    LOG_FIRST_AND_EVERY_N(WARNING, HOST_LIFECYCLE_LOG_INTERVAL)
+    LOG_EVERY_N(WARNING, HOST_LIFECYCLE_LOG_INTERVAL)
         << "CLUSTER_CONTROL_HOST cluster=" << entry.clusterName
         << " action=retry_doorbell status=" << status.ToString();
 }

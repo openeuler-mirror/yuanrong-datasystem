@@ -742,7 +742,7 @@ Status MigrateDataHandler::TryUpdateRate(uint64_t rate)
             uint64_t estimatedWaitMs = limiter_.EstimateWaitMilliseconds(currBatchSize_);
             constexpr uint32_t lowRateLogEveryN = 10;
             if (estimatedWaitMs > GetScaleDownMaxLimiterWaitMilliseconds(currBatchSize_)) {
-                LOG_FIRST_EVERY_N(INFO, lowRateLogEveryN)
+                LOG_EVERY_N(INFO, lowRateLogEveryN)
                     << "event=MIGRATE_RATE_LOW target=" << remoteApi_->Address() << " batch_bytes=" << currBatchSize_
                     << " advertised_rate_bps=" << rate << " estimated_wait_ms=" << estimatedWaitMs;
             }

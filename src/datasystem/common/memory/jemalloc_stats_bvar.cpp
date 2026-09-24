@@ -206,7 +206,7 @@ private:
 
         statsAvailable_ = false;
         ++readFailures_;
-        LOG_FIRST_AND_EVERY_N(ERROR, kFailureLogInterval)
+        LOG_EVERY_N(ERROR, kFailureLogInterval)
             << "Failed to refresh process jemalloc statistics, mallctl=" << failedControl << ", rc=" << errorCode;
     }
 

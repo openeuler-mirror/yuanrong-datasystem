@@ -57,7 +57,6 @@ namespace datasystem {
 namespace object_cache {
 
 static constexpr int DEBUG_LOG_LEVEL = 2;
-static constexpr uint32_t ROLLBACK_UNSUPPORTED_LOG_EVERY_N = 100;
 
 void WorkerOcServiceCrudCommonApi::SleepForMetaMovingRetry(int64_t sleepTimeMs)
 {
@@ -639,7 +638,7 @@ bool WorkerOcServiceCrudCommonApi::IsRollbackUnackCompatibilityStatus(
 
 void WorkerOcServiceCrudCommonApi::LogUnsupportedRollbackUnack(size_t objectCount)
 {
-    LOG_FIRST_AND_EVERY_N(WARNING, ROLLBACK_UNSUPPORTED_LOG_EVERY_N)
+    LOG(WARNING)
         << "Metadata owner does not support UNACK rollback; stop this cleanup batch, object count: " << objectCount;
 }
 
