@@ -371,3 +371,10 @@ When this document gets too large, split it in this order:
 2. `shared-memory.md`
 3. `kvstore-backends.md`
 4. `device-and-rdma.md`
+
+## Cooperative object-table locking
+
+- `common/object_cache/safe_table.h` uses `BthreadRwLock` for the table iteration fence. Insert/erase readers can
+  yield inside patched TBB operations; a waiting iterator writer must not spin a bthread worker pthread.
+- `SafeObjectTest.TableIterationContentionPreservesBthreadProgress` checks that contended inserts leave the
+  bthread scheduler able to execute independent work before the iterator releases the table fence.

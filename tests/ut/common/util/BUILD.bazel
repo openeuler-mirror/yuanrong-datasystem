@@ -220,6 +220,7 @@ ds_cc_test(
     name = "safe_object_test",
     srcs = ["safe_object_test.cpp"],
     deps = [
+        "//tests/ut:bthread_test_helper",
         "//src/datasystem/common/immutable_string",
         "//src/datasystem/common/object_cache:buffer",
         "//src/datasystem/common/object_cache:object_base",

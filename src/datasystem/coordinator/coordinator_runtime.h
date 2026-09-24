@@ -17,12 +17,14 @@
 #ifndef DATASYSTEM_COORDINATOR_COORDINATOR_RUNTIME_H
 #define DATASYSTEM_COORDINATOR_COORDINATOR_RUNTIME_H
 
-#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
+
+#include <bthread/condition_variable.h>
+#include <bthread/mutex.h>
 
 #include "datasystem/common/log/butil_log_sink_lease.h"
 #include "datasystem/coordinator_server.h"
@@ -93,8 +95,8 @@ private:
     void DisableConfigUpdates();
     void RunEventLoop();
 
-    mutable std::mutex mutex_;
-    std::condition_variable stopCv_;
+    mutable bthread::Mutex mutex_;
+    bthread::ConditionVariable stopCv_;
     bool stopRequested_{ false };
     std::unique_ptr<ButilLogSinkLease> butilLogSinkLease_;
     std::unique_ptr<coordinator::CoordinatorServiceImpl> service_;

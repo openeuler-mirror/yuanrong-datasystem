@@ -21,6 +21,7 @@
 #include <bthread/bthread.h>
 
 #include "ut/common.h"
+#include "ut/bthread_test_helper.h"
 #include "datasystem/common/object_cache/safe_object.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/immutable_string/immutable_string_pool.h"
@@ -513,6 +514,17 @@ TEST_F(SafeObjectTest, TestTryReadLocks)
     rc = objPtr1->TryRLock();
     LOG(INFO) << "TryRLock returned: " << rc.ToString();
     ASSERT_TRUE(rc.GetCode() == StatusCode::K_TRY_AGAIN);
+}
+
+TEST_F(SafeObjectTest, TableIterationContentionPreservesBthreadProgress)
+{
+    using StringTable = SafeTable<std::string, std::string>;
+    StringTable table;
+    auto iterator = std::unique_ptr<StringTable::Iterator>(new StringTable::Iterator(table.begin()));
+    ExpectBthreadProgressWhileBlocked(
+        [&](size_t index) { DS_EXPECT_OK(table.Insert(std::to_string(index), "value")); },
+        [&] { iterator.reset(); });
+    EXPECT_GT(table.GetSize(), 0);
 }
 
 // Test basic inserts and fetches of the SafeTable

@@ -296,7 +296,7 @@ Status CoordinatorServiceProxyBase::AcceptResponse(const coordinator::ResponseHe
 Status CoordinatorServiceProxyBase::ConfirmResponseIdentity(const std::string &responseId, int32_t timeoutMs,
                                                             bool allowLeaderRecovering)
 {
-    std::lock_guard<std::mutex> refreshLock(identityRefreshMutex_);
+    std::lock_guard<bthread::Mutex> refreshLock(identityRefreshMutex_);
     {
         std::lock_guard<std::mutex> identityLock(identityMutex_);
         if (currentCoordinatorId_ == responseId) {
@@ -547,7 +547,7 @@ Status CoordinatorServiceProxyBase::KeepAlive(const std::string &key, int64_t &t
 Status CoordinatorServiceProxyBase::GetCoordinatorId(std::string &coordinatorId, int32_t timeoutMs)
 {
     auto inFlight = BeginRpc(timeoutMs);
-    std::lock_guard<std::mutex> refreshLock(identityRefreshMutex_);
+    std::lock_guard<bthread::Mutex> refreshLock(identityRefreshMutex_);
     std::string probedId;
     RETURN_IF_NOT_OK(ProbeCoordinatorId(timeoutMs, probedId, false));
     RETURN_IF_NOT_OK(InstallProbedIdentity(probedId));
