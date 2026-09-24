@@ -55,6 +55,7 @@
 #undef private
 #include "cluster/test_port_allocator.h"
 #include "ut/common.h"
+#include "ut/bthread_test_helper.h"
 
 DS_DECLARE_string(coordinator_address);
 DS_DECLARE_string(coordinator_raft_data_dir);
@@ -1127,6 +1128,23 @@ TEST(CoordinatorServerOptionsTest, ServerStopDelegatesToOwnedRuntime)
     EXPECT_TRUE(runtime.stopRequested_);
     runtime.stopRequested_ = false;
     runtime.configState_ = originalConfigState;
+}
+
+TEST(CoordinatorServerOptionsTest, LeadershipQueriesPreserveBthreadProgress)
+{
+    CoordinatorRuntime runtime;
+    runtime.mutex_.lock();
+    ExpectBthreadProgressWhileBlocked(
+        [&](size_t index) {
+            constexpr size_t queryKinds = 2;
+            if (index % queryKinds == 0) {
+                EXPECT_FALSE(runtime.IsLeader());
+            } else {
+                std::string leader;
+                EXPECT_EQ(runtime.GetLeader(leader).GetCode(), K_NOT_READY);
+            }
+        },
+        [&] { runtime.mutex_.unlock(); });
 }
 
 TEST(CoordinatorServerOptionsTest, UpdateConfigIsGatedByRuntimeLifecycle)

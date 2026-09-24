@@ -35,6 +35,7 @@
 #include "../../../common/binmock/binmock.h"
 #include "bench_helper.h"
 #include "ut/common.h"
+#include "ut/bthread_test_helper.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/eviction_watermark.h"
 #include "datasystem/common/log/log.h"
@@ -180,6 +181,25 @@ public:
             objectTable_, HostPort("127.0.0.1", 31501), HostPort("127.0.0.1", 31500), GetTestMetadataRoute());
         globalRefs = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
         DS_ASSERT_OK(manager->Init(globalRefs, akSkManager_));
+    }
+
+    void CheckPolicyLockBthreadProgress(bool routeLock)
+    {
+        std::unique_ptr<WorkerOcEvictionManager> manager;
+        std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefs;
+        InitEvictionManager(manager, globalRefs);
+        const std::string key = "missing-migration-key";
+        if (routeLock) {
+            manager->policyRouteMutex_.lock();
+            ExpectBthreadProgressWhileBlocked(
+                [&](size_t) { (void)manager->GetPolicyStateSnapshot(); },
+                [&] { manager->policyRouteMutex_.unlock(); });
+        } else {
+            manager->GetPolicyMigrationLock(key).lock();
+            ExpectBthreadProgressWhileBlocked(
+                [&](size_t) { DS_EXPECT_OK(manager->MoveOnePolicyNode(key)); },
+                [&] { manager->GetPolicyMigrationLock(key).unlock(); });
+        }
     }
 
     void CreateObjectsBelowLowWaterMark(const std::shared_ptr<WorkerOcEvictionManager> &manager, size_t objectCount,
@@ -1266,6 +1286,16 @@ public:
     static constexpr uint64_t TEST_DATA_SIZE = 10 * 1024 * 1024;
     std::shared_ptr<AkSkManager> akSkManager_;
 };
+
+TEST_F(EvictionManagerTest, PolicyRouteContentionPreservesBthreadProgress)
+{
+    CheckPolicyLockBthreadProgress(true);
+}
+
+TEST_F(EvictionManagerTest, PolicyMigrationContentionPreservesBthreadProgress)
+{
+    CheckPolicyLockBthreadProgress(false);
+}
 
 TEST_F(EvictionManagerTest, TestAllocator)
 {

@@ -112,6 +112,7 @@ ds_cc_test(
     name = "worker_oc_eviction_test",
     srcs = ["object_cache/worker_oc_eviction_test.cpp"],
     deps = [
+        "//tests/ut:bthread_test_helper",
         "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:worker_oc_eviction_manager",

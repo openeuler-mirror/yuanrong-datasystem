@@ -274,3 +274,15 @@ Each Runtime election case body has a 6-second deadline; mandatory teardown Stop
 - Keep braft registration in the Service/shared-server owner and out of Node/Manager APIs.
 - Preserve lock-held `STOPPING` publication and Manager ownership transfer, lock-free Membership-before-Node drain, concurrent-shutdown waiting, and lock-free shared-server/remaining cleanup only after Manager destruction; reacquire the lifecycle mutex only to publish the shared result.
 - Keep registration and unregister policy in the external lifecycle callback provider.
+
+## Runtime and proxy lock scheduling
+
+- `CoordinatorRuntime::IsLeader/GetLeader` retain service lifetime protection with a bthread mutex while acquiring
+  Service/Raft lifecycle locks. The event loop uses the matching bthread condition variable; Stop still wakes it.
+  These internal query methods currently have test callers only; the public `CoordinatorServer` does not expose
+  them, and production RPC leadership checks use `CoordinatorServiceImpl` directly.
+- `CoordinatorServiceProxyBase` serializes identity probes with `bthread::Mutex` because confirmation holds this
+  lock across synchronous RPC and cooperative retries. Identity fencing and in-flight accounting are unchanged.
+- Regression coverage: `CoordinatorServerOptionsTest.LeadershipQueriesPreserveBthreadProgress`,
+  `CoordinatorServiceProxyTest.IdentityRefreshContentionPreservesBthreadProgress`, and
+  `CoordinatorServiceProxyTest.ExplicitIdentityProbeContentionPreservesBthreadProgress`.

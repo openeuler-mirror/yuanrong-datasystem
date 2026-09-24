@@ -31,6 +31,7 @@
 #include "datasystem/utils/coordinator_discovery.h"
 #include "datasystem/utils/status.h"
 #include "ut/common.h"
+#include "ut/bthread_test_helper.h"
 
 namespace datasystem {
 namespace ut {
@@ -90,6 +91,30 @@ std::shared_ptr<ScriptedCoordinatorDiscovery> MakeDiscovery(Status status, std::
     std::vector<DiscoveryReply> replies;
     replies.emplace_back(DiscoveryReply{ std::move(status), std::move(coordinators), false, "" });
     return std::make_shared<ScriptedCoordinatorDiscovery>(std::move(replies));
+}
+
+TEST(CoordinatorServiceProxyTest, IdentityRefreshContentionPreservesBthreadProgress)
+{
+    CoordinatorServiceProxyBrpcImpl proxy(MakeDiscovery(Status::OK(), { ADDRESS_A }));
+    proxy.currentCoordinatorId_ = COORDINATOR_ID;
+    proxy.identityRefreshMutex_.lock();
+    ExpectBthreadProgressWhileBlocked(
+        [&](size_t) {
+            DS_EXPECT_OK(proxy.ConfirmResponseIdentity(COORDINATOR_ID, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, false));
+        },
+        [&] { proxy.identityRefreshMutex_.unlock(); });
+}
+
+TEST(CoordinatorServiceProxyTest, ExplicitIdentityProbeContentionPreservesBthreadProgress)
+{
+    CoordinatorServiceProxyBrpcImpl proxy(MakeDiscovery(Status::OK(), { ADDRESS_A }));
+    proxy.identityRefreshMutex_.lock();
+    ExpectBthreadProgressWhileBlocked(
+        [&](size_t) {
+            std::string id;
+            EXPECT_EQ(proxy.GetCoordinatorId(id, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS).GetCode(), K_NOT_READY);
+        },
+        [&] { proxy.identityRefreshMutex_.unlock(); });
 }
 
 Status RangeOnce(ICoordinatorServiceProxy &proxy)
