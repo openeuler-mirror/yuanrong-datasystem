@@ -18,6 +18,7 @@ ds_cc_test(
     name = "coordinator_service_impl_test",
     srcs = ["coordinator_service_impl_test.cpp"],
     deps = [
+        "//tests/ut:bthread_test_helper",
         "//src/datasystem/common/rdma:common_rdma",
         "//src/datasystem/cluster:cluster_membership_codec",
         "//src/datasystem/common/rpc:bthread_utils",
@@ -65,6 +66,7 @@ ds_cc_test(
     srcs = ["coordinator_server_options_test.cpp"],
     timeout = "short",
     deps = [
+        "//tests/ut:bthread_test_helper",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/common/flags:dynamic_flag_config_header",
