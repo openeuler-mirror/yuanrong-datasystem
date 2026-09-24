@@ -559,6 +559,11 @@ TEST_F(ClientWorkerRemoteApiReconnectTest, GetSeparatesServerStatusFromIngressFa
     EXPECT_EQ(downstreamRc.GetCode(), K_RPC_PEER_DEAD) << downstreamRc.ToString();
     EXPECT_TRUE(ingressRpcStatus.IsOk()) << ingressRpcStatus.ToString();
 
+    ocService_->getStatus_.store(K_CLIENT_WORKER_DISCONNECT, std::memory_order_relaxed);
+    const auto sessionRc = GetOnce(1000, ingressRpcStatus);
+    EXPECT_EQ(sessionRc.GetCode(), K_CLIENT_WORKER_DISCONNECT) << sessionRc.ToString();
+    EXPECT_EQ(ingressRpcStatus.GetCode(), K_CLIENT_WORKER_DISCONNECT) << ingressRpcStatus.ToString();
+
     StopFakeWorker();
     const auto ingressRc = GetOnce(1000, ingressRpcStatus);
     EXPECT_EQ(ingressRc.GetCode(), K_RPC_PEER_DEAD) << ingressRc.ToString();

@@ -621,7 +621,10 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
     }
     const Status &finalStatus = uncertainGetStatus.IsError() ? uncertainGetStatus : getStatus;
     if (ingressRpcStatus != nullptr) {
-        *ingressRpcStatus = IsBrpcServerApplicationError(getStatus) ? Status::OK() : getStatus;
+        // A server-side disconnect means the ingress Worker no longer recognizes this Client session and the
+        // caller must re-register. Other explicit server errors are downstream/business results, not ingress loss.
+        const bool sessionInvalid = getStatus.GetCode() == K_CLIENT_WORKER_DISCONNECT;
+        *ingressRpcStatus = !IsBrpcServerApplicationError(getStatus) || sessionInvalid ? getStatus : Status::OK();
     }
 #ifdef USE_URMA
     if (NeedDelayReleaseShmUnit(finalStatus)) {

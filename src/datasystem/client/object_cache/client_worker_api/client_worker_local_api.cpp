@@ -306,6 +306,10 @@ Status ClientWorkerLocalApi::Get(const GetParam &getParam, uint32_t &version, Ge
         }
         return timeoutStatus;
     }
+    if (ingressRpcStatus != nullptr && result.second.GetCode() == K_CLIENT_WORKER_DISCONNECT) {
+        // The embedded Worker has lost this Client session; preserve the signal so BoundMode re-registers it.
+        *ingressRpcStatus = result.second;
+    }
     RETURN_IF_NOT_OK(result.second);
     version = workerVersion_.load(std::memory_order_relaxed);
     return Status::OK();
