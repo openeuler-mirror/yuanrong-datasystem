@@ -264,7 +264,7 @@ void LogReplicaReadFailure(const master::ObjectLocationInfoPb &location, const H
                            const Status &status, bool retryable)
 {
     if (!retryable) {
-        LOG_FIRST_AND_EVERY_N(ERROR, FAILURE_LOG_RATE)
+        LOG_EVERY_N(ERROR, FAILURE_LOG_RATE)
             << "[TransportGet][Data] Replica read failed without retry, key: " << location.object_key()
                    << ", worker: " << workerAddr.ToString() << ", round: " << round
                    << ", status: " << status.ToString();

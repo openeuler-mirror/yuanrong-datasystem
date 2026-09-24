@@ -554,7 +554,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteRe
         return Status::OK();
     }
     if (status.IsError()) {
-        LOG_FIRST_AND_EVERY_N(ERROR, FAILURE_LOG_RATE)
+        LOG_EVERY_N(ERROR, FAILURE_LOG_RATE)
             << FormatString("[ObjectKey %s] Get object remote failed, requestId: %s, workerAddr: %s", objectKey,
                             requestId, localAddress_.ToString())
             << ", Detail: " << status;

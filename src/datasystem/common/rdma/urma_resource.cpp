@@ -1303,7 +1303,7 @@ void UrmaResource::ScheduleTimedOutSendLane(const std::shared_ptr<UrmaSendLaneLe
     if (!laneLease->TryMarkTimedOut(std::move(timeoutInfo))) {
         return;
     }
-    LOG_FIRST_AND_EVERY_N(WARNING, FAILURE_LOG_RATE) << "[URMA_SEND_LANE_TIMEOUT_OBSERVED] [urma_request_id:" << requestId
+    LOG_EVERY_N(WARNING, FAILURE_LOG_RATE) << "[URMA_SEND_LANE_TIMEOUT_OBSERVED] [urma_request_id:" << requestId
                  << "] jettyId=" << jetty->GetJettyId()
                  << ", floor_urma_request_id=" << laneLease->GetRequestIdFloor()
                  << ", pendingWrs=" << laneLease->GetPendingWrCount() << ", sealed=" << laneLease->IsSealed()
