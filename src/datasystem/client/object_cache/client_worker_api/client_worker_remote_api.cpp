@@ -621,7 +621,7 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
     }
     const Status &finalStatus = uncertainGetStatus.IsError() ? uncertainGetStatus : getStatus;
     if (ingressRpcStatus != nullptr) {
-        *ingressRpcStatus = getStatus;
+        *ingressRpcStatus = IsBrpcServerApplicationError(getStatus) ? Status::OK() : getStatus;
     }
 #ifdef USE_URMA
     if (NeedDelayReleaseShmUnit(finalStatus)) {

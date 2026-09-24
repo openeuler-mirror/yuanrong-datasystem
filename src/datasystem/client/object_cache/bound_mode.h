@@ -164,7 +164,7 @@ public:
                                           bool queryL2Cache);
     Status RecoverWorkerAndRetryGet(const std::shared_ptr<IClientWorkerApi> &workerApi, GetParam &getParam,
                                     WorkerNode workerNode, const std::vector<std::string> &objectKeys,
-                                    std::vector<std::shared_ptr<Buffer>> &buffers);
+                                    std::vector<std::shared_ptr<Buffer>> &buffers, Status *ingressRpcStatus);
     Status GetFromLocalWorker(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs,
                               std::vector<std::shared_ptr<Buffer>> &buffers, bool queryL2Cache, bool isRH2DSupported,
                               int32_t requestTimeoutMs);

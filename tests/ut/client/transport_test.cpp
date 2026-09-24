@@ -6553,54 +6553,57 @@ TEST(ObjectClientTransportTest, RoutedPublishReplaysScaleDownOnRemainingWorker)
     info->pointer = nullptr;
 }
 
-TEST(ObjectClientTransportTest, RoutedPublishPeerDeadIsolatesTargetWithoutReplay)
+TEST(ObjectClientTransportTest, RoutedPublishPeerDeadIsolationDependsOnSealMode)
 {
-    const std::vector<HostPort> workers{ MakeAddress(31511), MakeAddress(31512) };
-    auto routing = MakeRouting(workers);
-    const std::string key = "routed-publish-peer-dead";
-    HostPort owner;
-    ASSERT_TRUE(routing->SelectWorker(key, DataPlacementPolicy::PREFERRED_META_OWNER,
-                                      client::WorkerAccessAction::SET, owner)
-                    .IsOk());
-    HostPort fallback;
-    ASSERT_TRUE(routing->SelectWorker(key, DataPlacementPolicy::PREFERRED_META_OWNER,
-                                      client::WorkerAccessAction::SET, fallback, { owner })
-                    .IsOk());
-    auto manager = std::make_shared<FakeDataPlaneManager>();
-    manager->configureTransporter = [owner](const HostPort &address, FakeTransporter &transporter) {
-        if (address == owner) {
-            transporter.setStatuses.emplace_back(K_RPC_PEER_DEAD, "worker is unreachable");
-        }
-    };
-    ConnectOptions options;
-    options.host = owner.Host();
-    options.port = owner.Port();
-    object_cache::ObjectClientImpl client(options);
-    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(owner);
-    workerApi->clientId_ = "routed-publish-peer-dead-test";
-    client.workerApi_.emplace_back(workerApi);
-    client.enableLocalCache_ = false;
-    client.transportLayer_ = std::make_unique<TestTransportLayer>(manager);
-    std::atomic_store(&client.routing_, routing);
-    auto info = std::make_shared<ObjectBufferInfo>();
-    info->objectKey = key;
-    info->workerAddr = owner;
-    info->dataSize = 4;
-    info->pointer = static_cast<uint8_t *>(malloc(5));
-    ASSERT_NE(info->pointer, nullptr);
-    std::memcpy(info->pointer, "data", info->dataSize);
-    info->isRoutedWrite = true;
-    ScopedRequestContext requestContext;
-    ApiDeadlineGuard deadline(1'000);
+    for (const bool isSeal : { false, true }) {
+        const int portOffset = isSeal ? 2 : 0;
+        const std::vector<HostPort> workers{ MakeAddress(31511 + portOffset), MakeAddress(31512 + portOffset) };
+        auto routing = MakeRouting(workers);
+        const std::string key = isSeal ? "routed-seal-peer-dead" : "routed-publish-peer-dead";
+        HostPort owner;
+        ASSERT_TRUE(routing->SelectWorker(key, DataPlacementPolicy::PREFERRED_META_OWNER,
+                                          client::WorkerAccessAction::SET, owner)
+                        .IsOk());
+        HostPort fallback;
+        ASSERT_TRUE(routing->SelectWorker(key, DataPlacementPolicy::PREFERRED_META_OWNER,
+                                          client::WorkerAccessAction::SET, fallback, { owner })
+                        .IsOk());
+        auto manager = std::make_shared<FakeDataPlaneManager>();
+        manager->configureTransporter = [owner](const HostPort &address, FakeTransporter &transporter) {
+            if (address == owner) {
+                transporter.setStatuses.emplace_back(K_RPC_PEER_DEAD, "worker is unreachable");
+            }
+        };
+        ConnectOptions options;
+        options.host = owner.Host();
+        options.port = owner.Port();
+        object_cache::ObjectClientImpl client(options);
+        auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(owner);
+        workerApi->clientId_ = "routed-publish-peer-dead-test";
+        client.workerApi_.emplace_back(workerApi);
+        client.enableLocalCache_ = false;
+        client.transportLayer_ = std::make_unique<TestTransportLayer>(manager);
+        std::atomic_store(&client.routing_, routing);
+        auto info = std::make_shared<ObjectBufferInfo>();
+        info->objectKey = key;
+        info->workerAddr = owner;
+        info->dataSize = 4;
+        info->pointer = static_cast<uint8_t *>(malloc(5));
+        ASSERT_NE(info->pointer, nullptr);
+        std::memcpy(info->pointer, "data", info->dataSize);
+        info->isRoutedWrite = true;
+        ScopedRequestContext requestContext;
+        ApiDeadlineGuard deadline(1'000);
 
-    EXPECT_EQ(client.PublishRoutedBuffer(info, {}, false).GetCode(), K_RPC_PEER_DEAD);
-    ASSERT_EQ(manager->builtTransporters.size(), 1U);
-    EXPECT_EQ(manager->builtTransporters.front()->setCount, 1);
-    object_cache::SetRouteContext route;
-    ASSERT_TRUE(client.SelectSetRoute(key, {}, route).IsOk());
-    EXPECT_EQ(route.worker, fallback);
-    free(info->pointer);
-    info->pointer = nullptr;
+        EXPECT_EQ(client.PublishRoutedBuffer(info, {}, isSeal).GetCode(), K_RPC_PEER_DEAD);
+        ASSERT_EQ(manager->builtTransporters.size(), 1U);
+        EXPECT_EQ(manager->builtTransporters.front()->setCount, 1);
+        object_cache::SetRouteContext route;
+        ASSERT_TRUE(client.SelectSetRoute(key, {}, route).IsOk());
+        EXPECT_EQ(route.worker, isSeal ? owner : fallback);
+        free(info->pointer);
+        info->pointer = nullptr;
+    }
 }
 
 TEST(ObjectClientTransportTest, CoordinatorRoutedPublishPreservesCandidateAndSharedAvoidance)
@@ -6785,7 +6788,8 @@ TEST(ObjectClientTransportTest, RoutedMultiPublishReplaysScaleDownOnRemainingWor
     client.workerApi_.emplace_back(workerApi);
     client.enableLocalCache_ = false;
     client.transportLayer_ = std::make_unique<TestTransportLayer>(manager);
-    std::atomic_store(&client.routing_, MakeSingleWorkerRouting(remainingWorker));
+    auto routing = MakeRouting({ leavingWorker, remainingWorker });
+    std::atomic_store(&client.routing_, routing);
     std::vector<std::shared_ptr<ObjectBufferInfo>> infos;
     for (const auto &value : { std::string("first"), std::string("second") }) {
         auto info = std::make_shared<ObjectBufferInfo>();
@@ -6803,6 +6807,7 @@ TEST(ObjectClientTransportTest, RoutedMultiPublishReplaysScaleDownOnRemainingWor
     size_t failedCount = 0;
 
     ASSERT_TRUE(client.ProcessRoutedMSetGroup(leavingWorker, infos, failedCount).IsOk());
+    EXPECT_TRUE(routing->IsWorkerConnectionBroken(leavingWorker));
     ASSERT_TRUE(client.ProcessRoutedMSetGroup(leavingWorker, infos, failedCount).IsOk());
     ASSERT_TRUE(client.PublishRoutedBuffer(infos.front(), {}, true).IsOk());
 
