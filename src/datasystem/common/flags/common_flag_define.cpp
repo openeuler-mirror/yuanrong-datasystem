@@ -208,7 +208,7 @@ DS_DEFINE_validator(urma_perf_interval_ms, [](const char *flagName, uint32_t val
     return value > 0;
 });
 DS_DEFINE_uint32_dynamic(node_dead_timeout_s, 300, "maximum time interval for the master to determine node death");
-DS_DEFINE_uint32(hash_ring_tokens_per_member, 4,
+DS_DEFINE_uint32(hash_ring_tokens_per_member, 32,
                  "Token count allocated to each Worker for new hash-ring bootstrap and scale-out plans. "
                  "Valid range is 1-4096. This startup-only setting must be identical on every topology planner "
                  "process in a cluster.");

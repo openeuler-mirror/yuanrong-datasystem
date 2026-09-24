@@ -236,7 +236,8 @@ TEST(HashAlgorithmTest, PlansMultiMemberScaleOutAsOneDeterministicOwnerChangeSet
 TEST(HashAlgorithmTest, RetainedJoiningMemberIsNotDoubleCountedInRangeDecision)
 {
     // owners already contain the retained joiner's tokens; only the single new member adds tokens,
-    // so the plan stays at the 8000-token boundary and must not degrade to pure hash derivation.
+    // so the plan stays at the BALANCED_PLACEMENT_MAX_RING_TOKENS boundary and must not degrade to pure
+    // hash derivation.
     constexpr uint32_t boundaryTokens = BALANCED_PLACEMENT_MAX_RING_TOKENS / 4 - 1;
     HashAlgorithm algorithm;
     ScaleOutPlanInput input;

@@ -19,7 +19,6 @@
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
-#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem::cluster {
@@ -39,8 +38,8 @@ Status MakePersistableTopology(const TopologyState &state, TopologyState &persis
         // Overrides must be recomputed together with the tokens: EncodeTopology rejects a state whose
         // re-derived seed-0 tokens no longer match the carried-in overrides.
         member.tokenSeedOverrides.clear();
-        member.tokens.reserve(FLAGS_hash_ring_tokens_per_member);
-        for (uint32_t index = 0; index < FLAGS_hash_ring_tokens_per_member; ++index) {
+        member.tokens.reserve(persistable.tokensPerMember);
+        for (uint32_t index = 0; index < persistable.tokensPerMember; ++index) {
             bool allocated = false;
             for (uint32_t seed = 0; seed < HashAlgorithm::MAX_TOKEN_SEEDS; ++seed) {
                 const auto token = HashAlgorithm::MakeToken(member.identity.address, index, seed);

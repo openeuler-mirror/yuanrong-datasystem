@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <string>
 #include <thread>
@@ -45,6 +46,7 @@ constexpr char HASH_KEY_PREFIX[] = "a_key_hash_to_";
 constexpr size_t KEY_VALUE_SIZE = 1024;
 constexpr size_t KEYS_PER_TOKEN_RANGE = 2;
 constexpr size_t CONTROL_KEYS_PER_TOKEN_RANGE = 1;
+constexpr size_t CONTROL_KEYS_PER_WORKER = 4;
 constexpr size_t MIN_MIGRATED_KEYS = 8;
 constexpr size_t MIN_TAKEOVER_OWNERS = 2;
 constexpr int POLL_INTERVAL_MS = 100;
@@ -187,8 +189,11 @@ protected:
     }
 
     void GenKeysHashToWorker(const ClusterTopologyPb &ring, uint32_t workerIndex, size_t perRange,
-                             std::vector<HashedKey> &keys)
+                             std::vector<HashedKey> &keys,
+                             size_t maxKeys = std::numeric_limits<size_t>::max())
     {
+        ASSERT_GT(maxKeys, 0);
+        const size_t initialSize = keys.size();
         std::map<uint32_t, std::string> tokenWorkers = BuildTokenWorkers(ring);
         HostPort workerAddress;
         DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddress));
@@ -202,9 +207,12 @@ protected:
             for (uint32_t offset = 1; offset <= distance && offset <= perRange; ++offset) {
                 uint32_t hash = iter->first - offset + 1;
                 keys.push_back(HashedKey{ HASH_KEY_PREFIX + std::to_string(hash), hash, workerIndex });
+                if (keys.size() - initialSize == maxKeys) {
+                    return;
+                }
             }
         }
-        ASSERT_FALSE(keys.empty()) << "no key generated for worker " << workerIndex;
+        ASSERT_GT(keys.size(), initialSize) << "no key generated for worker " << workerIndex;
     }
 
     void PutObjects(const std::vector<HashedKey> &keys)
@@ -255,8 +263,8 @@ TEST_F(LEVEL1_OCScaleDownMigrateTargetTest, ScaleDownMigratesDataToTokenTakeover
     DS_ASSERT_OK(cluster_->GetWorkerAddr(WORKER0, worker0Addr));
 
     std::vector<HashedKey> controlKeys;
-    GenKeysHashToWorker(ring, WORKER1, CONTROL_KEYS_PER_TOKEN_RANGE, controlKeys);
-    GenKeysHashToWorker(ring, WORKER2, CONTROL_KEYS_PER_TOKEN_RANGE, controlKeys);
+    GenKeysHashToWorker(ring, WORKER1, CONTROL_KEYS_PER_TOKEN_RANGE, controlKeys, CONTROL_KEYS_PER_WORKER);
+    GenKeysHashToWorker(ring, WORKER2, CONTROL_KEYS_PER_TOKEN_RANGE, controlKeys, CONTROL_KEYS_PER_WORKER);
     // Spread coverage: bucket the generated owner keys by their post-scale-in takeover owner (the pre-exit ring
     // minus the leaving worker's tokens) and escalate sampling until the buckets span both survivors; degenerate
     // token layouts where every range succeeds to one worker proceed with single-owner coverage, and the per-key
