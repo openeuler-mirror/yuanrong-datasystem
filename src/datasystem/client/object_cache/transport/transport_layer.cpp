@@ -270,7 +270,7 @@ struct TransportLayer::LocalUbSenderState final : public UrmaLateCompletionObser
                 INJECT_POINT_NO_RETURN("TransportLayer.ClientUbProbeCooldown.remoteAccepted");
                 const bool requested = requestRemoteVerification(destination);
                 if (!requested) {
-                    LOG_FIRST_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+                    LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
                         << "CLIENT_UB_PROBE action=request_not_accepted scope=remote_worker peer="
                         << destination.ToString() << " generation=" << generation
                         << " cooldown_ms=" << ClientUbProbeCooldown::COOLDOWN_MS;
@@ -978,8 +978,7 @@ Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param,
         // The UB data plane cannot be built right now (breaker cooling down, or the build failed):
         // degrade this write to TCP instead of failing it, matching the read path's UB->TCP fallback.
         // Each write re-asks the advisor, so a later write retries UB once the cooldown elapses.
-        LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
-            << "UB data plane unavailable for worker " << workerAddr.ToString()
+        SLOW_LOG(WARNING) << "UB data plane unavailable for worker " << workerAddr.ToString()
             << ", degrading this write to TCP: " << buildRc;
         hint = TransportHint::TCP_ONLY;
         buildRc = manager_->GetOrCreate(workerAddr, hint, transporter);
