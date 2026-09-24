@@ -1,5 +1,6 @@
 add_subdirectory(mmap_manager)
 add_subdirectory(cluster_query)
+add_subdirectory(cluster_admin)
 
 list(APPEND CLIENT_SRCS
         datasystem.cpp

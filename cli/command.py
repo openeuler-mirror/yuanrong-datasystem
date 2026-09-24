@@ -38,6 +38,7 @@ COMMAND_MODULES = (
     "generate_config",
     "collect_log",
     "query",
+    "delete",
 )
 
 
