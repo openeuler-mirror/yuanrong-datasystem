@@ -45,6 +45,7 @@
 #include "datasystem/common/object_cache/object_ref_info.h"
 #include "datasystem/common/object_cache/safe_table.h"
 #include "datasystem/common/object_cache/shm_guard.h"
+#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/object/object_enum.h"
@@ -655,7 +656,7 @@ private:
     static constexpr size_t POLICY_MIGRATION_LOCK_COUNT = 256;
     static constexpr size_t POLICY_MIGRATION_LOCK_ALIGNMENT = 64;
     struct alignas(POLICY_MIGRATION_LOCK_ALIGNMENT) PolicyMigrationLock {
-        std::mutex mutex;
+        bthread::Mutex mutex;
     };
 
     static constexpr size_t STABLE_ROUTE_READER_SLOT_COUNT = 64;
@@ -706,7 +707,7 @@ private:
 
     void EndTrackedPolicyMutation();
     Status MoveOnePolicyNode(const std::string &objectKey);
-    std::mutex &GetPolicyMigrationLock(const std::string &objectKey);
+    bthread::Mutex &GetPolicyMigrationLock(const std::string &objectKey);
     bool TryAcquireStableRouteReader(size_t &slot);
     void ReleaseStableRouteReader(size_t slot);
     bool StableRouteReadersDrained() const;
@@ -1419,7 +1420,7 @@ private:
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> gRefTable_{ nullptr };
     EvictionList memEvictionList_;
     EvictionList alternateEvictionList_;
-    mutable std::shared_mutex policyRouteMutex_;
+    mutable SharedMutex policyRouteMutex_;
     PolicyRoute policyRoute_;
     std::array<PolicyMigrationLock, POLICY_MIGRATION_LOCK_COUNT> policyMigrationLocks_;
     std::atomic<PolicyUpdatePhase> policyUpdatePhase_{ PolicyUpdatePhase::STABLE };

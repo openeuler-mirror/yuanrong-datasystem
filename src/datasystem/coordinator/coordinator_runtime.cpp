@@ -242,7 +242,7 @@ Status CoordinatorRuntime::Stop()
         configState_ = ConfigState::STOPPING;
     }
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         stopRequested_ = true;
     }
     stopCv_.notify_all();
@@ -251,7 +251,7 @@ Status CoordinatorRuntime::Stop()
 
 bool CoordinatorRuntime::IsLeader() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     if (service_ == nullptr) {
         return false;
     }
@@ -262,7 +262,7 @@ bool CoordinatorRuntime::IsLeader() const
 Status CoordinatorRuntime::GetLeader(std::string &leaderAddress) const
 {
     leaderAddress.clear();
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     if (service_ == nullptr) {
         return Status(K_NOT_READY, "Coordinator Runtime service is not running");
     }
@@ -289,7 +289,7 @@ Status CoordinatorRuntime::InvokeOnStart()
 {
     std::function<Status()> callback;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         if (callbackState_ != LifecycleCallbackState::READY) {
             return Status::OK();
         }
@@ -303,7 +303,7 @@ Status CoordinatorRuntime::InvokeOnStop()
 {
     std::function<Status()> callback;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         if (callbackState_ != LifecycleCallbackState::START_ATTEMPTED) {
             return Status::OK();
         }
@@ -318,7 +318,7 @@ Status CoordinatorRuntime::ShutdownService()
     // Detach ownership first so a throwing Shutdown cannot leave a Service owned by the Runtime.
     std::unique_ptr<coordinator::CoordinatorServiceImpl> service;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<bthread::Mutex> lock(mutex_);
         service = std::move(service_);
     }
     if (service == nullptr) {
@@ -329,7 +329,7 @@ Status CoordinatorRuntime::ShutdownService()
 
 void CoordinatorRuntime::EnableConfigUpdates()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<bthread::Mutex> lock(mutex_);
     if (!stopRequested_) {
         std::lock_guard<std::mutex> configLock(configMutex_);
         if (configState_ == ConfigState::NOT_READY) {
@@ -346,10 +346,11 @@ void CoordinatorRuntime::DisableConfigUpdates()
 
 void CoordinatorRuntime::RunEventLoop()
 {
-    std::unique_lock<std::mutex> lock(mutex_);
+    std::unique_lock<bthread::Mutex> lock(mutex_);
     while (!stopRequested_ && !IsTermSignalReceived()) {
-        stopCv_.wait_for(lock, std::chrono::milliseconds(kStopPollIntervalMs),
-                         [this] { return stopRequested_ || IsTermSignalReceived(); });
+        stopCv_.wait_for(
+            lock, std::chrono::duration_cast<std::chrono::microseconds>(
+                      std::chrono::milliseconds(kStopPollIntervalMs)).count());
         if (stopRequested_ || IsTermSignalReceived()) {
             break;
         }

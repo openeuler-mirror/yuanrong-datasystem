@@ -335,7 +335,7 @@ public:
 
 private:
     TbbTable tbbTable_;           // The implementation of the table itself.
-    WriterPrefRWLock tableLock_;  // A lock for use with iteration to make iteration exclusive and threadsafe.
+    BthreadRwLock tableLock_;  // A lock for use with iteration to make iteration exclusive and threadsafe.
 
     /**
      * @brief Locates the object by key and then removes it from the table.

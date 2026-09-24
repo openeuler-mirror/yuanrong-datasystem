@@ -320,7 +320,7 @@ Status WorkerOcEvictionManager::InitPolicyStateStore(PolicyStateLoader loader, P
     }
 
     {
-        std::unique_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+        std::unique_lock<SharedMutex> routeLock(policyRouteMutex_);
         CHECK_FAIL_RETURN_STATUS(policyStateLoader_ == nullptr && policyStateStorer_ == nullptr, K_INVALID,
                                  "Eviction policy state store is already initialized");
         policyStateLoader_ = std::move(loader);
@@ -526,7 +526,7 @@ Status WorkerOcEvictionManager::ApplyMigratedHeat(const std::string &objectKey, 
             EndTrackedPolicyMutation();
         }
     });
-    std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+    std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
     const auto phase = policyUpdatePhase_.load(std::memory_order_acquire);
     if (!trackMutation && phase != PolicyUpdatePhase::STABLE) {
         BeginTrackedPolicyMutation();
@@ -541,7 +541,7 @@ Status WorkerOcEvictionManager::ApplyMigratedHeat(const std::string &objectKey, 
                                                           mergeExisting);
     }
 
-    std::lock_guard<std::mutex> keyLock(GetPolicyMigrationLock(objectKey));
+    std::lock_guard<bthread::Mutex> keyLock(GetPolicyMigrationLock(objectKey));
     if (policyRoute_.targetPolicy == EvictionPolicy::HEAT) {
         RETURN_IF_NOT_OK(EnsureMigratedHeatTarget(objectKey));
         return policyRoute_.targetList->ApplyMigratedHeat(objectKey, heat, policyRoute_.targetHeatConfig.maxCounter,
@@ -613,19 +613,19 @@ bool WorkerOcEvictionManager::TryOnRefillWithoutSize(const std::string &objectKe
 
 EvictionPolicy WorkerOcEvictionManager::GetActiveEvictionPolicy() const
 {
-    std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+    std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
     return policyRoute_.sourcePolicy;
 }
 
 uint64_t WorkerOcEvictionManager::GetPolicyUpdateEpoch() const
 {
-    std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+    std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
     return policyRoute_.epoch;
 }
 
 WorkerOcEvictionManager::PolicyStateSnapshot WorkerOcEvictionManager::GetPolicyStateSnapshot() const
 {
-    std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+    std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
     return { policyUpdatePhase_.load(std::memory_order_acquire), policyRoute_.sourcePolicy, policyRoute_.epoch,
              policyRoute_.targetPolicy };
 }
@@ -637,7 +637,7 @@ Status WorkerOcEvictionManager::ValidateRebalancePolicy(uint32_t policy, uint64_
                              K_INVALID, "Rebalance task has an invalid eviction policy");
     CHECK_FAIL_RETURN_STATUS(policyUpdatePhase_.load(std::memory_order_acquire) == PolicyUpdatePhase::STABLE,
                              K_NOT_READY, "Eviction policy update is in progress");
-    std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+    std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
     const auto expected = policyRoute_.sourcePolicy == EvictionPolicy::CLOCK
                               ? static_cast<uint32_t>(master::EVICTION_POLICY_CLOCK)
                               : static_cast<uint32_t>(master::EVICTION_POLICY_HEAT);
@@ -646,7 +646,7 @@ Status WorkerOcEvictionManager::ValidateRebalancePolicy(uint32_t policy, uint64_
     return Status::OK();
 }
 
-std::mutex &WorkerOcEvictionManager::GetPolicyMigrationLock(const std::string &objectKey)
+bthread::Mutex &WorkerOcEvictionManager::GetPolicyMigrationLock(const std::string &objectKey)
 {
     return policyMigrationLocks_[std::hash<std::string>{}(objectKey) % policyMigrationLocks_.size()].mutex;
 }
@@ -722,7 +722,7 @@ Status WorkerOcEvictionManager::RoutePolicyMutation(const std::string &objectKey
         trackMutation = true;
     }
 
-    std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+    std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
     const auto phase = policyUpdatePhase_.load(std::memory_order_acquire);
     if (phase == PolicyUpdatePhase::STABLE || phase == PolicyUpdatePhase::DRAINING) {
         return ApplyPolicyMutation(policyRoute_, objectKey, kind, migratableSize, snapshot);
@@ -753,7 +753,7 @@ bool WorkerOcEvictionManager::TryApplyClockMutationWithoutSize(const std::string
 Status WorkerOcEvictionManager::RoutePolicyMutationDuringUpdate(
     const std::string &objectKey, PolicyMutationKind kind, uint64_t migratableSize, EvictionList::Node *snapshot)
 {
-    std::lock_guard<std::mutex> keyLock(GetPolicyMigrationLock(objectKey));
+    std::lock_guard<bthread::Mutex> keyLock(GetPolicyMigrationLock(objectKey));
     if (kind == PolicyMutationKind::ERASE) {
         (void)policyRoute_.targetList->Erase(objectKey);
         (void)policyRoute_.sourceList->Erase(objectKey);
@@ -1116,7 +1116,7 @@ uint64_t WorkerOcEvictionManager::EstimatePretriggerMarginBytes()
         ServiceType::OBJECT, memory::CacheType::MEMORY);
     size_t objectCount = 0;
     {
-        std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+        std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
         objectCount = policyRoute_.sourceList->Size();
     }
     if (objectCount == 0 || usedBytes < objectCount) {
@@ -1148,7 +1148,7 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
     st.cacheType = cacheType;
     st.forceEvict = forceEvict;
     {
-        std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+        std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
         if (policyUpdatePhase_.load(std::memory_order_acquire) != PolicyUpdatePhase::STABLE) {
             // This task will not run, so it must not consume the pending slot: an early return here
             // would take the need with the stack frame and drop it.
@@ -1557,7 +1557,7 @@ Status WorkerOcEvictionManager::GetAllObjectsInfo(std::vector<EvictionList::Node
     if (stableRoute) {
         return policyRoute_.sourceList->GetAllObjectsInfo(res, oldest);
     }
-    std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+    std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
     return policyRoute_.sourceList->GetAllObjectsInfo(res, oldest);
 }
 
@@ -1567,7 +1567,7 @@ Status WorkerOcEvictionManager::GetObjectInfo(const std::string &objectKey, Evic
     if (stableRoute) {
         return policyRoute_.sourceList->GetObjectInfo(objectKey, node);
     }
-    std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+    std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
     const auto phase = policyUpdatePhase_.load(std::memory_order_acquire);
     if (phase != PolicyUpdatePhase::STABLE && phase != PolicyUpdatePhase::DRAINING) {
         Status rc = policyRoute_.targetList->GetObjectInfo(objectKey, node);
@@ -1751,7 +1751,7 @@ void WorkerOcEvictionManager::FinishPrimaryEndLifeTask(const PrimaryEndLifeTask 
                 EndTrackedPolicyMutation();
             }
         });
-        std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+        std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
         const auto phase = policyUpdatePhase_.load(std::memory_order_acquire);
         if (!trackMutation && phase != PolicyUpdatePhase::STABLE) {
             BeginTrackedPolicyMutation();
@@ -1766,7 +1766,7 @@ void WorkerOcEvictionManager::FinishPrimaryEndLifeTask(const PrimaryEndLifeTask 
         if (phase == PolicyUpdatePhase::STABLE || phase == PolicyUpdatePhase::DRAINING) {
             policyRoute_.sourceStrategy->ReaddCandidate(retryCandidate, READD_COUNTER);
         } else {
-            std::lock_guard<std::mutex> keyLock(GetPolicyMigrationLock(task.objectKey));
+            std::lock_guard<bthread::Mutex> keyLock(GetPolicyMigrationLock(task.objectKey));
             policyRoute_.targetStrategy->ReaddCandidate(retryCandidate, READD_COUNTER);
         }
     }

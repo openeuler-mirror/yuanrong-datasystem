@@ -103,7 +103,7 @@ Status WorkerOcEvictionManager::PrecheckPolicyUpdate(EvictionPolicy targetPolicy
     CHECK_FAIL_RETURN_STATUS(policyUpdatePhase_.load(std::memory_order_acquire) == PolicyUpdatePhase::STABLE,
                              K_NOT_READY, "Another eviction policy update is in progress");
     {
-        std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+        std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
         if (recoveredTransitionIntent_) {
             CHECK_FAIL_RETURN_STATUS(epoch == recoveredTransitionEpoch_ && targetPolicy == recoveredTargetPolicy_,
                                      K_INVALID, "A persisted eviction policy update must recover forward");
@@ -162,7 +162,7 @@ Status WorkerOcEvictionManager::PreparePolicyUpdate(EvictionPolicy targetPolicy,
     EvictionPolicy activePolicy;
     uint64_t activeEpoch;
     {
-        std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+        std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
         if (recoveredTransitionIntent_) {
             if (epoch != recoveredTransitionEpoch_ || targetPolicy != recoveredTargetPolicy_) {
                 RETURN_STATUS(K_INVALID, "A persisted eviction policy update must recover forward");
@@ -177,7 +177,7 @@ Status WorkerOcEvictionManager::PreparePolicyUpdate(EvictionPolicy targetPolicy,
                                std::memory_order_release);
     RETURN_IF_NOT_OK(PersistTransitionIntent(activePolicy, activeEpoch, targetPolicy, epoch));
     {
-        std::unique_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+        std::unique_lock<SharedMutex> routeLock(policyRouteMutex_);
         recoveredTransitionIntent_ = true;
         recoveredTargetPolicy_ = targetPolicy;
         recoveredTransitionEpoch_ = epoch;
@@ -219,7 +219,7 @@ Status WorkerOcEvictionManager::DrainPolicyUpdateActivity()
 
 Status WorkerOcEvictionManager::InitializePolicyUpdateTarget(EvictionPolicy targetPolicy, uint64_t epoch)
 {
-    std::unique_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+    std::unique_lock<SharedMutex> routeLock(policyRouteMutex_);
     if (epoch <= policyRoute_.epoch) {
         RETURN_STATUS(K_INVALID, "Eviction policy update epoch is stale");
     }
@@ -272,7 +272,7 @@ Status WorkerOcEvictionManager::InitializePolicyUpdateTarget(EvictionPolicy targ
 void WorkerOcEvictionManager::ResetPolicyUpdatePhase()
 {
     {
-        std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+        std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
         needsMigratableSize_.store(policyRoute_.sourcePolicy == EvictionPolicy::HEAT, std::memory_order_release);
     }
     evictionCancelRequested_.store(false, std::memory_order_release);
@@ -281,8 +281,8 @@ void WorkerOcEvictionManager::ResetPolicyUpdatePhase()
 
 Status WorkerOcEvictionManager::MoveOnePolicyNode(const std::string &objectKey)
 {
-    std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
-    std::lock_guard<std::mutex> keyLock(GetPolicyMigrationLock(objectKey));
+    std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
+    std::lock_guard<bthread::Mutex> keyLock(GetPolicyMigrationLock(objectKey));
     EvictionList::Node sourceNode;
     Status rc = policyRoute_.sourceList->Extract(objectKey, sourceNode);
     if (rc.GetCode() == K_NOT_FOUND) {
@@ -332,7 +332,7 @@ Status WorkerOcEvictionManager::MigratePolicyBatch(size_t maxKeys, bool &done)
                              K_NOT_READY, "Eviction policy update is not migrating");
     std::vector<EvictionList::Node> nodes;
     {
-        std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+        std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
         RETURN_IF_NOT_OK(policyRoute_.sourceList->GetObjectsInfoFromOldest(maxKeys, nodes));
     }
     for (const auto &node : nodes) {
@@ -341,7 +341,7 @@ Status WorkerOcEvictionManager::MigratePolicyBatch(size_t maxKeys, bool &done)
     size_t sourceRemaining = 0;
     size_t targetSize = 0;
     {
-        std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+        std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
         sourceRemaining = policyRoute_.sourceList->Size();
         targetSize = policyRoute_.targetList->Size();
         done = sourceRemaining == 0;
@@ -375,7 +375,7 @@ Status WorkerOcEvictionManager::AuditPolicyUpdateMembership(uint64_t epoch, uint
 
     std::pair<EvictionList *, EvictionList *> auditLists{ nullptr, nullptr };
     {
-        std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+        std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
         CHECK_FAIL_RETURN_STATUS(policyUpdatePhase_.load(std::memory_order_acquire) == PolicyUpdatePhase::VERIFYING,
                                  K_NOT_READY, "Eviction policy update is not ready for audit");
         CHECK_FAIL_RETURN_STATUS(epoch == policyRoute_.epoch, K_INVALID, "Eviction policy update epoch mismatch");
@@ -404,7 +404,7 @@ Status WorkerOcEvictionManager::AuditPolicyUpdateMembership(uint64_t epoch, uint
         if (object == nullptr || !IsEligibleEvictionMembership(*object)) {
             continue;
         }
-        std::lock_guard<std::mutex> keyLock(GetPolicyMigrationLock(objectKey));
+        std::lock_guard<bthread::Mutex> keyLock(GetPolicyMigrationLock(objectKey));
         CHECK_FAIL_RETURN_STATUS(auditLists.second->Exist(objectKey), K_NOT_READY,
                                  "Eligible object is missing from target eviction list");
         ++eligibleObjects;
@@ -412,7 +412,7 @@ Status WorkerOcEvictionManager::AuditPolicyUpdateMembership(uint64_t epoch, uint
     const size_t targetObjects = auditLists.second->Size();
 
     {
-        std::shared_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+        std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
         CHECK_FAIL_RETURN_STATUS(policyUpdatePhase_.load(std::memory_order_acquire) == PolicyUpdatePhase::VERIFYING
                                      && epoch == policyRoute_.epoch && auditLists.first == policyRoute_.sourceList
                                      && auditLists.second == policyRoute_.targetList && auditLists.first->Size() == 0,
@@ -432,7 +432,7 @@ Status WorkerOcEvictionManager::CommitPolicyUpdate(uint64_t epoch)
     uint64_t auditedGeneration = 0;
     RETURN_IF_NOT_OK(AuditPolicyUpdateMembership(epoch, auditedGeneration));
     INJECT_POINT_NO_RETURN("WorkerOcEvictionManager.CommitPolicyUpdate.afterAudit", []() {});
-    std::unique_lock<std::shared_mutex> routeLock(policyRouteMutex_);
+    std::unique_lock<SharedMutex> routeLock(policyRouteMutex_);
     CHECK_FAIL_RETURN_STATUS(policyUpdatePhase_.load(std::memory_order_acquire) == PolicyUpdatePhase::VERIFYING,
                              K_NOT_READY, "Eviction policy update is not ready to commit");
     CHECK_FAIL_RETURN_STATUS(epoch == policyRoute_.epoch, K_INVALID, "Eviction policy update epoch mismatch");

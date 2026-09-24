@@ -34,3 +34,9 @@ ds_cc_test_library(
         "@securec",
     ],
 )
+
+ds_cc_test_library(
+    name = "bthread_test_helper",
+    hdrs = ["bthread_test_helper.h"],
+    deps = ["//src/datasystem/common/rpc:bthread_utils"],
+)

@@ -29,6 +29,8 @@
 #include <utility>
 #include <vector>
 
+#include <bthread/mutex.h>
+
 #include "datasystem/common/coordinator/coordinator_discovery_cache.h"
 #include "datasystem/common/coordinator/coordinator_leader_router.h"
 #include "datasystem/common/coordinator/key_value_entry.h"
@@ -487,7 +489,7 @@ private:
     std::string currentCoordinatorId_;
     std::unordered_map<std::string, size_t> inFlightByCoordinatorId_;
     // Serializes cold-path identity probes; when both locks are needed, acquire this before identityMutex_.
-    std::mutex identityRefreshMutex_;
+    bthread::Mutex identityRefreshMutex_;
 };
 
 class CoordinatorServiceProxyBrpcImpl final : public CoordinatorServiceProxyBase {

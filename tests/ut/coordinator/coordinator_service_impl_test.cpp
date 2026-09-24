@@ -30,6 +30,7 @@
 #include <google/protobuf/arena.h>
 
 #include "ut/common.h"
+#include "ut/bthread_test_helper.h"
 
 #include <array>
 #include <unordered_map>
@@ -227,56 +228,7 @@ void EnableElection(coordinator::CoordinatorServiceImpl &service)
 
 class CoordinatorServiceImplTest : public CommonTest {};
 
-namespace {
-void ExpectBthreadProgressWhileBlocked(const std::function<void(size_t)> &operation,
-                                      const std::function<void()> &release)
-{
-    constexpr auto timeout = std::chrono::seconds(2);
-    bthread_t warmup;
-    const int warmupStatus = StartBackgroundTask(&warmup, [] {});
-    if (warmupStatus != 0) {
-        release();
-        FAIL() << "Failed to initialize bthread workers: " << warmupStatus;
-    }
-    bthread_join(warmup, nullptr);
-    const auto workerCount = static_cast<size_t>(bthread_getconcurrency_by_tag(BTHREAD_TAG_DEFAULT));
-    std::atomic<size_t> entered{ 0 };
-    std::promise<void> allEntered;
-    auto enteredFuture = allEntered.get_future();
-    std::vector<bthread_t> tasks;
-    tasks.reserve(workerCount);
-    for (size_t index = 0; index < workerCount; ++index) {
-        bthread_t task;
-        const int rc = StartBackgroundTask(&task, [&, index] {
-            if (entered.fetch_add(1) + 1 == workerCount) {
-                allEntered.set_value();
-            }
-            operation(index);
-        });
-        EXPECT_EQ(rc, 0);
-        if (rc != 0) {
-            break;
-        }
-        tasks.push_back(task);
-    }
-    const bool enteredAll = enteredFuture.wait_for(timeout) == std::future_status::ready;
-    std::promise<void> probe;
-    auto probeFuture = probe.get_future();
-    bthread_t probeTask;
-    const int probeStatus = StartBackgroundTask(&probeTask, [&] { probe.set_value(); });
-    const bool progressed = probeStatus == 0 && probeFuture.wait_for(timeout) == std::future_status::ready;
-    // Release from the native test thread even on failure so the old blocking implementation can drain.
-    release();
-    for (auto task : tasks) {
-        bthread_join(task, nullptr);
-    }
-    if (probeStatus == 0) {
-        bthread_join(probeTask, nullptr);
-    }
-    EXPECT_TRUE(enteredAll);
-    EXPECT_TRUE(progressed) << "Contended Coordinator locks exhausted the Raft bthread worker pool";
-}
-}  // namespace
+
 
 TEST_F(CoordinatorServiceImplTest, MembershipWatchContentionPreservesBthreadProgress)
 {
