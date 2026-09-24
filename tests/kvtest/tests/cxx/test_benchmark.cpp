@@ -45,6 +45,11 @@ TEST(CalcKeysPerRound_Basic) {
     ASSERT_EQ(keys, 409);
 }
 
+TEST(CalcKeysPerRound_128GiBWorkerWith8MiBObjects) {
+    int keys = CalcKeysPerRound(131072, 8 * 1024 * 1024);
+    ASSERT_EQ(keys, 13107);
+}
+
 TEST(CalcKeysPerRound_SmallMemory) {
     // 100MB * 0.8 / 8MB = 10 keys
     int keys = CalcKeysPerRound(100, 8 * 1024 * 1024);
@@ -60,6 +65,14 @@ TEST(CalcKeysPerRound_LargeData) {
 TEST(CalcKeysPerRound_ZeroMemory) {
     int keys = CalcKeysPerRound(0, 8 * 1024 * 1024);
     ASSERT_EQ(keys, 0);
+}
+
+TEST(ContinuousSetSetup_PartialSuccessIsRunnable) {
+    ASSERT_TRUE(HasRunnableContinuousSetSetup(10124));
+}
+
+TEST(ContinuousSetSetup_NoSuccessIsNotRunnable) {
+    ASSERT_FALSE(HasRunnableContinuousSetSetup(0));
 }
 
 TEST(CalcRoundCleanupWait_UnlimitedDuration) {

@@ -20,6 +20,9 @@
 // Key calculation utilities
 int CalcKeysPerRound(int workerMemoryMb, uint64_t dataSize);
 
+/** @brief Return whether continuous Set has enough setup data to enter measurement. */
+bool HasRunnableContinuousSetSetup(int64_t successCount);
+
 /**
  * @brief Calculate the cleanup wait before the next benchmark round.
  * @param[in] configuredWaitMs Configured cleanup wait in milliseconds.

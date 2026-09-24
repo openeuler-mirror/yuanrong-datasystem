@@ -641,14 +641,24 @@ Regression entrypoints: `python3 -m unittest discover -s tests/kvtest/tests/pyth
 `num_threads` threads sharing each process-local KVClient. Get preloads once and then runs a synchronized Get-only
 window; failed preload Set operations are not retried, and warmup, measurement, and cleanup use only successfully
 preloaded keys. A fully failed preload stops the run; partial success continues with lower effective concurrency and
-is recorded as a `setup` CSV row. Set alternates synchronized Set and cleanup phases. `benchmark_phases.csv` is the
+is recorded as a `setup` CSV row. Set normally alternates synchronized Set and cleanup phases. For `set_local` and
+`set_remote`, `cleanup_method=none` first fills the fixed round-0 data set and then continuously overwrites the same keys
+without issuing Delete during measurement. A partially successful setup is
+recorded and measurement continues across the complete key set, so later passes retry keys that failed during setup;
+only a fully failed setup stops the run. The measured Clients delete the fixed data set after the measurement window.
+`benchmark_phases.csv` is the
 aggregate source of truth, while `benchmark_clients.csv` diagnoses Client start or throughput skew. Regression coverage
 starts with
 `tests/kvtest/tests/cxx/test_benchmark.cpp`, `test_config.cpp`, and `tests/python/test_deploy_client.py`; runtime transport
 and synchronization claims still require the focused benchmark integration script. The global data set is partitioned,
 not multiplied by Client count, and must contain at least one key per measured thread.
-Set operation and cleanup business failures are accumulated without shortening the configured rounds or duration;
+Buffer Set output preserves Set-only metrics that exclude the intervening Create calls. Set operation and cleanup
+business failures are accumulated without shortening the configured rounds or duration;
 execution and synchronization failures remain terminal, and any accumulated failure keeps the final exit status nonzero.
+For `cleanup_method=none`, a partially successful fill is recorded as a `setup` row and keeps the final exit status
+nonzero, while measurement still continues on the complete key set. Get warmup business failures are warnings and do not
+prevent measurement, while a warmup that succeeds for no key stops the run; warmup execution or synchronization
+failures remain terminal.
 
 
 Each collect additionally archives reproduction configuration: Client copies only its input deploy/config files into the output, retaining their parent directory names (for example `aaa/deploy.json` and `aaa/config.json`), without copying other directory contents; Worker normally saves each selected Pod's remote config as `worker_config.json` in that Pod's log directory. For Worker keyword filtering, a Pod with zero matching log lines skips both its local directory and `worker_config.json`; a Pod with matches keeps the configuration beside its logs. Other log filters do not filter this configuration archive. Existing default log selection, concurrency, and summary behavior remain unchanged.

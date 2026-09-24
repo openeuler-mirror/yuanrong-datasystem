@@ -1,5 +1,5 @@
 #!/bin/bash
-# Benchmark integration test: T01-T11
+# Benchmark integration test: T01-T12
 # Runs on remote server against real workers
 # Usage: bash tests/test_benchmark_integration.sh [SSH_HOST] [SSH_PORT] [REMOTE_DIR]
 #
@@ -15,7 +15,7 @@ SSH="ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p $SSH_PORT $SSH_HOST
 TOTAL_ROUNDS=3
 DATA_SIZE="1MB"
 
-# T01-T07: single worker
+# T01-T07, T12: single worker
 SINGLE_TESTS=(
     #  ID      test_mode        set_api        cleanup  threads mem_mb
     "T01|set_local|string_view|del|16|4096"
@@ -24,6 +24,8 @@ SINGLE_TESTS=(
     "T04|get_local|create_buffer|del|16|4096"
     "T05|set_local|string_view|ttl|16|4096"
     "T06|set_local|string_view|del|1|4096"
+    # T12 must precede T07, which restarts the worker with a small shared memory budget
+    "T12|set_local|create_buffer_raw|none|16|4096"
     "T07|set_local|string_view|del|16|100"
 )
 
@@ -304,7 +306,7 @@ run_test_case() {
 # ─── Main ────────────────────────────────────────────────────
 
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║   Benchmark Integration Tests (T01-T11)                ║"
+echo "║   Benchmark Integration Tests (T01-T12)                ║"
 echo "║   Remote: $SSH_HOST:$SSH_PORT                          "
 echo "╚══════════════════════════════════════════════════════════╝"
 
@@ -339,10 +341,10 @@ $SSH "test -d $REMOTE_DIR/lib" || {
     echo "WARN: $REMOTE_DIR/lib not found. SDK libs may be missing."
 }
 
-# ─── Phase 2: Single Worker Tests (T01-T07) ─────────────────
+# ─── Phase 2: Single Worker Tests (T01-T07, T12) ────────────
 
 echo ""
-echo "[Phase 2] Single Worker Tests (T01-T07)"
+echo "[Phase 2] Single Worker Tests (T01-T07, T12)"
 
 echo "Starting worker on port 31501 (shm=4096MB)..."
 $SSH "dscli stop --worker_address 127.0.0.1:31501" 2>/dev/null || true
