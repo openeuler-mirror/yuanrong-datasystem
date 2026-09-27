@@ -855,14 +855,18 @@ Status TransportLayer::Create(const HostPort &workerAddr, const std::string &obj
     }
     std::unordered_set<ShmKey> ambiguousShmIds;
     Status rc = TryCreate(workerAddr, objectKey, dataSize, param, hint, buffer, ambiguousShmIds);
+    Status ambiguousRc = IsAmbiguousCreateFailure(rc) ? rc : Status::OK();
     if (rc.GetCode() == K_RPC_UNAVAILABLE) {
-        const Status ambiguousRc = rc;
+        const Status firstRc = rc;
         LOG(WARNING) << "Rebuild RPC and data plane for worker " << workerAddr.ToString()
                      << " after Create failed: " << rc;
         manager_->Teardown(workerAddr);
         rc = TryCreate(workerAddr, objectKey, dataSize, param, hint, buffer, ambiguousShmIds);
         if (IsAllocationReplayConflict(rc)) {
-            rc = ambiguousRc;
+            rc = firstRc;
+        }
+        if (ambiguousRc.IsOk() && IsAmbiguousCreateFailure(rc)) {
+            ambiguousRc = rc;
         }
     }
     if (rc.GetCode() == K_NOT_SUPPORTED) {
@@ -870,11 +874,17 @@ Status TransportLayer::Create(const HostPort &workerAddr, const std::string &obj
             SLOW_LOG(WARNING) << "Create SHM unavailable on worker " << workerAddr.ToString() << ", fall back to "
                 << TransportHintName(fallbackHint);
             rc = TryCreate(workerAddr, objectKey, dataSize, param, fallbackHint, buffer, ambiguousShmIds);
+            if (ambiguousRc.IsOk() && IsAmbiguousCreateFailure(rc)) {
+                ambiguousRc = rc;
+            }
             if (rc.IsOk()) {
                 ScheduleAmbiguousCreateCleanup(workerAddr, ambiguousShmIds, param.requestContext);
                 return rc;
             }
         }
+    }
+    if (ambiguousRc.IsError() && (IsBrpcRequestDefinitelyNotSent(rc) || rc.GetCode() == K_SCALE_DOWN)) {
+        rc = ambiguousRc;
     }
     if (rc.IsError()) {
         // Throttle this terminal diagnostic like the SHM-unavailable fallback log above so a sustained UB
