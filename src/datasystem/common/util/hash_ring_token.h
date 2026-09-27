@@ -30,8 +30,9 @@ inline constexpr uint32_t MAX_HASH_RING_TOKEN_SEEDS = 10'000;
 inline constexpr uint32_t MAX_HASH_RING_TOKENS_PER_MEMBER = 4'096;
 // Balanced placement searches this many seed candidates per token; must stay within the probe budget.
 // Landing error is ring/(2K) against ideal ring/(members*tokens), so quality holds while members*tokens
-// stays well below 2K; K=4000 halves planning cost with no measured loss across the validated matrix.
-inline constexpr uint32_t BALANCED_PLACEMENT_SEED_CANDIDATES = 4'000;
+// stays well below 2K; K=1000 keeps the validated parity envelope (<=1.1x up to 25 members at the 32-token
+// default) at a quarter of the planning cost, and keeps the serialized topology small at large ring sizes.
+inline constexpr uint32_t BALANCED_PLACEMENT_SEED_CANDIDATES = 1'000;
 
 uint32_t MakeHashRingToken(const std::string &address, uint32_t index, uint32_t seed);
 

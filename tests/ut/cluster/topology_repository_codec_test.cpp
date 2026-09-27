@@ -44,7 +44,7 @@ constexpr size_t MAX_REPOSITORY_VALUE_BYTES = 4 * 1'024 * 1'024;
 constexpr size_t MAX_TOPOLOGY_MEMBERS = 10'000;
 constexpr size_t LARGE_TOPOLOGY_MEMBER_COUNT = 2'000;
 constexpr std::array<std::pair<uint32_t, size_t>, 6> LARGE_TOPOLOGY_SIZE_CASES{ {
-    { 4, 133'737 },
+    { 4, 82'009 },
     { 8, 82'009 },
     { 16, 82'009 },
     { 32, 82'009 },
