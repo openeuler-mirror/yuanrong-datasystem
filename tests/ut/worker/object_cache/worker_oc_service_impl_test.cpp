@@ -1759,12 +1759,17 @@ TEST_F(WorkerOcServiceImplTest, DeleteNotificationRejectsOversizedBatch)
 TEST_F(WorkerOcServiceImplTest, CleanupLocalStateForRejoinClearsLocalObjects)
 {
     InitImplClearDataFlow();
+    ASSERT_NE(impl_->gMigrateProc_, nullptr);
     AddObject("rejoin-object-1");
     AddObject("rejoin-object-2");
 
     DS_ASSERT_OK(impl_->CleanupLocalStateForRejoin(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
 
     EXPECT_EQ(objectTable_->GetSize(), 0);
+    EXPECT_TRUE(impl_->HasPendingRejoinCleanup());
+    impl_->ReopenIncomingMigrationAdmissionAfterRejoin();
+    EXPECT_FALSE(impl_->HasPendingRejoinCleanup());
+    EXPECT_FALSE(impl_->gMigrateProc_->IsIncomingMigrationAdmissionClosed());
 }
 
 TEST_F(WorkerOcServiceImplTest, CleanupLocalStateForRejoinRespectsExpiredDeadline)
@@ -1811,6 +1816,7 @@ TEST_F(WorkerOcServiceImplTest, CleanupLocalStateForRejoinStopsWhenMetadataClean
     EXPECT_TRUE(metadataCleanupCalled);
     EXPECT_EQ(rc.GetCode(), StatusCode::K_RUNTIME_ERROR);
     EXPECT_EQ(objectTable_->GetSize(), 1);
+    EXPECT_TRUE(impl_->HasPendingRejoinCleanup());
 }
 
 TEST_F(WorkerOcServiceImplTest, CleanupLocalStateForRejoinWaitsForOrdinaryRpcDrain)

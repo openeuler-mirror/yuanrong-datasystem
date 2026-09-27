@@ -1965,13 +1965,21 @@ Status WorkerOCServer::ConstructTopologyRuntime()
             HandleTopologySnapshotPublished(std::move(snapshot));
         })
         .SetMembershipRecreateGate([this] {
-            if (topologyEngine_ == nullptr || !topologyEngine_->RequiresMembershipRejoin()) {
+            const bool pendingCleanup =
+                objCacheClientWorkerSvc_ != nullptr && objCacheClientWorkerSvc_->HasPendingRejoinCleanup();
+            if (topologyEngine_ == nullptr
+                || (!topologyEngine_->RequiresMembershipRejoin() && !pendingCleanup)) {
                 return Status::OK();
             }
             CHECK_FAIL_RETURN_STATUS(objCacheClientWorkerSvc_ != nullptr, K_NOT_READY,
                                      "Object cache service is not ready for rejoin cleanup");
             const auto deadline = std::chrono::steady_clock::now() + TOPOLOGY_STOP_GRACE;
             return objCacheClientWorkerSvc_->CleanupLocalStateForRejoin(deadline);
+        })
+        .SetMembershipRejoinCompletedHandler([this] {
+            if (objCacheClientWorkerSvc_ != nullptr) {
+                objCacheClientWorkerSvc_->ReopenIncomingMigrationAdmissionAfterRejoin();
+            }
         })
         .SetControlBackendProbe(controlBackendProbe)
         .SetPeerTopologyRefresh(peerTopologyRefresh)
