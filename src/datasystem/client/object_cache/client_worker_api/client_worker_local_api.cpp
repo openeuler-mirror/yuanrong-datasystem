@@ -262,9 +262,12 @@ Status ClientWorkerLocalApi::PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRsp
 }
 
 Status ClientWorkerLocalApi::Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp,
-                                 std::vector<RpcMessage> &payloads)
+                                 std::vector<RpcMessage> &payloads, Status *ingressRpcStatus)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_GET_LATENCY);
+    if (ingressRpcStatus != nullptr) {
+        *ingressRpcStatus = Status::OK();
+    }
     const int64_t &subTimeoutMs = getParam.subTimeoutMs;
     GetReqPb req;
     RETURN_IF_NOT_OK(PreGet(getParam, subTimeoutMs, req));
@@ -274,7 +277,13 @@ Status ClientWorkerLocalApi::Get(const GetParam &getParam, uint32_t &version, Ge
     auto future = promise.get_future();
     std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> serverApi =
         std::make_shared<LocalServerUnaryWriterReader<GetRspPb, GetReqPb>>(req, std::move(promise));
-    RETURN_IF_NOT_OK(api_->WorkerOCGet(workerOCService_, serverApi));
+    Status dispatchStatus = api_->WorkerOCGet(workerOCService_, serverApi);
+    if (dispatchStatus.IsError()) {
+        if (ingressRpcStatus != nullptr) {
+            *ingressRpcStatus = dispatchStatus;
+        }
+        return dispatchStatus;
+    }
     std::pair<GetRspPb, Status> result;
     int64_t waitMs = TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs());
     if (future.wait_for(std::chrono::milliseconds(waitMs)) == std::future_status::ready) {
@@ -284,11 +293,22 @@ Status ClientWorkerLocalApi::Get(const GetParam &getParam, uint32_t &version, Ge
             rsp = std::move(result.first);
         } catch (const std::exception &e) {
             result.second = { K_RUNTIME_ERROR, FormatString("Exception when calling future.get(): %s ", e.what()) };
+            if (ingressRpcStatus != nullptr) {
+                *ingressRpcStatus = result.second;
+            }
         }
     } else {
-        return Status(K_RPC_DEADLINE_EXCEEDED,
-                      FormatString("Local get deadline exceeded, remaining %ld us",
-                                   ApiDeadline::Instance().ApiRemainingUs()));
+        Status timeoutStatus(K_RPC_DEADLINE_EXCEEDED,
+                             FormatString("Local get deadline exceeded, remaining %ld us",
+                                          ApiDeadline::Instance().ApiRemainingUs()));
+        if (ingressRpcStatus != nullptr) {
+            *ingressRpcStatus = timeoutStatus;
+        }
+        return timeoutStatus;
+    }
+    if (ingressRpcStatus != nullptr && result.second.GetCode() == K_CLIENT_WORKER_DISCONNECT) {
+        // The embedded Worker has lost this Client session; preserve the signal so BoundMode re-registers it.
+        *ingressRpcStatus = result.second;
     }
     RETURN_IF_NOT_OK(result.second);
     version = workerVersion_.load(std::memory_order_relaxed);

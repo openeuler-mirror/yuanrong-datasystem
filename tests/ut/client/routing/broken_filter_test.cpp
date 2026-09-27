@@ -30,8 +30,8 @@ namespace ut {
 namespace {
 constexpr auto BROKEN_FILTER_RECOVERY_TIMEOUT = std::chrono::seconds(6);
 constexpr auto BROKEN_FILTER_POLL_INTERVAL = std::chrono::milliseconds(20);
-// Must match BrokenFilter::EVICT_CONSECUTIVE_FAILURES. A single (or few) disconnect must NOT
-// evict a worker globally -- that was the code=37 cascade. Only a sustained burst evicts.
+// Must match BrokenFilter::EVICT_CONSECUTIVE_FAILURES. A single (or few) generic disconnect must
+// NOT evict a worker globally -- that was the code=37 cascade. Only a sustained burst evicts.
 constexpr int EVICT_THRESHOLD = 100;
 }  // namespace
 
@@ -45,7 +45,7 @@ TEST_F(BrokenFilterTest, DisconnectsBelowThresholdDoNotEvict)
     client::BrokenFilter filter;
 
     EXPECT_TRUE(filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
-    // A few transient blips (e.g. jitter-induced K_RPC_PEER_DEAD) must not evict the worker.
+    // A few generic disconnect notifications must not evict the worker.
     for (int i = 0; i < EVICT_THRESHOLD - 1; ++i) {
         filter.OnWorkerStateChange(worker_, K_CLIENT_WORKER_DISCONNECT);
         EXPECT_TRUE(filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL)) << "evicted after only " << (i + 1) << " failures";
@@ -53,6 +53,58 @@ TEST_F(BrokenFilterTest, DisconnectsBelowThresholdDoNotEvict)
     // Reaching the threshold within the burst window evicts the worker.
     filter.OnWorkerStateChange(worker_, K_CLIENT_WORKER_DISCONNECT);
     EXPECT_FALSE(filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
+}
+
+TEST_F(BrokenFilterTest, PeerDeadImmediatelyEvicts)
+{
+    client::BrokenFilter filter;
+
+    filter.OnWorkerStateChange(worker_, K_RPC_PEER_DEAD);
+
+    EXPECT_FALSE(filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
+}
+
+TEST_F(BrokenFilterTest, PeerDeadIsolationSurvivesUnrelatedHashRingUpdate)
+{
+    client::BrokenFilter filter;
+    filter.OnWorkerStateChange(worker_, K_RPC_PEER_DEAD);
+    ASSERT_FALSE(filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
+    ClusterTopologyPb ring;
+    (*ring.mutable_members())[worker_.ToString()].set_state(MembershipPb::ACTIVE);
+
+    filter.OnHashRingUpdated(ring);
+
+    EXPECT_FALSE(filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
+}
+
+TEST_F(BrokenFilterTest, DisconnectIsolationSurvivesUnrelatedHashRingUpdate)
+{
+    client::BrokenFilter filter;
+    for (int i = 0; i < EVICT_THRESHOLD; ++i) {
+        filter.OnWorkerStateChange(worker_, K_CLIENT_WORKER_DISCONNECT);
+    }
+    ASSERT_FALSE(filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
+    ClusterTopologyPb ring;
+    (*ring.mutable_members())[worker_.ToString()].set_state(MembershipPb::ACTIVE);
+
+    filter.OnHashRingUpdated(ring);
+
+    EXPECT_FALSE(filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
+}
+
+TEST_F(BrokenFilterTest, HashRingUpdateResetsIncompleteDisconnectBurst)
+{
+    client::BrokenFilter filter;
+    for (int i = 0; i < EVICT_THRESHOLD - 1; ++i) {
+        filter.OnWorkerStateChange(worker_, K_CLIENT_WORKER_DISCONNECT);
+    }
+    ClusterTopologyPb ring;
+    (*ring.mutable_members())[worker_.ToString()].set_state(MembershipPb::ACTIVE);
+    filter.OnHashRingUpdated(ring);
+
+    filter.OnWorkerStateChange(worker_, K_CLIENT_WORKER_DISCONNECT);
+
+    EXPECT_TRUE(filter.IsAvailable(worker_, client::WorkerAccessAction::CONTROL));
 }
 
 TEST_F(BrokenFilterTest, OtherStatusCodesAreIgnored)

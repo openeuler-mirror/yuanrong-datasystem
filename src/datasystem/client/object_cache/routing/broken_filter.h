@@ -52,8 +52,10 @@ private:
         std::chrono::steady_clock::time_point brokenUntil{};
     };
     using HealthMap = std::unordered_map<std::string, WorkerHealth>;
+    static void EraseExpiredEntries(HealthMap &healthMap, std::chrono::steady_clock::time_point now);
     std::shared_ptr<const HealthMap> healthMap_;
-    static constexpr std::chrono::seconds BROKEN_TTL{ 3 };
+    static constexpr std::chrono::seconds BROKEN_TTL{ 5 };
+    // Debounce generic disconnect notifications; an explicit K_RPC_PEER_DEAD is isolated immediately.
     static constexpr uint32_t EVICT_CONSECUTIVE_FAILURES{ 100 };
     static constexpr std::chrono::seconds FAILURE_BURST_WINDOW{ 5 };
 };

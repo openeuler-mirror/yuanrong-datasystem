@@ -176,6 +176,11 @@ std::vector<HostPort> Routing::GetAvailableWorkers() const
     return router_->GetAvailableWorkers();
 }
 
+bool Routing::IsWorkerConnectionBroken(const HostPort &addr) const
+{
+    return router_ != nullptr && router_->IsWorkerConnectionBroken(addr);
+}
+
 std::vector<HostPort> Routing::GetAvailableSameNodeWorkers() const
 {
     return router_->GetAvailableSameNodeWorkers();
