@@ -113,8 +113,12 @@ public:
 
     Status Get(std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> writer) override
     {
-        (void)writer;
-        return Status::OK();
+        const auto status = getStatus_.load(std::memory_order_relaxed);
+        if (status != K_OK) {
+            return writer->SendStatus(Status(status, "injected worker Get status"));
+        }
+        GetRspPb rsp;
+        return writer->Write(rsp);
     }
 
     Status QueryAndGet(std::shared_ptr<ServerUnaryWriterReader<QueryAndGetRspPb, QueryAndGetReqPb>> writer) override
@@ -386,6 +390,7 @@ public:
     }
 
     std::atomic<uint32_t> publishCount_{ 0 };
+    std::atomic<StatusCode> getStatus_{ K_OK };
 };
 
 class FakeWorkerService : public IWorkerService {
@@ -498,6 +503,24 @@ protected:
         return api_->Publish(MakeBufferInfo(), false, false, {}, 0, 0, timeoutMs);
     }
 
+    Status GetOnce(int32_t timeoutMs, Status &ingressRpcStatus)
+    {
+        ScopedRequestContext requestCtx;
+        ApiDeadlineGuard deadlineGuard(timeoutMs);
+        GetRequestContext()->reqTimeoutDuration.Init(timeoutMs);
+        const std::vector<std::string> objectKeys{ "get-key" };
+        const std::vector<ReadParam> readParams;
+        object_cache::GetParam getParam{ .objectKeys = objectKeys,
+                                         .subTimeoutMs = timeoutMs,
+                                         .readParams = readParams,
+                                         .queryL2Cache = false,
+                                         .requestTimeoutMs = timeoutMs };
+        uint32_t version = 0;
+        GetRspPb rsp;
+        std::vector<RpcMessage> payloads;
+        return api_->Get(getParam, version, rsp, payloads, &ingressRpcStatus);
+    }
+
     static constexpr int32_t kRequestTimeoutMs = 5000;
     static constexpr int32_t kConnectTimeoutMs = 3000;
 
@@ -524,6 +547,27 @@ TEST_F(ClientWorkerRemoteApiReconnectTest, PublishFailsFastWhenWorkerDown)
 
     ASSERT_EQ(rc.GetCode(), StatusCode::K_RPC_PEER_DEAD) << rc.ToString();
     ASSERT_LT(elapsedMs, kRequestTimeoutMs + 500) << rc.ToString();
+}
+
+TEST_F(ClientWorkerRemoteApiReconnectTest, GetSeparatesServerStatusFromIngressFailure)
+{
+    ocService_->getStatus_.store(K_RPC_PEER_DEAD, std::memory_order_relaxed);
+    Status ingressRpcStatus(K_UNKNOWN_ERROR, "not initialized");
+
+    const auto downstreamRc = GetOnce(1000, ingressRpcStatus);
+
+    EXPECT_EQ(downstreamRc.GetCode(), K_RPC_PEER_DEAD) << downstreamRc.ToString();
+    EXPECT_TRUE(ingressRpcStatus.IsOk()) << ingressRpcStatus.ToString();
+
+    ocService_->getStatus_.store(K_CLIENT_WORKER_DISCONNECT, std::memory_order_relaxed);
+    const auto sessionRc = GetOnce(1000, ingressRpcStatus);
+    EXPECT_EQ(sessionRc.GetCode(), K_CLIENT_WORKER_DISCONNECT) << sessionRc.ToString();
+    EXPECT_EQ(ingressRpcStatus.GetCode(), K_CLIENT_WORKER_DISCONNECT) << ingressRpcStatus.ToString();
+
+    StopFakeWorker();
+    const auto ingressRc = GetOnce(1000, ingressRpcStatus);
+    EXPECT_EQ(ingressRc.GetCode(), K_RPC_PEER_DEAD) << ingressRc.ToString();
+    EXPECT_EQ(ingressRpcStatus.GetCode(), K_RPC_PEER_DEAD) << ingressRpcStatus.ToString();
 }
 
 // After the worker process restarts, Publish recovers inside the same call's

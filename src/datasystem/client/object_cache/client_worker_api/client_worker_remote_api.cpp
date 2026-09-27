@@ -523,7 +523,7 @@ Status ClientWorkerRemoteApi::PrepareGetUrmaBuffer(const GetParam &getParam, Get
 #endif
 
 Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp,
-                                  std::vector<RpcMessage> &payloads)
+                                  std::vector<RpcMessage> &payloads, Status *ingressRpcStatus)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_GET_LATENCY);
     auto config = GetClientLatencyTraceConfig();
@@ -620,6 +620,12 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
         ConsumeUbHealthSummary(rsp.ub_health_summary(), "Ignore invalid Get UB health summary");
     }
     const Status &finalStatus = uncertainGetStatus.IsError() ? uncertainGetStatus : getStatus;
+    if (ingressRpcStatus != nullptr) {
+        // A server-side disconnect means the ingress Worker no longer recognizes this Client session and the
+        // caller must re-register. Other explicit server errors are downstream/business results, not ingress loss.
+        const bool sessionInvalid = getStatus.GetCode() == K_CLIENT_WORKER_DISCONNECT;
+        *ingressRpcStatus = !IsBrpcServerApplicationError(getStatus) || sessionInvalid ? getStatus : Status::OK();
+    }
 #ifdef USE_URMA
     if (NeedDelayReleaseShmUnit(finalStatus)) {
         std::shared_ptr<ShmUnit> shmUnit;

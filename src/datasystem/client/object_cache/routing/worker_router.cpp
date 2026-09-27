@@ -55,7 +55,8 @@ WorkerRouter::WorkerRouter(std::string myHostId, std::shared_ptr<WorkerUbHealthR
     }
     filters_.reserve(additionalFilters.size() + DEFAULT_FILTER_COUNT);
     filters_.emplace_back(std::make_shared<StateFilter>(this));
-    filters_.emplace_back(std::make_shared<BrokenFilter>());
+    brokenFilter_ = std::make_shared<BrokenFilter>();
+    filters_.emplace_back(brokenFilter_);
     filters_.insert(filters_.end(), std::make_move_iterator(additionalFilters.begin()),
                     std::make_move_iterator(additionalFilters.end()));
 
@@ -158,6 +159,11 @@ bool WorkerRouter::IsWorkerAvailable(const HostPort &addr, WorkerAccessAction ac
 {
     return std::all_of(filters_.begin(), filters_.end(),
         [&](const std::shared_ptr<IWorkerFilter> &f) { return f->IsAvailable(addr, action); });
+}
+
+bool WorkerRouter::IsWorkerConnectionBroken(const HostPort &addr) const
+{
+    return brokenFilter_ != nullptr && !brokenFilter_->IsAvailable(addr, WorkerAccessAction::CONTROL);
 }
 
 bool WorkerRouter::IsExcluded(const HostPort &addr, const std::vector<HostPort> &exclude) const

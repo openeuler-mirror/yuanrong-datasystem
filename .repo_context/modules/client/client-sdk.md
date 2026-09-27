@@ -925,6 +925,20 @@ handler. Clearing the Router handler synchronously excludes later callback acces
   - the admission tool executes the real `PeerUbAdmission::ReportOutcome` state-machine path and reports its state,
     epoch, recovery-probe outcome, and process CPU time; it is not a bRPC or physical-UB CPU measurement.
 
+## Worker connection failure feedback
+
+- `src/datasystem/client/object_cache/routing/broken_filter.*` isolates `K_RPC_PEER_DEAD` for five seconds immediately.
+  `K_CLIENT_WORKER_DISCONNECT` still requires 100 failures within five seconds. Ring updates preserve unexpired
+  connection isolation, while clearing `K_SCALE_DOWN` isolation and incomplete disconnect bursts through a CAS update.
+- `object_client_impl.cpp` and `routed_mode.cpp` report Create, MCreate, unsealed Publish, MSet and Get connection failures
+  through the existing `Routing::UpdateState`. The local-cache write shortcut consults the same `BrokenFilter`.
+  Failure feedback does not grant additional Create or Publish replay permission.
+- `client_worker_api/iclient_worker_api.h` exposes an optional Get ingress-status output used by `bound_mode.cpp`.
+  Downstream response failures retain their public status without being attributed to the ingress Worker.
+  An ingress session-invalid disconnect still triggers the existing re-registration and Get retry path.
+- Regression coverage lives in `tests/ut/client/{transport,bound_mode,client_worker_remote_api_reconnect}_test.cpp`,
+  `tests/ut/client/routing/*_test.cpp` and `tests/st/client/kv_cache/kv_cache_client_test.cpp`.
+
 ## Read-path transport failure handling
 
 - `K_URMA_NEED_CONNECT` (1006) means the worker no longer recognizes the client's UB connection

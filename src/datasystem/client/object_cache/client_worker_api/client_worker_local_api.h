@@ -84,7 +84,8 @@ public:
     Status DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys) override;
 
     Status PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp) override;
-    Status Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp, std::vector<RpcMessage> &payloads) override;
+    Status Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp, std::vector<RpcMessage> &payloads,
+               Status *ingressRpcStatus = nullptr) override;
     Status InvalidateBuffer(const std::string &objectKey) override;
     Status GIncreaseWorkerRef(const std::vector<std::string> &firstIncIds, std::vector<std::string> &failedObjectKeys,
                               const std::string &remoteClientId = "") override;
