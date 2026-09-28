@@ -326,6 +326,64 @@ private:
     std::string oldWorkerBinOverride_;
 };
 
+class KVCacheClientRoutingFailoverTest : public KVCacheClientQueryMetaDeadPeerTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numOBS = 1;
+        opts.numWorkers = 3;
+        opts.enableDistributedMaster = "true";
+        opts.numEtcd = 0;
+        // Mirror the established Coordinator Raft ST setup.  ExternalCluster
+        // supplies the three peer addresses and isolated Raft directories,
+        // then moves the elected leader to coordinatorConfigs[0].
+        opts.numCoordinators = 3;
+        opts.enableCoordinatorElection = true;
+        opts.isObjectCache = true;
+        opts.waitWorkerReady = true;
+        const std::string hostIp = "127.0.0.1";
+        for (uint32_t i = 0; i < opts.numWorkers; ++i) {
+            opts.workerConfigs.emplace_back(hostIp, GetFreePort());
+            workerAddress_.emplace_back(opts.workerConfigs.back().ToString());
+        }
+        opts.workerGflagParams =
+            "-shared_memory_size_mb=1024 -v=1 -log_monitor=true -max_client_num=2000 -enable_reconciliation=true "
+            "-node_timeout_s=3 -node_dead_timeout_s=30";
+        opts.coordinatorGflagParams =
+            "-v=1 -node_timeout_s=3 -node_dead_timeout_s=30 -scale_in_collect_window_ms=1000";
+    }
+
+    void GetKeysHashToWorker(uint32_t workerIndex, size_t keyCount, std::vector<std::string> &keys)
+    {
+        ClusterTopologyPb topology;
+        DS_ASSERT_OK(cluster_->ReadClusterTopology(topology));
+
+        HostPort targetWorker;
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, targetWorker));
+        std::map<uint32_t, std::string> tokenWorkers;
+        for (const auto &worker : topology.members()) {
+            for (const auto token : RebuildTopologyMemberTokens(topology, worker.first, worker.second)) {
+                tokenWorkers.emplace(token, worker.first);
+            }
+        }
+        ASSERT_FALSE(tokenWorkers.empty());
+
+        constexpr size_t kSearchLimit = 1'000'000;
+        keys.clear();
+        for (size_t candidateIndex = 0; candidateIndex < kSearchLimit && keys.size() < keyCount; ++candidateIndex) {
+            std::string key = "routing_failover_" + std::to_string(candidateIndex);
+            auto owner = tokenWorkers.lower_bound(MurmurHash3_32(key));
+            if (owner == tokenWorkers.end()) {
+                owner = tokenWorkers.begin();
+            }
+            if (owner->second == targetWorker.ToString()) {
+                keys.emplace_back(std::move(key));
+            }
+        }
+        ASSERT_EQ(keys.size(), keyCount);
+    }
+};
+
 class KVCacheClientDistributedMetaDeadPeerTest : public KVCacheClientQueryMetaDeadPeerTest,
                                                    public testing::WithParamInterface<bool> {
 public:
@@ -1593,6 +1651,175 @@ TEST_F(KVCacheClientQueryMetaDeadPeerTest, QueryMetaFastFailsAfterMetadataWorker
     ASSERT_EQ(status.GetCode(), K_RPC_PEER_DEAD) << status.ToString();
     ASSERT_NE(status.GetMsg().find("RPC peer dead"), std::string::npos) << status.ToString();
     ASSERT_LT(timer.ElapsedMilliSecond(), kFastFailMaxMs) << status.ToString();
+}
+
+TEST_F(KVCacheClientRoutingFailoverTest, SetGetTrafficSwitchesWithinFourSecondsAfterMetadataOwnerKilled)
+{
+    constexpr uint32_t kClientWorkerIndex = 0;
+    constexpr uint32_t kKilledWorkerIndex = 1;
+    constexpr int32_t kConnectTimeoutMs = 60'000;
+    constexpr int32_t kRequestTimeoutMs = 1'000;
+    constexpr size_t kKeyCount = 6'000;
+    constexpr size_t kWitnessKeysPerWorker = 1'000;
+    constexpr size_t kPrimaryKeyStart = 1 + 2 * kWitnessKeysPerWorker;
+    static_assert(kPrimaryKeyStart + 2 < kKeyCount);
+    constexpr size_t kValueSize = 10 * 1024;
+    constexpr auto kRunDuration = std::chrono::seconds(10);
+    constexpr auto kKillDelay = std::chrono::seconds(3);
+    constexpr auto kRequestInterval = std::chrono::milliseconds(5);
+    constexpr auto kMaxFailureWindow = std::chrono::seconds(4);
+
+    auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
+    ASSERT_NE(externalCluster, nullptr);
+    HostPort coordinatorAddress;
+    DS_ASSERT_OK(externalCluster->GetCoordinatorAddr(0, coordinatorAddress));
+    CoordinatorServiceDiscoveryOptions discoveryOptions;
+    discoveryOptions.serviceAddress = coordinatorAddress.ToString();
+    discoveryOptions.clusterName = GetTestClusterName();
+    discoveryOptions.affinityPolicy = ServiceAffinityPolicy::RANDOM;
+    auto serviceDiscovery = std::make_shared<CoordinatorServiceDiscovery>(discoveryOptions);
+    DS_ASSERT_OK(serviceDiscovery->Init());
+
+    ConnectOptions options;
+    InitConnectOpt(kClientWorkerIndex, options, kConnectTimeoutMs);
+    options.requestTimeoutMs = kRequestTimeoutMs;
+    options.enableLocalCache = false;
+    options.enableCrossNodeConnection = true;
+    options.dataPlacementPolicy = DataPlacementPolicy::PREFERRED_META_OWNER;
+    options.serviceDiscovery = serviceDiscovery;
+    auto client = std::make_shared<KVClient>(options);
+    DS_ASSERT_OK(client->Init());
+
+    // Bound writes make both healthy Workers observe the dead metadata owner independently.
+    std::vector<std::shared_ptr<KVClient>> witnessClients;
+    for (const auto workerIndex : { 0U, 2U }) {
+        ConnectOptions witnessOptions;
+        InitConnectOpt(workerIndex, witnessOptions, kConnectTimeoutMs);
+        witnessOptions.requestTimeoutMs = kRequestTimeoutMs;
+        witnessOptions.enableLocalCache = true;
+        witnessOptions.enableCrossNodeConnection = false;
+        auto witness = std::make_shared<KVClient>(witnessOptions);
+        DS_ASSERT_OK(witness->Init());
+        witnessClients.emplace_back(std::move(witness));
+    }
+
+    std::vector<std::string> keys;
+    GetKeysHashToWorker(kKilledWorkerIndex, kKeyCount, keys);
+    const std::string value(kValueSize, 'x');
+    SetParam setParam;
+    auto createAndSetBuffer = [&value, &setParam](const std::shared_ptr<KVClient> &targetClient,
+                                                  const std::string &key) {
+        std::shared_ptr<Buffer> buffer;
+        auto status = targetClient->Create(key, value.size(), setParam, buffer);
+        if (status.IsError()) {
+            return status;
+        }
+        status = buffer->MemoryCopy(value.data(), value.size());
+        if (status.IsError()) {
+            return status;
+        }
+        return targetClient->Set(buffer);
+    };
+    DS_ASSERT_OK(createAndSetBuffer(client, keys.front()));
+
+    std::vector<std::chrono::steady_clock::time_point> failureTimes;
+    std::vector<std::chrono::steady_clock::time_point> successTimesAfterFailure;
+    const auto start = std::chrono::steady_clock::now();
+    std::this_thread::sleep_until(start + kKillDelay);
+    DS_ASSERT_OK(cluster_->KillWorker(kKilledWorkerIndex));
+
+    // This ST's TCP Create allocates locally; inject peer-dead once to exercise routed Create feedback.
+    constexpr char kCreatePeerDeadPoint[] = "TransportLayer.Create.beforeTransport";
+    DS_ASSERT_OK(inject::Set(kCreatePeerDeadPoint, "1*return(K_RPC_PEER_DEAD)"));
+    Raii clearCreatePeerDead([&]() { (void)inject::Clear(kCreatePeerDeadPoint); });
+    std::shared_ptr<Buffer> failedBuffer;
+    const auto createFailure = client->Create(keys[kPrimaryKeyStart], value.size(), setParam, failedBuffer);
+    failureTimes.emplace_back(std::chrono::steady_clock::now());
+    ASSERT_EQ(createFailure.GetCode(), K_RPC_PEER_DEAD) << createFailure.ToString();
+    ASSERT_EQ(failedBuffer, nullptr);
+    ASSERT_EQ(inject::GetExecuteCount(kCreatePeerDeadPoint), 1U);
+    DS_ASSERT_OK(inject::Clear(kCreatePeerDeadPoint));
+
+    std::shared_ptr<Buffer> reroutedBuffer;
+    DS_ASSERT_OK(client->Create(keys[kPrimaryKeyStart + 1], value.size(), setParam, reroutedBuffer));
+    ASSERT_NE(reroutedBuffer, nullptr);
+    DS_ASSERT_OK(reroutedBuffer->MemoryCopy(value.data(), value.size()));
+    const auto reroutedSet = client->Set(reroutedBuffer);
+    failureTimes.emplace_back(std::chrono::steady_clock::now());
+    ASSERT_EQ(reroutedSet.GetCode(), K_METADATA_OWNER_UNAVAILABLE) << reroutedSet.ToString();
+
+    std::thread traffic([&]() {
+        size_t keyIndex = kPrimaryKeyStart + 2;
+        std::string previousKey = keys.front();
+        while (std::chrono::steady_clock::now() - start < kRunDuration) {
+            std::string actualValue;
+            const auto getStatus = client->Get(previousKey, actualValue);
+            const auto getDone = std::chrono::steady_clock::now();
+            const bool getSucceeded = getStatus.IsOk() && actualValue == value;
+            if (!getSucceeded) {
+                failureTimes.emplace_back(getDone);
+            } else if (!failureTimes.empty()) {
+                successTimesAfterFailure.emplace_back(getDone);
+            }
+
+            const auto &currentKey = keys[keyIndex];
+            const auto setStatus = createAndSetBuffer(client, currentKey);
+            const auto setDone = std::chrono::steady_clock::now();
+            if (setStatus.IsError()) {
+                failureTimes.emplace_back(setDone);
+            } else if (!failureTimes.empty()) {
+                successTimesAfterFailure.emplace_back(setDone);
+            }
+            if (setStatus.IsOk()) {
+                previousKey = currentKey;
+            }
+            if (++keyIndex == keys.size()) {
+                keyIndex = kPrimaryKeyStart + 2;
+            }
+            std::this_thread::sleep_for(kRequestInterval);
+        }
+    });
+
+    std::vector<size_t> witnessMetadataFailureCounts(witnessClients.size(), 0);
+    std::vector<std::thread> witnessTraffic;
+    for (size_t worker = 0; worker < witnessClients.size(); ++worker) {
+        witnessTraffic.emplace_back([&, worker]() {
+            const size_t firstKey = 1 + worker * kWitnessKeysPerWorker;
+            const size_t lastKey = firstKey + kWitnessKeysPerWorker;
+            for (size_t keyIndex = firstKey;
+                 keyIndex < lastKey && std::chrono::steady_clock::now() - start < kRunDuration; ++keyIndex) {
+                if (createAndSetBuffer(witnessClients[worker], keys[keyIndex]).GetCode()
+                    == K_METADATA_OWNER_UNAVAILABLE) {
+                    ++witnessMetadataFailureCounts[worker];
+                }
+                std::this_thread::sleep_for(kRequestInterval);
+            }
+        });
+    }
+    traffic.join();
+    for (auto &thread : witnessTraffic) {
+        thread.join();
+    }
+
+    for (size_t worker = 0; worker < witnessClients.size(); ++worker) {
+        EXPECT_GT(witnessMetadataFailureCounts[worker], 0U)
+            << "No metadata-owner failure reached healthy worker " << worker;
+    }
+    ASSERT_FALSE(failureTimes.empty()) << "No Set/Get failure was observed after killing the metadata owner";
+    const auto firstFailure = *std::min_element(failureTimes.begin(), failureTimes.end());
+    const auto lastFailure = *std::max_element(failureTimes.begin(), failureTimes.end());
+    const auto failureWindow =
+        std::chrono::duration_cast<std::chrono::milliseconds>(lastFailure - firstFailure);
+    EXPECT_LE(failureWindow.count(),
+              std::chrono::duration_cast<std::chrono::milliseconds>(kMaxFailureWindow).count())
+        << "Set/Get failures continued for more than four seconds after the first failure";
+    ASSERT_FALSE(successTimesAfterFailure.empty()) << "Traffic never recovered after the metadata owner failure";
+    const auto firstRecovered = *std::min_element(successTimesAfterFailure.begin(), successTimesAfterFailure.end());
+    const auto recoveryTime =
+        std::chrono::duration_cast<std::chrono::milliseconds>(firstRecovered - firstFailure);
+    EXPECT_LE(recoveryTime.count(),
+              std::chrono::duration_cast<std::chrono::milliseconds>(kMaxFailureWindow).count())
+        << "Set/Get traffic did not switch to a healthy worker within four seconds";
 }
 
 TEST_P(KVCacheClientDistributedMetaDeadPeerTest, OperationsFastFailAfterMetadataOwnerKilled)
