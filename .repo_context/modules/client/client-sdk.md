@@ -805,6 +805,9 @@ handler. Clearing the Router handler synchronously excludes later callback acces
     requests carry one preregistered buffer per input key. If SHM preparation fails while URMA is enabled, the client
     tries UB before degrading the whole owner group to TCP; when URMA is disabled, it degrades directly to TCP.
     Results remain positional, and absence of `data_result` means the existing replica-read phase must handle that key.
+    Worker access logs expose this two-phase flow as `DS_POSIX_QUERY_AND_GET` on the metadata owner followed by
+    `DS_POSIX_REMOTE_GET` or `DS_POSIX_REMOTE_MGET` on the selected data Worker. Same-host SHM reads continue through
+    `WorkerOCService.Get` and retain `DS_POSIX_GET`.
   - when the existing client latency trace is enabled for a request, transport-layer Get contributes
     `client.process.direct_route`, `client.rpc.direct_query_and_get`, `client.rpc.direct_get_data`, and
     `client.process.direct_materialize` to the request `latencySummary`. The two RPC-class phases are parent-thread wall
@@ -821,7 +824,8 @@ handler. Clearing the Router handler synchronously excludes later callback acces
     `QueryMeta` subscription, payload, and location-update behavior remains unchanged.
   - `tests/st/client/kv_cache/kv_client_transport_get_test.cpp` covers single-key and same-owner multi-key transport
     reads. It disables the local cache, applies the same deterministic hash rule in the SDK and worker processes, and
-    resolves the metadata owner through the real SDK `Routing` path before asserting TCP or UB data transport.
+    resolves the metadata owner through the real SDK `Routing` path before asserting TCP or UB data transport. Its
+    access-log fixture also verifies the metadata/data phase actions and early-failure recording.
   - `tests/st/client/kv_cache/kv_client_transport_set_test.cpp` covers the routed Set transaction over TCP or UB. It
     verifies successful data and metadata publication, complete transaction rerouting after a Publish-time scale-down
     or worker-not-ready response, Set and MSet rerouting from Create and Publish stages, and the rule that an ambiguous

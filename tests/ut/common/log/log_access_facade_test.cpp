@@ -142,6 +142,12 @@ TEST_F(LogAccessFacadeTest, ObjectFacadeRecordsRequestCount)
     ASSERT_EQ(GetAccessKeyType(AccessRecorderKey::DS_HETERO_CLIENT_PREREGISTERDEVICEMEMORY), AccessKeyType::CLIENT);
 }
 
+TEST_F(LogAccessFacadeTest, RemoteGetActionsUseWorkerAccessType)
+{
+    ASSERT_EQ(GetAccessKeyType(AccessRecorderKey::DS_POSIX_REMOTE_GET), AccessKeyType::ACCESS);
+    ASSERT_EQ(GetAccessKeyType(AccessRecorderKey::DS_POSIX_REMOTE_MGET), AccessKeyType::ACCESS);
+}
+
 TEST_F(LogAccessFacadeTest, ObjectFacadeWriteModeText)
 {
     EnableSampler(1.0, 1.0, 1.0);

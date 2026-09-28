@@ -30,6 +30,7 @@
 #include "tbb/parallel_for.h"
 
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
@@ -121,6 +122,62 @@ std::string GetRemoteAddressForLog(const GetObjectRemoteReqPb &req)
         return FormatString("%s:%d", req.ucp_info().remote_ip_addr().host(), req.ucp_info().remote_ip_addr().port());
     }
     return "";
+}
+
+const char *GetRemoteGetTransportName(const GetObjectRemoteReqPb &req)
+{
+    if (req.has_urma_info()) {
+        return "UB";
+    }
+    if (req.has_ucp_info()) {
+        return "RDMA";
+    }
+    return "TCP";
+}
+
+const char *GetRemoteGetTransportName(const BatchGetObjectRemoteReqPb &req)
+{
+    return req.requests_size() == 0 ? "UNKNOWN" : GetRemoteGetTransportName(req.requests(0));
+}
+
+std::string GetBatchRemoteGetObjectKeys(const BatchGetObjectRemoteReqPb &req)
+{
+    std::string objectKeys = "[";
+    uint64_t totalKeySize = 0;
+    uint64_t keyCount = 0;
+    for (const auto &request : req.requests()) {
+        if (keyCount >= LOG_TOTAL_KEYS_SIZE_LIMIT) {
+            return objectKeys.append("***,total:").append(std::to_string(req.requests_size())).append("]");
+        }
+        const auto &key = request.object_key();
+        if (totalKeySize > 0 && key.size() > LOG_OBJECT_KEY_SIZE_LIMIT - totalKeySize) {
+            return objectKeys.append("total:").append(std::to_string(req.requests_size())).append("]");
+        }
+        ++keyCount;
+        const size_t displaySize = std::min<uint64_t>(key.size(), LOG_OBJECT_KEY_SIZE_LIMIT);
+        totalKeySize = std::min<uint64_t>(totalKeySize + key.size(), LOG_OBJECT_KEY_SIZE_LIMIT);
+        objectKeys.append(key.data(), displaySize).append(",");
+    }
+    if (objectKeys.size() > 1) {
+        objectKeys.pop_back();
+    }
+    return objectKeys.append("]");
+}
+
+uint64_t GetRemoteGetDataSize(const GetObjectRemoteRspPb &rsp)
+{
+    return rsp.data_size() > 0 ? static_cast<uint64_t>(rsp.data_size()) : 0;
+}
+
+uint64_t GetBatchRemoteGetDataSize(const BatchGetObjectRemoteRspPb &rsp)
+{
+    uint64_t totalDataSize = 0;
+    for (const auto &response : rsp.responses()) {
+        if (response.error().error_code() == K_OK && response.data_size() > 0) {
+            totalDataSize += static_cast<uint64_t>(response.data_size());
+        }
+    }
+    return totalDataSize;
 }
 
 // UB data-transfer logs describe the RPC request direction (src=requester, dst=this worker), which reads
@@ -215,18 +272,33 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     GetObjectRemoteReqPb req;
     GetObjectRemoteRspPb rsp;
     std::vector<RpcMessage> payload;
+    bool wasRequestRead = false;
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_REMOTE_GET);
+    access.ObjectKeyProvider([&req] { return req.object_key(); }).DataSizeProvider([&rsp] {
+        return GetRemoteGetDataSize(rsp);
+    });
+    RemoteGetRpcExecutionContext executionContext{timer, point, wasRequestRead};
+    Status rc = ProcessGetObjectRemoteRpc(serverApi, req, rsp, payload, executionContext);
+    access.TransportType(wasRequestRead ? GetRemoteGetTransportName(req) : "UNKNOWN").Result(rc).Record();
+    return rc;
+}
+
+Status WorkerWorkerOCServiceImpl::ProcessGetObjectRemoteRpc(
+    const std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetObjectRemoteRspPb, GetObjectRemoteReqPb>> &serverApi,
+    GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload,
+    RemoteGetRpcExecutionContext &executionContext)
+{
+    auto &[timer, point, wasRequestRead] = executionContext;
     auto config = GetServerLatencyTraceConfig();
     const bool traceEnabled = ShouldCollectLatencyTrace(config);
     PerfPoint pointImpl(PerfKey::WORKER_SERVER_GET_REMOTE_READ);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "GetObjectRemote read error");
+    wasRequestRead = true;
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::DATA_REMOTEGET_START);
     }
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_IMPL);
     INJECT_POINT("worker.GetObjectRemote.afterRead");
-    // K_OC_REMOTE_GET_NOT_ENOUGH error happens only when URMA is used for RDMA and size of the object
-    // is different from the request. A provider-local UB write failure must also cross the RPC boundary so the
-    // requester can quarantine this source before its next read.
     BatchRh2dContext transportContext;
     auto getRc = ProcessSingleGetObjectRemote(req, rsp, payload, &transportContext);
     const bool providerUbFailureEncoded = TryEncodeProviderUbFailureResponse(getRc, rsp);
@@ -243,16 +315,14 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     pointImpl.Record();
     const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
-    const char *requestTransport =
-        req.has_urma_info() ? "UB" : (req.has_ucp_info() ? "RDMA" : "RPC_PAYLOAD");
-    SLOW_LOG_IF_OR_VLOG(
-        INFO, config.processSlowerThanUs > 0 && elapsedUs >= config.processSlowerThanUs, 1,
-        AppendRequesterProviderForLog(
-            FormatString("[GetObjRemote] finish, objKey: %s, reqTransport: %s, dataSrc: %d, "
-                         "payloadCnt: %zu, cost: %.3fms",
-                         req.object_key(), requestTransport, static_cast<int>(rsp.data_source()), payload.size(),
-                         elapsedMs),
-            GetRemoteAddressForLog(req), FLAGS_worker_address));
+    const char *requestTransport = req.has_urma_info() ? "UB" : (req.has_ucp_info() ? "RDMA" : "RPC_PAYLOAD");
+    SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && elapsedUs >= config.processSlowerThanUs, 1,
+                        AppendRequesterProviderForLog(
+                            FormatString("[GetObjRemote] finish, objKey: %s, reqTransport: %s, dataSrc: %d, "
+                                         "payloadCnt: %zu, cost: %.3fms",
+                                         req.object_key(), requestTransport, static_cast<int>(rsp.data_source()),
+                                         payload.size(), elapsedMs),
+                            GetRemoteAddressForLog(req), FLAGS_worker_address));
     point.Record();
     return Status::OK();
 }
@@ -1112,8 +1182,30 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     BatchGetObjectRemoteReqPb req;
     BatchGetObjectRemoteRspPb rsp;
     std::vector<RpcMessage> payload;
+    bool wasRequestRead = false;
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_REMOTE_MGET);
+    access.ObjectKeyProvider([&req] { return GetBatchRemoteGetObjectKeys(req); }).DataSizeProvider([&rsp] {
+        return GetBatchRemoteGetDataSize(rsp);
+    });
+    RemoteGetRpcExecutionContext executionContext{timer, point, wasRequestRead};
+    Status rc = ProcessBatchGetObjectRemoteRpc(serverApi, req, rsp, payload, executionContext);
+    access.Count(req.requests_size())
+        .TransportType(wasRequestRead ? GetRemoteGetTransportName(req) : "UNKNOWN")
+        .Result(rc)
+        .Record();
+    return rc;
+}
+
+Status WorkerWorkerOCServiceImpl::ProcessBatchGetObjectRemoteRpc(
+    const std::shared_ptr<
+        ::datasystem::ServerUnaryWriterReader<BatchGetObjectRemoteRspPb, BatchGetObjectRemoteReqPb>> &serverApi,
+    BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload,
+    RemoteGetRpcExecutionContext &executionContext)
+{
+    auto &[timer, point, wasRequestRead] = executionContext;
     PerfPoint pointImpl(PerfKey::WORKER_SERVER_GET_REMOTE_READ);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "GetObjectRemote read error");
+    wasRequestRead = true;
     INJECT_POINT("worker.BatchGetObjectRemote.afterRead");
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_IMPL);
     HostPort requestAddress;
