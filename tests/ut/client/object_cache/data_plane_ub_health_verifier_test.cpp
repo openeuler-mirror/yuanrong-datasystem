@@ -160,6 +160,7 @@ TEST(DataPlaneUbHealthCallbackStateTest, ConcurrentCallbacksRunOutsideLifecycleL
             hookCalls.fetch_add(1, std::memory_order_relaxed);
             hooksEntered.signal();
             releaseHooks.wait();
+            return false;
         });
     WorkerSnapshot snapshot;
     snapshot.ringVersion = 1;

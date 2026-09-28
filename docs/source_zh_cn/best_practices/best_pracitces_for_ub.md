@@ -289,15 +289,17 @@ print("[OK] Get value")
 ### 远端端口健康验证与隔离
 
 远端验证的隔离以 `QueryUbPortHealth` 返回的有效端口事实为准：全部端口 BAD 才确认隔离，任一端口 GOOD 即恢复可用性并停止待重试查询。
-CQE 错误和被动健康摘要只是验证线索，不能替代查询结果。Client 和 Worker 复用公共
+CQE 错误和被动全 BAD 健康摘要只是验证线索，不能替代查询结果。Client 已隔离某 Worker 时，若从该
+Worker 的业务响应收到相同 incarnation、非 pending 且任一端口 GOOD 的摘要，并且该事实高于当前隔离证据时，则直接解除写隔离并停止待重试查询。通常要求 health epoch 严格更高；如果 Client 已缓存相同端口计数、同 health epoch 的 pending 事实，对应的完成态摘要也可完成恢复。Client 和 Worker 复用公共
 `RemoteUbPortHealthVerifier`、既有查询线程池及总计 4 个并发槽，不新增轮询线程或查询协议。
+直接恢复仅适用于该 Client 能收到故障 Worker 业务响应的场景；若隔离后的请求不再命中该 Worker，Client 仍通过既有定时 `QueryUbPortHealth` 恢复，不会为被动摘要额外发起查询。
 
 **隔离的作用范围**：远端 Worker 的 UB 隔离只影响**写路由**（Set/MSet 不再选择该 Worker），不拦截读请求。
 Get 是否成功由 Worker 的权威判决决定：Worker 本机允许 UB 回写则正常返回，本机确认全部端口 BAD 则不提交 UB 写入，
 并按既有策略走 TCP fallback 或返回 UB 读源不可用（Client 可继续尝试其他副本）。
 只有 **Client 本机全部 UB 端口 BAD** 才会在 Client 入口直接拒绝 Get/Set（不发送 RPC）。
 隔离由探测结果驱动、异步生效：业务响应携带的全 BAD 摘要只触发端口查询，查询确认（并通过对端、incarnation 与
-health epoch 校验）后才建立/解除写隔离，生效延迟约为一次查询 RPC 往返。
+health epoch 校验）后才建立写隔离；解除写隔离可由可信查询结果或上述更新的被动恢复摘要驱动。
 
 | 状态或事件 | 调度行为 |
 | --- | --- |
@@ -306,7 +308,7 @@ health epoch 校验）后才建立/解除写隔离，生效延迟约为一次查
 | 有效全 BAD 查询结果 | 保持隔离，并按相同随机规则继续查询恢复状态 |
 | 有效 GOOD 查询结果 | 立即清除隔离；若无新的 trigger 或摘要 hint 则停止后续查询，否则按随机规则排入下一轮 |
 | 不支持查询 RPC | 当前固定等待 30s，不缩短为普通随机重试 |
-| 被动摘要 hint | 不缩短或延后已有 deadline；空闲 peer 的新全 BAD 线索立即开启验证；隔离且无 deadline 时只补排一次随机重试；查询在途时仅置 `summaryHintPending`，待本次查询完成后按随机规则排程 |
+| 被动摘要 hint | Client 隔离态收到同 incarnation、有效非全 BAD 摘要，且其 health epoch 严格更高，或为已缓存的同 epoch、相同计数 pending 事实的完成态时，立即恢复并取消已有 deadline；其他摘要不缩短或延后已有 deadline，新全 BAD 线索仅触发验证 |
 
 RPC timeout 与本地 `urma_user_ctl` 监控仍为 1s；30s 只约束下一次恢复查询的排程间隔，不是端到端恢复承诺。
 随机重试区间为 `[1000, 30000]` ms：单次恢复查询的额外等待最长为 30 秒、平均约 15.5 秒。

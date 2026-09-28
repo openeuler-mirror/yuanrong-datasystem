@@ -201,8 +201,8 @@ public:
 
     /**
      * Apply one valid aggregate port-health fact. Self admission accepts local monitor facts; remote admission accepts
-     * only QUERY_RESPONSE evidence. UNKNOWN and invalid inputs are ignored; pending self observations update the
-     * published health view without changing admission, and remote PASSIVE_SUMMARY inputs never change admission.
+     * query responses, plus newer passive recovery facts only while already isolated. UNKNOWN, invalid, pending, and
+     * remote PASSIVE_SUMMARY inputs never change remote admission.
      * Query callers must fence remote responses by the expected Worker incarnation before invoking this method.
      * @return true when a newer port-health fact was accepted.
      */
