@@ -467,6 +467,17 @@ inline void RunStreamingThread(KVClientAdapter *adapter, const Config &cfg, cons
         RunStreamingDelete(adapter, keys, startKey, range.second, result);
         return;
     }
+    if (cmd.oneOpPerThread != 0 && cmd.cmd == CMD_PREPARE_GET) {
+        (void)ProbeWarmupKeysUntilSuccess(startKey, range.second, [&](int keyIndex) {
+            const int64_t startNs = SteadyNowNs();
+            const BenchmarkOpResult op = adapter->GetWithStatus(keys[keyIndex]);
+            const int64_t endNs = SteadyNowNs();
+            result.Record(op, static_cast<double>(endNs - startNs) / BENCHMARK_NANOSECONDS_PER_MILLISECOND,
+                          startNs, endNs);
+            return op.success;
+        });
+        return;
+    }
 
     const int passLimit = cmd.oneOpPerThread != 0 ? 1 : cmd.maxPasses;
     for (int pass = 0; passLimit == 0 || pass < passLimit; ++pass) {
