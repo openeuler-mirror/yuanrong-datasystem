@@ -23,6 +23,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <future>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <string>
@@ -615,6 +616,41 @@ public:
     }
 };
 
+class KVClientTransportGetAccessLogTest : public KVClientTransportGetTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        KVClientTransportGetTest::SetClusterSetupOptions(opts);
+        opts.skipWorkerPreShutdown = false;
+        opts.workerGflagParams += " -log_monitor=true -log_monitor_interval_ms=100 -access_sample_rate=1";
+    }
+
+protected:
+    std::string GetWorkerAccessLogPath(uint32_t workerIndex) const
+    {
+        return FormatString("%s/worker%u/log/access.log", cluster_->GetRootDir(), workerIndex);
+    }
+
+    void AssertWorkerAccessLogLine(uint32_t workerIndex, const std::vector<std::string> &tokens,
+                                   size_t expectedCount = 1) const
+    {
+        const std::string path = GetWorkerAccessLogPath(workerIndex);
+        std::ifstream input(path);
+        ASSERT_TRUE(input.is_open()) << "failed to open " << path;
+        std::string line;
+        std::string content;
+        size_t actualCount = 0;
+        while (std::getline(input, line)) {
+            content.append(line).append("\n");
+            const bool isMatched = std::all_of(tokens.begin(), tokens.end(), [&line](const std::string &token) {
+                return line.find(token) != std::string::npos;
+            });
+            actualCount += isMatched ? 1 : 0;
+        }
+        ASSERT_EQ(actualCount, expectedCount) << "tokens: " << VectorToString(tokens) << "\nlog:\n" << content;
+    }
+};
+
 class KVClientTransportGetWithShmTest : public KVClientTransportGetTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -892,6 +928,69 @@ protected:
         ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
     }
 };
+
+TEST_F(KVClientTransportGetAccessLogTest, LEVEL1_RemoteDataRpcAccessLogsCoverSuccessBatchAndEarlyFailure)
+{
+    std::vector<std::string> keys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 5, "transport_remote_access_", keys);
+    ASSERT_EQ(keys.size(), 5u);
+    const std::string value(VALUE_SIZE, 'l');
+    std::shared_ptr<KVClient> dataWriter;
+    InitTestKVClient(DATA_WORKER_INDEX, dataWriter, CLIENT_TIMEOUT_MS);
+    for (const auto &key : keys) {
+        DS_ASSERT_OK(dataWriter->Set(key, value));
+    }
+
+    TransportRpcCounts beforeSingle;
+    GetRpcCounts(beforeSingle);
+    Optional<Buffer> singleBuffer;
+    DS_ASSERT_OK(reader_->Get(keys[0], singleBuffer));
+    ASSERT_TRUE(singleBuffer);
+    AssertBufferEqual(*singleBuffer, value);
+    TransportRpcCounts afterSingle;
+    GetRpcCounts(afterSingle);
+    ASSERT_EQ(afterSingle.getObjectRemote, beforeSingle.getObjectRemote + 1);
+
+    const std::vector<std::string> batchKeys{ keys[1], keys[2], keys[3] };
+    TransportRpcCounts beforeBatch;
+    GetRpcCounts(beforeBatch);
+    std::vector<Optional<Buffer>> batchBuffers;
+    DS_ASSERT_OK(reader_->Get(batchKeys, batchBuffers));
+    ASSERT_EQ(batchBuffers.size(), batchKeys.size());
+    for (auto &buffer : batchBuffers) {
+        ASSERT_TRUE(buffer);
+        AssertBufferEqual(*buffer, value);
+    }
+    TransportRpcCounts afterBatch;
+    GetRpcCounts(afterBatch);
+    ASSERT_EQ(afterBatch.batchGetObjectRemote, beforeBatch.batchGetObjectRemote + 1);
+
+    DS_ASSERT_OK(
+        cluster_->SetInjectAction(WORKER, DATA_WORKER_INDEX, PROVIDER_GET_ENTER_INJECT, "return(K_RUNTIME_ERROR)"));
+    Optional<Buffer> errorBuffer;
+    const Status errorStatus = reader_->Get(keys[4], errorBuffer);
+    ASSERT_TRUE(errorStatus.IsError());
+    ASSERT_FALSE(errorBuffer);
+
+    singleBuffer = Optional<Buffer>();
+    batchBuffers.clear();
+    dataWriter.reset();
+    reader_.reset();
+    writer_.reset();
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, DATA_WORKER_INDEX));
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, META_OWNER_INDEX));
+
+    const std::string expectedTransport = ExpectedTransport();
+    AssertWorkerAccessLogLine(META_OWNER_INDEX, { "DS_POSIX_QUERY_AND_GET", keys[0] });
+    AssertWorkerAccessLogLine(DATA_WORKER_INDEX,
+                              { "0 | DS_POSIX_REMOTE_GET |", keys[0], " | " + std::to_string(VALUE_SIZE) + " |",
+                                "transportType:" + expectedTransport });
+    AssertWorkerAccessLogLine(DATA_WORKER_INDEX, { "0 | DS_POSIX_REMOTE_MGET |", keys[1], keys[2], keys[3], "count:3",
+                                                   " | " + std::to_string(batchKeys.size() * VALUE_SIZE) + " |",
+                                                   "transportType:" + expectedTransport });
+    AssertWorkerAccessLogLine(
+        DATA_WORKER_INDEX, { std::to_string(static_cast<int>(K_RUNTIME_ERROR)) + " | DS_POSIX_REMOTE_GET |", keys[4] });
+}
 
 TEST_F(KVClientTransportGetWithAllWorkersShmTest, SameNodeMetadataOwnerHitUsesShmInline)
 {

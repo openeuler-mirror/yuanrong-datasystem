@@ -1238,11 +1238,13 @@ def _extract_trace(trace_id: str, trace: dict) -> dict:
                 transport = transport_match.group(1)
             client_summary.update(_latency_summary(text))
 
-        worker_match = re.search(r"\| \d+ \| DS_POSIX_GET \| (\d+) \|", text)
+        worker_match = re.search(r"\| \d+ \| DS_POSIX_(?:GET|REMOTE_GET|REMOTE_MGET) \| (\d+) \|", text)
         if worker_match:
             worker_us = int(worker_match.group(1))
             worker_summary.update(_latency_summary(text))
             direct_data_worker = evidence_worker
+            if "DS_POSIX_REMOTE_" in text:
+                explicit_remote = True
 
         method, fields = _rpc_fields(text)
         if method:
