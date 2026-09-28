@@ -26,7 +26,7 @@ SCHEMA_VERSION = "1.0"
 MAX_ERROR_BYTES = 1024
 
 
-class DeleteInputError(ValueError):
+class DeleteInputError(Exception):
     """Safe user-facing delete validation error."""
 
 
@@ -60,6 +60,8 @@ def _build_native_options(args, native):
     options.cluster_name = args.cluster_name
     options.etcd_address = args.etcd_address or ""
     options.coordinator_address = args.coordinator_address or ""
+    options.force = getattr(args, "force", False) or False
+    options.dry_run = getattr(args, "dry_run", False) or False
     return options
 
 
@@ -103,7 +105,11 @@ class Command(BaseCommand):
         cluster = subparsers.add_parser("cluster", allow_abbrev=False)
         _add_backend_arguments(cluster)
         cluster.add_argument("--worker_address", action="append", required=True,
-                             help="worker address to clean up, e.g. 7.218.76.39:20010")
+                             help="worker address to clean up, e.g. 192.0.2.10:20010")
+        cluster.add_argument("--force", action="store_true",
+                             help="force cleanup even if the worker appears online")
+        cluster.add_argument("--dry-run", action="store_true",
+                             help="preview which addresses would be cleaned up without making changes")
 
     def run(self, args):
         cluster_name = getattr(args, "cluster_name", "")
@@ -131,11 +137,20 @@ class Command(BaseCommand):
                     "deleted_members": deleted_members,
                 }
                 exit_code = self.SUCCESS
+            elif status == "Partial":
+                payload = {
+                    "schema_version": SCHEMA_VERSION,
+                    "cluster_name": cluster_name,
+                    "status": "Partial",
+                    "error": error,
+                    "deleted_members": deleted_members,
+                }
+                exit_code = self.FAILURE
             else:
                 payload = _failure(cluster_name, status, _safe_error(error))
         except DeleteInputError as error:
             payload = _failure(cluster_name, "Invalid parameter", _safe_error(error))
-        except (OSError, RuntimeError, UnicodeError) as error:
+        except (OSError, RuntimeError, ValueError) as error:
             payload = _failure(cluster_name, "Runtime error", _safe_error(error))
         _write_json(payload)
         return exit_code
