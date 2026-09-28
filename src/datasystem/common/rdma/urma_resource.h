@@ -193,6 +193,8 @@ public:
 
     void SetSendChipId(uint8_t chipId) { sendChipId_ = chipId; }
     uint8_t GetSendChipId() const { return sendChipId_; }
+    void SetDstChipId(uint8_t chipId) { dstChipId_ = chipId; }
+    uint8_t GetDstChipId() const { return dstChipId_; }
 
     void SetWriteChunkInfo(uint64_t chunkIndex, uint64_t chunkCount)
     {
@@ -236,6 +238,8 @@ public:
 
     void SetLocalPortId(uint16_t portId) { localPortId_ = portId; }
     uint16_t GetLocalPortId() const { return localPortId_; }
+    void SetLocalPortChipId(uint32_t chipId) { localPortChipId_ = chipId; }
+    uint32_t GetLocalPortChipId() const { return localPortChipId_; }
 
     /**
      * @brief Get the connection that owned the Jetty at request-submit time.
@@ -489,9 +493,11 @@ private:
     std::atomic<uint64_t> eventProcessingAndWaitLatencyUs_{ 0 };
     UrmaWriteTrace writeTrace_;
     std::string postSrcChipInflight_;
-    uint8_t sendChipId_{ 0 };
+    uint8_t sendChipId_{ UINT8_MAX };
+    uint8_t dstChipId_{ UINT8_MAX };
     std::atomic<int> *srcChipInflightCounter_{ nullptr };
     uint16_t localPortId_{ UINT16_MAX };
+    uint32_t localPortChipId_{ UINT32_MAX };
     bool observeGatherInflightDrain_{ false };
     Lifecycle lifecycle_{ Lifecycle::WAITING };
     std::optional<UrmaLateCompletionContext> lateCompletionContext_;

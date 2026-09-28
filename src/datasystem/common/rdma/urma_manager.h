@@ -973,7 +973,8 @@ private:
     void LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
                                     uint64_t totalElapsedUs, double totalElapsedMs, double waitElapsedMs,
                                     uint64_t wakeSchedLatencyUs, uint64_t completionObservationLatencyUs,
-                                    uint64_t eventProcessingAndWaitLatencyUs, const Status &waitRc) const;
+                                    uint64_t eventProcessingAndWaitLatencyUs, const Status &waitRc,
+                                    bool isWaitTimeout) const;
     Status CreateUrmaWaitTimeoutStatus(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
                                        double elapsedMs, const std::string &reason) const;
     Status WaitForUrmaEvent(uint64_t requestId, int64_t timeoutMs, const std::shared_ptr<UrmaEvent> &event,

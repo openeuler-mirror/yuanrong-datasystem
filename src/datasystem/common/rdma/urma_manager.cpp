@@ -28,6 +28,8 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
+#include <limits>
+#include <ostream>
 #include <unordered_map>
 #include <vector>
 
@@ -83,11 +85,51 @@ constexpr uint32_t K_URMA_POOL_EXHAUSTED_LOG_EVERY_N = 5000;
 constexpr uint32_t URMA_LOG_LIMIT_MS = 1;
 constexpr uint32_t URMA_LOG_LIMIT_US = 250;
 constexpr uint32_t URMA_WRITE_VLOG0_LIMIT_US = 200;
+constexpr uint64_t URMA_TIMEOUT_LOG_INVALID_U64 = std::numeric_limits<uint64_t>::max();
+constexpr int URMA_TIMEOUT_LOG_INVALID_CQE_STATUS = std::numeric_limits<int>::min();
+constexpr uint16_t URMA_TIMEOUT_LOG_INVALID_PORT_ID = std::numeric_limits<uint16_t>::max();
+constexpr uint32_t URMA_TIMEOUT_LOG_INVALID_PORT_CHIP_ID = std::numeric_limits<uint32_t>::max();
+constexpr int64_t URMA_TRACE_OFFSET_UNAVAILABLE = std::numeric_limits<int64_t>::min();
 constexpr size_t URMA_CHIP_INFLIGHT_TRACKED_COUNT = 10;
 constexpr size_t URMA_CHIP_INFLIGHT_LOG_BUFFER_SIZE = 320;
 constexpr uint8_t URMA_AFFINITY_SRC_CHIP_MIN = 1;
 constexpr uint8_t URMA_AFFINITY_SRC_CHIP_COUNT = 2;
 constexpr uint8_t URMA_AFFINITY_SRC_CHIP_MAX = URMA_AFFINITY_SRC_CHIP_MIN + URMA_AFFINITY_SRC_CHIP_COUNT - 1;
+
+int64_t GetTraceOffsetUs(uint64_t timestampUs, uint64_t postUs)
+{
+    if (timestampUs == URMA_TIMEOUT_LOG_INVALID_U64 || postUs == URMA_TIMEOUT_LOG_INVALID_U64) {
+        return URMA_TRACE_OFFSET_UNAVAILABLE;
+    }
+    if (timestampUs == 0 || postUs == 0) {
+        return 0;
+    }
+    if (timestampUs >= postUs) {
+        const auto offsetUs = timestampUs - postUs;
+        return offsetUs > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())
+                   ? std::numeric_limits<int64_t>::max()
+                   : static_cast<int64_t>(offsetUs);
+    }
+    const auto offsetUs = postUs - timestampUs;
+    return offsetUs > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())
+               ? std::numeric_limits<int64_t>::min()
+               : -static_cast<int64_t>(offsetUs);
+}
+
+struct ChipPath {
+    uint8_t sendChipId;
+    uint32_t portChipId;
+    uint8_t dstChipId;
+};
+
+std::ostream &operator<<(std::ostream &stream, const ChipPath &chipPath)
+{
+    stream << static_cast<uint32_t>(chipPath.sendChipId);
+    if (chipPath.portChipId != URMA_TIMEOUT_LOG_INVALID_PORT_CHIP_ID && chipPath.portChipId != chipPath.sendChipId) {
+        stream << "[" << chipPath.portChipId << "]";
+    }
+    return stream << "->" << static_cast<uint32_t>(chipPath.dstChipId);
+}
 constexpr uint64_t URMA_RECOVERY_PROBE_SEGMENT_SIZE = 4096;
 constexpr uint64_t URMA_FIRST_WRITE_CHUNK_INDEX = 1;
 constexpr uint64_t URMA_SECOND_WRITE_CHUNK_INDEX = 2;
@@ -1687,45 +1729,64 @@ UrmaManager::UrmaNumaPostConfig UrmaManager::ResolveNumaPostConfig(uint8_t trans
 void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
                                              uint64_t totalElapsedUs, double totalElapsedMs, double waitElapsedMs,
                                              uint64_t wakeSchedLatencyUs, uint64_t completionObservationLatencyUs,
-                                             uint64_t eventProcessingAndWaitLatencyUs, const Status &waitRc) const
+                                             uint64_t eventProcessingAndWaitLatencyUs, const Status &waitRc,
+                                             bool isWaitTimeout) const
 {
     auto config = GetServerLatencyTraceConfig();
-    const auto trace = event->GetWriteTrace();
-    const char *wakeSchedMetricName = "urmaWriteWakeSchedLatencyUs";
-    if (trace.writeChunkIndex == URMA_FIRST_WRITE_CHUNK_INDEX) {
-        wakeSchedMetricName = "firstUrmaWriteWakeSchedLatencyUs";
-    } else if (trace.writeChunkIndex == URMA_SECOND_WRITE_CHUNK_INDEX) {
-        wakeSchedMetricName = "secondUrmaWriteWakeSchedLatencyUs";
+    UrmaWriteTrace trace;
+    if (!isWaitTimeout) {
+        trace = event->GetWriteTrace();
+    } else {
+        trace.postUs = URMA_TIMEOUT_LOG_INVALID_U64;
+        trace.waitUs = URMA_TIMEOUT_LOG_INVALID_U64;
+        trace.pollBeginUs = URMA_TIMEOUT_LOG_INVALID_U64;
+        trace.sleepStartUs = URMA_TIMEOUT_LOG_INVALID_U64;
+        trace.sleepEndUs = URMA_TIMEOUT_LOG_INVALID_U64;
+        trace.pollEndUs = URMA_TIMEOUT_LOG_INVALID_U64;
+        trace.notifyUs = URMA_TIMEOUT_LOG_INVALID_U64;
+        trace.awakeUs = URMA_TIMEOUT_LOG_INVALID_U64;
+        trace.observedUs = URMA_TIMEOUT_LOG_INVALID_U64;
+        trace.writeChunkIndex = URMA_TIMEOUT_LOG_INVALID_U64;
+        trace.writeChunkCount = URMA_TIMEOUT_LOG_INVALID_U64;
     }
+    const auto sendChipId = event->GetSendChipId();
+    const auto dstChipId = event->GetDstChipId();
+    const auto portChipId =
+        isWaitTimeout ? URMA_TIMEOUT_LOG_INVALID_PORT_CHIP_ID : event->GetLocalPortChipId();
+    const auto portId = isWaitTimeout ? URMA_TIMEOUT_LOG_INVALID_PORT_ID : event->GetLocalPortId();
+    const ChipPath chipPath{ sendChipId, portChipId, dstChipId };
     SLOW_LOG_IF_OR_VLOG(
         INFO, (config.rpcSlowerThanUs > 0 && totalElapsedUs >= config.rpcSlowerThanUs) || FLAGS_enable_perf_trace_log,
         1,
         "[URMA_ELAPSED_TOTAL] [urma_request_id:"
             << requestId << "] urma post to completion cost: " << totalElapsedMs
-            << "ms, condition wait: " << waitElapsedMs
-            << "ms, src addr:" << localUrmaInfo_.localAddress.ToString()
-            << ", tgt addr:" << event->GetRemoteAddress() << ", dataSize:" << event->GetDataSize()
-            << ", writeChunkIdx:" << trace.writeChunkIndex << ", writeChunkCnt:" << trace.writeChunkCount
-            << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString()
-            << ", cqeStatus:" << event->GetStatusCode()
-            << ", urma_inflight_wr_cnt: " << tbbEventMap_.size()
-            << ", " << wakeSchedMetricName << ":" << wakeSchedLatencyUs
-            << ", completionObservationLatencyUs:" << completionObservationLatencyUs
-            << ", urmaEventProcessingAndWaitLatencyUs:" << eventProcessingAndWaitLatencyUs
-            << ", postSrcChipInflight:" << event->GetPostSrcChipInflight()
-            << ", sendChipId:" << static_cast<uint32_t>(event->GetSendChipId())
-            << ", port_id:" << event->GetLocalPortId()
-            << ", activeJetty:" << urmaResource_->GetActiveSendJettyCount()
-            << ", srcChipInflight:" << GetSrcChipInflightWrCountsString()
-            << ", trace_us:{post:" << trace.postUs << ", wait:" << trace.waitUs
-            << ", poll_begin:" << trace.pollBeginUs << ", sleep_start:" << trace.sleepStartUs
-            << ", sleep_end:" << trace.sleepEndUs
-            << ", poll_end:" << trace.pollEndUs << ", notify:" << trace.notifyUs << ", awake:" << trace.awakeUs
-            << ", observed:" << trace.observedUs
-            << ", waited_for_notification:" << trace.waitedForNotification
-            << ", pre_completed_before_wait:" << trace.preCompletedBeforeWait
-            << ", woken_by_previous_event:" << trace.wokenByPreviousEvent
-            << ", event_processing_and_wait_latency_valid:" << trace.eventProcessingAndWaitLatencyValid);
+            << "ms, condition_wait: " << waitElapsedMs
+            << "ms, src:" << localUrmaInfo_.localAddress.ToString()
+            << ", dst:" << event->GetRemoteAddress() << ", data_size:" << event->GetDataSize()
+            << ", write_chunk_idx:" << trace.writeChunkIndex << ", write_chunk_cnt:" << trace.writeChunkCount
+            << ", cpu_id:" << sched_getcpu() << ", status: " << waitRc.ToString()
+            << ", cqe_status:"
+            << (isWaitTimeout ? URMA_TIMEOUT_LOG_INVALID_CQE_STATUS : event->GetStatusCode())
+            << ", inflight_wr_cnt: " << tbbEventMap_.size()
+            << ", wake_delay:" << wakeSchedLatencyUs
+            << ", observe_delay:" << completionObservationLatencyUs
+            << ", chain_delay:" << eventProcessingAndWaitLatencyUs
+            << ", chip_inflight:{post:[" << event->GetPostSrcChipInflight()
+            << "],cur:[" << GetSrcChipInflightWrCountsString() << "]}"
+            << ", port_id:" << portId
+            << ", chip_id:" << chipPath
+            << ", active_jetty:" << urmaResource_->GetActiveSendJettyCount()
+            << ", trace_us:{post:" << trace.postUs << ", wait:" << GetTraceOffsetUs(trace.waitUs, trace.postUs)
+            << ", poll_begin:" << GetTraceOffsetUs(trace.pollBeginUs, trace.postUs)
+            << ", sleep_start:" << GetTraceOffsetUs(trace.sleepStartUs, trace.postUs)
+            << ", sleep_end:" << GetTraceOffsetUs(trace.sleepEndUs, trace.postUs)
+            << ", poll_end:" << GetTraceOffsetUs(trace.pollEndUs, trace.postUs)
+            << ", notify:" << GetTraceOffsetUs(trace.notifyUs, trace.postUs)
+            << ", awake:" << GetTraceOffsetUs(trace.awakeUs, trace.postUs)
+            << ", observed:" << GetTraceOffsetUs(trace.observedUs, trace.postUs)
+            << ", waited:" << trace.waitedForNotification << ", pre_ready:" << trace.preCompletedBeforeWait
+            << ", prior_wake:" << trace.wokenByPreviousEvent << ", chain_valid:"
+            << trace.eventProcessingAndWaitLatencyValid << "}");
 }
 
 Status UrmaManager::CreateUrmaWaitTimeoutStatus(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
@@ -1783,25 +1844,32 @@ Status UrmaManager::WaitForUrmaEvent(uint64_t requestId, int64_t timeoutMs,
     const auto endWaitTimeUs = waitTimer.GetEndTimeStampUs();
     constexpr double US_TO_MS = 1000.0;
     auto totalElapsedUs = endWaitTimeUs - event->GetCreateTimeUs();
-    auto wakeSchedLatencyUs = event->GetWakeSchedLatencyUs();
-    auto completionObservationLatencyUs = event->GetCompletionObservationLatencyUs();
-    auto eventProcessingAndWaitLatencyUs = event->GetEventProcessingAndWaitLatencyUs();
-    auto urmaElapsedUs = totalElapsedUs >= completionObservationLatencyUs
-                             ? totalElapsedUs - completionObservationLatencyUs
-                             : 0;
+    // UrmaEvent::WaitFor returns K_URMA_WAIT_TIMEOUT; keep K_RPC_DEADLINE_EXCEEDED for older Event paths.
+    const bool isUrmaWaitTimeout =
+        waitRc.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT || waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED;
+    uint64_t completionObservationLatencyUs = URMA_TIMEOUT_LOG_INVALID_U64;
+    uint64_t urmaElapsedUs = totalElapsedUs;
+    if (!isUrmaWaitTimeout) {
+        completionObservationLatencyUs = event->GetCompletionObservationLatencyUs();
+        urmaElapsedUs = totalElapsedUs >= completionObservationLatencyUs
+                            ? totalElapsedUs - completionObservationLatencyUs
+                            : 0;
+    }
     auto totalElapsedMs = static_cast<double>(urmaElapsedUs) / US_TO_MS;
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::URMA_WAIT_LATENCY)).Observe(totalElapsedUs);
     auto waitElapsedMs = waitTimer.ElapsedMicroSecond() / US_TO_MS;
     GetWorkerTimeCost().Append("Urma wait time.", static_cast<uint64_t>(totalElapsedMs));
-    // UrmaEvent::WaitFor returns K_URMA_WAIT_TIMEOUT; keep K_RPC_DEADLINE_EXCEEDED for older Event paths.
-    const bool isUrmaWaitTimeout =
-        waitRc.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT || waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED;
     if (isUrmaWaitTimeout) {
+        LogUrmaWaitToFinishElapsed(requestId, event, totalElapsedUs, totalElapsedMs, waitElapsedMs,
+                                   URMA_TIMEOUT_LOG_INVALID_U64, URMA_TIMEOUT_LOG_INVALID_U64,
+                                   URMA_TIMEOUT_LOG_INVALID_U64, waitRc, true);
         scheduleTimedOutLane();
         return CreateUrmaWaitTimeoutStatus(requestId, event, totalElapsedMs, waitRc.GetMsg());
     }
+    auto wakeSchedLatencyUs = event->GetWakeSchedLatencyUs();
+    auto eventProcessingAndWaitLatencyUs = event->GetEventProcessingAndWaitLatencyUs();
     LogUrmaWaitToFinishElapsed(requestId, event, totalElapsedUs, totalElapsedMs, waitElapsedMs, wakeSchedLatencyUs,
-                               completionObservationLatencyUs, eventProcessingAndWaitLatencyUs, waitRc);
+                               completionObservationLatencyUs, eventProcessingAndWaitLatencyUs, waitRc, false);
     if (event->IsFailed() && failure != nullptr) {
         const int cqeStatus = event->GetStatusCode();
         if (!failure->cqeStatus.has_value() || cqeStatus == URMA_PORT_UNAVAILABLE_STATUS) {
@@ -1982,13 +2050,17 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
             continue;
         }
 #ifdef BONDP_HAS_DATAPATH_QUERY
-        const auto portId = ds_bondp_get_cr_local_port_id(&completeRecords[i]).bs.port_idx;
+        const auto localPort = ds_bondp_get_cr_local_port_id(&completeRecords[i]);
+        const auto portId = localPort.bs.port_idx;
+        const auto portChipId = localPort.bs.chip_id;
 #else
         const auto portId = UINT8_MAX;
+        const auto portChipId = URMA_TIMEOUT_LOG_INVALID_PORT_CHIP_ID;
 #endif
         std::shared_ptr<UrmaEvent> event;
         if (GetEvent(userCtx, event).IsOk()) {
             event->SetLocalPortId(portId);
+            event->SetLocalPortChipId(portChipId);
         } else {
             LOG(INFO) << "[UrmaEventHandler] [urma_request_id:" << userCtx
                       << "] Event is missing, dropping request, port_id=" << portId;
@@ -2582,6 +2654,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         }
         event->SetWriteChunkInfo(writeChunkIndex, writeChunkCount);
         event->SetSendChipId(srcChipId);
+        event->SetDstChipId(args.dstChipId);
         laneLease->AddWr();
         urma_status_t ret;
         Timer t;
@@ -2822,9 +2895,12 @@ Status UrmaManager::UrmaWritePayloadImpl(const UrmaRemoteAddrPb &urmaInfo, const
         args.serverKey = GenerateReqId();
         args.clientKey = urmaInfo.pipeline_rh2d_req_id();
 
+        std::shared_ptr<UrmaEvent> event;
         RETURN_IF_NOT_OK(
             CreateEvent(args.serverKey, connection, laneLease, remoteAddress, readSize,
-                        UrmaEvent::OperationType::WRITE, nullptr, nullptr, nullptr, lateCompletionContext));
+                        UrmaEvent::OperationType::WRITE, nullptr, nullptr, &event, lateCompletionContext));
+        event->SetSendChipId(srcChipId);
+        event->SetDstChipId(dstChipId);
         laneLease->AddWr();
         eventKeys.emplace_back(args.serverKey);
         Status rc;
@@ -2957,12 +3033,14 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
         const uint64_t key = GenerateReqId();
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(localSegAccessor->second != nullptr, K_RUNTIME_ERROR,
                                              "Local segment is null");
-        auto createRc =
-            CreateEvent(key, connection, laneLease, remoteAddress, readSize, UrmaEvent::OperationType::READ, nullptr);
+        std::shared_ptr<UrmaEvent> event;
+        auto createRc = CreateEvent(key, connection, laneLease, remoteAddress, readSize, UrmaEvent::OperationType::READ,
+                                   nullptr, nullptr, &event);
         if (createRc.IsError()) {
             cleanupSubmittedEvents();
             return createRc;
         }
+        event->SetDstChipId(static_cast<uint8_t>(urmaInfo.chip_id()));
         laneLease->AddWr();
         urma_status_t ret = PostJettyRw(
             jetty, URMA_OPC_READ, targetJetty, remoteSegAccessor->second->Raw(), localSegAccessor->second->Raw(),
@@ -3164,9 +3242,12 @@ Status UrmaManager::CreateGatherWriteEvent(
     bondpWr.src_chip_id = numaConfig.srcChipId;
     bondpWr.dst_chip_id = dstChipId;
     context.transmittedSrcChipIds[dstSgeIdx] = transmittedSrcChipId;
+    std::shared_ptr<UrmaEvent> event;
     RETURN_IF_NOT_OK(CreateEvent(requestId, context.connection, context.laneLease, context.remoteAddress, writeSize,
-                                 UrmaEvent::OperationType::WRITE, numaConfig.inflightCounter, nullptr, nullptr,
+                                 UrmaEvent::OperationType::WRITE, numaConfig.inflightCounter, nullptr, &event,
                                  lateCompletionContext, true));
+    event->SetSendChipId(numaConfig.srcChipId);
+    event->SetDstChipId(dstChipId);
     context.laneLease->AddWr();
     context.createdEventKeys.emplace_back(requestId);
     if (dstSgeIdx > 0) {
