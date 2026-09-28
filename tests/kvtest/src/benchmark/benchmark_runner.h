@@ -35,6 +35,20 @@ int64_t CalcRoundCleanupWaitMs(int configuredWaitMs, int64_t maxDurationMs, int6
 std::string MakeBenchKey(int instanceId, int round, int index);
 std::pair<int, int> ThreadKeyRange(int totalKeys, int numThreads, int threadId);
 
+/** @brief Probe a thread's warmup partition until one key succeeds or all candidates fail. */
+template <typename Probe>
+inline int ProbeWarmupKeysUntilSuccess(int startKey, int numKeys, Probe &&probe)
+{
+    int attempted = 0;
+    for (int i = 0; i < numKeys; ++i) {
+        ++attempted;
+        if (probe(startKey + i)) {
+            break;
+        }
+    }
+    return attempted;
+}
+
 // Per-phase result with per-request latency tracking
 struct PhaseResult {
     int successCount = 0;

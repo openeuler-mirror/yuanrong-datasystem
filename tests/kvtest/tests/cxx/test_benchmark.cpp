@@ -137,6 +137,21 @@ TEST(ThreadKeyRange_MoreThreadsThanKeys) {
     ASSERT_EQ(r3.second, 0);
 }
 
+TEST(ProbeWarmupKeysUntilSuccess_SkipsUnreadableKeys) {
+    std::vector<int> probedKeys;
+    int attempts = ProbeWarmupKeysUntilSuccess(10, 5, [&](int key) {
+        probedKeys.push_back(key);
+        return key == 12;
+    });
+    ASSERT_EQ(attempts, 3);
+    ASSERT_EQ(probedKeys, std::vector<int>({10, 11, 12}));
+}
+
+TEST(ProbeWarmupKeysUntilSuccess_StopsAfterPartitionIsExhausted) {
+    int attempts = ProbeWarmupKeysUntilSuccess(20, 4, [](int) { return false; });
+    ASSERT_EQ(attempts, 4);
+}
+
 #include "stubs/kv_client_stub.h"
 
 // --- PhaseResult tests ---
