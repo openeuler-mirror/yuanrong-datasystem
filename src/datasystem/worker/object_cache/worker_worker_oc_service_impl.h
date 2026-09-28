@@ -214,6 +214,24 @@ private:
     Status ProcessSingleGetObjectRemote(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                         std::vector<RpcMessage> &payload, BatchRh2dContext *transportContext);
 
+    struct RemoteGetRpcExecutionContext {
+        Timer &timer;
+        PerfPoint &point;
+        bool &wasRequestRead;
+    };
+
+    Status ProcessGetObjectRemoteRpc(
+        const std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetObjectRemoteRspPb, GetObjectRemoteReqPb>>
+            &serverApi,
+        GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload,
+        RemoteGetRpcExecutionContext &executionContext);
+
+    Status ProcessBatchGetObjectRemoteRpc(
+        const std::shared_ptr<
+            ::datasystem::ServerUnaryWriterReader<BatchGetObjectRemoteRspPb, BatchGetObjectRemoteReqPb>> &serverApi,
+        BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload,
+        RemoteGetRpcExecutionContext &executionContext);
+
     Status PrepareSingleGetObjectRemoteReq(const GetObjectRemoteReqPb &req,
                                            BatchRh2dContext &transportContext);
 

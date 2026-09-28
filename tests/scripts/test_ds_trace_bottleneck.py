@@ -144,6 +144,35 @@ def urma_event(timestamp: str, worker: str, cost_ms: float, request_id: str) -> 
     }
 
 
+@pytest.mark.parametrize("action", ["DS_POSIX_REMOTE_GET", "DS_POSIX_REMOTE_MGET"])
+def test_remote_get_access_action_identifies_data_worker(action: str):
+    module = load_module()
+    item = trace(
+        "remote-access-trace",
+        client_ms=12,
+        worker_ms=0,
+        timestamp="",
+    )
+    item["evidence"].append(
+        {
+            "source": "worker-access.log",
+            "member": "remote-access-trace",
+            "line": 2,
+            "worker": "data-worker-b",
+            "host_ip": "",
+            "text": (
+                "traceId: remote-access-trace | "
+                f"0 | {action} | 7000 | 131072 | {{transportType:TCP}} |"
+            ),
+        }
+    )
+
+    row = module._extract_trace("remote-access-trace", item)
+
+    assert row["direct_data_worker"] == "data-worker-b"
+    assert row["worker_ms"] == 7
+
+
 def chunked_urma_event(
     timestamp: str,
     worker: str,
