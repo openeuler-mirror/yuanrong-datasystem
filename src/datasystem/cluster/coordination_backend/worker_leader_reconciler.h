@@ -15,6 +15,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -32,7 +33,8 @@ namespace datasystem::cluster {
 class WorkerLeaderReconciler final {
 public:
     WorkerLeaderReconciler(ICoordinatorServiceProxy &proxy, DsCoordinationBackend &backend,
-                           TopologyRecoveryReporter &reporter, std::string clusterName);
+                           TopologyRecoveryReporter &reporter, std::string clusterName,
+                           std::function<void()> rejoinCompleted = {});
     ~WorkerLeaderReconciler();
 
     Status Init();
@@ -83,6 +85,7 @@ private:
     DsCoordinationBackend &backend_;
     TopologyRecoveryReporter &reporter_;
     const std::string clusterName_;
+    const std::function<void()> rejoinCompleted_;
     std::mutex mutex_;
     std::mutex ensureMutex_;
     std::condition_variable retryCv_;

@@ -236,11 +236,24 @@ Status WorkerOcServiceMigrateImpl::CloseIncomingMigrationAdmissionAndWait(
     return Status::OK();
 }
 
+void WorkerOcServiceMigrateImpl::ReopenIncomingMigrationAdmissionAfterRejoin(
+    const std::atomic<bool> &scaleInDataDrainStarted, const std::atomic<bool> &shutdownRequested)
+{
+    std::lock_guard<std::mutex> lock(incomingMigrationMutex_);
+    const bool localExiting = exitRequested_ != nullptr && exitRequested_->load(std::memory_order_acquire);
+    if (localExiting || shutdownRequested.load(std::memory_order_acquire)
+        || scaleInDataDrainStarted.load(std::memory_order_acquire) || incomingMigrationCount_ != 0) {
+        return;
+    }
+    incomingMigrationDrainTimedOut_.store(false, std::memory_order_release);
+    incomingMigrationAdmissionClosed_.store(false, std::memory_order_release);
+}
+
 Status WorkerOcServiceMigrateImpl::PauseIncomingMigrationAdmissionAndCheckDrained()
 {
     std::lock_guard<std::mutex> lock(incomingMigrationMutex_);
     CHECK_FAIL_RETURN_STATUS(!incomingMigrationAdmissionClosed_, StatusCode::K_NOT_READY,
-                             "Incoming migration admission is permanently closed");
+                             "Incoming migration admission is closed");
     incomingMigrationAdmissionPaused_ = true;
     INJECT_POINT_NO_RETURN("WorkerOcServiceMigrateImpl.PauseIncomingMigrationAdmissionAndCheckDrained.afterPaused");
     RETURN_OK_IF_TRUE(incomingMigrationCount_ == 0);

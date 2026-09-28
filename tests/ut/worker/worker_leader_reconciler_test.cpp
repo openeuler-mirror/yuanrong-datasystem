@@ -13,6 +13,7 @@
 
 #include "datasystem/cluster/coordination_backend/worker_leader_reconciler.h"
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
@@ -418,7 +419,9 @@ TEST(WorkerLeaderReconcilerTest, RouteChangeDuringRecreateGateRetriesWithLatestI
         proxy, kClusterName, kWorkerAddress,
         [](uint64_t &, std::string &) { return Status(K_NOT_FOUND, "no snapshot"); }, ReporterOptions());
     proxy.routes_.Set(Identity(OLD_LEADER_TERM, OLD_ROUTE_EPOCH));
-    WorkerLeaderReconciler reconciler(proxy, backend, reporter, kClusterName);
+    std::atomic<size_t> rejoinCompletions{ 0 };
+    WorkerLeaderReconciler reconciler(proxy, backend, reporter, kClusterName,
+                                     [&rejoinCompletions] { ++rejoinCompletions; });
     DS_ASSERT_OK(reconciler.Init());
     ASSERT_TRUE(backend.InitKeepAlive("/datasystem/cluster/cluster-a", kWorkerAddress, false, true).IsOk());
     std::mutex gateMutex;
@@ -454,9 +457,11 @@ TEST(WorkerLeaderReconcilerTest, RouteChangeDuringRecreateGateRetriesWithLatestI
         [&reconciler](const CoordinatorLeaderIdentity &current) { reconciler.OnLeaderChanged(current); }));
 
     ASSERT_TRUE(proxy.WaitForEnsures(1));
+    ASSERT_TRUE(proxy.WaitForMembershipState(MemberLifecycleState::READY));
     EXPECT_EQ(proxy.EnsureAt(0).leader_term(), NEW_LEADER_TERM);
     EXPECT_EQ(proxy.ReportCount(), 0UL);
     reconciler.Shutdown();
+    EXPECT_EQ(rejoinCompletions.load(), 1UL);
     EXPECT_TRUE(reporter.Shutdown().IsOk());
     EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
 }
@@ -543,11 +548,14 @@ TEST(WorkerLeaderReconcilerTest, AsyncRejoinCompletesMembershipReadyAfterEnsure)
                                       ReporterOptions());
     reporter.NotifyRecoveryParticipationReady();
     proxy.routes_.Set(Identity(9, 2));
-    WorkerLeaderReconciler reconciler(proxy, backend, reporter, kClusterName);
+    std::atomic<size_t> rejoinCompletions{ 0 };
+    WorkerLeaderReconciler reconciler(proxy, backend, reporter, kClusterName,
+                                     [&rejoinCompletions] { ++rejoinCompletions; });
     DS_ASSERT_OK(reconciler.Init());
     ASSERT_TRUE(proxy.WaitForEnsures(1));
     ASSERT_TRUE(proxy.WaitForReports(1));
 
+    EXPECT_EQ(rejoinCompletions.load(), 0UL);
     proxy.FailMembershipPuts();
     ASSERT_TRUE(reconciler.Rejoin().IsOk());
 
@@ -555,6 +563,7 @@ TEST(WorkerLeaderReconcilerTest, AsyncRejoinCompletesMembershipReadyAfterEnsure)
     ASSERT_TRUE(proxy.WaitForMembershipState(MemberLifecycleState::READY));
 
     reconciler.Shutdown();
+    EXPECT_EQ(rejoinCompletions.load(), 1UL);
     EXPECT_TRUE(reporter.Shutdown().IsOk());
     EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
 }
@@ -568,7 +577,9 @@ TEST(WorkerLeaderReconcilerTest, InflightReconcileDefersQueuedRejoinCleanupToRes
                                       [](uint64_t &, std::string &) { return Status(K_NOT_FOUND, "no snapshot"); },
                                       ReporterOptions());
     reporter.NotifyRecoveryParticipationReady();
-    WorkerLeaderReconciler reconciler(proxy, backend, reporter, kClusterName);
+    std::atomic<size_t> rejoinCompletions{ 0 };
+    WorkerLeaderReconciler reconciler(proxy, backend, reporter, kClusterName,
+                                     [&rejoinCompletions] { ++rejoinCompletions; });
     DS_ASSERT_OK(reconciler.Init());
     DS_ASSERT_OK(proxy.SetLeaderChangeHandler({}));
     proxy.routes_.Set(Identity(9, 2));
@@ -605,6 +616,7 @@ TEST(WorkerLeaderReconcilerTest, InflightReconcileDefersQueuedRejoinCleanupToRes
     // The drained Reconcile pass completed without the gate and without a RESTARTING payload; only the queued Rejoin
     // round entered the destructive gate, and it blocks before publishing its Ensure.
     ASSERT_EQ(proxy.EnsureCount(), 1UL);
+    EXPECT_EQ(rejoinCompletions.load(), 0UL);
     MembershipValue payload;
     ASSERT_TRUE(MembershipValueCodec::Decode(proxy.EnsureAt(0).membership_value(), payload).IsOk());
     EXPECT_NE(payload.lifecycleState, MemberLifecycleState::RESTARTING);
@@ -624,6 +636,7 @@ TEST(WorkerLeaderReconcilerTest, InflightReconcileDefersQueuedRejoinCleanupToRes
     }
 
     reconciler.Shutdown();
+    EXPECT_EQ(rejoinCompletions.load(), 1UL);
     EXPECT_TRUE(reporter.Shutdown().IsOk());
     EXPECT_TRUE(backend.ShutdownEventSources().IsOk());
 }

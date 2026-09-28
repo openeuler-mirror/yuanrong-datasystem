@@ -185,6 +185,7 @@ struct TopologyEngine::Builder::Config {
     std::function<Status(WorkerProbeRequest)> workerProbeHandler;
     std::function<void(TopologyAvailabilityLevel)> availabilityHandler;
     std::function<Status()> membershipRecreateGate;
+    std::function<void()> membershipRejoinCompletedHandler;
     std::function<Status(const std::map<std::string, int64_t> &, RestartEffectMode)> membershipRestartHandler;
     std::function<void(std::shared_ptr<const TopologySnapshot>)> snapshotPublishedHandler;
     std::chrono::seconds nodeDeadTimeout{ TopologyControllerOptions{}.nodeDeadTimeout };
@@ -297,6 +298,14 @@ TopologyEngine::Builder &TopologyEngine::Builder::SetMembershipRecreateGate(std:
 {
     if (config_ != nullptr) {
         config_->membershipRecreateGate = std::move(gate);
+    }
+    return *this;
+}
+
+TopologyEngine::Builder &TopologyEngine::Builder::SetMembershipRejoinCompletedHandler(std::function<void()> handler)
+{
+    if (config_ != nullptr) {
+        config_->membershipRejoinCompletedHandler = std::move(handler);
     }
     return *this;
 }
@@ -477,6 +486,7 @@ TopologyEngine::RuntimeOptions TopologyEngine::ConsumeRuntimeOptions(Builder::Co
     options.peerTopologyRefresh = std::move(config.peerTopologyRefresh);
     options.workerProbeHandler = std::move(config.workerProbeHandler);
     options.availabilityHandler = std::move(config.availabilityHandler);
+    options.membershipRejoinCompletedHandler = std::move(config.membershipRejoinCompletedHandler);
     options.snapshotPublishedHandler = std::move(config.snapshotPublishedHandler);
     return options;
 }
@@ -561,7 +571,8 @@ Status TopologyEngine::InitializeCoordinatorComponents()
         [this](uint64_t &version, std::string &canonical) { return GetRecoveryTopology(version, canonical); });
     auto *member = static_cast<DsCoordinationBackend *>(memberBackend_.get());
     workerLeaderReconciler_ = std::make_unique<WorkerLeaderReconciler>(
-        *coordinatorProxy_, *member, *recoveryReporter_, options_.clusterName);
+        *coordinatorProxy_, *member, *recoveryReporter_, options_.clusterName,
+        options_.membershipRejoinCompletedHandler);
     RETURN_IF_NOT_OK(workerLeaderReconciler_->Init());
     member->SetMembershipReconcileHandler(
         [this](bool waitForCompletion) { return workerLeaderReconciler_->Reconcile(waitForCompletion); });

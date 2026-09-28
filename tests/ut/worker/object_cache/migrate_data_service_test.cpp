@@ -769,12 +769,60 @@ TEST_F(MigrateDataServiceTest, DirectMigrationHoldsAdmissionUntilRequestReturns)
     });
 }
 
+TEST_F(MigrateDataServiceTest, RejoinReopenPreservesEvictionPause)
+{
+    std::atomic<bool> scaleInStarted{ false };
+    std::atomic<bool> shutdownRequested{ false };
+    DS_ASSERT_OK(impl_->PauseIncomingMigrationAdmissionAndCheckDrained());
+    DS_ASSERT_OK(impl_->CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::now()));
+
+    impl_->ReopenIncomingMigrationAdmissionAfterRejoin(scaleInStarted, shutdownRequested);
+    EXPECT_FALSE(impl_->IsIncomingMigrationAdmissionClosed());
+    EXPECT_EQ(impl_->AcquireIncomingMigrationAdmission().GetCode(), StatusCode::K_NOT_READY);
+
+    impl_->ResumeIncomingMigrationAdmission();
+    DS_ASSERT_OK(impl_->AcquireIncomingMigrationAdmission());
+    impl_->ReleaseIncomingMigrationAdmission();
+}
+
+TEST_F(MigrateDataServiceTest, RejoinReopenRespectsScaleInShutdownAndExit)
+{
+    std::atomic<bool> scaleInStarted{ true };
+    std::atomic<bool> shutdownRequested{ false };
+    DS_ASSERT_OK(impl_->CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::now()));
+
+    impl_->ReopenIncomingMigrationAdmissionAfterRejoin(scaleInStarted, shutdownRequested);
+    EXPECT_TRUE(impl_->IsIncomingMigrationAdmissionClosed());
+
+    scaleInStarted.store(false);
+    shutdownRequested.store(true);
+    impl_->ReopenIncomingMigrationAdmissionAfterRejoin(scaleInStarted, shutdownRequested);
+    EXPECT_TRUE(impl_->IsIncomingMigrationAdmissionClosed());
+
+    shutdownRequested.store(false);
+    localExiting_.store(true);
+    impl_->ReopenIncomingMigrationAdmissionAfterRejoin(scaleInStarted, shutdownRequested);
+    EXPECT_TRUE(impl_->IsIncomingMigrationAdmissionClosed());
+}
+
 TEST_F(MigrateDataServiceTest, CloseMigrationAdmissionReturnsDeadlineExceeded)
 {
     DS_ASSERT_OK(impl_->AcquireIncomingMigrationAdmission());
     const auto rc = impl_->CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::now());
     EXPECT_EQ(rc.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
     EXPECT_EQ(impl_->AcquireIncomingMigrationAdmission().GetCode(), StatusCode::K_NOT_READY);
+
+    std::atomic<bool> scaleInStarted{ false };
+    std::atomic<bool> shutdownRequested{ false };
+    impl_->ReopenIncomingMigrationAdmissionAfterRejoin(scaleInStarted, shutdownRequested);
+    EXPECT_TRUE(impl_->IsIncomingMigrationAdmissionClosed());
+    EXPECT_TRUE(impl_->IsIncomingMigrationDrainTimedOut());
+
+    impl_->ReleaseIncomingMigrationAdmission();
+    DS_ASSERT_OK(impl_->CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::now()));
+    impl_->ReopenIncomingMigrationAdmissionAfterRejoin(scaleInStarted, shutdownRequested);
+    EXPECT_FALSE(impl_->IsIncomingMigrationDrainTimedOut());
+    DS_ASSERT_OK(impl_->AcquireIncomingMigrationAdmission());
     impl_->ReleaseIncomingMigrationAdmission();
 }
 
