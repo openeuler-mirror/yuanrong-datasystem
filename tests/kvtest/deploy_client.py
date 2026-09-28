@@ -1840,8 +1840,9 @@ def _add_gen_config_args(p):
                    help='Total Pipeline read and write threads (default: 16); '
                         'read threads equal this value minus --num-threads')
     p.add_argument('--cleanup-method', default='del',
-                   choices=['del', 'ttl'],
-                   help='Cleanup method: del (delete keys) or ttl (auto-expire, default: del)')
+                   choices=['del', 'ttl', 'none'],
+                   help='Cleanup method: del, ttl, or none for continuous Set overwrite with final delete '
+                        '(default: del)')
     # Cache mode
     p.add_argument('--key-pool-size', type=int, default=0,
                    help='Cache mode key pool size (0 = disabled)')

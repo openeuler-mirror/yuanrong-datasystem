@@ -216,6 +216,10 @@ LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH ./kvtest config/bench.json
 
 **Set API：** `string_view`（直接写入）/ `create_buffer`（SHM Buffer + latch）/ `create_buffer_raw`（SHM Buffer，无锁 memcpy）
 
+`cleanup_method: "none"` 仅用于 `set_local` / `set_remote` 持续覆盖实验。kvtest 会先用固定 key 集填充
+`worker_memory_mb × 80%` 的工作集，再持续对相同 key 执行真实的 `Create → Set(buffer)`，测量期间不调用
+Delete。例如 128GiB Worker、8MiB 对象会使用 13,107 个 key，常驻约 102.4GiB；测量结束后统一删除。
+
 **输出：** 上述四种单接口模式生成 `benchmark_phases.csv`（聚合接口指标）和
 `benchmark_clients.csv`（Client 偏斜诊断）；聚合 CSV 是性能结论的唯一口径。
 
