@@ -104,6 +104,13 @@
   Coordinator-side membership loss only re-ensures the current Worker payload and does not publish `RESTARTING` or run
   the local rejoin cleanup. Only `TopologyEngine` confirmation that the local Worker must rejoin uses the explicit
   destructive rejoin path. This keeps a new Coordinator lifetime from being mistaken for a new Worker incarnation.
+  Successful rejoin reopens incoming migration admission synchronously after the READY write under the reconciler's
+  ensure lock. Failed attempts keep admission closed; retries rerun cleanup and preserve rejoin across Leader changes.
+  Existing exit, shutdown and scale-in drain state prevent reopening, while eviction-policy pauses remain independent.
+  `CoordinatorRejoinMigrationTest.RejoinedWorkerAcceptsIncomingMigration` isolates a live Worker, observes admission
+  cleanup, and checks migration after that same PID rejoins. It then scales down the other Worker and verifies both
+  migrated object locations and payloads on the survivor after the source exits. The case is in
+  `ds_st_coordinator_backend_manual`; its gtest name includes the `LEVEL1_` prefix.
   A successful local reconciliation-to-READY write also replaces the local renewal payload and its modification
   revision before later Ensure/keepalive activity can replay it. Ensure payload capture and returned-revision
   installation use short mutation-lock sections around a lock-free remote RPC; revision ordering plus bounded

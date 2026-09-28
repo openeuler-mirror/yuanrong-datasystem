@@ -160,6 +160,7 @@ public:
          * @return This Builder.
          */
         Builder &SetMembershipRecreateGate(std::function<Status()> gate);
+        Builder &SetMembershipRejoinCompletedHandler(std::function<void()> handler);
 
         /**
          * @brief Register the existing member-restart cleanup sink.
@@ -429,6 +430,7 @@ private:
         PeerTopologyRefresh peerTopologyRefresh;
         std::function<Status(WorkerProbeRequest)> workerProbeHandler;
         std::function<void(TopologyAvailabilityLevel)> availabilityHandler;
+        std::function<void()> membershipRejoinCompletedHandler;
         std::function<void(std::shared_ptr<const TopologySnapshot>)> snapshotPublishedHandler;
         TopologyTaskExecutorOptions executor;
     };
