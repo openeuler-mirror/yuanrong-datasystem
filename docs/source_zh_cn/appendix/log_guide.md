@@ -199,6 +199,18 @@ access log 中的 `logSampled:true` 表示该请求的 INFO 日志可见（reque
 
 默认值均为 `1.0`（全量保留）。
 
+### 关闭本地缓存时的 Get 链路
+
+当 `enableLocalCache=false` 时，Worker access 日志使用不同 action 区分元数据查询和数据拉取阶段：
+
+- `DS_POSIX_QUERY_AND_GET`：metadata owner 查询元数据，并尝试返回内联数据。
+- `DS_POSIX_REMOTE_GET`：选中的 data worker 处理单对象远端拉取。
+- `DS_POSIX_REMOTE_MGET`：选中的 data worker 处理同一批次的多对象远端拉取。
+
+如果 `QueryAndGet` 没有返回 `data_result`，可使用同一 traceID 关联后续的 `REMOTE_GET` 或 `REMOTE_MGET`。
+同机共享内存读取仍进入 `WorkerOCService.Get`，对应 `DS_POSIX_GET`。
+`transportType` 表示请求携带的传输类型；请求未完成读取时记录 `UNKNOWN`。
+
 ### 开发约定：数据面流程与限频宏
 
 - **数据面请求流程内不得使用 EVERY 家族限频宏**。限频条件与日志采样是串联关系：实际输出频率 = 限频比例 × 采样率，会远低于采样预期。

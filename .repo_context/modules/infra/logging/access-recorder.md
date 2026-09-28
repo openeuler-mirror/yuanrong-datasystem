@@ -67,6 +67,8 @@
 - Verified key families in `access_point.def`:
   - client-facing KV/Object/Stream/Hetero operations
   - worker-side POSIX/object/stream operations
+  - routed Get metadata and data phases: `DS_POSIX_QUERY_AND_GET`, `DS_POSIX_REMOTE_GET`, and
+    `DS_POSIX_REMOTE_MGET`
   - ETCD outbound operations
 - Review implication:
   - adding a new externally meaningful operation without a matching key often leaves observability incomplete even when functionality works.
@@ -98,6 +100,8 @@
   - add new keys in a way that preserves meaning for existing log consumers;
   - review downstream dashboards, parsers, or runbooks before changing record fields or ordering;
   - keep `Record()` coverage on success and error paths to avoid silent observability gaps.
+  - record remote data reads at the outer RPC entry only; internal overloads must not emit a second access record for
+    the same request.
 
 ## Verification Hints
 
