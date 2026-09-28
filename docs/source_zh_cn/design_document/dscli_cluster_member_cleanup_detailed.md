@@ -136,7 +136,14 @@ classDiagram
         -InitCoordinator() Status
         -DeleteClusterMembersEtcd(addresses, results) Status
         -DeleteClusterMembersCoordinator(addresses, results) Status
-        -UpdateTopologyRemoveMembers(addresses, results) Status
+        -CheckMemberAbsentEtcd(address, absent) Status
+        -CheckMemberAbsentCoordinator(address, absent) Status
+        -DeletePerAddressKeysEtcd(addresses, results) Status
+        -DeletePerAddressKeysCoordinator(addresses, results) Status
+        -DeleteClusterMembersEtcd(addresses, results) Status
+        -DeleteClusterMembersCoordinator(addresses, results) Status
+        -ReadTopologyEtcd(value) Status
+        -ReadTopologyCoordinator(value) Status
     }
     class DeleteClusterMemberResult {
         +string address
@@ -219,7 +226,7 @@ sequenceDiagram
     Etcd-->>Client: committed or CONFLICT
 
     alt CONFLICT
-        Client->>Client: 重试 最多5次 随机sleep 0-10ms
+        Client->>Client: 重试 etcd最多10次 coordinator最多16次 随机sleep 0-200ms
         Client->>Etcd: CAS 重试
     end
 
@@ -268,7 +275,7 @@ sequenceDiagram
 | 错误码 | 含义 | CLI 处理 |
 |---|---|---|
 | `K_NOT_FOUND` | per-address key 不存在（lease 过期已删 / 从未注册） | 记录 `deleted=false`，继续下一个，不中断 |
-| `K_TRY_AGAIN` | topologyTable CAS 版本冲突 | 重试（最多 5 次） |
+| `K_TRY_AGAIN` | topologyTable CAS 版本冲突 | etcd 路径由 `EtcdStore::CAS` 重试（最多 10 次），Coordinator 路径由 `CoordinatorServiceProxyBase::CAS` 重试（最多 16 次），随机 sleep 0-200ms |
 | `K_RPC_UNAVAILABLE` | 协调后端不可达 | 整体失败，返回 JSON 错误 |
 | `K_NOT_READY` | Coordinator 未初始化 / lease 未建立 | 整体失败，返回 JSON 错误 |
 
@@ -349,7 +356,9 @@ struct DeleteClusterMemberResult {
 | `--etcd_address` | string | 无 | etcd/metastore 后端地址，互斥于 `--coordinator_address` |
 | `--coordinator_address` | string | 无 | Coordinator 后端地址，互斥于 `--etcd_address` |
 | `--cluster_name` | string | "" | 控制拓扑 key 前缀，默认 "" 对应 `/datasystem/...` |
-| `--worker_address` | string（可重复） | 无（必填） | 要清理的 worker 地址，如 `7.218.76.39:20010` |
+| `--worker_address` | string（可重复） | 无（必填） | 要清理的 worker 地址，如 `192.0.2.10:20010` |
+| `--force` | bool | false | 强制清理仍在线的 worker（默认拒绝在线 worker，避免触发破坏性 rejoin） |
+| `--dry-run` | bool | false | 预览将要清理的 address 而不执行实际删除 |
 
 ### §5.3 环境变量
 
@@ -367,17 +376,21 @@ struct DeleteClusterMemberResult {
 | C4 | topologyTable members 变空时必须删除 key，不能写空 protobuf | 下个 worker 启动时 controller 需要检测到 key 不存在才能走 `BuildBootstrap` 重建拓扑 |
 | C5 | `--worker_address` 必须通过 `TopologyKeyHelper::ValidateAddress` 校验 | 非法 address 会构造出错误的 etcd key，可能误删其它数据 |
 | C6 | cluster_name 隔离必须通过 `TopologyKeyHelper` 构造 key | 直接拼字符串可能跨集群误删 |
+| C7 | 默认拒绝清理仍在线的 worker（membership key 存在），必须显式 `--force` 才允许 | 对在线 worker 删 membership key 会触发 worker rejoin（关闭迁移准入、清本地 metadata），Coordinator 后端还会被 worker 自动重建 membership key 导致清理失效 |
+| C8 | topologyTable 序列化/反序列化必须走 `TopologyRepositoryCodec` | 自行 `SerializeToString` 会产生非确定性字节，与 controller 的 CAS 字节比较冲突，导致 controller 收到 K_INVALID 并进入 controlFrozen 退避 |
 
 ### 风险
 
 | # | 风险 | 缓解 |
 |---|---|---|
-| R1 | CLI CAS 和 controller CAS 竞争导致饥饿 | 最多 5 次重试 + 随机 sleep 0-10ms，与 `EtcdStore::CAS` 的 `CAS_ERROR_MAX_RETRY_NUM` 一致 |
+| R1 | CLI CAS 和 controller CAS 竞争导致饥饿 | 重试由 `EtcdStore::CAS`（最多 10 次）与 `CoordinatorServiceProxyBase::CAS`（最多 16 次）承担，随机 sleep 0-200ms |
 | R2 | CLI 在删 per-address key 后、CAS topologyTable 前崩溃 | eventual consistent：membership key 已删 → lease 不再续约 → 60s 后 controller 自动确认缺席 → 300s 后清理 topologyTable |
 | R3 | DaemonSet 地址复用导致新 worker 在 CLI 操作期间启动 | CLI 操作幂等：key 删除后新 worker 用新 lease 重建，topologyTable CAS 后 controller 通过 watch 事件感知 |
 | R4 | tasks 残留 | janitor 在下一周期（默认几十秒）自动清理，不需要 CLI 等待 |
 | R5 | 删错 address | `--worker_address` 指定的 address 如果不在 topologyTable 的 members 里，CAS processFunc 发现 erase 0 个 member → 不写回 → 输出 `topology_member_removed=false`，用户可审计 |
 | R6 | Coordinator `DeleteRange` 的 fence | CLI 不传 `expectedCoordinatorId`/`expectedModRevision`（置零禁用 fence），因为 CLI 不是 membership incarnation 持有者 |
+| R7 | 误对在线 worker 执行清理 | 默认检查 membership key 是否存在，仍在线的 address 返回 error 并标记 `topology_member_removed=false`；需显式 `--force` 才允许清理在线 worker |
+| R8 | per-address 部分失败被当作成功 | pybind 层聚合 per-address 结果，任一 error 非空时顶层 status 置为 `Partial`、退出码非 0 |
 
 ## §7 落地步骤
 

@@ -66,10 +66,20 @@ AdminReturn DeleteClusterMembers(ClusterAdminOptions options, const std::vector<
         }
     }
     py::list resultList;
+    bool hasError = false;
     for (const auto &result : results) {
+        if (!result.error.empty()) {
+            hasError = true;
+        }
         resultList.append(ResultToDict(result));
     }
-    return { StatusName(status), status.GetMsg(), std::move(resultList) };
+    std::string statusName = StatusName(status);
+    std::string statusMsg = status.GetMsg();
+    if (status.IsOk() && hasError) {
+        statusName = "Partial";
+        statusMsg = "one or more addresses failed; check deleted_members for details";
+    }
+    return { statusName, statusMsg, std::move(resultList) };
 }
 
 }  // namespace
@@ -80,7 +90,9 @@ PybindDefineRegisterer g_pybind_define_f_ClusterAdminOptions(
             .def(py::init<>())
             .def_readwrite("cluster_name", &ClusterAdminOptions::clusterName)
             .def_readwrite("etcd_address", &ClusterAdminOptions::etcdAddress)
-            .def_readwrite("coordinator_address", &ClusterAdminOptions::coordinatorAddress);
+            .def_readwrite("coordinator_address", &ClusterAdminOptions::coordinatorAddress)
+            .def_readwrite("force", &ClusterAdminOptions::force)
+            .def_readwrite("dry_run", &ClusterAdminOptions::dryRun);
     });
 
 PybindDefineRegisterer g_pybind_define_f_ClusterAdmin(
