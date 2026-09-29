@@ -74,6 +74,9 @@ struct Config {
     int targetQps = 100;                                   // 0 = unlimited
     std::vector<int> targetQpsStages;                      // QPS stages (empty = single fixed QPS)
     int stageDurationSeconds = 0;                          // seconds per stage, 0 = disabled
+    int targetQpsMin = 0;                                  // random QPS lower bound (0 = disabled)
+    int targetQpsMax = 0;                                  // random QPS upper bound (0 = disabled)
+    int randomQpsIntervalSeconds = 1;                      // re-sample random QPS every N seconds
     int numThreads = 4;        // write threads in pipeline mode
     int numTotalThreads = 16;  // total read and write threads in pipeline mode
     int notifyCount = 10;
