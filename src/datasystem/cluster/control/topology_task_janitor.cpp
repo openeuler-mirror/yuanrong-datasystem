@@ -18,6 +18,7 @@
 #include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/cluster/runtime/topology_reader.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem::cluster {
@@ -294,6 +295,7 @@ Status TopologyTaskJanitor::RunOnce()
 void TopologyTaskJanitor::Run()
 {
     while (true) {
+        auto traceGuard = Trace::Instance().SetTraceNewID(Trace::GenerateComponentTraceId("TopologyJanitor"));
         {
             std::lock_guard<std::mutex> lock(lifecycleMutex_);
             if (stopping_) {

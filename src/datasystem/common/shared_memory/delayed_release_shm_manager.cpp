@@ -18,6 +18,7 @@
 #include <algorithm>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 
 namespace datasystem {
 namespace {
@@ -58,6 +59,7 @@ void DelayedReleaseShmManager::Add(const std::shared_ptr<ShmUnit> &shmUnit, std:
 
 void DelayedReleaseShmManager::Run()
 {
+    auto traceGuard = Trace::Instance().SetTraceNewID(Trace::GenerateComponentTraceId("DelayedShmRelease"));
     auto nextReportTime = std::chrono::steady_clock::now() + DELAYED_RELEASE_REPORT_INTERVAL;
     std::unique_lock<std::mutex> lock(mutex_);
     while (!stopping_ || !delayReleaseQueue_.empty()) {

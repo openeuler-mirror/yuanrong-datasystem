@@ -246,6 +246,7 @@ Status OCMetadataManager::Init()
 void OCMetadataManager::StartMetaMonitor()
 {
     monitor_ = std::make_unique<Thread>([this] {
+        auto traceGuard = Trace::Instance().SetTraceNewID(Trace::GenerateComponentTraceId("MetadataMonitor"));
         const uint64_t timeout = 60000;  // 60s.
         const uint64_t interval = 100;   // 100ms
         Timer timer;

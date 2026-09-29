@@ -1851,6 +1851,7 @@ def test_missing_rpc_and_urma_evidence_stays_unobserved(run_dir: Path):
         "[URMA_WAIT_TIMEOUT] [urma_request_id:42] timedout waiting, elapsedMs=15.058000",
         "[URMA-WAIT-TIMEOUT] requestId=42 elapsedMs=15.058000",
         "Timed out waiting for urma_request_id_42, elapsedMs=15.058000",
+        "Timed out waiting for urma_request_id:42, elapsedMs=15.058000",
     ],
 )
 def test_failed_urma_wait_timeout_is_an_error_family_not_unsegmented_parent(

@@ -1786,6 +1786,7 @@ Status UrmaResource::PreFillSendJettyPool()
 
 void UrmaResource::RefillLoop()
 {
+    auto traceGuard = Trace::Instance().SetTraceNewID(Trace::GenerateComponentTraceId("UrmaRefill"));
     constexpr auto kRefillInterval = std::chrono::milliseconds(50);
     bool retryAfterFailure = false;
     while (!refillStop_.load()) {

@@ -29,6 +29,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/rpc/bthread_utils.h"
 #include "datasystem/common/util/net_util.h"
@@ -1690,7 +1691,9 @@ Status TopologyEngine::HandleProgressCompletion(TopologyCallbackCompletion compl
         // Completions are independent per-task fences: the executor validates each fence against the authority and
         // the repository CAS is idempotent per task key, so bounded concurrent processing preserves the ordering
         // contract while keeping the serial Run loop free of the per-completion backend round trips.
-        progressPool_->Execute([this, owned]() {
+        auto traceContext = Trace::Instance().GetContext();
+        progressPool_->Execute([this, owned, traceContext]() {
+            auto traceGuard = Trace::Instance().SetTraceContext(traceContext);
             const auto taskPrefix = TopologyDiagnosticPrefix(owned->fence.taskId);
             try {
                 auto rc = executor_.HandleCompletion(std::move(*owned));
@@ -2046,6 +2049,7 @@ void TopologyEngine::Run()
                            [&initialRefreshDelayMs](uint64_t delayMs) { initialRefreshDelayMs = delayMs; });
     auto nextMembershipRefresh = std::chrono::steady_clock::now() + std::chrono::milliseconds(initialRefreshDelayMs);
     while (state_.load() != TopologyEngineState::STOPPING) {
+        auto traceGuard = Trace::Instance().SetTraceNewID(Trace::GenerateComponentTraceId("TopologyEngine"));
         RuntimeEvent event;
         const auto refreshDeadline = std::min(nextExactRefresh, nextMembershipRefresh);
         const auto waitDeadline = isolationKillDeadline_.has_value()
