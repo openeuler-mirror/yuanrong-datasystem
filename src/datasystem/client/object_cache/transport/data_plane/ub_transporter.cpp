@@ -145,7 +145,7 @@ bool DelayReleaseUbReceiveBuffer(const UbReceiveBuffer &buffer, const Status &re
     auto owner = std::dynamic_pointer_cast<UbReceiveBufferOwner>(buffer.owner);
     auto shmUnit = owner == nullptr ? nullptr : owner->GetShmUnit();
     if (shmUnit != nullptr) {
-        LOG(WARNING) << "[CLIENT_GET_DELAY_RELEASE_ADD] id=" << shmUnit->id
+        VLOG(1) << "[CLIENT_GET_DELAY_RELEASE_ADD] id=" << shmUnit->id
             << ", identity=" << shmUnit->GetIdentity() << ", bytes=" << shmUnit->size
             << ", delayMs=" << DEFAULT_SHM_DELAY_RELEASE_MS << ", request=" << request
             << ", reasonSource=" << reasonSource << ", reason=" << reason;

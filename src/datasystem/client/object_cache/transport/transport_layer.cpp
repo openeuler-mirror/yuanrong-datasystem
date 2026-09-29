@@ -766,7 +766,7 @@ Status TransportLayer::Get(const ObjectReadRequest &input, ObjectReadResult &out
             << ", remaining deadline us: " << ApiDeadline::Instance().ApiRemainingUs();
     Status status = objectRead_->Run(input, output);
     if (status.IsError()) {
-        LOG(ERROR) << "[TransportGet][TransportLayer] Get failed, key count: " << input.items.size()
+        VLOG(1) << "[TransportGet][TransportLayer] Get failed, key count: " << input.items.size()
                    << ", status: " << status.ToString();
     } else {
         VLOG(1) << "[TransportGet][TransportLayer] Finish Get, key count: " << input.items.size()

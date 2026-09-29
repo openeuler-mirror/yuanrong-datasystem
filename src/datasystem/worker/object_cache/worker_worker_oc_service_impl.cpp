@@ -969,7 +969,7 @@ Status WorkerWorkerOCServiceImpl::ProcessFallbackTrackError(const Status &rc, co
         canPrepareFallbackPayload = false;
         return Status::OK();
     }
-    LOG(WARNING) << FormatString("Worker-to-worker TCP fallback payload rejected for object %s: %s", objectKey,
+    LOG(WARNING) << FormatString("TCP fallback payload rejected for object %s: %s", objectKey,
                                  rc.ToString());
     return rc;
 }
@@ -1002,7 +1002,8 @@ Status WorkerWorkerOCServiceImpl::HandlePayloadFallback(
             auto trackStatus = fastTransportStatus.IsOk()
                                    ? Status(StatusCode::K_URMA_ERROR, "URMA wait fallback payload precheck")
                                    : fastTransportStatus;
-            auto rc = shmGuard.TrackUrmaFallbackTcp(objKv.GetReadSize(), trackStatus, "worker->worker");
+            const char *direction = req.urma_info().client_id().empty() ? "worker->worker" : "worker->client";
+            auto rc = shmGuard.TrackUrmaFallbackTcp(objKv.GetReadSize(), trackStatus, direction);
             if (rc.IsError() && rsp.has_provider_ub_failure_detail()) {
                 UpdateProviderUbFailureDetailForWrappedStatus(trackStatus, rc,
                                                               *rsp.mutable_provider_ub_failure_detail());
@@ -1371,7 +1372,7 @@ Status WorkerWorkerOCServiceImpl::MergeParallelBatchGetResult(const BatchGetObje
             if (batchFallback) {
                 if (fallbackStatus.IsError()) {
                     // fallbackStatus is populated only when transport fallback is enabled and the limiter rejects it.
-                    LOG(WARNING) << "Worker-to-worker TCP fallback payload rejected: " << fallbackStatus.ToString();
+                    LOG(WARNING) << "TCP fallback payload rejected: " << fallbackStatus.ToString();
                     rsp.mutable_responses()->at(index).mutable_error()->set_error_code(fallbackStatus.GetCode());
                     rsp.mutable_responses()->at(index).mutable_error()->set_error_msg(fallbackStatus.GetMsg());
                     index += coveredRespNum;
@@ -1455,7 +1456,7 @@ Status WorkerWorkerOCServiceImpl::HandleBatchWaitFailure(BatchWaitContext &conte
         LOG_IF_ERROR(GetRemoteAddressFromBatchGetReq(context.req, requestAddress),
                      "GetRemoteAddressFromBatchGetReq failed");
         LOG(WARNING) << FormatString(
-            "Worker-to-worker TCP fallback payload rejected, srcAddress = %s, targetAddress = %s, "
+            "TCP fallback payload rejected, srcAddress = %s, targetAddress = %s, "
             "wait rc = %s, fallback rc = %s",
             localAddress_.ToString(), requestAddress.ToString(), status.ToString(),
             context.fallbackStatus.ToString());

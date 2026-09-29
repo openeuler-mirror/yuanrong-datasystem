@@ -1761,8 +1761,10 @@ void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shar
         "[URMA_ELAPSED_TOTAL] [urma_request_id:"
             << requestId << "] urma post to completion cost: " << totalElapsedMs
             << "ms, condition_wait: " << waitElapsedMs
-            << "ms, src:" << localUrmaInfo_.localAddress.ToString()
-            << ", dst:" << event->GetRemoteAddress() << ", data_size:" << event->GetDataSize()
+            << "ms, urma operation type=" << UrmaEvent::OperationTypeName(event->GetOperationType())
+            << ", urmaSrcAddress=" << localUrmaInfo_.localAddress.ToString()
+            << ", urmaDstAddress=" << event->GetRemoteAddress()
+            << ", data_size:" << event->GetDataSize()
             << ", write_chunk_idx:" << trace.writeChunkIndex << ", write_chunk_cnt:" << trace.writeChunkCount
             << ", cpu_id:" << sched_getcpu() << ", status: " << waitRc.ToString()
             << ", cqe_status:"
@@ -1794,11 +1796,11 @@ Status UrmaManager::CreateUrmaWaitTimeoutStatus(uint64_t requestId, const std::s
 {
     const auto srcAddress = localUrmaInfo_.localAddress.ToString();
     const auto message = FormatString(
-        "[URMA_WAIT_TIMEOUT] [urma_request_id:%zu] timedout waiting, elapsedMs=%f, srcAddress=%s, "
-        "targetAddress=%s, remoteInstanceId=%s, dataSize=%zu, op=%s, reason=%s",
-        requestId, elapsedMs, srcAddress.c_str(), event->GetRemoteAddress().c_str(),
-        event->GetRemoteInstanceId().c_str(), static_cast<size_t>(event->GetDataSize()),
-        UrmaEvent::OperationTypeName(event->GetOperationType()), reason.c_str());
+        "[URMA_WAIT_TIMEOUT] [urma_request_id:%zu] timedout waiting, elapsedMs=%f, urma operation type=%s, "
+        "urmaSrcAddress=%s, urmaDstAddress=%s, remoteInstanceId=%s, dataSize=%zu, reason=%s",
+        requestId, elapsedMs, UrmaEvent::OperationTypeName(event->GetOperationType()), srcAddress.c_str(),
+        event->GetRemoteAddress().c_str(), event->GetRemoteInstanceId().c_str(),
+        static_cast<size_t>(event->GetDataSize()), reason.c_str());
     // Message also propagates inside the returned Status.
     LOG(WARNING) << message;
     return Status(K_URMA_WAIT_TIMEOUT, message);
@@ -1918,12 +1920,11 @@ Status UrmaManager::HandleUrmaEvent(uint64_t requestId, const std::shared_ptr<Ur
 
     const auto statusCode = event->GetStatusCode();
     auto errMsg = FormatString(
-        "Polling failed with an error, urma_request_id=%zu, localAddress=%s, remoteAddress=%s, "
-        "remoteInstanceId=%s, op=%s, dataSize=%zu, cqeStatus=%d",
-        requestId, localUrmaInfo_.localAddress.ToString(),
+        "Polling failed with an error, urma_request_id=%zu, urma operation type=%s, "
+        "urmaSrcAddress=%s, urmaDstAddress=%s, remoteInstanceId=%s, dataSize=%zu, cqeStatus=%d",
+        requestId, UrmaEvent::OperationTypeName(event->GetOperationType()), localUrmaInfo_.localAddress.ToString(),
         event->GetRemoteAddress().empty() ? "unknown" : event->GetRemoteAddress().c_str(),
-        event->GetRemoteInstanceId(), UrmaEvent::OperationTypeName(event->GetOperationType()),
-        static_cast<size_t>(event->GetDataSize()), statusCode);
+        event->GetRemoteInstanceId(), static_cast<size_t>(event->GetDataSize()), statusCode);
 
     Status rc(K_URMA_ERROR, errMsg);
     LOG(ERROR) << "[URMA_COMPLETION_FAILED] " << rc.ToString();
@@ -2703,7 +2704,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
             // the 1st and every 100th occurrence is logged here.
             const std::string writeErrMsg = FormatString(
                 "[URMA_WRITE]: [urma_request_id:%zu] call urma_post_jetty_send_wr failed, "
-                "ret: %d, srcAddress=%s, targetAddress=%s, remoteInstanceId=%s, "
+                "ret: %d, urmaSrcAddress=%s, urmaDstAddress=%s, remoteInstanceId=%s, "
                 "dataSize=%zu, srcChipId=%u, dstChipId=%u, useNumaAffinity=%s, suggest: %s",
                 key, ret, srcAddress.c_str(), args.remoteAddress.c_str(), remoteInstanceId,
                 static_cast<size_t>(writeSize), static_cast<uint32_t>(srcChipId),
@@ -3352,14 +3353,14 @@ size_t UrmaManager::ResolveSubmittedGatherWriteCount(const RemoteSegInfo &remote
     const auto srcAddress = localUrmaInfo_.localAddress.ToString();
     if (badWr == nullptr) {
         LOG(WARNING) << "[URMA_WRITE]: provider post failed without bad_wr; treating all gather-write events as "
-                        "potentially accepted, srcAddress="
-                     << srcAddress << ", targetAddress=" << context.remoteAddress
+                        "potentially accepted, urmaSrcAddress="
+                     << srcAddress << ", urmaDstAddress=" << context.remoteAddress
                      << ", dataSize=" << static_cast<size_t>(context.totalWriteSize)
                      << ", dstChipId=" << static_cast<uint32_t>(remoteInfo.dstChipId);
     } else {
         LOG(WARNING) << "[URMA_WRITE]: provider returned a bad_wr outside the submitted WR chain; "
-                     << "treating all gather-write events as potentially accepted, srcAddress=" << srcAddress
-                     << ", targetAddress=" << context.remoteAddress
+                     << "treating all gather-write events as potentially accepted, urmaSrcAddress="
+                     << srcAddress << ", urmaDstAddress=" << context.remoteAddress
                      << ", dataSize=" << static_cast<size_t>(context.totalWriteSize)
                      << ", dstChipId=" << static_cast<uint32_t>(remoteInfo.dstChipId);
     }
@@ -3400,7 +3401,7 @@ Status UrmaManager::PostGatherWriteRequests(const RemoteSegInfo &remoteInfo, Urm
     RETURN_STATUS_LOG_ERROR(
         K_URMA_ERROR,
         FormatString("[URMA_WRITE]: call urma_post_jetty_send_wr failed, ret: %d, "
-                     "srcAddress=%s, targetAddress=%s, dataSize=%zu, dstChipId=%u, suggest: %s",
+                     "urmaSrcAddress=%s, urmaDstAddress=%s, dataSize=%zu, dstChipId=%u, suggest: %s",
                      ret, srcAddress.c_str(), context.remoteAddress.c_str(),
                      static_cast<size_t>(context.totalWriteSize), static_cast<uint32_t>(remoteInfo.dstChipId),
                      URMA_ERROR_SUGGEST));
