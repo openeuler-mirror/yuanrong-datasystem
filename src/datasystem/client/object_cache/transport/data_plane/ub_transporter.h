@@ -119,6 +119,7 @@ protected:
 
 private:
     Status PrepareMSetPayloads(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                               bool tcpFallbackDisabled,
                                std::vector<std::shared_ptr<ObjectBuffer>> &publishBuffers,
                                std::vector<bool> &tcpPayload,
                                std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets,
@@ -130,6 +131,7 @@ private:
                              PublishRspPb &rsp, uint32_t &workerVersion, TransportSetResult *result,
                              const Status &writeRc);
     void ClassifyMSetPayload(const std::shared_ptr<ObjectBuffer> &buffer, const Status &writeRc,
+                             bool tcpFallbackDisabled,
                              std::vector<std::shared_ptr<ObjectBuffer>> &publishBuffers,
                              std::vector<bool> &tcpPayload,
                              std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets,

@@ -428,6 +428,8 @@ Status RoutedMode::ProcessTransportPut(
     RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
     const int32_t subTimeoutMs = requestTimeoutMs > 0 ? requestTimeoutMs : requestTimeoutMs_;
     const auto requestContext = host_.buildTransportRequestContext(routeContext);
+    client::TransportSetParam setParam;
+    setParam.tcpFallbackDisabled = routeContext.clientApi->IsTcpFallbackDisabled();
     client::TransportCreateParam createParam;
     createParam.requestContext = requestContext;
     createParam.cacheType = param.cacheType;
@@ -452,7 +454,6 @@ Status RoutedMode::ProcessTransportPut(
                      "Release routed Set allocation after MemoryCopy failure failed");
         return copyRc;
     }
-    client::TransportSetParam setParam;
     setParam.requestContext = requestContext;
     setParam.nestedKeys = nestedObjectKeys;
     setParam.ttlSecond = ttlSecond;
@@ -910,6 +911,8 @@ Status RoutedMode::ProcessTransportMSet(const MSetRouteGroup &group, const MSetP
 {
     RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
     const auto requestContext = host_.buildTransportRequestContext(routeContext);
+    client::TransportSetParam setParam;
+    setParam.tcpFallbackDisabled = routeContext.clientApi->IsTcpFallbackDisabled();
     client::TransportCreateParam createParam;
     createParam.requestContext = requestContext;
     createParam.cacheType = param.cacheType;
@@ -934,7 +937,6 @@ Status RoutedMode::ProcessTransportMSet(const MSetRouteGroup &group, const MSetP
         }
         return copyRc;
     }
-    client::TransportSetParam setParam;
     setParam.requestContext = requestContext;
     setParam.ttlSecond = param.ttlSecond;
     setParam.existence = param.existence;

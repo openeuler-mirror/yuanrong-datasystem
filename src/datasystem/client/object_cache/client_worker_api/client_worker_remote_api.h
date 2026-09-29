@@ -202,6 +202,9 @@ private:
      */
     Status InitDecreaseQueue();
 
+    Status AppendPublishPayload(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
+                                std::vector<MemView> &payloads, UrmaFallbackTcpLimiter::Ticket &ticket);
+
     /**
      * @brief Record the bytes written by SHM or TCP (non-UB path) for Publish.
      * @param[in] bufferInfo Buffer information, provides dataSize and ubDataSentByMemoryCopy.

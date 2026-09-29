@@ -2386,12 +2386,13 @@ Status ObjectClientImpl::PublishRoutedBuffer(const std::shared_ptr<ObjectBufferI
     SetRouteContext routeContext;
     RETURN_IF_NOT_OK(BuildSetRouteContext(bufferInfo->workerAddr, routeContext));
     const auto requestContext = BuildTransportRequestContext(routeContext);
+    client::TransportSetParam setParam;
+    setParam.tcpFallbackDisabled = routeContext.clientApi->IsTcpFallbackDisabled();
     std::shared_ptr<ObjectBuffer> objBuf;
     RETURN_IF_NOT_OK(ObjectBufferInternal::Create(bufferInfo, objBuf));
     // The legacy Buffer owns the payload; keep the transient ObjectBuffer from freeing (and nulling)
     // the shared pointer at end of scope. No-op for SHM buffers.
     ObjectBufferInternal::DisownLocalMemory(*objBuf);
-    client::TransportSetParam setParam;
     setParam.requestContext = requestContext;
     setParam.nestedKeys = nestedObjectKeys;
     setParam.ttlSecond = bufferInfo->ttlSecond;
@@ -3958,6 +3959,8 @@ Status ObjectClientImpl::ProcessRoutedMSetGroup(const HostPort &worker,
     SetRouteContext routeContext;
     RETURN_IF_NOT_OK(BuildSetRouteContext(worker, routeContext));
     const auto requestContext = BuildTransportRequestContext(routeContext);
+    client::TransportSetParam setParam;
+    setParam.tcpFallbackDisabled = routeContext.clientApi->IsTcpFallbackDisabled();
     std::vector<std::shared_ptr<ObjectBuffer>> objBufs;
     objBufs.reserve(infos.size());
     for (const auto &info : infos) {
@@ -3972,7 +3975,6 @@ Status ObjectClientImpl::ProcessRoutedMSetGroup(const HostPort &worker,
         ObjectBufferInternal::DisownLocalMemory(*objBuf);
         objBufs.push_back(std::move(objBuf));
     }
-    client::TransportSetParam setParam;
     setParam.requestContext = requestContext;
     // MSet(buffers) is the publish step after MCreate; carry the existence opt recorded on the
     // buffer at Create time (mirrors single PublishRoutedBuffer).

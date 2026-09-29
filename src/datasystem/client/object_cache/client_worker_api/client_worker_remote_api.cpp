@@ -82,23 +82,6 @@ bool IsUrmaFallbackPayload(const std::shared_ptr<ObjectBufferInfo> &bufferInfo)
     return bufferInfo->ubUrmaDataInfo != nullptr && !bufferInfo->ubDataSentByMemoryCopy;
 }
 
-Status AppendPublishPayload(std::atomic<uint64_t> &pendingBytes, const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
-                            std::vector<MemView> &payloads, UrmaFallbackTcpLimiter::Ticket &ticket)
-{
-    if (IsUrmaFallbackPayload(bufferInfo)) {
-        auto rc = UrmaFallbackTcpLimiter::TryAcquire(pendingBytes, bufferInfo->dataSize,
-                                                     Status(StatusCode::K_URMA_ERROR, URMA_TRANSPORT_FAILED_MSG),
-                                                     CLIENT_TO_WORKER_FALLBACK, ticket);
-        if (rc.IsError()) {
-            LOG(WARNING) << "Client-to-worker TCP fallback payload rejected: " << rc.ToString();
-            return rc;
-        }
-        payloads.emplace_back(bufferInfo->pointer + bufferInfo->metadataSize, bufferInfo->dataSize);
-        return Status::OK();
-    }
-    payloads.emplace_back(bufferInfo->pointer, bufferInfo->dataSize);
-    return Status::OK();
-}
 
 void FillMultiPublishObjectInfo(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
                                 const DeviceBlobList *deviceBlobList, MultiPublishReqPb &req)
@@ -189,6 +172,26 @@ bool HasUrmaTcpFallbackPayload(const GetRspPb &rsp)
 }
 #endif
 }  // namespace
+
+Status ClientWorkerRemoteApi::AppendPublishPayload(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
+                                                   std::vector<MemView> &payloads,
+                                                   UrmaFallbackTcpLimiter::Ticket &ticket)
+{
+    if (IsUrmaFallbackPayload(bufferInfo)) {
+        RETURN_IF_NOT_OK(CheckTcpFallbackAllowed(IsTcpFallbackDisabled(), bufferInfo->ubFailureReportRc));
+        auto rc = UrmaFallbackTcpLimiter::TryAcquire(urmaFallbackTcpPendingBytes_, bufferInfo->dataSize,
+                                                     Status(StatusCode::K_URMA_ERROR, URMA_TRANSPORT_FAILED_MSG),
+                                                     CLIENT_TO_WORKER_FALLBACK, ticket);
+        if (rc.IsError()) {
+            LOG(WARNING) << "Client-to-worker TCP fallback payload rejected: " << rc.ToString();
+            return rc;
+        }
+        payloads.emplace_back(bufferInfo->pointer + bufferInfo->metadataSize, bufferInfo->dataSize);
+        return Status::OK();
+    }
+    payloads.emplace_back(bufferInfo->pointer, bufferInfo->dataSize);
+    return Status::OK();
+}
 
 ClientWorkerRemoteApi::ClientWorkerRemoteApi(HostPort hostPort, HeartbeatType heartbeatType,
                                              SensitiveValue token, Signature *signature, std::string tenantId,
@@ -714,7 +717,7 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
     std::vector<MemView> payloads;
     UrmaFallbackTcpLimiter::Ticket fallbackTicket;
     if (!isShm && !bufferInfo->ubDataSentByMemoryCopy) {
-        RETURN_IF_NOT_OK(AppendPublishPayload(urmaFallbackTcpPendingBytes_, bufferInfo, payloads, fallbackTicket));
+        RETURN_IF_NOT_OK(AppendPublishPayload(bufferInfo, payloads, fallbackTicket));
     }
     PublishRspPb rsp;
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_PUBLISH_OBJECT);
@@ -936,7 +939,7 @@ Status ClientWorkerRemoteApi::BuildMultiPublishPayloads(
         if (bufferInfo[i]->shmId.Empty() || IsUrmaFallbackPayload(bufferInfo[i])) {
             if (IsUrmaFallbackPayload(bufferInfo[i])) {
                 fallbackTickets.emplace_back();
-                RETURN_IF_NOT_OK(AppendPublishPayload(urmaFallbackTcpPendingBytes_, bufferInfo[i], payloads,
+                RETURN_IF_NOT_OK(AppendPublishPayload(bufferInfo[i], payloads,
                                                       fallbackTickets.back()));
             } else {
                 payloads.emplace_back(bufferInfo[i]->pointer, bufferInfo[i]->dataSize);

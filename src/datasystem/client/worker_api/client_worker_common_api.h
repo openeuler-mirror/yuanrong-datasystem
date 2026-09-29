@@ -112,6 +112,11 @@ struct ClientWorkerCommonApiAttribute {
         return IsShmEnable() && size >= shmThreshold_;
     }
 
+    bool IsTcpFallbackDisabled() const
+    {
+        return tcpFallbackDisabled_.load(std::memory_order_relaxed);
+    }
+
     bool IsShmEnable() const
     {
         return shmEnableType_ != ShmEnableType::NONE;
@@ -271,6 +276,7 @@ struct ClientWorkerCommonApiAttribute {
     // access workers beyond the bound endpoint, even when worker failover is disabled.
     bool mayAccessNonBoundWorker_{ false };
     bool workerEnableP2Ptransfer_ = false;
+    std::atomic<bool> tcpFallbackDisabled_{ false };
     std::shared_ptr<ShmUnitInfo> decShmUnit_;
     std::shared_ptr<ShmUnitInfo> pipelineMsgShmUnit_;
     Signature *signature_;
