@@ -231,7 +231,23 @@ LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH ./kvtest config/writer1.json
 
 每个阶段运行 60 秒，自动切换 QPS。
 
-### 3.6 CPU 亲和性绑定
+### 3.6 随机 QPS
+
+`target_qps_min` / `target_qps_max` 配置随机 QPS 范围，kvtest 在 `[min, max]` 区间均匀随机采样，每隔 `random_qps_interval_seconds` 秒重新采样，持续波动：
+
+```json
+{"target_qps_min": 30, "target_qps_max": 60, "random_qps_interval_seconds": 1}
+```
+
+每秒在 30-60 之间随机一个 QPS，不会像多阶段模式那样跑完停在最后一个值。
+
+与 `target_qps` 数组（多阶段）互斥，不能同时配置。使用 gen-config 生成：
+
+```bash
+python3 deploy_client.py gen-config -p client- --random-qps "30,60" --random-qps-interval 1 -o config
+```
+
+### 3.7 CPU 亲和性绑定
 
 进程级 CPU 绑核，在创建任何线程之前执行：
 
@@ -247,7 +263,7 @@ NUMA 节点绑定（同时绑定 CPU + 本地内存，需 `libnuma`）：
 
 `numa_node` 优先级高于 `cpu_affinity`。NUMA 不可用时自动回退到 CPU 绑核。
 
-### 3.7 通知节流
+### 3.8 通知节流
 
 当 peer 数量多时，避免瞬时大量 HTTP 请求：
 

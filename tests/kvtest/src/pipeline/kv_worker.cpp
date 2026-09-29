@@ -101,6 +101,13 @@ void KVWorker::Start() {
     if (!cfg_.targetQpsStages.empty()) {
         stageStartTime_ = std::chrono::steady_clock::now();
     }
+    if (cfg_.targetQpsMin > 0 && cfg_.targetQpsMax > 0) {
+        currentTargetQps_.store(ResampleRandomQps());
+        SLOG_INFO("Random QPS: [" << cfg_.targetQpsMin << ", " << cfg_.targetQpsMax
+                  << "], re-sample every " << cfg_.randomQpsIntervalSeconds << "s, initial="
+                  << currentTargetQps_.load());
+        stageStartTime_ = std::chrono::steady_clock::now();
+    }
 
     for (int i = 0; i < cfg_.numThreads; i++) {
         threads_.emplace_back(&KVWorker::PipelineLoop, this, i);
@@ -357,7 +364,27 @@ void KVWorker::AdjustPoolSize() {
     }
 }
 
+int KVWorker::ResampleRandomQps() {
+    static thread_local std::mt19937 rng(std::random_device{}());
+    std::uniform_int_distribution<int> dist(cfg_.targetQpsMin, cfg_.targetQpsMax);
+    return dist(rng);
+}
+
 void KVWorker::AdvanceStage() {
+    // Random QPS mode: re-sample uniformly in [min, max] every interval.
+    if (cfg_.targetQpsMin > 0 && cfg_.targetQpsMax > 0) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - stageStartTime_).count();
+        if (elapsed >= cfg_.randomQpsIntervalSeconds) {
+            int newQps = ResampleRandomQps();
+            currentTargetQps_.store(newQps);
+            stageStartTime_ = std::chrono::steady_clock::now();
+            SLOG_INFO("Random QPS re-sampled: " << newQps
+                      << " [" << cfg_.targetQpsMin << ", " << cfg_.targetQpsMax << "]");
+        }
+        return;
+    }
+
     if (cfg_.targetQpsStages.empty() || cfg_.stageDurationSeconds <= 0) return;
 
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(

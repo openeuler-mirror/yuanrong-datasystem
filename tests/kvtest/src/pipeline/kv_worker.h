@@ -50,6 +50,7 @@ private:
     void PipelineLoop(int threadId);
     void NotifyPeers(const std::vector<std::string> &keys, uint64_t size);
     void NotifyWarmupDone(const std::vector<std::string> &warmupKeys);
+    int ResampleRandomQps();
 
     Config cfg_;
     std::shared_ptr<datasystem::KVClient> client_;
