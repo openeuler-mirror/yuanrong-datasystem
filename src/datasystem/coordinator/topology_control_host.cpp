@@ -744,8 +744,8 @@ bool TopologyControlHost::ActiveFailureCandidatesContainExpected(const std::vect
 void TopologyControlHost::Run() noexcept
 {
     while (true) {
+        auto traceGuard = Trace::Instance().SetTraceNewID(Trace::GenerateComponentTraceId("TopologyControlHost"));
         try {
-            auto traceGuard = Trace::Instance().SetTraceNewID(Trace::GenerateComponentTraceId("TopologyControlHost"));
             {
                 std::unique_lock<bthread::Mutex> lock(mutex_);
                 wakeCv_.wait_for(
