@@ -14,10 +14,15 @@
 /**
  * Description: Unit tests for metadata recovery manager.
  */
-#include <functional>
+#include <atomic>
 #include <condition_variable>
+#include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <thread>
+#include <tuple>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -25,10 +30,11 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "common.h"
+#include "ut/common.h"
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/util/request_context.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/cluster/routing/placement_facade.h"
 #define private public
@@ -223,6 +229,7 @@ class MetaDataRecoveryManagerTest : public CommonTest {
 public:
     static void SetUpTestSuite()
     {
+        Parallel::InitParallelThreadPool(1);
         DS_ASSERT_OK(datasystem::memory::Allocator::Instance()->Init(64UL * 1024UL * 1024UL));
     }
 
@@ -354,21 +361,44 @@ ObjectMetaPb BuildRecoverMeta(const std::string &objectKey, WriteMode writeMode,
     return meta;
 }
 
-TEST_F(MetaDataRecoveryManagerTest, ParallelRecoveryPropagatesTraceId)
+class RecoveryTraceTest : public MetaDataRecoveryManagerTest,
+                          public ::testing::WithParamInterface<std::tuple<int, int, int>> {
+public:
+    void CheckRecoveryTraceId();
+};
+
+void RecoveryTraceTest::CheckRecoveryTraceId()
 {
-    Parallel::InitParallelThreadPool(1);
-    ASSERT_GT(Parallel::ParallelThreadPool::Instance()->GetThreadNum(), 0);
-    ScopedRequestContext request("recovery-parent");
+    const auto [path, parentMode, groupCount] = GetParam();
+    SetRequestContext(nullptr);
+    Trace::Instance().Invalidate();
+    Raii clearContext([] { SetRequestContext(nullptr); Trace::Instance().Invalidate(); });
+    std::optional<ScopedRequestContext> request;
+    if (parentMode == 1) {
+        request.emplace("recovery-parent");
+    }
+    auto parentGuard = Trace::Instance().SetTraceNewID(parentMode == 0 ? "" : "recovery-parent");
+    const auto callerThread = std::this_thread::get_id();
     MetadataTestPlacementFacade placement;
     worker::MetadataRouteResolver route(&placement, worker::MetadataRouteOptions{});
     MetaDataRecoveryManager manager(localAddress_, objectTable_, clusterAccess_, workerMasterApiManager_,
                                     route, 128, nullptr, memCpyThreadPool_, recoveredContentSaver_);
-    std::mutex mutex;
-    std::condition_variable cv;
-    size_t arrived = 0;
+    struct Observations {
+        std::mutex mutex;
+        std::condition_variable cv;
+        std::vector<std::string> traces;
+        bool sawPoolThread = false;
+    };
+    auto observed = std::make_shared<Observations>();
     std::vector<std::string> keys;
     std::vector<ObjectMetaPb> metas;
-    for (int index = 0; index < 2; ++index) {
+    std::vector<std::shared_ptr<TestWorkerMasterOCApi>> apis;
+    Raii clearHandlers([&apis] {
+        for (const auto &api : apis) {
+            api->SetPushHandler(nullptr);
+        }
+    });
+    for (int index = 0; index < groupCount; ++index) {
         HostPort masterAddr("127.0.0.1", 18501 + index);
         const auto key = "trace-recovery-" + std::to_string(index);
         placement.SetOwner(key, masterAddr);
@@ -376,31 +406,81 @@ TEST_F(MetaDataRecoveryManagerTest, ParallelRecoveryPropagatesTraceId)
         keys.emplace_back(key);
         metas.emplace_back(BuildRecoverMeta(key, WriteMode::NONE_L2_CACHE));
         auto api = std::make_shared<TestWorkerMasterOCApi>(masterAddr, localAddress_);
-        api->SetPushHandler([&](master::PushMetaToMasterReqPb &, master::PushMetaToMasterRspPb &) {
-            EXPECT_EQ(Trace::Instance().GetTraceID(), "recovery-parent");
-            std::unique_lock<std::mutex> lock(mutex);
-            ++arrived;
-            cv.notify_all();
-            EXPECT_TRUE(cv.wait_for(lock, std::chrono::seconds(1), [&] { return arrived == 2; }));
+        api->SetPushHandler([observed, callerThread, groupCount](master::PushMetaToMasterReqPb &,
+                                                                          master::PushMetaToMasterRspPb &) {
+            EXPECT_NE(GetActiveRequestContext(), nullptr);
+            std::unique_lock<std::mutex> lock(observed->mutex);
+            observed->traces.emplace_back(Trace::Instance().GetTraceID());
+            observed->sawPoolThread |= std::this_thread::get_id() != callerThread;
+            observed->cv.notify_all();
+            EXPECT_TRUE(observed->cv.wait_for(lock, std::chrono::seconds(10), [observed, groupCount] {
+                return observed->traces.size() == static_cast<size_t>(groupCount);
+            }));
             return Status(K_RPC_UNAVAILABLE, "injected recovery failure");
         });
+        apis.emplace_back(api);
         workerMasterApiManager_->SetApi(masterAddr, api);
     }
-    for (int path = 0; path < 3; ++path) {
-        arrived = 0;
-        std::vector<std::string> failedIds;
-        if (path == 0) {
-            failedIds = manager.RecoverMetadataWithSummary(keys, "", true).failedIds;
-        } else if (path == 1) {
-            failedIds = manager.RecoverMetadataWithSummary(metas).failedIds;
-        } else {
-            DS_ASSERT_NOT_OK(manager.RecoverMetadata(metas, failedIds));
+    std::vector<std::string> failedIds;
+    if (path == 0) {
+        failedIds = manager.RecoverMetadataWithSummary(keys, "", true).failedIds;
+    } else if (path == 1) {
+        failedIds = manager.RecoverMetadataWithSummary(metas).failedIds;
+    } else {
+        DS_ASSERT_NOT_OK(manager.RecoverMetadata(metas, failedIds));
+    }
+    EXPECT_THAT(failedIds, UnorderedElementsAreArray(keys));
+    ASSERT_EQ(observed->traces.size(), static_cast<size_t>(groupCount));
+    EXPECT_FALSE(observed->traces.front().empty());
+    for (const auto &trace : observed->traces) {
+        EXPECT_EQ(trace, observed->traces.front());
+        if (parentMode != 0) {
+            EXPECT_EQ(trace, "recovery-parent");
         }
-        EXPECT_EQ(arrived, 2U);
-        EXPECT_THAT(failedIds, UnorderedElementsAreArray(keys));
-        EXPECT_EQ(Trace::Instance().GetTraceID(), "recovery-parent");
+    }
+    EXPECT_EQ(observed->sawPoolThread, groupCount > 1);
+    const auto poolSize = Parallel::ParallelThreadPool::Instance()->GetThreadNum();
+    auto ready = std::make_shared<std::atomic<int>>(0);
+    std::vector<std::future<void>> probes;
+    for (int index = 0; index < poolSize; ++index) {
+        auto done = std::make_shared<std::promise<void>>();
+        probes.emplace_back(done->get_future());
+        Parallel::ParallelThreadPool::Instance()->LocalSubmit([ready, done, poolSize] {
+            EXPECT_EQ(GetActiveRequestContext(), nullptr);
+            EXPECT_TRUE(Trace::Instance().GetTraceID().empty());
+            EXPECT_FALSE(Trace::Instance().IsRequestLogTrace());
+            ++*ready;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            while (ready->load() < poolSize && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::yield();
+            }
+            EXPECT_EQ(ready->load(), poolSize);
+            done->set_value();
+        });
+    }
+    for (auto &probe : probes) {
+        probe.get();
     }
 }
+
+TEST_P(RecoveryTraceTest, PropagatesTraceId)
+{
+    CheckRecoveryTraceId();
+}
+
+TEST_P(RecoveryTraceTest, PropagatesTraceIdFromBthread)
+{
+    bthread_t thread;
+    ASSERT_EQ(bthread_start_background(&thread, nullptr, [](void *self) -> void * {
+        static_cast<RecoveryTraceTest *>(self)->CheckRecoveryTraceId();
+        return nullptr;
+    }, this), 0);
+    ASSERT_EQ(bthread_join(thread, nullptr), 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(RecoveryPaths, RecoveryTraceTest,
+                        ::testing::Combine(::testing::Values(0, 1, 2), ::testing::Values(0, 1, 2),
+                                           ::testing::Values(1, 2)));
 
 TEST_F(MetaDataRecoveryManagerTest, RecoverMetadataBatchSizeShouldNotExceed500)
 {

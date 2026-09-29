@@ -30,6 +30,7 @@ ds_cc_test(
 
 ds_cc_test(
     name = "topology_control_host_test",
+    linkstatic = True,
     srcs = ["topology_control_host_test.cpp"],
     deps = [
         "//src/datasystem/common/rdma:common_rdma",

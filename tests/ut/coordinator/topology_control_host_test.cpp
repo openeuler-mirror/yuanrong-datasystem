@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "gmock/gmock.h"
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
@@ -1043,6 +1044,11 @@ TEST_F(TopologyControlHostTest, RuntimeStartExceptionsStopPublishedDependenciesB
 
 TEST_F(TopologyControlHostTest, ReconcileExceptionDoesNotTerminateHostOrBlockShutdown)
 {
+    testing::internal::CaptureStderr();
+    Raii checkExceptionLog([] {
+        const auto output = testing::internal::GetCapturedStderr();
+        EXPECT_THAT(output, ::testing::ContainsRegex("TopologyControlHost;.*action=reconcile_exception"));
+    });
     constexpr char injectPoint[] = "TopologyControlHost.ReconcileEntries.exception";
     DS_ASSERT_OK(inject::Set(injectPoint, "1*call()"));
     Raii clearInject([&] { (void)inject::Clear(injectPoint); });

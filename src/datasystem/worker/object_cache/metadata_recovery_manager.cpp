@@ -28,6 +28,7 @@
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/request_table.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/object_endpoint_policy.h"
@@ -152,7 +153,8 @@ MetaDataRecoveryManager::RecoverySummary MetaDataRecoveryManager::RecoverMetadat
     Status parallelRc = Parallel::ParallelFor<size_t>(
         0, groupedByMasterKeys.size(),
         [this, &groupedByMasterKeys, &results, reportRecoveryErrors, &traceID](size_t start, size_t end) {
-            Trace::Instance().SetTraceNewID(traceID, true);
+            SetRequestContext(nullptr);
+            ScopedRequestContext ctx(traceID);
             for (size_t idx = start; idx < end; ++idx) {
                 const auto *group = groupedByMasterKeys[idx];
                 results[idx] = SendRecoverRequest(group->first, group->second, reportRecoveryErrors);
@@ -212,7 +214,8 @@ MetaDataRecoveryManager::RecoverySummary MetaDataRecoveryManager::RecoverMetadat
     Status parallelRc = Parallel::ParallelFor<size_t>(
         0, groupedByMasterKeys.size(),
         [this, &groupedByMasterKeys, &metasByObjectKey, &results, &traceID](size_t start, size_t end) {
-            Trace::Instance().SetTraceNewID(traceID, true);
+            SetRequestContext(nullptr);
+            ScopedRequestContext ctx(traceID);
             for (size_t idx = start; idx < end; ++idx) {
                 const auto *group = groupedByMasterKeys[idx];
                 auto groupedMetas = BuildGroupedMetas(group->second, metasByObjectKey);
@@ -442,7 +445,8 @@ Status MetaDataRecoveryManager::DispatchRecoveryMetas(
     RETURN_IF_NOT_OK(Parallel::ParallelFor<size_t>(
         0, groupedMetas.size(),
         [this, &groupedMetas, &results, &traceID](size_t start, size_t end) {
-            Trace::Instance().SetTraceNewID(traceID, true);
+            SetRequestContext(nullptr);
+            ScopedRequestContext ctx(traceID);
             for (size_t idx = start; idx < end; ++idx) {
                 const auto *group = groupedMetas[idx];
                 results[idx] = SendRecoverRequest(group->first, group->second);
