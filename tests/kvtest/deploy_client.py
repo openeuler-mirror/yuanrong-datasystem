@@ -1515,8 +1515,21 @@ def _build_config(mode, args):
     # an array and stage_duration_seconds so the kvtest binary schedules stage
     # transitions. Otherwise keep the legacy single-int target_qps. Validation
     # of (stage_duration_seconds > 0 when stages set) is done by the binary.
+    random_qps_raw = getattr(args, 'random_qps', '') or ''
     stage_qps_raw = getattr(args, 'stage_target_qps', '') or ''
-    if stage_qps_raw:
+    if random_qps_raw:
+        try:
+            parts = [int(x.strip()) for x in random_qps_raw.split(',') if x.strip()]
+        except ValueError:
+            log_error(f'ERROR: --random-qps must be "min,max" (two integers): {random_qps_raw}')
+            sys.exit(1)
+        if len(parts) != 2:
+            log_error(f'ERROR: --random-qps must be "min,max", got {len(parts)} values')
+            sys.exit(1)
+        cfg['target_qps_min'] = parts[0]
+        cfg['target_qps_max'] = parts[1]
+        cfg['random_qps_interval_seconds'] = getattr(args, 'random_qps_interval', 1)
+    elif stage_qps_raw:
         try:
             stage_qps_list = [int(x.strip()) for x in stage_qps_raw.split(',') if x.strip()]
         except ValueError:
@@ -1800,7 +1813,7 @@ def _add_gen_config_args(p):
                    help='Wait after KVClient init before pipeline requests and metrics (default: 0)')
     p.add_argument('--target-qps', type=int, default=100,
                    help='Target QPS, 0=unlimited (default: 100). Use --stage-target-qps '
-                        'for multi-stage QPS instead of this single value.')
+                        'for multi-stage QPS or --random-qps for random QPS range.')
     p.add_argument('--stage-target-qps', type=str, default='',
                    help='Comma-separated list of target QPS for multi-stage runs, e.g. '
                         '"60,90,120". When set, config.json target_qps is emitted as an array '
@@ -1810,6 +1823,13 @@ def _add_gen_config_args(p):
                    help='Per-stage duration in seconds (default: 0 = disabled). Required '
                         'when --stage-target-qps is set. The kvtest binary schedules stage '
                         'transitions; deploy_client only writes the value to config.json.')
+    p.add_argument('--random-qps', type=str, default='',
+                   help='Random QPS range "min,max" (e.g. "30,60"). The kvtest binary '
+                        're-samples a uniform random QPS in [min,max] every '
+                        '--random-qps-interval seconds. Mutually exclusive with '
+                        '--target-qps and --stage-target-qps.')
+    p.add_argument('--random-qps-interval', type=int, default=1,
+                   help='Re-sample interval in seconds for --random-qps (default: 1)')
     p.add_argument('--notify-count', type=int, default=10,
                    help='Number of peers to notify per write (default: 10)')
     # Reader-side probabilistic mGet batch sizing (C2 non-blocking variant).

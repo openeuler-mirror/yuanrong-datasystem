@@ -546,6 +546,13 @@ static int RunServerMode(const Config &cfg)
     while (gRunning) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         auto now = std::chrono::steady_clock::now();
+        // QPS stage / random-QPS resample is time-idempotent (only acts when
+        // the configured interval has elapsed), so tick it on the 200ms loop
+        // rather than the 3s reporting cadence for finer granularity.
+        if (worker && (!cfg.targetQpsStages.empty()
+                       || (cfg.targetQpsMin > 0 && cfg.targetQpsMax > 0))) {
+            worker->AdvanceStage();
+        }
         if (std::chrono::duration<double>(now - lastReport).count() < 3.0) {
             continue;
         }
@@ -597,15 +604,13 @@ static int RunServerMode(const Config &cfg)
                       << (cacheMode ? (" [pool=" + std::to_string(worker ? worker->CurrentPoolSize() : 0)
                                        + ", hit_rate=" + std::to_string(metrics.CacheHitRate()) + "]")
                                     : "")
-                      << (!cfg.targetQpsStages.empty() && worker
+                      << ((!cfg.targetQpsStages.empty()
+                           || (cfg.targetQpsMin > 0 && cfg.targetQpsMax > 0)) && worker
                               ? (" [qps=" + std::to_string(worker->CurrentTargetQps()) + "]")
                               : ""));
 
         if (worker && cfg.targetHitRate > 0.0) {
             worker->AdjustPoolSize();
-        }
-        if (worker && !cfg.targetQpsStages.empty()) {
-            worker->AdvanceStage();
         }
     }
 
