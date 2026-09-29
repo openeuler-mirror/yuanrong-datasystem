@@ -26,6 +26,7 @@
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
@@ -70,6 +71,7 @@ SharedMemoryRefTable::SharedMemoryRefTable()
     maybeExpiredFlushExit_ = false;
     maybeExpiredFlushPost_.Clear();
     maybeExpiredFlushThread_ = std::make_unique<Thread>([this]() {
+        auto traceGuard = Trace::Instance().SetTraceNewID(Trace::GenerateComponentTraceId("ShmRefFlush"));
         while (!maybeExpiredFlushExit_) {
             (void)maybeExpiredFlushPost_.WaitFor(SHM_REF_FLUSH_INTERVAL_MS);
             if (maybeExpiredFlushExit_) {

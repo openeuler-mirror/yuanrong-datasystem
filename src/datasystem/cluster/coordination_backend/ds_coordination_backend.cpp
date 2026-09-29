@@ -30,6 +30,7 @@
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/compatibility_manager.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
@@ -1065,6 +1066,7 @@ void DsCoordinationBackend::RunKeepAliveLoop()
     INJECT_POINT("CoordinationBackend.KeepAlive.confirmTimes", [&state](int times) { state.confirmMinTimes = times; });
     const std::string realKey = BuildRealKey(keepAliveTableName_, keepAliveKey_);
     while (!keepAliveExit_) {
+        auto traceGuard = Trace::Instance().SetTraceNewID(Trace::GenerateComponentTraceId("CoordinatorKeepAlive"));
         uint64_t wakeEpoch = 0;
         {
             std::lock_guard<std::mutex> lock(keepAliveMutex_);

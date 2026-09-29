@@ -45,6 +45,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -1098,6 +1099,7 @@ Status UrmaManager::GetOrRegisterSegment(const uint64_t &segAddress, const uint6
 
 Status UrmaManager::PerfThreadMain()
 {
+    auto traceGuard = Trace::Instance().SetTraceNewID(Trace::GenerateComponentTraceId("UrmaPerf"));
     // This is a startup-only flag. Disabled diagnostics must not invoke the provider's perf APIs.
     const bool enabled = FLAGS_enable_urma_perf;
     LOG(INFO) << "[URMA_PERF_CONTROL] enabled=" << static_cast<int>(enabled);
@@ -1146,6 +1148,7 @@ Status UrmaManager::PerfThreadMain()
 
 Status UrmaManager::ServerEventHandleThreadMain()
 {
+    auto traceGuard = Trace::Instance().SetTraceNewID(Trace::GenerateComponentTraceId("UrmaPollJfc"));
     const auto setSchedRuntimeResult = SetCurrentThreadSchedRuntime(FLAGS_enable_sched_runtime);
     if (!setSchedRuntimeResult.success && !setSchedRuntimeResult.skipped) {
         char errMsg[256] = { 0 };
@@ -1920,7 +1923,7 @@ Status UrmaManager::HandleUrmaEvent(uint64_t requestId, const std::shared_ptr<Ur
 
     const auto statusCode = event->GetStatusCode();
     auto errMsg = FormatString(
-        "Polling failed with an error, urma_request_id=%zu, urma operation type=%s, "
+        "Polling failed with an error, urma_request_id:%zu, urma operation type=%s, "
         "urmaSrcAddress=%s, urmaDstAddress=%s, remoteInstanceId=%s, dataSize=%zu, cqeStatus=%d",
         requestId, UrmaEvent::OperationTypeName(event->GetOperationType()), localUrmaInfo_.localAddress.ToString(),
         event->GetRemoteAddress().empty() ? "unknown" : event->GetRemoteAddress().c_str(),

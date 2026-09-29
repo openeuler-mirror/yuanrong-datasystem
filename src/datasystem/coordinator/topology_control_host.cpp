@@ -23,6 +23,7 @@
 #include "datasystem/common/coordinator/coordinator_log.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -744,6 +745,7 @@ void TopologyControlHost::Run() noexcept
 {
     while (true) {
         try {
+            auto traceGuard = Trace::Instance().SetTraceNewID(Trace::GenerateComponentTraceId("TopologyControlHost"));
             {
                 std::unique_lock<bthread::Mutex> lock(mutex_);
                 wakeCv_.wait_for(

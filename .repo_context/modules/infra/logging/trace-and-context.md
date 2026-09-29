@@ -67,6 +67,16 @@
   - asynchronous or cross-thread request flows capture and reapply full `TraceContext` explicitly;
   - BRPC request attachments carry the same request-log sampling state as a 1-byte `LogSampleState` appended after the `TRCID:V1` traceID frame; `AttachTraceIDToAttachment()` encodes traceID + state from the caller's `Trace`, and the generated `CallMethod` prologue (`ExtractTraceIDAndSampleState()` + `ScopedRequestContext` + `ApplyLogSampleState()`) restores both on the worker so the handler participates in `LogSampler` instead of being bypassed. Wire format and the transport-neutral helpers live in `src/datasystem/common/rpc/trace_attachment.h` and `src/datasystem/common/log/log_sample_state.h`;
   - coordinator startup establishes a `CoordMain` lifecycle trace before logging initialization, coordinator TTL/watch threads establish bounded component-scoped traces at thread entry, and topology recovery tasks capture and restore the submitting `TraceContext`;
+  - topology Host reconciliation, derived-task Janitor, worker Engine, Coordinator keepalive and UB-health lease sync
+    establish a component trace per control-loop iteration. Engine progress-pool closures carry the full submitting
+    `TraceContext`. URMA poll/performance/refill, delayed SHM release, SHM-reference flushing and metadata monitoring
+    establish component traces at thread entry. The URMA poll trace describes a component lifetime; individual
+    completions remain distinguished by `urma_request_id`, not by an invented client request association;
+  - metadata recovery creates a trace only when no caller trace exists. Its three `ParallelFor` dispatch paths
+    capture the caller's trace ID and apply `SetTraceNewID(traceID, true)` per chunk. The keep flag prevents
+    an inline chunk from clearing the caller's ID on return. This propagates only the ID, resets request sampling
+    state, and leaves the ID on pool threads until the next task overwrites it. Regression entrypoint:
+    `MetaDataRecoveryManagerTest.ParallelRecoveryPropagatesTraceId`;
   - the worker `RebalanceExecutor` single-task pool (`executorPool_` in `src/datasystem/worker/rebalance_executor.cpp::Submit`) propagates the caller's traceID via `GetTraceID()` + `SetTraceNewID` TraceGuard at task submit, so the executor/migrator logs and the downstream `ReportRebalanceResult`/`MigrateData` RPCs carry the same trace as the master scheduler logs; without it the executor logs had an empty traceID column and the target/master finish logs carried freshly-minted bare UUIDs;
   - request sampling decisions live in `Trace` rather than a process-wide trace-decision table; `LogSampler`
     owns the sampling decision and precomputed threshold; no per-second counter is used;

@@ -24,6 +24,7 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
@@ -121,6 +122,7 @@ MetaDataRecoveryManager::MetaDataRecoveryManager(
 MetaDataRecoveryManager::RecoverySummary MetaDataRecoveryManager::RecoverMetadataWithSummary(
     const std::vector<std::string> &objectKeys, std::string stanbyAddr, bool reportRecoveryErrors)
 {
+    auto traceGuard = Trace::Instance().SetTraceUUID();
     RecoverySummary summary;
     summary.requestedCount = objectKeys.size();
     if (objectKeys.empty()) {
@@ -145,10 +147,12 @@ MetaDataRecoveryManager::RecoverySummary MetaDataRecoveryManager::RecoverMetadat
     }
     summary.groupedMasterCount = groupedByMasterKeys.size();
 
+    const auto traceID = Trace::Instance().GetTraceID();
     std::vector<DispatchResult> results(groupedByMasterKeys.size());
     Status parallelRc = Parallel::ParallelFor<size_t>(
         0, groupedByMasterKeys.size(),
-        [this, &groupedByMasterKeys, &results, reportRecoveryErrors](size_t start, size_t end) {
+        [this, &groupedByMasterKeys, &results, reportRecoveryErrors, &traceID](size_t start, size_t end) {
+            Trace::Instance().SetTraceNewID(traceID, true);
             for (size_t idx = start; idx < end; ++idx) {
                 const auto *group = groupedByMasterKeys[idx];
                 results[idx] = SendRecoverRequest(group->first, group->second, reportRecoveryErrors);
@@ -169,6 +173,7 @@ MetaDataRecoveryManager::RecoverySummary MetaDataRecoveryManager::RecoverMetadat
 MetaDataRecoveryManager::RecoverySummary MetaDataRecoveryManager::RecoverMetadataWithSummary(
     const std::vector<ObjectMetaPb> &metas)
 {
+    auto traceGuard = Trace::Instance().SetTraceUUID();
     RecoverySummary summary;
     summary.requestedCount = metas.size();
     auto appendFailedMetas = [&summary, &metas]() {
@@ -202,10 +207,12 @@ MetaDataRecoveryManager::RecoverySummary MetaDataRecoveryManager::RecoverMetadat
     }
     summary.groupedMasterCount = groupedByMasterKeys.size();
 
+    const auto traceID = Trace::Instance().GetTraceID();
     std::vector<DispatchResult> results(groupedByMasterKeys.size());
     Status parallelRc = Parallel::ParallelFor<size_t>(
         0, groupedByMasterKeys.size(),
-        [this, &groupedByMasterKeys, &metasByObjectKey, &results](size_t start, size_t end) {
+        [this, &groupedByMasterKeys, &metasByObjectKey, &results, &traceID](size_t start, size_t end) {
+            Trace::Instance().SetTraceNewID(traceID, true);
             for (size_t idx = start; idx < end; ++idx) {
                 const auto *group = groupedByMasterKeys[idx];
                 auto groupedMetas = BuildGroupedMetas(group->second, metasByObjectKey);
@@ -354,6 +361,7 @@ Status MetaDataRecoveryManager::RecoverMetadata(const std::vector<ObjectMetaPb> 
                                                 std::vector<std::string> &failedIds,
                                                 std::string stanbyMasterAddr)
 {
+    auto traceGuard = Trace::Instance().SetTraceUUID();
     RETURN_OK_IF_TRUE(metas.empty());
     CHECK_FAIL_RETURN_STATUS(workerMasterApiManager_ != nullptr, K_RUNTIME_ERROR, "workerMasterApiManager is null");
     LOG(INFO) << "recovery meta from slot preload begin";
@@ -429,10 +437,12 @@ Status MetaDataRecoveryManager::DispatchRecoveryMetas(
         groupedMetas.emplace_back(&item);
     }
 
+    const auto traceID = Trace::Instance().GetTraceID();
     std::vector<DispatchResult> results(groupedMetas.size());
     RETURN_IF_NOT_OK(Parallel::ParallelFor<size_t>(
         0, groupedMetas.size(),
-        [this, &groupedMetas, &results](size_t start, size_t end) {
+        [this, &groupedMetas, &results, &traceID](size_t start, size_t end) {
+            Trace::Instance().SetTraceNewID(traceID, true);
             for (size_t idx = start; idx < end; ++idx) {
                 const auto *group = groupedMetas[idx];
                 results[idx] = SendRecoverRequest(group->first, group->second);
