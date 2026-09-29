@@ -349,11 +349,14 @@ maintenance 不创建 per-session 常驻线程，也不进入 Get 热路径。RP
 2. 二次检查 mmap table，避免并发重复请求；
 3. `WorkerService.GetClientFd(clientId, workerFds, requestId)`；
 4. RPC 成功后同步调用 `SockRecvFd`；
-5. 校验 requestId 和 fd 数量；
+5. 关闭并丢弃完整旧响应的 fd，继续接收；匹配当前 requestId 后校验 fd 数量；
 6. mmap，并以 worker fd 存入 session table。
 
-这里不需要常驻 FD receiver 线程：Worker 在 GetClientFd RPC 返回前已完成 `SockSendFd`，因此同步接收不会
-丢失关联；每个 endpoint 的冷路径本就需要串行。Shutdown 先对 socket 调用 `shutdown`，可唤醒阻塞接收。
+每个 endpoint 的冷路径串行接收，并通过 requestId 关联响应。Worker 发送 FD 后，RPC 仍可能超时，
+或 API deadline 在接收前耗尽，因此后续请求需要清理遗留的完整旧响应。每轮接收前通过
+`RemainingTimeoutMs` 检查预算并设置 socket 超时，接收后恢复超时设置；沿用原 `SockRecvFd`。
+底层仍会重试 EAGAIN/EWOULDBLOCK，因此不保证单次阻塞接收按 API deadline 返回。
+Shutdown 先对 socket 调用 `shutdown`，可唤醒阻塞接收。
 
 ### 8.4 Buffer 构造
 
@@ -397,7 +400,8 @@ transport 选择、session/FD 建链及 mmap 状态可能从 brpc/bthread 请求
 | WorkerOC Get 明确 missing | 否 | 返回 item 业务错误，保留 session |
 | WorkerOC Get transport error | 是 | 退役 session，不在同 session 重试 |
 | 响应协议错误 | 可能 | 退役 session，client-lost 清理 |
-| GetClientFd/SCM 校验失败 | 是 | 关闭收到的 fd，退役 session |
+| 收到完整旧 FD 响应 | 是 | 关闭旧 fd，重新检查剩余预算并继续接收 |
+| GetClientFd/SCM 校验失败 | 是 | 关闭收到的 fd，返回错误，保留通道供后续请求使用；读引用由既有 owner 释放 |
 | mmap/边界校验失败 | 是 | 整批失败，退役 session |
 | Create/MCreate 后本地 Buffer 构造失败 | 是 | 按响应 shm_id 调用 WorkerOC DecreaseReference；批量场景回收全部已分配对象 |
 | routed Create 本地 payload Buffer 析构 | 否 | 本地内存所有权与 Worker shm_id 解耦；释放 malloc 内存，Worker 引用仍按 shm_id 管理 |
