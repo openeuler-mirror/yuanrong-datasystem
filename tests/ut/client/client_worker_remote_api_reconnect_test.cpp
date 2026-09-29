@@ -202,6 +202,7 @@ public:
     Status MultiPublish(const MultiPublishReqPb &req, MultiPublishRspPb &rsp,
                         std::vector<RpcMessage> payload) override
     {
+        multiPublishCount_.fetch_add(1);
         (void)req;
         (void)rsp;
         (void)payload;
@@ -390,6 +391,7 @@ public:
     }
 
     std::atomic<uint32_t> publishCount_{ 0 };
+    std::atomic<uint32_t> multiPublishCount_{ 0 };
     std::atomic<StatusCode> getStatus_{ K_OK };
 };
 
@@ -420,6 +422,9 @@ public:
         rsp.set_worker_uuid("ut-worker-uuid");
         rsp.set_lock_id(1);
         rsp.set_client_dead_timeout_s(60);
+        if (tcpFallbackDisabled_.load()) {
+            rsp.set_tcp_fallback_disabled(true);
+        }
         return Status::OK();
     }
 
@@ -438,6 +443,7 @@ public:
     }
 
     std::atomic<uint32_t> registerCount_{ 0 };
+    std::atomic<bool> tcpFallbackDisabled_{ false };
     std::string workerStartId_;
 };
 
@@ -533,6 +539,78 @@ protected:
     std::unique_ptr<RpcServer> server_;
     std::shared_ptr<object_cache::ClientWorkerRemoteApi> api_;
 };
+
+TEST_F(ClientWorkerRemoteApiReconnectTest, RegistrationPolicyIsPerClientAndRefreshes)
+{
+    EXPECT_FALSE(api_->IsTcpFallbackDisabled());
+    workerService_->tcpFallbackDisabled_.store(true);
+    ASSERT_TRUE(api_->ReconnectWorker({}).IsOk());
+    EXPECT_TRUE(api_->IsTcpFallbackDisabled());
+
+    workerService_->tcpFallbackDisabled_.store(false);
+    auto other = std::make_shared<object_cache::ClientWorkerRemoteApi>(
+        HostPort("127.0.0.1", port_), HeartbeatType::NO_HEARTBEAT, "", signature_.get());
+    ASSERT_TRUE(other->Init(kRequestTimeoutMs, kConnectTimeoutMs).IsOk());
+    EXPECT_FALSE(other->IsTcpFallbackDisabled());
+    EXPECT_TRUE(api_->IsTcpFallbackDisabled());
+    ASSERT_TRUE(api_->ReconnectWorker({}).IsOk());
+    EXPECT_FALSE(api_->IsTcpFallbackDisabled());
+}
+
+TEST_F(ClientWorkerRemoteApiReconnectTest, RegistrationPolicyBlocksUbFallbackButAllowsNormalTcp)
+{
+    constexpr size_t PAYLOAD_SIZE = 512 * 1024;
+    std::string data(PAYLOAD_SIZE, 'x');
+    ScopedRequestContext requestCtx;
+    ApiDeadlineGuard deadline(kRequestTimeoutMs);
+    for (bool disabled : { true, false }) {
+        workerService_->tcpFallbackDisabled_.store(disabled);
+        ASSERT_TRUE(api_->ReconnectWorker({}).IsOk());
+        EXPECT_EQ(api_->IsTcpFallbackDisabled(), disabled);
+        auto info = MakeBufferInfo();
+        info->pointer = reinterpret_cast<uint8_t *>(data.data());
+        info->dataSize = data.size();
+        info->metadataSize = 0;
+        info->ubUrmaDataInfo = std::make_shared<UrmaRemoteAddrPb>();
+        info->ubFailureReportRc = Status(K_URMA_ERROR, "cqe status: 9");
+        auto before = ocService_->publishCount_.load();
+        auto rc = api_->Publish(info, false, false);
+        EXPECT_EQ(rc.GetCode(), disabled ? K_URMA_ERROR : K_OK);
+        EXPECT_EQ(ocService_->publishCount_.load(), before + (disabled ? 0u : 1u));
+        info->ubUrmaDataInfo.reset();
+        ASSERT_TRUE(api_->Publish(info, false, false).IsOk());
+        EXPECT_EQ(ocService_->publishCount_.load(), before + (disabled ? 1u : 2u));
+    }
+}
+
+TEST_F(ClientWorkerRemoteApiReconnectTest, DisabledFallbackStillPublishesSuccessfulUb)
+{
+    workerService_->tcpFallbackDisabled_.store(true);
+    ASSERT_TRUE(api_->ReconnectWorker({}).IsOk());
+    ScopedRequestContext requestCtx;
+    ApiDeadlineGuard deadline(kRequestTimeoutMs);
+    auto info = MakeBufferInfo();
+    info->metadataSize = 0;
+    info->ubUrmaDataInfo = std::make_shared<UrmaRemoteAddrPb>();
+    info->ubDataSentByMemoryCopy = true;
+    ASSERT_TRUE(api_->Publish(info, false, false).IsOk());
+    EXPECT_EQ(ocService_->publishCount_.load(), 1u);
+}
+
+TEST_F(ClientWorkerRemoteApiReconnectTest, MultiPublishRejectsDisabledUbFallbackBeforeRpc)
+{
+    workerService_->tcpFallbackDisabled_.store(true);
+    ASSERT_TRUE(api_->ReconnectWorker({}).IsOk());
+    ScopedRequestContext requestCtx;
+    ApiDeadlineGuard deadline(kRequestTimeoutMs);
+    auto info = MakeBufferInfo();
+    info->metadataSize = 0;
+    info->ubUrmaDataInfo = std::make_shared<UrmaRemoteAddrPb>();
+    object_cache::PublishParam param{};
+    MultiPublishRspPb response;
+    EXPECT_EQ(api_->MultiPublish({ info }, param, response).GetCode(), K_URMA_ERROR);
+    EXPECT_EQ(ocService_->multiPublishCount_.load(), 0u);
+}
 
 // With the worker process gone, Publish keeps the K_RPC_PEER_DEAD failure class
 // (the caller must still see peer-dead, not a budget-expiry rewrite) and stays

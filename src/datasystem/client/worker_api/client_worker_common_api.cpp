@@ -402,6 +402,7 @@ Status ClientWorkerLocalCommonApi::Connect(RegisterClientReqPb &req, int32_t tim
     workerCompatibilityVersion_ =
         ParseWorkerCompatibilityVersionOrCurrent(rsp.worker_compatibility_version(), "local worker register");
     workerEnableP2Ptransfer_ = rsp.enable_p2p_transfer();
+    tcpFallbackDisabled_.store(rsp.tcp_fallback_disabled(), std::memory_order_relaxed);
     SetHealthy(!rsp.unhealthy());
     SetHeartbeatProperties(timeoutMs, rsp);
     if (rsp.has_log_sample_config()) {
@@ -1147,6 +1148,7 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
     workerCompatibilityVersion_ =
         ParseWorkerCompatibilityVersionOrCurrent(rsp.worker_compatibility_version(), "remote worker register");
     workerEnableP2Ptransfer_ = rsp.enable_p2p_transfer();
+    tcpFallbackDisabled_.store(rsp.tcp_fallback_disabled(), std::memory_order_relaxed);
     SetHealthy(!rsp.unhealthy());
     workerSupportMultiShmRefCount_ = rsp.support_multi_shm_ref_count();
     SetHeartbeatProperties(timeoutMs, rsp);

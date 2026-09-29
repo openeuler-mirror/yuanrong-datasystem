@@ -370,6 +370,16 @@ struct ObjectInterface {
     #endif
 };
 
+inline Status CheckTcpFallbackAllowed(bool tcpFallbackDisabled, const Status &transportStatus)
+{
+    if (!tcpFallbackDisabled) {
+        return Status::OK();
+    }
+    auto status = transportStatus.IsError() ? transportStatus : Status(K_URMA_ERROR, "UB write failed");
+    status.AppendMsg("TCP fallback is disabled by the client registration policy");
+    return status;
+}
+
 struct ObjectBufferInfo {
     std::string objectKey;
     ShmKey shmId;

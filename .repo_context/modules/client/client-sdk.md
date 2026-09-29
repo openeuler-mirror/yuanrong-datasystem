@@ -759,6 +759,16 @@ handler. Clearing the Router handler synchronously excludes later callback acces
     `K_RPC_UNAVAILABLE` both invalidates the cached channel and permits the existing bounded, non-SHM metadata-owner
     read retry. These decisions are independent: a retry reconnects rather than reusing the failed channel. Dispatched
     SHM queries remain non-replayable.
+  - RegisterClient returns `tcp_fallback_disabled`, cached atomically in the client-worker API and refreshed on
+    registration/reconnection. Bound Publish reads that cache; routed writes snapshot the selected client identity's
+    policy in TransportSetParam; Create/release/auth contexts carry no write policy. The registering worker supplies
+    the client-wide policy;
+    routed targets are not separately registered for this setting. No field is added to Create/MultiCreate or UB
+    address messages, and ObjectBufferInfo has no duplicate policy state. The three UB payload-failure guards preserve
+    ordinary TCP/SHM and successful UB behavior. Missing registration fields allow historical fallback; a reconnect to
+    an old worker resets the cache accordingly. No process-global SDK flag is changed.
+    Focused coverage lives in `client_worker_remote_api_reconnect_test.cpp`, `ub_transporter_mset_failure_test.cpp`,
+    and `transport_test.cpp`, covering client isolation, registration refresh, request snapshots and fallback results.
   - Transport MSet preserves worker-reported partial failures and performs at most one same-worker UB recovery attempt.
     Routed `MultiCreateReqPb` and `MultiPublishReqPb` requests carry `is_routed=true`; target workers authenticate their
     signatures and tenant IDs without requiring the client to register separately on every metadata-owner worker.
@@ -772,7 +782,8 @@ handler. Clearing the Router handler synchronously excludes later callback acces
     code is ambiguous and is not replayed. A dead UB connection is never converted into whole-batch TCP fallback. If the
     same-worker retry still returns `K_URMA_NEED_CONNECT`, `ObjectClientImpl` maps it to
     `SetFailureStage::TRANSFER`, allowing the routing layer to exclude that worker and reroute the group. Only
-    per-object failures returned after `WritePayload` may use bounded TCP fallback: limiter admission sends that object
+    per-object failures returned after `WritePayload` may use bounded TCP fallback only when the registered client
+    policy allows it; policy and limiter admission send that object
     as a TCP payload, while limiter rejection marks only that key failed and allows other objects to publish.
     `MultiPublishReqPb` has no retry marker, so ambiguous RPC failures are not replayed on the same or another worker.
     The narrow exception is `K_SCALE_DOWN`, which the target returns before entering `MultiPublish`; the SDK safely

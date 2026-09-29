@@ -76,6 +76,7 @@ DS_DECLARE_uint32(memory_alignment);
 DS_DEFINE_uint64(oc_shm_transfer_threshold_kb, 500u,
                  "The data threshold to transfer obj data between client and worker via shm, unit is KB");
 DS_DECLARE_bool(enable_p2p_transfer);
+DS_DECLARE_bool(enable_transport_fallback);
 DS_DECLARE_uint32(client_reconnect_wait_s);
 
 namespace datasystem {
@@ -372,6 +373,7 @@ void WorkerServiceImpl::PopulateRegisterClientResponse(
     auto clientDeadTimeoutSec = std::min<uint64_t>(FLAGS_client_dead_timeout_s, FLAGS_node_timeout_s);
     rsp.set_client_dead_timeout_s(clientDeadTimeoutSec);
     rsp.set_enable_p2p_transfer(FLAGS_enable_p2p_transfer);
+    rsp.set_tcp_fallback_disabled(!FLAGS_enable_transport_fallback);
     rsp.set_client_reconnect_wait_s(FLAGS_client_reconnect_wait_s);
     rsp.set_support_multi_shm_ref_count(supportMultiShmRefCount);
     LogSampler::Instance().PopulateConfigProto(rsp.mutable_log_sample_config());

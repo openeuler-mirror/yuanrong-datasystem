@@ -57,6 +57,7 @@ struct TransportSetParam {
     bool keep = false;
     int64_t subTimeoutMs = 0;
     bool isRetry = false;
+    bool tcpFallbackDisabled = false;
 };
 
 struct TransportSetResult {

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-/** Description: Focused UB MSet raw failure evidence tests with a light Bazel link closure. */
+/** Description: Focused UB write failure and TCP fallback policy tests. */
 
 #include <gtest/gtest.h>
 
@@ -53,10 +53,11 @@ TransportRequestContext MakeRequestContext()
     return context;
 }
 
-TransportSetParam MakeSetParam()
+TransportSetParam MakeSetParam(bool tcpFallbackDisabled = false)
 {
     TransportSetParam param;
     param.requestContext = MakeRequestContext();
+    param.tcpFallbackDisabled = tcpFallbackDisabled;
     return param;
 }
 
@@ -87,11 +88,25 @@ public:
     {
     }
 
+    Status InvokeSet(int64_t, PublishReqPb &, const std::vector<MemView> &payloads,
+                     PublishRspPb &, uint32_t &) override
+    {
+        ++setInvokeCount;
+        invokedPayloads.clear();
+        for (const auto &payload : payloads) {
+            invokedPayloads.emplace_back(static_cast<const char *>(payload.Data()), payload.Size());
+        }
+        return Status::OK();
+    }
+
     Status InvokeMultiSet(int64_t, MultiPublishReqPb &request, const std::vector<MemView> &payloads,
                           MultiPublishRspPb &response, uint32_t &workerVersion) override
     {
         ++multiSetInvokeCount;
-        (void)request;
+        publishedKeys.clear();
+        for (const auto &info : request.object_info()) {
+            publishedKeys.emplace_back(info.object_key());
+        }
         invokedPayloads.clear();
         for (const auto &payload : payloads) {
             invokedPayloads.emplace_back(static_cast<const char *>(payload.Data()), payload.Size());
@@ -108,6 +123,8 @@ public:
 
     std::atomic<bool> alive{ true };
     int multiSetInvokeCount = 0;
+    int setInvokeCount = 0;
+    std::vector<std::string> publishedKeys;
     std::vector<std::string> invokedPayloads;
 };
 
@@ -179,6 +196,64 @@ TEST(UbTransporterMSetFailureReportTest, ReportsHardUbFailureOverEarlierTimeout)
     ASSERT_EQ(rpcClient->invokedPayloads.size(), 2u);
     EXPECT_EQ(rpcClient->invokedPayloads[0], "slow");
     EXPECT_EQ(rpcClient->invokedPayloads[1], "hard");
+}
+
+TEST(UbTransporterFallbackPolicyTest, SetHonorsPolicyAndDoesNotPublishDeniedPayload)
+{
+    constexpr size_t PAYLOAD_SIZE = 512 * 1024;
+    const std::string data(PAYLOAD_SIZE, 'x');
+    for (bool disabled : { true, false }) {
+        for (const auto &failure : { Status(K_URMA_ERROR, "cqe status: 9"),
+                                     Status(K_URMA_ERROR, "post send failed") }) {
+            auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+            TestUbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>());
+            transporter.writeStatuses = { failure };
+            auto buffer = MakeTransportBuffer(MakeAddress(9000), "set-key", data, "set-allocation");
+            ASSERT_NE(buffer, nullptr);
+            TransportSetResult result;
+            auto rc = transporter.Set(*buffer, MakeSetParam(disabled), &result);
+            EXPECT_EQ(rc.GetCode(), disabled ? K_URMA_ERROR : K_OK);
+            EXPECT_EQ(result.publishAttempted, !disabled);
+            EXPECT_EQ(rpcClient->setInvokeCount, disabled ? 0 : 1);
+            if (!disabled) {
+                ASSERT_EQ(rpcClient->invokedPayloads.size(), 1u);
+                EXPECT_EQ(rpcClient->invokedPayloads.front(), data);
+            }
+        }
+    }
+}
+
+TEST(UbTransporterFallbackPolicyTest, MSetWithDisabledFallbackPublishesOnlyUbSuccesses)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    TestUbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>());
+    transporter.writeStatuses = { Status(K_URMA_ERROR, "cqe status: 9"),
+                                   Status(K_URMA_ERROR, "post send failed"), Status::OK() };
+    auto denied = MakeTransportBuffer(MakeAddress(9000), "denied", "denied-data", "allocation-a");
+    auto alsoDenied = MakeTransportBuffer(MakeAddress(9000), "also-denied", "denied-data", "allocation-b");
+    auto success = MakeTransportBuffer(MakeAddress(9000), "success", "success-data", "allocation-c");
+    ASSERT_NE(denied, nullptr);
+    ASSERT_NE(alsoDenied, nullptr);
+    ASSERT_NE(success, nullptr);
+    TransportMSetResult result;
+    ASSERT_TRUE(transporter.MSet({ denied, alsoDenied, success }, MakeSetParam(true), result).IsOk());
+    EXPECT_EQ(result.failedKeys, std::vector<std::string>({ "denied", "also-denied" }));
+    EXPECT_EQ(result.lastRc.GetCode(), K_URMA_ERROR);
+    EXPECT_EQ(rpcClient->publishedKeys, std::vector<std::string>({ "success" }));
+    EXPECT_TRUE(rpcClient->invokedPayloads.empty());
+}
+
+TEST(UbTransporterFallbackPolicyTest, AllDeniedMSetNeverPublishes)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    TestUbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>());
+    transporter.writeStatuses = { Status(K_URMA_ERROR, "post send failed") };
+    auto buffer = MakeTransportBuffer(MakeAddress(9000), "denied", "data", "allocation");
+    ASSERT_NE(buffer, nullptr);
+    TransportMSetResult result;
+    EXPECT_EQ(transporter.MSet({ buffer }, MakeSetParam(true), result).GetCode(), K_URMA_ERROR);
+    EXPECT_FALSE(result.publishAttempted);
+    EXPECT_EQ(rpcClient->multiSetInvokeCount, 0);
 }
 
 }  // namespace

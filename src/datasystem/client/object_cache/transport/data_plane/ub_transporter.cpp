@@ -1020,6 +1020,7 @@ Status UbTransporter::PublishSetPayload(const ObjectBufferInfo &info, PublishReq
         return Status::OK();
     }
     // TCP fallback: send data as payload through RPC
+    RETURN_IF_NOT_OK(CheckTcpFallbackAllowed(param.tcpFallbackDisabled, writeRc));
     UrmaFallbackTcpLimiter::Ticket ticket;
     RETURN_IF_NOT_OK(UrmaFallbackTcpLimiter::TryAcquire(urmaFallbackTcpPendingBytes_, info.dataSize, writeRc,
                                                         "client->worker", ticket));
@@ -1037,6 +1038,7 @@ Status UbTransporter::PublishSetPayload(const ObjectBufferInfo &info, PublishReq
 }
 
 void UbTransporter::ClassifyMSetPayload(const std::shared_ptr<ObjectBuffer> &buffer, const Status &writeRc,
+                                        bool tcpFallbackDisabled,
                                         std::vector<std::shared_ptr<ObjectBuffer>> &publishBuffers,
                                         std::vector<bool> &tcpPayload,
                                         std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets,
@@ -1053,8 +1055,11 @@ void UbTransporter::ClassifyMSetPayload(const std::shared_ptr<ObjectBuffer> &buf
     info.ubDataSentByMemoryCopy = false;
     MergeUbFailureReport(writeRc, info, result);
     UrmaFallbackTcpLimiter::Ticket ticket;
-    Status acquireRc = UrmaFallbackTcpLimiter::TryAcquire(urmaFallbackTcpPendingBytes_, info.dataSize, writeRc,
-                                                          "client->worker", ticket);
+    Status acquireRc = CheckTcpFallbackAllowed(tcpFallbackDisabled, writeRc);
+    if (acquireRc.IsOk()) {
+        acquireRc = UrmaFallbackTcpLimiter::TryAcquire(urmaFallbackTcpPendingBytes_, info.dataSize, writeRc,
+                                                       "client->worker", ticket);
+    }
     if (acquireRc.IsError()) {
         result.failedKeys.emplace_back(info.objectKey);
         result.lastRc = acquireRc;
@@ -1067,6 +1072,7 @@ void UbTransporter::ClassifyMSetPayload(const std::shared_ptr<ObjectBuffer> &buf
 }
 
 Status UbTransporter::PrepareMSetPayloads(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                                          bool tcpFallbackDisabled,
                                           std::vector<std::shared_ptr<ObjectBuffer>> &publishBuffers,
                                           std::vector<bool> &tcpPayload,
                                           std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets,
@@ -1100,8 +1106,8 @@ Status UbTransporter::PrepareMSetPayloads(const std::vector<std::shared_ptr<Obje
             continue;
         }
         CHECK_FAIL_RETURN_STATUS(wasPending, K_RUNTIME_ERROR, "UB MSet pending payload index mismatch");
-        ClassifyMSetPayload(buffers[i], writeStatuses[pending++], publishBuffers, tcpPayload, fallbackTickets,
-                            fallbackBytes, result);
+        ClassifyMSetPayload(buffers[i], writeStatuses[pending++], tcpFallbackDisabled, publishBuffers, tcpPayload,
+                            fallbackTickets, fallbackBytes, result);
     }
     CHECK_FAIL_RETURN_STATUS(pending == pendingIndexes.size(), K_RUNTIME_ERROR,
                              "UB MSet pending payloads were not fully classified");
@@ -1178,7 +1184,8 @@ Status UbTransporter::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &buf
         }
         rpcClient = rpcClient_;
     }
-    RETURN_IF_NOT_OK(PrepareMSetPayloads(buffers, publishBuffers, tcpPayload, fallbackTickets, fallbackBytes, result));
+    RETURN_IF_NOT_OK(PrepareMSetPayloads(buffers, param.tcpFallbackDisabled, publishBuffers, tcpPayload,
+                                         fallbackTickets, fallbackBytes, result));
     return PublishMSet(rpcClient, publishBuffers, tcpPayload, param, fallbackBytes, result);
 }
 

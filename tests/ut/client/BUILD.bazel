@@ -164,6 +164,7 @@ ds_cc_test(
     name = "ub_transporter_mset_failure_test",
     srcs = ["ub_transporter_mset_failure_test.cpp"],
     deps = [
+        "//src/datasystem/client:datasystem",
         "//src/datasystem/client/object_cache/transport:client_transport",
         "//src/datasystem/common/object_cache:object_buffer",
         "//src/datasystem/common/rpc:mem_view",

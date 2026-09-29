@@ -1003,6 +1003,9 @@ public:
         createdKeys.push_back(key);
         createdSizes.push_back(size);
         createParams.push_back(param);
+        if (onCreate) {
+            onCreate();
+        }
         if (!createStatuses.empty()) {
             Status rc = createStatuses.front();
             createStatuses.erase(createStatuses.begin());
@@ -1061,10 +1064,11 @@ public:
         return Status::OK();
     }
 
-    Status MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &, const TransportSetParam &,
+    Status MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &, const TransportSetParam &param,
                 TransportMSetResult &result) override
     {
         ++mSetCount;
+        mSetParams.push_back(param);
         result.actualKind = kind;
         result.publishAttempted = mSetPublishAttempted;
         result.workerAutoRelease = mSetWorkerAutoRelease;
@@ -1126,6 +1130,8 @@ public:
     std::vector<TransportCreateParam> createParams;
     std::vector<TransportCreateParam> mCreateParams;
     std::vector<TransportSetParam> setParams;
+    std::vector<TransportSetParam> mSetParams;
+    std::function<void()> onCreate;
     std::vector<std::string> setPayloads;
     std::vector<std::string> mSetFailedKeys;
     std::vector<ShmKey> releasedShmIds;
@@ -6524,6 +6530,68 @@ TEST(ObjectClientTransportTest, CoordinatorRedirectCannotOverrideRequiredSameNod
     object_cache::SetRouteContext route;
 
     EXPECT_EQ(client.SelectSetRoute("strict-placement", {}, route, { worker }).GetCode(), K_NO_AVAILABLE_WORKER);
+}
+
+TEST(ObjectClientTransportTest, RoutedWritesSnapshotRegisteredWorkerFallbackPolicy)
+{
+    const auto worker = MakeAddress(31511);
+    const auto registeredWorker = MakeAddress(31512);
+    ConnectOptions options;
+    options.host = registeredWorker.Host();
+    options.port = registeredWorker.Port();
+    object_cache::ObjectClientImpl client(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(registeredWorker);
+    workerApi->clientId_ = "fallback-policy-test";
+    client.workerApi_.emplace_back(workerApi);
+    client.enableLocalCache_ = false;
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [workerApi](const HostPort &, FakeTransporter &transporter) {
+        transporter.onCreate = [workerApi] {
+            workerApi->tcpFallbackDisabled_.store(!workerApi->IsTcpFallbackDisabled());
+        };
+    };
+    client.transportLayer_ = std::make_unique<TestTransportLayer>(manager);
+    object_cache::SetRouteContext route;
+    ASSERT_TRUE(client.BuildSetRouteContext(worker, route).IsOk());
+    ScopedRequestContext requestContext;
+    ApiDeadlineGuard deadline(1'000);
+    std::string data = "data";
+    object_cache::FullParam param;
+    object_cache::SetFailureStage stage;
+    for (bool disabled : { true, false }) {
+        workerApi->tcpFallbackDisabled_.store(disabled);
+        TransportSetResult result;
+        ASSERT_TRUE(client.routedMode_->ProcessTransportPut(
+            "set-key", reinterpret_cast<const uint8_t *>(data.data()), data.size(), param, {}, 0, 0,
+            route, stage, result, 1'000).IsOk());
+        ASSERT_FALSE(manager->builtTransporters.empty());
+        const auto transporter = manager->builtTransporters.back();
+        ASSERT_FALSE(transporter->setParams.empty());
+        EXPECT_EQ(transporter->setParams.back().tcpFallbackDisabled, disabled);
+        EXPECT_EQ(workerApi->IsTcpFallbackDisabled(), !disabled);
+
+        workerApi->tcpFallbackDisabled_.store(disabled);
+        object_cache::MSetRouteGroup group{ worker, { "mset-key" }, { StringView(data) } };
+        TransportMSetResult batchResult;
+        PerfPoint point(PerfKey::CLIENT_MSET_INPUT_CHECK);
+        ASSERT_TRUE(client.routedMode_->ProcessTransportMSet(
+            group, MSetParam{}, route, batchResult, stage, point).IsOk());
+        ASSERT_FALSE(transporter->mSetParams.empty());
+        EXPECT_EQ(transporter->mSetParams.back().tcpFallbackDisabled, disabled);
+        EXPECT_EQ(workerApi->IsTcpFallbackDisabled(), !disabled);
+
+        auto info = std::make_shared<ObjectBufferInfo>();
+        info->objectKey = "publish-key";
+        info->workerAddr = worker;
+        info->dataSize = data.size();
+        info->pointer = reinterpret_cast<uint8_t *>(data.data());
+        ASSERT_TRUE(client.PublishRoutedBuffer(info, {}, false).IsOk());
+        EXPECT_EQ(transporter->setParams.back().tcpFallbackDisabled, !disabled);
+        size_t failedCount = 0;
+        ASSERT_TRUE(client.ProcessRoutedMSetGroup(worker, { info }, failedCount).IsOk());
+        EXPECT_EQ(transporter->mSetParams.back().tcpFallbackDisabled, !disabled);
+        EXPECT_EQ(failedCount, 0U);
+    }
 }
 
 TEST(ObjectClientTransportTest, RoutedPublishReplaysScaleDownOnRemainingWorker)
