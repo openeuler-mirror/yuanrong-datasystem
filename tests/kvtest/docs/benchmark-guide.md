@@ -343,7 +343,7 @@ keys_per_round = floor(worker_memory_mb × 0.8 × 1024 × 1024 / data_size_bytes
 四个单接口模式的执行流程如下：
 
 ```
-Get: 初始化 Client 组 → Set 全局数据集一次 → 对成功 Set 的 key 每线程预热一次
+Get: 初始化 Client 组 → Set 全局数据集一次 → 每线程在成功 Set 的 key 分片中预热至首次 Get 成功
      → 所有 Client/线程统一起跑并持续 Get → 统一停止 → Cleanup 一次
 
 Set(del/ttl): 所有 Client/线程统一起跑并 Set → 全部完成 → Cleanup → 下一周期
@@ -359,7 +359,8 @@ Client 初始化、线程创建、预置、预热和清理均不计入接口 QPS
 每个被测线程至少需要一个 key；若 `keys_per_dataset < num_clients × num_threads`，配置会在创建 Client 前被拒绝。
 Get 预置不重试失败的 Set：只要至少一个 key 成功，预热、测量和清理就仅使用成功 key；全部失败才终止。
 部分成功时实际活跃并发可能低于配置值，日志记录 `effective_concurrency`，预置结果写入 CSV 的 `setup` 行。
-预热 Get 的业务失败只记录告警，不阻止正式测量；进程通信或同步失败仍会终止用例。
+预热时每个线程从自己的分片首个 key 开始探测，遇到首个 Get 成功的 key 后停止；不会因为首个 key 不可读而放弃该分片。
+预热 Get 的业务失败只记录告警，不阻止正式测量；所有分片都未找到可读 key 才终止。进程通信或同步失败仍会终止用例。
 使用 `cleanup_method=del` 时，Set 模式使用同等数量的独立清理 Client；Get 模式在测量结束后，
 由各被测子进程惰性创建独立清理 Client，精确清理成功 Set 的 key。
 `cleanup_method=none` 的铺底只要至少成功一个 key 就进入测量；测量使用相同的 `round=0` key，后续循环

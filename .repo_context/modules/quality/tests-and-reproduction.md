@@ -656,9 +656,10 @@ Buffer Set output preserves Set-only metrics that exclude the intervening Create
 business failures are accumulated without shortening the configured rounds or duration;
 execution and synchronization failures remain terminal, and any accumulated failure keeps the final exit status nonzero.
 For `cleanup_method=none`, a partially successful fill is recorded as a `setup` row and keeps the final exit status
-nonzero, while measurement still continues on the complete key set. Get warmup business failures are warnings and do not
-prevent measurement, while a warmup that succeeds for no key stops the run; warmup execution or synchronization
-failures remain terminal.
+nonzero, while measurement still continues on the complete key set. Each Get warmup thread probes its retained-key
+partition until its first successful read or partition exhaustion, so an unreadable first key does not discard other
+preloaded candidates. Get warmup business failures are warnings and do not prevent measurement, while a warmup that
+succeeds for no key across all partitions stops the run; warmup execution or synchronization failures remain terminal.
 
 
 Each collect additionally archives reproduction configuration: Client copies only its input deploy/config files into the output, retaining their parent directory names (for example `aaa/deploy.json` and `aaa/config.json`), without copying other directory contents; Worker normally saves each selected Pod's remote config as `worker_config.json` in that Pod's log directory. For Worker keyword filtering, a Pod with zero matching log lines skips both its local directory and `worker_config.json`; a Pod with matches keeps the configuration beside its logs. Other log filters do not filter this configuration archive. Existing default log selection, concurrency, and summary behavior remain unchanged.
