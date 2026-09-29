@@ -25,6 +25,21 @@
   Hard reclaim and object TTL are disabled. Baseline reproduction requires the same test-only injection hook;
   the original socket desynchronization trigger is outside this test's scope.
 
+## SHM FD response synchronization
+
+- `ShmFdChannel` keeps its existing channel mutex across request numbering, RPC, and reception. Complete responses
+  with `0 < receivedRequestId < requestId_` are closed and discarded before receiving again; only the matching
+  response is checked against the current request's FD count. Draining does not send another RPC.
+- Each receive iteration uses `RemainingTimeoutMs` and the original socket timeout/`SockRecvFd` path. The common
+  receiver still retries `EAGAIN/EWOULDBLOCK`, so this is a between-receives budget check, not a strict deadline for
+  an individual blocked receive. SCMTCP partial-message recovery remains outside this fix.
+- Zero/future IDs, current-response count mismatches, and receive errors return failure and close received FDs,
+  preserving the channel for subsequent requests. Existing read-reference release behavior is unchanged.
+- Only FD acquisition on mmap misses changes; no new lock, thread, protocol field, public API, or persistent state.
+  A client binary rollback restores the previous stale-response failure behavior.
+- Regression: `ShmFdReceiveTest.*` in `tests/ut/client/transport_test.cpp` covers abandoned RPC responses,
+  stale FD closure, an expired budget before reception, and reuse after validation failure.
+
 ## Scope
 
 - Paths:

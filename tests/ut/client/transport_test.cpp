@@ -37,6 +37,7 @@
 #include <utility>
 #include <vector>
 
+#include <poll.h>
 #include <spawn.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -2190,6 +2191,136 @@ TEST(WorkerRpcClientTest, ShmDisconnectUsesBoundedSignedWorkerServiceRequest)
     EXPECT_EQ(client.invokedShmDisconnectRequest.token(), "token-1");
     EXPECT_EQ(client.invokedShmDisconnectRequest.access_key(), "access-1");
     EXPECT_FALSE(client.invokedShmDisconnectRequest.signature().empty());
+}
+
+class QueuedFdWorkerRpcClient final : public FakeWorkerRpcClient {
+public:
+    QueuedFdWorkerRpcClient() = default;
+    ~QueuedFdWorkerRpcClient() override = default;
+
+    Status InvokeGetClientFd(GetClientFdReqPb &request, GetClientFdRspPb &) override
+    {
+        ++requests;
+        return onRequest(request);
+    }
+
+    std::function<Status(const GetClientFdReqPb &)> onRequest;
+    int requests = 0;
+};
+
+class ShmFdReceiveTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        int sockets[2];
+        ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets), 0);
+        peer_ = ShmFd(sockets[1]);
+        rpc_ = std::make_shared<QueuedFdWorkerRpcClient>();
+        rpc_->onRequest = [this](const GetClientFdReqPb &request) {
+            return SockSendFd(peer_.Get(), false, { peer_.Get() }, request.request_id());
+        };
+        channel_ = std::make_shared<ShmFdChannel>(rpc_, ShmFd(sockets[0]), false, "fd-receive-test");
+    }
+
+    void TearDown() override
+    {
+        for (int fd : received_) {
+            close(fd);
+        }
+    }
+
+    ShmFd peer_;
+    std::shared_ptr<QueuedFdWorkerRpcClient> rpc_;
+    std::shared_ptr<ShmFdChannel> channel_;
+    std::vector<int> received_;
+};
+
+TEST_F(ShmFdReceiveTest, DrainsMultipleAbandonedResponsesBeforeMatchingCurrentRequest)
+{
+    ApiDeadlineGuard deadline(1000);
+    int pipeFds[2];
+    ASSERT_EQ(pipe(pipeFds), 0);
+    ShmFd readEnd(pipeFds[0]);
+    ShmFd writeEnd(pipeFds[1]);
+    rpc_->onRequest = [this, &writeEnd](const GetClientFdReqPb &request) {
+        RETURN_IF_NOT_OK(SockSendFd(peer_.Get(), false, { writeEnd.Get(), writeEnd.Get() }, request.request_id()));
+        return Status(K_RPC_DEADLINE_EXCEEDED, "RPC response lost after sending fds");
+    };
+    EXPECT_EQ(channel_->GetClientFd({ 17, 18 }, received_, "").GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(channel_->GetClientFd({ 17, 18 }, received_, "").GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    writeEnd.Reset();
+    rpc_->onRequest = [this](const GetClientFdReqPb &request) {
+        return SockSendFd(peer_.Get(), false, { peer_.Get() }, request.request_id());
+    };
+    ASSERT_TRUE(channel_->GetClientFd({ 19 }, received_, "").IsOk());
+    ASSERT_EQ(received_.size(), 1u);
+    EXPECT_EQ(rpc_->requests, 3);
+    EXPECT_TRUE(channel_->IsAlive());
+    pollfd descriptor{ readEnd.Get(), POLLIN, 0 };
+    ASSERT_EQ(poll(&descriptor, 1, 0), 1);
+    EXPECT_NE(descriptor.revents & POLLHUP, 0) << "All stale pipe writer fds must be closed";
+    close(received_.front());
+    received_.clear();
+    EXPECT_TRUE(channel_->GetClientFd({ 20 }, received_, "").IsOk());
+    EXPECT_EQ(rpc_->requests, 4);
+}
+
+TEST_F(ShmFdReceiveTest, ExpiredBudgetLeavesResponseForNextRequestToDrain)
+{
+    {
+        ApiDeadlineGuard deadline(1000);
+        rpc_->onRequest = [this](const GetClientFdReqPb &request) {
+            RETURN_IF_NOT_OK(SockSendFd(peer_.Get(), false, { peer_.Get() }, request.request_id()));
+            ApiDeadline::Instance().Init(0);
+            return Status::OK();
+        };
+        EXPECT_EQ(channel_->GetClientFd({ 17 }, received_, "").GetCode(), K_RPC_DEADLINE_EXCEEDED);
+        EXPECT_TRUE(received_.empty());
+        EXPECT_TRUE(channel_->IsAlive());
+    }
+    ApiDeadlineGuard deadline(1000);
+    rpc_->onRequest = [this](const GetClientFdReqPb &request) {
+        return SockSendFd(peer_.Get(), false, { peer_.Get() }, request.request_id());
+    };
+    EXPECT_TRUE(channel_->GetClientFd({ 17 }, received_, "").IsOk());
+    EXPECT_EQ(received_.size(), 1u);
+    EXPECT_EQ(rpc_->requests, 2);
+}
+
+TEST_F(ShmFdReceiveTest, RejectsFutureResponseButAllowsNextRequest)
+{
+    ApiDeadlineGuard deadline(1000);
+    rpc_->onRequest = [this](const GetClientFdReqPb &request) {
+        return SockSendFd(peer_.Get(), false, { peer_.Get() }, request.request_id() + 1);
+    };
+    EXPECT_EQ(channel_->GetClientFd({ 17 }, received_, "").GetCode(), K_RUNTIME_ERROR);
+    EXPECT_TRUE(received_.empty());
+    EXPECT_TRUE(channel_->IsAlive());
+    rpc_->onRequest = [this](const GetClientFdReqPb &request) {
+        return SockSendFd(peer_.Get(), false, { peer_.Get() }, request.request_id());
+    };
+    EXPECT_TRUE(channel_->GetClientFd({ 17 }, received_, "").IsOk());
+    EXPECT_EQ(received_.size(), 1u);
+    EXPECT_EQ(rpc_->requests, 2);
+}
+
+TEST_F(ShmFdReceiveTest, RejectsMalformedRequestId)
+{
+    ApiDeadlineGuard deadline(1000);
+    rpc_->onRequest = [this](const GetClientFdReqPb &) {
+        return SockSendFd(peer_.Get(), false, { peer_.Get() }, 0);
+    };
+    EXPECT_EQ(channel_->GetClientFd({ 17 }, received_, "").GetCode(), K_RUNTIME_ERROR);
+    EXPECT_TRUE(received_.empty());
+    EXPECT_TRUE(channel_->IsAlive());
+}
+
+TEST_F(ShmFdReceiveTest, RejectsCurrentResponseWithWrongFdCount)
+{
+    ApiDeadlineGuard deadline(1000);
+    EXPECT_EQ(channel_->GetClientFd({ 17, 18 }, received_, "").GetCode(), K_RUNTIME_ERROR);
+    EXPECT_TRUE(received_.empty());
+    EXPECT_TRUE(channel_->IsAlive());
 }
 
 TEST(ShmFdChannelTest, CloseDoesNotWaitForInFlightGetClientFdRpc)
