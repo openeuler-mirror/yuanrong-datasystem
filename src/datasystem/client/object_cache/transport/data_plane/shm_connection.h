@@ -62,6 +62,8 @@ public:
     void Close();
 
 private:
+    Status ReceiveClientFds(int socketNumber, size_t expectedFdCount, std::vector<int> &clientFds);
+
     std::shared_ptr<WorkerRpcClient> rpcClient_;
     ShmFd socketFd_;
     bool isScmTcp_;

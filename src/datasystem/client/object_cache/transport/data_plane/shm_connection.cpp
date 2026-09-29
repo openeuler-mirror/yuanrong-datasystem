@@ -239,22 +239,35 @@ Status ShmFdChannel::GetClientFd(const std::vector<int> &workerFds, std::vector<
         return rc;
     }
 
-    int64_t remainingMs = 0;
-    RETURN_IF_NOT_OK(RemainingTimeoutMs(remainingMs));
+    return ReceiveClientFds(socketNumber, workerFds.size(), clientFds);
+}
+
+Status ShmFdChannel::ReceiveClientFds(int socketNumber, size_t expectedFdCount, std::vector<int> &clientFds)
+{
     UnixSockFd socket(socketNumber, isScmTcp_);
-    RETURN_IF_NOT_OK(socket.SetTimeout(remainingMs));
-    uint64_t receivedRequestId = 0;
-    rc = SockRecvFd(socketNumber, isScmTcp_, clientFds, receivedRequestId);
-    LOG_IF_ERROR(socket.SetTimeout(0), "Restore shared-memory fd socket timeout failed");
-#ifdef WITH_TESTS
-    INJECT_POINT_NO_RETURN("client.shm_fd.received_request_id_mismatch", [&receivedRequestId]() {
-        ++receivedRequestId;
-    });
-#endif
-    if (rc.IsError() || receivedRequestId != requestId_ || clientFds.size() != workerFds.size()) {
+    while (true) {
+        int64_t remainingMs = 0;
+        RETURN_IF_NOT_OK(RemainingTimeoutMs(remainingMs));
+        RETURN_IF_NOT_OK(socket.SetTimeout(remainingMs));
+        uint64_t receivedRequestId = 0;
+        Status rc = SockRecvFd(socketNumber, isScmTcp_, clientFds, receivedRequestId);
+        LOG_IF_ERROR(socket.SetTimeout(0), "Restore shared-memory fd socket timeout failed");
+        INJECT_POINT_NO_RETURN("client.shm_fd.received_request_id_mismatch", [&receivedRequestId]() {
+            ++receivedRequestId;
+        });
+        if (rc.IsOk() && receivedRequestId > 0 && receivedRequestId < requestId_) {
+            SLOW_LOG(WARNING) << "Discard stale SHM fd response, clientId=" << clientId_
+                << ", expectedRequestId=" << requestId_ << ", receivedRequestId=" << receivedRequestId
+                << ", discardedFdCount=" << clientFds.size() << ", isScmTcp=" << isScmTcp_;
+            CloseFds(clientFds);
+            continue;
+        }
+        if (rc.IsOk() && receivedRequestId == requestId_ && clientFds.size() == expectedFdCount) {
+            return Status::OK();
+        }
         SLOW_LOG(WARNING) << "SHM fd validation failed, clientId=" << clientId_
             << ", expectedRequestId=" << requestId_ << ", receivedRequestId=" << receivedRequestId
-            << ", expectedFdCount=" << workerFds.size() << ", receivedFdCount=" << clientFds.size()
+            << ", expectedFdCount=" << expectedFdCount << ", receivedFdCount=" << clientFds.size()
             << ", isScmTcp=" << isScmTcp_ << ", status=" << rc;
         CloseFds(clientFds);
         if (rc.IsError()) {
@@ -262,7 +275,6 @@ Status ShmFdChannel::GetClientFd(const std::vector<int> &workerFds, std::vector<
         }
         RETURN_STATUS(K_RUNTIME_ERROR, "Received shared-memory fds do not match GetClientFd request");
     }
-    return Status::OK();
 }
 
 const std::string &ShmFdChannel::ClientId() const
