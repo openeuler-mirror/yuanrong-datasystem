@@ -9,6 +9,7 @@
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/object_cache/ub_health_summary_codec.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/share_memory.pb.h"
@@ -153,6 +154,7 @@ std::unordered_map<std::string, UbHealthSummary> UbHealthLeaseSync::DecodeLeaseS
 void UbHealthLeaseSync::Run()
 {
     while (!stopping_.load(std::memory_order_acquire)) {
+        auto traceGuard = Trace::Instance().SetTraceNewID(Trace::GenerateComponentTraceId("UbHealthLeaseSync"));
         LOG_IF_ERROR(SyncOnce(), "Refresh UB health lease snapshot failed");
         std::unique_lock<std::mutex> lock(mutex_);
         cv_.wait_for(lock, interval_, [this] { return stopping_.load(std::memory_order_acquire); });

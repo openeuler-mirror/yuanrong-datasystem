@@ -15,7 +15,9 @@
  * Description: Unit tests for metadata recovery manager.
  */
 #include <functional>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -24,6 +26,7 @@
 #include <gtest/gtest.h>
 
 #include "common.h"
+#include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
@@ -349,6 +352,54 @@ ObjectMetaPb BuildRecoverMeta(const std::string &objectKey, WriteMode writeMode,
     config->set_consistency_type(static_cast<uint32_t>(ConsistencyType::PRAM));
     config->set_cache_type(static_cast<uint32_t>(CacheType::MEMORY));
     return meta;
+}
+
+TEST_F(MetaDataRecoveryManagerTest, ParallelRecoveryPropagatesTraceId)
+{
+    Parallel::InitParallelThreadPool(1);
+    ASSERT_GT(Parallel::ParallelThreadPool::Instance()->GetThreadNum(), 0);
+    ScopedRequestContext request("recovery-parent");
+    MetadataTestPlacementFacade placement;
+    worker::MetadataRouteResolver route(&placement, worker::MetadataRouteOptions{});
+    MetaDataRecoveryManager manager(localAddress_, objectTable_, clusterAccess_, workerMasterApiManager_,
+                                    route, 128, nullptr, memCpyThreadPool_, recoveredContentSaver_);
+    std::mutex mutex;
+    std::condition_variable cv;
+    size_t arrived = 0;
+    std::vector<std::string> keys;
+    std::vector<ObjectMetaPb> metas;
+    for (int index = 0; index < 2; ++index) {
+        HostPort masterAddr("127.0.0.1", 18501 + index);
+        const auto key = "trace-recovery-" + std::to_string(index);
+        placement.SetOwner(key, masterAddr);
+        AddObject(key);
+        keys.emplace_back(key);
+        metas.emplace_back(BuildRecoverMeta(key, WriteMode::NONE_L2_CACHE));
+        auto api = std::make_shared<TestWorkerMasterOCApi>(masterAddr, localAddress_);
+        api->SetPushHandler([&](master::PushMetaToMasterReqPb &, master::PushMetaToMasterRspPb &) {
+            EXPECT_EQ(Trace::Instance().GetTraceID(), "recovery-parent");
+            std::unique_lock<std::mutex> lock(mutex);
+            ++arrived;
+            cv.notify_all();
+            EXPECT_TRUE(cv.wait_for(lock, std::chrono::seconds(1), [&] { return arrived == 2; }));
+            return Status(K_RPC_UNAVAILABLE, "injected recovery failure");
+        });
+        workerMasterApiManager_->SetApi(masterAddr, api);
+    }
+    for (int path = 0; path < 3; ++path) {
+        arrived = 0;
+        std::vector<std::string> failedIds;
+        if (path == 0) {
+            failedIds = manager.RecoverMetadataWithSummary(keys, "", true).failedIds;
+        } else if (path == 1) {
+            failedIds = manager.RecoverMetadataWithSummary(metas).failedIds;
+        } else {
+            DS_ASSERT_NOT_OK(manager.RecoverMetadata(metas, failedIds));
+        }
+        EXPECT_EQ(arrived, 2U);
+        EXPECT_THAT(failedIds, UnorderedElementsAreArray(keys));
+        EXPECT_EQ(Trace::Instance().GetTraceID(), "recovery-parent");
+    }
 }
 
 TEST_F(MetaDataRecoveryManagerTest, RecoverMetadataBatchSizeShouldNotExceed500)

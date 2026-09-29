@@ -322,8 +322,8 @@ public:
         }
         MarkTimedOutLocked(onRetainedTimeout);
         // URMA wait timeout is a transport completion timeout, not an RPC API deadline.
-        LOG_EVERY_N(ERROR, FAILURE_LOG_RATE) << "Timed out waiting for urma_request_id_" << requestId_;
-        return Status(K_URMA_WAIT_TIMEOUT, FormatString("Timed out waiting for urma_request_id_%zu", requestId_));
+        LOG_EVERY_N(ERROR, FAILURE_LOG_RATE) << "Timed out waiting for urma_request_id:" << requestId_;
+        return Status(K_URMA_WAIT_TIMEOUT, FormatString("Timed out waiting for urma_request_id:%zu", requestId_));
     }
 
     void MarkWaitTimedOut(const std::function<void()> &onRetainedTimeout)
