@@ -42,6 +42,7 @@
 #include "datasystem/client/object_cache/routing/routing.h"
 #include "datasystem/client/object_cache/transport/rpc/worker_rpc_client.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
+#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
 #include "datasystem/common/coordinator/key_value_entry.h"
 #include "datasystem/common/coordinator/static_coordinator_discovery.h"
@@ -56,6 +57,7 @@
 #include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/protos/coordinator.pb.h"
 #include "datasystem/utils/service_discovery.h"
+#include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 
 namespace datasystem {
 namespace st {
@@ -1433,6 +1435,126 @@ TEST_F(CoordinatorBackendClusterTest, IsolatedWorkerRemovedThenColdRejoinsWithou
     auto t1 = std::chrono::steady_clock::now();
     LOG(INFO) << "[TIMING] IsolatedWorkerRemovedThenColdRejoinsWithoutSuicide total test time: "
               << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count() << "ms";
+}
+
+class CoordinatorRejoinMigrationTest : public CoordinatorBackendClusterTest, public CommonDistributedExt {
+protected:
+    BaseCluster *GetCluster() override
+    {
+        return cluster_.get();
+    }
+
+    int GetTestCaseTimeoutSecs() const override
+    {
+        return 120;
+    }
+};
+
+TEST_F(CoordinatorRejoinMigrationTest, LEVEL1_RejoinedWorkerAcceptsIncomingMigration)
+{
+    constexpr uint32_t sourceIndex = 0;
+    constexpr uint32_t targetIndex = 1;
+    constexpr int admissionTimeoutSec = 5;
+    constexpr char closePoint[] = "WorkerOcServiceMigrateImpl.CloseIncomingMigrationAdmissionAndWait.closed";
+    ASSERT_NO_FATAL_FAILURE(AssertWorkersInCluster({ sourceIndex, targetIndex }));
+    const auto targetPid = cluster_->GetWorkerPid(targetIndex);
+    HostPort sourceAddress;
+    HostPort targetAddress;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(sourceIndex, sourceAddress));
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(targetIndex, targetAddress));
+    auto akSk = std::make_shared<AkSkManager>(0);
+    DS_ASSERT_OK(akSk->SetClientAkSk("QTWAOYTTINDUT2QVKYUC",
+                                    "MFyfvK41ba2giqM7**********KGpownRZlmVmHc"));
+    object_cache::WorkerRemoteWorkerOCApi targetApi(targetAddress, sourceAddress, akSk);
+    DS_ASSERT_OK(targetApi.Init());
+    auto probeMigration = [&] {
+        MigrateDataReqPb req;
+        req.set_type(MigrateType::SCALE_DOWN);
+        req.set_worker_addr(sourceAddress.ToString());
+        MigrateDataRspPb rsp;
+        return targetApi.MigrateDataProbe(req, rsp, 1000);
+    };
+    DS_ASSERT_OK(probeMigration());
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, targetIndex, closePoint, "call()"));
+
+    Raii clearInjections([this] {
+        (void)cluster_->ClearInjectAction(WORKER, 1, COORDINATOR_KEEPALIVE_INJECT_NAME);
+        (void)cluster_->ClearInjectAction(WORKER, 1, WITNESS_PROBE_FAILURE_INJECT);
+        (void)cluster_->ClearInjectAction(WORKER, 1,
+                                         "WorkerOcServiceMigrateImpl.CloseIncomingMigrationAdmissionAndWait.closed");
+    });
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, targetIndex, WITNESS_PROBE_FAILURE_INJECT,
+                                           "return(K_RPC_UNAVAILABLE)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, targetIndex, COORDINATOR_KEEPALIVE_INJECT_NAME,
+                                           "return(K_RPC_UNAVAILABLE)"));
+    ASSERT_NO_FATAL_FAILURE(AssertWorkersNotInCluster({ targetIndex }));
+    ASSERT_TRUE(cluster_->CheckWorkerProcess(targetIndex));
+
+    std::shared_ptr<KVClient> targetKvClient;
+    InitKVClient(targetIndex, targetKvClient);
+    ASSERT_NE(targetKvClient, nullptr);
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&] { return targetKvClient->Set("rejoin_migration_isolated", "isolated"); },
+        WAIT_SCALE_TIMEOUT_SEC, K_NOT_READY));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, targetIndex, COORDINATOR_KEEPALIVE_INJECT_NAME));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, targetIndex, WITNESS_PROBE_FAILURE_INJECT));
+    ASSERT_NO_FATAL_FAILURE(AssertWorkersInCluster({ sourceIndex, targetIndex }));
+    DS_ASSERT_OK(SetKeyEventually(*targetKvClient, "rejoin_migration_ready", "ready"));
+    ASSERT_EQ(cluster_->GetWorkerPid(targetIndex), targetPid);
+    ASSERT_TRUE(cluster_->CheckWorkerProcess(targetIndex));
+    uint64_t closeCount = 0;
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, targetIndex, closePoint, closeCount));
+    ASSERT_GT(closeCount, 0UL) << "The same-process rejoin must execute migration admission cleanup";
+
+    // The pre-fix Worker serves Set again here, but permanently rejects this migration RPC with K_NOT_READY.
+    Status migrationStatus;
+    const auto migrationWait = cluster_->WaitForExpectedResult(
+        [&] {
+            migrationStatus = probeMigration();
+            return migrationStatus;
+        },
+        admissionTimeoutSec, K_OK);
+    ASSERT_TRUE(migrationWait.IsOk()) << "Migration remains rejected after same-process rejoin: " << migrationStatus;
+
+    std::shared_ptr<ObjectClient> sourceClient;
+    std::shared_ptr<ObjectClient> targetClient;
+    InitTestClient(sourceIndex, sourceClient);
+    InitTestClient(targetIndex, targetClient);
+    ASSERT_NE(sourceClient, nullptr);
+    ASSERT_NE(targetClient, nullptr);
+    const std::vector<std::string> keys{ "rejoin_migration_payload_1", "rejoin_migration_payload_2" };
+    const std::string payload(64 * 1024, 'r');
+    for (const auto &key : keys) {
+        DS_ASSERT_OK(sourceClient->Put(key, reinterpret_cast<const uint8_t *>(payload.data()), payload.size(),
+                                       CreateParam{}));
+    }
+    std::vector<ObjMetaInfo> before;
+    DS_ASSERT_OK(targetClient->GetObjMetaInfo("", keys, before));
+    ASSERT_EQ(before.size(), keys.size());
+    for (const auto &meta : before) {
+        ASSERT_EQ(meta.locations, std::vector<std::string>{ sourceAddress.ToString() });
+    }
+    sourceClient.reset();
+    VoluntaryScaleDownInject(sourceIndex);
+    ASSERT_NO_FATAL_FAILURE(AssertWorkersInCluster({ targetIndex }, WAIT_SCALE_TIMEOUT_SEC));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&] {
+            return cluster_->CheckWorkerProcess(sourceIndex) ? Status(K_TRY_AGAIN, "source has not exited")
+                                                            : Status::OK();
+        },
+        WAIT_SCALE_TIMEOUT_SEC, K_OK));
+    std::vector<ObjMetaInfo> after;
+    DS_ASSERT_OK(targetClient->GetObjMetaInfo("", keys, after));
+    ASSERT_EQ(after.size(), keys.size());
+    for (const auto &meta : after) {
+        EXPECT_EQ(meta.locations, std::vector<std::string>{ targetAddress.ToString() });
+    }
+    for (const auto &key : keys) {
+        std::string value;
+        DS_ASSERT_OK(targetKvClient->Get(key, value));
+        EXPECT_EQ(value, payload);
+    }
+    EXPECT_EQ(cluster_->GetWorkerPid(targetIndex), targetPid);
 }
 
 TEST_F(CoordinatorBackendElectionClusterTest, WorkersStartAfterCoordinatorElectionAndServeRequests)

@@ -348,6 +348,8 @@ public:
      * @return K_OK after the drain; K_RPC_DEADLINE_EXCEEDED if admitted requests remain.
      */
     Status CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::time_point deadline);
+    bool HasPendingRejoinCleanup() const;
+    void ReopenIncomingMigrationAdmissionAfterRejoin();
     Status PauseIncomingMigrationAdmissionAndCheckDrained();
     void ResumeIncomingMigrationAdmission();
 

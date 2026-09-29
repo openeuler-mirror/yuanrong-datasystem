@@ -54,11 +54,13 @@ std::chrono::milliseconds EnsureRetryBackoff(const CoordinatorLeaderIdentity &id
 }  // namespace
 
 WorkerLeaderReconciler::WorkerLeaderReconciler(ICoordinatorServiceProxy &proxy, DsCoordinationBackend &backend,
-                                               TopologyRecoveryReporter &reporter, std::string clusterName)
+                                               TopologyRecoveryReporter &reporter, std::string clusterName,
+                                               std::function<void()> rejoinCompleted)
     : proxy_(proxy),
       backend_(backend),
       reporter_(reporter),
       clusterName_(std::move(clusterName)),
+      rejoinCompleted_(std::move(rejoinCompleted)),
       ensurePool_(std::make_unique<ThreadPool>(ENSURE_POOL_SIZE, ENSURE_POOL_SIZE, "WorkerLeaderEnsure", true))
 {
 }
@@ -231,6 +233,13 @@ Status WorkerLeaderReconciler::ReconcileIdentity(const CoordinatorLeaderIdentity
         HostPort localAddress;
         RETURN_IF_NOT_OK(localAddress.ParseString(backend_.GetWatcherAddr()));
         RETURN_IF_NOT_OK(backend_.InformReconciliationDone(localAddress));
+        const auto currentAfterReconciliation = router_->GetLeaderIdentity();
+        CHECK_FAIL_RETURN_STATUS(
+            currentAfterReconciliation.has_value() && SameIdentity(*currentAfterReconciliation, identity),
+            K_TRY_AGAIN, "Coordinator Leader changed during membership reconciliation");
+        if (rejoinCompleted_) {
+            rejoinCompleted_();
+        }
     }
     reporter_.NotifyMembershipReady(identity);
     {
@@ -309,6 +318,8 @@ bool WorkerLeaderReconciler::FinishFailedEnsure(const EnsureWork &work, const St
         return true;
     }
     if (!IsCurrentIdentityLocked(work.identity)) {
+        forceEnsurePending_ = forceEnsurePending_ || work.forceEnsure;
+        completeRejoinPending_ = completeRejoinPending_ || work.completeRejoin;
         retryAttempt = 0;
         auto shouldStop = [this] {
             return stopping_.load(std::memory_order_acquire);

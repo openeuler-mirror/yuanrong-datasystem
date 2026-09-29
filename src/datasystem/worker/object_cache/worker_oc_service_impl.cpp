@@ -1394,6 +1394,22 @@ Status WorkerOCServiceImpl::CloseIncomingMigrationAdmissionAndWait(std::chrono::
     return gMigrateProc_->CloseIncomingMigrationAdmissionAndWait(deadline);
 }
 
+bool WorkerOCServiceImpl::HasPendingRejoinCleanup() const
+{
+    const bool localExiting = exitRequested_ != nullptr && exitRequested_->load(std::memory_order_acquire);
+    return gMigrateProc_ != nullptr && gMigrateProc_->IsIncomingMigrationAdmissionClosed()
+           && !localExiting && !shutdownRequested_.load(std::memory_order_acquire)
+           && !topologyScaleInDataDrainStarted_.load(std::memory_order_acquire);
+}
+
+void WorkerOCServiceImpl::ReopenIncomingMigrationAdmissionAfterRejoin()
+{
+    if (gMigrateProc_ != nullptr) {
+        gMigrateProc_->ReopenIncomingMigrationAdmissionAfterRejoin(
+            topologyScaleInDataDrainStarted_, shutdownRequested_);
+    }
+}
+
 Status WorkerOCServiceImpl::PauseIncomingMigrationAdmissionAndCheckDrained()
 {
     RETURN_OK_IF_TRUE(gMigrateProc_ == nullptr);

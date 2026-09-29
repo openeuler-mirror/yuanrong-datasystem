@@ -108,6 +108,8 @@ public:
      * @return K_OK after the drain; K_RPC_DEADLINE_EXCEEDED if admitted requests remain.
      */
     Status CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::time_point deadline);
+    void ReopenIncomingMigrationAdmissionAfterRejoin(const std::atomic<bool> &scaleInDataDrainStarted,
+                                                   const std::atomic<bool> &shutdownRequested);
     /** Pause new migrations and return K_TRY_AGAIN instead of waiting while admitted requests drain. */
     Status PauseIncomingMigrationAdmissionAndCheckDrained();
     void ResumeIncomingMigrationAdmission();
