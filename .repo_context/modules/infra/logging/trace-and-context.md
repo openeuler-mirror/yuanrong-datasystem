@@ -73,10 +73,12 @@
     establish component traces at thread entry. The URMA poll trace describes a component lifetime; individual
     completions remain distinguished by `urma_request_id`, not by an invented client request association;
   - metadata recovery creates a trace only when no caller trace exists. Its three `ParallelFor` dispatch paths
-    capture the caller's trace ID and apply `SetTraceNewID(traceID, true)` per chunk. The keep flag prevents
-    an inline chunk from clearing the caller's ID on return. This propagates only the ID, resets request sampling
-    state, and leaves the ID on pool threads until the next task overwrites it. Regression entrypoint:
-    `MetaDataRecoveryManagerTest.ParallelRecoveryPropagatesTraceId`;
+    capture the trace ID and enter each chunk with `SetRequestContext(nullptr)` followed by
+    `ScopedRequestContext(traceID)`, matching the explicit binding pattern used by rebalance pool tasks.
+    This propagates the ID, not the full caller sampling state. `ParallelFor` also executes chunks on the caller,
+    so clearing the slot applies to inline execution too; it does not preserve the caller's original request binding.
+  - the topology Host loop initializes its trace guard before the try block and keeps it alive through catch logging;
+    trace setup exceptions are outside that catch boundary in the noexcept loop;
   - the worker `RebalanceExecutor` single-task pool (`executorPool_` in `src/datasystem/worker/rebalance_executor.cpp::Submit`) propagates the caller's traceID via `GetTraceID()` + `SetTraceNewID` TraceGuard at task submit, so the executor/migrator logs and the downstream `ReportRebalanceResult`/`MigrateData` RPCs carry the same trace as the master scheduler logs; without it the executor logs had an empty traceID column and the target/master finish logs carried freshly-minted bare UUIDs;
   - request sampling decisions live in `Trace` rather than a process-wide trace-decision table; `LogSampler`
     owns the sampling decision and precomputed threshold; no per-second counter is used;
