@@ -36,6 +36,7 @@
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
 #include "datasystem/common/coordinator/key_value_entry.h"
 #include "datasystem/common/coordinator/static_coordinator_discovery.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/validator.h"
@@ -118,6 +119,36 @@ void FillResults(std::vector<DeleteClusterMemberResult> &results,
     }
 }
 
+Status BuildCasProcessFunc(const std::string &curValue,
+    const std::vector<std::string> &toDelete, std::unique_ptr<std::string> &newValue, bool &retry)
+{
+    retry = false;
+    if (curValue.empty()) {
+        return Status::OK();
+    }
+    cluster::TopologyState current;
+    auto decRc = DecodeTopologyValue(curValue, current);
+    if (decRc.IsError()) {
+        return decRc;
+    }
+    cluster::TopologyState next;
+    bool changed = false;
+    auto rmRc = RemoveMembersFromTopology(current, toDelete, next, changed);
+    if (rmRc.IsError()) {
+        return rmRc;
+    }
+    if (!changed) {
+        return Status::OK();
+    }
+    std::string encoded;
+    auto encRc = cluster::TopologyRepositoryCodec::EncodeTopology(next, encoded);
+    if (encRc.IsError()) {
+        return encRc;
+    }
+    newValue = std::make_unique<std::string>(encoded);
+    return Status::OK();
+}
+
 }  // namespace
 
 class ClusterAdminClient::Impl final {
@@ -164,6 +195,9 @@ Status ClusterAdminClient::Impl::InitEtcd()
 {
     CHECK_FAIL_RETURN_STATUS(Validator::ValidateEtcdAddresses("etcd_address", options_.etcdAddress), K_INVALID,
         "invalid etcd address");
+    if (FLAGS_etcd_address.empty()) {
+        FLAGS_etcd_address = options_.etcdAddress;
+    }
     etcdStore_ = std::make_unique<EtcdStore>(options_.etcdAddress);
     RETURN_IF_NOT_OK(etcdStore_->Init());
     RETURN_IF_NOT_OK(etcdStore_->CreateTableWithExactPrefix(keys_->MembershipTable(),
@@ -297,17 +331,17 @@ void ClusterAdminClient::Impl::PreCheckAddresses(const std::vector<std::string> 
             results.push_back(std::move(result));
             continue;
         }
-        if (!absent && !options_.force) {
-            DeleteClusterMemberResult result;
-            result.address = address;
-            result.error = "worker is still online; use --force to override";
-            results.push_back(std::move(result));
-            continue;
-        }
         if (options_.dryRun) {
             DeleteClusterMemberResult result;
             result.address = address;
             result.error = "dry-run: no changes applied";
+            results.push_back(std::move(result));
+            continue;
+        }
+        if (!absent && !options_.force) {
+            DeleteClusterMemberResult result;
+            result.address = address;
+            result.error = "worker is still online; use --force to override";
             results.push_back(std::move(result));
             continue;
         }
@@ -346,8 +380,6 @@ Status ClusterAdminClient::Impl::CommitTopologyUpdate(const std::vector<std::str
         FillResults(results, true, 0);
         return Status::OK();
     }
-    std::string nextValue;
-    RETURN_IF_NOT_OK(cluster::TopologyRepositoryCodec::EncodeTopology(next, nextValue));
     std::string committedValue;
     auto casRc = casWriter(committedValue);
     if (casRc.IsError()) {
@@ -379,14 +411,11 @@ Status ClusterAdminClient::Impl::DeleteClusterMembersEtcd(const std::vector<std:
         auto rc = etcdStore_->Delete(keys_->TopologyTable(), cluster::TopologyKeyHelper::TopologyKey());
         return (rc.IsError() && !IsAddressNotFound(rc)) ? rc : Status::OK();
     };
-    std::string nextValue;
-    auto casWriter = [this, &nextValue](std::string &) {
+    auto casWriter = [this, &toDelete](std::string &) {
         return etcdStore_->CAS(keys_->TopologyTable(), cluster::TopologyKeyHelper::TopologyKey(),
-            [&nextValue](const std::string &,
+            [&toDelete](const std::string &curValue,
                 std::unique_ptr<std::string> &newValue, bool &retry) {
-                retry = false;
-                newValue = std::make_unique<std::string>(nextValue);
-                return Status::OK();
+                return BuildCasProcessFunc(curValue, toDelete, newValue, retry);
             });
     };
     return CommitTopologyUpdate(toDelete,
@@ -411,15 +440,14 @@ Status ClusterAdminClient::Impl::DeleteClusterMembersCoordinator(
         return coordinatorProxy_->DeleteRange(pk, "", delCount, revision, ADMIN_RPC_TIMEOUT_MS);
     };
     std::string nextValue;
-    auto casWriter = [this, &nextValue](std::string &) {
+    auto casWriter = [this, &toDelete](std::string &) {
         std::string pk = keys_->TopologyTable() + "/";
         int64_t version = 0;
         int64_t revision = 0;
         return coordinatorProxy_->CAS(pk,
-            [&nextValue](const std::string &, std::unique_ptr<std::string> &newValue, bool &retry) {
-                retry = true;
-                newValue = std::make_unique<std::string>(nextValue);
-                return Status::OK();
+            [&toDelete](const std::string &curValue,
+                std::unique_ptr<std::string> &newValue, bool &retry) {
+                return BuildCasProcessFunc(curValue, toDelete, newValue, retry);
             }, version, revision);
     };
     return CommitTopologyUpdate(toDelete,
