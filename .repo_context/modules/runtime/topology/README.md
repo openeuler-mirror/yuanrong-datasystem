@@ -501,6 +501,11 @@
   removal share one bounded deadline: lock acquisition, the backend write, retry sleep, and topology polling consume the
   same remaining budget. A failed publication is retried, but the first successful publication stops repeated writes;
   the backend's terminal EXITING latch republishes that intent if later lease or Leader recovery occurs.
+  After local client/async preparation completes, `WorkerOCServer::PreShutDown` snapshots `node_dead_timeout_s`
+  for that final publication/removal budget in both production and test builds. Failure logs
+  `CLUSTER_SCALE_IN action=exit_wait_failed` with the configured seconds, elapsed milliseconds, deadline state,
+  `migration_completion=unconfirmed`, and last status before cleanup continues. This neither claims successful
+  migration nor bounds subsequent callback/resource cleanup; normal removal still returns early.
   A restarted Worker that observes its own authoritative state as `LEAVING` first claims the process-local exit fence,
   then restores the same local drain lifecycle and asynchronously republishes EXITING with bounded per-attempt RPC time
   and capped exponential retry backoff with per-Worker jitter. A helper-thread creation failure therefore remains
@@ -687,6 +692,19 @@
   and include `common_rdma` to resolve the shared-memory allocator and transport dependencies. `common_rdma`
   retains its objects during static linking because shared-memory transport callbacks use a header-only dependency.
 - Business adapter coverage lives in `ds_ut_object`, `ds_ut_stream`, and selected Worker/object/stream ST binaries.
+- Manual URMA mock exit-budget coverage is in `CoordinatorUrmaExitTimeoutTest` in
+  `tests/st/worker/object_cache/coordinator_backend_cluster_test.cpp` (`ds_st_coordinator_backend_manual` for CMake).
+  Build remotely with `bash build.sh -j 98 -X off -t build -U on`, then run the binary with
+  `--gtest_also_run_disabled_tests --gtest_filter='NodeDeadTimeout/CoordinatorUrmaExitTimeoutTest.*'` in its CTest environment.
+  The cases use two configured exit budgets, sole-source data, persistent mock CQE failure, and a fresh Get after
+  source removal to assert the exact missing-data status; the no-fault control must preserve the payload without a
+  timeout log. They are opt-in because process startup, shutdown, and Failure convergence exceed eight seconds.
+- `CoordinatorUrmaMigrationBudgetTest` uses healthy URMA mock transport with a 1 MiB/s migration limit to
+  exercise a partially completed data drain, and a metadata-only delay to exercise a pending metadata transfer.
+  Keys initially belong to the exiting metadata owner. Direct `PureQueryMeta(redirect=false)` reads distinguish
+  physical target metadata presence from routed metadata lookup, both before exit and after Failure convergence;
+  per-key Get assertions distinguish retained metadata without a data location from missing metadata.
+  These opt-in cases use the same two exit budgets and the existing manual binary.
 - Operator-query coverage includes `CoordinatorStoreTest` raw RPC cases, `ClusterQueryProjectorTest`, Python
   `test_cli_query.py`, and a packaged-wheel real-backend smoke test.
 - Failure-preemption coverage in `cluster_topology_contract_ut` exhausts unrelated member states and includes

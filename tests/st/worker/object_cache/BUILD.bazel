@@ -18,6 +18,7 @@ ds_cc_test(
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",
         "//src/datasystem/protos:cluster_topology_cc_proto",
+        "//src/datasystem/worker/object_cache:worker_master_oc_api",
         "//src/datasystem/worker/object_cache:worker_worker_oc_api",
         "//tests/st:st_common",
         "//tests/st/client/object_cache:oc_client_common",

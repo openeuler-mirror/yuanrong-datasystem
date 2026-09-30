@@ -690,6 +690,52 @@ TEST_F(WorkerOCServerTest, FailedExitingPublicationRetriesUntilSuccess)
     EXPECT_EQ(observeCount, 2UL);
 }
 
+TEST_F(WorkerOCServerTest, ExitingRemovalReturnsImmediatelyWhenAlreadyRemoved)
+{
+    constexpr auto exitBudget = std::chrono::seconds(30);
+    constexpr auto immediateReturnBudget = std::chrono::seconds(1);
+    size_t publishCount = 0;
+    size_t observeCount = 0;
+    const auto start = std::chrono::steady_clock::now();
+    const auto status = WaitForExitingRemoval(
+        start + exitBudget,
+        [&](int32_t timeoutMs) {
+            ++publishCount;
+            EXPECT_GT(timeoutMs, 0);
+            EXPECT_LE(timeoutMs, std::chrono::duration_cast<std::chrono::milliseconds>(exitBudget).count());
+            return Status::OK();
+        },
+        [&] {
+            ++observeCount;
+            return Status::OK();
+        },
+        exitBudget);
+
+    DS_ASSERT_OK(status);
+    EXPECT_EQ(publishCount, 1UL);
+    EXPECT_EQ(observeCount, 1UL);
+    EXPECT_LT(std::chrono::steady_clock::now() - start, immediateReturnBudget);
+}
+
+TEST_F(WorkerOCServerTest, ExpiredExitingRemovalBudgetDoesNotPublishOrClaimSuccess)
+{
+    size_t calls = 0;
+    const auto status = WaitForExitingRemoval(
+        std::chrono::steady_clock::now(),
+        [&](int32_t) {
+            ++calls;
+            return Status::OK();
+        },
+        [&] {
+            ++calls;
+            return Status::OK();
+        },
+        std::chrono::seconds(1));
+
+    EXPECT_EQ(status.GetCode(), K_NOT_READY);
+    EXPECT_EQ(calls, 0UL);
+}
+
 TEST_F(WorkerOCServerTest, StartupHealthPublicationFailureIsRetried)
 {
     size_t refreshCount = 0;

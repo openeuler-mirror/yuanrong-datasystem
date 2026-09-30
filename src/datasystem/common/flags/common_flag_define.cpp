@@ -207,7 +207,10 @@ DS_DEFINE_validator(urma_perf_interval_ms, [](const char *flagName, uint32_t val
     (void)flagName;
     return value > 0;
 });
-DS_DEFINE_uint32_dynamic(node_dead_timeout_s, 300, "maximum time interval for the master to determine node death");
+DS_DEFINE_uint32_dynamic(node_dead_timeout_s, 300,
+                         "Maximum time interval in seconds to determine node death; also bounds the worker's "
+                         "EXITING publication and topology-removal wait during graceful scale-in. "
+                         "The exit wait snapshots this value when it starts, excluding subsequent resource cleanup.");
 DS_DEFINE_uint32(hash_ring_tokens_per_member, 32,
                  "Token count allocated to each Worker for new hash-ring bootstrap and scale-out plans. "
                  "Valid range is 1-4096. This startup-only setting must be identical on every topology planner "

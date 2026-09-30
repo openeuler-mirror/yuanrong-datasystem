@@ -22,15 +22,20 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <initializer_list>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
+#include <signal.h>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unistd.h>
 #include <vector>
 
 #include "common.h"
@@ -58,6 +63,7 @@
 #include "datasystem/protos/coordinator.pb.h"
 #include "datasystem/utils/service_discovery.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
+#include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
 namespace datasystem {
 namespace st {
@@ -1722,6 +1728,374 @@ TEST_F(CoordinatorBackendClusterThreeWorkerTest, GracefulWorkerExitKeepsExisting
     LOG(INFO) << "[TIMING] GracefulWorkerExitKeepsExistingKeysReadable total test time: "
               << std::chrono::duration_cast<std::chrono::milliseconds>(t6 - t0).count() << "ms";
 }
+
+#ifdef USE_URMA_MOCK
+class CoordinatorUrmaExitTimeoutTest : public CoordinatorBackendClusterTest,
+                                       public ::testing::WithParamInterface<int> {
+public:
+    CoordinatorUrmaExitTimeoutTest() = default;
+    ~CoordinatorUrmaExitTimeoutTest() override = default;
+
+    void SetUp() override
+    {
+        const char *previous = std::getenv("URMA_MOCK_UDS_BASE_DIR");
+        if (previous != nullptr) {
+            previousUds_ = previous;
+        }
+        const auto uds = "/tmp/ds_urma_exit_" + std::to_string(getpid());
+        ASSERT_EQ(setenv("URMA_MOCK_UDS_BASE_DIR", uds.c_str(), 1), 0);
+        ExternalClusterTest::SetUp();
+    }
+
+    void TearDown() override
+    {
+        ExternalClusterTest::TearDown();
+        if (previousUds_.has_value()) {
+            (void)setenv("URMA_MOCK_UDS_BASE_DIR", previousUds_->c_str(), 1);
+        } else {
+            (void)unsetenv("URMA_MOCK_UDS_BASE_DIR");
+        }
+    }
+
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        CoordinatorBackendClusterTest::SetClusterSetupOptions(opts);
+        opts.workerGflagParams += " -enable_urma=true -enable_transport_fallback=true"
+                                 " -shared_memory_size_mb=128 -arena_per_tenant=1 -client_dead_timeout_s=3"
+                                 " -payload_nocopy_threshold=1000000 -enable_worker_worker_batch_get=true"
+                                 " -node_timeout_s=1 -node_dead_timeout_s="
+                                 + std::to_string(GetParam());
+        opts.coordinatorGflagParams += " -scale_in_collect_window_ms=0 -node_dead_timeout_s="
+                                      + std::to_string(GetParam());
+    }
+
+protected:
+    static constexpr uint32_t SOURCE = 0;
+    static constexpr uint32_t SURVIVOR = 1;
+    static constexpr size_t PAYLOAD_BYTES = 4 * 1024 * 1024;
+    static constexpr int REQUEST_TIMEOUT_MS = 2'000;
+    static constexpr int TEST_TIMEOUT_S = 120;
+    static constexpr int EXIT_SCHEDULING_MARGIN_MS = 2'000;
+    static constexpr char CQE_FAILURE_POINT[] = "UrmaMock.CheckCompletionRecordStatus";
+
+    int GetTestCaseTimeoutSecs() const override
+    {
+        return TEST_TIMEOUT_S;
+    }
+
+    void PrepareSoleReplica(const std::string &key, const std::string &value)
+    {
+        ASSERT_NO_FATAL_FAILURE(AssertWorkersInCluster({ SOURCE, SURVIVOR }));
+        std::shared_ptr<ObjectClient> source;
+        std::shared_ptr<ObjectClient> observer;
+        ASSERT_NO_FATAL_FAILURE(InitTestClient(SOURCE, source));
+        ASSERT_NO_FATAL_FAILURE(InitTestClient(SURVIVOR, observer));
+        CreateParam parameters;
+        parameters.cacheType = CacheType::MEMORY;
+        DS_ASSERT_OK(source->Put(key, reinterpret_cast<const uint8_t *>(value.data()), value.size(), parameters));
+        HostPort sourceAddress;
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(SOURCE, sourceAddress));
+        std::vector<ObjMetaInfo> metadata;
+        DS_ASSERT_OK(observer->GetObjMetaInfo("", { key }, metadata));
+        ASSERT_EQ(metadata.size(), 1UL);
+        ASSERT_EQ(metadata.front().locations, std::vector<std::string>{ sourceAddress.ToString() });
+    }
+
+    Status FindSourceLogLine(const std::string &token, std::string &line) const
+    {
+        const auto logDir = cluster_->GetRootDir() + "/worker0/log";
+        std::error_code error;
+        for (const auto &entry : std::filesystem::directory_iterator(logDir, error)) {
+            if (error || !entry.is_regular_file()) {
+                continue;
+            }
+            std::ifstream input(entry.path());
+            while (std::getline(input, line)) {
+                if (line.find(token) != std::string::npos) {
+                    return Status::OK();
+                }
+            }
+        }
+        return Status(K_TRY_AGAIN, "Waiting for source worker log: " + token);
+    }
+
+    void StopSourceAndWaitForRemoval()
+    {
+        ASSERT_EQ(kill(cluster_->GetWorkerPid(SOURCE), SIGTERM), 0);
+        ASSERT_NO_FATAL_FAILURE(WaitForSourceRemoval());
+    }
+
+    void WaitForSourceRemoval()
+    {
+        DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+            [this] {
+                return cluster_->CheckWorkerProcess(SOURCE) ? Status(K_TRY_AGAIN, "Source is still running")
+                                                            : Status::OK();
+            },
+            WAIT_SCALE_TIMEOUT_SEC, K_OK));
+        ASSERT_NO_FATAL_FAILURE(AssertWorkersInCluster({ SURVIVOR }, WAIT_SCALE_TIMEOUT_SEC));
+    }
+
+    void AssertExpiredExitDiagnostic()
+    {
+        std::string line;
+        DS_ASSERT_OK(FindSourceLogLine("CLUSTER_SCALE_IN action=exit_wait_failed", line));
+        EXPECT_NE(line.find("node_dead_timeout_s=" + std::to_string(GetParam())), std::string::npos) << line;
+        EXPECT_NE(line.find("deadline_exceeded=1"), std::string::npos) << line;
+        EXPECT_NE(line.find("migration_completion=unconfirmed"), std::string::npos) << line;
+        const std::string elapsedField = "elapsed_ms=";
+        const auto begin = line.find(elapsedField);
+        ASSERT_NE(begin, std::string::npos) << line;
+        const auto elapsedMs = std::stoll(line.substr(begin + elapsedField.size()));
+        const auto budgetMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::seconds(GetParam())).count();
+        EXPECT_GE(elapsedMs, budgetMs);
+        EXPECT_LT(elapsedMs, budgetMs + EXIT_SCHEDULING_MARGIN_MS);
+    }
+
+    Status ReadAfterExit(const std::string &key, std::string &value)
+    {
+        ConnectOptions options;
+        InitConnectOpt(SURVIVOR, options);
+        options.requestTimeoutMs = REQUEST_TIMEOUT_MS;
+        options.enableLocalCache = false;
+        KVClient reader(options);
+        RETURN_IF_NOT_OK(reader.Init());
+        const auto status = reader.Get(key, value);
+        LOG(INFO) << "[ScaleInExitGet] node_dead_timeout_s=" << GetParam()
+                  << " status_code=" << static_cast<uint32_t>(status.GetCode())
+                  << " status=" << status.ToString() << " returned_bytes=" << value.size();
+        return status;
+    }
+
+    std::optional<std::string> previousUds_;
+};
+
+// Full process shutdown and Failure convergence exceed the default test budget; run explicitly with
+// --gtest_also_run_disabled_tests in the URMA mock build.
+TEST_P(CoordinatorUrmaExitTimeoutTest, DISABLED_UnmigratedSoleReplicaReturnsNotFoundAfterFailureConverges)
+{
+    const std::string key = "urma-incomplete-scale-in";
+    const std::string value(PAYLOAD_BYTES, 'f');
+    ASSERT_NO_FATAL_FAILURE(PrepareSoleReplica(key, value));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, SOURCE, CQE_FAILURE_POINT, "call(0,9)"));
+    ASSERT_NO_FATAL_FAILURE(StopSourceAndWaitForRemoval());
+    ASSERT_NO_FATAL_FAILURE(AssertExpiredExitDiagnostic());
+    std::string line;
+    DS_ASSERT_OK(FindSourceLogLine("CR.status: 9", line));
+    DS_ASSERT_OK(FindSourceLogLine("fallback tcp payload rejected by limiter", line));
+    DS_ASSERT_OK(FindSourceLogLine("CLUSTER_SCALE_IN action=data_drain stage=data_drain stage_event=start", line));
+
+    std::string actual;
+    const auto status = ReadAfterExit(key, actual);
+    EXPECT_EQ(status.GetCode(), K_NOT_FOUND) << status.ToString();
+    EXPECT_TRUE(actual.empty());
+}
+
+TEST_P(CoordinatorUrmaExitTimeoutTest, DISABLED_SuccessfulMigrationKeepsSoleReplicaReadableWithoutTimeoutLog)
+{
+    const std::string key = "urma-complete-scale-in";
+    const std::string value(PAYLOAD_BYTES, 's');
+    ASSERT_NO_FATAL_FAILURE(PrepareSoleReplica(key, value));
+    ASSERT_NO_FATAL_FAILURE(StopSourceAndWaitForRemoval());
+    std::string line;
+    EXPECT_EQ(FindSourceLogLine("CLUSTER_SCALE_IN action=exit_wait_failed", line).GetCode(), K_TRY_AGAIN);
+    std::string actual;
+    DS_ASSERT_OK(ReadAfterExit(key, actual));
+    EXPECT_EQ(actual, value);
+}
+
+constexpr int SHORT_SCALE_IN_EXIT_TIMEOUT_S = 3;
+constexpr int LONG_SCALE_IN_EXIT_TIMEOUT_S = 6;
+INSTANTIATE_TEST_SUITE_P(NodeDeadTimeout, CoordinatorUrmaExitTimeoutTest,
+                        ::testing::Values(SHORT_SCALE_IN_EXIT_TIMEOUT_S, LONG_SCALE_IN_EXIT_TIMEOUT_S));
+
+class CoordinatorUrmaMigrationBudgetTest : public CoordinatorUrmaExitTimeoutTest {
+public:
+    CoordinatorUrmaMigrationBudgetTest() = default;
+    ~CoordinatorUrmaMigrationBudgetTest() override = default;
+
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        CoordinatorUrmaExitTimeoutTest::SetClusterSetupOptions(opts);
+        opts.workerGflagParams += " -data_migrate_rate_limit_mb=1";
+    }
+
+protected:
+    static constexpr size_t SLOW_MIGRATION_KEY_COUNT = 16;
+    static constexpr size_t SLOW_MIGRATION_OBJECT_BYTES = 1024 * 1024;
+    static constexpr size_t KEY_SEARCH_LIMIT = 10'000;
+    static constexpr int METADATA_DELAY_S = 15;
+    static constexpr char METADATA_DELAY_POINT[] = "BatchMigrateMetadata.delay";
+
+    Status SelectSourceOwnedKeys(size_t count, std::vector<std::string> &keys)
+    {
+        ConnectOptions options;
+        InitConnectOpt(SOURCE, options);
+        auto signature = std::make_shared<Signature>(options.accessKey, options.secretKey);
+        BrpcChannelConfig config;
+        config.timeout_ms = REQUEST_TIMEOUT_MS;
+        config.max_retry = 0;
+        client::Routing routing(config, signature);
+        const HostPort source(options.host, options.port);
+        RETURN_IF_NOT_OK(routing.Init("", source));
+        for (size_t index = 0; index < KEY_SEARCH_LIMIT && keys.size() < count; ++index) {
+            const auto key = "healthy-migration-budget-" + std::to_string(index);
+            HostPort owner;
+            RETURN_IF_NOT_OK(routing.SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                                                  client::WorkerAccessAction::CONTROL, owner));
+            if (owner == source) {
+                keys.emplace_back(key);
+            }
+        }
+        CHECK_FAIL_RETURN_STATUS(keys.size() == count, K_NOT_FOUND, "Insufficient source-owned keys");
+        return Status::OK();
+    }
+
+    Status QueryLocalMetadata(uint32_t workerIndex, const std::vector<std::string> &keys,
+                              master::PureQueryMetaRspPb &response)
+    {
+        ConnectOptions options;
+        InitConnectOpt(workerIndex, options);
+        auto auth = std::make_shared<AkSkManager>(0);
+        RETURN_IF_NOT_OK(auth->SetClientAkSk(options.accessKey, options.secretKey));
+        const HostPort address(options.host, options.port);
+        worker::WorkerRemoteMasterOCApi api(address, address, auth);
+        RETURN_IF_NOT_OK(api.Init());
+        master::PureQueryMetaReqPb request;
+        request.set_redirect(false);
+        request.set_address(address.ToString());
+        for (const auto &key : keys) {
+            request.add_object_keys(key);
+        }
+        response.Clear();
+        ScopedRequestContext context;
+        ApiDeadlineGuard deadline(REQUEST_TIMEOUT_MS);
+        return api.PureQueryMeta(request, response);
+    }
+
+    void PrepareSourceOwnedObjects(size_t count, std::vector<std::string> &keys, const std::string &value)
+    {
+        ASSERT_NO_FATAL_FAILURE(AssertWorkersInCluster({ SOURCE, SURVIVOR }));
+        DS_ASSERT_OK(SelectSourceOwnedKeys(count, keys));
+        std::shared_ptr<ObjectClient> source;
+        std::shared_ptr<ObjectClient> observer;
+        ASSERT_NO_FATAL_FAILURE(InitTestClient(SOURCE, source));
+        ASSERT_NO_FATAL_FAILURE(InitTestClient(SURVIVOR, observer));
+        for (const auto &key : keys) {
+            DS_ASSERT_OK(source->Put(key, reinterpret_cast<const uint8_t *>(value.data()), value.size(), CreateParam{}));
+        }
+        HostPort address;
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(SOURCE, address));
+        std::vector<ObjMetaInfo> locations;
+        DS_ASSERT_OK(observer->GetObjMetaInfo("", keys, locations));
+        ASSERT_EQ(locations.size(), count);
+        for (const auto &metadata : locations) {
+            ASSERT_EQ(metadata.locations, std::vector<std::string>{ address.ToString() });
+        }
+        master::PureQueryMetaRspPb response;
+        DS_ASSERT_OK(QueryLocalMetadata(SOURCE, keys, response));
+        ASSERT_EQ(static_cast<size_t>(response.query_metas_size()), count);
+        DS_ASSERT_OK(QueryLocalMetadata(SURVIVOR, keys, response));
+        ASSERT_EQ(response.query_metas_size(), 0);
+    }
+
+    void AssertHealthyTransport()
+    {
+        std::string line;
+        EXPECT_EQ(FindSourceLogLine("return failed completion record", line).GetCode(), K_TRY_AGAIN) << line;
+        EXPECT_EQ(FindSourceLogLine("fallback tcp payload rejected by limiter", line).GetCode(), K_TRY_AGAIN) << line;
+    }
+
+    void AssertReadsMatchMetadata(const std::vector<std::string> &keys, const std::string &value,
+                                  bool metadataExpected, bool expectPartialSuccess)
+    {
+        master::PureQueryMetaRspPb response;
+        DS_ASSERT_OK(QueryLocalMetadata(SURVIVOR, keys, response));
+        ASSERT_EQ(static_cast<size_t>(response.query_metas_size()), metadataExpected ? keys.size() : 0UL);
+        std::unordered_map<std::string, master::QueryMetaInfoPb> metadata;
+        for (const auto &entry : response.query_metas()) {
+            metadata.emplace(entry.meta().object_key(), entry);
+        }
+        ConnectOptions options;
+        InitConnectOpt(SURVIVOR, options);
+        options.requestTimeoutMs = REQUEST_TIMEOUT_MS;
+        options.enableLocalCache = false;
+        KVClient reader(options);
+        DS_ASSERT_OK(reader.Init());
+        size_t found = 0;
+        size_t missing = 0;
+        for (const auto &key : keys) {
+            const auto entry = metadata.find(key);
+            const bool exists = entry != metadata.end();
+            const bool hasLocation = exists && !entry->second.meta().primary_address().empty();
+            if (exists) {
+                EXPECT_EQ(entry->second.meta().data_size(), value.size());
+            }
+            std::string actual;
+            const auto status = reader.Get(key, actual);
+            LOG(INFO) << "[MigrationBudgetGet] node_dead_timeout_s=" << GetParam()
+                      << " metadata_exists=" << exists << " has_location=" << hasLocation
+                      << " status_code=" << static_cast<uint32_t>(status.GetCode())
+                      << " returned_bytes=" << actual.size();
+            EXPECT_EQ(status.GetCode(), hasLocation ? K_OK : K_NOT_FOUND) << status.ToString();
+            if (hasLocation) {
+                ++found;
+                EXPECT_EQ(actual, value);
+            } else {
+                ++missing;
+                EXPECT_TRUE(actual.empty());
+            }
+        }
+        EXPECT_GT(missing, 0UL);
+        EXPECT_EQ(found > 0, expectPartialSuccess);
+    }
+};
+
+TEST_P(CoordinatorUrmaMigrationBudgetTest, DISABLED_HealthyRateLimitedMigrationRetainsMetadataForMissingData)
+{
+    std::vector<std::string> keys;
+    const std::string value(SLOW_MIGRATION_OBJECT_BYTES, 'r');
+    ASSERT_NO_FATAL_FAILURE(PrepareSourceOwnedObjects(SLOW_MIGRATION_KEY_COUNT, keys, value));
+    ASSERT_EQ(kill(cluster_->GetWorkerPid(SOURCE), SIGTERM), 0);
+    master::PureQueryMetaRspPb response;
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult([&] {
+        RETURN_IF_NOT_OK(QueryLocalMetadata(SURVIVOR, keys, response));
+        return static_cast<size_t>(response.query_metas_size()) == keys.size()
+                   ? Status::OK() : Status(K_TRY_AGAIN, "Metadata migration has not completed");
+    }, WAIT_TOPOLOGY_TIMEOUT_SEC, K_OK));
+    LOG(INFO) << "[MigrationBudgetMeta] phase=before_exit metadata_count=" << response.query_metas_size();
+    ASSERT_NO_FATAL_FAILURE(WaitForSourceRemoval());
+    ASSERT_NO_FATAL_FAILURE(AssertExpiredExitDiagnostic());
+    ASSERT_NO_FATAL_FAILURE(AssertHealthyTransport());
+    ASSERT_NO_FATAL_FAILURE(AssertReadsMatchMetadata(keys, value, true, true));
+}
+
+TEST_P(CoordinatorUrmaMigrationBudgetTest, DISABLED_HealthyMetadataMigrationPastDeadlineLeavesMetadataAbsent)
+{
+    std::vector<std::string> keys;
+    const std::string value(SLOW_MIGRATION_OBJECT_BYTES, 'm');
+    ASSERT_NO_FATAL_FAILURE(PrepareSourceOwnedObjects(1, keys, value));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, SOURCE, METADATA_DELAY_POINT,
+                                           "call(" + std::to_string(METADATA_DELAY_S) + ")"));
+    ASSERT_EQ(kill(cluster_->GetWorkerPid(SOURCE), SIGTERM), 0);
+    std::string line;
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult([&] {
+        return FindSourceLogLine("phase=SCALE_IN stage=metadata_migration stage_event=start", line);
+    }, WAIT_TOPOLOGY_TIMEOUT_SEC, K_OK));
+    master::PureQueryMetaRspPb response;
+    DS_ASSERT_OK(QueryLocalMetadata(SURVIVOR, keys, response));
+    ASSERT_EQ(response.query_metas_size(), 0);
+    LOG(INFO) << "[MigrationBudgetMeta] phase=before_exit metadata_count=0";
+    ASSERT_NO_FATAL_FAILURE(WaitForSourceRemoval());
+    ASSERT_NO_FATAL_FAILURE(AssertExpiredExitDiagnostic());
+    ASSERT_NO_FATAL_FAILURE(AssertHealthyTransport());
+    ASSERT_NO_FATAL_FAILURE(AssertReadsMatchMetadata(keys, value, false, false));
+}
+
+INSTANTIATE_TEST_SUITE_P(NodeDeadTimeout, CoordinatorUrmaMigrationBudgetTest,
+                        ::testing::Values(SHORT_SCALE_IN_EXIT_TIMEOUT_S, LONG_SCALE_IN_EXIT_TIMEOUT_S));
+#endif
 
 class CoordinatorWriteRedirectTest : public CoordinatorBackendClusterTest, public CommonDistributedExt {
 public:
