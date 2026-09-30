@@ -214,8 +214,19 @@ void RemoteUbPortHealthVerifier::ScheduleAfterCompletion(const HostPort &peer, P
 {
     const bool pending =
         state.isolated || state.verificationPending || state.triggerPending || state.summaryHintPending;
-    const uint64_t next =
-        pending ? RetryDeadlineMs(peer, state, nowMs) : std::numeric_limits<uint64_t>::max();
+    uint64_t next = std::numeric_limits<uint64_t>::max();
+    const auto queryIntervalMs = static_cast<uint64_t>(UB_REMOTE_PORT_HEALTH_QUERY_INTERVAL.count());
+    // Unconfirmed faults retain the pre-jitter schedule; only isolated peers randomize recovery queries.
+    if (state.isolated) {
+        next = RetryDeadlineMs(peer, state, nowMs);
+    } else if (state.summaryHintPending) {
+        next = nowMs;
+    } else if (state.triggerPending) {
+        next = state.lastQueryMs.has_value() ? std::max(nowMs, UbProbeRetryAt(*state.lastQueryMs, queryIntervalMs))
+                                             : nowMs;
+    } else if (state.verificationPending) {
+        next = UbProbeRetryAt(nowMs, queryIntervalMs);
+    }
     state.verificationPending = pending;
     state.summaryHintPending = false;
     state.triggerPending = false;
@@ -342,12 +353,15 @@ bool RemoteUbPortHealthVerifier::NotifySummaryHint(const UbHealthSummary &summar
         state.summaryHintPending = state.summaryHintPending || newer;
         return false;
     }
-    if (state.nextQueryMs != std::numeric_limits<uint64_t>::max()
-        || (!state.isolated && !(newer && ShouldIsolateForUbPortHealth(*summary.portHealth)))) {
+    if (!state.isolated && newer && ShouldIsolateForUbPortHealth(*summary.portHealth)) {
+        state.nextQueryMs = nowMs;
+        state.verificationPending = true;
+        return true;
+    }
+    if (!state.isolated || state.nextQueryMs != std::numeric_limits<uint64_t>::max()) {
         return false;
     }
-    state.nextQueryMs =
-        state.isolated || state.verificationPending ? RetryDeadlineMs(summary.worker, state, nowMs) : nowMs;
+    state.nextQueryMs = RetryDeadlineMs(summary.worker, state, nowMs);
     state.verificationPending = true;
     return true;
 }
