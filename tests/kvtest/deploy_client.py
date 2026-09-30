@@ -656,7 +656,7 @@ class Deployer:
                         f'(node {node.get("host", "?")}) has no status.hostIP; '
                         f'cannot inject a valid node IP — check k8s node status')
                 custom_env[host_id_env] = host_ip
-            # SDK reads DATASYSTEM_UB_GET_DATA_SIZE_BYTES at client init (default 32MB);
+            # SDK reads DATASYSTEM_UB_GET_DATA_SIZE_BYTES at client init (default 10MB);
             # kvtest workloads fit in 10MB. Overridable via config 'env'.
             if 'DATASYSTEM_UB_GET_DATA_SIZE_BYTES' not in custom_env:
                 custom_env['DATASYSTEM_UB_GET_DATA_SIZE_BYTES'] = '10485760'
