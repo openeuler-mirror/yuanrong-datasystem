@@ -155,14 +155,14 @@ std::vector<size_t> BuildNextTransportReadRetry(const std::vector<TransportReadR
 Status PrepareTransportReadRetry(const std::shared_ptr<client::Routing> &routing,
                                  const std::vector<size_t> &retryIndexes,
                                  std::vector<TransportReadRetryState> &states,
-                                 client::DeadlineRetry &retry, bool &refreshRequested)
+                                 client::DeadlineRetry &retry, bool &refreshRequested, bool alternativeAvailable)
 {
     auto &firstState = states[retryIndexes.front()];
     const bool draining = firstState.policy == TransportReadRetryPolicy::DRAINING;
     const auto retryCount = TransportReadRetryCount(firstState);
-    const bool immediateStaleRetry = !draining && retryCount == 0;
-    int64_t nextBackoffMs =
-        client::SelectLocationRefreshBackoffMs(draining, retryCount, TransportReadRetryBackoffMs(firstState));
+    const bool immediateStaleRetry = !draining && (alternativeAvailable || retryCount == 0);
+    int64_t nextBackoffMs = client::SelectLocationRefreshBackoffMs(
+        draining, alternativeAvailable, retryCount, TransportReadRetryBackoffMs(firstState));
     if (!draining && !immediateStaleRetry) {
         nextBackoffMs = client::ClampBackoffToDeadline(nextBackoffMs, ApiDeadline::Instance().ApiRemainingUs());
     }
@@ -769,19 +769,29 @@ Status RoutedMode::GetFromTransportLayer(const std::vector<std::string> &objectK
         if (retryIndexes.empty()) {
             break;
         }
+        std::vector<std::string> retryKeys;
+        retryKeys.reserve(retryIndexes.size());
+        bool safeMetadataRetry = !excludedWorkers.empty();
+        for (auto stateIndex : retryIndexes) {
+            const auto outputIndex = retryStates[stateIndex].outputIndex;
+            retryKeys.emplace_back(objectKeys[outputIndex]);
+            safeMetadataRetry = safeMetadataRetry && client::IsMetadataIngressUnavailable(itemStatuses[outputIndex]);
+        }
         auto routing = std::atomic_load(&routing_);
-        Status waitStatus = PrepareTransportReadRetry(routing, retryIndexes, retryStates, retry, refreshRequested);
+        bool alternativeAvailable = false;
+        if (safeMetadataRetry && routing != nullptr) {
+            std::unordered_map<HostPort, std::vector<std::string>> groups;
+            alternativeAvailable = routing->SelectWorkers(retryKeys, client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                                                           client::WorkerAccessAction::GET, groups, excludedWorkers).IsOk();
+        }
+        Status waitStatus =
+            PrepareTransportReadRetry(routing, retryIndexes, retryStates, retry, refreshRequested, alternativeAvailable);
         if (waitStatus.IsError()) {
             transportStatus = waitStatus;
             ApplyTransportReadRetryWaitFailure(retryIndexes, retryStates, waitStatus, itemStatuses);
             break;
         }
 
-        std::vector<std::string> retryKeys;
-        retryKeys.reserve(retryIndexes.size());
-        for (auto stateIndex : retryIndexes) {
-            retryKeys.emplace_back(objectKeys[retryStates[stateIndex].outputIndex]);
-        }
         TransportReadRoundResult roundResult;
         roundResult.buffers.resize(retryKeys.size());
         roundResult.statuses.resize(retryKeys.size(), Status(K_NOT_READY, "Object Get has not completed"));
