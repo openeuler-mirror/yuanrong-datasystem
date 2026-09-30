@@ -52,6 +52,7 @@
 #include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -1472,6 +1473,7 @@ Status TransportLayer::ApplyWorkerSnapshot(WorkerSnapshot snapshot)
     // advisor's RWLock write lock; keep it out of the reconcileMutex_ critical section so the
     // reconcile thread (which touches entries_ under reconcileMutex_) never blocks on the advisor
     // write lock.
+    const uint64_t ringVersion = snapshot.ringVersion;
     std::vector<HostPort> shmCandidateAddrs = snapshot.shmCandidateAddrs;
     std::unordered_set<HostPort> probeDestinations;
     probeDestinations.reserve(snapshot.remoteTransportAddrs.size() + snapshot.workerIncarnations.size());
@@ -1495,8 +1497,10 @@ Status TransportLayer::ApplyWorkerSnapshot(WorkerSnapshot snapshot)
         pendingSnapshot_ = std::move(snapshot);
         reconcileCv_->notify_one();
     }
-    if (advisor_ != nullptr) {
-        advisor_->SetShmCandidateWorkers(shmCandidateAddrs);
+    if (advisor_ != nullptr && advisor_->SetShmCandidateWorkers(shmCandidateAddrs)) {
+        LOG(INFO) << "Updated SHM candidate workers, ringVersion=" << ringVersion
+                  << ", count=" << shmCandidateAddrs.size()
+                  << ", shmCandidateAddrs=[" << VectorToString(shmCandidateAddrs, false) << "]";
     }
     return Status::OK();
 }

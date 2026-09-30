@@ -18,7 +18,10 @@
 
 #include "datasystem/client/object_cache/transport/worker_snapshot.h"
 
+#include <sstream>
 #include <utility>
+
+#include "datasystem/common/log/log.h"
 
 namespace datasystem {
 namespace client {
@@ -30,6 +33,28 @@ bool IsDraining(::datasystem::MembershipPb::StatePb state)
 }
 
 }  // namespace
+
+void LogRoutingHostIdMap(
+    uint64_t ringVersion, const ::datasystem::ClusterTopologyPb &ring,
+    const std::unordered_map<std::string, std::string> &hostIdMap, const std::string &sdkHostId)
+{
+    constexpr size_t fullLogLimit = 16;
+    std::ostringstream workers;
+    for (const auto &[worker, hostId] : hostIdMap) {
+        if (hostIdMap.size() > fullLogLimit && hostId != sdkHostId) {
+            continue;
+        }
+        auto member = ring.members().find(worker);
+        workers << " {worker=" << worker
+                << ", hostId=" << hostId << ", status="
+                << (member == ring.members().end() ? "UNKNOWN" : MembershipPb::StatePb_Name(member->second.state()))
+                << "}";
+    }
+    // Called only when the hash ring or hostIdMap changes, so no additional log deduplication is needed.
+    LOG(INFO) << "[Routing] worker snapshot hostIdMap, ringVersion=" << ringVersion << ", sdkHostId=" << sdkHostId
+              << ", totalNodes=" << ring.members_size() << ", hostIdMapSize=" << hostIdMap.size()
+              << ", sameHostOnly=" << (hostIdMap.size() > fullLogLimit) << ", workers=[" << workers.str() << "]";
+}
 
 Status BuildWorkerSnapshot(uint64_t ringVersion, const ::datasystem::ClusterTopologyPb &ring,
                            const std::unordered_map<std::string, std::string> &hostIdMap,

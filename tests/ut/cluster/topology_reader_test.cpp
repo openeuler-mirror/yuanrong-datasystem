@@ -367,6 +367,28 @@ TEST(TopologySnapshotStateTest, IdempotentPublicationRefreshesAuthorityAndRetain
     EXPECT_EQ(previous->AuthorityRevision(), 7);
 }
 
+TEST(TopologySnapshotStateTest, LocalHostIdsPreserveLatestTopologyAndRejectOldAuthority)
+{
+    TopologySnapshotState published;
+    DS_ASSERT_OK(published.RefreshHostIds({}, "coordinator-a"));
+    TopologyState topology;
+    topology.version = 1;
+    topology.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 0 } } };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(topology, 7, std::string(64, 'a'), snapshot, {}, false, "coordinator-b"));
+    SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(published.Publish(snapshot, outcome));
+    DS_ASSERT_OK(published.RefreshHostIds({ { "127.0.0.1:1", "old-host" } }, "coordinator-a"));
+    DS_ASSERT_OK(published.Load(snapshot));
+    EXPECT_FALSE(snapshot->HostIdsKnown());
+    DS_ASSERT_OK(published.RefreshHostIds({ { "127.0.0.1:1", "new-host" } }, "coordinator-b"));
+    DS_ASSERT_OK(published.Load(snapshot));
+    EXPECT_TRUE(snapshot->HostIdsKnown());
+    EXPECT_EQ(snapshot->HostIds().at("127.0.0.1:1"), "new-host");
+    EXPECT_EQ(snapshot->AuthorityRevision(), 7);
+    EXPECT_EQ(snapshot->CoordinatorId(), "coordinator-b");
+}
+
 TEST(TopologySnapshotStateTest, RejectsGapRollbackAndSameVersionConflict)
 {
     TopologySnapshotState state;

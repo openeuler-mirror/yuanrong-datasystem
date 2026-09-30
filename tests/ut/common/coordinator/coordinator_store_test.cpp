@@ -1633,6 +1633,31 @@ TEST_F(CoordinatorStoreTest, WatchRangeSnapshotDoesNotReplayInitialData)
     ASSERT_EQ(events[0]->entry.value, "v2");
 }
 
+TEST_F(CoordinatorStoreTest, WatchSnapshotRevisionIncludesDeletedKeysAndEmptyRanges)
+{
+    int64_t version = 0;
+    int64_t revision = 0;
+    DS_ASSERT_OK(store_->Put("/initial/a", "a", 0, 0, version, revision));
+    const auto firstRevision = revision;
+    DS_ASSERT_OK(store_->Put("/initial/b", "b", 0, 0, version, revision));
+    int64_t deleted = 0;
+    DS_ASSERT_OK(store_->DeleteRange("/initial/b", "", deleted, revision));
+    int64_t watchId = 0;
+    int64_t initialRevision = 0;
+    std::vector<KeyValueEntry> initial;
+    DS_ASSERT_OK(store_->WatchRange("/initial/", "/initial0", "addr", "", watchId, initial, false,
+                                    &initialRevision));
+    ASSERT_EQ(initial.size(), 1U);
+    EXPECT_EQ(initial.front().modRevision, firstRevision);
+    EXPECT_EQ(initialRevision, revision);
+    EXPECT_GT(initialRevision, firstRevision);
+    initial.clear();
+    DS_ASSERT_OK(store_->WatchRange("/empty/", "/empty0", "addr", "", watchId, initial, false,
+                                    &initialRevision));
+    EXPECT_TRUE(initial.empty());
+    EXPECT_EQ(initialRevision, revision);
+}
+
 TEST_F(CoordinatorStoreTest, WatchRangeSkipsInitialSnapshotAndDeliversSubsequentChanges)
 {
     int64_t version = 0;

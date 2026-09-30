@@ -239,6 +239,9 @@ public:
      */
     void SetEventHandler(EventHandler &&eventHandler) override;
 
+    // Runs after successful registration without rewatchMutex_; drained with event callbacks during shutdown.
+    void SetWatchRegisteredHandler(std::function<Status()> handler);
+
     /**
      * @brief Install the local evidence callback used to classify Coordinator renewal failures.
      * @param[in] handler Callback returning whether the backing store remains reachable from peers.
@@ -574,19 +577,24 @@ private:
      */
     Status RegisterWatchPlan(const std::vector<WatchKey> &watchKeys);
 
+    struct InitialWatchSnapshot {
+        std::vector<CoordinationEvent> events;
+        int64_t revision;
+    };
+
     /**
      * @brief Build all physical registrations and initial snapshot events for a logical plan.
      * @param[in] watchKeys Logical watch plan.
      * @param[out] registrations Successful physical registrations.
      * @param[out] registeredIds Successful watch IDs for rollback.
-     * @param[out] initialEvents Initial snapshot events.
+     * @param[out] initialSnapshots Initial snapshots in watch-plan order.
      * @param[out] coordinatorId Coordinator lifetime shared by the complete batch.
      * @return K_OK for a complete same-lifetime batch, otherwise an RPC or identity status.
      */
     Status PrepareWatchPlan(const std::vector<WatchKey> &watchKeys,
                             std::vector<WatchRegistration> &registrations,
                             std::vector<int64_t> &registeredIds,
-                            std::vector<CoordinationEvent> &initialEvents, std::string &coordinatorId);
+                            std::vector<InitialWatchSnapshot> &initialSnapshots, std::string &coordinatorId);
 
     /**
      * @brief Atomically replace the committed registrations after a complete batch succeeds.
@@ -602,6 +610,7 @@ private:
      * @return K_OK when no rewatch is needed or after a complete replacement.
      */
     Status RewatchIfNeeded();
+    Status NotifyWatchRegistered();
 
     /**
      * @brief Observe successful identity or probe after a cold identity-ambiguous failure.
@@ -660,6 +669,7 @@ private:
     // Uses eventHandlerMutex_ to drain handler copies before their consumer is destroyed.
     std::condition_variable eventHandlerCv_;
     EventHandler eventHandler_;
+    std::function<Status()> watchRegisteredHandler_;
     MembershipReadyHandler membershipReadyHandler_;
     MembershipReconcileHandler membershipReconcileHandler_;
     MembershipRecreateGate membershipRecreateGate_;

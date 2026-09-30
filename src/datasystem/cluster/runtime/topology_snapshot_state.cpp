@@ -101,6 +101,22 @@ Status TopologySnapshotState::Load(std::shared_ptr<const TopologySnapshot> &snap
     return Status::OK();
 }
 
+Status TopologySnapshotState::RefreshHostIds(std::unordered_map<std::string, std::string> hostIds,
+                                             const std::string &coordinatorId)
+{
+    std::unique_lock<bthread::Mutex> lock(publicationSync_->mutex);
+    auto current = std::atomic_load(&current_);
+    RETURN_OK_IF_TRUE(current == nullptr || current->CoordinatorId() != coordinatorId);
+    RETURN_OK_IF_TRUE(current->HostIdsKnown() && current->HostIds() == hostIds);
+    std::shared_ptr<const TopologySnapshot> candidate;
+    RETURN_IF_NOT_OK(TopologySnapshot::Create(current->CopyState(), current->AuthorityRevision(),
+                                              current->CanonicalDigest(), candidate, std::move(hostIds), true,
+                                              coordinatorId));
+    std::atomic_store_explicit(&current_, std::move(candidate), std::memory_order_release);
+    publicationGeneration_.fetch_add(1, std::memory_order_release);
+    return Status::OK();
+}
+
 Status TopologySnapshotState::Publish(std::shared_ptr<const TopologySnapshot> snapshot, SnapshotUpdateOutcome &outcome)
 {
     CHECK_FAIL_RETURN_STATUS(snapshot != nullptr, K_INVALID, "cannot publish a null cluster topology Snapshot");

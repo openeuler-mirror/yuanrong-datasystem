@@ -43,7 +43,7 @@ Status MakeSnapshot(std::shared_ptr<const cluster::TopologySnapshot> &snapshot)
         cluster::Member{ { std::string(16, 'b'), WORKER_B }, cluster::MemberState::JOINING, { 200u } },
     };
     return cluster::TopologySnapshot::Create(std::move(state), TOPOLOGY_VERSION, std::string(64, 'a'), snapshot,
-                                             { { WORKER_A, "host-a" }, { WORKER_B, "host-b" } });
+                                             { { WORKER_A, "host-a" }, { WORKER_B, "host-b" } }, true);
 }
 }  // namespace
 
@@ -135,6 +135,25 @@ TEST_F(WorkerGetHashRingTest, SameVersionHostIdChangesReturnCompleteSnapshot)
     DS_ASSERT_OK(BuildGetHashRingResponse(*original, TOPOLOGY_VERSION, "", rsp, original->HostIdsDigest()));
     EXPECT_FALSE(rsp.hash_ring_changed());
     EXPECT_TRUE(rsp.host_id_map().empty());
+}
+
+TEST_F(WorkerGetHashRingTest, UnreadyMembershipDoesNotReplaceClientHostIds)
+{
+    std::shared_ptr<const cluster::TopologySnapshot> ready;
+    DS_ASSERT_OK(MakeSnapshot(ready));
+    std::shared_ptr<const cluster::TopologySnapshot> starting;
+    DS_ASSERT_OK(cluster::TopologySnapshot::Create(ready->CopyState(), TOPOLOGY_VERSION,
+                                                  ready->CanonicalDigest(), starting, {}, false));
+    GetHashRingRspPb rsp;
+    for (const auto requestedVersion : { uint64_t{ 0 }, TOPOLOGY_VERSION }) {
+        auto rc = BuildGetHashRingResponse(*starting, requestedVersion, "", rsp, ready->HostIdsDigest());
+        EXPECT_EQ(rc.GetCode(), K_NOT_READY);
+        EXPECT_FALSE(rsp.has_hash_ring());
+        EXPECT_FALSE(rsp.hash_ring_changed());
+    }
+    DS_ASSERT_OK(BuildGetHashRingResponse(*ready, 0, "", rsp));
+    EXPECT_EQ(rsp.host_id_map().at(WORKER_A), "host-a");
+    EXPECT_EQ(rsp.host_id_map().at(WORKER_B), "host-b");
 }
 
 }  // namespace datasystem::object_cache

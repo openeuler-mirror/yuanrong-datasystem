@@ -141,7 +141,8 @@ public:
         return Unused();
     }
     Status WatchRange(const std::string &, const std::string &, const std::string &, const std::string &, int64_t &,
-                      std::vector<KeyValueEntry> &, int32_t, std::string *, bool = false) override { return Unused(); }
+                      std::vector<KeyValueEntry> &, int32_t, std::string *, bool = false,
+                      int64_t * = nullptr) override { return Unused(); }
     Status CancelWatch(const std::string &, const std::vector<int64_t> &, const std::string &, int32_t) override
     {
         return Unused();

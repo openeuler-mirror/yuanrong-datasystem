@@ -51,6 +51,11 @@ public:
         return engine.memberBackend_->WatchEvents({ { engine.keys_->MembershipTable(), "", 0, false } });
     }
 
+    static Status ApplyInitialSnapshot(TopologyEngine &engine, int64_t revision, int64_t watchId)
+    {
+        return engine.ApplyCoordinatorMembershipSnapshot({}, revision, "coordinator-test", watchId);
+    }
+
     static void RefreshIfDue(TopologyEngine &engine, std::chrono::steady_clock::time_point &deadline,
                              std::chrono::steady_clock::time_point now)
     {
@@ -70,6 +75,19 @@ public:
     static MembershipEndpointView &Membership(TopologyEngine &engine)
     {
         return engine.membershipView_;
+    }
+
+    static Status Rewatch(TopologyEngine &engine)
+    {
+        auto *backend = static_cast<DsCoordinationBackend *>(engine.memberBackend_.get());
+        backend->InvalidateWatches();
+        std::string topology;
+        return backend->Get(engine.keys_->TopologyTable(), TopologyKeyHelper::TopologyKey(), topology);
+    }
+
+    static Status RefreshSnapshotHostIds(TopologyEngine &engine)
+    {
+        return engine.RefreshSnapshotHostIds();
     }
 
     static Status ReloadTopology(TopologyEngine &engine)
@@ -1076,6 +1094,9 @@ TEST(TopologyEngineTest, ProbeEventInvokesOnlyWorkerProbeHandler)
 
 TEST(TopologyEngineTest, MembershipInitialSnapshotLargerThanEventQueueCompletes)
 {
+    constexpr char DELAY[] = "TopologyEngine.initialMembershipRefreshDelayMs";
+    DS_ASSERT_OK(inject::Set(DELAY, "call(30000)"));
+    Raii clearDelay([&] { (void)inject::Clear(DELAY); });
     testing::FakeCoordinatorServiceProxy proxy;
     TestWatchIngress ingress;
     NoopTopologyCallbacks callbacks;
@@ -1091,6 +1112,7 @@ TEST(TopologyEngineTest, MembershipInitialSnapshotLargerThanEventQueueCompletes)
     PutTopology(proxy, clusterName, topology);
     MembershipValue membership;
     membership.lifecycleState = MemberLifecycleState::READY;
+    membership.hostId = "host-peer";
     std::string encoded;
     DS_ASSERT_OK(MembershipValueCodec::Encode(membership, encoded));
     for (size_t i = 1; i < topology.members.size(); ++i) {
@@ -1101,7 +1123,87 @@ TEST(TopologyEngineTest, MembershipInitialSnapshotLargerThanEventQueueCompletes)
     EXPECT_EQ(engine->Membership().GetWriteCandidates(LOCAL_ADDRESS, "key", 3).size(), 3U);
     EXPECT_EQ(engine->Membership().GetWriteCandidates(LOCAL_ADDRESS, "key", PEERS).size(), PEERS);
     EXPECT_EQ(proxy.WatchCalls().size(), 4U);
+    std::unordered_map<std::string, std::string> hostIds;
+    DS_ASSERT_OK(engine->GetRoutingHostIds(hostIds));
+    EXPECT_EQ(hostIds.size(), PEERS);
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(engine->GetSnapshot(snapshot));
+    EXPECT_TRUE(snapshot->HostIdsKnown());
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, RefreshSnapshotHostIdsUsesOnlyLocalMembership)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "local-hostids-refresh";
+    PutTopology(proxy, clusterName, MakeTopology());
+    size_t rangeCalls = 0;
+    auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
+    DS_ASSERT_OK(TopologyEngineTestPeer::ReloadTopology(*engine));
+    std::shared_ptr<const TopologySnapshot> before;
+    DS_ASSERT_OK(engine->GetSnapshot(before));
+    ASSERT_FALSE(before->HostIdsKnown());
+    DS_ASSERT_OK(TopologyEngineTestPeer::WatchMembership(*engine));
+    DS_ASSERT_OK(TopologyEngineTestPeer::ApplyInitialSnapshot(*engine, 1, 1));
+    proxy.SetRangeEntryInterceptor([&](const std::string &) { ++rangeCalls; });
+    DS_ASSERT_OK(TopologyEngineTestPeer::Membership(*engine).RefreshMemberships(
+        { { "127.0.0.1:10001", MemberLifecycleState::READY, 0, "host-local" } }, 1));
+    DS_ASSERT_OK(TopologyEngineTestPeer::RefreshSnapshotHostIds(*engine));
+    std::shared_ptr<const TopologySnapshot> after;
+    DS_ASSERT_OK(engine->GetSnapshot(after));
+    EXPECT_EQ(rangeCalls, 0U);
+    EXPECT_TRUE(after->HostIdsKnown());
+    EXPECT_EQ(after->HostIds().at("127.0.0.1:10001"), "host-local");
+    EXPECT_EQ(after->Version(), before->Version());
+    EXPECT_EQ(after->AuthorityRevision(), before->AuthorityRevision());
+    EXPECT_EQ(after->CanonicalDigest(), before->CanonicalDigest());
+    EXPECT_EQ(after->CoordinatorId(), before->CoordinatorId());
+    EXPECT_FALSE(before->HostIdsKnown());
+    DS_ASSERT_OK(TopologyEngineTestPeer::Membership(*engine).RefreshMemberships({}, 2));
+    DS_ASSERT_OK(TopologyEngineTestPeer::RefreshSnapshotHostIds(*engine));
+    DS_ASSERT_OK(engine->GetSnapshot(after));
+    EXPECT_TRUE(after->HostIdsKnown());
+    EXPECT_TRUE(after->HostIds().empty());
+    EXPECT_EQ(rangeCalls, 0U);
+}
+
+TEST(TopologyEngineTest, InitialMembershipSnapshotSupportsModernAndLegacyCoordinators)
+{
+    constexpr char DELAY[] = "TopologyEngine.initialMembershipRefreshDelayMs";
+    DS_ASSERT_OK(inject::Set(DELAY, "call(30000)"));
+    Raii clearDelay([&] { (void)inject::Clear(DELAY); });
+    for (bool legacy : { false, true }) {
+        testing::FakeCoordinatorServiceProxy proxy;
+        proxy.legacyWatchResponse = legacy;
+        TestWatchIngress ingress;
+        NoopTopologyCallbacks callbacks;
+        const std::string clusterName = "membership-bootstrap";
+        auto keys = MakeKeys(clusterName);
+        PutTopology(proxy, clusterName, MakeTopology());
+        std::atomic<size_t> membershipReads{ 0 };
+        proxy.SetRangeEntryInterceptor([&](const std::string &key) {
+            if (key == keys->MembershipTable() + "/") {
+                ++membershipReads;
+            }
+        });
+        auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
+        DS_ASSERT_OK(engine->Start());
+        std::unordered_map<std::string, std::string> hostIds;
+        DS_ASSERT_OK(engine->GetRoutingHostIds(hostIds));
+        EXPECT_EQ(membershipReads.load(), legacy ? 1U : 0U);
+        std::shared_ptr<const TopologySnapshot> snapshot;
+        DS_ASSERT_OK(engine->GetSnapshot(snapshot));
+        EXPECT_TRUE(snapshot->HostIdsKnown());
+        TopologyEngineTestPeer::Membership(*engine).ClearMemberships();
+        DS_ASSERT_OK(TopologyEngineTestPeer::Rewatch(*engine));
+        DS_ASSERT_OK(engine->GetRoutingHostIds(hostIds));
+        DS_ASSERT_OK(engine->GetSnapshot(snapshot));
+        EXPECT_TRUE(snapshot->HostIdsKnown());
+        EXPECT_EQ(membershipReads.load(), legacy ? 2U : 0U);
+        DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+    }
 }
 
 TEST(TopologyEngineTest, CoordinatorMembershipHintsFenceLateEventsAndRebuildEmptyPeerSnapshot)
@@ -1140,6 +1242,8 @@ TEST(TopologyEngineTest, CoordinatorMembershipHintsFenceLateEventsAndRebuildEmpt
     DS_ASSERT_OK(ingress.Emit("coordinator-test", watchId,
                               { CoordinationEventType::PUT, key, ready, 4, 103 }));
     ASSERT_TRUE(WaitFor([&] { return candidates() == std::vector<std::string>({ peer }); }));
+    DS_ASSERT_OK(TopologyEngineTestPeer::ApplyInitialSnapshot(*engine, 102, watchId));
+    EXPECT_EQ(candidates(), std::vector<std::string>({ peer }));
     int64_t revision = 0;
     int64_t deleted = 0;
     DS_ASSERT_OK(proxy.DeleteRange(key, "", deleted, revision, 0, COORDINATOR_NO_MOD_REVISION_CHECK));
@@ -1154,6 +1258,7 @@ TEST(TopologyEngineTest, CoordinatorMembershipHintsFenceLateEventsAndRebuildEmpt
     stale.sourceWatchId = watchId;
     EXPECT_EQ(TopologyEngineTestPeer::EnqueueCoordinationEvent(*engine, std::move(stale)).GetCode(), K_NOT_READY);
     EXPECT_TRUE(candidates().empty());
+    EXPECT_EQ(TopologyEngineTestPeer::ApplyInitialSnapshot(*engine, 105, watchId).GetCode(), K_NOT_READY);
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 

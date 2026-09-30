@@ -375,6 +375,15 @@
     maps. Same-version hostId updates refresh same-node placement and Transport SHM candidates without epoch reset.
     Publication failures retain the previous digest for retry. Legacy requests without a digest retain version-only
     behavior; old Workers cannot provide hostId-only updates.
+    Workers return `K_NOT_READY` while the snapshot's membership host IDs are unknown, including the startup window
+    before the first membership refresh. The refresher skips that Worker and retains the last applied snapshot;
+    a successfully read empty hostId map remains a valid update. Covered by `WorkerGetHashRingTest`.
+    Coordinator Worker applies the membership watch initial snapshot; after registration releases its lock, a
+    completion callback refreshes local snapshot host IDs. WatchRange carries `initial_revision`; older responses
+    defer the full membership read to this callback. Failed RPC identity probes retain their normal lock-wait behavior.
+    The callback is drained at shutdown and local host-ID publication preserves the current topology under its lock.
+    Snapshot application is fenced by Coordinator/watch identity and retains newer membership events.
+    Covered by `TopologyEngineTest` and `DsCoordinationBackendSessionTest`.
   - Metadata-owner failure hooks admit at most one force-refresh request per owner per six seconds. Different owners
     have independent quotas; when the tracking map exceeds 64 entries, expired entries are reclaimed. A refresher
     result of false means its global wakeup was coalesced, not that the request had no effect: it can still extend the

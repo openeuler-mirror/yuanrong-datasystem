@@ -56,6 +56,9 @@ public:
      */
     Status Publish(std::shared_ptr<const TopologySnapshot> snapshot, SnapshotUpdateOutcome &outcome);
 
+    // Update the current topology locally; a missing or different-authority topology awaits its normal publication.
+    Status RefreshHostIds(std::unordered_map<std::string, std::string> hostIds, const std::string &coordinatorId);
+
     /**
      * @brief Publish a complete authoritative rebuild after a version gap.
      * @param[in] snapshot Complete newer Snapshot.
