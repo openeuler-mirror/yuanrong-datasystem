@@ -229,11 +229,6 @@ constexpr uint64_t HEAT_MAINTENANCE_INTERVAL_MS = 30'000;
 constexpr mode_t EVICTION_POLICY_STATE_DIR_MODE = 0700;
 constexpr int EVICTION_WATERMARK_LOG_LEVEL = 2;
 constexpr auto EVICTION_POLICY_BARRIER_TIMEOUT = std::chrono::seconds(30);
-#ifdef WITH_TESTS
-constexpr auto LOSSLESS_EXIT_GRACE = std::chrono::seconds(10);
-#else
-constexpr auto LOSSLESS_EXIT_GRACE = std::chrono::seconds(120);
-#endif
 static const std::string WORKER_OC_SERVER = "WorkerOcServer";
 static const std::string URMA_WARMUP_KEY_PREFIX = "_urma_";
 constexpr char TOPOLOGY_READINESS_PROBE_KEY[] = "topology-readiness-probe";
@@ -3584,11 +3579,20 @@ Status WorkerOCServer::PreShutDown()
     WaitForPreShutdownTasks(scaleIn);
     auto topoRc = Status::OK();
     if (scaleIn) {
-        const auto exitDeadline = std::chrono::steady_clock::now() + LOSSLESS_EXIT_GRACE;
+        const auto exitStart = std::chrono::steady_clock::now();
+        const auto exitTimeoutS = FLAGS_node_dead_timeout_s;
+        const auto exitDeadline = exitStart + std::chrono::seconds(exitTimeoutS);
         topoRc = PublishExitingMembershipAndWaitForTopologyRemoval(exitDeadline);
-        LOG_IF_ERROR(topoRc,
-                     "[Graceful exit] local_address=" + hostPort_.ToString()
-                         + " WaitForTopologyRemoval failed; proceeding to cleanup");
+        if (topoRc.IsError()) {
+            const auto exitEnd = std::chrono::steady_clock::now();
+            const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(exitEnd - exitStart).count();
+            LOG(ERROR) << "[Graceful exit] CLUSTER_SCALE_IN action=exit_wait_failed local_address="
+                       << hostPort_.ToString() << " node_dead_timeout_s=" << exitTimeoutS
+                       << " elapsed_ms=" << elapsedMs << " deadline_exceeded="
+                       << (exitEnd >= exitDeadline)
+                       << " migration_completion=unconfirmed; WaitForTopologyRemoval failed; proceeding to cleanup"
+                       << " without confirmed lossless migration, status=" << topoRc.ToString();
+        }
         SetUnhealthy();
     }
     if (objCacheClientWorkerSvc_ != nullptr) {
