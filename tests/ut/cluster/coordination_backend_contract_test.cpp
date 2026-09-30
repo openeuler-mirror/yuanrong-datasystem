@@ -63,7 +63,7 @@ public:
 
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
                       const std::string &, int64_t &watchId, std::vector<KeyValueEntry> &initialKvs, int32_t,
-                      std::string *coordinatorId, bool skipInitialKvs = false) override
+                      std::string *coordinatorId, bool skipInitialKvs = false, int64_t * = nullptr) override
     {
         watchId = nextWatchId_++;
         initialKvs = skipInitialKvs ? std::vector<KeyValueEntry>{} : initialKvs_;

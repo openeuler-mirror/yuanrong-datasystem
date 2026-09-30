@@ -17,6 +17,7 @@
 /**
  * Description: Coordinator-backed cluster coordination implementation.
  */
+#include "datasystem/common/rpc/scoped_bthread_local.h"
 #include "datasystem/common/coordinator/coordinator_status.h"
 #include "datasystem/cluster/coordination_backend/ds_coordination_backend.h"
 
@@ -49,6 +50,7 @@ DS_DECLARE_uint32(node_timeout_s);
 
 namespace datasystem::cluster {
 namespace {
+ScopedBthreadLocal<const DsCoordinationBackend *> g_watchRegisteredCaller;
 constexpr int64_t KEEP_ALIVE_INTERVAL_DIVISOR = 3;
 constexpr int64_t PEER_RPC_FAILURE_WINDOW_DIVISOR = 2;
 constexpr uint64_t MIN_PEER_RPC_FAILURES_TO_REPORT = 3;
@@ -403,8 +405,11 @@ Status DsCoordinationBackend::Delete(const std::string &tableName, const std::st
 Status DsCoordinationBackend::WatchEvents(const std::vector<WatchKey> &watchKeys)
 {
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
-    std::lock_guard<std::mutex> lock(rewatchMutex_);
-    return RegisterWatchPlan(watchKeys);
+    {
+        std::lock_guard<std::mutex> lock(rewatchMutex_);
+        RETURN_IF_NOT_OK(RegisterWatchPlan(watchKeys));
+    }
+    return NotifyWatchRegistered();
 }
 
 Status DsCoordinationBackend::RegisterWatchPlan(const std::vector<WatchKey> &watchKeys)
@@ -421,13 +426,13 @@ Status DsCoordinationBackend::RegisterWatchPlan(const std::vector<WatchKey> &wat
     });
     std::vector<WatchRegistration> registrations;
     std::vector<int64_t> registeredIds;
-    std::vector<CoordinationEvent> initialEvents;
+    std::vector<InitialWatchSnapshot> initialSnapshots;
     std::string batchCoordinatorId;
     if (pendingWatchRegistrationId_.empty()) {
         pendingWatchRegistrationId_ = GetBytesUuid();
     }
     RETURN_IF_NOT_OK(
-        PrepareWatchPlan(watchKeys, registrations, registeredIds, initialEvents, batchCoordinatorId));
+        PrepareWatchPlan(watchKeys, registrations, registeredIds, initialSnapshots, batchCoordinatorId));
     std::string observedCoordinatorId;
     proxy_->GetObservedCoordinatorId(observedCoordinatorId);
     if (batchCoordinatorId.empty() || batchCoordinatorId != observedCoordinatorId) {
@@ -437,8 +442,21 @@ Status DsCoordinationBackend::RegisterWatchPlan(const std::vector<WatchKey> &wat
     }
     CommitWatchPlan(watchKeys, std::move(registrations), batchCoordinatorId);
     pendingWatchRegistrationId_.clear();
-    for (auto &event : initialEvents) {
-        DispatchWatchEvent(std::move(event));
+    for (size_t i = 0; i < watchKeys.size(); ++i) {
+        const auto &handler = watchKeys[i].initialSnapshotHandler;
+        auto &snapshot = initialSnapshots[i];
+        if (handler) {
+            auto rc = handler(snapshot.events, snapshot.revision, batchCoordinatorId, registeredIds[i]);
+            if (rc.IsError()) {
+                InvalidateWatches();
+                return rc;
+            }
+        }
+    }
+    for (auto &snapshot : initialSnapshots) {
+        for (auto &event : snapshot.events) {
+            DispatchWatchEvent(std::move(event));
+        }
     }
     DispatchWatchEvent({ CoordinationEventType::RESET, "", "", 0, 0 });
     return Status::OK();
@@ -447,7 +465,7 @@ Status DsCoordinationBackend::RegisterWatchPlan(const std::vector<WatchKey> &wat
 Status DsCoordinationBackend::PrepareWatchPlan(const std::vector<WatchKey> &watchKeys,
                                                std::vector<WatchRegistration> &registrations,
                                                std::vector<int64_t> &registeredIds,
-                                               std::vector<CoordinationEvent> &initialEvents,
+                                               std::vector<InitialWatchSnapshot> &initialSnapshots,
                                                std::string &coordinatorId)
 {
     for (const auto &watchKey : watchKeys) {
@@ -456,6 +474,7 @@ Status DsCoordinationBackend::PrepareWatchPlan(const std::vector<WatchKey> &watc
         const std::string rangeEnd = isPrefix ? StringPlusOne(realKey) : "";
         std::vector<KeyValueEntry> initialKvs;
         int64_t watchId = 0;
+        int64_t initialRevision = 0;
         std::string responseCoordinatorId;
         constexpr int64_t watchRetryBudgetMs = 30'000;
         constexpr int64_t watchRetryIntervalMs = 200;
@@ -468,7 +487,7 @@ Status DsCoordinationBackend::PrepareWatchPlan(const std::vector<WatchKey> &watc
                                     watchId, initialKvs,
                                     std::min<int64_t>(DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
                                                       retryTimer.GetRemainingTimeMs()),
-                                    &responseCoordinatorId, watchKey.skipInitialKvs);
+                                    &responseCoordinatorId, watchKey.skipInitialKvs, &initialRevision);
             if ((!IsRetryableRpcError(rc) && rc.GetCode() != K_RPC_PEER_DEAD
                  && rc.GetCode() != K_NOT_READY && rc.GetCode() != K_TRY_AGAIN)
                 || retryTimer.GetRemainingTimeMs() <= watchRetryIntervalMs) {
@@ -494,10 +513,12 @@ Status DsCoordinationBackend::PrepareWatchPlan(const std::vector<WatchKey> &watc
         registrations.push_back({ watchId, { realKey, isPrefix } });
         registeredIds.emplace_back(watchId);
         coordinatorId = responseCoordinatorId;
+        std::vector<CoordinationEvent> initialEvents;
         for (auto &kv : initialKvs) {
             initialEvents.push_back({ CoordinationEventType::PUT, std::move(kv.key), std::move(kv.value),
                                       kv.version, kv.modRevision, responseCoordinatorId, watchId });
         }
+        initialSnapshots.push_back({ std::move(initialEvents), initialRevision });
     }
     return Status::OK();
 }
@@ -531,7 +552,7 @@ void DsCoordinationBackend::CommitWatchPlan(const std::vector<WatchKey> &watchKe
 
 Status DsCoordinationBackend::RewatchIfNeeded()
 {
-    std::lock_guard<std::mutex> rewatchLock(rewatchMutex_);
+    std::unique_lock<std::mutex> rewatchLock(rewatchMutex_);
     std::vector<WatchKey> plan;
     {
         std::lock_guard<std::mutex> watchLock(watchMutex_);
@@ -540,7 +561,9 @@ Status DsCoordinationBackend::RewatchIfNeeded()
         }
         plan = watchPlan_;
     }
-    return RegisterWatchPlan(plan);
+    RETURN_IF_NOT_OK(RegisterWatchPlan(plan));
+    rewatchLock.unlock();
+    return NotifyWatchRegistered();
 }
 
 std::chrono::milliseconds DsCoordinationBackend::GetIdentityProbeBackoffLimit(
@@ -603,16 +626,10 @@ void DsCoordinationBackend::RefreshWatchIdentity(const Status &status)
         rewatch = rewatchRequired_ && (status.IsOk() || identityChanged);
     }
     if (rewatch) {
-        if (probe) {
-            std::vector<WatchKey> plan;
-            {
-                std::lock_guard<std::mutex> lock(watchMutex_);
-                plan = watchPlan_;
-            }
-            LOG_IF_ERROR(RegisterWatchPlan(plan), "Re-register Coordinator watches after identity probe");
-        } else {
-            LOG_IF_ERROR(RewatchIfNeeded(), "Re-register Coordinator watches after identity observation");
+        if (probeLock.owns_lock()) {
+            probeLock.unlock();
         }
+        LOG_IF_ERROR(RewatchIfNeeded(), "Re-register Coordinator watches after identity change");
     }
 }
 
@@ -1262,6 +1279,7 @@ Status DsCoordinationBackend::ShutdownEventSources()
     {
         std::lock_guard<std::mutex> lock(eventHandlerMutex_);
         eventHandler_ = {};
+        watchRegisteredHandler_ = {};
         membershipReadyHandler_ = {};
         membershipReconcileHandler_ = {};
     }
@@ -1503,6 +1521,35 @@ bool DsCoordinationBackend::IsKeepAliveTimeout()
 bool DsCoordinationBackend::IsFirstKeepAliveSent()
 {
     return firstKeepAliveSent_.load(std::memory_order_acquire);
+}
+
+void DsCoordinationBackend::SetWatchRegisteredHandler(std::function<Status()> handler)
+{
+    std::lock_guard<std::mutex> lock(eventHandlerMutex_);
+    watchRegisteredHandler_ = std::move(handler);
+}
+
+Status DsCoordinationBackend::NotifyWatchRegistered()
+{
+    // A fallback read can re-register synchronously; its outer callback handles the changed identity.
+    auto &notifying = *g_watchRegisteredCaller;
+    RETURN_OK_IF_TRUE(notifying == this);
+    std::function<Status()> handler;
+    {
+        std::lock_guard<std::mutex> lock(eventHandlerMutex_);
+        handler = watchRegisteredHandler_;
+        RETURN_OK_IF_TRUE(!handler);
+        ++activeEventHandlers_;
+    }
+    const auto previous = notifying;
+    notifying = this;
+    Raii finish([&] {
+        notifying = previous;
+        std::lock_guard<std::mutex> lock(eventHandlerMutex_);
+        --activeEventHandlers_;
+        eventHandlerCv_.notify_all();
+    });
+    return handler();
 }
 
 void DsCoordinationBackend::SetEventHandler(EventHandler &&eventHandler)

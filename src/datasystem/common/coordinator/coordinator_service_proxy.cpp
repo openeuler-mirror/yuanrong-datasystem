@@ -473,7 +473,8 @@ Status CoordinatorServiceProxyBase::DeleteRangeInternal(
 Status CoordinatorServiceProxyBase::WatchRange(const std::string &key, const std::string &rangeEnd,
                                                const std::string &watcherAddr, const std::string &registrationId,
                                                int64_t &watchId, std::vector<KeyValueEntry> &initialKvs,
-                                               int32_t timeoutMs, std::string *coordinatorId, bool skipInitialKvs)
+                                               int32_t timeoutMs, std::string *coordinatorId, bool skipInitialKvs,
+                                               int64_t *initialRevision)
 {
     auto inFlight = BeginRpc(timeoutMs);
     coordinator::WatchRangeReqPb req;
@@ -494,6 +495,9 @@ Status CoordinatorServiceProxyBase::WatchRange(const std::string &key, const std
     RETURN_IF_NOT_OK(inFlight.Accept(rsp.header(), coordinatorId));
     watchId = rsp.watch_id();
     FillKeyValueEntries(rsp.initial_kvs(), initialKvs);
+    if (initialRevision != nullptr) {
+        *initialRevision = rsp.initial_revision();
+    }
     return Status::OK();
 }
 

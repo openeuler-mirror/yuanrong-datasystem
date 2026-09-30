@@ -174,13 +174,15 @@ public:
      * @param[in] timeoutMs RPC deadline in milliseconds.
      * @param[out] coordinatorId Exact response CoordinatorId; nullptr ignores it.
      * @param[in] skipInitialKvs Skip the initial snapshot; the caller must reconcile after registration.
+     * @param[out] initialRevision Complete snapshot revision; zero when unavailable on an older Coordinator.
      * @return Existing WatchRange status contract.
      */
     virtual Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
                               const std::string &registrationId, int64_t &watchId,
                               std::vector<KeyValueEntry> &initialKvs,
                               int32_t timeoutMs = DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
-                              std::string *coordinatorId = nullptr, bool skipInitialKvs = false) = 0;
+                              std::string *coordinatorId = nullptr, bool skipInitialKvs = false,
+                              int64_t *initialRevision = nullptr) = 0;
 
     /**
      * @brief Cancel watches owned by one callback address.
@@ -346,7 +348,8 @@ public:
      */
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
                       const std::string &registrationId, int64_t &watchId, std::vector<KeyValueEntry> &initialKvs,
-                      int32_t timeoutMs, std::string *coordinatorId, bool skipInitialKvs = false) override;
+                      int32_t timeoutMs, std::string *coordinatorId, bool skipInitialKvs = false,
+                      int64_t *initialRevision = nullptr) override;
 
     /**
      * @copydoc ICoordinatorServiceProxy::CancelWatch
