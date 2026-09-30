@@ -173,9 +173,12 @@ public:
         emptyWatchSnapshotKey_ = key;
     }
 
+    bool legacyWatchResponse = false;
+
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
                       const std::string &, int64_t &watchId, std::vector<KeyValueEntry> &initialKvs, int32_t,
-                      std::string *coordinatorId, bool skipInitialKvs = false) override
+                      std::string *coordinatorId, bool skipInitialKvs = false,
+                      int64_t *initialRevision = nullptr) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (key == nextWatchFailureKey_ && nextWatchFailureCode_ != K_OK) {
@@ -183,6 +186,9 @@ public:
             nextWatchFailureKey_.clear();
             nextWatchFailureCode_ = K_OK;
             return Status(failureCode, "injected Coordinator WatchRange failure");
+        }
+        if (initialRevision != nullptr) {
+            *initialRevision = legacyWatchResponse ? 0 : revision_;
         }
         watchId = nextWatchId_++;
         initialKvs.clear();

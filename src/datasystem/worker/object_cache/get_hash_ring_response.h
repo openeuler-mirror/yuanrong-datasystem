@@ -32,7 +32,7 @@ namespace datasystem::object_cache {
  * @param[in] requestedVersion SDK-side cached topology version; zero requests a full response.
  * @param[in] masterAddress Current master address.
  * @param[out] rsp GetHashRing response. All existing fields are cleared before the response is populated.
- * @return K_OK or the topology/host ID conversion error.
+ * @return K_NOT_READY until membership host IDs are known; otherwise K_OK or the topology conversion error.
  */
 Status BuildGetHashRingResponse(const cluster::TopologySnapshot &snapshot, uint64_t requestedVersion,
                                 const std::string &masterAddress, GetHashRingRspPb &rsp,

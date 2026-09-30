@@ -185,8 +185,11 @@ ds_cc_test(
 ds_cc_test(
     name = "worker_get_hash_ring_test",
     srcs = ["object_cache/worker_get_hash_ring_test.cpp"],
+    linkstatic = True,
     deps = [
         "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker:worker_flags",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//tests/ut:ut_common",
     ],

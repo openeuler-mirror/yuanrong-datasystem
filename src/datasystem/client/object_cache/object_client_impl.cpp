@@ -795,6 +795,7 @@ Status ObjectClientImpl::ApplyRoutingWorkerSnapshot(uint64_t ringVersion,
 {
     RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
     RETURN_RUNTIME_ERROR_IF_NULL(ubHealthFilter_);
+    client::LogRoutingHostIdMap(ringVersion, ring, hostIdMap, sdkHostId);
     client::WorkerSnapshot snapshot;
     RETURN_IF_NOT_OK(client::BuildWorkerSnapshot(ringVersion, ring, hostIdMap, sdkHostId, snapshot));
     snapshot.epochResetConfirmed = epochResetConfirmed;

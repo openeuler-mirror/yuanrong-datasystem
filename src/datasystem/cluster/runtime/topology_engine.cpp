@@ -820,6 +820,20 @@ Status TopologyEngine::StartMemberRole()
             }
         }
     }
+    if (coordinatorProxy_ != nullptr) {
+        for (auto &watch : watches) {
+            if (watch.tableName == keys_->MembershipTable()) {
+                watch.initialSnapshotHandler = [this](const auto &events, auto revision, const auto &authority,
+                                                       auto watchId) {
+                    return ApplyCoordinatorMembershipSnapshot(events, revision, authority, watchId);
+                };
+            }
+        }
+    }
+    if (coordinatorProxy_ != nullptr) {
+        static_cast<DsCoordinationBackend *>(memberBackend_.get())->SetWatchRegisteredHandler(
+            [this] { return RefreshSnapshotHostIds(); });
+    }
     auto rc = memberBackend_->WatchEvents(watches);
     if (rc.IsError()) {
         return rc;
@@ -1315,6 +1329,33 @@ TopologyDiagnostics TopologyEngine::GetDiagnostics() const
     return diagnostics;
 }
 
+Status TopologyEngine::RefreshSnapshotHostIds()
+{
+    std::unordered_map<std::string, std::string> hostIds;
+    auto rc = membershipView_.GetHostIds(hostIds);
+    if (rc.GetCode() == K_NOT_READY) {
+        rc = RefreshMemberships();
+        // The fallback RPC may complete a nested re-registration; retry once with its current watch identity.
+        if (rc.GetCode() == K_NOT_READY) {
+            rc = RefreshMemberships();
+        }
+    }
+    RETURN_IF_NOT_OK(rc);
+    std::string authority;
+    int64_t watchId;
+    {
+        std::lock_guard<std::mutex> lock(membershipEventsMutex_);
+        authority = membershipWatchAuthority_;
+        watchId = membershipWatchId_;
+    }
+    auto *backend = static_cast<DsCoordinationBackend *>(memberBackend_.get());
+    return backend->CommitIfCurrentWatch(authority, watchId, [&] {
+        std::lock_guard<std::mutex> lock(membershipEventsMutex_);
+        RETURN_IF_NOT_OK(membershipView_.GetHostIds(hostIds));
+        return snapshots_.RefreshHostIds(std::move(hostIds), authority);
+    });
+}
+
 Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed, int32_t timeoutMs)
 {
     std::shared_ptr<const TopologySnapshot> previous;
@@ -1607,6 +1648,36 @@ void TopologyEngine::ClearStaleMembershipCandidates()
     if (membershipWatchAuthority_ == authority && membershipWatchId_ == watchId) {
         ClearMembershipCandidatesLocked();
     }
+}
+
+Status TopologyEngine::ApplyCoordinatorMembershipSnapshot(const std::vector<CoordinationEvent> &events,
+                                                          int64_t revision, const std::string &authority,
+                                                          int64_t watchId)
+{
+    std::vector<MembershipRecord> members;
+    members.reserve(events.size());
+    const auto prefix = keys_->MembershipTable() + "/";
+    for (const auto &event : events) {
+        CHECK_FAIL_RETURN_STATUS(event.type == CoordinationEventType::PUT && event.key.rfind(prefix, 0) == 0,
+                                 K_INVALID, "Invalid initial membership snapshot entry");
+        MembershipValue value;
+        RETURN_IF_NOT_OK(MembershipValueCodec::Decode(event.value, value));
+        const auto address = event.key.substr(prefix.size());
+        std::string canonicalAddress;
+        RETURN_IF_NOT_OK(TopologyKeyHelper::MembershipKey(address, canonicalAddress));
+        CHECK_FAIL_RETURN_STATUS(address == canonicalAddress, K_INVALID, "Membership address is not canonical");
+        members.push_back({ address, value.lifecycleState, value.timestamp, value.hostId });
+    }
+    auto *backend = static_cast<DsCoordinationBackend *>(memberBackend_.get());
+    return backend->CommitIfCurrentWatch(authority, watchId, [&] {
+        std::lock_guard<std::mutex> lock(membershipEventsMutex_);
+        if (membershipWatchAuthority_ != authority || membershipWatchId_ != watchId) {
+            ClearMembershipCandidatesLocked();
+            membershipWatchAuthority_ = authority;
+            membershipWatchId_ = watchId;
+        }
+        return revision == 0 ? Status::OK() : membershipView_.RefreshMemberships(members, revision);
+    });
 }
 
 Status TopologyEngine::ApplyCoordinatorMembershipEvent(const CoordinationEvent &event)

@@ -560,6 +560,8 @@ private:
      * @return Read, validation, publish, or evidence status.
      */
     Status ReloadTopology(bool fullRebuildAllowed, int32_t timeoutMs = ENGINE_READ_TIMEOUT_MS);
+
+    Status RefreshSnapshotHostIds();
     void RestoreReadyAfterCoordinatorTopologyUpdate(const TopologySnapshot &snapshot) noexcept;
 
     /**
@@ -568,6 +570,9 @@ private:
      * @return Decode, publish, or evidence status.
      */
     Status ApplyCoordinatorTopologyEvent(const CoordinationEvent &event);
+
+    Status ApplyCoordinatorMembershipSnapshot(const std::vector<CoordinationEvent> &events, int64_t revision,
+                                               const std::string &authority, int64_t watchId);
 
     Status ApplyCoordinatorMembershipEvent(const CoordinationEvent &event);
     Status ApplyMembershipEvent(const CoordinationEvent &event, const std::string &prefix);
