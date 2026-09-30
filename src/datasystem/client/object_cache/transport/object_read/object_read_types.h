@@ -52,10 +52,10 @@ inline bool IsMetadataIngressUnavailable(const Status &status)
     return IsTransportSnapshotStaleLocation(status) && status.GetExtra() == METADATA_INGRESS_NOT_SENT;
 }
 
-inline int64_t SelectLocationRefreshBackoffMs(bool draining, uint8_t retryCount, int64_t currentBackoffMs)
+inline int64_t SelectLocationRefreshBackoffMs(bool draining, bool alternativeAvailable, uint8_t retryCount,
+                                             int64_t currentBackoffMs)
 {
-    constexpr int64_t immediateRetryBackoffMs = 0;
-    return !draining && retryCount == 0 ? immediateRetryBackoffMs : currentBackoffMs;
+    return !draining && (alternativeAvailable || retryCount == 0) ? 0 : currentBackoffMs;
 }
 
 /**
