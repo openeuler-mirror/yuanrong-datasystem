@@ -5735,17 +5735,51 @@ TEST(ObjectClientTransportTest, StaleLocationStopsAfterFiveRetries)
     EXPECT_EQ(buffers[0], nullptr);
 }
 
-TEST(ObjectClientTransportTest, FirstStaleLocationRetryUsesZeroBackoff)
+TEST(ObjectClientTransportTest, StaleLocationRetryWaitDependsOnAlternative)
 {
-    constexpr uint8_t firstRetry = 0;
-    constexpr uint8_t secondRetry = 1;
-    constexpr int64_t immediateBackoffMs = 0;
-    constexpr int64_t staleBackoffMs = 20;
-    constexpr int64_t drainingBackoffMs = 1;
+    EXPECT_EQ(SelectLocationRefreshBackoffMs(false, true, 0, 20), 0);
+    EXPECT_EQ(SelectLocationRefreshBackoffMs(false, true, 1, 20), 0);
+    EXPECT_EQ(SelectLocationRefreshBackoffMs(false, false, 0, 20), 0);
+    EXPECT_EQ(SelectLocationRefreshBackoffMs(false, false, 1, 20), 20);
+    EXPECT_EQ(SelectLocationRefreshBackoffMs(false, false, 2, 40), 40);
+    EXPECT_EQ(SelectLocationRefreshBackoffMs(true, true, 0, 1), 1);
+}
 
-    EXPECT_EQ(SelectLocationRefreshBackoffMs(false, firstRetry, staleBackoffMs), immediateBackoffMs);
-    EXPECT_EQ(SelectLocationRefreshBackoffMs(false, secondRetry, staleBackoffMs), staleBackoffMs);
-    EXPECT_EQ(SelectLocationRefreshBackoffMs(true, firstRetry, drainingBackoffMs), drainingBackoffMs);
+TEST(ObjectClientTransportTest, UnsentMetadataFailuresTryDistinctOwners)
+{
+    ApiDeadlineGuard deadline(1000);
+    const std::string objectKey = "alternate-metadata-owner";
+    auto metadata = std::make_shared<FakeObjectMetadataClient>();
+    std::atomic<int> attempts{ 0 };
+    metadata->queryAndGetHandler = [&attempts](const HostPort &address, const ObjectMetadataBatch &) {
+        if (attempts.fetch_add(1) < 2) {
+            return MakeStaleSnapshotStatus(address).WithExtra(METADATA_INGRESS_NOT_SENT);
+        }
+        return Status::OK();
+    };
+    metadata->inlineKinds[objectKey] = AccessTransportKind::TCP;
+    auto replicas = std::make_shared<FakeReplicaReader>();
+    auto transportLayer = std::make_unique<TestTransportLayer>(std::make_shared<FakeDataPlaneManager>());
+    transportLayer->SetObjectRead(std::make_unique<ObjectReadFlow>(
+        metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test")));
+
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
+    workerApi->clientId_ = "alternate-metadata-owner-test-client";
+    client->workerApi_.emplace_back(workerApi);
+    client->transportLayer_ = std::move(transportLayer);
+    std::atomic_store(&client->routing_, MakeRouting({ MakeAddress(41), MakeAddress(42), MakeAddress(43) }));
+
+    std::vector<std::shared_ptr<Buffer>> buffers(1);
+    ASSERT_TRUE(client->routedMode_->GetFromTransportLayer({ objectKey }, buffers, false, 1000, false).IsOk());
+    ASSERT_EQ(metadata->addresses.size(), 3u);
+    EXPECT_NE(metadata->addresses[0], metadata->addresses[1]);
+    EXPECT_NE(metadata->addresses[0], metadata->addresses[2]);
+    EXPECT_NE(metadata->addresses[1], metadata->addresses[2]);
+    EXPECT_NE(buffers[0], nullptr);
 }
 
 TEST(ObjectClientTransportTest, StaleBackoffIsClampedToRemainingDeadline)

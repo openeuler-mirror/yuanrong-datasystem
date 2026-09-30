@@ -672,10 +672,11 @@ handler. Clearing the Router handler synchronously excludes later callback acces
     another listed replica succeeds, the current Get returns that value without refreshing metadata. If all listed
     replicas are exhausted after a stale/draining/dead-replica observation, the reader returns the recorded stale
     topology/location signal so the outer Get refreshes the hash ring and re-queries authoritative metadata. The first
-    stale-location retry runs immediately after requesting the refresh; only persistent stale results use the 20 ms
-    exponential backoff. The stale signal is internal to the retry loop: if the caller deadline expires before the next
-    retry, whether during the read
-    RPC itself or during refresh backoff, the public SDK result is rewritten to `K_RPC_DEADLINE_EXCEEDED`; if the stale
+    stale-location retry runs immediately; later retries also run immediately when a definitely unsent metadata request
+    is excluded and a different owner is routable. All other persistent stale results use the original 20 ms
+    exponential backoff bounded by half the remaining API deadline. The stale signal is internal to the retry
+    loop: if the caller deadline expires before the next retry, whether during the
+    read RPC itself or during refresh backoff, the public SDK result is rewritten to `K_RPC_DEADLINE_EXCEEDED`; if the stale
     refresh budget is exhausted while the API deadline is still alive, the public SDK result is rewritten to
     `K_RPC_UNAVAILABLE`. Both final statuses append the original
     stale/dead-replica diagnostic string. Retry state is allocated only for affected keys; draining and stale-location
