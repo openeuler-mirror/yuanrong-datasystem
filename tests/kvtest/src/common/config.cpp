@@ -192,6 +192,15 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
         if (j.contains("stage_duration_seconds")) {
             cfg.stageDurationSeconds = j["stage_duration_seconds"];
         }
+        if (j.contains("target_qps_min")) {
+            cfg.targetQpsMin = j["target_qps_min"].get<int>();
+        }
+        if (j.contains("target_qps_max")) {
+            cfg.targetQpsMax = j["target_qps_max"].get<int>();
+        }
+        if (j.contains("random_qps_interval_seconds")) {
+            cfg.randomQpsIntervalSeconds = j["random_qps_interval_seconds"].get<int>();
+        }
         numThreadsExplicit = j.contains("num_threads");
         numTotalThreadsExplicit = j.contains("num_total_threads");
         if (numThreadsExplicit)
@@ -530,6 +539,26 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
     for (auto qps : cfg.targetQpsStages) {
         if (qps < 0) {
             SLOG_ERROR("target_qps stage values must be >= 0, got " << qps);
+            return false;
+        }
+    }
+    if (cfg.targetQpsMin > 0 || cfg.targetQpsMax > 0) {
+        if (cfg.targetQpsMin <= 0 || cfg.targetQpsMax <= 0) {
+            SLOG_ERROR("target_qps_min and target_qps_max must both be > 0 for random QPS, got min="
+                       << cfg.targetQpsMin << ", max=" << cfg.targetQpsMax);
+            return false;
+        }
+        if (cfg.targetQpsMin > cfg.targetQpsMax) {
+            SLOG_ERROR("target_qps_min must be <= target_qps_max, got min="
+                       << cfg.targetQpsMin << ", max=" << cfg.targetQpsMax);
+            return false;
+        }
+        if (!cfg.targetQpsStages.empty()) {
+            SLOG_ERROR("target_qps_min/max (random QPS) is mutually exclusive with target_qps array (stages)");
+            return false;
+        }
+        if (cfg.randomQpsIntervalSeconds <= 0) {
+            SLOG_ERROR("random_qps_interval_seconds must be > 0, got " << cfg.randomQpsIntervalSeconds);
             return false;
         }
     }
