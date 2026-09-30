@@ -172,9 +172,10 @@ void CleanupAmbiguousAllocations(const std::shared_ptr<DataPlaneManager> &manage
 
 uint64_t GetConfiguredUbInlineBufferSize()
 {
+    constexpr uint64_t DEFAULT_UB_GET_DATA_SIZE_BYTES = 10 * 1024 * 1024;
     const char *value = std::getenv("DATASYSTEM_UB_GET_DATA_SIZE_BYTES");
     if (value == nullptr || *value == '\0') {
-        return 0;
+        return DEFAULT_UB_GET_DATA_SIZE_BYTES;
     }
     for (const char *cursor = value; *cursor != '\0'; ++cursor) {
         if (*cursor < '0' || *cursor > '9') {
