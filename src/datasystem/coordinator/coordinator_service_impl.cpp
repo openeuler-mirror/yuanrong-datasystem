@@ -1090,11 +1090,13 @@ Status CoordinatorServiceImpl::WatchRange(const WatchRangeReqPb &req, WatchRange
     RETURN_IF_NOT_OK(CheckWatcherMembership(req, parsed));
 
     int64_t watchId = 0;
+    int64_t initialRevision = 0;
     std::vector<KeyValueEntry> initialKvs;
     RETURN_IF_NOT_OK(
         store_->WatchRange(req.key(), req.range_end(), req.watcher_addr(), req.registration_id(), watchId, initialKvs,
-                           req.skip_initial_kvs()));
+                           req.skip_initial_kvs(), &initialRevision));
     rsp.set_watch_id(watchId);
+    rsp.set_initial_revision(initialRevision);
     for (const auto &entry : initialKvs) {
         FillKeyValuePb(entry, rsp.add_initial_kvs());
     }

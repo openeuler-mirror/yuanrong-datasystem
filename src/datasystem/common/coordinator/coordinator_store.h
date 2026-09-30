@@ -101,11 +101,13 @@ public:
      * @param[out] watchId Assigned watch ID.
      * @param[out] initialKvs Current snapshot of the watched range.
      * @param[in] skipInitialKvs Skip snapshot materialization; the caller must reconcile after registration.
+     * @param[out] initialRevision Complete snapshot revision; zero when unavailable on an older Coordinator.
      * @return Status of the operation.
      */
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
                       const std::string &registrationId, int64_t &watchId,
-                      std::vector<KeyValueEntry> &initialKvs, bool skipInitialKvs = false);
+                      std::vector<KeyValueEntry> &initialKvs, bool skipInitialKvs = false,
+                      int64_t *initialRevision = nullptr);
 
     /**
      * @brief Cancel watches for a watcher address.

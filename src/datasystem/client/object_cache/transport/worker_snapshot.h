@@ -50,6 +50,10 @@ struct WorkerSnapshot {
     std::unordered_map<HostPort, std::string> workerIncarnations;
 };
 
+void LogRoutingHostIdMap(uint64_t ringVersion, const ::datasystem::ClusterTopologyPb &ring,
+                         const std::unordered_map<std::string, std::string> &hostIdMap,
+                         const std::string &sdkHostId);
+
 /**
  * @brief Build an all-or-nothing transport snapshot from the complete topology membership.
  * @param[in] ringVersion Version returned with the topology update.

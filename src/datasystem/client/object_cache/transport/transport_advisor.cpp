@@ -18,6 +18,8 @@
 
 #include "datasystem/client/object_cache/transport/transport_advisor.h"
 
+#include "datasystem/common/log/log.h"
+
 #ifdef USE_URMA
 #include "datasystem/common/rdma/urma_manager.h"
 #endif
@@ -58,7 +60,7 @@ std::vector<TransportHint> TransportAdvisor::GetFallbackHints(TransportHint init
     return hints;
 }
 
-void TransportAdvisor::SetShmCandidateWorkers(const std::vector<HostPort> &workers)
+bool TransportAdvisor::SetShmCandidateWorkers(const std::vector<HostPort> &workers)
 {
     std::unordered_set<HostPort> updated;
     updated.reserve(workers.size());
@@ -66,17 +68,24 @@ void TransportAdvisor::SetShmCandidateWorkers(const std::vector<HostPort> &worke
         updated.insert(w);
     }
     bthread::RWLockWrGuard lk(mtx_);
+    const bool changed = shmCandidateWorkers_ != updated;
     shmCandidateWorkers_ = std::move(updated);
     ++snapshotGeneration_;
+    return changed;
 }
 
 bool TransportAdvisor::ObserveDrainingShmFailure(const HostPort &workerAddr)
 {
     uint64_t snapshotGeneration;
+    bool removed;
     {
         bthread::RWLockWrGuard lk(mtx_);
-        shmCandidateWorkers_.erase(workerAddr);
+        removed = shmCandidateWorkers_.erase(workerAddr) > 0;
         snapshotGeneration = snapshotGeneration_;
+    }
+    if (removed) {
+        LOG(INFO) << "Removed SHM candidate worker=" << workerAddr
+                  << ", reason=draining SHM failure, snapshotGeneration=" << snapshotGeneration;
     }
     auto refreshGeneration = drainingRefreshGeneration_.load(std::memory_order_acquire);
     while (refreshGeneration < snapshotGeneration) {

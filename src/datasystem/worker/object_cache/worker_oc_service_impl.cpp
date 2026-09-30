@@ -475,6 +475,8 @@ Status BuildGetHashRingResponse(const cluster::TopologySnapshot &snapshot, uint6
                                 const std::string &requestedHostIdsDigest)
 {
     rsp.Clear();
+    CHECK_FAIL_RETURN_STATUS(snapshot.HostIdsKnown(), K_NOT_READY,
+                             "GetHashRing membership host IDs are not ready");
     rsp.set_version(snapshot.Version());
     rsp.set_master_address(masterAddress);
     rsp.set_host_ids_digest(snapshot.HostIdsDigest());

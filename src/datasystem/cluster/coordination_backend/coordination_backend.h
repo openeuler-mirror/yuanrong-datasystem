@@ -74,6 +74,9 @@ struct WatchKey {
     std::string key;
     int64_t startRevision{ 0 };
     bool skipInitialKvs{ false };
+    // Synchronous full-snapshot application after registration, including empty snapshots; never under watchMutex_.
+    std::function<Status(const std::vector<CoordinationEvent> &, int64_t, const std::string &, int64_t)>
+        initialSnapshotHandler{ nullptr };
 };
 
 /**

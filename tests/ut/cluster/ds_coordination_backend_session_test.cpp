@@ -142,6 +142,10 @@ public:
     {
         std::unique_lock<std::mutex> lock(mutex_);
         ++rangeCalls_;
+        if (rangeFailure_.IsError()) {
+            rangeFailureEntered_.set_value();
+            return rangeFailure_;
+        }
         if (blockNextRange_) {
             blockNextRange_ = false;
             rangeEntered_ = true;
@@ -195,7 +199,7 @@ public:
 
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &, const std::string &registrationId,
                       int64_t &watchId, std::vector<KeyValueEntry> &initialKvs, int32_t,
-                      std::string *coordinatorId, bool skipInitialKvs = false) override
+                      std::string *coordinatorId, bool skipInitialKvs = false, int64_t * = nullptr) override
     {
         WatchStep step{ Status::OK(), COORDINATOR_A, {} };
         std::function<void()> hook;
@@ -268,7 +272,10 @@ public:
 
     Status GetCoordinatorId(std::string &coordinatorId, int32_t) override
     {
-        GetObservedCoordinatorId(coordinatorId);
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++identityProbes_;
+        coordinatorId = probeCoordinatorId_.empty() ? observedCoordinatorId_ : probeCoordinatorId_;
+        observedCoordinatorId_ = coordinatorId;
         return Status::OK();
     }
 
@@ -569,6 +576,20 @@ public:
         lastPutValue_ = value;
     }
 
+    std::future<void> FailRangeAndProbe(StatusCode code, std::string coordinatorId)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        rangeFailure_ = Status(code, "injected Range failure");
+        probeCoordinatorId_ = std::move(coordinatorId);
+        return rangeFailureEntered_.get_future();
+    }
+
+    size_t IdentityProbes() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return identityProbes_;
+    }
+
     void SetRangeEntries(std::vector<KeyValueEntry> entries)
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -596,6 +617,10 @@ private:
     bool membershipDeleteUsed_{ false };
     size_t putCalls_{ 0 };
     size_t rangeCalls_{ 0 };
+    Status rangeFailure_;
+    std::promise<void> rangeFailureEntered_;
+    std::string probeCoordinatorId_;
+    size_t identityProbes_{ 0 };
     size_t keepAliveCalls_{ 0 };
     std::vector<std::string> lastFailedTargets_;
     int64_t putVersion_{ 0 };
@@ -743,12 +768,106 @@ TEST(DsCoordinationBackendSessionTest, CommitsOnlyCompleteSameCoordinatorBatch)
     });
     backend.SetEventHandler([&eventCount](CoordinationEvent &&) { ++eventCount; });
 
-    ASSERT_TRUE(backend.WatchEvents(TwoWatchPlan()).IsOk());
+    auto plan = TwoWatchPlan();
+    size_t snapshotEvents = 0;
+    plan[0].initialSnapshotHandler = [&](const std::vector<CoordinationEvent> &events, int64_t,
+                                          const std::string &authority, int64_t watchId) {
+        EXPECT_TRUE(backend.OwnsWatchIdentity(authority, watchId));
+        snapshotEvents += events.size();
+        EXPECT_EQ(events.size(), 1U);
+        if (!events.empty()) {
+            EXPECT_EQ(events.front().value, "topology");
+        }
+        return Status::OK();
+    };
+    ASSERT_TRUE(backend.WatchEvents(plan).IsOk());
+    EXPECT_EQ(snapshotEvents, 1U);
 
     EXPECT_EQ(eventCount.load(), 3);
     EXPECT_TRUE(backend.OwnsWatchIdentity(COORDINATOR_A, 1));
     EXPECT_TRUE(backend.OwnsWatchIdentity(COORDINATOR_A, 2));
     EXPECT_FALSE(backend.OwnsWatchIdentity(COORDINATOR_B, 1));
+}
+
+TEST(DsCoordinationBackendSessionTest, RegisteredCallbackCanReadAndRewatchOutsideRegistrationLock)
+{
+    DeterministicCoordinatorProxy proxy;
+    AddSuccessfulBatch(proxy, COORDINATOR_A);
+    AddSuccessfulBatch(proxy, COORDINATOR_B);
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    size_t callbacks = 0;
+    backend.SetWatchRegisteredHandler([&] {
+        ++callbacks;
+        EXPECT_FALSE(backend.IsWatchRegistrationInProgress());
+        proxy.SetPutCoordinatorId(COORDINATOR_B);
+        std::vector<std::pair<std::string, std::string>> members;
+        return backend.GetAll("/datasystem/c/cluster", members);
+    });
+    EXPECT_TRUE(backend.WatchEvents(TwoWatchPlan()).IsOk());
+    EXPECT_EQ(callbacks, 1U);
+    EXPECT_TRUE(backend.OwnsWatchIdentity(COORDINATOR_B, 3));
+    EXPECT_FALSE(backend.OwnsWatchIdentity(COORDINATOR_A, 1));
+    EXPECT_EQ(proxy.WatchCalls().size(), 4U);
+}
+
+TEST(DsCoordinationBackendSessionTest, FailedRpcDuringRegistrationStillProbesAfterUnlock)
+{
+    for (auto code : { K_NOT_READY, K_RPC_DEADLINE_EXCEEDED }) {
+        DeterministicCoordinatorProxy proxy;
+        AddSuccessfulBatch(proxy, COORDINATOR_A);
+        AddSuccessfulBatch(proxy, COORDINATOR_B);
+        DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+        std::promise<void> entered, release;
+        auto ready = entered.get_future();
+        auto resume = release.get_future().share();
+        std::atomic<bool> first{ true };
+        proxy.SetBeforeWatchReturn([&] {
+            if (first.exchange(false)) {
+                entered.set_value();
+                resume.wait();
+            }
+        });
+        std::atomic<size_t> callbacks{ 0 };
+        backend.SetWatchRegisteredHandler([&] { ++callbacks; return Status::OK(); });
+        auto registering = std::async(std::launch::async, [&] { return backend.WatchEvents(TwoWatchPlan()); });
+        ready.wait();
+        auto failed = proxy.FailRangeAndProbe(code, COORDINATOR_B);
+        auto reading = std::async(std::launch::async, [&] {
+            std::vector<std::pair<std::string, std::string>> members;
+            return backend.GetAll("/datasystem/c/cluster", members);
+        });
+        failed.wait();
+        EXPECT_EQ(reading.wait_for(std::chrono::milliseconds(50)), std::future_status::timeout);
+        release.set_value();
+        EXPECT_TRUE(registering.get().IsOk());
+        EXPECT_EQ(reading.get().GetCode(), code);
+        EXPECT_EQ(proxy.IdentityProbes(), 1U);
+        EXPECT_TRUE(backend.OwnsWatchIdentity(COORDINATOR_B, 3));
+        EXPECT_FALSE(backend.OwnsWatchIdentity(COORDINATOR_A, 1));
+        EXPECT_EQ(callbacks.load(), 2U);
+    }
+}
+
+TEST(DsCoordinationBackendSessionTest, ShutdownDrainsRegisteredCallback)
+{
+    DeterministicCoordinatorProxy proxy;
+    AddSuccessfulBatch(proxy, COORDINATOR_A);
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    std::promise<void> entered, release;
+    auto ready = entered.get_future();
+    auto resume = release.get_future().share();
+    backend.SetWatchRegisteredHandler([&] {
+        entered.set_value();
+        resume.wait();
+        return Status::OK();
+    });
+    auto registering = std::async(std::launch::async, [&] { return backend.WatchEvents(TwoWatchPlan()); });
+    ready.wait();
+    auto stopping = std::async(std::launch::async, [&] { return backend.ShutdownEventSources(); });
+    EXPECT_EQ(stopping.wait_for(std::chrono::milliseconds(50)), std::future_status::timeout);
+    release.set_value();
+    EXPECT_TRUE(registering.get().IsOk());
+    EXPECT_TRUE(stopping.get().IsOk());
 }
 
 TEST(DsCoordinationBackendSessionTest, RawValueCasCarriesRangeCoordinatorIdFence)

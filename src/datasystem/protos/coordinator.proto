@@ -221,6 +221,7 @@ message WatchRangeRspPb {
   ResponseHeader header = 1;
   int64 watch_id = 2;
   repeated KeyValue initial_kvs = 3;
+  int64 initial_revision = 4; // Revision of the complete initial snapshot; zero for older Coordinators.
 }
 
 message CancelWatchReqPb {

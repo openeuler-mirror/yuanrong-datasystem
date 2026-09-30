@@ -53,8 +53,9 @@ public:
     /**
      * @brief Update the set of same-host workers eligible for SHM (from WorkerSnapshot::shmCandidateAddrs).
      * Called when the routing topology changes. Thread-safe.
+     * @return True if the set of candidate addresses changed.
      */
-    void SetShmCandidateWorkers(const std::vector<HostPort> &workers);
+    bool SetShmCandidateWorkers(const std::vector<HostPort> &workers);
 
     /** @brief Stop selecting SHM for a draining worker and allow one refresh per published snapshot. */
     bool ObserveDrainingShmFailure(const HostPort &workerAddr);
