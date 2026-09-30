@@ -261,13 +261,12 @@ TEST(RemoteUbPortHealthVerifierTest, SuccessfulRetryPreservesOtherIsolationDeadl
     EXPECT_EQ(verifier.NextQueryDeadlineMs(), 1'120u);
 }
 
-TEST(RemoteUbPortHealthVerifierTest, RandomPolicyCoversUnusableAndAllDownResults)
+TEST(RemoteUbPortHealthVerifierTest, UnconfirmedFaultRetriesBeforeRecoveryJitterDeadline)
 {
     const std::vector<std::pair<Status, std::optional<UbHealthSummary>>> results{
         { Status(K_RPC_UNAVAILABLE, "rpc failure"), std::nullopt },
         { Status::OK(), std::nullopt },
         { Status::OK(), Summary(4, 1, 1, true) },
-        { Status::OK(), Summary(4, 4, 1) },
     };
     for (const auto &[status, summary] : results) {
         RemoteUbPortHealthVerifier verifier(12345, 17'000, 17'000);
@@ -275,8 +274,47 @@ TEST(RemoteUbPortHealthVerifierTest, RandomPolicyCoversUnusableAndAllDownResults
         auto ticket = verifier.TryBeginDue(100);
         ASSERT_TRUE(ticket.has_value());
         EXPECT_TRUE(verifier.Complete(*ticket, summary, status, 120).retryScheduled);
-        EXPECT_EQ(verifier.NextQueryDeadlineMs(), 17'120u);
+        EXPECT_FALSE(verifier.peers_.at(WORKER).isolated);
+        EXPECT_EQ(verifier.NextQueryDeadlineMs(), 1'120u);
+        EXPECT_FALSE(verifier.RequestVerification(WORKER, INCARNATION, 200));
+        EXPECT_FALSE(verifier.TryBeginDue(1'119).has_value());
+        ticket = verifier.TryBeginDue(1'120);
+        ASSERT_TRUE(ticket.has_value());
+        EXPECT_TRUE(verifier.Complete(*ticket, Summary(4, 4, 1), Status::OK(), 1'140).evidenceAccepted);
+        EXPECT_TRUE(verifier.peers_.at(WORKER).isolated);
+        EXPECT_EQ(verifier.NextQueryDeadlineMs(), 18'140u);
+        EXPECT_FALSE(verifier.RequestVerification(WORKER, INCARNATION, 1'200));
+        ticket = verifier.TryBeginDue(18'140);
+        ASSERT_TRUE(ticket.has_value());
+        EXPECT_TRUE(verifier.Complete(*ticket, Summary(4, 3, 2), Status::OK(), 18'160).evidenceAccepted);
+        EXPECT_FALSE(verifier.NextQueryDeadlineMs().has_value());
     }
+}
+
+TEST(RemoteUbPortHealthVerifierTest, NewAllBadHintAcceleratesOnlyUnconfirmedFault)
+{
+    RemoteUbPortHealthVerifier verifier(12345, 17'000, 17'000);
+    ASSERT_TRUE(verifier.RequestVerification(WORKER, INCARNATION, 100));
+    auto ticket = verifier.TryBeginDue(100);
+    ASSERT_TRUE(ticket.has_value());
+    auto pending = Summary(4, 1, 1, true);
+    EXPECT_FALSE(verifier.Complete(*ticket, pending, Status::OK(), 120).evidenceAccepted);
+    EXPECT_FALSE(verifier.NotifySummaryHint(pending, 150));
+    EXPECT_FALSE(verifier.NotifySummaryHint(Summary(4, 1, 1), 180));
+    EXPECT_EQ(verifier.NextQueryDeadlineMs(), 1'120u);
+    EXPECT_TRUE(verifier.NotifySummaryHint(Summary(4, 4, 2), 200));
+    EXPECT_EQ(verifier.NextQueryDeadlineMs(), 200u);
+    ticket = verifier.TryBeginDue(200);
+    ASSERT_TRUE(ticket.has_value());
+    EXPECT_FALSE(verifier.TryBeginDue(200).has_value());
+    EXPECT_FALSE(verifier.NotifySummaryHint(Summary(4, 4, 3), 210));
+    EXPECT_FALSE(verifier.Complete(*ticket, Summary(4, 4, 2), Status::OK(), 220).evidenceAccepted);
+    EXPECT_EQ(verifier.NextQueryDeadlineMs(), 220u);
+    ticket = verifier.TryBeginDue(220);
+    ASSERT_TRUE(ticket.has_value());
+    EXPECT_TRUE(verifier.Complete(*ticket, Summary(4, 4, 3), Status::OK(), 240).evidenceAccepted);
+    EXPECT_FALSE(verifier.NotifySummaryHint(Summary(4, 4, 4), 250));
+    EXPECT_EQ(verifier.NextQueryDeadlineMs(), 17'240u);
 }
 
 TEST(RemoteUbPortHealthVerifierTest, RandomPolicyDerivesStableIndependentSequences)
@@ -382,7 +420,7 @@ TEST(RemoteUbPortHealthVerifierTest, RandomBoundsAndUnsupportedBackoffRemainExac
         ASSERT_TRUE(verifier.RequestVerification(WORKER, INCARNATION, 100));
         auto ticket = verifier.TryBeginDue(100);
         ASSERT_TRUE(ticket.has_value());
-        EXPECT_TRUE(verifier.Complete(*ticket, std::nullopt, Status(K_RPC_UNAVAILABLE, "retry"), 120).retryScheduled);
+        EXPECT_TRUE(verifier.Complete(*ticket, Summary(4, 4, 1), Status::OK(), 120).retryScheduled);
         EXPECT_EQ(verifier.NextQueryDeadlineMs(), 120 + delay);
     }
     RemoteUbPortHealthVerifier unsupported(12345, 1'000, 30'000);
