@@ -348,8 +348,15 @@ Status TopologyTaskExecutor::ValidateFence(const TopologyExecutionFence &fence,
     TopologyTask task;
     RETURN_IF_NOT_OK(repository_.ReadTask(fence.taskKind, fence.taskId, fence.batchType, fence.batchEpoch, task));
     TopologyReader reader(repository_);
+    std::shared_ptr<const TopologySnapshot> known;
     std::shared_ptr<const TopologySnapshot> candidate;
-    RETURN_IF_NOT_OK(reader.Read(EXECUTOR_AUTHORITY_READ_TIMEOUT_MS, candidate));
+    if (snapshots_.Load(known).IsOk() && known->AuthorityRevision() > 0) {
+        candidate = known;
+        bool unchanged = false;
+        RETURN_IF_NOT_OK(reader.ReadIfChanged(EXECUTOR_AUTHORITY_READ_TIMEOUT_MS, *known, candidate, unchanged));
+    } else {
+        RETURN_IF_NOT_OK(reader.Read(EXECUTOR_AUTHORITY_READ_TIMEOUT_MS, candidate));
+    }
     TopologyExecutionFence observed;
     RETURN_IF_NOT_OK(BuildExecutionFence(task, fence.phase, *candidate, observed));
     CHECK_FAIL_RETURN_STATUS(SameFence(fence, observed), K_INVALID, "topology execution fence is stale");
