@@ -80,6 +80,8 @@
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/shared_memory/allocator.h"
+#include "datasystem/common/shared_memory/arena_group_key.h"
 #ifdef USE_URMA
 #include "datasystem/common/rdma/urma_manager.h"
 #endif
@@ -4723,6 +4725,7 @@ void ObjectClientImpl::StartMetricsThread()
         return;
     }
     LOG(INFO) << "StartMetricsThread.";
+    memory::Allocator::Instance()->EnableUbTransportPeakUsageTracking();
     metricsExitFlag_ = false;
     metricsThread_ = std::make_unique<Thread>([this] {
         constexpr int tickIntervalMs = 1000;
@@ -4741,10 +4744,27 @@ void ObjectClientImpl::StartMetricsThread()
                     metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_ASYNC_RELEASE_QUEUE_SIZE))
                         .Set(static_cast<int64_t>(pool->GetWaitingTasksNum()));
                 }
-                metrics::Tick();
+                metrics::Tick([this] { UpdateFastTransportMetrics(); });
             }
         }
     });
+}
+
+void ObjectClientImpl::UpdateFastTransportMetrics()
+{
+    auto limit = fastTransportMemSize_;
+    auto peakUsage = uint64_t{ 0 };
+    auto *allocator = memory::Allocator::Instance();
+    if (limit != 0 && allocator->IsMemoryPoolInitialized(memory::CacheType::UB_TRANSPORT)) {
+        limit = allocator->GetMaxMemoryLimit(memory::CacheType::UB_TRANSPORT);
+        peakUsage = allocator->GetAndResetUbTransportPeakUsage();
+    } else {
+        limit = 0;
+    }
+    metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_FAST_TRANSPORT_MEM_LIMIT))
+        .Set(static_cast<int64_t>(limit));
+    metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_FAST_TRANSPORT_MEM_REAL_USAGE))
+        .Set(static_cast<int64_t>(peakUsage));
 }
 
 void ObjectClientImpl::StartShmRefReconcileThread()
@@ -4873,8 +4893,10 @@ void ObjectClientImpl::ShutdownMetricsThread(bool dumpSummary)
         threadToJoin->join();
     }
     if (dumpSummary) {
+        UpdateFastTransportMetrics();
         metrics::PrintSummary();
     }
+    memory::Allocator::Instance()->DisableUbTransportPeakUsageTracking();
 }
 
 Status ObjectClientImpl::Exist(const std::vector<std::string> &keys, std::vector<bool> &exists, const bool queryL2Cache,
