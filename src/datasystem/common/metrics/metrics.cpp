@@ -374,7 +374,7 @@ Status Init(const MetricDesc *descs, size_t count)
     return Status::OK();
 }
 
-void Tick()
+void Tick(std::function<void()> preLogCallback)
 {
     if (!FLAGS_log_monitor && !FLAGS_json_log_monitor) {
         return;
@@ -388,6 +388,9 @@ void Tick()
             return;
         }
         g_lastLogTime = now;
+    }
+    if (preLogCallback) {
+        preLogCallback();
     }
     LogSummary(interval);
 }

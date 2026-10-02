@@ -150,6 +150,8 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 143, "worker_shm_ref_hard_reclaim_total", MetricType::COUNTER, "count" },
     { 144, "client_ambiguous_create_cleanup_dropped_total", MetricType::COUNTER, "count" },
     { 145, "worker_evict_pretrigger_total", MetricType::COUNTER, "count" },
+    { 146, "client_fast_transport_mem_limit", MetricType::GAUGE, "bytes" },
+    { 147, "client_fast_transport_mem_real_usage", MetricType::GAUGE, "bytes" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) <= static_cast<size_t>(KvMetricId::KV_METRIC_END));
 

@@ -19,6 +19,7 @@
  */
 #include "datasystem/common/log/logging.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
@@ -453,6 +454,11 @@ void Logging::InitClientAdvancedConfig()
 
     if (!WasCommandLineFlagSpecified("log_monitor")) {
         FLAGS_log_monitor = GetBoolFromEnv(LOG_MONITOR_ENABLE.c_str(), DEFAULT_CLIENT_LOG_MONITOR);
+    }
+
+    if (!WasCommandLineFlagSpecified("log_monitor_interval_ms")) {
+        FLAGS_log_monitor_interval_ms = std::max(
+            1000, GetInt32FromEnv(LOG_MONITOR_INTERVAL_MS_ENV.c_str(), FLAGS_log_monitor_interval_ms));
     }
 
     if (!WasCommandLineFlagSpecified("log_only_write_info_file")) {
