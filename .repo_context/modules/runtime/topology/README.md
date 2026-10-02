@@ -723,3 +723,12 @@
 - Update this module when cluster topology schema, keyspace/watch scope, routing semantics, callback contract,
   controller/executor recovery, Worker ownership, or shutdown ordering changes.
 - Update the quality context when test binary ownership, labels, or remote validation commands change.
+
+### Executor fence snapshot reuse
+
+`TopologyTaskExecutor::ValidateFence` reads the task and checks authoritative topology
+on every call. It uses `TopologyReader::ReadIfChanged` with the published immutable
+snapshot's authority revision and Coordinator identity; an unchanged response reuses
+that snapshot. Missing/invalid authority evidence falls back to a full read, and read
+errors propagate. Refreshed fence snapshots are not published into routing state.
+Fence comparisons, progress CAS and cleanup publication authorization remain in place.
