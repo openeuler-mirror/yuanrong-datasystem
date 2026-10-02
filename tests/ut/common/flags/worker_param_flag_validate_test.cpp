@@ -60,6 +60,7 @@ protected:
         savedV_ = FLAGS_v;
         savedMaxLogSize_ = FLAGS_max_log_size;
         savedUrmaPollSize_ = FLAGS_urma_poll_size;
+        savedLogMonitorIntervalMs_ = FLAGS_log_monitor_interval_ms;
         savedExporter_ = FLAGS_log_monitor_exporter;
         savedOcPort_ = FLAGS_oc_worker_worker_direct_port;
         savedScPort_ = FLAGS_sc_worker_worker_direct_port;
@@ -71,6 +72,7 @@ protected:
         FLAGS_v = savedV_;
         FLAGS_max_log_size = savedMaxLogSize_;
         FLAGS_urma_poll_size = savedUrmaPollSize_;
+        FLAGS_log_monitor_interval_ms = savedLogMonitorIntervalMs_;
         FLAGS_log_monitor_exporter = savedExporter_;
         FLAGS_oc_worker_worker_direct_port = savedOcPort_;
         FLAGS_sc_worker_worker_direct_port = savedScPort_;
@@ -80,6 +82,7 @@ protected:
     int32_t savedV_;
     uint32_t savedMaxLogSize_;
     uint32_t savedUrmaPollSize_;
+    int32_t savedLogMonitorIntervalMs_;
     std::string savedExporter_;
     int32_t savedOcPort_;
     int32_t savedScPort_;
@@ -102,6 +105,13 @@ TEST_F(WorkerParamFlagValidateTest, UrmaPollSizeRejectsZeroAndAboveDeviceLimit)
     ASSERT_FLAG_REJECTED(urma_poll_size, "17", savedUrmaPollSize_);
     ASSERT_FLAG_ACCEPTED(urma_poll_size, "1", 1u);
     ASSERT_FLAG_ACCEPTED(urma_poll_size, "16", 16u);
+}
+
+TEST_F(WorkerParamFlagValidateTest, LogMonitorIntervalRejectsNonPositiveValue)
+{
+    ASSERT_FLAG_REJECTED(log_monitor_interval_ms, "0", savedLogMonitorIntervalMs_);
+    ASSERT_FLAG_REJECTED(log_monitor_interval_ms, "-1", savedLogMonitorIntervalMs_);
+    ASSERT_FLAG_ACCEPTED(log_monitor_interval_ms, "1000", 1000);
 }
 
 // log_monitor_exporter only supports 'harddisk'.

@@ -182,7 +182,9 @@ enum class KvMetricId : uint16_t {
     // the hard high watermark). Rounds where the auto margin degenerated back to the hard line are
     // excluded; whether the eviction task then ran (e.g. policy-update window) shows in evict logs.
     WORKER_EVICT_PRETRIGGER_TOTAL = 145,
-    KV_METRIC_END = 146,
+    CLIENT_FAST_TRANSPORT_MEM_LIMIT = 146,
+    CLIENT_FAST_TRANSPORT_MEM_REAL_USAGE = 147,
+    KV_METRIC_END = 148,
 };
 
 Status InitKvMetrics();

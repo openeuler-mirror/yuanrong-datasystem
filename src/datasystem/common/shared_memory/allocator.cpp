@@ -226,6 +226,65 @@ uint64_t Allocator::GetMaxMemoryLimit(CacheType cacheType) const
     }
 }
 
+bool Allocator::IsMemoryPoolInitialized(CacheType cacheType) const
+{
+    switch (cacheType) {
+        case CacheType::MEMORY:
+            return physicalMemoryStats_ != nullptr && objectMemoryStats_ != nullptr;
+        case CacheType::DISK:
+            return diskStats_ != nullptr && physicalDiskStats_ != nullptr;
+        case CacheType::DEV_DEVICE:
+            return devDeviceMemStats_ != nullptr;
+        case CacheType::DEV_HOST:
+            return devHostMemStats_ != nullptr;
+        case CacheType::UB_TRANSPORT:
+            return ubTransportStats_ != nullptr;
+        default:
+            return false;
+    }
+}
+
+void Allocator::UpdateUbTransportPeakUsage(uint64_t usage)
+{
+    auto peak = ubTransportPeakUsage_.load(std::memory_order_relaxed);
+    while (peak < usage && !ubTransportPeakUsage_.compare_exchange_weak(
+               peak, usage, std::memory_order_relaxed, std::memory_order_relaxed)) {
+    }
+}
+
+void Allocator::EnableUbTransportPeakUsageTracking()
+{
+    if (ubTransportPeakUsageTrackingCount_.fetch_add(1, std::memory_order_relaxed) == 0
+        && ubTransportStats_ != nullptr) {
+        UpdateUbTransportPeakUsage(ubTransportStats_->RealUsage());
+    }
+}
+
+void Allocator::DisableUbTransportPeakUsageTracking()
+{
+    auto count = ubTransportPeakUsageTrackingCount_.load(std::memory_order_relaxed);
+    while (true) {
+        if (count == 0) {
+            return;
+        }
+        if (ubTransportPeakUsageTrackingCount_.compare_exchange_weak(
+                count, count - 1, std::memory_order_relaxed, std::memory_order_relaxed)) {
+            break;
+        }
+    }
+}
+
+uint64_t Allocator::GetAndResetUbTransportPeakUsage()
+{
+    auto usageBeforeReset = ubTransportStats_->RealUsage();
+    auto peakUsage = ubTransportPeakUsage_.exchange(0, std::memory_order_relaxed);
+    auto usageAfterReset = ubTransportStats_->RealUsage();
+    if (ubTransportPeakUsageTrackingCount_.load(std::memory_order_relaxed) != 0) {
+        UpdateUbTransportPeakUsage(usageAfterReset);
+    }
+    return std::max(peakUsage, usageBeforeReset);
+}
+
 uint64_t Allocator::GetAllocatedSize(void *pointer) const
 {
     if (pointer == nullptr) {
@@ -300,6 +359,8 @@ void Allocator::ResetForTest()
     devDeviceMemStats_.reset();
     devHostMemStats_.reset();
     ubTransportStats_.reset();
+    ubTransportPeakUsageTrackingCount_.store(0, std::memory_order_relaxed);
+    ubTransportPeakUsage_.store(0, std::memory_order_relaxed);
     objectMemoryStats_.reset();
     streamMemoryStats_.reset();
     diskDetecter_.reset();
@@ -363,6 +424,10 @@ Status Allocator::AllocateMemory(const std::string &tenantId, uint64_t needSize,
     (void)totalNumOfAllocated_.fetch_add(1, std::memory_order_relaxed);
 
     stats->AddRealUsageNoCheck(realSize);
+    if (cacheType == CacheType::UB_TRANSPORT
+        && ubTransportPeakUsageTrackingCount_.load(std::memory_order_relaxed) != 0) {
+        UpdateUbTransportPeakUsage(stats->RealUsage());
+    }
     // Counter uses requested size (needSize), aligned with IncrementMemoryUsage/SubUsage on this path.
     // Real footprint is tracked separately via stats->AddRealUsageNoCheck(realSize); do not use alloc counter
     // as a proxy for physical bytes (page alignment overhead is in RealUsage).

@@ -4156,10 +4156,62 @@ TEST(ObjectMetadataClientTest, UbWriteFailureStatusDelaysOnlyAffectedInlineBuffe
     EXPECT_EQ(bufferProvider->delayReleaseCount, 1);
     ASSERT_EQ(bufferProvider->delayReleaseReasons.size(), 1u);
     EXPECT_EQ(bufferProvider->delayReleaseReasons[0].GetCode(), K_URMA_ERROR);
-    EXPECT_TRUE(results[0].status.IsOk());
+    EXPECT_EQ(results[0].status.GetCode(), K_URMA_ERROR);
     EXPECT_TRUE(results[1].status.IsOk());
     EXPECT_FALSE(results[0].inlineData.has_value());
     EXPECT_FALSE(results[1].inlineData.has_value());
+}
+
+TEST(ObjectMetadataClientTest, UbWriteTimeoutDoesNotBecomeSecondPhaseFallback)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    manager->queryAndGetHandler = [](const HostPort &, const QueryAndGetReqPb &request,
+                                     QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
+        EXPECT_TRUE(request.data_request().has_ub());
+        auto *failed = AddLocation(response, "timed-out", MakeAddress(51), 6);
+        failed->mutable_status()->set_error_code(K_URMA_WAIT_TIMEOUT);
+        failed->mutable_status()->set_error_msg("URMA write-back timed out");
+        return Status::OK();
+    };
+    ObjectMetadataClient metadata(manager, std::make_shared<DeadlineRetry>(),
+                                  std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE),
+                                  bufferProvider, 16);
+    auto results = MakeMetadataItems({ { 0, "timed-out", MakeAddress(41) } });
+    auto batch = MakeMetadataBatch(results);
+
+    ASSERT_TRUE(metadata.QueryAndGet(MakeAddress(41), batch, nullptr).IsOk());
+    EXPECT_EQ(results[0].status.GetCode(), K_URMA_WAIT_TIMEOUT);
+    EXPECT_FALSE(results[0].inlineData.has_value());
+}
+
+TEST(ObjectReadFlowTest, QueryAndGetUbWriteFailureDoesNotInvokeReplicaReader)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    manager->queryAndGetHandler = [](const HostPort &, const QueryAndGetReqPb &request,
+                                     QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
+        EXPECT_TRUE(request.data_request().has_ub());
+        auto *failed = AddLocation(response, "write-failed", MakeAddress(51), 6);
+        failed->mutable_status()->set_error_code(K_URMA_ERROR);
+        failed->mutable_status()->set_error_msg("URMA write-back failed");
+        return Status::OK();
+    };
+    auto metadata = std::make_shared<ObjectMetadataClient>(
+        manager, std::make_shared<DeadlineRetry>(), std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE),
+        bufferProvider, 16);
+    auto replicas = std::make_shared<FakeReplicaReader>();
+    ObjectReadFlow flow(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test"));
+    ObjectReadRequest request;
+    request.context = MakeReadContext();
+    request.items = { { 0, "write-failed", MakeAddress(41) } };
+    ObjectReadResult result;
+
+    EXPECT_EQ(flow.Run(request, result).GetCode(), K_URMA_ERROR);
+    EXPECT_TRUE(replicas->unaryKeys.empty());
+    EXPECT_TRUE(replicas->batchKeys.empty());
 }
 
 TEST(ObjectMetadataClientTest, UbWriteFailureForwardsProviderDetailToSharedProbeHandler)

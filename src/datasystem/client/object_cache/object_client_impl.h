@@ -1203,6 +1203,7 @@ private:
     void ShutdownPerfThread();
     void StartMetricsThread();
     void ShutdownMetricsThread(bool dumpSummary);
+    void UpdateFastTransportMetrics();
     void ShutdownPiplnMsgQueueThread();
 
     /**

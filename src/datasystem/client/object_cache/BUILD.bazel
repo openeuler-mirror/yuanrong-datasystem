@@ -62,6 +62,7 @@ ds_cc_library(
         "//src/datasystem/common/rpc:api_deadline_helpers",
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
         "//src/datasystem/common/string_intern:string_ref",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
         "//src/datasystem/common/util:common_util",
         "//src/datasystem/common/util:dlutils",
         "//src/datasystem/common/util:fd_pass",
