@@ -602,6 +602,13 @@ Status ObjectMetadataClient::ApplyResult(const HostPort &provider, ObjectMetadat
     item.status = Status::OK();
     CopyLocation(location, item.location);
     if (hasUbTransportError) {
+        const Status ubStatus(static_cast<StatusCode>(result.status().error_code()), result.status().error_msg());
+        // A timed-out or failed provider write may still complete after the response. Do not turn this into a
+        // phase-two remote read: that would issue a second request for the same object while the original URMA
+        // write is still uncertain. Other inline-data misses keep the existing fallback behavior.
+        if (ubStatus.GetCode() == K_URMA_WAIT_TIMEOUT || ubStatus.GetCode() == K_URMA_ERROR) {
+            item.status = ubStatus;
+        }
         return Status::OK();
     }
     if (!result.has_data_result()) {
