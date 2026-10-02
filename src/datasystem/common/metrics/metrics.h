@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -40,7 +41,7 @@ struct MetricDesc {
 };
 
 Status Init(const MetricDesc *descs, size_t count);
-void Tick();
+void Tick(std::function<void()> preLogCallback = nullptr);
 void PrintSummary();
 
 class Counter {

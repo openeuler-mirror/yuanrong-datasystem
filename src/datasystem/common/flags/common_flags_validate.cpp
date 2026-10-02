@@ -313,6 +313,7 @@ DS_DEFINE_validator(access_sample_rate, &ValidateSampleRateRange);
 DS_DEFINE_validator(diagnostic_sample_rate, &ValidateSampleRateRange);
 DS_DEFINE_validator(urma_poll_size, &ValidateUrmaPollSize);
 DS_DEFINE_validator(log_monitor_exporter, &ValidateLogMonitorExporter);
+DS_DEFINE_validator(log_monitor_interval_ms, &Validator::ValidateInt32);
 DS_DEFINE_validator(oc_worker_worker_direct_port, &ValidateWorkerDirectPort);
 DS_DEFINE_validator(sc_worker_worker_direct_port, &ValidateWorkerDirectPort);
 

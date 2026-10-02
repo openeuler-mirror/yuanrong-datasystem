@@ -880,6 +880,58 @@ TEST_F(AllocatorTest, UbTransportCreatesEqualArenasAndAllocatesRoundRobin)
     DS_EXPECT_OK(arenaGroup->FreeMemory(second));
 }
 
+TEST_F(AllocatorTest, UbTransportPeakUsageKeepsCurrentUsageAsNextPeriodBaseline)
+{
+    auto *allocator = memory::Allocator::Instance();
+    allocator->ResetForTest();
+    constexpr uint64_t poolSize = 16 * 1024 * 1024;
+    std::vector<std::pair<void *, size_t>> arenaMappings;
+    memory::AllocatorFuncRegister regFunc;
+    regFunc.createFunc = [&arenaMappings](void **pointer, size_t size) -> Status {
+        *pointer = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (*pointer == MAP_FAILED) {
+            *pointer = nullptr;
+            return Status(K_OUT_OF_MEMORY, "test mmap failed");
+        }
+        arenaMappings.emplace_back(*pointer, size);
+        return Status::OK();
+    };
+    regFunc.destroyFunc = [](void *pointer, size_t size) {
+        return munmap(pointer, size) == 0 ? Status::OK() : Status(K_RUNTIME_ERROR, "test munmap failed");
+    };
+
+    DS_ASSERT_OK(allocator->InitWithFlexibleRegister(memory::CacheType::UB_TRANSPORT, poolSize, regFunc));
+    std::shared_ptr<ArenaGroup> arenaGroup;
+    DS_ASSERT_OK(allocator->CreateArenaGroup(DEFAULT_TENANT_ID, poolSize, arenaGroup,
+                                             memory::CacheType::UB_TRANSPORT));
+    allocator->EnableUbTransportPeakUsageTracking();
+    allocator->EnableUbTransportPeakUsageTracking();
+    EXPECT_EQ(allocator->GetUbTransportPeakUsageTrackingCount(), 2u);
+
+    void *pointer = nullptr;
+    int fd = -1;
+    ptrdiff_t offset = 0;
+    uint64_t mmapSize = 0;
+    DS_ASSERT_OK(allocator->AllocateMemory(DEFAULT_TENANT_ID, 4096, false, pointer, fd, offset, mmapSize,
+                                           ServiceType::OBJECT, memory::CacheType::UB_TRANSPORT));
+    auto realUsage = allocator->GetTotalRealMemoryUsage(ServiceType::OBJECT, memory::CacheType::UB_TRANSPORT);
+    EXPECT_GT(realUsage, 0u);
+    EXPECT_EQ(allocator->GetAndResetUbTransportPeakUsage(), realUsage);
+    EXPECT_EQ(allocator->GetAndResetUbTransportPeakUsage(), realUsage);
+
+    DS_ASSERT_OK(allocator->FreeMemory(DEFAULT_TENANT_ID, pointer, ServiceType::OBJECT,
+                                       memory::CacheType::UB_TRANSPORT));
+    EXPECT_EQ(allocator->GetAndResetUbTransportPeakUsage(), realUsage);
+    EXPECT_EQ(allocator->GetAndResetUbTransportPeakUsage(), 0u);
+
+    allocator->DisableUbTransportPeakUsageTracking();
+    EXPECT_EQ(allocator->GetUbTransportPeakUsageTrackingCount(), 1u);
+    allocator->DisableUbTransportPeakUsageTracking();
+    EXPECT_EQ(allocator->GetUbTransportPeakUsageTrackingCount(), 0u);
+    allocator->DisableUbTransportPeakUsageTracking();
+    EXPECT_EQ(allocator->GetUbTransportPeakUsageTrackingCount(), 0u);
+}
+
 void AllocatorTest::TestShmUnits1()
 {
     auto pool = std::make_shared<ThreadPool>(1);

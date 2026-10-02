@@ -187,6 +187,23 @@ public:
      */
     uint64_t GetMaxMemoryLimit(CacheType cacheType = CacheType::MEMORY) const;
 
+    bool IsMemoryPoolInitialized(CacheType cacheType) const;
+
+    void EnableUbTransportPeakUsageTracking();
+
+    void DisableUbTransportPeakUsageTracking();
+
+    void UpdateUbTransportPeakUsage(uint64_t usage);
+
+    uint64_t GetAndResetUbTransportPeakUsage();
+
+#ifdef WITH_TESTS
+    uint32_t GetUbTransportPeakUsageTrackingCount() const
+    {
+        return ubTransportPeakUsageTrackingCount_.load(std::memory_order_relaxed);
+    }
+#endif
+
     /**
      * @brief Query the real allocated size (sallocx) of a jemalloc base pointer.
      * @param[in] pointer A pointer returned by AllocateMemory (standalone allocation base). May be null.
@@ -515,6 +532,8 @@ private:
     std::unique_ptr<ResourcePool> devHostMemStats_;
     // Record the ub transport allocated in bytes.
     std::unique_ptr<ResourcePool> ubTransportStats_;
+    std::atomic<uint32_t> ubTransportPeakUsageTrackingCount_{ 0 };
+    std::atomic<uint64_t> ubTransportPeakUsage_{ 0 };
 
     // Number of the memory block allocated by allocator.
     std::atomic<uint64_t> totalNumOfAllocated_{ 0 };
