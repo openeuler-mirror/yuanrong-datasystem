@@ -16,12 +16,39 @@
 
 #include "datasystem/common/metrics/kv_metrics.h"
 
+#include <algorithm>
+#include <atomic>
 #include <mutex>
 
 #include "datasystem/common/util/status_helper.h"
 
+DS_DECLARE_bool(log_monitor);
+DS_DECLARE_bool(json_log_monitor);
+
 namespace datasystem::metrics {
 namespace {
+std::atomic<int64_t> g_clientUbHoldingCount{ 0 };
+std::atomic<int64_t> g_clientUbReleasingCount{ 0 };
+std::atomic<int64_t> g_clientUbHoldingPeakCount{ 0 };
+std::atomic<int64_t> g_clientUbReleasingPeakCount{ 0 };
+
+void UpdatePeakCount(std::atomic<int64_t> &peakCount, int64_t value)
+{
+    auto peak = peakCount.load(std::memory_order_relaxed);
+    while (peak < value
+           && !peakCount.compare_exchange_weak(peak, value, std::memory_order_relaxed, std::memory_order_relaxed)) {
+    }
+}
+
+int64_t GetAndResetPeakCount(std::atomic<int64_t> &count, std::atomic<int64_t> &peakCount)
+{
+    // Keep the current value as the next window's baseline, matching UB transport memory peak tracking.
+    const auto countBeforeReset = count.load(std::memory_order_relaxed);
+    const auto peak = peakCount.exchange(0, std::memory_order_relaxed);
+    const auto countAfterReset = count.load(std::memory_order_relaxed);
+    UpdatePeakCount(peakCount, countAfterReset);
+    return std::max(peak, countBeforeReset);
+}
 constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 0, "client_put_request_total", MetricType::COUNTER, "count" },
     { 1, "client_put_error_total", MetricType::COUNTER, "count" },
@@ -152,6 +179,8 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 145, "worker_evict_pretrigger_total", MetricType::COUNTER, "count" },
     { 146, "client_fast_transport_mem_limit", MetricType::GAUGE, "bytes" },
     { 147, "client_fast_transport_mem_real_usage", MetricType::GAUGE, "bytes" },
+    { 148, "client_ub_holding_count", MetricType::GAUGE, "count" },
+    { 149, "client_ub_releasing_count", MetricType::GAUGE, "count" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) <= static_cast<size_t>(KvMetricId::KV_METRIC_END));
 
@@ -170,10 +199,51 @@ Status InitKvMetrics()
     return Status::OK();
 }
 
+bool IsClientUbLifecycleMetricsEnabled()
+{
+    return FLAGS_log_monitor || FLAGS_json_log_monitor;
+}
+
 const MetricDesc *GetKvMetricDescs(size_t &count)
 {
     count = sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]);
     return KV_METRIC_DESCS;
+}
+
+void AddClientUbHoldingCount(int64_t delta)
+{
+    const auto count = g_clientUbHoldingCount.fetch_add(delta, std::memory_order_relaxed) + delta;
+    if (delta > 0) {
+        UpdatePeakCount(g_clientUbHoldingPeakCount, count);
+    }
+}
+
+void AddClientUbReleasingCount(int64_t delta)
+{
+    const auto count = g_clientUbReleasingCount.fetch_add(delta, std::memory_order_relaxed) + delta;
+    if (delta > 0) {
+        UpdatePeakCount(g_clientUbReleasingPeakCount, count);
+    }
+}
+
+int64_t GetClientUbHoldingCount()
+{
+    return g_clientUbHoldingCount.load(std::memory_order_relaxed);
+}
+
+int64_t GetClientUbReleasingCount()
+{
+    return g_clientUbReleasingCount.load(std::memory_order_relaxed);
+}
+
+int64_t GetAndResetClientUbHoldingPeakCount()
+{
+    return GetAndResetPeakCount(g_clientUbHoldingCount, g_clientUbHoldingPeakCount);
+}
+
+int64_t GetAndResetClientUbReleasingPeakCount()
+{
+    return GetAndResetPeakCount(g_clientUbReleasingCount, g_clientUbReleasingPeakCount);
 }
 
 void ResetKvMetricsForTest()
@@ -181,5 +251,9 @@ void ResetKvMetricsForTest()
     std::lock_guard<std::mutex> lock(g_initMutex);
     ResetForTest();
     g_inited = false;
+    g_clientUbHoldingCount.store(0, std::memory_order_relaxed);
+    g_clientUbReleasingCount.store(0, std::memory_order_relaxed);
+    g_clientUbHoldingPeakCount.store(0, std::memory_order_relaxed);
+    g_clientUbReleasingPeakCount.store(0, std::memory_order_relaxed);
 }
 }  // namespace datasystem::metrics

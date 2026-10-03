@@ -716,7 +716,7 @@ Status UbTransporter::Create(const HostPort &workerAddr, const std::string &key,
         // Attach owner that releases via the routed worker's RPC client (not LOCAL_WORKER).
         try {
             info->receiveBufferOwner = std::make_shared<ShmSendBufferOwner>(
-                rpcClient_, info->shmId, param.requestContext, releasePool_, info->ubGetBufferHandle);
+                rpcClient_, info->shmId, param.requestContext, releasePool_, info->ubGetBufferHandle, nullptr, true);
         } catch (const std::bad_alloc &e) {
             LOG_IF_ERROR(rpcClient_->InvokeDecreaseReference(param.requestContext, info->shmId),
                          "DecreaseReference after ShmSendBufferOwner OOM");
@@ -780,14 +780,13 @@ Status UbTransporter::BuildMCreateBuffer(const HostPort &workerAddr, const std::
     info->shmId = ShmKey::Intern(response.shm_id());
     info->version = workerVersion;
     // Attach owner that releases via the routed worker's RPC client (same as Create).
-    // lifecycleHandle_ (ubGetBufferHandle) and info->ubGetBufferHandle both hold the same
-    // BufferHandle. After buffer destruction, info's ref drops but owner keeps another ref until
-    // Release completes — this ensures the UB pool slot stays valid during async DecreaseReference.
-    // The slot returns to the pool only when both refs are gone; worker ref is independent (affects
-    // worker-side shm lifecycle, not local pool reuse). No leak or double-free.
+    // lifecycleHandle_ and info->ubGetBufferHandle both refer to the same BufferHandle. The owner
+    // releases that extra reference before queuing DecreaseReference once the URMA write result is
+    // final; uncertain writes retain it through the existing delayed-release path. Worker reference
+    // release remains independent from local UB slot reuse.
     try {
         info->receiveBufferOwner = std::make_shared<ShmSendBufferOwner>(
-            rpcClient_, info->shmId, param.requestContext, releasePool_, info->ubGetBufferHandle);
+            rpcClient_, info->shmId, param.requestContext, releasePool_, info->ubGetBufferHandle, nullptr, true);
     } catch (const std::bad_alloc &e) {
         LOG_IF_ERROR(rpcClient_->InvokeDecreaseReference(param.requestContext, info->shmId),
                      "DecreaseReference after ShmSendBufferOwner OOM");

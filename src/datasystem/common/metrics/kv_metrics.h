@@ -184,10 +184,25 @@ enum class KvMetricId : uint16_t {
     WORKER_EVICT_PRETRIGGER_TOTAL = 145,
     CLIENT_FAST_TRANSPORT_MEM_LIMIT = 146,
     CLIENT_FAST_TRANSPORT_MEM_REAL_USAGE = 147,
-    KV_METRIC_END = 148,
+    CLIENT_UB_HOLDING_COUNT = 148,
+    CLIENT_UB_RELEASING_COUNT = 149,
+    KV_METRIC_END = 150,
 };
 
 Status InitKvMetrics();
+
+// Lifecycle observation is off unless either KV metrics output is enabled. Callers use this to
+// avoid contending on process-wide counters in the UB Set/Get data path when no metric is consumed.
+bool IsClientUbLifecycleMetricsEnabled();
+
+// UB buffer lifecycle metrics report the peak count since the preceding metrics tick. The state
+// transitions use relaxed atomics only, so the observation does not add locks to the data path.
+void AddClientUbHoldingCount(int64_t delta);
+void AddClientUbReleasingCount(int64_t delta);
+int64_t GetClientUbHoldingCount();
+int64_t GetClientUbReleasingCount();
+int64_t GetAndResetClientUbHoldingPeakCount();
+int64_t GetAndResetClientUbReleasingPeakCount();
 const MetricDesc *GetKvMetricDescs(size_t &count);
 void ResetKvMetricsForTest();
 }  // namespace datasystem::metrics
