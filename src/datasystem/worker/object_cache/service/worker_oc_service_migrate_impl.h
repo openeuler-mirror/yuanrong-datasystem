@@ -33,6 +33,7 @@
 #include <vector>
 
 #include <google/protobuf/repeated_field.h>
+#include <tbb/concurrent_hash_map.h>
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
@@ -49,9 +50,11 @@
 #include "datasystem/worker/object_cache/limiter/data_limiter.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
+#include "datasystem/worker/object_cache/worker_worker_transport_api.h"
 
 namespace datasystem {
 namespace object_cache {
+
 
 using ObjInfoPbList = google::protobuf::RepeatedPtrField<MigrateDataReqPb::ObjectInfoPb>;
 using ObjInfoPbListDirect = google::protobuf::RepeatedPtrField<MigrateDataDirectReqPb::ObjectInfoPb>;
@@ -308,6 +311,13 @@ private:
      */
     std::shared_ptr<ShmOwner> GetShmOwnerByIndex(int idx, const std::vector<uint32_t> &shmIndexMapping,
                                                   const std::vector<std::shared_ptr<ShmOwner>> &shmOwners) const;
+
+    /**
+     * @brief Ensure the local-to-peer UB connection exists before remote read migration.
+     * @param[in] peerAddr Source worker address of the migration request.
+     * @return K_OK on success or when fast transport is disabled, the error otherwise.
+     */
+    Status EnsureWorkerPeerUrmaConnection(const std::string &peerAddr);
 
     /**
      * @brief Process remote read for a single object.
@@ -741,6 +751,9 @@ private:
 
     std::shared_timed_mutex unitMutex_;
     std::unordered_map<std::string, std::shared_ptr<ShmUnit>> failedSlotUnits_;
+
+    using TbbTransportStubTable = tbb::concurrent_hash_map<std::string, std::shared_ptr<WorkerRemoteWorkerTransApi>>;
+    TbbTransportStubTable transportApiTable_;
 };
 }  // namespace object_cache
 }  // namespace datasystem
