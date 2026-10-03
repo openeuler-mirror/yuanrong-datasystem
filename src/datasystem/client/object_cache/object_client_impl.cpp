@@ -124,6 +124,7 @@
 #include "datasystem/utils/string_view.h"
 #include "datasystem/object/buffer.h"
 DS_DECLARE_bool(log_monitor);
+DS_DECLARE_bool(json_log_monitor);
 DS_DECLARE_int32(fd_pool_prewarm_size);
 
 static constexpr size_t OBJ_META_MAX_SIZE_LIMIT = 64;
@@ -4723,7 +4724,7 @@ void ObjectClientImpl::StartPerfThread()
 
 void ObjectClientImpl::StartMetricsThread()
 {
-    if (!FLAGS_log_monitor || metricsThread_ != nullptr) {
+    if ((!FLAGS_log_monitor && !FLAGS_json_log_monitor) || metricsThread_ != nullptr) {
         return;
     }
     LOG(INFO) << "StartMetricsThread.";
@@ -4767,6 +4768,10 @@ void ObjectClientImpl::UpdateFastTransportMetrics()
         .Set(static_cast<int64_t>(limit));
     metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_FAST_TRANSPORT_MEM_REAL_USAGE))
         .Set(static_cast<int64_t>(peakUsage));
+    metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_UB_HOLDING_COUNT))
+        .Set(metrics::GetAndResetClientUbHoldingPeakCount());
+    metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_UB_RELEASING_COUNT))
+        .Set(metrics::GetAndResetClientUbReleasingPeakCount());
 }
 
 void ObjectClientImpl::StartShmRefReconcileThread()

@@ -962,6 +962,25 @@ TEST_F(MetricsTest, kv_metric_id_mapping_test)
     EXPECT_NE(summary.find(ScalarMetricJson("worker_allocated_memory_size", 10, 10)), std::string::npos);
 }
 
+TEST_F(MetricsTest, client_ub_lifecycle_count_reports_window_peak_test)
+{
+    InitKvMetricsForTest();
+    metrics::AddClientUbHoldingCount(1);
+    metrics::AddClientUbHoldingCount(4);
+    metrics::AddClientUbHoldingCount(-3);
+    EXPECT_EQ(metrics::GetAndResetClientUbHoldingPeakCount(), 5);
+
+    // A count which remains live across the reset is the following window's baseline.
+    EXPECT_EQ(metrics::GetAndResetClientUbHoldingPeakCount(), 2);
+    metrics::AddClientUbHoldingCount(-2);
+    EXPECT_EQ(metrics::GetAndResetClientUbHoldingPeakCount(), 2);
+
+    metrics::AddClientUbReleasingCount(3);
+    metrics::AddClientUbReleasingCount(-2);
+    metrics::AddClientUbReleasingCount(5);
+    EXPECT_EQ(metrics::GetAndResetClientUbReleasingPeakCount(), 6);
+}
+
 TEST_F(MetricsTest, kv_event_metrics_counter_test)
 {
     InitKvMetricsForTest();
@@ -1128,6 +1147,8 @@ TEST_F(MetricsTest, kv_metric_urma_id_layout_test)
         { metrics::KvMetricId::WORKER_EVICT_PRETRIGGER_TOTAL, "worker_evict_pretrigger_total" },
         { metrics::KvMetricId::CLIENT_FAST_TRANSPORT_MEM_LIMIT, "client_fast_transport_mem_limit" },
         { metrics::KvMetricId::CLIENT_FAST_TRANSPORT_MEM_REAL_USAGE, "client_fast_transport_mem_real_usage" },
+        { metrics::KvMetricId::CLIENT_UB_HOLDING_COUNT, "client_ub_holding_count" },
+        { metrics::KvMetricId::CLIENT_UB_RELEASING_COUNT, "client_ub_releasing_count" },
     };
     EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_RPC_TOTAL), 95u);
     EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_OBJECT_TOTAL), 96u);
@@ -1141,7 +1162,7 @@ TEST_F(MetricsTest, kv_metric_urma_id_layout_test)
     EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::WORKER_TO_CLIENT_GET_URMA_TOTAL_BYTES), 142u);
     EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_AMBIGUOUS_CREATE_CLEANUP_DROPPED_TOTAL), 144u);
     EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::WORKER_EVICT_PRETRIGGER_TOTAL), 145u);
-    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::KV_METRIC_END), 148u);
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::KV_METRIC_END), 150u);
     for (size_t k = 0; k < sizeof(kTailMetrics) / sizeof(kTailMetrics[0]); ++k) {
         const auto wantId = static_cast<uint16_t>(kTailMetrics[k].id);
         const auto *desc = std::find_if(descs, descs + count,
