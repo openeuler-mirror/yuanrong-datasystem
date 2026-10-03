@@ -6,7 +6,7 @@
 /**
  * Description: Fenced task Executor component tests.
  */
-#include "datasystem/cluster/executor/topology_task_executor.h"
+#include "ut/cluster/testing/topology_executor_access.h"
 
 #include <algorithm>
 #include <future>
@@ -17,12 +17,15 @@
 #include "datasystem/cluster/control/topology_controller.h"
 #include "datasystem/cluster/control/topology_plan_builder.h"
 #include "datasystem/cluster/control/topology_task_materializer.h"
+#include "datasystem/cluster/coordination_backend/ds_coordination_backend.h"
 #include "datasystem/cluster/executor/key_filter.h"
 #include "datasystem/cluster/executor/storage_scan_plan_access.h"
+#include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/cluster/runtime/coordination_event_dispatcher.h"
 #include "datasystem/cluster/runtime/topology_reader.h"
 #include "datasystem/cluster/runtime/topology_snapshot_state.h"
 #include "ut/cluster/testing/fake_coordination_backend.h"
+#include "ut/cluster/testing/fake_coordinator_service_proxy.h"
 
 #include "gtest/gtest.h"
 #include "ut/common.h"
@@ -311,6 +314,106 @@ bool WaitForFinalTopology(TopologyRepository &repository, std::chrono::steady_cl
         std::this_thread::yield();
     }
     return false;
+}
+
+TEST(TopologyTaskExecutorTest, UnchangedFenceReusesSnapshotButStillReadsAuthority)
+{
+    constexpr size_t fenceValidationCount = 3;
+    ExecutorScenario scenario;
+    DS_ASSERT_OK(scenario.SetUp());
+    const auto &task = std::get<TopologyMigrateTask>(scenario.expected.tasks.front());
+    TopologyTaskExecutor executor(task.executorAddress, *scenario.repository, scenario.snapshots, scenario.callbacks,
+                                  scenario.dispatcher, {});
+    TopologyExecutionFence fence;
+    DS_ASSERT_OK(executor.BuildExecutionFence(scenario.expected.tasks.front(), TopologyCallbackPhase::SCALE_OUT, fence));
+    scenario.backend.ResetReadCounts();
+    for (size_t index = 0; index < fenceValidationCount; ++index) {
+        std::shared_ptr<const TopologySnapshot> latest;
+        DS_ASSERT_OK(executor.ValidateFence(fence, latest));
+        EXPECT_EQ(latest, scenario.snapshot);
+    }
+    EXPECT_EQ(scenario.backend.ExactGetCount(scenario.keys->TopologyTable(), TopologyKeyHelper::TopologyKey()),
+              fenceValidationCount);
+}
+
+TEST(TopologyTaskExecutorTest, FenceRefreshesChangedAuthorityWithoutPublishingRoutingSnapshot)
+{
+    ExecutorScenario scenario;
+    DS_ASSERT_OK(scenario.SetUp());
+    const auto &task = std::get<TopologyMigrateTask>(scenario.expected.tasks.front());
+    TopologyTaskExecutor executor(task.executorAddress, *scenario.repository, scenario.snapshots, scenario.callbacks,
+                                  scenario.dispatcher, {});
+    TopologyExecutionFence fence;
+    DS_ASSERT_OK(executor.BuildExecutionFence(scenario.expected.tasks.front(), TopologyCallbackPhase::SCALE_OUT, fence));
+    auto changed = scenario.plan.next;
+    ++changed.version;
+    scenario.backend.PutRaw(scenario.keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), changed);
+    std::shared_ptr<const TopologySnapshot> latest;
+    DS_ASSERT_OK(executor.ValidateFence(fence, latest));
+    EXPECT_EQ(latest->Version(), changed.version);
+    EXPECT_NE(latest, scenario.snapshot);
+    std::shared_ptr<const TopologySnapshot> published;
+    DS_ASSERT_OK(scenario.snapshots.Load(published));
+    EXPECT_EQ(published, scenario.snapshot);
+    ++changed.version;
+    ++changed.activeBatch->epoch;
+    scenario.backend.PutRaw(scenario.keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), changed);
+    EXPECT_EQ(executor.ValidateFence(fence).GetCode(), K_INVALID);
+}
+
+TEST(TopologyTaskExecutorTest, FenceFallsBackToAuthorityWhenSnapshotIsMissing)
+{
+    ExecutorScenario scenario;
+    DS_ASSERT_OK(scenario.SetUp());
+    const auto &task = std::get<TopologyMigrateTask>(scenario.expected.tasks.front());
+    TopologySnapshotState empty;
+    TopologyTaskExecutor executor(task.executorAddress, *scenario.repository, empty, scenario.callbacks,
+                                  scenario.dispatcher, {});
+    TopologyExecutionFence fence;
+    DS_ASSERT_OK(executor.BuildExecutionFence(scenario.expected.tasks.front(), TopologyCallbackPhase::SCALE_OUT,
+                                              *scenario.snapshot, fence));
+    std::shared_ptr<const TopologySnapshot> latest;
+    DS_ASSERT_OK(executor.ValidateFence(fence, latest));
+    EXPECT_EQ(latest->Version(), scenario.snapshot->Version());
+    EXPECT_NE(latest, scenario.snapshot);
+}
+
+TEST(TopologyTaskExecutorTest, FenceAuthorityFailureCannotBeSatisfiedByPublishedSnapshot)
+{
+    ExecutorScenario scenario;
+    DS_ASSERT_OK(scenario.SetUp());
+    testing::FakeCoordinatorServiceProxy proxy;
+    DsCoordinationBackend backend(&proxy, "127.0.0.1:1");
+    TopologyRepository repository(backend, *scenario.keys);
+    std::string encoded;
+    DS_ASSERT_OK(TopologyRepositoryCodec::EncodeTopology(scenario.plan.next, encoded));
+    const auto topologyKey = scenario.keys->TopologyTable() + "/" + TopologyKeyHelper::TopologyKey();
+    DS_ASSERT_OK(proxy.PutRaw(topologyKey, encoded));
+    DS_ASSERT_OK(repository.CreateTaskIfAbsent(scenario.expected.tasks.front()));
+    TopologyReader reader(repository);
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(reader.Read(TEST_AUTHORITY_READ_TIMEOUT_MS, snapshot));
+    TopologySnapshotState snapshots;
+    SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
+    const auto &task = std::get<TopologyMigrateTask>(scenario.expected.tasks.front());
+    TopologyTaskExecutor executor(task.executorAddress, repository, snapshots, scenario.callbacks,
+                                  scenario.dispatcher, {});
+    TopologyExecutionFence fence;
+    DS_ASSERT_OK(executor.BuildExecutionFence(scenario.expected.tasks.front(), TopologyCallbackPhase::SCALE_OUT, fence));
+    proxy.FailNextRangeForKey(topologyKey, K_RUNTIME_ERROR);
+    EXPECT_EQ(executor.ValidateFence(fence).GetCode(), K_RUNTIME_ERROR);
+    DS_ASSERT_OK(executor.ValidateFence(fence));
+
+    proxy.ResetCoordinatorStore("coordinator-b");
+    DS_ASSERT_OK(proxy.PutRaw(topologyKey, encoded));
+    DS_ASSERT_OK(repository.CreateTaskIfAbsent(scenario.expected.tasks.front()));
+    std::shared_ptr<const TopologySnapshot> latest;
+    DS_ASSERT_OK(executor.ValidateFence(fence, latest));
+    EXPECT_EQ(latest->AuthorityRevision(), snapshot->AuthorityRevision());
+    EXPECT_NE(latest->CoordinatorId(), snapshot->CoordinatorId());
+    EXPECT_EQ(latest->CoordinatorId(), "coordinator-b");
+    EXPECT_NE(latest, snapshot);
 }
 
 TEST(TopologyTaskExecutorTest, ExecutesOneTaskCallbackAndCommitsWholeScopeProgress)
