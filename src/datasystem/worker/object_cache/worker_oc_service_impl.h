@@ -726,21 +726,6 @@ public:
     void NotifyTopologyAvailability(bool allowBusiness);
 
     /**
-     * @brief Prepare the local one-byte object used by URMA worker-worker connection warmup.
-     * @param[in] objectKey Warmup object key.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status PrepareUrmaWarmupObject(const std::string &objectKey);
-
-    /**
-     * @brief Trigger direct remote get to a peer's warmup object.
-     * @param[in] peerAddr Peer worker address.
-     * @param[in] peerKey Peer warmup object key.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status WarmupUrmaConnectionToPeer(const std::string &peerAddr, const std::string &peerKey);
-
-    /**
      * @brief Run a dedicated worker-to-worker UB recovery probe.
      * @param[in] peerAddr Remote worker endpoint.
      * @param[out] failure Optional raw provider/CQE failure details.
