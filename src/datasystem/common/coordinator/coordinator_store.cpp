@@ -21,6 +21,8 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/coordinator/kv_change_log_aggregator.h"
+#include "datasystem/common/coordinator/steady_clock.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
@@ -44,6 +46,18 @@ void LogClusterKvChange(const WatchEvent &event)
     const bool isDeleteTask = isTable("/tasks/delete");
     const bool isNotify = isTable("/notify");
     if (!isMembership && !isMigrateTask && !isDeleteTask && !isNotify) {
+        return;
+    }
+
+    // Leaky singleton (repo convention, cf. LogSampler): a by-value static
+    // would be destroyed at exit while worker threads may still call Record.
+    static auto *aggregator = new KvChangeLogAggregator(std::make_shared<SteadyClockReal>());
+    std::string summary;
+    const bool detail = aggregator->Record(static_cast<int>(event.type), std::string(table), summary);
+    if (!summary.empty()) {
+        LOG(INFO) << summary;
+    }
+    if (!detail) {
         return;
     }
 
