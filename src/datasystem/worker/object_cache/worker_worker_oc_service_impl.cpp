@@ -68,18 +68,10 @@ DS_DECLARE_uint64(oc_worker_aggregate_merge_size);
 
 namespace datasystem {
 namespace {
-constexpr char URMA_WARMUP_KEY_PREFIX[] = "_urma_";
 constexpr char BATCH_GET_RUNTIME_ERROR_KEY_PREFIX[] = "transport_get_inject_runtime_";
 constexpr char BATCH_GET_NOT_FOUND_KEY_PREFIX[] = "transport_get_inject_not_found_";
-constexpr uint64_t URMA_WARMUP_OBJECT_SIZE = 1;
 
 constexpr double US_PER_MS = 1000.0;
-
-bool IsUrmaWarmupRequest(const GetObjectRemoteReqPb &req)
-{
-    return req.has_urma_info() && req.object_key().rfind(URMA_WARMUP_KEY_PREFIX, 0) == 0 && req.read_offset() == 0
-           && req.read_size() == URMA_WARMUP_OBJECT_SIZE && req.data_size() == URMA_WARMUP_OBJECT_SIZE;
-}
 
 }  // namespace
 
@@ -579,21 +571,6 @@ Status WorkerWorkerOCServiceImpl::PrepareBatchRh2dContext(const GetObjectRemoteR
     return Status::OK();
 }
 
-bool WorkerWorkerOCServiceImpl::TryCompleteMissingUrmaWarmup(const GetObjectRemoteReqPb &req,
-                                                             GetObjectRemoteRspPb &rsp)
-{
-    if (!IsUrmaWarmupRequest(req)) {
-        return false;
-    }
-    auto status = ocClientWorkerSvc_->objectTable_->Contains(req.object_key());
-    if (status.GetCode() != StatusCode::K_NOT_FOUND) {
-        return false;
-    }
-    rsp.mutable_error()->set_error_code(K_OK);
-    rsp.set_data_source(DataTransferSource::DATA_ALREADY_TRANSFERRED);
-    return true;
-}
-
 Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                                          std::vector<RpcMessage> &payload, bool blocking,
                                                          std::vector<uint64_t> &eventKeys,
@@ -605,22 +582,12 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteRe
     const std::string &objectKey = req.object_key();
     const std::string &requestId = req.request_id();
     CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "objectKey is empty.");
-    if (TryCompleteMissingUrmaWarmup(req, rsp)) {
-        return Status::OK();
-    }
-    if (!IsUrmaWarmupRequest(req)) {
-        INJECT_POINT("worker.worker_worker_remote_get_sleep");
-        INJECT_POINT("worker.worker_worker_remote_get_failure");
-    }
+    INJECT_POINT("worker.worker_worker_remote_get_sleep");
+    INJECT_POINT("worker.worker_worker_remote_get_failure");
     Status status = GetObjectRemoteImpl(req, rsp, payload, blocking, eventKeys, batchPtr, batchRootInfo,
                                         fallbackStatus, batchRh2dContext);
     if (status.GetCode() == K_INVALID || status.GetCode() == K_NOT_FOUND) {
         status = Status(K_WORKER_PULL_OBJECT_NOT_FOUND, status.GetMsg());
-    }
-    if (status.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND && IsUrmaWarmupRequest(req)) {
-        rsp.mutable_error()->set_error_code(K_OK);
-        rsp.set_data_source(DataTransferSource::DATA_ALREADY_TRANSFERRED);
-        return Status::OK();
     }
     if (status.IsError()) {
         LOG(ERROR) << FormatString("[ObjectKey %s] Get object remote failed, requestId: %s, workerAddr: %s", objectKey,
