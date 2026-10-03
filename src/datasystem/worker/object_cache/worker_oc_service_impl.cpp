@@ -949,7 +949,7 @@ Status WorkerOCServiceImpl::Publish(const PublishReqPb &req, PublishRspPb &resp,
     RETURN_IF_NOT_OK(admission);
     BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        ValidateWorkerStateForRequest(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
     Status rc = publishProc_->Publish(req, resp, payloads);
     if (rc.IsOk()) {
@@ -984,7 +984,7 @@ Status WorkerOCServiceImpl::MultiPublish(const MultiPublishReqPb &req, MultiPubl
     RETURN_IF_NOT_OK(VerifyClientWriteAdmission(req.is_routed()));
     BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        ValidateWorkerStateForRequest(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
     auto clientId = ClientKey::Intern(req.client_id());
     RETURN_IF_NOT_OK(multiPublishProc_->MultiPublish(req, resp, payloads, clientId));
@@ -1728,6 +1728,22 @@ Status WorkerOCServiceImpl::HandleNodeRestartEvent(const std::map<std::string, i
 
 Status WorkerOCServiceImpl::ValidateWorkerState(BthreadReadGuard &noRecon, int reqTimeoutMs)
 {
+    if (!IsHealthy()) {
+        if (exitRequested_ != nullptr && exitRequested_->load(std::memory_order_acquire)) {
+            RETURN_STATUS(K_NOT_READY, "Worker is draining for ScaleIn");
+        }
+        if (IsStartupReconciling()) {
+            RETURN_STATUS(K_TRY_AGAIN, "Worker is starting up and reconciliation in progress, please retry");
+        }
+        RETURN_STATUS(K_NOT_READY, "Worker not ready");
+    }
+    RETURN_IF_NOT_OK(ValidateWorkerStateForRequest(noRecon, reqTimeoutMs));
+    CHECK_FAIL_RETURN_STATUS(IsHealthy(), K_NOT_READY, "Worker not ready");
+    return Status::OK();
+}
+
+Status WorkerOCServiceImpl::ValidateWorkerStateForRequest(BthreadReadGuard &noRecon, int reqTimeoutMs)
+{
     Timer timer;
     if (!IsHealthy()) {
         if (exitRequested_ != nullptr && exitRequested_->load(std::memory_order_acquire)) {
@@ -1737,7 +1753,13 @@ Status WorkerOCServiceImpl::ValidateWorkerState(BthreadReadGuard &noRecon, int r
             RETURN_STATUS(K_TRY_AGAIN,
                           "Worker is starting up and reconciliation in progress, please retry");
         }
-        RETURN_STATUS(K_NOT_READY, "Worker not ready");
+        const bool joiningReady = healthPublicationEnabled_.load(std::memory_order_acquire)
+                                  && reconciliationReady_.load(std::memory_order_acquire)
+                                  && !shutdownRequested_.load(std::memory_order_acquire) && !HasPendingRejoinCleanup()
+                                  && topologyEngine_ != nullptr && topologyEngine_->IsLocalJoiningOnlyNotReady();
+        if (!joiningReady) {
+            RETURN_STATUS(K_NOT_READY, "Worker not ready");
+        }
     }
     static const int SEC_TO_MS = 1000;
     const int totalWaitTimeMs = std::min(30 * SEC_TO_MS, reqTimeoutMs);
@@ -1791,7 +1813,7 @@ Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
     RETURN_IF_NOT_OK(admission);
     BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        ValidateWorkerStateForRequest(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
     Status rc = createProc_->Create(req, resp);
     if (rc.IsOk()) {
@@ -1814,7 +1836,7 @@ Status WorkerOCServiceImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreate
         return returnStatus;
     }
     BthreadReadGuard noRecon;
-    returnStatus = ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime());
+    returnStatus = ValidateWorkerStateForRequest(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime());
     if (returnStatus.IsError()) {
         LOG(ERROR) << "validate worker state failed:" << returnStatus.ToString();
         return returnStatus;
@@ -2027,7 +2049,7 @@ Status WorkerOCServiceImpl::Get(std::shared_ptr<::datasystem::ServerUnaryWriterR
     ScopedRequestContext ctx;
     BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        ValidateWorkerStateForRequest(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
     return getProc_->Get(serverApi);
 }
@@ -2038,7 +2060,7 @@ Status WorkerOCServiceImpl::QueryAndGet(
     ScopedRequestContext ctx;
     BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        ValidateWorkerStateForRequest(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
     RETURN_RUNTIME_ERROR_IF_NULL(queryAndGetProc_);
     return queryAndGetProc_->QueryAndGet(serverApi);
@@ -2415,7 +2437,7 @@ Status WorkerOCServiceImpl::DecreaseMemoryRef(const ClientKey &clientId, const s
     Timer timer;
     BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        ValidateWorkerStateForRequest(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
     Status decResult = Status::OK();
     for (const auto &shmId : shmIds) {

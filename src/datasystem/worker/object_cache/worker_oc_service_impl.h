@@ -210,6 +210,8 @@ public:
      */
     Status ValidateWorkerState(BthreadReadGuard &noRecon, int reqTimeoutMs);
 
+    Status ValidateWorkerStateForRequest(BthreadReadGuard &noRecon, int reqTimeoutMs);
+
     /**
      * @brief Determine whether the worker is in the startup reconciliation phase
      * (after a crash restart, g_health is not set to true but the process is running normally).

@@ -2201,6 +2201,28 @@ TEST_F(WorkerOcServiceImplTest, RejoinRequiredRejectsClientFacingRpc)
     EXPECT_EQ(impl_->Create(req, rsp).GetCode(), StatusCode::K_NOT_READY);
 }
 
+TEST_F(WorkerOcServiceImplTest, JoiningTopologyAllowsOnlyRequestAdmission)
+{
+    SetTopologyServingAdmission(false);
+    Raii restoreAdmission([] { SetTopologyServingAdmission(true); });
+    DS_ASSERT_OK(topologyRuntime_.StartWithJoiningLocalMember(localAddress_));
+    ASSERT_TRUE(topologyRuntime_.Engine()->HasEstablishedMemberLease());
+    ASSERT_EQ(topologyRuntime_.Engine()->GetAvailability(), cluster::TopologyAvailabilityLevel::NOT_READY);
+    ASSERT_TRUE(topologyRuntime_.Engine()->IsLocalJoiningOnlyNotReady());
+    impl_->healthPublicationEnabled_.store(true, std::memory_order_release);
+
+    BthreadReadGuard strictGuard;
+    EXPECT_EQ(impl_->ValidateWorkerState(strictGuard, K_META_MOVING_RETRY_TIMEOUT_MS).GetCode(), K_NOT_READY);
+
+    BthreadReadGuard requestGuard;
+    DS_EXPECT_OK(impl_->ValidateWorkerStateForRequest(requestGuard, K_META_MOVING_RETRY_TIMEOUT_MS));
+
+    exitRequested_.store(true, std::memory_order_release);
+    BthreadReadGuard exitingGuard;
+    EXPECT_EQ(impl_->ValidateWorkerStateForRequest(exitingGuard, K_META_MOVING_RETRY_TIMEOUT_MS).GetCode(),
+              K_NOT_READY);
+}
+
 TEST_F(WorkerOcServiceImplTest, CollectDisconnectedClientRefIdsReturnsOnlyMissingClients)
 {
     const auto liveClient = ClientKey::Intern("live-client");

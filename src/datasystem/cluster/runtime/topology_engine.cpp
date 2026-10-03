@@ -1118,6 +1118,27 @@ Status TopologyEngine::CheckLocalServingReady(std::string_view placementKey) con
     return Status::OK();
 }
 
+bool TopologyEngine::IsLocalJoiningOnlyNotReady() const
+{
+    if (GetState() != TopologyEngineState::RUNNING || GetAvailability() != TopologyAvailabilityLevel::NOT_READY
+        || RequiresMembershipRejoin() || !HasEstablishedMemberLease() || IsMemberLeaseTimedOut()) {
+        return false;
+    }
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    if (snapshots_.Load(snapshot).IsError()) {
+        return false;
+    }
+    const Member *local = nullptr;
+    if (snapshot->FindMemberByAddress(options_.localAddress, local).IsError() || local == nullptr
+        || local->state != MemberState::JOINING) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    return availability_.load() == TopologyAvailabilityLevel::NOT_READY
+           && publishedAvailability_.load() == TopologyAvailabilityLevel::NOT_READY
+           && isolationReason_ == "local_member_not_committed";
+}
+
 bool TopologyEngine::RequiresMembershipRejoin() const noexcept
 {
     return membershipRejoinRequired_.load(std::memory_order_relaxed);
@@ -1413,6 +1434,16 @@ Status TopologyEngine::ApplyCoordinatorTopologyEvent(const CoordinationEvent &ev
     INJECT_POINT("TopologyEngine.ApplyCoordinatorTopologyEvent.beforeCommit");
     std::shared_ptr<const TopologySnapshot> previous;
     (void)snapshots_.Load(previous);
+#ifdef WITH_TESTS
+    const Member *previousLocal = nullptr;
+    const Member *candidateLocal = nullptr;
+    if (previous != nullptr
+        && previous->FindMemberByAddress(options_.localAddress, previousLocal).IsOk()
+        && candidate->FindMemberByAddress(options_.localAddress, candidateLocal).IsOk()
+        && previousLocal->state == MemberState::JOINING && candidateLocal->state == MemberState::ACTIVE) {
+        INJECT_POINT("TopologyEngine.ApplyCoordinatorTopologyEvent.beforeJoiningToActiveCommit");
+    }
+#endif
     SnapshotUpdateOutcome outcome;
     bool newlyPublished = false;
     RETURN_IF_NOT_OK(member->CommitIfCurrentWatch(event.sourceAuthorityId, event.sourceWatchId, [&] {

@@ -128,13 +128,29 @@ public:
 
     Status StartWithActiveLocalMember(const HostPort &localAddress)
     {
+        return StartWithLocalMember(localAddress, cluster::MemberState::ACTIVE);
+    }
+
+    Status StartWithJoiningLocalMember(const HostPort &localAddress)
+    {
+        return StartWithLocalMember(localAddress, cluster::MemberState::JOINING);
+    }
+
+    Status StartWithLocalMember(const HostPort &localAddress, cluster::MemberState state)
+    {
         CHECK_FAIL_RETURN_STATUS(engine_ != nullptr, K_NOT_READY, "test topology engine is not initialized");
         const auto address = localAddress.ToString();
         cluster::TopologyState topology;
         topology.clusterHasInit = true;
         topology.version = 1;
-        topology.members = { cluster::Member{ { std::string(16, 'l'), address }, cluster::MemberState::ACTIVE,
+        topology.members = { cluster::Member{ { std::string(16, 'l'), address }, state,
                                               MakeTokens(address, 0) } };
+        if (state == cluster::MemberState::JOINING) {
+            const std::string existingAddress = "127.0.0.1:18482";
+            topology.members.emplace_back(cluster::Member{ { std::string(16, 'p'), existingAddress },
+                                                           cluster::MemberState::ACTIVE, MakeTokens(existingAddress, 0) });
+            topology.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_OUT, topology.version };
+        }
         std::unique_ptr<cluster::TopologyKeyHelper> keys;
         RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create("", keys));
         std::string encoded;
