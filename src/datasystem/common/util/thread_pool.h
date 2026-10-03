@@ -102,18 +102,23 @@ public:
         using RetType = typename std::result_of<F(Args...)>::type;
         auto task = std::bind(std::forward<F>(f), std::forward<Args>(args)...);
         static_assert(std::is_void<RetType>::value, "Return value type must be void!");
-
-        {
-            std::unique_lock<std::mutex> lock(mtx_);
-            if (shutDown_) {
-                throw std::runtime_error("Submit after Shutdown Error.");
-            }
-            taskQ_.emplace(std::move(task));
-            UpdateMaxAtomic(maxWaitingInPeriod_, taskQ_.size());
-            TryToAddThreadIfNeeded();
-        }
+        Enqueue(Task(std::move(task)));
         // Here, impossible to be empty; so no dead wait occurs.
         // Thus, safe to unprotected by lock(mtx_).
+        proceedCV_.notify_one();
+    }
+
+    // Same submission semantics as Execute. Reports whether the task entered taskQ_ before a
+    // lazy worker-creation error, so callers can keep queued-task cleanup ownership with the task.
+    template <class F, class... Args>
+    void ExecuteWithEnqueueStatus(bool &enqueued, F &&f, Args &&...args)
+    {
+        enqueued = false;
+        WarnIfNeed();
+        using RetType = typename std::result_of<F(Args...)>::type;
+        auto task = std::bind(std::forward<F>(f), std::forward<Args>(args)...);
+        static_assert(std::is_void<RetType>::value, "Return value type must be void!");
+        Enqueue(Task(std::move(task)), &enqueued);
         proceedCV_.notify_one();
     }
 
@@ -275,6 +280,21 @@ __attribute__((no_sanitize("thread")))
 
 private:
     using Task = std::function<void()>;
+
+    void Enqueue(Task task, bool *enqueued = nullptr)
+    {
+        std::unique_lock<std::mutex> lock(mtx_);
+        if (shutDown_) {
+            throw std::runtime_error("Submit after Shutdown Error.");
+        }
+        taskQ_.emplace(std::move(task));
+        if (enqueued != nullptr) {
+            *enqueued = true;
+        }
+        UpdateMaxAtomic(maxWaitingInPeriod_, taskQ_.size());
+        TryToAddThreadIfNeeded();
+    }
+
     ThreadWorkers workers_;
 
     std::queue<Task> taskQ_;

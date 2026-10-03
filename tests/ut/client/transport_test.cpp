@@ -11716,6 +11716,110 @@ TEST(UbTransporterTest, ShmSendBufferOwnerPropagatesDelayRelease)
     ASSERT_EQ(rpcClient->decreaseReferenceDelayRelease.size(), 1u);
     EXPECT_TRUE(rpcClient->decreaseReferenceDelayRelease[0]);
 }
+
+// A blocked DecreaseReference must not exhaust the transport pool after completed Set/Get calls.
+// The 16 slots model 16 ten-MB transport buffers: before the fix, queued release tasks retain
+// every handle and allocation fails after 16 buffers; the safe path returns each slot before it
+// enqueues DecreaseReference, so a continuous workload can reuse all 16 slots.
+TEST(UbTransporterTest, SafeUbHandlesReleaseBeforeSlowDecreaseReference)
+{
+    constexpr size_t transportSlotCount = 16;
+    constexpr size_t bufferCount = transportSlotCount * 4;
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    auto pool = std::make_shared<ThreadPool>(0, 1, "slow_ub_release");
+    auto availableSlots = std::make_shared<std::atomic<size_t>>(transportSlotCount);
+    std::promise<void> releaseStarted;
+    std::promise<void> allowRelease;
+    auto allowReleaseFuture = allowRelease.get_future().share();
+    rpcClient->afterDecreaseReference = [&releaseStarted, allowReleaseFuture](int count) {
+        if (count == 1) {
+            releaseStarted.set_value();
+        }
+        allowReleaseFuture.wait();
+    };
+    const auto releasingBefore = metrics::GetClientUbReleasingCount();
+    size_t outOfTransportMemory = 0;
+    auto allocateTransportSlot = [availableSlots]() -> std::shared_ptr<void> {
+        auto available = availableSlots->load(std::memory_order_relaxed);
+        while (available != 0) {
+            if (availableSlots->compare_exchange_weak(available, available - 1, std::memory_order_relaxed,
+                                                      std::memory_order_relaxed)) {
+                return std::shared_ptr<void>(new int(0), [availableSlots](void *ptr) {
+                    delete static_cast<int *>(ptr);
+                    availableSlots->fetch_add(1, std::memory_order_relaxed);
+                });
+            }
+        }
+        return nullptr;
+    };
+
+    // Block the only release worker first, so every later release remains queued for the whole
+    // allocation loop. This makes the pre-fix transport-pool exhaustion deterministic.
+    auto handle = allocateTransportSlot();
+    ASSERT_NE(handle, nullptr);
+    auto owner = std::make_shared<ShmSendBufferOwner>(rpcClient, ShmKey::Intern("test-shm-id-0"),
+                                                      MakeRequestContext(), pool, handle, nullptr, true);
+    handle.reset();
+    owner.reset();
+    releaseStarted.get_future().wait();
+
+    for (size_t i = 0; i < bufferCount; ++i) {
+        handle = allocateTransportSlot();
+        if (handle == nullptr) {
+            ++outOfTransportMemory;
+            break;
+        }
+        owner = std::make_shared<ShmSendBufferOwner>(rpcClient, ShmKey::Intern("test-shm-id-" + std::to_string(i + 1)),
+                                                      MakeRequestContext(), pool, handle, nullptr, true);
+        handle.reset();
+        owner.reset();
+    }
+    EXPECT_EQ(outOfTransportMemory, 0u);
+    EXPECT_EQ(availableSlots->load(std::memory_order_relaxed), transportSlotCount);
+    EXPECT_EQ(metrics::GetClientUbHoldingCount(), 0);
+    EXPECT_GT(metrics::GetClientUbReleasingCount(), releasingBefore);
+    allowRelease.set_value();
+}
+
+TEST(UbTransporterTest, HoldingUbHandleWaitsForDelayedRelease)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    auto pool = std::make_shared<ThreadPool>(0, 1, "holding_ub_release");
+    std::promise<void> releaseStarted;
+    std::promise<void> allowRelease;
+    auto allowReleaseFuture = allowRelease.get_future().share();
+    rpcClient->afterDecreaseReference = [&releaseStarted, allowReleaseFuture](int) {
+        releaseStarted.set_value();
+        allowReleaseFuture.wait();
+    };
+    const auto holdingBefore = metrics::GetClientUbHoldingCount();
+    const auto releasingBefore = metrics::GetClientUbReleasingCount();
+    std::weak_ptr<int> heldHandle;
+    {
+        auto handle = std::make_shared<int>(1);
+        heldHandle = handle;
+        auto owner = std::make_shared<ShmSendBufferOwner>(
+            rpcClient, ShmKey::Intern("held-shm-id"), MakeRequestContext(), pool, handle, nullptr, true);
+        owner->MarkDelayRelease();
+        handle.reset();
+    }
+    releaseStarted.get_future().wait();
+    EXPECT_FALSE(heldHandle.expired());
+    EXPECT_EQ(metrics::GetClientUbHoldingCount(), holdingBefore + 1);
+    EXPECT_EQ(metrics::GetClientUbReleasingCount(), releasingBefore + 1);
+    allowRelease.set_value();
+    for (int i = 0; i < 20 && !heldHandle.expired(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_TRUE(heldHandle.expired());
+    EXPECT_EQ(metrics::GetClientUbHoldingCount(), holdingBefore);
+    EXPECT_EQ(metrics::GetClientUbReleasingCount(), releasingBefore);
+}
+
+TEST(UbTransporterTest, UrmaWaitTimeoutRequiresDelayedRelease)
+{
+    EXPECT_TRUE(NeedDelayReleaseShmUnit(Status(K_URMA_WAIT_TIMEOUT, "waiting for late CQE")));
+}
 }  // namespace
 }  // namespace client
 }  // namespace datasystem
