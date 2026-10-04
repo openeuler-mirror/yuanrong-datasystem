@@ -19,7 +19,7 @@ package:
 	@if [ -d build/lib ]; then cp -fL build/lib/*.so* $(OUTPUT)/lib/ 2>/dev/null || true; fi
 	@cp deploy_client.py deploy_common.py deploy_pods.py deploy_jf.py parse_resource.py tools/procmon.py tools/standalone_launcher.py VERSION $(OUTPUT)/
 	@cp src/mock_jf_server.py $(OUTPUT)/ 2>/dev/null || true
-	@cp tests/test_deploy.sh tests/test_standalone_mode.sh $(OUTPUT)/ 2>/dev/null || true
+	@cp tests/test_deploy.sh tests/test_standalone_mode.sh tests/test_jf_resilience.sh $(OUTPUT)/ 2>/dev/null || true
 	@cp config/config.json.example $(OUTPUT)/config/
 	@cp config/config.cuda.json.example $(OUTPUT)/config/
 	@cp config/deploy.json.example $(OUTPUT)/config/
