@@ -1,8 +1,14 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
+
+struct PeerNotifySkipCounts {
+    uint64_t cooldown = 0;
+    uint64_t recoveryProbe = 0;
+};
 
 // PeerControlClient: sends Notify + Stop RPCs to peer kvtest instances.
 //
@@ -23,6 +29,9 @@ public:
     // empty action takes the normal notify_pipeline path.
     virtual void Notify(const std::string &host, int port, const std::string &action,
                         int sender, const std::vector<std::string> &keys, uint64_t size) = 0;
+
+    // Ordinary notifications skipped after a peer failure, counted per target.
+    virtual PeerNotifySkipCounts GetNotifySkipCounts() const = 0;
 
     // Stop a peer (graceful). Returns true on success.
     virtual bool Stop(const std::string &host, int port) = 0;
