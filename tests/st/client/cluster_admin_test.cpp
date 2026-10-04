@@ -30,7 +30,6 @@
 #include "datasystem/common/util/status_helper.h"
 
 DS_DECLARE_string(cluster_name);
-DS_DECLARE_string(etcd_address);
 
 namespace datasystem {
 namespace st {
@@ -55,7 +54,6 @@ public:
         for (size_t i = 0; i < 2; i++) {
             DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, i));
         }
-        FLAGS_etcd_address = cluster_->GetEtcdAddrs();
     }
 
     void TearDown() override
