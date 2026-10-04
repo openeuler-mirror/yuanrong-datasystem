@@ -17,12 +17,19 @@
 #include "datasystem/client/worker_api/client_worker_common_api.h"
 
 #include <gtest/gtest.h>
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
+#include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include "datasystem/client/worker_api/listen_worker.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/util/thread_pool.h"
+#include "datasystem/common/util/raii.h"
 #include "ut/common.h"
 
 namespace datasystem {
@@ -85,6 +92,27 @@ public:
     std::vector<bool> removableValues_;
 };
 
+class RecoveredLocalWorkerApi : public TestClientWorkerRemoteCommonApi {
+public:
+    explicit RecoveredLocalWorkerApi(HostPort hostPort)
+        : client::IClientWorkerCommonApi(HostPort(hostPort), HeartbeatType::RPC_HEARTBEAT, false, nullptr),
+          TestClientWorkerRemoteCommonApi(std::move(hostPort))
+    {
+    }
+
+    Status SendHeartbeat(bool &workerReboot, bool &clientRemoved, int64_t, bool &isWorkerVoluntaryScaleDown,
+                         const std::vector<int64_t> &, std::vector<int64_t> &) override
+    {
+        workerReboot = false;
+        clientRemoved = false;
+        isWorkerVoluntaryScaleDown = false;
+        heartbeatCalls_++;
+        return Status::OK();
+    }
+
+    std::atomic<int64_t> heartbeatCalls_{ 0 };
+};
+
 TEST(ClientWorkerCommonApiTest, NotifyClientRemovableRetriesTransientHeartbeatFailure)
 {
     constexpr int64_t expectedMaxAttemptTimeoutMs = 200;
@@ -101,6 +129,54 @@ TEST(ClientWorkerCommonApiTest, NotifyClientRemovableRetriesTransientHeartbeatFa
     EXPECT_LE(api->attemptTimeouts_[1], expectedMaxAttemptTimeoutMs);
     EXPECT_EQ(api->removableValues_, (std::vector<bool>{ true, true }));
     EXPECT_EQ(releaseFdCallbackCount, 1);
+}
+
+TEST(ClientWorkerCommonApiTest, CheckHeartbeatLoopKeepsPacingAfterLocalWorkerRecovery)
+{
+    const std::string intervalInject = "ListenWorker.CheckHeartbeat.heartbeat_interval_ms";
+    datasystem::inject::Set(intervalInject, "call(400)");
+    Raii clearInject([intervalInject]() { (void)datasystem::inject::Clear(intervalInject); });
+
+    auto api = std::make_shared<RecoveredLocalWorkerApi>(HostPort("127.0.0.1", 1));
+    auto asyncSwitchWorkerPool = std::make_shared<ThreadPool>(0, 1);
+    // Held by shared_ptr: the async recovery task captures shared_from_this().
+    auto listenWorker = std::make_shared<client::ListenWorker>(api, HeartbeatType::RPC_HEARTBEAT, 1,
+                                                               asyncSwitchWorkerPool.get());
+    listenWorker->SetIsLocalWorker(false);
+    std::atomic<bool> localWorkerRecovered{ false };
+    listenWorker->SetRecoverLocalWorkerHandle([&localWorkerRecovered]() {
+        localWorkerRecovered = true;
+        return true;
+    });
+    // Keep the fallback endpoint's data plane busy so the drain keeps deferring.
+    listenWorker->SetDataPlaneDrainHandle({ [](uint64_t) { return false; }, []() {} });
+
+    api->connectTimeoutMs_ = 5000;  // StartListenWorker waits for the first heartbeat with it.
+    Raii stopListener([&listenWorker]() { listenWorker->StopListenWorker(true); });
+    DS_ASSERT_OK(listenWorker->StartListenWorker());
+
+    auto recoverDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
+    while (!localWorkerRecovered.load() && std::chrono::steady_clock::now() < recoverDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(localWorkerRecovered.load()) << "Recovery handle should have been invoked";
+
+    // The recovery wake is one-shot: let the loop consume it before taking the baseline.
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    const int64_t baseline = api->heartbeatCalls_.load();
+    constexpr int64_t maxHeartbeatsInWindow = 12;
+    int64_t observed = 0;
+    auto windowEnd = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+    while (std::chrono::steady_clock::now() < windowEnd) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        observed = api->heartbeatCalls_.load() - baseline;
+        if (observed > maxHeartbeatsInWindow) {
+            break;  // Busy spin detected: bail out early instead of flooding the log.
+        }
+    }
+    // A 400ms heartbeat over a 2s window gives ~5 beats; only a sleepless loop exceeds this.
+    EXPECT_LE(observed, maxHeartbeatsInWindow) << "Heartbeat loop must keep sleeping between beats";
+    EXPECT_GE(observed, 1) << "Heartbeat loop must stay alive at heartbeat cadence";
 }
 
 TEST(ClientWorkerCommonApiTest, UsesWorkerMemoryAlignmentAndFallsBackForOldWorker)
