@@ -494,8 +494,6 @@ Status BuildGetHashRingResponse(const cluster::TopologySnapshot &snapshot, uint6
 }
 
 static constexpr int DEBUG_LOG_LEVEL = 2;
-static constexpr uint64_t URMA_WARMUP_OBJECT_SIZE = 1;
-static constexpr int64_t URMA_WARMUP_REQUEST_TIMEOUT_MS = 5'000;
 static constexpr size_t MAX_TOPOLOGY_SCALE_IN_CLEANUP_STATES = 1'024;
 static constexpr int ORDINARY_RPC_DRAIN_POLL_INTERVAL_MS = 10;
 static constexpr int MS_TO_US = 1000;
@@ -3103,61 +3101,6 @@ Status WorkerOCServiceImpl::WhetherNonRestart()
         LOG_IF_ERROR(slotRecoveryManager_->HandleLocalRestart(), "Recover slot failed");
     }
     return Status::OK();
-}
-
-Status WorkerOCServiceImpl::PrepareUrmaWarmupObject(const std::string &objectKey)
-{
-    CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "URMA warmup object key is empty.");
-    std::shared_ptr<SafeObjType> entry;
-    bool isInsert = false;
-    RETURN_IF_NOT_OK(RetryWhenDeadlock([this, &objectKey, &entry, &isInsert] {
-        return objectTable_->ReserveGetAndLock(objectKey, entry, isInsert, false, true);
-    }));
-    (void)isInsert;
-    Raii unlock([&entry]() { entry->WUnlock(); });
-    if (entry->Get() != nullptr && (*entry)->IsBinary() && (*entry)->IsPublished()
-        && !(*entry)->stateInfo.IsCacheInvalid()) {
-        LOG(INFO) << FormatString("[URMA_WARMUP] local warmup object already exists, objectKey=%s", objectKey);
-        return Status::OK();
-    }
-
-    SetNewObjectEntry(objectKey, ConsistencyType::CAUSAL, WriteMode::NONE_L2_CACHE, CacheType::MEMORY,
-                      URMA_WARMUP_OBJECT_SIZE, GetMetadataSize(), *entry);
-    ObjectKV objectKV(objectKey, *entry);
-    char warmupValue = 0;
-    RpcMessage payload;
-    auto rc = payload.CopyBuffer(&warmupValue, sizeof(warmupValue));
-    if (rc.IsError()) {
-        (void)objectTable_->Erase(objectKey, *entry);
-        return rc;
-    }
-    std::vector<RpcMessage> payloads;
-    payloads.emplace_back(std::move(payload));
-    rc = SaveBinaryObjectToMemory(objectKV, payloads, evictionManager_, memCpyThreadPool_);
-    if (rc.IsError()) {
-        (void)objectTable_->Erase(objectKey, *entry);
-        return rc;
-    }
-    (*entry)->stateInfo.SetNeedToDelete(false);
-    (*entry)->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
-    (*entry)->stateInfo.SetPrimaryCopy(true);
-    (*entry)->stateInfo.SetCacheInvalid(false);
-    (*entry)->stateInfo.SetIncompleted(false);
-    (*entry)->SetCreateTime(0);
-    (*entry)->SetTtlSecond(0);
-    LOG(INFO) << FormatString("[URMA_WARMUP] local warmup object prepared, objectKey=%s", objectKey);
-    INJECT_POINT("WorkerOCServiceImpl.PrepareUrmaWarmupObject.done");
-    return Status::OK();
-}
-
-Status WorkerOCServiceImpl::WarmupUrmaConnectionToPeer(const std::string &peerAddr, const std::string &peerKey)
-{
-    CHECK_FAIL_RETURN_STATUS(!peerAddr.empty(), K_INVALID, "URMA warmup peer address is empty.");
-    CHECK_FAIL_RETURN_STATUS(!peerKey.empty(), K_INVALID, "URMA warmup peer key is empty.");
-    CHECK_FAIL_RETURN_STATUS(getProc_ != nullptr, K_NOT_READY, "Object cache get service is not ready.");
-    GetRequestContext()->reqTimeoutDuration.Init(URMA_WARMUP_REQUEST_TIMEOUT_MS);
-    ApiDeadline::Instance().Reset();
-    return getProc_->WarmupGetObjectFromRemoteWorker(peerAddr, peerKey, URMA_WARMUP_OBJECT_SIZE);
 }
 
 Status WorkerOCServiceImpl::ProbeUrmaConnectionToPeer(const HostPort &peerAddr, UrmaWriteFailure *failure)

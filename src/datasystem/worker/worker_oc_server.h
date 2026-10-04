@@ -572,23 +572,18 @@ private:
                                 const std::function<bool()> &interrupted, std::chrono::milliseconds retryInterval);
 
     /**
-     * @brief Prepare local warmup object and start async URMA peer connection warmup if enabled.
+     * @brief Start the background URMA lifecycle loop (UB cleanup and recovery probe) if enabled.
      * @return Status of the call.
      */
     Status MaybeStartConnectionWarmup();
 
     /**
-     * @brief Stop URMA connection warmup background work.
+     * @brief Stop the background URMA lifecycle loop.
      */
     void StopConnectionWarmup();
 
     /**
-     * @brief Release one-shot URMA warmup thread pool.
-     */
-    void ReleaseWarmupThreadPool();
-
-    /**
-     * @brief Run async peer scanning and warmup tasks.
+     * @brief Run the background URMA lifecycle loop (UB cleanup and recovery probe).
      */
     void RunUrmaWarmupController();
 
@@ -616,19 +611,7 @@ private:
     void ContinueUbLifecycleCleanup();
 
     /**
-     * @brief Submit URMA warmup tasks for newly discovered ready peers.
-     */
-    void ScheduleUrmaWarmupTasks(const std::vector<const cluster::Member *> &members,
-                                 std::unordered_set<std::string> &scheduledPeers,
-                                 std::vector<std::future<bool>> &futures);
-
-    /**
-     * @brief Count successful URMA warmup tasks.
-     */
-    size_t GetUrmaWarmupSuccessCount(std::vector<std::future<bool>> &futures) const;
-
-    /**
-     * @brief Check whether the URMA warmup controller should exit.
+     * @brief Check whether a topology-scan warmup loop (e.g. master RPC warmup) should exit.
      */
     bool ShouldStopUrmaWarmup(int64_t elapsedMs, uint32_t stableRounds) const;
 
@@ -979,7 +962,6 @@ private:
     std::atomic<bool> checkThreadRunning_{ true };
     std::atomic<bool> checkAsyncTasksDone_{ false };
     std::unique_ptr<Thread> warmupControllerThread_{ nullptr };
-    std::shared_ptr<ThreadPool> warmupThreadPool_{ nullptr };
     std::atomic<bool> warmupExit_{ false };
     std::shared_ptr<ThreadPool> masterRpcWarmupThreadPool_{ nullptr };
     std::atomic<bool> masterRpcWarmupExit_{ false };
