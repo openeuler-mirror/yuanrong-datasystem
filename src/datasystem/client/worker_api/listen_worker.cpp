@@ -268,7 +268,7 @@ void ListenWorker::HandleHeartbeatError(Timer &timer, uint64_t clientDeadTimeout
 {
     CheckAndSetClientTimeout(timer.ElapsedMilliSecond(), clientDeadTimeoutMs, status);
     auto interval = GetErrorWaitInterval(timer, clientDeadTimeoutMs, heartbeatIntervalMs[lostHeartbeatTimes]);
-    waitPost_->WaitFor(interval);
+    waitPost_->WaitForAndClear(interval);
     if (isSwitched_ != prevSwitchedState) {
         return;
     }
@@ -333,7 +333,7 @@ bool ListenWorker::ProcessHeartbeatResult(bool workerReboot, bool clientRemoved,
     fdReleaseHelper_.Update(std::move(expiredWorkerFds));
     if (recoveryPending_) {
         TryRecoverClientResources(recoveryReason);
-        waitPost_->WaitFor(intervalMs);
+        waitPost_->WaitForAndClear(intervalMs);
         remainTime = clientDeadTimeoutMs;
         timer.Reset();
         return true;
@@ -342,7 +342,7 @@ bool ListenWorker::ProcessHeartbeatResult(bool workerReboot, bool clientRemoved,
     workerAvailable_ = true;
     TryRecoverLocalWorker();
     TrySwitchBackToLocalWorker();
-    waitPost_->WaitFor(intervalMs);
+    waitPost_->WaitForAndClear(intervalMs);
     remainTime = clientDeadTimeoutMs;
     timer.Reset();
     return false;
@@ -557,6 +557,9 @@ void ListenWorker::TryRecoverLocalWorker()
         if (recoverLocalWorkerHandle_()) {
             LOG(INFO) << "[Switch] Preferred same-node worker recovered, remote fallback will drain.";
             isSwitched_ = true;
+            // One-shot wake so the heartbeat loop re-evaluates immediately. Every sleep in
+            // CheckHeartbeat must consume this with WaitForAndClear, otherwise the event stays
+            // set and the loop spins at heartbeat-RPC speed without ever sleeping again.
             waitPost_->Set();
         }
     });
