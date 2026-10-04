@@ -67,6 +67,14 @@ public:
         return GetWorkerMasterApi(owner, api);
     }
 
+    // CreateMeta entry only; existing keys keep GetWorkerMasterApi.
+    Status GetWorkerMasterApiForCreate(std::string_view key, std::shared_ptr<ApiType> &api)
+    {
+        HostPort owner;
+        RETURN_IF_NOT_OK(routeResolver_.ResolveNewMetaOwner(key, owner));
+        return GetWorkerMasterApi(owner, api);
+    }
+
     /**
      * @brief Create a worker to Master api object for masterAddress, needs to be implemented by derived class.
      * @param[in] masterAddress The remote master ip address.

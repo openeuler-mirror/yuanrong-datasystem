@@ -584,7 +584,7 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaAttempt(
 {
     PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META_ROUTER);
     CHECK_FAIL_RETURN_STATUS(metadataRouteResolver_ != nullptr, K_NOT_READY, "Metadata route resolver is unavailable");
-    auto grouped = metadataRouteResolver_->GroupIndexedOwners(objectKeys);
+    auto grouped = metadataRouteResolver_->GroupIndexedNewMetaOwners(objectKeys);
     std::unordered_map<std::string, size_t> keyIndexes;
     keyIndexes.reserve(objectKeys.size());
     for (size_t i = 0; i < objectKeys.size(); ++i) {
@@ -711,7 +711,7 @@ void WorkerOcServiceMultiPublishImpl::RollbackPersistenceIfFailed(const Status &
     }
     LOG(ERROR) << FormatString("Multiple set fails to save object %s to l2cache.", objectKey);
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
-    auto routeRc = workerMasterApiManager_->GetWorkerMasterApi(objectKey, workerMasterApi);
+    auto routeRc = workerMasterApiManager_->GetWorkerMasterApiForCreate(objectKey, workerMasterApi);
     if (routeRc.IsError()) {
         LOG(ERROR) << "Getting metadata owner failed during rollback: " << routeRc.ToString();
         return;
