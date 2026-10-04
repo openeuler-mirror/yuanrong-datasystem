@@ -37,21 +37,15 @@
 namespace datasystem {
 namespace client {
 namespace {
-// Every internal RPC leaves 1ms of the API budget unused so a reroute or route refresh still fits
-// after a miss; the clamp only binds while remaining is still near the full budget (chain start).
-constexpr int64_t RPC_BUDGET_RESERVE_MS = 1;
-
 Status GetRpcTimeout(int64_t maxRpcTimeoutMs, int32_t &rpcTimeoutMs)
 {
     CHECK_FAIL_RETURN_STATUS(maxRpcTimeoutMs > 0, K_INVALID, "RPC timeout must be positive");
     const int64_t remainingUs = ApiDeadline::Instance().ApiRemainingUs();
     CHECK_FAIL_RETURN_STATUS(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
                              FormatString("API deadline exceeded, remaining %ld us.", remainingUs));
-    const int64_t maxRpcTimeoutMsReserved =
-        maxRpcTimeoutMs > RPC_BUDGET_RESERVE_MS ? maxRpcTimeoutMs - RPC_BUDGET_RESERVE_MS : maxRpcTimeoutMs;
     const int64_t remainingMs = TimeoutDuration::CeilUsToMs(remainingUs);
     rpcTimeoutMs = static_cast<int32_t>(
-        std::min({ remainingMs, maxRpcTimeoutMsReserved, static_cast<int64_t>(MAX_RPC_TIMEOUT_MS) }));
+        std::min({ remainingMs, maxRpcTimeoutMs, static_cast<int64_t>(MAX_RPC_TIMEOUT_MS) }));
     return Status::OK();
 }
 
