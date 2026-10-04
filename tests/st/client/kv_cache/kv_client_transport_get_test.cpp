@@ -2049,6 +2049,64 @@ TEST_F(KVClientTransportGetTest, InlineCapacityLimitFallsBack)
         << "A locally readable object exceeding inline capacity must not depend on its metadata owner";
 }
 
+// A provider-side UB writeback failure is terminal for this QueryAndGet result.  In particular, it must not
+// be reinterpreted as an inline-capacity miss and issue a second GetObjectRemote for the same object.
+TEST_F(KVClientTransportGetTest, QueryAndGetUbFailureDoesNotStartRemoteGet)
+{
+#ifndef USE_URMA_MOCK
+    GTEST_SKIP() << "This regression requires the deterministic URMA mock build.";
+#else
+    std::vector<std::string> keys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 1, "transport_query_and_get_ub_failure_", keys);
+    ASSERT_EQ(keys.size(), 1u);
+    const std::string &key = keys.front();
+    // Keep the payload substantial while remaining inside the requester's UB inline buffer, so this is a
+    // cross-worker QueryAndGet UB writeback rather than the ordinary capacity-miss fallback path.
+    const std::string value(INLINE_DATA_LIMIT / 2, 'u');
+    DS_ASSERT_OK(writer_->Set(key, value));
+
+    // First establish that this reader/owner pair uses cross-worker QueryAndGet with UB for this payload.
+    WorkerQueryAndGetCounts ownerBeforeWarmup;
+    GetWorkerQueryAndGetCounts(META_OWNER_INDEX, ownerBeforeWarmup);
+    Optional<Buffer> warmupBuffer;
+    DS_ASSERT_OK(reader_->Get(key, warmupBuffer));
+    ASSERT_TRUE(warmupBuffer);
+    AssertBufferEqual(*warmupBuffer, value);
+    WorkerQueryAndGetCounts ownerAfterWarmup;
+    GetWorkerQueryAndGetCounts(META_OWNER_INDEX, ownerAfterWarmup);
+    ASSERT_EQ(ownerAfterWarmup.ubHits, ownerBeforeWarmup.ubHits + 1);
+
+    // cqeStatus=4 makes the provider's EncodeUb return K_URMA_ERROR.  RemoteGet is a canary: if phase two
+    // is incorrectly reached, it returns K_RPC_UNAVAILABLE instead of the original URMA error.
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, META_OWNER_INDEX, URMA_CQE_ERROR_INJECT, "1*call(0, 4)"));
+    Raii clearUrmaFault([this] {
+        (void)cluster_->ClearInjectAction(WORKER, META_OWNER_INDEX, URMA_CQE_ERROR_INJECT);
+    });
+    DS_ASSERT_OK(inject::Set(GET_OBJECT_REMOTE_INJECT, "return(K_RPC_UNAVAILABLE)"));
+    Raii clearRemoteGetFault([] { (void)inject::Clear(GET_OBJECT_REMOTE_INJECT); });
+
+    TransportRpcCounts rpcBefore;
+    GetRpcCounts(rpcBefore);
+    uint64_t cqeBefore = 0;
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, META_OWNER_INDEX, URMA_CQE_ERROR_INJECT,
+                                                       cqeBefore));
+
+    Optional<Buffer> failedBuffer;
+    const Status rc = reader_->Get(key, failedBuffer);
+
+    TransportRpcCounts rpcAfter;
+    GetRpcCounts(rpcAfter);
+    uint64_t cqeAfter = 0;
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, META_OWNER_INDEX, URMA_CQE_ERROR_INJECT, cqeAfter));
+    ASSERT_EQ(rc.GetCode(), K_URMA_ERROR) << rc.ToString();
+    ASSERT_FALSE(failedBuffer);
+    ASSERT_EQ(rpcAfter.queryAndGet, rpcBefore.queryAndGet + 1);
+    ASSERT_EQ(cqeAfter, cqeBefore + 1) << "the provider-side QueryAndGet UB fault was not exercised";
+    ASSERT_EQ(rpcAfter.getObjectRemote, rpcBefore.getObjectRemote)
+        << "QueryAndGet UB failure incorrectly started phase-two GetObjectRemote";
+#endif
+}
+
 TEST_F(KVClientTransportGetTest, DirectBatchGetRoundTrips32Keys)
 {
     const auto keys = MakeRandomKeys(32);
