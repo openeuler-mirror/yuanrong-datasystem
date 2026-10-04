@@ -256,12 +256,16 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyWithLock(const std::vector<std::s
     }
     std::unordered_set<std::string> masterFailedIds;
     lastErr = DeleteAllCopyMetaFromMaster(sendToMasterIds, masterFailedIds);
+    std::vector<std::string> masterFailedObjectKeys;
+    masterFailedObjectKeys.reserve(masterFailedIds.size());
+    size_t masterFailedCount = 0;
 
     for (const auto &kv : lockedEntries) {
         const auto &objectKey = kv.first;
         if (masterFailedIds.count(objectKey) > 0) {
             failedObjectKeys.emplace_back(objectKey);
-            LOG(ERROR) << FormatString("[ObjectKey %s] Delete metadata in master failed.", objectKey);
+            ++masterFailedCount;
+            masterFailedObjectKeys.emplace_back(objectKey);
             continue;
         }
         std::shared_ptr<SafeObjType> entry = kv.second;
@@ -276,6 +280,11 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyWithLock(const std::vector<std::s
         } else {
             deletedSize += dataSize;
         }
+    }
+    if (!masterFailedObjectKeys.empty()) {
+        LOG(ERROR) << "Delete metadata in master failed for " << masterFailedCount
+                   << " object(s), total request objects=" << objectKeys.size()
+                   << ", object keys=" << VectorToString(masterFailedObjectKeys);
     }
     return lastErr;
 }
