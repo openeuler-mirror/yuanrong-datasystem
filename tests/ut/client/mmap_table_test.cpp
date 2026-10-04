@@ -21,7 +21,6 @@
 
 #include <algorithm>
 #include <tuple>
-#include <time.h>
 
 #ifdef __linux__
 #include <linux/memfd.h>
@@ -199,7 +198,12 @@ TEST_P(HugeTlbMmapTableTest, UnmapUsesActualPageSize)
     const auto &expectedSizes = std::get<2>(GetParam());
     const bool skipSleep = std::get<3>(GetParam());
     constexpr char skipSleepInject[] = "ShmMmapTableEntry.UnmapMemory.skipSleep";
-    Raii clearInject([&] { (void)inject::Clear(skipSleepInject); });
+    constexpr char beforeSleepInject[] = "ShmMmapTableEntry.UnmapMemory.beforeSleep";
+    Raii clearInject([&] {
+        (void)inject::Clear(skipSleepInject);
+        (void)inject::Clear(beforeSleepInject);
+    });
+    DS_ASSERT_OK(inject::Set(beforeSleepInject, "call()"));
     if (skipSleep) {
         DS_ASSERT_OK(inject::Set(skipSleepInject, "call()"));
     }
@@ -217,12 +221,6 @@ TEST_P(HugeTlbMmapTableTest, UnmapUsesActualPageSize)
         }));
     BINEXPECT_CALL(&mmap, (_, logicalSize, _, _, clientFd1_, _)).WillOnce(testing::Return(base));
     BINEXPECT_CALL(&madvise, (_, _, _)).WillOnce(testing::Return(0));
-    BINEXPECT_CALL(&nanosleep, (_, _)).Times(skipSleep ? 0 : expectedSizes.size() - 1).WillRepeatedly(testing::Invoke(
-        [](const struct timespec *duration, struct timespec *) {
-            EXPECT_EQ(duration->tv_sec, 0);
-            EXPECT_EQ(duration->tv_nsec, 1000000);
-            return 0;
-        }));
     size_t offset = 0;
     size_t calls = 0;
     BINEXPECT_CALL(&munmap, (_, _)).WillRepeatedly(testing::Invoke([](void *address, size_t length) {
@@ -249,6 +247,7 @@ TEST_P(HugeTlbMmapTableTest, UnmapUsesActualPageSize)
     }
     EXPECT_EQ(calls, expectedSizes.size());
     EXPECT_EQ(offset, logicalSize);
+    EXPECT_EQ(inject::GetExecuteCount(beforeSleepInject), skipSleep ? 0 : expectedSizes.size() - 1);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -296,6 +295,9 @@ TEST_P(MmapUnmapFailureTest, CleansOnlyStillOwnedSuffix)
     using testing::_;
     const auto failedFragment = std::get<0>(GetParam());
     const auto cleanupFails = std::get<1>(GetParam());
+    constexpr char beforeSleepInject[] = "ShmMmapTableEntry.UnmapMemory.beforeSleep";
+    Raii clearInject([&] { (void)inject::Clear(beforeSleepInject); });
+    DS_ASSERT_OK(inject::Set(beforeSleepInject, "call()"));
     const size_t pageSize = static_cast<size_t>(sysconf(_SC_PAGESIZE));
     const size_t mmapSize = UNMAP_SLICE_SIZE * 2 + pageSize;
     const size_t failedOffset = failedFragment * UNMAP_SLICE_SIZE;
@@ -351,10 +353,10 @@ TEST_P(MmapUnmapFailureTest, CleansOnlyStillOwnedSuffix)
                 }
                 return static_cast<int>(syscall(SYS_munmap, address, length));
             }));
-        BINEXPECT_CALL(&nanosleep, (_, _)).Times(failedFragment).WillRepeatedly(testing::Return(0));
         entry.reset();
     }
     EXPECT_EQ(calls, failedFragment + 2);
+    EXPECT_EQ(inject::GetExecuteCount(beforeSleepInject), failedFragment);
     unsigned char state = 0;
     for (size_t offset = 0; offset < prefixSize; offset += UNMAP_SLICE_SIZE) {
         ASSERT_EQ(mincore(base + offset, pageSize, &state), 0);

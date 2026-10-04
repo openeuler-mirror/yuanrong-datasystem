@@ -403,6 +403,7 @@ void ShmMmapTableEntry::UnmapMemory()
         unmapSucceeded = true;
         offset += fragmentSize;
         if (offset < size_ && !skipSleep) {
+            INJECT_POINT_NO_RETURN("ShmMmapTableEntry.UnmapMemory.beforeSleep", [] {});
             std::this_thread::sleep_for(UNMAP_FRAGMENT_INTERVAL);
         }
     }
