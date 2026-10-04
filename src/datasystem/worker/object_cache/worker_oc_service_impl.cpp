@@ -1307,6 +1307,7 @@ Status WorkerOCServiceImpl::SubmitTopologyFailureCleanup(
 
 Status WorkerOCServiceImpl::CleanupLocalStateForRejoin(std::chrono::steady_clock::time_point deadline)
 {
+    LOG(INFO) << "Clean up local state for rejoining.";
     CHECK_FAIL_RETURN_STATUS(clearDataFlow_ != nullptr, K_NOT_READY, "clear-data flow is not initialized");
     RETURN_IF_NOT_OK(CloseIncomingMigrationAdmissionAndWait(deadline));
     CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
@@ -2882,6 +2883,7 @@ void WorkerOCServiceImpl::StopTopologyHealthCoordinator()
 
 void WorkerOCServiceImpl::NotifyTopologyAvailability(bool allowBusiness)
 {
+    LOG(INFO) << "Notify topology availability: " << allowBusiness;
     {
         std::lock_guard<std::mutex> lock(topologyHealthMutex_);
         if (topologyHealthAvailabilityObserved_ && topologyHealthDesiredAdmission_ == allowBusiness) {
