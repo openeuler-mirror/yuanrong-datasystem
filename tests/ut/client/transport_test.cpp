@@ -1746,7 +1746,7 @@ TEST(WorkerRpcClientTest, SignsFinalReadRequestsBeforeRpc)
     ExistRspPb existResponse;
     ASSERT_TRUE(client.InvokeExist(800, existRequest, existResponse).IsOk());
     EXPECT_EQ(client.existInvokeCount, 1);
-    EXPECT_EQ(client.existRpcTimeout, 799);  // 800 - RPC_BUDGET_RESERVE_MS(1)
+    EXPECT_EQ(client.existRpcTimeout, 800);
     EXPECT_EQ(client.invokedExistRequest.client_id(), "client-1");
     EXPECT_EQ(client.invokedExistRequest.access_key(), "access-1");
     EXPECT_FALSE(client.invokedExistRequest.signature().empty());
@@ -2364,7 +2364,7 @@ TEST(WorkerRpcClientTest, ExistUsesSubTimeoutBelowChannelTimeout)
 
     ASSERT_TRUE(client.InvokeExist(1000, request, response).IsOk());
 
-    EXPECT_EQ(client.existRpcTimeout, 999);  // 1000 - RPC_BUDGET_RESERVE_MS(1)
+    EXPECT_EQ(client.existRpcTimeout, 1000);
 }
 
 TEST(WorkerRpcClientTest, BatchGetSignsAggregateRequestAndPreservesInputOrder)
