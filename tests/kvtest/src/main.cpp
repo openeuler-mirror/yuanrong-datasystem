@@ -578,9 +578,11 @@ static int RunServerMode(const Config &cfg)
         // Queue depths and notify loss
         size_t notifyOutQ = 0, notifyInQ = 0;
         uint64_t notifySuppressed = 0, notifyDropped = 0;
+        PeerNotifySkipCounts peerSkipped;
         if (worker) {
             notifyOutQ = worker->NotifyQueueSize();
             notifySuppressed = worker->NotifySuppressedCount();
+            peerSkipped = worker->NotifyPeerSkipCounts();
         }
         notifyInQ = server.NotifyQueueSize();
         notifyDropped = server.NotifyDroppedCount();
@@ -591,16 +593,21 @@ static int RunServerMode(const Config &cfg)
         if (notifyInQ > 1000) {
             SLOG_WARN("notify in queue backlog: " << notifyInQ);
         }
-        if (notifySuppressed > 0 || notifyDropped > 0) {
+        if (notifySuppressed > 0 || notifyDropped > 0 ||
+            peerSkipped.cooldown > 0 || peerSkipped.recoveryProbe > 0) {
             SLOG_WARN("notify lost: suppressed=" << notifySuppressed
                       << " (producer skipped fan-out) dropped=" << notifyDropped
-                      << " (queue bound hit) — receivers see less load than configured");
+                      << " (queue bound hit) peer_cooldown_skipped=" << peerSkipped.cooldown
+                      << " peer_probe_skipped=" << peerSkipped.recoveryProbe
+                      << " (per-target ordinary notify) — receivers see less load than configured");
         }
 
         SLOG_INFO("[" << rates << "] "
                       << "[out_q=" << notifyOutQ << ", in_q=" << notifyInQ
                       << ", dropped=" << notifyDropped
-                      << ", suppressed=" << notifySuppressed << "]"
+                      << ", suppressed=" << notifySuppressed
+                      << ", peer_cooldown_skipped=" << peerSkipped.cooldown
+                      << ", peer_probe_skipped=" << peerSkipped.recoveryProbe << "]"
                       << (cacheMode ? (" [pool=" + std::to_string(worker ? worker->CurrentPoolSize() : 0)
                                        + ", hit_rate=" + std::to_string(metrics.CacheHitRate()) + "]")
                                     : "")
