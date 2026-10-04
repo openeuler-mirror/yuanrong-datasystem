@@ -15,6 +15,10 @@
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem::cluster {
+namespace {
+constexpr uint64_t NEW_META_REROUTE_LOG_THROTTLE = 100;
+constexpr size_t DIAGNOSTIC_KEY_PREFIX_LEN = 16;
+}
 
 PlacementFacade::PlacementFacade(const TopologySnapshotState &snapshots, const IRoutingAlgorithm &algorithm,
                                  std::string localAddress)
@@ -111,11 +115,11 @@ Status PlacementFacade::LocateSurvivingInSnapshot(const TopologySnapshot &snapsh
             // metadata on its final home; the rule is a pure function of the snapshot so every worker on one
             // topology version picks the same owner. A PRE_LEAVING target is intentionally accepted: it is the
             // final-ring owner for this token, and any other choice would strand the metadata off-ring.
-            LOG_EVERY_N(INFO, 100) << "Committed owner " << owner->identity.address << " is LEAVING, reroute new "
+            LOG_EVERY_N(INFO, NEW_META_REROUTE_LOG_THROTTLE) << "Committed owner " << owner->identity.address << " is LEAVING, reroute new "
                                    << "metadata " << owner->identity.address << " -> " << surviving->identity.address
                                    << " (state " << MemberStateName(surviving->state) << ") at topology version "
                                    << snapshot.Version() << ", key prefix "
-                                   << std::string(placementKey.substr(0, 16));
+                                   << std::string(placementKey.substr(0, DIAGNOSTIC_KEY_PREFIX_LEN));
         }
     }
     decision = { snapshot.Version(), surviving->identity.address };

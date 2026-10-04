@@ -24,7 +24,7 @@
 // libraries to avoid this issue.
 
 namespace {
-constexpr uint32_t DEFAULT_SCALE_IN_COLLECT_WINDOW_MS = 3'000;
+constexpr uint32_t DEFAULT_SCALE_IN_COLLECT_WINDOW_MS = 1'000;
 constexpr uint32_t DEFAULT_URMA_SEND_LANE_COUNT_PER_PEER = 8;
 }
 
