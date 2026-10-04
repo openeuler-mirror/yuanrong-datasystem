@@ -71,6 +71,22 @@ public:
     Status LocateBatch(const std::vector<std::string_view> &placementKeys, BatchPlacementDecision &decision) const;
 
     /**
+     * @brief Resolve the owner for a NEW metadata key, skipping a LEAVING committed owner.
+     * @param[in] placementKey Binary-safe placement key.
+     * @param[out] decision Owner on the batch-final ring when the committed owner is LEAVING during an active
+     *                      scale-in drain (token-identical to the post-batch final ring); otherwise equals Locate.
+     * @return Status of the call. Existing keys must keep Locate (migration/redirect anchor on the committed
+     *         owner) -- this entry is for CreateMeta routing only.
+     */
+    Status LocateSurvivingOwner(std::string_view placementKey, PlacementDecision &decision) const;
+
+    /**
+     * @brief Batch form of LocateSurvivingOwner against a single Snapshot (same contract as LocateBatch).
+     */
+    Status LocateSurvivingOwnerBatch(const std::vector<std::string_view> &placementKeys,
+                                     BatchPlacementDecision &decision) const;
+
+    /**
      * @brief Evaluate whether this prebound local member should serve, redirect, or wait.
      * @param[in] placementKey Binary-safe placement key.
      * @param[out] decision Local/redirect/wait decision; unchanged on failure.
@@ -112,6 +128,9 @@ private:
      * @return Status.
      */
     Status LocateInSnapshot(const TopologySnapshot &snapshot, uint32_t token, PlacementDecision &decision) const;
+
+    Status LocateSurvivingInSnapshot(const TopologySnapshot &snapshot, std::string_view placementKey,
+                                      PlacementDecision &decision) const;
 
     /**
      * @brief Evaluate one redirect decision without reloading Snapshot.

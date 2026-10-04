@@ -19,6 +19,8 @@ namespace datasystem::cluster {
 
 struct PlacementDecision {
     uint64_t topologyVersion{ 0 };
+    // Owner address from the producing entry: Locate writes the committed owner; LocateSurvivingOwner writes
+    // the batch-final-ring owner (identical unless the committed owner is LEAVING during a scale-in drain).
     std::string committedOwnerAddress;
 };
 
