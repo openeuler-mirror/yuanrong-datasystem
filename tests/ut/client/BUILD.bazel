@@ -70,7 +70,10 @@ ds_cc_test(
     srcs = ["mmap_table_test.cpp"],
     deps = [
         "//src/datasystem/client/mmap_manager:mmap_table",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:raii",
         "//src/datasystem/common/util:status_helper",
+        "//tests/common/binmock:binmock",
         "//tests/ut:ut_common",
     ],
 )
