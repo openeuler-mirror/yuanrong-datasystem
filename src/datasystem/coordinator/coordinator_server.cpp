@@ -72,6 +72,7 @@ Status CoordinatorServer::UpdateConfig(const std::string &configJson)
 
 Status CoordinatorServer::Stop()
 {
+    LOG(INFO) << "Coordinator::Stop() called, requesting shutdown";
     return runtime_->Stop();
 }
 
