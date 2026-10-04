@@ -45,6 +45,7 @@ constexpr int64_t NON_SHM_SIZE = 499 * 1024;
 constexpr int64_t SHM_SIZE = 500 * 1024;
 constexpr int64_t BIG_STR_SIZE = 50 * 1024 * 1024;
 constexpr int64_t DEFAULT_TIMEOUT_MS = 1000;
+constexpr char SKIP_UNMAP_SLEEP_INJECT[] = "ShmMmapTableEntry.UnmapMemory.skipSleep";
 constexpr char SKIP_WARMUP_INJECT[] = "ObjectClientImpl.ClientWorkerWarmup.skip";
 
 class ScopedUnsetEnv {
@@ -116,12 +117,14 @@ public:
     {
         ImmutableStringPool::Instance().Init();
         intern::StringPool::InitAll();
+        DS_ASSERT_OK(inject::Set(SKIP_UNMAP_SLEEP_INJECT, "call()"));
         ExternalClusterTest::SetUp();
     }
 
     void TearDown() override
     {
         ExternalClusterTest::TearDown();
+        DS_ASSERT_OK(inject::Clear(SKIP_UNMAP_SLEEP_INJECT));
     }
 
 protected:

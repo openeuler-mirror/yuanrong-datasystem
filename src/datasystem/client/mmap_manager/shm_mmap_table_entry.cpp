@@ -20,14 +20,19 @@
 #include "datasystem/client/mmap_manager/shm_mmap_table_entry.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
-#include <cstddef>
 #include <chrono>
+#include <cstddef>
 #include <exception>
 #include <shared_mutex>
+#include <sstream>
 #include <thread>
+#include <utility>
 #include <sys/mman.h>
+#include <sys/vfs.h>
 #include <unistd.h>
+#include <linux/magic.h>
 
 #include "datasystem/common/device/nvidia/cuda_host_memory.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -41,6 +46,9 @@ constexpr auto HOST_MEMORY_FRAGMENT_INTERVAL = std::chrono::milliseconds(5);
 constexpr auto HOST_MEMORY_OPERATION_LOCK_RETRY_INTERVAL = std::chrono::milliseconds(1);
 constexpr size_t HOST_MEMORY_FRAGMENT_SIZE = 64UL * 1024UL * 1024UL;
 constexpr size_t HOST_MEMORY_PIN_MAX_RETRY_COUNT = 3;
+constexpr size_t UNMAP_FRAGMENT_SIZE = 512UL * 1024UL * 1024UL;
+constexpr size_t UNMAP_TOP_DURATION_COUNT = 3;
+constexpr auto UNMAP_FRAGMENT_INTERVAL = std::chrono::milliseconds(1);
 }  // namespace
 
 Status ShmMmapTableEntry::Init(bool enableHugeTlb, const std::string &tenantId)
@@ -56,13 +64,18 @@ Status ShmMmapTableEntry::Init(bool enableHugeTlb, const std::string &tenantId)
     // mmap fd
     uint32_t mFlag = MAP_SHARED;
     if (enableHugeTlb) {
+        RETURN_IF_NOT_OK(InitHugeTlbUnmapAlignment());
         mFlag |= MAP_HUGETLB;
     }
+    const auto mmapBegin = std::chrono::steady_clock::now();
     pointer_ = reinterpret_cast<uint8_t *>(mmap(nullptr, size_, PROT_READ | PROT_WRITE, mFlag, fd_, 0));
+    const int mmapErrno = errno;
+    const auto mmapElapsedUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - mmapBegin);
     if (pointer_ == MAP_FAILED) {
         RETURN_STATUS_LOG_ERROR(
             StatusCode::K_RUNTIME_ERROR,
-            FormatString("Mmap [client id = %s, fd = %d] failed. Error no: [%s]", clientId_, fd_, StrErr(errno)));
+            FormatString("Mmap [client id = %s, fd = %d] failed. Error no: [%s]", clientId_, fd_, StrErr(mmapErrno)));
     }
     // Exclude the shared memory from core dump.
     int ret = madvise(pointer_, size_, MADV_DONTDUMP);
@@ -72,8 +85,20 @@ Status ShmMmapTableEntry::Init(bool enableHugeTlb, const std::string &tenantId)
     }
     // Closing this fd has an effect on performance.
     RETRY_ON_EINTR(close(fd_));
-    LOG(INFO) << FormatString("mmap success, client id: %s, fd: %d, size: %zu", clientId_, fd_, size_);
+    LOG(INFO) << FormatString("mmap success, client id: %s, fd: %d, size: %zu", clientId_, fd_, size_)
+              << ", elapsedUs: " << mmapElapsedUs.count();
     BuildPinRange();
+    return Status::OK();
+}
+
+Status ShmMmapTableEntry::InitHugeTlbUnmapAlignment()
+{
+    struct statfs fsInfo {};
+    CHECK_FAIL_RETURN_STATUS(fstatfs(fd_, &fsInfo) == 0, K_RUNTIME_ERROR,
+                             FormatString("Query HugeTLB page size failed, fd: %d, errno: %s", fd_, StrErr(errno)));
+    CHECK_FAIL_RETURN_STATUS(fsInfo.f_type == HUGETLBFS_MAGIC && fsInfo.f_bsize > 0, K_RUNTIME_ERROR,
+                             FormatString("Invalid HugeTLB filesystem, fd: %d", fd_));
+    unmapAlignment_ = static_cast<size_t>(fsInfo.f_bsize);
     return Status::OK();
 }
 
@@ -335,11 +360,67 @@ ShmMmapTableEntry::~ShmMmapTableEntry()
     if (pinAttempted_.load(std::memory_order_acquire)) {
         UnpinHostMemory();
     }
-    int ret = munmap(pointer_, size_);
-    if (ret != 0) {
-        LOG(ERROR) << FormatString("munmap failed, client id: %s, fd: %d, size: %zu, returned: [%d], errno = [%s]",
-                                   clientId_, fd_, size_, ret, StrErr(errno));
-    } else {
+    UnmapMemory();
+}
+
+void ShmMmapTableEntry::UnmapMemory()
+{
+    bool skipSleep = false;
+    INJECT_POINT_NO_RETURN("ShmMmapTableEntry.UnmapMemory.skipSleep", [&skipSleep] { skipSleep = true; });
+    size_t unmapFragmentSize = std::min(UNMAP_FRAGMENT_SIZE, size_);
+    unmapFragmentSize += (unmapAlignment_ - unmapFragmentSize % unmapAlignment_) % unmapAlignment_;
+    std::array<std::pair<int64_t, size_t>, UNMAP_TOP_DURATION_COUNT> topDurations{};
+    bool unmapSucceeded = true;
+    std::chrono::microseconds unmapElapsedUs{ 0 };
+    const auto loopBegin = std::chrono::steady_clock::now();
+    bool cleanupRemaining = false;
+    for (size_t offset = 0; offset < size_;) {
+        const size_t fragmentSize = cleanupRemaining ? size_ - offset : std::min(unmapFragmentSize, size_ - offset);
+        const auto begin = std::chrono::steady_clock::now();
+        int ret = munmap(pointer_ + offset, fragmentSize);
+        const int unmapErrno = errno;
+        const auto elapsedUs =
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin);
+        unmapElapsedUs += elapsedUs;
+        std::pair<int64_t, size_t> duration{ elapsedUs.count(), offset / unmapFragmentSize + 1 };
+        for (auto &topDuration : topDurations) {
+            if (duration > topDuration) {
+                std::swap(duration, topDuration);
+            }
+        }
+        if (ret != 0) {
+            unmapSucceeded = false;
+            LOG(ERROR) << FormatString(
+                "munmap failed, client id: %s, fd: %d, offset: %zu, size: %zu, returned: [%d], errno = [%s]",
+                clientId_, fd_, offset, fragmentSize, ret, StrErr(unmapErrno));
+            if (cleanupRemaining) {
+                break;
+            }
+            // Only the failed fragment and its suffix are still owned; the released prefix may have been reused.
+            cleanupRemaining = true;
+            continue;
+        }
+        unmapSucceeded = true;
+        offset += fragmentSize;
+        if (offset < size_ && !skipSleep) {
+            INJECT_POINT_NO_RETURN("ShmMmapTableEntry.UnmapMemory.beforeSleep", [] {});
+            std::this_thread::sleep_for(UNMAP_FRAGMENT_INTERVAL);
+        }
+    }
+    const auto totalElapsedUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - loopBegin);
+    std::ostringstream topDurationLog;
+    for (size_t i = 0; i < topDurations.size() && topDurations[i].second != 0; ++i) {
+        if (i > 0) {
+            topDurationLog << "; ";
+        }
+        topDurationLog << "fragment: " << topDurations[i].second << ", elapsedUs: " << topDurations[i].first;
+    }
+    LOG(INFO) << "munmap for client id: " << clientId_ << ", fd: " << fd_
+              << ", totalElapsedUs: " << totalElapsedUs.count()
+              << ", unmapElapsedUs: " << unmapElapsedUs.count()
+              << ", top 3 durations us: [ " << topDurationLog.str() << " ]";
+    if (unmapSucceeded) {
         LOG(INFO) << FormatString("munmap success, client id: %s, fd: %d, size: %zu", clientId_, fd_, size_);
     }
 }

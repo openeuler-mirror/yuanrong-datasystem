@@ -204,7 +204,20 @@
     voluntary scale-down. Removing an mmap entry marks it retired before dropping the table reference, so a queued or
     running registration stops after any in-flight fragment returns and unregisters only its successfully registered
     prefix. Object/KV Client shutdown likewise stops registration after any in-flight fragment returns, skips all
-    remaining registration fragments and their intervals, and skips the unregister interval. Client
+    remaining registration fragments and their intervals, and skips the unregister interval. After unregistration,
+    `ShmMmapTableEntry` uses a fixed 512 MiB unmap fragment size. A 1 ms sleep occurs only between fragments,
+    including during client shutdown; single-fragment mappings and the last fragment have no trailing sleep.
+    `ObjectClientTest` enables the test-only `ShmMmapTableEntry.UnmapMemory.skipSleep` injection to bypass these
+    intervals without skipping unmapping, and clears it during teardown.
+    For HugeTLB mappings, `Init` obtains the actual page size from the received fd using `fstatfs` before mmap and fd close; query/type failures reject initialization.
+    Unmap fragments are rounded up to that page size, while the total release length remains the original mapping size;
+    client cleanup does not pad unaligned mapping lengths. On the first fragment failure, cleanup retries once for
+    the still-owned continuous suffix starting at the failed offset, then stops; an already released prefix is never
+    retried. If suffix cleanup also fails, its offset, length and errno are logged. Both attempts contribute to timing.
+    After cleanup, up to three slowest `munmap` calls are logged in one line in descending duration order,
+    with their one-based fragment numbers and elapsed microseconds, excluding sleeps. The same log reports
+    `totalElapsedUs` including sleeps and `unmapElapsedUs` summing only the syscalls. The `mmap success` log
+    reports syscall-only `elapsedUs`, excluding `madvise` and fd close. Client
     `DsCudaMemcpyAsync` splits H2D/D2H ranges at those planned fragment boundaries only when the Host pointer belongs to
     a Worker SHM mapping; other Host memory is submitted as one copy. The pin task retains the mmap entry, so shutdown
     cannot unpin or unmap it while registration is still running. Per-fragment register/unregister start and finish

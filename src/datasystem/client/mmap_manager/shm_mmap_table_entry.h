@@ -108,8 +108,11 @@ private:
     PinResult PinHostMemoryFragments();
     bool UnpinHostMemoryFragment(size_t fragmentIndex);
     void UnpinHostMemory();
+    void UnmapMemory();
+    Status InitHugeTlbUnmapAlignment();
 
     const std::string clientId_;
+    size_t unmapAlignment_{ 1 };
     PinRange pinRange_;
     std::shared_ptr<std::timed_mutex> hostMemoryOperationMutex_{ std::make_shared<std::timed_mutex>() };
     std::shared_ptr<std::atomic<bool>> clientExiting_;
