@@ -969,14 +969,14 @@ void TopologyEngine::CommitSuccessfulStart()
 Status TopologyEngine::StartStateThread()
 {
     {
-        std::lock_guard<std::mutex> lock(stateMutex_);
+        std::lock_guard<bthread::Mutex> lock(stateMutex_);
         threadExited_ = false;
     }
     try {
         stateThread_ = Thread(&TopologyEngine::Run, this);
         stateThread_.set_name("cluster-eng");
     } catch (const std::exception &error) {
-        std::lock_guard<std::mutex> lock(stateMutex_);
+        std::lock_guard<bthread::Mutex> lock(stateMutex_);
         threadExited_ = true;
         RETURN_STATUS(K_RUNTIME_ERROR, std::string("start cluster topology Engine thread failed: ") + error.what());
     }
@@ -1004,8 +1004,19 @@ Status TopologyEngine::ShutdownComponents(std::chrono::steady_clock::time_point 
     dispatcher_.ShutdownIngress();
     PreserveFirstError(executor_.Stop(deadline), firstError);
     bool stateThreadExited = false;
-    std::unique_lock<std::mutex> lock(stateMutex_);
-    stateThreadExited = stoppedCv_.wait_until(lock, deadline, [this] { return threadExited_; });
+    std::unique_lock<bthread::Mutex> lock(stateMutex_);
+    while (!threadExited_) {
+        if (deadline == std::chrono::steady_clock::time_point::max()) {
+            stoppedCv_.wait(lock);
+            continue;
+        }
+        const auto remaining = deadline - std::chrono::steady_clock::now();
+        if (remaining <= std::chrono::steady_clock::duration::zero()) {
+            break;
+        }
+        stoppedCv_.wait_for(lock, std::chrono::duration_cast<std::chrono::microseconds>(remaining).count());
+    }
+    stateThreadExited = threadExited_;
     lock.unlock();
     if (!stateThreadExited) {
         PreserveFirstError(Status(K_RPC_DEADLINE_EXCEEDED, "cluster topology Engine shutdown deadline exceeded"),
@@ -1072,7 +1083,7 @@ Status TopologyEngine::Shutdown(std::chrono::steady_clock::time_point deadline)
     }
     snapshots_.Clear();
     {
-        std::lock_guard<std::mutex> stateLock(stateMutex_);
+        std::lock_guard<bthread::Mutex> stateLock(stateMutex_);
         isolationReason_.clear();
     }
     {
@@ -1133,7 +1144,7 @@ bool TopologyEngine::IsLocalJoiningOnlyNotReady() const
         || local->state != MemberState::JOINING) {
         return false;
     }
-    std::lock_guard<std::mutex> lock(stateMutex_);
+    std::lock_guard<bthread::Mutex> lock(stateMutex_);
     return availability_.load() == TopologyAvailabilityLevel::NOT_READY
            && publishedAvailability_.load() == TopologyAvailabilityLevel::NOT_READY
            && isolationReason_ == "local_member_not_committed";
@@ -1317,7 +1328,7 @@ Status TopologyEngine::GetRecoveryTopology(uint64_t &topologyVersion, std::strin
 
 ControlBackendObservation TopologyEngine::GetControlBackendObservation() const
 {
-    std::lock_guard<std::mutex> lock(stateMutex_);
+    std::lock_guard<bthread::Mutex> lock(stateMutex_);
     auto observation = backendObservation_;
     const auto now = std::chrono::steady_clock::now();
     const auto availability = availability_.load();
@@ -1336,7 +1347,7 @@ TopologyDiagnostics TopologyEngine::GetDiagnostics() const
     diagnostics.state = state_.load();
     diagnostics.availability = publishedAvailability_.load();
     {
-        std::lock_guard<std::mutex> lock(stateMutex_);
+        std::lock_guard<bthread::Mutex> lock(stateMutex_);
         diagnostics.topologyVersion = backendObservation_.topologyVersion;
         diagnostics.topologyRevision = backendObservation_.topologyRevision;
         diagnostics.topologyDigestPrefix = TopologyDiagnosticPrefix(backendObservation_.topologyDigest);
@@ -1574,7 +1585,7 @@ Status TopologyEngine::PublishMissingLocalMemberEvidence()
     const bool localVoluntaryExitRequested = localVoluntaryExitRequested_.load();
     const bool rejoinAlreadyRequired = membershipRejoinRequired_.load(std::memory_order_relaxed);
     {
-        std::lock_guard<std::mutex> lock(stateMutex_);
+        std::lock_guard<bthread::Mutex> lock(stateMutex_);
         backendObservation_ = {};
     }
     // Repeated missing Snapshots must not erase a rejoin decision made when the local member disappeared.
@@ -1601,7 +1612,7 @@ void TopologyEngine::PublishFoundLocalMemberEvidence(const TopologySnapshot &sna
     ResetLocalIsolationEvidence();
     bool identityChanged = false;
     {
-        std::lock_guard<std::mutex> lock(stateMutex_);
+        std::lock_guard<bthread::Mutex> lock(stateMutex_);
         identityChanged =
             !backendObservation_.reporter.id.empty() && backendObservation_.reporter.id != local.identity.id;
         backendObservation_ = { local.identity,
@@ -1869,7 +1880,7 @@ Status TopologyEngine::HandleBackendUnavailable()
     std::shared_ptr<const TopologySnapshot> snapshot;
     hasSnapshot = snapshots_.Load(snapshot).IsOk();
     {
-        std::lock_guard<std::mutex> lock(stateMutex_);
+        std::lock_guard<bthread::Mutex> lock(stateMutex_);
         backendObservation_.state = ControlBackendState::UNAVAILABLE;
         backendObservation_.observedAt = std::chrono::steady_clock::now();
     }
@@ -1891,7 +1902,7 @@ Status TopologyEngine::ReevaluateFailureScope()
 {
     ControlBackendObservation local;
     {
-        std::lock_guard<std::mutex> lock(stateMutex_);
+        std::lock_guard<bthread::Mutex> lock(stateMutex_);
         local = backendObservation_;
     }
     if (!options_.controlBackendProbe) {
@@ -2040,7 +2051,7 @@ void TopologyEngine::SetAvailability(TopologyAvailabilityLevel level, std::strin
     const bool publish = state_.load() == TopologyEngineState::RUNNING || !AllowsBusinessTraffic(level);
     TopologyAvailabilityLevel previous;
     {
-        std::lock_guard<std::mutex> lock(stateMutex_);
+        std::lock_guard<bthread::Mutex> lock(stateMutex_);
         previous = availability_.load();
         if (previous == level && isolationReason_ == reason && (!publish || publishedAvailability_.load() == level)) {
             return;
@@ -2050,7 +2061,7 @@ void TopologyEngine::SetAvailability(TopologyAvailabilityLevel level, std::strin
         NotifyAvailability(level);
     }
     {
-        std::lock_guard<std::mutex> lock(stateMutex_);
+        std::lock_guard<bthread::Mutex> lock(stateMutex_);
         availability_.store(level);
         isolationReason_ = reason;
     }
@@ -2105,7 +2116,7 @@ void TopologyEngine::NotifySnapshotPublished(std::shared_ptr<const TopologySnaps
 void TopologyEngine::RecordError(const Status &status)
 {
     {
-        std::lock_guard<std::mutex> lock(stateMutex_);
+        std::lock_guard<bthread::Mutex> lock(stateMutex_);
         lastError_ = status.ToString();
     }
     if (availability_.load() == TopologyAvailabilityLevel::CONTROL_DEGRADED && IsBackendAccessFailure(status)) {
@@ -2185,7 +2196,7 @@ void TopologyEngine::Run()
         RefreshMembershipsIfDue(nextMembershipRefresh, std::chrono::steady_clock::now());
         KillSelfIfIsolationExpired();
     }
-    std::lock_guard<std::mutex> lock(stateMutex_);
+    std::lock_guard<bthread::Mutex> lock(stateMutex_);
     threadExited_ = true;
     stoppedCv_.notify_all();
 }
