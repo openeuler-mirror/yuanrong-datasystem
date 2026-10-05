@@ -60,6 +60,11 @@ public:
     static constexpr uint64_t BUSY_HEAL_CANCEL_POLL_MS = 10;
     static constexpr uint64_t BUSY_HEAL_PROBE_TIMEOUT_MS = 2000;
     static constexpr uint64_t SCALE_DOWN_MIN_LIMITER_WAIT_MS = 1000;
+    // Per-batch rate-limit wait budget for SCALE_DOWN drains: 10x the admission bound floor so an
+    // admitted batch only hits it after a post-admission rate collapse, which then fails the batch
+    // fast (K_NOT_READY) into the existing redirect pipeline instead of sleeping to the token
+    // refill pace (2026-10-05 incident: 104s silent wait at a collapsed 6MB/s advertised rate).
+    static constexpr uint64_t RATE_LIMIT_WAIT_BUDGET_MS = 10'000;
 
     MigrateDataHandler(MigrateType type, const std::string &localAddr,
                        const std::vector<ImmutableString> &needMigrateDataIds, std::shared_ptr<ObjectTable> objectTable,
@@ -196,7 +201,7 @@ private:
 
     void CaptureRemoteUbHealth(const UbHealthSummaryPb &encoded);
 
-    bool IsRateRecovered(uint64_t rate, uint64_t estimatedWaitMs, uint64_t requiredSize) const;
+    bool IsRateRecovered(uint64_t rate, uint64_t requiredSize) const;
     uint64_t GetScaleDownMaxLimiterWaitMilliseconds(uint64_t requiredSize) const;
 
     /**
