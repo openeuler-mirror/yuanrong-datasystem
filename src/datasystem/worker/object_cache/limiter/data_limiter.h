@@ -47,12 +47,15 @@ public:
     void WaitAllow(uint64_t requiredSize);
 
     /**
-     * @brief Wait for tokens while allowing a caller-owned operation to cancel.
+     * @brief Wait for tokens while allowing a caller-owned operation to cancel and a wait budget.
      * @param[in] requiredSize Required size.
      * @param[in] cancelled Optional cancellation flag that outlives this call.
-     * @return False if cancelled before tokens are consumed; true otherwise.
+     * @param[in] maxWaitMs Give up once this many milliseconds have been waited; UINT64_MAX waits
+     *                      unbounded. A zero advertised rate still elapses the budget.
+     * @return False if cancelled or the budget is exhausted before tokens are consumed; true otherwise.
      */
-    bool WaitAllow(uint64_t requiredSize, const std::atomic<bool> *cancelled);
+    bool WaitAllow(uint64_t requiredSize, const std::atomic<bool> *cancelled,
+                   uint64_t maxWaitMs = UINT64_MAX);
 
     /**
      * @brief Estimate how long the required tokens need to become available.
