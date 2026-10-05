@@ -291,6 +291,55 @@ TEST_F(DataLimiterTest, EstimateWaitHandlesZeroRate)
     ASSERT_EQ(limiter.EstimateWaitMilliseconds(2), UINT64_MAX);
 }
 
+// Regression for the 2026-10-05 scale-in incident: a collapsed advertised rate made WaitAllow
+// sleep silently to the token refill pace (104s for one batch). A finite budget must bound the
+// wait and return false once exhausted.
+TEST_F(DataLimiterTest, WaitBudgetExpiryFailsFast)
+{
+    DataLimiter limiter(100, 100);
+    Timer timer;
+    ASSERT_FALSE(limiter.WaitAllow(500, nullptr, 200));
+    EXPECT_GE(timer.ElapsedMilliSecond(), double(180));
+    EXPECT_LT(timer.ElapsedMilliSecond(), double(1500));
+}
+
+// At rate 0 WaitMilliseconds returns UINT64_MAX; the sleep must be capped by the remaining budget
+// so a finite budget can always elapse instead of sleeping unbounded.
+TEST_F(DataLimiterTest, ZeroAdvertisedRateStillElapsesBudget)
+{
+    DataLimiter limiter(0);
+    Timer timer;
+    ASSERT_FALSE(limiter.WaitAllow(10, nullptr, 250));
+    EXPECT_GE(timer.ElapsedMilliSecond(), double(230));
+    EXPECT_LT(timer.ElapsedMilliSecond(), double(2000));
+}
+
+TEST_F(DataLimiterTest, BudgetDoesNotAffectImmediateGrants)
+{
+    DataLimiter limiter(1000);
+    ASSERT_TRUE(limiter.WaitAllow(1000, nullptr, 1));
+    ASSERT_FALSE(limiter.WaitAllow(1000, nullptr, 1));
+}
+
+// A rate recovery must wake a caller that is sleeping on a wait computed under the collapsed
+// rate; without the UpdateRate wakeup the caller idles until the stale deadline.
+TEST_F(DataLimiterTest, RateUpdateWakesWaitingCaller)
+{
+    DataLimiter limiter(1, 1);
+    std::atomic<bool> done{ false };
+    auto wait = std::async(std::launch::async, [&] {
+        limiter.WaitAllow(1'000);
+        done.store(true, std::memory_order_release);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    ASSERT_FALSE(done.load(std::memory_order_acquire));
+    limiter.UpdateRate(100'000);
+    for (int i = 0; i < 200 && !done.load(std::memory_order_acquire); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_TRUE(done.load(std::memory_order_acquire));
+}
+
 class MigrateDataHandlerTest : public CommonTest, public EvictionManagerCommon {
 public:
     virtual void SetUp()
@@ -423,6 +472,42 @@ TEST_F(MigrateDataHandlerTest, TestMigrateDataMeetsNoSpaceError)
                                 nullptr);
     auto result2 = handler2.MigrateDataToRemote();
     EXPECT_EQ(result2.status.GetCode(), StatusCode::K_NO_SPACE);
+}
+
+// Regression for the 2026-10-05 scale-in incident: the target advertised a collapsed rate
+// (6.3MB/s after concurrent drains saturated its 1s window). The old token-balance verdict said
+// "recovered" and the batch slept 104s for tokens. With the steady-state verdict the probe rate
+// itself must disqualify recovery, so the batch fails fast with K_NOT_READY into the redirect
+// pipeline instead of waiting.
+TEST_F(MigrateDataHandlerTest, ScaleDownCollapsedAdvertisedRateFailsFast)
+{
+    LOG(INFO) << "Test scale-down batch fails fast when the advertised rate cannot drain it";
+    const std::string objectKey = "collapsed-rate-object";
+    // Larger than the default limiter bucket (data_migrate_rate_limit_mb = 40MB) so tokens cannot
+    // cover the batch; the advertised 1024 B/s cannot drain it either.
+    DS_ASSERT_OK(CreateObject(objectKey, 50ul * 1024ul * 1024ul));
+
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .WillRepeatedly(Invoke([&](MigrateDataReqPb &, const std::vector<MemView> &, MigrateDataRspPb &rsp) {
+            rsp.set_remain_bytes(1024ul * 1024ul * 1024ul);
+            rsp.set_available_ratio(85.0);
+            rsp.set_limit_rate(1024);
+            return Status::OK();
+        }));
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataProbe, (_, _, _))
+        .Times(3)
+        .WillRepeatedly(Invoke([](MigrateDataReqPb &, MigrateDataRspPb &rsp, int) {
+            rsp.set_limit_rate(1024);
+            return Status::OK();
+        }));
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", { objectKey }, objectTable_, remoteApi_, strategy_,
+                               nullptr);
+    auto result = handler.MigrateDataToRemote();
+    EXPECT_EQ(result.status.GetCode(), StatusCode::K_NOT_READY);
+    EXPECT_NE(result.status.GetMsg().find("usable bandwidth"), std::string::npos);
+    EXPECT_EQ(result.failedIds.count(objectKey), size_t(1));
+    EXPECT_TRUE(result.successIds.empty());
 }
 
 TEST_F(MigrateDataHandlerTest, RebalanceMemoryMigrationReachesTargetWhenReportedRemainBytesIsZero)

@@ -527,10 +527,22 @@ bool MigrateDataHandler::PrepareTransportSend()
         Clear();
         return false;
     }
-    if (!limiter_.WaitAllow(currBatchSize_, stoppingPtr_)) {
+    uint64_t waitBudgetMs = UINT64_MAX;
+    if (type_ == MigrateType::SCALE_DOWN) {
+        // Bounded per-batch wait: a collapsed advertised rate must fail fast into the existing
+        // redirect pipeline instead of sleeping to the token refill pace. The budget is never below
+        // the admission bound, so a batch admitted by EnsureRateForBatch only times out on a
+        // post-admission rate drop.
+        waitBudgetMs = std::max<uint64_t>(RATE_LIMIT_WAIT_BUDGET_MS,
+                                          GetScaleDownMaxLimiterWaitMilliseconds(currBatchSize_));
+    }
+    if (!limiter_.WaitAllow(currBatchSize_, stoppingPtr_, waitBudgetMs)) {
+        LOG(WARNING) << FormatString(
+            "event=MIGRATE_LIMITER_WAIT_FAILED target=%s batch_count=%zu batch_bytes=%lu budget_ms=%lu",
+            remoteApi_->Address(), datas_.size(), currBatchSize_, waitBudgetMs);
         std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
                        [](const std::unique_ptr<BaseDataUnit> &data) { return data->Id(); });
-        lastRc_ = Status(K_NOT_READY, "Migration cancelled while waiting for rate-limit tokens");
+        lastRc_ = Status(K_NOT_READY, "Migration rate-limit wait cancelled or budget exceeded");
         Clear();
         return false;
     }
@@ -669,7 +681,7 @@ Status MigrateDataHandler::SelfHealBusyRate(uint64_t requiredSize)
             rate = rsp.limit_rate();
             limiter_.UpdateRate(rate);
             estimatedWaitMs = limiter_.EstimateWaitMilliseconds(requiredSize);
-            recovered = IsRateRecovered(rate, estimatedWaitMs, requiredSize);
+            recovered = IsRateRecovered(rate, requiredSize);
         }
         VLOG(1) << FormatString("[Migrate Data] busy re-probe for %s: attempt %d, rate=%lu, rc=%s",
                                 remoteApi_->Address(), probesMade + 1, rate, lastErr.ToString());
@@ -688,13 +700,18 @@ Status MigrateDataHandler::SelfHealBusyRate(uint64_t requiredSize)
     return lastHealStatus_;
 }
 
-bool MigrateDataHandler::IsRateRecovered(uint64_t rate, uint64_t estimatedWaitMs, uint64_t requiredSize) const
+bool MigrateDataHandler::IsRateRecovered(uint64_t rate, uint64_t requiredSize) const
 {
     if (rate == 0) {
         return false;
     }
-    return type_ != MigrateType::SCALE_DOWN
-           || estimatedWaitMs <= GetScaleDownMaxLimiterWaitMilliseconds(requiredSize);
+    if (type_ != MigrateType::SCALE_DOWN) {
+        return true;
+    }
+    // Token balance is one-shot burst credit refilled under stale rates; the next batch still pays
+    // requiredSize/rate. Recovery must be judged on that steady-state cost, never on token balance.
+    const uint64_t steadyWaitMs = requiredSize * SECS_TO_MS / rate + 1;
+    return steadyWaitMs <= GetScaleDownMaxLimiterWaitMilliseconds(requiredSize);
 }
 
 uint64_t MigrateDataHandler::GetScaleDownMaxLimiterWaitMilliseconds(uint64_t requiredSize) const
