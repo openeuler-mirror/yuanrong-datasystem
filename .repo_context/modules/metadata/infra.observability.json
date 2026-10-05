@@ -28,9 +28,14 @@
     "src/datasystem/worker",
     "src/datasystem/common/log",
     "src/datasystem/common/metrics",
-    "tests"
+    "tests",
+    "scripts/trace_analysis"
   ],
-  "key_tests": [],
+  "key_tests": [
+    "tests/scripts/ds_trace_analysis/pipeline/test_ds_trace_analysis_pipeline.py",
+    "tests/scripts/ds_trace_analysis/delivery/test_ds_trace_analysis_skills.py",
+    "tests/scripts/ds_trace_analysis/evidence/test_ds_trace_rpc_accounting.py"
+  ],
   "module_boundary": {
     "related_modules": [
       "infra.logging",

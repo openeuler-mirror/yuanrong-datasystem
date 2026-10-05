@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61", "wheel>=0.40"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ds-trace-analysis"
+version = "0.1.0"
+description = "Offline DataSystem Trace analysis and report pipeline"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+ds-trace-analysis = "trace_analysis.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["trace_analysis*"]
+
+[tool.setuptools.package-data]
+trace_analysis = ["assets/**/*", "_build_info.json"]

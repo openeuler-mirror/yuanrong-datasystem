@@ -1,0 +1,113 @@
+{
+  "trace_id": "trace",
+  "timestamp": "fallback",
+  "evidence": [
+    "2026-01-01T00:00:00.000001 | I | file.cpp:1 | 192.0.2.1 | 1:2 | trace | zone | 0 | DS_KV_CLIENT_SET | 10000 | 4 |",
+    "2026-01-01T00:00:00.000001 | I | file.cpp:1 | 192.0.2.1 | 1:2 | trace | zone | [Client/WorkerRpc] Create done, costUs: 1000",
+    "2026-01-01T00:00:00.000001 | I | file.cpp:1 | 192.0.2.1 | 1:2 | trace | zone | [Client/WorkerRpc] Create done, costUs: 1000",
+    "2026-01-01T00:00:00.000002 | I | file.cpp:1 | 192.0.2.1 | 1:2 | trace | zone | [Client/WorkerRpc] Create done, costUs: 2000",
+    "2026-01-01T00:00:00.000001 | I | file.cpp:1 | 192.0.2.1 | 1:2 | trace | zone | [Client/WorkerRpc] Publish done, costUs: 500",
+    "2026-01-01T00:00:00.000001 | I | file.cpp:1 | 192.0.2.1 | 1:2 | trace | zone | Cannot assign requested address Create->[192.0.2.3:10]",
+    "2026-01-01T00:00:00.000001 | I | file.cpp:1 | 192.0.2.2 | 1:2 | trace | zone | 0 | DS_POSIX_PUBLISH | 800 |",
+    "2026-01-01T00:00:00.000003 | I | file.cpp:1 | 192.0.2.1 | 1:2 | trace | zone | 1 | DS_KV_CLIENT_PUBLISH | 20000 | 8 |"
+  ],
+  "client_ms": 10,
+  "status": 0,
+  "create_rpc_ms": 0,
+  "publish_rpc_ms": 0.5,
+  "write_urma_ms": null,
+  "write_breakdown_ms": {
+    "未解释残差": 9.5,
+    "Create RPC其他": 0,
+    "Publish RPC其他": 0.5
+  },
+  "write_phase_observation": {
+    "Create": {
+      "state": "observed",
+      "parent_ms": null,
+      "source": "multiple_client_worker_rpc"
+    },
+    "Copy": {
+      "state": "unobserved",
+      "parent_ms": null,
+      "source": null
+    },
+    "Publish": {
+      "state": "observed",
+      "parent_ms": 0.5,
+      "source": "client_worker_rpc"
+    }
+  },
+  "observed_parents": [
+    {
+      "stage": "Create",
+      "ms": 1.0,
+      "evidence": "2026-01-01T00:00:00.000001 | I | file.cpp:1 | 192.0.2.1 | 1:2 | trace | zone | [Client/WorkerRpc] Create done, costUs: 1000"
+    },
+    {
+      "stage": "Create",
+      "ms": 2.0,
+      "evidence": "2026-01-01T00:00:00.000002 | I | file.cpp:1 | 192.0.2.1 | 1:2 | trace | zone | [Client/WorkerRpc] Create done, costUs: 2000"
+    },
+    {
+      "stage": "Publish",
+      "ms": 0.5,
+      "evidence": "2026-01-01T00:00:00.000001 | I | file.cpp:1 | 192.0.2.1 | 1:2 | trace | zone | [Client/WorkerRpc] Publish done, costUs: 500"
+    }
+  ],
+  "refinement_notes": [
+    "Create：多个调用父窗口，仅列旁证，不推断串并行后求和。",
+    "Publish：由同Trace唯一 Client/WorkerRpc costUs 补回父窗口；内部未细分，不算纯网络或业务。"
+  ],
+  "error_root_causes": [],
+  "write_primary_stage": "未解释残差",
+  "client_status_failed": false,
+  "issues": [
+    "E99建连失败"
+  ],
+  "client_observers": [
+    "192.0.2.1"
+  ],
+  "worker_observers": [
+    "192.0.2.2"
+  ],
+  "rpc_targets": [
+    "192.0.2.3:10"
+  ],
+  "worker_events": [
+    {
+      "host": "192.0.2.2",
+      "timestamp": "2026-01-01T00:00:00.000001",
+      "operation": "PUBLISH",
+      "status": 0,
+      "ms": 0.8
+    }
+  ],
+  "operation": "SET",
+  "client_timestamp": "2026-01-01T00:00:00.000001",
+  "write_rpc_phase_evidence": {
+    "Create": {
+      "state": "unobserved",
+      "method": null,
+      "e2e_ms": null,
+      "network_ms": null,
+      "queue_ms": null,
+      "framework_ms": null,
+      "source_ref": null
+    },
+    "Publish": {
+      "state": "unobserved",
+      "method": null,
+      "e2e_ms": null,
+      "network_ms": null,
+      "queue_ms": null,
+      "framework_ms": null,
+      "source_ref": null
+    }
+  },
+  "wr_applicable": true,
+  "wr_phase_attribution": {
+    "phase": "unconfirmed",
+    "basis": "wr_callsite_not_observed"
+  }
+}

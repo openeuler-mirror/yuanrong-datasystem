@@ -23,6 +23,7 @@ Use this directory when the question is not only "how does logging or metrics wo
   - symptom-to-signal routing table for common runtime and observability issues
 - `performance-troubleshooting.md`
   - performance investigation workflow and likely bottleneck classes
+  - for collected Trace packages, route Triage, read/write bottleneck, and NUMA tasks through the single `ds-trace-analysis-pipeline` skill and `scripts/ds_trace_analysis.py` subcommands; a focused request can run only its selected mode
 - `runtime-health-and-runbook.md`
   - readiness, liveness, shutdown, health probes, and operator checklists
 - `docs/source_zh_cn/appendix/cluster_log_diagnosis_guide.md`

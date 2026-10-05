@@ -1,0 +1,1451 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>__TITLE__</title>
+
+  </head>
+  <body class="report-bottleneck">
+    <main>
+      <header>
+        <h1>__TITLE__</h1>
+        <p class="report-links">__LINKS__</p>
+        <p class="note">
+          SET 同一 Trace 包含 Create、Copy、Publish；独立 CREATE 不按对象名拼到 SET。阶段与 WR 归属以日志和源码路径证据为准。
+        </p>
+      </header>
+      <section class="panel" id="overview">
+        <h2>1. 总览</h2>
+        <div class="controls"><label for="write-top-n">写入范围</label>
+          <select id="write-top-n"><option value="0">全部</option><option value="100">Top 100</option><option value="1000">Top 1000</option></select>
+          <span id="write-top-scope" class="caption"></span>
+        </div>
+        <div id="kpis" class="kpis"></div>
+        <div id="insights"></div>
+        <p class="note">
+          按 Client 总时延选取最慢 Trace。顶部范围适用于全页；下方时延档位仅联动总览、时间序列和 Trace 查看。
+        </p>
+        <div class="grid">
+          <div><div id="problem-count" class="chart"></div><p class="chart-caption">图 1-1 主瓶颈 Trace 数</p></div>
+          <div><div id="problem-time" class="chart"></div><p class="chart-caption">图 1-2 主瓶颈阶段 P90</p></div>
+        </div>
+        <div class="overview-subpanel" id="error-analysis">
+          <h3>错误分析</h3>
+          <p class="note">失败按同 Trace 首要信号归类；这是故障点证据，不代表接收端、网络或线程的最终根因。</p>
+          <div id="error-chart" class="chart"></div>
+          <p class="chart-caption">图 1-3 Client 失败分类</p>
+          <div id="error-scope" class="caption"></div>
+        </div>
+        <div class="overview-subpanel" id="stage-root">
+          <h3>问题证据</h3>
+          <div id="issue-chart" class="chart"></div>
+          <p class="chart-caption">图 1-4 问题证据 Trace 数</p>
+          <details><summary>分类口径</summary><p id="issue-guide" class="note"></p></details>
+          <h3 class="table-caption">表 1-1 问题证据明细</h3>
+          <div id="stage-root-table"></div>
+        </div>
+        <div class="overview-subpanel" id="latency-bands">
+          <h3>Client 时延分段</h3>
+          <p class="note">五档为 5–6、6–7、7–10、10–20、&gt;20 ms；20 ms 归入 10–20，低于 5 ms 单列为未纳入五档。</p>
+          <div id="latency-band-controls" class="latency-band-controls"></div>
+          <p id="latency-band-scope" class="caption"></p>
+          <div id="latency-band-chart" class="chart"></div>
+          <p class="chart-caption">图 1-5 Client 总时延五档问题分布</p>
+        </div>
+      </section>
+      <section class="panel" id="time">
+        <h2>2. 时间序列</h2>
+        <div id="stage-share" class="chart"></div>
+        <p class="chart-caption">图 2-1 互斥阶段耗时占比</p>
+        <p class="note">
+          互斥阶段和等于Client总窗口。Create/Publish
+          RPC其他表示该父窗口扣除已确认子段后的未细分部分，不等同RPC框架或服务端CPU。URMA通信含完成观察等待，不是纯链路传输；URMA调度只使用明确字段。
+        </p>
+        <div id="timeline" class="chart" style="height: 460px"></div>
+        <p class="chart-caption">图 2-2 写入阶段时序</p>
+        <p class="note">
+          按Client日志时间排序，显示当前写入范围内的全部Trace；底部缩放查看。不同节点时钟未校准，不据此断言同时拥塞。点击柱子打开Trace明细。
+        </p>
+        <div id="time-table"></div>
+      </section>
+      <section class="panel" id="write-rpc">
+        <h2>3. 写入阶段与 RPC</h2>
+        <p class="note">SET 的 Create、Copy、Publish 共用一条 Trace；独立 CREATE 单列。详细调用与阶段汇总窗口分列，汇总可能含重试，不与调用或 Client 父窗口相加。</p>
+        <h3 class="table-caption">表 3-1 写入阶段观测覆盖</h3><div id="write-phase-table"></div>
+        <div class="controls"><label for="rpc-method-choice">RPC 方法 / 阶段</label><select id="rpc-method-choice"><option value="">全部 RPC 方法 / 阶段</option></select></div>
+        <div class="write-rpc-grid">
+          <figure><div id="write-rpc-method-chart" class="chart"></div><figcaption class="chart-caption">图 3-1 RPC 方法 / 阶段的 Trace 数与观测数</figcaption></figure>
+          <figure><div id="write-rpc-histogram-chart" class="chart"></div><figcaption class="chart-caption">图 3-2 RPC 耗时分布（调用 / 汇总窗口分列）</figcaption></figure>
+        </div>
+        <h3 class="table-caption">表 3-2 全 RPC 汇总</h3><div id="write-rpc-method-table"></div>
+      </section>
+      <section class="panel" id="write-wr">
+        <h2>4. URMA WR</h2>
+        <p class="note">复用完整结构化 URMA_ELAPSED_TOTAL 记录，不受日志展示截断影响。WR 数为采集到的分片事件数，不是全量提交量或 Trace 数；异步 WR 耗时不相加。无完成事件的超时请求单列，不补造 WR 或完成耗时。慢 WR 阈值沿用读取页：Elapsed &gt;1.5ms。</p>
+        <div class="controls">
+          <select id="wr-target"><option value="">全部目标 Worker / 地址</option></select>
+          <select id="wr-sender"><option value="">全部发送端</option></select>
+          <select id="wr-bucket"><option value="100">100ms 时间桶</option><option value="1000" selected>1s 时间桶</option><option value="10000">10s 时间桶</option><option value="60000">1min 时间桶</option></select>
+        </div>
+        <div id="wr-summary" class="wr-summary"></div>
+        <div id="wr-count-chart" class="chart"></div><p class="chart-caption">图 4-1 每 Trace WR 数与最长时延</p><p class="note">时延取每 Trace 最长成功 WR 后再计算 P90；不累加并行 WR。</p>
+        <p class="note">横轴仅显示发送端本地时间，筛选后按时间汇聚 WR；跨主机时钟未校准，不由同时出现推断因果。</p>
+        <div id="wr-time-chart" class="chart"></div><p class="chart-caption">图 4-2 WR 时间序列</p><h3 class="table-caption">表 4-1 WR 本地时间桶</h3><div id="wr-time-table" class="wr-metric-table"></div>
+        <p class="note">只使用 WR 的明确 target address；映射不到名称时保留地址，无目标时归未观测。目标关联时延不能直接证明 Worker CPU 或网络故障。</p>
+        <div id="wr-worker-chart" class="chart"></div><p class="chart-caption">图 4-3 目标 Worker WR</p><h3 class="table-caption">表 4-2 WR 目标 Worker</h3><div id="wr-worker-table" class="wr-metric-table"></div>
+        <h3 class="table-caption">表 4-3 WR 分片证据</h3><div id="wr-events-table"></div>
+      </section>
+      <section class="panel" id="worker">
+        <h2>5. Worker 分析</h2>
+        <p class="note">
+          只把明确的Worker日志发出节点作为“Worker处理证据”。RPC报错中的目标地址单列在Trace明细，不能把失败连接的目标当成已处理请求。下面Client时延是关联请求时延，不是Worker执行时间，也不是Worker负载。
+        </p>
+        <div class="controls">
+          <select id="worker-choice">
+            <option value="">全部有日志的Worker</option>
+          </select>
+        </div>
+        <div id="worker-chart" class="chart"></div>
+        <p class="chart-caption">图 5-1 Worker 关联 Trace 数</p>
+        <div id="worker-table"></div>
+        <div id="worker-time" class="chart"></div>
+        <p class="chart-caption">图 5-2 Worker 本地时间序列</p>
+        <p class="note">
+          Worker时间序列仅使用各节点 DS_POSIX_CREATE/PUBLISH access
+          完成时间，1秒桶显示最大接口耗时和采样完成数；选择全部时汇总各Worker的本地时间桶。不同节点时钟未校准，不据此推断同时拥塞；不把Client错误时间移到Worker轴上。
+        </p>
+      </section>
+      <section class="panel" id="traces">
+        <h2>6. Trace 查看</h2>
+        <h3>6.1 Trace 列表与筛选</h3>
+        <div class="controls">
+          <input id="search" placeholder="Trace / 日志关键词" />
+          <select id="operation"><option value="">全部写入接口</option></select>
+          <select id="stage"><option value="">全部主瓶颈</option></select>
+          <select id="issue"><option value="">全部问题证据</option></select>
+          <select id="status"><option value="">全部Client状态</option><option value="fail">Client失败</option><option value="ok">Client成功（可含重试）</option></select>
+          <select id="band"><option value="">全部时延</option><option value="5-6">5–6ms</option><option value="6-7">6–7ms</option><option value="7-10">7–10ms</option><option value="10-20">10–20ms（含20）</option><option value="20">&gt;20ms</option></select>
+          <select id="client"><option value="">全部Client观测节点</option></select>
+          <select id="segment"><option value="">全部时间段</option></select>
+          <select id="order">
+            <option value="desc">总时延降序</option>
+            <option value="asc">总时延升序</option>
+            <option value="time">Client时间升序</option>
+          </select>
+          <button id="reset">重置</button>
+          <button id="download-filtered">下载筛选证据</button>
+        </div>
+        <p class="note">这些条件只筛选 Trace 列表与选中明细，不改变前五章的统计。时间段按各 Client 节点观测时间独立等数量分5段，并非全局同步阶段。</p>
+        <div id="trace-table"></div>
+      <div class="trace-subpanel" id="detail">
+        <h3>6.2 选中 Trace</h3>
+        <div id="selected-title"></div>
+        <div id="diagnosis"></div>
+        <button id="download-one">下载本条日志证据</button>
+        <div id="phase-coverage" class="phase-coverage"></div>
+        <figure class="write-detail-figure">
+          <div id="selected-chart" class="chart"></div>
+          <figcaption>图 6-1 选中 Trace 互斥阶段与 WR</figcaption>
+        </figure>
+        <div class="grid">
+          <div>
+            <h3>互斥Breakdown</h3>
+            <table id="selected-stage-table">
+              <thead>
+                <tr>
+                  <th>阶段</th>
+                  <th>耗时 ms</th>
+                </tr>
+              </thead>
+              <tbody id="phases"></tbody>
+            </table>
+          </div>
+          <div>
+            <h3>旁证父窗口 / Worker接口</h3>
+            <div id="parent-evidence"></div>
+          </div>
+        </div>
+      </div>
+      <div class="trace-subpanel" id="logs-panel">
+        <h3>6.3 Trace 证据日志</h3>
+        <p id="truncation" class="note"></p>
+        <p class="note">
+          每组默认显示最多8条重点，其他证据可展开。仅高亮异常耗时数值（URMA
+          &gt;1.5ms，其他
+          &gt;5ms）、错误与关键字段；Inflight/Chip字段不因数值大就判异常。日志支持角色、实例、组件和错误类别筛选，全部匹配行直接展示。
+        </p>
+        <div id="logs"></div>
+      </div>
+      </section>
+      <section class="panel" id="trace-event-timeline">
+        <h2>7. Trace 时间线</h2>
+        <p class="caption">按进程展示保留日志的先后顺序；每个进程独立归零，不用跨机墙钟差计算通信耗时。</p>
+        <div class="controls">
+          <input id="event-trace-search" aria-label="搜索时间线 Trace" placeholder="搜索 Trace ID">
+          <select id="event-trace-select" aria-label="时间线 Trace"></select>
+        </div>
+        <div class="controls">
+          <select id="event-component-filter" aria-label="筛选日志组件"></select>
+          <select id="event-process-filter" aria-label="筛选进程"></select>
+        </div>
+        <p id="event-filter-summary" class="caption"></p>
+        <p id="selected-event-coverage" class="caption"></p>
+        <div id="trace-event-chart" class="chart"></div>
+        <p class="chart-caption">图 7-1 Trace 分进程事件</p>
+        <h3 id="trace-event-table-title" class="table-caption">表 7-1 Trace 事件明细</h3>
+        <div class="table-wrap">
+          <table id="trace-event-table">
+            <thead><tr><th>进程 / 本地时间</th><th>进程内累计 / 相邻 elapsed</th><th>组件 / 类型</th><th>事件证据</th></tr></thead>
+            <tbody id="event-table-body"></tbody>
+          </table>
+        </div>
+        <div id="event-table-pager" class="pager"></div>
+        <details class="analysis-details" open><summary>选中事件原始日志</summary><pre id="selected-event-evidence"></pre></details>
+      </section>
+      <section class="panel" id="write-downloads">
+        <h2>附录 · 下载与口径</h2>
+        <button id="download-model">下载完整写入分析模型与保留证据</button>
+        <ul>
+          __RAW__
+        </ul>
+        <p class="note">
+          上述原始输入覆盖整个Run，含原包和补采包；JSON/单条/分类下载仅含triage保留的证据，不冒充完整原始日志。Triage/NUMA的覆盖范围以各自输入清单为准。运行二进制SHA未核实，源码参考不等于运行版本证明。
+        </p>
+      </section>
+    </main>
+    <script>
+      __ECHARTS__;
+    </script>
+    <script>
+      const MODEL = __DATA__,
+        ALL = MODEL.rows,
+        $ = (id) => document.getElementById(id),
+        charts = new Map();
+      let selected = null,
+        filtered = [],
+        bandRows = [],
+        activeClientBand = null,
+        traceFiltered = [],
+        timelineRows = [];
+      ReportRegistry.bindSource('write',()=>MODEL,()=>({rows:filtered}));
+      ReportRegistry.bindSource('write_band',()=>MODEL,()=>({rows:bandRows}));
+      ReportRegistry.bindSource('write_bands',()=>MODEL,()=>({rows:filtered.filter(r=>clientBandId(r.client_ms))}));
+      ReportRegistry.bindSource('write_failed',()=>MODEL,()=>({rows:bandRows.filter(r=>r.client_status_failed)}));
+      ReportRegistry.bindSource('write_issue',()=>MODEL,()=>({rows:bandRows.filter(r=>r.issues.length)}));
+      ReportRegistry.bindSource('write_trace_filtered',()=>MODEL,()=>({rows:traceFiltered}));
+      ReportRegistry.bindSource('write_selected',()=>MODEL,()=>({rows:selected?[selected]:[]}));
+      function phaseCoverageRows(rows,schema){
+        if(schema===2)return rows;
+        return rows.map(row=>({...row,
+          write_phase_observation:Object.fromEntries(['Create','Copy','Publish'].map(stage=>
+            [stage,{state:'model_unavailable',parent_ms:null,source:null}]))}));
+      }
+      ReportRegistry.bindSource('write_phase',
+        ()=>({rows:phaseCoverageRows(ALL,MODEL.write_phase_schema_version)}),
+        ()=>({rows:phaseCoverageRows(filtered,MODEL.write_phase_schema_version)}));
+      ReportRegistry.bindSource('write_rpc_methods',()=>MODEL,()=>({rows:filtered.filter(r=>(r.rpc_analysis?.calls||[]).length||(r.rpc_analysis?.summary_windows||[]).length)}));
+      ReportRegistry.bindSource('write_worker',()=>MODEL,()=>({rows:filtered.filter(r=>!$('worker-choice').value||r.worker_observers.includes($('worker-choice').value))}));
+      function timedWorkerEvents(rows, host) {
+        return rows.flatMap(row => row.worker_events)
+          .filter(event => event.timestamp && (!host || event.host === host));
+      }
+      ReportRegistry.bindSource('write_worker_events',()=>({events:ALL.flatMap(r=>r.worker_events)}),
+        ()=>({events:timedWorkerEvents(filtered,$('worker-choice').value)}));
+      function scopedWrEvents(){return writeWrEvents(publishWrRows(filtered)).filter(e=>(!$('wr-target').value||e.target===$('wr-target').value)&&(!$('wr-sender').value||e.sender===$('wr-sender').value));}
+      ReportRegistry.bindSource('write_wr',()=>({events:writeWrEvents(publishWrRows(ALL))}),()=>({events:scopedWrEvents()}));
+      ReportRegistry.bindSource('write_wr_time',()=>({events:writeWrEvents(publishWrRows(ALL)).filter(e=>wrLocalBucket(e,Number($('wr-bucket').value))!==null)}),()=>({events:scopedWrEvents().filter(e=>wrLocalBucket(e,Number($('wr-bucket').value))!==null)}));
+      ReportRegistry.bindSource('write_wr_count',()=>MODEL,()=>({rows:!$('wr-target').value&&!$('wr-sender').value?publishWrRows(filtered):scopedWrEvents()}));
+      const esc = (s) =>
+        String(s ?? "").replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c],
+        );
+      const num = (n) => (n == null ? "未观测" : Number(n).toFixed(3)),
+        lat = (n) => `<span class="${n > 5 ? "hot" : ""}">${num(n)}</span>`,
+        count = (rs, key) =>
+          rs.reduce((a, r) => ((a[key(r)] = (a[key(r)] || 0) + 1), a), {}),
+        p90 = (rs) => {
+          const v = rs.map((r) => r.client_ms).sort((a, b) => a - b);
+          return v.length
+            ? v[Math.min(v.length - 1, Math.floor(v.length * 0.9))]
+            : null;
+        };
+      const stageNames = [
+          ...new Set(ALL.flatMap((r) => Object.keys(r.write_breakdown_ms))),
+        ],
+        clientBands = [
+          {id:'5-6',label:'5–6 ms'},
+          {id:'6-7',label:'6–7 ms'},
+          {id:'7-10',label:'7–10 ms'},
+          {id:'10-20',label:'10–20 ms'},
+          {id:'20',label:'>20 ms'},
+        ],
+        colors = [
+          "#4b78bc",
+          "#9ca84f",
+          "#ef8845",
+          "#ba5f9d",
+          "#32a4a4",
+          "#8672be",
+          "#debd53",
+          "#db6464",
+          "#67a2bd",
+          "#b3bac5",
+        ];
+      function durationAxis(axis) {
+        if (axis.type !== "value" || !/\bms\b/i.test(axis.name || "")) return axis;
+        return { ...axis, axisLabel: { ...axis.axisLabel,
+          formatter: (value) => Number(value).toFixed(3) } };
+      }
+      function chart(id, option) {
+        let c = charts.get(id);
+        if (!c) {
+          c = TraceCharts.init(echarts,$(id));
+          charts.set(id, c);
+        }
+        const axes = {};
+        for (const key of ["xAxis", "yAxis"]) {
+          if (option[key]) axes[key] = Array.isArray(option[key])
+            ? option[key].map(durationAxis) : durationAxis(option[key]);
+        }
+        c.setOption({ animation: false, color: colors, ...option, ...axes,
+          title:{...option.title,show:false} }, true);
+        return c;
+      }
+      function bars(id, title, keys, values, unit) {
+        const splitByCategory = id !== "worker-chart" && keys.length <= 8;
+        const series = splitByCategory
+          ? keys.map((key, index) => ({
+              name: TraceCharts.label(key), type: "bar", barMaxWidth: 72,
+              itemStyle: { color: id === 'error-chart'
+                ? ['#dc3545','#ef8845','#8672be'][index % 3]
+                : TraceCharts.color(key) || colors[index % colors.length] },
+              data: keys.map((_, item) => item === index ? values[index] : null),
+            }))
+          : [{
+              name: unit === "ms" ? "阶段 P90" : "Trace 数", type: "bar", barMaxWidth: 72,
+              itemStyle: { color: "#2f6fed" }, data: values,
+            }];
+        chart(id, {
+          title: { text: title, left: "center", textStyle: { fontSize: 15 } },
+          tooltip: { trigger: "axis" },
+          legend: { top: 0 },
+          grid: { left: 55, right: 20, top: 65, bottom: id === 'worker-chart' ? 115 : 80 },
+          xAxis: {
+            type: "category",
+            data: keys,
+            axisLabel: { interval: 0, rotate: 25, fontSize: 10 },
+          },
+          yAxis: { type: "value", name: unit },
+          series,
+        });
+      }
+      function download(name, data, type = "application/json") {
+        const a = document.createElement("a"),
+          u = URL.createObjectURL(new Blob([data], { type }));
+        a.href = u;
+        a.download = name;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(u), 500);
+      }
+      const tableState = {};
+      function table(id, rows, cols, pick) {
+        let state = tableState[id] || { page: 1, key: null, asc: false };
+        const wrTable = id === 'wr-events-table';
+        tableState[id] = state;
+        function draw() {
+          let data = [...rows];
+          if (state.key) {
+            const col = cols.find((c) => c.key === state.key);
+            data.sort((a, b) => {
+              let x = col.value(a),
+                y = col.value(b);
+              const xMissing = x == null || x === '' ||
+                (typeof x === 'number' && !Number.isFinite(x));
+              const yMissing = y == null || y === '' ||
+                (typeof y === 'number' && !Number.isFinite(y));
+              if (xMissing || yMissing) return Number(xMissing) - Number(yMissing);
+              return (
+                (typeof x === "number" && typeof y === "number"
+                  ? x - y
+                  : String(x ?? "").localeCompare(String(y ?? ""))) *
+                (state.asc ? 1 : -1)
+              );
+            });
+          }
+          state.page = Math.max(
+            1,
+            Math.min(state.page, Math.ceil(data.length / 4) || 1),
+          );
+          const chunk = data.slice((state.page - 1) * 4, state.page * 4);
+          const sortControls = wrTable
+            ? `<div class="wr-table-sort"><label>排序 <select class="sort-key">` +
+              `<option value="">原顺序</option>${cols.map(c=>`<option value="${esc(c.key)}">${esc(c.title)}</option>`).join('')}` +
+              `</select></label><button type="button" class="sort-direction" ${state.key?'':'disabled'}>` +
+              `${state.asc?'升序':'降序'}</button></div>`
+            : '';
+          $(id).innerHTML =
+            sortControls +
+            "<table><thead><tr>" +
+            cols
+              .map(
+                (c) =>
+                  `<th data-key="${c.key}" class="${c.secondary ? "secondary" : ""}" tabindex="0" title="点击排序" aria-sort="${state.key === c.key ? (state.asc ? 'ascending' : 'descending') : 'none'}">${esc(c.title)} ${state.key === c.key ? (state.asc ? "↑" : "↓") : ""}</th>`,
+              )
+              .join("") +
+            "</tr></thead><tbody>" +
+            chunk
+              .map(
+                (r, i) =>
+                  `<tr data-index="${i}" class="${pick ? "pick" : ""}" ${pick ? 'tabindex="0"' : ""}>` +
+                  cols
+                    .map(
+                      (c) =>
+                        `<td data-label="${esc(c.title)}" class="${c.secondary ? "secondary" : ""}">${c.render ? c.render(r) : esc(c.value(r))}</td>`,
+                    )
+                    .join("") +
+                  "</tr>",
+              )
+              .join("") +
+            "</tbody></table>" +
+            (!rows.length ? "<p>未观测到匹配数据</p>" : "") +
+            `<div class="pager"><button class="prev" ${state.page === 1 ? "disabled" : ""}>上一页</button><span>第 ${state.page}/${Math.ceil(data.length / 4) || 1} 页 · ${data.length} 条</span><button class="next" ${state.page * 4 >= data.length ? "disabled" : ""}>下一页</button></div>`;
+          $(id)
+            .querySelectorAll("th")
+            .forEach((th) => {
+                const sortColumn = () => {
+                  state.asc = state.key === th.dataset.key ? !state.asc : false;
+                  state.key = th.dataset.key;
+                  state.page = 1;
+                  draw();
+                };
+                th.onclick = sortColumn;
+                th.onkeydown = event => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    sortColumn();
+                  }
+                };
+              });
+          if (wrTable) {
+            const sortKey = $(id).querySelector('.sort-key');
+            sortKey.value = state.key || '';
+            sortKey.onchange = () => {
+              state.key = sortKey.value || null;
+              state.asc = false;
+              state.page = 1;
+              draw();
+            };
+            $(id).querySelector('.sort-direction').onclick = () => {
+              state.asc = !state.asc;
+              draw();
+            };
+          }
+          $(id).querySelector(".prev").onclick = () => {
+            state.page--;
+            draw();
+          };
+          $(id).querySelector(".next").onclick = () => {
+            state.page++;
+            draw();
+          };
+          if (pick)
+            $(id)
+              .querySelectorAll("tbody tr")
+              .forEach((tr, i) => {
+                tr.onclick = () => pick(chunk[i]);
+                tr.onkeydown = (e) => {
+                  if (e.key === "Enter") pick(chunk[i]);
+                };
+              });
+        }
+        draw();
+      }
+      for (const [id, values] of [
+        ["operation", ALL.map((r) => r.operation)],
+        ["stage", ALL.map((r) => r.write_primary_stage)],
+        ["issue", ALL.flatMap((r) => r.issues)],
+        ["client", ALL.flatMap((r) => r.client_observers)],
+        ["worker-choice", ALL.flatMap((r) => r.worker_observers)],
+      ])
+        for (const v of [...new Set(values)].sort())
+          $(id).add(new Option(TraceCharts.label(v), v));
+      for (let i = 1; i <= 5; i++)
+        $("segment").add(new Option("各Client第 " + i + " 段", String(i)));
+      const byClient = {};
+      ALL.forEach((r) => {
+        const k = r.client_observers.join(",") || "未观测";
+        (byClient[k] ??= []).push(r);
+      });
+      Object.values(byClient).forEach((rs) => {
+        rs.sort(
+          (a, b) =>
+            a.client_timestamp.localeCompare(b.client_timestamp) ||
+            a.trace_id.localeCompare(b.trace_id),
+        );
+        rs.forEach((r, i) => (r.segment = 1 + Math.floor((i * 5) / rs.length)));
+      });
+      function inBand(v) {
+        const b = $("band").value;
+        return (
+          !b ||
+          (b === "20" && v > 20) ||
+          (b === "5-6" && v >= 5 && v < 6) ||
+          (b === "6-7" && v >= 6 && v < 7) ||
+          (b === "7-10" && v >= 7 && v < 10) ||
+          (b === "10-20" && v >= 10 && v <= 20)
+        );
+      }
+      function clientBandId(value) {
+        if (value >= 5 && value < 6) return '5-6';
+        if (value >= 6 && value < 7) return '6-7';
+        if (value >= 7 && value < 10) return '7-10';
+        if (value >= 10 && value <= 20) return '10-20';
+        if (value > 20) return '20';
+        return null;
+      }
+      function failureCategory(row) {
+        if (row.issues.includes('URMA超时')) return 'URMA 超时';
+        if (row.issues.includes('回退失败')) return '回退失败';
+        return '其他失败';
+      }
+      function selectClientBand(id) {
+        activeClientBand = id;
+        renderClientBands();
+        renderScope();
+      }
+      function renderClientBands() {
+        bandRows = activeClientBand
+          ? filtered.filter(row => clientBandId(row.client_ms) === activeClientBand)
+          : filtered;
+        const grouped = clientBands.map(band => filtered.filter(row => clientBandId(row.client_ms) === band.id));
+        const covered = grouped.reduce((total,rows)=>total+rows.length,0);
+        $('latency-band-controls').innerHTML = [
+          {id:'all',label:'全部',count:filtered.length},
+          ...clientBands.map((band,index)=>({...band,count:grouped[index].length})),
+        ].map(band => `<button type="button" data-band="${band.id}" class="latency-band-button ${activeClientBand===band.id||!activeClientBand&&band.id==='all'?'active':''}">${esc(band.label)} · ${band.count}</button>`).join('');
+        $('latency-band-controls').querySelectorAll('button').forEach(button =>
+          button.onclick = () => selectClientBand(button.dataset.band==='all'?null:button.dataset.band));
+        $('latency-band-scope').textContent = activeClientBand
+          ? `当前 ${clientBands.find(band=>band.id===activeClientBand).label}：${bandRows.length} 条；WR、RPC、Worker 仍按顶部 ${filtered.length} 条分析。`
+          : `五档覆盖 ${covered} 条；低于 5 ms 或无有效时延 ${filtered.length-covered} 条未纳入五档。`;
+        const stages = [...new Set(filtered.map(row=>row.write_primary_stage))].sort();
+        const stageCounts = grouped.map(rows=>count(rows,row=>row.write_primary_stage));
+        const c = chart('latency-band-chart',{
+          tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:params=>{
+            const index=params[0]?.dataIndex??0,rows=grouped[index];
+            return `${esc(clientBands[index].label)}<br>Trace ${rows.length} · Client失败 ${rows.filter(row=>row.client_status_failed).length}<br>`+
+              params.filter(item=>item.value>0).map(item=>`${esc(item.seriesName)} ${item.value}`).join('<br>');
+          }},
+          legend:{type:'scroll',top:8,left:8,right:8},
+          grid:{left:55,right:24,top:75,bottom:65},
+          xAxis:{type:'category',data:clientBands.map(band=>band.label),axisLabel:{interval:0,rotate:window.innerWidth<650?30:0}},
+          yAxis:{type:'value',name:'Trace 数',minInterval:1},
+          series:stages.map((stage,index)=>({name:TraceCharts.label(stage),type:'bar',stack:'trace-count',barMaxWidth:72,
+            itemStyle:{color:TraceCharts.color(stage)||colors[index%colors.length]},
+            data:stageCounts.map(counts=>counts[stage]||0)})),
+        });
+        c.off('click');
+        c.on('click',point=>selectClientBand(clientBands[point.dataIndex].id));
+      }
+      function update() {
+        const limit = Number($('write-top-n').value);
+        const ranked = [...ALL].sort((a,b)=>
+          b.client_ms-a.client_ms ||
+          a.client_timestamp.localeCompare(b.client_timestamp) ||
+          a.trace_id.localeCompare(b.trace_id));
+        filtered = limit ? ranked.slice(0,limit) : ranked;
+        activeClientBand = null;
+        $('write-top-scope').textContent = `当前 ${filtered.length} / ${ALL.length} 条；以下分析章节统一使用该范围。`;
+        renderClientBands();
+        renderScope();
+        renderWritePhases();
+        worker();
+        renderWriteWr();
+      }
+      function renderScope() {
+        $('kpis').innerHTML =
+          `<div class="kpi"><span>写入样本 / 输入 ${ALL.length}</span><b>${bandRows.length}</b></div><div class="kpi"><span>Client 失败样本</span><b>${bandRows.filter((r) => r.client_status_failed).length}</b></div><div class="kpi"><span>Client P90</span><b>${num(p90(bandRows))} ms</b></div>`;
+        const problems = count(bandRows, (r) => r.write_primary_stage),
+          top = Object.entries(problems).sort((a, b) => b[1] - a[1]),
+          issues = {};
+        bandRows.forEach((r) =>
+          r.issues.forEach((i) => (issues[i] = (issues[i] || 0) + 1)),
+        );
+        const tags = Object.entries(issues).sort((a, b) => b[1] - a[1]);
+        $('insights').innerHTML = `<p>当前主耗时窗口：${
+          top
+            .slice(0, 3)
+            .map(([k, v]) => `<b>${esc(TraceCharts.label(k))}</b> ${v} 条`)
+            .join('；') || '无样本'
+        }。错误/性能证据：${
+          tags
+            .slice(0, 3)
+            .map(([k, v]) => `${esc(TraceCharts.label(k))} ${v} 条`)
+            .join('；') || '无样本'
+        }。</p><p class="note">${bandRows.filter((r) => r.refinement_notes.length).length} 条具有补充RPC父窗口证据；窗口补齐不等于内部根因已闭环。Client成功与“曾报错/重试”分开统计。</p>`;
+        bars(
+          "problem-count",
+          "图 1-1 主瓶颈 Trace 数",
+          Object.keys(problems),
+          Object.values(problems),
+          "条",
+        );
+        bars(
+          "problem-time",
+          "图 1-2 主瓶颈阶段 P90",
+          Object.keys(problems),
+          Object.keys(problems).map((k) => {
+            const v = bandRows
+              .filter((r) => r.write_primary_stage === k)
+              .map((r) => r.write_breakdown_ms[k])
+              .sort((a, b) => a - b);
+            return v[Math.min(v.length - 1, Math.floor(v.length * 0.9))];
+          }),
+          "ms",
+        );
+        const failures=bandRows.filter(row=>row.client_status_failed),
+          failureCounts=count(failures,failureCategory);
+        bars('error-chart','图 1-3 Client 失败分类',Object.keys(failureCounts),Object.values(failureCounts),'条');
+        const statusCounts=count(failures,row=>String(row.status??'未观测'));
+        $('error-scope').textContent = `Client失败 ${failures.length} 条；状态码 ${Object.entries(statusCounts).map(([code,total])=>`${code}: ${total}`).join('，')||'未观测'}。同 Trace 多个信号仅归首要一类，不作为最终根因。`;
+        bars(
+          "issue-chart",
+          "图 1-4 问题证据 Trace 数",
+          Object.keys(issues),
+          Object.values(issues),
+          "条",
+        );
+        const issueRows=Object.entries(issues).map(([name,traces])=>{
+          const matches=bandRows.filter(row=>row.issues.includes(name));
+          return {name,traces,failed:matches.filter(row=>row.client_status_failed).length,
+            p90_ms:p90(matches),sample:matches.sort((a,b)=>b.client_ms-a.client_ms)[0]?.trace_id||''};
+        }).sort((a,b)=>b.traces-a.traces);
+        table('stage-root-table',issueRows,[
+          {key:'name',title:'证据类别',value:r=>r.name},
+          {key:'traces',title:'Trace 数',value:r=>r.traces},
+          {key:'failed',title:'Client 失败',value:r=>r.failed},
+          {key:'p90_ms',title:'Client P90 ms',value:r=>r.p90_ms,render:r=>num(r.p90_ms)},
+          {key:'sample',title:'最慢示例 Trace',value:r=>r.sample}
+        ],row=>{const sample=bandRows.find(trace=>trace.trace_id===row.sample);
+          if(sample){selectTrace(sample);$('detail').scrollIntoView();}});
+        $("issue-guide").textContent = MODEL.rules
+          .filter((r) => issues[r[0]])
+          .map((r) => r[0] + "：" + r[2])
+          .join(" ");
+        const sums = stageNames
+          .map((name) => ({
+            name,
+            value: bandRows.reduce(
+              (s, r) => s + (r.write_breakdown_ms[name] || 0),
+              0,
+            ),
+          }))
+          .filter((v) => v.value > 0);
+        chart("stage-share", {
+          title: {
+            text: "图 2-1 互斥阶段耗时占比",
+            left: "center",
+            textStyle: { fontSize: 15 },
+          },
+          tooltip: { trigger: "item", formatter: "{b}: {c} ms ({d}%)" },
+          legend: { top: 0 },
+          series: [
+            {
+              type: "pie",
+              radius: window.innerWidth < 650 ? ["20%", "40%"] : ["30%", "60%"],
+              center: ["50%", window.innerWidth < 650 ? "70%" : "58%"],
+              data: sums.map((v) => ({ ...v, value: +v.value.toFixed(3) })),
+              label: { fontSize: 11 },
+            },
+          ],
+        });
+        timeline();
+        const ts = [];
+        Object.keys(byClient).forEach((host) => {
+          for (let i = 1; i <= 5; i++) {
+            const rs = bandRows
+              .filter(
+                (r) =>
+                  (r.client_observers.join(",") || "未观测") === host &&
+                  r.segment === i,
+              )
+              .sort((a, b) =>
+                a.client_timestamp.localeCompare(b.client_timestamp),
+              );
+            if (!rs.length) continue;
+            const p = Object.entries(
+              count(rs, (r) => r.write_primary_stage),
+            ).sort((a, b) => b[1] - a[1])[0];
+            ts.push({
+              host,
+              segment: i,
+              range:
+                rs[0].client_timestamp.slice(11) +
+                " – " +
+                rs.at(-1).client_timestamp.slice(11),
+              count: rs.length,
+              p90: p90(rs),
+              problem: p[0] + " " + p[1] + "条",
+            });
+          }
+        });
+        table("time-table", ts, [
+          { key: "host", title: "Client", value: (r) => r.host },
+          { key: "segment", title: "段", value: (r) => r.segment },
+          { key: "range", title: "本地时间范围", value: (r) => r.range },
+          { key: "count", title: "Trace数", value: (r) => r.count },
+          {
+            key: "p90",
+            title: "样本P90 ms",
+            value: (r) => r.p90,
+            render: (r) => lat(r.p90),
+          },
+          { key: "problem", title: "主阶段", value: (r) => r.problem },
+        ]);
+        applyTraceFilters();
+      }
+      function applyTraceFilters() {
+        const q = $('search').value.toLowerCase();
+        traceFiltered = bandRows.filter(r =>
+          (!q || r.trace_id.toLowerCase().includes(q) ||
+            r.evidence.some(e => e.toLowerCase().includes(q))) &&
+          (!$('operation').value || r.operation === $('operation').value) &&
+          (!$('stage').value || r.write_primary_stage === $('stage').value) &&
+          (!$('issue').value || r.issues.includes($('issue').value)) &&
+          (!$('status').value || r.client_status_failed === ($('status').value === 'fail')) &&
+          inBand(r.client_ms) &&
+          (!$('client').value || r.client_observers.includes($('client').value)) &&
+          (!$('segment').value || r.segment === Number($('segment').value)));
+        traceTable();
+        if (selected && traceFiltered.includes(selected)) selectTrace(selected);
+        else if (traceFiltered.length) selectTrace(traceFiltered[0]);
+        else {
+          selected = null;
+          [
+            "selected-title",
+            "diagnosis",
+            "phases",
+            "parent-evidence",
+            "logs",
+            "phase-coverage",
+            "truncation",
+          ].forEach((id) => ($(id).textContent = "无匹配Trace"));
+          chart("selected-chart", {
+            series: [],
+            graphic: {
+              type: "text", left: "center", top: "middle",
+              style: { text: "无匹配Trace", fill: "#64748b", font: '14px "Microsoft YaHei"' },
+            },
+          });
+        }
+      }
+      function timeline() {
+        const rs = [...bandRows].sort((a, b) =>
+          a.client_timestamp.localeCompare(b.client_timestamp),
+        );
+        const axisTime = timestamp => {
+          const match = timestamp.match(/T(\d{2}:\d{2}:\d{2})(?:\.(\d+))?/);
+          return match ? `${match[1]}.${(match[2] || '').padEnd(3, '0').slice(0, 3)}` : timestamp;
+        };
+        timelineRows = rs;
+        const c = chart("timeline", {
+          title: {
+            text: "图 2-2 写入阶段时序 · " + rs.length + " 条",
+            left: "center",
+            textStyle: { fontSize: 15 },
+          },
+          legend: { type: "scroll", top: 30 },
+          tooltip: {
+            trigger: "axis",
+            formatter: (ps) => {
+              const r = timelineRows[ps[0].dataIndex];
+              return (
+                esc(r.trace_id) +
+                "<br>" +
+                esc(r.client_timestamp) +
+                "<br>总 " +
+                num(r.client_ms) +
+                "ms<br>" +
+                ps
+                  .filter((p) => p.value > 0)
+                  .map((p) => esc(TraceCharts.label(p.seriesName)) + " " + num(p.value))
+                  .join("<br>")
+              );
+            },
+          },
+          grid: { top: 90, left: 55, right: 20, bottom: 85 },
+          xAxis: {
+            type: "category",
+            data: rs.map((r) => axisTime(r.client_timestamp)),
+          },
+          yAxis: { type: "value", name: "ms" },
+          dataZoom: [{ type: "inside" }, { type: "slider", bottom: 8 }],
+          series: stageNames.map((name) => ({
+            name,
+            type: "bar",
+            stack: "write",
+            data: rs.map((r) => r.write_breakdown_ms[name] || 0),
+          })),
+        });
+        c.off("click");
+        c.on("click", (p) => {
+          selectTrace(timelineRows[p.dataIndex]);
+          $("detail").scrollIntoView();
+        });
+      }
+      function publishWrRows(rows) {
+        return rows.filter(r => r.wr_applicable === true ||
+          (r.wr_applicable == null &&
+            (['SET','MSET','PUBLISH'].includes(r.operation) ||
+              (r.operation !== 'CREATE' && (r.write_wr_events || []).length > 0))));
+      }
+      function writeWrEvents(rows) {
+        return rows.flatMap(r => (r.write_wr_events || []).map(e => ({...e,
+          trace_id:r.trace_id, sender:e.source_worker || e.src_addr || '发送端未观测',
+          target:e.target_worker_mapped || e.target_addr || '目标未观测',
+          completed:/\[OK\]/.test(e.status || '')
+        })));
+      }
+      function wrPercentile(values, q) {
+        const a=values.filter(v=>typeof v==='number' && Number.isFinite(v)).sort((a,b)=>a-b);
+        if(!a.length)return null;
+        const i=(a.length-1)*q, lo=Math.floor(i), hi=Math.ceil(i);
+        return a[lo]+(a[hi]-a[lo])*(i-lo);
+      }
+      function wrStats(events) {
+        const done=events.filter(e=>e.completed), durations=done.map(e=>e.total_ms);
+        return {count:events.length,traces:new Set(events.map(e=>e.trace_id)).size,
+          completed:done.length,other:events.length-done.length,
+          slow:done.filter(e=>e.total_ms>1.5).length,
+          p50:wrPercentile(durations,.5),p90:wrPercentile(durations,.9),
+          max:wrPercentile(durations,1),wait:wrPercentile(done.map(e=>e.wait_completion_ms),.9)};
+      }
+      function wrGroups(events, key) {
+        const groups=new Map();for(const e of events){const k=key(e);if(k===null)continue;
+          if(!groups.has(k))groups.set(k,[]);groups.get(k).push(e);}
+        return [...groups].map(([key,events])=>({key,...wrStats(events)}));
+      }
+      function wrLocalBucket(e, width) {
+        if(!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?$/.test(e.timestamp||''))return null;
+        const ms=Date.parse(e.timestamp+'Z');if(!Number.isFinite(ms))return null;
+        return new Date(Math.floor(ms/width)*width).toISOString().replace('Z','').slice(11);
+      }
+      function writePhaseSummary(rows) {
+        const scopes=[['SET',['SET','MSET'],['Create','Copy','Publish']],
+          ['CREATE',['CREATE'],['Create']],['PUBLISH',['PUBLISH'],['Publish']]];
+        const result=[];
+        for(const [scope,operations,phases] of scopes){
+          const matches=rows.filter(row=>operations.includes(row.operation));
+          if(!matches.length)continue;
+          for(const phase of phases){
+            const observations=matches.map(row=>row.write_phase_observation?.[phase]);
+            const durations=observations.filter(x=>x?.state==='observed'&&Number.isFinite(x.parent_ms))
+              .map(x=>x.parent_ms).sort((a,b)=>a-b);
+            const observed=observations.filter(x=>x?.state==='observed').length;
+            const unavailable=observations.filter(x=>x?.state==='model_unavailable').length;
+            const rpc=phase==='Copy'?null:matches.flatMap(row=>row.rpc_analysis?.calls||[])
+              .filter(call=>{
+                const method=call.method?.split('.').at(-1).toLowerCase()||'';
+                return method.includes(phase.toLowerCase())&&!method.includes('meta');
+              });
+            result.push({name:scope+' · '+phase,traces:matches.length,observed,
+              unobserved:matches.length-observed-unavailable,unavailable,rpc_calls:rpc?.length??null,
+              rpc_failed:rpc?.filter(call=>call.cntl_failed||call.cntl_error_code).length??null,
+              p90_ms:durations.length?durations[Math.min(durations.length-1,Math.floor(durations.length*.9))]:null});
+          }
+        }
+        return result;
+      }
+      function writeRpcSummary(rows) {
+        const grouped=new Map();
+        for(const row of rows){
+          const analysis=row.rpc_analysis||{},calls=analysis.calls||[];
+          const windows=(analysis.summary_windows||[]).filter(window=>!calls.some(call=>
+            window.method_hint&&String(call.method||'').split('.').at(-1)===window.method_hint&&
+            JSON.stringify(call.owner)===JSON.stringify(window.owner)&&
+            Number.isFinite(call.fields_us?.e2e_us)));
+          for(const item of [...calls.map(call=>({item:call,kind:'详细调用',
+              name:call.method||'方法未观测',value:call.fields_us?.e2e_us/1000})),
+            ...windows.map(window=>({item:window,kind:'汇总窗口',
+              name:window.stage_label||window.stage_key||'阶段未命名',value:window.total_ms}))]){
+            const key=item.kind+'|'+item.name;
+            if(!grouped.has(key))grouped.set(key,{key,name:item.name,kind:item.kind,
+              traceIds:new Set(),count:0,failed:0,values:[]});
+            const group=grouped.get(key);group.traceIds.add(row.trace_id);group.count++;
+            if(item.kind==='详细调用'&&(item.item.cntl_failed||item.item.cntl_error_code))group.failed++;
+            if(Number.isFinite(item.value)&&item.value>=0)group.values.push(item.value);
+          }
+        }
+        return [...grouped.values()].map(group=>({...group,traces:group.traceIds.size,
+          values:group.values.sort((a,b)=>a-b)})).sort((a,b)=>b.traces-a.traces||a.key.localeCompare(b.key));
+      }
+      function renderWritePhases() {
+        const summary=writePhaseSummary(phaseCoverageRows(filtered,MODEL.write_phase_schema_version));
+        const columns=[
+          {key:'name',title:'接口 / 阶段',value:r=>r.name},
+          {key:'traces',title:'Trace 数',value:r=>r.traces},
+          {key:'observed',title:'父窗口已观测',value:r=>r.observed},
+          {key:'unobserved',title:'未观测',value:r=>r.unobserved},
+          {key:'rpc',title:'RPC调用 / 失败',value:r=>r.rpc_calls===null?'不适用':`${r.rpc_calls} / ${r.rpc_failed}`},
+          {key:'p90',title:'父窗口 P90 ms',value:r=>r.p90_ms,render:r=>num(r.p90_ms)}];
+        if(MODEL.write_phase_schema_version!==2)
+          columns.splice(4,0,{key:'unavailable',title:'模型缺字段',value:r=>r.unavailable});
+        table('write-phase-table',summary,columns);
+        const methods=writeRpcSummary(filtered);
+        const choice=$('rpc-method-choice'),before=choice.value;
+        const shortName=name=>name.split('.').at(-1);
+        choice.innerHTML='<option value="">全部 RPC 方法 / 阶段</option>'+methods.map(x=>
+          `<option value="${esc(x.key)}">${esc(shortName(x.name))} · ${x.kind}</option>`).join('');
+        choice.value=methods.some(x=>x.key===before)?before:'';
+        const visible=methods.filter(x=>!choice.value||x.key===choice.value);
+        const labels=visible.map(x=>shortName(x.name)+' · '+(x.kind==='详细调用'?'调用':'窗口'));
+        const height=Math.max(390,150+visible.length*42)+'px';
+        for(const id of ['write-rpc-method-chart','write-rpc-histogram-chart'])$(id).style.height=height;
+        const base={tooltip:{trigger:'axis',confine:true},legend:{top:5,type:'scroll',left:8,right:8},
+          grid:{left:150,right:25,top:68,bottom:45,containLabel:false},
+          xAxis:{type:'value',name:'观测数',minInterval:1},
+          yAxis:{type:'category',inverse:true,data:labels,axisLabel:{width:135,overflow:'truncate'}},
+          graphic:visible.length?[]:[{type:'text',left:'center',top:'middle',
+            style:{text:'当前范围未采集 RPC 调用或阶段汇总窗口',fill:'#667085',font:'13px Microsoft YaHei'}}]};
+        chart('write-rpc-method-chart',{...base,series:[
+          {name:'唯一 Trace',type:'bar',data:visible.map(x=>x.traces),itemStyle:{color:'#2563eb'}},
+          {name:'详细调用',type:'bar',data:visible.map(x=>x.kind==='详细调用'?x.count:0),itemStyle:{color:'#e27828'}},
+          {name:'汇总窗口',type:'bar',data:visible.map(x=>x.kind==='汇总窗口'?x.count:0),itemStyle:{color:'#7c3aed'}}]});
+        const bins=['<2ms','2–5ms','5–10ms','10–20ms','≥20ms'];
+        const histogram=visible.map(x=>{const counts=[0,0,0,0,0];
+          for(const value of x.values)counts[value<2?0:value<5?1:value<10?2:value<20?3:4]++;
+          return counts;});
+        chart('write-rpc-histogram-chart',{...base,series:bins.map((name,i)=>({name,type:'bar',stack:'latency',
+          data:histogram.map(counts=>counts[i]),itemStyle:{color:['#2563eb','#0f9d86','#e27828','#7c3aed','#b42318'][i]}}))});
+        const percentile=(values,p)=>values.length?values[Math.min(values.length-1,Math.floor(values.length*p))]:null;
+        table('write-rpc-method-table',visible,[
+          {key:'method',title:'RPC 方法 / 阶段',value:r=>r.name,render:r=>`<span title="${esc(r.name)}">${esc(shortName(r.name))}</span>`},
+          {key:'kind',title:'观测口径',value:r=>r.kind},
+          {key:'traces',title:'Trace 数',value:r=>r.traces},
+          {key:'count',title:'调用 / 窗口数',value:r=>r.count},
+          {key:'failed',title:'失败调用',value:r=>r.kind==='详细调用'?r.failed:'未观测'},
+          {key:'p50',title:'P50 ms',value:r=>percentile(r.values,.5),render:r=>r.values.length?num(percentile(r.values,.5)):'未观测'},
+          {key:'p90',title:'P90 ms',value:r=>percentile(r.values,.9),render:r=>r.values.length?num(percentile(r.values,.9)):'未观测'},
+          {key:'max',title:'最大 ms',value:r=>r.values.at(-1),render:r=>r.values.length?num(r.values.at(-1)):'未观测'}]);
+      }
+      function renderWriteWr() {
+        const candidates=publishWrRows(filtered),all=writeWrEvents(candidates);
+        for(const [id,key,title] of [['wr-target','target','全部目标 Worker / 地址'],['wr-sender','sender','全部发送端']]){
+          const choice=$(id).value,values=[...new Set(all.map(e=>e[key]))].sort();
+          $(id).innerHTML='<option value="">'+title+'</option>'+values.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
+          $(id).value=values.includes(choice)?choice:'';
+        }
+        const target=$('wr-target').value,sender=$('wr-sender').value;
+        const events=scopedWrEvents();
+        const summary=wrStats(events),missing=candidates.filter(r=>!(r.write_wr_events||[]).length);
+        const completedIds=new Set(events.filter(e=>e.completed).map(e=>e.trace_id));
+        const failedAfterWr=candidates.filter(r=>r.client_status_failed&&completedIds.has(r.trace_id)).length;
+        const fmt=v=>v==null?'未观测':num(v)+'ms';
+        $('wr-summary').innerHTML=[
+          ['WR 适用 Trace',candidates.length],['未观测 WR',missing.length],
+          ['WR 事件',summary.count],['成功慢 WR',summary.slow],
+          ['成功 WR P90',fmt(summary.p90)],['成功 WR 最大',fmt(summary.max)]
+        ].map(([label,value])=>`<div><span>${label}</span><b>${value}</b></div>`).join('')+
+          `<details><summary>覆盖与状态口径</summary>筛选 ${filtered.length} 条写入 Trace；未观测 WR 中最终失败 ${missing.filter(r=>r.client_status_failed).length} 条。端点筛选后涉及 ${summary.traces} 条 Trace；成功完成 ${summary.completed}，非成功或状态未明 ${summary.other}；成功 WR 后请求最终失败 ${failedAfterWr} 条。无有效发送端本地时间 ${events.filter(e=>wrLocalBucket(e,1000)===null).length} 条，不进入时间轴。</details>`;
+        function metricChart(id,groups,axisName,countLabel='WR数') {
+          const narrow=window.innerWidth<650;
+          const zoomed=groups.length>(narrow?8:24);
+          const windowSize=narrow?8:40;
+          const windowPercent=Math.min(100,100*windowSize/Math.max(groups.length,1));
+          const start=id==='wr-time-chart'?Math.max(0,100-windowPercent):0;
+          const end=Math.min(100,start+windowPercent);
+          chart(id,{tooltip:{trigger:'axis'},legend:{top:0},grid:{left:55,right:60,top:50,bottom:zoomed?125:90},
+            dataZoom:zoomed?[{type:'inside',start,end},{type:'slider',bottom:20,start,end}]:[],
+            xAxis:{type:'category',data:groups.map(g=>g.key),name:narrow?'':axisName,
+              axisLabel:{interval:'auto',hideOverlap:true,rotate:groups.length>8?35:0,width:115,overflow:'truncate',formatter:v=>v.length>22?'…'+v.slice(-22):v}},
+            yAxis:[{type:'value',name:countLabel,minInterval:1},{type:'value',name:'成功WR ms'}],
+            series:[{name:countLabel,type:'bar',data:groups.map(g=>g.count)},
+              {name:'成功WR P90',type:'line',yAxisIndex:1,connectNulls:false,data:groups.map(g=>g.p90)},
+              {name:'成功 WR 最大',type:'line',yAxisIndex:1,connectNulls:false,
+                itemStyle:{color:'#b42318'},lineStyle:{color:'#b42318',type:'dotted'},symbol:'triangle',
+                data:groups.map(g=>g.max)}]});
+        }
+        const perTrace=wrGroups(events,e=>e.trace_id),dist=[];
+        const counts=[...new Set(perTrace.map(t=>t.count))].sort((a,b)=>a-b);
+        if(!target&&!sender&&missing.length)dist.push({key:'0 WR（未观测）',count:missing.length,p90:null,max:null});
+        for(const n of counts){const traces=perTrace.filter(t=>t.count===n);dist.push({key:n+' WR',count:traces.length,
+          p90:wrPercentile(traces.map(t=>t.max),.9),max:wrPercentile(traces.map(t=>t.max),1)});}
+        metricChart('wr-count-chart',dist,'每Trace观测WR数','Trace数');
+        const times=wrGroups(events,e=>wrLocalBucket(e,Number($('wr-bucket').value))).sort((a,b)=>a.key.localeCompare(b.key));
+        const workers=wrGroups(events,e=>e.target).sort((a,b)=>b.slow-a.slow||b.count-a.count);
+        metricChart('wr-time-chart',times,'发送端本地桶');metricChart('wr-worker-chart',workers,'目标Worker');
+        const columns=[{key:'count',title:'WR数',value:r=>r.count},
+          {key:'traces',title:'Trace数',value:r=>r.traces},
+          {key:'slow',title:'慢WR',value:r=>r.slow},
+          {key:'p90',title:'P90 ms',value:r=>r.p90,render:r=>num(r.p90)},
+          {key:'max',title:'最大 ms',value:r=>r.max,render:r=>num(r.max)}];
+        table('wr-time-table',times,[{key:'key',title:'本地时间桶',value:r=>r.key},...columns]);
+        table('wr-worker-table',workers,[{key:'key',title:'目标 IP',value:r=>r.key,
+          render:r=>`<span title="${esc(r.key)}">${esc(String(r.key).replace(/:\d+$/,''))}</span>`},...columns]);
+        table('wr-events-table',[...events].sort((a,b)=>(b.total_ms??-1)-(a.total_ms??-1)),[
+          {key:'timestamp',title:'发送端本地时间',value:e=>e.timestamp||'未观测'},
+          {key:'trace_id',title:'Trace（点击查看证据）',value:e=>e.trace_id},
+          {key:'request_id',title:'WR ID / 分片',value:e=>(e.request_id||'未观测')+' / '+(e.write_chunk_index||'?')+'/'+(e.write_chunk_count||'?')},
+          {key:'sender',title:'发送端',value:e=>e.sender},{key:'target',title:'目标Worker / 地址',value:e=>e.target},
+          {key:'total_ms',title:'Elapsed ms',value:e=>e.total_ms,render:e=>fmt(e.total_ms)},
+          {key:'wait',title:'wait ms',value:e=>e.wait_completion_ms,render:e=>fmt(e.wait_completion_ms)},
+          {key:'status',title:'WR状态',value:e=>e.status||'未观测'}
+        ],e=>{const row=filtered.find(r=>r.trace_id===e.trace_id);if(row){selectTrace(row);$('detail').scrollIntoView();}});
+      }
+
+      function worker() {
+        const pick = $("worker-choice").value,
+          hosts = [
+            ...new Set(filtered.flatMap((r) => r.worker_observers)),
+          ].filter((h) => !pick || h === pick),
+          rs = hosts.map((host) => {
+            const rows = filtered.filter((r) =>
+                r.worker_observers.includes(host),
+              ),
+              ev = rows
+                .flatMap((r) => r.worker_events)
+                .filter((e) => e.host === host);
+            return {
+              host,
+              count: rows.length,
+              fail: rows.filter((r) => r.client_status_failed).length,
+              p90: p90(rows),
+              events: ev.length,
+              max: ev.length ? Math.max(...ev.map((e) => e.ms)) : null,
+            };
+          });
+        bars(
+          "worker-chart",
+          "图 5-1 Worker 关联 Trace 数",
+          rs.map((r) => r.host),
+          rs.map((r) => r.count),
+          "条",
+        );
+        table("worker-table", rs, [
+          { key: "host", title: "Worker日志节点", value: (r) => r.host },
+          { key: "count", title: "关联Trace", value: (r) => r.count },
+          { key: "fail", title: "关联Client失败", value: (r) => r.fail },
+          {
+            key: "p90",
+            title: "Client样本P90 ms",
+            value: (r) => r.p90,
+            render: (r) => lat(r.p90),
+          },
+          { key: "events", title: "Worker接口记录", value: (r) => r.events },
+          {
+            key: "max",
+            title: "Worker接口最大 ms",
+            value: (r) => r.max,
+            render: (r) => lat(r.max),
+          },
+        ]);
+        $("worker-time").textContent = "";
+        const buckets = {};
+        timedWorkerEvents(filtered, pick).forEach((e) => {
+          const k = e.timestamp.slice(0, 19);
+          (buckets[k] ??= []).push(e);
+        });
+        const keys = Object.keys(buckets).sort();
+        if (!keys.length) {
+          if(typeof ReportRegistry!=="undefined")ReportRegistry.record("worker-time",{state:"unavailable",reason:"worker_access_not_observed",matchedCount:0});
+          charts.get("worker-time")?.dispose();
+          charts.delete("worker-time");
+          $("worker-time").textContent =
+            "当前范围未观测到Worker Create/Publish access完成记录";
+          return;
+        }
+        const bucketMax = events => events.reduce((max, event) => Math.max(max, event.ms), -Infinity);
+        chart("worker-time", {
+          title: {
+            text: "图 5-2 " + (pick || "全部Worker") + " · 本地1秒桶",
+            left: "center",
+            textStyle: { fontSize: 14 },
+          },
+          tooltip: { trigger: "axis", formatter: points => {
+            const key = keys[points[0].dataIndex], events = buckets[key];
+            return `${esc(key)} · ${esc(pick || '全部Worker')}<br>采样完成 ${events.length} 条 · Worker ${new Set(events.map(e=>e.host)).size} 个<br>接口最大耗时 ${num(bucketMax(events))} ms`;
+          } },
+          legend: { top: 30 },
+          grid: { top: 75, bottom: 75 },
+          xAxis: { type: "category", data: keys.map((k) => k.slice(11)) },
+          yAxis: [
+            { type: "value", name: "ms" },
+            { type: "value", name: "记录数", minInterval: 1 },
+          ],
+          dataZoom: [{ type: "slider" }],
+          series: [
+            {
+              name: "接口最大耗时",
+              type: "line",
+              data: keys.map((k) => bucketMax(buckets[k])),
+            },
+            {
+              name: "采样完成数",
+              type: "bar",
+              yAxisIndex: 1,
+              data: keys.map((k) => buckets[k].length),
+            },
+          ],
+        });
+      }
+      function traceTable() {
+        const rs = [...traceFiltered],
+          order = $("order").value;
+        rs.sort((a, b) =>
+          order === "time"
+            ? a.client_timestamp.localeCompare(b.client_timestamp)
+            : order === "asc"
+              ? a.client_ms - b.client_ms
+              : b.client_ms - a.client_ms,
+        );
+        tableState["trace-table"] = { page: 1, key: null, asc: false };
+        table(
+          "trace-table",
+          rs,
+          [
+            {
+              key: "trace",
+              title: "Trace ID · 点击详情",
+              value: (r) => r.trace_id,
+            },
+            { key: "operation", title: "接口", value: (r) => r.operation },
+            {
+              key: "time",
+              title: "Client时间",
+              value: (r) => r.client_timestamp.slice(11),
+              secondary: true,
+            },
+            {
+              key: "total",
+              title: "总时延 ms",
+              value: (r) => r.client_ms,
+              render: (r) => lat(r.client_ms),
+            },
+            {
+              key: "stage",
+              title: "主耗时窗口",
+              value: (r) => TraceCharts.label(r.write_primary_stage),
+            },
+            { key: "status", title: "Client状态", value: (r) => r.status },
+            {
+              key: "issue",
+              title: "问题证据",
+              value: (r) => r.issues.join("；"),
+              secondary: true,
+            },
+          ],
+          selectTrace,
+        );
+      }
+      function writeWrPhaseLabel(row) {
+        const phase=row.wr_phase_attribution?.phase;
+        return phase==='Copy'||phase==='Publish'?phase:'阶段未确认';
+      }
+      function writeWrWindows(event) {
+        const points = event.trace_us || {};
+        const interval = (start, end) =>
+          Number.isFinite(points[start]) && Number.isFinite(points[end]) &&
+          points[end] >= points[start]
+            ? Math.round((points[end] - points[start]) * 1000) / 1000000
+            : null;
+        const measured = value => Number.isFinite(value) && value >= 0 ? value : null;
+        return {
+          elapsed: measured(event.total_ms),
+          wait: measured(event.wait_completion_ms),
+          sleep: interval('sleep_start', 'sleep_end'),
+          poll: interval('poll_begin', 'poll_end'),
+          notify_awake: interval('notify', 'awake'),
+          awake_observed: interval('awake', 'observed'),
+        };
+      }
+      function writePhaseCards(row,schema) {
+        const urma=Number.isFinite(row.write_urma_ms)&&row.write_urma_ms>0
+          ? `<div><b>URMA通信</b><strong>已观测</strong><span>${num(row.write_urma_ms)} ms；不据此推断 WR 所在阶段</span></div>`:'';
+        if(schema!==2){
+          return `<div><b>阶段计时</b><strong>旧模型缺少阶段字段</strong><span>需重新计算写入模型；不能当作日志未观测</span></div>${urma}`+
+            '<div><b>WR 归属</b><strong>旧模型缺少调用点字段</strong><span>需重新计算写入模型</span></div>';
+        }
+        const names=['Create','Copy','Publish'];
+        const observed=names.filter(name=>row.write_phase_observation?.[name]?.state==='observed');
+        const missing=names.filter(name=>row.write_phase_observation?.[name]?.state==='unobserved');
+        const cards=observed.map(name=>`<div><b>${name}</b><strong>已观测</strong><span>${row.write_phase_observation[name].parent_ms==null?'耗时未观测':num(row.write_phase_observation[name].parent_ms)+' ms'}</span></div>`);
+        if(missing.length)cards.push(`<div><b>未观测父窗口</b><strong>${missing.join('、')}</strong><span>日志未采集这几个阶段的父窗口计时</span></div>`);
+        const phase=row.wr_phase_attribution?.phase;
+        const label=phase==='Copy'||phase==='Publish'?phase:phase==='not_applicable'?'不适用':'阶段未确认';
+        const basis=phase==='Copy'||phase==='Publish'?(row.wr_phase_attribution?.basis||'调用点证据未观测'):
+          phase==='not_applicable'?'独立 CREATE 不发生 WR':'发送调用点未观测；不能仅凭 URMA 耗时归入 Copy 或 Publish';
+        return cards.join('')+urma+`<div><b>WR 归属</b><strong>${esc(label)}</strong><span>${esc(basis)}</span></div>`;
+      }
+      function selectTrace(r) {
+        selected = r;
+        $("selected-title").textContent =
+          r.trace_id +
+          " · " +
+          r.operation +
+          " · 总时延 " +
+          num(r.client_ms) +
+          "ms · Client状态 " +
+          r.status;
+        $('phase-coverage').innerHTML = writePhaseCards(r,MODEL.write_phase_schema_version);
+        const primary = r.write_primary_stage;
+        let advice = MODEL.rules
+          .filter((x) => r.issues.includes(x[0]))
+          .map((x) => x[2]);
+        if (r.issues.includes("URMA传输窗口慢"))
+          advice.push(
+            "优先核对同次逻辑Write的多个WR、最慢完成与明确调度字段；不把两个异步WR耗时直接相加。",
+          );
+        $("diagnosis").innerHTML =
+          `<p><b>Worker 日志覆盖：</b>${esc(r.worker_log_assessment?.message || "旧模型缺少采集覆盖判定，请重新生成分析模型")}</p><p>主要窗口：<b>${esc(TraceCharts.label(primary))} ${num(r.write_breakdown_ms[primary])}ms</b>；证据标签：${r.issues.map((i) => `<span class="pill">${esc(i)}</span>`).join("")}</p><p>${esc(r.error_root_causes.length ? "明确错误点："+r.error_root_causes.join("；") : advice.join(" ") || "已定位到上述调用/处理窗口；窗口内部步骤未观测，不能据此断言CPU、锁或物理网络故障。")}</p><p>${esc(r.refinement_notes.join(" "))}</p><details><summary>本Trace全部RPC方法与计时依据</summary>${(r.rpc_analysis?.calls||[]).map(c=>`<p><b>${esc(c.method)}</b> · 网络/通信 ${c.network_ms==null?'未观测/无效':num(c.network_ms)+'ms'} · ${c.selected?'计入Client串行预算':esc(c.selection_reason)}</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(JSON.stringify({owner:c.owner,fields_us:c.fields_us,clocks_ns:c.clocks_ns,cntl_error_code:c.cntl_error_code,source:c.source}))}</pre>`).join('')||'无结构化RPC记录，需重新运行triage补齐；不等于没有RPC耗时。'}</details><p class="note">Client观测：${esc(r.client_observers.join(",") || "未观测")}；Worker日志节点：${esc(r.worker_observers.join(",") || "未观测")}；RPC明确目标：${esc(r.rpc_targets.join(",") || "未观测")}。URMA依据：${esc(r.write_data_basis)}。</p><p class="gap">Client阶段计时差额 ${num(r.write_breakdown_ms["未解释残差"])}ms 是未被现有互斥阶段覆盖的差额；Create/Publish其他是父窗口内部未细分。失败RPC的全零server/network字段不代表网络为0。</p>`;
+        const timeoutAudit=r.urma_timeout_accounting;
+        if(timeoutAudit?.event_count){const f=v=>v==null?'未观测':num(v)+'ms';
+          $('diagnosis').innerHTML+=`<p class="note"><b>URMA Timeout 耗时核对：</b>原始事件 ${timeoutAudit.event_count} 条；超时区间并集 ${f(timeoutAudit.timeout_path_ms)}；含完成WR的URMA路径 ${f(timeoutAudit.urma_path_ms)}；URMA阶段已计入 ${f(timeoutAudit.allocated_ms)}，本次补回 ${f(timeoutAudit.added_ms)}，未纳入差额 ${f(timeoutAudit.unallocated_ms)}。${esc(timeoutAudit.basis)}</p>`;}
+        $("phases").innerHTML = Object.entries(r.write_breakdown_ms)
+          .map(([k, v]) => `<tr><td>${esc(TraceCharts.label(k))}</td><td>${lat(v)}</td></tr>`)
+          .join("");
+        const rpcPhaseLines=['Create','Publish'].map(stage=>{
+          const evidence=r.write_rpc_phase_evidence?.[stage];
+          if(evidence?.state!=='observed')return `<p>${stage} RPC 分段：未观测</p>`;
+          return `<p><b>${stage} RPC 最长完整调用</b> · E2E ${num(evidence.e2e_ms)}ms · 网络残差 ${num(evidence.network_ms)}ms · 排队 ${num(evidence.queue_ms)}ms · 框架残差 ${num(evidence.framework_ms)}ms · 日志 #${evidence.source_ref.index+1}</p>`;
+        }).join('');
+        $("parent-evidence").innerHTML =
+          "<p>以下是旁证，可能包含Breakdown子阶段或晚于Client完成；不与左侧重复相加。</p>" +
+          rpcPhaseLines +
+          r.observed_parents
+            .map(
+              (p) => `<p>${esc(p.stage)} Client RPC父窗口：${lat(p.ms)}ms</p>`,
+            )
+            .join("") +
+          r.worker_events
+            .map(
+              (e) =>
+                `<p>${esc(e.host)} · ${esc(e.operation)} · ${esc(e.timestamp.slice(11))} · ${lat(e.ms)}ms · 状态 ${e.status}</p>`,
+            )
+            .join("") +
+          (!r.observed_parents.length && !r.worker_events.length
+            ? "<p>未观测</p>"
+            : "");
+        const wr=r.wr_applicable===false?[]:(r.write_wr_events||[]);
+        const wrRows=[['Elapsed','elapsed'],['condition wait','wait'],['sleep','sleep'],
+          ['CQ poll','poll'],['通知→唤醒','notify_awake'],['唤醒→观察','awake_observed']];
+        const labels=[`${r.operation} · Client`,...wr.flatMap((event,index)=>
+          wrRows.map(([,key])=>`WR ${event.write_chunk_index||index+1}/${event.write_chunk_count||'?'} · ${key.replace('_awake','').replace('awake_observed','observe')}`))];
+        const windows=wr.map(writeWrWindows),presentStages=stageNames.filter(name=>r.write_breakdown_ms[name]>0);
+        const metrics=[['WR Elapsed','elapsed','#a65c1b'],['condition wait','wait','#0f8f9a'],
+          ['sleep','sleep','#7a53a4'],['CQ poll','poll','#2476aa'],
+          ['通知→唤醒','notify_awake','#19846e'],['唤醒→观察','awake_observed','#bd507e']];
+        const series=presentStages.map(name=>({name,type:'bar',stack:'client',barMaxWidth:24,
+          itemStyle:{color:TraceCharts.color(name)||colors[stageNames.indexOf(name)%colors.length]},
+          data:labels.map((_,index)=>index===0?r.write_breakdown_ms[name]:null)}));
+        for(const [name,key,color] of metrics){
+          if(!windows.some(window=>window[key]!=null))continue;
+          series.push({name,type:'bar',barMaxWidth:24,itemStyle:{color},
+            data:labels.map((_,index)=>index>0&&(index-1)%wrRows.length===wrRows.findIndex(row=>row[1]===key)
+              ?windows[Math.floor((index-1)/wrRows.length)][key]:null)});
+        }
+        $('selected-chart').style.height=Math.max(330,170+labels.length*31)+'px';
+        chart("selected-chart", {
+          tooltip:{trigger:'item',confine:true,formatter:p=>{
+            const event=p.dataIndex>0?wr[Math.floor((p.dataIndex-1)/wrRows.length)]:null;
+            return `${esc(labels[p.dataIndex])}<br>${esc(p.seriesName)}：${num(p.value)} ms`+
+              (event?`<br>WR ${esc(event.request_id||'未观测')} · ${esc(event.status||'状态未观测')}`:'');
+          }},
+          legend:{type:'scroll',top:8,textStyle:{fontSize:12}},
+          grid:{top:70,left:window.innerWidth<700?135:215,right:35,bottom:50,containLabel:false},
+          xAxis:{type:'value',name:'ms'},
+          yAxis:{type:'category',inverse:true,data:labels,axisLabel:{width:window.innerWidth<700?125:205,overflow:'truncate'}},
+          series,
+          graphic:series.length?[]:[{type:'text',left:'center',top:'middle',style:{text:'阶段与 WR 时间点未观测',fill:'#667085',font:'13px Microsoft YaHei'}}],
+        });
+        renderLogs(r);
+      }
+      function highlight(text) {
+        const isUB = /URMA|urma_/i.test(text),
+          threshold = isUB ? 1.5 : 5;
+        const regex =
+          /(?:\b(?:costUs|[\w.]+_us|[\w.]+LatencyUs)\s*[:=]\s*\d+(?:\.\d+)?|\b(?:client|worker)\.[\w.]+\s*:\s*\d+|\b\d+(?:\.\d+)?\s*(?:ms|us)\b|\b(?:urma_request_id|urma_inflight_wr_count|srcChipInflight|inflightRemoteGet|writeChunkIndex|writeChunkCount|cpuid)\b|Cannot assign requested address|fresh_extent_unavailable|RPC deadline exceeded|URMA_ELAPSED_TOTAL|\bERROR\b)/g;
+        let out = "",
+          last = 0;
+        for (const m of text.matchAll(regex)) {
+          out += esc(text.slice(last, m.index));
+          const token = m[0],
+            n = token.match(/(?:[:=]\s*|^)(\d+(?:\.\d+)?)/),
+            hasUnits =
+              /(?:ms|us)\b/.test(token) ||
+              /costUs|_us|LatencyUs|^(client|worker)\./.test(token);
+          if (/deadline_us|timestamp_us/.test(token)) {
+            out += esc(token);
+          } else if (n && hasUnits) {
+            const ms = Number(n[1]) / (/ms\b/.test(token) ? 1 : 1000);
+            out +=
+              ms > threshold
+                ? '<span class="hot">' + esc(token) + "</span>"
+                : esc(token);
+          } else out += '<span class="tag">' + esc(token) + "</span>";
+          last = m.index + token.length;
+        }
+        return TraceLogFields.decorate(out + esc(text.slice(last)));
+      }
+      function renderLogs(r) {
+        $("truncation").textContent =
+          `保留证据 ${r.evidence.length} 行；triage截断计数 ${r.dropped_evidence || 0}。` +
+          (r.dropped_evidence
+            ? "更多上下文请下载原始包。"
+            : "仍以原始包为完整性依据。");
+        const render=()=>TraceEvidenceLogs.render($("logs"),r.evidence_records?.length?r.evidence_records:r.evidence,highlight);
+        if(typeof TraceEvidenceLogs==='undefined')document.addEventListener('DOMContentLoaded',render,{once:true});else render();
+      }
+
+      let searchTimer;
+      function immediateUpdate() {
+        clearTimeout(searchTimer);
+        applyTraceFilters();
+      }
+      $("search").oninput = () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(applyTraceFilters, 150);
+      };
+      [
+        "operation",
+        "stage",
+        "issue",
+        "status",
+        "band",
+        "client",
+        "segment",
+      ].forEach((id) => ($(id).oninput = immediateUpdate));
+      $("reset").onclick = () => {
+        clearTimeout(searchTimer);
+        [
+          "search",
+          "operation",
+          "stage",
+          "issue",
+          "status",
+          "band",
+          "client",
+          "segment",
+        ].forEach((id) => ($(id).value = ""));
+        applyTraceFilters();
+      };
+      $("worker-choice").onchange = worker;
+      $('rpc-method-choice').onchange = renderWritePhases;
+      $("write-top-n").onchange = update;
+      $("order").onchange = traceTable;
+      $("download-model").onclick = () =>
+        download("write.refined.analysis.json", JSON.stringify(MODEL));
+      $("download-filtered").onclick = () =>
+        download(
+          "write-filtered-evidence.json",
+          JSON.stringify(
+            { scope: "triage-retained-evidence", rows: traceFiltered },
+            null,
+            2,
+          ),
+        );
+      $("download-one").onclick = () => {
+        if (selected)
+          download(
+            selected.trace_id + ".log",
+            "triage保留证据；dropped_evidence=" +
+              selected.dropped_evidence +
+              "\n" +
+              selected.evidence.join("\n"),
+            "text/plain",
+          );
+      };
+      window.addEventListener("resize", () =>
+        charts.forEach((c) => c.resize()),
+      );
+      update();
+      const originalWorkerRender = worker;
+      worker = function () {
+        const c = charts.get("worker-time");
+        if (c) {
+          c.dispose();
+          charts.delete("worker-time");
+        }
+        originalWorkerRender();
+      };
+      $("worker-choice").onchange = worker;
+      for(const id of ["wr-target","wr-sender","wr-bucket"])$(id).onchange=renderWriteWr;
+      const navItems = window.REPORT_COMPONENT_REGISTRY.navigation.map(item=>[item.id,item.title,item.sub]);
+      const side = document.createElement("aside");
+      side.id = "write-nav";
+      side.setAttribute("aria-label", "写入诊断导航");
+      side.innerHTML =
+        '<details open><summary>写入瓶颈诊断</summary><div class="nav-items">' +
+        navItems
+          .map(
+            ([id, label, sub]) =>
+              `<a href="#${id}" class="${sub ? "sub" : ""}">${esc(label)}</a>`,
+          )
+          .join("") +
+        "</div></details>";
+      document.body.prepend(side);
+      for (const [id, label] of [
+        ["time-table", "表 2-1 Client时间分段与主瓶颈"],
+        ["worker-table", "表 5-1 Worker 关联明细"],
+        ["trace-table", "表 6-1 写入 Trace"],
+      ]) {
+        const h = document.createElement("h3");
+        h.className = "table-caption";
+        h.textContent = label;
+        $(id).before(h);
+      }
+      const phaseCaption = $("phases").closest("table").createCaption();
+      phaseCaption.id = "phase-table-caption";
+      phaseCaption.className = "table-caption";
+      phaseCaption.textContent = "表 6-2 互斥阶段明细";
+      const parentCaption = $("parent-evidence").previousElementSibling;
+      parentCaption.id = "parent-caption";
+      parentCaption.textContent = "旁证 6-3 RPC父窗口 / Worker接口";
+      document.querySelector("main>section:last-of-type").id =
+        "write-downloads";
+      const logCaption = document.createElement("h3");
+      logCaption.textContent = "日志框 7-1 分类证据与上下文";
+      $("logs").before(logCaption);
+      if (matchMedia("(max-width:1050px)").matches)
+        side.querySelector("details").open = false;
+      const navLinks = [...side.querySelectorAll("a")];
+      function updateNav() {
+        let active = navLinks[0], nearest = -Infinity;
+        for (const link of navLinks) {
+          const node = $(link.hash.slice(1));
+          const top=node?.getBoundingClientRect().top;
+          if (top < 140 && top >= nearest) {active = link;nearest = top;}
+        }
+        if (scrollY > 0 && scrollY + innerHeight >= document.documentElement.scrollHeight - 2) {
+          active = navLinks[navLinks.length - 1];
+        }
+        navLinks.forEach((link) => {
+          const on = link === active;
+          link.classList.toggle("active", on);
+          if (on) link.setAttribute("aria-current", "location");
+          else link.removeAttribute("aria-current");
+        });
+      }
+      window.addEventListener("scroll", updateNav, { passive: true });
+      window.addEventListener("resize", updateNav);
+      navLinks.forEach((link) =>
+        link.addEventListener("click", () => {
+          if (matchMedia("(max-width:1050px)").matches)
+            side.querySelector("details").open = false;
+        }),
+      );
+      requestAnimationFrame(() => {
+        charts.forEach((c) => c.resize());
+        updateNav();
+      });
+    </script>
+  </body>
+</html>

@@ -41,6 +41,13 @@
 
 ## Test Layout
 
+- Trace 离线分析工具的 Python 回归位于 `tests/scripts/ds_trace_analysis/`，按
+  `ingest/`、`evidence/`、`analysis/`、`pipeline/`、`rendering/`、`delivery/` 分组；
+  `browser/` 放离线页面检查脚本，`fixtures/` 与 `support/` 放共享输入和路径装载。
+  全量入口为 `python3 -m pytest -q tests/scripts/ds_trace_analysis`。不要使用
+  `tests/scripts/test_ds_trace_*.py`，该旧 glob 不会收集子目录。无关的
+  `tests/scripts/test_ds_pr_review_helper.py` 保留原位。
+
 - `tests/kvtest/deploy_client.py collect --sdk-only` skips summary, case configs and kvtest outputs.
   Repeatable `--log-pattern` aliases the shared `--file-pattern` filter; use both switches to
   collect only matching SDK logs through the existing archive transport. Patterns are OR-combined
