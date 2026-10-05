@@ -561,7 +561,7 @@ TEST(PlacementFacadeTest, SurvivingOwnerBatchMatchesPostBatchCommittedRing)
     DS_ASSERT_OK(facade.LocateSurvivingOwnerBatch(keys, batch));
     ASSERT_EQ(batch.items.size(), keys.size());
     for (const auto &item : batch.items) {
-        ASSERT_OK(item.status);
+        ASSERT_TRUE(item.status.IsOk());
         EXPECT_EQ(item.decision.topologyVersion, 2U);
     }
 
