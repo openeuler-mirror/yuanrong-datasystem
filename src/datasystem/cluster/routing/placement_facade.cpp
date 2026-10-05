@@ -10,6 +10,8 @@
 
 #include <utility>
 
+#include "datasystem/cluster/model/topology_diagnostics.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem::cluster {
@@ -60,6 +62,63 @@ Status PlacementFacade::LocateBatch(const std::vector<std::string_view> &placeme
         built.items.emplace_back(BatchPlacementItem{ std::move(item), std::move(status) });
     }
     decision = std::move(built);
+    return Status::OK();
+}
+
+Status PlacementFacade::LocateSurvivingOwner(std::string_view placementKey, PlacementDecision &decision) const
+{
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    RETURN_IF_NOT_OK(snapshots_.Load(snapshot));
+    return LocateSurvivingInSnapshot(*snapshot, placementKey, decision);
+}
+
+Status PlacementFacade::LocateSurvivingOwnerBatch(const std::vector<std::string_view> &placementKeys,
+                                                  BatchPlacementDecision &decision) const
+{
+    CHECK_FAIL_RETURN_STATUS(!placementKeys.empty() && placementKeys.size() <= kMaxBatchKeys, K_INVALID,
+                             "invalid cluster placement batch size");
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    RETURN_IF_NOT_OK(snapshots_.Load(snapshot));
+    BatchPlacementDecision built;
+    built.topologyVersion = snapshot->Version();
+    built.items.reserve(placementKeys.size());
+    for (auto key : placementKeys) {
+        PlacementDecision item;
+        auto status = LocateSurvivingInSnapshot(*snapshot, key, item);
+        built.items.emplace_back(BatchPlacementItem{ std::move(item), std::move(status) });
+    }
+    decision = std::move(built);
+    return Status::OK();
+}
+
+Status PlacementFacade::LocateSurvivingInSnapshot(const TopologySnapshot &snapshot, std::string_view placementKey,
+                                                  PlacementDecision &decision) const
+{
+    const uint32_t token = algorithm_.Hash(placementKey);
+    const Member *owner = nullptr;
+    RETURN_IF_NOT_OK(algorithm_.LocateOwner(snapshot, token, owner));
+    CHECK_FAIL_RETURN_STATUS(owner != nullptr, K_RUNTIME_ERROR, "routing algorithm returned a null owner");
+    const Member *surviving = owner;
+    if (owner->state == MemberState::LEAVING) {
+        surviving = nullptr;
+        RETURN_IF_NOT_OK(algorithm_.LocateProspectiveOwner(snapshot, token, surviving));
+        CHECK_FAIL_RETURN_STATUS(surviving != nullptr, K_RUNTIME_ERROR,
+                                 "routing algorithm returned a null prospective owner");
+        if (surviving->state == MemberState::LEAVING) {
+            surviving = owner;
+        } else {
+            // The prospective ring is token-identical to the post-batch final ring, so the fallback lands new
+            // metadata on its final home; the rule is a pure function of the snapshot so every worker on one
+            // topology version picks the same owner. A PRE_LEAVING target is intentionally accepted: it is the
+            // final-ring owner for this token, and any other choice would strand the metadata off-ring.
+            LOG_EVERY_N(INFO, 100) << "Committed owner " << owner->identity.address << " is LEAVING, reroute new "
+                                   << "metadata " << owner->identity.address << " -> " << surviving->identity.address
+                                   << " (state " << MemberStateName(surviving->state) << ") at topology version "
+                                   << snapshot.Version() << ", key prefix "
+                                   << std::string(placementKey.substr(0, 16));
+        }
+    }
+    decision = { snapshot.Version(), surviving->identity.address };
     return Status::OK();
 }
 
