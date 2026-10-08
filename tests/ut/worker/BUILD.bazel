@@ -198,18 +198,23 @@ ds_cc_test(
 # 元数据恢复管理器测试
 ds_cc_test(
     name = "metadata_recovery_manager_test",
+    linkstatic = True,
     srcs = [
         "object_cache/metadata_recovery_manager_test.cpp",
         "object_cache/test_placement_facade.h",
     ],
     deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker:worker_service_impl",
+        "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/common/shared_memory:common_shared_memory",
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/worker/object_cache:metadata_recovery_manager",
         "//src/datasystem/worker/object_cache:metadata_recovery_selector",
         "//src/datasystem/worker/object_cache:object_kv",
-        "//src/datasystem/worker/object_cache:worker_master_oc_api_header",
+        "//src/datasystem/worker/object_cache:worker_master_oc_api",
+        "//src/datasystem/worker/object_cache:worker_oc_eviction_manager",
         "//tests/ut:ut_common",
         "//tests/ut/worker:test_metadata_route",
     ],
