@@ -49,7 +49,8 @@ public:
     ShmSendBufferOwner(std::shared_ptr<WorkerRpcClient> rpcClient, ShmKey shmId,
                        TransportRequestContext context, std::weak_ptr<ThreadPool> releasePool,
                        std::shared_ptr<void> lifecycleHandle = nullptr,
-                       std::function<bool()> livenessCheck = nullptr);
+                       std::function<bool()> livenessCheck = nullptr,
+                       bool releaseUbHandleBeforeAsync = false);
     ~ShmSendBufferOwner() override;
 
     void Release() override;
@@ -64,7 +65,12 @@ private:
     std::weak_ptr<ThreadPool> releasePool_;
     std::shared_ptr<void> lifecycleHandle_;  // keeps SHM mmap or UB handle alive until release
     std::function<bool()> livenessCheck_;   // optional data-plane liveness gate (e.g. ShmSession::IsAlive)
+    // UB only: once the write result is final, the local pool slot need not wait for DecreaseReference.
+    bool releaseUbHandleBeforeAsync_{ false };
     std::atomic<bool> delayRelease_{ false };
+    // A delayed URMA result keeps the local handle alive regardless of whether metrics are enabled.
+    std::atomic<bool> holding_{ false };
+    std::atomic<bool> holdingMetricCounted_{ false };
     std::atomic<bool> released_{ false };
 };
 

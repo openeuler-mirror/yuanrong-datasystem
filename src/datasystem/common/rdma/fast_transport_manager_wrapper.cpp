@@ -35,7 +35,8 @@ bool NeedDelayReleaseShmUnit(const Status &status)
         return false;
     }
     // RPC retryability does not prove whether a request reached the peer; only definitely-not-sent is safe to release.
-    return IsRetryableRpcError(status) || IsNonRetryableRpcError(status) || status.GetCode() == K_URMA_ERROR;
+    return IsRetryableRpcError(status) || IsNonRetryableRpcError(status) || status.GetCode() == K_URMA_ERROR
+           || status.GetCode() == K_URMA_WAIT_TIMEOUT;
 }
 
 Status GetClientCommUuid(std::string &commId)
