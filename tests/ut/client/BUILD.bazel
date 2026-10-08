@@ -18,6 +18,7 @@ ds_cc_test(
     srcs = ["client_worker_common_api_test.cpp"],
     deps = [
         "//src/datasystem/client/worker_api:client_worker_common_api",
+        "//src/datasystem/client/worker_api:listen_worker",
         "//tests/ut:ut_common",
     ],
 )
