@@ -21,6 +21,7 @@
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/status_helper.h"
 
 namespace datasystem::worker {
 namespace {
@@ -178,6 +179,51 @@ IndexedMetaOwnerRouteGroups MetadataRouteResolver::GroupIndexedOwners(const std:
     std::vector<std::string_view> keyViews(keys.begin(), keys.end());
     cluster::BatchPlacementDecision decision;
     Status rc = placement_->LocateBatch(keyViews, decision);
+    if (rc.IsError()) {
+        RecordFailures(keys, rc, result);
+        return result;
+    }
+    result.topologyVersion = decision.topologyVersion;
+    std::unordered_map<std::string_view, HostPort> parsedOwners;
+    for (size_t index = 0; index < keys.size(); ++index) {
+        if (index >= decision.items.size()) {
+            result.failures.insert_or_assign(keys[index], Status(K_NOT_FOUND, "Placement decision is missing."));
+            continue;
+        }
+        auto &item = decision.items[index];
+        if (item.status.IsError()) {
+            result.failures.insert_or_assign(keys[index], std::move(item.status));
+            continue;
+        }
+        AddResolvedOwner(keys[index], item.decision.committedOwnerAddress, parsedOwners, result.failures,
+                         [&](const HostPort &owner) { result.groups[owner].emplace_back(keys[index], index); });
+    }
+    return result;
+}
+
+Status MetadataRouteResolver::ResolveNewMetaOwner(std::string_view key, HostPort &owner) const
+{
+    if (options_.centralizedMode || placement_ == nullptr) {
+        return ResolveOwner(key, owner);
+    }
+    cluster::PlacementDecision decision;
+    RETURN_IF_NOT_OK(placement_->LocateSurvivingOwner(key, decision));
+    HostPort resolved;
+    RETURN_IF_NOT_OK(resolved.ParseString(decision.committedOwnerAddress));
+    owner = std::move(resolved);
+    return Status::OK();
+}
+
+IndexedMetaOwnerRouteGroups MetadataRouteResolver::GroupIndexedNewMetaOwners(
+    const std::vector<std::string> &keys) const
+{
+    if (options_.centralizedMode || keys.empty() || placement_ == nullptr) {
+        return GroupIndexedOwners(keys);
+    }
+    std::vector<std::string_view> keyViews(keys.begin(), keys.end());
+    cluster::BatchPlacementDecision decision;
+    IndexedMetaOwnerRouteGroups result;
+    Status rc = placement_->LocateSurvivingOwnerBatch(keyViews, decision);
     if (rc.IsError()) {
         RecordFailures(keys, rc, result);
         return result;

@@ -111,11 +111,13 @@ Status InitEmbeddedWorker(const EmbeddedConfig &config, void *w)
 
 namespace datasystem {
 std::condition_variable g_termSignalCv;
+// 0 means an in-process exit request (topology scale-in), otherwise the OS signal number.
+static volatile sig_atomic_t g_termSignalNum = 0;
 
 void SignalHandler(int signum)
 {
-    (void)signum;
     g_exitFlag = 1;
+    g_termSignalNum = signum;
     g_termSignalCv.notify_all();
 }
 struct WorkerServerOptions {
@@ -477,6 +479,11 @@ Status DataWorker::RunEventLoopAndShutdown(DynamicFlagConfig &flags)
         }
     }
     termSignalLock.unlock();
+
+    if (IsTermSignalReceived()) {
+        LOG(INFO) << "Worker exit requested, signum=" << g_termSignalNum
+                  << " (0=topology scale-in request), begin graceful shutdown";
+    }
 
     if (perfManager != nullptr) {
         perfManager->PrintPerfLog();

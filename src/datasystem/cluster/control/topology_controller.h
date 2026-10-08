@@ -231,6 +231,11 @@ private:
         bool awaitingAdmission{ false };
     };
 
+    struct FailureReplanCoalesceState {
+        std::chrono::steady_clock::time_point openedAt;
+        std::chrono::steady_clock::time_point deadline;
+    };
+
     Status EnqueueCoordinationEvent(CoordinationEvent &&event);
 
     Status PrepareMembershipRestartObservation();
@@ -324,6 +329,11 @@ private:
     void ApplyWitnessFailureGate(FailureClassification &classification);
 
     Status CommitClusterShutdown(const TopologySnapshot &latest);
+
+    bool ShouldHoldFailureReplanCoalesce(const FailureClassification &classification,
+                                         std::chrono::steady_clock::time_point now, size_t &pendingRounds);
+
+    void ReleaseFailureReplanCoalesce(size_t confirmedCount, size_t pendingRounds);
 
     Status CommitConfirmedFailures(const TopologySnapshot &latest, const FailureClassification &classification,
                                    int64_t expectedAuthorityRevision = 0);
@@ -454,6 +464,9 @@ private:
     // They may age concurrently but are not written to topology or shared across Controller instances or restarts.
     std::optional<BatchCollectState> scaleInCollect_;
     std::optional<BatchCollectState> scaleOutCollect_;
+    // State-thread-owned, in-process and non-persistent FAILURE replan coalescing window.
+    // Holds newly confirmed failures briefly so staggered confirmations land in one replan epoch.
+    std::optional<FailureReplanCoalesceState> failureReplanCoalesce_;
     bool activeBatchObserved_{ false };
     // The Controller state thread exclusively owns derived-generation and task-progress cursors/caches below.
     size_t admissionCursor_{ 0 };

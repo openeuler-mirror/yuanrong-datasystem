@@ -47,6 +47,7 @@
 #include "datasystem/protos/master_object.service.rpc.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/object_kv.h"
+#include "datasystem/worker/object_cache/worker_worker_transport_api.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
@@ -384,6 +385,30 @@ ObjectInfoMap WorkerOcServiceMigrateImpl::BuildPrimarySwitchInputs(
     return needSendMasterIds;
 }
 
+Status WorkerOcServiceMigrateImpl::EnsureWorkerPeerUrmaConnection(const std::string &peerAddr)
+{
+    if (!IsUrmaEnabled() || peerAddr.empty()) {
+        return Status::OK();
+    }
+    if (CheckTransportConnectionStable(peerAddr, "", "").IsOk()) {
+        return Status::OK();
+    }
+    HostPort hostAddress;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(hostAddress.ParseString(peerAddr), "ParseString failed");
+    TbbTransportStubTable::const_accessor constAccApi;
+    while (!transportApiTable_.find(constAccApi, peerAddr)) {
+        TbbTransportStubTable::accessor acc;
+        if (transportApiTable_.insert(acc, peerAddr)) {
+            std::shared_ptr<WorkerRemoteWorkerTransApi> transportApi =
+                std::make_shared<WorkerRemoteWorkerTransApi>(hostAddress);
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(transportApi->Init(), "Create transport api faild.");
+            acc->second = std::move(transportApi);
+        }
+    }
+    UrmaHandshakeRspPb rsp;
+    return constAccApi->second->ExecOnceParrallelExchange(rsp);
+}
+
 Status WorkerOcServiceMigrateImpl::MigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp)
 {
     PerfPoint pointAll(PerfKey::WORKER_SERVER_MIGRATE_DATA_DIRECT);
@@ -406,6 +431,10 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirect(const MigrateDataDirectReqP
                                              "admission closed before data processing");
     }
     RETURN_IF_NOT_OK(PreCheckMigrateDataDirect(req, rsp));
+    auto connRc = EnsureWorkerPeerUrmaConnection(req.worker_addr());
+    if (connRc.IsError()) {
+        return PrepareMigrateDataDirectError(req, rsp, connRc.GetCode(), connRc.GetMsg());
+    }
     auto rc = MigrateDataDirectImpl(req, rsp);
     if (rc.IsOk() && IsIncomingMigrationDrainTimedOut()) {
         // Data may already be written to target; intentionally return failure so Source

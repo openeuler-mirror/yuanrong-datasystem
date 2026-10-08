@@ -76,6 +76,7 @@ ds_cc_library(
         "event_notify_executor.h",
         "key_value_entry.h",
         "coordinator_store.h",
+        "kv_change_log_aggregator.h",
         "memory_kv_store.h",
         "steady_clock.h",
         "ttl_manager.h",

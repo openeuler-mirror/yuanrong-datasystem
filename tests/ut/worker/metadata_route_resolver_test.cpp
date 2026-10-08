@@ -92,6 +92,11 @@ public:
         owner_.state = cluster::MemberState::ACTIVE;
     }
 
+    void SetOwnerState(cluster::MemberState state)
+    {
+        owner_.state = state;
+    }
+
     void SetProspectiveAddress(std::string address)
     {
         prospective_.identity.address = std::move(address);
@@ -112,6 +117,14 @@ public:
     void RouteToken(uint32_t token, std::string address)
     {
         committedByToken_.emplace(token, MakeMember(std::move(address)));
+    }
+
+    void RouteToken(uint32_t token, std::string address, cluster::MemberState state)
+    {
+        cluster::Member member;
+        member.identity.address = std::move(address);
+        member.state = state;
+        committedByToken_.emplace(token, std::move(member));
     }
 
     void SetKeyToken(std::string key, uint32_t token)
@@ -462,5 +475,68 @@ TEST_F(MetadataRouteResolverTest, ApiManagerUsesBoundResolverAndKeepsAddressOver
     EXPECT_EQ(manager.LastAddress(), options.masterAddress);
     ASSERT_TRUE(manager.GetWorkerMasterApi(HostPort("127.0.0.1", 18483), api).IsOk());
     EXPECT_EQ(manager.LastAddress(), HostPort("127.0.0.1", 18483));
+}
+
+TEST_F(MetadataRouteResolverTest, NewMetaResolutionAndForCreateAvoidLeavingOwner)
+{
+    ASSERT_TRUE(PublishVersion(1).IsOk());
+    algorithm_.SetOwnerAddress("127.0.0.1:18482");
+    algorithm_.SetOwnerState(cluster::MemberState::LEAVING);
+    algorithm_.SetProspectiveAddress("127.0.0.1:18483");
+    algorithm_.RouteToken(2, "127.0.0.1:18484", cluster::MemberState::ACTIVE);
+    algorithm_.SetKeyToken("active-key", 2);
+    worker::MetadataRouteResolver resolver(&placement_, worker::MetadataRouteOptions{});
+    HostPort owner;
+
+    ASSERT_TRUE(resolver.ResolveNewMetaOwner("leaving-key", owner).IsOk());
+    EXPECT_EQ(owner, HostPort("127.0.0.1", 18483));
+    ASSERT_TRUE(resolver.ResolveNewMetaOwner("active-key", owner).IsOk());
+    EXPECT_EQ(owner, HostPort("127.0.0.1", 18484));
+    HostPort workerAddress("127.0.0.1", 18481);
+    TestMasterApiManager manager(workerAddress, resolver);
+    std::shared_ptr<TestMasterApi> api;
+    ASSERT_TRUE(manager.GetWorkerMasterApiForCreate("leaving-key", api).IsOk());
+    ASSERT_NE(api, nullptr);
+    EXPECT_TRUE(api->Initialized());
+    EXPECT_EQ(manager.LastAddress(), HostPort("127.0.0.1", 18483));
+    ASSERT_TRUE(manager.GetWorkerMasterApi("leaving-key", api).IsOk());
+    EXPECT_EQ(manager.LastAddress(), HostPort("127.0.0.1", 18482));
+}
+
+TEST_F(MetadataRouteResolverTest, NewMetaResolutionStaysOnMasterInCentralizedMode)
+{
+    worker::MetadataRouteOptions options;
+    options.centralizedMode = true;
+    options.masterAddress = HostPort("127.0.0.1", 18481);
+    worker::MetadataRouteResolver resolver(nullptr, options);
+    HostPort owner("unchanged", 1);
+
+    ASSERT_TRUE(resolver.ResolveNewMetaOwner("object", owner).IsOk());
+    EXPECT_EQ(owner, options.masterAddress);
+}
+
+TEST_F(MetadataRouteResolverTest, GroupIndexedNewMetaOwnersMixedLeavingAndActivePreservesIndexes)
+{
+    ASSERT_TRUE(PublishVersion(4).IsOk());
+    algorithm_.SetOwnerAddress("127.0.0.1:18482");
+    algorithm_.SetOwnerState(cluster::MemberState::LEAVING);
+    algorithm_.SetProspectiveAddress("127.0.0.1:18483");
+    algorithm_.RouteToken(2, "127.0.0.1:18484", cluster::MemberState::ACTIVE);
+    algorithm_.SetKeyToken("active-key", 2);
+    algorithm_.SetKeyToken("leaving-key", 1);
+    worker::MetadataRouteResolver resolver(&placement_, worker::MetadataRouteOptions{});
+
+    auto groups = resolver.GroupIndexedNewMetaOwners({ "active-key", "leaving-key" });
+    EXPECT_TRUE(groups.failures.empty());
+    EXPECT_EQ(groups.topologyVersion, 4U);
+    ASSERT_EQ(groups.groups.size(), 2U);
+    const HostPort active("127.0.0.1", 18484);
+    const HostPort surviving("127.0.0.1", 18483);
+    ASSERT_EQ(groups.groups[active].size(), 1U);
+    EXPECT_EQ(groups.groups[active][0].first, "active-key");
+    EXPECT_EQ(groups.groups[active][0].second, 0U);
+    ASSERT_EQ(groups.groups[surviving].size(), 1U);
+    EXPECT_EQ(groups.groups[surviving][0].first, "leaving-key");
+    EXPECT_EQ(groups.groups[surviving][0].second, 1U);
 }
 }  // namespace datasystem::ut

@@ -42,6 +42,7 @@ constexpr int64_t DERIVED_SLICE_WARN_THRESHOLD_MS = 20;
 constexpr size_t MAX_EXTERNAL_BOOTSTRAP_ATTEMPTS = 8;
 constexpr auto ACTIVE_FAILURE_DIRECT_PROBE_TIMEOUT = std::chrono::milliseconds(250);
 constexpr auto ACTIVE_FAILURE_DIRECT_PROBE_INTERVAL = std::chrono::milliseconds(750);
+constexpr auto FAILURE_REPLAN_COALESCE_WINDOW = std::chrono::milliseconds(2'000);
 constexpr uint32_t MIN_ACTIVE_FAILURE_UNREACHABLE_PROBES = 2;
 constexpr size_t MAX_ACTIVE_FAILURE_PROBES_PER_ROUND = 128;
 constexpr size_t TWO_WORKER_CLUSTER_SIZE = 2;
@@ -94,6 +95,30 @@ std::string MembershipDigest(const std::vector<MembershipRecord> &memberships,
 bool IsTransientReconcileStatus(StatusCode code)
 {
     return code == K_TRY_AGAIN || code == K_NOT_READY;
+}
+
+// Collect retained FAILED members followed by newly confirmed failures, capped per batch.
+// Returns the retained member count so callers can detect "nothing new to commit".
+size_t CollectFailureCommitBatch(const TopologySnapshot &latest, const FailureClassification &classification,
+                                 size_t maxMembers, std::vector<MemberIdentity> &confirmed)
+{
+    std::unordered_set<std::string> retainedAddresses;
+    for (const auto &member : latest.Members()) {
+        if (member.state == MemberState::FAILED) {
+            confirmed.push_back(member.identity);
+            retainedAddresses.insert(member.identity.address);
+        }
+    }
+    const size_t retainedCount = confirmed.size();
+    for (const auto &identity : classification.confirmedFailure) {
+        if (confirmed.size() >= maxMembers) {
+            break;
+        }
+        if (retainedAddresses.insert(identity.address).second) {
+            confirmed.push_back(identity);
+        }
+    }
+    return retainedCount;
 }
 
 const char *ControlBackendProbeOutcomeName(ControlBackendProbeOutcome outcome)
@@ -1101,6 +1126,7 @@ Status TopologyController::TryConfirmFailures(const TopologySnapshot &latest,
                 && activeBatch->type == TopologyChangeType::SCALE_OUT
                 && joiningAddresses.count(identity.address) == 0) {
                 probeCandidates.emplace_back(identity);
+                continue;
             }
         }
         std::unordered_set<std::string> candidateAddresses;
@@ -1547,19 +1573,25 @@ void TopologyController::ApplyWitnessFailureGate(FailureClassification &classifi
         if (found == suspectRoundsByTarget_.end() || !(found->second.target == target)) {
             return false;
         }
-        const bool waiting = now < found->second.deadline;
         const bool reachable = HasReachableWitness(found->second);
+        // Evidence-preserving short-circuit: close the round before the deadline only when every selected
+        // witness has reported and none is reachable; silent witnesses still wait the full deadline.
+        const bool allWitnessesReported =
+            !found->second.witnesses.empty() && found->second.reports.size() >= found->second.witnesses.size();
+        const bool waiting = now < found->second.deadline && !allWitnessesReported;
         const auto probeId = WorkerProbeIdForLog(options_.probeEpoch, found->second.probeRound);
         if (waiting || reachable) {
             LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " target=" << target.address
                          << " target_id_prefix=" << MemberIdForLog(target.id)
                          << " action=WITNESS_PROBE_FAILURE_BLOCKED probe_id=" << probeId << " waiting=" << waiting
-                         << " reachable=" << reachable;
+                         << " reachable=" << reachable << " reports=" << found->second.reports.size()
+                         << " witnesses=" << found->second.witnesses.size();
         } else {
             LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " target=" << target.address
                          << " target_id_prefix=" << MemberIdForLog(target.id)
                          << " action=WITNESS_PROBE_FAILURE_ALLOWED probe_id=" << probeId
-                         << " waiting=false reachable=false";
+                         << " waiting=false reachable=false reports=" << found->second.reports.size()
+                         << " witnesses=" << found->second.witnesses.size();
         }
         return waiting || reachable;
     };
@@ -2016,28 +2048,62 @@ Status TopologyController::CommitClusterShutdown(const TopologySnapshot &latest)
     return CommitAndReadBack(latest.Version(), next, committed);
 }
 
+bool TopologyController::ShouldHoldFailureReplanCoalesce(const FailureClassification &classification,
+                                                         std::chrono::steady_clock::time_point now,
+                                                         size_t &pendingRounds)
+{
+    if (!failureReplanCoalesce_.has_value()) {
+        failureReplanCoalesce_ = FailureReplanCoalesceState{ now, now + FAILURE_REPLAN_COALESCE_WINDOW };
+    }
+    // Only rounds for members this reconcile cycle is classifying count as pending; unrelated absence
+    // observations elsewhere in the cluster must not stretch the coalesce window.
+    // Confirmed members' rounds are bookkeeping until the post-commit erase; only members still awaiting
+    // evidence (missing but not confirmed) count as pending.
+    std::unordered_set<std::string_view> classifiedAddresses;
+    for (const auto &observation : classification.newlyMissing) {
+        classifiedAddresses.emplace(observation.identity.address);
+    }
+    for (const auto &observation : classification.confirmedMissing) {
+        classifiedAddresses.emplace(observation.identity.address);
+    }
+    for (const auto &identity : classification.confirmedFailure) {
+        classifiedAddresses.erase(identity.address);
+    }
+    pendingRounds = 0;
+    for (const auto &entry : suspectRoundsByTarget_) {
+        pendingRounds += classifiedAddresses.count(entry.first) != 0U ? 1U : 0U;
+    }
+    return pendingRounds > 0 && now < failureReplanCoalesce_->deadline;
+}
+
+void TopologyController::ReleaseFailureReplanCoalesce(size_t confirmedCount, size_t pendingRounds)
+{
+    if (!failureReplanCoalesce_.has_value()) {
+        return;
+    }
+    const auto heldMs = std::chrono::duration_cast<std::chrono::milliseconds>(options_.now()
+                                                                               - failureReplanCoalesce_->openedAt)
+                            .count();
+    LOG(INFO) << "CLUSTER_FAILURE_COALESCE cluster=" << keys_.ClusterName() << " action=release"
+              << " reason=" << (pendingRounds == 0 ? "all_absent_confirmed" : "window_elapsed")
+              << " held_ms=" << heldMs << " confirmed_count=" << confirmedCount
+              << " pending_rounds=" << pendingRounds;
+    failureReplanCoalesce_.reset();
+}
+
 Status TopologyController::CommitConfirmedFailures(const TopologySnapshot &latest,
                                                    const FailureClassification &classification,
                                                    int64_t expectedAuthorityRevision)
 {
     std::vector<MemberIdentity> confirmed;
-    std::unordered_set<std::string> retainedAddresses;
-    for (const auto &member : latest.Members()) {
-        if (member.state == MemberState::FAILED) {
-            confirmed.push_back(member.identity);
-            retainedAddresses.insert(member.identity.address);
-        }
-    }
-    const size_t retainedCount = confirmed.size();
-    for (const auto &identity : classification.confirmedFailure) {
-        if (confirmed.size() >= options_.maxMembersPerBatch) {
-            break;
-        }
-        if (retainedAddresses.insert(identity.address).second) {
-            confirmed.push_back(identity);
-        }
-    }
+    const size_t retainedCount =
+        CollectFailureCommitBatch(latest, classification, options_.maxMembersPerBatch, confirmed);
     if (confirmed.size() == retainedCount) {
+        failureReplanCoalesce_.reset();
+        return Status::OK();
+    }
+    size_t pendingRounds = 0;
+    if (ShouldHoldFailureReplanCoalesce(classification, options_.now(), pendingRounds)) {
         return Status::OK();
     }
     const bool replan =
@@ -2057,6 +2123,7 @@ Status TopologyController::CommitConfirmedFailures(const TopologySnapshot &lates
         for (const auto &identity : classification.confirmedFailure) {
             suspectRoundsByTarget_.erase(identity.address);
         }
+        ReleaseFailureReplanCoalesce(confirmed.size(), pendingRounds);
         LogBatchStart(latest, *committed, confirmed, replan ? "replan" : "start");
     }
     return rc;

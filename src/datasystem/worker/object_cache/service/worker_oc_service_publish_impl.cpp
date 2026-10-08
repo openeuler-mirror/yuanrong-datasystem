@@ -250,7 +250,7 @@ Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &object
     Status rc = RetryMetadataRequestWithRouteRefresh(
         workerMasterApi, retryRequestFailure,
         [this, &objectKey](std::shared_ptr<WorkerMasterOCApi> &api) {
-            return workerMasterApiManager_->GetWorkerMasterApi(objectKey, api);
+            return workerMasterApiManager_->GetWorkerMasterApiForCreate(objectKey, api);
         },
         [this, &metaReq, &metaResp, &rpcDispatched](std::shared_ptr<WorkerMasterOCApi> &api) {
             metaResp.Clear();

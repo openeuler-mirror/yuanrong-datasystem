@@ -98,3 +98,29 @@ foreach(mode cpu required_no_gpu load_fail pin_only pin_on pin_off partial_fail 
     add_test(NAME cuda_${mode} COMMAND kvtest_cuda_tests $<TARGET_FILE:kvtest_fake_cudart> ${mode})
     set_tests_properties(cuda_${mode} PROPERTIES TIMEOUT 8)
 endforeach()
+
+# ---------------------------------------------------------------------------
+# kvtest_jf_tests: JfClient resilience tests (optional).
+# Needs the real datasystem SDK (Status impl lives in libdatasystem.so) and
+# spawns ${KVTEST_ROOT}/src/mock_jf_server.py via python3, so it is built
+# only when the SDK is provided:
+#   cmake .. -DDATASYSTEM_SDK_DIR=<repo>/output/cpp
+# The stubs/ include dir is intentionally NOT on this target's path: the
+# real datasystem headers must win over the stub Status.
+# ---------------------------------------------------------------------------
+set(DATASYSTEM_SDK_DIR "" CACHE PATH "datasystem SDK install dir (output/cpp); enables kvtest_jf_tests")
+if(DATASYSTEM_SDK_DIR AND EXISTS "${DATASYSTEM_SDK_DIR}/lib/libdatasystem.so")
+    add_executable(kvtest_jf_tests test_jf_service_discovery.cpp)
+    target_include_directories(kvtest_jf_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${KVTEST_ROOT}/src
+        ${DATASYSTEM_SDK_DIR}/include)
+    target_compile_definitions(kvtest_jf_tests PRIVATE KVTEST_ROOT_CMAKE="${KVTEST_ROOT}")
+    target_link_libraries(kvtest_jf_tests PRIVATE
+        ${DATASYSTEM_SDK_DIR}/lib/libdatasystem.so pthread)
+    set_target_properties(kvtest_jf_tests PROPERTIES BUILD_RPATH "${DATASYSTEM_SDK_DIR}/lib")
+    add_test(NAME jf_resilience COMMAND kvtest_jf_tests)
+    # Spans TTL expiry windows (~40s wall clock on a quiet host); not part
+    # of the 8s default budget -- run explicitly via ctest -R jf_resilience.
+    set_tests_properties(jf_resilience PROPERTIES TIMEOUT 120)
+endif()

@@ -100,6 +100,18 @@ public:
     IndexedMetaOwnerRouteGroups GroupIndexedOwners(const std::vector<std::string> &keys) const;
 
     /**
+     * @brief Resolve the owner for a NEW metadata key (CreateMeta): a LEAVING committed owner is skipped in
+     *        favor of the batch-final-ring owner; centralized mode equals ResolveOwner.
+     *        Existing keys keep ResolveOwner/GroupIndexedOwners.
+     */
+    Status ResolveNewMetaOwner(std::string_view key, HostPort &owner) const;
+
+    /**
+     * @brief Group NEW metadata keys by the surviving owner (single placement decision per batch).
+     */
+    IndexedMetaOwnerRouteGroups GroupIndexedNewMetaOwners(const std::vector<std::string> &keys) const;
+
+    /**
      * @brief Group keys by their migration target using exactly one redirect decision per batch chunk.
      * @param[in] keys Keys to group.
      * @return Successful groups plus per-key failures from the oldest topology version across chunks. During a

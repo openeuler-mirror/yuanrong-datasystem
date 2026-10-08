@@ -210,7 +210,6 @@ constexpr int32_t DEFAULT_STREAM_SOCKET_NUM = 8;       // The default stream soc
 constexpr double DFT_TIMEOUT_MULT = 1.0;          // A default timeout multiplier iartWorkerf file cache HA is used.
 constexpr int32_t THREAD_POOL_SIZE_LIMIT = 4096;  // size limit of the thread pool
 constexpr int32_t CHECK_ASYNC_SLEEP_TIME_S = 1;   // Check async task time interval.
-constexpr int32_t WARMUP_THREAD_NUM = 4;
 constexpr int64_t WARMUP_SCAN_INTERVAL_MS = 1'000;
 constexpr int64_t WARMUP_MIN_SCAN_MS = 30'000;
 constexpr int64_t WARMUP_MAX_SCAN_MS = 110'000;
@@ -235,7 +234,6 @@ constexpr auto LOSSLESS_EXIT_GRACE = std::chrono::seconds(10);
 constexpr auto LOSSLESS_EXIT_GRACE = std::chrono::seconds(120);
 #endif
 static const std::string WORKER_OC_SERVER = "WorkerOcServer";
-static const std::string URMA_WARMUP_KEY_PREFIX = "_urma_";
 constexpr char TOPOLOGY_READINESS_PROBE_KEY[] = "topology-readiness-probe";
 
 namespace {
@@ -574,30 +572,6 @@ bool EnableOCService()
 bool EnableSCService()
 {
     return FLAGS_sc_regular_socket_num > 0 && FLAGS_sc_stream_socket_num > 0;
-}
-
-bool IsWarmupKeyChar(unsigned char c)
-{
-    if (std::isalnum(c) != 0) {
-        return true;
-    }
-    static constexpr char allowedSymbols[] = "-_!@#%^*()+=:;";
-    for (char symbol : allowedSymbols) {
-        if (symbol == '\0') {
-            break;
-        }
-        if (static_cast<unsigned char>(symbol) == c) {
-            return true;
-        }
-    }
-    return false;
-}
-
-std::string BuildWarmupKey(const std::string &workerAddr)
-{
-    std::string encoded = workerAddr;
-    std::replace_if(encoded.begin(), encoded.end(), [](unsigned char c) { return !IsWarmupKeyChar(c); }, '_');
-    return URMA_WARMUP_KEY_PREFIX + encoded;
 }
 
 void SleepForWarmupScanInterval(const std::atomic<bool> &exitFlag, std::condition_variable &exitCv,
@@ -2833,14 +2807,9 @@ Status WorkerOCServer::MaybeStartConnectionWarmup()
         return Status::OK();
     }
     CHECK_FAIL_RETURN_STATUS(objCacheClientWorkerSvc_ != nullptr, K_NOT_READY, "Object cache service is not ready.");
-    RETURN_IF_NOT_OK(objCacheClientWorkerSvc_->PrepareUrmaWarmupObject(BuildWarmupKey(hostPort_.ToString())));
     warmupExit_ = false;
-    RETURN_IF_EXCEPTION_OCCURS(warmupThreadPool_ =
-                                   std::make_shared<ThreadPool>(WARMUP_THREAD_NUM, WARMUP_THREAD_NUM, "UrmaWarmup"));
-    RaiiPlus cleanupWarmupThreadPool([this]() { ReleaseWarmupThreadPool(); });
     RETURN_IF_EXCEPTION_OCCURS(warmupControllerThread_ =
                                    std::make_unique<Thread>([this]() { RunUrmaWarmupController(); }));
-    cleanupWarmupThreadPool.ClearAllTask();
     warmupControllerThread_->set_name("UrmaWarmup");
     return Status::OK();
 }
@@ -2853,62 +2822,6 @@ void WorkerOCServer::StopConnectionWarmup()
         warmupControllerThread_->join();
         warmupControllerThread_.reset();
     }
-    warmupThreadPool_.reset();
-}
-
-void WorkerOCServer::ReleaseWarmupThreadPool()
-{
-    warmupThreadPool_.reset();
-}
-
-void WorkerOCServer::ScheduleUrmaWarmupTasks(const std::vector<const cluster::Member *> &members,
-                                             std::unordered_set<std::string> &scheduledPeers,
-                                             std::vector<std::future<bool>> &futures)
-{
-    for (const auto *member : members) {
-        if (warmupExit_) {
-            break;
-        }
-        const auto &peerAddress = member->identity.address;
-        if (peerAddress == hostPort_.ToString() || scheduledPeers.count(peerAddress) > 0) {
-            continue;
-        }
-        scheduledPeers.emplace(peerAddress);
-        try {
-            futures.emplace_back(warmupThreadPool_->Submit([this, peerAddr = peerAddress]() {
-                if (warmupExit_) {
-                    return false;
-                }
-                TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-                auto rc = objCacheClientWorkerSvc_->WarmupUrmaConnectionToPeer(peerAddr, BuildWarmupKey(peerAddr));
-                if (rc.IsError()) {
-                    LOG(WARNING) << FormatString("[URMA_WARMUP] peer warmup failed, peer=%s, status=%s", peerAddr,
-                                                 rc.ToString());
-                    return false;
-                }
-                return true;
-            }));
-        } catch (const std::exception &e) {
-            LOG(WARNING) << FormatString("[URMA_WARMUP] submit peer warmup failed, peer=%s, error=%s", peerAddress,
-                                         e.what());
-            scheduledPeers.erase(peerAddress);
-        }
-    }
-}
-
-size_t WorkerOCServer::GetUrmaWarmupSuccessCount(std::vector<std::future<bool>> &futures) const
-{
-    size_t successCount = 0;
-    for (auto &future : futures) {
-        try {
-            if (future.valid() && future.get()) {
-                ++successCount;
-            }
-        } catch (const std::exception &e) {
-            LOG(WARNING) << "[URMA_WARMUP] peer warmup task failed, error=" << e.what();
-        }
-    }
-    return successCount;
 }
 
 bool WorkerOCServer::ShouldStopUrmaWarmup(int64_t elapsedMs, uint32_t stableRounds) const
@@ -2918,43 +2831,10 @@ bool WorkerOCServer::ShouldStopUrmaWarmup(int64_t elapsedMs, uint32_t stableRoun
 
 void WorkerOCServer::RunUrmaWarmupController()
 {
-    Raii releaseWarmupPool([this]() { ReleaseWarmupThreadPool(); });
     if (topologyEngine_ == nullptr) {
         LOG(WARNING) << "[URMA_WARMUP] topology runtime is unavailable, skip peer warmup.";
         return;
     }
-    const auto start = std::chrono::steady_clock::now();
-    std::unordered_set<std::string> scheduledPeers;
-    std::vector<std::future<bool>> futures;
-    for (uint32_t stableRounds = 0; !warmupExit_;) {
-        std::shared_ptr<const cluster::TopologySnapshot> snapshot;
-        auto rc = topologyEngine_->GetSnapshot(snapshot);
-        if (rc.IsError()) {
-            VLOG(1) << "[URMA_WARMUP] topology Snapshot is not ready, status=" << rc.ToString();
-        }
-        auto oldPeerCount = scheduledPeers.size();
-        if (snapshot != nullptr) {
-            ScheduleUrmaWarmupTasks(snapshot->ActiveMembers(), scheduledPeers, futures);
-        }
-        RunOneUbRecoveryProbe();
-
-        const auto elapsedMs =
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-        stableRounds = scheduledPeers.size() == oldPeerCount ? stableRounds + 1 : 0;
-        if (ShouldStopUrmaWarmup(elapsedMs, stableRounds)) {
-            break;
-        }
-        SleepForWarmupScanInterval(warmupExit_, warmupScanCv_, warmupScanMutex_);
-    }
-
-    auto successCount = GetUrmaWarmupSuccessCount(futures);
-    const auto elapsedMs =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-    LOG(INFO) << FormatString(
-        "[URMA_WARMUP] finished actual_success_count=%zu/total_count=%zu, elapsed_ms=%lld, "
-        "discovered_peer_count=%zu",
-        successCount, futures.size(), elapsedMs, scheduledPeers.size());
-    ReleaseWarmupThreadPool();
     while (!warmupExit_) {
         ContinueUbLifecycleCleanup();
         RunOneUbRecoveryProbe();
