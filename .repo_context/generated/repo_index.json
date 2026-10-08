@@ -1,6 +1,6 @@
 {
   "repo_root": ".",
-  "generated_at_utc": "2026-10-02T03:18:47+00:00",
+  "generated_at_utc": "2026-10-08T08:04:51+00:00",
   "root_files": [
     "README.md",
     "build.sh",
@@ -490,7 +490,6 @@
         "    - rendering/",
         "    - support/",
         "    - conftest.py",
-        "  - fixtures/",
         "  - test_ds_pr_review_helper.py",
         "- st/",
         "  - client/",
@@ -759,6 +758,7 @@
         "  - hugepage_guide.md",
         "  - index.md",
         "  - log_guide.md",
+        "  - trace_analysis_unknown_audit_20261003.md",
         "  - trace_analysis_usage.md",
         "  - trace_rpc_accounting_rfc.md",
         "  - trace_triage_methodology.md",

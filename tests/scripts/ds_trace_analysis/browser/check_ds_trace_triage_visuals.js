@@ -103,9 +103,10 @@ const {chromium}=require(process.env.DS_PLAYWRIGHT_MODULE||'playwright');
       {text:'/logs/client/worker12/ds_client.INFO:1:2026-09-22T18:00:00 | RPC Worker failed',process:'192.0.2.1 / PID 80'},
       {text:'/logs/worker/worker06/kvcache.INFO:2:2026-09-22T18:00:00 | client connected',process:'192.0.2.2 / PID 9'},
       {text:'/logs/worker/worker07/kvcache.INFO:3:2026-09-22T18:00:00 | client connected',process:'192.0.2.3 / PID 9'},
+      {text:'/logs/coordinator/coordinator.INFO:4:2026-09-22T18:00:00 | URMA RPC',process:'192.0.2.5 / PID 10'},
       {text:'Worker RPC client connected',process:'192.0.2.4 / PID 9'}
     ].map(e=>traceLogActor({evidence:{text:e.text},process:e.process})));
-    assert.deepStrictEqual(actors.map(e=>e.role),['Client','Worker','Worker','角色未观测']);
+    assert.deepStrictEqual(actors.map(e=>e.role),['Client','Worker','Worker','Coordinator','组件未观测']);
     assert.notStrictEqual(actors[1].instance,actors[2].instance);
     const categories=await page.evaluate(()=>['RPC deadline exceeded','connection refused','| E | URMA failed','| E | QueryMeta failed','| E | unexpected state','| I | done','cntl_timeout_ms=20 cntl_deadline_us=123'].map(text=>traceLogErrorCategory({evidence:{text}})));
     assert.deepStrictEqual(categories,['超时 / Deadline','连接失败','URMA 错误','RPC 错误','其他错误','未标记错误','未标记错误']);

@@ -162,16 +162,16 @@ const {chromium} = require(process.env.DS_PLAYWRIGHT_MODULE || 'playwright');
       await page.evaluate(()=>{
         const rows=typeof ROWS!=='undefined'?ROWS:ALL;
         rows.push({trace_id:'timeline-pagination-fixture',evidence:Array.from({length:21},(_,i)=>
-          `2026-09-22T18:00:00.${String(i).padStart(3,'0')} | I | ${i===20?'urma_manager':'object_posix'}.cpp:1 | 127.0.0.1 | 80:1 | fixture | ${i===20?'URMA_ELAPSED_TOTAL':'RPC timeout'}`)});
+          `${i===20?'/logs/worker01/kvcache.INFO.log':'/logs/client/ds_client.INFO.log'}:1:2026-09-22T18:00:00.${String(i).padStart(3,'0')} | I | ${i===20?'urma_manager':'object_posix'}.cpp:1 | 127.0.0.1 | 80:1 | fixture | ${i===20?'URMA_ELAPSED_TOTAL':'RPC timeout'}`)});
       });
       await page.locator('#event-trace-search').fill('timeline-pagination-fixture');
       assert.strictEqual(await page.locator('#event-table-body tr[data-event]').count(),4);
       assert(await page.locator('#event-table-pager').isVisible());
-      await page.locator('#event-component-filter').selectOption({label:'SDK'});
+      await page.locator('#event-component-filter').selectOption({label:'Client'});
       assert.strictEqual(await page.locator('#event-table-body tr[data-event]').count(),20);
       assert(!(await page.locator('#event-table-pager').isVisible()));
       assert(await page.locator('#event-table-body mark').count()>0);
-      await page.locator('#event-component-filter').selectOption({label:'URMA'});
+      await page.locator('#event-component-filter').selectOption({label:'Worker'});
       assert.strictEqual(await page.locator('#event-table-body tr[data-event]').count(),1);
       assert((await page.locator('#event-table-body').innerText()).includes('+20.000 ms'));
       assert((await page.locator('#event-table-body').innerText()).includes('（1.000 ms）'));

@@ -13,7 +13,7 @@
   - `tests/perf`
   - `tests/st`
 - Last verified against source:
-  - `2026-04-13`
+  - `2026-10-08`
 - Related design docs:
   - `.repo_context/modules/infra/observability/diagnosis-and-operations.md`
   - `.repo_context/modules/infra/logging/design.md`
@@ -67,24 +67,43 @@
 ## URMA Request Wait Slowdown
 
 - Verified timing surface:
-  - `src/datasystem/common/rdma/urma_manager.cpp` logs `[URMA_ELAPSED_TOTAL]` when a request exceeds 1 ms from just
+  - `src/datasystem/common/rdma/urma_manager.cpp` logs `[URMA_ELAPSED_TOTAL]` when the configured positive RPC slow-log threshold is reached
+    (or perf trace logging is enabled), measured from just
     before `urma_post_jetty_send_wr` submission to write completion confirmation. The timestamp is captured when the
     event is created immediately before submit, so for chunked writes this is per-event lifetime latency rather than
     only the local blocking wait duration. The log includes request id, local source address, remote target address,
-    data size, CPU id, status, and an embedded next-step suggestion.
+    data size, CPU id, status, completion status, and per-event timing offsets; the TOTAL log has no suggestion field.
   - If `[URMA_ELAPSED_TOTAL]` appears, check whether companion logs appear in the same time window:
     `[URMA_ELAPSED_THREAD_SHED]`, `[URMA_ELAPSED_POLL_JFC]`, and `[URMA_ELAPSED_NOTIFY]`.
-  - `[URMA_ELAPSED_THREAD_SHED]` means `nanosleep(1us)` wake-up cost exceeded 100 us; route to OS scheduling
-    overhead investigation.
+  - `[URMA_ELAPSED_THREAD_SHED]` records either a poll-loop gap or `nanosleep(1us)` wake-up cost above
+    100 us; inspect the actual message before investigating scheduling overhead.
   - `[URMA_ELAPSED_POLL_JFC]` means `urma_poll_jfc` cost exceeded 100 us; route to URMA analysis.
-  - `[URMA_ELAPSED_NOTIFY]` means notify wake-up cost exceeded 1 ms; route to OS scheduling overhead investigation.
-  - If `[URMA_ELAPSED_TOTAL]` appears but none of the companion logs appear, route to URMA and UDMA analysis.
+  - `[URMA_ELAPSED_NOTIFY]` records the event-handler notification window above 1 ms (or with perf tracing);
+    it is not an isolated measurement of the waiting thread’s scheduling delay.
+  - If `[URMA_ELAPSED_TOTAL]` appears without companion logs, inspect its timing offsets and evidence coverage;
+    absence of thresholded companion logs alone does not establish a URMA/UDMA root cause.
 - Verified error surfaces:
   - `src/datasystem/common/rdma/urma_resource.cpp` tags failed URMA resource calls with the underlying interface name,
     including `urma_create_jfr`, `urma_create_jetty`, `urma_import_jetty`, and `urma_import_seg`.
   - `src/datasystem/common/rdma/urma_manager.cpp` tags failed `urma_post_jetty_send_wr` logs with `[URMA_WRITE]` and
     failed `urma_poll_jfc` return or completion-record errors with `[URMA_POLL_JFC]`; these logs include the URMA
     return/status code and route to URMA further analysis.
+
+## Send-Lane And QueryAndGet Stages
+
+- `urma_resource.cpp` emits `[URMA_SEND_LANE_PHASE] phase=acquirePeerSlot`; `urma_manager.cpp` emits
+  `acquireJetty` and `createAndRegisterLane`. These use the positive Worker process slow-log threshold;
+  verbose logging can also expose the records. Associate them by Trace ID and source process.
+- `worker/object_cache/service/worker_query_and_get_impl.cpp` emits `[QUERY_AND_GET_PHASE]` for
+  `checkTransportConnection` (request scope), `acquireLocalObject`, `encodeLocalHitTotal`,
+  `shmReadLatch`, `urmaWritePayloadTotal`, and `addShmReference` (object scope).
+  The same positive process slow-log threshold applies; absent records do not mean zero duration.
+- `QueryAndGet done` reports preproc, localRead, metadata, delivery, and total request windows.
+  Object totals contain nested work; never sum parent windows with their child phases or WR windows.
+  Per-event URMA completion lifetime excludes send-lane acquisition before WR submission.
+- Trace viewers identify components as Client, Worker, or Coordinator from original log provenance,
+  then explicit component source files. RPC and URMA remain event kinds; shared transport source alone
+  cannot establish the component owner and is displayed as unobserved.
 
 ## Current Signal Limits For `set/get`
 
@@ -177,7 +196,8 @@ per-Run stage/queue time in `stage.execution.json`.
 完整原始 JSON 通过下载按钮导出，不在首屏重复展开。回归入口为
 `tests/scripts/ds_trace_analysis/rendering/test_ds_trace_triage_rendering.py` 和
 `tests/scripts/ds_trace_analysis/browser/check_ds_trace_triage_visuals.js`。`trace_analysis/bottleneck.py` 有写入记录时自动生成
-同名 `.write.html`，读取页和写入页互链；合并 analysis JSON 仍作为后处理输入。
+同名 `.write.html`，写入伴随页提供返回读取页的链接；独立读取页不提供伴随页链接。
+完整 pipeline 通过 `link_reports` 统一组装页面互链；合并 analysis JSON 仍作为后处理输入。
 
 读取总览分类由实际 Trace 集合生成，颜色表不能作为分类白名单。验证图表需对齐筛选 Trace 数与
 阶段数值，不能只检查 JavaScript 无异常；对应回归见 `test_ds_trace_rpc_accounting.py`。

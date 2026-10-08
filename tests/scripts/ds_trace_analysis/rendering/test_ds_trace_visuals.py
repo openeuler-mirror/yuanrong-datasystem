@@ -18,9 +18,9 @@ assert.equal(m.lanes[1].events[0].offset_ms,0);
 assert.equal(m.lanes[0].events[0].elapsed_ms,null);
 assert(Math.abs(m.lanes[0].events[1].elapsed_ms-5.1)<.001);
 assert.equal(m.lanes[1].events[0].elapsed_ms,null);
-assert.equal(TraceVisuals.component({text:'x | urma_manager.cpp:42 |'}),'URMA');
-assert.equal(TraceVisuals.component({text:'x | client_worker_api.cpp:42 |'}),'SDK');
-assert.equal(TraceVisuals.component({text:'no source'}),'其他 / 来源未明确');
+assert.equal(TraceVisuals.component({text:'x | urma_manager.cpp:42 |'}),'组件未观测');
+assert.equal(TraceVisuals.component({text:'x | client_worker_api.cpp:42 |'}),'Client');
+assert.equal(TraceVisuals.component({text:'no source'}),'组件未观测');
 const original={source:'run1',member:'all-core/a',line:2,text:'/logs/worker.log:123:2026-01-01T00:00:00.000001 | msg'};
 const unique=TraceVisuals.uniqueEvidence([original,{...original,member:'time-buckets/a'}, {...original,text:original.text.replace(':123:',':124:')},{...original,source:'run2'},{text:'trace-id',member:'all-core/unique_traces_1001.txt'}]);
 assert.equal(unique.records.length,3);assert.equal(unique.duplicates,1);assert.equal(unique.indexRows,1);assert.equal(unique.records[0].origins.length,2);
@@ -51,7 +51,7 @@ const point=option.series.flatMap(s=>s.data).find(p=>p.event.evidence.text===evi
 callbacks.click({data:point});
 assert(detail.innerHTML.includes('log-field-error'),'clicked failure must highlight error');
 assert(detail.innerHTML.includes('cntl_error_code=1008'));
-assert(detail.innerHTML.includes('组件：URMA'));
+assert(detail.innerHTML.includes('组件：Worker'));
 assert(detail.innerHTML.includes('0.100 ms'));
 assert(detail.innerHTML.includes('&lt;img'));
 assert(!detail.innerHTML.includes('<img'));
@@ -86,3 +86,26 @@ for(const path of ['worker/kvcache.INFO.log','C:\\logs\\worker.log','worker.log'
 }
 '''
     subprocess.run(['node', '-e', script, str(asset)], check=True)
+
+
+def test_component_is_process_owner_not_transport():
+    asset = REPO_ROOT / 'scripts/trace_analysis/assets/shared/trace_visuals.js'
+    script = r'''
+const assert=require('assert');eval(require('fs').readFileSync(process.argv[1],'utf8'));
+const event=(path,file)=>({member:'capture/trace.txt',text:`${path}:1:2026-01-01T00:00:00 | I | ${file}:2 | 127.0.0.1 | 1:2 | tid | RPC URMA`});
+for(const [path,role] of [
+ ['/logs/client/ds_client.INFO.log','Client'],
+ ['/logs/worker01/kvcache.INFO.log','Worker'],
+ ['/logs/coordinator/coordinator.INFO.log','Coordinator'],
+ ['C:\\logs\\worker02\\kvcache.INFO.log','Worker']
+]){
+ const e=event(path,'urma_manager.cpp');
+ assert.equal(TraceVisuals.component(e),role);
+ assert.equal(TraceVisuals.actor({evidence:e}).role,role);
+}
+assert.equal(TraceVisuals.component({text:'x | coordinator_service.cpp:1 |'}),'Coordinator');
+assert.equal(TraceVisuals.component({text:'x | worker_query_and_get_impl.cpp:1 |'}),'Worker');
+assert.equal(TraceVisuals.component({text:'x | brpc_server.cpp:1 |'}),'组件未观测');
+assert.equal(TraceVisuals.component(event('/logs/client/ds_client.INFO.log','worker_api.cpp')),'Client');
+'''
+    subprocess.run(['node','-e',script,str(asset)],check=True)

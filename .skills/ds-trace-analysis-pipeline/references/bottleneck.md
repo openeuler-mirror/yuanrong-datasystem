@@ -356,7 +356,7 @@ change focused and cover it in `test_ds_trace_triage.py`.
 
 ### 自动分离读写输出
 
-`ds_trace_analysis.py read --output report.html` 在有写入 Trace 时同时生成 `report.write.html`，两页互链。
+`ds_trace_analysis.py read --output report.html` 在有写入 Trace 时同时生成 `report.write.html`，写入伴随页提供返回读取页的链接。独立读取页不提供伴随页链接；完整 `pipeline` 统一组装页面互链。
 读页仅包含 GET，写页仅包含 SET；analysis JSON 保持合并结构以兼容 suite 和独立写入后处理。
 分享时保留两页及其依赖。全方法 RPC 审计与 QueryAndGet 分层口径见
 `docs/source_zh_cn/appendix/trace_rpc_accounting_rfc.md`。

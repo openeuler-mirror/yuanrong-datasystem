@@ -3,13 +3,23 @@ var TraceVisuals = (() => {
   const colors={timeout:'#c18016',error:'#b42318',urma:'#8052c0',rpc:'#2563eb',access:'#16805c',other:'#64748b'};
   function component(event){
     const evidence=event.evidence||event,text=evidence.text||'';
-    const file=text.match(/\|\s*([^|]+\.(?:cpp|cc|h)):\d+\s*\|/)?.[1]||evidence.member||evidence.source||'';
-    if(/urma|ub_/i.test(file))return 'URMA';
-    if(/brpc|rpc|zmq/i.test(file))return 'RPC';
-    if(/client|object_posix/i.test(file))return 'SDK';
-    if(/master|metadata/i.test(file))return '元数据';
+    const original=text.match(/^(.+?):\d+:(?=\d{4}-\d\d-\d\d[T ])/)?.[1];
+    const path=String(original||evidence.member||'').replace(/\\/g,'/');
+    if(/(?:^|\/)(?:client(?:\/|_|\d)|ds_client|sdk(?:\/|_))/i.test(path))return 'Client';
+    if(/(?:^|\/)(?:coordinator(?:\/|_|\.|\d)|ds_coordinator)|collected_coordinator_logs/i.test(path))return 'Coordinator';
+    if(/(?:^|\/)(?:worker(?:\/|_|\.|\d)|kvcache\.(?:INFO|WARNING|ERROR))|collected_worker_logs/i.test(path))return 'Worker';
+    const file=text.match(/\|\s*([^|]+\.(?:cpp|cc|h)):\d+\s*\|/)?.[1]||'';
+    if(/client|object_posix/i.test(file))return 'Client';
+    if(/coordinator/i.test(file))return 'Coordinator';
     if(/worker/i.test(file))return 'Worker';
-    return '其他 / 来源未明确';
+    return '组件未观测';
+  }
+  function actor(event){
+    const evidence=event.evidence||event,text=evidence.text||'';
+    const original=text.match(/^(.+?):\d+:(?=\d{4}-\d\d-\d\d[T ])/)?.[1];
+    const role=component(event);
+    const process=event.process&&event.process!=='进程未观测'?event.process:original||evidence.member||'实例未观测';
+    return {role,instance:role+' · '+process};
   }
   function uniqueEvidence(evidence){
     const records=[],seen=new Map();let duplicates=0,indexRows=0;
@@ -72,5 +82,5 @@ var TraceVisuals = (() => {
     const box=(x,y,w,h,text)=>`<foreignObject x="${x}" y="${y}" width="${w}" height="${h}"><div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Microsoft YaHei,sans-serif;font-size:13px;line-height:1.5;text-align:center;overflow-wrap:anywhere;background:white">${esc(text)}</div></foreignObject>`;
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(title)}" style="display:block;width:100%;min-width:760px"><title>${esc(title)}</title><defs><marker id="${marker}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#2563eb"/></marker></defs>${nodes.map(n=>{const x=positions.get(n.id);return `<rect x="${x-78}" y="12" width="156" height="80" rx="8" fill="white" stroke="#64748b"/>`+box(x-70,20,140,64,({client:'SDK',entry_worker:'入口 Worker',data_worker:'Data Worker',meta_worker:'Meta Worker',transport:'Transport'}[n.role]||n.label||n.id)+'\n'+((n.top_ips||[]).slice(0,2).join(' / ')||'IP 未观测'))+`<path d="M${x} 96V${height-25}" stroke="#dce3ef" stroke-dasharray="4 4"/>`}).join('')}${edges.map((e,i)=>{const x=positions.get(e.source),y=positions.get(e.target),top=150+i*100;if(x===undefined||y===undefined)return '';return `<g><title>${esc(e.evidence||e.summary)}</title><path d="M${x} ${top}L${y} ${top}" stroke="#2563eb" stroke-width="2" marker-end="url(#${marker})"/>`+box(Math.max(5,(x+y)/2-145),top+10,290,75,(i+1)+'. '+(e.operation||e.name)+' · '+(e.rollup?.trace_count??'未统计')+' Trace'+(e.rollup?.max_ms!=null?' / max '+Number(e.rollup.max_ms).toFixed(3)+' ms':''))+'</g>'}).join('')}</svg>`;
   }
-  return {timeline,renderTimeline,eventEvidenceHtml,flowSvg,component,uniqueEvidence};
+  return {timeline,renderTimeline,eventEvidenceHtml,flowSvg,component,actor,uniqueEvidence};
 })();

@@ -797,14 +797,7 @@
     return rows.length ? `<div class="trace-log-details">${rows.join('')}</div>` : '';
   }
   function traceLogActor(event){
-    const e=event.evidence||{},text=e.text||'';
-    const original=text.match(/^(.+?):\d+:(?=\d{4}-\d\d-\d\d[T ])/)?.[1];
-    const path=original||e.member||'';
-    const client=/(?:^|\/)client(?:\/|_)|(?:^|\/)ds_client[^/]*|(?:^|\/)sdk(?:\/|_)/i.test(path);
-    const worker=/(?:^|\/)worker(?:\/|\d|_)|collected_worker_logs|(?:^|\/)kvcache\.(?:INFO|WARNING|ERROR)/i.test(path);
-    const role=client?'Client':worker?'Worker':'角色未观测';
-    const process=event.process&&event.process!=='进程未观测'?event.process:path||'实例未观测';
-    return {role,instance:role+' · '+process};
+    return TraceVisuals.actor(event);
   }
   function traceLogErrorCategory(event){
     const text=event.evidence.text||'';
