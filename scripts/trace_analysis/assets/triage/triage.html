@@ -1,0 +1,1957 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>__TITLE__</title>
+  __STYLESHEET__
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+</head>
+<body class="report-triage">
+  <div class="layout">
+    <aside><h2>Trace 分析报告</h2><nav id="nav">
+      <a href="#s1">1. 结论</a>
+      <a class="sub" href="#overall-guide">整体导读</a>
+      <a href="#s2">2. 根因分布</a>
+      <a class="sub" href="#cohort-chart">图 2-1 输入包 / Cohort</a>
+      <a class="sub" href="#classification-chart">图 2-2 分类分布</a>
+      <a class="sub" href="#error-chart">图 2-3 错误分布</a>
+      <a href="#s3">3. 时延 Breakdown</a>
+      <a class="sub" href="#read-latency-chart">图 3-1 读取时延</a>
+      <a class="sub" href="#rw-flow-chart">图 3-2 读写 Flow</a>
+      <a class="sub" href="#read-time-breakdown-chart">图 3-3 读取时间桶</a>
+      <a class="sub" href="#write-latency-chart">图 3-4 写入时延</a>
+      <a class="sub" href="#write-time-breakdown-chart">图 3-5 写入时间桶</a>
+      <a href="#s4">4. Worker / 流程</a>
+      <a class="sub" href="#read-flow-stage-table">表 4-1 读取阶段证据</a>
+      <a class="sub" href="#read-worker-chart">图 4-2 读取 Worker</a>
+      <a class="sub" href="#write-flow-stage-table">表 4-3 写入阶段证据</a>
+      <a class="sub" href="#write-worker-chart">图 4-4 写入 Worker</a>
+      <a class="sub" href="#worker-ip-alias-table">表 4-5 Worker IP 映射</a>
+      <a href="#s5">5. UB / URMA</a>
+      <a class="sub" href="#ub-lifecycle-chart">图 5-1 UB 生命周期</a>
+      <a class="sub" href="#ub-wr-count-chart">图 5-2 WR / Inflight</a>
+      <a class="sub" href="#ub-worker-role-chart">图 5-3 发起/提供 Worker</a>
+      <a class="sub" href="#ub-worker-time-chart">图 5-4 UB 时间桶</a>
+      <a class="sub" href="#read-ub-edge-chart">图 5-5 读取 UB Edge</a>
+      <a class="sub" href="#write-ub-edge-chart">图 5-6 写入 UB Edge</a>
+      <a href="#s6">6. Trace 查看</a>
+      <a class="sub" href="#top-trace-table">表 6-1 Top Trace</a>
+      <a class="sub" href="#selected-event-timeline">图 6-1 进程内事件时间线</a>
+      <a class="sub" href="#selected-trace-chart">图 6-2 选中 Trace Breakdown</a>
+      <a class="sub" href="#selected-trace-table">表 6-2 选中 Trace 摘要</a>
+      <a class="sub" href="#selected-trace-log">日志框 6-3 全量日志</a>
+      <a href="#s7">7. 建议与口径</a>
+      <a class="sub" href="#recommendation-table">表 7-1 建议</a>
+      <a class="sub" href="#source-appendix-common-table">表 7-2 代码映射</a>
+      <a href="#s8">8. 原始 JSON</a>
+      <a class="sub" href="#trace-data">表 8-1 原始 Trace JSON</a>
+    </nav>
+    </aside>
+    <main>
+      <section id="s1">
+        <h1>__TITLE__</h1>
+        <p class="subtitle" id="report-subtitle"></p>
+        <div id="summary" class="cards"></div>
+        <div class="panel"><h3>表 1-1 运行与输入来源</h3><table id="run-metadata-table" class="metadata-table"></table></div>
+        <div class="panel insight" id="report-insight"></div>
+        <div class="panel" id="overall-guide"><h3>整体导读</h3><ul class="chapter-guide" id="chapter-guide-list"></ul></div>
+        <div class="panel"><h3>客户化诊断口径</h3><ul id="diagnosis-list"></ul><div class="controls"><button class="primary" id="download-report-summary">下载分析摘要</button></div></div>
+        <div class="panel"><h3>表 1-2 日志覆盖与缺失观测面</h3><table id="coverage-table"></table></div>
+      </section>
+      <section id="s2">
+        <h2>2. 错误根因与分类分布</h2>
+        <div class="panel section-summary" id="section-summary-s2"></div>
+        <div class="panel"><div id="cohort-chart" class="chart"></div><div class="caption">图 2-1 输入包 / Cohort 对比</div><p class="chart-note">多个日志包独立统计，再对比分类和错误分布。</p></div>
+        <div class="panel"><h3>表 2-1 输入包 / Cohort 对比</h3><table id="cohort-table"></table></div>
+        <div class="chart-grid">
+          <div class="panel"><div id="classification-chart" class="chart"></div><div class="caption">图 2-2 分类分布</div><p class="chart-note">按根因分类聚合 Trace。</p></div>
+          <div class="panel"><div id="error-chart" class="chart"></div><div class="caption">图 2-3 错误文本 / 状态分布</div><p class="chart-note">按错误文本和状态码聚合。</p></div>
+        </div>
+        <div class="compare2">
+          <div class="panel"><h3>表 2-2 分类聚合</h3><table id="classification-table"></table></div>
+          <div class="panel"><h3>表 2-3 Error Breakdown</h3><table id="error-table"></table></div>
+        </div>
+      </section>
+      <section id="s3">
+        <h2>3. 时延 Breakdown</h2>
+        <div class="panel section-summary" id="section-summary-s3"></div>
+        <div class="panel insight">读写分开看尾部：读关注 GET/QueryMeta/RemoteGet/UB，写关注 SET/Create/Publish/memory copy。</div>
+        <div class="flow-section">
+          <div class="panel"><div id="read-latency-chart" class="chart"></div><div class="caption">图 3-1 读取 Top 时延</div></div>
+          <div id="rw-flow-chart" class="panel">
+            <div class="flow-pair">
+              <div><div id="read-flow-chart" class="chart"></div></div>
+              <div><div id="write-flow-chart" class="chart"></div></div>
+            </div>
+            <div class="caption">图 3-2 读写 Flow</div><p class="chart-note">左侧为读取接口分布，右侧为写入接口分布。</p>
+          </div>
+          <div class="panel"><div id="read-time-breakdown-chart" class="chart"></div><div class="caption">图 3-3 读取时间桶 Breakdown</div><p class="chart-note">柱为读 RPC/UB 子阶段 p99，线为读 Trace access p99。</p></div>
+        </div>
+        <div class="flow-section">
+          <div class="panel"><div id="write-latency-chart" class="chart"></div><div class="caption">图 3-4 写入 Top 时延</div></div>
+          <div class="panel"><div id="write-time-breakdown-chart" class="chart"></div><div class="caption">图 3-5 写入时间桶 Breakdown</div><p class="chart-note">柱为写 RPC/本地阶段 p99，线为写 trace access p99。</p></div>
+        </div>
+        <div class="compare2">
+          <div class="panel"><h3>表 3-1 读取时延指标</h3><table id="read-latency-table"></table></div>
+          <div class="panel"><h3>表 3-2 写入时延指标</h3><table id="write-latency-table"></table></div>
+          <div class="panel"><h3>表 3-3 读取 Flow</h3><table id="read-flow-table"></table></div>
+          <div class="panel"><h3>表 3-4 写入 Flow</h3><table id="write-flow-table"></table></div>
+        </div>
+      </section>
+      <section id="s4">
+        <h2>4. Worker / 流程分布</h2>
+        <div class="panel section-summary" id="section-summary-s4"></div>
+        <div id="flow-stage-chart" class="panel insight">读写链路分开看：读关注 Entry→Data，写关注 CreateBuffer/Publish/Meta。</div>
+        <div id="read-flow-section" class="flow-section">
+          <div class="panel"><h3>表 4-1 读取流程阶段证据</h3><table id="read-flow-stage-table"></table></div>
+          <div class="panel"><div class="controls"><label>Worker 筛选 <select id="read-worker-filter"><option value="">全部 Worker</option></select></label></div><div id="read-worker-chart" class="chart"></div><div class="caption">图 4-2 读取 Worker 分布</div><p class="chart-note">读取链路按 Worker 聚合。</p></div>
+          <div class="panel"><h3>表 4-2 读取 Worker Breakdown</h3><div class="controls"><label>Worker 筛选 <select id="read-worker-table-filter"><option value="">全部 Worker</option></select></label></div><table id="read-worker-table"></table><div id="read-worker-table-pager" class="mini-pager"></div></div>
+        </div>
+        <div id="write-flow-section" class="flow-section">
+          <div class="panel"><h3>表 4-3 写入流程阶段证据</h3><table id="write-flow-stage-table"></table></div>
+          <div class="panel"><div class="controls"><label>Worker 筛选 <select id="write-worker-filter"><option value="">全部 Worker</option></select></label></div><div id="write-worker-chart" class="chart"></div><div class="caption">图 4-4 写入 Worker 分布</div><p class="chart-note">写入链路按 Worker 聚合。</p></div>
+          <div class="panel"><h3>表 4-4 写入 Worker Breakdown</h3><div class="controls"><label>Worker 筛选 <select id="write-worker-table-filter"><option value="">全部 Worker</option></select></label></div><table id="write-worker-table"></table><div id="write-worker-table-pager" class="mini-pager"></div></div>
+        </div>
+        <div class="panel"><h3>表 4-5 Worker IP / 别名映射</h3><table id="worker-ip-alias-table" class="adaptive-table"></table><div id="worker-ip-alias-table-pager" class="mini-pager"></div></div>
+        <div class="panel"><h3>表 4-6 候选链路 / 拓扑扩展</h3><div class="small">阶段证据表区分已观测与缺失链路；候选链路记录后续 Client→Entry UB、Client→Data UB、Client→Meta Direct 等拓扑演进。</div><table id="flow-candidate-edge-table" class="adaptive-table"></table></div>
+      </section>
+      <section id="s5">
+        <h2>5. UB / URMA 分析</h2>
+        <div class="panel section-summary" id="section-summary-s5"></div>
+        <div class="panel insight">UB 单独看：先看 wait/poll/notify/sched，再看入口/出口 worker，最后看 edge/IP。</div>
+        <div class="chart-grid">
+          <div class="panel"><div id="ub-lifecycle-chart" class="chart"></div><div class="caption">图 5-1 UB 生命周期</div><p class="chart-note">TOTAL、wait_for、poll/notify/sched 等耗时按实际采样字段展示。</p></div>
+          <div class="panel"><div id="ub-wr-count-chart" class="chart"></div><div class="caption">图 5-2 WR / Inflight Count</div><p class="chart-note">包括 remote get WR、URMA inflight WR、chip inflight，单位为 count。</p></div>
+          <div class="panel full-row"><div class="controls"><label>Worker 筛选 <select id="ub-worker-role-filter"><option value="">全部 Worker</option></select></label></div><div id="ub-worker-role-chart" class="chart"></div><div class="caption">图 5-3 UB Worker 角色</div><p class="chart-note">读取发起端来自 RemoteGet/transferPath；数据提供端来自 URMA_ELAPSED。</p></div>
+        </div>
+        <div class="panel"><div class="controls"><label>Worker 筛选 <select id="ub-worker-time-filter"><option value="">全部 Worker</option></select></label></div><div id="ub-worker-time-chart" class="chart"></div><div class="caption">图 5-4 UB 时间桶</div><p class="chart-note">按秒观察入口/出口事件与尾部时延。</p></div>
+        <div class="flow-section ub-table-stack">
+          <div class="panel"><h3>表 5-1 UB 生命周期指标</h3><div class="table-scroll"><table id="ub-lifecycle-table" class="nowrap-table"></table></div></div>
+          <div class="panel"><h3>表 5-2 UB Request Top</h3><table id="ub-request-table" class="adaptive-table"></table><div id="ub-request-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><h3>表 5-3 UB Worker 角色</h3><div class="controls"><label>Worker 筛选 <select id="ub-worker-role-table-filter"><option value="">全部 Worker</option></select></label></div><table id="ub-worker-role-table" class="adaptive-table"></table><div id="ub-worker-role-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><h3>表 5-4 UB 时间桶</h3><div class="controls"><label>Worker 筛选 <select id="ub-worker-time-table-filter"><option value="">全部 Worker</option></select></label></div><table id="ub-worker-time-table"></table><div id="ub-worker-time-table-pager" class="mini-pager"></div></div>
+        </div>
+        <div class="flow-section">
+          <div class="panel"><div id="read-ub-edge-summary" class="section-summary"></div><div id="read-ub-edge-chart" class="chart"></div><div class="caption">图 5-5 读取 UB Edge</div><p class="chart-note">读取 UB 入口/出口 IP 与 Worker 关联。</p></div>
+          <div class="panel"><h3>表 5-5 读取 UB Edges</h3><div class="controls"><label>源端 <select id="read-ub-src-filter"><option value="">全部源端</option></select></label><label>目的端 <select id="read-ub-dst-filter"><option value="">全部目的端</option></select></label></div><table id="read-ub-edge-table"></table><div id="read-ub-edge-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><div id="write-ub-edge-summary" class="section-summary"></div><div id="write-ub-edge-chart" class="chart"></div><div class="caption">图 5-6 写入 UB Edge</div><p class="chart-note">写入 UB 入口/出口 IP 与 Worker 关联。</p></div>
+          <div class="panel"><h3>表 5-6 写入 UB Edges</h3><table id="write-ub-edge-table"></table><div id="write-ub-edge-table-pager" class="mini-pager"></div></div>
+        </div>
+      </section>
+      <section id="s6">
+        <h2>6. Trace 查看</h2>
+        <div class="panel section-summary" id="section-summary-s6"></div>
+        <div class="panel">
+        <div class="controls"><label>Trace 查看读写视角 <select id="operation-filter"><option value="">全部读写</option><option value="read">只看读取</option><option value="write">只看写入</option></select></label><label>请求状态 <select id="request-status-filter"><option value="">全部请求</option><option value="failed">只看失败</option><option value="success">只看成功</option></select></label><input id="trace-search" placeholder="搜索 trace / worker / 关键词" style="min-width:300px"><select id="class-filter"><option value="">全部分类</option></select><select id="worker-filter"><option value="">全部 Worker</option></select><span class="muted">按 access max 降序；联动 Trace 列表与选中 Trace Breakdown。</span><button id="reset-filter">清空</button></div>
+        <h3>表 6-1 Top Trace</h3>
+        <table id="top-trace-table"></table>
+        <div id="trace-pager" class="controls pager">
+          <label>每页 <select id="trace-page-size"><option value="4" selected>4</option><option value="8">8</option><option value="16">16</option><option value="32">32</option><option value="9999">全部</option></select> 条</label>
+          <button class="primary" id="prev-page">上一页</button>
+          <span id="page-status" class="muted"></span>
+          <button class="primary" id="next-page">下一页</button>
+        </div>
+        </div>
+        <div class="compare2">
+          <div class="panel" style="grid-column:1/-1"><div id="selected-event-timeline" class="chart"></div><div class="caption">图 6-1 选中 Trace · 进程内事件时间线</div><p id="selected-event-coverage" class="muted"></p><pre id="selected-event-evidence"></pre></div>
+          <div class="panel"><div id="selected-trace-chart" class="chart"></div><div id="selected-stage-legend" class="stage-legend"></div><div class="caption">图 6-2 选中 Trace Breakdown</div><p class="chart-note">点击 Trace 行联动，按阶段耗时排序，单位 ms。</p><table id="selected-stage-table"></table></div>
+          <div class="panel"><h3>表 6-2 选中 Trace 摘要</h3><table id="selected-trace-table"></table><div class="controls"><button class="primary" id="download-selected-raw">下载当前 Trace 裸日志</button><button id="download-filtered-evidence">下载当前过滤证据</button></div></div>
+        </div>
+        <div class="panel"><h3>日志框 6-3 Trace 全量日志</h3><div class="small">按进程组织时间线，标明组件与 elapsed；重复采集副本合并，下载仍保留原始证据。</div><div class="log-legend" id="log-highlight-legend"></div><div id="selected-trace-log" class="trace-log-groups"></div></div>
+      </section>
+      <section id="s7">
+        <h2>7. 建议与后续口径</h2>
+        <div class="panel section-summary" id="section-summary-s7"></div>
+        <div class="panel"><h3>表 7-1 建议与证据边界</h3><table id="recommendation-table"></table></div>
+        <div class="panel">
+          <h3>代码与字段映射</h3>
+          <h4>表 7-2 通用字段映射</h4><table id="source-appendix-common-table"></table>
+          <h4>表 7-3 读取字段映射</h4><table id="source-appendix-read-table"></table>
+          <h4>表 7-4 写入字段映射</h4><table id="source-appendix-write-table"></table>
+        </div>
+      </section>
+      <section id="s8">
+        <h2>8. 原始 JSON 附录</h2>
+        <div class="panel section-summary" id="section-summary-s8"></div>
+        <div class="panel"><details>
+          <summary>原始Trace JSON：按需预览与完整下载</summary>          <button id="preview-trace-json">预览当前Trace JSON</button><button id="download-trace-json">下载全部Trace JSON</button>
+          <pre id="trace-data"></pre>
+        </details></div>
+      </section>
+    </main>
+  </div>
+  __TRACE_PAYLOADS__<script>
+  const report = __DATA__;
+  ReportRegistry.bindSource('triage',()=>report);
+  const manifest = __MANIFEST__;
+  const dim = report.dimensions || {};
+  const traces = report.traces || {};  const deferredTraces = __DEFERRED_TRACES__;
+  deferredTraces.forEach(([id,keys],index)=>{
+    const item=traces[id];let decoded=null;
+    function load(){
+      if(decoded===null){const node=document.getElementById(`trace-payload-${index}`);decoded=JSON.parse(node.textContent);node.remove();}
+      return decoded;
+    }
+    keys.forEach(key=>Object.defineProperty(item,key,{enumerable:true,get:()=>load()[key]}));
+  });
+
+  function traceAccessLatencyMs(item) {
+    const value = item?.access_latency_ms?.max ?? item?.access_latency_ms?.p99 ?? item?.access_latency_ms?.p50 ?? 0;
+    const n = Number(value || 0);
+    return Number.isFinite(n) ? Number(n.toFixed(3)) : 0;
+  }
+  const traceRows = Object.entries(traces).sort((a,b) => traceAccessLatencyMs(b[1]) - traceAccessLatencyMs(a[1]));
+  let filteredTraceRows = traceRows;
+  let currentPage = 0;
+  let selectedTraceId = traceRows[0]?.[0] || null;
+  let pageSize = 4;
+  let activeOperation = '';
+  let topTraceSort = null;
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  }
+  function shortCodeRef(value) {
+    const text = String(value || '');
+    return text.length > 16 ? `${text.slice(0, 12)}...${text.slice(-7)}` : text;
+  }
+  function formatMetadataValue(field, value) {
+    if (field === 'code_ref') {
+      return `<span class="code-ref-value" title="${escapeHtml(value)}">${escapeHtml(value)}</span>`;
+    }
+    return formatCell('value', value);
+  }
+  function workerNameParts(raw) {
+    const text = String(raw || '');
+    let match = text.match(/client-?(\d+).*?worker-?(\d+)/i);
+    if (match) return {kind:'client', left:match[1], worker:match[2]};
+    match = text.match(/worker-?(\d+).*?worker-?(\d+)/i);
+    if (match) return {kind:'worker', left:match[1], worker:match[2]};
+    match = text.match(/(?:^|[-_/])worker-?(\d+)/i);
+    if (match) return {kind:'worker', worker:match[1]};
+    return {kind:'unknown', raw:text};
+  }
+  function workerDisplayName(raw) {
+    const parts = workerNameParts(raw);
+    return parts.worker ? `worker ${parts.worker}` : (parts.raw || 'unknown worker');
+  }
+  function workerAggregateKey(raw) {
+    const parts = workerNameParts(raw);
+    return parts.worker ? `worker:${parts.worker}` : `raw:${String(raw || 'unknown')}`;
+  }
+  function workerAggregateLabel(key) {
+    const text = String(key || '');
+    if (text.startsWith('worker:')) return `worker ${text.slice('worker:'.length)}`;
+    if (text.startsWith('raw:')) return text.slice('raw:'.length) || 'unknown worker';
+    return workerDisplayName(text);
+  }
+  function workerMatchesFilter(raw, selectedWorker) {
+    return !selectedWorker || workerAggregateKey(raw) === selectedWorker;
+  }
+  function workerRelationName(raw) {
+    const parts = workerNameParts(raw);
+    if (parts.kind === 'client' && parts.left && parts.worker) return `client ${parts.left} → worker ${parts.worker}`;
+    if (parts.kind === 'worker' && parts.left && parts.worker) return `worker ${parts.left} → worker ${parts.worker}`;
+    return workerDisplayName(raw);
+  }
+  function refreshControlsVisibility(select) {
+    const controls = select?.closest('.controls');
+    if (!controls) return;
+    const labels = [...controls.querySelectorAll('label')];
+    if (!labels.length) return;
+    controls.style.display = labels.every(label => label.style.display === 'none') ? 'none' : '';
+  }
+  function hideEmptyFilterLabel(select, optionCount) {
+    if (!select) return;
+    const label = select.closest('label');
+    if (label) {
+      label.style.display = optionCount ? '' : 'none';
+    } else {
+      select.style.display = optionCount ? '' : 'none';
+    }
+    refreshControlsVisibility(select);
+  }
+  function setSelectOptions(id, defaultLabel, options) {
+    const select = document.getElementById(id);
+    if (!select) return null;
+    const normalized = (options || []).map(item => Array.isArray(item) ? item : [item, item]);
+    const current = select.value;
+    select.innerHTML = `<option value="">${escapeHtml(defaultLabel)}</option>` +
+      normalized.map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`).join('');
+    const values = normalized.map(([value]) => String(value));
+    select.value = values.includes(current) ? current : '';
+    hideEmptyFilterLabel(select, normalized.length);
+    return select;
+  }
+  function pctText(item) {
+    if (!item || !item.count) return '';
+    return `count=${item.count} p50=${item.p50} p90=${item.p90} p99=${item.p99} max=${item.max}`;
+  }
+  function scalePercentiles(item, scale) {
+    if (!item || !item.count) return null;
+    const out = {count:item.count};
+    ['min','p50','p90','p99','max'].forEach(key => {
+      out[key] = item[key] === undefined || item[key] === null ? null : Number((item[key] * scale).toFixed(3));
+    });
+    return out;
+  }
+  const metricLabelMap = {
+    'access':'Access',
+    'urma.total':'URMA total',
+    'urma.poll_jfc':'URMA poll',
+    'urma.notify':'URMA notify',
+    'urma.thread_sched':'URMA sched',
+    'latencySummary.client.process.get':'Client process GET',
+    'latencySummary.client.process.set':'Client process SET',
+    'latencySummary.client.rpc.get':'Client RPC GET',
+    'latencySummary.client.rpc.create':'Client RPC Create',
+    'latencySummary.client.rpc.publish':'Client RPC Publish',
+    'latencySummary.client.process.memory_copy':'Client memory copy',
+    'latencySummary.worker.process.get':'Worker process GET',
+    'latencySummary.worker.process.remote_get':'Worker RemoteGet process',
+    'latencySummary.worker.rpc.query_meta':'Worker QueryMeta RPC',
+    'latencySummary.worker.rpc.remote_get':'Worker RemoteGet RPC',
+    'latencySummary.worker.rpc.create_meta':'Worker CreateMeta RPC',
+    'latencySummary.worker.process.publish':'Worker Publish',
+    'custom.wlock_wait':'WLock wait',
+    'wlock_wait':'WLock wait'
+  };
+  function metricLabel(name) {
+    if (metricLabelMap[name]) return metricLabelMap[name];
+    return String(name || '').replace(/^latencySummary\./, '').replace(/^urma\./, 'URMA ').replace(/[._]/g, ' ');
+  }
+  const flowLabelMap = {
+    'DS_KV_CLIENT_GET':'Client GET',
+    'DS_POSIX_GET':'Worker GET',
+    'DS_KV_CLIENT_SET':'Client SET',
+    'DS_POSIX_SET':'Worker SET',
+    'DS_KV_CLIENT_CREATE':'Client Create',
+    'DS_POSIX_CREATE':'Worker Create',
+    'DS_KV_CLIENT_PUBLISH':'Client Publish',
+    'DS_POSIX_PUBLISH':'Worker Publish'
+  };
+  function flowLabel(name) {
+    if (flowLabelMap[name]) return flowLabelMap[name];
+    return String(name || '').replace(/^DS_/, '').replace(/_/g, ' ');
+  }
+  const tableSortStates = {};
+  function sortCellValue(value, header) {
+    if(header==='原始证据')return highlightLogLine(text);
+    if(header==='组件'||header==='组件 / 错误类别')return '<b>'+escapeHtml(text)+'</b>';
+    const lowerHeader = String(header || '').toLowerCase();
+    const text = String(value ?? '').replace(/<[^>]*>/g, '').trim();
+    const distributionMatch = text.match(/\b(max|p99|p90|p50|count)=(-?\d+(?:\.\d+)?)/gi);
+    if (distributionMatch && /(distribution|latency|access)/.test(lowerHeader)) {
+      const scores = Object.fromEntries(distributionMatch.map(part => {
+        const [, key, raw] = part.match(/(max|p99|p90|p50|count)=(-?\d+(?:\.\d+)?)/i);
+        return [key.toLowerCase(), Number(raw)];
+      }));
+      return {type:'number', value:scores.max ?? scores.p99 ?? scores.p90 ?? scores.p50 ?? scores.count ?? 0, text};
+    }
+    if (/(time|trace|worker|edge|classification|status|access)/.test(lowerHeader) && !/(latency ms|p50|p90|p99|max|count|events|lines|traces|slow|errors|duration|total|wait|wake|poll|notify|sched|data size|cpuid)/.test(lowerHeader)) {
+      return {type:'text', value:text.toLowerCase(), text};
+    }
+    if (typeof value === 'number') return {type:'number', value, text};
+    if (/^-?\d+(?:\.\d+)?$/.test(text)) return {type:'number', value:Number(text), text};
+    return {type:'text', value:text.toLowerCase(), text};
+  }
+  function sortRowsForTable(rows, sort, headers=[]) {
+    if (!sort || sort.index === undefined || sort.index === null) return rows.slice();
+    return rows.map((row, originalIndex) => ({row, originalIndex})).sort((a, b) => {
+      const av = sortCellValue(a.row[sort.index], headers[sort.index]);
+      const bv = sortCellValue(b.row[sort.index], headers[sort.index]);
+      let cmp = 0;
+      if (av.type === 'number' && bv.type === 'number') cmp = av.value - bv.value;
+      else cmp = av.text.localeCompare(bv.text, 'zh-CN', {numeric:true});
+      if (cmp === 0) cmp = a.originalIndex - b.originalIndex;
+      return sort.dir === 'desc' ? -cmp : cmp;
+    }).map(item => item.row);
+  }
+  function nextSortState(current, index) {
+    if (!current || current.index !== index) return {index, dir:'asc'};
+    return {index, dir:current.dir === 'asc' ? 'desc' : 'asc'};
+  }
+  function renderTable(id, headers, rows, rowAttrs, options={}) {
+    const table = document.getElementById(id);
+    const sortable = options.sortable !== false;
+    const sortState = options.sortState || tableSortStates[id];
+    const visibleRows = options.skipSort ? rows.slice() : sortRowsForTable(rows, sortState, headers);
+    const headerHtml = headers.map((h, index) => {
+      const active = sortState && sortState.index === index;
+      const mark = active ? `<span class="sort-mark">${sortState.dir === 'asc' ? '▲' : '▼'}</span>` : '<span class="sort-mark">↕</span>';
+      return `<th class="${sortable ? 'sortable-th' : ''}" data-sort-index="${index}" aria-sort="${active ? (sortState.dir === 'asc' ? 'ascending' : 'descending') : 'none'}">${escapeHtml(h)}${sortable ? mark : ''}</th>`;
+    }).join('');
+    if (!rows.length) {
+      table.innerHTML = `<thead><tr>${headerHtml}</tr></thead><tbody><tr><td class="muted" colspan="${headers.length}">No data</td></tr></tbody>`;
+      return;
+    }
+    table.innerHTML = `<thead><tr>${headerHtml}</tr></thead>` +
+      `<tbody>${visibleRows.map((row, idx) => `<tr ${rowAttrs ? rowAttrs(row, idx) : ''}>${row.map((cell, cellIdx) => {
+        const cellHtml = options.formatCell ? options.formatCell(headers[cellIdx], cell, row, cellIdx) : formatCell(headers[cellIdx], cell);
+        return `<td${id==='ub-request-table' ? ` data-label="${escapeHtml(headers[cellIdx])}"` : ''}>${cellHtml}</td>`;
+      }).join('')}</tr>`).join('')}</tbody>`;
+    if (sortable) {
+      table.querySelectorAll('th[data-sort-index]').forEach(th => th.addEventListener('click', () => {
+        const index = Number(th.dataset.sortIndex);
+        if (options.onSort) options.onSort(index);
+        else {
+          tableSortStates[id] = nextSortState(tableSortStates[id], index);
+          renderTable(id, headers, rows, rowAttrs, options);
+        }
+      }));
+    }
+  }
+  function formatCell(header, cell) {
+    const text = String(cell ?? '');
+    if(header==='原始证据')return highlightLogLine(text);
+    if(header==='组件'||header==='组件 / 错误类别')return '<b>'+escapeHtml(text)+'</b>';
+    const lowerHeader = String(header || '').toLowerCase();
+    const lower = text.toLowerCase();
+    const escaped = escapeHtml(text);
+    if (!text) return '';
+    const numeric = Number(text);
+    if (/(error|errors|status|classification)/.test(lowerHeader) && /(deadline|timeout|error|fail|1001|runtime)/i.test(text)) {
+      return `<span class="cell-hot">${escaped}</span>`;
+    }
+    if (/status/.test(lowerHeader) && /(present|ok|success)/i.test(text)) return `<span class="cell-ok">${escaped}</span>`;
+    if (/(latency|duration|p99|max|access|slow)/.test(lowerHeader) && Number.isFinite(numeric)) {
+      return `<span class="${numeric >= 20 ? 'cell-hot' : numeric >= 5 ? 'cell-warn' : 'cell-ok'}">${escaped}</span>`;
+    }
+    if (/(slow|errors|count|traces)/.test(lowerHeader) && Number.isFinite(numeric) && numeric > 0) {
+      return `<span class="${numeric >= 20 ? 'cell-hot' : 'cell-warn'}">${escaped}</span>`;
+    }
+    if (/(access|latency|distribution)/.test(lowerHeader) && /(p99|max)=/i.test(text)) {
+      return escaped.replace(/\b(p99|max)=([\d.]+)/gi, (match, key, value) => {
+        const n = Number(value);
+        const cls = Number.isFinite(n) && n >= 20 ? 'cell-hot' : Number.isFinite(n) && n >= 5 ? 'cell-warn' : 'cell-ok';
+        return `<span class="${cls}">${key}=${value}</span>`;
+      });
+    }
+    if (/(deadline|timeout|error|fail|rpc deadline exceeded|status=1001)/i.test(text)) {
+      return escaped.replace(/(deadline|timeout|error|fail|RPC deadline exceeded|status=1001)/gi, '<span class="cell-hot">$1</span>');
+    }
+    return escaped;
+  }
+  const pagedTables = {};
+  function renderPagedTable(id, pagerId, headers, rows, rowAttrs, pageSize=5) {
+    const state = pagedTables[id] || (pagedTables[id] = {page:0, sort:null});
+    const sortedRows = sortRowsForTable(rows, state.sort, headers);
+    const pages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
+    state.page = Math.min(Math.max(state.page, 0), pages - 1);
+    const start = state.page * pageSize;
+    renderTable(id, headers, sortedRows.slice(start, start + pageSize), (row, idx) => rowAttrs ? rowAttrs(row, start + idx) : '', {
+      skipSort:true,
+      sortState:state.sort,
+      onSort:index => {
+        state.sort = nextSortState(state.sort, index);
+        state.page = 0;
+        renderPagedTable(id, pagerId, headers, rows, rowAttrs, pageSize);
+      }
+    });
+    const pager = document.getElementById(pagerId);
+    if (!pager) return;
+    pager.innerHTML = `<button ${state.page <= 0 ? 'disabled' : ''} data-act="prev">上一页</button><span>第 ${state.page + 1} / ${pages} 页，共 ${rows.length} 行</span><button ${state.page >= pages - 1 ? 'disabled' : ''} data-act="next">下一页</button>`;
+    pager.querySelectorAll('button').forEach(button => button.addEventListener('click', () => {
+      state.page += button.dataset.act === 'prev' ? -1 : 1;
+      renderPagedTable(id, pagerId, headers, rows, rowAttrs, pageSize);
+    }));
+  }
+  function severityClass(value, warn=5, hot=20) {
+    const n = Number(value || 0);
+    return n >= hot ? 'hotrow' : n >= warn ? 'warnrow' : '';
+  }
+  function maxLatencyFromText(value) {
+    const text = String(value || '');
+    const keyed = [...text.matchAll(/\b(?:p50|p90|p99|max)=(-?\d+(?:\.\d+)?)/gi)].map(match => Number(match[1]));
+    const ms = [...text.matchAll(/=(-?\d+(?:\.\d+)?)ms\b/gi)].map(match => Number(match[1]));
+    const values = keyed.concat(ms).filter(Number.isFinite);
+    return values.length ? Math.max(...values) : 0;
+  }
+  function severityCellClass(value) {
+    const cls = severityClass(value);
+    return cls === 'hotrow' ? 'cell-hot' : cls === 'warnrow' ? 'cell-warn' : '';
+  }
+  function highlightLatencyTokens(value) {
+    return escapeHtml(value)
+      .replace(/\b((?:p50|p90|p99|max)=)(-?\d+(?:\.\d+)?)/gi, (match, prefix, raw) => {
+        const cls = severityCellClass(Number(raw));
+        return cls ? `<span class="${cls}">${prefix}${raw}</span>` : match;
+      })
+      .replace(/(=)(-?\d+(?:\.\d+)?)(ms\b)/gi, (match, prefix, raw, suffix) => {
+        const cls = severityCellClass(Number(raw));
+        return cls ? `${prefix}<span class="${cls}">${raw}${suffix}</span>` : match;
+      });
+  }
+  function selectedTraceSummaryValueHtml(field, value) {
+    const text = String(value ?? '');
+    if (!text) return '';
+    if (field === 'errors' && value !== '{}') return `<span class="cell-hot">${escapeHtml(text)}</span>`;
+    if (field === 'classification' && /deadline|error|slow|tail|timeout/i.test(value)) return `<span class="cell-hot">${escapeHtml(text)}</span>`;
+    const summarySeverity = severityClass(maxLatencyFromText(value));
+    if (/(access|latencySummary)/i.test(field) && summarySeverity) return highlightLatencyTokens(value);
+    return formatCell('value', value);
+  }
+  const stageLabelMap = {
+    'read.client_to_entry_worker':'Client→Entry RPC',
+    'read.entry_to_meta_worker':'Entry→Meta RPC',
+    'read.entry_to_data_worker':'Entry→Data RPC',
+    'read.data_worker_ub_write':'URMA Write',
+    'write.client_to_entry_createbuffer':'Client→Entry CreateBuffer',
+    'write.client_memory_copy':'Client Memory Copy',
+    'write.client_to_entry_publish':'Client→Entry Publish',
+    'write.entry_to_meta_publish':'Entry→Meta Publish'
+  };
+  const stageColorMap = {
+    'read.entry_to_meta_worker':'#0891b2',
+    'read.entry_to_data_worker':'#ea580c',
+    'read.data_worker_ub_write':'#f59e0b',
+    'write.client_to_entry_createbuffer':'#2563eb',
+    'write.client_memory_copy':'#0ea5a4',
+    'write.client_to_entry_publish':'#ca8a04',
+    'write.entry_to_meta_publish':'#dc2626'
+  };
+  function stageDisplayName(stage) {
+    if (stageLabelMap[stage]) return stageLabelMap[stage];
+    return String(stage || '').replace(/^(read|write)\./, '').replace(/_/g, ' ');
+  }
+  function stageDetailText(stage) {
+    const display = stageDisplayName(stage);
+    return display === stage ? display : `${display} (${stage})`;
+  }
+  function traceOperation(item) {
+    const stageNames = (item.stage_breakdown || []).map(stage => stage.stage || '');
+    const flowNames = Object.keys(item.flows || {});
+    const hasRead = stageNames.some(name => name.startsWith('read.')) || flowNames.some(name => name.includes('GET'));
+    const hasWrite = stageNames.some(name => name.startsWith('write.')) || flowNames.some(name => /(SET|CREATE|PUBLISH)/.test(name));
+    return hasRead && hasWrite ? 'mixed' : hasRead ? 'read' : hasWrite ? 'write' : 'unknown';
+  }
+  function operationMatches(item) {
+    if (!activeOperation) return true;
+    const op = traceOperation(item);
+    return op === activeOperation || op === 'mixed';
+  }
+  function hasTraceFailure(item) {
+    return Object.keys(item.errors || {}).length > 0 || /deadline|error|fail|timeout/i.test(String(item.classification || ''));
+  }
+  function statusMatchesTrace(item, requestStatus) {
+    if (!requestStatus) return true;
+    const failed = hasTraceFailure(item);
+    return requestStatus === 'failed' ? failed : !failed;
+  }
+  function traceStartTime(item) {
+    return item.first_ts || item.last_ts || '';
+  }
+  function stageMatchesOperation(stageName) {
+    return !activeOperation || String(stageName || '').startsWith(`${activeOperation}.`);
+  }
+  function flowOperation(name) {
+    const text = String(name || '');
+    if (/GET/.test(text)) return 'read';
+    if (/(SET|CREATE|PUBLISH)/.test(text)) return 'write';
+    return 'unknown';
+  }
+  function metricOperation(name) {
+    const text = String(name || '').toLowerCase();
+    if (text === 'access') return 'both';
+    if (text.includes('urma') || text.includes('remote_get') || text.includes('query_meta') || text.endsWith('.get') || text.includes('process.get')) return 'read';
+    if (text.includes('memory_copy') || text.includes('publish') || text.includes('create') || text.endsWith('.set') || text.includes('process.set')) return 'write';
+    return 'unknown';
+  }
+  function percentileFromValues(values) {
+    const nums = values.map(Number).filter(Number.isFinite).sort((a,b) => a-b);
+    if (!nums.length) return null;
+    const pick = pct => nums[Math.min(nums.length - 1, Math.floor((nums.length - 1) * pct))];
+    return {count:nums.length,min:nums[0],p50:pick(.5),p90:pick(.9),p99:pick(.99),max:nums[nums.length - 1]};
+  }
+  function traceRowsForOperation(operation) {
+    return traceRows.filter(([, item]) => {
+      const op = traceOperation(item);
+      return op === operation || op === 'mixed';
+    });
+  }
+  function operationAccessPercentiles(operation) {
+    return percentileFromValues(traceRowsForOperation(operation).map(([, item]) => item.access_latency_ms?.max ?? item.access_latency_ms?.p99 ?? item.access_latency_ms?.p50));
+  }
+  const palette = ['#2563eb','#ea580c','#059669','#7c3aed','#dc2626','#0891b2','#ca8a04','#64748b'];
+  const chartTextStyle = {fontSize:13, color:'#475569'};
+  function axisBase(title, extra) {
+    return Object.assign({
+      title:{show:false,text:title},
+      color:palette,
+      textStyle:chartTextStyle,
+      grid:{left:58,right:24,top:72,bottom:76,containLabel:true},
+      legend:{top:30,type:'scroll'},
+      tooltip:{trigger:'axis', axisPointer:{type:'shadow'}, confine:true},
+      dataZoom:[{type:'inside'},{type:'slider', height:18, bottom:18}]
+    }, extra || {});
+  }
+  function wideHorizontalGrid(left=120, top=56, bottom=34) {
+    return {left:left,right:24,top:top,bottom:bottom,containLabel:false};
+  }
+  function noDataOption(title) {
+    return {title:{text:title, left:'center', top:'center', textStyle:Object.assign({}, chartTextStyle, {color:'#94a3b8'})}};
+  }
+  const chartRegistry = new Map();
+  const chartRenderers = new Map();
+  const pendingChartOptions = new Map();
+  const observedCharts = new WeakSet();
+  function chartIsVisible(node) {
+    const rect = node.getBoundingClientRect();
+    return rect.bottom >= -200 && rect.top <= window.innerHeight + 200;
+  }
+  function drawChart(id, option) {
+    const node = document.getElementById(id);
+    if (!window.echarts) { node.innerHTML='<div class="muted">ECharts failed to load; tables below remain available.</div>'; return; }
+    const instance = echarts.getInstanceByDom(node) || TraceCharts.init(echarts,node);
+    instance.setOption(option, true);
+    instance.resize();
+    chartRegistry.set(id,instance);
+  }
+  const chartVisibility = window.IntersectionObserver ? new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      const id=entry.target.id;
+      if (!entry.isIntersecting || !pendingChartOptions.has(id)) return;
+      const option=pendingChartOptions.get(id);pendingChartOptions.delete(id);
+      const render=chartRenderers.get(id);
+      if(render) render(); else drawChart(id,option);
+    });
+  },{rootMargin:'200px'}) : null;
+  function chart(id,option) {
+    const node=document.getElementById(id);if(!node)return;
+    if(chartVisibility && !chartIsVisible(node)) {
+      pendingChartOptions.set(id,option);
+      if(!observedCharts.has(node)){observedCharts.add(node);chartVisibility.observe(node);}
+      return;
+    }
+    pendingChartOptions.delete(id);drawChart(id,option);
+  }
+  function deferSection(id,render) {
+    const node=document.getElementById(id);
+    if(!window.IntersectionObserver || !node) {setTimeout(render,0);return;}
+    const observer=new IntersectionObserver(entries=>{
+      if(entries.some(entry=>entry.isIntersecting)){observer.disconnect();setTimeout(render,0);}
+    },{rootMargin:'200px'});
+    observer.observe(node);
+  }
+  function installResponsiveCharts() {
+    let timer = null;
+    const scheduleChartResize = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        chartRenderers.forEach((renderer,id) => {if(chartRegistry.has(id)) renderer();});
+        chartRegistry.forEach(instance => instance.resize());
+      }, 80);
+    };
+    window.addEventListener('resize', scheduleChartResize);
+    if (window.ResizeObserver) {
+      const observer = new ResizeObserver(scheduleChartResize);
+      document.querySelectorAll('.chart').forEach(node => observer.observe(node));
+    }
+  }
+  function autoCenterFlowGraph(chartInstance) {
+    if (!chartInstance) return;
+    if (chartInstance.resize) chartInstance.resize();
+  }
+  function downloadText(filename, text) {
+    const blob = new Blob([text], {type:'text/plain;charset=utf-8'});
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    URL.revokeObjectURL(link.href);
+    link.remove();
+  }
+  function highlightLogLine(line) {
+    const text = escapeHtml(line);
+    return text
+      .replace(/(\|\s*E\s*\|)/g, '<span class="log-tag log-error">$1</span>')
+      .replace(/(\|\s*F\s*\|)/g, '<span class="log-tag log-error">$1</span>')
+      .replace(/(\|\s*W\s*\|)/g, '<span class="log-tag log-deadline">$1</span>')
+      .replace(/\b(ERROR|FATAL|K_RUNTIME_ERROR|K_TRY_AGAIN|status[:=]?\s*1001|RPC failed|error_code=2004|max_concurrency)\b/gi, '<span class="log-tag log-error">$1</span>')
+      .replace(/(\[?URMA_ELAPSED_(?:TOTAL|POLL_JFC|NOTIFY|THREAD_SHED)\]?|URMA_WAIT_TIMEOUT|urma_[a-z_]+|wait os sched[^:,]*?(?:\([^)]*\))?:\s*[\d.]+ms|(?:firstUrmaWrite|secondUrmaWrite|urmaWrite)?WakeSchedLatencyUs:\s*[\d.]+|srcChipInflight:\s*\{[^}]*\}|request id[:=]?\s*\d+|src address:\s*[^,\s]+|target address:\s*[^,\s]+|dataSize[:=]?\s*\d+|cpuid[:=]?\s*\d+|inflight[_a-z]*[:=]?\s*\d+)/gi, '<span class="log-tag log-urma">$1</span>')
+      .replace(/(\[?(?:(?:ZMQ|BRPC)_)?RPC_FRAMEWORK_SLOW\]?|server_exec_us=\d+|network_residual_us=\d+|client_req_framework_us=\d+|client_rsp_framework_us=\d+|remote_processing_us=\d+)/gi, '<span class="log-tag log-rpc">$1</span>')
+      .replace(/(latencySummary|client\.rpc\.[a-z_]+|worker\.rpc\.[a-z_]+|worker\.process\.[a-z_]+|client\.process\.[a-z_]+)/gi, '<span class="log-tag log-latency">$1</span>')
+      .replace(/(deadline exceeded|RPC timed out|\btimeout\b|20ms deadline)/gi, '<span class="log-tag log-deadline">$1</span>')
+      .replace(/(WLock[^,;\n]*(?:cost|elapsed|time|耗时)[:=\s]*[\d.]+\s*(?:us|ms))/gi, '<span class="log-tag log-slow">$1</span>')
+      .replace(/(cost(?:Us)?[:=]?\s*[\d.]+\s*(?:us|ms)?|totalCost:\s*[\d.]+ms|[A-Za-z0-9_.-]+:\s*\d{4,})/gi, '<span class="log-tag log-slow">$1</span>')
+      .replace(/(RemotePull|Remote done|BatchGetObjectRemote|ProcessGetObjectRequest|CreateBuffer|Publish|QueryMeta|GetObjMetaInfo)/gi, '<span class="log-tag log-field">$1</span>');
+  }
+  const componentLabels = {
+    client:'Client 侧日志',
+    entry_worker:'Entry Worker 日志',
+    meta_worker:'Meta Worker 观测',
+    data_worker:'Data Worker / UB 日志',
+    context:'Trace Context'
+  };
+  function classifyEvidenceComponent(e) {
+    const text = `${e.member || ''} ${e.text || ''}`;
+    if (/URMA_ELAPSED|urma_manager|urma_|target address|src address/i.test(text)) return 'data_worker';
+    if (/MasterOCService\.QueryMeta|Query metadata from master|GetObjMetaInfo|meta[_ -]?worker/i.test(text)) return 'meta_worker';
+    if (/\/collected\/|ds_client_|object_client_impl|client_worker_remote_api|DS_KV_CLIENT|Client\/WorkerRpc/i.test(text)) return 'client';
+    if (/collected_worker_logs|DS_POSIX|worker_oc_service|BatchGetObjectRemote|Remote done|access\.log/i.test(text)) return 'entry_worker';
+    return 'context';
+  }
+  function traceLogBlockSummary(group) {
+    const text = group.lines.join('\n');
+    const focus = [];
+    const add = (label, tone='') => {
+      if (!focus.some(item => item.label === label)) focus.push({label, tone});
+    };
+    if (/ERROR|FATAL|Get error|Set error|status[:=]?\s*1001|error_code=2004|max_concurrency/i.test(text)) add('error/status', 'hot');
+    if (/error_code=2004|max_concurrency/i.test(text)) add('RPC 线程数/并发不足', 'hot');
+    if (/deadline exceeded|RPC timed out|\btimeout\b|20ms deadline/i.test(text)) add('deadline/timeout', 'hot');
+    if (/RPC_FRAMEWORK_SLOW|server_exec_us=|network_residual_us=|remote_processing_us=/i.test(text)) add('RPC slow', 'warn');
+    if (/\bWLock\b/i.test(text)) add('WLock 耗时', 'warn');
+    if (/latencySummary|client\.rpc\.|worker\.rpc\.|worker\.process\./i.test(text)) add('latencySummary');
+    if (/URMA_ELAPSED|URMA_WAIT_TIMEOUT|\burma[_a-z]*\b|\bUB\b/i.test(text)) add('URMA/UB', 'warn');
+    if (/RemotePull|Remote done|BatchGetObjectRemote/i.test(text)) add('RemoteGet');
+    if (/QueryMeta|GetObjMetaInfo|MasterOCService/i.test(text)) add('QueryMeta');
+    if (/CreateBuffer|Publish/i.test(text)) add('Write path');
+    const costs = [...text.matchAll(/(?:cost(?:Us)?|totalCost|framework_us|e2e_us|server_exec_us|network_residual_us|remote_processing_us)[:=]?\s*([\d.]+)\s*(us|ms)?/gi)]
+      .map(match => {
+        const raw = Number(match[1]);
+        if (!Number.isFinite(raw)) return null;
+        const unit = (match[2] || '').toLowerCase();
+        return unit === 'us' || /(?:costUs|_us)/i.test(match[0]) ? raw / 1000 : raw;
+      })
+      .filter(value => value !== null);
+    if (costs.length) add(`max ${Math.max(...costs).toFixed(3)}ms`, Math.max(...costs) >= 20 ? 'hot' : 'warn');
+    const ips = [...new Set([...text.matchAll(/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b/g)].map(match => match[0]))].slice(0, 2);
+    ips.forEach(ip => add(ip));
+    if (!focus.length) add('按原始时间顺序看');
+    return '<span>重点:</span>' + focus.slice(0, 7).map(item =>
+      `<span class="trace-log-focus ${escapeHtml(item.tone)}">${escapeHtml(item.label)}</span>`
+    ).join('');
+  }
+  function extractLatencyDetails(text) {
+    const details = [];
+    const seen = new Set();
+    const add = (label, value, unitHint='') => {
+      const raw = Number(value);
+      if (!Number.isFinite(raw)) return;
+      const unit = (unitHint || '').toLowerCase();
+      const ms = unit === 'us' || /(?:costUs|_us|LatencyUs)$/i.test(label) ? raw / 1000 : raw;
+      const key = `${label}:${ms.toFixed(3)}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        details.push({label, ms});
+      }
+    };
+    for (const match of text.matchAll(/\b(costUs|cost|totalCost|framework_us|e2e_us|server_exec_us|network_residual_us|remote_processing_us|(?:firstUrmaWrite|secondUrmaWrite|urmaWrite)?WakeSchedLatencyUs)[:=]?\s*([\d.]+)\s*(us|ms)?/gi)) {
+      add(match[1], match[2], match[3] || '');
+    }
+    for (const match of text.matchAll(/\b(WLock[^,;\n]{0,80}?(?:cost|elapsed|time|耗时))[:=\s]*([\d.]+)\s*(us|ms)/gi)) {
+      add(match[1].trim(), match[2], match[3] || '');
+    }
+    for (const match of text.matchAll(/\b([A-Za-z][A-Za-z0-9_. -]{1,80})\s*:\s*([\d.]+)\s*ms\b/g)) {
+      add(match[1].trim(), match[2], 'ms');
+    }
+    return details.sort((a,b) => b.ms - a.ms).slice(0, 8);
+  }
+  function traceLatencyClass(item) {
+    const value = Number(item?.ms);
+    if (!Number.isFinite(value)) return '';
+    return value >= 20 ? 'trace-latency-hot' : value >= 5 ? 'trace-latency-warn' : '';
+  }
+  function renderTraceLatencyValue(item) {
+    const value = `${Number(item.ms).toFixed(3)}ms`;
+    const cls = traceLatencyClass(item);
+    return cls ? `<span class="${cls}">${escapeHtml(value)}</span>` : escapeHtml(value);
+  }
+  function extractDirectionDetails(text) {
+    const out = [];
+    const patterns = [
+      /\bsrc=([^,\s]+),\s*dst=([^,\s]+)/gi,
+      /\bsrc address:\s*([^,\s]+),\s*target address:\s*([^,\s]+)/gi,
+      /\bsource address:\s*([^,\s]+),\s*dst address:\s*([^,\s]+)/gi,
+      /Get->\[([^\]]+)\]/gi
+    ];
+    patterns.forEach(regex => {
+      for (const match of text.matchAll(regex)) {
+        const right = match[2] || match[1];
+        const left = match[2] ? match[1] : 'client';
+        const value = `${left} → ${right}`;
+        if (!out.includes(value)) out.push(value);
+      }
+    });
+    return out.slice(0, 5);
+  }
+  function extractRemainingTimeWarnings(text) {
+    const warnings = [];
+    for (const match of text.matchAll(/\b(?:remainingTime|start remainingTime)[:=]?\s*([\d.]+)/gi)) {
+      const value = Number(match[1]);
+      if (Number.isFinite(value) && value > 20) warnings.push(`remainingTime 远大于 20ms: ${value}ms`);
+    }
+    return [...new Set(warnings)].slice(0, 5);
+  }
+  function traceLogBlockDetails(group) {
+    const text = group.lines.join('\n');
+    const rows = [];
+    const remaining = extractRemainingTimeWarnings(text);
+    if (remaining.length) rows.push(`<div><b>告警:</b> ${remaining.map(escapeHtml).join('；')}</div>`);
+    const directions = extractDirectionDetails(text);
+    if (directions.length) rows.push(`<div><b>方向:</b> ${directions.map(escapeHtml).join('；')}</div>`);
+    const latencies = extractLatencyDetails(text);
+    if (latencies.length) rows.push(`<div><b>耗时明细:</b> ${latencies.map(item => `${escapeHtml(item.label)}=${renderTraceLatencyValue(item)}`).join('；')}</div>`);
+    return rows.length ? `<div class="trace-log-details">${rows.join('')}</div>` : '';
+  }
+  function traceLogActor(event){
+    return TraceVisuals.actor(event);
+  }
+  function traceLogErrorCategory(event){
+    const text=event.evidence.text||'';
+    if(/ERPCTIMEDOUT|ETIMEDOUT|DEADLINE_EXCEEDED|timed out|deadline exceeded|reached timeout|超时|\btimeout\b(?!\s*[:=])/i.test(text))return '超时 / Deadline';
+    if(/ECONN|ENETUNREACH|EHOSTUNREACH|connection (?:refused|reset|failed)|connect(?:ion)?[^\n]{0,30}fail|连接失败/i.test(text))return '连接失败';
+    const failed=/\|\s*[EF]\s*\||\bfailed\b|\berror\b|cntl_failed\s*=\s*1|(?:cntl|ds)_error_code\s*=\s*-?[1-9]\d*|失败|status\s*[:=]\s*[1-9]\d*/i.test(text);
+    if(failed&&/URMA|UB_|urma_/i.test(text))return 'URMA 错误';
+    if(failed&&/RPC|QueryAndGet|QueryMeta|RemoteGet/i.test(text))return 'RPC 错误';
+    return failed?'其他错误':'未标记错误';
+  }
+  function renderTraceLogBlocks(evidence) {
+    const audit=TraceVisuals.uniqueEvidence(evidence),model=TraceVisuals.timeline(audit.records);
+    const rows=model.lanes.flatMap(lane=>lane.events.map(event=>({...event,process:lane.name})));
+    const timed=new Set(rows.map(e=>JSON.stringify([e.evidence.member,e.evidence.line,e.evidence.text])));
+    rows.push(...audit.records.filter(e=>!timed.has(JSON.stringify([e.member,e.line,e.text]))).map(e=>({evidence:e,component:TraceVisuals.component(e),process:'进程未观测',timestamp:'无时间戳',offset_ms:null,elapsed_ms:null})));
+    window.traceLogTimelineRows=rows.map(event=>({...event,...traceLogActor(event),errorCategory:traceLogErrorCategory(event)}));
+    const options=values=>[...new Set(values)].sort().map(value=>`<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join('');
+    return `<div class="trace-log-block"><p class="caption">原始保留 ${audit.rawCount} 条 · 唯一日志 ${audit.records.length} 条 · 合并采集副本 ${audit.duplicates} 条 · 索引行 ${audit.indexRows} 条。按进程内时间排序；累计和相邻 elapsed 不跨进程计算。统计图仍使用原分析数据，本处为日志展示去重。</p><div class="controls"><label>角色 <select id="trace-log-role"><option value="">全部角色</option>${options(window.traceLogTimelineRows.map(e=>e.role))}</select></label><label>实例 <select id="trace-log-instance"><option value="">全部实例</option>${options(window.traceLogTimelineRows.map(e=>e.instance))}</select></label><label>组件 <select id="trace-log-component"><option value="">全部组件</option>${options(rows.map(e=>e.component))}</select></label><label>错误类别 <select id="trace-log-error"><option value="">全部类别</option>${options(window.traceLogTimelineRows.map(e=>e.errorCategory))}</select></label><label>排列 <select id="trace-log-order"><option value="process">进程内时间顺序</option><option value="elapsed">累计时间升序（各进程归零）</option><option value="gap">相邻间隔降序</option></select></label><button type="button" id="trace-log-reset">重置筛选</button><span id="trace-log-filter-count"></span></div><p class="caption">筛选后显示全部匹配行；elapsed 保留筛选前的进程内计时；默认按进程分组，换进程累计归零，相邻间隔不保证递增。跨进程累计排序不代表全局先后。类别按日志标记识别，不代表根因；“未标记错误”不等于请求成功。</p><div class="table-wrap"><table id="trace-log-timeline-table"></table></div></div>`;
+  }
+  function renderTraceLogTimelinePage(){
+    const component=document.getElementById('trace-log-component'),error=document.getElementById('trace-log-error');
+    const role=document.getElementById('trace-log-role'),instance=document.getElementById('trace-log-instance');
+    const all=window.traceLogTimelineRows||[],rows=all.filter(e=>(!role.value||e.role===role.value)&&(!instance.value||e.instance===instance.value)&&(!component.value||e.component===component.value)&&(!error.value||e.errorCategory===error.value));
+    const order=document.getElementById('trace-log-order');
+    if(order.value==='elapsed')rows.sort((a,b)=>(a.offset_ms??Infinity)-(b.offset_ms??Infinity));
+    if(order.value==='gap')rows.sort((a,b)=>(b.elapsed_ms??-Infinity)-(a.elapsed_ms??-Infinity));
+    renderTable('trace-log-timeline-table',['本地时间 / 角色 / 实例','进程内累计 / 相邻间隔 (ms)','组件 / 错误类别','原始证据'],rows.map(event=>[
+      event.timestamp+'\n'+event.instance,
+      (event.offset_ms==null?'未观测':event.offset_ms.toFixed(3))+' / '+(event.elapsed_ms==null?'首条或未观测':event.elapsed_ms.toFixed(3)),
+      event.component+'\n'+event.errorCategory,event.evidence.text
+    ]),null,{sortable:false,skipSort:true});
+    document.getElementById('trace-log-filter-count').textContent=`显示 ${rows.length} / ${all.length} 条（全部匹配行）`;
+    order.onchange=renderTraceLogTimelinePage;role.onchange=renderTraceLogTimelinePage;instance.onchange=renderTraceLogTimelinePage;component.onchange=renderTraceLogTimelinePage;error.onchange=renderTraceLogTimelinePage;
+    document.getElementById('trace-log-reset').onclick=()=>{order.value='process';role.value='';instance.value='';component.value='';error.value='';renderTraceLogTimelinePage();};
+  }
+  const access = dim.latency_ms?.access || {};
+  const totalErrors = Object.values(dim.errors || {}).reduce((a,b) => a + b, 0);
+  const topClass = Object.entries(dim.classifications || {}).sort((a,b) => b[1] - a[1])[0] || ['unknown', 0];
+  const diagnosis = dim.diagnosis || {};
+  const recommendations = dim.recommendations || [];
+  const sourceAppendix = dim.source_appendix || [];
+  const flowStages = dim.flow_stages || {nodes: [], edges: [], read:{nodes: [], edges: []}, write:{nodes: [], edges: []}};
+  const readFlowStages = flowStages.read || {nodes: flowStages.nodes || [], edges: []};
+  const writeFlowStages = flowStages.write || {nodes: flowStages.nodes || [], edges: []};
+  document.getElementById('log-highlight-legend').innerHTML = [
+    ['log-error','ERROR/status'],
+    ['log-deadline','deadline/timeout'],
+    ['log-rpc','RPC slow'],
+    ['log-latency','latencySummary'],
+    ['log-urma','URMA/UB'],
+    ['log-slow','>=阈值耗时'],
+    ['log-field','关键流程']
+  ].map(([cls,label]) => `<span class="log-tag ${cls}">${label}</span>`).join('');
+  document.getElementById('report-subtitle').innerHTML =
+    `输入日志解析得到 <b>${report.trace_count}</b> 条 trace，错误标记 <b>${totalErrors}</b> 个。` +
+    `当前主分类为 <b>${escapeHtml(topClass[0])}</b>，access p99 为 <b>${access.p99 ?? ''}ms</b>。`;
+  const diagnosisRows = ['symptom_line','latency_line','evidence_boundary','customer_expression']
+    .map(key => diagnosis[key])
+    .filter(Boolean);
+  document.getElementById('report-insight').innerHTML =
+    `<b>核心判断：</b>${escapeHtml(diagnosis.customer_expression?.text || '请结合错误线、慢时延线和证据边界阅读。')}`;
+  document.getElementById('diagnosis-list').innerHTML = diagnosisRows
+    .map(item => `<li><b>${escapeHtml(item.label)}：</b>${escapeHtml(item.text)}</li>`).join('');
+  document.getElementById('summary').innerHTML = [
+    ['trace_count', report.trace_count, 'parsed traces'],
+    ['errors', totalErrors, 'total error markers'],
+    ['access p99 ms', access.p99 ?? '', 'client/access latency'],
+    ['code_ref', report.code_ref, 'source reference']
+  ].map(([k,v,hint]) => k === 'code_ref'
+    ? `<div class="card code-ref-card"><div class="k">${escapeHtml(k)}</div><div class="v" title="${escapeHtml(v)}">${escapeHtml(shortCodeRef(report.code_ref))}</div><div class="n">${escapeHtml(hint)}</div></div>`
+    : `<div class="card"><div class="k">${escapeHtml(k)}</div><div class="v">${escapeHtml(v)}</div><div class="n">${escapeHtml(hint)}</div></div>`).join('');
+  renderTable('run-metadata-table', ['field','value'], [
+    ['case_name', manifest.case_name || ''],
+    ['scenario', manifest.scenario || ''],
+    ['analysis_created_at', manifest.analysis_created_at || ''],
+    ['code_ref', report.code_ref || manifest.code_ref || ''],
+    ['input_document', manifest.input_document || 'inputs.md'],
+    ['raw_inputs', 'raw/inputs'],
+    ['raw_extracted', 'raw/extracted'],
+    ['inputs', (manifest.inputs || []).map(item => `${item.path} (${item.size || 0} bytes)`).join('\n')]
+  ].filter(row => row[1]), null, {
+    formatCell:(header, cell, row) => header === 'value' ? formatMetadataValue(row[0], cell) : formatCell(header, cell)
+  });
+  const classificationRows = Object.entries(dim.classifications || {}).sort((a,b) => b[1]-a[1]);
+  const errorRows = Object.entries(dim.errors || {}).sort((a,b) => b[1]-a[1]);
+  const cohortRows = Object.entries(dim.cohorts || {}).sort((a,b) => b[1].trace_count - a[1].trace_count);
+  const coverageRows = Object.entries(dim.coverage?.surfaces || {}).sort((a,b) => a[0].localeCompare(b[0]));
+  renderTable('coverage-table', ['log surface','events','status','reading'], coverageRows.map(([name,item]) => [
+    name,
+    item.events || 0,
+    item.status || 'missing',
+    item.status === 'present' ? '可作为 observed evidence 进入定界' : '观测盲区，不能把缺失当根因'
+  ]));
+  renderTable('cohort-table', ['cohort','traces','classifications','errors','access'], cohortRows.map(([name,item]) => [
+    name,
+    item.trace_count,
+    JSON.stringify(item.classifications || {}),
+    JSON.stringify(item.errors || {}),
+    pctText(item.access_latency_ms)
+  ]));
+  renderTable('classification-table', ['classification','count'], classificationRows);
+  renderTable('recommendation-table', ['category','title','detail'], recommendations.map(item => [
+    item.category,
+    item.title,
+    item.detail
+  ]));
+  function sourceAppendixByScope(scope) {
+    return sourceAppendix.filter(item => (item.scope || '通用') === scope);
+  }
+  function renderSourceAppendixTables() {
+    const headers = ['log surface','flow stage','source hint','validation','report reading'];
+    const renderScope = (id, scope) => renderTable(id, headers, sourceAppendixByScope(scope).map(item => [
+      item.log_surface,
+      item.flow_stage,
+      item.source_hint,
+      item.validation,
+      item.report_reading
+    ]));
+    renderScope('source-appendix-common-table', '通用');
+    renderScope('source-appendix-read-table', '读取');
+    renderScope('source-appendix-write-table', '写入');
+  }
+  renderSourceAppendixTables();
+  function renderFlowStageTable(id, graph) {
+    renderTable(id, ['stage','summary','operation','IPs','异常 IP','reason','status'], (graph.edges || []).map(edge => [
+      edge.name,
+      edge.summary || '',
+      edge.operation,
+      (edge.rollup?.top_ips || []).join(', '),
+      flowEdgeAbnormalIps(edge),
+      edge.reason || edge.report_reading,
+      edge.status
+    ]));
+  }
+  function renderFlowCandidateEdgeTable() {
+    const rows = (flowStages.candidate_edges || []).map(edge => [
+      edge.operation,
+      `${edge.source} -> ${edge.target}`,
+      (edge.transports || []).join('/'),
+      edge.status,
+      (edge.observed_transfer_paths || []).join('/') || '未观测',
+      edge.report_reading || ''
+    ]);
+    renderTable('flow-candidate-edge-table', ['candidate','direction','transport','status','observed path','reading'], rows);
+  }
+  renderFlowStageTable('read-flow-stage-table', readFlowStages);
+  renderFlowStageTable('write-flow-stage-table', writeFlowStages);
+  renderFlowCandidateEdgeTable();
+  renderPagedTable('worker-ip-alias-table', 'worker-ip-alias-table-pager', ['worker full name','worker short name','POD IP'], buildWorkerIpAliasRows(), null, 5);
+  renderTable('error-table', ['error','count'], errorRows);
+  const latencyRowsForTable = [
+    ['access', pctText(dim.latency_ms?.access)],
+    ...Object.entries(dim.urma_elapsed || {}).map(([k,v]) => [`urma.${k}`, pctText(v)]),
+    ...Object.entries(dim.latency_summary_us || {}).map(([k,v]) => [`latencySummary.${k}`, pctText(v)])
+  ].filter(row => row[1]);
+  const latencyModelRows = [
+    ['access', scalePercentiles(dim.latency_ms?.access, 1)],
+    ...Object.entries(dim.urma_elapsed || {}).map(([k,v]) => [`urma.${k}`, scalePercentiles(v, 1)]),
+    ...Object.entries(dim.latency_summary_us || {}).map(([k,v]) => [`latencySummary.${k}`, scalePercentiles(v, 0.001)])
+  ].filter(([, item]) => item && item.count).sort((a,b) => (b[1].max || 0) - (a[1].max || 0));
+  const latencyChartRows = latencyModelRows.slice(0, 12);
+  const flowRows = Object.entries(dim.flow || {}).sort((a,b) => b[1]-a[1]);
+  const workerRows = Object.entries(dim.worker_summary || {})
+    .sort((a,b) => (b[1].error_count || 0) - (a[1].error_count || 0) || (b[1].line_count || 0) - (a[1].line_count || 0))
+    .slice(0, 40);
+  const ubRows = Object.entries(dim.ub_summary?.edges || {})
+    .sort((a,b) => (b[1].count || 0) - (a[1].count || 0))
+    .slice(0, 40);
+  const ubWorkerRows = Object.entries(dim.ub_worker_summary?.workers || {})
+    .sort((a,b) => (b[1].latency_ms?.max || 0) - (a[1].latency_ms?.max || 0) || ((b[1].entry_events || 0) + (b[1].exit_events || 0)) - ((a[1].entry_events || 0) + (a[1].exit_events || 0)))
+    .slice(0, 40);
+  const ubWorkerTimeRows = dim.ub_worker_summary?.time_buckets || [];
+  const ubLifecycleMetrics = Object.entries(dim.ub_lifecycle_summary?.metrics || {})
+    .sort((a,b) => (b[1].max || 0) - (a[1].max || 0));
+  const ubCountMetricNames = new Set(['remote_get_wr_count','urma_inflight_wr_count']);
+  const ubLifecycleLatencyMetrics = ubLifecycleMetrics.filter(([name]) => !ubCountMetricNames.has(name));
+  const ubChipInflightRows = Object.entries(dim.ub_lifecycle_summary?.chip_inflight || {})
+    .sort((a,b) => (b[1].max || 0) - (a[1].max || 0));
+  const ubWrCountRows = [
+    ...ubLifecycleMetrics.filter(([name]) => ubCountMetricNames.has(name)).map(([name,item]) => [lifecycleLabel(name), item]),
+    ...ubChipInflightRows.map(([chip,item]) => [`Chip ${chip} inflight`, item])
+  ].sort((a,b) => (b[1].max || 0) - (a[1].max || 0));
+  const ubRequestRows = dim.ub_lifecycle_summary?.requests || [];
+  const timeBucketRows = dim.time_buckets?.['1000ms'] || [];
+  const sourceRows = rows => ({rows});
+  ReportRegistry.bindSource('triage_manifest',()=>sourceRows([manifest]));
+  ReportRegistry.bindSource('triage_traces',()=>sourceRows(Object.values(traces)),
+    ()=>sourceRows(filteredTraceRows.map(([,item])=>item)));
+  ReportRegistry.bindSource('triage_selected',()=>sourceRows(Object.values(traces)),
+    ()=>sourceRows(selectedTraceId && traces[selectedTraceId] ? [traces[selectedTraceId]] : []));
+  function selectedStages(observedOnly=false) {
+    return (traces[selectedTraceId]?.stage_breakdown || [])
+      .filter(stage=>stageMatchesOperation(stage.stage) && (!observedOnly || stage.duration_ms !== undefined));
+  }
+  ReportRegistry.bindSource('triage_selected_stages',
+    ()=>sourceRows((traces[selectedTraceId]?.stage_breakdown || []).filter(stage=>stage.duration_ms !== undefined)),
+    ()=>sourceRows(selectedStages(true)));
+  ReportRegistry.bindSource('triage_selected_stage_table',
+    ()=>sourceRows(traces[selectedTraceId]?.stage_breakdown || []),()=>sourceRows(selectedStages()));
+  function selectedEventModel() {
+    const item=traces[selectedTraceId] || {};
+    return item.timelineModel || TraceVisuals.timeline(item.evidence);
+  }
+  ReportRegistry.bindSource('triage_selected_events',
+    ()=>sourceRows(selectedEventModel().lanes.flatMap(lane=>lane.events)));
+  for (const operation of ['read','write']) {
+    ReportRegistry.bindSource(`triage_${operation}_latency`,
+      ()=>sourceRows(latencyRowsForOperation(operation,true).map(([,item])=>item)));
+    ReportRegistry.bindSource(`triage_${operation}_flow`,
+      ()=>sourceRows(flowRowsForOperation(operation).map(([,value])=>value)));
+    ReportRegistry.bindSource(`triage_${operation}_time`,()=>sourceRows(buildTraceTimeBuckets(operation)));
+    for (const kind of ['chart','table']) {
+      const control = `${operation}-worker-${kind==='table'?'table-':''}filter`;
+      const all = ()=>traceRowsForOperation(operation).map(([,item])=>item);
+      ReportRegistry.bindSource(`triage_${operation}_worker_${kind}`,()=>sourceRows(all()),()=>{
+        const worker=workerFilterValue(control);
+        return sourceRows(all().filter(item=>!worker || Object.keys(item.workers || {}).some(w=>workerMatchesFilter(w,worker))));
+      });
+    }
+    ReportRegistry.bindSource(`triage_${operation}_edges`,
+      ()=>sourceRows(ubEdgeModelRows(operation).map(([,item])=>item)),
+      ()=>sourceRows(ubEdgeRowsForOperation(operation).map(([,item])=>item)));
+  }
+  ReportRegistry.bindSource('triage_ub_latency',()=>sourceRows(ubLifecycleLatencyMetrics.map(([,item])=>item)));
+  ReportRegistry.bindSource('triage_ub_counts',()=>sourceRows(ubWrCountRows.map(([,item])=>item)));
+  ReportRegistry.bindSource('triage_ub_metrics',
+    ()=>sourceRows([...ubLifecycleMetrics,...ubChipInflightRows].map(([,item])=>item)));
+  for (const kind of ['chart','table']) {
+    const roleControl=`ub-worker-role-${kind==='table'?'table-':''}filter`;
+    const timeControl=`ub-worker-time-${kind==='table'?'table-':''}filter`;
+    ReportRegistry.bindSource(`triage_ub_worker_role_${kind}`,
+      ()=>sourceRows(Object.values(dim.ub_worker_summary.workers)),
+      ()=>sourceRows(ubWorkerRows.filter(([worker])=>workerMatchesFilter(worker,workerFilterValue(roleControl))).map(([,item])=>item)));
+    ReportRegistry.bindSource(`triage_ub_worker_time_${kind}`,
+      ()=>sourceRows(dim.ub_worker_summary.time_buckets),
+      ()=>sourceRows(filterUbWorkerTimeRows(workerFilterValue(timeControl))));
+  }
+  for (const [scope,label] of [['common','通用'],['read','读取'],['write','写入']]) {
+    ReportRegistry.bindSource(`triage_appendix_${scope}`,()=>sourceRows(sourceAppendixByScope(label)));
+  }
+  function filterUbWorkerTimeRows(selectedWorker) {
+    return selectedWorker ? ubWorkerTimeRows.filter(item =>
+      (item.top_entry_workers || []).some(worker=>workerMatchesFilter(worker,selectedWorker)) ||
+      (item.top_exit_workers || []).some(worker=>workerMatchesFilter(worker,selectedWorker))) : ubWorkerTimeRows;
+  }
+  function ubEdgeModelRows(operation) {
+    const groups=dim.ub_summary?.edges_by_operation;
+    if(!groups)return [];
+    if(!Object.prototype.hasOwnProperty.call(groups,operation))throw new Error('UB edge operation field missing: '+operation);
+    return Object.entries(groups[operation]).sort((a,b)=>(b[1].count||0)-(a[1].count||0));
+  }
+  function ubEdgeRowsForOperation(operation) {
+    const src=ubEdgeFilterValue(operation,'src'),dst=ubEdgeFilterValue(operation,'dst');
+    return ubEdgeModelRows(operation).filter(([edge])=>{
+      const parts=splitUbEdge(edge);
+      return (!src || parts.src===src) && (!dst || parts.dst===dst);
+    });
+  }
+  function latencyRowsForOperation(operation, full=false) {
+    const rows = (full ? latencyModelRows : latencyChartRows).filter(([name]) => metricOperation(name) === operation || metricOperation(name) === 'both');
+    const accessRow = ['access', operationAccessPercentiles(operation)];
+    return [accessRow, ...rows.filter(([name]) => name !== 'access')]
+      .filter(([, item]) => item && item.count)
+      .sort((a,b) => (b[1].max || 0) - (a[1].max || 0))
+      .slice(0, full ? undefined : 12);
+  }
+  function flowRowsForOperation(operation) {
+    return flowRows.filter(([name]) => flowOperation(name) === operation);
+  }
+  function buildTraceTimeBuckets(operation) {
+    const buckets = {};
+    traceRowsForOperation(operation).forEach(([, item]) => {
+      const ts = traceStartTime(item);
+      if (!ts) return;
+      const bucket = String(ts).slice(0, 19);
+      const target = buckets[bucket] || (buckets[bucket] = {bucket_start:bucket,bucket_ms:1000,access:[],stage_values:{},max_concurrency_error_count:0});
+      const accessValue = item.access_latency_ms?.max ?? item.access_latency_ms?.p99 ?? item.access_latency_ms?.p50;
+      if (Number.isFinite(Number(accessValue))) target.access.push(Number(accessValue));
+      target.max_concurrency_error_count += Number((item.errors || {})['RPC max concurrency reached'] || 0);
+      (item.stage_breakdown || []).forEach(stage => {
+        if (!String(stage.stage || '').startsWith(`${operation}.`) || stage.duration_ms === undefined) return;
+        (target.stage_values[stage.stage] || (target.stage_values[stage.stage] = [])).push(Number(stage.duration_ms));
+      });
+    });
+    return Object.values(buckets).sort((a,b) => String(a.bucket_start).localeCompare(String(b.bucket_start))).map(bucket => {
+      const stageBreakdown = {};
+      Object.entries(bucket.stage_values).forEach(([name, values]) => { stageBreakdown[name] = percentileFromValues(values) || {}; });
+      return {bucket_start:bucket.bucket_start,bucket_ms:bucket.bucket_ms,p99_access_ms:(percentileFromValues(bucket.access) || {}).p99 || 0,max_concurrency_error_count:bucket.max_concurrency_error_count,stage_breakdown_ms:stageBreakdown};
+    });
+  }
+  function workerFilterValue(id) {
+    const node = document.getElementById(id);
+    return node ? node.value : '';
+  }
+  function workerRoleBreakdownForTrace(item, worker) {
+    const out = {entry_get:0,data_provider:0,other:0};
+    (item.ub_events || []).forEach(event => {
+      if (!workerMatchesFilter(event.worker, workerAggregateKey(worker))) return;
+      if (['transfer_path','remote_get_start'].includes(event.event_type)) out.entry_get += 1;
+      else if (['total','poll_jfc','notify','thread_sched'].includes(event.event_type)) out.data_provider += 1;
+    });
+    if (!out.entry_get && !out.data_provider) out.other += 1;
+    return out;
+  }
+  function isSameNodeEntryData(item) {
+    return Boolean(item && item.entry_get_count && item.data_provider_count);
+  }
+  function workerRoleSummaryText(item) {
+    const parts = [];
+    if (item.same_node_entry_data || isSameNodeEntryData(item)) parts.push('同节点 entry+data');
+    if (item.entry_get_count) parts.push(`数据读取发起端(entry get)=${item.entry_get_count}`);
+    if (item.data_provider_count) parts.push(`数据提供端(data provider)=${item.data_provider_count}`);
+    if (!parts.length && item.other_role_count) parts.push(`其他/未归因=${item.other_role_count}`);
+    return parts.join(', ') || (item.roles || []).join(',');
+  }
+  function buildWorkerIpAliasRows() {
+    return (dim.worker_ip_mapping || []).map(item => [
+        item.worker_full_name,
+        item.worker_short_name,
+        item.pod_ip
+      ]);
+  }
+  function workerRowsForOperation(operation, selectedWorker='') {
+    const workers = {};
+    traceRowsForOperation(operation).forEach(([, item]) => {
+      const errorCount = Object.values(item.errors || {}).reduce((a,b) => a + b, 0);
+      const isSlow = Number(item.access_latency_ms?.max || 0) >= 20;
+      const seenWorkerKeys = new Set();
+      Object.keys(item.workers || {}).forEach(worker => {
+        const key = workerAggregateKey(worker);
+        if (!workerMatchesFilter(worker, selectedWorker) || seenWorkerKeys.has(key)) return;
+        seenWorkerKeys.add(key);
+        const source = dim.worker_summary?.[worker] || {};
+        const target = workers[key] || (workers[key] = {display_worker:workerAggregateLabel(key),roles:[],line_count:0,trace_count:0,slow_trace_count:0,error_count:0,entry_get_count:0,data_provider_count:0,other_role_count:0,relations:new Set()});
+        const roleBreakdown = workerRoleBreakdownForTrace(item, worker);
+        target.roles = [...new Set([...(target.roles || []), ...(source.roles || [])])];
+        target.line_count += source.line_count || 0;
+        target.relations.add(workerRelationName(worker));
+        target.entry_get_count += roleBreakdown.entry_get;
+        target.data_provider_count += roleBreakdown.data_provider;
+        target.other_role_count += roleBreakdown.other;
+        target.same_node_entry_data = isSameNodeEntryData(target);
+        target.trace_count += 1;
+        target.slow_trace_count += isSlow ? 1 : 0;
+        target.error_count += errorCount;
+      });
+    });
+    return Object.entries(workers).sort((a,b) => (b[1].error_count || 0) - (a[1].error_count || 0) || (b[1].slow_trace_count || 0) - (a[1].slow_trace_count || 0) || (b[1].trace_count || 0) - (a[1].trace_count || 0)).slice(0, 40);
+  }
+  function renderLatencySection(operation, title) {
+    const rows = latencyRowsForOperation(operation);
+    renderTable(`${operation}-latency-table`, ['metric','distribution'], rows.map(([name,item]) => [metricLabel(name), pctText(item)]));
+    chart(`${operation}-latency-chart`, rows.length ? axisBase(`${title} Top Latency`, {
+      grid:wideHorizontalGrid(150,66,36),
+      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},confine:true,formatter:ps => ps.map(p => `${escapeHtml(p.seriesName)}: ${p.value} ms`).join('<br>')},
+      xAxis:{type:'value', name:'ms'},
+      yAxis:{type:'category', data:rows.map(r => metricLabel(r[0])), axisLabel:{width:138, overflow:'truncate'}},
+      series:['p50','p90','p99','max'].map(key => ({name:key,type:'bar',barMaxWidth:18,data:rows.map(([, item]) => item[key] || 0), markLine:key === 'max' ? {symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{xAxis:20}]} : undefined}))
+    }) : noDataOption(`No ${operation} latency data`));
+  }
+  function renderFlowSection(operation, title) {
+    const rows = flowRowsForOperation(operation);
+    renderTable(`${operation}-flow-table`, ['flow','count'], rows);
+    chart(`${operation}-flow-chart`, rows.length ? axisBase(`${title} Flow Breakdown`, {
+      grid:wideHorizontalGrid(122,56,44),dataZoom:[],
+      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},confine:true},
+      xAxis:{type:'value',splitNumber:3,axisLabel:{hideOverlap:true}},
+      yAxis:{type:'category', data:rows.map(r => flowLabel(r[0])), axisLabel:{width:112, overflow:'truncate'}},
+      series:[{name:'count',type:'bar',barMaxWidth:28,data:rows.map(r => r[1]),itemStyle:{color:'#2563eb'},label:{show:true,position:'right'}}]
+    }) : noDataOption(`No ${operation} flow data`));
+  }
+  function renderTimeBucketSection(operation, title) {
+    const rows = buildTraceTimeBuckets(operation);
+    const stageNames = [...new Set(rows.flatMap(row => Object.keys(row.stage_breakdown_ms || {})))].filter(name => !name.endsWith('client_to_entry_worker'));
+    chart(`${operation}-time-breakdown-chart`, rows.length ? axisBase(`${title} Time Bucket Latency Stages`, {
+      tooltip:{trigger:'axis', axisPointer:{type:'cross'}, confine:true},
+      xAxis:{type:'category', data:rows.map(r => String(r.bucket_start || '').replace('T','\n')), axisLabel:{rotate:0}},
+      yAxis:{type:'value', name:'ms'},
+      series:[
+        ...stageNames.map(name => ({name:stageLabelMap[name] || name,type:'bar',stack:'stage-p99',barMaxWidth:34,data:rows.map(r => r.stage_breakdown_ms?.[name]?.p99 || 0),itemStyle:{color:stageColorMap[name] || '#64748b'}})),
+        {name:'RPC max_concurrency errors',type:'bar',barMaxWidth:24,data:rows.map(r => r.max_concurrency_error_count || 0),itemStyle:{color:'#991b1b'}},
+        {name:'client/access p99 upper bound',type:'line',smooth:true,data:rows.map(r => r.p99_access_ms || 0), itemStyle:{color:'#2563eb'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{yAxis:20}]}}
+      ]
+    }) : noDataOption(`No ${operation} time bucket stage data`));
+  }
+  function renderWorkerSection(operation, title) {
+    ReportRegistry.beginScope(`${operation}-worker`,[`${operation}-worker-chart`,`${operation}-worker-table`]);
+    const chartRows = workerRowsForOperation(operation, workerFilterValue(`${operation}-worker-filter`));
+    const tableRowsForOperation = workerRowsForOperation(operation, workerFilterValue(`${operation}-worker-table-filter`));
+    const tableRows = tableRowsForOperation.map(([,item]) => {
+      const display_worker = item.display_worker || '';
+      return [display_worker, workerRoleSummaryText(item), item.line_count, item.trace_count, item.slow_trace_count || 0, item.error_count || 0];
+    });
+    renderPagedTable(`${operation}-worker-table`, `${operation}-worker-table-pager`, ['worker','roles','lines','traces','slow','errors'], tableRows,
+      row => (String(row[1]).includes('同节点 entry+data') || Number(row[5]) > 0 ? 'class="hotrow"' : Number(row[4]) > 0 ? 'class="warnrow"' : ''), 5);
+    chart(`${operation}-worker-chart`, chartRows.length ? axisBase(`${title} Workers by Trace/Error`, {xAxis:{type:'category', data:chartRows.slice(0,20).map(r => r[1].display_worker || workerAggregateLabel(r[0])), axisLabel:{rotate:35, width:120, overflow:'truncate'}}, yAxis:{type:'value'}, series:[
+      {name:'traces',type:'bar',barMaxWidth:34,data:chartRows.slice(0,20).map(r => r[1].trace_count || 0), itemStyle:{color:'#94a3b8'}},
+      {name:'slow',type:'bar',barMaxWidth:34,data:chartRows.slice(0,20).map(r => r[1].slow_trace_count || 0), itemStyle:{color:'#ea580c'}},
+      {name:'errors',type:'bar',barMaxWidth:34,data:chartRows.slice(0,20).map(r => r[1].error_count || 0), itemStyle:{color:'#dc2626'}, label:{show:true, position:'top'}}
+    ]}) : noDataOption(`No ${operation} worker data`));
+  }
+  function splitUbEdge(edge) {
+    const parts = String(edge || '').split(/\s*->\s*/);
+    return {src:parts[0] || '', dst:parts[1] || ''};
+  }
+  function ubEdgeDegreeSummary(rows) {
+    const srcStats = {};
+    const dstStats = {};
+    rows.forEach(([edge, item]) => {
+      const parts = splitUbEdge(edge);
+      const count = Number(item?.count || 0);
+      const tail = Math.max(Number(item?.latency_ms?.p99 || 0), Number(item?.latency_ms?.max || 0));
+      const update = (map, ip) => {
+        if (!ip) return;
+        const target = map[ip] || (map[ip] = {ip, count:0, tail_ms:0});
+        target.count += count;
+        target.tail_ms = Math.max(target.tail_ms, tail);
+      };
+      update(srcStats, parts.src);
+      update(dstStats, parts.dst);
+    });
+    const top = map => Object.values(map).sort((a,b) => b.count - a.count || b.tail_ms - a.tail_ms)[0];
+    const topSrc = top(srcStats);
+    const topDst = top(dstStats);
+    const worst = [topSrc, topDst].filter(Boolean).sort((a,b) => b.tail_ms - a.tail_ms || b.count - a.count)[0];
+    if (!worst) return '无 UB Edge 样本';
+    return `源端出度 Top ${topSrc?.ip || '无'} count=${fmtCount(topSrc?.count)}，目的端入度 Top ${topDst?.ip || '无'} count=${fmtCount(topDst?.count)}；最大问题 IP ${worst.ip} tail=${fmtMs(worst.tail_ms)}。`;
+  }
+  function renderUbEdgeFilters(operation, rows) {
+    ['src','dst'].forEach(kind => {
+      const select = document.getElementById(`${operation}-ub-${kind}-filter`);
+      if (!select) return;
+      const current = select.value;
+      const values = [...new Set(rows.map(([edge]) => splitUbEdge(edge)[kind]).filter(Boolean))].sort();
+      const label = kind === 'src' ? '全部源端' : '全部目的端';
+      setSelectOptions(`${operation}-ub-${kind}-filter`, label, values);
+      select.value = values.includes(current) ? current : '';
+    });
+  }
+  function ubEdgeFilterValue(operation, kind) {
+    const node = document.getElementById(`${operation}-ub-${kind}-filter`);
+    return node ? node.value : '';
+  }
+  function renderUbSection(operation) {
+    const legacyEdges = !dim.ub_summary?.edges_by_operation;
+    const emptyMessage = legacyEdges ? '旧模型缺读写分桶，需重新分析' : '未观测到明确属于'+(operation==='read'?'读取':'写入')+'的 UB Edge';
+    const allRows = ubEdgeModelRows(operation);
+    renderUbEdgeFilters(operation, allRows);
+    const rows = ubEdgeRowsForOperation(operation);
+    const summaryNode = document.getElementById(`${operation}-ub-edge-summary`);
+    if (summaryNode) {const unknown=Object.values(dim.ub_summary?.edges_by_operation?.unknown||(!dim.ub_summary?.edges_by_operation?dim.ub_summary?.edges:{})||{}).reduce((n,item)=>n+Number(item.count||0),0);summaryNode.textContent=(legacyEdges?emptyMessage:ubEdgeDegreeSummary(rows))+(unknown?' 另有 '+unknown+' 条未确定读写归属的 URMA Edge；保留总量，不分配给读取或写入。':'');}
+    const tableRows = rows.map(([edge,item]) => {
+      const parts = splitUbEdge(edge);
+      return [parts.src, parts.dst, item.count, item.latency_ms?.p99 || '', item.latency_ms?.max || '', pctText(item.latency_ms)];
+    });
+    renderPagedTable(`${operation}-ub-edge-table`, `${operation}-ub-edge-table-pager`, ['源端','目的端','count','p99 ms','max ms','latency'], tableRows,
+      row => `class="${severityClass(Math.max(Number(row[3]) || 0, Number(row[4]) || 0))}"`, 5);
+    chart(`${operation}-ub-edge-chart`, rows.length ? axisBase(`${operation === 'read' ? 'Read' : 'Write'} UB Edge Count / Tail Latency`, {xAxis:{type:'category', data:rows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:150, overflow:'truncate'}}, yAxis:[{type:'value', name:'count'}, {type:'value', name:'ms'}], series:[
+      {name:'UB edges',type:'bar',barMaxWidth:34,data:rows.slice(0,20).map(r => r[1].count || 0), itemStyle:{color:'#059669'}, label:{show:true, position:'top'}},
+      {name:'p99 ms',type:'line',yAxisIndex:1,smooth:true,data:rows.slice(0,20).map(r => r[1].latency_ms?.p99 || 0), itemStyle:{color:'#dc2626'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms'}, data:[{yAxis:20}]}}
+    ]}) : noDataOption(emptyMessage));
+  }
+  function renderUbWorkerViews() {
+    ReportRegistry.beginScope('ub-worker',['ub-worker-role-chart','ub-worker-role-table',
+      'ub-worker-time-chart','ub-worker-time-table']);
+    const roleChartWorker = workerFilterValue('ub-worker-role-filter');
+    const timeChartWorker = workerFilterValue('ub-worker-time-filter');
+    const roleTableWorker = workerFilterValue('ub-worker-role-table-filter');
+    const timeTableWorker = workerFilterValue('ub-worker-time-table-filter');
+    function ubWorkerRoleLabel(role) {
+      if (role === 'entry_and_exit') return '同节点 entry+data / 发起端+提供端';
+      if (role === 'entry') return '数据读取发起端(entry get)';
+      if (role === 'exit') return '数据提供端(data provider)';
+      return role || '';
+    }
+    function aggregateUbWorkerRowsByIdentity(rows, selectedWorker='') {
+      const out = {};
+      rows.forEach(([worker, item]) => {
+        const key = workerAggregateKey(worker);
+        if (!workerMatchesFilter(worker, selectedWorker)) return;
+        const target = out[key];
+        const aggregate = target || (out[key] = {
+          display_worker: workerAggregateLabel(key),
+          entry_events: 0,
+          exit_events: 0,
+          trace_count: 0,
+          latency_ms: {p99: 0, max: 0},
+          top_edges: [],
+          roles: new Set()
+        });
+        aggregate.entry_events += item.entry_events || 0;
+        aggregate.exit_events += item.exit_events || 0;
+        aggregate.trace_count += item.trace_count || 0;
+        aggregate.latency_ms.p99 = Math.max(aggregate.latency_ms.p99 || 0, item.latency_ms?.p99 || 0);
+        aggregate.latency_ms.max = Math.max(aggregate.latency_ms.max || 0, item.latency_ms?.max || 0);
+        (item.top_edges || []).forEach(edge => aggregate.top_edges.push(edge));
+        if (item.entry_events) aggregate.roles.add('ub_entry');
+        if (item.exit_events) aggregate.roles.add('ub_exit');
+      });
+      return Object.entries(out).map(([key, item]) => {
+        const display_ub_role = item.entry_events && item.exit_events ? 'entry_and_exit' : item.entry_events ? 'entry' : 'exit';
+        item.role = display_ub_role;
+        item.top_edges = [...new Set(item.top_edges)].slice(0, 5);
+        return [key, item];
+      }).sort((a,b) =>
+        Number(b[1].latency_ms?.max || 0) - Number(a[1].latency_ms?.max || 0) ||
+        Number((b[1].entry_events || 0) + (b[1].exit_events || 0)) - Number((a[1].entry_events || 0) + (a[1].exit_events || 0))
+      );
+    }
+    const chartUbWorkerRows = aggregateUbWorkerRowsByIdentity(ubWorkerRows, roleChartWorker);
+    const tableUbWorkerRows = aggregateUbWorkerRowsByIdentity(ubWorkerRows, roleTableWorker);
+    const chartUbWorkerTimeRows = filterUbWorkerTimeRows(timeChartWorker);
+    const tableUbWorkerTimeRows = filterUbWorkerTimeRows(timeTableWorker);
+    renderPagedTable('ub-worker-role-table', 'ub-worker-role-table-pager', ['worker','role','发起端 events','提供端 events','trace count','p99 ms','max ms','top edges'], tableUbWorkerRows.map(([worker,item]) => {
+      const display_worker = item.display_worker || workerAggregateLabel(worker);
+      const display_top_edges = (item.top_edges || []).map(edge => edge.replace(/\s*->\s*/g, ' → ')).join(', ');
+      return [
+        display_worker,
+        ubWorkerRoleLabel(item.role),
+        item.entry_events || 0,
+        item.exit_events || 0,
+        item.trace_count || 0,
+        item.latency_ms?.p99 || '',
+        item.latency_ms?.max || '',
+        display_top_edges
+      ];
+    }), row => `class="${severityClass(Math.max(Number(row[5]) || 0, Number(row[6]) || 0))}"`, 5);
+    renderPagedTable('ub-worker-time-table', 'ub-worker-time-table-pager', ['time','发起端 events','提供端 events','p99 ms','max ms','发起端 workers','提供端 workers'], tableUbWorkerTimeRows.map(item => [
+      item.bucket_start || '',
+      item.entry_events || 0,
+      item.exit_events || 0,
+      item.latency_ms?.p99 || '',
+      item.latency_ms?.max || '',
+      [...new Set((item.top_entry_workers || []).map(workerAggregateKey))].map(workerAggregateLabel).join(', '),
+      [...new Set((item.top_exit_workers || []).map(workerAggregateKey))].map(workerAggregateLabel).join(', ')
+    ]), row => `class="${severityClass(Math.max(Number(row[3]) || 0, Number(row[4]) || 0))}"`, 5);
+    chart('ub-worker-role-chart', chartUbWorkerRows.length ? axisBase('UB Worker Roles', {
+      tooltip:{trigger:'axis', axisPointer:{type:'shadow'}, confine:true},
+      xAxis:{type:'category', data:chartUbWorkerRows.slice(0,20).map(r => r[1].display_worker || workerAggregateLabel(r[0])), axisLabel:{rotate:35, width:120, overflow:'truncate'}},
+      yAxis:[{type:'value', name:'events'}, {type:'value', name:'ms'}],
+      series:[
+        {name:'数据读取发起端 events',type:'bar',stack:'ub-role',barMaxWidth:34,data:chartUbWorkerRows.slice(0,20).map(r => r[1].entry_events || 0),itemStyle:{color:'#2563eb'}},
+        {name:'数据提供端 events',type:'bar',stack:'ub-role',barMaxWidth:34,data:chartUbWorkerRows.slice(0,20).map(r => r[1].exit_events || 0),itemStyle:{color:'#ea580c'}},
+        {name:'p99 ms',type:'line',yAxisIndex:1,data:chartUbWorkerRows.slice(0,20).map(r => r[1].latency_ms?.p99 || 0),itemStyle:{color:'#dc2626'}}
+      ]
+    }) : noDataOption('No UB worker role data'));
+    chart('ub-worker-time-chart', chartUbWorkerTimeRows.length ? axisBase('UB Worker Role Time Buckets', {
+      tooltip:{trigger:'axis', axisPointer:{type:'cross'}, confine:true},
+      xAxis:{type:'category', data:chartUbWorkerTimeRows.map(r => String(r.bucket_start || '').replace('T','\n')), axisLabel:{rotate:0}},
+      yAxis:[{type:'value', name:'events'}, {type:'value', name:'ms'}],
+      series:[
+        {name:'数据读取发起端 events',type:'bar',stack:'ub-time',barMaxWidth:34,data:chartUbWorkerTimeRows.map(r => r.entry_events || 0),itemStyle:{color:'#2563eb'}},
+        {name:'数据提供端 events',type:'bar',stack:'ub-time',barMaxWidth:34,data:chartUbWorkerTimeRows.map(r => r.exit_events || 0),itemStyle:{color:'#ea580c'}},
+        {name:'p99 ms',type:'line',yAxisIndex:1,smooth:true,data:chartUbWorkerTimeRows.map(r => r.latency_ms?.p99 || 0),itemStyle:{color:'#dc2626'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms'}, data:[{yAxis:20}]}}
+      ]
+    }) : noDataOption('No UB time bucket data'));
+  }
+  function lifecycleLabel(name) {
+    const labels = {
+      'total_ms':'URMA total',
+      'wait_os_sched_ms':'wait_for',
+      'wake_sched_latency_ms':'actual wake sched',
+      'first_write_wake_sched_latency_ms':'first write reported wake',
+      'second_write_wake_sched_latency_ms':'second write reported wake',
+      'write_wake_sched_latency_ms':'write reported wake',
+      'legacy_wake_sched_latency_ms':'legacy wake sched',
+      'inherited_wake_sched_latency_ms':'inherited wake display',
+      'completion_observation_latency_ms':'completion observation',
+      'event_processing_and_wait_latency_ms':'event processing and wait',
+      'poll_jfc_ms':'poll_jfc',
+      'notify_ms':'notify',
+      'thread_sched_ms':'thread sched',
+      'poll_loop_gap_ms':'poll loop gap',
+      'nanosleep_wake_ms':'nanosleep wake',
+      'remote_get_wr_count':'RemoteGet WR count',
+      'urma_inflight_wr_count':'URMA inflight WR count'
+    };
+    return labels[name] || metricLabel(name);
+  }
+  function renderUbLifecycleViews() {
+    const metricRows = [
+      ...ubLifecycleMetrics.map(([name,item]) => [lifecycleLabel(name), item.count || 0, item.p50 ?? '', item.p90 ?? '', item.p99 ?? '', item.max ?? '']),
+      ...ubChipInflightRows.map(([chip,item]) => [`Chip ${chip} inflight`, item.count || 0, item.p50 ?? '', item.p90 ?? '', item.p99 ?? '', item.max ?? ''])
+    ];
+    renderTable('ub-lifecycle-table', ['metric','count','p50','p90','p99','max'], metricRows,
+      row => `class="${severityClass(Math.max(Number(row[4]) || 0, Number(row[5]) || 0))}"`);
+    renderPagedTable('ub-request-table', 'ub-request-table-pager',
+      ['Trace','WR / Chunk','Worker','总耗时 ms','等待 ms','status'],
+      ubRequestRows.map(item => [
+        item.trace_id || '',
+        `${String(item.request_id ?? '') || '未观测'}\nChunk ${item.write_chunk_index ?? '?'}/${item.write_chunk_count ?? '?'}`,
+        item.worker || '未观测',
+        item.total_ms ?? '',
+        item.wait_os_sched_ms ?? '',
+        item.status || '未观测'
+      ]),
+      row => `class="${severityClass(Number(row[3]) || 0)}"`, 4);
+    chart('ub-lifecycle-chart', ubLifecycleLatencyMetrics.length ? axisBase('UB Lifecycle Breakdown', {
+      grid:wideHorizontalGrid(138,66,36),
+      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},confine:true,formatter:ps => ps.map(p => `${escapeHtml(p.seriesName)}: ${p.value} ms`).join('<br>')},
+      xAxis:{type:'value', name:'ms'},
+      yAxis:{type:'category', data:ubLifecycleLatencyMetrics.map(r => lifecycleLabel(r[0])), axisLabel:{width:128, overflow:'truncate'}},
+      series:['p50','p90','p99','max'].map(key => ({
+        name:key,
+        type:'bar',
+        barMaxWidth:18,
+        data:ubLifecycleLatencyMetrics.map(([, item]) => item[key] || 0),
+        markLine:key === 'max' ? {symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms'}, data:[{xAxis:20}]} : undefined
+      }))
+    }) : noDataOption('No UB lifecycle data'));
+    chart('ub-wr-count-chart', ubWrCountRows.length ? axisBase('UB WR / Inflight Count', {
+      grid:wideHorizontalGrid(160,66,36),
+      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},confine:true,formatter:ps => ps.map(p => `${escapeHtml(p.seriesName)}: ${p.value} count`).join('<br>')},
+      xAxis:{type:'value',splitNumber:3,axisLabel:{hideOverlap:true}},
+      yAxis:{type:'category', data:ubWrCountRows.map(r => r[0]), axisLabel:{width:150, overflow:'truncate'}},
+      series:['p50','p90','p99','max'].map(key => ({
+        name:key,
+        type:'bar',
+        barMaxWidth:18,
+        data:ubWrCountRows.map(([, item]) => item[key] || 0)
+      }))
+    }) : noDataOption('No UB WR/inflight count data'));
+  }
+  function renderOperationViews() {
+    renderTracePage();
+    renderSelectedTrace();
+  }
+  function renderWorkerDependentViews() {
+    renderWorkerSection('read', 'Read');
+    renderWorkerSection('write', 'Write');
+    renderUbWorkerViews();
+    renderSectionSummaries();
+  }
+  let traceFilterKey = null;
+  let traceFilterPendingKey = null;
+  let traceFilterGeneration = 0;
+  function applyTraceFilters() {
+    const query = document.getElementById('trace-search').value.trim().toLowerCase();
+    const cls = document.getElementById('class-filter').value;
+    const worker = document.getElementById('worker-filter').value;
+    const requestStatus = document.getElementById('request-status-filter').value;
+    const key = JSON.stringify([query,cls,worker,requestStatus,activeOperation]);
+    if (key === traceFilterKey) { if(traceFilterPendingKey!==null){++traceFilterGeneration;traceFilterPendingKey=null;} return true; }
+    if (key === traceFilterPendingKey) return false;
+    const generation = ++traceFilterGeneration;
+    traceFilterPendingKey = null;
+    const candidates = traceRows.filter(([,item]) => (!cls || item.classification === cls)
+      && (!worker || Object.keys(item.workers || {}).some(name => workerMatchesFilter(name,worker)))
+      && statusMatchesTrace(item,requestStatus) && operationMatches(item));
+    function complete(rows) {
+      filteredTraceRows = rows;
+      traceFilterKey = key;
+      traceFilterPendingKey = null;
+      if (!rows.some(([id]) => id === selectedTraceId)) selectedTraceId = rows[0]?.[0] || null;
+    }
+    if (!query) { complete(candidates); return true; }
+    traceFilterPendingKey = key;
+    document.getElementById('page-status').textContent = '正在搜索日志…';
+    const matched = [];
+    let index = 0;
+    function scan() {
+      if (generation !== traceFilterGeneration) return;
+      const deadline = performance.now() + 8;
+      while (index < candidates.length && performance.now() < deadline) {
+        const [id,item] = candidates[index++];
+        const metadata = [id,item.classification,JSON.stringify(item.errors||{}),Object.keys(item.workers||{}).join(' ')].join(' ').toLowerCase();
+        if (metadata.includes(query) || (item.evidence||[]).some(e => String(e.text||'').toLowerCase().includes(query))) matched.push([id,item]);
+      }
+      if (index < candidates.length) { setTimeout(scan,0); return; }
+      complete(matched);
+      renderTracePage();
+      renderSelectedTrace();
+    }
+    setTimeout(scan,0);
+    return false;
+  }
+  function renderTracePage() {
+    if (!applyTraceFilters()) return;
+    function topTraceDisplayRows(rows) {
+      return rows.map(([traceId,item]) => [
+        traceStartTime(item),
+        traceId,
+        item.classification,
+        traceAccessLatencyMs(item),
+        JSON.stringify(item.errors || {}),
+        pctText(item.access_latency_ms),
+        Object.keys(item.workers || {}).slice(0, 6).map(workerRelationName).join(', ')
+      ]);
+    }
+    const topTraceHeaders = ['time','trace','classification','latency ms','errors','access','workers'];
+    const sortedDisplayRows = sortRowsForTable(topTraceDisplayRows(filteredTraceRows), topTraceSort, topTraceHeaders);
+    if (!sortedDisplayRows.some(row => row[1] === selectedTraceId)) {
+      selectedTraceId = sortedDisplayRows[0]?.[1] || null;
+    }
+    const totalPages = Math.max(Math.ceil(sortedDisplayRows.length / pageSize), 1);
+    currentPage = Math.min(Math.max(currentPage, 0), totalPages - 1);
+    const pageRows = sortedDisplayRows.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+    renderTable('top-trace-table', topTraceHeaders, pageRows,
+      row => `data-trace="${escapeHtml(row[1])}" class="${row[1] === selectedTraceId ? 'selected-row' : ''}"`,
+      {
+        skipSort:true,
+        sortState:topTraceSort,
+        onSort:index => {
+          topTraceSort = nextSortState(topTraceSort, index);
+          currentPage = 0;
+          renderTracePage();
+          renderSelectedTrace();
+        }
+      });
+    document.querySelectorAll('#top-trace-table tbody tr').forEach(row => row.addEventListener('click', () => {
+      selectedTraceId = row.getAttribute('data-trace');
+      renderTracePage();
+      renderSelectedTrace();
+    }));
+    document.getElementById('page-status').textContent = `第 ${currentPage + 1} / ${totalPages} 页，每页 ${pageSize} 条，共 ${sortedDisplayRows.length} 条 trace`;
+    document.getElementById('prev-page').disabled = currentPage === 0;
+    document.getElementById('next-page').disabled = currentPage >= totalPages - 1;
+  }
+  let renderedTraceKey=null;
+  function renderSelectedTrace() {    const renderKey=JSON.stringify([selectedTraceId,activeOperation]);
+    if(renderKey===renderedTraceKey)return;
+    renderedTraceKey=renderKey;
+
+    const item = traces[selectedTraceId] || {};
+    ReportRegistry.beginScope(`trace:${selectedTraceId}:${activeOperation}`,
+      ['selected-event-timeline','selected-trace-chart','selected-stage-table','selected-trace-table']);
+    const eventChart=TraceVisuals.renderTimeline(document.getElementById("selected-event-timeline"),
+      {...item,timelineModel:selectedEventModel()},echarts,TraceCharts);
+    if(!eventChart)ReportRegistry.record('selected-event-timeline',{state:'empty',reason:'no_dated_events'});
+    chartRegistry.delete("selected-event-timeline");if(eventChart)chartRegistry.set("selected-event-timeline",eventChart);
+    function compactLatencySummary(summary) {
+      return Object.entries(summary || {})
+        .sort((a,b) => Number(b[1] || 0) - Number(a[1] || 0))
+        .slice(0, 6)
+        .map(([key, value]) => `${metricLabel(`latencySummary.${key}`)}=${Number(value / 1000).toFixed(3)}ms`)
+        .join('; ');
+    }
+    const selectedTraceSummaryRows = [
+      ['trace', selectedTraceId || ''],
+      ['classification', item.classification || ''],
+      ['errors', JSON.stringify(item.errors || {})],
+      ['client access', pctText(item.access_latency_ms_by_role?.client)],
+      ['worker access', pctText(item.access_latency_ms_by_role?.worker)],
+      ['access all', pctText(item.access_latency_ms)],
+      ['key latencySummary', compactLatencySummary(item.latency_summary_us)],
+      ['coverage', JSON.stringify(item.evidence_coverage || {})],
+      ['missing_evidence', JSON.stringify(item.missing_evidence || [])]
+    ].filter(row => selectedTraceId && row[1]);
+    renderTable('selected-trace-table', ['field','value'], selectedTraceSummaryRows,
+      row => row[0] === 'key latencySummary' || /access/.test(row[0]) ? 'class="summaryrow"' : '',
+      {formatCell:(header, cell, row) => header === 'value' ? selectedTraceSummaryValueHtml(row[0], cell) : formatCell(header, cell)});
+    const visibleStageRows = selectedStages()
+      .slice()
+      .sort((a,b) => (a.duration_ms || 0) - (b.duration_ms || 0));
+    const stageRows = visibleStageRows.filter(s => s.duration_ms !== undefined);
+    renderTable('selected-stage-table', ['研发流程','duration ms','confidence','source'], visibleStageRows.map(s => [
+      stageDetailText(s.stage),
+      s.duration_ms === undefined ? 'missing' : s.duration_ms,
+      s.confidence || '',
+      s.source || ''
+    ]), row => row[1] === 'missing' ? 'class="warnrow"' : `class="${severityClass(row[1])}"`);
+    const stageColors = ['#2563eb','#ea580c','#059669','#7c3aed','#dc2626','#0891b2','#ca8a04','#64748b'];
+    document.getElementById('selected-stage-legend').innerHTML = stageRows.map((stage, idx) =>
+      `<span class="stage-pill"><i class="stage-dot" style="background:${TraceCharts.color(stage.stage) || stageColors[idx % stageColors.length]}"></i>${escapeHtml(stageDisplayName(stage.stage))}</span>`
+    ).join('');
+    chart('selected-trace-chart', stageRows.length ? axisBase('Selected Trace Stage Breakdown', {
+      legend:{show:false},
+      dataZoom:[],
+      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:ps => ps.filter(p => p.data && p.data.value != null).map(p => `研发流程: ${escapeHtml(p.data.display)}<br>耗时: ${p.data.value}ms<br>原始字段: ${escapeHtml(p.data.rawStage || '')}<br>观测来源: ${escapeHtml(p.data.source || '')}`).join('<br><br>')},
+      grid:wideHorizontalGrid(128,44,30),
+      xAxis:{type:'value', name:'ms'},
+      yAxis:{type:'category', data:stageRows.map(s => stageDisplayName(s.stage)), axisLabel:{width:118, overflow:'truncate'}},
+      series:[{
+        name:'duration_ms',
+        type:'bar',
+        barMaxWidth:28,
+        data:stageRows.map((row, rowIndex) => ({value:row.duration_ms, display:stageDisplayName(row.stage), rawStage:row.stage, source:row.source || '', itemStyle:{color:TraceCharts.color(row.stage) || stageColors[rowIndex % stageColors.length]}})),
+        label:{show:true, position:'right', formatter:p => p.data && p.data.value != null ? `${p.data.value}ms` : ''},
+        markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{xAxis:20}]}
+      }]
+    }) : noDataOption('No observed stage duration for selected operation'));
+    document.getElementById('selected-trace-log').innerHTML = renderTraceLogBlocks(item.evidence || []);
+    renderTraceLogTimelinePage();
+  }
+  document.getElementById('prev-page').addEventListener('click', () => { currentPage -= 1; renderTracePage(); });
+  document.getElementById('next-page').addEventListener('click', () => { currentPage += 1; renderTracePage(); });
+  document.getElementById('trace-search').addEventListener('input', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
+  document.getElementById('request-status-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
+  document.getElementById('operation-filter').addEventListener('change', event => {
+    activeOperation = event.target.value;
+    currentPage = 0;
+    renderOperationViews();
+    renderTracePage();
+    renderSelectedTrace();
+  });
+  setSelectOptions('class-filter', '全部分类', classificationRows.map(([name]) => name));
+  document.getElementById('class-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
+  const traceWorkerNames = [...new Set(traceRows.flatMap(([, item]) => Object.keys(item.workers || {})))].sort();
+  function workerFilterOptions() {
+    const options = new Map();
+    traceWorkerNames.forEach(name => {
+      const key = workerAggregateKey(name);
+      if (!options.has(key)) options.set(key, workerAggregateLabel(key));
+    });
+    return [...options.entries()].sort((a,b) => a[1].localeCompare(b[1], 'zh-CN', {numeric:true}));
+  }
+  setSelectOptions('worker-filter', '全部 Worker', workerFilterOptions());
+  document.getElementById('worker-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
+  const workerScopedFilterIds = [
+    'read-worker-filter',
+    'read-worker-table-filter',
+    'write-worker-filter',
+    'write-worker-table-filter',
+    'ub-worker-role-filter',
+    'ub-worker-role-table-filter',
+    'ub-worker-time-filter',
+    'ub-worker-time-table-filter'
+  ];
+  workerScopedFilterIds.forEach(id => {
+    const node = document.getElementById(id);
+    if (!node) return;
+    setSelectOptions(id, '全部 Worker', workerFilterOptions());
+    node.addEventListener('change', renderWorkerDependentViews);
+  });
+  ['read-ub-src-filter','read-ub-dst-filter'].forEach(id => {
+    const node = document.getElementById(id);
+    if (node) node.addEventListener('change', () => {
+      pagedTables['read-ub-edge-table'] = {page:0, sort:pagedTables['read-ub-edge-table']?.sort || null};
+      renderUbSection('read');
+      renderSectionSummaries();
+    });
+  });
+  document.getElementById('trace-page-size').addEventListener('change', event => {
+    pageSize = Number(event.target.value) || 4;
+    currentPage = 0;
+    renderTracePage();
+    renderSelectedTrace();
+  });
+  document.getElementById('reset-filter').addEventListener('click', () => {
+    document.getElementById('trace-search').value = '';
+    document.getElementById('class-filter').value = '';
+    document.getElementById('worker-filter').value = '';
+    document.getElementById('operation-filter').value = '';
+    document.getElementById('request-status-filter').value = '';
+    document.getElementById('trace-page-size').value = '4';
+    activeOperation = '';
+    pageSize = 4;
+    currentPage = 0;
+    renderOperationViews();
+    renderTracePage();
+    renderSelectedTrace();
+  });
+  document.getElementById('download-selected-raw').addEventListener('click', () => {
+    const item = traces[selectedTraceId] || {};
+
+    const text = (item.evidence || []).map(e => `${e.member}:${e.line} ${e.text}`).join('\n');
+    downloadText(`${selectedTraceId || 'trace'}-raw.log`, text);
+  });
+  document.getElementById('download-filtered-evidence').addEventListener('click', () => {
+    const rows = filteredTraceRows.map(([traceId, item]) => [
+      `# ${traceId} ${item.classification || ''}`,
+      ...(item.evidence || []).map(e => `${e.member}:${e.line} ${e.text}`)
+    ].join('\n')).join('\n\n');
+    downloadText('filtered-trace-evidence.log', rows);
+  });
+  document.getElementById('download-report-summary').addEventListener('click', () => {
+    const lines = [
+      '# DataSystem Trace Report Summary',
+      '',
+      `- case_name: ${manifest.case_name || ''}`,
+      `- scenario: ${manifest.scenario || ''}`,
+      `- code_ref: ${report.code_ref || ''}`,
+      `- trace_count: ${report.trace_count || 0}`,
+      '',
+      '## Diagnosis',
+      ...diagnosisRows.map(item => `- ${item.label}: ${item.text}`),
+      '',
+      '## Evidence Coverage',
+      ...coverageRows.map(([name,item]) => `- ${name}: ${item.status || 'missing'} (${item.events || 0} events)`),
+      '',
+      '## Recommendations',
+      ...recommendations.map(item => `- [${item.category}] ${item.title}: ${item.detail}`),
+      '',
+      '## Source Mapping',
+      ...sourceAppendix.map(item => `- ${item.log_surface} | ${item.flow_stage} | ${item.source_hint}`),
+      '',
+      '## Inputs',
+      ...(manifest.inputs || []).map(item => `- ${item.path} (${item.size || 0} bytes)`),
+      '',
+    ];
+    downloadText('trace-report-summary.md', lines.join('\n'));
+  });
+  const navLinks = [...document.querySelectorAll('#nav a')];
+  let navUpdatePending=false;
+  function updateTraceNavigation(){
+    navUpdatePending=false;
+    const threshold=(document.getElementById('report-switcher')?.getBoundingClientRect().bottom||0)+40;
+    let active=navLinks[0],nearest=-Infinity;
+    for(const link of navLinks){
+      const node=document.getElementById(link.hash.slice(1));
+      if(!node||!node.getClientRects().length)continue;
+      const top=node.getBoundingClientRect().top;
+      if(top<=threshold&&top>=nearest){active=link;nearest=top;}
+    }
+    for(const link of navLinks){
+      link.classList.toggle('active',link===active);
+      if(link===active)link.setAttribute('aria-current','location');else link.removeAttribute('aria-current');
+    }
+    const sidebar=document.querySelector('.layout>aside');
+    if(sidebar&&getComputedStyle(sidebar).position==='sticky'&&active&&!active.hidden){
+      const bounds=sidebar.getBoundingClientRect(),item=active.getBoundingClientRect();
+      if(item.bottom>bounds.bottom-16)sidebar.scrollTop+=item.bottom-bounds.bottom+16;
+      else if(item.top<bounds.top+16)sidebar.scrollTop+=item.top-bounds.top-16;
+    }
+  }
+  function scheduleTraceNavigation(){if(!navUpdatePending){navUpdatePending=true;requestAnimationFrame(updateTraceNavigation);}}
+  for(const event of ['scroll','resize','hashchange','load'])window.addEventListener(event,scheduleTraceNavigation);
+  chart('classification-chart', classificationRows.length ? {title:{show:false}, color:palette, textStyle:chartTextStyle, tooltip:{trigger:'item', confine:true}, legend:{type:'scroll', bottom:0}, series:[{type:'pie', radius:['38%','66%'], center:['50%','48%'], avoidLabelOverlap:true, data:classificationRows.map(([name,value]) => ({name,value}))}]} : noDataOption('No classification data'));
+  chart('cohort-chart', cohortRows.length ? axisBase('Input Cohort Comparison', {xAxis:{type:'category', data:cohortRows.map(r => r[0]), axisLabel:{rotate:20, width:110, overflow:'truncate'}}, yAxis:{type:'value'}, series:[
+    {name:'traces',type:'bar',barMaxWidth:42,data:cohortRows.map(r => r[1].trace_count || 0), label:{show:true, position:'top'}},
+    {name:'errors',type:'bar',barMaxWidth:42,data:cohortRows.map(r => Object.values(r[1].errors || {}).reduce((a,b) => a+b, 0)), label:{show:true, position:'top'}, itemStyle:{color:'#dc2626'}}
+  ]}) : noDataOption('No cohort data'));
+  chart('error-chart', errorRows.length ? axisBase('Errors', {xAxis:{type:'category', data:errorRows.map(r => r[0]), axisLabel:{rotate:25, width:130, overflow:'truncate'}}, yAxis:{type:'value'}, series:[{type:'bar', barMaxWidth:46, data:errorRows.map(r => ({value:r[1], itemStyle:{color:'#dc2626'}})), label:{show:true, position:'top'}}]}) : noDataOption('No error data'));
+  function flowToolbox() {
+    return {right:10,feature:{
+      myAutoCenter:{
+        show:true,
+        title:'自适应居中',
+        icon:'path://M512 128l96 96-48 48-16-16v160h160l-16-16 48-48 96 96-96 96-48-48 16-16H544v160l16-16 48 48-96 96-96-96 48-48 16 16V608H320l16 16-48 48-96-96 96-96 48 48-16 16h160V384H320l16 16-48 48-96-96 96-96 48 48-16 16h160V256l-16 16-48-48 96-96z',
+        onclick:(ecModel, api) => autoCenterFlowGraph(api)
+      }
+    }};
+  }
+  function flowNodeLabel(node) {
+    return node.label;
+  }
+  function flowEdgeBriefText(edge) {
+    const rollup = edge.rollup || {};
+    const hasSamples = Number(rollup.trace_count || 0) > 0;
+    const maxMs = Number(rollup.max_ms);
+    const p99Ms = Number(rollup.p99_ms);
+    const latency = hasSamples && Number.isFinite(maxMs) && maxMs > 0 ? `max=${maxMs.toFixed(3)}ms` :
+      hasSamples && Number.isFinite(p99Ms) && p99Ms > 0 ? `p99=${p99Ms.toFixed(3)}ms` : '';
+    const worker = (rollup.top_workers || []).map(workerRelationName).filter(Boolean)[0];
+    const abnormalIp = flowEdgeAbnormalIps(edge).split(', ')[0];
+    return [edge.operation, latency || '未采样', abnormalIp ? `异常IP ${abnormalIp}` : worker].filter(Boolean).join('\n');
+  }
+  function flowEdgeAbnormalIps(edge) {
+    const isSlow = Number(edge.rollup?.max_ms || 0) >= 20 || Number(edge.rollup?.p99_ms || 0) >= 20;
+    const isMissing = edge.status && edge.status !== 'present';
+    if (!isSlow && !isMissing) return '';
+    return (edge.rollup?.top_ips || []).slice(0, 4).join(', ');
+  }
+  function flowEdgeCurveness(edge) {
+    if (edge.operation === 'CreateBuffer') return .08;
+    if (edge.operation === 'Client Publish') return -.08;
+    if (edge.operation === 'Client→Entry RPC/UB') return 0;
+    if (edge.operation === 'Entry→Meta RPC') return 0;
+    if (edge.operation === 'Entry→Data RPC') return .1;
+    if (edge.operation === 'URMA Write') return -.1;
+    return 0;
+  }
+  function flowEdgeLabelOffset(edge) {
+    if (edge.operation === 'CreateBuffer') return [0, -22];
+    if (edge.operation === 'Client Publish') return [0, 22];
+    if (edge.operation === 'Entry→Data RPC') return [0, 22];
+    if (edge.operation === 'URMA Write') return [0, -22];
+    return [0, 0];
+  }
+  function flowEdgeLabelNodeData(edges, positions) {
+    return edges.map((edge, index) => {
+      const source = positions[edge.source];
+      const target = positions[edge.target];
+      if (!source || !target) return null;
+      const [offsetX, offsetY] = flowEdgeLabelOffset(edge);
+      const maxMs = Number(edge.rollup?.max_ms || 0);
+      return {
+        name:`__flow_edge_label_${index}`,
+        edge_text:flowEdgeBriefText(edge),
+        x:Math.round((source.x + target.x) / 2 + offsetX),
+        y:Math.round((source.y + target.y) / 2 + offsetY),
+        symbolSize:1,
+        fixed:true,
+        silent:true,
+        itemStyle:{color:'transparent', borderColor:'transparent'},
+        tooltip:{show:false},
+        label:{
+          show:true,
+          formatter:p => p.data.edge_text,
+          position:'inside',
+          fontSize:FLOW_GRAPH_LABEL_FONT_SIZE,
+          fontWeight:maxMs >= 20 ? 700 : 500,
+          color:maxMs >= 20 ? '#b91c1c' : '#334155',
+          width:160,
+          overflow:'break',
+          align:'center',
+          verticalAlign:'middle',
+          backgroundColor:'rgba(255,255,255,.9)',
+          borderRadius:3,
+          padding:[2,4]
+        }
+      };
+    }).filter(Boolean);
+  }
+  function flowGraphNodeSize() {
+    return 72;
+  }
+  const FLOW_GRAPH_LABEL_FONT_SIZE = 14;
+  function fmtMs(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? `${Number(n.toFixed(3))}ms` : '未采样';
+  }
+  function fmtCount(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? String(n) : '0';
+  }
+  function firstEntry(rows, fallback=['无数据', null]) {
+    return rows && rows.length ? rows[0] : fallback;
+  }
+  function topLatencyText(rows) {
+    const [name, item] = firstEntry(rows);
+    if (!item || !item.count) return '无有效时延样本';
+    return `${metricLabel(name)} max=${fmtMs(item.max)}, p99=${fmtMs(item.p99)}`;
+  }
+  function topTimeBucketText(operation) {
+    const rows = buildTraceTimeBuckets(operation);
+    if (!rows.length) return '无时间桶样本';
+    const top = rows.slice().sort((a,b) => Number(b.p99_access_ms || 0) - Number(a.p99_access_ms || 0))[0];
+    const stage = Object.entries(top.stage_breakdown_ms || {})
+      .sort((a,b) => Number(b[1]?.p99 || 0) - Number(a[1]?.p99 || 0))[0];
+    const stageText = stage ? `${stageDisplayName(stage[0])} p99=${fmtMs(stage[1]?.p99)}` : '子阶段未采样';
+    return `${String(top.bucket_start || '').replace('T',' ')} access p99=${fmtMs(top.p99_access_ms)}，${stageText}`;
+  }
+  function topWorkerText(rows) {
+    const [worker, item] = firstEntry(rows);
+    if (!item) return '无 worker 聚合样本';
+    return `${item.display_worker || workerAggregateLabel(worker)}: traces=${fmtCount(item.trace_count)}, slow=${fmtCount(item.slow_trace_count)}, errors=${fmtCount(item.error_count)}`;
+  }
+  function topFlowStageText(graph) {
+    const edge = (graph.edges || []).slice().sort((a,b) =>
+      Number(b.rollup?.max_ms || 0) - Number(a.rollup?.max_ms || 0) ||
+      Number(b.rollup?.count || 0) - Number(a.rollup?.count || 0)
+    )[0];
+    if (!edge) return '流程阶段证据不足';
+    return `${edge.name}: ${edge.summary || edge.status || 'observed'}`;
+  }
+  function topUbMetricText() {
+    const [name, item] = firstEntry(ubLifecycleLatencyMetrics);
+    if (!item || !item.count) return 'UB 耗时字段未采样';
+    return `${lifecycleLabel(name)} max=${fmtMs(item.max)}, p99=${fmtMs(item.p99)}`;
+  }
+  function topUbWorkerText() {
+    const [worker, item] = firstEntry(ubWorkerRows);
+    if (!item) return '无 UB worker 聚合样本';
+    return `${worker}: role=${item.role || ''}, entry=${fmtCount(item.entry_events)}, exit=${fmtCount(item.exit_events)}, max=${fmtMs(item.latency_ms?.max)}`;
+  }
+  function topUbEdgeText() {
+    const [edge, item] = firstEntry(ubRows);
+    if (!item) return '无 UB edge 样本';
+    return `${edge}: count=${fmtCount(item.count)}, p99=${fmtMs(item.latency_ms?.p99)}`;
+  }
+  function topTraceText() {
+    const [traceId, item] = firstEntry(traceRows);
+    if (!item) return '无 trace 样本';
+    const workers = Object.keys(item.workers || {}).slice(0, 3).join(', ') || 'unknown worker';
+    return `${String(item.first_ts || item.last_ts || '').replace('T',' ')} ${traceId}: ${item.classification || 'unknown'}, access=${fmtMs(traceAccessLatencyMs(item))}, workers=${workers}`;
+  }
+  function missingCoverageText() {
+    const missing = coverageRows.filter(([, item]) => item.status !== 'present').map(([name]) => name).slice(0, 3);
+    return missing.length ? `缺失观测面：${missing.join(', ')}` : '关键观测面已采样';
+  }
+  function highlightSummaryLatency(match, raw) {
+    const value = Number(raw);
+    const cls = Number.isFinite(value) && value >= 20 ? 'summary-hot' : Number.isFinite(value) && value >= 5 ? 'summary-warn' : 'summary-key';
+    return `<span class="${cls}">${match}</span>`;
+  }
+  function highlightSummaryText(text) {
+    return escapeHtml(text)
+      .replace(/\b(\d+(?:\.\d+)?)ms\b/g, highlightSummaryLatency)
+      .replace(/(deadline|timeout|error|errors|失败|异常|异常耗时|异常时延|缺失|未采样|Top error)/gi, '<span class="summary-hot">$1</span>')
+      .replace(/(瓶颈|热点|集中|Top trace|Top edge|access|p99|max|slow|worker|Worker|UB|URMA)/g, '<span class="summary-warn">$1</span>')
+      .replace(/(主分类|读取|写入|流程|建议|原始 JSON|证据|时间|入口\/出口)/g, '<span class="summary-key">$1</span>');
+  }
+  function summaryPointsHtml(summary) {
+    const points = Array.isArray(summary?.points) ? summary.points : String(summary || '').split(/[；;]/).filter(Boolean);
+    return `<b>本章结论：</b><ul class="summary-points">${points.map(point => `<li>${highlightSummaryText(point.replace(/[。.]$/, ''))}</li>`).join('')}</ul>`;
+  }
+  function setSectionSummary(id, summary) {
+    const node = document.getElementById(id);
+    if (node) node.innerHTML = summaryPointsHtml(summary);
+  }
+  function chapterSummaryTexts() {
+    const topCohort = cohortRows.slice().sort((a,b) => Object.values(b[1].errors || {}).reduce((x,y)=>x+y,0) - Object.values(a[1].errors || {}).reduce((x,y)=>x+y,0))[0];
+    const topCohortText = topCohort ? `${topCohort[0]} errors=${fmtCount(Object.values(topCohort[1].errors || {}).reduce((a,b)=>a+b,0))}` : '无 cohort 对比';
+    return {
+      s2: {points:[`主分类 ${topClass[0]}=${fmtCount(topClass[1])}`, `Top error ${errorRows[0]?.[0] || '无'}=${fmtCount(errorRows[0]?.[1])}`, topCohortText]},
+      s3: {points:[`读取瓶颈 ${topLatencyText(latencyRowsForOperation('read'))}`, `写入瓶颈 ${topLatencyText(latencyRowsForOperation('write'))}`, `时间热点：读 ${topTimeBucketText('read')}，写 ${topTimeBucketText('write')}`]},
+      s4: {points:[`流程热点：读 ${topFlowStageText(readFlowStages)}；写 ${topFlowStageText(writeFlowStages)}`, `Worker 集中：读 ${topWorkerText(workerRowsForOperation('read'))}`, `Worker 集中：写 ${topWorkerText(workerRowsForOperation('write'))}`]},
+      s5: {points:[`UB 耗时 ${topUbMetricText()}`, `入口/出口集中 ${topUbWorkerText()}`, `Top edge ${topUbEdgeText()}`]},
+      s6: {points:[`默认按接口 access 时延降序`, `Top trace ${topTraceText()}`, `建议先切换“失败/成功”和“读/写”筛选，再看原始日志块摘要`]},
+      s7: {points:[recommendations[0]?.title || '暂无自动建议', missingCoverageText()]},
+      s8: {points:[`原始 JSON 保留 ${fmtCount(Object.keys(traces).length)} 条 trace`, '可用于复现 parser 聚合和人工二次确认']}
+    };
+  }
+  function renderChapterGuide() {
+    const guideRows = [
+      ['#s2', '2. 根因分布', '图 2-1/2-2/2-3'],
+      ['#s3', '3. 时延 Breakdown', '图 3-1/3-3'],
+      ['#s4', '4. Worker / 流程', '表 4-1/4-3 · 图 4-2/4-4'],
+      ['#s5', '5. UB / URMA', '图 5-1/5-2/5-3/5-4/5-5/5-6'],
+      ['#s6', '6. Trace 查看', '表 6-1 / 图 6-1 / 日志框 6-3'],
+      ['#s7', '7. 建议与口径', '表 7-1/7-2']
+    ];
+    const node = document.getElementById('chapter-guide-list');
+    if (!node) return;
+    node.innerHTML = guideRows.map(([href, title, refs]) =>
+      `<li><a href="${href}">${escapeHtml(title)}</a><div class="small">${escapeHtml(refs)}</div></li>`
+    ).join('');
+  }
+  function renderSectionSummaries() {
+    const summaries = chapterSummaryTexts();
+    setSectionSummary('section-summary-s2', summaries.s2);
+    setSectionSummary('section-summary-s3', summaries.s3);
+    setSectionSummary('section-summary-s4', summaries.s4);
+    setSectionSummary('section-summary-s5', summaries.s5);
+    setSectionSummary('section-summary-s6', summaries.s6);
+    setSectionSummary('section-summary-s7', summaries.s7);
+    setSectionSummary('section-summary-s8', summaries.s8);
+    renderChapterGuide();
+  }
+  renderSectionSummaries();
+  deferSection('s3',()=>{renderLatencySection('read', 'Read');renderLatencySection('write', 'Write');renderFlowSection('read', 'Read');renderFlowSection('write', 'Write');});
+  deferSection('s3',()=>{renderTimeBucketSection('read', 'Read');renderTimeBucketSection('write', 'Write');});
+  deferSection('s4',()=>{renderWorkerSection('read', 'Read');renderWorkerSection('write', 'Write');});
+  deferSection('s5',()=>{renderUbLifecycleViews();renderUbWorkerViews();renderUbSection('read');renderUbSection('write');});
+  renderTracePage();
+  deferSection('s6',renderSelectedTrace);
+  installResponsiveCharts();
+  document.getElementById('preview-trace-json').onclick=()=>{
+    document.getElementById('trace-data').textContent=JSON.stringify({[selectedTraceId]:traces[selectedTraceId]||{}},null,2);
+  };
+  document.getElementById('download-trace-json').onclick=async event=>{
+    const button=event.currentTarget;button.disabled=true;
+    try {
+      const parts=['{'];let first=true,deadline=performance.now()+8;
+      for(const [id,item] of traceRows){
+        parts.push((first?'':',')+JSON.stringify(id)+':'+JSON.stringify(item));first=false;
+        if(performance.now()>=deadline){button.textContent=`正在导出 ${parts.length-1}/${traceRows.length}`;await new Promise(resolve=>setTimeout(resolve,0));deadline=performance.now()+8;}
+      }
+      parts.push('}');const url=URL.createObjectURL(new Blob(parts,{type:'application/json'}));
+      const link=document.createElement('a');link.href=url;link.download='traces.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    } finally {button.disabled=false;button.textContent='下载全部Trace JSON';}
+  };
+  </script>
+  __SCRIPT_REF__
+</body>
+</html>

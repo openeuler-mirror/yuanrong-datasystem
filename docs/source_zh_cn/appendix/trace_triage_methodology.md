@@ -1,6 +1,7 @@
 # DataSystem 慢时延与错误 Trace 分析方法论
 
 本文沉淀一套可自验证、可随主线演进刷新的 trace 分析流程。它适用于给定慢时延或错误日志包后，从时间、worker、访问流程、关键日志字段、breakdown 和聚合分布中定位主要延迟族或错误族。
+本方法是 `ds-trace-analysis-pipeline` 的 Triage 局部模式，不是另一个 skill。统一入口为 `python3 scripts/ds_trace_analysis.py triage`；读、写和 NUMA 可在已有校验产物上分别执行。
 
 ## 目标
 
@@ -12,15 +13,15 @@
 - 耗时维度：access latency、client summary、worker summary、rpc slow、URMA elapsed、锁和元数据操作。
 - Breakdown 维度：`ProcessGetObjectRequest`、QueryMeta/CreateMeta、SafeObject lock、RemotePull、URMA wait/poll/notify。
 - 错误维度：非 0 status、`RPC deadline exceeded`、`URMA_WAIT_TIMEOUT`、`Object in use`、`Key not found`、fallback rejected、Etcd 异常。
-- 源码维度：固定 `main/master` ref，并用 CodeGraph + 源码交叉校验调用链。
+- 源码维度：记录已核实的源码 ref；部署版本未知时仅称为解释基线。现有共享 CodeGraph 可用于发现，结论以该 ref 的源码复核为准。
 
 ## 快速入口
 
 先跑脚本生成一个带时间戳的 run 目录：
 
 ```bash
-python3 scripts/ds_trace_triage.py run <trace_dir_or_tar_gz> \
-  --code-ref "$(git rev-parse main/master)" \
+python3 scripts/ds_trace_analysis.py triage run <trace_dir_or_tar_gz> \
+  --code-ref <verified-source-ref> \
   --case <case-name> \
   --scenario <scenario> \
   --out <local-run-root>
@@ -44,25 +45,25 @@ run 默认会复用缓存。缓存 key 包含脚本版本、parser 规则指纹�
 也可以显式分阶段执行，便于人工检查中间产物：
 
 ```bash
-run_dir=$(python3 scripts/ds_trace_triage.py parse <trace_dir_or_tar_gz> \
-  --code-ref "$(git rev-parse main/master)" \
+run_dir=$(python3 scripts/ds_trace_analysis.py triage parse <trace_dir_or_tar_gz> \
+  --code-ref <verified-source-ref> \
   --case <case-name> \
   --scenario <scenario> \
   --out <local-run-root>)
-python3 scripts/ds_trace_triage.py aggregate "$run_dir"
-python3 scripts/ds_trace_triage.py triage "$run_dir"
-python3 scripts/ds_trace_triage.py render-local "$run_dir"
-python3 scripts/ds_trace_triage.py render-site "$run_dir"
-python3 scripts/ds_trace_triage.py publish-site "$run_dir" --dry-run
+python3 scripts/ds_trace_analysis.py triage aggregate "$run_dir"
+python3 scripts/ds_trace_analysis.py triage triage "$run_dir"
+python3 scripts/ds_trace_analysis.py triage render-local "$run_dir"
+python3 scripts/ds_trace_analysis.py triage render-site "$run_dir"
+python3 scripts/ds_trace_analysis.py triage publish-site "$run_dir" --dry-run
 # 确认 site_publish.md 后，设置 DS_TRACE_TRIAGE_PUBLISH_HOST 和 DS_TRACE_TRIAGE_PUBLISH_ROOT。
 # 不带 --dry-run 会先做 HTML 大小门禁，再执行 scp、curl HEAD，并校验线上 HTML 关键组件。
 ```
 
-旧的直接摘要入口仍可用于快速检查：
+`triage` 子命令的简版摘要形式仍可用于快速检查：
 
 ```bash
-python3 scripts/ds_trace_triage.py <trace_dir_or_tar_gz> \
-  --code-ref "$(git rev-parse main/master)" \
+python3 scripts/ds_trace_analysis.py triage <trace_dir_or_tar_gz> \
+  --code-ref <verified-source-ref> \
   --output-json <local-summary-json> \
   --output-md <local-summary-md>
 ```
@@ -70,9 +71,9 @@ python3 scripts/ds_trace_triage.py <trace_dir_or_tar_gz> \
 脚本支持自验证：
 
 ```bash
-python3 scripts/ds_trace_triage.py verify
-python3 scripts/ds_trace_triage.py --self-test
-python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
+python3 scripts/ds_trace_analysis.py triage verify
+python3 scripts/ds_trace_analysis.py triage --self-test
+python3 -m pytest -s tests/scripts/ds_trace_analysis/pipeline/test_ds_trace_triage.py -q
 ```
 
 这些命令先作为人工验证和独立 job 候选，不接入 `.gitee/ci_build.sh` 主路径，避免影响主工程构建耗时。
@@ -108,33 +109,16 @@ mod.register_metric_rule(
 | `TraceSitePublisher` | 管理站点版 HTML 大小门禁、复制和 live marker 校验 |
 | `TraceRunPipeline` | 编排 parse、aggregate、triage、render-local、render-site 阶段 |
 
-兼容入口 `analyze_inputs`、`parse_stage`、`aggregate_stage`、`triage_stage`、`render-local`、`render-site`、`run_pipeline` 保持可用，但新增能力优先落到对应对象，再通过 wrapper 暴露。
+包内函数 `analyze_inputs`、`parse_stage`、`aggregate_stage`、`triage_stage` 和 `run_pipeline` 供内部调用；`render-local`、`render-site` 是统一入口的 `triage` 子命令。新增能力落到对应模块，不新增顶层脚本。
 
-## 当前主线校准流程
+## 源码基线与历史校准
 
-不要复用旧会话中的“latest”结论。每次分析先刷新并记录 ref：
+不要复用旧会话中的“latest”结论。每次分析从输入清单、PR 或明确的运行时证据取得并记录源码 ref；
+仅从文件名不能断言部署版本。需要源码因果时，可使用已有共享 CodeGraph 发现符号，
+再在核实的 ref 上用 `rg` 和源码读取确认调用链；无需为报告重建索引。
+CodeGraph 缺失不阻止直接源码复核，但日志现象本身不足以证明源码根因。
 
-```bash
-git fetch main master
-git rev-parse main/master
-git log -1 --oneline main/master
-```
-
-需要源码因果时，在干净 worktree 上建 CodeGraph：
-
-```bash
-git worktree add --detach <clean-main-worktree> main/master
-CODEGRAPH_BIN=${CODEGRAPH_BIN:-$(command -v codegraph || true)}
-test -n "$CODEGRAPH_BIN"
-"$CODEGRAPH_BIN" init <clean-main-worktree>
-"$CODEGRAPH_BIN" index <clean-main-worktree>
-"$CODEGRAPH_BIN" callees WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl --path <clean-main-worktree>
-```
-
-CodeGraph 用于发现符号和边，结论必须回到源码验证。`.worktrees`、生成代码和动态分发会导致重复或缺边，不能把“没有边”当成“没有调用”。
-如果本机找不到 `CODEGRAPH_BIN`，本轮只能输出日志侧定位结论，并明确标记源码因果未验证；不得把日志现象直接写成源码根因。
-
-本次沉淀校准的 ref 为 `a7130ac9c3171bf3acb70601c7de99f7bc24f25a`。在该 ref 下，远端 Get 慢链路仍要关注：
+以下为历史校准示例，ref 为 `a7130ac9c3171bf3acb70601c7de99f7bc24f25a`，不能代替新报告的源码基线。在该 ref 下，远端 Get 慢链路关注：
 
 - `ObjectClientImpl::GetFromTransportLayer` / `GetBuffersFromWorker`
 - `ClientWorkerRemoteApi::GetObjMetaInfo`
@@ -147,7 +131,7 @@ CodeGraph 用于发现符号和边，结论必须回到源码验证。`.worktree
 - `WaitFastTransportEvent`
 - `UrmaManager::WaitToFinish`
 
-主线已经包含 batch/aggregate gather、send-lane lease、fallback 等分支，所以报告应描述“当前 trace 实际命中的分支”，不要把历史单一路径写死。
+在该历史 ref 下，源码包含 batch/aggregate gather、send-lane lease、fallback 等分支。新报告须对照其已核实的源码 ref 描述 Trace 实际命中的分支，不套用这份历史路径。
 
 ## 分析顺序
 
@@ -156,7 +140,7 @@ CodeGraph 用于发现符号和边，结论必须回到源码验证。`.worktree
 3. 聚合先行：先给总 trace 数、时间范围、P50/P90/P99/max、worker Top、flow 分布、错误分布。
 4. 延迟族分类：区分 20ms deadline、500ms/1s/2s URMA wait、rpc slow 4-8ms、锁/元数据小尾巴、无 summary 的 unknown。
 5. 单 trace 证据：每个主要族选 top slow 和典型错误，保留足够日志上下文。
-6. 源码校验：把日志里的 method、阶段和字段映射到当前 `main/master` 的函数和 timeout 传递。
+6. 源码校验：把日志里的 method、阶段和字段映射到已核实源码 ref 的函数和 timeout 传递。
 7. 结论边界：明确 observed evidence、source-backed inference、unverified hypothesis。
 
 ## 错误 Trace 的几种切法
@@ -168,7 +152,7 @@ CodeGraph 用于发现符号和边，结论必须回到源码验证。`.worktree
 3. **Worker ownership 切分**：区分 client、entry worker、provider/data worker、master 和 fallback target。日志没有显式打印目标 Worker 时，只标注“目标未显式打印”，不要用 IP 或目录名强行推断。
 4. **Transport 切分**：分开 TCP、UB、URMA/RDMA、fallback 证据。`transportType:SHM` 或 tracker 默认值不等于请求实际走 SHM/UB；需要结合 slow log、payload source、fallback 日志和源码分支。
 5. **URMA lifecycle 切分**：分别看 `URMA_ELAPSED_TOTAL`、`URMA_ELAPSED_POLL_JFC`、`URMA_ELAPSED_NOTIFY`、`URMA_ELAPSED_THREAD_SHED`、dataSize、CPU、inflight、source chip 和 target address。总耗时慢不自动等价于 poll 慢。
-6. **源码演进切分**：每轮都刷新 `main/master`，用 CodeGraph 找符号，再回源码验证 timeout 传递、Batch/aggregate gather、send-lane lease、fallback 等当前分支。旧 trace 会话的结论只能作为 hypothesis。
+6. **源码演进切分**：比较已核实的运行版本与解释基线；已有 CodeGraph 可帮助发现符号，结论仍需源码验证 timeout 传递、Batch/aggregate gather、send-lane lease、fallback 等分支。旧 trace 会话的结论只能作为 hypothesis。
 
 ## 字段字典
 
@@ -213,9 +197,9 @@ CodeGraph 用于发现符号和边，结论必须回到源码验证。`.worktree
 ci-build、标签分流和构建时长。先把下面命令作为人工验证或 agent 自检入口：
 
 ```bash
-python3 -m py_compile scripts/ds_trace_triage.py tests/scripts/test_ds_trace_triage.py
-python3 scripts/ds_trace_triage.py verify
-python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
+python3 -m py_compile scripts/ds_trace_analysis.py scripts/trace_analysis/triage.py tests/scripts/ds_trace_analysis/pipeline/test_ds_trace_triage.py
+python3 scripts/ds_trace_analysis.py triage verify
+python3 -m pytest -s tests/scripts/ds_trace_analysis/pipeline/test_ds_trace_triage.py -q
 ```
 
 后续如果要接 CI，建议作为候选 CI 门禁先放到独立 job 或手动触发 job，
@@ -224,7 +208,7 @@ python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
 扩展门禁可以在后续加入真实脱敏 fixture：
 
 ```bash
-python3 scripts/ds_trace_triage.py tests/fixtures/trace_triage/*.tar.gz \
+python3 scripts/ds_trace_analysis.py triage tests/fixtures/trace_triage/*.tar.gz \
   --code-ref fixture \
   --output-json <fixture-summary-json>
 python3 - <<'PY'

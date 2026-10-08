@@ -1,0 +1,4 @@
+interface:
+  display_name: "DataSystem Trace Pipeline"
+  short_description: "Trace、读写关键瓶颈、NUMA 与多 Run 报告"
+  default_prompt: "Use $ds-trace-analysis-pipeline and choose the requested mode: triage, read/write bottlenecks, NUMA, render-only, or full single/multi-run reports. Preserve evidence gaps and validate the outputs."

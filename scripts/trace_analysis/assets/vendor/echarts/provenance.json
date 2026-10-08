@@ -1,0 +1,12 @@
+{
+  "name": "Apache ECharts",
+  "version": "5.5.1",
+  "license": "Apache-2.0",
+  "sha256": "e84270bd0cd5bdf60fefc26d00c2a391cb2e81f4d26a7a9ee16185a54773a3cf",
+  "source": "Existing repository asset .skills/ds-trace-triage/assets/echarts-5.5.1.min.js at 6bf3a05090401e1a6c2a9e4c3fa0cb18283ae7ec",
+  "modification": "Relocated without changing bytes; embedded third-party notices preserved.",
+  "verified_tarball": "https://registry.npmjs.org/echarts/-/echarts-5.5.1.tgz",
+  "verified_tarball_sha256": "1f0eae29c406496a77789a7d7f56b811cae034ac95c0b3808215998f4ba0fbf3",
+  "license_source": "Official npm tarball package/LICENSE and package/licenses/LICENSE-d3",
+  "notice_source": "Official npm tarball package/NOTICE"
+}

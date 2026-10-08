@@ -34,13 +34,15 @@ when a natural-language request should invoke one of them.
   - `.skills/ds-network-latency-analysis/SKILL.md`
   - `.skills/ds-network-latency-analysis/scripts/network_latency_analysis.py`
   - `.skills/ds-network-latency-analysis/scripts/test_network_latency_analysis.py`
-  - `.skills/ds-trace-triage/SKILL.md`
-  - `.skills/ds-trace-bottleneck-analysis/SKILL.md`
-  - `.skills/ds-trace-numa-analysis/SKILL.md`
-  - `scripts/ds_trace_triage.py`
-  - `scripts/ds_trace_bottleneck.py`
-  - `scripts/ds_trace_bottleneck_suite.py`
-  - `scripts/ds_trace_numa_analysis.py`
+  - `.skills/ds-trace-analysis-pipeline/SKILL.md`
+  - `scripts/trace_analysis/pipeline.py`
+  - `scripts/trace_analysis/triage.py`
+  - `scripts/trace_analysis/bottleneck.py`
+  - `scripts/trace_analysis/suite.py`
+  - `scripts/trace_analysis/numa.py`
+  - `scripts/trace_analysis/write_report.py`
+  - `scripts/trace_analysis/packaging.py`
+  - `scripts/trace_analysis/assets/`
   - `.skills/rdma-ucx-perf-debug/SKILL.md`
   - `.skills/ds-design/SKILL.md`
   - `.skills/ds-design/scripts/self_check.py`
@@ -73,9 +75,7 @@ when a natural-language request should invoke one of them.
 | `ds-refresh-docs` | rebuild and publish online Chinese docs from the latest upstream `master` into `doc_pages`, then automatically open the GitCode PR | “更新在线文档”, “刷新在线文档”, “发布在线文档”, “refresh online docs”, “update zh-cn latest docs” | mentions of online docs, docs publishing, or `doc_pages` without clearly asking to refresh or publish |
 | `ds-log-analysis` | analyze KVCache access/resource logs and generate HTML reports | “日志分析”, “access log 分析”, “resource log 报告”, “QPS/延迟/错误率趋势”, “KVCache report” | asking what the log format means without requesting report generation |
 | `ds-network-latency-analysis` | analyze K8s-collected client, worker, BPF, scheduling, irqoff, NIC, and bthread logs to localize BRPC network or scheduling latency and generate HTML/JSON/raw reports | “网络时延分析”, “network_residual_us 定位”, “RPC segment latency”, “调度问题定位”, “网卡收发耗时”, “软中断抢占分析” | asking only about the supported log format, report schema, or script internals without requesting an analysis |
-| `ds-trace-triage` | parse DataSystem trace packages once into normalized per-Run evidence, JSON, and an offline triage report | “用 ds-trace-triage 分析 traces”, “解析 trace 包”, “生成 trace triage 报告” | asking only what one trace field or log line means |
-| `ds-trace-bottleneck-analysis` | build separate read and write TopN bottleneck pages plus isolated multi-Run control-variable suites from ds-trace-triage outputs; write reports split Create RPC, MemoryCopy/URMA, Publish RPC, Worker Publish/metadata, scheduling, RPC communication residual, and RPC framework | “TopN 关键瓶颈分析”, “读写瓶颈分析”, “多 Runs 控制变量分析”, “分档 traces 对比”, “生成 bottleneck suite” | asking only about the report schema, chart style, or script internals without requesting analysis |
-| `ds-trace-numa-analysis` | analyze WR, chip/NUMA distribution, inflight accumulation, and receiver-side NUMA evidence from triage and bottleneck outputs | “NUMA trace 分析”, “WR 分布分析”, “多 chip 接收带宽分析”, “inflight WR 累积分析” | asking only what one NUMA or WR field means |
+| `ds-trace-analysis-pipeline` | one skill for Trace triage, independent read/write bottlenecks, NUMA/WR analysis, report refresh, and complete single/multi-Run reports; select mode references on demand | “分析 Trace 包”, “读写瓶颈分析”, “NUMA 分析”, “重绘报告”, “多 Run 汇总” | discussion of a field alone does not authorize generating the full report |
 | `rdma-ucx-perf-debug` | diagnose RDMA/UCX throughput, latency, flush, submit, batch get, or resource lifetime problems | “RDMA 性能”, “UCX 延迟”, “UCP flush”, “BatchGet 远端拉取慢”, “P2P/RDMA crash” | generic mention of RDMA code ownership without a performance/debugging task |
 | `ds-design` | author, revise, or review overview design (概要设计) and detailed design (子模块详细设计) documents for features, refactors, or submodules in yuanrong-datasystem, including requirement clarification when the entry point is vague, source-backed current-state investigation via subagent, chapter-by-chapter writing with per-section human gate, and structural self-check plus Mermaid lint and scope check | “写设计”, “设计文档”, “概要设计”, “详细设计”, “子模块设计”, “做个设计”, “改设计”, “修订设计文档”, “design doc” | discussion of design philosophy without asking to produce a design doc; already inside ds-infra-engineering coding flow |
 
@@ -190,3 +190,33 @@ If multiple skills could apply:
 ## Pending Verification
 
 - None today.
+
+### Trace report pipeline artifacts
+
+`scripts/trace_analysis/pipeline.py` supports bounded Run parallelism (`--jobs`), hash-checked completed-Run reuse (`--resume`), and presentation-only refresh (`--render-only`, implemented by `trace_analysis/render_bundle.py`). One process owns each output root; validation gates remain false until all requested stages succeed. Read attribution changes require analysis again. `trace_analysis/overview.py` and `trace_analysis/assets/overview/overview.{html,css,js}` own the reusable single/multi-Run homepage and `run.summary.json`; independent write output uses `write.refined.analysis.json` / `rows`. `trace_analysis/archive.py` normalizes core/time cohorts without requiring a particular outer archive directory.
+Preflight validates the optional `pr` as a numeric ID before archive scanning; a PR URL is not a valid stage input.
+
+Read Chapter 6 uses `trace_analysis/assets/read/read_correlation.js`. Worker `QueryAndGet done` metadata/localRead phases retain their log owner and unknown status, separate from caller RPC records; localRead is a parent processing window, not a proven copy-only time. Empty panels distinguish filtered evidence from uncollected dimensions. `chapter_navigation.js` owns shared chapter disclosure and deep-link expansion.
+
+Read RPC display keeps `rpc_analysis.calls` (individual measured calls) separate from `rpc_analysis.summary_windows` (deduplicated access-stage latencySummary windows). `read_rpc.js` renders the latter when detailed timing is absent; summary counts are windows, not RPC attempts, and never enter network residual accounting. QueryAndGet detailed timing takes precedence for the same owner; network/server decomposition remains unobserved for summary-only windows.
+
+Trace implementation is under `scripts/trace_analysis/`; unified CLI: `python3 scripts/ds_trace_analysis.py <command>`. Former standalone CLI entries are removed; `scripts/ds_trace_analysis.py` is the sole public entry. The single skill routes to `references/triage.md`, `bottleneck.md`, `numa.md`, and `reports.md`. Operating guide: `docs/source_zh_cn/appendix/trace_analysis_usage.md`.
+
+Write reports use a separate model and a versioned `write_phase_observation` for
+Create, Copy, and Publish on one SET Trace. WR applicability excludes independent
+CREATE requests. Source code permits bound writes to send WR in Copy or Publish,
+and routed writes to send WR in Publish. A bound route alone does not identify
+the send phase; absent actual send-callsite evidence, the report records
+`wr_phase_attribution=unconfirmed`. The write page and validation live in
+`scripts/trace_analysis/assets/write/` and `scripts/trace_analysis/validation.py`.
+Write phase schema 2 adds source-referenced Create/Publish RPC call measurements
+as non-additive evidence; older schema 1 reports identify missing model fields separately from
+missing log evidence, and render-only requires schema 2 before publishing a refreshed page.
+The write validation receipt counts operation, WR applicability, phase observation,
+and RPC observation separately. Unknown WR applicability stays unknown; partial
+chunk logs cannot prove a missing-chunk total. Budget validation failures name
+the offending Trace ID, while legacy-model receipts do not invent coverage counts.
+The write template declares its Trace event timeline and captions; the report
+registry derives chapter/component navigation from that markup. The shared
+timeline script populates the existing write section while retaining lazy
+insertion for the read page.

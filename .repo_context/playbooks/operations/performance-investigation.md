@@ -41,6 +41,11 @@
    - backend or metadata
 7. Reproduce with the narrowest matching ST or perf test.
 
+For collected DataSystem Trace packages, use `ds-trace-analysis-pipeline` with
+`python3 scripts/ds_trace_analysis.py <triage|read|write|numa|pipeline>`.
+Choose only the mode requested and use validated upstream Run artifacts for downstream modes;
+the full `pipeline` mode is for complete single/multi-Run reports.
+
 ## Minimal Evidence Set
 
 - One representative slow path or operation

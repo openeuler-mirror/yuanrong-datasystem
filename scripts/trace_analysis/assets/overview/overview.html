@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__TITLE__</title>
+<style>__OVERVIEW_CSS__</style>
+</head>
+<body>
+<aside id="overview-nav">
+<strong>Run 分析</strong>
+<a href="#runs">1. 总览与 Run 入口</a>
+<a href="#errors">2. 异常分布</a>
+<a href="#latency">3. 读写时延与瓶颈</a>
+<a href="#numa">4. WR 与 NUMA</a>
+<a href="#coverage">5. 证据完整性</a>
+</aside>
+<main>
+<header>
+<h1>__TITLE__</h1>
+<p>独立分析各 Run，合并同一 Run 的 all-core / time 采集。</p>
+<p class="muted" id="sampling-note">
+</p>
+<p class="muted">全量解析采集包内 Trace；图中数量和分位数仅代表采集样本，不等于整体故障率或基准测试 P99。</p>
+</header>
+<section id="runs">
+<h2>1. 总览与 Run 入口</h2>
+<div class="tiles" id="tiles">
+</div>
+<div class="controls">
+<label>Run <select id="run-filter">
+<option value="">全部 Runs</option>
+</select>
+</label>
+<button id="reset">重置</button>
+</div>
+<div class="panel">
+<table id="run-summary-table" class="run-table">
+<caption>表 1-1 Run 样本与分析入口</caption>
+<thead>
+<tr>
+<th style="width:40%">Run / 详细页面</th>
+<th>读取 / 失败</th>
+<th>写入 / 失败</th>
+<th>读取 p90</th>
+</tr>
+</thead>
+<tbody id="run-body">
+</tbody>
+</table>
+<div class="pager" id="run-pager">
+</div>
+</div>
+<div id="notes">
+</div>
+<div class="panel" id="focus-panel">
+<table id="focus-summary-table" class="audit-table">
+<caption>表 1-2 重点 Run 异常线索 · 按 Trace 去重</caption>
+<thead>
+<tr>
+<th style="width:30%">Run / 证据</th>
+<th>观测 Client IP / IP-PID</th>
+<th>URMA 等待超时</th>
+<th>RPC Deadline</th>
+<th>Fallback 拒绝</th>
+</tr>
+</thead>
+<tbody id="focus-body">
+</tbody>
+</table><div id="focus-pager" class="pager"></div>
+<p class="muted">日志类别可重叠，不代表最终失败。观测 IP / PID 不能直接还原客户端配置数。</p>
+</div>
+</section>
+<section id="errors">
+<h2>2. 异常分布</h2>
+<div class="panel">
+<div class="chart" id="error-chart">
+</div>
+<div class="caption">图 2-1 读写最终失败 Trace 数</div>
+</div>
+<div class="panel">
+<div class="chart" id="family-chart">
+</div>
+<div class="caption">图 2-2 读取失败类别 · 采集样本</div>
+</div>
+</section>
+<section id="latency">
+<h2>3. 读写时延与瓶颈</h2>
+<div class="panel">
+<div class="chart" id="band-chart">
+</div>
+<div class="caption">图 3-1 Client GET 时延分段 Trace 数</div>
+</div>
+<div class="panel">
+<div class="chart" id="latency-chart">
+</div>
+<div class="caption">图 3-2 读写 Client p90 · 采集样本</div>
+</div>
+<div class="panel">
+<div class="chart" id="problem-chart">
+</div>
+<div class="caption">图 3-3 读取主瓶颈 Trace 数</div>
+</div>
+<div class="panel">
+<div class="chart" id="write-problem-chart">
+</div>
+<div class="caption">图 3-4 写入主瓶颈 Trace 数</div>
+</div>
+</section>
+<section id="numa">
+<h2>4. WR 与 NUMA</h2>
+<div class="panel">
+<div class="chart" id="wr-chart">
+</div>
+<div class="caption">图 4-1 慢 WR 数（严格 &gt; 1.5 ms）</div>
+</div>
+<p class="muted">双 chip 表示日志中的源端并发分布，不等同于已确认的跨 NUMA 远端访问；拓扑与逐 WR 证据见各 Run 的 NUMA 页面。</p>
+</section>
+<section id="coverage">
+<h2>5. 证据完整性</h2>
+<p class="note">缺少 Worker 日志时保留“未观测”，不能据此判定该 Worker 无耗时；POD 提前退出是否导致缺失，需要关联采集清单和退出记录。未确认的 Client 数不从负载倍率推断。</p>
+<div class="panel">
+<table id="coverage-summary-table" class="audit-table">
+<caption>表 5-1 模型覆盖与排除项</caption>
+<thead>
+<tr>
+<th>Run</th>
+<th>源 Trace</th>
+<th>缺少 Client 窗口</th>
+<th>非 GET</th>
+<th>NUMA Trace / 双 chip</th>
+</tr>
+</thead>
+<tbody id="audit-body">
+</tbody>
+</table>
+<div class="pager" id="audit-pager">
+</div>
+</div>
+<p class="muted">模型来源：<code>suite.manifest.json → 读/写/NUMA/问题分析模型 → run.summary.json → suite.analysis.json</code>
+</p>
+<div class="links" id="downloads">
+</div>
+<p class="muted" id="source">
+</p>
+</section>
+</main>
+<script>__ECHARTS_SOURCE__</script>
+<script>__CHART_SUPPORT__</script>
+<script>const REPORT_DATA=__DATA__;</script>
+<script>__OVERVIEW_JS__</script>
+</body>
+</html>
