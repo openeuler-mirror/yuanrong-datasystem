@@ -33,11 +33,12 @@ constexpr int32_t K_DEFAULT_HIXL_BASE_PORT = 22000;
 constexpr int32_t K_PORT_SEGMENT_SIZE = 100;
 constexpr int32_t K_DEFAULT_CONNECT_TIMEOUT_MS = 10000;
 constexpr int32_t K_DEFAULT_TRANSFER_TIMEOUT_MS = 10000;
-constexpr int32_t K_DEFAULT_READ_LEASE_TTL_MS = 30000;
 constexpr int32_t K_READ_LEASE_TIMEOUT_MARGIN_MS = 1000;
 constexpr int32_t K_MAX_TCP_PORT = 65535;
 constexpr int32_t K_DECIMAL_BASE = 10;
 constexpr size_t K_MAX_TRANSFER_OPS_PER_CALL = 4096;
+constexpr size_t K_MAX_TRACKED_CONNECTION_KEYS = 4096;
+constexpr size_t K_MAX_TRACKED_ENDPOINTS = 4096;
 constexpr char K_OPTION_AUTO_CONNECT[] = "AutoConnect";
 constexpr char K_OPTION_GLOBAL_RESOURCE_CONFIG[] = "GlobalResourceConfig";
 constexpr char K_OPTION_LOCAL_COMM_RES[] = "LocalCommRes";
@@ -346,6 +347,7 @@ void AscendBackend::FinalizeLocal()
     }
     connectedEndpoints_.clear();
     peerEndpointByConnection_.clear();
+    cleanupPendingEndpoints_.clear();
     engineMode_ = HixlEngineMode::kLegacy;
     autoConnectEnabled_ = false;
 }
@@ -362,6 +364,20 @@ uint64_t AscendBackend::MemoryGeneration() const
     return memGeneration_;
 }
 
+uint64_t AscendBackend::ReadLeaseTtlMs() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return static_cast<uint64_t>(readLeaseTtlMs_);
+}
+
+bool AscendBackend::IsConnectionReady(const ConnectionSpec &spec) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto iter = peerEndpointByConnection_.find(ConnectionKey(spec));
+    return impl_->initialized && iter != peerEndpointByConnection_.end() && connectedEndpoints_.count(iter->second) != 0
+           && cleanupPendingEndpoints_.count(iter->second) == 0;
+}
+
 Result AscendBackend::InitializeLocal(const std::string &localHost, uint16_t localPort, int32_t localDeviceId)
 {
     TE_CHECK_OR_RETURN(localDeviceId >= 0, ErrorCode::kInvalid, "local_device_id is invalid");
@@ -376,7 +392,7 @@ Result AscendBackend::InitializeLocal(const std::string &localHost, uint16_t loc
     connectTimeoutMs_ = GetEnvI32("YR_TE_HIXL_CONNECT_TIMEOUT_MS", K_DEFAULT_CONNECT_TIMEOUT_MS);
     transferTimeoutMs_ = GetEnvI32("YR_TE_HIXL_TRANSFER_TIMEOUT_MS", K_DEFAULT_TRANSFER_TIMEOUT_MS);
     const int32_t readLeaseTtlMs =
-        GetEnvI32("YR_TE_HIXL_READ_LEASE_TTL_MS", K_DEFAULT_READ_LEASE_TTL_MS);
+        GetEnvI32("YR_TE_HIXL_READ_LEASE_TTL_MS", static_cast<int32_t>(K_DEFAULT_READ_LEASE_TTL_MS));
     TE_CHECK_OR_RETURN(transferTimeoutMs_ <= readLeaseTtlMs - K_READ_LEASE_TIMEOUT_MARGIN_MS, ErrorCode::kInvalid,
                        "hixl read lease ttl should exceed transfer timeout by at least 1000 ms");
 
@@ -387,6 +403,8 @@ Result AscendBackend::InitializeLocal(const std::string &localHost, uint16_t loc
     engineMode_ = config.engineMode;
     autoConnectEnabled_ = config.autoConnectEnabled;
     hixlEndpoint_ = endpoint;
+    // The owner grants leases with exactly the TTL validated above against transferTimeoutMs_.
+    readLeaseTtlMs_ = readLeaseTtlMs;
 
     internal::DumpProcessEnvironment("hixl_backend_initialize");
     config.localHost = localHost;
@@ -525,29 +543,6 @@ Result AscendBackend::InitSend(const ConnectionSpec &spec, const std::string &ro
     return Result::OK();
 }
 
-Result AscendBackend::PostRecv(const ConnectionSpec &spec, uint64_t localAddr, uint64_t length)
-{
-    (void)spec;
-    (void)localAddr;
-    (void)length;
-    return Result(ErrorCode::kNotSupported, "ascend backend uses receiver-driven read");
-}
-
-Result AscendBackend::PostSend(const ConnectionSpec &spec, uint64_t remoteAddr, uint64_t length)
-{
-    (void)spec;
-    (void)remoteAddr;
-    (void)length;
-    return Result(ErrorCode::kNotSupported, "ascend backend uses receiver-driven read");
-}
-
-Result AscendBackend::WaitRecv(const ConnectionSpec &spec, uint64_t timeoutMs)
-{
-    (void)spec;
-    (void)timeoutMs;
-    return Result(ErrorCode::kNotSupported, "ascend backend uses receiver-driven read");
-}
-
 Result AscendBackend::TransferSyncRead(const ConnectionSpec &spec, const std::vector<TransferReadOp> &ops,
                                        uint64_t timeoutMs)
 {
@@ -556,6 +551,9 @@ Result AscendBackend::TransferSyncRead(const ConnectionSpec &spec, const std::ve
     const auto iter = peerEndpointByConnection_.find(ConnectionKey(spec));
     TE_CHECK_OR_RETURN(iter != peerEndpointByConnection_.end(), ErrorCode::kNotReady, "hixl connection not found");
     const std::string endpoint = iter->second;
+    TE_CHECK_OR_RETURN(connectedEndpoints_.find(endpoint) != connectedEndpoints_.end()
+                           && cleanupPendingEndpoints_.find(endpoint) == cleanupPendingEndpoints_.end(),
+                       ErrorCode::kNotReady, "hixl connection is not ready");
 
     for (size_t base = 0; base < ops.size(); base += K_MAX_TRANSFER_OPS_PER_CALL) {
         const size_t end = std::min(base + K_MAX_TRANSFER_OPS_PER_CALL, ops.size());
@@ -605,15 +603,13 @@ Result AscendBackend::TransferReadBatchLocked(const ConnectionSpec &spec, const 
                  << ", batch_op_count=" << descs.size() << ", total_op_count=" << ops.size()
                  << ", batch_bytes=" << SaturatingBatchBytes(ops, base, end)
                  << ", transfer_timeout_ms=" << effectiveTimeout << ", hixl_status=" << status;
-    if (!autoConnectEnabled_) {
-        const hixl::Status disconnectStatus =
-            impl_->engine.Disconnect(hixl::AscendString(endpoint.c_str()), connectTimeoutMs_);
-        LogDisconnectFailure(disconnectStatus, "Hixl::Disconnect after transfer failure", endpoint, connectTimeoutMs_);
-        if (disconnectStatus == hixl::SUCCESS || disconnectStatus == hixl::NOT_CONNECTED) {
-            connectedEndpoints_.erase(endpoint);
-        }
+    if (autoConnectEnabled_) {
+        EraseEndpointReferencesLocked(endpoint);
+        connectedEndpoints_.erase(endpoint);
+        cleanupPendingEndpoints_.erase(endpoint);
+    } else {
+        InvalidateEndpointLocked(endpoint, "Hixl::Disconnect after transfer failure");
     }
-    peerEndpointByConnection_.erase(ConnectionKey(spec));
     return rc;
 }
 
@@ -626,12 +622,21 @@ void AscendBackend::AbortConnection(const ConnectionSpec &spec)
         return;
     }
     const std::string endpoint = iter->second;
-    const hixl::Status status = impl_->engine.Disconnect(hixl::AscendString(endpoint.c_str()), connectTimeoutMs_);
-    LogDisconnectFailure(status, "Hixl::Disconnect during abort", endpoint, connectTimeoutMs_);
-    if (status == hixl::SUCCESS || status == hixl::NOT_CONNECTED) {
-        connectedEndpoints_.erase(endpoint);
-    }
     peerEndpointByConnection_.erase(iter);
+    if (cleanupPendingEndpoints_.find(endpoint) != cleanupPendingEndpoints_.end()
+        || !HasEndpointReferenceLocked(endpoint)) {
+        InvalidateEndpointLocked(endpoint, "Hixl::Disconnect during abort");
+    }
+}
+
+void AscendBackend::InvalidatePeerConnections(const ConnectionSpec &spec)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto iter = peerEndpointByConnection_.find(ConnectionKey(spec));
+    if (iter != peerEndpointByConnection_.end()) {
+        const std::string endpoint = iter->second;
+        InvalidateEndpointLocked(endpoint, "Hixl::Disconnect after peer invalidation");
+    }
 }
 
 std::string AscendBackend::ConnectionKey(const ConnectionSpec &spec)
@@ -813,31 +818,135 @@ Result AscendBackend::UnregisterOneLocked(uint64_t addr, uint64_t length, bool f
     return Result::OK();
 }
 
+bool AscendBackend::HasEndpointReferenceLocked(const std::string &endpoint) const
+{
+    return std::any_of(peerEndpointByConnection_.begin(), peerEndpointByConnection_.end(),
+                       [&endpoint](const auto &entry) { return entry.second == endpoint; });
+}
+
+void AscendBackend::EraseEndpointReferencesLocked(const std::string &endpoint)
+{
+    for (auto iter = peerEndpointByConnection_.begin(); iter != peerEndpointByConnection_.end();) {
+        if (iter->second == endpoint) {
+            iter = peerEndpointByConnection_.erase(iter);
+        } else {
+            ++iter;
+        }
+    }
+}
+
+bool AscendBackend::DisconnectEndpointLocked(const std::string &endpoint, const std::string &where)
+{
+    const hixl::Status status = impl_->engine.Disconnect(hixl::AscendString(endpoint.c_str()), connectTimeoutMs_);
+    if (status == hixl::SUCCESS || status == hixl::NOT_CONNECTED) {
+        connectedEndpoints_.erase(endpoint);
+        cleanupPendingEndpoints_.erase(endpoint);
+        return true;
+    }
+    LogDisconnectFailure(status, where, endpoint, connectTimeoutMs_);
+    connectedEndpoints_.erase(endpoint);
+    cleanupPendingEndpoints_.insert(endpoint);
+    return false;
+}
+
+Result AscendBackend::CleanupPendingEndpointLocked(const std::string &endpoint)
+{
+    if (cleanupPendingEndpoints_.find(endpoint) == cleanupPendingEndpoints_.end()) {
+        return Result::OK();
+    }
+    if (DisconnectEndpointLocked(endpoint, "Hixl::Disconnect pending endpoint cleanup")) {
+        return Result::OK();
+    }
+    return TE_MAKE_STATUS(ErrorCode::kNotReady, "hixl endpoint cleanup is still pending");
+}
+
+Result AscendBackend::EnsureEndpointCapacityLocked(const std::string &endpoint)
+{
+    if (connectedEndpoints_.find(endpoint) != connectedEndpoints_.end()
+        || cleanupPendingEndpoints_.find(endpoint) != cleanupPendingEndpoints_.end()) {
+        return Result::OK();
+    }
+    if (connectedEndpoints_.size() + cleanupPendingEndpoints_.size() < K_MAX_TRACKED_ENDPOINTS) {
+        return Result::OK();
+    }
+    if (cleanupPendingEndpoints_.empty()) {
+        return TE_MAKE_STATUS(ErrorCode::kNotReady, "hixl endpoint tracking capacity is exhausted");
+    }
+    const std::string pendingEndpoint = *cleanupPendingEndpoints_.begin();
+    TE_RETURN_IF_ERROR(CleanupPendingEndpointLocked(pendingEndpoint));
+    TE_CHECK_OR_RETURN(connectedEndpoints_.size() + cleanupPendingEndpoints_.size() < K_MAX_TRACKED_ENDPOINTS,
+                       ErrorCode::kNotReady, "hixl endpoint tracking capacity is exhausted");
+    return Result::OK();
+}
+
+void AscendBackend::InvalidateEndpointLocked(const std::string &endpoint, const std::string &where)
+{
+    EraseEndpointReferencesLocked(endpoint);
+    connectedEndpoints_.erase(endpoint);
+    (void)cleanupPendingEndpoints_.erase(endpoint);
+    (void)DisconnectEndpointLocked(endpoint, where);
+}
+
 Result AscendBackend::DisconnectAllLocked()
 {
-    hixl::Status firstFailure = hixl::SUCCESS;
-    for (auto iter = connectedEndpoints_.begin(); iter != connectedEndpoints_.end();) {
-        const hixl::Status status = impl_->engine.Disconnect(hixl::AscendString(iter->c_str()), connectTimeoutMs_);
-        LogDisconnectFailure(status, "Hixl::Disconnect during disconnect-all", *iter, connectTimeoutMs_);
-        if (status == hixl::SUCCESS || status == hixl::NOT_CONNECTED) {
-            iter = connectedEndpoints_.erase(iter);
-            continue;
+    bool anyPending = false;
+    std::unordered_set<std::string> endpoints;
+    endpoints.reserve(connectedEndpoints_.size() + cleanupPendingEndpoints_.size());
+    endpoints.insert(connectedEndpoints_.begin(), connectedEndpoints_.end());
+    endpoints.insert(cleanupPendingEndpoints_.begin(), cleanupPendingEndpoints_.end());
+    for (const auto &endpoint : endpoints) {
+        if (!DisconnectEndpointLocked(endpoint, "Hixl::Disconnect during disconnect-all")) {
+            anyPending = true;
         }
-        if (firstFailure == hixl::SUCCESS) {
-            firstFailure = status;
-        }
-        ++iter;
     }
     peerEndpointByConnection_.clear();
-    return HixlStatusToResult(firstFailure, "Hixl::Disconnect during disconnect-all");
+    if (anyPending) {
+        return TE_MAKE_STATUS(ErrorCode::kNotReady, "hixl disconnect-all left endpoints pending cleanup");
+    }
+    return Result::OK();
 }
 
 Result AscendBackend::ConnectLocked(const std::string &connectionKey, const std::string &endpoint)
 {
     TE_CHECK_OR_RETURN(impl_->initialized, ErrorCode::kNotReady, "ascend backend is not initialized");
+
+    if (cleanupPendingEndpoints_.find(endpoint) != cleanupPendingEndpoints_.end()) {
+        TE_RETURN_IF_ERROR(CleanupPendingEndpointLocked(endpoint));
+    }
+
     auto existing = peerEndpointByConnection_.find(connectionKey);
     if (existing != peerEndpointByConnection_.end() && existing->second == endpoint &&
         connectedEndpoints_.find(endpoint) != connectedEndpoints_.end()) {
+        return Result::OK();
+    }
+    if (existing != peerEndpointByConnection_.end() && existing->second == endpoint
+        && connectedEndpoints_.find(endpoint) == connectedEndpoints_.end()) {
+        peerEndpointByConnection_.erase(existing);
+        existing = peerEndpointByConnection_.end();
+    }
+    if (existing != peerEndpointByConnection_.end() && existing->second != endpoint) {
+        // Peer rebound to a new endpoint (e.g. owner restart with a different port); release the
+        // superseded connection instead of leaking it until Finalize.
+        const std::string supersededEndpoint = existing->second;
+        peerEndpointByConnection_.erase(existing);
+        if (!HasEndpointReferenceLocked(supersededEndpoint)) {
+            (void)DisconnectEndpointLocked(supersededEndpoint, "Hixl::Disconnect of superseded endpoint");
+        }
+    }
+
+    if (peerEndpointByConnection_.find(connectionKey) == peerEndpointByConnection_.end()
+        && peerEndpointByConnection_.size() >= K_MAX_TRACKED_CONNECTION_KEYS) {
+        return TE_MAKE_STATUS(ErrorCode::kNotReady, "hixl connection tracking capacity is exhausted");
+    }
+    TE_RETURN_IF_ERROR(EnsureEndpointCapacityLocked(endpoint));
+
+    return ConnectEndpointLocked(connectionKey, endpoint);
+}
+
+Result AscendBackend::ConnectEndpointLocked(const std::string &connectionKey, const std::string &endpoint)
+{
+    if (connectedEndpoints_.find(endpoint) != connectedEndpoints_.end()) {
+        peerEndpointByConnection_[connectionKey] = endpoint;
         return Result::OK();
     }
     if (autoConnectEnabled_) {
@@ -853,14 +962,14 @@ Result AscendBackend::ConnectLocked(const std::string &connectionKey, const std:
                 << ", remote_hixl_endpoint=" << endpoint << ", hixl_route_policy=" << routePolicy_
                 << ", connect_timeout_ms=" << connectTimeoutMs_;
     const hixl::Status status = impl_->engine.Connect(hixl::AscendString(endpoint.c_str()), connectTimeoutMs_);
-    if (status != hixl::ALREADY_CONNECTED) {
-        if (status != hixl::SUCCESS) {
-            TE_LOG_ERROR << "hixl connect failed"
-                         << ", connection_key=" << connectionKey << ", local_hixl_endpoint=" << hixlEndpoint_
-                         << ", remote_hixl_endpoint=" << endpoint << ", hixl_route_policy=" << routePolicy_
-                         << ", connect_timeout_ms=" << connectTimeoutMs_ << ", hixl_status=" << status;
-            return HixlStatusToResult(status, "Hixl::Connect");
-        }
+    if (status != hixl::SUCCESS && status != hixl::ALREADY_CONNECTED) {
+        TE_LOG_ERROR << "hixl connect failed"
+                     << ", connection_key=" << connectionKey << ", local_hixl_endpoint=" << hixlEndpoint_
+                     << ", remote_hixl_endpoint=" << endpoint << ", hixl_route_policy=" << routePolicy_
+                     << ", connect_timeout_ms=" << connectTimeoutMs_ << ", hixl_status=" << status;
+        connectedEndpoints_.erase(endpoint);
+        cleanupPendingEndpoints_.insert(endpoint);
+        return HixlStatusToResult(status, "Hixl::Connect");
     }
     peerEndpointByConnection_[connectionKey] = endpoint;
     connectedEndpoints_.insert(endpoint);

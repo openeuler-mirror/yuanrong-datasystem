@@ -34,6 +34,7 @@ public:
         K_REMOVED,
         K_NOT_FOUND,
         K_BUSY,
+        K_AMBIGUOUS,
     };
 
     bool AddRegion(const RegisteredRegion &region);

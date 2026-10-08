@@ -3,6 +3,7 @@ import socket
 import unittest
 
 from yr.datasystem import ErrorCode, MemoryRegistration, TransferEngine
+from ..cleanup import finalize_for_cleanup, flush_queue_before_exit, read_lease_ttl_seconds
 
 try:
     import torch
@@ -11,10 +12,55 @@ try:
 except ImportError:
     HAS_TORCH_NPU = False
 
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return int(s.getsockname()[1])
+
+
+_CLEANUP_MARGIN_SECONDS = 30.0
+
+
+def _exit_wait_seconds() -> float:
+    """Budget for a worker to exit, including its full finalize cleanup window.
+
+    A worker legitimately blocks in finalize until its read leases expire, so the
+    wait has to track the configured lease TTL rather than a fixed constant.
+    """
+    return read_lease_ttl_seconds() + _CLEANUP_MARGIN_SECONDS
+
+
+def _reap(proc) -> None:
+    if proc.is_alive():
+        proc.terminate()
+        proc.join(timeout=10)
+        if proc.is_alive():
+            proc.kill()
+            proc.join(timeout=10)
+
+
+def _drain_then_join(case, queue, proc, label: str, payload_timeout: float):
+    """Read the worker payload before joining it.
+
+    A worker blocks in Queue.join_thread until its payload is drained, so joining
+    first would deadlock whenever the payload exceeds the pipe buffer.
+    """
+    try:
+        payload = queue.get(timeout=payload_timeout)
+    except Exception as exc:  # noqa: BLE001
+        _reap(proc)
+        case.fail(f"{label} produced no result: {type(exc).__name__}, exitcode={proc.exitcode}")
+    _join_worker(case, proc, label, context=payload)
+    return payload
+
+
+def _join_worker(case, proc, label: str, context=None) -> None:
+    proc.join(timeout=_exit_wait_seconds())
+    if proc.is_alive():
+        _reap(proc)
+        case.fail(f"{label} did not exit within its cleanup window; context={context}")
+    case.assertEqual(proc.exitcode, 0, f"{label} exited with {proc.exitcode}: {context}")
 
 
 def _owner_worker(local_hostname: str, device_id: int, size: int, batch_count: int, ready_queue, stop_event) -> None:
@@ -38,6 +84,7 @@ def _owner_worker(local_hostname: str, device_id: int, size: int, batch_count: i
             lengths.append(size)
             expected_values.append(v)
 
+        torch.npu.synchronize(dev)
         reg_rc = engine.batch_register_memory(src_addrs, lengths, "*")
         if reg_rc.is_error():
             ready_queue.put({"ok": False, "error": reg_rc.to_string()})
@@ -54,7 +101,10 @@ def _owner_worker(local_hostname: str, device_id: int, size: int, batch_count: i
     except Exception as exc:  # noqa: BLE001
         ready_queue.put({"ok": False, "error": str(exc)})
     finally:
-        engine.finalize()
+        try:
+            flush_queue_before_exit(ready_queue)
+        finally:
+            finalize_for_cleanup(engine, "owner", ErrorCode.kNotReady)
 
 
 def _requester_worker(local_hostname: str, device_id: int, owner_hostname: str, remote_addrs, lengths, expected_values,
@@ -70,8 +120,9 @@ def _requester_worker(local_hostname: str, device_id: int, owner_hostname: str, 
         dst_tensors = [torch.zeros((int(lengths[i]),), dtype=torch.uint8, device=dev) for i in range(len(remote_addrs))]
         dst_addrs = [int(t.data_ptr()) for t in dst_tensors]
         single_dst = torch.zeros((int(lengths[0]),), dtype=torch.uint8, device=dev)
+        torch.npu.synchronize(dev)
         local_addrs = dst_addrs + [int(single_dst.data_ptr())]
-        local_lengths = list(lengths) + [int(lengths[0])]
+        local_lengths = [int(length) for length in lengths] + [int(lengths[0])]
 
         reg_rc = engine.batch_register_memory(local_addrs, local_lengths, "*")
         if reg_rc.is_error():
@@ -84,6 +135,7 @@ def _requester_worker(local_hostname: str, device_id: int, owner_hostname: str, 
             return
 
         # Also validate single-transfer API on the first item.
+        torch.npu.synchronize(dev)
         single_rc = engine.transfer_sync_read(
             owner_hostname,
             int(single_dst.data_ptr()),
@@ -95,6 +147,7 @@ def _requester_worker(local_hostname: str, device_id: int, owner_hostname: str, 
             result_queue.put({"ok": False, "error": single_rc.to_string()})
             return
 
+        torch.npu.synchronize(dev)
         for i, t in enumerate(dst_tensors):
             expected = torch.full((int(lengths[i]),), int(expected_values[i]), dtype=torch.uint8)
             if not torch.equal(t.cpu(), expected):
@@ -115,7 +168,10 @@ def _requester_worker(local_hostname: str, device_id: int, owner_hostname: str, 
     except Exception as exc:  # noqa: BLE001
         result_queue.put({"ok": False, "error": str(exc)})
     finally:
-        engine.finalize()
+        try:
+            flush_queue_before_exit(result_queue)
+        finally:
+            finalize_for_cleanup(engine, "requester", ErrorCode.kNotReady)
 
 
 @unittest.skipUnless(HAS_TORCH_NPU, "torch_npu is required for python st tests")
@@ -138,6 +194,7 @@ class PythonApiStTest(unittest.TestCase):
             args=(owner_hostname, 0, 256, 3, ready_q, stop_event),
         )
         owner_proc.start()
+        self.addCleanup(_reap, owner_proc)
 
         owner_info = ready_q.get(timeout=30)
         self.assertTrue(owner_info.get("ok"), owner_info.get("error"))
@@ -156,16 +213,12 @@ class PythonApiStTest(unittest.TestCase):
             ),
         )
         requester_proc.start()
-        requester_proc.join(timeout=60)
-        self.assertFalse(requester_proc.is_alive(), "requester process timeout")
-        self.assertEqual(requester_proc.exitcode, 0)
-        requester_result = result_q.get(timeout=10)
+        self.addCleanup(_reap, requester_proc)
+        requester_result = _drain_then_join(self, result_q, requester_proc, "requester", 60)
         self.assertTrue(requester_result.get("ok"), requester_result.get("error"))
 
         stop_event.set()
-        owner_proc.join(timeout=30)
-        self.assertFalse(owner_proc.is_alive(), "owner process timeout")
-        self.assertEqual(owner_proc.exitcode, 0)
+        _join_worker(self, owner_proc, "owner")
 
     def test_concurrent_requesters_with_fork(self):
         owner_port = _free_port()
@@ -178,6 +231,7 @@ class PythonApiStTest(unittest.TestCase):
             args=(owner_hostname, 0, 128, 2, ready_q, stop_event),
         )
         owner_proc.start()
+        self.addCleanup(_reap, owner_proc)
         owner_info = ready_q.get(timeout=30)
         self.assertTrue(owner_info.get("ok"), owner_info.get("error"))
 
@@ -200,19 +254,15 @@ class PythonApiStTest(unittest.TestCase):
                 ),
             )
             proc.start()
+            self.addCleanup(_reap, proc)
             requesters.append(proc)
 
         for i, proc in enumerate(requesters):
-            proc.join(timeout=60)
-            self.assertFalse(proc.is_alive(), f"requester-{i} timeout")
-            self.assertEqual(proc.exitcode, 0)
-            result = result_queues[i].get(timeout=10)
+            result = _drain_then_join(self, result_queues[i], proc, f"requester-{i}", 60)
             self.assertTrue(result.get("ok"), result.get("error"))
 
         stop_event.set()
-        owner_proc.join(timeout=30)
-        self.assertFalse(owner_proc.is_alive(), "owner process timeout")
-        self.assertEqual(owner_proc.exitcode, 0)
+        _join_worker(self, owner_proc, "owner")
 
     def test_boundary_invalid_arguments(self):
         engine = TransferEngine()

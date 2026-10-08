@@ -334,6 +334,29 @@ if (TRANSFER_ENGINE_BUILD_TESTS)
     target_link_libraries(transfer_engine_initialization_llt PRIVATE transfer_engine GTest::gtest GTest::gtest_main)
     add_test(NAME transfer_engine_initialization_llt COMMAND transfer_engine_initialization_llt)
 
+    add_executable(transfer_engine_orchestration_llt tests/llt/orchestration_llt_test.cpp)
+    target_include_directories(transfer_engine_orchestration_llt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(transfer_engine_orchestration_llt PRIVATE transfer_engine GTest::gtest GTest::gtest_main)
+    add_test(NAME transfer_engine_orchestration_llt COMMAND transfer_engine_orchestration_llt)
+
+    # Compile the real connection lifecycle against a test-only HIXL implementation, without CANN.
+    add_executable(transfer_engine_ascend_connections_llt
+        tests/llt/ascend_connections_llt_test.cpp
+        tests/fakes/hixl_config_stub.cpp
+        src/internal/backend/ascend/ascend_backend.cpp
+        src/internal/log/logging.cpp
+        src/internal/log/environment_dump.cpp
+        src/internal/control_plane/socket_rpc_transport.cpp)
+    target_include_directories(transfer_engine_ascend_connections_llt PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/fakes
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(transfer_engine_ascend_connections_llt PRIVATE
+        ds_spdlog::spdlog Threads::Threads GTest::gtest GTest::gtest_main)
+    add_test(NAME transfer_engine_ascend_connections_llt COMMAND transfer_engine_ascend_connections_llt)
+    set_tests_properties(transfer_engine_ascend_connections_llt PROPERTIES
+        ENVIRONMENT "YR_TE_LOG_LEVEL=OFF")
+
     if (TRANSFER_ENGINE_ENABLE_HIXL)
         add_executable(transfer_engine_hixl_config_ut tests/llt/hixl_config_llt_test.cpp)
         target_include_directories(transfer_engine_hixl_config_ut PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -388,6 +411,16 @@ if (TRANSFER_ENGINE_BUILD_TESTS)
         transfer_engine_standalone_python_no_ctypes_cdll
         "${CMAKE_CURRENT_SOURCE_DIR}/python/yr/datasystem/__init__.py"
         "ctypes.CDLL")
+
+    if (NOT Python3_EXECUTABLE)
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+    endif()
+    if (Python3_EXECUTABLE)
+        add_test(NAME transfer_engine_python_cleanup_llt
+            COMMAND ${Python3_EXECUTABLE} -m unittest tests.python.test_cleanup)
+        set_tests_properties(transfer_engine_python_cleanup_llt PROPERTIES
+            ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
 endif()
 
 if (TRANSFER_ENGINE_BUILD_PYTHON)

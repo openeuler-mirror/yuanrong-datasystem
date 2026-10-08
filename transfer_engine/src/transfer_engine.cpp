@@ -4,7 +4,6 @@
 #include <chrono>
 #include <cctype>
 #include <cstdlib>
-#include <functional>
 #include <iomanip>
 #include <limits>
 #include <map>
@@ -38,6 +37,7 @@ constexpr uint64_t K_FINALIZE_LEASE_WAIT_TIMEOUT_MS = 30000;
 constexpr int32_t K_MAX_HIXL_READ_ATTEMPTS = 2;
 constexpr size_t K_MAX_BATCH_READ_ITEMS = 4096;
 constexpr size_t K_MAX_BATCH_REGISTRATION_ITEMS = 4096;
+constexpr size_t K_MAX_ENDPOINT_CACHE_ENTRIES = 4096;
 constexpr uint64_t K_MAX_TCP_PORT = 65535;
 constexpr uint64_t K_DECIMAL_BASE = 10;
 // ']' and ':' separate the bracketed IPv6 host from the port in "[host]:port".
@@ -122,24 +122,23 @@ std::string ToLowerAscii(std::string value)
     return value;
 }
 
+template <typename F>
 class ScopeExit final {
 public:
-    explicit ScopeExit(std::function<void()> fn) : fn_(std::move(fn))
+    explicit ScopeExit(F fn) : fn_(std::move(fn))
     {
     }
 
     ~ScopeExit()
     {
-        if (fn_) {
-            fn_();
-        }
+        fn_();
     }
 
     ScopeExit(const ScopeExit &) = delete;
     ScopeExit &operator=(const ScopeExit &) = delete;
 
 private:
-    std::function<void()> fn_;
+    F fn_;
 };
 
 Result ValidateProtocol(const std::string &protocol)
@@ -249,17 +248,20 @@ public:
     struct EndpointCacheEntry {
         int32_t ownerDeviceId = -1;
         uint64_t ownerMemGeneration = 0;
+        uint64_t localMemGeneration = 0;
     };
 
     struct BackingEntry {
         uint64_t addr = 0;
         uint64_t length = 0;
         size_t logicalRefCount = 0;
+        size_t localReadRefCount = 0;
     };
 
     std::unordered_map<std::string, EndpointCacheEntry> endpointOwnerDeviceCache;
     // TransferEngine accesses backingEntries only while holding apiMutex_.
     std::vector<BackingEntry> backingEntries;
+    std::map<uint64_t, size_t> backingIndex;
 };
 
 namespace {
@@ -291,6 +293,44 @@ std::vector<TransferEngineState::BackingEntry>::iterator FindBackingEntry(Backin
 }
 
 using BackingRangeIndex = std::map<uint64_t, uint64_t>;
+
+Result PinReadBackings(BackingEntries *backings, const std::vector<uintptr_t> &buffers,
+                       const std::vector<size_t> &lengths, const std::map<uint64_t, size_t> &backingIndex,
+                       std::vector<uint64_t> *pinnedAddrs)
+{
+    std::vector<size_t> indexes;
+    indexes.reserve(buffers.size());
+    for (size_t i = 0; i < buffers.size(); ++i) {
+        const auto addr = static_cast<uint64_t>(buffers[i]);
+        const auto length = static_cast<uint64_t>(lengths[i]);
+        TE_CHECK_OR_RETURN(addr <= std::numeric_limits<uint64_t>::max() - length, ErrorCode::kInvalid,
+                           "read destination range overflow");
+        auto iter = backingIndex.upper_bound(addr);
+        TE_CHECK_OR_RETURN(iter != backingIndex.begin(), ErrorCode::kNotFound, "read destination is not registered");
+        --iter;
+        const auto &entry = (*backings)[iter->second];
+        TE_CHECK_OR_RETURN(length <= entry.length && addr - entry.addr <= entry.length - length, ErrorCode::kNotFound,
+                           "read destination is not registered");
+        indexes.push_back(iter->second);
+    }
+    std::sort(indexes.begin(), indexes.end());
+    indexes.erase(std::unique(indexes.begin(), indexes.end()), indexes.end());
+    pinnedAddrs->reserve(indexes.size());
+    for (const auto index : indexes) {
+        auto &entry = (*backings)[index];
+        pinnedAddrs->push_back(entry.addr);
+        ++entry.localReadRefCount;
+    }
+    return Result::OK();
+}
+
+void RebuildBackingIndex(const BackingEntries &backings, std::map<uint64_t, size_t> *index)
+{
+    index->clear();
+    for (size_t i = 0; i < backings.size(); ++i) {
+        index->emplace(backings[i].addr, i);
+    }
+}
 
 Result CheckExistingBackingUniqueOrFail(const BackingEntries &entries, uint64_t backingAddr, uint64_t backingLength,
                                         bool *exactExists)
@@ -437,6 +477,8 @@ Result CollectBackingsToRemove(const std::vector<RegisteredRegion> &regions, con
         }
         TE_CHECK_OR_RETURN(removedRefCount <= entry.logicalRefCount, ErrorCode::kRuntimeError,
                            "backing reference count underflow");
+        TE_CHECK_OR_RETURN(removedRefCount == 0 || entry.localReadRefCount == 0, ErrorCode::kNotReady,
+                           "memory backing is used by an active local read");
         if (removedRefCount > 0 && removedRefCount == entry.logicalRefCount) {
             backingsToRemove->push_back(entry);
         }
@@ -486,10 +528,16 @@ TransferEngine::TransferEngine(std::shared_ptr<IDataPlaneBackend> backend)
 
 TransferEngine::~TransferEngine()
 {
-    Result finalizeRc;
-    do {
+    Result finalizeRc = Finalize();
+    while (finalizeRc.GetCode() == ErrorCode::kNotReady) {
         finalizeRc = Finalize();
-    } while (finalizeRc.GetCode() == ErrorCode::kNotReady);
+    }
+    if (finalizeRc.IsError()) {
+        // Destruction cannot release registered buffers after an incomplete HIXL teardown.
+        TE_LOG_ERROR << "transfer engine destructor cannot finalize safely, reason=" << finalizeRc.ToString();
+        internal::FlushLogs();
+        std::_Exit(EXIT_FAILURE);
+    }
 }
 
 Result TransferEngine::Initialize(const std::string &localHostname, const std::string &protocol,
@@ -567,6 +615,15 @@ Result TransferEngine::BindControlPortLocked()
                           "no available RPC port within YR_TE_RPC_PORT_MIN/YR_TE_RPC_PORT_MAX range");
 }
 
+Result TransferEngine::EnsureBackendDeviceBoundLocked()
+{
+    if (backend_ == nullptr || !backend_->RequiresAclRuntime()) {
+        return Result::OK();
+    }
+    TE_CHECK_OR_RETURN(deviceId_ >= 0, ErrorCode::kNotReady, "device_id is invalid");
+    return internal::EnsureAclSetDeviceForCurrentThread(deviceId_);
+}
+
 Result TransferEngine::InitializeAscendBackendLocked(const std::string &protocol)
 {
     TE_RETURN_IF_ERROR(ValidateProtocol(protocol));
@@ -586,9 +643,7 @@ Result TransferEngine::InitializeAscendBackendLocked(const std::string &protocol
                 << ", device_id=" << deviceId_ << ", backend=" << backend_->BackendKind()
                 << ", backend_injected=" << backendInjected_ << ", rpc_threads=" << kDefaultRpcThreads;
 
-    if (backend_->RequiresAclRuntime()) {
-        TE_RETURN_IF_ERROR(internal::EnsureAclSetDeviceForCurrentThread(deviceId_));
-    }
+    TE_RETURN_IF_ERROR(EnsureBackendDeviceBoundLocked());
     Result backendInitRc = backend_->InitializeLocal(localHost_, localPort_, deviceId_);
     if (backendInitRc.IsError()) {
         TE_LOG_ERROR << "backend initialize failed"
@@ -635,9 +690,9 @@ std::string TransferEngine::GetRoutePolicy()
     return backend_->RoutePolicy();
 }
 
-Result TransferEngine::RegisterMemory(uintptr_t bufferAddrRegisrterch, size_t length)
+Result TransferEngine::RegisterMemory(uintptr_t bufferAddr, size_t length)
 {
-    return RegisterMemoryEx(MemoryRegistration{ bufferAddrRegisrterch, length, bufferAddrRegisrterch, length });
+    return RegisterMemoryEx(MemoryRegistration{ bufferAddr, length, bufferAddr, length });
 }
 
 Result TransferEngine::BatchRegisterMemory(const std::vector<uintptr_t> &bufferAddrs,
@@ -673,7 +728,10 @@ Result TransferEngine::BatchRegisterMemoryEx(const std::vector<MemoryRegistratio
     TE_CHECK_OR_RETURN(!finalizing_, ErrorCode::kNotReady, "transfer engine is finalizing");
     TE_CHECK_OR_RETURN(!backendDegraded_, ErrorCode::kNotReady,
                        "transfer engine backend is degraded; finalize and reinitialize it");
-    TE_CHECK_OR_RETURN(deviceId_ >= 0, ErrorCode::kNotReady, "device_id is invalid");
+    TE_RETURN_IF_ERROR(EnsureBackendDeviceBoundLocked());
+    const uint64_t previousGeneration = backend_->MemoryGeneration();
+    ScopeExit invalidateConnections(
+        [this, previousGeneration]() { InvalidateConnectionsAfterMemoryChangeLocked(previousGeneration); });
 
     std::vector<RegisteredRegion> logicalRegions;
     BackingEntries newBackings;
@@ -688,7 +746,7 @@ Result TransferEngine::BatchRegisterMemoryEx(const std::vector<MemoryRegistratio
         Result backendRegRc = backend_->RegisterLocalMemory(backing.addr, backing.length);
         if (backendRegRc.IsError()) {
             if (!UnregisterAllBackings(backend_.get(), registeredBackings)) {
-                MarkBackendDegraded();
+                MarkBackendDegradedLocked();
                 return TE_MAKE_STATUS(ErrorCode::kRuntimeError,
                                       "memory registration failed and rollback failed; backend is degraded");
             }
@@ -699,7 +757,7 @@ Result TransferEngine::BatchRegisterMemoryEx(const std::vector<MemoryRegistratio
 
     if (!registeredMemory_->AddRegions(logicalRegions)) {
         if (!UnregisterAllBackings(backend_.get(), registeredBackings)) {
-            MarkBackendDegraded();
+            MarkBackendDegradedLocked();
             return TE_MAKE_STATUS(ErrorCode::kRuntimeError,
                                   "logical registration commit and backend rollback failed; backend is degraded");
         }
@@ -707,15 +765,16 @@ Result TransferEngine::BatchRegisterMemoryEx(const std::vector<MemoryRegistratio
     }
 
     CommitBackings(&state_->backingEntries, newBackings, logicalRegions);
+    RebuildBackingIndex(state_->backingEntries, &state_->backingIndex);
     TE_LOG_INFO << "batch register memory success"
                 << ", device_id=" << deviceId_ << ", logical_count=" << logicalRegions.size()
                 << ", new_backing_count=" << newBackings.size();
     return Result::OK();
 }
 
-Result TransferEngine::UnregisterMemory(uintptr_t bufferAddrRegisrterch)
+Result TransferEngine::UnregisterMemory(uintptr_t bufferAddr)
 {
-    return BatchUnregisterMemory({ bufferAddrRegisrterch });
+    return BatchUnregisterMemory({ bufferAddr });
 }
 
 Result TransferEngine::BatchUnregisterMemory(const std::vector<uintptr_t> &bufferAddrs)
@@ -728,6 +787,10 @@ Result TransferEngine::BatchUnregisterMemory(const std::vector<uintptr_t> &buffe
     TE_CHECK_OR_RETURN(!bufferAddrs.empty(), ErrorCode::kInvalid, "bufferAddrs is empty");
     TE_CHECK_OR_RETURN(bufferAddrs.size() <= K_MAX_BATCH_REGISTRATION_ITEMS, ErrorCode::kInvalid,
                        "unregistration batch item count exceeds limit");
+    TE_RETURN_IF_ERROR(EnsureBackendDeviceBoundLocked());
+    const uint64_t previousGeneration = backend_->MemoryGeneration();
+    ScopeExit invalidateConnections(
+        [this, previousGeneration]() { InvalidateConnectionsAfterMemoryChangeLocked(previousGeneration); });
 
     std::vector<uint64_t> baseAddrs;
     std::vector<RegisteredRegion> regions;
@@ -742,6 +805,9 @@ Result TransferEngine::BatchUnregisterMemory(const std::vector<uintptr_t> &buffe
     if (removeRc == RegisteredMemoryTable::RemoveResult::K_BUSY) {
         return Result(ErrorCode::kNotReady, "one or more regions have an active read lease");
     }
+    if (removeRc == RegisteredMemoryTable::RemoveResult::K_AMBIGUOUS) {
+        return Result(ErrorCode::kInvalid, "base address is registered on multiple devices; ambiguous unregistration");
+    }
     TE_CHECK_OR_RETURN(removeRc == RegisteredMemoryTable::RemoveResult::K_REMOVED, ErrorCode::kNotFound,
                        "one or more regions are not registered");
 
@@ -750,9 +816,11 @@ Result TransferEngine::BatchUnregisterMemory(const std::vector<uintptr_t> &buffe
         Result backendRc = backend_->UnregisterLocalMemory(backing.addr, backing.length);
         if (backendRc.IsError()) {
             bool rollbackOk = ReregisterAllBackings(backend_.get(), removedBackings);
-            rollbackOk = registeredMemory_->AddRegions(removedRegions) && rollbackOk;
+            if (rollbackOk) {
+                rollbackOk = registeredMemory_->AddRegions(removedRegions);
+            }
             if (!rollbackOk) {
-                MarkBackendDegraded();
+                MarkBackendDegradedLocked();
                 return TE_MAKE_STATUS(ErrorCode::kRuntimeError,
                                       "memory unregistration failed and rollback failed; backend is degraded");
             }
@@ -762,16 +830,28 @@ Result TransferEngine::BatchUnregisterMemory(const std::vector<uintptr_t> &buffe
     }
 
     ReleaseBackingRefCounts(&state_->backingEntries, regions);
+    RebuildBackingIndex(state_->backingEntries, &state_->backingIndex);
     TE_LOG_INFO << "batch unregister memory success, count=" << bufferAddrs.size();
     return Result::OK();
 }
 
-void TransferEngine::MarkBackendDegraded()
+void TransferEngine::MarkBackendDegradedLocked()
 {
-    backend_->FinalizeLocal();
     backendDegraded_ = true;
-    registeredMemory_->Clear();
-    state_->backingEntries.clear();
+    // Keep registrations and leases until Finalize drains local and remote readers.
+    if (controlService_ != nullptr) {
+        controlService_->BeginShutdown();
+    }
+}
+
+void TransferEngine::InvalidateConnectionsAfterMemoryChangeLocked(uint64_t previousGeneration)
+{
+    if (backend_->MemoryGeneration() == previousGeneration) {
+        return;
+    }
+    connMgr_->Clear();
+    std::lock_guard<std::mutex> lock(endpointCacheMutex_);
+    state_->endpointOwnerDeviceCache.clear();
 }
 
 Result TransferEngine::TransferSyncRead(const std::string &targetHostname, uintptr_t buffer,
@@ -804,7 +884,7 @@ Result TransferEngine::BatchTransferSyncRead(const std::string &targetHostname, 
     }
 
     TE_RETURN_IF_ERROR(EnterSyncRead(&ctx));
-    ScopeExit finishGuard([this]() { LeaveSyncRead(); });
+    ScopeExit finishGuard([this, &ctx]() { LeaveSyncRead(ctx); });
 
     TE_VLOG_1 << "batch sync read begin"
               << ", item_count=" << buffers.size()
@@ -826,18 +906,29 @@ Result TransferEngine::EnterSyncRead(SyncReadContext *ctx)
     TE_CHECK_OR_RETURN(!finalizing_, ErrorCode::kNotReady, "transfer engine is finalizing");
     TE_CHECK_OR_RETURN(!backendDegraded_, ErrorCode::kNotReady,
                        "transfer engine backend is degraded; finalize and reinitialize it");
+    TE_RETURN_IF_ERROR(EnsureBackendDeviceBoundLocked());
     ctx->localHost = localHost_;
     ctx->localPort = localPort_;
     ctx->deviceId = deviceId_;
     ctx->requestIdStart = nextRequestId_;
+    if (backend_->SupportsReceiverDrivenRead()) {
+        TE_RETURN_IF_ERROR(PinReadBackings(&state_->backingEntries, *ctx->buffers, *ctx->lengths, state_->backingIndex,
+                                           &ctx->pinnedBackingAddrs));
+    }
     nextRequestId_ += static_cast<uint64_t>(ctx->buffers->size());
     ++inFlightSyncReads_;
     return Result::OK();
 }
 
-void TransferEngine::LeaveSyncRead()
+void TransferEngine::LeaveSyncRead(const SyncReadContext &ctx)
 {
     std::lock_guard<std::mutex> lock(apiMutex_);
+    for (const auto addr : ctx.pinnedBackingAddrs) {
+        const auto iter = state_->backingIndex.find(addr);
+        if (iter != state_->backingIndex.end()) {
+            --state_->backingEntries[iter->second].localReadRefCount;
+        }
+    }
     if (inFlightSyncReads_ > 0) {
         --inFlightSyncReads_;
     }
@@ -862,7 +953,7 @@ void TransferEngine::InvalidateReadRoute(const ConnectionSpec &spec, int32_t own
 {
     backend_->AbortConnection(spec);
     ConnectionKey key{ spec.localDeviceId, spec.peerHost, spec.peerPort, ownerDeviceId };
-    connMgr_->MarkStale(key);
+    connMgr_->Remove(key);
     if (evictEndpointCache) {
         std::lock_guard<std::mutex> lock(endpointCacheMutex_);
         state_->endpointOwnerDeviceCache.erase(spec.peerHost + ":" + std::to_string(spec.peerPort));
@@ -956,6 +1047,7 @@ TransferEngine::ReceiverReadOutcome TransferEngine::AttemptReceiverDrivenRead(co
     }
     if (rsp.ownerMemGeneration != ownerMemGeneration) {
         ReleaseReadLeaseQuietly(ctx, rsp);
+        backend_->InvalidatePeerConnections(spec);
         InvalidateReadRoute(spec, ownerDeviceId, true);
         TE_LOG_WARNING << "hixl owner memory generation changed during read authorization"
                        << ", cached_generation=" << ownerMemGeneration
@@ -1050,7 +1142,7 @@ Result TransferEngine::BatchTransferSyncReadLegacy(const SyncReadContext &ctx)
         if (waitRc.IsError()) {
             TE_LOG_ERROR << "batch sync read wait recv failed, item_index=" << i << ", reason=" << waitRc.ToString();
             ConnectionKey key{ ctx.deviceId, ctx.peerHost, ctx.peerPort, ownerDeviceId };
-            connMgr_->MarkStale(key);
+            connMgr_->Remove(key);
             return waitRc;
         }
     }
@@ -1062,7 +1154,6 @@ Result TransferEngine::BatchTransferSyncReadLegacy(const SyncReadContext &ctx)
 Result TransferEngine::Finalize()
 {
     std::lock_guard<std::mutex> finalizeLock(finalizeMutex_);
-    bool startShutdown = false;
     {
         std::unique_lock<std::mutex> lock(apiMutex_);
         if (!initialized_) {
@@ -1073,19 +1164,29 @@ Result TransferEngine::Finalize()
                         << ", local_host=" << localHost_ << ", local_port=" << localPort_ << ", device_id=" << deviceId_
                         << ", inflight_sync_reads=" << inFlightSyncReads_;
             finalizing_ = true;
-            startShutdown = true;
-            apiCv_.wait(lock, [this]() { return inFlightSyncReads_ == 0; });
+            if (controlService_ != nullptr) {
+                controlService_->BeginShutdown();
+            }
+        }
+        if (!apiCv_.wait_for(lock, std::chrono::milliseconds(K_FINALIZE_LEASE_WAIT_TIMEOUT_MS),
+                             [this]() { return inFlightSyncReads_ == 0; })) {
+            return Result(ErrorCode::kNotReady, "active local reads did not drain before finalize deadline");
         }
     }
 
-    if (startShutdown && controlService_ != nullptr) {
-        controlService_->BeginShutdown();
-    }
     if (!registeredMemory_->WaitForNoActiveReadLeases(K_FINALIZE_LEASE_WAIT_TIMEOUT_MS)) {
         TE_LOG_WARNING << "transfer engine finalize deferred by active remote read leases";
         return Result(ErrorCode::kNotReady, "active remote read leases did not drain before finalize deadline");
     }
 
+    {
+        std::lock_guard<std::mutex> lock(apiMutex_);
+        const Result bindRc = EnsureBackendDeviceBoundLocked();
+        if (bindRc.IsError()) {
+            return TE_MAKE_STATUS(ErrorCode::kRuntimeError,
+                                  "cannot bind backend device for finalization: " + bindRc.ToString());
+        }
+    }
     TeardownEngineState();
     TE_LOG_INFO << "transfer engine finalize success";
     internal::FlushLogs();
@@ -1115,6 +1216,7 @@ void TransferEngine::TeardownEngineState()
         registeredMemory_->Clear();
         connMgr_->Clear();
         state_->backingEntries.clear();
+        state_->backingIndex.clear();
         initialized_ = false;
         finalizing_ = false;
         backendDegraded_ = false;
@@ -1144,8 +1246,8 @@ Result TransferEngine::BuildConnectionIfNeeded(const std::string &peerHost, uint
         return BuildConnectionOnce(peerHost, peerPort, ownerDeviceId, ownerMemGeneration);
     }
 
-    if (TryReuseCachedConnection(peerHost, peerPort, cached.ownerDeviceId, cached.ownerMemGeneration, ownerDeviceId,
-                                 ownerMemGeneration)) {
+    if (TryReuseCachedConnection(peerHost, peerPort, cached.ownerDeviceId, cached.ownerMemGeneration,
+                                 cached.localMemGeneration, ownerDeviceId, ownerMemGeneration)) {
         return Result::OK();
     }
     return BuildConnectionOnce(peerHost, peerPort, ownerDeviceId, ownerMemGeneration);
@@ -1153,10 +1255,18 @@ Result TransferEngine::BuildConnectionIfNeeded(const std::string &peerHost, uint
 
 bool TransferEngine::TryReuseCachedConnection(const std::string &peerHost, uint16_t peerPort,
                                               int32_t cachedOwnerDeviceId, uint64_t cachedOwnerMemGeneration,
-                                              int32_t *ownerDeviceId, uint64_t *ownerMemGeneration)
+                                              uint64_t cachedLocalMemGeneration, int32_t *ownerDeviceId,
+                                              uint64_t *ownerMemGeneration)
 {
     ConnectionKey key{ deviceId_, peerHost, peerPort, cachedOwnerDeviceId };
     if (!connMgr_->HasReadyConnection(key)) {
+        return false;
+    }
+    const ConnectionSpec spec{ localHost_, localPort_, deviceId_, peerHost, peerPort, cachedOwnerDeviceId };
+    if (!backend_->IsConnectionReady(spec)
+        || (backend_->SupportsReceiverDrivenRead() && backend_->MemoryGeneration() != cachedLocalMemGeneration)) {
+        backend_->InvalidatePeerConnections(spec);
+        InvalidateReadRoute(spec, cachedOwnerDeviceId, true);
         return false;
     }
     TE_VLOG_1 << "reuse cached connection"
@@ -1172,8 +1282,9 @@ bool TransferEngine::TryReuseCachedConnection(const std::string &peerHost, uint1
     Result queryRc = controlClient_->QueryConnReady(peerHost, peerPort, queryReq, &queryRsp);
     if (queryRc.IsOk()) {
         Result rpcStatus = RpcCodeToStatus(queryRsp.code, queryRsp.msg);
-        const bool generationMatches =
-            !backend_->SupportsReceiverDrivenRead() || queryRsp.ownerMemGeneration == cachedOwnerMemGeneration;
+        const bool generationMatches = !backend_->SupportsReceiverDrivenRead()
+                                       || (queryRsp.ownerMemGeneration == cachedOwnerMemGeneration
+                                           && backend_->MemoryGeneration() == cachedLocalMemGeneration);
         if (rpcStatus.IsOk() && queryRsp.ready && generationMatches) {
             *ownerDeviceId = cachedOwnerDeviceId;
             *ownerMemGeneration = queryRsp.ownerMemGeneration;
@@ -1183,9 +1294,8 @@ bool TransferEngine::TryReuseCachedConnection(const std::string &peerHost, uint1
     TE_LOG_WARNING << "cached connection stale, rebuilding"
                    << ", peer=" << peerHost << ":" << peerPort << ", owner_device_id=" << cachedOwnerDeviceId
                    << ", cached_owner_mem_generation=" << cachedOwnerMemGeneration;
-    connMgr_->MarkStale(key);
-    std::lock_guard<std::mutex> lock(endpointCacheMutex_);
-    state_->endpointOwnerDeviceCache.erase(peerHost + ":" + std::to_string(peerPort));
+    backend_->InvalidatePeerConnections(spec);
+    InvalidateReadRoute(spec, cachedOwnerDeviceId, true);
     return false;
 }
 
@@ -1195,10 +1305,18 @@ Result TransferEngine::BuildConnectionOnce(const std::string &peerHost, uint16_t
     TE_CHECK_PTR_OR_RETURN(ownerDeviceId);
     TE_CHECK_PTR_OR_RETURN(ownerMemGeneration);
     std::lock_guard<std::mutex> lock(chainMutex_);
+    {
+        std::lock_guard<std::mutex> cacheLock(endpointCacheMutex_);
+        const auto endpoint = peerHost + ":" + std::to_string(peerPort);
+        TE_CHECK_OR_RETURN(state_->endpointOwnerDeviceCache.count(endpoint) != 0
+                               || state_->endpointOwnerDeviceCache.size() < K_MAX_ENDPOINT_CACHE_ENTRIES,
+                           ErrorCode::kNotReady, "connection cache capacity reached");
+    }
     TE_LOG_INFO << "build connection start"
                 << ", peer=" << peerHost << ":" << peerPort << ", device_id=" << deviceId_;
     internal::DumpProcessEnvironment("build_connection_once_start");
 
+    const uint64_t localMemGeneration = backend_->MemoryGeneration();
     std::string rootInfo;
     Result createRootRc = backend_->CreateRootInfo(&rootInfo);
     if (createRootRc.IsError()) {
@@ -1210,7 +1328,13 @@ Result TransferEngine::BuildConnectionOnce(const std::string &peerHost, uint16_t
     ExchangeRootInfoResponse exchangeRsp;
     TE_RETURN_IF_ERROR(ExchangeRootInfoForConnection(peerHost, peerPort, rootInfo, &exchangeRsp));
     TE_RETURN_IF_ERROR(InitRequesterRecvForConnection(peerHost, peerPort, rootInfo, exchangeRsp));
-    TE_RETURN_IF_ERROR(WaitOwnerReadyAndCache(peerHost, peerPort, exchangeRsp.ownerDeviceId, ownerMemGeneration));
+    Result readyRc =
+        WaitOwnerReadyAndCache(peerHost, peerPort, exchangeRsp.ownerDeviceId, localMemGeneration, ownerMemGeneration);
+    if (readyRc.IsError()) {
+        const ConnectionSpec spec{ localHost_, localPort_, deviceId_, peerHost, peerPort, exchangeRsp.ownerDeviceId };
+        InvalidateReadRoute(spec, exchangeRsp.ownerDeviceId, true);
+        return readyRc;
+    }
     *ownerDeviceId = exchangeRsp.ownerDeviceId;
     return Result::OK();
 }
@@ -1277,12 +1401,15 @@ Result TransferEngine::InitRequesterRecvForConnection(const std::string &peerHos
     }
 
     ConnectionKey key{ deviceId_, peerHost, peerPort, exchangeRsp.ownerDeviceId };
-    connMgr_->MarkRequesterRecvReady(key);
+    if (!connMgr_->MarkRequesterRecvReady(key)) {
+        backend_->AbortConnection(spec);
+        return TE_MAKE_STATUS(ErrorCode::kNotReady, "connection state capacity reached");
+    }
     return Result::OK();
 }
 
 Result TransferEngine::WaitOwnerReadyAndCache(const std::string &peerHost, uint16_t peerPort, int32_t ownerDeviceId,
-                                              uint64_t *ownerMemGeneration)
+                                              uint64_t localMemGeneration, uint64_t *ownerMemGeneration)
 {
     TE_CHECK_PTR_OR_RETURN(ownerMemGeneration);
     QueryConnReadyRequest queryReq;
@@ -1297,30 +1424,32 @@ Result TransferEngine::WaitOwnerReadyAndCache(const std::string &peerHost, uint1
         TE_RETURN_IF_ERROR(controlClient_->QueryConnReady(peerHost, peerPort, queryReq, &queryRsp));
         TE_RETURN_IF_ERROR(RpcCodeToStatus(queryRsp.code, queryRsp.msg));
         if (queryRsp.ready) {
-            connMgr_->MarkOwnerSendReady(key);
+            std::lock_guard<std::mutex> apiLock(apiMutex_);
+            TE_CHECK_OR_RETURN(!backendDegraded_, ErrorCode::kNotReady, "transfer engine backend is degraded");
+            TE_CHECK_OR_RETURN(
+                !backend_->SupportsReceiverDrivenRead() || backend_->MemoryGeneration() == localMemGeneration,
+                ErrorCode::kNotReady, "local memory generation changed during connection setup");
+            TE_CHECK_OR_RETURN(connMgr_->MarkOwnerSendReady(key), ErrorCode::kNotReady,
+                               "connection state capacity reached");
             *ownerMemGeneration = queryRsp.ownerMemGeneration;
             {
                 std::lock_guard<std::mutex> lock(endpointCacheMutex_);
                 state_->endpointOwnerDeviceCache[peerHost + ":" + std::to_string(peerPort)] =
-                    TransferEngineState::EndpointCacheEntry{ ownerDeviceId, queryRsp.ownerMemGeneration };
+                    TransferEngineState::EndpointCacheEntry{ ownerDeviceId, queryRsp.ownerMemGeneration,
+                                                             localMemGeneration };
             }
             return Result::OK();
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(kConnReadyRetryIntervalMs));
     }
 
-    connMgr_->MarkStale(key);
+    connMgr_->Remove(key);
     TE_LOG_WARNING << "build connection timeout waiting owner ready"
                    << ", peer=" << peerHost << ":" << peerPort << ", owner_device_id=" << ownerDeviceId
                    << ", retry_count=" << kConnReadyRetryCount;
     return TE_MAKE_STATUS(ErrorCode::kNotReady,
                           "connection is not ready, peer=" + peerHost + ":" + std::to_string(peerPort) + ", device_id="
                               + std::to_string(deviceId_) + ", owner_device_id=" + std::to_string(ownerDeviceId));
-}
-
-std::string TransferEngine::CreateRootInfo() const
-{
-    return "te_root_info_v0_1_0";
 }
 
 }  // namespace datasystem

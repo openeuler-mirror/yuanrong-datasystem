@@ -26,11 +26,10 @@ TEST(ConnectionManagerLltTest, DefaultNotReady)
     ConnectionState state = mgr.GetState(key);
     EXPECT_FALSE(state.requesterRecvReady);
     EXPECT_FALSE(state.ownerSendReady);
-    EXPECT_FALSE(state.stale);
 }
 
-// 中文说明：验证 ConnectionManager 在双方就绪、标记 stale、再次建链时状态转换正确。
-TEST(ConnectionManagerLltTest, ReadyStaleRecover)
+// 中文说明：验证 ConnectionManager 在双方就绪、移除链路、再次建链时状态转换正确。
+TEST(ConnectionManagerLltTest, ReadyRemoveRecover)
 {
     ConnectionManager mgr;
     ConnectionKey key{ 2, "127.0.0.1", 50002, 3 };
@@ -41,10 +40,10 @@ TEST(ConnectionManagerLltTest, ReadyStaleRecover)
     mgr.MarkOwnerSendReady(key);
     EXPECT_TRUE(mgr.HasReadyConnection(key));
 
-    mgr.MarkStale(key);
+    mgr.Remove(key);
     EXPECT_FALSE(mgr.HasReadyConnection(key));
 
-    // 中文说明：MarkStale 现在会清空该 key 状态，因此仅补一侧 ready 仍应 not ready。
+    // 中文说明：Remove 会清空该 key 状态，因此仅补一侧 ready 仍应 not ready。
     mgr.MarkRequesterRecvReady(key);
     EXPECT_FALSE(mgr.HasReadyConnection(key));
     mgr.MarkOwnerSendReady(key);
@@ -60,6 +59,68 @@ TEST(ConnectionManagerLltTest, BoundsAndClearsConnectionStates)
     EXPECT_LE(mgr.Size(), 4096U);
     mgr.Clear();
     EXPECT_EQ(mgr.Size(), 0U);
+}
+
+TEST(ConnectionManagerLltTest, CapacityPreservesReadyStateAndRecoversAfterRemove)
+{
+    constexpr size_t kConnectionStateCapacity = 4096;
+    ConnectionManager mgr;
+    const ConnectionKey oldKey{ 0, "old-peer", 50000, 1 };
+    ASSERT_TRUE(mgr.MarkRequesterRecvReady(oldKey));
+    ASSERT_TRUE(mgr.MarkOwnerSendReady(oldKey));
+
+    for (size_t i = 0; i < kConnectionStateCapacity - 1; ++i) {
+        const ConnectionKey key{ 0, "peer-" + std::to_string(i), static_cast<uint16_t>(i), 1 };
+        ASSERT_TRUE(mgr.MarkRequesterRecvReady(key));
+    }
+    EXPECT_EQ(mgr.Size(), kConnectionStateCapacity);
+
+    const ConnectionKey rejectedKey{ 0, "rejected-peer", 50001, 1 };
+    EXPECT_FALSE(mgr.MarkRequesterRecvReady(rejectedKey));
+    EXPECT_FALSE(mgr.MarkOwnerSendReady(rejectedKey));
+    EXPECT_TRUE(mgr.HasReadyConnection(oldKey));
+    EXPECT_FALSE(mgr.GetState(rejectedKey).requesterRecvReady);
+    EXPECT_FALSE(mgr.GetState(rejectedKey).ownerSendReady);
+
+    const ConnectionKey removedKey{ 0, "peer-0", 0, 1 };
+    mgr.Remove(removedKey);
+    EXPECT_EQ(mgr.Size(), kConnectionStateCapacity - 1);
+    ASSERT_TRUE(mgr.MarkRequesterRecvReady(rejectedKey));
+    ASSERT_TRUE(mgr.MarkOwnerSendReady(rejectedKey));
+    EXPECT_TRUE(mgr.HasReadyConnection(rejectedKey));
+    EXPECT_TRUE(mgr.HasReadyConnection(oldKey));
+}
+
+TEST(ConnectionManagerLltTest, IncomingOwnerStateEvictsOldestAfterSequentialRequesters)
+{
+    constexpr size_t kConnectionStateCapacity = 4096;
+    ConnectionManager mgr;
+    const auto keyFor = [](size_t i) { return ConnectionKey{ 0, "requester-" + std::to_string(i), 50000, 1 }; };
+    for (size_t i = 0; i < kConnectionStateCapacity; ++i) {
+        ASSERT_TRUE(mgr.MarkOwnerSendReadyWithOldestEviction(keyFor(i)));
+    }
+    ASSERT_TRUE(mgr.MarkRequesterRecvReady(keyFor(0)));
+    ASSERT_TRUE(mgr.MarkOwnerSendReadyWithOldestEviction(keyFor(2)));
+    ASSERT_TRUE(mgr.MarkOwnerSendReadyWithOldestEviction(keyFor(kConnectionStateCapacity)));
+
+    EXPECT_EQ(mgr.Size(), kConnectionStateCapacity);
+    EXPECT_TRUE(mgr.HasReadyConnection(keyFor(0)));
+    EXPECT_FALSE(mgr.GetState(keyFor(1)).ownerSendReady);
+    EXPECT_TRUE(mgr.GetState(keyFor(2)).ownerSendReady);
+    EXPECT_TRUE(mgr.GetState(keyFor(kConnectionStateCapacity)).ownerSendReady);
+}
+
+TEST(ConnectionManagerLltTest, IncomingOwnerStatePreservesRequesterStatesAtCapacity)
+{
+    constexpr size_t kConnectionStateCapacity = 4096;
+    ConnectionManager mgr;
+    for (size_t i = 0; i < kConnectionStateCapacity; ++i) {
+        ASSERT_TRUE(mgr.MarkRequesterRecvReady(ConnectionKey{ 0, "requester-" + std::to_string(i), 50000, 1 }));
+    }
+    const ConnectionKey newKey{ 0, "new-requester", 50000, 1 };
+    EXPECT_FALSE(mgr.MarkOwnerSendReadyWithOldestEviction(newKey));
+    EXPECT_EQ(mgr.Size(), kConnectionStateCapacity);
+    EXPECT_TRUE(mgr.GetState(ConnectionKey{ 0, "requester-0", 50000, 1 }).requesterRecvReady);
 }
 
 // 中文说明：验证 RegisteredMemoryTable 对已注册范围、跨范围访问和错误设备号的判定逻辑。
@@ -201,6 +262,24 @@ TEST(RegisteredMemoryTableLltTest, BatchAddAllowsAdjacentRegionsAndCrossDeviceSa
                                    RegisteredRegion{ 0x13000, 0x100, 8 } }));
     EXPECT_TRUE(table.IsRegistered(0x13010, 0x10, 7));
     EXPECT_TRUE(table.IsRegistered(0x13110, 0x10, 7));
+    EXPECT_TRUE(table.IsRegistered(0x13010, 0x10, 8));
+}
+
+// 中文说明：跨设备同 baseAddr 的批量注销必须返回 K_AMBIGUOUS，且两个区域都原样保留，不得多删少报。
+TEST(RegisteredMemoryTableLltTest, BatchRemoveRejectsCrossDeviceSameBaseAddrAsAmbiguous)
+{
+    RegisteredMemoryTable table;
+    ASSERT_TRUE(table.AddRegions({ RegisteredRegion{ 0x13000, 0x100, 7 }, RegisteredRegion{ 0x13000, 0x100, 8 } }));
+
+    std::vector<RegisteredRegion> removedRegions;
+    EXPECT_EQ(table.RemoveByBaseAddrsIfNoActiveLease({ 0x13000 }, &removedRegions),
+              RegisteredMemoryTable::RemoveResult::K_AMBIGUOUS);
+    EXPECT_TRUE(removedRegions.empty());
+    EXPECT_TRUE(table.IsRegistered(0x13010, 0x10, 7));
+    EXPECT_TRUE(table.IsRegistered(0x13010, 0x10, 8));
+
+    EXPECT_EQ(table.RemoveByBaseAddrIfNoActiveLease(0x13000), RegisteredMemoryTable::RemoveResult::K_AMBIGUOUS);
+    EXPECT_TRUE(table.IsRegistered(0x13010, 0x10, 7));
     EXPECT_TRUE(table.IsRegistered(0x13010, 0x10, 8));
 }
 

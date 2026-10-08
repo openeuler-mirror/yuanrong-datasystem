@@ -97,6 +97,16 @@ TEST(HixlConfigLltTest, ClientServerRoceInjectsProtocolFilter)
     EXPECT_EQ(config.globalResourceConfig, R"({"comm_resource_config.protocol_desc":"roce:device"})");
 }
 
+// 中文说明：CS 模式下未显式设置 YR_TE_HIXL_LOCAL_COMM_RES 时，
+// 必然注入默认 {"version":"1.3"} 对象，而不是留空。
+TEST(HixlConfigLltTest, UnsetLocalCommResInjectsDefaultInClientServerMode)
+{
+    HixlCsConfig config;
+    ASSERT_TRUE(ResolveHixlCsConfig(MakeInput("on", "auto", true), &config).IsOk());
+    EXPECT_EQ(config.engineMode, HixlEngineMode::kClientServer);
+    EXPECT_EQ(config.localCommRes, R"({"version":"1.3"})");
+}
+
 TEST(HixlConfigLltTest, ExplicitLocalCommResIsNormalizedAndPreserved)
 {
     HixlCsConfig config;
