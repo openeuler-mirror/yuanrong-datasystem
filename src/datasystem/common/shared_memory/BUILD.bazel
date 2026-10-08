@@ -33,6 +33,10 @@ ds_cc_library(
         ],
         exclude = ["shm_unit_info.h"],
     ),
+    # Static-only: in bazel's per-library _solib dynamic mode the prebuilt jemalloc
+    # archive (sole provider of datasystem_sallocx) never lands in any .so, so every
+    # bazel-run test crashed at load; static linking matches cmake/cc_shared_library.
+    linkstatic = True,
     linkopts = ["-ldl"],
     deps = [
         ":common_shm_unit_info",
