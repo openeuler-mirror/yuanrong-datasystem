@@ -149,6 +149,7 @@ ds_cc_library(
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common:common_constants",
         "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/common/log/spdlog:ds_spdlog",
         "//src/datasystem/common/metrics/hard_disk_exporter",
         "//src/datasystem/common/util:file_util",
