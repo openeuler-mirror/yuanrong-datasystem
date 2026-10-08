@@ -366,6 +366,12 @@ public:
     Status CheckLocalServingReady(std::string_view placementKey) const;
 
     /**
+     * @brief Allow an object-cache RPC to distinguish local JOINING from other topology unavailability.
+     * @return True only when the current local member is JOINING and no other topology fault is known.
+     */
+    bool IsLocalJoiningOnlyNotReady() const;
+
+    /**
      * @brief Return whether this Engine has observed that the local membership identity must cold-rejoin.
      * @return True after the local member is missing, failed, or replaced by another identity.
      */

@@ -34,6 +34,7 @@ public:
     size_t NotifyQueueSize() { return notifyPool_.QueueSize(); }
     uint64_t NotifyDroppedCount() { return notifyPool_.DroppedCount(); }
     uint64_t NotifySuppressedCount() const { return notifySuppressed_.load(std::memory_order_relaxed); }
+    PeerNotifySkipCounts NotifyPeerSkipCounts() const { return peerClient_->GetNotifySkipCounts(); }
     uint64_t CurrentPoolSize() { return currentPoolSize_.load(); }
 
     // Adjust pool size based on current hit rate vs target.

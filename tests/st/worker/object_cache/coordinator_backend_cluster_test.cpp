@@ -659,6 +659,18 @@ protected:
     std::unique_ptr<ICoordinatorServiceProxy> coordinatorProxy_;
 };
 
+class CoordinatorJoiningWindowTest : public CoordinatorBackendClusterTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        CoordinatorBackendClusterTest::SetClusterSetupOptions(opts);
+        opts.waitWorkerReady = false;
+        opts.workerSpecifyGflagParams[2] =
+            " -inject_actions=test.start.notWait:call(0);master.disableRocksDb:1*call();"
+            "TopologyEngine.ApplyCoordinatorTopologyEvent.beforeJoiningToActiveCommit:pause()";
+    }
+};
+
 class CoordinatorBackendClusterThreeWorkerTest : public CoordinatorBackendClusterTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -1595,6 +1607,78 @@ TEST_F(CoordinatorBackendClusterTest, AddedWorkerCanWriteKeysReadableFromExistin
     const auto scaleUpValues = BuildValues(scaleUpKeys, "scale_up_new_worker");
     AssertSetKeysEventually(client2, scaleUpKeys, scaleUpValues);
     AssertGetKeysEventually(client1, scaleUpKeys, scaleUpValues);
+}
+
+TEST_F(CoordinatorJoiningWindowTest, RoutedSetSucceedsWhileTargetStillSeesJoining)
+{
+    const std::string pausePoint = "TopologyEngine.ApplyCoordinatorTopologyEvent.beforeJoiningToActiveCommit";
+    for (uint32_t index = 0; index < 2; ++index) {
+        DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, index, WAIT_SCALE_TIMEOUT_SEC));
+    }
+
+    auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
+    ASSERT_NE(externalCluster, nullptr);
+    HostPort worker0;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, worker0));
+    const HostPort worker2("127.0.0.1", GetFreePort());
+    DS_ASSERT_OK(externalCluster->AddNode(worker0, worker2.ToString(), GetFreePort()));
+    Raii releasePause([this, pausePoint] { (void)cluster_->ClearInjectAction(WORKER, 2, pausePoint); });
+
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult([this, pausePoint] {
+        uint64_t count = 0;
+        RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 2, pausePoint, count));
+        CHECK_FAIL_RETURN_STATUS(count > 0, K_TRY_AGAIN, "Waiting for local ACTIVE watch pause");
+        return Status::OK();
+    }, WAIT_SCALE_TIMEOUT_SEC, K_OK));
+
+    ConnectOptions options;
+    InitConnectOpt(0, options, 1'000, true);
+    auto signature = std::make_shared<Signature>(options.accessKey, options.secretKey);
+    BrpcChannelConfig config;
+    config.timeout_ms = 1'000;
+    config.max_retry = 0;
+    client::WorkerRpcClient oldRpc(worker2, signature, config);
+    client::WorkerRpcClient newRpc(worker0, signature, config);
+    DS_ASSERT_OK(oldRpc.Init());
+    DS_ASSERT_OK(newRpc.Init());
+    const auto readState = [&worker2](client::WorkerRpcClient &rpc, MembershipPb::StatePb expected) {
+        GetHashRingRspPb response;
+        RETURN_IF_NOT_OK(rpc.InvokeGetHashRing(0, response));
+        const auto &members = response.hash_ring().members();
+        const auto found = members.find(worker2.ToString());
+        CHECK_FAIL_RETURN_STATUS(found != members.end() && found->second.state() == expected, K_TRY_AGAIN,
+                                 "Waiting for split Worker topology views");
+        return Status::OK();
+    };
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&] { return readState(oldRpc, MembershipPb::JOINING); }, WAIT_SCALE_TIMEOUT_SEC, K_OK));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&] { return readState(newRpc, MembershipPb::ACTIVE); }, WAIT_SCALE_TIMEOUT_SEC, K_OK));
+
+    client::Routing routing(config, signature);
+    DS_ASSERT_OK(routing.Init("", worker0));
+    std::string key;
+    for (size_t index = 0; index < 10'000; ++index) {
+        const auto candidate = "joining-window-routed-set-" + std::to_string(index);
+        HostPort selected;
+        DS_ASSERT_OK(routing.SelectWorker(candidate, client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                                          client::WorkerAccessAction::CONTROL, selected));
+        if (selected == worker2) {
+            key = candidate;
+            break;
+        }
+    }
+    ASSERT_FALSE(key.empty());
+
+    options.enableLocalCache = false;
+    options.dataPlacementPolicy = DataPlacementPolicy::PREFERRED_META_OWNER;
+    options.requestTimeoutMs = 20;
+    KVClient kvClient(options);
+    DS_ASSERT_OK(kvClient.Init());
+    DS_EXPECT_OK(kvClient.Set(key, "joining-value"));
+    std::string value;
+    DS_EXPECT_OK(kvClient.Get(key, value));
+    EXPECT_EQ(value, "joining-value");
 }
 
 TEST_F(CoordinatorBackendClusterThreeWorkerTest, AllWorkersRestartWithCoordinatorRunning)

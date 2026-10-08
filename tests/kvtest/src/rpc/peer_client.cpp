@@ -5,7 +5,6 @@
 #include "vendor/nlohmann_json.hpp"
 
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 
 #ifdef KVTEST_USE_BRPC
@@ -13,6 +12,11 @@
 
 #include <brpc/channel.h>
 #include <brpc/controller.h>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <memory>
+#include <random>
 #else
 #include "vendor/httplib.h"
 #endif
@@ -46,6 +50,8 @@ bool SplitHostPort(const std::string &peerUrl, std::string &host, int &port) {
 // ---------------------------------------------------------------------------
 class HttpPeerClient : public PeerControlClient {
 public:
+    PeerNotifySkipCounts GetNotifySkipCounts() const override { return {}; }
+
     void Notify(const std::string &host, int port, const std::string &action,
                 int sender, const std::vector<std::string> &keys, uint64_t size) override {
         try {
@@ -91,13 +97,35 @@ class BrpcPeerClient : public PeerControlClient {
 public:
     ~BrpcPeerClient() override = default;
 
+    PeerNotifySkipCounts GetNotifySkipCounts() const override {
+        return {cooldownSkipped_.load(std::memory_order_relaxed),
+                recoveryProbeSkipped_.load(std::memory_order_relaxed)};
+    }
+
     void Notify(const std::string &host, int port, const std::string &action,
                 int sender, const std::vector<std::string> &keys, uint64_t size) override {
+        const std::string key = host + ":" + std::to_string(port);
+        const bool warmupDone = action == "warmup_done";
+        ChannelLease lease;
+        bool oneShot = false;
         try {
-            brpc::Channel *chan = GetOrCreateChannel(host, port);
-            if (chan == nullptr) {
-                // Channel Init failure is one-shot per peer (logged inside
-                // GetOrCreateChannel); skip the per-call WARN here.
+            // Warmup completion is sent once. Give it a real attempt even if
+            // ordinary notifications to this peer are cooling down.
+            lease = GetOrCreateChannel(host, port, key);
+            if (warmupDone && !lease.channel) {
+                // Bypass a cached failed socket as well as the per-peer cooldown.
+                lease = {CreateChannel(host, port, "kvtest-peer-priority"), 0};
+                oneShot = true;
+            }
+            if (!lease.channel) {
+                if (!warmupDone) {
+                    if (lease.skipReason == SkipReason::Cooldown) {
+                        cooldownSkipped_.fetch_add(1, std::memory_order_relaxed);
+                    } else if (lease.skipReason == SkipReason::RecoveryProbe) {
+                        recoveryProbeSkipped_.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }
+                if (oneShot) SLOG_WARN("brpc channel Init failed for " << key);
                 return;
             }
             kvtest_control::NotifyReq req;
@@ -112,7 +140,7 @@ public:
             // httplib path's single-shot Post). Retrying a down peer just
             // amplifies the [R1][R2][R3] noise without helping recovery.
             cntl.set_max_retry(0);
-            kvtest_control::KvtestControl::Stub stub(chan);
+            kvtest_control::KvtestControl::Stub stub(lease.channel.get());
             // done=NULL = SYNCHRONOUS call: stub.Notify blocks until the
             // response arrives (or timeout), then returns. A non-null done
             // makes it async — the response callback fires later in a bthread
@@ -124,40 +152,33 @@ public:
             // repeats until the peer recovers, then log a single INFO. This
             // keeps startup-race noise (writer notifying before readers are
             // up) from flooding the log every round.
-            const std::string key = host + ":" + std::to_string(port);
             if (cntl.Failed()) {
-                std::string err = cntl.ErrorText();
-                bool firstFailure;
-                {
-                    std::lock_guard<kvtest::mutex> lock(mu_);
-                    firstFailure = warned_peers_.insert(key).second;
+                if (oneShot) {
+                    SLOG_WARN("Notify RPC to " << key << " failed: " << cntl.ErrorText());
+                } else {
+                    RecordFailure(key, lease, cntl.ErrorText().c_str());
                 }
-                if (firstFailure) {
-                    SLOG_WARN("Notify RPC to " << key << " failed: " << err
-                              << " (further failures suppressed until recovery)");
-                }
-            } else {
-                bool wasWarned;
-                {
-                    std::lock_guard<kvtest::mutex> lock(mu_);
-                    wasWarned = warned_peers_.erase(key) > 0;
-                }
-                if (wasWarned) {
-                    SLOG_INFO("Notify to " << key << " recovered");
-                }
+            } else if (!oneShot) {
+                RecordSuccess(key, lease);
             }
         } catch (...) {
+            if (!oneShot && lease.channel) {
+                RecordFailure(key, lease, "unexpected exception");
+            }
         }
     }
 
     bool Stop(const std::string &host, int port) override {
         try {
-            brpc::Channel *chan = GetOrCreateChannel(host, port);
-            if (chan == nullptr) return false;
+            auto chan = CreateChannel(host, port, "kvtest-peer-stop");
+            if (!chan) {
+                SLOG_WARN("brpc channel Init failed for " << host << ":" << port);
+                return false;
+            }
             kvtest_control::StopReq req;
             kvtest_control::StopResp resp;
             brpc::Controller cntl;
-            kvtest_control::KvtestControl::Stub stub(chan);
+            kvtest_control::KvtestControl::Stub stub(chan.get());
             stub.Stop(&cntl, &req, &resp, /*done=*/nullptr);
             return !cntl.Failed();
         } catch (...) {
@@ -166,35 +187,148 @@ public:
     }
 
 private:
-    brpc::Channel *GetOrCreateChannel(const std::string &host, int port) {
-        std::string key = host + ":" + std::to_string(port);
-        std::lock_guard<kvtest::mutex> lock(mu_);
-        auto it = channels_.find(key);
-        if (it != channels_.end()) return it->second.get();
-        auto chan = std::make_unique<brpc::Channel>();
+    using Clock = std::chrono::steady_clock;
+
+    enum class SkipReason { None, Cooldown, RecoveryProbe };
+
+    struct ChannelLease {
+        std::shared_ptr<brpc::Channel> channel;
+        uint64_t generation = 0;
+        SkipReason skipReason = SkipReason::None;
+    };
+
+    struct PeerState {
+        std::shared_ptr<brpc::Channel> channel;
+        Clock::time_point nextProbeAt{};
+        uint64_t generation = 0;
+        unsigned failureStreak = 0;
+        bool probeInFlight = false;
+        bool warned = false;
+    };
+
+    static std::shared_ptr<brpc::Channel> CreateChannel(const std::string &host, int port,
+                                                        const char *connectionGroup = "kvtest-peer") {
+        auto chan = std::make_shared<brpc::Channel>();
         brpc::ChannelOptions opts;
         opts.timeout_ms = 2000;
-        opts.connection_group = "kvtest-peer";
+        opts.connection_group = connectionGroup;
         if (chan->Init(host.c_str(), port, &opts) != 0) {
-            SLOG_WARN("brpc channel Init failed for " << host << ":" << port);
             return nullptr;
         }
-        auto *raw = chan.get();
-        channels_[key] = std::move(chan);
-        return raw;
+        return chan;
     }
 
-    // Protects channels_ and warned_peers_. Acquired from BrpcPeerClient::
-    // Notify (notifyPool_ worker, bthread in bazel mode) and from Stop
-    // (stop.cpp std::thread batch). kvtest::mutex is bthread::Mutex in bazel
-    // mode so a bthread worker blocks on contention without holding a pthread;
-    // also works from the pthread Stop callers since bthread::Mutex is
-    // pthread-compatible.
+    ChannelLease GetOrCreateChannel(const std::string &host, int port, const std::string &key) {
+        uint64_t generation;
+        {
+            std::unique_lock<kvtest::mutex> lock(mu_);
+            for (;;) {
+                auto &peer = peers_[key];
+                if (peer.failureStreak == 0) {
+                    // A healthy Channel can serve concurrent RPCs even while
+                    // the first RPC is still waiting for its response.
+                    if (peer.channel) return {peer.channel, peer.generation};
+                    if (peer.probeInFlight) {
+                        // Channel creation is in progress; preserve this
+                        // notification instead of dropping it at startup.
+                        channelReady_.wait(lock);
+                        continue;
+                    }
+                } else {
+                    if (peer.probeInFlight) return {nullptr, 0, SkipReason::RecoveryProbe};
+                    if (Clock::now() < peer.nextProbeAt) return {nullptr, 0, SkipReason::Cooldown};
+                }
+                peer.probeInFlight = true;
+                generation = ++peer.generation;
+                break;
+            }
+        }
+
+        std::shared_ptr<brpc::Channel> chan;
+        try {
+            chan = CreateChannel(host, port);
+        } catch (...) {
+            RecordFailure(key, {nullptr, generation}, "brpc channel creation threw");
+            return {};
+        }
+        if (!chan) {
+            RecordFailure(key, {nullptr, generation}, "brpc channel Init failed");
+            return {};
+        }
+        bool published = false;
+        {
+            std::lock_guard<kvtest::mutex> lock(mu_);
+            auto it = peers_.find(key);
+            if (it != peers_.end() && it->second.generation == generation && it->second.probeInFlight) {
+                it->second.channel = chan;
+                published = true;
+            }
+        }
+        if (published) {
+            // Wake initial-creation waiters before the first RPC finishes.
+            channelReady_.notify_all();
+            return {std::move(chan), generation};
+        }
+        return {};
+    }
+
+    // Borrow the error text so an allocation failure cannot prevent the
+    // in-flight probe from being cleared. Logging happens after state cleanup.
+    void RecordFailure(const std::string &key, const ChannelLease &lease, const char *error) {
+        bool firstFailure = false;
+        std::shared_ptr<brpc::Channel> retired;
+        {
+            std::lock_guard<kvtest::mutex> lock(mu_);
+            auto it = peers_.find(key);
+            if (it == peers_.end() || it->second.generation != lease.generation ||
+                it->second.channel != lease.channel) {
+                return;
+            }
+            auto &peer = it->second;
+            retired = std::move(peer.channel);
+            ++peer.generation;
+            peer.probeInFlight = false;
+            peer.failureStreak = std::min(peer.failureStreak + 1, 6u);
+            static constexpr int backoffMs[] = {2000, 4000, 8000, 16000, 32000, 60000};
+            int baseMs = backoffMs[peer.failureStreak - 1];
+            std::uniform_int_distribution<int> jitter(baseMs * 4 / 5, baseMs);
+            peer.nextProbeAt = Clock::now() + std::chrono::milliseconds(jitter(rng_));
+            firstFailure = !peer.warned;
+            peer.warned = true;
+        }
+        channelReady_.notify_all();
+        if (firstFailure) {
+            SLOG_WARN("Notify RPC to " << key << " failed: " << error
+                      << " (further failures suppressed until recovery)");
+        }
+    }
+
+    void RecordSuccess(const std::string &key, const ChannelLease &lease) {
+        bool wasWarned = false;
+        {
+            std::lock_guard<kvtest::mutex> lock(mu_);
+            auto it = peers_.find(key);
+            if (it == peers_.end() || it->second.generation != lease.generation ||
+                it->second.channel != lease.channel) {
+                return;
+            }
+            auto &peer = it->second;
+            peer.failureStreak = 0;
+            peer.probeInFlight = false;
+            peer.nextProbeAt = {};
+            wasWarned = peer.warned;
+            peer.warned = false;
+        }
+        if (wasWarned) SLOG_INFO("Notify to " << key << " recovered");
+    }
+
+    // mu_ protects peer state and the jitter generator.
     kvtest::mutex mu_;
-    std::unordered_map<std::string, std::unique_ptr<brpc::Channel>> channels_;
-    // Peers whose Notify is currently in a failed state. First failure logs a
-    // WARN; subsequent failures are suppressed; recovery logs INFO + erases.
-    std::unordered_set<std::string> warned_peers_;
+    kvtest::condition_variable channelReady_;
+    std::unordered_map<std::string, PeerState> peers_;
+    std::mt19937 rng_{std::random_device{}()};
+    std::atomic<uint64_t> cooldownSkipped_{0};
+    std::atomic<uint64_t> recoveryProbeSkipped_{0};
 };
 #endif
 
