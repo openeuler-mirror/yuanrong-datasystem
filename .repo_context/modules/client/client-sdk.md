@@ -939,17 +939,52 @@ handler. Clearing the Router handler synchronously excludes later callback acces
 - Receiver-driven read leases use non-sequential bearer tokens bound to requester host/port/device. Finalize closes new lease
   admission and waits for owner-side leases before clearing registration or finalizing HIXL; a 30-second wait expiry
   returns `kNotReady` so callers can retry without freeing HBM early. HIXL initialization rejects a read-lease TTL that
-  does not exceed the transfer timeout by at least one second.
-- Connection readiness state is capped at 4096 entries and cleared across engine incarnations. The opt-in environment
-  diagnostic logs a fixed TransferEngine configuration allowlist once per process, never the complete process environment.
+  does not exceed the transfer timeout by at least one second. The owner grants the backend's validated TTL rather than
+  parsing the environment a second time. Public registration, unregistration, synchronous read, and finalization entrypoints
+  bind the ACL device on their calling thread before invoking the HIXL backend. The owner TTL handoff is covered by
+  `TransferControlServiceLltTest.GrantsBackendValidatedReadLeaseTtl`.
+- Receiver-driven local destinations are pinned by physical backing under `apiMutex_` before preparation and remain
+  pinned through connection setup, retries, and completion. Backing lookup uses an ordered address index; unregistering
+  a logical registration on a pinned backing returns `kNotReady` without changing the batch. Unrelated backings can
+  still be unregistered. The data-plane backend remains responsible for completion semantics on return.
+- Connection readiness, endpoint caches, backend connection keys, and physical endpoint tracking each have a 4096-entry
+  bound. At capacity, receiver-driven owner initialization replaces the oldest owner-only rendezvous state so a
+  long-lived RFork seed can serve sequential requesters. An evicted requester re-handshakes on its next readiness query.
+  Requester-side readiness and data-plane connections are preserved by this eviction. Other new entries are rejected at capacity.
+  Cached reads check both
+  local and remote registration generations and backend readiness; endpoint cleanup failures stay tracked and must
+  succeed before reconnect can reuse them. A single alias abort preserves other aliases, while a transfer failure
+  or stale peer generation invalidates all backend keys referencing the endpoint. Registration generation changes
+  clear readiness and endpoint caches for every peer, so incremental registration forces active peers through the full
+  connection and authorization handshake again. AutoConnect transfer failure drops local route tracking without a
+  vendor Disconnect because HIXL automatically cleans abnormal AutoConnect links. Explicit abort, peer-generation
+  invalidation, and registration changes still issue vendor Disconnect; `NOT_CONNECTED` completes cleanup, while other
+  failures remain pending. Explicit-connect failure retains the same unsuccessful-Disconnect cleanup. Failed connection
+  setup removes the partially installed requester route. HIXL externally requires every link to be disconnected before
+  registered memory is deregistered, so registration-generation invalidation cannot only discard local tracking.
+- Connection publication uses the lock order `chainMutex_` -> `apiMutex_` -> `endpointCacheMutex_`. Registration paths
+  take the registered-memory table's internal mutex below `apiMutex_`; degraded-state shutdown may likewise take the
+  control-service owner-init queue mutex below `apiMutex_`. Neither component may acquire `apiMutex_` in the reverse
+  direction.
+  The opt-in environment
+  diagnostic logs a fixed TransferEngine configuration allowlist once per stage in each process, never the complete process environment.
 - The Python facade accepts the Mooncake-compatible four-argument initialization
   form with empty metadata or `P2PHANDSHAKE`, while retaining the three-argument
   YuanRong overload. `location` and `transport_hint` are compatibility arguments;
   `transport_hint` does not select HCCS versus RoCE.
 - The integrated DataSystem wheel lazily exports `TransferEngine`, `MemoryRegistration`, `Result`, and `ErrorCode`
   from its optional `_transfer_engine` extension without loading the main client native library during parent import.
-- Registration rollback failure moves the backend to a fail-closed degraded state;
-  subsequent operations require `Finalize` and reinitialization.
+- Registration rollback failure closes control-service admission and marks the engine degraded without clearing
+  registrations or finalizing the backend. `Finalize` serializes cleanup, closes admission before draining local reads,
+  and waits separately for local reads and remote leases (30 seconds per stage, `kNotReady` on expiry). Callers retain
+  all affected backing allocations, including failed-batch registrations, until finalization succeeds, then reinitialize.
+  If ACL device binding fails at finalization, it returns `kRuntimeError` before HIXL teardown; the native destructor
+  terminates on that failure rather than destroying an incompletely finalized backend. The failure and retry paths are
+  covered by `TransferEngineInitializationLltTest.FailedFinalizeDeviceBindPreservesStateForRetry` and
+  `TransferEngineInitializationLltTest.DestructorStopsOnUnrecoverableFinalizeFailure`.
+- The wire protocol and lease-expiry policy are unchanged by these lifetime fixes. Owner TTL versus requester queueing,
+  timeout, and device-operation termination still needs a separate HIXL-backed protocol design; do not infer that a
+  local reference count or configured TTL alone proves remote DMA quiescence.
 - Source-of-truth files:
   - `transfer_engine/include/datasystem/transfer_engine/transfer_engine.h`
   - `transfer_engine/src/transfer_engine.cpp`

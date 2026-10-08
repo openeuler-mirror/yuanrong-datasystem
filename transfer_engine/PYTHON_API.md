@@ -362,6 +362,10 @@ batch_unregister_memory(buffer_addrs)
 
 Unregisters multiple registered memory regions.
 
+Returns `kNotReady` without changing the batch when a requested registration's backing is used by an active local
+receiver-driven read, or its logical range has an active remote read lease. Local backing references cover preparation,
+connection setup, transfer, and retries. Retry unregistration after the reads finish.
+
 Parameters:
 
 - `buffer_addrs` (`list[int]`): Registered local buffer addresses
@@ -441,15 +445,23 @@ finalize()
 
 Shuts down the engine instance and releases internal runtime state.
 
-The call releases the Python GIL while native shutdown is running. It waits for in-flight synchronous reads, stops new
-read-lease admission, and then waits for active remote READ leases. If leases do not drain within the 30-second
-shutdown wait window, it returns `ErrorCode.kNotReady`; keep every registered backing allocation alive and retry
+The call releases the Python GIL while native shutdown is running. It first stops new read-lease admission, waits for
+in-flight reads, and then waits for active owner-side remote READ leases. Each drain stage has a 30-second
+shutdown wait window. If a stage does not drain, it returns `ErrorCode.kNotReady`; keep every registered backing
+allocation alive and retry
 `finalize()` until it returns `ErrorCode.kOk`.
 
 The native destructor retries `finalize()` after a `kNotReady` result. Therefore, relying on Python reference counting or
 garbage collection for shutdown can block until existing leases expire (the read-lease TTL defaults to 30 seconds and
 is configurable with `YR_TE_HIXL_READ_LEASE_TTL_MS`). Do not free, reuse, or let the tensor/array owning a
 registered address be collected while finalization is pending.
+An ACL device-binding failure returns `ErrorCode.kRuntimeError` without tearing down the backend. Keep registered
+allocations alive and retry explicit `finalize()` after restoring the device context; if the native destructor encounters
+this failure, it terminates the process rather than releasing registered memory unsafely.
+
+Registration rollback failure closes admission but preserves existing registrations and active readers until this
+shutdown completes. Keep backing allocations from the failed registration batch alive as well; a rollback error does
+not establish that every backend registration was removed.
 
 Returns:
 

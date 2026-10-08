@@ -99,23 +99,28 @@ RegisteredMemoryTable::RemoveResult RegisteredMemoryTable::RemoveByBaseAddrsIfNo
     std::lock_guard<std::mutex> lock(mutex_);
     PruneExpiredLeasesLocked(now);
 
-    std::unordered_map<uint64_t, const RegisteredRegion *> regionsByBaseAddr;
+    std::unordered_map<uint64_t, std::vector<const RegisteredRegion *>> regionsByBaseAddr;
     regionsByBaseAddr.reserve(regions_.size());
     for (const auto &region : regions_) {
-        regionsByBaseAddr.emplace(region.baseAddr, &region);
+        regionsByBaseAddr[region.baseAddr].push_back(&region);
     }
 
     std::vector<RegisteredRegion> matches;
     matches.reserve(baseAddrs.size());
     for (const auto baseAddr : baseAddrs) {
         const auto iter = regionsByBaseAddr.find(baseAddr);
-        if (iter == regionsByBaseAddr.end()) {
+        if (iter == regionsByBaseAddr.end() || iter->second.empty()) {
             return RemoveResult::K_NOT_FOUND;
         }
-        if (HasActiveLeaseForRegionLocked(*iter->second, now)) {
+        if (iter->second.size() > 1) {
+            // Same baseAddr registered on multiple devices: removal by baseAddr alone cannot tell
+            // which region is intended, so reject instead of silently dropping all but the first.
+            return RemoveResult::K_AMBIGUOUS;
+        }
+        if (HasActiveLeaseForRegionLocked(*iter->second.front(), now)) {
             return RemoveResult::K_BUSY;
         }
-        matches.push_back(*iter->second);
+        matches.push_back(*iter->second.front());
     }
 
     const auto isRemovedBaseAddr = [&requestedBaseAddrs](const RegisteredRegion &item) {

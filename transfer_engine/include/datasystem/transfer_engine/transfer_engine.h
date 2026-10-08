@@ -55,12 +55,12 @@ public:
                       const std::string &deviceName);
     int32_t GetRpcPort();
     std::string GetRoutePolicy();
-    Result RegisterMemory(uintptr_t bufferAddrRegisrterch, size_t length);
+    Result RegisterMemory(uintptr_t bufferAddr, size_t length);
     // Registration batches accept at most 4096 logical ranges.
     Result BatchRegisterMemory(const std::vector<uintptr_t> &bufferAddrs, const std::vector<size_t> &lengths);
     Result RegisterMemoryEx(const MemoryRegistration &registration);
     Result BatchRegisterMemoryEx(const std::vector<MemoryRegistration> &registrations);
-    Result UnregisterMemory(uintptr_t bufferAddrRegisrterch);
+    Result UnregisterMemory(uintptr_t bufferAddr);
     // Unregistration batches accept at most 4096 logical ranges.
     Result BatchUnregisterMemory(const std::vector<uintptr_t> &bufferAddrs);
     Result TransferSyncRead(const std::string &targetHostname, uintptr_t buffer, uintptr_t peerBufferAddress,
@@ -81,6 +81,7 @@ private:
         const std::vector<uintptr_t> *buffers = nullptr;
         const std::vector<uintptr_t> *peerBufferAddresses = nullptr;
         const std::vector<size_t> *lengths = nullptr;
+        std::vector<uint64_t> pinnedBackingAddrs;
     };
 
     enum class ReceiverReadOutcome {
@@ -94,21 +95,23 @@ private:
     Result BuildConnectionOnce(const std::string &peerHost, uint16_t peerPort, int32_t *ownerDeviceId,
                                uint64_t *ownerMemGeneration);
     Result BindControlPortLocked();
+    // ACL device binding is per-thread. Public entry points may run on any caller thread, so each
+    // one must bind before it reaches the backend.
+    Result EnsureBackendDeviceBoundLocked();
     Result InitializeAscendBackendLocked(const std::string &protocol);
     Result StartControlServerLocked();
     bool TryReuseCachedConnection(const std::string &peerHost, uint16_t peerPort, int32_t cachedOwnerDeviceId,
-                                  uint64_t cachedOwnerMemGeneration, int32_t *ownerDeviceId,
-                                  uint64_t *ownerMemGeneration);
+                                  uint64_t cachedOwnerMemGeneration, uint64_t cachedLocalMemGeneration,
+                                  int32_t *ownerDeviceId, uint64_t *ownerMemGeneration);
     Result ExchangeRootInfoForConnection(const std::string &peerHost, uint16_t peerPort, const std::string &rootInfo,
                                          ExchangeRootInfoResponse *exchangeRsp);
     Result InitRequesterRecvForConnection(const std::string &peerHost, uint16_t peerPort, const std::string &rootInfo,
                                           const ExchangeRootInfoResponse &exchangeRsp);
     Result WaitOwnerReadyAndCache(const std::string &peerHost, uint16_t peerPort, int32_t ownerDeviceId,
-                                  uint64_t *ownerMemGeneration);
-    std::string CreateRootInfo() const;
+                                  uint64_t localMemGeneration, uint64_t *ownerMemGeneration);
 
     Result EnterSyncRead(SyncReadContext *ctx);
-    void LeaveSyncRead();
+    void LeaveSyncRead(const SyncReadContext &ctx);
     ConnectionSpec BuildReadConnectionSpec(const SyncReadContext &ctx, int32_t ownerDeviceId) const;
     std::vector<TransferReadOp> BuildReadOps(const SyncReadContext &ctx) const;
     void InvalidateReadRoute(const ConnectionSpec &spec, int32_t ownerDeviceId, bool evictEndpointCache);
@@ -118,7 +121,8 @@ private:
     ReceiverReadOutcome AttemptReceiverDrivenRead(const SyncReadContext &ctx, int32_t attempt, Result *failRc);
     Result BatchTransferSyncReadReceiverDriven(const SyncReadContext &ctx);
     Result BatchTransferSyncReadLegacy(const SyncReadContext &ctx);
-    void MarkBackendDegraded();
+    void MarkBackendDegradedLocked();
+    void InvalidateConnectionsAfterMemoryChangeLocked(uint64_t previousGeneration);
     void TeardownEngineState();
 
     std::string localHost_;

@@ -28,6 +28,8 @@ public:
     std::string RoutePolicy() const override;
     uint64_t MemoryGeneration() const override;
     bool SupportsReceiverDrivenRead() const override { return true; }
+    uint64_t ReadLeaseTtlMs() const override;
+    bool IsConnectionReady(const ConnectionSpec &spec) const override;
 
     Result InitializeLocal(const std::string &localHost, uint16_t localPort, int32_t localDeviceId) override;
     void FinalizeLocal() override;
@@ -38,12 +40,10 @@ public:
     Result CreateRootInfo(std::string *rootInfoBytes) override;
     Result InitRecv(const ConnectionSpec &spec, const std::string &rootInfoBytes) override;
     Result InitSend(const ConnectionSpec &spec, const std::string &rootInfoBytes) override;
-    Result PostRecv(const ConnectionSpec &spec, uint64_t localAddr, uint64_t length) override;
-    Result PostSend(const ConnectionSpec &spec, uint64_t remoteAddr, uint64_t length) override;
-    Result WaitRecv(const ConnectionSpec &spec, uint64_t timeoutMs) override;
     Result TransferSyncRead(const ConnectionSpec &spec, const std::vector<TransferReadOp> &ops,
                             uint64_t timeoutMs) override;
     void AbortConnection(const ConnectionSpec &spec) override;
+    void InvalidatePeerConnections(const ConnectionSpec &spec) override;
 
 private:
     struct Impl;
@@ -60,6 +60,13 @@ private:
     Result RegisterOneLocked(uint64_t addr, uint64_t length, bool *registeredNew);
     Result ValidateBackingAlignmentLocked(uint64_t addr, uint64_t length) const;
     Result UnregisterOneLocked(uint64_t addr, uint64_t length, bool failIfMissing, bool *unregistered = nullptr);
+    bool HasEndpointReferenceLocked(const std::string &endpoint) const;
+    void EraseEndpointReferencesLocked(const std::string &endpoint);
+    bool DisconnectEndpointLocked(const std::string &endpoint, const std::string &where);
+    Result CleanupPendingEndpointLocked(const std::string &endpoint);
+    Result EnsureEndpointCapacityLocked(const std::string &endpoint);
+    Result ConnectEndpointLocked(const std::string &connectionKey, const std::string &endpoint);
+    void InvalidateEndpointLocked(const std::string &endpoint, const std::string &where);
     Result DisconnectAllLocked();
     Result ConnectLocked(const std::string &connectionKey, const std::string &endpoint);
     Result TransferReadBatchLocked(const ConnectionSpec &spec, const std::vector<TransferReadOp> &ops, size_t base,
@@ -70,6 +77,7 @@ private:
     std::unordered_map<uint64_t, RegisteredMem> registeredMems_;
     std::unordered_map<std::string, std::string> peerEndpointByConnection_;
     std::unordered_set<std::string> connectedEndpoints_;
+    std::unordered_set<std::string> cleanupPendingEndpoints_;
     int32_t localDeviceId_ = -1;
     std::string hixlEndpoint_;
     std::string routePolicy_ = K_DEFAULT_HIXL_ROUTE;
@@ -78,6 +86,7 @@ private:
     uint64_t memGeneration_ = 0;
     int32_t connectTimeoutMs_ = 10000;
     int32_t transferTimeoutMs_ = 10000;
+    int32_t readLeaseTtlMs_ = static_cast<int32_t>(K_DEFAULT_READ_LEASE_TTL_MS);
 };
 
 }  // namespace datasystem

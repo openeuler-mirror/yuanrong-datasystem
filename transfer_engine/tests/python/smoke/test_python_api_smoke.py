@@ -5,7 +5,9 @@ import sys
 import time
 from typing import List, Optional, Tuple
 
-from yr.datasystem import TransferEngine
+from yr.datasystem import ErrorCode, TransferEngine
+
+from tests.python.cleanup import finalize_for_cleanup
 
 torch = None  # type: ignore
 
@@ -88,6 +90,7 @@ def run_owner(args: argparse.Namespace) -> int:
                 t = torch.full((args.size,), fill, dtype=torch.uint8, device=dev)
                 src_tensors.append(t)
                 src_addrs.append(int(t.data_ptr()))
+            torch.npu.synchronize(dev)
 
         lengths = [args.size] * len(src_addrs)
         rc = engine.batch_register_memory(src_addrs, lengths)
@@ -108,7 +111,7 @@ def run_owner(args: argparse.Namespace) -> int:
             time.sleep(args.hold_seconds)
         return 0
     finally:
-        engine.finalize()
+        finalize_for_cleanup(engine, "owner", ErrorCode.kNotReady)
 
 
 def run_requester(args: argparse.Namespace) -> int:
@@ -125,6 +128,7 @@ def run_requester(args: argparse.Namespace) -> int:
     dev = torch.device(f"npu:{args.device_id}")
     dst_tensors = [torch.zeros((args.size,), dtype=torch.uint8, device=dev) for _ in remote_addrs]
     dst_addrs = [int(t.data_ptr()) for t in dst_tensors]
+    torch.npu.synchronize(dev)
 
     engine = TransferEngine()
     rc = engine.initialize(args.local_hostname, "ascend", f"npu:{args.device_id}")
@@ -133,11 +137,17 @@ def run_requester(args: argparse.Namespace) -> int:
         return 1
 
     try:
+        rc = engine.batch_register_memory(dst_addrs, lengths)
+        if rc.is_error():
+            print(f"[ERROR] batch_register_memory failed: {rc.to_string()}", file=sys.stderr)
+            return 1
+
         rc = engine.batch_transfer_sync_read(args.peer_hostname, dst_addrs, remote_addrs, lengths)
         if rc.is_error():
             print(f"[ERROR] batch_transfer_sync_read failed: {rc.to_string()}", file=sys.stderr)
             return 1
 
+        torch.npu.synchronize(dev)
         if args.auto_verify_data:
             if args.peer_device_id is None:
                 print("[ERROR] --auto-verify-data requires --peer-device-id", file=sys.stderr)
@@ -154,7 +164,7 @@ def run_requester(args: argparse.Namespace) -> int:
               f"bytes_each={args.size}")
         return 0
     finally:
-        engine.finalize()
+        finalize_for_cleanup(engine, "requester", ErrorCode.kNotReady)
 
 
 def requester_worker(worker_args: dict, result_queue: "mp.Queue[int]") -> None:

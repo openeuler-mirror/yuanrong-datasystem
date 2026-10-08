@@ -5,6 +5,7 @@
 
 #include <unistd.h>
 
+#include <atomic>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -69,7 +70,7 @@ public:
 
     bool RequiresAclRuntime() const override
     {
-        return false;
+        return requiresAclRuntime.load();
     }
 
     Result InitializeLocal(const std::string &localHost, uint16_t localPort, int32_t localDeviceId) override
@@ -120,6 +121,7 @@ public:
     }
 
     Result initializeResult = Result::OK();
+    std::atomic<bool> requiresAclRuntime{ false };
     std::string initializedHost;
     uint16_t initializedPort = 0;
     int32_t initializedDeviceId = -1;
@@ -292,6 +294,37 @@ TEST(TransferEngineInitializationLltTest, BackendFailureReleasesDynamicPortAndRo
     if (listenFd >= 0) {
         close(listenFd);
     }
+}
+
+TEST(TransferEngineInitializationLltTest, FailedFinalizeDeviceBindPreservesStateForRetry)
+{
+    auto backend = std::make_shared<InitializationBackend>();
+    TransferEngine engine(backend);
+    ASSERT_TRUE(engine.Initialize("127.0.0.1:0", "ascend", "npu:2147483647").IsOk());
+
+    backend->requiresAclRuntime = true;
+    EXPECT_EQ(engine.Finalize().GetCode(), ErrorCode::kRuntimeError);
+    EXPECT_EQ(backend->finalizeCount, 0);
+    EXPECT_GT(engine.GetRpcPort(), 0);
+
+    backend->requiresAclRuntime = false;
+    EXPECT_TRUE(engine.Finalize().IsOk());
+    EXPECT_EQ(backend->finalizeCount, 1);
+}
+
+TEST(TransferEngineInitializationLltTest, DestructorStopsOnUnrecoverableFinalizeFailure)
+{
+    EXPECT_EXIT(
+        {
+            auto backend = std::make_shared<InitializationBackend>();
+            auto engine = std::make_unique<TransferEngine>(backend);
+            if (!engine->Initialize("127.0.0.1:0", "ascend", "npu:2147483647").IsOk()) {
+                ::_exit(2);
+            }
+            backend->requiresAclRuntime = true;
+            engine.reset();
+        },
+        ::testing::ExitedWithCode(EXIT_FAILURE), ".*");
 }
 
 }  // namespace

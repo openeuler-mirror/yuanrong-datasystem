@@ -19,25 +19,27 @@ struct ConnectionKey {
 struct ConnectionState {
     bool requesterRecvReady = false;
     bool ownerSendReady = false;
-    bool stale = false;
+    uint64_t ownerReadySequence = 0;
 };
 
 class ConnectionManager {
 public:
     bool HasReadyConnection(const ConnectionKey &key) const;
     ConnectionState GetState(const ConnectionKey &key) const;
-    void MarkStale(const ConnectionKey &key);
-    void MarkRequesterRecvReady(const ConnectionKey &key);
-    void MarkOwnerSendReady(const ConnectionKey &key);
+    void Remove(const ConnectionKey &key);
+    bool MarkRequesterRecvReady(const ConnectionKey &key);
+    bool MarkOwnerSendReady(const ConnectionKey &key);
+    bool MarkOwnerSendReadyWithOldestEviction(const ConnectionKey &key);
     void Clear();
     size_t Size() const;
 
 private:
     static std::string ToMapKey(const ConnectionKey &key);
-    ConnectionState &GetOrCreateStateLocked(const std::string &mapKey);
+    ConnectionState *GetOrCreateStateLocked(const std::string &mapKey);
 
     mutable std::mutex mutex_;
     std::unordered_map<std::string, ConnectionState> states_;
+    uint64_t nextOwnerReadySequence_ = 1;
 };
 
 }  // namespace datasystem

@@ -2,9 +2,7 @@
 
 #include <atomic>
 #include <condition_variable>
-#include <cstdlib>
 #include <deque>
-#include <limits>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -22,31 +20,10 @@ namespace {
 
 constexpr int32_t kRpcOkCode = 0;
 constexpr size_t kMaxOwnerInitQueueSize = 1024;
-constexpr uint64_t K_DEFAULT_READ_LEASE_TTL_MS = 30000;
-constexpr uint64_t K_DECIMAL_BASE = 10;
 
 std::string NormalizeBackendKind(const std::string &backendKind)
 {
     return backendKind.empty() ? "ascend" : backendKind;
-}
-
-uint64_t GetReadLeaseTtlMs()
-{
-    const char *env = std::getenv("YR_TE_HIXL_READ_LEASE_TTL_MS");
-    if (env == nullptr || env[0] == '\0') {
-        return K_DEFAULT_READ_LEASE_TTL_MS;
-    }
-    uint64_t value = 0;
-    for (const char *p = env; *p != '\0'; ++p) {
-        if (*p < '0' || *p > '9') {
-            return K_DEFAULT_READ_LEASE_TTL_MS;
-        }
-        value = value * K_DECIMAL_BASE + static_cast<uint64_t>(*p - '0');
-        if (value > static_cast<uint64_t>(std::numeric_limits<int32_t>::max())) {
-            return K_DEFAULT_READ_LEASE_TTL_MS;
-        }
-    }
-    return value == 0 ? K_DEFAULT_READ_LEASE_TTL_MS : value;
 }
 
 class TransferControlServiceImpl final : public ITransferControlService {
@@ -123,7 +100,7 @@ public:
 
         rsp->code = kRpcOkCode;
         rsp->msg = "ok";
-        rsp->ready = state.ownerSendReady && !state.stale;
+        rsp->ready = state.ownerSendReady;
         rsp->ownerMemGeneration = backend_->MemoryGeneration();
         return Result::OK();
     }
@@ -325,8 +302,8 @@ private:
         uint64_t leaseId = 0;
         ReadLeaseRequester requester{ req.requesterHost, static_cast<uint16_t>(req.requesterPort),
                                       req.requesterDeviceId };
-        Result leaseRc =
-            registeredMemory_->AcquireReadLease(ranges, localDeviceId_, requester, GetReadLeaseTtlMs(), &leaseId);
+        Result leaseRc = registeredMemory_->AcquireReadLease(ranges, localDeviceId_, requester,
+                                                             backend_->ReadLeaseTtlMs(), &leaseId);
         if (leaseRc.IsError()) {
             rsp->code = static_cast<int32_t>(leaseRc.GetCode());
             rsp->msg = leaseRc.GetMsg();
@@ -406,17 +383,24 @@ private:
                 rc = backend_->InitSend(task.spec, task.rootInfo);
             }
             if (rc.IsOk()) {
-                connMgr_->MarkOwnerSendReady(task.key);
+                const bool published = backend_->SupportsReceiverDrivenRead()
+                                           ? connMgr_->MarkOwnerSendReadyWithOldestEviction(task.key)
+                                           : connMgr_->MarkOwnerSendReady(task.key);
+                if (!published) {
+                    rc = Result(ErrorCode::kNotReady, "owner connection state capacity reached");
+                }
+            }
+            if (rc.IsError()) {
+                connMgr_->Remove(task.key);
+                TE_LOG_ERROR << "owner init failed"
+                          << ", peer=" << task.spec.peerHost << ":" << task.spec.peerPort
+                          << ", peer_device_id=" << task.spec.peerDeviceId
+                          << ", reason=" << rc.ToString();
+            } else {
                 TE_VLOG_1 << "owner init done"
                           << ", peer=" << task.spec.peerHost << ":" << task.spec.peerPort
                           << ", peer_device_id=" << task.spec.peerDeviceId
                           << ", owner_device_id=" << localDeviceId_;
-            } else {
-                connMgr_->MarkStale(task.key);
-                TE_LOG_ERROR << "owner init failed"
-                           << ", peer=" << task.spec.peerHost << ":" << task.spec.peerPort
-                           << ", peer_device_id=" << task.spec.peerDeviceId
-                           << ", reason=" << rc.ToString();
             }
         }
     }

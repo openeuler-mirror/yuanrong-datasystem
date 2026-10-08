@@ -131,6 +131,8 @@ that still relies on the old default `"hixl"` must update its override before up
 adds its `protocol_desc` while preserving other fields; a conflicting user-supplied `protocol_desc` returns `kInvalid`.
 `YR_TE_HIXL_LOCAL_COMM_RES` can supply an explicit HIXL 1.3 JSON object when deployment must provide
 `net_instance_id` and a deterministic endpoint list. It is rejected outside CS mode or when its version is not `1.3`.
+When the variable is unset, CS mode still injects the default `{"version":"1.3"}` object unconditionally; deployments
+that need a different resource layout must set the variable explicitly.
 
 `YR_TE_HIXL_AUTO_CONNECT` accepts `auto`, `on`, or `off` and defaults to `auto`. The core `hixl::Hixl` Engine
 and `GetCapability(AUTO_CONNECT)` support it starting with HIXL 9.1.0. `on` fails closed when unsupported, and `off` is
@@ -193,6 +195,30 @@ peers while registering the caller-owned backing range with the backend. The bac
 range, and the underlying allocation must remain alive until the registration is successfully unregistered and any
 remote read lease has drained. The non-`_ex` registration methods use the same address and capacity for both ranges.
 Registration, unregistration, and batch-read methods accept at most 4096 items per call.
+Receiver-driven reads hold a local reference to each destination backing until the entire call, including retries,
+returns. Unregistering a logical registration on an in-use backing returns `kNotReady`; unrelated backings remain
+available for unregistration. The allocation must also remain alive while the caller is using its raw address.
+
+If registration or unregistration rollback fails, the engine closes new operation and read-lease admission and enters
+a degraded state. Keep all affected allocations alive, including backing allocations from the failed registration
+batch, until `finalize()` succeeds. Degradation itself does not deregister memory or clear outstanding read leases.
+
+Connection readiness, requester endpoint caches, backend connection keys, and backend endpoints are each capped at
+4096 entries. For receiver-driven reads, the owner replaces its oldest owner-only rendezvous state when a new requester
+arrives at the limit. The next query from an evicted requester rebuilds readiness. Requester states and data-plane
+connections are not evicted by this owner-side bookkeeping. Other full connection tables return `kNotReady`.
+Disconnect failures remain tracked until cleanup succeeds or the backend is finalized. Reusing a cached connection
+checks the local registration generation, remote registration generation, and backend readiness. A local registration
+generation change invalidates readiness for every peer, so incremental registration can force all active peers through
+the connection and authorization handshake again. In AutoConnect mode a failed transfer forgets the local route state
+without calling vendor `Disconnect`, because HIXL automatically removes an abnormal AutoConnect link. Explicit abort,
+peer-generation invalidation, and memory-registration changes still call vendor `Disconnect`; `NOT_CONNECTED` is a
+successful cleanup result, while other failures remain pending. Explicit-connect mode likewise tracks a failed
+`Disconnect` for later cleanup. This is required by HIXL's external contract: all links must be disconnected before
+registered memory is deregistered.
+Custom C++ `IDataPlaneBackend` implementations must be rebuilt after adding `IsConnectionReady` and
+`InvalidatePeerConnections`. Default implementations preserve source compatibility, but the virtual interface is not
+binary compatible with older builds.
 
 `Result`:
 
@@ -212,11 +238,15 @@ Registration, unregistration, and batch-read methods accept at most 4096 items p
 - `kNotAuthorized`
 - `kNotSupported`
 
-`finalize()` waits for in-flight reads, stops new read-lease admission, and then waits for active remote leases. It may
-return `kNotReady` when leases do not drain within the shutdown wait window; keep every registered allocation alive and
-retry until it returns `kOk`. The native destructor retries this operation, so relying on Python garbage collection can
-block for the configured read-lease TTL (30 seconds by default, `YR_TE_HIXL_READ_LEASE_TTL_MS`). Do not
+`finalize()` closes new read-lease admission and waits for in-flight reads and active remote leases. It may return
+`kNotReady` when local reads or remote leases do not drain within their respective 30-second wait windows;
+keep every registered allocation alive and retry
+until it returns `kOk`. The native destructor retries this operation, so relying on Python garbage collection can block
+for the configured read-lease TTL (30 seconds by default, `YR_TE_HIXL_READ_LEASE_TTL_MS`). Do not
 release or reuse registered device memory merely because `finalize()` has returned `kNotReady`.
+If binding the ACL device fails during finalization, `finalize()` returns `kRuntimeError` without tearing down the
+backend; keep registered memory alive and retry explicitly after restoring the device context. Destroying an engine
+whose finalization still fails this way terminates the process instead of continuing unsafe HIXL cleanup.
 
 ## 4. Quick Example (single process)
 
@@ -253,6 +283,12 @@ owner.finalize()
 
 TransferEngine accepts IPv6 control-plane endpoints in bracketed form, for example `"[::1]:60551"` or
 `"[fd00::1]:60551"`.
+
+The control-plane listen socket binds a single address: the first candidate that `getaddrinfo` returns for the
+configured host and that binds successfully, and IPv6 listeners are `IPV6_V6ONLY`. Outbound connects do try every
+candidate, so only the listen side is single-family. A name such as `localhost` usually resolves to `::1` first, so an
+owner initialized with `localhost` does not accept requester connections that target `127.0.0.1`. Use IP literals such
+as `127.0.0.1:60551` or `[::1]:60551`, or keep the same address family on both peers, to avoid this mismatch.
 
 ## 5. Cross-node Smoke Example (owner/requester)
 

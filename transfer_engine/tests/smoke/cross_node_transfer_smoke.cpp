@@ -40,6 +40,8 @@ constexpr int32_t K_THROUGHPUT_PRECISION = 6;
 constexpr int32_t K_ACL_MEMCPY_HOST_TO_DEVICE = 1;
 constexpr int32_t K_ACL_MEMCPY_DEVICE_TO_HOST = 2;
 constexpr int K_OPTION_KEY_VALUE_ARG_COUNT = 2;
+constexpr uint32_t K_FINALIZE_MAX_ATTEMPTS = 3;
+constexpr uint32_t K_FINALIZE_RETRY_DELAY_MS = 100;
 
 void HandleStopSignal(int)
 {
@@ -79,6 +81,64 @@ struct DeviceAllocation {
     void *addr = nullptr;
     bool owned = false;
 };
+
+void TrackOwnedBufferForCleanup(const DeviceAllocation &allocation, std::vector<void *> &allocAddrs,
+                                std::vector<bool> &ownAllocs)
+{
+    if (allocation.addr == nullptr || !allocation.owned) {
+        return;
+    }
+    allocAddrs.push_back(allocation.addr);
+    ownAllocs.push_back(true);
+}
+
+Result InitAclAndDevice(int32_t deviceId);
+
+Result FinalizeForCleanup(TransferEngine &engine)
+{
+    Result rc = Result::OK();
+    for (uint32_t attempt = 0; attempt < K_FINALIZE_MAX_ATTEMPTS; ++attempt) {
+        rc = engine.Finalize();
+        if (rc.IsOk()) {
+            return rc;
+        }
+        if (rc.GetCode() != ErrorCode::kNotReady || attempt + 1 == K_FINALIZE_MAX_ATTEMPTS) {
+            return rc;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(K_FINALIZE_RETRY_DELAY_MS));
+    }
+    return rc;
+}
+
+Result FinalizeAndFreeOwnedBuffers(TransferEngine &engine, std::vector<void *> &allocAddrs,
+                                   std::vector<bool> &ownAllocs, int32_t deviceId)
+{
+    Result finalizeRc = FinalizeForCleanup(engine);
+    if (finalizeRc.IsError()) {
+        TE_LOG_ERROR << "transfer engine finalize did not complete; keeping device buffers allocated, reason="
+                     << finalizeRc.ToString();
+        return finalizeRc;
+    }
+
+    for (size_t i = 0; i < allocAddrs.size(); ++i) {
+        if (!ownAllocs[i]) {
+            continue;
+        }
+        Result setDeviceRc = InitAclAndDevice(deviceId);
+        if (setDeviceRc.IsError()) {
+            TE_LOG_ERROR << "cannot select device before freeing smoke buffer, index=" << i
+                         << ", reason=" << setDeviceRc.ToString();
+            return setDeviceRc;
+        }
+        Result freeRc = testutil::AclFree(allocAddrs[i]);
+        if (freeRc.IsError()) {
+            TE_LOG_ERROR << "cannot free smoke buffer, index=" << i << ", reason=" << freeRc.ToString();
+            return freeRc;
+        }
+        ownAllocs[i] = false;
+    }
+    return Result::OK();
+}
 
 struct Options {
     std::string role;
@@ -490,8 +550,7 @@ Result PrepareOwnerSourceBuffer(const Options &opt, uint32_t index, DeviceAlloca
     allocation.owned = true;
     rc = FillDeviceBuffer(allocation.addr, opt.size, static_cast<uint8_t>(opt.deviceId + 1));
     if (rc.IsError()) {
-        (void)testutil::AclFree(allocation.addr);
-        allocation = {};
+        return rc;
     }
     return rc;
 }
@@ -541,39 +600,33 @@ Result RunOwner(const Options &opt)
     registeredLengths.reserve(opt.contiguousBatch ? 1U : registerCount);
 
     auto cleanup = [&engine, &allocAddrs, &ownAllocs, &opt]() {
-        (void)engine.Finalize();
-        for (size_t i = 0; i < allocAddrs.size(); ++i) {
-            if (ownAllocs[i]) {
-                (void)InitAclAndDevice(opt.deviceId);
-                (void)testutil::AclFree(allocAddrs[i]);
-            }
-        }
+        return FinalizeAndFreeOwnedBuffers(engine, allocAddrs, ownAllocs, opt.deviceId);
+    };
+    auto returnWithCleanup = [&cleanup](Result operationRc) {
+        Result cleanupRc = cleanup();
+        return cleanupRc.IsError() ? cleanupRc : operationRc;
     };
 
     if (opt.contiguousBatch) {
         uint64_t totalBytes = 0;
         if (!CheckedMul(opt.size, registerCount, &totalBytes) ||
             totalBytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
-            cleanup();
-            return Result(ErrorCode::kInvalid, "contiguous owner allocation size overflow");
+            return returnWithCleanup(Result(ErrorCode::kInvalid, "contiguous owner allocation size overflow"));
         }
         void *srcDev = nullptr;
         rc = testutil::AclMalloc(static_cast<size_t>(totalBytes), &srcDev);
         if (rc.IsError()) {
-            cleanup();
-            return rc;
+            return returnWithCleanup(rc);
         }
+        allocAddrs.push_back(srcDev);
+        ownAllocs.push_back(true);
         const uint8_t fill = static_cast<uint8_t>(opt.deviceId + 1);
         std::vector<uint8_t> host(static_cast<size_t>(totalBytes), fill);
         rc = testutil::AclMemcpy(srcDev, static_cast<size_t>(totalBytes), host.data(), host.size(),
                                  K_ACL_MEMCPY_HOST_TO_DEVICE);
         if (rc.IsError()) {
-            (void)testutil::AclFree(srcDev);
-            cleanup();
-            return rc;
+            return returnWithCleanup(rc);
         }
-        allocAddrs.push_back(srcDev);
-        ownAllocs.push_back(true);
         const uintptr_t base = PtrToAddr(srcDev);
         registeredAddrs.push_back(base);
         registeredLengths.push_back(static_cast<size_t>(totalBytes));
@@ -587,8 +640,8 @@ Result RunOwner(const Options &opt)
             DeviceAllocation source;
             rc = PrepareOwnerSourceBuffer(opt, i, source);
             if (rc.IsError()) {
-                cleanup();
-                return rc;
+                TrackOwnedBufferForCleanup(source, allocAddrs, ownAllocs);
+                return returnWithCleanup(rc);
             }
             allocAddrs.push_back(source.addr);
             ownAllocs.push_back(source.owned);
@@ -600,8 +653,7 @@ Result RunOwner(const Options &opt)
 
     rc = engine.BatchRegisterMemory(registeredAddrs, registeredLengths);
     if (rc.IsError()) {
-        cleanup();
-        return rc;
+        return returnWithCleanup(rc);
     }
 
     std::ostringstream remoteAddrsOss;
@@ -635,8 +687,7 @@ Result RunOwner(const Options &opt)
         }
     }
 
-    cleanup();
-    return Result::OK();
+    return returnWithCleanup(Result::OK());
 }
 
 Result RunRequester(const Options &opt)
@@ -662,27 +713,24 @@ Result RunRequester(const Options &opt)
     registeredAddrs.reserve(opt.contiguousBatch ? 1U : opt.remoteAddrs.size());
     registeredLengths.reserve(opt.contiguousBatch ? 1U : opt.remoteAddrs.size());
 
-    auto cleanup = [&engine, &dstDevs, &ownAllocs]() {
-        (void)engine.Finalize();
-        for (size_t i = 0; i < dstDevs.size(); ++i) {
-            if (ownAllocs[i]) {
-                (void)testutil::AclFree(dstDevs[i]);
-            }
-        }
+    auto cleanup = [&engine, &dstDevs, &ownAllocs, &opt]() {
+        return FinalizeAndFreeOwnedBuffers(engine, dstDevs, ownAllocs, opt.deviceId);
+    };
+    auto returnWithCleanup = [&cleanup](Result operationRc) {
+        Result cleanupRc = cleanup();
+        return cleanupRc.IsError() ? cleanupRc : operationRc;
     };
 
     if (opt.contiguousBatch) {
         uint64_t totalBytes = 0;
         if (!CheckedMul(opt.size, opt.remoteAddrs.size(), &totalBytes) ||
             totalBytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
-            cleanup();
-            return Result(ErrorCode::kInvalid, "contiguous requester allocation size overflow");
+            return returnWithCleanup(Result(ErrorCode::kInvalid, "contiguous requester allocation size overflow"));
         }
         void *dstBase = nullptr;
         rc = testutil::AclMalloc(static_cast<size_t>(totalBytes), &dstBase);
         if (rc.IsError()) {
-            cleanup();
-            return rc;
+            return returnWithCleanup(rc);
         }
         const uintptr_t base = PtrToAddr(dstBase);
         for (size_t i = 0; i < opt.remoteAddrs.size(); ++i) {
@@ -698,8 +746,7 @@ Result RunRequester(const Options &opt)
             DeviceAllocation destination;
             rc = PrepareRequesterDestinationBuffer(opt, i, destination);
             if (rc.IsError()) {
-                cleanup();
-                return rc;
+                return returnWithCleanup(rc);
             }
             dstDevs.push_back(destination.addr);
             ownAllocs.push_back(destination.owned);
@@ -709,8 +756,7 @@ Result RunRequester(const Options &opt)
     }
     rc = engine.BatchRegisterMemory(registeredAddrs, registeredLengths);
     if (rc.IsError()) {
-        cleanup();
-        return rc;
+        return returnWithCleanup(rc);
     }
 
     std::vector<uintptr_t> buffers;
@@ -726,8 +772,7 @@ Result RunRequester(const Options &opt)
     }
     uint64_t sampleBytes = 0;
     if (!CheckedMul(opt.size, static_cast<uint64_t>(buffers.size()), &sampleBytes)) {
-        cleanup();
-        return Result(ErrorCode::kInvalid, "perf sample byte size overflow");
+        return returnWithCleanup(Result(ErrorCode::kInvalid, "perf sample byte size overflow"));
     }
 
     const std::string targetHostname = FormatHostPort(opt.peerIp, opt.peerPort);
@@ -737,8 +782,7 @@ Result RunRequester(const Options &opt)
         Result readRc = engine.BatchTransferSyncRead(targetHostname, buffers, peerBufferAddresses, lengths);
         const auto end = std::chrono::steady_clock::now();
         if (readRc.IsError()) {
-            cleanup();
-            return readRc;
+            return returnWithCleanup(readRc);
         }
 
         if (sample >= opt.perfWarmup) {
@@ -771,28 +815,25 @@ Result RunRequester(const Options &opt)
         rc = testutil::AclMemcpy(host.data(), host.size(), dstDevs[i], static_cast<size_t>(opt.size),
                                  K_ACL_MEMCPY_DEVICE_TO_HOST);
         if (rc.IsError()) {
-            cleanup();
-            return rc;
+            return returnWithCleanup(rc);
         }
 
         if (opt.autoVerifyData) {
             for (size_t j = 0; j < host.size(); ++j) {
                 if (host[j] != autoExpected) {
-                    cleanup();
-                    return Result(ErrorCode::kRuntimeError,
-                                  "auto verify failed at batch=" + std::to_string(i) + ", index=" +
-                                      std::to_string(j) + ", got=" + std::to_string(host[j]) +
-                                      ", expected=" + std::to_string(autoExpected));
+                    return returnWithCleanup(Result(
+                        ErrorCode::kRuntimeError,
+                        "auto verify failed at batch=" + std::to_string(i) + ", index=" + std::to_string(j)
+                            + ", got=" + std::to_string(host[j]) + ", expected=" + std::to_string(autoExpected)));
                 }
             }
         } else if (opt.verifyPattern) {
             for (size_t j = 0; j < host.size(); ++j) {
                 if (host[j] != opt.pattern) {
-                    cleanup();
-                    return Result(ErrorCode::kRuntimeError,
-                                  "verify pattern failed at batch=" + std::to_string(i) + ", index=" +
-                                      std::to_string(j) + ", got=" + std::to_string(host[j]) +
-                                      ", expected=" + std::to_string(opt.pattern));
+                    return returnWithCleanup(
+                        Result(ErrorCode::kRuntimeError,
+                               "verify pattern failed at batch=" + std::to_string(i) + ", index=" + std::to_string(j)
+                                   + ", got=" + std::to_string(host[j]) + ", expected=" + std::to_string(opt.pattern)));
                 }
             }
         }
@@ -813,8 +854,7 @@ Result RunRequester(const Options &opt)
     std::cout << "[REQUESTER_BATCH_DONE] batch_size=" << buffers.size() << " bytes_each=" << opt.size
               << " repeats=" << opt.perfRepeats << " warmup=" << opt.perfWarmup << std::endl;
 
-    cleanup();
-    return Result::OK();
+    return returnWithCleanup(Result::OK());
 }
 
 Result RunRequesterConcurrent(const Options &opt)

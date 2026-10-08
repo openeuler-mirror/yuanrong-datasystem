@@ -359,6 +359,16 @@ bazel test --config=release --config=test \
   - `binmock`
   - `binmock_spec`
 - Transfer Engine HIXL smoke helpers:
+  - `transfer_engine_orchestration_llt` covers local backing pins, shared-backing/error-path release, rollback
+    degradation with a remote reader, admission closure, reinitialization, and local-generation cache invalidation.
+  - `transfer_engine_ascend_connections_llt` compiles the production Ascend connection lifecycle against a test-only
+    HIXL header and config stub. It needs no CANN and covers alias isolation, endpoint failure cleanup, reconnect
+    fencing, and capacity for explicit and automatic connection modes. It does not validate vendor DMA semantics.
+  - `transfer_engine_python_cleanup_llt` checks the test-process cleanup policy without NPU. Python ST/smoke register
+    destination tensors and synchronize device work; unrecoverable cleanup exits the isolated process without Python
+    tensor destruction. ST owner/requester finalization runs even when queue flushing raises or is interrupted;
+    hardware-independent mocks cover thread-start failure and interrupted join after registration.
+    C++ smoke only frees owned HBM after successful finalization.
   - `transfer_engine/scripts/run_cross_node_smoke_cases.sh`: manual owner/requester wrapper around
     `transfer_engine_cross_node_smoke`.
   - `transfer_engine/scripts/run_hixl_d2d_smoke_suite.sh`: same-node HIXL D2D suite covering batch reads, reverse
