@@ -24,6 +24,9 @@
 #include <utility>
 #include <vector>
 
+#include <bthread/condition_variable.h>
+#include <bthread/mutex.h>
+
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/cluster/routing/placement_facade.h"
 #include "datasystem/cluster/runtime/topology_reader.h"
@@ -712,13 +715,13 @@ private:
     // Backend IO, callbacks, drain, component Start/Stop, and thread join execute without this lock.
     std::mutex lifecycleMutex_;
     // Protects threadExited_, isolationReason_, lastError_, and backendObservation_.
-    mutable std::mutex stateMutex_;
+    mutable bthread::Mutex stateMutex_;
     // Serializes availability_, publishedAvailability_, isolationReason_, and Host admission callback ordering.
     // The successful-Start commit may acquire lifecycleMutex_ while holding this mutex; lifecycle paths never acquire
     // this mutex while holding lifecycleMutex_.
     std::mutex availabilityTransitionMutex_;
     // Uses stateMutex_ and signals changes to threadExited_.
-    std::condition_variable stoppedCv_;
+    bthread::ConditionVariable stoppedCv_;
     std::mutex startupWaitMutex_;
     std::condition_variable startupWaitCv_;
     std::condition_variable lifecycleCv_;
