@@ -926,8 +926,8 @@ bool WorkerFailover::GetPreferredLocalWorkerToRecover(WorkerNode &oldNode, HostP
     int workerPort;
     Status rc = owner_.serviceDiscovery_->SelectSameNodeWorker(workerIp, workerPort);
     if (rc.IsError()) {
-        constexpr int times = 10;
-        LOG_EVERY_T(INFO, times) << "[Switch] Same-node worker is not ready yet: " << rc.ToString();
+        constexpr int logIntervalSeconds = 3600;
+        LOG_EVERY_T(INFO, logIntervalSeconds) << "[Switch] Same-node worker is not ready yet: " << rc.ToString();
         if (IsCoordinatorReachabilityFailure(rc)) {
             const int32_t backoffMs = discoveryBackoff_.OnFailure(std::chrono::steady_clock::now());
             LOG(INFO) << "[Switch] Discovery unreachable, back off " << backoffMs
