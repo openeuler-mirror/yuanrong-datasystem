@@ -67,6 +67,7 @@ DS_DECLARE_int32(logbufsecs);
 DS_DECLARE_uint32(max_log_file_num);
 DS_DECLARE_uint32(max_log_size);
 DS_DECLARE_bool(log_only_write_info_file);
+DS_DECLARE_string(cluster_name);
 
 namespace datasystem {
 namespace ut {
@@ -1069,6 +1070,16 @@ TEST_F(LoggingTest, TestExplicitClientLogNameOverridesEnv)
     Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, LogProcessRole::CLIENT, 1);
 
     ASSERT_EQ(FLAGS_log_filename, "config_client");
+}
+
+TEST_F(LoggingTest, TestClientClusterNameAppliedBeforeLoggingStarts)
+{
+    Logging::SetClientClusterName("client_cluster");
+    Logging::SetClientClusterName("ignored_cluster");
+
+    Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, LogProcessRole::CLIENT, 1);
+
+    ASSERT_EQ(FLAGS_cluster_name, "client_cluster");
 }
 
 TEST_F(LoggingTest, TestClientLogNameEnvAfterLoggingRestart)

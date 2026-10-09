@@ -505,6 +505,15 @@ void Logging::SetClientLogName(const std::string &logName)
     g_clientLogNameConfig = logName;
 }
 
+void Logging::SetClientClusterName(const std::string &clusterName)
+{
+    auto *logging = GetInstance();
+    WriteLock lock(&logging->mux_);
+    if (!logging->IsLoggingInitialized() && FLAGS_cluster_name.empty() && !clusterName.empty()) {
+        FLAGS_cluster_name = clusterName;
+    }
+}
+
 bool Logging::TryGetClientLogName(std::string &logName)
 {
     std::lock_guard<std::mutex> lock(g_clientLogConfigMutex);
@@ -539,6 +548,7 @@ void Logging::ResetClientLogConfigForTest()
     g_clientLogWithoutPidConfig = false;
     g_hasClientLogNameConfig = false;
     g_clientLogNameConfig.clear();
+    FLAGS_cluster_name.clear();
     g_hasClientAccessLogNameConfig = false;
     g_clientAccessLogNameConfig.clear();
 }
