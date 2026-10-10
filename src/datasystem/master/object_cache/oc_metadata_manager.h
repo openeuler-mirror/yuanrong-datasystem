@@ -34,7 +34,6 @@
 #include <google/protobuf/repeated_field.h>
 #include <tbb/concurrent_hash_map.h>
 
-#include "datasystem/common/util/metadata_memory_limiter.h"
 #include "datasystem/cluster/executor/storage_scan_plan.h"
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
@@ -1353,12 +1352,6 @@ public:
     }
     // ===== end sharding infrastructure =====
 
-    // Configure before Init; WorkerOCServer shares this budget with the local Worker service.
-    void SetMetadataMemoryLimiter(std::shared_ptr<MetadataMemoryLimiter> limiter)
-    {
-        metadataMemoryLimiter_ = std::move(limiter);
-    }
-
     /**
      * @brief Get current size of the master object metadata table.
      * @return Number of object metadata entries currently held by master.
@@ -2201,7 +2194,6 @@ private:
 
     std::unique_ptr<OCNotifyWorkerManager> notifyWorkerManager_{ nullptr };
     std::unique_ptr<OCGlobalCacheDeleteManager> globalCacheDeleteManager_{ nullptr };
-    std::shared_ptr<MetadataMemoryLimiter> metadataMemoryLimiter_ = std::make_shared<MetadataMemoryLimiter>();
     std::unique_ptr<ExpiredObjectManager> expiredObjectManager_{ nullptr };
     std::shared_ptr<MasterDevOcManager> masterDevOcManager_{ nullptr };
     std::unique_ptr<ThreadPool> asyncTaskPool_{ nullptr };

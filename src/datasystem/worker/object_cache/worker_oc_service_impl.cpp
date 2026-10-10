@@ -582,13 +582,10 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
                                          const cluster::MembershipEndpointView &membership,
                                          const std::atomic<bool> *exitRequested,
                                          bool isRestart,
-                                         bool controlBackendAvailableAtStartup,
-                                         std::shared_ptr<MetadataMemoryLimiter> metadataMemoryLimiter)
+                                         bool controlBackendAvailableAtStartup)
     : WorkerOCService(std::move(serverAddr)),
       localMasterAddress_(std::move(masterAddr)),
       persistenceApi_(persistApi),
-      metadataMemoryLimiter_(metadataMemoryLimiter ? std::move(metadataMemoryLimiter)
-                                                 : std::make_shared<MetadataMemoryLimiter>()),
       objectTable_(std::move(objectTable)),
       evictionManager_(std::move(evictionManager)),
       etcdStore_(etcdStore),
@@ -604,11 +601,6 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
 {
     reconciliationReady_.store(!isRestart_ || !controlBackendAvailableAtStartup_ || !FLAGS_enable_reconciliation,
                                std::memory_order_relaxed);
-    metadataMemoryLimiter_->RegisterCounter(MetadataMemoryLimiter::Source::OBJECT,
-        [table = std::weak_ptr<ObjectTable>(objectTable_)] {
-            auto locked = table.lock();
-            return locked ? locked->GetSize() : 0;
-        });
     healthPublisher_ = [] { return SetHealthProbe(); };
     initOkFuture_ = initOk_.get_future();
     workerMasterApiManager_ =
@@ -886,11 +878,10 @@ Status WorkerOCServiceImpl::HealthCheck(const HealthCheckRequestPb &req, HealthC
 
 Status WorkerOCServiceImpl::VerifyClientWriteAdmission(bool isRouted)
 {
-    RETURN_IF_NOT_OK(worker::VerifyLeavingStateWithEvaluator([this, isRouted] {
+    return worker::VerifyLeavingStateWithEvaluator([this, isRouted] {
         const bool exitIntent = exitRequested_ != nullptr && exitRequested_->load(std::memory_order_acquire);
         return MigrateDataStarted() || (exitIntent && (isRouted || FLAGS_enable_leaving_intercept));
-    }));
-    return metadataMemoryLimiter_->CheckAdmission();
+    });
 }
 
 void WorkerOCServiceImpl::FillWorkerRedirect(const std::string &selectionKey, WorkerRedirectPb &redirect) const

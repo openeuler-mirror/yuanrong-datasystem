@@ -83,7 +83,6 @@ DS_DECLARE_bool(enable_reconciliation);
 DS_DECLARE_bool(enable_transport_fallback);
 DS_DECLARE_bool(enable_worker_worker_batch_get);
 DS_DECLARE_string(data_migrate_urma_transport_mode);
-DS_DECLARE_uint64(max_object_metadata_size_mb);
 DS_DECLARE_uint32(arena_per_tenant);
 DS_DECLARE_int32(oc_worker_worker_parallel_min);
 
@@ -1334,33 +1333,6 @@ TEST_F(WorkerOcServiceImplTest, MetadataDeadlineTriggersRefreshStatusOnlyAfterFa
     EXPECT_EQ(common.TranslateQualifiedMetadataDeadline(api, deadline, false).GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_EQ(common.TranslateQualifiedMetadataDeadline(api, deadline, true).GetCode(), K_METADATA_OWNER_UNAVAILABLE);
     EXPECT_EQ(common.TranslateQualifiedMetadataDeadline(api, Status::OK(), true).GetCode(), K_OK);
-}
-
-TEST_F(WorkerOcServiceImplTest, CreateMetadataPreservesMetadataMemoryRejection)
-{
-    ScopedRequestContext requestContext;
-    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
-    const std::string objectKey = "create-metadata-memory-limit";
-    placement_.SetOwner(objectKey, localAddress_);
-    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
-    api->SetCreateMetaHandler([](master::CreateMetaReqPb &, master::CreateMetaRspPb &) {
-        return Status(K_OUT_OF_MEMORY, "metadata limit exceeded").WithExtra(K_METADATA_FAILURE_TEST_EXTRA);
-    });
-    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
-    apiManager->SetApi(api);
-    auto publish = MakePublishProcessor(apiManager);
-    auto safeObj = MakeMetadataFailureObject(ObjectLifeState::OBJECT_INVALID);
-    ObjectKV objectKV(objectKey, *safeObj);
-    const std::vector<std::string> nestedKeys;
-    const WorkerOcServicePublishImpl::PublishParams params{
-        ObjectLifeState::OBJECT_PUBLISHED, nestedKeys, false, 0, ExistenceOptPb::NONE, CacheType::MEMORY
-    };
-
-    auto rc = publish->RequestingToMasterCore(objectKV, params);
-
-    EXPECT_EQ(rc.GetCode(), K_OUT_OF_MEMORY);
-    EXPECT_EQ(rc.GetExtra(), K_METADATA_FAILURE_TEST_EXTRA);
-    EXPECT_EQ(api->CreateMetaCallCount(), 1);
 }
 
 TEST_F(WorkerOcServiceImplTest, CreateMetadataMapsDispatchedOwnerPeerDead)
@@ -3974,52 +3946,6 @@ TEST_F(WorkerOcServiceImplTest, ShutdownRequestRejectsClientHealthWithoutTopolog
     HealthCheckRequestPb req;
     HealthCheckReplyPb rsp;
     EXPECT_EQ(impl_->HealthCheck(req, rsp).GetCode(), K_SCALE_DOWN);
-}
-
-TEST_F(WorkerOcServiceImplTest, ObjectMetadataLimitRejectsWritesAndRecoversAfterDeletion)
-{
-    const auto savedLimit = FLAGS_max_object_metadata_size_mb;
-    Raii restore([savedLimit] { FLAGS_max_object_metadata_size_mb = savedLimit; });
-    FLAGS_max_object_metadata_size_mb = 1;
-    constexpr size_t OBJECTS_PER_MIB = 1024 * 1024 / 800;
-    DS_ASSERT_OK(impl_->VerifyClientWriteAdmission(false));
-    for (size_t i = 0; i < OBJECTS_PER_MIB; ++i) {
-        AddObject("metadata-limit-" + std::to_string(i));
-    }
-    DS_ASSERT_OK(impl_->VerifyClientWriteAdmission(false));
-    DS_ASSERT_OK(impl_->VerifyClientWriteAdmission(true));
-    const std::string excessKey = "metadata-limit-excess";
-    AddObject(excessKey);
-    const auto admission = impl_->VerifyClientWriteAdmission(false);
-    ASSERT_EQ(admission.GetCode(), K_OUT_OF_MEMORY);
-    EXPECT_THAT(admission.GetMsg(), HasSubstr("max_object_metadata_size_mb"));
-
-    for (bool routed : { false, true }) {
-        ScopedRequestContext requestContext;
-        GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
-        CreateReqPb create;
-        create.set_is_routed(routed);
-        CreateRspPb createRsp;
-        EXPECT_EQ(impl_->Create(create, createRsp).GetCode(), K_OUT_OF_MEMORY);
-        EXPECT_FALSE(createRsp.has_worker_redirect());
-        MultiCreateReqPb multiCreate;
-        multiCreate.set_is_routed(routed);
-        MultiCreateRspPb multiCreateRsp;
-        EXPECT_EQ(impl_->MultiCreate(multiCreate, multiCreateRsp).GetCode(), K_OUT_OF_MEMORY);
-        PublishReqPb publish;
-        publish.set_is_routed(routed);
-        PublishRspPb publishRsp;
-        EXPECT_EQ(impl_->Publish(publish, publishRsp, {}).GetCode(), K_OUT_OF_MEMORY);
-        EXPECT_FALSE(publishRsp.has_worker_redirect());
-        MultiPublishReqPb multiPublish;
-        multiPublish.set_is_routed(routed);
-        MultiPublishRspPb multiPublishRsp;
-        EXPECT_EQ(impl_->MultiPublish(multiPublish, multiPublishRsp, {}).GetCode(), K_OUT_OF_MEMORY);
-    }
-    EXPECT_EQ(objectTable_->GetSize(), OBJECTS_PER_MIB + 1);
-    DS_ASSERT_OK(impl_->DeleteObject(excessKey));
-    EXPECT_EQ(objectTable_->GetSize(), OBJECTS_PER_MIB);
-    DS_EXPECT_OK(impl_->VerifyClientWriteAdmission(false));
 }
 
 TEST_F(WorkerOcServiceImplTest, IncomingMigrationGateClosureDoesNotImpersonateTopologyScaleInDrain)

@@ -1419,25 +1419,6 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 |-----|------|---------|-----|-------------|
 | max_client_num | int | `200` | 否 | openYuanrong datasystem单个DaemonSet可同时接入的共享内存客户端数量上限；仅对走共享内存（SHM）路径的客户端生效 |
 | shared_memory_size_mb | int | `1024` | 否 | openYuanrong datasystem单个DaemonSet可使用的共享内存资源大小（以MB为单位） |
-| max_object_metadata_size_mb | int | `1024` | 否 | Worker 对象元数据估算准入上限（MiB），必须为正整数。按本地 Worker 对象数 × 800 + Master 元数据数 × 1200 字节估算；当前占用严格超过上限时拒绝 Create、MultiCreate、Publish、MultiPublish 以及 Master 单条/批量元数据创建，返回 K_OUT_OF_MEMORY；读取、删除和释放不受此限制。需重启生效。 |
-
-##### 对象元数据准入限制
-
-`--max_object_metadata_size_mb 1024` 默认将每个进程的元数据估算准入上限设为 1 GiB。
-估算公式为：`Worker 对象数 × 800 + Master 元数据数 × 1200`，单位为字节。
-同进程的 Worker 和 Master 共用限额；不同进程各自统计本地持有的表，不跨节点汇总。
-Master 每条元数据的 1200 字节估算已包含 TTL 开销，不单独统计 TTL 表，也不按是否设置 TTL 调整权重。
-该值不是实际匿名内存测量值，也不包含所有其他数据结构或分配器保留内存。
-
-仅当两类记录数量相同，默认限额才对应约 536,870 个对象（每个对象合计 2000 字节）。
-数据副本和元数据分属不同节点时，可容纳数量取决于两类记录的实际比例。
-
-Worker 在 Create、MultiCreate、Publish、MultiPublish 的写入准入入口检查，
-Master 在路由判定后、修改状态前检查 CreateMeta 和 CreateMultiMeta。
-当前估算占用等于上限仍允许写入，严格超过时返回 K_OUT_OF_MEMORY，包括已有对象的覆盖写。
-读取、删除、TTL 清理、恢复和迁移不受此准入检查限制。
-计数为并发快照，不预留请求额度，批量、并发请求以及恢复或拉取副本仍可能超过阈值。
-参数需重启生效；调整前应考虑本节点承担的 Master 元数据和 TTL 数量，回滚可调高限额后重启。
 
 #### IPC/RPC相关配置
 
