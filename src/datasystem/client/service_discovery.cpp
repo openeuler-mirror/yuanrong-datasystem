@@ -39,6 +39,7 @@ DS_DECLARE_string(log_dir);
 namespace datasystem {
 namespace {
 constexpr int COORDINATOR_SERVICE_DISCOVERY_RPC_STUB_CACHE_SIZE = 100;
+constexpr int WORKER_STATE_LOG_INTERVAL_SECONDS = 3600;
 
 std::string PickRandomAddr(const std::vector<std::string> &workers, RandomData *randomData)
 {
@@ -367,7 +368,8 @@ Status CoordinatorServiceDiscovery::ObtainWorkers(std::vector<std::string> &same
     for (const auto &kv : kvs) {
         AppendReadyWorkerFromProto(kv.key, kv.value, hostId_, sameHost, other, workersStateCount);
     }
-    LOG(INFO) << "The workers state count from coordinator is " << MapToString(workersStateCount);
+    LOG_EVERY_T(INFO, WORKER_STATE_LOG_INTERVAL_SECONDS)
+        << "The workers state count from coordinator is " << MapToString(workersStateCount);
     return Status::OK();
 }
 
