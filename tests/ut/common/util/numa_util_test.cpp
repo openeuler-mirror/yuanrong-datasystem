@@ -201,6 +201,8 @@ TEST_F(NumaUtilTest, TestNumaIdToChipIdConcurrentFirstCallDoesNotCrash)
         for (auto &future : futures) {
             future.get();
         }
+        // Avoid destroying inherited bvar globals after fork, which can deadlock on sampler locks.
+        _exit(::testing::Test::HasFailure() ? 1 : 0);
     });
 
     ASSERT_EQ(WaitForChildFork(child), 0);

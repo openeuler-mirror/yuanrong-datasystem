@@ -37,6 +37,7 @@
 #include <google/protobuf/repeated_field.h>
 #include <tbb/concurrent_hash_map.h>
 
+#include "datasystem/common/util/metadata_memory_limiter.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/locks.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
@@ -184,7 +185,8 @@ public:
                         const worker::MetadataRouteResolver &metadataRoute,
                         const cluster::MembershipEndpointView &membership,
                         const std::atomic<bool> *exitRequested, bool isRestart,
-                        bool controlBackendAvailableAtStartup);
+                        bool controlBackendAvailableAtStartup,
+                        std::shared_ptr<MetadataMemoryLimiter> metadataMemoryLimiter = nullptr);
 
     ~WorkerOCServiceImpl() override;
 
@@ -1495,6 +1497,7 @@ private:
     std::shared_ptr<PersistenceApi> persistenceApi_{ nullptr };
     std::shared_ptr<SharedMemoryRefTable> memoryRefTable_;
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable_;
+    std::shared_ptr<MetadataMemoryLimiter> metadataMemoryLimiter_;
     std::shared_ptr<ObjectTable> objectTable_;
     std::shared_ptr<SlotRecoveryManager> slotRecoveryManager_{ nullptr };
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;

@@ -89,8 +89,7 @@ TEST_F(ExpiredObjectManagerTest, TestParallelInsert)
 TEST_F(ExpiredObjectManagerTest, TestGetExpiredObjectCrossShardFairness)
 {
     ExpiredObjectManager manager("127.0.0.1:10001", nullptr);
-    DS_ASSERT_OK(inject::Set("master.ExpiredObjectManager.Run", "call()"));
-    manager.Init();
+    // Fetch expiration manually so the background scanner cannot consume test entries.
 
     // Generate keys that hash to specific shards. Shard 0 gets > MAX_DEL_BATCH_NUM (3000)
     // entries with later expiration; shard 63 gets a handful with earlier expiration.

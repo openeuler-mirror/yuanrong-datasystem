@@ -500,7 +500,8 @@ Status WorkerOcServicePublishImpl::RequestingToMasterCore(ObjectKV &objectKV, co
         }
         const std::unordered_set<StatusCode> passthroughError{
             StatusCode::K_WORKER_TIMEOUT,    StatusCode::K_KVSTORE_ERROR, StatusCode::K_OC_KEY_ALREADY_EXIST,
-            StatusCode::K_OC_ALREADY_SEALED, StatusCode::K_INVALID,       StatusCode::K_TRY_AGAIN
+            StatusCode::K_OC_ALREADY_SEALED, StatusCode::K_INVALID,       StatusCode::K_TRY_AGAIN,
+            StatusCode::K_OUT_OF_MEMORY
         };
         if (passthroughError.find(rc.GetCode()) == passthroughError.end()) {
             rc = Status(K_RUNTIME_ERROR,

@@ -115,6 +115,14 @@ DS_DEFINE_uint64(shared_memory_size_mb, 64,
 DS_DEFINE_uint64(shared_memory_size_mb, 1024,
                  "Upper limit of the shared memory, the unit is mb, must be greater than 0.");
 #endif
+DS_DEFINE_uint64(max_object_metadata_size_mb, 1024,
+                 "Process-local metadata admission limit in MiB: worker objects * 800 + "
+                 "master metadata * 1200 bytes (including TTL overhead). "
+                 "Reject client writes and master metadata creation when current usage exceeds the limit. "
+                 "Must be greater than 0.");
+DS_DEFINE_validator(max_object_metadata_size_mb, [](const char *flagName, uint64_t value) {
+    return value > 0 && Validator::ValidateSharedDiskSize(flagName, value);
+});
 DS_DEFINE_uint64(shared_disk_size_mb, 0, "Upper limit of the shared disk, the unit is mb.");
 
 #ifdef WITH_TESTS
@@ -1154,7 +1162,8 @@ void WorkerOCServer::CreateObjectCacheWorkerServices(
     objCacheClientWorkerSvc_ = std::make_shared<datasystem::object_cache::WorkerOCServiceImpl>(
         hostPort_, masterAddr_, objectTable, akSkManager_, evictionManager, persistenceApi_, etcdStore_.get(),
         objCacheMasterSvc_.get(), topologyEngine_.get(), *metadataRouteResolver_, topologyEngine_->Membership(),
-        &topologyExitRequested_, topologyEngine_->IsRestart(), true);
+        &topologyExitRequested_, topologyEngine_->IsRestart(), true,
+        metadataMemoryLimiter_);
     objCacheClientWorkerSvc_->RegisterLocalMetadataCleanupForRejoin([this] {
         CHECK_FAIL_RETURN_STATUS(metadataManagerHolder_ != nullptr, K_NOT_READY,
                                  "Metadata manager holder is not ready for rejoin cleanup");
@@ -2560,6 +2569,7 @@ Status WorkerOCServer::InitLivenessCheck()
 Status WorkerOCServer::InitMetadataManagerHolder()
 {
     MetadataManagerHolderParam param;
+    param.metadataMemoryLimiter = metadataMemoryLimiter_;
     param.dbRootPath = FLAGS_rocksdb_store_dir;
     param.currWorkerId = hostPort_.ToString();
     param.akSkManager = akSkManager_;
