@@ -161,6 +161,10 @@ void ValidateKvClientNumericFields(const std::unordered_map<std::string, std::st
                                        std::numeric_limits<uint32_t>::max(), reason)) {
         AddError(errors, "UrmaSendLaneCountPerPeer", reason);
     }
+    if (!ValidateOptionalUint32InRange(args, "urma_log_threshold_us", 1,
+                                       std::numeric_limits<uint32_t>::max(), reason)) {
+        AddError(errors, "UrmaLogThresholdUs", reason);
+    }
 }
 
 void CollectKvClientBuildErrors(const std::unordered_map<std::string, std::string> &args,
@@ -282,6 +286,12 @@ KVClientConfig::Builder &KVClientConfig::Builder::MonitorConfigPath(const std::s
 KVClientConfig::Builder &KVClientConfig::Builder::UrmaSendLaneCountPerPeer(uint32_t count)
 {
     args_["urma_send_lane_count_per_peer"] = std::to_string(count);
+    return *this;
+}
+
+KVClientConfig::Builder &KVClientConfig::Builder::UrmaLogThresholdUs(uint32_t thresholdUs)
+{
+    args_["urma_log_threshold_us"] = std::to_string(thresholdUs);
     return *this;
 }
 

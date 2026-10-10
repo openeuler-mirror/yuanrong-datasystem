@@ -294,3 +294,18 @@ latencySummary:{client.process.get:200,client.rpc.get:896,worker.process.get:768
 | 运行时动态修改 | 修改 `datasystem.config` 中对应参数 | — |
 
 默认值为 `2000`/`5000`（进程内2ms/RPC 5ms），完全向后兼容，零开销。
+
+## URMA 轮询耗时日志阈值
+
+Worker 使用 `--urma_log_threshold_us`，C++ Client 使用 `KVClientConfig::Builder::UrmaLogThresholdUs`。
+默认 500 微秒，范围 `[1, 4294967295]`；设为 250 可恢复原诊断灵敏度。
+
+仅控制轮询模式（`urma_event_mode=false`）下的三类 INFO 日志，耗时严格超过阈值时触发：
+
+- `[URMA_ELAPSED_THREAD_SHED]`：轮询间隔。
+- `[URMA_ELAPSED_POLL_JFC]`：单次 `urma_poll_jfc` 耗时。
+- `[URMA_ELAPSED_THREAD_SHED]`：`nanosleep` 休眠耗时。
+
+实际输出受日志级别控制，与 `enable_urma_perf` 独立。Worker 修改后需重启；Client 在进程首次
+`KVClient::Init` 时生效，后续实例共享该值，不支持热更新。Embedded Worker 通过 `extraArgs` 设置。
+回退旧版本前删除新增 Worker 参数；使用新 Builder 方法需配套新 SDK。

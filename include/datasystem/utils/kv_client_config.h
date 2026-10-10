@@ -190,6 +190,14 @@ public:
         Builder &UrmaSendLaneCountPerPeer(uint32_t count);
 
         /**
+         * @brief Set the URMA polling-mode INFO log threshold (urma_event_mode=false).
+         * Shared and fixed at the first KVClient Init.
+         * @param[in] thresholdUs Threshold in microseconds, range [1, UINT32_MAX], default 500.
+         * @return Reference to self for chaining.
+         */
+        Builder &UrmaLogThresholdUs(uint32_t thresholdUs);
+
+        /**
          * @brief Whether this Client SDK process applies UB fault isolation results.
          * @param[in] enable Equivalent to flag enable_ub_fault_isolation. The switch only controls this Client SDK
          * process; Worker-side UB isolation keeps running. The first Client Init freezes the value for the process.

@@ -84,7 +84,6 @@ constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 constexpr uint32_t K_URMA_ERROR_LOG_EVERY_N = 100;
 constexpr uint32_t K_URMA_POOL_EXHAUSTED_LOG_EVERY_N = 5000;
 constexpr uint32_t URMA_LOG_LIMIT_MS = 1;
-constexpr uint32_t URMA_LOG_LIMIT_US = 250;
 constexpr uint32_t URMA_WRITE_VLOG0_LIMIT_US = 200;
 constexpr uint64_t URMA_TIMEOUT_LOG_INVALID_U64 = std::numeric_limits<uint64_t>::max();
 constexpr int URMA_TIMEOUT_LOG_INVALID_CQE_STATUS = std::numeric_limits<int>::min();
@@ -2168,12 +2167,13 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
         return Status::OK();
     }
 
+    const uint32_t logThresholdUs = GetUrmaLogThresholdUs();
     // trys maxTryCount times to get an event
     for (uint64_t i = 0; i < maxTryCount; ++i) {
         const auto pollStartUs = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
         const auto pollGapAfterLastEndUs = pollLastEndUs_ == 0 ? 0 : pollStartUs - pollLastEndUs_;
         const auto pollStartIntervalUs = pollLastStartUs_ == 0 ? 0 : pollStartUs - pollLastStartUs_;
-        if (pollGapAfterLastEndUs > URMA_LOG_LIMIT_US || pollStartIntervalUs > URMA_LOG_LIMIT_US) {
+        if (pollGapAfterLastEndUs > logThresholdUs || pollStartIntervalUs > logThresholdUs) {
             LOG(INFO) << "[URMA_ELAPSED_THREAD_SHED]: urma_poll_jfc loop gap, lastPollEndToThisPollStart "
                       << pollGapAfterLastEndUs << "us, lastPollStartToThisPollStart " << pollStartIntervalUs
                       << "us, cpuid: " << sched_getcpu() << ", suggest: " << URMA_ELAPSED_THREAD_SCHED_SUGGEST;
@@ -2184,7 +2184,7 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
         auto pollElapsedUs = timer.ElapsedMicroSecond();
         pollLastStartUs_ = pollStartUs;
         pollLastEndUs_ = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
-        LOG_IF(INFO, pollElapsedUs > URMA_LOG_LIMIT_US)
+        LOG_IF(INFO, pollElapsedUs > logThresholdUs)
             << "[URMA_ELAPSED_POLL_JFC]: urma_poll_jfc cost " << pollElapsedUs << "us, cpuid: " << sched_getcpu()
             << ", suggest: " << URMA_ELAPSED_POLL_JFC_SUGGEST;
         if (cnt == 0) {
@@ -2204,7 +2204,7 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
             // observed by a later invocation still reports the latest sleep.
             pollTrace.sleepStartUs = sleepTimer.GetStartTimeStampUs();
             pollTrace.sleepEndUs = sleepTimer.GetEndTimeStampUs();
-            LOG_IF(INFO, sleepElapsedUs > URMA_LOG_LIMIT_US)
+            LOG_IF(INFO, sleepElapsedUs > logThresholdUs)
                 << "[URMA_ELAPSED_THREAD_SHED]: urma_poll_jfc thread wake up after nanosleep(1us) cost "
                 << sleepElapsedUs << "us, cpuid: " << sched_getcpu()
                 << ", suggest: " << URMA_ELAPSED_THREAD_SCHED_SUGGEST;
