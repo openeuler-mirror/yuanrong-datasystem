@@ -19,7 +19,13 @@
  */
 #include "datasystem/common/flags/dynamic_config_updater.h"
 
+#include <limits>
+
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/flags/flag_manager.h"
+#include "datasystem/common/util/raii.h"
+#include "datasystem/utils/kv_client_config.h"
 #include "datasystem/common/flags/config_monitor_state.h"
 
 #include "gtest/gtest.h"
@@ -48,6 +54,55 @@ protected:
         FLAGS_v = 0;
     }
 };
+
+TEST(UrmaLogThresholdConfigTest, StartupFlagDefaultsTo500AndRejectsInvalidValues)
+{
+    LinkCommonFlagsValidators();
+    const uint32_t original = FLAGS_urma_log_threshold_us;
+    Raii restore([original] {
+        std::string ignored;
+        SetCommandLineOption("urma_log_threshold_us", std::to_string(original), ignored);
+    });
+    EXPECT_EQ(FLAGS_urma_log_threshold_us, 500u);
+    EXPECT_EQ(GetUrmaLogThresholdUs(), 500u);
+    std::string error;
+    for (uint32_t value : { 1u, 250u, 500u, 1000u, std::numeric_limits<uint32_t>::max() }) {
+        ASSERT_TRUE(SetCommandLineOption("urma_log_threshold_us", std::to_string(value), error)) << error;
+        EXPECT_EQ(FLAGS_urma_log_threshold_us, value);
+        EXPECT_EQ(GetUrmaLogThresholdUs(), value);
+    }
+    for (const std::string &value : { "0", "-1", "4294967296", "1.5", "bad" }) {
+        EXPECT_FALSE(SetCommandLineOption("urma_log_threshold_us", value, error)) << value;
+        EXPECT_EQ(FLAGS_urma_log_threshold_us, std::numeric_limits<uint32_t>::max());
+        EXPECT_EQ(GetUrmaLogThresholdUs(), std::numeric_limits<uint32_t>::max());
+    }
+}
+
+TEST(UrmaLogThresholdConfigTest, BuilderKeepsMissingFieldUnspecifiedAndPreservesConfigOnFailure)
+{
+    KVClientConfig config;
+    ASSERT_TRUE(KVClientConfig::Builder().Build(config).IsOk());
+    EXPECT_EQ(config.GetArgs().count("urma_log_threshold_us"), 0u);
+    for (uint32_t value : { 1u, 250u, 500u, 1000u, std::numeric_limits<uint32_t>::max() }) {
+        ASSERT_TRUE(KVClientConfig::Builder().UrmaLogThresholdUs(value).Build(config).IsOk());
+        EXPECT_EQ(config.GetArgs().at("urma_log_threshold_us"), std::to_string(value));
+    }
+    const auto status = KVClientConfig::Builder().UrmaLogThresholdUs(0).Build(config);
+    EXPECT_EQ(status.GetCode(), K_INVALID);
+    EXPECT_THAT(status.GetMsg(), testing::HasSubstr("UrmaLogThresholdUs"));
+    EXPECT_EQ(config.GetArgs().at("urma_log_threshold_us"), "4294967295");
+}
+
+TEST_F(DynamicConfigUpdaterTest, UrmaLogThresholdRejectsApiAndFileRuntimeUpdates)
+{
+    const uint32_t original = FLAGS_urma_log_threshold_us;
+    EXPECT_FALSE(FlagManager::GetInstance()->IsModifiableFlag("urma_log_threshold_us"));
+    DynamicConfigUpdater updater(flagConfig_);
+    EXPECT_EQ(updater.ApplyJson(R"({"urma_log_threshold_us":"1000"})").GetCode(), K_INVALID);
+    EXPECT_EQ(FLAGS_urma_log_threshold_us, original);
+    EXPECT_FALSE(flagConfig_.ValidateFlagName("urma_log_threshold_us"));
+    EXPECT_EQ(FLAGS_urma_log_threshold_us, original);
+}
 
 TEST_F(DynamicConfigUpdaterTest, ApplyValidJson)
 {

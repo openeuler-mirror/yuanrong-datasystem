@@ -258,6 +258,7 @@ spec:
         - -pipeline_h2d_thread_num={{ $.Values.global.performance.pipelineH2dThreadNum }}
         - -shared_memory_distribution_policy={{ $.Values.global.performance.sharedMemoryDistributionPolicy }}
         - -urma_poll_size={{ $.Values.global.performance.urmaPollSize }}
+        - -urma_log_threshold_us={{ $.Values.global.performance.urmaLogThresholdUs | int64 }}
         - -urma_max_write_size_mb={{ $.Values.global.performance.urmaMaxWriteSizeMb }}
         - -urma_register_whole_arena={{ $.Values.global.performance.urmaRegisterWholeArena }}
         - -urma_connection_size={{ $.Values.global.performance.urmaConnectionSize }}

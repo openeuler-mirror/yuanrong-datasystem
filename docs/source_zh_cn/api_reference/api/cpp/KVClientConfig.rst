@@ -180,6 +180,25 @@ KVClientConfig
        默认值为 ``8``，实际生效值为该值与进程级 ``urma_send_jetty_lane_pool_size`` 的较小值。
        该配置由进程内首次 ``KVClient::Init`` 固化，不支持运行时热更新。
 
+    .. cpp:function:: Builder &UrmaLogThresholdUs(uint32_t thresholdUs)
+
+       设置 URMA 轮询模式（``urma_event_mode=false``）INFO 日志耗时阈值，涵盖轮询间隔、单次轮询和休眠耗时。
+       单位微秒，默认 ``500``，范围 ``[1, 4294967295]``；``0`` 使 ``Build`` 返回 ``StatusCode::K_INVALID``。
+       耗时超过阈值时触发，仍受日志级别控制，与 ``enable_urma_perf`` 独立。
+
+       进程内首次 ``KVClient::Init`` 时生效，所有客户端共享；后续不同值会记录冲突并忽略，
+       不因此使 ``Init`` 失败。空配置保留原值，不支持热更新或环境变量。
+
+       使用示例：
+
+       .. code-block:: cpp
+
+          datasystem::KVClientConfig config;
+          auto status = datasystem::KVClientConfig::Builder().UrmaLogThresholdUs(1000).Build(config);
+          if (status.IsOk()) {
+              status = client.Init(config);  // Must be the first KVClient Init in this process.
+          }
+
     .. cpp:function:: Status Build(KVClientConfig &config) const
 
        校验并构建 :cpp:class:`KVClientConfig`。
