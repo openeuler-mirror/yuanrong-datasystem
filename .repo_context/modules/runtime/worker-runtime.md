@@ -68,6 +68,27 @@
   - complete startup sequence inside `Worker::InitWorker()` after the early initialization path already inspected;
   - all interactions between `WorkerOCServer` and replica/data-migration components.
 
+## Object Metadata Admission
+
+- `max_object_metadata_size_mb` is a positive startup-only flag, default 1024 MiB.
+- `WorkerOCServer` owns a `MetadataMemoryLimiter`, injected into the Worker service and local OC metadata manager.
+  `MetadataManagerHolder` forwards it through a weak reference when creating the local metadata manager.
+  It estimates process-local usage as object table size * 800 + sharded master metadata size * 1200 bytes.
+  The master estimate includes TTL overhead regardless of whether TTL is configured; no separate TTL count is read.
+  No cross-node aggregation or allocator/RSS measurement is performed.
+- Counter callbacks capture weak owners. Registration and reads share a reader/writer lock; callbacks must not reenter the limiter.
+  Master reads 64 concurrent-map sizes; admission does not acquire TTL shard locks.
+- Worker checks Create/MultiCreate/Publish/MultiPublish after leaving-state validation. Master checks CreateMeta/CreateMultiMeta
+  after routing and before mutation. Strictly greater usage returns K_OUT_OF_MEMORY, including overwrites.
+- Reads, deletion, TTL cleanup, recovery and migration remain admitted. Counts are snapshots, with no batch/concurrency
+  reservations; this is an estimated admission threshold, not a hard anonymous-memory cap.
+- Configuration is wired through dscli, Helm and Deployment. Raising the limit and restarting rolls back admission behavior.
+- The standalone Bazel limiter test supplies its own flag definition through a target-local macro;
+  CMake ds_ut uses the production definition linked from datasystem_worker_static.
+- Validation: MetadataMemoryLimiterTest,
+  OCMetadataManagerTopologyTest.MetadataAdmissionRejectsSingleAndBatchBeforeMutation,
+  WorkerOcServiceImplTest.ObjectMetadataLimitRejectsWritesAndRecoversAfterDeletion.
+
 ## Build Artifacts
 
 - Verified from `src/datasystem/worker/CMakeLists.txt`:

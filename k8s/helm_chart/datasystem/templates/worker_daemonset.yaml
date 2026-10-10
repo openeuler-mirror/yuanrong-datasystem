@@ -110,6 +110,7 @@ spec:
         - -slow_log_rpc_slower_than=$(SLOW_LOG_RPC_SLOWER_THAN)
         - -logfile_mode=416
         - -shared_memory_size_mb=$(SHARE_MEMORY_SIZE)
+        - -max_object_metadata_size_mb={{ $.Values.global.resources.datasystemWorker.maxObjectMetadataSizeMb }}
         - -sc_local_cache_memory_size_mb={{ $.Values.global.resources.datasystemWorker.scLocalCacheMemorySizeMb }}
         - -sc_scan_thread_num={{ $.Values.global.rpc.scScanThreadNum }}
         - -sc_scan_num_buckets={{ $.Values.global.rpc.scScanNumBuckets }}

@@ -28,6 +28,7 @@
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #undef private
 
+DS_DECLARE_uint64(max_object_metadata_size_mb);
 DS_DECLARE_string(rocksdb_write_mode);
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 
@@ -802,6 +803,29 @@ TEST_F(OCMetadataManagerTopologyTest, EvictionRemoveMetaStillErasesNonPrimaryLoc
     EXPECT_EQ(accessor->second.meta.primary_address(), LOCAL_ADDRESS);
     EXPECT_EQ(accessor->second.locations.count(LOCAL_ADDRESS), 1U);
     EXPECT_EQ(accessor->second.locations.count(TARGET_ADDRESS), 0U);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, MetadataAdmissionRejectsSingleAndBatchBeforeMutation)
+{
+    const auto oldLimit = FLAGS_max_object_metadata_size_mb;
+    Raii restore([oldLimit] { FLAGS_max_object_metadata_size_mb = oldLimit; });
+    FLAGS_max_object_metadata_size_mb = 1;
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              true, HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    auto limiter = std::make_shared<MetadataMemoryLimiter>();
+    limiter->RegisterCounter(MetadataMemoryLimiter::Source::META, [] { return 2000; });
+    manager.SetMetadataMemoryLimiter(limiter);
+    CreateMetaReqPb request;
+    request.set_address(LOCAL_ADDRESS);
+    request.mutable_meta()->set_object_key("single");
+    CreateMetaRspPb response;
+    EXPECT_EQ(manager.CreateMeta(request, response).GetCode(), K_OUT_OF_MEMORY);
+    CreateMultiMetaReqPb batch;
+    batch.set_address(LOCAL_ADDRESS);
+    batch.add_metas()->set_object_key("batch");
+    CreateMultiMetaRspPb batchResponse;
+    EXPECT_EQ(manager.CreateMultiMeta(batch, batchResponse).GetCode(), K_OUT_OF_MEMORY);
+    EXPECT_EQ(manager.GetMetaTableSize(), 0u);
 }
 
 TEST_F(OCMetadataManagerTopologyTest, CreateMultiMetaRedirectsAbsentKeyDuringScaleOutWait)
