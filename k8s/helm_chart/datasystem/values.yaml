@@ -74,8 +74,6 @@ global:
       # Upper limit of the shared memory, the default unit for shared memory is MB.
       # To prevent being rendered as scientific notation by helm, numbers with more than 5 digits should be configured as strings.
       sharedMemory: 2048
-      # Estimated object metadata admission limit in MiB, must be positive.
-      maxObjectMetadataSizeMb: 1024
       # Upper limit of the stream cache local memory, the unit for shared memory is MB.
       scLocalCacheMemorySizeMb: 1024
       #Upper limit of the shared memory in percentage can be used by OC, must be within (0, 100]

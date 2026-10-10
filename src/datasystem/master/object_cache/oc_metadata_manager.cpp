@@ -227,11 +227,6 @@ Status OCMetadataManager::Init()
     RETURN_IF_NOT_OK(globalCacheDeleteManager_->Init());
     expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(masterAddress_, this);
     expiredObjectManager_->Init();
-    auto weak = weak_from_this();
-    metadataMemoryLimiter_->RegisterCounter(MetadataMemoryLimiter::Source::META, [weak] {
-        auto manager = weak.lock();
-        return manager ? manager->GetMetaTableSize() : 0;
-    });
     RETURN_IF_NOT_OK(LoadMeta(skipRecoveryFromEtcd));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(notifyWorkerManager_->RecoverCacheInvalidAndRemoveMeta(true),
                                      "Recover cache invalid for rocksdb failed.");
@@ -802,7 +797,6 @@ Status OCMetadataManager::CreateMultiMeta(const CreateMultiMetaReqPb &req, Creat
                               req.address());
     RETURN_IF_NOT_OK(FillObjectRedirectResponses(rsp, objectKeys, req.redirect()));
     RETURN_OK_IF_TRUE(rsp.meta_is_moving() || !rsp.info().empty());
-    RETURN_IF_NOT_OK(metadataMemoryLimiter_->CheckAdmission());
     return CreateMultiMetaNtx(req, rsp);
 }
 
@@ -1059,7 +1053,6 @@ Status OCMetadataManager::CreateMeta(const CreateMetaReqPb &request, CreateMetaR
                                          "CreateMeta: Cannot CreateMeta with empty objectKey or server address.");
     RETURN_IF_NOT_OK(FillObjectRedirectResponse(response, objectKey, redirect));
     RETURN_OK_IF_TRUE(redirect);
-    RETURN_IF_NOT_OK(metadataMemoryLimiter_->CheckAdmission());
     int64_t version = 0;
     bool firstOne = false;
     auto status = CreateMeta(request.meta(), request.address(), nestedObjectKeys, version, firstOne);

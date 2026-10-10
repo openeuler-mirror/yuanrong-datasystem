@@ -905,7 +905,6 @@ private:
     std::function<void()> scaleInShutdownRequester_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     HostPort masterAddr_;
-    std::shared_ptr<MetadataMemoryLimiter> metadataMemoryLimiter_ = std::make_shared<MetadataMemoryLimiter>();
     std::unique_ptr<datasystem::MetadataManagerHolder> metadataManagerHolder_{ nullptr };
     std::unique_ptr<datasystem::master::ResourceManager> resourceManager_{ nullptr };
     std::shared_ptr<master::RpcSessionManager> rpcSessionManager_{ nullptr };

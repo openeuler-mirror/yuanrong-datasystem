@@ -51,7 +51,6 @@ Status MetadataManagerHolder::Init(MetadataManagerHolderParam param)
     akSkManager_ = param.akSkManager;
     etcdStore_ = param.etcdStore;
     persistenceApi_ = param.persistenceApi;
-    metadataMemoryLimiter_ = param.metadataMemoryLimiter;
     masterAddress_ = param.masterAddress;
     placement_ = param.placement;
     membership_ = param.membership;
@@ -93,9 +92,6 @@ Status MetadataManagerHolder::CreateMetaManager(const std::string &workerId, Roc
             akSkManager_, objectRocksStore, etcdStore_, persistenceApi_, masterAddress_.ToString(), placement_,
             membership_, centralizedMetadata_, metadataAddress_, localAddress_, exitRequested_, workerId, isNewNode_);
         LOG(INFO) << "Start init OCMetadataManager for " << workerId;
-        if (auto limiter = metadataMemoryLimiter_.lock()) {
-            oc->SetMetadataMemoryLimiter(std::move(limiter));
-        }
         RETURN_IF_NOT_OK(oc->Init());
         ocElapsed = timer.ElapsedMilliSecond();
         oc->AssignLocalWorker(masterWorkerService_, workerWorkerService_, masterAddress_);

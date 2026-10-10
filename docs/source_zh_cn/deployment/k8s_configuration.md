@@ -135,7 +135,6 @@ global:
 | global.resources.datasystemWorker.requests.memory | string | `"3Gi"` | openYuanrong datasystem单个DaemonSet初始化时需要的内存量，该值的大小必须小于等于 `global.resources.datasystemWorker.limits.memory` |
 | global.resources.datasystemWorker.maxClientNum | int | `200` | openYuanrong datasystem单个DaemonSet最大可同时连接的客户端数 |
 | global.resources.datasystemWorker.sharedMemory | int | `2048` | openYuanrong datasystem单个DaemonSet可使用的共享内存资源大小（以MB为单位），该值的大小必须小于 `global.resources.datasystemWorker.requests.memory` |
-| global.resources.datasystemWorker.maxObjectMetadataSizeMb | int | `1024` | 对象元数据估算准入上限（MiB），必须为正整数。按本进程 Worker 对象数 × 800 + Master 元数据数 × 1200 字节估算，Master 权重已包含 TTL 开销。默认 1 GiB 在两类数量相同时对应约 536,870 个对象；严格超限时拒绝客户端写入及 Master 单条/批量元数据创建；读取及删除/释放保留。为请求入口估算限制，并发、批量和读取拉取副本可能超限。需重启生效。 |
 
 ### IPC/RPC相关配置
 

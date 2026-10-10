@@ -387,16 +387,3 @@ test_suite(
         "dyn_bitmap_test",
     ],
 )
-
-ds_cc_test(
-    name = "metadata_memory_limiter_test",
-    srcs = ["metadata_memory_limiter_test.cpp"],
-    linkstatic = True,
-    local_defines = ["METADATA_MEMORY_LIMITER_STANDALONE_TEST"],
-    deps = [
-        "//src/datasystem/common:common_constants",
-        "//src/datasystem/common/flags:ds_flags",
-        "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/util:common_util",
-    ],
-)

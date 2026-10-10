@@ -46,7 +46,6 @@ struct MetadataManagerHolderParam {
     std::shared_ptr<AkSkManager> akSkManager;
     EtcdStore *etcdStore;
     std::shared_ptr<PersistenceApi> persistenceApi;
-    std::shared_ptr<MetadataMemoryLimiter> metadataMemoryLimiter;
     HostPort masterAddress;
     const cluster::PlacementFacade *placement;
     const cluster::MembershipEndpointView *membership;
@@ -145,7 +144,6 @@ protected:
     std::shared_ptr<RocksStore> objectRocksStore_;
     std::shared_ptr<RocksStore> streamRocksStore_;
 
-    std::weak_ptr<MetadataMemoryLimiter> metadataMemoryLimiter_;
     SharedMutex mutex_;
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager_;
     std::shared_ptr<master::SCMetadataManager> scMetadataManager_;
