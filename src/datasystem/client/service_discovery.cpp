@@ -233,6 +233,7 @@ ServiceDiscovery::ServiceDiscovery(const ServiceDiscoveryOptions &opts)
       hostIdEnvName_(opts.hostIdEnvName),
       affinityPolicy_(opts.affinityPolicy)
 {
+    Logging::SetClientClusterName(clusterName_);
 }
 
 Status ServiceDiscovery::Init()
@@ -313,6 +314,7 @@ CoordinatorServiceDiscovery::CoordinatorServiceDiscovery(const CoordinatorServic
       affinityPolicy_(opts.affinityPolicy),
       coordinatorDiscovery_(opts.coordinatorDiscovery)
 {
+    Logging::SetClientClusterName(clusterName_);
     if (coordinatorDiscovery_ == nullptr && !opts.serviceAddress.empty()) {
         coordinatorDiscovery_ = std::make_shared<StaticCoordinatorDiscovery>(opts.serviceAddress);
     }
