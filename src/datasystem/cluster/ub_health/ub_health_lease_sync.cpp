@@ -7,6 +7,7 @@
 
 #include <utility>
 
+#include "datasystem/common/constants.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
@@ -155,7 +156,11 @@ void UbHealthLeaseSync::Run()
 {
     while (!stopping_.load(std::memory_order_acquire)) {
         auto traceGuard = Trace::Instance().SetTraceNewID(Trace::GenerateComponentTraceId("UbHealthLeaseSync"));
-        LOG_IF_ERROR(SyncOnce(), "Refresh UB health lease snapshot failed");
+        auto rc = SyncOnce();
+        if (rc.IsError()) {
+            LOG_EVERY_T(ERROR, LOG_TIME_LIMIT_LEVEL3)
+                << "Refresh UB health lease snapshot failed. Detail: " << rc.ToString();
+        }
         std::unique_lock<std::mutex> lock(mutex_);
         cv_.wait_for(lock, interval_, [this] { return stopping_.load(std::memory_order_acquire); });
     }
