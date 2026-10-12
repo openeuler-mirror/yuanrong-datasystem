@@ -56,6 +56,8 @@ urma_status_t ds_urma_mock_register_log_func(urma_log_cb_t log_cb);
  */
 urma_status_t ds_urma_mock_unregister_log_func(void);
 
+bool ds_urma_mock_emit_log(int level, char *message);
+
 /**
  * @brief Get mock URMA devices.
  * @param[out] dev_num Number of devices returned.

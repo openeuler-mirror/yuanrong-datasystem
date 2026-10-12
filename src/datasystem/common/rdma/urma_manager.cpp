@@ -71,6 +71,9 @@
 
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 
+#define URMA_LOG_UNSAMPLED_FLAG 0x00010000
+#define URMA_LOG_LEVEL_MASK 0x0000ffff
+
 DS_DECLARE_uint32(urma_poll_size);
 DS_DECLARE_uint32(urma_connection_size);
 DS_DECLARE_bool(urma_event_mode);
@@ -712,10 +715,20 @@ Status UrmaManager::RegisterUrmaLog()
                    "partial. Original: " << message;
             return;
         }
+        bool unsampled = (level & URMA_LOG_UNSAMPLED_FLAG) != 0;
+        level &= URMA_LOG_LEVEL_MASK;
         if (level <= (int)URMA_VLOG_LEVEL_ERR) {
-            LOG_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N) << message;
+            if (unsampled) {
+                LOG_UNSAMPLED(ERROR) << message;
+            } else {
+                LOG_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N) << message;
+            }
         } else if (level <= (int)URMA_VLOG_LEVEL_NOTICE) {
-            LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N) << message;
+            if (unsampled) {
+                LOG_UNSAMPLED(WARNING) << message;
+            } else {
+                LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N) << message;
+            }
         } else if (level <= (int)URMA_VLOG_LEVEL_INFO) {
             VLOG(INFO) << message;
         } else if (level <= (int)URMA_VLOG_LEVEL_DEBUG) {

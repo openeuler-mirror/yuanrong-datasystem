@@ -388,6 +388,23 @@ cmake --build build --target ds_ut_urma_connection_inflight -j
 build/tests/ut/ds_ut_urma_connection_inflight
 ```
 
+- `urma_log_test` is a targeted CMake test for `BUILD_WITH_URMA_MOCK=ON`, also available as
+  `//tests/ut/common/rdma:urma_log_test` with Bazel's mock configuration. The shared test-support mock provider exercises
+  the real `ds_urma_*` dispatch and `RegisterUrmaLog` callback. Its single case verifies flagged ERROR/WARNING logs at
+  zero sample rates, count-throttle bypass, severity and trace correlation, ordinary-log rejection, and level-mask
+  handling. Run `cmake --build build --target urma_log_test -j`, then
+  `ctest --test-dir build -R '^UrmaLogTest[.]' --output-on-failure` with `DS_OPENSOURCE_DIR` set.
+  `urma_log_e2e` is a separate manual SDK driver: `urma_log_e2e <host> <writer-port> <reader-port> <sdk-log-dir>`.
+  With two externally started mock workers it performs three 1 MiB Set/remote Get/Delete cycles, verifies payloads,
+  and activates `UrmaMock.ProviderLog` so real provider send calls emit flagged and unflagged levels through the registered
+  callback. Request/diagnostic rates are zero; access retention remains full for transport evidence. Retain worker,
+  SDK, and driver logs. This driver is not registered as a default CTest case and needs no real URMA hardware.
+  Set `URMA_LOG_E2E_SAMPLE_RATE=0.1` and `URMA_LOG_E2E_REQUEST_COUNT=300` for a partial-sampling comparison: every
+  provider send emits `0x00010001/0x00010002` and ordinary ERROR/WARNING/INFO through the same callback. Flagged
+  ERROR/WARNING must survive for both admitted and rejected trace groups; ordinary and flagged INFO follow request
+  sampling, while ordinary ERROR/WARNING also retain their existing count throttle. Each send attempts 100 ordinary
+  ERROR/WARNING callbacks per level so the count throttle admits a candidate within every trace for sampling checks.
+
 - Manual URMA remote-Jetty reuse coverage:
   - `//tests/ut/client:urma_remote_jetty_reuse_test` is a Bazel `manual` target, deliberately separate from the
     header-only `urma_send_lane_test`.
