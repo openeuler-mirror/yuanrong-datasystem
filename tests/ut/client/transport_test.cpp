@@ -5594,7 +5594,7 @@ TEST(ObjectClientTransportTest, DrainingMetadataOwnerRetriesThroughSurvivorBefor
     }
 }
 
-TEST(ObjectClientTransportTest, NoAvailableWorkerRefreshesAndRetriesBatchRoute)
+TEST(ObjectClientTransportTest, NoAvailableWorkerFailsWithoutRetryOrRefresh)
 {
     ApiDeadlineGuard deadline(1000);
     const auto ownerAddress = MakeAddress(41);
@@ -5618,16 +5618,26 @@ TEST(ObjectClientTransportTest, NoAvailableWorkerRefreshesAndRetriesBatchRoute)
     options.port = 31501;
     auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
-    workerApi->clientId_ = "route-unavailable-retry-client";
+    workerApi->clientId_ = "route-unavailable-fail-fast-client";
     client->workerApi_.emplace_back(workerApi);
     client->transportLayer_ = std::move(transportLayer);
     auto routing = MakeSingleWorkerRouting(ownerAddress, { rejectOnce });
     std::atomic_store(&client->routing_, routing);
     const std::vector<std::string> objectKeys{ "route-a", "route-b" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
+    auto status = client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    EXPECT_EQ(status.GetCode(), K_NO_AVAILABLE_WORKER);
+    EXPECT_EQ(rejectOnce->Checks(), 1u);
+    EXPECT_EQ(routing->refresher_->forceRefreshDeadlineMs_.load(), 0);
+    EXPECT_TRUE(metadata->keyGroups.empty());
+    EXPECT_TRUE(replicas->batchKeys.empty());
+    EXPECT_TRUE(replicas->unaryKeys.empty());
+    EXPECT_EQ(buffers[0], nullptr);
+    EXPECT_EQ(buffers[1], nullptr);
+
     ASSERT_TRUE(client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false).IsOk());
-    EXPECT_GE(rejectOnce->Checks(), 3u);
-    EXPECT_GT(routing->refresher_->forceRefreshDeadlineMs_.load(), 0);
+    EXPECT_EQ(rejectOnce->Checks(), 3u);
+    EXPECT_EQ(routing->refresher_->forceRefreshDeadlineMs_.load(), 0);
     ASSERT_EQ(metadata->keyGroups.size(), 1u);
     EXPECT_EQ(metadata->keyGroups.front(), objectKeys);
     ASSERT_EQ(replicas->batchKeys.size(), 1u);

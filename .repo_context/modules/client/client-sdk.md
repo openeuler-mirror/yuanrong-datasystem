@@ -687,7 +687,7 @@ handler. Clearing the Router handler synchronously excludes later callback acces
   - direct-read metadata and replica retries share the caller's API deadline. The metadata phase queries the selected
     metadata-owner Worker first. Metadata-owner connection, dispatch-deadline, peer-dead, client-disconnect, and
     owner-unavailable failures report the failed endpoint and return a stale topology/location signal immediately
-    instead of retrying that fixed owner. The outer `ObjectClientImpl::GetFromTransportLayer` retry then forces the
+    instead of retrying that fixed owner. The outer `RoutedMode::GetFromTransportLayer` retry then forces the
     existing hash-ring refresher before it re-routes and re-queries metadata only for affected keys with deadline-bounded
     backoff. The data phase polls replicas from one fixed metadata location snapshot: stale-snapshot errors and
     draining errors try the remaining replicas first, and a data-replica `K_RPC_PEER_DEAD` is treated the same way. If
@@ -706,7 +706,10 @@ handler. Clearing the Router handler synchronously excludes later callback acces
     are coalesced by the refresher's atomic budget, and forced retries retain their 250 ms minimum interval instead of
     letting request traffic wake the refresh loop continuously. The transport round must still apply structured per-item
     results before deciding which keys are affected, so mixed batches do not turn object-level failures such as
-    `K_NOT_FOUND` into stale-location retries.
+    `K_NOT_FOUND` into stale-location retries. `K_NO_AVAILABLE_WORKER` is terminal for the affected keys in this Get:
+    it does not trigger refresh, backoff, or another transport round. A later independent Get can route again;
+    worker isolation and its expiry are unchanged. Covered by
+    `ObjectClientTransportTest.NoAvailableWorkerFailsWithoutRetryOrRefresh` in `tests/ut/client/transport_test.cpp`.
   - Python-facing behavior can differ from C++ because pybind wrappers convert statuses into exceptions and sometimes rename methods;
   - context propagation changes can affect tracing and multi-tenant behavior across all client operations.
   - `tools/perf/cpu_spike_capture.sh` is an operator-side event trigger for transient client CPU spikes. It samples
