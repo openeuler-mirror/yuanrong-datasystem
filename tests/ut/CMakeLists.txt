@@ -79,6 +79,7 @@ set(UT_COMMON_SRCS
 
 set(BIN_PATH_LIST LLT_BIN_PATH="${CMAKE_CURRENT_BINARY_DIR}")
 
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/rdma/urma_log_test[.]cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/device/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/binmock/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags/.*)
@@ -580,6 +581,29 @@ target_link_libraries(operation_logger_ut
         GTest::gtest
         GTest::gmock)
 add_datasystem_test(operation_logger_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+
+if (BUILD_WITH_URMA_MOCK)
+    add_executable(urma_log_test common/rdma/urma_log_test.cpp)
+    target_link_libraries(urma_log_test PRIVATE
+            ${DS_UT_HEAVY_LINK_START}
+            GTest::gtest_main
+            common_rdma
+            common_log
+            common_shared_memory
+            common_cuda_host_memory
+            common_util
+            common_rpc_zmq
+            rpc_stub_cache_mgr
+            common_urma_mock_obj
+            ${DS_UT_HEAVY_LINK_END})
+    add_datasystem_test(urma_log_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+
+    add_executable(urma_log_e2e ${PROJECT_DIR}/tests/kvtest/tests/cxx/urma_log_e2e.cpp)
+    target_link_libraries(urma_log_e2e PRIVATE
+            ${DS_UT_HEAVY_LINK_START}
+            datasystem_static common_urma_mock_obj common_inject common_log common_rpc_zmq
+            ${DS_UT_HEAVY_LINK_END})
+endif()
 
 add_executable(dynamic_config_updater_ut
         "${CMAKE_CURRENT_SOURCE_DIR}/common/flags/dynamic_config_updater_test.cpp"

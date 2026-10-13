@@ -19,8 +19,10 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
@@ -46,6 +48,7 @@
 #include "datasystem/common/urma_mock/urma_mock_backend.h"
 
 namespace {
+std::atomic<urma_log_cb_t> logCallback{ nullptr };
 constexpr int K_MOCK_DEVICE_TYPE = 1;
 constexpr uint32_t K_MOCK_EID_COUNT = 1;
 constexpr int K_MOCK_DEVICE_LIMIT = 1024;
@@ -117,13 +120,24 @@ urma_status_t ds_urma_mock_uninit(void)
 
 urma_status_t ds_urma_mock_register_log_func(urma_log_cb_t log_cb)
 {
-    (void)log_cb;
+    logCallback.store(log_cb);
     return URMA_SUCCESS;
 }
 
 urma_status_t ds_urma_mock_unregister_log_func(void)
 {
+    logCallback.store(nullptr);
     return URMA_SUCCESS;
+}
+
+bool ds_urma_mock_emit_log(int level, char *message)
+{
+    auto callback = logCallback.load();
+    if (callback == nullptr) {
+        return false;
+    }
+    callback(level, message);
+    return true;
 }
 
 // --- device (5) ---
@@ -886,6 +900,29 @@ urma_status_t ds_urma_mock_unimport_seg(urma_target_seg_t *seg)
 
 urma_status_t ds_urma_mock_post_jetty_send_wr(urma_jetty_t *jetty, urma_jfs_wr_t *wr, urma_jfs_wr_t **badWr)
 {
+    INJECT_POINT("UrmaMock.ProviderLog", []() -> urma_status_t {
+        char unsampledError[] = "URMA_LOG_E2E level=0x00010001 post_jetty_send_wr";
+        char unsampledWarning[] = "URMA_LOG_E2E level=0x00010002 post_jetty_send_wr";
+        char error[] = "URMA_LOG_E2E level=0x00000001 post_jetty_send_wr";
+        char warning[] = "URMA_LOG_E2E level=0x00000002 post_jetty_send_wr";
+        char info[] = "URMA_LOG_E2E level=0x00000004 post_jetty_send_wr";
+        char flaggedInfo[] = "URMA_LOG_E2E level=0x00010004 post_jetty_send_wr";
+        ds_urma_mock_emit_log(0x00010001, unsampledError);
+        ds_urma_mock_emit_log(0x00010002, unsampledWarning);
+        constexpr int kOrdinaryLogAttempts = 100;
+        for (int i = 0; i < kOrdinaryLogAttempts; ++i) {
+            ds_urma_mock_emit_log(URMA_VLOG_LEVEL_ERR, error);
+            ds_urma_mock_emit_log(URMA_VLOG_LEVEL_WARNING, warning);
+        }
+        ds_urma_mock_emit_log(URMA_VLOG_LEVEL_INFO, info);
+        ds_urma_mock_emit_log(0x00010004, flaggedInfo);
+        const auto &trace = datasystem::Trace::Instance();
+        bool admitted = false;
+        const bool decisionValid = trace.GetRequestSampleDecision(admitted);
+        std::printf("URMA_LOG_E2E_PROVIDER request=%d trace=%s admitted=%d decision_valid=%d\n",
+                    trace.IsRequestLogTrace(), trace.GetTraceIDPtr(), admitted, decisionValid);
+        return URMA_SUCCESS;
+    });
     auto &backend = datasystem::urma_mock::MockUrmaBackend::Instance();
     auto &tables = datasystem::urma_mock::Tables();
     std::shared_ptr<datasystem::urma_mock::MockJetty> fjetty;

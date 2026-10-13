@@ -4,6 +4,23 @@ load("//bazel:build_defs.bzl", "ds_cc_test")
 
 package(default_visibility = ["//visibility:public"])
 
+ds_cc_test(
+    name = "urma_log_test",
+    srcs = ["urma_log_test.cpp"],
+    defines = ["USE_URMA", "USE_URMA_MOCK"],
+    target_compatible_with = select({
+        "//:enable_urma_mock": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rdma:urma_manager",
+        "//src/datasystem/common/urma_mock:urma_abi_compat",
+        "//src/datasystem/common/util:file_util",
+        "//tests/support/datasystem/common/urma_mock:urma_mock_backend",
+    ],
+)
+
 URMA_COMPATIBLE_WITH = select({
     "//:enable_urma": [],
     "//:enable_urma_mock": [],

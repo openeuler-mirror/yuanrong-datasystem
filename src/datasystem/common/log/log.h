@@ -224,6 +224,9 @@ inline bool LogFirstAndEveryTShouldEmit(double seconds, std::atomic<bool> &first
 
 // Basic Logging Macros
 #define LOG(severity) LOG_IF(severity, true)
+#define LOG_UNSAMPLED(severity)                                           \
+    if (datasystem::IsLogSeverityEnabled(DS_LOGS_LEVEL_##severity))        \
+    LOG_IMPL(severity)
 #define SLOW_LOG(severity) SLOW_LOG_IF(severity, true)
 
 #define LOG_FIRST_N(severity, n)                   \
