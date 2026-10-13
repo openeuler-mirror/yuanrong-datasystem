@@ -31,6 +31,7 @@
 #include <limits>
 #include <ostream>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <sys/mman.h>
@@ -76,7 +77,6 @@ DS_DECLARE_uint32(urma_connection_size);
 DS_DECLARE_bool(urma_event_mode);
 DS_DECLARE_uint32(urma_perf_interval_ms);
 DS_DECLARE_bool(enable_urma_perf);
-
 namespace datasystem {
 constexpr int FAILURE_LOG_RATE = 100;
 namespace {
@@ -96,6 +96,10 @@ constexpr size_t URMA_CHIP_INFLIGHT_LOG_BUFFER_SIZE = 320;
 constexpr uint8_t URMA_AFFINITY_SRC_CHIP_MIN = 1;
 constexpr uint8_t URMA_AFFINITY_SRC_CHIP_COUNT = 2;
 constexpr uint8_t URMA_AFFINITY_SRC_CHIP_MAX = URMA_AFFINITY_SRC_CHIP_MIN + URMA_AFFINITY_SRC_CHIP_COUNT - 1;
+// Routed data-plane clients carry no client entity id, so no loss notification reclaims their target
+// jetties; sweep them once idle well beyond any live routing pattern.
+constexpr uint64_t MS_PER_SECOND = 1000;
+constexpr uint32_t ORPHAN_SWEEP_LOCK_WAIT_MS = 100;
 
 int64_t GetTraceOffsetUs(uint64_t timestampUs, uint64_t postUs)
 {
@@ -240,6 +244,7 @@ UrmaManager::~UrmaManager()
     {
         std::lock_guard<std::mutex> lock(clientIdMutex_);
         clientIdMapping_.clear();
+        clientConnectionOwners_.clear();
     }
     localSegmentMap_.reset();
     ClearRetainedTimeoutEvents();
@@ -290,7 +295,15 @@ Status UrmaManager::Stop()
         urmaResource_->BeginShutdown();
         urmaResource_->WaitForPostPermitsDrained();
     }
-    serverStop_ = true;
+    {
+        std::lock_guard<std::mutex> lock(orphanSweepMutex_);
+        serverStop_ = true;
+    }
+    orphanSweepCv_.notify_all();
+    if (orphanSweepThread_ && orphanSweepThread_->joinable()) {
+        orphanSweepThread_->join();
+        orphanSweepThread_.reset();
+    }
     if (perfThread_ && perfThread_->joinable()) {
         LOG(INFO) << "Waiting for Perf thread to exit";
         perfThread_->join();
@@ -304,6 +317,28 @@ Status UrmaManager::Stop()
     aeHandler_.Stop();
     ClearRetainedTimeoutEvents();
     return Status::OK();
+}
+
+void UrmaManager::StartOrphanSweepThread()
+{
+    if (!clientMode_.load(std::memory_order_acquire)) {
+        orphanSweepThread_ = std::make_unique<std::thread>(&UrmaManager::OrphanSweepThreadMain, this);
+    }
+}
+
+void UrmaManager::OrphanSweepThreadMain()
+{
+    std::unique_lock<std::mutex> lock(orphanSweepMutex_);
+    while (!serverStop_.load(std::memory_order_acquire)) {
+        const auto interval = std::chrono::seconds(std::max<uint32_t>(1, FLAGS_urma_orphan_sweep_interval_s));
+        INJECT_POINT_NO_RETURN("UrmaManager.OrphanSweepBeforeWait");
+        if (orphanSweepCv_.wait_for(lock, interval, [this] { return serverStop_.load(std::memory_order_acquire); })) {
+            break;
+        }
+        lock.unlock();
+        SweepOrphanClientConnections(static_cast<uint64_t>(GetSteadyClockTimeStampMs()), true);
+        lock.lock();
+    }
 }
 
 Status UrmaManager::GetUrmaDeviceName(std::vector<std::string> &candidates, int &eidIndex)
@@ -395,6 +430,7 @@ Status UrmaManager::Init(const HostPort &hostport)
         clientId_ = GetStringUuid();
         RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(MAX_STUB_CACHE_NUM, hostport));
     }
+    StartOrphanSweepThread();
     perfThread_ = std::make_unique<std::thread>(&UrmaManager::PerfThreadMain, this);
     needRollback = false;
     return Status::OK();
@@ -1937,6 +1973,7 @@ Status UrmaManager::AcquireSendLaneFromConnection(const std::shared_ptr<UrmaConn
                                                   std::shared_ptr<UrmaJetty> &jetty, urma_target_jetty_t *&targetJetty)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(connection != nullptr, K_RUNTIME_ERROR, "Urma connection is null");
+    connection->lastActiveMs_.store(static_cast<uint64_t>(GetSteadyClockTimeStampMs()), std::memory_order_relaxed);
     // Bound the per-peer wait by the remaining API deadline so stuck Jettys cannot block callers indefinitely.
     const int64_t remainingUs = ApiDeadline::Instance().ApiRemainingUs();
     RETURN_IF_NOT_OK(connection->AcquireInflightSlot(remainingUs));
@@ -2226,11 +2263,16 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
 
 Status UrmaManager::ImportRemoteJetty(const UrmaJfrInfo &jfrInfo, uint32_t &localJettyId)
 {
+    std::shared_lock<std::shared_timed_mutex> lock(remoteMapMutex_);
+    return ImportRemoteJettyLocked(jfrInfo, localJettyId);
+}
+
+Status UrmaManager::ImportRemoteJettyLocked(const UrmaJfrInfo &jfrInfo, uint32_t &localJettyId)
+{
     LOG(INFO) << "Begin to import remote jfr.";
     PerfPoint point(PerfKey::URMA_SETUP_CONNECTION);
     const std::string remoteConnectionId =
         jfrInfo.clientId.empty() ? jfrInfo.localAddress.ToString() : jfrInfo.clientId;
-    std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
     // Insert or update the connection (in case the sending worker restarts)
     std::shared_ptr<UrmaConnection> previous;
     TbbUrmaConnectionMap::accessor accessor;
@@ -2277,10 +2319,15 @@ Status UrmaManager::ImportRemoteJetty(const UrmaJfrInfo &jfrInfo, uint32_t &loca
 
 Status UrmaManager::ImportRemoteInfo(const UrmaHandshakeReqPb &req)
 {
+    std::shared_lock<std::shared_timed_mutex> lock(remoteMapMutex_);
+    return ImportRemoteInfoLocked(req);
+}
+
+Status UrmaManager::ImportRemoteInfoLocked(const UrmaHandshakeReqPb &req)
+{
     PerfPoint point(PerfKey::URMA_SETUP_CONNECTION);
     const HostPort requestAddress(req.address().host(), req.address().port());
     const std::string remoteConnectionId = req.client_id().empty() ? requestAddress.ToString() : req.client_id();
-    std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
     TbbUrmaConnectionMap::accessor accessor;
     // The comm layer has already exchanged the jfr, and we should be able to locate the entry.
     auto res = urmaConnectionMap_.find(accessor, remoteConnectionId);
@@ -2747,6 +2794,7 @@ Status UrmaManager::AcquireSendLane(const UrmaRemoteAddrPb &urmaInfo, std::share
                                          FormatString("Failed to find jfr from %s", remoteConnectionId));
     auto connection = constAccessor->second;
     constAccessor.release();
+    l.unlock();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(connection != nullptr, K_RUNTIME_ERROR, "Urma connection is null");
     std::shared_ptr<UrmaJetty> jetty;
     urma_target_jetty_t *targetJetty = nullptr;
@@ -2831,6 +2879,7 @@ Status UrmaManager::UrmaWritePayloadImpl(const UrmaRemoteAddrPb &urmaInfo, const
                      requestAddress.Empty() ? "unknown" : remoteAddress, urmaInfo.client_id()));
     connection = constAccessor->second;
     constAccessor.release();
+    l.unlock();
     if (externalLaneLease != nullptr && externalLaneLease->GetJetty() != nullptr) {
         connection = externalLaneLease->GetConnection();
     }
@@ -3003,6 +3052,7 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
                                          FormatString("Failed to find jfr from %s", remoteConnectionId));
     auto connection = constAccessor->second;
     constAccessor.release();
+    l.unlock();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(connection != nullptr, K_RUNTIME_ERROR, "Urma connection is null");
     UrmaRemoteSegmentMap::const_accessor remoteSegAccessor;
     RETURN_IF_NOT_OK(connection->GetRemoteSeg(segVa, remoteSegAccessor));
@@ -3116,12 +3166,13 @@ Status UrmaManager::InitGatherWriteContext(const RemoteSegInfo &remoteInfo, size
     constexpr size_t wrSgeMaxNum = 13;
     const HostPort requestAddress(remoteInfo.host, remoteInfo.port);
     context.remoteAddress = requestAddress.ToString();
-    context.remoteMapLock = std::shared_lock<std::shared_timed_mutex>(remoteMapMutex_);
+    std::shared_lock<std::shared_timed_mutex> lock(remoteMapMutex_);
     const bool found = urmaConnectionMap_.find(context.connectionAccessor, context.remoteAddress);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         found, K_RUNTIME_ERROR, FormatString("Failed to find jfr from %s", context.remoteAddress));
     context.connection = context.connectionAccessor->second;
     context.connectionAccessor.release();
+    lock.unlock();
     if (externalLaneLease != nullptr && externalLaneLease->GetJetty() != nullptr) {
         context.connection = externalLaneLease->GetConnection();
     }
@@ -3447,6 +3498,7 @@ void UrmaManager::ReleaseClientConnection(const std::string &address,
             << "Skip releasing URMA client connection with an empty owner, remoteAddress: " << address;
         return;
     }
+    std::shared_lock<std::shared_timed_mutex> lock(remoteMapMutex_);
     TbbUrmaConnectionMap::accessor accessor;
     if (!urmaConnectionMap_.find(accessor, address)) {
         LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
@@ -3469,22 +3521,85 @@ void UrmaManager::ReleaseClientConnection(const std::string &address,
     // In-flight lane leases can still own this generation and its imported resources.
 }
 
+void UrmaManager::SweepOrphanClientConnections(uint64_t nowMs, bool stopAware)
+{
+    const auto ttl = FLAGS_urma_orphan_conn_ttl_s;
+    const auto batch = FLAGS_urma_orphan_sweep_batch;
+    if (ttl == 0 || batch == 0) {
+        return;
+    }
+    std::vector<RemovedOrphanConnection> removed;
+    removed.reserve(batch);
+    {
+        std::unique_lock<std::shared_timed_mutex> lock(remoteMapMutex_, std::defer_lock);
+        if (stopAware) {
+            while (!serverStop_.load(std::memory_order_acquire)
+                   && !lock.try_lock_for(std::chrono::milliseconds(ORPHAN_SWEEP_LOCK_WAIT_MS))) {
+                INJECT_POINT_NO_RETURN("UrmaManager.OrphanSweepWaitingForMap");
+            }
+            if (serverStop_.load(std::memory_order_acquire)) {
+                return;
+            }
+        } else {
+            lock.lock();
+        }
+        CollectExpiredOrphanConnections(nowMs, ttl, batch, removed);
+    }
+    for (const auto &entry : removed) {
+        LOG(INFO) << "[URMA_CONNECTION_SWEEP] Remove idle orphan client connection, key=" << entry.key
+                  << ", remoteInstanceId=" << entry.connection->GetUrmaJfrInfo().uniqueInstanceId
+                  << ", mapSize=" << entry.mapSize;
+    }
+}
+
+void UrmaManager::CollectExpiredOrphanConnections(uint64_t nowMs, uint32_t ttl, uint32_t batch,
+                                                  std::vector<RemovedOrphanConnection> &removed)
+{
+    const auto expired = [nowMs, ttl](const std::shared_ptr<UrmaConnection> &connection) {
+        const auto lastActiveMs = connection->lastActiveMs_.load(std::memory_order_relaxed);
+        return nowMs > lastActiveMs
+               && nowMs - lastActiveMs > static_cast<uint64_t>(ttl) * MS_PER_SECOND
+               && connection->Inflight() == 0;
+    };
+    std::unordered_set<std::string> ownedKeys;
+    {
+        std::lock_guard<std::mutex> clientLock(clientIdMutex_);
+        ownedKeys.reserve(clientConnectionOwners_.size());
+        for (const auto &entry : clientConnectionOwners_) {
+            ownedKeys.insert(entry.first);
+        }
+    }
+    std::vector<std::string> candidates;
+    candidates.reserve(batch);
+    for (const auto &entry : urmaConnectionMap_) {
+        const auto &connection = entry.second;
+        if (candidates.size() < batch && connection != nullptr && !connection->GetUrmaJfrInfo().clientId.empty()
+            && ownedKeys.count(entry.first) == 0 && expired(connection)) {
+            candidates.emplace_back(entry.first);
+        }
+    }
+    for (const auto &key : candidates) {
+        TbbUrmaConnectionMap::accessor accessor;
+        if (!urmaConnectionMap_.find(accessor, key) || accessor->second == nullptr || !expired(accessor->second)) {
+            continue;
+        }
+        removed.push_back({key, accessor->second, urmaConnectionMap_.size()});
+        urmaConnectionMap_.erase(accessor);
+    }
+}
+
 Status UrmaManager::RemoveRemoteResources(const std::string &connectionKey)
 {
-    bool removed = false;
-
-    std::shared_lock<std::shared_timed_mutex> lock(remoteMapMutex_);
     std::shared_ptr<UrmaConnection> removedConnection;
-    TbbUrmaConnectionMap::accessor connectionAccessor;
-    if (urmaConnectionMap_.find(connectionAccessor, connectionKey)) {
-        LOG(INFO) << "Remove UrmaConnection for " << connectionKey;
-        removedConnection = connectionAccessor->second;
-        urmaConnectionMap_.erase(connectionAccessor);
-        removed = true;
-        INJECT_POINT("UrmaManager.RemoveRemoteResources");
-    }
+    std::shared_lock<std::shared_timed_mutex> lock(remoteMapMutex_);
+    return RemoveRemoteResourcesLocked(connectionKey, removedConnection);
+}
 
-    if (!removed) {
+Status UrmaManager::RemoveRemoteResourcesLocked(const std::string &connectionKey,
+                                                std::shared_ptr<UrmaConnection> &removedConnection)
+{
+    TbbUrmaConnectionMap::accessor connectionAccessor;
+    if (!urmaConnectionMap_.find(connectionAccessor, connectionKey)) {
         const auto msg = FormatString(
             "Skip removing URMA resources, connection key %s not found; may be already "
             "cleaned up or not established",
@@ -3492,6 +3607,10 @@ Status UrmaManager::RemoveRemoteResources(const std::string &connectionKey)
         LOG(INFO) << msg;
         RETURN_STATUS(K_NOT_FOUND, msg);
     }
+    LOG(INFO) << "Remove UrmaConnection for " << connectionKey;
+    removedConnection = connectionAccessor->second;
+    urmaConnectionMap_.erase(connectionAccessor);
+    INJECT_POINT("UrmaManager.RemoveRemoteResources");
     return Status::OK();
 }
 
@@ -3579,12 +3698,13 @@ Status UrmaManager::ProcessHandshakePeer(const UrmaHandshakeReqPb &req, UrmaHand
     RETURN_IF_NOT_OK(urmaInfo.FromProto(req));
     LOG(INFO) << "Start import remote jetty, remote urma info: " << urmaInfo.ToString()
               << ", local address:" << localUrmaInfo_.localAddress;
+    std::shared_lock<std::shared_timed_mutex> lock(remoteMapMutex_);
     if (localUrmaInfo_.localAddress != urmaInfo.localAddress || !req.client_id().empty()
         || clientMode_.load(std::memory_order_acquire)) {
         uint32_t localJettyId = 0;
         METRIC_TIMER(metrics::KvMetricId::URMA_CONNECTION_SETUP_LATENCY);
-        RETURN_IF_NOT_OK(ImportRemoteJetty(urmaInfo, localJettyId));
-        RETURN_IF_NOT_OK(ImportRemoteInfo(req));
+        RETURN_IF_NOT_OK(ImportRemoteJettyLocked(urmaInfo, localJettyId));
+        RETURN_IF_NOT_OK(ImportRemoteInfoLocked(req));
         if (rsp != nullptr) {
             auto localInfo = localUrmaInfo_;
             localInfo.jfrId = localJettyId;
@@ -3607,9 +3727,11 @@ Status UrmaManager::ProcessHandshakePeer(const UrmaHandshakeReqPb &req, UrmaHand
             RETURN_IF_NOT_OK(GetSegmentInfo(*rsp));
         }
     }
-    if (!req.client_id().empty()) {
-        std::lock_guard<std::mutex> lock(clientIdMutex_);
-        clientIdMapping_[ClientKey::Intern(req.client_entity_id())] = req.client_id();
+    INJECT_POINT_NO_RETURN("UrmaManager.HandshakeBeforeClientMapping");
+    RegisterClientMapping(req.client_entity_id(), req.client_id());
+    if (!req.client_id().empty() && req.client_entity_id().empty()) {
+        LOG(INFO) << "[URMA_CONNECTION_HANDSHAKE] Routed data-plane client handshake succeeded, key="
+                  << req.client_id() << ", remoteInstanceId=" << urmaInfo.uniqueInstanceId;
     }
     return Status::OK();
 }
@@ -3701,11 +3823,31 @@ void UrmaManager::SetClientUbNumaConfig(bool affinityEnabled, uint32_t rrType, u
     }
 }
 
+void UrmaManager::RegisterClientMapping(const std::string &entityId, const std::string &connectionKey)
+{
+    if (entityId.empty() || connectionKey.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(clientIdMutex_);
+    auto &previous = clientIdMapping_[ClientKey::Intern(entityId)];
+    if (previous == connectionKey) {
+        return;
+    }
+    if (!previous.empty() && --clientConnectionOwners_.at(previous) == 0) {
+        clientConnectionOwners_.erase(previous);
+    }
+    previous = connectionKey;
+    ++clientConnectionOwners_[connectionKey];
+}
+
 Status UrmaManager::RemoveRemoteClient(ClientKey clientEntityId)
 {
+    std::shared_ptr<UrmaConnection> removedConnection;
     std::string remoteConnectionId;
+    std::unique_lock<std::shared_timed_mutex> mapLock(remoteMapMutex_);
+    INJECT_POINT_NO_RETURN("UrmaManager.RemoveClientMapLocked");
     {
-        std::lock_guard<std::mutex> lock(clientIdMutex_);
+        std::lock_guard<std::mutex> clientLock(clientIdMutex_);
         auto it = clientIdMapping_.find(clientEntityId);
         if (it == clientIdMapping_.end()) {
             RETURN_STATUS(K_NOT_FOUND, FormatString("Cannot find remote connection for client entity id: %s",
@@ -3713,9 +3855,14 @@ Status UrmaManager::RemoveRemoteClient(ClientKey clientEntityId)
         }
         remoteConnectionId = it->second;
         clientIdMapping_.erase(it);
+        if (--clientConnectionOwners_.at(remoteConnectionId) != 0) {
+            return Status::OK();
+        }
+        clientConnectionOwners_.erase(remoteConnectionId);
     }
     LOG(INFO) << "Remove URMA resources for client " << clientEntityId << ", connection key " << remoteConnectionId;
-    return RemoveRemoteResources(remoteConnectionId);
+    RETURN_IF_NOT_OK(RemoveRemoteResourcesLocked(remoteConnectionId, removedConnection));
+    return Status::OK();
 }
 
 bool UrmaManager::HasRemoteClient(ClientKey clientEntityId)

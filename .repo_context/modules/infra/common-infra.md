@@ -84,6 +84,18 @@ Detailed follow-up docs now exist for:
 - `modules/infra/metrics/exporters-and-buffering.md`
 - `modules/infra/metrics/metric-families-and-registration.md`
 
+## URMA Orphan Client Cleanup
+
+- Workers run a dedicated sweep thread; each tick scans the complete map and removes at most
+  `urma_orphan_sweep_batch` idle, unmapped client connections. TTL zero disables removal.
+- Sweep holds `remoteMapMutex_` exclusively. Handshake registration and formal removal use map-then-client lock order;
+  empty entity IDs have no owner, and the last formal owner removes the connection.
+- Removed connections remain referenced until map locks are released, so provider cleanup is outside those locks.
+  Send paths copy a connection reference and then release the map lock.
+- Shutdown wakes and joins the sweep thread. Batch limits removals, not scan time; a full scan can delay map users.
+- Source: `src/datasystem/common/rdma/urma_manager.{h,cpp}`; regression source:
+  `tests/ut/common/rdma/urma_orphan_sweep_test.cpp`.
+
 ## Storage And Metadata Backends
 
 - Verified:
