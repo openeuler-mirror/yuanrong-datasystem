@@ -110,33 +110,32 @@ private:
     std::shared_ptr<LoggerProvider> loggerProvider_;
 };
 
-TEST_F(UrmaLogTest, FlaggedCallbacksBypassSamplingAndCountThrottle)
+TEST_F(UrmaLogTest, CallbacksBypassSamplingAndCountThrottle)
 {
     auto guard = Trace::Instance().SetRequestTraceUUID();
     const auto traceId = Trace::Instance().GetTraceID();
     const auto output = CaptureLogs([&] {
-        EmitLog(URMA_VLOG_LEVEL_ERR, "ordinary error rejected");
-        EmitLog(URMA_VLOG_LEVEL_WARNING, "ordinary warning rejected");
-        EmitLog(0, "zero level rejected");
-        EmitLog(0x00020001, "unrelated flag rejected");
         for (int i = 0; i < 3; ++i) {
-            EmitLog(0x00010001, "unsampled error " + std::to_string(i));
-            EmitLog(0x00010002, "unsampled warning " + std::to_string(i));
+            EmitLog(URMA_VLOG_LEVEL_ERR, "error " + std::to_string(i));
+            EmitLog(URMA_VLOG_LEVEL_WARNING, "warning " + std::to_string(i));
         }
-        EmitLog(0x00010003, "unsampled notice");
+        EmitLog(URMA_VLOG_LEVEL_NOTICE, "notice");
+        EmitLog(URMA_VLOG_LEVEL_INFO, "sampled info");
+        EmitLog(URMA_VLOG_LEVEL_DEBUG, "sampled debug");
+        EmitLog(URMA_VLOG_LEVEL_DEBUG + 1, "sampled other");
+        EmitLog(URMA_VLOG_LEVEL_ERR, "no available thread slot");
     });
-    EXPECT_EQ(output.find("ordinary error rejected"), std::string::npos);
-    EXPECT_EQ(output.find("ordinary warning rejected"), std::string::npos);
-    EXPECT_EQ(output.find("zero level rejected"), std::string::npos);
-    EXPECT_EQ(output.find("unrelated flag rejected"), std::string::npos);
     for (int i = 0; i < 3; ++i) {
-        EXPECT_NE(output.find("unsampled error " + std::to_string(i)), std::string::npos);
-        EXPECT_NE(output.find("unsampled warning " + std::to_string(i)), std::string::npos);
+        EXPECT_NE(output.find("error " + std::to_string(i)), std::string::npos);
+        EXPECT_NE(output.find("warning " + std::to_string(i)), std::string::npos);
     }
-    EXPECT_NE(output.find("unsampled notice"), std::string::npos);
+    EXPECT_NE(output.find("notice"), std::string::npos);
     EXPECT_NE(output.find(" | E | "), std::string::npos);
     EXPECT_NE(output.find(" | W | "), std::string::npos);
     EXPECT_NE(output.find(traceId), std::string::npos);
+    EXPECT_EQ(output.find("sampled "), std::string::npos);
+    EXPECT_EQ(output.find("no available thread slot"), std::string::npos);
+    EXPECT_EQ(Trace::Instance().GetTraceID(), traceId);
 }
 
 }  // namespace
