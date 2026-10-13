@@ -55,7 +55,7 @@ TransportReadRetryPolicy ClassifyTransportReadRetry(const Status &status)
     if (client::IsWorkerDrainingForScaleIn(status)) {
         return TransportReadRetryPolicy::DRAINING;
     }
-    if (client::IsTransportSnapshotStaleLocation(status) || status.GetCode() == K_NO_AVAILABLE_WORKER) {
+    if (client::IsTransportSnapshotStaleLocation(status)) {
         return TransportReadRetryPolicy::STALE;
     }
     return TransportReadRetryPolicy::NONE;
