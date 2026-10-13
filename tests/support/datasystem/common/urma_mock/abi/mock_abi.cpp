@@ -901,21 +901,12 @@ urma_status_t ds_urma_mock_unimport_seg(urma_target_seg_t *seg)
 urma_status_t ds_urma_mock_post_jetty_send_wr(urma_jetty_t *jetty, urma_jfs_wr_t *wr, urma_jfs_wr_t **badWr)
 {
     INJECT_POINT("UrmaMock.ProviderLog", []() -> urma_status_t {
-        char unsampledError[] = "URMA_LOG_E2E level=0x00010001 post_jetty_send_wr";
-        char unsampledWarning[] = "URMA_LOG_E2E level=0x00010002 post_jetty_send_wr";
         char error[] = "URMA_LOG_E2E level=0x00000001 post_jetty_send_wr";
         char warning[] = "URMA_LOG_E2E level=0x00000002 post_jetty_send_wr";
         char info[] = "URMA_LOG_E2E level=0x00000004 post_jetty_send_wr";
-        char flaggedInfo[] = "URMA_LOG_E2E level=0x00010004 post_jetty_send_wr";
-        ds_urma_mock_emit_log(0x00010001, unsampledError);
-        ds_urma_mock_emit_log(0x00010002, unsampledWarning);
-        constexpr int kOrdinaryLogAttempts = 100;
-        for (int i = 0; i < kOrdinaryLogAttempts; ++i) {
-            ds_urma_mock_emit_log(URMA_VLOG_LEVEL_ERR, error);
-            ds_urma_mock_emit_log(URMA_VLOG_LEVEL_WARNING, warning);
-        }
+        ds_urma_mock_emit_log(URMA_VLOG_LEVEL_ERR, error);
+        ds_urma_mock_emit_log(URMA_VLOG_LEVEL_WARNING, warning);
         ds_urma_mock_emit_log(URMA_VLOG_LEVEL_INFO, info);
-        ds_urma_mock_emit_log(0x00010004, flaggedInfo);
         const auto &trace = datasystem::Trace::Instance();
         bool admitted = false;
         const bool decisionValid = trace.GetRequestSampleDecision(admitted);
