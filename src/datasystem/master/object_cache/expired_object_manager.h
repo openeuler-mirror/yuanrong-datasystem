@@ -134,6 +134,22 @@ public:
     Status InsertObject(const std::string &objectKey, uint64_t version, uint32_t ttlSecond, bool acceptZero = false);
 
     /**
+     * @brief Remove the expiry task and report its absolute deadline.
+     * @param[in] objectKey The object key.
+     * @param[out] hadTask True if a task was registered and removed.
+     * @param[out] deadline The removed task's absolute expire time in us, valid when hadTask is true.
+     * @return K_TRY_AGAIN when an async ttl delete is in flight for the key.
+     */
+    Status RemoveObjectIfExistAndGetDeadline(const std::string &objectKey, bool &hadTask, uint64_t &deadline);
+
+    /**
+     * @brief Restore an expiry task at the given absolute deadline, only when no task is registered.
+     * @param[in] objectKey The object key.
+     * @param[in] deadline Absolute expire time in us previously captured by the caller.
+     */
+    void RestoreExpiryTaskIfAbsent(const std::string &objectKey, uint64_t deadline);
+
+    /**
      * @brief Locking and remove object that will be expired.
      * @param[in] objectKey The object key.
      */
