@@ -201,6 +201,30 @@ Status ExpiredObjectManager::RemoveObjectIfExist(const std::string &objectKey)
     return Status::OK();
 }
 
+Status ExpiredObjectManager::RemoveObjectIfExistAndGetDeadline(const std::string &objectKey, bool &hadTask,
+                                                               uint64_t &deadline)
+{
+    auto &shard = shards_[GetShardIndex(objectKey)];
+    std::lock_guard<std::mutex> lock(shard.mutex);
+    RETURN_IF_NOT_OK(CheckObjectInAsyncDelete(shard, objectKey, K_TRY_AGAIN));
+    auto iter = shard.obj2Timed.find(objectKey);
+    hadTask = iter != shard.obj2Timed.end();
+    if (hadTask) {
+        deadline = iter->second->first;
+    }
+    RemoveObjectIfExistUnlock(shard, objectKey);
+    return Status::OK();
+}
+
+void ExpiredObjectManager::RestoreExpiryTaskIfAbsent(const std::string &objectKey, const uint64_t deadline)
+{
+    auto &shard = shards_[GetShardIndex(objectKey)];
+    std::lock_guard<std::mutex> lock(shard.mutex);
+    if (shard.obj2Timed.find(objectKey) == shard.obj2Timed.end()) {
+        (void)InsertObjectUnlock(shard, objectKey, deadline, 0);
+    }
+}
+
 void ExpiredObjectManager::AddSucceedObject(const std::unordered_map<std::string, uint64_t> &objectKeys)
 {
     if (objectKeys.empty()) {

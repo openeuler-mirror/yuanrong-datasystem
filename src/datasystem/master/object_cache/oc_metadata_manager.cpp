@@ -557,6 +557,9 @@ Status OCMetadataManager::CreateMetaFirstTime(const ObjectMetaPb &newMeta, const
                                               TbbMetaTable::accessor &accessor, ObjectMeta &outMetaCache)
 {
     (void)nestedObjectKeys;
+    // Strip any stale expiry task before the first create commits; on a race with an in-flight
+    // async ttl delete the freshly inserted entry is erased and the create is rejected.
+    RETURN_IF_NOT_OK(StripExpiryTaskAfterChecks(newMeta.object_key(), accessor, true));
     RETURN_IF_NOT_OK(PersistCreatedMeta(newMeta, address, version, accessor, outMetaCache));
     return Status::OK();
 }
@@ -667,8 +670,6 @@ Status OCMetadataManager::CreatePendingMeta(const ObjectMetaPb &newMeta, const s
                                             bool &firstOne)
 {
     const std::string &objectKey = newMeta.object_key();
-    // Validate the input.
-    RETURN_IF_NOT_OK(expiredObjectManager_->RemoveObjectIfExist(objectKey));
 
     INJECT_POINT("master.create_meta_failure");
     VLOG(1) << FormatString("[ObjectKey %s] CreateMeta PreCommit: worker address: %s", objectKey, address);
@@ -704,6 +705,9 @@ Status OCMetadataManager::CreatePendingMeta(const ObjectMetaPb &newMeta, const s
         default:
             break;
     };
+    // Strip the previous expiry task only after the existence checks passed, so a rejected create
+    // keeps the entry's ttl cleanup registered.
+    RETURN_IF_NOT_OK(StripExpiryTaskAfterChecks(objectKey, accessor, firstOne));
     ObjectMeta metaCache;
     SetMetaInfo(newMeta, address, 0, metaCache);
     metaCache.multiSetState = PENDING;
@@ -726,6 +730,19 @@ Status OCMetadataManager::CheckExistenceOpt(const ObjectMeta &meta, const std::s
         }
     }
     return Status::OK();
+}
+
+// Strips the previous expiry task once the create checks passed. If the strip races with an
+// in-flight async ttl delete, rejects and erases a freshly inserted empty entry to leave no
+// partial state behind.
+Status OCMetadataManager::StripExpiryTaskAfterChecks(const std::string &objectKey, TbbMetaTable::accessor &accessor,
+                                                     bool firstOne)
+{
+    Status rc = expiredObjectManager_->RemoveObjectIfExist(objectKey);
+    if (rc.IsError() && firstOne) {
+        (void)metaShards_[GetShardIndex(objectKey)].table.erase(accessor);
+    }
+    return rc;
 }
 
 Status OCMetadataManager::CreateMetaForBinaryFormat(const ObjectMetaPb &newMeta, const std::string &address,
@@ -754,6 +771,9 @@ Status OCMetadataManager::CreateMetaForBinaryFormat(const ObjectMetaPb &newMeta,
                                                      .isReplica = newMeta.config().is_replica() };
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
                 CheckBinaryFormatParamMatch(objectKey, prevMeta, newMateDate, nestedObjectKeys), "Check format failed");
+            // Strip the previous expiry task only after the state and format checks passed, so a
+            // rejected create keeps the entry's ttl cleanup registered.
+            RETURN_IF_NOT_OK(StripExpiryTaskAfterChecks(objectKey, accessor, firstOne));
 
             Status s = DoBinaryCacheInvalidationUnlocked(objectKey, prevMeta,
                                                          { .newAddress = address,
@@ -1069,8 +1089,6 @@ Status OCMetadataManager::CreateMeta(const ObjectMetaPb &newMeta, const std::str
                                      bool &firstOne)
 {
     const std::string &objectKey = newMeta.object_key();
-    // Validate the input.
-    RETURN_IF_NOT_OK(expiredObjectManager_->RemoveObjectIfExist(objectKey));
 
     INJECT_POINT("master.create_meta_failure");
 
@@ -1082,13 +1100,16 @@ Status OCMetadataManager::CreateMeta(const ObjectMetaPb &newMeta, const std::str
 
     // Condition 1: Create meta for hash format.
     if (newMeta.config().data_format() == (uint64_t)DataFormat::HASH_MAP) {
+        RETURN_IF_NOT_OK(expiredObjectManager_->RemoveObjectIfExist(objectKey));
         return CreateHashMeta(newMeta, address);
     }
 
     if (newMeta.config().data_format() == (uint64_t)DataFormat::HETERO) {
+        RETURN_IF_NOT_OK(expiredObjectManager_->RemoveObjectIfExist(objectKey));
         return CreateDeviceMeta(newMeta, address);
     }
-    // Condition 2: Create meta for binary format.
+    // Condition 2: binary format strips the expiry task inside CreateMetaForBinaryFormat, after the
+    // existence checks, so a rejected create keeps the entry's ttl cleanup registered.
     return CreateMetaForBinaryFormat(newMeta, address, nestedObjectKeys, version, firstOne);
 }
 
@@ -2404,6 +2425,12 @@ Status OCMetadataManager::UpdateMetaByState(const UpdateMetaReqPb &request, Obje
                                       newMeta.cache_type(), false },
             nestedObjectKeys));
     }
+    // Arbitrate with any in-flight async ttl delete before mutating metadata, and keep the old
+    // deadline so a failed update can restore it.
+    bool hadExpiryTask = false;
+    uint64_t oldDeadline = 0;
+    RETURN_IF_NOT_OK(
+        expiredObjectManager_->RemoveObjectIfExistAndGetDeadline(objectKey, hadExpiryTask, oldDeadline));
     int64_t version = GetSystemClockTimeStampUs();
 
     response.set_version(version);
@@ -2417,6 +2444,11 @@ Status OCMetadataManager::UpdateMetaByState(const UpdateMetaReqPb &request, Obje
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveObjectLocation(objectKey, address),
                                          "Remove location failed from rocksdb.");
         (void)objectMeta.locations.erase(address);
+        // The old value is still live after the failed update: restore its original deadline
+        // instead of leaving the entry without ttl cleanup or applying the candidate ttl.
+        if (hadExpiryTask) {
+            expiredObjectManager_->RestoreExpiryTaskIfAbsent(objectKey, oldDeadline);
+        }
         return s;
     }
 
@@ -2438,7 +2470,6 @@ Status OCMetadataManager::UpdateMeta(const UpdateMetaReqPb &request, UpdateMetaR
     RETURN_IF_NOT_OK(FillObjectRedirectResponse(response, objectKey, redirect));
     RETURN_OK_IF_TRUE(redirect);
 
-    RETURN_IF_NOT_OK(expiredObjectManager_->RemoveObjectIfExist(objectKey));
     Timer timer;
     size_t shardIdx = GetShardIndex(objectKey);
     bthread::RWLockRdGuard lck(metaShards_[shardIdx].mutex);
