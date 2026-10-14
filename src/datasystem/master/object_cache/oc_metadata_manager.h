@@ -1569,6 +1569,16 @@ private:
                              bool &firstOne);
 
     /**
+     * @brief Strip the previous expiry task once the create checks passed.
+     * @note Tbb lock should be acquired before this function call.
+     * @param[in] objectKey object key.
+     * @param[in,out] accessor Accessor of the metadata entry; erased on failure for a fresh insert.
+     * @param[in] firstOne Whether the metadata entry was freshly inserted.
+     * @return Status of the call.
+     */
+    Status StripExpiryTaskAfterChecks(const std::string &objectKey, TbbMetaTable::accessor &accessor, bool firstOne);
+
+    /**
      * @brief Do cache invalidation notification for binary format.
      * @note Tbb lock should be acquired before this function call.
      * @param[in] objectKey object key parameters.
