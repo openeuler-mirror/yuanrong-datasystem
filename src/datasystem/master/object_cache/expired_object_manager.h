@@ -34,6 +34,7 @@
 #include <vector>
 
 #include <tbb/concurrent_hash_map.h>
+#include <bthread/mutex.h>
 
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/util/status_helper.h"
@@ -207,7 +208,7 @@ private:
         uint64_t expireTime{ 0 };
     };
     struct ExpiredShard {
-        std::mutex mutex;
+        bthread::Mutex mutex;
         std::multimap<uint64_t, ImmutableString> timedObj;
         std::unordered_map<ImmutableString, std::multimap<uint64_t, ImmutableString>::iterator> obj2Timed;
         std::unordered_map<ImmutableString, FailedObjectInfo> failedObjects;
