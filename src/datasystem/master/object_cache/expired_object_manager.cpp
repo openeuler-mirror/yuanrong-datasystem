@@ -144,7 +144,7 @@ void ExpiredObjectManager::ReloadExpireObjects(const std::vector<std::tuple<std:
     LOG(INFO) << FormatString("There had %zu expire objects will reload to ExpiredObjectManager", objects.size());
     for (const auto &[objectKey, version, ttlSecond] : objects) {
         auto &shard = shards_[GetShardIndex(objectKey)];
-        std::lock_guard<std::mutex> lock(shard.mutex);
+        std::lock_guard<bthread::Mutex> lock(shard.mutex);
         (void)InsertObjectUnlock(shard, objectKey, version, ttlSecond);
     }
 }
@@ -157,7 +157,7 @@ Status ExpiredObjectManager::InsertObject(const std::string &objectKey, const ui
     }
     Timer timer;
     auto &shard = shards_[GetShardIndex(objectKey)];
-    std::lock_guard<std::mutex> lock(shard.mutex);
+    std::lock_guard<bthread::Mutex> lock(shard.mutex);
     GetMasterTimeCost().Append("InsertObject", timer.ElapsedMilliSecond());
     RETURN_IF_NOT_OK(CheckObjectInAsyncDelete(shard, objectKey, K_RUNTIME_ERROR));
     RemoveObjectIfExistUnlock(shard, objectKey);
@@ -194,7 +194,7 @@ Status ExpiredObjectManager::RemoveObjectIfExist(const std::string &objectKey)
 {
     Timer timer;
     auto &shard = shards_[GetShardIndex(objectKey)];
-    std::lock_guard<std::mutex> lock(shard.mutex);
+    std::lock_guard<bthread::Mutex> lock(shard.mutex);
     GetMasterTimeCost().Append("RemoveObjectIfExist", timer.ElapsedMilliSecond());
     RETURN_IF_NOT_OK(CheckObjectInAsyncDelete(shard, objectKey, K_TRY_AGAIN));
     RemoveObjectIfExistUnlock(shard, objectKey);
@@ -205,7 +205,7 @@ Status ExpiredObjectManager::RemoveObjectIfExistAndGetDeadline(const std::string
                                                                uint64_t &deadline)
 {
     auto &shard = shards_[GetShardIndex(objectKey)];
-    std::lock_guard<std::mutex> lock(shard.mutex);
+    std::lock_guard<bthread::Mutex> lock(shard.mutex);
     RETURN_IF_NOT_OK(CheckObjectInAsyncDelete(shard, objectKey, K_TRY_AGAIN));
     auto iter = shard.obj2Timed.find(objectKey);
     hadTask = iter != shard.obj2Timed.end();
@@ -219,7 +219,7 @@ Status ExpiredObjectManager::RemoveObjectIfExistAndGetDeadline(const std::string
 void ExpiredObjectManager::RestoreExpiryTaskIfAbsent(const std::string &objectKey, const uint64_t deadline)
 {
     auto &shard = shards_[GetShardIndex(objectKey)];
-    std::lock_guard<std::mutex> lock(shard.mutex);
+    std::lock_guard<bthread::Mutex> lock(shard.mutex);
     if (shard.obj2Timed.find(objectKey) == shard.obj2Timed.end()) {
         (void)InsertObjectUnlock(shard, objectKey, deadline, 0);
     }
@@ -237,7 +237,7 @@ void ExpiredObjectManager::AddSucceedObject(const std::unordered_map<std::string
     }
     for (auto &[shardIdx, items] : byShard) {
         auto &shard = shards_[shardIdx];
-        std::lock_guard<std::mutex> lock(shard.mutex);
+        std::lock_guard<bthread::Mutex> lock(shard.mutex);
         for (const auto *item : items) {
             auto &objectKey = item->first;
             auto &expiredTime = item->second;
@@ -268,7 +268,7 @@ void ExpiredObjectManager::AddFailedObject(const std::unordered_map<std::string,
     }
     for (auto &[shardIdx, keys] : byShard) {
         auto &shard = shards_[shardIdx];
-        std::lock_guard<std::mutex> lock(shard.mutex);
+        std::lock_guard<bthread::Mutex> lock(shard.mutex);
         for (const auto &objectKey : keys) {
             auto &retryInfo = shard.failedObjects[objectKey];
             retryInfo.retryCount++;
@@ -302,7 +302,7 @@ std::unordered_map<std::string, uint64_t> ExpiredObjectManager::GetExpiredObject
         size_t bestShard = kExpiredShardCount;
         uint64_t bestTime = UINT64_MAX;
         for (size_t i = 0; i < kExpiredShardCount; ++i) {
-            std::lock_guard<std::mutex> lock(shards_[i].mutex);
+            std::lock_guard<bthread::Mutex> lock(shards_[i].mutex);
             if (shards_[i].timedObj.empty()) {
                 continue;
             }
@@ -318,7 +318,7 @@ std::unordered_map<std::string, uint64_t> ExpiredObjectManager::GetExpiredObject
 
         // Pop a bounded chunk from the winning shard, then re-evaluate.
         auto &shard = shards_[bestShard];
-        std::lock_guard<std::mutex> lock(shard.mutex);
+        std::lock_guard<bthread::Mutex> lock(shard.mutex);
         size_t remaining = MAX_DEL_BATCH_NUM - expiredObject.size();
         size_t popped = 0;
         for (auto iter = shard.timedObj.begin();
@@ -359,7 +359,7 @@ std::unordered_map<std::string, uint64_t> ExpiredObjectManager::CleanupShardsAft
     }
     for (auto &[shardIdx, keys] : byShard) {
         auto &shard = shards_[shardIdx];
-        std::lock_guard<std::mutex> lock(shard.mutex);
+        std::lock_guard<bthread::Mutex> lock(shard.mutex);
         for (const auto &key : keys) {
             if (failedIds.count(key) == 0) {
                 auto expireTime = mediator.GetObjectVersionInRequest(key);
@@ -381,7 +381,7 @@ void ExpiredObjectManager::DiscardAsyncDeleteObjects(const std::vector<std::stri
     }
     for (auto &[shardIdx, keys] : byShard) {
         auto &shard = shards_[shardIdx];
-        std::lock_guard<std::mutex> lock(shard.mutex);
+        std::lock_guard<bthread::Mutex> lock(shard.mutex);
         for (const auto &objectKey : keys) {
             (void)shard.readyExpiredObjects.erase(objectKey);
             (void)shard.failedObjects.erase(objectKey);
@@ -464,7 +464,7 @@ Status ExpiredObjectManager::AsyncDelete(std::unordered_map<std::string, uint64_
 Status ExpiredObjectManager::GetObjectRemainTimeAndRemove(const std::string &objectKey, uint32_t &remainTimeSecond)
 {
     auto &shard = shards_[GetShardIndex(objectKey)];
-    std::lock_guard<std::mutex> lock(shard.mutex);
+    std::lock_guard<bthread::Mutex> lock(shard.mutex);
     if (shard.obj2Timed.find(objectKey) == shard.obj2Timed.end()) {
         RETURN_STATUS(StatusCode::K_INVALID, FormatString("The object[%s] not set ttl", objectKey));
     }
@@ -489,7 +489,7 @@ void ExpiredObjectManager::Run()
         INJECT_POINT("master.ExpiredObjectManager.Run", [this, &expiredObjects, &intervalMs] {
             for (const auto &kv : expiredObjects) {
                 auto &shard = shards_[GetShardIndex(kv.first)];
-                std::lock_guard<std::mutex> lock(shard.mutex);
+                std::lock_guard<bthread::Mutex> lock(shard.mutex);
                 (void)shard.readyExpiredObjects.erase(kv.first);
             }
             expiredObjects.clear();
@@ -523,7 +523,7 @@ Status ExpiredObjectManager::CheckObjectInAsyncDelete(const ExpiredShard &shard,
 bool ExpiredObjectManager::CheckObjectInAsyncDeleteWithLock(const std::string &objectKey)
 {
     auto &shard = shards_[GetShardIndex(objectKey)];
-    std::lock_guard<std::mutex> lock(shard.mutex);
+    std::lock_guard<bthread::Mutex> lock(shard.mutex);
     return shard.readyExpiredObjects.count(objectKey) > 0;
 }
 }  // namespace master

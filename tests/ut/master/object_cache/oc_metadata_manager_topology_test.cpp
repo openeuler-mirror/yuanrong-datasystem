@@ -1340,7 +1340,7 @@ TEST_F(OCMetadataManagerTopologyTest, PartialShutdownRequeuesLocallyOwnedFailedT
 
     auto &retryShard = expiredManager.shards_[expiredManager.GetShardIndex(objectKey)];
     {
-        std::lock_guard<std::mutex> lock(retryShard.mutex);
+        std::lock_guard<bthread::Mutex> lock(retryShard.mutex);
         auto failedIt = retryShard.failedObjects.find(objectKey);
         ASSERT_NE(failedIt, retryShard.failedObjects.end());
         EXPECT_EQ(failedIt->second.expireTime, expireTime);
@@ -1361,7 +1361,7 @@ TEST_F(OCMetadataManagerTopologyTest, PartialShutdownRequeuesLocallyOwnedFailedT
     DS_ASSERT_OK(expiredManager.AsyncDelete(std::move(retryObjects)));
     EXPECT_FALSE(expiredManager.CheckObjectInAsyncDeleteWithLock(objectKey));
     {
-        std::lock_guard<std::mutex> lock(retryShard.mutex);
+        std::lock_guard<bthread::Mutex> lock(retryShard.mutex);
         EXPECT_EQ(retryShard.failedObjects.count(objectKey), 0U);
     }
 }
@@ -1400,7 +1400,7 @@ TEST_F(OCMetadataManagerTopologyTest, SuccessfulTtlRetryClearsFailedState)
 
     auto &retryShard = expiredManager.shards_[expiredManager.GetShardIndex(objectKey)];
     {
-        std::lock_guard<std::mutex> lock(retryShard.mutex);
+        std::lock_guard<bthread::Mutex> lock(retryShard.mutex);
         ASSERT_EQ(retryShard.failedObjects.count(objectKey), 1U);
         auto timedIt = retryShard.obj2Timed.find(objectKey);
         ASSERT_NE(timedIt, retryShard.obj2Timed.end());
@@ -1413,7 +1413,7 @@ TEST_F(OCMetadataManagerTopologyTest, SuccessfulTtlRetryClearsFailedState)
     DS_ASSERT_OK(expiredManager.AsyncDelete(std::move(retryObjects)));
     EXPECT_FALSE(expiredManager.CheckObjectInAsyncDeleteWithLock(objectKey));
     {
-        std::lock_guard<std::mutex> lock(retryShard.mutex);
+        std::lock_guard<bthread::Mutex> lock(retryShard.mutex);
         EXPECT_EQ(retryShard.failedObjects.count(objectKey), 0U);
     }
 }
