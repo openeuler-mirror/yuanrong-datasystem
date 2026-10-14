@@ -28,7 +28,8 @@ public:
     // Notify a peer. action="warmup_done" targets the cache warmup path; an
     // empty action takes the normal notify_pipeline path. version (0 = none)
     // carries the wall-clock version stamp for cache update broadcasts.
-    virtual void Notify(const std::string &host, int port, const std::string &action,
+    // Returns true when the peer acknowledged the notify RPC.
+    virtual bool Notify(const std::string &host, int port, const std::string &action,
                         int sender, const std::vector<std::string> &keys, uint64_t size,
                         uint64_t version) = 0;
 

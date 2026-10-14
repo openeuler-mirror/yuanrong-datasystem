@@ -14,6 +14,7 @@
 #include <vector>
 
 class CacheReader;
+class KVWorker;
 
 // NotifyDispatcher owns the former httplib POST /notify handling logic:
 // dispatching warmup_done / evict / normal notify_pipeline actions to the
@@ -38,6 +39,11 @@ public:
                      MetricsCollector &metrics);
 
     void SetCacheReader(CacheReader *reader) { cacheReader_ = reader; }
+
+    // Inject the cache-mode writer so version-bearing update broadcasts can be
+    // routed to its per-key max-version map (a writer is also a reader of the
+    // shared key space in the homogeneous-client model).
+    void SetWorker(KVWorker *worker) { worker_ = worker; }
 
     // Dispatch a parsed notify request. action="warmup_done" takes the cache
     // warmup path; an empty action takes the normal notify_pipeline path.
@@ -79,6 +85,7 @@ private:
     kvtest::mutex pregenMutex_;
     std::unordered_map<std::string, std::string> pregenData_;
     CacheReader *cacheReader_ = nullptr;
+    KVWorker *worker_ = nullptr;
 
     // Pending key queue for distribution mode. Each pending entry carries
     // the sender + size so a sampled mGet batch can mix keys from different

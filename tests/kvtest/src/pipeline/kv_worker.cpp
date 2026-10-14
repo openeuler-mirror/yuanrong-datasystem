@@ -254,6 +254,30 @@ void KVWorker::PipelineLoop(int threadId) {
             NotifyPeers({ctx.key}, size, ctx.updateVersionValue);
         }
 
+        // Cache hit stale-read check (writer-side): a read-back version older
+        // than the newest we've seen (broadcasts + prior hits) is a stale read.
+        if (cfg_.keyPoolSize > 0 && ctx.hit) {
+            bool stale = false;
+            uint64_t expectedVer = 0;
+            {
+                std::lock_guard<kvtest::mutex> lock(versionMutex_);
+                auto vit = maxSeenVersion_.find(ctx.key);
+                if (vit != maxSeenVersion_.end()) expectedVer = vit->second;
+                stale = (expectedVer > 0) && (ctx.readVersionValue < expectedVer);
+                uint64_t latest = std::max(ctx.readVersionValue, ctx.updateVersionValue);
+                if (latest > expectedVer) {
+                    if (vit != maxSeenVersion_.end()) vit->second = latest;
+                    else maxSeenVersion_[ctx.key] = latest;
+                }
+            }
+            if (stale) {
+                metrics_.RecordCacheStale();
+                SLOG_WARN("cacheGetOrCreate stale read: key=" << ctx.key
+                          << " expected=" << expectedVer
+                          << " actual=" << ctx.readVersionValue);
+            }
+        }
+
         gate.Advance();
     }
 
@@ -345,13 +369,45 @@ void KVWorker::NotifyWarmupDone(const std::vector<std::string> &warmupKeys) {
                               std::stoi(hostPort.substr(colonPos + 1))});
         } catch (...) { continue; }
     }
+    if (targets.empty()) return;
 
     int sender = cfg_.instanceId;
-    for (auto &t : targets) {
-        notifyPool_.Submit([this, h = t.host, p = t.port, warmupKeys, sender]() {
-            peerClient_->Notify(h, p, /*action=*/"warmup_done", sender, warmupKeys, /*size=*/0, /*version=*/0);
-        });
+    // warmup_done is critical: a reader that misses it waits warmup_timeout and
+    // then exits (it has no other way to learn the warmup keys). Under startup
+    // skew a writer may finish warmup before its readers are up, so retry the
+    // broadcast until every reader acks, up to 100 attempts at 2s intervals.
+    notifyPool_.Submit([this, targets = std::move(targets), warmupKeys, sender]() {
+        constexpr int kMaxWarmupNotifyRetries = 100;
+        constexpr int kWarmupNotifyRetryDelayMs = 2000;
+        for (int attempt = 0; attempt < kMaxWarmupNotifyRetries; attempt++) {
+            bool allAcked = true;
+            for (const auto &t : targets) {
+                if (!peerClient_->Notify(t.host, t.port, /*action=*/"warmup_done",
+                                         sender, warmupKeys, /*size=*/0, /*version=*/0)) {
+                    allAcked = false;
+                }
+            }
+            if (allAcked) return;
+            if (attempt + 1 < kMaxWarmupNotifyRetries) {
+                kvtest::sleep_for(std::chrono::milliseconds(kWarmupNotifyRetryDelayMs));
+            }
+        }
+        SLOG_WARN("warmup_done not acknowledged by all readers after "
+                  << kMaxWarmupNotifyRetries << " retries, giving up");
+    });
+}
+
+void KVWorker::OnUpdateVersion(const std::vector<std::string> &keys, uint64_t version) {
+    std::lock_guard<kvtest::mutex> lock(versionMutex_);
+    for (const auto &k : keys) {
+        auto &v = maxSeenVersion_[k];
+        if (version > v) v = version;
     }
+}
+
+size_t KVWorker::MaxSeenVersionSize() const {
+    std::lock_guard<kvtest::mutex> lock(versionMutex_);
+    return maxSeenVersion_.size();
 }
 
 void KVWorker::AdjustPoolSize() {
