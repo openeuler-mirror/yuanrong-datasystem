@@ -54,6 +54,11 @@ struct PipelineContext {
     // updateVersionValue carries the timestamp that was written.
     bool updated = false;
     uint64_t updateVersionValue = 0;
+    // Set true by the op on a cache hit; readVersionValue is the version stamp
+    // read back from the value (the writer's pipeline loop does the monotonic
+    // stale check against its own per-key max-seen map).
+    bool hit = false;
+    uint64_t readVersionValue = 0;
     // Miss backfill policy (writer side): probability to backfill a miss.
     // 1.0 = always (legacy), 0.0 = never (leave key absent), 0.5 = half.
     double missBackfillProb = 1.0;

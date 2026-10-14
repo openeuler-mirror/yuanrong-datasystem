@@ -47,6 +47,13 @@ public:
 
     int CurrentTargetQps() { return currentTargetQps_.load(); }
 
+    // Record the latest-known version stamp for the given keys (from cache
+    // update broadcasts), so the writer can detect stale reads on hit.
+    void OnUpdateVersion(const std::vector<std::string> &keys, uint64_t version);
+
+    // Snapshot of the per-key max-version map size, for logging.
+    size_t MaxSeenVersionSize() const;
+
 private:
     void PipelineLoop(int threadId);
     void NotifyPeers(const std::vector<std::string> &keys, uint64_t size, uint64_t version);
@@ -63,6 +70,10 @@ private:
     std::atomic<uint64_t> notifySuppressed_{0};
     std::atomic<double> missBackfillProb_{1.0};  // probability to backfill a miss; 0 = leave absent
     std::chrono::steady_clock::time_point stageStartTime_;
+    // Per-key max version seen (from broadcast updates + own hits), for
+    // stale-read detection. Guards by versionMutex_.
+    mutable kvtest::mutex versionMutex_;
+    std::unordered_map<std::string, uint64_t> maxSeenVersion_;
     int currentStageIndex_ = 0;
     std::vector<kvtest::thread> threads_;
     ThreadPool notifyPool_;

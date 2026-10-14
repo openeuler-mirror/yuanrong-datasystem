@@ -124,6 +124,7 @@ BrpcControlServer::~BrpcControlServer() { Stop(); }
 
 void BrpcControlServer::SetWorker(KVWorker *worker) {
     impl_->SetWorker(worker);
+    dispatcher_.SetWorker(worker);
 }
 
 void BrpcControlServer::Start() {

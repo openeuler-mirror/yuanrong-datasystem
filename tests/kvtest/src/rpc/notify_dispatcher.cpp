@@ -2,6 +2,7 @@
 
 #include "pipeline/cache_reader.h"
 #include "pipeline/data_pattern.h"
+#include "pipeline/kv_worker.h"
 #include "common/simple_log.h"
 #include <utility>
 
@@ -51,6 +52,16 @@ void NotifyDispatcher::DispatchNotify(const std::string &action, int sender,
         } else {
             cacheReader_->OnEvictKeys(keys);
         }
+        return;
+    }
+
+    // Cache-mode writer without a dedicated reader (homogeneous read+write
+    // clients): route version updates into the writer's per-key max-version
+    // map, and ignore plain warmup/backfill sync (a writer has no key pool to
+    // synchronize). This also keeps warmup_done/backfill from falling through
+    // to the pipeline-mode notify_pipeline (getBuffer) below.
+    if (cfg_.keyPoolSize > 0 && worker_) {
+        if (version > 0) worker_->OnUpdateVersion(keys, version);
         return;
     }
 

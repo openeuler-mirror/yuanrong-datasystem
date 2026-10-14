@@ -250,6 +250,9 @@ static Status OpCacheGetOrCreate(PipelineContext &ctx, double &latencyMs) {
             if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
         }
         ctx.metrics->RecordCacheHit();
+        ctx.hit = true;
+        ctx.readVersionValue = ReadVersion(optBuf->ImmutableData(),
+                                           static_cast<uint64_t>(optBuf->GetSize()));
 
         // Cache-update-on-hit: with probability cacheUpdateProb, re-Set a
         // timestamped value (overwrite/write-through path). Disabled by default.
