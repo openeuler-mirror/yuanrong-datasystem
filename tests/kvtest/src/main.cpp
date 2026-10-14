@@ -609,6 +609,8 @@ static int RunServerMode(const Config &cfg)
                       << ", peer_cooldown_skipped=" << peerSkipped.cooldown
                       << ", peer_probe_skipped=" << peerSkipped.recoveryProbe << "]"
                       << (cacheMode ? (" [pool=" + std::to_string(worker ? worker->CurrentPoolSize() : 0)
+                                       + ", read_pool=" + std::to_string(cacheReader ? cacheReader->KeyPoolSize() : 0)
+                                       + ", max_seen=" + std::to_string(cacheReader ? cacheReader->MaxSeenVersionSize() : 0)
                                        + ", hit_rate=" + std::to_string(metrics.CacheHitRate()) + "]")
                                     : "")
                       << ((!cfg.targetQpsStages.empty()

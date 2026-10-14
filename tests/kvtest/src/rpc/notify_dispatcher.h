@@ -41,9 +41,10 @@ public:
 
     // Dispatch a parsed notify request. action="warmup_done" takes the cache
     // warmup path; an empty action takes the normal notify_pipeline path.
-    // keys/size semantics mirror the former httplib /notify JSON body.
+    // version (0 = none) carries the cache update version stamp.
     void DispatchNotify(const std::string &action, int sender,
-                        const std::vector<std::string> &keys, uint64_t size);
+                        const std::vector<std::string> &keys, uint64_t size,
+                        uint64_t version);
 
     size_t QueueSize() { return notifyPool_.QueueSize(); }
     uint64_t DroppedCount() { return notifyPool_.DroppedCount(); }

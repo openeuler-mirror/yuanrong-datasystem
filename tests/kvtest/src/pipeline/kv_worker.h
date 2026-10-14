@@ -49,7 +49,7 @@ public:
 
 private:
     void PipelineLoop(int threadId);
-    void NotifyPeers(const std::vector<std::string> &keys, uint64_t size);
+    void NotifyPeers(const std::vector<std::string> &keys, uint64_t size, uint64_t version);
     void NotifyWarmupDone(const std::vector<std::string> &warmupKeys);
     int ResampleRandomQps();
 
@@ -61,6 +61,7 @@ private:
     std::atomic<uint64_t> currentPoolSize_{0};
     std::atomic<int> currentTargetQps_{0};
     std::atomic<uint64_t> notifySuppressed_{0};
+    std::atomic<double> missBackfillProb_{1.0};  // probability to backfill a miss; 0 = leave absent
     std::chrono::steady_clock::time_point stageStartTime_;
     int currentStageIndex_ = 0;
     std::vector<kvtest::thread> threads_;
