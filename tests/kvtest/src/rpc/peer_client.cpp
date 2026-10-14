@@ -53,7 +53,8 @@ public:
     PeerNotifySkipCounts GetNotifySkipCounts() const override { return {}; }
 
     void Notify(const std::string &host, int port, const std::string &action,
-                int sender, const std::vector<std::string> &keys, uint64_t size) override {
+                int sender, const std::vector<std::string> &keys, uint64_t size,
+                uint64_t version) override {
         try {
             thread_local std::unordered_map<std::string,
                 std::unique_ptr<httplib::Client>> clientCache;
@@ -64,12 +65,13 @@ public:
                 ref->set_connection_timeout(2);
                 ref->set_read_timeout(2);
             }
-            // Reconstruct the original JSON body {action, sender, keys, size}.
+            // Reconstruct the original JSON body {action, sender, keys, size, version}.
             json j;
             if (!action.empty()) j["action"] = action;
             j["sender"] = sender;
             if (!keys.empty()) j["keys"] = keys;
             if (size > 0) j["size"] = size;
+            if (version > 0) j["version"] = version;
             ref->Post("/notify", j.dump(), "application/json");
         } catch (...) {
         }
@@ -103,7 +105,8 @@ public:
     }
 
     void Notify(const std::string &host, int port, const std::string &action,
-                int sender, const std::vector<std::string> &keys, uint64_t size) override {
+                int sender, const std::vector<std::string> &keys, uint64_t size,
+                uint64_t version) override {
         const std::string key = host + ":" + std::to_string(port);
         const bool warmupDone = action == "warmup_done";
         ChannelLease lease;
@@ -133,6 +136,7 @@ public:
             req.set_sender(sender);
             *req.mutable_keys() = {keys.begin(), keys.end()};
             req.set_size(size);
+            req.set_version(version);
 
             kvtest_control::NotifyResp resp;
             brpc::Controller cntl;

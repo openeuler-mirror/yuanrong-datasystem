@@ -8,6 +8,7 @@
 #include "data_pattern.h"
 #include "cuda_workload.h"
 #include <chrono>
+#include <cmath>
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -46,6 +47,17 @@ struct PipelineContext {
     std::atomic<uint64_t> *verifyFailCount = nullptr;
     VerifyConfig verifyCfg;
     class MetricsCollector *metrics = nullptr;
+    // Cache-update-on-hit (writer side): probability to re-Set a timestamped
+    // value on hit. 0 = disabled.
+    double cacheUpdateProb = 0.0;
+    // Set true by the op when it performed a cache update (re-Set on hit);
+    // updateVersionValue carries the timestamp that was written.
+    bool updated = false;
+    uint64_t updateVersionValue = 0;
+    // Miss backfill policy (writer side): probability to backfill a miss.
+    // 1.0 = always (legacy), 0.0 = never (leave key absent), 0.5 = half.
+    double missBackfillProb = 1.0;
+    bool backfilled = false;  // set true by the op when it backfills a miss
 };
 
 // Build a traceId that is unique across worker instances running on the same
@@ -82,11 +94,59 @@ inline int SampleMgetBatchSize(const Config::MgetSizeDistribution &d, std::mt199
     return bd(rng);
 }
 
+// Sample a key-pool index honoring hot_key_ratio / hot_access_prob. The hot
+// set is the first ceil(poolSize * hotKeyRatio) keys; with probability
+// hotAccessProb draw uniformly from the hot set, otherwise from the cold
+// remainder. When either ratio or prob is 0, falls back to uniform over the
+// whole pool. Used by both the writer (its own currentPoolSize) and the
+// reader (its own keyPool_); the two hot sets are therefore not guaranteed to
+// overlap exactly.
+inline uint64_t SamplePoolIndex(std::mt19937 &rng, uint64_t poolSize,
+                                double hotKeyRatio, double hotAccessProb) {
+    if (poolSize == 0) return 0;
+    if (hotKeyRatio <= 0.0 || hotAccessProb <= 0.0) {
+        return std::uniform_int_distribution<uint64_t>(0, poolSize - 1)(rng);
+    }
+    uint64_t hotBound = static_cast<uint64_t>(std::ceil(static_cast<double>(poolSize) * hotKeyRatio));
+    if (hotBound < 1) hotBound = 1;
+    if (hotBound > poolSize) hotBound = poolSize;
+    std::uniform_real_distribution<double> pd(0.0, 1.0);
+    if (pd(rng) < hotAccessProb || hotBound >= poolSize) {
+        return std::uniform_int_distribution<uint64_t>(0, hotBound - 1)(rng);
+    }
+    return std::uniform_int_distribution<uint64_t>(hotBound, poolSize - 1)(rng);
+}
+
+// Cache mode per-key size: maps a pool index to a fixed data size via modulo
+// so a key's value size is deterministic and never changes across warmup /
+// steady state / backfill / update. With one entry this degenerates to the
+// legacy single-size behavior.
+inline uint64_t CacheKeySize(uint64_t idx, const std::vector<uint64_t> &dataSizes)
+{
+    return dataSizes.empty() ? 0 : dataSizes[static_cast<size_t>(idx % dataSizes.size())];
+}
+
+// Parse the pool index out of a "cache_pool_<writerId>_<idx>" key name.
+// Returns 0 for keys that do not match the expected shape.
+inline uint64_t ParseCacheKeyIdx(const std::string &key)
+{
+    auto pos = key.find_last_of('_');
+    if (pos == std::string::npos || pos + 1 >= key.size()) return 0;
+    uint64_t idx = 0;
+    for (size_t i = pos + 1; i < key.size(); i++) {
+        char c = key[i];
+        if (c < '0' || c > '9') return 0;
+        idx = idx * 10 + static_cast<uint64_t>(c - '0');
+    }
+    return idx;
+}
+
 // Cache mode sub-step names (not in kOpRegistry, for metrics pre-allocation only)
 inline constexpr const char *kOpCacheGetOrFillHit  = "cacheGetOrFill_hit";
 inline constexpr const char *kOpCacheExist          = "cacheExist";
 inline constexpr const char *kOpCacheSetFill        = "cacheSetFill";
 inline constexpr const char *kOpCacheGetOrFillMiss  = "cacheGetOrFill_miss";
+inline constexpr const char *kOpCacheSetUpdate      = "cacheSetUpdate";
 
 // All known op names (for metrics pre-creation).
 const std::vector<const char *> &GetAllOpNames(bool cacheMode = false);

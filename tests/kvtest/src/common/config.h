@@ -40,6 +40,11 @@ enum class RunMode { PIPELINE, CACHE, BENCHMARK };
 
 constexpr int DEFAULT_ROUND_CLEANUP_WAIT_MS = 3000;
 
+// Default cap for the key-pool size — both the writer's monotonic growth and
+// the reader's present-key pool. Configurable via max_key_pool_size; this is
+// the temporary default while observing the real working-set size.
+inline constexpr uint64_t kMaxPoolSize = 5000000;
+
 TestMode ParseTestMode(const std::string &s);
 bool NeedsRemoteWorker(TestMode mode);
 bool IsGetMode(TestMode mode);
@@ -123,8 +128,11 @@ struct Config {
     int warmupRetryCount = 3;        // retries per warmup key
     int warmupRetryDelayMs = 1000;   // delay between retries
     int warmupTimeoutSeconds = 300;  // Reader wait timeout for all Writer warmups
-    int maxKeyPoolSize = 0;          // 0 = auto (keyPoolSize * 20)
+    int maxKeyPoolSize = 0;          // 0 = auto (kMaxPoolSize = 5M); shared by writer growth + reader pool
     double targetHitRate = 0.0;      // 0 = fixed pool, 0.01-1.0 = auto-adjust pool to target hit rate
+    double cacheUpdateProb = 0.0;    // probability to re-Set a versioned value on cache hit, [0.0, 1.0], 0 = disabled
+    double hotKeyRatio = 0.0;        // hot-set fraction of the key pool, (0.0, 1.0], 0 = uniform (disabled)
+    double hotAccessProb = 0.0;      // probability to draw from the hot set, [0.0, 1.0], 0 = uniform (disabled)
     // Benchmark mode fields (test_mode != NONE)
     TestMode testMode = TestMode::NONE;
     int workerMemoryMb = 0;

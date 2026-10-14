@@ -260,6 +260,12 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
             cfg.maxKeyPoolSize = j["max_key_pool_size"];
         if (j.contains("target_hit_rate"))
             cfg.targetHitRate = j["target_hit_rate"];
+        if (j.contains("cache_update_prob"))
+            cfg.cacheUpdateProb = j["cache_update_prob"].get<double>();
+        if (j.contains("hot_key_ratio"))
+            cfg.hotKeyRatio = j["hot_key_ratio"].get<double>();
+        if (j.contains("hot_access_prob"))
+            cfg.hotAccessProb = j["hot_access_prob"].get<double>();
         if (j.contains("metrics_interval_ms"))
             cfg.metricsIntervalMs = j["metrics_interval_ms"];
         if (j.contains("metrics_file"))
@@ -326,6 +332,21 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
             cfg.role = j["role"].get<std::string>();
         // Cache mode: Writer only notifies Readers
         if (cfg.keyPoolSize > 0 && cfg.role == "writer" && !cfg.nodes.empty()) {
+            std::vector<std::string> filteredPeers;
+            for (auto &n : cfg.nodes) {
+                if (n.instanceId == cfg.instanceId)
+                    continue;
+                if (n.role == "reader") {
+                    filteredPeers.push_back("http://" + n.host + ":" + std::to_string(n.port));
+                }
+            }
+            if (!filteredPeers.empty()) {
+                cfg.peers = std::move(filteredPeers);
+                cfg.notifyCount = static_cast<int>(cfg.peers.size());
+            }
+        }
+        // Cache mode: Reader only notifies other Readers (update-version broadcasts).
+        if (cfg.keyPoolSize > 0 && cfg.role == "reader" && !cfg.nodes.empty()) {
             std::vector<std::string> filteredPeers;
             for (auto &n : cfg.nodes) {
                 if (n.instanceId == cfg.instanceId)
@@ -475,7 +496,7 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
         // else: absolute or relative path with directory → use as-is
 
         if (cfg.maxKeyPoolSize == 0 && cfg.keyPoolSize > 0) {
-            cfg.maxKeyPoolSize = cfg.keyPoolSize * 20;
+            cfg.maxKeyPoolSize = static_cast<int>(kMaxPoolSize);
         }
 
         // Mode: explicit or auto-infer
@@ -651,6 +672,21 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
             SLOG_ERROR("target_hit_rate must be in [0, 1.0], got " << cfg.targetHitRate);
             return false;
         }
+        if (cfg.cacheUpdateProb < 0.0 || cfg.cacheUpdateProb > 1.0) {
+            SLOG_ERROR("cache_update_prob must be in [0.0, 1.0], got " << cfg.cacheUpdateProb);
+            return false;
+        }
+        if ((cfg.hotKeyRatio > 0.0) != (cfg.hotAccessProb > 0.0)) {
+            SLOG_ERROR("hot_key_ratio and hot_access_prob must both be 0 (disabled) or both > 0, got ratio="
+                       << cfg.hotKeyRatio << ", prob=" << cfg.hotAccessProb);
+            return false;
+        }
+        if (cfg.hotKeyRatio > 0.0
+            && (cfg.hotKeyRatio > 1.0 || cfg.hotAccessProb < 0.0 || cfg.hotAccessProb > 1.0)) {
+            SLOG_ERROR("hot_key_ratio must be in (0.0, 1.0] and hot_access_prob in [0.0, 1.0], got ratio="
+                       << cfg.hotKeyRatio << ", prob=" << cfg.hotAccessProb);
+            return false;
+        }
     }
     if (cfg.runMode == RunMode::BENCHMARK) {
         if (cfg.testMode == TestMode::NONE) {
@@ -796,6 +832,10 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
             log << ", mget_size_distribution={single_prob=" << cfg.mgetSizeDist.singleProb
                 << ", batch=[" << cfg.mgetSizeDist.minBatch << ".." << cfg.mgetSizeDist.maxBatch
                 << "], pending_queue_max=" << cfg.mgetSizeDist.pendingQueueMax << "}";
+        }
+        log << ", cache_update_prob=" << cfg.cacheUpdateProb;
+        if (cfg.hotKeyRatio > 0.0) {
+            log << ", hot_key_ratio=" << cfg.hotKeyRatio << ", hot_access_prob=" << cfg.hotAccessProb;
         }
     }
     if (cfg.urmaSendLaneCountPerPeer.has_value()) {

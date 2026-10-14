@@ -53,7 +53,7 @@ public:
             auto *req = static_cast<const kvtest_control::NotifyReq *>(request);
             auto *resp = static_cast<kvtest_control::NotifyResp *>(response);
             std::vector<std::string> keys(req->keys().begin(), req->keys().end());
-            dispatcher_->DispatchNotify(req->action(), req->sender(), keys, req->size());
+            dispatcher_->DispatchNotify(req->action(), req->sender(), keys, req->size(), req->version());
             resp->set_ok(true);
             resp->set_message("ok");
         } else if (name == kStats) {

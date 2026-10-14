@@ -55,13 +55,13 @@ void KVWorker::Start() {
             std::string key = "cache_pool_" + std::to_string(cfg_.instanceId)
                             + "_" + std::to_string(i);
 
-            uint64_t size = cfg_.dataSizes[0];
+            uint64_t size = CacheKeySize(static_cast<uint64_t>(i), cfg_.dataSizes);
             auto it = pregenData_.find(size);
             if (it == pregenData_.end()) {
                 warmupFail++;
                 continue;
             }
-            const auto &data = it->second;
+            std::string data = GenerateVersionedData(size, NowNanos());
 
             bool ok = false;
             for (int retry = 0; retry <= cfg_.warmupRetryCount; retry++) {
@@ -192,19 +192,19 @@ void KVWorker::PipelineLoop(int threadId) {
             }
         }
 
-        uint64_t size = cfg_.dataSizes[sizeDist(rng)];
-
         PipelineContext ctx;
         ctx.batchKeys.resize(cfg_.batchKeysCount);
 
         if (cfg_.keyPoolSize > 0) {
-            // Cache mode: hash-modulo keys from pool for reuse
+            // Cache mode: reuse keys from the pool, honoring the hot-set
+            // distribution (hot_key_ratio / hot_access_prob) when enabled.
             uint64_t poolSize = currentPoolSize_.load();
             if (poolSize > 0) {
-                auto dist = std::uniform_int_distribution<uint64_t>(0, poolSize - 1);
                 for (int i = 0; i < cfg_.batchKeysCount; i++) {
+                    uint64_t idx = SamplePoolIndex(rng, poolSize,
+                                                   cfg_.hotKeyRatio, cfg_.hotAccessProb);
                     ctx.batchKeys[i] = "cache_pool_" + std::to_string(cfg_.instanceId)
-                                     + "_" + std::to_string(dist(rng));
+                                     + "_" + std::to_string(idx);
                 }
             }
         } else {
@@ -217,7 +217,13 @@ void KVWorker::PipelineLoop(int threadId) {
             }
         }
         ctx.key = ctx.batchKeys[0];
-        ctx.size = size;
+        // Cache mode: deterministic per-key size (idx % sizes) so a key's
+        // value size never changes across warmup/backfill/update. Pipeline
+        // mode keeps the random size draw.
+        ctx.size = (cfg_.keyPoolSize > 0)
+            ? CacheKeySize(ParseCacheKeyIdx(ctx.key), cfg_.dataSizes)
+            : cfg_.dataSizes[sizeDist(rng)];
+        uint64_t size = ctx.size;
         ctx.senderId = cfg_.instanceId;
         if (pipelineNeedsData_) ctx.data = pregenData_[size];
         ctx.client = client_;
@@ -226,13 +232,26 @@ void KVWorker::PipelineLoop(int threadId) {
         ctx.verifyFailCount = &metrics_.VerifyFailCounter();
         ctx.verifyCfg = BuildVerifyConfig(cfg_.verifyLevel, cfg_.verifySampleBytes,
                                           cfg_.verifySampleStepBytes, cfg_.verifyFailOp);
+        // Cache-mode values carry an 8-byte version stamp; content verify skips it.
+        if (cfg_.keyPoolSize > 0) ctx.verifyCfg.versionPrefixBytes = 8;
         ctx.metrics = &metrics_;
+        ctx.cacheUpdateProb = cfg_.cacheUpdateProb;
+        ctx.missBackfillProb = missBackfillProb_.load();
 
         bool allOk = ExecutePipeline(pipelineOps_, ctx, metrics_,
                                      metrics_.VerifyFailCounter(), cfg_.instanceId);
 
-        if (allOk) {
-            NotifyPeers(ctx.batchKeys, size);
+        // Cache mode: broadcast only when a miss was backfilled (a new present
+        // key was created); hit keys are already present and already in reader
+        // pools. Pipeline mode keeps the legacy every-op notify.
+        if (allOk && (cfg_.keyPoolSize == 0 || ctx.backfilled)) {
+            NotifyPeers(ctx.batchKeys, size, /*version=*/0);
+        }
+        // Cache update (re-Set on hit) carries the new version stamp so readers
+        // can advance their per-key expected version. Only the single updated
+        // key is broadcast — batchKeys[1..n] were not touched by this op.
+        if (allOk && cfg_.keyPoolSize > 0 && ctx.updated) {
+            NotifyPeers({ctx.key}, size, ctx.updateVersionValue);
         }
 
         gate.Advance();
@@ -241,7 +260,7 @@ void KVWorker::PipelineLoop(int threadId) {
     SLOG_INFO("Thread " << threadId << " stopped");
 }
 
-void KVWorker::NotifyPeers(const std::vector<std::string> &keys, uint64_t size) {
+void KVWorker::NotifyPeers(const std::vector<std::string> &keys, uint64_t size, uint64_t version) {
     if (cfg_.peers.empty() || cfg_.notifyCount <= 0) return;
 
     // Skip the whole fan-out (shuffle, address parsing, one allocation per
@@ -290,20 +309,20 @@ void KVWorker::NotifyPeers(const std::vector<std::string> &keys, uint64_t size) 
         // In bazel mode the pool worker is a bthread — kvtest::sleep_for
         // yields it so the inter-notify gap doesn't hold a pthread worker.
         int intervalUs = cfg_.notifyIntervalUs;
-        notifyPool_.Submit([this, targets = std::move(targets), keys, sender, size, intervalUs]() {
+        notifyPool_.Submit([this, targets = std::move(targets), keys, sender, size, intervalUs, version]() {
             for (size_t i = 0; i < targets.size(); i++) {
                 if (i > 0) {
                     kvtest::sleep_for(std::chrono::microseconds(intervalUs));
                 }
                 peerClient_->Notify(targets[i].host, targets[i].port,
-                                     /*action=*/"", sender, keys, size);
+                                     /*action=*/"", sender, keys, size, version);
             }
         });
     } else {
         // Parallel: fire-and-forget via thread pool
         for (auto &t : targets) {
-            notifyPool_.Submit([this, h = t.host, p = t.port, keys, sender, size]() {
-                peerClient_->Notify(h, p, /*action=*/"", sender, keys, size);
+            notifyPool_.Submit([this, h = t.host, p = t.port, keys, sender, size, version]() {
+                peerClient_->Notify(h, p, /*action=*/"", sender, keys, size, version);
             });
         }
     }
@@ -330,7 +349,7 @@ void KVWorker::NotifyWarmupDone(const std::vector<std::string> &warmupKeys) {
     int sender = cfg_.instanceId;
     for (auto &t : targets) {
         notifyPool_.Submit([this, h = t.host, p = t.port, warmupKeys, sender]() {
-            peerClient_->Notify(h, p, /*action=*/"warmup_done", sender, warmupKeys, /*size=*/0);
+            peerClient_->Notify(h, p, /*action=*/"warmup_done", sender, warmupKeys, /*size=*/0, /*version=*/0);
         });
     }
 }
@@ -340,27 +359,29 @@ void KVWorker::AdjustPoolSize() {
 
     double currentRate = metrics_.CacheHitRate();
     uint64_t poolSize = currentPoolSize_.load();
-    uint64_t minSize = std::max<uint64_t>(10, cfg_.keyPoolSize / 10);
-    uint64_t maxSize = static_cast<uint64_t>(cfg_.maxKeyPoolSize);
+    const uint64_t maxSize = static_cast<uint64_t>(cfg_.maxKeyPoolSize);
 
     if (currentRate > cfg_.targetHitRate + 0.02) {
-        // Hit rate too high → increase pool to add pressure
+        // Too hot: grow the pool with brand-new (never-seen) keys and stop
+        // backfilling misses so the new keys stay absent and pull the hit
+        // rate down. The pool only grows — indices are never reused.
+        missBackfillProb_.store(0.0);
         uint64_t newSize = poolSize + std::max<uint64_t>(1, poolSize / 20);
         if (newSize <= maxSize) {
             currentPoolSize_.store(newSize);
-            SLOG_INFO("Pool adjust: hit_rate=" << std::fixed << std::setprecision(3)
+            SLOG_INFO("Pool expand: hit_rate=" << std::fixed << std::setprecision(3)
                       << currentRate << " > target=" << cfg_.targetHitRate
-                      << " → pool " << poolSize << "→" << newSize);
+                      << " → pool " << poolSize << "→" << newSize << " (backfill=0)");
         }
     } else if (currentRate < cfg_.targetHitRate - 0.02) {
-        // Hit rate too low → decrease pool to reduce pressure
-        uint64_t newSize = poolSize - std::max<uint64_t>(1, poolSize / 20);
-        if (newSize >= minSize) {
-            currentPoolSize_.store(newSize);
-            SLOG_INFO("Pool adjust: hit_rate=" << std::fixed << std::setprecision(3)
-                      << currentRate << " < target=" << cfg_.targetHitRate
-                      << " → pool " << poolSize << "→" << newSize);
-        }
+        // Too cold: backfill half the misses to warm the cache back up.
+        // No pool shrink (indices are never reused).
+        missBackfillProb_.store(0.5);
+        SLOG_INFO("Pool warm: hit_rate=" << std::fixed << std::setprecision(3)
+                  << currentRate << " < target=" << cfg_.targetHitRate
+                  << " → backfill=0.5 (pool " << poolSize << ")");
+    } else {
+        missBackfillProb_.store(0.5);
     }
 }
 

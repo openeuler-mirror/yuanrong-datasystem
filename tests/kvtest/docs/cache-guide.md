@@ -103,11 +103,16 @@ Pool adjust: hit_rate=0.812 > target=0.8 → pool 158→166
 |------|------|--------|------|
 | `key_pool_size` | int | 0 | Key 池初始大小，**0 = 禁用 Cache 模式** |
 | `target_hit_rate` | double | 0.0 | 目标命中率，0 = 固定池大小，0.01~1.0 = 自动调整 |
+| `cache_update_prob` | double | 0.0 | 命中后以该概率重新 Set 一个带版本号的新值（覆盖写路径），0 = 关闭 |
+| `hot_key_ratio` | double | 0.0 | 热集占池比例，(0.0, 1.0]，0 = 均匀随机 |
+| `hot_access_prob` | double | 0.0 | 每次从热集取 key 的概率，[0.0, 1.0]，0 = 均匀随机（与 hot_key_ratio 必须同时为 0 或同时 >0） |
 | `max_key_pool_size` | int | 0 | Key 池上限，0 = 自动（key_pool_size × 20） |
 | `inference_delay_ms` | int | 0 | 模拟推理延迟（毫秒），Cache miss 后的等待 |
 | `warmup_retry_count` | int | 3 | 预热阶段每个 key 的最大重试次数 |
 | `warmup_retry_delay_ms` | int | 1000 | 预热重试间隔（毫秒） |
 | `warmup_timeout_seconds` | int | 300 | Reader 等待所有 Writer 预热完成的超时 |
+
+> **data_sizes 多档位**：Cache 模式下每个 key 的大小由其 idx 确定（`size = data_sizes[idx % 档位数]`）。同一 key 永远同一大小，warmup / 稳态 / 回填 / 更新全链路一致，多档位可正常使用且 verify 不会误报 size mismatch。warmup 阶段各档位近似均分（idx 连续取模）。
 
 ---
 
@@ -174,6 +179,24 @@ Reader 每次读取后等待指定毫秒数，模拟推理计算间隔。
 ```
 对应 `stats` JSON 的 `verify_fail` 字段会递增。SLOG 行格式为 `<YYYY-MM-DD HH:MM:SS.mmm> [INFO|WARN|ERROR] <msg>`，时间戳为本地时间。完整参数说明见 [user-guide.md 公共参数表](user-guide.md)。
 
+### 6.1 命中后更新值（`cache_update_prob`）
+
+`cache_update_prob > 0` 时，命中分支在校验通过后以该概率重新 `Set` 一个**带版本号的新值**（前 8 字节写递增版本号，其余保持确定性 pattern），用于压测覆盖写/写穿路径。`cache_update_prob=0`（默认）关闭，命中仍只读。
+
+- 版本号使每次更新的值内容真实变化，但总大小不变 → 默认 `verify.level=size` 不受影响。
+- **注意**：因值前 8 字节是版本号，`verify.level=sample/full` 会对更新后的 key 报 `content mismatch`。启用 `cache_update_prob` 时建议保持默认 `size` 校验。
+- 更新操作单独记录为指标 `cacheSetUpdate`。
+
+### 6.2 Get 错误与未命中区分
+
+Get 返回码分三类：`K_OK`（命中）、`K_NOT_FOUND`（正常 miss → 回填）、其他错误码（超时/连接错误等）。
+
+- 其他错误码**不**回填、不计 hit/miss，单独计入 `cache_get_error`（stats JSON 与 `run_summary.txt` 均输出），并按每 1000 次节流打印 `SLOG_WARN`。
+
+### 6.3 Reader 池的滚动更新
+
+Writer 稳态每次成功操作都会把触碰的 key 以空 action 通知 Reader，Reader 收到后追加进自己的 key 池（超过 `max_key_pool_size` 时裁剪**非 warmup 段**）。因此 Reader 池 = 全部 writer 的 warmup key + 滚动收到的活跃 key，不会漏掉扩池产生的新 key。warmup key 永不裁剪；若 `writer_count × key_pool_size > max_key_pool_size`，会告警并保留全部 warmup key（evict 窗口失效）。
+
 ---
 
 ## 7. 测试验证清单
@@ -199,3 +222,21 @@ Reader 每次读取后等待指定毫秒数，模拟推理计算间隔。
 - [ ] `verify.level=full` + `fail_op=true` 下，命中率正常且 `verify_fail=0`
 - [ ] 人为篡改 key 内容后 `verify_fail` 递增、日志出现 `content mismatch`
 - [ ] `verify.level=off` 下 `verify_fail` 恒为 0
+
+### 7.5 命中更新值（cache_update_prob）
+- [ ] `cache_update_prob=0`（默认）时 `cacheSetUpdate=0`，命中只读
+- [ ] `cache_update_prob=0.5` 下 `cacheSetUpdate > 0`，且命中率统计不受影响
+- [ ] 更新后的 key 再次 Get 大小仍 = 配置 size（`verify.level=size` 通过）
+
+### 7.6 热点分布（hot_key_ratio / hot_access_prob）
+- [ ] `hot_key_ratio=0.05` + `hot_access_prob=0.95` 下，命中率显著高于均匀基线
+- [ ] 只设其中一个字段（另一个为 0）时启动直接报错退出
+
+### 7.7 Get 错误分类
+- [ ] 注入一次 Get 超时/连接错误后 `cache_get_error > 0`，且不计入 hit/miss
+- [ ] 多 writer（>20）下 reader 池覆盖 = N×P 全量（warmup key 不被裁）
+
+### 7.8 多档位 data_sizes
+- [ ] `data_sizes=["8MB","16MB"]` 下，key `cache_pool_0_N` 的大小 = N%2 对应档位，verify 无 size mismatch
+- [ ] 同一 key 命中 / 回填 / 更新（cache_update_prob）后大小始终不变
+- [ ] 单档配置行为与旧版一致（退化为固定大小）

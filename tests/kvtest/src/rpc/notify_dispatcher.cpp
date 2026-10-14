@@ -34,7 +34,7 @@ NotifyDispatcher::NotifyDispatcher(const Config &cfg,
 
 void NotifyDispatcher::DispatchNotify(const std::string &action, int sender,
                                       const std::vector<std::string> &keys,
-                                      uint64_t size) {
+                                      uint64_t size, uint64_t version) {
     // Cache mode: warmup_done notification
     if (action == "warmup_done" && cacheReader_) {
         cacheReader_->OnWarmupDone(sender, keys);
@@ -43,9 +43,14 @@ void NotifyDispatcher::DispatchNotify(const std::string &action, int sender,
 
     if (keys.empty()) return;
 
-    // Cache mode: evict keys -> CacheReader
+    // Cache mode: version-bearing notify is an update broadcast; otherwise the
+    // keys are plain backfill sync.
     if (cacheReader_) {
-        cacheReader_->OnEvictKeys(keys);
+        if (version > 0) {
+            cacheReader_->OnUpdateVersion(keys, version);
+        } else {
+            cacheReader_->OnEvictKeys(keys);
+        }
         return;
     }
 

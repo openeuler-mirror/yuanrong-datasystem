@@ -242,6 +242,8 @@ void MetricsCollector::WriteSummary() {
         f << "\n=== Cache Statistics ===\n";
         f << "Hits: " << cacheHitCount_.load() << "\n";
         f << "Misses: " << cacheMissCount_.load() << "\n";
+        f << "Get Errors: " << cacheGetErrorCount_.load() << "\n";
+        f << "Stale Reads: " << cacheStaleCount_.load() << "\n";
         f << std::fixed << std::setprecision(4);
         f << "Hit Rate: " << CacheHitRate() << "\n";
     }
@@ -368,6 +370,8 @@ std::string MetricsCollector::GetStatsJson() {
         uint64_t misses = cacheMissCount_.load();
         j["cache_hit_count"] = hits;
         j["cache_miss_count"] = misses;
+        j["cache_get_error"] = cacheGetErrorCount_.load();
+        j["cache_stale"] = cacheStaleCount_.load();
         j["cache_hit_rate"] = CacheHitRate();
     }
 

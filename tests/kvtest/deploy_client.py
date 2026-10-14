@@ -1623,6 +1623,11 @@ def _build_config(mode, args):
             cfg['key_pool_size'] = args.key_pool_size
             if args.target_hit_rate > 0:
                 cfg['target_hit_rate'] = args.target_hit_rate
+            if args.cache_update_prob > 0:
+                cfg['cache_update_prob'] = args.cache_update_prob
+            if args.hot_key_ratio > 0 and args.hot_access_prob > 0:
+                cfg['hot_key_ratio'] = args.hot_key_ratio
+                cfg['hot_access_prob'] = args.hot_access_prob
             if args.warmup_timeout != 60:
                 cfg['warmup_timeout_seconds'] = args.warmup_timeout
             if args.inference_delay > 0:
@@ -1868,6 +1873,12 @@ def _add_gen_config_args(p):
                    help='Cache mode key pool size (0 = disabled)')
     p.add_argument('--target-hit-rate', type=float, default=0,
                    help='Target cache hit rate 0.01~1.0 (0 = no adjustment)')
+    p.add_argument('--cache-update-prob', type=float, default=0,
+                   help='Probability to re-Set a versioned value on cache hit, 0.0~1.0 (default: 0 = disabled)')
+    p.add_argument('--hot-key-ratio', type=float, default=0,
+                   help='Hot-set fraction of the key pool, (0.0, 1.0] (default: 0 = uniform)')
+    p.add_argument('--hot-access-prob', type=float, default=0,
+                   help='Probability to draw from the hot set, [0.0, 1.0] (default: 0 = uniform)')
     p.add_argument('--warmup-timeout', type=int, default=60,
                    help='Reader warmup timeout in seconds (default: 60)')
     p.add_argument('--inference-delay', type=int, default=0,

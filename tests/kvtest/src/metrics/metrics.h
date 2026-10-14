@@ -56,6 +56,8 @@ public:
 
     void RecordCacheHit()  { cacheHitCount_++; }
     void RecordCacheMiss() { cacheMissCount_++; }
+    void RecordCacheGetError() { cacheGetErrorCount_++; }
+    void RecordCacheStale() { cacheStaleCount_++; }
     double CacheHitRate() const;
 
     void Start();
@@ -84,6 +86,8 @@ private:
     std::atomic<uint64_t> verifyFailCount_{0};
     std::atomic<uint64_t> cacheHitCount_{0};
     std::atomic<uint64_t> cacheMissCount_{0};
+    std::atomic<uint64_t> cacheGetErrorCount_{0};
+    std::atomic<uint64_t> cacheStaleCount_{0};
     bool cacheModeEnabled_ = false;
     bool cudaMetricsEnabled_ = false;
     std::vector<int> qpsStages_;
