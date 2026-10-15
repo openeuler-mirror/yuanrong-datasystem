@@ -371,7 +371,11 @@ void KVWorker::PipelineLoop(int threadId) {
 }
 
 void KVWorker::NotifyPeers(const std::vector<std::string> &keys, uint64_t size, uint64_t version) {
-    if (cfg_.peers.empty() || cfg_.notifyCount <= 0) return;
+    if (cfg_.peers.empty()) return;
+    // Cache mode broadcasts to ALL peers (update-version and expand broadcasts
+    // must reach every client); notify_count only caps the fan-out in pipeline
+    // mode.
+    if (cfg_.keyPoolSize == 0 && cfg_.notifyCount <= 0) return;
 
     // Skip the whole fan-out (shuffle, address parsing, one allocation per
     // target) when the notify pool is already at its bound; ThreadPool would
@@ -383,9 +387,11 @@ void KVWorker::NotifyPeers(const std::vector<std::string> &keys, uint64_t size, 
     }
 
     int total = static_cast<int>(cfg_.peers.size());
-    int count = std::min(cfg_.notifyCount, total);
+    // Cache mode: fan out to every peer (no sampling); pipeline mode caps at
+    // notify_count.
+    int count = (cfg_.keyPoolSize > 0) ? total : std::min(cfg_.notifyCount, total);
 
-    // Fisher-Yates partial shuffle
+    // Fisher-Yates partial shuffle (cache mode: count == total, full shuffle).
     std::vector<int> indices(total);
     std::iota(indices.begin(), indices.end(), 0);
     std::mt19937 rng(std::random_device{}());
