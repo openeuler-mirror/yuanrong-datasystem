@@ -529,8 +529,11 @@ static int RunServerMode(const Config &cfg)
     std::unique_ptr<KVWorker> worker;
     if (cfg.role == "writer") {
         worker = std::make_unique<KVWorker>(cfg, client, metrics);
-        worker->Start();
+        // Set the worker before Start (warmup) so that notify broadcasts that
+        // arrive during warmup route to worker_->OnUpdateVersion instead of
+        // falling through to the pipeline-mode notify_pipeline (getBuffer).
         server.SetWorker(worker.get());
+        worker->Start();
     } else {
         SLOG_INFO("Reader mode: waiting for notifications...");
     }
@@ -609,10 +612,11 @@ static int RunServerMode(const Config &cfg)
                       << ", peer_cooldown_skipped=" << peerSkipped.cooldown
                       << ", peer_probe_skipped=" << peerSkipped.recoveryProbe << "]"
                       << (cacheMode ? (" [pool=" + std::to_string(worker ? worker->CurrentPoolSize() : 0)
-                                       + ", read_pool=" + std::to_string(cacheReader ? cacheReader->KeyPoolSize() : 0)
+                                       + ", read_pool=" + std::to_string(cacheReader ? cacheReader->KeyPoolSize()
+                                                                                   : (worker ? worker->KeyPoolSize() : 0))
                                        + ", max_seen=" + std::to_string(cacheReader ? cacheReader->MaxSeenVersionSize()
                                                                                    : (worker ? worker->MaxSeenVersionSize() : 0))
-                                       + ", hit_rate=" + std::to_string(metrics.CacheHitRate()) + "]")
+                                       + ", hit_rate=" + std::to_string(metrics.RecentHitRate()) + "]")
                                     : "")
                       << ((!cfg.targetQpsStages.empty()
                            || (cfg.targetQpsMin > 0 && cfg.targetQpsMax > 0)) && worker

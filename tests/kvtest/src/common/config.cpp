@@ -330,7 +330,8 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
 
         if (j.contains("role"))
             cfg.role = j["role"].get<std::string>();
-        // Cache mode: Writer only notifies Readers
+        // Cache mode: Writer notifies Readers (or, with no readers, all other
+        // writers in the homogeneous model so every client's key pool stays in sync).
         if (cfg.keyPoolSize > 0 && cfg.role == "writer" && !cfg.nodes.empty()) {
             std::vector<std::string> filteredPeers;
             for (auto &n : cfg.nodes) {
@@ -342,6 +343,10 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
             }
             if (!filteredPeers.empty()) {
                 cfg.peers = std::move(filteredPeers);
+                cfg.notifyCount = static_cast<int>(cfg.peers.size());
+            } else if (!cfg.peers.empty()) {
+                // No readers: broadcast to all peers so warmup/expand/backfill
+                // keys reach every client.
                 cfg.notifyCount = static_cast<int>(cfg.peers.size());
             }
         }

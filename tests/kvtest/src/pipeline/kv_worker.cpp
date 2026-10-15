@@ -11,6 +11,12 @@
 
 using namespace datasystem;
 
+// Incremental warmup-broadcast batch size: keys accumulate and are sent to
+// peers in batches of this size (version=0 → OnEvictKeys on receivers).
+namespace {
+constexpr size_t kWarmupBroadcastBatch = 50;
+}
+
 KVWorker::KVWorker(const Config &cfg, std::shared_ptr<KVClient> client,
                    MetricsCollector &metrics)
     : cfg_(cfg), client_(client), metrics_(metrics),
@@ -39,58 +45,29 @@ KVWorker::~KVWorker() { Stop(); }
 void KVWorker::Start() {
     running_ = true;
 
-    // Cache mode warmup phase
+    // Spawn the warmup Set producer first. Keys enter the local (and remote)
+    // key pool only after their Set completes, so the pipeline (Get) never
+    // samples a key the warmup has not set yet — no backfill race with the
+    // staggered Set schedule.
     if (cfg_.keyPoolSize > 0) {
         SLOG_INFO("Starting warmup: " << cfg_.keyPoolSize << " keys");
-
-        SetParam param;
-        param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
-        param.ttlSecond = cfg_.ttlSeconds;
-
-        int warmupOk = 0, warmupFail = 0;
         std::vector<std::string> warmupKeys;
         warmupKeys.reserve(cfg_.keyPoolSize);
-
         for (int i = 0; i < cfg_.keyPoolSize; i++) {
-            std::string key = "cache_pool_" + std::to_string(cfg_.instanceId)
-                            + "_" + std::to_string(i);
-
-            uint64_t size = CacheKeySize(static_cast<uint64_t>(i), cfg_.dataSizes);
-            auto it = pregenData_.find(size);
-            if (it == pregenData_.end()) {
-                warmupFail++;
-                continue;
-            }
-            std::string data = GenerateVersionedData(size, NowNanos());
-
-            bool ok = false;
-            for (int retry = 0; retry <= cfg_.warmupRetryCount; retry++) {
-                Status rc = client_->Set(key, StringView(data), param);
-                if (rc.IsOk()) {
-                    ok = true;
-                    break;
-                }
-                if (retry < cfg_.warmupRetryCount) {
-                    SLOG_WARN("Warmup Set failed for key=" << key
-                              << " retry=" << retry << ": " << rc.GetMsg());
-                    std::this_thread::sleep_for(
-                        std::chrono::milliseconds(cfg_.warmupRetryDelayMs));
-                }
-            }
-            if (ok) {
-                warmupOk++;
-                warmupKeys.push_back(key);
-            } else {
-                warmupFail++;
-                SLOG_WARN("Warmup Set failed permanently for key=" << key);
-            }
+            warmupKeys.push_back("cache_pool_" + std::to_string(cfg_.instanceId)
+                                 + "_" + std::to_string(i));
         }
+        warmupThread_ = std::thread([this, keys = std::move(warmupKeys)]() {
+            WarmupSet(keys);
+        });
+    }
 
-        SLOG_INFO("Warmup done: " << warmupOk << " ok, " << warmupFail << " fail");
-
-        if (!warmupKeys.empty()) {
-            NotifyWarmupDone(warmupKeys);
-        }
+    // Give the warmup producer a head start before Get begins sampling, so the
+    // pool is not (near-)empty when the pipeline threads start. With no TTL the
+    // warmup bursts in well under a second, so the delay is skipped.
+    if (cfg_.keyPoolSize > 0 && cfg_.ttlSeconds > 0) {
+        SLOG_INFO("Warmup head start: Get starts 5s after Set begins");
+        std::this_thread::sleep_for(std::chrono::seconds(5));
     }
 
     SLOG_INFO("Starting " << cfg_.numThreads << " pipeline threads"
@@ -114,8 +91,101 @@ void KVWorker::Start() {
     }
 }
 
+void KVWorker::WarmupSet(const std::vector<std::string> &keys) {
+    SetParam param;
+    param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
+    param.ttlSecond = cfg_.ttlSeconds;
+
+    // Spread the Sets across the TTL window so expiry does not synchronize into
+    // a burst: key idx should land at start + idx * (ttl/size). Deadline
+    // scheduling (not a fixed sleep) so the Set RPC latency itself does not
+    // stretch the window. Without a TTL, burst (no spacing).
+    uint64_t intervalUs = 0;
+    if (cfg_.ttlSeconds > 0 && !keys.empty()) {
+        intervalUs = static_cast<uint64_t>(cfg_.ttlSeconds) * 1000000ULL / keys.size();
+    }
+    const int64_t startUs = kvtest::SteadyNowUs();
+
+    int warmupOk = 0, warmupFail = 0;
+    std::vector<std::string> setKeys;      // successfully Set keys (for the final catch-up)
+    std::vector<std::string> pendingBcast; // batched keys awaiting incremental broadcast
+    setKeys.reserve(keys.size());
+    for (size_t idx = 0; idx < keys.size() && running_.load(); idx++) {
+        const std::string &key = keys[idx];
+        uint64_t size = CacheKeySize(static_cast<uint64_t>(idx), cfg_.dataSizes);
+        auto it = pregenData_.find(size);
+        if (it == pregenData_.end()) {
+            warmupFail++;
+            continue;
+        }
+        std::string data = GenerateVersionedData(size, NowNanos());
+
+        bool ok = false;
+        for (int retry = 0; retry <= cfg_.warmupRetryCount; retry++) {
+            Status rc = client_->Set(key, StringView(data), param);
+            if (rc.IsOk()) {
+                ok = true;
+                break;
+            }
+            if (retry < cfg_.warmupRetryCount) {
+                SLOG_WARN("Warmup Set failed for key=" << key
+                          << " retry=" << retry << ": " << rc.GetMsg());
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(cfg_.warmupRetryDelayMs));
+            }
+        }
+        if (ok) {
+            warmupOk++;
+            setKeys.push_back(key);
+            // Enter the LOCAL key pool only after the Set completes, so Get
+            // never samples a key the warmup has not set yet.
+            {
+                std::unique_lock<kvtest::shared_mutex> lock(keyPoolMutex_);
+                if (seenKeys_.insert(std::hash<std::string>{}(key)).second) {
+                    keyPool_.push_back(key);
+                    warmupKeyCount_++;
+                }
+            }
+            pendingBcast.push_back(key);
+            // Incremental broadcast in batches: receivers route version=0 to
+            // OnEvictKeys and add the keys to their pools right away.
+            if (pendingBcast.size() >= kWarmupBroadcastBatch) {
+                NotifyPeers(pendingBcast, /*size=*/0, /*version=*/0);
+                pendingBcast.clear();
+            }
+        } else {
+            warmupFail++;
+            SLOG_WARN("Warmup Set failed permanently for key=" << key);
+        }
+
+        // Sleep only until the next key's deadline; the Set time already spent
+        // counts toward it (no drift).
+        if (intervalUs > 0 && idx + 1 < keys.size()) {
+            int64_t deadlineUs = startUs
+                + static_cast<int64_t>((idx + 1) * intervalUs);
+            int64_t nowUs = kvtest::SteadyNowUs();
+            if (deadlineUs > nowUs) {
+                std::this_thread::sleep_for(
+                    std::chrono::microseconds(deadlineUs - nowUs));
+            }
+        }
+    }
+    // Flush the trailing incremental batch.
+    if (!pendingBcast.empty()) {
+        NotifyPeers(pendingBcast, /*size=*/0, /*version=*/0);
+        pendingBcast.clear();
+    }
+    // Final catch-up with retry: covers incremental batches that were dropped,
+    // and doubles as the reader-role start signal (readers wait for warmup_done).
+    if (!setKeys.empty()) {
+        NotifyWarmupDone(setKeys);
+    }
+    SLOG_INFO("Warmup done: " << warmupOk << " ok, " << warmupFail << " fail");
+}
+
 void KVWorker::Stop() {
     running_ = false;
+    if (warmupThread_.joinable()) warmupThread_.join();
     for (auto &t : threads_) {
         if (t.joinable()) t.join();
     }
@@ -196,16 +266,15 @@ void KVWorker::PipelineLoop(int threadId) {
         ctx.batchKeys.resize(cfg_.batchKeysCount);
 
         if (cfg_.keyPoolSize > 0) {
-            // Cache mode: reuse keys from the pool, honoring the hot-set
-            // distribution (hot_key_ratio / hot_access_prob) when enabled.
-            uint64_t poolSize = currentPoolSize_.load();
-            if (poolSize > 0) {
-                for (int i = 0; i < cfg_.batchKeysCount; i++) {
-                    uint64_t idx = SamplePoolIndex(rng, poolSize,
-                                                   cfg_.hotKeyRatio, cfg_.hotAccessProb);
-                    ctx.batchKeys[i] = "cache_pool_" + std::to_string(cfg_.instanceId)
-                                     + "_" + std::to_string(idx);
-                }
+            // Cache mode: sample keys from the shared key pool (own warmup keys
+            // + other clients' keys via broadcast), honoring the hot-set
+            // distribution. Empty pool (before any key is known) skips.
+            for (int i = 0; i < cfg_.batchKeysCount; i++) {
+                ctx.batchKeys[i] = RandomKey(rng);
+            }
+            if (ctx.batchKeys[0].empty()) {
+                kvtest::sleep_for(std::chrono::milliseconds(10));
+                continue;
             }
         } else {
             // Original: timestamp-based keys
@@ -241,10 +310,11 @@ void KVWorker::PipelineLoop(int threadId) {
         bool allOk = ExecutePipeline(pipelineOps_, ctx, metrics_,
                                      metrics_.VerifyFailCounter(), cfg_.instanceId);
 
-        // Cache mode: broadcast only when a miss was backfilled (a new present
-        // key was created); hit keys are already present and already in reader
-        // pools. Pipeline mode keeps the legacy every-op notify.
-        if (allOk && (cfg_.keyPoolSize == 0 || ctx.backfilled)) {
+        // Pipeline mode keeps the legacy every-op notify. Cache mode no longer
+        // broadcasts on backfill: the backfilled key was sampled from the shared
+        // key pool and is already in every client's pool (expand already
+        // broadcast it), so a backfill notify is redundant.
+        if (allOk && cfg_.keyPoolSize == 0) {
             NotifyPeers(ctx.batchKeys, size, /*version=*/0);
         }
         // Cache update (re-Set on hit) carries the new version stamp so readers
@@ -410,10 +480,53 @@ size_t KVWorker::MaxSeenVersionSize() const {
     return maxSeenVersion_.size();
 }
 
+size_t KVWorker::KeyPoolSize() const {
+    std::shared_lock<kvtest::shared_mutex> lock(keyPoolMutex_);
+    return keyPool_.size();
+}
+
+void KVWorker::OnWarmupDone(int senderId, const std::vector<std::string> &warmupKeys) {
+    (void)senderId;
+    std::unique_lock<kvtest::shared_mutex> lock(keyPoolMutex_);
+    for (const auto &k : warmupKeys) {
+        if (seenKeys_.insert(std::hash<std::string>{}(k)).second) {
+            keyPool_.push_back(k);
+            warmupKeyCount_++;
+        }
+    }
+}
+
+void KVWorker::OnEvictKeys(const std::vector<std::string> &keys) {
+    const size_t maxPool = static_cast<size_t>(cfg_.maxKeyPoolSize);
+    std::unique_lock<kvtest::shared_mutex> lock(keyPoolMutex_);
+    for (const auto &k : keys) {
+        if (seenKeys_.insert(std::hash<std::string>{}(k)).second) {
+            keyPool_.push_back(k);
+        }
+    }
+    // Capacity control: trim the oldest eviction keys (after the warmup
+    // segment) when the pool exceeds the budget.
+    if (keyPool_.size() <= maxPool) return;
+    if (warmupKeyCount_ > maxPool) return;  // keep all warmup keys
+    size_t eraseCount = keyPool_.size() - maxPool;
+    keyPool_.erase(keyPool_.begin() + warmupKeyCount_,
+                   keyPool_.begin() + warmupKeyCount_ + eraseCount);
+}
+
+std::string KVWorker::RandomKey(std::mt19937 &rng) {
+    std::shared_lock<kvtest::shared_mutex> lock(keyPoolMutex_);
+    if (keyPool_.empty()) return "";
+    uint64_t idx = SamplePoolIndex(rng, static_cast<uint64_t>(keyPool_.size()),
+                                   cfg_.hotKeyRatio, cfg_.hotAccessProb);
+    return keyPool_[static_cast<size_t>(idx)];
+}
+
 void KVWorker::AdjustPoolSize() {
     if (cfg_.targetHitRate <= 0.0 || cfg_.targetHitRate > 1.0) return;
 
-    double currentRate = metrics_.CacheHitRate();
+    // Windowed hit rate (last flush interval), so the controller reacts to the
+    // recent traffic instead of the cumulative total.
+    double currentRate = metrics_.RecentHitRate();
     uint64_t poolSize = currentPoolSize_.load();
     const uint64_t maxSize = static_cast<uint64_t>(cfg_.maxKeyPoolSize);
 
@@ -425,9 +538,32 @@ void KVWorker::AdjustPoolSize() {
         uint64_t newSize = poolSize + std::max<uint64_t>(1, poolSize / 20);
         if (newSize <= maxSize) {
             currentPoolSize_.store(newSize);
+            // Materialize the new OWN keys into the shared pool and broadcast
+            // them so every client can sample them (they stay absent until a
+            // miss backfills them, which the backfill=0 policy suppresses).
+            std::vector<std::string> newKeys;
+            {
+                std::unique_lock<kvtest::shared_mutex> lock(keyPoolMutex_);
+                for (uint64_t idx = poolSize; idx < newSize; idx++) {
+                    std::string k = "cache_pool_" + std::to_string(cfg_.instanceId)
+                                  + "_" + std::to_string(idx);
+                    if (seenKeys_.insert(std::hash<std::string>{}(k)).second) {
+                        keyPool_.push_back(k);
+                        newKeys.push_back(std::move(k));
+                    }
+                }
+            }
+            if (!newKeys.empty()) {
+                NotifyPeers(newKeys, /*size=*/0, /*version=*/0);
+            }
             SLOG_INFO("Pool expand: hit_rate=" << std::fixed << std::setprecision(3)
                       << currentRate << " > target=" << cfg_.targetHitRate
-                      << " → pool " << poolSize << "→" << newSize << " (backfill=0)");
+                      << " → pool " << poolSize << "→" << newSize
+                      << " (+" << newKeys.size() << " keys, backfill=0)");
+        } else {
+            SLOG_INFO("Pool at cap: hit_rate=" << std::fixed << std::setprecision(3)
+                      << currentRate << " > target=" << cfg_.targetHitRate
+                      << ", pool=" << poolSize << " (max " << maxSize << ", backfill=0)");
         }
     } else if (currentRate < cfg_.targetHitRate - 0.02) {
         // Too cold: backfill half the misses to warm the cache back up.
@@ -438,6 +574,9 @@ void KVWorker::AdjustPoolSize() {
                   << " → backfill=0.5 (pool " << poolSize << ")");
     } else {
         missBackfillProb_.store(0.5);
+        SLOG_INFO("Pool hold: hit_rate=" << std::fixed << std::setprecision(3)
+                  << currentRate << " ~ target=" << cfg_.targetHitRate
+                  << " (pool " << poolSize << ", backfill=0.5)");
     }
 }
 
