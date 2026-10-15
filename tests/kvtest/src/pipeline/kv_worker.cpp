@@ -273,21 +273,34 @@ void KVWorker::PipelineLoop(int threadId) {
         }
 
         PipelineContext ctx;
-        ctx.batchKeys.resize(cfg_.batchKeysCount);
 
         if (cfg_.keyPoolSize > 0) {
             // Cache mode: sample keys from the shared key pool (own warmup keys
             // + other clients' keys via broadcast), honoring the hot-set
-            // distribution. Empty pool (before any key is known) skips.
-            for (int i = 0; i < cfg_.batchKeysCount; i++) {
-                ctx.batchKeys[i] = RandomKey(rng);
+            // distribution. With mget distribution enabled, sample a batch of
+            // distinct keys; otherwise a single key. Empty pool skips.
+            bool mget = cfg_.mgetSizeDist.enabled;
+            int target = mget ? SampleMgetBatchSize(cfg_.mgetSizeDist, rng) : 1;
+            std::unordered_set<std::string> sampled;
+            sampled.reserve(static_cast<size_t>(target));
+            ctx.batchKeys.clear();
+            for (int i = 0; i < target; i++) {
+                std::string k;
+                int guard = 0;
+                do {
+                    k = RandomKey(rng);
+                    if (k.empty()) break;
+                } while (!sampled.insert(k).second && ++guard < 16);
+                if (k.empty()) break;
+                ctx.batchKeys.push_back(k);
             }
-            if (ctx.batchKeys[0].empty()) {
+            if (ctx.batchKeys.empty()) {
                 kvtest::sleep_for(std::chrono::milliseconds(10));
                 continue;
             }
         } else {
             // Original: timestamp-based keys
+            ctx.batchKeys.resize(cfg_.batchKeysCount);
             auto now = std::chrono::steady_clock::now().time_since_epoch().count();
             for (int i = 0; i < cfg_.batchKeysCount; i++) {
                 ctx.batchKeys[i] = "kv_test_" + std::to_string(cfg_.instanceId)
@@ -302,6 +315,14 @@ void KVWorker::PipelineLoop(int threadId) {
         ctx.size = (cfg_.keyPoolSize > 0)
             ? CacheKeySize(ParseCacheKeyIdx(ctx.key), cfg_.dataSizes)
             : cfg_.dataSizes[sizeDist(rng)];
+        // Batch sizes for mget mode (per sampled key); empty for single-key.
+        ctx.batchSizes.clear();
+        if (cfg_.keyPoolSize > 0 && ctx.batchKeys.size() > 1) {
+            ctx.batchSizes.reserve(ctx.batchKeys.size());
+            for (const auto &k : ctx.batchKeys) {
+                ctx.batchSizes.push_back(CacheKeySize(ParseCacheKeyIdx(k), cfg_.dataSizes));
+            }
+        }
         uint64_t size = ctx.size;
         ctx.senderId = cfg_.instanceId;
         if (pipelineNeedsData_) ctx.data = pregenData_[size];
@@ -330,37 +351,46 @@ void KVWorker::PipelineLoop(int threadId) {
         if (allOk && cfg_.keyPoolSize == 0) {
             NotifyPeers(ctx.batchKeys, size, /*version=*/0);
         }
-        // Cache update (re-Set on hit) carries the new version stamp so readers
-        // can advance their per-key expected version. Skipped with set_nx: an NX
-        // re-Set of an existing key does not write (value unchanged), so the new
-        // stamp never landed and broadcasting it would mislead readers.
-        if (allOk && cfg_.keyPoolSize > 0 && !cfg_.setNx && ctx.updated) {
-            NotifyPeers({ctx.key}, size, ctx.updateVersionValue);
+        // Cache update (re-Set on hit) broadcast: carry each updated key's new
+        // version stamp to all peers. Skipped with set_nx (NX re-Set is a no-op,
+        // value unchanged, so the new stamp never landed).
+        if (allOk && cfg_.keyPoolSize > 0 && !cfg_.setNx) {
+            for (size_t i = 0; i < ctx.batchUpdatedKeys.size(); i++) {
+                NotifyPeers({ctx.batchUpdatedKeys[i]}, size, ctx.batchUpdatedVersions[i]);
+            }
         }
 
-        // Cache hit stale-read check (writer-side): a read-back version older
-        // than the newest we've seen (broadcasts + prior hits) is a stale read.
-        // Skipped with set_nx: the value is write-once, and its stamp reflects
-        // the first writer, not the latest write, so "new vs old" is moot.
-        if (cfg_.keyPoolSize > 0 && !cfg_.setNx && ctx.hit) {
-            bool stale = false;
-            uint64_t expectedVer = 0;
-            {
-                std::lock_guard<kvtest::mutex> lock(versionMutex_);
-                auto vit = maxSeenVersion_.find(ctx.key);
-                if (vit != maxSeenVersion_.end()) expectedVer = vit->second;
-                stale = (expectedVer > 0) && (ctx.readVersionValue < expectedVer);
-                uint64_t latest = std::max(ctx.readVersionValue, ctx.updateVersionValue);
-                if (latest > expectedVer) {
-                    if (vit != maxSeenVersion_.end()) vit->second = latest;
-                    else maxSeenVersion_[ctx.key] = latest;
+        // Cache hit stale-read check (writer-side), one per hit key in the batch.
+        if (cfg_.keyPoolSize > 0 && !cfg_.setNx) {
+            for (size_t i = 0; i < ctx.batchHitKeys.size(); i++) {
+                const std::string &key = ctx.batchHitKeys[i];
+                uint64_t readVer = (i < ctx.batchHitVersions.size()) ? ctx.batchHitVersions[i] : 0;
+                uint64_t updVer = 0;
+                for (size_t j = 0; j < ctx.batchUpdatedKeys.size(); j++) {
+                    if (ctx.batchUpdatedKeys[j] == key) {
+                        updVer = ctx.batchUpdatedVersions[j];
+                        break;
+                    }
                 }
-            }
-            if (stale) {
-                metrics_.RecordCacheStale();
-                SLOG_WARN("cacheGetOrCreate stale read: key=" << ctx.key
-                          << " expected=" << expectedVer
-                          << " actual=" << ctx.readVersionValue);
+                bool stale = false;
+                uint64_t expectedVer = 0;
+                {
+                    std::lock_guard<kvtest::mutex> lock(versionMutex_);
+                    auto vit = maxSeenVersion_.find(key);
+                    if (vit != maxSeenVersion_.end()) expectedVer = vit->second;
+                    stale = (expectedVer > 0) && (readVer < expectedVer);
+                    uint64_t latest = std::max(readVer, updVer);
+                    if (latest > expectedVer) {
+                        if (vit != maxSeenVersion_.end()) vit->second = latest;
+                        else maxSeenVersion_[key] = latest;
+                    }
+                }
+                if (stale) {
+                    metrics_.RecordCacheStale();
+                    SLOG_WARN("cacheGetOrCreate stale read: key=" << key
+                              << " expected=" << expectedVer
+                              << " actual=" << readVer);
+                }
             }
         }
 
