@@ -538,6 +538,7 @@ std::string KVWorker::RandomKey(std::mt19937 &rng) {
 }
 
 void KVWorker::AdjustPoolSize() {
+    if (cfg_.keyPoolSize <= 0) return;
     if (cfg_.targetHitRate <= 0.0 || cfg_.targetHitRate > 1.0) return;
 
     // Windowed hit rate (last flush interval), so the controller reacts to the
