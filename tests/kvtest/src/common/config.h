@@ -75,7 +75,7 @@ struct Config {
     int32_t requestTimeoutMs = 20;
     uint64_t fastTransportMemSize = 512ULL * 1024 * 1024;  // 512MB default
     std::vector<uint64_t> dataSizes;                       // parsed bytes
-    uint32_t ttlSeconds = 0;                               // from set_param.ttl_second, 0 = no expiry
+    uint32_t ttlSeconds = 3600;                         // from set_param.ttl_second, 3600 = 1 hour
     int targetQps = 100;                                   // 0 = unlimited
     std::vector<int> targetQpsStages;                      // QPS stages (empty = single fixed QPS)
     int stageDurationSeconds = 0;                          // seconds per stage, 0 = disabled
@@ -130,7 +130,7 @@ struct Config {
     int warmupTimeoutSeconds = 300;  // Reader wait timeout for all Writer warmups
     int maxKeyPoolSize = 0;          // 0 = auto (kMaxPoolSize = 5M); shared by writer growth + reader pool
     double targetHitRate = 0.0;      // 0 = fixed pool, 0.01-1.0 = auto-adjust pool to target hit rate
-    double cacheUpdateProb = 0.05;   // probability to re-Set a versioned value on cache hit, [0.0, 1.0], 0 = disabled
+    double cacheUpdateProb = 0.1;    // probability to re-Set a versioned value on cache hit, [0.0, 1.0]
     // Cache mode: use SetParam.existence = NX (write only when absent; a
     // repeated Set of an existing key is a no-op that keeps the value). With NX
     // the version stamp no longer proves a write took effect, so the version
