@@ -543,12 +543,18 @@ const std::vector<const char *> &GetAllOpNames(bool cacheMode) {
         kOpCacheSetFill, kOpCacheGetOrFillMiss,
         kOpCacheSetUpdate,
     };
-    static const std::vector<const char *> allNames = [] {
-        auto v = baseNames;
+    // Cache mode only exercises a subset of the pipeline ops; drop the
+    // pipeline-only ones (setStringView/exist/mCreate/mSet) so the periodic
+    // rate log stays readable for the cache scenario.
+    static const std::vector<const char *> cacheAllNames = [] {
+        auto v = std::vector<const char *>{
+            kOpGetBuffer, kOpCreateBuffer, kOpMemoryCopy, kOpSetBuffer,
+            kOpMGet, kOpCacheGetOrCreate,
+        };
         v.insert(v.end(), cacheNames.begin(), cacheNames.end());
         return v;
     }();
-    return cacheMode ? allNames : baseNames;
+    return cacheMode ? cacheAllNames : baseNames;
 }
 
 OpFunc GetOpFunc(const std::string &name) {
