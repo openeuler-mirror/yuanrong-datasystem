@@ -62,6 +62,14 @@ struct PipelineContext {
     // Miss backfill policy (writer side): probability to backfill a miss.
     // 1.0 = always (legacy), 0.0 = never (leave key absent), 0.5 = half.
     double missBackfillProb = 1.0;
+    // Batch cache-get state (mget mode): per-key value sizes, and the results
+    // gathered across the batch so the caller (PipelineLoop) can run the
+    // per-key stale check and update broadcast after the op returns.
+    std::vector<uint64_t> batchSizes;
+    std::vector<std::string> batchHitKeys;
+    std::vector<uint64_t> batchHitVersions;
+    std::vector<std::string> batchUpdatedKeys;
+    std::vector<uint64_t> batchUpdatedVersions;
 };
 
 // Build a traceId that is unique across worker instances running on the same

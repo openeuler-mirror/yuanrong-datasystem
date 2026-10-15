@@ -254,19 +254,48 @@ void CacheReader::ReaderLoop(int threadId) {
             }
         }
 
-        std::string key = RandomKey(rng);
-        if (key.empty()) {
-            kvtest::sleep_for(std::chrono::milliseconds(100));
-            continue;
+        if (cfg_.mgetSizeDist.enabled) {
+            // mget: sample a batch of distinct keys, one MGet, then per-key hit/miss.
+            int target = SampleMgetBatchSize(cfg_.mgetSizeDist, rng);
+            std::unordered_set<std::string> sampled;
+            sampled.reserve(static_cast<size_t>(target));
+            std::vector<std::string> keys;
+            std::vector<uint64_t> sizes;
+            for (int i = 0; i < target; i++) {
+                std::string k;
+                int guard = 0;
+                do {
+                    k = RandomKey(rng);
+                    if (k.empty()) break;
+                } while (!sampled.insert(k).second && ++guard < 16);
+                if (k.empty()) break;
+                keys.push_back(k);
+                sizes.push_back(CacheKeySize(ParseCacheKeyIdx(k), cfg_.dataSizes));
+            }
+            if (keys.empty()) {
+                kvtest::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
+            if (!IsKvtestClientInitialized()) {
+                kvtest::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+            CacheGetOrFillBatch(keys, sizes);
+        } else {
+            std::string key = RandomKey(rng);
+            if (key.empty()) {
+                kvtest::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
+            if (!IsKvtestClientInitialized()) {
+                kvtest::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+            // Deterministic per-key size (idx % sizes) — matches what the writer
+            // used for this key, so verify never sees a size mismatch.
+            uint64_t size = CacheKeySize(ParseCacheKeyIdx(key), cfg_.dataSizes);
+            CacheGetOrFill(key, size);
         }
-        if (!IsKvtestClientInitialized()) {
-            kvtest::sleep_for(std::chrono::milliseconds(10));
-            continue;
-        }
-        // Deterministic per-key size (idx % sizes) — matches what the writer
-        // used for this key, so verify never sees a size mismatch.
-        uint64_t size = CacheKeySize(ParseCacheKeyIdx(key), cfg_.dataSizes);
-        CacheGetOrFill(key, size);
 
         gate.Advance();
     }
@@ -411,6 +440,131 @@ bool CacheReader::CacheGetOrFill(const std::string &key, uint64_t size) {
     metrics_.Record(kOpCacheGetOrFillMiss, missLatency, setRc.GetCode(), size);
     metrics_.RecordCacheMiss();
     return setRc.IsOk();
+}
+
+bool CacheReader::CacheGetOrFillBatch(const std::vector<std::string> &keys,
+                                      const std::vector<uint64_t> &sizes) {
+    if (keys.empty()) return true;
+
+    // Step 1: MGet the whole batch.
+    std::vector<Optional<Buffer>> results;
+    double getLatency = 0;
+    Status getRc = Measure([&]() {
+        return client_->Get(keys, results);
+    }, getLatency);
+    uint64_t totalBytes = 0;
+    for (uint64_t s : sizes) totalBytes += s;
+    metrics_.Record(kOpMGet, getLatency, getRc.GetCode(), totalBytes);
+
+    bool anyFail = false;
+    size_t n = std::min(keys.size(), results.size());
+    for (size_t i = 0; i < n; i++) {
+        const std::string &key = keys[i];
+        uint64_t size = (i < sizes.size()) ? sizes[i] : 0;
+
+        if (pregenData_.find(size) == pregenData_.end()) {
+            SLOG_WARN("CacheGetOrFillBatch: size " << size << " not in pregenData_");
+            continue;
+        }
+
+        if (results[i]) {
+            // Hit: verify + record + optional cache-update re-Set.
+            VerifyFailReason reason = VerifyFailReason::NONE;
+            bool vok = VerifyBuffer(results[i]->ImmutableData(),
+                                    static_cast<uint64_t>(results[i]->GetSize()),
+                                    size, /*senderId=*/0, verifyCfg_, &reason);
+            if (!vok) {
+                if (reason == VerifyFailReason::SIZE) {
+                    SLOG_WARN("cacheGetOrFill size mismatch on hit: key=" << key
+                              << " expected=" << size << " got=" << results[i]->GetSize());
+                } else {
+                    SLOG_WARN("cacheGetOrFill content mismatch on hit: key=" << key
+                              << " level=" << static_cast<int>(verifyCfg_.level)
+                              << " senderId=" << cfg_.instanceId);
+                }
+                metrics_.RecordVerifyFail();
+            }
+            metrics_.Record(kOpCacheGetOrFillHit, 0, getRc.GetCode(), size);
+            metrics_.RecordCacheHit();
+
+            uint64_t actualVersion = ReadVersion(results[i]->ImmutableData(),
+                                                 static_cast<uint64_t>(results[i]->GetSize()));
+
+            uint64_t newVersion = 0;
+            if (cfg_.cacheUpdateProb > 0.0) {
+                static thread_local std::mt19937 updateRng(std::random_device{}());
+                static thread_local std::uniform_real_distribution<double> updateDist(0.0, 1.0);
+                if (updateDist(updateRng) < cfg_.cacheUpdateProb) {
+                    newVersion = NowNanos();
+                    std::string newData = GenerateVersionedData(size, newVersion);
+                    SetParam param;
+                    param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
+                    param.ttlSecond = cfg_.ttlSeconds;
+                    param.existence = cfg_.setNx ? ExistenceOpt::NX : ExistenceOpt::NONE;
+                    double setLatency = 0;
+                    Status setRc = Measure([&]() {
+                        return client_->Set(key, StringView(newData), param);
+                    }, setLatency);
+                    metrics_.Record(kOpCacheSetUpdate, setLatency, setRc.GetCode(), size);
+                    if (!setRc.IsOk()) newVersion = 0;
+                }
+            }
+
+            if (!cfg_.setNx) {
+                bool stale = false;
+                uint64_t expectedVer = 0;
+                {
+                    std::lock_guard<kvtest::mutex> lock(versionMutex_);
+                    auto vit = maxSeenVersion_.find(key);
+                    if (vit != maxSeenVersion_.end()) expectedVer = vit->second;
+                    stale = (expectedVer > 0) && (actualVersion < expectedVer);
+                    uint64_t latest = std::max(actualVersion, newVersion);
+                    if (latest > expectedVer) {
+                        if (vit != maxSeenVersion_.end()) vit->second = latest;
+                        else maxSeenVersion_[key] = latest;
+                    }
+                }
+                if (stale) {
+                    metrics_.RecordCacheStale();
+                    SLOG_WARN("cacheGetOrFill stale read: key=" << key
+                              << " expected=" << expectedVer << " actual=" << actualVersion);
+                }
+            }
+
+            if (!cfg_.setNx && newVersion > 0) {
+                BroadcastUpdate({key}, newVersion);
+            }
+
+            if (!vok && verifyCfg_.failOp) anyFail = true;
+        } else {
+            // Miss: Exist + inference + backfill Set.
+            double existLatency = 0;
+            std::vector<bool> exists;
+            Status existRc = Measure([&]() {
+                return client_->Exist({key}, exists);
+            }, existLatency);
+            metrics_.Record(kOpCacheExist, existLatency, existRc.GetCode(), 0);
+
+            kvtest::sleep_for(std::chrono::milliseconds(cfg_.inferenceDelayMs));
+
+            SetParam param;
+            param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
+            param.ttlSecond = cfg_.ttlSeconds;
+            param.existence = cfg_.setNx ? ExistenceOpt::NX : ExistenceOpt::NONE;
+            std::string fillData = GenerateVersionedData(size, NowNanos());
+            double setLatency = 0;
+            Status setRc = Measure([&]() {
+                return client_->Set(key, StringView(fillData), param);
+            }, setLatency);
+            metrics_.Record(kOpCacheSetFill, setLatency, setRc.GetCode(), size);
+
+            double missLatency = existLatency + setLatency;
+            metrics_.Record(kOpCacheGetOrFillMiss, missLatency, setRc.GetCode(), size);
+            metrics_.RecordCacheMiss();
+            if (!setRc.IsOk()) anyFail = true;
+        }
+    }
+    return !anyFail;
 }
 
 int CacheReader::ResampleRandomQps() {

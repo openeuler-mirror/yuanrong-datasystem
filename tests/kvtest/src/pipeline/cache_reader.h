@@ -65,6 +65,8 @@ public:
 private:
     void ReaderLoop(int threadId);
     bool CacheGetOrFill(const std::string &key, uint64_t size);
+    bool CacheGetOrFillBatch(const std::vector<std::string> &keys,
+                             const std::vector<uint64_t> &sizes);
     std::string RandomKey(std::mt19937 &rng);
     // Fire-and-forget broadcast of an update (key, version) to reader peers.
     void BroadcastUpdate(const std::vector<std::string> &keys, uint64_t version);
