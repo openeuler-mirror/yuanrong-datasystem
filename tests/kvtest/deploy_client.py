@@ -1626,8 +1626,7 @@ def _build_config(mode, args):
             cfg['set_param'] = {'ttl_second': args.ttl if args.ttl > 0 else 3600}
             cfg['set_nx'] = args.set_nx
             cfg['cache_update_prob'] = args.cache_update_prob
-            if args.target_hit_rate > 0:
-                cfg['target_hit_rate'] = args.target_hit_rate
+            cfg['target_hit_rate'] = args.target_hit_rate
             if args.hot_key_ratio > 0 and args.hot_access_prob > 0:
                 cfg['hot_key_ratio'] = args.hot_key_ratio
                 cfg['hot_access_prob'] = args.hot_access_prob
@@ -1874,8 +1873,8 @@ def _add_gen_config_args(p):
     # Cache mode
     p.add_argument('--key-pool-size', type=int, default=0,
                    help='Cache mode key pool size (0 = disabled)')
-    p.add_argument('--target-hit-rate', type=float, default=0,
-                   help='Target cache hit rate 0.01~1.0 (0 = no adjustment)')
+    p.add_argument('--target-hit-rate', type=float, default=0.8,
+                   help='Target cache hit rate 0.01~1.0 (default: 0.8 auto-adjust; 0 = fixed pool)')
     p.add_argument('--cache-update-prob', type=float, default=0.1,
                    help='Probability to re-Set a versioned value on cache hit, 0.0~1.0 (default: 0.1)')
     p.add_argument('--set-nx', type=_parse_bool, default=True, nargs='?', const=True, dest='set_nx',

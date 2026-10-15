@@ -129,7 +129,7 @@ struct Config {
     int warmupRetryDelayMs = 1000;   // delay between retries
     int warmupTimeoutSeconds = 300;  // Reader wait timeout for all Writer warmups
     int maxKeyPoolSize = 0;          // 0 = auto (kMaxPoolSize = 5M); shared by writer growth + reader pool
-    double targetHitRate = 0.0;      // 0 = fixed pool, 0.01-1.0 = auto-adjust pool to target hit rate
+    double targetHitRate = 0.8;      // target cache hit rate; 0 = fixed pool, 0.01-1.0 = auto-adjust
     double cacheUpdateProb = 0.1;    // probability to re-Set a versioned value on cache hit, [0.0, 1.0]
     // Cache mode: use SetParam.existence = NX (write only when absent; a
     // repeated Set of an existing key is a no-op that keeps the value). With NX
