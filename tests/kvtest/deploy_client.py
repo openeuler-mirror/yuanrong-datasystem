@@ -1623,7 +1623,7 @@ def _build_config(mode, args):
                 cfg['mget_size_distribution']['pending_queue_max'] = args.mget_pending_queue_max
         if mode == 'cache':
             cfg['key_pool_size'] = args.key_pool_size
-            cfg['set_param'] = {'ttl_second': args.ttl}
+            cfg['set_param'] = {'ttl_second': args.ttl if args.ttl > 0 else 3600}
             cfg['set_nx'] = args.set_nx
             cfg['cache_update_prob'] = args.cache_update_prob
             if args.target_hit_rate > 0:
@@ -1876,12 +1876,12 @@ def _add_gen_config_args(p):
                    help='Cache mode key pool size (0 = disabled)')
     p.add_argument('--target-hit-rate', type=float, default=0,
                    help='Target cache hit rate 0.01~1.0 (0 = no adjustment)')
-     p.add_argument('--cache-update-prob', type=float, default=0.1,
-                    help='Probability to re-Set a versioned value on cache hit, 0.0~1.0 (default: 0.1)')
-     p.add_argument('--set-nx', type=_parse_bool, default=True, nargs='?', const=True, dest='set_nx',
-                    help='Use SetParam.existence=NX in cache mode: write only when key absent; '
-                         'repeated Set keeps value (default: true)')
-     p.add_argument('--hot-key-ratio', type=float, default=0,
+    p.add_argument('--cache-update-prob', type=float, default=0.1,
+                   help='Probability to re-Set a versioned value on cache hit, 0.0~1.0 (default: 0.1)')
+    p.add_argument('--set-nx', type=_parse_bool, default=True, nargs='?', const=True, dest='set_nx',
+                   help='Use SetParam.existence=NX in cache mode: write only when key absent; '
+                        'repeated Set keeps value (default: true)')
+    p.add_argument('--hot-key-ratio', type=float, default=0,
                    help='Hot-set fraction of the key pool, (0.0, 1.0] (default: 0 = uniform)')
     p.add_argument('--hot-access-prob', type=float, default=0,
                    help='Probability to draw from the hot set, [0.0, 1.0] (default: 0 = uniform)')
@@ -1919,8 +1919,9 @@ def _add_gen_config_args(p):
                    help='Benchmark duration in seconds (0 = infinite)')
     p.add_argument('--total-rounds', type=int, default=0,
                    help='Benchmark total rounds (0 = infinite)')
-    p.add_argument('--ttl', type=int, default=3600,
-                    help='TTL in seconds via set_param.ttl_second (default: 3600 = 1 hour)')
+    p.add_argument('--ttl', type=int, default=0,
+                    help='TTL in seconds via set_param.ttl_second (default: 0 = no expiry; '
+                         'cache mode defaults to 3600 = 1 hour)')
     # Connect options (applies to all modes)
     p.add_argument('--enable-local-cache', type=_parse_bool, default=False,
                    nargs='?', const=True, dest='enable_local_cache',
