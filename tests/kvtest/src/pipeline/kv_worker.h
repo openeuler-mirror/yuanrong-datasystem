@@ -87,11 +87,13 @@ private:
     std::atomic<int> currentTargetQps_{0};
     std::atomic<uint64_t> notifySuppressed_{0};
     // Backfill probability on miss. Kept at 1.0 (always backfill): a missed key
-    // is written back immediately, so pool growth relies on cache eviction —
-    // not on leaving keys absent — to pull the hit rate down. The warmup race
-    // is handled structurally: keys enter the key pool only after their warmup
-    // Set completes, so a Get can never sample (and backfill) a key the warmup
-    // has not set yet.
+    // is written back immediately. The hit rate is therefore driven down by
+    // pool expansion, TTL expiry and cache eviction — not by leaving keys
+    // absent. The pool does not expand forever: once the grown key set exceeds
+    // the cache capacity, LRU eviction kicks in and lowers the hit rate. The
+    // warmup race is handled structurally: keys enter the key pool only after
+    // their warmup Set completes, so a Get can never sample (and backfill) a
+    // key the warmup has not set yet.
     std::atomic<double> missBackfillProb_{1.0};
     std::chrono::steady_clock::time_point stageStartTime_;
     // Per-key max version seen (from broadcast updates + own hits), for

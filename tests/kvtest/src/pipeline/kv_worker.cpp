@@ -584,10 +584,11 @@ void KVWorker::AdjustPoolSize() {
     const uint64_t maxSize = static_cast<uint64_t>(cfg_.maxKeyPoolSize);
 
     if (currentRate > cfg_.targetHitRate + 0.02) {
-        // Too hot: grow the pool with brand-new (never-seen) keys. Missed new
-        // keys are backfilled (backfill=1.0), so the effective key count grows
-        // until the data volume exceeds the cache capacity and LRU evict pulls
-        // the hit rate down. The pool only grows — indices are never reused.
+        // Too hot: grow the pool with brand-new (never-seen) keys. The hit rate
+        // is driven down by expansion + TTL expiry + cache eviction: the grown
+        // key set eventually exceeds the cache capacity, LRU eviction kicks in
+        // and lowers the hit rate, so the pool does not expand forever. The pool
+        // only grows — indices are never reused (backfill=1.0).
         missBackfillProb_.store(1.0);
         uint64_t newSize = poolSize + std::max<uint64_t>(1, poolSize / 20);
         if (newSize <= maxSize) {
