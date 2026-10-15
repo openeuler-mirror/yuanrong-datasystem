@@ -13,6 +13,7 @@ CacheReader::CacheReader(const Config &cfg,
                          std::shared_ptr<KVClient> client,
                          MetricsCollector &metrics)
     : cfg_(cfg), client_(client), metrics_(metrics),
+      currentTargetQps_(cfg.targetQps),
       verifyCfg_(BuildVerifyConfig(cfg.verifyLevel, cfg.verifySampleBytes,
                                    cfg.verifySampleStepBytes, cfg.verifyFailOp)),
       maxKeyPoolSize_(static_cast<size_t>(cfg.maxKeyPoolSize)),
@@ -46,6 +47,18 @@ void CacheReader::Start() {
         }
         SLOG_INFO("CacheReader starting " << cfg_.numThreads << " reader threads"
                   << ", waiting for " << pendingWarmupWriters_.size() << " writers");
+    }
+
+    // Dynamic QPS initialization, mirrors KVWorker::Start.
+    if (!cfg_.targetQpsStages.empty()) {
+        stageStartTime_ = std::chrono::steady_clock::now();
+    }
+    if (cfg_.targetQpsMin > 0 && cfg_.targetQpsMax > 0) {
+        currentTargetQps_.store(ResampleRandomQps());
+        SLOG_INFO("CacheReader Random QPS: [" << cfg_.targetQpsMin << ", " << cfg_.targetQpsMax
+                  << "], re-sample every " << cfg_.randomQpsIntervalSeconds << "s, initial="
+                  << currentTargetQps_.load());
+        stageStartTime_ = std::chrono::steady_clock::now();
     }
 
     for (int i = 0; i < cfg_.numThreads; i++) {
@@ -185,14 +198,25 @@ void CacheReader::ReaderLoop(int threadId) {
     }
     if (!running_) return;
 
-    // QPS control (same logic as KVWorker::PipelineLoop)
+    // QPS control (same logic as KVWorker::PipelineLoop). Reads
+    // currentTargetQps_ each iteration so stage changes / random resamples
+    // take effect at runtime.
+    auto calcMyQps = [&](int totalQps) -> int {
+        if (totalQps <= 0 || cfg_.numThreads <= 0) return 0;
+        int base = totalQps / cfg_.numThreads;
+        int rem = totalQps % cfg_.numThreads;
+        return base + (threadId < rem ? 1 : 0);
+    };
+
     int64_t intervalUs = 0;
-    if (cfg_.targetQps > 0 && cfg_.numThreads > 0) {
-        int base = cfg_.targetQps / cfg_.numThreads;
-        int rem = cfg_.targetQps % cfg_.numThreads;
-        int myQps = base + (threadId < rem ? 1 : 0);
-        intervalUs = myQps > 0 ? 1000000 / myQps : 1000000000;
+    int lastKnownQps = currentTargetQps_.load();
+    int myQps = calcMyQps(lastKnownQps);
+    if (myQps > 0) {
+        intervalUs = 1000000 / myQps;
+    } else if (lastKnownQps > 0) {
+        intervalUs = 1000000000;  // effectively stopped
     }
+
     kvtest::RateGate gate;
     gate.Configure(intervalUs, threadId, cfg_.numThreads, cfg_.enableJitter);
     gate.ResetGrid(kvtest::SteadyNowUs());
@@ -201,6 +225,24 @@ void CacheReader::ReaderLoop(int threadId) {
               << (intervalUs > 0 ? "" : " (unlimited)"));
 
     while (running_) {
+        // Check for QPS stage change
+        int currentQps = currentTargetQps_.load();
+        if (currentQps != lastKnownQps) {
+            lastKnownQps = currentQps;
+            myQps = calcMyQps(currentQps);
+            if (myQps > 0) {
+                intervalUs = 1000000 / myQps;
+            } else if (currentQps > 0) {
+                intervalUs = 1000000000;
+            } else {
+                intervalUs = 0;
+            }
+            gate.Configure(intervalUs, threadId, cfg_.numThreads, cfg_.enableJitter);
+            gate.ResetGrid(kvtest::SteadyNowUs());
+            SLOG_INFO("Reader thread " << threadId << " QPS → " << currentQps
+                      << " (myQps=" << myQps << ", interval=" << intervalUs << "us)");
+        }
+
         if (gate.Active()) {
             int64_t nowUs = kvtest::SteadyNowUs();
             int64_t fireUs = gate.NextFireUs(nowUs, rng);
@@ -369,4 +411,46 @@ bool CacheReader::CacheGetOrFill(const std::string &key, uint64_t size) {
     metrics_.Record(kOpCacheGetOrFillMiss, missLatency, setRc.GetCode(), size);
     metrics_.RecordCacheMiss();
     return setRc.IsOk();
+}
+
+int CacheReader::ResampleRandomQps() {
+    static thread_local std::mt19937 rng(std::random_device{}());
+    std::uniform_int_distribution<int> dist(cfg_.targetQpsMin, cfg_.targetQpsMax);
+    return dist(rng);
+}
+
+void CacheReader::AdvanceStage() {
+    // Random QPS mode: re-sample uniformly in [min, max] every interval.
+    if (cfg_.targetQpsMin > 0 && cfg_.targetQpsMax > 0) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - stageStartTime_).count();
+        if (elapsed >= cfg_.randomQpsIntervalSeconds) {
+            int newQps = ResampleRandomQps();
+            currentTargetQps_.store(newQps);
+            stageStartTime_ = std::chrono::steady_clock::now();
+            SLOG_INFO("CacheReader Random QPS re-sampled: " << newQps
+                      << " [" << cfg_.targetQpsMin << ", " << cfg_.targetQpsMax << "]");
+        }
+        return;
+    }
+
+    if (cfg_.targetQpsStages.empty() || cfg_.stageDurationSeconds <= 0) return;
+
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - stageStartTime_).count();
+
+    int targetStage = static_cast<int>(elapsed / cfg_.stageDurationSeconds);
+    int lastStage = static_cast<int>(cfg_.targetQpsStages.size()) - 1;
+    if (targetStage > lastStage) {
+        targetStage = lastStage;
+    }
+
+    if (targetStage != currentStageIndex_) {
+        currentStageIndex_ = targetStage;
+        int newQps = cfg_.targetQpsStages[targetStage];
+        currentTargetQps_.store(newQps);
+        SLOG_INFO("CacheReader QPS stage " << targetStage << "/" << lastStage
+                  << ": " << newQps << " QPS"
+                  << (targetStage == lastStage ? " (final stage)" : ""));
+    }
 }
