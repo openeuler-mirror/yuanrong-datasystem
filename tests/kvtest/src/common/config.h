@@ -75,7 +75,7 @@ struct Config {
     int32_t requestTimeoutMs = 20;
     uint64_t fastTransportMemSize = 512ULL * 1024 * 1024;  // 512MB default
     std::vector<uint64_t> dataSizes;                       // parsed bytes
-    uint32_t ttlSeconds = 3600;                         // from set_param.ttl_second, 3600 = 1 hour
+    uint32_t ttlSeconds = 0;                               // from set_param.ttl_second, 0 = no expiry
     int targetQps = 100;                                   // 0 = unlimited
     std::vector<int> targetQpsStages;                      // QPS stages (empty = single fixed QPS)
     int stageDurationSeconds = 0;                          // seconds per stage, 0 = disabled
