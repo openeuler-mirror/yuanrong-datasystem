@@ -7,7 +7,7 @@ Cache 模式使用 `cacheGetOrCreate` 流水线操作，模拟 LLM 推理中的 
 **核心特性：**
 - `cacheGetOrCreate` 流水线：先查后写，模拟缓存复用
 - Key Pool 机制：预热阶段写入初始 key，稳态从池中随机选取
-- 动态命中率控制：`target_hit_rate` 自动调整 Pool 大小（只扩不缩，靠 evict 压命中率）
+- 动态命中率控制：`target_hit_rate` 自动调整 Pool 大小（只扩不缩，命中率靠扩容 + TTL + evict 降低；扩容到数据量超过缓存容量时触发 evict）
 - 概率化批量 Get：`mget_size_distribution` 支持 writer/reader 一次 MGet 多个 key
 - 动态 QPS：writer/reader 均支持 `target_qps_stages` 分阶段与 `target_qps_min/max` 随机
 - NX 写入（`set_nx`）与 TTL 过期（`set_param.ttl_second`，默认 1 小时）
@@ -130,7 +130,7 @@ Pool adjust: hit_rate=0.812 > target=0.8 → pool 158→166
 - 命中率 ≈ target → 保持
 - 调整步长：当前池大小的 1/20（即 5%），最小 1；**池只增不减**（索引不复用）
 - 池上限由 `max_key_pool_size` 控制（默认 `kMaxPoolSize` = 5M）
-- 命中率下降依赖「池不断扩张 → 数据量超过缓存容量 → LRU 淘汰」自然产生 miss（新增 key 采样到后 miss → 回填 Set，不会保持为空）
+- 命中率靠**扩容 + TTL + evict** 三者降低：不会无限扩容——池扩张到数据量超过缓存容量时触发 LRU 淘汰，进而拉低命中率（新增 key 采样到后 miss → 回填 Set，不会保持为空）；TTL 过期同样产生 miss
 
 ---
 
