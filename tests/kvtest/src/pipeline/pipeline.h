@@ -62,7 +62,6 @@ struct PipelineContext {
     // Miss backfill policy (writer side): probability to backfill a miss.
     // 1.0 = always (legacy), 0.0 = never (leave key absent), 0.5 = half.
     double missBackfillProb = 1.0;
-    bool backfilled = false;  // set true by the op when it backfills a miss
 };
 
 // Build a traceId that is unique across worker instances running on the same

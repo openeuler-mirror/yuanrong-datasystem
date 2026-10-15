@@ -164,6 +164,14 @@ void MetricsCollector::FlushWindow() {
 
     // Cache mode: append hit_rate summary line
     if (cacheModeEnabled_) {
+        // Windowed hit rate for the just-completed interval: the ratio of hits
+        // to (hits + misses) since the previous flush, so the pool controller
+        // reacts to recent traffic rather than the cumulative total.
+        uint64_t wHits = windowHitCount_.exchange(0);
+        uint64_t wMisses = windowMissCount_.exchange(0);
+        uint64_t wTotal = wHits + wMisses;
+        recentHitRate_.store(wTotal > 0 ? static_cast<double>(wHits) / wTotal : 1.0);
+
         uint64_t hits = cacheHitCount_.load();
         uint64_t misses = cacheMissCount_.load();
         uint64_t total = hits + misses;

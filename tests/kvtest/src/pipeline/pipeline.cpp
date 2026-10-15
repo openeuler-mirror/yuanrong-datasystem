@@ -309,7 +309,6 @@ static Status OpCacheGetOrCreate(PipelineContext &ctx, double &latencyMs) {
             return Status::OK();
         }
     }
-    ctx.backfilled = true;
 
     // Step 2: CreateBuffer
     std::shared_ptr<Buffer> buf;

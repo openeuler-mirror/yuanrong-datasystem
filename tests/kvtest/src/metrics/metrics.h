@@ -54,11 +54,14 @@ public:
 
     std::atomic<uint64_t> &VerifyFailCounter() { return verifyFailCount_; }
 
-    void RecordCacheHit()  { cacheHitCount_++; }
-    void RecordCacheMiss() { cacheMissCount_++; }
+    void RecordCacheHit()  { cacheHitCount_++; windowHitCount_++; }
+    void RecordCacheMiss() { cacheMissCount_++; windowMissCount_++; }
     void RecordCacheGetError() { cacheGetErrorCount_++; }
     void RecordCacheStale() { cacheStaleCount_++; }
     double CacheHitRate() const;
+    // Windowed hit rate over the just-completed flush interval (1.0 when the
+    // window had no traffic); used by the pool controller for fast reaction.
+    double RecentHitRate() const { return recentHitRate_.load(); }
 
     void Start();
     void Stop();
@@ -88,6 +91,11 @@ private:
     std::atomic<uint64_t> cacheMissCount_{0};
     std::atomic<uint64_t> cacheGetErrorCount_{0};
     std::atomic<uint64_t> cacheStaleCount_{0};
+    // Windowed counters, reset on each flush; recentHitRate_ holds the ratio from
+    // the just-completed interval.
+    std::atomic<uint64_t> windowHitCount_{0};
+    std::atomic<uint64_t> windowMissCount_{0};
+    std::atomic<double> recentHitRate_{1.0};
     bool cacheModeEnabled_ = false;
     bool cudaMetricsEnabled_ = false;
     std::vector<int> qpsStages_;

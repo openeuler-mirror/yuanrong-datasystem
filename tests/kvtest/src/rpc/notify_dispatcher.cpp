@@ -36,16 +36,21 @@ NotifyDispatcher::NotifyDispatcher(const Config &cfg,
 void NotifyDispatcher::DispatchNotify(const std::string &action, int sender,
                                       const std::vector<std::string> &keys,
                                       uint64_t size, uint64_t version) {
-    // Cache mode: warmup_done notification
-    if (action == "warmup_done" && cacheReader_) {
-        cacheReader_->OnWarmupDone(sender, keys);
+    // Cache mode: warmup_done notification → build the shared key pool, either
+    // on the cache reader or (homogeneous model) on the writer.
+    if (action == "warmup_done") {
+        if (cacheReader_) {
+            cacheReader_->OnWarmupDone(sender, keys);
+        } else if (cfg_.keyPoolSize > 0 && worker_) {
+            worker_->OnWarmupDone(sender, keys);
+        }
         return;
     }
 
     if (keys.empty()) return;
 
-    // Cache mode: version-bearing notify is an update broadcast; otherwise the
-    // keys are plain backfill sync.
+    // Cache mode reader: version-bearing notify is an update broadcast;
+    // otherwise the keys are plain backfill sync.
     if (cacheReader_) {
         if (version > 0) {
             cacheReader_->OnUpdateVersion(keys, version);
@@ -55,13 +60,16 @@ void NotifyDispatcher::DispatchNotify(const std::string &action, int sender,
         return;
     }
 
-    // Cache-mode writer without a dedicated reader (homogeneous read+write
-    // clients): route version updates into the writer's per-key max-version
-    // map, and ignore plain warmup/backfill sync (a writer has no key pool to
-    // synchronize). This also keeps warmup_done/backfill from falling through
-    // to the pipeline-mode notify_pipeline (getBuffer) below.
+    // Cache mode writer (homogeneous read+write clients): version updates feed
+    // the writer's max-version map; plain backfill/new-key sync feeds its
+    // shared key pool. This also keeps these from falling through to the
+    // pipeline-mode notify_pipeline (getBuffer) below.
     if (cfg_.keyPoolSize > 0 && worker_) {
-        if (version > 0) worker_->OnUpdateVersion(keys, version);
+        if (version > 0) {
+            worker_->OnUpdateVersion(keys, version);
+        } else {
+            worker_->OnEvictKeys(keys);
+        }
         return;
     }
 
