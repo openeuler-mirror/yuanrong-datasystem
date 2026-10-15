@@ -511,6 +511,21 @@ static int RunServerMode(const Config &cfg)
     }
     metrics.Start();
 
+    if (cacheMode) {
+        SLOG_INFO("==== cache 模式日志字段说明 ====");
+        SLOG_INFO("速率段(/s): cacheGetOrCreate=writer缓存Get(未命中则回填), "
+                  << "getBuffer=单key Get(未启用mget), mGet=批量Get(启用mget), "
+                  << "createBuffer/memoryCopy/setBuffer=未命中回填三步, "
+                  << "cacheSetUpdate=命中时按概率re-Set");
+        SLOG_INFO("速率段(reader): cacheGetOrFill_hit=命中, cacheGetOrFill_miss=未命中, "
+                  << "cacheExist=未命中Exist检查, cacheSetFill=未命中回填Set");
+        SLOG_INFO("队列段: out_q/in_q=notify出/入队深度, dropped=队列满丢弃, "
+                  << "suppressed=生产者抑制, peer_cooldown_skipped/probe_skipped=peer冷却/探测跳过");
+        SLOG_INFO("缓存段: pool=writer池大小, read_pool=reader池大小, "
+                  << "max_seen=最大版本数(NX模式为0), hit_rate=窗口命中率, "
+                  << "qps=当前目标QPS(动态QPS时)");
+    }
+
     ControlServer server(cfg, client, metrics, gRunning);
 
     // Cache mode: create CacheReader before the server starts accepting connections
