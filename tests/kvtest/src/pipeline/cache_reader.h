@@ -64,7 +64,10 @@ public:
 
 private:
     void ReaderLoop(int threadId);
+    // Single-key cache Get: hit -> verify + optional re-Set; miss -> Exist +
+    // backfill Set.
     bool CacheGetOrFill(const std::string &key, uint64_t size);
+    // Batch cache Get (mget mode): one MGet, then per-key hit/miss handling.
     bool CacheGetOrFillBatch(const std::vector<std::string> &keys,
                              const std::vector<uint64_t> &sizes);
     std::string RandomKey(std::mt19937 &rng);

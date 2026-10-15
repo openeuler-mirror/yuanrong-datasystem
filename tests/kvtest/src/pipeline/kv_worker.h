@@ -86,10 +86,12 @@ private:
     std::atomic<uint64_t> currentPoolSize_{0};
     std::atomic<int> currentTargetQps_{0};
     std::atomic<uint64_t> notifySuppressed_{0};
-    // Backfill probability on miss; raised/lowered by AdjustPoolSize (0.5 when
-    // too cold/neutral, 0 when too hot). The warmup race is handled structurally:
-    // keys enter the key pool only after their warmup Set completes, so a Get
-    // can never sample (and backfill) a key the warmup has not set yet.
+    // Backfill probability on miss. Kept at 1.0 (always backfill): a missed key
+    // is written back immediately, so pool growth relies on cache eviction —
+    // not on leaving keys absent — to pull the hit rate down. The warmup race
+    // is handled structurally: keys enter the key pool only after their warmup
+    // Set completes, so a Get can never sample (and backfill) a key the warmup
+    // has not set yet.
     std::atomic<double> missBackfillProb_{1.0};
     std::chrono::steady_clock::time_point stageStartTime_;
     // Per-key max version seen (from broadcast updates + own hits), for
@@ -97,7 +99,8 @@ private:
     mutable kvtest::mutex versionMutex_;
     std::unordered_map<std::string, uint64_t> maxSeenVersion_;
     // Shared key pool the writer samples from (own warmup keys + other clients'
-    // keys via warmup_done + backfill broadcasts). Guards by keyPoolMutex_.
+    // keys via warmup_done/backfill broadcasts + expand-added keys). Guarded by
+    // keyPoolMutex_.
     mutable kvtest::shared_mutex keyPoolMutex_;
     std::vector<std::string> keyPool_;
     size_t warmupKeyCount_ = 0;  // total warmup keys (own + others'), never trimmed

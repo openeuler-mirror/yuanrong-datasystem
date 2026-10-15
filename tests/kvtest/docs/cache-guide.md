@@ -7,7 +7,10 @@ Cache 模式使用 `cacheGetOrCreate` 流水线操作，模拟 LLM 推理中的 
 **核心特性：**
 - `cacheGetOrCreate` 流水线：先查后写，模拟缓存复用
 - Key Pool 机制：预热阶段写入初始 key，稳态从池中随机选取
-- 动态命中率控制：`target_hit_rate` 自动调整 Pool 大小
+- 动态命中率控制：`target_hit_rate` 自动调整 Pool 大小（只扩不缩，靠 evict 压命中率）
+- 概率化批量 Get：`mget_size_distribution` 支持 writer/reader 一次 MGet 多个 key
+- 动态 QPS：writer/reader 均支持 `target_qps_stages` 分阶段与 `target_qps_min/max` 随机
+- NX 写入（`set_nx`）与 TTL 过期（`set_param.ttl_second`，默认 1 小时）
 - Writer + Reader 跨实例缓存验证
 - 推理延迟模拟：Cache miss 后的等待时间
 
@@ -102,11 +105,14 @@ Pool adjust: hit_rate=0.812 > target=0.8 → pool 158→166
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `key_pool_size` | int | 0 | Key 池初始大小，**0 = 禁用 Cache 模式** |
-| `target_hit_rate` | double | 0.0 | 目标命中率，0 = 固定池大小，0.01~1.0 = 自动调整 |
-| `cache_update_prob` | double | 0.0 | 命中后以该概率重新 Set 一个带版本号的新值（覆盖写路径），0 = 关闭 |
+| `target_hit_rate` | double | 0.8 | 目标命中率，0 = 固定池大小（不自动调整），0.01~1.0 = 自动调整 |
+| `cache_update_prob` | double | 0.1 | 命中后以该概率重新 Set 一个带版本号的新值（覆盖写路径），0 = 关闭 |
+| `set_nx` | bool | true | 命中写入用 `existence=NX`（仅当 key 不存在才写）；true 时跳过版本检查与更新广播 |
 | `hot_key_ratio` | double | 0.0 | 热集占池比例，(0.0, 1.0]，0 = 均匀随机 |
 | `hot_access_prob` | double | 0.0 | 每次从热集取 key 的概率，[0.0, 1.0]，0 = 均匀随机（与 hot_key_ratio 必须同时为 0 或同时 >0） |
-| `max_key_pool_size` | int | 0 | Key 池上限，0 = 自动（key_pool_size × 20） |
+| `max_key_pool_size` | int | 0 | Key 池上限，0 = 自动（`kMaxPoolSize` = 5M） |
+| `set_param.ttl_second` | int | 3600 | key 过期时间（秒）；0 = 永不过期。cache 模式默认 1 小时 |
+| `mget_size_distribution` | object | 关闭 | 概率化批量 Get（见 §8）；`single_prob < 1.0` 启用 |
 | `inference_delay_ms` | int | 0 | 模拟推理延迟（毫秒），Cache miss 后的等待 |
 | `warmup_retry_count` | int | 3 | 预热阶段每个 key 的最大重试次数 |
 | `warmup_retry_delay_ms` | int | 1000 | 预热重试间隔（毫秒） |
@@ -118,12 +124,13 @@ Pool adjust: hit_rate=0.812 > target=0.8 → pool 158→166
 
 ## 4. 命中率调整算法
 
-- 每 `metrics_interval_ms`（默认 3s）评估一次当前命中率
-- 命中率 > target + 0.02 → 扩大池（增加 key 范围），命中率自然下降
-- 命中率 < target - 0.02 → 缩小池（减少 key 范围），命中率自然上升
-- 调整步长：当前池大小的 1/20（即 5%），最小 1
-- 池大小范围：`max(10, key_pool_size / 10)` ~ `key_pool_size × 20`
-- 池大小上限由 `max_key_pool_size` 配置项控制（默认 `key_pool_size × 20`）
+- 每 `metrics_interval_ms`（默认 3s）评估一次当前窗口命中率
+- 命中率 > target + 0.02 → 扩大池（新增一批未见过 key，广播给所有 client）
+- 命中率 < target - 0.02 → 保持池大小，miss 100% 回填暖场
+- 命中率 ≈ target → 保持
+- 调整步长：当前池大小的 1/20（即 5%），最小 1；**池只增不减**（索引不复用）
+- 池上限由 `max_key_pool_size` 控制（默认 `kMaxPoolSize` = 5M）
+- 命中率下降依赖「池不断扩张 → 数据量超过缓存容量 → LRU 淘汰」自然产生 miss（新增 key 采样到后 miss → 回填 Set，不会保持为空）
 
 ---
 
@@ -240,3 +247,36 @@ Writer 稳态每次成功操作都会把触碰的 key 以空 action 通知 Reade
 - [ ] `data_sizes=["8MB","16MB"]` 下，key `cache_pool_0_N` 的大小 = N%2 对应档位，verify 无 size mismatch
 - [ ] 同一 key 命中 / 回填 / 更新（cache_update_prob）后大小始终不变
 - [ ] 单档配置行为与旧版一致（退化为固定大小）
+
+---
+
+## 8. 概率化批量 Get（mget）
+
+`mget_size_distribution` 让 cache 模式的 writer/reader 在 Get 时按概率采样批大小，一次 `MGet` 多个 key：
+
+```json
+{
+  "mget_size_distribution": {
+    "single_prob": 0.95,
+    "min_batch": 2,
+    "max_batch": 5,
+    "pending_queue_max": 65536
+  }
+}
+```
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `single_prob` | 1.0 | 单 key Get 的概率；< 1.0 启用批量 |
+| `min_batch` | 2 | 批量分支的最小批大小 |
+| `max_batch` | 5 | 批量分支的最大批大小 |
+| `pending_queue_max` | 65536 | 仅 pipeline 模式 notify 驱动 mGet 的队列上限；cache 模式不使用 |
+
+语义：
+
+- 每次 Get 以 `single_prob` 概率取 1 个 key，否则均匀取 `[min_batch, max_batch]` 个 key
+- 抽样 key 去重；一次 `MGet` 后逐 key 处理 hit（校验 + 可选 re-Set）/ miss（回填）
+- `single_prob >= 1.0`（默认）关闭，走单 key 路径
+- 日志里批量 Get 记为 `mGet`（替代单 key 的 `getBuffer`）
+
+> **注意**：`pending_queue_max` 只对 pipeline 模式 notify 驱动的 mGet 有效；cache 模式主动采样直接 MGet，无 pending 队列。
