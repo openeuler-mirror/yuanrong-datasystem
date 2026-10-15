@@ -209,8 +209,8 @@ bash tests/test_standalone_mode.sh
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `key_pool_size` | int | 0 | Key 池初始大小，**0 = 禁用 Cache 模式** |
-| `target_hit_rate` | double | 0.0 | 目标命中率，0 = 固定池大小，0.01~1.0 = 自动调整 |
-| `max_key_pool_size` | int | 0 | Key 池上限，0 = 自动（key_pool_size × 20） |
+| `target_hit_rate` | double | 0.8 | 目标命中率，0 = 固定池大小（不自动调整），0.01~1.0 = 自动调整 |
+| `max_key_pool_size` | int | 0 | Key 池上限，0 = 自动（`kMaxPoolSize` = 5M） |
 | `inference_delay_ms` | int | 0 | 模拟推理延迟（毫秒），Cache miss 后的等待 |
 | `warmup_retry_count` | int | 3 | 预热阶段每个 key 的最大重试次数 |
 | `warmup_retry_delay_ms` | int | 1000 | 预热重试间隔（毫秒） |

@@ -26,9 +26,12 @@ public:
     virtual ~PeerControlClient() = default;
 
     // Notify a peer. action="warmup_done" targets the cache warmup path; an
-    // empty action takes the normal notify_pipeline path.
-    virtual void Notify(const std::string &host, int port, const std::string &action,
-                        int sender, const std::vector<std::string> &keys, uint64_t size) = 0;
+    // empty action takes the normal notify_pipeline path. version (0 = none)
+    // carries the wall-clock version stamp for cache update broadcasts.
+    // Returns true when the peer acknowledged the notify RPC.
+    virtual bool Notify(const std::string &host, int port, const std::string &action,
+                        int sender, const std::vector<std::string> &keys, uint64_t size,
+                        uint64_t version) = 0;
 
     // Ordinary notifications skipped after a peer failure, counted per target.
     virtual PeerNotifySkipCounts GetNotifySkipCounts() const = 0;

@@ -511,6 +511,21 @@ static int RunServerMode(const Config &cfg)
     }
     metrics.Start();
 
+    if (cacheMode) {
+        SLOG_INFO("==== cache 模式日志字段说明 ====");
+        SLOG_INFO("速率段(/s): cacheGetOrCreate=writer缓存Get(未命中则回填), "
+                  << "getBuffer=单key Get(未启用mget), mGet=批量Get(启用mget), "
+                  << "createBuffer/memoryCopy/setBuffer=未命中回填三步, "
+                  << "cacheSetUpdate=命中时按概率re-Set");
+        SLOG_INFO("速率段(reader): cacheGetOrFill_hit=命中, cacheGetOrFill_miss=未命中, "
+                  << "cacheExist=未命中Exist检查, cacheSetFill=未命中回填Set");
+        SLOG_INFO("队列段: out_q/in_q=notify出/入队深度, dropped=队列满丢弃, "
+                  << "suppressed=生产者抑制, peer_cooldown_skipped/probe_skipped=peer冷却/探测跳过");
+        SLOG_INFO("缓存段: pool=writer池大小, read_pool=reader池大小, "
+                  << "max_seen=最大版本数(NX模式为0), hit_rate=窗口命中率, "
+                  << "qps=当前目标QPS(动态QPS时)");
+    }
+
     ControlServer server(cfg, client, metrics, gRunning);
 
     // Cache mode: create CacheReader before the server starts accepting connections
@@ -529,8 +544,11 @@ static int RunServerMode(const Config &cfg)
     std::unique_ptr<KVWorker> worker;
     if (cfg.role == "writer") {
         worker = std::make_unique<KVWorker>(cfg, client, metrics);
-        worker->Start();
+        // Set the worker before Start (warmup) so that notify broadcasts that
+        // arrive during warmup route to worker_->OnUpdateVersion instead of
+        // falling through to the pipeline-mode notify_pipeline (getBuffer).
         server.SetWorker(worker.get());
+        worker->Start();
     } else {
         SLOG_INFO("Reader mode: waiting for notifications...");
     }
@@ -549,9 +567,10 @@ static int RunServerMode(const Config &cfg)
         // QPS stage / random-QPS resample is time-idempotent (only acts when
         // the configured interval has elapsed), so tick it on the 200ms loop
         // rather than the 3s reporting cadence for finer granularity.
-        if (worker && (!cfg.targetQpsStages.empty()
-                       || (cfg.targetQpsMin > 0 && cfg.targetQpsMax > 0))) {
-            worker->AdvanceStage();
+        if (!cfg.targetQpsStages.empty()
+            || (cfg.targetQpsMin > 0 && cfg.targetQpsMax > 0)) {
+            if (worker) worker->AdvanceStage();
+            if (cacheReader) cacheReader->AdvanceStage();
         }
         if (std::chrono::duration<double>(now - lastReport).count() < 3.0) {
             continue;
@@ -609,11 +628,17 @@ static int RunServerMode(const Config &cfg)
                       << ", peer_cooldown_skipped=" << peerSkipped.cooldown
                       << ", peer_probe_skipped=" << peerSkipped.recoveryProbe << "]"
                       << (cacheMode ? (" [pool=" + std::to_string(worker ? worker->CurrentPoolSize() : 0)
-                                       + ", hit_rate=" + std::to_string(metrics.CacheHitRate()) + "]")
+                                       + ", read_pool=" + std::to_string(cacheReader ? cacheReader->KeyPoolSize()
+                                                                                   : (worker ? worker->KeyPoolSize() : 0))
+                                       + ", max_seen=" + std::to_string(cacheReader ? cacheReader->MaxSeenVersionSize()
+                                                                                   : (worker ? worker->MaxSeenVersionSize() : 0))
+                                       + ", hit_rate=" + std::to_string(metrics.RecentHitRate()) + "]")
                                     : "")
                       << ((!cfg.targetQpsStages.empty()
-                           || (cfg.targetQpsMin > 0 && cfg.targetQpsMax > 0)) && worker
-                              ? (" [qps=" + std::to_string(worker->CurrentTargetQps()) + "]")
+                           || (cfg.targetQpsMin > 0 && cfg.targetQpsMax > 0))
+                              ? (" [qps=" + std::to_string(
+                                     worker ? worker->CurrentTargetQps()
+                                            : (cacheReader ? cacheReader->CurrentTargetQps() : 0)) + "]")
                               : ""));
 
         if (worker && cfg.targetHitRate > 0.0) {

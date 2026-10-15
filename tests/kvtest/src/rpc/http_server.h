@@ -38,7 +38,7 @@ public:
 
     // Inject the writer so /stop can flip its pipeline loop flag immediately
     // instead of waiting for main's shutdown delay. Mirrors SetCacheReader.
-    void SetWorker(KVWorker *worker) { worker_ = worker; }
+    void SetWorker(KVWorker *worker) { worker_ = worker; dispatcher_.SetWorker(worker); }
 
 private:
     void HandleNotify(const std::string &body);

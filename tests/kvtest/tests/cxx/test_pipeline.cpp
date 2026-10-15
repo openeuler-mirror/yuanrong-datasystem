@@ -11,7 +11,7 @@ TEST(GetAllOpNames_Base) {
 
 TEST(GetAllOpNames_Cache) {
     auto &names = GetAllOpNames(true);
-    ASSERT_EQ(names.size(), 14u);
+    ASSERT_EQ(names.size(), 11u);
 }
 
 TEST(GetAllOpNames_StableReference) {
@@ -118,4 +118,30 @@ TEST(SampleMgetBatchSize_Edge_AllBatch) {
     for (int i = 0; i < 1000; i++) {
         ASSERT_EQ(SampleMgetBatchSize(d, rng), 3);
     }
+}
+
+TEST(CacheKeySize_Modulo) {
+    std::vector<uint64_t> sizes = {100, 200, 300};
+    ASSERT_EQ(CacheKeySize(0, sizes), 100u);
+    ASSERT_EQ(CacheKeySize(1, sizes), 200u);
+    ASSERT_EQ(CacheKeySize(2, sizes), 300u);
+    ASSERT_EQ(CacheKeySize(3, sizes), 100u);
+    ASSERT_EQ(CacheKeySize(7, sizes), 100u);
+    ASSERT_EQ(CacheKeySize(8, sizes), 200u);
+    // Single entry degenerates to fixed size
+    std::vector<uint64_t> single = {42};
+    ASSERT_EQ(CacheKeySize(0, single), 42u);
+    ASSERT_EQ(CacheKeySize(12345, single), 42u);
+    // Empty is defensive-zero
+    std::vector<uint64_t> empty;
+    ASSERT_EQ(CacheKeySize(5, empty), 0u);
+}
+
+TEST(ParseCacheKeyIdx) {
+    ASSERT_EQ(ParseCacheKeyIdx("cache_pool_0_42"), 42u);
+    ASSERT_EQ(ParseCacheKeyIdx("cache_pool_12_2000000"), 2000000u);
+    ASSERT_EQ(ParseCacheKeyIdx("cache_pool_3_0"), 0u);
+    ASSERT_EQ(ParseCacheKeyIdx("badkey"), 0u);
+    ASSERT_EQ(ParseCacheKeyIdx("cache_pool_1_"), 0u);
+    ASSERT_EQ(ParseCacheKeyIdx("cache_pool_1_7x"), 0u);
 }

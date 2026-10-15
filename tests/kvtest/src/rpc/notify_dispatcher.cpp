@@ -2,6 +2,7 @@
 
 #include "pipeline/cache_reader.h"
 #include "pipeline/data_pattern.h"
+#include "pipeline/kv_worker.h"
 #include "common/simple_log.h"
 #include <utility>
 
@@ -34,18 +35,41 @@ NotifyDispatcher::NotifyDispatcher(const Config &cfg,
 
 void NotifyDispatcher::DispatchNotify(const std::string &action, int sender,
                                       const std::vector<std::string> &keys,
-                                      uint64_t size) {
-    // Cache mode: warmup_done notification
-    if (action == "warmup_done" && cacheReader_) {
-        cacheReader_->OnWarmupDone(sender, keys);
+                                      uint64_t size, uint64_t version) {
+    // Cache mode: warmup_done notification → build the shared key pool, either
+    // on the cache reader or (homogeneous model) on the writer.
+    if (action == "warmup_done") {
+        if (cacheReader_) {
+            cacheReader_->OnWarmupDone(sender, keys);
+        } else if (cfg_.keyPoolSize > 0 && worker_) {
+            worker_->OnWarmupDone(sender, keys);
+        }
         return;
     }
 
     if (keys.empty()) return;
 
-    // Cache mode: evict keys -> CacheReader
+    // Cache mode reader: version-bearing notify is an update broadcast;
+    // otherwise the keys are plain backfill sync.
     if (cacheReader_) {
-        cacheReader_->OnEvictKeys(keys);
+        if (version > 0) {
+            cacheReader_->OnUpdateVersion(keys, version);
+        } else {
+            cacheReader_->OnEvictKeys(keys);
+        }
+        return;
+    }
+
+    // Cache mode writer (homogeneous read+write clients): version updates feed
+    // the writer's max-version map; plain backfill/new-key sync feeds its
+    // shared key pool. This also keeps these from falling through to the
+    // pipeline-mode notify_pipeline (getBuffer) below.
+    if (cfg_.keyPoolSize > 0 && worker_) {
+        if (version > 0) {
+            worker_->OnUpdateVersion(keys, version);
+        } else {
+            worker_->OnEvictKeys(keys);
+        }
         return;
     }
 

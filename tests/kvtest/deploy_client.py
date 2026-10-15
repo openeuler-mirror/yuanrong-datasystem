@@ -1606,11 +1606,13 @@ def _build_config(mode, args):
         cfg['notify_count'] = args.notify_count
         if args.batch_keys_count > 1:
             cfg['batch_keys_count'] = args.batch_keys_count
-        if args.ttl > 0:
+        # TTL for pipeline mode: only when explicitly set (--ttl 0 disables).
+        # Cache mode emits set_param in its own block below.
+        if mode != 'cache' and args.ttl > 0:
             cfg['set_param'] = {'ttl_second': args.ttl}
-        # Reader-side probabilistic mGet batch sizing (C2 non-blocking).
-        # Active when single_prob < 1.0. Requires notify_pipeline to contain
-        # mGet for the distribution to actually take effect.
+        # Probabilistic mGet batch sizing. Active when single_prob < 1.0. In
+        # cache mode this drives the writer/reader batch Get directly; in
+        # pipeline mode it also requires notify_pipeline to contain mGet.
         if args.mget_single_prob < 1.0:
             cfg['mget_size_distribution'] = {
                 'single_prob': args.mget_single_prob,
@@ -1621,8 +1623,13 @@ def _build_config(mode, args):
                 cfg['mget_size_distribution']['pending_queue_max'] = args.mget_pending_queue_max
         if mode == 'cache':
             cfg['key_pool_size'] = args.key_pool_size
-            if args.target_hit_rate > 0:
-                cfg['target_hit_rate'] = args.target_hit_rate
+            cfg['set_param'] = {'ttl_second': args.ttl if args.ttl > 0 else 3600}
+            cfg['set_nx'] = args.set_nx
+            cfg['cache_update_prob'] = args.cache_update_prob
+            cfg['target_hit_rate'] = args.target_hit_rate
+            if args.hot_key_ratio > 0 and args.hot_access_prob > 0:
+                cfg['hot_key_ratio'] = args.hot_key_ratio
+                cfg['hot_access_prob'] = args.hot_access_prob
             if args.warmup_timeout != 60:
                 cfg['warmup_timeout_seconds'] = args.warmup_timeout
             if args.inference_delay > 0:
@@ -1831,15 +1838,16 @@ def _add_gen_config_args(p):
     p.add_argument('--random-qps-interval', type=int, default=1,
                    help='Re-sample interval in seconds for --random-qps (default: 1)')
     p.add_argument('--notify-count', type=int, default=10,
-                   help='Number of peers to notify per write (default: 10)')
-    # Reader-side probabilistic mGet batch sizing (C2 non-blocking variant).
-    # When --mget-single-prob < 1.0, each notify-triggered mGet samples a
-    # target batch size: with probability --mget-single-prob it is 1,
+                   help='Number of peers to notify per write in pipeline mode '
+                        '(default: 10). Ignored in cache mode, which broadcasts to all peers.')
+    # Probabilistic mGet batch sizing. When --mget-single-prob < 1.0, a Get
+    # samples a target batch size: with probability --mget-single-prob it is 1,
     # otherwise a uniform draw from [--mget-min-batch, --mget-max-batch].
-    # The actual batch is min(target, pending queue depth); no waiting.
-    # Requires --notify-pipeline to contain mGet.
+    # Drives cache-mode writer/reader batch Get directly; in pipeline mode it
+    # also requires --notify-pipeline to contain mGet (notify-triggered variant,
+    # actual batch = min(target, pending queue depth)).
     p.add_argument('--mget-single-prob', type=float, default=1.0,
-                   help='Probability that a notify-triggered mGet fetches a single key '
+                   help='Probability that a Get fetches a single key '
                         '(default: 1.0 = disabled, always single-key). Set < 1.0 to enable '
                         'probabilistic batch sizing, e.g. 0.95 for 95%% single / 5%% batch.')
     p.add_argument('--mget-min-batch', type=int, default=2,
@@ -1866,8 +1874,17 @@ def _add_gen_config_args(p):
     # Cache mode
     p.add_argument('--key-pool-size', type=int, default=0,
                    help='Cache mode key pool size (0 = disabled)')
-    p.add_argument('--target-hit-rate', type=float, default=0,
-                   help='Target cache hit rate 0.01~1.0 (0 = no adjustment)')
+    p.add_argument('--target-hit-rate', type=float, default=0.8,
+                   help='Target cache hit rate 0.01~1.0 (default: 0.8 auto-adjust; 0 = fixed pool)')
+    p.add_argument('--cache-update-prob', type=float, default=0.1,
+                   help='Probability to re-Set a versioned value on cache hit, 0.0~1.0 (default: 0.1)')
+    p.add_argument('--set-nx', type=_parse_bool, default=True, nargs='?', const=True, dest='set_nx',
+                   help='Use SetParam.existence=NX in cache mode: write only when key absent; '
+                        'repeated Set keeps value (default: true)')
+    p.add_argument('--hot-key-ratio', type=float, default=0,
+                   help='Hot-set fraction of the key pool, (0.0, 1.0] (default: 0 = uniform)')
+    p.add_argument('--hot-access-prob', type=float, default=0,
+                   help='Probability to draw from the hot set, [0.0, 1.0] (default: 0 = uniform)')
     p.add_argument('--warmup-timeout', type=int, default=60,
                    help='Reader warmup timeout in seconds (default: 60)')
     p.add_argument('--inference-delay', type=int, default=0,
@@ -1903,7 +1920,8 @@ def _add_gen_config_args(p):
     p.add_argument('--total-rounds', type=int, default=0,
                    help='Benchmark total rounds (0 = infinite)')
     p.add_argument('--ttl', type=int, default=0,
-                   help='TTL in seconds via set_param.ttl_second (default: 0, no expiry)')
+                    help='TTL in seconds via set_param.ttl_second (default: 0 = no expiry; '
+                         'cache mode defaults to 3600 = 1 hour)')
     # Connect options (applies to all modes)
     p.add_argument('--enable-local-cache', type=_parse_bool, default=False,
                    nargs='?', const=True, dest='enable_local_cache',

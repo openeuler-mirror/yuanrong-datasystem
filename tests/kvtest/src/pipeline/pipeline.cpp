@@ -3,6 +3,7 @@
 #include "data_pattern.h"
 #include "common/simple_log.h"
 #include <datasystem/context/context.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -220,6 +221,113 @@ static Status OpCacheGetOrCreate(PipelineContext &ctx, double &latencyMs) {
     }
     latencyMs = 0;
 
+    // ---- Batch mGet path (mget_size_distribution enabled) ----
+    if (ctx.batchKeys.size() > 1) {
+        const auto &keys = ctx.batchKeys;
+        std::vector<Optional<Buffer>> results;
+        double getLat = 0;
+        Status getRc = Measure([&]() {
+            return ctx.client->Get(keys, results);
+        }, getLat);
+        latencyMs += getLat;
+        uint64_t totalBytes = 0;
+        for (size_t i = 0; i < keys.size(); i++) {
+            totalBytes += (i < ctx.batchSizes.size()) ? ctx.batchSizes[i] : ctx.size;
+        }
+        ctx.metrics->Record(kOpMGet, getLat, getRc.GetCode(), totalBytes);
+
+        bool anyFail = false;
+        size_t n = std::min(keys.size(), results.size());
+        for (size_t i = 0; i < n; i++) {
+            const std::string &key = keys[i];
+            uint64_t size = (i < ctx.batchSizes.size()) ? ctx.batchSizes[i] : ctx.size;
+
+            if (results[i]) {
+                // Hit: verify + record + optional cache-update re-Set.
+                VerifyFailReason reason = VerifyFailReason::NONE;
+                bool vok = VerifyBuffer(results[i]->ImmutableData(),
+                                        static_cast<uint64_t>(results[i]->GetSize()),
+                                        size, /*senderId=*/0, ctx.verifyCfg, &reason);
+                if (!vok) {
+                    if (reason == VerifyFailReason::SIZE) {
+                        SLOG_WARN("cacheGetOrCreate size mismatch on hit: key=" << key
+                                  << " expected=" << size << " got=" << results[i]->GetSize());
+                    } else {
+                        SLOG_WARN("cacheGetOrCreate content mismatch on hit: key=" << key
+                                  << " level=" << static_cast<int>(ctx.verifyCfg.level)
+                                  << " senderId=" << ctx.senderId);
+                    }
+                    if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
+                }
+                ctx.metrics->RecordCacheHit();
+                uint64_t readVersion = ReadVersion(results[i]->ImmutableData(),
+                                                   static_cast<uint64_t>(results[i]->GetSize()));
+                ctx.batchHitKeys.push_back(key);
+                ctx.batchHitVersions.push_back(readVersion);
+
+                if (ctx.cacheUpdateProb > 0.0) {
+                    static thread_local std::mt19937 updateRng(std::random_device{}());
+                    static thread_local std::uniform_real_distribution<double> updateDist(0.0, 1.0);
+                    if (updateDist(updateRng) < ctx.cacheUpdateProb) {
+                        uint64_t version = NowNanos();
+                        std::string newData = GenerateVersionedData(size, version);
+                        double setLat = 0;
+                        Status setRc = Measure([&]() {
+                            return ctx.client->Set(key, StringView(newData), ctx.param);
+                        }, setLat);
+                        latencyMs += setLat;
+                        ctx.metrics->Record(kOpCacheSetUpdate, setLat, setRc.GetCode(), size);
+                        if (setRc.IsOk()) {
+                            ctx.batchUpdatedKeys.push_back(key);
+                            ctx.batchUpdatedVersions.push_back(version);
+                        }
+                    }
+                }
+                if (!vok && ctx.verifyCfg.failOp) anyFail = true;
+            } else {
+                // Miss: record + conditional backfill (Create + MemoryCopy + Set).
+                ctx.metrics->RecordCacheMiss();
+                if (ctx.missBackfillProb > 0.0) {
+                    bool doBackfill = true;
+                    if (ctx.missBackfillProb < 1.0) {
+                        static thread_local std::mt19937 backfillRng(std::random_device{}());
+                        static thread_local std::uniform_real_distribution<double> backfillDist(0.0, 1.0);
+                        doBackfill = backfillDist(backfillRng) < ctx.missBackfillProb;
+                    }
+                    if (doBackfill) {
+                        std::shared_ptr<Buffer> buf;
+                        double createLat = 0;
+                        Status createRc = Measure([&]() {
+                            return ctx.client->Create(key, size, ctx.param, buf);
+                        }, createLat);
+                        latencyMs += createLat;
+                        ctx.metrics->Record(kOpCreateBuffer, createLat, createRc.GetCode(), size);
+                        if (createRc.IsOk() && buf) {
+                            std::string fill = GenerateVersionedData(size, NowNanos());
+                            double copyLat = 0;
+                            Status copyRc = Measure([&]() {
+                                return buf->MemoryCopy(fill.data(), size);
+                            }, copyLat);
+                            latencyMs += copyLat;
+                            ctx.metrics->Record(kOpMemoryCopy, copyLat, copyRc.GetCode(), 0);
+                            if (copyRc.IsOk()) {
+                                double setLat = 0;
+                                Status setRc = Measure([&]() {
+                                    return ctx.client->Set(buf);
+                                }, setLat);
+                                latencyMs += setLat;
+                                ctx.metrics->Record(kOpSetBuffer, setLat, setRc.GetCode(), size);
+                                if (!setRc.IsOk()) anyFail = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return anyFail ? Status(K_INVALID, "cacheGetOrCreate: batch verify failed")
+                       : Status::OK();
+    }
+
     // Step 1: Get
     Optional<Buffer> optBuf;
     double getLat = 0;
@@ -236,7 +344,7 @@ static Status OpCacheGetOrCreate(PipelineContext &ctx, double &latencyMs) {
         VerifyFailReason reason = VerifyFailReason::NONE;
         bool vok = VerifyBuffer(optBuf->ImmutableData(),
                                 static_cast<uint64_t>(optBuf->GetSize()),
-                                ctx.size, ctx.senderId, ctx.verifyCfg, &reason);
+                                ctx.size, /*senderId=*/0, ctx.verifyCfg, &reason);
         if (!vok) {
             if (reason == VerifyFailReason::SIZE) {
                 SLOG_WARN("cacheGetOrCreate size mismatch on hit: key=" << ctx.key
@@ -250,11 +358,69 @@ static Status OpCacheGetOrCreate(PipelineContext &ctx, double &latencyMs) {
             if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
         }
         ctx.metrics->RecordCacheHit();
+        ctx.hit = true;
+        ctx.readVersionValue = ReadVersion(optBuf->ImmutableData(),
+                                           static_cast<uint64_t>(optBuf->GetSize()));
+        ctx.batchHitKeys.push_back(ctx.key);
+        ctx.batchHitVersions.push_back(ctx.readVersionValue);
+
+        // Cache-update-on-hit: with probability cacheUpdateProb, re-Set a
+        // timestamped value (overwrite/write-through path). Disabled by default.
+        if (ctx.cacheUpdateProb > 0.0) {
+            static thread_local std::mt19937 updateRng(std::random_device{}());
+            static thread_local std::uniform_real_distribution<double> updateDist(0.0, 1.0);
+            if (updateDist(updateRng) < ctx.cacheUpdateProb) {
+                uint64_t version = NowNanos();
+                std::string newData = GenerateVersionedData(ctx.size, version);
+                double setLat = 0;
+                Status setRc = Measure([&]() {
+                    return ctx.client->Set(ctx.key, StringView(newData), ctx.param);
+                }, setLat);
+                latencyMs += setLat;
+                ctx.metrics->Record(kOpCacheSetUpdate, setLat, setRc.GetCode(), ctx.size);
+                // Only flag/broadcast a successful write — a failed Set leaves
+                // the old value in place, and broadcasting its stamp would make
+                // readers flag stale on every subsequent read.
+                if (setRc.IsOk()) {
+                    ctx.updated = true;
+                    ctx.updateVersionValue = version;
+                    ctx.batchUpdatedKeys.push_back(ctx.key);
+                    ctx.batchUpdatedVersions.push_back(version);
+                }
+            }
+        }
+
         if (!vok && ctx.verifyCfg.failOp) return Status(K_INVALID, "cacheGetOrCreate: verify failed on hit");
         return Status::OK();
     }
 
+    if (getRc.GetCode() != StatusCode::K_NOT_FOUND) {
+        // Get error (timeout / connection / etc.): not a cache miss, so do not
+        // backfill. Count it separately and warn throttled (once per 1000).
+        ctx.metrics->RecordCacheGetError();
+        static thread_local uint64_t getErrThrottle = 0;
+        if (++getErrThrottle % 1000 == 1) {
+            SLOG_WARN("cacheGetOrCreate Get error: key=" << ctx.key
+                      << " code=" << getRc.GetCode() << " msg=" << getRc.GetMsg());
+        }
+        return getRc;
+    }
+
     ctx.metrics->RecordCacheMiss();
+
+    // Conditional backfill: the miss-backfill probability decides whether a
+    // missed key is written back (making it present) or left absent. Leaving
+    // it absent keeps it "not in the system" — no explicit delete needed.
+    if (ctx.missBackfillProb <= 0.0) {
+        return Status::OK();
+    }
+    if (ctx.missBackfillProb < 1.0) {
+        static thread_local std::mt19937 backfillRng(std::random_device{}());
+        static thread_local std::uniform_real_distribution<double> backfillDist(0.0, 1.0);
+        if (backfillDist(backfillRng) >= ctx.missBackfillProb) {
+            return Status::OK();
+        }
+    }
 
     // Step 2: CreateBuffer
     std::shared_ptr<Buffer> buf;
@@ -266,13 +432,12 @@ static Status OpCacheGetOrCreate(PipelineContext &ctx, double &latencyMs) {
     ctx.metrics->Record(kOpCreateBuffer, createLat, createRc.GetCode(), ctx.size);
     if (!createRc.IsOk() || !buf) return createRc.IsOk() ? Status(K_RUNTIME_ERROR, "cacheGetOrCreate: Create returned OK but no buffer") : createRc;
 
-    // Step 3: MemoryCopy
+    // Step 3: MemoryCopy (fill the buffer with a timestamped value so the
+    // backfilled key carries a comparable version stamp).
     double copyLat = 0;
     Status copyRc = Measure([&]() {
-        // No-copy benchmark: skip filling the Buffer before publishing it.
-        // Restore the write below when content validation is needed again.
-        // return buf->MemoryCopy(ctx.data.data(), ctx.size);
-        return Status::OK();
+        std::string fill = GenerateVersionedData(ctx.size, NowNanos());
+        return buf->MemoryCopy(fill.data(), ctx.size);
     }, copyLat);
     latencyMs += copyLat;
     ctx.metrics->Record(kOpMemoryCopy, copyLat, copyRc.GetCode(), 0);
@@ -376,13 +541,20 @@ const std::vector<const char *> &GetAllOpNames(bool cacheMode) {
     static const std::vector<const char *> cacheNames = {
         kOpCacheGetOrFillHit, kOpCacheExist,
         kOpCacheSetFill, kOpCacheGetOrFillMiss,
+        kOpCacheSetUpdate,
     };
-    static const std::vector<const char *> allNames = [] {
-        auto v = baseNames;
+    // Cache mode only exercises a subset of the pipeline ops; drop the
+    // pipeline-only ones (setStringView/exist/mCreate/mSet) so the periodic
+    // rate log stays readable for the cache scenario.
+    static const std::vector<const char *> cacheAllNames = [] {
+        auto v = std::vector<const char *>{
+            kOpGetBuffer, kOpCreateBuffer, kOpMemoryCopy, kOpSetBuffer,
+            kOpMGet, kOpCacheGetOrCreate,
+        };
         v.insert(v.end(), cacheNames.begin(), cacheNames.end());
         return v;
     }();
-    return cacheMode ? allNames : baseNames;
+    return cacheMode ? cacheAllNames : baseNames;
 }
 
 OpFunc GetOpFunc(const std::string &name) {

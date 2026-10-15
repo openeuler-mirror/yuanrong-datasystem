@@ -8,9 +8,13 @@
 #include "rpc/peer_client.h"
 #include <datasystem/kv_client.h>
 #include <atomic>
+#include <functional>
 #include <memory>
+#include <set>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <thread>
 
@@ -47,11 +51,33 @@ public:
 
     int CurrentTargetQps() { return currentTargetQps_.load(); }
 
+    // Record the latest-known version stamp for the given keys (from cache
+    // update broadcasts), so the writer can detect stale reads on hit.
+    void OnUpdateVersion(const std::vector<std::string> &keys, uint64_t version);
+
+    // Snapshot of the per-key max-version map size, for logging.
+    size_t MaxSeenVersionSize() const;
+
+    // Add warmup keys (from other writers' warmup_done broadcast) to the shared
+    // key pool the writer samples from.
+    void OnWarmupDone(int senderId, const std::vector<std::string> &warmupKeys);
+
+    // Add keys from plain (version=0) peer broadcasts — warmup incremental
+    // batches and expand-added keys — to the shared key pool.
+    void OnEvictKeys(const std::vector<std::string> &keys);
+
+    // Snapshot of the shared key-pool size, for logging.
+    size_t KeyPoolSize() const;
+
 private:
     void PipelineLoop(int threadId);
-    void NotifyPeers(const std::vector<std::string> &keys, uint64_t size);
+    void NotifyPeers(const std::vector<std::string> &keys, uint64_t size, uint64_t version);
     void NotifyWarmupDone(const std::vector<std::string> &warmupKeys);
     int ResampleRandomQps();
+    std::string RandomKey(std::mt19937 &rng);
+    // Warmup Set producer: Set the given keys, spread across the TTL window
+    // (one key every ttl/key_pool_size) so their expiry does not synchronize.
+    void WarmupSet(const std::vector<std::string> &keys);
 
     Config cfg_;
     std::shared_ptr<datasystem::KVClient> client_;
@@ -61,9 +87,30 @@ private:
     std::atomic<uint64_t> currentPoolSize_{0};
     std::atomic<int> currentTargetQps_{0};
     std::atomic<uint64_t> notifySuppressed_{0};
+    // Backfill probability on miss. Kept at 1.0 (always backfill): a missed key
+    // is written back immediately. The hit rate is therefore driven down by
+    // pool expansion, TTL expiry and cache eviction — not by leaving keys
+    // absent. The pool does not expand forever: once the grown key set exceeds
+    // the cache capacity, LRU eviction kicks in and lowers the hit rate. The
+    // warmup race is handled structurally: keys enter the key pool only after
+    // their warmup Set completes, so a Get can never sample (and backfill) a
+    // key the warmup has not set yet.
+    std::atomic<double> missBackfillProb_{1.0};
     std::chrono::steady_clock::time_point stageStartTime_;
+    // Per-key max version seen (from broadcast updates + own hits), for
+    // stale-read detection. Guards by versionMutex_.
+    mutable kvtest::mutex versionMutex_;
+    std::unordered_map<std::string, uint64_t> maxSeenVersion_;
+    // Shared key pool the writer samples from (own warmup keys + other clients'
+    // keys via warmup_done/incremental broadcasts + expand-added keys). Guarded
+    // by keyPoolMutex_.
+    mutable kvtest::shared_mutex keyPoolMutex_;
+    std::vector<std::string> keyPool_;
+    size_t warmupKeyCount_ = 0;  // total warmup keys (own + others'), never trimmed
+    std::unordered_set<uint64_t> seenKeys_;  // hash dedup so a key enters the pool once
     int currentStageIndex_ = 0;
     std::vector<kvtest::thread> threads_;
+    std::thread warmupThread_;  // warmup Set producer (spread across the TTL window)
     ThreadPool notifyPool_;
     std::vector<std::pair<std::string, OpFunc>> pipelineOps_;
     bool pipelineNeedsData_ = true;

@@ -13,9 +13,14 @@ CacheReader::CacheReader(const Config &cfg,
                          std::shared_ptr<KVClient> client,
                          MetricsCollector &metrics)
     : cfg_(cfg), client_(client), metrics_(metrics),
+      currentTargetQps_(cfg.targetQps),
       verifyCfg_(BuildVerifyConfig(cfg.verifyLevel, cfg.verifySampleBytes,
                                    cfg.verifySampleStepBytes, cfg.verifyFailOp)),
-      maxKeyPoolSize_(static_cast<size_t>(cfg.maxKeyPoolSize)) {
+      maxKeyPoolSize_(static_cast<size_t>(cfg.maxKeyPoolSize)),
+      peerClient_(MakePeerControlClient()),
+      notifyPool_(100, cfg.notifyQueueMax) {
+    // Cache-mode values carry an 8-byte version stamp; content verify skips it.
+    verifyCfg_.versionPrefixBytes = 8;
     // Pre-generate data for all sizes (read-only after constructor)
     for (auto size : cfg_.dataSizes) {
         pregenData_[size] = GeneratePatternData(size, cfg_.instanceId);
@@ -44,6 +49,18 @@ void CacheReader::Start() {
                   << ", waiting for " << pendingWarmupWriters_.size() << " writers");
     }
 
+    // Dynamic QPS initialization, mirrors KVWorker::Start.
+    if (!cfg_.targetQpsStages.empty()) {
+        stageStartTime_ = std::chrono::steady_clock::now();
+    }
+    if (cfg_.targetQpsMin > 0 && cfg_.targetQpsMax > 0) {
+        currentTargetQps_.store(ResampleRandomQps());
+        SLOG_INFO("CacheReader Random QPS: [" << cfg_.targetQpsMin << ", " << cfg_.targetQpsMax
+                  << "], re-sample every " << cfg_.randomQpsIntervalSeconds << "s, initial="
+                  << currentTargetQps_.load());
+        stageStartTime_ = std::chrono::steady_clock::now();
+    }
+
     for (int i = 0; i < cfg_.numThreads; i++) {
         threads_.emplace_back(&CacheReader::ReaderLoop, this, i);
     }
@@ -56,12 +73,18 @@ void CacheReader::Stop() {
         if (t.joinable()) t.join();
     }
     threads_.clear();
+    notifyPool_.Stop();
 }
 
 void CacheReader::OnWarmupDone(int senderId, const std::vector<std::string> &warmupKeys) {
     {
         std::unique_lock<kvtest::shared_mutex> lock(keyPoolMutex_);
-        keyPool_.insert(keyPool_.end(), warmupKeys.begin(), warmupKeys.end());
+        for (const auto &k : warmupKeys) {
+            if (seenKeys_.insert(std::hash<std::string>{}(k)).second) {
+                keyPool_.push_back(k);
+                warmupKeyCount_++;
+            }
+        }
     }
     size_t remaining = 0;
     {
@@ -80,36 +103,94 @@ void CacheReader::OnWarmupDone(int senderId, const std::vector<std::string> &war
 
 void CacheReader::OnEvictKeys(const std::vector<std::string> &keys) {
     std::unique_lock<kvtest::shared_mutex> lock(keyPoolMutex_);
-    size_t prevSize = keyPool_.size();
-    keyPool_.insert(keyPool_.end(), keys.begin(), keys.end());
-    // Capacity control: remove oldest eviction keys if over limit
-    // Warmup keys are at [0, warmupKeyCount), evict keys after that
-    if (keyPool_.size() > maxKeyPoolSize_ && prevSize >= static_cast<size_t>(cfg_.keyPoolSize)) {
-        size_t evictStart = std::min(static_cast<size_t>(cfg_.keyPoolSize), keyPool_.size());
-        size_t eraseCount = std::min(keyPool_.size() - evictStart, keyPool_.size() - maxKeyPoolSize_);
-        keyPool_.erase(keyPool_.begin() + evictStart,
-                       keyPool_.begin() + evictStart + eraseCount);
+    for (const auto &k : keys) {
+        if (seenKeys_.insert(std::hash<std::string>{}(k)).second) {
+            keyPool_.push_back(k);
+        }
     }
+    // Wake any reader threads waiting for the first keys (incremental warmup
+    // batches arrive here, not via warmup_done).
+    warmupCv_.notify_all();
+    // Capacity control: trim the oldest eviction keys (everything after the
+    // warmup segment) when the pool exceeds the budget. Warmup keys span
+    // [0, warmupKeyCount_) across ALL writers and are never trimmed.
+    if (keyPool_.size() <= maxKeyPoolSize_) return;
+    if (warmupKeyCount_ > maxKeyPoolSize_) {
+        static std::atomic<bool> warned{false};
+        if (!warned.exchange(true)) {
+            SLOG_WARN("CacheReader: warmup keys (" << warmupKeyCount_
+                      << ") exceed max_key_pool_size (" << maxKeyPoolSize_
+                      << "); keeping all warmup keys, evict window disabled. "
+                      << "Set max_key_pool_size >= writer_count * key_pool_size");
+        }
+        return;
+    }
+    size_t eraseCount = keyPool_.size() - maxKeyPoolSize_;
+    keyPool_.erase(keyPool_.begin() + warmupKeyCount_,
+                   keyPool_.begin() + warmupKeyCount_ + eraseCount);
+}
+
+void CacheReader::OnUpdateVersion(const std::vector<std::string> &keys, uint64_t version) {
+    {
+        std::lock_guard<kvtest::mutex> lock(versionMutex_);
+        for (const auto &k : keys) {
+            auto &v = maxSeenVersion_[k];
+            if (version > v) v = version;
+        }
+    }
+    // Also ensure the keys are in the pool (dedup + capacity control).
+    OnEvictKeys(keys);
+}
+
+void CacheReader::BroadcastUpdate(const std::vector<std::string> &keys, uint64_t version) {
+    if (cfg_.peers.empty() || version == 0) return;
+    notifyPool_.Submit([this, keys, version]() {
+        for (const auto &peer : cfg_.peers) {
+            std::string hostPort = peer;
+            if (hostPort.size() > 7 && hostPort.compare(0, 7, "http://") == 0) {
+                hostPort = hostPort.substr(7);
+            }
+            auto colonPos = hostPort.find(':');
+            if (colonPos == std::string::npos) continue;
+            std::string host = hostPort.substr(0, colonPos);
+            int port = 0;
+            try {
+                port = std::stoi(hostPort.substr(colonPos + 1));
+            } catch (...) {
+                continue;
+            }
+            peerClient_->Notify(host, port, /*action=*/"", cfg_.instanceId, keys,
+                                /*size=*/0, version);
+        }
+    });
 }
 
 std::string CacheReader::RandomKey(std::mt19937 &rng) {
     std::shared_lock<kvtest::shared_mutex> lock(keyPoolMutex_);
     if (keyPool_.empty()) return "";
-    auto dist = std::uniform_int_distribution<size_t>(0, keyPool_.size() - 1);
-    return keyPool_[dist(rng)];
+    uint64_t idx = SamplePoolIndex(rng, static_cast<uint64_t>(keyPool_.size()),
+                                   cfg_.hotKeyRatio, cfg_.hotAccessProb);
+    return keyPool_[static_cast<size_t>(idx)];
 }
 
 void CacheReader::ReaderLoop(int threadId) {
     // Per-thread independent RNG (matches KVWorker::PipelineLoop pattern)
     std::mt19937 rng(threadId + cfg_.instanceId * 1000);
-    auto sizeDist = std::uniform_int_distribution<size_t>(0, cfg_.dataSizes.size() - 1);
 
-    // Wait for warmup completion with timeout
+    // Wait for the first keys to arrive (warmup_done OR any incremental
+    // broadcast). With the staggered warmup a writer's final warmup_done comes
+    // ~TTL seconds late, but its keys arrive via incremental batches right
+    // away — waiting for the full warmup_done would idle the reader for a
+    // whole TTL window. Start as soon as the pool has any key.
     {
         std::unique_lock<kvtest::mutex> lock(warmupMutex_);
         if (!warmupCv_.wait_for(lock,
                 std::chrono::seconds(cfg_.warmupTimeoutSeconds),
-                [this] { return warmupDone_.load() || !running_.load(); })) {
+                [this] {
+                    if (warmupDone_.load() || !running_.load()) return true;
+                    std::shared_lock<kvtest::shared_mutex> poolLock(keyPoolMutex_);
+                    return !keyPool_.empty();
+                })) {
             SLOG_ERROR("Thread " << threadId << ": warmup timeout after "
                        << cfg_.warmupTimeoutSeconds << "s, exiting");
             return;
@@ -117,14 +198,25 @@ void CacheReader::ReaderLoop(int threadId) {
     }
     if (!running_) return;
 
-    // QPS control (same logic as KVWorker::PipelineLoop)
+    // QPS control (same logic as KVWorker::PipelineLoop). Reads
+    // currentTargetQps_ each iteration so stage changes / random resamples
+    // take effect at runtime.
+    auto calcMyQps = [&](int totalQps) -> int {
+        if (totalQps <= 0 || cfg_.numThreads <= 0) return 0;
+        int base = totalQps / cfg_.numThreads;
+        int rem = totalQps % cfg_.numThreads;
+        return base + (threadId < rem ? 1 : 0);
+    };
+
     int64_t intervalUs = 0;
-    if (cfg_.targetQps > 0 && cfg_.numThreads > 0) {
-        int base = cfg_.targetQps / cfg_.numThreads;
-        int rem = cfg_.targetQps % cfg_.numThreads;
-        int myQps = base + (threadId < rem ? 1 : 0);
-        intervalUs = myQps > 0 ? 1000000 / myQps : 1000000000;
+    int lastKnownQps = currentTargetQps_.load();
+    int myQps = calcMyQps(lastKnownQps);
+    if (myQps > 0) {
+        intervalUs = 1000000 / myQps;
+    } else if (lastKnownQps > 0) {
+        intervalUs = 1000000000;  // effectively stopped
     }
+
     kvtest::RateGate gate;
     gate.Configure(intervalUs, threadId, cfg_.numThreads, cfg_.enableJitter);
     gate.ResetGrid(kvtest::SteadyNowUs());
@@ -133,6 +225,24 @@ void CacheReader::ReaderLoop(int threadId) {
               << (intervalUs > 0 ? "" : " (unlimited)"));
 
     while (running_) {
+        // Check for QPS stage change
+        int currentQps = currentTargetQps_.load();
+        if (currentQps != lastKnownQps) {
+            lastKnownQps = currentQps;
+            myQps = calcMyQps(currentQps);
+            if (myQps > 0) {
+                intervalUs = 1000000 / myQps;
+            } else if (currentQps > 0) {
+                intervalUs = 1000000000;
+            } else {
+                intervalUs = 0;
+            }
+            gate.Configure(intervalUs, threadId, cfg_.numThreads, cfg_.enableJitter);
+            gate.ResetGrid(kvtest::SteadyNowUs());
+            SLOG_INFO("Reader thread " << threadId << " QPS → " << currentQps
+                      << " (myQps=" << myQps << ", interval=" << intervalUs << "us)");
+        }
+
         if (gate.Active()) {
             int64_t nowUs = kvtest::SteadyNowUs();
             int64_t fireUs = gate.NextFireUs(nowUs, rng);
@@ -144,17 +254,48 @@ void CacheReader::ReaderLoop(int threadId) {
             }
         }
 
-        std::string key = RandomKey(rng);
-        if (key.empty()) {
-            kvtest::sleep_for(std::chrono::milliseconds(100));
-            continue;
+        if (cfg_.mgetSizeDist.enabled) {
+            // mget: sample a batch of distinct keys, one MGet, then per-key hit/miss.
+            int target = SampleMgetBatchSize(cfg_.mgetSizeDist, rng);
+            std::unordered_set<std::string> sampled;
+            sampled.reserve(static_cast<size_t>(target));
+            std::vector<std::string> keys;
+            std::vector<uint64_t> sizes;
+            for (int i = 0; i < target; i++) {
+                std::string k;
+                int guard = 0;
+                do {
+                    k = RandomKey(rng);
+                    if (k.empty()) break;
+                } while (!sampled.insert(k).second && ++guard < 16);
+                if (k.empty()) break;
+                keys.push_back(k);
+                sizes.push_back(CacheKeySize(ParseCacheKeyIdx(k), cfg_.dataSizes));
+            }
+            if (keys.empty()) {
+                kvtest::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
+            if (!IsKvtestClientInitialized()) {
+                kvtest::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+            CacheGetOrFillBatch(keys, sizes);
+        } else {
+            std::string key = RandomKey(rng);
+            if (key.empty()) {
+                kvtest::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
+            if (!IsKvtestClientInitialized()) {
+                kvtest::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+            // Deterministic per-key size (idx % sizes) — matches what the writer
+            // used for this key, so verify never sees a size mismatch.
+            uint64_t size = CacheKeySize(ParseCacheKeyIdx(key), cfg_.dataSizes);
+            CacheGetOrFill(key, size);
         }
-        if (!IsKvtestClientInitialized()) {
-            kvtest::sleep_for(std::chrono::milliseconds(10));
-            continue;
-        }
-        uint64_t size = cfg_.dataSizes[sizeDist(rng)];
-        CacheGetOrFill(key, size);
 
         gate.Advance();
     }
@@ -169,7 +310,6 @@ bool CacheReader::CacheGetOrFill(const std::string &key, uint64_t size) {
         SLOG_WARN("CacheGetOrFill: size " << size << " not in pregenData_");
         return false;
     }
-    const auto &data = it->second;
 
     // Step 1: Get
     Optional<Buffer> optBuf;
@@ -184,7 +324,7 @@ bool CacheReader::CacheGetOrFill(const std::string &key, uint64_t size) {
         VerifyFailReason reason = VerifyFailReason::NONE;
         bool vok = VerifyBuffer(optBuf->ImmutableData(),
                                 static_cast<uint64_t>(optBuf->GetSize()),
-                                size, cfg_.instanceId, verifyCfg_, &reason);
+                                size, /*senderId=*/0, verifyCfg_, &reason);
         if (!vok) {
             if (reason == VerifyFailReason::SIZE) {
                 SLOG_WARN("cacheGetOrFill size mismatch on hit: key=" << key
@@ -199,8 +339,77 @@ bool CacheReader::CacheGetOrFill(const std::string &key, uint64_t size) {
         }
         metrics_.Record(kOpCacheGetOrFillHit, getLatency, hitRc.GetCode(), size);
         metrics_.RecordCacheHit();
+
+        uint64_t actualVersion = ReadVersion(optBuf->ImmutableData(),
+                                             static_cast<uint64_t>(optBuf->GetSize()));
+
+        // Cache-update-on-hit: with probability cacheUpdateProb, re-Set a
+        // timestamped value (overwrite path). Disabled by default (prob 0).
+        uint64_t newVersion = 0;
+        if (cfg_.cacheUpdateProb > 0.0) {
+            static thread_local std::mt19937 updateRng(std::random_device{}());
+            static thread_local std::uniform_real_distribution<double> updateDist(0.0, 1.0);
+            if (updateDist(updateRng) < cfg_.cacheUpdateProb) {
+                newVersion = NowNanos();
+                std::string newData = GenerateVersionedData(size, newVersion);
+                SetParam param;
+                param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
+                param.ttlSecond = cfg_.ttlSeconds;
+                param.existence = cfg_.setNx ? ExistenceOpt::NX : ExistenceOpt::NONE;
+                double setLatency = 0;
+                Status setRc = Measure([&]() {
+                    return client_->Set(key, StringView(newData), param);
+                }, setLatency);
+                metrics_.Record(kOpCacheSetUpdate, setLatency, setRc.GetCode(), size);
+                // A failed Set must not advance the tracked version nor be
+                // broadcast — readers would expect a stamp that isn't there.
+                if (!setRc.IsOk()) newVersion = 0;
+            }
+        }
+
+        // Version monotonicity check: a read-back version older than the newest
+        // we've seen (from reads or broadcasts) is a stale read. Skipped with
+        // set_nx (the value is write-once; its stamp is the first writer's).
+        if (!cfg_.setNx) {
+            bool stale = false;
+            uint64_t expectedVer = 0;
+            {
+                std::lock_guard<kvtest::mutex> lock(versionMutex_);
+                auto vit = maxSeenVersion_.find(key);
+                if (vit != maxSeenVersion_.end()) expectedVer = vit->second;
+                stale = (expectedVer > 0) && (actualVersion < expectedVer);
+                uint64_t latest = std::max(actualVersion, newVersion);
+                if (latest > expectedVer) {
+                    if (vit != maxSeenVersion_.end()) vit->second = latest;
+                    else maxSeenVersion_[key] = latest;
+                }
+            }
+            if (stale) {
+                metrics_.RecordCacheStale();
+                SLOG_WARN("cacheGetOrFill stale read: key=" << key
+                          << " expected=" << expectedVer
+                          << " actual=" << actualVersion);
+            }
+        }
+
+        if (!cfg_.setNx && newVersion > 0) {
+            BroadcastUpdate({key}, newVersion);
+        }
+
         if (!vok && verifyCfg_.failOp) return false;
         return true;
+    }
+
+    if (hitRc.GetCode() != StatusCode::K_NOT_FOUND) {
+        // Get error (timeout / connection / etc.): not a cache miss, so do not
+        // backfill. Count separately and warn throttled (once per 1000).
+        metrics_.RecordCacheGetError();
+        static thread_local uint64_t getErrThrottle = 0;
+        if (++getErrThrottle % 1000 == 1) {
+            SLOG_WARN("cacheGetOrFill Get error: key=" << key
+                      << " code=" << hitRc.GetCode() << " msg=" << hitRc.GetMsg());
+        }
+        return false;
     }
 
     // Step 2: Miss -> Exist
@@ -215,13 +424,15 @@ bool CacheReader::CacheGetOrFill(const std::string &key, uint64_t size) {
     // selection as the reader loop — yields the bthread in brpc mode.
     kvtest::sleep_for(std::chrono::milliseconds(cfg_.inferenceDelayMs));
 
-    // Step 4: Set backfill
+    // Step 4: Set backfill (timestamped value so version monotonicity holds)
     SetParam param;
     param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
     param.ttlSecond = cfg_.ttlSeconds;
+    param.existence = cfg_.setNx ? ExistenceOpt::NX : ExistenceOpt::NONE;
+    std::string fillData = GenerateVersionedData(size, NowNanos());
     double setLatency = 0;
     Status setRc = Measure([&]() {
-        return client_->Set(key, StringView(data), param);
+        return client_->Set(key, StringView(fillData), param);
     }, setLatency);
     metrics_.Record(kOpCacheSetFill, setLatency, setRc.GetCode(), size);
 
@@ -229,4 +440,171 @@ bool CacheReader::CacheGetOrFill(const std::string &key, uint64_t size) {
     metrics_.Record(kOpCacheGetOrFillMiss, missLatency, setRc.GetCode(), size);
     metrics_.RecordCacheMiss();
     return setRc.IsOk();
+}
+
+bool CacheReader::CacheGetOrFillBatch(const std::vector<std::string> &keys,
+                                      const std::vector<uint64_t> &sizes) {
+    if (keys.empty()) return true;
+
+    // Step 1: MGet the whole batch.
+    std::vector<Optional<Buffer>> results;
+    double getLatency = 0;
+    Status getRc = Measure([&]() {
+        return client_->Get(keys, results);
+    }, getLatency);
+    uint64_t totalBytes = 0;
+    for (uint64_t s : sizes) totalBytes += s;
+    metrics_.Record(kOpMGet, getLatency, getRc.GetCode(), totalBytes);
+
+    bool anyFail = false;
+    size_t n = std::min(keys.size(), results.size());
+    for (size_t i = 0; i < n; i++) {
+        const std::string &key = keys[i];
+        uint64_t size = (i < sizes.size()) ? sizes[i] : 0;
+
+        if (pregenData_.find(size) == pregenData_.end()) {
+            SLOG_WARN("CacheGetOrFillBatch: size " << size << " not in pregenData_");
+            continue;
+        }
+
+        if (results[i]) {
+            // Hit: verify + record + optional cache-update re-Set.
+            VerifyFailReason reason = VerifyFailReason::NONE;
+            bool vok = VerifyBuffer(results[i]->ImmutableData(),
+                                    static_cast<uint64_t>(results[i]->GetSize()),
+                                    size, /*senderId=*/0, verifyCfg_, &reason);
+            if (!vok) {
+                if (reason == VerifyFailReason::SIZE) {
+                    SLOG_WARN("cacheGetOrFill size mismatch on hit: key=" << key
+                              << " expected=" << size << " got=" << results[i]->GetSize());
+                } else {
+                    SLOG_WARN("cacheGetOrFill content mismatch on hit: key=" << key
+                              << " level=" << static_cast<int>(verifyCfg_.level)
+                              << " senderId=" << cfg_.instanceId);
+                }
+                metrics_.RecordVerifyFail();
+            }
+            metrics_.Record(kOpCacheGetOrFillHit, 0, getRc.GetCode(), size);
+            metrics_.RecordCacheHit();
+
+            uint64_t actualVersion = ReadVersion(results[i]->ImmutableData(),
+                                                 static_cast<uint64_t>(results[i]->GetSize()));
+
+            uint64_t newVersion = 0;
+            if (cfg_.cacheUpdateProb > 0.0) {
+                static thread_local std::mt19937 updateRng(std::random_device{}());
+                static thread_local std::uniform_real_distribution<double> updateDist(0.0, 1.0);
+                if (updateDist(updateRng) < cfg_.cacheUpdateProb) {
+                    newVersion = NowNanos();
+                    std::string newData = GenerateVersionedData(size, newVersion);
+                    SetParam param;
+                    param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
+                    param.ttlSecond = cfg_.ttlSeconds;
+                    param.existence = cfg_.setNx ? ExistenceOpt::NX : ExistenceOpt::NONE;
+                    double setLatency = 0;
+                    Status setRc = Measure([&]() {
+                        return client_->Set(key, StringView(newData), param);
+                    }, setLatency);
+                    metrics_.Record(kOpCacheSetUpdate, setLatency, setRc.GetCode(), size);
+                    if (!setRc.IsOk()) newVersion = 0;
+                }
+            }
+
+            if (!cfg_.setNx) {
+                bool stale = false;
+                uint64_t expectedVer = 0;
+                {
+                    std::lock_guard<kvtest::mutex> lock(versionMutex_);
+                    auto vit = maxSeenVersion_.find(key);
+                    if (vit != maxSeenVersion_.end()) expectedVer = vit->second;
+                    stale = (expectedVer > 0) && (actualVersion < expectedVer);
+                    uint64_t latest = std::max(actualVersion, newVersion);
+                    if (latest > expectedVer) {
+                        if (vit != maxSeenVersion_.end()) vit->second = latest;
+                        else maxSeenVersion_[key] = latest;
+                    }
+                }
+                if (stale) {
+                    metrics_.RecordCacheStale();
+                    SLOG_WARN("cacheGetOrFill stale read: key=" << key
+                              << " expected=" << expectedVer << " actual=" << actualVersion);
+                }
+            }
+
+            if (!cfg_.setNx && newVersion > 0) {
+                BroadcastUpdate({key}, newVersion);
+            }
+
+            if (!vok && verifyCfg_.failOp) anyFail = true;
+        } else {
+            // Miss: Exist + inference + backfill Set.
+            double existLatency = 0;
+            std::vector<bool> exists;
+            Status existRc = Measure([&]() {
+                return client_->Exist({key}, exists);
+            }, existLatency);
+            metrics_.Record(kOpCacheExist, existLatency, existRc.GetCode(), 0);
+
+            kvtest::sleep_for(std::chrono::milliseconds(cfg_.inferenceDelayMs));
+
+            SetParam param;
+            param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
+            param.ttlSecond = cfg_.ttlSeconds;
+            param.existence = cfg_.setNx ? ExistenceOpt::NX : ExistenceOpt::NONE;
+            std::string fillData = GenerateVersionedData(size, NowNanos());
+            double setLatency = 0;
+            Status setRc = Measure([&]() {
+                return client_->Set(key, StringView(fillData), param);
+            }, setLatency);
+            metrics_.Record(kOpCacheSetFill, setLatency, setRc.GetCode(), size);
+
+            double missLatency = existLatency + setLatency;
+            metrics_.Record(kOpCacheGetOrFillMiss, missLatency, setRc.GetCode(), size);
+            metrics_.RecordCacheMiss();
+            if (!setRc.IsOk()) anyFail = true;
+        }
+    }
+    return !anyFail;
+}
+
+int CacheReader::ResampleRandomQps() {
+    static thread_local std::mt19937 rng(std::random_device{}());
+    std::uniform_int_distribution<int> dist(cfg_.targetQpsMin, cfg_.targetQpsMax);
+    return dist(rng);
+}
+
+void CacheReader::AdvanceStage() {
+    // Random QPS mode: re-sample uniformly in [min, max] every interval.
+    if (cfg_.targetQpsMin > 0 && cfg_.targetQpsMax > 0) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - stageStartTime_).count();
+        if (elapsed >= cfg_.randomQpsIntervalSeconds) {
+            int newQps = ResampleRandomQps();
+            currentTargetQps_.store(newQps);
+            stageStartTime_ = std::chrono::steady_clock::now();
+            SLOG_INFO("CacheReader Random QPS re-sampled: " << newQps
+                      << " [" << cfg_.targetQpsMin << ", " << cfg_.targetQpsMax << "]");
+        }
+        return;
+    }
+
+    if (cfg_.targetQpsStages.empty() || cfg_.stageDurationSeconds <= 0) return;
+
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - stageStartTime_).count();
+
+    int targetStage = static_cast<int>(elapsed / cfg_.stageDurationSeconds);
+    int lastStage = static_cast<int>(cfg_.targetQpsStages.size()) - 1;
+    if (targetStage > lastStage) {
+        targetStage = lastStage;
+    }
+
+    if (targetStage != currentStageIndex_) {
+        currentStageIndex_ = targetStage;
+        int newQps = cfg_.targetQpsStages[targetStage];
+        currentTargetQps_.store(newQps);
+        SLOG_INFO("CacheReader QPS stage " << targetStage << "/" << lastStage
+                  << ": " << newQps << " QPS"
+                  << (targetStage == lastStage ? " (final stage)" : ""));
+    }
 }
