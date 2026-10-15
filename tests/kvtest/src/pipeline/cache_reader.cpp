@@ -95,6 +95,9 @@ void CacheReader::OnEvictKeys(const std::vector<std::string> &keys) {
             keyPool_.push_back(k);
         }
     }
+    // Wake any reader threads waiting for the first keys (incremental warmup
+    // batches arrive here, not via warmup_done).
+    warmupCv_.notify_all();
     // Capacity control: trim the oldest eviction keys (everything after the
     // warmup segment) when the pool exceeds the budget. Warmup keys span
     // [0, warmupKeyCount_) across ALL writers and are never trimmed.
@@ -161,12 +164,20 @@ void CacheReader::ReaderLoop(int threadId) {
     // Per-thread independent RNG (matches KVWorker::PipelineLoop pattern)
     std::mt19937 rng(threadId + cfg_.instanceId * 1000);
 
-    // Wait for warmup completion with timeout
+    // Wait for the first keys to arrive (warmup_done OR any incremental
+    // broadcast). With the staggered warmup a writer's final warmup_done comes
+    // ~TTL seconds late, but its keys arrive via incremental batches right
+    // away — waiting for the full warmup_done would idle the reader for a
+    // whole TTL window. Start as soon as the pool has any key.
     {
         std::unique_lock<kvtest::mutex> lock(warmupMutex_);
         if (!warmupCv_.wait_for(lock,
                 std::chrono::seconds(cfg_.warmupTimeoutSeconds),
-                [this] { return warmupDone_.load() || !running_.load(); })) {
+                [this] {
+                    if (warmupDone_.load() || !running_.load()) return true;
+                    std::shared_lock<kvtest::shared_mutex> poolLock(keyPoolMutex_);
+                    return !keyPool_.empty();
+                })) {
             SLOG_ERROR("Thread " << threadId << ": warmup timeout after "
                        << cfg_.warmupTimeoutSeconds << "s, exiting");
             return;
