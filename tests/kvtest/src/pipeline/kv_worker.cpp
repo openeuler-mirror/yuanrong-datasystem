@@ -582,18 +582,18 @@ void KVWorker::AdjustPoolSize() {
                       << ", pool=" << poolSize << " (max " << maxSize << ", backfill=0)");
         }
     } else if (currentRate < cfg_.targetHitRate - 0.02) {
-        // Too cold: backfill half the misses to warm the cache back up.
+        // Too cold: always backfill misses to warm the cache back up.
         // No pool shrink (indices are never reused).
-        missBackfillProb_.store(0.5);
+        missBackfillProb_.store(1.0);
         SLOG_INFO("Pool warm: hit_rate=" << std::fixed << std::setprecision(3)
                   << currentRate << " < target=" << cfg_.targetHitRate
-                  << " → backfill=0.5 (pool " << poolSize << ")");
+                  << " → backfill=1.0 (pool " << poolSize << ")");
     } else {
-        missBackfillProb_.store(0.5);
+        missBackfillProb_.store(1.0);
         SLOG_INFO("Pool hold: hit_rate=" << std::fixed << std::setprecision(3)
                   << currentRate << " ~ target=" << cfg_.targetHitRate
-                  << " (pool " << poolSize << ", backfill=0.5)");
-    }
+                  << " (pool " << poolSize << ", backfill=1.0)");
+     }
 }
 
 int KVWorker::ResampleRandomQps() {
