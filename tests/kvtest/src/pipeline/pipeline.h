@@ -94,10 +94,12 @@ inline constexpr const char *kOpCacheGetOrCreate = "cacheGetOrCreate";
 
 // Sample the next mGet target batch size per the configured probability
 // distribution. Returns 1 with probability singleProb; otherwise a uniform
-// draw from [minBatch, maxBatch]. Used by the reader-side notify-driven mGet
-// (C2 non-blocking variant) where the actual batch is min(target, queue
-// depth). Distribution-disabled configs (singleProb >= 1.0) always return 1.
-// The caller-owned rng avoids shared-state contention on the hot path.
+// draw from [minBatch, maxBatch]. Used both by cache-mode Get (writer
+// PipelineLoop / reader ReaderLoop, which sample a batch of keys directly) and
+// by the pipeline reader-side notify-driven mGet (C2 non-blocking variant)
+// where the actual batch is min(target, queue depth). Distribution-disabled
+// configs (singleProb >= 1.0) always return 1. The caller-owned rng avoids
+// shared-state contention on the hot path.
 inline int SampleMgetBatchSize(const Config::MgetSizeDistribution &d, std::mt19937 &rng) {
     if (!d.enabled) return 1;
     std::uniform_real_distribution<double> pd(0.0, 1.0);

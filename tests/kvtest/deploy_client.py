@@ -1610,9 +1610,9 @@ def _build_config(mode, args):
         # Cache mode emits set_param in its own block below.
         if mode != 'cache' and args.ttl > 0:
             cfg['set_param'] = {'ttl_second': args.ttl}
-        # Reader-side probabilistic mGet batch sizing (C2 non-blocking).
-        # Active when single_prob < 1.0. Requires notify_pipeline to contain
-        # mGet for the distribution to actually take effect.
+        # Probabilistic mGet batch sizing. Active when single_prob < 1.0. In
+        # cache mode this drives the writer/reader batch Get directly; in
+        # pipeline mode it also requires notify_pipeline to contain mGet.
         if args.mget_single_prob < 1.0:
             cfg['mget_size_distribution'] = {
                 'single_prob': args.mget_single_prob,
@@ -1838,15 +1838,16 @@ def _add_gen_config_args(p):
     p.add_argument('--random-qps-interval', type=int, default=1,
                    help='Re-sample interval in seconds for --random-qps (default: 1)')
     p.add_argument('--notify-count', type=int, default=10,
-                   help='Number of peers to notify per write (default: 10)')
-    # Reader-side probabilistic mGet batch sizing (C2 non-blocking variant).
-    # When --mget-single-prob < 1.0, each notify-triggered mGet samples a
-    # target batch size: with probability --mget-single-prob it is 1,
+                   help='Number of peers to notify per write in pipeline mode '
+                        '(default: 10). Ignored in cache mode, which broadcasts to all peers.')
+    # Probabilistic mGet batch sizing. When --mget-single-prob < 1.0, a Get
+    # samples a target batch size: with probability --mget-single-prob it is 1,
     # otherwise a uniform draw from [--mget-min-batch, --mget-max-batch].
-    # The actual batch is min(target, pending queue depth); no waiting.
-    # Requires --notify-pipeline to contain mGet.
+    # Drives cache-mode writer/reader batch Get directly; in pipeline mode it
+    # also requires --notify-pipeline to contain mGet (notify-triggered variant,
+    # actual batch = min(target, pending queue depth)).
     p.add_argument('--mget-single-prob', type=float, default=1.0,
-                   help='Probability that a notify-triggered mGet fetches a single key '
+                   help='Probability that a Get fetches a single key '
                         '(default: 1.0 = disabled, always single-key). Set < 1.0 to enable '
                         'probabilistic batch sizing, e.g. 0.95 for 95%% single / 5%% batch.')
     p.add_argument('--mget-min-batch', type=int, default=2,

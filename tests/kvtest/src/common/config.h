@@ -96,12 +96,13 @@ struct Config {
     int msetBatchSize = 8;   // keys per MSet call
     int mgetBatchSize = 8;   // keys per MGet call
 
-    // Reader-side probabilistic mGet batch sizing (C2 non-blocking variant).
-    // When enabled (singleProb < 1.0), each notify-triggered mGet samples a
-    // target batch size: with probability singleProb it is 1, otherwise it is
-    // uniformly drawn from [minBatch, maxBatch]. The actual batch is
-    // min(target, pending queue depth) so no artificial waiting is
-    // introduced. Defaults preserve legacy behavior (always 1).
+    // Probabilistic mGet batch sizing. When enabled (singleProb < 1.0), a Get
+    // samples a target batch size: with probability singleProb it is 1, otherwise
+    // uniformly drawn from [minBatch, maxBatch]. Used by cache-mode Get (writer
+    // + reader, which sample a batch of keys directly) and by the pipeline
+    // reader-side notify-driven mGet (C2 non-blocking variant, where the actual
+    // batch is min(target, pending queue depth)). Defaults preserve legacy
+    // behavior (always 1).
     struct MgetSizeDistribution {
         bool enabled = false;
         double singleProb = 1.0;
