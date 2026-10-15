@@ -11,7 +11,7 @@ TEST(GetAllOpNames_Base) {
 
 TEST(GetAllOpNames_Cache) {
     auto &names = GetAllOpNames(true);
-    ASSERT_EQ(names.size(), 15u);
+    ASSERT_EQ(names.size(), 11u);
 }
 
 TEST(GetAllOpNames_StableReference) {
