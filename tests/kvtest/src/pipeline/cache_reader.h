@@ -8,6 +8,7 @@
 #include "rpc/peer_client.h"
 #include <datasystem/kv_client.h>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <functional>
 #include <memory>
@@ -43,6 +44,12 @@ public:
         warmupCv_.notify_all();
     }
 
+    // Advance to the next QPS stage / re-sample random QPS based on elapsed
+    // time. Called periodically from the main loop (mirrors KVWorker).
+    void AdvanceStage();
+
+    int CurrentTargetQps() { return currentTargetQps_.load(); }
+
     // Snapshot of the reader key-pool size (present keys), for logging.
     size_t KeyPoolSize() const {
         std::shared_lock<kvtest::shared_mutex> lock(keyPoolMutex_);
@@ -61,6 +68,7 @@ private:
     std::string RandomKey(std::mt19937 &rng);
     // Fire-and-forget broadcast of an update (key, version) to reader peers.
     void BroadcastUpdate(const std::vector<std::string> &keys, uint64_t version);
+    int ResampleRandomQps();
 
     Config cfg_;
     std::shared_ptr<datasystem::KVClient> client_;
@@ -91,6 +99,11 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> warmupDone_{false};
     std::vector<kvtest::thread> threads_;
+
+    // Dynamic QPS (stages / random min-max), mirrors KVWorker.
+    std::atomic<int> currentTargetQps_{0};
+    std::chrono::steady_clock::time_point stageStartTime_;
+    int currentStageIndex_ = 0;
 
     // Pre-generated data (constructor-time, read-only after)
     std::unordered_map<uint64_t, std::string> pregenData_;

@@ -552,9 +552,10 @@ static int RunServerMode(const Config &cfg)
         // QPS stage / random-QPS resample is time-idempotent (only acts when
         // the configured interval has elapsed), so tick it on the 200ms loop
         // rather than the 3s reporting cadence for finer granularity.
-        if (worker && (!cfg.targetQpsStages.empty()
-                       || (cfg.targetQpsMin > 0 && cfg.targetQpsMax > 0))) {
-            worker->AdvanceStage();
+        if (!cfg.targetQpsStages.empty()
+            || (cfg.targetQpsMin > 0 && cfg.targetQpsMax > 0)) {
+            if (worker) worker->AdvanceStage();
+            if (cacheReader) cacheReader->AdvanceStage();
         }
         if (std::chrono::duration<double>(now - lastReport).count() < 3.0) {
             continue;
@@ -619,8 +620,10 @@ static int RunServerMode(const Config &cfg)
                                        + ", hit_rate=" + std::to_string(metrics.RecentHitRate()) + "]")
                                     : "")
                       << ((!cfg.targetQpsStages.empty()
-                           || (cfg.targetQpsMin > 0 && cfg.targetQpsMax > 0)) && worker
-                              ? (" [qps=" + std::to_string(worker->CurrentTargetQps()) + "]")
+                           || (cfg.targetQpsMin > 0 && cfg.targetQpsMax > 0))
+                              ? (" [qps=" + std::to_string(
+                                     worker ? worker->CurrentTargetQps()
+                                            : (cacheReader ? cacheReader->CurrentTargetQps() : 0)) + "]")
                               : ""));
 
         if (worker && cfg.targetHitRate > 0.0) {
