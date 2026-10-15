@@ -18,6 +18,9 @@ message NotifyReq {
   int32 sender = 2;
   repeated string keys = 3;
   uint64 size = 4;
+  // Optional version stamp (wall-clock nanos) carried by cache update
+  // broadcasts; 0 means "no version" (plain backfill/warmup sync).
+  uint64 version = 5;
 }
 
 message NotifyResp {

@@ -52,8 +52,9 @@ class HttpPeerClient : public PeerControlClient {
 public:
     PeerNotifySkipCounts GetNotifySkipCounts() const override { return {}; }
 
-    void Notify(const std::string &host, int port, const std::string &action,
-                int sender, const std::vector<std::string> &keys, uint64_t size) override {
+    bool Notify(const std::string &host, int port, const std::string &action,
+                int sender, const std::vector<std::string> &keys, uint64_t size,
+                uint64_t version) override {
         try {
             thread_local std::unordered_map<std::string,
                 std::unique_ptr<httplib::Client>> clientCache;
@@ -64,14 +65,17 @@ public:
                 ref->set_connection_timeout(2);
                 ref->set_read_timeout(2);
             }
-            // Reconstruct the original JSON body {action, sender, keys, size}.
+            // Reconstruct the original JSON body {action, sender, keys, size, version}.
             json j;
             if (!action.empty()) j["action"] = action;
             j["sender"] = sender;
             if (!keys.empty()) j["keys"] = keys;
             if (size > 0) j["size"] = size;
-            ref->Post("/notify", j.dump(), "application/json");
+            if (version > 0) j["version"] = version;
+            auto res = ref->Post("/notify", j.dump(), "application/json");
+            return res && res->status == 200;
         } catch (...) {
+            return false;
         }
     }
 
@@ -102,15 +106,17 @@ public:
                 recoveryProbeSkipped_.load(std::memory_order_relaxed)};
     }
 
-    void Notify(const std::string &host, int port, const std::string &action,
-                int sender, const std::vector<std::string> &keys, uint64_t size) override {
+    bool Notify(const std::string &host, int port, const std::string &action,
+                int sender, const std::vector<std::string> &keys, uint64_t size,
+                uint64_t version) override {
         const std::string key = host + ":" + std::to_string(port);
         const bool warmupDone = action == "warmup_done";
         ChannelLease lease;
         bool oneShot = false;
+        bool ok = false;
         try {
-            // Warmup completion is sent once. Give it a real attempt even if
-            // ordinary notifications to this peer are cooling down.
+            // Warmup completion gets a real attempt even if ordinary
+            // notifications to this peer are cooling down.
             lease = GetOrCreateChannel(host, port, key);
             if (warmupDone && !lease.channel) {
                 // Bypass a cached failed socket as well as the per-peer cooldown.
@@ -126,19 +132,18 @@ public:
                     }
                 }
                 if (oneShot) SLOG_WARN("brpc channel Init failed for " << key);
-                return;
+                return false;
             }
             kvtest_control::NotifyReq req;
             req.set_action(action);
             req.set_sender(sender);
             *req.mutable_keys() = {keys.begin(), keys.end()};
             req.set_size(size);
+            req.set_version(version);
 
             kvtest_control::NotifyResp resp;
             brpc::Controller cntl;
-            // No retry: notify is fire-and-forget best-effort (matches the
-            // httplib path's single-shot Post). Retrying a down peer just
-            // amplifies the [R1][R2][R3] noise without helping recovery.
+            // No RPC-level retry: (re)transmission cycles are the caller's job.
             cntl.set_max_retry(0);
             kvtest_control::KvtestControl::Stub stub(lease.channel.get());
             // done=NULL = SYNCHRONOUS call: stub.Notify blocks until the
@@ -148,11 +153,11 @@ public:
             // returns (use-after-free -> EndRPC check failures + heap
             // corruption). Stack locals are safe only under the sync path.
             stub.Notify(&cntl, &req, &resp, /*done=*/nullptr);
+            ok = !cntl.Failed();
             // De-dup WARNs per peer: log the first failure once, suppress
             // repeats until the peer recovers, then log a single INFO. This
-            // keeps startup-race noise (writer notifying before readers are
-            // up) from flooding the log every round.
-            if (cntl.Failed()) {
+            // keeps startup-race noise from flooding the log every round.
+            if (!ok) {
                 if (oneShot) {
                     SLOG_WARN("Notify RPC to " << key << " failed: " << cntl.ErrorText());
                 } else {
@@ -165,7 +170,9 @@ public:
             if (!oneShot && lease.channel) {
                 RecordFailure(key, lease, "unexpected exception");
             }
+            ok = false;
         }
+        return ok;
     }
 
     bool Stop(const std::string &host, int port) override {

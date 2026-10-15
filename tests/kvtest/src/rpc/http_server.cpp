@@ -71,8 +71,9 @@ void HttpServer::HandleNotify(const std::string &body) {
 
         int sender = j.value("sender", 0);
         uint64_t size = j.value("size", 0ULL);
+        uint64_t version = j.value("version", 0ULL);
 
-        dispatcher_.DispatchNotify(action, sender, keys, size);
+        dispatcher_.DispatchNotify(action, sender, keys, size, version);
     } catch (const std::exception &e) {
         SLOG_WARN("Parse notify body failed: " << e.what());
     }
