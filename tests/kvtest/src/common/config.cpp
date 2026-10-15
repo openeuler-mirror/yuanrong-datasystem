@@ -262,6 +262,8 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
             cfg.targetHitRate = j["target_hit_rate"];
         if (j.contains("cache_update_prob"))
             cfg.cacheUpdateProb = j["cache_update_prob"].get<double>();
+        if (j.contains("set_nx"))
+            cfg.setNx = j["set_nx"].get<bool>();
         if (j.contains("hot_key_ratio"))
             cfg.hotKeyRatio = j["hot_key_ratio"].get<double>();
         if (j.contains("hot_access_prob"))
@@ -839,6 +841,7 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
                 << "], pending_queue_max=" << cfg.mgetSizeDist.pendingQueueMax << "}";
         }
         log << ", cache_update_prob=" << cfg.cacheUpdateProb;
+        log << ", set_nx=" << (cfg.setNx ? "true" : "false");
         if (cfg.hotKeyRatio > 0.0) {
             log << ", hot_key_ratio=" << cfg.hotKeyRatio << ", hot_access_prob=" << cfg.hotAccessProb;
         }

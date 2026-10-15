@@ -273,6 +273,7 @@ bool CacheReader::CacheGetOrFill(const std::string &key, uint64_t size) {
                 SetParam param;
                 param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
                 param.ttlSecond = cfg_.ttlSeconds;
+                param.existence = cfg_.setNx ? ExistenceOpt::NX : ExistenceOpt::NONE;
                 double setLatency = 0;
                 Status setRc = Measure([&]() {
                     return client_->Set(key, StringView(newData), param);
@@ -285,29 +286,31 @@ bool CacheReader::CacheGetOrFill(const std::string &key, uint64_t size) {
         }
 
         // Version monotonicity check: a read-back version older than the newest
-        // we've seen (from reads or broadcasts) is a stale read. Print both
-        // stamps to diagnose multi-node clock skew.
-        bool stale = false;
-        uint64_t expectedVer = 0;
-        {
-            std::lock_guard<kvtest::mutex> lock(versionMutex_);
-            auto vit = maxSeenVersion_.find(key);
-            if (vit != maxSeenVersion_.end()) expectedVer = vit->second;
-            stale = (expectedVer > 0) && (actualVersion < expectedVer);
-            uint64_t latest = std::max(actualVersion, newVersion);
-            if (latest > expectedVer) {
-                if (vit != maxSeenVersion_.end()) vit->second = latest;
-                else maxSeenVersion_[key] = latest;
+        // we've seen (from reads or broadcasts) is a stale read. Skipped with
+        // set_nx (the value is write-once; its stamp is the first writer's).
+        if (!cfg_.setNx) {
+            bool stale = false;
+            uint64_t expectedVer = 0;
+            {
+                std::lock_guard<kvtest::mutex> lock(versionMutex_);
+                auto vit = maxSeenVersion_.find(key);
+                if (vit != maxSeenVersion_.end()) expectedVer = vit->second;
+                stale = (expectedVer > 0) && (actualVersion < expectedVer);
+                uint64_t latest = std::max(actualVersion, newVersion);
+                if (latest > expectedVer) {
+                    if (vit != maxSeenVersion_.end()) vit->second = latest;
+                    else maxSeenVersion_[key] = latest;
+                }
+            }
+            if (stale) {
+                metrics_.RecordCacheStale();
+                SLOG_WARN("cacheGetOrFill stale read: key=" << key
+                          << " expected=" << expectedVer
+                          << " actual=" << actualVersion);
             }
         }
-        if (stale) {
-            metrics_.RecordCacheStale();
-            SLOG_WARN("cacheGetOrFill stale read: key=" << key
-                      << " expected=" << expectedVer
-                      << " actual=" << actualVersion);
-        }
 
-        if (newVersion > 0) {
+        if (!cfg_.setNx && newVersion > 0) {
             BroadcastUpdate({key}, newVersion);
         }
 
@@ -343,6 +346,7 @@ bool CacheReader::CacheGetOrFill(const std::string &key, uint64_t size) {
     SetParam param;
     param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
     param.ttlSecond = cfg_.ttlSeconds;
+    param.existence = cfg_.setNx ? ExistenceOpt::NX : ExistenceOpt::NONE;
     std::string fillData = GenerateVersionedData(size, NowNanos());
     double setLatency = 0;
     Status setRc = Measure([&]() {

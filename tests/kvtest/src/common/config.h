@@ -130,7 +130,12 @@ struct Config {
     int warmupTimeoutSeconds = 300;  // Reader wait timeout for all Writer warmups
     int maxKeyPoolSize = 0;          // 0 = auto (kMaxPoolSize = 5M); shared by writer growth + reader pool
     double targetHitRate = 0.0;      // 0 = fixed pool, 0.01-1.0 = auto-adjust pool to target hit rate
-    double cacheUpdateProb = 0.0;    // probability to re-Set a versioned value on cache hit, [0.0, 1.0], 0 = disabled
+    double cacheUpdateProb = 0.05;   // probability to re-Set a versioned value on cache hit, [0.0, 1.0], 0 = disabled
+    // Cache mode: use SetParam.existence = NX (write only when absent; a
+    // repeated Set of an existing key is a no-op that keeps the value). With NX
+    // the version stamp no longer proves a write took effect, so the version
+    // check / update broadcast are skipped. Default true.
+    bool setNx = true;
     double hotKeyRatio = 0.0;        // hot-set fraction of the key pool, (0.0, 1.0], 0 = uniform (disabled)
     double hotAccessProb = 0.0;      // probability to draw from the hot set, [0.0, 1.0], 0 = uniform (disabled)
     // Benchmark mode fields (test_mode != NONE)

@@ -95,14 +95,24 @@ void KVWorker::WarmupSet(const std::vector<std::string> &keys) {
     SetParam param;
     param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
     param.ttlSecond = cfg_.ttlSeconds;
+    param.existence = cfg_.setNx ? ExistenceOpt::NX : ExistenceOpt::NONE;
 
     // Spread the Sets across the TTL window so expiry does not synchronize into
     // a burst: key idx should land at start + idx * (ttl/size). Deadline
     // scheduling (not a fixed sleep) so the Set RPC latency itself does not
-    // stretch the window. Without a TTL, burst (no spacing).
+    // stretch the window. The effective interval is the LARGER of the TTL
+    // spread and the target_qps pacing, so the Set rate never exceeds
+    // target_qps (prevents Set-timeout bursts when the spread is fast or the
+    // TTL is off). Without either, burst (no spacing).
     uint64_t intervalUs = 0;
     if (cfg_.ttlSeconds > 0 && !keys.empty()) {
         intervalUs = static_cast<uint64_t>(cfg_.ttlSeconds) * 1000000ULL / keys.size();
+    }
+    if (cfg_.targetQps > 0) {
+        uint64_t qpsIntervalUs = 1000000ULL / static_cast<uint64_t>(cfg_.targetQps);
+        if (qpsIntervalUs > intervalUs) {
+            intervalUs = qpsIntervalUs;
+        }
     }
     const int64_t startUs = kvtest::SteadyNowUs();
 
@@ -298,6 +308,9 @@ void KVWorker::PipelineLoop(int threadId) {
         ctx.client = client_;
         ctx.param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
         ctx.param.ttlSecond = cfg_.ttlSeconds;
+        // NX applies to cache mode only; pipeline mode always overwrites (NONE).
+        ctx.param.existence = (cfg_.keyPoolSize > 0 && cfg_.setNx)
+            ? ExistenceOpt::NX : ExistenceOpt::NONE;
         ctx.verifyFailCount = &metrics_.VerifyFailCounter();
         ctx.verifyCfg = BuildVerifyConfig(cfg_.verifyLevel, cfg_.verifySampleBytes,
                                           cfg_.verifySampleStepBytes, cfg_.verifyFailOp);
@@ -318,15 +331,18 @@ void KVWorker::PipelineLoop(int threadId) {
             NotifyPeers(ctx.batchKeys, size, /*version=*/0);
         }
         // Cache update (re-Set on hit) carries the new version stamp so readers
-        // can advance their per-key expected version. Only the single updated
-        // key is broadcast — batchKeys[1..n] were not touched by this op.
-        if (allOk && cfg_.keyPoolSize > 0 && ctx.updated) {
+        // can advance their per-key expected version. Skipped with set_nx: an NX
+        // re-Set of an existing key does not write (value unchanged), so the new
+        // stamp never landed and broadcasting it would mislead readers.
+        if (allOk && cfg_.keyPoolSize > 0 && !cfg_.setNx && ctx.updated) {
             NotifyPeers({ctx.key}, size, ctx.updateVersionValue);
         }
 
         // Cache hit stale-read check (writer-side): a read-back version older
         // than the newest we've seen (broadcasts + prior hits) is a stale read.
-        if (cfg_.keyPoolSize > 0 && ctx.hit) {
+        // Skipped with set_nx: the value is write-once, and its stamp reflects
+        // the first writer, not the latest write, so "new vs old" is moot.
+        if (cfg_.keyPoolSize > 0 && !cfg_.setNx && ctx.hit) {
             bool stale = false;
             uint64_t expectedVer = 0;
             {
