@@ -550,13 +550,13 @@ void KVWorker::AdjustPoolSize() {
         // Too hot: grow the pool with brand-new (never-seen) keys and stop
         // backfilling misses so the new keys stay absent and pull the hit
         // rate down. The pool only grows — indices are never reused.
-        missBackfillProb_.store(0.0);
+        missBackfillProb_.store(1.0);
         uint64_t newSize = poolSize + std::max<uint64_t>(1, poolSize / 20);
         if (newSize <= maxSize) {
             currentPoolSize_.store(newSize);
             // Materialize the new OWN keys into the shared pool and broadcast
             // them so every client can sample them (they stay absent until a
-            // miss backfills them, which the backfill=0 policy suppresses).
+            // miss backfills them).
             std::vector<std::string> newKeys;
             {
                 std::unique_lock<kvtest::shared_mutex> lock(keyPoolMutex_);
@@ -575,11 +575,11 @@ void KVWorker::AdjustPoolSize() {
             SLOG_INFO("Pool expand: hit_rate=" << std::fixed << std::setprecision(3)
                       << currentRate << " > target=" << cfg_.targetHitRate
                       << " → pool " << poolSize << "→" << newSize
-                      << " (+" << newKeys.size() << " keys, backfill=0)");
+                      << " (+" << newKeys.size() << " keys, backfill=1.0)");
         } else {
             SLOG_INFO("Pool at cap: hit_rate=" << std::fixed << std::setprecision(3)
                       << currentRate << " > target=" << cfg_.targetHitRate
-                      << ", pool=" << poolSize << " (max " << maxSize << ", backfill=0)");
+                      << ", pool=" << poolSize << " (max " << maxSize << ", backfill=1.0)");
         }
     } else if (currentRate < cfg_.targetHitRate - 0.02) {
         // Too cold: always backfill misses to warm the cache back up.
