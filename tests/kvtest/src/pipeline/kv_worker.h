@@ -62,7 +62,8 @@ public:
     // key pool the writer samples from.
     void OnWarmupDone(int senderId, const std::vector<std::string> &warmupKeys);
 
-    // Add backfilled keys (from broadcast) to the shared key pool.
+    // Add keys from plain (version=0) peer broadcasts — warmup incremental
+    // batches and expand-added keys — to the shared key pool.
     void OnEvictKeys(const std::vector<std::string> &keys);
 
     // Snapshot of the shared key-pool size, for logging.
@@ -101,8 +102,8 @@ private:
     mutable kvtest::mutex versionMutex_;
     std::unordered_map<std::string, uint64_t> maxSeenVersion_;
     // Shared key pool the writer samples from (own warmup keys + other clients'
-    // keys via warmup_done/backfill broadcasts + expand-added keys). Guarded by
-    // keyPoolMutex_.
+    // keys via warmup_done/incremental broadcasts + expand-added keys). Guarded
+    // by keyPoolMutex_.
     mutable kvtest::shared_mutex keyPoolMutex_;
     std::vector<std::string> keyPool_;
     size_t warmupKeyCount_ = 0;  // total warmup keys (own + others'), never trimmed

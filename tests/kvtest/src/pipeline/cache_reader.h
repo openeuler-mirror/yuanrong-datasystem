@@ -29,6 +29,8 @@ public:
     ~CacheReader();
 
     void OnWarmupDone(int senderId, const std::vector<std::string> &warmupKeys);
+    // Add keys from plain (version=0) peer broadcasts — warmup incremental
+    // batches and expand-added keys — to the reader key pool.
     void OnEvictKeys(const std::vector<std::string> &keys);
     // Cache update broadcast: record the latest-known version stamp for the
     // given keys (also ensures they are present in the key pool).

@@ -48,12 +48,13 @@ LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH ./kvtest config/test_cache.json
 **观察日志：**
 ```
 Starting warmup: 100 keys
-Warmup done: 100 ok, 0 fail
 Starting 2 pipeline threads
-[cacheGetOrCreate=10/s, getBuffer=10/s] [pool=100, hit_rate=0.0000]
-[cacheGetOrCreate=10/s, getBuffer=10/s] [pool=100, hit_rate=0.5500]
-[cacheGetOrCreate=10/s, getBuffer=10/s] [pool=100, hit_rate=0.9000]
+[cacheGetOrCreate=10/s, getBuffer=10/s] [pool=100, read_pool=100, max_seen=0, hit_rate=0.0000]
+[cacheGetOrCreate=10/s, getBuffer=10/s] [pool=100, read_pool=100, max_seen=0, hit_rate=0.5500]
+[cacheGetOrCreate=10/s, getBuffer=10/s] [pool=100, read_pool=100, max_seen=0, hit_rate=0.9000]
 ```
+
+> 启动时会打印一次「cache 模式日志字段说明」，逐字段解释各速率段/队列段/缓存段含义。
 
 **预期行为：**
 1. 预热阶段：写入 100 个 key（`cache_pool_0_0` ~ `cache_pool_0_99`）
@@ -91,12 +92,13 @@ Starting 2 pipeline threads
 
 **运行并观察：**
 ```
-Pool adjust: hit_rate=1.000 > target=0.8 → pool 100→105
-Pool adjust: hit_rate=0.952 > target=0.8 → pool 105→110
-Pool adjust: hit_rate=0.889 > target=0.8 → pool 110→116
-...
-Pool adjust: hit_rate=0.812 > target=0.8 → pool 158→166
+Pool expand: hit_rate=1.000 > target=0.800 → pool 100→105 (+5 keys, backfill=1.0)
+Pool expand: hit_rate=0.952 > target=0.800 → pool 105→110 (+5 keys, backfill=1.0)
+Pool warm: hit_rate=0.759 < target=0.800 → backfill=1.0 (pool 21575)
+Pool hold: hit_rate=0.812 ~ target=0.800 (pool 158, backfill=1.0)
 ```
+
+命中率持续高于 target 时反复 `Pool expand`，直到数据量超过缓存容量触发 evict、命中率回落到 target 附近后停止扩容。
 
 ---
 
@@ -215,9 +217,9 @@ Writer 稳态每次成功操作都会把触碰的 key 以空 action 通知 Reade
 - [ ] cache_summary 行的 hit_rate 与实际一致
 
 ### 7.2 target_hit_rate 动态调整测试
-- [ ] 设置 `target_hit_rate=0.8` 后，Pool Size 自动调整
-- [ ] 命中率在 target ± 0.05 范围内波动
-- [ ] Pool Size 不低于 `max(10, key_pool_size / 10)`，不超过 `key_pool_size × 20`
+- [ ] 设置 `target_hit_rate=0.8` 后，命中率高于 target 时 Pool Size 自动扩大（`Pool expand`）
+- [ ] 命中率回落到 target ± 0.02 范围后停止扩容（Pool warm/hold）
+- [ ] Pool Size 只增不减，不超过 `max_key_pool_size`（默认 5M）
 
 ### 7.3 跨实例缓存测试
 - [ ] Writer 预热完成后通知 Reader
