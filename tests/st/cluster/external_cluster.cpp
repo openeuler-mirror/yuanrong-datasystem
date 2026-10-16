@@ -1321,7 +1321,6 @@ void ExternalCluster::AppendWorkerRuntimeFlags(int index, const std::string &roo
            + " -l2_cache_delete_thread_num=4" + " -inject_actions=" + injectActions + " " + opts_.workerGflagParams
            + " " + gFlag + " -rpc_thread_num=" + std::to_string(opts_.numRpcThreads) + " -spill_directory=" + spillDir
            + " -enable_distributed_master=" + opts_.enableDistributedMaster
-           + " -add_node_wait_time_s=" + std::to_string(opts_.addNodeTime) + " -iam_kit=" + opts_.iamKit
            + " -yuanrong_iam_url=" + opts_.yuanrong_iam_url
            + " -rocksdb_background_threads=" + std::to_string(opts_.numRocksDBThreads) + " -oc_thread_num="
            + std::to_string(opts_.numOcThreadNum) + " -spill_thread_num=" + std::to_string(opts_.numSpillThreadNum)
@@ -1499,7 +1498,6 @@ ExternalClusterOptions::ExternalClusterOptions()
       logCompress(true),
       isObjectCache(true),
       masterIdx(0),
-      addNodeTime(0),
       waitWorkerReady(true),
       waitAfterStart(false),
       enableLivenessProbe(false),

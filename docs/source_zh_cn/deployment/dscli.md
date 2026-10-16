@@ -1430,8 +1430,6 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | coordinator_address | string | `""` | 否 | Coordinator 服务地址，格式为 `host:port`；使用 Coordinator 集群管理方式时必须配置 |
 | kv_events_config | string | `""` | 否 | KV event publisher JSON 配置。为空表示关闭该功能；非空时需要填写 JSON 对象字符串，字段说明参见[表1](#table_kv_events_config)。例如：`{"bind_endpoint":"tcp://0.0.0.0:5557","backend_id":"worker-0"}` |
 | oc_worker_worker_direct_port | int | `0` | 否 | 对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延。取值范围：[0, 65535] |
-| oc_worker_worker_pool_size | int | `3` | 否 | datasystem-worker间用于数据传输的并行连接数，用于提升节点间数据传输的吞吐量，只有当 `ocWorkerWorkerDirectPort` 指定为非0值时该配置才生效 |
-| payload_nocopy_threshold | string | `"104857600"` | 否 | datasystem-worker间数据传输时免数据拷贝的阈值（以字节为单位） |
 | rpc_thread_num | int | `16` | 否 | 配置服务端的RPC线程数，必须为大于0的数 |
 | oc_thread_num | int | `32` | 否 | 配置服务端用于处理对象/KV缓存的业务线程数 |
 | io_thread_nice | int | `0` | 否 | 指定部分 IO 线程的 nice 值，取值范围：[-20, 19]。0 表示跳过 nice 调整并保留线程继承的 nice 值；仅非 0 值调用 `setpriority`；设置负值通常需要相应权限 |
@@ -1439,7 +1437,6 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | brpc_event_dispatcher_num | int | `0` | 否 | brpc 进程级事件分发器数量。0 表示不覆盖 brpc 默认值 1；大于 1 时按 fd 哈希分摊 socket 读写事件，可缓解大量连接同时活跃时的首包读取排队，但不会并行化单个监听 fd 的 accept。仅在进程首次初始化 brpc 前生效，修改后需要重启 Worker |
 | max_rpc_session_num | int | `2048` | 否 | 单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000] |
 | remote_send_thread_num | int | `8` | 否 | 配置服务端用于将元素发送到远程工作线程的线程数量 |
-| stream_idle_time_s | int | `300` | 否 | 配置流的空闲时间。默认值为300秒（5分钟） |
 
 `brpc_event_dispatcher_num` 与 `rpc_thread_num`、`oc_thread_num` 的职责不同。仅当大量连接在同一时段发送首包或恢复读写，TCP 建连已完成但 RPC handler 入场仍明显延迟，且业务线程池与 CPU 尚未饱和时，才建议从 2 或 4 开始灰度验证；可结合 `event_dispatcher_read_latency` 与 handler 入场时序判断。业务处理、锁竞争、服务线程池饱和或单监听 fd 的 accept 是瓶颈时，增大该值通常无效。
 
@@ -1569,7 +1566,6 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | rocksdb_background_threads | int | `16` | 否 | RocksDB的后台线程数，用于元数据的刷盘和压缩，必须为正整数 |
 | rocksdb_max_open_file | int | `128` | 否 | RocksDB可使用的最大打开文件个数 |
 | rocksdb_write_mode | string | `async` | 否 | 配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为`async`。可选值包括：'none'（不写）、'sync'（同步）、'async'（异步） |
-| enable_meta_replica | bool | `false` | 否 | 已废弃的兼容参数，当前配置值会被忽略 |
 | enable_metadata_recovery | bool | `false` | 否 | 是否在 worker 重启清理阶段将本地元数据回补到 master |
 | enable_data_replication | bool | `true` | 否 | 实验性参数。是否允许跨 worker 读取到的数据在本 worker 缓存为本地热副本，并向 master 注册副本位置；关闭后 remote get 获取的数据通常仅服务当前请求，不作为普通本地副本保留。该参数仅用于热副本性能优化，不作为数据可靠性机制，不保障数据可靠性或可用性 |
 
@@ -1584,7 +1580,6 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | node_dead_timeout_s | int | `300` | 是 | 服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点，该值必须大于 `node_timeout_s` |
 | hash_ring_tokens_per_member | uint32 | `4` | 否 | 首次创建哈希环时为每个 Worker 分配的 token 数，取值范围为 `1`～`4096`。该值会写入集群 topology；后续扩容和重规划使用 topology 中的集群值，修改本地配置不会改变已有集群的 token 数。 |
 | enable_reconciliation | bool | `false` | 否 | 当节点重启时是否启用全局引用计数对账功能；仅使用 KVClient 的场景无需开启，使用 ObjectClient 全局引用计数时需显式设置为 `true` |
-| add_node_wait_time_s | int | `60` | 是 | 新节点加入哈希环的等待超时时间 |
 | auto_del_dead_node | bool | `true` | 是 | 是否启用死亡节点自动清理功能，当该值为 `true` 时，会将死亡节点剔除出集群管理，并触发被动缩容 |
 | enable_distributed_master | bool | `true` | 否 | 是否启用分布式主节点，默认值为true |
 
@@ -1617,7 +1612,6 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | ub_numa_src_chip_policy | int | `1` | UB NUMA 源芯片策略。`0` 表示轮询；`1` 表示以轮询为基线，仅当发送内存的亲和芯片接收本次逻辑写的预计 WR 后仍不比轮询候选更忙时，才覆盖轮询结果。配置 `0` 可用于消融实验和快速回滚。旧 worker 未返回该字段时，新 client 按 `0` 兼容。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。 |
 | ub_numa_inflight_wr_diff_threshold | int | `15` | 两个源芯片 inflight WR 数量的最大允许差值。差值严格大于该值时，后续逻辑写改用 inflight 较低的芯片；`0` 表示关闭深度纠偏和机会式亲和覆盖，保留纯轮询。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。 |
 | shared_memory_distribution_policy | string | `none` | 共享内存在 NUMA 上的分布策略。可选值：`none`、`interleave_all_numa`、`interleave_affinity_numa`。仅在 `enable_urma=true` 且 `urma_register_whole_arena=true` 时生效。 |
-| urma_connection_size | int | `0` | [已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建 |
 | urma_send_lane_count_per_peer | int | `8` | 单个远端 peer 可并发占用的 URMA send lane 上限，必须大于 0；实际值不超过 `urma_send_jetty_lane_pool_size`。静态配置，修改后需重启 Worker。 |
 | urma_log_threshold_us | int | `500` | URMA 轮询模式（`urma_event_mode=false`）INFO 耗时阈值（微秒），范围 `[1, 4294967295]`，修改后重启。 |
 | urma_event_mode | bool | `false` | 是否使用中断模式轮询完成事件 |

@@ -95,7 +95,6 @@ public:
         opts.numWorkers = 2;
         opts.enableDistributedMaster = "true";
         opts.waitWorkerReady = false;
-        opts.addNodeTime = SCALE_DOWN_ADD_TIME;
         distributedDiskPath_ = testCasePath_ + "/distributed_disk";
         DS_ASSERT_OK(CreateDir(distributedDiskPath_, true));
         const bool autoDeleteDeadNode = IsPassiveScaleDownCase();
@@ -1083,7 +1082,6 @@ public:
         opts.numWorkers = 3;
         opts.enableDistributedMaster = "true";
         opts.waitWorkerReady = false;
-        opts.addNodeTime = SCALE_DOWN_ADD_TIME;
         distributedDiskPath_ = testCasePath_ + "/distributed_disk";
         DS_ASSERT_OK(CreateDir(distributedDiskPath_, true));
         std::stringstream ss;
@@ -1203,7 +1201,6 @@ public:
         opts.numWorkers = UseSmallClusterConfig() ? 2 : 3;
         opts.enableDistributedMaster = "true";
         opts.waitWorkerReady = true;
-        opts.addNodeTime = 1;
         if (UseSmallClusterConfig()) {
             opts.injectActions = "SlotClient.Init.SetSlotNum:return(2)";
         }
@@ -1546,7 +1543,6 @@ public:
         opts.numWorkers = 3;
         opts.enableDistributedMaster = "true";
         opts.waitWorkerReady = false;
-        opts.addNodeTime = 0;
         distributedDiskPath_ = testCasePath_ + "/distributed_disk";
         DS_ASSERT_OK(CreateDir(distributedDiskPath_, true));
         std::stringstream ss;

@@ -25,8 +25,6 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/status.h"
 
-DS_DEFINE_bool(enable_meta_replica, false, "Deprecated compatibility flag for metadata replica; ignored.");
-
 namespace datasystem {
 namespace {
 constexpr char OBJECT_META_NAME[] = "object_metadata";

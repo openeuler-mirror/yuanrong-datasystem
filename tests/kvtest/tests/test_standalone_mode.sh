@@ -101,7 +101,6 @@ cat > "$ROOT_DIR/worker_config.json" << EOF
     "health_check_path": {"value": "$ROOT_DIR/worker/health"},
     "node_timeout_s": {"value": "3"},
     "node_dead_timeout_s": {"value": "6"},
-    "add_node_wait_time_s": {"value": "1"},
     "enable_distributed_master": {"value": "true"}
 }
 EOF
@@ -485,7 +484,6 @@ cat > "$ROOT_DIR/worker_config2.json" << EOF
 "health_check_path":{"value":"$ROOT_DIR/w2/health"},
 "node_timeout_s":{"value":"3"},
 "node_dead_timeout_s":{"value":"6"},
-"add_node_wait_time_s":{"value":"1"},
 "enable_distributed_master":{"value":"true"}}
 EOF
 

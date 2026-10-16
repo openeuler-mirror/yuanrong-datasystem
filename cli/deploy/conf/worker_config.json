@@ -95,10 +95,6 @@
         "value": "0",
         "description": "A direct tcp/ip port for worker to workers scenarios to improve latency. Valid range is [0, 65535]. 0 means disabled."
     },
-    "oc_worker_worker_pool_size": {
-        "value": "3",
-        "description": "Number of parallel connections between worker/worker oc service. The flag `oc_worker_worker_direct_port` must be enabled for this setting to take effect"
-    },
     "sc_worker_worker_pool_size": {
         "value": "3",
         "description": "Number of parallel connections between worker/worker sc service. Flag sc_worker_worker_direct_port must be enabled to take effect."
@@ -142,10 +138,6 @@
     "master_sc_thread_num": {
         "value": "128",
         "description": "Max number of threads for (non rpc) master stream cache service work."
-    },
-    "payload_nocopy_threshold": {
-        "value": "104857600",
-        "description": "minimum payload size to trigger no memory copy"
     },
     "oc_thread_num": {
         "value": "32",
@@ -326,10 +318,6 @@
     "async_delete": {
         "value": "false",
         "description": "Master notify workers to delete objects asynchronously."
-    },
-    "add_node_wait_time_s": {
-        "value": "60",
-        "description": "Time to wait for the first node that wants to join a working hash ring."
     },
     "auto_del_dead_node": {
         "value": "true",
@@ -571,10 +559,6 @@
         "value": "false",
         "description": "Enable the OBS client to access OBS using a temporary token. After the token expires, obtain a new token and connect to OBS again."
     },
-    "enable_meta_replica": {
-        "value": "false",
-        "description": "Deprecated compatibility option for metadata replica. The value is ignored."
-    },
     "enable_urma": {
         "value": "false",
         "description": "Option to turn on urma for OC worker to worker data transfer, default false."
@@ -598,10 +582,6 @@
     "shared_memory_distribution_policy": {
         "value": "none",
         "description": "Shared memory NUMA distribution policy. Optional values: none, interleave_all_numa, interleave_affinity_numa. This option takes effect only when both enable_urma and urma_register_whole_arena are true."
-    },
-    "urma_connection_size": {
-        "value": "0",
-        "description": "[DEPRECATED] Retained for compatibility only and ignored internally. JFS/JFR are now created per connection."
     },
     "urma_send_lane_count_per_peer": {
         "value": "8",
@@ -655,10 +635,6 @@
         "value": "8",
         "description": "The num of threads used to send elements to remote worker."
     },
-    "stream_idle_time_s": {
-        "value": "300",
-        "description": "stream idle time. default 300s (5 minutes)"
-    },
     "skip_authenticate": {
         "value": "false",
         "description": "Skip authentication for worker requests"
@@ -710,10 +686,6 @@
     "sc_encrypt_secret_key": {
         "value": "",
         "description": "The encrypted secret key for stream cache. The key length is up to 1024 bytes and must be 32 bytes after decryption"
-    },
-    "iam_kit": {
-        "value": "none",
-        "description": "The type of iam kit, none is default, value range: [none, yuanrong_iam]"
     },
     "yuanrong_iam_url": {
         "value": "",

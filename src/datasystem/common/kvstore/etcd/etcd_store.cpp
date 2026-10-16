@@ -36,17 +36,12 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
-#include "datasystem/common/util/validator.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/utils/status.h"
 #include "etcd/api/etcdserverpb/rpc.grpc.pb.h"
 #include "etcd/api/etcdserverpb/rpc.pb.h"
 
 DS_DECLARE_string(etcd_address);
-DS_DEFINE_string(other_cluster_names, "",
-                 "[DEPRECATED] Cross-cluster access has been removed. This flag is kept for compatibility and is "
-                 "ignored.");
-DS_DEFINE_validator(other_cluster_names, &Validator::ValidateOtherAzNames);
 DS_DEFINE_string(metastore_address, "", "Address of metastore server");
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);

@@ -46,7 +46,6 @@ public:
         opts.numEtcd = 1;
         opts.numOBS = 1;
         opts.numWorkers = workerNum_;
-        opts.addNodeTime = SCALE_UP_ADD_TIME;
         opts.enableDistributedMaster = enableDistributedMaster_;
         opts.workerGflagParams =
             FormatString(" -v=1 -node_timeout_s=%d -node_dead_timeout_s=%d", timeoutS_, deadTimeoutS_);

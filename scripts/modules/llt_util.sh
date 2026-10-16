@@ -416,7 +416,6 @@ function start_all()
   sed -i \
     -e '/"worker_address": {/,/}/ s|"value": "[^"]*"|"value": "'"${WORKER_ADDRESS}"'"|' \
     -e '/"etcd_address": {/,/}/ s|"value": "[^"]*"|"value": "'"${WORKER_ETCD_ADDRESS}"'"|' \
-    -e '/"add_node_wait_time_s": {/,/}/ s|"value": "[^"]*"|"value": "0"|' \
     -e '/"l2_cache_type": {/,/}/ s|"value": "[^"]*"|"value": "sfs"|' \
     -e '/"sfs_path": {/,/}/ s|"value": "[^"]*"|"value": "'"${root_dir}/datasystem/sfs"'"|' \
     "${deploy_dir}/datasystem/service/worker_config.json"

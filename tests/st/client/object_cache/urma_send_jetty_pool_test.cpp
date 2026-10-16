@@ -91,7 +91,7 @@ public:
         }
         opts.vLogLevel = 2;
         opts.workerGflagParams = std::string(
-            " -shared_memory_size_mb=5120 -payload_nocopy_threshold=1000000 -enable_worker_worker_batch_get=true"
+            " -shared_memory_size_mb=5120 -enable_worker_worker_batch_get=true"
             " -batch_get_threshold_mb=20 -arena_per_tenant=1 -oc_worker_worker_parallel_nums=64"
             " -urma_send_jetty_lane_pool_size=")
             + std::to_string(SendLanePoolSize()) + " -urma_send_jetty_lane_refill_extra_size="

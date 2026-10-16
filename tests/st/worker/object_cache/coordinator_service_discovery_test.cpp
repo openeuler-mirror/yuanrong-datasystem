@@ -96,7 +96,7 @@ public:
         opts.waitAfterStart = false;
         opts.disableRocksDB = true;
         opts.workerGflagParams =
-            " -shared_memory_size_mb=64 -node_timeout_s=2 -node_dead_timeout_s=4 -add_node_wait_time_s=1"
+            " -shared_memory_size_mb=64 -node_timeout_s=2 -node_dead_timeout_s=4"
             " -enable_reconciliation=false -enable_lossless_data_exit_mode=true";
         opts.coordinatorGflagParams = " -v=1 -node_dead_timeout_s=4";
 

@@ -27,7 +27,6 @@ data:
     -spill_file_open_limit={{ .Values.global.spill.spillFileOpenLimit }}
     -spill_size_limit={{ .Values.global.spill.spillSizeLimit }}
     -heartbeat_interval_ms={{ .Values.global.reliability.heartbeatIntervalMs }}
-    -add_node_wait_time_s={{ .Values.global.reliability.addNodeWaitTimeS }}
     -async_delete={{ .Values.global.performance.asyncDelete}}
     -urma_failover_success_rate_ratio={{ .Values.global.performance.urmaFailoverSuccessRateRatio }}
     -urma_failover_min_sample_count={{ .Values.global.performance.urmaFailoverMinSampleCount }}

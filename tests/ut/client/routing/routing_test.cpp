@@ -462,7 +462,6 @@ TEST_F(RoutingFacadeTest, TestShutdownRejectsSubsequentCalls)
 
 TEST_F(RoutingFacadeTest, TestParseDataPlacementPolicy)
 {
-    EXPECT_EQ(FLAGS_sdk_data_placement_policy, "PREFERRED_SAME_NODE");
     client::DataPlacementPolicy policy = client::DataPlacementPolicy::PREFERRED_SAME_NODE;
     DS_ASSERT_OK(client::ParseDataPlacementPolicy("PREFERRED_SAME_NODE", policy));
     EXPECT_EQ(policy, client::DataPlacementPolicy::PREFERRED_SAME_NODE);

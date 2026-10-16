@@ -650,10 +650,9 @@ std::string DsCoordinationBackend::ResolveKeepAliveHostId() const
     std::string hostId;
     if (FLAGS_host_id_env_name.empty()) {
         // host_id_env_name is unset: the worker registers an empty host_id, so clients cannot partition
-        // same-node workers and sdk_data_placement_policy=PREFERRED_SAME_NODE silently degrades to the
-        // hash ring (cross-node routing for every key, including large payloads that may time out).
+        // same-node workers and same-node placement silently degrades to the hash ring.
         LOG(WARNING) << "host_id_env_name is not set; worker will register an empty host_id and same-node "
-                        "worker affinity (sdk_data_placement_policy=PREFERRED_SAME_NODE) will be disabled. "
+                        "worker affinity will be disabled. "
                         "Set --host_id_env_name=<ENV_VAR> and export <ENV_VAR>=<unique-per-host value> on each "
                         "worker host to enable same-node routing.";
         return hostId;

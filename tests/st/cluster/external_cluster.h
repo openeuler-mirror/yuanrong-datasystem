@@ -96,8 +96,6 @@ public:
 
     std::string enableDistributedMaster = "true";  // enable distributed master or not.
 
-    std::string iamKit = "yuanrong_iam";
-
     std::string yuanrong_iam_url = "https://testyuanrongiam.com";
 
     bool enableSpill = false;
@@ -105,8 +103,6 @@ public:
     // Used in object cache, where master is part of worker process. We use this index to tell which worker will work
     // as the master. workerConfigs[masterIdx] is the address of the master. masterIdx is 0 by default.
     int32_t masterIdx;
-
-    int addNodeTime;
 
     bool waitWorkerReady;
 

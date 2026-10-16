@@ -1719,7 +1719,7 @@ public:
         opts.numEtcd = 1;
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
-            " -v=1 -add_node_wait_time_s=3 -auto_del_dead_node=true -node_timeout_s=1"
+            " -v=1 -auto_del_dead_node=true -node_timeout_s=1"
             " -node_dead_timeout_s=3 -heartbeat_interval_ms=500";
         opts.waitWorkerReady = false;
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(500)");
@@ -1806,7 +1806,7 @@ TEST_F(StandbyWorkerDfxTest, DISABLED_TestUseStandbyWorker)
 
     // Restore the local worker
     StartWorkerAndWaitReady({ 0 });
-    sleep(5);  // sleep more than add_node_wait_time_s
+    sleep(5);
     std::string objKey2 = "obj2";
     std::string data2(objSize, 'b');
     // Client will use shm because local worker is restored.

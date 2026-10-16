@@ -93,7 +93,7 @@ public:
             workerAddress_.emplace_back(addr.ToString());
         }
         opts.workerGflagParams = FormatString(
-            " -shared_memory_size_mb=5120 -v=2 -payload_nocopy_threshold=1000000 -max_client_num=%d", maxClientNum);
+            " -shared_memory_size_mb=5120 -v=2 -max_client_num=%d", maxClientNum);
         for (size_t i = 0; i < opts.workerConfigs.size(); ++i) {
             std::string envName = FormatString("object_client_sd_host_id_env_%zu", i);
             std::string envValue = FormatString("object_client_sd_host_id_%zu", i);

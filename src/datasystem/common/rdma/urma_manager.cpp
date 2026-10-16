@@ -73,7 +73,6 @@
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 
 DS_DECLARE_uint32(urma_poll_size);
-DS_DECLARE_uint32(urma_connection_size);
 DS_DECLARE_bool(urma_event_mode);
 DS_DECLARE_uint32(urma_perf_interval_ms);
 DS_DECLARE_bool(enable_urma_perf);
@@ -375,10 +374,6 @@ Status UrmaManager::Init(const HostPort &hostport)
     std::vector<std::string> candidates;
     int eidIndex = -1;
     RETURN_IF_NOT_OK(GetUrmaDeviceName(candidates, eidIndex));
-    if (FLAGS_urma_connection_size != 0) {
-        LOG(WARNING) << "Flag urma_connection_size is deprecated and ignored. "
-                     << "JFS/JFR are now created per-connection.";
-    }
     OsXprtPipln::SetIsClientMode(clientMode_.load(std::memory_order_acquire));
     // Try each candidate device in order. UrmaResource::Init starts with Clear() (urma_resource.cpp), so a failed
     // attempt on one device is torn down before the next candidate is tried; the first device whose Init succeeds is
@@ -3767,7 +3762,6 @@ void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t trans
                 UrmaManager::ubTransportMemSize_);
         }
         RequestClientUrmaRuntime();
-        // FLAGS_urma_connection_size is deprecated; JFS/JFR are created per-connection.
     }
 }
 

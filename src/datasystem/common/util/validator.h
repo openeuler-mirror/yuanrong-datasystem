@@ -635,23 +635,6 @@ public:
         return false;
     }
 
-    /**
-     * @brief Validate the value for IAMKit.
-     * @param[in] IAMKit IAM type.
-     * @param[in] value Gflags value.
-     * @return True if valid.
-     */
-    static bool ValidateIAMKit(const char *IAMKit, const std::string &value)
-    {
-        if (value == "none" || value == "yuanrong_iam") {
-            return true;
-        } else {
-            LOG(ERROR) << FormatString("The value of %s flags is %s, which must be in [none, yuanrong_iam]", IAMKit,
-                                       value);
-            return false;
-        }
-    }
-
     // The following functions are not compatible with gflag validator.
 
     /**
@@ -1120,21 +1103,6 @@ public:
             return false;
         }
         return ValidatePathString(flagName, value);
-    }
-
-    /**
-     * @brief Validate deprecated other AZ names compatibility flag.
-     * @param flagName[in] Other AZ names flag.
-     * @param value[in] Other AZ names value.
-     * @return True if valid.
-     */
-    static bool ValidateOtherAzNames(const char *flagName, const std::string &value)
-    {
-        if (std::find(value.begin(), value.end(), ' ') != value.end()) {
-            LOG(ERROR) << FormatString("The value of %s flag is %s, which must not contain spaces.", flagName, value);
-            return false;
-        }
-        return true;
     }
 
     /**

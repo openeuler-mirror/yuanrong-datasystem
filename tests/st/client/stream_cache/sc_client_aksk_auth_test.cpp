@@ -42,7 +42,6 @@ public:
             " -authorization_enable=true "
             "-yuanrong_iam_url=https://www.example.com";
         opts.numEtcd = 1;
-        opts.iamKit = "yuanrong_iam";
         SCClientCommon::SetClusterSetupOptions(opts);
     }
 

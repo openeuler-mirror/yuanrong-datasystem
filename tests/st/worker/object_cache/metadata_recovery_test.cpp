@@ -47,7 +47,6 @@ public:
         opts.numCoordinators = useCoordinator ? 1 : 0;
         opts.numWorkers = 2;
         opts.enableDistributedMaster = "true";
-        opts.addNodeTime = 0;
         std::stringstream ss;
         ss << "-enable_metadata_recovery=true "
            << "-enable_reconciliation=true "

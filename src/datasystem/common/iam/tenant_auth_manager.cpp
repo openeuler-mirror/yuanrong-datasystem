@@ -32,13 +32,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/common/util/validator.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
-
-DS_DEFINE_string(
-    iam_kit, "none",
-    "The type of iam kit, none is default, value range: [none, yuanrong_iam]");
-DS_DEFINE_validator(iam_kit, &Validator::ValidateIAMKit);
 
 namespace datasystem {
 TenantAuthManager *TenantAuthManager::Instance()
@@ -47,19 +41,9 @@ TenantAuthManager *TenantAuthManager::Instance()
     return &tenantAuthManager;
 }
 
-std::string IAMKitToString(IAMKit kit)
-{
-    if (kit == YUANRONG_IAM) {
-        return "yuanrong iam";
-    }
-    return "";
-}
-
 Status TenantAuthManager::Init(bool authEnable, std::shared_ptr<AkSkManager> akSkManager)
 {
-    IAMKit iamKit = YUANRONG_IAM;
-    LOG(INFO) << "Init TenantAuthManager, authorization_enable_enable flag is " << authEnable
-              << ", iam_kit is: " << IAMKitToString(iamKit);
+    LOG(INFO) << "Init TenantAuthManager, authorization_enable flag is " << authEnable;
     authEnable_ = authEnable;
     akSkManager_ = std::move(akSkManager);
     iamAuth_ = std::make_shared<YuanRongIAM>(akSkManager_);

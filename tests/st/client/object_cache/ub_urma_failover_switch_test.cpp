@@ -51,10 +51,8 @@ public:
         opts.numEtcd = 1;
         opts.enableDistributedMaster = "true";
         // client_dead_timeout_s=3 shrinks the URMA success-rate window from ~60s to 3s.
-        // payload_nocopy_threshold=1MB routes 2MB objects through the UB data plane instead of inline RPC.
         opts.workerGflagParams = " -enable_urma=true -shared_memory_size_mb=1024 -arena_per_tenant=1"
-                                 " -ipc_through_shared_memory=false -client_dead_timeout_s=3"
-                                 " -payload_nocopy_threshold=1000000";
+                                 " -ipc_through_shared_memory=false -client_dead_timeout_s=3";
     }
 
     void SetUp() override
@@ -174,17 +172,6 @@ TEST_F(UbFailoverSwitchTest, SwitchNeverRevertsAfterRecoveryWhenLocalCacheEnable
 // the broken breaker from ubFailureReportRc. The explicit rebuild trigger must still fire, otherwise
 // the UB plane stays broken for every small write until a payload the limiter rejects comes along.
 class UbTcpFallbackRebuildTest : public UbFailoverSwitchTest {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        UbFailoverSwitchTest::SetClusterSetupOptions(opts);
-        // 512KB probes clear this threshold (so they use the UB data plane) while staying under the
-        // 1MB TCP fallback limiter (so the fallback succeeds).
-        const std::string base = "-payload_nocopy_threshold=1000000";
-        const auto pos = opts.workerGflagParams.find(base);
-        ASSERT_NE(pos, std::string::npos) << "base fixture lost its payload_nocopy_threshold flag";
-        opts.workerGflagParams.replace(pos, base.size(), "-payload_nocopy_threshold=1024");
-    }
 };
 
 TEST_F(UbTcpFallbackRebuildTest, TcpFallbackSuccessStillTriggersUbPlaneRebuild)

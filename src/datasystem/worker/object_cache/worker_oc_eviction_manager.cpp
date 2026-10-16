@@ -64,7 +64,6 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 
 DS_DECLARE_uint32(eviction_reserve_mem_threshold_mb);
-DS_DECLARE_uint32(eviction_pretrigger_margin_mb);
 DS_DECLARE_uint32(spill_thread_num);
 DS_DECLARE_string(spill_io_mode);
 
@@ -3546,12 +3545,6 @@ bool EvictWhenMemoryExceedThrehold(const std::string &keyInfo, uint64_t needSize
 
 bool EvictWhenMemoryExceedPretriggerWatermark(const std::shared_ptr<WorkerOcEvictionManager> &evictionManager)
 {
-    if (FLAGS_eviction_pretrigger_margin_mb != 0) {
-        // Deprecated no-op flag: kept one release so configs carrying the old key still start.
-        LOG_EVERY_T(WARNING, LOG_TIME_LIMIT_LEVEL3)
-            << "eviction_pretrigger_margin_mb is deprecated and ignored; the patrol auto-reserves the "
-               "average cached object size. Remove the key from worker config.";
-    }
     return CheckAndTriggerEviction("", 0, evictionManager, { ServiceType::OBJECT, true });
 }
 
