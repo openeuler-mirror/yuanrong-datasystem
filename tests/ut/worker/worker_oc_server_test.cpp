@@ -33,6 +33,7 @@
 #include <utility>
 
 #include "datasystem/cluster/model/topology_snapshot.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/raii.h"
@@ -265,12 +266,41 @@ public:
                                              std::chrono::milliseconds(1));
     }
 
+    void TryInitJemallocStatsBvar(worker::WorkerOCServer &server)
+    {
+        server.TryInitJemallocStatsBvar();
+    }
+
+    bool HasJemallocStatsBvar(const worker::WorkerOCServer &server) const
+    {
+        return server.jemallocStatsBvar_ != nullptr;
+    }
+
 protected:
     std::unique_ptr<worker::WorkerOCServer> server_;
     std::string recoveredAddress_;
     size_t recoveryCount_{ 0 };
     size_t shutdownRequestCount_{ 0 };
 };
+
+TEST_F(WorkerOCServerTest, JemallocStatsRegistrationFollowsBuiltinServices)
+{
+    const bool oldEnableBuiltinServices = FLAGS_brpc_enable_builtin_services;
+    Raii restoreFlag([oldEnableBuiltinServices] { FLAGS_brpc_enable_builtin_services = oldEnableBuiltinServices; });
+
+    FLAGS_brpc_enable_builtin_services = false;
+    TryInitJemallocStatsBvar(*server_);
+    EXPECT_FALSE(HasJemallocStatsBvar(*server_));
+
+    FLAGS_brpc_enable_builtin_services = true;
+    TryInitJemallocStatsBvar(*server_);
+    ASSERT_TRUE(HasJemallocStatsBvar(*server_));
+
+    worker::WorkerOCServer duplicateServer(HostPort("127.0.0.1", 31502), HostPort("127.0.0.1", 31502), HostPort(),
+                                           nullptr);
+    TryInitJemallocStatsBvar(duplicateServer);
+    EXPECT_FALSE(HasJemallocStatsBvar(duplicateServer));
+}
 
 TEST_F(WorkerOCServerTest, ActiveAddressRemovesPreviouslyFailedWorker)
 {

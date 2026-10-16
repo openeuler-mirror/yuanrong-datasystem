@@ -64,7 +64,7 @@ curl -s http://127.0.0.1:31501/status | head
 # 浏览 bvar 指标（QPS/P99/错误率/连接数，人读文本格式）
 curl -s http://127.0.0.1:31501/vars | less
 
-# 按需查看进程 jemalloc 指标（同时设置 jemalloc_stats=true）
+# 按需查看进程 jemalloc 指标
 curl -s 'http://127.0.0.1:31501/vars/anon_jemalloc_*?console=1'
 
 # Prometheus 抓取（注意是 /prometheus_metrics，不是 /vars）
@@ -81,8 +81,8 @@ curl -s http://127.0.0.1:31501/bthreads | head -50
 
 - **brpc 内置服务默认关闭**，保持无 HTTP 管理端点的安全基线。`/flags` 可 POST 翻转任意 gflag，`/pprof/heap` 可 dump 内存，默认关闭可防止经业务 RPC 端口越权操作。
 - 由 gflag `FLAGS_brpc_enable_builtin_services` 控制（默认 `false`）。仅在受信网络调试时设为 `true` 开启 `/flags`、`/pprof`、`/vars` 等诊断接口，无需改代码重新编译。
-- Worker 设置 `jemalloc_stats=true` 后会注册进程 jemalloc 指标。该参数仅在启动时读取，修改配置后必须重启
-  Worker，不支持通过 `/flags` 动态启停。该参数要求 `brpc_enable_builtin_services=true`，不满足时 Worker 拒绝启动。
+- Worker 启用 `brpc_enable_builtin_services` 后会同时注册进程 jemalloc 指标；关闭 builtin 服务时不注册。
+- 升级前需从 Worker 配置和启动参数中删除旧 `jemalloc_stats` 参数，否则 Worker 会按未知参数拒绝启动。
 - `anon_jemalloc_{allocated,active,resident,metadata,mapped,retained,dirty,muzzy}_bytes` 的单位均为字节。
   指标按查询触发采集并缓存一秒；没有查询时不采集，也不落盘。
 - 先检查 `anon_jemalloc_stats_available`：值为 `1` 时 `_bytes` 属于本次有效快照；值为 `0` 时读取失败，

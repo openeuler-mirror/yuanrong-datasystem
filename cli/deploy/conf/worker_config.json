@@ -527,10 +527,6 @@
         "value": "false",
         "description": "Expose BRPC builtin diagnostic HTTP services such as /flags, /pprof, /vars, and /status. Enable only on trusted networks."
     },
-    "jemalloc_stats": {
-        "value": "false",
-        "description": "Startup-only flag that exposes process jemalloc statistics through BRPC builtin /vars. Requires brpc_enable_builtin_services=true and a Worker restart after changing the value."
-    },
     "enable_etcd_auth": {
         "value": "false",
         "description": "Whether to enable ETCD auth, default is false. ETCD certificate will be obtained."

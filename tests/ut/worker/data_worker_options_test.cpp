@@ -19,6 +19,7 @@
 #include <string>
 #include <vector>
 
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/utils/coordinator_discovery.h"
 #include "datasystem/utils/embedded_config.h"
 #include "datasystem/utils/status.h"
@@ -68,6 +69,14 @@ TEST(DataWorkerOptionsTest, RejectsUnpairedCallbacksBeforeReadingConfig)
     auto status = DataWorker::GetInstance()->InitAndRun(options);
 
     ExpectInvalidWithMessage(status, "onStart and onStop");
+}
+
+TEST(DataWorkerOptionsTest, RejectsRemovedJemallocStatsFlag)
+{
+    std::string errMsg;
+
+    EXPECT_FALSE(SetCommandLineOption("jemalloc_stats", "true", errMsg));
+    EXPECT_NE(errMsg.find("not found"), std::string::npos) << errMsg;
 }
 
 TEST(DataWorkerOptionsTest, ThrownStopExceptionDoesNotReplaceStartError)

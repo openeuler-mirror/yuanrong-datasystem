@@ -9,6 +9,7 @@ ds_cc_test(
     name = "data_worker_options_test",
     srcs = ["data_worker_options_test.cpp"],
     deps = [
+        "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/worker:worker",
         "//tests/ut:ut_common",
     ],
@@ -41,6 +42,7 @@ ds_cc_test(
     srcs = ["worker_oc_server_test.cpp"],
     deps = [
         "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker:worker_oc_server",

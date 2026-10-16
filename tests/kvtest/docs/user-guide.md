@@ -404,8 +404,8 @@ python3 parse_resource.py collected_worker_logs/<pod>/resource_monitor.csv \
 
 `--start-time` 和 `--end-time` 可以单独使用；不带时区偏移时，按生成报告的机器本地时区解释。
 
-CSV 默认包含 CPU、RSS、匿名/共享内存、文件描述符、TCP 失败率和吞吐量。Worker 配置同时启用
-`jemalloc_stats=true` 与 `brpc_enable_builtin_services=true` 时，还会按秒采集 jemalloc 的
+CSV 默认包含 CPU、RSS、匿名/共享内存、文件描述符、TCP 失败率和吞吐量。Worker 配置启用
+`brpc_enable_builtin_services=true` 时，还会按秒采集 jemalloc 的
 allocated、active、resident、metadata、mapped、retained、dirty 和 muzzy 指标。读取失败时
 jemalloc 内存列留空，`jemalloc_stats_available` 与 `jemalloc_stats_read_failures` 用于判断缺口原因。
 
@@ -420,7 +420,7 @@ jemalloc 内存列留空，`jemalloc_stats_available` 与 `jemalloc_stats_read_f
 | `brpc_active_requests` / `brpc_method_concurrency` | 目标端口各业务 RPC 方法 concurrency 的合计 / 仅非零方法的紧凑 JSON 明细 |
 | `brpc_stats_available` / `brpc_stats_read_failures` | 本轮是否读到 `bthread_count` / 累计缺失次数；其他字段缺失时各自留空 |
 
-这些统计不依赖 jemalloc profiling 或 `jemalloc_stats`。RSS 已由 `rss_mb` 记录。
+这些统计不依赖 jemalloc profiling。RSS 已由 `rss_mb` 记录。
 `bthread_concurrency` 是配置值，不采集。bRPC 1.15 的 `bthread_group_status` 只统计本地运行队列，
 不包含 remote/priority 队列，也不包含挂起等待的 bthread，因此不导出未经证实的 pending/suspended 总数。
 精确的全局 pending/suspended 计数需要在 bRPC 调度状态转换处增加统计。
