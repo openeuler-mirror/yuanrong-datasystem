@@ -261,7 +261,7 @@ Status ExternalCluster::ShutdownWorkers()
     return rc;
 }
 
-Status ExternalCluster::AddNode(const HostPort &masterAddress, const std::string workerAddress, int workerDirectPort)
+Status ExternalCluster::AddNode(const HostPort &masterAddress, const std::string workerAddress)
 {
     const int num = 1;
     CHECK_FAIL_RETURN_STATUS(!masterAddress.Empty() && !workerAddress.empty(), K_INVALID, "address is empty");
@@ -269,7 +269,6 @@ Status ExternalCluster::AddNode(const HostPort &masterAddress, const std::string
     HostPort workerAddr;
     RETURN_IF_NOT_OK(workerAddr.ParseString(workerAddress));
     opts_.workerConfigs.emplace_back(workerAddr);
-    opts_.workerOcDirectPorts.emplace_back(workerDirectPort);
     workerProcesses_.emplace_back(nullptr);
     return StartWorker(opts_.numWorkers - num, masterAddress);
 }
@@ -1130,8 +1129,7 @@ Status ExternalCluster::StartCoordinatorNode(int index)
                             " -coordinator_discovery_retry_interval_ms=100";
     }
     coordinatorCmd += " -coordinator_address=" + opts_.coordinatorConfigs[index].ToString() + " -log_dir=" + rootDir
-                      + "/log -v=" + std::to_string(opts_.vLogLevel) + " " + opts_.coordinatorGflagParams
-                      + " -rpc_thread_num=" + std::to_string(opts_.numRpcThreads);
+                      + "/log -v=" + std::to_string(opts_.vLogLevel) + " " + opts_.coordinatorGflagParams;
     if (!opts_.enableCoordinatorElection && opts_.numCoordinators > 1
         && opts_.coordinatorGflagParams.find("-coordinator_raft_initial_peers=") == std::string::npos) {
         coordinatorCmd += " -coordinator_raft_initial_peers=" + BuildCoordinatorAddressList(opts_.coordinatorConfigs);
@@ -1158,8 +1156,7 @@ Status ExternalCluster::StartMaster(int index)
     masterCmd += " -master_address=" + opts_.masterIpAddrs[index].ToString() + " -log_dir=" + rootDir + "/log"
                  + " -rocksdb_store_dir=" + rootDir + "/rocksdb" + " -unix_domain_socket_dir=" + opts_.socketDir + " "
                  + " -v=" + std::to_string(opts_.vLogLevel) + " -health_check_path=" + healthFile
-                 + +" -l2_cache_delete_thread_num=4 " + opts_.masterGflagParams
-                 + " -rpc_thread_num=" + std::to_string(opts_.numRpcThreads);
+                 + +" -l2_cache_delete_thread_num=4 " + opts_.masterGflagParams;
     if (GetEtcdNum() > 0) {
         std::string etcdUrl;
         for (size_t i = 0; i < GetEtcdNum(); ++i) {
@@ -1283,9 +1280,6 @@ Status ExternalCluster::StartWorker(int index, const HostPort &address, std::str
     workerProcess->SetEnv({ std::make_pair("POD_NAME", workerName) });
     RETURN_IF_NOT_OK(workerProcess->Start());
     TestPortAllocator::Instance().RegisterChildPid(opts_.workerConfigs[index].Port(), workerProcess->Pid());
-    if (static_cast<size_t>(index) < opts_.workerOcDirectPorts.size()) {
-        TestPortAllocator::Instance().RegisterChildPid(opts_.workerOcDirectPorts[index], workerProcess->Pid());
-    }
     workerProcesses_[index].reset(workerProcess.release());
     if (opts_.waitWorkerReady) {
         RETURN_IF_NOT_OK(WaitNodeReady(WORKER, index, WAIT_TIMEOUT_SECS));
@@ -1304,7 +1298,6 @@ void ExternalCluster::AppendWorkerRuntimeFlags(int index, const std::string &roo
         spillDir = rootDir + "/spill";
     }
     if (opts_.isStreamCacheCase) {
-        opts_.numRpcThreads = 1;
         opts_.numOcThreadNum = 1;
         opts_.workerGflagParams = " -sc_regular_socket_num=" + std::to_string(opts_.numScRegularSocket)
                                   + " -sc_stream_socket_num=" + std::to_string(opts_.numScStreamSocket) + " "
@@ -1318,18 +1311,13 @@ void ExternalCluster::AppendWorkerRuntimeFlags(int index, const std::string &roo
     cmd += " -worker_address=" + opts_.workerConfigs[index].ToString() + " -unix_domain_socket_dir=" + opts_.socketDir
            + " -log_dir=" + logDir + " -v=" + std::to_string(opts_.vLogLevel) + " -health_check_path=" + healthFile
            + " -l2_cache_delete_thread_num=4" + " -inject_actions=" + injectActions + " " + opts_.workerGflagParams
-           + " " + gFlag + " -rpc_thread_num=" + std::to_string(opts_.numRpcThreads) + " -spill_directory=" + spillDir
-           + " -enable_distributed_master=" + opts_.enableDistributedMaster
-           + " -yuanrong_iam_url=" + opts_.yuanrong_iam_url
-           + " -rocksdb_background_threads=" + std::to_string(opts_.numRocksDBThreads) + " -oc_thread_num="
-           + std::to_string(opts_.numOcThreadNum) + " -spill_thread_num=" + std::to_string(opts_.numSpillThreadNum)
-           + " -check_async_queue_empty_time_s=1";
+           + " " + gFlag + " -spill_directory=" + spillDir + " -enable_distributed_master="
+           + opts_.enableDistributedMaster + " -yuanrong_iam_url=" + opts_.yuanrong_iam_url
+           + " -rocksdb_background_threads=" + std::to_string(opts_.numRocksDBThreads)
+           + " -oc_thread_num=" + std::to_string(opts_.numOcThreadNum)
+           + " -spill_thread_num=" + std::to_string(opts_.numSpillThreadNum) + " -check_async_queue_empty_time_s=1";
     cmd += " -system_access_key=" + opts_.systemAccessKey + " -system_secret_key=" + opts_.systemSecretKey
            + " -tenant_access_key=" + opts_.tenantAccessKey + " -tenant_secret_key=" + opts_.tenantSecretKey;
-    cmd += " -oc_worker_worker_direct_port="
-           + ((static_cast<size_t>(index) < opts_.workerOcDirectPorts.size())
-                  ? std::to_string(opts_.workerOcDirectPorts[index])
-                  : "0");
 
     auto &specifyParams = opts_.workerSpecifyGflagParams;
     if (specifyParams.find(index) != specifyParams.end()) {

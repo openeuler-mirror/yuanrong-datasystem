@@ -87,10 +87,6 @@
         "value": "32",
         "description": "The number of stream backend socket for stream cache, must be great equal than 0."
     },
-    "oc_worker_worker_direct_port": {
-        "value": "0",
-        "description": "A direct tcp/ip port for worker to workers scenarios to improve latency. Valid range is [0, 65535]. 0 indicates disabled."
-    },
     "sc_worker_worker_direct_port": {
         "value": "0",
         "description": "A direct tcp/ip port for worker to workers scenarios to improve latency. Valid range is [0, 65535]. 0 means disabled."
@@ -398,10 +394,6 @@
     "health_check_path": {
         "value": "./datasystem/probe/worker",
         "description": "Startup commit and liveness lease file."
-    },
-    "rpc_thread_num": {
-        "value": "16",
-        "description": "Config rpc server thread number, must be great equal than 0."
     },
     "minloglevel": {
         "value": "0",

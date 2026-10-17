@@ -26,10 +26,7 @@
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/uri.h"
-#include "datasystem/common/util/validator.h"
 
-DS_DEFINE_int32(rpc_thread_num, 16, "Thread number of OC HandleRequest, must great than or equal to 0.");
-DS_DEFINE_validator(rpc_thread_num, &Validator::ValidateRpcThreadNum);
 DS_DECLARE_string(unix_domain_socket_dir);
 
 namespace datasystem {

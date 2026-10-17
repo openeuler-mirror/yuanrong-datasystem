@@ -675,9 +675,9 @@ void RpcGenerator::ImplementBrpcCallMethodUnarySocket(io::Printer &printer,
         "$indent$        cntl, request, response, asyncDone, \"$methodFullName$\");\n";
     if (HasPayloadRecvOption(method)) {
         impl +=
-        "$indent$// Defer done_->Run() so SendPayload()/SendAndTagPayload() can write\n"
-        "$indent$// payload to response_attachment before brpc serializes the response.\n"
-        "$indent$serverApi->SetHasRecvPayload(true);\n";
+            "$indent$// Defer done_->Run() so SendPayload() can write\n"
+            "$indent$// payload to response_attachment before brpc serializes the response.\n"
+            "$indent$serverApi->SetHasRecvPayload(true);\n";
     }
     impl += BuildScTimeoutDurationInitSnippet();
     impl +=
@@ -701,7 +701,7 @@ void RpcGenerator::ImplementBrpcCallMethodUnarySocket(io::Printer &printer,
         "$indent$    serverApi->RunDoneIfNotConsumed();\n"
         "$indent$}\n"
         "$indent$// If st.IsOk(), done->Run() will be called by Write()/SendStatus()\n"
-        "$indent$// (or by SendPayload()/SendAndTagPayload() when SetHasRecvPayload(true)).\n"
+        "$indent$// (or by SendPayload() when SetHasRecvPayload(true)).\n"
         "$indent$// Falls back to ~BrpcServerUnaryWriterReader() if none are called.\n";
     printer.Print(vars, impl.c_str());
 }

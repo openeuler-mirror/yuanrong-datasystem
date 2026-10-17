@@ -33,7 +33,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = 1;
-        opts.numRpcThreads = 0;
         opts.numWorkers = 2;
         SCClientCommon::SetClusterSetupOptions(opts);
     }
@@ -435,7 +434,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = 1;
-        opts.numRpcThreads = 0;
         opts.numWorkers = 2;
         DeleteStreamTest::SetClusterSetupOptions(opts);
         opts.enableDistributedMaster = "false";

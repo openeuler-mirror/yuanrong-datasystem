@@ -102,6 +102,9 @@ static constexpr char URMA_WARMUP_KEY_PREFIX[] = "_urma_";
 
 static constexpr double US_PER_MS = 1000.0;
 static constexpr int64_t REMOTE_GET_CLEANUP_HEADROOM_MS = 100;
+static constexpr size_t REMOTE_GET_MAX_THREAD_NUM = 16;
+static constexpr size_t BATCH_QUERY_META_MAX_THREAD_NUM = 16;
+static constexpr size_t BATCH_REMOTE_GET_MAX_THREAD_NUM = 16;
 
 namespace {
 void CollectRollbackRetryIds(std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
@@ -271,10 +274,12 @@ WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initPar
       rateController_(std::move(rateController)),
       ubAdmission_(std::move(ubAdmission))
 {
-    remoteGetThreadPool_ = std::make_unique<ThreadPool>(1, FLAGS_rpc_thread_num, "RemoteGetThreadPool");
-    workerBatchQueryMetaThreadPool_ = std::make_unique<ThreadPool>(1, FLAGS_rpc_thread_num, "BatchQueryMeta");
+    remoteGetThreadPool_ = std::make_unique<ThreadPool>(1, REMOTE_GET_MAX_THREAD_NUM, "RemoteGetThreadPool");
+    workerBatchQueryMetaThreadPool_ =
+        std::make_unique<ThreadPool>(1, BATCH_QUERY_META_MAX_THREAD_NUM, "BatchQueryMeta");
     if (FLAGS_enable_worker_worker_batch_get) {
-        workerBatchRemoteGetThreadPool_ = std::make_unique<ThreadPool>(1, FLAGS_rpc_thread_num, "BatchRemoteGet");
+        workerBatchRemoteGetThreadPool_ =
+            std::make_unique<ThreadPool>(1, BATCH_REMOTE_GET_MAX_THREAD_NUM, "BatchRemoteGet");
     }
 }
 

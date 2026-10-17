@@ -114,7 +114,7 @@ public:
         HostPort workerAddr(HOST_IP, GetFreePort());
         HostPort masterAddr;
         RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(0, masterAddr));
-        RETURN_IF_NOT_OK(cluster_->AddNode(masterAddr, workerAddr.ToString(), GetFreePort()));
+        RETURN_IF_NOT_OK(cluster_->AddNode(masterAddr, workerAddr.ToString()));
         RETURN_IF_NOT_OK(cluster_->WaitNodeReady(WORKER, newWorkerIdx));
         return Status::OK();
     }

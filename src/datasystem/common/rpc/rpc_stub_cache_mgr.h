@@ -292,12 +292,6 @@ protected:
     void InitCreators();
 
     /**
-     * @brief Enable object cache worker worker direct tcp port or not.
-     * @return True if worker worker direct port is enable.
-     */
-    static bool EnableOcWorkerWorkerDirectPort();
-
-    /**
      * @brief Enable worker worker direct tcp port or not.
      * @return True if worker worker direct port is enable.
      */

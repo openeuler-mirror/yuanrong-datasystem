@@ -217,10 +217,10 @@ class TestCmdStart(unittest.TestCase):
     def test_set_overrides_applied(self, mock_start):
         cfg_path = _write_config({'worker_address': {'value': '0.0.0.0:0'}})
         try:
-            args = self._args(config=cfg_path, set=['rpc_thread_num=128'])
+            args = self._args(config=cfg_path, set=['brpc_server_num_threads=128'])
             cmd_start(args, [{'name': 'p1', 'ip': '10.0.0.1'}])
             cfg = _pos(mock_start.call_args)[2]
-            self.assertEqual(cfg['rpc_thread_num']['value'], 128)
+            self.assertEqual(cfg['brpc_server_num_threads']['value'], 128)
         finally:
             os.unlink(cfg_path)
 

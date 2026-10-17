@@ -1371,7 +1371,6 @@ address 清理失败，需检查 `deleted_members` 中的 `error` 字段。
 | coordinator_member_failure_grace_ms | uint32 | `10000` | 否 | 成员持续失败宽限时间，单位为毫秒；必须大于内部健康检查间隔 |
 | coordinator_discovery_retry_interval_ms | uint32 | `5000` | 否 | Discovery候选重试的最小间隔，单位为毫秒；必须大于`0` |
 | watch_event_dispatch_thread | int | `4` | 否 | Coordinator 分发 Watch 事件的线程数 |
-| rpc_thread_num | int | `64` | 否 | Coordinator RPC 服务线程数 |
 | log_dir | string | `"./datasystem/logs"` | 否 | Coordinator 日志目录 |
 | log_filename | string | `"datasystem_coordinator"` | 否 | Coordinator 日志文件名前缀，非空时仅允许英文字母、数字和下划线 |
 | minloglevel | int | `0` | 是 | 最低日志级别，低于该级别的日志不会被记录 |
@@ -1431,16 +1430,15 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | worker_address | string | `"127.0.0.1:31501"` | 否 | datasystem_worker IP地址，格式为：ip:port, 例如：127.0.0.1:31501 |
 | coordinator_address | string | `""` | 否 | Coordinator 服务地址，格式为 `host:port`；使用 Coordinator 集群管理方式时必须配置 |
 | kv_events_config | string | `""` | 否 | KV event publisher JSON 配置。为空表示关闭该功能；非空时需要填写 JSON 对象字符串，字段说明参见[表1](#table_kv_events_config)。例如：`{"bind_endpoint":"tcp://0.0.0.0:5557","backend_id":"worker-0"}` |
-| oc_worker_worker_direct_port | int | `0` | 否 | 对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延。取值范围：[0, 65535] |
-| rpc_thread_num | int | `16` | 否 | 配置服务端的RPC线程数，必须为大于0的数 |
 | oc_thread_num | int | `32` | 否 | 配置服务端用于处理对象/KV缓存的业务线程数 |
 | io_thread_nice | int | `0` | 否 | 指定部分 IO 线程的 nice 值，取值范围：[-20, 19]。0 表示跳过 nice 调整并保留线程继承的 nice 值；仅非 0 值调用 `setpriority`；设置负值通常需要相应权限 |
 | enable_sched_runtime | bool | `true` | 否 | 是否允许指定 worker 线程设置 Linux 调度 runtime。当前仅用于 URMA JFC poll 线程；设置为 `false` 时保留线程继承的调度参数且不调用 `sched_setattr`。 |
+| brpc_server_num_threads | int | `64` | 否 | brpc Server 工作线程数 |
 | brpc_event_dispatcher_num | int | `0` | 否 | brpc 进程级事件分发器数量。0 表示不覆盖 brpc 默认值 1；大于 1 时按 fd 哈希分摊 socket 读写事件，可缓解大量连接同时活跃时的首包读取排队，但不会并行化单个监听 fd 的 accept。仅在进程首次初始化 brpc 前生效，修改后需要重启 Worker |
 | max_rpc_session_num | int | `2048` | 否 | 单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000] |
 | remote_send_thread_num | int | `8` | 否 | 配置服务端用于将元素发送到远程工作线程的线程数量 |
 
-`brpc_event_dispatcher_num` 与 `rpc_thread_num`、`oc_thread_num` 的职责不同。仅当大量连接在同一时段发送首包或恢复读写，TCP 建连已完成但 RPC handler 入场仍明显延迟，且业务线程池与 CPU 尚未饱和时，才建议从 2 或 4 开始灰度验证；可结合 `event_dispatcher_read_latency` 与 handler 入场时序判断。业务处理、锁竞争、服务线程池饱和或单监听 fd 的 accept 是瓶颈时，增大该值通常无效。
+`brpc_event_dispatcher_num` 与 `brpc_server_num_threads`、`oc_thread_num` 的职责不同。仅当大量连接在同一时段发送首包或恢复读写，TCP 建连已完成但 RPC handler 入场仍明显延迟，且业务线程池与 CPU 尚未饱和时，才建议从 2 或 4 开始灰度验证；可结合 `event_dispatcher_read_latency` 与 handler 入场时序判断。业务处理、锁竞争、服务线程池饱和或单监听 fd 的 accept 是瓶颈时，增大该值通常无效。
 
 > **升级提示：** `io_thread_nice` 的新默认值 `0` 仅影响新生成的配置文件，或启动时未显式传入该参数的场景。已有 `worker_config.json` 中的 `-15` 仍会作为显式配置在后续启动时使用；如需停用 nice 调整，请在启动 worker 前手动将其改为 `0`。
 

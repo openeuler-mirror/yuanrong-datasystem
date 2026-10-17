@@ -264,8 +264,6 @@ Status WorkerLivenessCheck::CheckRocksDbService()
     if (!IsMasterNode() || (FLAGS_rocksdb_write_mode == "none")) {
         return Status::OK();
     }
-    // rpc_thread_num=0 keeps the distributed master role but creates no embedded master OC
-    // service; there is no rocksdb metadata store on this node to check.
     if (workerOcServer_->GetOcMetaSvc() == nullptr) {
         return Status::OK();
     }

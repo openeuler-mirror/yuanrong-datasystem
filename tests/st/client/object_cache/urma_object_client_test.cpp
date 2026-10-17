@@ -1895,7 +1895,6 @@ public:
         UrmaObjectClientTest::SetClusterSetupOptions(opts);
         opts.numWorkers = 1;
         opts.workerConfigs.resize(opts.numWorkers);
-        opts.workerOcDirectPorts.resize(opts.numWorkers);
         opts.enableDistributedMaster = "true";
         opts.vLogLevel = 2;
         opts.workerGflagParams += " -enable_transport_fallback=false -client_dead_timeout_s=3";

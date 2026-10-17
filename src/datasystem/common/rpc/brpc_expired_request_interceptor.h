@@ -29,7 +29,6 @@
 #include <brpc/interceptor.h>
 #include <butil/time.h>
 
-#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
 
@@ -46,15 +45,11 @@ inline constexpr int64_t BRPC_INTERCEPTOR_US_PER_MS = 1000;
 // within its remaining budget, and stops once the budget is exhausted). It is defense-in-depth
 // on top of the per-handler ApiDeadline checks and covers all baidu-std-protocol brpc RPCs
 // (datasystem's brpc traffic uses baidu-std; requests carrying no received_us - e.g. other
-// protocols - are accepted by the guard, never dropped). Toggle at runtime via
-// FLAGS_brpc_drop_expired_request (hot-updatable via monitor_config_file).
+// protocols - are accepted by the guard, never dropped).
 class ExpiredRequestInterceptor : public brpc::Interceptor {
 public:
     bool Accept(const brpc::Controller *controller, int &error_code, std::string &error_txt) const override
     {
-        if (!FLAGS_brpc_drop_expired_request) {
-            return true;
-        }
         int64_t timeoutMs = controller->timeout_ms();
         int64_t receivedUs = controller->get_rpc_received_us();
         // timeout_ms is UNSET_MAGIC_NUM (<0) or 0 when the client sent no deadline (e.g. a

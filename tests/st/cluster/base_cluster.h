@@ -67,7 +67,6 @@ struct BaseClusterOptions {
     BaseClusterOptions()
         : numMasters(DEFAULT_COMPONENT_NUM),
           numWorkers(DEFAULT_COMPONENT_NUM),
-          numRpcThreads(DEFAULT_THREAD_NUM),
           numRocksDBThreads(DEFAULT_THREAD_NUM),
           numOcThreadNum(DEFAULT_THREAD_NUM),
           numSpillThreadNum(DEFAULT_THREAD_NUM),
@@ -87,10 +86,6 @@ struct BaseClusterOptions {
     // Number of workers to be started. numWorkers must be less than or equal to the number of workerConfigs. When
     // numMasters is less than the number of workerConfigs, the first numWorkers IP addresses are used.
     uint32_t numWorkers;
-
-    // Number of threads used by DsWorker to process RPC requests.
-    // Default: 4
-    uint32_t numRpcThreads;
 
     // Number of background threads rocksdb can use for flushing and compacting.
     // Default: 4
@@ -120,10 +115,8 @@ struct BaseClusterOptions {
     // Default: None. Must be specified by the user.
     std::vector<HostPort> workerConfigs;
 
-    // Extra tcp/ip port for worker <-> worker direct connection.
-    // One for WorkerWorkerOCService and one WorkerWorkerSCService
-    // Default: None. It is optional but its size must match workerConfigs
-    std::vector<int> workerOcDirectPorts;
+    // Extra tcp/ip port for worker <-> worker direct connection (WorkerWorkerSCService).
+    // Default: None. It is optional but its size must match workerConfigs.
     std::vector<int> workerScDirectPorts;
 
     uint32_t numEtcd;
@@ -350,10 +343,9 @@ public:
      * @brief Add one worker
      * @param masterAddress master address
      * @param workerAddress worker address
-     * @param workerDirectPort worker <-> worker direct port. 0 == disabled.
      * @return
      */
-    virtual Status AddNode(const HostPort &masterAddress, const std::string workerAddress, int workerDirectPort) = 0;
+    virtual Status AddNode(const HostPort &masterAddress, const std::string workerAddress) = 0;
 
     /**
      * @brief Clear inject action for worker, master or gcs.

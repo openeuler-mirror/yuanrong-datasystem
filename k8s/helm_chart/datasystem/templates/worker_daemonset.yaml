@@ -117,7 +117,6 @@ spec:
         - -sc_shared_page_group_count={{ $.Values.global.resources.datasystemWorker.scSharedPageGroupCount }}
         - -oc_shm_threshold_percentage={{ $.Values.global.resources.datasystemWorker.ocShmThresholdPercentage }}
         - -sc_shm_threshold_percentage={{ $.Values.global.resources.datasystemWorker.scShmThresholdPercentage }}
-        - -rpc_thread_num={{ $.Values.global.rpc.rpcThreadNum }}
         - -oc_thread_num={{ $.Values.global.rpc.ocThreadNum }}
         - -sc_regular_socket_num={{ $.Values.global.rpc.scRegularSocketNum }}
         - -sc_stream_socket_num={{ $.Values.global.rpc.scStreamSocketNum }}
@@ -152,7 +151,6 @@ spec:
         - -master_sc_thread_num={{ $.Values.global.rpc.masterScThreadNum }}
         - -unix_domain_socket_dir={{ $.Values.global.ipc.udsDir }}
         - -health_check_path=$(WORKER_PROBE_PATH)
-        - -oc_worker_worker_direct_port={{ $.Values.global.rpc.ocWorkerWorkerDirectPort }}
         - -batch_get_threshold_mb={{ $.Values.global.rpc.batchGetThresholdMb }}
         - -max_client_num={{ $.Values.global.resources.datasystemWorker.maxClientNum }}
         - -client_reconnect_wait_s={{ $.Values.global.reliability.clientReconnectWaitS }}

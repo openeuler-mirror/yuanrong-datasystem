@@ -16,6 +16,7 @@
 
 #include "datasystem/coordinator/coordinator_service_impl.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -84,6 +85,7 @@ constexpr size_t MAX_CLUSTER_RAW_SNAPSHOT_BYTES = 16 * 1'024 * 1'024;
 constexpr size_t MAX_CLUSTER_RAW_MEMBERSHIPS = 10'000;
 constexpr size_t MIN_ACTIVE_CLUSTERS = 2;
 constexpr size_t MAX_ACTIVE_CLUSTERS = 32;
+constexpr int32_t MIN_RPC_SERVICE_THREAD_NUM = 4;
 constexpr auto COORDINATOR_TOPOLOGY_SHUTDOWN_GRACE = std::chrono::seconds(5);
 
 cluster::ControlBackendProbeResult ProbeMemberLiveness(WatchDispatcherImpl &dispatcher,
@@ -639,7 +641,7 @@ void CoordinatorServiceImpl::HandleCommittedMembershipMutation(const std::string
 void CoordinatorServiceImpl::ConfigureRpcService()
 {
     RpcServiceCfg cfg;
-    cfg.numRegularSockets_ = FLAGS_rpc_thread_num;
+    cfg.numRegularSockets_ = std::max(FLAGS_brpc_server_num_threads, MIN_RPC_SERVICE_THREAD_NUM);
     cfg.numStreamSockets_ = 0;
     cfg.hwm_ = RPC_LIGHT_SERVICE_HWM;
     cfg.udsEnabled_ = false;

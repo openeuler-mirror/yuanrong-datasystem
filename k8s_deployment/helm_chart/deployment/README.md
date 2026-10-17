@@ -191,7 +191,6 @@ resources:
 | global.ipc.ipcThroughSharedMemory | bool | `false` | datasystem-worker共享内存启用开关 |
 | global.ipc.udsDir | string | `"/home/uds"` | Unix Domain Socket (UDS) 文件存储目录。UDS文件在该路径下产生，路径最大长度不能超过80个字符。该目录将挂载到宿主机同名目录上，请确保容器具备宿主机同名目录的操作权限 |
 | global.port.datasystemWorker | int | `31501` | kvcache deployment占用的主机端口号 |
-| global.rpc.rpcThreadNum | int | `128` | 配置服务端的RPC线程数，必须为大于0的数 |
 | global.rpc.ocThreadNum | int | `64` | 配置服务端用于处理对象/KV缓存的业务线程数 |
 
 该 Deployment 镜像通过 `k8s_deployment/helm_chart/worker.config` 启动 Worker。可在该文件中配置

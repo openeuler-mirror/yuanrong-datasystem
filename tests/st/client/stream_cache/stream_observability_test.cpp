@@ -89,7 +89,6 @@ void StreamObservabilityTest::SetClusterSetupOptions(ExternalClusterOptions &opt
     opts.enableDistributedMaster = "false";
     opts.workerGflagParams = " -page_size=" + std::to_string(PAGE_SIZE)
                              + " -log_monitor=true -log_monitor_interval_ms=2000 -shared_memory_size_mb=64";
-    opts.numRpcThreads = 0;
     opts.vLogLevel = V_LEVEL;
     SCClientCommon::SetClusterSetupOptions(opts);
 }
@@ -316,7 +315,6 @@ void StreamYrObservabilityTest::SetClusterSetupOptions(ExternalClusterOptions &o
     opts.enableDistributedMaster = "false";
     opts.workerGflagParams = " -page_size=" + std::to_string(PAGE_SIZE)
                              + " -log_monitor=true -log_monitor_interval_ms=100 -log_monitor_exporter=yr_file_exporter";
-    opts.numRpcThreads = 0;
     opts.vLogLevel = V_LEVEL;
     SCClientCommon::SetClusterSetupOptions(opts);
 }

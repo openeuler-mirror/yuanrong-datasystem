@@ -650,8 +650,7 @@ protected:
         HostPort masterAddr;
         RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(0, masterAddr));
         workerAddr = HostPort("127.0.0.1", GetFreePort());
-        const int directPort = GetFreePort();
-        RETURN_IF_NOT_OK(externalCluster->AddNode(masterAddr, workerAddr.ToString(), directPort));
+        RETURN_IF_NOT_OK(externalCluster->AddNode(masterAddr, workerAddr.ToString()));
         return cluster_->WaitNodeReady(WORKER, workerIndex, WAIT_SCALE_TIMEOUT_SEC);
     }
 
@@ -1191,7 +1190,7 @@ protected:
                 firstReplacement = workerAddress;
             }
             const auto &masterAddress = offset == 0 ? workerAddress : firstReplacement;
-            RETURN_IF_NOT_OK(externalCluster->AddNode(masterAddress, workerAddress.ToString(), GetFreePort()));
+            RETURN_IF_NOT_OK(externalCluster->AddNode(masterAddress, workerAddress.ToString()));
             addresses.insert(workerAddress.ToString());
         }
         return Status::OK();
@@ -1621,7 +1620,7 @@ TEST_F(CoordinatorJoiningWindowTest, RoutedSetSucceedsWhileTargetStillSeesJoinin
     HostPort worker0;
     DS_ASSERT_OK(cluster_->GetWorkerAddr(0, worker0));
     const HostPort worker2("127.0.0.1", GetFreePort());
-    DS_ASSERT_OK(externalCluster->AddNode(worker0, worker2.ToString(), GetFreePort()));
+    DS_ASSERT_OK(externalCluster->AddNode(worker0, worker2.ToString()));
     Raii releasePause([this, pausePoint] { (void)cluster_->ClearInjectAction(WORKER, 2, pausePoint); });
 
     DS_ASSERT_OK(cluster_->WaitForExpectedResult([this, pausePoint] {

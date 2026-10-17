@@ -45,16 +45,6 @@ constexpr int64_t kElapsedUsVeryOld = 999'999'999;
 
 class BrpcExpiredRequestInterceptorTest : public ::testing::Test {
 protected:
-    void SetUp() override
-    {
-        prevDrop_ = FLAGS_brpc_drop_expired_request;
-        FLAGS_brpc_drop_expired_request = true;
-    }
-    void TearDown() override
-    {
-        FLAGS_brpc_drop_expired_request = prevDrop_;
-    }
-    bool prevDrop_{ false };
     ExpiredRequestInterceptor interceptor_;
 };
 
@@ -103,18 +93,6 @@ TEST_F(BrpcExpiredRequestInterceptorTest, AcceptsWhenReceivedTimeUnset)
     brpc::Controller cntl;
     cntl.set_timeout_ms(kBudgetMs20);
     cntl.set_rpc_received_us(0);
-    int code = 0;
-    std::string txt;
-    EXPECT_TRUE(interceptor_.Accept(&cntl, code, txt));
-}
-
-// Flag off (escape hatch) -> accept, even for an obviously expired request.
-TEST_F(BrpcExpiredRequestInterceptorTest, AcceptsWhenDisabled)
-{
-    FLAGS_brpc_drop_expired_request = false;
-    brpc::Controller cntl;
-    cntl.set_timeout_ms(1);
-    cntl.set_rpc_received_us(butil::cpuwide_time_us() - kElapsedUsVeryOld);
     int code = 0;
     std::string txt;
     EXPECT_TRUE(interceptor_.Accept(&cntl, code, txt));

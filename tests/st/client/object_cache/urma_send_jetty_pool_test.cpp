@@ -607,8 +607,8 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         UrmaSendJettyPoolStTest::SetClusterSetupOptions(opts);
-        // The tests below must have eight worker RPC handlers inside BatchGet simultaneously; both ST defaults are four.
-        opts.numRpcThreads = 16;
+        // The tests below need eight worker handlers inside BatchGet concurrently; raise the OC business pool to
+        // 16 while the brpc server supplies the RPC workers.
         opts.numOcThreadNum = 16;
     }
 

@@ -83,7 +83,6 @@ void PubSubMultiNodeTest::SetClusterSetupOptions(ExternalClusterOptions &opts)
     opts.numEtcd = 1;
     opts.numWorkers = WORKER_COUNT;
     opts.workerGflagParams = " -page_size=" + std::to_string(PAGE_SIZE);
-    opts.numRpcThreads = 16;
     SCClientCommon::SetClusterSetupOptions(opts);
 }
 #endif

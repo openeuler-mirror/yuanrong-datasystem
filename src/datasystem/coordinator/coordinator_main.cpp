@@ -27,6 +27,7 @@ int main(int argc, char **argv)
 {
     datasystem::TraceGuard traceGuard =
         datasystem::Trace::Instance().SetTraceNewID("CoordMain;" + datasystem::GetStringUuid());
+    datasystem::LinkCommonFlagsValidators();
     datasystem::ParseCommandLineFlags(argc, argv);
 
     auto rc = datasystem::CoordinatorServer::GetInstance()->InitAndRun();

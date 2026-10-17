@@ -48,7 +48,6 @@ class Service;
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
 
-DS_DECLARE_int32(rpc_thread_num);
 DS_DECLARE_int32(v);
 
 namespace datasystem {

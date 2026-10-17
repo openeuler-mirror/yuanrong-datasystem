@@ -697,8 +697,6 @@ TEST_F(KVCacheClientTest, TestFirstStubConnectFailed)
     InitTestKVClient(0, client);
     std::shared_ptr<KVClient> client1;
     InitTestKVClient(1, client1);
-    // Only the direct-port-disable inject remains for stub-connect failure.
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "RpcStubCacheMgr.EnableOcWorkerWorkerDirectPort", "return()"));
     std::string key = "key";
     std::string value = GenRandomString(1024 * 1024);
     SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE };

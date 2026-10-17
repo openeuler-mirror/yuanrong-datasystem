@@ -125,7 +125,6 @@ void RemoteSendRecvTest::SetClusterSetupOptions(ExternalClusterOptions &opts)
     opts.numWorkers = 3;
     opts.enableDistributedMaster = "false";
     opts.workerGflagParams = " -page_size=" + std::to_string(PAGE_SIZE);
-    opts.numRpcThreads = 0;
     opts.vLogLevel = 2;
     SCClientCommon::SetClusterSetupOptions(opts);
 }
@@ -1487,7 +1486,6 @@ public:
         opts.numWorkers = 3;
         opts.enableDistributedMaster = "false";
         opts.workerGflagParams = " -sc_local_cache_memory_size_mb=1";
-        opts.numRpcThreads = 0;
         opts.vLogLevel = 2;
         SCClientCommon::SetClusterSetupOptions(opts);
     }

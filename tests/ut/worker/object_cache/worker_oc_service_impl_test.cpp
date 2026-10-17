@@ -648,25 +648,10 @@ public:
         return Status::OK();
     }
 
-    Status SendAndTagPayload(std::vector<RpcMessage> &payload, bool tagPayloadFrame) override
-    {
-        (void)tagPayloadFrame;
-        ++payloadSendCount_;
-        payload_ = std::move(payload);
-        return Status::OK();
-    }
-
     Status SendPayload(std::vector<RpcMessage> &payload) override
     {
         ++payloadSendCount_;
         payload_ = std::move(payload);
-        return Status::OK();
-    }
-
-    Status SendAndTagPayload(const std::vector<MemView> &payload, bool tagPayloadFrame) override
-    {
-        (void)payload;
-        (void)tagPayloadFrame;
         return Status::OK();
     }
 

@@ -263,7 +263,6 @@ echo "Yuanrong service start finished!"
 | shared_memory_size_mb | 512000 | 共享内存大小（500 GB） |
 | node_timeout_s | 30 | 节点超时时间（秒） |
 | node_dead_timeout_s | 60 | 节点死亡超时时间（秒） |
-| rpc_thread_num | 16 | 处理线程数量 |
 | enable_worker_worker_batch_get | false | 批量传输key |
 | health_check_path | /workspace/worker | Worker 启动与存活探针路径 |
 
