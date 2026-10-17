@@ -94,9 +94,12 @@ extern char **environ;
 #include "datasystem/common/util/fd_pass.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
+#include "datasystem/common/util/file_util.h"
 #include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/utils/connection.h"
 #include "datasystem/object/object_buffer.h"
+
+DS_DECLARE_string(log_dir);
 
 #ifdef USE_URMA
 DS_DECLARE_bool(enable_urma);
@@ -106,6 +109,8 @@ namespace datasystem {
 namespace client {
 namespace {
 
+#define TO_STR(param) #param
+
 HostPort MakeAddress(int port)
 {
     return HostPort("127.0.0.1", port);
@@ -113,9 +118,14 @@ HostPort MakeAddress(int port)
 
 void InitBatchGetMetrics()
 {
-    const bool jsonLogMonitor = FLAGS_json_log_monitor;
-    Raii restoreJsonLogMonitor([jsonLogMonitor]() { FLAGS_json_log_monitor = jsonLogMonitor; });
-    FLAGS_json_log_monitor = false;
+    const std::string oldLogDir = FLAGS_log_dir;
+    Raii restoreLogDir([&oldLogDir]() { FLAGS_log_dir = oldLogDir; });
+    if (oldLogDir.empty()) {
+        // These fixtures do not derive from CommonTest, so give the always-on kv_metrics.log
+        // exporter a writable directory instead of the filesystem root.
+        FLAGS_log_dir = std::string(TO_STR(LLT_BIN_PATH)) + "/ds/kv_metrics_transport_ut";
+        CreateDir(FLAGS_log_dir, true);
+    }
     metrics::ResetKvMetricsForTest();
     ASSERT_TRUE(metrics::InitKvMetrics().IsOk());
 }
@@ -11794,6 +11804,7 @@ TEST(UbTransporterTest, ShmSendBufferOwnerPropagatesDelayRelease)
 // enqueues DecreaseReference, so a continuous workload can reuse all 16 slots.
 TEST(UbTransporterTest, SafeUbHandlesReleaseBeforeSlowDecreaseReference)
 {
+    InitBatchGetMetrics();
     constexpr size_t transportSlotCount = 16;
     constexpr size_t bufferCount = transportSlotCount * 4;
     auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
@@ -11854,6 +11865,7 @@ TEST(UbTransporterTest, SafeUbHandlesReleaseBeforeSlowDecreaseReference)
 
 TEST(UbTransporterTest, HoldingUbHandleWaitsForDelayedRelease)
 {
+    InitBatchGetMetrics();
     auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
     auto pool = std::make_shared<ThreadPool>(0, 1, "holding_ub_release");
     std::promise<void> releaseStarted;

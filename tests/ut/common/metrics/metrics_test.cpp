@@ -40,7 +40,6 @@
 #include "ut/common.h"
 
 DS_DECLARE_bool(log_monitor);
-DS_DECLARE_bool(json_log_monitor);
 DS_DECLARE_int32(log_monitor_interval_ms);
 DS_DECLARE_string(log_dir);
 
@@ -236,7 +235,6 @@ public:
         metrics::ResetKvMetricsForTest();
         metrics::ResetForTest();
         FLAGS_log_monitor = true;
-        FLAGS_json_log_monitor = true;
         FLAGS_log_monitor_interval_ms = 10000;
     }
 };
@@ -373,8 +371,8 @@ TEST_F(MetricsTest, writer_no_type_unit_field_test)
 
 TEST_F(MetricsTest, print_summary_uses_metrics_trace_id_test)
 {
-    FLAGS_json_log_monitor = false;
     InitMetrics();
+    metrics::ResetKvMetricsExporterForTest();
     testing::internal::CaptureStderr();
     metrics::PrintSummary();
     auto output = testing::internal::GetCapturedStderr();
@@ -393,8 +391,8 @@ TEST_F(MetricsTest, print_summary_uses_metrics_trace_id_test)
 // Same histogram JSON fields including total/delta p50, p90, and p99.
 TEST_F(MetricsTest, print_summary_histogram_json_includes_p99)
 {
-    FLAGS_json_log_monitor = false;
     InitMetrics();
+    metrics::ResetKvMetricsExporterForTest();
     metrics::GetHistogram(HISTOGRAM_ID).Observe(10);
     metrics::GetHistogram(HISTOGRAM_ID).Observe(30);
     testing::internal::CaptureStderr();
@@ -412,7 +410,6 @@ TEST_F(MetricsTest, print_summary_histogram_json_includes_p99)
 TEST_F(MetricsTest, print_summary_omits_info_when_json_exporter_is_active)
 {
     FLAGS_log_monitor = true;
-    FLAGS_json_log_monitor = true;
     const std::string filePath = FLAGS_log_dir + "/" + KV_METRICS_LOG_NAME + ".log";
     (void)DeleteFile(filePath);
     InitMetrics();
@@ -443,9 +440,8 @@ TEST_F(MetricsTest, print_summary_omits_info_when_json_exporter_is_active)
 TEST_F(MetricsTest, print_summary_uses_info_when_json_exporter_is_unavailable)
 {
     FLAGS_log_monitor = true;
-    FLAGS_json_log_monitor = false;
     InitMetrics();
-    FLAGS_json_log_monitor = true;
+    metrics::ResetKvMetricsExporterForTest();
     metrics::GetCounter(COUNTER_ID).Inc(5);
 
     testing::internal::CaptureStderr();
@@ -458,7 +454,6 @@ TEST_F(MetricsTest, print_summary_uses_info_when_json_exporter_is_unavailable)
 TEST_F(MetricsTest, print_summary_writes_all_parts_for_every_split_cycle_without_info)
 {
     FLAGS_log_monitor = true;
-    FLAGS_json_log_monitor = true;
     const std::string filePath = FLAGS_log_dir + "/" + KV_METRICS_LOG_NAME + ".log";
     (void)DeleteFile(filePath);
     metrics::ResetForTest();
@@ -492,7 +487,6 @@ TEST_F(MetricsTest, print_summary_writes_all_parts_for_every_split_cycle_without
 
 TEST_F(MetricsTest, print_summary_splits_large_payload_test)
 {
-    FLAGS_json_log_monitor = false;
     metrics::ResetForTest();
     std::vector<std::string> names;
     std::vector<metrics::MetricDesc> descs;
@@ -503,6 +497,7 @@ TEST_F(MetricsTest, print_summary_splits_large_payload_test)
         descs.push_back({ i, names.back().c_str(), metrics::MetricType::COUNTER, "count" });
     }
     DS_ASSERT_OK(metrics::Init(descs.data(), descs.size()));
+    metrics::ResetKvMetricsExporterForTest();
     for (uint16_t i = 0; i < 80; ++i) {
         METRIC_ADD(i, 6);
     }
@@ -883,16 +878,19 @@ TEST_F(MetricsTest, writer_print_summary_updates_delta_snapshot_test)
     EXPECT_NE(summary.find(ScalarMetricJson("test_counter", 5, 0)), std::string::npos);
 }
 
-TEST_F(MetricsTest, writer_disabled_test)
+// With JSON monitoring fixed on, Tick still emits summaries through kv_metrics.log when log_monitor is off.
+TEST_F(MetricsTest, writer_tick_json_only_test)
 {
     FLAGS_log_monitor = false;
-    FLAGS_json_log_monitor = false;
+    const std::string filePath = FLAGS_log_dir + "/" + KV_METRICS_LOG_NAME + ".log";
+    (void)DeleteFile(filePath);
     InitMetrics();
     FLAGS_log_monitor_interval_ms = 0;
     metrics::GetCounter(COUNTER_ID).Inc(5);
     metrics::Tick();
-    auto summary = metrics::DumpSummaryForTest();
-    EXPECT_NE(summary.find(ScalarMetricJson("test_counter", 5, 5)), std::string::npos);
+    constexpr int retryTimes = 30;
+    ASSERT_TRUE(Retry([&filePath]() { return FileContains(filePath, "\"name\":\"test_counter\""); }, retryTimes,
+                      std::chrono::milliseconds(100)));
 }
 
 TEST_F(MetricsTest, writer_update_race_test)
@@ -1521,16 +1519,28 @@ TEST_F(MetricsTest, kv_metrics_summary_format_test)
     EXPECT_EQ(summary.find("unit="), std::string::npos);
 }
 
-TEST_F(MetricsTest, kv_metrics_disabled_test)
+// With JSON monitoring fixed on, Tick still emits kv metrics through kv_metrics.log when log_monitor is off.
+TEST_F(MetricsTest, kv_metrics_tick_json_only_test)
 {
     FLAGS_log_monitor = false;
-    FLAGS_json_log_monitor = false;
+    const std::string filePath = FLAGS_log_dir + "/" + KV_METRICS_LOG_NAME + ".log";
+    (void)DeleteFile(filePath);
     InitKvMetricsForTest();
     FLAGS_log_monitor_interval_ms = 0;
     METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
     metrics::Tick();
-    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("client_put_request_total", 1, 1)),
-              std::string::npos);
+    constexpr int retryTimes = 30;
+    ASSERT_TRUE(Retry([&filePath]() {
+        return FileContains(filePath, "\"name\":\"client_put_request_total\"");
+    }, retryTimes, std::chrono::milliseconds(100)));
+}
+
+TEST_F(MetricsTest, client_ub_lifecycle_metrics_remain_enabled_in_json_only_mode_test)
+{
+    FLAGS_log_monitor = false;
+    EXPECT_FALSE(metrics::IsClientUbLifecycleMetricsEnabled());
+    InitKvMetricsForTest();
+    EXPECT_TRUE(metrics::IsClientUbLifecycleMetricsEnabled());
 }
 
 TEST_F(MetricsTest, kv_metrics_long_running_test)
@@ -1582,7 +1592,6 @@ TEST_F(MetricsTest, kv_metrics_print_summary_test)
 TEST_F(MetricsTest, client_metrics_summary_uses_json_log_without_info)
 {
     FLAGS_log_monitor = true;
-    FLAGS_json_log_monitor = true;
     const std::string filePath = FLAGS_log_dir + "/" + KV_METRICS_LOG_NAME + ".log";
     (void)DeleteFile(filePath);
     InitKvMetricsForTest();
@@ -1603,9 +1612,8 @@ TEST_F(MetricsTest, client_metrics_summary_uses_json_log_without_info)
 TEST_F(MetricsTest, client_metrics_summary_uses_info_when_json_exporter_is_unavailable)
 {
     FLAGS_log_monitor = true;
-    FLAGS_json_log_monitor = false;
     InitKvMetricsForTest();
-    FLAGS_json_log_monitor = true;
+    metrics::ResetKvMetricsExporterForTest();
     METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
 
     testing::internal::CaptureStderr();

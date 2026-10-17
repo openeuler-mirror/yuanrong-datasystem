@@ -22,15 +22,13 @@
 
 #include "datasystem/common/util/status_helper.h"
 
-DS_DECLARE_bool(log_monitor);
-DS_DECLARE_bool(json_log_monitor);
-
 namespace datasystem::metrics {
 namespace {
 std::atomic<int64_t> g_clientUbHoldingCount{ 0 };
 std::atomic<int64_t> g_clientUbReleasingCount{ 0 };
 std::atomic<int64_t> g_clientUbHoldingPeakCount{ 0 };
 std::atomic<int64_t> g_clientUbReleasingPeakCount{ 0 };
+std::atomic<bool> g_clientUbLifecycleMetricsEnabled{ false };
 
 void UpdatePeakCount(std::atomic<int64_t> &peakCount, int64_t value)
 {
@@ -195,13 +193,14 @@ Status InitKvMetrics()
         return Status::OK();
     }
     RETURN_IF_NOT_OK(Init(KV_METRIC_DESCS, sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0])));
+    g_clientUbLifecycleMetricsEnabled.store(true, std::memory_order_relaxed);
     g_inited = true;
     return Status::OK();
 }
 
 bool IsClientUbLifecycleMetricsEnabled()
 {
-    return FLAGS_log_monitor || FLAGS_json_log_monitor;
+    return g_clientUbLifecycleMetricsEnabled.load(std::memory_order_relaxed);
 }
 
 const MetricDesc *GetKvMetricDescs(size_t &count)
@@ -255,5 +254,6 @@ void ResetKvMetricsForTest()
     g_clientUbReleasingCount.store(0, std::memory_order_relaxed);
     g_clientUbHoldingPeakCount.store(0, std::memory_order_relaxed);
     g_clientUbReleasingPeakCount.store(0, std::memory_order_relaxed);
+    g_clientUbLifecycleMetricsEnabled.store(false, std::memory_order_relaxed);
 }
 }  // namespace datasystem::metrics

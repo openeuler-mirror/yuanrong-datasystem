@@ -78,7 +78,9 @@
 - Verified from `json_lines_exporter.*`:
   - `Init(filePath)` creates the file, caches `podName_` (`GetPodIdentifier()`) and `clusterName_` (`FLAGS_cluster_name`), and starts exporter infrastructure.
   - `WriteJsonLine(json)` writes one complete JSON object per line with **no text prefix** (unlike `HardDiskExporter::Send`, it does not call `ConstructLogPrefix`); `Send` exists only as a pure-virtual contract stub and should not be used by new callers.
-  - `metrics::LogSummary` writes every part of a cycle to `kv_metrics.log` when `json_log_monitor` is enabled and the exporter exists. In that state it suppresses the duplicate INFO summary; when the exporter is disabled or unavailable, `log_monitor` retains the INFO fallback.
+  - `metrics::LogSummary` writes every part of a cycle to `kv_metrics.log` whenever the exporter exists. The exporter
+    is always created on successful `metrics::Init`; `json_log_monitor` was removed. This suppresses duplicate INFO
+    summaries; when exporter creation fails, `log_monitor` retains the INFO fallback.
   - the output boundary is shared by Worker, Coordinator, and SDK Client callers; role-specific metrics differ, but routing and fallback semantics do not.
   - `PodName()`/`ClusterName()` expose the cached labels (with `[[nodiscard]]`/`noexcept`) for JSON top-level fields.
   - rotation and pruning reuse the hoisted base-class machinery; rotated files use the `.<ts>.log` suffix.

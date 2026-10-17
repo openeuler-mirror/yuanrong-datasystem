@@ -91,10 +91,6 @@
     "value": "true",
     "description": "Record Coordinator typed metrics summaries in the INFO log."
   },
-  "json_log_monitor": {
-    "value": "true",
-    "description": "Record Coordinator typed metrics summaries as JSON Lines in kv_metrics.log."
-  },
   "log_monitor_interval_ms": {
     "value": "10000",
     "description": "Interval in milliseconds between Coordinator typed metrics summary emissions. Must be greater than 0."

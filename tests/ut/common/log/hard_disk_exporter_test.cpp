@@ -40,7 +40,6 @@
 #include "datasystem/common/util/uri.h"
 
 DS_DECLARE_bool(log_monitor);
-DS_DECLARE_bool(json_log_monitor);
 DS_DECLARE_string(log_dir);
 DS_DECLARE_string(log_monitor_exporter);
 DS_DECLARE_int32(minloglevel);
@@ -201,26 +200,25 @@ TEST_F(HardDiskExporterTest, TestMaxLogFileNumLimit)
 TEST_F(HardDiskExporterTest, ResourceCollectorIgnoresMinLogLevelAndRespectsLogMonitor)
 {
     auto oldLogMonitor = FLAGS_log_monitor;
-    auto oldJsonLogMonitor = FLAGS_json_log_monitor;
     auto oldLogMonitorExporter = FLAGS_log_monitor_exporter;
     auto oldLogMonitorInterval = FLAGS_log_monitor_interval_ms;
     auto oldMinLogLevel = FLAGS_minloglevel;
     Raii restoreFlags([&] {
         FLAGS_log_monitor = oldLogMonitor;
-        FLAGS_json_log_monitor = oldJsonLogMonitor;
         FLAGS_log_monitor_exporter = oldLogMonitorExporter;
         FLAGS_log_monitor_interval_ms = oldLogMonitorInterval;
         FLAGS_minloglevel = oldMinLogLevel;
     });
 
     FLAGS_log_monitor = true;
-    FLAGS_json_log_monitor = false;
     FLAGS_log_monitor_exporter = "harddisk";
     FLAGS_log_monitor_interval_ms = 100;
     FLAGS_minloglevel = 0;
 
     const std::string filePath = FLAGS_log_dir + "/" + RESOURCE_LOG_NAME + ".log";
+    const std::string jsonPath = FLAGS_log_dir + "/" + KV_RESOURCE_LOG_NAME + ".log";
     (void)DeleteFile(filePath);
+    (void)DeleteFile(jsonPath);
 
     std::atomic<uint64_t> seq{ 0 };
     ResMetricCollector collector;
@@ -249,12 +247,13 @@ TEST_F(HardDiskExporterTest, ResourceCollectorIgnoresMinLogLevelAndRespectsLogMo
     auto disabledSeq = seq.load();
     auto disabledCount = CountPatternInFile(filePath, marker);
     std::this_thread::sleep_for(std::chrono::milliseconds(350));
-    EXPECT_EQ(seq.load(), disabledSeq);
+    // Text output stops with log_monitor off, while collection keeps running for the JSON snapshot.
+    EXPECT_GT(seq.load(), disabledSeq);
     EXPECT_EQ(CountPatternInFile(filePath, marker), disabledCount);
+    ASSERT_TRUE(Retry([this, &jsonPath]() { return FileContains(jsonPath, "resource_snapshot"); }, retryTimes,
+                      std::chrono::milliseconds(100)));
 
     FLAGS_log_monitor = true;
-    ASSERT_TRUE(Retry([&seq, disabledSeq]() { return seq.load() > disabledSeq; }, retryTimes,
-                      std::chrono::milliseconds(100)));
     ASSERT_TRUE(Retry([this, &filePath, &marker, disabledCount]() {
         return CountPatternInFile(filePath, marker) > disabledCount;
     }, retryTimes, std::chrono::milliseconds(100)));
@@ -334,17 +333,14 @@ TEST_F(HardDiskExporterTest, JsonLinesExporterRotatesWithLogSuffix)
 TEST_F(HardDiskExporterTest, ResourceCollectorWritesKvResourceLogJsonLines)
 {
     auto oldLogMonitor = FLAGS_log_monitor;
-    auto oldJsonLogMonitor = FLAGS_json_log_monitor;
     auto oldLogMonitorExporter = FLAGS_log_monitor_exporter;
     auto oldLogMonitorInterval = FLAGS_log_monitor_interval_ms;
     Raii restoreFlags([&] {
         FLAGS_log_monitor = oldLogMonitor;
-        FLAGS_json_log_monitor = oldJsonLogMonitor;
         FLAGS_log_monitor_exporter = oldLogMonitorExporter;
         FLAGS_log_monitor_interval_ms = oldLogMonitorInterval;
     });
     FLAGS_log_monitor = false;
-    FLAGS_json_log_monitor = true;
     FLAGS_log_monitor_exporter = "harddisk";
     FLAGS_log_monitor_interval_ms = 100;
 
@@ -385,17 +381,14 @@ TEST_F(HardDiskExporterTest, ResourceCollectorWritesKvResourceLogJsonLines)
 TEST_F(HardDiskExporterTest, ResourceCollectorBothMonitorsEnabledSharesOneCollection)
 {
     auto oldLogMonitor = FLAGS_log_monitor;
-    auto oldJsonLogMonitor = FLAGS_json_log_monitor;
     auto oldLogMonitorExporter = FLAGS_log_monitor_exporter;
     auto oldLogMonitorInterval = FLAGS_log_monitor_interval_ms;
     Raii restoreFlags([&] {
         FLAGS_log_monitor = oldLogMonitor;
-        FLAGS_json_log_monitor = oldJsonLogMonitor;
         FLAGS_log_monitor_exporter = oldLogMonitorExporter;
         FLAGS_log_monitor_interval_ms = oldLogMonitorInterval;
     });
     FLAGS_log_monitor = true;
-    FLAGS_json_log_monitor = true;
     FLAGS_log_monitor_exporter = "harddisk";
     FLAGS_log_monitor_interval_ms = 100;
 

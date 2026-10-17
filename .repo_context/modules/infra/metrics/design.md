@@ -136,10 +136,14 @@
 - Current implementation or baseline behavior:
   - metrics are collected as string payloads, not typed numeric objects, and persisted through a single concrete exporter backend named `"harddisk"`.
   - `metrics.h/.cpp` also provide a release-scoped lightweight typed API with fixed-descriptor `Counter`, `Gauge`, `Histogram`, `ScopedTimer`, and one JSON `LOG(INFO)` summary emission per monitor interval.
+  - typed JSON exporter initialization failure aborts Coordinator and Worker startup. SDK Client initialization keeps
+    its business result, logs the exporter error, and emits INFO summaries only when `log_monitor` is enabled.
   - counter summaries expose cumulative `total`, per-monitor-cycle `delta`, and top-level `interval_ms`; throughput/TPS is derived as `delta * 1000 / interval_ms`.
   - oversized typed-metrics summaries are split into multiple one-line JSON log records rather than truncating a single record.
   - `DumpSummaryForTest()` returns an unsplit JSON snapshot for typed-metrics tests; compatibility-oriented tests that still prefer flat-string parsing should build that view locally from the JSON dump instead of relying on a production-only legacy formatter.
   - the lightweight typed metrics API does not own a background thread; worker main and client runtime code drive periodic `Tick()`/`PrintSummary()` calls, mirroring the `PerfManager` ownership style.
+  - client UB lifecycle counters activate after typed metrics and its JSON exporter initialize successfully, independent
+    of `log_monitor`; the hot path reads one relaxed atomic gate before updating relaxed atomic counters.
   - worker object-cache batch remote get now exposes `worker_inflight_remote_get_request` as a typed `Gauge` around the outbound `BatchGetObjectRemote` logical retry flow.
   - Coordinator initializes and ticks the same typed registry from `coordinator_runtime.cpp`. Every dispatched `CoordinatorService` RPC entrypoint increments its own request counter before handler-level validation or serving gates, so handler-rejected and redirected requests remain visible. Requests dropped by RPC framework admission before service dispatch are outside these per-method counters and remain covered by framework-level metrics. Successful business watch notifications increment sent-batch, sent-event, and serialized-`EventReqPb` byte counters in `WatchDispatcherImpl::DoNotify`; the byte counter excludes transport framing and worker reachability probes use a separate path, so probes are excluded from all three counters. `SendEventRequest` records `HandleEvent` latency and failures, while channel-map mutations publish the lock-consistent live channel count.
   - request-path latency for `set/get` style APIs is mostly surfaced through the logging/access-recorder path rather than through typed metrics families.
@@ -229,7 +233,6 @@
   - family descriptions and units are sourced from `metrics_description.def`.
 - CLI commands, config flags, or environment variables:
   - `log_monitor`
-  - `json_log_monitor`
   - `log_monitor_exporter`
   - `log_monitor_interval_ms`
   - `log_dir`
@@ -383,8 +386,7 @@ Failure-sensitive steps:
 
 | Config | Type | Default or source | Effect | Risk if changed |
 | --- | --- | --- | --- | --- |
-| `log_monitor` | gflag | shared observability flag, runtime default in common flags | enables monitor collection and the INFO `metrics_summary` fallback used when the JSON exporter is disabled or unavailable | can disable text fallback while runtime logic keeps working |
-| `json_log_monitor` | gflag | JSON monitor flag, runtime default in common flags | enables `kv_resource.log` and `kv_metrics.log`; when the metrics JSON exporter is active, each complete summary cycle is written only to `kv_metrics.log` instead of being duplicated in INFO | affects Worker, Coordinator, and SDK Client metrics output because they share `metrics::LogSummary` |
+| `log_monitor` | gflag | `true` | gates text `resource.log` and INFO fallback | JSON outputs stay enabled |
 | `log_monitor_exporter` | gflag | current supported value `"harddisk"` | selects exporter backend | unsupported values fail initialization |
 | `log_monitor_interval_ms` | gflag | defined in `res_metric_collector.cpp`, default `10000` | controls sampling cadence | changes load, freshness, and output volume |
 | `log_dir` | gflag | shared logging config | controls output directory | bad path or permissions break persistence |
