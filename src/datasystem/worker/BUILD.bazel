@@ -275,26 +275,6 @@ ds_cc_library(
     alwayslink = True,
 )
 
-# success
-ds_cc_library(
-    name = "worker_cli",
-    srcs = [
-        "worker_cli.cpp",
-    ],
-    hdrs = [
-        "worker_cli.h",
-    ],
-    deps = [
-        "//src/datasystem/cluster:cluster_topology_keyspace",
-        "//src/datasystem/common/flags:ds_flags",
-        "//src/datasystem/common/kvstore/etcd:etcd_store",
-        "//src/datasystem/common/kvstore:kv_store",
-        "//src/datasystem/common/util:format",
-        "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/protos:cluster_topology_cc_proto",
-    ],
-)
-
 ds_cc_library(
     name = "worker_liveness_check_header",
     hdrs = [
@@ -433,7 +413,6 @@ ds_cc_library(
         "//src/datasystem/common/util:uri",
         "//src/datasystem/common/util:validator",
         "//src/datasystem/common/flags:dynamic_flag_config",
-        "//src/datasystem/worker:worker_cli",
         "//src/datasystem/worker:worker_flags",
         "//src/datasystem/worker:worker_oc_server",
         "//src/datasystem/worker:worker_service_accessor",
@@ -548,7 +527,6 @@ cc_shared_library(
         "//src/datasystem/worker:worker",
         "//src/datasystem/worker:worker_service_impl",
         "//src/datasystem/worker:worker_oc_server",
-        "//src/datasystem/worker:worker_cli",
         "//src/datasystem/worker:worker_flags",
         "@com_google_protobuf//upb:wire",
     ],

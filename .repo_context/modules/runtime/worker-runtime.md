@@ -28,7 +28,6 @@
   - `src/datasystem/worker/data_worker.cpp`
   - `src/datasystem/worker/worker_service_impl.cpp`
   - `src/datasystem/worker/worker_oc_server.cpp`
-  - `src/datasystem/worker/worker_cli.cpp`
   - `src/datasystem/cluster/runtime/topology_engine.cpp`
   - `docs/source_zh_cn/design_document/cluster_management.md`
 
@@ -64,7 +63,6 @@
     stale fault-worker entry.
   - async Worker notification cleanup commits RocksDB/ETCD removal or update before applying the matching in-memory
     epoch mutation. A persistence failure keeps the in-memory entry so the caller can retry without losing recovery state.
-  - worker CLI helpers can export/import the v3 topology ring state through ETCD or Metastore-backed metadata.
   - topology member ids remain binary, topology-internal identities. Worker business UUIDs and public object-location
     ids remain printable and must not expose the topology id bytes.
   - the ETCD-phase Controller role preserves each distinct `RESTARTING` membership generation before generic watch
