@@ -514,11 +514,6 @@ Status WorkerRpcClient::InvokeSet(int64_t subTimeoutMs, PublishReqPb &request,
     }
     RecordRpcTotalLatency(LatencySummaryPhase::CLIENT_RPC_PUBLISH_TOTAL, traceEnabled, rpcStart);
     if (rc.IsError()) {
-        if (request.is_retry() && request.is_seal() && rc.GetCode() == K_OC_ALREADY_SEALED) {
-            workerVersion = connectionGeneration_;
-            perfPoint.Record();
-            return Status::OK();
-        }
         return WithRpcDiag(
             rc, RpcDiagnosticInfo{ "Publish", "", workerAddress_.ToString() },
             "rpc_return");

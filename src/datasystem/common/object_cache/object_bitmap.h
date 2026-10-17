@@ -37,7 +37,9 @@ enum class DataFormat : int {
 enum class ObjectLifeState : int {
     OBJECT_INVALID = 0,
     OBJECT_PUBLISHED = 1,
-    OBJECT_SEALED = 2,
+    // Value 2 was the historical OBJECT_SEALED (seal semantics removed). Legacy persisted
+    // life_state=2 is normalized to OBJECT_PUBLISHED at the worker recovery entry
+    // (SetObjectEntryAccordingToMeta). Do not reuse this value.
 };
 
 struct Config {

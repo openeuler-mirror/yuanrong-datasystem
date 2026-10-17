@@ -291,7 +291,6 @@ Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     const bool traceEnabled = ShouldCollectLatencyTrace(GetClientLatencyTraceConfig());
     RETURN_IF_NOT_OK(CheckDeprecated());
-    CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
     // Routed two-step buffers send their payload via transportLayer_->Set on the Create-pinned worker;
     // skip the legacy bound-worker UB pre-send here too (symmetric with the MemoryCopy guard above).
     if (bufferInfo_->ubUrmaDataInfo && !bufferInfo_->ubDataSentByMemoryCopy && !bufferInfo_->isRoutedWrite) {
@@ -326,22 +325,7 @@ Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
 
 Status Buffer::Seal(const std::unordered_set<std::string> &nestedKeys)
 {
-    auto clientImpl = clientImpl_.lock();
-    if (clientImpl == nullptr) {
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
-                      "Client already destroyed or Shutdown() invoked, buffer invalidated.");
-    }
-    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    RETURN_IF_NOT_OK(CheckDeprecated());
-    CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
-    Status status = clientImpl->Seal(bufferInfo_, nestedKeys, isShm_);
-    if (isShm_) {
-        SetVisibility(status.IsOk());
-    }
-    if (status.IsOk()) {
-        bufferInfo_->isSeal = true;
-    }
-    return status;
+    return Publish(nestedKeys);
 }
 
 Status Buffer::WLatch(uint64_t timeoutSec)
@@ -350,7 +334,6 @@ Status Buffer::WLatch(uint64_t timeoutSec)
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     RETURN_IF_NOT_OK(CheckVisible());
-    CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
     CHECK_FAIL_RETURN_STATUS(timeoutSec > 0, K_INVALID, "timeout value should be positive.");
     return latch_->WLatch(timeoutSec);
 }
@@ -518,7 +501,7 @@ Status Buffer::CheckVisible()
         return Status::OK();
     }
     if (*val != 0) {
-        RETURN_STATUS(K_RUNTIME_ERROR, "Buffer publish/seal failed, unable to visit");
+        RETURN_STATUS(K_RUNTIME_ERROR, "Buffer publish failed, unable to visit");
     }
     return Status::OK();
 }

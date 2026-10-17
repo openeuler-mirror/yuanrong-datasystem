@@ -520,10 +520,7 @@ TEST_F(KVCacheExistenceOptTest, TestMCreateNXPartialNullBuffers)
 TEST_F(KVCacheExistenceOptTest, TestMCreateNXMSetWithPlaceholder)
 {
     // Regression test for Issue #494: concurrent MCreate NX + MSet with unfiltered
-    // placeholder buffers should not produce "Object already sealed" error.
-    // Before fix: MCreate NX placeholder had isSeal=true, MSet rejected it with
-    // K_OC_ALREADY_SEALED. After fix: placeholder has isSeal=false, MSet skips
-    // dataSize==0 buffers.
+    // placeholder buffers must succeed. MSet skips dataSize==0 placeholder buffers.
     std::shared_ptr<KVClient> testClient;
     InitTestKVClient(0, testClient);
 
@@ -552,7 +549,6 @@ TEST_F(KVCacheExistenceOptTest, TestMCreateNXMSetWithPlaceholder)
     DS_ASSERT_OK(buffers[1]->MemoryCopy(newVal.data(), newVal.size()));
 
     // Core assertion: MSet with ALL buffers (including placeholder) must succeed.
-    // Before fix this would fail with K_OC_ALREADY_SEALED.
     DS_ASSERT_OK(testClient->MSet(buffers));
 
     // Verify new key was published correctly
@@ -719,9 +715,8 @@ TEST_F(KVCacheExistenceOptTest, TestMCreateNXMultiThreadRace)
 TEST_F(KVCacheExistenceOptTest, TestMCreateNXMultiThreadBatchOverlap)
 {
     // Reproduce Issue #494: Concurrent MSet with NX existence on overlapping key
-    // batches, shared KVClient. Pre-existing keys create placeholder buffers that
-    // were incorrectly marked isSeal=true before the fix, causing MSet to fail with
-    // K_OC_ALREADY_SEALED ("Object already sealed error" at object_client_impl.cpp).
+    // batches, shared KVClient. Pre-existing keys create placeholder buffers;
+    // MSet must skip them and complete without errors.
     //
     // Scenario (per issue #494):
     //   2 nodes, 3 workers/node, 1 client/worker
@@ -763,7 +758,6 @@ TEST_F(KVCacheExistenceOptTest, TestMCreateNXMultiThreadBatchOverlap)
     }
 
     std::atomic<int> msetOkCount(0);
-    std::atomic<int> sealedErrorCount(0);
     std::atomic<int> totalOps(0);
 
     std::promise<void> ready;
@@ -788,9 +782,6 @@ TEST_F(KVCacheExistenceOptTest, TestMCreateNXMultiThreadBatchOverlap)
             std::vector<std::shared_ptr<Buffer>> buffers;
             Status rc = sharedClient->MCreate(keys, sizes, param, buffers);
             if (!rc.IsOk()) {
-                if (rc.GetCode() == StatusCode::K_OC_ALREADY_SEALED) {
-                    sealedErrorCount++;
-                }
                 totalOps++;
                 return;
             }
@@ -804,11 +795,7 @@ TEST_F(KVCacheExistenceOptTest, TestMCreateNXMultiThreadBatchOverlap)
                 }
             }
             rc = sharedClient->MSet(buffers);
-            if (!rc.IsOk()) {
-                if (rc.GetCode() == StatusCode::K_OC_ALREADY_SEALED) {
-                    sealedErrorCount++;
-                }
-            } else {
+            if (rc.IsOk()) {
                 msetOkCount++;
             }
             totalOps++;
@@ -819,12 +806,6 @@ TEST_F(KVCacheExistenceOptTest, TestMCreateNXMultiThreadBatchOverlap)
     for (auto &f : futures) {
         f.get();
     }
-
-    // Core assertion: zero K_OC_ALREADY_SEALED errors.
-    // Before fix: placeholder buffers from NX-rejected keys had isSeal=true,
-    // causing MSet to reject them with K_OC_ALREADY_SEALED.
-    ASSERT_EQ(sealedErrorCount.load(), 0)
-        << "K_OC_ALREADY_SEALED should not occur. Placeholder buffers must have isSeal=false";
 
     // All threads should have completed operations
     ASSERT_EQ(totalOps.load(), numThreads);

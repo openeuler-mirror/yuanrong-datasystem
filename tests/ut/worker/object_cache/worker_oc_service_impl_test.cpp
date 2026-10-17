@@ -755,7 +755,7 @@ public:
         auto obj = std::make_unique<ObjCacheShmUnit>();
         obj->SetDataSize(dataSize);
         obj->SetCreateTime(version);
-        obj->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+        obj->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
         obj->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
         obj->stateInfo.SetDataFormat(DataFormat::BINARY);
         obj->stateInfo.SetPrimaryCopy(true);
@@ -767,7 +767,7 @@ public:
         auto obj = std::make_unique<ObjCacheShmUnit>();
         obj->SetDataSize(dataSize);
         obj->SetCreateTime(version);
-        obj->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+        obj->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
         obj->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE_EVICT);
         obj->stateInfo.SetDataFormat(DataFormat::BINARY);
         obj->stateInfo.SetPrimaryCopy(true);
@@ -783,7 +783,7 @@ public:
         obj->SetShmUnit(std::move(shmUnit));
         obj->SetDataSize(dataSize);
         obj->SetCreateTime(1);
-        obj->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+        obj->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
         obj->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
         obj->modeInfo.SetCacheType(CacheType::MEMORY);
         obj->stateInfo.SetDataFormat(DataFormat::BINARY);
@@ -3535,7 +3535,7 @@ TEST_F(WorkerOcServiceImplTest, MasterDrivenCleanupRetainsUnconfirmedAndFencesOr
                 auto replacement = std::make_unique<ObjCacheShmUnit>();
                 replacement->SetDataSize(1024);
                 replacement->SetCreateTime(objectVersion.version());
-                replacement->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+                replacement->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
                 replacement->stateInfo.SetDataFormat(DataFormat::BINARY);
                 replacement->stateInfo.SetPrimaryCopy(true);
                 RETURN_IF_NOT_OK(entries[objectKey]->WLock());

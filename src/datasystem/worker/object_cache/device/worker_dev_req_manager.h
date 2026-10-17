@@ -75,7 +75,7 @@ public:
     Status AddRequest(const std::string objectKey, std::shared_ptr<GetDeviceObjectRequest> &request);
 
     /**
-     * @brief Update request info after object sealed.
+     * @brief Update request info after object published.
      * @param[in] objectKV The safe object and its corresponding objectKey.
      * @param[in,out] memoryRefApi The memory refCnt table.
      * @return Status of the call.

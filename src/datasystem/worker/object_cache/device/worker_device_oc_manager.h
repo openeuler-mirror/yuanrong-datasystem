@@ -104,7 +104,7 @@ public:
                                         std::vector<std::string> &objectsNeedGetRemote);
 
     /**
-     * @brief Update request info after object sealed.
+     * @brief Update request info after object published.
      * @param[in] objectKV The safe object and its corresponding objectKey.
      * @return Status of the call.
      */

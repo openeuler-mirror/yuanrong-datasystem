@@ -133,7 +133,7 @@ public:
         meta->set_object_key(objectKey);
         meta->set_version(version);
         meta->set_data_size(dataSize);
-        meta->set_life_state(static_cast<uint32_t>(ObjectLifeState::OBJECT_SEALED));
+        meta->set_life_state(static_cast<uint32_t>(ObjectLifeState::OBJECT_PUBLISHED));
         auto *cfg = meta->mutable_config();
         cfg->set_consistency_type(static_cast<uint32_t>(ConsistencyType::CAUSAL));
         cfg->set_write_mode(static_cast<uint32_t>(WriteMode::NONE_L2_CACHE));
@@ -523,7 +523,7 @@ TEST_F(MigrateDataDirectTest, NewerTargetCopyWithoutMetadataRemainsSkipped)
     const std::string objectKey = "newerTargetWithoutMeta";
     auto ptr = std::make_unique<object_cache::ObjCacheShmUnit>();
     ptr->SetCreateTime(targetVersion);
-    ptr->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+    ptr->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
     ptr->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
     ptr->modeInfo.SetCacheType(CacheType::MEMORY);
     ptr->stateInfo.SetDataFormat(DataFormat::BINARY);
@@ -554,7 +554,7 @@ TEST_F(MigrateDataDirectTest, NeedModifyPrimaryWithMetadataCallsReplacePrimary)
     const std::string objectKey = "needModifyObj";
     auto ptr = std::make_unique<object_cache::ObjCacheShmUnit>();
     ptr->SetCreateTime(version);
-    ptr->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+    ptr->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
     ptr->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
     ptr->modeInfo.SetCacheType(CacheType::MEMORY);
     ptr->stateInfo.SetDataFormat(DataFormat::BINARY);

@@ -285,7 +285,7 @@ public:
         // Zero-copy when data lives in the mmap'd worker region (mmapEntry set by Create); TCP when it
         // fell back to an inline payload. mmapEntry is the real zero-copy discriminator.
         const auto kind = (info.mmapEntry != nullptr) ? AccessTransportKind::SHM : AccessTransportKind::TCP;
-        return SetTransportResponseStatus(rsp, kind, param.isSeal, param.isRetry);
+        return SetTransportResponseStatus(rsp, kind);
     }
 
     Status MCreate(const HostPort &workerAddr, const std::vector<std::string> &keys,

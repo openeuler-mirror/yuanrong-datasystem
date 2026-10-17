@@ -364,7 +364,7 @@ Shutdown 先对 socket 调用 `shutdown`，可唤醒阻塞接收。
 
 - `externalData = mmap_base + offset`
 - `externalSize = data_size`
-- `ExternalBufferMeta(metadataSize, shmId, mode, seal, workerAddr)`
+- `ExternalBufferMeta(metadataSize, shmId, mode, workerAddr)`
 - `externalOwner = ShmReceiveBufferOwner`
 - `sessionLockId = RegisterClientRsp.lock_id`
 

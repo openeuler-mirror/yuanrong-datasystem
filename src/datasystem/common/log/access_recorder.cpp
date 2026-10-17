@@ -440,15 +440,6 @@ ObjectAccessRecorder &ObjectAccessRecorder::ConsistencyTypeText(std::string_view
     return *this;
 }
 
-ObjectAccessRecorder &ObjectAccessRecorder::IsSeal(bool isSeal)
-{
-    if (!core_.ShouldRecordInternal()) {
-        return *this;
-    }
-    state_.isSeal.SetNumeric(isSeal ? 1 : 0);
-    return *this;
-}
-
 ObjectAccessRecorder &ObjectAccessRecorder::IsRetry(bool isRetry)
 {
     if (!core_.ShouldRecordInternal()) {
@@ -620,7 +611,6 @@ void ObjectAccessRecorder::Record()
     state_.remoteClientId.Fill(req.remoteClientId);
     state_.transportType.Fill(req.transportType);
     state_.keep.Fill(req.keep);
-    state_.isSeal.Fill(req.isSeal);
     state_.isRetry.Fill(req.isRetry);
     state_.ttlSecond.Fill(req.ttlSecond);
     state_.existence.Fill(req.existence);
@@ -1187,7 +1177,6 @@ std::string RequestParam::ToString() const
     AppendRequestParam(ret, "keep:", keep);
     AppendRequestParam(ret, "Write_mode:", writeMode);
     AppendRequestParam(ret, "consistency_type:", consistencyType);
-    AppendRequestParam(ret, "is_seal:", isSeal);
     AppendRequestParam(ret, "is_retry:", isRetry);
     AppendRequestParam(ret, "ttl_second:", ttlSecond);
     AppendRequestParam(ret, "sub_timeout:", subTimeout);

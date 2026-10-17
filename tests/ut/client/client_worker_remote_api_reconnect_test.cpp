@@ -500,7 +500,7 @@ protected:
         ScopedRequestContext requestCtx;
         ApiDeadlineGuard deadlineGuard(timeoutMs);
         GetRequestContext()->reqTimeoutDuration.Init(timeoutMs);
-        return api_->Publish(MakeBufferInfo(), false, false, {}, 0, 0, timeoutMs);
+        return api_->Publish(MakeBufferInfo(), false, {}, 0, 0, timeoutMs);
     }
 
     Status GetOnce(int32_t timeoutMs, Status &ingressRpcStatus)

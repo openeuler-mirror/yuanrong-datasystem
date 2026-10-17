@@ -65,15 +65,6 @@ struct ObjectInterface {
 
     /**
      * @brief A getter function that a derived class can optionally implement.
-     * @return Base version just returns false. If implemented, returns true if sealed.
-     */
-    virtual bool IsSealed() const
-    {
-        return false;
-    }
-
-    /**
-     * @brief A getter function that a derived class can optionally implement.
      * @return Base version just returns false. If implemented, returns true if published.
      */
     virtual bool IsPublished() const
@@ -380,7 +371,6 @@ struct ObjectBufferInfo {
     int existence = 0;
     ModeInfo objectMode;
     bool keep = false;
-    bool isSeal = false;
     uint32_t version;
     std::shared_ptr<RpcMessage> payloadPointer;
     std::shared_ptr<client::IMmapTableEntry> mmapEntry;

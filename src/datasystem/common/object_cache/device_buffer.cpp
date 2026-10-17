@@ -139,7 +139,7 @@ int32_t DeviceBuffer::GetDeviceIdx() const
 Status DeviceBuffer::Publish()
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isPublished, K_OC_ALREADY_SEALED, "Device object is already published");
+    CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isPublished, K_OC_KEY_ALREADY_EXIST, "Device object is already published");
     CHECK_FAIL_RETURN_STATUS(!deviceMemUnit_->GetBlobsStorage().empty(), K_INVALID,
                              "The blobs can't be empty in device buffer");
     Status rc = clientImpl_->PublishDeviceObject(shared_from_this());

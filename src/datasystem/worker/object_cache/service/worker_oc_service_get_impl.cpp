@@ -911,7 +911,7 @@ Status WorkerOcServiceGetImpl::PreProcessGetObject(const ReadKey &readKey, GetOb
         return Status::OK();
     });
     CHECK_FAIL_RETURN_STATUS((*entry)->IsBinary(), K_INVALID, "Not a Shm Unit");
-    if ((*entry)->IsSealed() || (*entry)->IsPublished()) {
+    if ((*entry)->IsPublished()) {
         if (!(*entry)->stateInfo.IsCacheInvalid()) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectKV.CheckReadOffset(), "Read offset verify failed");
             // case 1: object exist in local node, and it is the latest version.
@@ -964,7 +964,7 @@ Status WorkerOcServiceGetImpl::RLockGetObjectFromMem(const ReadKey &readKey, Get
         return Status::OK();
     }
     CHECK_FAIL_RETURN_STATUS((*entry)->IsBinary(), K_INVALID, "Not a Shm Unit");
-    if ((*entry)->IsSealed() || (*entry)->IsPublished()) {
+    if ((*entry)->IsPublished()) {
         if (!(*entry)->stateInfo.IsCacheInvalid()) {
             ReadObjectKV objectKV(readKey, *entry);
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectKV.CheckReadOffset(), "Read offset verify failed");

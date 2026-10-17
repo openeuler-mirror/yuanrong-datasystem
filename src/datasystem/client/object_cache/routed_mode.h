@@ -75,7 +75,7 @@ public:
 
     // Routed two-step Create/Publish (Component D). When local cache is off, allocate the buffer
     // on the hash-ring-selected worker via the transport layer and bridge the result to a legacy
-    // Buffer; seal it via the transport layer on the worker pinned at Create time. The one-step
+    // Buffer; publish it via the transport layer on the worker pinned at Create time. The one-step
     // equivalents are ProcessTransportPut (Create+Set) below.
     Status CreateRoutedBuffer(const std::string &objectKey, uint64_t dataSize, const FullParam &param,
                               std::shared_ptr<Buffer> &buffer);
@@ -98,7 +98,7 @@ public:
                                const FullParam &param, const std::unordered_set<std::string> &nestedObjectKeys,
                                uint32_t ttlSecond, int existence, const SetRouteContext &routeContext,
                                SetFailureStage &failureStage, client::TransportSetResult &transportResult,
-                               int32_t requestTimeoutMs, bool isSeal = false);
+                               int32_t requestTimeoutMs);
     void BuildTransportReadRequest(const std::vector<std::string> &objectKeys, client::ObjectReadRequest &request,
                                    std::vector<Status> &itemStatuses, int64_t subTimeoutMs,
                                    bool queryL2Cache, const std::vector<HostPort> &excludedWorkers = {});

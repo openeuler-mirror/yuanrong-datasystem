@@ -216,14 +216,6 @@ public:
      */
     virtual Status PushMetadataToMaster(master::PushMetaToMasterReqPb &req, master::PushMetaToMasterRspPb &rsp) = 0;
 
-    /*
-     * @brief Rollback seal.
-     * @param[in] objectKey Object key to be seal
-     * @param[out] oldLifeState old life state
-     * @return Status of the call
-     */
-    virtual Status RollbackSeal(const std::string &objectKey, uint32_t oldLifeState) = 0;
-
     /**
      * @brief Send request of set expiration time for metas.
      * @param[in] req The expire request protobuf.
@@ -448,7 +440,6 @@ public:
     Status GDecreaseMasterRef(master::GDecreaseReqPb &decReq, master::GDecreaseRspPb &decRsp) override;
     Status QueryGlobalRefNum(QueryGlobalRefNumReqPb &req, QueryGlobalRefNumRspCollectionPb &rsp) override;
     Status PushMetadataToMaster(master::PushMetaToMasterReqPb &req, master::PushMetaToMasterRspPb &rsp) override;
-    Status RollbackSeal(const std::string &objectKey, uint32_t oldLifeState) override;
     Status ReconcileMembershipChange(master::ReconciliationQueryPb &req, master::ReconciliationRspPb &rsp) override;
     std::string GetHostPort() override;
 
@@ -544,7 +535,6 @@ public:
     Status GDecreaseMasterRef(master::GDecreaseReqPb &decReq, master::GDecreaseRspPb &decRsp) override;
     Status QueryGlobalRefNum(QueryGlobalRefNumReqPb &req, QueryGlobalRefNumRspCollectionPb &rsp) override;
     Status PushMetadataToMaster(master::PushMetaToMasterReqPb &req, master::PushMetaToMasterRspPb &rsp) override;
-    Status RollbackSeal(const std::string &objectKey, uint32_t oldLifeState) override;
     Status ReconcileMembershipChange(master::ReconciliationQueryPb &req, master::ReconciliationRspPb &rsp) override;
     std::string GetHostPort() override;
     Status Expire(master::ExpireReqPb &req, master::ExpireRspPb &rsp) override;

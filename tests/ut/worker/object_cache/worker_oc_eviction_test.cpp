@@ -585,7 +585,7 @@ public:
     void InsertNoneL2EvictableMetadata(const std::string &objectKey)
     {
         auto object = std::make_unique<object_cache::ObjCacheShmUnit>();
-        object->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+        object->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
         object->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE_EVICT);
         object->modeInfo.SetCacheType(CacheType::MEMORY);
         DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(object)));
@@ -2081,7 +2081,7 @@ TEST_F(EvictionManagerTest, PrimaryEndLifeReacquireRejectsObjectClaimedByRebalan
     const std::string objectKey = "primary-end-life-rebalance-window";
     auto object = std::make_unique<object_cache::ObjCacheShmUnit>();
     object->SetCreateTime(1);
-    object->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+    object->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
     object->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE_EVICT);
     object->modeInfo.SetCacheType(CacheType::MEMORY);
     DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(object)));

@@ -91,7 +91,6 @@ Status BuildSetRequest(const ObjectBufferInfo &info, const TransportSetParam &pa
     request.set_write_mode(static_cast<uint32_t>(info.objectMode.GetWriteMode()));
     request.set_consistency_type(static_cast<uint32_t>(info.objectMode.GetConsistencyType()));
     request.set_cache_type(static_cast<uint32_t>(info.objectMode.GetCacheType()));
-    request.set_is_seal(param.isSeal);
     request.set_shm_id(info.shmId);
     request.set_keep(param.keep);
     request.set_is_retry(param.isRetry);
@@ -99,16 +98,12 @@ Status BuildSetRequest(const ObjectBufferInfo &info, const TransportSetParam &pa
     return Status::OK();
 }
 
-Status SetTransportResponseStatus(const PublishRspPb &response, AccessTransportKind kind,
-                                  bool isSeal, bool isRetry)
+Status SetTransportResponseStatus(const PublishRspPb &response, AccessTransportKind kind)
 {
     // PublishRspPb carries only latency trace fields (latency_phase_us, latency_tick_dropped_count).
     // Set errors are in the RPC return Status, handled by TransportLayer::Set's rebuild ladder.
-    // Seal-retry K_OC_ALREADY_SEALED is normalized by WorkerRpcClient::InvokeSet, where the RPC Status is available.
     (void)response;
     AccessTransportTracker::Record(kind);
-    (void)isSeal;
-    (void)isRetry;
     return Status::OK();
 }
 

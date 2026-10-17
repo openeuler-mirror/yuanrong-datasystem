@@ -246,9 +246,7 @@ void WorkerOcServiceMultiPublishImpl::VerifyObjectsNtx(const MultiPublishReqPb &
 Status WorkerOcServiceMultiPublishImpl::VerifyObjectReleaseValidity(const MultiPublishReqPb &req,
                                                                     const SafeObjType &safeObj)
 {
-    if (safeObj->IsSealed()) {
-        RETURN_STATUS(StatusCode::K_OC_ALREADY_SEALED, "already be sealed.");
-    } else if (safeObj->IsPublished()) {
+    if (safeObj->IsPublished()) {
         if (static_cast<CacheType>(req.cache_type()) != safeObj->modeInfo.GetCacheType()) {
             RETURN_STATUS(StatusCode::K_INVALID, "The cache type cannot be modified.");
         }

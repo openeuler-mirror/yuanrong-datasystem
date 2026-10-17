@@ -24,12 +24,12 @@ public void publish(List<String> nestedKeys)
 public void seal()
 ~~~~~~~~~~~~~~~~~~
 
-将不可变数据发布到服务器。
+发布数据到服务器，语义等同 publish（封存语义已移除）。
 
 public void seal(List<String> nestedKeys)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-将不可变数据发布到服务器。
+发布数据到服务器，语义等同 publish（封存语义已移除）。
 
 参数：
     - **nestedKeys** - 嵌套对象的对象键。

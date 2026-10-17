@@ -760,14 +760,14 @@ handler. Clearing the Router handler synchronously excludes later callback acces
     missing diagnostics, timeout, EOF, connection reset, and other ambiguous failures are never replayed on another
     worker. If a same-worker retry follows an ambiguous first Publish result, `TransportLayer` preserves that first
     result so a later connection-refused error cannot make replay appear safe.
-    Routed two-step `Create(Buffer) -> Set/Seal` is pinned to the Create worker until Publish. If that worker rejects
+    Routed two-step `Create(Buffer) -> Set` is pinned to the Create worker until Publish. If that worker rejects
     Publish with the side-effect-free `K_SCALE_DOWN` admission result, the SDK excludes it and reuses the one-step
-    Create-copy-Publish flow on a remaining route, preserving mode, nested keys, TTL, existence, and seal semantics.
+    Create-copy-Publish flow on a remaining route, preserving mode, nested keys, TTL, and existence.
     Other Publish failures remain subject to the ambiguity rule and are not replayed across workers. The old transport
     allocation follows the existing release contract: non-owner buffers are scheduled for release by `TransportLayer`,
     while zero-copy send owners remain attached to the caller's Buffer so replay does not invalidate its data pointer.
     After the first `K_SCALE_DOWN` replay, that Buffer records the source as draining and retains its source mapping only
-    as staging memory. Later `MemoryCopy`, `Publish`, `Seal`, and repeated MSet calls skip source liveness and run the same
+    as staging memory. Later `MemoryCopy`, `Publish`, and repeated MSet calls skip source liveness and run the same
     complete transaction on a current route; they never rebuild the removed source endpoint or rebind the caller's
     pointer, latch, and release owner.
   - `ObjectClientImpl::InitWithServiceDiscovery` keeps a per-Init local exclusion set: a worker
@@ -790,8 +790,9 @@ handler. Clearing the Router handler synchronously excludes later callback acces
     from the latest placement before the next attempt; MSet re-groups only unresolved keys and preserves successful
     owner groups. The MSet metadata route loop is bounded by both the API deadline and 10 attempts. MSet keys whose
     metadata was not created are never transitioned to the published state and are returned through
-    `failed_object_keys` when either retry budget is exhausted. Seal metadata requests remain non-retryable after the
-    master call is attempted; only route-resolution failures before that call may refresh the route and retry.
+    `failed_object_keys` when either retry budget is exhausted. All metadata requests are retryable after route
+    failures; every publish path (including the `Buffer::Seal` forwarding shim) uses the same retryable Publish
+    metadata flow.
   - An absent worker rejected by transport snapshot admission returns `K_NOT_READY`, not object-level `K_NOT_FOUND`. Because
     no RPC was sent, routed Set and MSet may safely exclude that worker and rebuild the request on a current route.
     Routed direct Get uses the same narrow signal to recover from topology/metadata skew during scale or rolling
@@ -1017,7 +1018,7 @@ handler. Clearing the Router handler synchronously excludes later callback acces
 - `src/datasystem/client/object_cache/routing/broken_filter.*` isolates `K_RPC_PEER_DEAD` for five seconds immediately.
   `K_CLIENT_WORKER_DISCONNECT` still requires 100 failures within five seconds. Ring updates preserve unexpired
   connection isolation, while clearing `K_SCALE_DOWN` isolation and incomplete disconnect bursts through a CAS update.
-- `object_client_impl.cpp` and `routed_mode.cpp` report Create, MCreate, unsealed Publish, MSet and Get connection failures
+- `object_client_impl.cpp` and `routed_mode.cpp` report Create, MCreate, Publish, MSet and Get connection failures
   through the existing `Routing::UpdateState`. The local-cache write shortcut consults the same `BrokenFilter`.
   Failure feedback does not grant additional Create or Publish replay permission.
 - `client_worker_api/iclient_worker_api.h` exposes an optional Get ingress-status output used by `bound_mode.cpp`.

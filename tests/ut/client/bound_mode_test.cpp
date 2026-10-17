@@ -33,7 +33,7 @@ public:
 
     std::shared_ptr<IClientWorkerApi> CloneWith(HostPort hostPort, HeartbeatType heartbeatType, SensitiveValue token, Signature *signature, std::string tenantId, bool enableCrossNodeConnection, std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api, void *worker) const override { return nullptr; }
     Status Create(const std::string &objectKey, int64_t dataSize, uint32_t &version, uint64_t &metadataSize, std::shared_ptr<ShmUnitInfo> &shmBuf, std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo, const CacheType &cacheType, int32_t requestTimeoutMs) override { return Status::OK(); }
-    Status Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, bool isSeal, const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond, int existence, int32_t requestTimeoutMs) override { return Status::OK(); }
+    Status Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond, int existence, int32_t requestTimeoutMs) override { return Status::OK(); }
     Status MultiPublish(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo, const PublishParam &param, MultiPublishRspPb &rsp, const std::vector<const DeviceBlobList *> &deviceBlobRefs) override { return Status::OK(); }
     Status DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys) override { return Status::OK(); }
     Status PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp) override { return Status::OK(); }

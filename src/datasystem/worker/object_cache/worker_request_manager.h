@@ -59,7 +59,6 @@ struct GetObjEntryParams {
         params->objectState = objShmUnit->stateInfo;
         params->lifeState = objShmUnit->GetLifeState();
         params->shmUnit = safeObj->GetShmUnit();
-        params->isSealed = safeObj->IsSealed();
         params->version = safeObj->GetCreateTime();
 #ifdef BUILD_HETERO
         params->remoteH2DHostInfo = safeObj->GetRemoteHostInfo();
@@ -79,7 +78,6 @@ struct GetObjEntryParams {
         params->objectState = objectState;
         params->lifeState = lifeState;
         params->shmUnit = shmUnit;
-        params->isSealed = isSealed;
         params->version = version;
         params->remoteH2DHostInfo = remoteH2DHostInfo;
         return params;
@@ -92,7 +90,6 @@ struct GetObjEntryParams {
     StateInfo objectState;
     ObjectLifeState lifeState;
     std::shared_ptr<ShmUnit> shmUnit;
-    bool isSealed;
     uint64_t version;
     std::shared_ptr<RemoteH2DHostInfoMap> remoteH2DHostInfo;
 };

@@ -59,7 +59,6 @@ protected:
     /**
      * @brief Prepare the put request.
      * @param[in] bufferInfo Buffer information.
-     * @param[in] isSeal Is seal or not.
      * @param[in] nestedKeys Nested keys.
      * @param[in] ttlSecond Used by state api, means how many seconds the key will be delete automatically.
      * @param[in] existence Used by state api, to determine whether to set or not set the key if it does already
@@ -67,7 +66,7 @@ protected:
      * @param[out] req The protobuf req.
      * @return K_OK on success; the error code otherwise.
      */
-    Status PreparePublishReq(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isSeal,
+    Status PreparePublishReq(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
                              const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond, int existence,
                              PublishReqPb &req);
 

@@ -147,10 +147,9 @@ public:
                           const CacheType &cacheType = CacheType::MEMORY, int32_t requestTimeoutMs = 0) = 0;
 
     /**
-     * @brief Publish/Seal/Put an object in the store-server.
+     * @brief Publish/Put an object in the store-server.
      * @param[in] bufferInfo Buffer information.
      * @param[in] isShm Is shared memory or not.
-     * @param[in] isSeal Is seal or not.
      * @param[in] nestedKeys Nested keys.
      * @param[in] ttlSecond Used by state api, means how many seconds the key will be delete automatically.
      * @param[in] existence Used by state api, to determine whether to set or not set the key if it does already
@@ -158,7 +157,7 @@ public:
      * @param[in] requestTimeoutMs Optional per-call RPC budget; 0 uses the configured business timeout.
      * @return K_OK on success; the error code otherwise.
      */
-    virtual Status Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, bool isSeal,
+    virtual Status Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm,
                            const std::unordered_set<std::string> &nestedKeys = {}, uint32_t ttlSecond = 0,
                            int existence = 0, int32_t requestTimeoutMs = 0) = 0;
 

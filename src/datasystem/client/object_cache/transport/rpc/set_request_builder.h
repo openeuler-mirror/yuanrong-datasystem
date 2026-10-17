@@ -53,7 +53,6 @@ struct TransportSetParam {
     std::unordered_set<std::string> nestedKeys;
     uint32_t ttlSecond = 0;
     ExistenceOpt existence = ExistenceOpt::NONE;
-    bool isSeal = false;
     bool keep = false;
     int64_t subTimeoutMs = 0;
     bool isRetry = false;
@@ -74,8 +73,7 @@ Status ValidateSetRequest(const ObjectBufferInfo &info, const TransportSetParam 
 Status BuildSetRequest(const ObjectBufferInfo &info, const TransportSetParam &param, PublishReqPb &request);
 
 /** Maps the Publish response payload to a transport-level status. */
-Status SetTransportResponseStatus(const PublishRspPb &response, AccessTransportKind kind,
-                                  bool isSeal, bool isRetry);
+Status SetTransportResponseStatus(const PublishRspPb &response, AccessTransportKind kind);
 
 }  // namespace client
 }  // namespace datasystem

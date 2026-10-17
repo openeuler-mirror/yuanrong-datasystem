@@ -403,26 +403,6 @@ TEST_F(KVClientBrpcLocalCacheVerifyTest, CreateMemoryCopySetBuffer)
     ASSERT_EQ(got, data);
 }
 
-// TC-1.3.3: Set(buffer) twice → second call returns already-sealed
-TEST_F(KVClientBrpcLocalCacheVerifyTest, SetBufferTwiceAlreadySealed)
-{
-    InitClient();
-    const std::string key = NewKey();
-    const std::string data = GenRandomString(SMALL_VALUE_SIZE);
-
-    std::shared_ptr<Buffer> buffer;
-    SetParam param;
-    DS_ASSERT_OK(client_->Create(key, data.size(), param, buffer));
-    DS_ASSERT_OK(buffer->WLatch());
-    DS_ASSERT_OK(buffer->MemoryCopy(data.data(), data.size()));
-    DS_ASSERT_OK(buffer->Publish());
-    DS_ASSERT_OK(buffer->UnWLatch());
-
-    // Second publish should fail
-    auto rc = buffer->Publish();
-    ASSERT_EQ(rc.GetCode(), StatusCode::K_OC_ALREADY_SEALED);
-}
-
 // ============================================================================
 // Category 1.4: Get Flow Tests
 // ============================================================================
@@ -700,25 +680,6 @@ TEST_F(KVClientBrpcLocalCacheVerifyTest, DuplicateCreateSameKey)
     // Second Create with same key
     auto rc = client_->Create(key, SMALL_VALUE_SIZE, param, buf2);
     ASSERT_EQ(rc.GetCode(), StatusCode::K_DUPLICATED);
-}
-
-// TC-3.16: Publish already-sealed buffer
-TEST_F(KVClientBrpcLocalCacheVerifyTest, PublishAlreadySealed)
-{
-    InitClient();
-    const std::string key = NewKey();
-    const std::string data = GenRandomString(SMALL_VALUE_SIZE);
-
-    std::shared_ptr<Buffer> buffer;
-    SetParam param;
-    DS_ASSERT_OK(client_->Create(key, data.size(), param, buffer));
-    DS_ASSERT_OK(buffer->WLatch());
-    DS_ASSERT_OK(buffer->MemoryCopy(data.data(), data.size()));
-    DS_ASSERT_OK(buffer->Publish());  // First publish succeeds
-    DS_ASSERT_OK(buffer->UnWLatch());
-
-    auto rc = buffer->Publish();  // Second publish on sealed buffer
-    ASSERT_EQ(rc.GetCode(), StatusCode::K_OC_ALREADY_SEALED);
 }
 
 // ============================================================================

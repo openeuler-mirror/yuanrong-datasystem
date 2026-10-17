@@ -186,7 +186,7 @@ Status ClientWorkerLocalApi::Create(const std::string &objectKey, int64_t dataSi
     return Status::OK();
 }
 
-Status ClientWorkerLocalApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, bool isSeal,
+Status ClientWorkerLocalApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm,
                                      const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond,
                                      int existence, int32_t requestTimeoutMs)
 {
@@ -194,7 +194,7 @@ Status ClientWorkerLocalApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bu
     (void)requestTimeoutMs;
     GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     PublishReqPb req;
-    RETURN_IF_NOT_OK(PreparePublishReq(bufferInfo, isSeal, nestedKeys, ttlSecond, existence, req));
+    RETURN_IF_NOT_OK(PreparePublishReq(bufferInfo, nestedKeys, ttlSecond, existence, req));
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     std::vector<RpcMessage> rms;
     if (!isShm) {

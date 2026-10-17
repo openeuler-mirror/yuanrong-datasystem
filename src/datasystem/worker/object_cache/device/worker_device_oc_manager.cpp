@@ -239,7 +239,7 @@ Status WorkerDeviceOcManager::GetDeviceObjectInLocalMem(const std::string &objec
             (void)request->numSatisfiedObjects_.fetch_add(1);
         }
     } else {
-        // case 3: object didn't exist in local node, is not published or sealed yet.
+        // case 3: object didn't exist in local node, is not published yet.
         objectsNeedGetRemote.push_back(objectKey);
     }
     return Status::OK();

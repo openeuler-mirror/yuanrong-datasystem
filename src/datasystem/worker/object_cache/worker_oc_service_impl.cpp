@@ -3211,7 +3211,7 @@ Status WorkerOCServiceImpl::PublishDeviceObject(const PublishDeviceObjectReqPb &
     std::vector<ShmKey> shmUnits = { ShmKey::Intern(req.shm_id()) };
     RETURN_IF_NOT_OK(
         WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(tenantId, clientId, shmUnits, memoryRefTable_));
-    PerfPoint point(PerfKey::WORKER_SEAL_OBJECT);
+    PerfPoint point(PerfKey::WORKER_PUBLISH_OBJECT);
     BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),

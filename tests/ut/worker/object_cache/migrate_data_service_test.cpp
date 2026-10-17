@@ -168,7 +168,6 @@ public:
     RETURN_UNSUPPORTED_MASTER_API(QueryGlobalRefNum, QueryGlobalRefNumReqPb &, QueryGlobalRefNumRspCollectionPb &)
     RETURN_UNSUPPORTED_MASTER_API(PushMetadataToMaster, master::PushMetaToMasterReqPb &,
                                   master::PushMetaToMasterRspPb &)
-    RETURN_UNSUPPORTED_MASTER_API(RollbackSeal, const std::string &, uint32_t)
     RETURN_UNSUPPORTED_MASTER_API(Expire, master::ExpireReqPb &, master::ExpireRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(ReconcileMembershipChange, master::ReconciliationQueryPb &,
                                   master::ReconciliationRspPb &)
@@ -382,7 +381,7 @@ public:
         ptr->SetDataSize(dataSize);
         ptr->SetMetadataSize(metaSize);
         ptr->SetCreateTime(1);
-        ptr->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+        ptr->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
 
         ptr->modeInfo.SetWriteMode(writeMode);
         ptr->modeInfo.SetCacheType(CacheType::MEMORY);
@@ -403,7 +402,7 @@ public:
             const std::string objectKey = prefix + std::to_string(i);
             auto ptr = std::make_unique<object_cache::ObjCacheShmUnit>();
             ptr->SetCreateTime(version);
-            ptr->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+            ptr->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
             ptr->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
             ptr->modeInfo.SetCacheType(CacheType::MEMORY);
             ptr->stateInfo.SetDataFormat(DataFormat::BINARY);
@@ -1490,7 +1489,7 @@ protected:
         object->SetShmUnit(std::make_shared<ShmUnit>());
         object->SetDataSize(1);
         object->SetCreateTime(version);
-        object->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+        object->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
         object->stateInfo.SetDataFormat(DataFormat::BINARY);
         object->stateInfo.SetNeedToDelete(true);
         DS_EXPECT_OK(objectTable_->Insert(objectKey, std::move(object)));
@@ -1505,7 +1504,7 @@ protected:
         replacement->SetShmUnit(std::make_shared<ShmUnit>());
         replacement->SetDataSize(1);
         replacement->SetCreateTime(version);
-        replacement->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+        replacement->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
         replacement->stateInfo.SetDataFormat(DataFormat::BINARY);
         replacement->stateInfo.SetNeedToDelete(true);
         RETURN_IF_NOT_OK(entry->WLock());
@@ -1722,7 +1721,7 @@ TEST_F(NotifyRemoteGetMigrationTest, LocalPayloadMissReachesResolvedRemoteAndPre
                                  std::make_pair(K_URMA_WAIT_TIMEOUT, "return(K_URMA_WAIT_TIMEOUT)") }) {
         const std::string objectKey = "metadata-only-local-copy";
         auto object = std::make_unique<object_cache::ObjCacheShmUnit>();
-        object->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+        object->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
         object->stateInfo.SetDataFormat(DataFormat::BINARY);
         object->stateInfo.SetIncompleted(false);
         auto entry = std::make_shared<SafeObjType>(std::move(object));
@@ -2103,7 +2102,7 @@ TEST_F(NotifyRemoteGetMigrationTest, PostProcessRemoteGetInNotificationClearsDel
     auto obj = std::make_unique<ObjCacheShmUnit>();
     obj->SetDataSize(1);
     obj->SetCreateTime(1);
-    obj->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+    obj->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
     obj->stateInfo.SetDataFormat(DataFormat::BINARY);
     obj->stateInfo.SetNeedToDelete(true);
     DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(obj)));
@@ -2180,7 +2179,7 @@ TEST_F(NotifyRemoteGetMigrationTest, ReplacePrimaryFailureMarksPayloadAndSuccess
     object->SetShmUnit(shmUnit);
     object->SetDataSize(dataSize);
     object->SetCreateTime(version);
-    object->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+    object->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
     object->stateInfo.SetDataFormat(DataFormat::BINARY);
     object->stateInfo.SetNeedToDelete(true);
     DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(object)));
@@ -2654,7 +2653,7 @@ TEST_F(NotifyRemoteGetMigrationTest, ExpiredPrimarySwitchRemainsDeletableAndCann
     object->SetShmUnit(std::make_shared<ShmUnit>());
     object->SetDataSize(dataSize);
     object->SetCreateTime(version);
-    object->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+    object->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
     object->stateInfo.SetDataFormat(DataFormat::BINARY);
     object->stateInfo.SetNeedToDelete(true);
     DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(object)));
@@ -2930,7 +2929,7 @@ TEST_F(NotifyRemoteGetMigrationTest, SpillCallsReplacePrimaryAndSkipsCreateMulti
     auto obj = std::make_unique<ObjCacheShmUnit>();
     obj->SetDataSize(1);
     obj->SetCreateTime(1);
-    obj->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+    obj->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
     obj->stateInfo.SetDataFormat(DataFormat::BINARY);
     obj->stateInfo.SetNeedToDelete(true);
     DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(obj)));

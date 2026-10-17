@@ -94,7 +94,6 @@ struct RequestParam {
     std::string keep;
     std::string writeMode;
     std::string consistencyType;
-    std::string isSeal;
     std::string isRetry;
     std::string ttlSecond;
     std::string existence;
@@ -225,7 +224,6 @@ struct ObjectAccessState {
     FieldEntry remoteClientId;
     FieldEntry transportType;
     FieldEntry keep;
-    FieldEntry isSeal;
     FieldEntry isRetry;
     FieldEntry ttlSecond;
     FieldEntry existence;
@@ -380,7 +378,6 @@ public:
     }
     ObjectAccessRecorder &ConsistencyType(int consistencyType);
     ObjectAccessRecorder &ConsistencyTypeText(std::string_view consistencyType);
-    ObjectAccessRecorder &IsSeal(bool isSeal);
     ObjectAccessRecorder &IsRetry(bool isRetry);
     ObjectAccessRecorder &TtlSecond(uint32_t ttlSecond);
     template <typename Provider>

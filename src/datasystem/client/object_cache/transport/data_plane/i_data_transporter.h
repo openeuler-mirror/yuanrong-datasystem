@@ -59,7 +59,6 @@ struct ExternalBufferMeta {
     uint64_t metadataSize = 0;
     ShmKey shmId;
     uint32_t lockId = 0;
-    bool isSeal = false;
     ModeInfo mode;
     HostPort workerAddr;
 };
@@ -119,7 +118,7 @@ public:
     /**
      * @brief Commit an ObjectBuffer via transport (URMA write + Publish RPC / TCP payload).
      * @param[in] buffer ObjectBuffer created by this transporter's Create.
-     * @param[in] param Set parameters (nested keys, TTL, existence, seal, keep, timeout, isRetry).
+     * @param[in] param Set parameters (nested keys, TTL, existence, keep, timeout, isRetry).
      * @return K_OK on success; rebuild/teardown-trigger errors (K_URMA_NEED_CONNECT, retryable RPC failures,
      *         K_RPC_PEER_DEAD) on failure. K_RPC_PEER_DEAD is terminal for the current request.
      */

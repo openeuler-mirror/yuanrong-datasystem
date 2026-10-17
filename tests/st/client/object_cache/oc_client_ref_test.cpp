@@ -693,11 +693,13 @@ TEST_F(OCClientRefTest, TestPutNested3)
     ASSERT_TRUE(b2[0]);
     DS_ASSERT_OK(b2[0]->Seal({ objectKey2, objectKey3 }));
 
-    // client1 seal failed
+    // client1 reseal: different nested keys are rejected by the nested-keys guard; identical keys
+    // forward to an idempotent Publish since the non-publisher seal rejection was removed.
     std::vector<Optional<Buffer>> b1;
     DS_ASSERT_OK(client->Get({ objectKey1 }, 0, b1));
     ASSERT_TRUE(b1[0]);
-    DS_ASSERT_NOT_OK(b1[0]->Seal({ objectKey2, objectKey3 }));
+    DS_ASSERT_NOT_OK(b1[0]->Seal({ "key_4" }));
+    DS_ASSERT_OK(b1[0]->Seal({ objectKey2, objectKey3 }));
 
     // Get verify
     std::vector<Optional<Buffer>> buffers;
@@ -834,11 +836,13 @@ TEST_F(OCClientRefTest, TestPublishNested2)
     DS_ASSERT_NOT_OK(buffer->Seal({ "key_4" }));
     DS_ASSERT_OK(buffer->Seal({ objectKey2, objectKey3 }));
 
-    // client1 seal failed
+    // client1 reseal: different nested keys are rejected by the nested-keys guard; identical keys
+    // forward to an idempotent Publish since the non-publisher seal rejection was removed.
     std::vector<Optional<Buffer>> b1;
     DS_ASSERT_OK(client->Get({ objectKey1 }, 0, b1));
     ASSERT_TRUE(b1[0]);
-    DS_ASSERT_NOT_OK(b1[0]->Seal({ objectKey2, objectKey3 }));
+    DS_ASSERT_NOT_OK(b1[0]->Seal({ "key_4" }));
+    DS_ASSERT_OK(b1[0]->Seal({ objectKey2, objectKey3 }));
 
     // Get verify
     std::vector<Optional<Buffer>> buffers;
@@ -2481,6 +2485,39 @@ TEST_F(OCRemoteClientIdRefMigrateTest, TestRemoteClientObjRefRedirect2)
     for (auto &future : futureVec) {
         future.get();
     }
+}
+TEST_F(OCClientRefTest, TestNestedSelfReferenceRejected)
+{
+    std::shared_ptr<ObjectClient> client;
+    InitTestClient(0, client);
+    CreateParam param{};
+    std::string objectKey1 = "key_1";
+    std::string objectKey2 = "key_2";
+    std::string data = GenRandomString();
+
+    std::vector<std::string> failObjects;
+    DS_ASSERT_OK(client->GIncreaseRef({ objectKey1, objectKey2 }, failObjects));
+    ASSERT_TRUE(failObjects.empty());
+    DS_ASSERT_OK(
+        client->Put(objectKey2, reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())), data.size(), param));
+
+    std::shared_ptr<Buffer> buffer;
+    DS_ASSERT_OK(client->Create(objectKey1, data.size(), param, buffer));
+    buffer->MemoryCopy(reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())), data.size());
+    DS_ASSERT_NOT_OK(buffer->Publish({ objectKey1 }));
+    DS_ASSERT_NOT_OK(buffer->Seal({ objectKey1 }));
+
+    // A rejected self-reference must not leave nested state behind: the parent still accepts a
+    // valid nested publish and the whole group stays reclaimable via the global reference lifecycle.
+    DS_ASSERT_OK(buffer->Publish({ objectKey2 }));
+    std::vector<Optional<Buffer>> buffers;
+    DS_ASSERT_OK(client->Get({ objectKey1, objectKey2 }, 0, buffers));
+    ASSERT_TRUE(buffers.size() == 2 && buffers[0] && buffers[1]);
+
+    DS_ASSERT_OK(client->GDecreaseRef({ objectKey1, objectKey2 }, failObjects));
+    ASSERT_TRUE(failObjects.empty());
+    DS_ASSERT_NOT_OK(client->Get({ objectKey1, objectKey2 }, 0, buffers));
+    ASSERT_TRUE(buffers.size() == 2 && !buffers[0] && !buffers[1]);
 }
 }  // namespace st
 }  // namespace datasystem
