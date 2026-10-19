@@ -138,18 +138,6 @@ DS_DEFINE_double_dynamic(urma_failover_success_rate_ratio, 0.5,
                  "rate is below this ratio, the client tries to switch worker. 0.0 disables URMA failover.");
 DS_DEFINE_uint32_dynamic(urma_failover_min_sample_count, 5,
                  "Minimum URMA data-plane samples per client_dead_timeout_s window before failover evaluation.");
-DS_DEFINE_uint32_dynamic(ub_rebuild_cooldown_ms, 1000,
-                         "Cooldown (ms) before the read path tries to rebuild a UB data plane on an endpoint after a "
-                         "read-path UB handshake failure, including K_URMA_NEED_CONNECT. Only gates read-path rebuild "
-                         "attempts: writers, direct leases and replica reads are unaffected. 0 rebuilds on the next "
-                         "request.");
-DS_DEFINE_uint32_dynamic(
-    standby_drain_data_plane_quiet_ms, 30000,
-    "Minimum idle window (ms) that a standby endpoint's data plane must stay unused before the standby "
-    "control connection may be shut down after the preferred same-node worker recovers. The last-use "
-    "timestamp is sampled, so the measured wait is this value plus up to one sampling interval; the gate "
-    "never tears down earlier than the window. 0 restores the legacy behaviour, i.e. drain as soon as the "
-    "control connection looks idle.");
 DS_DEFINE_uint32(
     eviction_reserve_mem_threshold_mb, 10240,
     "The reserved memory (MB) is determined by min(shared_memory_size_mb*0.1, eviction_reserve_mem_threshold_mb). "
@@ -356,11 +344,6 @@ DS_DEFINE_uint64(shm_ref_hard_reclaim_timeout_ms, 5000,
                  "published shm leaks under enableLocalCache=false when the client is alive but not revisiting. "
                  "Measured from the soft deadline (requestTimeoutMs), not from create time, so it never races an "
                  "in-flight publish. Default 5000 (5s). 0 disables proactive reclaim (revert to passive reconcile).");
-
-DS_DEFINE_int32(fd_pool_prewarm_size, GetInt32FromEnv("DATASYSTEM_FD_POOL_PREWARM_SIZE", 5000),
-                "Number of fds to briefly open then close during SDK Init and worker startup to pre-expand the "
-                "kernel fdtable and warm the file slab. Default 5000. 0 disables. The soft RLIMIT_NOFILE is raised "
-                "(up to the hard limit) when needed; any failure is non-fatal.");
 
 // ============================================================================
 // Load-aware scheduling switches

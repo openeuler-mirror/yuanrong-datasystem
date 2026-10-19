@@ -4481,7 +4481,7 @@ public:
         return true;
     }
 
-    // Expire (or re-arm) the read-path rebuild cooldown without waiting FLAGS_ub_rebuild_cooldown_ms, so the
+    // Expire (or re-arm) the read-path rebuild cooldown without waiting for the fixed one-second window, so the
     // "UB resumes once the cooldown elapses" path can be asserted deterministically.
     static bool SetUbRebuildAllowedAfterMs(DataPlaneManager &manager, const HostPort &address, int64_t ms)
     {
@@ -4491,6 +4491,15 @@ public:
         }
         accessor->second->ubRebuildAllowedAfterMs.store(ms, std::memory_order_relaxed);
         return true;
+    }
+
+    static int64_t GetUbRebuildAllowedAfterMs(DataPlaneManager &manager, const HostPort &address)
+    {
+        DataPlaneManager::EntryMap::const_accessor accessor;
+        if (!manager.entries_.find(accessor, address.ToString())) {
+            return 0;
+        }
+        return accessor->second->ubRebuildAllowedAfterMs.load(std::memory_order_relaxed);
     }
 
     static std::unique_ptr<bthread::RWLockRdGuard> AcquireEntryReadLock(DataPlaneManager &manager,
@@ -4585,7 +4594,7 @@ TEST(ListenWorkerDrainTest, CanDisconnectStandbyGatesOnDataPlane)
     EXPECT_EQ(resetCount, 0) << "Evaluating the drain gate must not reset the data plane";
 }
 
-TEST(ListenWorkerDrainTest, CanDisconnectStandbyPropagatesQuietWindowFlag)
+TEST(ListenWorkerDrainTest, CanDisconnectStandbyUsesFixedQuietWindow)
 {
     auto workerApi =
         std::make_shared<ClientWorkerRemoteCommonApi>(MakeAddress(41), HeartbeatType::RPC_HEARTBEAT, "", nullptr);
@@ -4593,20 +4602,28 @@ TEST(ListenWorkerDrainTest, CanDisconnectStandbyPropagatesQuietWindowFlag)
     listenWorker->SetIsLocalWorker(false);
 
     uint64_t requestedQuietMs = 0;
-    // Mirror the real handle: a zero window means "do not check", i.e. the legacy drain behaviour.
     listenWorker->SetDataPlaneDrainHandle({ [&requestedQuietMs](uint64_t quietMs) {
                                                requestedQuietMs = quietMs;
-                                               return quietMs == 0;
+                                               return true;
                                            },
                                             []() {} });
-    ASSERT_FALSE(listenWorker->CanDisconnectStandby());
-    EXPECT_EQ(requestedQuietMs, static_cast<uint64_t>(FLAGS_standby_drain_data_plane_quiet_ms));
-
-    // Zero is the online rollback switch: it must let the standby drain immediately.
-    uint32_t originalQuietMs = FLAGS_standby_drain_data_plane_quiet_ms;
-    FLAGS_standby_drain_data_plane_quiet_ms = 0;
     EXPECT_TRUE(listenWorker->CanDisconnectStandby());
-    FLAGS_standby_drain_data_plane_quiet_ms = originalQuietMs;
+    EXPECT_EQ(requestedQuietMs, 30'000u);
+}
+
+TEST(DataPlaneManagerTest, UbRebuildCooldownIsFixedAtOneSecond)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    const HostPort address = MakeAddress(41);
+    constexpr int64_t cooldownMs = 1'000;
+    const int64_t before = SteadyNowMsForTest();
+
+    manager->MarkUbRebuildCooldown(address);
+
+    const int64_t after = SteadyNowMsForTest();
+    const int64_t deadline = DataPlaneManagerQuietTestPeer::GetUbRebuildAllowedAfterMs(*manager, address);
+    EXPECT_GE(deadline, before + cooldownMs);
+    EXPECT_LE(deadline, after + cooldownMs);
 }
 
 TEST(ListenWorkerDrainTest, TeardownReChecksQuietGateBeforeDisconnect)

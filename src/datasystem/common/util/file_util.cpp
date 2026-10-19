@@ -26,8 +26,10 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <exception>
 #include <fstream>
 #include <ios>
+#include <optional>
 #include <ostream>
 #include <iomanip>
 #include <map>
@@ -50,6 +52,8 @@
 #include <unistd.h>
 #include <zlib.h>
 
+#include "datasystem/common/flags/flags.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
@@ -789,39 +793,94 @@ Status SetFileLimit(rlim_t softLimit)
     return Status::OK();
 }
 
-Status PreExpandFdPool(int targetCount)
+namespace {
+constexpr int DEFAULT_FD_POOL_PREWARM_SIZE = 5'000;
+constexpr char FD_POOL_PREWARM_SIZE_ENV[] = "DATASYSTEM_FD_POOL_PREWARM_SIZE";
+
+std::optional<int> CalculateFdPoolPrewarmTarget(int requestedCount)
 {
-    if (targetCount <= 0) {
+    bool failGetLimit = false;
+    INJECT_POINT_NO_RETURN("PreExpandFdPool.getrlimit", [&failGetLimit](int64_t errorNumber) {
+        failGetLimit = true;
+        errno = static_cast<int>(errorNumber);
+    });
+    struct rlimit limit {};
+    if (failGetLimit || getrlimit(RLIMIT_NOFILE, &limit) != 0) {
+        LOG(WARNING) << FormatString("PreExpandFdPool: getrlimit failed, requested=%d, errno=%d: %s",
+                                     requestedCount, errno, StrErr(errno));
+        return std::nullopt;
+    }
+    INJECT_POINT_NO_RETURN("PreExpandFdPool.rlimit", [&limit](int64_t softLimit, int64_t hardLimit) {
+        limit.rlim_cur = static_cast<rlim_t>(softLimit);
+        limit.rlim_max = static_cast<rlim_t>(hardLimit);
+    });
+    if (limit.rlim_cur == RLIM_INFINITY) {
+        return requestedCount;
+    }
+    return static_cast<int>(std::min(static_cast<rlim_t>(requestedCount), limit.rlim_cur));
+}
+
+int OpenFdForPrewarm()
+{
+    int injectedErrno = 0;
+    INJECT_POINT_NO_RETURN("PreExpandFdPool.open",
+                           [&injectedErrno](int64_t errorNumber) { injectedErrno = static_cast<int>(errorNumber); });
+    if (injectedErrno != 0) {
+        errno = injectedErrno;
+        return -1;
+    }
+    return open("/dev/null", O_RDONLY | O_CLOEXEC);
+}
+
+void OpenAndClosePrewarmFds(int requestedCount, int targetCount)
+{
+    std::vector<int> fds;
+    try {
+        fds.reserve(static_cast<size_t>(targetCount));
+    } catch (const std::exception &error) {
+        LOG(WARNING) << FormatString("PreExpandFdPool: reserve failed, requested=%d, target=%d, error=%s",
+                                     requestedCount, targetCount, error.what());
+        return;
+    }
+    for (int i = 0; i < targetCount; ++i) {
+        const int fd = OpenFdForPrewarm();
+        if (fd < 0) {
+            LOG(WARNING) << FormatString(
+                "PreExpandFdPool: open stopped, requested=%d, target=%d, actual=%zu, errno=%d: %s",
+                requestedCount, targetCount, fds.size(), errno, StrErr(errno));
+            break;
+        }
+        fds.push_back(fd);
+    }
+    for (int fd : fds) {
+        RETRY_ON_EINTR(close(fd));
+    }
+    LOG(INFO) << FormatString("PreExpandFdPool: requested=%d, target=%d, opened_and_closed=%zu",
+                              requestedCount, targetCount, fds.size());
+}
+
+Status PreExpandFdPoolOnce()
+{
+    const int requestedCount = GetInt32FromEnv(FD_POOL_PREWARM_SIZE_ENV, DEFAULT_FD_POOL_PREWARM_SIZE);
+    if (requestedCount <= 0) {
+        LOG(INFO) << FormatString("PreExpandFdPool: disabled, requested=%d", requestedCount);
         return Status::OK();
     }
-    static std::once_flag onceFlag;
-    std::call_once(onceFlag, [targetCount]() {
-        struct rlimit rlim {};
-        if (getrlimit(RLIMIT_NOFILE, &rlim) == 0 && rlim.rlim_cur != RLIM_INFINITY
-            && static_cast<rlim_t>(targetCount) > rlim.rlim_cur) {
-            // Only raise (never lower) the soft limit, capped at the hard limit.
-            rlim_t wantSoft = std::min(static_cast<rlim_t>(targetCount), rlim.rlim_max);
-            struct rlimit neu { wantSoft, rlim.rlim_max };
-            if (setrlimit(RLIMIT_NOFILE, &neu) != 0) {
-                LOG(WARNING) << FormatString("PreExpandFdPool: setrlimit failed, errno=%d: %s", errno, StrErr(errno));
-            }
-        }
-        std::vector<int> fds;
-        fds.reserve(targetCount);
-        for (int i = 0; i < targetCount; ++i) {
-            int fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
-            if (fd < 0) {
-                break; // Hit the fd ceiling (EMFILE/ENFILE): keep what was opened.
-            }
-            fds.push_back(fd);
-        }
-        for (int fd : fds) {
-            RETRY_ON_EINTR(close(fd));
-        }
-        LOG(INFO) << FormatString("PreExpandFdPool: opened and closed %d/%d fds to pre-expand the fdtable",
-                                  static_cast<int>(fds.size()), targetCount);
-    });
+    const std::optional<int> targetCount = CalculateFdPoolPrewarmTarget(requestedCount);
+    if (!targetCount.has_value()) {
+        return Status::OK();
+    }
+    OpenAndClosePrewarmFds(requestedCount, *targetCount);
     return Status::OK();
+}
+}  // namespace
+
+Status PreExpandFdPool()
+{
+    static std::once_flag onceFlag;
+    static Status result = Status::OK();
+    std::call_once(onceFlag, [] { result = PreExpandFdPoolOnce(); });
+    return result;
 }
 
 Status GetFileLastModified(std::string pathname, uint64_t *timestamp)

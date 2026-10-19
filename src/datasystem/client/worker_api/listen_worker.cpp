@@ -20,7 +20,6 @@
 #include <memory>
 #include <sys/socket.h>
 
-#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/format.h"
@@ -36,6 +35,7 @@ namespace client {
 namespace {
 constexpr int32_t REMOVABLE_NOTIFY_RETRY_TIMEOUT_MS = 1000;
 constexpr int32_t REMOVABLE_NOTIFY_RPC_TIMEOUT_MS = 200;
+constexpr uint64_t STANDBY_DATA_PLANE_QUIET_MS = 30'000;
 }
 
 ListenWorker::ListenWorker(std::shared_ptr<IClientWorkerCommonApi> clientCommonWorker, HeartbeatType type,
@@ -634,7 +634,7 @@ bool ListenWorker::IsStandbyDataPlaneQuiet()
         // No data-plane owner registered: keep the legacy behaviour.
         return true;
     }
-    return isQuiet(FLAGS_standby_drain_data_plane_quiet_ms);
+    return isQuiet(STANDBY_DATA_PLANE_QUIET_MS);
 }
 
 void ListenWorker::ShutdownStandbyConnection()

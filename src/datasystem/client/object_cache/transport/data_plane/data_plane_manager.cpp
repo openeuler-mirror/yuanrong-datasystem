@@ -100,11 +100,11 @@ namespace {
 constexpr int64_t SNAPSHOT_REFRESH_GRACE_MS = 60'000;
 // Upper bound on how long admission may degrade (allow unknown endpoints) while the ring is lost.
 constexpr int64_t DEGRADED_ADMISSION_TTL_MS = 120'000;
+constexpr int64_t UB_REBUILD_COOLDOWN_MS = 1'000;
 // Minimum gap between two recordings of "this endpoint's data plane was just used". The standby drain gate
 // only needs multi-second granularity, so refreshing at most this often keeps the hot path from dirtying the
-// timestamp on every read. The recorded value therefore lags the true last use by up to this interval:
-// FLAGS_standby_drain_data_plane_quiet_ms is a dynamic uint32 with no non-zero lower bound, so
-// IsEndpointDataPlaneQuiet() must discount this bound instead of assuming it is negligible.
+// timestamp on every read. The recorded value therefore lags the true last use by up to this interval, so
+// IsEndpointDataPlaneQuiet() must discount this bound.
 constexpr int64_t DATA_PLANE_USE_REFRESH_INTERVAL_MS = 100;
 constexpr size_t SHM_MAINTENANCE_THREAD_COUNT = 4;
 
@@ -1087,9 +1087,8 @@ void DataPlaneManager::ResetStaleUbDataPlane(const HostPort &workerAddr,
         if (stale != nullptr && entry->GetTransporter(AccessTransportKind::UB) != stale) {
             return;
         }
-        if (markCooldown && FLAGS_ub_rebuild_cooldown_ms != 0) {
-            entry->ubRebuildAllowedAfterMs.store(SteadyNowMs() + static_cast<int64_t>(FLAGS_ub_rebuild_cooldown_ms),
-                                                 std::memory_order_relaxed);
+        if (markCooldown) {
+            entry->ubRebuildAllowedAfterMs.store(SteadyNowMs() + UB_REBUILD_COOLDOWN_MS, std::memory_order_relaxed);
         }
         retired = std::move(entry->GetTransporterSlot(AccessTransportKind::UB));
     }
@@ -1154,14 +1153,11 @@ Status DataPlaneManager::RebuildStaleUbDataPlane(const HostPort &workerAddr,
             }
             CHECK_FAIL_RETURN_STATUS(entry->rpcClient == expectedRpcClient, K_TRY_AGAIN,
                                      "RPC client changed during UB data-plane rebuild");
-            if (FLAGS_ub_rebuild_cooldown_ms != 0) {
-                const int64_t cooldownUntil =
-                    SteadyNowMs() + static_cast<int64_t>(FLAGS_ub_rebuild_cooldown_ms);
-                auto currentCooldown = entry->ubRebuildAllowedAfterMs.load(std::memory_order_relaxed);
-                while (currentCooldown < cooldownUntil
-                       && !entry->ubRebuildAllowedAfterMs.compare_exchange_weak(
-                           currentCooldown, cooldownUntil, std::memory_order_relaxed)) {
-                }
+            const int64_t cooldownUntil = SteadyNowMs() + UB_REBUILD_COOLDOWN_MS;
+            auto currentCooldown = entry->ubRebuildAllowedAfterMs.load(std::memory_order_relaxed);
+            while (currentCooldown < cooldownUntil
+                   && !entry->ubRebuildAllowedAfterMs.compare_exchange_weak(currentCooldown, cooldownUntil,
+                                                                            std::memory_order_relaxed)) {
             }
             if (entry->GetTransporter(AccessTransportKind::UB) == stale) {
                 retired = std::move(entry->fallbackTransporter);
@@ -1226,7 +1222,7 @@ Status DataPlaneManager::RebuildStaleUbDataPlane(const HostPort &workerAddr,
 
 void DataPlaneManager::MarkUbRebuildCooldown(const HostPort &workerAddr)
 {
-    if (shutdown_.load(std::memory_order_acquire) || FLAGS_ub_rebuild_cooldown_ms == 0) {
+    if (shutdown_.load(std::memory_order_acquire)) {
         return;
     }
     std::shared_ptr<WorkerTransportEntry> entry;
@@ -1238,8 +1234,7 @@ void DataPlaneManager::MarkUbRebuildCooldown(const HostPort &workerAddr)
         }
         entry = accessor->second;
     }
-    entry->ubRebuildAllowedAfterMs.store(SteadyNowMs() + static_cast<int64_t>(FLAGS_ub_rebuild_cooldown_ms),
-                                         std::memory_order_relaxed);
+    entry->ubRebuildAllowedAfterMs.store(SteadyNowMs() + UB_REBUILD_COOLDOWN_MS, std::memory_order_relaxed);
 }
 
 bool DataPlaneManager::IsUbRebuildCoolingDown(const HostPort &workerAddr) const

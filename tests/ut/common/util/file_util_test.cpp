@@ -19,6 +19,7 @@
  */
 #include "datasystem/common/util/file_util.h"
 
+#include <cerrno>
 #include <cstdlib>
 #include <dirent.h>
 #include <fcntl.h>
@@ -30,6 +31,7 @@
 #include <securec.h>
 
 #include "ut/common.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/random_data.h"
 
 DS_DECLARE_string(log_dir);
@@ -50,6 +52,69 @@ struct WorkerEnvCase {
     const char *key;
     const char *value;
 };
+
+struct FdPoolPrewarmCase {
+    const char *envValue;
+    const char *getLimitAction;
+    const char *limitAction;
+    const char *openAction;
+    uint64_t expectedOpenAttempts;
+};
+
+long CountOpenFds()
+{
+    DIR *dir = opendir("/proc/self/fd");
+    if (dir == nullptr) {
+        return -1;
+    }
+    long count = 0;
+    for (struct dirent *entry = readdir(dir); entry != nullptr; entry = readdir(dir)) {
+        if (entry->d_name[0] != '.') {
+            ++count;
+        }
+    }
+    closedir(dir);
+    return count;
+}
+
+bool RunFdPoolPrewarmCase(const FdPoolPrewarmCase &testCase)
+{
+    constexpr char envName[] = "DATASYSTEM_FD_POOL_PREWARM_SIZE";
+    if (testCase.envValue == nullptr) {
+        if (unsetenv(envName) != 0) {
+            return false;
+        }
+    } else if (setenv(envName, testCase.envValue, 1) != 0) {
+        return false;
+    }
+    if (testCase.getLimitAction != nullptr
+        && inject::Set("PreExpandFdPool.getrlimit", testCase.getLimitAction).IsError()) {
+        return false;
+    }
+    if (testCase.limitAction != nullptr
+        && inject::Set("PreExpandFdPool.rlimit", testCase.limitAction).IsError()) {
+        return false;
+    }
+    if (inject::Set("PreExpandFdPool.open", testCase.openAction).IsError()) {
+        return false;
+    }
+    struct rlimit beforeLimit {};
+    struct rlimit afterLimit {};
+    const long beforeFds = CountOpenFds();
+    if (beforeFds < 0 || getrlimit(RLIMIT_NOFILE, &beforeLimit) != 0) {
+        return false;
+    }
+    if (PreExpandFdPool().IsError() || PreExpandFdPool().IsError()) {
+        return false;
+    }
+    const long afterFds = CountOpenFds();
+    if (afterFds < 0 || getrlimit(RLIMIT_NOFILE, &afterLimit) != 0) {
+        return false;
+    }
+    return inject::GetExecuteCount("PreExpandFdPool.open") == testCase.expectedOpenAttempts
+           && beforeLimit.rlim_cur == afterLimit.rlim_cur && beforeLimit.rlim_max == afterLimit.rlim_max
+           && std::llabs(afterFds - beforeFds) <= 2;
+}
 }  // namespace
 
 class FileUtilTest : public CommonTest {
@@ -320,37 +385,27 @@ TEST_F(FileUtilTest, FileLimitErrors2)
 
 TEST_F(FileUtilTest, PreExpandFdPoolBestEffortAndLeakFree)
 {
-    auto countOpenFds = []() -> long {
-        DIR *dir = opendir("/proc/self/fd");
-        if (dir == nullptr) {
-            return -1;
-        }
-        long n = 0;
-        struct dirent *ent = nullptr;
-        while ((ent = readdir(dir)) != nullptr) {
-            if (ent->d_name[0] == '.') {
-                continue;
-            }
-            ++n;
-        }
-        closedir(dir);
-        return n;
+    const std::vector<FdPoolPrewarmCase> testCases = {
+        { "4", nullptr, "call(2,2)", "call(0)", 2 },
+        { "3", nullptr, "call(-1,-1)", "call(0)", 3 },
+        { "7", "call(5)", nullptr, "call(0)", 0 },
+        { "5", nullptr, "call(100,100)", "call(24)", 1 },
+        { "3", nullptr, "call(100,100)", "call(0)", 3 },
+        { "0", nullptr, nullptr, "call(0)", 0 },
+        { "invalid", nullptr, "call(2,2)", "call(0)", 2 },
+        { nullptr, nullptr, "call(2,2)", "call(0)", 2 },
     };
-
-    // Non-positive counts are no-ops and must succeed.
-    DS_ASSERT_OK(PreExpandFdPool(0));
-    DS_ASSERT_OK(PreExpandFdPool(-5));
-
-    long before = countOpenFds();
-    ASSERT_GE(before, 0L);
-    // 512 is safely below typical RLIMIT_NOFILE and exercises the open/close path quickly.
-    DS_ASSERT_OK(PreExpandFdPool(512));
-    long after = countOpenFds();
-    // All warmed-up fds are closed: no net fd leak (allow tiny drift from logging).
-    EXPECT_LE(std::llabs(after - before), 2L);
-
-    // Idempotent: a second call is a no-op (once-per-process guard) and must not error.
-    DS_ASSERT_OK(PreExpandFdPool(512));
+    for (const auto &testCase : testCases) {
+        const pid_t pid = fork();
+        ASSERT_GE(pid, 0);
+        if (pid == 0) {
+            _exit(RunFdPoolPrewarmCase(testCase) ? 0 : 1);
+        }
+        int status = 0;
+        ASSERT_EQ(waitpid(pid, &status, 0), pid);
+        ASSERT_TRUE(WIFEXITED(status));
+        EXPECT_EQ(WEXITSTATUS(status), 0);
+    }
 }
 
 TEST_F(FileUtilTest, TestChangeFileMod)
