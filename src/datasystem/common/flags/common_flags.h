@@ -19,7 +19,6 @@
 
 #include "datasystem/common/flags/flags.h"
 
-DS_DECLARE_int32(io_thread_nice);
 DS_DECLARE_bool(enable_sched_runtime);
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(hash_ring_tokens_per_member);
@@ -29,19 +28,13 @@ DS_DECLARE_bool(enable_data_replication);
 DS_DECLARE_bool(enable_worker_worker_batch_get);
 DS_DECLARE_bool(enable_urma);
 DS_DECLARE_bool(enable_ub_fault_isolation);
-DS_DECLARE_bool(enable_ub_numa_affinity);
 DS_DECLARE_uint32(ub_numa_rr_type);
 DS_DECLARE_uint32(ub_numa_src_chip_policy);
-DS_DECLARE_uint32(ub_numa_inflight_wr_diff_threshold);
 DS_DECLARE_string(shared_memory_distribution_policy);
 DS_DECLARE_bool(urma_register_whole_arena);
-DS_DECLARE_uint32(ub_transport_arena_num);
-DS_DECLARE_uint32(urma_poll_size);
 DS_DECLARE_uint32(urma_log_threshold_us);
 DS_DECLARE_uint32(urma_send_jetty_lane_pool_size);
 DS_DECLARE_uint32(urma_send_lane_count_per_peer);
-DS_DECLARE_uint32(urma_send_jetty_lane_refill_extra_size);
-DS_DECLARE_bool(urma_event_mode);
 DS_DECLARE_uint32(urma_perf_interval_ms);
 DS_DECLARE_uint32(urma_orphan_conn_ttl_s);
 DS_DECLARE_uint32(urma_orphan_sweep_interval_s);

@@ -162,7 +162,7 @@ public:
         Builder &UrmaSendLaneCountPerPeer(uint32_t count);
 
         /**
-         * @brief Set the URMA polling-mode INFO log threshold (urma_event_mode=false).
+         * @brief Set the URMA polling-mode INFO log threshold.
          * Shared and fixed at the first KVClient Init.
          * @param[in] thresholdUs Threshold in microseconds, range [1, UINT32_MAX], default 500.
          * @return Reference to self for chaining.

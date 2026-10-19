@@ -3,7 +3,7 @@
 ## URMA polling log configuration
 
 - `urma_log_threshold_us` is a startup-only positive uint32 flag, default 500 microseconds.
-  It gates only the polling-mode (`urma_event_mode=false`) gap, poll-call, and sleep INFO logs in
+  It gates only the polling gap, poll-call, and sleep INFO logs in
   `UrmaManager::PollJfcWait`; elapsed time must be strictly greater. It does not change timeouts,
   polling cadence, event mode, or `enable_urma_perf`. Worker changes require restart.
 - dscli and both Helm configuration paths expose the same default; the values-based chart uses

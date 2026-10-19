@@ -97,25 +97,11 @@ public:
     EmbeddedConfig &EnableUrma(bool enable);
 
     /**
-     * @brief URMA completion-queue poll size.
-     * @param[in] size Equivalent to flag urma_poll_size.
-     * @return Reference to self for chaining.
-     */
-    EmbeddedConfig &UrmaPollSize(int size);
-
-    /**
      * @brief Register the whole arena to URMA in one chunk.
      * @param[in] whole Equivalent to flag urma_register_whole_arena.
      * @return Reference to self for chaining.
      */
     EmbeddedConfig &UrmaRegisterWholeArena(bool whole);
-
-    /**
-     * @brief Use URMA event-driven mode.
-     * @param[in] enable Equivalent to flag urma_event_mode.
-     * @return Reference to self for chaining.
-     */
-    EmbeddedConfig &UrmaEventMode(bool enable);
 
     /**
      * @brief Directory to stroe log files.

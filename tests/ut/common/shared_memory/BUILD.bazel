@@ -8,6 +8,7 @@ ds_cc_test(
     tags = ["manual"],
     deps = [
         "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/rdma:fast_transport_base_header",
         "//src/datasystem/common/rpc:rpc_message",
         "//src/datasystem/common/shared_memory:common_shared_memory",
         "//src/datasystem/common/shared_memory:common_shm_unit_info",

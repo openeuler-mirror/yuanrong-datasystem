@@ -222,7 +222,6 @@ spec:
         - -data_migrate_urma_transport_mode={{ $.Values.global.gracefulShutdown.dataMigrateUrmaTransportMode }}
         - -ipc_through_shared_memory={{ $.Values.global.ipc.ipcThroughSharedMemory }}
         - -shared_memory_worker_port={{ $.Values.global.ipc.sharedMemoryWorkerPort }}
-        - -io_thread_nice={{ $.Values.global.rpc.ioThreadNice }}
         - -enable_sched_runtime={{ $.Values.global.performance.enableSchedRuntime }}
         - -brpc_event_dispatcher_num={{ $.Values.global.rpc.brpc.eventDispatcherNum }}
         - -brpc_server_num_threads={{ $.Values.global.rpc.brpc.brpcServerNumThreads }}
@@ -247,11 +246,8 @@ spec:
         - -enable_pipeline_h2d={{ $.Values.global.performance.enablePipelineH2d }}
         - -pipeline_h2d_thread_num={{ $.Values.global.performance.pipelineH2dThreadNum }}
         - -shared_memory_distribution_policy={{ $.Values.global.performance.sharedMemoryDistributionPolicy }}
-        - -urma_poll_size={{ $.Values.global.performance.urmaPollSize }}
         - -urma_log_threshold_us={{ $.Values.global.performance.urmaLogThresholdUs | int64 }}
-        - -urma_max_write_size_mb={{ $.Values.global.performance.urmaMaxWriteSizeMb }}
         - -urma_register_whole_arena={{ $.Values.global.performance.urmaRegisterWholeArena }}
-        - -urma_event_mode={{ $.Values.global.performance.urmaEventMode }}
         - -enable_transport_fallback={{ $.Values.global.performance.enableTransportFallback }}
         - -urma_failover_success_rate_ratio={{ $.Values.global.performance.urmaFailoverSuccessRateRatio }}
         - -urma_failover_min_sample_count={{ $.Values.global.performance.urmaFailoverMinSampleCount }}

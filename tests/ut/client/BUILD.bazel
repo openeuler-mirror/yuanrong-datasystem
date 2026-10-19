@@ -308,8 +308,8 @@ ds_cc_test(
     }),
 )
 
-# URMA mock-backed coverage of the UrmaWriteImpl chunking contract: a payload above the configured
-# max write size must split into the minimum number of even-sized chunks. Runs entirely against the
+# URMA mock-backed coverage of the UrmaWriteImpl chunking contract: writes above 4 MiB target two balanced chunks,
+# while a smaller device write limit can require more. Runs entirely against the
 # mock backend (imported peer jetty/segment + memcpy post), so it needs no configured device.
 ds_cc_test(
     name = "urma_write_chunk_split_test",

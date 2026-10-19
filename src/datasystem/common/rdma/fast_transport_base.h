@@ -36,6 +36,16 @@ struct UrmaWriteFailure {
 
 static constexpr int URMA_PORT_UNAVAILABLE_STATUS = 4;
 static constexpr int URMA_REMOTE_ACK_TIMEOUT_STATUS = 9;
+/** @brief Fixed number of arenas in the UB transport memory pool. */
+static constexpr uint32_t UB_TRANSPORT_ARENA_NUM = 4;
+/** @brief Fixed source-chip inflight-WR difference threshold published by new Workers. */
+static constexpr uint32_t UB_NUMA_INFLIGHT_WR_DIFF_THRESHOLD = 15;
+/** @brief Fixed number of URMA completion records polled per call. */
+static constexpr uint32_t URMA_COMPLETION_POLL_BATCH_SIZE = 16;
+/** @brief Fixed retiring-or-pending send-lane headroom above the active pool. */
+static constexpr uint32_t URMA_SEND_LANE_REFILL_HEADROOM = 200;
+/** @brief Largest URMA write kept in one target chunk when the device allows it. */
+static constexpr uint64_t URMA_WRITE_BALANCE_THRESHOLD_BYTES = 4ULL * 1024ULL * 1024ULL;
 
 /**
  * @brief Register fast transport memory (as segment).
@@ -107,7 +117,7 @@ bool IsRegisterWholeArenaEnabled();
 
 /**
  * @brief Check whether UB numa affinity optimization is enabled.
- * @return True if the feature flag, URMA and whole-arena registration are all enabled.
+ * @return True if the fixed or negotiated policy, URMA, and whole-arena registration are all enabled.
  */
 bool IsUbNumaAffinityEnabled();
 

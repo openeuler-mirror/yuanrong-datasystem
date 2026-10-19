@@ -133,4 +133,20 @@ TEST(WorkerServiceUbHealthTest, HeartbeatConsumerRejectsSummaryFromAnotherWorker
     EXPECT_EQ(notifications, 0u);
     EXPECT_EQ(cache.Size(), 0u);
 }
+
+TEST(WorkerRegisterClientUbPolicyTest, PublishesEnabledAffinityAndFixedThreshold)
+{
+    RegisterClientRspPb rsp;
+    WorkerServiceImpl::PopulateUbRegisterClientPolicy(rsp, true);
+    EXPECT_TRUE(rsp.ub_numa_affinity_enabled());
+    EXPECT_EQ(rsp.ub_numa_inflight_wr_diff_threshold(), UB_NUMA_INFLIGHT_WR_DIFF_THRESHOLD);
+}
+
+TEST(WorkerRegisterClientUbPolicyTest, PublishesDisabledAffinityAndFixedThreshold)
+{
+    RegisterClientRspPb rsp;
+    WorkerServiceImpl::PopulateUbRegisterClientPolicy(rsp, false);
+    EXPECT_FALSE(rsp.ub_numa_affinity_enabled());
+    EXPECT_EQ(rsp.ub_numa_inflight_wr_diff_threshold(), UB_NUMA_INFLIGHT_WR_DIFF_THRESHOLD);
+}
 }  // namespace datasystem::worker

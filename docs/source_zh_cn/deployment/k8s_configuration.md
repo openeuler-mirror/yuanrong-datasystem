@@ -146,7 +146,6 @@ global:
 | global.rpc.ocWorkerWorkerDirectPort | int | `0` | 对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延 |
 | global.rpc.rpcThreadNum | int | `128` | 配置服务端的RPC线程数，必须为大于0的数 |
 | global.rpc.ocThreadNum | int | `64` | 配置服务端用于处理对象/KV缓存的业务线程数 |
-| global.rpc.ioThreadNice | int | `0` | 指定部分 IO 线程的 nice 值，取值范围：[-20, 19]。0 表示跳过 nice 调整并保留线程继承的 nice 值；仅非 0 值调用 `setpriority`；设置负值通常需要相应权限 |
 | global.rpc.brpc.eventDispatcherNum | int | `0` | brpc 进程级事件分发器数量。0 表示不覆盖 brpc 默认值 1；大于 1 时按 fd 哈希分摊 socket 读写事件，可缓解大量连接同时活跃时的首包读取排队，但不会并行化单个监听 fd 的 accept。该值仅在进程首次初始化 brpc 前生效，修改后需要重启 Worker |
 | global.rpc.brpc.brpcServerNumThreads | int | `64` | brpc 服务端工作线程数（bthread 工作线程池大小） |
 | global.rpc.brpc.brpcMaxConcurrency | int | `128` | 单个 brpc 服务的最大并发在途 RPC 数，0 表示不限制。推荐值为 `brpcServerNumThreads` 的 2 倍（如 64 线程对应 128）。超过该值时 brpc 会立即向客户端返回 ELIMIT，避免慢请求耗尽 bthread 导致 OOM。该值不得小于 `brpcServerNumThreads` |
@@ -457,9 +456,7 @@ global:
 | global.performance.enableP2pTransfer | bool | `false` | 是否开启异构对象传输协议支持点对点传输 |
 | global.performance.enableWorkerWorkerBatchGet | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |
 | global.performance.enableUrma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输，开启后worker启动时会自动预热URMA worker-worker连接 |
-| global.performance.urmaPollSize | int | `8` | 一次可轮询的完整记录数量，该设备最多可轮询16条记录 |
 | global.performance.urmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
-| global.performance.urmaEventMode | bool | `false` | 是否使用中断模式轮询完成事件 |
 | global.performance.urmaFailoverSuccessRateRatio | double | `0.5` | 客户端 URMA 数据面成功率阈值，用于触发 worker failover 评估。取值范围 `[0.0, 1.0]`，设为 `0.0` 时禁用 URMA failover。仅在 `global.performance.enableUrma=true` 时生效 |
 | global.performance.urmaFailoverMinSampleCount | uint32 | `5` | 在每个 `client_dead_timeout_s` 窗口内进行 failover 评估所需的最小 URMA 数据面样本数，样本数不足时不触发 failover。仅在 `global.performance.enableUrma=true` 时生效 |
 | global.performance.enablePipelineH2d | bool | `false` | 是否开启 pipeline Host-to-Device（H2D）流水线传输，将主机侧数据准备与设备侧拷贝重叠以提升传输性能。仅在 `global.performance.enableUrma=true` 时生效，否则被忽略 |
@@ -472,6 +469,11 @@ global:
 | global.performance.ocWorkerAggregateSingleMax | int | `65536` | 批量处理worker最大单个项目大小，默认为64KB |
 | global.performance.ocWorkerWorkerParallelMin | int | `100` | 并行工作线程批处理响应的最小数据计数，默认值为100 |
 | global.performance.ocWorkerWorkerParallelNums | int | `16` | worker并行数量，0表示无限制 |
+
+URMA 内部固定使用轮询完成模式（单次最多 16 条）、4 个 Client 传输 Arena、200 条 send lane refill 余量和
+15 的 inflight WR 差值阈值。4 MiB 及以下的写请求使用一个分片，更大的请求目标为两个均衡分片；设备单次
+写上限更小时会继续增加分片数。NUMA 拓扑不可读或 `mbind` 失败时会记录 WARNING 并跳过剩余绑定，
+不会中止 Client 初始化。
 
 ### AK/SK相关配置
 

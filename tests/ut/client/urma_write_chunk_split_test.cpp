@@ -14,10 +14,7 @@
  * limitations under the License.
  */
 
-// Covers the UrmaWriteImpl chunking contract: when the configured max write size (bounded by the
-// device cap) forces a split, the payload must be divided into the minimum number of chunks with
-// even per-chunk sizes (8MB/5MB limit -> 4+4, not 5+3). Runs against the URMA mock backend so the
-// post/wait path, event registration, and chunk traces are exercised without a real device.
+// Covers the UrmaWriteImpl fixed chunking policy and device-capability fallback through the URMA mock backend.
 
 #include <gtest/gtest.h>
 
@@ -42,9 +39,7 @@
 #include "datasystem/common/util/raii.h"
 
 DS_DECLARE_bool(enable_urma);
-DS_DECLARE_uint64(urma_max_write_size_mb);
 DS_DECLARE_uint32(urma_send_jetty_lane_pool_size);
-DS_DECLARE_uint32(urma_send_jetty_lane_refill_extra_size);
 
 namespace datasystem {
 namespace {
@@ -65,26 +60,19 @@ protected:
             GTEST_SKIP() << "Chunk-split coverage requires the URMA mock backend (--config=urma_mock).";
         }
         const auto savedEnableUrma = FLAGS_enable_urma;
-        const auto savedMaxWriteSizeMb = FLAGS_urma_max_write_size_mb;
         const auto savedLanePoolSize = FLAGS_urma_send_jetty_lane_pool_size;
-        const auto savedLaneRefillExtraSize = FLAGS_urma_send_jetty_lane_refill_extra_size;
         flagRestore_.AddTask([savedEnableUrma] { FLAGS_enable_urma = savedEnableUrma; });
-        flagRestore_.AddTask([savedMaxWriteSizeMb] { FLAGS_urma_max_write_size_mb = savedMaxWriteSizeMb; });
         flagRestore_.AddTask([savedLanePoolSize] { FLAGS_urma_send_jetty_lane_pool_size = savedLanePoolSize; });
-        flagRestore_.AddTask([savedLaneRefillExtraSize] {
-            FLAGS_urma_send_jetty_lane_refill_extra_size = savedLaneRefillExtraSize;
-        });
         FLAGS_enable_urma = true;
-        FLAGS_urma_max_write_size_mb = 1;
         FLAGS_urma_send_jetty_lane_pool_size = 4;
-        FLAGS_urma_send_jetty_lane_refill_extra_size = 4;
 
         auto &manager = UrmaManager::Instance();
         ASSERT_TRUE(manager.Init(HostPort("127.0.0.1", 0)).IsOk()) << "UrmaManager::Init failed on mock backend";
         ASSERT_NE(manager.urmaResource_, nullptr);
-        // The mock device cap (1GB) is far above the 1MB flag, so the flag is the effective limit.
-        maxWriteSize_ = manager.urmaResource_->GetMaxWriteSize();
-        ASSERT_EQ(maxWriteSize_, kMb) << "expected the 1MB flag to be the effective max write size";
+        const auto savedDeviceMaxWriteSize = manager.urmaResource_->urmaDeviceAttribute_.dev_cap.max_write_size;
+        flagRestore_.AddTask([resource = manager.urmaResource_.get(), savedDeviceMaxWriteSize] {
+            resource->urmaDeviceAttribute_.dev_cap.max_write_size = savedDeviceMaxWriteSize;
+        });
 
         UrmaHandshakeReqPb handshake;
         handshake.set_eid(kFakeEid);
@@ -121,7 +109,7 @@ protected:
     std::vector<std::tuple<uint64_t, uint64_t, uint64_t>> WriteAndCollectChunks(uint64_t dataSize, Status &writeRc)
     {
         auto &manager = UrmaManager::Instance();
-        const uint64_t bufferRoundUp = ((dataSize + kMb - 1) / kMb) * kMb;
+        const uint64_t bufferRoundUp = std::max(kMb, ((dataSize + kMb - 1) / kMb) * kMb);
         MmapBuffer payload(bufferRoundUp);
         if (!payload.IsValid()) {
             writeRc = Status(K_OUT_OF_MEMORY, "Failed to allocate URMA test payload");
@@ -167,14 +155,13 @@ protected:
     }
 
     static void ExpectEvenChunks(const std::vector<std::tuple<uint64_t, uint64_t, uint64_t>> &chunks,
-                                 uint64_t dataSize, uint64_t maxWriteSize, const char *context)
+                                 uint64_t dataSize, uint64_t maxWriteSize, uint64_t expectedCount,
+                                 const char *context)
     {
         ASSERT_FALSE(chunks.empty()) << context;
-        const uint64_t expectedCount = (dataSize + maxWriteSize - 1) / maxWriteSize;
-        ASSERT_EQ(chunks.size(), expectedCount) << context << ": chunk count is not minimal";
-        // Even split within the minimal count: every non-final chunk is ceil(dataSize/count),
-        // which never exceeds maxWriteSize; the final chunk carries the remainder.
-        const uint64_t expectedChunkSize = (dataSize + expectedCount - 1) / expectedCount;
+        ASSERT_EQ(chunks.size(), expectedCount) << context << ": chunk count mismatch";
+        const uint64_t expectedChunkSize =
+            dataSize / expectedCount + (dataSize % expectedCount == 0 ? 0 : 1);
         uint64_t summedSize = 0;
         uint64_t smallestChunk = std::numeric_limits<uint64_t>::max();
         uint64_t largestChunk = 0;
@@ -182,7 +169,7 @@ protected:
             const auto &[chunkIndex, chunkCount, chunkSize] = chunks[i];
             EXPECT_EQ(chunkIndex, i + 1) << context << ": chunk index out of order";
             EXPECT_EQ(chunkCount, expectedCount) << context << ": chunk count mismatch across events";
-            EXPECT_LE(chunkSize, maxWriteSize) << context << ": chunk exceeds the configured max write size";
+            EXPECT_LE(chunkSize, maxWriteSize) << context << ": chunk exceeds the device max write size";
             if (i + 1 < chunks.size()) {
                 EXPECT_EQ(chunkSize, expectedChunkSize) << context << ": non-final chunk is not evenly split";
             }
@@ -196,7 +183,6 @@ protected:
             << context << ": final chunk does not carry the remainder";
     }
 
-    uint64_t maxWriteSize_ = 0;
     RaiiPlus flagRestore_;
 
 private:
@@ -243,19 +229,49 @@ private:
     };
 };
 
-TEST_F(UrmaWriteChunkSplitTest, SplitUsesMinimumCountAndBalancesChunks)
+TEST_F(UrmaWriteChunkSplitTest, FixedPolicyBalancesChunksWithinDeviceLimit)
 {
-    const std::vector<std::pair<uint64_t, const char *>> cases = {
-        { maxWriteSize_, "limit payload" },
-        { maxWriteSize_ + 1, "limit plus one byte" },
-        { 2 * maxWriteSize_ + 3 * kMb / 4, "three uneven chunks" },
+    struct TestCase {
+        uint64_t dataSize;
+        uint64_t deviceMaxWriteSize;
+        uint64_t expectedChunkCount;
+        const char *context;
     };
-    for (const auto &[dataSize, context] : cases) {
+    const std::vector<TestCase> cases = {
+        { 1, 64 * kMb, 1, "single byte" },
+        { 4 * kMb, 64 * kMb, 1, "four MiB boundary" },
+        { 4 * kMb + 1, 64 * kMb, 2, "boundary plus one byte" },
+        { 8 * kMb, 64 * kMb, 2, "eight MiB balanced" },
+        { 16 * kMb, 64 * kMb, 2, "sixteen MiB balanced" },
+        { 16 * kMb, 3 * kMb, 6, "device limit requires extra chunks" },
+    };
+    auto &manager = UrmaManager::Instance();
+    for (const auto &[dataSize, deviceMaxWriteSize, expectedChunkCount, context] : cases) {
+        manager.urmaResource_->urmaDeviceAttribute_.dev_cap.max_write_size = deviceMaxWriteSize;
         Status writeRc;
         const auto chunks = WriteAndCollectChunks(dataSize, writeRc);
         ASSERT_TRUE(writeRc.IsOk()) << context << ": " << writeRc.ToString();
-        ExpectEvenChunks(chunks, dataSize, maxWriteSize_, context);
+        ExpectEvenChunks(chunks, dataSize, deviceMaxWriteSize, expectedChunkCount, context);
     }
+}
+
+TEST_F(UrmaWriteChunkSplitTest, ZeroSizeSucceedsBeforeCheckingDeviceLimit)
+{
+    auto &manager = UrmaManager::Instance();
+    manager.urmaResource_->urmaDeviceAttribute_.dev_cap.max_write_size = 0;
+    Status writeRc;
+    const auto chunks = WriteAndCollectChunks(0, writeRc);
+    EXPECT_TRUE(writeRc.IsOk()) << writeRc.ToString();
+    EXPECT_TRUE(chunks.empty());
+}
+
+TEST_F(UrmaWriteChunkSplitTest, NonZeroSizeRejectsZeroDeviceLimit)
+{
+    auto &manager = UrmaManager::Instance();
+    manager.urmaResource_->urmaDeviceAttribute_.dev_cap.max_write_size = 0;
+    Status writeRc;
+    EXPECT_TRUE(WriteAndCollectChunks(1, writeRc).empty());
+    EXPECT_TRUE(writeRc.IsError());
 }
 
 }  // namespace

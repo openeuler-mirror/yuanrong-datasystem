@@ -36,6 +36,7 @@
 #include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/object_cache/ub_health_summary_codec.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
+#include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/compatibility_manager.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
@@ -342,6 +343,12 @@ Status WorkerServiceImpl::AddRegisteringClient(
     return Status::OK();
 }
 
+void WorkerServiceImpl::PopulateUbRegisterClientPolicy(RegisterClientRspPb &rsp, bool numaAffinityEnabled)
+{
+    rsp.set_ub_numa_affinity_enabled(numaAffinityEnabled);
+    rsp.set_ub_numa_inflight_wr_diff_threshold(UB_NUMA_INFLIGHT_WR_DIFF_THRESHOLD);
+}
+
 void WorkerServiceImpl::PopulateRegisterClientResponse(
     RegisterClientRspPb &rsp, const ClientKey &clientId, const std::string &tenantId, uint32_t lockId,
     uint32_t pipelineQueueId, bool supportMultiShmRefCount, bool shmEnabled, int fd, uint64_t mmapSize,
@@ -377,9 +384,8 @@ void WorkerServiceImpl::PopulateRegisterClientResponse(
 #ifdef USE_URMA
     if (IsUrmaEnabled()) {
         rsp.set_ub_runtime_enabled(true);
-        rsp.set_ub_numa_affinity_enabled(IsUbNumaAffinityEnabled());
+        PopulateUbRegisterClientPolicy(rsp, IsUbNumaAffinityEnabled());
         rsp.set_ub_numa_rr_type(FLAGS_ub_numa_rr_type);
-        rsp.set_ub_numa_inflight_wr_diff_threshold(FLAGS_ub_numa_inflight_wr_diff_threshold);
         rsp.set_ub_numa_src_chip_policy(FLAGS_ub_numa_src_chip_policy);
         // fast_transport_mode describes this endpoint only. Keep it as SHM for a same-host client, even though
         // ub_runtime_enabled above advertises process-wide UB capability for connections to other workers.

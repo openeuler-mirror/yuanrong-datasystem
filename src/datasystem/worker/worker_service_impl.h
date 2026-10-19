@@ -157,6 +157,7 @@ private:
     Status AddRegisteringClient(const RegisterClientReqPb &req, const ClientKey &clientId,
                                 const std::string &tenantId, const CompatibilityVersion &compatibilityVersion,
                                 uint32_t &lockId, uint32_t &pipelineQueueId, bool &supportMultiShmRefCount);
+    static void PopulateUbRegisterClientPolicy(RegisterClientRspPb &rsp, bool numaAffinityEnabled);
     void PopulateRegisterClientResponse(RegisterClientRspPb &rsp, const ClientKey &clientId,
                                         const std::string &tenantId, uint32_t lockId, uint32_t pipelineQueueId,
                                         bool supportMultiShmRefCount, bool shmEnabled, int fd, uint64_t mmapSize,

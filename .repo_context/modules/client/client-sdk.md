@@ -92,7 +92,7 @@
   - `KVClientConfig::Builder::UrmaLogThresholdUs` sets the startup-only process-wide
     `urma_log_threshold_us` (default 500 microseconds, positive uint32). It uses the existing first-KV-Init
     snapshot and conflict rules, has no environment variable, and cannot be updated through UpdateConfig.
-    Only URMA polling-mode (`urma_event_mode=false`) gap, poll-call, and sleep INFO logs use this threshold;
+    Only URMA polling gap, poll-call, and sleep INFO logs use this threshold;
     elapsed time must be strictly greater, independently of `enable_urma_perf` and subject to log severity.
     Polling reads an independent atomic threshold published by successful flag validation, so Object/Hetero Init
     may start URMA before the first KV Init without racing the ordinary flag variable.
