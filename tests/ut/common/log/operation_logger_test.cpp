@@ -31,16 +31,15 @@
 
 #include "gtest/gtest.h"
 #include "gmock/gmock.h"
+#include <spdlog/async.h>
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/logging.h"
-#include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/file_util.h"
 
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(log_dir);
 DS_DECLARE_string(log_filename);
-DS_DECLARE_bool(log_async);
 
 namespace datasystem {
 namespace {
@@ -63,6 +62,20 @@ std::string ReadFile(const std::string &path)
     return buffer.str();
 }
 
+bool InitOperationLogger(const std::string &role)
+{
+    if (!ds_spdlog::thread_pool()) {
+        ds_spdlog::init_thread_pool(1024, 1);
+    }
+    return OperationLogger::Instance().Init(role);
+}
+
+void ShutdownAndDrainOperationLogger()
+{
+    OperationLogger::Instance().Shutdown();
+    ds_spdlog::shutdown();
+}
+
 class OperationLoggerTest : public ::testing::Test {
 protected:
     void SetUp() override
@@ -73,12 +86,11 @@ protected:
         FLAGS_cluster_name = "operation-logger-test-cluster";
         FLAGS_log_dir = logDir_;
         FLAGS_log_filename = "test_worker";
-        FLAGS_log_async = false;
     }
 
     void TearDown() override
     {
-        OperationLogger::Instance().Shutdown();
+        ShutdownAndDrainOperationLogger();
         if (!logDir_.empty()) {
             (void)RemoveAll(logDir_);
         }
@@ -93,9 +105,9 @@ protected:
 
 TEST_F(OperationLoggerTest, WritesConfigChangedLine)
 {
-    ASSERT_TRUE(OperationLogger::Instance().Init("worker"));
+    ASSERT_TRUE(InitOperationLogger("worker"));
     OperationLogger::Instance().LogConfigChanged("minloglevel", "0", "1");
-    OperationLogger::Instance().Shutdown();
+    ShutdownAndDrainOperationLogger();
 
     const std::string path = logDir_ + "/test_worker_operation.log";
     const std::string content = ReadFile(path);
@@ -104,9 +116,9 @@ TEST_F(OperationLoggerTest, WritesConfigChangedLine)
 
 TEST_F(OperationLoggerTest, MasksSensitiveValuesInConfigChanged)
 {
-    ASSERT_TRUE(OperationLogger::Instance().Init("worker"));
+    ASSERT_TRUE(InitOperationLogger("worker"));
     OperationLogger::Instance().LogConfigChanged("etcd_password", "old-secret", "new-secret");
-    OperationLogger::Instance().Shutdown();
+    ShutdownAndDrainOperationLogger();
 
     const std::string path = logDir_ + "/test_worker_operation.log";
     const std::string content = ReadFile(path);
@@ -117,9 +129,9 @@ TEST_F(OperationLoggerTest, MasksSensitiveValuesInConfigChanged)
 
 TEST_F(OperationLoggerTest, WritesOperationStartStop)
 {
-    ASSERT_TRUE(OperationLogger::Instance().Init("client"));
+    ASSERT_TRUE(InitOperationLogger("client"));
     OperationLogger::Instance().LogOperationStop();
-    OperationLogger::Instance().Shutdown();
+    ShutdownAndDrainOperationLogger();
 
     const std::string path = logDir_ + "/test_worker_operation.log";
     const std::string content = ReadFile(path);
@@ -130,8 +142,8 @@ TEST_F(OperationLoggerTest, WritesOperationStartStop)
 TEST_F(OperationLoggerTest, UsesStandardLogContextFields)
 {
     TraceGuard traceGuard = Trace::Instance().SetTraceNewID("operation-logger-test-trace");
-    ASSERT_TRUE(OperationLogger::Instance().Init("worker"));
-    OperationLogger::Instance().Shutdown();
+    ASSERT_TRUE(InitOperationLogger("worker"));
+    ShutdownAndDrainOperationLogger();
 
     const std::string path = logDir_ + "/test_worker_operation.log";
     const std::string content = ReadFile(path);
@@ -143,8 +155,8 @@ TEST_F(OperationLoggerTest, UsesStandardLogContextFields)
 
 TEST_F(OperationLoggerTest, WritesCoordinatorRole)
 {
-    ASSERT_TRUE(OperationLogger::Instance().Init(GetLogProcessRoleName(LogProcessRole::COORDINATOR)));
-    OperationLogger::Instance().Shutdown();
+    ASSERT_TRUE(InitOperationLogger(GetLogProcessRoleName(LogProcessRole::COORDINATOR)));
+    ShutdownAndDrainOperationLogger();
 
     const std::string path = logDir_ + "/test_worker_operation.log";
     const std::string content = ReadFile(path);
@@ -154,9 +166,9 @@ TEST_F(OperationLoggerTest, WritesCoordinatorRole)
 
 TEST_F(OperationLoggerTest, WritesWorkerVersionInit)
 {
-    ASSERT_TRUE(OperationLogger::Instance().Init("worker"));
+    ASSERT_TRUE(InitOperationLogger("worker"));
     OperationLogger::Instance().LogVersionInit("[abc123] [2026-08-13 09:30:00]");
-    OperationLogger::Instance().Shutdown();
+    ShutdownAndDrainOperationLogger();
 
     const std::string content = ReadFile(logDir_ + "/test_worker_operation.log");
     EXPECT_THAT(content, testing::HasSubstr(
@@ -166,9 +178,9 @@ TEST_F(OperationLoggerTest, WritesWorkerVersionInit)
 
 TEST_F(OperationLoggerTest, WritesCoordinatorVersionInit)
 {
-    ASSERT_TRUE(OperationLogger::Instance().Init(GetLogProcessRoleName(LogProcessRole::COORDINATOR)));
+    ASSERT_TRUE(InitOperationLogger(GetLogProcessRoleName(LogProcessRole::COORDINATOR)));
     OperationLogger::Instance().LogVersionInit("NO GIT_HASH FIXME");
-    OperationLogger::Instance().Shutdown();
+    ShutdownAndDrainOperationLogger();
 
     const std::string content = ReadFile(logDir_ + "/test_worker_operation.log");
     EXPECT_THAT(content,
@@ -177,7 +189,7 @@ TEST_F(OperationLoggerTest, WritesCoordinatorVersionInit)
 
 TEST_F(OperationLoggerTest, MasksSensitiveFlagsInConfigInit)
 {
-    ASSERT_TRUE(OperationLogger::Instance().Init("worker"));
+    ASSERT_TRUE(InitOperationLogger("worker"));
     OperationLogger::Instance().LogConfigInit("--minloglevel=0\n"
                                               "--system_access_key=secret\n"
                                               "--etcd_password=etcd-secret\n"
@@ -185,7 +197,7 @@ TEST_F(OperationLoggerTest, MasksSensitiveFlagsInConfigInit)
                                               "--yuanrong_iam_passphrase=iam-secret\n"
                                               "--yuanrong_iam_key=/tmp/iam.key\n"
                                               "--v=1\n");
-    OperationLogger::Instance().Shutdown();
+    ShutdownAndDrainOperationLogger();
 
     const std::string path = logDir_ + "/test_worker_operation.log";
     const std::string content = ReadFile(path);
@@ -203,9 +215,9 @@ TEST_F(OperationLoggerTest, MasksSensitiveFlagsInConfigInit)
 
 TEST_F(OperationLoggerTest, WritesConfigFailedLine)
 {
-    ASSERT_TRUE(OperationLogger::Instance().Init("worker"));
+    ASSERT_TRUE(InitOperationLogger("worker"));
     OperationLogger::Instance().LogConfigFailed("rpc_thread_num", "not modifiable");
-    OperationLogger::Instance().Shutdown();
+    ShutdownAndDrainOperationLogger();
 
     const std::string path = logDir_ + "/test_worker_operation.log";
     const std::string content = ReadFile(path);
@@ -214,7 +226,7 @@ TEST_F(OperationLoggerTest, WritesConfigFailedLine)
 
 TEST_F(OperationLoggerTest, RotatedOperationLogFilesMatchLogManagerGlob)
 {
-    ASSERT_TRUE(OperationLogger::Instance().Init("worker"));
+    ASSERT_TRUE(InitOperationLogger("worker"));
     const std::string rotatedName = logDir_ + "/test_worker_operation.20260101120000.log";
     {
         std::ofstream out(rotatedName, std::ios::out);
@@ -224,7 +236,7 @@ TEST_F(OperationLoggerTest, RotatedOperationLogFilesMatchLogManagerGlob)
     const std::string pattern = logDir_ + "/test_worker_operation." + "*[0-9].log";
     ASSERT_TRUE(Glob(pattern, files).IsOk());
     EXPECT_EQ(files.size(), 1u);
-    OperationLogger::Instance().Shutdown();
+    ShutdownAndDrainOperationLogger();
 }
 
 TEST_F(OperationLoggerTest, OperationLoggerRoleFilter)
@@ -254,11 +266,11 @@ TEST_F(OperationLoggerTest, OperationLoggerRoleFilter)
 
     auto runRole = [&](const std::string &role, const std::string &logBasename) -> std::string {
         FLAGS_log_filename = logBasename;
-        if (!OperationLogger::Instance().Init(role)) {
+        if (!InitOperationLogger(role)) {
             return std::string();
         }
         OperationLogger::Instance().LogConfigInit(snapshot);
-        OperationLogger::Instance().Shutdown();
+        ShutdownAndDrainOperationLogger();
         const std::string path = logDir_ + "/" + logBasename + "_operation.log";
         return ReadFile(path);
     };
@@ -300,7 +312,7 @@ TEST_F(OperationLoggerTest, OperationLoggerRoleChangeFilter)
 
     auto runRoleChanges = [&](const std::string &role, const std::string &logBasename) -> std::string {
         FLAGS_log_filename = logBasename;
-        if (!OperationLogger::Instance().Init(role)) {
+        if (!InitOperationLogger(role)) {
             return std::string();
         }
         OperationLogger::Instance().LogConfigChanged(clientFlag, "5000", "8000");
@@ -308,7 +320,7 @@ TEST_F(OperationLoggerTest, OperationLoggerRoleChangeFilter)
         OperationLogger::Instance().LogConfigChanged(sensitiveWorkerFlag, "plain_secret", "rotated_secret");
         OperationLogger::Instance().LogConfigFailed(clientFlag, "invalid value");
         OperationLogger::Instance().LogConfigFailed(workerFlag, "out of range");
-        OperationLogger::Instance().Shutdown();
+        ShutdownAndDrainOperationLogger();
         const std::string path = logDir_ + "/" + logBasename + "_operation.log";
         return ReadFile(path);
     };
@@ -345,7 +357,7 @@ TEST_F(OperationLoggerTest, OperationLevelFailuresAlwaysRecordedOnClient)
     // Operation-level failures (name is an operation tag, not a gflag) must always be recorded,
     // even on the client role -- the client allow-list filter must not drop them. These mirror
     // the three real call sites: API disabled by file monitor, illegal JSON, monitor path conflict.
-    ASSERT_TRUE(OperationLogger::Instance().Init("client"));
+    ASSERT_TRUE(InitOperationLogger("client"));
     OperationLogger::Instance().LogConfigApiFailed("UpdateConfig",
         "UpdateConfig: file monitor is enabled, API disabled");
     OperationLogger::Instance().LogConfigApiFailed("UpdateConfig", "UpdateConfig: invalid JSON: ...");
@@ -353,7 +365,7 @@ TEST_F(OperationLoggerTest, OperationLevelFailuresAlwaysRecordedOnClient)
         "UpdateConfig: MonitorConfigPath must be empty when using UpdateConfig API");
     // A worker-only gflag failure is still filtered out on client (unchanged LogConfigFailed behavior).
     OperationLogger::Instance().LogConfigFailed("eviction_high_watermark_ratio", "out of range");
-    OperationLogger::Instance().Shutdown();
+    ShutdownAndDrainOperationLogger();
 
     const std::string path = logDir_ + "/test_worker_operation.log";
     const std::string content = ReadFile(path);
@@ -369,7 +381,7 @@ TEST_F(OperationLoggerTest, OperationLevelFailuresAlwaysRecordedOnClient)
 
 TEST_F(OperationLoggerTest, ConcurrentShutdownInitNoRoleLoggerCrossGeneration)
 {
-    ASSERT_TRUE(OperationLogger::Instance().Init("worker"));
+    ASSERT_TRUE(InitOperationLogger("worker"));
 
     std::atomic<bool> stop{false};
     std::thread writer([&] {
@@ -390,7 +402,7 @@ TEST_F(OperationLoggerTest, ConcurrentShutdownInitNoRoleLoggerCrossGeneration)
     });
     writer.join();
     cycler.join();
-    OperationLogger::Instance().Shutdown();
+    ShutdownAndDrainOperationLogger();
 
     const std::string path = logDir_ + "/test_worker_operation.log";
     EXPECT_FALSE(ReadFile(path).empty());

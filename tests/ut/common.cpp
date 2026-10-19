@@ -27,7 +27,6 @@
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 
 DS_DECLARE_uint32(arena_per_tenant);
-DS_DECLARE_bool(alsologtostderr);
 DS_DECLARE_string(log_dir);
 
 #define TO_STR(param) #param
@@ -76,7 +75,6 @@ void ClearTestCaseDir(const std::string &path)
 
 CommonTest::CommonTest()
 {
-    FLAGS_alsologtostderr = true;
     std::string caseName;
     std::string name;
     GetCurTestName(caseName, name);

@@ -1497,7 +1497,6 @@ ExternalClusterOptions::ExternalClusterOptions()
       logRollingSecs(DEFAULT_logRollingSecs),
       vLogLevel(1),
       logCompress(true),
-      logAsync(true),
       isObjectCache(true),
       masterIdx(0),
       addNodeTime(0),

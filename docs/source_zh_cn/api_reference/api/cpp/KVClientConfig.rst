@@ -105,12 +105,6 @@ KVClientConfig
        设置 SDK 的 verbose（VLOG）日志级别。数值越大，输出的调试日志越详细，一般用于排查
        内部细节。取值范围 ``[0, 3]``，默认值为 ``0``。对应环境变量 ``DATASYSTEM_LOG_V``。
 
-    .. cpp:function:: Builder &StderrThreshold(int level)
-
-       控制哪些级别的日志同时复制到 stderr。取值含义同 ``MinLogLevel`` （``0``=INFO、
-       ``1``=WARNING、``2``=ERROR、``3``=FATAL）；设为 ``3`` 表示只有 FATAL 输出到 stderr。
-       取值范围 ``[0, 3]``，默认值为 ``3``（FATAL）。对应环境变量 ``DATASYSTEM_STD_THRESHOLD``。
-
     .. cpp:function:: Builder &MaxLogSize(int size)
 
        设置日志轮转前的最大大小（MiB）。取值范围 ``[1, 4095]``，默认值为 ``100``。
@@ -131,31 +125,12 @@ KVClientConfig
        设置日志保留天数。``0`` 表示不按时间清理日志。默认值为 ``0``。
        对应环境变量 ``DATASYSTEM_LOG_RETENTION_DAY``。
 
-    .. cpp:function:: Builder &LogToStderr(bool enable)
-
-       设置是否将日志仅输出到 stderr 而不写文件。为 ``true`` 时所有日志输出到 stderr 并关闭
-       文件输出；为 ``false`` 时日志写入文件。默认值为 ``false``。对应环境变量
-       ``DATASYSTEM_LOG_TO_STDERR``。该参数与 ``AlsoLogToStderr`` （在文件输出基础上额外输出
-       到 stderr）、``LogOnlyWriteInfoFile`` （控制是否按级别拆分文件）相互独立。
-
-    .. cpp:function:: Builder &AlsoLogToStderr(bool enable)
-
-       设置是否在写文件的同时也输出到 stderr。为 ``true`` 时日志同时写文件和 stderr；
-       为 ``false`` 时只写文件。默认值为 ``false``。对应环境变量
-       ``DATASYSTEM_ALSO_LOG_TO_STDERR``。当 ``LogToStderr`` 为 ``true`` 时本参数无效
-       （此时已全部重定向到 stderr）。
-
     .. cpp:function:: Builder &LogOnlyWriteInfoFile(bool enable)
 
        设置是否将所有级别的日志都写入单个 INFO 日志文件。为 ``true`` 时所有级别日志只写入
        ``.INFO`` 文件；为 ``false`` 时额外生成 ``.WARNING``、``.ERROR`` 文件，高级别日志按
        等级写入各自文件。默认值为 ``true``。对应环境变量
        ``DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE``。
-
-    .. cpp:function:: Builder &LogAsyncEnable(bool enable)
-
-       设置是否启用异步日志写入。为 ``true`` 时异步写日志以降低前台时延；为 ``false`` 时同步
-       写入。默认值为 ``true``。
 
     .. cpp:function:: Builder &LogAsyncQueueSize(uint32_t size)
 

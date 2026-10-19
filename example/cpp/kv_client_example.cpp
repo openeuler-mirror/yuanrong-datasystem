@@ -84,7 +84,6 @@ static Status BuildClientConfig(KVClientConfig &clientConfig)
         .MaxLogSize(100)
         .MaxLogFileNum(10)
         .LogRetentionDay(7)
-        .LogAsyncEnable(true)
         .LogAsyncQueueSize(4096)
         .Build(clientConfig);
 }

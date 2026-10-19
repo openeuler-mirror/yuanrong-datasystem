@@ -41,15 +41,11 @@
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/log_sampler.h"
 
-DS_DECLARE_bool(alsologtostderr);
-DS_DECLARE_bool(logtostderr);
-DS_DECLARE_bool(log_async);
 DS_DECLARE_double(request_sample_rate);
 DS_DECLARE_double(access_sample_rate);
 DS_DECLARE_double(diagnostic_sample_rate);
 DS_DECLARE_string(log_dir);
 DS_DECLARE_uint32(max_log_size);
-DS_DECLARE_uint32(stderrthreshold);
 
 namespace datasystem {
 namespace ut {
@@ -87,11 +83,7 @@ public:
 
     void StartLogging()
     {
-        FLAGS_alsologtostderr = false;
-        FLAGS_logtostderr = false;
-        FLAGS_stderrthreshold = LogSeverity::FATAL;
         FLAGS_max_log_size = 2048;
-        FLAGS_log_async = true;
 
         Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT, 1);
     }

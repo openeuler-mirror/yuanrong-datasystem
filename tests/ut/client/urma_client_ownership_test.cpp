@@ -22,11 +22,11 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/log/logging.h"
 #include "datasystem/common/util/raii.h"
 #include "common/binmock/binmock.h"
 
 DS_DECLARE_bool(enable_urma_perf);
-DS_DECLARE_bool(alsologtostderr);
 
 namespace datasystem {
 namespace {
@@ -299,12 +299,10 @@ TEST_F(UrmaClientOwnershipTest, OldOwnerCannotRemoveReplacement)
     ASSERT_TRUE(
         manager.FinalizeOutboundConnection(response, UrmaManager::ConnectionOwnership::CLIENT_REF, &newOwner).IsOk());
     ASSERT_NE(newOwner, oldOwner);
-    const bool savedAlsoLogToStderr = FLAGS_alsologtostderr;
-    FLAGS_alsologtostderr = true;
+    Logging::ResetLoggingRuntimeForTest();
     testing::internal::CaptureStderr();
     manager.ReleaseClientConnection(info.localAddress.ToString(), oldOwner);
     const auto logs = testing::internal::GetCapturedStderr();
-    FLAGS_alsologtostderr = savedAlsoLogToStderr;
     EXPECT_NE(logs.find("Skip releasing replaced URMA client connection owner"), std::string::npos);
     EXPECT_EQ(newOwner->GetUrmaJfrInfo().uniqueInstanceId, info.uniqueInstanceId);
     EXPECT_EQ(manager.urmaConnectionMap_.count(info.localAddress.ToString()), 1u);

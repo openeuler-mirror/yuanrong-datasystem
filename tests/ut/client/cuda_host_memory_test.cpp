@@ -37,9 +37,9 @@
 #include "datasystem/client/mmap_manager/shm_mmap_table_entry.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/log/logging.h"
 #include "datasystem/common/util/raii.h"
 
-DS_DECLARE_bool(alsologtostderr);
 DS_DECLARE_int32(v);
 
 namespace datasystem {
@@ -130,15 +130,13 @@ int SecondMemcpyAsync(void *, const void *, size_t, DsCudaMemcpyKind, void *)
 
 void VerifySlowCallbacksLogWithoutVlog()
 {
+    Logging::ResetLoggingRuntimeForTest();
     const auto oldV = FLAGS_v;
-    const auto oldStderr = FLAGS_alsologtostderr;
-    Raii restore([oldV, oldStderr] {
+    Raii restore([oldV] {
         slowCallbacks.store(false);
         FLAGS_v = oldV;
-        FLAGS_alsologtostderr = oldStderr;
     });
     FLAGS_v = 0;
-    FLAGS_alsologtostderr = true;
     slowCallbacks.store(true);
     char source = 0;
     char destination = 0;

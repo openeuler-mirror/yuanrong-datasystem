@@ -66,7 +66,7 @@ public:
     {
         opts.enableSpill = true;
         opts.workerGflagParams =
-            "-shared_memory_size_mb=12 -log_async=false -log_monitor=true -spill_size_limit="
+            "-shared_memory_size_mb=12 -log_monitor=true -spill_size_limit="
             + std::to_string(maxSize_);
         opts.numEtcd = 1;
         opts.numWorkers = 1;
@@ -489,7 +489,6 @@ public:
         opts.enableSpill = true;
         opts.workerGflagParams =
             "-shared_memory_size_mb=200 "
-            "-log_async=false "
             "-log_monitor=true "
             "-v=2 "
             "-spill_size_limit="
@@ -570,7 +569,7 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.enableSpill = true;
-        opts.workerGflagParams = "-shared_memory_size_mb=12 -log_async=false -log_monitor=true -spill_size_limit="
+        opts.workerGflagParams = "-shared_memory_size_mb=12 -log_monitor=true -spill_size_limit="
                                  + std::to_string(maxSize_);
         opts.numEtcd = 1;
         opts.numWorkers = 2;  // worker num is 2
@@ -835,7 +834,7 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.workerGflagParams =
-            "-shared_memory_size_mb=1024 -log_async=false -log_monitor=true";
+            "-shared_memory_size_mb=1024 -log_monitor=true";
         opts.numEtcd = 1;
         opts.numWorkers = 2;  // worker num is 2
         opts.numOBS = 1;
@@ -1065,7 +1064,7 @@ class KVClientWithoutL2Test : public OCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
-        opts.workerGflagParams = "-shared_memory_size_mb=1024 -log_async=false -log_monitor=true -v=2";
+        opts.workerGflagParams = "-shared_memory_size_mb=1024 -log_monitor=true -v=2";
         opts.numEtcd = 1;
         opts.numWorkers = 2;  // worker num is 2
         opts.numOBS = 0;
@@ -1122,7 +1121,7 @@ public:
     {
         opts.enableSpill = true;
         opts.workerGflagParams =
-            "-shared_memory_size_mb=10 -log_async=false -log_monitor=true -v=2 -spill_size_limit=67108864";
+            "-shared_memory_size_mb=10 -log_monitor=true -v=2 -spill_size_limit=67108864";
         opts.numEtcd = 1;
         opts.numWorkers = 2;
         opts.numOBS = 0;
@@ -1263,7 +1262,7 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.enableSpill = true;
-        opts.workerGflagParams = "-shared_memory_size_mb=10 -log_async=false -log_monitor=true -v=2";
+        opts.workerGflagParams = "-shared_memory_size_mb=10 -log_monitor=true -v=2";
         opts.numEtcd = 1;
         opts.numWorkers = 2;  // worker num is 2
         opts.numOBS = 0;

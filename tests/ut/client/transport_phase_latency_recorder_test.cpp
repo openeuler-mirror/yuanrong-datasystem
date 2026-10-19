@@ -23,9 +23,8 @@
 
 #include "datasystem/client/object_cache/transport/transport_phase_latency_recorder.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/log/logging.h"
 #include "datasystem/common/util/raii.h"
-
-DS_DECLARE_bool(alsologtostderr);
 
 namespace datasystem {
 namespace client {
@@ -38,6 +37,7 @@ constexpr char PHASE_LOG_MARKER[] = "[TransportGet] Phase latency";
 
 std::string CapturePhaseSummary(uint64_t processUs, uint64_t rpcUs)
 {
+    Logging::ResetLoggingRuntimeForTest();
     testing::internal::CaptureStderr();
     {
         TransportPhaseLatencyRecorder recorder(HostPort("127.0.0.1", 1));
@@ -59,16 +59,12 @@ TEST(TransportPhaseLatencyRecorderTest, AppliesThresholdsAndFormatsOneSummary)
 {
     const uint64_t oldProcessThreshold = FLAGS_client_slow_log_process_slower_than;
     const uint64_t oldRpcThreshold = FLAGS_client_slow_log_rpc_slower_than;
-    const bool oldAlsoLogToStderr = FLAGS_alsologtostderr;
-    Raii restoreFlags([oldProcessThreshold, oldRpcThreshold, oldAlsoLogToStderr] {
+    Raii restoreFlags([oldProcessThreshold, oldRpcThreshold] {
         FLAGS_client_slow_log_process_slower_than = oldProcessThreshold;
         FLAGS_client_slow_log_rpc_slower_than = oldRpcThreshold;
-        FLAGS_alsologtostderr = oldAlsoLogToStderr;
     });
     FLAGS_client_slow_log_process_slower_than = PROCESS_THRESHOLD_US;
     FLAGS_client_slow_log_rpc_slower_than = RPC_THRESHOLD_US;
-    FLAGS_alsologtostderr = true;
-
     const std::string rpcSlow = CapturePhaseSummary(PROCESS_BELOW_THRESHOLD_US, RPC_THRESHOLD_US);
     const std::string processSlow = CapturePhaseSummary(PROCESS_THRESHOLD_US, RPC_BELOW_THRESHOLD_US);
     const std::string allFast = CapturePhaseSummary(PROCESS_BELOW_THRESHOLD_US, RPC_BELOW_THRESHOLD_US);

@@ -463,10 +463,6 @@
         "value": "0",
         "description": "This value should be greater than or equal to 0.If log_retention_day is greater than 0, any log file from your project whose last modified time is greater than log_retention_day days will be unlinked. If log_retention_day is equal 0, will not unlink log file by time."
     },
-    "log_async": {
-        "value": "true",
-        "description": "Flush log files with async mode."
-    },
     "log_compress": {
         "value": "false",
         "description": "Compress old log files in .gz format. This parameter takes effect only when the size of the generated log is greater than max log size."

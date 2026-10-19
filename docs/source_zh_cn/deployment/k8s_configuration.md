@@ -310,7 +310,6 @@ global:
 |-----|------|---------|-------------|
 | global.log.logDir | string | `"/home/sn/datasystem/logs"` | 日志目录，服务端产生的日志将保存到此目录中，该路径会被自动挂载到宿主机同名路径下 |
 | global.log.logLevel | int | `0` | 冗余日志级别，0表示不开启冗余日志，取值范围：[0, 3] |
-| global.log.logAsync | bool | `true` | 是否开启异步刷新日志功能 |
 | global.log.logAsyncQueueSize | int | `65536` | 异步日志的消息队列大小 |
 | global.log.logCompress | bool | `false` | 是否开启日志压缩功能，当开启时会将历史日志压缩为gzip格式 |
 | global.log.logBufSecs | int | `10` | 日志消息的最大缓冲时间（以秒为单位） |
@@ -329,6 +328,10 @@ global:
 
 > **升级提示**：`global.log.logCompress` 默认关闭后，新部署或升级集群的历史日志不会再自动压缩，日志磁盘占用可能增加且滚动更快。如需保持历史压缩行为，请显式配置 `global.log.logCompress: true`；同时建议根据不压缩场景重新评估 `global.log.maxLogFileNum` 和 `global.log.maxLogSize` 的容量设置。
 
+> **日志模式说明**：正常日志固定异步写入文件。
+> 升级前请从自定义 values 和额外启动参数中删除旧的日志模式开关，
+> 否则 Worker 会因未知参数启动失败。
+
 **样例**：
 ```yaml
 global:
@@ -340,7 +343,6 @@ global:
     maxLogSize: 400
     maxLogFileNum: 25
     logRetentionDay: 0
-    logAsync: true
     logBufSecs: 10
     # 默认关闭日志压缩功能，可设置为 true 将历史日志压缩成gzip格式节约磁盘空间
     logCompress: false

@@ -1379,7 +1379,6 @@ address 清理失败，需检查 `deleted_members` 中的 `error` 字段。
 | max_log_size | int | `400` | 否 | 单个日志文件最大大小，单位为 MB，取值范围：[1, 4095] |
 | max_log_file_num | int | `25` | 是 | 每个日志级别最多保留的日志文件数；为 `0` 时不限制数量 |
 | log_retention_day | int | `0` | 否 | 日志保留天数；为 `0` 时不按时间删除日志 |
-| log_async | bool | `true` | 否 | 是否异步写入日志文件 |
 | log_compress | bool | `false` | 是 | 是否将滚动生成的历史日志压缩为 gzip 格式 |
 | logbufsecs | int | `0` | 否 | 日志消息最大缓冲时长，单位为秒 |
 | logfile_mode | int | `416` | 否 | 日志文件模式/权限 |
@@ -1515,7 +1514,6 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 |-----|------|---------|-----|-------------|
 | log_dir | string | `"./datasystem/logs"` | 否 | 日志目录，服务端产生的日志将保存到此目录中，该路径会被自动挂载到宿主机同名路径下 |
 | v | int | `0` | 是 | 冗余日志级别，0表示不开启冗余日志，取值范围：[0, 3] |
-| log_async | bool | `true` | 否 | 是否开启异步刷新日志功能 |
 | log_async_queue_size | int | `65536` | 否 | 异步日志的消息队列最大容量（消息条数） |
 | log_compress | bool | `false` | 是 | 控制是否启用日志压缩功能。启用时，历史日志将自动压缩为gzip格式存储 |
 | logbufsecs | int | `10` | 否 | 日志消息最多缓冲时长（以秒为单位） |

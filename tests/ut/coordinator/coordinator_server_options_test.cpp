@@ -35,6 +35,7 @@
 #include <unistd.h>
 
 #include <google/protobuf/descriptor.h>
+#include <spdlog/async.h>
 
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/flags/config_monitor_state.h"
@@ -68,7 +69,6 @@ DS_DECLARE_double(access_sample_rate);
 DS_DECLARE_double(diagnostic_sample_rate);
 DS_DECLARE_string(log_dir);
 DS_DECLARE_string(log_filename);
-DS_DECLARE_bool(log_async);
 DS_DECLARE_uint32(node_dead_timeout_s);
 
 namespace datasystem {
@@ -195,14 +195,14 @@ void CreateNonEmptyFile(const std::filesystem::path &path, const std::string &co
 void CreateCoordinatorConfig(const std::string &path, bool useBrpc = true)
 {
     (void)useBrpc;
-    CreateNonEmptyFile(path, std::string(R"({"log_async":{"value":"false",)")
+    CreateNonEmptyFile(path, std::string(R"({"logbufsecs":{"value":"0",)")
                             + R"("description":"Coordinator Runtime UT config."}})");
 }
 
 void CreateCoordinatorLogConfig(const std::string &path, const std::string &logFilename)
 {
     CreateNonEmptyFile(path,
-                       std::string(R"({"log_async":{"value":"false","description":"Coordinator Runtime UT config."},)")
+                       std::string(R"({"logbufsecs":{"value":"0","description":"Coordinator Runtime UT config."},)")
                            + R"("log_filename":{"value":")" + logFilename
                            + R"(","description":"Coordinator log filename."}})");
 }
@@ -451,7 +451,6 @@ protected:
         savedElectionTimeoutMs_ = FLAGS_coordinator_raft_election_timeout_ms;
         savedFailureGraceMs_ = FLAGS_coordinator_member_failure_grace_ms;
         savedDiscoveryRetryMs_ = FLAGS_coordinator_discovery_retry_interval_ms;
-        savedLogAsync_ = FLAGS_log_async;
         savedLogDir_ = FLAGS_log_dir;
         savedLogFilename_ = FLAGS_log_filename;
         Logging::ResetLoggingRuntimeForTest();
@@ -482,7 +481,6 @@ protected:
         FLAGS_coordinator_raft_election_timeout_ms = kElectionTimeoutMs;
         FLAGS_coordinator_member_failure_grace_ms = kFailureGraceMs;
         FLAGS_coordinator_discovery_retry_interval_ms = kDiscoveryRetryMs;
-        FLAGS_log_async = false;
         FLAGS_log_dir = tempDirectory_->Child("logs");
         FLAGS_log_filename.clear();
         raftFlags_ = coordinator::CoordinatorRaftFlags{ coordinatorAddress_, tempDirectory_->Child("raft-data"),
@@ -502,7 +500,6 @@ protected:
         FLAGS_coordinator_member_failure_grace_ms = savedFailureGraceMs_;
         FLAGS_coordinator_discovery_retry_interval_ms = savedDiscoveryRetryMs_;
         Logging::ResetLoggingRuntimeForTest();
-        FLAGS_log_async = savedLogAsync_;
         FLAGS_log_dir = savedLogDir_;
         FLAGS_log_filename = savedLogFilename_;
 
@@ -563,7 +560,6 @@ protected:
     int32_t savedElectionTimeoutMs_{ 0 };
     uint32_t savedFailureGraceMs_{ 0 };
     uint32_t savedDiscoveryRetryMs_{ 0 };
-    bool savedLogAsync_{ false };
     std::string savedLogDir_;
     std::string savedLogFilename_;
 };
@@ -1248,12 +1244,13 @@ TEST(CoordinatorServerOptionsTest, LifecycleRejectionsAreAuditedWithoutConfigPay
     ScopedTempDirectory tempDirectory;
     const auto originalLogDir = FLAGS_log_dir;
     const auto originalLogFilename = FLAGS_log_filename;
-    const auto originalLogAsync = FLAGS_log_async;
-    OperationLogger::Instance().Shutdown();
+    Logging::ResetLoggingRuntimeForTest();
     FLAGS_log_dir = tempDirectory.Child("logs");
     std::filesystem::create_directories(FLAGS_log_dir);
     FLAGS_log_filename = "coordinator_lifecycle_audit";
-    FLAGS_log_async = false;
+    if (!ds_spdlog::thread_pool()) {
+        ds_spdlog::init_thread_pool(1024, 1);
+    }
     EXPECT_TRUE(OperationLogger::Instance().Init("coordinator"));
     CoordinatorRuntime runtime;
     constexpr const char *kPayloadMarker = "payload-must-not-be-audited";
@@ -1264,6 +1261,7 @@ TEST(CoordinatorServerOptionsTest, LifecycleRejectionsAreAuditedWithoutConfigPay
     const auto afterStop = runtime.UpdateConfig(
         std::string(R"({"diagnostic_sample_rate":")") + kPayloadMarker + R"("})");
     OperationLogger::Instance().Shutdown();
+    ds_spdlog::shutdown();
 
     EXPECT_EQ(beforeStart.GetCode(), K_NOT_READY) << beforeStart.ToString();
     EXPECT_EQ(afterStop.GetCode(), K_SHUTTING_DOWN) << afterStop.ToString();
@@ -1277,7 +1275,6 @@ TEST(CoordinatorServerOptionsTest, LifecycleRejectionsAreAuditedWithoutConfigPay
 
     FLAGS_log_dir = originalLogDir;
     FLAGS_log_filename = originalLogFilename;
-    FLAGS_log_async = originalLogAsync;
 }
 
 TEST_F(CoordinatorElectionServiceTest, ElectionInputsAreAcceptedBeforeNetwork)

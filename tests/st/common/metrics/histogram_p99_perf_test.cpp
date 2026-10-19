@@ -41,7 +41,6 @@
 #define LLT_BIN_PATH "/tmp/ds_llt"
 #endif
 
-DS_DECLARE_bool(alsologtostderr);
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_int32(log_monitor_interval_ms);
 DS_DECLARE_string(log_dir);
@@ -112,7 +111,6 @@ protected:
 
     HistogramP99PerfTest()
     {
-        FLAGS_alsologtostderr = true;
         std::string caseName;
         std::string name;
         GetCurTestName(caseName, name);

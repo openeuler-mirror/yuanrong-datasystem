@@ -23,7 +23,6 @@
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/status_helper.h"
 
-DS_DECLARE_bool(alsologtostderr);
 DS_DECLARE_string(log_dir);
 
 namespace datasystem {
@@ -81,7 +80,6 @@ CommonTest::CommonTest() : CommonTest("")
 
 CommonTest::CommonTest(const std::string &pathSuffix)
 {
-    FLAGS_alsologtostderr = true;
     const auto *testInfo = testing::UnitTest::GetInstance()->current_test_info();
     const std::string caseName = testInfo == nullptr ? "unknown_test_suite" : testInfo->test_case_name();
     const std::string testName = testInfo == nullptr ? "unknown_test" : testInfo->name();

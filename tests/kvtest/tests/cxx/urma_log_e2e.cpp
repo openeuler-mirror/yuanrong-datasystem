@@ -69,7 +69,7 @@ int main(int argc, char **argv)
     datasystem::KVClient writer(writerOptions);
     datasystem::KVClient reader(readerOptions);
     datasystem::KVClientConfig config;
-    if (!Check(datasystem::KVClientConfig::Builder().LogDir(argv[4]).LogAsyncEnable(false).Build(config), "CONFIG")
+    if (!Check(datasystem::KVClientConfig::Builder().LogDir(argv[4]).Build(config), "CONFIG")
         || !Check(writer.Init(config), "WRITER_INIT") || !Check(reader.Init(), "READER_INIT")
         || !Check(datasystem::Context::SetTraceId("UrmaLogE2E"), "TRACE_PREFIX")
         || !Check(datasystem::inject::Set("UrmaMock.ProviderLog", "call()"), "PROVIDER_LOG_INJECT")) {

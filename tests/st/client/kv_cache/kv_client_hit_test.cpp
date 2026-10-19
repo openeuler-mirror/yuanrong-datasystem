@@ -43,7 +43,7 @@ public:
             workerAddress_.emplace_back(addr.ToString());
         }
         opts.workerGflagParams =
-            "-log_async=false -log_monitor_interval_ms=1000 -shared_memory_size_mb=1 -skip_authenticate=true -v=1 ";
+            "-log_monitor_interval_ms=1000 -shared_memory_size_mb=1 -skip_authenticate=true -v=1 ";
         opts.enableSpill = true;
         opts.numEtcd = 1;
     }

@@ -42,7 +42,7 @@ public:
         opts.numWorkers = DEFAULT_WORKER_NUM;
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
-            "-shared_memory_size_mb=5120 -v=2 -log_async=true -log_async_queue_size=4096 -logbufsecs=15";
+            "-shared_memory_size_mb=5120 -v=2 -log_async_queue_size=4096 -logbufsecs=15";
     }
 
     void SetUp() override
@@ -57,7 +57,6 @@ public:
             DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, i));
         }
 
-        EXPECT_EQ(setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "true", 1), 0);
         EXPECT_EQ(setenv("DATASYSTEM_LOG_ASYNC_QUEUE_SIZE", "2048", 1), 0);
         InitTestKVClient(0, client0_, 2000);  // Init client0 to worker 0 with 2000ms timeout
         InitTestKVClient(1, client1_, 2000);  // Init client1 to worker 1 with 2000ms timeout
@@ -70,7 +69,6 @@ public:
         client0_.reset();
         client1_.reset();
         client2_.reset();
-        EXPECT_EQ(setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "", 1), 0);
         EXPECT_EQ(setenv("DATASYSTEM_LOG_ASYNC_QUEUE_SIZE", "", 1), 0);
         ExternalClusterTest::TearDown();
     }

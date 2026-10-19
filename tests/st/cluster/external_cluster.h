@@ -65,10 +65,6 @@ public:
     // Default: false
     bool logCompress;
 
-    // Async log flush.
-    // Default: true
-    bool logAsync;
-
     // on for object cache, off for file cache
     bool isObjectCache;
 
