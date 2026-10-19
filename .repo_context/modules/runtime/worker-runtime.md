@@ -1,5 +1,18 @@
 # Worker Runtime
 
+## URMA polling log configuration
+
+- `urma_log_threshold_us` is a startup-only positive uint32 flag, default 500 microseconds.
+  It gates only the polling-mode (`urma_event_mode=false`) gap, poll-call, and sleep INFO logs in
+  `UrmaManager::PollJfcWait`; elapsed time must be strictly greater. It does not change timeouts,
+  polling cadence, event mode, or `enable_urma_perf`. Worker changes require restart.
+- dscli and both Helm configuration paths expose the same default; the values-based chart uses
+  `global.performance.urmaLogThresholdUs`, rendered through `int64` to preserve decimal uint32 values.
+  Setting 250 restores the previous diagnostic sensitivity.
+  Remove the new Worker option before downgrading to a version that does not recognize it.
+- Sources: common flag definitions/validators, `src/datasystem/common/rdma/urma_manager.cpp`,
+  `cli/deploy/conf/worker_config.json`, and the Worker configuration under both Helm chart trees.
+
 ## Scope
 
 - Paths:
