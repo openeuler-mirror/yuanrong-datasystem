@@ -73,8 +73,6 @@ DS_DECLARE_string(cluster_name);
 DS_DECLARE_uint64(client_dead_timeout_s);
 DS_DECLARE_bool(enable_huge_tlb);
 DS_DECLARE_uint32(memory_alignment);
-DS_DEFINE_uint64(oc_shm_transfer_threshold_kb, 500u,
-                 "The data threshold to transfer obj data between client and worker via shm, unit is KB");
 DS_DECLARE_bool(enable_p2p_transfer);
 DS_DECLARE_uint32(client_reconnect_wait_s);
 
@@ -355,7 +353,7 @@ void WorkerServiceImpl::PopulateRegisterClientResponse(
     rsp.set_client_id(clientId);
     rsp.set_lock_id(lockId);
     rsp.set_worker_start_id(workerStartId_);
-    rsp.set_shm_threshold(FLAGS_oc_shm_transfer_threshold_kb * KB);
+    rsp.set_shm_threshold(OC_SHM_TRANSFER_THRESHOLD_KB * KB);
     rsp.set_worker_uuid(workerUuid_);
     rsp.set_worker_compatibility_version(
         CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString());

@@ -413,11 +413,10 @@ global:
     # Huge pages require system-level configuration. use command "echo [pageNums] > /proc/sys/vm/nr_hugepages" to config the number of huge page.
     # If the system does not have enough physical memory to allocate huge pages, memory allocation will fail.
     enableHugeTlb: false
-    # Whether to allocate metadata header for object cache shared memory. Set to false to disable shm latch/visibility.
-    enableOcMetadataHeader: true
     #Due to Kubernetes' (k8s) resource calculation policies, shared memory is sometimes counted twice, which can lead to client crashes.
     #To address this issue, fallocate is employed to link the client and worker nodes for shared memory,
-    #thus correcting the memory calculation errors. By default, fallocate is enabled.
+    #thus correcting the memory calculation errors. The process-level default is disabled; Kubernetes deployments
+    #should keep this enabled explicitly.
     #Enabling fallocate will lower the efficiency of memory allocation
     enableFallocate: true
     # Avoiding page faults during copying improves runtime performance but may result in longer worker startup times (depending on sharedMemory).
@@ -431,8 +430,6 @@ global:
     # The arena count for each tenant. Multiple arenas can improve the performance of share memory allocation for the first time,
     # but each arena will use one more fd, value range: [1, 32]
     arenaPerTenant: 16
-    # The memory reclamation time after free, default is 600 seconds.
-    memoryReclamationTimeSecond: 600
     # The memory alignment size used by jemalloc for all memory allocations (in bytes).
     # Larger alignment can improve performance but may increase memory consumption due to fragmentation.
     memoryAlignment: 64
@@ -444,8 +441,6 @@ global:
     enableP2pTransfer: false
     # Enable worker->worker OC batch get, default false.
     enableWorkerWorkerBatchGet: false
-    # The data threshold to transfer obj data between client and worker via shm, unit is KB.
-    ocShmTransferThresholdKB: 500
     # Option to turn on urma for OC worker to worker data transfer, default false.
     enableUrma: false
     # Enable selected worker threads to set the Linux scheduler runtime. Default true.
@@ -456,7 +451,7 @@ global:
     #   - interleave_all_numa: uniformly interleave pages across all available NUMA nodes.
     #   - interleave_affinity_numa: uniformly interleave pages only across NUMA nodes covered by current process CPU affinity.
     # This option only takes effect when both enableUrma=true and urmaRegisterWholeArena=true.
-    sharedMemoryDistributionPolicy: "none"
+    sharedMemoryDistributionPolicy: "interleave_all_numa"
     # Enable UB numa affinity optimization.
     # This option only takes effect when both enableUrma=true and urmaRegisterWholeArena=true.
     enableUbNumaAffinity: false

@@ -126,9 +126,10 @@ Detailed follow-up docs now exist for:
   - `shared_memory` contains allocator, jemalloc integration, arenas, shm units, and several mmap backends; when UB
     numa affinity is enabled it also records per-allocation NUMA ownership. Shared-memory pre-touch distribution is
     controlled by `shared_memory_distribution_policy` with values `none`, `interleave_all_numa`,
-    `interleave_affinity_numa`; for interleave policies the implementation performs 1GB chunk round-robin across
-    selected NUMA nodes, applies `SYS_mbind` with `MPOL_BIND` per chunk, and then page-touches each chunk. The
-    distribution policy takes effect when `enable_urma=true` and
+    `interleave_affinity_numa`, defaulting to `interleave_all_numa`; for interleave policies the implementation
+    performs 1GB chunk round-robin across selected NUMA nodes, applies `SYS_mbind` with `MPOL_PREFERRED` as a soft
+    preference per chunk, and then page-touches each chunk. If `mbind` fails, the implementation retries the chunk on
+    the next selected NUMA node. The distribution policy takes effect when `enable_urma=true` and
     `urma_register_whole_arena=true`. For `MemMmap`, `enable_huge_tlb=true` still selects explicit hugetlb mappings,
     while `enable_thp=true` leaves the process THP setting enabled and additionally applies `madvise(...,
 MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when the mapping is not using

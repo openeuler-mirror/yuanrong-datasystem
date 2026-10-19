@@ -127,9 +127,6 @@ DS_DEFINE_bool(oc_io_from_l2cache_need_metadata, true,
                "Whether data read and write from the L2 cache daemon depend on metadata. Note: If set to false, it "
                "indicates that the metadata is not stored in etcd.");
 DS_DECLARE_string(l2_cache_type);
-DS_DEFINE_bool(oc_metadata_header, true,
-               "Whether to allocate metadata header for object cache shared memory. Set to false (0) to disable the "
-               "metadata header, which also disables shm-based latch/visibility.");
 DS_DECLARE_uint32(data_migrate_rate_limit_mb);
 DS_DEFINE_string(data_migrate_urma_transport_mode, "write",
                  "URMA transport mode for background data migration, valid values are read and write.");
@@ -2791,11 +2788,6 @@ void WorkerOCServiceImpl::TryUnlatch(void *pointer, int lockId)
 
 void WorkerOCServiceImpl::InitMetaSize()
 {
-    if (!FLAGS_oc_metadata_header) {
-        metadataSize_ = 0;
-        LOG(INFO) << "Object cache metadata header disabled: shm latch/visibility are unavailable.";
-        return;
-    }
     constexpr int alignment = 0x8;
     // Worker set lockId_ = 0(shm_guard), so we need client_nums + 1 bits slot.
     metadataSize_ = FLAGS_max_client_num == 0 ? 0 : FLAGS_max_client_num / alignment + 1;

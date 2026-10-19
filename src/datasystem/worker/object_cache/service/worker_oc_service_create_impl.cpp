@@ -38,8 +38,6 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
 
-DS_DECLARE_uint64(oc_shm_transfer_threshold_kb);
-
 namespace datasystem {
 namespace object_cache {
 

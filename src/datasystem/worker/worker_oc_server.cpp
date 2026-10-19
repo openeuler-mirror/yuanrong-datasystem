@@ -159,7 +159,6 @@ DS_DEFINE_bool(start_metastore_service, false,
                "Start metastore service on master worker to replace external etcd server for cluster worker "
                "metadata storage, default is false.");
 DS_DEFINE_bool_dynamic(async_delete, false, "Master notify workers to delete objects asynchronously.");
-DS_DEFINE_uint32(memory_reclamation_time_second, 600, "The memory reclamation time after free.");
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_uint32(scale_in_collect_window_ms);
@@ -203,6 +202,7 @@ constexpr int32_t DEFAULT_STREAM_SOCKET_NUM = 8;       // The default stream soc
 constexpr double DFT_TIMEOUT_MULT = 1.0;          // A default timeout multiplier iartWorkerf file cache HA is used.
 constexpr int32_t THREAD_POOL_SIZE_LIMIT = 4096;  // size limit of the thread pool
 constexpr int32_t CHECK_ASYNC_SLEEP_TIME_S = 1;   // Check async task time interval.
+constexpr int64_t MEMORY_RECLAMATION_TIME_S = 600;  // Freed memory returns to the allocator for reuse after this decay.
 constexpr int64_t WARMUP_SCAN_INTERVAL_MS = 1'000;
 constexpr int64_t WARMUP_MIN_SCAN_MS = 30'000;
 constexpr int64_t WARMUP_MAX_SCAN_MS = 110'000;
@@ -2451,10 +2451,11 @@ Status WorkerOCServer::InitRpcAndMemoryRuntime()
 
     // Init shared memory
     uint64_t sharedMemoryBytes = FLAGS_shared_memory_size_mb * 1024ul * 1024ul;  // convert mb to bytes.
-    ssize_t decayMs = FLAGS_memory_reclamation_time_second * 1000;               // convert to ms.
+    ssize_t decayMs = MEMORY_RECLAMATION_TIME_S * 1000;                          // convert to ms.
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         datasystem::memory::Allocator::Instance()->Init(sharedMemoryBytes, FLAGS_shared_memory_populate, true, decayMs,
-            FLAGS_oc_shm_threshold_percentage, FLAGS_sc_shm_threshold_percentage),
+                                                        FLAGS_oc_shm_threshold_percentage,
+                                                        FLAGS_sc_shm_threshold_percentage),
         "Init allocator failed");
     // Call base class to init common service
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CommonServer::Init(), "CommonServer init failed");
