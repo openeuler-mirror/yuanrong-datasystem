@@ -238,7 +238,6 @@ spec:
         - -coordinator_address={{ $.Values.global.coordinator.coordinatorAddress }}
         - -cluster_name={{ $.Values.global.clusterName }}
         - -async_delete={{ $.Values.global.performance.asyncDelete}}
-        - -etcd_meta_pool_size={{ $.Values.global.etcd.etcdMetaPoolSize }}
         - -arena_per_tenant={{ $.Values.global.performance.arenaPerTenant }}
         - -shared_memory_populate={{ $.Values.global.performance.sharedMemoryPopulate }}
         - -memory_reclamation_time_second={{ $.Values.global.performance.memoryReclamationTimeSecond }}

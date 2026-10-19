@@ -123,14 +123,12 @@ public:
      * @param[in] tableHandle The table handle for the <key,value> to insert.
      * @param[in] key The key to add to the table.
      * @param[in] value The value to add to the table.
-     * @param[in] sync The sync mode to delete or not.
      * @return Status of the call.
      */
     inline rocksdb::Status Put(rocksdb::ColumnFamilyHandle *tableHandle, const std::string &key,
-                               const std::string &value, bool sync = false)
+                               const std::string &value)
     {
         rocksdb::WriteOptions options;
-        options.sync = sync;
         return db_->Put(options, tableHandle, rocksdb::Slice(key), rocksdb::Slice(value));
     }
 
@@ -138,14 +136,12 @@ public:
      * @brief Put a batch of meta into a table.
      * @param[in] metaInfos The metaInfos of a batch of objects to insert.
      * @param[in] tableHandle The table handle for the <key,value> to insert.
-     * @param[in] sync The sync mode to delete or not.
      * @return Status of the call.
      */
     inline rocksdb::Status BatchPut(const std::unordered_map<std::string, std::string> &metaInfos,
-                                    rocksdb::ColumnFamilyHandle *tableHandle, bool sync = false)
+                                    rocksdb::ColumnFamilyHandle *tableHandle)
     {
         rocksdb::WriteOptions options;
-        options.sync = sync;
         rocksdb::WriteBatch batch;
         for (const auto &info : metaInfos) {
             batch.Put(tableHandle, info.first, info.second);
@@ -157,14 +153,12 @@ public:
      * @brief Deleta a a batch of meta from the table.
      * @param[in] metaInfos The metaInfos of a batch of objects to insert.
      * @param[in] tableHandle The table handle for the <key,value> to insert.
-     * @param[in] sync The sync mode to delete or not.
      * @return Status of the call.
      */
     inline rocksdb::Status BatchDelete(const std::unordered_map<std::string, std::string> &metaInfos,
-                                       rocksdb::ColumnFamilyHandle *tableHandle, bool sync = false)
+                                       rocksdb::ColumnFamilyHandle *tableHandle)
     {
         rocksdb::WriteOptions options;
-        options.sync = sync;
         rocksdb::WriteBatch batch;
         for (const auto &info : metaInfos) {
             batch.Delete(tableHandle, rocksdb::Slice(info.first));
@@ -280,13 +274,11 @@ public:
      * @brief Delete the given key.
      * @param[in] tableHandle The table handle where the key to be deleted.
      * @param[in] key The key to delete.
-     * @param[in] sync The sync mode to delete or not.
      * @return Status of the call.
      */
-    inline rocksdb::Status Delete(rocksdb::ColumnFamilyHandle *tableHandle, const std::string &key, bool sync = false)
+    inline rocksdb::Status Delete(rocksdb::ColumnFamilyHandle *tableHandle, const std::string &key)
     {
         rocksdb::WriteOptions options;
-        options.sync = sync;
         return db_->Delete(options, tableHandle, rocksdb::Slice(key));
     }
 

@@ -50,21 +50,9 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/locks.h"
 
-DS_DEFINE_uint32(etcd_meta_pool_size, 8, "ETCD metadata async pool size");
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 DS_DECLARE_string(rocksdb_write_mode);
 DS_DECLARE_string(l2_cache_type);
-
-static bool ValidateEtcdPoolSize(const char *flagName, uint32_t value)
-{
-    const uint32_t maxSize = 128;
-    if (value <= 0 || value > maxSize) {
-        LOG(ERROR) << "Flag " << flagName << " must be greater than 0 and less than " << maxSize;
-        return false;
-    }
-    return true;
-}
-DS_DEFINE_validator(etcd_meta_pool_size, ValidateEtcdPoolSize);
 
 #define EXEC_UTIL_SUCCESS(_statement, _quietCode, _exitFlag)                 \
     do {                                                                     \
@@ -94,7 +82,7 @@ void FillNotifyWorkerOpDetailPb(const NotifyWorkerOp &op, ObjectAsyncOpDetailPb 
 ObjectMetaStore::ObjectMetaStore(RocksStore *rocksStore, EtcdStore *etcdStore, bool isEnable)
     : rocksStore_(rocksStore),
       etcdStore_(etcdStore),
-      maxRequestSize_(static_cast<uint64_t>(QUEUE_CAPACITY) * FLAGS_etcd_meta_pool_size),
+      maxRequestSize_(static_cast<uint64_t>(QUEUE_CAPACITY) * ETCD_META_POOL_SIZE),
       isPersistenceEnabled_(isEnable)
 {
 }
@@ -123,10 +111,10 @@ Status ObjectMetaStore::InitEtcdStore()
         return Status::OK();
     }
 
-    for (uint32_t i = 0; i < FLAGS_etcd_meta_pool_size; i++) {
+    for (uint32_t i = 0; i < ETCD_META_POOL_SIZE; i++) {
         queues_.emplace_back(std::make_shared<MetaAsyncQueue>(QUEUE_CAPACITY));
     }
-    for (uint32_t i = 0; i < FLAGS_etcd_meta_pool_size; i++) {
+    for (uint32_t i = 0; i < ETCD_META_POOL_SIZE; i++) {
         threadPool_.emplace_back(Thread(&ObjectMetaStore::AsyncMetaOpToEtcdStorageHandler, this, i, queues_[i]));
     }
 
@@ -279,7 +267,7 @@ Status ObjectMetaStore::AddOneAsyncTaskToEtcdStore(const std::string &objectKey,
     if (postHandler) {
         element->SetPostHandler(std::move(postHandler));
     }
-    auto threadIdx = MurmurHash3_32(objectKey) % FLAGS_etcd_meta_pool_size;
+    auto threadIdx = MurmurHash3_32(objectKey) % ETCD_META_POOL_SIZE;
     std::shared_ptr<AsyncElement> elderElement;
     int incrCnt = 0;
     queues_[threadIdx]->AppendAsyncTask(element, elderElement, incrCnt);
@@ -524,7 +512,7 @@ void ObjectMetaStore::PollAsyncElementsByObjectKey(const std::string &objectKey,
         LOG(WARNING) << "It does not support executing etcd asynchronous tasks currently.";
         return;
     }
-    auto idx = MurmurHash3_32(objectKey) % FLAGS_etcd_meta_pool_size;
+    auto idx = MurmurHash3_32(objectKey) % ETCD_META_POOL_SIZE;
     queues_[idx]->PollAsyncElementsByObjectKey(objectKey, elements);
     (void)asyncReqSize_.fetch_sub(elements.size(), std::memory_order_relaxed);
     {

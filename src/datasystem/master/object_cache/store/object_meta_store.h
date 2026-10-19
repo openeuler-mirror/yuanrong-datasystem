@@ -65,6 +65,7 @@ static const std::string LIVENESS_OK = "ok";
 std::string Hash2Str(uint32_t hash);
 
 const int QUEUE_CAPACITY = 10000;
+const uint32_t ETCD_META_POOL_SIZE = 8;
 
 // The odd-numbered bits are used to store notifications to the masters, and the even-numbered bits are used to store
 // notifications to the workers.
