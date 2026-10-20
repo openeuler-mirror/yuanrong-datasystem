@@ -115,7 +115,7 @@ public:
         opts.numEtcd = 0;
         opts.numCoordinators = 1;
         opts.numOBS = 0;
-        opts.workerGflagParams = "-shared_memory_size_mb=64 -log_monitor=true -enable_lossless_data_exit_mode=true "
+        opts.workerGflagParams = "-shared_memory_size_mb=64 -log_monitor=true "
                                  "-node_timeout_s=5 -node_dead_timeout_s=10";
     }
 

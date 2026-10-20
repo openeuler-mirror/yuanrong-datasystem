@@ -325,18 +325,18 @@
     admitted while that target is `ACTIVE/PRE_LEAVING`; `JOINING/LEAVING/FAILED` reject it. Sender connection creation
     and per-batch admission, redirect, rebalance, recovery, and primary selection continue to require `ACTIVE`.
     Rebalance rechecks before candidate selection and every bounded batch.
-    FastMigration read failures preserve target-local raw CQE evidence; NotifyRemoteGet write failures preserve the
-    source Provider operator. Every migration batch rechecks both source and target admission, so a source failure
-    stops following batches instead of being misattributed to a target. Recovery
+    Background URMA migration uses only the NotifyRemoteGet write path; its failures preserve the source Provider
+    operator. Every migration batch rechecks both source and target admission, so a source failure stops following
+    batches instead of being misattributed to a target. Recovery
     probes use a manager-owned, independently registered 4 KiB source segment; Worker startup does not initialize the
     client `UB_TRANSPORT` allocation pool solely for the one-byte probe.
   - Worker-to-worker migration responses distinguish success, failed, and skipped object keys as three mutually
-    exclusive sets. `skipped_object_keys` (in `MigrateDataRspPb`, `MigrateDataDirectRspPb`, and `NotifyRemoteGetRspPb`)
+    exclusive sets. `skipped_object_keys` (in `MigrateDataRspPb` and `NotifyRemoteGetRspPb`)
     carries objects the target could not process because master metadata was not found (deleted concurrently, or
     meta-is-moving). The source `MigrateDataHandler` inserts `skipKeys` into `skipIds_` and excludes them from
     `successIds` before calling `ReleaseResources`, so skipped objects are never released at the source. Three migration
-    paths route metadata-not-found to skipped: TCP `FillObjectsLocked`, URMA read `FillMetaToObjectEntries`, and URMA
-    write `NotifyRemoteGet` entry plus `ReportUnattemptedObjects` catch-all. `needModifyPrimary` objects (equal-version
+    paths route metadata-not-found to skipped: TCP `FillObjectsLocked` and URMA write `NotifyRemoteGet` entry plus
+    `ReportUnattemptedObjects` catch-all. `needModifyPrimary` objects (equal-version
     copies already on target) are included in the metadata query set so that the skip check only fires when master
     genuinely has no metadata, not merely because the key was not queried. For SPILL migrations via `NotifyRemoteGet`,
     `is_spill` gates `ReplacePrimary`/`CreateMultiCopyMeta`/`ClearNeedDelete`: when `is_spill=true`, the target skips
@@ -393,8 +393,8 @@
     `RetryUntilSuccessDuringGracefulExit(func, grace)` overload in `common/util/rpc_util.h`; on grace expiry it logs
     "Graceful-exit retry gave up before success" once and returns the last error. `PreShutDown` runs both topology
     steps best-effort (`LOG_IF_ERROR`, never early-return) and always reaches `RemoveWriteBackIdsLocation` cleanup
-    before returning the topology status. `WaitClientsExit` still uses the unbounded overload because its own health
-    check breaks the loop.
+    before returning the topology status. `WaitClientsExit` uses the same bounded grace; when a same-node client does
+    not unregister in time, the Worker logs the remaining client diagnostics and proceeds with already-published data.
   - after authoritative topology removal, an empty membership snapshot marks full-cluster shutdown: the Worker
     immediately tells object metadata to discard TTL work, and later shutdown stops the TTL producer before draining its
     shared async pool. For partial removal, TTL work continues only while local metadata exists and its version does not
@@ -405,12 +405,13 @@
     propagates its non-empty `businessOperationId` as `RemoveMetaReqPb.topology_operation_id`. Metadata owners use that
     marker only to allow the callback's own idempotent remove/give-up-primary effects. The data phase, final source
     cleanup, and redirect retries must all preserve the same marker; ordinary requests leave the field unset.
-  - the object-cache `Create`, `Publish`, `MultiCreate`, and `MultiPublish` entrypoints read both `is_routed` and the
-    process-local ScaleIn exit intent. Routed writes return `K_SCALE_DOWN` before entering their processors regardless
-    of `enable_leaving_intercept`, allowing the SDK's existing route-failure path to exclude the leaving Worker and retry
-    another hash-ring member. Direct writes are rejected at exit intent only when `enable_leaving_intercept` is enabled;
-    otherwise they are rejected after topology data drain starts, preserving the local-client unregister contract.
-    This gate is deliberately separate from incoming migration admission. Read-only RPCs keep their existing behavior.
+  - the object-cache `Create`, `Publish`, `MultiCreate`, and `MultiPublish` entrypoints share one atomic admission gate.
+    The high bit closes admission and the remaining bits count in-flight writes, making close-versus-admit linearizable
+    without a hot-path mutex. Distributed-master exit closes the gate before publishing exit intent; routed writes can
+    use the existing redirect response, direct writes receive `K_SCALE_DOWN`, and the topology data callback waits for
+    admitted writes to finish before taking its migration snapshot. This gate is deliberately separate from incoming
+    migration admission. Read-only RPCs keep their existing behavior. Centralized-master shutdown bypasses lossless
+    exit, while distributed-master shutdown always uses it.
   - Routed Create/MultiCreate requests may carry client-generated allocation UUIDs. The Worker validates each UUID,
     uses it directly as the `shmId`, and reserves it in a short-lived TBB concurrent hash set before allocating memory.
     A completed duplicate returns `K_DUPLICATED`; an in-flight duplicate returns `K_TRY_AGAIN`; neither path allocates a

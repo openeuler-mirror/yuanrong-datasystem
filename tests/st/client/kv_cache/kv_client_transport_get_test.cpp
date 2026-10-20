@@ -684,7 +684,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         KVClientTransportGetWithShmTest::SetClusterSetupOptions(opts);
-        opts.workerGflagParams += " -enable_lossless_data_exit_mode=true";
     }
 
     void SetUp() override

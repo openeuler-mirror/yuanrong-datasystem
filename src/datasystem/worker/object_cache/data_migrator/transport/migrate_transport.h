@@ -93,7 +93,7 @@ protected:
         }
     }
 
-    int64_t CalcMigrateDataDirectTimeoutMs(uint64_t totalDataBytes)
+    int64_t CalcFastMigrationTimeoutMs(uint64_t totalDataBytes)
     {
         constexpr int64_t maxTimeoutMs = 180'000;
         constexpr int64_t minTimeoutMs = 100;

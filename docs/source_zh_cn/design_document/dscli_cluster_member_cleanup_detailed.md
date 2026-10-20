@@ -21,7 +21,8 @@
 
 - worker 退出时不主动删 membership key：`src/datasystem/cluster/runtime/topology_engine.cpp:1002-1052` 的 `TopologyEngine::Shutdown` 注释明确写道"lease expiry removes any READY write that raced the STOPPING transition"，依赖 lease 过期兜底
 - worker 退出时不主动 revoke lease：`src/datasystem/common/kvstore/etcd/etcd_keep_alive.cpp:68-132` 的 `EtcdKeepAlive::Shutdown` 只做 gRPC stream 的 `WritesDone`+`Finish`，无 `LeaseRevoke` 调用；全仓库 grep `RevokeLease|LeaseRevoke` 0 命中
-- helm uninstall 场景不走 graceful exit：`src/datasystem/worker/worker_oc_server.cpp:3449-3472` 的 `IsScaleIn()` 在 `enable_lossless_data_exit_mode=false`（默认，`k8s/helm_chart/datasystem/values.yaml:418`）且无 `worker-status` 文件时返回 false，`PreShutDown`（`:3559-3588`）跳过 `PublishExitingMembershipAndWaitForTopologyRemoval`
+- 正常退出会执行无损迁移和拓扑移除；进程崩溃、强制终止或协调后端不可用时仍需依赖 lease TTL、controller
+  故障确认或本命令清理残留
 - topologyTable 是持久 key 不绑 lease：`src/datasystem/cluster/repository/topology_repository.cpp:228-256` 的 `CompareAndSwapTopology` 用普通 CAS 写入，不传 leaseId
 - controller 的 failure 确认要等 300s：`src/datasystem/cluster/control/topology_failure_classifier.cpp:56-65`，`node_dead_timeout_s` 默认 300（`k8s/helm_chart/datasystem/values.yaml:399`）
 - 原 `datasystem_worker --get/set_cluster_topology`（`src/datasystem/worker/worker_cli.cpp`）已随 gflags 精简整体移除，Worker 侧不再有拓扑导入/导出入口

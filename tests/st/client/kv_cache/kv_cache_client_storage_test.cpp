@@ -44,7 +44,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         constexpr uint8_t WORKER_NUM = 1;
-        opts.workerGflagParams = "-check_async_queue_empty_time_s=15";
         opts.numEtcd = 1;
         opts.numOBS = 1;
         opts.numWorkers = WORKER_NUM;

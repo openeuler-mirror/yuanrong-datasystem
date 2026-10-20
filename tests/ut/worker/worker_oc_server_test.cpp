@@ -36,9 +36,13 @@
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
+#include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/worker/cluster_event_type.h"
 #include "ut/common.h"
+
+DS_DECLARE_bool(enable_distributed_master);
+DS_DECLARE_string(log_dir);
 
 namespace datasystem::ut {
 namespace {
@@ -173,6 +177,11 @@ public:
         return server_->IsScaleInDataDrainReady();
     }
 
+    bool IsScaleIn()
+    {
+        return server_->IsScaleIn();
+    }
+
     void SetScaleInDataDrainReadiness(bool asyncTasksDone, bool clientsExited)
     {
         server_->checkAsyncTasksDone_.store(asyncTasksDone);
@@ -300,6 +309,25 @@ TEST_F(WorkerOCServerTest, JemallocStatsRegistrationFollowsBuiltinServices)
                                            nullptr);
     TryInitJemallocStatsBvar(duplicateServer);
     EXPECT_FALSE(HasJemallocStatsBvar(duplicateServer));
+}
+
+TEST_F(WorkerOCServerTest, DistributedMetadataAlwaysUsesLosslessExit)
+{
+    const bool savedDistributedMaster = FLAGS_enable_distributed_master;
+    auto restoreFlag = Raii([savedDistributedMaster] { FLAGS_enable_distributed_master = savedDistributedMaster; });
+    FLAGS_enable_distributed_master = true;
+
+    EXPECT_TRUE(IsScaleIn());
+}
+
+TEST_F(WorkerOCServerTest, CentralizedMetadataIgnoresVoluntaryExitMarker)
+{
+    const bool savedDistributedMaster = FLAGS_enable_distributed_master;
+    auto restoreFlag = Raii([savedDistributedMaster] { FLAGS_enable_distributed_master = savedDistributedMaster; });
+    FLAGS_enable_distributed_master = false;
+    DS_ASSERT_OK(AtomicWriteTextFile(FLAGS_log_dir + "/worker-status", "voluntary scale in\n"));
+
+    EXPECT_FALSE(IsScaleIn());
 }
 
 TEST_F(WorkerOCServerTest, ActiveAddressRemovesPreviouslyFailedWorker)

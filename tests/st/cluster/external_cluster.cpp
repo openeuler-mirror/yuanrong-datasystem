@@ -1315,7 +1315,7 @@ void ExternalCluster::AppendWorkerRuntimeFlags(int index, const std::string &roo
            + opts_.enableDistributedMaster + " -yuanrong_iam_url=" + opts_.yuanrong_iam_url
            + " -rocksdb_background_threads=" + std::to_string(opts_.numRocksDBThreads)
            + " -oc_thread_num=" + std::to_string(opts_.numOcThreadNum)
-           + " -spill_thread_num=" + std::to_string(opts_.numSpillThreadNum) + " -check_async_queue_empty_time_s=1";
+           + " -spill_thread_num=" + std::to_string(opts_.numSpillThreadNum);
     cmd += " -system_access_key=" + opts_.systemAccessKey + " -system_secret_key=" + opts_.systemSecretKey
            + " -tenant_access_key=" + opts_.tenantAccessKey + " -tenant_secret_key=" + opts_.tenantSecretKey;
 

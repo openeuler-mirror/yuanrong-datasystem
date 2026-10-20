@@ -33,7 +33,6 @@
 #include "datasystem/worker/object_cache/data_migrator/strategy/scale_down_node_selector.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/spill_node_selector.h"
 
-DS_DECLARE_string(data_migrate_urma_transport_mode);
 DS_DECLARE_bool(enable_transport_fallback);
 
 namespace datasystem {
@@ -57,18 +56,13 @@ Status DataMigrator::CheckSourceAdmission() const
                           ? DataPlaneAdmissionRole::TOPOLOGY_SCALE_IN_SOURCE
                           : DataPlaneAdmissionRole::ORDINARY_SOURCE;
     RETURN_IF_NOT_OK(endpointPolicy_.CheckDataPlaneAdmission(localAddress_, role));
-    if (FLAGS_data_migrate_urma_transport_mode != "read") {
-        RETURN_IF_NOT_OK(CheckUbAdmission(localAddress_, UbOperationKind::MIGRATION_WRITE));
-    }
-    return Status::OK();
+    return CheckUbAdmission(localAddress_, UbOperationKind::MIGRATION_WRITE);
 }
 
 Status DataMigrator::CheckTargetAdmission(const HostPort &target, DataPlaneAdmissionRole role) const
 {
     RETURN_IF_NOT_OK(endpointPolicy_.CheckDataPlaneAdmission(target, role));
-    const auto operation = FLAGS_data_migrate_urma_transport_mode == "read" ? UbOperationKind::MIGRATION_READ
-                                                                           : UbOperationKind::MIGRATION_WRITE;
-    return CheckUbAdmission(target, operation);
+    return CheckUbAdmission(target, UbOperationKind::MIGRATION_WRITE);
 }
 
 Status DataMigrator::CheckUbAdmission(const HostPort &worker, UbOperationKind operation) const
@@ -77,7 +71,7 @@ Status DataMigrator::CheckUbAdmission(const HostPort &worker, UbOperationKind op
         return Status::OK();
     }
     auto status = ubAdmission_->CheckWriteTarget(worker, operation);
-    const bool canUseTcpFallback = FLAGS_enable_transport_fallback && FLAGS_data_migrate_urma_transport_mode == "write";
+    const bool canUseTcpFallback = FLAGS_enable_transport_fallback;
     if (status.IsError() && canUseTcpFallback) {
         LOG_EVERY_N(WARNING, MIGRATION_RETRY_LOG_EVERY_N)
             << "[Migrate Data] UB admission denied for " << worker.ToString()
@@ -795,7 +789,7 @@ bool DataMigrator::LearnStructuredUbFailure(const MigrateDataHandler::MigrateRes
 
 bool DataMigrator::IsLocalMigrationOperatorUnavailable() const
 {
-    const bool canUseTcpFallback = FLAGS_enable_transport_fallback && FLAGS_data_migrate_urma_transport_mode == "write";
+    const bool canUseTcpFallback = FLAGS_enable_transport_fallback;
     if (!IsUrmaEnabled() || ubAdmission_ == nullptr || canUseTcpFallback) {
         return false;
     }

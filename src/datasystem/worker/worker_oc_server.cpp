@@ -21,11 +21,11 @@
 #include <cctype>
 #include <chrono>
 #include <exception>
+#include <fstream>
 #include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
-#include <sstream>
 #include <set>
 #include <string>
 #include <thread>
@@ -35,6 +35,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+#include "datasystem/cluster/control/topology_controller.h"
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/model/topology_diagnostics.h"
@@ -155,10 +156,7 @@ DS_DEFINE_bool(start_metastore_service, false,
 DS_DEFINE_bool_dynamic(async_delete, false, "Master notify workers to delete objects asynchronously.");
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
-DS_DECLARE_uint32(scale_in_collect_window_ms);
 DS_DEFINE_uint32(liveness_probe_timeout_s, 150, "Liveness probe timeout in seconds.");
-DS_DEFINE_uint32(check_async_queue_empty_time_s, 1,
-                 "The async queue needs to be empty for a certain period of time before worker can exist.");
 DS_DECLARE_string(rocksdb_store_dir);
 DS_DEFINE_string(sc_encrypt_secret_key, "",
                  "The encrypted secret key for stream cache. The key length is up to 1024 bytes and must be 32 bytes "
@@ -167,9 +165,6 @@ DS_DEFINE_validator(sc_encrypt_secret_key, &Validator::ValidateScEncryptSecretKe
 DS_DEFINE_int32(max_rpc_session_num, 2048,
                 "Maximum number of sessions that can be cached, must be within [512, 10'000]");
 DS_DEFINE_validator(max_rpc_session_num, &Validator::ValidateMaxRpcSessionNum);
-DS_DEFINE_bool_dynamic(
-    enable_lossless_data_exit_mode, false,
-    "Decide whether to migrate data to other nodes or not when current node exits, default is false.");
 DS_DEFINE_bool(shared_memory_populate, false,
                "Avoiding page faults during copying improves runtime performance but may result in longer worker "
                "startup times (depending on shared_memory_size_mb).");
@@ -192,6 +187,7 @@ constexpr double DFT_TIMEOUT_MULT = 1.0;          // A default timeout multiplie
 constexpr int32_t THREAD_POOL_SIZE_LIMIT = 4096;  // size limit of the thread pool
 constexpr int32_t CHECK_ASYNC_SLEEP_TIME_S = 1;   // Check async task time interval.
 constexpr int64_t MEMORY_RECLAMATION_TIME_S = 600;  // Freed memory returns to the allocator for reuse after this decay.
+constexpr int32_t ASYNC_QUEUE_EMPTY_OBSERVATION_S = 1;
 constexpr int64_t WARMUP_SCAN_INTERVAL_MS = 1'000;
 constexpr int64_t WARMUP_MIN_SCAN_MS = 30'000;
 constexpr int64_t WARMUP_MAX_SCAN_MS = 110'000;
@@ -1501,10 +1497,6 @@ Status WorkerOCServer::InitializeMasterServices()
 
 Status WorkerOCServer::InitializeWorkerServices()
 {
-    if (FLAGS_enable_lossless_data_exit_mode && !FLAGS_enable_distributed_master) {
-        RETURN_STATUS_LOG_ERROR(
-            K_INVALID, "enable_lossless_data_exit_mode can be set to true only when enable_distributed_master is true");
-    }
     // Register GenericService (test control-plane: SetInjectAction / GcovFlush / ...)
     // as a brpc service. No-op in non-test builds.
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitGenericBrpcService(), "InitGenericBrpcService failed");
@@ -1889,7 +1881,7 @@ Status WorkerOCServer::ConstructTopologyRuntime()
         .SetCoordinatorReadyTimeout(std::chrono::seconds(FLAGS_node_dead_timeout_s))
         // Local backend isolation starts at the first positive peer observation, so it owns the full dead timeout.
         .SetLocalIsolationTimeout(std::chrono::seconds(FLAGS_node_dead_timeout_s))
-        .SetScaleInCollectWindow(std::chrono::milliseconds(FLAGS_scale_in_collect_window_ms))
+        .SetScaleInCollectWindow(std::chrono::milliseconds(cluster::DEFAULT_SCALE_IN_COLLECT_WINDOW_MS))
         .SetMembershipRestartHandler(membershipRestartHandler)
         .SetSnapshotPublishedHandler([this](std::shared_ptr<const cluster::TopologySnapshot> snapshot) {
             if (objCacheClientWorkerSvc_ != nullptr) {
@@ -3262,24 +3254,9 @@ bool WorkerOCServer::IsScaleIn()
     const std::string checkFileName = "worker-status";
     checkFilePath_ =
         FLAGS_log_dir.back() == '/' ? (FLAGS_log_dir + checkFileName) : (FLAGS_log_dir + "/" + checkFileName);
-
-    if (FLAGS_enable_lossless_data_exit_mode) {
-        return true;
-    }
-
-    std::ifstream ifs(checkFilePath_);
-    if (!ifs.is_open()) {
-        LOG(WARNING) << "Can not open worker status file in " << checkFilePath_
-                     << ", voluntary scale in will not start, errno: " << errno;
-    } else {
-        std::stringstream buffer;
-        buffer << ifs.rdbuf();
-        ifs.close();
-        if (buffer.str() == "voluntary scale in\n") {
-            return true;
-        }
-    }
-    return false;
+    LOG(INFO) << "[Graceful exit] Shutdown mode: "
+              << (FLAGS_enable_distributed_master ? "distributed-lossless" : "centralized-direct");
+    return FLAGS_enable_distributed_master;
 }
 
 bool WorkerOCServer::IsClientsExist()
@@ -3293,15 +3270,19 @@ bool WorkerOCServer::IsClientsExist()
 
 void WorkerOCServer::WaitClientsExit()
 {
-    (void)RetryUntilSuccessDuringGracefulExit([this] {
+    auto status = RetryUntilSuccessDuringGracefulExit([this] {
         if (checkThreadRunning_) {
             return IsClientsExist() ? Status(K_NOT_READY, "Still exists clients on the worker.") : Status::OK();
         } else {
             LOG(ERROR) << "[Graceful exit] Stop waiting for clients: check_thread_running=false.";
             return Status::OK();
         }
-    });
-    LOG(INFO) << "[Graceful exit] Client exit wait finished.";
+    }, LOSSLESS_EXIT_GRACE);
+    if (status.IsError()) {
+        LOG(WARNING) << "[Graceful exit] Client exit grace expired; continue with published data. status=" << status;
+    } else {
+        LOG(INFO) << "[Graceful exit] Client exit wait finished.";
+    }
 
     allClientsExited_ = true;
     checkAsyncTasksDoneCv_.notify_all();
@@ -3372,6 +3353,7 @@ Status WorkerOCServer::PreShutDown()
     RETURN_OK_IF_TRUE(topologyEngine_ == nullptr);
     INJECT_POINT("worker.PreShutDown.skip");
     bool scaleIn = IsScaleIn();
+    INJECT_POINT_NO_RETURN("worker.PreShutDown.direct", [&scaleIn] { scaleIn = false; });
     auto traceId = Trace::Instance().GetTraceID();
     if (scaleIn) {
         RETURN_IF_NOT_OK(StartPreShutdownWorkers(scaleIn, traceId));
@@ -3408,6 +3390,9 @@ Status WorkerOCServer::StartPreShutdownWorkers(bool scaleIn, const std::string &
     {
         std::lock_guard<std::mutex> lock(preShutdownWorkersMutex_);
         CHECK_FAIL_RETURN_STATUS(!preShutdownWorkersStopped_, K_NOT_READY, "pre-shutdown workers are stopping");
+        if (objCacheClientWorkerSvc_ != nullptr) {
+            objCacheClientWorkerSvc_->CloseClientWriteAdmission();
+        }
         topologyExitRequested_.store(true);
         RETURN_IF_NOT_OK(StartPreShutdownWorkersLocked(true, traceId));
     }
@@ -3432,6 +3417,9 @@ Status WorkerOCServer::RestorePreShutdownWorkers(const std::string &traceId, boo
     // thread cannot be created. A later snapshot retries only the missing helper while retaining any thread already
     // started by this attempt.
     scaleInRecoveryStarted_ = true;
+    if (objCacheClientWorkerSvc_ != nullptr) {
+        objCacheClientWorkerSvc_->CloseClientWriteAdmission();
+    }
     topologyExitRequested_.store(true);
     recovered = true;
     CHECK_FAIL_RETURN_STATUS(!preShutdownWorkersStopped_, K_NOT_READY, "pre-shutdown workers are stopping");
@@ -3443,9 +3431,9 @@ Status WorkerOCServer::StartPreShutdownWorkersLocked(bool scaleIn, const std::st
 {
     if (checkAsyncTasksThread_ == nullptr) {
         INJECT_POINT("worker.RestoreScaleIn.beforeCheckAsyncTasksThreadCreation");
-        RETURN_IF_EXCEPTION_OCCURS(checkAsyncTasksThread_ = std::make_unique<Thread>([this, traceId]() {
+        RETURN_IF_EXCEPTION_OCCURS(checkAsyncTasksThread_ = std::make_unique<Thread>([this, traceId, scaleIn]() {
                                        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-                                       CheckAsyncTasks();
+                                       CheckAsyncTasks(scaleIn);
                                    }));
         checkAsyncTasksThread_->set_name("CheckAsyncTask");
     }
@@ -3667,7 +3655,7 @@ Status WorkerOCServer::AddClient(const ClientKey &clientId, bool shmEnabled, int
 
 void WorkerOCServer::CheckRule(bool isAsyncTasksRunning, int &checkNum)
 {
-    int updateCheckNum = static_cast<int>(FLAGS_check_async_queue_empty_time_s / CHECK_ASYNC_SLEEP_TIME_S);
+    int updateCheckNum = ASYNC_QUEUE_EMPTY_OBSERVATION_S / CHECK_ASYNC_SLEEP_TIME_S;
     // Has async tasks running.
     if (isAsyncTasksRunning) {
         checkNum = updateCheckNum;
@@ -3675,7 +3663,7 @@ void WorkerOCServer::CheckRule(bool isAsyncTasksRunning, int &checkNum)
         return;
     }
 
-    // Ensure that the async queue remains empty within FLAGS_check_async_queue_empty_time_s seconds.
+    // Ensure that the async queue remains empty throughout the observation window.
     auto lastRequestArrivalTime = RequestCounter::GetInstance().GetLastArrivalTime();
     if (lastRequestArrivalTime_ != lastRequestArrivalTime) {
         LOG(WARNING) << "External requests is coming in[lastRequestArrivalTime: " << lastRequestArrivalTime_
@@ -3686,7 +3674,7 @@ void WorkerOCServer::CheckRule(bool isAsyncTasksRunning, int &checkNum)
         return;
     }
 
-    // All async tasks finished, check FLAGS_check_async_queue_empty_time_s / CHECK_ASYNC_SLEEP_TIME_S times.
+    // All async tasks finished; keep observing until the fixed window expires.
     if (checkNum > 0) {
         checkNum--;
         return;
@@ -3709,12 +3697,23 @@ bool WorkerOCServer::IsAsyncTasksRunning()
            || (streamCacheClientWorkerSvc_ != nullptr && streamCacheClientWorkerSvc_->HaveTasksToProcess());
 }
 
-void WorkerOCServer::CheckAsyncTasks()
+void WorkerOCServer::CheckAsyncTasks(bool waitClientWrites)
 {
-    int checkNum = FLAGS_check_async_queue_empty_time_s / CHECK_ASYNC_SLEEP_TIME_S;
+    int checkNum = ASYNC_QUEUE_EMPTY_OBSERVATION_S / CHECK_ASYNC_SLEEP_TIME_S;
     LOG(INFO) << "Check async task thread start, check times: " << checkNum;
     RequestCounter::GetInstance().StartCount();
     while (checkThreadRunning_) {
+        if (waitClientWrites && objCacheClientWorkerSvc_ != nullptr
+            && !objCacheClientWorkerSvc_->IsClientWriteAdmissionDrained()) {
+            constexpr int kClientWriteDrainLogEvery = 5;
+            LOG_EVERY_N(INFO, kClientWriteDrainLogEvery)
+                << "[Graceful exit] Waiting for " << objCacheClientWorkerSvc_->GetAdmittedClientWriteCount()
+                << " admitted client write request(s) to finish.";
+            checkNum = ASYNC_QUEUE_EMPTY_OBSERVATION_S / CHECK_ASYNC_SLEEP_TIME_S;
+            SetCheckAsyncTasksDone(false);
+            std::this_thread::sleep_for(std::chrono::seconds(CHECK_ASYNC_SLEEP_TIME_S));
+            continue;
+        }
         CheckRule(IsAsyncTasksRunning(), checkNum);
         std::this_thread::sleep_for(std::chrono::seconds(CHECK_ASYNC_SLEEP_TIME_S));
     }

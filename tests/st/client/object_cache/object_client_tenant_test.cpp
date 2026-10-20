@@ -463,6 +463,8 @@ TEST_F(ObjectClientGetMetaNoTenantAuthTest, GetFailed)
     ASSERT_EQ(status.GetCode(), K_RUNTIME_ERROR) << status;
     ASSERT_EQ(objMetas.size(), 0);
     // one master (worker 0) down, another (worker 1 local) success
+    // Force a direct exit so worker0's data is lost instead of migrated by lossless shutdown.
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.PreShutDown.direct", "1*call()"));
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
     // Failure finalization includes the bounded direct-liveness confirmation after membership expiry.
     constexpr int failureFinalizationWaitSec = 15;

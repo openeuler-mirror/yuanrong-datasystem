@@ -114,7 +114,6 @@
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
-#include "datasystem/worker/object_cache/verify_leaving_state.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/worker_health_check.h"
 
@@ -125,13 +124,6 @@ DS_DEFINE_validator(client_reconnect_wait_s, &Validator::ValidateUint32);
 DS_DEFINE_bool(enable_reconciliation, false, "Whether to enable reconciliation, default is false");
 DS_DECLARE_string(l2_cache_type);
 DS_DECLARE_uint32(data_migrate_rate_limit_mb);
-DS_DEFINE_string(data_migrate_urma_transport_mode, "write",
-                 "URMA transport mode for background data migration, valid values are read and write.");
-DS_DEFINE_validator(data_migrate_urma_transport_mode, [](const char *flagName, const std::string &value) {
-    (void)flagName;
-    return value == "read" || value == "write";
-});
-
 DS_DECLARE_uint32(max_client_num);
 DS_DECLARE_string(worker_address);
 DS_DECLARE_string(master_address);
@@ -489,6 +481,7 @@ Status BuildGetHashRingResponse(const cluster::TopologySnapshot &snapshot, uint6
 static constexpr int DEBUG_LOG_LEVEL = 2;
 static constexpr size_t MAX_TOPOLOGY_SCALE_IN_CLEANUP_STATES = 1'024;
 static constexpr int ORDINARY_RPC_DRAIN_POLL_INTERVAL_MS = 10;
+static constexpr auto CLIENT_WRITE_DRAIN_POLL_INTERVAL = std::chrono::milliseconds(100);
 static constexpr int MS_TO_US = 1000;
 static constexpr int64_t ORDINARY_RECONCILIATION_LOCK_TIMEOUT_MS = 500;
 static constexpr int64_t REJOIN_RECONCILIATION_LOCK_TIMEOUT_MS = 10'000;
@@ -725,7 +718,7 @@ void WorkerOCServiceImpl::InitServiceImpl()
                                                                      akSkManager_, localAddress_);
 
     gMigrateProc_ = std::make_shared<WorkerOcServiceMigrateImpl>(
-        param, memCpyThreadPool_, akSkManager_, GetLocalAddr().ToString(), migrateRateController_);
+        param, memCpyThreadPool_, GetLocalAddr().ToString(), migrateRateController_);
 
     expireProc_ = std::make_shared<WorkerOcServiceExpireImpl>(param, akSkManager_);
     initOk_.set_value(Status::OK());
@@ -864,12 +857,70 @@ Status WorkerOCServiceImpl::HealthCheck(const HealthCheckRequestPb &req, HealthC
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::VerifyClientWriteAdmission(bool isRouted)
+Status WorkerOCServiceImpl::AcquireClientWriteAdmission()
 {
-    return worker::VerifyLeavingStateWithEvaluator([this, isRouted] {
-        const bool exitIntent = exitRequested_ != nullptr && exitRequested_->load(std::memory_order_acquire);
-        return MigrateDataStarted() || (exitIntent && (isRouted || FLAGS_enable_leaving_intercept));
-    });
+    uint64_t current = clientWriteAdmission_.load(std::memory_order_acquire);
+    while ((current & CLIENT_WRITE_ADMISSION_CLOSED) == 0) {
+        if (clientWriteAdmission_.compare_exchange_weak(current, current + 1, std::memory_order_acq_rel,
+                                                        std::memory_order_acquire)) {
+            return Status::OK();
+        }
+    }
+    RETURN_STATUS(StatusCode::K_SCALE_DOWN, "Worker is exiting now");
+}
+
+void WorkerOCServiceImpl::ReleaseClientWriteAdmission()
+{
+    const auto previous = clientWriteAdmission_.fetch_sub(1, std::memory_order_acq_rel);
+    if (previous == (CLIENT_WRITE_ADMISSION_CLOSED | 1)) {
+        std::lock_guard<std::mutex> lock(clientWriteDrainMutex_);
+        clientWriteDrainCv_.notify_all();
+    }
+}
+
+void WorkerOCServiceImpl::CloseClientWriteAdmission()
+{
+    clientWriteAdmission_.fetch_or(CLIENT_WRITE_ADMISSION_CLOSED, std::memory_order_acq_rel);
+}
+
+bool WorkerOCServiceImpl::IsClientWriteAdmissionDrained() const
+{
+    return clientWriteAdmission_.load(std::memory_order_acquire) == CLIENT_WRITE_ADMISSION_CLOSED;
+}
+
+uint64_t WorkerOCServiceImpl::GetAdmittedClientWriteCount() const
+{
+    return clientWriteAdmission_.load(std::memory_order_acquire) & CLIENT_WRITE_ADMISSION_COUNT_MASK;
+}
+
+Status WorkerOCServiceImpl::WaitClientWritesDrained(std::chrono::steady_clock::time_point deadline,
+                                                    const cluster::CancellationToken &cancellation)
+{
+    CloseClientWriteAdmission();
+    auto admittedWrites = GetAdmittedClientWriteCount();
+    if (admittedWrites > 0) {
+        LOG(INFO) << "[Graceful exit] Waiting for " << admittedWrites
+                  << " admitted client write request(s) to finish.";
+    }
+    std::unique_lock<std::mutex> lock(clientWriteDrainMutex_);
+    while ((admittedWrites = GetAdmittedClientWriteCount()) > 0) {
+        if (cancellation.IsCancelled()) {
+            LOG(WARNING) << "[Graceful exit] Client write drain cancelled with " << admittedWrites
+                         << " request(s) still running; admission remains closed.";
+            RETURN_STATUS(K_NOT_READY, "topology ScaleIn client write drain cancelled");
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            LOG(ERROR) << "[Graceful exit] Timed out with " << admittedWrites
+                       << " client write request(s) still running; admission remains closed.";
+            RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED, "Timed out waiting for admitted client writes to finish");
+        }
+        const auto wake = std::min(deadline, now + CLIENT_WRITE_DRAIN_POLL_INTERVAL);
+        (void)clientWriteDrainCv_.wait_until(lock, wake, [this, &cancellation] {
+            return GetAdmittedClientWriteCount() == 0 || cancellation.IsCancelled();
+        });
+    }
+    return Status::OK();
 }
 
 void WorkerOCServiceImpl::FillWorkerRedirect(const std::string &selectionKey, WorkerRedirectPb &redirect) const
@@ -924,8 +975,8 @@ Status WorkerOCServiceImpl::Publish(const PublishReqPb &req, PublishRspPb &resp,
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before Publish dispatch, remaining %ld us.", remainingUs));
-    auto admission = VerifyClientWriteAdmission(req.is_routed());
-    if (admission.GetCode() == K_SCALE_DOWN && membership_.SupportsWriteRedirect()) {
+    auto admission = AcquireClientWriteAdmission();
+    if (req.is_routed() && admission.GetCode() == K_SCALE_DOWN && membership_.SupportsWriteRedirect()) {
         std::string tenantId;
         RETURN_IF_NOT_OK(req.is_routed() ? worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId)
                                         : worker::Authenticate(akSkManager_, req, tenantId));
@@ -933,6 +984,7 @@ Status WorkerOCServiceImpl::Publish(const PublishReqPb &req, PublishRspPb &resp,
         return Status::OK();
     }
     RETURN_IF_NOT_OK(admission);
+    Raii releaseAdmission([this] { ReleaseClientWriteAdmission(); });
     BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerStateForRequest(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
@@ -967,7 +1019,8 @@ Status WorkerOCServiceImpl::MultiPublish(const MultiPublishReqPb &req, MultiPubl
     Raii attachHealth([this, &resp] { AttachPublishedSelfUbHealth(*this, resp); });
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_PUBLISH_LATENCY);
     uint64_t payloadBytes = PayloadBytes(payloads);
-    RETURN_IF_NOT_OK(VerifyClientWriteAdmission(req.is_routed()));
+    RETURN_IF_NOT_OK(AcquireClientWriteAdmission());
+    Raii releaseAdmission([this] { ReleaseClientWriteAdmission(); });
     BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerStateForRequest(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
@@ -1085,6 +1138,7 @@ Status WorkerOCServiceImpl::DrainTopologyScaleInData(const cluster::TopologyPhas
     CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology ScaleIn cancelled");
     CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
                              "topology ScaleIn deadline exceeded");
+    RETURN_IF_NOT_OK(WaitClientWritesDrained(deadline, cancellation));
     if (asyncTasksDoneChecker_ != nullptr) {
         RETURN_IF_NOT_OK(asyncTasksDoneChecker_(action.taskId, deadline, cancellation));
     }
@@ -1317,14 +1371,6 @@ Status WorkerOCServiceImpl::MigrateData(const MigrateDataReqPb &req, MigrateData
     Raii attachHealth([this, &rsp] { AttachPublishedSelfUbHealth(*this, rsp); });
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     return gMigrateProc_->MigrateData(req, rsp, std::move(payloads));
-}
-
-Status WorkerOCServiceImpl::MigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp)
-{
-    ScopedRequestContext ctx;
-    Raii attachHealth([this, &rsp] { AttachPublishedSelfUbHealth(*this, rsp); });
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    return gMigrateProc_->MigrateDataDirect(req, rsp);
 }
 
 Status WorkerOCServiceImpl::CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::time_point deadline)
@@ -1720,8 +1766,8 @@ Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
 {
     ScopedRequestContext ctx;
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_CREATE_LATENCY);
-    auto admission = VerifyClientWriteAdmission(req.is_routed());
-    if (admission.GetCode() == K_SCALE_DOWN && membership_.SupportsWriteRedirect()) {
+    auto admission = AcquireClientWriteAdmission();
+    if (req.is_routed() && admission.GetCode() == K_SCALE_DOWN && membership_.SupportsWriteRedirect()) {
         std::string tenantId;
         RETURN_IF_NOT_OK(req.is_routed() ? worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId)
                                         : worker::Authenticate(akSkManager_, req, tenantId));
@@ -1729,6 +1775,7 @@ Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
         return Status::OK();
     }
     RETURN_IF_NOT_OK(admission);
+    Raii releaseAdmission([this] { ReleaseClientWriteAdmission(); });
     BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerStateForRequest(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
@@ -1749,10 +1796,11 @@ Status WorkerOCServiceImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreate
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_MULTI_CREATE);
     access.ObjectKeysRef(req.object_key());
     Raii raii([&returnStatus, &access]() { access.Result(returnStatus).Record(); });
-    returnStatus = VerifyClientWriteAdmission(req.is_routed());
+    returnStatus = AcquireClientWriteAdmission();
     if (returnStatus.IsError()) {
         return returnStatus;
     }
+    Raii releaseAdmission([this] { ReleaseClientWriteAdmission(); });
     BthreadReadGuard noRecon;
     returnStatus = ValidateWorkerStateForRequest(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime());
     if (returnStatus.IsError()) {
@@ -3696,7 +3744,7 @@ Status WorkerOCServiceImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, Not
     Raii attachHealth([this, &rsp] { AttachPublishedSelfUbHealth(*this, rsp); });
     RETURN_IF_NOT_OK(gMigrateProc_->ValidateRebalancePolicyFence(
         req.has_rebalance_policy_fence(), req.target_eviction_policy(), req.target_eviction_policy_epoch()));
-    RETURN_IF_NOT_OK(gMigrateProc_->AcquireIncomingMigrationAdmission(!FLAGS_enable_transport_fallback));
+    RETURN_IF_NOT_OK(gMigrateProc_->AcquireIncomingMigrationAdmission());
     Raii admission([this] { gMigrateProc_->ReleaseIncomingMigrationAdmission(); });
     INJECT_POINT_NO_RETURN("WorkerOCServiceImpl.NotifyRemoteGet.afterAdmission");
     if (gMigrateProc_->IsIncomingMigrationAdmissionClosed()) {

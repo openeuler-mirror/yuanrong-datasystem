@@ -117,8 +117,7 @@ constexpr size_t MMAP_SWITCH_VALUE_SIZE = 1024UL * 1024UL;
 constexpr char DATASYSTEM_MEMFD_MAP_NAME[] = "memfd:datasystem";
 constexpr char MMAP_SWITCH_WORKER_GFLAGS[] =
     "-shared_memory_size_mb=25 -v=1 -log_monitor=true -max_client_num=2000 "
-    "-node_timeout_s=1 -node_dead_timeout_s=2 -client_reconnect_wait_s=1 "
-    "-enable_lossless_data_exit_mode=true";
+    "-node_timeout_s=1 -node_dead_timeout_s=2 -client_reconnect_wait_s=1";
 constexpr char MMAP_SWITCH_HOST_ID_ENV_PREFIX[] = "mmap_switch_host_id_env";
 constexpr char MMAP_SWITCH_HOST_ID_VALUE_PREFIX[] = "mmap_switch_host_id";
 
@@ -349,7 +348,7 @@ public:
             "-shared_memory_size_mb=1024 -v=1 -log_monitor=true -max_client_num=2000 -enable_reconciliation=true "
             "-node_timeout_s=3 -node_dead_timeout_s=30";
         opts.coordinatorGflagParams =
-            "-v=1 -node_timeout_s=3 -node_dead_timeout_s=30 -scale_in_collect_window_ms=1000";
+            "-v=1 -node_timeout_s=3 -node_dead_timeout_s=30";
     }
 
     void GetKeysHashToWorker(uint32_t workerIndex, size_t keyCount, std::vector<std::string> &keys)
@@ -2948,6 +2947,14 @@ bool IsCoordinatorWriteRocksdbCase()
 constexpr auto VOLUNTARY_SCALE_DOWN_WAIT = std::chrono::seconds(5);
 constexpr auto TOPOLOGY_POLL_INTERVAL = std::chrono::milliseconds(100);
 
+void RestartWorkerWithoutScaleIn(BaseCluster *cluster, uint32_t workerIndex)
+{
+    DS_ASSERT_OK(cluster->SetInjectAction(WORKER, workerIndex, "worker.PreShutDown.direct", "1*call()"));
+    DS_ASSERT_OK(cluster->ShutdownNode(WORKER, workerIndex));
+    DS_ASSERT_OK(cluster->StartNode(WORKER, workerIndex, ""));
+    DS_ASSERT_OK(cluster->WaitNodeReady(WORKER, workerIndex));
+}
+
 class KVClientWriteRocksdbTest : public OCClientCommon, public CommonDistributedExt {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -3069,9 +3076,7 @@ TEST_F(KVClientWriteRocksdbTest, TestNoneModeNoneL2Cache)
     uint64_t size = 128;
     std::string data = GenRandomString(size);
     DS_ASSERT_OK(client1->Set(key1, data));
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+    RestartWorkerWithoutScaleIn(cluster_.get(), 0);
     InitTestKVClient(0, client1);
     std::string val;
     // L2 data may survive a process restart, but object metadata is intentionally not persisted in the target model.
@@ -3097,9 +3102,7 @@ TEST_F(KVClientWriteRocksdbTest, TestNoneModeL2Cache)
     SetParam param2;
     param2.writeMode = WriteMode::WRITE_BACK_L2_CACHE;
     DS_ASSERT_OK(client1->Set(key2, data, param2));
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+    RestartWorkerWithoutScaleIn(cluster_.get(), 0);
     InitTestKVClient(0, client1);
     std::string val;
     ASSERT_EQ(client1->Get(key1, val).GetCode(), StatusCode::K_NOT_FOUND);
@@ -3109,7 +3112,7 @@ TEST_F(KVClientWriteRocksdbTest, TestNoneModeL2Cache)
 TEST_F(KVClientWriteRocksdbTest, TestNoneModeVoluntaryScaleDown)
 {
     StartWorkerAndWaitReady({ 0, 1 },
-                            "-node_timeout_s=5 -node_dead_timeout_s=8 -enable_lossless_data_exit_mode=true "
+                            "-node_timeout_s=5 -node_dead_timeout_s=8 "
                             "-rocksdb_write_mode=none");
     SetWorkerHashInjection();
     std::string key1 = GetObjectKeyHashToWorker(etcd_.get(), 0);
@@ -3132,7 +3135,7 @@ TEST_F(KVClientWriteRocksdbTest, TestNoneModeVoluntaryScaleDown)
 TEST_F(KVClientWriteRocksdbTest, TestVoluntaryScaleDownWaitsForCopyMetaConfirmation)
 {
     StartWorkerAndWaitReady({ 0, 1 },
-                            "-node_timeout_s=5 -node_dead_timeout_s=8 -enable_lossless_data_exit_mode=true "
+                            "-node_timeout_s=5 -node_dead_timeout_s=8 "
                             "-rocksdb_write_mode=none");
     SetWorkerHashInjection();
     const std::string key = GetObjectKeyHashToWorker(etcd_.get(), 0);
@@ -3154,7 +3157,7 @@ TEST_F(KVClientWriteRocksdbTest, TestVoluntaryScaleDownWaitsForCopyMetaConfirmat
 TEST_F(KVClientWriteRocksdbTest, EXCLUSIVE_LEVEL1_TestScaleDownFallsBackWhenEvictedCopyIsMissing)
 {
     StartWorkerAndWaitReady({ 0, 1 },
-                            "-node_timeout_s=5 -node_dead_timeout_s=8 -enable_lossless_data_exit_mode=true "
+                            "-node_timeout_s=5 -node_dead_timeout_s=8 "
                             "-rocksdb_write_mode=none");
     SetWorkerHashInjection();
     const std::string key = GetObjectKeyHashToWorker(etcd_.get(), 0);
@@ -3223,9 +3226,7 @@ TEST_F(KVClientWriteRocksdbTest, TestSyncModeNoneL2Cache)
     uint64_t size = 128;
     std::string data = GenRandomString(size);
     DS_ASSERT_OK(client1->Set(key1, data));
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+    RestartWorkerWithoutScaleIn(cluster_.get(), 0);
     InitTestKVClient(0, client1);
     std::string val;
     ASSERT_EQ(client1->Get(key1, val).GetCode(), StatusCode::K_RUNTIME_ERROR);
@@ -3251,9 +3252,7 @@ TEST_F(KVClientWriteRocksdbTest, TestSyncModeL2Cache)
     SetParam param2;
     param2.writeMode = WriteMode::WRITE_BACK_L2_CACHE;
     DS_ASSERT_OK(client1->Set(key2, data, param2));
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+    RestartWorkerWithoutScaleIn(cluster_.get(), 0);
     InitTestKVClient(0, client1);
     std::string val;
     DS_ASSERT_OK(client1->Get(key1, val));
@@ -3265,7 +3264,7 @@ TEST_F(KVClientWriteRocksdbTest, TestSyncModeL2Cache)
 TEST_F(KVClientWriteRocksdbTest, TestSyncModeVoluntaryScaleDown)
 {
     StartWorkerAndWaitReady({ 0, 1 },
-                            "-node_timeout_s=5 -node_dead_timeout_s=8 -enable_lossless_data_exit_mode=true "
+                            "-node_timeout_s=5 -node_dead_timeout_s=8 "
                             "-rocksdb_write_mode=sync");
     SetWorkerHashInjection();
     std::string key1 = GetObjectKeyHashToWorker(etcd_.get(), 0);
@@ -3311,9 +3310,7 @@ TEST_F(KVClientWriteRocksdbTest, TestASyncModeNoneL2Cache)
     uint64_t size = 128;
     std::string data = GenRandomString(size);
     DS_ASSERT_OK(client1->Set(key1, data));
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+    RestartWorkerWithoutScaleIn(cluster_.get(), 0);
     InitTestKVClient(0, client1);
     std::string val;
     ASSERT_EQ(client1->Get(key1, val).GetCode(), StatusCode::K_RUNTIME_ERROR);
@@ -3339,9 +3336,7 @@ TEST_F(KVClientWriteRocksdbTest, TestASyncModeL2Cache)
     SetParam param2;
     param2.writeMode = WriteMode::WRITE_BACK_L2_CACHE;
     DS_ASSERT_OK(client1->Set(key2, data, param2));
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+    RestartWorkerWithoutScaleIn(cluster_.get(), 0);
     InitTestKVClient(0, client1);
     std::string val;
     DS_ASSERT_OK(client1->Get(key1, val));
@@ -3352,7 +3347,7 @@ TEST_F(KVClientWriteRocksdbTest, TestASyncModeL2Cache)
 TEST_F(KVClientWriteRocksdbTest, TestASyncModeVoluntaryScaleDown)
 {
     StartWorkerAndWaitReady({ 0, 1 },
-                            "-node_timeout_s=5 -node_dead_timeout_s=8 -enable_lossless_data_exit_mode=true "
+                            "-node_timeout_s=5 -node_dead_timeout_s=8 "
                             "-rocksdb_write_mode=async");
     SetWorkerHashInjection();
     std::string key1 = GetObjectKeyHashToWorker(etcd_.get(), 0);
@@ -4085,9 +4080,7 @@ TEST_F(KVCacheClientL2FallBackTest, TestL2CacheFallBack)
     param.writeMode = WriteMode::WRITE_THROUGH_L2_CACHE;
     DS_ASSERT_OK(client->Set(key, value));
     client.reset();
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+    RestartWorkerWithoutScaleIn(cluster_.get(), 0);
     InitTestKVClient(0, client);
     std::string valueGet;
     auto status = client->Get(key, valueGet);

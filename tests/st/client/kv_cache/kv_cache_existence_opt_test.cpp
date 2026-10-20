@@ -241,6 +241,9 @@ TEST_F(KVCacheExistenceOptTest, LEVEL1_TestDfxNoneL2NXSet)
     SetParam param { .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0, .existence = ExistenceOpt::NX };
     DS_ASSERT_OK(client1->Set(key, value, param));
     auto externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
+    for (uint32_t workerIndex = 0; workerIndex < WORKER_NUM; ++workerIndex) {
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, "worker.PreShutDown.direct", "1*call()"));
+    }
     DS_ASSERT_OK(externalCluster->RestartWorkerAndWaitReadyOneByOne({ 0, 1, 2 }));
     std::string val;
     DS_ASSERT_OK(client1->Set(key, value, param));
@@ -253,6 +256,9 @@ TEST_F(KVCacheExistenceOptTest, LEVEL1_TestDfxNoneL2NXSetAfterGet)
     SetParam param { .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0, .existence = ExistenceOpt::NX };
     DS_ASSERT_OK(client1->Set(key, value, param));
     auto externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
+    for (uint32_t workerIndex = 0; workerIndex < WORKER_NUM; ++workerIndex) {
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, "worker.PreShutDown.direct", "1*call()"));
+    }
     DS_ASSERT_OK(externalCluster->RestartWorkerAndWaitReadyOneByOne({ 0, 1, 2 }));
     std::string val;
     DS_ASSERT_NOT_OK(client1->Get(key, val));
@@ -266,7 +272,8 @@ TEST_F(KVCacheExistenceOptTest, LEVEL1_TestDfxL2NXSet)
     std::string value = "value1";
     SetParam param { .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE, .ttlSecond = 0, .existence = ExistenceOpt::NX };
     DS_ASSERT_OK(client1->Set(key, value, param));
-    DS_ASSERT_OK(externalCluster->RestartWorkerAndWaitReadyOneByOne({1}));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.PreShutDown.direct", "1*call()"));
+    DS_ASSERT_OK(externalCluster->RestartWorkerAndWaitReadyOneByOne({ 1 }));
     std::string val;
     DS_ASSERT_OK(client1->Set(key, value, param));
 }

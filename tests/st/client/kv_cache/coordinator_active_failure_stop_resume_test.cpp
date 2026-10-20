@@ -133,8 +133,7 @@ public:
         opts.workerGflagParams += " -enable_urma=false";
 #endif
         opts.coordinatorGflagParams = " -node_timeout_s=" + std::to_string(ONLINE_NODE_TIMEOUT_S)
-                                      + " -node_dead_timeout_s=" + std::to_string(ONLINE_NODE_DEAD_TIMEOUT_S)
-                                      + " -scale_in_collect_window_ms=0";
+                                      + " -node_dead_timeout_s=" + std::to_string(ONLINE_NODE_DEAD_TIMEOUT_S);
         ASSERT_EQ(setenv(CLIENT_SD_HOST_ID_ENV0, CLIENT_SD_HOST_ID_VALUE0, 1), 0);
         ASSERT_EQ(setenv(CLIENT_SD_HOST_ID_ENV1, CLIENT_SD_HOST_ID_VALUE1, 1), 0);
         ASSERT_EQ(setenv(CLIENT_SD_HOST_ID_ENV2, CLIENT_SD_HOST_ID_VALUE2, 1), 0);
@@ -436,8 +435,7 @@ public:
         opts.workerGflagParams += " -enable_urma=false";
 #endif
         opts.coordinatorGflagParams = " -node_timeout_s=" + std::to_string(ONLINE_NODE_TIMEOUT_S)
-                                      + " -node_dead_timeout_s=" + std::to_string(ONLINE_NODE_DEAD_TIMEOUT_S)
-                                      + " -scale_in_collect_window_ms=0";
+                                      + " -node_dead_timeout_s=" + std::to_string(ONLINE_NODE_DEAD_TIMEOUT_S);
     }
 
     void SetUp() override

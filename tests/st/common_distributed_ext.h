@@ -36,7 +36,6 @@
 #include "datasystem/protos/cluster_topology.pb.h"
 
 DS_DECLARE_string(etcd_address);
-DS_DECLARE_string(log_dir);
 
 namespace datasystem {
 namespace st {
@@ -161,18 +160,6 @@ public:
 
     void VoluntaryScaleDownInject(int workerIdx)
     {
-        std::string checkFilePath = FLAGS_log_dir.c_str();
-        std::string client = "client";
-        checkFilePath = checkFilePath.substr(0, checkFilePath.length() - client.length()) + "/worker"
-                        + std::to_string(workerIdx) + "/log/worker-status";
-        std::ofstream ofs(checkFilePath);
-        if (!ofs.is_open()) {
-            LOG(ERROR) << "Can not open worker status file in " << checkFilePath
-                       << ", voluntary scale in will not start, errno: " << errno;
-        } else {
-            ofs << "voluntary scale in\n";
-        }
-        ofs.close();
         kill(GetCluster()->GetWorkerPid(workerIdx), SIGTERM);
     }
 
