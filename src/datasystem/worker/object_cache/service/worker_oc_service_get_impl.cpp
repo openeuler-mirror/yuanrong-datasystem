@@ -1707,9 +1707,11 @@ Status WorkerOcServiceGetImpl::CheckRemoteReadAdmission(const std::string &addre
     auto status = ubAdmission_->CheckReadSource(peer);
     if (status.GetCode() == K_URMA_DATA_WORKER_UNAVAILABLE && FLAGS_enable_transport_fallback
         && fallback == ReadTransportFallback::ALLOWED) {
-        useFastTransport = false;
-        SLOW_LOG(WARNING) << "[Get] UB read source is unavailable; continue through the existing TCP fallback, peer: "
-            << peer.ToString() << ", status: " << status.ToString();
+        // Keep URMA metadata so provider admission selects the existing bounded TCP fallback without posting a WR.
+        SLOW_LOG(WARNING) << "[Get] UB read source is unavailable; preserve the UB request context for bounded TCP "
+                             "fallback, peer: "
+                          << peer.ToString() << ", useFastTransport: " << useFastTransport
+                          << ", status: " << status.ToString();
         return Status::OK();
     }
     return status;

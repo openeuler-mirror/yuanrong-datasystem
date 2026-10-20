@@ -172,6 +172,7 @@ ds_cc_test(
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/object_cache:common_object_cache",
         "//src/datasystem/common/rpc:rpc_server_stream_base",
         "//src/datasystem/common/shared_memory:common_shared_memory",
         "//src/datasystem/worker:add_miss_libs_fixme",
