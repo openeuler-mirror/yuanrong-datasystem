@@ -303,8 +303,6 @@ global:
     rocksdbBackgroundThreads: 16
     # Config the rocksdb support none, sync or async, async by default. Optional value: 'none', 'sync', 'async'. This represents the method of writing metadata to rocksdb.
     rocksdbWriteMode: "async"
-    # Enable query meta redirect when scale up or voluntary scale down, default is true
-    enableRedirect: "true"
     # Whether to recover worker metadata to master during worker restart cleanup, default is false
     enableMetadataRecovery: "false"
     # Experimental parameter. Allow data read from a remote worker to be cached locally as a hot replica and registered

@@ -80,8 +80,6 @@ DS_DEFINE_string(rocksdb_store_dir, "~/datasystem/rocksdb",
                  "specify in rocksdb scenario. The rocksdb database is used to persistently store the metadata "
                  "in the master, so that the metadata before the restart can be re-obtained when the master restarts.");
 DS_DEFINE_validator(rocksdb_store_dir, &Validator::ValidatePathString);
-DS_DEFINE_bool(enable_redirect, "true",
-               "Enable query meta redirect when scale up or voluntary scale down, default is true");
 
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_bool(async_delete);
@@ -1703,7 +1701,7 @@ Status OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, con
         return Status::OK();
     }
     if (!notRedirectObjectKeys.empty() && IsLocalExitRequested() && request.topology_operation_id().empty()
-        && request.redirect() && FLAGS_enable_redirect) {
+        && request.redirect()) {
         response.set_meta_is_moving(true);
         return Status::OK();
     }
@@ -1793,7 +1791,7 @@ Status OCMetadataManager::RollbackUnackLocations(const RemoveMetaReqPb &request,
     }
     RETURN_IF_NOT_OK(FillObjectRedirectResponses(response, objectKeys, request.redirect()));
     RETURN_OK_IF_TRUE(response.meta_is_moving());
-    if (!objectKeys.empty() && IsLocalExitRequested() && request.redirect() && FLAGS_enable_redirect) {
+    if (!objectKeys.empty() && IsLocalExitRequested() && request.redirect()) {
         response.set_meta_is_moving(true);
         return Status::OK();
     }
@@ -3259,7 +3257,7 @@ Status OCMetadataManager::EvaluateClientIdRefRedirect(const std::string &remoteC
     needRedirect = false;
     isMoving = false;
     newAddr.clear();
-    if (!checkRedirect || !FLAGS_enable_redirect) {
+    if (!checkRedirect) {
         VLOG(1) << "receive redirect object: " << remoteClientId;
         return Status::OK();
     }
@@ -3277,12 +3275,6 @@ Status OCMetadataManager::EvaluateClientIdRefRedirect(const std::string &remoteC
 Status OCMetadataManager::RedirectObjRefs(std::string &objectKey, bool &needRedirect, std::string &newAddr,
                                           bool &isMoving)
 {
-    if (!FLAGS_enable_redirect) {
-        needRedirect = false;
-        isMoving = false;
-        newAddr.clear();
-        return Status::OK();
-    }
     MetaRedirectDecision route;
     RETURN_IF_NOT_OK(EvaluateMetadataRedirect(objectKey, route));
     RETURN_IF_NOT_OK(ApplyObjectMetadataAvailability(objectKey, route));

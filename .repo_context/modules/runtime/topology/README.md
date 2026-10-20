@@ -343,7 +343,9 @@
   migrating that key. Metadata absence alone is not completion evidence: after a successful callback and progress CAS,
   the Executor publishes immutable process-local completion ranges scoped by ScaleOut batch epoch. A key redirects only
   when its token is covered by that evidence; publication leaves the epoch by atomically clearing the evidence. A
-  ScaleIn source whose metadata handoff has completed redirects missing metadata to the prospective owner. Migration
+  ScaleIn source whose metadata handoff has completed redirects missing metadata to the prospective owner. Master
+  metadata redirect capability is unconditional: the former `enable_redirect` global flag is removed, and the
+  per-request `redirect` caller-intent field plus topology state are the only gates. Migration
   RPC fence validation may wait through a bthread-aware condition variable only for the process-local Snapshot to catch
   up within the existing request deadline; it never synchronously reads the backend. A newer Snapshot in the same
   active batch remains valid after epoch/type/participant revalidation.
