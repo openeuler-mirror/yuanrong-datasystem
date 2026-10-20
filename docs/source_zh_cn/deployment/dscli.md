@@ -1564,7 +1564,6 @@ INFO fallback 仅适用于忽略该初始化错误的 SDK Client，并且只在 
 | rocksdb_background_threads | int | `16` | 否 | RocksDB的后台线程数，用于元数据的刷盘和压缩，必须为正整数 |
 | rocksdb_max_open_file | int | `128` | 否 | RocksDB可使用的最大打开文件个数 |
 | rocksdb_write_mode | string | `async` | 否 | 配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为`async`。可选值包括：'none'（不写）、'sync'（同步）、'async'（异步） |
-| enable_data_replication | bool | `true` | 否 | 实验性参数。是否允许跨 worker 读取到的数据在本 worker 缓存为本地热副本，并向 master 注册副本位置；关闭后 remote get 获取的数据通常仅服务当前请求，不作为普通本地副本保留。该参数仅用于热副本性能优化，不作为数据可靠性机制，不保障数据可靠性或可用性 |
 
 #### 可靠性相关配置
 
@@ -1600,7 +1599,6 @@ INFO fallback 仅适用于忽略该初始化错误的 SDK Client，并且只在 
 | arena_per_tenant | int | `16` | 每个租户的共享内存分配器数量。多分配器可以提高第一次分配共享内存的性能，但每个分配器会多使用一个fd，导致fd资源使用量上升。取值范围：[1, 32] |
 | async_delete | bool | `false` | 是否异步删除对象，如果设置为 `true` 时，删除对象数据是个异步的过程，客户端不需要等待所有数据副本删除完成即可返回 |
 | enable_p2p_transfer | bool | `false` | 是否开启异构对象传输协议支持点对点传输 |
-| enable_worker_worker_batch_get | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |
 | enable_urma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输，开启后worker启动时会自动预热URMA worker-worker连接 |
 | ub_numa_rr_type | int | `1` | UB NUMA 源芯片选择粒度。`0` 表示关闭源芯片选择，保持发送内存所在芯片；`1` 表示每次逻辑写选择一次，`2` 表示每个 WR Post 选择一次。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。 |
 | ub_numa_src_chip_policy | int | `1` | UB NUMA 源芯片策略。`0` 表示轮询；`1` 表示以轮询为基线，仅当发送内存的亲和芯片接收本次逻辑写的预计 WR 后仍不比轮询候选更忙时，才覆盖轮询结果。配置 `0` 可用于消融实验和快速回滚。旧 worker 未返回该字段时，新 client 按 `0` 兼容。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。 |

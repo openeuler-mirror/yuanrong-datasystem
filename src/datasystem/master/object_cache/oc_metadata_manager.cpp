@@ -86,7 +86,6 @@ DS_DECLARE_string(etcd_address);
 DS_DECLARE_bool(async_delete);
 
 DS_DECLARE_bool(enable_reconciliation);
-DS_DECLARE_bool(enable_data_replication);
 
 namespace datasystem {
 namespace master {
@@ -1317,30 +1316,15 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
             info.set_single_copy(accessor->second.IsPrimaryWithoutCopy(accessor->second.meta.primary_address()));
         };
         QueryMetaInfoPb info;
-        if (!FLAGS_enable_data_replication) {
-            TbbMetaTable::const_accessor accessor;
-            size_t shardIdx = GetShardIndex(objectKey);
-            if (metaShards_[shardIdx].table.find(accessor, objectKey) && accessor->second.multiSetState != PENDING) {
-                getMetaInfo(accessor, info);
-            }
-        } else {
-            TbbMetaTable::accessor accessor;
-            size_t shardIdx = GetShardIndex(objectKey);
-            if (metaShards_[shardIdx].table.find(accessor, objectKey) && accessor->second.multiSetState != PENDING) {
-                getMetaInfo(accessor, info);
-                TryGetObjectData(objectKey, accessor, payloadSize, info, payloads);
-                // If we enable data replication, we only set the not exist location as UNACK state because of the
-                // following reason:
-                // 1. If the location exists and its status is ACK, this issue likely stems from concurrent query
-                // requests. Since the location is already in a ready state, any modification attempt will result in an
-                // error.
-                // 2. If location exist and it's state is UNACK, we no need to modify it.
-                // 3. If the key type is hash and the req is from another worker, no need to keep worker address to
-                // location.
-                if (accessor->second.locations.find(address) == accessor->second.locations.end()) {
-                    accessor->second.locations[address] = AckState::UNACK;
-                    RETURN_IF_NOT_OK(objectStore_->AddObjectLocation(objectKey, address));
-                }
+        TbbMetaTable::accessor accessor;
+        size_t shardIdx = GetShardIndex(objectKey);
+        if (metaShards_[shardIdx].table.find(accessor, objectKey) && accessor->second.multiSetState != PENDING) {
+            getMetaInfo(accessor, info);
+            TryGetObjectData(objectKey, accessor, payloadSize, info, payloads);
+            // Existing ACK locations are ready, and existing UNACK locations already track an in-flight fetch.
+            if (accessor->second.locations.find(address) == accessor->second.locations.end()) {
+                accessor->second.locations[address] = AckState::UNACK;
+                RETURN_IF_NOT_OK(objectStore_->AddObjectLocation(objectKey, address));
             }
         }
         if (!info.meta().object_key().empty()) {

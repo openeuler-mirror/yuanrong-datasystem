@@ -85,7 +85,7 @@ public:
             " -shared_memory_size_mb=5120"
             " -arena_per_tenant=1 -enable_urma=true -ipc_through_shared_memory=false"
             " -enable_transport_fallback=false -ub_numa_rr_type=1 -ub_numa_src_chip_policy="
-            + std::to_string(sourceChipPolicy_) + " -enable_worker_worker_batch_get=true";
+            + std::to_string(sourceChipPolicy_);
     }
 
     void SetUp() override

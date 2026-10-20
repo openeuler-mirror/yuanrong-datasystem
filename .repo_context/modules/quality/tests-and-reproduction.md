@@ -511,7 +511,8 @@ DS_URMA_DEV_NAME=<device> \
     CQE status 9 on a real remote GET writeback, keeps the requester quarantined during the assertion window, and
     verifies that subsequent ordinary and aggregate Batch Gets either carry the complete payload over TCP or return
     `K_URMA_WORKER_UNAVAILABLE` when fallback is disabled, without acquiring an URMA send lane. The target also covers
-    configured-capacity concurrent remote Get, a manual `LEVEL1_` 64 concurrently started Batch Get × 64 ordinary sub-object scenario with exactly 64 lane releases and zero
+    configured-capacity concurrent remote Get, a manual `LEVEL1_` 64 concurrently started Batch Get × 101 ordinary
+    sub-object scenario with exactly 64 lane releases and zero
     observed pool exhaustion (without claiming all lanes were simultaneously held), recovery after an injected
     recoverable CQE retires a send Jetty, and `LEVEL1_ConcurrentBatchGetsRecoverFromInFlightTimeoutStorm`: timeout
     releases each sealed lane while retaining observer-backed write Events. The timeout-storm case pauses production

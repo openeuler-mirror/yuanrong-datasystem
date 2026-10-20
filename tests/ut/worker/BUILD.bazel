@@ -178,6 +178,7 @@ ds_cc_test(
         "//src/datasystem/common/rpc:rpc_server_stream_base",
         "//src/datasystem/common/shared_memory:common_shared_memory",
         "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/object_cache:worker_oc_constants",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//tests/common/binmock:binmock",
         "//tests/ut:ut_common",
@@ -474,6 +475,7 @@ ds_cc_test(
     name = "worker_worker_oc_gather_layout_test",
     srcs = ["object_cache/worker_worker_oc_gather_layout_test.cpp"],
     deps = [
+        "//src/datasystem/worker/object_cache:worker_oc_constants",
         "//src/datasystem/worker/object_cache:worker_worker_oc_gather_layout",
         "//tests/ut:ut_common",
     ],

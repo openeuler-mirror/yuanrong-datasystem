@@ -215,8 +215,11 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     do not clear live holders in place. RPC-shared lanes keep using their original connection generation.
     Last-holder destruction remains synchronous, outside the connection-map lock; `URMA_CONNECTION_CLEANUP`
     measures target/segment unimport cost in the existing perf framework. It is not claimed to be latency-free.
-    Worker-to-worker Batch Get is a narrower RPC-scoped exception: `BatchGetObjectRemoteImpl` attempts one shared-lane
-    acquire before object processing. On success it passes the lane to ordinary and gather writes and seals it once
+    Worker-to-worker Batch Get is always used for remote multi-object reads. The provider enters its fixed 16-way
+    parallel path only above 100 objects when fast transport is active; pipeline H2D stays serial. Aggregate gather
+    accepts objects up to and including 64 KiB and caps each subgroup at 2 MiB including metadata and alignment.
+    `BatchGetObjectRemoteImpl` attempts one shared-lane acquire before object processing. On success it passes the lane
+    to ordinary and gather writes and seals it once
     after all sub-request WRs are created. When the acquire fails and transport fallback is enabled, the whole RPC is
     pinned to TCP before object processing; aggregate/GatherWrite and per-object URMA acquire/post are disabled, while
     the existing `TrackUrmaFallbackTcp` admission/accounting path remains in force. With fallback disabled, the original

@@ -52,10 +52,8 @@ public:
         for (const auto &addr : opts.workerConfigs) {
             workerAddress_.emplace_back(addr.ToString());
         }
-        // Enable worker->worker batch get by default.
         opts.workerGflagParams =
-            " -shared_memory_size_mb=5120 -v=2 -enable_worker_worker_batch_get=true"
-            " -batch_get_threshold_mb=20";
+            " -shared_memory_size_mb=5120 -v=2 -batch_get_threshold_mb=20";
 #ifdef USE_RDMA
         opts.workerGflagParams += " -arena_per_tenant=1 -enable_rdma=true ";
 #else
@@ -769,10 +767,8 @@ public:
         for (const auto &addr : opts.workerConfigs) {
             workerAddress_.emplace_back(addr.ToString());
         }
-        // Enable worker->worker batch get by default.
         opts.workerGflagParams =
-            " -shared_memory_size_mb=5120 -v=2 -enable_worker_worker_batch_get=true "
-            "-arena_per_tenant=1";
+            " -shared_memory_size_mb=5120 -v=2 -arena_per_tenant=1";
         // Specify mismatching enable_rdma setting for the workers.
         opts.workerSpecifyGflagParams[0] += " -enable_rdma=true ";
         opts.workerSpecifyGflagParams[1] += " -enable_rdma=false ";

@@ -96,7 +96,6 @@ DS_DEFINE_string(shared_memory_distribution_policy, "interleave_all_numa",
                  "Shared memory NUMA distribution policy. Optional values: "
                  "'none', 'interleave_all_numa', 'interleave_affinity_numa'.");
 DS_DEFINE_bool(enable_urma_perf, false, "Enable performance logging for URMA operations");
-DS_DEFINE_bool(enable_worker_worker_batch_get, false, "Enable worker->worker OC batch get, default false.");
 DS_DEFINE_bool(enable_remote_h2d, false, "Option to turn on Remote H2D, default false.");
 DS_DEFINE_string(remote_h2d_link_type, "ROCE", "Link type for Remote H2D: ROCE or HCCS.");
 DS_DEFINE_string(remote_h2d_hccs_buffer_pool, "0:0",
@@ -218,9 +217,6 @@ DS_DEFINE_bool_dynamic(auto_del_dead_node, true, "Remove dead node from hash rin
 DS_DEFINE_bool(enable_huge_tlb, false,
                "enable_huge_tlb can improve memory access and reducing the overhead of page table,"
                "default is disable.");
-DS_DEFINE_bool(enable_data_replication, true,
-               "Allow data replica cache locally; mainly for performance validation, keep enabled unless needed.");
-
 DS_DEFINE_bool(enable_memory_rebalance, false,
     "Enable master-scheduled memory rebalance across workers. The master periodically schedules tasks to migrate "
     "primary object replicas from high-usage workers to under-utilized workers.");

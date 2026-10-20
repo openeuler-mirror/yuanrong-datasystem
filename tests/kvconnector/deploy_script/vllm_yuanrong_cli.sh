@@ -196,7 +196,6 @@ start_ds_worker() {
         -w \
         --worker_address "${HOST_IP}:${YUANRONG_WORKER_PORT}" \
         --shared_memory_size_mb ${SHARED_MEMORY_MB} \
-        --enable_worker_worker_batch_get True \
         --etcd_address "${ETCD_IP}:${ETCD_CLIENT_PORT}" &
 
     sleep 3

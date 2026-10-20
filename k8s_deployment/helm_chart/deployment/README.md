@@ -234,7 +234,6 @@ global:
 |-----|------|---------|-------------|
 | global.metadata.rocksdbStoreDir | string | `"/home/jd/kvcache/rocksdb"` | 配置元数据持久化目录，元数据通过RocksDB持久化在磁盘中 |
 | global.metadata.rocksdbWriteMode | string | `none` | 配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为`async`。可选值包括：'none'（不写）、'sync'（同步）、'async'（异步） |
-| global.metadata.enableDataReplication | bool | `true` | 实验性参数。是否允许跨 worker 读取到的数据在本 worker 缓存为本地热副本，并向 master 注册副本位置；关闭后 remote get 获取的数据通常仅服务当前请求，不作为普通本地副本保留。该参数仅用于热副本性能优化，不作为数据可靠性机制，不保障数据可靠性或可用性 |
 | global.metadata.clusterName | string | `AZ1` | 配置ETCD表前缀，值只能包含英文字母（a-zA-Z）和数字（0-9）,用于逻辑隔离集群 |
 
 **样例**：
@@ -243,7 +242,6 @@ global:
   metadata:
     rocksdbStoreDir: /home/jd/kvcache/rocksdb
     rocksdbWriteMode: "none"
-    enableDataReplication: true
     clusterName: "AZ1"
 ```
 
@@ -253,7 +251,6 @@ global:
 |-----|------|---------|-------------|
 | global.performance.enableHugeTlb | bool | `false` | 是否开启共享内存大页内存功能，它可以提高内存访问，减少页表的开销 |
 | global.performance.enableThp | bool | `false` | 是否启用透明大页（Transparent Huge Page,THP）功能，启用透明大页可以提高性能，减少页表开销，但也可能导致 Pod 内存使用增加 |
-| global.performance.enableWorkerWorkerBatchGet | bool | `true` | 是否开启worker到worker的对象数据批量获取 |
 | global.performance.enableUrma | bool | `true` | 是否开启Urma以实现对象worker之间的数据传输，开启后worker启动时会自动预热URMA worker-worker连接 |
 | global.performance.urmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
 | global.performance.evictionReserveMemThresholdMB | int | `10240` | 内存预留阈值（MB），实际取值 min(shared_memory_size_mb × 0.1, evictionReserveMemThresholdMB)；与 evictionHighWatermarkRatio 共同决定驱逐触发线。有效范围 100-102400 |

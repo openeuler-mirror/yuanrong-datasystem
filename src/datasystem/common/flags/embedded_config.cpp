@@ -171,12 +171,6 @@ EmbeddedConfig &EmbeddedConfig::RocksdbWriteMode(int mode)
     return *this;
 }
 
-EmbeddedConfig &EmbeddedConfig::EnableDataReplication(bool enable)
-{
-    extraArgs["enable_data_replication"] = enable ? "true" : "false";
-    return *this;
-}
-
 EmbeddedConfig &EmbeddedConfig::SetArg(const std::string &name, const std::string &value)
 {
     extraArgs[name] = value;
