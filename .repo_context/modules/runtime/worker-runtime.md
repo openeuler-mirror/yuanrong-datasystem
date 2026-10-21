@@ -51,6 +51,12 @@
     routed requests with `is_routed=true` call `worker::AuthenticateRequest` using the signed request tenant, while
     legacy gateway requests retain the registered-client authentication path. Deploy workers with this routed-request
     branch before enabling routed Set or MSet in newer clients during rolling upgrades.
+  - new object metadata and worker object-entry construction admit only `BINARY` and `HETERO` formats. The legacy
+    `HASH_MAP` numeric value remains reserved for decoding historical metadata, while an unset/unknown format maps to
+    `DataFormat::UNKNOWN` instead of being interpreted as `HASH_MAP`.
+  - deprecated `Hget/Hset/Hdel/Hgetall` RPC declarations remain in `WorkerOCService` to preserve generated method
+    indexes, but their handlers return `K_INVALID`. `UpdateObjectInfoPb.secondary_keys` is removed with field 5
+    reserved, and worker cache-invalidation notifications no longer carry a field-level hash erase path.
   - global-reference decrease treats a missing worker-to-master API after a successful owner lookup as
     `K_RPC_UNAVAILABLE`; affected ids enter the existing RPC-failure path instead of being silently skipped during a
     connection rebuild window.

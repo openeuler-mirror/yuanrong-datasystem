@@ -173,12 +173,13 @@ void SetNewObjectEntry(const std::string &namespaceUri, ConsistencyType consiste
 void SetDeviceObjEntry(const ObjectMetaPb &meta, uint64_t metaDataSize, SafeObjType &entry);
 
 /**
- * @brief Set properties of object entry.
+ * @brief Set properties of a supported object entry.
  * @param[in] meta The meta of object.
  * @param[in] metaDataSize The metadata size.
  * @param[out] entry Object entry.
+ * @return Status of the call.
  */
-void SetObjectEntryAccordingToMeta(const ObjectMetaPb &meta, uint64_t metaDataSize, SafeObjType &entry);
+Status SetObjectEntryAccordingToMeta(const ObjectMetaPb &meta, uint64_t metaDataSize, SafeObjType &entry);
 
 /**
  * @brief Set properties of object entry.

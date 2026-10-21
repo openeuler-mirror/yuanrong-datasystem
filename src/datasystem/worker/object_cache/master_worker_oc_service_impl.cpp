@@ -121,14 +121,6 @@ Status MasterWorkerOCServiceImpl::UpdateSingleNotification(const UpdateObjectInf
             LOG(INFO) << "Cache Invalidation should not be performed because the version is out of date.";
             RETURN_STATUS(K_INVALID, "Version expired.");
         }
-    } else if ((*safeEntry)->IsHashmap()) {
-        for (const auto &field : req.secondary_keys()) {
-            Status rc = (*safeEntry)->Erase(field);
-            if (rc.IsError() && rc.GetCode() != K_NOT_FOUND) {
-                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "UpdateSingleNotification erase data failed");
-            }
-        }
-        LOG(INFO) << FormatString("[ObjectKey %s] Cache invalidation delete success", objectKey);
     } else {
         RETURN_STATUS_LOG_ERROR(K_UNKNOWN_ERROR, "object data format not supported");
     }

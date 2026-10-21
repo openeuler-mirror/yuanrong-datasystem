@@ -580,7 +580,7 @@ std::vector<std::pair<std::string, NotifyWorkerOp>> OCNotifyWorkerManager::GetOb
 
 Status OCNotifyWorkerManager::SyncSendUpdateObject(const std::string &objectKey, uint64_t timestamp,
                                                    const std::string &sourceWorker, ObjectMeta &objectMeta,
-                                                   ObjectLifeState lifeState, const std::vector<std::string> &fields)
+                                                   ObjectLifeState lifeState)
 {
     for (auto iter = objectMeta.locations.begin(); iter != objectMeta.locations.end();) {
         const std::string &address = iter->first;
@@ -610,7 +610,6 @@ Status OCNotifyWorkerManager::SyncSendUpdateObject(const std::string &objectKey,
         req->set_life_state(static_cast<uint32_t>(lifeState));
         req->set_object_key(objectKey);
         req->set_version(timestamp);
-        *req->mutable_secondary_keys() = { fields.begin(), fields.end() };
         RETURN_IF_NOT_OK(masterWorkerApi->UpdateNotification(request, response));
         CHECK_FAIL_RETURN_STATUS(response.failed_ids().empty(), StatusCode::K_RUNTIME_ERROR, "worker update failed");
         (void)objectStore_->RemoveObjectLocation(objectKey, address);

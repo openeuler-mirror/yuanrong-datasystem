@@ -163,6 +163,36 @@ TEST_F(OCMetadataManagerExistenceOptTest, RejectedCreateMetaKeepsExpiryTaskRegis
     EXPECT_TRUE(HasExpiryTask(objectKey));
 }
 
+TEST_F(OCMetadataManagerExistenceOptTest, CreateMetaRejectsLegacyHashMapFormat)
+{
+    const std::string objectKey = "legacy-hash-format-create";
+    ObjectMetaPb newMeta;
+    newMeta.set_object_key(objectKey);
+    newMeta.set_data_size(8);
+    newMeta.mutable_config()->set_write_mode(static_cast<uint32_t>(WriteMode::NONE_L2_CACHE));
+    newMeta.mutable_config()->set_data_format(static_cast<uint32_t>(DataFormat::HASH_MAP));
+    int64_t version = 0;
+    bool firstOne = false;
+
+    auto rc = manager_->CreateMeta(newMeta, WORKER_ADDRESS, {}, version, firstOne);
+
+    EXPECT_EQ(rc.GetCode(), K_INVALID);
+    EXPECT_FALSE(HasMeta(objectKey));
+}
+
+TEST_F(OCMetadataManagerExistenceOptTest, CreateCopyMetaRejectsLegacyHashMapFormat)
+{
+    CreateCopyMetaReqPb request;
+    request.set_object_key("legacy-hash-format-copy");
+    request.set_address(WORKER_ADDRESS);
+    request.set_data_format(static_cast<uint32_t>(DataFormat::HASH_MAP));
+    CreateCopyMetaRspPb response;
+
+    auto rc = manager_->CreateCopyMeta(request, response);
+
+    EXPECT_EQ(rc.GetCode(), K_INVALID);
+}
+
 TEST_F(OCMetadataManagerExistenceOptTest, RejectedUpdateKeepsExpiryTaskAndZeroTtlCancelsIt)
 {
     const std::string objectKey = "ttl-strip-update-entry";

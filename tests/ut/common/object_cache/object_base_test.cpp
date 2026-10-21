@@ -34,6 +34,31 @@ public:
     }
 };
 
+TEST_F(ObjectInterfaceTest, DataFormatTransitionsKeepOneFormatFlag)
+{
+    StateInfo stateInfo;
+    EXPECT_EQ(stateInfo.GetDataFormat(), DataFormat::UNKNOWN);
+
+    stateInfo.SetDataFormat(DataFormat::BINARY);
+    EXPECT_EQ(stateInfo.GetDataFormat(), DataFormat::BINARY);
+    EXPECT_TRUE(stateInfo.GetDataFormat() != DataFormat::HETERO);
+
+    stateInfo.SetDataFormat(DataFormat::HETERO);
+    EXPECT_EQ(stateInfo.GetDataFormat(), DataFormat::HETERO);
+
+    stateInfo.SetDataFormat(DataFormat::HASH_MAP);
+    EXPECT_EQ(stateInfo.GetDataFormat(), DataFormat::HASH_MAP);
+
+    stateInfo.SetDataFormat(DataFormat::UNKNOWN);
+    EXPECT_EQ(stateInfo.GetDataFormat(), DataFormat::UNKNOWN);
+
+    EXPECT_TRUE(IsSupportedDataFormat(static_cast<uint32_t>(DataFormat::BINARY)));
+    EXPECT_TRUE(IsSupportedDataFormat(static_cast<uint32_t>(DataFormat::HETERO)));
+    EXPECT_FALSE(IsSupportedDataFormat(static_cast<uint32_t>(DataFormat::LIST)));
+    EXPECT_FALSE(IsSupportedDataFormat(static_cast<uint32_t>(DataFormat::HASH_MAP)));
+    EXPECT_FALSE(IsSupportedDataFormat(99U));
+}
+
 TEST_F(ObjectInterfaceTest, TestGetterSetters)
 {
     std::shared_ptr<ObjectInterface> interface = std::make_shared<FakeObject>();
@@ -50,7 +75,6 @@ TEST_F(ObjectInterfaceTest, TestGetterSetters)
     testObject.SetLifeState(ObjectLifeState::OBJECT_INVALID);
     testObject.SetCreateTime(0);
     testObject.SetAddress(std::string());
-    ASSERT_EQ(testObject.Erase("field"), Status::OK());
     ASSERT_EQ(testObject.IsShm(), false);
 }
 }  // namespace ut

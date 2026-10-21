@@ -201,32 +201,12 @@ struct ObjectInterface {
     }
 
     /**
-     * @brief An Erase function that a derived class can optionally implement.
-     * @param[in] field The field to erase.
-     * @return Status of the call.
-     */
-    virtual Status Erase(const std::string &field)
-    {
-        (void)field;
-        return Status::OK();
-    }
-
-    /**
      * @brief Get function to test if its spilled or not.
      * @return True if its spilled.
      */
     virtual bool IsSpilled() const
     {
         return stateInfo.IsSpilled();
-    }
-
-    /**
-     * @brief Check if the object is a hashmap.
-     * @return True if the object is a hashmap, false otherwise.
-     */
-    bool IsHashmap() const
-    {
-        return stateInfo.GetDataFormat() == DataFormat::HASH_MAP;
     }
 
     /**

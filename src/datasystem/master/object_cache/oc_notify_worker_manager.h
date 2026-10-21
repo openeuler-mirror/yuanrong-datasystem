@@ -105,12 +105,10 @@ public:
      * @param[in] sourceWorker The worker initiates to update object.
      * @param[in] objectMeta The meta of object.
      * @param[in] lifeState Update the object life state to the given value.
-     * @param[in] fields The secondary keys.
      * @return Status of the call.
      */
     Status SyncSendUpdateObject(const std::string &objectKey, uint64_t timestamp, const std::string &sourceWorker,
-                                struct ObjectMeta &objectMeta, ObjectLifeState lifeState,
-                                const std::vector<std::string> &fields);
+                                struct ObjectMeta &objectMeta, ObjectLifeState lifeState);
 
     /**
      * @brief Asynchronously notify worker which has object data to update.

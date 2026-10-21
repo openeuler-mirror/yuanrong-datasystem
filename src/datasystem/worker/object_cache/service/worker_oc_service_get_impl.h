@@ -1146,11 +1146,11 @@ private:
     Status FetchNotifyRemoteGetGroup(const std::string &address,
                                      std::list<std::pair<std::list<GetObjectInfo>, uint64_t>> &infoList,
                                      BatchGetObjectOutput output);
-    void PrepareNotifyRemoteGetGroups(const NotifyRemoteGetReqPb &req, const std::set<ReadKey> &pendingObjects,
-                                      std::map<ReadKey, LockedEntity> &lockedEntries, QueryMetaMap &queryMetas,
-                                      std::unordered_map<std::string,
-                                          std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groups,
-                                      std::vector<std::string> &reusedPayloadIds);
+    Status PrepareNotifyRemoteGetGroups(
+        const NotifyRemoteGetReqPb &req, const std::set<ReadKey> &pendingObjects,
+        std::map<ReadKey, LockedEntity> &lockedEntries, QueryMetaMap &queryMetas,
+        std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groups,
+        std::vector<std::string> &reusedPayloadIds);
     Status ProcessRemoteGetInNotificationImpl(NotifyRemoteGetProcessContext &context);
 
     void AttachNotifyRemoteGetUbFailure(const std::unordered_map<std::string, uint64_t> &epochsBefore,

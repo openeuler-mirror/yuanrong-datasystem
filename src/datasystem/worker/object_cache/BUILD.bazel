@@ -726,23 +726,6 @@ ds_cc_library(
     ],
 )
 
-# success
-ds_cc_library(
-    name = "obj_cache_hashmap",
-    srcs = [
-        "obj_cache_hashmap.cpp",
-    ],
-    hdrs = [
-        "obj_cache_hashmap.h",
-    ],
-    deps = [
-        "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/object_cache:object_base",
-        "//src/datasystem/common/shared_memory:common_shm_unit_info",
-        "@tbb",
-    ],
-)
-
 ds_cc_library(
     name = "worker_worker_transport_service_impl",
     srcs = [

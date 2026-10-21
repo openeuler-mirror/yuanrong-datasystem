@@ -283,12 +283,14 @@ service WorkerWorkerOCService {
 }
 
 message UpdateObjectInfoPb {
+  reserved 5;
+  reserved "secondary_keys";
+
   string object_key = 1;
   string address = 2;
   uint64 version = 3; // version control
   // For the meaning of the value, see 'ObjectLifeState' enum class.
   uint32 life_state = 4;
-  repeated string secondary_keys = 5;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

@@ -168,8 +168,7 @@ Status WorkerOcServicePublishImpl::PrepareForPublish(const PublishReqPb &req, co
     SafeObjType &safeObj = objectKV.GetObjEntry();
     // Update or create entry state, set object cache invalid here
     if (safeObj.Get() != nullptr) {  // Case 1: Get.
-        CHECK_FAIL_RETURN_STATUS(safeObj->IsBinary(), K_INVALID,
-                                 "The key you set already exists, which is used by hset.");
+        CHECK_FAIL_RETURN_STATUS(safeObj->IsBinary(), K_INVALID, "The existing object is not BINARY.");
         RETURN_IF_NOT_OK(VertifyObjectReleaseValidity(req, safeObj));
         UpdateObjectEntry(ConsistencyType(req.consistency_type()), WriteMode(req.write_mode()),
                           static_cast<CacheType>(req.cache_type()), GetMetadataSize(), safeObj);

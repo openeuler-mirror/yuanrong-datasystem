@@ -338,7 +338,9 @@ Status MetaDataRecoveryManager::RecoverLocalEntries(
             continue;
         }
 
-        SetObjectEntryAccordingToMeta(meta, metadataSize_, *entry);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            SetObjectEntryAccordingToMeta(meta, metadataSize_, *entry),
+            FormatString("[ObjectKey %s] Set object entry failed", meta.object_key().c_str()));
         (*entry)->SetAddress(localAddress_.ToString());
         (*entry)->stateInfo.SetPrimaryCopy(true);
 
