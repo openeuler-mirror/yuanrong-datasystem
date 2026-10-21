@@ -1,6 +1,6 @@
 {
   "repo_root": ".",
-  "generated_at_utc": "2026-10-22T11:16:30+00:00",
+  "generated_at_utc": "2026-10-23T08:14:39+00:00",
   "root_files": [
     "README.md",
     "build.sh",
@@ -614,7 +614,6 @@
         "    - membership_contract_test.cpp",
         "    - placement_facade_test.cpp",
         "    - remote_ub_port_health_verifier_test.cpp",
-        "    - storage_scan_plan_test.cpp",
         "    - topology_controller_runtime_test.cpp",
         "    - topology_controller_test.cpp",
         "    - topology_dfx_test.cpp",

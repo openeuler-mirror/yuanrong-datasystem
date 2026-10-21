@@ -79,7 +79,6 @@ using namespace datasystem::object_cache;
 DS_DECLARE_string(health_check_path);
 DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_bool(enable_leaving_intercept);
-DS_DECLARE_bool(enable_metadata_recovery);
 DS_DECLARE_bool(enable_reconciliation);
 DS_DECLARE_bool(enable_transport_fallback);
 DS_DECLARE_bool(enable_worker_worker_batch_get);
@@ -744,7 +743,7 @@ public:
             topologyRuntime_.Engine(), metadataRoute_, topologyRuntime_.Engine()->Membership(), &exitRequested_,
             topologyRuntime_.Engine()->IsRestart(), false);
         dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(
-            objectTable_, globalRefTable_, nullptr, gRefProc_, deleteProc_, nullptr, metadataRoute_, *endpointPolicy_,
+            objectTable_, globalRefTable_, nullptr, gRefProc_, deleteProc_, metadataRoute_, *endpointPolicy_,
             localAddress_.ToString());
         impl_->InitServiceImpl();
     }
@@ -847,7 +846,7 @@ public:
     void InitImplClearDataFlow()
     {
         impl_->clearDataFlow_ = std::make_unique<WorkerOcServiceClearDataFlow>(
-            objectTable_, globalRefTable_, nullptr, impl_->gRefProc_, impl_->deleteProc_, nullptr, metadataRoute_,
+            objectTable_, globalRefTable_, nullptr, impl_->gRefProc_, impl_->deleteProc_, metadataRoute_,
             *endpointPolicy_, localAddress_.ToString());
     }
 
@@ -992,6 +991,20 @@ TEST_F(WorkerOcServiceImplTest, ObjectEntryOnlyAcceptsBinaryAndHeteroMetadataFor
                                                impl_->GetMetadataSize(), heteroEntry));
     ASSERT_NE(heteroEntry.Get(), nullptr);
     EXPECT_TRUE(heteroEntry->IsHetero());
+}
+
+TEST_F(WorkerOcServiceImplTest, NodeRestartAlwaysTriggersMetadataRecovery)
+{
+    const std::map<std::string, int64_t> restartFacts{ { "127.0.0.1:18482", 123 } };
+    using RecoverRestartedWorkersMethod =
+        Status (WorkerOCServiceImpl::*)(const std::map<std::string, int64_t> &);
+    BINEXPECT_CALL((RecoverRestartedWorkersMethod)&WorkerOCServiceImpl::RecoverMetadataOfRestartedWorkers, (_))
+        .WillOnce(Invoke([&restartFacts](const std::map<std::string, int64_t> &actualFacts) {
+            EXPECT_EQ(actualFacts, restartFacts);
+            return Status::OK();
+        }));
+
+    DS_ASSERT_OK(impl_->HandleNodeRestartEvent(restartFacts, true));
 }
 
 TEST_F(WorkerOcServiceImplTest, AllocationIdReservationUsesStableShmIdAndRejectsConcurrentDuplicate)
@@ -2410,7 +2423,7 @@ TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterReportsMetadataRpcFailure
         [&observations](const HostPort &target, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     master::QueryMetaRspPb rsp;
     std::vector<RpcMessage> payloads;
 
@@ -2430,7 +2443,7 @@ TEST_F(WorkerOcServiceImplTest, GetLocationCleanupUsesNormalCause)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     DS_ASSERT_OK(getImpl.RemoveLocation(objectKey, UINT64_MAX));
 
@@ -2474,7 +2487,7 @@ TEST_F(WorkerOcServiceImplTest, DeviceRemoteGetReservesCleanupBudgetBeforeRetry)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
-    impl_->getProc_ = std::make_shared<WorkerOcServiceGetImpl>(param, nullptr, nullptr, nullptr, nullptr, localAddress_,
+    impl_->getProc_ = std::make_shared<WorkerOcServiceGetImpl>(param, nullptr, nullptr, nullptr, localAddress_,
                                                                nullptr);
     WorkerDeviceOcManager deviceManager(impl_.get());
     GetDeviceObjectReqPb req;
@@ -2513,7 +2526,7 @@ TEST_F(WorkerOcServiceImplTest, RollbackUnackEmptySingleResponseStopsCleanupRetr
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     getImpl.DeleteObjectsMetaUnacked({ { objectKey, rollbackVersion } });
 
@@ -2536,7 +2549,7 @@ TEST_F(WorkerOcServiceImplTest, RollbackUnackEmptyBatchResponseStopsCleanupRetry
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     getImpl.DeleteObjectsMetaUnacked({ { firstKey, rollbackVersion }, { secondKey, rollbackVersion } });
 
@@ -2566,7 +2579,7 @@ TEST_F(WorkerOcServiceImplTest, RollbackUnackRetriesBatchRpcNotSupportedFailure)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     auto param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     getImpl.DeleteObjectsMetaUnacked({ { firstKey, rollbackVersion }, { secondKey, rollbackVersion } });
 
@@ -2588,7 +2601,7 @@ TEST_F(WorkerOcServiceImplTest, DeleteObjectsMetaUnackedUsesRollbackCause)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     getImpl.DeleteObjectsMetaUnacked({ { objectKey, rollbackVersion } });
 
@@ -2680,7 +2693,7 @@ TEST_F(WorkerOcServiceImplTest, RollbackUnackRetriesTransportFailure)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     auto param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     getImpl.DeleteObjectsMetaUnacked({ { objectKey, rollbackVersion } });
 
@@ -2706,7 +2719,7 @@ TEST_F(WorkerOcServiceImplTest, RollbackUnackRetriesRpcNotSupportedFailure)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     auto param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     getImpl.DeleteObjectsMetaUnacked({ { objectKey, rollbackVersion } });
 
@@ -2736,7 +2749,7 @@ TEST_F(WorkerOcServiceImplTest, RollbackUnackRetriesExplicitFailure)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     auto param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     getImpl.DeleteObjectsMetaUnacked({ { firstKey, rollbackVersion }, { secondKey, rollbackVersion } });
 
@@ -2767,7 +2780,7 @@ TEST_F(WorkerOcServiceImplTest, RollbackUnackRetriesMissingPartialResult)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     auto param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     getImpl.DeleteObjectsMetaUnacked(
         { { acknowledgedKey, rollbackVersion }, { missingKey, rollbackVersion } });
@@ -2797,7 +2810,7 @@ TEST_F(WorkerOcServiceImplTest, RollbackUnackRetriesMetaMovingResponse)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     auto param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     getImpl.DeleteObjectsMetaUnacked({ { objectKey, rollbackVersion } });
 
@@ -2818,7 +2831,7 @@ TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterReportsMetadataRpcSuccess
         [&observations](const HostPort &target, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     master::QueryMetaRspPb rsp;
     std::vector<RpcMessage> payloads;
 
@@ -2847,7 +2860,7 @@ TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterDoesNotReportLocalRetryBu
         [&observations](const HostPort &target, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     master::QueryMetaRspPb rsp;
     std::vector<RpcMessage> payloads;
 
@@ -2873,7 +2886,7 @@ TEST_F(WorkerOcServiceImplTest, RedirectGetObjectLocationsMapsMetadataRpcFailure
         [&observations](const HostPort &target, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     google::protobuf::RepeatedPtrField<RedirectMetaInfo> infos;
     auto *info = infos.Add();
     info->set_redirect_meta_address(redirectAddress.ToString());
@@ -2909,7 +2922,7 @@ TEST_F(WorkerOcServiceImplTest, GetMapOfObjectKeysDoesNotReportLocalRetryBudgetT
         [&observations](const HostPort &target, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     std::unordered_map<std::string, master::ObjectLocationInfoPb> result;
     Status lastRc;
 
@@ -2940,7 +2953,7 @@ TEST_F(WorkerOcServiceImplTest, GetMapOfObjectKeysMapsOwnerPeerDeadToMetadataOwn
         [&observations](const HostPort &target, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     std::unordered_map<std::string, master::ObjectLocationInfoPb> result;
     Status lastRc;
 
@@ -2972,7 +2985,7 @@ TEST_F(WorkerOcServiceImplTest, GetMapOfObjectKeysKeepsNonConnectionOwnerError)
         [&observations](const HostPort &target, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     std::unordered_map<std::string, master::ObjectLocationInfoPb> result;
     Status lastRc;
 
@@ -3043,7 +3056,7 @@ TEST_F(WorkerOcServiceImplTest, BatchExistsGroupsBusinessKeysByOwner)
     apiManager->SetApi(localAddress_, firstApi);
     apiManager->SetApi(otherAddress, secondApi);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     std::unordered_set<std::string> exists{ "local-hit" };
     DS_ASSERT_OK(getImpl.QueryExistMetadata(keys, exists));
     EXPECT_THAT(exists, testing::UnorderedElementsAre("local-hit", "a-present", "b-present"));
@@ -3076,7 +3089,7 @@ TEST_F(WorkerOcServiceImplTest, BatchExistsQueriesOwnersConcurrentlyAndJoinsFail
     apiManager->SetApi(localAddress_, firstApi);
     apiManager->SetApi(otherAddress, secondApi);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     constexpr int ownerCount = 2;
     for (auto failureCode : { K_OK, K_RPC_UNAVAILABLE, K_RUNTIME_ERROR }) {
         GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
@@ -3132,7 +3145,7 @@ TEST_F(WorkerOcServiceImplTest, BatchExistsRouteFailureDoesNotDispatchOrPublishR
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     std::unordered_set<std::string> exists{ "local-hit" };
     EXPECT_EQ(getImpl.QueryExistMetadata({ "routed", "unroutable" }, exists).GetCode(), K_NOT_FOUND);
     EXPECT_THAT(exists, ElementsAre("local-hit"));
@@ -3172,7 +3185,7 @@ TEST_F(WorkerOcServiceImplTest, BatchExistsRedirectUsesSubrequestIndicesAndDoesN
     apiManager->SetApi(api);
     apiManager->SetApi(redirectAddress, redirectApi);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     std::unordered_set<std::string> exists;
     DS_ASSERT_OK(getImpl.QueryExistMetadata(keys, exists));
     EXPECT_THAT(exists, testing::UnorderedElementsAre("present", "redirect-present"));
@@ -3222,7 +3235,7 @@ TEST_F(WorkerOcServiceImplTest, BatchExistsRetriesMovingAndHonorsExpiredDeadline
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     std::unordered_set<std::string> exists;
     DS_ASSERT_OK(getImpl.QueryExistMetadata({ "present" }, exists));
     EXPECT_THAT(exists, ElementsAre("present"));
@@ -3254,7 +3267,7 @@ TEST_F(WorkerOcServiceImplTest, QueryObjectLocationsMapsPureMetadataOwnerPeerDea
         [&observations](const HostPort &target, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     std::unordered_map<std::string, master::ObjectLocationInfoPb> locations;
 
     auto rc = getImpl.QueryObjectLocations({ objectKey }, locations);
@@ -3286,7 +3299,7 @@ TEST_F(WorkerOcServiceImplTest, QueryObjectLocationsCarriesServingMasterTopology
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy());
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     std::unordered_map<std::string, master::ObjectLocationInfoPb> locations;
 
     DS_ASSERT_OK(getImpl.QueryObjectLocations({ objectKey }, locations));
@@ -3331,7 +3344,7 @@ TEST_F(WorkerOcServiceImplTest, QueryObjectLocationsCarriesPerResultServingMaste
     apiManager->SetApi(originalMaster, originalApi);
     apiManager->SetApi(redirectMaster, redirectApi);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy());
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     std::unordered_map<std::string, master::ObjectLocationInfoPb> locations;
 
     DS_ASSERT_OK(getImpl.QueryObjectLocations({ directKey, redirectKey }, locations));
@@ -3356,7 +3369,7 @@ TEST_F(WorkerOcServiceImplTest, GetObjMetaInfoUsesLocalObjectBeforeStaleOwner)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy());
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, std::make_shared<AkSkManager>(0), localAddress_,
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, std::make_shared<AkSkManager>(0), localAddress_,
                                    nullptr);
     GetObjMetaInfoReqPb req;
     req.add_object_keys(objectKey);
@@ -3388,7 +3401,7 @@ TEST_F(WorkerOcServiceImplTest, GetObjMetaInfoDoesNotHideRemoteOwnerFailureAfter
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy());
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, std::make_shared<AkSkManager>(0), localAddress_,
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, std::make_shared<AkSkManager>(0), localAddress_,
                                    nullptr);
     GetObjMetaInfoReqPb req;
     req.add_object_keys(localObjectKey);
@@ -3821,9 +3834,6 @@ TEST_F(WorkerOcServiceImplTest, DeferredGetCleanupRechecksMigrationState)
 TEST_F(WorkerOcServiceImplTest, MasterDrivenCleanupRetainsUnconfirmedAndFencesOrdinaryDeletion)
 {
     Parallel::InitParallelThreadPool(1);
-    const bool oldMetadataRecovery = FLAGS_enable_metadata_recovery;
-    Raii restoreFlag([oldMetadataRecovery]() { FLAGS_enable_metadata_recovery = oldMetadataRecovery; });
-    FLAGS_enable_metadata_recovery = false;
     const std::string ordinaryObject = "ordinary-stale-copy";
     const std::string markerRaceObject = "marker-race-copy";
     const std::string versionRaceObject = "version-race-copy";
@@ -3891,10 +3901,8 @@ TEST_F(WorkerOcServiceImplTest, MasterDrivenCleanupRetainsUnconfirmedAndFencesOr
     };
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
-    MetaDataRecoveryManager recovery(
-        localAddress_, objectTable_, { [](const HostPort &) { return Status::OK(); } }, apiManager, metadataRoute_);
     dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(
-        objectTable_, globalRefTable_, apiManager, gRefProc_, deleteProc_, &recovery, metadataRoute_, *endpointPolicy_,
+        objectTable_, globalRefTable_, apiManager, gRefProc_, deleteProc_, metadataRoute_, *endpointPolicy_,
         localAddress_.ToString());
 
     ClearDataRetryIds retryIds;
@@ -3927,12 +3935,9 @@ TEST_F(WorkerOcServiceImplTest, MasterDrivenCleanupRetainsUnconfirmedAndFencesOr
     dataClearImpl_.reset();
 }
 
-TEST_F(WorkerOcServiceImplTest, TopologyCleanupOrdinaryObjectsRespectMetadataRecoveryAndSnapshotFence)
+TEST_F(WorkerOcServiceImplTest, TopologyCleanupOrdinaryObjectsDoesNotRecoverMetadata)
 {
     Parallel::InitParallelThreadPool(1);
-    const bool oldMetadataRecovery = FLAGS_enable_metadata_recovery;
-    Raii restoreFlag([oldMetadataRecovery]() { FLAGS_enable_metadata_recovery = oldMetadataRecovery; });
-    FLAGS_enable_metadata_recovery = true;
     const std::string recoveredObject = "ordinary-recovered-copy";
     const std::string changedObject = "ordinary-changed-during-recovery";
     AddReadableObject(recoveredObject);
@@ -3968,34 +3973,27 @@ TEST_F(WorkerOcServiceImplTest, TopologyCleanupOrdinaryObjectsRespectMetadataRec
     };
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
-    MetaDataRecoveryManager recovery(
-        localAddress_, objectTable_, { [](const HostPort &) { return Status::OK(); } }, apiManager, metadataRoute_);
     dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(
-        objectTable_, globalRefTable_, apiManager, gRefProc_, deleteProc_, &recovery, metadataRoute_, *endpointPolicy_,
+        objectTable_, globalRefTable_, apiManager, gRefProc_, deleteProc_, metadataRoute_, *endpointPolicy_,
         localAddress_.ToString());
 
     ClearDataRetryIds recoveredRetryIds;
     dataClearImpl_->ClearTopologyFailureMatchedObjects({ recoveredObject }, recoveredRetryIds);
-    EXPECT_EQ(pushMetaCalls, 1U);
-    EXPECT_TRUE(objectTable_->Contains(recoveredObject).IsOk());
-    EXPECT_TRUE((*entries[recoveredObject])->IsShmUnitExistsAndComplete());
+    EXPECT_EQ(pushMetaCalls, 0U);
+    EXPECT_EQ(objectTable_->Contains(recoveredObject).GetCode(), K_NOT_FOUND);
     EXPECT_TRUE(recoveredRetryIds.Empty());
 
     ClearDataRetryIds failedRetryIds;
     dataClearImpl_->ClearTopologyFailureMatchedObjects({ changedObject }, failedRetryIds);
-    EXPECT_EQ(pushMetaCalls, 2U);
-    EXPECT_TRUE(objectTable_->Contains(changedObject).IsOk());
-    EXPECT_EQ((*entries[changedObject])->GetCreateTime(), 2U);
+    EXPECT_EQ(pushMetaCalls, 0U);
+    EXPECT_EQ(objectTable_->Contains(changedObject).GetCode(), K_NOT_FOUND);
     EXPECT_TRUE(failedRetryIds.Empty());
     dataClearImpl_.reset();
 }
 
-TEST_F(WorkerOcServiceImplTest, MasterDrivenUnconfirmedRecoveryFailureEntersTopologyRetry)
+TEST_F(WorkerOcServiceImplTest, MasterDrivenUnconfirmedPayloadIsRetainedWithoutRecovery)
 {
     Parallel::InitParallelThreadPool(1);
-    const bool oldMetadataRecovery = FLAGS_enable_metadata_recovery;
-    Raii restoreFlag([oldMetadataRecovery]() { FLAGS_enable_metadata_recovery = oldMetadataRecovery; });
-    FLAGS_enable_metadata_recovery = true;
     const std::string objectKey = "unconfirmed-recovery-retry";
     AddReadableObject(objectKey);
     std::shared_ptr<SafeObjType> entry;
@@ -4016,17 +4014,15 @@ TEST_F(WorkerOcServiceImplTest, MasterDrivenUnconfirmedRecoveryFailureEntersTopo
     };
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
-    MetaDataRecoveryManager recovery(localAddress_, objectTable_, { [](const HostPort &) { return Status::OK(); } },
-                                     apiManager, metadataRoute_);
     dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(objectTable_, globalRefTable_, apiManager,
-                                                                    gRefProc_, deleteProc_, &recovery, metadataRoute_,
+                                                                    gRefProc_, deleteProc_, metadataRoute_,
                                                                     *endpointPolicy_, localAddress_.ToString());
 
     ClearDataRetryIds retryIds;
     dataClearImpl_->ClearMatchedObjects({ objectKey }, retryIds);
 
-    EXPECT_EQ(pushMetaCalls, 1U);
-    EXPECT_THAT(retryIds.topologyCheckFailedIds, UnorderedElementsAre(objectKey));
+    EXPECT_EQ(pushMetaCalls, 0U);
+    EXPECT_TRUE(retryIds.Empty());
     EXPECT_TRUE(objectTable_->Contains(objectKey).IsOk());
     EXPECT_TRUE((*entry)->HasCompleteUnconfirmedPayload());
     dataClearImpl_.reset();
@@ -4034,9 +4030,6 @@ TEST_F(WorkerOcServiceImplTest, MasterDrivenUnconfirmedRecoveryFailureEntersTopo
 
 TEST_F(WorkerOcServiceImplTest, ExpiredMigrationSkipsRecoveryAndUsesTopologyCleanup)
 {
-    const bool oldMetadataRecovery = FLAGS_enable_metadata_recovery;
-    Raii restoreFlag([oldMetadataRecovery]() { FLAGS_enable_metadata_recovery = oldMetadataRecovery; });
-    FLAGS_enable_metadata_recovery = true;
     const std::string objectKey = "expired-migration-cleanup";
     AddReadableObject(objectKey);
     std::shared_ptr<SafeObjType> entry;
@@ -4061,10 +4054,8 @@ TEST_F(WorkerOcServiceImplTest, ExpiredMigrationSkipsRecoveryAndUsesTopologyClea
     };
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
-    MetaDataRecoveryManager recovery(localAddress_, objectTable_, { [](const HostPort &) { return Status::OK(); } },
-                                     apiManager, metadataRoute_);
     dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(objectTable_, globalRefTable_, apiManager,
-                                                                    gRefProc_, deleteProc_, &recovery, metadataRoute_,
+                                                                    gRefProc_, deleteProc_, metadataRoute_,
                                                                     *endpointPolicy_, localAddress_.ToString());
 
     ClearDataRetryIds retryIds;
@@ -4078,9 +4069,6 @@ TEST_F(WorkerOcServiceImplTest, ExpiredMigrationSkipsRecoveryAndUsesTopologyClea
 
 TEST_F(WorkerOcServiceImplTest, TopologyCleanupSnapshotsAreBoundedByMasterBatch)
 {
-    const bool oldMetadataRecovery = FLAGS_enable_metadata_recovery;
-    Raii restoreFlag([oldMetadataRecovery]() { FLAGS_enable_metadata_recovery = oldMetadataRecovery; });
-    FLAGS_enable_metadata_recovery = false;
     constexpr size_t objectCount = 501;
     std::vector<std::string> objectKeys;
     objectKeys.reserve(objectCount);
@@ -4111,7 +4099,7 @@ TEST_F(WorkerOcServiceImplTest, TopologyCleanupSnapshotsAreBoundedByMasterBatch)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(objectTable_, globalRefTable_, apiManager,
-                                                                    gRefProc_, deleteProc_, nullptr, metadataRoute_,
+                                                                    gRefProc_, deleteProc_, metadataRoute_,
                                                                     *endpointPolicy_, localAddress_.ToString());
 
     ClearDataRetryIds retryIds;

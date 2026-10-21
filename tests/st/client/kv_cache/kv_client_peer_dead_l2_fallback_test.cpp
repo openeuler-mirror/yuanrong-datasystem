@@ -60,12 +60,9 @@ public:
         opts.numOBS = 1;
         opts.numCoordinators = 1;
         opts.enableDistributedMaster = "true";
-        // oc_io_from_l2cache_need_metadata=false: skip etcd metadata fallback (no etcd in this
-        // cluster) and enable the existing GetObjectsWithoutMeta L2-cache path for absent keys.
         // node_timeout_s=60: keep the hash ring stable during the test so the pre-filtered key's
         // metadata owner does not shift while we kill the primary worker.
         opts.workerGflagParams =
-            "-oc_io_from_l2cache_need_metadata=false "
             "-enable_l2_cache_fallback=true "
             "-enable_worker_worker_batch_get=false "
             "-node_timeout_s=60 -node_dead_timeout_s=120 "
@@ -263,7 +260,6 @@ public:
     {
         KVClientPeerDeadL2Fallback::SetClusterSetupOptions(opts);
         opts.workerGflagParams =
-            "-oc_io_from_l2cache_need_metadata=false "
             "-enable_l2_cache_fallback=false "
             "-node_timeout_s=60 -node_dead_timeout_s=120 "
             "-shared_memory_size_mb=5120 -v=2";

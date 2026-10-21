@@ -31,7 +31,6 @@
 #undef private
 
 DS_DECLARE_string(rocksdb_write_mode);
-DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 
 namespace datasystem::master {
 namespace {
@@ -1416,16 +1415,13 @@ TEST_F(OCMetadataManagerTopologyTest, FullClusterShutdownDiscardsTtlDelete)
     EXPECT_FALSE(expiredManager.CheckObjectInAsyncDeleteWithLock(objectKey));
 }
 
-TEST_F(OCMetadataManagerTopologyTest, OrdinaryTtlWithoutMetadataKeepsL2Fallback)
+TEST_F(OCMetadataManagerTopologyTest, OrdinaryTtlWithoutMetadataDoesNotCreateL2Delete)
 {
     localExiting_.store(false);
     OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
                               HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
     manager.globalCacheDeleteManager_ = std::make_unique<OCGlobalCacheDeleteManager>(
         manager.objectStore_, nullptr, false, LOCAL_ADDRESS, akSkManager_);
-    const auto oldNeedMetadata = FLAGS_oc_io_from_l2cache_need_metadata;
-    FLAGS_oc_io_from_l2cache_need_metadata = false;
-    Raii restoreFlag([oldNeedMetadata] { FLAGS_oc_io_from_l2cache_need_metadata = oldNeedMetadata; });
     const std::string objectKey = "ordinary_ttl_without_metadata";
     DeleteObjectMediator mediator(LOCAL_ADDRESS, { { objectKey, true } });
     std::unordered_map<std::string, DeleteStruct> deleteObjects{ { objectKey, DeleteStruct{} } };
@@ -1435,7 +1431,7 @@ TEST_F(OCMetadataManagerTopologyTest, OrdinaryTtlWithoutMetadataKeepsL2Fallback)
     EXPECT_TRUE(manager.ShouldContinueTtlDelete(objectKey, 1));
     DS_ASSERT_OK(manager.ClearMetaInfo(deleteObjects, true, failedObjects, mediator));
 
-    EXPECT_EQ(manager.globalCacheDeleteManager_->GetDeletingObjectCount(), deletingCount + 1);
+    EXPECT_EQ(manager.globalCacheDeleteManager_->GetDeletingObjectCount(), deletingCount);
 }
 
 TEST_F(OCMetadataManagerTopologyTest, FullClusterShutdownDrainsQueuedTtlDeletesAsNoOps)

@@ -112,6 +112,16 @@
 
 ## Main Flows
 
+### Object Cache Metadata Boundary
+
+- `ObjectMetaStore` still initializes the object-metadata, async-worker-operation, and global-delete ETCD tables and
+  keeps their asynchronous put/remove queues enabled when the configured L2 backend is not `distributed_disk`.
+- Object Get, master startup, and confirmed-Failure handling do not read or rebuild Object Cache metadata from ETCD.
+  Object Get requires metadata returned by the metadata owner and does not read a raw L2 payload when metadata is
+  absent. Startup loads persisted records only from a healthy, enabled RocksDB store; otherwise it starts with an empty
+  recovery set. Removing the remaining ETCD writes is a separate change.
+- Fast-restart metadata repair and ETCD-backed slot recovery remain independent of this object-metadata read policy.
+
 ### External ETCD Access
 
 1. Caller constructs `EtcdStore(address)` or TLS-aware overload.

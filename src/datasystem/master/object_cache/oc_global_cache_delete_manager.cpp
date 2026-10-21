@@ -30,7 +30,6 @@
 
 DS_DECLARE_string(obs_endpoint);
 DS_DECLARE_string(sfs_path);
-DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 
 /**
  * the purpose is:
@@ -351,22 +350,9 @@ void OCGlobalCacheDeleteManager::GetDeletedObjects(std::map<std::string, DeleteM
 Status OCGlobalCacheDeleteManager::RecoverDeletedIds(bool isFromRocksdb)
 {
     std::vector<std::pair<std::string, std::string>> deleteObjects;
-    if (!objectStore_->IsRocksdbRunning()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetFromEtcd(ETCD_GLOBAL_CACHE_TABLE_PREFIX, GLOBAL_CACHE_TABLE,
-                                                                   deleteObjects),
-                                         "Load global cache delete objects from etcd failed.");
-        for (const auto &iter : deleteObjects) {
-            RETURN_IF_NOT_OK(objectStore_->PutToRocksStore(GLOBAL_CACHE_TABLE, iter.first, iter.second));
-        }
-    } else {
-        if (isFromRocksdb && objectStore_->IsRocksdbEnableWriteMeta()) {
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(GLOBAL_CACHE_TABLE, deleteObjects),
-                                             "Load global cache delete objects from rocksdb failed.");
-        } else {
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                objectStore_->GetFromEtcd(ETCD_GLOBAL_CACHE_TABLE_PREFIX, GLOBAL_CACHE_TABLE, deleteObjects),
-                "Load global cache delete objects from etcd failed.");
-        }
+    if (objectStore_->IsRocksdbRunning() && isFromRocksdb && objectStore_->IsRocksdbEnableWriteMeta()) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(GLOBAL_CACHE_TABLE, deleteObjects),
+                                         "Load global cache delete objects from rocksdb failed.");
     }
 
     return RecoverTopologyDeletedIds(deleteObjects);

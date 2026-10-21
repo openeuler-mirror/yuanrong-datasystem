@@ -121,7 +121,7 @@ public:
         };
         service_->threadPool_ = std::make_shared<ThreadPool>(0, 1, "test-ub-driver");
         service_->getProc_ = std::make_shared<WorkerOcServiceGetImpl>(
-            param, nullptr, nullptr, nullptr, nullptr, SELF, nullptr, service_->ubAdmission_);
+            param, nullptr, nullptr, nullptr, SELF, nullptr, service_->ubAdmission_);
     }
 
 protected:

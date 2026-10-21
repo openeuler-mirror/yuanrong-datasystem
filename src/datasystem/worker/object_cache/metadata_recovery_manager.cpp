@@ -35,8 +35,6 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/worker/object_cache/device/device_obj_cache.h"
 
-DS_DEFINE_bool(enable_metadata_recovery, false, "enable metadata recovery when worker failed");
-
 namespace datasystem {
 namespace object_cache {
 namespace {

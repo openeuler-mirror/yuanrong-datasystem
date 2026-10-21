@@ -51,7 +51,6 @@ std::string MetadataRecoverySelector::SelectionRequest::ToString() const
     for (const auto &range : ranges) {
         ss << "[" << range.first << ", " << range.second << "],";
     }
-    ss << " includeL2CacheIds: " << includeL2CacheIds;
     return ss.str();
 }
 
@@ -60,11 +59,9 @@ MetadataRecoverySelector::MetadataRecoverySelector(const std::shared_ptr<ObjectT
 {
 }
 
-MetadataRecoverySelector::SelectionRequest MetadataRecoverySelector::BuildSelectionRequest(const ClearDataReqPb &req,
-                                                                                           bool includeL2CacheIds)
+MetadataRecoverySelector::SelectionRequest MetadataRecoverySelector::BuildSelectionRequest(const ClearDataReqPb &req)
 {
     SelectionRequest request;
-    request.includeL2CacheIds = includeL2CacheIds;
     for (const auto &range : req.ranges()) {
         request.ranges.emplace_back(range.from(), range.end());
     }
@@ -83,10 +80,21 @@ Status MetadataRecoverySelector::BuildMatchFunc(const SelectionRequest &request,
     return Status::OK();
 }
 
-void MetadataRecoverySelector::Select(const MatchFunc &matchFunc, bool includeL2CacheIds,
+void MetadataRecoverySelector::SelectAll(const MatchFunc &matchFunc, std::vector<std::string> &objectKeys) const
+{
+    Select(matchFunc, SelectionScope::ALL, objectKeys);
+}
+
+void MetadataRecoverySelector::SelectWithoutL2Cache(const MatchFunc &matchFunc,
+                                                    std::vector<std::string> &objectKeys) const
+{
+    Select(matchFunc, SelectionScope::WITHOUT_L2_CACHE, objectKeys);
+}
+
+void MetadataRecoverySelector::Select(const MatchFunc &matchFunc, SelectionScope scope,
                                       std::vector<std::string> &objectKeys) const
 {
-    LOG(INFO) << "MetadataRecoverySelector.Select begin, includeL2CacheIds: " << includeL2CacheIds;
+    LOG(INFO) << "MetadataRecoverySelector.Select begin";
     Timer timer;
     std::vector<std::string> allObjectKeys;
     allObjectKeys.reserve(objectTable_->GetSize());
@@ -97,12 +105,12 @@ void MetadataRecoverySelector::Select(const MatchFunc &matchFunc, bool includeL2
               << ", object size: " << allObjectKeys.size();
     timer.Reset();
 
-    auto batchFun = [this, &matchFunc, &objectKeys, includeL2CacheIds](std::vector<std::string> &batchObjectKeys) {
+    auto batchFun = [this, &matchFunc, scope, &objectKeys](std::vector<std::string> &batchObjectKeys) {
         for (const auto &objectKey : batchObjectKeys) {
             if (!matchFunc(objectKey)) {
                 continue;
             }
-            if (includeL2CacheIds) {
+            if (scope == SelectionScope::ALL) {
                 objectKeys.emplace_back(objectKey);
                 continue;
             }
@@ -133,7 +141,6 @@ void MetadataRecoverySelector::Select(const MatchFunc &matchFunc, bool includeL2
         batchFun(tmpObjectKeys);
     }
     LOG(INFO) << "MetadataRecoverySelector.Select finish, objectKeys size: " << objectKeys.size()
-              << ", includeL2CacheIds: " << includeL2CacheIds
               << ", elapsed ms: " << timer.ElapsedMilliSecond();
 }
 
@@ -141,7 +148,7 @@ Status MetadataRecoverySelector::Select(const SelectionRequest &request, std::ve
 {
     MatchFunc matchFunc;
     RETURN_IF_NOT_OK(BuildMatchFunc(request, matchFunc));
-    Select(matchFunc, request.includeL2CacheIds, objectKeys);
+    SelectWithoutL2Cache(matchFunc, objectKeys);
     return Status::OK();
 }
 }  // namespace object_cache

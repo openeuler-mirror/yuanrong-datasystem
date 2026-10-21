@@ -471,12 +471,6 @@ public:
     Status GDecreaseRef(const GDecreaseReqPb &req, GDecreaseRspPb &resp) override;
 
     /**
-     * @brief Push metadata to master, for DFX purpose.
-     * @return Status of the call
-     */
-    Status PushMetadataToMaster(const HostPort &masterAddr);
-
-    /**
      * @brief Handles the request for meta info and populates the response pb with the meta info.
      * @param[in] req The rpc request protobuf.
      * @param[out] resp The rpc response protobuf.
@@ -824,14 +818,6 @@ public:
      */
     Status GetDeviceObject(
         std::shared_ptr<ServerUnaryWriterReader<GetDeviceObjectRspPb, GetDeviceObjectReqPb>> serverApi) override;
-
-    /**
-     * @brief Get match object keys.
-     * @param[in] matchFunc The function to match object.
-     * @param[out] objKeys All object keys match.
-     */
-    void GetObjectsMatch(std::function<bool(const std::string &)> matchFunc,
-                         std::vector<std::string> &nooL2CacheobjKeys, bool includeL2CacheIds);
 
     /**
      * @brief Recover metadata of the input object keys to master.

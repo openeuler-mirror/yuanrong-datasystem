@@ -99,9 +99,9 @@
     ids remain printable and must not expose the topology id bytes.
   - the ETCD-phase Controller role preserves each distinct `RESTARTING` membership generation before generic watch
     doorbell coalescing and forwards it to the Worker host on the Controller state thread. Surviving Workers then restore
-    locally held metadata to the restarted current owner. Fast-restart recovery is required even when the legacy
-    failure-time `enable_metadata_recovery` switch is disabled, and owner selection must use the business metadata-route
-    helper so centralized and distributed metadata modes stay aligned. The restarted Worker independently schedules
+    locally held metadata to the restarted current owner. Fast-restart recovery is independent of confirmed-Failure
+    cleanup, which does not restore Object Cache metadata. Owner selection must use the business metadata-route helper
+    so centralized and distributed metadata modes stay aligned. The restarted Worker independently schedules
     bounded reconciliation requests to every committed metadata owner, so readiness stays closed until the existing
     completion path succeeds or reaches its bounded give-up policy.
   - if Failure final already removed the old member, the later process is a fresh `INITIAL` admission and must not

@@ -35,7 +35,6 @@
 
 
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/cluster/executor/key_filter.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/log/log_helper.h"
@@ -88,9 +87,7 @@ DS_DECLARE_string(etcd_address);
 DS_DECLARE_bool(async_delete);
 DS_DECLARE_int32(rpc_thread_num);
 
-DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 DS_DECLARE_bool(enable_reconciliation);
-DS_DECLARE_string(rocksdb_write_mode);
 DS_DECLARE_bool(enable_data_replication);
 
 namespace datasystem {
@@ -201,8 +198,7 @@ OCMetadataManager::OCMetadataManager(std::shared_ptr<AkSkManager> akSkManager, R
       persistApi_(persistApi),
       newNode_(newNode)
 {
-    bool isEnabled = FLAGS_rocksdb_write_mode != "none" || FLAGS_oc_io_from_l2cache_need_metadata;
-    objectStore_ = std::make_shared<ObjectMetaStore>(rocksStore, etcdStore, isEnabled);
+    objectStore_ = std::make_shared<ObjectMetaStore>(rocksStore, etcdStore, true);
     if (!IsCentralizedMetadata()) {
         workerId_ = workerId;
     }
@@ -214,22 +210,21 @@ Status OCMetadataManager::Init()
     if (newNode_) {
         RETURN_IF_NOT_OK(objectStore_->AddRocksdbHealthTag());
     }
-    // let it skips recovery from etcd
-    bool skipRecoveryFromEtcd = objectStore_->CheckHealth();
+    bool rocksdbHealthy = objectStore_->CheckHealth();
 
     nestedRefManager_ = std::make_unique<OCNestedManager>(objectStore_, IsCentralizedMetadata());
     RETURN_IF_NOT_OK(InitGlobalRef());
     asyncPool_ = std::make_unique<ThreadPool>(ASYNC_MIN_THREAD_NUM, ASYNC_MAX_THREAD_NUM, "OcAsyncTask");
     notifyWorkerManager_ =
-        std::make_unique<OCNotifyWorkerManager>(objectStore_, skipRecoveryFromEtcd, akSkManager_, this);
+        std::make_unique<OCNotifyWorkerManager>(objectStore_, rocksdbHealthy, akSkManager_, this);
     RETURN_IF_NOT_OK(notifyWorkerManager_->Init());
     globalCacheDeleteManager_ = std::make_unique<OCGlobalCacheDeleteManager>(
-        objectStore_, persistApi_, skipRecoveryFromEtcd, masterAddress_, akSkManager_);
+        objectStore_, persistApi_, rocksdbHealthy, masterAddress_, akSkManager_);
     RETURN_IF_NOT_OK(globalCacheDeleteManager_->Init());
     expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(masterAddress_, this);
     expiredObjectManager_->Init();
-    RETURN_IF_NOT_OK(LoadMeta(skipRecoveryFromEtcd));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(notifyWorkerManager_->RecoverCacheInvalidAndRemoveMeta(true),
+    RETURN_IF_NOT_OK(LoadMeta(rocksdbHealthy));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(notifyWorkerManager_->RecoverCacheInvalidAndRemoveMeta(rocksdbHealthy),
                                      "Recover cache invalid for rocksdb failed.");
 
     if (!objectStore_->IsRocksdbRunning()) {
@@ -307,10 +302,6 @@ void OCMetadataManager::InitSubscribeEvent()
             ProcessPrimaryCopyByWorkerTimeout(workerAddr, ifvoluntaryScaleDown);
             return Status::OK();
         });
-    RequestMetaFromWorkerEvent::GetInstance().AddSubscriber(
-        eventName_, [this](const std::string &masterAddr, const std::string &workerAddr) {
-            return RequestMetaFromWorker(masterAddr, workerAddr);
-        });
     NodeRestartEvent::GetInstance().AddSubscriber(
         eventName_, [this](const std::map<std::string, int64_t> &restartFacts, bool sync) {
             return ProcessWorkerRestarts(restartFacts, sync);
@@ -338,7 +329,6 @@ void OCMetadataManager::Shutdown()
     NodeTimeoutEvent::GetInstance().RemoveSubscriber(eventName_);
     NodeNetworkRecoveryEvent::GetInstance().RemoveSubscriber(eventName_);
     ChangePrimaryCopy::GetInstance().RemoveSubscriber(eventName_);
-    RequestMetaFromWorkerEvent::GetInstance().RemoveSubscriber(eventName_);
     NodeRestartEvent::GetInstance().RemoveSubscriber(eventName_);
     if (expiredObjectManager_ != nullptr) {
         expiredObjectManager_->Shutdown();
@@ -1298,12 +1288,7 @@ Status OCMetadataManager::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb &r
     RETURN_OK_IF_TRUE(rsp.meta_is_moving());
     point.RecordAndReset(PerfKey::MASTER_QUERY_META_SET_RSP);
     std::list<std::string> notExistObjectKeys = { tmpNotExistObjectKeys.begin(), tmpNotExistObjectKeys.end() };
-    std::vector<uint64_t> deletingVersions;
-    if (FLAGS_oc_io_from_l2cache_need_metadata) {
-        deletingVersions.resize(notExistObjectKeys.size());
-    } else {
-        globalCacheDeleteManager_->GetDeletingVersions(notExistObjectKeys, deletingVersions);
-    }
+    std::vector<uint64_t> deletingVersions(notExistObjectKeys.size());
     *rsp.mutable_not_exist_ids() = { notExistObjectKeys.begin(), notExistObjectKeys.end() };
     *rsp.mutable_deleting_versions() = { deletingVersions.begin(), deletingVersions.end() };
     INJECT_POINT("master.slow_query_meta");
@@ -2138,19 +2123,6 @@ Status OCMetadataManager::ClearMetaInfo(const std::unordered_map<std::string, De
         bthread::RWLockRdGuard lck(metaShards_[shardIdx].mutex);
         if (!metaShards_[shardIdx].table.find(accessor, objectKey)) {
             VLOG(1) << "meta not found in meta table";
-            // During graceful exit the metadata may have moved after the TTL task was admitted. Do not let that stale
-            // task delete the new owner's L2 data; ordinary TTL processing keeps the existing best-effort fallback.
-            if (isExpired && IsLocalExitRequested()) {
-                continue;
-            }
-            // metadata is not present in master. If metadata is not stored in etcd,
-            // try to delete all versions of the object from L2 Cache using async delete.
-            if (!FLAGS_oc_io_from_l2cache_need_metadata) {
-                auto maxVersionToDel = static_cast<int64_t>(GetSystemClockTimeStampUs());
-                Status gcStatus =
-                    globalCacheDeleteManager_->InsertDeletedObject(objectKey, UINT64_MAX, maxVersionToDel);
-                LOG_IF_ERROR(gcStatus, FormatString("[ObjectKey %s] Global cache delete enqueue failed", objectKey));
-            }
             continue;
         } else if (delMediator.GetHashObjsWithoutMeta().count(objectKey) > 0) {
             failedObjects.insert(objectKey);
@@ -2570,7 +2542,7 @@ Status OCMetadataManager::LoadObjectLocations(
 {
     INJECT_POINT("OCNotifyWorkerManager.NoNeedRecoveryMeta");
     std::vector<std::pair<std::string, std::string>> objectLocations;
-    if (isFromRocksdb) {
+    if (objectStore_->IsRocksdbRunning() && isFromRocksdb && objectStore_->IsRocksdbEnableWriteMeta()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(LOCATION_TABLE, objectLocations),
                                          "Load object location from rocksdb into memory failed.");
     }
@@ -2680,7 +2652,7 @@ Status OCMetadataManager::LoadMeta(bool isFromRocksdb)
     std::vector<std::tuple<std::string, uint64_t, uint32_t>> expireObjects;
     std::vector<std::pair<std::string, std::string>> metas;
 
-    RETURN_IF_NOT_OK(CheckRocksdbStatusAndLoadL2Table(ETCD_META_TABLE_PREFIX, META_TABLE, isFromRocksdb, metas));
+    RETURN_IF_NOT_OK(CheckRocksdbStatusAndLoadL2Table(META_TABLE, isFromRocksdb, metas));
     std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> objLocMap;
     RETURN_IF_NOT_OK(LoadObjectLocations(isFromRocksdb, objLocMap));
     RETURN_IF_NOT_OK(HandleLoadMeta(metas, expireObjects, isFromRocksdb));
@@ -3437,8 +3409,8 @@ void OCMetadataManager::ConstructRequestObjectKeyMap(const std::vector<std::stri
     for (const auto &objKey : finishDecIds) {
         bool needDelete = false;
         if (std::find(failedDecIds.begin(), failedDecIds.end(), objKey) == failedDecIds.end()) {
-        size_t shardIdx = GetShardIndex(objKey);
-        bthread::RWLockRdGuard lck(metaShards_[shardIdx].mutex);
+            size_t shardIdx = GetShardIndex(objKey);
+            bthread::RWLockRdGuard lck(metaShards_[shardIdx].mutex);
             TbbMetaTable::const_accessor accessor;
             auto found = metaShards_[shardIdx].table.find(accessor, objKey);
             needDelete = found && nestedRefManager_->CheckIsNoneNestedRefById(objKey);
@@ -3529,18 +3501,11 @@ Status OCMetadataManager::GDecreaseRefImpl(
     for (const auto &objKey : finishDecIds) {
         bool needDelete = false;
         if (std::find(failedDecIds.begin(), failedDecIds.end(), objKey) == failedDecIds.end()) {
-        size_t shardIdx = GetShardIndex(objKey);
-        bthread::RWLockRdGuard lck(metaShards_[shardIdx].mutex);
+            size_t shardIdx = GetShardIndex(objKey);
+            bthread::RWLockRdGuard lck(metaShards_[shardIdx].mutex);
             TbbMetaTable::const_accessor accessor;
             auto found = metaShards_[shardIdx].table.find(accessor, objKey);
-            Status rc = Status::OK();
             needDelete = found && nestedRefManager_->CheckIsNoneNestedRefById(objKey);
-
-            if (!found && rc.IsError() && !FLAGS_oc_io_from_l2cache_need_metadata) {
-                // Could not find the object in meta table (for both regular and device object) and not a device object.
-                // Try to delete all versions of the object form L2Cache.
-                needDelete = true;
-            }
         }
         requestObjectKeyMap.emplace(objKey, needDelete);
     }
@@ -3983,28 +3948,6 @@ Status OCMetadataManager::ProcessWorkerNetworkRecovery(const std::string &worker
     if (workerAddr == masterAddress_) {
         ExecuteAsyncTask([this]() { notifyWorkerManager_->ProcessAsyncDeleteNotifyOpImpl(); });
     }
-    return Status::OK();
-}
-
-Status OCMetadataManager::RequestMetaFromWorker(const std::string &masterAddr, const std::string &workerAddr)
-{
-    LOG(INFO) << "Requesting metadata from worker. Worker meta is lost as the worker is marked Offline";
-    RequestMetaFromWorkerRspPb rsp;
-    RETURN_IF_NOT_OK(notifyWorkerManager_->RequestMetaFromWorker(masterAddr, workerAddr, rsp));
-    VLOG(1) << "master RequestMetaFromWorker rsp:" << LogHelper::IgnoreSensitive(rsp);
-    for (auto &meta : rsp.metas()) {
-        Status s = RecoveryMetaFromWorker(rsp.address(), meta);
-        if (s.IsError()) {
-            LOG(WARNING) << FormatString("RequestMetaFromWorker failed. objectKey:%s, status:%s", meta.object_key(),
-                                         s.ToString());
-        }
-    }
-    std::vector<std::string> objectKeys = { rsp.gref_object_keys().begin(), rsp.gref_object_keys().end() };
-    std::vector<std::string> failedIncIds;
-    std::vector<std::string> firstIncIds;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        globalRefTable_->GIncreaseRef(rsp.address(), objectKeys, failedIncIds, firstIncIds),
-        "GIncreaseRef failed in RequestMetaFromWorker");
     return Status::OK();
 }
 
@@ -4583,80 +4526,6 @@ bool OCMetadataManager::MetaIsFound(const std::string &objectKey)
     return false;
 }
 
-Status OCMetadataManager::RecoverTopologyFailure(const cluster::TopologyPhaseAction &action,
-                                                 const cluster::IKeyFilter &filter,
-                                                 const cluster::StorageScanPlan &plan,
-                                                 const std::string &businessOperationId,
-                                                 std::chrono::steady_clock::time_point deadline,
-                                                 const cluster::CancellationToken &cancellation)
-{
-    CHECK_FAIL_RETURN_STATUS(action.failed.has_value(), K_INVALID, "failure callback lacks failed member");
-    CHECK_FAIL_RETURN_STATUS(!businessOperationId.empty(), K_INVALID, "empty topology business operation id");
-    CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology recovery cancelled");
-    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
-                             "topology recovery deadline exceeded");
-    auto firstError = RecoverTopologyObjectMetadata(action, filter, plan);
-    auto auxiliaryStatus = RecoverTopologyAuxiliaryMetadata(filter, plan);
-    if (firstError.IsOk()) {
-        firstError = std::move(auxiliaryStatus);
-    }
-    return firstError;
-}
-
-Status OCMetadataManager::RecoverTopologyObjectMetadata(
-    const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
-    const cluster::StorageScanPlan &plan)
-{
-    std::vector<std::pair<std::string, std::string>> metas;
-    auto collect = [&action, &metas](const std::string &key, const std::string &value) {
-        ObjectMetaPb metadata;
-        CHECK_FAIL_RETURN_STATUS(metadata.ParseFromString(value), K_INVALID, "invalid persisted object metadata");
-        metadata.set_object_key(key);
-        if (metadata.primary_address() == action.failed->address) {
-            metadata.set_primary_address(action.executor.address);
-        }
-        auto serialized = metadata.SerializeAsString();
-        metas.emplace_back(key, std::move(serialized));
-        return Status::OK();
-    };
-    RETURN_IF_NOT_OK(objectStore_->ScanTopologyScope(plan, filter, collect));
-    std::vector<std::tuple<std::string, uint64_t, uint32_t>> expireObjects;
-    std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> locations;
-    bool fromRocks = false;
-    RETURN_IF_NOT_OK(HandleLoadMeta(metas, expireObjects, fromRocks));
-    expiredObjectManager_->ReloadExpireObjects(expireObjects);
-    return Status::OK();
-}
-
-Status OCMetadataManager::RecoverTopologyAuxiliaryMetadata(const cluster::IKeyFilter &filter,
-                                                           const cluster::StorageScanPlan &plan)
-{
-    std::vector<std::pair<std::string, std::string>> deleteRecords;
-    auto collectDeletes = [&deleteRecords](const std::string &key, const std::string &value) {
-        deleteRecords.emplace_back(key, value);
-        return Status::OK();
-    };
-    auto firstError = objectStore_->ScanTopologyScope(
-        plan, filter, ObjectMetaStore::TopologyScanTable::GLOBAL_CACHE_DELETE, collectDeletes);
-    if (firstError.IsOk()) {
-        firstError = globalCacheDeleteManager_->RecoverTopologyDeletedIds(deleteRecords);
-    }
-    std::vector<std::pair<std::string, std::string>> asyncRecords;
-    auto collectAsync = [&asyncRecords](const std::string &key, const std::string &value) {
-        asyncRecords.emplace_back(key, value);
-        return Status::OK();
-    };
-    auto asyncStatus = objectStore_->ScanTopologyScope(
-        plan, filter, ObjectMetaStore::TopologyScanTable::ASYNC_WORKER_OP, collectAsync);
-    if (asyncStatus.IsOk()) {
-        notifyWorkerManager_->RecoverCacheInvalidAndRemoveMeta2EtcdKeyMap(asyncRecords);
-    }
-    if (firstError.IsOk()) {
-        firstError = std::move(asyncStatus);
-    }
-    return firstError;
-}
-
 Status OCMetadataManager::CleanupTopologyFailedMember(
     const cluster::TopologyPhaseAction &action, const std::string &businessOperationId,
     std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation)
@@ -4841,27 +4710,13 @@ Status OCMetadataManager::CreateDeviceMeta(const ObjectMetaPb &newMeta, const st
     return objectStore_->CreateOrUpdateMeta(objectKey, serializedStr);
 }
 
-Status OCMetadataManager::CheckRocksdbStatusAndLoadL2Table(const std::string &tablePrefix,
-                                                           const std::string &rocksTable, bool isFromRocksdb,
+Status OCMetadataManager::CheckRocksdbStatusAndLoadL2Table(const std::string &rocksTable, bool isFromRocksdb,
                                                            std::vector<std::pair<std::string, std::string>> &outMetas)
 {
-    if (!objectStore_->IsRocksdbRunning()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetFromEtcd(tablePrefix, rocksTable, outMetas),
-                                         "Load meta from etcd into memory failed.");
-        LOG(INFO) << "Load meta from etcd and try put to rocksdb, count:" << outMetas.size();
-        for (const auto &iter : outMetas) {
-            RETURN_IF_NOT_OK(objectStore_->PutToRocksStore(rocksTable, iter.first, iter.second));
-        }
-    } else {
-        if (isFromRocksdb && objectStore_->IsRocksdbEnableWriteMeta()) {
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(rocksTable, outMetas),
-                                             "Load meta from rocksdb into memory failed.");
-            LOG(INFO) << "Load meta from rocksdb, count:" << outMetas.size();
-        } else {
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetFromEtcd(tablePrefix, rocksTable, outMetas),
-                                             "Load meta from etcd into memory failed.");
-            LOG(INFO) << "Load meta from etcd, count:" << outMetas.size();
-        }
+    if (objectStore_->IsRocksdbRunning() && isFromRocksdb && objectStore_->IsRocksdbEnableWriteMeta()) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(rocksTable, outMetas),
+                                         "Load meta from rocksdb into memory failed.");
+        LOG(INFO) << "Load meta from rocksdb, count:" << outMetas.size();
     }
     return Status::OK();
 }

@@ -34,7 +34,6 @@
 #include <google/protobuf/repeated_field.h>
 #include <tbb/concurrent_hash_map.h>
 
-#include "datasystem/cluster/executor/storage_scan_plan.h"
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
@@ -1058,14 +1057,6 @@ public:
                            object_cache::WorkerWorkerOCServiceImpl *workerWorkerService, const HostPort &masterAddr);
 
     /**
-     * @brief Requests the worker to send meta to the master in the response.
-     * @param[in] masterAddr The address of the master requesting for the metadata.
-     * @param[in] workerAddr The address of the worker to whom the request is sent.
-     * @return Status of the result.
-     */
-    Status RequestMetaFromWorker(const std::string &masterAddr, const std::string &workerAddr);
-
-    /**
      * @brief Check whether there are any requests for asynchronously writing metadata to ETCD.
      * @return True if there are unfinished async requests.
      */
@@ -1214,21 +1205,6 @@ public:
     Status ClearDevClientMetaForScaledInWorker(const std::vector<std::string> &removeNodes);
 
     /**
-     * @brief Run one scoped best-effort recovery attempt for a confirmed failed member.
-     * @param[in] action Validated failure participants and topology fence facts.
-     * @param[in] filter Final object-key predicate for this failure task.
-     * @param[in] plan Opaque candidate scan plan for the same task scope.
-     * @param[in] businessOperationId Stable idempotency identity for this business step.
-     * @param[in] deadline Absolute monotonic callback deadline.
-     * @param[in] cancellation Executor-owned cooperative cancellation signal.
-     * @return K_OK on success; the first recovery error otherwise.
-     */
-    Status RecoverTopologyFailure(
-        const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
-        const cluster::StorageScanPlan &plan, const std::string &businessOperationId,
-        std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation);
-
-    /**
      * @brief Remove residual object metadata for one confirmed failed member.
      * @param[in] action Validated failure participants and topology fence facts.
      * @param[in] businessOperationId Stable idempotency identity for this business step.
@@ -1280,24 +1256,12 @@ public:
                                      std::unordered_set<std::shared_ptr<AsyncElement>> &elements);
 
     /**
-     * @brief Recover data of faulty worker from etcd.
-     * @param[in] extraRanges The hash range of faulty worker.
-     * @return Status of the result.
-     */
-
-    /**
      * @brief Get the usage of the queue for asynchronously writing ETCD data.
      * @note currentSize: the number of tasks in the current queue.
      * totalLimit:  the maximum queue capacity
      * @return The Usage: "currentSize/totalLimit/workerL2CacheQueueUsag"
      */
     std::string GetETCDAsyncQueueUsage();
-
-    /**
-     * @brief Recover global cache del and cache invalid task
-     * @param[in] extraRanges The hash range of faulty worker.
-     * @return Status of the result.
-     */
 
     /**
      * @brief Check meta table is empty;
@@ -1690,26 +1654,6 @@ private:
     Status LoadMeta(bool isFromRocksdb);
 
     /**
-     * @brief Recover task-scoped object metadata records and replace a failed primary.
-     * @param[in] action Failure callback facts, including the failed member and destination members.
-     * @param[in] filter Opaque task-scoped key filter.
-     * @param[in] plan Opaque storage scan plan valid for this callback invocation.
-     * @return Status of the best-effort recovery pass.
-     */
-    Status RecoverTopologyObjectMetadata(const cluster::TopologyPhaseAction &action,
-                                         const cluster::IKeyFilter &filter,
-                                         const cluster::StorageScanPlan &plan);
-
-    /**
-     * @brief Recover task-scoped global-delete and async-worker operation records.
-     * @param[in] filter Opaque task-scoped key filter.
-     * @param[in] plan Opaque storage scan plan valid for this callback invocation.
-     * @return Status of the best-effort auxiliary recovery pass.
-     */
-    Status RecoverTopologyAuxiliaryMetadata(const cluster::IKeyFilter &filter,
-                                            const cluster::StorageScanPlan &plan);
-
-    /**
      * @brief SendChangePrimaryCopy
      * @param[in,out] workerForChangePrimaryIds Need to send change primary copy ids, failed will save, success will be
      * erase.
@@ -2094,15 +2038,13 @@ private:
         const std::string &remoteClientId = "");
 
     /**
-     * @brief Check whether rocksdb is trustworthy and determine where to load the l2_cache table from.
-     * @param[in] tablePrefix ETCD table prefix.
+     * @brief Load one trusted l2_cache table from RocksDB.
      * @param[in] rocksTable Need write rocksdb table.
      * @param[in] isFromRocksdb Specifies whether to obtain data from rocksdb.
      * @param[out] outMetas The output metas in table.
      * @return Status of the call.
      */
-    Status CheckRocksdbStatusAndLoadL2Table(const std::string &tablePrefix, const std::string &rocksTable,
-                                            bool isFromRocksdb,
+    Status CheckRocksdbStatusAndLoadL2Table(const std::string &rocksTable, bool isFromRocksdb,
                                             std::vector<std::pair<std::string, std::string>> &outMetas);
 
     /**

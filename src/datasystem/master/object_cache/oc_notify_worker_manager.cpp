@@ -488,22 +488,9 @@ void OCNotifyWorkerManager::RecoverCacheInvalidAndRemoveMeta2EtcdKeyMap(
 Status OCNotifyWorkerManager::RecoverCacheInvalidAndRemoveMeta(bool isFromRocksdb)
 {
     std::vector<std::pair<std::string, std::string>> cacheInvalids;
-    if (!objectStore_->IsRocksdbRunning()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            objectStore_->GetFromEtcd(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX, ASYNC_WORKER_OP_TABLE, cacheInvalids),
-            "Load meta from etcd into memory failed.");
-        for (const auto &iter : cacheInvalids) {
-            RETURN_IF_NOT_OK(objectStore_->PutToRocksStore(ASYNC_WORKER_OP_TABLE, iter.first, iter.second));
-        }
-    } else {
-        if (isFromRocksdb && objectStore_->IsRocksdbEnableWriteMeta()) {
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(ASYNC_WORKER_OP_TABLE, cacheInvalids),
-                                             "Load meta from rocksdb into memory failed.");
-        } else {
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                objectStore_->GetFromEtcd(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX, ASYNC_WORKER_OP_TABLE, cacheInvalids),
-                "Load meta from etcd into memory failed.");
-        }
+    if (objectStore_->IsRocksdbRunning() && isFromRocksdb && objectStore_->IsRocksdbEnableWriteMeta()) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(ASYNC_WORKER_OP_TABLE, cacheInvalids),
+                                         "Load meta from rocksdb into memory failed.");
     }
 
     RecoverCacheInvalidAndRemoveMeta2EtcdKeyMap(cacheInvalids);

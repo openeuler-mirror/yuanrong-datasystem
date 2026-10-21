@@ -19,7 +19,6 @@
 #include "datasystem/cluster/control/topology_task_materializer.h"
 #include "datasystem/cluster/coordination_backend/ds_coordination_backend.h"
 #include "datasystem/cluster/executor/key_filter.h"
-#include "datasystem/cluster/executor/storage_scan_plan_access.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/cluster/runtime/coordination_event_dispatcher.h"
 #include "datasystem/cluster/runtime/topology_reader.h"
@@ -74,9 +73,6 @@ public:
         ++scaleOutCalls;
         EXPECT_FALSE(context.businessOperationId.empty());
         EXPECT_FALSE(context.keyFilter.DebugString().empty());
-        std::vector<StorageScanSegment> segments;
-        EXPECT_TRUE(StorageScanPlanAccess::GetSegments(context.storageScanPlan, segments).IsOk());
-        EXPECT_FALSE(segments.empty());
         {
             std::lock_guard<std::mutex> lock(mutex);
             scaleOutEntered = true;
