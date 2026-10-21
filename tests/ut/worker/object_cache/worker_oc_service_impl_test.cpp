@@ -42,6 +42,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/object_cache/safe_table.h"
+#include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_message.h"
@@ -1164,7 +1165,7 @@ TEST_F(WorkerOcServiceImplTest, RemoteGetL2MissDoesNotLeaveEmptyEntry)
 
 TEST_F(WorkerOcRemoteGetAdmissionTest, BlockingRemoteGetAdmissionFailureFallsBackToPayloadWithoutUrmaPost)
 {
-    constexpr uint64_t dataSize = 16;
+    constexpr uint64_t dataSize = UrmaFallbackTcpLimiter::kMaxSinglePayloadBytes - 1;
     const std::string objectKey = "blocked-remote-get-fallback";
     const HostPort requester("192.0.2.30", 18481);
     AddTransferableObject(objectKey, dataSize);
@@ -1192,6 +1193,36 @@ TEST_F(WorkerOcRemoteGetAdmissionTest, BlockingRemoteGetAdmissionFailureFallsBac
     EXPECT_EQ(serverApi->Response().data_source(), DataTransferSource::DATA_IN_PAYLOAD);
     ASSERT_EQ(serverApi->Payload().size(), 1);
     EXPECT_EQ(serverApi->Payload().front().Size(), dataSize);
+}
+
+TEST_F(WorkerOcRemoteGetAdmissionTest, BlockingRemoteGetAdmissionFailureRejectsPayloadAtSingleLimit)
+{
+    constexpr uint64_t dataSize = UrmaFallbackTcpLimiter::kMaxSinglePayloadBytes;
+    const std::string objectKey = "blocked-remote-get-large-fallback";
+    const HostPort requester("192.0.2.34", 18481);
+    AddTransferableObject(objectKey, dataSize);
+    SetVerifiedUnavailablePorts(impl_->GetUbAdmission(), requester);
+    const bool savedFallback = FLAGS_enable_transport_fallback;
+    Raii restoreFallback([savedFallback] { FLAGS_enable_transport_fallback = savedFallback; });
+    FLAGS_enable_transport_fallback = true;
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::CheckTransportConnectionStable, (_, _, _)).Times(0);
+    BINEXPECT_CALL(&datasystem::UrmaWritePayload, (_, _, _, _, _, _, _, _, _, _, _, _, _, _)).Times(0);
+    auto akSkManager = std::make_shared<AkSkManager>();
+    WorkerWorkerOCServiceImpl remoteService(
+        impl_, akSkManager, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        []() { return cluster::ControlBackendObservation{}; });
+    auto req = MakeUrmaRemoteGetRequest(objectKey, dataSize, requester);
+    auto serverApi = std::make_shared<TestGetObjectRemoteServerApi>(std::move(req));
+
+    auto rc = remoteService.GetObjectRemote(serverApi);
+
+    EXPECT_EQ(rc.GetCode(), K_URMA_WORKER_UNAVAILABLE);
+    EXPECT_THAT(rc.GetMsg(), HasSubstr("is not smaller than the limit"));
+    EXPECT_EQ(serverApi->ReadCount(), 1);
+    EXPECT_EQ(serverApi->WriteCount(), 0);
+    EXPECT_EQ(serverApi->PayloadSendCount(), 0);
+    EXPECT_TRUE(serverApi->Payload().empty());
 }
 
 TEST_F(WorkerOcRemoteGetAdmissionTest, BlockingRemoteGetAdmissionFailureReturnsUnavailableWhenFallbackDisabled)

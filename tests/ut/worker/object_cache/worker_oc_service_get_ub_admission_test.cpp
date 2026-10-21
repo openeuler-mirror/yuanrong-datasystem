@@ -138,7 +138,7 @@ TEST(WorkerOcServiceGetUbAdmissionTest, ProviderCqe9RequestsRequesterSelfVerific
     EXPECT_FALSE(admission->GetState(DATA_WORKER).has_value());
 }
 
-TEST(WorkerOcServiceGetUbAdmissionTest, UnavailableDataWorkerReadSourceUsesConfiguredFallback)
+TEST(WorkerOcServiceGetUbAdmissionTest, UnavailableDataWorkerReadSourcePreservesBoundedFallbackContext)
 {
     const bool oldTransportFallback = FLAGS_enable_transport_fallback;
     Raii restoreFlag([oldTransportFallback]() { FLAGS_enable_transport_fallback = oldTransportFallback; });
@@ -166,6 +166,20 @@ TEST(WorkerOcServiceGetUbAdmissionTest, UnavailableDataWorkerReadSourceUsesConfi
                                   useFastTransport);
     EXPECT_EQ(rc.GetCode(), StatusCode::K_URMA_DATA_WORKER_UNAVAILABLE);
     EXPECT_TRUE(useFastTransport);
+    EXPECT_TRUE(CheckRemoteReadAdmission(getImpl, DATA_WORKER, WorkerOcServiceGetImpl::ReadTransportFallback::ALLOWED,
+                                         useFastTransport)
+                    .IsOk());
+    EXPECT_TRUE(useFastTransport);
+}
+
+TEST(WorkerOcServiceGetUbAdmissionTest, HealthyOrdinaryTcpReadRemainsOrdinaryTcp)
+{
+    auto admission = std::make_shared<PeerUbAdmission>();
+    WorkerRequestManager requestManager;
+    auto param = BuildGetParam(requestManager, std::make_shared<ObjectTable>());
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, LOCAL_WORKER, nullptr, admission);
+
+    bool useFastTransport = false;
     EXPECT_TRUE(CheckRemoteReadAdmission(getImpl, DATA_WORKER, WorkerOcServiceGetImpl::ReadTransportFallback::ALLOWED,
                                          useFastTransport)
                     .IsOk());
