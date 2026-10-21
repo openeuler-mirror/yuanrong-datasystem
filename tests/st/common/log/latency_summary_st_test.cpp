@@ -317,7 +317,7 @@ TEST_F(LatencySummaryStTest, GetTimeoutWorkerAccessLogContainsLatencySummary)
     DS_ASSERT_OK(client_->Set(key, "val_timeout"));
 
     std::string out;
-    client_->Get(key, out, 1);
+    client_->Get(key, out);
 
     client_.reset();
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));

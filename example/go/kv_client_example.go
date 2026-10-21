@@ -44,7 +44,7 @@ func getValue(theClient kv.KVClient, key string) string {
 	// Get the value
 	var resultValue string
 	fmt.Printf("Fetch the value for key: %s\n", key)
-	resultValue, s := theClient.Get(key, 0)
+	resultValue, s := theClient.Get(key)
 	if s.IsError() {
 		fmt.Println(s)
 	}
@@ -63,7 +63,7 @@ func delValue(theClient kv.KVClient, key string) {
 }
 
 func getValues(theClient kv.KVClient, keys []string) {
-	output, s := theClient.GetArray(keys, 0)
+	output, s := theClient.GetArray(keys)
 	if s.IsError() {
 		fmt.Println(s)
 	}

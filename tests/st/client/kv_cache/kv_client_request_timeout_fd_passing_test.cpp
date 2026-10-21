@@ -110,7 +110,7 @@ TEST_F(KVClientRequestTimeoutFdPassingTest, GetHonorsRequestTimeoutWhenFdPassing
 
     Timer timer;
     std::string out;
-    const Status rc = reader->Get(key, out, 0);
+    const Status rc = reader->Get(key, out);
     const int64_t elapsedMs = timer.ElapsedMilliSecond();
 
     // Prove the Get actually reached GetClientFd/PostRecvPageFd rather than failing earlier

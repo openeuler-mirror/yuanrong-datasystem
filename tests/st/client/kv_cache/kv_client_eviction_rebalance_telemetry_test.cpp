@@ -82,7 +82,6 @@ namespace {
 constexpr int kLogIntervalSec = 1;
 constexpr int kBaselineSampleIntervals = 2;
 constexpr int kDefaultMeasureSec = 20;
-constexpr int kGetTimeoutMs = 30'000;
 constexpr int kSetRetryCount = 20;
 constexpr int kSetRetryIntervalMs = 100;
 constexpr int kHashRingReadyTimeoutSec = 30;
@@ -1043,7 +1042,7 @@ protected:
                 for (const size_t keyIdx : keySet.hotKeyIndices) {
                     ASSERT_LT(keyIdx, keySet.residentKeyCount);
                     std::string output;
-                    const Status status = clients_[workerIdx]->Get(keySet.keys[keyIdx], output, kGetTimeoutMs);
+                    const Status status = clients_[workerIdx]->Get(keySet.keys[keyIdx], output);
                     ASSERT_TRUE(status.IsOk()) << status.ToString();
                     ASSERT_EQ(output, std::string(static_cast<size_t>(keySet.keySizeBytes[keyIdx]), fillChar));
                 }
@@ -1556,7 +1555,7 @@ protected:
         auto getAndCount = [&](size_t workerIdx, size_t idx) {
             const std::string &key = pool.keys[idx];
             std::string output;
-            const Status status = clients_[workerIdx]->Get(key, output, kGetTimeoutMs);
+            const Status status = clients_[workerIdx]->Get(key, output);
             counters.attempts.fetch_add(1, std::memory_order_relaxed);
             if (status.IsError()) {
                 counters.getErrors.fetch_add(1, std::memory_order_relaxed);
@@ -1607,7 +1606,7 @@ protected:
             const size_t clientCount = ownerAffinity ? 1 : clients_.size();
             for (size_t clientOffset = 0; clientOffset < clientCount; ++clientOffset) {
                 std::vector<Optional<ReadOnlyBuffer>> buffers;
-                const Status status = clients_[firstClient + clientOffset]->Get(group.keys, buffers, kGetTimeoutMs);
+                const Status status = clients_[firstClient + clientOffset]->Get(group.keys, buffers);
                 if (status.IsError()) {
                     return status;
                 }
@@ -1644,7 +1643,7 @@ protected:
             const size_t clientCount = ownerAffinity ? 1 : clients_.size();
             for (size_t clientOffset = 0; clientOffset < clientCount; ++clientOffset) {
                 std::vector<Optional<ReadOnlyBuffer>> buffers;
-                RETURN_IF_NOT_OK(clients_[firstClient + clientOffset]->Get(group.keys, buffers, kGetTimeoutMs));
+                RETURN_IF_NOT_OK(clients_[firstClient + clientOffset]->Get(group.keys, buffers));
                 if (buffers.size() != group.keys.size()) {
                     return Status(K_RUNTIME_ERROR, "block cold scan returned an incomplete buffer vector");
                 }
@@ -1760,7 +1759,7 @@ protected:
                     const auto &group = accessPlan.groups[accessPlan.repeatingGroupIndices[planPos]];
                     const size_t clientIdx = ownerAffinity ? group.ownerWorker : deterministicClient;
                     std::vector<Optional<ReadOnlyBuffer>> buffers;
-                    const Status status = clients_[clientIdx]->Get(group.keys, buffers, kGetTimeoutMs);
+                    const Status status = clients_[clientIdx]->Get(group.keys, buffers);
                     counters.requestAttempts.fetch_add(1, std::memory_order_relaxed);
                     counters.attempts.fetch_add(group.keys.size(), std::memory_order_relaxed);
                     if (status.IsError()) {

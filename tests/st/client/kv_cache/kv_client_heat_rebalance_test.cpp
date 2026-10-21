@@ -52,7 +52,6 @@ constexpr uint32_t WORKER2 = 2;
 // A heat task can move at most 10% of source capacity. Keep each object's real allocation below that budget while
 // retaining enough aggregate bytes to cross the source usage and hot-ratio thresholds.
 constexpr size_t VALUE_SIZE = 4 * 1024UL * 1024UL;  // 4MiB payload; 9 objects still trigger rebalance.
-constexpr int GET_TIMEOUT_MS = 30'000;
 constexpr int REBALANCE_TIMEOUT_MS = 30'000;
 constexpr int SHORT_WAIT_MS = 3'000;
 constexpr int POLL_INTERVAL_MS = 100;
@@ -198,7 +197,7 @@ protected:
         for (int t = 0; t < times; ++t) {
             for (const auto &key : batch.keys) {
                 std::string value;
-                auto rc = client->Get(key, value, GET_TIMEOUT_MS);
+                auto rc = client->Get(key, value);
                 if (rc.IsError()) {
                     ADD_FAILURE() << FormatString("warm-up Get %s failed: %s", key, rc.ToString());
                     return;
@@ -212,7 +211,7 @@ protected:
         ASSERT_TRUE(client != nullptr);
         for (const auto &key : batch.keys) {
             std::string value;
-            auto rc = client->Get(key, value, GET_TIMEOUT_MS);
+            auto rc = client->Get(key, value);
             ASSERT_TRUE(rc.IsOk()) << FormatString("Get %s failed: %s", key, rc.ToString());
             ASSERT_EQ(value, batch.value) << key;
         }

@@ -315,7 +315,7 @@ func (t *KVClient) SetValue(value string, param SetParam) (string, common.Status
 }
 
 // Get function takes key identifier as input and fetches the string of data for that key and returns it.
-func (t *KVClient) Get(key string, timeoutms ...uint32) (string, common.Status) {
+func (t *KVClient) Get(key string) (string, common.Status) {
 	rc := checkNullPtr(t)
 	if int(rc.Code) != common.Ok {
 		return "", rc
@@ -329,9 +329,6 @@ func (t *KVClient) Get(key string, timeoutms ...uint32) (string, common.Status) 
 	keyLen := C.size_t(len(key))
 	var valLen C.size_t
 	ctimeoutms := C.uint(0)
-	if len(timeoutms) > 0 {
-		ctimeoutms = C.uint(timeoutms[0])
-	}
 	t.mutex.RLock()
 	defer t.mutex.RUnlock()
 	statusC := C.SCGet(t.client, cKey, keyLen, ctimeoutms, &cVal, &valLen)
@@ -371,7 +368,7 @@ func (t *KVClient) Del(key string) common.Status {
 // GetArray function is similar to Get(), except that it takes an array of keys to get, and returns and array of string
 // values for those keys.  The array index of the input key corresponds to the array index of the output value string.
 // If a key is not found -> error is returned and output value string for the key set to an empty string(length 0)
-func (t *KVClient) GetArray(keys []string, timeoutms ...uint32) ([]string, common.Status) {
+func (t *KVClient) GetArray(keys []string) ([]string, common.Status) {
 	rc := checkNullPtr(t)
 	if int(rc.Code) != common.Ok {
 		return nil, rc
@@ -398,9 +395,6 @@ func (t *KVClient) GetArray(keys []string, timeoutms ...uint32) ([]string, commo
 	}
 
 	ctimeoutms := C.uint(0)
-	if len(timeoutms) > 0 {
-		ctimeoutms = C.uint(timeoutms[0])
-	}
 	t.mutex.RLock()
 	defer t.mutex.RUnlock()
 	statusC := C.SCGetArray(t.client, keyArray, &keyLenArray[0], C.ulong(len(keys)), ctimeoutms, valuesC, valuesLenC)

@@ -57,7 +57,7 @@ TEST_F(KVClientTimeoutTest, KVGetShortTimeoutFailsFastWithDeadlineExceeded)
     std::string key = ObjectKey();
     std::string val;
     Timer timer;
-    Status rc = client->Get(key, val, 0);
+    Status rc = client->Get(key, val);
     int64_t elapsedMs = timer.ElapsedMilliSecond();
 
     EXPECT_FALSE(rc.IsOk());

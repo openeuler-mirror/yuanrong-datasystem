@@ -244,7 +244,7 @@ TEST_F(OCClientAllocateDiskTest, MSetCacheTypeChange)
     ASSERT_EQ(failedKeys.size(), failedSize);
 
     std::string val1;
-    DS_ASSERT_OK(client1->Get(keys[index], val1, 0));
+    DS_ASSERT_OK(client1->Get(keys[index], val1));
     ASSERT_EQ(val1, "qqqqqq");
 }
 

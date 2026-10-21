@@ -197,7 +197,7 @@ protected:
         const auto worker = sequence % WORKER_COUNT;
         const auto object = (sequence / WORKER_COUNT) % OBJECTS_PER_WORKER;
         std::string value;
-        RETURN_IF_NOT_OK(clients_[worker]->Get(objects_[worker].keys[object], value, RPC_TIMEOUT_MS));
+        RETURN_IF_NOT_OK(clients_[worker]->Get(objects_[worker].keys[object], value));
         CHECK_FAIL_RETURN_STATUS(value == objects_[worker].value, K_RUNTIME_ERROR,
                                  "Object value changed during policy update");
         return Status::OK();
@@ -208,7 +208,7 @@ protected:
         for (uint32_t worker = 0; worker < WORKER_COUNT; ++worker) {
             for (const auto &key : objects_[worker].keys) {
                 std::string value;
-                RETURN_IF_NOT_OK(clients_[worker]->Get(key, value, RPC_TIMEOUT_MS));
+                RETURN_IF_NOT_OK(clients_[worker]->Get(key, value));
                 CHECK_FAIL_RETURN_STATUS(value == objects_[worker].value, K_RUNTIME_ERROR,
                                          "Object value changed after policy update");
             }
@@ -224,7 +224,7 @@ protected:
             }
             for (const auto &key : objects_.at(worker).keys) {
                 std::string value;
-                RETURN_IF_NOT_OK(clients_.at(worker)->Get(key, value, RPC_TIMEOUT_MS));
+                RETURN_IF_NOT_OK(clients_.at(worker)->Get(key, value));
                 CHECK_FAIL_RETURN_STATUS(value == objects_.at(worker).value, K_RUNTIME_ERROR,
                                          "Surviving worker object changed during policy recovery");
             }
@@ -239,7 +239,7 @@ protected:
         worker += worker >= excludedWorker;
         const auto object = (sequence / survivingWorkerCount) % OBJECTS_PER_WORKER;
         std::string value;
-        RETURN_IF_NOT_OK(clients_.at(worker)->Get(objects_.at(worker).keys.at(object), value, RPC_TIMEOUT_MS));
+        RETURN_IF_NOT_OK(clients_.at(worker)->Get(objects_.at(worker).keys.at(object), value));
         CHECK_FAIL_RETURN_STATUS(value == objects_.at(worker).value, K_RUNTIME_ERROR,
                                  "Surviving worker object changed during policy recovery");
         return Status::OK();
@@ -255,8 +255,7 @@ protected:
     Status CheckWorkerObjectReadable(uint32_t workerIndex)
     {
         std::string value;
-        RETURN_IF_NOT_OK(
-            clients_.at(workerIndex)->Get(objects_.at(workerIndex).keys.front(), value, RPC_TIMEOUT_MS));
+        RETURN_IF_NOT_OK(clients_.at(workerIndex)->Get(objects_.at(workerIndex).keys.front(), value));
         CHECK_FAIL_RETURN_STATUS(value == objects_.at(workerIndex).value, K_RUNTIME_ERROR,
                                  "Object value changed during policy update");
         return Status::OK();
@@ -270,7 +269,7 @@ protected:
             const auto value = "after-fault-value-" + std::to_string(worker);
             RETURN_IF_NOT_OK(clients_.at(worker)->Set(key, value));
             std::string actual;
-            RETURN_IF_NOT_OK(clients_.at(worker)->Get(key, actual, RPC_TIMEOUT_MS));
+            RETURN_IF_NOT_OK(clients_.at(worker)->Get(key, actual));
             CHECK_FAIL_RETURN_STATUS(actual == value, K_RUNTIME_ERROR,
                                      "Fresh object changed after policy recovery");
         }
@@ -308,7 +307,7 @@ protected:
     {
         for (const auto &key : rebalanceKeys_) {
             std::string value;
-            RETURN_IF_NOT_OK(clients_.at(sourceWorker)->Get(key, value, RPC_TIMEOUT_MS));
+            RETURN_IF_NOT_OK(clients_.at(sourceWorker)->Get(key, value));
             CHECK_FAIL_RETURN_STATUS(value == rebalanceValue_, K_RUNTIME_ERROR,
                                      "Rebalanced object changed during policy update");
         }

@@ -141,7 +141,7 @@ class TestKVClientMethods(unittest.TestCase):
 
         client.mset_buffer(buffers)
 
-        retrieved_buffers = client.get_buffers([key], timeout_ms=500)
+        retrieved_buffers = client.get_buffers([key])
         self.assertEqual(len(retrieved_buffers), 1)
 
         read_view = retrieved_buffers[0]
@@ -171,16 +171,16 @@ class TestKVClientMethods(unittest.TestCase):
 
         client.mset_buffer(buffers)
 
-        retrieved_buffers = client.get_buffers(keys, timeout_ms=500)
+        retrieved_buffers = client.get_buffers(keys)
         self.assertEqual(len(retrieved_buffers), len(keys))
 
         self.assertEqual(retrieved_buffers[0].GetSize(), 100)
         self.assertEqual(retrieved_buffers[1].GetSize(), 200)
 
-        # Test: Fail to get when times out
+        # Test: Fail to get after the TTL expires
         time.sleep(1.1)
         with self.assertRaises(RuntimeError):
-            client.get_buffers(keys, timeout_ms=0)
+            client.get_buffers(keys)
 
     def test_state_init_by_env(self):
         """
@@ -299,7 +299,7 @@ class TestKVClientMethods(unittest.TestCase):
         client.set(key_list[0], val_list[0])
         client.set(key_list[1], val_list[1])
         client.set(key_list[2], val_list[2])
-        read_only_buffers = client.get_read_only_buffers(key_list, 0)
+        read_only_buffers = client.get_read_only_buffers(key_list)
         views = [buffer.immutable_data() for buffer in read_only_buffers]
         for i, mem_view in enumerate(views):
             read_only_buffers[i].rlatch()
@@ -317,7 +317,7 @@ class TestKVClientMethods(unittest.TestCase):
         client.set(key_list[0], val_list[0])
         client.set(key_list[1], val_list[1])
         client.set(key_list[2], val_list[2])
-        read_only_buffers = client.get_read_only_buffers(key_list, 0)
+        read_only_buffers = client.get_read_only_buffers(key_list)
         views = [buffer.immutable_data(with_latch=True) for buffer in read_only_buffers]
         for i, mem_view in enumerate(views):
             self.assertEqual(val_list[i].encode(), mem_view.tobytes())
@@ -339,13 +339,13 @@ class TestKVClientMethods(unittest.TestCase):
         rw_buffers = oc_client.get([key_list[0], key_list[1]], timeout_ms=1000)
 
         # small element case.
-        read_only_buffers = client.get_read_only_buffers(key_list, 0)
+        read_only_buffers = client.get_read_only_buffers(key_list)
         mem_view = read_only_buffers[0].immutable_data(with_latch=True, timeout_sec=1)
         self.assertEqual(mem_view.tobytes(), val_list[0].encode())
 
         # big element case.
         rw_buffers[1].wlatch(timeout_sec=1)
-        read_only_buffers = client.get_read_only_buffers(key_list, 0)
+        read_only_buffers = client.get_read_only_buffers(key_list)
         is_runtime_error = False
         try:
             read_only_buffers[1].immutable_data(with_latch=True, timeout_sec=1)
@@ -412,7 +412,7 @@ class TestKVClientMethods(unittest.TestCase):
         client.init()
         client.set(key1, val1)
         self.assertEqual(client.get([key1], True), [val1])
-        self.assertRaisesRegex(RuntimeError, "Cannot get objects from worker", client.get, [key2], False, 5)
+        self.assertRaisesRegex(RuntimeError, "Cannot get objects from worker", client.get, [key2], False)
         self.assertEqual(client.get([key1, key2], True), [val1, None])
         self.assertEqual(client.get([key1, key2], False), [val1.encode(), None])
 
@@ -657,7 +657,7 @@ class TestKVClientMethods(unittest.TestCase):
 
         client.mset_buffer(buffers)
 
-        retrieved_buffers = client.get_buffers(keys, timeout_ms=500)
+        retrieved_buffers = client.get_buffers(keys)
         self.assertEqual(len(retrieved_buffers), len(keys))
 
         self.assertEqual(retrieved_buffers[0].GetSize(), 100)

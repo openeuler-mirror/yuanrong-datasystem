@@ -611,7 +611,7 @@ protected:
     uint64_t maxSize_ = 64 * 1024ul * 1024ul;
 };
 
-TEST_P(KVClientOffsetReadRemoteTest, SubscribeAndGetParal)
+TEST_P(KVClientOffsetReadRemoteTest, SetAndGetFromRemoteWorkers)
 {
     std::shared_ptr<KVClient> client, client1, client2;
     InitTestKVClient(0, client);
@@ -619,22 +619,13 @@ TEST_P(KVClientOffsetReadRemoteTest, SubscribeAndGetParal)
     InitTestKVClient(1, client2);
     std::string key = "key";
     std::string value = "value";
-    std::string valGet;
-    std::thread t1([&]() {
-        DS_ASSERT_OK(client->Get(key, valGet, 300'000));  // sub time is 300'000 ms
-    });
-    datasystem::SetParam param = type_;
-    std::thread t2([&]() {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));  // wait time is 1000ms
-        DS_ASSERT_OK(client2->Set(key, value, param));
-    });
-    std::thread t3([&]() {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));  // wait time is 1000ms
-        DS_ASSERT_OK(client1->Get(key, valGet, 300'000));              // sub time is 300'000 ms
-    });
-    t1.join();
-    t2.join();
-    t3.join();
+    DS_ASSERT_OK(client2->Set(key, value, type_));
+    std::string firstGet;
+    std::string secondGet;
+    DS_ASSERT_OK(client->Get(key, firstGet));
+    DS_ASSERT_OK(client1->Get(key, secondGet));
+    ASSERT_EQ(firstGet, value);
+    ASSERT_EQ(secondGet, value);
 }
 
 TEST_P(KVClientOffsetReadRemoteTest, LEVEL1_TestReadKeyRemoteGet)

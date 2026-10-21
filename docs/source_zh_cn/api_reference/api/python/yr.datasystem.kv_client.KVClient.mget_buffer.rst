@@ -1,7 +1,7 @@
 yr.datasystem.kv_client.KVClient.get_buffers
 ============================================
 
-.. py:method:: yr.datasystem.kv_client.KVClient.get_buffers(keys=None, timeout_ms=0)
+.. py:method:: yr.datasystem.kv_client.KVClient.get_buffers(keys=None)
 
     获取所有给定键的值。
 
@@ -10,7 +10,6 @@ yr.datasystem.kv_client.KVClient.get_buffers
 
     参数：
         - **keys** (list) - 字符串类型的键列表。约束：传入的key的数量不能超过1万。
-        - **timeout_ms** (int) - 等待结果返回的超时时间，单位为毫秒。
 
     返回：
         `ReadOnlyBuffer` 对象列表。该buffer生命周期内始终持有读锁，数据系统不可修改。
