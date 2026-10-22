@@ -21,6 +21,7 @@
 #include "datasystem/common/log/log.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -46,7 +47,6 @@
 #include "datasystem/common/log/logging.h"
 #undef protected
 #undef private
-#include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/random_data.h"
@@ -57,8 +57,6 @@
 #include "datasystem/common/util/validator.h"
 #include "datasystem/utils/status.h"
 
-DS_DECLARE_bool(alsologtostderr);
-DS_DECLARE_uint32(stderrthreshold);
 DS_DECLARE_bool(log_compress);
 DS_DECLARE_string(log_filename);
 DS_DECLARE_bool(log_monitor);
@@ -73,26 +71,7 @@ namespace datasystem {
 namespace ut {
 void ResetLoggingForTest()
 {
-    auto *logging = Logging::GetInstance();
-    WriteLock lock(&logging->mux_);
-    if (logging->IsLoggingInitialized()) {
-        OperationLogger::Instance().LogOperationStop();
-        OperationLogger::Instance().Shutdown();
-        logging->logManager_->Stop();
-        LogSampler::Instance().Shutdown();
-
-        auto lp = Provider::Instance().GetLoggerProvider();
-        if (lp) {
-            lp->DropDsLogger();
-        }
-
-        logging->accessRecorderManagerInstance_.reset();
-        logging->logManager_.reset();
-        Provider::Instance().SetLoggerProvider(nullptr);
-        logging->SetLoggingInitialized(false);
-        logging->init_ = false;
-    }
-
+    Logging::ResetLoggingRuntimeForTest();
     FLAGS_log_filename.clear();
     Logging::ResetClientLogConfigForTest();
 }
@@ -383,8 +362,7 @@ TEST_F(LoggingTest, LogProcessVersionWritesRegularAndOperationLogs)
     const std::string logFilename = "log_process_version_test";
     Logging::GetInstance()->Start(logFilename, LogProcessRole::COORDINATOR, 1);
     Logging::GetInstance()->LogProcessVersion("[abc123] [2026-08-13 09:30:00]", "feature/test");
-    OperationLogger::Instance().Shutdown();
-    Provider::Instance().FlushLogs();
+    ResetLoggingForTest();
 
     const std::string infoContent = ReadFileContent(FLAGS_log_dir + "/" + logFilename + ".INFO.log");
     const std::string operationContent = ReadFileContent(FLAGS_log_dir + "/" + logFilename + "_operation.log");
@@ -831,7 +809,6 @@ TEST_F(LoggingTest, TestWriteLogWhenChangeEnv)
 TEST_F(LoggingTest, TestMinLogLevelNotWriteToFile)
 {
     int replace = 1;
-    (void)setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "false", replace);
     FLAGS_log_only_write_info_file = false;
     FLAGS_logbufsecs = 0;
     (void)setenv("DATASYSTEM_MIN_LOG_LEVEL", "1", replace);
@@ -843,6 +820,7 @@ TEST_F(LoggingTest, TestMinLogLevelNotWriteToFile)
     LOG(INFO) << infoLog;
     LOG(WARNING) << warningLog;
     LOG(ERROR) << errorLog;
+    ResetLoggingForTest();
 
     bool isAccessLogExist = false;
     for (const auto &filename : GetFilesInDirectory(FLAGS_log_dir)) {
@@ -911,39 +889,59 @@ TEST_F(LoggingTest, TestLogFileDeleted)
     ASSERT_TRUE(FileExist(filename));
 }
 
-TEST_F(LoggingTest, TestAlsoLogToStderr)
+TEST_F(LoggingTest, NormalLogsStayOffStderrAndDrainOnShutdown)
 {
+    ScopedEnv minLogLevel(MIN_LOG_LEVEL, "0");
+    const std::string logName = "async_file_only";
+    const std::string infoLogPath = FLAGS_log_dir + "/" + logName + ".INFO.log";
+    const std::string infoMessage = "normal-info-file-only";
+    const std::string warningMessage = "normal-warning-file-only";
+    const std::string errorMessage = "normal-error-file-only";
     testing::internal::CaptureStderr();
+    Logging::SetClientLogName(logName);
+    Logging::GetInstance()->Start("unused", LogProcessRole::CLIENT, 1);
+    LOG(INFO) << infoMessage;
+    LOG(WARNING) << warningMessage;
+    LOG(ERROR) << errorMessage;
+    ResetLoggingForTest();
 
-    FLAGS_alsologtostderr = false;
-    Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT, 1);
-    auto interval = std::chrono::milliseconds(100);
-    std::this_thread::sleep_for(interval);
-
-    LOG(INFO) << "Test FLAGS_alsologtostderr" << std::endl;
-
-    std::string output = testing::internal::GetCapturedStderr();
-    EXPECT_EQ(output.find("Test FLAGS_alsologtostderr"), std::string::npos);
+    const std::string output = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(output.find(infoMessage), std::string::npos);
+    EXPECT_EQ(output.find(warningMessage), std::string::npos);
+    EXPECT_EQ(output.find(errorMessage), std::string::npos);
+    const std::string fileContent = ReadFileContent(infoLogPath);
+    EXPECT_NE(fileContent.find(infoMessage), std::string::npos);
+    EXPECT_NE(fileContent.find(warningMessage), std::string::npos);
+    EXPECT_NE(fileContent.find(errorMessage), std::string::npos);
 }
 
-TEST_F(LoggingTest, TestStderrThreshold)
+TEST_F(LoggingTest, ClientShutdownKeepsHostStderrWritableAcrossRestarts)
 {
-    ScopedEnv logAsync(LOG_ASYNC_ENABLE, "false");
-    ScopedEnv stderrThreshold(STDERR_THRESHOLD_ENV, "1");
+    ScopedEnv minLogLevel(MIN_LOG_LEVEL, "0");
+    const std::array<std::string, 2> logNames{ "stderr_owner_first", "stderr_owner_second" };
+    const std::array<std::string, 2> logMessages{ "first-generation-tail", "second-generation-tail" };
+    const std::array<std::string, 2> hostMessages{ "host-stderr-after-first\n", "host-stderr-after-second\n" };
     testing::internal::CaptureStderr();
+    for (size_t i = 0; i < logNames.size(); ++i) {
+        Logging::SetClientLogName(logNames[i]);
+        Logging::GetInstance()->Start("unused", LogProcessRole::CLIENT, 1);
+        LOG(INFO) << logMessages[i];
+        ResetLoggingForTest();
+        ASSERT_EQ(write(STDERR_FILENO, hostMessages[i].data(), hostMessages[i].size()),
+                  static_cast<ssize_t>(hostMessages[i].size()));
+    }
 
-    Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT, 1);
-    auto interval = std::chrono::milliseconds(100);
-    std::this_thread::sleep_for(interval);
-
-    LOG(INFO) << "StderrThresholdTest: INFO level message" << std::endl;
-    LOG(WARNING) << "StderrThresholdTest: WARNING level message" << std::endl;
-    LOG(ERROR) << "StderrThresholdTest: ERROR level message" << std::endl;
-
-    std::string output = testing::internal::GetCapturedStderr();
-    EXPECT_EQ(output.find("StderrThresholdTest: INFO level message"), std::string::npos);
-    EXPECT_NE(output.find("StderrThresholdTest: WARNING level message"), std::string::npos);
-    EXPECT_NE(output.find("StderrThresholdTest: ERROR level message"), std::string::npos);
+    const std::string output = testing::internal::GetCapturedStderr();
+    std::array<std::string, 2> fileContents;
+    for (size_t i = 0; i < logNames.size(); ++i) {
+        EXPECT_NE(output.find(hostMessages[i]), std::string::npos);
+        EXPECT_EQ(output.find(logMessages[i]), std::string::npos);
+        const std::string infoLogPath = FLAGS_log_dir + "/" + logNames[i] + ".INFO.log";
+        fileContents[i] = ReadFileContent(infoLogPath);
+        EXPECT_NE(fileContents[i].find(logMessages[i]), std::string::npos);
+    }
+    EXPECT_EQ(fileContents[0].find(logMessages[1]), std::string::npos);
+    EXPECT_EQ(fileContents[1].find(logMessages[0]), std::string::npos);
 }
 
 TEST_F(LoggingTest, TestMaxLogSize)
@@ -956,8 +954,6 @@ TEST_F(LoggingTest, TestMaxLogSize)
 
 TEST_F(LoggingTest, TestLogOnlyWriteInfoFile)
 {
-    int replace = 1;
-    (void)setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "false", replace);
     FLAGS_log_only_write_info_file = true;
     Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT);
     std::string warningLog = "skip separate warning file";
@@ -965,6 +961,7 @@ TEST_F(LoggingTest, TestLogOnlyWriteInfoFile)
 
     LOG(WARNING) << warningLog;
     LOG(ERROR) << errorLog;
+    ResetLoggingForTest();
 
     bool infoFound = false;
     bool separateFileFound = false;
@@ -989,7 +986,6 @@ TEST_F(LoggingTest, TestLogOnlyWriteInfoFile)
 TEST_F(LoggingTest, TestLogOnlyWriteInfoFileEnvOverride)
 {
     int replace = 1;
-    (void)setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "false", replace);
     (void)setenv(LOG_ONLY_WRITE_INFO_FILE_ENV.c_str(), "false", replace);
     FLAGS_log_only_write_info_file = true;
     Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT);
@@ -998,6 +994,7 @@ TEST_F(LoggingTest, TestLogOnlyWriteInfoFileEnvOverride)
 
     LOG(WARNING) << warningLog;
     LOG(ERROR) << errorLog;
+    ResetLoggingForTest();
 
     bool warningFound = false;
     bool errorFound = false;

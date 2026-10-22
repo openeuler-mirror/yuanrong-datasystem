@@ -35,7 +35,6 @@
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(log_dir);
 DS_DECLARE_string(log_filename);
-DS_DECLARE_bool(log_async);
 DS_DECLARE_uint32(max_log_size);
 
 namespace datasystem {
@@ -123,9 +122,8 @@ const std::unordered_set<std::string> &ClientUsedFlagNames()
     static const std::unordered_set<std::string> kSet = {
         // ---- logging isClient_ startup branch (InitClientConfig / InitClientAdvancedConfig) ----
         "log_dir", "log_filename", "max_log_size", "max_log_file_num", "log_compress", "v",
-        "minloglevel", "log_retention_day", "logtostderr", "alsologtostderr", "stderrthreshold",
-        "log_async", "log_async_queue_size", "log_monitor", "log_only_write_info_file",
-        "logbufsecs", "cluster_name",
+        "minloglevel", "log_retention_day", "log_async_queue_size", "log_monitor",
+        "log_only_write_info_file", "logbufsecs", "cluster_name",
         // ---- log sampling rates (InitLogSampler on client path) ----
         "request_sample_rate", "access_sample_rate", "diagnostic_sample_rate",
         // ---- client config file monitor ----
@@ -177,26 +175,21 @@ bool OperationLogger::Init(const std::string &role)
         if (FLAGS_log_dir.empty() || FLAGS_log_filename.empty()) {
             return false;
         }
+        if (!ds_spdlog::thread_pool()) {
+            return false;
+        }
         role_ = role;
         logPath_ = FLAGS_log_dir + "/" + FLAGS_log_filename + "_operation.log";
         try {
             const uint32_t maxLogSizeMb = GetMaxLogSizeMb();
             auto sink = std::make_shared<ds_spdlog::sinks::rotating_file_sink_mt>(
                 logPath_, maxLogSizeMb * log_param::SIZE_MEGA_BYTES, HIGHEST_SPDLOG_MAX_FILE_NUM);
-            std::shared_ptr<ds_spdlog::logger> logger;
-            if (FLAGS_log_async && ds_spdlog::thread_pool()) {
-                logger = std::make_shared<ds_spdlog::async_logger>(OPERATION_LOGGER_NAME, sink,
-                                                                     ds_spdlog::thread_pool(),
-                                                                     ds_spdlog::async_overflow_policy::overrun_oldest);
-            } else {
-                logger = std::make_shared<ds_spdlog::logger>(OPERATION_LOGGER_NAME, sink);
-            }
+            auto logger = std::make_shared<ds_spdlog::async_logger>(
+                OPERATION_LOGGER_NAME, sink, ds_spdlog::thread_pool(),
+                ds_spdlog::async_overflow_policy::overrun_oldest);
             ds_spdlog::initialize_logger(logger);
             logger->set_pattern(log_param::DEFAULT_LOG_PATTERN, ds_spdlog::pattern_time_type::local);
             logger->set_level(ds_spdlog::level::info);
-            if (!FLAGS_log_async) {
-                logger->flush_on(ds_spdlog::level::info);
-            }
             logger_ = logger;
             shouldLogStart = true;
         } catch (const std::exception &) {

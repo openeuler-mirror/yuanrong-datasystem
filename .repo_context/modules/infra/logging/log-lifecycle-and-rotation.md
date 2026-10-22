@@ -92,16 +92,16 @@
   - `DATASYSTEM_MAX_LOG_FILE_NUM`
   - `DATASYSTEM_LOG_COMPRESS`
   - `DATASYSTEM_LOG_RETENTION_DAY`
-  - `DATASYSTEM_LOG_TO_STDERR`
-  - `DATASYSTEM_ALSO_LOG_TO_STDERR`
-  - `DATASYSTEM_STD_THRESHOLD`
-  - `DATASYSTEM_LOG_ASYNC_ENABLE`
   - `DATASYSTEM_LOG_ASYNC_QUEUE_SIZE`
   - `DATASYSTEM_LOG_V`
   - `DATASYSTEM_MIN_LOG_LEVEL`
   - `DATASYSTEM_LOG_MONITOR_ENABLE`
   - `DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE`
 - Verified in `logging.cpp`, `cli/deploy/conf/*.json`, and Helm values:
+  - ordinary logs always use the bounded asynchronous file logger; normal stderr and synchronous modes are not
+    configurable;
+  - `LogParam` keeps backend-only sink/mode fields for isolated spdlog and crash-path tests; `BuildLoggerParam()` does
+    not expose them to production initialization;
   - `log_compress` defaults to disabled in the runtime flag and shipped worker/coordinator deployment templates.
   - client-side `DATASYSTEM_LOG_COMPRESS` is only used when `log_compress` was not explicitly supplied through
     command-line style flags or `KVClientConfig`.
@@ -122,9 +122,6 @@
   - `logbufsecs`
   - `logfile_mode`
   - `max_log_size`
-  - `logtostderr`
-  - `alsologtostderr`
-  - `stderrthreshold`
   - `minloglevel`
   - `log_async_queue_size`
 
@@ -132,6 +129,9 @@
 
 - Stability-sensitive behavior:
   - log file naming patterns must stay aligned with `LogManager` rolling and pruning regexes;
+  - graceful shutdown stops producers, flushes and unregisters loggers, then shuts down the spdlog registry/thread
+    pool so queued tail messages are processed before worker threads join;
+  - logging does not redirect, close, or otherwise take ownership of the embedding process's stderr;
   - `DATASYSTEM_*` environment overrides are externally visible operational contracts for client processes;
   - `container.log` remains the expected crash-path output location beneath the resolved log directory.
 - Operations implications:

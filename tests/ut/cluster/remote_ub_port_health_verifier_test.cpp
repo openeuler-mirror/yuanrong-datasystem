@@ -27,10 +27,8 @@
 #include "datasystem/cluster/ub_health/remote_ub_port_health_verifier.h"
 #undef private
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/log/logging.h"
 #include "datasystem/common/object_cache/ub_port_health.h"
-#include "datasystem/common/util/raii.h"
-
-DS_DECLARE_bool(alsologtostderr);
 
 namespace datasystem::cluster {
 namespace {
@@ -69,9 +67,7 @@ size_t CountOccurrences(const std::string &text, const std::string &needle)
 
 TEST(RemoteUbPortHealthVerifierTest, LogsOnlyChangedResponsesAndRetryStatus)
 {
-    const bool oldAlsoLogToStderr = FLAGS_alsologtostderr;
-    Raii restoreFlag([oldAlsoLogToStderr] { FLAGS_alsologtostderr = oldAlsoLogToStderr; });
-    FLAGS_alsologtostderr = true;
+    Logging::ResetLoggingRuntimeForTest();
     RemoteUbPortHealthVerifier verifier(12345, 1'000, 1'000);
 
     testing::internal::CaptureStderr();

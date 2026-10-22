@@ -40,8 +40,6 @@
 DS_DECLARE_double(request_sample_rate);
 DS_DECLARE_double(access_sample_rate);
 DS_DECLARE_double(diagnostic_sample_rate);
-DS_DECLARE_uint32(stderrthreshold);
-DS_DECLARE_bool(log_async);
 
 namespace datasystem {
 namespace ut {
@@ -63,8 +61,6 @@ public:
 
     void StartLogging()
     {
-        FLAGS_stderrthreshold = LogSeverity::FATAL;
-        FLAGS_log_async = true;
         Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT, 1);
     }
 

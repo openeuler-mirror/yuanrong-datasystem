@@ -160,8 +160,6 @@ global:
     # any log file from your project whose last modified time is greater than log-retention-day days will be unlinked.
     # If log-retention-day is equal 0, will not unlink log file by time.
     logRetentionDay: 0
-    # Flush log files with async mode.
-    logAsync: true
     # Buffer log messages for at most this many seconds.
     logBufSecs: 10
     # Compress old log files in .gz format.

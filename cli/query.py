@@ -73,9 +73,8 @@ def _suppress_native_stderr():
     # lib writes brpc / rpc_stub_cache_mgr INFO-level framework logs directly to
     # std::cerr (fd 2) via LogMessageImpl::ToStderr when no logger provider is
     # registered (cluster_query_client::Init does not call Logging::InitLogging).
-    # std::cerr bypasses glog flag checks (stderrthreshold / alsologtostderr),
-    # so env overrides cannot suppress it. Redirect fd 2 to a temp file for the
-    # duration of the native call. The caller inspects the captured logs by
+    # This fallback is independent of the normal asynchronous file logger.
+    # Redirect fd 2 to a temp file for the duration of the native call. The caller inspects the captured logs by
     # reading tmp_path before exiting this context, since the file is removed
     # on exit.
     saved_stderr = os.dup(2)

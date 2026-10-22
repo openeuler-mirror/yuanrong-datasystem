@@ -129,8 +129,7 @@ public:
     {
         decoyConfigPath_ = GetTestCaseDataDir() + "/datasystem.config";
         WriteConfigFile(decoyConfigPath_, "--v=99\n--minloglevel=0\n");
-        SetupMinimalCluster(opts,
-                            "-monitor_config_file= -log_async=0 -shared_memory_size_mb=25 -v=1 -max_client_num=2000");
+        SetupMinimalCluster(opts, "-monitor_config_file= -shared_memory_size_mb=25 -v=1 -max_client_num=2000");
     }
 
     std::string decoyConfigPath_;
@@ -194,7 +193,7 @@ public:
         configPath_ = GetTestCaseDataDir() + "/wiki_dynamic.config";
         WriteConfigFile(configPath_, "--v=0\n--minloglevel=0\n");
         SetupMinimalCluster(opts, "-monitor_config_file=" + configPath_ +
-                            " -log_async=0 -shared_memory_size_mb=25 -v=0 -max_client_num=2000");
+                            " -shared_memory_size_mb=25 -v=0 -max_client_num=2000");
     }
 
     std::string configPath_;

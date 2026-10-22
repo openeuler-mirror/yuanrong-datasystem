@@ -144,9 +144,6 @@ void ValidateKvClientNumericFields(const std::unordered_map<std::string, std::st
     if (!ValidateOptionalIntInRange(args, "v", MIN_VLOG_LEVEL, MAX_VLOG_LEVEL, reason)) {
         AddError(errors, "VLogLevel", reason);
     }
-    if (!ValidateOptionalIntInRange(args, "stderrthreshold", MIN_LOG_SEVERITY, MAX_LOG_SEVERITY, reason)) {
-        AddError(errors, "StderrThreshold", reason);
-    }
     if (!ValidateOptionalIntInRange(args, "max_log_size", MIN_MAX_LOG_SIZE_MB, MAX_MAX_LOG_SIZE_MB, reason)) {
         AddError(errors, "MaxLogSize", reason);
     }
@@ -211,12 +208,6 @@ KVClientConfig::Builder &KVClientConfig::Builder::VLogLevel(int level)
     return *this;
 }
 
-KVClientConfig::Builder &KVClientConfig::Builder::StderrThreshold(int level)
-{
-    args_["stderrthreshold"] = std::to_string(level);
-    return *this;
-}
-
 KVClientConfig::Builder &KVClientConfig::Builder::MaxLogSize(int size)
 {
     args_["max_log_size"] = std::to_string(size);
@@ -241,27 +232,9 @@ KVClientConfig::Builder &KVClientConfig::Builder::LogRetentionDay(uint32_t days)
     return *this;
 }
 
-KVClientConfig::Builder &KVClientConfig::Builder::LogToStderr(bool enable)
-{
-    args_["logtostderr"] = ConfigBoolToString(enable);
-    return *this;
-}
-
-KVClientConfig::Builder &KVClientConfig::Builder::AlsoLogToStderr(bool enable)
-{
-    args_["alsologtostderr"] = ConfigBoolToString(enable);
-    return *this;
-}
-
 KVClientConfig::Builder &KVClientConfig::Builder::LogOnlyWriteInfoFile(bool enable)
 {
     args_["log_only_write_info_file"] = ConfigBoolToString(enable);
-    return *this;
-}
-
-KVClientConfig::Builder &KVClientConfig::Builder::LogAsyncEnable(bool enable)
-{
-    args_["log_async"] = ConfigBoolToString(enable);
     return *this;
 }
 

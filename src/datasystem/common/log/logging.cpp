@@ -27,6 +27,7 @@
 #include <vector>
 
 #include <fcntl.h>
+#include <spdlog/spdlog.h>
 #include <unistd.h>
 
 #include "datasystem/common/log/access_recorder.h"
@@ -55,20 +56,14 @@ constexpr uint32_t DEFAULT_LOG_LEVEL = 0;
 constexpr uint32_t DEFAULT_LOG_RETENTION_DAY = 0;
 constexpr uint32_t DEFAULT_MAX_LOG_FILE_NUM = 5;
 constexpr uint32_t HIGHEST_MAX_LOG_SIZE = 4096;
-constexpr bool DEFAULT_ALSO_LOG_TO_STDERR = false;
 constexpr bool DEFAULT_CLIENT_LOG_MONITOR = true;
 constexpr bool DEFAULT_CLIENT_LOG_WITHOUT_PID = false;
-constexpr bool DEFAULT_LOG_ASYNC_FLAG = true;
 constexpr bool DEFAULT_LOG_COMPRESS = false;
 constexpr bool DEFAULT_CLIENT_LOG_COMPRESS = false;
 constexpr bool DEFAULT_LOG_ONLY_WRITE_INFO_FILE = true;
-constexpr bool DEFAULT_LOG_TO_STDERR = false;
 constexpr bool DEFAULT_ENABLE_PERF_TRACE_LOG = false;
-constexpr int DEFAULT_STDERRTHRESHOLD = LogSeverity::ERROR;  // By default, errors always log to stderr.
-constexpr int HIGHEST_STDERRTHRESHOLD = LogSeverity::FATAL;  // The errors log won't print to stderr.
 constexpr uint32_t DEFAULT_LOG_ASYNC_THREAD_COUNT = 2;
 
-DS_DEFINE_bool(log_async, DEFAULT_LOG_ASYNC_FLAG, "Enable asynchronous writing to log files.");
 DS_DEFINE_uint32_dynamic(
     max_log_file_num, DEFAULT_MAX_LOG_FILE_NUM,
     "Maximum number of log files to retain per severity level. And every log file size is limited by max_log_size."
@@ -84,13 +79,6 @@ DS_DEFINE_int32(logbufsecs, DEFAULT_LOG_BUF_SECS, "Buffer log messages for at mo
 DS_DEFINE_int32(logfile_mode, 0640, "Log file mode/permissions.");
 DS_DEFINE_uint32(max_log_size, DEFAULT_MAX_LOG_SIZE_MB,
                  "approx. maximum log file size (in MB). Valid range is [1, 4095].");
-DS_DEFINE_bool(logtostderr, false,
-               "log messages go to stderr instead of logfiles.  This flag obsoletes");
-DS_DEFINE_bool(alsologtostderr, false,
-               "log messages go to stderr in addition to logfiles");
-DS_DEFINE_uint32(stderrthreshold, 2,
-                 "log messages at or above this level are copied to stderr in "
-                 "addition to logfiles.  This flag obsoletes --alsologtostderr.");
 DS_DEFINE_int32_dynamic(minloglevel, 0, "Messages below this level are not logged.");
 
 static bool ValidateMinLogLevel(const char *flagName, int32_t value)
@@ -287,10 +275,8 @@ LogParam BuildLoggerParam(uint32_t maxLogSize)
     LogParam loggerParam;
     loggerParam.fileNamePatterns = fileNamePatterns;
     loggerParam.logDir = FLAGS_log_dir;
-    loggerParam.alsoLog2Stderr = FLAGS_alsologtostderr;
-    loggerParam.stderrLogLevel = GetLogSeverityName(FLAGS_stderrthreshold);
     loggerParam.logLevel = GetLogSeverityName(FLAGS_minloglevel);
-    loggerParam.logAsync = FLAGS_log_async;
+    loggerParam.logAsync = true;
     loggerParam.maxSize = maxLogSize;
     // LogManager still owns retention and compression. Passing the configured file-count limit to spdlog also keeps
     // high-frequency local rotation from temporarily growing beyond max_log_file_num.
@@ -325,9 +311,7 @@ bool Logging::InitLoggingWrapper(uint32_t logProcessInterval)
     if (!InitLogSampler()) {
         return false;
     }
-    if (loggerParam.logAsync) {
-        LOG(INFO) << "Async logging buffer duration: " << globalLogParam.logBufSecs << " s";
-    }
+    LOG(INFO) << "Async logging buffer duration: " << globalLogParam.logBufSecs << " s";
     logManager_ = std::make_unique<LogManager>(logProcessInterval);
     auto status = logManager_->Start();
     if (status.IsError()) {
@@ -366,24 +350,21 @@ void Logging::ShutdownLoggingWrapper()
 
     // Stop log manager.
     logManager_->Stop();
+    logManager_.reset();
+    accessRecorderManagerInstance_.reset();
 
     // Shutdown LogSampler.
     LogSampler::Instance().Shutdown();
 
-    if (isClient_ && !FLAGS_logtostderr) {
-        auto *redirectStdErr = freopen("/dev/null", "w", stderr);
-        if (redirectStdErr == nullptr) {
-            LOG(WARNING) << "Failed to redirect stderr to /dev/null, errno: " << errno
-                         << ", error: " << strerror(errno);
-        }
-    }
-
     auto lp = Provider::Instance().GetLoggerProvider();
     if (lp) {
+        (void)lp->ForceFlush();
         lp->DropDsLogger();
     }
 
     Provider::Instance().SetLoggerProvider(nullptr);
+    lp.reset();
+    ds_spdlog::shutdown();
     SetLoggingInitialized(false);
 }
 
@@ -425,26 +406,6 @@ void Logging::InitClientAdvancedConfig()
     std::string errMsg;
     if (!WasCommandLineFlagSpecified("log_retention_day")) {
         FLAGS_log_retention_day = GetUint32FromEnv(LOG_RETENTION_DAY_ENV.c_str(), DEFAULT_LOG_RETENTION_DAY);
-    }
-
-    // Keep client don't print log to stderror.
-    // Upstream can change FLAGS_ variable directly in fL#shorttype# namespace(high priority) to change log behavior.
-    if (!WasCommandLineFlagSpecified("logtostderr")) {
-        // If FLAGS_ variable is default value, can use "DATASYSTEM_xx" environment variable when to change behavior.
-        FLAGS_logtostderr = GetBoolFromEnv(LOG_TO_STDERR_ENV.c_str(), DEFAULT_LOG_TO_STDERR);
-    }
-
-    if (!WasCommandLineFlagSpecified("alsologtostderr")) {
-        FLAGS_alsologtostderr = GetBoolFromEnv(ALSO_LOG_TO_STDERR_ENV.c_str(), DEFAULT_ALSO_LOG_TO_STDERR);
-    }
-
-    if (!WasCommandLineFlagSpecified("stderrthreshold")) {
-        // Change stderrthreshold default value to HIGHEST_STDERRTHRESHOLD to avoid error message log to stderr.
-        FLAGS_stderrthreshold = GetUint32FromEnv(STDERR_THRESHOLD_ENV.c_str(), HIGHEST_STDERRTHRESHOLD);
-    }
-
-    if (!WasCommandLineFlagSpecified("log_async")) {
-        FLAGS_log_async = GetBoolFromEnv(LOG_ASYNC_ENABLE.c_str(), DEFAULT_LOG_ASYNC_FLAG);
     }
 
     if (!WasCommandLineFlagSpecified("log_async_queue_size")) {
@@ -561,6 +522,8 @@ void Logging::ResetLoggingRuntimeForTest()
         logging->ShutdownLoggingWrapper();
     } else {
         OperationLogger::Instance().Shutdown();
+        Provider::Instance().SetLoggerProvider(nullptr);
+        ds_spdlog::shutdown();
     }
     logging->accessRecorderManagerInstance_.reset();
     logging->logManager_.reset();
@@ -628,9 +591,8 @@ void Logging::Start(const std::string &logFilename, LogProcessRole processRole, 
             LOG(INFO) << "The client log config is: log_dir: " << FLAGS_log_dir
                       << ", max_log_size: " << FLAGS_max_log_size << ", max_log_file_num: " << FLAGS_max_log_file_num
                       << ", log_compress: " << FLAGS_log_compress << ", log_retention_day: " << FLAGS_log_retention_day
-                      << ", log_async: " << FLAGS_log_async << ", log_async_queue_size: " << FLAGS_log_async_queue_size
-                      << ", log_v: " << FLAGS_v << ", log_only_write_info_file: " << FLAGS_log_only_write_info_file
-                      << std::endl;
+                      << ", log_async_queue_size: " << FLAGS_log_async_queue_size << ", log_v: " << FLAGS_v
+                      << ", log_only_write_info_file: " << FLAGS_log_only_write_info_file << std::endl;
         }
     } else {
         FLAGS_log_monitor = false;

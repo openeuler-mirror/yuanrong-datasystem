@@ -42,7 +42,8 @@ public:
     bool Init(const std::string &role);
 
     /**
-     * @brief Shutdown operation audit logger and flush pending messages.
+     * @brief Submit the final operation record and flush, then unregister the logger.
+     * @details The owning Logging shutdown drains and joins the shared async thread pool.
      */
     void Shutdown();
 

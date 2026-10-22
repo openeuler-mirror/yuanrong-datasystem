@@ -33,7 +33,6 @@
 #include "datasystem/kv_client.h"
 #include "datasystem/utils/status.h"
 
-DS_DECLARE_bool(alsologtostderr);
 DS_DECLARE_uint32(max_log_size);
 
 namespace datasystem {
@@ -43,7 +42,6 @@ public:
     void SetUp() override
     {
         FLAGS_v = 1;
-        FLAGS_alsologtostderr = false;
         FLAGS_max_log_size = 1024; // 1024 MB
         ExternalClusterTest::SetUp();
     }

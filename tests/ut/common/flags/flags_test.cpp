@@ -49,17 +49,13 @@ DS_DEFINE_double(double_flag, 1.0, "double variable test");
 DS_DEFINE_double(invalid_double_flag, 1.0, "invalid double variable test");
 DS_DEFINE_int32_dynamic(test_modifiable_flag, 7, "ut dynamic flag");
 
-DS_DECLARE_bool(alsologtostderr);
-DS_DECLARE_bool(log_async);
 DS_DECLARE_bool(log_compress);
 DS_DECLARE_bool(log_only_write_info_file);
-DS_DECLARE_bool(logtostderr);
 DS_DECLARE_int32(minloglevel);
 DS_DECLARE_uint32(log_async_queue_size);
 DS_DECLARE_uint32(log_retention_day);
 DS_DECLARE_uint32(max_log_file_num);
 DS_DECLARE_uint32(max_log_size);
-DS_DECLARE_uint32(stderrthreshold);
 DS_DECLARE_string(log_filename);
 DS_DECLARE_string(monitor_config_file);
 
@@ -237,10 +233,6 @@ public:
           v_(FLAGS_v),
           minLogLevel_(FLAGS_minloglevel),
           logRetentionDay_(FLAGS_log_retention_day),
-          logToStderr_(FLAGS_logtostderr),
-          alsoLogToStderr_(FLAGS_alsologtostderr),
-          stderrThreshold_(FLAGS_stderrthreshold),
-          logAsync_(FLAGS_log_async),
           logAsyncQueueSize_(FLAGS_log_async_queue_size),
           logOnlyWriteInfoFile_(FLAGS_log_only_write_info_file)
     {
@@ -254,10 +246,6 @@ public:
         FLAGS_v = v_;
         FLAGS_minloglevel = minLogLevel_;
         FLAGS_log_retention_day = logRetentionDay_;
-        FLAGS_logtostderr = logToStderr_;
-        FLAGS_alsologtostderr = alsoLogToStderr_;
-        FLAGS_stderrthreshold = stderrThreshold_;
-        FLAGS_log_async = logAsync_;
         FLAGS_log_async_queue_size = logAsyncQueueSize_;
         FLAGS_log_only_write_info_file = logOnlyWriteInfoFile_;
     }
@@ -269,10 +257,6 @@ private:
     int32_t v_;
     int32_t minLogLevel_;
     uint32_t logRetentionDay_;
-    bool logToStderr_;
-    bool alsoLogToStderr_;
-    uint32_t stderrThreshold_;
-    bool logAsync_;
     uint32_t logAsyncQueueSize_;
     bool logOnlyWriteInfoFile_;
 };
@@ -436,10 +420,6 @@ TEST_F(FlagsTest, ExplicitDefaultClientLogConfigIsNotOverriddenByEnv)
         { LOG_V, "3" },
         { MIN_LOG_LEVEL, "2" },
         { LOG_RETENTION_DAY_ENV, "5" },
-        { LOG_TO_STDERR_ENV, "true" },
-        { ALSO_LOG_TO_STDERR_ENV, "true" },
-        { STDERR_THRESHOLD_ENV, "3" },
-        { LOG_ASYNC_ENABLE, "false" },
         { LOG_ASYNC_QUEUE_SIZE, "4096" },
         { LOG_ONLY_WRITE_INFO_FILE_ENV, "false" },
     });
@@ -452,10 +432,6 @@ TEST_F(FlagsTest, ExplicitDefaultClientLogConfigIsNotOverriddenByEnv)
                         .VLogLevel(0)
                         .MinLogLevel(0)
                         .LogRetentionDay(0)
-                        .LogToStderr(false)
-                        .AlsoLogToStderr(false)
-                        .StderrThreshold(2)
-                        .LogAsyncEnable(true)
                         .LogAsyncQueueSize(DEFAULT_LOG_ASYNC_QUEUE_SIZE)
                         .LogOnlyWriteInfoFile(true)
                         .Build(config);
@@ -472,10 +448,6 @@ TEST_F(FlagsTest, ExplicitDefaultClientLogConfigIsNotOverriddenByEnv)
     EXPECT_EQ(FLAGS_v, 0);
     EXPECT_EQ(FLAGS_minloglevel, 0);
     EXPECT_EQ(FLAGS_log_retention_day, 0u);
-    EXPECT_FALSE(FLAGS_logtostderr);
-    EXPECT_FALSE(FLAGS_alsologtostderr);
-    EXPECT_EQ(FLAGS_stderrthreshold, 2u);
-    EXPECT_TRUE(FLAGS_log_async);
     EXPECT_EQ(FLAGS_log_async_queue_size, DEFAULT_LOG_ASYNC_QUEUE_SIZE);
     EXPECT_TRUE(FLAGS_log_only_write_info_file);
 }
@@ -615,15 +587,11 @@ TEST_F(FlagsTest, KVClientConfigBuilderStoresExplicitValues)
                         .AccessLogName("client_access")
                         .MinLogLevel(1)
                         .VLogLevel(2)
-                        .StderrThreshold(3)
                         .MaxLogSize(100)
                         .MaxLogFileNum(7)
                         .LogCompress(false)
                         .LogRetentionDay(3)
-                        .LogToStderr(true)
-                        .AlsoLogToStderr(true)
                         .LogOnlyWriteInfoFile(false)
-                        .LogAsyncEnable(false)
                         .LogAsyncQueueSize(4096)
                         .LogMonitorEnable(false)
                         .MonitorConfigPath("/tmp/ds.config")
@@ -637,15 +605,11 @@ TEST_F(FlagsTest, KVClientConfigBuilderStoresExplicitValues)
     ASSERT_EQ(config.GetArgs().at("client_access_log_filename"), "client_access");
     ASSERT_EQ(config.GetArgs().at("minloglevel"), "1");
     ASSERT_EQ(config.GetArgs().at("v"), "2");
-    ASSERT_EQ(config.GetArgs().at("stderrthreshold"), "3");
     ASSERT_EQ(config.GetArgs().at("max_log_size"), "100");
     ASSERT_EQ(config.GetArgs().at("max_log_file_num"), "7");
     ASSERT_EQ(config.GetArgs().at("log_compress"), "false");
     ASSERT_EQ(config.GetArgs().at("log_retention_day"), "3");
-    ASSERT_EQ(config.GetArgs().at("logtostderr"), "true");
-    ASSERT_EQ(config.GetArgs().at("alsologtostderr"), "true");
     ASSERT_EQ(config.GetArgs().at("log_only_write_info_file"), "false");
-    ASSERT_EQ(config.GetArgs().at("log_async"), "false");
     ASSERT_EQ(config.GetArgs().at("log_async_queue_size"), "4096");
     ASSERT_EQ(config.GetArgs().at("log_monitor"), "false");
     ASSERT_EQ(config.GetArgs().at("monitor_config_file"), "/tmp/ds.config");
@@ -866,6 +830,18 @@ TEST_F(FlagsTest, TestSetAbsentFlag)
     ASSERT_TRUE(errMsg.find("not found") != errMsg.npos);
     ASSERT_EQ(defaultCount, 0);
     ASSERT_EQ(modifyCount, 0);
+}
+
+TEST_F(FlagsTest, RemovedLogModeFlagsAreUnknown)
+{
+    const std::vector<std::string> removedFlags{
+        "logtostderr", "alsologtostderr", "stderrthreshold", "log_async"
+    };
+    for (const auto &name : removedFlags) {
+        std::string errMsg;
+        EXPECT_FALSE(SetCommandLineOption(name.c_str(), "true", errMsg));
+        EXPECT_THAT(errMsg, testing::HasSubstr("not found"));
+    }
 }
 
 TEST_F(FlagsTest, TestSetIllegalValue)

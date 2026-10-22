@@ -223,11 +223,7 @@
     - `logbufsecs`
     - `logfile_mode`
     - `max_log_size`
-    - `logtostderr`
-    - `alsologtostderr`
-    - `stderrthreshold`
     - `minloglevel`
-    - `log_async`
     - `log_async_queue_size`
     - `log_only_write_info_file`
     - `request_sample_rate` (complete request-log sampling ratio per request trace; local decision cached in `Trace`)
@@ -243,10 +239,6 @@
     - `DATASYSTEM_MAX_LOG_FILE_NUM`
     - `DATASYSTEM_LOG_COMPRESS`
     - `DATASYSTEM_LOG_RETENTION_DAY`
-    - `DATASYSTEM_LOG_TO_STDERR`
-    - `DATASYSTEM_ALSO_LOG_TO_STDERR`
-    - `DATASYSTEM_STD_THRESHOLD`
-    - `DATASYSTEM_LOG_ASYNC_ENABLE`
     - `DATASYSTEM_LOG_ASYNC_QUEUE_SIZE`
     - `DATASYSTEM_LOG_V`
     - `DATASYSTEM_MIN_LOG_LEVEL`
@@ -392,11 +384,14 @@ Failure-sensitive steps:
   - `AccessRecorder` is scoped to one operation and should call `Record()` before destruction.
 - Concurrency or thread-affinity rules:
   - `Trace` is thread-local by design;
-  - ordinary log emission may be asynchronous depending on `log_async`;
+  - ordinary and operation log emission always use the shared bounded asynchronous spdlog thread pool;
   - background maintenance and exporter flush occur on non-request threads;
   - trace import must be explicit across threads.
 - Ordering requirements or invariants:
   - provider initialization must finish before ordinary logging is relied on;
+  - shutdown stops log producers before unregistering loggers, then destroys the registry/thread pool to drain the
+    queue and join its workers; a later initialization creates a new pool generation;
+  - normal logging never owns or redirects the embedding process's stderr;
   - access-recorder exporters must be initialized before monitor flush;
   - trace prefixes must be set before root trace generation if the prefix should be preserved;
   - `LogManager` remains the sole owner of periodic rolling and compression.
@@ -447,7 +442,6 @@ TransferEngine reuses the same patched `libds-spdlog.so` ABI but constructs its 
 | `log_compress` | gflag or env override | default `false` | compresses rotated log files | changes CPU cost, file collector behavior, and file suffix expectations |
 | `log_retention_day` | gflag or env override | default `0` meaning no age-based prune | age-based deletion | may violate audit expectations or exhaust disk if unset |
 | `max_log_size` | gflag or env override | default `100` in `logging.cpp` for normal path, client env override available | rotation threshold in MB | alters file count, tailing behavior, and compression cadence |
-| `log_async` | gflag or env override | default `true` | enables async ordinary log writing | can reorder failure perception under stress or drop oldest messages on overflow policy |
 | `log_async_queue_size` | gflag or env override | default `1024` in `logging.cpp` for this path | bounds async queue depth | too low increases overwrite risk, too high increases memory use |
 | `DATASYSTEM_CLIENT_LOG_DIR` | environment | client-only override | changes client log destination directory | can redirect output unexpectedly or fail on bad permissions |
 | `DATASYSTEM_CLIENT_LOG_NAME` | environment | client-only override validated by RE2 | changes client ordinary log base name | unsafe naming would break file handling if validation changed |

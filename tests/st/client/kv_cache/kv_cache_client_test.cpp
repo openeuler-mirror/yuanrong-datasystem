@@ -85,7 +85,6 @@
     } while (0)
 
 DS_DECLARE_bool(log_monitor);
-DS_DECLARE_bool(log_async);
 DS_DECLARE_string(log_filename);
 
 namespace datasystem {
@@ -3525,13 +3524,6 @@ public:
 
     void SetUp() override
     {
-        // Disable async logging so AssertFileContainsEventually can deterministically
-        // verify log file content.  FLAGS_log_async alone is not sufficient because
-        // Logging::Start() (called during KVClient::Init()) resets it from the
-        // DATASYSTEM_LOG_ASYNC_ENV env var, falling back to the default (true).
-        // Setting the env var ensures the flag stays false through SDK re-init.
-        FLAGS_log_async = false;
-        ::setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "0", 1);
         ExternalClusterTest::SetUp();
         FLAGS_log_monitor = true;
         FLAGS_v = 1;

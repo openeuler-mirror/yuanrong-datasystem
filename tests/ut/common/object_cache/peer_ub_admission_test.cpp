@@ -28,11 +28,9 @@
 #include <bthread/countdown_event.h>
 
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/log/logging.h"
 #include "datasystem/common/object_cache/peer_ub_admission.h"
-#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/timer.h"
-
-DS_DECLARE_bool(alsologtostderr);
 
 namespace datasystem {
 namespace {
@@ -66,6 +64,7 @@ void EnablePeerPortHealth(PeerUbAdmission &admission)
 std::string CaptureGlobalSummaryReplace(PeerUbAdmission &admission,
                                         const std::vector<UbHealthSummary> &summaries)
 {
+    Logging::ResetLoggingRuntimeForTest();
     testing::internal::CaptureStderr();
     admission.ReplaceGlobalSummaries(summaries);
     return testing::internal::GetCapturedStderr();
@@ -75,6 +74,7 @@ CapturedProbeCompletion CaptureProbeCompletion(PeerUbAdmission &admission, const
                                                const Status &status, uint64_t nowMs,
                                                bool requireGlobalAvailable)
 {
+    Logging::ResetLoggingRuntimeForTest();
     testing::internal::CaptureStderr();
     const bool recovered = admission.CompleteProbe(token, status, nowMs, requireGlobalAvailable);
     return { recovered, testing::internal::GetCapturedStderr() };
@@ -512,10 +512,7 @@ TEST(PeerUbAdmissionTest, PartialQuerySettlesSuspectAndAllowsNewFailureVerificat
 
 TEST(PeerUbAdmissionTest, PortHealthFactTransitionsLogAdmissionState)
 {
-    const bool oldAlsoLogToStderr = FLAGS_alsologtostderr;
-    Raii restoreFlag([oldAlsoLogToStderr] { FLAGS_alsologtostderr = oldAlsoLogToStderr; });
-    FLAGS_alsologtostderr = true;
-
+    Logging::ResetLoggingRuntimeForTest();
     PeerUbAdmission admission(VERIFIED);
     testing::internal::CaptureStderr();
     EXPECT_TRUE(admission.ApplyPortHealth(PEER, PortSummary(4, 4, 1), QUERY));
@@ -537,10 +534,6 @@ TEST(PeerUbAdmissionTest, PortHealthFactTransitionsLogAdmissionState)
 
 TEST(PeerUbAdmissionTest, AvailableRecoveryLogExcludesSoftAndPortFactTransitions)
 {
-    const bool oldAlsoLogToStderr = FLAGS_alsologtostderr;
-    Raii restoreFlag([oldAlsoLogToStderr] { FLAGS_alsologtostderr = oldAlsoLogToStderr; });
-    FLAGS_alsologtostderr = true;
-
     PeerUbAdmission softAdmission;
     UbOpOutcome softFailure(PEER, UbOperationKind::MIGRATION_WRITE,
                             Status(K_RPC_DEADLINE_EXCEEDED, "soft UB failure"));
@@ -662,10 +655,6 @@ TEST(PeerUbAdmissionTest, GlobalSummaryUsesEpochAndIncarnationFencingAndExpiresI
 
 TEST(PeerUbAdmissionTest, GlobalSummaryLogsOnlyEffectiveOperationalTransitions)
 {
-    const bool oldAlsoLogToStderr = FLAGS_alsologtostderr;
-    Raii restoreFlag([oldAlsoLogToStderr] { FLAGS_alsologtostderr = oldAlsoLogToStderr; });
-    FLAGS_alsologtostderr = true;
-
     PeerUbAdmission admission;
     admission.SetSelfWorker(SELF);
     const std::array<char, 16> binaryIncarnationBytes{
@@ -733,10 +722,6 @@ TEST(PeerUbAdmissionTest, GlobalSummaryLogsOnlyEffectiveOperationalTransitions)
 
 TEST(PeerUbAdmissionTest, RejectedGlobalSummariesDoNotLogAppliedMarker)
 {
-    const bool oldAlsoLogToStderr = FLAGS_alsologtostderr;
-    Raii restoreFlag([oldAlsoLogToStderr] { FLAGS_alsologtostderr = oldAlsoLogToStderr; });
-    FLAGS_alsologtostderr = true;
-
     PeerUbAdmission admission;
     admission.SetSelfWorker(SELF);
     admission.ReconcileTopologyWorkers({ PEER }, 10, 100);

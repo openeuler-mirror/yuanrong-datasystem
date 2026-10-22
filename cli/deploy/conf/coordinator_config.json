@@ -71,10 +71,6 @@
     "value": "0",
     "description": "If greater than 0, log files older than this many days will be removed. If equal 0, log files are not removed by time."
   },
-  "log_async": {
-    "value": "true",
-    "description": "Enable asynchronous writing to log files."
-  },
   "log_compress": {
     "value": "false",
     "description": "Compress old log files in .gz format when generated log size exceeds max_log_size."

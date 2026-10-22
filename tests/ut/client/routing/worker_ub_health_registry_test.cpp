@@ -29,11 +29,9 @@
 
 #include "datasystem/client/object_cache/routing/worker_ub_health_registry.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/log/logging.h"
 #include "datasystem/common/object_cache/ub_port_health.h"
-#include "datasystem/common/util/raii.h"
 #include "datasystem/protos/cluster_topology.pb.h"
-
-DS_DECLARE_bool(alsologtostderr);
 
 namespace datasystem::ut {
 namespace {
@@ -156,10 +154,7 @@ TEST(WorkerUbHealthRegistryTest, FencesIdentityEpochAndDuplicateUpdates)
 
 TEST(WorkerUbHealthRegistryTest, LogsOnlyRoutingHealthTransitionsWithSafeIncarnation)
 {
-    const bool oldAlsoLogToStderr = FLAGS_alsologtostderr;
-    Raii restoreFlag([oldAlsoLogToStderr] { FLAGS_alsologtostderr = oldAlsoLogToStderr; });
-    FLAGS_alsologtostderr = true;
-
+    Logging::ResetLoggingRuntimeForTest();
     const std::array<char, 16> binaryIncarnationBytes{
         '\0', '\n', '\r', '\x1f', ' ', '\x7f', static_cast<char>(0x80), static_cast<char>(0xff),
         '\x01', '\x02', '\x03', '\x04', '\x05', '\x06', '\x07', '\x08'

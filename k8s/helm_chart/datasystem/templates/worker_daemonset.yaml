@@ -93,7 +93,6 @@ spec:
         - -enable_meta_replica={{ $.Values.global.metadata.enableMetaReplica }}
         - -enable_metadata_recovery={{ $.Values.global.metadata.enableMetadataRecovery }}
         - -enable_data_replication={{ $.Values.global.metadata.enableDataReplication }}
-        - -log_async={{ $.Values.global.log.logAsync }}
         - -logbufsecs={{ $.Values.global.log.logBufSecs }}
         - -log_compress={{ $.Values.global.log.logCompress }}
         {{- if not (kindIs "invalid" $.Values.global.log.requestSampleRate) }}

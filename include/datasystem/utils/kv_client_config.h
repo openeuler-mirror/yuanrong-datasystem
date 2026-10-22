@@ -99,13 +99,6 @@ public:
         Builder &VLogLevel(int level);
 
         /**
-         * @brief Minimum severity level to write to stderr.
-         * @param[in] level Equivalent to flag stderrthreshold.
-         * @return Reference to self for chaining.
-         */
-        Builder &StderrThreshold(int level);
-
-        /**
          * @brief Maximum size in MiB before log rotation.
          * @param[in] size Equivalent to flag max_log_size.
          * @return Reference to self for chaining.
@@ -134,32 +127,11 @@ public:
         Builder &LogRetentionDay(uint32_t days);
 
         /**
-         * @brief Write logs only to stderr.
-         * @param[in] enable Equivalent to flag logtostderr.
-         * @return Reference to self for chaining.
-         */
-        Builder &LogToStderr(bool enable);
-
-        /**
-         * @brief Also write logs to stderr.
-         * @param[in] enable Equivalent to flag alsologtostderr.
-         * @return Reference to self for chaining.
-         */
-        Builder &AlsoLogToStderr(bool enable);
-
-        /**
          * @brief Only write info log file.
          * @param[in] enable Equivalent to flag log_only_write_info_file.
          * @return Reference to self for chaining.
          */
         Builder &LogOnlyWriteInfoFile(bool enable);
-
-        /**
-         * @brief Enable asynchronous logging.
-         * @param[in] enable Equivalent to flag log_async.
-         * @return Reference to self for chaining.
-         */
-        Builder &LogAsyncEnable(bool enable);
 
         /**
          * @brief Queue size for asynchronous logging.

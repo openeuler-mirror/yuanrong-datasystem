@@ -244,7 +244,7 @@ public:
         opts.disableRocksDB = true;
         opts.workerGflagParams =
             " -shared_memory_size_mb=64 -node_timeout_s=2 -node_dead_timeout_s=4 -add_node_wait_time_s=1"
-            " -log_async=false -enable_reconciliation=false -enable_lossless_data_exit_mode=true";
+            " -enable_reconciliation=false -enable_lossless_data_exit_mode=true";
         opts.coordinatorGflagParams = " -v=1 -node_dead_timeout_s=4 -scale_in_collect_window_ms=1000";
         coordinatorCount_ = opts.numCoordinators;
     }
@@ -906,7 +906,7 @@ public:
             " -shared_memory_size_mb=64 -ipc_through_shared_memory=false -arena_per_tenant=1"
             " -node_timeout_s=" + std::to_string(FAULT_NODE_TIMEOUT_SEC)
             + " -node_dead_timeout_s=30 -client_dead_timeout_s=3"
-            " -add_node_wait_time_s=1 -log_async=false -enable_reconciliation=false"
+            " -add_node_wait_time_s=1 -enable_reconciliation=false"
             " -enable_lossless_data_exit_mode=true";
 #ifdef USE_URMA
         opts.workerGflagParams += " -enable_urma=true";
@@ -1274,7 +1274,7 @@ public:
         opts.enableCoordinatorElection = true;
         opts.workerGflagParams =
             " -shared_memory_size_mb=64 -node_timeout_s=8 -node_dead_timeout_s=12 -add_node_wait_time_s=1"
-            " -log_async=false -enable_reconciliation=true -enable_lossless_data_exit_mode=true";
+            " -enable_reconciliation=true -enable_lossless_data_exit_mode=true";
         opts.coordinatorGflagParams = " -v=1 -node_dead_timeout_s=12 -scale_in_collect_window_ms=1000";
         coordinatorCount_ = opts.numCoordinators;
     }
@@ -2504,7 +2504,7 @@ public:
         (void)setenv("JD_HOST_IP", "127.0.0.1", 1);
         opts.workerGflagParams =
             " -shared_memory_size_mb=64 -node_timeout_s=3 -node_dead_timeout_s=30"
-            " -add_node_wait_time_s=1 -log_async=false -enable_reconciliation=true"
+            " -add_node_wait_time_s=1 -enable_reconciliation=true"
             " -enable_lossless_data_exit_mode=true -client_reconnect_wait_s=5"
             " -ipc_through_shared_memory=false -host_id_env_name=JD_HOST_IP";
         opts.coordinatorGflagParams = " -v=1 -node_dead_timeout_s=30 -scale_in_collect_window_ms=1000";
