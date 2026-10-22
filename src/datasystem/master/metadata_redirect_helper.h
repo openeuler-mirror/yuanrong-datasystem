@@ -45,8 +45,6 @@
 #include "datasystem/cluster/routing/placement_facade.h"
 #include "datasystem/protos/utils.pb.h"
 
-DS_DECLARE_bool(enable_redirect);
-
 namespace datasystem {
 namespace master {
 using TbbMigratingTable = tbb::concurrent_hash_map<ImmutableString, bool>;
@@ -261,8 +259,7 @@ protected:
     template <typename Rsp>
     Status FillRedirectResponseInfo(Rsp &response, const std::string &id, bool &redirect)
     {
-        if (!redirect || !FLAGS_enable_redirect) {
-            redirect = false;
+        if (!redirect) {
             return Status::OK();
         }
         MetaRedirectDecision decision;
@@ -303,8 +300,7 @@ protected:
     template <typename Rsp>
     Status FillRedirectResponseInfos(Rsp &rsp, std::vector<std::string> &ids, bool redirect)
     {
-        if (!redirect || !FLAGS_enable_redirect) {
-            redirect = false;
+        if (!redirect) {
             return Status::OK();
         }
         std::map<std::pair<uint64_t, std::string>, std::vector<std::string>> redirectQueryObjKeys;

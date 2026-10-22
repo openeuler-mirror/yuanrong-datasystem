@@ -183,12 +183,6 @@ EmbeddedConfig &EmbeddedConfig::RocksdbWriteMode(int mode)
     return *this;
 }
 
-EmbeddedConfig &EmbeddedConfig::EnableRedirect(bool enable)
-{
-    extraArgs["enable_redirect"] = enable ? "true" : "false";
-    return *this;
-}
-
 EmbeddedConfig &EmbeddedConfig::EnableDataReplication(bool enable)
 {
     extraArgs["enable_data_replication"] = enable ? "true" : "false";

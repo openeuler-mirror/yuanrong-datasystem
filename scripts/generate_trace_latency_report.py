@@ -1028,7 +1028,6 @@ def _write_html(path, D):
 <table>
 <tr><th>参数</th><th>默认值</th><th>作用</th></tr>
 <tr><td><code>rpc_thread_num</code> (Master)</td><td>16</td><td>Master RPC 线程池, 影响 server_req_queue_us</td></tr>
-<tr><td><code>enable_redirect</code></td><td>true</td><td>开启 redirect 可减少扩缩容时的 QueryMeta 调用</td></tr>
 <tr><td><code>requestTimeoutMs</code> (ConnectOptions)</td><td>0</td><td>SDK 请求超时, 影响 QueryMeta 重试的剩余时间</td></tr>
 </table>
 <h4>定位瓶颈决策树</h4>

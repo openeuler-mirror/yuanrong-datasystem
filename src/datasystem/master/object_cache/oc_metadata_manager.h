@@ -621,8 +621,7 @@ public:
     template <typename Rsp>
     Status FillObjectRedirectResponse(Rsp &response, const std::string &objectKey, bool &redirect)
     {
-        if (!redirect || !FLAGS_enable_redirect) {
-            redirect = false;
+        if (!redirect) {
             return Status::OK();
         }
         MetaRedirectDecision decision;
@@ -661,7 +660,7 @@ public:
     template <typename Rsp>
     Status FillObjectRedirectResponses(Rsp &response, std::vector<std::string> &objectKeys, bool redirect)
     {
-        if (!redirect || !FLAGS_enable_redirect) {
+        if (!redirect) {
             return Status::OK();
         }
         std::vector<std::string_view> keys;
@@ -739,9 +738,8 @@ public:
                          return Status::OK();
                      });
         response.set_ref_is_moving(false);
-        if (!redirect || !FLAGS_enable_redirect) {
+        if (!redirect) {
             VLOG(1) << "receive redirect req";
-            redirect = false;
             return Status::OK();
         }
         std::vector<std::string> objectKeysNoNeedRedirect;
@@ -792,7 +790,7 @@ public:
                          return Status::OK();
                      });
         response.set_ref_is_moving(false);
-        if (!redirect || !FLAGS_enable_redirect) {
+        if (!redirect) {
             return Status::OK();
         }
         std::vector<std::string> localKeys;

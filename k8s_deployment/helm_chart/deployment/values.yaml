@@ -52,8 +52,6 @@ global:
   metadata:
     # Config the rocksdb support none, sync or async, async by default. Optional value: 'none', 'sync', 'async'. This represents the method of writing metadata to rocksdb.
     rocksdbWriteMode: "none"
-    # Enable query meta redirect when scale up or voluntary scale down, default is true
-    enableRedirect: "false"
     # Experimental parameter. Allow data read from a remote worker to be cached locally as a hot replica and registered
     # in metadata. This is only for hot-replica performance optimization, not a data reliability mechanism.
     enableDataReplication: "true"

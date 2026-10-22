@@ -197,6 +197,41 @@ TEST(MetadataRedirectHelperTest, ScaleOutWaitEndsOnlyAfterMetadataHandoffComplet
     EXPECT_EQ(singleResponse.info().topology_version(), 2U);
 }
 
+TEST(MetadataRedirectHelperTest, CallerIntentFalseSkipsRedirectEvaluation)
+{
+    cluster::TopologyState topology;
+    topology.version = 2;
+    topology.clusterHasInit = true;
+    topology.members = {
+        cluster::Member{ { std::string(16, 'a'), "127.0.0.1:1" }, cluster::MemberState::ACTIVE, { 0 } },
+        cluster::Member{ { std::string(16, 'b'), "127.0.0.1:2" }, cluster::MemberState::ACTIVE, { 1 } },
+    };
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    DS_ASSERT_OK(cluster::TopologySnapshot::Create(topology, 2, std::string(64, 'a'), snapshot));
+    cluster::TopologySnapshotState snapshots;
+    cluster::SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
+    CountingRoutingAlgorithm algorithm;
+    cluster::PlacementFacade placement(snapshots, algorithm, "127.0.0.1:1");
+    MetadataRedirectHelperForTest helper(&placement, false, HostPort());
+
+    CreateMetaRspPb singleResponse;
+    bool redirect = false;
+    DS_ASSERT_OK(helper.FillRedirectResponseInfo(singleResponse, "key", redirect));
+    EXPECT_FALSE(redirect);
+    EXPECT_FALSE(singleResponse.meta_is_moving());
+    EXPECT_FALSE(singleResponse.has_info());
+
+    CreateMultiMetaRspPb batchResponse;
+    std::vector<std::string> ids = { "key1", "key2" };
+    DS_ASSERT_OK(helper.FillRedirectResponseInfos(batchResponse, ids, false));
+    EXPECT_EQ(ids, (std::vector<std::string>{ "key1", "key2" }));
+    EXPECT_FALSE(batchResponse.meta_is_moving());
+    EXPECT_EQ(batchResponse.info_size(), 0);
+
+    EXPECT_EQ(algorithm.LocateCount(), 0U);
+}
+
 TEST(MetadataRedirectHelperTest, CentralizedMetadataDoesNotRequirePlacement)
 {
     MetadataRedirectHelperForTest helper(nullptr, true, HostPort("127.0.0.1", 18481));
