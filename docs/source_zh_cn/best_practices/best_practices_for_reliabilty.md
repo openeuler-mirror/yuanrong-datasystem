@@ -43,12 +43,10 @@
 | 部署方式 | 配置入口 | 参数形式 |
 | --- | --- | --- |
 | Kubernetes DaemonSet | `k8s/helm_chart/datasystem/values.yaml` | `global.l2Cache.*` |
-| Kubernetes Deployment | `k8s_deployment/helm_chart/worker.config` | worker 级 flag，例如 `l2_cache_type` |
 | `dscli` 进程部署 | `worker_config.json` 或 `dscli start` 命令行参数 | worker 级 flag，例如 `l2_cache_type` |
 
 对于 Kubernetes DaemonSet 模式，Helm chart 会将 `values.yaml` 中的 `global.l2Cache.*` 转换为实际的 worker
-启动参数。对于 Kubernetes Deployment 模式和 `dscli` 进程部署模式，可靠性相关配置均直接以 worker flag 的
-形式生效。
+启动参数；对于 `dscli` 进程部署模式，可靠性相关配置直接以 worker flag 的形式生效。
 
 ## 配置方法
 
@@ -74,7 +72,6 @@
 | 部署方式 | 配置入口 | 关键参数 |
 | --- | --- | --- |
 | Kubernetes DaemonSet | `k8s/helm_chart/datasystem/values.yaml` | `global.l2Cache.l2CacheType`、`global.l2Cache.distributedDisk.*` |
-| Kubernetes Deployment | `k8s_deployment/helm_chart/worker.config` | `l2_cache_type`、`distributed_disk_path`、`distributed_disk_*` |
 | `dscli` 进程部署 | `worker_config.json` 或 `dscli start` 参数 | `l2_cache_type`、`distributed_disk_path`、`distributed_disk_*` |
 
 该模式下需要重点关注：
@@ -139,40 +136,6 @@ global:
 
 DaemonSet 模式下，用户真正需要提供的是宿主机侧的共享 NFS 路径 `global.l2Cache.distributedDisk.path`。
 Helm chart 会负责将该路径挂载到容器内固定目录，并把对应 worker flag 自动传入进程。
-
-**Kubernetes Deployment**
-
-```javascript
-{
-  // 必选：启用 distributed_disk 二级缓存
-  "l2_cache_type": {
-    "value": "distributed_disk"
-  },
-  // 必选：所有 worker 共享可见的 NFS 路径
-  "distributed_disk_path": {
-    "value": "/mnt/datasystem-nfs"
-  },
-  // 可选：单个 data file 的大小上限，单位 MB
-  "distributed_disk_max_data_file_size_mb": {
-    "value": "1024"
-  },
-  // 可选：group commit 的最长刷盘间隔，单位毫秒
-  "distributed_disk_sync_interval_ms": {
-    "value": "1000"
-  },
-  // 可选：group commit 的批量刷盘阈值，单位字节
-  "distributed_disk_sync_batch_bytes": {
-    "value": "33554432"
-  },
-  // 可选：后台 compact 执行周期，单位秒
-  "distributed_disk_compact_interval_s": {
-    "value": "3600"
-  }
-}
-```
-
-Kubernetes Deployment 模式下，worker 直接读取 `worker.config` 中的 flag 配置，因此最小可运行配置是
-`l2_cache_type` 和 `distributed_disk_path`；其他 `distributed_disk_*` 选项均属于可选调优参数。
 
 **dscli 进程部署**
 
@@ -263,7 +226,6 @@ dscli start -w \
 | 部署方式 | 配置入口 | 关键参数 |
 | --- | --- | --- |
 | Kubernetes DaemonSet | `k8s/helm_chart/datasystem/values.yaml` | `global.l2Cache.l2CacheType`、`global.l2Cache.sfsTurbo.*` |
-| Kubernetes Deployment | `k8s_deployment/helm_chart/worker.config` | `l2_cache_type`、`sfs_path` |
 | `dscli` 进程部署 | `worker_config.json` 或 `dscli start` 参数 | `l2_cache_type`、`sfs_path` |
 
 该模式下，Helm chart 会在容器内使用固定的 `sfs_path`，并由 PVC 将 SFS Turbo 挂载到 worker。
@@ -282,19 +244,6 @@ global:
       id: "0"
       projectId: "0"
       capacity: "500Gi"
-```
-
-**Kubernetes Deployment**
-
-```json
-{
-  "l2_cache_type": {
-    "value": "sfs"
-  },
-  "sfs_path": {
-    "value": "/opt/data/datasystem/sfs-turbo"
-  }
-}
 ```
 
 **dscli 进程部署**
@@ -340,7 +289,6 @@ dscli start -w \
 | 部署方式 | 配置入口 | 关键参数 |
 | --- | --- | --- |
 | Kubernetes DaemonSet | `k8s/helm_chart/datasystem/values.yaml` | `global.l2Cache.l2CacheType`、`global.l2Cache.obs.*` |
-| Kubernetes Deployment | `k8s_deployment/helm_chart/worker.config` | `l2_cache_type`、`obs_access_key`、`obs_secret_key`、`obs_endpoint`、`obs_bucket` |
 | `dscli` 进程部署 | `worker_config.json` 或 `dscli start` 参数 | `l2_cache_type`、`obs_access_key`、`obs_secret_key`、`obs_endpoint`、`obs_bucket` |
 
 如果集群使用临时凭据模式，DaemonSet 模式下还应继续配置
@@ -360,31 +308,6 @@ global:
       obsEndpoint: "obs.example.com"
       obsBucket: "datasystem-l2"
       obsHttpsEnabled: true
-```
-
-**Kubernetes Deployment**
-
-```json
-{
-  "l2_cache_type": {
-    "value": "obs"
-  },
-  "obs_access_key": {
-    "value": ""
-  },
-  "obs_secret_key": {
-    "value": ""
-  },
-  "obs_endpoint": {
-    "value": "obs.example.com"
-  },
-  "obs_bucket": {
-    "value": "datasystem-l2"
-  },
-  "obs_https_enabled": {
-    "value": "true"
-  }
-}
 ```
 
 **dscli 进程部署**

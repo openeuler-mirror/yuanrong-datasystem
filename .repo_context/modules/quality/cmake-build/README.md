@@ -80,6 +80,7 @@ python3 scripts/verify_package_manifest.py \
 
 This verifier is read-only. It checks the file-level paths inside the generated deployment tarball and Python wheel
 against checked-in baselines, and it must be run after `build.sh` creates packages rather than replacing `build.sh`.
+The Python wheel carries only DaemonSet entrypoint files under `yr/datasystem/docker_entryfile/daemonset/`.
 
 ## Build Script And CMake Contract
 

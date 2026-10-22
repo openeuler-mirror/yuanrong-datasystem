@@ -316,7 +316,7 @@
   - 未来若把 `END_LIFE` 的同步 master RPC 放回 memory eviction 主 loop，会再次放大 master/RPC 抖动对
     eviction 吞吐的影响；primary end-life lane 在对象锁外发送 RPC，spill/no-space fallback 仍同步持有对象锁。
   - `eviction_thread_num` 已删除；如果未来重新设计 memory eviction 并发，不能通过恢复该 flag 绕过 `isDone_`，需要重新设计候选队列、水位和失败回填的一致性。
-  - 删除 `eviction_thread_num` 必须同时覆盖 `cli/deploy/conf/worker_config.json`、`k8s_deployment/helm_chart/worker.config`、`k8s/helm_chart/datasystem/values.yaml`、`k8s/helm_chart/datasystem/templates/worker_daemonset.yaml`、`docs/source_zh_cn/deployment/dscli.md`、`docs/source_zh_cn/deployment/k8s_configuration.md` 和示例文档。
+  - 删除 `eviction_thread_num` 必须同时覆盖 `cli/deploy/conf/worker_config.json`、`k8s/helm_chart/datasystem/values.yaml`、`k8s/helm_chart/datasystem/templates/worker_daemonset.yaml`、`docs/source_zh_cn/deployment/dscli.md`、`docs/source_zh_cn/deployment/k8s_configuration.md` 和示例文档。
   - `DELETE` 和 `END_LIFE` 语义不同：前者只移除本 worker copy metadata，后者删除所有 copy metadata 并结束对象生命周期。
   - spill 写入会释放对象写锁再执行 I/O，之后按 create time 重新加锁校验版本；不要绕过版本校验。
   - direct async spill 是可丢失的临时缓存，不承诺掉电恢复。future 只在 WRITE CQE 全部成功后 ready，随后仍需
