@@ -150,9 +150,11 @@ public:
         ExternalClusterTest::TearDown();
     }
 
-    void InitTestDsClientForRemoteH2D(uint32_t workerIndex, std::shared_ptr<DsClient> &client);
+    void InitTestHeteroClientForRemoteH2D(uint32_t workerIndex, std::shared_ptr<HeteroClient> &client);
 
-    void RunMGetH2DTest(const std::shared_ptr<DsClient> &client1, const std::shared_ptr<DsClient> &client2,
+    void InitTestKVClientForRemoteH2D(uint32_t workerIndex, std::shared_ptr<KVClient> &client);
+
+    void RunMGetH2DTest(const std::shared_ptr<HeteroClient> &client1, const std::shared_ptr<HeteroClient> &client2,
                         const std::vector<size_t> &numObjChoices, const std::vector<size_t> &blkSzChoices,
                         size_t deviceId, const size_t blksPerObj = 31, int loopsNum = 5);
 
@@ -264,19 +266,29 @@ class DevObjectHeteroRH2DMultiDevTest : public DevObjectHeteroRH2DTest {
     }
 };
 
-void DevObjectHeteroRH2DTest::InitTestDsClientForRemoteH2D(uint32_t workerIndex, std::shared_ptr<DsClient> &client)
+void DevObjectHeteroRH2DTest::InitTestHeteroClientForRemoteH2D(uint32_t workerIndex, std::shared_ptr<HeteroClient> &client)
 {
     ConnectOptions connectOptions;
     const int32_t timeoutMs = 60000;
     InitConnectOpt(workerIndex, connectOptions, timeoutMs);
     connectOptions.enableRemoteH2D = true;
-    client = std::make_shared<DsClient>(connectOptions);
+    client = std::make_shared<HeteroClient>(connectOptions);
     DS_ASSERT_OK(client->Init());
     datasystem::inject::Set("RH2D.ManageHeartbeats.heartbeat_interval_s", "call(5)");
 }
 
-void DevObjectHeteroRH2DTest::RunMGetH2DTest(const std::shared_ptr<DsClient> &client1,
-                                             const std::shared_ptr<DsClient> &client2,
+void DevObjectHeteroRH2DTest::InitTestKVClientForRemoteH2D(uint32_t workerIndex, std::shared_ptr<KVClient> &client)
+{
+    ConnectOptions connectOptions;
+    const int32_t timeoutMs = 60000;
+    InitConnectOpt(workerIndex, connectOptions, timeoutMs);
+    connectOptions.enableRemoteH2D = true;
+    client = std::make_shared<KVClient>(connectOptions);
+    DS_ASSERT_OK(client->Init());
+}
+
+void DevObjectHeteroRH2DTest::RunMGetH2DTest(const std::shared_ptr<HeteroClient> &client1,
+                                             const std::shared_ptr<HeteroClient> &client2,
                                              const std::vector<size_t> &numObjChoices,
                                              const std::vector<size_t> &blkSzChoices, size_t deviceId,
                                              const size_t blksPerObj, int loopsNum)
@@ -307,12 +319,12 @@ void DevObjectHeteroRH2DTest::RunMGetH2DTest(const std::shared_ptr<DsClient> &cl
             std::vector<DeviceBlobList> setBlobList;
             std::vector<std::vector<std::string>> verifyList;
             PrePareRandomData(numOfObjs, blksPerObj, blkSz, deviceId, setBlobList, verifyList);
-            DS_ASSERT_OK(client1->Hetero()->MSetD2H(inObjectIds, setBlobList));
+            DS_ASSERT_OK(client1->MSetD2H(inObjectIds, setBlobList));
             std::vector<std::string> failedList;
-            DS_ASSERT_OK(client2->Hetero()->MGetH2D(inObjectIds, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
+            DS_ASSERT_OK(client2->MGetH2D(inObjectIds, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
             ASSERT_TRUE(failedList.empty());
             verifyFunc(verifyList);
-            DS_ASSERT_OK(client1->Hetero()->Delete(inObjectIds, failedList));
+            DS_ASSERT_OK(client1->Delete(inObjectIds, failedList));
             ASSERT_TRUE(failedList.empty());
         }
     }
@@ -325,12 +337,12 @@ void DevObjectHeteroRH2DTest::RunDistributedMGetH2DTest(const int numSetWorkers,
 {
     InitAcl(deviceId_);
 
-    std::vector<std::shared_ptr<DsClient>> setClients(numSetWorkers);
-    std::shared_ptr<DsClient> getClient;
+    std::vector<std::shared_ptr<HeteroClient>> setClients(numSetWorkers);
+    std::shared_ptr<HeteroClient> getClient;
     for (int i = 0; i < numSetWorkers; i++) {
-        InitTestDsClientForRemoteH2D(i, setClients[i]);
+        InitTestHeteroClientForRemoteH2D(i, setClients[i]);
     }
-    InitTestDsClientForRemoteH2D(numSetWorkers, getClient);
+    InitTestHeteroClientForRemoteH2D(numSetWorkers, getClient);
 
     for (size_t vecIdx = 0; vecIdx < numObjChoices.size(); vecIdx++) {
         auto blkSz = blkSzChoices[vecIdx];
@@ -365,14 +377,14 @@ void DevObjectHeteroRH2DTest::RunDistributedMGetH2DTest(const int numSetWorkers,
         }
 
         for (int i = 0; i < numSetWorkers; i++) {
-            DS_ASSERT_OK(setClients[i]->Hetero()->MSetD2H(splitInObjectIds[i], splitSetBlobList[i]));
+            DS_ASSERT_OK(setClients[i]->MSetD2H(splitInObjectIds[i], splitSetBlobList[i]));
         }
         std::vector<std::string> failedList;
-        DS_ASSERT_OK(getClient->Hetero()->MGetH2D(inObjectIds, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
+        DS_ASSERT_OK(getClient->MGetH2D(inObjectIds, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
         ASSERT_TRUE(failedList.empty());
         verifyFunc(verifyList);
         for (int i = 0; i < numSetWorkers; i++) {
-            DS_ASSERT_OK(setClients[i]->Hetero()->Delete(splitInObjectIds[i], failedList));
+            DS_ASSERT_OK(setClients[i]->Delete(splitInObjectIds[i], failedList));
             ASSERT_TRUE(failedList.empty());
         }
     }
@@ -400,8 +412,8 @@ void DevObjectHeteroRH2DTest::RunMGetMultiProcessH2DTest(int setWorkerIndex, int
         pids.emplace_back(ForkForTest([&, idx = i]() {
             const int32_t devId = GetDeviceIdWithOffset(deviceId_, idx);
             InitAcl(devId);
-            std::shared_ptr<DsClient> client;
-            InitTestDsClientForRemoteH2D(setWorkerIndex, client);
+            std::shared_ptr<HeteroClient> client;
+            InitTestHeteroClientForRemoteH2D(setWorkerIndex, client);
             std::vector<DeviceBlobList> setBlobList;
             for (auto k = static_cast<uint32_t>(idx * objPerProcess);
                  k < static_cast<uint32_t>(idx * objPerProcess + objPerProcess); k++) {
@@ -415,7 +427,7 @@ void DevObjectHeteroRH2DTest::RunMGetMultiProcessH2DTest(int setWorkerIndex, int
                 }
                 setBlobList.emplace_back(blobList);
             }
-            DS_ASSERT_OK(client->Hetero()->MSetD2H(inObjectIds[idx], setBlobList));
+            DS_ASSERT_OK(client->MSetD2H(inObjectIds[idx], setBlobList));
         }));
     }
     for (auto pid : pids) {
@@ -427,14 +439,14 @@ void DevObjectHeteroRH2DTest::RunMGetMultiProcessH2DTest(int setWorkerIndex, int
         pids.emplace_back(ForkForTest([&, idx = i]() {
             const int32_t devId = GetDeviceIdWithOffset(deviceId_, idx);
             InitAcl(devId);
-            std::shared_ptr<DsClient> client;
-            InitTestDsClientForRemoteH2D(getWorkerIndex, client);
+            std::shared_ptr<HeteroClient> client;
+            InitTestHeteroClientForRemoteH2D(getWorkerIndex, client);
             std::vector<DeviceBlobList> setBlobListUseless;
             std::vector<DeviceBlobList> getBlobList;
             PrePareDevData(inObjectIdsConcat.size(), blksPerObj, blkSz, setBlobListUseless, getBlobList, devId);
 
             std::vector<std::string> failedList;
-            DS_ASSERT_OK(client->Hetero()->MGetH2D(inObjectIdsConcat, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
+            DS_ASSERT_OK(client->MGetH2D(inObjectIdsConcat, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
             ASSERT_TRUE(failedList.empty());
             for (size_t j = 0; j < inObjectIdsConcat.size(); j++) {
                 for (size_t k = 0; k < blksPerObj; k++) {
@@ -458,10 +470,10 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTest1)
     std::vector<size_t> numObjChoices = { 1, 5, 20u, 50u };
     std::vector<size_t> blkSzChoices = { 73 * 1024, 73 * 1024, 73 * 1024, 73 * 1024 };
 
-    std::shared_ptr<DsClient> client1;
-    std::shared_ptr<DsClient> client2;
-    InitTestDsClientForRemoteH2D(0, client1);
-    InitTestDsClientForRemoteH2D(1, client2);
+    std::shared_ptr<HeteroClient> client1;
+    std::shared_ptr<HeteroClient> client2;
+    InitTestHeteroClientForRemoteH2D(0, client1);
+    InitTestHeteroClientForRemoteH2D(1, client2);
 
     RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_);
 }
@@ -480,17 +492,17 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DPreRegisterDeviceMemory)
     constexpr int loopsNum = 2;
     const size_t preRegisterSize = numOfObjs * blksPerObj * blkSz;
 
-    std::shared_ptr<DsClient> setClient;
-    std::shared_ptr<DsClient> getClient;
-    InitTestDsClientForRemoteH2D(0, setClient);
-    InitTestDsClientForRemoteH2D(1, getClient);
+    std::shared_ptr<HeteroClient> setClient;
+    std::shared_ptr<HeteroClient> getClient;
+    InitTestHeteroClientForRemoteH2D(0, setClient);
+    InitTestHeteroClientForRemoteH2D(1, getClient);
 
     void *getBasePtr = nullptr;
     DS_ASSERT_OK(AclDeviceManager::Instance()->MallocDeviceMemory(preRegisterSize, getBasePtr));
     ASSERT_NE(getBasePtr, nullptr);
     // Pre-registered memory is kept by the RemoteH2D client until process shutdown.
     DS_ASSERT_OK(
-        getClient->Hetero()->PreRegisterDeviceMemory(std::vector<void *>{ getBasePtr },
+        getClient->PreRegisterDeviceMemory(std::vector<void *>{ getBasePtr },
                                                      std::vector<uint64_t>{ preRegisterSize }));
 
     std::vector<DeviceBlobList> getBlobList;
@@ -515,10 +527,10 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DPreRegisterDeviceMemory)
         std::vector<DeviceBlobList> setBlobList;
         std::vector<std::vector<std::string>> verifyList;
         PrePareRandomData(numOfObjs, blksPerObj, blkSz, deviceId_, setBlobList, verifyList);
-        DS_ASSERT_OK(setClient->Hetero()->MSetD2H(objectKeys, setBlobList));
+        DS_ASSERT_OK(setClient->MSetD2H(objectKeys, setBlobList));
 
         std::vector<std::string> failedList;
-        DS_ASSERT_OK(getClient->Hetero()->MGetH2D(objectKeys, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
+        DS_ASSERT_OK(getClient->MGetH2D(objectKeys, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
         ASSERT_TRUE(failedList.empty());
         for (size_t i = 0; i < numOfObjs; i++) {
             for (size_t j = 0; j < blksPerObj; j++) {
@@ -528,7 +540,7 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DPreRegisterDeviceMemory)
         }
 
         failedList.clear();
-        DS_ASSERT_OK(setClient->Hetero()->Delete(objectKeys, failedList));
+        DS_ASSERT_OK(setClient->Delete(objectKeys, failedList));
         ASSERT_TRUE(failedList.empty());
     }
 }
@@ -541,10 +553,10 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestFFTSContextLimit)
     std::vector<size_t> numObjChoices = { 64 };
     std::vector<size_t> blkSzChoices = { 16 * 1024 };
 
-    std::shared_ptr<DsClient> client1;
-    std::shared_ptr<DsClient> client2;
-    InitTestDsClientForRemoteH2D(0, client1);
-    InitTestDsClientForRemoteH2D(1, client2);
+    std::shared_ptr<HeteroClient> client1;
+    std::shared_ptr<HeteroClient> client2;
+    InitTestHeteroClientForRemoteH2D(0, client1);
+    InitTestHeteroClientForRemoteH2D(1, client2);
 
     RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_, 1000, 1);
 }
@@ -559,10 +571,10 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestShmDisabled)
     std::vector<size_t> numObjChoices = { 1, 5, 20u, 50u };
     std::vector<size_t> blkSzChoices = { 73 * 1024, 73 * 1024, 73 * 1024, 73 * 1024 };
 
-    std::shared_ptr<DsClient> client1;
-    std::shared_ptr<DsClient> client2;
-    InitTestDsClientForRemoteH2D(0, client1);
-    InitTestDsClientForRemoteH2D(1, client2);
+    std::shared_ptr<HeteroClient> client1;
+    std::shared_ptr<HeteroClient> client2;
+    InitTestHeteroClientForRemoteH2D(0, client1);
+    InitTestHeteroClientForRemoteH2D(1, client2);
 
     RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_);
 }
@@ -572,13 +584,10 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestCompatibility1)
     // Test compatibility when non-RH2D requests are sent when RH2D is enabled on workers.
     InitAcl(deviceId_);
 
-    std::shared_ptr<DsClient> dsClient1;
-    std::shared_ptr<DsClient> dsClient2;
-    InitTestDsClientForRemoteH2D(0, dsClient1);
-    InitTestDsClientForRemoteH2D(1, dsClient2);
-
-    std::shared_ptr<KVClient> client1 = dsClient1->KV();
-    std::shared_ptr<KVClient> client2 = dsClient2->KV();
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClientForRemoteH2D(0, client1);
+    InitTestKVClientForRemoteH2D(1, client2);
 
     std::string setKey = "testKey";
     std::string setValue = "testValue";
@@ -600,10 +609,10 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestCompatibility2)
     std::vector<size_t> numObjChoices = { 1, 5, 20u, 50u };
     std::vector<size_t> blkSzChoices = { 73 * 1024, 73 * 1024, 73 * 1024, 73 * 1024 };
 
-    std::shared_ptr<DsClient> client1;
-    std::shared_ptr<DsClient> client2;
-    InitTestDsClient(0, client1);
-    InitTestDsClient(1, client2);
+    std::shared_ptr<HeteroClient> client1;
+    std::shared_ptr<HeteroClient> client2;
+    InitTestHeteroClient(0, client1);
+    InitTestHeteroClient(1, client2);
 
     RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_);
 }
@@ -639,10 +648,10 @@ TEST_F(DevObjectHeteroRH2DMismatchTest, DISABLED_RemoteH2DTestDirection1)
     std::vector<size_t> numObjChoices = { 1, 5, 20u, 50u };
     std::vector<size_t> blkSzChoices = { 73 * 1024, 73 * 1024, 73 * 1024, 73 * 1024 };
 
-    std::shared_ptr<DsClient> client1;
-    std::shared_ptr<DsClient> client2;
-    InitTestDsClientForRemoteH2D(0, client1);
-    InitTestDsClientForRemoteH2D(1, client2);
+    std::shared_ptr<HeteroClient> client1;
+    std::shared_ptr<HeteroClient> client2;
+    InitTestHeteroClientForRemoteH2D(0, client1);
+    InitTestHeteroClientForRemoteH2D(1, client2);
 
     RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_);
 }
@@ -658,10 +667,10 @@ TEST_F(DevObjectHeteroRH2DMismatchTest, DISABLED_RemoteH2DTestDirection2)
     std::vector<size_t> numObjChoices = { 1, 5, 20u, 50u };
     std::vector<size_t> blkSzChoices = { 73 * 1024, 73 * 1024, 73 * 1024, 73 * 1024 };
 
-    std::shared_ptr<DsClient> client1;
-    std::shared_ptr<DsClient> client2;
-    InitTestDsClientForRemoteH2D(0, client1);
-    InitTestDsClientForRemoteH2D(1, client2);
+    std::shared_ptr<HeteroClient> client1;
+    std::shared_ptr<HeteroClient> client2;
+    InitTestHeteroClientForRemoteH2D(0, client1);
+    InitTestHeteroClientForRemoteH2D(1, client2);
 
     RunMGetH2DTest(client2, client1, numObjChoices, blkSzChoices, deviceId_);
 }
@@ -675,10 +684,10 @@ TEST_F(DevObjectHeteroRH2DDistributedTest, DISABLED_RemoteH2DTest2)
     std::vector<size_t> numObjChoices = { 1, 5, 20u, 50u };
     std::vector<size_t> blkSzChoices = { 73 * 1024, 73 * 1024, 73 * 1024, 73 * 1024 };
 
-    std::shared_ptr<DsClient> client1;
-    std::shared_ptr<DsClient> client2;
-    InitTestDsClientForRemoteH2D(0, client1);
-    InitTestDsClientForRemoteH2D(1, client2);
+    std::shared_ptr<HeteroClient> client1;
+    std::shared_ptr<HeteroClient> client2;
+    InitTestHeteroClientForRemoteH2D(0, client1);
+    InitTestHeteroClientForRemoteH2D(1, client2);
 
     const size_t blksPerObj = 6;
     RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_, blksPerObj);
@@ -688,10 +697,10 @@ TEST_F(DevObjectHeteroRH2DDistributedTest, DISABLED_MSetD2HNxReturnsOnlyLocallyP
 {
     InitAcl(deviceId_);
 
-    std::shared_ptr<DsClient> d2hClient;
-    std::shared_ptr<DsClient> existingKeyClient;
-    InitTestDsClientForRemoteH2D(0, d2hClient);
-    InitTestDsClientForRemoteH2D(1, existingKeyClient);
+    std::shared_ptr<HeteroClient> d2hClient;
+    std::shared_ptr<KVClient> existingKVClient;
+    InitTestHeteroClientForRemoteH2D(0, d2hClient);
+    InitTestKVClientForRemoteH2D(1, existingKVClient);
 
     const std::string existingKey = GetStringUuid();
     const std::string newKey = GetStringUuid();
@@ -711,7 +720,7 @@ TEST_F(DevObjectHeteroRH2DDistributedTest, DISABLED_MSetD2HNxReturnsOnlyLocallyP
     Status d2hStatus;
     std::vector<std::string> localPublishedKeys;
     std::thread d2hThread([&]() {
-        d2hStatus = d2hClient->Hetero()->MSetD2H(keys, setBlobList, nxParam, &localPublishedKeys);
+        d2hStatus = d2hClient->MSetD2H(keys, setBlobList, nxParam, &localPublishedKeys);
     });
 
     uint64_t executeCount = 0;
@@ -731,7 +740,7 @@ TEST_F(DevObjectHeteroRH2DDistributedTest, DISABLED_MSetD2HNxReturnsOnlyLocallyP
     const std::string oldValue = "existing-causal-value";
     Status existingSetStatus;
     if (pollStatus.IsOk() && executeCount > 0) {
-        existingSetStatus = existingKeyClient->KV()->Set(existingKey, oldValue, nxParam);
+        existingSetStatus = existingKVClient->Set(existingKey, oldValue, nxParam);
     }
 
     d2hThread.join();
@@ -744,7 +753,7 @@ TEST_F(DevObjectHeteroRH2DDistributedTest, DISABLED_MSetD2HNxReturnsOnlyLocallyP
     ASSERT_EQ(localPublishedKeys, (std::vector<std::string>{ newKey }));
 
     std::string actualValue;
-    DS_ASSERT_OK(existingKeyClient->KV()->Get(existingKey, actualValue));
+    DS_ASSERT_OK(existingKVClient->Get(existingKey, actualValue));
     ASSERT_EQ(actualValue, oldValue);
 }
 
@@ -757,10 +766,10 @@ TEST_F(DevObjectHeteroRH2DNoNpuTest, DISABLED_RemoteH2DTestNoNpu)
     std::vector<size_t> numObjChoices = { 1, 5, 20u, 50u };
     std::vector<size_t> blkSzChoices = { 73 * 1024, 73 * 1024, 73 * 1024, 73 * 1024 };
 
-    std::shared_ptr<DsClient> client1;
-    std::shared_ptr<DsClient> client2;
-    InitTestDsClientForRemoteH2D(0, client1);
-    InitTestDsClientForRemoteH2D(1, client2);
+    std::shared_ptr<HeteroClient> client1;
+    std::shared_ptr<HeteroClient> client2;
+    InitTestHeteroClientForRemoteH2D(0, client1);
+    InitTestHeteroClientForRemoteH2D(1, client2);
 
     RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_);
 }
@@ -775,10 +784,10 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestNoUpdateOnExistingKey)
     const size_t blksPerObj = 1;
     const size_t blkSz = 1024 * sizeof(float);  // 1024 floats
 
-    std::shared_ptr<DsClient> client0;
-    std::shared_ptr<DsClient> client1;
-    InitTestDsClientForRemoteH2D(0, client0);
-    InitTestDsClientForRemoteH2D(1, client1);
+    std::shared_ptr<HeteroClient> client0;
+    std::shared_ptr<HeteroClient> client1;
+    InitTestHeteroClientForRemoteH2D(0, client0);
+    InitTestHeteroClientForRemoteH2D(1, client1);
 
     // Generate object keys
     std::vector<std::string> objectKeys;
@@ -809,7 +818,7 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestNoUpdateOnExistingKey)
     }
 
     // Set data with client0
-    DS_ASSERT_OK(client0->Hetero()->MSetD2H(objectKeys, setBlobList1));
+    DS_ASSERT_OK(client0->MSetD2H(objectKeys, setBlobList1));
     LOG(INFO) << "First MSetD2H completed with client0";
 
     // ========== Phase 2: MGetH2D from client1 to verify initial data ==========
@@ -827,7 +836,7 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestNoUpdateOnExistingKey)
     }
 
     std::vector<std::string> failedList;
-    DS_ASSERT_OK(client1->Hetero()->MGetH2D(objectKeys, getBlobList1, failedList, DEFAULT_GET_TIMEOUT));
+    DS_ASSERT_OK(client1->MGetH2D(objectKeys, getBlobList1, failedList, DEFAULT_GET_TIMEOUT));
     ASSERT_TRUE(failedList.empty());
     LOG(INFO) << "First MGetH2D completed with client1";
 
@@ -862,7 +871,7 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestNoUpdateOnExistingKey)
     }
 
     // Try to set data again with client1 (should not update)
-    DS_ASSERT_OK(client1->Hetero()->MSetD2H(objectKeys, setBlobList2));
+    DS_ASSERT_OK(client1->MSetD2H(objectKeys, setBlobList2));
     LOG(INFO) << "Second MSetD2H completed with client1 (should not update)";
 
     // ========== Phase 4: MGetH2D again to verify data is still 'a' ==========
@@ -880,7 +889,7 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestNoUpdateOnExistingKey)
     }
 
     failedList.clear();
-    DS_ASSERT_OK(client1->Hetero()->MGetH2D(objectKeys, getBlobList2, failedList, DEFAULT_GET_TIMEOUT));
+    DS_ASSERT_OK(client1->MGetH2D(objectKeys, getBlobList2, failedList, DEFAULT_GET_TIMEOUT));
     ASSERT_TRUE(failedList.empty());
     LOG(INFO) << "Second MGetH2D completed with client1";
 
@@ -893,7 +902,7 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestNoUpdateOnExistingKey)
     LOG(INFO) << "Verified data is still 'a' after second MSetD2H (no update occurred)";
 
     // Cleanup
-    DS_ASSERT_OK(client0->Hetero()->Delete(objectKeys, failedList));
+    DS_ASSERT_OK(client0->Delete(objectKeys, failedList));
     ASSERT_TRUE(failedList.empty());
 }
 
@@ -916,8 +925,8 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestMultiThread1)
             verifyList[i].emplace_back(RandomData().GetRandomString(blkSz));
         }
     }
-    std::shared_ptr<DsClient> setClient;
-    InitTestDsClientForRemoteH2D(0, setClient);
+    std::shared_ptr<HeteroClient> setClient;
+    InitTestHeteroClientForRemoteH2D(0, setClient);
 
     for (int i = 0; i < threadNum; i++) {
         for (int j = 0ul; j < objPerThread; j++) {
@@ -938,7 +947,7 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestMultiThread1)
                 }
                 setBlobList.emplace_back(blobList);
             }
-            DS_ASSERT_OK(setClient->Hetero()->MSetD2H(inObjectIds[threadId], setBlobList));
+            DS_ASSERT_OK(setClient->MSetD2H(inObjectIds[threadId], setBlobList));
         });
     }
 
@@ -947,8 +956,8 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestMultiThread1)
     }
     threads.clear();
 
-    std::shared_ptr<DsClient> getClient;
-    InitTestDsClientForRemoteH2D(1, getClient);
+    std::shared_ptr<HeteroClient> getClient;
+    InitTestHeteroClientForRemoteH2D(1, getClient);
     for (int i = 0; i < threadNum; i++) {
         threads.emplace_back([&, threadId = i]() {
             DS_ASSERT_OK(AclDeviceManager::Instance()->aclrtSetDevice(deviceId_));
@@ -957,7 +966,7 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestMultiThread1)
             PrePareDevData(inObjectIdsConcat.size(), blksPerObj, blkSz, setBlobListUseless, getBlobList, deviceId_);
 
             std::vector<std::string> failedList;
-            DS_ASSERT_OK(getClient->Hetero()->MGetH2D(inObjectIdsConcat, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
+            DS_ASSERT_OK(getClient->MGetH2D(inObjectIdsConcat, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
             ASSERT_TRUE(failedList.empty());
             for (size_t j = 0; j < inObjectIdsConcat.size(); j++) {
                 for (size_t k = 0; k < blksPerObj; k++) {
@@ -987,10 +996,10 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestReliability1)
                 const int32_t devId = GetDeviceIdWithOffset(deviceId_, idx);
                 InitAcl(devId);
 
-                std::shared_ptr<DsClient> client1;
-                std::shared_ptr<DsClient> client2;
-                InitTestDsClientForRemoteH2D(0, client1);
-                InitTestDsClientForRemoteH2D(1, client2);
+                std::shared_ptr<HeteroClient> client1;
+                std::shared_ptr<HeteroClient> client2;
+                InitTestHeteroClientForRemoteH2D(0, client1);
+                InitTestHeteroClientForRemoteH2D(1, client2);
 
                 RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, devId);
             }));
@@ -1004,10 +1013,10 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestReliability1)
     // Create connection 101
     InitAcl(deviceId_);
 
-    std::shared_ptr<DsClient> client1;
-    std::shared_ptr<DsClient> client2;
-    InitTestDsClientForRemoteH2D(0, client1);
-    InitTestDsClientForRemoteH2D(1, client2);
+    std::shared_ptr<HeteroClient> client1;
+    std::shared_ptr<HeteroClient> client2;
+    InitTestHeteroClientForRemoteH2D(0, client1);
+    InitTestHeteroClientForRemoteH2D(1, client2);
 
     RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_);
 }
@@ -1026,15 +1035,15 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_TestSkipCopyMeta)
     const std::string copyMetaInject = "CreateCopyMeta.skip";
     const std::vector<std::string> objectKeys = { GetStringUuid() };
 
-    std::shared_ptr<DsClient> ownerClient;
-    std::shared_ptr<DsClient> getClient;
-    InitTestDsClientForRemoteH2D(ownerWorkerIndex, ownerClient);
-    InitTestDsClientForRemoteH2D(getWorkerIndex, getClient);
+    std::shared_ptr<HeteroClient> ownerClient;
+    std::shared_ptr<HeteroClient> getClient;
+    InitTestHeteroClientForRemoteH2D(ownerWorkerIndex, ownerClient);
+    InitTestHeteroClientForRemoteH2D(getWorkerIndex, getClient);
 
     std::vector<DeviceBlobList> setBlobList;
     std::vector<std::vector<std::string>> verifyList;
     PrePareRandomData(numOfObjs, blksPerObj, blkSz, deviceId_, setBlobList, verifyList);
-    DS_ASSERT_OK(ownerClient->Hetero()->MSetD2H(objectKeys, setBlobList));
+    DS_ASSERT_OK(ownerClient->MSetD2H(objectKeys, setBlobList));
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, getWorkerIndex, copyMetaInject, "call()"));
     uint64_t executeCount = 0;
@@ -1045,7 +1054,7 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_TestSkipCopyMeta)
     std::vector<DeviceBlobList> getBlobList;
     PrePareDevData(numOfObjs, blksPerObj, blkSz, getBlobListUseless, getBlobList, deviceId_);
     std::vector<std::string> failedList;
-    DS_ASSERT_OK(getClient->Hetero()->MGetH2D(objectKeys, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
+    DS_ASSERT_OK(getClient->MGetH2D(objectKeys, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
     ASSERT_TRUE(failedList.empty());
     for (size_t i = 0; i < blksPerObj; i++) {
         CheckDevPtrContent(getBlobList[0].blobs[i].pointer, getBlobList[0].blobs[i].size, verifyList[0][i]);
@@ -1061,7 +1070,7 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_TestSkipCopyMeta)
     ASSERT_EQ(executeCount, 0ul);
 
     failedList.clear();
-    DS_ASSERT_OK(ownerClient->Hetero()->Delete(objectKeys, failedList));
+    DS_ASSERT_OK(ownerClient->Delete(objectKeys, failedList));
     ASSERT_TRUE(failedList.empty());
 }
 
@@ -1093,10 +1102,10 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestClientInitDelay)
     InitAcl(deviceId_);
     inject::Set("RemoteH2DManager.P2PCommInitRootInfo.delay", "1*sleep(45000)");
 
-    std::shared_ptr<DsClient> client1;
-    std::shared_ptr<DsClient> client2;
-    InitTestDsClientForRemoteH2D(0, client1);
-    InitTestDsClientForRemoteH2D(1, client2);
+    std::shared_ptr<HeteroClient> client1;
+    std::shared_ptr<HeteroClient> client2;
+    InitTestHeteroClientForRemoteH2D(0, client1);
+    InitTestHeteroClientForRemoteH2D(1, client2);
 
     const size_t blkSz = 73 * 1024;
     const size_t numOfObjs = 1;
@@ -1115,8 +1124,8 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestClientInitDelay)
     std::vector<std::vector<std::string>> verifyList;
     std::vector<std::string> failedList;
     PrePareRandomData(numOfObjs, blksPerObj, blkSz, deviceId_, setBlobList, verifyList);
-    DS_ASSERT_OK(client1->Hetero()->MSetD2H(inObjectIds, setBlobList));
-    DS_ASSERT_NOT_OK(client2->Hetero()->MGetH2D(inObjectIds, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
+    DS_ASSERT_OK(client1->MSetD2H(inObjectIds, setBlobList));
+    DS_ASSERT_NOT_OK(client2->MGetH2D(inObjectIds, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
 }
 
 TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestWorkerInitDelay)
@@ -1124,10 +1133,10 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestWorkerInitDelay)
     // Test Remote H2D when there is a delay in worker's initiation.
     InitAcl(deviceId_);
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "RemoteH2DManager.P2PCommInitRootInfo.delay", "1*sleep(45000)"));
-    std::shared_ptr<DsClient> client1;
-    std::shared_ptr<DsClient> client2;
-    InitTestDsClientForRemoteH2D(0, client1);
-    InitTestDsClientForRemoteH2D(1, client2);
+    std::shared_ptr<HeteroClient> client1;
+    std::shared_ptr<HeteroClient> client2;
+    InitTestHeteroClientForRemoteH2D(0, client1);
+    InitTestHeteroClientForRemoteH2D(1, client2);
 
     const size_t blkSz = 73 * 1024;
     const size_t numOfObjs = 1;
@@ -1146,8 +1155,8 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestWorkerInitDelay)
     std::vector<std::vector<std::string>> verifyList;
     std::vector<std::string> failedList;
     PrePareRandomData(numOfObjs, blksPerObj, blkSz, deviceId_, setBlobList, verifyList);
-    DS_ASSERT_OK(client1->Hetero()->MSetD2H(inObjectIds, setBlobList));
-    DS_ASSERT_OK(client2->Hetero()->MGetH2D(inObjectIds, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
+    DS_ASSERT_OK(client1->MSetD2H(inObjectIds, setBlobList));
+    DS_ASSERT_OK(client2->MGetH2D(inObjectIds, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
 }
 
 }  // namespace st

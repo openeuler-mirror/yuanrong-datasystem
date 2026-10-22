@@ -52,7 +52,6 @@
   - connect SDK calls to worker/master services through shared memory, RPC, and optional device transfer paths;
   - expose the same core capabilities across C++ and Python.
 - Primary source files to verify against:
-  - `include/datasystem/datasystem.h`
   - `include/datasystem/kv_client.h`
   - `include/datasystem/object_client.h`
   - `include/datasystem/stream_client.h`
@@ -61,7 +60,6 @@
   - `include/datasystem/utils/connection.h`
 
   - `src/datasystem/client/CMakeLists.txt`
-  - `src/datasystem/client/datasystem.cpp`
   - `src/datasystem/client/kv_cache/kv_client.cpp`
   - `src/datasystem/client/object_cache/object_client.cpp`
   - `src/datasystem/client/object_cache/object_client_impl.cpp`
@@ -89,7 +87,7 @@
     low-capacity workers. Successfully created warmup objects are batch-deleted before initialization returns; their
     five-second TTL remains a cleanup fallback if that best-effort deletion fails.
   - `datasystem` shared library is built from `src/datasystem/client/*` and is the main user-facing client library.
-  - `DsClient` is only a convenience aggregator. It constructs `KVClient`, `HeteroClient`, and `ObjectClient`, then initializes and shuts them down in order.
+  - Public client entrypoints are the direct `KVClient`, `ObjectClient`, `StreamClient`, and `HeteroClient` classes; callers construct and initialize only the semantics they use.
   - `ConnectOptions` is the common connection/auth/config carrier for C++ clients.
   - `KVClientConfig::Builder::UrmaLogThresholdUs` sets the startup-only process-wide
     `urma_log_threshold_us` (default 500 microseconds, positive uint32). It uses the existing first-KV-Init
@@ -457,9 +455,6 @@
 
 ## Public API Surface
 
-- C++ aggregate:
-  - `datasystem::DsClient`
-  - obtains `KV()`, `Object()`, and `Hetero()`
 - C++ direct clients:
   - `KVClient`
   - `PerfClient`
@@ -478,7 +473,6 @@
 
 | Public surface | Main implementation path | Notes |
 | --- | --- | --- |
-| `DsClient` | `src/datasystem/client/datasystem.cpp` | convenience wrapper only |
 | `KVClient` | `src/datasystem/client/kv_cache/kv_client.cpp` -> `object_cache::ObjectClientImpl` | KV create/set/get path is layered over object-cache client backend |
 | `PerfClient` | `src/datasystem/client/perf_client/perf_client.cpp` | perf log reset/get helper for worker/client performance diagnostics |
 | `ObjectClient` | `src/datasystem/client/object_cache/object_client.cpp` -> `object_cache::ObjectClientImpl` | object semantics are thin wrappers around shared implementation |
@@ -520,7 +514,7 @@ handler. Clearing the Router handler synchronously excludes later callback acces
     only takes effect when `enableLocalCache=false`; callers may pick `PREFERRED_META_OWNER` to route
     Set/MSet to the metadata owner. The two are intentionally independent: a caller may turn off local
     cache while keeping `PREFERRED_SAME_NODE`, or pair it with any other policy. The Python SDK exposes
-    both as kwargs on `KVClient` and `DsClient`: `enable_local_cache=True` (default) and
+    as kwargs on `KVClient`: `enable_local_cache=True` (default) and
     `data_placement_policy=DataPlacementPolicy.PREFERRED_SAME_NODE` (default). The pybind `KVClient`
     constructors receive both as trailing positional parameters
     (`py::arg("enableLocalCache") = true`, `py::arg("dataPlacementPolicy") = PREFERRED_SAME_NODE`)
@@ -554,7 +548,6 @@ handler. Clearing the Router handler synchronously excludes later callback acces
 - Package entry:
   - `python/yr/datasystem/__init__.py`
 - Python facade files:
-  - `ds_client.py`
   - `kv_client.py`
   - `object_client.py`
   - `stream_client.py`
@@ -564,7 +557,6 @@ handler. Clearing the Router handler synchronously excludes later callback acces
 
 ### Verified Python layering
 
-- `DsClient` in Python mirrors the C++ aggregate pattern by composing Python `KVClient`, `HeteroClient`, and `ObjectClient`.
 - `KVClient`, `ObjectClient`, `StreamClient`, and `HeteroClient` wrap `yr.datasystem.lib.libds_client_py` objects.
 - `libds_client_py` is populated by `src/datasystem/pybind_api/pybind_register*.cpp`.
 - `pybind_register_cluster_query.cpp` exposes internal query functions and converts already-projected native results to
@@ -611,7 +603,7 @@ handler. Clearing the Router handler synchronously excludes later callback acces
 
 - Python `Context` currently exposes `set_trace_id`, but not `SetTenantId`, even though C++ `Context` has both APIs.
 - Python `KVClient` is backed by a pybind class named `KVClient` whose underlying C++ object is `ObjectClientImpl`.
-  `DsClient`, `ObjectClient`, and `HeteroClient` may still resolve a service discovery object to a static worker address
+  `ObjectClient` and `HeteroClient` may still resolve a service discovery object to a static worker address
   at the Python facade unless their wrappers explicitly pass native discovery through their own pybind constructors.
 - Public SDK classes and transfer-engine bindings are loaded on first attribute access to keep TE-only imports
   isolated from `libbrpc`.
@@ -726,7 +718,6 @@ handler. Clearing the Router handler synchronously excludes later callback acces
     process/thread/socket and optional caller-provided metric snapshots. It intentionally does not bulk-copy SDK logs;
     correlate logs afterward using the event timestamps.
 - Important invariants:
-  - `DsClient` init order is KV -> Hetero -> Object; shutdown order is Object -> Hetero -> KV.
   - worker connectivity and auth material may come from explicit options or environment fallback in shared client backend code.
   - Worker FD integers are process-local identifiers, not stable SHM identities. After worker restart, the client must
     remove old mmap-table lookup entries and receive new SCM_RIGHTS FDs even when the new worker reuses the same integer.

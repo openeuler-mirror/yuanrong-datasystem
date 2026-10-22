@@ -20,18 +20,16 @@
 
 #include <iostream>
 
-#include "datasystem/datasystem.h"
 #include "datasystem/kv_client.h"
 
 using datasystem::ConnectOptions;
 using datasystem::Context;
-using datasystem::DsClient;
 using datasystem::KVClient;
 using datasystem::Optional;
 using datasystem::ReadOnlyBuffer;
 using datasystem::Status;
 
-static std::shared_ptr<DsClient> dsClient_;
+static std::shared_ptr<KVClient> kvClient_;
 
 static std::string DEFAULT_IP = "127.0.0.1";
 static constexpr int DEFAULT_PORT = 9088;
@@ -46,7 +44,7 @@ static int Write()
     std::string objectKey1 = "key2";
     std::string val = "test1";
     datasystem::SetParam opt;
-    std::shared_ptr<KVClient> kvClient = dsClient_->KV();
+    const std::shared_ptr<KVClient> &kvClient = kvClient_;
     opt.writeMode = datasystem::WriteMode::NONE_L2_CACHE;
     Status status = kvClient->Set(objectKey, val, opt);
     if (status.IsError()) {
@@ -90,7 +88,7 @@ static int Read()
     std::string objectKey = "key1";
     std::string correctVal = "test1";
     std::string val;
-    std::shared_ptr<KVClient> kvClient = dsClient_->KV();
+    const std::shared_ptr<KVClient> &kvClient = kvClient_;
     Status status = kvClient->Get(objectKey, val);
     if (status.IsError()) {
         std::cerr << "Get string value failed, detail: " << status.ToString() << std::endl;
@@ -124,7 +122,7 @@ static int Delete()
 {
     (void)Context::SetTraceId("delete");
     std::string objectKey = "key1";
-    std::shared_ptr<KVClient> kvClient = dsClient_->KV();
+    const std::shared_ptr<KVClient> &kvClient = kvClient_;
     Status status = kvClient->Del(objectKey);
     if (status.IsError()) {
         std::cerr << "Delete failed, detail: " << status.ToString() << std::endl;
@@ -138,7 +136,7 @@ static int TestSetValue()
 {
     std::string val = "test1";
     datasystem::SetParam opt;
-    std::shared_ptr<KVClient> kvClient = dsClient_->KV();
+    const std::shared_ptr<KVClient> &kvClient = kvClient_;
     uint32_t ttl = 5;
     opt.writeMode = datasystem::WriteMode::NONE_L2_CACHE;
     opt.ttlSecond = ttl;
@@ -197,9 +195,9 @@ int main(int argc, char *argv[])
     connectOpts.clientPrivateKey = clientPrivateKey;
     connectOpts.serverPublicKey = serverPublicKey;
     
-    dsClient_ = std::make_shared<DsClient>(connectOpts);
+    kvClient_ = std::make_shared<KVClient>(connectOpts);
     (void)Context::SetTraceId("init");
-    Status status = dsClient_->Init();
+    Status status = kvClient_->Init();
     if (status.IsError()) {
         std::cerr << "Failed to init kv client, detail: " << status.ToString() << std::endl;
         return FAILED;

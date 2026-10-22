@@ -11,19 +11,19 @@ openYuanrong datasystem (下文中称为数据系统)提供了近计算 KV 缓�
 :::{tab-item} Python
 
 ```python
-from yr.datasystem.ds_client import DsClient
+from yr.datasystem import KVClient
 
-client = DsClient("127.0.0.1", 31501)
+client = KVClient("127.0.0.1", 31501)
 client.init()
 
 key = "key"
 expected_val = b"value"
-client.kv().set(key, expected_val)
+client.set(key, expected_val)
 
-val = client.kv().get([key])
+val = client.get([key])
 assert val[0] == expected_val
 
-client.kv().delete([key])
+client.delete([key])
 ```
 
 :::
@@ -32,14 +32,14 @@ client.kv().delete([key])
 
 ```cpp
 #include <cstdio>
-#include "datasystem/datasystem.h"
+#include "datasystem/kv_client.h"
 
 using namespace datasystem;
 
 int main()
 {
     ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
-    auto client = std::make_shared<DsClient>(connectOptions);
+    auto client = std::make_shared<KVClient>(connectOptions);
     if (!client->Init().IsOk()) {
         fprintf(stderr, "Init failed\n");
         return -1;
@@ -48,38 +48,38 @@ int main()
     std::string key = "testKey";
     std::string value = "Hello kv client";
     std::string value2 = "Hello modify";
-    Status status = client->KV()->Set(key, value);
+    Status status = client->Set(key, value);
     if (!status.IsOk()) {
         fprintf(stderr, "Set failed\n");
         return -1;
     }
 
     std::string getValue;
-    status = client->KV()->Get(key, getValue);
+    status = client->Get(key, getValue);
     if (!status.IsOk() || getValue != value) {
         fprintf(stderr, "Get failed\n");
         return -1;
     }
 
-    status = client->KV()->Set(key, value2);
+    status = client->Set(key, value2);
     if (!status.IsOk()) {
         fprintf(stderr, "Set failed\n");
         return -1;
     }
 
-    status = client->KV()->Get(key, getValue);
+    status = client->Get(key, getValue);
     if (!status.IsOk() || getValue != value2) {
         fprintf(stderr, "Get failed\n");
         return -1;
     }
 
-    status = client->KV()->Del(key);
+    status = client->Del(key);
     if (!status.IsOk()) {
         fprintf(stderr, "Del failed\n");
         return -1;
     }
 
-    status = client->KV()->Get(key, getValue);
+    status = client->Get(key, getValue);
     if (!status.IsError()) {
         fprintf(stderr, "Get after delete should fail\n");
         return -1;
@@ -125,7 +125,7 @@ KV 接口支持 Causal 级别数据读写一致性。
 
 ```cpp
 #include <cstdio>
-#include "datasystem/datasystem.h"
+#include "datasystem/kv_client.h"
 
 using namespace datasystem;
 
@@ -146,7 +146,7 @@ int main()
 
     ConnectOptions connectOptions;
     connectOptions.serviceDiscovery = serviceDiscovery;
-    auto client = std::make_shared<DsClient>(connectOptions);
+    auto client = std::make_shared<KVClient>(connectOptions);
     if (!client->Init().IsOk()) {
         fprintf(stderr, "Init failed\n");
         return -1;
@@ -160,7 +160,7 @@ int main()
 使用 `CoordinatorServiceDiscovery` 从 Coordinator 获取可用 Worker。初始化时选择并固定访问一个 Coordinator 地址。
 
 ```cpp
-#include "datasystem/datasystem.h"
+#include "datasystem/kv_client.h"
 
 CoordinatorServiceDiscoveryOptions sdOpts;
 sdOpts.serviceAddress = "127.0.0.1:31511";
@@ -172,7 +172,7 @@ ASSERT_TRUE(serviceDiscovery->Init().IsOk());
 
 ConnectOptions connectOptions;
 connectOptions.serviceDiscovery = serviceDiscovery;
-auto client = std::make_shared<DsClient>(connectOptions);
+auto client = std::make_shared<KVClient>(connectOptions);
 ASSERT_TRUE(client->Init().IsOk());
 ```
 

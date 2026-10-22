@@ -29,7 +29,8 @@
 
 #include "common.h"
 #include "client/object_cache/oc_client_common.h"
-#include "datasystem/datasystem.h"
+#include "datasystem/kv_client.h"
+#include "datasystem/object_client.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/net_util.h"
 #include "etcd/api/etcdserverpb/rpc.grpc.pb.h"
@@ -71,11 +72,11 @@ protected:
     void SetUp() override
     {
         ExternalClusterTest::SetUp();
-        // Initialize datasystem client
-        InitTestDsClient();
+        // Initialize only the KV and Object semantics exercised by this test.
+        InitTestClients();
     }
 
-    void InitTestDsClient(int32_t timeoutMs = 60000)
+    void InitTestClients(int32_t timeoutMs = 60000)
     {
         HostPort workerAddress;
         DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddress));
@@ -85,11 +86,14 @@ protected:
         opts.port = workerAddress.Port();
         opts.connectTimeoutMs = timeoutMs;
 
-        dsClient_ = std::make_shared<DsClient>(opts);
-        DS_ASSERT_OK(dsClient_->Init());
+        kvClient_ = std::make_shared<KVClient>(opts);
+        objectClient_ = std::make_shared<ObjectClient>(opts);
+        DS_ASSERT_OK(kvClient_->Init());
+        DS_ASSERT_OK(objectClient_->Init());
     }
 
-    std::shared_ptr<DsClient> dsClient_;
+    std::shared_ptr<KVClient> kvClient_;
+    std::shared_ptr<ObjectClient> objectClient_;
     int metastorePort_;
     std::string metastoreAddress_;
     std::string metastoreListenAddress_;
@@ -99,28 +103,26 @@ TEST_F(MetastoreGrpcTest, TestKVOperationsThroughGrpc)
 {
     LOG(INFO) << "Test KV operations through datasystem gRPC server to metastore";
 
-    std::shared_ptr<KVClient> kvClient = dsClient_->KV();
-    ASSERT_TRUE(kvClient != nullptr);
 
     std::string testKey = "metastore_grpc_test_key";
     std::string testValue = "metastore_grpc_test_value";
 
     // Test Put operation
     LOG(INFO) << "Testing Put operation";
-    DS_ASSERT_OK(kvClient->Set(testKey, testValue));
+    DS_ASSERT_OK(kvClient_->Set(testKey, testValue));
 
     // Test Get operation
     LOG(INFO) << "Testing Get operation";
     std::string getValue;
-    DS_ASSERT_OK(kvClient->Get(testKey, getValue));
+    DS_ASSERT_OK(kvClient_->Get(testKey, getValue));
     EXPECT_EQ(getValue, testValue);
 
     // Test Delete operation
     LOG(INFO) << "Testing Delete operation";
-    DS_ASSERT_OK(kvClient->Del(testKey));
+    DS_ASSERT_OK(kvClient_->Del(testKey));
 
     // Verify key is deleted
-    Status getStatus = kvClient->Get(testKey, getValue);
+    Status getStatus = kvClient_->Get(testKey, getValue);
     EXPECT_FALSE(getStatus.IsOk());
     LOG(INFO) << "KV operations through gRPC to metastore are working";
 }
@@ -129,8 +131,7 @@ TEST_F(MetastoreGrpcTest, TestObjectOperationsThroughGrpc)
 {
     LOG(INFO) << "Test object operations through datasystem gRPC server to metastore";
 
-    std::shared_ptr<ObjectClient> objectClient = dsClient_->Object();
-    ASSERT_TRUE(objectClient != nullptr);
+    std::shared_ptr<ObjectClient> objectClient = objectClient_;
 
     std::string objectKey = "metastore_grpc_test_object";
     std::string objectValue = "Test value for metastore grpc test";
@@ -173,8 +174,6 @@ TEST_F(MetastoreGrpcTest, TestMultipleKeyValuePairs)
 {
     LOG(INFO) << "Test multiple key-value operations through datasystem gRPC server to metastore";
 
-    std::shared_ptr<KVClient> kvClient = dsClient_->KV();
-    ASSERT_TRUE(kvClient != nullptr);
 
     std::vector<std::pair<std::string, std::string>> testData = {
         {"key1", "value1"},
@@ -187,24 +186,24 @@ TEST_F(MetastoreGrpcTest, TestMultipleKeyValuePairs)
     // Test batch Put operations
     LOG(INFO) << "Testing multiple Put operations";
     for (const auto& [key, value] : testData) {
-        DS_ASSERT_OK(kvClient->Set(key, value));
+        DS_ASSERT_OK(kvClient_->Set(key, value));
     }
 
     // Test batch Get operations
     LOG(INFO) << "Testing multiple Get operations";
     for (const auto& [key, expectedValue] : testData) {
         std::string actualValue;
-        DS_ASSERT_OK(kvClient->Get(key, actualValue));
+        DS_ASSERT_OK(kvClient_->Get(key, actualValue));
         EXPECT_EQ(actualValue, expectedValue);
     }
 
     // Test delete operations
     LOG(INFO) << "Testing Delete operations";
     for (const auto& [key, _] : testData) {
-        DS_ASSERT_OK(kvClient->Del(key));
+        DS_ASSERT_OK(kvClient_->Del(key));
         // Verify key is deleted
         std::string value;
-        Status status = kvClient->Get(key, value);
+        Status status = kvClient_->Get(key, value);
         EXPECT_FALSE(status.IsOk());
     }
 
@@ -215,10 +214,7 @@ TEST_F(MetastoreGrpcTest, TestMixedObjectAndKVOperations)
 {
     LOG(INFO) << "Test mixed object and KV operations through datasystem gRPC server to metastore";
 
-    std::shared_ptr<KVClient> kvClient = dsClient_->KV();
-    std::shared_ptr<ObjectClient> objectClient = dsClient_->Object();
-    ASSERT_TRUE(kvClient != nullptr);
-    ASSERT_TRUE(objectClient != nullptr);
+    std::shared_ptr<ObjectClient> objectClient = objectClient_;
 
     std::string kvKey = "mixed_operation_kv_key";
     std::string kvValue = "mixed_operation_kv_value";
@@ -228,7 +224,7 @@ TEST_F(MetastoreGrpcTest, TestMixedObjectAndKVOperations)
 
     // Mixed operations: first Put KV, then Create Object, then Get both
     LOG(INFO) << "Testing mixed operations";
-    DS_ASSERT_OK(kvClient->Set(kvKey, kvValue));
+    DS_ASSERT_OK(kvClient_->Set(kvKey, kvValue));
 
     DS_ASSERT_OK(objectClient->GIncreaseRef({objectKey}, failedObjectKeys));
     std::shared_ptr<Buffer> buffer;
@@ -241,7 +237,7 @@ TEST_F(MetastoreGrpcTest, TestMixedObjectAndKVOperations)
 
     // Verify both can be retrieved correctly
     std::string retrievedKvValue;
-    DS_ASSERT_OK(kvClient->Get(kvKey, retrievedKvValue));
+    DS_ASSERT_OK(kvClient_->Get(kvKey, retrievedKvValue));
     EXPECT_EQ(retrievedKvValue, kvValue);
 
     std::vector<Optional<Buffer>> getBuffers;
@@ -254,7 +250,7 @@ TEST_F(MetastoreGrpcTest, TestMixedObjectAndKVOperations)
     DS_ASSERT_OK(getBuffers[0]->UnRLatch());
 
     // Clean up resources
-    DS_ASSERT_OK(kvClient->Del(kvKey));
+    DS_ASSERT_OK(kvClient_->Del(kvKey));
     DS_ASSERT_OK(objectClient->GDecreaseRef({objectKey}, failedObjectKeys));
     DS_ASSERT_OK(objectClient->GDecreaseRef({objectKey}, failedObjectKeys));
 
@@ -266,8 +262,7 @@ TEST_F(MetastoreGrpcTest, TestClusterOperationsThroughGrpc)
 {
     LOG(INFO) << "Test cluster operations through datasystem gRPC server to metastore";
 
-    std::shared_ptr<ObjectClient> objectClient = dsClient_->Object();
-    ASSERT_TRUE(objectClient != nullptr);
+    std::shared_ptr<ObjectClient> objectClient = objectClient_;
 
     std::string objectKey1 = "cluster_test_object_1";
     std::string objectKey2 = "cluster_test_object_2";
@@ -322,15 +317,13 @@ TEST_F(MetastoreGrpcTest, TestRangeQuery)
 {
     LOG(INFO) << "Test range query through datasystem gRPC server to metastore";
 
-    std::shared_ptr<KVClient> kvClient = dsClient_->KV();
-    ASSERT_TRUE(kvClient != nullptr);
 
     // Put some keys
     std::vector<std::string> keys = {"key1", "key2", "key3", "key4", "key5"};
     std::vector<std::string> values = {"value1", "value2", "value3", "value4", "value5"};
 
     for (size_t i = 0; i < keys.size(); ++i) {
-        DS_ASSERT_OK(kvClient->Set(keys[i], values[i]));
+        DS_ASSERT_OK(kvClient_->Set(keys[i], values[i]));
         LOG(INFO) << "Put key: " << keys[i] << " with value: " << values[i];
     }
 
@@ -338,7 +331,7 @@ TEST_F(MetastoreGrpcTest, TestRangeQuery)
     LOG(INFO) << "Testing individual key queries";
     for (size_t i = 0; i < keys.size(); ++i) {
         std::string getValue;
-        DS_ASSERT_OK(kvClient->Get(keys[i], getValue));
+        DS_ASSERT_OK(kvClient_->Get(keys[i], getValue));
         EXPECT_EQ(getValue, values[i]);
         LOG(INFO) << "Successfully retrieved key: " << keys[i] << " with value: " << getValue;
     }
@@ -346,7 +339,7 @@ TEST_F(MetastoreGrpcTest, TestRangeQuery)
     // Test querying multiple keys at once
     LOG(INFO) << "Testing batch key query";
     std::vector<std::string> batchResult;
-    DS_ASSERT_OK(kvClient->Get(keys, batchResult));
+    DS_ASSERT_OK(kvClient_->Get(keys, batchResult));
     EXPECT_EQ(batchResult.size(), keys.size());
     for (size_t i = 0; i < batchResult.size(); ++i) {
         EXPECT_EQ(batchResult[i], values[i]);
@@ -369,8 +362,7 @@ TEST_F(MetastoreGrpcTest, TestConcurrentOperations)
     // Run concurrent put/get operations
     for (int i = 0; i < kThreadCount; ++i) {
         threads.emplace_back([this, i, kOperationsPerThread, &successfulOperations, &failedOperations]() {
-            std::shared_ptr<KVClient> kvClient = dsClient_->KV();
-            if (!kvClient) {
+            if (!kvClient_) {
                 LOG(ERROR) << "Failed to get KV client in thread " << i;
                 failedOperations += kOperationsPerThread;
                 return;
@@ -381,11 +373,11 @@ TEST_F(MetastoreGrpcTest, TestConcurrentOperations)
                 std::string value = "concurrent_value_" + std::to_string(i) + "_" + std::to_string(j);
 
                 // Put operation
-                Status putStatus = kvClient->Set(key, value);
+                Status putStatus = kvClient_->Set(key, value);
                 if (putStatus.IsOk()) {
                     // Get operation
                     std::string getValue;
-                    Status getStatus = kvClient->Get(key, getValue);
+                    Status getStatus = kvClient_->Get(key, getValue);
                     if (getStatus.IsOk() && getValue == value) {
                         successfulOperations++;
                     } else {

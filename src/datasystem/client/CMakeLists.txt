@@ -3,7 +3,6 @@ add_subdirectory(cluster_query)
 add_subdirectory(cluster_admin)
 
 list(APPEND CLIENT_SRCS
-        datasystem.cpp
         worker_api/client_worker_common_api.cpp
         worker_api/listen_worker.cpp
         object_cache/routing/urma_success_rate_tracker.cpp

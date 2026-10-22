@@ -217,12 +217,12 @@ For more advanced Kubernetes configuration parameters, please refer to the docum
   ```python
   import acl
   import os
-  from yr.datasystem import Blob, DsClient, DeviceBlobList
+  from yr.datasystem import Blob, HeteroClient, DeviceBlobList
 
   # hetero_dev_mset and hetero_dev_mget must be executed in different processes
   # because they need to be bound to different NPUs.
   def hetero_dev_mset():
-      client = DsClient("127.0.0.1", 31501)
+      client = HeteroClient("127.0.0.1", 31501)
       client.init()
 
       acl.init()
@@ -243,10 +243,10 @@ For more advanced Kubernetes configuration parameters, please refer to the docum
               tmp_batch_list.append(blob)
           blob_list = DeviceBlobList(device_idx, tmp_batch_list)
           in_data_blob_list.append(blob_list)
-      client.hetero().dev_mset(key_list, in_data_blob_list)
+      client.dev_mset(key_list, in_data_blob_list)
 
   def hetero_dev_mget():
-      client = DsClient("127.0.0.1", 31501)
+      client = HeteroClient("127.0.0.1", 31501)
       client.init()
 
       acl.init()
@@ -264,8 +264,8 @@ For more advanced Kubernetes configuration parameters, please refer to the docum
               tmp_batch_list.append(blob)
           blob_list = DeviceBlobList(device_idx, tmp_batch_list)
           out_data_blob_list.append(blob_list)
-      client.hetero().dev_mget(key_list, out_data_blob_list, 60000)
-      client.hetero().dev_delete(key_list)
+      client.dev_mget(key_list, out_data_blob_list, 60000)
+      client.dev_delete(key_list)
 
   pid = os.fork()
   if pid == 0:
@@ -281,39 +281,40 @@ For more advanced Kubernetes configuration parameters, please refer to the docum
   Using the KV interface to write arbitrary binary data to DDR in key-value form:
 
   ```python
-  from yr.datasystem.ds_client import DsClient
+  from yr.datasystem import KVClient
 
-  client = DsClient("127.0.0.1", 31501)
+  client = KVClient("127.0.0.1", 31501)
   client.init()
 
   key = "key"
   expected_val = b"value"
-  client.kv().set(key, expected_val)
+  client.set(key, expected_val)
 
-  val = client.kv().get([key])
+  val = client.get([key])
   assert val[0] == expected_val
 
-  client.kv().delete([key])
+  client.delete([key])
   ```
+
 
 - Object
 
   Using the object interface to implement cache data management based on reference counting:
 
   ```python
-  from yr.datasystem.ds_client import DsClient
+  from yr.datasystem import ObjectClient
 
-  client = DsClient("127.0.0.1", 31501)
+  client = ObjectClient("127.0.0.1", 31501)
   client.init()
 
   # Increase the key's global reference
   key = "key"
-  client.object().g_increase_ref([key])
+  client.g_increase_ref([key])
 
   # Create shared memory buffer for key.
   value = bytes("val", encoding="utf8")
   size = len(value)
-  buf = client.object().create(key, size)
+  buf = client.create(key, size)
 
   # Copy data to shared memory buffer.
   buf.memory_copy(value)

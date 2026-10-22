@@ -15,7 +15,7 @@ Object 当前支持基于引用计数的生命周期管理，当对象的引用�
 
 ```python
 import random
-from yr.datasystem.ds_client import DsClient
+from yr.datasystem import ObjectClient
 
 def random_str(slen=10):
     seed = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#%^*()_+=-"
@@ -25,25 +25,25 @@ def random_str(slen=10):
     return ''.join(sa)
 
 def object_test():
-    client = DsClient("127.0.0.1", 31501)
+    client = ObjectClient("127.0.0.1", 31501)
     client.init()
     object_key = "test_key"
     value = bytes(random_str(100), encoding='utf8')
-    buffer = client.object().create(object_key, len(value))
-    client.object().g_increase_ref([object_key])
-    assert client.object().query_global_ref_num(object_key) == 1
+    buffer = client.create(object_key, len(value))
+    client.g_increase_ref([object_key])
+    assert client.query_global_ref_num(object_key) == 1
     buffer.wlatch()
     buffer.memory_copy(value)
     buffer.seal()
     buffer.unwlatch()
-    buffer_list = client.object().get([object_key], 0)
+    buffer_list = client.get([object_key], 0)
     assert buffer_list[0].immutable_data().tobytes() == value
     #self.assertEqual(buffer_list[0].immutable_data().tobytes(), value)
-    client.object().g_decrease_ref([object_key])
-    assert client.object().query_global_ref_num(object_key) == 0
-    #self.assertEqual(client.object().query_global_ref_num(object_key), 0)
+    client.g_decrease_ref([object_key])
+    assert client.query_global_ref_num(object_key) == 0
+    #self.assertEqual(client.query_global_ref_num(object_key), 0)
     try:
-        client.object().get([object_key], 0)
+        client.get([object_key], 0)
     except RuntimeError as e:
         print("get error:", e)
 
@@ -58,14 +58,14 @@ if __name__ == "__main__":
 ```cpp
 #include <cstdio>
 #include <cstring>
-#include "datasystem/datasystem.h"
+#include "datasystem/object_client.h"
 
 using namespace datasystem;
 
 int main()
 {
     ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
-    auto client = std::make_shared<DsClient>(connectOptions);
+    auto client = std::make_shared<ObjectClient>(connectOptions);
     if (!client->Init().IsOk()) {
         fprintf(stderr, "Init failed\n");
         return -1;
@@ -75,13 +75,13 @@ int main()
     std::string data = "Hello object client";
     int size = data.size();
     std::shared_ptr<Buffer> buffer;
-    Status status = client->Object()->Create(objectKey, size, CreateParam{}, buffer);
+    Status status = client->Create(objectKey, size, CreateParam{}, buffer);
     if (!status.IsOk() || size != buffer->GetSize()) {
         fprintf(stderr, "Create failed\n");
         return -1;
     }
     std::vector<std::string> failedobjectKeys;
-    if (!client->Object()->GIncreaseRef({ objectKey }, failedobjectKeys).IsOk()) {
+    if (!client->GIncreaseRef({ objectKey }, failedobjectKeys).IsOk()) {
         fprintf(stderr, "GIncreaseRef failed\n");
         return -1;
     }
@@ -91,7 +91,7 @@ int main()
     buffer->UnWLatch();
 
     std::vector<Optional<Buffer>> buffers;
-    if (!client->Object()->Get({ objectKey }, 0, buffers).IsOk() || buffers[0]->GetSize() != size) {
+    if (!client->Get({ objectKey }, 0, buffers).IsOk() || buffers[0]->GetSize() != size) {
         fprintf(stderr, "Get failed\n");
         return -1;
     }
@@ -101,11 +101,11 @@ int main()
         return -1;
     }
     buffers[0]->UnRLatch();
-    if (!client->Object()->GDecreaseRef({ objectKey }, failedobjectKeys).IsOk()) {
+    if (!client->GDecreaseRef({ objectKey }, failedobjectKeys).IsOk()) {
         fprintf(stderr, "GDecreaseRef failed\n");
         return -1;
     }
-    if (!client->Object()->Get({ objectKey }, 0, buffers).IsError()) {
+    if (!client->Get({ objectKey }, 0, buffers).IsError()) {
         fprintf(stderr, "Get after delete should fail\n");
         return -1;
     }

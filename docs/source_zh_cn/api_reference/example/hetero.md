@@ -28,7 +28,7 @@ DevPublish / DevSubscribe 为异步接口，提供了返回 Future 供用户获�
 ```python
 import acl
 import random
-from yr.datasystem import DsClient, DeviceBlobList, Blob
+from yr.datasystem import HeteroClient, DeviceBlobList, Blob
 
 def random_str(slen=10):
     seed = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#%^*()_+=-"
@@ -40,7 +40,7 @@ def random_str(slen=10):
 # hetero_dev_publish and hetero_dev_subscribe must be executed in different processes
 # because they need to be bound to different NPUs.
 def hetero_dev_publish():
-    client = DsClient("127.0.0.1", 31501)
+    client = HeteroClient("127.0.0.1", 31501)
     client.init()
 
     acl.init()
@@ -61,12 +61,12 @@ def hetero_dev_publish():
             tmp_batch_list.append(blob)
         blob_list = DeviceBlobList(device_idx, tmp_batch_list)
         in_data_blob_list.append(blob_list)
-    pub_futures = client.hetero().dev_publish(key_list, in_data_blob_list)
+    pub_futures = client.dev_publish(key_list, in_data_blob_list)
     for future in pub_futures:
         future.get()
 
 def hetero_dev_subscribe():
-    client = DsClient("127.0.0.1", 31501)
+    client = HeteroClient("127.0.0.1", 31501)
     client.init()
 
     acl.init()
@@ -84,7 +84,7 @@ def hetero_dev_subscribe():
             tmp_batch_list.append(blob)
         blob_list = DeviceBlobList(device_idx, tmp_batch_list)
         out_data_blob_list.append(blob_list)
-    sub_futures = client.hetero().dev_subscribe(key_list, out_data_blob_list)
+    sub_futures = client.dev_subscribe(key_list, out_data_blob_list)
     for future in sub_futures:
         future.get()
 ```
@@ -95,7 +95,7 @@ def hetero_dev_subscribe():
 
 ```cpp
 #include <cstdio>
-#include "datasystem/datasystem.h"
+#include "datasystem/hetero_client.h"
 #include <acl/acl.h>
 
 using namespace datasystem;
@@ -105,7 +105,7 @@ using namespace datasystem;
 int HeteroDevPublish()
 {
     ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
-    auto client = std::make_shared<DsClient>(connectOptions);
+    auto client = std::make_shared<HeteroClient>(connectOptions);
     if (!client->Init().IsOk()) {
         fprintf(stderr, "Init failed\n");
         return -1;
@@ -146,7 +146,7 @@ int HeteroDevPublish()
     }
 
     std::vector<Future> inFutureVecEnque;
-    Status status = client->Hetero()->DevPublish(keys, inBlobList, inFutureVecEnque);
+    Status status = client->DevPublish(keys, inBlobList, inFutureVecEnque);
     if (!status.IsOk()) {
         fprintf(stderr, "DevPublish failed\n");
         return -1;
@@ -168,7 +168,7 @@ int HeteroDevPublish()
 int HeteroDevSubscribe()
 {
     ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
-    auto client = std::make_shared<DsClient>(connectOptions);
+    auto client = std::make_shared<HeteroClient>(connectOptions);
     if (!client->Init().IsOk()) {
         fprintf(stderr, "Init failed\n");
         return -1;
@@ -206,7 +206,7 @@ int HeteroDevSubscribe()
     }
 
     std::vector<Future> outFutureVecDeque;
-    Status status = client->Hetero()->DevSubscribe(keys, outBlobList, outFutureVecDeque);
+    Status status = client->DevSubscribe(keys, outBlobList, outFutureVecDeque);
     if (!status.IsOk()) {
         fprintf(stderr, "DevSubscribe failed\n");
         return -1;
@@ -258,7 +258,7 @@ int main(int argc, char *argv[])
 ```python
 import acl
 import random
-from yr.datasystem import DsClient, DeviceBlobList, Blob
+from yr.datasystem import HeteroClient, DeviceBlobList, Blob
 
 def random_str(slen=10):
     seed = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#%^*()_+=-"
@@ -270,7 +270,7 @@ def random_str(slen=10):
 # hetero_dev_mset and hetero_dev_mget must be executed in different processes
 # because they need to be bound to different NPUs.
 def hetero_dev_mset():
-    client = DsClient("127.0.0.1", 31501)
+    client = HeteroClient("127.0.0.1", 31501)
     client.init()
 
     acl.init()
@@ -291,10 +291,10 @@ def hetero_dev_mset():
             tmp_batch_list.append(blob)
         blob_list = DeviceBlobList(device_idx, tmp_batch_list)
         in_data_blob_list.append(blob_list)
-    client.hetero().dev_mset(key_list, in_data_blob_list)
+    client.dev_mset(key_list, in_data_blob_list)
 
 def hetero_dev_mget():
-    client = DsClient("127.0.0.1", 31501)
+    client = HeteroClient("127.0.0.1", 31501)
     client.init()
 
     acl.init()
@@ -312,8 +312,8 @@ def hetero_dev_mget():
             tmp_batch_list.append(blob)
         blob_list = DeviceBlobList(device_idx, tmp_batch_list)
         out_data_blob_list.append(blob_list)
-    client.hetero().dev_mget(key_list, out_data_blob_list, 60000)
-    client.hetero().dev_delete(key_list)
+    client.dev_mget(key_list, out_data_blob_list, 60000)
+    client.dev_delete(key_list)
 ```
 
 :::
@@ -322,7 +322,7 @@ def hetero_dev_mget():
 
 ```cpp
 #include <cstdio>
-#include "datasystem/datasystem.h"
+#include "datasystem/hetero_client.h"
 #include <acl/acl.h>
 
 using namespace datasystem;
@@ -332,7 +332,7 @@ using namespace datasystem;
 int HeteroDevMSet()
 {
     ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
-    auto client = std::make_shared<DsClient>(connectOptions);
+    auto client = std::make_shared<HeteroClient>(connectOptions);
     if (!client->Init().IsOk()) {
         fprintf(stderr, "Init failed\n");
         return -1;
@@ -372,7 +372,7 @@ int HeteroDevMSet()
     }
 
     std::vector<std::string> setFailedKeys;
-    Status status = client->Hetero()->DevMSet(keys, inBlobList, setFailedKeys);
+    Status status = client->DevMSet(keys, inBlobList, setFailedKeys);
     if (!status.IsOk() || !setFailedKeys.empty()) {
         fprintf(stderr, "DevMSet failed\n");
         return -1;
@@ -384,7 +384,7 @@ int HeteroDevMSet()
 int HeteroDevMGet()
 {
     ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
-    auto client = std::make_shared<DsClient>(connectOptions);
+    auto client = std::make_shared<HeteroClient>(connectOptions);
     if (!client->Init().IsOk()) {
         fprintf(stderr, "Init failed\n");
         return -1;
@@ -423,14 +423,14 @@ int HeteroDevMGet()
     }
 
     std::vector<std::string> getFailedKeys;
-    Status status = client->Hetero()->DevMGet(keys, outBlobList, getFailedKeys);
+    Status status = client->DevMGet(keys, outBlobList, getFailedKeys);
     if (!status.IsOk() || !getFailedKeys.empty()) {
         fprintf(stderr, "DevMGet failed\n");
         return -1;
     }
 
     std::vector<std::string> delFailedKeys;
-    status = client->Hetero()->DevDelete(keys, delFailedKeys);
+    status = client->DevDelete(keys, delFailedKeys);
     if (!status.IsOk() || !delFailedKeys.empty()) {
         fprintf(stderr, "DevDelete failed\n");
         return -1;
@@ -474,7 +474,7 @@ MGetH2D / MSetD2H 需配套使用。当 MSetD2H 对 HBM 的小数据块合并后
 ```python
 import acl
 import random
-from yr.datasystem import DsClient, DeviceBlobList, Blob
+from yr.datasystem import HeteroClient, DeviceBlobList, Blob
 
 def random_str(slen=10):
     seed = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#%^*()_+=-"
@@ -484,7 +484,7 @@ def random_str(slen=10):
     return ''.join(sa)
 
 def hetero_mset_d2h_mget_h2d():
-    client = DsClient("127.0.0.1", 31501)
+    client = HeteroClient("127.0.0.1", 31501)
     client.init()
 
     acl.init()
@@ -516,9 +516,9 @@ def hetero_mset_d2h_mget_h2d():
         blob_list = DeviceBlobList(device_idx, tmp_batch_list)
         out_data_blob_list.append(blob_list)
 
-    client.hetero().mset_d2h(key_list, in_data_blob_list)
+    client.mset_d2h(key_list, in_data_blob_list)
 
-    client.hetero().mget_h2d(key_list, out_data_blob_list, 60000)
+    client.mget_h2d(key_list, out_data_blob_list, 60000)
 ```
 
 :::
@@ -528,7 +528,7 @@ def hetero_mset_d2h_mget_h2d():
 ```cpp
 
 #include <cstdio>
-#include "datasystem/datasystem.h"
+#include "datasystem/hetero_client.h"
 #include <acl/acl.h>
 
 using namespace datasystem;
@@ -536,7 +536,7 @@ using namespace datasystem;
 int main()
 {
     ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
-    auto client = std::make_shared<DsClient>(connectOptions);
+    auto client = std::make_shared<HeteroClient>(connectOptions);
     if (!client->Init().IsOk()) {
         fprintf(stderr, "Init failed\n");
         return -1;
@@ -569,7 +569,7 @@ int main()
         }
     }
 
-    Status status = client->Hetero()->MSetD2H(keys, swapOutBlobList);
+    Status status = client->MSetD2H(keys, swapOutBlobList);
     if (!status.IsOk()) {
         fprintf(stderr, "MSetD2H failed\n");
         return -1;
@@ -592,7 +592,7 @@ int main()
         }
     }
     std::vector<std::string> failedList;
-    status = client->Hetero()->MGetH2D(keys, swapInBlobList, failedList, 30000);
+    status = client->MGetH2D(keys, swapInBlobList, failedList, 30000);
     if (!status.IsOk()) {
         fprintf(stderr, "MGetH2D failed\n");
         return -1;

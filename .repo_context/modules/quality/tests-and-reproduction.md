@@ -535,7 +535,6 @@ DS_URMA_DEV_NAME=<device> \
 ## Python And Example Tests
 
 - Python tests live under `tests/python`:
-  - `test_ds_client.py`
   - `test_oc_client.py`
   - `test_kv_cache_client.py`
   - `test_sc_client.py`

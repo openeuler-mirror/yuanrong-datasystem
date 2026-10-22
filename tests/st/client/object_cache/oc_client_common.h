@@ -33,7 +33,6 @@
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/thread_pool.h"
-#include "datasystem/datasystem.h"
 #include "datasystem/hetero_client.h"
 #include "datasystem/object_client.h"
 #include "datasystem/kv_client.h"
@@ -99,16 +98,6 @@ public:
         connectOptions.secretKey = "";
         f(connectOptions);
         client = std::make_shared<KVClient>(connectOptions);
-        DS_ASSERT_OK(client->Init());
-    }
-
-    void InitTestDsClient(uint32_t workerIndex, std::shared_ptr<DsClient> &client, int32_t timeoutMs = 60000,
-                          int32_t requestTimeoutMs = 0)
-    {
-        ConnectOptions connectOptions;
-        InitConnectOpt(workerIndex, connectOptions, timeoutMs);
-        connectOptions.requestTimeoutMs = requestTimeoutMs;
-        client = std::make_shared<DsClient>(connectOptions);
         DS_ASSERT_OK(client->Init());
     }
 

@@ -92,9 +92,9 @@ kubectl get pods -o wide
 kvcache会以deployment按照replicaNum的数量在相应数量的节点部署一个 `kvcache-worker` Pod，默认监听 `<PODIP>:31501`，可通过如下 Python 脚本快速验证：
 
 ```python
-from yr.datasystem.ds_client import DsClient
+from yr.datasystem import KVClient
 
-client = DsClient("127.0.0.1", 31501)
+client = KVClient("127.0.0.1", 31501)
 client.init()
 ```
 

@@ -412,9 +412,9 @@ dscli up -f ./cluster_config.json
 Python 脚本快速验证：
 
 ```python
-from yr.datasystem.ds_client import DsClient
+from yr.datasystem import KVClient
 
-client = DsClient("127.0.0.1", 31501)
+client = KVClient("127.0.0.1", 31501)
 client.init()
 ```
 
@@ -588,9 +588,9 @@ kubectl get pods -o wide
 openYuanrong datasystem会默认以DaemonSet的方式在每个节点都部署一个 `ds-worker` Pod，默认监听 `<主机IP>:31501`，可通过如下 Python 脚本快速验证：
 
 ```python
-from yr.datasystem.ds_client import DsClient
+from yr.datasystem import KVClient
 
-client = DsClient("127.0.0.1", 31501)
+client = KVClient("127.0.0.1", 31501)
 client.init()
 ```
 

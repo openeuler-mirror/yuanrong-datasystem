@@ -17,7 +17,7 @@
 /**
  * Description: The stream client example.
  */
-#include "datasystem/datasystem.h"
+#include "datasystem/stream_client.h"
 
 #include <cstdlib>
 #include <iostream>

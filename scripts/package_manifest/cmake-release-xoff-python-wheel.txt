@@ -63,7 +63,6 @@ yr/datasystem/docker_entryfile/deployment/liveness_check.sh
 yr/datasystem/docker_entryfile/deployment/uninstall.sh
 yr/datasystem/docker_entryfile/deployment/utils.sh
 yr/datasystem/docker_entryfile/deployment/worker_entry.sh
-yr/datasystem/ds_client.py
 yr/datasystem/ds_tensor_client.py
 yr/datasystem/dsbench_cpp
 yr/datasystem/helm_chart/datasystem/Chart.yaml
@@ -83,7 +82,6 @@ yr/datasystem/hetero_client.py
 yr/datasystem/include/datasystem/BUILD.bazel
 yr/datasystem/include/datasystem/context/context.h
 yr/datasystem/include/datasystem/coordinator_server.h
-yr/datasystem/include/datasystem/datasystem.h
 yr/datasystem/include/datasystem/hetero/BUILD.bazel
 yr/datasystem/include/datasystem/hetero/device_common.h
 yr/datasystem/include/datasystem/hetero/future.h

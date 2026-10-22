@@ -17,7 +17,7 @@
 /**
  * Description: Link probe for the public DataSystem source SDK client target.
  */
-#include "datasystem/datasystem.h"
+#include "datasystem/kv_client.h"
 
 int main()
 {

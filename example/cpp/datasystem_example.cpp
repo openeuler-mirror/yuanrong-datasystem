@@ -15,16 +15,16 @@
  */
 
 /**
- * Description: The ds client example.
+ * Description: The direct KV and Object client example.
  */
-#include "datasystem/datasystem.h"
+#include "datasystem/kv_client.h"
+#include "datasystem/object_client.h"
 
 #include <iostream>
 #include <memory>
 
 using datasystem::ConnectOptions;
 using datasystem::Context;
-using datasystem::DsClient;
 using datasystem::KVClient;
 using datasystem::ObjectClient;
 using datasystem::Status;
@@ -38,7 +38,6 @@ static constexpr int PARAMETERS_NUM = 3;
 static constexpr int SUCCESS = 0;
 static constexpr int FAILED = -1;
 
-static std::shared_ptr<DsClient> dsClient_;
 static std::shared_ptr<Buffer> buffer_;
 
 static int Write(const std::shared_ptr<ObjectClient> &client, const std::string &writeId, std::string data, bool isSeal)
@@ -210,29 +209,34 @@ int main(int argc, char *argv[])
     connectOptions.host = ip;
     connectOptions.port = port;
     connectOptions.connectTimeoutMs = connectTimeoutMs;
-    dsClient_ = std::make_shared<DsClient>(connectOptions);
+    auto objectClient = std::make_shared<ObjectClient>(connectOptions);
+    auto kvClient = std::make_shared<KVClient>(connectOptions);
     (void)Context::SetTraceId("init");
-    Status status = dsClient_->Init();
+    Status status = objectClient->Init();
     if (status.IsError()) {
-        std::cerr << "Failed to init ds client, detail: " << status.ToString() << std::endl;
+        std::cerr << "Failed to init object client, detail: " << status.ToString() << std::endl;
+        return FAILED;
+    }
+    status = kvClient->Init();
+    if (status.IsError()) {
+        std::cerr << "Failed to init kv client, detail: " << status.ToString() << std::endl;
+        objectClient->ShutDown();
         return FAILED;
     }
 
-    std::shared_ptr<ObjectClient> objectClient = dsClient_->Object();
     if (RunObjectTest(objectClient) == FAILED) {
         std::cerr << "Run object client test failed." << std::endl;
         return FAILED;
     }
 
-    std::shared_ptr<KVClient> kvClient = dsClient_->KV();
     if (RunKVTest(kvClient) == FAILED) {
         std::cerr << "Run kv client test failed." << std::endl;
         return FAILED;
     }
 
-    std::cout << "Run ds client test success." << std::endl;
+    std::cout << "Run direct client test success." << std::endl;
 
-    dsClient_->ShutDown();
-    dsClient_.reset();
+    kvClient->ShutDown();
+    objectClient->ShutDown();
     return SUCCESS;
 }
