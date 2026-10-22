@@ -271,8 +271,8 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublish
         }
         if (entries[i]->Get() != nullptr) {
             if (!(*entries[i])->IsBinary()) {
-                LOG(ERROR) << "The objectKey: " << objectKeys[i] << "you set already exists, which is used by hset.";
-                lastRc = Status(K_INVALID, "The object already exists, which is used by hset");
+                LOG(ERROR) << "The objectKey: " << objectKeys[i] << " exists with a non-BINARY format.";
+                lastRc = Status(K_INVALID, "The existing object is not BINARY.");
                 failedKeys.emplace(objectKeys[i]);
                 continue;
             }

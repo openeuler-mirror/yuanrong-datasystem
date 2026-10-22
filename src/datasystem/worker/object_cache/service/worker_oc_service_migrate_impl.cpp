@@ -483,7 +483,9 @@ Status WorkerOcServiceMigrateImpl::PrepareMigrateDataDirectEntries(
 {
     BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds, needModifyPrimary);
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_META);
-    FillMetaToObjectEntries(lockedEntries, metas, successIds, failedIds, needReadDataIds, skippedIds);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        FillMetaToObjectEntries(lockedEntries, metas, successIds, failedIds, needReadDataIds, skippedIds),
+        "Fill migration object entries failed");
     for (auto it = needModifyPrimary.begin(); it != needModifyPrimary.end();) {
         if (metas.find(it->first) == metas.end()) {
             (void)skippedIds.emplace(it->first);
@@ -790,11 +792,11 @@ Status WorkerOcServiceMigrateImpl::FillObjectsLocked(
     return lastRc;
 }
 
-void WorkerOcServiceMigrateImpl::FillMetaToObjectEntries(LockedEntryMap &lockedEntries, const QueryMetaMap &metas,
-                                                         std::unordered_set<std::string> &successIds,
-                                                         std::unordered_set<std::string> &failedIds,
-                                                         ObjectInfoMap &needReadDataIds,
-                                                         std::unordered_set<std::string> &skippedIds)
+Status WorkerOcServiceMigrateImpl::FillMetaToObjectEntries(LockedEntryMap &lockedEntries, const QueryMetaMap &metas,
+                                                           std::unordered_set<std::string> &successIds,
+                                                           std::unordered_set<std::string> &failedIds,
+                                                           ObjectInfoMap &needReadDataIds,
+                                                           std::unordered_set<std::string> &skippedIds)
 {
     for (auto &[objectKey, it] : lockedEntries) {
         const auto &metaIt = metas.find(objectKey);
@@ -826,10 +828,12 @@ void WorkerOcServiceMigrateImpl::FillMetaToObjectEntries(LockedEntryMap &lockedE
                          FormatString("[Migrate Data] Delete elder object %s failed", objectKey));
         }
         bool isNewCreate = IsNewCreatedObject(entry);
-        SetObjectEntryAccordingToMeta(meta.meta(), GetMetadataSize(), *entry);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetObjectEntryAccordingToMeta(meta.meta(), GetMetadataSize(), *entry),
+                                         FormatString("[ObjectKey %s] Set object entry failed", objectKey.c_str()));
         (*entry)->stateInfo.SetPrimaryCopy(false);
         needReadDataIds.emplace(objectKey, std::make_pair(entry, isNewCreate));
     }
+    return Status::OK();
 }
 
 Status WorkerOcServiceMigrateImpl::AggregateAllocateHelper(const MigrateDataDirectReqPb &req,
@@ -1288,7 +1292,8 @@ Status WorkerOcServiceMigrateImpl::FillOneObjectLocked(std::shared_ptr<SafeObjTy
                      FormatString("[Migrate Data] Delete elder object %s failed", objectKey));
     }
     bool isNewCreate = IsNewCreatedObject(entry);
-    SetObjectEntryAccordingToMeta(meta.meta(), GetMetadataSize(), *entry);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetObjectEntryAccordingToMeta(meta.meta(), GetMetadataSize(), *entry),
+                                     FormatString("[ObjectKey %s] Set object entry failed", objectKey.c_str()));
     RETURN_IF_NOT_OK(SaveDataWithObjectLocked(entry, info, payloads, type, unit));
     if ((*entry)->IsMemoryCache() && (*entry)->GetShmUnit() == nullptr) {
         (*entry)->stateInfo.SetSpillState(true);

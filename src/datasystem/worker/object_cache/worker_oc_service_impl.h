@@ -567,28 +567,28 @@ public:
     {
         (void)req;
         (void)rsp;
-        return Status::OK();
+        return Status(K_INVALID, "hash object APIs are deprecated and unsupported");
     }
 
     Status Hset(const HsetRequestPb &req, HsetReplyPb &rsp)
     {
         (void)req;
         (void)rsp;
-        return Status::OK();
+        return Status(K_INVALID, "hash object APIs are deprecated and unsupported");
     }
 
     Status Hdel(const HdelRequestPb &req, HdelReplyPb &rsp)
     {
         (void)req;
         (void)rsp;
-        return Status::OK();
+        return Status(K_INVALID, "hash object APIs are deprecated and unsupported");
     }
 
     Status Hgetall(const HgetallRequestPb &req, HgetallReplyPb &rsp)
     {
         (void)req;
         (void)rsp;
-        return Status::OK();
+        return Status(K_INVALID, "hash object APIs are deprecated and unsupported");
     }
 
     Status IncrSeqNo(const IncrSeqNoReqPb &req, IncrSeqNoRspPb &rsp)

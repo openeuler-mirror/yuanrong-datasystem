@@ -16,7 +16,6 @@ set(WORKER_OC_SRCS
         eviction_strategy.cpp
         worker_oc_spill.cpp
         spill_io_uring.cpp
-        obj_cache_hashmap.cpp
         obj_cache_shm_unit.cpp
         async_send_manager.cpp
         async_update_location_manager.cpp

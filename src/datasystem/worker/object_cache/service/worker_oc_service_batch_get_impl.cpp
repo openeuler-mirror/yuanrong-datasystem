@@ -288,12 +288,18 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
         if (queryMeta.payload_indexs_size() != 0) {
             payloadIndexMetas.emplace_back(queryMeta);
         } else {
+            Status setEntryRc = SetObjectEntryAccordingToMeta(meta, GetMetadataSize(), *safeObj);
+            if (setEntryRc.IsError()) {
+                lastRc = setEntryRc;
+                failedIds.emplace(meta.object_key());
+                LOG(ERROR) << lastRc;
+                continue;
+            }
             GetObjectInfo info;
             info.entry = &(iter->second);
             info.readKey = &(iter->first);
             info.queryMeta = &queryMeta;
             GroupQueryMeta(info, groupedQueryMetas);
-            SetObjectEntryAccordingToMeta(meta, GetMetadataSize(), *safeObj);
         }
     }
 

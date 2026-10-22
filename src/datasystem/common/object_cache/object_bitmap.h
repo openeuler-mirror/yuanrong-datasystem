@@ -28,11 +28,18 @@
 namespace datasystem {
 
 enum class DataFormat : int {
+    UNKNOWN = -1,
     BINARY = 0,
     LIST = 1,
     HASH_MAP = 2,
     HETERO = 3,
 };
+
+inline bool IsSupportedDataFormat(uint32_t dataFormat)
+{
+    return dataFormat == static_cast<uint32_t>(DataFormat::BINARY)
+           || dataFormat == static_cast<uint32_t>(DataFormat::HETERO);
+}
 
 enum class ObjectLifeState : int {
     OBJECT_INVALID = 0,
@@ -170,11 +177,12 @@ public:
             return DataFormat::BINARY;
         } else if (TESTFLAG(stateBitmap_, ObjectFlag::LIST)) {
             return DataFormat::LIST;
+        } else if (TESTFLAG(stateBitmap_, ObjectFlag::HASH_MAP)) {
+            return DataFormat::HASH_MAP;
         } else if (TESTFLAG(stateBitmap_, ObjectFlag::HETERO)) {
             return DataFormat::HETERO;
-        } else {
-            return DataFormat::HASH_MAP;
         }
+        return DataFormat::UNKNOWN;
     }
 
     /**
@@ -269,6 +277,10 @@ public:
      */
     void SetDataFormat(DataFormat dataFormat)
     {
+        CLEARFLAG(stateBitmap_, ObjectFlag::BINARY);
+        CLEARFLAG(stateBitmap_, ObjectFlag::LIST);
+        CLEARFLAG(stateBitmap_, ObjectFlag::HASH_MAP);
+        CLEARFLAG(stateBitmap_, ObjectFlag::HETERO);
         switch (dataFormat) {
             case DataFormat::BINARY:
                 SETFLAG(stateBitmap_, ObjectFlag::BINARY);

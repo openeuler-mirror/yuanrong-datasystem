@@ -80,31 +80,36 @@ void SetDeviceObjEntry(const ObjectMetaPb &meta, uint64_t metaDataSize, SafeObjT
     entry.SetRealObject(std::move(devObj));
 }
 
-void SetObjectEntryAccordingToMeta(const ObjectMetaPb &meta, uint64_t metaDataSize, SafeObjType &entry)
+Status SetObjectEntryAccordingToMeta(const ObjectMetaPb &meta, uint64_t metaDataSize, SafeObjType &entry)
 {
     const std::string &objectKey = meta.object_key();
     const ConfigPb &configPb = meta.config();
-    auto dataFormat = static_cast<DataFormat>(configPb.data_format());
-    if (dataFormat == DataFormat::HETERO) {
+    const uint32_t dataFormat = configPb.data_format();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        IsSupportedDataFormat(dataFormat), K_INVALID,
+        FormatString("[ObjectKey %s] Unsupported data format %u", objectKey.c_str(), dataFormat));
+    if (dataFormat == static_cast<uint32_t>(DataFormat::HETERO)) {
         SetDeviceObjEntry(meta, metaDataSize, entry);
-    } else {
-        auto lifeState = static_cast<ObjectLifeState>(meta.life_state());
-        if (lifeState != ObjectLifeState::OBJECT_INVALID && lifeState != ObjectLifeState::OBJECT_PUBLISHED) {
-            // Legacy persisted value (historical OBJECT_SEALED); normalize to PUBLISHED so
-            // objects written before the seal-semantics removal stay readable and re-publishable.
-            lifeState = ObjectLifeState::OBJECT_PUBLISHED;
-        }
-        entry.SetRealObject(CreateObjectEntry(
-            { .objectKey = objectKey,
-              .dataSize = meta.data_size(),
-              .metaSize = metaDataSize,
-              .createTime = (int64_t)meta.version(),
-              .ttlSecond = meta.ttl_second(),
-              .entryMode = ModeInfo(ConsistencyType(configPb.consistency_type()), WriteMode(configPb.write_mode()),
-                                    CacheType(configPb.cache_type())),
-              .entryState = StateInfo(DataFormat(configPb.data_format())),
-              .lifeState = lifeState }));
+        return Status::OK();
     }
+
+    auto lifeState = static_cast<ObjectLifeState>(meta.life_state());
+    if (lifeState != ObjectLifeState::OBJECT_INVALID && lifeState != ObjectLifeState::OBJECT_PUBLISHED) {
+        // Legacy persisted value (historical OBJECT_SEALED); normalize to PUBLISHED so
+        // objects written before the seal-semantics removal stay readable and re-publishable.
+        lifeState = ObjectLifeState::OBJECT_PUBLISHED;
+    }
+    entry.SetRealObject(
+        CreateObjectEntry({ .objectKey = objectKey,
+                            .dataSize = meta.data_size(),
+                            .metaSize = metaDataSize,
+                            .createTime = (int64_t)meta.version(),
+                            .ttlSecond = meta.ttl_second(),
+                            .entryMode = ModeInfo(ConsistencyType(configPb.consistency_type()),
+                                                  WriteMode(configPb.write_mode()), CacheType(configPb.cache_type())),
+                            .entryState = StateInfo(DataFormat::BINARY),
+                            .lifeState = lifeState }));
+    return Status::OK();
 }
 
 void SetEmptyObjectEntry(const std::string &objectKey, SafeObjType &entry)

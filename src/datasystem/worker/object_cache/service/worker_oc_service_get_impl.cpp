@@ -488,7 +488,15 @@ Status WorkerOcServiceGetImpl::GetObjectFromAnywhere(const ReadKey &readKey, con
         return UpdateRequestForSuccess(objectKV, nullptr);
     }
 
-    SetObjectEntryAccordingToMeta(meta, GetMetadataSize(), *entry);
+    Status setEntryRc = SetObjectEntryAccordingToMeta(meta, GetMetadataSize(), *entry);
+    if (setEntryRc.IsError()) {
+        if (isInsert) {
+            (void)objectTable_->Erase(objectKey, *entry);
+        } else {
+            CleanupGetFailureOnLock(entry);
+        }
+        return setEntryRc;
+    }
     ReadKey readKeyAfterSet(readKey.objectKey, readKey.readOffset, readKey.readSize);
     ReadObjectKV objectKV(readKeyAfterSet, *entry);
     Status status = queryMeta.payload_indexs_size() == 0
@@ -496,15 +504,10 @@ Status WorkerOcServiceGetImpl::GetObjectFromAnywhere(const ReadKey &readKey, con
                         : GetObjectFromQueryMetaResultOnLock(nullptr, queryMeta, payloads, objectKV);
     if (status.IsError()) {
         (void)RemoveLocation(objectKey, meta.version());
-        if (entry->Get() != nullptr && entry->Get()->GetShmUnit() != nullptr) {
-            entry->Get()->GetShmUnit()->SetHardFreeMemory();
-        }
         if (isInsert) {
             (void)objectTable_->Erase(objectKey, *entry);
-        } else if (entry->Get() != nullptr) {
-            LOG_IF_ERROR(entry->Get()->FreeResources(), "free resources failed");
-            entry->Get()->SetLifeState(ObjectLifeState::OBJECT_INVALID);
-            entry->Get()->stateInfo.SetCacheInvalid(true);
+        } else {
+            CleanupGetFailureOnLock(entry);
         }
     }
     return status;
@@ -522,7 +525,8 @@ Status WorkerOcServiceGetImpl::GetDataFromL2CacheForPrimaryCopy(const std::strin
         const auto &meta = queryMeta.meta();
         const auto &address = queryMeta.address();
         ObjectKV objectKV(objectKey, *safeEntry);
-        SetObjectEntryAccordingToMeta(meta, GetMetadataSize(), *safeEntry);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetObjectEntryAccordingToMeta(meta, GetMetadataSize(), *safeEntry),
+                                         FormatString("[ObjectKey %s] Set object entry failed", objectKey.c_str()));
         if (meta.primary_address() == localAddress_.ToString()) {
             VLOG(1) << FormatString("[ObjectKey %s] primary copy get data from L2 cache, meta is:%s", objectKey,
                                     LogHelper::IgnoreSensitive(meta));
@@ -1492,16 +1496,19 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
         }
         // Checked availability when metas are grouped, so it should be safe to just access the entry here.
         auto &entry = lockEntry->safeObj;
-        // Re-set object entry in the case of looped for data size change.
-        SetObjectEntryAccordingToMeta(meta, GetMetadataSize(), *entry);
         const auto &readKey = infoIter->readKey;
-
-        // Function to handle individual status
         auto handleIndividualStatus = [&](Status &status) {
             BatchGetObjectHandleIndividualStatus(status, *readKey, successIds, needRetryIds, failedIds);
             infoIter = infos.erase(infoIter);
             lastRc = status;
         };
+
+        // Re-set object entry in the case of looped for data size change.
+        Status setEntryRc = SetObjectEntryAccordingToMeta(meta, GetMetadataSize(), *entry);
+        if (setEntryRc.IsError()) {
+            handleIndividualStatus(setEntryRc);
+            continue;
+        }
 
         ReadObjectKV objectKV(*readKey, *entry);
         Status status = objectKV.CheckReadOffset();
@@ -2522,7 +2529,8 @@ Status WorkerOcServiceGetImpl::GetObjectFromAnywhereWithLock(const ReadKey &read
         // A metadata-only local entry is a cache miss, not a failure of the resolved remote copy.
         // For RemoteH2D scenario, data never reaches shared memory, so need to re-do get entirely.
     }
-    SetObjectEntryAccordingToMeta(meta, GetMetadataSize(), *entry);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetObjectEntryAccordingToMeta(meta, GetMetadataSize(), *entry),
+                                     FormatString("[ObjectKey %s] Set object entry failed", meta.object_key().c_str()));
     // Assume the client work with only one device id.
     std::shared_ptr<std::string> commId = nullptr;
     if (IsRemoteH2DEnabled() && request != nullptr) {
@@ -4208,8 +4216,9 @@ bool WorkerOcServiceGetImpl::CanReuseUnconfirmedMigrationPayload(const ObjectMet
            && object.GetDataSize() == meta.data_size();
 }
 
-void WorkerOcServiceGetImpl::PrepareNotifyRemoteGetGroups(const NotifyRemoteGetReqPb &req,
-    const std::set<ReadKey> &pendingObjects, std::map<ReadKey, LockedEntity> &lockedEntries, QueryMetaMap &queryMetas,
+Status WorkerOcServiceGetImpl::PrepareNotifyRemoteGetGroups(
+    const NotifyRemoteGetReqPb &req, const std::set<ReadKey> &pendingObjects,
+    std::map<ReadKey, LockedEntity> &lockedEntries, QueryMetaMap &queryMetas,
     std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groups,
     std::vector<std::string> &reusedPayloadIds)
 {
@@ -4229,13 +4238,16 @@ void WorkerOcServiceGetImpl::PrepareNotifyRemoteGetGroups(const NotifyRemoteGetR
         info.entry = &(iter->second);
         info.readKey = &(iter->first);
         info.queryMeta = &(queryMeta);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            SetObjectEntryAccordingToMeta(queryMeta.meta(), GetMetadataSize(), *iter->second.safeObj),
+            FormatString("[ObjectKey %s] Set object entry failed", obj.objectKey.c_str()));
         GroupQueryMeta(info, groups);
-        SetObjectEntryAccordingToMeta(queryMeta.meta(), GetMetadataSize(), *iter->second.safeObj);
     }
     if (!reusedPayloadIds.empty()) {
         LOG(INFO) << "[NotifyRemoteGet] Reuse complete unconfirmed migration payloads, object size: "
                   << reusedPayloadIds.size();
     }
+    return Status::OK();
 }
 
 Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotification(const NotifyRemoteGetReqPb &req,
@@ -4263,8 +4275,11 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotification(const NotifyRemote
 
             std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> groupedQueryMetas;
             std::vector<std::string> reusedPayloadIds;
-            PrepareNotifyRemoteGetGroups(req, objectsNeedGetRemote, lockedEntries, queryMetas,
-                groupedQueryMetas, reusedPayloadIds);
+            auto prepareRc = PrepareNotifyRemoteGetGroups(req, objectsNeedGetRemote, lockedEntries, queryMetas,
+                                                          groupedQueryMetas, reusedPayloadIds);
+            if (prepareRc.IsError()) {
+                return prepareRc;
+            }
             NotifyRemoteGetProcessContext processContext{
                 groupedQueryMetas, reusedPayloadIds, lockedEntries, rsp, objectsNeedGetRemote, queryMetas,
                 migratedBytes, unconfirmedObjectVersions, failedConfirmationOwners, failedKeyVersions,

@@ -931,6 +931,60 @@ private:
     uint32_t savedArenaPerTenant_{ 0 };
 };
 
+TEST_F(WorkerOcServiceImplTest, DeprecatedHashRpcReturnsInvalid)
+{
+    HgetRequestPb getRequest;
+    HgetReplyPb getReply;
+    EXPECT_EQ(impl_->Hget(getRequest, getReply).GetCode(), K_INVALID);
+    EXPECT_TRUE(getReply.ShortDebugString().empty());
+
+    HsetRequestPb setRequest;
+    HsetReplyPb setReply;
+    EXPECT_EQ(impl_->Hset(setRequest, setReply).GetCode(), K_INVALID);
+    EXPECT_TRUE(setReply.ShortDebugString().empty());
+
+    HdelRequestPb delRequest;
+    HdelReplyPb delReply;
+    EXPECT_EQ(impl_->Hdel(delRequest, delReply).GetCode(), K_INVALID);
+    EXPECT_TRUE(delReply.ShortDebugString().empty());
+
+    HgetallRequestPb getAllRequest;
+    HgetallReplyPb getAllReply;
+    EXPECT_EQ(impl_->Hgetall(getAllRequest, getAllReply).GetCode(), K_INVALID);
+    EXPECT_TRUE(getAllReply.ShortDebugString().empty());
+}
+
+TEST_F(WorkerOcServiceImplTest, ObjectEntryOnlyAcceptsBinaryAndHeteroMetadataFormats)
+{
+    auto makeMeta = [](uint32_t dataFormat) {
+        ObjectMetaPb meta;
+        meta.set_object_key("metadata-format-entry");
+        meta.set_data_size(8);
+        meta.mutable_config()->set_data_format(dataFormat);
+        return meta;
+    };
+
+    for (uint32_t format :
+         { static_cast<uint32_t>(DataFormat::LIST), static_cast<uint32_t>(DataFormat::HASH_MAP), 99U }) {
+        SafeObjType entry;
+        auto rc = SetObjectEntryAccordingToMeta(makeMeta(format), impl_->GetMetadataSize(), entry);
+        EXPECT_EQ(rc.GetCode(), K_INVALID);
+        EXPECT_EQ(entry.Get(), nullptr);
+    }
+
+    SafeObjType binaryEntry;
+    DS_ASSERT_OK(SetObjectEntryAccordingToMeta(makeMeta(static_cast<uint32_t>(DataFormat::BINARY)),
+                                               impl_->GetMetadataSize(), binaryEntry));
+    ASSERT_NE(binaryEntry.Get(), nullptr);
+    EXPECT_TRUE(binaryEntry->IsBinary());
+
+    SafeObjType heteroEntry;
+    DS_ASSERT_OK(SetObjectEntryAccordingToMeta(makeMeta(static_cast<uint32_t>(DataFormat::HETERO)),
+                                               impl_->GetMetadataSize(), heteroEntry));
+    ASSERT_NE(heteroEntry.Get(), nullptr);
+    EXPECT_TRUE(heteroEntry->IsHetero());
+}
+
 TEST_F(WorkerOcServiceImplTest, AllocationIdReservationUsesStableShmIdAndRejectsConcurrentDuplicate)
 {
     const std::string allocationId = GetStringUuid();

@@ -253,10 +253,10 @@ private:
      * @param[out] failedIds Failed object key list.
      * @param[out] needReadDataIds Need read data object keys.
      */
-    void FillMetaToObjectEntries(LockedEntryMap &lockedEntries, const QueryMetaMap &metas,
-                                 std::unordered_set<std::string> &successIds,
-                                 std::unordered_set<std::string> &failedIds, ObjectInfoMap &needReadDataIds,
-                                 std::unordered_set<std::string> &skippedIds);
+    Status FillMetaToObjectEntries(LockedEntryMap &lockedEntries, const QueryMetaMap &metas,
+                                   std::unordered_set<std::string> &successIds,
+                                   std::unordered_set<std::string> &failedIds, ObjectInfoMap &needReadDataIds,
+                                   std::unordered_set<std::string> &skippedIds);
 
     /**
      * @brief Fill data to object entries.

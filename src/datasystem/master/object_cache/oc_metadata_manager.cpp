@@ -39,6 +39,7 @@
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/object_cache/object_bitmap.h"
 #include "datasystem/common/util/locks.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/parallel/parallel_for.h"
@@ -1025,13 +1026,11 @@ Status OCMetadataManager::PublishMultiMeta(const std::vector<std::string> &objec
         accessor->second.multiSetState = IDLE;
         metaCopy = accessor->second;
     }
-    if (metaCopy.meta.config().data_format() != (uint64_t)DataFormat::HASH_MAP) {
-        UpdateSubscribeCache(objKey, metaCopy);
-    }
-        RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objKey, version, metaCopy.meta.ttl_second()));
-        std::string serializedStr;
-        RETURN_IF_NOT_OK(objectStore_->CreateSerializedStringForMeta(objKey, metaCopy.meta, serializedStr));
-        metaInfos.emplace(objKey, serializedStr);
+    UpdateSubscribeCache(objKey, metaCopy);
+    RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objKey, version, metaCopy.meta.ttl_second()));
+    std::string serializedStr;
+    RETURN_IF_NOT_OK(objectStore_->CreateSerializedStringForMeta(objKey, metaCopy.meta, serializedStr));
+    metaInfos.emplace(objKey, serializedStr);
     }
     rsp.set_version(version);
     return objectStore_->CreateOrUpdateBatchMeta(metaInfos, type);
@@ -1090,19 +1089,18 @@ Status OCMetadataManager::CreateMeta(const ObjectMetaPb &newMeta, const std::str
 
     INJECT_POINT("master.create_meta_failure");
 
+    const uint32_t dataFormat = newMeta.config().data_format();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        IsSupportedDataFormat(dataFormat), K_INVALID,
+        FormatString("Unsupported data format %u for objectKey(%s)", dataFormat, objectKey.c_str()));
+
     if (newMeta.config().consistency_type() == static_cast<uint32_t>(ConsistencyType::CAUSAL)
         && !AddHeavyOp(objectKey)) {
         RETURN_STATUS_LOG_ERROR(StatusCode::K_WORKER_TIMEOUT, "retry");
     }
     Raii raii([this, &objectKey]() { RemoveHeavyOp({ objectKey }); });
 
-    // Condition 1: Create meta for hash format.
-    if (newMeta.config().data_format() == (uint64_t)DataFormat::HASH_MAP) {
-        RETURN_IF_NOT_OK(expiredObjectManager_->RemoveObjectIfExist(objectKey));
-        return CreateHashMeta(newMeta, address);
-    }
-
-    if (newMeta.config().data_format() == (uint64_t)DataFormat::HETERO) {
+    if (dataFormat == static_cast<uint32_t>(DataFormat::HETERO)) {
         RETURN_IF_NOT_OK(expiredObjectManager_->RemoveObjectIfExist(objectKey));
         return CreateDeviceMeta(newMeta, address);
     }
@@ -1202,6 +1200,9 @@ Status OCMetadataManager::ProcessCopyMetaHelper(const std::string &address, cons
                                                 bool &isExpired)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!objectKey.empty(), StatusCode::K_INVALID, "The objectKey can not be empty.");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        IsSupportedDataFormat(dataFormat), K_INVALID,
+        FormatString("Unsupported data format %u for objectKey(%s)", dataFormat, objectKey.c_str()));
     size_t shardIdx = GetShardIndex(objectKey);
     auto found = this->metaShards_[shardIdx].table.find(accessor, objectKey);
     CHECK_FAIL_RETURN_STATUS(
@@ -2383,7 +2384,7 @@ Status OCMetadataManager::DoBinaryCacheInvalidationUnlocked(const std::string &o
     } else if (prevMeta.IsCausal()) {
         RETURN_IF_NOT_OK(notifyWorkerManager_->SyncSendUpdateObject(objectKey, changedMeta.newVersion,
                                                                     changedMeta.newAddress, prevMeta,
-                                                                    ObjectLifeState(changedMeta.newLifeState), {}));
+                                                                    ObjectLifeState(changedMeta.newLifeState)));
     } else if (prevMeta.IsPram()) {
         RETURN_IF_NOT_OK(notifyWorkerManager_->AsyncSendUpdateObject(objectKey, changedMeta.newAddress, prevMeta));
     }
@@ -3630,45 +3631,6 @@ void OCMetadataManager::RollbackIfGDecRefFail(DeleteObjectMediator &delMediator,
         return;
     }
     (void)globalRefTable_->GIncreaseRef(delMediator.GetSourceWorker(), failedIds, tempFailedIds, tempFinishIds);
-}
-
-Status OCMetadataManager::CreateHashMeta(const ObjectMetaPb &meta, const std::string &address)
-{
-    const std::string &objectKey = meta.object_key();
-    ObjectMeta metaCache;
-    metaCache.meta = meta;
-    // Object key is the key in a key/value pair for the metadata table.
-    // Storing the same object key in the "value" part of the kv is redundant and
-    // deprecated. Save memory and resources by removing this from the value.
-    // The field itself cannot be removed due to down-level support since this ObjectMeta pb
-    // is stored on disk (rocksdb). In future it could be fully removed since its not used
-    // anymore.
-    metaCache.meta.set_allocated_object_key(NULL);
-    metaCache.meta.set_primary_address(address);
-
-    {
-        // Check meta info in cache and rocksdb.
-        size_t shardIdx = GetShardIndex(objectKey);
-        bthread::RWLockRdGuard lck(metaShards_[shardIdx].mutex);
-        TbbMetaTable::accessor accessor;
-        auto found = metaShards_[shardIdx].table.find(accessor, objectKey);
-        if (found) {
-            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-                accessor->second.meta.config().data_format() == meta.config().data_format(), K_INVALID,
-                FormatString("Invalid data format of objectKey(%s)", objectKey));
-            accessor->second.locations[address] = AckState::ACK;
-        } else {
-            INJECT_POINT("master.CreateHashMeta.new_object");
-            metaCache.locations[address] = AckState::ACK;
-            if (!metaShards_[shardIdx].table.emplace(accessor, objectKey, metaCache)) {
-                accessor->second.locations[address] = AckState::ACK;
-            }
-        }
-    }
-    std::string serializedStr;
-    RETURN_IF_NOT_OK(objectStore_->CreateSerializedStringForMeta(objectKey, metaCache.meta, serializedStr));
-    return objectStore_->CreateOrUpdateMeta(objectKey, serializedStr,
-                                            WriteMode2MetaType(metaCache.meta.config().write_mode()));
 }
 
 void OCMetadataManager::GetMetasMatch(std::function<bool(const std::string &)> &&matchFunc,

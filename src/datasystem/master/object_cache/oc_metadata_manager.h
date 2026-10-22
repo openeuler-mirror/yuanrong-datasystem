@@ -1921,15 +1921,6 @@ private:
                              std::vector<std::string> &toBeNotifiedNestedRefs);
 
     /**
-     * @brief Create the hash object metadata.
-     * @param[in] newMeta Metadata of object.
-     * @param[in] address Server address.
-     * @param[in] isMultiset if Multiset or not.
-     * @return Status of the call.
-     */
-    Status CreateHashMeta(const ObjectMetaPb &meta, const std::string &address);
-
-    /**
      * @brief Modify the primary copy record in the master table.
      * @param[in] objectKey Object key to be modify.
      * @param[in] workerId New primary copy.

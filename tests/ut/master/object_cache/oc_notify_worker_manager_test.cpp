@@ -27,6 +27,8 @@
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
+
+#include <google/protobuf/unknown_field_set.h>
 #include <utility>
 #include <vector>
 
@@ -109,6 +111,21 @@ public:
         return manager.SnapshotAsyncDeleteReplayBatch(worker);
     }
 };
+
+TEST_F(OCNotifyWorkerManagerTest, UpdateObjectInfoPbParsesLegacySecondaryKeysAsUnknownField)
+{
+    const std::string wireData =
+        std::string({ char{ 0x0a }, char{ 0x03 }, 'k', 'e', 'y', char{ 0x2a }, char{ 0x05 }, 'f', 'i', 'e', 'l', 'd' });
+    UpdateObjectInfoPb request;
+    ASSERT_TRUE(request.ParseFromString(wireData));
+    EXPECT_EQ(request.object_key(), "key");
+
+    const auto &unknownFields = request.GetReflection()->GetUnknownFields(request);
+    ASSERT_EQ(unknownFields.field_count(), 1);
+    EXPECT_EQ(unknownFields.field(0).number(), 5);
+    EXPECT_EQ(unknownFields.field(0).type(), google::protobuf::UnknownField::TYPE_LENGTH_DELIMITED);
+    EXPECT_EQ(unknownFields.field(0).length_delimited(), "field");
+}
 
 TEST_F(OCNotifyWorkerManagerTest, DISABLED_TestAsyncSendUpdateObject)
 {
