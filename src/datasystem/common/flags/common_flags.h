@@ -42,6 +42,7 @@ DS_DECLARE_string(shared_memory_distribution_policy);
 DS_DECLARE_bool(urma_register_whole_arena);
 DS_DECLARE_uint32(ub_transport_arena_num);
 DS_DECLARE_uint32(urma_poll_size);
+DS_DECLARE_uint32(urma_log_threshold_us);
 DS_DECLARE_uint32(urma_connection_size);
 DS_DECLARE_uint32(urma_send_jetty_lane_pool_size);
 DS_DECLARE_uint32(urma_send_lane_count_per_peer);
@@ -121,6 +122,9 @@ DS_DECLARE_int32(brpc_event_dispatcher_num);
 DS_DECLARE_bool(enable_load_aware_scheduler);
 
 namespace datasystem {
+// Polling readers use the published value because the first KV Init can follow another Client's URMA startup.
+uint32_t GetUrmaLogThresholdUs();
+bool ValidateAndPublishUrmaLogThresholdUs(const char *flagName, uint32_t value);
 /** @brief Resolve enable_ub_fault_isolation into the process-level freeze; the first Client Init of any kind wins. */
 void FreezeClientUbFaultIsolation();
 /** @brief Read the process-level UB fault isolation switch; it mirrors the flag until a Client Init freezes it. */

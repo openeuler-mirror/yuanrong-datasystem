@@ -154,6 +154,12 @@ public:
     static void SetClientLogName(const std::string &logName);
 
     /**
+     * @brief Set the client cluster name before client logging starts.
+     * @param[in] clusterName Cluster name used in the standard log prefix.
+     */
+    static void SetClientClusterName(const std::string &clusterName);
+
+    /**
      * @brief Get client log filename explicitly configured by KVClientConfig.
      * @param[out] logName Client log file base name, which may be empty.
      * @return True if KVClientConfig explicitly configured the log name.

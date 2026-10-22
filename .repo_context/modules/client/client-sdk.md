@@ -91,6 +91,15 @@
   - `datasystem` shared library is built from `src/datasystem/client/*` and is the main user-facing client library.
   - `DsClient` is only a convenience aggregator. It constructs `KVClient`, `HeteroClient`, and `ObjectClient`, then initializes and shuts them down in order.
   - `ConnectOptions` is the common connection/auth/config carrier for C++ clients.
+  - `KVClientConfig::Builder::UrmaLogThresholdUs` sets the startup-only process-wide
+    `urma_log_threshold_us` (default 500 microseconds, positive uint32). It uses the existing first-KV-Init
+    snapshot and conflict rules, has no environment variable, and cannot be updated through UpdateConfig.
+    Only URMA polling-mode (`urma_event_mode=false`) gap, poll-call, and sleep INFO logs use this threshold;
+    elapsed time must be strictly greater, independently of `enable_urma_perf` and subject to log severity.
+    Polling reads an independent atomic threshold published by successful flag validation, so Object/Hetero Init
+    may start URMA before the first KV Init without racing the ordinary flag variable.
+    Regression target: `dynamic_config_updater_ut` (threshold defaults/publication, Builder validation,
+    runtime rejection).
   - `KVClientConfig` carries first-Init process settings. In addition to logging and monitoring, its
     `UrmaSendLaneCountPerPeer` Builder setter configures the Client's outbound per-peer URMA send-lane cap; the
     connection snapshots `min(configured cap, process lane-pool size)` when it is constructed.

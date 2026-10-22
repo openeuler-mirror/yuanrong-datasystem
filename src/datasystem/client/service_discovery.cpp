@@ -39,6 +39,7 @@ DS_DECLARE_string(log_dir);
 namespace datasystem {
 namespace {
 constexpr int COORDINATOR_SERVICE_DISCOVERY_RPC_STUB_CACHE_SIZE = 100;
+constexpr int WORKER_STATE_LOG_INTERVAL_SECONDS = 3600;
 
 std::string PickRandomAddr(const std::vector<std::string> &workers, RandomData *randomData)
 {
@@ -232,6 +233,7 @@ ServiceDiscovery::ServiceDiscovery(const ServiceDiscoveryOptions &opts)
       hostIdEnvName_(opts.hostIdEnvName),
       affinityPolicy_(opts.affinityPolicy)
 {
+    Logging::SetClientClusterName(clusterName_);
 }
 
 Status ServiceDiscovery::Init()
@@ -312,6 +314,7 @@ CoordinatorServiceDiscovery::CoordinatorServiceDiscovery(const CoordinatorServic
       affinityPolicy_(opts.affinityPolicy),
       coordinatorDiscovery_(opts.coordinatorDiscovery)
 {
+    Logging::SetClientClusterName(clusterName_);
     if (coordinatorDiscovery_ == nullptr && !opts.serviceAddress.empty()) {
         coordinatorDiscovery_ = std::make_shared<StaticCoordinatorDiscovery>(opts.serviceAddress);
     }
@@ -367,7 +370,8 @@ Status CoordinatorServiceDiscovery::ObtainWorkers(std::vector<std::string> &same
     for (const auto &kv : kvs) {
         AppendReadyWorkerFromProto(kv.key, kv.value, hostId_, sameHost, other, workersStateCount);
     }
-    LOG(INFO) << "The workers state count from coordinator is " << MapToString(workersStateCount);
+    LOG_EVERY_T(INFO, WORKER_STATE_LOG_INTERVAL_SECONDS)
+        << "The workers state count from coordinator is " << MapToString(workersStateCount);
     return Status::OK();
 }
 

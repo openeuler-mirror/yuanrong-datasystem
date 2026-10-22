@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "datasystem/common/flags/flags.h"
+#include "datasystem/common/flags/common_flags.h"
 
 #include <atomic>
 #include <cstdint>
@@ -26,7 +26,25 @@
 namespace {
 constexpr uint32_t DEFAULT_SCALE_IN_COLLECT_WINDOW_MS = 1'000;
 constexpr uint32_t DEFAULT_URMA_SEND_LANE_COUNT_PER_PEER = 8;
+constexpr uint32_t DEFAULT_URMA_LOG_THRESHOLD_US = 500;
+std::atomic<uint32_t> g_urmaLogThresholdUs{ DEFAULT_URMA_LOG_THRESHOLD_US };
+}  // namespace
+
+namespace datasystem {
+uint32_t GetUrmaLogThresholdUs()
+{
+    return g_urmaLogThresholdUs.load(std::memory_order_relaxed);
 }
+
+bool ValidateAndPublishUrmaLogThresholdUs(const char *, uint32_t value)
+{
+    if (value == 0) {
+        return false;
+    }
+    g_urmaLogThresholdUs.store(value, std::memory_order_relaxed);
+    return true;
+}
+}  // namespace datasystem
 
 DS_DEFINE_string(l2_cache_type, "none",
                  "L2 cache type, optional value: 'obs', 'sfs', 'distributed_disk' or 'none', default is none");
@@ -61,6 +79,9 @@ DS_DEFINE_bool(rdma_register_whole_arena, true,
                "Register the whole arena as segment during init, otherwise, register each object as a segment.");
 DS_DEFINE_bool(enable_rdma, false, "Option to turn on rdma for OC worker to worker data transfer, default false.");
 DS_DEFINE_uint32(urma_poll_size, 8, "Number of complete record to poll at a time, 16 is the max this device can poll");
+DS_DEFINE_uint32(urma_log_threshold_us, DEFAULT_URMA_LOG_THRESHOLD_US,
+                 "URMA polling-mode INFO log threshold in microseconds (urma_event_mode=false). "
+                 "Valid range [1, UINT32_MAX]. Default 500; restart required.");
 DS_DEFINE_uint64(urma_max_write_size_mb, 4, "Maximum URMA write size, unit is MB. Valid range is [1, 2048].");
 DS_DEFINE_uint32(urma_connection_size, 0, "[DEPRECATED] No longer used. JFS/JFR are created per-connection.");
 DS_DEFINE_uint32(urma_send_jetty_lane_pool_size, 200,

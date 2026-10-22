@@ -50,3 +50,14 @@ ds_cc_test(
         "//tests/ut:ut_common",
     ],
 )
+
+ds_cc_test(
+    name = "dynamic_config_updater_test",
+    srcs = ["dynamic_config_updater_test.cpp"],
+    deps = [
+        "//src/datasystem/common/flags:dynamic_flag_config",
+        "//src/datasystem/common/flags:kv_client_config",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:raii",
+    ],
+)
