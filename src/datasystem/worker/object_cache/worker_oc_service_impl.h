@@ -397,7 +397,7 @@ public:
                               const cluster::CancellationToken &cancellation);
 
     /**
-     * @brief Handle Put/Publish/Seal request from client.
+     * @brief Handle Put/Publish request from client.
      * @param[in] req The rpc request protobuf.
      * @param[out] resp The rpc response protobuf.
      * @param[in] payloads The rpc request payload.
@@ -1102,14 +1102,6 @@ private:
     friend class WorkerWorkerOCServiceImpl;
     friend class WorkerDeviceOcManager;
 
-    struct PublishParams {
-        const ObjectLifeState lifeState;
-        const std::vector<std::string> &nestedObjectKeys;
-        bool isRetry = false;
-        uint32_t ttlSecond;
-        int existence;
-    };
-
     /**
      * @brief Initializes resources related to the l2 cache.
      * @return Status of the call.
@@ -1253,14 +1245,6 @@ private:
      */
     Status DeleteObject(const std::string &objectKey, uint64_t version = 0,
                         DeleteEligibility eligibility = DeleteEligibility::UNCONDITIONAL);
-
-    /**
-     * @brief Create or update metadata to master, object will be unlocked during requesting master.
-     * @param[in] objectKV Safe object entry and its corresponding objectKey.
-     * @param[in] params Publishing parameters.
-     * @return Status of the call.
-     */
-    Status RequestingToMaster(ObjectKV &objectKV, const PublishParams &params);
 
     /**
      * @brief Sending Asynchronous RPCs to Clear Heterogeneous Metadata.

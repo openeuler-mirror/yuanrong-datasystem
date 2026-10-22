@@ -3,7 +3,7 @@ yr.datasystem.object_client.Buffer.seal
 
 .. py:method:: yr.datasystem.object_client.Buffer.seal(nested_object_keys=None)
 
-    将Buffer中的数据发布到数据系统中，发布成功之后Buffer所对应的对象的值将无法再被修改。
+    将Buffer中的数据发布到数据系统中，语义等同 publish（封存语义已移除）。
 
     参数：
         - **nested_object_keys** (list) - 依赖的嵌套对象 key 列表。默认值： ``None`` 。

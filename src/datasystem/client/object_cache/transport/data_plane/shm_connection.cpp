@@ -583,7 +583,6 @@ Status ShmSession::BuildResult(const GetRspPb::ObjectInfoPb &info, const DataGet
     meta.metadataSize = metadataSize;
     meta.shmId = unit->id;
     meta.lockId = lockId_;
-    meta.isSeal = info.is_seal();
     meta.mode.SetWriteMode(WriteMode(info.write_mode()));
     meta.mode.SetConsistencyType(ConsistencyType(info.consistency_type()));
     meta.mode.SetCacheType(CacheType(info.cache_type()));
@@ -608,7 +607,6 @@ Status ShmSession::BuildQueryAndGetResult(const QueryAndGetShmInfoPb &info, cons
     objectInfo.set_metadata_size(info.metadata_size());
     objectInfo.set_mmap_size(info.mmap_size());
     objectInfo.set_shm_id(info.shm_id());
-    objectInfo.set_is_seal(info.is_seal());
     objectInfo.set_write_mode(info.write_mode());
     objectInfo.set_consistency_type(info.consistency_type());
     objectInfo.set_cache_type(info.cache_type());

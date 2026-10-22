@@ -96,7 +96,7 @@ public:
         ptr->SetDataSize(dataSize);
         ptr->SetMetadataSize(metaSize);
         ptr->SetCreateTime(1);
-        ptr->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+        ptr->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
 
         ptr->modeInfo.SetWriteMode(writeMode);
         ptr->modeInfo.SetCacheType(CacheType::MEMORY);

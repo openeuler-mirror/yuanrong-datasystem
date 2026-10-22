@@ -221,7 +221,7 @@ class Buffer:
 
     def seal(self, nested_object_keys=None):
         """
-        Publish immutable data to the server.
+        Publish data to the server, semantically identical to publish (seal semantics removed).
 
         Args:
             nested_object_keys(list):  Objects that depend on objectKey.

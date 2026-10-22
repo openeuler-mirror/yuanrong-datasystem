@@ -658,8 +658,6 @@ Status OCMetadataManager::CheckBinaryFormatParamMatch(const std::string &objectK
             "write_mode, cache_type), (%zu, %zu, %zu); old: (%zu, %zu, %zu)",
             newMeta.consistencyType, newMeta.writeMode, newMeta.cacheType, oldConsistencyType, oldWriteMode,
             oldCacheType));
-    CHECK_FAIL_RETURN_STATUS(((prevMeta.meta.life_state() != static_cast<uint32_t>(ObjectLifeState::OBJECT_SEALED))),
-                             StatusCode::K_OC_ALREADY_SEALED, "Already sealed");
 
     CHECK_FAIL_RETURN_STATUS(nestedRefManager_->NestedKeysCanSet(objectKey, nestedObjectKeys),
                              StatusCode::K_RUNTIME_ERROR, "Nested keys not match");
@@ -2382,8 +2380,7 @@ Status OCMetadataManager::DoBinaryCacheInvalidationUnlocked(const std::string &o
     // Step 1: Notify worker to update.
     if (prevMeta.IsReplica()) {
         VLOG(1) << "Object " << objectKey << " is replica, no need to invalid cache";
-    } else if (prevMeta.IsCausal()
-               || changedMeta.newLifeState == static_cast<uint32_t>(ObjectLifeState::OBJECT_SEALED)) {
+    } else if (prevMeta.IsCausal()) {
         RETURN_IF_NOT_OK(notifyWorkerManager_->SyncSendUpdateObject(objectKey, changedMeta.newVersion,
                                                                     changedMeta.newAddress, prevMeta,
                                                                     ObjectLifeState(changedMeta.newLifeState), {}));
@@ -4153,32 +4150,6 @@ Status OCMetadataManager::ProcessWorkerPushMeta(const PushMetaToMasterReqPb &req
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         globalRefTable_->GIncreaseRef(req.address(), objectKeys, failedIncIds, firstIncIds),
         "GIncreaseRef failed in ProcessWorkerPushMeta");
-    return Status::OK();
-}
-
-Status OCMetadataManager::RollbackSeal(const RollbackSealReqPb &req, RollbackSealRspPb &rsp)
-{
-    (void)rsp;
-    LOG(INFO) << FormatString("[ObjectKey %s] Start to rollback seal", req.object_key());
-    size_t shardIdx = GetShardIndex(req.object_key());
-    bthread::RWLockRdGuard lck(metaShards_[shardIdx].mutex);
-    TbbMetaTable::accessor accessor;
-    if (!metaShards_[shardIdx].table.find(accessor, req.object_key())) {
-        LOG(WARNING) << FormatString("[ObjectKey %s] The object key not exists in metaTable_", req.object_key());
-        return Status::OK();
-    }
-    if (req.old_life_state() == static_cast<uint32_t>(ObjectLifeState::OBJECT_PUBLISHED)) {
-        (void)accessor->second.locations.erase(req.address());
-        (void)objectStore_->RemoveObjectLocation(req.object_key(), req.address());
-        accessor->second.meta.set_life_state(req.old_life_state());
-        std::string serializedStr;
-        (void)objectStore_->CreateSerializedStringForMeta(req.object_key(), accessor->second.meta, serializedStr);
-        (void)objectStore_->CreateOrUpdateMeta(req.object_key(), serializedStr,
-                                               WriteMode2MetaType(accessor->second.meta.config().write_mode()));
-    } else {
-        RETURN_IF_NOT_OK(objectStore_->RemoveMeta(req.object_key()));
-        (void)metaShards_[shardIdx].table.erase(accessor);
-    }
     return Status::OK();
 }
 

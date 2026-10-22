@@ -766,21 +766,6 @@ Status MasterOCServiceImpl::PushMetaToMaster(const PushMetaToMasterReqPb &req, P
     return Status::OK();
 }
 
-Status MasterOCServiceImpl::RollbackSeal(const RollbackSealReqPb &req, RollbackSealRspPb &rsp)
-{
-    ScopedRequestContext ctx;
-    Timer timer;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
-                                     "GetOcMetadataManager failed");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocMetadataManager->RollbackSeal(req, rsp), "Master process RollbackSeal failed");
-    INJECT_POINT("MasterOCServiceImpl.RollbackSeal.idempotence");
-    GetMasterTimeCost().Append("Total RollbackSeal", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master PushMetaToMaster %s", GetMasterTimeCost().GetInfo());
-    return Status::OK();
-}
-
 Status MasterOCServiceImpl::IfNeedTriggerReconciliationImpl(const ReconciliationQueryPb &req, ReconciliationRspPb &rsp)
 {
     (void)rsp;

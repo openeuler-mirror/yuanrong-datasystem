@@ -67,11 +67,6 @@ bool ObjCacheShmUnit::IsInvalid() const
     return (lifeState_ == ObjectLifeState::OBJECT_INVALID);
 }
 
-bool ObjCacheShmUnit::IsSealed() const
-{
-    return (lifeState_ == ObjectLifeState::OBJECT_SEALED);
-}
-
 bool ObjCacheShmUnit::IsPublished() const
 {
     return (lifeState_ == ObjectLifeState::OBJECT_PUBLISHED);

@@ -223,22 +223,6 @@ Status WorkerRemoteMasterOCApi::CreateMeta(master::CreateMetaReqPb &request, mas
 {
     METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_CREATE_META_LATENCY);
     RpcOptions opts;
-    // seal operation can't been retry.
-    if (request.meta().life_state() == static_cast<uint32_t>(ObjectLifeState::OBJECT_SEALED)) {
-        CHECK_AND_SET_TIMEOUT_WITH_RPC_DIAG(
-            "CreateMeta", &GetRequestContext()->reqTimeoutDuration, request, opts, localHostPort_, hostPort_);
-        // Apply the same 3s hard cap as the non-seal path so a slow master
-        // on an uninitialized or degenerate timeout path cannot pin a seal
-        // bthread for the 10min default.
-        if (opts.GetTimeout() <= 0 || opts.GetTimeout() > WORKER_TO_MASTER_RPC_HARD_CAP_MS) {
-            opts.SetTimeout(WORKER_TO_MASTER_RPC_HARD_CAP_MS);
-        }
-        RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
-        Timer sealTimer;
-        Status rc = brpcSession_->CreateMeta(opts, request, response);
-        GetWorkerTimeCost().Append("Worker to master rpc Seal CreateMeta", sealTimer.ElapsedMilliSecond());
-        return WithRpcDiag(rc, "CreateMeta", localHostPort_, hostPort_);
-    }
 
     // When the client budget is exhausted (remainingMs <= 0), fail fast instead of
     // falling back to HARD_CAP: a 3s master RPC retry window would pin the Publish
@@ -262,9 +246,9 @@ Status WorkerRemoteMasterOCApi::CreateMeta(master::CreateMetaReqPb &request, mas
         timeoutMs,
         [this, &opts, &request, &response](int32_t) {
             CHECK_AND_SET_TIMEOUT(&GetRequestContext()->reqTimeoutDuration, request, opts);
-            // Mirror the seal-path cap: an uninitialized reqTimeoutDuration makes
-            // CHECK_AND_SET_TIMEOUT set opts to ~60s; clamp the per-RPC timeout so
-            // a single slow master RPC cannot block a worker bthread past the hard cap.
+            // An uninitialized reqTimeoutDuration makes CHECK_AND_SET_TIMEOUT set
+            // opts to ~60s; clamp the per-RPC timeout so a single slow master RPC
+            // cannot block a worker bthread past the hard cap.
             if (opts.GetTimeout() <= 0 || opts.GetTimeout() > WORKER_TO_MASTER_RPC_HARD_CAP_MS) {
                 opts.SetTimeout(WORKER_TO_MASTER_RPC_HARD_CAP_MS);
             }
@@ -493,16 +477,6 @@ Status WorkerRemoteMasterOCApi::GDecNestedRef(master::GDecNestedRefReqPb &reques
 Status WorkerRemoteMasterOCApi::UpdateMeta(master::UpdateMetaReqPb &request, master::UpdateMetaRspPb &response)
 {
     RpcOptions opts;
-    // seal operation can't been retry.
-    if (request.life_state() == static_cast<uint32_t>(ObjectLifeState::OBJECT_SEALED)) {
-        CHECK_AND_SET_TIMEOUT_WITH_RPC_DIAG(
-            "UpdateMeta", &GetRequestContext()->reqTimeoutDuration, request, opts, localHostPort_, hostPort_);
-        RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
-        Timer sealTimer;
-        Status rc = brpcSession_->UpdateMeta(opts, request, response);
-        GetWorkerTimeCost().Append("Worker to master rpc Seal UpdateMeta", sealTimer.ElapsedMilliSecond());
-        return WithRpcDiag(rc, "UpdateMeta", localHostPort_, hostPort_);
-    }
 
     int64_t timeoutMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     INJECT_POINT("WorkerMasterOCApi.UpdateMeta.timeoutMs", [&timeoutMs](int time) {
@@ -681,37 +655,6 @@ Status WorkerRemoteMasterOCApi::PushMetadataToMaster(master::PushMetaToMasterReq
             return rc;
         },
         pushMetaRetryOn, "PushMetadataToMaster");
-}
-
-Status WorkerRemoteMasterOCApi::RollbackSeal(const std::string &objectKey, uint32_t oldLifeState)
-{
-    master::RollbackSealReqPb req;
-    master::RollbackSealRspPb rsp;
-    req.set_object_key(objectKey);
-    req.set_old_life_state(oldLifeState);
-    req.set_address(localHostPort_.ToString());
-    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRemainingTime();
-    RpcOptions opts;
-    uint64_t timeoutMs = remainingTime > 0 ? remainingTime : WORKER_ADD_MILLISECOND;
-    if (timeoutMs > INT32_MAX) {
-        timeoutMs = INT32_MAX;
-    }
-    opts.SetTimeout(timeoutMs);
-    auto status = RetryOnErrorRepent(
-        timeoutMs,
-        [this, &opts, &req, &rsp](int32_t) {
-            auto &reqTimeoutDuration = GetRequestContext()->reqTimeoutDuration;
-            opts.SetTimeout(std::min<int64_t>(opts.GetTimeout(), reqTimeoutDuration.CalcRemainingTime()));
-            RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-            Timer timer;
-            Status rc = brpcSession_->RollbackSeal(opts, req, rsp);
-            GetWorkerTimeCost().Append("Worker to master rpc RollbackSeal", timer.ElapsedMilliSecond());
-            return rc;
-        },
-        []() { return Status::OK(); },
-        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-          StatusCode::K_RPC_UNAVAILABLE });
-    return WithRpcDiag(status, "RollbackSeal", localHostPort_, hostPort_);
 }
 
 Status WorkerRemoteMasterOCApi::ReconcileMembershipChange(master::ReconciliationQueryPb &req,
@@ -1391,17 +1334,6 @@ Status WorkerLocalMasterOCApi::PushMetadataToMaster(master::PushMetaToMasterReqP
 {
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     return masterOC_->PushMetaToMaster(req, rsp);
-}
-
-Status WorkerLocalMasterOCApi::RollbackSeal(const std::string &objectKey, uint32_t oldLifeState)
-{
-    master::RollbackSealReqPb req;
-    master::RollbackSealRspPb rsp;
-    req.set_object_key(objectKey);
-    req.set_old_life_state(oldLifeState);
-    req.set_address(localHostPort_.ToString());
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    return masterOC_->RollbackSeal(req, rsp);
 }
 
 Status WorkerLocalMasterOCApi::ReconcileMembershipChange(master::ReconciliationQueryPb &req,

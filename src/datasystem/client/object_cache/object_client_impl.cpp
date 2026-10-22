@@ -400,8 +400,8 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
                                     [this]() { return CheckConnectionWhileShmModify(); },
                                     [this](uint32_t version) { return IsBufferAlive(version); },
                                     [this](const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
-                                            const std::unordered_set<std::string> &nestedObjectKeys, bool isSeal) {
-                                        return PublishRoutedBuffer(bufferInfo, nestedObjectKeys, isSeal);
+                                            const std::unordered_set<std::string> &nestedObjectKeys) {
+                                        return PublishRoutedBuffer(bufferInfo, nestedObjectKeys);
                                     },
                                     [this](const Status &rc, SetFailureStage failureStage, const HostPort &worker,
                                             std::vector<HostPort> &excludedWorkers) -> bool {
@@ -2290,7 +2290,7 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
     if (!useShmTransfer) {
         for (size_t i = 0; i < objectKeyList.size(); i++) {
             if (!skipCheckExistence && exists[i]) {
-                auto bufferInfo = boundMode_->MakeObjectBufferInfo(objectKeyList[i], nullptr, 0, 0, param, false, 0);
+                auto bufferInfo = boundMode_->MakeObjectBufferInfo(objectKeyList[i], nullptr, 0, 0, param, 0);
                 std::shared_ptr<Buffer> placeholder;
                 RETURN_IF_NOT_OK(Buffer::CreateBuffer(bufferInfo, shared_from_this(), placeholder));
                 bufferList[i] = std::move(placeholder);
@@ -2300,7 +2300,7 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
             auto dataSize = dataSizeList[i];
             auto version = 0u;
             std::shared_ptr<Buffer> newBuffer;
-            auto bufferInfo = boundMode_->MakeObjectBufferInfo(objectKey, nullptr, dataSize, 0, param, false, version);
+            auto bufferInfo = boundMode_->MakeObjectBufferInfo(objectKey, nullptr, dataSize, 0, param, version);
             auto rc = Buffer::CreateBuffer(bufferInfo, shared_from_this(), newBuffer);
             if (rc.IsError()) {
                 bufferList.clear();
@@ -2374,15 +2374,11 @@ Status ObjectClientImpl::UpdateConfig(const std::string &configJson)
 }
 
 Status ObjectClientImpl::PublishRoutedBuffer(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
-                                             const std::unordered_set<std::string> &nestedObjectKeys, bool isSeal)
+                                             const std::unordered_set<std::string> &nestedObjectKeys)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
     if (bufferInfo->routedWriteSourceDraining) {
-        auto rc = ReplayRoutedBuffer(bufferInfo, nestedObjectKeys, isSeal);
-        if (rc.IsOk()) {
-            bufferInfo->isSeal = isSeal;
-        }
-        return rc;
+        return ReplayRoutedBuffer(bufferInfo, nestedObjectKeys);
     }
     // The worker was pinned on the buffer at Create time; rebuild the route context from it only to
     // carry the client identity (clientId/token/tenantId) into the request context. TransportLayer::Set
@@ -2400,26 +2396,22 @@ Status ObjectClientImpl::PublishRoutedBuffer(const std::shared_ptr<ObjectBufferI
     setParam.nestedKeys = nestedObjectKeys;
     setParam.ttlSecond = bufferInfo->ttlSecond;
     setParam.existence = static_cast<ExistenceOpt>(bufferInfo->existence);
-    setParam.isSeal = isSeal;
     setParam.subTimeoutMs = requestTimeoutMs_;
     auto setRc = transportLayer_->Set(*objBuf, setParam);
-    if (!isSeal && IsRoutingEvictionFailure(setRc)) {
+    if (IsRoutingEvictionFailure(setRc)) {
         auto routing = std::atomic_load(&routing_);
         if (routing != nullptr) {
             routing->UpdateState(bufferInfo->workerAddr, setRc.GetCode());
         }
     }
     if (setRc.GetCode() == K_SCALE_DOWN) {
-        setRc = ReplayRoutedBuffer(bufferInfo, nestedObjectKeys, isSeal, setRc);
-    }
-    if (setRc.IsOk()) {
-        bufferInfo->isSeal = isSeal;  // mark sealed only after a successful Set (avoid stuck-sealed on retry)
+        setRc = ReplayRoutedBuffer(bufferInfo, nestedObjectKeys, setRc);
     }
     return setRc;
 }
 
 Status ObjectClientImpl::ReplayRoutedBuffer(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
-                                            const std::unordered_set<std::string> &nestedObjectKeys, bool isSeal,
+                                            const std::unordered_set<std::string> &nestedObjectKeys,
                                             const Status &rejection)
 {
     bufferInfo->routedWriteSourceDraining = true;
@@ -2434,7 +2426,7 @@ Status ObjectClientImpl::ReplayRoutedBuffer(const std::shared_ptr<ObjectBufferIn
     const auto *data = bufferInfo->pointer + bufferInfo->metadataSize;
     std::vector<HostPort> excludedWorkers{ bufferInfo->workerAddr };
     return ExecuteSetFlow(bufferInfo->objectKey, data, bufferInfo->dataSize, param, nestedObjectKeys,
-                          bufferInfo->ttlSecond, bufferInfo->existence, requestTimeoutMs_, isSeal,
+                          bufferInfo->ttlSecond, bufferInfo->existence, requestTimeoutMs_,
                           std::move(excludedWorkers), rejection);
 }
 
@@ -2749,7 +2741,7 @@ Status ObjectClientImpl::ExecuteCreateFlow(const std::string &objectKey, uint64_
 Status ObjectClientImpl::ExecuteSetFlow(
     const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
     const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence,
-    int32_t requestTimeoutMs, bool isSeal, std::vector<HostPort> excludedWorkers,
+    int32_t requestTimeoutMs, std::vector<HostPort> excludedWorkers,
     const Status &initialRejection)
 {
     Status rc(K_RUNTIME_ERROR, "Set route attempts exhausted");
@@ -2777,21 +2769,21 @@ Status ObjectClientImpl::ExecuteSetFlow(
         // uniform placement and shm lifecycle, so gate this shortcut on enableLocalCache_. Without the
         // gate, a key whose route lands on the bound worker over a SHM-capable connection with
         // size >= threshold would wrongly take ProcessShmPut.
-        if (!isSeal && enableLocalCache_ && routeContext.directWorkerApi != nullptr
+        if (enableLocalCache_ && routeContext.directWorkerApi != nullptr
             && routeContext.directWorkerApi->ShmCreateable(size)) {
             rc = boundMode_->ProcessShmPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond,
                                            routeContext.directWorkerApi, existence, failureStage, requestTimeoutMs);
             if (rc.IsOk() || !HandleSetRouteFailure(rc, failureStage, routeContext.worker, excludedWorkers)) {
                 return rc;
             }
-        } else if (!isSeal && routeContext.directWorkerApi != nullptr && transportLayer_ == nullptr) {
+        } else if (routeContext.directWorkerApi != nullptr && transportLayer_ == nullptr) {
             return boundMode_->ProcessDirectSetWithoutTransport(objectKey, data, size, param, nestedObjectKeys,
                                                                 ttlSecond, existence, routeContext, failureStage,
                                                                 excludedWorkers, requestTimeoutMs);
         } else {
             rc = routedMode_->ProcessTransportPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond, existence,
                                                   routeContext, failureStage, transportResult,
-                                                  requestTimeoutMs, isSeal);
+                                                  requestTimeoutMs);
             if (rc.IsOk()
                 || !HandleSetRouteFailure(rc, failureStage, routeContext.worker, excludedWorkers,
                                           transportResult.writeTargetQuarantined
@@ -3931,7 +3923,7 @@ Status ObjectClientImpl::MSetRoutedBuffers(const std::vector<std::shared_ptr<Buf
             if (buffer == nullptr || buffer->bufferInfo_->dataSize == 0 || !buffer->bufferInfo_->isRoutedWrite) {
                 continue;
             }
-            auto rc = PublishRoutedBuffer(buffer->bufferInfo_, {}, false);
+            auto rc = PublishRoutedBuffer(buffer->bufferInfo_, {});
             if (rc.IsError()) {
                 lastRc = rc;
             }
@@ -4008,7 +4000,7 @@ Status ObjectClientImpl::ReplayRoutedMSetGroup(const std::vector<std::shared_ptr
     Status lastRc = Status::OK();
     const size_t failedBefore = failedCount;
     for (const auto &info : infos) {
-        Status rc = ReplayRoutedBuffer(info, {}, false);
+        Status rc = ReplayRoutedBuffer(info, {});
         if (rc.IsError()) {
             ++failedCount;
             lastRc = std::move(rc);
@@ -4047,7 +4039,6 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
                                  "Buffers in one MSet must use the same existence option.");
         batchExistence = existence;
         // Routed (lc=false two-step Create) buffers are published through the transport layer below.
-        CHECK_FAIL_RETURN_STATUS(!buffer->bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
         if (buffer->bufferInfo_->isRoutedWrite) {
             hasRouted = true;
             continue;
@@ -4356,7 +4347,6 @@ Status ObjectClientImpl::MultiPublish(const std::vector<std::shared_ptr<Buffer>>
     bufferInfoList.reserve(bufferList.size());
     for (auto &buffer : bufferList) {
         RETURN_IF_NOT_OK(buffer->CheckDeprecated());
-        CHECK_FAIL_RETURN_STATUS(!buffer->bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Cient object is already sealed");
         bufferInfoList.emplace_back(buffer->bufferInfo_);
     }
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
@@ -5269,13 +5259,6 @@ void ObjectClientImpl::DecreaseReferenceCnt(const ShmKey &shmId, bool isShm, uin
 {
     std::shared_lock<std::shared_timed_mutex> lck(shutdownMux_);
     boundMode_->DecreaseReferenceCnt(shmId, isShm, version);
-}
-
-Status ObjectClientImpl::Seal(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
-                              const std::unordered_set<std::string> &nestedObjectKeys, bool isShm)
-{
-    std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
-    return boundMode_->Seal(bufferInfo, nestedObjectKeys, isShm);
 }
 
 Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,

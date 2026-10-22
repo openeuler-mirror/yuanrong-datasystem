@@ -39,7 +39,6 @@ TEST_F(ObjectInterfaceTest, TestGetterSetters)
     std::shared_ptr<ObjectInterface> interface = std::make_shared<FakeObject>();
     auto &testObject = *interface;
     ASSERT_EQ(testObject.IsInvalid(), false);
-    ASSERT_EQ(testObject.IsSealed(), false);
     ASSERT_EQ(testObject.IsPublished(), false);
     ASSERT_EQ(testObject.GetLifeState(), ObjectLifeState::OBJECT_INVALID);
     ASSERT_EQ(testObject.GetCreateTime(), 0ul);

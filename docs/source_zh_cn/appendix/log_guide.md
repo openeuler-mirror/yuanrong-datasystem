@@ -114,7 +114,6 @@ Branch 仅写入普通运行日志，不写入 operation 日志。构建系统�
 | keep | 1 | 是否手动管理对象生命周期。取值：true/false, 长度：5Byte |
 | Write_mode | 1 | 写数据的模式，影响数据可靠性。取值：int32 |
 | consistency_type | 1 | 数据一致性模式。取值：uint32 |
-| is_seal | 1 | 数据是否不可修改。取值：0/1, 0表示false |
 | is_retry | 1 | 是否为重试场景。取值：0/1 |
 | ttl_second | 32 | TTL时间配置。取值：uint32 |
 | existence | 1 | 配置Key存在时是否允许继续操作，默认允许。取值：int |

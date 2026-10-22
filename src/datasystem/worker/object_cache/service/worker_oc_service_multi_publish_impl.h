@@ -233,7 +233,7 @@ private:
     /**
      * @brief Verify the validity of the object release.
      * @param[in] req Publish request meta.
-     * @param[in] safeObj The object to be sealed.
+     * @param[in] safeObj The object to be published.
      * @return Status of the call.
      */
     static Status VerifyObjectReleaseValidity(const MultiPublishReqPb &req, const SafeObjType &safeObj);

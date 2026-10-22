@@ -996,7 +996,7 @@ Status UbTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param, 
     RETURN_IF_NOT_OK(PublishSetPayload(info, pubReq, param, rpcClient, rsp, workerVersion, result, writeRc));
 
     const auto kind = info.ubDataSentByMemoryCopy ? AccessTransportKind::UB : AccessTransportKind::TCP;
-    return SetTransportResponseStatus(rsp, kind, param.isSeal, param.isRetry);
+    return SetTransportResponseStatus(rsp, kind);
 }
 
 Status UbTransporter::PublishSetPayload(const ObjectBufferInfo &info, PublishReqPb &pubReq,

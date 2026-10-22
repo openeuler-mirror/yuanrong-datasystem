@@ -228,15 +228,6 @@ Status WorkerOcServiceCreateImpl::CreateImpl(const std::string &tenantId, const 
                                              CreateRspPb &resp, CacheType cacheType)
 {
     auto objectKey = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, rawObjectKey);
-    std::shared_ptr<SafeObjType> entry;
-    bool isExist = objectTable_->Get(objectKey, entry).IsOk();
-    if (isExist && entry != nullptr) {
-        int64_t remUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
-        if (entry->RLock(false, remUs).IsOk()) {
-            Raii unlock([&entry]() { entry->RUnlock(); });
-            CHECK_FAIL_RETURN_STATUS(!(*entry)->IsSealed(), K_OC_ALREADY_SEALED, "Cannot create sealed object.");
-        }
-    }
     ShmKey shmId;
     bool reserved = false;
     RETURN_IF_NOT_OK(ResolveCreateShmId(allocationId, shmId, reserved));

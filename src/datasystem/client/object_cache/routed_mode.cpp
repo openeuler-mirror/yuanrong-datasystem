@@ -423,7 +423,7 @@ Status RoutedMode::ProcessTransportPut(
     const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
     const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence,
     const SetRouteContext &routeContext, SetFailureStage &failureStage,
-    client::TransportSetResult &transportResult, int32_t requestTimeoutMs, bool isSeal)
+    client::TransportSetResult &transportResult, int32_t requestTimeoutMs)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
     const int32_t subTimeoutMs = requestTimeoutMs > 0 ? requestTimeoutMs : requestTimeoutMs_;
@@ -457,7 +457,6 @@ Status RoutedMode::ProcessTransportPut(
     setParam.nestedKeys = nestedObjectKeys;
     setParam.ttlSecond = ttlSecond;
     setParam.existence = static_cast<ExistenceOpt>(existence);
-    setParam.isSeal = isSeal;
     setParam.subTimeoutMs = subTimeoutMs;
     failureStage = SetFailureStage::PUBLISH;
     Status setRc = transportLayer_->Set(*buffer, setParam, transportResult);
@@ -575,7 +574,7 @@ Status RoutedMode::BuildTransportGetResponse(
                                              "Invalid object data response");
         FullParam param;
         auto bufferInfo = boundMode_->MakeObjectBufferInfo(item.objectKey, const_cast<uint8_t *>(data.externalData),
-                                                           dataSize, 0, param, false, 0);
+                                                           dataSize, 0, param, 0);
         bufferInfo->ubGetBufferHandle = data.externalOwner;
         ubBufferInfos.emplace(item.objectKey, std::move(bufferInfo));
         payloadInfo->add_part_index(0);
@@ -617,7 +616,7 @@ Status RoutedMode::MaterializeTransportItem(const std::string &objectKey, client
         param.cacheType = meta.mode.GetCacheType();
         // The routed owner checks the target session generation, so the legacy initial-Worker version is unused.
         auto bufferInfo = boundMode_->MakeObjectBufferInfo(item.objectKey, const_cast<uint8_t *>(data.externalData),
-                                                           data.externalSize, meta.metadataSize, param, meta.isSeal, 0,
+                                                           data.externalSize, meta.metadataSize, param, 0,
                                                            meta.shmId);
         bufferInfo->workerAddr = meta.workerAddr;
         bufferInfo->receiveBufferOwner = std::move(data.externalOwner);

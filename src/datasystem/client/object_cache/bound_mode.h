@@ -61,8 +61,7 @@ public:
         std::function<Status()> checkConnection;
         std::function<Status()> checkConnWhileShmModify;
         std::function<bool(uint32_t)> isBufferAlive;
-        std::function<Status(const std::shared_ptr<ObjectBufferInfo> &, const std::unordered_set<std::string> &,
-                             bool)>
+        std::function<Status(const std::shared_ptr<ObjectBufferInfo> &, const std::unordered_set<std::string> &)>
             publishRoutedBuffer;
         std::function<bool(const Status &, SetFailureStage, const HostPort &, std::vector<HostPort> &)>
             handleSetRouteFailure;
@@ -129,8 +128,6 @@ public:
     void BatchDecreaseRefCnt(const std::vector<std::pair<ShmKey, std::uint32_t>> &shmInfos);
     void DecreaseReferenceCnt(const ShmKey &shmId, bool isShm, uint32_t version = 0);
     Status DecreaseReferenceCntImpl(const ShmKey &shmId, bool isShm, uint32_t version);
-    Status Seal(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
-                const std::unordered_set<std::string> &nestedObjectKeys, bool isShm);
     Status Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
                    const std::unordered_set<std::string> &nestedObjectKeys, bool isShm);
     Status SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data, uint64_t length,
@@ -174,7 +171,7 @@ public:
                        std::shared_ptr<client::IMmapTableEntry> &mmapEntry, uint8_t *&pointer);
     static std::shared_ptr<ObjectBufferInfo> MakeObjectBufferInfo(
         const std::string &objectKey, uint8_t *pointer, uint64_t size, uint64_t metaSize, const FullParam &param,
-        bool isSeal, uint32_t version, const ShmKey &shmId = {},
+        uint32_t version, const ShmKey &shmId = {},
         const std::shared_ptr<RpcMessage> &payloadPointer = nullptr,
         std::shared_ptr<client::IMmapTableEntry> mmapEntry = nullptr,
         std::shared_ptr<RemoteH2DHostInfoPb> remoteHostInfo = nullptr);

@@ -125,7 +125,7 @@ Buffer
 
     .. cpp:function:: Status Seal(const std::unordered_set<std::string> &nestedKeys = {})
 
-        发布不可变数据到服务器。
+        发布数据到服务器，语义等同 Publish（封存语义已移除）。
 
         参数：
             - **nestedKeys** - 嵌套对象的键集合，默认为空集合。

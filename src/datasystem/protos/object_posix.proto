@@ -126,7 +126,7 @@ message PublishReqPb {
   uint32 write_mode = 7;
   uint32 consistency_type = 8;
   string shm_id = 9;
-  bool is_seal = 10;
+  reserved 10;
   bool is_retry = 11;
   uint32 ttl_second = 12;
   // For the meaning of the value, see 'ExistenceOpt' enum class.
@@ -241,7 +241,7 @@ message GetRspPb {
     int64 metadata_size = 4;
     int64 mmap_size = 5;
     int64 version = 6;
-    bool is_seal = 7;
+    reserved 7;
     string object_key = 8;
     bool keep = 9;
     uint32 write_mode = 10;
@@ -255,7 +255,7 @@ message GetRspPb {
   message PayloadInfoPb {
   	string object_key = 1;
   	int64 data_size = 2;
-    bool is_seal = 3;
+    reserved 3;
     int64 version = 4;
     bool keep = 5;
     uint32 write_mode = 6;
@@ -717,7 +717,7 @@ message QueryAndGetShmInfoPb {
   int64 metadata_size = 4;
   int64 mmap_size = 5;
   string shm_id = 6;
-  bool is_seal = 7;
+  reserved 7;
   uint32 write_mode = 8;
   uint32 consistency_type = 9;
   uint32 cache_type = 10;

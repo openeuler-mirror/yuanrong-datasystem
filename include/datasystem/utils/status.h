@@ -87,7 +87,6 @@ enum StatusCode : uint32_t {
     K_RPC_NETWORK_BLIP = 1012,
 
     // object error code, range: [2000, 3000)
-    K_OC_ALREADY_SEALED = 2000,
     K_OC_OBJECT_NOT_IN_USED = 2001,
     K_OC_REMOTE_GET_NOT_ENOUGH = 2002,
     K_WRITE_BACK_QUEUE_FULL = 2003,

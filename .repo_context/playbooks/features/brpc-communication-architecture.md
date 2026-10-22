@@ -168,7 +168,7 @@ Treat the following as review-blocking until justified:
 - adding large protobuf fields for object/stream data that should remain in shm, RDMA, or attachment payload;
 - holding locks across synchronous RPC, `AsyncRead`, stream reads/writes, or RDMA visibility waits;
 - enabling brpc internal retry on paths already using datasystem `RetryOnError` slicing;
-- retrying non-idempotent metadata operations such as seal/update paths without explicit idempotency proof;
+- retrying non-idempotent metadata operations without explicit idempotency proof;
 - adding high-frequency success logs in request-critical RPC paths.
 
 ## Required Design Notes

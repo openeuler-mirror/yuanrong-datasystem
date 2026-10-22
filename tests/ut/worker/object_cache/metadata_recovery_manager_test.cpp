@@ -140,7 +140,6 @@ public:
         return returnStatus_;
     }
 
-    RETURN_UNSUPPORTED_MASTER_API(RollbackSeal, const std::string &, uint32_t)
     RETURN_UNSUPPORTED_MASTER_API(Expire, master::ExpireReqPb &, master::ExpireRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(ReconcileMembershipChange, master::ReconciliationQueryPb &,
                                   master::ReconciliationRspPb &)
@@ -205,22 +204,19 @@ private:
 
 class WorkerRemoteMasterRpcDiagnosticTest : public CommonTest {};
 
-TEST_F(WorkerRemoteMasterRpcDiagnosticTest, SealCreateMetaTimeoutReportsRpcDiagnostic)
+TEST_F(WorkerRemoteMasterRpcDiagnosticTest, CreateMetaDeadlineExhaustedFailsFast)
 {
     HostPort local("127.0.0.1", 18500);
     HostPort master("127.0.0.1", 18501);
     worker::WorkerRemoteMasterOCApi api(master, local, nullptr);
     master::CreateMetaReqPb req;
     master::CreateMetaRspPb rsp;
-    req.mutable_meta()->set_life_state(static_cast<uint32_t>(ObjectLifeState::OBJECT_SEALED));
 
     GetRequestContext()->reqTimeoutDuration.Init(0);
     Status rc = api.CreateMeta(req, rsp);
     GetRequestContext()->reqTimeoutDuration.Init();
 
     ASSERT_EQ(rc.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
-    EXPECT_NE(rc.GetMsg().find("[" + local.ToString() + "]-CreateMeta->[" + master.ToString() + "]"), std::string::npos)
-        << rc.ToString();
 }
 
 #undef RETURN_UNSUPPORTED_MASTER_API
@@ -277,7 +273,7 @@ public:
         auto obj = std::make_unique<ObjCacheShmUnit>();
         obj->SetDataSize(dataSize);
         obj->SetCreateTime(version);
-        obj->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+        obj->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
         obj->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
         obj->stateInfo.SetDataFormat(DataFormat::BINARY);
         obj->stateInfo.SetPrimaryCopy(true);
@@ -351,7 +347,7 @@ ObjectMetaPb BuildRecoverMeta(const std::string &objectKey, WriteMode writeMode,
     meta.set_object_key(objectKey);
     meta.set_data_size(2048);
     meta.set_version(9);
-    meta.set_life_state(static_cast<uint32_t>(ObjectLifeState::OBJECT_SEALED));
+    meta.set_life_state(2u);  // legacy persisted OBJECT_SEALED; recovery must normalize to PUBLISHED
     meta.set_primary_address(primaryAddress);
     auto *config = meta.mutable_config();
     config->set_write_mode(static_cast<uint32_t>(writeMode));
@@ -601,6 +597,7 @@ TEST_F(MetaDataRecoveryManagerTest, RecoverLocalEntries)
     ASSERT_TRUE(entry->RLock().IsOk());
     EXPECT_EQ((*entry)->GetDataSize(), 2048);
     EXPECT_EQ((*entry)->GetCreateTime(), 9);
+    EXPECT_EQ((*entry)->GetLifeState(), ObjectLifeState::OBJECT_PUBLISHED);
     EXPECT_EQ((*entry)->GetMetadataSize(), 128);
     EXPECT_EQ((*entry)->GetAddress(), "127.0.0.1:18500");
     EXPECT_TRUE((*entry)->stateInfo.IsPrimaryCopy());
@@ -682,7 +679,7 @@ public:
         auto obj = std::make_unique<ObjCacheShmUnit>();
         obj->modeInfo.SetWriteMode(writeMode);
         obj->stateInfo.SetDataFormat(DataFormat::BINARY);
-        obj->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+        obj->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
         DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(obj)));
     }
 

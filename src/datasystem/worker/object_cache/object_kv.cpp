@@ -88,6 +88,12 @@ void SetObjectEntryAccordingToMeta(const ObjectMetaPb &meta, uint64_t metaDataSi
     if (dataFormat == DataFormat::HETERO) {
         SetDeviceObjEntry(meta, metaDataSize, entry);
     } else {
+        auto lifeState = static_cast<ObjectLifeState>(meta.life_state());
+        if (lifeState != ObjectLifeState::OBJECT_INVALID && lifeState != ObjectLifeState::OBJECT_PUBLISHED) {
+            // Legacy persisted value (historical OBJECT_SEALED); normalize to PUBLISHED so
+            // objects written before the seal-semantics removal stay readable and re-publishable.
+            lifeState = ObjectLifeState::OBJECT_PUBLISHED;
+        }
         entry.SetRealObject(CreateObjectEntry(
             { .objectKey = objectKey,
               .dataSize = meta.data_size(),
@@ -97,7 +103,7 @@ void SetObjectEntryAccordingToMeta(const ObjectMetaPb &meta, uint64_t metaDataSi
               .entryMode = ModeInfo(ConsistencyType(configPb.consistency_type()), WriteMode(configPb.write_mode()),
                                     CacheType(configPb.cache_type())),
               .entryState = StateInfo(DataFormat(configPb.data_format())),
-              .lifeState = static_cast<ObjectLifeState>(meta.life_state()) }));
+              .lifeState = lifeState }));
     }
 }
 

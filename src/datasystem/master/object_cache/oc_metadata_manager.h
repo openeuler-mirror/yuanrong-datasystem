@@ -1036,14 +1036,6 @@ public:
         const std::shared_ptr<ServerUnaryWriterReader<GDecreaseRspPb, GDecreaseReqPb>> &serverApi);
 
     /**
-     * @brief Rollback seal.
-     * @param[in] req The rpc request protobuf.
-     * @param[out] rsp The rpc response protobuf.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status RollbackSeal(const RollbackSealReqPb &req, RollbackSealRspPb &rsp);
-
-    /**
      * @brief Increase dependent object count from remote worker.
      * @param[in] req The rpc request protobuf.
      * @param[out] rsp The rpc response protobuf.

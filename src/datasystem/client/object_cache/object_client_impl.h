@@ -152,16 +152,6 @@ public:
     Status Init(bool &needRollbackState, bool enableHeartbeat = true, const KVClientConfig *clientConfig = nullptr);
 
     /**
-     * @brief  Invoke worker client to seal the object.
-     * @param[in] bufferInfo The info (data to be published) contained in the buffer.
-     * @param[in] nestedObjectKeys Objects that depend on objectKey.
-     * @param[in] isShm A flag indicating how the object will be published (shm or non-shm).
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status Seal(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
-                const std::unordered_set<std::string> &nestedObjectKeys, bool isShm);
-
-    /**
      * @brief  Publish the object.
      * @param[in] bufferInfo The info (data to be published) contained in the buffer.
      * @param[in] nestedObjectKeys Objects that depend on objectKey.
@@ -753,10 +743,10 @@ private:
     client::TransportRequestContext BuildTransportRequestContext(const SetRouteContext &routeContext) const;
 
     Status PublishRoutedBuffer(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
-                               const std::unordered_set<std::string> &nestedObjectKeys, bool isSeal);
+                               const std::unordered_set<std::string> &nestedObjectKeys);
 
     Status ReplayRoutedBuffer(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
-                              const std::unordered_set<std::string> &nestedObjectKeys, bool isSeal,
+                              const std::unordered_set<std::string> &nestedObjectKeys,
                               const Status &rejection = Status::OK());
 
     // Routed two-step MSet(vector<Buffer>) (lc=false batch). When every non-placeholder buffer is a
@@ -785,8 +775,7 @@ private:
 
     Status ExecuteSetFlow(const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
                           const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence,
-                          int32_t requestTimeoutMs, bool isSeal = false,
-                          std::vector<HostPort> excludedWorkers = {},
+                          int32_t requestTimeoutMs, std::vector<HostPort> excludedWorkers = {},
                           const Status &initialRejection = Status::OK());
 
     friend Buffer;

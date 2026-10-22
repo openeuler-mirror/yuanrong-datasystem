@@ -38,12 +38,12 @@ public interface Buffer {
     void publish(List<String> nestedKeys);
 
     /**
-     * Publish immutable data to the server.
+     * Publish data to the server, semantically identical to publish (seal semantics removed).
      */
     void seal();
 
     /**
-     * Publish immutable data to the server.
+     * Publish data to the server, semantically identical to publish (seal semantics removed).
      *
      * @param nestedKeys Object key of the nested object.
      */

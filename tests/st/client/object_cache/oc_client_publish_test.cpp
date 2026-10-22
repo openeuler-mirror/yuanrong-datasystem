@@ -191,24 +191,6 @@ public:
         }
     }
 
-    void CreateAndSeal(const std::shared_ptr<ObjectClient> &client, std::atomic_int &okCnt)
-    {
-        std::shared_ptr<Buffer> buffer;
-        DS_ASSERT_OK(client->Create(objKey, sz, createParam, buffer));
-
-        PublishOrSeal(*buffer, sz,
-                      [&okCnt, &buffer]() -> Status {
-                          auto status = buffer->Seal();
-                          if (status.IsOk()) {
-                              okCnt++;
-                          } else {
-                              LOG(ERROR) << status.ToString();
-                          }
-                          return status;
-                      },
-                      false);
-    }
-
     void CreateAndPublish(const std::shared_ptr<ObjectClient> &client, int createSz = -1)
     {
         if (createSz == -1) {
@@ -317,89 +299,6 @@ public:
             ArrToStr((void *)byteArr.data(), byteArr.size(), str);
             LOG(INFO) << "md5 of bytes: " << hash(str) << " , SubStr:" << str.substr(0, threshold);
         }
-    }
-
-    void SealVarySzSealTwoWorkerCreatePub(int64_t bigDataSz)
-    {
-        std::shared_ptr<ObjectClient> client1;
-        std::shared_ptr<ObjectClient> client2;
-        std::shared_ptr<ObjectClient> client3;
-        InitTestClient(0, client1);
-        InitTestClient(1, client2);
-        InitTestClient(2, client3);
-        int64_t dataSz = 100'000;
-
-        RandomData randomData;
-        auto bytes = randomData.RandomBytes(dataSz);
-        auto bytes2 = randomData.RandomBytes(bigDataSz);
-        auto bytes3 = randomData.RandomBytes(bigDataSz);
-        auto bytes4 = randomData.RandomBytes(bigDataSz);
-        PrintBytes({ bytes, bytes2, bytes3, bytes4 });
-        ASSERT_EQ(Status::OK(), client1->Put(objKey, bytes.data(), bytes.size(), createParam));
-        ASSERT_EQ(Status::OK(), client2->Put(objKey, bytes2.data(), bytes2.size(), createParam));
-
-        {
-            std::vector<Optional<Buffer>> buffers;
-            DS_ASSERT_OK(client2->Get({ objKey }, timeOut, buffers));
-            ASSERT_TRUE(NotExistsNone(buffers));
-            ASSERT_EQ(buffers.size(), 1u);
-            ASSERT_EQ(buffers[0]->WLatch(), Status::OK());
-            datasystem::Raii unlatch([&buffers]() { buffers[0]->UnWLatch(); });
-            ASSERT_EQ(buffers[0]->MemoryCopy(bytes3.data(), bytes3.size()), Status::OK());
-            DS_ASSERT_OK(buffers[0]->Seal());
-        }
-        {
-            std::shared_ptr<Buffer> bufferPtr;
-            DS_ASSERT_OK(client1->Create(objKey, bigDataSz, createParam, bufferPtr));
-            ASSERT_EQ(bufferPtr->WLatch(), Status::OK());
-            datasystem::Raii unlatch([&bufferPtr]() { bufferPtr->UnWLatch(); });
-            ASSERT_EQ(bufferPtr->MemoryCopy(bytes3.data(), bytes3.size()), Status::OK());
-            DS_ASSERT_NOT_OK(bufferPtr->Seal());
-        }
-        GetAndVerify(client1, bytes3);
-        GetAndVerify(client2, bytes3);
-        GetAndVerify(client3, bytes3);
-    }
-
-    void SealVarySzSealTwoWorkerGetPub(int64_t bigDataSz)
-    {
-        std::shared_ptr<ObjectClient> client1;
-        std::shared_ptr<ObjectClient> client2;
-        std::shared_ptr<ObjectClient> client3;
-        InitTestClient(0, client1);
-        InitTestClient(1, client2);
-        InitTestClient(2, client3);
-        int64_t dataSz = 100'000;
-
-        RandomData randomData;
-        auto bytes = randomData.RandomBytes(dataSz);
-        auto bytes2 = randomData.RandomBytes(bigDataSz);
-        auto bytes3 = randomData.RandomBytes(bigDataSz);
-        auto bytes4 = randomData.RandomBytes(bigDataSz);
-        PrintBytes({ bytes, bytes2, bytes3, bytes4 });
-        ASSERT_EQ(Status::OK(), client1->Put(objKey, bytes.data(), bytes.size(), createParam));
-        ASSERT_EQ(Status::OK(), client2->Put(objKey, bytes2.data(), bytes2.size(), createParam));
-
-        {
-            std::vector<Optional<Buffer>> buffers;
-            DS_ASSERT_OK(client2->Get({ objKey }, timeOut, buffers));
-            ASSERT_TRUE(NotExistsNone(buffers));
-            ASSERT_EQ(buffers.size(), 1u);
-            ASSERT_EQ(buffers[0]->WLatch(), Status::OK());
-            datasystem::Raii unlatch([&buffers]() { buffers[0]->UnWLatch(); });
-            ASSERT_EQ(buffers[0]->MemoryCopy(bytes3.data(), bytes3.size()), Status::OK());
-            DS_ASSERT_OK(buffers[0]->Seal());
-        }
-        {
-            std::vector<Optional<Buffer>> buffers;
-            DS_ASSERT_OK(client1->Get({ objKey }, timeOut, buffers));
-            ASSERT_TRUE(NotExistsNone(buffers));
-            ASSERT_EQ(buffers.size(), 1u);
-            DS_ASSERT_NOT_OK(buffers[0]->WLatch());
-        }
-        GetAndVerify(client1, bytes3);
-        GetAndVerify(client2, bytes3);
-        GetAndVerify(client3, bytes3);
     }
 
 protected:
@@ -619,70 +518,6 @@ TEST_F(OCClientPublishTest, TestPutAndDel)
     }
 }
 
-TEST_F(OCClientPublishTest, TestSealAfterSeal)
-{
-    std::shared_ptr<ObjectClient> client1;
-    InitTestClient(0, client1);
-    std::shared_ptr<ObjectClient> client2;
-    InitTestClient(1, client2);
-
-    std::atomic_int okCnt{ 0 };
-    CreateAndSeal(client1, okCnt);
-    ASSERT_EQ(okCnt.load(), 1);
-    CreateAndSeal(client2, okCnt);
-    ASSERT_EQ(okCnt.load(), 1);
-}
-
-TEST_F(OCClientPublishTest, TestPublishAfterSeal)
-{
-    std::shared_ptr<ObjectClient> client1;
-    InitTestClient(0, client1);
-    std::shared_ptr<ObjectClient> client2;
-    InitTestClient(1, client2);
-
-    // 1st: Create shm object and decrease shm reference to 0.
-    std::vector<uint8_t> data(sz, 0);
-    DS_ASSERT_OK(client1->Put(objKey, data.data(), sz, createParam));
-
-    // 2nd: Another client triggers cache invalidation.
-    std::atomic_int okCnt{ 0 };
-    CreateAndSeal(client2, okCnt);
-    ASSERT_EQ(okCnt.load(), 1);
-
-    // 3rd: Should fail after seal.
-    {
-        std::shared_ptr<Buffer> buffer;
-        DS_ASSERT_OK(client1->Create(objKey, sz, createParam, buffer));
-
-        RandomData randomData;
-        auto bytes = randomData.RandomBytes(sz);
-        ASSERT_EQ(buffer->WLatch(), Status::OK());
-        datasystem::Raii unlatch([&buffer]() { buffer->UnWLatch(); });
-        buffer->MemoryCopy(bytes.data(), sz);
-        DS_ASSERT_NOT_OK(buffer->Publish());
-    }
-}
-
-TEST_F(OCClientPublishTest, DISABLED_TestPutAfterSeal)
-{
-    std::shared_ptr<ObjectClient> client1;
-    InitTestClient(0, client1);
-    std::shared_ptr<ObjectClient> client2;
-    InitTestClient(1, client2);
-
-    // 1st: Create shm object and decrease shm reference to 0.
-    std::vector<uint8_t> data(sz, 0);
-    DS_ASSERT_OK(client1->Put(objKey, data.data(), sz, createParam));
-
-    // 2nd: Another client triggers cache invalidation.
-    std::atomic_int okCnt{ 0 };
-    CreateAndSeal(client2, okCnt);
-    ASSERT_EQ(okCnt.load(), 1);
-
-    // 3rd: Should fail after seal.
-    DS_ASSERT_NOT_OK(client1->Put(objKey, data.data(), sz, createParam));
-}
-
 TEST_F(OCClientPublishTest, TestShmCreateCreate)
 {
     std::shared_ptr<ObjectClient> client1;
@@ -881,177 +716,26 @@ TEST_F(OCClientPublishTest, VarySzMultiPub)
     }
 }
 
-TEST_F(OCClientPublishTest, CreateUpdatePubAfterSeal)
+TEST_F(OCClientPublishTest, SealForwardingShimSemantics)
 {
     std::shared_ptr<ObjectClient> client1;
     InitTestClient(0, client1);
-    int64_t dataSz = 100'000;
-    std::shared_ptr<Buffer> bufferPtr1;
-    std::shared_ptr<Buffer> bufferPtr2;
-    CreateParam createParam1 = { .consistencyType = ConsistencyType::CAUSAL };
-    CreateParam createParam2 = { .consistencyType = ConsistencyType::CAUSAL };
-    ASSERT_EQ(Status::OK(), client1->Create(objKey, dataSz, createParam1, bufferPtr1));
-    ASSERT_EQ(Status::OK(), client1->Create(objKey, dataSz, createParam2, bufferPtr2));
-    ASSERT_EQ(Status::OK(), bufferPtr1->Seal());
-    DS_ASSERT_NOT_OK(bufferPtr2->Publish());
-}
+    int64_t sz = 100'000;
 
-TEST_F(OCClientPublishTest, ConcurrentSealAfterPub)
-{
-    std::shared_ptr<ObjectClient> client1;
-    InitTestClient(0, client1);
-    int64_t dataSz1 = 100'000;
-    int64_t dataSz2 = 200'000;
-    CreateParam createParam1 = { .consistencyType = ConsistencyType::CAUSAL };
-    std::shared_ptr<Buffer> bufferPtr1;
-    std::shared_ptr<Buffer> bufferPtr2;
-    ASSERT_EQ(Status::OK(), client1->Create(objKey, dataSz1, createParam1, bufferPtr1));
-    RandomData randomData;
-    {
-        auto bytes = randomData.RandomBytes(dataSz1);
-        ASSERT_EQ(bufferPtr1->WLatch(), Status::OK());
-        datasystem::Raii unlatch([&bufferPtr1]() { bufferPtr1->UnWLatch(); });
-        ASSERT_EQ(bufferPtr1->MemoryCopy(bytes.data(), bytes.size()), Status::OK());
-    }
-    ASSERT_EQ(Status::OK(), bufferPtr1->Publish());
-
-    ASSERT_EQ(Status::OK(), client1->Create(objKey, dataSz2, createParam1, bufferPtr2));
-    {
-        auto bytes = randomData.RandomBytes(dataSz2);
-        ASSERT_EQ(bufferPtr2->WLatch(), Status::OK());
-        datasystem::Raii unlatch([&bufferPtr2]() { bufferPtr2->UnWLatch(); });
-        ASSERT_EQ(bufferPtr2->MemoryCopy(bytes.data(), bytes.size()), Status::OK());
-    }
-    ASSERT_EQ(Status::OK(), bufferPtr2->Publish());
-    int loopNum = 6;
-    size_t numOfThreads = 2;
-    ThreadPool pool(numOfThreads);
-    int okCount = 0;
-    for (int i = 0; i < loopNum; i++) {
-        std::vector<std::future<Status>> futures;
-        futures.emplace_back(pool.Submit([&bufferPtr1]() { return bufferPtr1->Seal(); }));
-        futures.emplace_back(pool.Submit([&bufferPtr2]() { return bufferPtr2->Seal(); }));
-        for (auto &fut : futures) {
-            if (fut.get().IsOk()) {
-                okCount++;
-            }
-        }
-        ASSERT_EQ(okCount, 1);
-    }
-}
-
-TEST_F(OCClientPublishTest, CreateUpdateSingleWorkerSealVarySzSeal)
-{
-    std::shared_ptr<ObjectClient> client1;
-    std::shared_ptr<ObjectClient> client2;
-    std::shared_ptr<ObjectClient> client3;
-    InitTestClient(0, client1);
-    InitTestClient(1, client2);
-    InitTestClient(2, client3);
-    int64_t dataSz = 100'000;
-    int64_t bigDataSz = 600'000;
-    CreateParam createParam = { .consistencyType = ConsistencyType::CAUSAL };
-
-    std::shared_ptr<Buffer> bufferPtr1;
-    std::shared_ptr<Buffer> bufferPtr2;
-    ASSERT_EQ(Status::OK(), client1->Create(objKey, dataSz, createParam, bufferPtr1));
-    ASSERT_EQ(Status::OK(), client1->Create(objKey, bigDataSz, createParam, bufferPtr2));
-    ASSERT_EQ(Status::OK(), bufferPtr1->Publish());
-    ASSERT_EQ(Status::OK(), bufferPtr1->Seal());
-
-    DS_ASSERT_NOT_OK(bufferPtr2->Publish());
-    DS_ASSERT_NOT_OK(bufferPtr2->Seal());
-    {
-        std::vector<Optional<Buffer>> buffers;
-        DS_ASSERT_OK(client1->Get({ objKey }, timeOut, buffers));
-    }
-    {
-        std::vector<Optional<Buffer>> buffers;
-        DS_ASSERT_OK(client2->Get({ objKey }, timeOut, buffers));
-    }
-    {
-        std::vector<Optional<Buffer>> buffers;
-        DS_ASSERT_OK(client3->Get({ objKey }, timeOut, buffers));
-    }
-}
-
-TEST_F(OCClientPublishTest, LEVEL1_CreateUpdateTwoWorkerSealVarySzSealShm)
-{
-    SealVarySzSealTwoWorkerGetPub(600'000);
-}
-
-TEST_F(OCClientPublishTest, CreateUpdateTwoWorkerSealVarySzSealNoShm)
-{
-    SealVarySzSealTwoWorkerGetPub(200'000);
-}
-
-TEST_F(OCClientPublishTest, CreateUpdateTwoWorkerSealVarySzSealShmCreatePub)
-{
-    SealVarySzSealTwoWorkerCreatePub(600'000);
-}
-
-TEST_F(OCClientPublishTest, CreateUpdateTwoWorkerSealVarySzSealNoShmCreatePub)
-{
-    SealVarySzSealTwoWorkerCreatePub(200'000);
-}
-
-TEST_F(OCClientPublishTest, CreateCreateUpdatePubAfterSeal)
-{
-    std::shared_ptr<ObjectClient> client1;
-    InitTestClient(0, client1);
-    std::shared_ptr<ObjectClient> client2;
-    InitTestClient(1, client2);
-    int64_t dataSz = 100'000;
-    std::shared_ptr<Buffer> bufferPtr1;
-    std::shared_ptr<Buffer> bufferPtr2;
-    std::shared_ptr<Buffer> bufferPtr3;
-
-    ASSERT_EQ(Status::OK(), client1->Create(objKey, dataSz, createParam, bufferPtr1));
-    ASSERT_EQ(Status::OK(), client1->Create(objKey, dataSz, createParam, bufferPtr2));
-    ASSERT_EQ(Status::OK(), client2->Create(objKey, dataSz, createParam, bufferPtr3));
-    ASSERT_EQ(Status::OK(), bufferPtr1->Publish());
-    ASSERT_EQ(Status::OK(), bufferPtr3->Seal());
-    DS_ASSERT_NOT_OK(bufferPtr2->Publish());
-}
-
-TEST_F(OCClientPublishTest, CreateObjectAfterSealShm)
-{
-    std::shared_ptr<ObjectClient> client1;
-    InitTestClient(0, client1);
-    int64_t sz = 600'000;
-
+    // Seal forwards to Publish: Create -> Seal -> Get reads the data.
     std::shared_ptr<Buffer> buffer1;
     RandomData randomData;
-    auto bytes = randomData.RandomBytes(sz);
+    auto bytes1 = randomData.RandomBytes(sz);
     {
         DS_ASSERT_OK(client1->Create(objKey, sz, createParam, buffer1));
         DS_ASSERT_OK(buffer1->WLatch());
         datasystem::Raii unlatch([&buffer1]() { buffer1->UnWLatch(); });
-        DS_ASSERT_OK(buffer1->MemoryCopy(bytes.data(), bytes.size()));
+        DS_ASSERT_OK(buffer1->MemoryCopy(bytes1.data(), bytes1.size()));
         DS_ASSERT_OK(buffer1->Seal());
     }
-    std::shared_ptr<Buffer> buffer2;
-    // Cannot create sealed object.
-    ASSERT_EQ(client1->Create(objKey, sz, createParam, buffer2).GetCode(), StatusCode::K_OC_ALREADY_SEALED);
-    GetAndVerify(client1, bytes);
-}
+    GetAndVerify(client1, bytes1);
 
-TEST_F(OCClientPublishTest, PublishObjectAfterSeal)
-{
-    std::shared_ptr<ObjectClient> client1;
-    InitTestClient(0, client1);
-    int64_t sz = 100;
-
-    std::shared_ptr<Buffer> buffer1;
-    RandomData randomData;
-    auto bytes = randomData.RandomBytes(sz);
-    {
-        DS_ASSERT_OK(client1->Create(objKey, sz, createParam, buffer1));
-        DS_ASSERT_OK(buffer1->WLatch());
-        datasystem::Raii unlatch([&buffer1]() { buffer1->UnWLatch(); });
-        DS_ASSERT_OK(buffer1->MemoryCopy(bytes.data(), bytes.size()));
-        DS_ASSERT_OK(buffer1->Seal());
-    }
+    // Seal no longer pins the object: a later Publish overwrites it.
     std::shared_ptr<Buffer> buffer2;
     auto bytes2 = randomData.RandomBytes(sz);
     {
@@ -1059,98 +743,9 @@ TEST_F(OCClientPublishTest, PublishObjectAfterSeal)
         DS_ASSERT_OK(buffer2->WLatch());
         datasystem::Raii unlatch([&buffer2]() { buffer2->UnWLatch(); });
         DS_ASSERT_OK(buffer2->MemoryCopy(bytes2.data(), bytes2.size()));
-        ASSERT_EQ(buffer2->Publish().GetCode(), StatusCode::K_OC_ALREADY_SEALED);
+        DS_ASSERT_OK(buffer2->Publish());
     }
-    GetAndVerify(client1, bytes);
-}
-
-TEST_F(OCClientPublishTest, DoubleSealDiffSize)
-{
-    std::shared_ptr<ObjectClient> client1;
-    InitTestClient(0, client1);
-    int64_t szShm = 600'000;
-    int64_t szNoShm = 100'000;
-
-    std::shared_ptr<Buffer> buffer1;
-    std::shared_ptr<Buffer> buffer2;
-    RandomData randomData;
-    auto bytes = randomData.RandomBytes(szShm);
-    {
-        DS_ASSERT_OK(client1->Create(objKey, szShm, createParam, buffer1));
-        DS_ASSERT_OK(buffer1->WLatch());
-        datasystem::Raii unlatch([&buffer1]() { buffer1->UnWLatch(); });
-        DS_ASSERT_OK(buffer1->MemoryCopy(bytes.data(), bytes.size()));
-        DS_ASSERT_OK(buffer1->Seal());
-
-        auto bytes2 = randomData.RandomBytes(szNoShm);
-        DS_ASSERT_OK(client1->Create(objKey, szNoShm, createParam, buffer2));
-        DS_ASSERT_OK(buffer2->WLatch());
-        datasystem::Raii unlatch2([&buffer2]() { buffer2->UnWLatch(); });
-        DS_ASSERT_OK(buffer2->MemoryCopy(bytes2.data(), bytes2.size()));
-        // Cannot double seal.
-        ASSERT_EQ(buffer2->Seal().GetCode(), StatusCode::K_OC_ALREADY_SEALED);
-    }
-    GetAndVerify(client1, bytes);
-}
-
-TEST_F(OCClientPublishTest, DoubleSealNoShm)
-{
-    std::shared_ptr<ObjectClient> client1;
-    InitTestClient(0, client1);
-    int64_t sz = 100'000;
-
-    std::shared_ptr<Buffer> buffer1;
-    std::shared_ptr<Buffer> buffer2;
-    RandomData randomData;
-    auto bytes = randomData.RandomBytes(sz);
-    auto bytes2 = randomData.RandomBytes(sz);
-    {
-        DS_ASSERT_OK(client1->Create(objKey, sz, createParam, buffer1));
-        DS_ASSERT_OK(buffer1->WLatch());
-        datasystem::Raii unlatch([&buffer1]() { buffer1->UnWLatch(); });
-        DS_ASSERT_OK(buffer1->MemoryCopy(bytes.data(), bytes.size()));
-        DS_ASSERT_OK(buffer1->Seal());
-
-        // Create success because no shm.
-        DS_ASSERT_OK(client1->Create(objKey, sz, createParam, buffer2));
-        DS_ASSERT_OK(buffer2->WLatch());
-        datasystem::Raii unlatch2([&buffer2]() { buffer2->UnWLatch(); });
-        DS_ASSERT_OK(buffer2->MemoryCopy(bytes2.data(), bytes2.size()));
-        // Cannot double seal.
-        ASSERT_EQ(buffer2->Seal().GetCode(), StatusCode::K_OC_ALREADY_SEALED);
-    }
-    GetAndVerify(client1, bytes);
-}
-
-TEST_F(OCClientPublishTest, DoubleSealDiffWorker)
-{
-    std::shared_ptr<ObjectClient> client1;
-    std::shared_ptr<ObjectClient> client2;
-    InitTestClient(0, client1);
-    InitTestClient(1, client2);
-    int64_t sz = 100'000;
-
-    std::shared_ptr<Buffer> buffer1;
-    std::shared_ptr<Buffer> buffer2;
-    RandomData randomData;
-    auto bytes = randomData.RandomBytes(sz);
-    auto bytes2 = randomData.RandomBytes(sz);
-    {
-        DS_ASSERT_OK(client1->Create(objKey, sz, createParam, buffer1));
-        DS_ASSERT_OK(buffer1->WLatch());
-        datasystem::Raii unlatch([&buffer1]() { buffer1->UnWLatch(); });
-        DS_ASSERT_OK(buffer1->MemoryCopy(bytes.data(), bytes.size()));
-        DS_ASSERT_OK(buffer1->Seal());
-
-        // Create success because no shm.
-        DS_ASSERT_OK(client2->Create(objKey, sz, createParam, buffer2));
-        DS_ASSERT_OK(buffer2->WLatch());
-        datasystem::Raii unlatch2([&buffer2]() { buffer2->UnWLatch(); });
-        DS_ASSERT_OK(buffer2->MemoryCopy(bytes2.data(), bytes2.size()));
-        // Cannot double seal.
-        ASSERT_EQ(buffer2->Seal().GetCode(), StatusCode::K_OC_ALREADY_SEALED);
-    }
-    GetAndVerify(client1, bytes);
+    GetAndVerify(client1, bytes2);
 }
 }  // namespace st
 }  // namespace datasystem

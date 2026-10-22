@@ -279,14 +279,6 @@ public:
     Status PushMetaToMaster(const PushMetaToMasterReqPb &req, PushMetaToMasterRspPb &rsp) override;
 
     /**
-     * @brief Rollback the seal req.
-     * @param[in] req The rpc req protobuf.
-     * @param[out] rsp The rpc rsp protobuf.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status RollbackSeal(const RollbackSealReqPb &req, RollbackSealRspPb &rsp) override;
-
-    /**
      * @brief Check if the asking worker needs reconciliaton. If so, trigger reconciliation.
      * @param[in] req The rpc req protobuf.
      * @param[out] rsp The rpc rsp protobuf.

@@ -1597,7 +1597,7 @@ TEST_F(HeatEvictionTest, CopyWatermarkUsesAllocatorAccountingAndStablePrimaryFil
     DS_ASSERT_OK(CreateObject("deleting-primary", payloadSize, WriteMode::NONE_L2_CACHE_EVICT, true));
     auto noShm = std::make_unique<ObjCacheShmUnit>();
     noShm->SetDataSize(payloadSize);
-    noShm->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+    noShm->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
     noShm->stateInfo.SetPrimaryCopy(true);
     DS_ASSERT_OK(objectTable_->Insert("no-shm-primary", std::move(noShm)));
     SeedHeat("hot-primary", 5.0, nowMs);

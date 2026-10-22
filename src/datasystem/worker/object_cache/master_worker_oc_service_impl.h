@@ -79,7 +79,7 @@ public:
     Status DeletePersistenceObject(const DeletePersistenceObjectReqPb &req, DeletePersistenceObjectRspPb &rsp) override;
 
     /**
-     * @brief Publish already sealed object meta from master to worker.
+     * @brief Publish already published object meta from master to worker.
      * @param[in] req The rpc request protobuf.
      * @param[out] resp The rpc response protobuf.
      * @return Status of the call.

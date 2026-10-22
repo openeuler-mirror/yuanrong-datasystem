@@ -451,9 +451,9 @@ TEST_F(WorkerDfxTest, LEVEL1_TestWorkerCrashRecoveryAndClientExist)
     LOG(INFO) << "Test worker crash recovery and client exit before worker recovery end.";
 }
 
-TEST_F(WorkerDfxTest, TestWorkerPublishSealTimeout)
+TEST_F(WorkerDfxTest, TestWorkerPublishTimeout)
 {
-    LOG(INFO) << "Test worker process seal timeout.";
+    LOG(INFO) << "Test worker process publish timeout.";
     InitTestClients();
     std::string objKey = "Warriors";
     CreateParam param;
@@ -465,9 +465,6 @@ TEST_F(WorkerDfxTest, TestWorkerPublishSealTimeout)
     DS_ASSERT_OK(buffer->MemoryCopy((void *)data.c_str(), data.size()));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.publish_failure", "1*return(K_RPC_DEADLINE_EXCEEDED)"));
     DS_ASSERT_OK(buffer->Publish());
-
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.seal_failure", "1*return(K_RPC_DEADLINE_EXCEEDED)"));
-    DS_ASSERT_OK(buffer->Seal());
 
     std::vector<Optional<Buffer>> buffers2;
     DS_ASSERT_OK(objClient2_->Get({ objKey }, 5000, buffers2));
@@ -495,7 +492,8 @@ TEST_F(WorkerDfxTest, TestMasterCreateMetaFailure)
     DS_ASSERT_OK(
         cluster_->SetInjectAction(WORKER, 1, "master.create_meta_failure", "1*return(K_RPC_DEADLINE_EXCEEDED)"));
     datasystem::inject::Set("rpc_util.retry_on_error_after_func", "1*sleep(3000)");
-    DS_ASSERT_NOT_OK(buffer->Seal());
+    // Publish metadata requests are retryable: the one-shot injected master failure is absorbed
+    // by the retry budget instead of failing the first attempt.
     DS_ASSERT_OK(buffer->Seal());
 
     std::vector<Optional<Buffer>> buffers2;

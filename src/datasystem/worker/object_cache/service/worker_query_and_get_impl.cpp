@@ -492,7 +492,6 @@ void WorkerQueryAndGetImpl::EncodeShm(const QueryAndGetShmDataReqPb &request, si
     info->set_metadata_size(static_cast<int64_t>(params.metaSize));
     info->set_mmap_size(static_cast<int64_t>(params.shmUnit->GetMmapSize()));
     info->set_shm_id(params.shmUnit->id.ToString());
-    info->set_is_seal(params.isSealed);
     info->set_write_mode(static_cast<uint32_t>(params.objectMode.GetWriteMode()));
     info->set_consistency_type(static_cast<uint32_t>(params.objectMode.GetConsistencyType()));
     shmBytes += params.dataSize;

@@ -722,7 +722,6 @@ void GetRequest::SetShmObjectInfoPb(const ObjectKey &, size_t objectIndex, GetOb
     info.set_data_size(static_cast<int64_t>(safeEntry.dataSize));
     info.set_metadata_size(static_cast<int64_t>(safeEntry.metaSize));
     info.set_version(static_cast<int64_t>(safeEntry.createTime));
-    info.set_is_seal(safeEntry.isSealed);
     info.set_write_mode(static_cast<uint32_t>(safeEntry.objectMode.GetWriteMode()));
     info.set_consistency_type(static_cast<uint32_t>(safeEntry.objectMode.GetConsistencyType()));
 }
@@ -741,7 +740,6 @@ void GetRequest::SetNoShmObjectInfoPb(const ObjectKey &, size_t objectIndex, con
     const auto &safeEntry = *objectInfo.params;
     info.set_data_size(static_cast<int64_t>(objectInfo.offsetInfo.readSize));
     info.set_version(static_cast<int64_t>(safeEntry.createTime));
-    info.set_is_seal(safeEntry.isSealed);
     info.set_write_mode(static_cast<uint32_t>(safeEntry.objectMode.GetWriteMode()));
     info.set_consistency_type(static_cast<uint32_t>(safeEntry.objectMode.GetConsistencyType()));
 }
@@ -762,7 +760,6 @@ void GetRequest::SetDefaultObjectInfoPb(const ObjectKey &, size_t objectIndex, G
     info.set_metadata_size(-1);
     info.set_mmap_size(-1);
     info.set_version(-1);
-    info.set_is_seal(false);
     info.set_write_mode(static_cast<uint32_t>(WriteMode::NONE_L2_CACHE));
     info.set_consistency_type(static_cast<uint32_t>(ConsistencyType::PRAM));
 }

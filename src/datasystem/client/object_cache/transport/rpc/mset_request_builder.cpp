@@ -37,8 +37,8 @@ Status ValidateMSetRequest(const std::vector<std::shared_ptr<ObjectBuffer>> &buf
     CHECK_FAIL_RETURN_STATUS(!buffers.empty(), K_INVALID, "MSet buffer list must not be empty");
     CHECK_FAIL_RETURN_STATUS(Validator::IsBatchSizeUnderLimit(buffers.size()), K_INVALID,
                              "MSet buffer count exceeds the batch limit");
-    CHECK_FAIL_RETURN_STATUS(param.nestedKeys.empty() && !param.isSeal && !param.keep, K_NOT_SUPPORTED,
-                             "MSet does not support nested keys, seal, or keep");
+    CHECK_FAIL_RETURN_STATUS(param.nestedKeys.empty() && !param.keep, K_NOT_SUPPORTED,
+                             "MSet does not support nested keys or keep");
 
     const ObjectBufferInfo *first = nullptr;
     std::unordered_set<std::string> uniqueKeys;

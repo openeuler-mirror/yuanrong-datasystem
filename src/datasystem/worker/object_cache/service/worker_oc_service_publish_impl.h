@@ -54,7 +54,7 @@ public:
                                HostPort &localAddress);
 
     /**
-     * @brief Handle Put/Publish/Seal request from the client.
+     * @brief Handle Put/Publish request from the client.
      * @param[in] req The rpc request protobuf.
      * @param[out] resp The rpc response protobuf.
      * @param[in] payloads The rpc request payload.
@@ -90,7 +90,7 @@ private:
     Status PublishImpl(const PublishReqPb &req, PublishRspPb &resp, std::vector<RpcMessage> &payloads);
 
     /**
-     * @brief Reserve/get and lock a object from ObjectTable and publish/seal it.
+     * @brief Reserve/get and lock a object from ObjectTable and publish it.
      * @param[in] objectKey The object key.
      * @param[in] req Publish request meta.
      * @param[in] clientId Client id.
@@ -205,15 +205,13 @@ private:
     /**
      * @brief Rollback after publishing failure
      * @param[in] objectKV Safe object entry and its corresponding objectKey.
-     * @param[in] oldLifeState The old life state of object.
-     * @param[in] newLifeState The new life state of object.
      * @return Status of the call.
      */
-    Status RollbackPublishFailure(ObjectKV &objectKV, ObjectLifeState oldLifeState, ObjectLifeState newLifeState);
+    Status RollbackPublishFailure(ObjectKV &objectKV);
 
     /**
      * @brief Publish a newly created or updated object. This function will publish entry and save data to cache.
-     * @param[in/out] objectKV The object to be sealed and its corresponding id.
+     * @param[in/out] objectKV The object to be published and its corresponding id.
      * @param[in] params Publish parameters.
      * @param[out] payloads Payloads for non-shared-memory cases.
      * @return Status of the call.

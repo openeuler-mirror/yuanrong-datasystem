@@ -595,43 +595,6 @@ std::string MockGetClientId()
     return "123456";
 }
 
-TEST_F(ObjectClientTest, ImmutableObjectTest)
-{
-    std::shared_ptr<ObjectClient> client;
-    InitTestClient(0, client);
-
-    std::string objectKey = NewObjectKey();
-    std::shared_ptr<Buffer> buffer;
-    DS_ASSERT_OK(client->Create(objectKey, SHM_SIZE, CreateParam{}, buffer));
-    DS_ASSERT_OK(buffer->Seal());
-    ASSERT_NE(buffer, nullptr);
-    DS_ASSERT_NOT_OK(buffer->Seal());
-}
-
-TEST_F(ObjectClientTest, TestPublishSealOrderConstraint)
-{
-    std::shared_ptr<ObjectClient> client;
-    InitTestClient(0, client);
-    // Seal followed by Publish should fail
-    {
-        std::string objectKey = NewObjectKey();
-        std::shared_ptr<Buffer> buffer;
-        DS_ASSERT_OK(client->Create(objectKey, SHM_SIZE, CreateParam{}, buffer));
-        ASSERT_NE(buffer, nullptr);
-        DS_ASSERT_OK(buffer->Seal());
-        DS_ASSERT_NOT_OK(buffer->Publish());
-    }
-    // Publish followed by Seal should success
-    {
-        std::string objectKey = NewObjectKey();
-        std::shared_ptr<Buffer> buffer;
-        DS_ASSERT_OK(client->Create(objectKey, SHM_SIZE, CreateParam{}, buffer));
-        ASSERT_NE(buffer, nullptr);
-        DS_ASSERT_OK(buffer->Publish());
-        DS_ASSERT_OK(buffer->Seal());
-    }
-}
-
 TEST_F(ObjectClientTest, LatestObjectGetTest)
 {
     std::shared_ptr<ObjectClient> client1;
@@ -683,27 +646,7 @@ TEST_F(ObjectClientTest, ClientStateSync)
     std::vector<Optional<Buffer>> dataList;
     DS_ASSERT_OK(client2->Get(getObjList, 0, dataList));
     ASSERT_TRUE(NotExistsNone(dataList));
-    AssertStatusCode(dataList[0]->Seal(), K_OC_ALREADY_SEALED);
-}
-
-TEST_F(ObjectClientTest, RemoteSealTest)
-{
-    std::shared_ptr<ObjectClient> client1;
-    std::shared_ptr<ObjectClient> client2;
-    InitTestClient(0, client1);
-    InitTestClient(1, client2);
-
-    std::string objectKey = NewObjectKey();
-    std::shared_ptr<Buffer> buffer;
-    DS_ASSERT_OK(client1->Create(objectKey, 20, CreateParam{}, buffer));
-    DS_ASSERT_OK(buffer->Publish());
-
-    std::vector<std::string> getObjList{ objectKey };
-    std::vector<Optional<Buffer>> dataList;
-    DS_ASSERT_OK(client2->Get(getObjList, 0, dataList));
-    ASSERT_TRUE(NotExistsNone(dataList));
     DS_ASSERT_OK(dataList[0]->Seal());
-    DS_ASSERT_NOT_OK(buffer->Publish());
 }
 
 TEST_F(ObjectClientTest, ExpireObjectUpdate)
@@ -750,33 +693,6 @@ TEST_F(ObjectClientTest, ExpireObjectUpdate)
     ASSERT_EQ(hash(worker1Result), hash(worker0_data2));
 }
 
-TEST_F(ObjectClientTest, AsynPublishSealTest)
-{
-    std::shared_ptr<ObjectClient> client1;
-    std::shared_ptr<ObjectClient> client2;
-    InitTestClient(0, client1);
-    InitTestClient(1, client2);
-
-    std::string objectKey = NewObjectKey();
-    std::shared_ptr<Buffer> buffer;
-    DS_ASSERT_OK(client1->Create(objectKey, SHM_SIZE, CreateParam{}, buffer));
-    DS_ASSERT_OK(buffer->Publish());
-
-    std::vector<std::string> getObjList{ objectKey };
-    std::vector<Optional<Buffer>> dataList;
-    DS_ASSERT_OK(client2->Get(getObjList, 0, dataList));
-    ASSERT_TRUE(NotExistsNone(dataList));
-
-    ThreadPool threadPool(2);
-    Status rc1;
-    Status rc2;
-    auto fut1 = threadPool.Submit([&buffer, &rc1]() { rc1 = buffer->Seal(); });
-    auto fut2 = threadPool.Submit([&dataList, &rc2]() { rc2 = dataList[0]->Publish(); });
-    fut1.get();
-    fut2.get();
-    ASSERT_TRUE((rc1.IsOk() || rc2.IsOk()));
-}
-
 TEST_F(ObjectClientTest, AsynPublishTest)
 {
     std::shared_ptr<ObjectClient> client1;
@@ -817,22 +733,6 @@ TEST_F(ObjectClientTest, PublishCreateMetaRetry)
     DS_ASSERT_OK(buffer->Publish());
 }
 
-TEST_F(ObjectClientTest, SealCreateMetaNotRetry)
-{
-    std::shared_ptr<ObjectClient> client1;
-    int timeoutMs = 3000;
-    InitTestClient(0, client1, timeoutMs);
-
-    std::string objectKey = NewObjectKey();
-    std::shared_ptr<Buffer> buffer;
-    DS_ASSERT_OK(client1->Create(objectKey, SHM_SIZE, CreateParam{}, buffer));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "MasterOCServiceImpl.CreateMeta.idempotence",
-                                           "1*return(K_RPC_CANCELLED)"));
-    datasystem::inject::Set("rpc_util.retry_on_error_after_func", "1*sleep(3000)");
-    // seal create meta is not idempotence
-    ASSERT_EQ(buffer->Seal().GetCode(), StatusCode::K_RPC_CANCELLED);
-}
-
 TEST_F(ObjectClientTest, PublishUpdateMetaRetry)
 {
     std::shared_ptr<ObjectClient> client1;
@@ -845,23 +745,6 @@ TEST_F(ObjectClientTest, PublishUpdateMetaRetry)
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.update_meta_failure", "1*return(K_RPC_CANCELLED)"));
     DS_ASSERT_OK(buffer->Publish());
-}
-
-TEST_F(ObjectClientTest, SealUpdateMetaNotRetry)
-{
-    std::shared_ptr<ObjectClient> client1;
-    int timeoutMs = 3000;
-    InitTestClient(0, client1, timeoutMs);
-
-    std::string objectKey = NewObjectKey();
-    std::shared_ptr<Buffer> buffer;
-    DS_ASSERT_OK(client1->Create(objectKey, SHM_SIZE, CreateParam{}, buffer));
-    DS_ASSERT_OK(buffer->Publish());
-
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.update_meta_failure", "1*return(K_RPC_CANCELLED)"));
-    datasystem::inject::Set("rpc_util.retry_on_error_after_func", "1*sleep(3000)");
-    // seal create meta is not idempotence
-    ASSERT_EQ(buffer->Seal().GetCode(), StatusCode::K_RPC_CANCELLED);
 }
 
 TEST_F(ObjectClientTest, PublishMaster2WorkerUpdateNotificationRetry)

@@ -151,11 +151,7 @@ WorkerOcServicePublishImpl::WorkerOcServicePublishImpl(WorkerOcServiceCrudParam 
 
 Status WorkerOcServicePublishImpl::VertifyObjectReleaseValidity(const PublishReqPb &req, const SafeObjType &safeObj)
 {
-    if (safeObj->IsSealed()) {
-        if (!req.is_retry()) {
-            RETURN_STATUS(StatusCode::K_OC_ALREADY_SEALED, "already be sealed.");
-        }
-    } else if (safeObj->IsPublished()) {
+    if (safeObj->IsPublished()) {
         if (WriteMode(req.write_mode()) != safeObj->modeInfo.GetWriteMode()
             || ConsistencyType(req.consistency_type()) != safeObj->modeInfo.GetConsistencyType()
             || static_cast<CacheType>(req.cache_type()) != safeObj->modeInfo.GetCacheType()) {
@@ -245,7 +241,7 @@ Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &object
 
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
     Timer rpcTimer;
-    const bool retryRequestFailure = params.lifeState != ObjectLifeState::OBJECT_SEALED;
+    const bool retryRequestFailure = true;
     bool rpcDispatched = false;
     Status rc = RetryMetadataRequestWithRouteRefresh(
         workerMasterApi, retryRequestFailure,
@@ -293,7 +289,7 @@ Status WorkerOcServicePublishImpl::UpdateMetadataToMaster(const ObjectKV &object
                             localAddress_.ToString());
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
     Timer rpcTimer;
-    const bool retryRequestFailure = params.lifeState != ObjectLifeState::OBJECT_SEALED;
+    const bool retryRequestFailure = true;
     bool rpcDispatched = false;
     Status rc = RetryMetadataRequestWithRouteRefresh(
         workerMasterApi, retryRequestFailure,
@@ -438,12 +434,6 @@ Status WorkerOcServicePublishImpl::CheckMasterRpcBudget(const std::string &objec
 Status WorkerOcServicePublishImpl::RequestingToMaster(ObjectKV &objectKV, const PublishParams &params)
 {
     const auto &objectKey = objectKV.GetObjKey();
-    SafeObjType &safeObj = objectKV.GetObjEntry();
-
-    if (safeObj->IsSealed() && params.lifeState == ObjectLifeState::OBJECT_SEALED && params.isRetry) {
-        safeObj->stateInfo.SetCacheInvalid(false);
-    }
-    CHECK_FAIL_RETURN_STATUS(!safeObj->IsSealed(), StatusCode::K_OC_ALREADY_SEALED, "already be sealed.");
 
     // Deadline gate: if the client's request budget is already exhausted, do not
     // fire the master CreateMeta/UpdateMeta RPC — its result would be an orphan
@@ -499,8 +489,8 @@ Status WorkerOcServicePublishImpl::RequestingToMasterCore(ObjectKV &objectKV, co
             return Status(code, FormatString("Create meta to master failed. detail: %s", rc.ToString()));
         }
         const std::unordered_set<StatusCode> passthroughError{
-            StatusCode::K_WORKER_TIMEOUT,    StatusCode::K_KVSTORE_ERROR, StatusCode::K_OC_KEY_ALREADY_EXIST,
-            StatusCode::K_OC_ALREADY_SEALED, StatusCode::K_INVALID,       StatusCode::K_TRY_AGAIN
+            StatusCode::K_WORKER_TIMEOUT, StatusCode::K_KVSTORE_ERROR, StatusCode::K_OC_KEY_ALREADY_EXIST,
+            StatusCode::K_INVALID,        StatusCode::K_TRY_AGAIN
         };
         if (passthroughError.find(rc.GetCode()) == passthroughError.end()) {
             rc = Status(K_RUNTIME_ERROR,
@@ -511,18 +501,9 @@ Status WorkerOcServicePublishImpl::RequestingToMasterCore(ObjectKV &objectKV, co
     return rc;
 }
 
-Status WorkerOcServicePublishImpl::RollbackPublishFailure(ObjectKV &objectKV, ObjectLifeState oldLifeState,
-                                                          ObjectLifeState newLifeState)
+Status WorkerOcServicePublishImpl::RollbackPublishFailure(ObjectKV &objectKV)
 {
-    const auto &objectKey = objectKV.GetObjKey();
-
     objectKV.GetObjEntry()->stateInfo.SetCacheInvalid(true);
-    if (newLifeState == ObjectLifeState::OBJECT_SEALED) {
-        std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
-        RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApi(objectKey, workerMasterApi));
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApi->RollbackSeal(objectKey, static_cast<uint32_t>(oldLifeState)),
-                                         FormatString("RollbackSeal failed."));
-    }
     return Status::OK();
 }
 
@@ -549,7 +530,7 @@ Status WorkerOcServicePublishImpl::PublishObject(ObjectKV &objectKV, const Publi
         Status res = SaveBinaryObjectToPersistence(objectKV);
         if (res.IsError()) {
             LOG(ERROR) << "SaveBinaryObjectToPersistence failed. status:" << res.ToString();
-            RETURN_IF_NOT_OK(RollbackPublishFailure(objectKV, oldLifeState, params.lifeState));
+            RETURN_IF_NOT_OK(RollbackPublishFailure(objectKV));
             return res;
         }
     }
@@ -597,8 +578,7 @@ Status WorkerOcServicePublishImpl::PublishObjectWithLock(const std::string &obje
     }
 
     // Step 3: Request to master and save data (non-shm copy).
-    auto newLifeState = req.is_seal() ? ObjectLifeState::OBJECT_SEALED : ObjectLifeState::OBJECT_PUBLISHED;
-    const PublishParams params = { .lifeState = newLifeState,
+    const PublishParams params = { .lifeState = ObjectLifeState::OBJECT_PUBLISHED,
                                    .nestedObjectKeys = nestedObjectKeys,
                                    .isRetry = req.is_retry(),
                                    .ttlSecond = req.ttl_second(),
@@ -654,7 +634,7 @@ Status WorkerOcServicePublishImpl::PublishImpl(const PublishReqPb &req, PublishR
     RETURN_IF_NOT_OK(WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(tenantId, ClientKey::Intern(req.client_id()),
                                                                           shmUnits, memoryRefTable_));
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_key());
-    PerfPoint point(PerfKey::WORKER_SEAL_OBJECT);
+    PerfPoint point(PerfKey::WORKER_PUBLISH_OBJECT);
     auto nestedObjectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.nested_keys());
 
     // Step 2: Do create-or-get logic on object table, and get both locks.
@@ -684,11 +664,7 @@ Status WorkerOcServicePublishImpl::PublishImpl(const PublishReqPb &req, PublishR
     // record the published object size.
     (void)resp;
     point.Record();
-    if (req.is_seal()) {
-        INJECT_POINT("worker.seal_failure");
-    } else {
-        INJECT_POINT("worker.publish_failure");
-    }
+    INJECT_POINT("worker.publish_failure");
     VLOG(1) << "Put success";
     INJECT_POINT("worker.after_publish");
     return Status::OK();
@@ -712,7 +688,6 @@ Status WorkerOcServicePublishImpl::Publish(const PublishReqPb &req, PublishRspPb
     access.Keep(req.keep())
         .WriteMode(req.write_mode())
         .ConsistencyType(req.consistency_type())
-        .IsSeal(req.is_seal())
         .IsRetry(req.is_retry())
         .TtlSecond(req.ttl_second())
         .Existence(req.existence())

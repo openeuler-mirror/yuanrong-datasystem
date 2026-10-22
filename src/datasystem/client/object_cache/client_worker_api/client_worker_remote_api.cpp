@@ -702,7 +702,7 @@ Status ClientWorkerRemoteApi::InvalidateBuffer(const std::string &objectKey)
     return DS_OC_DISPATCH(InvalidateBuffer, opts, req, rsp);
 }
 
-Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, bool isSeal,
+Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm,
                                       const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond,
                                       int existence, int32_t requestTimeoutMs)
 {
@@ -710,7 +710,7 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
     auto config = GetClientLatencyTraceConfig();
     const bool traceEnabled = ShouldCollectLatencyTrace(config);
     PublishReqPb req;
-    RETURN_IF_NOT_OK(PreparePublishReq(bufferInfo, isSeal, nestedKeys, ttlSecond, existence, req));
+    RETURN_IF_NOT_OK(PreparePublishReq(bufferInfo, nestedKeys, ttlSecond, existence, req));
     std::vector<MemView> payloads;
     UrmaFallbackTcpLimiter::Ticket fallbackTicket;
     if (!isShm && !bufferInfo->ubDataSentByMemoryCopy) {
@@ -799,12 +799,6 @@ Status ClientWorkerRemoteApi::DoPublishRpc(PublishReqPb& req, PublishRspPb& rsp,
     if (s.IsOk() && rsp.has_worker_redirect()) {
         return Status(K_SCALE_DOWN, "Worker rejected write before execution")
             .WithExtra(rsp.worker_redirect().SerializeAsString());
-    }
-    if (req.is_retry() && req.is_seal() && s.GetCode() == K_OC_ALREADY_SEALED) {
-        VLOG(1) << FormatString(
-            "Object(%s) retry seal and returned K_OC_ALREADY_SEALED, success is also considered.",
-            req.object_key());
-        return Status::OK();
     }
     isRetry = true;
     return s;

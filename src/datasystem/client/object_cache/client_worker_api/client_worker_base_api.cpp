@@ -114,7 +114,7 @@ Status CopyToUbPoolBuffer(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, c
 }  // namespace
 #endif
 
-Status ClientWorkerBaseApi::PreparePublishReq(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isSeal,
+Status ClientWorkerBaseApi::PreparePublishReq(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
                                               const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond,
                                               int existence, PublishReqPb &req)
 {
@@ -141,7 +141,6 @@ Status ClientWorkerBaseApi::PreparePublishReq(const std::shared_ptr<ObjectBuffer
     req.set_write_mode(static_cast<uint32_t>(bufferInfo->objectMode.GetWriteMode()));
     req.set_consistency_type(static_cast<uint32_t>(bufferInfo->objectMode.GetConsistencyType()));
     req.set_cache_type(static_cast<uint32_t>(bufferInfo->objectMode.GetCacheType()));
-    req.set_is_seal(isSeal);
     req.set_shm_id(bufferInfo->shmId);
     return Status::OK();
 }

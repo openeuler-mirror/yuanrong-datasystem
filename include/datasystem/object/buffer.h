@@ -80,7 +80,7 @@ public:
     /// \return Status of the result.
     Status Publish(const std::unordered_set<std::string> &nestedKeys = {});
 
-    /// \brief Publish immutable data to the server.
+    /// \brief Publish data to the server, semantically identical to Publish (seal semantics removed).
     ///
     /// \param[in] nestedKeys Object key of the nested object.
     ///

@@ -62,7 +62,7 @@ public:
     virtual Status Init() = 0;
 
     /**
-     * @brief Publish already sealed object's meta data to its subscribers.
+     * @brief Publish already published object's meta data to its subscribers.
      * @param[in] req The rpc request protobuf.
      * @param[out] resp The rpc request protobuf.
      * @return Status of the call.

@@ -233,20 +233,6 @@ message RemoveMetaRspPb {
   repeated string need_l2cache_ids = 8;
 }
 
-message RollbackSealReqPb {
-  string object_key = 1;
-  string address = 2;
-  uint32 old_life_state = 3;
-
-  // put to the end, the previous data is used to generate AK and SK signatures.
-  uint64 timestamp = 100;
-  string signature = 101;
-  string access_key = 102;
-}
-
-message RollbackSealRspPb {
-}
-
 message DeleteAllCopyMetaReqPb {
   bytes address = 1;
   repeated string object_keys = 2;
@@ -934,7 +920,6 @@ service MasterOCService {
   rpc GetSeqNoMeta(GetSeqNoMetaReqPb) returns (GetSeqNoMetaRspPb) {option deprecated = true;}
   rpc DelSeqNoMeta(DelSeqNoMetaReqPb) returns (DelSeqNoMetaRspPb) {option deprecated = true;}
   rpc PushMetaToMaster(PushMetaToMasterReqPb) returns (PushMetaToMasterRspPb) {}
-  rpc RollbackSeal(RollbackSealReqPb) returns (RollbackSealRspPb) {}
   rpc GIncNestedRef(GIncNestedRefReqPb) returns (GIncNestedRefRspPb) {}
   rpc GDecNestedRef(GDecNestedRefReqPb) returns (GDecNestedRefRspPb) {}
   rpc ReconcileMembershipChange(ReconciliationQueryPb) returns (ReconciliationRspPb) {

@@ -176,12 +176,12 @@ std::shared_ptr<ObjectBufferInfo> BoundMode::MakeUbPoolBufferInfo(const std::str
     std::shared_ptr<UrmaManager::BufferHandle> ubBufHandle;
     if (UrmaManager::Instance().GetMemoryBufferHandle(ubBufHandle, dataSize).IsOk()) {
         auto info = MakeObjectBufferInfo(objectKey, static_cast<uint8_t*>(ubBufHandle->GetPointer()),
-                                         dataSize, 0, param, false, version, shmId);
+                                         dataSize, 0, param, version, shmId);
         info->ubGetBufferHandle = ubBufHandle;
         return info;
     }
 #endif
-    return MakeObjectBufferInfo(objectKey, nullptr, dataSize, 0, param, false, version, shmId);
+    return MakeObjectBufferInfo(objectKey, nullptr, dataSize, 0, param, version, shmId);
 }
 
 Status BoundMode::CreateShmBuffer(const std::string &objectKey, uint64_t dataSize, const FullParam &param,
@@ -218,7 +218,7 @@ Status BoundMode::CreateShmBuffer(const std::string &objectKey, uint64_t dataSiz
             CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr, StatusCode::K_RUNTIME_ERROR, "Get mmap entry failed");
             bufferInfo =
                 MakeObjectBufferInfo(objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, dataSize, metadataSize,
-                                     param, false, version, shmBuf->id, nullptr, std::move(mmapEntry));
+                                     param, version, shmBuf->id, nullptr, std::move(mmapEntry));
         } else {
             bufferInfo = MakeUbPoolBufferInfo(objectKey, dataSize, param, version, shmBuf->id);
         }
@@ -227,7 +227,7 @@ Status BoundMode::CreateShmBuffer(const std::string &objectKey, uint64_t dataSiz
         memoryRefCount_->IncreaseRef(shmBuf->id);
         RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), host_.getSelf(), newBuffer));
     } else {
-        auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, dataSize, 0, param, false, version);
+        auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, dataSize, 0, param, version);
         RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), host_.getSelf(), newBuffer));
     }
     return Status::OK();
@@ -333,36 +333,6 @@ Status BoundMode::DecreaseReferenceCntImpl(const ShmKey &shmId, bool isShm, uint
     return Status::OK();
 }
 
-Status BoundMode::Seal(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
-                       const std::unordered_set<std::string> &nestedObjectKeys, bool isShm)
-{
-    RETURN_IF_NOT_OK(host_.isClientReady());
-    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
-    PerfPoint sealPoint(PerfKey::CLIENT_SEAL_OBJECT);
-    RETURN_IF_NOT_OK(host_.checkConnection());
-    RETURN_IF_NOT_OK(ObjectClientImpl::CheckValidObjectKeyVector(nestedObjectKeys, true));
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-        Validator::IsBatchSizeUnderLimit(nestedObjectKeys.size()), K_INVALID,
-        FormatString("The nestedObjectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
-    const std::string &objectKey = bufferInfo->objectKey;
-    if (nestedObjectKeys.find(objectKey) != nestedObjectKeys.end()) {
-        RETURN_STATUS(K_UNKNOWN_ERROR, "Nested object references cannot be nested in a loop.");
-    }
-    VLOG(1) << "Begin to seal object, object_key: " << objectKey;
-    if (bufferInfo->isRoutedWrite) {
-        // Routed two-step buffer: seal via transport layer on the worker pinned at Create time.
-        return host_.publishRoutedBuffer(bufferInfo, nestedObjectKeys, true);
-    }
-    PerfPoint rpcPoint(PerfKey::RPC_CLIENT_SEAL_OBJECT);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        workerApi_[LOCAL_WORKER]->Publish(bufferInfo, isShm, true, nestedObjectKeys),
-        FormatString("Seal object %s", objectKey));
-    rpcPoint.Record();
-    VLOG(1) << "Finished sealing object, object_key: " << objectKey;
-    sealPoint.Record();
-    return Status::OK();
-}
-
 Status BoundMode::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
                           const std::unordered_set<std::string> &nestedObjectKeys, bool isShm)
 {
@@ -376,14 +346,15 @@ Status BoundMode::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
         Validator::IsBatchSizeUnderLimit(nestedObjectKeys.size()), K_INVALID,
         FormatString("The nestedObjectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
     const std::string &objectKey = bufferInfo->objectKey;
+    CHECK_FAIL_RETURN_STATUS(nestedObjectKeys.find(objectKey) == nestedObjectKeys.end(), K_UNKNOWN_ERROR,
+                             "Nested object references cannot be nested in a loop.");
     const uint32_t ttlSecond = bufferInfo->ttlSecond;
     const int existence = bufferInfo->existence;
     VLOG(1) << "Begin to publish object, object_key: " << objectKey << " with ttlSecond = " << ttlSecond;
 
-    bufferInfo->isSeal = false;
     if (bufferInfo->isRoutedWrite) {
-        // Routed two-step buffer: the worker was pinned at Create time; seal via transport layer.
-        return host_.publishRoutedBuffer(bufferInfo, nestedObjectKeys, false);
+        // Routed two-step buffer: the worker was pinned at Create time; publish via transport layer.
+        return host_.publishRoutedBuffer(bufferInfo, nestedObjectKeys);
     }
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
@@ -392,7 +363,7 @@ Status BoundMode::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_START);
     }
-    auto rc = workerApi->Publish(bufferInfo, isShm, false, nestedObjectKeys, ttlSecond, existence);
+    auto rc = workerApi->Publish(bufferInfo, isShm, nestedObjectKeys, ttlSecond, existence);
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_END);
     }
@@ -504,7 +475,7 @@ Status BoundMode::ProcessShmPut(const std::string &objectKey, const uint8_t *dat
         mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
         CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr, StatusCode::K_RUNTIME_ERROR, "Get mmap entry failed");
         objInfo = MakeObjectBufferInfo(objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, size, metadataSize,
-                                       param, false, version, shmBuf->id, nullptr, std::move(mmapEntry));
+                                       param, version, shmBuf->id, nullptr, std::move(mmapEntry));
     } else {
         objInfo = MakeUbPoolBufferInfo(objectKey, size, param, version, shmBuf->id);
     }
@@ -531,8 +502,7 @@ Status BoundMode::ProcessShmPut(const std::string &objectKey, const uint8_t *dat
     RETURN_IF_NOT_OK(ApiDeadline::Instance().CheckApiDeadline());
     failureStage = SetFailureStage::PUBLISH;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Publish(objInfo, !urmaDataInfo || objInfo->ubDataSentByMemoryCopy,
-                                                         false, nestedObjectKeys, ttlSecond, existence,
-                                                         requestTimeoutMs),
+                                                         nestedObjectKeys, ttlSecond, existence, requestTimeoutMs),
                                      FormatString("Put object %s", objectKey));
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_END);
@@ -564,13 +534,13 @@ Status BoundMode::ProcessDirectSetWithoutTransport(
         return ProcessShmPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond, routeContext.directWorkerApi,
                              existence, failureStage, requestTimeoutMs);
     }
-    auto info = MakeObjectBufferInfo(objectKey, const_cast<uint8_t *>(data), size, 0, param, false, 0);
+    auto info = MakeObjectBufferInfo(objectKey, const_cast<uint8_t *>(data), size, 0, param, 0);
     const bool traceEnabled = ShouldCollectLatencyTrace(GetClientLatencyTraceConfig());
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_START);
     }
     failureStage = SetFailureStage::PUBLISH;
-    auto rc = routeContext.directWorkerApi->Publish(info, false, false, nestedObjectKeys, ttlSecond, existence,
+    auto rc = routeContext.directWorkerApi->Publish(info, false, nestedObjectKeys, ttlSecond, existence,
                                                     requestTimeoutMs);
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_END);
@@ -853,7 +823,7 @@ Status BoundMode::SetShmObjectBuffer(const std::string &objectKey, const GetRspP
     param.consistencyType = ConsistencyType(info.consistency_type());
     param.cacheType = CacheType(info.cache_type());
     auto bufferInfo =
-        MakeObjectBufferInfo(objectKey, pointer, info.data_size(), info.metadata_size(), param, info.is_seal(), version,
+        MakeObjectBufferInfo(objectKey, pointer, info.data_size(), info.metadata_size(), param, version,
                              ShmKey::Intern(info.shm_id()), nullptr, std::move(mmapEntry));
 
     // Update shared memory reference count.
@@ -879,7 +849,7 @@ Status BoundMode::MmapShmUnit(int64_t fd, uint64_t mmapSize, ptrdiff_t offset,
 
 std::shared_ptr<ObjectBufferInfo> BoundMode::MakeObjectBufferInfo(
     const std::string &objectKey, uint8_t *pointer, uint64_t size, uint64_t metaSize, const FullParam &param,
-    bool isSeal, uint32_t version, const ShmKey &shmId, const std::shared_ptr<RpcMessage> &payloadPointer,
+    uint32_t version, const ShmKey &shmId, const std::shared_ptr<RpcMessage> &payloadPointer,
     std::shared_ptr<client::IMmapTableEntry> mmapEntry, std::shared_ptr<RemoteH2DHostInfoPb> remoteHostInfo)
 {
     auto bufferInfo = std::make_shared<ObjectBufferInfo>();
@@ -893,7 +863,6 @@ std::shared_ptr<ObjectBufferInfo> BoundMode::MakeObjectBufferInfo(
     bufferInfo->objectMode.SetWriteMode(param.writeMode);
     bufferInfo->objectMode.SetConsistencyType(param.consistencyType);
     bufferInfo->objectMode.SetCacheType(param.cacheType);
-    bufferInfo->isSeal = isSeal;
     bufferInfo->version = version;
     bufferInfo->payloadPointer = payloadPointer;
     bufferInfo->mmapEntry = std::move(mmapEntry);
@@ -1074,7 +1043,7 @@ Status BoundMode::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> workerA
             param.cacheType = CacheType(pi->cache_type());
             auto bufferInfo = MakeObjectBufferInfo(
                 mapKey, ubPtr + ubReadOffset, dataSize, 0, param,
-                pi->is_seal(), version, {}, nullptr, nullptr, nullptr);
+                version, {}, nullptr, nullptr, nullptr);
             bufferInfo->ubGetBufferHandle = std::shared_ptr<void>(ubHandle, ubHandle.get());
             ubBufferInfos[mapKey] = std::move(bufferInfo);
             ubReadOffset += dataSize;
@@ -1249,7 +1218,7 @@ Status BoundMode::GetOversizedBufferFromWorkerByChunks(std::shared_ptr<IClientWo
     }
     offsetInfo.AdjustReadSize(objectSize);
     FullParam param;
-    auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, offsetInfo.readSize, 0, param, false, 0);
+    auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, offsetInfo.readSize, 0, param, 0);
     std::shared_ptr<Buffer> mergedBuffer;
     RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), host_.getSelf(), mergedBuffer));
 
@@ -1484,7 +1453,7 @@ Status BoundMode::SetRemoteHostObjectBuffer(const std::string &objectKey, const 
     auto hostInfo = std::make_shared<RemoteH2DHostInfoPb>();
     *hostInfo = std::move(info.host_info());
     auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, info.data_size(), info.metadata_size(), param,
-                                           info.is_seal(), version, {}, nullptr, nullptr, hostInfo);
+                                           version, {}, nullptr, nullptr, hostInfo);
     return Buffer::CreateBuffer(bufferInfo, host_.getSelf(), buffer);
 }
 
@@ -1501,7 +1470,7 @@ Status BoundMode::SetNonShmObjectBuffer(const std::string &objectKey, const GetR
         std::shared_ptr<RpcMessage> payloadSharedPtr =
             std::make_shared<RpcMessage>(std::move(payloads[payloadInfo.part_index(0)]));
         auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, payloadInfo.data_size(), 0, param,
-                                               payloadInfo.is_seal(), version, {}, payloadSharedPtr, nullptr);
+                                               version, {}, payloadSharedPtr, nullptr);
         return Buffer::CreateBuffer(std::move(bufferInfo), host_.getSelf(), bufferPtr);
     } else {
         std::vector<RpcMessage> objectPayloads;
@@ -1514,7 +1483,7 @@ Status BoundMode::SetNonShmObjectBuffer(const std::string &objectKey, const GetR
             objectPayloads.emplace_back(std::move(payloads[partIndex]));
         }
         auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, payloadInfo.data_size(), 0, param,
-                                               payloadInfo.is_seal(), version, {}, nullptr, nullptr);
+                                               version, {}, nullptr, nullptr);
         RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), host_.getSelf(), bufferPtr));
         size_t offset = 0;
         for (const auto &part : objectPayloads) {
@@ -1557,7 +1526,7 @@ Status BoundMode::SetOffsetReadObjectBuffer(const std::string &objectKey, const 
     param.consistencyType = ConsistencyType(info.consistency_type());
     param.cacheType = CacheType(info.cache_type());
     auto bufferInfo =
-        MakeObjectBufferInfo(objectKey, pointer, info.data_size(), info.metadata_size(), param, info.is_seal(), version,
+        MakeObjectBufferInfo(objectKey, pointer, info.data_size(), info.metadata_size(), param, version,
                              ShmKey::Intern(info.shm_id()), nullptr, std::move(mmapEntry));
 
     // Update shared memory reference count.
@@ -1567,7 +1536,7 @@ Status BoundMode::SetOffsetReadObjectBuffer(const std::string &objectKey, const 
         RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), host_.getSelf(), tmpbuffer));
     }
 
-    auto readBufferInfo = MakeObjectBufferInfo(objectKey, nullptr, offsetInfo.readSize, 0, param, info.is_seal(),
+    auto readBufferInfo = MakeObjectBufferInfo(objectKey, nullptr, offsetInfo.readSize, 0, param,
                                                version, {}, nullptr, nullptr);
     RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(readBufferInfo), host_.getSelf(), buffer));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
@@ -1844,7 +1813,7 @@ Status BoundMode::CreateBufferForMultiCreateParamAtIndex(size_t index, bool skip
     Status injectRC = Status::OK();
     auto &createParam = multiCreateParamList[index];
     if (!skipCheckExistence && exists[createParam.index]) {
-        auto bufferInfo = MakeObjectBufferInfo(createParam.objectKey, nullptr, 0, 0, param, false, 0);
+        auto bufferInfo = MakeObjectBufferInfo(createParam.objectKey, nullptr, 0, 0, param, 0);
         std::shared_ptr<Buffer> placeholder;
         RETURN_IF_NOT_OK(Buffer::CreateBuffer(bufferInfo, host_.getSelf(), placeholder));
         bufferList[createParam.index] = std::move(placeholder);
@@ -1854,7 +1823,7 @@ Status BoundMode::CreateBufferForMultiCreateParamAtIndex(size_t index, bool skip
     std::shared_ptr<ObjectBufferInfo> bufferInfo = nullptr;
 #ifdef USE_URMA
     if (createParam.urmaDataInfo) {
-        bufferInfo = MakeObjectBufferInfo(createParam.objectKey, nullptr, createParam.dataSize, 0, param, false,
+        bufferInfo = MakeObjectBufferInfo(createParam.objectKey, nullptr, createParam.dataSize, 0, param,
                                           version, shmBuf->id);
         bufferInfo->ubUrmaDataInfo = createParam.urmaDataInfo;
     } else
@@ -1867,7 +1836,7 @@ Status BoundMode::CreateBufferForMultiCreateParamAtIndex(size_t index, bool skip
         mmapPoint.Record();
 
         bufferInfo = MakeObjectBufferInfo(createParam.objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset,
-                                          createParam.dataSize, createParam.metadataSize, param, false, version,
+                                          createParam.dataSize, createParam.metadataSize, param, version,
                                           shmBuf->id, nullptr, std::move(mmapEntry));
     }
     PerfPoint refPoint(PerfKey::CLIENT_MEMORY_REF_ADD);
@@ -1902,12 +1871,10 @@ Status BoundMode::MemoryCopyParallel(bool isParallel, const std::vector<std::str
             if (buffer == nullptr) {
                 bufferInfoList[i] =
                     MakeObjectBufferInfo(keys[i], reinterpret_cast<uint8_t *>(const_cast<char *>(vals[i].data())),
-                                         vals[i].size(), 0, createParam, false, 0);
+                                         vals[i].size(), 0, createParam, 0);
                 continue;
             }
             RETURN_IF_NOT_OK(buffer->CheckDeprecated());
-            CHECK_FAIL_RETURN_STATUS(!buffer->bufferInfo_->isSeal, K_OC_ALREADY_SEALED,
-                                     "Client object is already sealed");
             AccessTransportKind actualTransportKind = AccessTransportKind::SHM;
             uint8_t transportKindValue = static_cast<uint8_t>(AccessTransportKind::SHM);
             RETURN_IF_NOT_OK(buffer->MemoryCopyWithTransport(

@@ -173,7 +173,7 @@ Status TcpTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param,
         result->publishDefinitelyNotSent = IsBrpcRequestDefinitelyNotSent(invokeRc);
     }
     RETURN_IF_NOT_OK(invokeRc);
-    return SetTransportResponseStatus(rsp, AccessTransportKind::TCP, param.isSeal, param.isRetry);
+    return SetTransportResponseStatus(rsp, AccessTransportKind::TCP);
 }
 
 Status TcpTransporter::MCreate(const HostPort &workerAddr, const std::vector<std::string> &keys,
