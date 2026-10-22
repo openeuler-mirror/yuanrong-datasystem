@@ -1470,7 +1470,7 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
     std::vector<std::shared_ptr<ShmOwner>> shmOwners;
     std::vector<uint32_t> shmIndexMapping(infos.size(), std::numeric_limits<uint32_t>::max());
     // Skip early allocate if the request is both RH2D enabled and supported.
-    if (useFastTransport) {
+    if (useFastTransport || IsRemoteH2DEnabled()) {
         if (!IsRemoteH2DEnabled() || request == nullptr || request->GetClientCommUuid().empty()) {
             RETURN_IF_NOT_OK(AggregateAllocateHelper(infos, shmOwners, shmIndexMapping));
         } else {
