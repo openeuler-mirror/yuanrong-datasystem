@@ -695,7 +695,7 @@ Status UbTransporter::Create(const HostPort &workerAddr, const std::string &key,
     info->objectKey = key;
     info->dataSize = size;
     info->workerAddr = workerAddr;
-    info->objectMode = ModeInfo(param.consistencyType, param.writeMode, param.cacheType);
+    info->objectMode = ModeInfo(param.consistencyType, param.writeMode);
     info->ubDataSentByMemoryCopy = false;
 
     if (createRsp.has_urma_info()) {
@@ -772,7 +772,7 @@ Status UbTransporter::BuildMCreateBuffer(const HostPort &workerAddr, const std::
     info->dataSize = size;
     info->metadataSize = 0;
     info->workerAddr = workerAddr;
-    info->objectMode = ModeInfo(param.consistencyType, param.writeMode, param.cacheType);
+    info->objectMode = ModeInfo(param.consistencyType, param.writeMode);
     info->ubUrmaDataInfo = std::make_shared<UrmaRemoteAddrPb>(response.urma_info());
     info->ubDataSentByMemoryCopy = false;
     info->pointer = static_cast<uint8_t *>(handle->GetPointer());

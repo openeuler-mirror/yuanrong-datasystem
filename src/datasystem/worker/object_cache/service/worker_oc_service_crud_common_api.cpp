@@ -482,8 +482,7 @@ Status WorkerOcServiceCrudCommonApi::AttachShmUnitToObject(const ClientKey &clie
         }
     } else {
         uint64_t metaDataSz = GetMetadataSize();
-        RETURN_IF_NOT_OK(AllocateNewShmUnit(objectKey, dataSize, metaDataSz, false, evictionManager_, shmUnit,
-                                            entry->modeInfo.GetCacheType()));
+        RETURN_IF_NOT_OK(AllocateNewShmUnit(objectKey, dataSize, metaDataSz, false, evictionManager_, shmUnit));
     }
     entry->SetShmUnit(shmUnit);
     entry->SetDataSize(dataSize);

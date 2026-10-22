@@ -499,7 +499,6 @@ bool MetaDataRecoveryManager::FillRecoveredMeta(const std::string &objectKey, Ob
     configPb->set_write_mode(static_cast<uint32_t>((*currSafeObj)->modeInfo.GetWriteMode()));
     configPb->set_data_format(static_cast<uint32_t>((*currSafeObj)->stateInfo.GetDataFormat()));
     configPb->set_consistency_type(static_cast<uint32_t>((*currSafeObj)->modeInfo.GetConsistencyType()));
-    configPb->set_cache_type(static_cast<uint32_t>((*currSafeObj)->modeInfo.GetCacheType()));
     const bool recoverAsPrimary = (*currSafeObj)->stateInfo.IsPrimaryCopy()
                                   || (*currSafeObj)->stateInfo.IsMigrationUnconfirmed();
     configPb->set_is_replica(!recoverAsPrimary);

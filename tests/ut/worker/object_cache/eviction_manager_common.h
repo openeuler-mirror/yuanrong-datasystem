@@ -99,7 +99,6 @@ public:
         ptr->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
 
         ptr->modeInfo.SetWriteMode(writeMode);
-        ptr->modeInfo.SetCacheType(CacheType::MEMORY);
         ptr->stateInfo.SetDataFormat(dataFormat);
         ptr->stateInfo.SetPrimaryCopy(primaryCopy);
         ptr->stateInfo.SetSpillState(spillState);

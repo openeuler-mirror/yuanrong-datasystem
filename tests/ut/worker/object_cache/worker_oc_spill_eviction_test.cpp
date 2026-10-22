@@ -254,7 +254,7 @@ public:
         tasks.reserve(pendingLimit);
         for (size_t i = 0; i < pendingLimit; ++i) {
             tasks.emplace_back(WorkerOcEvictionManager::PrimaryEndLifeTask{
-                "primary_end_life_pending_" + std::to_string(i), i, CacheType::MEMORY });
+                "primary_end_life_pending_" + std::to_string(i), i });
         }
         bool accepted = false;
         DS_ASSERT_OK(evictionManager_->ReservePrimaryEndLifeTask(tasks.front(), accepted));
@@ -265,7 +265,7 @@ public:
             DS_ASSERT_OK(evictionManager_->ReservePrimaryEndLifeTask(tasks[i], accepted));
             ASSERT_TRUE(accepted);
         }
-        WorkerOcEvictionManager::PrimaryEndLifeTask overflow{ "primary_end_life_overflow", 0, CacheType::MEMORY };
+        WorkerOcEvictionManager::PrimaryEndLifeTask overflow{ "primary_end_life_overflow", 0 };
         ASSERT_EQ(evictionManager_->ReservePrimaryEndLifeTask(overflow, accepted).GetCode(), K_TRY_AGAIN);
         for (const auto &task : tasks) {
             evictionManager_->ClearPrimaryEndLifePending(task);
@@ -277,7 +277,7 @@ public:
         const std::string objectKey = "primary_end_life_low_water";
         constexpr uint64_t objectSize = 1024;
         DS_ASSERT_OK(CreateObject(objectKey, objectSize, WriteMode::NONE_L2_CACHE_EVICT));
-        WorkerOcEvictionManager::PrimaryEndLifeTask task{ objectKey, 1, CacheType::MEMORY };
+        WorkerOcEvictionManager::PrimaryEndLifeTask task{ objectKey, 1 };
         std::vector<WorkerOcEvictionManager::PrimaryEndLifeTask> tasks{ task };
         std::vector<WorkerOcEvictionManager::PrimaryEndLifeCandidate> candidates;
         std::vector<WorkerOcEvictionManager::PrimaryEndLifeTask> skippedTasks;
@@ -294,8 +294,8 @@ public:
         constexpr uint64_t objectSize = 1024;
         const uint64_t triggerDelta = 1;
         DS_ASSERT_OK(CreateObject(objectKey, objectSize, WriteMode::NONE_L2_CACHE_EVICT));
-        auto needSize = evictionManager_->GetLowWaterMark(CacheType::MEMORY) + triggerDelta;
-        WorkerOcEvictionManager::PrimaryEndLifeTask task{ objectKey, 1, CacheType::MEMORY, needSize };
+        auto needSize = evictionManager_->GetLowWaterMark() + triggerDelta;
+        WorkerOcEvictionManager::PrimaryEndLifeTask task{ objectKey, 1, needSize };
         std::vector<WorkerOcEvictionManager::PrimaryEndLifeTask> tasks{ task };
         std::vector<WorkerOcEvictionManager::PrimaryEndLifeCandidate> candidates;
         std::vector<WorkerOcEvictionManager::PrimaryEndLifeTask> skippedTasks;
@@ -360,8 +360,8 @@ public:
         const std::string objectKey = "primary_end_life_evict_object_pending";
         constexpr uint64_t objectSize = 1024;
         DS_ASSERT_OK(CreateObject(objectKey, objectSize, WriteMode::NONE_L2_CACHE_EVICT));
-        auto needSize = evictionManager_->GetLowWaterMark(CacheType::MEMORY) + 1;
-        WorkerOcEvictionManager::PrimaryEndLifeTask task{ objectKey, 1, CacheType::MEMORY, needSize };
+        auto needSize = evictionManager_->GetLowWaterMark() + 1;
+        WorkerOcEvictionManager::PrimaryEndLifeTask task{ objectKey, 1, needSize };
         bool accepted = false;
         DS_ASSERT_OK(evictionManager_->ReservePrimaryEndLifeTask(task, accepted));
         ASSERT_TRUE(accepted);
@@ -370,8 +370,7 @@ public:
         DS_ASSERT_OK(objectTable_->Get(objectKey, entry));
         ObjectKV objectKV(objectKey, *entry);
 
-        DS_ASSERT_OK(evictionManager_->EvictObject(objectKV, WorkerOcEvictionManager::Action::END_LIFE, nullptr,
-                                                  CacheType::MEMORY, needSize));
+        DS_ASSERT_OK(evictionManager_->EvictObject(objectKV, WorkerOcEvictionManager::Action::END_LIFE, nullptr, needSize));
 
         ASSERT_TRUE(objectTable_->Contains(objectKey));
         ASSERT_FALSE(evictionManager_->memEvictionList_.Exist(objectKey));
@@ -383,8 +382,7 @@ public:
 
     void TestPrimaryEndLifeFinishClearsPendingAndReaddsOnlyOnFailure()
     {
-        WorkerOcEvictionManager::PrimaryEndLifeTask failedTask{ "primary_end_life_finish_failed", 1,
-                                                                CacheType::MEMORY };
+        WorkerOcEvictionManager::PrimaryEndLifeTask failedTask{ "primary_end_life_finish_failed", 1 };
         bool accepted = false;
         DS_ASSERT_OK(evictionManager_->ReservePrimaryEndLifeTask(failedTask, accepted));
         ASSERT_TRUE(accepted);
@@ -395,28 +393,24 @@ public:
         evictionManager_->ClearPrimaryEndLifePending(failedTask);
         (void)evictionManager_->memEvictionList_.Erase(failedTask.objectKey);
 
-        WorkerOcEvictionManager::PrimaryEndLifeTask metaDeletedTask{ "primary_end_life_finish_meta_deleted", 1,
-                                                                     CacheType::MEMORY };
+        WorkerOcEvictionManager::PrimaryEndLifeTask metaDeletedTask{ "primary_end_life_finish_meta_deleted", 1 };
         DS_ASSERT_OK(evictionManager_->ReservePrimaryEndLifeTask(metaDeletedTask, accepted));
         ASSERT_TRUE(accepted);
         metaDeletedTask.metaDeleted = true;
         evictionManager_->FinishPrimaryEndLifeTask(metaDeletedTask, true);
-        WorkerOcEvictionManager::PrimaryEndLifeTask retryTask{ metaDeletedTask.objectKey, metaDeletedTask.version,
-                                                               metaDeletedTask.cacheType };
+        WorkerOcEvictionManager::PrimaryEndLifeTask retryTask{ metaDeletedTask.objectKey, metaDeletedTask.version };
         DS_ASSERT_OK(evictionManager_->ReservePrimaryEndLifeTask(retryTask, accepted));
         ASSERT_TRUE(accepted);
         ASSERT_TRUE(retryTask.metaDeleted);
         evictionManager_->FinishPrimaryEndLifeTask(retryTask, false);
-        WorkerOcEvictionManager::PrimaryEndLifeTask clearedTask{ metaDeletedTask.objectKey, metaDeletedTask.version,
-                                                                 metaDeletedTask.cacheType };
+        WorkerOcEvictionManager::PrimaryEndLifeTask clearedTask{ metaDeletedTask.objectKey, metaDeletedTask.version };
         DS_ASSERT_OK(evictionManager_->ReservePrimaryEndLifeTask(clearedTask, accepted));
         ASSERT_TRUE(accepted);
         ASSERT_FALSE(clearedTask.metaDeleted);
         evictionManager_->ClearPrimaryEndLifePending(clearedTask);
         (void)evictionManager_->memEvictionList_.Erase(metaDeletedTask.objectKey);
 
-        WorkerOcEvictionManager::PrimaryEndLifeTask successTask{ "primary_end_life_finish_success", 1,
-                                                                 CacheType::MEMORY };
+        WorkerOcEvictionManager::PrimaryEndLifeTask successTask{ "primary_end_life_finish_success", 1 };
         DS_ASSERT_OK(evictionManager_->ReservePrimaryEndLifeTask(successTask, accepted));
         ASSERT_TRUE(accepted);
         evictionManager_->FinishPrimaryEndLifeTask(successTask, false);

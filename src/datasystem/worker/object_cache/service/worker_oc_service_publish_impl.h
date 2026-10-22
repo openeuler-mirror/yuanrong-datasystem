@@ -77,7 +77,6 @@ private:
         bool isRetry = false;
         uint32_t ttlSecond;
         int existence;
-        CacheType cacheType;
     };
 
     /**

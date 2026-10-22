@@ -220,7 +220,6 @@ class HeteroClient:
         ds_set_param.write_mode = ds.WriteMode(set_param.write_mode.value)
         ds_set_param.existence = ds.ExistenceOpt(set_param.existence.value)
         ds_set_param.ttl_second = set_param.ttl_second
-        ds_set_param.cache_type = ds.CacheType(set_param.cache_type.value)
         return ds_set_param
 
     def init(self):
@@ -341,7 +340,6 @@ class HeteroClient:
                 write_mode = WriteMode.NONE_L2_CACHE
                 ttl_second = 0
                 existence = ExistenceOpt.NONE
-                cache_type = CacheType.MEMEORY
 
         Returns:
             None.
@@ -401,7 +399,6 @@ class HeteroClient:
                 write_mode = WriteMode.NONE_L2_CACHE
                 ttl_second = 0
                 existence = ExistenceOpt.NONE
-                cache_type = CacheType.MEMEORY
         Returns:
             Future: You can use the get() method of the future object.
 

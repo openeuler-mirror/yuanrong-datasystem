@@ -12,9 +12,7 @@ set(SHARED_MEM_SRCS
         arena.cpp
         shm_unit.cpp
         resource_pool.cpp
-        shared_disk_detecter.cpp
         mmap/base_mmap.cpp
-        mmap/disk_mmap.cpp
         mmap/flexible_mmap.cpp
         mmap/mem_mmap.cpp)
 

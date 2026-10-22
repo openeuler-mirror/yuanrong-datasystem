@@ -13,7 +13,3 @@ CreateParam
     .. cpp:member:: ConsistencyType consistencyType = ConsistencyType::PRAM
 
         设置对象的一致性配置, 默认PRAM一致性。
-
-    .. cpp:member:: CacheType cacheType = CacheType::MEMORY
-
-        配置缓存介质，默认为内存缓存介质。

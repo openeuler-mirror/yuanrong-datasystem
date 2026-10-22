@@ -564,20 +564,12 @@ private:
     bool IsMemoryAvailable(uint64_t size = 0, MigrateType type = MigrateType::SCALE_DOWN) const;
 
     /**
-     * @brief Indicate if disk space is available.
-     * @param[in] size The amount of disk space needed.
-     * @return True if the required disk space is available.
-     */
-    bool IsDiskAvailable(uint64_t size = 0) const;
-
-    /**
      * @brief Indicate if resource space is available.
      * @param[in] type Migrate type.
-     * @param[in] cacheType Cache type.
      * @param[in] size The resource size.
      * @return True if resource space is available.
      */
-    bool IsResourceAvailable(const MigrateType &type, CacheType cacheType, uint64_t size) const;
+    bool IsResourceAvailable(const MigrateType &type, uint64_t size) const;
 
     /**
      * @brief Indicate if spill disk is available.

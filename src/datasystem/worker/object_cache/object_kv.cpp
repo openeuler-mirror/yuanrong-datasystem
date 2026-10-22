@@ -42,26 +42,24 @@ std::unique_ptr<ObjectInterface> CreateObjectEntry(const ObjEntryParams &objPara
     return objShmUnit;
 }
 
-void UpdateObjectEntry(ConsistencyType type, WriteMode writeMode, CacheType cacheType, uint64_t metaDataSize,
-                       SafeObjType &safeObj)
+void UpdateObjectEntry(ConsistencyType type, WriteMode writeMode, uint64_t metaDataSize, SafeObjType &safeObj)
 {
     safeObj->SetMetadataSize(metaDataSize);
     safeObj->modeInfo.SetConsistencyType(type);
     safeObj->stateInfo.SetDataFormat(DataFormat::BINARY);
     safeObj->modeInfo.SetWriteMode(writeMode);
-    safeObj->modeInfo.SetCacheType(cacheType);
     safeObj->stateInfo.SetCacheInvalid(true);
     safeObj->stateInfo.SetWriteBackDone(false);
 }
 
 void SetNewObjectEntry(const std::string &namespaceUri, ConsistencyType consistencyType, WriteMode writeMode,
-                       CacheType cacheType, uint64_t dataSize, uint64_t metaDataSize, SafeObjType &safeObj)
+                       uint64_t dataSize, uint64_t metaDataSize, SafeObjType &safeObj)
 {
     safeObj.SetRealObject(CreateObjectEntry({ .objectKey = namespaceUri,
                                               .dataSize = dataSize,
                                               .metaSize = metaDataSize,
                                               .createTime = 0,
-                                              .entryMode = ModeInfo(consistencyType, writeMode, cacheType),
+                                              .entryMode = ModeInfo(consistencyType, writeMode),
                                               .entryState = StateInfo(DataFormat::BINARY),
                                               .lifeState = ObjectLifeState::OBJECT_INVALID }));
 
@@ -106,7 +104,7 @@ Status SetObjectEntryAccordingToMeta(const ObjectMetaPb &meta, uint64_t metaData
                             .createTime = (int64_t)meta.version(),
                             .ttlSecond = meta.ttl_second(),
                             .entryMode = ModeInfo(ConsistencyType(configPb.consistency_type()),
-                                                  WriteMode(configPb.write_mode()), CacheType(configPb.cache_type())),
+                                                  WriteMode(configPb.write_mode())),
                             .entryState = StateInfo(DataFormat::BINARY),
                             .lifeState = lifeState }));
     return Status::OK();

@@ -150,7 +150,7 @@ def install_fake_native_module():
         },
     )
     fake_ds.ConsistencyType = type("ConsistencyType", (), {"PRAM": 0, "CAUSAL": 1})
-    fake_ds.CacheType = type("CacheType", (), {"MEMORY": 0, "DISK": 1})
+    fake_ds.CacheType = type("CacheType", (), {"MEMORY": 0})
     fake_ds.StateValueBuffer = type("StateValueBuffer", (), {})
 
     fake_lib = types.ModuleType("yr.datasystem.lib")

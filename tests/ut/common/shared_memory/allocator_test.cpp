@@ -61,9 +61,7 @@ using datasystem::memory::ArenaGroup;
 using namespace ::testing;
 
 DS_DECLARE_uint32(arena_per_tenant);
-DS_DECLARE_uint32(shared_disk_arena_per_tenant);
 DS_DECLARE_bool(enable_huge_tlb);
-DS_DECLARE_string(shared_disk_directory);
 DS_DECLARE_uint32(eviction_reserve_mem_threshold_mb);
 
 namespace datasystem {
@@ -71,7 +69,6 @@ namespace ut {
 
 struct AllocatorConfig {
     uint64_t shmSize = 1;
-    uint64_t shdSize = 0;
     bool populate = false;
     bool scaling = true;
     ssize_t decayMs = 5'000;
@@ -83,10 +80,6 @@ struct AllocatorConfig {
     AllocatorConfig() = default;
 
     AllocatorConfig(uint64_t size) : shmSize(size)
-    {
-    }
-
-    AllocatorConfig(uint64_t size, memory::CacheType type) : shmSize(size), shdSize(size), cacheType(type)
     {
     }
 };
@@ -101,18 +94,14 @@ public:
     Status Init(const AllocatorConfig &config)
     {
         config_ = config;
-        if (config_.cacheType == memory::CacheType::DISK) {
-            std::string dir = GetTestCaseDataDir() + "/shared_disk/";
-            FLAGS_shared_disk_directory = dir.c_str();
-        }
-        return datasystem::memory::Allocator::Instance()->Init(config_.shmSize, config_.shdSize, config_.populate,
+        return datasystem::memory::Allocator::Instance()->Init(config_.shmSize, config_.populate,
                                                                config_.scaling, config_.decayMs,
                                                                config_.objectThreshold, config_.streamThreshold);
     }
 
     uint64_t MaxSize()
     {
-        return config_.cacheType == memory::CacheType::MEMORY ? config_.shmSize : config_.shdSize;
+        return config_.shmSize;
     }
 
     Status AllocateMemory(uint64_t needSize, ShmUnitInfo &unit, const std::string &tenantId = DEFAULT_TENANT_ID)
@@ -277,13 +266,6 @@ TEST_F(AllocatorTest, TestParallelAllocate)
     TestParallelAllocate();
 }
 
-TEST_F(AllocatorTest, TestParallelAllocateDisk)
-{
-    uint64_t maxSize = 3u * 1024l * 1024ul * 1024ul;
-    DS_ASSERT_OK(Init({ maxSize, memory::CacheType::DISK }));
-    TestParallelAllocate();
-}
-
 void AllocatorTest::TestAllocateMemoryWithDefaultParam()
 {
     LOG(INFO) << "Test allocate memory with default parameter values.";
@@ -319,13 +301,6 @@ TEST_F(AllocatorTest, TestAllocateMemoryWithDefaultParam)
     TestAllocateMemoryWithDefaultParam();
 }
 
-TEST_F(AllocatorTest, TestAllocateMemoryWithDefaultParamDisk)
-{
-    uint64_t maxSize = 64 * 1024ul * 1024ul;
-    DS_ASSERT_OK(Init({ maxSize, memory::CacheType::DISK }));
-    TestAllocateMemoryWithDefaultParam();
-}
-
 TEST_F(AllocatorTest, TestAllocateMemoryWithThreshold)
 {
     LOG(INFO) << "Test allocate memory with threshold.";
@@ -337,7 +312,7 @@ TEST_F(AllocatorTest, TestAllocateMemoryWithThreshold)
     ShmUnit shmUnit;
     ResetShmUnit(shmUnit);
 
-    DS_ASSERT_OK(allocator->Init(maxSize, 0, false, true, decayMs, ocShmPercentage, scShmPercentage));
+    DS_ASSERT_OK(allocator->Init(maxSize, false, true, decayMs, ocShmPercentage, scShmPercentage));
     ASSERT_EQ(allocator->GetMaxMemorySize(ServiceType::OBJECT), size_t(maxOcSize));
     ASSERT_EQ(allocator->GetMaxMemorySize(ServiceType::STREAM), size_t(maxScSize));
     ASSERT_EQ(allocator->GetMemoryUsage(), size_t(0));
@@ -421,13 +396,6 @@ TEST_F(AllocatorTest, TestAllocateManyPages)
     TestAllocateManyPages();
 }
 
-TEST_F(AllocatorTest, TestAllocateManyPagesDisk)
-{
-    size_t maxSize = 128 * 1024ul * 1024ul;
-    DS_ASSERT_OK(Init({ maxSize, memory::CacheType::DISK }));
-    TestAllocateManyPages();
-}
-
 void AllocatorTest::TestAllocateDifferSz()
 {
     std::vector<std::unique_ptr<ShmUnit>> shmUnits;
@@ -468,16 +436,6 @@ TEST_F(AllocatorTest, TestAllocateDifferSz)
     AllocatorConfig config;
     config.shmSize = 8ul * 1024 * 1024 * 1024;
     config.decayMs = 10 * 1000 * 60;
-    DS_ASSERT_OK(Init(config));
-    TestAllocateDifferSz();
-}
-
-TEST_F(AllocatorTest, TestAllocateDifferSzDisk)
-{
-    AllocatorConfig config;
-    config.shdSize = 8ul * 1024 * 1024 * 1024;
-    config.decayMs = 10 * 1000 * 60;
-    config.cacheType = memory::CacheType::DISK;
     DS_ASSERT_OK(Init(config));
     TestAllocateDifferSz();
 }
@@ -604,13 +562,6 @@ TEST_F(AllocatorTest, TestAllocatedAddresses)
 }
 #endif
 
-TEST_F(AllocatorTest, TestAllocatedAddressesDisk)
-{
-    size_t maxSize = 4 * 1024 * 1024ul * 1024ul;
-    DS_ASSERT_OK(Init({ maxSize, memory::CacheType::DISK }));
-    TestAllocatedAddresses();
-}
-
 void AllocatorTest::TestDoubleFree()
 {
     LOG(INFO) << "Test double free.";
@@ -628,13 +579,6 @@ TEST_F(AllocatorTest, TestDoubleFree)
 {
     size_t maxSize = 64 * 1024ul * 1024ul;
     DS_ASSERT_OK(Init(maxSize));
-    TestDoubleFree();
-}
-
-TEST_F(AllocatorTest, TestDoubleFreeDisk)
-{
-    size_t maxSize = 64 * 1024ul * 1024ul;
-    DS_ASSERT_OK(Init({ maxSize, memory::CacheType::DISK }));
     TestDoubleFree();
 }
 
@@ -670,23 +614,13 @@ TEST_F(AllocatorTest, TestArenaBasicFunction)
     TestArenaBasicFunction();
 }
 
-TEST_F(AllocatorTest, TestArenaBasicFunctionDisk)
-{
-    AllocatorConfig config;
-    config.shdSize = 64 * 1024ul * 1024ul;  // 64 MB
-    config.decayMs = 1'000;  // 1'000 MS
-    config.cacheType = memory::CacheType::DISK;
-    DS_ASSERT_OK(Init(config));
-    TestArenaBasicFunction();
-}
-
 TEST_F(AllocatorTest, TestTenantAllocMemory)
 {
     FLAGS_v = 3;
     const size_t shmSize = 64 * 1024ul * 1024ul + 4096 * 2;
     ssize_t decayMs = 1'000;
     auto allocator = datasystem::memory::Allocator::Instance();
-    DS_ASSERT_OK(allocator->Init(shmSize, 0, false, true, decayMs));
+    DS_ASSERT_OK(allocator->Init(shmSize, false, true, decayMs));
 
     const size_t allocSize = 30 * 1024ul * 1024ul;
 
@@ -724,17 +658,6 @@ TEST_F(AllocatorTest, TestAllocMemByteAlign)
     TestAllocMemByteAlign();
 }
 
-TEST_F(AllocatorTest, TestAllocMemByteAlignDisk)
-{
-    AllocatorConfig config;
-    const uint64_t size = 64 * 1024ul * 1024ul + 4096 * 2;
-    config.shdSize = size;
-    config.decayMs = 1'000;  // 1'000 MS
-    config.cacheType = memory::CacheType::DISK;
-    DS_ASSERT_OK(Init(config));
-    TestAllocMemByteAlign();
-}
-
 void AllocatorTest::TestCreateArenaConcurrently()
 {
     LOG(INFO) << "Test create arenas concurrently.";
@@ -763,13 +686,6 @@ TEST_F(AllocatorTest, TestCreateArenaConcurrently)
     TestCreateArenaConcurrently();
 }
 
-TEST_F(AllocatorTest, TestCreateArenaConcurrentlyDisk)
-{
-    uint64_t maxSize = 1024ul * 1024ul;
-    DS_ASSERT_OK(Init({ maxSize, memory::CacheType::DISK }));
-    TestCreateArenaConcurrently();
-}
-
 TEST_F(AllocatorTest, DISABLED_TestCreateArenaEdgeCond)
 {
     LOG(INFO) << "Test create arenas edge";
@@ -792,7 +708,7 @@ TEST_F(AllocatorTest, TestReuseArena)
     size_t size = 1 * 1024ul * 1024ul;
     ssize_t decayMs = 1000;
     auto allocator = datasystem::memory::Allocator::Instance();
-    DS_ASSERT_OK(allocator->Init(size, 0, false, true, decayMs));
+    DS_ASSERT_OK(allocator->Init(size, false, true, decayMs));
 
     std::shared_ptr<ArenaGroup> arenaGroup;
     DS_ASSERT_OK(allocator->CreateArenaGroup(size, arenaGroup));
@@ -958,13 +874,6 @@ TEST_F(AllocatorTest, TestShmUnits1)
     TestShmUnits1();
 }
 
-TEST_F(AllocatorTest, TestShmUnits1Disk)
-{
-    uint64_t maxSize = 4 * 1024;
-    DS_ASSERT_OK(Init({ maxSize, memory::CacheType::DISK }));
-    TestShmUnits1();
-}
-
 void AllocatorTest::TestShmUnits2()
 {
     auto pool = std::make_shared<ThreadPool>(1);
@@ -1005,13 +914,6 @@ TEST_F(AllocatorTest, TestShmUnits2)
     TestShmUnits2();
 }
 
-TEST_F(AllocatorTest, TestShmUnits2Disk)
-{
-    uint64_t maxSize = 4 * 1024;
-    DS_ASSERT_OK(Init({ maxSize, memory::CacheType::DISK }));
-    TestShmUnits2();
-}
-
 void AllocatorTest::TestUsedupAndFree()
 {
     auto usedUpAndFreeFunc = [this](int &successCnt) {
@@ -1044,13 +946,6 @@ TEST_F(AllocatorTest, TestUsedupAndFree)
 {
     uint64_t maxSize = 1024 * 1024ul * 1024ul;
     DS_ASSERT_OK(Init(maxSize));
-    TestUsedupAndFree();
-}
-
-TEST_F(AllocatorTest, TestUsedupAndFreeDisk)
-{
-    uint64_t maxSize = 1024 * 1024ul * 1024ul;
-    DS_ASSERT_OK(Init({ maxSize, memory::CacheType::DISK }));
     TestUsedupAndFree();
 }
 
@@ -1105,16 +1000,6 @@ TEST_F(AllocatorTest, TestUsedupAndFree2)
     TestUsedupAndFree2();
 }
 
-TEST_F(AllocatorTest, TestUsedupAndFree2Disk)
-{
-    AllocatorConfig config;
-    config.shdSize = 2 * 1024ul * 1024ul * 1024ul;  // 2 GB
-    config.decayMs = 10 * SEC_PER_MIN * MS_PER_SECOND;  // 10 minus.
-    config.cacheType = memory::CacheType::DISK;
-    DS_ASSERT_OK(Init(config));
-    TestUsedupAndFree2();
-}
-
 TEST_F(AllocatorTest, GetLargestJemallocSizeClass)
 {
     constexpr uint64_t bytesPerGiB = 1024ul * 1024ul * 1024ul;
@@ -1161,13 +1046,6 @@ TEST_F(AllocatorTest, TestCreateTenantArena)
 {
     uint64_t maxSize = 64 * 1024ul * 1024ul;
     DS_ASSERT_OK(Init(maxSize));
-    TestCreateTenantArena();
-}
-
-TEST_F(AllocatorTest, TestCreateTenantArenaDisk)
-{
-    uint64_t maxSize = 64 * 1024ul * 1024ul;
-    DS_ASSERT_OK(Init({ maxSize, memory::CacheType::DISK }));
     TestCreateTenantArena();
 }
 
@@ -1225,13 +1103,6 @@ TEST_F(AllocatorTest, TestCreateMultiTenantArena)
     TestCreateMultiTenantArena();
 }
 
-TEST_F(AllocatorTest, TestCreateMultiTenantArenaDisk)
-{
-    uint64_t maxSize = 64 * 1024ul * 1024ul;
-    DS_ASSERT_OK(Init({ maxSize, memory::CacheType::DISK }));
-    TestCreateMultiTenantArena();
-}
-
 void AllocatorTest::TestCreateTenantArenaConcurrent()
 {
     LOG(INFO) << "Test create arenas concurrently.";
@@ -1273,13 +1144,6 @@ TEST_F(AllocatorTest, TestCreateTenantArenaConcurrent)
     TestCreateTenantArenaConcurrent();
 }
 
-TEST_F(AllocatorTest, TestCreateTenantArenaConcurrentDisk)
-{
-    uint64_t maxSize = 1024ul * 1024ul;
-    DS_ASSERT_OK(Init({ maxSize, memory::CacheType::DISK }));
-    TestCreateTenantArenaConcurrent();
-}
-
 void AllocatorTest::FakeAllocate()
 {
     FLAGS_v = 3;  // vlog is 3.
@@ -1318,17 +1182,6 @@ TEST_F(AllocatorTest, FakeAllocate)
     FakeAllocate();
 }
 
-TEST_F(AllocatorTest, FakeAllocateDisk)
-{
-    FLAGS_shared_disk_arena_per_tenant = 1;
-    AllocatorConfig config;
-    config.shdSize = 10 * 1024ul * 1024ul * 1024ul;  // 10 GB
-    config.decayMs = 10 * SEC_PER_MIN * MS_PER_SECOND;  // 10 minus.
-    config.cacheType = memory::CacheType::DISK;
-    DS_ASSERT_OK(Init(config));
-    FakeAllocate();
-}
-
 TEST_F(AllocatorTest, TestMultiArenaCache)
 {
     FLAGS_v = 1;
@@ -1337,7 +1190,7 @@ TEST_F(AllocatorTest, TestMultiArenaCache)
     ssize_t decayMs = 10'000 * 60;
     const uint64_t smallSize = 1024ul * 1024ul;
     const uint64_t bigSize = 2 * 1024ul * 1024ul * 1024;
-    DS_ASSERT_OK(datasystem::memory::Allocator::Instance()->Init(shmMaxSize, 0, false, true, decayMs));
+    DS_ASSERT_OK(datasystem::memory::Allocator::Instance()->Init(shmMaxSize, false, true, decayMs));
 
     ShmUnitInfo unit1;
     ShmUnitInfo unit2;
@@ -1378,7 +1231,7 @@ TEST_F(AllocatorTest, TestDestructorOrder)
     const size_t shmMaxSize = 4 * 1024ul * 1024ul;
     ssize_t decayMs = 10'000 * 60;
     const uint64_t size = 1024ul * 1024ul;
-    DS_ASSERT_OK(datasystem::memory::Allocator::Instance()->Init(shmMaxSize, 0, false, true, decayMs));
+    DS_ASSERT_OK(datasystem::memory::Allocator::Instance()->Init(shmMaxSize, false, true, decayMs));
     std::shared_ptr<ArenaGroup> arenaGroup;
     std::string tenantId = "t1";
     DS_ASSERT_OK(datasystem::memory::Allocator::Instance()->CreateArenaGroup(tenantId, shmMaxSize, arenaGroup));
@@ -1395,7 +1248,7 @@ TEST_F(AllocatorTest, DecommitSizeOverflow)
     const ssize_t decayMs = 10'000;
     auto &allocator = *datasystem::memory::Allocator::Instance();
     const size_t maxSize = 4 * 1024 * 1024ul * 1024ul;
-    DS_ASSERT_OK(allocator.Init(maxSize, 0, false, true, decayMs));
+    DS_ASSERT_OK(allocator.Init(maxSize, false, true, decayMs));
     inject::Set("arena.decommit", "10%call(10240)");
     auto func = []() {
         RandomData random;
@@ -1479,54 +1332,6 @@ TEST_F(AllocatorTest, TestAllocatedTenantMax)
 }
 #endif
 
-TEST_F(AllocatorTest, OpenTmpFileFailed)
-{
-    FLAGS_shared_disk_arena_per_tenant = 1;
-    uint64_t maxSize = 1024ul * 1024ul;
-    datasystem::inject::Set("DiskMmap.OpenTmpFail", "call()");
-    // Creating a tmp file using mkstemp.
-    DS_ASSERT_OK(Init({ maxSize, memory::CacheType::DISK }));
-    // Need unlink tmp file.
-    ASSERT_TRUE(IsEmptyDir(FLAGS_shared_disk_directory));
-    const uint64_t allocSize = 1024ul;
-    ShmUnitInfo unit;
-    DS_ASSERT_OK(AllocateMemory(allocSize, unit));
-    DS_ASSERT_OK(FreeMemory(unit.pointer));
-}
-
-TEST_F(AllocatorTest, CapacityScaling)
-{
-    uint64_t maxSize = 64 * 1024ul * 1024ul;
-    AllocatorConfig config;
-    config.shdSize = maxSize;
-    config.decayMs = 1'000;
-    config.cacheType = memory::CacheType::DISK;
-    DS_ASSERT_OK(Init(config));
-    std::string tenant1 = "tenant1";
-    std::string tenant2 = "tenant2";
-    ShmUnit unit;
-    const uint64_t allocSize = 25 * 1024ul * 1024ul;
-    DS_ASSERT_OK(AllocateMemory(unit, allocSize, tenant1));
-    ShmUnit unit2;
-    DS_ASSERT_OK(AllocateMemory(unit2, allocSize, tenant2));
-    ShmUnit unit3;
-    ASSERT_EQ(AllocateMemory(allocSize, unit3, tenant2).GetCode(), K_OUT_OF_MEMORY);
-    DS_ASSERT_OK(FreeMemory(unit));
-    sleep(1);
-    DS_ASSERT_OK(AllocateMemory(allocSize, unit3, tenant2));
-}
-
-TEST_F(AllocatorTest, SharedDiskNotEnable)
-{
-    FLAGS_shared_disk_arena_per_tenant = 1;
-    uint64_t maxSize = 1024ul * 1024ul;
-    DS_ASSERT_OK(Init({ maxSize, memory::CacheType::DISK }));
-    FLAGS_shared_disk_directory = "";
-    const uint64_t allocSize = 1024ul;
-    ShmUnitInfo unit;
-    ASSERT_EQ(AllocateMemory(allocSize, unit).GetCode(), K_INVALID);
-}
-
 TEST_F(AllocatorTest, TestGetMemoryAvailToHighWater)
 {
     uint64_t maxSize = 100UL * 1024UL * 1024UL; // 100 MB
@@ -1562,47 +1367,39 @@ TEST_F(AllocatorTest, TestGetMemoryAvailToHighWaterWithReserve)
 
 class AllocatorHybridTest : public CommonTest {
 public:
-    void SetUp() override
-    {
-        std::string dir = GetTestCaseDataDir() + "/shared_disk/";
-        FLAGS_shared_disk_directory = dir.c_str();
-    }
-
     void TearDown() override
     {
         datasystem::memory::Allocator::Instance()->Shutdown();
     }
 
-    Status AllocateMemory(uint64_t needSize, ShmUnitInfo &unit, memory::CacheType cacheType,
-                          const std::string &tenantId = DEFAULT_TENANT_ID)
+    Status AllocateMemory(uint64_t needSize, ShmUnitInfo &unit, const std::string &tenantId = DEFAULT_TENANT_ID)
     {
         return datasystem::memory::Allocator::Instance()->AllocateMemory(tenantId, needSize, false, unit.pointer,
                                                                          unit.fd, unit.offset, unit.mmapSize,
-                                                                         ServiceType::OBJECT, cacheType);
+                                                                         ServiceType::OBJECT);
     }
 
-    Status FreeMemory(void *&pointer, memory::CacheType cacheType, const std::string &tenantId = DEFAULT_TENANT_ID)
+    Status FreeMemory(void *&pointer, const std::string &tenantId = DEFAULT_TENANT_ID)
     {
-        return datasystem::memory::Allocator::Instance()->FreeMemory(tenantId, pointer, ServiceType::OBJECT, cacheType);
+        return datasystem::memory::Allocator::Instance()->FreeMemory(tenantId, pointer, ServiceType::OBJECT);
     }
 };
 
 TEST_F(AllocatorHybridTest, ParallelAllocate)
 {
     uint64_t maxSize = 2u * 1024l * 1024ul * 1024ul;
-    DS_ASSERT_OK(datasystem::memory::Allocator::Instance()->Init(maxSize, maxSize));
+    DS_ASSERT_OK(datasystem::memory::Allocator::Instance()->Init(maxSize));
     const int maxParallel = 128;
     for (int numThreads = 1; numThreads <= maxParallel; numThreads <<= 1) {
         std::vector<std::promise<double>> timeLst(numThreads);
         ThreadPool pool(numThreads);
         for (int i = 0; i < numThreads; i++) {
-            auto type = i % 2 ? memory::CacheType::MEMORY : memory::CacheType::DISK;
-            pool.Submit([this, type]() {
+            pool.Submit([this]() {
                 ShmUnit shmUnit;
                 shmUnit.pointer = nullptr;
                 uint64_t allocSize = 16 * 1024ul * 1024ul;
-                DS_ASSERT_OK(AllocateMemory(allocSize, shmUnit, type));
-                DS_ASSERT_OK(FreeMemory(shmUnit.pointer, type));
+                DS_ASSERT_OK(AllocateMemory(allocSize, shmUnit));
+                DS_ASSERT_OK(FreeMemory(shmUnit.pointer));
             });
         }
     }
@@ -1613,19 +1410,18 @@ TEST_F(AllocatorHybridTest, AllocatedTenantMax)
 {
     int count = 0;
     size_t size = 1024ul * 1024ul;
-    DS_ASSERT_OK(datasystem::memory::Allocator::Instance()->Init(size, size));
+    DS_ASSERT_OK(datasystem::memory::Allocator::Instance()->Init(size));
     Status rc;
     while (rc.IsOk()) {
         std::shared_ptr<ArenaGroup> arena;
-        auto cacheType = count % 2 ? memory::CacheType::MEMORY : memory::CacheType::DISK;
         rc = datasystem::memory::Allocator::Instance()->GetArenaManager()->GetOrCreateArenaGroup(
-            { std::to_string(count), cacheType }, size, arena);
+            { std::to_string(count), memory::CacheType::MEMORY }, size, arena);
         count++;
     }
     count--;
 
     ASSERT_TRUE(rc.ToString().find("create tenant failed, the maximum tenant size") != std::string::npos);
-    ASSERT_EQ(count, 169);  // max tenant size is 169: 4096 / (16 + 8) -1 = 169
+    ASSERT_EQ(count, 255);  // max tenant size is 255: 4096 / 16 - 1 = 255
 }
 #endif
 }  // namespace ut

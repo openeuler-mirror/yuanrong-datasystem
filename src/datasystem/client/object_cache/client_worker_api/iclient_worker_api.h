@@ -132,7 +132,6 @@ public:
      * @brief Create an object in the store-server, will only be called in shm case.
      * @param[in] objectKey The ID of the object to create.
      * @param[in] dataSize The size in bytes of the space to be allocated for this object.
-     * @param[in] cacheType The cache type of the object to be allocted, defalut is MEMORY.
      * @param[out] version Worker version.
      * @param[out] metadataSize The metadata size.
      * @param[out] urmaDataInfo Urma data info.
@@ -144,7 +143,7 @@ public:
      */
     virtual Status Create(const std::string &objectKey, int64_t dataSize, uint32_t &version, uint64_t &metadataSize,
                           std::shared_ptr<ShmUnitInfo> &shmBuf, std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo,
-                          const CacheType &cacheType = CacheType::MEMORY, int32_t requestTimeoutMs = 0) = 0;
+                          int32_t requestTimeoutMs = 0) = 0;
 
     /**
      * @brief Publish/Put an object in the store-server.

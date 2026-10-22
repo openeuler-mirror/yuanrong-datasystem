@@ -68,7 +68,6 @@ DS_DECLARE_string(log_dir);
 DS_DECLARE_string(monitor_config_file);
 DS_DECLARE_string(unix_domain_socket_dir);
 DS_DECLARE_string(log_filename);
-DS_DECLARE_string(shared_disk_directory);
 DS_DECLARE_string(encrypt_kit);
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(log_monitor_exporter);

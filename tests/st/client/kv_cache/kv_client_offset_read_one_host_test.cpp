@@ -476,91 +476,6 @@ TEST_P(KVClientOffsetReadOneHostTest, TestReadKeyFromDiskForDiffRange)
     ASSERT_EQ(getValue2, data);
 }
 
-class KVClientOffsetRemoteReadTest : public OCClientCommon {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        const int kNumEtcd = 1;
-        const int kNumWorkers = 2;
-        const int knumOBS = 1;
-        const int kOcThreadNum = 64;
-        const int kWorkerCount = 2;
-
-        opts.enableSpill = true;
-        opts.workerGflagParams =
-            "-shared_memory_size_mb=200 "
-            "-log_monitor=true "
-            "-v=2 "
-            "-spill_size_limit="
-            + std::to_string(maxSize_);
-
-        opts.numEtcd = kNumEtcd;
-        opts.numWorkers = kNumWorkers;
-        opts.numOBS = knumOBS;
-        opts.enableDistributedMaster = "false";
-        opts.numOcThreadNum = kOcThreadNum;
-        opts.injectActions = "worker.Spill.Sync:return()";
-
-        for (int i = 0; i < kWorkerCount; ++i) {
-            std::string dir =
-                "./ds/KVClientOffsetRemoteReadTest.RemoteRead/worker" + std::to_string(i) + "/shared_disk";
-            int diskSize = (i == 0) ? 256 : 16;
-            opts.workerSpecifyGflagParams[i] +=
-                " -shared_disk_directory=" + dir + " -shared_disk_size_mb=" + std::to_string(diskSize);
-        }
-    }
-
-    void SetUp() override
-    {
-        ExternalClusterTest::SetUp();
-        InitTestKVClientWithTenant(0, client_);
-        InitTestKVClientWithTenant(1, client1_);
-    }
-
-    void InitConnectOptW(uint32_t workerIndex, ConnectOptions &connectOptions, int32_t timeoutMs = 60000)
-    {
-        HostPort workerAddress;
-        ASSERT_TRUE(workerIndex < cluster_->GetWorkerNum());
-        DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddress));
-        connectOptions = { .host = workerAddress.Host(), .port = workerAddress.Port(), .connectTimeoutMs = timeoutMs };
-        connectOptions.accessKey = "QTWAOYTTINDUT2QVKYUC";
-        connectOptions.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
-    }
-
-    void InitTestKVClientWithTenant(uint32_t workerIndex, std::shared_ptr<KVClient> &client)
-    {
-        ConnectOptions connectOptions;
-        InitConnectOptW(workerIndex, connectOptions);
-        client = std::make_shared<KVClient>(connectOptions);
-        DS_ASSERT_OK(client->Init());
-    }
-
-    void RemoteRead(std::shared_ptr<KVClient> client, const std::vector<std::string> &keys, const std::string &data,
-                    size_t offset, size_t size)
-    {
-        const size_t kReadLoopCount = 50;
-        for (size_t i = 0; i < kReadLoopCount; ++i) {
-            ReadParam param = { .key = keys[0], .offset = offset, .size = size };
-            std::vector<ReadParam> params = { param };
-            std::string expectedValue = data.substr(offset, size);
-
-            std::vector<Optional<ReadOnlyBuffer>> buffers;
-            DS_ASSERT_OK(client->Read(params, buffers));
-
-            std::string actualValue(reinterpret_cast<const char *>(buffers[0]->ImmutableData()), buffers[0]->GetSize());
-
-            ASSERT_EQ(buffers[0]->GetSize(), size);
-            ASSERT_EQ(actualValue, expectedValue);
-        }
-    }
-
-protected:
-    std::shared_ptr<KVClient> client_;
-    std::shared_ptr<KVClient> client1_;
-    datasystem::SetParam type_;
-    uint64_t maxSize_ = 5 * 1024 * 1024ul * 1024ul;
-};
-
 
 
 class KVClientOffsetReadRemoteTest : public OCClientCommon,
@@ -1282,21 +1197,20 @@ TEST_F(KVClientSpillTest, TestReadKeyRemoteGet)
     DS_ASSERT_OK(client_->Get({ keys[0] }, buffers));
 }
 
-datasystem::SetParam ConstructParam(CacheType type)
+datasystem::SetParam ConstructParam()
 {
     SetParam param;
     param.writeMode = WriteMode::NONE_L2_CACHE;
-    param.cacheType = type;
     return param;
 }
 
 INSTANTIATE_TEST_SUITE_P(ReadOffsetParamTest, KVClientOffsetReadOneHostTest,
-                         ::testing::Values(ConstructParam(CacheType::MEMORY)));
+                         ::testing::Values(ConstructParam()));
 
 INSTANTIATE_TEST_SUITE_P(ReadOffsetParamTest, KVClientOffsetReadRemoteTest,
-                         ::testing::Values(ConstructParam(CacheType::MEMORY)));
+                         ::testing::Values(ConstructParam()));
 
 INSTANTIATE_TEST_SUITE_P(ReadOffsetParamTest, KVClientOffsetReadRemoteParallelTest,
-                         ::testing::Values(ConstructParam(CacheType::MEMORY)));
+                         ::testing::Values(ConstructParam()));
 }  // namespace st
 }  // namespace datasystem

@@ -353,7 +353,6 @@ ObjectMetaPb BuildRecoverMeta(const std::string &objectKey, WriteMode writeMode,
     config->set_write_mode(static_cast<uint32_t>(writeMode));
     config->set_data_format(static_cast<uint32_t>(DataFormat::BINARY));
     config->set_consistency_type(static_cast<uint32_t>(ConsistencyType::PRAM));
-    config->set_cache_type(static_cast<uint32_t>(CacheType::MEMORY));
     return meta;
 }
 
@@ -633,6 +632,30 @@ TEST_F(MetaDataRecoveryManagerTest, RecoverLocalEntriesLoadsPayloadIntoMemory)
     ASSERT_FALSE((*entry)->stateInfo.IsCacheInvalid());
     auto *data = static_cast<const char *>((*entry)->GetShmUnit()->GetPointer()) + (*entry)->GetMetadataSize();
     EXPECT_EQ(std::string(data, expected.size()), expected);
+    entry->RUnlock();
+}
+
+// Metadata persisted before the shared-disk cut carries config.cache_type=1 (ConfigPb field 4, now
+// reserved). Recovery must parse those bytes cleanly and treat the object as an ordinary memory entry.
+TEST_F(MetaDataRecoveryManagerTest, RecoverLocalEntriesNormalizesLegacyCacheType)
+{
+    ObjectMetaPb meta = BuildRecoverMeta("tenant/legacy_cache_type", WriteMode::WRITE_THROUGH_L2_CACHE);
+    std::string configBytes = meta.config().SerializeAsString();
+    configBytes.push_back('\x20');  // tag: ConfigPb field 4, varint
+    configBytes.push_back('\x01');  // legacy cache_type value (disk)
+    ASSERT_TRUE(meta.mutable_config()->ParseFromString(configBytes));
+
+    std::vector<ObjectMetaPb> recoverMetas{ meta };
+    std::vector<std::string> recoveredObjectKeys;
+    DS_ASSERT_OK(manager_->RecoverLocalEntries(recoverMetas, recoveredObjectKeys));
+    ASSERT_EQ(recoveredObjectKeys, std::vector<std::string>({ "tenant/legacy_cache_type" }));
+
+    std::shared_ptr<SafeObjType> entry;
+    DS_ASSERT_OK(objectTable_->Get("tenant/legacy_cache_type", entry));
+    ASSERT_TRUE(entry->RLock().IsOk());
+    EXPECT_TRUE((*entry)->HasL2Cache());
+    EXPECT_TRUE((*entry)->stateInfo.IsPrimaryCopy());
+    EXPECT_FALSE((*entry)->stateInfo.IsCacheInvalid());
     entry->RUnlock();
 }
 

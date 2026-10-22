@@ -640,23 +640,20 @@ Status OCMetadataManager::CheckBinaryFormatParamMatch(const std::string &objectK
     const auto &prevConfig = prevMeta.meta.config();
     const auto oldConsistencyType = prevConfig.consistency_type();
     const auto oldWriteMode = prevConfig.write_mode();
-    const auto oldCacheType = prevConfig.cache_type();
     const bool oldIsReplica = prevConfig.is_replica();
 
     const bool isBinaryFormatConsistent =
         (newMeta.dataFormat == static_cast<uint32_t>(DataFormat::BINARY)) && prevMeta.IsBinary();
 
     const bool isConfigConsistent = (newMeta.consistencyType == oldConsistencyType)
-                                    && (newMeta.writeMode == oldWriteMode) && (newMeta.cacheType == oldCacheType)
-                                    && (newMeta.isReplica == oldIsReplica);
+                                    && (newMeta.writeMode == oldWriteMode) && (newMeta.isReplica == oldIsReplica);
     CHECK_FAIL_RETURN_STATUS(
         isBinaryFormatConsistent && isConfigConsistent, StatusCode::K_INVALID,
         FormatString(
             "Inconsistency in publish or set cache whose key already exists in datasystem, please delete the old cache "
             "or keep parameter the same as the old cache, newMeta: (consistency_type, "
-            "write_mode, cache_type), (%zu, %zu, %zu); old: (%zu, %zu, %zu)",
-            newMeta.consistencyType, newMeta.writeMode, newMeta.cacheType, oldConsistencyType, oldWriteMode,
-            oldCacheType));
+            "write_mode), (%zu, %zu); old: (%zu, %zu)",
+            newMeta.consistencyType, newMeta.writeMode, oldConsistencyType, oldWriteMode));
 
     CHECK_FAIL_RETURN_STATUS(nestedRefManager_->NestedKeysCanSet(objectKey, nestedObjectKeys),
                              StatusCode::K_RUNTIME_ERROR, "Nested keys not match");
@@ -764,7 +761,6 @@ Status OCMetadataManager::CreateMetaForBinaryFormat(const ObjectMetaPb &newMeta,
             BinaryFormatParamsStruct newMateDate = { .writeMode = newMeta.config().write_mode(),
                                                      .dataFormat = newMeta.config().data_format(),
                                                      .consistencyType = newMeta.config().consistency_type(),
-                                                     .cacheType = newMeta.config().cache_type(),
                                                      .isReplica = newMeta.config().is_replica() };
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
                 CheckBinaryFormatParamMatch(objectKey, prevMeta, newMateDate, nestedObjectKeys), "Check format failed");
@@ -831,7 +827,6 @@ Status OCMetadataManager::UpdateMeta(ObjectMeta &meta, const ObjectMetaPb &newMe
     BinaryFormatParamsStruct newMateDate = { .writeMode = newMeta.config().write_mode(),
                                              .dataFormat = newMeta.config().data_format(),
                                              .consistencyType = newMeta.config().consistency_type(),
-                                             .cacheType = newMeta.config().cache_type(),
                                              .isReplica = newMeta.config().is_replica() };
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckBinaryFormatParamMatch(objectKey, meta, newMateDate), "Check format failed");
 
@@ -2418,7 +2413,7 @@ Status OCMetadataManager::UpdateMetaByState(const UpdateMetaReqPb &request, Obje
         RETURN_IF_NOT_OK(CheckBinaryFormatParamMatch(
             objectKey, objectMeta,
             BinaryFormatParamsStruct{ newMeta.write_mode(), newMeta.data_format(), newMeta.consistency_type(),
-                                      newMeta.cache_type(), false },
+                                      false },
             nestedObjectKeys));
     }
     // Arbitrate with any in-flight async ttl delete before mutating metadata, and keep the old

@@ -655,18 +655,6 @@
         "value": "8",
         "description": "The num of threads used to send elements to remote worker."
     },
-    "shared_disk_arena_per_tenant": {
-        "value": "8",
-        "description": "The number of disk cache Arena for each tenant. Multiple arenas can improve the performance of shared disk allocation for the first time, but each arena will use one more fd. The valid range is 0 to 32."
-    },
-    "shared_disk_directory": {
-        "value": "",
-        "description": "Disk cache data placement directory, default value is empty, indicating that disk cache is not enabled."
-    },
-    "shared_disk_size_mb": {
-        "value": "0",
-        "description": "Upper limit of the shared disk, the unit is mb."
-    },
     "stream_idle_time_s": {
         "value": "300",
         "description": "stream idle time. default 300s (5 minutes)"

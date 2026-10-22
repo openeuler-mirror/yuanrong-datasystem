@@ -18,7 +18,7 @@
  * Description: Comprehensive verification tests for KVClient with brpc + enableLocalCache=true.
  *
  * Covers:
- *   - Create flow: shm and non-shm paths, all WriteModes, CacheTypes, input validation
+ *   - Create flow: shm and non-shm paths, all WriteModes, input validation
  *   - Set flow: ProcessShmPut, Publish (non-shm), all ExistenceOpts, TTL
  *   - Get flow: single/batch, Buffer/string/ReadOnlyBuffer, not-found, timeout
  *   - MSet flow: multi-create+publish, duplicate keys, transactional, partial failure
@@ -105,14 +105,12 @@ protected:
 
     SetParam DefaultSetParam()
     {
-        return { .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0,
-                 .existence = ExistenceOpt::NONE, .cacheType = CacheType::MEMORY };
+        return { .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0, .existence = ExistenceOpt::NONE };
     }
 
     MSetParam DefaultMSetParam()
     {
-        return { .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0,
-                 .existence = ExistenceOpt::NONE, .cacheType = CacheType::MEMORY };
+        return { .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0, .existence = ExistenceOpt::NONE };
     }
 };
 
@@ -198,18 +196,15 @@ TEST_F(KVClientBrpcLocalCacheVerifyTest, CreateAllWriteModes)
     }
 }
 
-// TC-1.1.7: Create with CacheType MEMORY and DISK
-TEST_F(KVClientBrpcLocalCacheVerifyTest, CreateAllCacheTypes)
+// TC-1.1.7: Create with default cache param
+TEST_F(KVClientBrpcLocalCacheVerifyTest, CreateWithDefaultParam)
 {
     InitClient();
-    for (auto cacheType : { CacheType::MEMORY, CacheType::DISK }) {
-        const std::string key = NewKey();
-        std::shared_ptr<Buffer> buffer;
-        SetParam param;
-        param.cacheType = cacheType;
-        DS_ASSERT_OK(client_->Create(key, SMALL_VALUE_SIZE, param, buffer));
-        ASSERT_NE(buffer, nullptr);
-    }
+    const std::string key = NewKey();
+    std::shared_ptr<Buffer> buffer;
+    SetParam param;
+    DS_ASSERT_OK(client_->Create(key, SMALL_VALUE_SIZE, param, buffer));
+    ASSERT_NE(buffer, nullptr);
 }
 
 // TC-1.1.8: MCreate batch (3 keys)
@@ -322,20 +317,17 @@ TEST_F(KVClientBrpcLocalCacheVerifyTest, SetAllWriteModes)
     }
 }
 
-// TC-1.2.11: Set with CacheType MEMORY and DISK
-TEST_F(KVClientBrpcLocalCacheVerifyTest, SetAllCacheTypes)
+// TC-1.2.11: Set with default cache param
+TEST_F(KVClientBrpcLocalCacheVerifyTest, SetWithDefaultParam)
 {
     InitClient();
-    for (auto cacheType : { CacheType::MEMORY, CacheType::DISK }) {
-        const std::string key = NewKey();
-        SetParam param = DefaultSetParam();
-        param.cacheType = cacheType;
-        DS_ASSERT_OK(client_->Set(key, "cache_test", param));
+    const std::string key = NewKey();
+    SetParam param = DefaultSetParam();
+    DS_ASSERT_OK(client_->Set(key, "cache_test", param));
 
-        std::string got;
-        DS_ASSERT_OK(client_->Get(key, got));
-        ASSERT_EQ(got, "cache_test");
-    }
+    std::string got;
+    DS_ASSERT_OK(client_->Get(key, got));
+    ASSERT_EQ(got, "cache_test");
 }
 
 // TC-1.2.12: Set with TTL

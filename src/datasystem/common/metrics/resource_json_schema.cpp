@@ -67,7 +67,6 @@ const std::array<ResourceFieldDesc, DESC_COUNT> DESC_TABLE = {
     ResourceFieldDesc{ {}, {}, '/', false, "master_worker_sc_service_thread_pool" },
     ResourceFieldDesc{ {}, {}, '/', false, "master_sc_service_thread_pool" },
     ResourceFieldDesc{ {}, {}, '/', false, "stream_remote_send_success_rate" },
-    ResourceFieldDesc{ {}, {}, '/', false, "shared_disk" },
     ResourceFieldDesc{ {}, {}, '/', false, "sc_local_cache" },
     ResourceFieldDesc{ { "mem_hit_num", "disk_hit_num", "l2_hit_num", "remote_hit_num", "miss_num" },
         { true, true, true, true, true }, '/', true, "oc_hit_num" },

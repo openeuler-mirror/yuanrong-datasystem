@@ -485,15 +485,6 @@ ObjectAccessRecorder &ObjectAccessRecorder::TimeoutMs(uint64_t timeoutMs)
     return *this;
 }
 
-ObjectAccessRecorder &ObjectAccessRecorder::CacheType(int cacheType)
-{
-    if (!core_.ShouldRecordInternal()) {
-        return *this;
-    }
-    state_.cacheType.SetNumeric(cacheType);
-    return *this;
-}
-
 ObjectAccessRecorder &ObjectAccessRecorder::RemoteClientId(std::string_view remoteClientId)
 {
     if (!core_.ShouldRecordInternal()) {
@@ -616,7 +607,6 @@ void ObjectAccessRecorder::Record()
     state_.existence.Fill(req.existence);
     state_.subTimeout.Fill(req.subTimeout);
     state_.timeout.Fill(req.timeout);
-    state_.cacheType.Fill(req.cacheType);
     req.latencySummary = state_.latencySummary;
     core_.WriteObject(state_.code, state_.dataSize.Resolve(), elapsed, req, state_.respMsg, state_.asyncElapsedUs);
     core_.MarkRecorded();
@@ -1181,7 +1171,6 @@ std::string RequestParam::ToString() const
     AppendRequestParam(ret, "ttl_second:", ttlSecond);
     AppendRequestParam(ret, "sub_timeout:", subTimeout);
     AppendRequestParam(ret, "timeout:", timeout);
-    AppendRequestParam(ret, "cacheType:", cacheType);
     AppendRequestParam(ret, "transportType:", transportType);
     AppendRequestParam(ret, "latencySummary:", latencySummary);
     if (ret.length() > 1) {

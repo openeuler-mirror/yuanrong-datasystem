@@ -285,24 +285,6 @@ struct ObjectInterface {
     }
 
     /**
-     * @brief Check if the object is memory cache.
-     * @return True if the object is memory cache, false otherwise.
-     */
-    bool IsMemoryCache() const
-    {
-        return modeInfo.GetCacheType() == CacheType::MEMORY;
-    }
-
-    /**
-     * @brief Check if the object is disk cache.
-     * @return True if the object is disk cache, false otherwise.
-     */
-    bool IsDiskCache() const
-    {
-        return modeInfo.GetCacheType() == CacheType::DISK;
-    }
-
-    /**
      * @brief Check if the object is empty.
      * @return True if the object is empty.
      */

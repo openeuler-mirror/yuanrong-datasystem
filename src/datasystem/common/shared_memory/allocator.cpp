@@ -43,7 +43,6 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/flags/eviction_watermark.h"
 
-DS_DECLARE_string(shared_disk_directory);
 DS_DECLARE_uint32(eviction_reserve_mem_threshold_mb);
 DS_DECLARE_uint32(arena_per_tenant);
 DS_DECLARE_bool(enable_fallocate);
@@ -97,25 +96,6 @@ Status Allocator::InitSharedMemory(uint64_t size, int objectThreshold, int strea
     return Status::OK();
 }
 
-Status Allocator::InitSharedDisk(uint64_t size)
-{
-    physicalDiskStats_ = std::make_unique<ResourcePool>(size);
-    diskStats_ = std::make_unique<ResourcePool>(size);
-    RETURN_OK_IF_TRUE(size == 0 || FLAGS_shared_disk_directory.empty());
-    RETURN_IF_NOT_OK(RemoveAll(FLAGS_shared_disk_directory));
-    const int permission = 0700;
-    RETURN_IF_NOT_OK(CreateDir(FLAGS_shared_disk_directory, true, permission));
-
-    auto freeSpace = GetFreeSpaceBytes(FLAGS_shared_disk_directory);
-    if (size > freeSpace) {
-        LOG(WARNING) << FormatString(
-            "The required disk space(%lluB) exceeds the available space(%lluB), which may lead to OOM", size,
-            freeSpace);
-    }
-    diskDetecter_ = std::make_unique<SharedDiskDetecter>(FLAGS_shared_disk_directory);
-    return Status::OK();
-}
-
 Status Allocator::InitDevHostMemory(uint64_t devHostSize)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(devHostSize > 0, K_INVALID, "Got invalid dev host memory init!");
@@ -140,12 +120,7 @@ Status Allocator::InitUBTransportMemory(uint64_t size)
     return Status::OK();
 }
 
-bool Allocator::IsDiskAvailable()
-{
-    return diskDetecter_ == nullptr ? true : diskDetecter_->IsAvailable();
-}
-
-Status Allocator::Init(uint64_t shmSize, uint64_t shdSize, bool populate, bool scaling, ssize_t decayMs,
+Status Allocator::Init(uint64_t shmSize, bool populate, bool scaling, ssize_t decayMs,
                        int objectThreshold, int streamThreshold)
 {
     if (arenaManager_) {
@@ -153,7 +128,6 @@ Status Allocator::Init(uint64_t shmSize, uint64_t shdSize, bool populate, bool s
     }
     RETURN_IF_NOT_OK(ValidateSharedMemoryPopulateFlags(populate));
     RETURN_IF_NOT_OK(InitSharedMemory(shmSize, objectThreshold, streamThreshold));
-    RETURN_IF_NOT_OK(InitSharedDisk(shdSize));
     arenaManager_ = std::make_unique<ArenaManager>(populate, scaling, decayMs);
     arenaManager_->Init();
     return Status::OK();
@@ -212,8 +186,6 @@ uint64_t Allocator::GetMaxMemoryLimit(CacheType cacheType) const
     switch (cacheType) {
         case CacheType::MEMORY:
             return physicalMemoryStats_->FootprintLimit();
-        case CacheType::DISK:
-            return physicalDiskStats_->FootprintLimit();
         case CacheType::DEV_DEVICE:
             return devDeviceMemStats_->FootprintLimit();
         case CacheType::DEV_HOST:
@@ -231,8 +203,6 @@ bool Allocator::IsMemoryPoolInitialized(CacheType cacheType) const
     switch (cacheType) {
         case CacheType::MEMORY:
             return physicalMemoryStats_ != nullptr && objectMemoryStats_ != nullptr;
-        case CacheType::DISK:
-            return diskStats_ != nullptr && physicalDiskStats_ != nullptr;
         case CacheType::DEV_DEVICE:
             return devDeviceMemStats_ != nullptr;
         case CacheType::DEV_HOST:
@@ -301,8 +271,6 @@ ResourcePool *Allocator::GetResourcePoolByType(ServiceType serviceType, CacheTyp
         return streamMemoryStats_.get();
     }
     switch (cacheType) {
-        case CacheType::DISK:
-            return diskStats_.get();
         case CacheType::DEV_HOST:
             return devHostMemStats_.get();
         case CacheType::DEV_DEVICE:
@@ -316,11 +284,8 @@ ResourcePool *Allocator::GetResourcePoolByType(ServiceType serviceType, CacheTyp
     }
 }
 
-ResourcePool *Allocator::GetPhyResourcePoolByType(CacheType cacheType) const
+ResourcePool *Allocator::GetPhyResourcePoolByType() const
 {
-    if (cacheType == CacheType::DISK) {
-        return physicalDiskStats_.get();
-    }
     return physicalMemoryStats_.get();
 }
 
@@ -354,8 +319,6 @@ void Allocator::ResetForTest()
     }
     arenaManager_.reset();
     physicalMemoryStats_.reset();
-    physicalDiskStats_.reset();
-    diskStats_.reset();
     devDeviceMemStats_.reset();
     devHostMemStats_.reset();
     ubTransportStats_.reset();
@@ -363,7 +326,6 @@ void Allocator::ResetForTest()
     ubTransportPeakUsage_.store(0, std::memory_order_relaxed);
     objectMemoryStats_.reset();
     streamMemoryStats_.reset();
-    diskDetecter_.reset();
     checkIfAllFdReleasedHandler_ = nullptr;
     refPageCount_.store(0, std::memory_order_relaxed);
     noRefPageCount_.store(0, std::memory_order_relaxed);
@@ -387,14 +349,6 @@ Status Allocator::AllocateMemory(const std::string &tenantId, uint64_t needSize,
 #ifdef WITH_TESTS
     INJECT_POINT("worker.Allocator.AllocateMemory");
 #endif
-    if (cacheType == CacheType::DISK) {
-        if (FLAGS_shared_disk_directory.empty()) {
-            RETURN_STATUS(K_INVALID, "Allocate failed because shared disk is not enabled.");
-        }
-        if (!IsDiskAvailable()) {
-            RETURN_STATUS(K_RUNTIME_ERROR, "Allocate failed because shared disk is not available.");
-        }
-    }
 
     Status incrementRc = IncrementMemoryUsage(needSize, serviceType, cacheType);
     if (incrementRc.GetCode() == StatusCode::K_OUT_OF_MEMORY) {
@@ -437,9 +391,7 @@ Status Allocator::AllocateMemory(const std::string &tenantId, uint64_t needSize,
 
 Status Allocator::IncrementMemoryUsage(uint64_t needSize, ServiceType serviceType, CacheType cacheType)
 {
-    if (cacheType == CacheType::DISK) {
-        return diskStats_->AddUsageCAS(needSize);
-    } else if (cacheType == CacheType::DEV_DEVICE) {
+    if (cacheType == CacheType::DEV_DEVICE) {
         return devDeviceMemStats_->AddUsageCAS(needSize);
     } else if (cacheType == CacheType::DEV_HOST) {
         return devHostMemStats_->AddUsageCAS(needSize);
@@ -552,9 +504,6 @@ void Allocator::ChangeNoRefPageCount(int64_t num)
 
 uint64_t Allocator::GetTotalPhysicalMemoryUsage(CacheType cacheType)
 {
-    if (cacheType == CacheType::DISK) {
-        return physicalDiskStats_->GetOrUpdateRealUsage(diskStats_->RealUsage());
-    }
     if (cacheType == CacheType::DEV_DEVICE) {
         return devDeviceMemStats_->RealUsage();
     }
@@ -579,7 +528,7 @@ bool Allocator::AddTotalPhysicalMemoryUsage(CacheType type, uint64_t size)
     if (type == CacheType::DEV_DEVICE || type == CacheType::DEV_HOST || type == CacheType::UB_TRANSPORT) {
         return true;
     }
-    return GetPhyResourcePoolByType(type)->AddRealUsage(size);
+    return GetPhyResourcePoolByType()->AddRealUsage(size);
 }
 
 void Allocator::SubTotalPhysicalMemoryUsage(CacheType type, uint64_t size)
@@ -587,7 +536,7 @@ void Allocator::SubTotalPhysicalMemoryUsage(CacheType type, uint64_t size)
     if (type == CacheType::DEV_DEVICE || type == CacheType::DEV_HOST || type == CacheType::UB_TRANSPORT) {
         return;
     }
-    (void)GetPhyResourcePoolByType(type)->SubRealUsageCAS(size);
+    (void)GetPhyResourcePoolByType()->SubRealUsageCAS(size);
 }
 
 std::set<int> Allocator::GetAllExpiredFds()

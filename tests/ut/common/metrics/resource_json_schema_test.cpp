@@ -94,7 +94,6 @@ TEST_F(ResourceJsonSchemaTest, ThreadPoolGroupOrder)
 // GetResourceFieldDesc: ods-flagged-false groups are recordGroup=false (omitted from JSON entirely).
 TEST_F(ResourceJsonSchemaTest, OmittedGroups)
 {
-    EXPECT_FALSE(GetResourceFieldDesc(ResMetricName::SHARED_DISK).recordGroup);
     EXPECT_FALSE(GetResourceFieldDesc(ResMetricName::SC_LOCAL_CACHE).recordGroup);
     EXPECT_FALSE(GetResourceFieldDesc(ResMetricName::STREAM_COUNT).recordGroup);
     EXPECT_FALSE(GetResourceFieldDesc(ResMetricName::OBS_REQUEST_SUCCESS_RATE).recordGroup);

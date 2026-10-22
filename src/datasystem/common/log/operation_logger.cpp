@@ -139,7 +139,7 @@ const std::unordered_set<std::string> &ClientUsedFlagNames()
         // read via etcd_keep_alive on the client etcd path (router_client / service_discovery)
         "heartbeat_interval_ms",
         // read via arena.cpp on the embedded, client + URMA arena registration path
-        "arena_per_tenant", "shared_disk_arena_per_tenant",
+        "arena_per_tenant",
     };
     return kSet;
 }

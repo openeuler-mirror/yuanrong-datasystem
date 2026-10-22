@@ -29,14 +29,13 @@ namespace datasystem {
 namespace memory {
 enum class CacheType : int {
     MEMORY = 0,
-    DISK = 1,
+    // Value 1 was DISK (removed); do not reuse.
     DEV_DEVICE = 2,
     DEV_HOST = 3,
     UB_TRANSPORT = 4,
 };
 
 static const std::unordered_map<CacheType, std::string> CACHE_TYPE_STR = { { CacheType::MEMORY, "Shared memory" },
-                                                                           { CacheType::DISK, "Shared disk" },
                                                                            { CacheType::DEV_DEVICE, "Device pin mem" },
                                                                            { CacheType::DEV_HOST, "DevHost pin mem" } };
 

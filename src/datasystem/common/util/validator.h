@@ -419,22 +419,6 @@ public:
     }
 
     /**
-     * @brief Validate the given string matches the shared disk arena per tenant supported.
-     * @param[in] flagName The shared disk arena per tenant flag.
-     * @param[in] value The string to be checked.
-     * @return True if valid.
-     */
-    static bool ValidateSharedDiskArenaPerTenant(const char *flagName, const uint32_t value)
-    {
-        const uint32_t maxValueLimit = 32;
-        if (value <= maxValueLimit) {
-            return true;
-        }
-        LOG(ERROR) << FormatString("The value of the flag %s is %u, which exceeds the limit [0,32].", flagName, value);
-        return false;
-    }
-
-    /**
      * @brief Validate a log file base name.
      * @param[in] value The string to be checked.
      * @return True if valid.
@@ -906,22 +890,6 @@ public:
         LOG(ERROR) << FormatString("The value of %s flag is %zu MB, which must be in [0, %zu].", flagname, value,
                                    maxValue);
         return false;
-    }
-
-    /**
-     * @brief Validate the given value matches the shared disk size supported.
-     * @param[in] flagName The shared disk size flag.
-     * @param[in] value The value to be checked.
-     * @return True if valid.
-     */
-    static bool ValidateSharedDiskSize(const char *flagname, uint64_t value)
-    {
-        (void)flagname;
-        if (value > MB_LIMIT) {
-            LOG(ERROR) << "The " << flagname << " must be smaller than " << MB_LIMIT << ".";
-            return false;
-        }
-        return true;
     }
 
     static bool ValidateLocalCacheMemSize(const char *flagname, uint64_t value)

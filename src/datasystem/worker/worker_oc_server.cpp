@@ -114,7 +114,6 @@ DS_DEFINE_uint64(shared_memory_size_mb, 64,
 DS_DEFINE_uint64(shared_memory_size_mb, 1024,
                  "Upper limit of the shared memory, the unit is mb, must be greater than 0.");
 #endif
-DS_DEFINE_uint64(shared_disk_size_mb, 0, "Upper limit of the shared disk, the unit is mb.");
 
 #ifdef WITH_TESTS
 DS_DEFINE_uint64(sc_local_cache_memory_size_mb, 128,
@@ -147,7 +146,6 @@ DS_DEFINE_uint32(request_expire_time_s, 300,
                  "value of this parameter, the authentication fails and the service is denied.");
 DS_DEFINE_validator(ready_check_path, &Validator::ValidatePathString);
 DS_DEFINE_validator(shared_memory_size_mb, &Validator::ValidateSharedMemSize);
-DS_DEFINE_validator(shared_disk_size_mb, &Validator::ValidateSharedDiskSize);
 DS_DEFINE_validator(sc_local_cache_memory_size_mb, &Validator::ValidateLocalCacheMemSize);
 DS_DEFINE_validator(page_size, &Validator::ValidatePageSize);
 DS_DECLARE_int32(sc_regular_socket_num);
@@ -2457,12 +2455,11 @@ Status WorkerOCServer::InitRpcAndMemoryRuntime()
 
     // Init shared memory
     uint64_t sharedMemoryBytes = FLAGS_shared_memory_size_mb * 1024ul * 1024ul;  // convert mb to bytes.
-    uint64_t sharedDiskBytes = FLAGS_shared_disk_size_mb * 1024ul * 1024ul;      // convert mb to bytes.
     ssize_t decayMs = FLAGS_memory_reclamation_time_second * 1000;               // convert to ms.
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(datasystem::memory::Allocator::Instance()->Init(
-                                         sharedMemoryBytes, sharedDiskBytes, FLAGS_shared_memory_populate, true,
-                                         decayMs, FLAGS_oc_shm_threshold_percentage, FLAGS_sc_shm_threshold_percentage),
-                                     "Init allocator failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        datasystem::memory::Allocator::Instance()->Init(sharedMemoryBytes, FLAGS_shared_memory_populate, true, decayMs,
+            FLAGS_oc_shm_threshold_percentage, FLAGS_sc_shm_threshold_percentage),
+        "Init allocator failed");
     // Call base class to init common service
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CommonServer::Init(), "CommonServer init failed");
     return Status::OK();
@@ -2621,9 +2618,6 @@ void WorkerOCServer::RegisteringWorkerCommonCallbackFunc()
     // The usage of share memory
     instance.RegisterCollectHandler(ResMetricName::SHARED_MEMORY,
                                     []() { return memory::Allocator::Instance()->GetMemoryStatistics(); });
-    // The usage of share disk
-    instance.RegisterCollectHandler(ResMetricName::SHARED_DISK,
-                                    []() { return memory::Allocator::Instance()->GetSharedDiskStatistics(); });
     // The usage of WorkerOCService
     instance.RegisterCollectHandler(ResMetricName::WORKER_OC_SERVICE_THREAD_POOL, [this]() {
         return GetRpcServicesUsage("WorkerOCService").ToString(FLAGS_log_monitor_interval_ms);

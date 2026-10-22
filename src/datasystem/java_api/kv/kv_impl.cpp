@@ -49,7 +49,6 @@ Status SetDirectBufferNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jobje
         datasystem::object_cache::FullParam fullParam;
         fullParam.writeMode = param.writeMode;
         fullParam.ttlSecond = param.ttlSecond;
-        fullParam.cacheType = param.cacheType;
         fullParam.consistencyType = ConsistencyType::CAUSAL;
         int limit = GetByteBufferLimit(env, valueJO);
         access.DataSize(static_cast<uint64_t>(limit));
@@ -78,7 +77,6 @@ Status SetHeapBufferNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jbyteAr
     } else {
         fullParam.writeMode = param.writeMode;
         fullParam.consistencyType = ConsistencyType::CAUSAL;
-        fullParam.cacheType = param.cacheType;
         fullParam.ttlSecond = param.ttlSecond;
     }
     // When putting HeapByteBuffer data, if the code uses the shared memory logic, the set interface is copy-free.

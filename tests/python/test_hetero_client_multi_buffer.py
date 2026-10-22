@@ -97,7 +97,6 @@ class TestHeteroClientMultiBuffer(unittest.TestCase):
         self.assertEqual(native_set_param.write_mode, ds.WriteMode(set_param.write_mode.value))
         self.assertEqual(native_set_param.existence, ds.ExistenceOpt(set_param.existence.value))
         self.assertEqual(native_set_param.ttl_second, 60)
-        self.assertEqual(native_set_param.cache_type, ds.CacheType(set_param.cache_type.value))
 
     def test_native_errors_are_raised(self):
         self.native_client.get_result = (_Status("get failed"), [])

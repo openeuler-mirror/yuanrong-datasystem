@@ -40,11 +40,6 @@ enum class ConsistencyType : int {
     CAUSAL = 1,
 };
 
-enum class CacheType : int {
-    MEMORY = 0,
-    DISK = 1,
-};
-
 enum class ServerState : uint8_t {
     NORMAL = 0,
     REBOOT = 1,

@@ -199,8 +199,8 @@ Status WorkerOcServiceGetImpl::BatchGetRetrieveRemotePayload(uint64_t completeDa
     // Only create new shm if size changed or not exist.
     if (szChanged) {
         auto shmUnit = std::make_shared<ShmUnit>();
-        RETURN_IF_NOT_OK(AllocateMemoryForObject(objectKey, completeDataSize, metaSz, false, evictionManager_, *shmUnit,
-                                                 entry->modeInfo.GetCacheType()));
+        RETURN_IF_NOT_OK(AllocateMemoryForObject(objectKey, completeDataSize, metaSz, false, evictionManager_,
+                                                 *shmUnit));
         shmUnit->id = ShmKey::Intern(GetStringUuid());
         entry->SetShmUnit(shmUnit);
     }

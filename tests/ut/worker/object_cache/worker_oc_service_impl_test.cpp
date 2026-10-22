@@ -786,7 +786,6 @@ public:
         obj->SetCreateTime(1);
         obj->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
         obj->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
-        obj->modeInfo.SetCacheType(CacheType::MEMORY);
         obj->stateInfo.SetDataFormat(DataFormat::BINARY);
         obj->stateInfo.SetPrimaryCopy(true);
         DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(obj)));
@@ -1437,7 +1436,7 @@ TEST_F(WorkerOcServiceImplTest, CreateMetadataMapsDispatchedOwnerPeerDead)
     ObjectKV objectKV(objectKey, *safeObj);
     const std::vector<std::string> nestedKeys;
     const WorkerOcServicePublishImpl::PublishParams params{
-        ObjectLifeState::OBJECT_PUBLISHED, nestedKeys, false, 0, ExistenceOptPb::NONE, CacheType::MEMORY
+        ObjectLifeState::OBJECT_PUBLISHED, nestedKeys, false, 0, ExistenceOptPb::NONE
     };
 
     auto rc = publish->RequestingToMasterCore(objectKV, params);
@@ -1463,7 +1462,7 @@ TEST_F(WorkerOcServiceImplTest, CreateMetadataMapsUndispatchedOwnerPeerDead)
     ObjectKV objectKV(objectKey, *safeObj);
     const std::vector<std::string> nestedKeys;
     const WorkerOcServicePublishImpl::PublishParams params{
-        ObjectLifeState::OBJECT_PUBLISHED, nestedKeys, false, 0, ExistenceOptPb::NONE, CacheType::MEMORY
+        ObjectLifeState::OBJECT_PUBLISHED, nestedKeys, false, 0, ExistenceOptPb::NONE
     };
 
     auto rc = publish->RequestingToMasterCore(objectKV, params);

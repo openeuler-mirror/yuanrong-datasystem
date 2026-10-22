@@ -208,8 +208,7 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
         return authRc;
     }
     Status rc = CreateImpl(tenantId, ClientKey::Intern(req.client_id()), req.object_key(), req.data_size(),
-                           req.request_timeout(), req.allocation_id(), resp,
-                           static_cast<CacheType>(req.cache_type()));
+                           req.request_timeout(), req.allocation_id(), resp);
     const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     FinalizeWorkerLatencyTrace(LatencyTickKey::WORKER_CREATE_END, config, traceEnabled, totalUs, true, resp);
     access.Result(rc).Record();
@@ -225,7 +224,7 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
 Status WorkerOcServiceCreateImpl::CreateImpl(const std::string &tenantId, const ClientKey &clientId,
                                              const std::string &rawObjectKey, size_t dataSize,
                                              int64_t requestTimeoutMs, const std::string &allocationId,
-                                             CreateRspPb &resp, CacheType cacheType)
+                                             CreateRspPb &resp)
 {
     auto objectKey = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, rawObjectKey);
     ShmKey shmId;
@@ -240,7 +239,7 @@ Status WorkerOcServiceCreateImpl::CreateImpl(const std::string &tenantId, const 
     auto shmUnit = std::make_shared<ShmUnit>();
     auto metadataSize = GetMetadataSize();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        AllocateMemoryForObject(objectKey, dataSize, metadataSize, true, evictionManager_, *shmUnit, cacheType),
+        AllocateMemoryForObject(objectKey, dataSize, metadataSize, true, evictionManager_, *shmUnit),
         "worker allocate memory failed");
 
     shmUnit->id = shmId;

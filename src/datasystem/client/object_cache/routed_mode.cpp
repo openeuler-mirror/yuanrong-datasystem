@@ -388,7 +388,6 @@ Status RoutedMode::ProcessRoutedMCreateGroup(const HostPort &worker, const std::
     const auto requestContext = host_.buildTransportRequestContext(routeContext);
     client::TransportCreateParam createParam;
     createParam.requestContext = requestContext;
-    createParam.cacheType = param.cacheType;
     createParam.consistencyType = param.consistencyType;
     createParam.writeMode = param.writeMode;
     createParam.subTimeoutMs = requestTimeoutMs_;
@@ -430,7 +429,6 @@ Status RoutedMode::ProcessTransportPut(
     const auto requestContext = host_.buildTransportRequestContext(routeContext);
     client::TransportCreateParam createParam;
     createParam.requestContext = requestContext;
-    createParam.cacheType = param.cacheType;
     createParam.consistencyType = param.consistencyType;
     createParam.writeMode = param.writeMode;
     createParam.subTimeoutMs = subTimeoutMs;
@@ -613,7 +611,6 @@ Status RoutedMode::MaterializeTransportItem(const std::string &objectKey, client
         FullParam param;
         param.writeMode = meta.mode.GetWriteMode();
         param.consistencyType = meta.mode.GetConsistencyType();
-        param.cacheType = meta.mode.GetCacheType();
         // The routed owner checks the target session generation, so the legacy initial-Worker version is unused.
         auto bufferInfo = boundMode_->MakeObjectBufferInfo(item.objectKey, const_cast<uint8_t *>(data.externalData),
                                                            data.externalSize, meta.metadataSize, param, 0,
@@ -921,7 +918,6 @@ Status RoutedMode::ProcessTransportMSet(const MSetRouteGroup &group, const MSetP
     const auto requestContext = host_.buildTransportRequestContext(routeContext);
     client::TransportCreateParam createParam;
     createParam.requestContext = requestContext;
-    createParam.cacheType = param.cacheType;
     createParam.consistencyType = ConsistencyType::CAUSAL;
     createParam.writeMode = param.writeMode;
     createParam.subTimeoutMs = requestTimeoutMs_;

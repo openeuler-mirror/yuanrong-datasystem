@@ -277,7 +277,6 @@ public:
         uint32_t writeMode;
         uint32_t dataFormat;
         uint32_t consistencyType;
-        uint32_t cacheType;
         bool isReplica;
     };
 

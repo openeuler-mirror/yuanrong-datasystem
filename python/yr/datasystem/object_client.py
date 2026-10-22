@@ -64,24 +64,6 @@ class ConsistencyType(Enum):
     CAUSAL = ds.ConsistencyType.CAUSAL
 
 
-class CacheType(Enum):
-    """
-    The `CacheType` class defines the consistency of object.
-
-    Currently, the following 'CacheType' are supported:
-
-    ===================================  ==================================================================
-    Definition                            Description
-    ===================================  ==================================================================
-    `CacheType.MEMEORY`               Cache to memory.
-    `CacheType.DISK`                  Cache to disk.
-    ===================================  ==================================================================
-    """
-
-    MEMEORY = ds.CacheType.MEMORY
-    DISK = ds.CacheType.DISK
-
-
 class Buffer:
     """
     The `Buffer` class defines a Buffer in object cache.

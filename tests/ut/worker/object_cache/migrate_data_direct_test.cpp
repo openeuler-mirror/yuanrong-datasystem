@@ -137,7 +137,6 @@ public:
         auto *cfg = meta->mutable_config();
         cfg->set_consistency_type(static_cast<uint32_t>(ConsistencyType::CAUSAL));
         cfg->set_write_mode(static_cast<uint32_t>(WriteMode::NONE_L2_CACHE));
-        cfg->set_cache_type(static_cast<uint32_t>(CacheType::MEMORY));
         cfg->set_data_format(static_cast<uint32_t>(DataFormat::BINARY));
         return metaInfo;
     }
@@ -525,7 +524,6 @@ TEST_F(MigrateDataDirectTest, NewerTargetCopyWithoutMetadataRemainsSkipped)
     ptr->SetCreateTime(targetVersion);
     ptr->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
     ptr->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
-    ptr->modeInfo.SetCacheType(CacheType::MEMORY);
     ptr->stateInfo.SetDataFormat(DataFormat::BINARY);
     ptr->stateInfo.SetPrimaryCopy(true);
     DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(ptr)));
@@ -556,7 +554,6 @@ TEST_F(MigrateDataDirectTest, NeedModifyPrimaryWithMetadataCallsReplacePrimary)
     ptr->SetCreateTime(version);
     ptr->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
     ptr->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
-    ptr->modeInfo.SetCacheType(CacheType::MEMORY);
     ptr->stateInfo.SetDataFormat(DataFormat::BINARY);
     ptr->stateInfo.SetPrimaryCopy(true);
     DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(ptr)));

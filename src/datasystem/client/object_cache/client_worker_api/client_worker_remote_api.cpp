@@ -130,7 +130,6 @@ void InitMultiPublishReq(const std::vector<std::shared_ptr<ObjectBufferInfo>> &b
     req.set_ttl_second(param.ttlSecond);
     req.set_write_mode(static_cast<uint32_t>(bufferInfo[0]->objectMode.GetWriteMode()));
     req.set_consistency_type(static_cast<uint32_t>(bufferInfo[0]->objectMode.GetConsistencyType()));
-    req.set_cache_type(static_cast<uint32_t>(bufferInfo[0]->objectMode.GetCacheType()));
     req.set_existence(static_cast<::datasystem::ExistenceOptPb>(param.existence));
     req.set_is_replica(param.isReplica);
     req.set_auto_release_memory_ref(!bufferInfo[0]->shmId.Empty());
@@ -338,8 +337,7 @@ Status ClientWorkerRemoteApi::ReconnectWorker(const std::vector<std::string> &gR
 
 Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataSize, uint32_t &version,
                                      uint64_t &metadataSize, std::shared_ptr<ShmUnitInfo> &shmBuf,
-                                     std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo, const CacheType &cacheType,
-                                     int32_t requestTimeoutMs)
+                                     std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo, int32_t requestTimeoutMs)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY);
     const bool traceEnabled = ShouldCollectLatencyTrace(GetClientLatencyTraceConfig());
@@ -351,7 +349,6 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
     req.set_object_key(objectKey);
     req.set_client_id(clientId_);
     req.set_data_size(dataSize);
-    req.set_cache_type(static_cast<uint32_t>(cacheType));
     req.set_request_timeout(TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when create data.");
 

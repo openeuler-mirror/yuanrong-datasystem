@@ -40,7 +40,6 @@ struct TransportRequestContext {
 
 struct TransportCreateParam {
     TransportRequestContext requestContext;
-    CacheType cacheType = CacheType::MEMORY;
     ConsistencyType consistencyType = ConsistencyType::PRAM;
     WriteMode writeMode = WriteMode::NONE_L2_CACHE;
     int64_t subTimeoutMs = 0;

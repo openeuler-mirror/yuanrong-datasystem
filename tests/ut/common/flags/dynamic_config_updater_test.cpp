@@ -71,7 +71,7 @@ TEST(UrmaLogThresholdConfigTest, StartupFlagDefaultsTo500AndRejectsInvalidValues
         EXPECT_EQ(FLAGS_urma_log_threshold_us, value);
         EXPECT_EQ(GetUrmaLogThresholdUs(), value);
     }
-    for (const std::string &value : { "0", "-1", "4294967296", "1.5", "bad" }) {
+    for (const std::string value : { "0", "-1", "4294967296", "1.5", "bad" }) {
         EXPECT_FALSE(SetCommandLineOption("urma_log_threshold_us", value, error)) << value;
         EXPECT_EQ(FLAGS_urma_log_threshold_us, std::numeric_limits<uint32_t>::max());
         EXPECT_EQ(GetUrmaLogThresholdUs(), std::numeric_limits<uint32_t>::max());

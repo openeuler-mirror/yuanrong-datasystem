@@ -138,34 +138,31 @@ TEST_F(ScaleDownNodeSelectorTest, TestCheckCondition)
     MigrateDataRspPb rsp;
 
     datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 0, 60, 0)");
-    ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), true);
+    ASSERT_EQ(migrateStrategy.CheckCondition(rsp), true);
 
     datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 0, 30, 1)");
-    ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), true);
+    ASSERT_EQ(migrateStrategy.CheckCondition(rsp), true);
 
     datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 0, 15, 2)");
-    ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), true);
+    ASSERT_EQ(migrateStrategy.CheckCondition(rsp), true);
 
     datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 1, 15, 3)");
-    ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), false);
-
-    datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 0, 60, 0)");
-    ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::DISK), true);
+    ASSERT_EQ(migrateStrategy.CheckCondition(rsp), false);
 
     datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 0, 30, 0)");
-    ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), false);
+    ASSERT_EQ(migrateStrategy.CheckCondition(rsp), false);
 
     datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 0, 10, 0)");
-    ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), false);
+    ASSERT_EQ(migrateStrategy.CheckCondition(rsp), false);
 
     datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 1, 60, 0)");
-    ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), false);
+    ASSERT_EQ(migrateStrategy.CheckCondition(rsp), false);
 
     datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 1, 30, 0)");
-    ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), false);
+    ASSERT_EQ(migrateStrategy.CheckCondition(rsp), false);
 
     datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 1, 10, 0)");
-    ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), false);
+    ASSERT_EQ(migrateStrategy.CheckCondition(rsp), false);
 }
 
 class DataLimiterTest : public CommonTest {
@@ -1018,7 +1015,7 @@ TEST_F(MigrateDataHandlerTest, TestMigrateBigObjectsWithLimitedRate)
 TEST_F(MigrateDataHandlerTest, TestPayloadData)
 {
     std::vector<RpcMessage> data;
-    auto payloadData = std::make_unique<PayloadData>("111", 0, std::move(data), 2, datasystem::CacheType::MEMORY);
+    auto payloadData = std::make_unique<PayloadData>("111", 0, std::move(data), 2);
     const size_t payloadDataSize = 2;
     ASSERT_EQ(payloadData->Size(), payloadDataSize);
     std::vector<MemView> memViews = payloadData->GetMemViews();

@@ -140,7 +140,6 @@ Status ClientWorkerBaseApi::PreparePublishReq(const std::shared_ptr<ObjectBuffer
     req.set_data_size(bufferInfo->dataSize);
     req.set_write_mode(static_cast<uint32_t>(bufferInfo->objectMode.GetWriteMode()));
     req.set_consistency_type(static_cast<uint32_t>(bufferInfo->objectMode.GetConsistencyType()));
-    req.set_cache_type(static_cast<uint32_t>(bufferInfo->objectMode.GetCacheType()));
     req.set_shm_id(bufferInfo->shmId);
     return Status::OK();
 }

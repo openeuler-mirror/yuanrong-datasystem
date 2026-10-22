@@ -133,7 +133,7 @@ Status ShmUnit::AllocateMemory(const std::string &tenantId, uint64_t needSize, b
     size = needSize;
     tenantId_ = tenantId;
     VLOG(1) << "[ShmUnit] AllocateMemory, Tenant: " << (tenantId.empty() ? "Default" : tenantId)
-            << ", size: " << needSize << ", cachetype: " << static_cast<int>(cacheType) << ", id: " << id
+            << ", size: " << needSize << ", id: " << id
             << ", identity: " << GetIdentity();
     return Status::OK();
 }

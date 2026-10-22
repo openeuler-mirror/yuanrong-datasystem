@@ -53,7 +53,7 @@ public:
      * @param[in] type The cache type (e.g., memory or disk).
      * @return True if the migration condition is satisfied, false otherwise.
      */
-    virtual bool CheckCondition(const MigrateDataRspPb &rsp, const CacheType &type) = 0;
+    virtual bool CheckCondition(const MigrateDataRspPb &rsp) = 0;
 
     /**
      * @brief Update strategy when migrate failed.

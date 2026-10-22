@@ -474,9 +474,6 @@ global:
 | global.performance.enablePipelineH2d | bool | `false` | 是否开启 pipeline Host-to-Device（H2D）流水线传输，将主机侧数据准备与设备侧拷贝重叠以提升传输性能。仅在 `global.performance.enableUrma=true` 时生效，否则被忽略 |
 | global.performance.pipelineH2dThreadNum | int | `64` | pipeline H2D 工作线程数。取值范围 [8, 128]，超出该范围会在运行时回退为默认值 64 |
 | global.performance.enableTransportFallback | bool | `true` | 是否开启快速传输（urma/rdma）回退到tcp传输的功能，默认值为true |
-| global.performance.sharedDiskDirectory | string | `""` | 磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存 |
-| global.performance.sharedDiskSize | int | `0` | 共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存 |
-| global.performance.sharedDiskArenaPerTenant  | int | `8` | 每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32] |
 | global.performance.enableRdma | bool | `false` | 是否为OC工作节点之间的数据传输启用RDMA |
 | global.performance.rdmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，false时将每个对象分别注册为一个段 |
 | global.performance.ucxTransportLayerSelection | string | `rc_x` | UCX使用的 RDMA传输模式。默认选用 "rc_x" 以获得最佳性能；若当前环境不支持，可改用 "rc"、"ud" 或 "dc"。各模式适用场景详见[UCX传输模式说明](https://github.com/openucx/ucx/wiki/UCX-environment-parameters) |

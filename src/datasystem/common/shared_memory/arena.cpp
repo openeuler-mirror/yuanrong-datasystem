@@ -45,7 +45,6 @@
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/shared_memory/jemalloc.h"
 #include "datasystem/common/shared_memory/mmap/flexible_mmap.h"
-#include "datasystem/common/shared_memory/mmap/disk_mmap.h"
 #include "datasystem/common/shared_memory/mmap/mem_mmap.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
@@ -59,13 +58,6 @@ DS_DEFINE_uint32_dynamic(
     "the first time, but each arena will use one more fd. The valid range is 1 to 32.");
 DS_DEFINE_validator(arena_per_tenant, &Validator::ValidateArenaPerTenant);
 DS_DECLARE_bool(enable_huge_tlb);
-DS_DEFINE_uint32_dynamic(
-    shared_disk_arena_per_tenant, 8,
-    "The number of disk cache Arena for each tenant. Multiple arenas can improve the performance of shared "
-    "disk allocation for "
-    "the first time, but each arena will use one more fd. The valid range is 0 to 32.");
-DS_DEFINE_validator(shared_disk_arena_per_tenant, &Validator::ValidateSharedDiskArenaPerTenant);
-DS_DECLARE_string(shared_disk_directory);
 DS_DECLARE_bool(enable_fallocate);
 DS_DECLARE_uint32(ub_transport_arena_num);
 
@@ -413,11 +405,7 @@ ArenaManager::ArenaManager(bool populate, bool scaling, ssize_t decayMs)
         // phase.
         FLAGS_enable_fallocate = false;
     }
-    auto arenaNum = FLAGS_arena_per_tenant;
-    if (!FLAGS_shared_disk_directory.empty()) {
-        arenaNum += FLAGS_shared_disk_arena_per_tenant;
-    }
-    maxTenantSize_ = ARENAS_INIT_SIZE / arenaNum - 1;
+    maxTenantSize_ = ARENAS_INIT_SIZE / FLAGS_arena_per_tenant - 1;
 }
 
 void ArenaManager::Init()
@@ -502,8 +490,7 @@ Status ArenaManager::ComputeArenaParams(CacheType type, uint64_t maxSize, ArenaP
     if (FLAGS_enable_huge_tlb) {
         mmapSize = RoundUpToNextMultiple(mmapSize);
     }
-    uint32_t arenasNum = type == CacheType::MEMORY ? FLAGS_arena_per_tenant : FLAGS_shared_disk_arena_per_tenant;
-    arenasNum = (type == CacheType::DEV_DEVICE || type == CacheType::DEV_HOST) ? 1 : arenasNum;
+    uint32_t arenasNum = (type == CacheType::DEV_DEVICE || type == CacheType::DEV_HOST) ? 1 : FLAGS_arena_per_tenant;
     params.mmapSizeForArena = mmapSize;
     params.fakeAllocateSizeForArena = maxSize;
     if (type == CacheType::UB_TRANSPORT) {
@@ -806,9 +793,7 @@ Status ArenaManager::CheckWorkerFdTenant(const std::string &tenantId, const std:
     std::vector<ArenaGroupKey> keys = {
         // all tenant can access the worker fds of DEFAULT_TENANT_ID to access the object client lock area.
         { DEFAULT_TENANT_ID, CacheType::MEMORY },
-        { DEFAULT_TENANT_ID, CacheType::DISK },
-        { tenantId, CacheType::MEMORY },
-        { tenantId, CacheType::DISK }
+        { tenantId, CacheType::MEMORY }
     };
     for (const auto &key : keys) {
         Status rc = GetArenaGroup(key, arenaGroup);
@@ -845,9 +830,6 @@ Status Arena::Init(AllocatorFuncRegister funcRegister)
     switch (cacheType_) {
         case CacheType::MEMORY:
             mmap_ = std::make_unique<MemMmap>();
-            break;
-        case CacheType::DISK:
-            mmap_ = std::make_unique<DiskMmap>();
             break;
         case CacheType::DEV_DEVICE:
         case CacheType::DEV_HOST:

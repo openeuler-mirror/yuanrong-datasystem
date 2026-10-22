@@ -66,10 +66,6 @@ public:
         opts.numOBS = 1;
         opts.enableDistributedMaster = "false";
         opts.injectActions = "worker.Spill.Sync:return()";
-        for (size_t i = 0; i < opts.numWorkers; i++) {
-            std::string dir = GetTestCaseDataDir() + "/worker" + std::to_string(i) + "/shared_disk";
-            opts.workerSpecifyGflagParams[i] = FormatString("-shared_disk_directory=%s -shared_disk_size_mb=8", dir);
-        }
     }
 
     void SetUp() override
@@ -113,8 +109,7 @@ TEST_F(KVCacheClientEvictTest, TestNoneL2CacheEvictTypeBasicFunction)
     std::vector<SetParam> params{ { .writeMode = WriteMode::NONE_L2_CACHE_EVICT },
                                   { .writeMode = WriteMode::NONE_L2_CACHE_EVICT,
                                     .ttlSecond = 0,
-                                    .existence = ExistenceOpt::NONE,
-                                    .cacheType = CacheType::DISK } };
+                                    .existence = ExistenceOpt::NONE } };
     for (auto &param : params) {
         for (size_t i = 0; i < count; ++i) {
             auto key = client_->Set(data, param);

@@ -59,8 +59,7 @@ public:
     ScaleDownNodeSelector(const cluster::MembershipEndpointView &membership, HostPort &localAddress)
         : membership_(membership),
           localAddress_(localAddress),
-          currentStage_(Stage::FIRST),
-          currentDiskStage_(Stage::FIRST)
+          currentStage_(Stage::FIRST)
     {
     }
 
@@ -83,7 +82,7 @@ public:
      * @param[in] type The cache type (e.g., memory or disk).
      * @return True if the migration condition is satisfied, false otherwise.
      */
-    bool CheckCondition(const MigrateDataRspPb &rsp, const CacheType &type) override;
+    bool CheckCondition(const MigrateDataRspPb &rsp) override;
 
     /**
      * @brief Checks whether the current worker has been visited and upgrades the migration stage if a full cycle is
@@ -121,13 +120,11 @@ private:
     void IncrementStage(Stage &stage);
 
     std::unordered_set<std::string> visitedAddresses_;
-    std::unordered_set<std::string> visitedAddressesForDisk_;
 
     const cluster::MembershipEndpointView &membership_;
     HostPort &localAddress_;
 
     Stage currentStage_;
-    Stage currentDiskStage_;
 };
 
 }  // namespace object_cache

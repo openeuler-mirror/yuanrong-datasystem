@@ -193,7 +193,6 @@ class DsTensorClient:
                 write_mode = WriteMode.NONE_L2_CACHE
                 ttl_second = 0
                 existence = ExistenceOpt.NONE
-                cache_type = CacheType.MEMEORY
 
         Returns:
             None.
@@ -257,7 +256,6 @@ class DsTensorClient:
                 write_mode = WriteMode.NONE_L2_CACHE
                 ttl_second = 0
                 existence = ExistenceOpt.NONE
-                cache_type = CacheType.MEMEORY
 
         Returns:
             Future: A Future object representing the asynchronous operations.

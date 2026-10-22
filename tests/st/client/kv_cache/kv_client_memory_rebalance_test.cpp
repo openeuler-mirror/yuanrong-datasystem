@@ -1354,9 +1354,6 @@ public:
            "-shared_memory_size_mb=8 -log_monitor=true -v=1 -spill_size_limit=67108864 "
            "-enable_memory_rebalance=" + std::string(EnableRebalance() ? "true" : "false");
        opts.injectActions = "worker.Spill.Sync:return()";
-       opts.workerSpecifyGflagParams[WORKER0] =
-           FormatString("-shared_disk_directory=%s/worker0/shared_disk -shared_disk_size_mb=64",
-                        GetTestCaseDataDir());
    }
 
    void SetUp() override

@@ -4,7 +4,7 @@
 Parses KVCache worker resource.log files, computes per-time-interval aggregated
 resource metrics across hosts, and generates a self-contained HTML report.
 
-Resource.log Format (pipe-separated, 7 header fields + 22 metric groups):
+Resource.log Format (pipe-separated, 7 header fields + 21 metric groups):
   $1  timestamp                    ISO 8601 with microseconds
   $2  log_level                    I/W/E
   $3  source                       res_metric_collector.cpp:line
@@ -32,9 +32,8 @@ Resource.log Format (pipe-separated, 7 header fields + 22 metric groups):
   $24 MASTER_WORKER_SC_THREAD      maxRunning/total/tasksDelta/maxWaiting/usage
   $25 MASTER_SC_SERVICE_THREAD     maxRunning/total/tasksDelta/maxWaiting/usage
   $26 STREAM_REMOTE_SEND_RATE      float 0-1
-  $27 SHARED_DISK                  usage/physicalUsage/limit/usageRate
-  $28 SC_LOCAL_CACHE               usage/reserved/limit/usageRate
-  $29 OC_HIT_NUM                   memHit/diskHit/l2Hit/remoteHit/miss
+  $27 SC_LOCAL_CACHE               usage/reserved/limit/usageRate
+  $28 OC_HIT_NUM                   memHit/diskHit/l2Hit/remoteHit/miss
 
 Usage:
   # Basic usage
@@ -107,7 +106,7 @@ _GAUGE_KEYS = [
     "sc_mem_usage", "sc_mem_limit", "object_count", "object_size",
     "active_clients", "stream_count",
     "etcd_queue_size", "etcd_queue_usage", "etcd_queue_limit",
-    "disk_usage", "disk_rate", "sc_cache_usage", "sc_cache_rate",
+    "sc_cache_usage", "sc_cache_rate",
 ]
 
 # Thread pool prefixes and their sub-fields
@@ -255,22 +254,15 @@ def parse_resource_logs(log_files_by_host, since=None, until=None):
                     # $21 STREAM_COUNT
                     m["stream_count"] = float(parts[20]) if len(parts) > 20 and parts[20] else 0
 
-                    # $27 SHARED_DISK
-                    disk = _parse_sub(parts[26]) if len(parts) > 26 else []
-                    m["disk_usage"] = disk[0] if len(disk) > 0 else 0
-                    m["disk_physical"] = disk[1] if len(disk) > 1 else 0
-                    m["disk_limit"] = disk[2] if len(disk) > 2 else 0
-                    m["disk_rate"] = disk[3] if len(disk) > 3 else 0
-
-                    # $28 SC_LOCAL_CACHE
-                    sc = _parse_sub(parts[27]) if len(parts) > 27 else []
+                    # $27 SC_LOCAL_CACHE
+                    sc = _parse_sub(parts[26]) if len(parts) > 26 else []
                     m["sc_cache_usage"] = sc[0] if len(sc) > 0 else 0
                     m["sc_cache_reserved"] = sc[1] if len(sc) > 1 else 0
                     m["sc_cache_limit"] = sc[2] if len(sc) > 2 else 0
                     m["sc_cache_rate"] = sc[3] if len(sc) > 3 else 0
 
-                    # $29 OC_HIT_NUM (cumulative counter)
-                    hit = _parse_sub(parts[28]) if len(parts) > 28 else []
+                    # $28 OC_HIT_NUM (cumulative counter)
+                    hit = _parse_sub(parts[27]) if len(parts) > 27 else []
                     m["oc_mem_hit"] = hit[0] if len(hit) > 0 else 0
                     m["oc_disk_hit"] = hit[1] if len(hit) > 1 else 0
                     m["oc_l2_hit"] = hit[2] if len(hit) > 2 else 0

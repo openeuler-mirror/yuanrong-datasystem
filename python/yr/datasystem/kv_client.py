@@ -22,7 +22,7 @@ from typing import List
 import warnings
 
 from yr.datasystem.lib import libds_client_py as ds
-from yr.datasystem.object_client import WriteMode, CacheType
+from yr.datasystem.object_client import WriteMode
 from yr.datasystem.util import Validator as validator
 from yr.datasystem.service_discovery import CoordinatorServiceDiscovery, ServiceDiscovery
 
@@ -80,7 +80,6 @@ class SetParam:
         self.write_mode = WriteMode.NONE_L2_CACHE
         self.ttl_second = 0
         self.existence = ExistenceOpt.NONE
-        self.cache_type = CacheType.MEMEORY
 
     # Defines the reliability of object
     write_mode: WriteMode
@@ -88,8 +87,6 @@ class SetParam:
     ttl_second: int
     # Determines if setting is allowed when the key already exists.
     existence: ExistenceOpt
-    # Decide where to store data
-    cache_type: CacheType
 
 
 class ReadOnlyBuffer:

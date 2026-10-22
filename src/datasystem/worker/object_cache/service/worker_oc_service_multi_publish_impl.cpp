@@ -150,7 +150,6 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishImpl(const MultiPublishReqPb
             TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_info(i).object_key()));
     }
 
-    VLOG(1) << FormatString("Process multi pub, cacheType: %d", req.cache_type());
     RETURN_IF_NOT_OK(VerifyDuplicateKeys(namespaceUri));
     VLOG(1) << "Multi publish with key : " << VectorToString(namespaceUri);
 
@@ -180,7 +179,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishNtx(std::vector<std::string>
     });
     std::unordered_set<std::string> failedKeys;
     std::unordered_set<std::string> rollbackOnlyKeys;
-    VerifyObjectsNtx(req, namespaceUri, entries, failedKeys, localExistKeys);
+    VerifyObjectsNtx(namespaceUri, entries, failedKeys, localExistKeys);
     Status lastRc;
     point.RecordAndReset(PerfKey::WORKER_MULTI_PUBLISH_NTX_IMPL);
     Status rc = MultiPublishObjectNtx(req, namespaceUri, entries, payloads, lastRc, failedKeys, rollbackOnlyKeys);
@@ -217,8 +216,7 @@ Status WorkerOcServiceMultiPublishImpl::VerifyDuplicateKeys(const std::vector<st
     return Status::OK();
 }
 
-void WorkerOcServiceMultiPublishImpl::VerifyObjectsNtx(const MultiPublishReqPb &req,
-                                                       const std::vector<std::string> &objectKeys,
+void WorkerOcServiceMultiPublishImpl::VerifyObjectsNtx(const std::vector<std::string> &objectKeys,
                                                        std::vector<std::shared_ptr<SafeObjType>> &entries,
                                                        std::unordered_set<std::string> &failedKeys,
                                                        const std::unordered_set<std::string> &localExistKeys)
@@ -231,27 +229,7 @@ void WorkerOcServiceMultiPublishImpl::VerifyObjectsNtx(const MultiPublishReqPb &
             failedKeys.emplace(objectKeys[i]);
             continue;
         }
-        if (entries[i]->Get() != nullptr) {
-            Status rc = VerifyObjectReleaseValidity(req, *entries[i]);
-            if (rc.IsError()) {
-                LOG(ERROR) << "ObjectKey: " << objectKeys[i] << " verify validity failed, rc: " << rc.ToString();
-                entries[i]->WUnlock();
-                entries[i].reset();
-                failedKeys.emplace(objectKeys[i]);
-            }
-        }
     }
-}
-
-Status WorkerOcServiceMultiPublishImpl::VerifyObjectReleaseValidity(const MultiPublishReqPb &req,
-                                                                    const SafeObjType &safeObj)
-{
-    if (safeObj->IsPublished()) {
-        if (static_cast<CacheType>(req.cache_type()) != safeObj->modeInfo.GetCacheType()) {
-            RETURN_STATUS(StatusCode::K_INVALID, "The cache type cannot be modified.");
-        }
-    }
-    return Status::OK();
 }
 
 Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublishReqPb &req,
@@ -277,11 +255,10 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublish
                 continue;
             }
             UpdateObjectEntry(ConsistencyType(req.consistency_type()), WriteMode(req.write_mode()),
-                              static_cast<CacheType>(req.cache_type()), GetMetadataSize(), *entries[i]);
+                              GetMetadataSize(), *entries[i]);
         } else {
             SetNewObjectEntry(objectKeys[i], ConsistencyType(req.consistency_type()), WriteMode(req.write_mode()),
-                              static_cast<CacheType>(req.cache_type()), req.object_info(i).data_size(),
-                              GetMetadataSize(), *entries[i]);
+                              req.object_info(i).data_size(), GetMetadataSize(), *entries[i]);
         }
 
         pointIn.RecordAndReset(PerfKey::WORKER_MULTI_PUBLISH_NTX_ATTACH_TO_ENTRY);
@@ -680,7 +657,6 @@ void WorkerOcServiceMultiPublishImpl::ConstructCreateReqCommon(SafeObjType &entr
     configPb->set_write_mode(static_cast<uint32_t>(entry->modeInfo.GetWriteMode()));
     configPb->set_data_format(static_cast<uint32_t>(entry->stateInfo.GetDataFormat()));
     configPb->set_consistency_type(static_cast<uint32_t>(entry->modeInfo.GetConsistencyType()));
-    configPb->set_cache_type(static_cast<uint32_t>(entry->modeInfo.GetCacheType()));
     configPb->set_is_replica(pubReq.is_replica());
 }
 

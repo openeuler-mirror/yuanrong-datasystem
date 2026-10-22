@@ -54,7 +54,6 @@ struct SetParam {
     // The default value 0 means the key will keep alive until you call Del api to delete the key explicitly.
     uint32_t ttlSecond = 0;
     ExistenceOpt existence = ExistenceOpt::NONE;
-    CacheType cacheType = CacheType::MEMORY;
 };
 
 struct MSetParam {
@@ -62,7 +61,6 @@ struct MSetParam {
     uint32_t ttlSecond =
         0;  // The default value means the key will keep alive until you call Del api to delete the key.
     ExistenceOpt existence = ExistenceOpt::NONE;
-    CacheType cacheType = CacheType::MEMORY;
 };
 
 struct ReadParam {

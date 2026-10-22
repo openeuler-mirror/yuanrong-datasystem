@@ -34,23 +34,15 @@ void ScaleDownNodeSelector::UpdateForRedirect(const std::string &currentWorker)
     } else {
         visitedAddresses_.insert(currentWorker);
     }
-
-    if (visitedAddressesForDisk_.find(currentWorker) != visitedAddressesForDisk_.end()) {
-        IncrementStage(currentDiskStage_);
-        visitedAddressesForDisk_.clear();
-        visitedAddressesForDisk_.insert(currentWorker);
-    } else {
-        visitedAddressesForDisk_.insert(currentWorker);
-    }
 }
 
-bool ScaleDownNodeSelector::CheckCondition(const MigrateDataRspPb &rsp, const CacheType &type)
+bool ScaleDownNodeSelector::CheckCondition(const MigrateDataRspPb &rsp)
 {
     bool isDataMigrationStarted = rsp.scale_down_state() == MigrateDataRspPb::DATA_MIGRATION_STARTED;
     bool needScaleDown = rsp.scale_down_state() == MigrateDataRspPb::NEED_SCALE_DOWN;
-    double availableSpaceRatio = type == CacheType::MEMORY ? rsp.available_ratio() : rsp.disk_available_ratio();
+    double availableSpaceRatio = rsp.available_ratio();
 
-    Stage &stage = type == CacheType::MEMORY ? currentStage_ : currentDiskStage_;
+    Stage &stage = currentStage_;
 
     INJECT_POINT_NO_RETURN("ScaleDownNodeSelector.CheckCondition",
                            [&needScaleDown, &isDataMigrationStarted, &availableSpaceRatio, &stage](
@@ -65,11 +57,7 @@ bool ScaleDownNodeSelector::CheckCondition(const MigrateDataRspPb &rsp, const Ca
                            [this](int64_t newStage) { currentStage_ = static_cast<Stage>(newStage); });
     bool res = EvaluateStageCondition(stage, needScaleDown, isDataMigrationStarted, availableSpaceRatio);
     if (res) {
-        if (type == CacheType::MEMORY) {
-            visitedAddresses_.clear();
-        } else {
-            visitedAddressesForDisk_.clear();
-        }
+        visitedAddresses_.clear();
     }
     return res;
 }

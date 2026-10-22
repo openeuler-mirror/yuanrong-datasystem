@@ -384,7 +384,6 @@ public:
         ptr->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
 
         ptr->modeInfo.SetWriteMode(writeMode);
-        ptr->modeInfo.SetCacheType(CacheType::MEMORY);
         ptr->stateInfo.SetDataFormat(DataFormat::BINARY);
         ptr->stateInfo.SetPrimaryCopy(primaryCopy);
         ptr->stateInfo.SetSpillState(false);
@@ -404,7 +403,6 @@ public:
             ptr->SetCreateTime(version);
             ptr->SetLifeState(ObjectLifeState::OBJECT_PUBLISHED);
             ptr->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
-            ptr->modeInfo.SetCacheType(CacheType::MEMORY);
             ptr->stateInfo.SetDataFormat(DataFormat::BINARY);
             ptr->stateInfo.SetPrimaryCopy(true);
             ptr->stateInfo.SetSpillState(false);
@@ -435,11 +433,6 @@ public:
     void SetSpillAvailable(bool available)
     {
         BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::IsSpillAvaialble, (_)).WillRepeatedly(Return(available));
-    }
-
-    void SetDiskAvailable(bool available)
-    {
-        BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::IsDiskAvailable, (_)).WillRepeatedly(Return(available));
     }
 
     void MockQueryMasterMetadataHit(const std::string &objectKey)
@@ -636,31 +629,10 @@ TEST(MetaOwnerRouteGroupsTest, BuildGroupsFromTopologyPlacementAndKeepsPerKeyFai
     EXPECT_EQ(grouped.failures.at("missing-key").GetCode(), StatusCode::K_NOT_FOUND);
 }
 
-TEST_F(MigrateDataServiceTest, TestDiskIOError)
-{
-    SetMemoryAvailable(false);
-    SetSpillAvailable(false);
-    BINEXPECT_CALL(&memory::Allocator::IsDiskAvailable, ()).WillRepeatedly(Return(false));
-
-    constexpr int size = 100;
-    MigrateDataReqPb req;
-    for (int i = 0; i < size; ++i) {
-        auto objInfo = req.add_objects();
-        objInfo->set_object_key("HelloWorld_" + std::to_string(i));
-    }
-
-    MigrateDataRspPb rsp;
-    std::vector<RpcMessage> payloads;
-    ASSERT_EQ(impl_->MigrateData(req, rsp, std::move(payloads)).GetCode(), StatusCode::K_OUT_OF_MEMORY);
-    ASSERT_EQ(rsp.success_ids_size(), 0);
-    ASSERT_EQ(rsp.fail_ids_size(), size);
-}
-
 TEST_F(MigrateDataServiceTest, TestResourcesUnavailable)
 {
     SetMemoryAvailable(false);
     SetSpillAvailable(false);
-    SetDiskAvailable(false);
 
     constexpr int size = 100;
     MigrateDataReqPb req;
@@ -1315,7 +1287,6 @@ TEST_F(MigrateDataServiceTest, TestAllocateAndAssignDataBasicFunction)
     std::string objectKey = "xxx";
     std::shared_ptr<SafeObjType> entry =
         std::make_shared<SafeObjType>(std::make_unique<object_cache::ObjCacheShmUnit>());
-    (*entry)->modeInfo.SetCacheType(CacheType::MEMORY);
 
     std::vector<uint8_t> data(size, 0);
     std::vector<std::pair<const uint8_t *, uint64_t>> payloads = { { data.data(), data.size() } };

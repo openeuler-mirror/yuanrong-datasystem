@@ -188,14 +188,12 @@ Status CopyAndSplitBuffer(const std::string &tenantId, const void *data, size_t 
  * @param[in] populate Indicate need populate or not.
  * @param[in] evictionManager Eviction manager.
  * @param[out] shmUnit The share memory info of object.
- * @param[in] cacheType The type of cache.
  * @param[in] retryOnOOM Indicate need retry on OOM or not.
  * @return Status of the call.
  */
 Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t dataSize, uint64_t metadataSize,
                                bool populate, std::shared_ptr<WorkerOcEvictionManager> evictionManager,
-                               ShmUnit &shmUnit, CacheType cacheType = CacheType::MEMORY,
-                               bool retryOnOOM = true);
+                               ShmUnit &shmUnit, bool retryOnOOM = true);
 
 /**
  * @brief Distribute memory from already allocated ShmOwner for object.
@@ -235,12 +233,11 @@ Status AggregateAllocate(
  * @param[in] populate Indicate need populate or not.
  * @param[in] evictionManager Eviction manager.
  * @param[out] shmUnit The shared memory unit.
- * @param[in] cacheType The type of cache.
  * @return Status of the call.
  */
 Status AllocateNewShmUnit(const std::string &objectKey, uint64_t dataSize, uint64_t metadataSize, bool populate,
-                          std::shared_ptr<WorkerOcEvictionManager> evictionManager, std::shared_ptr<ShmUnit> &shmUnit,
-                          CacheType cacheType = CacheType::MEMORY);
+                          std::shared_ptr<WorkerOcEvictionManager> evictionManager,
+                          std::shared_ptr<ShmUnit> &shmUnit);
 
 /**
  * @brief Read object from disk to memory, AllocateMemory will be occurs.
@@ -256,7 +253,6 @@ Status LoadSpilledObjectToMemory(ReadObjectKV &objectKV, std::shared_ptr<WorkerO
  * @param[in] payloads The object data to be saved.
  * @param[in] evictionManager Eviction manager.
  * @param[in] threadPool the thread pool that might be used for larger memcopies.
- * @param[in] cacheType The type of cache.
  * @param[in] retryOnOOM Indicate need retry on OOM or not.
  * @return Status of the call.
  */

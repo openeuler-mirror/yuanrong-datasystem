@@ -20,14 +20,3 @@ ds_cc_test(
         "@jemalloc",
     ],
 )
-
-ds_cc_test(
-    name = "shared_disk_detecter_test",
-    srcs = ["shared_disk_detecter_test.cpp"],
-    deps = [
-        "//src/datasystem/common/shared_memory:common_shared_memory",
-        "//src/datasystem/common/util:file_util",
-        "//tests/common/binmock",
-        "//tests/ut:ut_common",
-    ],
-)

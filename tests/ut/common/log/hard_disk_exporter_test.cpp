@@ -378,7 +378,6 @@ TEST_F(HardDiskExporterTest, ResourceCollectorWritesKvResourceLogJsonLines)
     EXPECT_FALSE(FileContains(jsonPath, "sc_memory_usage"));
     EXPECT_FALSE(FileContains(jsonPath, "sc_memory_limit"));
     // ods-dropped groups must not appear at all.
-    EXPECT_FALSE(FileContains(jsonPath, "shared_disk"));
     EXPECT_FALSE(FileContains(jsonPath, "sc_local_cache"));
     EXPECT_FALSE(FileContains(jsonPath, "stream_count"));
 }

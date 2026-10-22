@@ -500,12 +500,6 @@ global:
     # Number of pipeline H2D worker threads. Valid range [8, 128], default 64.
     # Values outside the range fall back to the default (64) at runtime.
     pipelineH2dThreadNum: 64
-    # Disk cache data placement directory, default value is empty, indicating that disk cache is not enabled.
-    sharedDiskDirectory: ""
-    # Upper limit of the shared disk, the unit is mb.
-    sharedDiskSize: 0
-    # The number of disk cache Arena for each tenant. Multiple arenas can improve the performance of shared disk allocation for the first time, but each arena will use one more fd. The valid range is 0 to 32.
-    sharedDiskArenaPerTenant: 8
     # Option to turn on rdma for OC worker to worker data transfer, default false.
     enableRdma: false
     # Register the whole arena as segment during init, otherwise, register each object as a segment.

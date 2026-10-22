@@ -1839,8 +1839,8 @@ Status WorkerOcServiceGetImpl::RetrieveRemotePayload(
     // Only create new shm if size changed or not exist.
     if (szChanged) {
         auto shmUnit = std::make_shared<ShmUnit>();
-        RETURN_IF_NOT_OK(AllocateMemoryForObject(objectKey, completeDataSize, metaSz, false, evictionManager_, *shmUnit,
-                                                 entry->modeInfo.GetCacheType()));
+        RETURN_IF_NOT_OK(AllocateMemoryForObject(objectKey, completeDataSize, metaSz, false, evictionManager_,
+                                                 *shmUnit));
         shmUnit->id = ShmKey::Intern(GetStringUuid());
         entry->SetShmUnit(shmUnit);
     }
@@ -2510,8 +2510,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromAnywhereWithLock(const ReadKey &read
     const auto &address = queryMeta.address();
     const auto objectKey = meta.object_key();
     VLOG(1) << "Get object from remote, object meta is: " << LogHelper::IgnoreSensitive(meta) << ", payload_index_size"
-            << queryMeta.payload_indexs_size() << ", addr: " << address
-            << ", cache_type: " << queryMeta.meta().config().cache_type();
+            << queryMeta.payload_indexs_size() << ", addr: " << address;
     INJECT_POINT("worker.GetObjectFromAnywhere");
 
     if ((entry->Get() != nullptr) && entry->Get()->IsBinary() && !entry->Get()->stateInfo.IsCacheInvalid()

@@ -75,10 +75,6 @@ public:
         opts.enableDistributedMaster = "false";
         opts.injectActions = "worker.Spill.Sync:return();NodeSelector.setInterval:call(200);"
                              "WorkerOCServer.heatMaintenanceIntervalMs:call(200)";
-        for (size_t i = 0; i < opts.numWorkers; i++) {
-            std::string dir = GetTestCaseDataDir() + "/worker" + std::to_string(i) + "/shared_disk";
-            opts.workerSpecifyGflagParams[i] = FormatString("-shared_disk_directory=%s -shared_disk_size_mb=8", dir);
-        }
     }
 
     void SetUp() override

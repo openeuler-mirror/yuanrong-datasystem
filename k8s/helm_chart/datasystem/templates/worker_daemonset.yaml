@@ -264,9 +264,6 @@ spec:
         - -urma_failover_success_rate_ratio={{ $.Values.global.performance.urmaFailoverSuccessRateRatio }}
         - -urma_failover_min_sample_count={{ $.Values.global.performance.urmaFailoverMinSampleCount }}
         - -oc_shm_transfer_threshold_kb={{ $.Values.global.performance.ocShmTransferThresholdKB }}
-        - -shared_disk_directory={{ $.Values.global.performance.sharedDiskDirectory }}
-        - -shared_disk_size_mb={{ $.Values.global.performance.sharedDiskSize }}
-        - -shared_disk_arena_per_tenant={{ $.Values.global.performance.sharedDiskArenaPerTenant }}
         - -stream_idle_time_s={{ $.Values.global.rpc.streamIdleTimes }}
         - -enable_distributed_master={{ $.Values.global.reliability.enableDistributedMaster }}
         - -enable_p2p_transfer={{ $.Values.global.performance.enableP2pTransfer }}

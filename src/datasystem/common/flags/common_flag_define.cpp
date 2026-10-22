@@ -62,9 +62,6 @@ DS_DEFINE_string(
 DS_DEFINE_string(log_filename, "",
                  "Prefix of log filename, default is program invocation short name. Only letters, digits, and "
                  "underscores are allowed.");
-DS_DEFINE_string(
-    shared_disk_directory, "",
-    "Disk cache data placement directory, default value is empty, indicating that disk cache is not enabled.");
 DS_DEFINE_string(encrypt_kit, "plaintext", "Choose the encryptService, can be 'plaintext'. Default is 'plaintext'.");
 DS_DEFINE_string(
     cluster_name, "",

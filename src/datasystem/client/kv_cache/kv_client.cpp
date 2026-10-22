@@ -137,7 +137,6 @@ Status KVClient::Create(const std::string &key, uint64_t size, const SetParam &p
     createParam.writeMode = param.writeMode;
     createParam.ttlSecond = param.ttlSecond;
     createParam.consistencyType = ConsistencyType::CAUSAL;
-    createParam.cacheType = param.cacheType;
     createParam.existence = param.existence;
     Status rc = impl_->Create(key, size, createParam, buffer);
     METRIC_INC(metrics::KvMetricId::CLIENT_CREATE_REQUEST_TOTAL);
@@ -146,7 +145,7 @@ Status KVClient::Create(const std::string &key, uint64_t size, const SetParam &p
         METRIC_ADD(metrics::KvMetricId::CLIENT_CREATE_ALLOCATED_BYTES, size);
     }
     access.ObjectKeyRef(key).WriteMode(static_cast<int>(param.writeMode)).TtlSecond(param.ttlSecond)
-        .Existence(static_cast<int>(param.existence)).CacheType(static_cast<int>(param.cacheType))
+        .Existence(static_cast<int>(param.existence))
         .DataSize(size).Result(rc).Record();
     return rc;
 }
@@ -162,7 +161,6 @@ const SetParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
     createParam.writeMode = param.writeMode;
     createParam.ttlSecond = param.ttlSecond;
     createParam.consistencyType = ConsistencyType::CAUSAL;
-    createParam.cacheType = param.cacheType;
     createParam.existence = param.existence;
     Status rc = impl_->MCreate(keys, sizes, createParam, buffers);
     METRIC_INC(metrics::KvMetricId::CLIENT_CREATE_REQUEST_TOTAL);
@@ -173,7 +171,7 @@ const SetParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
         METRIC_ADD(metrics::KvMetricId::CLIENT_CREATE_ALLOCATED_BYTES, totalSize);
     }
     access.ObjectKeysRef(keys).WriteMode(static_cast<int>(param.writeMode)).TtlSecond(param.ttlSecond)
-        .Existence(static_cast<int>(param.existence)).CacheType(static_cast<int>(param.cacheType))
+        .Existence(static_cast<int>(param.existence))
         .DataSize(sizes.size()).Result(rc).Record();
     return rc;
 }
@@ -256,7 +254,7 @@ Status KVClient::Set(const std::string &key, const StringView &val, const SetPar
     METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
     access.ObjectKeyRef(key).WriteMode(static_cast<int>(setParam.writeMode)).TtlSecond(setParam.ttlSecond)
-        .Existence(static_cast<int>(setParam.existence)).CacheType(static_cast<int>(setParam.cacheType))
+        .Existence(static_cast<int>(setParam.existence))
         .TrackedTransportType().DataSize(val.size()).Result(rc).Record();
     return rc;
 }
@@ -272,7 +270,7 @@ std::string KVClient::Set(const StringView &val, const SetParam &setParam)
     METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
     access.ObjectKeyRef(key).WriteMode(static_cast<int>(setParam.writeMode)).TtlSecond(setParam.ttlSecond)
-        .CacheType(static_cast<int>(setParam.cacheType)).TrackedTransportType()
+        .TrackedTransportType()
         .DataSize(val.size()).Result(rc).Record();
     return key;
 }
@@ -383,7 +381,7 @@ Status KVClient::MSet(const std::vector<std::string> &keys, const std::vector<St
     METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
     access.ObjectKeysRef(keys).WriteMode(static_cast<int>(param.writeMode)).TtlSecond(param.ttlSecond)
-        .Existence(static_cast<int>(param.existence)).CacheType(static_cast<int>(param.cacheType))
+        .Existence(static_cast<int>(param.existence))
         .TrackedTransportType().DataSize(vals.size()).Result(rc).Record();
     return rc;
 }

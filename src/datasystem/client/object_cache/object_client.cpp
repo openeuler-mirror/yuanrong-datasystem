@@ -73,11 +73,10 @@ Status ObjectClient::Create(const std::string &objectKey, uint64_t size, const C
     object_cache::FullParam innerParam;
     innerParam.writeMode = WriteMode::NONE_L2_CACHE;
     innerParam.consistencyType = param.consistencyType;
-    innerParam.cacheType = param.cacheType;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_OBJECT_CLIENT_CREATE);
     Status rc = impl_->Create(objectKey, size, innerParam, buffer);
     access.ObjectKeyRef(objectKey).WriteMode(static_cast<int>(innerParam.writeMode))
-        .ConsistencyType(static_cast<int>(innerParam.consistencyType)).CacheType(static_cast<int>(innerParam.cacheType))
+        .ConsistencyType(static_cast<int>(innerParam.consistencyType))
         .DataSize(size).Result(rc).Record();
     return rc;
 }
@@ -139,11 +138,10 @@ Status ObjectClient::Put(const std::string &objectKey, const uint8_t *data, uint
     object_cache::FullParam innerParam;
     innerParam.writeMode = WriteMode::NONE_L2_CACHE;
     innerParam.consistencyType = param.consistencyType;
-    innerParam.cacheType = param.cacheType;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_OBJECT_CLIENT_PUT);
     Status rc = impl_->Put(objectKey, data, size, innerParam, nestedObjectKeys);
     access.ObjectKeyRef(objectKey).WriteMode(static_cast<int>(innerParam.writeMode))
-        .ConsistencyType(static_cast<int>(innerParam.consistencyType)).CacheType(static_cast<int>(innerParam.cacheType))
+        .ConsistencyType(static_cast<int>(innerParam.consistencyType))
         .DataSize(size).Result(rc).Record();
     return rc;
 }

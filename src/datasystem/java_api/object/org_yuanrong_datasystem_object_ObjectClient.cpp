@@ -65,7 +65,6 @@ JNIEXPORT jlong JNICALL Java_org_yuanrong_datasystem_object_ObjectClient_createN
     object_cache::FullParam innerParam;
     innerParam.writeMode = WriteMode::NONE_L2_CACHE;
     innerParam.consistencyType = createParam.consistencyType;
-    innerParam.cacheType = createParam.cacheType;
     // The purpose of using make_unique is to use the release() function to prevent the buffer from being destructed.
     auto buffer = std::make_unique<std::shared_ptr<Buffer>>();
     JNI_CHECK_RESULT(env, (*client)->Create(objectKey, size, innerParam, *buffer), 0);
@@ -84,7 +83,6 @@ JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_object_ObjectClient_putDirec
     object_cache::FullParam innerParam;
     innerParam.writeMode = WriteMode::NONE_L2_CACHE;
     innerParam.consistencyType = createParam.consistencyType;
-    innerParam.cacheType = createParam.cacheType;
     auto body = env->GetDirectBufferAddress(bufferJO);
     if (!body) {
         ThrowException(env, -1, "cant get data address");
@@ -114,7 +112,6 @@ JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_object_ObjectClient_putHeapB
     object_cache::FullParam innerParam;
     innerParam.writeMode = WriteMode::NONE_L2_CACHE;
     innerParam.consistencyType = createParam.consistencyType;
-    innerParam.cacheType = createParam.cacheType;
     std::unordered_set<std::string> nestedObjectKeys;
     GetJavaStringListVal(env, nestedObjectKeysJO, nestedObjectKeys);
     if (env->ExceptionOccurred()) {

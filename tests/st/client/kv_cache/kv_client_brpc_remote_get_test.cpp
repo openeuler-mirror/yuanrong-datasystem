@@ -70,8 +70,7 @@ TEST_F(KVClientBrpcRemoteGetTest, LEVEL1_Get8MBValueAcrossWorkersWithShmEnabled)
 
     const std::string key = "brpc_remote_get_8mb_" + NewObjectKey();
     const std::string value = GenRandomString(VALUE_SIZE);
-    SetParam setParam{ .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0, .existence = ExistenceOpt::NONE,
-                       .cacheType = CacheType::MEMORY };
+    SetParam setParam{ .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0, .existence = ExistenceOpt::NONE };
     DS_ASSERT_OK(setterClient->Set(key, value, setParam));
 
     std::string valueGet;
@@ -128,8 +127,7 @@ TEST_F(KVClientBrpcRemoteGetRetryTest, LEVEL1_RemoteGetRetryToPrimaryAfterPayloa
 
     const std::string key = "brpc_remote_get_retry_primary_" + NewObjectKey();
     const std::string value = GenRandomString(VALUE_SIZE);
-    SetParam setParam{ .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0, .existence = ExistenceOpt::NONE,
-                       .cacheType = CacheType::MEMORY };
+    SetParam setParam{ .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0, .existence = ExistenceOpt::NONE };
     DS_ASSERT_OK(setterClient->Set(key, value, setParam));
 
     // Warm up a replica on worker 1 so it is an acked location with data. This makes the later

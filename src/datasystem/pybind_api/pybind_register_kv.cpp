@@ -594,7 +594,6 @@ PybindDefineRegisterer g_pybind_define_f_SetParam("SetParam", PRIORITY_LOW, [](c
         .def(py::init<>())
         .def_readwrite("write_mode", &SetParam::writeMode)
         .def_readwrite("ttl_second", &SetParam::ttlSecond)
-        .def_readwrite("existence", &SetParam::existence)
-        .def_readwrite("cache_type", &SetParam::cacheType);
+        .def_readwrite("existence", &SetParam::existence);
 });
 }  // namespace datasystem
