@@ -34,7 +34,6 @@
   "key_tests": [
     "tests/ut/CMakeLists.txt",
     "tests/st/CMakeLists.txt",
-    "tests/python/test_ds_client.py",
     "tests/python/prefetch_tests/test_multi_key_prefetch.py"
   ],
   "module_boundary": {

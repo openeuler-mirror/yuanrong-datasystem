@@ -24,7 +24,7 @@ This document captures a coarse, source-backed map of the repository. It is inte
 | `src/datasystem/java_api` | Java binding layer | built when Java API is enabled |
 | `src/datasystem/c_api` | C API / Go-related bridge layer | built when Go API is enabled according to `src/datasystem/CMakeLists.txt` |
 | `include/datasystem` | public C++ headers and API surface | includes context, kv, object, stream, hetero, utils |
-| `python/yr/datasystem` | Python SDK surface | includes `ds_client`, `kv_client`, `object_client`, `stream_client`, `hetero_client` |
+| `python/yr/datasystem` | Python SDK surface | includes `kv_client`, `object_client`, `stream_client`, `hetero_client` |
 | `java` | Java build and packaging area | see `java/pom.xml`, `java/CMakeLists.txt` |
 | `go` | Go module area | see `go/go.mod` and subpackages |
 | `cli` | operational and deployment CLI scripts | includes `start`, `stop`, `up`, `generate_config`, `generate_helm_chart`, benchmark tools |

@@ -39,7 +39,6 @@ datasystem/sdk/cpp/include/datasystem/
 datasystem/sdk/cpp/include/datasystem/context/
 datasystem/sdk/cpp/include/datasystem/context/context.h
 datasystem/sdk/cpp/include/datasystem/coordinator_server.h
-datasystem/sdk/cpp/include/datasystem/datasystem.h
 datasystem/sdk/cpp/include/datasystem/hetero/
 datasystem/sdk/cpp/include/datasystem/hetero/device_common.h
 datasystem/sdk/cpp/include/datasystem/hetero/future.h

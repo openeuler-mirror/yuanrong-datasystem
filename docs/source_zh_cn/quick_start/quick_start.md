@@ -143,12 +143,12 @@ openYuanrong datasystem 还提供了基于 Kubernetes 容器化部署方式，�
 ```python
 import acl
 import os
-from yr.datasystem import Blob, DsClient, DeviceBlobList
+from yr.datasystem import Blob, HeteroClient, DeviceBlobList
 
 # hetero_dev_mset and hetero_dev_mget must be executed in different processes
 # because they need to be bound to different NPUs.
 def hetero_dev_mset():
-    client = DsClient("127.0.0.1", 31501)
+    client = HeteroClient("127.0.0.1", 31501)
     client.init()
 
     acl.init()
@@ -169,10 +169,10 @@ def hetero_dev_mset():
             tmp_batch_list.append(blob)
         blob_list = DeviceBlobList(device_idx, tmp_batch_list)
         in_data_blob_list.append(blob_list)
-    client.hetero().dev_mset(key_list, in_data_blob_list)
+    client.dev_mset(key_list, in_data_blob_list)
 
 def hetero_dev_mget():
-    client = DsClient("127.0.0.1", 31501)
+    client = HeteroClient("127.0.0.1", 31501)
     client.init()
 
     acl.init()
@@ -190,8 +190,8 @@ def hetero_dev_mget():
             tmp_batch_list.append(blob)
         blob_list = DeviceBlobList(device_idx, tmp_batch_list)
         out_data_blob_list.append(blob_list)
-    client.hetero().dev_mget(key_list, out_data_blob_list, 60000)
-    client.hetero().dev_delete(key_list)
+    client.dev_mget(key_list, out_data_blob_list, 60000)
+    client.dev_delete(key_list)
 
 pid = os.fork()
 if pid == 0:
@@ -213,7 +213,7 @@ else:
 #include <unistd.h>
 #include <sys/wait.h>
 #include <acl/acl.h>
-#include "datasystem/datasystem.h"
+#include "datasystem/hetero_client.h"
 
 using namespace datasystem;
 
@@ -323,19 +323,19 @@ int main()
 :::{tab-item} Python
 
 ```python
-from yr.datasystem.ds_client import DsClient
+from yr.datasystem import KVClient
 
-client = DsClient("127.0.0.1", 31501)
+client = KVClient("127.0.0.1", 31501)
 client.init()
 
 key = "key"
 expected_val = b"value"
-client.kv().set(key, expected_val)
+client.set(key, expected_val)
 
-val = client.kv().get([key])
+val = client.get([key])
 assert val[0] == expected_val
 
-client.kv().delete([key])
+client.delete([key])
 ```
 
 :::
@@ -343,7 +343,7 @@ client.kv().delete([key])
 :::{tab-item} C++
 
 ```cpp
-#include "datasystem/datasystem.h"
+#include "datasystem/kv_client.h"
 
 using namespace datasystem;
 
@@ -359,31 +359,31 @@ using namespace datasystem;
 int main()
 {
     ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
-    auto client = std::make_shared<DsClient>(connectOptions);
+    auto client = std::make_shared<KVClient>(connectOptions);
     ASSERT_TRUE(client->Init().IsOk());
 
     std::string key = "testKey";
     std::string value = "Hello kv client";
     std::string value2 = "Hello modify";
-    Status status = client->KV()->Set(key, value);
+    Status status = client->Set(key, value);
     ASSERT_TRUE(status.IsOk());
 
     std::string getValue;
-    status = client->KV()->Get(key, getValue);
+    status = client->Get(key, getValue);
     ASSERT_TRUE(status.IsOk());
     ASSERT_TRUE(getValue == value);
 
-    status = client->KV()->Set(key, value2);
+    status = client->Set(key, value2);
     ASSERT_TRUE(status.IsOk());
 
-    status = client->KV()->Get(key, getValue);
+    status = client->Get(key, getValue);
     ASSERT_TRUE(status.IsOk());
     ASSERT_TRUE(getValue == value2);
 
-    status = client->KV()->Del(key);
+    status = client->Del(key);
     ASSERT_TRUE(status.IsOk());
 
-    status = client->KV()->Get(key, getValue);
+    status = client->Get(key, getValue);
     ASSERT_TRUE(status.IsError());
     return 0;
 }
@@ -405,7 +405,7 @@ int main()
 
 ```python
 import random
-from yr.datasystem.ds_client import DsClient
+from yr.datasystem import ObjectClient
 
 def random_str(slen=10):
     seed = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#%^*()_+=-"
@@ -415,25 +415,25 @@ def random_str(slen=10):
     return ''.join(sa)
 
 def object_test():
-    client = DsClient("127.0.0.1", 31501)
+    client = ObjectClient("127.0.0.1", 31501)
     client.init()
     object_key = "test_key"
     value = bytes(random_str(100), encoding='utf8')
-    buffer = client.object().create(object_key, len(value))
-    client.object().g_increase_ref([object_key])
-    assert client.object().query_global_ref_num(object_key) == 1
+    buffer = client.create(object_key, len(value))
+    client.g_increase_ref([object_key])
+    assert client.query_global_ref_num(object_key) == 1
     buffer.wlatch()
     buffer.memory_copy(value)
     buffer.seal()
     buffer.unwlatch()
-    buffer_list = client.object().get([object_key], 0)
+    buffer_list = client.get([object_key], 0)
     assert buffer_list[0].immutable_data().tobytes() == value
     #self.assertEqual(buffer_list[0].immutable_data().tobytes(), value)
-    client.object().g_decrease_ref([object_key])
-    assert client.object().query_global_ref_num(object_key) == 0
-    #self.assertEqual(client.object().query_global_ref_num(object_key), 0)
+    client.g_decrease_ref([object_key])
+    assert client.query_global_ref_num(object_key) == 0
+    #self.assertEqual(client.query_global_ref_num(object_key), 0)
     try:
-        client.object().get([object_key], 0)
+        client.get([object_key], 0)
     except RuntimeError as e:
         print("get error:", e)
 
@@ -445,7 +445,7 @@ object_test()
 :::{tab-item} C++
 
 ```cpp
-#include "datasystem/datasystem.h"
+#include "datasystem/object_client.h"
 
 using namespace datasystem;
 
@@ -461,31 +461,31 @@ using namespace datasystem;
 int main()
 {
     ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
-    auto client = std::make_shared<DsClient>(connectOptions);
+    auto client = std::make_shared<ObjectClient>(connectOptions);
     ASSERT_TRUE(client->Init().IsOk());
 
     std::string objectKey = "testKey";
     std::string data = "Hello object client";
     int size = data.size();
     std::shared_ptr<Buffer> buffer;
-    Status status = client->Object()->Create(objectKey, size, CreateParam{}, buffer);
+    Status status = client->Create(objectKey, size, CreateParam{}, buffer);
     ASSERT_TRUE(status.IsOk());
     ASSERT_EQ(size, buffer->GetSize());
     std::vector<std::string> failedobjectKeys;
-    ASSERT_TRUE(client->Object()->GIncreaseRef({ objectKey }, failedobjectKeys).IsOk());
+    ASSERT_TRUE(client->GIncreaseRef({ objectKey }, failedobjectKeys).IsOk());
     buffer->WLatch();
     buffer->MemoryCopy((void *)data.data(), size);
     buffer->Seal();
     buffer->UnWLatch();
 
     std::vector<Optional<Buffer>> buffers;
-    ASSERT_TRUE(client->Object()->Get({ objectKey }, 0, buffers).IsOk());
+    ASSERT_TRUE(client->Get({ objectKey }, 0, buffers).IsOk());
     ASSERT_EQ(buffers[0]->GetSize(), size);
     buffers[0]->RLatch();
     ASSERT_EQ(memcmp(data.data(), buffers[0]->MutableData(), size), 0);
     buffers[0]->UnRLatch();
-    ASSERT_TRUE(client->Object()->GDecreaseRef({ objectKey }, failedobjectKeys).IsOk());
-    ASSERT_TRUE(client->Object()->Get({ objectKey }, 0, buffers).IsError());
+    ASSERT_TRUE(client->GDecreaseRef({ objectKey }, failedobjectKeys).IsOk());
+    ASSERT_TRUE(client->Get({ objectKey }, 0, buffers).IsError());
     return 0;
 }
 ```

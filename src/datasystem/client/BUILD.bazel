@@ -135,9 +135,6 @@ ds_cc_library(
 
 ds_cc_library(
     name = "datasystem",
-    srcs = [
-        "datasystem.cpp",
-    ],
     visibility = ["//visibility:public"],
     deps = [
         ":add_client_miss_libs_fixme",

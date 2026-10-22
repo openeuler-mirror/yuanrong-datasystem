@@ -4,8 +4,6 @@ This file is intentionally short at first. Add terms only when they recur across
 
 ## Terms
 
-- `DsClient`
-  - aggregate client that bundles `KVClient`, `HeteroClient`, and `ObjectClient`
 - `worker`
   - the datasystem runtime process serving client and cache operations on a node
 - `master`

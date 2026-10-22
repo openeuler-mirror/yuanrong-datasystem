@@ -62,20 +62,18 @@ cc_binary(
 
 ```cpp
 #include <cstdio>
-#include <datasystem/datasystem.h>
+#include <datasystem/kv_client.h>
 
 using namespace datasystem;
 
 int main() {
     ConnectOptions opts{ .host = "127.0.0.1", .port = 31501 };
-    auto client = std::make_shared<DsClient>(opts);
+    auto client = std::make_shared<KVClient>(opts);
     Status status = client->Init();
     if (status.IsError()) {
         fprintf(stderr, "Init failed: %s\n", status.ToString().c_str());
         return -1;
     }
-    auto kv = client->KV();
-    (void)kv;
     return 0;
 }
 ```

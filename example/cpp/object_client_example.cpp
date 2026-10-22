@@ -17,7 +17,7 @@
 /**
  * Description: The object client example.
  */
-#include "datasystem/datasystem.h"
+#include "datasystem/object_client.h"
 
 #include <iostream>
 

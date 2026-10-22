@@ -7,7 +7,6 @@ Python
    :hidden:
    :maxdepth: 1
 
-   yr.datasystem.DsClient
    yr.datasystem.DsTensorClient
    yr.datasystem.hetero_client.HeteroClient
    yr.datasystem.hetero_client.Blob
@@ -32,23 +31,6 @@ Python
    yr.datasystem.stream_client.Producer
    yr.datasystem.stream_client.Consumer
    yr.datasystem.stream_client.SubconfigType
-
-DsClient：聚合各语义的客户端
------------------------------------
-
-.. list-table::
-    :widths: 30 70
-    :header-rows: 0
-
-    * - :doc:`yr.datasystem.DsClient.init <yr.datasystem.DsClient.init>`
-      - 初始化数据系统客户端
-    * - :doc:`yr.datasystem.DsClient.hetero <yr.datasystem.DsClient.hetero>` 
-      - 获取数据系统异构缓存客户端。
-    * - :doc:`yr.datasystem.DsClient.kv <yr.datasystem.DsClient.kv>`
-      - 获取数据系统KV缓存客户端。
-    * - :doc:`yr.datasystem.DsClient.object <yr.datasystem.DsClient.object>`
-      - 获取数据系统对象缓存客户端。
-
 
 Tensor接口
 -----------------

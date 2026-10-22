@@ -786,9 +786,9 @@ TEST_F(DevObjectHeteroTest, DISABLED_TestAsyncMSetD2H)
 
     InitAcl(deviceId);
 
-    std::shared_ptr<DsClient> client;
-    InitTestDsClient(0, client);
-    std::shared_ptr<HeteroClient> heteroClient = client->Hetero();
+    std::shared_ptr<HeteroClient> client;
+    InitTestHeteroClient(0, client);
+    std::shared_ptr<HeteroClient> heteroClient = client;
 
     std::vector<std::string> inObjectKeys;
     std::vector<DeviceBlobList> swapOutBlobList;
@@ -836,9 +836,9 @@ TEST_F(DevObjectHeteroTest, DISABLED_TestMultiAsyncMSetD2H)
 
     InitAcl(deviceId);
 
-    std::shared_ptr<DsClient> client;
-    InitTestDsClient(0, client);
-    std::shared_ptr<HeteroClient> heteroClient = client->Hetero();
+    std::shared_ptr<HeteroClient> client;
+    InitTestHeteroClient(0, client);
+    std::shared_ptr<HeteroClient> heteroClient = client;
 
     std::vector<std::vector<std::pair<std::vector<std::string>, std::vector<DeviceBlobList>>>> data;
     int threadNum = 8;
@@ -1199,9 +1199,9 @@ TEST_F(DevObjectHeteroTest, DISABLED_TestPartOfMGet)
     auto blksPerObj = totalSz / blkSz / numOfObjs;
     std::uniform_int_distribution<> distrib(0, numOfObjs - 1);
 
-    std::shared_ptr<DsClient> client;
-    InitTestDsClient(0, client);
-    std::shared_ptr<HeteroClient> heteroClient = client->Hetero();
+    std::shared_ptr<HeteroClient> client;
+    InitTestHeteroClient(0, client);
+    std::shared_ptr<HeteroClient> heteroClient = client;
 
     std::vector<std::string> inObjectKeys;
     std::vector<DeviceBlobList> swapOutBlobList;

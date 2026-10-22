@@ -116,9 +116,9 @@ TEST_F(EdgeConditionDevObjectHeteroTest, DISABLED_TestInvalidPubSub)
     if (pubPid == 0) {
         deviceIdx_ = 0;
         InitAcl(deviceIdx_);
-        std::shared_ptr<DsClient> client;
-        InitTestDsClient(0, client);
-        std::shared_ptr<HeteroClient> heteroClient = client->Hetero();
+        std::shared_ptr<HeteroClient> client;
+        InitTestHeteroClient(0, client);
+        std::shared_ptr<HeteroClient> heteroClient = client;
         PrePareDevData(numOfObjs, blksPerObj, blkSz, swapOutBlobList, swapInBlobList, deviceIdx_);
         auto invalidateRes = heteroClient->DevPublish(invalidKeys, swapOutBlobList, ftlist);
         DS_ASSERT_NOT_OK(invalidateRes);
@@ -129,9 +129,9 @@ TEST_F(EdgeConditionDevObjectHeteroTest, DISABLED_TestInvalidPubSub)
     if (subPid == 0) {
         deviceIdx_ = 1;
         InitAcl(deviceIdx_);
-        std::shared_ptr<DsClient> client;
-        InitTestDsClient(1, client);
-        std::shared_ptr<HeteroClient> heteroClient = client->Hetero();
+        std::shared_ptr<HeteroClient> client;
+        InitTestHeteroClient(1, client);
+        std::shared_ptr<HeteroClient> heteroClient = client;
         PrePareDevData(numOfObjs, blksPerObj, blkSz, swapOutBlobList, swapInBlobList, deviceIdx_);
         DS_ASSERT_NOT_OK(heteroClient->DevSubscribe(invalidKeys, swapInBlobList, ftlist));
         DS_ASSERT_TRUE(ftlist.empty(), true);
@@ -157,9 +157,9 @@ TEST_F(EdgeConditionDevObjectHeteroTest, DISABLED_TestPubRetry)
     if (pubPid == 0) {
         deviceIdx_ = 0;
         InitAcl(deviceIdx_);
-        std::shared_ptr<DsClient> client;
-        InitTestDsClient(0, client);
-        std::shared_ptr<HeteroClient> heteroClient = client->Hetero();
+        std::shared_ptr<HeteroClient> client;
+        InitTestHeteroClient(0, client);
+        std::shared_ptr<HeteroClient> heteroClient = client;
         PrePareDevData(numOfObjs, blksPerObj, blkSz, swapOutBlobList, swapInBlobList, deviceIdx_);
         DS_ASSERT_NOT_OK(heteroClient->DevPublish(validKeys, swapOutBlobList, ftlist));
         DS_ASSERT_TRUE(ftlist.empty(), true);
@@ -174,9 +174,9 @@ TEST_F(EdgeConditionDevObjectHeteroTest, DISABLED_TestPubRetry)
     if (subPid == 0) {
         deviceIdx_ = 1;
         InitAcl(deviceIdx_);
-        std::shared_ptr<DsClient> client;
-        InitTestDsClient(1, client);
-        std::shared_ptr<HeteroClient> heteroClient = client->Hetero();
+        std::shared_ptr<HeteroClient> client;
+        InitTestHeteroClient(1, client);
+        std::shared_ptr<HeteroClient> heteroClient = client;
         PrePareDevData(numOfObjs, blksPerObj, blkSz, swapOutBlobList, swapInBlobList, deviceIdx_);
         DS_ASSERT_OK(heteroClient->DevSubscribe(validKeys, swapInBlobList, ftlist));
         DS_ASSERT_TRUE(ftlist.size(), validKeys.size());

@@ -17,7 +17,7 @@
 /**
  * Description: The hetero client example.
  */
-#include "datasystem/datasystem.h"
+#include "datasystem/hetero_client.h"
 
 #include <iostream>
 

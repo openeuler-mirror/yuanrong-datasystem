@@ -22,7 +22,6 @@ from pathlib import Path
 __all__ = [
     "Buffer",
     "ConsistencyType",
-    "DsClient",
     "HeteroClient",
     "ObjectClient",
     "KVClient",
@@ -60,7 +59,6 @@ _LAZY_EXPORTS = {
     "FutureTimeoutException": ("yr.datasystem.lib.libds_client_py", "FutureTimeoutException"),
     "SubconfigType": ("yr.datasystem.stream_client", "SubconfigType"),
     "StreamClient": ("yr.datasystem.stream_client", "StreamClient"),
-    "DsClient": ("yr.datasystem.ds_client", "DsClient"),
     "KVClient": ("yr.datasystem.kv_client", "KVClient"),
     "HeteroClient": ("yr.datasystem.hetero_client", "HeteroClient"),
     "Blob": ("yr.datasystem.hetero_client", "Blob"),

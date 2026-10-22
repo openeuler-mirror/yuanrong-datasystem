@@ -26,7 +26,7 @@
  * When running both writer and reader on the same machine, specify different device_idx
  * values (e.g., 0 for writer, 1 for reader) to avoid NCCL conflicts on the same GPU.
  */
-#include "datasystem/datasystem.h"
+#include "datasystem/hetero_client.h"
 
 #include <iostream>
 
