@@ -242,6 +242,11 @@ private:
     Status InitClusterRuntimeAndServices();
 
     /**
+     * @brief Best-effort register process jemalloc statistics when BRPC builtin services are enabled.
+     */
+    void TryInitJemallocStatsBvar();
+
+    /**
      * @brief Start the BRPC server after all adapter services have been registered when BRPC is enabled.
      * @return Status of the start operation.
      */
