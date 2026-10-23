@@ -793,7 +793,7 @@ TEST_F(KVCacheClientTest, SubscribeTimeoutTest)
     auto key = client1->GenerateKey();
     std::thread t1([&]() {
         std::string val;
-        DS_ASSERT_OK(client1->Get(key, val, 20000));  // timeout is 20000 ms
+        DS_ASSERT_OK(client1->Get(key, val));
     });
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.remote_get_failed", "1*sleep(15000)"));
     DS_ASSERT_OK(client2->Set(key, "aaaaaa"));
@@ -816,8 +816,8 @@ TEST_F(KVCacheClientTest, TestSingleKey)
     ASSERT_EQ(value, std::string(reinterpret_cast<const char *>(buffer->ImmutableData()), buffer->GetSize()));
 
     ASSERT_EQ(client->Del(key), Status::OK());
-    ASSERT_EQ(client->Get(key, valueGet, 5).GetCode(), StatusCode::K_NOT_FOUND);
-    ASSERT_EQ(client->Get(key, buffer, 5).GetCode(), StatusCode::K_NOT_FOUND);
+    ASSERT_EQ(client->Get(key, valueGet).GetCode(), StatusCode::K_NOT_FOUND);
+    ASSERT_EQ(client->Get(key, buffer).GetCode(), StatusCode::K_NOT_FOUND);
 
     ASSERT_EQ(client->Del(key), Status::OK());
     ASSERT_EQ(client->Del("key2"), Status::OK());
@@ -908,7 +908,7 @@ TEST_F(KVCacheClientTest, TestReadOnlyBufferFunction)
     std::string value = "value";
     ASSERT_EQ(client->Set(key, value), Status::OK());
     std::vector<Optional<ReadOnlyBuffer>> buffers;
-    DS_ASSERT_OK(client->Get({ key }, buffers, 0));
+    DS_ASSERT_OK(client->Get({ key }, buffers));
     ASSERT_EQ(buffers.size(), 1ul);
     ASSERT_TRUE(buffers[0]);
     ASSERT_EQ((uint64_t)buffers[0]->GetSize(), value.size());
@@ -924,16 +924,16 @@ TEST_F(KVCacheClientTest, TestReadOnlyBufferFunction)
     ASSERT_NE(other->ImmutableData(), nullptr);
 }
 
-TEST_F(KVCacheClientTest, TestSetAndGetSubscribeTimeout)
+TEST_F(KVCacheClientTest, TestGetDoesNotWaitForLaterSet)
 {
     std::shared_ptr<KVClient> client0;
     InitTestKVClient(0, client0);
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.RemoveSubscribeCache.deadlock", "1*sleep(2000)"));
-
     std::string key = "QuQu_Paul";
     std::string val;
-    DS_ASSERT_NOT_OK(client0->Get(key, val, 1'000));
+    Timer timer;
+    DS_ASSERT_NOT_OK(client0->Get(key, val));
+    ASSERT_LT(timer.ElapsedMilliSecond(), 3'000);
     val = "58";
     DS_ASSERT_OK(client0->Set(key, val));
 }
@@ -1424,35 +1424,15 @@ TEST_F(KVCacheClientTest, LEVEL1_TestRemoteGetFromSelfAddressScenarios)
     InitTestKVClient(0, client1);
     InitTestKVClient(1, client2);
     std::string objectKey = NewObjectKey();
-    uint64_t size = 128;
-    std::string data = GenRandomString(size);
+    std::string data = GenRandomString(128);
     SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0, .existence = ExistenceOpt::NX };
 
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 0, "MasterWorkerOCServiceImpl.DeleteNotification.retry", "sleep(3000)"));
-
-    std::thread t1([&client1, &objectKey, data, &param]() {
-        sleep(1);
-        DS_ASSERT_OK(client1->Set(objectKey, data, param));
-        std::vector<std::string> dataList;
-        sleep(1);
-        Timer timer;
-        uint64_t subTimeoutMs = 8000;
-        EXPECT_EQ(client1->Get({ objectKey }, dataList, subTimeoutMs).GetCode(), StatusCode::K_NOT_FOUND);
-        uint64_t elapsedMilliSeconds = timer.ElapsedMilliSecond();
-        EXPECT_LE(elapsedMilliSeconds, 10000ul);
-        EXPECT_GE(elapsedMilliSeconds, 7000ul);
-    });
-
-    std::thread t2([&client2, &objectKey, data]() {
-        std::vector<std::string> dataList;
-        uint64_t subTimeoutMs = 5'000;
-        DS_ASSERT_OK(client2->Get({ objectKey }, dataList, subTimeoutMs));
-        DS_ASSERT_OK(client2->Del(objectKey));
-    });
-
-    t1.join();
-    t2.join();
+    DS_ASSERT_OK(client1->Set(objectKey, data, param));
+    std::vector<std::string> dataList;
+    DS_ASSERT_OK(client1->Get({ objectKey }, dataList));
+    DS_ASSERT_OK(client2->Get({ objectKey }, dataList));
+    DS_ASSERT_OK(client2->Del(objectKey));
+    EXPECT_EQ(client1->Get({ objectKey }, dataList).GetCode(), StatusCode::K_NOT_FOUND);
 }
 
 TEST_F(KVCacheClientTest, TestRemoteGetFromSelfAddressScenarios1)
@@ -1462,34 +1442,17 @@ TEST_F(KVCacheClientTest, TestRemoteGetFromSelfAddressScenarios1)
     InitTestKVClient(0, client1);
     InitTestKVClient(1, client2);
     std::string objectKey = NewObjectKey();
-    uint64_t size = 128;
-    std::string data = GenRandomString(size);
+    std::string data = GenRandomString(128);
     SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0, .existence = ExistenceOpt::NX };
 
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 0, "MasterWorkerOCServiceImpl.DeleteNotification.retry", "sleep(3000)"));
-
-    std::thread t1([&client1, &objectKey, data, &param]() {
-        sleep(1);
-        DS_ASSERT_OK(client1->Set(objectKey, data, param));
-        std::vector<std::string> dataList;
-        sleep(1);
-        Timer timer;
-        uint64_t subTimeoutMs = 10'000;
-        DS_ASSERT_OK(client1->Get({ objectKey }, dataList, subTimeoutMs));
-        ASSERT_EQ(data, dataList[0]);
-    });
-
-    std::thread t2([&client2, &objectKey, data, &param]() {
-        std::vector<std::string> dataList;
-        uint64_t subTimeoutMs = 5'000;
-        DS_ASSERT_OK(client2->Get({ objectKey }, dataList, subTimeoutMs));
-        DS_ASSERT_OK(client2->Del(objectKey));
-        DS_ASSERT_OK(client2->Set(objectKey, data, param));
-    });
-
-    t1.join();
-    t2.join();
+    DS_ASSERT_OK(client1->Set(objectKey, data, param));
+    std::vector<std::string> dataList;
+    DS_ASSERT_OK(client1->Get({ objectKey }, dataList));
+    ASSERT_EQ(data, dataList[0]);
+    DS_ASSERT_OK(client2->Del(objectKey));
+    DS_ASSERT_OK(client2->Set(objectKey, data, param));
+    DS_ASSERT_OK(client1->Get({ objectKey }, dataList));
+    ASSERT_EQ(data, dataList[0]);
 }
 
 TEST_F(KVCacheClientTest, LEVEL1_DelSucceedsWhenTargetWorkerDiesBeforeDeleteNotificationReply)
@@ -1887,7 +1850,7 @@ TEST_F(KVCacheClientTest, TestGetKeyAlwaysMeetsCacheInvalid)
                                            "return(K_WORKER_PULL_OBJECT_NOT_FOUND)"));
 
     std::string getVal;
-    ASSERT_EQ(client1->Get(key, getVal, timeoutMs).GetCode(), StatusCode::K_NOT_FOUND);
+    ASSERT_EQ(client1->Get(key, getVal).GetCode(), StatusCode::K_NOT_FOUND);
 }
 
 TEST_F(KVCacheClientTest, TestSetGetDelTheSameKeyConcurrently)
@@ -2493,13 +2456,9 @@ public:
             ASSERT_TRUE(status.IsOk() || status.GetCode() == StatusCode::K_OC_KEY_ALREADY_EXIST) << status.ToString();
             if (status.GetCode() == StatusCode::K_OC_KEY_ALREADY_EXIST) {
                 std::string getVal;
-                Timer timer;
-                Status status = clients_[index]->Get(key, getVal, 20'000);
-                uint64_t elasped = timer.ElapsedMilliSecond();
+                Status status = clients_[index]->Get(key, getVal);
                 ASSERT_TRUE(status.IsOk() || status.GetCode() == StatusCode::K_NOT_FOUND) << status.ToString();
-                if (status.GetCode() == StatusCode::K_NOT_FOUND) {
-                    ASSERT_GE(elasped, 18'000ul);
-                } else {
+                if (status.IsOk()) {
                     ASSERT_EQ(getVal.size(), val.size());
                 }
 

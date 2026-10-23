@@ -981,7 +981,7 @@ TEST_F(KVClientTransportGetAccessLogTest, LEVEL1_RemoteDataRpcAccessLogsCoverSuc
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, META_OWNER_INDEX));
 
     const std::string expectedTransport = ExpectedTransport();
-    AssertWorkerAccessLogLine(META_OWNER_INDEX, { "DS_POSIX_QUERY_AND_GET", keys[0] });
+    AssertWorkerAccessLogLine(META_OWNER_INDEX, { "DS_POSIX_QUERY_AND_GET", keys[0] + "]" });
     AssertWorkerAccessLogLine(DATA_WORKER_INDEX,
                               { "0 | DS_POSIX_REMOTE_GET |", keys[0], " | " + std::to_string(VALUE_SIZE) + " |",
                                 "transportType:" + expectedTransport });

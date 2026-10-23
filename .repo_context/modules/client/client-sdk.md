@@ -116,6 +116,10 @@
     boundary currently covers `KVClient` only; the other SDK client families remain unchanged.
   - General batch APIs accept up to 10,000 keys. `Exist` accepts up to 100,000 keys, so one query can cover the
     32,768 cache blocks required by a 1 Mi-token context with 32 tokens per key.
+  - Public `KVClient::Get` overloads and their Python, Java, and Go facades do not expose a per-call subscription
+    timeout. They pass zero to the shared object-client backend, so an absent or unpublished object is not awaited;
+    `ConnectOptions::requestTimeoutMs` remains the whole-call deadline. `ObjectClient::Get` retains its explicit
+    `subTimeoutMs` contract, and the Worker/Master subscription protocol is unchanged.
   - `KVClient::MGetH2D` requires every input key to be unique and returns `K_INVALID` before pipeline dispatch when
     duplicates are present. This constraint is specific to the KV pipeline H2D path, whose transfer state is tracked
     per input request; it does not change `HeteroClient::MGetH2D`.

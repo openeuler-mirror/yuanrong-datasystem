@@ -407,9 +407,9 @@ TEST_F(STCClientDistMasterTest, DISABLED_TestAddNodeGet)
             std::string valueGet;
             std::string valueGet1;
             std::string valueGet2;
-            ASSERT_EQ(client_->Get(key, valueGet, 50000), Status::OK());
-            ASSERT_EQ(client1_->Get(key, valueGet1, 50000), Status::OK());
-            ASSERT_EQ(client2_->Get(key, valueGet2, 50000), Status::OK());
+            ASSERT_EQ(client_->Get(key, valueGet), Status::OK());
+            ASSERT_EQ(client1_->Get(key, valueGet1), Status::OK());
+            ASSERT_EQ(client2_->Get(key, valueGet2), Status::OK());
             ASSERT_EQ(value, std::string(valueGet.data(), valueGet.size()));
         }
     };
@@ -566,6 +566,8 @@ TEST_F(STCClientDistMasterTest, TestRemoteGetSameObjectsConcurrently)
         absentIds1.emplace_back("not_exist_id" + std::to_string(i));
         absentIds2.emplace_back("not_exist_id" + std::to_string(i));
     }
+    DS_ASSERT_OK(client1_->Set("not_exist_id0", val));
+    DS_ASSERT_OK(client_->Set("not_exist_id1", val));
 
     for (size_t i = 0; i < num; ++i) {
         threads[i] = std::thread([this, i, &val, &objectKeys, &partOfIds1, &partOfIds2, &absentIds1, &absentIds2]() {
@@ -589,7 +591,7 @@ TEST_F(STCClientDistMasterTest, TestRemoteGetSameObjectsConcurrently)
             }
 
             std::vector<std::string> getVals;
-            DS_ASSERT_OK(client->Get(getObjects, getVals, 20'000));
+            DS_ASSERT_OK(client->Get(getObjects, getVals));
             ASSERT_EQ(getVals.size(), getObjects.size());
             for (size_t k = 0; k < getObjects.size(); ++k) {
                 ASSERT_EQ(getVals[k], val);
@@ -597,46 +599,33 @@ TEST_F(STCClientDistMasterTest, TestRemoteGetSameObjectsConcurrently)
         });
     }
 
-    DS_ASSERT_OK(client1_->Set("not_exist_id0", val));
-    DS_ASSERT_OK(client_->Set("not_exist_id1", val));
     for (auto &t : threads) {
         t.join();
     }
 }
 
-TEST_F(STCClientDistMasterTest, TestRemoteGetSameSubscribeObjectsConcurrently)
+TEST_F(STCClientDistMasterTest, TestRemoteGetSameObjectsConcurrentlyAfterPublication)
 {
-    LOG(INFO) << "Test remote get and subscribe happen currently";
+    LOG(INFO) << "Test remote get of published objects happens concurrently";
     StartClustersAndWaitReady();
     GetWorkerUuids();
     std::vector<std::string> objectKeys{ "Zed",  "Vi",      "Morgana",  "AShe",   "Aatrox", "Annie",     "Akali",
                                         "Bard", "Camille", "Darius",   "Ekko",   "Garen",  "Gangplank", "Jax",
                                         "Jinx", "KaiSa",   "Kassadin", "Kennen", "Lillia", "Lucian",    "Pyke" };
     std::string val = "Welcome to Wild Rift";
-    DS_ASSERT_OK(client_->Set(objectKeys.back(), val));
+    for (const auto &objectKey : objectKeys) {
+        DS_ASSERT_OK(client_->Set(objectKey, val));
+    }
 
-    size_t num = 25;
+    size_t num = 2;
     std::vector<std::thread> threads(num);
-    for (size_t i = 0; i < num; ++i) {
-        threads[i] = std::thread([this, &objectKeys, &val, i]() {
-            if (i < 20) {
-                std::vector<std::string> getVals;
-                DS_ASSERT_OK(client1_->Get(objectKeys, getVals, 20'000));
-                ASSERT_EQ(getVals.size(), objectKeys.size());
-                for (size_t k = 0; k < objectKeys.size(); ++k) {
-                    ASSERT_EQ(getVals[k], val);
-                }
-            } else {
-                size_t index = i - 20;
-                for (size_t k = index * 4; k < index * 4 + 4; ++k) {
-                    if (index % 3 == 0) {
-                        DS_ASSERT_OK(client_->Set(objectKeys[k], val));
-                    } else if (index % 3 == 1) {
-                        DS_ASSERT_OK(client1_->Set(objectKeys[k], val));
-                    } else {
-                        DS_ASSERT_OK(client2_->Set(objectKeys[k], val));
-                    }
-                }
+    for (auto &thread : threads) {
+        thread = std::thread([this, &objectKeys, &val]() {
+            std::vector<std::string> getVals;
+            DS_ASSERT_OK(client1_->Get(objectKeys, getVals));
+            ASSERT_EQ(getVals.size(), objectKeys.size());
+            for (size_t k = 0; k < objectKeys.size(); ++k) {
+                ASSERT_EQ(getVals[k], val);
             }
         });
     }
@@ -677,7 +666,7 @@ TEST_F(STCClientDistMasterTest, DISABLED_TestRemoteGetConcurrentlyMeetsQueryMeta
     for (size_t i = 0; i < num; ++i) {
         threads[i] = std::thread([&client2, &objectKeys, &val, &succCount, &failCount]() {
             std::vector<std::string> getVals;
-            Status rc = client2->Get(objectKeys, getVals, 0);
+            Status rc = client2->Get(objectKeys, getVals);
             if (rc.IsError()) {
                 failCount.fetch_add(1);
                 return;
@@ -747,69 +736,11 @@ TEST_F(STCClientDistMasterTest, TestRemoteGetAndDelConcurrencyNotFoundScenario)
 
     std::thread getThr([this, &key]() {
         std::string getVal;
-        Timer timer;
-        Status status = client1_->Get(key, getVal, 5000);
+        Status status = client1_->Get(key, getVal);
         EXPECT_EQ(status.GetCode(), StatusCode::K_NOT_FOUND);
-        auto elsaped = timer.ElapsedMilliSecond();
-        EXPECT_GE(elsaped, 4000.0);
-        EXPECT_LE(elsaped, 6000.0);
     });
 
     delThr.join();
-    getThr.join();
-}
-
-TEST_F(STCClientDistMasterTest, TestRemoteGetAndDelConcurrencyRemoteSetScenario)
-{
-    LOG(INFO) << "Test remote get and del concurrency cause not found scenario";
-    StartClustersAndWaitReady();
-    GetWorkerUuids();
-    std::string key = ObjectKeyWithOwner(0, uuidMap_);
-    std::string val = RandomData().GetRandomString(1024ul * 1024ul);
-
-    DS_ASSERT_OK(client_->Set(key, val));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.worker_worker_remote_get_failure", "1*sleep(1000)"));
-
-    std::thread delThr([this, &key]() {
-        usleep(100'000);
-        DS_ASSERT_OK(client2_->Del(key));
-    });
-
-    std::thread getThr([this, &key, &val]() {
-        std::string getVal;
-        DS_ASSERT_OK(client1_->Get(key, getVal, 5000));
-        ASSERT_EQ(getVal, val);
-    });
-
-    delThr.join();
-    DS_ASSERT_OK(client2_->Set(key, val));
-    getThr.join();
-}
-
-TEST_F(STCClientDistMasterTest, TestRemoteGetAndDelConcurrencyLocalSetScenario)
-{
-    LOG(INFO) << "Test remote get and del concurrency cause not found scenario";
-    StartClustersAndWaitReady();
-    GetWorkerUuids();
-    std::string key = ObjectKeyWithOwner(0, uuidMap_);
-    std::string val = RandomData().GetRandomString(1024ul * 1024ul);
-
-    DS_ASSERT_OK(client_->Set(key, val));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.worker_worker_remote_get_failure", "1*sleep(1000)"));
-
-    std::thread delThr([this, &key]() {
-        usleep(100'000);
-        DS_ASSERT_OK(client2_->Del(key));
-    });
-
-    std::thread getThr([this, &key, &val]() {
-        std::string getVal;
-        DS_ASSERT_OK(client1_->Get(key, getVal, 5000));
-        ASSERT_EQ(getVal, val);
-    });
-
-    delThr.join();
-    DS_ASSERT_OK(client_->Set(key, val));
     getThr.join();
 }
 

@@ -53,7 +53,6 @@ constexpr size_t MEMORY_LIMIT_SOURCE_VALUE_SIZE = 4 * 1024UL * 1024UL;
 constexpr size_t SPILL_VALUE_SIZE = 4 * 1024UL * 1024UL;
 constexpr int MEMORY_LIMIT_SOURCE_OBJECT_COUNT = 8;
 constexpr int MEMORY_LIMIT_SOURCE_TRIGGER_OBJECT_COUNT = 2;
-constexpr int GET_TIMEOUT_MS = 30'000;
 constexpr int REBALANCE_TIMEOUT_MS = 25'000;
 constexpr int HASH_RING_TIMEOUT_MS = 60'000;
 constexpr int SHORT_WAIT_MS = 3'000;
@@ -279,7 +278,7 @@ protected:
        ASSERT_TRUE(client != nullptr);
        for (const auto &key : batch.keys) {
            std::string value;
-           auto rc = client->Get(key, value, GET_TIMEOUT_MS);
+           auto rc = client->Get(key, value);
            ASSERT_TRUE(rc.IsOk()) << FormatString("Get %s failed: %s", key, rc.ToString());
            ASSERT_EQ(value, batch.value) << key;
        }
@@ -584,14 +583,13 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, DISABLED_ForegroundReadWriteConcurren
                    continue;
                }
                std::string getSmallValue;
-               if (client0_->Get(smallKey, getSmallValue, GET_TIMEOUT_MS).IsError() || getSmallValue != smallValue) {
+               if (client0_->Get(smallKey, getSmallValue).IsError() || getSmallValue != smallValue) {
                    failures.fetch_add(1, std::memory_order_relaxed);
                }
 
                std::string getLargeValue;
                const auto &largeKey = sourceBatch.keys[(round + tid) % sourceBatch.keys.size()];
-               if (client1_->Get(largeKey, getLargeValue, GET_TIMEOUT_MS).IsError()
-                   || getLargeValue != sourceBatch.value) {
+               if (client1_->Get(largeKey, getLargeValue).IsError() || getLargeValue != sourceBatch.value) {
                    failures.fetch_add(1, std::memory_order_relaxed);
                }
                ++round;
@@ -1327,7 +1325,7 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceUbFaultTest, UnavailableTargetRecoversOnlyA
     ASSERT_TRUE(WaitFor([&] {
         for (const auto &key : firstBatch.keys) {
             std::string value;
-            if (client0_->Get(key, value, GET_TIMEOUT_MS).IsError()) {
+            if (client0_->Get(key, value).IsError()) {
                 return false;
             }
         }
@@ -1389,7 +1387,7 @@ protected:
        }
        for (const auto &key : batch.keys) {
            std::string value;
-           auto rc = client_->Get(key, value, GET_TIMEOUT_MS);
+           auto rc = client_->Get(key, value);
            ASSERT_TRUE(rc.IsOk()) << FormatString("Get %s failed: %s", key, rc.ToString());
            ASSERT_EQ(value, batch.value) << key;
        }

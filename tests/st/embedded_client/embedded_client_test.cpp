@@ -53,7 +53,6 @@ namespace st {
 namespace {
 constexpr int EMBEDDED_CLIENT_REQUEST_TIMEOUT_MS = 90'000;
 constexpr int EMBEDDED_CHILD_GET_TIMEOUT_MS = 30'000;
-constexpr int EMBEDDED_CHILD_GET_ATTEMPT_TIMEOUT_MS = 5'000;
 constexpr auto EMBEDDED_CHILD_WAIT_TIMEOUT = std::chrono::seconds(45);
 constexpr auto EMBEDDED_CHILD_POLL_INTERVAL = std::chrono::milliseconds(100);
 
@@ -62,19 +61,14 @@ Status WaitForEmbeddedKey(KVClient &client, const std::string &key, std::string 
     const auto deadline = std::chrono::steady_clock::now()
                           + std::chrono::milliseconds(EMBEDDED_CHILD_GET_TIMEOUT_MS);
     Status rc(K_NOT_FOUND, "Timed out waiting for the embedded key");
-    // The embedded client's RPC deadline is shorter than the cluster convergence window, so wait in bounded attempts.
     while (std::chrono::steady_clock::now() < deadline) {
-        const auto remainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                     deadline - std::chrono::steady_clock::now())
-                                     .count();
-        const auto timeoutMs = static_cast<int32_t>(std::max<int64_t>(
-            1, std::min<int64_t>(EMBEDDED_CHILD_GET_ATTEMPT_TIMEOUT_MS, remainingMs)));
-        rc = client.Get(key, val, timeoutMs);
+        rc = client.Get(key, val);
         if (rc.IsOk()
             || (rc.GetCode() != K_NOT_FOUND && rc.GetCode() != K_RPC_DEADLINE_EXCEEDED
                 && rc.GetCode() != K_RPC_UNAVAILABLE)) {
             return rc;
         }
+        std::this_thread::sleep_for(EMBEDDED_CHILD_POLL_INTERVAL);
     }
     return rc;
 }
@@ -284,7 +278,7 @@ public:
         auto client2 = &KVClient::EmbeddedInstance();
         std::string k1(key);
         std::string v1got;
-        auto s = client2->Get(k1, v1got, 10000); // wait for 10000 ms
+        auto s = WaitForEmbeddedKey(*client2, k1, v1got);
         if (!s.IsOk()) {
             std::cerr << "Child Get key1 failed: " << s.ToString() << std::endl;
             return Status(K_RUNTIME_ERROR, "get failed");
@@ -297,7 +291,7 @@ public:
             return Status(K_RUNTIME_ERROR, "set failed");
         }
         std::string finish;
-        RETURN_IF_NOT_OK(client2->Get("finish", finish, 10000)); // wait for 10000 ms
+        RETURN_IF_NOT_OK(WaitForEmbeddedKey(*client2, "finish", finish));
         RETURN_IF_NOT_OK(client2->ShutDown());
         return Status::OK();
     }
@@ -408,7 +402,7 @@ TEST_F(KVClientCoprocessTest, TestEmbeddedClientsGetAndSetSuccess)
 
         std::string k2 = "key2_from_child";
         std::string v2got;
-        ASSERT_EQ(client_->Get(k2, v2got, 20000), Status::OK());  // wait for 10000 ms
+        DS_ASSERT_OK(WaitForEmbeddedKey(*client_, k2, v2got));
         ASSERT_EQ(v2got, "val2_from_child");
         DS_ASSERT_OK(client_->Set("finish", "finish"));
         DS_ASSERT_OK(client_->ShutDown());

@@ -444,7 +444,6 @@ func TestDelArrayFail(t *testing.T) {
 func TestGetArrayFail(t *testing.T) {
 	var theClient *KVClient
 	var s common.Status
-	const TimeoutMs uint32 = 5 // Waiting 5ms for the result return if not ready.
 	if theClient, s = CreateClientForTest(); theClient == nil {
 		t.Fatalf(s.ToString())
 	}
@@ -460,7 +459,7 @@ func TestGetArrayFail(t *testing.T) {
 	}
 
 	// Getting multiple keys -> Key1 missing
-	outputE, s := theClient.GetArray([]string{"key12637", "key67789"}, TimeoutMs)
+	outputE, s := theClient.GetArray([]string{"key12637", "key67789"})
 	if s.IsError() {
 		t.Fatalf(s.ToString())
 	}

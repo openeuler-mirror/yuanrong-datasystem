@@ -204,18 +204,13 @@ KVClient
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示无法从 worker 获取值、H2D 提交/等待失败或服务端内部错误。
             - 返回 ``StatusCode::K_NOT_SUPPORTED`` 表示当前 client/worker、共享内存、编译选项或 worker 启动参数不支持 RH2D。
 
-    .. cpp:function:: Status Get(const std::string &key, std::string &val, int32_t subTimeoutMs)
+    .. cpp:function:: Status Get(const std::string &key, std::string &val)
 
         获取键对应的数据。
 
         参数：
             - **key** - 键. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个key最大长度为1024字节。
             - **val** - 传出参数，返回缓存数据。
-            - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
-
-              .. note::
-
-                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
 
         返回：
             - 返回 ``StatusCode::K_OK`` 表示获取成功。
@@ -226,18 +221,13 @@ KVClient
             - 返回 ``StatusCode::K_RPC_NETWORK_BLIP`` 表示 RPC 遇到瞬时网络抖动，客户端在原 ``K_RPC_UNAVAILABLE`` 的重试预算内自动重试。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
-    .. cpp:function:: Status Get(const std::string &key, Optional<ReadOnlyBuffer> &readOnlyBuffer, int32_t subTimeoutMs)
+    .. cpp:function:: Status Get(const std::string &key, Optional<ReadOnlyBuffer> &readOnlyBuffer)
 
         获取键对应的只读共享内存 :cpp:class:`ReadOnlyBuffer`。
 
         参数：
             - **key** - 键. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个key最大长度为1024字节。
             - **readOnlyBuffer** - 传出参数，返回的使用 :cpp:class:`Optional` 封装的只读共享内存 :cpp:class:`ReadOnlyBuffer` 。
-            - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
-
-              .. note::
-
-                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
 
         返回：
             - 返回 ``StatusCode::K_OK`` 表示获取成功。
@@ -248,19 +238,12 @@ KVClient
             - 返回 ``StatusCode::K_RPC_NETWORK_BLIP`` 表示 RPC 遇到瞬时网络抖动，客户端在原 ``K_RPC_UNAVAILABLE`` 的重试预算内自动重试。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
-    .. cpp:function:: Status Get(const std::string &key, Optional<Buffer> &buffer, int32_t subTimeoutMs)
+    .. cpp:function:: Status Get(const std::string &key, Optional<Buffer> &buffer)
 
-        获取键对应的共享内存 :cpp:class:`Buffer` 。该接口相比 :cpp:any:`Status Get(const std::string &key, std::string &val, int32_t subTimeoutMs)` 可减少一次从共享内存到临时内存的拷贝，直接读取缓存在共享内存上的数据，性能更优。
+        获取键对应的共享内存 :cpp:class:`Buffer` 。该接口相比 :cpp:any:`Status Get(const std::string &key, std::string &val)` 可减少一次从共享内存到临时内存的拷贝，直接读取缓存在共享内存上的数据，性能更优。
 
         参数：
             - **key** - 键. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个key最大长度为1024字节。
-            - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
-
-              .. note::
-
-                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
-
-            - **buffer** - 传出参数，返回的使用 :cpp:class:`Optional` 封装的共享内存 :cpp:class:`Buffer` ，当 Get 返回失败时，``buffer`` 的值为 ``nullptr``。
 
         返回：
             - 返回 ``StatusCode::K_OK`` 表示获取成功。
@@ -272,19 +255,13 @@ KVClient
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
 
-    .. cpp:function:: Status Get(const std::vector<std::string> &keys, std::vector<std::string> &vals, int32_t subTimeoutMs)
+    .. cpp:function:: Status Get(const std::vector<std::string> &keys, std::vector<std::string> &vals)
 
         批量获取数据。
 
         参数：
             - **keys** - 需要获取的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个key最大长度为1024字节。传入的key的个数 `<=10000`，推荐单次获取key个数 `<=64`。
-            - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
 
-              .. note::
-
-                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
-
-            - **vals** - 传出参数，返回一组获取的数据。若有部分数据获取不成功，则对应位置的vector的对象为空。
 
         返回：
             - 返回 ``StatusCode::K_OK`` 表示至少有一个数据获取成功。
@@ -295,18 +272,14 @@ KVClient
             - 返回 ``StatusCode::K_NOT_FOUND`` 表示所有 ``keys`` 不存在。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
-    .. cpp:function:: Status Get(const std::vector<std::string> &keys, std::vector<Optional<ReadOnlyBuffer>> &readOnlyBuffers, int32_t subTimeoutMs)
+    .. cpp:function:: Status Get(const std::vector<std::string> &keys, std::vector<Optional<ReadOnlyBuffer>> &readOnlyBuffers)
 
         批量获取多个键对应的只读共享内存 :cpp:class:`ReadOnlyBuffer`。
 
         参数：
             - **keys** - 需要获取的一组key.
             - **readOnlyBuffers** - 传出参数，返回的一组使用 :cpp:class:`Optional` 封装的只读共享内存 :cpp:class:`ReadOnlyBuffer` 。
-            - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
 
-              .. note::
-
-                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
 
         返回：
             - 返回 ``StatusCode::K_OK`` 表示至少有一个数据获取成功。
@@ -332,19 +305,13 @@ KVClient
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
 
-    .. cpp:function:: Status Get(const std::vector<std::string> &keys, std::vector<Optional<Buffer>> &buffers, int32_t subTimeoutMs)
+    .. cpp:function:: Status Get(const std::vector<std::string> &keys, std::vector<Optional<Buffer>> &buffers)
     
-        批量获取多个键对应的共享内存 :cpp:class:`Buffer` 。该接口相比 :cpp:any:`Status Get(const std::vector<std::string> &keys, std::vector<std::string> &vals, int32_t subTimeoutMs)` 少一次从共享内存到临时内存的拷贝，性能更优。
+        批量获取多个键对应的共享内存 :cpp:class:`Buffer` 。该接口相比 :cpp:any:`Status Get(const std::vector<std::string> &keys, std::vector<std::string> &vals)` 少一次从共享内存到临时内存的拷贝，性能更优。
         
         参数：
             - **keys** - 需要获取的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个key最大长度为1024字节。传入的key的个数 `<=10000`，推荐单次获取key个数 `<=64`。
-            - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
 
-              .. note::
-
-                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
-
-            - **buffers** - 传出参数，返回的一组使用 :cpp:class:`Optional` 封装的共享内存 :cpp:class:`Buffer` 。若有部分数据获取不成功，则对应位置的vector的对象为空。
 
         返回：
             - 返回 ``StatusCode::K_OK`` 表示至少有一个数据获取成功。

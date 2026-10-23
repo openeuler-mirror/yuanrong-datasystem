@@ -445,7 +445,7 @@ class KVClient:
         if status.is_error():
             raise RuntimeError(status.to_string())
 
-    def get_buffers(self, keys: list, timeout_ms=0):
+    def get_buffers(self, keys: list):
         """ Retrieve multiple objects as read-only buffers.
 
         Args:
@@ -458,13 +458,10 @@ class KVClient:
             RuntimeError: Raise a runtime error if fails to get the value of all keys.
             TypeError: Raise a type error if the input parameter is invalid.
         """
-        args = [
-            ["keys", keys, list],
-            ["timeout_ms", timeout_ms, int]
-        ]
+        args = [["keys", keys, list]]
         validator.check_args_types(args)
 
-        status, buffer_array = self._client.MGetBuffer(keys, timeout_ms)
+        status, buffer_array = self._client.MGetBuffer(keys)
         if status.is_error():
             raise RuntimeError(status.to_string())
 
@@ -542,13 +539,11 @@ class KVClient:
         if status.is_error():
             raise RuntimeError(status.to_string())
 
-    def get_read_only_buffers(self, keys: list = None, timeout_ms=0) -> List[ReadOnlyBuffer]:
+    def get_read_only_buffers(self, keys: list = None) -> List[ReadOnlyBuffer]:
         """ Get the values of all given keys.
 
         Args:
             keys(list): The key list of string type.
-            timeout_ms(int): TimeoutMs of waiting for the result return if object not ready.
-                A positive integer number required. 0 means no waiting time allowed.
         Returns:
             values(list): The value list of keys. If the key is not found, it will raise RuntimeError.
 
@@ -556,10 +551,9 @@ class KVClient:
             RuntimeError: Raise a runtime error if fails to get the value of all keys.
             TypeError: Raise a type error if the input parameter is invalid.
         """
-        args = [["keys", keys, list], ["timeout_ms", timeout_ms, int]]
+        args = [["keys", keys, list]]
         validator.check_args_types(args)
-        validator.check_param_range("timeout_ms", timeout_ms, 0, validator.INT32_MAX_SIZE)
-        status, buffer_array = self._client.GetReadOnlyBuffers(keys, timeout_ms)  # returned value is bytes type
+        status, buffer_array = self._client.GetReadOnlyBuffers(keys)  # returned value is bytes type
         if status.is_error():
             raise RuntimeError(status.to_string())
 
@@ -572,14 +566,12 @@ class KVClient:
 
         return buffer_list
 
-    def get(self, keys: list = None, convert_to_str: bool = False, sub_timeout_ms=0):
+    def get(self, keys: list = None, convert_to_str: bool = False):
         """ Get the values of all given keys.
 
         Args:
             keys(list): The key list of string type.
             convert_to_str(bool): True: convert the return value to string, False: return bytes directly.
-            sub_timeout_ms(int): TimeoutMs of waiting for the result return if object not ready.
-                A positive integer number required. 0 means no waiting time allowed.
         Returns:
             values(list): The value list of keys. If the key is not found, it will raise RuntimeError.
 
@@ -587,12 +579,11 @@ class KVClient:
             RuntimeError: Raise a runtime error if fails to get the value of all keys.
             TypeError: Raise a type error if the input parameter is invalid.
         """
-        args = [["keys", keys, list], ["sub_timeout_ms", sub_timeout_ms, int]]
+        args = [["keys", keys, list]]
         validator.check_args_types(args)
         if keys is None:
             raise RuntimeError(r"The input of keys list should not be empty")
-        validator.check_param_range("sub_timeout_ms", sub_timeout_ms, 0, validator.INT32_MAX_SIZE)
-        status, values = self._client.Get(keys, sub_timeout_ms)  # returned value is bytes type
+        status, values = self._client.Get(keys)  # returned value is bytes type
         if status.is_error():
             raise RuntimeError(status.to_string())
         if convert_to_str is False:

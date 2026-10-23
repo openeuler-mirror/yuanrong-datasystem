@@ -275,33 +275,27 @@ public:
     ///
     /// \param[in] key The key.
     /// \param[out] val The value for the key.
-    /// \param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer
-    ///  number required. 0 means no waiting time allowed.
     ///
     /// \return K_OK on success; the error code otherwise.
     ///         K_INVALID: the key is empty.
     ///         K_NOT_FOUND: the key not found.
     ///         K_RUNTIME_ERROR: Cannot get value from worker.
-    Status Get(const std::string &key, std::string &val, int32_t subTimeoutMs = 0);
+    Status Get(const std::string &key, std::string &val);
 
     /// \brief Invoke worker client to get the value of a key.
     ///
     /// \param[in] key The key.
-    /// \param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer
-    ///  number required. 0 means no waiting time allowed.
     /// \param[out] readOnlyBuffer The value for the key.
     ///
     /// \return K_OK on success; the error code otherwise.
     ///         K_INVALID: the key is empty.
     ///         K_NOT_FOUND: the key not found.
     ///         K_RUNTIME_ERROR: Cannot get value from worker.
-    Status Get(const std::string &key, Optional<ReadOnlyBuffer> &readOnlyBuffer, int32_t subTimeoutMs = 0);
+    Status Get(const std::string &key, Optional<ReadOnlyBuffer> &readOnlyBuffer);
 
     /// \brief Invoke worker client to get the buffer of a key.
     ///
     /// \param[in] key The key.
-    /// \param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer
-    ///  number required. 0 means no waiting time allowed.
     /// \param[out] buffer The value for the key. nullptr if get failed.
     ///
     /// \return K_OK on success; the error code otherwise.
@@ -309,23 +303,19 @@ public:
     ///         K_NOT_FOUND: the key not found.
     ///         K_RPC_UNAVAILABLE: disconnect from worker or master.
     ///         K_RUNTIME_ERROR: Cannot get value from worker.
-    Status Get(const std::string &key, Optional<Buffer> &buffer, int32_t subTimeoutMs = 0);
+    Status Get(const std::string &key, Optional<Buffer> &buffer);
 
     /// \brief Get multiple buffers
     ///
     /// \param[in] keys List of keys
-    /// \param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer
-    ///  number required. 0 means no waiting time allowed.
     /// \param[out] buffers The buffer list to get.
     ///
     /// \return K_OK on success; the error code otherwise.
-    Status Get(const std::vector<std::string> &keys, std::vector<Optional<Buffer>> &buffers, int32_t subTimeoutMs = 0);
+    Status Get(const std::vector<std::string> &keys, std::vector<Optional<Buffer>> &buffers);
 
     /// \brief Invoke worker client to get the values of all the given keys.
     ///
     /// \param[in] keys The vector of the keys.
-    /// \param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer
-    ///  number required. 0 means no waiting time allowed.
     /// \param[out] vals The vector of the values.
     ///
     /// \return K_OK on any key success; the error code otherwise.
@@ -336,13 +326,11 @@ public:
     ///  If some keys are not found, The Status OK will return,
     ///  and the existing keys will set the vals with the same index of keys.
     /// \endverbatim
-    Status Get(const std::vector<std::string> &keys, std::vector<std::string> &vals, int32_t subTimeoutMs = 0);
+    Status Get(const std::vector<std::string> &keys, std::vector<std::string> &vals);
 
     /// \brief Invoke worker client to get the values of all the given keys.
     ///
     /// \param[in] keys The vector of the keys.
-    /// \param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer
-    ///  number required. 0 means no waiting time allowed.
     /// \param[out] readOnlyBuffers The vector of the values.
     ///
     /// \return K_OK on any key success; the error code otherwise.
@@ -353,8 +341,7 @@ public:
     ///  If some keys are not found, The Status OK will return,
     ///  and the existing keys will set the vals with the same index of keys.
     /// \endverbatim
-    Status Get(const std::vector<std::string> &keys, std::vector<Optional<ReadOnlyBuffer>> &readOnlyBuffers,
-               int32_t subTimeoutMs = 0);
+    Status Get(const std::vector<std::string> &keys, std::vector<Optional<ReadOnlyBuffer>> &readOnlyBuffers);
 
     /// \brief Some data in an object can be read based on the specified key and parameters.
     ///         In some scenarios, read amplification can be avoided.

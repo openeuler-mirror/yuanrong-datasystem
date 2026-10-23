@@ -258,7 +258,7 @@ public class KVClientTest {
             client.del(key);
 
             // expected DataSystemException
-            client.get(key, 5);
+            client.get(key);
         } finally {
             client.close();
         }

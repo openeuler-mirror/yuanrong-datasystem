@@ -384,7 +384,7 @@ TEST_F(LEVEL1_KVClientRollbackStaleEntryTest, LEVEL1_RollbackStaleReplicaEntries
     ASSERT_FALSE(sourceBatch.empty());
     for (const auto &key : replicaKeys) {
         std::string value;
-        DS_ASSERT_OK(client1_->Get(key, value, 30'000));
+        DS_ASSERT_OK(client1_->Get(key, value));
         ASSERT_EQ(value.size(), VALUE_SIZE) << key;
     }
 

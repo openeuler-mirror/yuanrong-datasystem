@@ -455,8 +455,7 @@ TEST_F(KVClientBrpcLocalCacheVerifyTest, GetBatchBuffers)
     }
 
     std::vector<Optional<Buffer>> buffers;
-    int64_t subTimeoutMs = 0;
-    DS_ASSERT_OK(client_->Get(keys, buffers, subTimeoutMs));
+    DS_ASSERT_OK(client_->Get(keys, buffers));
     ASSERT_EQ(buffers.size(), keys.size());
     for (uint32_t i = 0; i < BATCH_KEY_COUNT; ++i) {
         ASSERT_TRUE(buffers[i]);

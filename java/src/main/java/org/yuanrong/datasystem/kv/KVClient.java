@@ -130,25 +130,6 @@ public class KVClient {
     }
 
     /**
-     * Invoke worker client to get the value of a key.
-     *
-     * @param key       The key.
-     * @param timeoutMs TimeoutMs of waiting for the result return if object not
-     *                  ready. A positive integer number
-     *                  required. 0 means no waiting time allowed.
-     * @return The value for the key.
-     */
-    public ByteBuffer get(String key, int timeoutMs) {
-        rLock.lock();
-        try {
-            ensureOpen();
-            return getKeyNative(kvClientPtr, key, timeoutMs);
-        } finally {
-            rLock.unlock();
-        }
-    }
-
-    /**
      * Invoke worker client to get the values of all the given keys.
      *
      * @param keys The vector of the keys.
@@ -159,25 +140,6 @@ public class KVClient {
         try {
             ensureOpen();
             return getKeysNative(kvClientPtr, keys, 0);
-        } finally {
-            rLock.unlock();
-        }
-    }
-
-    /**
-     * Invoke worker client to get the values of all the given keys.
-     *
-     * @param keys      The vector of the keys.
-     * @param timeoutMs TimeoutMs of waiting for the result return if object not
-     *                  ready. A positive integer number
-     *                  required. 0 means no waiting time allowed.
-     * @return The values list.
-     */
-    public List<ByteBuffer> get(List<String> keys, int timeoutMs) {
-        rLock.lock();
-        try {
-            ensureOpen();
-            return getKeysNative(kvClientPtr, keys, timeoutMs);
         } finally {
             rLock.unlock();
         }

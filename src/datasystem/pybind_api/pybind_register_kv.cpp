@@ -389,19 +389,19 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                 return status;
              })
         .def("MGetBuffer",
-             [](ObjectClientImpl &client, const std::vector<std::string> &keys, uint32_t timeout_ms) {
+             [](ObjectClientImpl &client, const std::vector<std::string> &keys) {
                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                 std::vector<Optional<Buffer>> buffers;
                 py::list vals;
                 uint64_t totalSize = 0;
                 Status lastRc;
                 auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
-                Raii raii([&access, &totalSize, &lastRc, &keys, timeout_ms] {
+                Raii raii([&access, &totalSize, &lastRc, &keys] {
                     Status accessRc = (lastRc.GetCode() == K_NOT_FOUND) ? Status::OK() : lastRc;
-                    access.ObjectKeysRef(keys).TimeoutMs(timeout_ms).Result(accessRc).DataSize(totalSize).Record();
+                    access.ObjectKeysRef(keys).TimeoutMs(0).Result(accessRc).DataSize(totalSize).Record();
                 });
 
-                lastRc = client.Get(keys, timeout_ms, buffers);
+                lastRc = client.Get(keys, 0, buffers);
                 if (lastRc.IsError()) {
                     return std::make_pair(lastRc, std::move(vals));
                 }
@@ -426,18 +426,18 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                 return std::make_pair(lastRc, std::move(vals));
              })
         .def("GetReadOnlyBuffers",
-             [](ObjectClientImpl &client, const std::vector<std::string> &keys, uint32_t timeout_ms) {
+             [](ObjectClientImpl &client, const std::vector<std::string> &keys) {
                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                 std::vector<Optional<Buffer>> buffers;
                 py::list pyList;
                 uint64_t totalSize = 0;
                 Status lastRc;
                 auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
-                Raii raii([&access, &totalSize, &lastRc, &keys, timeout_ms] {
+                Raii raii([&access, &totalSize, &lastRc, &keys] {
                     Status accessRc = (lastRc.GetCode() == K_NOT_FOUND) ? Status::OK() : lastRc;
-                    access.ObjectKeysRef(keys).TimeoutMs(timeout_ms).Result(accessRc).DataSize(totalSize).Record();
+                    access.ObjectKeysRef(keys).TimeoutMs(0).Result(accessRc).DataSize(totalSize).Record();
                 });
-                Status rc = client.Get(keys, timeout_ms, buffers);
+                Status rc = client.Get(keys, 0, buffers);
                 lastRc = rc;
                 if (rc.IsError()) {
                     return std::make_pair(rc, std::move(pyList));
@@ -457,18 +457,18 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                 return std::make_pair(rc, std::move(pyList));
              })
         .def("Get",
-             [](ObjectClientImpl &client, const std::vector<std::string> &keys, uint32_t timeout_ms) {
+             [](ObjectClientImpl &client, const std::vector<std::string> &keys) {
                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                 std::vector<Optional<Buffer>> buffers;
                 py::list vals;
                 uint64_t totalSize = 0;
                 Status lastRc;
                 auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
-                Raii raii([&access, &totalSize, &lastRc, &keys, timeout_ms] {
+                Raii raii([&access, &totalSize, &lastRc, &keys] {
                     Status accessRc = (lastRc.GetCode() == K_NOT_FOUND) ? Status::OK() : lastRc;
-                    access.ObjectKeysRef(keys).TimeoutMs(timeout_ms).Result(accessRc).DataSize(totalSize).Record();
+                    access.ObjectKeysRef(keys).TimeoutMs(0).Result(accessRc).DataSize(totalSize).Record();
                 });
-                Status rc = client.Get(keys, timeout_ms, buffers);
+                Status rc = client.Get(keys, 0, buffers);
                 lastRc = rc;
                 if (rc.IsError()) {
                     return std::make_pair(rc, std::move(vals));

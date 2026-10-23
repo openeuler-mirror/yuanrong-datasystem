@@ -213,39 +213,36 @@ Status KVClient::MSet(const std::vector<std::shared_ptr<Buffer>> &buffers)
     return rc;
 }
 
-Status KVClient::Get(const std::string &key, Optional<Buffer> &buffer, int32_t subTimeoutMs)
+Status KVClient::Get(const std::string &key, Optional<Buffer> &buffer)
 {
     ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_BUFFER);
     std::vector<Optional<Buffer>> buffers;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
-    Status rc = impl_->Get({ key }, subTimeoutMs, buffers);
+    Status rc = impl_->Get({ key }, 0, buffers);
     METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
     size_t dataSize = rc.IsOk() ? buffers[0]->GetSize() : 0;
     Status accessRc = (rc.GetCode() == K_NOT_FOUND) ? Status::OK() : rc;
-    access.ObjectKeyRef(key).TimeoutMs(subTimeoutMs).TrackedTransportType()
-        .DataSize(dataSize).Result(accessRc).Record();
+    access.ObjectKeyRef(key).TimeoutMs(0).TrackedTransportType().DataSize(dataSize).Result(accessRc).Record();
     RETURN_IF_NOT_OK(rc);
     buffer = std::move(buffers[0]);
     return rc;
 }
 
-Status KVClient::Get(const std::vector<std::string> &keys,
-                     std::vector<Optional<Buffer>> &buffers, int32_t subTimeoutMs)
+Status KVClient::Get(const std::vector<std::string> &keys, std::vector<Optional<Buffer>> &buffers)
 {
     ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_MUL_BUFFERS);
     std::vector<Optional<Buffer>> tmpBuffers;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
-    Status rc = impl_->Get(keys, subTimeoutMs, buffers);
+    Status rc = impl_->Get(keys, 0, buffers);
     METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
     Status accessRc = (rc.GetCode() == K_NOT_FOUND) ? Status::OK() : rc;
-    access.ObjectKeysRef(keys).TimeoutMs(subTimeoutMs).TrackedTransportType()
-        .DataSize(buffers.size()).Result(accessRc).Record();
+    access.ObjectKeysRef(keys).TimeoutMs(0).TrackedTransportType().DataSize(buffers.size()).Result(accessRc).Record();
     return rc;
 }
 
@@ -319,7 +316,7 @@ Status KVClient::MGetH2D(const std::vector<std::string> &keys, const std::vector
     return result.status;
 }
 
-Status KVClient::Get(const std::string &key, std::string &val, int32_t timeoutMs)
+Status KVClient::Get(const std::string &key, std::string &val)
 {
     ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
@@ -328,19 +325,18 @@ Status KVClient::Get(const std::string &key, std::string &val, int32_t timeoutMs
     std::vector<std::string> vals;
     size_t dataSize = 0;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
-    Status rc = impl_->GetWithLatch({ key }, vals, timeoutMs, buffers, dataSize);
+    Status rc = impl_->GetWithLatch({ key }, vals, 0, buffers, dataSize);
     METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
     Status accessRc = (rc.GetCode() == K_NOT_FOUND) ? Status::OK() : rc;
-    access.ObjectKeyRef(key).TimeoutMs(timeoutMs).TrackedTransportType()
-        .DataSize(dataSize).Result(accessRc).Record();
+    access.ObjectKeyRef(key).TimeoutMs(0).TrackedTransportType().DataSize(dataSize).Result(accessRc).Record();
     if (rc.IsOk()) {
         val = std::move(vals[0]);
     }
     return rc;
 }
 
-Status KVClient::Get(const std::vector<std::string> &keys, std::vector<std::string> &vals, int32_t subTimeoutMs)
+Status KVClient::Get(const std::vector<std::string> &keys, std::vector<std::string> &vals)
 {
     ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
@@ -348,23 +344,22 @@ Status KVClient::Get(const std::vector<std::string> &keys, std::vector<std::stri
     std::vector<Optional<Buffer>> buffers;
     size_t dataSize = 0;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
-    Status rc = impl_->GetWithLatch(keys, vals, subTimeoutMs, buffers, dataSize);
+    Status rc = impl_->GetWithLatch(keys, vals, 0, buffers, dataSize);
     METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
     Status accessRc = (rc.GetCode() == K_NOT_FOUND) ? Status::OK() : rc;
-    access.ObjectKeysRef(keys).TimeoutMs(subTimeoutMs).TrackedTransportType()
-        .DataSize(dataSize).Result(accessRc).Record();
+    access.ObjectKeysRef(keys).TimeoutMs(0).TrackedTransportType().DataSize(dataSize).Result(accessRc).Record();
     return rc;
 }
 
-Status KVClient::Get(const std::string &key, Optional<ReadOnlyBuffer> &readOnlyBuffer, int32_t subTimeoutMs)
+Status KVClient::Get(const std::string &key, Optional<ReadOnlyBuffer> &readOnlyBuffer)
 {
     ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_BUFFER);
     std::vector<Optional<Buffer>> buffers;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
-    Status rc = impl_->Get({ key }, subTimeoutMs, buffers);
+    Status rc = impl_->Get({ key }, 0, buffers);
     size_t dataSize = rc.IsOk() ? buffers[0]->GetSize() : 0;
     if (rc.IsOk()) {
         auto bufferSharedPtr = std::make_shared<Buffer>(std::move(buffers[0].value()));
@@ -373,8 +368,7 @@ Status KVClient::Get(const std::string &key, Optional<ReadOnlyBuffer> &readOnlyB
     METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
     Status accessRc = (rc.GetCode() == K_NOT_FOUND) ? Status::OK() : rc;
-    access.ObjectKeyRef(key).TimeoutMs(subTimeoutMs).TrackedTransportType()
-        .DataSize(dataSize).Result(accessRc).Record();
+    access.ObjectKeyRef(key).TimeoutMs(0).TrackedTransportType().DataSize(dataSize).Result(accessRc).Record();
     return rc;
 }
 
@@ -405,15 +399,14 @@ Status KVClient::MSetTx(const std::vector<std::string> &keys, const std::vector<
     return { K_RUNTIME_ERROR, K_MSETTX_DEPRECATED_MSG };
 }
 
-Status KVClient::Get(const std::vector<std::string> &keys, std::vector<Optional<ReadOnlyBuffer>> &readOnlyBuffers,
-                     int32_t subTimeoutMs)
+Status KVClient::Get(const std::vector<std::string> &keys, std::vector<Optional<ReadOnlyBuffer>> &readOnlyBuffers)
 {
     ScopedClientRequestContext requestContext;
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_MUL_BUFFERS);
     std::vector<Optional<Buffer>> buffers;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
-    Status rc = impl_->Get(keys, subTimeoutMs, buffers);
+    Status rc = impl_->Get(keys, 0, buffers);
     int64_t dataSize = 0;
     std::vector<Optional<ReadOnlyBuffer>> result;
     if (rc.IsOk()) {
@@ -434,8 +427,7 @@ Status KVClient::Get(const std::vector<std::string> &keys, std::vector<Optional<
     METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
     Status accessRc = (rc.GetCode() == K_NOT_FOUND) ? Status::OK() : rc;
-    access.ObjectKeysRef(keys).TimeoutMs(subTimeoutMs).TrackedTransportType()
-        .DataSize(dataSize).Result(accessRc).Record();
+    access.ObjectKeysRef(keys).TimeoutMs(0).TrackedTransportType().DataSize(dataSize).Result(accessRc).Record();
     return rc;
 }
 

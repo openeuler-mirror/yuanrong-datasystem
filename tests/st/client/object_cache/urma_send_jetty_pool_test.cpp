@@ -1133,7 +1133,7 @@ TEST_F(UrmaSendJettyPoolFallbackDisabledStTest,
         setExhaustedStatus = cluster_->SetInjectAction(WORKER, kSourceWorker, kPoolExhaustedInject, "call()");
         setWriteStatus = cluster_->SetInjectAction(WORKER, kSourceWorker, kWriteErrorInject, "call()");
         if (setExhaustedStatus.IsOk() && setWriteStatus.IsOk()) {
-            getStatus = reader->Get(keys, got, 500);
+            getStatus = reader->Get(keys, got);
             exhaustedCountStatus = cluster_->GetInjectActionExecuteCount(WORKER, kSourceWorker, kPoolExhaustedInject,
                                                                           exhaustedCount);
             writeCountStatus = cluster_->GetInjectActionExecuteCount(WORKER, kSourceWorker, kWriteErrorInject,
