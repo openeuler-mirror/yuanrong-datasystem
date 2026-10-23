@@ -32,7 +32,6 @@ set(WORKER_SRCS
         worker_oc_server.cpp
         worker_topology_phase_callbacks.cpp
         worker_liveness_check.cpp
-        worker_cli.cpp
         worker_flags.cpp
         data_worker.cpp
         worker_api_c_wrapper.cpp

@@ -49,7 +49,6 @@
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/common/util/version.h"
-#include "datasystem/worker/worker_cli.h"
 #include "datasystem/worker/worker_oc_server.h"
 #include "datasystem/worker/worker_service_accessor.h"
 #include "datasystem/worker/worker_update_flag_check.h"
@@ -431,9 +430,6 @@ Status DataWorker::InitEmbeddedWorker(const EmbeddedConfig &config)
     std::string errMsg;
     CHECK_FAIL_RETURN_STATUS(ParseCommandLineFlags(config, errMsg), K_INVALID,
                              FormatString("parse worker flags failed, err: %s", errMsg));
-    if (cli::HandleCli()) {
-        return Status::OK();
-    }
     // The configuration file processing is triggered immediately when the worker is started.
     flags.StartConfigFileHandle(FLAGS_monitor_config_file, std::chrono::steady_clock::now());
     AdjustNodeTimeoutFlags();
@@ -528,10 +524,6 @@ Status DataWorker::InitAndRun(int argc, char **argv)
         FLAGS_logfile_mode = 0640;
         LinkCommonFlagsValidators();
         ParseCommandLineFlags(argc, argv);
-        if (cli::HandleCli()) {
-            SignalHandler(0);
-            return Status::OK();
-        }
         flags.StartConfigFileHandle(FLAGS_monitor_config_file, std::chrono::steady_clock::now());
         AdjustNodeTimeoutFlags();
         CHECK_FAIL_RETURN_STATUS(ValidateWatermarkFlags(), K_INVALID,

@@ -24,7 +24,7 @@
 - helm uninstall 场景不走 graceful exit：`src/datasystem/worker/worker_oc_server.cpp:3449-3472` 的 `IsScaleIn()` 在 `enable_lossless_data_exit_mode=false`（默认，`k8s/helm_chart/datasystem/values.yaml:418`）且无 `worker-status` 文件时返回 false，`PreShutDown`（`:3559-3588`）跳过 `PublishExitingMembershipAndWaitForTopologyRemoval`
 - topologyTable 是持久 key 不绑 lease：`src/datasystem/cluster/repository/topology_repository.cpp:228-256` 的 `CompareAndSwapTopology` 用普通 CAS 写入，不传 leaseId
 - controller 的 failure 确认要等 300s：`src/datasystem/cluster/control/topology_failure_classifier.cpp:56-65`，`node_dead_timeout_s` 默认 300（`k8s/helm_chart/datasystem/values.yaml:399`）
-- 现有 `datasystem_worker --get/set_cluster_topology`（`src/datasystem/worker/worker_cli.cpp:100-128`）只支持 etcd 直连，不支持 Coordinator 后端
+- 原 `datasystem_worker --get/set_cluster_topology`（`src/datasystem/worker/worker_cli.cpp`）已随 gflags 精简整体移除，Worker 侧不再有拓扑导入/导出入口
 - 现有 `dscli query cluster`（`cli/query.py`）只读，无写能力
 
 ### 目标

@@ -1,6 +1,6 @@
 {
   "repo_root": ".",
-  "generated_at_utc": "2026-10-22T07:08:42+00:00",
+  "generated_at_utc": "2026-10-22T11:16:30+00:00",
   "root_files": [
     "README.md",
     "build.sh",
@@ -209,8 +209,6 @@
         "  - rebalance_executor.h",
         "  - worker_api_c_wrapper.cpp",
         "  - worker_api_c_wrapper.h",
-        "  - worker_cli.cpp",
-        "  - worker_cli.h",
         "  - worker_flags.cpp",
         "  - worker_health_check.cpp",
         "  - worker_health_check.h",
