@@ -215,6 +215,16 @@ DS_DEFINE_validator(urma_perf_interval_ms, [](const char *flagName, uint32_t val
     (void)flagName;
     return value > 0;
 });
+DS_DEFINE_uint32_dynamic(urma_orphan_conn_ttl_s, 600,
+                         "Idle time in seconds before an unmapped URMA client connection is swept; "
+                         "0 disables sweeping.");
+DS_DEFINE_validator(urma_orphan_conn_ttl_s, [](const char *, uint32_t value) { return value == 0 || value >= 300; });
+DS_DEFINE_uint32_dynamic(urma_orphan_sweep_interval_s, 60,
+                         "Interval in seconds between URMA orphan client connection sweeps.");
+DS_DEFINE_validator(urma_orphan_sweep_interval_s, [](const char *, uint32_t value) { return value > 0; });
+DS_DEFINE_uint32_dynamic(urma_orphan_sweep_batch, 100,
+                         "Maximum number of orphan URMA client connections removed per sweep.");
+DS_DEFINE_validator(urma_orphan_sweep_batch, [](const char *, uint32_t value) { return value > 0; });
 DS_DEFINE_uint32_dynamic(node_dead_timeout_s, 300, "maximum time interval for the master to determine node death");
 DS_DEFINE_uint32(hash_ring_tokens_per_member, 32,
                  "Token count allocated to each Worker for new hash-ring bootstrap and scale-out plans. "

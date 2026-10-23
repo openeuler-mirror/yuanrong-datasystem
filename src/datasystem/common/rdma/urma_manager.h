@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_COMMON_RPC_URMA_MANAGER_H
 #define DATASYSTEM_COMMON_RPC_URMA_MANAGER_H
 
+#include <condition_variable>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -808,6 +809,30 @@ private:
      * @return Status of the call.
      */
     Status CheckAndNotify(const UrmaWriteTrace &pollTrace);
+    void StartOrphanSweepThread();
+    void OrphanSweepThreadMain();
+    // Caller holds remoteMapMutex_ through connection import and mapping registration.
+    void RegisterClientMapping(const std::string &entityId, const std::string &connectionKey);
+    Status ImportRemoteJettyLocked(const UrmaJfrInfo &jfrInfo, uint32_t &localJettyId);
+    Status ImportRemoteInfoLocked(const UrmaHandshakeReqPb &req);
+    Status RemoveRemoteResourcesLocked(const std::string &connectionKey,
+                                       std::shared_ptr<UrmaConnection> &removedConnection);
+
+    struct RemovedOrphanConnection {
+        std::string key;
+        std::shared_ptr<UrmaConnection> connection;
+        size_t mapSize;
+    };
+
+    void CollectExpiredOrphanConnections(uint64_t nowMs, uint32_t ttl, uint32_t batch,
+                                         std::vector<RemovedOrphanConnection> &removed);
+
+    /**
+     * @brief Drops client-keyed connections with no clientIdMapping_ owner after a long idle period.
+     * @param[in] nowMs Current steady-clock time in milliseconds.
+     * @param[in] stopAware Allow background lock acquisition to stop during shutdown.
+     */
+    void SweepOrphanClientConnections(uint64_t nowMs, bool stopAware = false);
 
     /**
      * @brief Gets event object of request id
@@ -848,7 +873,6 @@ private:
 
     struct UrmaGatherWriteContext {
         std::string remoteAddress;
-        std::shared_lock<std::shared_timed_mutex> remoteMapLock;
         TbbUrmaConnectionMap::const_accessor connectionAccessor;
         std::shared_ptr<UrmaConnection> connection;
         UrmaRemoteSegmentMap::const_accessor remoteSegAccessor;
@@ -985,6 +1009,9 @@ private:
     // Polling thread
     std::unique_ptr<Thread> serverEventThread_{ nullptr };
     std::unique_ptr<std::thread> perfThread_{ nullptr };
+    std::unique_ptr<std::thread> orphanSweepThread_{ nullptr };
+    std::mutex orphanSweepMutex_;
+    std::condition_variable orphanSweepCv_;
     mutable bthread::Mutex clientPortHealthMutex_;
     bool portHealthStopping_{ false };
     std::shared_ptr<UbPortHealthMonitor> clientPortHealthMonitor_;
@@ -1045,7 +1072,9 @@ private:
     std::mutex recoveryProbeSourceMutex_;
     void *recoveryProbeSourceBuffer_ = nullptr;
     std::mutex clientIdMutex_;
+    // Nest clientIdMutex_ only after remoteMapMutex_; both maps below use clientIdMutex_.
     std::unordered_map<ClientKey, std::string> clientIdMapping_;
+    std::unordered_map<std::string, size_t> clientConnectionOwners_;
     static std::atomic<uint64_t> ubTransportMemSize_;  // 256 MB
     uint64_t ubMaxGetDataSize_ = 32 * 1024 * 1024;     // 32 MB
     uint64_t ubMaxSetBufferSize_ = 8 * 1024 * 1024;    // 8 MB

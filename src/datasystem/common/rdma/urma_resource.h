@@ -953,6 +953,12 @@ public:
      */
     const UrmaJfrInfo &GetUrmaJfrInfo() const;
 
+    uint32_t Inflight() const
+    {
+        std::lock_guard<bthread::Mutex> lock(peerState_->mutex);
+        return peerState_->inflight;
+    }
+
     /**
      * @brief Get the imported remote target Jetty handle.
      * @return Raw target Jetty handle, or nullptr if not yet imported.
@@ -1060,7 +1066,7 @@ private:
     struct PeerState {
         PeerState() = default;
         ~PeerState() = default;
-        bthread::Mutex mutex;
+        mutable bthread::Mutex mutex;
         bthread::ConditionVariable cv;
         uint32_t inflight = 0;
         uint32_t retired = 0;
@@ -1073,6 +1079,7 @@ private:
     // or close a half-open breaker with a delayed completion; the map retains OPEN state until replacement.
     std::shared_ptr<PeerState> peerState_ = std::make_shared<PeerState>();
     uint64_t generation_ = 0;
+    std::atomic<uint64_t> lastActiveMs_{ 0 };
     std::atomic<bool> transportUnusable_{ false };
 };
 

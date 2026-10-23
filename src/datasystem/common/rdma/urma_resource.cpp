@@ -45,6 +45,7 @@
 #include "datasystem/common/util/no_destructor.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/common/rdma/urma_dlopen_util.h"
 #include "datasystem/utils/status.h"
 
@@ -688,6 +689,7 @@ UrmaConnection::UrmaConnection(std::unique_ptr<UrmaTargetJetty> tjetty, const Ur
     : targetJetty_(std::move(tjetty)), urmaJfrInfo_(urmaJfrInfo),
       maxInflightJetties_(GetEffectiveSendLaneCountPerPeer())
 {
+    lastActiveMs_.store(static_cast<uint64_t>(GetSteadyClockTimeStampMs()), std::memory_order_relaxed);
     LOG(INFO) << "[URMA_CONNECTION] Created connection, remote Jetty=" << urmaJfrInfo_.jfrId
               << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId
               << ", maxInflightJetties=" << maxInflightJetties_;
