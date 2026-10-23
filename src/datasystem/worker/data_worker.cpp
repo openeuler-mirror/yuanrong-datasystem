@@ -74,7 +74,6 @@ DS_DECLARE_string(rocksdb_write_mode);
 DS_DECLARE_string(log_dir);
 DS_DECLARE_uint32(max_log_size);
 DS_DECLARE_int32(logfile_mode);
-DS_DECLARE_int32(fd_pool_prewarm_size);
 
 #ifdef WITH_TESTS
 DS_DEFINE_string_dynamic(inject_actions, "", "Set inject action when worker start for ut.");
@@ -380,7 +379,7 @@ Status DataWorker::InitWorker(DynamicFlagConfig &flags, const std::string &nonDe
 
     WorkerServerOptions options;
     RETURN_IF_NOT_OK(options.LoadParameters());
-    LOG_IF_ERROR(PreExpandFdPool(FLAGS_fd_pool_prewarm_size), "Failed to pre-expand fd pool.");
+    LOG_IF_ERROR(PreExpandFdPool(), "Failed to pre-expand fd pool.");
     worker_ = std::make_unique<worker::WorkerOCServer>(options.workerAddress, options.bindAddress,
                                                        options.masterAddress, coordinatorDiscovery_);
     if (!isEmbeddedClient) {

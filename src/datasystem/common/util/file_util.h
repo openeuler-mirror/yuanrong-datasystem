@@ -256,14 +256,12 @@ Status OpenFile(const std::string &pathname, int flags, mode_t mode, int *fileDe
 Status SetFileLimit(rlim_t softLimit);
 
 /**
- * @brief Briefly open then close targetCount fds (/dev/null) once per process to pre-expand the kernel
- *        fdtable and warm the file slab, so the first burst of real fd allocation avoids the fdtable
- *        realloc and cold-slab cost. Raises RLIMIT_NOFILE soft limit up to the hard limit when needed.
- *        Best-effort: any failure is logged as a warning and Status::OK() is always returned.
- * @param[in] targetCount Number of fds to open and close. <= 0 disables.
+ * @brief Briefly open then close file descriptors once per process to pre-expand the kernel fdtable and warm the
+ *        file slab. The requested count defaults to 5000 and can be overridden by DATASYSTEM_FD_POOL_PREWARM_SIZE;
+ *        the target is clamped to the current RLIMIT_NOFILE soft limit. The process limits are not changed.
  * @return Always Status::OK().
  */
-Status PreExpandFdPool(int targetCount);
+Status PreExpandFdPool();
 
 /**
  * @brief Get file last modified timestamp.

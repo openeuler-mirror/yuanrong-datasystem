@@ -1071,16 +1071,15 @@ handler. Clearing the Router handler synchronously excludes later callback acces
 ## Standby connection drain gating
 
 - After the preferred same-node worker recovers, the client keeps the old standby control connection until its data
-  plane has been idle for `FLAGS_standby_drain_data_plane_quiet_ms` (default 30000). The gate exists because the
+  plane has been idle for the fixed 30000 ms quiet window. The gate exists because the
   standby worker can still be the **meta owner** of objects: metadata-owner reads are routed to it through per-address
   stubs and never touch `workerApi_[REMOTE]`, so an idle control connection says nothing about the data plane. Tearing
   the connection down makes the worker delete this client's URMA connection in `RefreshMeta`, and the next routed read
   fails the entry precheck with `K_URMA_NEED_CONNECT` (1006).
 - Predicate: `ListenWorker::CanDisconnectStandby()`. Voluntary scale-down drains immediately (legacy behaviour);
-  otherwise the registered drain handle decides. `FLAGS_standby_drain_data_plane_quiet_ms = 0` restores the legacy
-  "drain as soon as the control connection looks idle" behaviour. The teardown path calls the same predicate again
-  (`ShutdownStandbyConnection`) instead of restating its conditions: the teardown runs on the shared async-switch
-  thread and can start seconds after the decision, during which read traffic can resume on the endpoint.
+  otherwise the registered drain handle decides using the fixed quiet window. The teardown path calls the same
+  predicate again (`ShutdownStandbyConnection`) instead of restating its conditions: the teardown runs on the shared
+  async-switch thread and can start seconds after the decision, during which read traffic can resume on the endpoint.
 - Ordering: the teardown resets the client's own data-plane entry **before** sending `Disconnect`, so the client never
   keeps a transporter for a connection the peer is about to drop. A new SDK can recover the resulting 1006 from an
   old or new Worker without a protocol extension; old SDK behaviour is unchanged.
@@ -1088,16 +1087,14 @@ handler. Clearing the Router handler synchronously excludes later callback acces
   `DATA_PLANE_USE_REFRESH_INTERVAL_MS` (100 ms) so the read hot path does not dirty the entry on every request, and it
   records the transporter kind that **actually served** the request, so a UB candidate served by the cached TCP
   fallback does not hold the drain back. `IsEndpointDataPlaneQuiet` discounts the sampling bound, so the effective wait
-  is the configured window plus up to one interval and never shorter than it. The flag is a dynamic uint32 with no
-  non-zero lower bound, so the compensation is unconditional.
+  is the fixed window plus up to one interval and never shorter than it. The compensation is unconditional.
 
 ## Read-path UB rebuild coordination
 
 - `DataPlaneManager::AdmitUbRead` evaluates two read-path-private gates from a single entry lookup: the rebuild
-  cooldown (`FLAGS_ub_rebuild_cooldown_ms`, default 1000; armed by any read-path UB handshake failure, not only 1006)
-  and a per-endpoint rebuild slot. It returns `PROCEED` (a usable data plane), `REBUILD` (this request owns the slot and
-  must release it through `DataPlaneManager::UbRebuildSlotGuard`), or `DEGRADE` (serve this request over TCP inline
-  instead of queueing).
+  cooldown (a fixed 1000 ms, armed by any read-path UB handshake failure, not only 1006) and a per-endpoint rebuild
+  slot. It returns `PROCEED` (a usable data plane), `REBUILD` (this request owns the slot and must release it through
+  `DataPlaneManager::UbRebuildSlotGuard`), or `DEGRADE` (serve this request over TCP inline instead of queueing).
 - The slot exists because a wave of readers can all pass the cooldown before the first handshake fails and arms it:
   without coordination every queued reader pays for its own doomed handshake. Exactly one request rebuilds; waiters
   never block and no lock is held across the RPC. Both gates stay private to the read path — writers, direct H2D

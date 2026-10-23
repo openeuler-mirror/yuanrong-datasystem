@@ -125,7 +125,6 @@
 #include "datasystem/object/buffer.h"
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_bool(json_log_monitor);
-DS_DECLARE_int32(fd_pool_prewarm_size);
 
 static constexpr size_t OBJ_META_MAX_SIZE_LIMIT = 64;
 
@@ -1227,7 +1226,7 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, con
     FreezeClientUbFaultIsolation();
     Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, LogProcessRole::CLIENT);
     FlagsMonitor::GetInstance()->Start();
-    LOG_IF_ERROR(PreExpandFdPool(FLAGS_fd_pool_prewarm_size), "Failed to pre-expand fd pool.");
+    LOG_IF_ERROR(PreExpandFdPool(), "Failed to pre-expand fd pool.");
 
     auto rc = clientStateManager_->ProcessInit(needRollbackState);
     if (!needRollbackState) {
