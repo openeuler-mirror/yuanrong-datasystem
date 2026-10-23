@@ -198,7 +198,7 @@ Status BoundMode::CreateShmBuffer(const std::string &objectKey, uint64_t dataSiz
         if (traceEnabled) {
             Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_CREATE_RPC_START);
         }
-        auto rc = workerApi->Create(objectKey, dataSize, version, metadataSize, shmBuf, urmaDataInfo, param.cacheType);
+        auto rc = workerApi->Create(objectKey, dataSize, version, metadataSize, shmBuf, urmaDataInfo);
         if (traceEnabled) {
             Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_CREATE_RPC_END);
         }
@@ -462,7 +462,7 @@ Status BoundMode::ProcessShmPut(const std::string &objectKey, const uint8_t *dat
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_CREATE_RPC_START);
     }
     failureStage = SetFailureStage::CREATE;
-    RETURN_IF_NOT_OK(workerApi->Create(objectKey, size, version, metadataSize, shmBuf, urmaDataInfo, param.cacheType,
+    RETURN_IF_NOT_OK(workerApi->Create(objectKey, size, version, metadataSize, shmBuf, urmaDataInfo,
                                        requestTimeoutMs));
     failureStage = SetFailureStage::TRANSFER;
     if (traceEnabled) {
@@ -821,7 +821,6 @@ Status BoundMode::SetShmObjectBuffer(const std::string &objectKey, const GetRspP
     FullParam param;
     param.writeMode = WriteMode(info.write_mode());
     param.consistencyType = ConsistencyType(info.consistency_type());
-    param.cacheType = CacheType(info.cache_type());
     auto bufferInfo =
         MakeObjectBufferInfo(objectKey, pointer, info.data_size(), info.metadata_size(), param, version,
                              ShmKey::Intern(info.shm_id()), nullptr, std::move(mmapEntry));
@@ -862,7 +861,6 @@ std::shared_ptr<ObjectBufferInfo> BoundMode::MakeObjectBufferInfo(
     bufferInfo->existence = static_cast<int>(param.existence);
     bufferInfo->objectMode.SetWriteMode(param.writeMode);
     bufferInfo->objectMode.SetConsistencyType(param.consistencyType);
-    bufferInfo->objectMode.SetCacheType(param.cacheType);
     bufferInfo->version = version;
     bufferInfo->payloadPointer = payloadPointer;
     bufferInfo->mmapEntry = std::move(mmapEntry);
@@ -1040,7 +1038,6 @@ Status BoundMode::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> workerA
             FullParam param;
             param.writeMode = WriteMode(pi->write_mode());
             param.consistencyType = ConsistencyType(pi->consistency_type());
-            param.cacheType = CacheType(pi->cache_type());
             auto bufferInfo = MakeObjectBufferInfo(
                 mapKey, ubPtr + ubReadOffset, dataSize, 0, param,
                 version, {}, nullptr, nullptr, nullptr);
@@ -1449,7 +1446,6 @@ Status BoundMode::SetRemoteHostObjectBuffer(const std::string &objectKey, const 
     FullParam param;
     param.writeMode = WriteMode(info.write_mode());
     param.consistencyType = ConsistencyType(info.consistency_type());
-    param.cacheType = CacheType(info.cache_type());
     auto hostInfo = std::make_shared<RemoteH2DHostInfoPb>();
     *hostInfo = std::move(info.host_info());
     auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, info.data_size(), info.metadata_size(), param,
@@ -1464,7 +1460,6 @@ Status BoundMode::SetNonShmObjectBuffer(const std::string &objectKey, const GetR
     FullParam param;
     param.writeMode = WriteMode(payloadInfo.write_mode());
     param.consistencyType = ConsistencyType(payloadInfo.consistency_type());
-    param.cacheType = CacheType(payloadInfo.cache_type());
     int payloadIndexSize = payloadInfo.part_index().size();
     if (payloadIndexSize == 1) {
         std::shared_ptr<RpcMessage> payloadSharedPtr =
@@ -1524,7 +1519,6 @@ Status BoundMode::SetOffsetReadObjectBuffer(const std::string &objectKey, const 
     FullParam param;
     param.writeMode = WriteMode(info.write_mode());
     param.consistencyType = ConsistencyType(info.consistency_type());
-    param.cacheType = CacheType(info.cache_type());
     auto bufferInfo =
         MakeObjectBufferInfo(objectKey, pointer, info.data_size(), info.metadata_size(), param, version,
                              ShmKey::Intern(info.shm_id()), nullptr, std::move(mmapEntry));
@@ -1938,7 +1932,6 @@ Status BoundMode::MSetCreateCopyAndPublish(const std::vector<std::string> &keys,
     FullParam createParam;
     createParam.writeMode = param.writeMode;
     createParam.consistencyType = ConsistencyType::CAUSAL;
-    createParam.cacheType = param.cacheType;
     const std::vector<std::string> &filteredKeys = deduplicateKeys.empty() ? keys : deduplicateKeys;
     const std::vector<StringView> &filteredValues = deduplicateVals.empty() ? vals : deduplicateVals;
     point.RecordAndReset(PerfKey::CLIENT_MSET_MULTICREATE);

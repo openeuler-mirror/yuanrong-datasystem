@@ -130,17 +130,15 @@ public:
 private:
     /**
      * @brief Spy on remote node remian bytes.
-     * @param[in] type The cache type.
      * @return K_OK if success, the error otherwise.
      */
-    Status SpyOnRemoteRemainBytes(CacheType type);
+    Status SpyOnRemoteRemainBytes();
 
     /**
      * @brief Spy on remote node remain bytes through migrate RPC.
-     * @param[in] type The cache type.
      * @return K_OK if success, the error otherwise.
      */
-    Status SpyOnRemoteRemainBytesByRpc(CacheType type);
+    Status SpyOnRemoteRemainBytesByRpc();
 
     /**
      * @brief Adjust max batch size via size.
@@ -150,10 +148,9 @@ private:
 
     /**
      * @brief Indicate the remote node is lack of resources or not.
-     * @param[in] cacheType The cache type being migrated.
      * @return True if remote node is lack of resources.
      */
-    bool IsRemoteLackResources(CacheType cacheType) const;
+    bool IsRemoteLackResources() const;
 
     /**
      * @brief Add object data into migrate data list.
@@ -227,28 +224,19 @@ private:
     }
 
     /**
-     * @brief Split migrate data by cache type.
-     * @param[in] memoryDataIds The memory data.
-     * @param[in] diskDataIds The disk data.
-     */
-    void SplitByCacheType(std::vector<std::string> &memoryDataIds, std::vector<std::string> &diskDataIds);
-
-    /**
-     * @brief Migrate data for one cache type.
-     * @param[in] type The cache type.
+     * @brief Migrate data in batches.
      * @param[in] needMigrateDataIds Objects to migrate.
      * @param[in] isSlotMigration Whether this is a slot migration.
      * @return K_OK if success, the error otherwise.
      */
-    Status MigrateDataByCacheType(CacheType type, std::vector<std::string> &needMigrateDataIds, bool isSlotMigration);
+    Status MigrateDataInBatches(std::vector<std::string> &needMigrateDataIds, bool isSlotMigration);
 
     /**
-     * @brief Prepare remote state before migrating a cache type.
-     * @param[in] type The cache type.
+     * @brief Prepare remote state before migrating.
      * @param[in] needMigrateDataIds Objects to migrate.
      * @return K_OK if success, the error otherwise.
      */
-    Status PrepareRemoteMigration(CacheType type, const std::vector<std::string> &needMigrateDataIds);
+    Status PrepareRemoteMigration(const std::vector<std::string> &needMigrateDataIds);
 
     /**
      * @brief Collect one object into the current migrate batch.

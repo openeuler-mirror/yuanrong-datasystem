@@ -231,14 +231,6 @@ private:
         std::vector<uint64_t> &versions, CreateMultiMetaAttemptResult &attemptResult);
 
     /**
-     * @brief Verify the validity of the object release.
-     * @param[in] req Publish request meta.
-     * @param[in] safeObj The object to be published.
-     * @return Status of the call.
-     */
-    static Status VerifyObjectReleaseValidity(const MultiPublishReqPb &req, const SafeObjType &safeObj);
-
-    /**
      * @brief Create multimeta request to master in parallel.
      * @param[in] masterAddrs The master addrs.
      * @param[in] reqs The CreateMultiMeta requests.
@@ -352,13 +344,12 @@ private:
 
     /**
      * @brief Verify NTX objects.
-     * @param[in] req The rpc request protobuf.
      * @param[in] objectKeys Object key list.
      * @param[in] entries The object entries.
      * @param[out] failedKeys The failed object keys.
      * @param[in] localExistKeys Object keys already present locally.
      */
-    void VerifyObjectsNtx(const MultiPublishReqPb &req, const std::vector<std::string> &objectKeys,
+    void VerifyObjectsNtx(const std::vector<std::string> &objectKeys,
                           std::vector<std::shared_ptr<SafeObjType>> &entries,
                           std::unordered_set<std::string> &failedKeys,
                           const std::unordered_set<std::string> &localExistKeys);

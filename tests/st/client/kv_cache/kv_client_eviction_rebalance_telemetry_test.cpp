@@ -2098,8 +2098,6 @@ private:
             "-shared_memory_size_mb=32 -log_monitor=true -json_log_monitor=true "
             "-log_monitor_interval_ms=1000 -skip_authenticate=true -v=1 -spill_size_limit=134217728 "
             "-enable_memory_rebalance=false -arena_per_tenant=1";
-        opts.workerSpecifyGflagParams[0] = FormatString(
-            "-shared_disk_directory=%s/worker0/shared_disk -shared_disk_size_mb=256", GetTestCaseDataDir());
         opts.injectActions = "NodeSelector.setInterval:call(200);WorkerOCServer.heatMaintenanceIntervalMs:call(1000);"
                              "WorkerOCServer.copyWatermarkTelemetryIntervalMs:call(1000)";
     }
@@ -2131,11 +2129,6 @@ private:
             "-rebalance_source_usage_percent=60 -rebalance_task_report_grace_ms=500 "
             "-data_migrate_rate_limit_mb=1024 -rebalance_keep_local_copy=true -arena_per_tenant=1",
             memoryMb, kSpillLimitBytes);
-        for (int workerIdx = 0; workerIdx < WorkerNum(); ++workerIdx) {
-            opts.workerSpecifyGflagParams[workerIdx] =
-                FormatString("-shared_disk_directory=%s/worker%d/shared_disk -shared_disk_size_mb=256",
-                             GetTestCaseDataDir(), workerIdx);
-        }
         opts.injectActions = kRebalanceInjectActions;
     }
 
@@ -2162,11 +2155,6 @@ public:
             "-rebalance_source_usage_percent=60 -rebalance_task_report_grace_ms=500 "
             "-data_migrate_rate_limit_mb=2048 -rebalance_keep_local_copy=true -arena_per_tenant=1",
             memoryMb, kSpillLimitBytes);
-        for (int workerIdx = 0; workerIdx < WorkerNum(); ++workerIdx) {
-            opts.workerSpecifyGflagParams[workerIdx] =
-                FormatString("-shared_disk_directory=%s/worker%d/shared_disk -shared_disk_size_mb=2048",
-                             GetTestCaseDataDir(), workerIdx);
-        }
         opts.injectActions = "NodeSelector.setInterval:call(200);ResourceManager.setInterval:call(200);"
                              "MemoryRebalanceScheduler.CooldownSeconds:call(1);"
                              "WorkerOCServer.heatMaintenanceIntervalMs:call(1000);"

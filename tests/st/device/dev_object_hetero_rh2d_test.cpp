@@ -712,7 +712,6 @@ TEST_F(DevObjectHeteroRH2DDistributedTest, DISABLED_MSetD2HNxReturnsOnlyLocallyP
     SetParam nxParam;
     nxParam.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
     nxParam.existence = ExistenceOpt::NX;
-    nxParam.cacheType = CacheType::MEMORY;
 
     const std::string injectPoint = "worker.before_CreateMultiMetaToMaster";
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, injectPoint, "1*sleep(1000)"));

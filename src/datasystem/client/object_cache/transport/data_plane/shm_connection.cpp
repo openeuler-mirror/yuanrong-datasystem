@@ -438,8 +438,7 @@ Status ShmSession::ValidateObjectInfo(const GetRspPb::ObjectInfoPb &info, uint64
                              K_RUNTIME_ERROR, "WorkerOCService Get shared-memory metadata exceeds local limits");
     CHECK_FAIL_RETURN_STATUS(
         info.write_mode() <= static_cast<uint32_t>(WriteMode::WRITE_BACK_L2_CACHE_EVICT)
-            && info.consistency_type() <= static_cast<uint32_t>(ConsistencyType::CAUSAL)
-            && info.cache_type() <= static_cast<uint32_t>(CacheType::DISK),
+            && info.consistency_type() <= static_cast<uint32_t>(ConsistencyType::CAUSAL),
         K_RUNTIME_ERROR, "WorkerOCService Get returned an invalid object mode");
     return Status::OK();
 }
@@ -585,7 +584,6 @@ Status ShmSession::BuildResult(const GetRspPb::ObjectInfoPb &info, const DataGet
     meta.lockId = lockId_;
     meta.mode.SetWriteMode(WriteMode(info.write_mode()));
     meta.mode.SetConsistencyType(ConsistencyType(info.consistency_type()));
-    meta.mode.SetCacheType(CacheType(info.cache_type()));
     meta.workerAddr = workerAddr_;
     built.externalMeta = std::move(meta);
     shmOwner->BindMmapEntry(std::move(mmapEntry));
@@ -609,7 +607,6 @@ Status ShmSession::BuildQueryAndGetResult(const QueryAndGetShmInfoPb &info, cons
     objectInfo.set_shm_id(info.shm_id());
     objectInfo.set_write_mode(info.write_mode());
     objectInfo.set_consistency_type(info.consistency_type());
-    objectInfo.set_cache_type(info.cache_type());
     return BuildResult(objectInfo, input, result, std::move(owner));
 }
 

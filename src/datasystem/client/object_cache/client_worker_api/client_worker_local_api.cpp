@@ -101,7 +101,6 @@ void SetMultiPublishRequestOptions(MultiPublishRequestContext &context)
     context.req.set_ttl_second(context.param.ttlSecond);
     context.req.set_write_mode(static_cast<uint32_t>(context.bufferInfo[0]->objectMode.GetWriteMode()));
     context.req.set_consistency_type(static_cast<uint32_t>(context.bufferInfo[0]->objectMode.GetConsistencyType()));
-    context.req.set_cache_type(static_cast<uint32_t>(context.bufferInfo[0]->objectMode.GetCacheType()));
     context.req.set_existence(static_cast<::datasystem::ExistenceOptPb>(context.param.existence));
     context.req.set_is_replica(context.param.isReplica);
     context.req.set_auto_release_memory_ref(!context.bufferInfo[0]->shmId.Empty());
@@ -151,8 +150,7 @@ Status ClientWorkerLocalApi::Init(int32_t requestTimeoutMs, int32_t connectTimeo
 
 Status ClientWorkerLocalApi::Create(const std::string &objectKey, int64_t dataSize, uint32_t &version,
                                     uint64_t &metadataSize, std::shared_ptr<ShmUnitInfo> &shmBuf,
-                                    std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo, const CacheType &cacheType,
-                                    int32_t requestTimeoutMs)
+                                    std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo, int32_t requestTimeoutMs)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY);
     (void)urmaDataInfo;
@@ -167,7 +165,6 @@ Status ClientWorkerLocalApi::Create(const std::string &objectKey, int64_t dataSi
     req.set_object_key(objectKey);
     req.set_client_id(clientId_);
     req.set_data_size(dataSize);
-    req.set_cache_type(static_cast<uint32_t>(cacheType));
     req.set_request_timeout(TimeoutDuration::CeilUsToMs(remainingUs));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when create data.");

@@ -102,13 +102,11 @@ private:
      * @param[in] requestTimeoutMs Remaining request timeout in milliseconds.
      * @param[in] allocationId Optional client-generated shared-memory allocation UUID.
      * @param[out] resp The rpc response protobuf
-     * @param[in] cacheType The type of cache.
      * @return K_OK on success; the error code otherwise.
      * K_DUPLICATED: the object already exists, no need to create.
      */
     Status CreateImpl(const std::string &tenantId, const ClientKey &clientId, const std::string &rawObjectKey,
-                       size_t dataSize, int64_t requestTimeoutMs, const std::string &allocationId, CreateRspPb &resp,
-                       CacheType cacheType = CacheType::MEMORY);
+                      size_t dataSize, int64_t requestTimeoutMs, const std::string &allocationId, CreateRspPb &resp);
 
     /**
      * @brief Helper function to allocate aggregated memory for objects creation.

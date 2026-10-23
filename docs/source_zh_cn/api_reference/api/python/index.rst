@@ -26,7 +26,6 @@ Python
    yr.datasystem.object_client.Buffer
    yr.datasystem.object_client.ConsistencyType
    yr.datasystem.object_client.WriteMode
-   yr.datasystem.object_client.CacheType
    yr.datasystem.stream_client.StreamClient
    yr.datasystem.stream_client.Producer
    yr.datasystem.stream_client.Consumer

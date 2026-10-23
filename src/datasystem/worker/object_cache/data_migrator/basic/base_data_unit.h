@@ -32,8 +32,8 @@ namespace object_cache {
 
 class BaseDataUnit {
 public:
-    BaseDataUnit(const ImmutableString &objectKey, uint64_t version, datasystem::CacheType type)
-        : objectKey_(objectKey), version_(version), type_(type)
+    BaseDataUnit(const ImmutableString &objectKey, uint64_t version)
+        : objectKey_(objectKey), version_(version)
     {
     }
 
@@ -105,24 +105,17 @@ public:
         return objectKey_;
     }
 
-    datasystem::CacheType GetCacheType() const
-    {
-        return type_;
-    }
-
 private:
     ImmutableString objectKey_;
 
     uint64_t version_;
-
-    datasystem::CacheType type_;
 };
 
 class ShmData : public BaseDataUnit {
 public:
     ShmData(const ImmutableString &objectKey, uint64_t version, std::shared_ptr<ShmUnit> unit, size_t dataSize,
-            size_t metaSize, datasystem::CacheType type)
-        : BaseDataUnit(objectKey, version, type),
+            size_t metaSize)
+        : BaseDataUnit(objectKey, version),
           data_(static_cast<uint8_t *>(unit->GetPointer())),
           offset_(unit->GetOffset()),
           size_(dataSize),
@@ -201,9 +194,8 @@ private:
 
 class PayloadData : public BaseDataUnit {
 public:
-    PayloadData(const ImmutableString &objectKey, uint64_t version, std::vector<RpcMessage> payloads, size_t dataSize,
-                datasystem::CacheType type)
-        : BaseDataUnit(objectKey, version, type), payloads_(std::move(payloads)), size_(dataSize)
+    PayloadData(const ImmutableString &objectKey, uint64_t version, std::vector<RpcMessage> payloads, size_t dataSize)
+        : BaseDataUnit(objectKey, version), payloads_(std::move(payloads)), size_(dataSize)
     {
     }
 

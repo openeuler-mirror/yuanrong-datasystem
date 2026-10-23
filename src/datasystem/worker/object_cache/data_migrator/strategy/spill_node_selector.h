@@ -46,15 +46,13 @@ public:
                       std::string &outNode) override;
 
     /**
-     * @brief Checks whether the migration condition is met based on the response and cache type.
+     * @brief Checks whether the migration condition is met based on the response.
      * @param[in] rsp The migration response containing information about the migration status.
-     * @param[in] type The cache type (e.g., memory or disk).
      * @return True if the migration condition is satisfied, false otherwise.
      */
-    bool CheckCondition(const MigrateDataRspPb &rsp, const CacheType &type) override
+    bool CheckCondition(const MigrateDataRspPb &rsp) override
     {
         (void)rsp;
-        (void)type;
         return true;
     }
 

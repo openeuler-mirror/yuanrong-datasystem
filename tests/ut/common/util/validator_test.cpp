@@ -284,9 +284,6 @@ TEST_F(ValidatorTest, TestValidateCoordinatorAddresses)
 
 TEST_F(ValidatorTest, ValidateFailed)
 {
-    const uint32_t invalidVal = 33;
-    ASSERT_FALSE(Validator::ValidateSharedDiskArenaPerTenant("", invalidVal));
-
     ASSERT_FALSE(Validator::ValidateEligibleChar("", "￥"));
     ASSERT_FALSE(Validator::ValidatePathString("", "￥"));
     ASSERT_FALSE(Validator::ValidateRpcThreadNum("", -1));
@@ -296,7 +293,6 @@ TEST_F(ValidatorTest, ValidateFailed)
     ASSERT_FALSE(Validator::ValidateInt32(-1));
     ASSERT_FALSE(Validator::ValidateSharedMemSize("", 0));
     ASSERT_FALSE(Validator::ValidateSharedMemSize("", Validator::MB_LIMIT + 1));
-    ASSERT_FALSE(Validator::ValidateSharedDiskSize("", Validator::MB_LIMIT + 1));
     ASSERT_FALSE(Validator::ValidateLocalCacheMemSize("", 0));
     ASSERT_FALSE(Validator::ValidateLocalCacheMemSize("", Validator::MB_LIMIT + 1));
     ASSERT_FALSE(Validator::ValidatePageSize("", 0));

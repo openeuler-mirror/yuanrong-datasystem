@@ -74,7 +74,7 @@ public:
      * @param[in] needSize The requested size in bytes to allocate.
      * @param[in] populate Indicate need populate or not.
      * @param[in] serviceType The type of datasystem service for this allocation request.
-     * @param[in] cacheType The cache type.
+     * @param[in] cacheType The cache type (device/UB memory pools; defaults to shared memory).
      * @return Status of the call.
      */
     Status AllocateMemory(const std::string &tenantId, uint64_t needSize, bool populate,

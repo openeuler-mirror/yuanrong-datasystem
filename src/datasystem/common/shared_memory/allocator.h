@@ -30,7 +30,6 @@
 #include "datasystem/common/shared_memory/arena.h"
 #include "datasystem/common/shared_memory/arena_group_key.h"
 #include "datasystem/common/shared_memory/resource_pool.h"
-#include "datasystem/common/shared_memory/shared_disk_detecter.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 
@@ -52,7 +51,6 @@ public:
      *        we want and then delete the temp file immediately (because we
      *        don't want to maintain the shared memory file).
      * @param[in] shmSize shared memory size in bytes.
-     * @param[in] shdSize shared disk size in bytes.
      * @param[in] populate Shared memory need pre-populate or not.
      * @param[in] scaling Shared memory need scaling or not.
      * @param[in] decayMs Decay clean dirty pages milliseconds.
@@ -60,7 +58,7 @@ public:
      * @param[in] streamThreshold A limit to restrict the memory usage of stream cache service.
      * @return Status of the call.
      */
-    Status Init(uint64_t shmSize, uint64_t shdSize = 0, bool populate = false, bool scaling = true,
+    Status Init(uint64_t shmSize, bool populate = false, bool scaling = true,
                 ssize_t decayMs = 5'000, int objectThreshold = 100, int streamThreshold = 100);
 
     /**
@@ -140,7 +138,7 @@ public:
      * @param[out] offset Offset from the base of the shared memory mmap.
      * @param[out] mmapSize Total size of shared memory segments.
      * @param[in] serviceType The type of datasystem service for this allocation request.
-     * @param[in] cacheType The cache type, either MEMORY or DISK.
+     * @param[in] cacheType The cache type.
      * @return Status of the call.
      */
     Status AllocateMemory(const std::string &tenantId, uint64_t needSize, bool populate, void *&pointer, int &fd,
@@ -165,7 +163,6 @@ public:
      * @param[in] tenantId The Id of the tenant which to free its memory.
      * @param[in] pointer reference to the pointer to free. Sets pointer to nullptr after.
      * @param[in] type The service type for which memory is getting freed.
-     * @param[in] cacheType The cache type, either MEMORY or DISK.
      * @return Status of the call.
      */
     Status FreeMemory(const std::string &tenantId, void *&pointer, ServiceType serviceType = ServiceType::OBJECT,
@@ -305,20 +302,12 @@ public:
 
     /**
      * @brief Get the total real memory free to be allocated.
-     * @param[in] cacheType The cache type.
      * @return The total real free memory.
      */
-    uint64_t GetTotalRealMemoryFree(CacheType cacheType = CacheType::MEMORY)
+    uint64_t GetTotalRealMemoryFree()
     {
-        uint64_t limit;
-        uint64_t realUsage;
-        if (cacheType == CacheType::DISK) {
-            limit = diskStats_->FootprintLimit();
-            realUsage = diskStats_->RealUsage();
-        } else {
-            limit = physicalMemoryStats_->FootprintLimit();
-            realUsage = objectMemoryStats_->RealUsage() + streamMemoryStats_->RealUsage();
-        }
+        uint64_t limit = physicalMemoryStats_->FootprintLimit();
+        uint64_t realUsage = objectMemoryStats_->RealUsage() + streamMemoryStats_->RealUsage();
         return limit > realUsage ? limit - realUsage : 0;
     }
 
@@ -329,22 +318,13 @@ public:
     uint64_t GetMemoryAvailToHighWater() const;
 
     /**
-     * @brief Get the memory available ratio based on the cache type.
-     * @param[in] cacheType The cache type, either MEMORY or DISK.
+     * @brief Get the memory available ratio.
      * @return The memory available ratio as a percentage (0.0 to 100.0), representing the available memory.
      */
-    double GetMemoryAvailableRatio(CacheType cacheType = CacheType::MEMORY)
+    double GetMemoryAvailableRatio()
     {
-        uint64_t limit;
-        uint64_t realUsage;
-
-        if (cacheType == CacheType::DISK) {
-            limit = diskStats_->FootprintLimit();
-            realUsage = diskStats_->RealUsage();
-        } else {
-            limit = physicalMemoryStats_->FootprintLimit();
-            realUsage = objectMemoryStats_->RealUsage() + streamMemoryStats_->RealUsage();
-        }
+        uint64_t limit = physicalMemoryStats_->FootprintLimit();
+        uint64_t realUsage = objectMemoryStats_->RealUsage() + streamMemoryStats_->RealUsage();
 
         if (limit == 0) {
             return 0.0;
@@ -386,20 +366,6 @@ public:
     }
 
     /**
-     * @brief Get the shared disk statistics.
-     * @return std::string format: "usage/physicalUsage/totalLimit/rate".
-     */
-    std::string GetSharedDiskStatistics()
-    {
-        if (diskStats_->FootprintLimit() == 0) {
-            return "0/0/0/0";
-        }
-        return FormatString("%lu/%lu/%lu/%.3f", diskStats_->RealUsage(), physicalDiskStats_->RealUsage(),
-                            diskStats_->FootprintLimit(),
-                            diskStats_->RealUsage() / static_cast<float>(diskStats_->FootprintLimit()));
-    }
-
-    /**
      * @brief Get all expired fds.
      * @return All expired fds.
      */
@@ -428,12 +394,6 @@ public:
      */
     Status CheckWorkerFdTenant(const std::string &tenantId, const std::vector<int> &workerFds);
 
-    /**
-     * @brief Check disk buffer is available.
-     * @return True if disk is available.
-     */
-    bool IsDiskAvailable();
-
 private:
     /**
      * @brief Increase the actual physical memory usage.
@@ -459,12 +419,10 @@ private:
     ResourcePool *GetResourcePoolByType(ServiceType serviceType, CacheType cacheType) const;
 
     /**
-     * @brief Get the ResourcePool by type.
-     * @param[in] serviceType The service type.
-     * @param[in] cacheType The cache type.
+     * @brief Get the physical-memory resource pool.
      * @return ResourcePool* The ResourcePool.
      */
-    ResourcePool *GetPhyResourcePoolByType(CacheType cacheType) const;
+    ResourcePool *GetPhyResourcePoolByType() const;
 
     /**
      * @brief Init shared memory.
@@ -474,13 +432,6 @@ private:
      * @return Status K_OK if success, the error otherwise.
      */
     Status InitSharedMemory(uint64_t size, int objectThreshold, int streamThreshold);
-
-    /**
-     * @brief Init shared disk.
-     * @param[in] size The shared disk size.
-     * @return Status K_OK if success, the error otherwise.
-     */
-    Status InitSharedDisk(uint64_t size);
 
     /**
      * @brief Init device host mem pool.
@@ -521,12 +472,6 @@ private:
     // after the memory is free.
     std::unique_ptr<ResourcePool> physicalMemoryStats_;
 
-    // Record the shared disk already binding to physical disk.
-    std::unique_ptr<ResourcePool> physicalDiskStats_;
-
-    // Record the shared disk allocated in bytes.
-    std::unique_ptr<ResourcePool> diskStats_;
-
     // Record the device allocated in bytes.
     std::unique_ptr<ResourcePool> devDeviceMemStats_;
     std::unique_ptr<ResourcePool> devHostMemStats_;
@@ -544,8 +489,6 @@ private:
     std::unique_ptr<ResourcePool> streamMemoryStats_;
 
     std::function<bool(const std::vector<int> &)> checkIfAllFdReleasedHandler_;
-
-    std::unique_ptr<SharedDiskDetecter> diskDetecter_;
 };
 
 void DeallocateForZmqFree(void *data, void *hint = nullptr);

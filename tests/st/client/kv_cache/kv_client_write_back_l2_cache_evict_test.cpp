@@ -44,12 +44,6 @@ public:
     opts.numWorkers = 1;
     opts.numOBS = 1;
     opts.enableDistributedMaster = "false";
-    for (size_t i = 0; i < opts.numWorkers; i++) {
-      std::string dir =
-          GetTestCaseDataDir() + "/worker" + std::to_string(i) + "/shared_disk";
-      opts.workerSpecifyGflagParams[i] = FormatString(
-          "-shared_disk_directory=%s -shared_disk_size_mb=12", dir);
-    }
   }
 
   void SetUp() override {

@@ -80,7 +80,6 @@
     - `ETCD_REQUEST_SUCCESS_RATE`
     - `OBS_REQUEST_SUCCESS_RATE`
     - stream families
-    - `SHARED_DISK`
     - `SC_LOCAL_CACHE`
     - `OC_HIT_NUM`
   - descriptions file also records human meanings and units for many families.
@@ -93,7 +92,6 @@
   - worker-side registration includes:
     - spill hard disk usage
     - shared memory usage
-    - shared disk usage
     - worker object-cache service thread-pool usage
     - worker-worker object-cache service thread-pool usage
     - active client count

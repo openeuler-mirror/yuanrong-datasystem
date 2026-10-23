@@ -30,7 +30,6 @@ void FillObjectInfo(const BaseDataUnit &data, const MigrateTransport::Request &r
     objectInfo.set_object_key(data.Id());
     objectInfo.set_version(data.Version());
     objectInfo.set_data_size(data.Size());
-    objectInfo.set_cache_type(static_cast<uint32_t>(data.GetCacheType()));
     if (req.objectHeats == nullptr) {
         return;
     }

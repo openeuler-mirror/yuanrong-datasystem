@@ -478,7 +478,7 @@
     collection snapshot per scan (the kv_metrics Tick may lag one scan) and no per-RPC gauge refresh exists on
     service entrypoints; registering with monitoring disabled at startup leaves the handlers dormant until restart.
     After a migration rollback, rolled back pre-existing entries are removed from the object table after their
-    data cleanup is attempted, whether the staged copy was a memory-resident husk or a disk husk.
+    data cleanup is attempted, whether the staged copy was a memory-resident husk.
 - Useful files during debugging:
   - `src/datasystem/worker/worker_main.cpp`
   - `src/datasystem/worker/data_worker.cpp`

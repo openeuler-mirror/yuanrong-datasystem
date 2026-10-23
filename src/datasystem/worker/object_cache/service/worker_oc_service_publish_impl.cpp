@@ -153,9 +153,8 @@ Status WorkerOcServicePublishImpl::VertifyObjectReleaseValidity(const PublishReq
 {
     if (safeObj->IsPublished()) {
         if (WriteMode(req.write_mode()) != safeObj->modeInfo.GetWriteMode()
-            || ConsistencyType(req.consistency_type()) != safeObj->modeInfo.GetConsistencyType()
-            || static_cast<CacheType>(req.cache_type()) != safeObj->modeInfo.GetCacheType()) {
-            RETURN_STATUS(StatusCode::K_INVALID, "The write mode, consistency type or cache type cannot be modified.");
+            || ConsistencyType(req.consistency_type()) != safeObj->modeInfo.GetConsistencyType()) {
+            RETURN_STATUS(StatusCode::K_INVALID, "The write mode or consistency type cannot be modified.");
         }
     }
     return Status::OK();
@@ -171,10 +170,10 @@ Status WorkerOcServicePublishImpl::PrepareForPublish(const PublishReqPb &req, co
         CHECK_FAIL_RETURN_STATUS(safeObj->IsBinary(), K_INVALID, "The existing object is not BINARY.");
         RETURN_IF_NOT_OK(VertifyObjectReleaseValidity(req, safeObj));
         UpdateObjectEntry(ConsistencyType(req.consistency_type()), WriteMode(req.write_mode()),
-                          static_cast<CacheType>(req.cache_type()), GetMetadataSize(), safeObj);
+                          GetMetadataSize(), safeObj);
     } else {  // Case 2: First Time Publish.
         SetNewObjectEntry(objectKey, ConsistencyType(req.consistency_type()), WriteMode(req.write_mode()),
-                          static_cast<CacheType>(req.cache_type()), req.data_size(), GetMetadataSize(), safeObj);
+                          req.data_size(), GetMetadataSize(), safeObj);
     }
 
     RETURN_IF_NOT_OK(CheckIfL2CacheNeededAndWritable(supportL2Storage_, WriteMode(req.write_mode())));
@@ -199,9 +198,7 @@ void WorkerOcServicePublishImpl::ConstructCreateMetaRequest(const ObjectKV &obje
     configPb->set_write_mode(static_cast<uint32_t>(safeObj->modeInfo.GetWriteMode()));
     configPb->set_data_format(static_cast<uint32_t>(safeObj->stateInfo.GetDataFormat()));
     configPb->set_consistency_type(static_cast<uint32_t>(safeObj->modeInfo.GetConsistencyType()));
-    configPb->set_cache_type(static_cast<uint32_t>(params.cacheType));
     metaReq.set_address(localAddress_.ToString());
-    metaReq.set_redirect(true);
 }
 
 void WorkerOcServicePublishImpl::ConstructUpdateMetaRequest(const ObjectKV &objectKV, const PublishParams &params,
@@ -219,7 +216,6 @@ void WorkerOcServicePublishImpl::ConstructUpdateMetaRequest(const ObjectKV &obje
     binaryFormatParams->set_write_mode((uint32_t)safeObj->modeInfo.GetWriteMode());
     binaryFormatParams->set_data_format((uint32_t)safeObj->stateInfo.GetDataFormat());
     binaryFormatParams->set_consistency_type((uint32_t)safeObj->modeInfo.GetConsistencyType());
-    binaryFormatParams->set_cache_type(static_cast<uint32_t>(params.cacheType));
 }
 
 Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &objectKV, const PublishParams &params,
@@ -581,8 +577,7 @@ Status WorkerOcServicePublishImpl::PublishObjectWithLock(const std::string &obje
                                    .nestedObjectKeys = nestedObjectKeys,
                                    .isRetry = req.is_retry(),
                                    .ttlSecond = req.ttl_second(),
-                                   .existence = req.existence(),
-                                   .cacheType = static_cast<CacheType>(req.cache_type()) };
+                                   .existence = req.existence() };
     auto rc = PublishObject(objectKV, params, payloads);
     INJECT_POINT("publish.sleep");
     if (rc.IsError()) {
@@ -689,8 +684,7 @@ Status WorkerOcServicePublishImpl::Publish(const PublishReqPb &req, PublishRspPb
         .ConsistencyType(req.consistency_type())
         .IsRetry(req.is_retry())
         .TtlSecond(req.ttl_second())
-        .Existence(req.existence())
-        .CacheType(req.cache_type());
+        .Existence(req.existence());
     Status rc = PublishImpl(req, resp, payloads);
     FillReadLoadFeedback(rc, resp);
     if (traceEnabled) {

@@ -1573,7 +1573,6 @@ void WorkerOCServiceImpl::FillMetadata(const std::string &objectKey, const HostP
     configPb->set_write_mode(static_cast<uint32_t>((*currSafeObj)->modeInfo.GetWriteMode()));
     configPb->set_data_format(static_cast<uint32_t>((*currSafeObj)->stateInfo.GetDataFormat()));
     configPb->set_consistency_type(static_cast<uint32_t>((*currSafeObj)->modeInfo.GetConsistencyType()));
-    configPb->set_cache_type(static_cast<uint32_t>((*currSafeObj)->modeInfo.GetCacheType()));
     configPb->set_is_replica(!(*currSafeObj)->stateInfo.IsPrimaryCopy());
     isFill = true;
 }

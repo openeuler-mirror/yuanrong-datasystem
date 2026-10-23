@@ -134,7 +134,7 @@ message MigrateDataReqPb {
     uint64 version = 2;
     uint64 data_size = 3;
     repeated uint32 part_index = 4;
-    uint32 cache_type = 5;
+    reserved 5;
     // Point-in-time source heat used by heat rebalance. The explicit presence bit distinguishes an old sender from
     // a legitimate zero heat value during a rolling upgrade.
     double heat = 6;
@@ -163,9 +163,9 @@ message MigrateDataRspPb {
   uint64 remain_bytes = 1;
   repeated string success_ids = 2;
   repeated string fail_ids = 3;
-  uint64 disk_remain_bytes = 4;
+  reserved 4;
   double available_ratio = 5;
-  double disk_available_ratio = 6;
+  reserved 6;
   enum ScaleDownState {
     NONE = 0;          // No scale-down operation
     NEED_SCALE_DOWN = 1; // Scale-down is needed
@@ -397,7 +397,7 @@ message ConfigPb {
   // For the meaning of the value, see 'ConsistencyType' enum class.
   uint32 consistency_type = 3;
 
-  uint32 cache_type = 4;
+  reserved 4;
 
   // If true, this won't invalidate existing copies.
   bool is_replica = 5;

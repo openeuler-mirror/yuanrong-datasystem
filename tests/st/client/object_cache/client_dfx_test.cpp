@@ -2095,49 +2095,5 @@ TEST_F(WorkerKillTest, DISABLED_ClearPrimaryAfterWorkerRestart)
 
     fut.get();
 }
-
-class ClientDiskCacheDfxTest : public OCClientCommon {
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        opts.numWorkers = 1;
-        opts.numEtcd = 1;
-        for (size_t i = 0; i < opts.numWorkers; i++) {
-            std::string dir = GetTestCaseDataDir() + "/worker" + std::to_string(i) + "/shared_disk";
-            opts.workerSpecifyGflagParams[i] += FormatString(" -shared_disk_directory=%s -shared_disk_size_mb=32", dir);
-        }
-    }
-};
-
-TEST_F(ClientDiskCacheDfxTest, ClientCrash)
-{
-    std::vector<std::shared_ptr<ObjectClient>> clients;
-    int num = 3;
-    clients.resize(num);
-    for (int i = 0; i < num; i++) {
-        InitTestClient(0, clients[i]);
-    }
-
-    std::string val = GenRandomString(1000 * 1024);  // 1000 KB
-    CreateParam param;
-    param.cacheType = CacheType::DISK;
-    for (int i = 0; i < num; i++) {
-        int objectsNum = 10;
-        for (int j = 0; j < objectsNum; j++) {
-            std::string objectKey = GenRandomString();
-            std::vector<std::string> failedObjectKeys;
-            DS_ASSERT_OK(clients[i]->GIncreaseRef({ objectKey }, failedObjectKeys));
-            DS_ASSERT_OK(clients[i]->Put(objectKey, reinterpret_cast<const uint8_t *>(val.data()), val.size(), param));
-        }
-    }
-
-    clients[0].reset();
-    clients[num - 1].reset();
-
-    int objectsNum = 20;
-    for (int j = 0; j < objectsNum; j++) {
-        std::string objectKey = GenRandomString();
-        DS_ASSERT_OK(clients[1]->Put(objectKey, reinterpret_cast<const uint8_t *>(val.data()), val.size(), param));
-    }
-}
 }  // namespace st
 }  // namespace datasystem

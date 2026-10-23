@@ -82,7 +82,6 @@ enum class ModeFlag : uint16_t {
     PRAM = 1u << 4,
     CAUSAL = 1u << 5,
     MEMORY = 1u << 6,
-    DISK = 1u << 7,
     WRITE_BACK_L2_CACHE_EVICT = 1u << 8,
 };
 
@@ -351,14 +350,12 @@ public:
      * @brief default constructor
      * @param consistencyType a specified consistency type
      * @param writeMode a specified write mode
-     * @param cacheType a specified cache type
      */
-    ModeInfo(ConsistencyType consistencyType, WriteMode writeMode, CacheType cacheType = CacheType::MEMORY)
+    ModeInfo(ConsistencyType consistencyType, WriteMode writeMode)
     {
         modeBitmap_ = ModeFlag::NONE;
 
         SetConsistencyType(consistencyType);
-        SetCacheType(cacheType);
         SetWriteMode(writeMode);
     }
 
@@ -369,15 +366,6 @@ public:
     ConsistencyType GetConsistencyType() const
     {
         return TESTFLAG(modeBitmap_, ModeFlag::PRAM) ? ConsistencyType::PRAM : ConsistencyType::CAUSAL;
-    }
-
-    /**
-     * @brief getter function to get the Cache Type of the object.
-     * @return the Cache Type of the object.
-     */
-    CacheType GetCacheType() const
-    {
-        return TESTFLAG(modeBitmap_, ModeFlag::DISK) ? CacheType::DISK : CacheType::MEMORY;
     }
 
     /**
@@ -408,15 +396,6 @@ public:
     void SetConsistencyType(ConsistencyType consistencyType)
     {
         SETFLAG(modeBitmap_, consistencyType == ConsistencyType::PRAM ? ModeFlag::PRAM : ModeFlag::CAUSAL);
-    }
-
-    /**
-     * @brief A setter function for Cache Type of the object.
-     * @param[in] cacheType Cache Type of the object.
-     */
-    void SetCacheType(CacheType cacheType)
-    {
-        SETFLAG(modeBitmap_, cacheType == CacheType::MEMORY ? ModeFlag::MEMORY : ModeFlag::DISK);
     }
 
     /**

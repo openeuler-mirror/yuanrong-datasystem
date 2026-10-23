@@ -304,7 +304,6 @@ DS_DEFINE_validator(rebalance_heat_target_hot_ratio_percent, &ValidatePercent);
 DS_DEFINE_validator(monitor_config_file, &Validator::ValidatePathString);
 DS_DEFINE_validator(unix_domain_socket_dir, &Validator::ValidateUnixDomainSocketDir);
 DS_DEFINE_validator(log_filename, &ValidateOptionalLogName);
-DS_DEFINE_validator(shared_disk_directory, &Validator::ValidatePathString);
 DS_DEFINE_validator(distributed_disk_path, &Validator::ValidatePathString);
 DS_DEFINE_validator(encrypt_kit, &Validator::ValidateEncryptKit);
 DS_DEFINE_validator(etcd_address, &Validator::ValidateEtcdAddresses);

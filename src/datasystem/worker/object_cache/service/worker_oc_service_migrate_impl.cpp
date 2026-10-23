@@ -128,7 +128,7 @@ Status WorkerOcServiceMigrateImpl::CheckResource(const MigrateDataReqPb &req, Mi
     bool oom = false;
     switch (req.type()) {
         case MigrateType::SCALE_DOWN:
-            oom = !IsMemoryAvailable(0, req.type()) && !IsSpillAvaialble() && !IsDiskAvailable();
+            oom = !IsMemoryAvailable(0, req.type()) && !IsSpillAvaialble();
             break;
         case MigrateType::SPILL:
         case MigrateType::REBALANCE_KEEP_LOCAL:
@@ -967,8 +967,7 @@ Status WorkerOcServiceMigrateImpl::StartRemoteReadTasks(DirectReadOutcome &outco
             lastRc = DistributeMemoryForObject(objectKey, dataSize, metaSize, true, shmOwner, *shmUnit);
         } else {
             lastRc =
-                AllocateMemoryForObject(objectKey, dataSize, metaSize, true, evictionManager_, *shmUnit,
-                                        CacheType::MEMORY, true);
+                AllocateMemoryForObject(objectKey, dataSize, metaSize, true, evictionManager_, *shmUnit, true);
         }
         if (lastRc.IsError()) {
             LOG(ERROR) << FormatString("[Migrate Data] %s allocate memory failed: %s", objectKey, lastRc.ToString());
@@ -1159,7 +1158,6 @@ void WorkerOcServiceMigrateImpl::FillMigrateDataResponse(const MigrateDataReqPb 
     }
     if (oom) {
         rsp.set_remain_bytes(0);
-        rsp.set_disk_remain_bytes(0);
         rsp.set_limit_rate(0);
     } else {
         if (req.bytes_send() > 0) {
@@ -1167,10 +1165,6 @@ void WorkerOcServiceMigrateImpl::FillMigrateDataResponse(const MigrateDataReqPb 
         }
         rsp.set_remain_bytes(CalcRemainBytes(req.type()));
         rsp.set_available_ratio(memory::Allocator::Instance()->GetMemoryAvailableRatio());
-        uint64_t diskRemainBytes = memory::Allocator::Instance()->GetTotalRealMemoryFree(memory::CacheType::DISK);
-        constexpr double remainThreshold = 0.8;
-        rsp.set_disk_remain_bytes(static_cast<uint64_t>(diskRemainBytes * remainThreshold));
-        rsp.set_disk_available_ratio(memory::Allocator::Instance()->GetMemoryAvailableRatio(memory::CacheType::DISK));
         if (req.worker_addr().empty()) {
             rsp.set_limit_rate(rateController_->PeekAvailableRate(req.worker_addr()));
         } else {
@@ -1295,7 +1289,7 @@ Status WorkerOcServiceMigrateImpl::FillOneObjectLocked(std::shared_ptr<SafeObjTy
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetObjectEntryAccordingToMeta(meta.meta(), GetMetadataSize(), *entry),
                                      FormatString("[ObjectKey %s] Set object entry failed", objectKey.c_str()));
     RETURN_IF_NOT_OK(SaveDataWithObjectLocked(entry, info, payloads, type, unit));
-    if ((*entry)->IsMemoryCache() && (*entry)->GetShmUnit() == nullptr) {
+    if ((*entry)->GetShmUnit() == nullptr) {
         (*entry)->stateInfo.SetSpillState(true);
     }
     // Keep the staged object non-primary until master confirms ReplacePrimary. The object WLock remains held across
@@ -1337,15 +1331,13 @@ Status WorkerOcServiceMigrateImpl::SaveDataWithObjectLocked(std::shared_ptr<Safe
     }
 
     Status rc = Status(StatusCode::K_OUT_OF_MEMORY, "OOM");
-    const bool memoryRebalance = (*entry)->IsMemoryCache()
-                                 && (type == MigrateType::SPILL || type == MigrateType::REBALANCE_KEEP_LOCAL);
-    if (unit != nullptr || memoryRebalance
-        || IsResourceAvailable(type, (*entry)->modeInfo.GetCacheType(), info.data_size())) {
+    const bool memoryRebalance = (type == MigrateType::SPILL || type == MigrateType::REBALANCE_KEEP_LOCAL);
+    if (unit != nullptr || memoryRebalance || IsResourceAvailable(type, info.data_size())) {
         rc = AllocateAndAssignData(objectKey, entry, pairs, info.data_size(), unit,
                                    memoryRebalance && evictionManager_ != nullptr);
         VLOG(1) << FormatString("[ObjectKey %s] Save data to memory, result: %s", objectKey, rc.ToString());
     }
-    if (type == MigrateType::SCALE_DOWN && (*entry)->IsMemoryCache() && rc.IsError()
+    if (type == MigrateType::SCALE_DOWN && rc.IsError()
         && IsSpillAvaialble(info.data_size())) {
         rc = WorkerOcSpill::Instance()->Spill(objectKey, pairs, info.data_size());
         VLOG(1) << FormatString("[ObjectKey %s] Save data to spill dir, result: %s", objectKey, rc.ToString());
@@ -1364,8 +1356,7 @@ Status WorkerOcServiceMigrateImpl::BatchAllocateObjectGroupBySlot(
         auto metaSize = GetMetadataSize();
         auto needSize = info.data_size() + metaSize;
         auto tenantId = TenantAuthManager::ExtractTenantId(objectKey);
-        auto status = shmUnit->AllocateMemory(tenantId, needSize, false, ServiceType::OBJECT,
-                                              static_cast<memory::CacheType>(info.cache_type()));
+        auto status = shmUnit->AllocateMemory(tenantId, needSize, false, ServiceType::OBJECT);
         if (IsNoSpace(status)) {
             LOG(ERROR) << FormatString("[Migrate Data] %s allocate memory failed, size: %ld", objectKey, needSize);
             return status;
@@ -1387,8 +1378,7 @@ Status WorkerOcServiceMigrateImpl::AllocateAndAssignData(
     if (shmUnit == nullptr) {
         shmUnit = std::make_shared<ShmUnit>();
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            AllocateMemoryForObject(objectKey, size, metaSize, false, evictionManager_, *shmUnit,
-                                    (*entry)->modeInfo.GetCacheType(), retryOnOOM),
+            AllocateMemoryForObject(objectKey, size, metaSize, false, evictionManager_, *shmUnit, retryOnOOM),
             FormatString("[Migrate Data] %s allocate memory failed, size: %ld", objectKey, needSize));
         shmUnit->id = ShmKey::Intern(GetStringUuid());
     }
@@ -1693,24 +1683,9 @@ bool WorkerOcServiceMigrateImpl::IsSpillAvaialble(uint64_t size) const
     return handler->IsEnabled() && !handler->IsActiveSpillSizeExceedHWM(size);
 }
 
-bool WorkerOcServiceMigrateImpl::IsDiskAvailable(uint64_t size) const
+bool WorkerOcServiceMigrateImpl::IsResourceAvailable(const MigrateType &type, uint64_t size) const
 {
-    if (!memory::Allocator::Instance()->IsDiskAvailable()) {
-        constexpr int freq = 10;
-        LOG_EVERY_T(INFO, freq) << "[Migrate Data] Disk now is not available";
-        return false;
-    }
-    auto realMemoryUsage =
-        memory::Allocator::Instance()->GetTotalRealMemoryUsage(ServiceType::OBJECT, memory::CacheType::DISK);
-    uint64_t used = size < UINT64_MAX - realMemoryUsage ? realMemoryUsage + size : UINT64_MAX;
-    uint64_t total = memory::Allocator::Instance()->GetMaxMemoryLimit(memory::CacheType::DISK);
-    const double factor = 0.95;
-    return used <= total * factor;
-}
-
-bool WorkerOcServiceMigrateImpl::IsResourceAvailable(const MigrateType &type, CacheType cacheType, uint64_t size) const
-{
-    return cacheType == CacheType::MEMORY ? IsMemoryAvailable(size, type) : IsDiskAvailable(size);
+    return IsMemoryAvailable(size, type);
 }
 
 bool WorkerOcServiceMigrateImpl::IsNoSpace(const Status &status) const

@@ -143,26 +143,23 @@ std::unique_ptr<ObjectInterface> CreateObjectEntry(const ObjEntryParams &objPara
  * @brief Update properties of object entry.
  * @param[in] consistencyType The consistency of safeObj.
  * @param[in] writeMode The through of back mode that refers to save entry in the L2 cache.
- * @param[in] cacheType The type of cache.
  * @param[in] dataSize The data size.
  * @param[in] metaDataSize The metadata size.
  * @param[out] safeObj Object entry.
  */
-void UpdateObjectEntry(ConsistencyType type, WriteMode writeMode, CacheType cacheType, uint64_t metaDataSize,
-                       SafeObjType &safeObj);
+void UpdateObjectEntry(ConsistencyType type, WriteMode writeMode, uint64_t metaDataSize, SafeObjType &safeObj);
 
 /**
  * @brief Set properties of object entry.
  * @param[in] namespaceUri Normalized object key.
  * @param[in] consistencyType The consistency of safeObj.
  * @param[in] writeMode The through of back mode that refers to save entry in the L2 cache.
- * @param[in] cacheType The type of cache.
  * @param[in] dataSize The data size.
  * @param[in] metaDataSize The metadata size.
  * @param[out] safeObj Object entry.
  */
 void SetNewObjectEntry(const std::string &namespaceUri, ConsistencyType consistencyType, WriteMode writeMode,
-                       CacheType cacheType, uint64_t dataSize, uint64_t metaDataSize, SafeObjType &safeObj);
+                       uint64_t dataSize, uint64_t metaDataSize, SafeObjType &safeObj);
 
 /**
  * @brief Set meta info to device object entry.

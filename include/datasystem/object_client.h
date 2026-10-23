@@ -42,7 +42,6 @@ class ObjectClientImpl;
 namespace datasystem {
 struct CreateParam {
     ConsistencyType consistencyType = ConsistencyType::PRAM;
-    CacheType cacheType = CacheType::MEMORY;
 };
 
 struct ObjMetaInfo {

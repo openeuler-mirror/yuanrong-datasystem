@@ -96,63 +96,47 @@ bool MigrateDataHandler::ShouldUseFastTransport() const
     return IsUrmaEnabled();
 }
 
-void MigrateDataHandler::SplitByCacheType(std::vector<std::string> &memoryDataIds,
-                                          std::vector<std::string> &diskDataIds)
-{
-    for (const auto &objectKey : needMigrateDataIds_) {
-        std::shared_ptr<SafeObjType> entry;
-        Status rc = objectTable_->Get(objectKey, entry);
-        if (rc.IsError() || entry->TryRLock().IsError()) {
-            (void)skipIds_.emplace(objectKey);
-            continue;
-        }
-        if ((*entry)->IsMemoryCache()) {
-            memoryDataIds.emplace_back(objectKey);
-        } else {
-            diskDataIds.emplace_back(objectKey);
-        }
-        entry->RUnlock();
-    }
-    LOG(INFO) << FormatString("[Migrate Data] Migrate %ld objects to: %s, memory(%ld) disk(%ld)",
-                              needMigrateDataIds_.size(), remoteApi_->Address(), memoryDataIds.size(),
-                              diskDataIds.size());
-}
-
 MigrateDataHandler::MigrateResult MigrateDataHandler::MigrateDataToRemote(bool isSlotMigration)
 {
     PerfPoint point(PerfKey::WORKER_MIGRATE_TO_REMOTE);
     INJECT_POINT_NO_RETURN("MigrateDataHandler.MigrateDataToRemote.DelayMigrate",
                            [](int sleepMs) { std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs)); });
-    std::vector<std::string> memoryDataIds;
-    std::vector<std::string> diskDataIds;
-    SplitByCacheType(memoryDataIds, diskDataIds);
-    if (isSlotMigration) {
-        std::vector<std::string> migrateIds(needMigrateDataIds_.begin(), needMigrateDataIds_.end());
-        lastRc_ = MigrateDataByCacheType(CacheType::MEMORY, migrateIds, true);
-        return ConstructResult(lastRc_);
-    }
-    lastRc_ = MigrateDataByCacheType(CacheType::MEMORY, memoryDataIds, false);
+    std::vector<std::string> migrateIds(needMigrateDataIds_.begin(), needMigrateDataIds_.end());
+    lastRc_ = MigrateDataInBatches(migrateIds, isSlotMigration);
     maxBatchSize_ = FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul;
-    lastRc_ = lastRc_.IsError() ? lastRc_ : MigrateDataByCacheType(CacheType::DISK, diskDataIds, false);
     return ConstructResult(lastRc_);
 }
 
-Status MigrateDataHandler::MigrateDataByCacheType(CacheType type, std::vector<std::string> &needMigrateDataIds,
-                                                  bool isSlotMigration)
+Status MigrateDataHandler::MigrateDataInBatches(std::vector<std::string> &needMigrateDataIds,
+                                                bool isSlotMigration)
 {
     RETURN_OK_IF_TRUE(needMigrateDataIds.empty());
-    RETURN_IF_NOT_OK(PrepareRemoteMigration(type, needMigrateDataIds));
+    if (!isSlotMigration) {
+        for (auto it = needMigrateDataIds.begin(); it != needMigrateDataIds.end();) {
+            std::shared_ptr<SafeObjType> entry;
+            Status rc = objectTable_->Get(*it, entry);
+            if (rc.IsError() || entry->TryRLock().IsError()) {
+                (void)skipIds_.emplace(*it);
+                it = needMigrateDataIds.erase(it);
+                continue;
+            }
+            entry->RUnlock();
+            ++it;
+        }
+        RETURN_OK_IF_TRUE(needMigrateDataIds.empty());
+    }
+    RETURN_IF_NOT_OK(PrepareRemoteMigration(needMigrateDataIds));
 
     for (auto it = needMigrateDataIds.begin(); it != needMigrateDataIds.end(); ++it) {
         if (stoppingPtr_ != nullptr && stoppingPtr_->load(std::memory_order_acquire)) {
             failedIds_.insert(it, needMigrateDataIds.end());
             RETURN_STATUS(K_NOT_READY, "Migration cancelled before collecting the next object");
         }
-        if (IsRemoteLackResources(type)) {
+        if (IsRemoteLackResources()) {
             LOG(WARNING) << FormatString(
-                "[Migrate Data] Remote node %s has no remain bytes, local node: %s, cache type: %d, "
+                "[Migrate Data] Remote node %s has no remain bytes, local node: %s, "
                 "max batch size: %ld",
-                remoteApi_->Address(), localAddr_, static_cast<int>(type), maxBatchSize_);
+                remoteApi_->Address(), localAddr_, maxBatchSize_);
             std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
                            [](const std::unique_ptr<BaseDataUnit> &d) { return d->Id(); });
             (void)failedIds_.insert(it, needMigrateDataIds.end());
@@ -169,9 +153,9 @@ Status MigrateDataHandler::MigrateDataByCacheType(CacheType type, std::vector<st
     return lastRc_;
 }
 
-Status MigrateDataHandler::PrepareRemoteMigration(CacheType type, const std::vector<std::string> &needMigrateDataIds)
+Status MigrateDataHandler::PrepareRemoteMigration(const std::vector<std::string> &needMigrateDataIds)
 {
-    Status s = SpyOnRemoteRemainBytes(type);
+    Status s = SpyOnRemoteRemainBytes();
     if (s.IsError()) {
         (void)failedIds_.insert(needMigrateDataIds.begin(), needMigrateDataIds.end());
     }
@@ -221,7 +205,7 @@ std::string MigrateDataHandler::ResultToString(const MigrateResult &result)
     return ss.str();
 }
 
-Status MigrateDataHandler::SpyOnRemoteRemainBytes(CacheType type)
+Status MigrateDataHandler::SpyOnRemoteRemainBytes()
 {
     if (ShouldUseFastTransport()) {
         size_t availableMemory = 0;
@@ -238,26 +222,26 @@ Status MigrateDataHandler::SpyOnRemoteRemainBytes(CacheType type)
                 "[Migrate Data] Failed to get remote node %s available memory from resource snapshot, local node: %s, "
                 "status: %s, fallback to remote probe",
                 remoteApi_->Address(), localAddr_, rc.ToString());
-            RETURN_IF_NOT_OK(SpyOnRemoteRemainBytesByRpc(type));
+            RETURN_IF_NOT_OK(SpyOnRemoteRemainBytesByRpc());
         }
     } else {
-        RETURN_IF_NOT_OK(SpyOnRemoteRemainBytesByRpc(type));
+        RETURN_IF_NOT_OK(SpyOnRemoteRemainBytesByRpc());
     }
 
-    if (IsRemoteLackResources(type)) {
+    if (IsRemoteLackResources()) {
         LOG(WARNING) << FormatString(
-            "[Migrate Data] Remote node %s has no remain bytes, local node: %s, cache type: %d, max batch size: %ld",
-            remoteApi_->Address(), localAddr_, static_cast<int>(type), maxBatchSize_);
+            "[Migrate Data] Remote node %s has no remain bytes, local node: %s, max batch size: %ld",
+            remoteApi_->Address(), localAddr_, maxBatchSize_);
         RETURN_STATUS(StatusCode::K_NO_SPACE, "[Migrate Data] No remain bytes");
     }
 
     LOG(INFO) << FormatString(
-        "[Migrate Data] Remote node %s remain bytes, local node: %s, cache type: %d, max batch size: %ld",
-        remoteApi_->Address(), localAddr_, static_cast<int>(type), maxBatchSize_);
+        "[Migrate Data] Remote node %s remain bytes, local node: %s, max batch size: %ld",
+        remoteApi_->Address(), localAddr_, maxBatchSize_);
     return Status::OK();
 }
 
-Status MigrateDataHandler::SpyOnRemoteRemainBytesByRpc(CacheType type)
+Status MigrateDataHandler::SpyOnRemoteRemainBytesByRpc()
 {
     MigrateDataReqPb req;
     req.set_type(type_);
@@ -277,21 +261,17 @@ Status MigrateDataHandler::SpyOnRemoteRemainBytesByRpc(CacheType type)
         }
         return s;
     }
-    if (!strategy_->CheckCondition(rsp, type)) {
+    if (!strategy_->CheckCondition(rsp)) {
         LOG(WARNING) << FormatString(
-            "[Migrate Data] Remote node %s has insufficient space, local node: %s, cache type: %d, remain bytes: %ld, "
-            "disk remain bytes: %ld, available ratio: %.2f, disk available ratio: %.2f, scale down state: %d",
-            remoteApi_->Address(), localAddr_, static_cast<int>(type), rsp.remain_bytes(), rsp.disk_remain_bytes(),
-            rsp.available_ratio(), rsp.disk_available_ratio(), static_cast<int>(rsp.scale_down_state()));
+            "[Migrate Data] Remote node %s has insufficient space, local node: %s, remain bytes: %ld, "
+            "available ratio: %.2f, scale down state: %d",
+            remoteApi_->Address(), localAddr_, rsp.remain_bytes(),
+            rsp.available_ratio(), static_cast<int>(rsp.scale_down_state()));
         RETURN_STATUS(StatusCode::K_NO_SPACE,
                       FormatString("[Migrate Data] Remote node %s has insufficient space", remoteApi_->Address()));
     }
     RETURN_IF_NOT_OK(TryUpdateRate(rsp.limit_rate()));
-    if (type == CacheType::MEMORY) {
-        AdjustMaxBatchSize(rsp.remain_bytes());
-    } else {
-        AdjustMaxBatchSize(rsp.disk_remain_bytes());
-    }
+    AdjustMaxBatchSize(rsp.remain_bytes());
     return Status::OK();
 }
 
@@ -314,15 +294,14 @@ void MigrateDataHandler::AdjustMaxBatchSize(uint64_t size)
     maxBatchSize_ = std::min<uint64_t>(maxBatchSize_, size);
 }
 
-bool MigrateDataHandler::IsRemoteLackResources(CacheType cacheType) const
+bool MigrateDataHandler::IsRemoteLackResources() const
 {
     constexpr uint64_t minRemianBytes = 1024ul * 1024ul;
     // Rebalance targets can recycle cold memory while receiving the next object. Do not let the legacy 1 MiB
     // batching floor prevent that allocation from reaching the target; maxBatchSize_ == 0 naturally produces
-    // single-object batches. Disk migration and scale-down keep their strict remaining-capacity admission.
-    const bool canRecycleTargetMemory = cacheType == CacheType::MEMORY
-                                        && (type_ == MigrateType::SPILL
-                                            || type_ == MigrateType::REBALANCE_KEEP_LOCAL);
+    // single-object batches. Scale-down keeps its strict remaining-capacity admission.
+    const bool canRecycleTargetMemory = (type_ == MigrateType::SPILL
+                                         || type_ == MigrateType::REBALANCE_KEEP_LOCAL);
     if (canRecycleTargetMemory) {
         return false;
     }
@@ -344,7 +323,7 @@ Status MigrateDataHandler::AddObjectDataLocked(const ObjectKV &objectKV)
         Status rc = WorkerOcSpill::Instance()->Get(objectKey, data, entry->GetDataSize());
         if (rc.IsOk()) {
             datas_.emplace_back(std::make_unique<PayloadData>(objectKey, entry->GetCreateTime(), std::move(data),
-                                                              entry->GetDataSize(), entry->modeInfo.GetCacheType()));
+                                                              entry->GetDataSize()));
         } else {
             (void)failedIds_.emplace(objectKey);
             return rc;
@@ -356,8 +335,7 @@ Status MigrateDataHandler::AddObjectDataLocked(const ObjectKV &objectKV)
                                     FormatString("[Migrate Data] Object %s has no shm unit when migrating", objectKey));
         }
         datas_.emplace_back(std::make_unique<ShmData>(objectKey, entry->GetCreateTime(), std::move(shmUnit),
-                                                      entry->GetDataSize(), entry->GetMetadataSize(),
-                                                      entry->modeInfo.GetCacheType()));
+                                                      entry->GetDataSize(), entry->GetMetadataSize()));
     }
     currBatchSize_ += entry->GetDataSize();
     ++currBatchCount_;

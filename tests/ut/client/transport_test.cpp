@@ -1567,7 +1567,7 @@ protected:
         info->dataSize = size;
         info->metadataSize = 0;
         info->workerAddr = workerAddr;
-        info->objectMode = ModeInfo(param.consistencyType, param.writeMode, param.cacheType);
+        info->objectMode = ModeInfo(param.consistencyType, param.writeMode);
         info->ubUrmaDataInfo = std::make_shared<UrmaRemoteAddrPb>(response.urma_info());
         info->pointer = static_cast<uint8_t *>(calloc(size + 1, 1));
         info->shmId = ShmKey::Intern(response.shm_id());
@@ -10511,7 +10511,6 @@ TEST(ObjectBufferTest, MoveAssignmentTransfersOwnershipAndData)
 TEST(SetRequestBuilderTest, PreservesIdentityTenantAndWriteOptions)
 {
     TransportCreateParam createParam = MakeCreateParam();
-    createParam.cacheType = CacheType::DISK;
     createParam.allocationId = "7fe3f66f-82d3-475d-9d9a-075cc604d344";
     CreateReqPb createRequest;
     ASSERT_TRUE(BuildCreateRequest("request-key", 64, createParam, createRequest).IsOk());
@@ -10525,7 +10524,7 @@ TEST(SetRequestBuilderTest, PreservesIdentityTenantAndWriteOptions)
     info.objectKey = "request-key";
     info.dataSize = 64;
     info.metadataSize = 0;
-    info.objectMode = ModeInfo(ConsistencyType::PRAM, WriteMode::WRITE_THROUGH_L2_CACHE, CacheType::DISK);
+    info.objectMode = ModeInfo(ConsistencyType::PRAM, WriteMode::WRITE_THROUGH_L2_CACHE);
     TransportSetParam setParam = MakeSetParam();
     setParam.ttlSecond = 60;
     PublishReqPb setRequest;
@@ -10538,6 +10537,27 @@ TEST(SetRequestBuilderTest, PreservesIdentityTenantAndWriteOptions)
     EXPECT_EQ(setRequest.write_mode(), static_cast<uint32_t>(WriteMode::WRITE_THROUGH_L2_CACHE));
 }
 
+// A pre-cut client serializes cache_type=1 (CreateReqPb field 6, now reserved). The new code must
+// parse those bytes cleanly, keep every surviving field, and admit the request as a memory create.
+TEST(SetRequestBuilderTest, LegacyCacheTypeFieldIsIgnoredOnWire)
+{
+    CreateReqPb legacy;
+    legacy.set_client_id("legacy-client");
+    legacy.set_object_key("legacy-key");
+    legacy.set_data_size(1024);
+    legacy.set_tenant_id("legacy-tenant");
+    std::string bytes = legacy.SerializeAsString();
+    bytes.push_back('\x30');  // tag: CreateReqPb field 6, varint
+    bytes.push_back('\x01');  // legacy cache_type value (disk)
+
+    CreateReqPb parsed;
+    ASSERT_TRUE(parsed.ParseFromString(bytes));
+    EXPECT_EQ(parsed.client_id(), "legacy-client");
+    EXPECT_EQ(parsed.object_key(), "legacy-key");
+    EXPECT_EQ(parsed.data_size(), 1024u);
+    EXPECT_EQ(parsed.tenant_id(), "legacy-tenant");
+}
+
 TEST(TcpTransporterTest, CreateAllocatesBuffer)
 {
     auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
@@ -10545,7 +10565,6 @@ TEST(TcpTransporterTest, CreateAllocatesBuffer)
     std::shared_ptr<ObjectBuffer> buffer;
 
     TransportCreateParam param = MakeCreateParam();
-    param.cacheType = CacheType::MEMORY;
     param.consistencyType = ConsistencyType::PRAM;
 
     Status rc = transporter.Create(MakeAddress(9000), "my-key", 128, param, buffer);
@@ -10705,7 +10724,7 @@ TEST(MSetRequestBuilderTest, RejectsInvalidBatchInvariants)
     ASSERT_NE(remote, nullptr);
     ASSERT_NE(differentMode, nullptr);
     ObjectBufferInternal::GetMutableInfo(*differentMode).objectMode =
-        ModeInfo(ConsistencyType::PRAM, WriteMode::WRITE_BACK_L2_CACHE, CacheType::DISK);
+        ModeInfo(ConsistencyType::CAUSAL, WriteMode::WRITE_BACK_L2_CACHE);
 
     EXPECT_EQ(ValidateMSetRequest({}, MakeSetParam()).GetCode(), K_INVALID);
     EXPECT_EQ(ValidateMSetRequest({ first, duplicate }, MakeSetParam()).GetCode(), K_INVALID);

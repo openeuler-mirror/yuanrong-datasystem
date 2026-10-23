@@ -98,7 +98,6 @@ namespace object_cache {
 namespace {
 struct EvictionTriggerOptions {
     ServiceType type;
-    CacheType cacheType;
     bool usePretriggerWatermark;
 };
 
@@ -1000,17 +999,6 @@ void WorkerOcEvictionManager::GetObjectNextAction(SafeObjType &entry, std::uniqu
     if (!entry->stateInfo.IsPrimaryCopy()) {
         info = "not primary copy";
         nextAction = Action::DELETE;
-    } else if (entry->modeInfo.GetCacheType() == CacheType::DISK) {
-        if (hasL2Cache) {
-            info = "object has L2 cache, which cache type is DISK";
-            nextAction = Action::DELETE;
-        } else if (entry->IsNoneL2CacheEvictMode()) {
-            info = "object could be evict, which cache type is DISK";
-            nextAction = Action::END_LIFE;
-        } else {
-            info = "object don't have L2 cache, which cache type is DISK";
-            nextAction = Action::RETAIN;
-        }
     } else if (entry->IsSpilled()) {
         info = "already spilled";
         nextAction = Action::FREE_MEMORY;
@@ -1044,14 +1032,14 @@ void WorkerOcEvictionManager::GetObjectNextAction(SafeObjType &entry, std::uniqu
 }
 
 Status WorkerOcEvictionManager::EvictObject(ObjectKV &objectKV, Action nextAction, EvictDeletedObjects *deletedObjects,
-                                            CacheType cacheType, uint64_t needSize, const EvictionCandidate *candidate,
+                                            uint64_t needSize, const EvictionCandidate *candidate,
                                             bool forceEvict)
 {
     const auto &objectKey = objectKV.GetObjKey();
     SafeObjType &entry = objectKV.GetObjEntry();
     if (nextAction == Action::END_LIFE) {
         bool accepted = false;
-        Status rc = SubmitPrimaryEndLifeTask(objectKV, cacheType, needSize, accepted, candidate, forceEvict);
+        Status rc = SubmitPrimaryEndLifeTask(objectKV, needSize, accepted, candidate, forceEvict);
         Erase(objectKey);
         RETURN_IF_NOT_OK(rc);
         VLOG(1) << FormatString("[ObjectKey %s] Object will be end of life, accepted: %d", objectKey, accepted);
@@ -1096,14 +1084,14 @@ Status WorkerOcEvictionManager::EvictClearObject(ObjectKV &objectKV)
     return EvictObject(objectKV, Action::DELETE);
 }
 
-uint64_t WorkerOcEvictionManager::GetLowWaterMark(CacheType cacheType)
+uint64_t WorkerOcEvictionManager::GetLowWaterMark()
 {
-    memory::CacheType memCacheType = static_cast<memory::CacheType>(cacheType);
+    constexpr memory::CacheType memCacheType = memory::CacheType::MEMORY;
     auto maxMemorySize = datasystem::memory::Allocator::Instance()->GetMaxMemorySize(ServiceType::OBJECT, memCacheType);
     auto usedMemorySize =
         datasystem::memory::Allocator::Instance()->GetTotalRealMemoryUsage(ServiceType::OBJECT, memCacheType);
     auto lowWater = static_cast<std::uint64_t>(
-        std::min(datasystem::memory::Allocator::Instance()->GetTotalRealMemoryFree(memCacheType) + usedMemorySize,
+        std::min(datasystem::memory::Allocator::Instance()->GetTotalRealMemoryFree() + usedMemorySize,
                  maxMemorySize)
         * GetEvictionLowWaterFactor());
     return lowWater;
@@ -1125,18 +1113,18 @@ uint64_t WorkerOcEvictionManager::EstimatePretriggerMarginBytes()
     return std::max(MIN_PRETRIGGER_MARGIN_BYTES, usedBytes / objectCount);
 }
 
-bool WorkerOcEvictionManager::IsAboveLowWaterMark(uint64_t needSize, size_t pendingSpillSize, CacheType cacheType)
+bool WorkerOcEvictionManager::IsAboveLowWaterMark(uint64_t needSize, size_t pendingSpillSize)
 {
     uint64_t max = std::numeric_limits<uint64_t>::max();
     auto realMemoryUsage = datasystem::memory::Allocator::Instance()->GetTotalRealMemoryUsage(
-        ServiceType::OBJECT, static_cast<memory::CacheType>(cacheType));
+        ServiceType::OBJECT, memory::CacheType::MEMORY);
     realMemoryUsage = (realMemoryUsage > max - needSize) ? max : realMemoryUsage + needSize;
-    auto lowWater = GetLowWaterMark(cacheType);
+    auto lowWater = GetLowWaterMark();
     lowWater = (lowWater > max - pendingSpillSize) ? max : lowWater + pendingSpillSize;
     return realMemoryUsage > lowWater;
 }
 
-void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheType, bool forceEvict)
+void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, bool forceEvict)
 {
     Raii finishTask([this]() {
         isDone_.store(true, std::memory_order_release);
@@ -1145,7 +1133,6 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
     });
     EvictionLoopState st;
     st.needSize = needSize;
-    st.cacheType = cacheType;
     st.forceEvict = forceEvict;
     {
         std::shared_lock<SharedMutex> routeLock(policyRouteMutex_);
@@ -1224,7 +1211,7 @@ void WorkerOcEvictionManager::RunEvictionLoop(EvictionLoopState &st)
         std::chrono::steady_clock::now() + std::chrono::milliseconds(FORCE_EVICT_MAX_DURATION_MS);
     uint32_t consecutiveSkipped = 0;
     while (!evictionCancelRequested_.load(std::memory_order_acquire)
-           && (IsAboveLowWaterMark(st.needSize, st.pendingSpillSize, st.cacheType)
+           && (IsAboveLowWaterMark(st.needSize, st.pendingSpillSize)
                || (st.forceEvict && !forceObligationCovered()
                    && std::chrono::steady_clock::now() < forceDeadline))
            && st.evictionList->Size() != 0) {
@@ -1265,21 +1252,19 @@ void WorkerOcEvictionManager::ResolveSpillFutures(EvictionLoopState &st, bool bl
 void WorkerOcEvictionManager::MergePendingForceIntoTask(EvictionLoopState &st)
 {
     // A force need that lost the single-flight race to this task must run with it, not after the
-    // next OOM retry. Only the slot of this task's own cache type can be served here: another type
-    // is an independent water mark domain and stays pending for the exit hook to resubmit.
+    // next OOM retry.
     std::lock_guard<std::mutex> lock(pendingForceMutex_);
-    auto iter = pendingForceNeeds_.find(st.cacheType);
-    if (iter == pendingForceNeeds_.end()) {
+    if (!pendingForceNeed_.has_value()) {
         return;
     }
     auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
-    if (IsPendingForceNeedExpired(iter->second.arrivalMs, nowMs)) {
-        pendingForceNeeds_.erase(iter);
+    if (IsPendingForceNeedExpired(pendingForceNeed_->arrivalMs, nowMs)) {
+        pendingForceNeed_.reset();
         return;
     }
-    st.needSize = std::max(st.needSize, iter->second.needSize);
+    st.needSize = std::max(st.needSize, pendingForceNeed_->needSize);
     st.forceEvict = true;
-    pendingForceNeeds_.erase(iter);
+    pendingForceNeed_.reset();
 }
 
 void WorkerOcEvictionManager::LogForceEvictionSummary(const EvictionLoopState &st)
@@ -1321,7 +1306,7 @@ WorkerOcEvictionManager::EvictOneResult WorkerOcEvictionManager::EvictOneObject(
     st.lastAction = trace->action;
     bool wasDeletedObjectsEmpty = st.deletedObjects->empty();
     rc = TryEvictObject(entry, std::move(trace), st.pendingSpillSize, *st.spillTasks, locked, candidate,
-                        st.cacheType, st.deletedObjects, st.needSize, st.forceEvict);
+                        st.deletedObjects, st.needSize, st.forceEvict);
     if (wasDeletedObjectsEmpty && !st.deletedObjects->empty()) {
         st.deletedObjectsFlushTimer->Reset();
     }
@@ -1407,20 +1392,18 @@ void WorkerOcEvictionManager::NotifyEvictionStopped()
 Status WorkerOcEvictionManager::TryEvictObject(std::shared_ptr<SafeObjType> &entry,
                                                std::unique_ptr<EvictionTrace> trace, size_t &pendingSpillSize,
                                                std::unordered_map<std::string, SpillTask> &spillTasks, bool &locked,
-                                               const EvictionCandidate &candidate, CacheType cacheType,
+                                               const EvictionCandidate &candidate,
                                                EvictDeletedObjects *deletedObjects, uint64_t needSize,
                                                bool forceEvict)
 {
     const auto &objectKey = trace->taskId;
     ObjectKV objectKV(objectKey, *entry);
     PerfPoint point(PerfKey::WORKER_EVICT_ONE_OBJECT);
-    Status rc = EvictObject(objectKV, trace->action, deletedObjects, cacheType, needSize, &candidate, forceEvict);
+    Status rc = EvictObject(objectKV, trace->action, deletedObjects, needSize, &candidate, forceEvict);
     if (rc.IsError()) {
         trace->rc = rc;
         if (rc.GetCode() != K_NOT_READY) {
             trace->rc.AppendMsg("EvictObject failed");
-        } else if ((*entry)->modeInfo.GetCacheType() == CacheType::DISK) {
-            return Status::OK();
         }
         return rc;
     }
@@ -1439,7 +1422,7 @@ Status WorkerOcEvictionManager::TryEvictObject(std::shared_ptr<SafeObjType> &ent
     return Status::OK();
 }
 
-void WorkerOcEvictionManager::Evict(uint64_t needSize, CacheType cacheType, bool forceEvict)
+void WorkerOcEvictionManager::Evict(uint64_t needSize, bool forceEvict)
 {
     LOG_EVERY_T(INFO, LOG_TIME_LIMIT_LEVEL3) << "Eviction start.";
     if (policyUpdatePhase_.load(std::memory_order_acquire) != PolicyUpdatePhase::STABLE) {
@@ -1453,18 +1436,18 @@ void WorkerOcEvictionManager::Evict(uint64_t needSize, CacheType cacheType, bool
             NotifyEvictionStopped();
             return;
         }
-        SubmitEvictionTask(needSize, cacheType, forceEvict);
+        SubmitEvictionTask(needSize, forceEvict);
         return;
     }
     if (forceEvict) {
-        MergePendingForceNeed(needSize, cacheType);
+        MergePendingForceNeed(needSize);
         // The winner may have finished between the failed CAS and the merge above; retry the CAS
         // once so the need runs immediately. If it fails again the active task is still running:
         // it merged before our CAS, so its exit hook (which takes after storing isDone_) sees the
         // need and resubmits — a force request is never silently dropped.
         expected = true;
         if (isDone_.compare_exchange_strong(expected, false)) {
-            SubmitEvictionTask(needSize, cacheType, true);
+            SubmitEvictionTask(needSize, true);
             return;
         }
         LOG_EVERY_T(INFO, LOG_TIME_LIMIT_LEVEL3)
@@ -1474,16 +1457,19 @@ void WorkerOcEvictionManager::Evict(uint64_t needSize, CacheType cacheType, bool
     }
 }
 
-void WorkerOcEvictionManager::MergePendingForceNeed(uint64_t needSize, CacheType cacheType)
+void WorkerOcEvictionManager::MergePendingForceNeed(uint64_t needSize)
 {
     std::lock_guard<std::mutex> lock(pendingForceMutex_);
-    auto &pending = pendingForceNeeds_[cacheType];
-    if (needSize > pending.needSize) {
-        pending.needSize = needSize;
+    if (!pendingForceNeed_.has_value()) {
+        pendingForceNeed_ = PendingForceNeed{ needSize, static_cast<uint64_t>(GetSteadyClockTimeStampMs()) };
+        return;
+    }
+    if (needSize > pendingForceNeed_->needSize) {
+        pendingForceNeed_->needSize = needSize;
     }
     // Refresh the arrival time even for a smaller need: it is a fresh observation that the pressure
     // this slot describes is still present.
-    pending.arrivalMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    pendingForceNeed_->arrivalMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
 }
 
 bool WorkerOcEvictionManager::IsPendingForceNeedExpired(uint64_t arrivalMs, uint64_t nowMs)
@@ -1491,21 +1477,20 @@ bool WorkerOcEvictionManager::IsPendingForceNeedExpired(uint64_t arrivalMs, uint
     return nowMs - arrivalMs > PENDING_FORCE_NEED_TTL_MS;
 }
 
-bool WorkerOcEvictionManager::TakeAnyPendingForceNeed(uint64_t &needSize, CacheType &cacheType)
+bool WorkerOcEvictionManager::TakeAnyPendingForceNeed(uint64_t &needSize)
 {
     std::lock_guard<std::mutex> lock(pendingForceMutex_);
-    auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
-    for (auto iter = pendingForceNeeds_.begin(); iter != pendingForceNeeds_.end();) {
-        if (IsPendingForceNeedExpired(iter->second.arrivalMs, nowMs)) {
-            iter = pendingForceNeeds_.erase(iter);
-            continue;
-        }
-        needSize = iter->second.needSize;
-        cacheType = iter->first;
-        pendingForceNeeds_.erase(iter);
-        return true;
+    if (!pendingForceNeed_.has_value()) {
+        return false;
     }
-    return false;
+    auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    if (IsPendingForceNeedExpired(pendingForceNeed_->arrivalMs, nowMs)) {
+        pendingForceNeed_.reset();
+        return false;
+    }
+    needSize = pendingForceNeed_->needSize;
+    pendingForceNeed_.reset();
+    return true;
 }
 
 void WorkerOcEvictionManager::ResubmitPendingForceEviction()
@@ -1516,30 +1501,28 @@ void WorkerOcEvictionManager::ResubmitPendingForceEviction()
         return;
     }
     uint64_t pendingNeed = 0;
-    CacheType pendingCacheType = CacheType::MEMORY;
-    if (!TakeAnyPendingForceNeed(pendingNeed, pendingCacheType)) {
+    if (!TakeAnyPendingForceNeed(pendingNeed)) {
         return;
     }
     bool expected = true;
     if (!isDone_.compare_exchange_strong(expected, false)) {
         // Another caller won the slot; its task merges the pending need at entry. If that entry
         // merge already ran, put the need back — that task's own exit hook will pick it up.
-        MergePendingForceNeed(pendingNeed, pendingCacheType);
+        MergePendingForceNeed(pendingNeed);
         return;
     }
-    LOG(INFO) << "Resubmit force eviction for extent OOM, needSize " << pendingNeed
-              << ", cacheType " << static_cast<int>(pendingCacheType);
-    SubmitEvictionTask(pendingNeed, pendingCacheType, true);
+    LOG(INFO) << "Resubmit force eviction for extent OOM, needSize " << pendingNeed;
+    SubmitEvictionTask(pendingNeed, true);
 }
 
-void WorkerOcEvictionManager::SubmitEvictionTask(uint64_t needSize, CacheType cacheType, bool forceEvict)
+void WorkerOcEvictionManager::SubmitEvictionTask(uint64_t needSize, bool forceEvict)
 {
     std::unique_lock<std::mutex> lk(cvMutex_);
     auto traceID = Trace::Instance().GetTraceID();
     try {
-        memEvictTaskThreadPool_->Execute([this, traceID, needSize, cacheType, forceEvict] {
+        memEvictTaskThreadPool_->Execute([this, traceID, needSize, forceEvict] {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-            EvictionTask(needSize, cacheType, forceEvict);
+            EvictionTask(needSize, forceEvict);
         });
     } catch (const std::exception &e) {
         // The caller has already claimed isDone_ (and this may be a destructor-driven resubmit, where
@@ -1633,12 +1616,11 @@ void WorkerOcEvictionManager::AsyncMasterTask(const EvictDeletedObjects &objectK
     }
 }
 
-Status WorkerOcEvictionManager::SubmitPrimaryEndLifeTask(const ObjectKV &objectKV, CacheType cacheType,
-                                                         uint64_t needSize, bool &accepted,
+Status WorkerOcEvictionManager::SubmitPrimaryEndLifeTask(const ObjectKV &objectKV, uint64_t needSize, bool &accepted,
                                                          const EvictionCandidate *candidate, bool forceEvict)
 {
     const auto &objectKey = objectKV.GetObjKey();
-    PrimaryEndLifeTask task{ objectKey, objectKV.GetObjEntry()->GetCreateTime(), cacheType, needSize };
+    PrimaryEndLifeTask task{ objectKey, objectKV.GetObjEntry()->GetCreateTime(), needSize };
     task.forceEvict = forceEvict;
     task.queuedAtMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
     if (candidate != nullptr) {
@@ -2472,7 +2454,7 @@ Status WorkerOcEvictionManager::ReacquireAndValidateForLocalDelete(PrimaryEndLif
 Status WorkerOcEvictionManager::ReacquirePrimaryEndLifeForTest(const std::string &objectKey, uint64_t version,
                                                                std::shared_ptr<SafeObjType> &entry)
 {
-    PrimaryEndLifeCandidate candidate{ { objectKey, version, CacheType::MEMORY }, nullptr };
+    PrimaryEndLifeCandidate candidate{ { objectKey, version }, nullptr };
     auto rc = ReacquireAndValidateForLocalDelete(candidate);
     entry = candidate.entry;
     return rc;
@@ -2483,7 +2465,7 @@ Status WorkerOcEvictionManager::PreparePrimaryEndLifeCandidates(const std::vecto
                                                                 std::vector<PrimaryEndLifeCandidate> &candidates,
                                                                 std::vector<PrimaryEndLifeTask> &skippedTasks)
 {
-    std::unordered_map<int, uint64_t> selectedSizeByCache;
+    uint64_t selectedReleaseSize = 0;
     const size_t candidateBegin = candidates.size();
     bool handoffCandidates = false;
     Raii unlockOnError([&candidates, &handoffCandidates, candidateBegin] {
@@ -2500,7 +2482,7 @@ Status WorkerOcEvictionManager::PreparePrimaryEndLifeCandidates(const std::vecto
     for (const auto &task : tasks) {
         // Force tasks exist precisely because usage sits below the low water mark; skipping them
         // here would requeue them forever and wedge the exact state force eviction must relieve.
-        if (!task.forceEvict && !IsAboveLowWaterMark(task.needSize, 0, task.cacheType)) {
+        if (!task.forceEvict && !IsAboveLowWaterMark(task.needSize, 0)) {
             skippedTasks.emplace_back(task);
             continue;
         }
@@ -2520,17 +2502,16 @@ Status WorkerOcEvictionManager::PreparePrimaryEndLifeCandidates(const std::vecto
             skippedTasks.emplace_back(task);
             continue;
         }
-        auto cacheKey = static_cast<int>(task.cacheType);
         auto releaseSize = GetPrimaryEndLifeReleaseSize(*entry);
-        auto budget = GetPrimaryEndLifeReleaseBudget(task.cacheType, task.needSize);
-        auto selectedSize = selectedSizeByCache[cacheKey];
+        auto budget = GetPrimaryEndLifeReleaseBudget(task.needSize);
+        auto selectedSize = selectedReleaseSize;
         // The first candidate is allowed so a single large object can still relieve pressure.
         if (selectedSize != 0 && releaseSize > budget - std::min(budget, selectedSize)) {
             skippedTasks.emplace_back(task);
             continue;
         }
         auto maxSize = std::numeric_limits<uint64_t>::max();
-        selectedSizeByCache[cacheKey] = releaseSize > maxSize - selectedSize ? maxSize : selectedSize + releaseSize;
+        selectedReleaseSize = releaseSize > maxSize - selectedReleaseSize ? maxSize : selectedReleaseSize + releaseSize;
         candidates.emplace_back(PrimaryEndLifeCandidate{ task, entry });
         entryLocked = false;
     }
@@ -2577,14 +2558,6 @@ bool WorkerOcEvictionManager::IsPrimaryEndLifeTaskStillEvictable(const PrimaryEn
         return false;
     }
     bool hasL2Cache = IsObjectExistInL2Cache(entry);
-    if (entry->modeInfo.GetCacheType() == CacheType::DISK) {
-        bool evictable = !hasL2Cache && entry->IsNoneL2CacheEvictMode();
-        if (!evictable) {
-            VLOG(DEBUG_LOG_LEVEL) << "[ObjectKey " << task.objectKey
-                                  << "] Skip primary end-life, disk object is not none-L2 evictable.";
-        }
-        return evictable;
-    }
     if (entry->IsWriteBackL2CacheEvictMode()) {
         return true;
     }
@@ -2596,13 +2569,13 @@ bool WorkerOcEvictionManager::IsPrimaryEndLifeTaskStillEvictable(const PrimaryEn
     return evictable;
 }
 
-uint64_t WorkerOcEvictionManager::GetPrimaryEndLifeReleaseBudget(CacheType cacheType, uint64_t needSize)
+uint64_t WorkerOcEvictionManager::GetPrimaryEndLifeReleaseBudget(uint64_t needSize)
 {
     auto realUsage = datasystem::memory::Allocator::Instance()->GetTotalRealMemoryUsage(
-        ServiceType::OBJECT, static_cast<memory::CacheType>(cacheType));
+        ServiceType::OBJECT, memory::CacheType::MEMORY);
     auto max = std::numeric_limits<uint64_t>::max();
     realUsage = realUsage > max - needSize ? max : realUsage + needSize;
-    auto lowWater = GetLowWaterMark(cacheType);
+    auto lowWater = GetLowWaterMark();
     return realUsage > lowWater ? realUsage - lowWater : 0;
 }
 
@@ -2877,7 +2850,7 @@ Status WorkerOcEvictionManager::DeletePrimaryEndLifeLocal(const PrimaryEndLifeCa
 Status WorkerOcEvictionManager::DeletePrimaryEndLifeLocalForTest(const std::string &objectKey,
                                                                  const std::shared_ptr<SafeObjType> &entry)
 {
-    PrimaryEndLifeTask task{ objectKey, 0, CacheType::MEMORY };
+    PrimaryEndLifeTask task{ objectKey, 0 };
     return DeletePrimaryEndLifeLocal(PrimaryEndLifeCandidate{ std::move(task), entry });
 }
 #endif
@@ -3517,7 +3490,7 @@ bool CheckAndTriggerEviction(const std::string &keyInfo, uint64_t needSize,
     uint64_t realMemoryUsed = 0;
     uint64_t memOccupied = 0;
     uint64_t maxAvailableMemorySize = 0;
-    memory::CacheType memCacheType = static_cast<memory::CacheType>(options.cacheType);
+    constexpr memory::CacheType memCacheType = memory::CacheType::MEMORY;
     uint64_t memThreshold = 0;
     uint64_t pretriggerMarginMb = 0;
     uint64_t pretriggerHardWatermark = 0;
@@ -3533,7 +3506,7 @@ bool CheckAndTriggerEviction(const std::string &keyInfo, uint64_t needSize,
         memOccupied = realMemoryUsed + needSize;
         maxAvailableMemorySize = std::min(
             datasystem::memory::Allocator::Instance()->GetMaxMemorySize(options.type, memCacheType),
-            (datasystem::memory::Allocator::Instance()->GetTotalRealMemoryFree(memCacheType) + realMemoryUsed));
+            (datasystem::memory::Allocator::Instance()->GetTotalRealMemoryFree() + realMemoryUsed));
         memThreshold = GetHardHighWatermark(maxAvailableMemorySize, FLAGS_eviction_reserve_mem_threshold_mb);
         if (options.usePretriggerWatermark) {
             pretriggerHardWatermark = memThreshold;
@@ -3557,7 +3530,7 @@ bool CheckAndTriggerEviction(const std::string &keyInfo, uint64_t needSize,
                                    static_cast<uint64_t>(maxAvailableMemorySize * GetEvictionLowWaterFactor()) });
         }
         PerfPoint evictPoint(PerfKey::WORKER_EVICT_TASK);
-        evictionManager->Evict(needSize, options.cacheType);
+        evictionManager->Evict(needSize);
         evictPoint.Record();
         return true;
     }
@@ -3566,10 +3539,9 @@ bool CheckAndTriggerEviction(const std::string &keyInfo, uint64_t needSize,
 }  // namespace
 
 bool EvictWhenMemoryExceedThrehold(const std::string &keyInfo, uint64_t needSize,
-                                   const std::shared_ptr<WorkerOcEvictionManager> &evictionManager, ServiceType type,
-                                   CacheType cacheType)
+                                   const std::shared_ptr<WorkerOcEvictionManager> &evictionManager, ServiceType type)
 {
-    return CheckAndTriggerEviction(keyInfo, needSize, evictionManager, { type, cacheType, false });
+    return CheckAndTriggerEviction(keyInfo, needSize, evictionManager, { type, false });
 }
 
 bool EvictWhenMemoryExceedPretriggerWatermark(const std::shared_ptr<WorkerOcEvictionManager> &evictionManager)
@@ -3580,7 +3552,7 @@ bool EvictWhenMemoryExceedPretriggerWatermark(const std::shared_ptr<WorkerOcEvic
             << "eviction_pretrigger_margin_mb is deprecated and ignored; the patrol auto-reserves the "
                "average cached object size. Remove the key from worker config.";
     }
-    return CheckAndTriggerEviction("", 0, evictionManager, { ServiceType::OBJECT, CacheType::MEMORY, true });
+    return CheckAndTriggerEviction("", 0, evictionManager, { ServiceType::OBJECT, true });
 }
 
 }  // namespace object_cache

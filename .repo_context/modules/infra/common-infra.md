@@ -55,7 +55,7 @@
 | Subdomain               | Verified role                                                                    | Build facts                                                                          |
 | ----------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | `rpc`                   | RPC plumbing plus code generation plugins and ZMQ-based transport implementation | builds rpc plugins, `common_rpc_zmq`, `common_rpc_zmq_client`, `rpc_stub_cache_mgr`  |
-| `shared_memory`         | shared-memory allocator, arena, mmap abstractions, shared-disk detection         | builds `common_shared_memory` and `common_shm_unit_info`                             |
+| `shared_memory`         | shared-memory allocator, arena, mmap abstractions                                 | builds `common_shared_memory` and `common_shm_unit_info`                             |
 | `memory`                | reusable process-memory diagnostics                                               | builds `jemalloc_stats_bvar`; roles link and own it explicitly                       |
 | `kvstore`               | metadata/backend storage families                                                | split into `etcd`, `metastore`, `rocksdb`                                            |
 | `log`                   | logging, access recording, tracing, failure handling                             | builds `common_log`                                                                  |

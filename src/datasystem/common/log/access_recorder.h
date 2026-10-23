@@ -100,7 +100,6 @@ struct RequestParam {
     std::string subTimeout;
     std::string timeout;
     std::string outReq;
-    std::string cacheType;
     std::string remoteClientId;
     std::string transportType;
     std::string latencySummary;
@@ -229,7 +228,6 @@ struct ObjectAccessState {
     FieldEntry existence;
     FieldEntry subTimeout;
     FieldEntry timeout;
-    FieldEntry cacheType;
     int code = static_cast<int>(StatusCode::K_OK);
     std::string respMsg;
     DataSizeState dataSize;
@@ -394,7 +392,6 @@ public:
     ObjectAccessRecorder &Existence(int existence);
     ObjectAccessRecorder &SubTimeoutMs(uint64_t timeoutMs);
     ObjectAccessRecorder &TimeoutMs(uint64_t timeoutMs);
-    ObjectAccessRecorder &CacheType(int cacheType);
     ObjectAccessRecorder &RemoteClientId(std::string_view remoteClientId);
     ObjectAccessRecorder &TransportType(std::string_view transportType);
     ObjectAccessRecorder &TransportTypeOwned(std::string transportType);

@@ -138,7 +138,7 @@ Status TcpTransporter::CreateBuffer(const HostPort &workerAddr, const std::strin
     info->dataSize = size;
     info->metadataSize = 0;
     info->workerAddr = workerAddr;
-    info->objectMode = ModeInfo(param.consistencyType, param.writeMode, param.cacheType);
+    info->objectMode = ModeInfo(param.consistencyType, param.writeMode);
     info->ubDataSentByMemoryCopy = false;
     // ObjectBuffer owns and validates the plain TCP allocation.
     info->pointer = nullptr;

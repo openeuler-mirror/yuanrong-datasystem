@@ -97,7 +97,7 @@ TEST_F(KVClientWorkerWorkerBatchGetTest, LEVEL1_SameKeyMSetNxConcurrentlyAcrossW
                     values.emplace_back(rawVals[0]);
                     std::vector<std::string> failedKeys;
                     MSetParam msetParam{ .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0,
-                                         .existence = ExistenceOpt::NX, .cacheType = CacheType::MEMORY };
+                                         .existence = ExistenceOpt::NX };
                     Status msetStatus = client->MSet(keys, values, failedKeys, msetParam);
                     if (!msetStatus.IsOk()) {
                         LOG(ERROR) << "MSet NX failed. workerIdx=" << workerIdx << ", threadIdx=" << threadIdx

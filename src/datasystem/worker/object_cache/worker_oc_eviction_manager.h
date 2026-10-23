@@ -169,12 +169,11 @@ public:
     /**
      * @brief Trigger asynchronous eviction task.
      * @param[in] needSize The need size.
-     * @param[in] cacheType The type of cache.
      * @param[in] forceEvict Bypass the low-water-mark gate. Only allowed for extent-unavailable OOM
      *            (memory::IsExtentUnavailableOom), where contiguous space is exhausted while usage stays
      *            below the water mark; eviction then continues until needSize bytes are freed.
      */
-    void Evict(uint64_t needSize = 0, CacheType cacheType = CacheType::MEMORY, bool forceEvict = false);
+    void Evict(uint64_t needSize = 0, bool forceEvict = false);
 
     /**
      * @brief Estimates the pre-trigger margin: the average cached object size (>= 1 MiB).
@@ -380,9 +379,9 @@ public:
     bool IsObjectBeingRebalanced(const std::string &objectKey) const;
 
 #ifdef WITH_TESTS
-    void EvictionTaskForTest(uint64_t needSize, CacheType cacheType = CacheType::MEMORY, bool forceEvict = false)
+    void EvictionTaskForTest(uint64_t needSize, bool forceEvict = false)
     {
-        EvictionTask(needSize, cacheType, forceEvict);
+        EvictionTask(needSize, forceEvict);
     }
 
     Status EvictDeleteObjectForTest(ObjectKV &objectKV)
@@ -525,7 +524,6 @@ private:
     struct PrimaryEndLifeTask {
         std::string objectKey;
         uint64_t version;
-        CacheType cacheType;
         uint64_t needSize{ 0 };
         // True when the task came from force eviction for an extent-unavailable OOM: below the low
         // water mark it must still be processed (see PreparePrimaryEndLifeCandidates), otherwise the
@@ -638,7 +636,6 @@ private:
         uint64_t forceEvictedSize = 0;
         uint64_t forceSyncFreedSize = 0;
         uint64_t forceEndLifeAcceptedSize = 0;
-        CacheType cacheType = CacheType::MEMORY;
     };
 
     struct PolicyRoute {
@@ -771,7 +768,7 @@ private:
      * @return Status of the call.
      */
     Status EvictObject(ObjectKV &objectKV, Action nextAction, EvictDeletedObjects *deletedObjects = nullptr,
-                       CacheType cacheType = CacheType::MEMORY, uint64_t needSize = 0,
+                       uint64_t needSize = 0,
                        const EvictionCandidate *candidate = nullptr, bool forceEvict = false);
 
     /**
@@ -785,17 +782,16 @@ private:
      */
     Status TryEvictObject(std::shared_ptr<SafeObjType> &entry, std::unique_ptr<EvictionTrace> trace,
                           size_t &pendingSpillSize, std::unordered_map<std::string, SpillTask> &spillTasks,
-                          bool &locked, const EvictionCandidate &candidate, CacheType cacheType = CacheType::MEMORY,
+                          bool &locked, const EvictionCandidate &candidate,
                           EvictDeletedObjects *deletedObjects = nullptr, uint64_t needSize = 0,
                           bool forceEvict = false);
 
     /**
      * @brief Eviction task, asynchronous.
      * @param[in] needSize The need size.
-     * @param[in] cacheType The type of cache.
      * @param[in] forceEvict Evict even below the low water mark until needSize bytes are freed.
      */
-    void EvictionTask(uint64_t needSize, CacheType cacheType = CacheType::MEMORY, bool forceEvict = false);
+    void EvictionTask(uint64_t needSize, bool forceEvict = false);
 
     /**
      * @brief Run the eviction candidate loop until the water mark gate or the force target is met.
@@ -811,7 +807,7 @@ private:
     void ResolveSpillFutures(EvictionLoopState &st, bool blocking);
 
     /**
-     * @brief Merge the pending force need of st.cacheType into a task that is certain to run.
+     * @brief Merge the pending force need into a task that is certain to run.
      *
      * Called after the phase gate: a task that returns early must not consume the slot, otherwise the
      * need would be dropped with its stack frame.
@@ -867,7 +863,7 @@ private:
      * @param[in] pendingSpillSize The pending spill size in bytes.
      * @return True if now is above low water mark.
      */
-    bool IsAboveLowWaterMark(uint64_t needSize, size_t pendingSpillSize, CacheType cacheType);
+    bool IsAboveLowWaterMark(uint64_t needSize, size_t pendingSpillSize);
 
     /**
      * @brief Get the next action in eviction task for an object.
@@ -883,28 +879,24 @@ private:
     /**
      * @brief Submit a primary-copy END_LIFE object to the async primary end-life lane.
      * @param[in] objectKV The object selected by the memory eviction loop.
-     * @param[in] cacheType The cache type being evicted.
      * @param[in] needSize The foreground memory demand that triggered this eviction round.
      * @param[out] accepted Whether this object is newly accepted into the pending set.
      * @param[in] forceEvict True when submitted by force eviction; the task then bypasses the
      *            drain lane's low-water skip so it completes instead of requeueing forever.
      * @return Status of the submit operation.
      */
-    Status SubmitPrimaryEndLifeTask(const ObjectKV &objectKV, CacheType cacheType, uint64_t needSize, bool &accepted,
+    Status SubmitPrimaryEndLifeTask(const ObjectKV &objectKV, uint64_t needSize, bool &accepted,
                                     const EvictionCandidate *candidate, bool forceEvict = false);
 
     /**
-     * @brief Record a force-eviction need that lost the single-flight race, keyed by cache type.
-     *
-     * Merging is per cache type because each type is its own water mark domain: one shared slot
-     * would let a larger need of one type hide a smaller need of another and drop it silently.
+     * @brief Record a force-eviction need that lost the single-flight race.
      */
-    void MergePendingForceNeed(uint64_t needSize, CacheType cacheType);
+    void MergePendingForceNeed(uint64_t needSize);
 
     /**
-     * @brief Take one still-fresh pending force need of any cache type.
+     * @brief Take one still-fresh pending force need.
      */
-    bool TakeAnyPendingForceNeed(uint64_t &needSize, CacheType &cacheType);
+    bool TakeAnyPendingForceNeed(uint64_t &needSize);
 
     static bool IsPendingForceNeedExpired(uint64_t arrivalMs, uint64_t nowMs);
 
@@ -926,7 +918,7 @@ private:
      * very memory pressure this path exists for. The caller has already claimed isDone_, so leaving
      * it false on the way out would disable eviction for the rest of this manager's lifetime.
      */
-    void SubmitEvictionTask(uint64_t needSize, CacheType cacheType, bool forceEvict);
+    void SubmitEvictionTask(uint64_t needSize, bool forceEvict);
 
     Status StartPrimaryEndLifeWorkers();
 
@@ -1130,11 +1122,10 @@ private:
 
     /**
      * @brief Compute how many bytes this lane may additionally release before reaching the low watermark.
-     * @param[in] cacheType The cache type being evicted.
      * @param[in] needSize The foreground memory demand that triggered this eviction round.
      * @return The remaining release budget in bytes.
      */
-    uint64_t GetPrimaryEndLifeReleaseBudget(CacheType cacheType, uint64_t needSize);
+    uint64_t GetPrimaryEndLifeReleaseBudget(uint64_t needSize);
 
     /**
      * @brief Delete all-copy metadata for validated primary end-life candidates on one master.
@@ -1400,10 +1391,9 @@ private:
 
     /**
      * @brief Calculates the low water mark for shared memory dynamically.
-     * @param[in] cacheType The type of cache.
      * @return the low water mark based on the available shared memory.
      */
-    uint64_t GetLowWaterMark(CacheType cacheType = CacheType::MEMORY);
+    uint64_t GetLowWaterMark();
 
     EvictionList::HeatNodeMetadata ResolveHeatNodeMetadata(const std::string &objectKey) const;
     Status CollectCopyWatermarkStats(CopyWatermarkStats &stats, bool collectCounterDistribution = true);
@@ -1461,15 +1451,14 @@ private:
     HostPort masterAddress_;
     std::atomic<bool> isDone_;
     // Force-eviction needs that arrived while another task held the isDone_ single-flight slot.
-    // Guarded by pendingForceMutex_. A task merges the need of its own cache type at entry; needs
-    // arriving mid-task (e.g. while it blocks draining spill futures) are resubmitted from its exit
-    // hook. Keyed by CacheType because each type is an independent water mark domain.
+    // Guarded by pendingForceMutex_. A task merges the need at entry; needs arriving mid-task
+    // (e.g. while it blocks draining spill futures) are resubmitted from its exit hook.
     struct PendingForceNeed {
         uint64_t needSize = 0;
         uint64_t arrivalMs = 0;
     };
     std::mutex pendingForceMutex_;
-    std::unordered_map<CacheType, PendingForceNeed> pendingForceNeeds_;
+    std::optional<PendingForceNeed> pendingForceNeed_;
     master::MasterOCServiceImpl *masterOc_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     const worker::MetadataRouteResolver &metadataRoute_;
@@ -1503,12 +1492,11 @@ private:
  * @param[in] needSize The size need to allocate.
  * @param[in] evictionManager The class of eviction process.
  * @param[in] type The service type.
- * @param[in] cacheType The type of cache.
  * @return True if eviction is triggered.
  */
 bool EvictWhenMemoryExceedThrehold(const std::string &keyInfo, uint64_t needSize,
                                    const std::shared_ptr<WorkerOcEvictionManager> &evictionManager,
-                                   ServiceType type = ServiceType::OBJECT, CacheType cacheType = CacheType::MEMORY);
+                                   ServiceType type = ServiceType::OBJECT);
 
 /**
  * @brief Try to evict object memory using the background pretrigger watermark.

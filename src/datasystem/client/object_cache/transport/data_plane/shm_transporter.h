@@ -441,7 +441,7 @@ private:
             info->dataSize = size;
             info->metadataSize = 0;  // SHM payload-only path: metadata sent inline with data
             info->workerAddr = workerAddr;
-            info->objectMode = ModeInfo(param.consistencyType, param.writeMode, param.cacheType);
+            info->objectMode = ModeInfo(param.consistencyType, param.writeMode);
             info->pointer = nullptr;  // local payload buffer, allocated by ObjectBuffer::Init
             // Do not carry the worker shm_id: this is a pure inline-payload (TCP) buffer with no shm region
             // on the worker side. Sending both payload + shm_id would risk the worker dual-path attaching
@@ -465,7 +465,7 @@ private:
             auto info = std::make_shared<ObjectBufferInfo>();
             info->objectKey = key;
             info->workerAddr = workerAddr;
-            info->objectMode = ModeInfo(param.consistencyType, param.writeMode, param.cacheType);
+            info->objectMode = ModeInfo(param.consistencyType, param.writeMode);
             info->version = workerVersion;
             RETURN_IF_NOT_OK(session->MmapWriteRegion(createRsp, param.requestContext, size, *info));
             return ObjectBufferInternal::Create(std::move(info), buffer);

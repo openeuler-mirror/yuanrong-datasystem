@@ -58,7 +58,7 @@
   - schedule thread 每 10 秒巡检 object/stream 水位；
   - spill 写入前发现 spill 空间超过高水位。
 - Typical deployment or runtime environment:
-  - 单 worker 或多 worker 集群，可能启用本地 spill、远端 memory spill、L2 cache 或 shared disk/slot。
+  - 单 worker 或多 worker 集群，可能启用本地 spill、远端 memory spill、L2 cache 或 slot。
 - Expected user or operator experience:
   - 前台请求在压力下仍尽可能通过后台释放空间继续执行；
   - eviction 慢时应能从日志、perf point、trace 和测试入口定位到 master RPC、spill I/O、对象锁或候选队列。
@@ -297,9 +297,6 @@ Failure-sensitive steps:
 | Condition | Action | Current effect |
 | --- | --- | --- |
 | not primary copy | `DELETE` | 删除本地 copy，异步 `RemoveMeta` |
-| `CacheType::DISK` and has L2 | `DELETE` | 删除本地 copy，异步 `RemoveMeta` |
-| `CacheType::DISK` and `NONE_L2_CACHE_EVICT` | `END_LIFE` | memory eviction 主 loop 投递 primary lane；spill fallback 仍同步 `DeleteAllCopyMeta` |
-| `CacheType::DISK` without L2 and not evict type | `RETAIN` | 保留 |
 | already spilled | `FREE_MEMORY` | 释放 shm |
 | remote spill enabled and peer memory enough | `MIGRATE` | batch 远端迁移 |
 | local spill enabled and spill not too full | `SPILL` | 异步本地 spill |

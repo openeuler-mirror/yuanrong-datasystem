@@ -76,11 +76,6 @@ PybindDefineRegisterer g_pybind_define_f_Client("ObjectClient", PRIORITY_LOW, []
         .value("CAUSAL", ConsistencyType::CAUSAL)
         .export_values();
 
-    py::enum_<CacheType>(*m, "CacheType")
-        .value("MEMORY", CacheType::MEMORY)
-        .value("DISK", CacheType::DISK)
-        .export_values();
-
     py::enum_<DataType>(*m, "DataType")
         .value("DATA_TYPE_INT8", DataType::DATA_TYPE_INT8)
         .value("DATA_TYPE_INT16", DataType::DATA_TYPE_INT16)

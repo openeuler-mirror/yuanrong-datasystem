@@ -58,8 +58,7 @@ Status ValidateMSetRequest(const std::vector<std::shared_ptr<ObjectBuffer>> &buf
         CHECK_FAIL_RETURN_STATUS(info.workerAddr == first->workerAddr, K_INVALID,
                                  "MSet buffers must target the same worker");
         CHECK_FAIL_RETURN_STATUS(info.objectMode.GetWriteMode() == first->objectMode.GetWriteMode()
-                                     && info.objectMode.GetConsistencyType() == first->objectMode.GetConsistencyType()
-                                     && info.objectMode.GetCacheType() == first->objectMode.GetCacheType(),
+                                     && info.objectMode.GetConsistencyType() == first->objectMode.GetConsistencyType(),
                                  K_INVALID, "MSet buffers must use the same object mode");
     }
     return Status::OK();
@@ -167,7 +166,6 @@ Status BuildMultiPublishRequest(const std::vector<std::shared_ptr<ObjectBuffer>>
     const auto &first = ObjectBufferInternal::GetInfo(*buffers.front());
     request.set_write_mode(static_cast<uint32_t>(first.objectMode.GetWriteMode()));
     request.set_consistency_type(static_cast<uint32_t>(first.objectMode.GetConsistencyType()));
-    request.set_cache_type(static_cast<uint32_t>(first.objectMode.GetCacheType()));
     request.mutable_object_info()->Reserve(static_cast<int>(buffers.size()));
     payloads.reserve(buffers.size());
 

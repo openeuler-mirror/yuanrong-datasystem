@@ -2019,7 +2019,6 @@ Status ObjectClientImpl::DeviceDataCreate(const std::vector<std::string> &object
 
     FullParam param;
     param.writeMode = setParam.writeMode;
-    param.cacheType = setParam.cacheType;
     std::vector<size_t> dataSizeList;
     dataSizeList.reserve(objectKeys.size());
     const auto expectedDeviceIdx = devBlobList.front().deviceIdx;
@@ -2417,7 +2416,6 @@ Status ObjectClientImpl::ReplayRoutedBuffer(const std::shared_ptr<ObjectBufferIn
     CHECK_FAIL_RETURN_STATUS(bufferInfo->pointer != nullptr, K_RUNTIME_ERROR,
                              "Routed buffer has no payload for ScaleIn replay");
     FullParam param;
-    param.cacheType = bufferInfo->objectMode.GetCacheType();
     param.consistencyType = bufferInfo->objectMode.GetConsistencyType();
     param.writeMode = bufferInfo->objectMode.GetWriteMode();
     param.ttlSecond = bufferInfo->ttlSecond;
@@ -2708,7 +2706,6 @@ Status ObjectClientImpl::ExecuteCreateFlow(const std::string &objectKey, uint64_
         RETURN_IF_NOT_OK(SelectSetRoute(objectKey, excludedWorkers, routeContext, preferredWorkers));
         client::TransportCreateParam createParam;
         createParam.requestContext = BuildTransportRequestContext(routeContext);
-        createParam.cacheType = param.cacheType;
         createParam.consistencyType = param.consistencyType;
         createParam.writeMode = param.writeMode;
         createParam.subTimeoutMs = requestTimeoutMs_;
@@ -4080,7 +4077,6 @@ Status ObjectClientImpl::Set(const std::string &key, const StringView &val, cons
     FullParam param;
     param.writeMode = setParam.writeMode;
     param.consistencyType = ConsistencyType::CAUSAL;
-    param.cacheType = setParam.cacheType;
     return Put(key, reinterpret_cast<const uint8_t *>(val.data()), val.size(), param, {}, setParam.ttlSecond,
                static_cast<int>(setParam.existence), requestTimeoutMs);
 }

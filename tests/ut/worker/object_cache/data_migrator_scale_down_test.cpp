@@ -207,7 +207,6 @@ public:
                     ++state.probeCalls;
                     rsp.set_available_ratio(probeRatio);
                     rsp.set_remain_bytes(1UL << 30);
-                    rsp.set_disk_remain_bytes(1UL << 30);
                     rsp.set_limit_rate(1UL << 26);
                     rsp.set_scale_down_state(MigrateDataRspPb::NONE);
                     return Status::OK();

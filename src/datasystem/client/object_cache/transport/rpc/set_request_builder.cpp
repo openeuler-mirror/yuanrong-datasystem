@@ -50,7 +50,6 @@ Status BuildCreateRequest(const std::string &key, uint64_t size, const Transport
     request.set_data_size(size);
     request.set_token(param.requestContext.token);
     request.set_tenant_id(param.requestContext.tenantId);
-    request.set_cache_type(static_cast<uint32_t>(param.cacheType));
     request.set_request_timeout(TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()));
     request.set_is_routed(true);
     request.set_allocation_id(param.allocationId);
@@ -90,7 +89,6 @@ Status BuildSetRequest(const ObjectBufferInfo &info, const TransportSetParam &pa
     request.set_data_size(info.dataSize);
     request.set_write_mode(static_cast<uint32_t>(info.objectMode.GetWriteMode()));
     request.set_consistency_type(static_cast<uint32_t>(info.objectMode.GetConsistencyType()));
-    request.set_cache_type(static_cast<uint32_t>(info.objectMode.GetCacheType()));
     request.set_shm_id(info.shmId);
     request.set_keep(param.keep);
     request.set_is_retry(param.isRetry);

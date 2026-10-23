@@ -28,7 +28,6 @@ C++
    struct-ObjMetaInfo
    enum-WriteMode
    enum-ConsistencyType
-   enum-CacheType
    enum-StreamMode
    enum-SubscriptionType
    SensitiveValue

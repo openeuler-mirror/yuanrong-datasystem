@@ -193,13 +193,6 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "oc_client_allocate_disk_test",
-    srcs = ["oc_client_allocate_disk_test.cpp"],
-    tags = ["manual"],
-    deps = OC_CLIENT_COMMON_DEPS,
-)
-
-ds_cc_test(
     name = "oc_client_dist_master_test",
     srcs = ["oc_client_dist_master_test.cpp"],
     tags = ["manual"],

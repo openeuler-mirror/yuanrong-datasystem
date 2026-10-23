@@ -223,7 +223,7 @@ bool ShouldForceEvict(const Status &rc)
 
 Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t dataSize, uint64_t metadataSize,
                                bool populate, std::shared_ptr<WorkerOcEvictionManager> evictionManager,
-                               ShmUnit &shmUnit, CacheType cacheType, bool retryOnOOM)
+                               ShmUnit &shmUnit, bool retryOnOOM)
 {
     Timer timer;
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
@@ -232,14 +232,13 @@ Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t data
     uint64_t needSize = dataSize + metadataSize;
     PerfPoint point(PerfKey::WORKER_MEMORY_ALLOCATE);
     if (retryOnOOM) {
-        (void)EvictWhenMemoryExceedThrehold(objectKey, needSize, evictionManager, ServiceType::OBJECT, cacheType);
+        (void)EvictWhenMemoryExceedThrehold(objectKey, needSize, evictionManager, ServiceType::OBJECT);
     }
     // Allocate some memory into this shmUnit
     auto tenantId = TenantAuthManager::ExtractTenantId(objectKey);
     constexpr int maxOomRetries = 13;
     constexpr int64_t maxOomBackoffMs = 2048;
-    Status rc = shmUnit.AllocateMemory(tenantId, needSize, populate, ServiceType::OBJECT,
-                                       static_cast<memory::CacheType>(cacheType));
+    Status rc = shmUnit.AllocateMemory(tenantId, needSize, populate, ServiceType::OBJECT);
     if (rc.GetCode() == K_OUT_OF_MEMORY && retryOnOOM) {
         INJECT_POINT("worker.AllocateMemory.afterOOM");
         for (int retry = 0; retry < maxOomRetries; ++retry) {
@@ -250,7 +249,7 @@ Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t data
                     remainingTime, objectKey, needSize);
                 break;
             }
-            evictionManager->Evict(needSize, cacheType, ShouldForceEvict(rc));
+            evictionManager->Evict(needSize, ShouldForceEvict(rc));
             auto retryBudget = remainingTime - K_MIN_OOM_RETRY_TIMEOUT_MS;
             auto backoff = std::min(maxOomBackoffMs, int64_t{ 1 } << retry);
             auto sleepTime = std::min(retryBudget, backoff);
@@ -261,8 +260,7 @@ Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t data
             VLOG(1) << FormatString("OOM, sleep time: %ld, objectKey: %s, needSize %ld", sleepTime, objectKey,
                                     needSize);
             SleepCurrentFor(std::chrono::milliseconds(sleepTime));
-            rc = shmUnit.AllocateMemory(tenantId, needSize, populate, ServiceType::OBJECT,
-                                        static_cast<memory::CacheType>(cacheType));
+            rc = shmUnit.AllocateMemory(tenantId, needSize, populate, ServiceType::OBJECT);
             if (rc.GetCode() != K_OUT_OF_MEMORY) {
                 break;
             }
@@ -339,7 +337,7 @@ Status AggregateAllocate(
             std::shared_ptr<ShmOwner> shmOwner = std::make_shared<ShmOwner>();
             // All keys in the batch request should belong to the same tenant.
             RETURN_IF_NOT_OK(AllocateMemoryForObject(firstObjectKey, aggregateSize, 0, false, evictionManager,
-                                                     *shmOwner, CacheType::MEMORY, retryOnOOM));
+                                                     *shmOwner, retryOnOOM));
             shmOwners.push_back(shmOwner);
         }
     } else {
@@ -350,12 +348,11 @@ Status AggregateAllocate(
 }
 
 Status AllocateNewShmUnit(const std::string &objectKey, uint64_t dataSize, uint64_t metadataSize, bool populate,
-                          std::shared_ptr<WorkerOcEvictionManager> evictionManager, std::shared_ptr<ShmUnit> &shmUnit,
-                          CacheType cacheType)
+                          std::shared_ptr<WorkerOcEvictionManager> evictionManager, std::shared_ptr<ShmUnit> &shmUnit)
 {
     shmUnit = std::make_shared<ShmUnit>();
     RETURN_IF_NOT_OK(
-        AllocateMemoryForObject(objectKey, dataSize, metadataSize, populate, evictionManager, *shmUnit, cacheType));
+        AllocateMemoryForObject(objectKey, dataSize, metadataSize, populate, evictionManager, *shmUnit));
     shmUnit->id = ShmKey::Intern(GetStringUuid());
     return Status::OK();
 }
@@ -444,7 +441,7 @@ Status SaveBinaryObjectToMemory(ObjectKV &objectKV, const std::vector<RpcMessage
     if (szChanged) {
         auto shmUnit = std::make_shared<ShmUnit>();
         RETURN_IF_NOT_OK(AllocateMemoryForObject(objectKey, payloadSz, metaSz, false, evictionManager, *shmUnit,
-                                                 entry->modeInfo.GetCacheType(), retryOnOOM));
+                                                 retryOnOOM));
         shmUnit->id = ShmKey::Intern(GetStringUuid());
         entry->SetShmUnit(shmUnit);
     }
