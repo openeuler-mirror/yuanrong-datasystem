@@ -193,6 +193,16 @@ public:
     bool CheckObjectInAsyncDeleteWithLock(const std::string &objectKey);
 
     /**
+     * @brief Check whether the object's ttl has expired (still awaiting GC pickup) or its async
+     *        delete is already in-flight. Superset of CheckObjectInAsyncDeleteWithLock: the latter
+     *        only rejects while the delete is in-flight, while this also covers expired-but-not-
+     *        yet-collected keys.
+     * @param[in] objectKey The object key.
+     * @return True if the object should be treated as deleted by existence checks.
+     */
+    bool IsExpiredOrDeleting(const std::string &objectKey);
+
+    /**
      * @brief Get the remaining time of the object and deletes it.
      * @param[in] objectKey The expired object key.
      * @param[out] remainTimeSecond Remaining time of the object. The unit is second.

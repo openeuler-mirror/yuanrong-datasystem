@@ -48,6 +48,7 @@ namespace datasystem {
 enum class ExistenceOpt : int {
     NONE = 0,  // Does not check for existence.
     NX = 1,    // Set if key does not exist; if key exists, return success and keep existing value unchanged.
+               // A key awaiting async ttl deletion counts as not existing; NX recreates it.
 };
 struct SetParam {
     WriteMode writeMode = WriteMode::NONE_L2_CACHE;  // The default value of writeMode is WriteMode::NONE_L2_CACHE.

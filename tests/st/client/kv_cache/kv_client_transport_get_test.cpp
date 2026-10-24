@@ -1985,7 +1985,7 @@ TEST_F(KVClientTransportGetTest, AllKeysFailReturnFirstError)
         std::chrono::steady_clock::now() - start).count();
     const auto code = rc.GetCode();
     ASSERT_TRUE(code == StatusCode::K_RUNTIME_ERROR || code == StatusCode::K_WORKER_PULL_OBJECT_NOT_FOUND
-                || code == StatusCode::K_RPC_DEADLINE_EXCEEDED)
+                || code == StatusCode::K_NOT_FOUND || code == StatusCode::K_RPC_DEADLINE_EXCEEDED)
         << "unexpected status: " << rc.ToString() << ", transport: " << AccessTransportTracker::ToString()
         << ", elapsedMs: " << elapsedMs << ", buffers: " << buffers.size() << "/" << keys.size();
     ASSERT_EQ(buffers.size(), keys.size());
@@ -2291,7 +2291,7 @@ TEST_F(KVClientTransportGetTest, DirectBatchGetAllUnavailableReturnsFirstInputEr
         std::chrono::steady_clock::now() - start).count();
     const auto code = rc.GetCode();
     ASSERT_TRUE(code == StatusCode::K_RUNTIME_ERROR || code == StatusCode::K_WORKER_PULL_OBJECT_NOT_FOUND
-                || code == StatusCode::K_RPC_DEADLINE_EXCEEDED)
+                || code == StatusCode::K_NOT_FOUND || code == StatusCode::K_RPC_DEADLINE_EXCEEDED)
         << "unexpected status: " << rc.ToString() << ", transport: " << AccessTransportTracker::ToString()
         << ", elapsedMs: " << elapsedMs << ", buffers: " << buffers.size() << "/" << keys.size();
     ASSERT_EQ(buffers.size(), keys.size());

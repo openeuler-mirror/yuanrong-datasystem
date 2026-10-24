@@ -526,5 +526,16 @@ bool ExpiredObjectManager::CheckObjectInAsyncDeleteWithLock(const std::string &o
     std::lock_guard<bthread::Mutex> lock(shard.mutex);
     return shard.readyExpiredObjects.count(objectKey) > 0;
 }
+
+bool ExpiredObjectManager::IsExpiredOrDeleting(const std::string &objectKey)
+{
+    auto &shard = shards_[GetShardIndex(objectKey)];
+    std::lock_guard<bthread::Mutex> lock(shard.mutex);
+    auto iter = shard.obj2Timed.find(objectKey);
+    if (iter != shard.obj2Timed.end()) {
+        return iter->second->first <= static_cast<uint64_t>(GetSystemClockTimeStampUs());
+    }
+    return shard.readyExpiredObjects.count(objectKey) > 0;
+}
 }  // namespace master
 }  // namespace datasystem

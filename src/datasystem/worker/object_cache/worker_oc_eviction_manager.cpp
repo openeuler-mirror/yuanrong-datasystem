@@ -865,6 +865,7 @@ Status WorkerOcEvictionManager::RemoveMetaFromMasterForEviction(EvictDeletedObje
 {
     RETURN_OK_IF_TRUE(objectKeyVersions.empty());
     VLOG(DEBUG_LOG_LEVEL) << "RemoveMetaFromMasterForEviction start. Object count: " << objectKeyVersions.size();
+    INJECT_POINT_NO_RETURN("WorkerOcEvictionManager.RemoveMetaFromMasterForEviction.beforeSend");
     EvictDeletedObjects failedObjects;
     Status lastRc;
     std::vector<std::string> objectKeys;

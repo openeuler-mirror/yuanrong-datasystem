@@ -9674,6 +9674,28 @@ TEST(ReplicaReaderTest, StopsOnNotFoundWithoutTryingNextLocation)
     EXPECT_EQ(manager->transportBuildCount, 1);
 }
 
+TEST(ReplicaReaderTest, AllReplicasNotFoundFastFailsAsDeleted)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterGetStatuses = { { Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "missing") },
+                                        { Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "missing") } };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
+    master::ObjectLocationInfoPb location;
+    location.set_object_key("key");
+    location.set_object_size(4);
+    location.add_object_locations(MakeAddress(31).ToString());
+    location.add_object_locations(MakeAddress(32).ToString());
+    ObjectReadItemResult result;
+
+    Status rc = reader.Read(location, result, MakeReadContext());
+
+    EXPECT_EQ(rc.GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(rc.GetMsg(), "Object not found on any replica");
+    EXPECT_EQ(manager->transportBuildCount, 2);
+}
+
 TEST(ReplicaReaderTest, StartsAnotherRoundWithoutRefreshingMetadata)
 {
     ApiDeadlineGuard deadline(1000);
@@ -10076,6 +10098,106 @@ TEST(ReplicaReaderTest, BatchNotFoundTerminatesWithoutTryingNextReplica)
     EXPECT_EQ(manager->transportBuildCount, 1);
     EXPECT_EQ(reader.backoffCount, 0);
     ExpectMetricAbsent("client_direct_batch_get_replica_retry_total");
+}
+
+TEST(ReplicaReaderTest, BatchAllReplicasNotFoundFastFailsAsDeleted)
+{
+    InitBatchGetMetrics();
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [](const HostPort &address, FakeTransporter &transporter) {
+        (void)address;
+        transporter.getStatuses = { Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "missing") };
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ControlledReplicaReader reader(executor, std::make_shared<ThreadPool>(1));
+    auto location = MakeReplicaLocation("key", 1, { MakeAddress(61), MakeAddress(62) });
+    ObjectReadItemResult result;
+
+    EXPECT_EQ(reader.ReadBatch({ MakeReplicaReadRequest(&location, &result) }).GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(result.status.GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(result.status.GetMsg(), "Object not found on any replica");
+    EXPECT_EQ(manager->transportBuildCount, 2);
+    EXPECT_EQ(reader.backoffCount, 0);
+}
+
+TEST(ReplicaReaderTest, BatchMixedErrorsDoNotFastFailAsDeleted)
+{
+    // A trailing not-found must not turn transient failures of earlier replicas into "deleted".
+    InitBatchGetMetrics();
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [](const HostPort &address, FakeTransporter &transporter) {
+        if (address.ToString() == MakeAddress(63).ToString()) {
+            transporter.getStatuses = { Status(K_OUT_OF_MEMORY, "oom") };
+        } else {
+            transporter.getStatuses = { Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "missing") };
+        }
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ControlledReplicaReader reader(executor, std::make_shared<ThreadPool>(1));
+    reader.backoffStatus = Status(K_OUT_OF_MEMORY, "budget exhausted");
+    auto location = MakeReplicaLocation("key", 1, { MakeAddress(63), MakeAddress(64) });
+    ObjectReadItemResult result;
+
+    EXPECT_EQ(reader.ReadBatch({ MakeReplicaReadRequest(&location, &result) }).GetCode(), K_OUT_OF_MEMORY);
+    EXPECT_EQ(result.status.GetCode(), K_OUT_OF_MEMORY);
+    EXPECT_EQ(reader.backoffCount, 1);
+    EXPECT_EQ(manager->transportBuildCount, 2);
+}
+
+TEST(ReplicaReaderTest, BatchMixedErrorsAreOrderIndependent)
+{
+    // Same mixed failures as BatchMixedErrorsDoNotFastFailAsDeleted with the reversed location
+    // order: the final status must not depend on which replica answered last.
+    InitBatchGetMetrics();
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [](const HostPort &address, FakeTransporter &transporter) {
+        if (address.ToString() == MakeAddress(65).ToString()) {
+            transporter.getStatuses = { Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "missing") };
+        } else {
+            transporter.getStatuses = { Status(K_OUT_OF_MEMORY, "oom") };
+        }
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ControlledReplicaReader reader(executor, std::make_shared<ThreadPool>(1));
+    reader.backoffStatus = Status(K_OUT_OF_MEMORY, "budget exhausted");
+    auto location = MakeReplicaLocation("key", 1, { MakeAddress(65), MakeAddress(66) });
+    ObjectReadItemResult result;
+
+    EXPECT_EQ(reader.ReadBatch({ MakeReplicaReadRequest(&location, &result) }).GetCode(), K_OUT_OF_MEMORY);
+    EXPECT_EQ(result.status.GetCode(), K_OUT_OF_MEMORY);
+    EXPECT_EQ(reader.backoffCount, 1);
+    EXPECT_EQ(manager->transportBuildCount, 2);
+}
+
+TEST(ReplicaReaderTest, BatchNotFoundCountsResetPerRound)
+{
+    // Round 1 mixes an oom with a not-found and must retry; round 2 answers not-found from every
+    // replica and only then fast-fails as deleted.
+    InitBatchGetMetrics();
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [](const HostPort &address, FakeTransporter &transporter) {
+        if (address.ToString() == MakeAddress(67).ToString()) {
+            transporter.getStatuses = { Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "missing"),
+                                        Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "missing") };
+        } else {
+            transporter.getStatuses = { Status(K_OUT_OF_MEMORY, "oom"),
+                                        Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "missing") };
+        }
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ControlledReplicaReader reader(executor, std::make_shared<ThreadPool>(1));
+    auto location = MakeReplicaLocation("key", 1, { MakeAddress(67), MakeAddress(68) });
+    ObjectReadItemResult result;
+
+    EXPECT_EQ(reader.ReadBatch({ MakeReplicaReadRequest(&location, &result) }).GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(result.status.GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(result.status.GetMsg(), "Object not found on any replica");
+    EXPECT_EQ(reader.backoffCount, 1);
+    EXPECT_EQ(manager->transportBuildCount, 2);
 }
 
 TEST(ReplicaReaderTest, BatchStaleTransportSnapshotAdvancesReplica)

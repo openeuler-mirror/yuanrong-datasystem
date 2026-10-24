@@ -718,6 +718,12 @@ Status OCMetadataManager::CheckExistenceOpt(const ObjectMeta &meta, const std::s
         meta.locations.empty() && WriteMode(meta.meta.config().write_mode()) == WriteMode::NONE_L2_CACHE;
     if (!firstOne && existence == ExistenceOptPb::NX && !noL2CacheAndNoCopy) {
         if (meta.multiSetState == IDLE) {
+            // A key pending async ttl deletion (evict end-of-life / expiry) has no live data anywhere; treat it as
+            // not-exists so NX re-creates. The stale delete task is stripped by this create or skipped later by
+            // the delete version guards.
+            if (expiredObjectManager_->IsExpiredOrDeleting(objectKey)) {
+                return Status::OK();
+            }
             RETURN_STATUS(K_OC_KEY_ALREADY_EXIST, "object[" + objectKey + "] already exist");
         } else {
             RETURN_STATUS(K_TRY_AGAIN, "object[" + objectKey + "] is creating");
@@ -737,6 +743,53 @@ Status OCMetadataManager::StripExpiryTaskAfterChecks(const std::string &objectKe
         (void)metaShards_[GetShardIndex(objectKey)].table.erase(accessor);
     }
     return rc;
+}
+
+Status OCMetadataManager::OverwriteBinaryMeta(const ObjectMetaPb &newMeta, const std::string &address,
+                                              const std::set<ImmutableString> &nestedObjectKeys, int64_t version,
+                                              ObjectMeta &prevMeta)
+{
+    const std::string &objectKey = newMeta.object_key();
+    // Arbitrate with any in-flight async ttl delete before mutating metadata, and keep the old
+    // deadline so a failed update can restore it.
+    bool hadExpiryTask = false;
+    uint64_t oldDeadline = 0;
+    RETURN_IF_NOT_OK(
+        expiredObjectManager_->RemoveObjectIfExistAndGetDeadline(objectKey, hadExpiryTask, oldDeadline));
+
+    // Cache Invalidation Logic.
+    Status s = DoBinaryCacheInvalidationUnlocked(objectKey, prevMeta,
+                                                 { .newAddress = address,
+                                                   .newVersion = version,
+                                                   .newDataSz = newMeta.data_size(),
+                                                   .newLifeState = newMeta.life_state(),
+                                                   .newBlobSizes = newMeta.device_info().blob_sizes() });
+    if (s.IsError()) {
+        // If the cache invalid processing fails, delete the address from the meta. Cleanup failure is
+        // logged only so the ttl rollback below still runs before returning the original error.
+        LOG_IF_ERROR(objectStore_->RemoveObjectLocation(objectKey, address),
+                     "Remove location failed from rocksdb.");
+        (void)prevMeta.locations.erase(address);
+        // The old value is still live after the failed update: restore its original deadline
+        // instead of leaving the entry without ttl cleanup or applying the candidate ttl.
+        if (hadExpiryTask) {
+            expiredObjectManager_->RestoreExpiryTaskIfAbsent(objectKey, oldDeadline);
+        }
+        return s;
+    }
+
+    if (!nestedObjectKeys.empty() && nestedRefManager_->IsNestedKeysDiff(objectKey, nestedObjectKeys)) {
+        Status nestedRc = nestedRefManager_->IncreaseNestedRefCnt(objectKey, nestedObjectKeys);
+        if (nestedRc.IsError()) {
+            // The invalidation already committed, but the failed request must not leave the entry
+            // without ttl cleanup; restore the previous deadline as a bounded lifetime.
+            if (hadExpiryTask) {
+                expiredObjectManager_->RestoreExpiryTaskIfAbsent(objectKey, oldDeadline);
+            }
+            return nestedRc;
+        }
+    }
+    return expiredObjectManager_->InsertObject(objectKey, version, newMeta.ttl_second());
 }
 
 Status OCMetadataManager::CreateMetaForBinaryFormat(const ObjectMetaPb &newMeta, const std::string &address,
@@ -764,27 +817,7 @@ Status OCMetadataManager::CreateMetaForBinaryFormat(const ObjectMetaPb &newMeta,
                                                      .isReplica = newMeta.config().is_replica() };
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
                 CheckBinaryFormatParamMatch(objectKey, prevMeta, newMateDate, nestedObjectKeys), "Check format failed");
-            // Strip the previous expiry task only after the state and format checks passed, so a
-            // rejected create keeps the entry's ttl cleanup registered.
-            RETURN_IF_NOT_OK(StripExpiryTaskAfterChecks(objectKey, accessor, firstOne));
-
-            Status s = DoBinaryCacheInvalidationUnlocked(objectKey, prevMeta,
-                                                         { .newAddress = address,
-                                                           .newVersion = version,
-                                                           .newDataSz = newMeta.data_size(),
-                                                           .newLifeState = newMeta.life_state(),
-                                                           .newBlobSizes = newMeta.device_info().blob_sizes() });
-            if (s.IsError()) {
-                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveObjectLocation(objectKey, address),
-                                                 "Remove location failed from rocksdb.");
-                (void)prevMeta.locations.erase(address);
-            }
-
-            if (!nestedObjectKeys.empty() && nestedRefManager_->IsNestedKeysDiff(objectKey, nestedObjectKeys)) {
-                RETURN_IF_NOT_OK(nestedRefManager_->IncreaseNestedRefCnt(objectKey, nestedObjectKeys));
-            }
-            RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objectKey, version, newMeta.ttl_second()));
-            return s;
+            return OverwriteBinaryMeta(newMeta, address, nestedObjectKeys, version, prevMeta);
         }
         RETURN_IF_NOT_OK(CreateMetaFirstTime(newMeta, address, version, nestedObjectKeys, accessor, metaCache));
     }
@@ -830,6 +863,13 @@ Status OCMetadataManager::UpdateMeta(ObjectMeta &meta, const ObjectMetaPb &newMe
                                              .isReplica = newMeta.config().is_replica() };
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckBinaryFormatParamMatch(objectKey, meta, newMateDate), "Check format failed");
 
+    // Arbitrate with any in-flight async ttl delete before mutating metadata, and keep the old
+    // deadline so a failed update can restore it.
+    bool hadExpiryTask = false;
+    uint64_t oldDeadline = 0;
+    RETURN_IF_NOT_OK(
+        expiredObjectManager_->RemoveObjectIfExistAndGetDeadline(objectKey, hadExpiryTask, oldDeadline));
+
     // Cache Invalidation Logic.
     Status s = DoBinaryCacheInvalidationUnlocked(objectKey, meta,
                                                  { .newAddress = address,
@@ -838,14 +878,19 @@ Status OCMetadataManager::UpdateMeta(ObjectMeta &meta, const ObjectMetaPb &newMe
                                                    .newLifeState = newMeta.life_state(),
                                                    .newBlobSizes = newMeta.device_info().blob_sizes() });
     if (s.IsError()) {
-        // If the cache invalid processing fails, delete the address from the meta.
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveObjectLocation(objectKey, address),
-                                         "Remove location failed from rocksdb.");
+        // If the cache invalid processing fails, delete the address from the meta. Cleanup failure is
+        // logged only so the ttl rollback below still runs before returning the original error.
+        LOG_IF_ERROR(objectStore_->RemoveObjectLocation(objectKey, address),
+                     "Remove location failed from rocksdb.");
         (void)meta.locations.erase(address);
+        // The old value is still live after the failed update: restore its original deadline
+        // instead of leaving the entry without ttl cleanup or applying the candidate ttl.
+        if (hadExpiryTask) {
+            expiredObjectManager_->RestoreExpiryTaskIfAbsent(objectKey, oldDeadline);
+        }
+        return s;
     }
-
-    RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objectKey, version, newMeta.ttl_second()));
-    return s;
+    return expiredObjectManager_->InsertObject(objectKey, version, newMeta.ttl_second());
 }
 
 Status OCMetadataManager::CreateMeta(const std::string &objectKey, ObjectMeta &newMeta, const std::string &address,
@@ -2431,9 +2476,10 @@ Status OCMetadataManager::UpdateMetaByState(const UpdateMetaReqPb &request, Obje
             address, static_cast<int64_t>(response.version()), request.data_size(), request.life_state(), {} });
     if (s.IsError()) {
         LOG(ERROR) << "DoBinaryCacheInvalidationUnlocked failed, status : " << s.ToString();
-        // If the cache invalid processing fails, delete the address from the meta.
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveObjectLocation(objectKey, address),
-                                         "Remove location failed from rocksdb.");
+        // If the cache invalid processing fails, delete the address from the meta. Cleanup failure is
+        // logged only so the ttl rollback below still runs before returning the original error.
+        LOG_IF_ERROR(objectStore_->RemoveObjectLocation(objectKey, address),
+                     "Remove location failed from rocksdb.");
         (void)objectMeta.locations.erase(address);
         // The old value is still live after the failed update: restore its original deadline
         // instead of leaving the entry without ttl cleanup or applying the candidate ttl.
