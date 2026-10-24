@@ -1446,6 +1446,85 @@ TEST_F(WorkerOcServiceImplTest, CreateMetadataMapsDispatchedOwnerPeerDead)
     EXPECT_EQ(api->CreateMetaCallCount(), 1);
 }
 
+TEST_F(WorkerOcServiceImplTest, PublishSetsFirstHopRedirectOnCreateMeta)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const std::string objectKey = "create-metadata-first-hop-redirect";
+    placement_.SetOwner(objectKey, localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    bool firstHopRedirect = false;
+    api->SetCreateMetaHandler([&firstHopRedirect](master::CreateMetaReqPb &req, master::CreateMetaRspPb &) {
+        firstHopRedirect = req.redirect();
+        return Status::OK();
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    auto publish = MakePublishProcessor(apiManager);
+    auto safeObj = MakeMetadataFailureObject(ObjectLifeState::OBJECT_INVALID);
+    ObjectKV objectKV(objectKey, *safeObj);
+    const std::vector<std::string> nestedKeys;
+    const WorkerOcServicePublishImpl::PublishParams params{
+        ObjectLifeState::OBJECT_PUBLISHED, nestedKeys, false, 0, ExistenceOptPb::NONE
+    };
+
+    auto rc = publish->RequestingToMasterCore(objectKV, params);
+
+    EXPECT_EQ(rc, Status::OK());
+    EXPECT_EQ(api->CreateMetaCallCount(), 1);
+    EXPECT_TRUE(firstHopRedirect);
+}
+
+TEST_F(WorkerOcServiceImplTest, PublishRearmsFirstHopRedirectOnRouteRefreshRetry)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const HostPort targetAddress("127.0.0.1", 18483);
+    const std::string objectKey = "create-metadata-rearm-redirect-retry";
+    placement_.SetOwner(objectKey, localAddress_);
+    auto sourceApi = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    std::vector<bool> sourceRedirects;
+    sourceApi->SetCreateMetaHandler([&sourceRedirects, &targetAddress](master::CreateMetaReqPb &req,
+                                                                      master::CreateMetaRspPb &rsp) {
+        sourceRedirects.push_back(req.redirect());
+        if (!req.redirect()) {
+            // Master with redirect=false skips owner validation and creates locally.
+            rsp.set_version(K_META_MOVING_SUCCESS_VERSION);
+            return Status::OK();
+        }
+        rsp.mutable_info()->set_redirect_meta_address(targetAddress.ToString());
+        return Status::OK();
+    });
+    auto targetApi = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    int targetCalls = 0;
+    targetApi->SetCreateMetaHandler([&targetCalls](master::CreateMetaReqPb &req, master::CreateMetaRspPb &rsp) {
+        EXPECT_FALSE(req.redirect());
+        if (++targetCalls == 1) {
+            return Status(K_RPC_UNAVAILABLE, "target master unavailable");
+        }
+        rsp.set_version(K_META_MOVING_SUCCESS_VERSION);
+        return Status::OK();
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(localAddress_, sourceApi);
+    apiManager->SetApi(targetAddress, targetApi);
+    auto publish = MakePublishProcessor(apiManager);
+    auto safeObj = MakeMetadataFailureObject(ObjectLifeState::OBJECT_INVALID);
+    ObjectKV objectKV(objectKey, *safeObj);
+    const std::vector<std::string> nestedKeys;
+    const WorkerOcServicePublishImpl::PublishParams params{
+        ObjectLifeState::OBJECT_PUBLISHED, nestedKeys, false, 0, ExistenceOptPb::NONE
+    };
+
+    auto rc = publish->RequestingToMasterCore(objectKV, params);
+
+    EXPECT_EQ(rc, Status::OK());
+    ASSERT_EQ(sourceRedirects.size(), static_cast<size_t>(2));
+    EXPECT_TRUE(sourceRedirects.front());
+    EXPECT_TRUE(sourceRedirects.back());
+    EXPECT_EQ(targetCalls, 2);
+}
+
 TEST_F(WorkerOcServiceImplTest, CreateMetadataMapsUndispatchedOwnerPeerDead)
 {
     ScopedRequestContext requestContext;

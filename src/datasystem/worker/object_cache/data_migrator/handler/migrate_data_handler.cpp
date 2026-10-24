@@ -19,6 +19,7 @@
  */
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
 
+#include <algorithm>
 #include <chrono>
 #include <thread>
 
@@ -112,17 +113,18 @@ Status MigrateDataHandler::MigrateDataInBatches(std::vector<std::string> &needMi
 {
     RETURN_OK_IF_TRUE(needMigrateDataIds.empty());
     if (!isSlotMigration) {
-        for (auto it = needMigrateDataIds.begin(); it != needMigrateDataIds.end();) {
-            std::shared_ptr<SafeObjType> entry;
-            Status rc = objectTable_->Get(*it, entry);
-            if (rc.IsError() || entry->TryRLock().IsError()) {
-                (void)skipIds_.emplace(*it);
-                it = needMigrateDataIds.erase(it);
-                continue;
-            }
-            entry->RUnlock();
-            ++it;
-        }
+        auto end = std::remove_if(needMigrateDataIds.begin(), needMigrateDataIds.end(),
+            [this](const std::string &objectKey) {
+                std::shared_ptr<SafeObjType> entry;
+                Status rc = objectTable_->Get(objectKey, entry);
+                if (rc.IsError() || entry->TryRLock().IsError()) {
+                    (void)skipIds_.emplace(objectKey);
+                    return true;
+                }
+                entry->RUnlock();
+                return false;
+            });
+        needMigrateDataIds.erase(end, needMigrateDataIds.end());
         RETURN_OK_IF_TRUE(needMigrateDataIds.empty());
     }
     RETURN_IF_NOT_OK(PrepareRemoteMigration(needMigrateDataIds));
