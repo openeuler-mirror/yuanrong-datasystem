@@ -387,6 +387,8 @@ public:
      */
     Status PureQueryMeta(const PureQueryMetaReqPb &req, PureQueryMetaRspPb &rsp) override;
 
+    Status BatchExists(const BatchExistsReqPb &req, BatchExistsRspPb &rsp) override;
+
     /**
      * @brief Check whether worker-local object data is still recorded in master metadata.
      * @param[in] The rpc req protobuf.

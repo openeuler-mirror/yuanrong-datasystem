@@ -23,6 +23,7 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <string_view>
 #include <unordered_set>
 #include <tuple>
 #include <utility>
@@ -49,6 +50,7 @@
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rpc/bthread_utils.h"
 #include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rpc/api_deadline.h"
@@ -3412,18 +3414,136 @@ Status WorkerOcServiceGetImpl::QuerySize(const QuerySizeReqPb &req, QuerySizeRsp
     return Status::OK();
 }
 
-Status WorkerOcServiceGetImpl::QueryExistMetadataViaPureQueryMeta(const std::vector<std::string> &objectKeys,
-                                                                  std::vector<master::QueryMetaInfoPb> &queryMetas)
+Status WorkerOcServiceGetImpl::CollectBatchExistsResults(const master::BatchExistsReqPb &req,
+                                                         const master::BatchExistsRspPb &rsp,
+                                                         std::unordered_set<std::string> &existKeys)
 {
-    std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
-    RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, workerMasterApi));
-    master::PureQueryMetaReqPb req;
+    CHECK_FAIL_RETURN_STATUS(!rsp.meta_is_moving(), K_TRY_AGAIN, "BatchExists metadata is moving");
+    std::vector<bool> exists(req.object_keys_size(), true);
+    int64_t previousIndex = -1;
+    for (auto index : rsp.not_exist_indices()) {
+        CHECK_FAIL_RETURN_STATUS(index < static_cast<uint32_t>(req.object_keys_size()) && index > previousIndex,
+                                 K_INVALID, "Invalid BatchExists missing index");
+        exists[index] = false;
+        previousIndex = index;
+    }
+    std::unordered_set<std::string_view> redirectedKeys;
+    if (!rsp.info().empty()) {
+        std::unordered_set<std::string_view> requestedKeys(req.object_keys().begin(), req.object_keys().end());
+        for (const auto &info : rsp.info()) {
+            CHECK_FAIL_RETURN_STATUS(!info.redirect_meta_address().empty() && !info.change_meta_ids().empty(),
+                                     K_INVALID, "Invalid BatchExists redirect");
+            for (const auto &key : info.change_meta_ids()) {
+                CHECK_FAIL_RETURN_STATUS(requestedKeys.count(key) != 0, K_INVALID,
+                                         "BatchExists redirected an unexpected key");
+                redirectedKeys.emplace(key);
+            }
+        }
+        for (auto index : rsp.not_exist_indices()) {
+            CHECK_FAIL_RETURN_STATUS(redirectedKeys.count(req.object_keys(index)) == 0, K_INVALID,
+                                     "BatchExists key is both missing and redirected");
+        }
+    }
+    for (int index = 0; index < req.object_keys_size(); ++index) {
+        if (exists[index] && redirectedKeys.count(req.object_keys(index)) == 0) {
+            existKeys.emplace(req.object_keys(index));
+        }
+    }
+    return Status::OK();
+}
+
+Status WorkerOcServiceGetImpl::QueryBatchExists(const std::shared_ptr<WorkerMasterOCApi> &api,
+                                                master::BatchExistsReqPb &req, master::BatchExistsRspPb &rsp)
+{
+    std::function<Status(master::BatchExistsReqPb &, master::BatchExistsRspPb &)> query =
+        [&api](master::BatchExistsReqPb &request, master::BatchExistsRspPb &response) {
+            return api->BatchExists(request, response);
+        };
+    return RedirectRetryWhenMetasMoving(req, rsp, query);
+}
+
+Status WorkerOcServiceGetImpl::QueryExistMetadata(const std::vector<std::string> &objectKeys,
+                                                  std::unordered_set<std::string> &existKeys)
+{
+    if (objectKeys.empty()) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(metadataRouteResolver_ != nullptr, K_NOT_READY, "Metadata route resolver is unavailable");
+    PerfPoint groupPoint(PerfKey::WORKER_EXIST_GROUP_OWNERS);
+    auto grouped = metadataRouteResolver_->GroupOwners(objectKeys);
+    groupPoint.Record();
+    if (!grouped.failures.empty()) {
+        return grouped.failures.begin()->second;
+    }
+    std::vector<std::unordered_set<std::string>> results(grouped.groups.size());
+    RETURN_IF_NOT_OK(DispatchExistsGroups(grouped.groups, results));
+    for (auto &result : results) {
+        existKeys.merge(result);
+    }
+    return Status::OK();
+}
+
+Status WorkerOcServiceGetImpl::DispatchExistsGroups(
+    const std::unordered_map<HostPort, std::vector<std::string>> &groups,
+    std::vector<std::unordered_set<std::string>> &results)
+{
+    const auto traceContext = Trace::Instance().GetContext();
+    const auto remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
+    const auto dispatchTime = std::chrono::steady_clock::now();
+    std::vector<Status> statuses(groups.size());
+    std::vector<bthread_t> tasks;
+    tasks.reserve(groups.size());
+    {
+        // Join before any captured group/result storage is released, including submission exceptions.
+        Raii joinTasks([&tasks]() {
+            for (auto task : tasks) {
+                bthread_join(task, nullptr);
+            }
+        });
+        size_t index = 0;
+        for (const auto &group : groups) {
+            auto *groupPtr = &group;
+            auto query = [this, groupPtr, &results, &statuses, index, traceContext, remainingUs, dispatchTime]() {
+                ScopedRequestContext context;
+                TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext, true);
+                auto &status = statuses[index];
+                status = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
+                if (status.IsOk()) {
+                    results[index].reserve(groupPtr->second.size());
+                    status = QueryExistMetadataGroup(groupPtr->first, groupPtr->second, results[index]);
+                }
+            };
+            if (++index == groups.size()) {
+                query();
+            } else {
+                bthread_t task;
+                if (StartBackgroundTask(&task, query) == 0) {
+                    tasks.emplace_back(task);
+                } else {
+                    query();
+                }
+            }
+        }
+    }
+    for (const auto &status : statuses) {
+        RETURN_IF_NOT_OK(status);
+    }
+    return Status::OK();
+}
+
+Status WorkerOcServiceGetImpl::QueryExistMetadataGroup(const HostPort &masterAddress,
+                                                       const std::vector<std::string> &objectKeys,
+                                                       std::unordered_set<std::string> &existKeys)
+{
+    auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddress);
+    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "Get master API failed for BatchExists");
+    master::BatchExistsReqPb req;
     req.set_redirect(true);
-    req.set_address(localAddress_.ToString());
+    req.set_source_worker(localAddress_.ToString());
     req.mutable_object_keys()->Add(objectKeys.begin(), objectKeys.end());
-    master::PureQueryMetaRspPb rsp;
-    RETURN_IF_NOT_OK(workerMasterApi->PureQueryMeta(req, rsp));
-    queryMetas.insert(queryMetas.end(), rsp.mutable_query_metas()->begin(), rsp.mutable_query_metas()->end());
+    master::BatchExistsRspPb rsp;
+    RETURN_IF_NOT_OK(QueryBatchExists(workerMasterApi, req, rsp));
+    RETURN_IF_NOT_OK(CollectBatchExistsResults(req, rsp, existKeys));
     for (const auto &redirectInfo : rsp.info()) {
         HostPort redirectMasterAddr;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(redirectMasterAddr.ParseString(redirectInfo.redirect_meta_address()),
@@ -3432,15 +3552,15 @@ Status WorkerOcServiceGetImpl::QueryExistMetadataViaPureQueryMeta(const std::vec
         CHECK_FAIL_RETURN_STATUS(
             redirectWorkerMasterApi != nullptr, K_RUNTIME_ERROR,
             FormatString("Get redirect master api failed, address: %s", redirectMasterAddr.ToString()));
-        master::PureQueryMetaReqPb redirectReq;
-        master::PureQueryMetaRspPb redirectRsp;
+        master::BatchExistsReqPb redirectReq;
+        master::BatchExistsRspPb redirectRsp;
         redirectReq.set_redirect(false);
-        redirectReq.set_address(localAddress_.ToString());
+        redirectReq.set_source_worker(req.source_worker());
         redirectReq.mutable_object_keys()->Add(redirectInfo.change_meta_ids().begin(),
                                                redirectInfo.change_meta_ids().end());
-        RETURN_IF_NOT_OK(redirectWorkerMasterApi->PureQueryMeta(redirectReq, redirectRsp));
-        queryMetas.insert(queryMetas.end(), redirectRsp.mutable_query_metas()->begin(),
-                          redirectRsp.mutable_query_metas()->end());
+        RETURN_IF_NOT_OK(QueryBatchExists(redirectWorkerMasterApi, redirectReq, redirectRsp));
+        CHECK_FAIL_RETURN_STATUS(redirectRsp.info().empty(), K_TRY_AGAIN, "BatchExists redirect target changed");
+        RETURN_IF_NOT_OK(CollectBatchExistsResults(redirectReq, redirectRsp, existKeys));
     }
     return Status::OK();
 }
@@ -3513,9 +3633,8 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
         if (traceEnabled) {
             Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_EXIST_QUERYMETA_START);
         }
-        std::vector<master::QueryMetaInfoPb> queryMetas;
         INJECT_POINT("worker.before_query_meta");
-        rc = QueryExistMetadataViaPureQueryMeta(nonLocalKeys, queryMetas);
+        rc = QueryExistMetadata(nonLocalKeys, existKeys);
         if (traceEnabled) {
             Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_EXIST_QUERYMETA_END);
         }
@@ -3528,18 +3647,14 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
             }
             return rc;
         }
-        const auto localAddress = localAddress_.ToString();
-        for (const auto &meta : queryMetas) {
-            const bool isLocalPrimaryCopy = meta.single_copy() && meta.meta().primary_address() == localAddress;
-            if (!meta.address().empty() || isLocalPrimaryCopy) {
-                existKeys.emplace(meta.meta().object_key());
-            }
-        }
     }
 
     point.RecordAndReset(PerfKey::WORKER_EXIST_BUILD_RSP);
+    uint64_t existCount = 0;
     for (const auto &key : keys) {
-        rsp.add_exists(existKeys.count(key));
+        const bool exists = existKeys.count(key) != 0;
+        rsp.add_exists(exists);
+        existCount += exists;
     }
 
     if (traceEnabled) {
@@ -3575,7 +3690,7 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
             }
         }
     }
-    access.Result(rc).Record();
+    access.ExistCount(existCount).Result(rc).Record();
     const double totalExistMs = static_cast<double>(totalExistUs) / US_PER_MS;
     GetWorkerTimeCost().Append("Total Exist", totalExistMs);
     SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && totalExistUs >= config.processSlowerThanUs, 1,

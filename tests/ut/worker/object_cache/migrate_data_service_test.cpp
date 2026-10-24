@@ -221,6 +221,7 @@ public:
         }
         return Status(K_RUNTIME_ERROR, "unsupported test master API: PureQueryMeta");
     }
+    RETURN_UNSUPPORTED_MASTER_API(BatchExists, master::BatchExistsReqPb &, master::BatchExistsRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(CheckObjectDataLocation, master::CheckObjectDataLocationReqPb &,
                                   master::CheckObjectDataLocationRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(RollbackMultiMeta, master::RollbackMultiMetaReqPb &,

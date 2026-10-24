@@ -951,6 +951,16 @@ Status MasterOCServiceImpl::PureQueryMeta(const PureQueryMetaReqPb &req, PureQue
     return ocMetadataManager->PureQueryMeta(req, rsp);
 }
 
+Status MasterOCServiceImpl::BatchExists(const BatchExistsReqPb &req, BatchExistsRspPb &rsp)
+{
+    ScopedRequestContext ctx;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
+                                     "GetOcMetadataManager failed");
+    return ocMetadataManager->BatchExists(req, rsp);
+}
+
 Status MasterOCServiceImpl::CheckObjectDataLocation(const CheckObjectDataLocationReqPb &req,
                                                     CheckObjectDataLocationRspPb &rsp)
 {

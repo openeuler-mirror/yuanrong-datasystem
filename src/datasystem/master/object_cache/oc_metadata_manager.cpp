@@ -26,6 +26,7 @@
 #include <shared_mutex>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -61,6 +62,7 @@
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uri.h"
+#include "datasystem/common/util/validator.h"
 #include "datasystem/master/object_cache/master_master_oc_api.h"
 #include "datasystem/master/object_cache/oc_notify_worker_manager.h"
 #include "datasystem/master/object_cache/store/meta_async_queue.h"
@@ -4975,6 +4977,58 @@ Status OCMetadataManager::PureQueryMeta(const PureQueryMetaReqPb &req, PureQuery
             LOG(WARNING) << FormatString("QueryMeta and not found: %s", objectKey);
         }
     }
+    return Status::OK();
+}
+
+bool OCMetadataManager::HasReadableLocation(const std::string &objectKey, const std::string &sourceWorker,
+                                            const ObjectMeta &meta)
+{
+    if (meta.meta.primary_address() == sourceWorker && meta.IsPrimaryWithoutCopy(sourceWorker)) {
+        return true;
+    }
+    for (const auto &location : meta.locations) {
+        if (location.first != sourceWorker && location.second == AckState::ACK
+            && !notifyWorkerManager_->CheckExistAsyncWorkerOp(
+                location.first, objectKey,
+                NotifyWorkerOpType::CACHE_INVALID | NotifyWorkerOpType::PRIMARY_COPY_INVALID)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+Status OCMetadataManager::BatchExists(const BatchExistsReqPb &req, BatchExistsRspPb &rsp)
+{
+    PerfPoint total(PerfKey::MASTER_BATCH_EXISTS);
+    CHECK_FAIL_RETURN_STATUS(!req.source_worker().empty(), K_INVALID, "BatchExists requires a source worker");
+    CHECK_FAIL_RETURN_STATUS(Validator::IsExistBatchSizeUnderLimit(req.object_keys_size()), K_INVALID,
+                             "Invalid BatchExists batch size");
+    PerfPoint point(PerfKey::MASTER_BATCH_EXISTS_REDIRECT);
+    std::vector<std::string> localKeys(req.object_keys().begin(), req.object_keys().end());
+    RETURN_IF_NOT_OK(FillObjectRedirectResponses(rsp, localKeys, req.redirect()));
+    if (rsp.meta_is_moving()) {
+        return Status::OK();
+    }
+    point.RecordAndReset(PerfKey::MASTER_BATCH_EXISTS_LOOKUP);
+    std::unordered_set<std::string_view> redirectedKeys;
+    for (const auto &info : rsp.info()) {
+        for (const auto &key : info.change_meta_ids()) {
+            redirectedKeys.emplace(key);
+        }
+    }
+    for (int index = 0; index < req.object_keys_size(); ++index) {
+        const auto &key = req.object_keys(index);
+        if (redirectedKeys.count(key) != 0) {
+            continue;
+        }
+        TbbMetaTable::const_accessor accessor;
+        auto &shard = metaShards_[GetShardIndex(key)];
+        if (!shard.table.find(accessor, key) || accessor->second.multiSetState == PENDING
+            || !HasReadableLocation(key, req.source_worker(), accessor->second)) {
+            rsp.add_not_exist_indices(index);
+        }
+    }
+    point.Record();
     return Status::OK();
 }
 

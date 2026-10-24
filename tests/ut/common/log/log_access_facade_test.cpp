@@ -141,6 +141,31 @@ TEST_F(LogAccessFacadeTest, ObjectFacadeRecordsRequestCount)
     ASSERT_EQ(GetAccessKeyType(AccessRecorderKey::DS_HETERO_CLIENT_PREREGISTERDEVICEMEMORY), AccessKeyType::CLIENT);
 }
 
+TEST_F(LogAccessFacadeTest, ObjectFacadeRecordsExistCount)
+{
+    RequestParam req;
+    req.count = "3";
+    req.existCount = "2";
+    EXPECT_EQ(req.ToString(), "{count:3,existCount:2}");
+    EnableSampler(0.0, 0.0, 1.0);
+    {
+        TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
+        auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_EXIST);
+        access.ExistCount(2).Result(Status::OK()).Record();
+    }
+    EnableSampler(1.0, 1.0, 1.0);
+    {
+        TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
+        auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_EXIST);
+        access.ExistCount(2).Result(K_RUNTIME_ERROR).Record();
+    }
+    {
+        TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
+        auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_EXIST);
+        access.ExistCount(2).Result(Status::OK()).Record();
+    }
+}
+
 TEST_F(LogAccessFacadeTest, RemoteGetActionsUseWorkerAccessType)
 {
     ASSERT_EQ(GetAccessKeyType(AccessRecorderKey::DS_POSIX_REMOTE_GET), AccessKeyType::ACCESS);

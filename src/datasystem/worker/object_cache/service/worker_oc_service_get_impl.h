@@ -567,8 +567,16 @@ private:
                                        std::map<std::string, uint64_t> &absentObjectKeysWithVersion,
                                        const std::map<std::string, uint64_t> &deletingObjectsWithVersion);
 
-    Status QueryExistMetadataViaPureQueryMeta(const std::vector<std::string> &objectKeys,
-                                              std::vector<master::QueryMetaInfoPb> &queryMetas);
+    Status QueryExistMetadata(const std::vector<std::string> &objectKeys,
+                              std::unordered_set<std::string> &existKeys);
+    Status DispatchExistsGroups(const std::unordered_map<HostPort, std::vector<std::string>> &groups,
+                                std::vector<std::unordered_set<std::string>> &results);
+    Status QueryExistMetadataGroup(const HostPort &masterAddress, const std::vector<std::string> &objectKeys,
+                                   std::unordered_set<std::string> &existKeys);
+    Status QueryBatchExists(const std::shared_ptr<worker::WorkerMasterOCApi> &api, master::BatchExistsReqPb &req,
+                            master::BatchExistsRspPb &rsp);
+    static Status CollectBatchExistsResults(const master::BatchExistsReqPb &req, const master::BatchExistsRspPb &rsp,
+                                           std::unordered_set<std::string> &existKeys);
     Status QueryPureMetadataGroup(const HostPort &masterAddress, const std::vector<std::string> &objectKeys,
                                   std::vector<master::QueryMetaInfoPb> &queryMetas);
     Status QueryPureMetadataRedirects(const google::protobuf::RepeatedPtrField<RedirectMetaInfo> &redirects,

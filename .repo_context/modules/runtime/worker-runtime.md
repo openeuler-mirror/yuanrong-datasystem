@@ -59,6 +59,32 @@
   - global-reference decrease treats a missing worker-to-master API after a successful owner lookup as
     `K_RPC_UNAVAILABLE`; affected ids enter the existing RPC-failure path instead of being silently skipped during a
     connection rebuild window.
+  - object-cache `Exist` uses `MasterOCService.BatchExists` for keys not resolved by the unchanged local-check budget.
+    Worker uses `MetadataRouteResolver::GroupOwners` on the actual business keys, querying each owner directly rather
+    than routing through `P2P_DEFAULT_MASTER`. Multiple groups use background bthreads with the last group executed
+    inline; joins yield rather than blocking BRPC scheduler pthreads on `std::future`. Each task has its own request
+    context and result set, inherits trace context, and deducts dispatch/queue delay from the shared deadline.
+    All tasks finish before results are merged or an error returns; each may still redirect during topology changes.
+    Route or RPC failure leaves the caller's existing results unchanged. Single-group requests do not start a bthread.
+    `BatchExistsRspPb.not_exist_indices` contains sorted, unique, zero-based indices in that RPC request;
+    redirected keys remain unresolved and `meta_is_moving` invalidates the whole response until deadline-bounded retry.
+    Master retains the existing non-PENDING/readable-location or requester-only-primary semantics, without copying
+    metadata or selecting/shuffling concrete locations. `PureQueryMeta` remains for other callers and retains its
+    missing/PENDING-key warning. Sources: `worker_oc_service_get_impl.cpp`, `oc_metadata_manager.cpp`, `master_object.proto`.
+    The new RPC is appended to the service to preserve existing method indices. New workers require masters supporting
+    `BatchExists`; there is no old-master fallback. Deploy/roll back worker and master roles as a coordinated version
+    set (including co-located roles), rather than assuming arbitrary mixed-version rolling upgrades are supported.
+    Focused tests: `OCMetadataManagerTopologyTest.BatchExists*`, `WorkerOcServiceImplTest.BatchExists*`;
+    Bazel targets are `//tests/ut/master/object_cache:oc_metadata_manager_topology_test` and
+    `//tests/ut/worker:worker_oc_service_impl_test`; CMake discovers the same existing test source files.
+    `MASTER_BATCH_EXISTS`, `MASTER_BATCH_EXISTS_REDIRECT`, and `MASTER_BATCH_EXISTS_LOOKUP` measure total,
+    routing, and the lookup/readability/result loop respectively; enable Bazel `--config=perf` or CMake `ENABLE_PERF`.
+    `WORKER_EXIST_GROUP_OWNERS` measures only owner grouping, excluding group dispatch and RPC execution.
+    Manual `OCMetadataManagerTopologyTest.DISABLED_BatchExistsHandlerBenchmark` compares handler plus serialization
+    using 960 synthetic 155-byte keys, 10 warmup pairs and 100 measured pairs with alternating API order.
+    It excludes routing and transport; the `PureQueryMeta` baseline retains missing-key warnings.
+    Run the master target with `--test_filter='*DISABLED_BatchExistsHandlerBenchmark'`
+    and `--test_arg=--gtest_also_run_disabled_tests`; do not interpret fastbuild measurements as production RPC latency.
   - restart global-reference reconciliation is disabled by default in the Worker flag and dscli configuration because
     pure KVClient deployments do not maintain global references. ObjectClient deployments that use global references
     must explicitly enable `enable_reconciliation`; the Kubernetes Helm defaults continue to enable it for backward
