@@ -154,6 +154,9 @@ void DynamicFlagConfig::MonitorConfigFile(const std::string &configFilePath)
 void DynamicFlagConfig::StartConfigFileHandle(const std::string &configFilePath,
                                               std::chrono::time_point<std::chrono::steady_clock> nowTime)
 {
+    if (configFilePath.empty()) {
+        return;
+    }
     // Check whether the configfile exists.
     preConfigCheckTime_ = nowTime;
     bool fileExists = false;
