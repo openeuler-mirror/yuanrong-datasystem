@@ -80,6 +80,12 @@ struct MultiCreateParam {
 #endif
 };
 
+struct ReadRangeParam {
+    std::string key;
+    uint64_t offset = 0;
+    uint64_t size = 0;
+};
+
 struct PublishParam {
     bool isReplica;
     ExistenceOpt existence;
@@ -90,7 +96,7 @@ struct PublishParam {
 struct GetParam {
     const std::vector<std::string> &objectKeys;
     int64_t subTimeoutMs;
-    const std::vector<ReadParam> &readParams;
+    const std::vector<ReadRangeParam> &readParams;
     bool queryL2Cache;
     bool isRH2DSupported = false;
     uint64_t ubTotalSize = 0;  // Pre-fetched total UB data size; 0 means not pre-fetched.

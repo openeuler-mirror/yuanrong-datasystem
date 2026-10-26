@@ -337,22 +337,6 @@ public:
                                                                void *h2dStream = nullptr);
 
     /**
-     * @brief Some data in an object can be read based on the specified key and parameters.
-     *        In some scenarios, read amplification can be avoided.
-     * @param[in] readParams The vector of the keys and offset.
-     * @param[out] failedKeys The failed delete keys.
-     * @return K_OK on any key success; the error code otherwise.
-     *         K_INVALID: the vector of keys is empty or include empty key.
-     *         K_NOT_FOUND: the key not found.
-     *         K_RUNTIME_ERROR: Cannot get values from worker.
-     * @verbatim
-     * If some keys are not found, The Status OK will return,
-     * and the existing keys will set the vals with the same index of keys.
-     * @endverbatim
-     */
-    Status Read(const std::vector<ReadParam> &readParams, std::vector<Optional<Buffer>> &buffers);
-
-    /**
      * @brief Delete the given objects.
      * @param[in] objectKeys The vector of the object key.
      * @param[out] failedObjectKeys The vector of the failed delete object key list.

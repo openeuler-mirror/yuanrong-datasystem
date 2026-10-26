@@ -903,7 +903,7 @@ Status BoundMode::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> workerA
     PerfPoint totalPoint(PerfKey::CLIENT_GET_BUFFERS_FROM_WORKER);
     PerfPoint stagePoint(PerfKey::CLIENT_GET_BUFFERS_FROM_WORKER_RPC);
     const std::vector<std::string> &objectsNeedToGet = getParam.objectKeys;
-    const std::vector<ReadParam> &readParams = getParam.readParams;
+    const std::vector<ReadRangeParam> &readParams = getParam.readParams;
     CHECK_FAIL_RETURN_STATUS(buffers.size() == objectsNeedToGet.size(), K_INVALID, "buffers size does not match");
     bool shouldRecordTransport = false;
     AccessTransportKind actualTransportKind = AccessTransportKind::SHM;
@@ -1120,11 +1120,11 @@ Status BoundMode::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWorkerApi> 
             subKeys.push_back(objectKeys[idx]);
         }
 
-        std::vector<ReadParam> subReadParams;
+        std::vector<ReadRangeParam> subReadRangeParams;
         if (!readParams.empty()) {
-            subReadParams.reserve(batch.indices.size());
+            subReadRangeParams.reserve(batch.indices.size());
             for (size_t idx : batch.indices) {
-                subReadParams.push_back(readParams[idx]);
+                subReadRangeParams.push_back(readParams[idx]);
             }
         }
 
@@ -1133,7 +1133,7 @@ Status BoundMode::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWorkerApi> 
 
         GetParam subGetParam{ .objectKeys = subKeys,
                               .subTimeoutMs = getParam.subTimeoutMs,
-                              .readParams = subReadParams,
+                              .readParams = subReadRangeParams,
                               .queryL2Cache = getParam.queryL2Cache,
                               .isRH2DSupported = getParam.isRH2DSupported,
                               .ubTotalSize = batch.totalSize,
@@ -1165,7 +1165,7 @@ Status BoundMode::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWorkerApi> 
 
         std::vector<std::string> failedObjectKey;
         failedObjectKey.reserve(subKeys.size());
-        rc = ProcessGetResponse(subKeys, subReadParams, rsp, version, payloads, subBuffers, failedObjectKey);
+        rc = ProcessGetResponse(subKeys, subReadRangeParams, rsp, version, payloads, subBuffers, failedObjectKey);
         if (rc.IsError()) {
             LOG(WARNING) << "ProcessGetResponse failed in batch: " << rc.ToString();
             lastError = rc;
@@ -1254,13 +1254,13 @@ Status BoundMode::GetOversizedBufferChunk(std::shared_ptr<IClientWorkerApi> work
                                           std::shared_ptr<Buffer> &chunkBuffer, uint32_t &version,
                                           AccessTransportKind *requestTransportKind, Status *ingressRpcStatus)
 {
-    ReadParam readParam{ objectKey, offset, chunkSize };
+    ReadRangeParam readParam{ objectKey, offset, chunkSize };
     std::vector<std::string> subKeys{ objectKey };
-    std::vector<ReadParam> subReadParams{ readParam };
+    std::vector<ReadRangeParam> subReadRangeParams{ readParam };
     AccessTransportKind chunkTransportKind = AccessTransportKind::SHM;
     GetParam subGetParam{ .objectKeys = subKeys,
                           .subTimeoutMs = getParam.subTimeoutMs,
-                          .readParams = subReadParams,
+                          .readParams = subReadRangeParams,
                           .queryL2Cache = getParam.queryL2Cache,
                           .isRH2DSupported = getParam.isRH2DSupported,
                           .ubTotalSize = chunkSize,
@@ -1279,7 +1279,7 @@ Status BoundMode::GetOversizedBufferChunk(std::shared_ptr<IClientWorkerApi> work
 
     std::vector<std::shared_ptr<Buffer>> chunkBuffers(1);
     std::vector<std::string> failedObjectKey;
-    RETURN_IF_NOT_OK(ProcessGetResponse(subKeys, subReadParams, rsp, version, payloads, chunkBuffers,
+    RETURN_IF_NOT_OK(ProcessGetResponse(subKeys, subReadRangeParams, rsp, version, payloads, chunkBuffers,
                                         failedObjectKey));
     if (!failedObjectKey.empty() || chunkBuffers[0] == nullptr) {
         return GetWorkerGetFailure(
@@ -1315,7 +1315,7 @@ Status BoundMode::CopyOversizedBufferChunk(const std::string &objectKey, uint64_
 #endif
 
 Status BoundMode::ProcessGetResponse(const std::vector<std::string> &objectKeys,
-                                     const std::vector<ReadParam> &readParams, GetRspPb &rsp,
+                                     const std::vector<ReadRangeParam> &readParams, GetRspPb &rsp,
                                      uint32_t version, std::vector<RpcMessage> &payloads,
                                      std::vector<std::shared_ptr<Buffer>> &buffers,
                                      std::vector<std::string> &failedObjectKey,
@@ -1349,7 +1349,7 @@ Status BoundMode::ProcessGetResponse(const std::vector<std::string> &objectKeys,
 }
 
 Status BoundMode::GetObjectBuffers(const std::vector<std::string> &objectsNeedToGet, const GetRspPb &rsp,
-                                   uint32_t version, const std::vector<ReadParam> &readParams,
+                                   uint32_t version, const std::vector<ReadRangeParam> &readParams,
                                    std::vector<RpcMessage> &payloads,
                                    std::vector<std::shared_ptr<Buffer>> &buffers,
                                    std::vector<std::string> &failedObjectKey,
@@ -1401,7 +1401,7 @@ Status BoundMode::GetObjectBuffers(const std::vector<std::string> &objectsNeedTo
 
 Status BoundMode::SetShmObjectBufferWithMetric(const std::string &objectKey,
                                                const GetRspPb::ObjectInfoPb &info, uint32_t version,
-                                               const std::vector<ReadParam> &readParams, size_t index,
+                                               const std::vector<ReadRangeParam> &readParams, size_t index,
                                                std::shared_ptr<Buffer> &bufferPtr)
 {
     // Special case for Remote H2D scenario.

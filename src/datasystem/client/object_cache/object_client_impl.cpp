@@ -3780,37 +3780,6 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
     return rc;
 }
 
-Status ObjectClientImpl::Read(const std::vector<ReadParam> &readParams, std::vector<Optional<Buffer>> &buffers)
-{
-    PerfPoint perfPoint(PerfKey::CLIENT_READ_OBJECT);
-    RETURN_IF_NOT_OK(IsClientReady());
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(readParams.size()), K_INVALID,
-                                         FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
-    std::shared_ptr<IClientWorkerApi> workerApi;
-    std::unique_ptr<Raii> raii;
-    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
-    std::vector<std::shared_ptr<Buffer>> objectBuffers(readParams.size());
-    std::vector<std::string> objectKeys;
-    for (const auto &param : readParams) {
-        objectKeys.emplace_back(param.key);
-    }
-    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
-    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
-    GetParam getParam{ .objectKeys = objectKeys, .subTimeoutMs = 0, .readParams = readParams };
-    Status rc = boundMode_->GetBuffersFromWorker(workerApi, getParam, objectBuffers);
-    buffers.clear();
-    for (auto &objectBuffer : objectBuffers) {
-        if (objectBuffer == nullptr) {
-            buffers.emplace_back();
-        } else {
-            buffers.emplace_back(std::move(*objectBuffer));
-        }
-    }
-    perfPoint.Record();
-    LOG(INFO) << "Finish to Get objects " << VectorToString(objectKeys);
-    return rc;
-}
-
 Status ObjectClientImpl::CheckValidObjectKey(const std::string &key)
 {
     CHECK_FAIL_RETURN_STATUS(Validator::IsIdFormat(key), K_INVALID,

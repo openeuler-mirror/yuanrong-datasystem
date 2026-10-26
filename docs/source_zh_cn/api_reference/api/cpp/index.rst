@@ -73,8 +73,6 @@ KV接口
       - 已废弃 API，仅为兼容保留，调用固定返回 ``StatusCode::K_RUNTIME_ERROR``。
     * - :cpp:func:`KVClient::Get`
       - 获取键对应的数据。
-    * - :cpp:func:`KVClient::Read`
-      - 根据指定的键和参数读取对象中的部分数据。
     * - :cpp:func:`KVClient::Del`
       - 删除指定键值对。
     * - :cpp:func:`KVClient::GenerateKey`

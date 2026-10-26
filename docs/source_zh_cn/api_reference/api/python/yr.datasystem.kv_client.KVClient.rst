@@ -50,8 +50,6 @@ yr.datasystem.kv_client.KVClient
          - 以只读缓冲区形式获取给定键的值。
        * - :doc:`get <yr.datasystem.kv_client.KVClient.get>`
          - 获取所有给定键的值。
-       * - :doc:`read <yr.datasystem.kv_client.KVClient.read>`
-         - 读取指定偏移量的数据。
        * - :doc:`delete <yr.datasystem.kv_client.KVClient.delete>`
          - 删除指定的键值对。
        * - :doc:`generate_key <yr.datasystem.kv_client.KVClient.generate_key>`
@@ -77,7 +75,6 @@ yr.datasystem.kv_client.KVClient
     yr.datasystem.kv_client.KVClient.msettx
     yr.datasystem.kv_client.KVClient.get_read_only_buffers
     yr.datasystem.kv_client.KVClient.get
-    yr.datasystem.kv_client.KVClient.read
     yr.datasystem.kv_client.KVClient.delete
     yr.datasystem.kv_client.KVClient.generate_key
     yr.datasystem.kv_client.KVClient.exist

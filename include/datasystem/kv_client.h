@@ -63,12 +63,6 @@ struct MSetParam {
     ExistenceOpt existence = ExistenceOpt::NONE;
 };
 
-struct ReadParam {
-    std::string key;
-    uint64_t offset = 0;
-    uint64_t size = 0;
-};
-
 struct AsyncResult {
     Status status;
     std::vector<std::string> failedList;
@@ -340,22 +334,6 @@ public:
     ///  and the existing keys will set the vals with the same index of keys.
     /// \endverbatim
     Status Get(const std::vector<std::string> &keys, std::vector<Optional<ReadOnlyBuffer>> &readOnlyBuffers);
-
-    /// \brief Some data in an object can be read based on the specified key and parameters.
-    ///         In some scenarios, read amplification can be avoided.
-    ///
-    /// \param[in] readParams The vector of the keys and offset.
-    /// \param[out] readOnlyBuffers The vector of the values.
-    ///
-    /// \return K_OK on any key success; the error code otherwise.
-    ///         K_INVALID: the vector of keys is empty or include empty key.
-    ///         K_NOT_FOUND: the key not found.
-    ///         K_RUNTIME_ERROR: Cannot get values from worker.
-    /// \verbatim
-    ///  If some keys are not found, The Status OK will return,
-    ///  and the existing keys will set the vals with the same index of keys.
-    /// \endverbatim
-    Status Read(const std::vector<ReadParam> &readParams, std::vector<Optional<ReadOnlyBuffer>> &readOnlyBuffers);
 
     /// \brief Invoke worker client to delete a key.
     ///

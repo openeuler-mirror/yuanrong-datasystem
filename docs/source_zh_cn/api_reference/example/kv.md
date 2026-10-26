@@ -251,7 +251,7 @@ spillFileMaxSizeMb: 200
 # some files will be temporarily closed to prevent exceeding the maximum system limit. You need reduce this value if your system resources are limited.
 # The valid range is greater than or equal to 8.
 spillFileOpenLimit: 512
-# Disable readahead can mitigate the read amplification problem for offset read, default is true
+# Disable readahead when internal oversized range reads would amplify I/O; default is true
 spillEnableReadahead: true
 ```
 

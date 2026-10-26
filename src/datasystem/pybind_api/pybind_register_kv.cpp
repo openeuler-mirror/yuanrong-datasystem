@@ -497,45 +497,6 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                 }
                 return std::make_pair(rc, std::move(vals));
              })
-        .def("ReadSpecifyOffsetData",
-             [](ObjectClientImpl &client, const std::vector<ReadParam> &readParams) {
-                TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-                std::vector<Optional<Buffer>> buffers;
-                py::list vals;
-                uint64_t totalSize = 0;
-                Status lastRc;
-
-                auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
-                access.ObjectKeyProvider([&readParams] {
-                    std::vector<std::string> keys;
-                    keys.reserve(readParams.size());
-                    for (const auto &readParam : readParams) {
-                        keys.emplace_back(readParam.key);
-                    }
-                    return objectKeysToString(keys);
-                });
-                Raii raii([&access, &totalSize, &lastRc] {
-                    Status accessRc = (lastRc.GetCode() == K_NOT_FOUND) ? Status::OK() : lastRc;
-                    access.Result(accessRc).DataSize(totalSize).Record();
-                });
-                lastRc = client.Read(readParams, buffers);
-                if (lastRc.IsError()) {
-                    return std::make_pair(lastRc, std::move(vals));
-                }
-
-                for (auto &buffer : buffers) {
-                    if (!buffer) {
-                        vals.append(py::none());
-                        continue;
-                    }
-                    std::shared_ptr<StateValueBuffer> stateValueBuffer =
-                        std::make_shared<StateValueBuffer>(std::make_shared<Buffer>(std::move(buffer.value())));
-
-                    vals.append(py::cast(stateValueBuffer));
-                    totalSize += stateValueBuffer->GetSize();
-                }
-                return std::make_pair(lastRc, std::move(vals));
-             })
         .def("Del",
              [](ObjectClientImpl &client, const std::vector<std::string> &keys) {
                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
@@ -575,18 +536,6 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                 Status healthState = client.HealthCheck(state);
                 return healthState;
             });
-});
-
-PybindDefineRegisterer g_pybind_define_f_ReadParam("ReadParam", PRIORITY_LOW, [](const py::module *m) {
-    py::class_<ReadParam>(*m, "ReadParam")
-        .def(py::init<>())
-        .def_static("build",
-                    [](const std::string &key, uint64_t offset, uint64_t size) {
-                        return ReadParam{ key, offset, size };
-                    })
-        .def("get_key", [](ReadParam &readParam) { return readParam.key; })
-        .def("get_offset", [](ReadParam &readParam) { return readParam.offset; })
-        .def("get_size", [](ReadParam &readParam) { return readParam.size; });
 });
 
 PybindDefineRegisterer g_pybind_define_f_SetParam("SetParam", PRIORITY_LOW, [](const py::module *m) {

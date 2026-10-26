@@ -65,11 +65,18 @@ public:
         }
         if (populateSuccessfulGetResponse) {
             for (size_t i = 0; i < getParam.objectKeys.size(); ++i) {
+                size_t dataSize = 1;
+                if (!getParam.readParams.empty()) {
+                    const auto &readParam = getParam.readParams[i];
+                    requestedReadOffsets.push_back(readParam.offset);
+                    requestedReadSizes.push_back(readParam.size);
+                    dataSize = readParam.size;
+                }
                 RpcMessage payload;
-                RETURN_IF_NOT_OK(payload.CopyString("x"));
+                RETURN_IF_NOT_OK(payload.CopyString(std::string(dataSize, 'x')));
                 auto *info = rsp.add_payload_info();
                 info->set_object_index(i);
-                info->set_data_size(1);
+                info->set_data_size(static_cast<int64_t>(dataSize));
                 info->add_part_index(payloads.size());
                 payloads.emplace_back(std::move(payload));
             }
@@ -83,6 +90,8 @@ public:
     std::vector<StatusCode> ingressStatusSequence;
     bool populateSuccessfulGetResponse = false;
     bool expireDeadlineOnGet = false;
+    std::vector<uint64_t> requestedReadOffsets;
+    std::vector<uint64_t> requestedReadSizes;
     std::optional<ProviderUbFailureDetailPb> providerUbFailureDetail;
     Status InvalidateBuffer(const std::string &objectKey) override { return Status::OK(); }
     Status GIncreaseWorkerRef(const std::vector<std::string> &firstIncIds, std::vector<std::string> &failedObjectKeys, const std::string &remoteClientId) override { return Status::OK(); }
@@ -329,7 +338,7 @@ TEST_F(BoundModeTest, BatchedGetClearsIngressFailureAfterPartialSuccess)
     mockApi->ingressStatusSequence = { K_RPC_PEER_DEAD, K_OK };
     mockApi->populateSuccessfulGetResponse = true;
     const std::vector<std::string> objectKeys{ "first", "second" };
-    const std::vector<ReadParam> readParams;
+    const std::vector<ReadRangeParam> readParams;
     GetParam getParam{ .objectKeys = objectKeys,
                        .subTimeoutMs = 0,
                        .readParams = readParams,
@@ -347,13 +356,40 @@ TEST_F(BoundModeTest, BatchedGetClearsIngressFailureAfterPartialSuccess)
     EXPECT_EQ(mockApi->getCalls, 2U);
 }
 
+TEST_F(BoundModeTest, OversizedGetPreservesInternalRangeChunking)
+{
+    ApiDeadlineGuard deadline(1000);
+    mockApi->getStatusSequence = { K_OK, K_OK };
+    mockApi->populateSuccessfulGetResponse = true;
+    const std::vector<std::string> objectKeys{ "oversized" };
+    const std::vector<ReadRangeParam> readParams;
+    GetParam getParam{ .objectKeys = objectKeys,
+                       .subTimeoutMs = 0,
+                       .readParams = readParams,
+                       .queryL2Cache = false,
+                       .requestTimeoutMs = 1000 };
+    std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
+    const std::vector<ObjMetaInfo> objMetas{ { 16, {} } };
+    AccessTransportKind transportKind = AccessTransportKind::SHM;
+    Status ingressRpcStatus;
+
+    EXPECT_TRUE(bound->GetBuffersFromWorkerBatched(mockApi, getParam, buffers, objMetas, 8, &transportKind,
+                                                   &ingressRpcStatus)
+                    .IsOk());
+    ASSERT_EQ(mockApi->getCalls, 2U);
+    EXPECT_EQ(mockApi->requestedReadOffsets, (std::vector<uint64_t>{ 0, 8 }));
+    EXPECT_EQ(mockApi->requestedReadSizes, (std::vector<uint64_t>{ 8, 8 }));
+    ASSERT_TRUE(buffers[0]);
+    EXPECT_EQ(buffers[0]->GetSize(), 16U);
+}
+
 TEST_F(BoundModeTest, BatchedGetPreservesFirstIngressFailureWhenAllBatchesFail)
 {
     ApiDeadlineGuard deadline(1000);
     mockApi->getStatusSequence = { K_CLIENT_WORKER_DISCONNECT, K_RPC_PEER_DEAD };
     mockApi->ingressStatusSequence = { K_CLIENT_WORKER_DISCONNECT, K_OK };
     const std::vector<std::string> objectKeys{ "first", "second" };
-    const std::vector<ReadParam> readParams;
+    const std::vector<ReadRangeParam> readParams;
     GetParam getParam{ .objectKeys = objectKeys,
                        .subTimeoutMs = 0,
                        .readParams = readParams,
@@ -423,7 +459,7 @@ TEST_F(BoundModeTest, ProviderCqe4AndClientCqe9UseUnifiedProbeEntry)
     Raii clearRemoteInject([] { (void)inject::Clear(REMOTE_PROBE_ACCEPTED_INJECT); });
 
     const std::vector<std::string> objectKeys{ "key" };
-    const std::vector<ReadParam> readParams;
+    const std::vector<ReadRangeParam> readParams;
     GetParam getParam{ objectKeys, 0, readParams, false };
     getParam.requestTimeoutMs = 1'000;
     std::vector<std::shared_ptr<Buffer>> buffers(1);

@@ -420,7 +420,7 @@ Status ClientWorkerBaseApi::SendBufferViaUbFromPool(const std::shared_ptr<Object
 Status ClientWorkerBaseApi::PreGet(const GetParam &getParam, int64_t subTimeoutMs, GetReqPb &req)
 {
     const std::vector<std::string> &objectKeys = getParam.objectKeys;
-    const std::vector<ReadParam> &readParams = getParam.readParams;
+    const std::vector<ReadRangeParam> &readParams = getParam.readParams;
     VLOG(1) << AppendSrcDstForLog(
         FormatString("Begin to get object, client id: %s, object key: %s", clientId_, VectorToString(objectKeys)), "",
         hostPort_.ToString());

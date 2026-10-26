@@ -476,29 +476,6 @@ TEST_F(KVClientBrpcLocalCacheVerifyTest, GetEmptyKeyRejected)
     ASSERT_EQ(rc.GetCode(), StatusCode::K_INVALID);
 }
 
-// TC-1.4.9: Read with offset
-TEST_F(KVClientBrpcLocalCacheVerifyTest, ReadWithOffset)
-{
-    InitClient();
-    const std::string key = NewKey();
-    const uint64_t totalSize = 1024;
-    const uint64_t offset = 512;
-    const uint64_t readSize = 256;
-    const std::string fullValue = GenRandomString(totalSize);
-
-    DS_ASSERT_OK(client_->Set(key, fullValue, DefaultSetParam()));
-
-    std::vector<ReadParam> readParams = { ReadParam{ .key = key, .offset = offset, .size = readSize } };
-    std::vector<Optional<ReadOnlyBuffer>> readBuffers;
-    DS_ASSERT_OK(client_->Read(readParams, readBuffers));
-    ASSERT_EQ(readBuffers.size(), 1u);
-    ASSERT_TRUE(readBuffers[0]);
-    ASSERT_EQ(readBuffers[0]->GetSize(), readSize);
-
-    std::string readStr(reinterpret_cast<const char *>(readBuffers[0]->ImmutableData()), readSize);
-    ASSERT_EQ(readStr, fullValue.substr(offset, readSize));
-}
-
 // ============================================================================
 // Category 1.5: MSet Flow Tests
 // ============================================================================

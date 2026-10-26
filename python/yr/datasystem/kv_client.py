@@ -16,7 +16,6 @@
 State cache client python interface.
 """
 from __future__ import absolute_import
-from collections import namedtuple
 from enum import Enum
 from typing import List
 import warnings
@@ -28,20 +27,6 @@ from yr.datasystem.service_discovery import CoordinatorServiceDiscovery, Service
 
 DEFAULT_FAST_TRANSPORT_MEM_SIZE = 256 * 1024 * 1024
 MAX_FAST_TRANSPORT_MEM_SIZE = 2 * 1024 * 1024 * 1024
-
-
-ReadParam = namedtuple(
-    "ReadParam",
-    ["key", "offset", "size"]
-)
-"""
-Declare the attribute of each value to be read when using 'read' interface.
-
-Args:
-    key(str): Key of the value to be read.
-    offset(int): Read the value and skip the offset length.
-    size(int): Size of the value to be read.
-"""
 
 
 class ExistenceOpt(Enum):
@@ -589,42 +574,6 @@ class KVClient:
         for val in values:
             ret_vals.append(val.decode() if val is not None else None)
         return ret_vals
-
-    def read(self, read_params) -> List[ReadOnlyBuffer]:
-        """Some data in an object can be read based on the specified key and parameters.
-           In some scenarios, read amplification can be avoided.
-
-        Args:
-            read_params(list): List of namedtuple ReadParam.
-
-        Returns:
-            read_only_buffer_list(list): Return List[ReadOnlyBuffer]. If the key is not found,
-                                         it will raise RuntimeError.
-
-        Raises:
-            RuntimeError: Raise a runtime error if fails to get the value of one key.
-            TypeError: Raise a type error if the input parameter is invalid.
-        """
-        args = [["read_params", read_params, list]]
-        validator.check_args_types(args)
-        if read_params is None:
-            raise RuntimeError(r"The input of read_param list should not be empty")
-        cpp_read_params = []
-        for read_param in read_params:
-            cpp_read_params.append(ds.ReadParam.build(read_param.key, read_param.offset, read_param.size))
-
-        status, buffer_array = self._client.ReadSpecifyOffsetData(cpp_read_params)
-        if status.is_error():
-            raise RuntimeError(status.to_string())
-
-        read_only_buffer_list = []
-        for buffer in buffer_array:
-            buf = None
-            if buffer is not None:
-                buf = ReadOnlyBuffer(buffer)
-            read_only_buffer_list.append(buf)
-
-        return read_only_buffer_list
 
     def delete(self, keys: list = None):
         """ Delete the values of all given keys.

@@ -290,21 +290,6 @@ KVClient
             - 返回 ``StatusCode::K_NOT_FOUND`` 表示所有 ``keys`` 不存在。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
 
-    .. cpp:function:: Status Read(const std::vector<ReadParam> &readParams, std::vector<Optional<ReadOnlyBuffer>> &readOnlyBuffers)
-
-        根据指定的键和参数读取对象中的部分数据。在某些场景下可避免读取放大。
-
-        参数：
-            - **readParams** - 包含键和偏移量的读取参数列表。
-            - **readOnlyBuffers** - 传出参数，返回读取到的只读共享内存 :cpp:class:`ReadOnlyBuffer` 列表。
-
-        返回：
-            - 返回 ``StatusCode::K_OK`` 表示至少有一个数据获取成功。
-            - 返回 ``StatusCode::K_INVALID`` 表示存在key校验不通过。
-            - 返回 ``StatusCode::K_NOT_FOUND`` 表示key不存在。
-            - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示 worker 侧存在错误。
-
-
     .. cpp:function:: Status Get(const std::vector<std::string> &keys, std::vector<Optional<Buffer>> &buffers)
     
         批量获取多个键对应的共享内存 :cpp:class:`Buffer` 。该接口相比 :cpp:any:`Status Get(const std::vector<std::string> &keys, std::vector<std::string> &vals)` 少一次从共享内存到临时内存的拷贝，性能更优。
