@@ -1471,7 +1471,6 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | etcd_username | string | `""` | 否 | ETCD鉴权用户名。仅在ETCD开启用户名/密码鉴权时需要配置 |
 | etcd_password | string | `""` | 否 | ETCD鉴权密码。仅在ETCD开启用户名/密码鉴权时需要配置 |
 | etcd_passphrase_path | string | `""` | 否 | 密码短语的值，需加密并进行Base64转码 |
-| etcd_meta_pool_size | int | `8` | 否 | ETCD元数据异步队列大小，用于将KV接口 `WRITE_BACK_L2_CACHE` 可靠性配置的key的元数据异步写入ETCD持久化 |
 | etcd_target_name_override | string | `""` | 否 | 设置用于SSL主机名校验的ETCD目标名称覆盖。该配置值应与TLS证书的Subject Alternate Names（主题备用名称）中的DNS内容保持一致 |
 | host_id_env_name | string | `""` | 否 | 用于读取当前节点 `host_id` 的环境变量名。配置后，worker 在注册到 ETCD 时会同时上报 `host_id`，供客户端按同节点策略优先选择 worker |
 | start_metastore_service | bool | `false` | 否 | 是否启用 Metastore 代替ETCD，若需要启用，仅需主节点worker设为`true`，从节点worker设为`false` |

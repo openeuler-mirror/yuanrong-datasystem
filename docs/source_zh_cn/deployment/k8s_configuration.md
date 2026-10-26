@@ -179,7 +179,6 @@ global:
 | global.etcd.etcdKey | string | `""` | 客户端私钥。需进行Base64转码，是否加密取决于是否设置了密码短语 |
 | global.etcd.etcdCertDir | string | `"/home/sn/datasystem/etcd_cert_dir"` | 已加密 etcd 证书的挂载路径，`global.etcd.enableEtcdAuth` 为 `true` 必须指定此参数 |
 | global.etcd.passphraseValue | string | `""` | 密码短语的值，需加密并进行Base64转码 |
-| global.etcd.etcdMetaPoolSize | int | `8` | ETCD元数据异步队列大小，用于将KV接口 `WRITE_BACK_L2_CACHE` 可靠性配置的key的元数据异步写入ETCD持久化 |
 | global.etcd.etcdTargetNameOverride | string | `""` | 设置用于SSL主机名校验的ETCD目标名称覆盖。该配置值应与TLS证书的Subject Alternate Names（主题备用名称）中的DNS内容保持一致 |
 
 **样例**：
@@ -195,7 +194,6 @@ global:
     etcdKey: ""
     etcdCertDir: ""
     passphraseValue: ""
-    etcdMetaPoolSize: 8
 ```
 
 ### Coordinator相关配置

@@ -45,7 +45,6 @@
 #include "datasystem/utils/connection.h"
 #include "datasystem/utils/status.h"
 
-DS_DEFINE_bool(rocksdb_sync_write, false, "Controls whether rocksdb sets sync to true when writing data.");
 DS_DEFINE_int32(rocksdb_max_open_file, 128, "Number of open files that can be used by the rocksdb");
 DS_DEFINE_int32(rocksdb_background_threads, 16,
                 "Number of background threads rocksdb can use for flushing and compacting.");
@@ -64,14 +63,13 @@ std::atomic<bool> RocksStore::disableRocksDB{ false };
 namespace {
 using ResolvedTableKey = std::pair<rocksdb::ColumnFamilyHandle *, std::string>;
 
-rocksdb::Status WriteDeleteBatchAcrossTables(rocksdb::DB *db, const std::vector<ResolvedTableKey> &tableKeys, bool sync)
+rocksdb::Status WriteDeleteBatchAcrossTables(rocksdb::DB *db, const std::vector<ResolvedTableKey> &tableKeys)
 {
     rocksdb::WriteBatch batch;
     for (const auto &tableKey : tableKeys) {
         batch.Delete(tableKey.first, rocksdb::Slice(tableKey.second));
     }
     rocksdb::WriteOptions options;
-    options.sync = sync;
     return db->Write(options, &batch);
 }
 
@@ -305,7 +303,7 @@ Status RocksStore::PutWithOrderingKey(const std::string &tableName, const std::s
     tableHandle = iter->second;
     Timer timer;
     if (mode_ == RocksdbWriteMode::SYNC) {
-        rc = Put(tableHandle, key, value, FLAGS_rocksdb_sync_write);
+        rc = Put(tableHandle, key, value);
         GetMasterTimeCost().Append("RocksDB Put", timer.ElapsedMilliSecond());
         return CheckAndRemoveDbPath(rc);
     } else if (mode_ == RocksdbWriteMode::ASYNC) {
@@ -319,7 +317,7 @@ Status RocksStore::PutWithOrderingKey(const std::string &tableName, const std::s
         }
         auto future = asyncThreadPool_->Submit(orderingKey, [this, tableHandle, key, value, callerTraceID]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callerTraceID);
-            rocksdb::Status rc = Put(tableHandle, key, value, FLAGS_rocksdb_sync_write);
+            rocksdb::Status rc = Put(tableHandle, key, value);
             if (!rc.ok()) {
                 LOG(ERROR) << FormatString("Async Put key %s failed: %s", key, rc.getState());
             }
@@ -341,7 +339,7 @@ Status RocksStore::BatchPut(const std::string &tableName, std::unordered_map<std
     CHECK_FAIL_RETURN_STATUS(iter != tables_.end(), StatusCode::K_NOT_FOUND, "Table " + tableName + " does not exist");
     tableHandle = iter->second;
     if (mode_ == RocksdbWriteMode::SYNC) {
-        rc = BatchPut(metaInfos, tableHandle, FLAGS_rocksdb_sync_write);
+        rc = BatchPut(metaInfos, tableHandle);
         return CheckAndRemoveDbPath(rc);
     } else if (mode_ == RocksdbWriteMode::ASYNC) {
         auto callerTraceID = Trace::Instance().GetTraceID();
@@ -350,9 +348,9 @@ Status RocksStore::BatchPut(const std::string &tableName, std::unordered_map<std
         }
         auto future = asyncThreadPool_->Submit(tableName, [this, tableHandle, metaInfos, callerTraceID]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callerTraceID);
-            rocksdb::Status rc = BatchPut(metaInfos, tableHandle, FLAGS_rocksdb_sync_write);
+            rocksdb::Status rc = BatchPut(metaInfos, tableHandle);
             if (!rc.ok()) {
-                FormatString("Async BatchPut failed: %s", rc.getState());
+                LOG(ERROR) << FormatString("Async BatchPut failed: %s", rc.getState());
             }
         });
 
@@ -371,7 +369,7 @@ Status RocksStore::BatchDelete(const std::string &tableName, std::unordered_map<
     CHECK_FAIL_RETURN_STATUS(iter != tables_.end(), StatusCode::K_NOT_FOUND, "Table " + tableName + " does not exist");
     tableHandle = iter->second;
     if (mode_ == RocksdbWriteMode::SYNC) {
-        rocksdb::Status rc = BatchDelete(metaInfos, tableHandle, FLAGS_rocksdb_sync_write);
+        rocksdb::Status rc = BatchDelete(metaInfos, tableHandle);
         return CheckAndRemoveDbPath(rc);
     } else if (mode_ == RocksdbWriteMode::ASYNC) {
         auto callerTraceID = Trace::Instance().GetTraceID();
@@ -380,8 +378,7 @@ Status RocksStore::BatchDelete(const std::string &tableName, std::unordered_map<
         }
         auto future = asyncThreadPool_->Submit(tableName, [this, tableHandle, metaInfos, callerTraceID]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callerTraceID);
-            sleep(10);
-            rocksdb::Status rc = BatchDelete(metaInfos, tableHandle, FLAGS_rocksdb_sync_write);
+            rocksdb::Status rc = BatchDelete(metaInfos, tableHandle);
             if (!rc.ok()) {
                 LOG(ERROR) << FormatString("Async BatchDelete failed: %s", rc.getState());
             }
@@ -575,7 +572,7 @@ Status RocksStore::DeleteWithOrderingKey(const std::string &tableName, const std
     Timer timer;
     PerfPoint point(PerfKey::ROCKSDB_DELETE);
     if (mode_ == RocksdbWriteMode::SYNC) {
-        rc = Delete(tableHandle, key, FLAGS_rocksdb_sync_write);
+        rc = Delete(tableHandle, key);
         GetMasterTimeCost().Append("RocksDB Delete", timer.ElapsedMilliSecond());
         // Deleting a key that does not exist in the database will NOT yield an error.
         return CheckAndRemoveDbPath(rc);
@@ -586,7 +583,7 @@ Status RocksStore::DeleteWithOrderingKey(const std::string &tableName, const std
         }
         auto future = asyncThreadPool_->Submit(orderingKey, [this, tableHandle, key, callerTraceID]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callerTraceID);
-            rocksdb::Status rc = Delete(tableHandle, key, FLAGS_rocksdb_sync_write);
+            rocksdb::Status rc = Delete(tableHandle, key);
             if (!rc.ok()) {
                 LOG(ERROR) << FormatString("Async Delete key %s failed: %s", key, rc.getState());
             }
@@ -615,7 +612,7 @@ Status RocksStore::DeleteBatchAcrossTables(const std::vector<TableKey> &tableKey
     }
     rocksdb::Status rc;
     if (mode_ == RocksdbWriteMode::SYNC) {
-        rc = WriteDeleteBatchAcrossTables(db_, resolvedKeys, FLAGS_rocksdb_sync_write);
+        rc = WriteDeleteBatchAcrossTables(db_, resolvedKeys);
     } else if (mode_ == RocksdbWriteMode::ASYNC) {
         auto callerTraceID = Trace::Instance().GetTraceID();
         if (callerTraceID.empty()) {
@@ -623,7 +620,7 @@ Status RocksStore::DeleteBatchAcrossTables(const std::vector<TableKey> &tableKey
         }
         auto future = asyncThreadPool_->Submit(orderingKey, [this, resolvedKeys, callerTraceID, &rc]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callerTraceID);
-            rc = WriteDeleteBatchAcrossTables(db_, resolvedKeys, FLAGS_rocksdb_sync_write);
+            rc = WriteDeleteBatchAcrossTables(db_, resolvedKeys);
         });
         future.wait();
     }
@@ -644,7 +641,6 @@ Status RocksStore::PrefixDelete(const std::string &tableName, const std::string 
     PerfPoint point(PerfKey::ROCKSDB_PREFIX_DELETE);
     std::string endKey = StringPlusOne(prefixKey);
     rocksdb::WriteOptions options;
-    options.sync = FLAGS_rocksdb_sync_write;
     Timer timer;
     if (mode_ == RocksdbWriteMode::SYNC) {
         rc = db_->DeleteRange(options, tableHandle, rocksdb::Slice(prefixKey), rocksdb::Slice(endKey));

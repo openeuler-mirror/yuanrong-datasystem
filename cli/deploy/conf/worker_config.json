@@ -171,10 +171,6 @@
         "value": "1048576",
         "description": "Size of the page used for caching worker files. The valid range is 4096-1073741824."
     },
-    "etcd_meta_pool_size": {
-        "value": "8",
-        "description": "ETCD metadata async pool size."
-    },
     "spill_directory": {
         "value": "",
         "description": "The path and file name prefix of the spilling, empty means spill disabled."
