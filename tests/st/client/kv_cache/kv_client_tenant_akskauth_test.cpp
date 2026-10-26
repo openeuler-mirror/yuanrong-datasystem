@@ -38,7 +38,6 @@ public:
         opts.numOBS = 1;
         opts.numWorkers = 1;
         opts.numEtcd = 1;
-        opts.iamKit = "yuanrong_iam";
         std::string hostIp = "127.0.0.1";
         opts.workerConfigs.emplace_back(hostIp, GetFreePort());
         for (auto addr : opts.workerConfigs) {

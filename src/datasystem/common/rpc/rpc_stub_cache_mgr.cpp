@@ -56,7 +56,6 @@
 // Re-include log.h to restore datasystem's spdlog-based macros.
 #include "datasystem/common/log/log.h"
 
-DS_DEFINE_int32(oc_worker_worker_pool_size, 3, "Number of parallel connections between worker/worker. Default is 3.");
 DS_DEFINE_int32(sc_worker_worker_pool_size, 3, "Number of parallel connections between worker/worker. Default is 3.");
 
 namespace datasystem {

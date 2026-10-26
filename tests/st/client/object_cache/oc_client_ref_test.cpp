@@ -38,7 +38,7 @@ public:
         opts.numWorkers = 1;
         opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
-        opts.workerGflagParams = " -shared_memory_size_mb=100 -enable_multi_stubs=true -v=1";
+        opts.workerGflagParams = " -shared_memory_size_mb=100 -v=1";
     }
 };
 
@@ -2020,7 +2020,7 @@ public:
         opts.numWorkers = 1;
         opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
-        opts.workerGflagParams = " -shared_memory_size_mb=2048 -enable_multi_stubs=true -v=1 -max_client_num=800";
+        opts.workerGflagParams = " -shared_memory_size_mb=2048 -v=1 -max_client_num=800";
     }
 };
 
@@ -2041,7 +2041,7 @@ public:
         opts.numWorkers = 2;
         opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
-        opts.workerGflagParams = " -shared_memory_size_mb=10240 -enable_multi_stubs=true -v=1";
+        opts.workerGflagParams = " -shared_memory_size_mb=10240 -v=1";
     }
 
     void InitNumsClient(std::vector<std::shared_ptr<ObjectClient>> &clientVec, int index = 0)

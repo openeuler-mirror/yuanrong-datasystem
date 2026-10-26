@@ -42,7 +42,6 @@
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
 
-DS_DECLARE_string(iam_kit);
 DS_DECLARE_string(yuanrong_iam_url);
 DS_DECLARE_string(yuanrong_iam_ca);
 DS_DECLARE_string(yuanrong_iam_cert);
@@ -182,7 +181,6 @@ TEST_F(TenantAuthManagerTest, YuanIamServerWithToken)
     FLAGS_yuanrong_iam_ca = "./ca";
     FLAGS_yuanrong_iam_cert = "./cert.crt";
     FLAGS_yuanrong_iam_key = "./key";
-    FLAGS_iam_kit = "yuanrong_iam";
     std::ofstream ofs(FLAGS_yuanrong_iam_ca);
     ofs.write(TOKEN.c_str(), TOKEN.size());
     ofs.close();
@@ -211,7 +209,6 @@ TEST_F(TenantAuthManagerTest, YuanIamServerWithAk)
     FLAGS_yuanrong_iam_ca = "./ca";
     FLAGS_yuanrong_iam_cert = "./cert.crt";
     FLAGS_yuanrong_iam_key = "./key";
-    FLAGS_iam_kit = "yuanrong_iam";
     auto akSkManager = std::make_shared<AkSkManager>();
     akSkManager->SetClientAkSk(ACCESSKEY, SECRETKEY);
     std::ofstream ofs(FLAGS_yuanrong_iam_ca);
@@ -243,7 +240,6 @@ TEST_F(TenantAuthManagerTest, YuanIamServerWithoutTls)
     FLAGS_yuanrong_iam_ca = "";
     FLAGS_yuanrong_iam_cert = "";
     FLAGS_yuanrong_iam_key = "";
-    FLAGS_iam_kit = "yuanrong_iam";
     DS_ASSERT_OK(MockTenantAuthManager::Instance()->Init(true));
     auto mockIam = std::make_shared<MockYuanRongIAM>();
     auto client = std::make_shared<MockYuanRongIAMCurlClient>();
@@ -263,7 +259,6 @@ TEST_F(TenantAuthManagerTest, YuanIamServerWithoutTls1)
     FLAGS_yuanrong_iam_ca = "";
     FLAGS_yuanrong_iam_cert = "";
     FLAGS_yuanrong_iam_key = "";
-    FLAGS_iam_kit = "yuanrong_iam";
     auto akSkManager = std::make_shared<AkSkManager>();
     akSkManager->SetClientAkSk(ACCESSKEY, SECRETKEY);
     DS_ASSERT_OK(MockTenantAuthManager::Instance()->Init(true, akSkManager));
@@ -284,7 +279,6 @@ TEST_F(TenantAuthManagerTest, YuanIamServerFailed)
     FLAGS_yuanrong_iam_ca = "./ca";
     FLAGS_yuanrong_iam_cert = "./cert.crt";
     FLAGS_yuanrong_iam_key = "./key";
-    FLAGS_iam_kit = "yuanrong_iam";
     std::ofstream ofs(FLAGS_yuanrong_iam_ca);
     ofs.write(TOKEN.c_str(), TOKEN.size());
     ofs.close();
@@ -311,7 +305,6 @@ TEST_F(TenantAuthManagerTest, YuanIamServerFailed1)
     FLAGS_yuanrong_iam_ca = "./ca";
     FLAGS_yuanrong_iam_cert = "./cert.crt";
     FLAGS_yuanrong_iam_key = "./key";
-    FLAGS_iam_kit = "yuanrong_iam";
     std::ofstream ofs(FLAGS_yuanrong_iam_ca);
     ofs.write(TOKEN.c_str(), TOKEN.size());
     ofs.close();
@@ -339,7 +332,6 @@ TEST_F(TenantAuthManagerTest, YuanIamServerRetry)
     FLAGS_yuanrong_iam_ca = "./ca";
     FLAGS_yuanrong_iam_cert = "./cert.crt";
     FLAGS_yuanrong_iam_key = "./key";
-    FLAGS_iam_kit = "yuanrong_iam";
     std::ofstream ofs(FLAGS_yuanrong_iam_ca);
     ofs.write(TOKEN.c_str(), TOKEN.size());
     ofs.close();
@@ -368,7 +360,6 @@ TEST_F(TenantAuthManagerTest, YuanIamServerWithAkRetry)
     FLAGS_yuanrong_iam_ca = "./ca";
     FLAGS_yuanrong_iam_cert = "./cert.crt";
     FLAGS_yuanrong_iam_key = "./key";
-    FLAGS_iam_kit = "yuanrong_iam";
     auto akSkManager = std::make_shared<AkSkManager>();
     akSkManager->SetClientAkSk(ACCESSKEY, SECRETKEY);
     std::ofstream ofs(FLAGS_yuanrong_iam_ca);
@@ -400,7 +391,6 @@ TEST_F(TenantAuthManagerTest, YuanIamServerRetryFailed)
     FLAGS_yuanrong_iam_ca = "./ca";
     FLAGS_yuanrong_iam_cert = "./cert.crt";
     FLAGS_yuanrong_iam_key = "./key";
-    FLAGS_iam_kit = "yuanrong_iam";
     std::ofstream ofs(FLAGS_yuanrong_iam_ca);
     ofs.write(TOKEN.c_str(), TOKEN.size());
     ofs.close();

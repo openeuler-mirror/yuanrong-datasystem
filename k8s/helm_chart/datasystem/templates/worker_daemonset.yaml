@@ -1,3 +1,7 @@
+{{- $iamKit := $.Values.global.tenantAuth.iamKit }}
+{{- if not (has $iamKit (list "none" "yuanrong_iam")) }}
+{{- fail (printf "global.tenantAuth.iamKit must be one of [none, yuanrong_iam], got %q" $iamKit) }}
+{{- end }}
 {{- $default := list }}
 {{- if not $.Values.global.multiSpec }}
 {{- $default = list (dict "name" "ds-worker" "affinityLabel" "" "workerResources" (dict "sharedMemory" $.Values.global.resources.datasystemWorker.sharedMemory) "resources" (dict "limits" (dict "cpu" $.Values.global.resources.datasystemWorker.limits.cpu "memory" $.Values.global.resources.datasystemWorker.limits.memory) "requests" (dict "cpu" $.Values.global.resources.datasystemWorker.requests.cpu "memory" $.Values.global.resources.datasystemWorker.requests.memory))) }}
@@ -90,7 +94,6 @@ spec:
         - -log_monitor_exporter={{ $.Values.global.observability.logMonitorExporter }}
         - -log_monitor_interval_ms={{ $.Values.global.observability.logMonitorIntervalMs }}
         - -enable_perf_trace_log={{ $.Values.global.log.enablePerfTraceLog }}
-        - -enable_meta_replica={{ $.Values.global.metadata.enableMetaReplica }}
         - -enable_metadata_recovery={{ $.Values.global.metadata.enableMetadataRecovery }}
         - -enable_data_replication={{ $.Values.global.metadata.enableDataReplication }}
         - -logbufsecs={{ $.Values.global.log.logBufSecs }}
@@ -123,7 +126,6 @@ spec:
         - -oc_metadata_header={{ $.Values.global.performance.enableOcMetadataHeader }}
         - -enable_fallocate={{ $.Values.global.performance.enableFallocate }}
         - -authorization_enable={{ $.Values.global.tenantAuth.authorizationEnable }}
-        - -iam_kit={{ $.Values.global.tenantAuth.iamKit }}
         - -yuanrong_iam_url={{ $.Values.global.tenantAuth.yuanrong.yuanrongIamUrl }}
         {{- if not (eq $.Values.global.tenantAuth.yuanrong.yuanrongIamCa "") }}
         - -yuanrong_iam_ca={{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}/yuanrong_iam_ca.crt
@@ -155,8 +157,6 @@ spec:
         - -ready_check_path=$(READY_CHECK_PATH)
         - -liveness_check_path=$(LIVENESS_CHECK_PATH)
         - -oc_worker_worker_direct_port={{ $.Values.global.rpc.ocWorkerWorkerDirectPort }}
-        - -oc_worker_worker_pool_size={{ $.Values.global.rpc.ocWorkerWorkerPoolSize }}
-        - -payload_nocopy_threshold={{ $.Values.global.rpc.payloadNocopyThreshold | int64 }}
         - -batch_get_threshold_mb={{ $.Values.global.rpc.batchGetThresholdMb }}
         - -max_client_num={{ $.Values.global.resources.datasystemWorker.maxClientNum }}
         - -client_reconnect_wait_s={{ $.Values.global.reliability.clientReconnectWaitS }}
@@ -208,7 +208,6 @@ spec:
         - -etcd_key={{ $.Values.global.etcd.etcdCertDir }}/client.key
         - -etcd_passphrase_path={{ $.Values.global.etcd.etcdCertDir }}/passphrase
         {{- end }}
-        - -add_node_wait_time_s={{ $.Values.global.reliability.addNodeWaitTimeS }}
         - -auto_del_dead_node={{ $.Values.global.reliability.autoDelDeadNode }}
         - -spill_directory={{ $.Values.global.spill.spillDirectory }}
         - -spill_size_limit={{ $.Values.global.spill.spillSizeLimit }}
@@ -258,13 +257,11 @@ spec:
         - -urma_log_threshold_us={{ $.Values.global.performance.urmaLogThresholdUs | int64 }}
         - -urma_max_write_size_mb={{ $.Values.global.performance.urmaMaxWriteSizeMb }}
         - -urma_register_whole_arena={{ $.Values.global.performance.urmaRegisterWholeArena }}
-        - -urma_connection_size={{ $.Values.global.performance.urmaConnectionSize }}
         - -urma_event_mode={{ $.Values.global.performance.urmaEventMode }}
         - -enable_transport_fallback={{ $.Values.global.performance.enableTransportFallback }}
         - -urma_failover_success_rate_ratio={{ $.Values.global.performance.urmaFailoverSuccessRateRatio }}
         - -urma_failover_min_sample_count={{ $.Values.global.performance.urmaFailoverMinSampleCount }}
         - -oc_shm_transfer_threshold_kb={{ $.Values.global.performance.ocShmTransferThresholdKB }}
-        - -stream_idle_time_s={{ $.Values.global.rpc.streamIdleTimes }}
         - -enable_distributed_master={{ $.Values.global.reliability.enableDistributedMaster }}
         - -enable_p2p_transfer={{ $.Values.global.performance.enableP2pTransfer }}
         - -enable_worker_worker_batch_get={{ $.Values.global.performance.enableWorkerWorkerBatchGet }}

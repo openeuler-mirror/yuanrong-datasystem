@@ -27,8 +27,6 @@ public:
     {
         int num = 4;
         opts.numWorkers = num;
-        opts.workerGflagParams = " -cache_rpc_session=false ";
-        opts.masterGflagParams = " -cache_rpc_session=false ";
         opts.numEtcd = 1;
     }
 };

@@ -82,7 +82,7 @@ public:
         }
         opts.vLogLevel = 1;
         opts.workerGflagParams =
-            " -shared_memory_size_mb=5120 -payload_nocopy_threshold=1000000"
+            " -shared_memory_size_mb=5120"
             " -arena_per_tenant=1 -enable_urma=true -ipc_through_shared_memory=false"
             " -enable_transport_fallback=false -enable_ub_numa_affinity=true"
             " -ub_numa_rr_type=1 -ub_numa_inflight_wr_diff_threshold=15 -ub_numa_src_chip_policy="

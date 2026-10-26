@@ -54,7 +54,7 @@ public:
         }
         // Enable worker->worker batch get by default.
         opts.workerGflagParams =
-            " -shared_memory_size_mb=5120 -v=2 -payload_nocopy_threshold=1000000 -enable_worker_worker_batch_get=true"
+            " -shared_memory_size_mb=5120 -v=2 -enable_worker_worker_batch_get=true"
             " -batch_get_threshold_mb=20";
 #ifdef USE_RDMA
         opts.workerGflagParams += " -arena_per_tenant=1 -enable_rdma=true ";
@@ -771,7 +771,7 @@ public:
         }
         // Enable worker->worker batch get by default.
         opts.workerGflagParams =
-            " -shared_memory_size_mb=5120 -v=2 -payload_nocopy_threshold=1000000 -enable_worker_worker_batch_get=true "
+            " -shared_memory_size_mb=5120 -v=2 -enable_worker_worker_batch_get=true "
             "-arena_per_tenant=1";
         // Specify mismatching enable_rdma setting for the workers.
         opts.workerSpecifyGflagParams[0] += " -enable_rdma=true ";

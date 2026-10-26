@@ -104,7 +104,6 @@ DS_DECLARE_bool(enable_reconciliation);
 DS_DECLARE_string(coordinator_address);
 DS_DEFINE_string(master_address, "", "Address of ds master and the value cannot be empty.");
 DS_DEFINE_bool(enable_distributed_master, true, "Whether to support distributed master, default is true.");
-DS_DEFINE_uint32_dynamic(add_node_wait_time_s, 60, "Wait time (s) for the first node joining a working hash ring.");
 DS_DECLARE_bool(auto_del_dead_node);
 DS_DEFINE_bool(enable_p2p_transfer, false, "Heterogeneous object transfer protocol Enables p2ptransfer");
 #ifdef WITH_TESTS
@@ -164,9 +163,6 @@ DS_DEFINE_uint32(memory_reclamation_time_second, 600, "The memory reclamation ti
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_uint32(scale_in_collect_window_ms);
-DS_DEFINE_bool(cross_cluster_get_data_from_worker, true,
-               "[DEPRECATED] Cross-cluster data access from workers has been removed. This flag is kept for "
-               "compatibility and is ignored.");
 DS_DEFINE_string(liveness_check_path, "",
                  "File will create after the worker check liveness successfully"
                  "It is used to detect whether the container is liveness in the k8s scenario."

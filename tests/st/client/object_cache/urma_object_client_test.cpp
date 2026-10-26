@@ -158,7 +158,7 @@ public:
         // Enable worker->worker batch get by default.
         opts.vLogLevel = 2;
         opts.workerGflagParams =
-            " -shared_memory_size_mb=5120 -payload_nocopy_threshold=1000000 -enable_worker_worker_batch_get=true"
+            " -shared_memory_size_mb=5120 -enable_worker_worker_batch_get=true"
             " -batch_get_threshold_mb=20";
 #ifdef USE_URMA
         opts.workerGflagParams += " -arena_per_tenant=1 -enable_urma=true ";
@@ -1487,7 +1487,7 @@ public:
         // Enable worker->worker batch get by default.
         opts.vLogLevel = 2;
         opts.workerGflagParams =
-            " -shared_memory_size_mb=5120 -payload_nocopy_threshold=1000000 -enable_worker_worker_batch_get=true "
+            " -shared_memory_size_mb=5120 -enable_worker_worker_batch_get=true "
             "-arena_per_tenant=1";
         // Specify mismatching enable_urma setting for the workers.
         opts.workerSpecifyGflagParams[0] += " -enable_urma=true ";

@@ -62,7 +62,6 @@ public:
         opts.numWorkers = 2;
         opts.enableDistributedMaster = "true";
         opts.waitWorkerReady = false;
-        opts.addNodeTime = SCALE_DOWN_ADD_TIME;
         distributedDiskPath_ = GetTestCaseDataDir() + "/distributed_disk";
         DS_ASSERT_OK(CreateDir(distributedDiskPath_, true));
         opts.workerGflagParams = FormatString(

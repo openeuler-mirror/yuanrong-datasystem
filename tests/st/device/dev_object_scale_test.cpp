@@ -208,7 +208,6 @@ public:
         opts.numWorkers = 3;  // worker num is 3
         opts.numOBS = 1;
         opts.enableDistributedMaster = "true";
-        opts.addNodeTime = 0;
         opts.workerGflagParams =
             FormatString(" -v=0 -node_timeout_s=%d -node_dead_timeout_s=%d -auto_del_dead_node=true", nodeTimeout_,
                          nodeDeadTimeout_);

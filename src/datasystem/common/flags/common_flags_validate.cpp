@@ -21,7 +21,6 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/rdma/urma_send_lane.h"
-#include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/validator.h"
 
 DS_DECLARE_uint64(urma_max_write_size_mb);
@@ -85,20 +84,6 @@ bool ValidateUbNumaSrcChipPolicy(const char *flagName, uint32_t value)
         return false;
     }
     return true;
-}
-
-bool ValidateDataPlacementPolicy(const char *flagName, const std::string &value)
-{
-    const std::string normalized = StringToUpper(Trim(value));
-    if (normalized == "PREFERRED_SAME_NODE" ||
-        normalized == "REQUIRED_SAME_NODE" ||
-        normalized == "PREFERRED_META_OWNER") {
-        return true;
-    }
-    LOG(ERROR) << FormatString(
-        "Invalid %s value: '%s'. Valid values are PREFERRED_SAME_NODE, REQUIRED_SAME_NODE, PREFERRED_META_OWNER.",
-        flagName, value);
-    return false;
 }
 
 bool ValidateEnableRdma(const char *flagName, bool value)
@@ -270,7 +255,6 @@ bool ValidateWorkerDirectPort(const char *flagName, int32_t value)
 }  // namespace
 
 DS_DEFINE_validator(l2_cache_type, &Validator::ValidateL2CacheType);
-DS_DEFINE_validator(sdk_data_placement_policy, &ValidateDataPlacementPolicy);
 DS_DEFINE_validator(io_thread_nice, &ValidateIoThreadNice);
 DS_DEFINE_validator(node_timeout_s, &Validator::ValidateNodeTimeout);
 DS_DEFINE_validator(eviction_reserve_mem_threshold_mb, &Validator::ValidateEvictReserveMemThreshold);

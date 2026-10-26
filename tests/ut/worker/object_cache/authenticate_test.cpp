@@ -45,7 +45,6 @@
 #include "../../../common/binmock/binmock.h"
 
 DS_DECLARE_string(spill_directory);
-DS_DECLARE_string(iam_kit);
 DS_DECLARE_string(yuanrong_iam_url);
 
 using namespace ::testing;
@@ -58,7 +57,6 @@ public:
     void SetUp() override
     {
         FLAGS_v = 1;
-        FLAGS_iam_kit = "token_oauth";
         ASSERT_TRUE(TimerQueue::GetInstance()->Initialize());
         datasystem::inject::Set("CurlHttpClient.Send.ReleaseCurlHandle", "100*call");
     }
@@ -207,7 +205,6 @@ TEST_F(AuthenticateTest, TestProtobufFilterSensitiveInfo)
 
 TEST_F(AuthenticateTest, TestEnableInYuanrong)
 {
-    FLAGS_iam_kit = "yuanrong_iam";
     const std::string accessKey = "accesskey";
     const std::string secretKey = "secretkey";
     auto akSkManager = std::make_shared<AkSkManager>();
@@ -242,7 +239,6 @@ TEST_F(AuthenticateTest, TestSystemRoleAuth)
             rsp->GetBody()->write(rspStr.c_str(), rspStr.length());
             return Status::OK();
         });
-    FLAGS_iam_kit = "yuanrong_iam";
     FLAGS_yuanrong_iam_url = "http://iam-server.default.svc.cluster.local:31218";
     const std::string accessKey = "accesskey";
     const std::string secretKey = "secretkey";
@@ -285,7 +281,6 @@ TEST_F(AuthenticateTest, TestOnlySystemAKSK)
 
 TEST_F(AuthenticateTest, TestAKSKCompatibility)
 {
-    FLAGS_iam_kit = "yuanrong_iam";
     const std::string accessKey = "accesskey";
     const std::string secretKey = "secretkey";
     auto akSkManager = std::make_shared<AkSkManager>();

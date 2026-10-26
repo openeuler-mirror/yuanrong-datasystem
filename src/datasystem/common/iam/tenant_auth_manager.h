@@ -41,8 +41,6 @@
 namespace datasystem {
 const std::string K_SEPARATOR = "$";
 
-enum IAMKit : int { YUANRONG_IAM };
-
 struct SensitiveValueHashCompare {
     static size_t hash(const SensitiveValue &a)
     {

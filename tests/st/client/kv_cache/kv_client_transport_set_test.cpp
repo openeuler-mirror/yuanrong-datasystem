@@ -49,7 +49,6 @@
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
-DS_DECLARE_string(sdk_data_placement_policy);
 DS_DECLARE_string(host_id_env_name);
 namespace datasystem {
 namespace st {
@@ -583,9 +582,6 @@ class KVClientTransportSetConnectOptionsTest : public KVClientTransportSetTest {
 protected:
     void InitRoutedClient() override
     {
-        const std::string previousPolicy = FLAGS_sdk_data_placement_policy;
-        Raii restorePolicy([previousPolicy]() { FLAGS_sdk_data_placement_policy = previousPolicy; });
-        FLAGS_sdk_data_placement_policy = "PREFERRED_SAME_NODE";
         ConnectOptions options;
         InitConnectOpt(ROUTED_CLIENT_WORKER_INDEX, options);
         options.enableLocalCache = false;
@@ -610,9 +606,6 @@ TEST_F(KVClientTransportSetConnectOptionsTest, DISABLED_MetaOwnerPolicyRoutesWri
     DS_ASSERT_OK(FindWorkerIndex(metaOwner, metaOwnerIndex));
     DS_ASSERT_OK(FindWorkerIndex(preferredWorker, preferredWorkerIndex));
     AssertPrimaryWorker(key, metaOwnerIndex);
-    const std::string previousPolicy = FLAGS_sdk_data_placement_policy;
-    Raii restorePolicy([previousPolicy]() { FLAGS_sdk_data_placement_policy = previousPolicy; });
-    FLAGS_sdk_data_placement_policy = "PREFERRED_SAME_NODE";
     ConnectOptions readOptions;
     InitConnectOpt(preferredWorkerIndex, readOptions);
     readOptions.enableLocalCache = false;

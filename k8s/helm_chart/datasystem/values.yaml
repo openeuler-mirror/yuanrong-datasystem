@@ -287,8 +287,6 @@ global:
       capacity: "500Gi"
 
   metadata:
-    # Deprecated compatibility option for metadata replica. The value is ignored.
-    enableMetaReplica: false
     # Config MASTER back store directory and must specify in rocksdb scenario.
     # The rocksdb database is used to persistently store the metadata stored in the master
     # so that the metadata before the restart can be re-obtained when the master restarts.
@@ -311,9 +309,6 @@ global:
     # A direct TCP/IP port for worker-to-worker scenarios to improve latency.
     # Acceptable value:0, or some positive integer. 0 means disabled.
     ocWorkerWorkerDirectPort: 0
-    # Number of parallel connections from worker to worker scenarios to improve throughput.
-    # OC_WORKER_WORKER_DIRECT_PORT must be enabled to take effect.
-    ocWorkerWorkerPoolSize: 3
     # A direct tcp/ip port for worker to workers scenarios to improve latency.
     # Acceptable values:0, or some positive integer. 0 means disabled.
     scWorkerWorkerDirectPort: 0
@@ -323,9 +318,6 @@ global:
 
     # The payload threshold to batch get objects, unit is MB. Setting to 0 will indicate no split.
     batchGetThresholdMb: 100
-    # Minimum payload size in bytes to trigger direct write into shared memory.
-    # May incur extra network cost
-    payloadNocopyThreshold: "104857600"
     # Config rpc server thread number, must be greater than 0.
     rpcThreadNum: 128
     # The number of worker service for object cache.
@@ -371,8 +363,6 @@ global:
     scGcIntervalMs: 50
     # Remote send interval in milliseconds
     scScanIntervalMs: 10
-    # stream idle time. default 300s (5 minutes)
-    streamIdleTimes: 300
 
   ipc:
     # Determines whether the shared memory feature is enabled.
@@ -397,8 +387,6 @@ global:
     enableReconciliation: true
     # Timeout interval of kubernetes liveness probe, default is 150 seconds.
     livenessProbeTimeoutS: 150
-    # Time to wait for the first node that wants to join a working hash ring.
-    addNodeWaitTimeS: 60
     # Decide whether to remove the node from hash ring or not when node is dead
     autoDelDeadNode: true
     # Whether to support distributed master, default is true.
@@ -483,9 +471,6 @@ global:
     urmaMaxWriteSizeMb: 4
     # Register the whole arena as segment during init, otherwise, register each object as a segment.
     urmaRegisterWholeArena: true
-    # [DEPRECATED] Retained for compatibility only and ignored internally.
-    # JFS/JFR are now created per connection.
-    urmaConnectionSize: 0
     # Uses interrupt mode to poll completion events.
     urmaEventMode: false
     # Enable fast transport (urma/rdma) fallback to tcp transport.
@@ -542,7 +527,8 @@ global:
     # Indicates whether to enable the tenant authentication, default is false.
     # Tenant authorization is forbidden in the case of stream cache.
     authorizationEnable: false
-    # The type of iam kit, none is default, value range: [none, yuanrong_iam].
+    # Controls whether YuanRong IAM Secret and certificate volumes are mounted.
+    # The runtime always uses YuanRong IAM. Supported values: [none, yuanrong_iam].
     iamKit: "none"
     yuanrong:
       # The access yuanrong token or accessKey server url. Example: http(s)://xxx.xxx , for different auth methods, the following URI will be automatically added.

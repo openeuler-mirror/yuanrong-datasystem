@@ -80,7 +80,6 @@ DS_DEFINE_uint32(urma_log_threshold_us, DEFAULT_URMA_LOG_THRESHOLD_US,
                  "URMA polling-mode INFO log threshold in microseconds (urma_event_mode=false). "
                  "Valid range [1, UINT32_MAX]. Default 500; restart required.");
 DS_DEFINE_uint64(urma_max_write_size_mb, 4, "Maximum URMA write size, unit is MB. Valid range is [1, 2048].");
-DS_DEFINE_uint32(urma_connection_size, 0, "[DEPRECATED] No longer used. JFS/JFR are created per-connection.");
 DS_DEFINE_uint32(urma_send_jetty_lane_pool_size, 200,
                  "Process-level target number of reusable URMA send Jetty lanes. Each lane is leased by one logical "
                  "transfer and may carry multiple chunk WRs until that transfer settles.");
@@ -117,7 +116,6 @@ DS_DEFINE_string(remote_h2d_hccs_buffer_pool, "0:0",
                  "disable the buffer pool. "
                  "Only consumed when remote_h2d_link_type=HCCS.");
 DS_DEFINE_bool(hixl_cs_enable, false, "Enable HIXL CS with LocalCommRes version 1.3 for Remote H2D.");
-DS_DEFINE_string(urma_mode, "UB", "[DEPRECATED] This flag is no longer used and will be removed in a future version.");
 DS_DEFINE_bool(enable_urma, false, "Option to turn on urma for OC worker to worker data transfer, default false.");
 DS_DEFINE_bool(enable_ub_fault_isolation, GetBoolFromEnv("DATASYSTEM_ENABLE_UB_FAULT_ISOLATION", true),
                "Whether the Client SDK process applies UB fault isolation results. It only controls whether this "
@@ -160,13 +158,6 @@ DS_DEFINE_uint32(
     eviction_reserve_mem_threshold_mb, 10240,
     "The reserved memory (MB) is determined by min(shared_memory_size_mb*0.1, eviction_reserve_mem_threshold_mb). "
     "Eviction begins when memory drops below this threshold.The valid range is 100-102400.");
-// Deprecated no-op kept one release for upgrade compatibility: worker configs generated from the
-// template while this key existed still carry it, and an unknown flag fails worker startup. Nothing
-// reads the value; the patrol always auto-reserves the average cached object size.
-DS_DEFINE_uint32(
-    eviction_pretrigger_margin_mb, 0,
-    "Deprecated and ignored: the background eviction patrol now auto-reserves the average cached "
-    "object size. Remove this key from worker configs.");
 DS_DEFINE_double(eviction_high_watermark_ratio, 0.9,
                  "Memory usage high watermark (ratio of available shared memory, 0.0-1.0). Eviction starts when "
                  "occupied memory reaches max(ratio * memory, memory - eviction_reserve_mem_threshold_mb). Must be "
@@ -234,10 +225,6 @@ DS_DEFINE_uint32(scale_in_collect_window_ms, DEFAULT_SCALE_IN_COLLECT_WINDOW_MS,
                  "ordinary SCALE_IN batch coalescing window in milliseconds. When non-zero, the first PRE_LEAVING "
                  "candidate opens a short collect window so members exiting within it land in the same epoch; "
                  "0 disables coalescing (legacy immediate-batch behavior). Hard upper bound 5000ms.");
-DS_DEFINE_uint64(stream_idle_time_s, 5 * 60, "stream idle time. default 300s (5 minutes)");
-DS_DEFINE_int64(payload_nocopy_threshold, 1048576L * 100L, "minimum payload size to trigger no memory copy");
-DS_DEFINE_bool(enable_multi_stubs, false, "deprecated");
-DS_DEFINE_bool(enable_tcp_direct_for_multi_stubs, false, "deprecated");
 DS_DEFINE_bool_dynamic(log_monitor, true, "Indicates whether to enable log monitoring, default is true.");
 DS_DEFINE_bool_dynamic(json_log_monitor, true,
                        "Indicates whether to enable JSON log monitoring for kv_resource.log and kv_metrics.log.");
@@ -297,7 +284,6 @@ DS_DEFINE_int32(io_thread_nice, 0,
                 "require appropriate privileges.");
 DS_DEFINE_bool(enable_sched_runtime, true,
                "Enable selected threads to set the Linux scheduler runtime. Default is true.");
-DS_DEFINE_bool(cache_rpc_session, true, "Deprecated: This flag is deprecated and will be removed in future releases.");
 DS_DEFINE_string(etcd_address, "", "Address of ETCD server");
 DS_DEFINE_string(coordinator_address, "",
                  "Address of datasystem coordinator service. Empty means coordinator mode is disabled.");
@@ -320,10 +306,6 @@ DS_DEFINE_uint64_dynamic(slow_log_rpc_slower_than, 5000,
                  "will include a latency summary in the access log.");
 DS_DEFINE_bool(enable_leaving_intercept, false,
                "Reject object-cache write requests after the local worker records topology scale-in exit intent.");
-DS_DEFINE_string(sdk_data_placement_policy, "PREFERRED_SAME_NODE",
-                 "SDK write placement policy, read once during routing initialization: PREFERRED_SAME_NODE, "
-                 "REQUIRED_SAME_NODE, or PREFERRED_META_OWNER. Use PREFERRED_META_OWNER to preserve legacy "
-                 "metadata-owner placement.");
 DS_DEFINE_int32(brpc_server_num_threads, 64, "Number of brpc server worker threads.");
 DS_DEFINE_int32(brpc_max_concurrency, 128,
                 "Max concurrent in-flight RPCs per brpc server. 0=unlimited. "

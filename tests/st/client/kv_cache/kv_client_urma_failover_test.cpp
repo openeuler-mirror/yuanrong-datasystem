@@ -93,7 +93,7 @@ public:
         opts.masterIdx = 1;
         // Keep local IPC enabled so same-host service discovery exercises the UDS/shared-memory path.
         opts.workerGflagParams = FormatString(
-            " -shared_memory_size_mb=5120 -payload_nocopy_threshold=65536"
+            " -shared_memory_size_mb=5120"
             " -enable_worker_worker_batch_get=true -enable_transport_fallback=true"
             " -ipc_through_shared_memory=true -client_dead_timeout_s=1"
             " -node_timeout_s=1 -node_dead_timeout_s=%d -heartbeat_interval_ms=500"
