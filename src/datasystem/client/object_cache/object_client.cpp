@@ -22,6 +22,7 @@
 
 #include "datasystem/client/object_cache/object_client_impl.h"
 #include "datasystem/common/log/access_recorder.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/utils/status.h"
@@ -61,7 +62,12 @@ Status ObjectClient::Init()
         // Init only after impl_->Init succeeded so the kv_metrics.log exporter resolves FLAGS_log_dir
         // after the client config/logging has set it; creating it earlier (or on a failed init whose
         // config was never applied) writes to "/kv_metrics.log" and pins g_inited.
-        (void)metrics::InitKvMetrics();
+        Status metricsRc = metrics::InitKvMetrics();
+        if (metricsRc.IsError()) {
+            LOG(WARNING) << "Metrics JSON exporter initialization failed; summaries fall back to INFO only when "
+                            "log_monitor is enabled: "
+                         << metricsRc.ToString();
+        }
     }
     return rc;
 }

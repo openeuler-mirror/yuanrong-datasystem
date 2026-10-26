@@ -1383,8 +1383,7 @@ address 清理失败，需检查 `deleted_members` 中的 `error` 字段。
 | logbufsecs | int | `0` | 否 | 日志消息最大缓冲时长，单位为秒 |
 | logfile_mode | int | `416` | 否 | 日志文件模式/权限 |
 | log_only_write_info_file | bool | `true` | 否 | 是否只生成 INFO 日志文件；INFO 文件始终包含所有级别的日志 |
-| log_monitor | bool | `true` | 是 | 是否开启 Coordinator 指标摘要；当 JSON exporter 未启用或未创建时，摘要输出到 Coordinator INFO 作为 fallback |
-| json_log_monitor | bool | `true` | 是 | 是否将 Coordinator 指标摘要输出到 `kv_metrics.log` JSON-Lines 文件。开启且 exporter 创建成功后，每周期完整记录，Coordinator INFO 不再重复输出 `metrics_summary` |
+| log_monitor | bool | `true` | 是 | 不控制 JSON 输出；失败策略见表后说明 |
 | log_monitor_interval_ms | int | `10000` | 否 | Coordinator 指标摘要的采集和输出间隔，单位为毫秒 |
 | brpc_server_num_threads | int | `64` | 否 | brpc Server 工作线程数 |
 | brpc_max_concurrency | int | `128` | 否 | 每个 brpc Server 允许的最大并发 RPC 数；为 `0` 时不限制，且不能小于 `brpc_server_num_threads` |
@@ -1393,6 +1392,9 @@ address 清理失败，需检查 `deleted_members` 中的 `error` 字段。
 | diagnostic_sample_rate | double | `1.0` | 是 | Diagnostic 日志采样率（独立于请求采样），取值范围为 `[0.0, 1.0]` |
 
 Coordinator 日志和采样配置的详细语义参见[日志与可观测相关配置](#日志与可观测相关配置)。
+
+JSON exporter 初始化失败时，Coordinator 启动失败，不会进入 INFO fallback。
+INFO fallback 仅适用于忽略该初始化错误的 SDK Client，并且只在 `log_monitor` 开启时生效。
 
 `coordinator_raft_initial_peers` 为空时，Coordinator 按单节点无选主模式启动；配置多个静态 peers 时，
 Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinator_raft_data_dir`、
@@ -1525,14 +1527,16 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 
 > **采样率与链路完整性**：三个采样率相互独立，各自精确控制本类日志的保留率。三类共用同一个由 traceID 决定的 per-trace 哈希并各比各的阈值（嵌套阈值），因此 access/diagnostic 的采样预算优先覆盖被采中的请求：采样率 >= `request_sample_rate` 时链路零破坏；采样率低于 request 时，被破坏的是保留率约束下最小且确定可复现的请求子集，需要链路完整请配置该采样率 >= `request_sample_rate`（或保持默认 1.0）。
 | log_only_write_info_file | bool | `true` | 否 | INFO日志文件始终写入所有级别日志。该值为`true`时不额外生成WARNING/ERROR日志文件；为`false`时会额外生成WARNING/ERROR日志文件，高级别日志会按等级写入多个日志文件。 |
-| log_monitor | bool | `true` | 是 | 是否开启接口性能与资源观测日志 |
-| json_log_monitor | bool | `true` | 是 | 是否开启 `kv_resource.log` 与 `kv_metrics.log` JSON-Lines 观测日志。开启后 `kv_metrics.log` 每周期完整记录 `metrics_summary`，主 INFO 不再重复输出 `metrics_summary`；JSON exporter 未启用或未创建时保持 `log_monitor` 控制的 INFO 输出 |
+| log_monitor | bool | `true` | 是 | 控制 resource.log，不控制 JSON 输出；失败策略见表后说明 |
 | monitor_config_file | string | `./datasystem/config/datasystem.config` | 否 | 配置worker监控配置文件的路径 |
-| log_monitor_exporter | string | `"harddisk"` | 否 | 指定观测日志导出类型，当前仅支持按 `harddisk` 类型导出观测数据，即将观测数据保存到 `logDir` 路径下 |
+| log_monitor_exporter | string | `"harddisk"` | 否 | 资源日志导出类型；仅支持 harddisk；启动时校验 |
 | log_monitor_interval_ms | int | `10000` | 否 | 观测日志收集导出的间隔时间（以毫秒为单位） |
 | minloglevel | int | `0` | 是 | 设置记录冗余日志的最低级别，低于这个级别的日志不会被记录 |
 | logfile_mode | int | `416` | 否 | 设置日志文件模式/权限，值为八进制数 |
 | enable_perf_trace_log | bool | `false` | 否 | 是否打开性能trace日志 |
+
+JSON exporter 初始化失败时，Worker 启动失败，不会进入 INFO fallback。
+INFO fallback 仅适用于忽略该初始化错误的 SDK Client，并且只在 `log_monitor` 开启时生效。
 
 > **升级提示**：日志压缩默认关闭后，新部署或升级集群的历史日志不会再自动压缩，日志磁盘占用可能增加且滚动更快。如需保持历史压缩行为，请显式配置 `log_compress` 为 `true`；同时建议根据不压缩场景重新评估 `max_log_file_num` 和 `max_log_size` 的容量设置。
 

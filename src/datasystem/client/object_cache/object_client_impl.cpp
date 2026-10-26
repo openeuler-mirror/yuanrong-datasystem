@@ -123,9 +123,6 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/utils/string_view.h"
 #include "datasystem/object/buffer.h"
-DS_DECLARE_bool(log_monitor);
-DS_DECLARE_bool(json_log_monitor);
-
 static constexpr size_t OBJ_META_MAX_SIZE_LIMIT = 64;
 
 namespace datasystem {
@@ -4707,7 +4704,7 @@ void ObjectClientImpl::StartPerfThread()
 
 void ObjectClientImpl::StartMetricsThread()
 {
-    if ((!FLAGS_log_monitor && !FLAGS_json_log_monitor) || metricsThread_ != nullptr) {
+    if (metricsThread_ != nullptr) {
         return;
     }
     LOG(INFO) << "StartMetricsThread.";

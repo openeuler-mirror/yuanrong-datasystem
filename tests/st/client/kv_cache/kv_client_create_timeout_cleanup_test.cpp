@@ -83,7 +83,7 @@ public:
         opts.workerGflagParams =
             std::string(" -shared_memory_size_mb=") + std::to_string(WORKER_SHM_SIZE_MB)
             + " -ipc_through_shared_memory=true -arena_per_tenant=1 -enable_urma=false"
-            + " -log_monitor=true -json_log_monitor=true -log_monitor_interval_ms=200"
+            + " -log_monitor=true -log_monitor_interval_ms=200"
             + " -shm_ref_hard_reclaim_timeout_ms=" + std::to_string(GetHardReclaimTimeoutMs())
             + " -host_id_env_name=" + HOST_ID_ENV_NAME;
     }

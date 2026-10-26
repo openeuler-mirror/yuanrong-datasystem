@@ -191,8 +191,7 @@ enum class KvMetricId : uint16_t {
 
 Status InitKvMetrics();
 
-// Lifecycle observation is off unless either KV metrics output is enabled. Callers use this to
-// avoid contending on process-wide counters in the UB Set/Get data path when no metric is consumed.
+// UB lifecycle observation follows successful metrics catalog and exporter initialization.
 bool IsClientUbLifecycleMetricsEnabled();
 
 // UB buffer lifecycle metrics report the peak count since the preceding metrics tick. The state

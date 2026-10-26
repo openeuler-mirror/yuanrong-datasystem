@@ -119,6 +119,10 @@ private:
 std::vector<std::string> DumpSummariesForTest(int intervalMs = 10000);
 std::string DumpSummaryForTest(int intervalMs = 10000);
 void ResetForTest();
+#ifdef WITH_TESTS
+// Drops only the kv_metrics.log exporter so the INFO fallback path is testable; slots stay registered.
+void ResetKvMetricsExporterForTest();
+#endif
 }  // namespace datasystem::metrics
 
 #endif  // DATASYSTEM_COMMON_METRICS_METRICS_H

@@ -43,7 +43,6 @@ DS_DEFINE_int32(sc_stream_socket_num, 16,
 DS_DEFINE_validator(sc_regular_socket_num, &Validator::ValidateRpcThreadNum);
 DS_DEFINE_validator(sc_stream_socket_num, &Validator::ValidateRpcThreadNum);
 DS_DECLARE_bool(log_monitor);
-DS_DECLARE_bool(json_log_monitor);
 DS_DECLARE_string(log_monitor_exporter);
 DS_DECLARE_string(log_dir);
 DS_DECLARE_string(cluster_name);
@@ -108,25 +107,21 @@ void ResMetricCollector::Stop()
 
 Status ResMetricCollector::Init()
 {
-    if (FLAGS_log_monitor || FLAGS_json_log_monitor) {
-        if (FLAGS_log_monitor_exporter != "harddisk") {
-            RETURN_STATUS(K_INVALID, "Invalid gflag log_monitor_exporter. Must be \"harddisk\".");
-        }
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Logging::CreateLogDir(), K_NOT_READY, "Log file creation failed");
-        if (FLAGS_log_monitor) {
-            std::string filePath = FLAGS_log_dir + "/" + RESOURCE_LOG_NAME + ".log";
-            auto hardDiskExporter = std::make_unique<HardDiskExporter>();
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(hardDiskExporter->Init(filePath), "hardDiskExporter Init failed.");
-            exporter_ = std::move(hardDiskExporter);
-        }
-        if (FLAGS_json_log_monitor) {
-            std::string jsonPath = FLAGS_log_dir + "/" + KV_RESOURCE_LOG_NAME + ".log";
-            auto jsonExporter = std::make_unique<JsonLinesExporter>();
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(jsonExporter->Init(jsonPath), "jsonExporter Init failed.");
-            jsonExporter_ = std::move(jsonExporter);
-        }
-        isInit_ = true;
+    if (FLAGS_log_monitor_exporter != "harddisk") {
+        RETURN_STATUS(K_INVALID, "Invalid gflag log_monitor_exporter. Must be \"harddisk\".");
     }
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Logging::CreateLogDir(), K_NOT_READY, "Log file creation failed");
+    if (FLAGS_log_monitor) {
+        std::string filePath = FLAGS_log_dir + "/" + RESOURCE_LOG_NAME + ".log";
+        auto hardDiskExporter = std::make_unique<HardDiskExporter>();
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(hardDiskExporter->Init(filePath), "hardDiskExporter Init failed.");
+        exporter_ = std::move(hardDiskExporter);
+    }
+    std::string jsonPath = FLAGS_log_dir + "/" + KV_RESOURCE_LOG_NAME + ".log";
+    auto jsonExporter = std::make_unique<JsonLinesExporter>();
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(jsonExporter->Init(jsonPath), "jsonExporter Init failed.");
+    jsonExporter_ = std::move(jsonExporter);
+    isInit_ = true;
     return Status::OK();
 }
 
@@ -149,41 +144,38 @@ void ResMetricCollector::CollectMetrics()
         TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
         int iLimit = int(ResMetricName::RES_METRICS_END) - 1;
         while (!exitFlag_) {
-            if (FLAGS_log_monitor || FLAGS_json_log_monitor) {
-                std::string metricString;
-                std::stringstream unRegisteredFunctions;
-                // Cache each handler result once: some handlers reset interval counters
-                // (e.g. GetAndResetIntervalStats), so text and JSON paths must share one call.
-                std::vector<std::string> handlerResults(iLimit + 1);
-                for (int i = int(ResMetricName::SHARED_MEMORY); i <= iLimit; i++) {
-                    auto iter = collectHandler_.find(i);
-                    if (iter != collectHandler_.end()) {
-                        std::string collectMetrics = iter->second();
-                        handlerResults[i] = collectMetrics;
-                        metricString += collectMetrics + " | ";
-                    } else {
-                        metricString += " | ";
-                        unRegisteredFunctions << std::to_string(i) << (i == iLimit ? "" : ",");
-                    }
+            std::string metricString;
+            std::stringstream unRegisteredFunctions;
+            // Cache each handler result once: some handlers reset interval counters
+            // (e.g. GetAndResetIntervalStats), so text and JSON paths must share one call.
+            std::vector<std::string> handlerResults(iLimit + 1);
+            for (int i = int(ResMetricName::SHARED_MEMORY); i <= iLimit; i++) {
+                auto iter = collectHandler_.find(i);
+                if (iter != collectHandler_.end()) {
+                    std::string collectMetrics = iter->second();
+                    handlerResults[i] = collectMetrics;
+                    metricString += collectMetrics + " | ";
+                } else {
+                    metricString += " | ";
+                    unRegisteredFunctions << std::to_string(i) << (i == iLimit ? "" : ",");
                 }
-                if (!unRegisteredFunctions.str().empty()) {
-                    LOG_FIRST_N(WARNING, 1)
-                        << "No handler found for resource log type :" << unRegisteredFunctions.str();
-                }
-                if (!metricString.empty()) {
-                    metricString.pop_back();
-                }
-                Uri uri(__FILE__);
-                LogTime logTime;
-                const std::string timestamp = FormatLogTimestamp(logTime.getTm(), logTime.getUsec());
-                if (FLAGS_log_monitor && exporter_ != nullptr) {
-                    exporter_->Send(metricString, uri, __LINE__);
-                    exporter_->SubmitWriteMessage();
-                }
-                if (FLAGS_json_log_monitor && jsonExporter_ != nullptr) {
-                    std::string jsonLine = BuildResourceJson(handlerResults, timestamp);
-                    jsonExporter_->WriteJsonLine(jsonLine);
-                }
+            }
+            if (!unRegisteredFunctions.str().empty()) {
+                LOG_FIRST_N(WARNING, 1) << "No handler found for resource log type :" << unRegisteredFunctions.str();
+            }
+            if (!metricString.empty()) {
+                metricString.pop_back();
+            }
+            Uri uri(__FILE__);
+            LogTime logTime;
+            const std::string timestamp = FormatLogTimestamp(logTime.getTm(), logTime.getUsec());
+            if (FLAGS_log_monitor && exporter_ != nullptr) {
+                exporter_->Send(metricString, uri, __LINE__);
+                exporter_->SubmitWriteMessage();
+            }
+            if (jsonExporter_ != nullptr) {
+                std::string jsonLine = BuildResourceJson(handlerResults, timestamp);
+                jsonExporter_->WriteJsonLine(jsonLine);
             }
             INJECT_POINT("worker.CollectMetrics", [this](int interval) { msInterval_ = interval; });
             auto waitTimeMs = 100;
@@ -221,9 +213,8 @@ std::string ResMetricCollector::BuildResourceJson(const std::vector<std::string>
 void ResMetricCollector::RegisterCollectHandler(ResMetricName metricName, std::function<std::string()> collectHandler)
 {
     if (exporter_ == nullptr && jsonExporter_ == nullptr) {
-        LOG(WARNING) << "ResMetricCollector is not initialized because both log_monitor and json_log_monitor are "
-                        "off at startup; the collect handler for metric "
-                     << int(metricName) << " stays dormant until the worker restarts with monitoring enabled";
+        LOG(WARNING) << "ResMetricCollector is not initialized; the collect handler for metric " << int(metricName)
+                     << " stays dormant until the worker restarts with monitoring initialized";
         return;
     }
     collectHandler_.emplace(int(metricName), collectHandler);

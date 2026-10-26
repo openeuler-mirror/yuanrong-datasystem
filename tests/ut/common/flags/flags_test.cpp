@@ -384,6 +384,14 @@ TEST_F(FlagsTest, ParseCommandLineFlagsAcceptsArgMap)
     ASSERT_EQ(FLAGS_str_flag, "from_map");
 }
 
+// json_log_monitor was removed with its output fixed on; a stale config entry must fail, not alias.
+TEST_F(FlagsTest, RejectsRemovedJsonLogMonitorFlag)
+{
+    std::string errMsg;
+    EXPECT_FALSE(SetCommandLineOption("json_log_monitor", "false", errMsg));
+    EXPECT_NE(errMsg.find("not found"), std::string::npos) << errMsg;
+}
+
 TEST_F(FlagsTest, ExplicitLogMonitorConfigIsNotOverriddenByEnv)
 {
     const char *envName = "DATASYSTEM_LOG_MONITOR_ENABLE";

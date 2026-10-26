@@ -47,14 +47,17 @@
 - Verified:
   - `ResMetricCollector` is a singleton periodic collector.
   - collector interval defaults to `FLAGS_log_monitor_interval_ms`.
-  - collector initializes exporter infrastructure when `FLAGS_log_monitor` or `FLAGS_json_log_monitor` is true.
-  - after startup, each collection loop re-checks runtime `FLAGS_log_monitor || FLAGS_json_log_monitor`; `resource.log` writes require `log_monitor`, while `kv_resource.log` writes require `json_log_monitor`.
+  - collector initializes exporter infrastructure unconditionally; `resource.log` writes require `log_monitor`, while
+    `kv_resource.log` JSON snapshots are always collected and written.
+  - after startup, each collection loop runs unconditionally; `resource.log` writes re-check runtime
+    `FLAGS_log_monitor`.
   - current supported exporter selection is `"harddisk"` via `FLAGS_log_monitor_exporter`.
   - `CollectMetrics()` iterates metric IDs from `ResMetricName::SHARED_MEMORY` up to `RES_METRICS_END - 1`.
   - if a metric has no registered handler, an empty field is emitted and a warning is logged once.
   - each handler returns a string payload, not a typed metric object.
 - Verified (kv_resource.log JSON output):
-  - the same `CollectMetrics()` loop can feed `resource.log` (text, via `HardDiskExporter`, gated by `log_monitor`) and `kv_resource.log` (JSON-Lines, via `JsonLinesExporter`, gated by `json_log_monitor`), sharing one call per handler to avoid resetting interval counters twice (e.g. `GetAndResetIntervalStats`).
+  - the same `CollectMetrics()` loop feeds gated text `resource.log` and always-on JSON-Lines `kv_resource.log`. It
+    calls each handler once to avoid resetting interval counters twice, such as `GetAndResetIntervalStats`.
   - handler results are cached once into a `std::vector<std::string>` indexed by `ResMetricName`; the text path joins them with `" | "` (unchanged), the JSON path serializes them via `BuildResourceJson`.
   - `resource_json_schema.h` is the single source of truth for the `ResMetricName -> (sub-field names, ods record mask, separator, group name)` mapping; `GetResourceFieldDesc` indexes `DESC_TABLE` by `static_cast<size_t>(name)`, bounded by `RES_METRICS_END`.
   - each kv_resource.log line is a pure JSON object `{"event":"resource_snapshot","version":"v0","pod_name":"...","cluster_name":"...","metrics":{...}}`; `pod_name`/`cluster_name` are JSON-escaped and prepended via the shared `WrapJsonWithPodCluster` helper (same path as kv_metrics.log).
@@ -73,11 +76,10 @@
 
 - Startup is gated by:
   - `log_monitor` for `resource.log`
-  - `json_log_monitor` for `kv_resource.log`
   - `log_monitor_exporter`
   - exporter initialization success
 - Runtime behavior:
-  - registered handlers are polled periodically while either `log_monitor=true` or `json_log_monitor=true`
+  - registered handlers are polled periodically; `log_monitor` gates only the `resource.log` text writes
   - returned strings are assembled into exporter output
   - missing handlers do not fail hard
 

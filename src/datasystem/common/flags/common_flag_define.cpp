@@ -69,7 +69,7 @@ DS_DEFINE_string(
     "allowing different clusters to be distinguished by the cluster_name.");
 DS_DEFINE_string(
     log_monitor_exporter, "harddisk",
-    "Specify the type of exporter. Only 'harddisk' is supported. Only takes effect when log_monitor is true.");
+    "Resource and KV resource log exporter. Only 'harddisk' is supported; always validated at startup.");
 DS_DEFINE_int32(log_monitor_interval_ms, 10000,
                 "The sleep time between iterations of observability collector scan.");
 DS_DEFINE_bool(rdma_register_whole_arena, true,
@@ -226,8 +226,6 @@ DS_DEFINE_uint32(scale_in_collect_window_ms, DEFAULT_SCALE_IN_COLLECT_WINDOW_MS,
                  "candidate opens a short collect window so members exiting within it land in the same epoch; "
                  "0 disables coalescing (legacy immediate-batch behavior). Hard upper bound 5000ms.");
 DS_DEFINE_bool_dynamic(log_monitor, true, "Indicates whether to enable log monitoring, default is true.");
-DS_DEFINE_bool_dynamic(json_log_monitor, true,
-                       "Indicates whether to enable JSON log monitoring for kv_resource.log and kv_metrics.log.");
 DS_DEFINE_bool_dynamic(auto_del_dead_node, true, "Remove dead node from hash ring when enabled.");
 DS_DEFINE_bool(enable_huge_tlb, false,
                "enable_huge_tlb can improve memory access and reducing the overhead of page table,"

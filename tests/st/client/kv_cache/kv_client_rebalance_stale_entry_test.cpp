@@ -221,7 +221,7 @@ public:
         opts.numOBS = 0;
         opts.waitWorkerReady = true;
         opts.workerGflagParams =
-            "-shared_memory_size_mb=64 -log_monitor=true -json_log_monitor=true -log_monitor_interval_ms=500 "
+            "-shared_memory_size_mb=64 -log_monitor=true -log_monitor_interval_ms=500 "
             "-enable_memory_rebalance=true -rebalance_source_usage_percent=70 -rebalance_usage_gap_percent=30 "
             "-rebalance_task_report_grace_ms=500 -data_migrate_rate_limit_mb=8 -enable_data_replication=true "
             "-enable_lossless_data_exit_mode=true -node_timeout_s=5 -node_dead_timeout_s=10";

@@ -2095,7 +2095,7 @@ private:
         opts.enableSpill = true;
         opts.enableDistributedMaster = "false";
         opts.workerGflagParams =
-            "-shared_memory_size_mb=32 -log_monitor=true -json_log_monitor=true "
+            "-shared_memory_size_mb=32 -log_monitor=true "
             "-log_monitor_interval_ms=1000 -skip_authenticate=true -v=1 -spill_size_limit=134217728 "
             "-enable_memory_rebalance=false -arena_per_tenant=1";
         opts.injectActions = "NodeSelector.setInterval:call(200);WorkerOCServer.heatMaintenanceIntervalMs:call(1000);"
@@ -2106,7 +2106,7 @@ private:
     {
         opts.numWorkers = 3;
         opts.workerGflagParams =
-            "-shared_memory_size_mb=64 -log_monitor=true -json_log_monitor=true "
+            "-shared_memory_size_mb=64 -log_monitor=true "
             "-log_monitor_interval_ms=1000 -skip_authenticate=true -v=1 -enable_data_replication=true "
             "-enable_memory_rebalance=true -rebalance_usage_gap_percent=20 -rebalance_source_usage_percent=60 "
             "-rebalance_task_report_grace_ms=500 -data_migrate_rate_limit_mb=1024 "
@@ -2123,7 +2123,7 @@ private:
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams = FormatString(
             "-shared_memory_size_mb=%d -eviction_high_watermark_ratio=0.75 "
-            "-eviction_low_watermark_ratio=0.65 -log_monitor=true -json_log_monitor=true "
+            "-eviction_low_watermark_ratio=0.65 -log_monitor=true "
             "-log_monitor_interval_ms=1000 -skip_authenticate=true -v=1 -spill_size_limit=%zu "
             "-enable_data_replication=true -enable_memory_rebalance=true -rebalance_usage_gap_percent=20 "
             "-rebalance_source_usage_percent=60 -rebalance_task_report_grace_ms=500 "
@@ -2149,7 +2149,7 @@ public:
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams = FormatString(
             "-shared_memory_size_mb=%d -eviction_high_watermark_ratio=0.75 "
-            "-eviction_low_watermark_ratio=0.65 -log_monitor=true -json_log_monitor=true "
+            "-eviction_low_watermark_ratio=0.65 -log_monitor=true "
             "-log_monitor_interval_ms=1000 -skip_authenticate=true -v=1 -spill_size_limit=%zu "
             "-enable_data_replication=true -enable_memory_rebalance=true -rebalance_usage_gap_percent=20 "
             "-rebalance_source_usage_percent=60 -rebalance_task_report_grace_ms=500 "

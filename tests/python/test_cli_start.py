@@ -336,7 +336,7 @@ class CliStartTest(unittest.TestCase):
         keys = self.command.get_default_config_keys("coordinator_config.json")
 
         self.assertTrue(
-            {"log_monitor", "json_log_monitor", "log_monitor_interval_ms"}.issubset(keys)
+            {"log_monitor", "log_monitor_interval_ms"}.issubset(keys)
         )
 
     def test_physcpubind_keeps_long_option_only(self):
