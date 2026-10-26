@@ -73,7 +73,6 @@ ds_cc_test(
         "//src/datasystem/client/kv_cache:read_only_buffer",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/util:thread_pool",
-        "@com_google_googletest//:gmock",
     ],
 )
 

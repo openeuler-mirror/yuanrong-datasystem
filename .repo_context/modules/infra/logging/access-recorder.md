@@ -86,6 +86,12 @@
   - SDK client access logs and worker access logs append `logSampled:true` inside the existing request-parameter field when
     the current request trace was admitted by request log sampling. This does not add a new pipe-delimited column.
   - `REQUEST_OUT` records are not marked with `logSampled:true`, even when emitted under a sampled request context.
+  - successful KVClient/HeteroClient `Exist` and worker `DS_POSIX_EXIST` access records include `existCount` in the
+    existing parameter field. It counts true entries in the final returned result, including repeated-key positions;
+    all-missing and empty successful results emit zero. Failed calls omit the field to avoid counting stale/partial
+    output. Callers pass a numeric count through `ObjectAccessRecorder::ExistCount(uint64_t)`: Worker counts while
+    constructing its response; clients count the final boolean vector after success. The recorder owns the count,
+    not a reference to the result container. Sampled-out calls skip formatting, but clients still compute the count.
 - Cross-module implication:
   - logging and metrics are coupled here; exporter bugs can show up as missing access logs.
 

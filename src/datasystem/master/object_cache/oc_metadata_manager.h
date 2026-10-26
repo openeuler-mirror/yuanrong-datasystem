@@ -1106,6 +1106,8 @@ public:
      */
     Status PureQueryMeta(const PureQueryMetaReqPb &req, PureQueryMetaRspPb &rsp);
 
+    Status BatchExists(const BatchExistsReqPb &req, BatchExistsRspPb &rsp);
+
     /**
      * @brief Check whether worker-local object data is still valid according to master metadata.
      * @param[in] req The request of CheckObjectDataLocation.
@@ -1953,6 +1955,8 @@ private:
      */
     std::string SelectObjectLocation(const std::string &objectKey, const std::string &sourceWorker,
                                      const std::unordered_map<ImmutableString, AckState> &locations);
+
+    bool HasReadableLocation(const std::string &objectKey, const std::string &sourceWorker, const ObjectMeta &meta);
 
     template <class F, class... Args>
     void ExecuteAsyncTask(F &&f, Args &&...args)

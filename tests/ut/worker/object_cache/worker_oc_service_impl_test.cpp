@@ -282,6 +282,16 @@ public:
         return pureQueryMetaStatus_;
     }
 
+    Status BatchExists(master::BatchExistsReqPb &req, master::BatchExistsRspPb &rsp) override
+    {
+        return batchExistsHandler_(req, rsp);
+    }
+
+    std::function<Status(master::BatchExistsReqPb &, master::BatchExistsRspPb &)> batchExistsHandler_ =
+        [](master::BatchExistsReqPb &, master::BatchExistsRspPb &) {
+            return Status(K_RUNTIME_ERROR, "Unexpected BatchExists");
+        };
+
     Status PushMetadataToMaster(master::PushMetaToMasterReqPb &req,
                                 master::PushMetaToMasterRspPb &rsp) override
     {
@@ -2974,6 +2984,255 @@ TEST_F(WorkerOcServiceImplTest, GetMapOfObjectKeysKeepsNonConnectionOwnerError)
     EXPECT_TRUE(result.empty());
     EXPECT_EQ(api->GetObjectLocationsCallCount(), 1);
     EXPECT_THAT(observations, ElementsAre(Pair(masterAddress.ToString(), K_RUNTIME_ERROR)));
+}
+
+TEST_F(WorkerOcServiceImplTest, BatchExistsValidatesIndicesBeforePublishingResults)
+{
+    master::BatchExistsReqPb req;
+    req.add_object_keys("present");
+    req.add_object_keys("missing");
+    req.add_object_keys("present");
+    master::BatchExistsRspPb rsp;
+    rsp.add_not_exist_indices(1);
+    std::unordered_set<std::string> exists;
+    DS_ASSERT_OK(WorkerOcServiceGetImpl::CollectBatchExistsResults(req, rsp, exists));
+    EXPECT_THAT(exists, ElementsAre("present"));
+
+    const std::vector<std::vector<uint32_t>> invalidIndices{ { 3 }, { 1, 1 }, { 2, 1 } };
+    for (const auto &indices : invalidIndices) {
+        rsp.Clear();
+        rsp.mutable_not_exist_indices()->Add(indices.begin(), indices.end());
+        exists.clear();
+        EXPECT_EQ(WorkerOcServiceGetImpl::CollectBatchExistsResults(req, rsp, exists).GetCode(), K_INVALID);
+        EXPECT_TRUE(exists.empty());
+    }
+    rsp.Clear();
+    rsp.set_meta_is_moving(true);
+    EXPECT_EQ(WorkerOcServiceGetImpl::CollectBatchExistsResults(req, rsp, exists).GetCode(), K_TRY_AGAIN);
+    EXPECT_TRUE(exists.empty());
+}
+
+TEST_F(WorkerOcServiceImplTest, BatchExistsGroupsBusinessKeysByOwner)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const HostPort otherAddress("127.0.0.1", 18482);
+    const std::vector<std::string> keys{ "a-present", "b-missing", "a-missing", "b-present", "a-present" };
+    for (const auto &key : keys) {
+        placement_.SetOwner(key, key.front() == 'a' ? localAddress_ : otherAddress);
+    }
+    auto firstApi = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    auto secondApi = std::make_shared<FakeWorkerMasterOCApi>(otherAddress);
+    int firstCalls = 0;
+    int secondCalls = 0;
+    firstApi->batchExistsHandler_ = [&firstCalls](master::BatchExistsReqPb &req, master::BatchExistsRspPb &rsp) {
+        ++firstCalls;
+        EXPECT_TRUE(req.redirect());
+        EXPECT_THAT(req.object_keys(), ElementsAre("a-present", "a-missing", "a-present"));
+        rsp.add_not_exist_indices(1);
+        return Status::OK();
+    };
+    secondApi->batchExistsHandler_ = [&secondCalls](master::BatchExistsReqPb &req, master::BatchExistsRspPb &rsp) {
+        ++secondCalls;
+        EXPECT_TRUE(req.redirect());
+        EXPECT_THAT(req.object_keys(), ElementsAre("b-missing", "b-present"));
+        rsp.add_not_exist_indices(0);
+        return Status::OK();
+    };
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(localAddress_, firstApi);
+    apiManager->SetApi(otherAddress, secondApi);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    std::unordered_set<std::string> exists{ "local-hit" };
+    DS_ASSERT_OK(getImpl.QueryExistMetadata(keys, exists));
+    EXPECT_THAT(exists, testing::UnorderedElementsAre("local-hit", "a-present", "b-present"));
+    EXPECT_EQ(firstCalls, 1);
+    EXPECT_EQ(secondCalls, 1);
+
+    std::atomic<int> calls{ 0 };
+    auto failSecondGroup = [&calls](master::BatchExistsReqPb &, master::BatchExistsRspPb &) {
+        return ++calls == 1 ? Status::OK() : Status(K_RPC_UNAVAILABLE, "injected owner failure");
+    };
+    firstApi->batchExistsHandler_ = failSecondGroup;
+    secondApi->batchExistsHandler_ = failSecondGroup;
+    exists = { "local-hit" };
+    EXPECT_EQ(getImpl.QueryExistMetadata(keys, exists).GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_EQ(calls.load(), 2);
+    EXPECT_THAT(exists, ElementsAre("local-hit"));
+}
+
+TEST_F(WorkerOcServiceImplTest, BatchExistsQueriesOwnersConcurrentlyAndJoinsFailures)
+{
+    ScopedRequestContext requestContext;
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID("exists-fanout-test", true);
+    auto *parentContext = GetRequestContext();
+    const HostPort otherAddress("127.0.0.1", 18482);
+    placement_.SetOwner("first", localAddress_);
+    placement_.SetOwner("second", otherAddress);
+    auto firstApi = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    auto secondApi = std::make_shared<FakeWorkerMasterOCApi>(otherAddress);
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(localAddress_, firstApi);
+    apiManager->SetApi(otherAddress, secondApi);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    constexpr int ownerCount = 2;
+    for (auto failureCode : { K_OK, K_RPC_UNAVAILABLE, K_RUNTIME_ERROR }) {
+        GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+        std::mutex mutex;
+        std::condition_variable cv;
+        int entered = 0;
+        std::atomic<int> finished{ 0 };
+        auto handler = [&](master::BatchExistsReqPb &req, master::BatchExistsRspPb &) {
+            EXPECT_NE(GetRequestContext(), parentContext);
+            EXPECT_EQ(Trace::Instance().GetTraceID(), "exists-fanout-test");
+            auto remaining = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+            EXPECT_GT(remaining, 0);
+            EXPECT_LE(remaining, K_META_MOVING_RETRY_TIMEOUT_MS);
+            {
+                std::unique_lock<std::mutex> lock(mutex);
+                ++entered;
+                cv.notify_all();
+                EXPECT_TRUE(cv.wait_for(lock, std::chrono::milliseconds(K_META_MOVING_RETRY_TIMEOUT_MS),
+                                        [&]() { return entered == ownerCount; }));
+            }
+            ++finished;
+            if (req.object_keys(0) == "second") {
+                return Status(failureCode, "injected fanout status");
+            }
+            return Status::OK();
+        };
+        firstApi->batchExistsHandler_ = handler;
+        secondApi->batchExistsHandler_ = handler;
+        std::unordered_set<std::string> exists{ "local-hit" };
+        EXPECT_EQ(getImpl.QueryExistMetadata({ "first", "second" }, exists).GetCode(), failureCode);
+        EXPECT_EQ(finished.load(), ownerCount);
+        if (failureCode == K_OK) {
+            EXPECT_THAT(exists, testing::UnorderedElementsAre("local-hit", "first", "second"));
+        } else {
+            EXPECT_THAT(exists, ElementsAre("local-hit"));
+        }
+        EXPECT_EQ(GetRequestContext(), parentContext);
+        EXPECT_EQ(Trace::Instance().GetTraceID(), "exists-fanout-test");
+    }
+}
+
+TEST_F(WorkerOcServiceImplTest, BatchExistsRouteFailureDoesNotDispatchOrPublishResults)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    placement_.SetOwner("routed", localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    int calls = 0;
+    api->batchExistsHandler_ = [&calls](master::BatchExistsReqPb &, master::BatchExistsRspPb &) {
+        ++calls;
+        return Status::OK();
+    };
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    std::unordered_set<std::string> exists{ "local-hit" };
+    EXPECT_EQ(getImpl.QueryExistMetadata({ "routed", "unroutable" }, exists).GetCode(), K_NOT_FOUND);
+    EXPECT_THAT(exists, ElementsAre("local-hit"));
+    DS_ASSERT_OK(getImpl.QueryExistMetadata({}, exists));
+    EXPECT_THAT(exists, ElementsAre("local-hit"));
+    EXPECT_EQ(calls, 0);
+}
+
+TEST_F(WorkerOcServiceImplTest, BatchExistsRedirectUsesSubrequestIndicesAndDoesNotPublishPartialFailure)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const std::vector<std::string> keys{ "present", "missing", "redirect-present", "redirect-missing" };
+    for (const auto &key : keys) {
+        placement_.SetOwner(key, localAddress_);
+    }
+    const HostPort redirectAddress("127.0.0.1", 18482);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    api->batchExistsHandler_ = [&redirectAddress](master::BatchExistsReqPb &req, master::BatchExistsRspPb &rsp) {
+        EXPECT_TRUE(req.redirect());
+        rsp.add_not_exist_indices(1);
+        auto *info = rsp.add_info();
+        info->set_redirect_meta_address(redirectAddress.ToString());
+        info->add_change_meta_ids("redirect-missing");
+        info->add_change_meta_ids("redirect-present");
+        return Status::OK();
+    };
+    auto redirectApi = std::make_shared<FakeWorkerMasterOCApi>(redirectAddress);
+    redirectApi->batchExistsHandler_ = [this](master::BatchExistsReqPb &req, master::BatchExistsRspPb &rsp) {
+        EXPECT_FALSE(req.redirect());
+        EXPECT_EQ(req.source_worker(), localAddress_.ToString());
+        EXPECT_THAT(req.object_keys(), ElementsAre("redirect-missing", "redirect-present"));
+        rsp.add_not_exist_indices(0);
+        return Status::OK();
+    };
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    apiManager->SetApi(redirectAddress, redirectApi);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    std::unordered_set<std::string> exists;
+    DS_ASSERT_OK(getImpl.QueryExistMetadata(keys, exists));
+    EXPECT_THAT(exists, testing::UnorderedElementsAre("present", "redirect-present"));
+
+    redirectApi->batchExistsHandler_ = [](master::BatchExistsReqPb &, master::BatchExistsRspPb &) {
+        return Status(K_RPC_UNAVAILABLE, "injected redirect failure");
+    };
+    exists = { "local-hit" };
+    EXPECT_EQ(getImpl.QueryExistMetadata(keys, exists).GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_THAT(exists, ElementsAre("local-hit"));
+}
+
+TEST_F(WorkerOcServiceImplTest, BatchExistsRejectsInvalidRedirectResults)
+{
+    master::BatchExistsReqPb req;
+    req.add_object_keys("present");
+    master::BatchExistsRspPb rsp;
+    auto *info = rsp.add_info();
+    info->set_redirect_meta_address("127.0.0.1:18482");
+    info->add_change_meta_ids("unexpected");
+    std::unordered_set<std::string> exists;
+    EXPECT_EQ(WorkerOcServiceGetImpl::CollectBatchExistsResults(req, rsp, exists).GetCode(), K_INVALID);
+    EXPECT_TRUE(exists.empty());
+    info->set_change_meta_ids(0, "present");
+    rsp.add_not_exist_indices(0);
+    EXPECT_EQ(WorkerOcServiceGetImpl::CollectBatchExistsResults(req, rsp, exists).GetCode(), K_INVALID);
+    EXPECT_TRUE(exists.empty());
+    rsp.clear_not_exist_indices();
+    DS_ASSERT_OK(WorkerOcServiceGetImpl::CollectBatchExistsResults(req, rsp, exists));
+    EXPECT_TRUE(exists.empty());
+}
+
+TEST_F(WorkerOcServiceImplTest, BatchExistsRetriesMovingAndHonorsExpiredDeadline)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    placement_.SetOwner("present", localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    int calls = 0;
+    api->batchExistsHandler_ = [&calls](master::BatchExistsReqPb &, master::BatchExistsRspPb &rsp) {
+        if (++calls == 1) {
+            rsp.set_meta_is_moving(true);
+            rsp.add_not_exist_indices(0);
+        }
+        return Status::OK();
+    };
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    std::unordered_set<std::string> exists;
+    DS_ASSERT_OK(getImpl.QueryExistMetadata({ "present" }, exists));
+    EXPECT_THAT(exists, ElementsAre("present"));
+    EXPECT_EQ(calls, 2);
+
+    GetRequestContext()->reqTimeoutDuration.Init(0);
+    exists.clear();
+    EXPECT_EQ(getImpl.QueryExistMetadata({ "present" }, exists).GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_TRUE(exists.empty());
+    EXPECT_EQ(calls, 2);
 }
 
 TEST_F(WorkerOcServiceImplTest, QueryObjectLocationsMapsPureMetadataOwnerPeerDead)

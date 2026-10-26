@@ -6,9 +6,11 @@
 /**
  * Description: Test topology-fenced object metadata mutations.
  */
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <memory>
@@ -464,6 +466,166 @@ TEST_F(OCMetadataManagerTopologyTest, RollbackLastNoneL2UnackAtomicFailureKeepsS
     EXPECT_FALSE(HasPersistedKey(LOCATION_TABLE, locationKey));
 }
 
+TEST_F(OCMetadataManagerTopologyTest, BatchExistsPreservesReadableLocationSemantics)
+{
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    manager.notifyWorkerManager_ =
+        std::make_unique<OCNotifyWorkerManager>(manager.objectStore_, true, akSkManager_, &manager);
+    const std::vector<std::string> keys{
+        "remote", "missing", "pending", "empty", "local-primary", "local-copy", "unack", "invalidated", "missing"
+    };
+    for (const auto &key : keys) {
+        if (key == "missing") {
+            continue;
+        }
+        MakeTargetReadable(manager, key);
+        TbbMetaTable::accessor accessor;
+        ASSERT_TRUE(manager.metaShards_[manager.GetShardIndex(key)].table.find(accessor, key));
+        auto &meta = accessor->second;
+        if (key == "pending") {
+            meta.multiSetState = PENDING;
+        } else if (key == "empty") {
+            meta.locations.clear();
+        } else if (key == "local-primary" || key == "local-copy") {
+            meta.locations.erase(TARGET_ADDRESS);
+            if (key == "local-copy") {
+                meta.meta.set_primary_address(TARGET_ADDRESS);
+            }
+        } else if (key == "unack") {
+            meta.locations[TARGET_ADDRESS] = AckState::UNACK;
+        }
+    }
+    BINEXPECT_CALL(&OCNotifyWorkerManager::CheckExistAsyncWorkerOp, (testing::_, testing::_, testing::_))
+        .WillRepeatedly(testing::Invoke([](const std::string &, const std::string &key, NotifyWorkerOpType) {
+            return key == "invalidated";
+        }));
+    BatchExistsReqPb request;
+    request.set_source_worker(LOCAL_ADDRESS);
+    request.mutable_object_keys()->Add(keys.begin(), keys.end());
+    BatchExistsRspPb response;
+    DS_ASSERT_OK(manager.BatchExists(request, response));
+    EXPECT_THAT(response.not_exist_indices(), testing::ElementsAre(1, 2, 3, 5, 6, 7, 8));
+
+    PureQueryMetaReqPb oldRequest;
+    oldRequest.set_address(LOCAL_ADDRESS);
+    oldRequest.mutable_object_keys()->CopyFrom(request.object_keys());
+    PureQueryMetaRspPb oldResponse;
+    DS_ASSERT_OK(manager.PureQueryMeta(oldRequest, oldResponse));
+    std::unordered_set<std::string> oldExists;
+    for (const auto &meta : oldResponse.query_metas()) {
+        if (!meta.address().empty() || (meta.single_copy() && meta.meta().primary_address() == LOCAL_ADDRESS)) {
+            oldExists.emplace(meta.meta().object_key());
+        }
+    }
+    std::vector<uint32_t> expected;
+    for (size_t index = 0; index < keys.size(); ++index) {
+        if (oldExists.count(keys[index]) == 0) {
+            expected.emplace_back(index);
+        }
+    }
+    EXPECT_THAT(response.not_exist_indices(), testing::ElementsAreArray(expected));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, BatchExistsEmptyAllPresentAndAllMissing)
+{
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    BatchExistsReqPb request;
+    BatchExistsRspPb response;
+    EXPECT_EQ(manager.BatchExists(request, response).GetCode(), K_INVALID);
+    request.set_source_worker(LOCAL_ADDRESS);
+    DS_ASSERT_OK(manager.BatchExists(request, response));
+    EXPECT_TRUE(response.not_exist_indices().empty());
+    const std::string key = "only-primary";
+    {
+        TbbMetaTable::accessor accessor;
+        manager.metaShards_[manager.GetShardIndex(key)].table.insert(accessor, key);
+        accessor->second.meta.set_primary_address(LOCAL_ADDRESS);
+        accessor->second.locations[LOCAL_ADDRESS] = AckState::UNACK;
+    }
+    request.add_object_keys(key);
+    request.add_object_keys(key);
+    DS_ASSERT_OK(manager.BatchExists(request, response));
+    EXPECT_TRUE(response.not_exist_indices().empty());
+    manager.metaShards_[manager.GetShardIndex(key)].table.erase(key);
+    DS_ASSERT_OK(manager.BatchExists(request, response));
+    EXPECT_THAT(response.not_exist_indices(), testing::ElementsAre(0, 1));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, DISABLED_BatchExistsHandlerBenchmark)
+{
+    constexpr size_t batchSize = 960;
+    constexpr size_t keyLength = 155;
+    constexpr size_t warmup = 10;
+    constexpr size_t iterations = 100;
+    constexpr size_t percentile99 = 99;
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    manager.notifyWorkerManager_ =
+        std::make_unique<OCNotifyWorkerManager>(manager.objectStore_, true, akSkManager_, &manager);
+    std::vector<std::string> keys;
+    for (size_t index = 0; index < batchSize; ++index) {
+        auto key = std::to_string(index);
+        key.append(keyLength - key.size(), 'k');
+        MakeTargetReadable(manager, key);
+        keys.emplace_back(std::move(key));
+    }
+    for (size_t missingCount : { size_t{ 0 }, batchSize / 10, batchSize }) {
+        BatchExistsReqPb request;
+        request.set_source_worker(LOCAL_ADDRESS);
+        for (size_t index = 0; index < batchSize; ++index) {
+            auto key = keys[index];
+            if (index < missingCount) {
+                key.back() = 'x';
+            }
+            request.add_object_keys(key);
+        }
+        PureQueryMetaReqPb oldRequest;
+        oldRequest.set_address(LOCAL_ADDRESS);
+        oldRequest.mutable_object_keys()->CopyFrom(request.object_keys());
+        std::vector<double> oldSamples;
+        std::vector<double> newSamples;
+        oldSamples.reserve(iterations);
+        newSamples.reserve(iterations);
+        size_t oldBytes = 0;
+        size_t newBytes = 0;
+        auto measure = [&](bool useBatchExists, bool record) {
+            const auto start = std::chrono::steady_clock::now();
+            size_t bytes;
+            if (useBatchExists) {
+                BatchExistsRspPb response;
+                DS_ASSERT_OK(manager.BatchExists(request, response));
+                bytes = response.SerializeAsString().size();
+                EXPECT_EQ(response.not_exist_indices_size(), missingCount);
+            } else {
+                PureQueryMetaRspPb response;
+                DS_ASSERT_OK(manager.PureQueryMeta(oldRequest, response));
+                bytes = response.SerializeAsString().size();
+                EXPECT_EQ(response.query_metas_size(), batchSize - missingCount);
+            }
+            const auto elapsed = std::chrono::duration<double, std::micro>(
+                std::chrono::steady_clock::now() - start).count();
+            if (record) {
+                (useBatchExists ? newSamples : oldSamples).emplace_back(elapsed);
+            }
+            (useBatchExists ? newBytes : oldBytes) = bytes;
+        };
+        for (size_t iteration = 0; iteration < warmup + iterations; ++iteration) {
+            const bool newFirst = iteration % 2 == 0;
+            measure(newFirst, iteration >= warmup);
+            measure(!newFirst, iteration >= warmup);
+        }
+        std::sort(oldSamples.begin(), oldSamples.end());
+        std::sort(newSamples.begin(), newSamples.end());
+        std::cout << "BatchExists handler+serialize (no routing/RPC), missing=" << missingCount
+                  << ", PureQueryMeta p50_us=" << oldSamples[iterations / 2]
+                  << ", p99_us=" << oldSamples[percentile99 - 1] << ", bytes=" << oldBytes
+                  << ", BatchExists p50_us=" << newSamples[iterations / 2]
+                  << ", p99_us=" << newSamples[percentile99 - 1] << ", bytes=" << newBytes << std::endl;
+    }
+}
+
 TEST_F(OCMetadataManagerTopologyTest, PureQueryMetaUsesMembershipVersionThatContainsEveryReturnedLocation)
 {
     cluster::TopologySnapshotState snapshots;
@@ -894,6 +1056,57 @@ TEST_F(OCMetadataManagerTopologyTest, ObjectRedirectProgressivelyHandlesScaleOut
     ASSERT_EQ(objectKeys.size(), 2U);
     EXPECT_EQ(objectKeys[0], existingKey);
     EXPECT_EQ(objectKeys[1], movingKey);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, BatchExistsPreservesIndicesAcrossScaleOutRedirectAndMoving)
+{
+    constexpr uint64_t topologyVersion = 2;
+    cluster::TopologyState topology;
+    topology.version = topologyVersion;
+    topology.clusterHasInit = true;
+    topology.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_OUT, topologyVersion };
+    topology.members = {
+        cluster::Member{ { std::string(MEMBER_ID_SIZE, 'a'), LOCAL_ADDRESS }, cluster::MemberState::ACTIVE, { 0 } },
+        cluster::Member{ { std::string(MEMBER_ID_SIZE, 'b'), TARGET_ADDRESS }, cluster::MemberState::JOINING,
+                         { std::numeric_limits<uint32_t>::max() } },
+    };
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    DS_ASSERT_OK(cluster::TopologySnapshot::Create(topology, topologyVersion, std::string(SHA256_HEX_SIZE, 'a'), snapshot));
+    cluster::TopologySnapshotState snapshots;
+    cluster::SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
+    cluster::HashAlgorithm algorithm;
+    cluster::PlacementFacade placement(snapshots, algorithm, LOCAL_ADDRESS);
+    OCMetadataManagerForTopologyTest manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS,
+                                             &placement, nullptr, false, HostPort(), LOCAL_ADDRESS, &localExiting_,
+                                             "workerId");
+    const std::string localKey = "exists-local-pending";
+    const std::string redirectKey = "exists-redirect";
+    InsertPrimaryWithCopy(manager, localKey);
+    {
+        TbbMetaTable::accessor accessor;
+        ASSERT_TRUE(manager.metaShards_[manager.GetShardIndex(localKey)].table.find(accessor, localKey));
+        accessor->second.multiSetState = PENDING;
+    }
+    BatchExistsReqPb request;
+    request.set_source_worker(LOCAL_ADDRESS);
+    request.set_redirect(true);
+    request.add_object_keys(redirectKey);
+    request.add_object_keys(localKey);
+    request.add_object_keys(localKey);
+    BatchExistsRspPb response;
+    DS_ASSERT_OK(manager.BatchExists(request, response));
+    EXPECT_THAT(response.not_exist_indices(), testing::ElementsAre(1, 2));
+    ASSERT_EQ(response.info_size(), 1);
+    EXPECT_THAT(response.info(0).change_meta_ids(), testing::ElementsAre(redirectKey));
+    EXPECT_EQ(response.info(0).redirect_meta_address(), TARGET_ADDRESS);
+
+    manager.MarkMigrating(localKey);
+    response.Clear();
+    DS_ASSERT_OK(manager.BatchExists(request, response));
+    EXPECT_TRUE(response.meta_is_moving());
+    EXPECT_TRUE(response.not_exist_indices().empty());
+    EXPECT_TRUE(response.info().empty());
 }
 
 TEST_F(OCMetadataManagerTopologyTest, QueryMetaRetriesWholeBatchWhenOneScaleOutKeyIsMoving)

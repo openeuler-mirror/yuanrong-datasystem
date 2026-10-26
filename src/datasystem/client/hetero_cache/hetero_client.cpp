@@ -20,6 +20,8 @@
 
 #include "datasystem/hetero_client.h"
 
+#include <algorithm>
+
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/client/object_cache/object_client_impl.h"
 #include "datasystem/common/log/access_recorder.h"
@@ -290,6 +292,9 @@ Status HeteroClient::Exist(const std::vector<std::string> &keys, std::vector<boo
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     auto rc = impl_->Exist(keys, exists, false, false);
+    if (rc.IsOk()) {
+        access.ExistCount(std::count(exists.begin(), exists.end(), true));
+    }
     access.ObjectKeysSummaryRef(keys).Result(rc).Record();
     return rc;
 }

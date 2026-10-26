@@ -386,6 +386,15 @@ ObjectAccessRecorder &ObjectAccessRecorder::NestedKeysRef(const char *const *key
     return *this;
 }
 
+ObjectAccessRecorder &ObjectAccessRecorder::ExistCount(uint64_t count)
+{
+    if (!core_.ShouldRecordInternal()) {
+        return *this;
+    }
+    state_.existCount.SetOwned(std::to_string(count));
+    return *this;
+}
+
 ObjectAccessRecorder &ObjectAccessRecorder::Count(uint64_t count)
 {
     if (!core_.ShouldRecordInternal()) {
@@ -597,6 +606,9 @@ void ObjectAccessRecorder::Record()
     state_.objectKey.FillObjectKey(req);
     state_.nestedKey.FillNestedKey(req);
     state_.count.Fill(req.count);
+    if (state_.code == static_cast<int>(StatusCode::K_OK)) {
+        state_.existCount.Fill(req.existCount);
+    }
     state_.writeMode.Fill(req.writeMode);
     state_.consistencyType.Fill(req.consistencyType);
     state_.remoteClientId.Fill(req.remoteClientId);
@@ -1164,6 +1176,7 @@ std::string RequestParam::ToString() const
     AppendRequestParam(ret, "Object_key:", objectKey);
     AppendRequestParam(ret, "Nested_keys:", nestedKey);
     AppendRequestParam(ret, "count:", count);
+    AppendRequestParam(ret, "existCount:", existCount);
     AppendRequestParam(ret, "keep:", keep);
     AppendRequestParam(ret, "Write_mode:", writeMode);
     AppendRequestParam(ret, "consistency_type:", consistencyType);

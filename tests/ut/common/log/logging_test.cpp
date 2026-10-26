@@ -645,6 +645,52 @@ TEST_F(LoggingTest, TestCostAutoWriteToLog)
     ASSERT_GT(lastSize, firstSize);
 }
 
+TEST_F(LoggingTest, TestExistsAccessResultCount)
+{
+    ScopedEnv accessLogName(ACCESS_LOG_NAME_ENV, "exists_access_test");
+    const bool oldMonitor = FLAGS_log_monitor;
+    FLAGS_log_monitor = true;
+    LogSampler::Instance().ResetForTest();
+    for (auto role : { LogProcessRole::CLIENT, LogProcessRole::WORKER }) {
+        Logging::GetInstance()->Start("exists_count_test", role, 1);
+        const auto key = role == LogProcessRole::CLIENT ? AccessRecorderKey::DS_KV_CLIENT_EXIST
+                                                       : AccessRecorderKey::DS_POSIX_EXIST;
+        const std::string path = FLAGS_log_dir + "/"
+                                + (role == LogProcessRole::CLIENT ? ClientAccessLogName() : ACCESS_LOG_NAME) + ".log";
+        const std::vector<std::vector<bool>> results{ {}, { false, false }, { true, false, true }, { true, true } };
+        const std::vector<std::string> names{ "exists-empty", "exists-none", "exists-mixed", "exists-all" };
+        const std::vector<std::string> counts{ "0", "0", "2", "2" };
+        for (size_t index = 0; index < results.size(); ++index) {
+            auto access = AccessRecorder::Object(key);
+            access.ObjectKeyRef(names[index]).Count(results[index].size());
+            access.ExistCount(std::count(results[index].begin(), results[index].end(), true))
+                .Result(Status::OK()).Record();
+        }
+        {
+            auto access = AccessRecorder::Object(key);
+            access.ObjectKeyRef("exists-error").ExistCount(2).Result(K_RUNTIME_ERROR).Record();
+        }
+        DS_ASSERT_OK(LogManager::DoLogMonitorWrite());
+        ResetLoggingForTest();
+        const auto content = ReadFileContent(path);
+        for (size_t index = 0; index < results.size(); ++index) {
+            EXPECT_NE(content.find("Object_key:" + names[index] + ",count:" + std::to_string(results[index].size())
+                                   + ",existCount:" + counts[index]), std::string::npos);
+        }
+        std::istringstream lines(content);
+        std::string line;
+        bool foundError = false;
+        while (std::getline(lines, line)) {
+            if (line.find("exists-error") != std::string::npos) {
+                foundError = true;
+                EXPECT_EQ(line.find("existCount:"), std::string::npos);
+            }
+        }
+        EXPECT_TRUE(foundError);
+    }
+    FLAGS_log_monitor = oldMonitor;
+}
+
 TEST_F(LoggingTest, TestAccessLogSampledMarker)
 {
     (void)unsetenv(ACCESS_LOG_NAME_ENV.c_str());
