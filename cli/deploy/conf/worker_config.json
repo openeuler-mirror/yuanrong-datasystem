@@ -412,12 +412,8 @@
         "description": "The fixed interval in seconds between distributed disk background compact runs. The minimum value is 60 in production builds."
     },
     "health_check_path": {
-        "value": "./datasystem/probe/healthy",
-        "description": "File will create after the worker successfully."
-    },
-    "ready_check_path": {
-        "value": "./datasystem/probe/ready",
-        "description": "This file will be created after the worker service is started successfully and a connection can be established using the stub."
+        "value": "./datasystem/probe/worker",
+        "description": "Startup commit and liveness lease file."
     },
     "rpc_thread_num": {
         "value": "16",

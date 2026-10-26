@@ -70,6 +70,8 @@ global:
     udsDir: /home/uds
 
   reliability:
+    # Startup must cover reconciliation, topology convergence, and initialization margin.
+    startupProbeTimeoutS: 390
     # Timeout interval of kubernetes liveness probe, default is 150 seconds.
     livenessProbeTimeoutS: 150
 

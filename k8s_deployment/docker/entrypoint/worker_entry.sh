@@ -86,18 +86,16 @@ fi
 
 ilog "container start."
 
-LIVENESS_CHECK_PATH=$(extract_json_value "${CONFIG_FILE}" "liveness_check_path")
-if [[ -f "${LIVENESS_CHECK_PATH}" ]]; then
-    # the startup probe will start after 5sec
-    # remove the existing liveness probe file before startup probe start.
-    ilog "delete the existing liveness probe file ${LIVENESS_CHECK_PATH}"
-    rm "${LIVENESS_CHECK_PATH}"
+WORKER_PROBE_PATH=$(extract_json_value "${CONFIG_FILE}" "health_check_path")
+if [[ -f "${WORKER_PROBE_PATH}" ]]; then
+    ilog "delete the stale worker probe file ${WORKER_PROBE_PATH}"
+    rm "${WORKER_PROBE_PATH}"
 fi
 
 BASE_DIR=$(cd "$(dirname "$0")" || exit 1; pwd)
 
 (
-    while [ ! -f "${HEALTH_CHECK_PATH}" ]; do
+    while [ ! -f "${WORKER_PROBE_PATH}" ]; do
         sleep 1
     done
     [[ -d "${A_DIR}" ]] && rm -rf "${A_DIR:?}/"*

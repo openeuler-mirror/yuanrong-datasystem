@@ -38,13 +38,7 @@ function liveness_check() {
     return 0
   fi
 
-  local content="$(cat ${probe_path})"
-  if grep -q "liveness check failed" "${probe_path}"; then
-    elog "liveness probe ${probe_path} check failed: ${content}"
-    return 1
-  fi
-
-  local probe_last_updata_time=$(stat -c %Z ${probe_path})
+  local probe_last_updata_time=$(stat -c %Y ${probe_path})
   local current_time=$(date +%s)
   if [[ $((current_time - probe_last_updata_time)) -gt $probe_timeout ]]; then
     elog "liveness probe not update in ${probe_timeout}"
@@ -54,10 +48,10 @@ function liveness_check() {
 
 function main() {
   ilog "container prestop start"
-  PROBE_PATH=`utils_get_worker_arg_value liveness_check_path`
+  PROBE_PATH=`utils_get_worker_arg_value health_check_path`
   PROBE_TIMEOUT=`utils_get_worker_arg_value liveness_probe_timeout_s`
   STATUS_FILE_PATH=`utils_get_worker_arg_value log_dir`/worker/worker-status
-  liveness_check ${LIVENESS_CHECK_PATH} ${PROBE_TIMEOUT} || force_kill_worker
+  liveness_check ${PROBE_PATH} ${PROBE_TIMEOUT} || force_kill_worker
 
   ilog "send TERM to process 1 to gracefully notify worker to exit"
   kill -TERM 1
@@ -70,11 +64,8 @@ function main() {
     sleep 1
   done
 
-  ilog "delete health check file..."
-  HEALTH_CHECK_PATH=`utils_get_worker_arg_value health_check_path`
-  READY_CHECK_PATH=`utils_get_worker_arg_value ready_check_path`
-  [[ -f "${HEALTH_CHECK_PATH}" ]] && rm "${HEALTH_CHECK_PATH:?}"
-  [[ -f "${READY_CHECK_PATH}" ]] && rm "${READY_CHECK_PATH:?}"
+  ilog "delete worker probe file..."
+  [[ -f "${PROBE_PATH}" ]] && rm "${PROBE_PATH:?}"
   ilog "ready to exit, byebye"
   exit 0
 }

@@ -34,12 +34,12 @@ Subcommands:
 
 Readiness polling matches ``dscli start`` (``cli/start.py``):
 
-* If ``--ready-file`` is given, poll for that file's existence until it
+* If ``--worker-probe-file`` is given, poll for that file's existence until it
   appears (or ``--ready-timeout`` elapses). Used by worker standalones;
-  the worker binary writes ``FLAGS_ready_check_path`` only after
+  the worker binary writes ``FLAGS_health_check_path`` only after
   ``WaitForServiceReady()`` + ``WaitForTopologyReady()`` complete, so this
   is the authoritative readiness signal.
-* If ``--port`` is given (and no ``--ready-file``), poll TCP connect to
+* If ``--port`` is given (and no ``--worker-probe-file``), poll TCP connect to
   ``--host:--port`` until it succeeds. Used by coordinator standalones
   and kvtest clients (HTTP control port).
 * If neither is given, poll ``proc.poll()`` for ``--no-signal-grace``
@@ -101,12 +101,12 @@ def is_port_ready(host, port, timeout=0.5):
 
 
 def is_file_ready(path, cwd=None):
-    """Return True if a readiness file exists.
+    """Return True if a worker probe file exists.
 
     ``path`` may be absolute or relative. Relative paths are resolved
     against ``cwd`` (the binary's working directory), matching the worker
     binary's own file-write semantics — the binary writes
-    ``FLAGS_ready_check_path`` relative to its CWD, so the launcher must
+    ``FLAGS_health_check_path`` relative to its CWD, so the launcher must
     check the same resolved path.
     """
     if not path:
@@ -116,17 +116,13 @@ def is_file_ready(path, cwd=None):
     return os.path.exists(path)
 
 
-def clear_stale_ready_file(path, cwd=None):
-    """Remove a stale ready file before launching a new binary.
+def clear_stale_worker_probe_file(path, cwd=None):
+    """Remove a stale worker probe file before launching a new binary.
 
-    Mirrors dscli ``start_worker`` (``cli/start.py:671-672``): the worker
-    binary deletes ``FLAGS_ready_check_path`` at the start of
-    ``ReadinessProbe()`` and re-creates it only after
-    ``WaitForTopologyReady()`` completes (``worker_oc_server.cpp:2920-2922``).
-    The worker's ``Shutdown()`` does not delete the file, so without this
-    cleanup a second launch would hit the previous run's stale file on the
-    first readiness poll and report ``ready`` in milliseconds, before the
-    new worker has reached ``ReadinessProbe()``.
+    Mirrors dscli ``start_worker``: the worker also deletes
+    ``FLAGS_health_check_path`` during early initialization and publishes it
+    only after startup gates pass. Launcher-side cleanup closes the interval
+    between process creation and that initialization step.
 
     Relative paths are resolved against ``cwd`` to match ``is_file_ready``.
     Returns True when a file was removed, False when it was already absent
@@ -272,10 +268,10 @@ def parse_args(argv=None):
     parser.add_argument('--pidfile',
                         help='File to record the launched PID so the stop '
                              'subcommand can address the exact process')
-    parser.add_argument('--ready-file',
+    parser.add_argument('--worker-probe-file',
                         help="If set, poll for this file's existence until "
                              'ready (authoritative readiness signal, e.g. '
-                             'worker ready_check_path). Relative paths are '
+                             'worker health_check_path). Relative paths are '
                              'resolved against --cwd.')
     parser.add_argument('--port', type=int,
                         help='If set, poll TCP connect on host:port until ready')
@@ -287,10 +283,10 @@ def parse_args(argv=None):
                         help='Polling interval in seconds (default: 0.5)')
     parser.add_argument('--no-signal-grace', type=float, default=2.0,
                         help='Max seconds to poll proc.poll() for early '
-                             'exits when no readiness signal (--ready-file '
+                             'exits when no readiness signal (--worker-probe-file '
                              'or --port) is given (default: 2). Catches '
                              'gflag/config failures before reporting '
-                             'success. Ignored when --ready-file or --port '
+                             'success. Ignored when --worker-probe-file or --port '
                              'is set.')
     parser.add_argument('argv', nargs='*',
                         help='Arguments for the binary (separate with --)')
@@ -312,13 +308,13 @@ def main_start(argv=None):
     log_fd = os.open(args.log,
                      os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
 
-    # Clear any stale ready_file before Popen, mirroring dscli start_worker
+    # Clear any stale worker_probe_file before Popen, mirroring dscli start_worker
     # (cli/start.py:671-672). Without this, the first readiness poll could
     # hit a file left by a previous run and report ready before the new
-    # binary reaches ReadinessProbe(). See clear_stale_ready_file for the
+    # binary reaches ReadinessProbe(). See clear_stale_worker_probe_file for the
     # full rationale.
-    if args.ready_file:
-        clear_stale_ready_file(args.ready_file, args.cwd)
+    if args.worker_probe_file:
+        clear_stale_worker_probe_file(args.worker_probe_file, args.cwd)
 
     # t_launch anchors the actual binary startup timing (Popen → ready),
     # excluding kubectl exec / python3 startup overhead that the caller's
@@ -352,10 +348,10 @@ def main_start(argv=None):
     if args.pidfile:
         write_pid(args.pidfile, proc.pid)
 
-    # Readiness polling priority: --ready-file (authoritative, e.g. worker
-    # ready_check_path) > --port (TCP connect, e.g. coordinator) > none
+    # Readiness polling priority: --worker-probe-file (authoritative, e.g. worker
+    # health_check_path) > --port (TCP connect, e.g. coordinator) > none
     # (grace-poll proc.poll() to catch early exits). This mirrors dscli's
-    # split: start_worker waits on ready_check_path, start_coordinator waits
+    # split: start_worker waits on health_check_path, start_coordinator waits
     # on is_tcp_ready.
     #
     # For the no-signal path, use a shorter grace deadline instead of the
@@ -363,7 +359,7 @@ def main_start(argv=None):
     # happen within the first few hundred ms), not to wait for indefinite
     # readiness. The binary is expected to stay running; if it survives the
     # grace period, print PID + elapsed and return 0.
-    has_readiness_signal = bool(args.ready_file) or args.port is not None
+    has_readiness_signal = bool(args.worker_probe_file) or args.port is not None
     if has_readiness_signal:
         deadline = t_launch + args.ready_timeout
     else:
@@ -379,8 +375,8 @@ def main_start(argv=None):
                   f'after {elapsed:.3f}s',
                   file=sys.stderr, flush=True)
             return 1
-        if args.ready_file:
-            if is_file_ready(args.ready_file, args.cwd):
+        if args.worker_probe_file:
+            if is_file_ready(args.worker_probe_file, args.cwd):
                 elapsed = time.monotonic() - t_launch
                 print(f'{proc.pid} {elapsed:.3f}', flush=True)
                 return 0
@@ -413,7 +409,7 @@ def main_start(argv=None):
     print(f'{proc.pid} {elapsed:.3f}', flush=True)
     timeout_label = (args.ready_timeout if has_readiness_signal
                      else min(args.ready_timeout, args.no_signal_grace))
-    waited_on = (f'file={args.ready_file}' if args.ready_file
+    waited_on = (f'file={args.worker_probe_file}' if args.worker_probe_file
                  else f'port={args.host}:{args.port}' if args.port is not None
                  else 'no-signal')
     print(f'standalone_launcher: WARNING: not ready within '

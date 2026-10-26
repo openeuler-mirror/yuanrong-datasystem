@@ -13,7 +13,7 @@
   - `.repo_context/modules/infra/observability/signal-map.md`
   - `.repo_context/modules/quality/tests-and-reproduction.md`
 - Last verified against source:
-  - `2026-04-13`
+  - `2026-10-17`
 
 ## When To Use
 
@@ -27,16 +27,15 @@
 1. Name the symptom precisely: startup failure, not ready, liveness failure, request error, latency regression, missing monitor output, topology anomaly.
 2. Record the exact time window, affected node or process, and recent config or rollout changes.
 3. Collect the minimum evidence set:
-   - readiness file
-   - liveness file
+   - worker probe existence and mtime
    - ordinary logs
    - access logs if request-path issue
    - resource monitor files if DFX issue
 4. Confirm key config:
    - `log_dir`
    - `log_monitor`
-   - `ready_check_path`
-   - `liveness_check_path`
+   - `health_check_path`
+   - `liveness_probe_timeout_s`
    - `etcd_address` or `metastore_address`
 5. Use `signal-map.md` to pick the first code entrypoint.
 

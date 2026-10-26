@@ -16,8 +16,12 @@
 
 #include "datasystem/worker/worker_liveness_check.h"
 
-#include <fstream>
+#include <cerrno>
+#include <ctime>
+#include <fcntl.h>
 #include <memory>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 #include "datasystem/common/flags/flags.h"
@@ -32,6 +36,7 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -102,14 +107,13 @@ Status WorkerLivenessCheck::Init()
 
 void WorkerLivenessCheck::Stop()
 {
-    if (checkThread_ == nullptr) {
-        return;
+    if (checkThread_ != nullptr) {
+        LOG(INFO) << "Stop WorkerLivenessCheck and remove worker probe after its thread exits.";
+        exitFlag_ = true;
+        checkThread_->join();
+        checkThread_.reset();
     }
-    LOG(INFO) << "Stop WorkerLivenessCheck and try delete liveness probe file.";
-    LOG_IF_ERROR(ResetLivenessProbe(), "ResetLivenessProbe failed");
-    exitFlag_ = true;
-    checkThread_->join();
-    checkThread_.reset();
+    LOG_IF_ERROR(RemoveProbe(), "Remove worker probe failed");
 }
 
 WorkerLivenessCheck::~WorkerLivenessCheck()
@@ -128,9 +132,9 @@ void WorkerLivenessCheck::Run()
     uint32_t probeIntervalMs =
         std::min({ probeTimeoutMs_ / minProbeCount, maxProbeIntervalMs, FLAGS_node_timeout_s / minProbeCount });
     Timer timer;
-    Timer failedTimer;
     Status rc;
     bool logFlag = false;
+    bool isProbeExpired = false;
     bool isFirst = true;
     while (!exitFlag_) {
         TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
@@ -146,33 +150,41 @@ void WorkerLivenessCheck::Run()
 
         if (rc.IsOk()) {
             logFlag = false;
-            LOG_IF_ERROR(SetLivenessProbe(true), "SetLivenessProbe failed");
+            isProbeExpired = false;
+            LOG_IF_ERROR(RenewProbe(), "Renew worker probe failed");
             continue;
         }
-        LOG_IF(ERROR, !logFlag) << "Check worker liveness probe failed, detail message: "
-                                << rc.ToString() << ". maybe you can try delete liveness probe file!";
-        LOG_IF_ERROR(SetLivenessProbe(false), "SetLivenessProbe failed");
+        LOG_IF(ERROR, !logFlag) << "Check worker liveness failed; expire the worker probe: " << rc.ToString();
         logFlag = true;
+        if (!isProbeExpired) {
+            auto expireRc = ExpireProbe();
+            LOG_IF_ERROR(expireRc, "Expire worker probe failed");
+            isProbeExpired = expireRc.IsOk();
+        }
     }
     LOG(INFO) << "Terminating worker liveness check thread.";
 }
 
-Status WorkerLivenessCheck::SetLivenessProbe(bool success)
+Status WorkerLivenessCheck::RenewProbe()
 {
-    std::string fileDir = probeFileName_.substr(0, probeFileName_.find_last_of('/'));
-    if (!FileExist(fileDir)) {
-        const mode_t per = 0700;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateDir(fileDir, true, per), "Create liveness probe file failed");
+    if (utimensat(AT_FDCWD, probeFileName_.c_str(), nullptr, 0) == 0) {
+        return Status::OK();
     }
-    std::ofstream outfile(probeFileName_);
-    if (success) {
-        outfile << "liveness check success\n" << std::endl;
-    } else {
-        outfile << "liveness check failed\n" << std::endl;
+    const int error = errno;
+    RETURN_STATUS(K_IO_ERROR, FormatString("Renew worker probe %s failed with errno: %d, errmsg: %s", probeFileName_,
+                                           error, StrErr(error)));
+}
+
+Status WorkerLivenessCheck::ExpireProbe()
+{
+    const time_t expiredTime = time(nullptr) - static_cast<time_t>(probeTimeoutMs_ / TIME_UNIT_CONVERSION) - 1;
+    const timespec times[] = { { 0, UTIME_OMIT }, { expiredTime, 0 } };
+    if (utimensat(AT_FDCWD, probeFileName_.c_str(), times, 0) == 0) {
+        return Status::OK();
     }
-    outfile.close();
-    const mode_t per = 0600;
-    return ChangeFileMod(probeFileName_, per);
+    const int error = errno;
+    RETURN_STATUS(K_IO_ERROR, FormatString("Expire worker probe %s failed with errno: %d, errmsg: %s", probeFileName_,
+                                           error, StrErr(error)));
 }
 
 Status WorkerLivenessCheck::CheckLivenessProbeFile(Timer &timer, const Status &lastStatus)
@@ -190,38 +202,24 @@ Status WorkerLivenessCheck::CheckLivenessProbeFile(Timer &timer, const Status &l
         return Status(K_RUNTIME_ERROR, FormatString("%s not exist", probeFileName_.c_str()));
     }
 
-    // Check for "liveness check failed" in file
-    std::ifstream file(probeFileName_.c_str());
-    if (file.is_open()) {
-        std::string line;
-        std::stringstream buffer;
-        buffer << file.rdbuf();
-        file.close();
-        if (buffer.str().find("liveness check failed") != std::string::npos) {
-            return Status(K_RUNTIME_ERROR, "liveness check failed");
-        }
-    } else {
-        LOG(WARNING) << "file open failed";
-        return Status::OK();
-    }
-
-    // Check last update time
-    time_t probeLastUpdateTime = fileStat.st_mtime;
-    time_t currentTime = time(nullptr);
+    const time_t probeLastUpdateTime = fileStat.st_mtime;
+    const time_t currentTime = time(nullptr);
     if ((currentTime - probeLastUpdateTime) > probeTimeoutMs_ / TIME_UNIT_CONVERSION) {
-        return Status(K_RUNTIME_ERROR,
-                      FormatString("liveness file not update for %d s", currentTime - probeLastUpdateTime));
+        return Status(K_RUNTIME_ERROR, FormatString("worker probe not updated for %lld s",
+                                                    static_cast<long long>(currentTime - probeLastUpdateTime)));
     }
 
     return Status::OK();
 }
 
-Status WorkerLivenessCheck::ResetLivenessProbe()
+Status WorkerLivenessCheck::RemoveProbe()
 {
-    if (FileExist(probeFileName_)) {
-        RETURN_IF_NOT_OK(DeleteFile(probeFileName_));  // Delete file if exist
+    if (unlink(probeFileName_.c_str()) == 0 || errno == ENOENT) {
+        return Status::OK();
     }
-    return Status::OK();
+    const int error = errno;
+    RETURN_STATUS(K_IO_ERROR, FormatString("Delete worker probe %s failed with errno: %d, errmsg: %s", probeFileName_,
+                                           error, StrErr(error)));
 }
 
 bool WorkerLivenessCheck::IsMasterNode()
@@ -266,19 +264,18 @@ Status WorkerLivenessCheck::CheckRocksDbService()
     if (!IsMasterNode() || (FLAGS_rocksdb_write_mode == "none")) {
         return Status::OK();
     }
+    // rpc_thread_num=0 keeps the distributed master role but creates no embedded master OC
+    // service; there is no rocksdb metadata store on this node to check.
+    if (workerOcServer_->GetOcMetaSvc() == nullptr) {
+        return Status::OK();
+    }
     master::LivenessCheckReqPb req;
     master::LivenessCheckRspPb rsp;
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     auto rc = workerOcServer_->GetOcMetaSvc()->LivenessCheck(req, rsp);
-    if (rc.IsOk() || lastSuccessTimeUs_ == 0) {
-        lastSuccessTimeUs_ = GetSteadyClockTimeStampUs();
-    }
     if (rc.IsError()) {
-        LOG(WARNING) << "CheckRocksDbService failed in allowed time. " << rc.ToString();
-    }
-    auto currentTime = GetSteadyClockTimeStampUs();
-    if (currentTime - lastSuccessTimeUs_ > probeTimeoutMs_ * TIME_UNIT_CONVERSION) {
-        RETURN_STATUS_LOG_ERROR(K_WORKER_ABNORMAL, "CheckRocksDbService timeout.");
+        RETURN_STATUS_LOG_ERROR(K_WORKER_ABNORMAL,
+                                FormatString("CheckRocksDbService failed: %s", rc.ToString()));
     }
     return Status::OK();
 }

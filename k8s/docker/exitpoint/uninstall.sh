@@ -38,13 +38,7 @@ function liveness_check() {
     return 0
   fi
 
-  local content="$(cat ${probe_path})"
-  if grep -q "liveness check failed" "${probe_path}"; then
-    elog "liveness probe ${probe_path} check failed: ${content}"
-    return 1
-  fi
-
-  local probe_last_updata_time=$(stat -c %Z ${probe_path})
+  local probe_last_updata_time=$(stat -c %Y ${probe_path})
   local current_time=$(date +%s)
   if [[ $((current_time - probe_last_updata_time)) -gt $probe_timeout ]]; then
     elog "liveness probe not update in ${probe_timeout}"
@@ -70,7 +64,7 @@ function main() {
     esac
   done
 
-  liveness_check ${LIVENESS_CHECK_PATH} ${PROBE_TIMEOUT} || force_kill_worker
+  liveness_check ${WORKER_PROBE_PATH} ${PROBE_TIMEOUT} || force_kill_worker
 
   ilog "send TERM to process 1 to gracefully notify worker to exit"
   kill -TERM 1
@@ -83,9 +77,8 @@ function main() {
     sleep 1
   done
 
-  ilog "delete health check file..."
-  [[ -f "${HEALTH_CHECK_PATH}" ]] && rm "${HEALTH_CHECK_PATH:?}"
-  [[ -f "${READY_CHECK_PATH}" ]] && rm "${READY_CHECK_PATH:?}"
+  ilog "delete worker probe file..."
+  [[ -f "${WORKER_PROBE_PATH}" ]] && rm "${WORKER_PROBE_PATH:?}"
   ilog "ready to exit, byebye"
   exit 0
 }

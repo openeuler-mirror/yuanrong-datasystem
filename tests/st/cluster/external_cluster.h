@@ -109,7 +109,7 @@ public:
     // Keep the old post-start grace period only for tests that explicitly need heartbeat convergence.
     bool waitAfterStart;
 
-    bool enableLivenessProbe;
+    uint32_t livenessProbeTimeoutS;
     // used by ak/sk authorize
     std::string systemAccessKey = "QTWAOYTTINDUT2QVKYUC";
     std::string systemSecretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";

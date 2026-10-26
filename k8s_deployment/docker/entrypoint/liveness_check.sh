@@ -19,20 +19,14 @@ readonly WORK_DIR=$(dirname "$(readlink -f "$0")")
 source ${WORK_DIR}/utils.sh
 
 function main() {
-    PROBE_PATH=`utils_get_worker_arg_value liveness_check_path`
+    PROBE_PATH=`utils_get_worker_arg_value health_check_path`
 	PROBE_TIMEOUT=`utils_get_worker_arg_value liveness_probe_timeout_s`
 	if [[ ! -e "${PROBE_PATH}" ]]; then
 		elog "liveness probe file ${PROBE_PATH} not exists!"
 		exit 1
 	fi
 
-    content="$(cat ${PROBE_PATH})"
-    if ! grep -q "liveness check success" "${PROBE_PATH}"; then
-        elog "liveness probe ${PROBE_PATH} check failed: ${content}"
-        exit 1
-    fi
-
-	PROBE_LAST_UPDATA_TIME=$(stat -c %Z ${PROBE_PATH})
+	PROBE_LAST_UPDATA_TIME=$(stat -c %Y ${PROBE_PATH})
 	CURRENT_TIME=$(date +%s)
 	if [[ $((CURRENT_TIME - PROBE_LAST_UPDATA_TIME)) -gt $PROBE_TIMEOUT ]]; then
 		elog "liveness probe not update in ${PROBE_TIMEOUT}"

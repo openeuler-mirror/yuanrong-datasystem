@@ -133,7 +133,7 @@ cat > "$ROOT_DIR/worker_config.json" << EOF
     "log_dir": {"value": "$ROOT_DIR/worker/log"},
     "rocksdb_store_dir": {"value": "$ROOT_DIR/worker/rocksdb"},
     "rocksdb_write_mode": {"value": "none"},
-    "health_check_path": {"value": "$ROOT_DIR/worker/health"},
+    "health_check_path": {"value": "$ROOT_DIR/worker/probe"},
     "node_timeout_s": {"value": "3"},
     "node_dead_timeout_s": {"value": "6"},
     "enable_distributed_master": {"value": "true"}

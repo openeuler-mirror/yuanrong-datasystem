@@ -373,6 +373,8 @@ global:
     udsDir: /home/uds
 
   reliability:
+    # Startup must cover reconciliation, topology convergence, and initialization margin.
+    startupProbeTimeoutS: 390
     # Client reconnect wait seconds, default value is 5 seconds. (Must be greater than 0)
     clientReconnectWaitS: 10
     # Maximum time interval for the worker to determine client death, value range: [3, UINT64_MAX).

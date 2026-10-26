@@ -1316,9 +1316,9 @@ def start_service_standalone(pod, namespace, binary_name, remote_dir, config_pat
     held by a ``nohup``-backgrounded binary.
 
     Readiness check priority (matches dscli split):
-      * ``ready_check_path`` in config -> poll for that file's existence
+      * ``health_check_path`` in config -> poll for that file's existence
         (worker; authoritative — written after WaitForServiceReady +
-        WaitForTopologyReady in worker_oc_server.cpp:2911-2933)
+        WaitForTopologyReady)
       * else ``port`` given          -> poll TCP connect on ``pod_ip:port``
         (coordinator; mirrors dscli's start_coordinator is_tcp_ready)
       * else                         -> launcher prints PID immediately;
@@ -1376,12 +1376,12 @@ def start_service_standalone(pod, namespace, binary_name, remote_dir, config_pat
                     '--service', service_name]
                    + (shlex.split(extra_args) if extra_args else []))
 
-    # Extract ready_check_path from the worker config (if set). The worker
+    # Extract health_check_path from the worker config (if set). The worker
     # binary writes this file only after WaitForServiceReady() +
-    # WaitForTopologyReady() complete (worker_oc_server.cpp:2911-2933), so
+    # WaitForTopologyReady() complete, so
     # it's a strictly stronger readiness signal than TCP port listening.
-    # Coordinators have no ready_check_path; they fall through to --port.
-    ready_file = _extract_ready_check_path(config)
+    # Coordinators have no health_check_path; they fall through to --port.
+    worker_probe_file = _extract_health_check_path(config)
 
     # Upload the launcher to the same directory as the binary (remote_dir), so
     # start and stop both find it at {remote_dir}/standalone_launcher.py and
@@ -1398,7 +1398,7 @@ def start_service_standalone(pod, namespace, binary_name, remote_dir, config_pat
                 name, namespace, launcher_remote,
                 binary_path, remote_dir, log_path, lib_path, binary_argv,
                 port=port, host=pod_ip,
-                ready_file=ready_file,
+                worker_probe_file=worker_probe_file,
                 ready_timeout=start_timeout,
                 subprocess_timeout=start_timeout + 60, env=env)
         else:
@@ -1490,7 +1490,7 @@ def prepare_standalone_jemalloc_prof(pod, namespace, binary_name, remote_dir, pa
 def _launch_via_launcher(name, namespace, launcher_remote, binary_path,
                          cwd, log_path, lib_path, binary_argv,
                          port=None, host='127.0.0.1',
-                         ready_file=None,
+                         worker_probe_file=None,
                          ready_timeout=30, subprocess_timeout=DEFAULT_TIMEOUT, env=None):
     """Invoke standalone_launcher.py via kubectl exec; return (pid, elapsed).
 
@@ -1505,8 +1505,8 @@ def _launch_via_launcher(name, namespace, launcher_remote, binary_path,
     diff so that large-cluster ``kubectl exec`` latency does not inflate
     the reported startup time.
 
-    Readiness signal priority (matches dscli): ``ready_file`` (authoritative,
-    e.g. worker ``ready_check_path``) > ``port`` (TCP connect, e.g.
+    Readiness signal priority (matches dscli): ``worker_probe_file`` (authoritative,
+    e.g. worker ``health_check_path``) > ``port`` (TCP connect, e.g.
     coordinator) > none (grace-poll for early exits).
     """
     cmd = ['kubectl', 'exec', '-n', namespace, name, '--']
@@ -1519,8 +1519,8 @@ def _launch_via_launcher(name, namespace, launcher_remote, binary_path,
            '--lib-path', lib_path,
            '--pidfile', f'{binary_path}.pid',
            '--ready-timeout', str(ready_timeout)])
-    if ready_file:
-        cmd.extend(['--ready-file', ready_file])
+    if worker_probe_file:
+        cmd.extend(['--worker-probe-file', worker_probe_file])
     if port:
         cmd.extend(['--port', str(port), '--host', host])
     cmd.append('--')
@@ -1558,22 +1558,20 @@ def _launch_via_launcher(name, namespace, launcher_remote, binary_path,
     return pid, elapsed
 
 
-def _extract_ready_check_path(config):
-    """Extract ready_check_path from a dscli-style worker config.
+def _extract_health_check_path(config):
+    """Extract health_check_path from a dscli-style worker config.
 
     The config field may be a ``{"value": "/path"}`` dict (dscli config
     style, as emitted by deploy_worker / helm_chart/worker.config) or a
     plain string. Returns ``None`` if not set or empty.
 
-    Source: src/datasystem/worker/worker_oc_server.cpp:133 defines
-    ``FLAGS_ready_check_path``; ``ReadinessProbe()`` writes the file only
-    after ``WaitForServiceReady()`` + ``WaitForTopologyReady()`` complete
-    (worker_oc_server.cpp:2911-2933), so file existence is a strictly
+    ``ReadinessProbe()`` writes the file only after ``WaitForServiceReady()``
+    and ``WaitForTopologyReady()`` complete, so file existence is a strictly
     stronger readiness signal than TCP port listening.
     """
     if not config:
         return None
-    rcp = config.get('ready_check_path')
+    rcp = config.get('health_check_path')
     if rcp is None:
         return None
     if isinstance(rcp, dict):
