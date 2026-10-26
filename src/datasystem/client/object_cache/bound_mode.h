@@ -256,6 +256,13 @@ public:
                                     std::vector<std::string> &outFailedKeys, PerfPoint &point);
 
 private:
+    Status RecoverWorkerAndRetryPublish(const std::shared_ptr<IClientWorkerApi> &workerApi,
+                                        const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
+                                        const std::unordered_set<std::string> &nestedObjectKeys, bool isShm,
+                                        WorkerNode workerNode);
+
+    Status RecoverWorker(WorkerNode workerNode);
+
     void ObserveGetProviderUbFailure(const std::shared_ptr<IClientWorkerApi> &workerApi, const GetRspPb &rsp);
 
     std::vector<std::shared_ptr<IClientWorkerApi>> &workerApi_;

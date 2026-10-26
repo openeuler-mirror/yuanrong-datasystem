@@ -423,7 +423,11 @@
     reconnecting. During recovery, new requests fail with `K_RPC_UNAVAILABLE`.
     If an idempotent Object Get reaches a Worker whose in-memory client registration was lost, the remote Object client
     re-registers the existing client ID during recovery, refreshes the client ID in the request, and retries that Get within
-    the existing retry path; non-idempotent Create/Publish requests are not replayed by this branch.
+    the existing retry path. A bound Publish rejected with `K_CLIENT_WORKER_DISCONNECT` before execution also runs the
+    existing client recovery and retries once when the request carries its complete payload. SHM Publish and UB Publish
+    whose data transfer already completed are not replayed because their Worker-resident data is lost across restart.
+    Recovery is skipped after the API deadline expires, and the retry is bounded by the remaining deadline.
+    Other non-idempotent Create/Publish failures are not replayed by this branch.
     For local-cache cross-node clients, a direct Get that receives `K_RPC_PEER_DEAD` from the currently bound Worker
     also queues a switch on the existing single-thread switch pool, deduplicated by the exact Worker API instance.
     The failed request still returns its original status; the background task retains and revalidates the exact Worker
