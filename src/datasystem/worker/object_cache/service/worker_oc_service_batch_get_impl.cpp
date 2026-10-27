@@ -794,7 +794,7 @@ Status WorkerOcServiceGetImpl::SendBatchGetRemoteRequest(const std::string &addr
                                                          std::vector<RpcMessage> &payloads, bool useFastTransport)
 {
     std::shared_ptr<WorkerRemoteWorkerOCApi> workerStub;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(address, localAddress_, akSkManager_, workerStub),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(address, localAddress_, workerStub),
                                      "Create remote worker api failed.");
     std::unique_ptr<ClientUnaryWriterReader<BatchGetObjectRemoteReqPb, BatchGetObjectRemoteRspPb>> clientApi;
     int64_t timeoutMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
@@ -814,7 +814,7 @@ Status WorkerOcServiceGetImpl::SendBatchGetRemoteRequest(const std::string &addr
             PerfPoint rpcPoint(PerfKey::WORKER_BATCH_REMOTE_GET_RPC);
             if (workerStub == nullptr) {
                 RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                    CreateRemoteWorkerApi(address, localAddress_, akSkManager_, workerStub),
+                    CreateRemoteWorkerApi(address, localAddress_, workerStub),
                     "Recreate remote worker api failed.");
             }
             CLEAN_RPC_AND_RETURN_WHEN_ERROR(workerStub->BatchGetObjectRemote(&clientApi), "open stream");

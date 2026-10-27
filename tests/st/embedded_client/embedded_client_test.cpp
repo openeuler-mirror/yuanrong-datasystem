@@ -305,9 +305,7 @@ public:
                                           .token = "",
                                           .clientPublicKey = "",
                                           .clientPrivateKey = "",
-                                          .serverPublicKey = "",
-                                          .accessKey = "QTWAOYTTINDUT2QVKYUC",
-                                          .secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc" };
+                                          .serverPublicKey = "" };
 
         client = std::make_shared<KVClient>(connectOptions);
         DS_ASSERT_OK(client->Init());

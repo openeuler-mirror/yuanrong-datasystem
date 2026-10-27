@@ -34,6 +34,8 @@ DECLARE_int32(max_connection_pool_size);
 
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/rpc/brpc_expired_request_interceptor.h"
+#include "datasystem/common/rpc/brpc_factory.h"
+#include "datasystem/common/rpc/brpc_auth_capture.h"
 #include "datasystem/common/rpc/rpc_service_base.h"
 #include "datasystem/common/util/thread_pool.h"
 
@@ -111,7 +113,8 @@ Status RpcServer::AddBrpcServices(const std::function<Status(brpc::Server &)> &r
     return registrar(*brpcServer_);
 }
 
-Status RpcServer::StartBrpcServer(const std::string &addr, int port, BrpcLogPolicy logPolicy)
+Status RpcServer::StartBrpcServer(const std::string &addr, int port, BrpcLogPolicy logPolicy,
+                                  const BrpcAuthCapture *authCapture)
 {
     if (!brpcServer_) {
         brpcServer_ = std::make_unique<brpc::Server>();
@@ -125,7 +128,12 @@ Status RpcServer::StartBrpcServer(const std::string &addr, int port, BrpcLogPoli
         logging::InitLogging(settings);
     }
 
+    BrpcChannelFactory::EnsureGlobalInitialized();
+    if (authCapture != nullptr) {
+        RETURN_IF_NOT_OK(RegisterRpcAuthChecksumColdOnce());
+    }
     brpc::ServerOptions options;
+    options.session_local_data_factory = authCapture;
     options.idle_timeout_sec = -1;
     // Builtin HTTP services (/flags, /pprof, /vars) are off by default for a
     // tight security surface; set FLAGS_brpc_enable_builtin_services=true to debug.

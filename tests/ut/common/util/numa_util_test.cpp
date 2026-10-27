@@ -39,7 +39,7 @@ pid_t ForkForTest(std::function<void()> func)
     if (child == 0) {
         std::thread thread(std::move(func));
         thread.join();
-        exit(0);
+        _exit(::testing::Test::HasFailure() ? 1 : 0);
     }
     return child;
 }

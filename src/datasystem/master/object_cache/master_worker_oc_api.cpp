@@ -18,6 +18,7 @@
  * Description: Defines the worker class to communicate with the worker service.
  */
 #include "datasystem/master/object_cache/master_worker_oc_api.h"
+#include "datasystem/common/inject/inject_point.h"
 
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/flags/common_flags.h"
@@ -34,32 +35,31 @@ namespace datasystem {
 namespace master {
 
 // Base class methods
-MasterWorkerOCApi::MasterWorkerOCApi(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager)
-    : masterHostPort_(localHostPort), akSkManager_(akSkManager)
+MasterWorkerOCApi::MasterWorkerOCApi(const HostPort &localHostPort)
+    : masterHostPort_(localHostPort)
 {
 }
 
 std::shared_ptr<MasterWorkerOCApi> MasterWorkerOCApi::CreateMasterWorkerOCApi(
-    const HostPort &hostPort, const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager,
+    const HostPort &hostPort, const HostPort &localHostPort,
     object_cache::MasterWorkerOCServiceImpl *service)
 {
     if (hostPort != localHostPort) {
         VLOG(1) << "Master and worker are not collocated. Creating a MasterWorkerOCApi as RPC-based api.";
-        return std::make_shared<MasterRemoteWorkerOCApi>(hostPort, localHostPort, akSkManager);
+        return std::make_shared<MasterRemoteWorkerOCApi>(hostPort, localHostPort);
     }
     if (service == nullptr) {
         LOG(INFO) << "Master and worker are collocated but the worker service is not provided. Local bypass disabled.";
-        return std::make_shared<MasterRemoteWorkerOCApi>(hostPort, localHostPort, akSkManager);
+        return std::make_shared<MasterRemoteWorkerOCApi>(hostPort, localHostPort);
     }
     VLOG(1) << "Master and worker are collocated. Creating a MasterWorkerOCApi with local bypass optimization.";
-    return std::make_shared<MasterLocalWorkerOCApi>(service, localHostPort, akSkManager);
+    return std::make_shared<MasterLocalWorkerOCApi>(service, localHostPort);
 }
 
 // MasterRemoteWorkerOCApi methods
 
-MasterRemoteWorkerOCApi::MasterRemoteWorkerOCApi(const HostPort &workerHostPort, const HostPort &localHostPort,
-                                                 std::shared_ptr<AkSkManager> akSkManager)
-    : MasterWorkerOCApi(localHostPort, akSkManager), workerHostPort_(workerHostPort)
+MasterRemoteWorkerOCApi::MasterRemoteWorkerOCApi(const HostPort &workerHostPort, const HostPort &localHostPort)
+    : MasterWorkerOCApi(localHostPort), workerHostPort_(workerHostPort)
 {
 }
 
@@ -75,12 +75,10 @@ Status MasterRemoteWorkerOCApi::Init()
 Status MasterRemoteWorkerOCApi::ClearData(ClearDataReqPb &req, ClearDataRspPb &rsp)
 {
     RpcOptions opts;
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     auto status = RetryOnErrorRepent(
         GetRequestContext()->timeoutDuration.CalcRealRemainingTime(),
         [this, &opts, &req, &rsp](int32_t rpcTimeout) {
             opts.SetTimeout(rpcTimeout);
-            RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
             return brpcSession_->ClearData(opts, req, rsp);
         },
         []() { return Status::OK(); },
@@ -97,7 +95,6 @@ Status MasterRemoteWorkerOCApi::PublishMeta(PublishMetaReqPb &req, PublishMetaRs
         GetRequestContext()->timeoutDuration.CalcRealRemainingTime(),
         [this, &opts, &req, &resp](int32_t rpcTimeout) {
             opts.SetTimeout(rpcTimeout);
-            RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
             Timer timer;
             Status rc = brpcSession_->PublishMeta(opts, req, resp);
             GetMasterTimeCost().Append("Master to worker rpc PublishMeta", timer.ElapsedMilliSecond());
@@ -122,7 +119,6 @@ Status MasterRemoteWorkerOCApi::UpdateNotification(UpdateObjectReqPb &req, Updat
         timeoutMs,
         [this, &opts, &req, &rsp](int32_t rpcTimeout) {
             opts.SetTimeout(rpcTimeout);
-            RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
             Timer timer;
             Status rc = brpcSession_->UpdateNotification(opts, req, rsp);
             GetMasterTimeCost().Append("Master to worker rpc UpdateNotification", timer.ElapsedMilliSecond());
@@ -138,7 +134,6 @@ Status MasterRemoteWorkerOCApi::DeleteNotification(std::unique_ptr<DeleteObjectR
 {
     RpcOptions opts;
     SET_RPC_TIMEOUT(&GetRequestContext()->timeoutDuration, opts);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(*req));
     Timer timer;
     Status rc = brpcSession_->DeleteNotification(opts, *req, rsp);
     GetMasterTimeCost().Append("Master to worker rpc DeleteNotification", timer.ElapsedMilliSecond());
@@ -150,7 +145,6 @@ Status MasterRemoteWorkerOCApi::DeletePersistenceObject(std::unique_ptr<DeletePe
 {
     RpcOptions opts;
     SET_RPC_TIMEOUT(&GetRequestContext()->timeoutDuration, opts);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(*req));
     Timer timer;
     Status rc = brpcSession_->DeletePersistenceObject(opts, *req, rsp);
     GetMasterTimeCost().Append("Master to worker rpc DeletePersistenceObject", timer.ElapsedMilliSecond());
@@ -161,7 +155,6 @@ Status MasterRemoteWorkerOCApi::DeleteNotificationSend(std::unique_ptr<DeleteObj
 {
     RpcOptions opts;
     SET_RPC_TIMEOUT(&GetRequestContext()->timeoutDuration, opts);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(*req));
     Timer timer;
     Status rc = brpcSession_->DeleteNotificationAsyncWrite(opts, *req, tag);
     GetMasterTimeCost().Append("Master to worker rpc DeleteNotificationSend", timer.ElapsedMilliSecond());
@@ -182,7 +175,6 @@ Status MasterRemoteWorkerOCApi::QueryGlobalRefNumOnWorker(QueryGlobalRefNumReqPb
     SET_RPC_TIMEOUT(&GetRequestContext()->timeoutDuration, opts);
     req.set_timeout(MasterGetRequestTimeout(GetRequestContext()->timeoutDuration.CalcRemainingTime()));
     LOG(INFO) << "QueryGlobalRefNumOnWorker " << workerHostPort_.ToString() << " : " << LogHelper::IgnoreSensitive(req);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     Timer timer;
     Status rc = brpcSession_->QueryGlobalRefNumOnWorker(opts, req, rsp);
     GetMasterTimeCost().Append("Master to worker rpc QueryGlobalRefNumOnWorker", timer.ElapsedMilliSecond());
@@ -201,7 +193,6 @@ Status MasterRemoteWorkerOCApi::PushMetaToWorker(PushMetaToWorkerReqPb &req, Pus
     RpcOptions opts;
     GetRequestContext()->timeoutDuration.Reset();
     SET_RPC_TIMEOUT(&GetRequestContext()->timeoutDuration, opts);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     Timer timer;
     Status rc = brpcSession_->PushMetaToWorker(opts, req, rsp);
     GetMasterTimeCost().Append("Master to worker rpc PushMetaToWorker", timer.ElapsedMilliSecond());
@@ -218,7 +209,6 @@ Status MasterRemoteWorkerOCApi::RequestMetaFromWorker(RequestMetaFromWorkerReqPb
     LOG(INFO) << "Send RequestMetaFromWorker to worker " << workerHostPort_.ToString();
     RpcOptions opts;
     SET_RPC_TIMEOUT(&GetRequestContext()->timeoutDuration, opts);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     Timer timer;
     Status rc = brpcSession_->RequestMetaFromWorker(opts, req, rsp);
     GetMasterTimeCost().Append("Master to worker rpc RequestMetaFromWorker", timer.ElapsedMilliSecond());
@@ -236,7 +226,6 @@ Status MasterRemoteWorkerOCApi::ChangePrimaryCopy(ChangePrimaryCopyReqPb &req, C
               << LogHelper::IgnoreSensitive(req);
     RpcOptions opts;
     SET_RPC_TIMEOUT(&GetRequestContext()->timeoutDuration, opts);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     Timer timer;
     Status rc = brpcSession_->ChangePrimaryCopy(opts, req, rsp);
     GetMasterTimeCost().Append("Master to worker rpc ChangePrimaryCopy", timer.ElapsedMilliSecond());
@@ -255,7 +244,6 @@ Status MasterRemoteWorkerOCApi::NotifyMasterIncNestedRefs(NotifyMasterIncNestedR
               << LogHelper::IgnoreSensitive(req);
     RpcOptions opts;
     SET_RPC_TIMEOUT(&GetRequestContext()->timeoutDuration, opts);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     Timer timer;
     Status rc = brpcSession_->NotifyMasterIncNestedRefs(opts, req, rsp);
     GetMasterTimeCost().Append("Master to worker rpc NotifyMasterIncNestedRefs", timer.ElapsedMilliSecond());
@@ -274,7 +262,6 @@ Status MasterRemoteWorkerOCApi::NotifyMasterDecNestedRefs(NotifyMasterDecNestedR
               << LogHelper::IgnoreSensitive(req);
     RpcOptions opts;
     SET_RPC_TIMEOUT(&GetRequestContext()->timeoutDuration, opts);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     Timer timer;
     Status rc = brpcSession_->NotifyMasterDecNestedRefs(opts, req, rsp);
     GetMasterTimeCost().Append("Master to worker rpc NotifyMasterDecNestedRefs", timer.ElapsedMilliSecond());

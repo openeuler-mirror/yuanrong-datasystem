@@ -32,6 +32,8 @@ set(COMMON_RPC_ZMQ_SRCS
         api_deadline.cpp
         api_deadline_helpers.cpp
         brpc_factory.cpp
+        brpc_auth.cpp
+        brpc_auth_capture.cpp
         fanout_collector.cpp
         network_latency_estimator.cpp
         rpc_auth_key_manager.cpp
@@ -63,6 +65,7 @@ set(COMMON_RPC_ZMQ_SRCS
         rpc_auth_key_manager_server.cpp)
 
 set(COMMON_RPC_ZMQ_DEPENDS_LIBS
+        common_ak_sk
         protobuf::libprotobuf
         nlohmann_json::nlohmann_json
         ${SECUREC_LIBRARY}
@@ -77,6 +80,7 @@ set(COMMON_RPC_ZMQ_DEPENDS_LIBS
         rpc_option_protos)
 
 set(COMMON_RPC_ZMQ_CLIENT_DEPENDS_LIBS
+        common_ak_sk
         protobuf::libprotobuf
         nlohmann_json::nlohmann_json
         ${SECUREC_LIBRARY}

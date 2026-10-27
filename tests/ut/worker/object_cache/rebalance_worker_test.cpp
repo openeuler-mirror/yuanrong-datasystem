@@ -239,18 +239,16 @@ public:
         objectTable_ = std::make_shared<ObjectTable>();
         allocator = memory::Allocator::Instance();
         allocator->Init(maxMemorySize);
-        akSkManager_ = std::make_shared<AkSkManager>(0);
         evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, LOCAL_ADDR, MASTER_ADDR,
                                                                      GetTestMetadataRoute());
         globalRefTable_ = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
-        DS_ASSERT_OK(evictionManager_->Init(globalRefTable_, akSkManager_));
+        DS_ASSERT_OK(evictionManager_->Init(globalRefTable_));
     }
 
     void TearDown() override
     {
         evictionManager_.reset();
         globalRefTable_.reset();
-        akSkManager_.reset();
         objectTable_.reset();
         allocator->ResetForTest();
         allocator = nullptr;
@@ -264,7 +262,6 @@ protected:
         evictionManager_->Add(objectKey);
     }
 
-    std::shared_ptr<AkSkManager> akSkManager_;
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable_;
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
 };
@@ -497,7 +494,6 @@ public:
         objectTable_ = std::make_shared<ObjectTable>();
         allocator = memory::Allocator::Instance();
         allocator->Init(maxMemorySize);
-        akSkManager_ = std::make_shared<AkSkManager>(0);
 
         FLAGS_eviction_strategy = "heat";
         FLAGS_eviction_heat_threshold = 2.0;
@@ -509,7 +505,7 @@ public:
         evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, LOCAL_ADDR, MASTER_ADDR,
                                                                      GetTestMetadataRoute());
         globalRefTable_ = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
-        DS_ASSERT_OK(evictionManager_->Init(globalRefTable_, akSkManager_));
+        DS_ASSERT_OK(evictionManager_->Init(globalRefTable_));
         std::weak_ptr<WorkerOcEvictionManager> weakManager = evictionManager_;
         AsyncResourceReleaser::Instance().Init(objectTable_, [weakManager](const ImmutableString &objectKey) {
             auto manager = weakManager.lock();
@@ -524,7 +520,6 @@ public:
         AsyncResourceReleaser::Instance().Shutdown();
         evictionManager_.reset();
         globalRefTable_.reset();
-        akSkManager_.reset();
         objectTable_.reset();
         FLAGS_eviction_strategy = "clock";
         FLAGS_rebalance_keep_local_copy = true;
@@ -553,7 +548,6 @@ protected:
         });
     }
 
-    std::shared_ptr<AkSkManager> akSkManager_;
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable_;
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
 };
@@ -759,7 +753,7 @@ public:
         evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, LOCAL_ADDR, MASTER_ADDR,
                                                                      GetTestMetadataRoute());
         RebalanceExecutorConfig config{ LOCAL_ADDR,       &metadataRoute_, &membership_, &endpointPolicy_,
-                                        &exitRequested_, nullptr,         nullptr,       objectTable_,
+                                        &exitRequested_, nullptr,         objectTable_,
                                         evictionManager_, nullptr };
         executor_ = std::make_unique<RebalanceExecutor>(std::move(config));
     }

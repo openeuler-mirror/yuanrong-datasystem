@@ -1285,7 +1285,7 @@ private:
     bool enableCrossNodeConnection_ = false;
     bool enableLocalCache_ = true;
     client::DataPlacementPolicy dataPlacementPolicy_ = client::DataPlacementPolicy::PREFERRED_SAME_NODE;
-    std::unique_ptr<Signature> signature_{ nullptr };
+    std::shared_ptr<Signature> signature_{ nullptr };
     std::vector<std::shared_ptr<IClientWorkerApi>> workerApi_;
     std::atomic<WorkerNode> currentNode_{ LOCAL_WORKER };
     // One pin queue, one deferred-unmap queue, and one operation mutex for every Worker connection

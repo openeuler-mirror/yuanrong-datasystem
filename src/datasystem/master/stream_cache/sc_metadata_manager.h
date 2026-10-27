@@ -46,14 +46,13 @@ public:
     /**
      * @brief Construct a new SCMetadataManager instance.
      * @param[in] masterHostPort The master address.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] rpcSessionManager Master to Worker session manager.
      * @param[in] placement Borrowed metadata placement capability.
      * @param[in] membership Borrowed read-only membership capability.
      * @param[in] rocksStore The rocks store instance.
      * @param[in] workerId The worker id.
      */
-    SCMetadataManager(const HostPort &masterHostPort, std::shared_ptr<AkSkManager> akSkManager,
+    SCMetadataManager(const HostPort &masterHostPort,
                       std::shared_ptr<RpcSessionManager> rpcSessionManager,
                       const cluster::PlacementFacade *placement,
                       const cluster::MembershipEndpointView *membership, RocksStore *rocksStore,
@@ -474,7 +473,6 @@ private:
     std::shared_ptr<RocksStreamMetaStore> streamMetaStore_{ nullptr };
 
     std::unique_ptr<ThreadPool> asyncReconciliationPool_{ nullptr };
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::shared_ptr<RpcSessionManager> rpcSessionManager_{ nullptr };
     std::shared_ptr<std::atomic_bool> exitFlag_;
 

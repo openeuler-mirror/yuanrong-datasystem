@@ -493,7 +493,7 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
     token_ = connectOptions.token;
     transportToken_ = std::make_shared<const SensitiveValue>(connectOptions.token);
     tenantId_ = connectOptions.tenantId;
-    signature_ = std::make_unique<Signature>(connectOptions.accessKey, connectOptions.secretKey);
+    signature_ = std::make_shared<Signature>(connectOptions.accessKey, connectOptions.secretKey);
     enableCrossNodeConnection_ = connectOptions.enableCrossNodeConnection;
     enableLocalCache_ = connectOptions.enableLocalCache;
     dataPlacementPolicy_ = static_cast<client::DataPlacementPolicy>(connectOptions.dataPlacementPolicy);
@@ -959,7 +959,7 @@ Status ObjectClientImpl::InitClientWorkerConnectAt(WorkerNode node, const HostPo
     workerApi_.resize(STANDBY2_WORKER + 1);
     if (!initWithWorker) {
         workerApi_[node] =
-            std::make_shared<ClientWorkerRemoteApi>(address, heartbeatType, token_, signature_.get(), tenantId_,
+            std::make_shared<ClientWorkerRemoteApi>(address, heartbeatType, token_, signature_, tenantId_,
                                                     enableCrossNodeConnection_, deviceId_);
     } else {
         workerApi_[node] = std::make_shared<ClientWorkerLocalApi>(address, embeddedClientWorkerApi_, worker_,
@@ -2383,9 +2383,15 @@ Status ObjectClientImpl::UpdateAkSk(const std::string &accessKey, SensitiveValue
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
+    CHECK_FAIL_RETURN_STATUS(!accessKey.empty(), K_INVALID, "accessKey is empty");
+    CHECK_FAIL_RETURN_STATUS(!secretKey.Empty(), K_INVALID, "secretKey is empty");
+    RETURN_RUNTIME_ERROR_IF_NULL(transportSignature_);
+    AkSkData transportKey;
+    RETURN_IF_NOT_OK(transportSignature_->SnapshotClientKey(transportKey));
+    CHECK_FAIL_RETURN_STATUS(!transportKey.NotComplete(), K_NOT_SUPPORTED,
+                             "Recreate the client with complete AK/SK to enable RPC authentication.");
     SensitiveValue transportSecretKey(secretKey);
     RETURN_IF_NOT_OK(workerApi->UpdateAkSk(accessKey, secretKey));
-    RETURN_RUNTIME_ERROR_IF_NULL(transportSignature_);
     return transportSignature_->SetClientAkSk(accessKey, std::move(transportSecretKey));
 }
 

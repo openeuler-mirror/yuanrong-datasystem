@@ -24,7 +24,6 @@
 #include <set>
 #include <vector>
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/strings_util.h"
@@ -143,22 +142,20 @@ public:
      * rpc-based api, whereas local masters can be optimized for in-process pointer based api.
      * @param[in] hostPort The host port of the target master
      * @param[in] localHostPort The local worker rpc service host port.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] service The local pointer to the master SC service implementation. If null, the created api must
      * default to the RPC-based version.
      * @return A base class pointer to the correct derived type of api.
      */
     static std::shared_ptr<MasterWorkerSCApi> CreateMasterWorkerSCApi(
-        const HostPort &hostPort, const HostPort &localHostPort, const std::shared_ptr<AkSkManager> &akSkManager,
+        const HostPort &hostPort, const HostPort &localHostPort,
         worker::stream_cache::MasterWorkerSCServiceImpl *service);
 
 protected:
     /**
      * @brief Constructor, Create a new MasterWorkerSCApi object from master to a particular worker.
      * @param[in] localMasterAddress The source master address (local)
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      */
-    MasterWorkerSCApi(HostPort localMasterAddress, std::shared_ptr<AkSkManager> akSkManager);
+    explicit MasterWorkerSCApi(HostPort localMasterAddress);
 
     /**
      * @brief Get log prefix
@@ -192,7 +189,6 @@ protected:
                                        const HostPort &src, bool isRecon, SyncPubNodeReqPb &req) noexcept;
 
     HostPort localMasterAddress_;
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 };
 
 /**
@@ -208,10 +204,8 @@ public:
      * @brief Constructor, Create a new MasterWorkerSCApi object from master to a particular worker.
      * @param[in] workerAddress The target worker node address
      * @param[in] localAddress The source address of this host
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      */
-    explicit MasterRemoteWorkerSCApi(HostPort workerAddress, const HostPort &localAddress,
-                                     std::shared_ptr<AkSkManager> akSkManager);
+    explicit MasterRemoteWorkerSCApi(HostPort workerAddress, const HostPort &localAddress);
     ~MasterRemoteWorkerSCApi() override = default;
     Status Init() override;
     MasterWorkerSCApiType TypeId() override;
@@ -256,10 +250,9 @@ public:
      * @brief Constructor, Create a new MasterWorkerSCApi object from master to a particular worker.
      * @param[in] service The direct pointer to the service for the requests.
      * @param[in] localAddress The source address of this host
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      */
     explicit MasterLocalWorkerSCApi(worker::stream_cache::MasterWorkerSCServiceImpl *service,
-                                    const HostPort &localAddress, std::shared_ptr<AkSkManager> akSkManager);
+                                    const HostPort &localAddress);
     ~MasterLocalWorkerSCApi() override = default;
     Status Init() override;
     MasterWorkerSCApiType TypeId() override;

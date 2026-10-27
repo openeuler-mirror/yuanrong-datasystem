@@ -37,6 +37,7 @@ ds_cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//src/datasystem/common/rpc:brpc_auth",
         ":embedded_client_worker_api",
         "//src/datasystem/client/object_cache/routing:urma_success_rate_tracker",
         "//src/datasystem/common/rpc:brpc_factory",

@@ -20,7 +20,6 @@
 #include <functional>
 #include "datasystem/common/perf/perf_manager.h"
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/object_cache/peer_ub_admission.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/rdma/rdma_util.h"
@@ -45,13 +44,11 @@ public:
     /**
      * @brief Construct WorkerWorkerOCServiceImpl.
      * @param[in] clientSvc The implementation of worker service.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] membership Read-only topology membership view.
      * @param[in] coordinationAvailable Callback used by the legacy synchronous coordination-health RPC.
      * @param[in] backendObservationProvider Callback returning cached local backend evidence for bounded peer probes.
      */
     WorkerWorkerOCServiceImpl(std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc,
-                              std::shared_ptr<AkSkManager> akSkManager,
                               const cluster::MembershipEndpointView &membership,
                               CoordinationAvailabilityProvider coordinationAvailable,
                               BackendObservationProvider backendObservationProvider);
@@ -506,7 +503,6 @@ private:
         const GetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload);
 
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> ocClientWorkerSvc_;
-    std::shared_ptr<AkSkManager> akSkManager_;
     const cluster::MembershipEndpointView &membership_;
     CoordinationAvailabilityProvider coordinationAvailable_;
     BackendObservationProvider backendObservationProvider_;

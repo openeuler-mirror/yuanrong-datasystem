@@ -56,7 +56,7 @@ using MetadataTestPlacementFacade = TestPlacementFacade;
 class TestWorkerMasterApiManager : public worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi> {
 public:
     TestWorkerMasterApiManager(HostPort &workerAddr, const worker::MetadataRouteResolver &metadataRoute)
-        : WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>(workerAddr, nullptr, metadataRoute)
+        : WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>(workerAddr, metadataRoute)
     {
     }
 
@@ -92,7 +92,7 @@ public:
     using PushHandler = std::function<Status(master::PushMetaToMasterReqPb &, master::PushMetaToMasterRspPb &)>;
 
     TestWorkerMasterOCApi(const HostPort &masterAddr, const HostPort &localAddr)
-        : WorkerMasterOCApi(localAddr, nullptr), masterAddr_(masterAddr)
+        : WorkerMasterOCApi(localAddr), masterAddr_(masterAddr)
     {
     }
 
@@ -209,7 +209,7 @@ TEST_F(WorkerRemoteMasterRpcDiagnosticTest, CreateMetaDeadlineExhaustedFailsFast
 {
     HostPort local("127.0.0.1", 18500);
     HostPort master("127.0.0.1", 18501);
-    worker::WorkerRemoteMasterOCApi api(master, local, nullptr);
+    worker::WorkerRemoteMasterOCApi api(master, local);
     master::CreateMetaReqPb req;
     master::CreateMetaRspPb rsp;
 

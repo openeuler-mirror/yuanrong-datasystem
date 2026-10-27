@@ -42,18 +42,13 @@ protected:
     {
         HostPort metaAddr;
         DS_ASSERT_OK(cluster_->GetMetaServerAddr(metaAddr));
-        akSkManager_ = std::make_shared<AkSkManager>(0);
-        akSkManager_->SetClientAkSk(accessKey_, secretKey_);
         int stubCacheNum = 100;
         RpcStubCacheMgr::Instance().Init(stubCacheNum);
         workerMasterSCApi_ =
-            WorkerMasterSCApi::CreateWorkerMasterSCApi(metaAddr, HostPort("127.0.0.1", 18888), akSkManager_);
+            WorkerMasterSCApi::CreateWorkerMasterSCApi(metaAddr, HostPort("127.0.0.1", 18888));
     }
 
     std::shared_ptr<WorkerMasterSCApi> workerMasterSCApi_;
-    std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
-    std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
-    std::shared_ptr<AkSkManager> akSkManager_;
 };
 
 TEST_F(WorkerMasterSCApiTest, TestWorkerMasterDiffIp)

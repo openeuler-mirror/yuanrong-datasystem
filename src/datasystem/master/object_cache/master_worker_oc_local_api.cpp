@@ -34,8 +34,8 @@ std::atomic<int64_t> MasterLocalWorkerOCApi::g_localTagGen_{ 1 };
 // MasterLocalWorkerOCApi methods
 
 MasterLocalWorkerOCApi::MasterLocalWorkerOCApi(object_cache::MasterWorkerOCServiceImpl *service,
-                                               const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager)
-    : MasterWorkerOCApi(localHostPort, akSkManager), workerOC_(service)
+                                               const HostPort &localHostPort)
+    : MasterWorkerOCApi(localHostPort), workerOC_(service)
 {
 }
 
@@ -47,26 +47,22 @@ Status MasterLocalWorkerOCApi::Init()
 
 Status MasterLocalWorkerOCApi::PublishMeta(PublishMetaReqPb &req, PublishMetaRspPb &resp)
 {
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     return workerOC_->PublishMeta(req, resp);
 }
 
 Status MasterLocalWorkerOCApi::UpdateNotification(UpdateObjectReqPb &req, UpdateObjectRspPb &rsp)
 {
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     return workerOC_->UpdateNotification(req, rsp);
 }
 
 Status MasterLocalWorkerOCApi::DeleteNotification(std::unique_ptr<DeleteObjectReqPb> req, DeleteObjectRspPb &rsp)
 {
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(*req));
     return workerOC_->DeleteNotification(*req, rsp);
 }
 
 Status MasterLocalWorkerOCApi::DeletePersistenceObject(std::unique_ptr<DeletePersistenceObjectReqPb> req,
                                                        DeletePersistenceObjectRspPb &rsp)
 {
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(*req));
     return workerOC_->DeletePersistenceObject(*req, rsp);
 }
 
@@ -87,7 +83,6 @@ Status MasterLocalWorkerOCApi::DeleteNotificationSend(std::unique_ptr<DeleteObje
     //    which pulls the request from the map and calls workerOC_->DeleteNotification.
     // A shared_mutex keeps concurrent Send/Receive operations on the same API
     // instance serialized.
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(*req));
     tag = g_localTagGen_.fetch_add(1);
 
     std::unique_lock<std::shared_mutex> lock(localReqMutex_);
@@ -114,7 +109,6 @@ Status MasterLocalWorkerOCApi::QueryGlobalRefNumOnWorker(QueryGlobalRefNumReqPb 
 {
     req.set_timeout(MasterGetRequestTimeout(GetRequestContext()->timeoutDuration.CalcRemainingTime()));
     LOG(INFO) << "QueryGlobalRefNumOnWorker " << masterHostPort_.ToString() << " : " << LogHelper::IgnoreSensitive(req);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(workerOC_->QueryGlobalRefNumOnWorker(req, rsp));
     LOG(INFO) << "QueryGlobalRefNumOnWorker " << masterHostPort_.ToString() << " success."
               << LogHelper::IgnoreSensitive(rsp);
@@ -125,7 +119,6 @@ Status MasterLocalWorkerOCApi::PushMetaToWorker(PushMetaToWorkerReqPb &req, Push
 {
     LOG(INFO) << "Send PushMetaToWorker to worker " << masterHostPort_.ToString() << " : "
               << LogHelper::IgnoreSensitive(req);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(workerOC_->PushMetaToWorker(req, rsp));
     LOG(INFO) << "Send PushMetaToWorker to worker " << masterHostPort_.ToString() << " success."
               << LogHelper::IgnoreSensitive(rsp);
@@ -135,7 +128,6 @@ Status MasterLocalWorkerOCApi::PushMetaToWorker(PushMetaToWorkerReqPb &req, Push
 Status MasterLocalWorkerOCApi::RequestMetaFromWorker(RequestMetaFromWorkerReqPb &req, RequestMetaFromWorkerRspPb &rsp)
 {
     LOG(INFO) << "Send RequestMetaFromWorker to LOCAL worker.";
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(workerOC_->RequestMetaFromWorker(req, rsp));
     LOG(INFO) << "Send RequestMetaFromWorker to LOCAL worker success." << LogHelper::IgnoreSensitive(rsp);
     return Status::OK();
@@ -145,7 +137,6 @@ Status MasterLocalWorkerOCApi::ChangePrimaryCopy(ChangePrimaryCopyReqPb &req, Ch
 {
     LOG(INFO) << "Send ChangePrimaryCopy to worker " << masterHostPort_.ToString() << " : "
               << LogHelper::IgnoreSensitive(req);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(workerOC_->ChangePrimaryCopy(req, rsp));
     LOG(INFO) << "Send ChangePrimaryCopy to worker " << masterHostPort_.ToString() << " success."
               << LogHelper::IgnoreSensitive(rsp);
@@ -157,7 +148,6 @@ Status MasterLocalWorkerOCApi::NotifyMasterIncNestedRefs(NotifyMasterIncNestedRe
 {
     LOG(INFO) << "Send NotifyMasterIncNestedRefs to worker " << masterHostPort_.ToString() << " : "
               << LogHelper::IgnoreSensitive(req);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(workerOC_->NotifyMasterIncNestedRefs(req, rsp));
     LOG(INFO) << "Send NotifyMasterIncNestedRefs to worker " << masterHostPort_.ToString() << " success."
               << LogHelper::IgnoreSensitive(rsp);
@@ -166,7 +156,6 @@ Status MasterLocalWorkerOCApi::NotifyMasterIncNestedRefs(NotifyMasterIncNestedRe
 
 Status MasterLocalWorkerOCApi::ClearData(ClearDataReqPb &req, ClearDataRspPb &rsp)
 {
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     return workerOC_->ClearData(req, rsp);
 }
 
@@ -175,7 +164,6 @@ Status MasterLocalWorkerOCApi::NotifyMasterDecNestedRefs(NotifyMasterDecNestedRe
 {
     LOG(INFO) << "Send NotifyMasterDecNestedRefs to worker " << masterHostPort_.ToString() << " : "
               << LogHelper::IgnoreSensitive(req);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(workerOC_->NotifyMasterDecNestedRefs(req, rsp));
     LOG(INFO) << "Send NotifyMasterDecNestedRefs to worker " << masterHostPort_.ToString() << " success."
               << LogHelper::IgnoreSensitive(rsp);

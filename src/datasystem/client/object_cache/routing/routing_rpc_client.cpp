@@ -22,6 +22,8 @@
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rpc/rpc_options.h"
+#include "datasystem/common/rpc/brpc_auth.h"
+#include "datasystem/protos/object_posix.auth.pb.h"
 #include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/common/util/status_helper.h"
 
@@ -34,11 +36,6 @@ RoutingRpcClient::RoutingRpcClient(BrpcChannelConfig channelConfig, std::shared_
       signature_(std::move(signature)),
       channelFactory_(std::move(channelFactory))
 {
-    if (!channelFactory_) {
-        channelFactory_ = [](const BrpcChannelConfig &config) {
-            return std::shared_ptr<brpc::Channel>(BrpcChannelFactory::Create(config));
-        };
-    }
 }
 
 RoutingRpcClient::~RoutingRpcClient() = default;
@@ -47,7 +44,30 @@ Status RoutingRpcClient::Init()
 {
     RETURN_RUNTIME_ERROR_IF_NULL(signature_);
     CHECK_FAIL_RETURN_STATUS(channelConfig_.timeout_ms > 0, K_INVALID, "RPC timeout must be positive");
-    CHECK_FAIL_RETURN_STATUS(static_cast<bool>(channelFactory_), K_INVALID, "Routing channel factory must be set");
+    if (!channelFactory_) {
+        AkSkData key;
+        RETURN_IF_NOT_OK(signature_->SnapshotClientKey(key));
+        if (key.NotComplete()) {
+            channelFactory_ = [](const BrpcChannelConfig &config) {
+                return std::shared_ptr<brpc::Channel>(BrpcChannelFactory::Create(config));
+            };
+        } else {
+            RpcSigningBinding binding;
+            binding.credentials = signature_;
+            RETURN_IF_NOT_OK(RpcMethodMap::Create(
+                {{google::protobuf::DescriptorPool::generated_pool()->FindServiceByName("datasystem.WorkerOCService"),
+                WorkerOCServiceAuth::descriptor()}}, binding.methods));
+            channelFactory_ = [binding = std::move(binding)](const BrpcChannelConfig &config) {
+                std::unique_ptr<brpc::Channel> channel;
+                auto status = CreateBrpcAuthChannel(config, binding, channel);
+                if (status.IsError()) {
+                    LOG(ERROR) << "Failed to initialize routing RPC channel: " << status.ToString();
+                    return std::shared_ptr<brpc::Channel>();
+                }
+                return std::shared_ptr<brpc::Channel>(std::move(channel));
+            };
+        }
+    }
     initialized_.store(true, std::memory_order_release);
     return Status::OK();
 }
@@ -62,7 +82,6 @@ Status RoutingRpcClient::GetHashRing(const HostPort &workerAddr, uint64_t curren
     GetHashRingReqPb request;
     request.set_version(currentVersion);
     request.set_host_ids_digest(hostIdsDigest);
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(timeoutMs > 0 ? timeoutMs : channelConfig_.timeout_ms);
     Status rc = connection->stub->GetHashRing(options, request, response);

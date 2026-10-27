@@ -337,6 +337,7 @@ ds_cc_test(
     name = "client_worker_remote_api_reconnect_test",
     srcs = ["client_worker_remote_api_reconnect_test.cpp"],
     deps = [
+        "//src/datasystem/common/rpc:brpc_auth",
         "//src/datasystem/client:datasystem",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/rpc:api_deadline",

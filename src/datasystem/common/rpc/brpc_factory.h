@@ -41,6 +41,8 @@
 #include <brpc/channel.h>
 #include <brpc/controller.h>
 
+#include "datasystem/utils/status.h"
+
 namespace datasystem {
 
 /**
@@ -70,6 +72,8 @@ struct BrpcChannelConfig {
     /// isolating a peer under momentary back-pressure would amplify failure.
     bool enable_circuit_breaker = true;
 };
+
+Status InitializeBrpcChannel(const BrpcChannelConfig &cfg, brpc::Channel &channel);
 
 /**
  * @brief Value object holding per-call overrides for a brpc::Controller.

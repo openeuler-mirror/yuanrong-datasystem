@@ -10,7 +10,7 @@ ds_cc_library(
         "perf_service_impl.h",
     ],
     deps = [
-        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/protos:perf_posix_brpc",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/util:net_util",

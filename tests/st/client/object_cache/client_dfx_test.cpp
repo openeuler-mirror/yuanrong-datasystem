@@ -1336,7 +1336,6 @@ public:
 
         GRefTableReqPb req;
         GRefTableRspPb rsp;
-        DS_ASSERT_OK(aksk_->GenerateSignature(req));
         // worker0's table should have two clients and two objects
         DS_ASSERT_OK(utSvcStub0_->GetWorkerGRefTable(req, rsp));
         ASSERT_EQ(rsp.single_client_gref().size(), 2);
@@ -1364,7 +1363,6 @@ public:
         do {
             GRefTableReqPb req;
             GRefTableRspPb rsp;
-            DS_ASSERT_OK(aksk_->GenerateSignature(req));
             if (tableKind == GRefTableKind::WORKER) {
                 lastRc = stub.GetWorkerGRefTable(req, rsp);
             } else {
@@ -1434,7 +1432,6 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart2)
 
     GRefTableReqPb req;
     GRefTableRspPb rsp;
-    DS_ASSERT_OK(aksk_->GenerateSignature(req));
     // master0 and worker0 should be good
     // worker0's table should have two clients and two objects
     rsp.clear_single_client_gref();
@@ -1484,7 +1481,6 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart3)
 
     GRefTableReqPb req;
     GRefTableRspPb rsp;
-    DS_ASSERT_OK(aksk_->GenerateSignature(req));
     // master0 and worker0 should be good
     // worker0's table should have two clients and two objects
     rsp.clear_single_client_gref();
@@ -1534,7 +1530,6 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart4)
 
     GRefTableReqPb req;
     GRefTableRspPb rsp;
-    DS_ASSERT_OK(aksk_->GenerateSignature(req));
     // all masters and workers should have no gref
     rsp.clear_single_client_gref();
     DS_ASSERT_OK(utSvcStub0_->GetWorkerGRefTable(req, rsp));
@@ -1572,7 +1567,6 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart5)
 
     GRefTableReqPb req;
     GRefTableRspPb rsp;
-    DS_ASSERT_OK(aksk_->GenerateSignature(req));
     // all masters and workers should have no gref
     rsp.clear_single_client_gref();
     DS_ASSERT_OK(utSvcStub0_->GetWorkerGRefTable(req, rsp));
@@ -1603,7 +1597,6 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_GiveUpReconciliation)
 
     GRefTableReqPb req;
     GRefTableRspPb rsp;
-    DS_ASSERT_OK(aksk_->GenerateSignature(req));
     // master0 and worker0 should be good
     // worker0's table should have two clients and two objects
     rsp.clear_single_client_gref();
@@ -1683,7 +1676,6 @@ TEST_F(WorkerReconciliationDfxTest, DISABLED_LEVEL1_RestartAgainNoExtraReconcili
         auto request = [this](std::unique_ptr<IUtOCStub> &stub) -> Status {
             CmNodeTableReqPb req;
             CmNodeTableRspPb rsp;
-            RETURN_IF_NOT_OK(aksk_->GenerateSignature(req));
             stub->GetCmNodeTable(req, rsp);
             auto nodeSize = 2;
             CHECK_FAIL_RETURN_STATUS(rsp.cm_node_table_size() == nodeSize, K_RUNTIME_ERROR,

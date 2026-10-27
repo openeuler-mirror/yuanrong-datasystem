@@ -37,15 +37,14 @@ class WorkerWorkerOcApiTest : public CommonTest {
 
 TEST_F(WorkerWorkerOcApiTest, TestExecRemoteGetLocally)
 {
-    auto localApi = std::make_unique<object_cache::WorkerLocalWorkerOCApi>(nullptr, nullptr);
+    auto localApi = std::make_unique<object_cache::WorkerLocalWorkerOCApi>(nullptr);
     ASSERT_EQ(localApi->GetObjectRemote(nullptr).GetCode(), K_RUNTIME_ERROR);
 }
 
 TEST_F(WorkerWorkerOcApiTest, RemoteHashRingRefreshRequiresInitializedSession)
 {
-    auto akSkManager = std::make_shared<AkSkManager>();
     WorkerRemoteWorkerOCApi remoteApi(HostPort("127.0.0.1", REMOTE_WORKER_PORT),
-                                      HostPort("127.0.0.1", LOCAL_WORKER_PORT), akSkManager);
+                                      HostPort("127.0.0.1", LOCAL_WORKER_PORT));
     GetHashRingRspPb rsp;
 
     auto rc = remoteApi.GetHashRing(HASH_RING_VERSION, RPC_TIMEOUT_MS, rsp);

@@ -1505,7 +1505,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
         objectKV.commId_ == nullptr ? ReadTransportFallback::ALLOWED : ReadTransportFallback::FORBIDDEN;
     RETURN_IF_NOT_OK(CheckRemoteReadAdmission(address, fallback, useFastTransport));
     std::shared_ptr<WorkerRemoteWorkerOCApi> workerStub;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(address, localAddress_, akSkManager_, workerStub),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(address, localAddress_, workerStub),
                                      "Create remote worker api failed.");
     PerfPoint rpcPoint(PerfKey::WORKER_PULL_FROM_REMOTE);
     GetObjectRemoteReqPb reqPb;
@@ -2814,12 +2814,9 @@ void WorkerOcServiceGetImpl::FillGetObjMetaInfoRspPb(
     }
 }
 
-Status AuthenticateGetMetaUser(AkSkManager *akSkManager, const GetObjMetaInfoReqPb &req)
+Status AuthenticateGetMetaUser(AkSkManager *akSkManager)
 {
-    if (akSkManager->SystemAuthEnabled()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager->VerifySignatureAndTimestamp(req),
-                                         "AK/SK failed. Only the ak/sk client can check the meta info of objects.");
-    } else {
+    if (!akSkManager->SystemAuthEnabled()) {
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
             !FLAGS_authorization_enable, K_NOT_AUTHORIZED,
             "Only the ak/sk client can check the meta info of objects if tenant authorization is enabled.");
@@ -3048,7 +3045,7 @@ Status WorkerOcServiceGetImpl::GetObjMetaInfo(const GetObjMetaInfoReqPb &req, Ge
 {
     ScopedRequestContext ctx;
     INJECT_POINT("worker.GetObjMetaInfo");
-    RETURN_IF_NOT_OK(AuthenticateGetMetaUser(akSkManager_.get(), req));
+    RETURN_IF_NOT_OK(AuthenticateGetMetaUser(akSkManager_.get()));
     // construct objectKey by the input tenantId
     auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(req.tenantid(), req.object_keys());
     Status lastRc;
@@ -4221,7 +4218,7 @@ Status WorkerOcServiceGetImpl::QueryPeerUbPortHealth(const HostPort &peerAddr,
 {
     summary = UbHealthSummary{};
     std::shared_ptr<WorkerRemoteWorkerOCApi> workerApi;
-    RETURN_IF_NOT_OK(CreateRemoteWorkerApi(peerAddr.ToString(), localAddress_, akSkManager_, workerApi));
+    RETURN_IF_NOT_OK(CreateRemoteWorkerApi(peerAddr.ToString(), localAddress_, workerApi));
     QueryUbPortHealthRspPb rsp;
     RETURN_IF_NOT_OK(workerApi->QueryUbPortHealth(expectedIncarnation, timeoutMs, rsp));
     CHECK_FAIL_RETURN_STATUS(rsp.has_health_summary(), K_INVALID,

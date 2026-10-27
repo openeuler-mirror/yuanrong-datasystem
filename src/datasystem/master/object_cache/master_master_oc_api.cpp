@@ -19,6 +19,7 @@
  */
 
 #include "datasystem/master/object_cache/master_master_oc_api.h"
+#include "datasystem/common/inject/inject_point.h"
 
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
@@ -30,9 +31,8 @@
 
 namespace datasystem {
 namespace master {
-MasterMasterOCApi::MasterMasterOCApi(const HostPort &hostPort, const HostPort &localHostPort,
-                                     std::shared_ptr<AkSkManager> akSkManager)
-    : destHostPort_(hostPort), localHostPort_(localHostPort), akSkManager_(std::move(akSkManager))
+MasterMasterOCApi::MasterMasterOCApi(const HostPort &hostPort, const HostPort &localHostPort)
+    : destHostPort_(hostPort), localHostPort_(localHostPort)
 {
 }
 
@@ -110,7 +110,6 @@ Status MasterMasterOCApi::DeleteAllCopyMeta(DeleteAllCopyMetaReqPb &request, Del
                                      FormatString("Request timeout (%lld ms).", -remainingTime));
             opts.SetTimeout(remainingTime);
             request.set_timeout(remainingTime);
-            RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
             return brpcSession_->DeleteAllCopyMeta(opts, request, response);
         },
         []() { return Status::OK(); },

@@ -221,7 +221,7 @@ private:
 class TestMasterApiManager final : public worker::WorkerMasterApiManagerBase<TestMasterApi> {
 public:
     TestMasterApiManager(HostPort &workerAddress, const worker::MetadataRouteResolver &resolver)
-        : WorkerMasterApiManagerBase<TestMasterApi>(workerAddress, nullptr, resolver)
+        : WorkerMasterApiManagerBase<TestMasterApi>(workerAddress, resolver)
     {
     }
 

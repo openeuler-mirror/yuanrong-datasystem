@@ -112,7 +112,7 @@ using MigrateTestPlacementFacade = TestPlacementFacade;
 class MigrateTestWorkerMasterOCApi : public worker::WorkerMasterOCApi {
 public:
     MigrateTestWorkerMasterOCApi(const HostPort &masterAddr, const HostPort &localAddr)
-        : WorkerMasterOCApi(localAddr, nullptr), masterAddr_(masterAddr)
+        : WorkerMasterOCApi(localAddr), masterAddr_(masterAddr)
     {
     }
 
@@ -232,7 +232,7 @@ private:
 class MigrateTestWorkerMasterApiManager : public worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi> {
 public:
     MigrateTestWorkerMasterApiManager(HostPort &workerAddr, const worker::MetadataRouteResolver &metadataRoute)
-        : WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>(workerAddr, nullptr, metadataRoute)
+        : WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>(workerAddr, metadataRoute)
     {
     }
 

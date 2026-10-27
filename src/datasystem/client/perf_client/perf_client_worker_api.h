@@ -60,7 +60,7 @@ public:
 
 private:
     HostPort hostPort_;
-    std::unique_ptr<Signature> signature_{ nullptr };
+    std::shared_ptr<Signature> signature_{ nullptr };
     RpcAuthKeys authKeys_;
 
     std::shared_ptr<PerfService_BrpcGenericStub> rpcSession_{ nullptr };

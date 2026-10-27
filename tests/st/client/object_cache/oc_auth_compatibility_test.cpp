@@ -14,340 +14,86 @@
  * limitations under the License.
  */
 
-/**
- * Description: update object data test
- */
+#include <memory>
+#include <string>
 
 #include <gtest/gtest.h>
-#include <unistd.h>
-#include <memory>
 
-#include "common.h"
-#include "datasystem/common/flags/common_flags.h"
-#include "datasystem/common/log/log.h"
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
-#include "datasystem/common/rpc/rpc_auth_keys.h"
-#include "datasystem/common/rpc/brpc_factory.h"
-#include "datasystem/common/util/request_context.h"
-#include "datasystem/common/util/thread_local.h"
-#include "datasystem/protos/ut_object.brpc.stub.pb.h"
-#include "datasystem/utils/status.h"
 #include "oc_client_common.h"
 
 namespace datasystem {
 namespace st {
+namespace {
+constexpr char TEST_ACCESS_KEY[] = "test-only-rpc-access";
+constexpr char TEST_SECRET_KEY[] = "test-only-rpc-secret";
+}
 
-const std::string WORKER_SERVER_NAME = "worker";
-
-class OcAuthCompatibilityTest : public OCClientCommon {
+class OcRpcAuthIntegrationTest : public OCClientCommon {
 public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    void SetClusterSetupOptions(ExternalClusterOptions &options) override
     {
-        opts.numWorkers = 1;  // worker num is 1
-        opts.numEtcd = 1;     // only one etcd
-        opts.numOcThreadNum = 1;
-        opts.workerGflagParams =
-            " -shared_memory_size_mb=64 -v=2 -log_monitor=true -oc_thread_num=1 "
-            "-inject_actions=client_manager.GetClientInfo:return()";
+        options.numWorkers = 2;
+        options.numEtcd = 1;
+        options.systemAccessKey = TEST_ACCESS_KEY;
+        options.systemSecretKey = TEST_SECRET_KEY;
+        options.workerGflagParams = " -shared_memory_size_mb=64";
     }
-
-    void SetUp() override
-    {
-        ExternalClusterTest::SetUp();
-        // The legacy CURVE/ZAP auth transport was removed; the brpc auth path is not
-        // wired in yet. Skip until the brpc equivalent is implemented.
-            GTEST_SKIP() << "OcAuthCompatibilityTest is legacy-CURVE auth scoped; "
-                        "brpc auth is not yet implemented (skipped under brpc).";
-        akSkManager_ = std::make_shared<AkSkManager>();
-        DS_ASSERT_OK(akSkManager_->SetClientAkSk(accessKey_, secretKey_));
-
-        HostPort workerAddr0;
-        DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddr0));
-        BrpcChannelConfig cfg; cfg.endpoint = workerAddr0.ToString(); cfg.timeout_ms = 5000; auto channel = std::shared_ptr<brpc::Channel>(BrpcChannelFactory::Create(cfg));
-        stub_ = std::make_shared<UtOCService_BrpcGenericStub>(channel.get(), 5000);
-    }
-
-protected:
-    std::shared_ptr<UtOCService_BrpcGenericStub> stub_;
-    std::shared_ptr<AkSkManager> akSkManager_;
-    RpcAuthKeys authKeys_;
-
-    std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
-    std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
 };
 
-TEST_F(OcAuthCompatibilityTest, TestUnaryAuthCompatibility)
+TEST_F(OcRpcAuthIntegrationTest, CrossWorkerRequestsUseCurrentCredentialsAndRejectInvalidRotation)
 {
-    TestReqPbV2 req;
-    TestRspPbV1 rsp;
-    int num = 3;
-    req.set_filed1(num);
-    req.set_field2("xxx");
-    req.set_field3(num);
-    for (int i = 0; i < num; ++i) {
-        req.add_filed4(std::to_string(i));
-    }
-    req.set_filed5(num);  // filed5 not exist in TestReqPbV1.
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    DS_ASSERT_OK(stub_->TestUnaryCompatibilityV2(req, rsp));
-
-    uint32_t authType = 1;
-    req.set_auth_req(authType);
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    DS_ASSERT_OK(stub_->TestUnaryCompatibilityV2(req, rsp));
-
-    authType = 2;  // set auth type as 2
-    req.set_auth_req(authType);
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    DS_ASSERT_OK(stub_->TestUnaryCompatibilityV2(req, rsp));
-}
-
-TEST_F(OcAuthCompatibilityTest, TestStreamAuthCompatibility)
-{
-    TestReqPbV2 req;
-    TestRspPbV1 rsp;
-    int num = 3;
-    req.set_filed1(num);
-    req.set_field2("xxx");
-    req.set_field3(num);
-    for (int i = 0; i < num; ++i) {
-        req.add_filed4(std::to_string(i));
-    }
-    req.set_filed5(num);  // filed5 not exist in TestReqPbV1.
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    std::unique_ptr<datasystem::ClientWriterReader<TestReqPbV2, TestRspPbV1>> stream;
-    DS_ASSERT_OK(stub_->TestStreamCompatibilityV2(&stream));
-    DS_ASSERT_OK(stream->Write(req));
-    DS_ASSERT_OK(stream->Read(rsp));
-    DS_ASSERT_OK(stream->Finish());
-
-    uint32_t authType = 1;
-    req.set_auth_req(authType);
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    std::unique_ptr<datasystem::ClientWriterReader<TestReqPbV2, TestRspPbV1>> stream1;
-    DS_ASSERT_OK(stub_->TestStreamCompatibilityV2(&stream1));
-    DS_ASSERT_OK(stream1->Write(req));
-    DS_ASSERT_OK(stream1->Read(rsp));
-    DS_ASSERT_OK(stream1->Finish());
-
-    authType = 2;  // set auth type as 2
-    req.set_auth_req(authType);
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    std::unique_ptr<datasystem::ClientWriterReader<TestReqPbV2, TestRspPbV1>> stream2;
-    DS_ASSERT_OK(stub_->TestStreamCompatibilityV2(&stream2));
-    DS_ASSERT_OK(stream2->Write(req));
-    DS_ASSERT_OK(stream2->Read(rsp));
-    DS_ASSERT_OK(stream2->Finish());
-}
-
-TEST_F(OcAuthCompatibilityTest, TestStreamAuthCompatibility1)
-{
-    TestReqPbV2 req;
-    TestRspPbV1 rsp;
-    int num = 3;
-    req.set_filed1(num);
-    req.set_field2("xxx");
-    req.set_field3(num);
-    for (int i = 0; i < num; ++i) {
-        req.add_filed4(std::to_string(i));
-    }
-    req.set_filed5(num);  // filed5 not exist in TestReqPbV1.
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    std::unique_ptr<datasystem::ClientWriter<TestReqPbV2>> stream;
-    DS_ASSERT_OK(stub_->TestStreamCompatibility1V2(&stream));
-    DS_ASSERT_OK(stream->Write(req));
-    DS_ASSERT_OK(stream->Read(rsp));
-    DS_ASSERT_OK(stream->Finish());
-
-    uint32_t authType = 1;
-    req.set_auth_req(authType);
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    std::unique_ptr<datasystem::ClientWriter<TestReqPbV2>> stream1;
-    DS_ASSERT_OK(stub_->TestStreamCompatibility1V2(&stream1));
-    DS_ASSERT_OK(stream1->Write(req));
-    DS_ASSERT_OK(stream1->Read(rsp));
-    DS_ASSERT_OK(stream1->Finish());
-
-    authType = 2;  // set auth type as 2
-    req.set_auth_req(authType);
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    std::unique_ptr<datasystem::ClientWriter<TestReqPbV2>> stream2;
-    DS_ASSERT_OK(stub_->TestStreamCompatibility1V2(&stream2));
-    DS_ASSERT_OK(stream2->Write(req));
-    DS_ASSERT_OK(stream2->Read(rsp));
-    DS_ASSERT_OK(stream2->Finish());
-}
-
-TEST_F(OcAuthCompatibilityTest, TestUnaryAuthCompatibilityWithOldVersion)
-{
-    TestReqPbV2 req;
-    TestRspPbV1 rsp;
-    int num = 3;
-    req.set_filed1(num);
-    req.set_field2("xxx");
-    req.set_field3(num);
-    for (int i = 0; i < num; ++i) {
-        req.add_filed4(std::to_string(i));
-    }
-    req.set_filed5(num);  // filed5 not exist in TestReqPbV1.
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    // old version will not carry these message.
-    GetRequestContext()->reqAk.clear();
-    GetRequestContext()->reqSignature.clear();
-    GetRequestContext()->reqTimestamp = 0;
-    ASSERT_EQ(stub_->TestUnaryCompatibilityV2(req, rsp).GetCode(), StatusCode::K_NOT_AUTHORIZED);
-
-    req.clear_filed5();
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    DS_ASSERT_OK(stub_->TestUnaryCompatibilityV2(req, rsp));
-
-    uint32_t authType = 1;
-    req.set_auth_req(authType);
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    GetRequestContext()->reqAk.clear();
-    GetRequestContext()->reqSignature.clear();
-    GetRequestContext()->reqTimestamp = 0;
-    DS_ASSERT_OK(stub_->TestUnaryCompatibilityV2(req, rsp));
-
-    authType = 2;  // set auth type as 2
-    req.set_auth_req(authType);
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    GetRequestContext()->reqAk.clear();
-    GetRequestContext()->reqSignature.clear();
-    GetRequestContext()->reqTimestamp = 0;
-    DS_ASSERT_OK(stub_->TestUnaryCompatibilityV2(req, rsp));
-}
-
-TEST_F(OcAuthCompatibilityTest, TestStreamAuthWithOldVersionCompatibility)
-{
-    TestReqPbV2 req;
-    TestRspPbV1 rsp;
-    int num = 3;
-    req.set_filed1(num);
-    req.set_field2("xxx");
-    req.set_field3(num);
-    for (int i = 0; i < num; ++i) {
-        req.add_filed4(std::to_string(i));
-    }
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    // old version will not carry these message.
-    GetRequestContext()->reqAk.clear();
-    GetRequestContext()->reqSignature.clear();
-    GetRequestContext()->reqTimestamp = 0;
-    std::unique_ptr<datasystem::ClientWriterReader<TestReqPbV2, TestRspPbV1>> stream;
-    DS_ASSERT_OK(stub_->TestStreamCompatibilityV2(&stream));
-    DS_ASSERT_OK(stream->Write(req));
-    DS_ASSERT_OK(stream->Read(rsp));
-    DS_ASSERT_OK(stream->Finish());
-
-    uint32_t authType = 1;
-    req.set_auth_req(authType);
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    // old version will not carry these message.
-    GetRequestContext()->reqAk.clear();
-    GetRequestContext()->reqSignature.clear();
-    GetRequestContext()->reqTimestamp = 0;
-    std::unique_ptr<datasystem::ClientWriterReader<TestReqPbV2, TestRspPbV1>> stream1;
-    DS_ASSERT_OK(stub_->TestStreamCompatibilityV2(&stream1));
-    DS_ASSERT_OK(stream1->Write(req));
-    DS_ASSERT_OK(stream1->Read(rsp));
-    DS_ASSERT_OK(stream1->Finish());
-
-    authType = 2;  // set auth type as 2
-    req.set_auth_req(authType);
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    // old version will not carry these message.
-    GetRequestContext()->reqAk.clear();
-    GetRequestContext()->reqSignature.clear();
-    GetRequestContext()->reqTimestamp = 0;
-    std::unique_ptr<datasystem::ClientWriterReader<TestReqPbV2, TestRspPbV1>> stream2;
-    DS_ASSERT_OK(stub_->TestStreamCompatibilityV2(&stream2));
-    DS_ASSERT_OK(stream2->Write(req));
-    DS_ASSERT_OK(stream2->Read(rsp));
-    DS_ASSERT_OK(stream2->Finish());
-}
-
-TEST_F(OcAuthCompatibilityTest, TestStreamAuthWithOldVersionCompatibility1)
-{
-    TestReqPbV2 req;
-    TestRspPbV1 rsp;
-    int num = 3;
-    req.set_filed1(num);
-    req.set_field2("xxx");
-    req.set_field3(num);
-    for (int i = 0; i < num; ++i) {
-        req.add_filed4(std::to_string(i));
-    }
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    // old version will not carry these message.
-    GetRequestContext()->reqAk.clear();
-    GetRequestContext()->reqSignature.clear();
-    GetRequestContext()->reqTimestamp = 0;
-    std::unique_ptr<datasystem::ClientWriter<TestReqPbV2>> stream;
-    DS_ASSERT_OK(stub_->TestStreamCompatibility1V2(&stream));
-    DS_ASSERT_OK(stream->Write(req));
-    DS_ASSERT_OK(stream->Read(rsp));
-    DS_ASSERT_OK(stream->Finish());
-
-    uint32_t authType = 1;
-    req.set_auth_req(authType);
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    // old version will not carry these message.
-    GetRequestContext()->reqAk.clear();
-    GetRequestContext()->reqSignature.clear();
-    GetRequestContext()->reqTimestamp = 0;
-    std::unique_ptr<datasystem::ClientWriter<TestReqPbV2>> stream1;
-    DS_ASSERT_OK(stub_->TestStreamCompatibility1V2(&stream1));
-    DS_ASSERT_OK(stream1->Write(req));
-    DS_ASSERT_OK(stream1->Read(rsp));
-    DS_ASSERT_OK(stream1->Finish());
-
-    authType = 2;  // set auth type as 2
-    req.set_auth_req(authType);
-    DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    // old version will not carry these message.
-    GetRequestContext()->reqAk.clear();
-    GetRequestContext()->reqSignature.clear();
-    GetRequestContext()->reqTimestamp = 0;
-    std::unique_ptr<datasystem::ClientWriter<TestReqPbV2>> stream2;
-    DS_ASSERT_OK(stub_->TestStreamCompatibility1V2(&stream2));
-    DS_ASSERT_OK(stream2->Write(req));
-    DS_ASSERT_OK(stream2->Read(rsp));
-    DS_ASSERT_OK(stream2->Finish());
-}
-
-TEST_F(OcAuthCompatibilityTest, TestUnaryAuthMixOldAndNewVersion)
-{
-    auto requestToServer = [this](bool newVersion, int num, bool enableAuth) {
-        TestReqPbV2 req;
-        TestRspPbV1 rsp;
-        req.set_filed1(num);
-        req.set_field2("xxx");
-        req.set_field3(num);
-        req.set_auth_req(enableAuth);
-        for (int i = 0; i < num; ++i) {
-            req.add_filed4(std::to_string(i));
-        }
-        if (newVersion) {
-            req.set_filed5(num);  // filed5 not exist in TestReqPbV1.
-        }
-        DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-        if (!newVersion) {
-            // old version will not carry these message.
-            GetRequestContext()->reqAk.clear();
-            GetRequestContext()->reqSignature.clear();
-            GetRequestContext()->reqTimestamp = 0;
-        }
-        DS_ASSERT_OK(stub_->TestUnaryCompatibilityV2(req, rsp));
+    const auto credentials = [](ConnectOptions &options) {
+        options.accessKey = TEST_ACCESS_KEY;
+        options.secretKey = SensitiveValue(TEST_SECRET_KEY);
+        options.connectTimeoutMs = 5000;
+        options.requestTimeoutMs = 2000;
+        options.enableLocalCache = true;
     };
+    std::shared_ptr<KVClient> writer;
+    std::shared_ptr<KVClient> reader;
+    InitTestKVClient(0, writer, credentials);
+    InitTestKVClient(1, reader, credentials);
+    ASSERT_NE(writer, nullptr);
+    ASSERT_NE(reader, nullptr);
+    const std::string value(8192, 'x');
+    DS_ASSERT_OK(writer->Set("rpc-auth-before-rotation", value));
+    std::string received;
+    DS_ASSERT_OK(reader->Get("rpc-auth-before-rotation", received));
+    EXPECT_EQ(received, value);
+    DS_ASSERT_OK(writer->UpdateAkSk(TEST_ACCESS_KEY, SensitiveValue("test-only-invalid-secret")));
+    EXPECT_EQ(writer->Set("rpc-auth-rejected", value).GetCode(), K_NOT_AUTHORIZED);
+    DS_ASSERT_OK(writer->UpdateAkSk(TEST_ACCESS_KEY, SensitiveValue(TEST_SECRET_KEY)));
+    DS_ASSERT_OK(writer->Set("rpc-auth-after-rotation", value));
+    DS_ASSERT_OK(reader->Get("rpc-auth-after-rotation", received));
+    EXPECT_EQ(received, value);
+}
 
-    int num = 25;
-    const int div = 2;
-    const int div1 = 3;
-    for (int i = 0; i < num; ++i) {
-        requestToServer(i % div == 0, i, i % div1 == 0);
-        requestToServer(i % div == 0, i, i % div1 == 0);
+class OcRpcAuthOffIntegrationTest : public OCClientCommon {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &options) override
+    {
+        options.numWorkers = 1;
+        options.numEtcd = 1;
+        options.systemAccessKey.clear();
+        options.systemSecretKey.clear();
+        options.workerGflagParams = " -shared_memory_size_mb=64";
     }
+};
+
+TEST_F(OcRpcAuthOffIntegrationTest, OrdinaryClientKeepsWorkingAfterFirstEnableIsRejected)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client, [](ConnectOptions &options) {
+        options.connectTimeoutMs = 5000;
+        options.requestTimeoutMs = 2000;
+        options.enableLocalCache = true;
+    });
+    ASSERT_NE(client, nullptr);
+    DS_ASSERT_OK(client->Set("rpc-auth-off", "ordinary"));
+    EXPECT_EQ(client->UpdateAkSk(TEST_ACCESS_KEY, SensitiveValue(TEST_SECRET_KEY)).GetCode(), K_NOT_SUPPORTED);
+    std::string value;
+    DS_ASSERT_OK(client->Get("rpc-auth-off", value));
+    EXPECT_EQ(value, "ordinary");
 }
 }  // namespace st
 }  // namespace datasystem

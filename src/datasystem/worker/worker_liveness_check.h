@@ -20,13 +20,13 @@
 #ifndef DATASYSTEM_WORKER_WORKER_LIVENESS_CHECK_H
 #define DATASYSTEM_WORKER_WORKER_LIVENESS_CHECK_H
 
+#include <shared_mutex>
 #include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <thread>
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/protos/master_object.stub.rpc.pb.h"
@@ -41,7 +41,7 @@ class WorkerOCServer;
 class WorkerLivenessCheck {
 public:
     WorkerLivenessCheck(WorkerOCServer *workerOcServer, std::string probeFileName, uint32_t probeTimeoutMs,
-                        HostPort hostPort, std::string workerUuid, std::shared_ptr<AkSkManager> akSkManager);
+                        HostPort hostPort, std::string workerUuid);
     ~WorkerLivenessCheck();
     WorkerLivenessCheck(const WorkerLivenessCheck &) = delete;
     WorkerLivenessCheck &operator=(const WorkerLivenessCheck &) = delete;
@@ -104,7 +104,6 @@ private:
     // object if for send rpc.
     std::string livenessKey_;
     std::string workerUuid_;
-    std::shared_ptr<AkSkManager> akSkManager_;
     std::vector<std::string> servicesNames_;
     std::shared_mutex lock_;
 };

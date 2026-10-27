@@ -109,7 +109,7 @@ public:
     using RemoveMetaHandler = std::function<Status(master::RemoveMetaReqPb &, master::RemoveMetaRspPb &)>;
 
     FakeEvictionMasterApi(const HostPort &localAddress, RemoveMetaHandler handler)
-        : WorkerLocalMasterOCApi(nullptr, localAddress, nullptr), handler_(std::move(handler))
+        : WorkerLocalMasterOCApi(nullptr, localAddress), handler_(std::move(handler))
     {
     }
 
@@ -135,7 +135,7 @@ public:
         std::function<Status(master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &)>;
 
     FakeDeleteAllCopyMetaMasterApi(const HostPort &localAddress, DeleteAllCopyMetaHandler handler)
-        : WorkerLocalMasterOCApi(nullptr, localAddress, nullptr), handler_(std::move(handler))
+        : WorkerLocalMasterOCApi(nullptr, localAddress), handler_(std::move(handler))
     {
     }
 
@@ -170,7 +170,6 @@ public:
         objectTable_ = std::make_shared<ObjectTable>();
         allocator = datasystem::memory::Allocator::Instance();
         allocator->Init(maxMemorySize);
-        akSkManager_ = std::make_shared<AkSkManager>(0);
     }
 
     void InitEvictionManager(std::unique_ptr<WorkerOcEvictionManager> &manager,
@@ -179,7 +178,7 @@ public:
         manager = std::make_unique<WorkerOcEvictionManager>(
             objectTable_, HostPort("127.0.0.1", 31501), HostPort("127.0.0.1", 31500), GetTestMetadataRoute());
         globalRefs = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
-        DS_ASSERT_OK(manager->Init(globalRefs, akSkManager_));
+        DS_ASSERT_OK(manager->Init(globalRefs));
     }
 
     void CheckPolicyLockBthreadProgress(bool routeLock)
@@ -579,7 +578,6 @@ public:
 
     void StartPrimaryEndLifeWorkersForTest(WorkerOcEvictionManager &manager)
     {
-        manager.akSkManager_ = akSkManager_;
         DS_ASSERT_OK(manager.StartPrimaryEndLifeWorkers());
     }
 
@@ -789,9 +787,9 @@ public:
             });
 
         BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
-                       (testing::_, testing::_, testing::_, testing::_))
+                       (testing::_, testing::_, testing::_))
             .WillRepeatedly(testing::Invoke(
-                [&](const HostPort &masterAddress, const HostPort &, std::shared_ptr<AkSkManager>,
+                [&](const HostPort &masterAddress, const HostPort &,
                     master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> {
                     if (masterAddress.ToString() == targetMaster.ToString()) {
                         return targetApi;
@@ -859,9 +857,9 @@ public:
             });
 
         BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
-                       (testing::_, testing::_, testing::_, testing::_))
+                       (testing::_, testing::_, testing::_))
             .WillRepeatedly(testing::Invoke(
-                [&](const HostPort &masterAddress, const HostPort &, std::shared_ptr<AkSkManager>,
+                [&](const HostPort &masterAddress, const HostPort &,
                     master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> {
                     return masterAddress.ToString() == targetMaster.ToString() ? targetApi : sourceApi;
                 }));
@@ -914,9 +912,9 @@ public:
             });
 
         BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
-                       (testing::_, testing::_, testing::_, testing::_))
+                       (testing::_, testing::_, testing::_))
             .WillRepeatedly(testing::Invoke(
-                [&](const HostPort &masterAddress, const HostPort &, std::shared_ptr<AkSkManager>,
+                [&](const HostPort &masterAddress, const HostPort &,
                     master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> {
                     return masterAddress.ToString() == targetMaster.ToString() ? targetApi : sourceApi;
                 }));
@@ -985,9 +983,9 @@ public:
             });
 
         BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
-                       (testing::_, testing::_, testing::_, testing::_))
+                       (testing::_, testing::_, testing::_))
             .WillRepeatedly(testing::Invoke(
-                [&](const HostPort &masterAddress, const HostPort &, std::shared_ptr<AkSkManager>,
+                [&](const HostPort &masterAddress, const HostPort &,
                     master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> {
                     return masterAddress.ToString() == targetMaster.ToString() ? targetApi : sourceApi;
                 }));
@@ -1043,9 +1041,9 @@ public:
             });
 
         BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
-                       (testing::_, testing::_, testing::_, testing::_))
+                       (testing::_, testing::_, testing::_))
             .WillRepeatedly(testing::Invoke(
-                [&](const HostPort &masterAddress, const HostPort &, std::shared_ptr<AkSkManager>,
+                [&](const HostPort &masterAddress, const HostPort &,
                     master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> {
                     return masterAddress.ToString() == targetMaster.ToString() ? targetApi : sourceApi;
                 }));
@@ -1085,7 +1083,7 @@ public:
             });
 
         BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
-                       (testing::_, testing::_, testing::_, testing::_))
+                       (testing::_, testing::_, testing::_))
             .WillRepeatedly(testing::Return(sourceApi));
 
         WorkerOcEvictionManager manager(objectTable_, workerAddress, sourceMaster, GetTestMetadataRoute());
@@ -1116,7 +1114,7 @@ public:
             });
 
         BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
-                       (testing::_, testing::_, testing::_, testing::_))
+                       (testing::_, testing::_, testing::_))
             .WillRepeatedly(testing::Return(sourceApi));
 
         WorkerOcEvictionManager manager(objectTable_, workerAddress, sourceMaster, GetTestMetadataRoute());
@@ -1162,9 +1160,9 @@ public:
             });
 
         BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
-                       (testing::_, testing::_, testing::_, testing::_))
+                       (testing::_, testing::_, testing::_))
             .WillRepeatedly(testing::Invoke(
-                [&](const HostPort &masterAddress, const HostPort &, std::shared_ptr<AkSkManager>,
+                [&](const HostPort &masterAddress, const HostPort &,
                     master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> {
                     return masterAddress.ToString() == targetMaster.ToString() ? targetApi : sourceApi;
                 }));
@@ -1211,9 +1209,9 @@ public:
             });
 
         BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
-                       (testing::_, testing::_, testing::_, testing::_))
+                       (testing::_, testing::_, testing::_))
             .WillRepeatedly(testing::Invoke(
-                [&](const HostPort &masterAddress, const HostPort &, std::shared_ptr<AkSkManager>,
+                [&](const HostPort &masterAddress, const HostPort &,
                     master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> {
                     return masterAddress.ToString() == targetMaster.ToString() ? targetApi : sourceApi;
                 }));
@@ -1236,7 +1234,6 @@ public:
     }
 
     static constexpr uint64_t TEST_DATA_SIZE = 10 * 1024 * 1024;
-    std::shared_ptr<AkSkManager> akSkManager_;
 };
 
 TEST_F(EvictionManagerTest, PolicyRouteContentionPreservesBthreadProgress)
@@ -1329,7 +1326,7 @@ TEST_F(EvictionManagerTest, TestEvictionManagerInit)
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, HostPort("127.0.0.1", 31501),
                                                           HostPort("127.0.0.1", 31500), GetTestMetadataRoute());
     auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
-    DS_EXPECT_OK(evictionManager.Init(globalRefTable, akSkManager_));
+    DS_EXPECT_OK(evictionManager.Init(globalRefTable));
     std::vector<EvictionList::Node> objsInList;
     EvictionList::Node oldest;
     DS_EXPECT_OK(evictionManager.GetAllObjectsInfo(objsInList, oldest));
@@ -1455,9 +1452,9 @@ TEST_F(EvictionManagerTest, ForceEvictionEndLifeIsNotCountedAndExemptedTasksFree
             ++deleteCalls;
             return Status::OK();
         });
-    BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi, (testing::_, testing::_, testing::_, testing::_))
+    BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi, (testing::_, testing::_, testing::_))
         .WillRepeatedly(testing::Invoke(
-            [&](const HostPort &, const HostPort &, std::shared_ptr<AkSkManager>,
+            [&](const HostPort &, const HostPort &,
                 master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> { return fakeApi; }));
     Raii releaseStubs([]() { RELEASE_STUBS });
 
@@ -1680,7 +1677,7 @@ TEST_F(EvictionManagerTest, PretriggerMarginAutoReservesAverageObjectSize)
     auto evictionManager = std::make_shared<WorkerOcEvictionManager>(
         objectTable_, HostPort("127.0.0.1", 31501), HostPort("127.0.0.1", 31500), GetTestMetadataRoute());
     auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
-    DS_ASSERT_OK(evictionManager->Init(globalRefTable, akSkManager_));
+    DS_ASSERT_OK(evictionManager->Init(globalRefTable));
     // Empty cache: the estimate falls back to the 1 MiB floor instead of dividing by zero.
     EXPECT_EQ(1 * MB_TO_BYTES, evictionManager->EstimatePretriggerMarginBytes());
 
@@ -1720,7 +1717,7 @@ TEST_F(EvictionManagerTest, PretriggerAutoMarginFallsBackToHardWatermark)
     auto evictionManager = std::make_shared<WorkerOcEvictionManager>(
         objectTable_, HostPort("127.0.0.1", 31501), HostPort("127.0.0.1", 31500), GetTestMetadataRoute());
     auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
-    DS_ASSERT_OK(evictionManager->Init(globalRefTable, akSkManager_));
+    DS_ASSERT_OK(evictionManager->Init(globalRefTable));
     // A single 47 MiB object: the auto margin would push the soft line (4.2 MiB) below the low
     // watermark (32 MiB), so the patrol keeps the hard watermark and stays silent below it.
     DS_ASSERT_OK(CreateObject("single-large-object", 47 * MB_TO_BYTES));
@@ -1752,7 +1749,7 @@ TEST_F(EvictionManagerTest, PretriggerMarginRoundsUpToCoverAverageObject)
     auto evictionManager = std::make_shared<WorkerOcEvictionManager>(
         objectTable_, HostPort("127.0.0.1", 31501), HostPort("127.0.0.1", 31500), GetTestMetadataRoute());
     auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
-    DS_ASSERT_OK(evictionManager->Init(globalRefTable, akSkManager_));
+    DS_ASSERT_OK(evictionManager->Init(globalRefTable));
     // 33 x 1.5 MiB objects: the 1.5 MiB average must round up to a 2 MiB margin, putting the soft
     // watermark at 49.2 MiB. A floored 1 MiB margin (soft 50.2 MiB) would leave the 49.5 MiB usage
     // in a residual dead band where neither the patrol nor rebalance can proceed.
@@ -1866,9 +1863,9 @@ TEST_F(EvictionManagerTest, PrimaryEndLifeSameOwnerSingleFlightDoesNotBlockHealt
             return Status::OK();
         });
     BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
-                   (testing::_, testing::_, testing::_, testing::_))
+                   (testing::_, testing::_, testing::_))
         .WillRepeatedly(testing::Invoke(
-            [&](const HostPort &masterAddress, const HostPort &, std::shared_ptr<AkSkManager>,
+            [&](const HostPort &masterAddress, const HostPort &,
                 master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> {
                 return masterAddress == ownerB ? ownerBApi : ownerAApi;
             }));
@@ -1926,7 +1923,7 @@ TEST_F(EvictionManagerTest, PrimaryEndLifeRetryIsDeferredAcrossDrainRounds)
             return Status(K_RPC_DEADLINE_EXCEEDED, "source timeout");
         });
     BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
-                   (testing::_, testing::_, testing::_, testing::_))
+                   (testing::_, testing::_, testing::_))
         .WillRepeatedly(testing::Return(ownerApi));
 
     {
@@ -1983,9 +1980,9 @@ TEST_F(EvictionManagerTest, PrimaryEndLifeReroutesAfterFailedOwnerIsIsolated)
             return Status::OK();
         });
     BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
-                   (testing::_, testing::_, testing::_, testing::_))
+                   (testing::_, testing::_, testing::_))
         .WillRepeatedly(testing::Invoke(
-            [&](const HostPort &masterAddress, const HostPort &, std::shared_ptr<AkSkManager>,
+            [&](const HostPort &masterAddress, const HostPort &,
                 master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> {
                 return masterAddress == recoveryOwner ? recoveryOwnerApi : failedOwnerApi;
             }));
@@ -2136,7 +2133,6 @@ public:
         }
         objectTable_ = std::make_shared<ObjectTable>();
         allocator = datasystem::memory::Allocator::Instance();
-        akSkManager_ = std::make_shared<AkSkManager>(0);
 
         allocator->Init(maxSize_, false, true, 5000, ocPercent_, scPercent_);  // decay is 5000 ms.
         std::shared_ptr<ObjectTable> &objectTable = GetObjectTable();
@@ -2144,11 +2140,10 @@ public:
             objectTable, HostPort("127.0.0.1", 32131),  // worker port is 32131,
             HostPort("127.0.0.1", 52319), GetTestMetadataRoute());  // master port is 52319;
         auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
-        DS_ASSERT_OK(evictionManager_->Init(globalRefTable, akSkManager_));
+        DS_ASSERT_OK(evictionManager_->Init(globalRefTable));
         scAllocateManager_ = std::make_shared<worker::stream_cache::WorkerSCAllocateMemory>(evictionManager_);
     }
 
-    std::shared_ptr<AkSkManager> akSkManager_;
     std::shared_ptr<object_cache::WorkerOcEvictionManager> evictionManager_;
     std::shared_ptr<worker::stream_cache::WorkerSCAllocateMemory> scAllocateManager_;
     uint64_t maxSize_ = 0;

@@ -44,13 +44,11 @@ public:
      * @brief Construct the Worker QueryAndGet processor.
      * @param[in] getProc Existing local-read and metadata-location service.
      * @param[in] memoryRefTable Worker shared-memory reference table.
-     * @param[in] akSkManager Worker authentication manager.
      * @param[in] localAddress Local Worker address.
      * @param[in] ubAdmission Worker UB admission state.
      */
     WorkerQueryAndGetImpl(std::shared_ptr<WorkerOcServiceGetImpl> getProc,
-                          std::shared_ptr<SharedMemoryRefTable> memoryRefTable,
-                          std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
+                          std::shared_ptr<SharedMemoryRefTable> memoryRefTable, HostPort localAddress,
                           std::shared_ptr<PeerUbAdmission> ubAdmission);
 
     /**
@@ -129,7 +127,6 @@ private:
 
     std::shared_ptr<WorkerOcServiceGetImpl> getProc_;
     std::shared_ptr<SharedMemoryRefTable> memoryRefTable_;
-    std::shared_ptr<AkSkManager> akSkManager_;
     HostPort localAddress_;
     std::shared_ptr<PeerUbAdmission> ubAdmission_;
     std::shared_ptr<const UbHealthSummaryProvider> ubHealthSummaryProvider_;

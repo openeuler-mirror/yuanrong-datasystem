@@ -222,7 +222,7 @@ private:
     static Status VerifyProducerConfig(const ProducerConf &producerConf);
 
     std::mutex initMutex_;
-    std::unique_ptr<Signature> signature_{ nullptr };
+    std::shared_ptr<Signature> signature_{ nullptr };
     std::shared_ptr<ClientWorkerApi> clientWorkerApi_;
     std::unique_ptr<MmapManager> mmapManager_;
     std::function<Status(client::WorkerRecoveryReason)> callBack_;  // Worker recovery callback.

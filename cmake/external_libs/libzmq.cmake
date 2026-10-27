@@ -119,6 +119,7 @@ function(GENERATE_ZMQ_CPP ZMQ_PROTO_LIB_DEPEND source_files header_files target_
             "${_OUTPUT_PREFIX}/${file_name}.brpc.pb.h"
             "${_OUTPUT_PREFIX}/${file_name}.brpc.stub.pb.cc"
             "${_OUTPUT_PREFIX}/${file_name}.brpc.stub.pb.h"
+            "${_OUTPUT_PREFIX}/${file_name}.auth.proto"
             COMMAND ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${LD_LIB_PATH}
                     $<TARGET_FILE:protobuf::protoc>
             ARGS -I ${CMAKE_SOURCE_DIR}/src -I ${proto_src_directory}

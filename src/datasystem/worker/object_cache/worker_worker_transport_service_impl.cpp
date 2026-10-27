@@ -39,11 +39,10 @@ namespace datasystem {
 namespace object_cache {
 WorkerWorkerTransportServiceImpl::WorkerWorkerTransportServiceImpl(
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc, HostPort localWorker,
-    const cluster::MembershipEndpointView &membership, std::shared_ptr<AkSkManager> akSkManager)
+    const cluster::MembershipEndpointView &membership)
     : ocClientWorkerSvc_(std::move(clientSvc)),
       localWorker_(std::move(localWorker)),
-      membership_(membership),
-      akSkManager_(std::move(akSkManager))
+      membership_(membership)
 {
 }
 
@@ -157,8 +156,6 @@ Status WorkerWorkerTransportServiceImpl::ProbeProviderUbRecovery(const ProviderU
 Status WorkerWorkerTransportServiceImpl::QueryUbPortHealth(const QueryUbPortHealthReqPb &req,
                                                            QueryUbPortHealthRspPb &rsp)
 {
-    RETURN_RUNTIME_ERROR_IF_NULL(akSkManager_);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     RETURN_RUNTIME_ERROR_IF_NULL(ocClientWorkerSvc_);
     return ocClientWorkerSvc_->QuerySelfUbPortHealth(req, rsp);
 }

@@ -20,7 +20,6 @@
 #ifndef DATASYSTEM_MASTER_OBJECT_CACHE_MASTER_WORKER_OC_API_H
 #define DATASYSTEM_MASTER_OBJECT_CACHE_MASTER_WORKER_OC_API_H
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/object_cache/safe_object.h"
@@ -170,13 +169,12 @@ public:
      * rpc-based api, whereas local workers can be optimized for in-process pointer based api.
      * @param[in] hostPort The host port of the target worker
      * @param[in] localHostPort The local master host port.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] service The local pointer to the master worker OC service implementation. If null, the created api
      * must default to the RPC-based version.
      * @return A base class pointer to the correct derived type of api.
      */
     static std::shared_ptr<MasterWorkerOCApi> CreateMasterWorkerOCApi(
-        const HostPort &hostPort, const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager,
+        const HostPort &hostPort, const HostPort &localHostPort,
         object_cache::MasterWorkerOCServiceImpl *service = nullptr);
 
 protected:
@@ -184,13 +182,11 @@ protected:
      * @brief Constructor for MasterWorkerOCApi class. Protected constructor enforces class instantiation through the
      * factory method CreateMasterWorkerOCApi.
      * @param[in] localHostPort The local master service host port
-     * @param[in] akSkManager Used to do AK/SK authenticate
      */
-    explicit MasterWorkerOCApi(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager);
+    explicit MasterWorkerOCApi(const HostPort &localHostPort);
 
     HostPort masterHostPort_;  // The HostPort of the master node.
     std::shared_ptr<MasterWorkerOCService_BrpcGenericStub> brpcSession_{ nullptr };
-    std::shared_ptr<AkSkManager> akSkManager_;
 };
 
 /**
@@ -206,10 +202,8 @@ public:
      * @brief Constructor for MasterRemoteWorkerOCApi class, the remote version of the api.
      * @param[in] hostPort The address of the target worker.
      * @param[in] localHostPort The local master host port.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      */
-    explicit MasterRemoteWorkerOCApi(const HostPort &workerHostPort, const HostPort &localHostPort,
-                                     std::shared_ptr<AkSkManager> akSkManager);
+    explicit MasterRemoteWorkerOCApi(const HostPort &workerHostPort, const HostPort &localHostPort);
     ~MasterRemoteWorkerOCApi() override = default;
     Status Init() override;
     Status PublishMeta(PublishMetaReqPb &req, PublishMetaRspPb &resp) override;

@@ -18,6 +18,8 @@
  * Description: generate ak/sk signature
  */
 #include "datasystem/common/ak_sk/signature.h"
+
+#include <algorithm>
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -32,7 +34,38 @@ Signature::Signature(const std::string &clientAccessKey, const SensitiveValue &c
 Status Signature::SetClientAkSk(const std::string &accessKey, SensitiveValue secretKey)
 {
     std::lock_guard<std::shared_timed_mutex> lock(mutex_);
-    return CopyAkSk(accessKey, std::move(secretKey), AkSkType::CLIENT, clientKey_);
+    AkSkData next;
+    next.dataKey = clientKey_.dataKey;
+    CHECK_FAIL_RETURN_STATUS(next.dataKey.GetSize() == clientKey_.dataKey.GetSize(), K_OUT_OF_MEMORY,
+                             "Failed to retain client key data.");
+    RETURN_IF_NOT_OK(CopyAkSk(accessKey, std::move(secretKey), AkSkType::CLIENT, next));
+    clientKey_ = std::move(next);
+    return Status::OK();
+}
+
+Status Signature::SnapshotClientKey(AkSkData &out) const
+{
+    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    AkSkData snapshot;
+    snapshot.accessKey = clientKey_.accessKey;
+    snapshot.secretKey = clientKey_.secretKey;
+    CHECK_FAIL_RETURN_STATUS(snapshot.secretKey.GetSize() == clientKey_.secretKey.GetSize(), K_OUT_OF_MEMORY,
+                             "Failed to snapshot client credentials.");
+    snapshot.type = clientKey_.type;
+    out = std::move(snapshot);
+    return Status::OK();
+}
+
+Status Signature::GetSignatureFromDigest(const AkSkData &key, const AkSkDigest &digest, std::string &signature)
+{
+    CHECK_FAIL_RETURN_STATUS(!key.secretKey.Empty(), K_INVALID, "secretKey is empty.");
+    auto hash = std::make_unique<unsigned char[]>(digest.size());
+    std::copy(digest.begin(), digest.end(), hash.get());
+    Hasher hasher;
+    std::unique_ptr<unsigned char[]> encoded;
+    unsigned int encodedSize = 0;
+    RETURN_IF_NOT_OK(hasher.HexEncodeForAkSk(hash, digest.size(), encoded, encodedSize));
+    return HmacAndEncode(key, encoded, encodedSize, signature);
 }
 
 Status Signature::CopyAkSk(const std::string &accessKey, SensitiveValue secretKey, AkSkType type, AkSkData &data)
@@ -43,20 +76,10 @@ Status Signature::CopyAkSk(const std::string &accessKey, SensitiveValue secretKe
     return Status::OK();
 }
 
-Status Signature::GetSignature(const AkSkData &data, const char *canonicalStr, size_t canonicalSize,
-                               std::string &signature)
+Status Signature::HmacAndEncode(const AkSkData &data, std::unique_ptr<unsigned char[]> &signatureData,
+                                unsigned int signatureDataSize, std::string &signature)
 {
-    CHECK_FAIL_RETURN_STATUS(!data.secretKey.Empty(), K_INVALID, "secretKey is empty.");
     Hasher hasher;
-    // 1. calc hash and encode
-    std::unique_ptr<unsigned char[]> outHashData;
-    unsigned int outHashSize;
-    RETURN_IF_NOT_OK(hasher.HashSHA256(canonicalStr, canonicalSize, outHashData, outHashSize));
-    std::unique_ptr<unsigned char[]> signatureData;
-    unsigned int signatureDataSize;
-    RETURN_IF_NOT_OK(hasher.HexEncodeForAkSk(outHashData, outHashSize, signatureData, signatureDataSize));
-
-    // 2. hmac and encode
     std::unique_ptr<unsigned char[]> outSignature;
     unsigned int outSignatureSize;
     RETURN_IF_NOT_OK(hasher.Hmac(data.secretKey.GetData(), data.secretKey.GetSize(), signatureData, signatureDataSize,

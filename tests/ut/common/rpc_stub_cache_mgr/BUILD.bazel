@@ -18,6 +18,8 @@ ds_cc_test(
     name = "rpc_stub_cache_mgr_test",
     srcs = ["rpc_stub_cache_mgr_test.cpp"],
     deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/ak_sk:common_ak_sk",
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
         "//src/datasystem/common/util:net_util",
         "//tests/ut/common/rpc_stub_cache_mgr:rpc_stub_cache_mgr_test_helper",

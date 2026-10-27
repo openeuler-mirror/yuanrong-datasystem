@@ -66,6 +66,7 @@ ds_cc_test(
     name = "brpc_factory_test",
     srcs = ["brpc_factory_test.cpp"],
     deps = [
+        "//src/datasystem/common/rpc:brpc_auth_capture",
         "//src/datasystem/common/rpc:brpc_factory",
         "@com_github_apache_brpc//:brpc",
         "@com_github_gflags_gflags//:gflags",
@@ -148,5 +149,18 @@ ds_cc_test(
         "//src/datasystem/common/rpc:bthread_utils",
         "//src/datasystem/common/rpc:rpc_server",
         "@com_github_apache_brpc//:brpc",
+    ],
+)
+
+ds_cc_test(
+    name = "brpc_auth_test",
+    srcs = ["brpc_auth_test.cpp"],
+    tags = ["level0", "ut", "asan", "tsan"],
+    deps = [
+        "//src/datasystem/common/ak_sk:common_ak_sk",
+        "//src/datasystem/common/rpc:brpc_auth",
+        "//src/datasystem/protos:ut_object_cc_proto",
+        "@com_github_apache_brpc//:brpc",
+        "@com_google_protobuf//:protobuf",
     ],
 )

@@ -151,6 +151,12 @@ public:
             }
         }
         DS_ASSERT_OK(inject::Set(SKIP_WARMUP_INJECT, "call()"));
+        // Keep the process-wide cache bound to the same provider across fixture setups.
+        static const auto credentials = std::make_shared<AkSkManager>();
+        akSkManager_ = credentials;
+        DS_ASSERT_OK(akSkManager_->SetClientAkSk("QTWAOYTTINDUT2QVKYUC",
+                                                "MFyfvK41ba2giqM7**********KGpownRZlmVmHc"));
+        DS_ASSERT_OK(RpcStubCacheMgr::Instance().Init(100, HostPort(), akSkManager_));
         ExternalClusterTest::SetUp();
 
         if (!IsCoordinatorTransportSetCase()) {
@@ -214,11 +220,6 @@ protected:
 
     void InitMasterApis()
     {
-        DS_ASSERT_OK(RpcStubCacheMgr::Instance().Init(100));
-        akSkManager_ = std::make_shared<AkSkManager>();
-        DS_ASSERT_OK(akSkManager_->SetClientAkSk("QTWAOYTTINDUT2QVKYUC",
-                                                "MFyfvK41ba2giqM7**********KGpownRZlmVmHc"));
-
         HostPort localAddress;
         DS_ASSERT_OK(cluster_->GetWorkerAddr(READER_WORKER_INDEX, localAddress));
         queryAddress_ = localAddress.ToString();
@@ -227,7 +228,7 @@ protected:
             HostPort workerAddress;
             DS_ASSERT_OK(cluster_->GetWorkerAddr(i, workerAddress));
             auto api =
-                std::make_unique<worker::WorkerRemoteMasterOCApi>(workerAddress, localAddress, akSkManager_);
+                std::make_unique<worker::WorkerRemoteMasterOCApi>(workerAddress, localAddress);
             DS_ASSERT_OK(api->Init());
             masterApis_.emplace_back(std::move(api));
         }

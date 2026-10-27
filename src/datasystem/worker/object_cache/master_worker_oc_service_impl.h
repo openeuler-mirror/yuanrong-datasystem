@@ -20,7 +20,6 @@
 #ifndef DATASYSTEM_WORKER_OC_MASTER_SERVICE_IMPL_H
 #define DATASYSTEM_WORKER_OC_MASTER_SERVICE_IMPL_H
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 
@@ -35,10 +34,8 @@ public:
     /**
      * @brief MasterWorkerOCServiceImpl constructor.
      * @param[in] clientSvc Pointer to worker service.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      */
-    MasterWorkerOCServiceImpl(std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc,
-                              std::shared_ptr<AkSkManager> akSkManager);
+    explicit MasterWorkerOCServiceImpl(std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc);
 
     ~MasterWorkerOCServiceImpl() override;
 
@@ -180,7 +177,6 @@ private:
     Status ProcessChangePrimaryCopy(const std::string &objectKey, bool isPrimaryCopy);
 
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> ocClientWorkerSvc_;
-    std::shared_ptr<AkSkManager> akSkManager_;
 };
 }  // namespace object_cache
 }  // namespace datasystem

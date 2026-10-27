@@ -172,6 +172,9 @@ ds_cc_library(
         "worker_topology_phase_callbacks.h",
     ],
     deps = [
+        ":rpc_service_auth_registration",
+        "//src/datasystem/common/rpc:brpc_auth",
+        "//src/datasystem/protos:perf_posix_brpc",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/coordinator:coordinator_store",
         "//src/datasystem/cluster:cluster_topology_scope",
@@ -328,6 +331,7 @@ ds_cc_library(
         "authenticate.h",
     ],
     deps = [
+        "//src/datasystem/common/rpc:brpc_auth",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/iam:common_iam",
         "//src/datasystem/common/util:thread_local",
@@ -534,4 +538,10 @@ cc_shared_library(
         ],
         "//conditions:default": [],
     }),
+)
+
+ds_cc_library(
+    name = "rpc_service_auth_registration",
+    hdrs = ["rpc_service_auth_registration.h"],
+    deps = [":authenticate", "//src/datasystem/common/rpc:rpc_server"],
 )

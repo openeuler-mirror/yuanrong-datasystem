@@ -53,7 +53,6 @@ Status ProducerConsumerWorkerApi::GetDataPage(GetDataPageReqPb &req, ShmView &ou
     int64_t timeoutMs = req.timeout_ms();
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     req.set_client_id(workerApi->clientId_);
-    RETURN_IF_NOT_OK(workerApi->signature_->GenerateSignature(req));
     GetDataPageRspPb rsp;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         RetryOnError(
@@ -80,7 +79,6 @@ Status ProducerConsumerWorkerApi::DoGetDataPageRpc(ClientWorkerApi &workerApi, G
     opts.SetTimeout(currDefaultRpcTimeout);  // per-call budget from RetryOnError, avoid pair.first amplification
     GetRequestContext()->reqTimeoutDuration.Init(workerApi.ClientGetRequestTimeout(opts.GetTimeout()));
     req.set_timeout_ms(pair.second);
-    RETURN_IF_NOT_OK(workerApi.signature_->GenerateSignature(req));
     auto session = workerApi.brpcRpcSession_;
     if (session == nullptr) {
         LOG(WARNING) << FormatString("[%s] brpcRpcSession_ is null, RPC not executed", workerApi.LogPrefix());
@@ -141,7 +139,6 @@ Status ProducerConsumerWorkerApi::DoAllocBigShmMemoryRpc(ClientWorkerApi &worker
     // Even without AKSK authentication, this field should still be set in this scenario because worker
     // relies on this field to determine the order of requests.
     req.set_timestamp(GetSystemClockTimeStampUs());
-    RETURN_IF_NOT_OK(workerApi.signature_->GenerateSignature(req));
     auto session = workerApi.brpcRpcSession_;
     if (session == nullptr) {
         LOG(WARNING) << FormatString("[%s] brpcRpcSession_ is null, RPC not executed", workerApi.LogPrefix());
@@ -165,7 +162,6 @@ Status ProducerConsumerWorkerApi::ReleaseBigElementMemory(const std::string &str
     ReleaseLobPageReqPb req;
     FillReleaseLobPageReq(req, streamName, producerId, pageView, *workerApi);
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
-    RETURN_IF_NOT_OK(workerApi->signature_->GenerateSignature(req));
     ReleaseLobPageRspPb rsp;
     INJECT_POINT("ProducerConsumerWorkerApi.ReleaseBigElementMemory.preReleaseBigShmMemory");
     // Note: timeout is not relevant here but thread_local must be set
@@ -256,7 +252,6 @@ Status ProducerConsumerWorkerApi::DoCreateShmPageRpc(ClientWorkerApi &workerApi,
     // Even without AKSK authentication, this field should still be set in this scenario because worker
     // relies on this field to determine the order of requests.
     req.set_timestamp(GetSystemClockTimeStampUs());
-    RETURN_IF_NOT_OK(workerApi.signature_->GenerateSignature(req));
     auto session = workerApi.brpcRpcSession_;
     if (session == nullptr) {
         LOG(WARNING) << FormatString("[%s] brpcRpcSession_ is null, RPC not executed", workerApi.LogPrefix());
@@ -281,7 +276,6 @@ Status ProducerConsumerWorkerApi::CloseProducer(const std::string &streamName, c
     req.set_producer_id(producerId);
     req.set_client_id(workerApi->clientId_);
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
-    RETURN_IF_NOT_OK(workerApi->signature_->GenerateSignature(req));
     CloseProducerRspPb rsp;
 
     RpcOptions opts;
@@ -318,7 +312,6 @@ Status ProducerConsumerWorkerApi::CloseConsumer(const std::string &streamName, c
     req.set_consumer_id(consumerId);
     req.set_client_id(workerApi->clientId_);
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
-    RETURN_IF_NOT_OK(workerApi->signature_->GenerateSignature(req));
     CloseConsumerRspPb rsp;
 
     RpcOptions opts;
@@ -352,7 +345,6 @@ Status ProducerConsumerWorkerApi::GetLastAppendCursor(const std::string &streamN
     req.set_stream_name(streamName);
     req.set_client_id(workerApi->clientId_);
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
-    RETURN_IF_NOT_OK(workerApi->signature_->GenerateSignature(req));
     LastAppendCursorRspPb rsp;
 
     RpcOptions opts;

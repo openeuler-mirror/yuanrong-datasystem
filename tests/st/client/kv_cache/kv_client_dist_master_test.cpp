@@ -32,6 +32,7 @@
 #include <gtest/gtest.h>
 
 #include "common.h"
+#include "cluster/topology_token_helper.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log.h"
@@ -92,6 +93,30 @@ protected:
     void ShutdownEraseRocksDBAndRestartNodes();
 
     void GetWorkerUuids();
+
+    void PrepareRedirectKey(std::string &key)
+    {
+        ClusterTopologyPb topology;
+        DS_ASSERT_OK(cluster_->ReadClusterTopology(topology));
+        HostPort address;
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(1, address));
+        DS_ASSERT_OK(FindKeyForTopologyMember(topology, address.ToString(), key));
+        ASSERT_NO_FATAL_FAILURE(RouteKeyToWorker(key, 0, 2));
+    }
+
+    void RouteKeyToWorker(const std::string &key, uint32_t caller, uint32_t owner)
+    {
+        ClusterTopologyPb topology;
+        DS_ASSERT_OK(cluster_->ReadClusterTopology(topology));
+        HostPort address;
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(owner, address));
+        auto member = topology.members().find(address.ToString());
+        ASSERT_NE(member, topology.members().end());
+        auto tokens = RebuildTopologyMemberTokens(topology, member->first, member->second);
+        ASSERT_FALSE(tokens.empty());
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, caller, "MurmurHash3SpecifyKey",
+                                              FormatString("return(%s,%u)", key, tokens.front())));
+    }
 
     std::unique_ptr<EtcdStore> db_;
     std::shared_ptr<KVClient> client_;
@@ -417,49 +442,38 @@ TEST_F(STCClientDistMasterTest, DISABLED_TestAddNodeGet)
 TEST_F(STCClientDistMasterTest, TestRedirectSet)
 {
     StartClustersAndWaitReady();
-    GetWorkerUuids();
-    std::string key = ObjectKeyWithOwner(0, uuidMap_);
+    std::string key;
+    ASSERT_NO_FATAL_FAILURE(PrepareRedirectKey(key));
     std::string value = "value1";
     std::string valueGet;
-    HostPort redirectAddr;
-    cluster_->GetWorkerAddr(1, redirectAddr);
-    std::stringstream call;
-    call << "call(" << redirectAddr.ToString() << ")";
-    cluster_->SetInjectAction(WORKER, 0, "redirect.create.update.copy.meta", call.str());
-    ASSERT_EQ(client_->Set(key, value), Status::OK());
-    cluster_->SetInjectAction(WORKER, 0, "redirect.create.update.copy.meta", call.str());
-    cluster_->SetInjectAction(WORKER, 0, "redirect.query.delete", call.str());
+    DS_ASSERT_OK(client_->Set(key, value));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "MurmurHash3SpecifyKey"));
+    ASSERT_NO_FATAL_FAILURE(RouteKeyToWorker(key, 2, 0));
     DS_ASSERT_OK(client2_->Get(key, valueGet));
-    cluster_->SetInjectAction(WORKER, 0, "redirect.query.delete", call.str());
-    ASSERT_EQ(client2_->Del(key), Status::OK());
+    ASSERT_EQ(valueGet, value);
+    DS_ASSERT_OK(client2_->Del(key));
 }
 
 TEST_F(STCClientDistMasterTest, TestRedirectSetKeys)
 {
     FLAGS_v = 1;
     StartClustersAndWaitReady();
-    GetWorkerUuids();
-    std::vector<std::string> keys;
-    keys.emplace_back(ObjectKeyWithOwner(0, uuidMap_));
-    keys.emplace_back(ObjectKeyWithOwner(1, uuidMap_));
-    keys.emplace_back(ObjectKeyWithOwner(1, uuidMap_));
+    std::string redirectedKey;
+    ASSERT_NO_FATAL_FAILURE(PrepareRedirectKey(redirectedKey));
+    std::vector<std::string> keys{ redirectedKey, GetStringUuid(), GetStringUuid() };
 
     std::string value = "value1";
     std::vector<std::string> valueGets;
-    HostPort redirectAddr;
-    cluster_->GetWorkerAddr(1, redirectAddr);
-    std::stringstream call;
-    call << "call(" << redirectAddr.ToString() << ")";
-    cluster_->SetInjectAction(WORKER, 0, "redirect.create.update.copy.meta", call.str());
     for (auto key : keys) {
         ASSERT_EQ(client_->Set(key, value), Status::OK());
     }
-    cluster_->SetInjectAction(WORKER, 0, "redirect.create.update.copy.meta", call.str());
-    cluster_->SetInjectAction(WORKER, 0, "redirect.query.delete", call.str());
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "MurmurHash3SpecifyKey"));
+    ASSERT_NO_FATAL_FAILURE(RouteKeyToWorker(keys.front(), 2, 0));
     DS_ASSERT_OK(client2_->Get(keys, valueGets));
-    cluster_->SetInjectAction(WORKER, 0, "redirect.query.delete", call.str());
+    ASSERT_EQ(valueGets, std::vector<std::string>(keys.size(), value));
     std::vector<std::string> failedKeys;
     ASSERT_EQ(client2_->Del(keys, failedKeys), Status::OK());
+    ASSERT_TRUE(failedKeys.empty());
 }
 
 TEST_F(STCClientDistMasterTest, TestGetAndDelSameKeyConcurrency)

@@ -56,15 +56,19 @@ public:
         HostPort workerAddress;
         cluster_->GetWorkerAddr(workerNum, workerAddress);
         auto workerApi = std::make_shared<ClientWorkerRemoteApi>(workerAddress,
-                                                                 HeartbeatType::RPC_HEARTBEAT, "", signature_.get());
-        workerApi->Init(CLIENT_RPC_TIMEOUT, CLIENT_RPC_TIMEOUT);
+                                                                 HeartbeatType::RPC_HEARTBEAT, "", signature_);
+        const auto status = workerApi->Init(CLIENT_RPC_TIMEOUT, CLIENT_RPC_TIMEOUT);
+        if (status.IsError()) {
+            ADD_FAILURE() << status.ToString();
+            return nullptr;
+        }
         return workerApi;
     }
 
 protected:
     std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
-    std::unique_ptr<Signature> signature_ = std::make_unique<Signature>(accessKey_, secretKey_);
+    std::shared_ptr<Signature> signature_ = std::make_shared<Signature>(accessKey_, secretKey_);
     static constexpr int CLIENT_RPC_TIMEOUT = 4 * 60 * 1000;
 };
 
@@ -73,7 +77,9 @@ TEST_F(HeteroClientMockTest, TestSubscribeReceiveEvent)
     const int index1 = 0;
     const int index2 = 1;
     auto workerClient1 = CreateClientWorkerApi(index1);
+    ASSERT_NE(workerClient1, nullptr);
     auto workerClient2 = CreateClientWorkerApi(index2);
+    ASSERT_NE(workerClient2, nullptr);
     DS_ASSERT_OK(datasystem::inject::Set("SubscribeReceiveEvent.quicklyTimeout", "call(2000)"));
     // Test Local and remote func
     const int mockDevId = 1;
@@ -89,7 +95,9 @@ TEST_F(HeteroClientMockTest, TestGetP2PMeta)
     const int index2 = 1;
     const int deviceIdx = 1;
     auto workerClient1 = CreateClientWorkerApi(index1);
+    ASSERT_NE(workerClient1, nullptr);
     auto workerClient2 = CreateClientWorkerApi(index2);
+    ASSERT_NE(workerClient2, nullptr);
 
     auto devObjKey = GetStringUuid();
     auto lifetime = LifetimeType::REFERENCE;
@@ -132,7 +140,9 @@ TEST_F(HeteroClientMockTest, TestRecvRootInfo)
     const int index1 = 0;
 
     auto workerClient1 = CreateClientWorkerApi(index1);
+    ASSERT_NE(workerClient1, nullptr);
     auto workerClient2 = CreateClientWorkerApi(index1);
+    ASSERT_NE(workerClient2, nullptr);
     auto deviceId = 1;
     auto localClientId1 = workerClient1->clientId_;
     auto localClientId2 = workerClient2->clientId_;

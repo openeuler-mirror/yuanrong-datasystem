@@ -16,6 +16,7 @@
  */
 
 #include <algorithm>
+#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -97,7 +98,7 @@ using WorkerMasterOCApiManager = worker::WorkerMasterApiManagerBase<worker::Work
 class TestWorkerLivenessCheck : public worker::WorkerLivenessCheck {
 public:
     TestWorkerLivenessCheck(const std::string &probePath, uint32_t probeTimeoutMs)
-        : WorkerLivenessCheck(nullptr, probePath, probeTimeoutMs, HostPort(), "", nullptr)
+        : WorkerLivenessCheck(nullptr, probePath, probeTimeoutMs, HostPort(), "")
     {
     }
 
@@ -193,7 +194,7 @@ public:
     using CheckLocationHandler =
         std::function<Status(master::CheckObjectDataLocationReqPb &, master::CheckObjectDataLocationRspPb &)>;
 
-    explicit FakeWorkerMasterOCApi(const HostPort &localAddr) : WorkerLocalMasterOCApi(nullptr, localAddr, nullptr)
+    explicit FakeWorkerMasterOCApi(const HostPort &localAddr) : WorkerLocalMasterOCApi(nullptr, localAddr)
     {
     }
 
@@ -517,7 +518,7 @@ private:
 class FakeWorkerMasterApiManager final : public worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi> {
 public:
     FakeWorkerMasterApiManager(HostPort &workerAddr, const worker::MetadataRouteResolver &metadataRoute)
-        : WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>(workerAddr, nullptr, metadataRoute)
+        : WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>(workerAddr, metadataRoute)
     {
     }
 
@@ -1301,7 +1302,7 @@ TEST_F(WorkerOcServiceImplTest, RemoteGetTryLockMissDoesNotLeaveEmptyEntry)
     const std::string objectKey = "remote-get-try-lock-missing-key";
     ScopedRequestContext requestContext;
     WorkerWorkerOCServiceImpl remoteService(
-        impl_, nullptr, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        impl_, topologyRuntime_.Engine()->Membership(), []() { return true; },
         []() { return cluster::ControlBackendObservation{}; });
 
     for (size_t i = 0; i < kAttemptCount; ++i) {
@@ -1326,7 +1327,7 @@ TEST_F(WorkerOcServiceImplTest, MigrationUbAdmissionUsesExistingTcpFallback)
     failure.cqeStatus = URMA_REMOTE_ACK_TIMEOUT_STATUS;
     admission.ReportOutcome(failure);
     DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, topologyRuntime_.Engine()->Membership(),
-                          *endpointPolicy_, &exitRequested_, localAddress_, nullptr, objectTable_);
+                          *endpointPolicy_, &exitRequested_, localAddress_, objectTable_);
     migrator.SetUbAdmission(&admission);
     FLAGS_enable_transport_fallback = true;
     EXPECT_TRUE(migrator.CheckUbAdmission(target, UbOperationKind::MIGRATION_WRITE).IsOk());
@@ -1339,7 +1340,7 @@ TEST_F(WorkerOcServiceImplTest, MigrationUbAdmissionUsesExistingTcpFallback)
 TEST_F(WorkerOcServiceImplTest, MigrationHealthSummaryUsesDedicatedObserver)
 {
     DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, topologyRuntime_.Engine()->Membership(),
-                          *endpointPolicy_, &exitRequested_, localAddress_, nullptr, objectTable_);
+                          *endpointPolicy_, &exitRequested_, localAddress_, objectTable_);
     MigrateDataHandler::MigrateResult result;
     result.ubHealthSummary = UbHealthSummary{};
     result.ubHealthSummary->worker = HostPort("127.0.0.1", 18482);
@@ -1367,7 +1368,7 @@ TEST_F(WorkerOcServiceImplTest, RemoteGetL2MissDoesNotLeaveEmptyEntry)
     const std::string objectKey = "remote-get-l2-missing-key";
     ScopedRequestContext requestContext;
     WorkerWorkerOCServiceImpl remoteService(
-        impl_, nullptr, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        impl_, topologyRuntime_.Engine()->Membership(), []() { return true; },
         []() { return cluster::ControlBackendObservation{}; });
     std::shared_ptr<SafeObjType> safeEntry;
 
@@ -1390,9 +1391,8 @@ TEST_F(WorkerOcRemoteGetAdmissionTest, BlockingRemoteGetAdmissionFailureFallsBac
     BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
     BINEXPECT_CALL(&datasystem::CheckTransportConnectionStable, (_, _, _)).Times(0);
     BINEXPECT_CALL(&datasystem::UrmaWritePayload, (_, _, _, _, _, _, _, _, _, _, _, _, _, _)).Times(0);
-    auto akSkManager = std::make_shared<AkSkManager>();
     WorkerWorkerOCServiceImpl remoteService(
-        impl_, akSkManager, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        impl_, topologyRuntime_.Engine()->Membership(), []() { return true; },
         []() { return cluster::ControlBackendObservation{}; });
     auto req = MakeUrmaRemoteGetRequest(objectKey, dataSize, requester);
     auto serverApi = std::make_shared<TestGetObjectRemoteServerApi>(std::move(req));
@@ -1422,9 +1422,8 @@ TEST_F(WorkerOcRemoteGetAdmissionTest, BlockingRemoteGetAdmissionFailureRejectsP
     BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
     BINEXPECT_CALL(&datasystem::CheckTransportConnectionStable, (_, _, _)).Times(0);
     BINEXPECT_CALL(&datasystem::UrmaWritePayload, (_, _, _, _, _, _, _, _, _, _, _, _, _, _)).Times(0);
-    auto akSkManager = std::make_shared<AkSkManager>();
     WorkerWorkerOCServiceImpl remoteService(
-        impl_, akSkManager, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        impl_, topologyRuntime_.Engine()->Membership(), []() { return true; },
         []() { return cluster::ControlBackendObservation{}; });
     auto req = MakeUrmaRemoteGetRequest(objectKey, dataSize, requester);
     auto serverApi = std::make_shared<TestGetObjectRemoteServerApi>(std::move(req));
@@ -1452,9 +1451,8 @@ TEST_F(WorkerOcRemoteGetAdmissionTest, BlockingRemoteGetAdmissionFailureReturnsU
     BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
     BINEXPECT_CALL(&datasystem::CheckTransportConnectionStable, (_, _, _)).Times(0);
     BINEXPECT_CALL(&datasystem::UrmaWritePayload, (_, _, _, _, _, _, _, _, _, _, _, _, _, _)).Times(0);
-    auto akSkManager = std::make_shared<AkSkManager>();
     WorkerWorkerOCServiceImpl remoteService(
-        impl_, akSkManager, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        impl_, topologyRuntime_.Engine()->Membership(), []() { return true; },
         []() { return cluster::ControlBackendObservation{}; });
     auto req = MakeUrmaRemoteGetRequest(objectKey, dataSize, requester);
     auto serverApi = std::make_shared<TestGetObjectRemoteServerApi>(std::move(req));
@@ -1494,7 +1492,7 @@ TEST_F(WorkerOcRemoteGetAdmissionTest, BatchAdmissionPinsRequestToTcpBeforeLaneA
     BINEXPECT_CALL(&datasystem::UrmaGatherWrite, (_, _, _, _, _)).Times(0);
     BINEXPECT_CALL(&datasystem::UrmaGatherWriteWithLane, (_, _, _, _, _, _)).Times(0);
     WorkerWorkerOCServiceImpl remoteService(
-        impl_, nullptr, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        impl_, topologyRuntime_.Engine()->Membership(), []() { return true; },
         []() { return cluster::ControlBackendObservation{}; });
     WorkerWorkerOCServiceImpl::BatchRh2dContext batchTransportContext;
     BatchGetObjectRemoteRspPb rsp;
@@ -1526,7 +1524,7 @@ TEST_F(WorkerOcServiceImplTest, BatchAdmissionFailsBeforeLaneWhenFallbackDisable
     BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
     BINEXPECT_CALL(&datasystem::AcquireUrmaSendLane, (_, _)).Times(0);
     WorkerWorkerOCServiceImpl remoteService(
-        impl_, nullptr, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        impl_, topologyRuntime_.Engine()->Membership(), []() { return true; },
         []() { return cluster::ControlBackendObservation{}; });
     WorkerWorkerOCServiceImpl::BatchRh2dContext batchTransportContext;
 
@@ -1558,8 +1556,8 @@ TEST_F(WorkerOcServiceImplWithAllocatorTest, BatchRemoteGetHitCommitsOnceAfterDe
         subReq->set_try_lock(true);
     }
     WorkerWorkerOCServiceImpl remoteService(
-        impl_, std::make_shared<AkSkManager>(), topologyRuntime_.Engine()->Membership(),
-        []() { return true; }, []() { return cluster::ControlBackendObservation{}; });
+        impl_, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        []() { return cluster::ControlBackendObservation{}; });
     auto serverApi = std::make_shared<TestBatchGetObjectRemoteServerApi>(std::move(req));
     ScopedRequestContext requestContext;
     const std::string hitBefore = CacheHitInfo::Instance().GetHitInfo();
@@ -1589,8 +1587,8 @@ TEST_F(WorkerOcServiceImplWithAllocatorTest, BatchRemoteGetHitDiscardedWhenDeliv
     subReq->set_read_size(dataSize);
     subReq->set_try_lock(true);
     WorkerWorkerOCServiceImpl remoteService(
-        impl_, std::make_shared<AkSkManager>(), topologyRuntime_.Engine()->Membership(),
-        []() { return true; }, []() { return cluster::ControlBackendObservation{}; });
+        impl_, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        []() { return cluster::ControlBackendObservation{}; });
     auto serverApi = std::make_shared<TestBatchGetObjectRemoteServerApi>(std::move(req));
     serverApi->SetWriteStatus(Status(K_RUNTIME_ERROR, "injected write failure"));
     ScopedRequestContext requestContext;
@@ -1614,8 +1612,8 @@ TEST_F(WorkerOcServiceImplWithAllocatorTest, SingleRemoteGetHitDiscardedWhenDeli
     req.set_read_size(dataSize);
     req.set_try_lock(true);
     WorkerWorkerOCServiceImpl remoteService(
-        impl_, std::make_shared<AkSkManager>(), topologyRuntime_.Engine()->Membership(),
-        []() { return true; }, []() { return cluster::ControlBackendObservation{}; });
+        impl_, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        []() { return cluster::ControlBackendObservation{}; });
     auto serverApi = std::make_shared<TestGetObjectRemoteServerApi>(std::move(req));
     serverApi->SetWriteStatus(Status(K_RUNTIME_ERROR, "injected write failure"));
     ScopedRequestContext requestContext;
@@ -1663,8 +1661,8 @@ TEST_F(WorkerOcServiceImplWithAllocatorTest, BatchUrmaWaitFailureWithFallbackDis
     req.add_requests()->CopyFrom(MakeUrmaRemoteGetRequest(objectKey, dataSize, requester));
     req.mutable_requests(0)->set_try_lock(true);
     WorkerWorkerOCServiceImpl remoteService(
-        impl_, std::make_shared<AkSkManager>(), topologyRuntime_.Engine()->Membership(),
-        []() { return true; }, []() { return cluster::ControlBackendObservation{}; });
+        impl_, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        []() { return cluster::ControlBackendObservation{}; });
     auto serverApi = std::make_shared<TestBatchGetObjectRemoteServerApi>(std::move(req));
     ScopedRequestContext requestContext;
     const std::string hitBefore = CacheHitInfo::Instance().GetHitInfo();
@@ -1700,8 +1698,8 @@ TEST_F(WorkerOcServiceImplWithAllocatorTest, BatchUrmaFallbackToTcpCountsOnce)
     req.add_requests()->CopyFrom(MakeUrmaRemoteGetRequest(objectKey, dataSize, requester));
     req.mutable_requests(0)->set_try_lock(true);
     WorkerWorkerOCServiceImpl remoteService(
-        impl_, std::make_shared<AkSkManager>(), topologyRuntime_.Engine()->Membership(),
-        []() { return true; }, []() { return cluster::ControlBackendObservation{}; });
+        impl_, topologyRuntime_.Engine()->Membership(), []() { return true; },
+        []() { return cluster::ControlBackendObservation{}; });
     auto serverApi = std::make_shared<TestBatchGetObjectRemoteServerApi>(std::move(req));
     ScopedRequestContext requestContext;
     const std::string hitBefore = CacheHitInfo::Instance().GetHitInfo();

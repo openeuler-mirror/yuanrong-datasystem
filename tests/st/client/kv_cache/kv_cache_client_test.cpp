@@ -15,6 +15,7 @@
  * Description:
  */
 #include <algorithm>
+#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include <gtest/gtest.h>
 #include <tbb/concurrent_hash_map.h>
 #include <unistd.h>
@@ -3194,8 +3195,8 @@ TEST_F(KVClientWriteRocksdbTest, EXCLUSIVE_LEVEL1_TestScaleDownFallsBackWhenEvic
     InitConnectOpt(1, authOptions);
     auto akSkManager = std::make_shared<AkSkManager>();
     DS_ASSERT_OK(akSkManager->SetClientAkSk(authOptions.accessKey, authOptions.secretKey));
-    DS_ASSERT_OK(RpcStubCacheMgr::Instance().Init(100));
-    worker::WorkerRemoteMasterOCApi masterApi(worker0Addr, worker1Addr, akSkManager);
+    DS_ASSERT_OK(RpcStubCacheMgr::Instance().Init(100, HostPort(), akSkManager));
+    worker::WorkerRemoteMasterOCApi masterApi(worker0Addr, worker1Addr);
     DS_ASSERT_OK(masterApi.Init());
     master::CreateCopyMetaReqPb copyReq;
     master::CreateCopyMetaRspPb copyRsp;

@@ -38,9 +38,22 @@
 #include <gflags/gflags.h>
 
 #include "datasystem/common/rpc/brpc_factory.h"
+#include "datasystem/common/rpc/brpc_auth_capture.h"
 
 namespace datasystem {
 namespace test {
+
+TEST(BrpcColdInitializationTest, PlainChannelRegistersCaptureBeforeAuthenticatedUse)
+{
+    BrpcChannelConfig config;
+    config.endpoint = "127.0.0.1:1";
+    auto channel = BrpcChannelFactory::Create(config);
+    ASSERT_NE(channel, nullptr);
+    EXPECT_STREQ(brpc::ChecksumTypeToCStr(RPC_AUTH_CHECKSUM_TYPE), "datasystem-rpc-ak-sk");
+    EXPECT_TRUE(RegisterRpcAuthChecksumColdOnce().IsOk());
+    BrpcChannelFactory::EnsureGlobalInitialized();
+    EXPECT_STREQ(brpc::ChecksumTypeToCStr(RPC_AUTH_CHECKSUM_TYPE), "datasystem-rpc-ak-sk");
+}
 
 constexpr int kFactoryTestPort = 18600;
 
@@ -53,6 +66,7 @@ class BrpcFactoryTest : public ::testing::Test {
 protected:
     void SetUp() override
     {
+        BrpcChannelFactory::EnsureGlobalInitialized();
         server_ = std::make_unique<brpc::Server>();
         brpc::ServerOptions opts;
         opts.idle_timeout_sec = -1;

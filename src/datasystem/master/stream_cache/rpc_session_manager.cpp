@@ -23,10 +23,9 @@
 namespace datasystem {
 namespace master {
 
-Status RpcSessionManager::GetRpcSession(const HostPort &endPoint, std::shared_ptr<MasterWorkerSCApi> &rpcStub,
-                                        const std::shared_ptr<AkSkManager> &akSkManager)
+Status RpcSessionManager::GetRpcSession(const HostPort &endPoint, std::shared_ptr<MasterWorkerSCApi> &rpcStub)
 {
-    rpcStub = MasterWorkerSCApi::CreateMasterWorkerSCApi(endPoint, localMaster_, akSkManager, masterWorkerSvc_.get());
+    rpcStub = MasterWorkerSCApi::CreateMasterWorkerSCApi(endPoint, localMaster_, masterWorkerSvc_.get());
     return rpcStub->Init();
 }
 }  // namespace master

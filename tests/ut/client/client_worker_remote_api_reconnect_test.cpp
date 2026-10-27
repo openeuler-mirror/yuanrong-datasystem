@@ -46,6 +46,8 @@
 #include "datasystem/client/object_cache/client_worker_api/client_worker_remote_api.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/rpc/rpc_server.h"
+#include "datasystem/common/rpc/brpc_auth.h"
+#include "datasystem/protos/share_memory.auth.pb.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/rpc_util.h"
@@ -448,9 +450,9 @@ protected:
         port_ = GetFreeTcpPort();
         ASSERT_GT(port_, 0);
         ASSERT_TRUE(StartFakeWorker().IsOk());
-        signature_ = std::make_unique<Signature>();
+        signature_ = std::make_shared<Signature>();
         auto api = std::make_shared<object_cache::ClientWorkerRemoteApi>(
-            HostPort("127.0.0.1", port_), HeartbeatType::NO_HEARTBEAT, "", signature_.get());
+            HostPort("127.0.0.1", port_), HeartbeatType::NO_HEARTBEAT, "", signature_);
         ASSERT_TRUE(api->Init(kRequestTimeoutMs, kConnectTimeoutMs).IsOk());
         api_ = std::move(api);
     }
@@ -524,7 +526,7 @@ protected:
     static constexpr int32_t kRequestTimeoutMs = 5000;
     static constexpr int32_t kConnectTimeoutMs = 3000;
 
-    std::unique_ptr<Signature> signature_;
+    std::shared_ptr<Signature> signature_;
     int port_ = 0;
     std::unique_ptr<FakeWorkerOcService> ocService_;
     std::unique_ptr<FakeWorkerService> workerService_;
@@ -612,6 +614,69 @@ TEST_F(ClientWorkerRemoteApiReconnectTest, ReconnectWorkerRebuildsOcSession)
     EXPECT_EQ(workerService_->registerCount_.load(), 1u);
     EXPECT_EQ(ocService_->publishCount_.load(), 1u);
 }
+class ClientRpcCredentialOwnershipTest : public CommonTest {};
+
+class ClientRpcAuthModeProbe : public object_cache::ClientWorkerRemoteApi {
+public:
+    ClientRpcAuthModeProbe(const HostPort &host, HeartbeatType heartbeat, SensitiveValue token,
+                           const std::shared_ptr<Signature> &provider)
+        : client::IClientWorkerCommonApi(host, heartbeat, false, provider.get()),
+          object_cache::ClientWorkerRemoteApi(host, heartbeat, std::move(token), provider)
+    {
+    }
+    ClientRpcAuthModeProbe(const HostPort &host, HeartbeatType heartbeat, SensitiveValue token, Signature *provider)
+        : client::IClientWorkerCommonApi(host, heartbeat, false, provider),
+          object_cache::ClientWorkerRemoteApi(host, heartbeat, std::move(token), provider)
+    {
+    }
+    using client::ClientWorkerRemoteCommonApi::InitializeRpcAuthMode;
+    using client::ClientWorkerRemoteCommonApi::CreateRpcChannel;
+};
+
+TEST_F(ClientRpcCredentialOwnershipTest, FixedModeRejectsFirstEnableAndCloneKeepsRotationOwner)
+{
+    auto empty = std::make_shared<Signature>();
+    ClientRpcAuthModeProbe plain(HostPort("127.0.0.1", 1), HeartbeatType::NO_HEARTBEAT, "", empty);
+    ASSERT_TRUE(plain.InitializeRpcAuthMode().IsOk());
+    BrpcChannelConfig config;
+    config.endpoint = "127.0.0.1:1";
+    std::unique_ptr<brpc::Channel> plainChannel;
+    ASSERT_TRUE(plain.CreateRpcChannel(config, nullptr, nullptr, plainChannel).IsOk());
+    EXPECT_EQ(dynamic_cast<BrpcAuthChannel *>(plainChannel.get()), nullptr);
+    SensitiveValue secret("test-only-new-secret");
+    EXPECT_EQ(plain.UpdateAkSk("", secret).GetCode(), K_INVALID);
+    SensitiveValue emptySecret;
+    EXPECT_EQ(plain.UpdateAkSk("test-only-new-access", emptySecret).GetCode(), K_INVALID);
+    EXPECT_EQ(plain.UpdateAkSk("test-only-new-access", secret).GetCode(), K_NOT_SUPPORTED);
+    AkSkData snapshot;
+    ASSERT_TRUE(empty->SnapshotClientKey(snapshot).IsOk());
+    EXPECT_TRUE(snapshot.NotComplete());
+    auto plainClone = plain.CloneWith(HostPort("127.0.0.1", 2));
+    ASSERT_NE(plainClone, nullptr);
+    EXPECT_EQ(plainClone->UpdateAkSk("test-only-new-access", secret).GetCode(), K_NOT_SUPPORTED);
+
+    auto provider = std::make_shared<Signature>("test-only-old-access", SensitiveValue("test-only-old-secret"));
+    ClientRpcAuthModeProbe signedApi(HostPort("127.0.0.1", 1), HeartbeatType::NO_HEARTBEAT, "", provider);
+    ASSERT_TRUE(signedApi.InitializeRpcAuthMode().IsOk());
+    std::unique_ptr<brpc::Channel> signedChannel;
+    const auto *nativeService = google::protobuf::DescriptorPool::generated_pool()->FindServiceByName(
+        "datasystem.WorkerService");
+    ASSERT_TRUE(signedApi.CreateRpcChannel(config, nativeService, WorkerServiceAuth::descriptor(),
+                                          signedChannel).IsOk());
+    EXPECT_NE(dynamic_cast<BrpcAuthChannel *>(signedChannel.get()), nullptr);
+    auto signedClone = signedApi.CloneWith(HostPort("127.0.0.1", 2));
+    ASSERT_NE(signedClone, nullptr);
+    ASSERT_TRUE(signedClone->UpdateAkSk("test-only-new-access", secret).IsOk());
+    ASSERT_TRUE(provider->SnapshotClientKey(snapshot).IsOk());
+    EXPECT_EQ(snapshot.accessKey, "test-only-new-access");
+    EXPECT_EQ(std::string(snapshot.secretKey.GetData(), snapshot.secretKey.GetSize()),
+              std::string(secret.GetData(), secret.GetSize()));
+
+    Signature borrowed("test-only-raw-access", SensitiveValue("test-only-raw-secret"));
+    ClientRpcAuthModeProbe raw(HostPort("127.0.0.1", 1), HeartbeatType::NO_HEARTBEAT, "", &borrowed);
+    EXPECT_EQ(raw.InitializeRpcAuthMode().GetCode(), K_INVALID);
+}
+
 }  // namespace
 }  // namespace ut
 }  // namespace datasystem

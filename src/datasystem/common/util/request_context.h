@@ -83,13 +83,7 @@ struct RequestContext {
     TimeoutDuration scTimeoutDuration;
     TimeoutDuration timeoutDuration;
 
-    // Per-request auth context. Set at client SDK signature generation and consumed
-    // by authenticate.cpp / ak_sk_manager.h before any yield.
-    RpcMessage serializedMessage;
     std::string tenantId;
-    std::string reqAk;
-    std::string reqSignature;
-    uint64_t reqTimestamp = 0;
 };
 
 // Initialize the per-bthread key. Must be called once during server init.
@@ -158,15 +152,12 @@ public:
         } else {
             inheritedTraceID = Trace::Instance().GetTraceID();
         }
-        // Inherit per-request timeout/auth state from the outer context so that
+        // Inherit per-request timeout state from the outer context so that
         // nested ScopedRequestContext (created by business-layer handlers after
         // the transport-layer entry already set deadlines) does NOT reset
         // timeouts to defaults. Without this, a handler creating an inner scope
         // would read default-constructed timeouts — a regression vs the old
         // globals which were independent of ScopedRequestContext.
-        // Note: serializedMessage (RpcMessage) has deleted copy semantics, and
-        // the auth strings are consumed (std::move'd out) before business
-        // handlers create nested scopes, so they are intentionally NOT inherited.
         if (saved_ != nullptr) {
             ApiDeadline *activeDeadline = GetBthreadApiDeadline();
             if (activeDeadline != nullptr) {
@@ -177,12 +168,7 @@ public:
             ctx_.reqTimeoutDuration = saved_->reqTimeoutDuration;
             ctx_.scTimeoutDuration = saved_->scTimeoutDuration;
             ctx_.timeoutDuration = saved_->timeoutDuration;
-            // serializedMessage: not inherited (RpcMessage copy is deleted;
-            // consumed before nested scope creation)
             ctx_.tenantId = saved_->tenantId;
-            ctx_.reqAk = saved_->reqAk;
-            ctx_.reqSignature = saved_->reqSignature;
-            ctx_.reqTimestamp = saved_->reqTimestamp;
         }
         SetRequestContext(&ctx_);
         if (!inheritedTraceID.empty()) {

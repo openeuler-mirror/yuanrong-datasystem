@@ -58,7 +58,6 @@ RebalanceExecutor::RebalanceExecutor(RebalanceExecutorConfig config)
       endpointPolicy_(config.endpointPolicy),
       exitRequested_(config.exitRequested),
       ubAdmission_(config.ubAdmission),
-      akSkManager_(std::move(config.akSkManager)),
       objectTable_(std::move(config.objectTable)),
       evictionManager_(std::move(config.evictionManager)),
       apiManager_(std::move(config.apiManager)),
@@ -565,7 +564,7 @@ Status RebalanceExecutor::EnsureMigratorInitialized(
                              K_RUNTIME_ERROR, "Rebalance topology dependencies are not initialized");
     const auto migrateType = FLAGS_rebalance_keep_local_copy ? MigrateType::REBALANCE_KEEP_LOCAL : MigrateType::SPILL;
     migrator = std::make_unique<object_cache::DataMigrator>(
-        migrateType, *metadataRoute_, *membership_, *endpointPolicy_, exitRequested_, localAddress_, akSkManager_,
+        migrateType, *metadataRoute_, *membership_, *endpointPolicy_, exitRequested_, localAddress_,
         objectTable_, task.task_id(), 0);
     migrator->SetUbAdmission(ubAdmission_);
     migrator->Init();

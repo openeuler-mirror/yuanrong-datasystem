@@ -20,8 +20,8 @@
 #ifndef DATASYSTEM_MASTER_OBJECT_CACHE_MASTER_WORKER_OC_LOCAL_API_H
 #define DATASYSTEM_MASTER_OBJECT_CACHE_MASTER_WORKER_OC_LOCAL_API_H
 
+#include <shared_mutex>
 #include "datasystem/master/object_cache/master_worker_oc_api.h"
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/object_cache/safe_object.h"
 #include "datasystem/protos/worker_object.stub.rpc.pb.h"
@@ -45,10 +45,8 @@ public:
      * @brief Constructor for MasterLocalWorkerOCApi class, the remote version of the api.
      * @param[in] hostPort The address of the target worker.
      * @param[in] localHostPort The local master host port.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      */
-    explicit MasterLocalWorkerOCApi(object_cache::MasterWorkerOCServiceImpl *service, const HostPort &localHostPort,
-                                    std::shared_ptr<AkSkManager> akSkManager);
+    explicit MasterLocalWorkerOCApi(object_cache::MasterWorkerOCServiceImpl *service, const HostPort &localHostPort);
     ~MasterLocalWorkerOCApi() override = default;
     Status Init() override;
     Status PublishMeta(PublishMetaReqPb &req, PublishMetaRspPb &resp) override;

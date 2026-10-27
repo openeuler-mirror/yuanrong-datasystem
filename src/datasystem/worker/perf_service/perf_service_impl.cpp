@@ -18,7 +18,6 @@
 
 #include <string>
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/status_helper.h"
@@ -27,10 +26,7 @@
 namespace datasystem {
 Status PerfServiceImpl::GetPerfLog(const datasystem::GetPerfLogReqPb &req, datasystem::GetPerfLogRspPb &rsp)
 {
-    if (akSkManager_->SystemAuthEnabled()) {
-        CHECK_FAIL_RETURN_STATUS(!req.signature().empty(), K_NOT_AUTHORIZED, "AK/SK not provide");
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed");
-    }
+    (void)req;
     LOG(INFO) << "Start to query perf log from PerfManager";
     std::vector<std::pair<std::string, PerfInfo>> perfInfoList;
     PerfManager::Instance()->GetPerfInfoList(perfInfoList);
@@ -55,11 +51,8 @@ Status PerfServiceImpl::GetPerfLog(const datasystem::GetPerfLogReqPb &req, datas
 
 Status PerfServiceImpl::ResetPerfLog(const datasystem::ResetPerfLogReqPb &req, datasystem::ResetPerfLogRspPb &rsp)
 {
+    (void)req;
     (void)rsp;
-    if (akSkManager_->SystemAuthEnabled()) {
-        CHECK_FAIL_RETURN_STATUS(!req.signature().empty(), K_NOT_AUTHORIZED, "AK/SK not provide");
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed");
-    }
     LOG(INFO) << "Start to reset perf log from PerfManager";
     PerfManager::Instance()->ResetPerfLog();
     return Status::OK();

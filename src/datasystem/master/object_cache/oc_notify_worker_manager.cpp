@@ -95,13 +95,11 @@ struct OCNotifyWorkerManager::NotifyWorkerOpPersistenceState {
 };
 
 OCNotifyWorkerManager::OCNotifyWorkerManager(std::shared_ptr<ObjectMetaStore> objectStore, bool backendStoreExist,
-                                             std::shared_ptr<AkSkManager> akSkManager,
                                              OCMetadataManager *ocMetadataManager)
     : objectStore_(std::move(objectStore)),
       notifyWorkerOpPersistence_(std::make_unique<NotifyWorkerOpPersistenceState>()),
       interruptFlag_(false),
       backendStoreExist_(backendStoreExist),
-      akSkManager_(akSkManager),
       ocMetadataManager_(ocMetadataManager)
 {
     subscriberPrefix_ = GetStringUuid();
@@ -850,7 +848,7 @@ Status OCNotifyWorkerManager::GetMasterWorkerApi(const std::string &workerAddr,
     HostPort hostPort;
     RETURN_IF_NOT_OK(hostPort.ParseString(workerAddr));
     auto masterWorkerApi =
-        MasterWorkerOCApi::CreateMasterWorkerOCApi(hostPort, masterAddr_, akSkManager_, masterWorkerOCService_);
+        MasterWorkerOCApi::CreateMasterWorkerOCApi(hostPort, masterAddr_, masterWorkerOCService_);
     RETURN_IF_NOT_OK(masterWorkerApi->Init());
     resultApi = masterWorkerApi;
     return Status::OK();

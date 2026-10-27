@@ -48,35 +48,33 @@ namespace stream_cache {
     } while (false)
 
 // Base class methods
-WorkerMasterSCApi::WorkerMasterSCApi(const HostPort &localWorkerAddress, std::shared_ptr<AkSkManager> akSkManager)
-    : localWorkerAddress_(localWorkerAddress), akSkManager_(std::move(akSkManager))
+WorkerMasterSCApi::WorkerMasterSCApi(const HostPort &localWorkerAddress)
+    : localWorkerAddress_(localWorkerAddress)
 {
 }
 
 std::shared_ptr<WorkerMasterSCApi> WorkerMasterSCApi::CreateWorkerMasterSCApi(const HostPort &hostPort,
                                                                               const HostPort &localHostPort,
-                                                                              std::shared_ptr<AkSkManager> akSkManager,
                                                                               master::MasterSCServiceImpl *service)
 {
     if (hostPort != localHostPort) {
         LOG(INFO) << "Worker and master are not collocated. Creating a WorkerMasterSCApi as RPC-based api.";
-        return std::make_shared<WorkerRemoteMasterSCApi>(hostPort, localHostPort, akSkManager);
+        return std::make_shared<WorkerRemoteMasterSCApi>(hostPort, localHostPort);
     }
 
     if (service == nullptr) {
         LOG(INFO) << "Worker and master are collocated but the master service is not provided. Local bypass disabled.";
-        return std::make_shared<WorkerRemoteMasterSCApi>(hostPort, localHostPort, akSkManager);
+        return std::make_shared<WorkerRemoteMasterSCApi>(hostPort, localHostPort);
     }
 
     LOG(INFO) << "Worker and master are collocated. Creating a WorkerMasterSCApi with local bypass optimization.";
-    return std::make_shared<WorkerLocalMasterSCApi>(service, localHostPort, akSkManager);
+    return std::make_shared<WorkerLocalMasterSCApi>(service, localHostPort);
 }
 
 // WorkerRemoteMasterSCApi methods
 
-WorkerRemoteMasterSCApi::WorkerRemoteMasterSCApi(const HostPort &masterAddress, const HostPort &localHostPort,
-                                                 std::shared_ptr<AkSkManager> akSkManager)
-    : WorkerMasterSCApi(localHostPort, akSkManager), masterAddress_(masterAddress)
+WorkerRemoteMasterSCApi::WorkerRemoteMasterSCApi(const HostPort &masterAddress, const HostPort &localHostPort)
+    : WorkerMasterSCApi(localHostPort), masterAddress_(masterAddress)
 {
 }
 
@@ -99,7 +97,6 @@ Status WorkerRemoteMasterSCApi::CreateProducer(master::CreateProducerReqPb &req,
         opts.SetTimeout(timeout);
         RETURN_STATUS(GetStatusCodeByName(code), "inject status");
     });
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(brpcSession_->CreateProducer(opts, req, rsp));
     INJECT_POINT("worker.CreateProducer.afterSendToMaster");
 
@@ -117,7 +114,6 @@ Status WorkerRemoteMasterSCApi::CloseProducer(master::CloseProducerReqPb &req, m
         opts.SetTimeout(timeout);
         RETURN_STATUS(GetStatusCodeByName(code), "inject status");
     });
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(brpcSession_->CloseProducer(opts, req, rsp));
     INJECT_POINT("worker.CloseProducer.afterSendToMaster");
 
@@ -143,7 +139,6 @@ Status WorkerRemoteMasterSCApi::Subscribe(master::SubscribeReqPb &req, master::S
         opts.SetTimeout(0);
         return Status::OK();
     });
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(brpcSession_->Subscribe(opts, req, rsp));
     INJECT_POINT("worker.Subscribe.afterSendToMaster");
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s, C:%s] Add new consumer on master succeeded", LogPrefix(),
@@ -160,7 +155,6 @@ Status WorkerRemoteMasterSCApi::CloseConsumer(master::CloseConsumerReqPb &req, m
         opts.SetTimeout(timeout);
         RETURN_STATUS(GetStatusCodeByName(code), "inject status");
     });
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(brpcSession_->CloseConsumer(opts, req, rsp));
     INJECT_POINT("worker.CloseConsumer.afterSendToMaster");
 
@@ -173,7 +167,6 @@ Status WorkerRemoteMasterSCApi::DeleteStream(master::DeleteStreamReqPb &req, mas
 {
     RpcOptions opts;
     CHECK_AND_SET_TIMEOUT(&GetRequestContext()->scTimeoutDuration, req, opts);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(brpcSession_->DeleteStream(opts, req, rsp));
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] Delete stream succeeded.", LogPrefix(), req.stream_name());
     return Status::OK();
@@ -184,7 +177,6 @@ Status WorkerRemoteMasterSCApi::QueryGlobalProducersNum(master::QueryGlobalNumRe
 {
     RpcOptions opts;
     SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     return brpcSession_->QueryGlobalProducersNum(opts, req, rsp);
 }
 
@@ -193,7 +185,6 @@ Status WorkerRemoteMasterSCApi::QueryGlobalConsumersNum(master::QueryGlobalNumRe
 {
     RpcOptions opts;
     SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     return brpcSession_->QueryGlobalConsumersNum(opts, req, rsp);
 }
 
@@ -204,9 +195,8 @@ std::string WorkerRemoteMasterSCApi::LogPrefix() const
 
 // WorkerLocalMasterSCApi methods
 
-WorkerLocalMasterSCApi::WorkerLocalMasterSCApi(master::MasterSCServiceImpl *service, const HostPort &localHostPort,
-                                               std::shared_ptr<AkSkManager> akSkManager)
-    : WorkerMasterSCApi(localHostPort, akSkManager), masterSC_(service)
+WorkerLocalMasterSCApi::WorkerLocalMasterSCApi(master::MasterSCServiceImpl *service, const HostPort &localHostPort)
+    : WorkerMasterSCApi(localHostPort), masterSC_(service)
 {
 }
 
@@ -226,7 +216,6 @@ Status WorkerLocalMasterSCApi::CreateProducer(master::CreateProducerReqPb &req, 
         RETURN_STATUS(GetStatusCodeByName(code), "inject status");
     });
     req.set_timeout(opts.GetTimeout());
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(masterSC_->CreateProducerImpl(nullptr, req, rsp));
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] Add new pub node on master success", LogPrefix(),
                                               req.producer_meta().stream_name());
@@ -238,7 +227,6 @@ Status WorkerLocalMasterSCApi::CloseProducer(master::CloseProducerReqPb &req, ma
     RpcOptions opts;
     SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     req.set_timeout(opts.GetTimeout());
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(masterSC_->CloseProducerImpl(nullptr, req, rsp));
 
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s] Closing %d producers on master success", LogPrefix(),
@@ -251,7 +239,6 @@ Status WorkerLocalMasterSCApi::Subscribe(master::SubscribeReqPb &req, master::Su
     RpcOptions opts;
     SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     req.set_timeout(opts.GetTimeout());
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(masterSC_->SubscribeImpl(nullptr, req, rsp));
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s, C:%s] Add new consumer on master succeeded", LogPrefix(),
                                               req.consumer_meta().stream_name(), req.consumer_meta().consumer_id());
@@ -263,7 +250,6 @@ Status WorkerLocalMasterSCApi::CloseConsumer(master::CloseConsumerReqPb &req, ma
     RpcOptions opts;
     SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     req.set_timeout(opts.GetTimeout());
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(masterSC_->CloseConsumerImpl(nullptr, req, rsp));
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s, C:%s] Delete consumer on master succeeded", LogPrefix(),
                                               req.consumer_meta().stream_name(), req.consumer_meta().consumer_id());
@@ -275,7 +261,6 @@ Status WorkerLocalMasterSCApi::DeleteStream(master::DeleteStreamReqPb &req, mast
     RpcOptions opts;
     SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     req.set_timeout(opts.GetTimeout());
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(masterSC_->DeleteStream(req, rsp));
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] Delete stream succeeded.", LogPrefix(), req.stream_name());
     return Status::OK();
@@ -284,14 +269,12 @@ Status WorkerLocalMasterSCApi::DeleteStream(master::DeleteStreamReqPb &req, mast
 Status WorkerLocalMasterSCApi::QueryGlobalProducersNum(master::QueryGlobalNumReqPb &req,
                                                        master::QueryGlobalNumRsqPb &rsp)
 {
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     return masterSC_->QueryGlobalProducersNum(req, rsp);
 }
 
 Status WorkerLocalMasterSCApi::QueryGlobalConsumersNum(master::QueryGlobalNumReqPb &req,
                                                        master::QueryGlobalNumRsqPb &rsp)
 {
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     return masterSC_->QueryGlobalConsumersNum(req, rsp);
 }
 
@@ -301,17 +284,17 @@ std::string WorkerLocalMasterSCApi::LogPrefix() const
     return FormatString("WorkerMasterApi, EndPoint:%s", localWorkerAddress_.ToString());
 }
 
-WorkerMasterSCApiManager::WorkerMasterSCApiManager(HostPort &hostPort, std::shared_ptr<AkSkManager> akSkManager,
+WorkerMasterSCApiManager::WorkerMasterSCApiManager(HostPort &hostPort,
                                                    master::MasterSCServiceImpl *masterSCService,
                                                    const worker::MetadataRouteResolver &metadataRoute)
-    : WorkerMasterApiManagerBase<WorkerMasterSCApi>(hostPort, akSkManager, metadataRoute),
+    : WorkerMasterApiManagerBase<WorkerMasterSCApi>(hostPort, metadataRoute),
       masterSCService_(masterSCService)
 {
 }
 
 std::shared_ptr<WorkerMasterSCApi> WorkerMasterSCApiManager::CreateWorkerMasterApi(const HostPort &masterAddress)
 {
-    return WorkerMasterSCApi::CreateWorkerMasterSCApi(masterAddress, workerAddr_, akSkManager_, masterSCService_);
+    return WorkerMasterSCApi::CreateWorkerMasterSCApi(masterAddress, workerAddr_, masterSCService_);
 }
 }  // namespace stream_cache
 }  // namespace worker

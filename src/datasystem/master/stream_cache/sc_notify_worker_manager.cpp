@@ -37,12 +37,10 @@ namespace master {
 const size_t ASYNC_NOTIFY_THREAD_NUM = 8;
 const size_t DELETE_STREAM_THREAD_NUM = 8;
 SCNotifyWorkerManager::SCNotifyWorkerManager(std::shared_ptr<RocksStreamMetaStore> streamMetaStore,
-                                             std::shared_ptr<AkSkManager> akSkManager,
                                              std::shared_ptr<RpcSessionManager> rpcSessionManager,
                                              const cluster::MembershipEndpointView *membership,
                                              SCMetadataManager *scMetadataManager)
     : streamMetaStore_(std::move(streamMetaStore)),
-      akSkManager_(std::move(akSkManager)),
       rpcSessionManager_(std::move(rpcSessionManager)),
       topologyMembership_(membership),
       scMetadataManager_(scMetadataManager)
@@ -232,7 +230,7 @@ Status SCNotifyWorkerManager::SendNotification(const HostPort &workerAddr, Updat
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("Stream:<%s>, Dest:<%s>, UpdateTopoNotification req: %s",
                                               req.stream_name(), workerAddr.ToString(),
                                               LogHelper::IgnoreSensitive(req));
-    RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(workerAddr, masterWorkerApi, akSkManager_));
+    RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(workerAddr, masterWorkerApi));
     Status status = masterWorkerApi->UpdateTopoNotification(req);
     LOG(INFO) << FormatString("Stream:<%s>, Dest:<%s>, UpdateTopoNotification result: %s", req.stream_name(),
                               workerAddr.ToString(), status.GetMsg());

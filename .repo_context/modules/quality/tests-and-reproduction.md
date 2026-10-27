@@ -64,6 +64,7 @@
 | `tests/python` | Python unittest suites | `scripts/build_cmake.sh` runs `python3 -m unittest` from this directory after packaging and starting services. |
 | `tests/benchmark` | Python benchmark script area | Contains standalone benchmark scripts, not part of CTest registration. |
 | `tests/kvconnector` | External connector patch/test material | Contains versioned patch/deploy/benchmark material, not part of the main CMake gtest tree. |
+| `tests/ut/common/rpc/brpc_auth_test.cpp` | Raw-byte authentication and generic RPC admission | CMake `ds_ut`, CTest `BrpcAuthTest.*`; Bazel `//tests/ut/common/rpc:brpc_auth_test`. One component case covers cross-schema bytes, one encoding with NONE/GZIP, bad MAC and unsigned rejection through both service names; separate existing Worker ST verifies production adapters. |
 
 - Verified current C++ source scale:
   - `tests/ut`: 197 `.cpp` files, grouped under `client`, `common`, `master`, and `worker`.
@@ -701,3 +702,30 @@ Each collect additionally archives reproduction configuration: Client copies onl
 Collection CLIs no longer expose compression or extraction switches. Ordinary Kubernetes collection retains uncompressed tar transfer and local extraction; ordinary SSH Client collection retains gzip/SCP and local extraction; ordinary localhost Client collection copies files. Filename/keyword/uncompressed-only filtering retains gzip transfer and local extraction. Matching compressed source logs remain included unless `--uncompressed-only` is set. Internal archive helpers and their tests retain support for explicit archive options. Validate CLI rejection and archive behavior with `tests/kvtest/tests/python/test_collect_compression.py` plus the existing collect/deploy suites. No service hot path, concurrency policy, or persisted service format is changed. Rollback restores the CLI argument definitions and documentation; callers using removed flags must omit them.
 
 Host selection is opt-in through `--host-filter` JSON (`include`/`exclude` arrays) only, with exclusion priority; selection precedes prefixes and batching. Kubernetes Client selection reads live HostIP once per namespace; excluded targets receive no remote collection calls. Invalid selectors fail closed. Targets with unavailable host IP are skipped with a diagnostic warning; no stale Kubernetes host IP fallback is used. Empty selection fails and API query errors still abort collection. Defaults remain unchanged. See `config/collect_hosts.json.example` under kvtest and regression suite `test_collect_targets.py` (synthetic 500-target coverage and mocked Worker/Client ordering).
+
+
+
+- `ClientRpcCredentialOwnershipTest.FixedModeRejectsFirstEnableAndCloneKeepsRotationOwner` 检查固定模式、空 key 错误优先级与 Clone 后的 provider 配对。冷注册回归 `BrpcColdInitializationTest.PlainChannelRegistersCaptureBeforeAuthenticatedUse` 应通过精确 filter 的独立测试进程执行；混跑时其他认证测试可能已先注册，不能据此声称验证了首次初始化时机。这些用例应针对待交付的精简实现执行；旧大实现 `5b2a0d1c9` 的结果只属历史证据，不能代替当前实现回归。性能与旧二进制混部未实测。
+
+- `OcRpcAuthIntegrationTest.*` / `OcRpcAuthOffIntegrationTest.*` replace the obsolete skipped PB-signature compatibility
+  suite in `tests/st/client/object_cache/oc_auth_compatibility_test.cpp`. CMake uses `ds_st_object_cache`; rebuild
+  `datasystem_worker_bin` with it. Bazel has the explicit manual `oc_auth_compatibility_test` target. Tests cover
+  cross-worker writes/reads and invalid/valid key rotation on ON, plus ordinary operation after rejected first enable
+  on OFF. Existing system/tenant credentials and `authorization_enable` select the startup path; the OFF fixture clears
+  its keys. No additional worker flag or test-only mode setting is required.
+
+- RPC auth reduction regression: `AuthenticateTest.RpcEntryKeepsBodyCredentialsUntrustedAndPreservesHeartbeatException`
+  reuses the existing tenant test target to reject forged wire identity and missing capture at the RPC entry, preserving
+  restart heartbeat exemption while denying its marker if the session reappears. The same case also exercises real loopback
+  capture/Channel/production tenant admission with mocked IAM/session boundaries, checking session tenant selection,
+  tenant mismatch, bad MAC rejection without a token, and token priority. This is not an external IAM-service integration
+  test. Per-method facade-only tests and the
+  standalone manual feasibility probe were removed together with those implementations. Historical probe results
+  are not evidence for the current reduced implementation.
+
+- Existing RPC auth regression fixtures must pass shared credential providers to remote client APIs. Initialize signed
+  mesh stub caches with their provider before Coordinator topology helpers can select ordinary creators; preserve
+  the same provider owner across repeated fixture setup in a process. WorkerRpcClient DoInvoke mocks capture business
+  PB before Channel serialization, so their assertions cover body fields, dispatch and timeouts without expecting
+  PB signatures. Embedded OFF fixtures must also use ordinary cross-process clients. Regression coverage reuses the
+  existing ListenWorker, Master/KV metadata, Hetero, RemotePush, DeadPeer and embedded cases; no new cases are needed.

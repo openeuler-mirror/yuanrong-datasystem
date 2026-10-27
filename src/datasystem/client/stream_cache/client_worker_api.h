@@ -59,6 +59,8 @@ public:
      */
     ClientWorkerApi(const HostPort &hostPort, SensitiveValue token = "",
                     Signature *signature = nullptr, std::string tenantId = "");
+    ClientWorkerApi(const HostPort &hostPort, SensitiveValue token, std::shared_ptr<Signature> signature,
+                    std::string tenantId = "");
 
     /**
      * @brief Initialize the ClientWorkerApi Object.

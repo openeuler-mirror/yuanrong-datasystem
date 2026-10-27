@@ -16,6 +16,9 @@
  */
 #include "datasystem/master/stream_cache/sc_migrate_metadata_manager.h"
 
+#include "datasystem/common/rpc/brpc_auth.h"
+#include "datasystem/protos/master_stream.auth.pb.h"
+
 #include <algorithm>
 #include <exception>
 
@@ -63,7 +66,20 @@ Status MasterMasterSCApi::Init()
     cfg.endpoint = destHostPort_.ToString();
     cfg.timeout_ms = scMigrateTimeoutMs;
     cfg.connect_timeout_ms = scMigrateTimeoutMs;
-    channel_ = std::shared_ptr<brpc::Channel>(BrpcChannelFactory::Create(cfg));
+    AkSkData key;
+    RETURN_IF_NOT_OK(akSkManager_->SnapshotClientKey(key));
+    std::unique_ptr<brpc::Channel> created;
+    if (key.NotComplete()) {
+        created = BrpcChannelFactory::Create(cfg);
+    } else {
+        RpcSigningBinding binding;
+        binding.credentials = akSkManager_;
+        const auto *service = google::protobuf::DescriptorPool::generated_pool()->FindServiceByName(
+            "datasystem.master.MasterSCService");
+        RETURN_IF_NOT_OK(RpcMethodMap::Create({{service, master::MasterSCServiceAuth::descriptor()}}, binding.methods));
+        RETURN_IF_NOT_OK(CreateBrpcAuthChannel(cfg, std::move(binding), created));
+    }
+    channel_ = std::move(created);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(channel_ != nullptr, K_RPC_UNAVAILABLE,
                                          FormatString("Failed to init brpc channel to %s", destHostPort_.ToString()));
     rpcSession_ = std::make_shared<master::MasterSCService_BrpcGenericStub>(channel_.get(), scMigrateTimeoutMs);
@@ -384,19 +400,9 @@ Status SCMigrateMetadataManager::BatchMigrateMetadata(
         sleep(delay_s);
         return Status::OK();
     });
-    auto copyReq = req;
-    for (auto &metadata : *copyReq.mutable_stream_metas()) {
-        metadata.clear_notifications();
-    }
     MigrateSCMetadataRspPb rsp;
     auto sendStatus = CheckTopologyExecution(info);
     if (sendStatus.IsOk()) {
-        sendStatus = akSkManager_->GenerateSignature(copyReq);
-    }
-    if (sendStatus.IsOk()) {
-        req.set_access_key(copyReq.access_key());
-        req.set_timestamp(copyReq.timestamp());
-        req.set_signature(copyReq.signature());
         sendStatus = api->MigrateSCMetadata(req, rsp);
     }
     if (sendStatus.IsOk()) {

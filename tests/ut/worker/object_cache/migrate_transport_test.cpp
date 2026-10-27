@@ -61,7 +61,7 @@ TEST(MigrateTransportTest, CollectsOnlyMatchingAggregateHealthSidecar)
 {
     const HostPort remote("127.0.0.1", 18889);
     auto req = MakeEmptyRequest();
-    req.api = std::make_shared<WorkerRemoteWorkerOCApi>(remote, HostPort("127.0.0.1", 18888), nullptr);
+    req.api = std::make_shared<WorkerRemoteWorkerOCApi>(remote, HostPort("127.0.0.1", 18888));
     UbHealthSummary summary;
     summary.worker = remote;
     summary.incarnation = "remote-incarnation";

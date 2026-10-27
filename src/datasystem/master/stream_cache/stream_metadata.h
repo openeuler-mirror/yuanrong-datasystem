@@ -17,6 +17,7 @@
 #ifndef DATASYSTEM_MASTER_STREAM_CACHE_STREAM_METADATA_H
 #define DATASYSTEM_MASTER_STREAM_CACHE_STREAM_METADATA_H
 
+#include <shared_mutex>
 #include <algorithm>
 #include <memory>
 #include <mutex>
@@ -44,7 +45,7 @@ using RocksStreamMetaStore = stream_cache::RocksStreamMetaStore;
 class StreamMetadata : public std::enable_shared_from_this<StreamMetadata> {
 public:
     StreamMetadata(std::string streamName, const StreamFields &streamFields, RocksStreamMetaStore *streamMetaStore,
-                   std::shared_ptr<AkSkManager> akSkManager, std::shared_ptr<RpcSessionManager> rpcSessionManager,
+                   std::shared_ptr<RpcSessionManager> rpcSessionManager,
                    const cluster::MembershipEndpointView *membership, SCNotifyWorkerManager *notifyWorkerManager);
 
     ~StreamMetadata();
@@ -512,7 +513,6 @@ private:
     std::unique_ptr<TopologyManager> topoManager_;
     RocksStreamMetaStore *streamStore_;
     bool alive_;
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::shared_ptr<RpcSessionManager> rpcSessionManager_{ nullptr };
     RetainDataState retainData_;
     const cluster::MembershipEndpointView *topologyMembership_{ nullptr };

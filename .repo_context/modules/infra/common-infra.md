@@ -54,8 +54,8 @@
 
 | Subdomain               | Verified role                                                                    | Build facts                                                                          |
 | ----------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `rpc`                   | RPC plumbing plus code generation plugins and ZMQ-based transport implementation | builds rpc plugins, `common_rpc_zmq`, `common_rpc_zmq_client`, `rpc_stub_cache_mgr`  |
-| `shared_memory`         | shared-memory allocator, arena, mmap abstractions                                 | builds `common_shared_memory` and `common_shm_unit_info`                             |
+| `rpc`                   | RPC plumbing, generation plugins and the current BRPC transport | builds `rpc_plugin` / `zmq_plugin`, `common_rpc_zmq`, `common_rpc_zmq_client`, `rpc_stub_cache_mgr`; CMake keeps historical zmq target names (`rpc/CMakeLists.txt`), while Bazel exposes BRPC-specific components (`rpc/BUILD.bazel`) |
+| `shared_memory`         | shared-memory allocator, arena, mmap abstractions         | builds `common_shared_memory` and `common_shm_unit_info`                             |
 | `memory`                | reusable process-memory diagnostics                                               | builds `jemalloc_stats_bvar`; roles link and own it explicitly                       |
 | `kvstore`               | metadata/backend storage families                                                | split into `etcd`, `metastore`, `rocksdb`                                            |
 | `log`                   | logging, access recording, tracing, failure handling                             | builds `common_log`                                                                  |
@@ -113,7 +113,21 @@ Detailed follow-up docs now exist for:
   - `memory/jemalloc_stats_bvar` reads process-level jemalloc stats through `mallctl` and exposes cached bvars. It does
     not use the prefixed allocator owned by `shared_memory`, does not create a collection thread or write files, and
     remains inactive unless an owning process explicitly constructs it.
-  - `rpc` contains both generation tooling and the main ZMQ transport implementation.
+  - `rpc` contains generation tooling and BRPC transport. `brpc_factory.cpp`, `rpc_server.cpp` and the BRPC client/server adapters are the current transport entrypoints; historical zmq library/plugin names in CMake are not evidence of an active ZMQ request path. Verify against `rpc/CMakeLists.txt` and `rpc/BUILD.bazel` before selecting build targets.
+  - `rpc/brpc_auth.*` signs the original serializer output once and wraps existing native BRPC adapters in a
+    generic `BrpcAuthService` only when authentication is enabled. `brpc_auth_capture.*` owns Controller-bound
+    capture and checksum 1004. The receiving entry verifies MAC before dispatch; no auth identity uses TLS or
+    RequestContext. Native OFF adapters remain direct. PB re-encoding signing/verification and auth context fields
+    are removed; IAM string signing remains. All requests, including SC migration notifications, authenticate the
+    complete encoded body through the same digest helper; no field projection or method-specific compression rule is used.
+  - Raw-byte RPC authentication uses only `GetSignatureFromDigest` / `VerifySignatureFromDigest`; the obsolete
+    `GetSignature` / `VerifySignatureAndTimestamp` chain is removed, including its test-only subclass. Business RPC
+    APIs, peer services, migration/metadata managers and liveness checks no longer retain or forward unused credentials.
+    Cached mesh channels own the provider through `RpcStubCacheMgr::Init`; IAM string signing and tenant permission
+    managers retain their active credentials. Existing algorithm tests use fixed vectors rather than a deprecated API.
+  - The RPC plugin emits companion `.auth.proto` files compiled by standard protoc. Both original and Auth names
+    register the same generic authentication wrapper over one native adapter when ON. OFF registers only the native
+    adapter. There are no per-service AuthAdapter/Dispatcher variants or separate business body include files.
   - `ScopedBthreadLocal<T>` exposes materializing access only through `Get()`, `operator->`, `operator*`, assignment, and conversion. Its non-materializing existing-value lookup is a private implementation helper used only by `Get()`; no production or test caller consumes a public `Peek()` API. This API contraction does not change key creation, per-execution-context allocation, locking, or value lifetime behavior.
   - `PreExpandFdPool` is a shared process-once startup helper used by the Object SDK and Worker. It briefly opens and
     closes `/dev/null` descriptors without changing process limits. `DATASYSTEM_FD_POOL_PREWARM_SIZE` supplies the
@@ -407,3 +421,10 @@ When this document gets too large, split it in this order:
   yield inside patched TBB operations; a waiting iterator writer must not spin a bthread worker pthread.
 - `SafeObjectTest.TableIterationContentionPreservesBthreadProgress` checks that contended inserts leave the
   bthread scheduler able to execute independent work before the iterator releases the table fence.
+
+- RPC 原字节认证捕获在 `common/rpc/brpc_auth_capture.*`，所有请求均计算完整正文摘要。
+  认证入口没有 proof、密钥表为空或 AK 未知时拒绝；OFF 由冷初始化选择原生服务，不能用空密钥表放行。
+  capture 在复制字段和计算正文摘要前限制 AK 为 1–1024 字节、签名为 65 字节、时间戳为 1–20 字节。
+  checksum 1004 在 `BrpcChannelFactory::EnsureGlobalInitialized` 中冷注册；`RpcServer::StartBrpcServer`
+  在开始接收前进入同一入口。普通请求没有新增注册调用或认证捕获；普通冷启动新增一次注册。
+  `brpc_auth.*` 保留方法映射、签名 Channel 和摘要验签。性能及旧二进制混部未实测。

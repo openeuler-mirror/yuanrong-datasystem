@@ -21,7 +21,6 @@
 #include <string_view>
 #include <utility>
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
@@ -40,17 +39,16 @@ public:
     /**
      * @brief Construct a manager with its metadata resolver bound once.
      * @param[in] hostPort Local Worker address that outlives this manager.
-     * @param[in] manager Shared authentication manager.
      * @param[in] routeResolver Metadata resolver that outlives this manager.
      */
-    WorkerMasterApiManagerBase(HostPort &hostPort, std::shared_ptr<AkSkManager> manager,
+    WorkerMasterApiManagerBase(HostPort &hostPort,
                                const MetadataRouteResolver &routeResolver)
-        : workerAddr_(hostPort), akSkManager_(std::move(manager)), routeResolver_(routeResolver)
+        : workerAddr_(hostPort), routeResolver_(routeResolver)
     {
     }
 
     /**
-     * @brief Release non-owned route dependencies and shared authentication state.
+     * @brief Release non-owned route dependencies.
      */
     virtual ~WorkerMasterApiManagerBase() = default;
 
@@ -140,7 +138,6 @@ public:
 
 protected:
     HostPort &workerAddr_;
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     // Required non-owning resolver used by the key-only route; its owner must outlive this manager.
     const MetadataRouteResolver &routeResolver_;
 };

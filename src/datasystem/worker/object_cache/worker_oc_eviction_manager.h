@@ -38,7 +38,6 @@
 
 #include <tbb/concurrent_hash_map.h>
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/object_base.h"
@@ -132,11 +131,9 @@ public:
     /**
      * @brief Initialize the WorkerOcEvictionManager Object.
      * @param[in] gRefTable Global ref count table.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      * @return Status of the call.
      */
-    Status Init(const std::shared_ptr<ObjectGlobalRefTable<ClientKey>> &gRefTable,
-                std::shared_ptr<AkSkManager> akSkManager);
+    Status Init(const std::shared_ptr<ObjectGlobalRefTable<ClientKey>> &gRefTable);
 
     /**
      * @brief Install the worker-local policy state store and restore last-good state.
@@ -1460,7 +1457,6 @@ private:
     std::mutex pendingForceMutex_;
     std::optional<PendingForceNeed> pendingForceNeed_;
     master::MasterOCServiceImpl *masterOc_;
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     const worker::MetadataRouteResolver &metadataRoute_;
     std::atomic<bool> scheduleEvictionRunning_{ false };
     std::unique_ptr<ThreadPool> scheduleEvictThreadPool_{ nullptr };

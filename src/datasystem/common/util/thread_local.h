@@ -46,7 +46,7 @@ namespace datasystem {
 
 // The 8 per-request variables formerly declared here now live as fields of
 // RequestContext. Access them via GetRequestContext()->xxxTimeoutDuration /
-// ->serializedMessage / ->tenantId / ->reqAk / ->reqSignature / ->reqTimestamp
+// ->tenantId
 // (see common/util/request_context.h). ScopedBthreadLocal<T> is retained as a
 // standalone template for direct unit testing (tests/ut/common/rpc/bthread_local_test.cpp).
 

@@ -423,9 +423,9 @@ TEST_F(ObjectClientGetMetaNoTenantAuthTest, GetLocations)
 TEST_F(ObjectClientGetMetaNoTenantAuthTest, GetFailed)
 {
     std::shared_ptr<ObjectClient> client0;
-    InitTestClient(0, client0);
+    InitTestClient(0, client0, [](ConnectOptions &opts) { opts.SetAkSkAuth("", "", ""); });
     std::shared_ptr<ObjectClient> client1;
-    InitTestClient(1, client1);
+    InitTestClient(1, client1, [](ConnectOptions &opts) { opts.SetAkSkAuth("", "", ""); });
 
     // Deterministic hash-routing keys: objectKey0 → worker 0, objectKey1 → worker 1
     std::string objectKey0 = ObjectKeyHashTo(0);

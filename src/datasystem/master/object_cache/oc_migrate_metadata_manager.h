@@ -29,7 +29,6 @@
 #include <tbb/concurrent_hash_map.h>
 
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
@@ -86,12 +85,11 @@ public:
     /**
      * @brief Initialization.
      * @param[in] localHostPort The local worker rpc service host port.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] membership Process-local membership and endpoint view.
      * @param[in] metadataManagerHolder The metadata manager holder.
      * @return Status of the call.
      */
-    Status Init(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager,
+    Status Init(const HostPort &localHostPort,
                 const cluster::MembershipEndpointView *membership, MetadataManagerHolder *metadataManagerHolder,
                 MetadataRpcObserver metadataRpcObserver = {});
 
@@ -385,7 +383,6 @@ private:
 #endif
 
     HostPort localHostPort_;
-    std::shared_ptr<AkSkManager> akSkManager_;
     mutable std::shared_mutex topologyMembershipMutex_;
     const cluster::MembershipEndpointView *topologyMembership_{ nullptr };
     std::unique_ptr<ThreadPool> threadPool_;

@@ -33,7 +33,6 @@ public:
         objectStore_ = std::make_shared<master::ObjectMetaStore>(rocksStore_.get(), nullptr);
         objectStore_->Init();
         hostPort_.ParseString("127.0.0.1:30001");
-        akSkManager_ = std::make_shared<AkSkManager>(0);
     }
     static void AsyncUpdateLocationFunc(UpdateLocationTask &&task)
     {
@@ -43,7 +42,6 @@ public:
     std::shared_ptr<RocksStore> rocksStore_;
     std::shared_ptr<master::ObjectMetaStore> objectStore_;
     HostPort hostPort_;
-    std::shared_ptr<AkSkManager> akSkManager_;
 };
 
 class OCMetadataManagerHelper : public master::OCMetadataManager {
@@ -124,7 +122,7 @@ TEST_F(AsyncUpdateLocationTest, TestAddTask)
 TEST_F(AsyncUpdateLocationTest, AddAndLoadLocations)
 {
     auto ocMetaManager = std::make_shared<OCMetadataManagerHelper>(
-        akSkManager_, rocksStore_.get(), nullptr, nullptr, "127.0.0.1:900", nullptr, nullptr, "",
+        rocksStore_.get(), nullptr, nullptr, "127.0.0.1:900", nullptr, nullptr, "",
         nullptr, "locationDbName", false);
     DS_ASSERT_OK(objectStore_->Init());
     std::string key1 = "test_object_key1";
@@ -208,7 +206,7 @@ TEST_F(AsyncUpdateLocationTest, TopologyNotReadyDoesNotBlockLocationRecovery)
     cluster::TopologySnapshotState snapshots;
     cluster::MembershipEndpointView membership(snapshots);
     auto ocMetaManager = std::make_shared<OCMetadataManagerHelper>(
-        akSkManager_, rocksStore_.get(), nullptr, nullptr, "127.0.0.1:900", nullptr, &membership,
+        rocksStore_.get(), nullptr, nullptr, "127.0.0.1:900", nullptr, &membership,
         "", nullptr, "locationDbName", false);
     std::unordered_map<std::string, std::vector<std::pair<std::string, master::AckState>>> locations;
 

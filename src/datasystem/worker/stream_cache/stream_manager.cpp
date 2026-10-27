@@ -59,14 +59,13 @@ template Status StreamManager::HandleBlockedRequestImpl(
     std::shared_ptr<BlockedCreateRequest<CreateShmPageRspPb, CreateShmPageReqPb>> &&blockedReq, bool lock);
 
 StreamManager::StreamManager(std::string streamName, RemoteWorkerManager *remoteWorkerManager,
-                             std::string localWorkerAddr, std::shared_ptr<AkSkManager> akSkManager,
+                             std::string localWorkerAddr,
                              std::weak_ptr<ClientWorkerSCServiceImpl> scSvc,
                              std::shared_ptr<WorkerSCAllocateMemory> manager,
                              std::weak_ptr<WorkerWorkerSCServiceImpl> workerWorkerSCService, uint64_t localStreamNum)
     : workerAddr_(std::move(localWorkerAddr)),
       streamName_(std::move(streamName)),
       remoteWorkerManager_(remoteWorkerManager),
-      akSkManager_(std::move(akSkManager)),
       scSvc_(std::move(scSvc)),
       lastAckCursor_(0),
       wakeupPendingRecvOnProdFault_(false),
@@ -1290,7 +1289,6 @@ Status StreamManager::SendBlockProducerReq(const std::string &remoteWorkerAddr)
     RpcOptions opts;
     SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     req.set_timeout(opts.GetTimeout());
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     // Send only. No need to wait for any reply, and let clientApi goes out of scope by itself.
     RETURN_IF_NOT_OK(clientApi->Write(req));
     // Wait for the reply to ensure ordering
@@ -1373,7 +1371,6 @@ Status StreamManager::SendUnBlockProducerReq(const std::string &remoteWorkerAddr
     UnblockProducerReqPb req;
     req.set_stream_name(streamName_);
     req.set_worker_addr(workerAddr_);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     // Wait for the reply to ensure ordering
     RETURN_IF_NOT_OK(clientApi->Write(req));
     UnblockProducerRspPb rsp;

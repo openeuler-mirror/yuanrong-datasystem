@@ -383,8 +383,7 @@ void WorkerOcEvictionManager::EndTrackedPolicyMutation()
     policyMutationWriters_.fetch_sub(1, std::memory_order_acq_rel);
 }
 
-Status WorkerOcEvictionManager::Init(const std::shared_ptr<ObjectGlobalRefTable<ClientKey>> &gRefTable,
-                                     std::shared_ptr<AkSkManager> akSkManager)
+Status WorkerOcEvictionManager::Init(const std::shared_ptr<ObjectGlobalRefTable<ClientKey>> &gRefTable)
 {
     RETURN_IF_EXCEPTION_OCCURS(memEvictTaskThreadPool_ =
                                    std::make_unique<ThreadPool>(MEM_EVICT_THREAD_NUM, 0, "MemEvictionThread"));
@@ -400,7 +399,6 @@ Status WorkerOcEvictionManager::Init(const std::shared_ptr<ObjectGlobalRefTable<
     spillTaskThreadPool_->SetWarnLevel(ThreadPool::WarnLevel::LOW);
     RETURN_IF_NOT_OK(WorkerOcSpill::Instance()->Init());
     gRefTable_ = gRefTable;
-    akSkManager_ = std::move(akSkManager);
     scheduleEvictionRunning_.store(true, std::memory_order_release);
     scheduleEvictThreadPool_->Submit([this]() {
         Trace::Instance().SetTraceNewID(Trace::GenerateComponentTraceId("EvictionTimer"), true);
@@ -916,7 +914,7 @@ Status WorkerOcEvictionManager::RemoveEvictionMetaOnce(const HostPort &masterAdd
 {
     CHECK_FAIL_RETURN_STATUS(!masterAddr.Empty(), K_NOT_FOUND, "Cannot find master for eviction remove-meta.");
     auto workerMasterApi =
-        worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(masterAddr, localAddress_, akSkManager_, masterOc_);
+        worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(masterAddr, localAddress_, masterOc_);
     RETURN_IF_NOT_OK(workerMasterApi->Init());
     auto req = BuildEvictionRemoveMetaReq(objectKeys, objectKeyVersions, localAddress_, allowRedirect);
     return workerMasterApi->RemoveMeta(req, rsp);
@@ -2615,7 +2613,7 @@ Status WorkerOcEvictionManager::DeleteAllCopyMetaOnce(const HostPort &masterAddr
 {
     CHECK_FAIL_RETURN_STATUS(!masterAddr.Empty(), K_NOT_FOUND, "Cannot find master for DeleteAllCopyMeta.");
     auto workerMasterApi =
-        worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(masterAddr, localAddress_, akSkManager_, masterOc_);
+        worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(masterAddr, localAddress_, masterOc_);
     RETURN_IF_NOT_OK(workerMasterApi->Init());
     return workerMasterApi->DeleteAllCopyMeta(req, rsp);
 }
