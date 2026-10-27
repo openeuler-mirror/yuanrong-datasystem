@@ -132,11 +132,11 @@ public:
     ///         the metadata-header configuration.
     ///
     /// Acquires the read latch when the underlying lock is supported, invokes
-    /// `copyFn`, then releases the latch. When the buffer was created with the
-    /// metadata header disabled (DisabledLock — `oc_metadata_header=false`),
-    /// the shm layout has no lock frame and the read latch is not required for
-    /// safe reads, so `copyFn` is invoked without latching. All other latch
-    /// errors are surfaced to the caller.
+    /// `copyFn`, then releases the latch. When the buffer comes from a shm layout
+    /// without a metadata header (DisabledLock — legacy worker configuration or
+    /// transport-layer buffer), the shm layout has no lock frame and the read
+    /// latch is not required for safe reads, so `copyFn` is invoked without
+    /// latching. All other latch errors are surfaced to the caller.
     ///
     /// The public Buffer::RLatch() entry point is intentionally unaffected and
     /// still returns K_NOT_SUPPORTED for DisabledLock — explicit user calls keep

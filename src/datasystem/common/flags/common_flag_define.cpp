@@ -103,7 +103,7 @@ DS_DEFINE_uint32(ub_numa_src_chip_policy, 1,
 DS_DEFINE_uint32(ub_numa_inflight_wr_diff_threshold, 15,
                  "Maximum allowed difference between source-chip inflight WR counts before selecting the less busy "
                  "chip. Set to 0 to disable inflight feedback and preserve pure round-robin selection.");
-DS_DEFINE_string(shared_memory_distribution_policy, "none",
+DS_DEFINE_string(shared_memory_distribution_policy, "interleave_all_numa",
                  "Shared memory NUMA distribution policy. Optional values: "
                  "'none', 'interleave_all_numa', 'interleave_affinity_numa'.");
 DS_DEFINE_bool(urma_event_mode, false, "Uses interrupt mode to poll completion events.");

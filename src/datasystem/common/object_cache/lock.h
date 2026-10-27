@@ -87,7 +87,8 @@ public:
      * @brief Whether this lock implementation actually enforces latch semantics.
      *
      * Default true. Returns false for placeholder implementations (e.g. DisabledLock
-     * installed when oc_metadata_header is off) where the shm layout has no lock
+     * installed for shm layouts without a metadata header, such as transport-layer
+     * buffers or legacy-worker buffers) where the shm layout has no lock
      * frame. SDK-internal Get-and-copy paths use this to skip latch acquisition
      * while still presenting K_NOT_SUPPORTED to explicit Buffer::RLatch() callers.
      */
@@ -256,11 +257,11 @@ public:
     ~DisabledLock() override = default;
     Status WLatch(uint64_t) override
     {
-        return Status(StatusCode::K_NOT_SUPPORTED, "Shm latch unavailable: oc_metadata_header is disabled.");
+        return Status(StatusCode::K_NOT_SUPPORTED, "Shm latch unavailable: no metadata header in shm layout.");
     }
     Status RLatch(uint64_t) override
     {
-        return Status(StatusCode::K_NOT_SUPPORTED, "Shm latch unavailable: oc_metadata_header is disabled.");
+        return Status(StatusCode::K_NOT_SUPPORTED, "Shm latch unavailable: no metadata header in shm layout.");
     }
     bool TryRLatch() override { return false; }
     void UnWLatch() override {}

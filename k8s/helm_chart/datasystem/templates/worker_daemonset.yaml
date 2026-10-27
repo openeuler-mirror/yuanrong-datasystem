@@ -123,7 +123,6 @@ spec:
         - -sc_regular_socket_num={{ $.Values.global.rpc.scRegularSocketNum }}
         - -sc_stream_socket_num={{ $.Values.global.rpc.scStreamSocketNum }}
         - -enable_huge_tlb={{ $.Values.global.performance.enableHugeTlb }}
-        - -oc_metadata_header={{ $.Values.global.performance.enableOcMetadataHeader }}
         - -enable_fallocate={{ $.Values.global.performance.enableFallocate }}
         - -authorization_enable={{ $.Values.global.tenantAuth.authorizationEnable }}
         - -yuanrong_iam_url={{ $.Values.global.tenantAuth.yuanrong.yuanrongIamUrl }}
@@ -237,7 +236,6 @@ spec:
         - -async_delete={{ $.Values.global.performance.asyncDelete}}
         - -arena_per_tenant={{ $.Values.global.performance.arenaPerTenant }}
         - -shared_memory_populate={{ $.Values.global.performance.sharedMemoryPopulate }}
-        - -memory_reclamation_time_second={{ $.Values.global.performance.memoryReclamationTimeSecond }}
         - -memory_alignment={{ $.Values.global.performance.memoryAlignment }}
         - -monitor_config_file=/home/yuanrong/config/datasystem.config
         - -client_dead_timeout_s={{ $.Values.global.reliability.clientDeadTimeoutS }}
@@ -258,7 +256,6 @@ spec:
         - -enable_transport_fallback={{ $.Values.global.performance.enableTransportFallback }}
         - -urma_failover_success_rate_ratio={{ $.Values.global.performance.urmaFailoverSuccessRateRatio }}
         - -urma_failover_min_sample_count={{ $.Values.global.performance.urmaFailoverMinSampleCount }}
-        - -oc_shm_transfer_threshold_kb={{ $.Values.global.performance.ocShmTransferThresholdKB }}
         - -enable_distributed_master={{ $.Values.global.reliability.enableDistributedMaster }}
         - -enable_p2p_transfer={{ $.Values.global.performance.enableP2pTransfer }}
         - -enable_worker_worker_batch_get={{ $.Values.global.performance.enableWorkerWorkerBatchGet }}

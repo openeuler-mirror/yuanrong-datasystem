@@ -72,16 +72,18 @@ public:
         workerHostPort_ = HostPort(hostIp, port);
         opts.workerGflagParams =
             " -shared_memory_size_mb=64 -v=1 -ipc_through_shared_memory=true -node_timeout_s=1 "
-            "-heartbeat_interval_ms=500 -oc_shm_transfer_threshold_kb=100";
+            "-heartbeat_interval_ms=500";
     }
 };
 
+// The shm transfer threshold is fixed at 128 KiB; the worker must negotiate
+// exactly that value to the client.
 TEST_F(ShmWorkerTest, SHM_THRESHOLD)
 {
     auto workerApi = std::make_shared<ClientWorkerRemoteCommonApi>(workerHostPort_,
                                                               HeartbeatType::SOCKET_HEARTBEAT, "", signature_.get());
     DS_ASSERT_OK(workerApi->Init(initTimeoutMs, initTimeoutMs));
-    auto threshold = 100 * 1024u;
+    auto threshold = 128 * 1024u;
     DS_ASSERT_TRUE(workerApi->shmThreshold_, threshold);
 }
 

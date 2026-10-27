@@ -255,10 +255,6 @@
         "value": "200",
         "description": "Maximum number of clients that can be connected to a worker. Value range: [1, 10000]."
     },
-    "oc_metadata_header": {
-        "value": "true",
-        "description": "Whether to allocate metadata header for object cache shared memory. Set to false/0 to disable (shm latch/visibility will be unavailable)."
-    },
     "l2_cache_type": {
         "value": "none",
         "description": "Config the l2 cache type. Optional value: 'obs', 'sfs', 'distributed_disk', 'none'"
@@ -302,10 +298,6 @@
     "shared_memory_populate": {
         "value": "false",
         "description": "Avoiding page faults during copying improves runtime performance but may result in longer worker startup times (depending on shared_memory_size_mb)."
-    },
-    "memory_reclamation_time_second": {
-        "value": "600",
-        "description": "The memory reclamation time after free."
     },
     "async_delete": {
         "value": "false",
@@ -532,8 +524,8 @@
         "description": "This is controlled by the flag of mmap(MAP_HUGETLB) which can improve memory access and reducing the overhead of page table, default is disable."
     },
     "enable_fallocate": {
-        "value": "true",
-        "description": "Due to k8s's resource calculation policies,shared memory is sometimes multiple counted , which can lead to client crashes, Using fallocate to address this issue."
+        "value": "false",
+        "description": "Due to k8s's resource calculation policies, shared memory is sometimes multiple counted, which can lead to client crashes. Using fallocate to address this issue. The process-level default is disabled; Kubernetes deployments should enable it explicitly."
     },
     "enable_lossless_data_exit_mode": {
         "value": "false",
@@ -568,7 +560,7 @@
         "description": "Maximum allowed source-chip inflight WR difference before selecting the less busy chip. Zero disables all inflight feedback and preserves pure round-robin selection."
     },
     "shared_memory_distribution_policy": {
-        "value": "none",
+        "value": "interleave_all_numa",
         "description": "Shared memory NUMA distribution policy. Optional values: none, interleave_all_numa, interleave_affinity_numa. This option takes effect only when both enable_urma and urma_register_whole_arena are true."
     },
     "urma_send_lane_count_per_peer": {
@@ -614,10 +606,6 @@
     "enable_perf_trace_log": {
         "value": "false",
         "description": "Enable perf trace log output."
-    },
-    "oc_shm_transfer_threshold_kb": {
-        "value": "500",
-        "description": "The data threshold to transfer obj data between client and worker via shm, unit is KB"
     },
     "remote_send_thread_num": {
         "value": "8",

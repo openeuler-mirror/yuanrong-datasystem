@@ -692,7 +692,7 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, BusyGuardSelfHealProbesAfterBudgetEla
 }
 
 // Verifies the rebalance accounting-unit fix end-to-end. Standalone 1MiB objects carry a 64B metadata header
-// (default oc_metadata_header=true, max_client_num=200), so needSize=1MiB+64B and sallocx=1.25MiB (next jemalloc
+// (metadata header always on, max_client_num=200), so needSize=1MiB+64B and sallocx=1.25MiB (next jemalloc
 // size class). Before the fix, migrated_bytes counted payload (GetDataSize) while max_bytes used RealUsage
 // (salcx=1.25MiB), so the guard overshot: source undershot the midpoint and target overshot it (a ~16% gap).
 // After the fix, source and target must converge near the usage midpoint.

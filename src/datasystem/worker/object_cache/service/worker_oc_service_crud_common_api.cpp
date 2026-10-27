@@ -52,7 +52,6 @@
 #include "datasystem/common/util/uuid_generator.h"
 
 DS_DECLARE_bool(ipc_through_shared_memory);
-DS_DECLARE_uint64(oc_shm_transfer_threshold_kb);
 namespace datasystem {
 namespace object_cache {
 
@@ -448,7 +447,7 @@ bool WorkerOcServiceCrudCommonApi::ClientShmEnabled(const ClientKey &clientId)
 
 bool WorkerOcServiceCrudCommonApi::CanTransferByShm(uint64_t dataSize)
 {
-    return FLAGS_ipc_through_shared_memory && dataSize >= FLAGS_oc_shm_transfer_threshold_kb * KB;
+    return FLAGS_ipc_through_shared_memory && dataSize >= OC_SHM_TRANSFER_THRESHOLD_KB * KB;
 }
 
 bool WorkerOcServiceCrudCommonApi::ShmEnable()

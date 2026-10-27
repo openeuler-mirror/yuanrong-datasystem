@@ -375,8 +375,9 @@ Status Buffer::CopyDataWithRLatch(const std::function<Status()> &copyFn)
         RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "CopyDataWithRLatch: buffer is not initialized.");
     }
 
-    // When the buffer was created with oc_metadata_header disabled, the shm layout
-    // has no lock frame and read latching is a no-op; we still need the same
+    // When the buffer comes from a shm layout without a metadata header (legacy
+    // worker configuration), the layout has no lock frame and read latching is a
+    // no-op; we still need the same
     // CheckDeprecated/CheckVisible preconditions that Buffer::RLatch() enforces so
     // that callers do not read stale or deprecated buffers.
     const bool latchSupported = latch_->IsSupported();
