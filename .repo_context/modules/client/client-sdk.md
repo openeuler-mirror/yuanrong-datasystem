@@ -1132,3 +1132,7 @@ also enters the existing routing failure filter, which isolates the failed worke
 distinct-worker budget and API deadline bound retry. Ambiguous failures remain terminal.
 The manual Coordinator backend ST `CoordinatorWriteRedirectTest.ThreeExitingWorkersReturnLiveCandidateAndWritesSucceed`
 checks both two-step SHM Create/Publish and Set while three exiting workers are still ACTIVE in the committed ring.
+
+### SHM locality during topology recovery
+
+Automatic transport selection uses `DataPlaneManager::ResolveTransportHint` to prefer an established live SHM session when the worker hostId is missing and membership is non-draining. An immutable snapshot reuse-candidate set prevents overriding explicit remote locality or draining policy and avoids connection lookup for ordinary remote workers. The map accessor is released before the check takes an entry read lock and never closes data planes. An allocated transporter without a registered session is insufficient; draining and dead sessions are excluded. Explicit fallback hints bypass resolution, and UB write allocations retain their existing publish override. Topology publication is unchanged.

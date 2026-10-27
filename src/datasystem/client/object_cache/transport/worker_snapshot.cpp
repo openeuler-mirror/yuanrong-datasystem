@@ -74,6 +74,11 @@ Status BuildWorkerSnapshot(uint64_t ringVersion, const ::datasystem::ClusterTopo
         if (!member.second.id().empty()) {
             updated.workerIncarnations.emplace(worker, member.second.id());
         }
+        const auto hostId = hostIdMap.find(member.first);
+        if (!IsDraining(member.second.state())
+            && (hostId == hostIdMap.end() || hostId->second.empty())) {
+            updated.shmReuseCandidates.emplace(worker);
+        }
         bool sameHost = false;
         if (canPartition) {
             auto it = hostIdMap.find(member.first);

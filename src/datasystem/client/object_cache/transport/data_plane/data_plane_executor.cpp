@@ -194,7 +194,9 @@ Status DataPlaneExecutor::ExecuteFallbacks(const HostPort &workerAddr, const Ope
 Status DataPlaneExecutor::Execute(const HostPort &workerAddr, const Operation &operation, bool traceEnabled)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
-    return ExecuteImpl(workerAddr, 0, advisor_->GetTransportHint(workerAddr), operation, traceEnabled);
+    RETURN_RUNTIME_ERROR_IF_NULL(manager_);
+    const auto hint = manager_->ResolveTransportHint(workerAddr, advisor_->GetTransportHint(workerAddr));
+    return ExecuteImpl(workerAddr, 0, hint, operation, traceEnabled);
 }
 
 Status DataPlaneExecutor::ExecuteForDataLocation(const HostPort &workerAddr, uint64_t locationTopologyVersion,
@@ -203,7 +205,8 @@ Status DataPlaneExecutor::ExecuteForDataLocation(const HostPort &workerAddr, uin
 {
     if (!transportHint.has_value()) {
         RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
-        transportHint = advisor_->GetTransportHint(workerAddr);
+        RETURN_RUNTIME_ERROR_IF_NULL(manager_);
+        transportHint = manager_->ResolveTransportHint(workerAddr, advisor_->GetTransportHint(workerAddr));
     }
     return ExecuteImpl(workerAddr, locationTopologyVersion, *transportHint, operation, traceEnabled);
 }

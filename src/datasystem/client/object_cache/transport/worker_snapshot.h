@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "datasystem/common/util/net_util.h"
@@ -39,6 +40,7 @@ struct WorkerSnapshot {
     uint64_t ringVersion = 0;
     std::vector<HostPort> shmCandidateAddrs;
     std::vector<HostPort> remoteTransportAddrs;
+    std::unordered_set<HostPort> shmReuseCandidates;
     // ACTIVE GlobalFact candidates eligible to receive a client sender recovery WRITE probe.
     std::vector<HostPort> writeProbeAddrs;
     // Single-worker bootstrap snapshot published before the first complete ring; it never drives

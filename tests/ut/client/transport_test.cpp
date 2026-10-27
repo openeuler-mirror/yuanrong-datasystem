@@ -962,6 +962,11 @@ public:
         return alive && rpcClient != nullptr && rpcClient->IsAlive();
     }
 
+    bool HasEstablishedShmSession() const override
+    {
+        return establishedShmSession && IsAlive();
+    }
+
     Status Get(const DataGetRequest &input, DataGetResult &output) override
     {
         ++getCount;
@@ -1098,6 +1103,7 @@ public:
     AccessTransportKind kind = AccessTransportKind::TCP;
     std::shared_ptr<WorkerRpcClient> rpcClient;
     bool alive = true;
+    bool establishedShmSession = false;
     bool mSetPublishAttempted = true;
     bool mSetWorkerAutoRelease = false;
     int closeCount = 0;
@@ -3213,6 +3219,88 @@ TEST(DataPlaneManagerTest, ShmToUbFallbackRetainsBothTransporters)
     EXPECT_NE(firstShm, ub);
     EXPECT_EQ(manager.rpcBuildCount, 1);
     EXPECT_EQ(manager.transportBuildCount, 2);
+}
+
+TEST(DataPlaneManagerTest, EstablishedShmOverridesIncompleteTopologyHint)
+{
+    FakeDataPlaneManager manager;
+    const HostPort worker = MakeAddress(2027);
+    EXPECT_EQ(manager.ResolveTransportHint(worker, TransportHint::UB_CANDIDATE), TransportHint::UB_CANDIDATE);
+    WorkerSnapshot snapshot;
+    snapshot.ringVersion = 1;
+    snapshot.remoteTransportAddrs.push_back(worker);
+    snapshot.shmReuseCandidates.emplace(worker);
+    ASSERT_TRUE(manager.UpdateWorkerSnapshot(snapshot).IsOk());
+    std::shared_ptr<IDataTransporter> shm;
+    ASSERT_TRUE(manager.GetOrCreate(worker, TransportHint::SHM_CANDIDATE, shm).IsOk());
+    auto fake = std::static_pointer_cast<FakeTransporter>(shm);
+    EXPECT_EQ(manager.ResolveTransportHint(worker, TransportHint::UB_CANDIDATE), TransportHint::UB_CANDIDATE);
+    fake->establishedShmSession = true;
+    EXPECT_EQ(manager.ResolveTransportHint(worker, TransportHint::UB_CANDIDATE), TransportHint::SHM_CANDIDATE);
+    EXPECT_EQ(manager.ResolveTransportHint(worker, TransportHint::TCP_ONLY), TransportHint::SHM_CANDIDATE);
+    std::shared_ptr<IDataTransporter> selected;
+    ASSERT_TRUE(manager.GetOrCreate(worker,
+        manager.ResolveTransportHint(worker, TransportHint::UB_CANDIDATE), selected).IsOk());
+    EXPECT_EQ(selected, shm);
+    // Explicit fallback selection must still obtain TCP even with a live SHM session.
+    ASSERT_TRUE(manager.GetOrCreate(worker, TransportHint::TCP_ONLY, selected).IsOk());
+    EXPECT_EQ(selected->Kind(), AccessTransportKind::TCP);
+    EXPECT_EQ(fake->closeCount, 0);
+    fake->alive = false;
+    EXPECT_EQ(manager.ResolveTransportHint(worker, TransportHint::UB_CANDIDATE), TransportHint::UB_CANDIDATE);
+    EXPECT_EQ(fake->closeCount, 0);
+}
+
+TEST(DataPlaneManagerTest, DrainingAndTeardownPreventShmReuse)
+{
+    FakeDataPlaneManager manager;
+    const HostPort worker = MakeAddress(2028);
+    manager.configureTransporter = [](const HostPort &, FakeTransporter &transporter) {
+        transporter.establishedShmSession = true;
+    };
+    WorkerSnapshot snapshot;
+    snapshot.ringVersion = 1;
+    snapshot.remoteTransportAddrs.push_back(worker);
+    snapshot.shmReuseCandidates.emplace(worker);
+    ASSERT_TRUE(manager.UpdateWorkerSnapshot(snapshot).IsOk());
+    std::shared_ptr<IDataTransporter> shm;
+    ASSERT_TRUE(manager.GetOrCreate(worker, TransportHint::SHM_CANDIDATE, shm).IsOk());
+    manager.Teardown(worker);
+    EXPECT_EQ(std::static_pointer_cast<FakeTransporter>(shm)->closeCount, 1);
+    EXPECT_EQ(manager.ResolveTransportHint(worker, TransportHint::UB_CANDIDATE), TransportHint::UB_CANDIDATE);
+    ASSERT_TRUE(manager.GetOrCreate(worker, TransportHint::SHM_CANDIDATE, shm).IsOk());
+    manager.MarkShmDraining(worker);
+    EXPECT_EQ(manager.ResolveTransportHint(worker, TransportHint::UB_CANDIDATE), TransportHint::UB_CANDIDATE);
+}
+
+TEST(DataPlaneManagerTest, ShmReuseRequiresUnknownHostIdAndNonDrainingMembership)
+{
+    FakeDataPlaneManager manager;
+    const HostPort worker = MakeAddress(2031);
+    manager.configureTransporter = [](const HostPort &, FakeTransporter &transporter) {
+        transporter.establishedShmSession = true;
+    };
+    std::shared_ptr<IDataTransporter> shm;
+    ASSERT_TRUE(manager.GetOrCreate(worker, TransportHint::SHM_CANDIDATE, shm).IsOk());
+    ClusterTopologyPb ring;
+    (*ring.mutable_members())[worker.ToString()].set_state(MembershipPb::ACTIVE);
+    auto check = [&](const std::unordered_map<std::string, std::string> &hostIds, TransportHint expected) {
+        WorkerSnapshot snapshot;
+        ASSERT_TRUE(BuildWorkerSnapshot(1, ring, hostIds, "local", snapshot).IsOk());
+        ASSERT_TRUE(manager.UpdateWorkerSnapshot(snapshot).IsOk());
+        EXPECT_EQ(manager.ResolveTransportHint(worker, TransportHint::UB_CANDIDATE), expected);
+        EXPECT_EQ(std::static_pointer_cast<FakeTransporter>(shm)->closeCount, 0);
+    };
+    check({}, TransportHint::SHM_CANDIDATE);
+    manager.RecordRoutingRefresh(1);
+    EXPECT_EQ(manager.ResolveTransportHint(worker, TransportHint::UB_CANDIDATE), TransportHint::SHM_CANDIDATE);
+    check({ { worker.ToString(), "remote" } }, TransportHint::UB_CANDIDATE);
+    (*ring.mutable_members())[worker.ToString()].set_state(MembershipPb::PRE_LEAVING);
+    check({}, TransportHint::UB_CANDIDATE);
+    (*ring.mutable_members())[worker.ToString()].set_state(MembershipPb::LEAVING);
+    check({}, TransportHint::UB_CANDIDATE);
+    ring.clear_members();
+    check({}, TransportHint::UB_CANDIDATE);
 }
 
 TEST(DataPlaneManagerTest, ResetClosesRetainedShmAndUbTransporters)
@@ -11117,6 +11205,30 @@ TEST(UbTransporterTest, CloseDataPlaneWaitsForInflightSet)
 }
 
 // --- TransportLayer Create/Set tests ---
+
+TEST(TransportLayerTest, EstablishedSessionOverridesRemoteAdvisorForCreate)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    const HostPort worker = MakeAddress(2030);
+    WorkerSnapshot snapshot;
+    snapshot.ringVersion = 1;
+    snapshot.remoteTransportAddrs.push_back(worker);
+    snapshot.shmReuseCandidates.emplace(worker);
+    ASSERT_TRUE(manager->UpdateWorkerSnapshot(snapshot).IsOk());
+    std::shared_ptr<IDataTransporter> shm;
+    ASSERT_TRUE(manager->GetOrCreate(worker, TransportHint::SHM_CANDIDATE, shm).IsOk());
+    auto fake = std::static_pointer_cast<FakeTransporter>(shm);
+    auto advisor = std::make_shared<FixedTransportAdvisor>(TransportHint::TCP_ONLY);
+    TestTransportLayer layer(manager, advisor);
+    EXPECT_FALSE(layer.IsSameHostWorker(worker));
+    // A session completing after topology publication must be visible on the next request.
+    fake->establishedShmSession = true;
+    EXPECT_TRUE(layer.IsSameHostWorker(worker));
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(layer.Create(worker, "reuse-session", 64, MakeCreateParam(), buffer).IsOk());
+    EXPECT_EQ(fake->createCount, 1);
+    EXPECT_EQ(manager->transportBuildCount, 1);
+}
 
 TEST(TransportLayerTest, WorkerSnapshotCleanupIsAsyncAndCoalescesToLatest)
 {
