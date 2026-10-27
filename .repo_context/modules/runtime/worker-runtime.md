@@ -195,21 +195,22 @@
     stopping states therefore cannot publish or retain startup health from a last-good Snapshot. Serving availability
     is publicly committed before its admission callback, while non-serving callbacks retain fail-close ordering. The
     Engine availability callback closes admission only for non-serving states and posts a no-I/O request to a Worker-owned
-    coordinator. A serving notification does not transiently revoke an already published health state; when recovering
-    from isolation, the previously closed admission stays closed until the coordinator serializes health-file changes,
-    performs a fresh validation, and successfully republishes the marker. The coordinator continues low-frequency
-    single-Snapshot validation after startup, so local membership or placement loss also revokes health even without
-    another availability-level transition. The health marker is written by
-    atomic temporary-file replacement; revocation directly unlinks it and treats only `ENOENT` as idempotent success.
+    coordinator. A serving notification does not transiently revoke an already healthy process; when recovering from
+    isolation, the previously closed admission stays closed until the coordinator serializes in-process health changes
+    and performs a fresh validation. The coordinator continues low-frequency single-Snapshot validation after startup,
+    so local membership or placement loss closes in-process health even without another availability-level transition.
     The startup poll has no fixed topology deadline, so a slow ScaleOut keeps the joining process alive and externally
     unready instead of failing startup. Before each health refresh, that poll also reevaluates the restart-reconciliation
     give-up deadline; expiry can therefore open only the reconciliation gate even when no new topology snapshot arrives,
-    while committed membership and placement checks still control health publication. `ReadinessProbe`
-    owns the single service-health wait even when no ready-check path is configured; brpc mode skips only the loopback
-    RPC after health opens. SIGTERM ends that wait successfully so shutdown does not turn an in-progress startup into a
-    process failure. The ready-check file is written only
-    after committed membership, a placement probe, and Worker RPC health all succeed. No Worker-local topology
-    authority is persisted.
+    while committed membership and placement checks still control health. `ReadinessProbe` owns the single
+    service-health wait; brpc mode skips only the loopback RPC after health opens. SIGTERM ends that wait successfully
+    so shutdown does not turn an in-progress startup into a process failure. When `health_check_path` is configured,
+    `ReadinessProbe` atomically publishes one empty 0600 file only after committed membership, a placement probe, and
+    Worker RPC health all succeed. The liveness thread starts afterward and only renews the existing file's mtime after
+    successful checks. A confirmed liveness failure ages the mtime beyond `liveness_probe_timeout_s` so the next
+    external probe observes failure without consuming a second timeout window; a later successful check can renew the
+    same file before restart. Topology isolation changes in-process health and admission but never mutates this file.
+    No Worker-local topology authority is persisted.
   - Coordinator-mode witness probing uses three fixed Worker-owned loops, a bounded FIFO event queue, and an in-flight
     count. Every watch PUT contributes one independent single-target request; later target events do not cancel earlier
     work. Shutdown first rejects new probe events and clears pending work, then closes Engine watch ingress, waits for
@@ -363,8 +364,8 @@
     drain begins; Gets remain available for objects that have not migrated yet. Incoming migration admission remains a
     separate gate because failure/rejoin cleanup also closes it and must be able to resume ordinary traffic after
     reconciliation.
-    Voluntary ScaleIn continues waiting for local clients and asynchronous tasks without marking the process health file
-    unhealthy while EXITING publication proceeds. The topology data-drain callback waits for both conditions before it
+    Voluntary ScaleIn continues waiting for local clients and asynchronous tasks while EXITING publication proceeds.
+    The topology data-drain callback waits for both conditions before it
     marks data drain started, rejects any remaining direct writes, or selects the local object snapshot. It does not add
     a process-wide in-flight write fence: writes already inside their processors keep the existing request-timeout and
     migration ordering behavior. This preserves the bound-client drain contract when EXITING reaches the Coordinator

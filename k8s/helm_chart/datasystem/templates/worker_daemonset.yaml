@@ -153,9 +153,7 @@ spec:
         - -remote_send_thread_num={{ $.Values.global.rpc.remoteSendThreadNum }}
         - -master_sc_thread_num={{ $.Values.global.rpc.masterScThreadNum }}
         - -unix_domain_socket_dir={{ $.Values.global.ipc.udsDir }}
-        - -health_check_path=$(HEALTH_CHECK_PATH)
-        - -ready_check_path=$(READY_CHECK_PATH)
-        - -liveness_check_path=$(LIVENESS_CHECK_PATH)
+        - -health_check_path=$(WORKER_PROBE_PATH)
         - -oc_worker_worker_direct_port={{ $.Values.global.rpc.ocWorkerWorkerDirectPort }}
         - -batch_get_threshold_mb={{ $.Values.global.rpc.batchGetThresholdMb }}
         - -max_client_num={{ $.Values.global.resources.datasystemWorker.maxClientNum }}
@@ -291,21 +289,17 @@ spec:
             command:
               - /bin/bash
               - -c
-              - /home/yuanrong/file_check.sh startupProbe $(LIVENESS_CHECK_PATH)
+              - /home/yuanrong/file_check.sh startupProbe $(WORKER_PROBE_PATH)
           initialDelaySeconds: 5
           periodSeconds: 5
           timeoutSeconds: 5
-          {{- if gt (div (int $.Values.global.reliability.nodeDeadTimeoutS) 5) 12 }}
-          failureThreshold: {{ div (int $.Values.global.reliability.nodeDeadTimeoutS) 5 }}
-          {{- else}}
-          failureThreshold: 12
-          {{- end }}
+          failureThreshold: {{ div (add (int $.Values.global.reliability.startupProbeTimeoutS) 4) 5 }}
         readinessProbe:
           exec:
             command:
               - /bin/bash
               - -c
-              - /home/yuanrong/file_check.sh readinessProbe $(HEALTH_CHECK_PATH) $(READY_CHECK_PATH)
+              - /home/yuanrong/file_check.sh readinessProbe $(WORKER_PROBE_PATH)
           initialDelaySeconds: 1
           periodSeconds: 5
           timeoutSeconds: 5
@@ -315,7 +309,9 @@ spec:
             command:
               - /bin/bash
               - -c
-              - /home/yuanrong/liveness_check.sh -f $(LIVENESS_CHECK_PATH) -t {{ $.Values.global.reliability.livenessProbeTimeoutS }}
+              - >-
+                /home/yuanrong/liveness_check.sh -f $(WORKER_PROBE_PATH)
+                -t {{ $.Values.global.reliability.livenessProbeTimeoutS }}
           initialDelaySeconds: 1
           periodSeconds: 5
           timeoutSeconds: 5
@@ -378,12 +374,8 @@ spec:
             value: {{ $.Values.global.etcd.etcdCertDir }}
           - name: YUANRONG_IAM_DIR
             value: {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}
-          - name: HEALTH_CHECK_PATH
-            value: "/home/yuanrong/datasystem/health/healthy"
-          - name: READY_CHECK_PATH
-            value: "/home/yuanrong/datasystem/health/ready"
-          - name: LIVENESS_CHECK_PATH
-            value: "/home/yuanrong/datasystem/health/liveness"
+          - name: WORKER_PROBE_PATH
+            value: "/home/yuanrong/datasystem/health/worker"
           - name: STATUS_FILE_PATH
             value: "/home/yuanrong/datasystem/logs/worker/worker-status"
           - name: SCALE_IN_TAINT

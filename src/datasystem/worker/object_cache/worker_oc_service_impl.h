@@ -215,7 +215,7 @@ public:
     /**
      * @brief Determine whether the worker is in the startup reconciliation phase
      * (after a crash restart, g_health is not set to true but the process is running normally).
-     * @return True if starting reconciliation (when isRestart_ is true and setHealthFile_ is not set)
+     * @return True if starting reconciliation (when isRestart_ is true and startupHealthy_ is false)
      */
     bool IsStartupReconciling() const;
 
@@ -703,23 +703,19 @@ public:
     std::vector<std::string> StopAndGetAllUnfinishedObjects();
 
     /**
-     * @brief Check whether this node did a restart or not. If there is no restart, set health file. If there is,
-     * in case of centralized master, trigger reconciliation; for distributed master, do nothing.
+     * @brief Check whether this node restarted and update its in-process startup health.
      * @return K_OK on success; the error code otherwise.
      */
     Status WhetherNonRestart();
 
     /**
      * @brief Refresh startup health after reconciliation and committed topology placement become ready.
-     * @return K_OK when health is already published, newly published, or still legitimately pending; a topology or
-     *         health-file error otherwise.
-     * @note Called by the Worker startup thread. It may perform health-file I/O and must not run on a TopologyEngine
-     *       snapshot callback thread.
+     * @return K_OK when health is updated or still legitimately pending; a topology error otherwise.
      */
     Status RefreshStartupHealth();
 
     /**
-     * @brief Apply fail-close admission and asynchronously reconcile persisted health after a topology transition.
+     * @brief Apply fail-close admission and asynchronously reconcile in-process health after a topology transition.
      * @param[in] allowBusiness Whether the new topology availability permits business traffic.
      * @note Non-serving transitions close admission immediately. Serving transitions preserve current admission until
      *       the Worker-owned coordinator completes any required recovery. This path performs no file I/O and is safe to
@@ -1392,7 +1388,7 @@ private:
                       bool &isFill);
 
     /**
-     * @brief Check node table; remove "restart" tag; set health file.
+     * @brief Check node table, remove the restart tag, and update startup health.
      * @param[in] req PushMetaToWorkerReqPb request.
      * @return OK if success.
      */
@@ -1439,18 +1435,15 @@ private:
     int64_t lastReconTime_{ 0 };  // The last time when reconciliation was done.
     // Set only after CommonServer has started and WhetherNonRestart enters the Worker startup path. Topology callbacks
     // may arrive earlier and must not enable health for an RPC server that is not serving yet.
-    std::atomic<bool> healthPublicationEnabled_{ false };
+    std::atomic<bool> healthStateUpdatesEnabled_{ false };
     // True only after startup reconciliation is unnecessary or has reached its terminal handoff to topology control.
-    // Health publication additionally requires one committed local topology and a resolvable metadata placement.
+    // Health additionally requires one committed local topology and a resolvable metadata placement.
     std::atomic<bool> reconciliationReady_{ false };
-    // Serializes the cold-path health-file transaction. The publication flag is committed only after the file and
-    // process health state are updated successfully, so a failed attempt remains retryable by a later startup poll.
-    std::mutex healthPublicationMutex_;
-    // Injectable only for LLT verification of publication ordering and rollback. Production binds SetHealthProbe.
-    std::function<Status()> healthPublisher_;
-    std::atomic<bool> setHealthFile_{ false };  // Whether the worker health probe has been published.
-    // The Engine callback only updates this request state. A Worker-owned thread performs health-file I/O and
-    // periodically revalidates local membership/placement even when the availability level itself does not change.
+    // Serializes cold-path startup-health transitions with topology-driven revocation.
+    std::mutex healthStateMutex_;
+    std::atomic<bool> startupHealthy_{ false };
+    // The Engine callback only updates this request state. A Worker-owned thread updates in-process health and
+    // periodically revalidates local membership and placement when the availability level does not change.
     std::mutex topologyHealthMutex_;
     std::condition_variable topologyHealthCv_;
     uint64_t topologyHealthGeneration_{ 0 };

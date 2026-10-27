@@ -19,12 +19,14 @@
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <mutex>
 #include <thread>
 #include <netdb.h>
 #include <sys/prctl.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <unistd.h>
 #include <wait.h>
@@ -1004,16 +1006,13 @@ Status ExternalCluster::WaitNodeReady(ClusterNodeType nodeType, uint32_t index, 
 
 bool ExternalCluster::IsWorkerLiveness(uint32_t index)
 {
-    std::string livenessCheckPath = FormatString("%s/worker%d/liveness", opts_.rootDir, index);
-    std::ifstream file(livenessCheckPath);
-    if (!file) {
-        LOG(ERROR) << "Open file failed: " << StrErr(errno) << std::endl;
+    const std::string workerProbePath = FormatString("%s/worker%d/health", opts_.rootDir, index);
+    struct stat probeStat;
+    if (stat(workerProbePath.c_str(), &probeStat) != 0) {
+        LOG(ERROR) << "Stat worker probe failed: " << StrErr(errno);
         return false;
     }
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    std::string content = buffer.str();
-    return content.find("liveness check success") != std::string::npos;
+    return time(nullptr) - probeStat.st_mtime <= static_cast<time_t>(opts_.livenessProbeTimeoutS);
 }
 
 Status ExternalCluster::StartOBS()
@@ -1339,9 +1338,6 @@ void ExternalCluster::AppendWorkerRuntimeFlags(int index, const std::string &roo
     if (opts_.isObjectCache) {
         cmd += " -rocksdb_store_dir=" + rootDir + "/rocksdb ";
     }
-    if (opts_.enableLivenessProbe) {
-        cmd += " -liveness_check_path=" + rootDir + "/liveness ";
-    }
 }
 
 Status ExternalCluster::AppendWorkerBackendFlags(int index, const HostPort &address, std::string &cmd)
@@ -1500,7 +1496,7 @@ ExternalClusterOptions::ExternalClusterOptions()
       masterIdx(0),
       waitWorkerReady(true),
       waitAfterStart(false),
-      enableLivenessProbe(false),
+      livenessProbeTimeoutS(150),
       skipWorkerPreShutdown(true),
       isStreamCacheCase(false),
       disableRocksDB(true)

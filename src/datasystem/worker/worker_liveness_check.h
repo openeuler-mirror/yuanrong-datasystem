@@ -20,11 +20,11 @@
 #ifndef DATASYSTEM_WORKER_WORKER_LIVENESS_CHECK_H
 #define DATASYSTEM_WORKER_WORKER_LIVENESS_CHECK_H
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <thread>
-#include <atomic>
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/util/thread.h"
@@ -58,18 +58,11 @@ public:
     void Stop();
 
 protected:
-    /**
-     * @brief Set liveness probe.
-     * @param[in] success Mark as success liveness probe or not.
-     * @return Status of this call
-     */
-    Status SetLivenessProbe(bool success);
+    Status RenewProbe();
 
-    /**
-     * @brief Reset liveness probe, if liveness probe exist, delete it
-     * @return Status of this call
-     */
-    Status ResetLivenessProbe();
+    Status ExpireProbe();
+
+    Status RemoveProbe();
 
     /**
      * @brief Check liveness for all services.
@@ -112,7 +105,6 @@ private:
     };
     std::vector<Policy> policies_;
     HostPort hostPort_;
-    std::time_t lastSuccessTimeUs_ = 0;
     const uint32_t TIME_UNIT_CONVERSION = 1000;
 
     // object if for send rpc.

@@ -184,7 +184,7 @@ export ETCD_PORT="${ETCD_PORT}"
 export SHM_SIZE=512000
 export NODE_TIMEOUT=30
 export NODE_DEAD_TIMEOUT=60
-export LIVENESS_PATH=/workspace/liveness
+export WORKER_PROBE_PATH=/workspace/worker
 
 # 启动 etcd（单实例模式）
 etcd \
@@ -211,7 +211,7 @@ dscli start -w \
   --shared_memory_size_mb ${SHM_SIZE} \
   --node_timeout_s ${NODE_TIMEOUT} \
   --node_dead_timeout_s ${NODE_DEAD_TIMEOUT} \
-  --liveness_check_path ${LIVENESS_PATH}
+  --health_check_path ${WORKER_PROBE_PATH}
 
 echo "Yuanrong 服务启动完成"
 echo "etcd 日志: /tmp/etcd.log"
@@ -238,7 +238,7 @@ bash run_yr.sh
 | shared_memory_size_mb | ${SHM_SIZE} (512000)          | 共享内存大小（500 GB）   |
 | node_timeout_s        | ${NODE_TIMEOUT} (600)         | 节点超时时间（秒）       |
 | node_dead_timeout_s   | ${NODE_DEAD_TIMEOUT} (600000) | 节点死亡超时时间（毫秒） |
-| liveness_check_path   | ${LIVENESS_PATH}              | 存活检查路径             |
+| health_check_path   | ${WORKER_PROBE_PATH}              | Worker 启动与存活探针路径             |
 
 > **参考文档**：[Yuanrong Datasystem 文档](https://pages.openeuler.openatom.cn/openyuanrong/docs/zh-cn/latest/deploy/deploy_processes/parameters.html#data-system)，了解更多 worker 参数和环境变量配置。
 

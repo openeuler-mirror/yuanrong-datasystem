@@ -150,9 +150,12 @@ global:
 | global.livenessProbePath | string | `"/home/jd/kvcache/health/liveness"` | k8s pod存活检查路径 |
 | global.statusFilePath | string | `"/home/jd/kvcache/logs/worker/worker-status"` | 数据系统worker状态记录文件 |
 | global.reliability.livenessProbeTimeoutS | int | `150` | k8s pod存活探针超时时间（秒） |
+| global.reliability.startupProbeTimeoutS | int | `390` | k8s pod启动探针超时（秒） |
 | global.dockerConfigPath | string | `"/home/jd/kvcache/docker"` | 容器运行配置文件路径 |
 | global.hostNetwork | bool | `true` | 是否使用主机网络 |
 | global.dnsPolicy | string | `ClusterFirstWithHostNet` | k8s pod DNS策略 |
+
+`startupProbeTimeoutS` 默认值由 60 秒重启对账、300 秒死亡节点判定和 30 秒初始化余量组成。
 
 ### 资源相关配置
 

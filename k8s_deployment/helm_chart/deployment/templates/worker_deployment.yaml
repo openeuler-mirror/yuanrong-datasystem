@@ -39,7 +39,7 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 5
-            failureThreshold: 12
+            failureThreshold: {{ div (add (int $.Values.global.reliability.startupProbeTimeoutS) 4) 5 }}
           readinessProbe:
             exec:
               command:

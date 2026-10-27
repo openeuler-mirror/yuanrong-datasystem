@@ -130,11 +130,6 @@ DS_DEFINE_uint32(page_size, 1024 * 1024,
                  "Size of the page used for caching worker files. The valid range is 4096-1073741824.");
 DS_DEFINE_bool(ipc_through_shared_memory, true, "Using shared memory to exchange data between client and worker.");
 DS_DECLARE_bool(authorization_enable);
-DS_DEFINE_string(ready_check_path, "",
-                 "This file will be created after the worker service is started successfully "
-                 "and a connection can be established using the stub. It is used to "
-                 "detect whether the container is ready in the k8s scenario. In default, \"ready\" is filename"
-                 "The path length should less than 4095 characters.");
 DS_DEFINE_string(system_access_key, "", "The access key for system component AK/SK authentication.");
 DS_DEFINE_string(system_secret_key, "", "The secret key for system component AK/SK authentication.");
 DS_DEFINE_string(system_data_key, "", "The data key for system encrypte and decrypt secert key.");
@@ -143,7 +138,6 @@ DS_DEFINE_string(tenant_secret_key, "", "The secret key for tenant AK/SK authent
 DS_DEFINE_uint32(request_expire_time_s, 300,
                  "When AK/SK authentication is used, if the duration from the client to the server is longer than the "
                  "value of this parameter, the authentication fails and the service is denied.");
-DS_DEFINE_validator(ready_check_path, &Validator::ValidatePathString);
 DS_DEFINE_validator(shared_memory_size_mb, &Validator::ValidateSharedMemSize);
 DS_DEFINE_validator(sc_local_cache_memory_size_mb, &Validator::ValidateLocalCacheMemSize);
 DS_DEFINE_validator(page_size, &Validator::ValidatePageSize);
@@ -153,6 +147,7 @@ DS_DECLARE_string(unix_domain_socket_dir);
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(monitor_config_file);
 DS_DECLARE_string(worker_address);
+DS_DECLARE_string(health_check_path);
 DS_DECLARE_string(master_address);
 DS_DECLARE_string(metastore_address);
 DS_DEFINE_bool(start_metastore_service, false,
@@ -163,11 +158,6 @@ DS_DEFINE_uint32(memory_reclamation_time_second, 600, "The memory reclamation ti
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_uint32(scale_in_collect_window_ms);
-DS_DEFINE_string(liveness_check_path, "",
-                 "File will create after the worker check liveness successfully"
-                 "It is used to detect whether the container is liveness in the k8s scenario."
-                 "The path length must less than 4095 characters.");
-DS_DEFINE_validator(liveness_check_path, &Validator::ValidatePathString);
 DS_DEFINE_uint32(liveness_probe_timeout_s, 150, "Liveness probe timeout in seconds.");
 DS_DEFINE_uint32(check_async_queue_empty_time_s, 1,
                  "The async queue needs to be empty for a certain period of time before worker can exist.");
@@ -2423,6 +2413,8 @@ Status WorkerOCServer::StopMetaStoreService()
 
 Status WorkerOCServer::Init()
 {
+    SetUnhealthy();
+    RETURN_IF_NOT_OK(ResetWorkerProbe());
     ImmutableStringPool::Instance().Init();
     intern::StringPool::InitAll();
     RETURN_IF_NOT_OK(InitAkSk());
@@ -2548,10 +2540,9 @@ Status WorkerOCServer::StartBrpcIfEnabled()
 
 Status WorkerOCServer::InitLivenessCheck()
 {
-    if (!FLAGS_liveness_check_path.empty()) {
+    if (!FLAGS_health_check_path.empty()) {
         const int secToMs = 1000;
-        // start liveiness check.
-        livenessCheck_ = std::make_unique<WorkerLivenessCheck>(this, FLAGS_liveness_check_path,
+        livenessCheck_ = std::make_unique<WorkerLivenessCheck>(this, FLAGS_health_check_path,
                                                                FLAGS_liveness_probe_timeout_s * secToMs, bindHostPort_,
                                                                hostPort_.ToString(), akSkManager_);
         RETURN_IF_NOT_OK(livenessCheck_->Init());
@@ -3274,31 +3265,16 @@ Status WorkerOCServer::ReadinessProbe()
 {
     RETURN_IF_NOT_OK(WaitForServiceReady());
     RETURN_OK_IF_TRUE(IsTermSignalReceived() && topologyExitRequested_.load());
-    // delete health check flag for worker service
-    if (FLAGS_ready_check_path.empty()) {
+    if (FLAGS_health_check_path.empty()) {
         return Status::OK();
     }
-    RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(FLAGS_ready_check_path, "~/.datasystem/probe/ready", ""));
-    std::string fileDir = FLAGS_ready_check_path.substr(0, FLAGS_ready_check_path.find_last_of('/'));
-    if (!FileExist(fileDir)) {
-        // Change the permission of "~/.datasystem/probe" to 0700.
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateDir(fileDir, true, 0700), "Create ready check file failed!");
-    }
-    (void)DeleteFile(FLAGS_ready_check_path);  // Delete file if exist
     RETURN_IF_NOT_OK(WaitForTopologyReady());
-    std::ofstream outfile(FLAGS_ready_check_path);
-    outfile << "health check success\n" << std::endl;
-    outfile.close();
-    const mode_t permission = 0600;
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(chmod(FLAGS_ready_check_path.c_str(), permission) == 0, K_RUNTIME_ERROR,
-                                         FormatString("Chmod of %s error.", FLAGS_ready_check_path));
-    return Status::OK();
+    return PublishWorkerProbe();
 }
 
 Status WorkerOCServer::Start()
 {
     RETURN_IF_NOT_OK_APPEND_MSG(CommonServer::Start(), "\nWorker Start failed.");
-    RETURN_IF_NOT_OK(InitLivenessCheck());
     // The task via uds accept fd is started here.
     clientWorkerCommonSvcStatus_ = loadFunctor(*workerSvc_);
     if (IsLocalMetadataMaster()) {
@@ -3309,14 +3285,14 @@ Status WorkerOCServer::Start()
             RETURN_IF_NOT_OK_APPEND_MSG(objCacheClientWorkerSvc_->WhetherNonRestart(), "\nWorker Start failed.");
         } else {
             RETURN_IF_NOT_OK(WaitForTopologyReady());
-            RETURN_IF_NOT_OK(SetHealthProbe());
+            RETURN_IF_NOT_OK(SetHealthy());
         }
     } else {
         if (EnableOCService()) {
             RETURN_IF_NOT_OK_APPEND_MSG(objCacheClientWorkerSvc_->WhetherNonRestart(), "\nWorker Start failed.");
         } else {
             RETURN_IF_NOT_OK(WaitForTopologyReady());
-            RETURN_IF_NOT_OK(SetHealthProbe());
+            RETURN_IF_NOT_OK(SetHealthy());
         }
     }
     RETURN_IF_NOT_OK_APPEND_MSG(metrics::InitKvMetrics(), "\nWorker Start failed: metrics init.");
@@ -3324,6 +3300,11 @@ Status WorkerOCServer::Start()
     RETURN_IF_NOT_OK_APPEND_MSG(MaybeStartWorkerMasterRpcWarmup(), "\nWorker Start failed.");
     RETURN_IF_NOT_OK_APPEND_MSG(ReadinessProbe(), "\nWorker Start failed.");
     RETURN_OK_IF_TRUE(IsTermSignalReceived() && topologyExitRequested_.load());
+    const auto livenessRc = InitLivenessCheck();
+    if (livenessRc.IsError()) {
+        LOG_IF_ERROR(RemoveWorkerProbe(), "Rollback worker probe after liveness initialization failed");
+        return livenessRc;
+    }
     RETURN_IF_NOT_OK(ResMetricCollector::Instance().Init());
     RegisteringAllResourceCollectionCallbackFunc();
     ResMetricCollector::Instance().Start();

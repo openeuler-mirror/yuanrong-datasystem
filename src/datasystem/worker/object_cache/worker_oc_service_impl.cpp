@@ -601,7 +601,6 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
 {
     reconciliationReady_.store(!isRestart_ || !controlBackendAvailableAtStartup_ || !FLAGS_enable_reconciliation,
                                std::memory_order_relaxed);
-    healthPublisher_ = [] { return SetHealthProbe(); };
     initOkFuture_ = initOk_.get_future();
     workerMasterApiManager_ =
         std::make_shared<WorkerMasterOcApiManager>(localAddress_, akSkManager_, metadataRoute_, masterOCService);
@@ -762,7 +761,7 @@ void WorkerOCServiceImpl::ConfigureDataMigrator(DataMigrator &migrator)
 Status WorkerOCServiceImpl::Init()
 {
     InitMetaSize();
-    RETURN_IF_NOT_OK(ResetHealthProbe());
+    SetUnhealthy();
     RETURN_IF_NOT_OK(StartTopologyHealthCoordinator());
     auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(localMasterAddress_);
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "get worker master api failed, Init failed");
@@ -1751,7 +1750,7 @@ Status WorkerOCServiceImpl::ValidateWorkerStateForRequest(BthreadReadGuard &noRe
             RETURN_STATUS(K_TRY_AGAIN,
                           "Worker is starting up and reconciliation in progress, please retry");
         }
-        const bool joiningReady = healthPublicationEnabled_.load(std::memory_order_acquire)
+        const bool joiningReady = healthStateUpdatesEnabled_.load(std::memory_order_acquire)
                                   && reconciliationReady_.load(std::memory_order_acquire)
                                   && !shutdownRequested_.load(std::memory_order_acquire) && !HasPendingRejoinCleanup()
                                   && topologyEngine_ != nullptr && topologyEngine_->IsLocalJoiningOnlyNotReady();
@@ -1785,7 +1784,7 @@ Status WorkerOCServiceImpl::ValidateWorkerStateForRequest(BthreadReadGuard &noRe
             reconciliationCount = numRecon_;
         }
         LOG(INFO) << "Finished waiting for the reconFlag, elapsed ms: " << timer.ElapsedMilliSecond()
-                  << ", setHealthFile: " << setHealthFile_.load() << ", numRecon: " << reconciliationCount;
+                  << ", startupHealthy: " << startupHealthy_.load() << ", numRecon: " << reconciliationCount;
     }
     GetWorkerTimeCost().Append("ValidateWorkerState", timer.ElapsedMilliSecond());
     return Status::OK();
@@ -1953,11 +1952,10 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
         LOG(INFO) << "Reconciliation with all masters is done.";
         if (req.is_restart()) {
             LOG(INFO) << "WORKER_STARTUP state=WAITING gate=topology reason=reconciliation_complete completed="
-                      << numRecon_ << " expected=" << hashWorkerNum << " health_published="
-                      << (setHealthFile_.load(std::memory_order_acquire) ? "true" : "false");
+                      << numRecon_ << " expected=" << hashWorkerNum
+                      << " startup_healthy=" << (startupHealthy_.load(std::memory_order_acquire) ? "true" : "false");
             if (!topologyEngine_->HasEstablishedMemberLease() && controlBackendAvailableAtStartup_) {
-                RETURN_STATUS(K_NOT_READY,
-                              "Setting the health file is not allowed before the first lease is successfully created");
+                RETURN_STATUS(K_NOT_READY, "Worker cannot become healthy before its first lease is established");
             }
         }
         if (exitRequested_ != nullptr && exitRequested_->load()) {
@@ -1969,11 +1967,11 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
         }
     } else {
         LOG(INFO) << "WORKER_STARTUP state=WAITING gate=reconciliation completed=" << numRecon_
-                  << " expected=" << hashWorkerNum << " health_published="
-                  << (setHealthFile_.load(std::memory_order_acquire) ? "true" : "false");
+                  << " expected=" << hashWorkerNum
+                  << " startup_healthy=" << (startupHealthy_.load(std::memory_order_acquire) ? "true" : "false");
     }
     INJECT_POINT("WorkerOCServiceImpl.Reconciliation.expectedReconNum", [this](int expectedReconNum) {
-        if (!setHealthFile_.load() && expectedReconNum > 0 && numRecon_ >= expectedReconNum) {
+        if (!startupHealthy_.load() && expectedReconNum > 0 && numRecon_ >= expectedReconNum) {
             RETURN_IF_NOT_OK(UpdateLocalNodeReady());
             reconciliationReady_.store(true, std::memory_order_release);
         }
@@ -2836,8 +2834,9 @@ Status WorkerOCServiceImpl::GetExpectedReconciliationCount(int &expectedCount) c
 
 Status WorkerOCServiceImpl::RevokeStartupHealth()
 {
-    setHealthFile_.store(false, std::memory_order_release);
-    return RevokeHealthProbe();
+    startupHealthy_.store(false, std::memory_order_release);
+    SetUnhealthy();
+    return Status::OK();
 }
 
 Status WorkerOCServiceImpl::HandleTopologyServingFailure(const Status &failure)
@@ -2897,11 +2896,11 @@ void WorkerOCServiceImpl::NotifyTopologyAvailability(bool allowBusiness)
         ++topologyHealthGeneration_;
         topologyHealthRefreshPending_ = true;
         if (!allowBusiness) {
-            // Isolation must reject new RPCs before the asynchronous health-file revocation starts. On recovery the
-            // admission bit stays closed until the coordinator has revalidated and republished health. An initial or
+            // Isolation must reject new RPCs before the asynchronous health-state refresh starts. On recovery the
+            // admission bit stays closed until the coordinator has revalidated health. An initial or
             // duplicate serving notification must not transiently close an already healthy Worker.
             SetTopologyServingAdmission(false);
-            setHealthFile_.store(false, std::memory_order_release);
+            startupHealthy_.store(false, std::memory_order_release);
             SetUnhealthy();
         }
     }
@@ -2926,9 +2925,9 @@ void WorkerOCServiceImpl::RunTopologyHealthCoordinator()
         bool reconciled = false;
         if (allowBusiness) {
             rc = RefreshStartupHealth();
-            reconciled = rc.IsOk() && setHealthFile_.load(std::memory_order_acquire);
+            reconciled = rc.IsOk() && startupHealthy_.load(std::memory_order_acquire);
         } else {
-            std::lock_guard<std::mutex> publicationLock(healthPublicationMutex_);
+            std::lock_guard<std::mutex> publicationLock(healthStateMutex_);
             rc = RevokeStartupHealth();
             reconciled = rc.IsOk();
         }
@@ -2950,7 +2949,6 @@ void WorkerOCServiceImpl::RunTopologyHealthCoordinator()
                 << "Topology health coordination retrying, detail: " << rc.ToString();
         }
         if (!allowBusiness && reconciled) {
-            // A successful unlink is stable until a later admission transition requests publication again.
             continue;
         }
         topologyHealthCv_.wait_for(stateLock, TOPOLOGY_HEALTH_RETRY_INTERVAL, [this, generation] {
@@ -2958,7 +2956,7 @@ void WorkerOCServiceImpl::RunTopologyHealthCoordinator()
         });
         if (!topologyHealthStopping_ && generation == topologyHealthGeneration_) {
             // Keep validating local membership and placement after startup; these can change without an availability
-            // level transition and must still revoke the persisted marker.
+            // level transition and must still close in-process health and admission.
             topologyHealthRefreshPending_ = true;
         }
     }
@@ -2966,38 +2964,31 @@ void WorkerOCServiceImpl::RunTopologyHealthCoordinator()
 
 Status WorkerOCServiceImpl::RefreshStartupHealth()
 {
-    std::lock_guard<std::mutex> lock(healthPublicationMutex_);
-    if (!healthPublicationEnabled_.load(std::memory_order_acquire)) {
+    std::lock_guard<std::mutex> lock(healthStateMutex_);
+    if (!healthStateUpdatesEnabled_.load(std::memory_order_acquire)) {
         return Status::OK();
     }
     if (!reconciliationReady_.load(std::memory_order_acquire)) {
         LOG_EVERY_N(INFO, STARTUP_HEALTH_LOG_EVERY_COUNT)
-            << "WORKER_STARTUP state=BLOCKED gate=reconciliation reason=incomplete health_published="
-            << (setHealthFile_.load(std::memory_order_acquire) ? "true" : "false");
+            << "WORKER_STARTUP state=BLOCKED gate=reconciliation reason=incomplete startup_healthy="
+            << (startupHealthy_.load(std::memory_order_acquire) ? "true" : "false");
         return Status::OK();
     }
     auto rc = topologyEngine_->CheckLocalServingReady(TOPOLOGY_READINESS_PROBE_KEY);
     if (rc.IsError()) {
         return HandleTopologyServingFailure(rc);
     }
-    if (setHealthFile_.load(std::memory_order_acquire)) {
+    if (startupHealthy_.load(std::memory_order_acquire)) {
         return Status::OK();
     }
 
-    rc = healthPublisher_();
-    if (rc.IsError()) {
-        auto rollbackRc = RevokeStartupHealth();
-        if (rollbackRc.IsError()) {
-            return Status(rollbackRc.GetCode(), rollbackRc.GetMsg() + "; health publication failure: " + rc.ToString());
-        }
-        return rc;
-    }
+    RETURN_IF_NOT_OK(SetHealthy());
     rc = topologyEngine_->CheckLocalServingReady(TOPOLOGY_READINESS_PROBE_KEY);
     if (rc.IsError()) {
         return HandleTopologyServingFailure(rc);
     }
-    setHealthFile_.store(true, std::memory_order_release);
-    LOG(INFO) << "WORKER_STARTUP state=READY reconciliation_ready=true topology_ready=true health_published=true";
+    startupHealthy_.store(true, std::memory_order_release);
+    LOG(INFO) << "WORKER_STARTUP state=READY reconciliation_ready=true topology_ready=true startup_healthy=true";
     return Status::OK();
 }
 
@@ -3086,7 +3077,7 @@ Status WorkerOCServiceImpl::WhetherNonRestart()
               << " is_restart=" << isRestart_
               << " control_backend_available=" << controlBackendAvailableAtStartup_
               << " enable_reconciliation=" << FLAGS_enable_reconciliation;
-    healthPublicationEnabled_.store(true, std::memory_order_release);
+    healthStateUpdatesEnabled_.store(true, std::memory_order_release);
     const bool isRestart = isRestart_;
     if (!isRestart || !controlBackendAvailableAtStartup_ || !FLAGS_enable_reconciliation) {
         LOG(INFO) << "WORKER_STARTUP action=skip_reconciliation"
@@ -3116,7 +3107,7 @@ Status WorkerOCServiceImpl::ProbeUrmaConnectionToPeer(const HostPort &peerAddr, 
 
 Status WorkerOCServiceImpl::GiveUpReconciliation()
 {
-    RETURN_OK_IF_TRUE(setHealthFile_.load());
+    RETURN_OK_IF_TRUE(startupHealthy_.load());
     if (reconciliationReady_.load(std::memory_order_acquire)) {
         return Status::OK();
     }
@@ -3177,8 +3168,8 @@ Status WorkerOCServiceImpl::CheckGiveUpReconciliationAfterLock(int64_t waitMs, s
     int hashWorkerNum = 0;
     RETURN_IF_NOT_OK(GetExpectedReconciliationCount(hashWorkerNum));
     // no need to set health or not ready to set health
-    if (setHealthFile_) {
-        finishReason = "health_already_published";
+    if (startupHealthy_) {
+        finishReason = "startup_already_healthy";
         return Status::OK();
     }
     if (numRecon_ < hashWorkerNum && GetSteadyClockTimeStampMs() - lastReconTime_ <= waitMs) {

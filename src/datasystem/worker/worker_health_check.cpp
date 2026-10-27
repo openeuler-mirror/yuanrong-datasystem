@@ -26,56 +26,49 @@
 #include "datasystem/utils/status.h"
 
 DS_DEFINE_string(health_check_path, "",
-                 "File will create after the worker successfully "
-                 "sends a heartbeat message to the master for the first time. "
-                 "It is used to detect whether the container is ready in the k8s scenario."
-                 "The path length must less than 4095 characters.");
+                 "The Worker creates this file after startup and renews its mtime after each successful liveness "
+                 "check. An empty path disables the external file probe. The path length must be less than 4095 "
+                 "characters.");
 DS_DEFINE_validator(health_check_path, &Validator::ValidatePathString);
 
 namespace datasystem {
 std::atomic<bool> g_health{ false };
 std::atomic<bool> g_topologyServingAdmission{ true };
 
-Status ResetHealthProbe()
+Status ResetWorkerProbe()
 {
-    g_health.store(false, std::memory_order_release);
     if (FLAGS_health_check_path.empty()) {
         return Status::OK();
     }
-    LOG(INFO) << "Worker is starting up, health probe reset.";
-    RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(FLAGS_health_check_path, "~/.datasystem/probe/healthy", ""));
-    std::string fileDir = FLAGS_health_check_path.substr(0, FLAGS_health_check_path.find_last_of('/'));
+    RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(FLAGS_health_check_path, "~/.datasystem/probe/worker", ""));
+    const std::string parentDir = Uri(FLAGS_health_check_path).GetParent();
+    const std::string fileDir = parentDir.empty() ? "." : parentDir;
     if (!FileExist(fileDir)) {
-        // Change the permission of "~/.datasystem/probe" to 0700.
         const mode_t per = 0700;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateDir(fileDir, true, per), "Create healthy check file failed!");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateDir(fileDir, true, per), "Create worker probe directory failed");
     }
-    return RevokeHealthProbe();
+    LOG(INFO) << "Worker is starting up, remove stale worker probe.";
+    return RemoveWorkerProbe();
 }
 
-Status SetHealthProbe()
+Status PublishWorkerProbe()
 {
     if (FLAGS_health_check_path.empty()) {
-        g_health.store(true, std::memory_order_release);
         return Status::OK();
     }
-    auto rc = AtomicWriteTextFile(FLAGS_health_check_path, "health check success\n");
-    if (rc.IsError()) {
-        auto rollbackRc = RevokeHealthProbe();
-        if (rollbackRc.IsError()) {
-            return Status(rollbackRc.GetCode(),
-                          rollbackRc.GetMsg() + "; original health publication error: " + rc.ToString());
-        }
-        return rc;
-    }
-    g_health.store(true, std::memory_order_release);
-    LOG(INFO) << "Worker health probe published.";
+    RETURN_IF_NOT_OK(AtomicWriteTextFile(FLAGS_health_check_path, ""));
+    LOG(INFO) << "Worker probe published.";
     return Status::OK();
 }
 
-Status RevokeHealthProbe()
+Status SetHealthy()
 {
-    g_health.store(false, std::memory_order_release);
+    g_health.store(true, std::memory_order_release);
+    return Status::OK();
+}
+
+Status RemoveWorkerProbe()
+{
     if (FLAGS_health_check_path.empty()) {
         return Status::OK();
     }
@@ -83,7 +76,7 @@ Status RevokeHealthProbe()
         return Status::OK();
     }
     const int error = errno;
-    RETURN_STATUS(K_IO_ERROR, FormatString("Delete health marker %s failed with errno: %d, errmsg: %s",
+    RETURN_STATUS(K_IO_ERROR, FormatString("Delete worker probe %s failed with errno: %d, errmsg: %s",
                                            FLAGS_health_check_path, error, StrErr(error)));
 }
 

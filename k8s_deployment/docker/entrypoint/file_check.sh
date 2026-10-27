@@ -24,16 +24,9 @@ if [ $# -ne 1 ]; then
 fi
 
 CHECK_TYPE=$1
-CHECK_FILES=()
 case "${CHECK_TYPE}" in
-    startupProbe)
-        CHECK_FILES=(`utils_get_worker_arg_value liveness_check_path`)
-        ;;
-    readinessProbe)
-        CHECK_FILES=(
-            `utils_get_worker_arg_value health_check_path`
-            `utils_get_worker_arg_value ready_check_path`
-        )
+    startupProbe|readinessProbe)
+        CHECK_FILE=`utils_get_worker_arg_value health_check_path`
         ;;
     *)
         wlog "unsupported check type: ${CHECK_TYPE}"
@@ -41,14 +34,7 @@ case "${CHECK_TYPE}" in
         ;;
 esac
 
-NOT_EXISTS_FILES=""
-for file in "${CHECK_FILES[@]}"; do
-    if [[ ! -e "${file}" ]]; then
-        NOT_EXISTS_FILES="${NOT_EXISTS_FILES} ${file}"
-    fi
-done
-
-if [ -n "$NOT_EXISTS_FILES" ]; then
-    elog "file${NOT_EXISTS_FILES} not exists, ${CHECK_TYPE} failed."
+if [[ ! -e "${CHECK_FILE}" ]]; then
+    elog "worker probe file ${CHECK_FILE} not exists, ${CHECK_TYPE} failed."
     exit 1
 fi

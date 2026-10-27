@@ -46,13 +46,7 @@ function main() {
 		exit 1
 	fi
 
-    content="$(cat ${PROBE_PATH})"
-    if ! grep -q "liveness check success" "${PROBE_PATH}"; then
-        elog "liveness probe ${PROBE_PATH} check failed: ${content}"
-        exit 1
-    fi
-
-	PROBE_LAST_UPDATA_TIME=$(stat -c %Z ${PROBE_PATH})
+	PROBE_LAST_UPDATA_TIME=$(stat -c %Y ${PROBE_PATH})
 	CURRENT_TIME=$(date +%s)
 	if [[ $((CURRENT_TIME - PROBE_LAST_UPDATA_TIME)) -gt $PROBE_TIMEOUT ]]; then
 		elog "liveness probe not update in ${PROBE_TIMEOUT}"
