@@ -69,7 +69,6 @@ public:
             " -distributed_disk_path=%s"
             " -distributed_disk_sync_interval_ms=0"
             " -distributed_disk_sync_batch_bytes=1"
-            " -enable_metadata_recovery=false"
             " -enable_reconciliation=false"
             " -enable_l2_cache_fallback=false"
             " -auto_del_dead_node=false"

@@ -29,14 +29,12 @@
 #include "datasystem/common/util/net_util.h"
 namespace datasystem {
 enum ClusterEventType : uint32_t {
-    ADD_LOCAL_FAILED_NODE,
     ERASE_FAILED_NODE_API,
     START_NODE_CHECK,
     NODE_TIMEOUT,
     NODE_NETWORK_RECOVERY,
     REMOVE_DEAD_WORKER,
     CHANGE_PRIMARY_COPY,
-    REQUEST_META_FROM_WORKER,
     NODE_RESTART,
     CHECK_NEW_NODE_META,
     START_CLEAR_WORKER_META,
@@ -46,7 +44,6 @@ enum ClusterEventType : uint32_t {
     SLOT_RECOVERY_FAILED_WORKERS,
 };
 
-using AddLocalFailedNodeEvent = EventSubscribers<ADD_LOCAL_FAILED_NODE, std::function<Status(const HostPort &)>>;
 using EraseFailedNodeApiEvent = EventSubscribers<ERASE_FAILED_NODE_API, std::function<void(HostPort &)>>;
 using StartNodeCheckEvent = EventSubscribers<START_NODE_CHECK, std::function<Status()>>;
 using NodeTimeoutEvent = EventSubscribers<NODE_TIMEOUT, std::function<Status(const std::string &, bool, bool)>>;
@@ -54,8 +51,6 @@ using NodeNetworkRecoveryEvent =
     EventSubscribers<NODE_NETWORK_RECOVERY, std::function<Status(const std::string &, int64_t, bool)>>;
 using RemoveDeadWorkerEvent = EventSubscribers<REMOVE_DEAD_WORKER, std::function<void(const std::string &)>>;
 using ChangePrimaryCopy = EventSubscribers<CHANGE_PRIMARY_COPY, std::function<Status(const std::string &, bool)>>;
-using RequestMetaFromWorkerEvent =
-    EventSubscribers<REQUEST_META_FROM_WORKER, std::function<Status(const std::string &, const std::string &)>>;
 using NodeRestartEvent =
     EventSubscribers<NODE_RESTART, std::function<Status(const std::map<std::string, int64_t> &, bool)>>;
 using CheckNewNodeMetaEvent = EventSubscribers<CHECK_NEW_NODE_META, std::function<Status(const HostPort &)>>;

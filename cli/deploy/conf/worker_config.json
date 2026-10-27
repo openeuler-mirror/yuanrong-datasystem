@@ -619,10 +619,6 @@
         "value": "true",
         "description": "Experimental parameter. Allow data read from a remote worker to be cached locally as a hot replica and registered in metadata. This is only for hot-replica performance optimization; it is not a data reliability mechanism and does not guarantee data reliability or availability."
     },
-    "enable_metadata_recovery": {
-        "value": "false",
-        "description": "Whether to recover worker metadata to master during worker restart cleanup."
-    },
     "enable_rdma": {
         "value": "false",
         "description": "Option to turn on rdma for OC worker to worker data transfer, default false"
@@ -634,10 +630,6 @@
     "enable_stream_data_verification": {
         "value": "false",
         "description": "Option to verify if data from a producer is out of order"
-    },
-    "oc_io_from_l2cache_need_metadata": {
-        "value": "true",
-        "description": "Whether data read and write from the L2 cache daemon depend on metadata. Note: If set to false, it indicates that the metadata is not stored in etcd"
     },
     "enable_l2_cache_fallback": {
         "value": "true",

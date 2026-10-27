@@ -265,44 +265,6 @@ TEST_F(KVCacheSpillTest, DISABLED_TestSpillSpaceFull)
     }
 }
 
-class KVCacheNoMetaClientStorageTest : public KVCacheClientStorageTest {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        opts.workerGflagParams = "-check_async_queue_empty_time_s=15 -oc_io_from_l2cache_need_metadata=false";
-        opts.numEtcd = 1;
-        opts.numWorkers = WORKER_NUM;
-        opts.numOBS = 1;
-        opts.enableDistributedMaster = "true";
-    }
-    uint8_t WORKER_NUM = 2;
-};
-
-
-TEST_F(KVCacheNoMetaClientStorageTest, DISABLED_TestDeleteVersionBetweenPutAndDel)
-{
-    std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client);
-
-    std::string key = "key";
-    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
-    DS_ASSERT_OK(client->Set(key, "data az1", param));
-
-    // simulate other az put data to L2 cache.
-    std::string targetPath = GetTestCaseDataDir() + "/OBS/test/" + key;
-    DS_ASSERT_OK(CreateDir(targetPath, true));
-    uint64_t version = GetSystemClockTimeStampUs();
-    std::ofstream outfile(targetPath + "/" + std::to_string(version));
-    ASSERT_TRUE(outfile.is_open());
-    outfile << "data az2";
-    outfile.close();
-
-    DS_ASSERT_OK(client->Del(key));
-    std::string val;
-    DS_ASSERT_NOT_OK(client->Get(key, val));
-}
-
-
 class KVCacheClientStorageTestMultiNode : public KVCacheClientStorageTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override

@@ -18,7 +18,6 @@
 #include <utility>
 
 #include "datasystem/cluster/executor/key_filter.h"
-#include "datasystem/cluster/executor/storage_scan_plan.h"
 #include "datasystem/cluster/model/topology_types.h"
 #include "datasystem/utils/status.h"
 
@@ -144,7 +143,7 @@ struct TopologyPhaseAction {
 };
 
 /**
- * @brief Fully copied callback facts plus invocation-lifetime opaque scope references.
+ * @brief Fully copied callback facts plus invocation-lifetime key scope.
  */
 struct TopologyCallbackContext {
     TopologyPhaseAction action;
@@ -152,7 +151,6 @@ struct TopologyCallbackContext {
     std::chrono::steady_clock::time_point deadline;
     const CancellationToken &cancellation;
     const IKeyFilter &keyFilter;
-    const StorageScanPlan &storageScanPlan;
 };
 
 /**

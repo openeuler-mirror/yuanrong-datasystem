@@ -123,9 +123,6 @@ DS_DEFINE_validator(oc_thread_num, &Validator::ValidateThreadNum);
 DS_DEFINE_uint32_dynamic(client_reconnect_wait_s, 10, "Client reconnect wait seconds, default is 10.");
 DS_DEFINE_validator(client_reconnect_wait_s, &Validator::ValidateUint32);
 DS_DEFINE_bool(enable_reconciliation, false, "Whether to enable reconciliation, default is false");
-DS_DEFINE_bool(oc_io_from_l2cache_need_metadata, true,
-               "Whether data read and write from the L2 cache daemon depend on metadata. Note: If set to false, it "
-               "indicates that the metadata is not stored in etcd.");
 DS_DECLARE_string(l2_cache_type);
 DS_DECLARE_uint32(data_migrate_rate_limit_mb);
 DS_DEFINE_string(data_migrate_urma_transport_mode, "write",
@@ -142,7 +139,6 @@ DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_uint32(memory_alignment);
-DS_DECLARE_bool(enable_metadata_recovery);
 DS_DECLARE_string(kv_events_config);
 
 using namespace datasystem::master;
@@ -566,7 +562,6 @@ static constexpr int OLD_VERSION_DEL_THREAD_MIN_NUM = 0;
 static constexpr int OLD_VERSION_DEL_THREAD_MAX_NUM = 1;
 static constexpr uint32_t SHM_QUEUE_SLOT_NUM = 32;
 static const std::string WORKER_OC_SERVICE_IMPL = "WorkerOCServiceImpl";
-constexpr size_t GET_MATCH_OBJECT_BATCH = 500;  // batch number is 500.
 constexpr auto TOPOLOGY_HEALTH_RETRY_INTERVAL = std::chrono::seconds(1);
 
 WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAddr,
@@ -635,7 +630,6 @@ WorkerOCServiceImpl::~WorkerOCServiceImpl()
         setValue_ = true;
     }
     clearDataFlow_.reset();
-    AddLocalFailedNodeEvent::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
     NodeRestartEvent::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
     EraseFailedNodeApiEvent::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
     StartNodeCheckEvent::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
@@ -714,7 +708,7 @@ void WorkerOCServiceImpl::InitServiceImpl()
     migrateRateController_ =
         std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
     getProc_ =
-        std::make_shared<WorkerOcServiceGetImpl>(param, etcdStore_, memCpyThreadPool_, threadPool_,
+        std::make_shared<WorkerOcServiceGetImpl>(param, memCpyThreadPool_, threadPool_,
                                                  akSkManager_, localAddress_, migrateRateController_, ubAdmission_);
     ConfigurePeerUbHealthCallbacks();
     queryAndGetProc_ =
@@ -835,10 +829,8 @@ Status WorkerOCServiceImpl::InitRecoveryServices()
     RETURN_IF_NOT_OK(slotRecoveryManager_->Init(localAddress_, membership_, persistenceApi_,
                                                 workerMasterApiManager_, etcdStore_, metadataRecoveryManager_.get()));
     clearDataFlow_ = std::make_unique<WorkerOcServiceClearDataFlow>(
-        objectTable_, globalRefTable_, workerMasterApiManager_, gRefProc_, deleteProc_, metadataRecoveryManager_.get(),
-        metadataRoute_, endpointPolicy_, localAddress_.ToString());
-    AddLocalFailedNodeEvent::GetInstance().AddSubscriber(
-        WORKER_OC_SERVICE_IMPL, [this](const HostPort &node) { return PushMetadataToMaster(node); });
+        objectTable_, globalRefTable_, workerMasterApiManager_, gRefProc_, deleteProc_, metadataRoute_, endpointPolicy_,
+        localAddress_.ToString());
     NodeRestartEvent::GetInstance().AddSubscriber(
         WORKER_OC_SERVICE_IMPL, [this](const std::map<std::string, int64_t> &restartFacts, bool sync) {
             return HandleNodeRestartEvent(restartFacts, sync);
@@ -998,56 +990,6 @@ Status WorkerOCServiceImpl::MultiPublish(const MultiPublishReqPb &req, MultiPubl
         return DecreaseMemoryRef(clientId, shmIds);
     }
     return Status::OK();
-}
-
-void WorkerOCServiceImpl::GetObjectsMatch(std::function<bool(const std::string &)> matchFunc,
-                                          std::vector<std::string> &objKeys, bool includeL2CacheIds)
-{
-    LOG(INFO) << "GetNoL2CacheObjectsMatch begin";
-    Timer timer;
-    std::vector<std::string> objs;
-    for (const auto &it : *objectTable_) {
-        objs.emplace_back(it.first);
-    }
-    LOG(INFO) << "Get all object in table ElapsedMilliSecond:" << timer.ElapsedMilliSecond()
-              << " object size:" << objs.size();
-    timer.Reset();
-    std::function batchFun = [this, matchFunc, &objKeys, includeL2CacheIds](std::vector<std::string> &objects) {
-        for (const auto &id : objects)
-            if (matchFunc(id)) {
-                if (includeL2CacheIds) {
-                    objKeys.emplace_back(id);
-                    continue;
-                }
-                std::shared_ptr<SafeObjType> entry;
-                if (objectTable_->Get(id, entry).IsError()) {
-                    continue;
-                }
-                if (entry->TryRLock().IsError()) {
-                    continue;
-                }
-                Raii entryUnlock([&entry] { entry->RUnlock(); });
-                if (!(*entry)->HasL2Cache()) {
-                    objKeys.emplace_back(id);
-                }
-            }
-    };
-
-    std::vector<std::string> tmpIds;
-    for (const auto &id : objs) {
-        tmpIds.emplace_back(id);
-        if (tmpIds.size() < GET_MATCH_OBJECT_BATCH) {
-            continue;
-        }
-        batchFun(tmpIds);
-        tmpIds.clear();
-    }
-    if (!tmpIds.empty()) {
-        batchFun(tmpIds);
-    }
-    LOG(INFO) << "GetObjectsMatch finish, objectKeys size: " << objKeys.size()
-              << " , include l2cache ids: " << includeL2CacheIds
-              << " ElapsedMilliSecond: " << timer.ElapsedMilliSecond();
 }
 
 Status WorkerOCServiceImpl::GetPrimaryReplicaAddr(const std::string &srcAddr, HostPort &destAddr)
@@ -1508,24 +1450,6 @@ Status WorkerOCServiceImpl::FillRequestMetaByMaster(const RequestMetaFromWorkerR
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::PushMetadataToMaster(const HostPort &masterAddr)
-{
-    master::PushMetaToMasterReqPb req;
-    master::PushMetaToMasterRspPb rsp;
-    RETURN_IF_NOT_OK(FillObjData(req, masterAddr));
-
-    std::vector<std::string> objectKeys;
-    FillRefData(masterAddr, objectKeys);
-    *req.mutable_gref_object_keys() = { objectKeys.begin(), objectKeys.end() };
-
-    VLOG(1) << "PushMetadataToMaster: " << LogHelper::IgnoreSensitive(req);
-    auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
-    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "hash master get failed, PushMeta failed");
-    RETURN_IF_NOT_OK(workerMasterApi->PushMetadataToMaster(req, rsp));
-    VLOG(1) << "Push metadata to master success.";
-    return Status::OK();
-}
-
 void WorkerOCServiceImpl::GetAllObjectKeys(std::vector<std::string> &objectKeys)
 {
     LOG(INFO) << "GetAllObjectKeys";
@@ -1654,13 +1578,13 @@ Status WorkerOCServiceImpl::RecoverMetadataOfRestartedWorkers(
     Timer timer;
     MetadataRecoverySelector selector(objectTable_);
     std::vector<std::string> matchObjIds;
-    selector.Select(
+    selector.SelectAll(
         [this, &restartedAddresses](const std::string &objectKey) {
             HostPort metadataOwner;
             return metadataRoute_.ResolveOwner(objectKey, metadataOwner).IsOk()
                    && restartedAddresses.count(metadataOwner) > 0;
         },
-        true, matchObjIds);
+        matchObjIds);
     RETURN_OK_IF_TRUE(matchObjIds.empty());
 
     std::vector<std::string> failedIds;

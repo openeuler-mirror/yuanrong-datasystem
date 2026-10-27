@@ -27,8 +27,7 @@ target_link_libraries(cluster_topology_keyspace PUBLIC
         common_util)
 
 add_library(cluster_topology_scope STATIC
-        executor/hash_key_filter.cpp
-        executor/storage_scan_plan.cpp)
+        executor/hash_key_filter.cpp)
 target_include_directories(cluster_topology_scope PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(cluster_topology_scope PUBLIC common_util)
 

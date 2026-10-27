@@ -179,8 +179,7 @@ private:
     Status BuildPhaseAction(const TopologyExecutionFence &fence, uint64_t topologyVersion,
                             TopologyPhaseAction &action) const;
 
-    Status BuildOpaqueScope(const TopologyExecutionFence &fence, std::unique_ptr<IKeyFilter> &filter,
-                            std::unique_ptr<StorageScanPlan> &plan) const;
+    Status BuildKeyFilter(const TopologyExecutionFence &fence, std::unique_ptr<IKeyFilter> &filter) const;
 
     Status ValidateFence(const TopologyExecutionFence &fence) const;
 

@@ -351,7 +351,6 @@ global:
 |-----|------|---------|-------------|
 | global.l2Cache.l2CacheType | string | `"none"` | 配置二级缓存类型，`none` 表示不配置二级缓存，可选择二级缓存类型：[`obs`, `sfs`, `distributed_disk`] |
 | global.l2Cache.l2CacheDeleteThreadNum | int | `32` | 配置二级缓存异步删除线程池大小，增大该值可以提升二级缓存删除并行度，同时也会提升worker的CPU消耗 |
-| global.l2Cache.ocIoFromL2CacheNeedMetadata | bool | `true` | 配置L2缓存守护进程的数据读写是否依赖元数据，设置为false，则表示元数据不存储在etcd中 |
 | global.l2Cache.enableL2CacheFallback | bool | `true` | 控制是否允许从二级缓存拉数据，当worker失败时，是否启用从二级缓存拉取数据的回退机制 |
 | global.l2Cache.l2CacheAsyncWriteQueueSize | int | `10000` | 配置二级缓存异步写队列大小 |
 | global.l2Cache.l2CacheAsyncWriteRateLimitMb | int | `200` | 配置二级缓存异步写入限速，单位 MB/s |
@@ -412,7 +411,6 @@ global:
 | global.metadata.rocksdbBackgroundThreads | int | `16` | RocksDB的后台线程数，用于元数据的刷盘和压缩 |
 | global.metadata.rocksdbMaxOpenFile | int | `128` | RocksDB可使用的最大打开文件个数 |
 | global.metadata.rocksdbWriteMode | string | `async` | 配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为`async`。可选值包括：'none'（不写）、'sync'（同步）、'async'（异步） |
-| global.metadata.enableMetadataRecovery | bool | `false` | 是否在 worker 重启清理阶段将本地元数据回补到 master |
 | global.metadata.enableDataReplication | bool | `true` | 实验性参数。是否允许跨 worker 读取到的数据在本 worker 缓存为本地热副本，并向 master 注册副本位置；关闭后 remote get 获取的数据通常仅服务当前请求，不作为普通本地副本保留。该参数仅用于热副本性能优化，不作为数据可靠性机制，不保障数据可靠性或可用性 |
 
 

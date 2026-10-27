@@ -94,7 +94,6 @@ spec:
         - -log_monitor_exporter={{ $.Values.global.observability.logMonitorExporter }}
         - -log_monitor_interval_ms={{ $.Values.global.observability.logMonitorIntervalMs }}
         - -enable_perf_trace_log={{ $.Values.global.log.enablePerfTraceLog }}
-        - -enable_metadata_recovery={{ $.Values.global.metadata.enableMetadataRecovery }}
         - -enable_data_replication={{ $.Values.global.metadata.enableDataReplication }}
         - -logbufsecs={{ $.Values.global.log.logBufSecs }}
         - -log_compress={{ $.Values.global.log.logCompress }}
@@ -262,7 +261,6 @@ spec:
         - -enable_rdma={{ $.Values.global.performance.enableRdma }}
         - -rdma_register_whole_arena={{ $.Values.global.performance.rdmaRegisterWholeArena }}
         - -enable_stream_data_verification={{ $.Values.global.reliability.enableStreamDataVerification }}
-        - -oc_io_from_l2cache_need_metadata={{ $.Values.global.l2Cache.ocIoFromL2CacheNeedMetadata }}
         - -oc_worker_aggregate_merge_size={{ $.Values.global.performance.ocWorkerAggregateMergeSize | int64 }}
         - -oc_worker_aggregate_single_max={{ $.Values.global.performance.ocWorkerAggregateSingleMax | int64 }}
         - -oc_worker_worker_parallel_min={{ $.Values.global.performance.ocWorkerWorkerParallelMin }}

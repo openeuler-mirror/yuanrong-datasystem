@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "common.h"
+#include "datasystem/common/util/file_util.h"
 #include "client/kv_cache/kv_client_scale_common.h"
 
 namespace datasystem {
@@ -48,8 +49,7 @@ public:
         opts.numWorkers = 2;
         opts.enableDistributedMaster = "true";
         std::stringstream ss;
-        ss << "-enable_metadata_recovery=true "
-           << "-enable_reconciliation=true "
+        ss << "-enable_reconciliation=true "
            << "-heartbeat_interval_ms=" << HEARTBEAT_INTERVAL_MS << " "
            << "-node_timeout_s=" << NODE_TIMEOUT_S << " "
            << "-node_dead_timeout_s=" << NODE_DEAD_TIMEOUT_S << " "
@@ -80,19 +80,25 @@ protected:
     static constexpr int timeoutMs_ = 5'000;
 };
 
-TEST_P(MetadataRecoveryTest, MetadataOwnerRestart)
+TEST_P(MetadataRecoveryTest, MetadataOwnerRestartRecoversMetadataAndHonorsTtl)
 {
-        GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
     std::shared_ptr<KVClient> client0;
     std::shared_ptr<KVClient> client1;
     InitTestKVClient(0, client0, timeoutMs_);
     InitTestKVClient(1, client1, timeoutMs_);
 
-    std::string objKey = client1->GenerateKey("meta_own_worker1");
+    std::string objKey = client1->GenerateKey("metadata_owner_restart_worker1");
     auto value = GenRandomString(10);
     DS_ASSERT_OK(client0->Set(objKey, value));
 
+    constexpr int ttl = 2;
+    datasystem::SetParam param{ .ttlSecond = ttl };
+    std::string ttlObjKey = client1->GenerateKey("metadata_owner_restart_ttl_worker1");
+    DS_ASSERT_OK(client0->Set(ttlObjKey, value, param));
+
+    client1.reset();
     DS_ASSERT_OK(cluster_->KillWorker(1));
+    DS_ASSERT_OK(RemoveAll(cluster_->GetRootDir() + "/worker1/rocksdb"));
 
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
@@ -100,53 +106,9 @@ TEST_P(MetadataRecoveryTest, MetadataOwnerRestart)
 
     InitTestKVClient(1, client1, timeoutMs_);
     ASSERT_TRUE(WaitUntilGetSucceeds(client1, objKey, value)) << objKey;
-}
-
-TEST_P(MetadataRecoveryTest, FailoverRestoreObjectWithTtl)
-{
-    std::shared_ptr<KVClient> client0;
-    std::shared_ptr<KVClient> client1;
-    InitTestKVClient(0, client0, timeoutMs_);
-    InitTestKVClient(1, client1, timeoutMs_);
-
-    constexpr int ttl = 2;
-    datasystem::SetParam param{ .ttlSecond = ttl };
-    std::string objKey = client1->GenerateKey("object_with_ttl_worker0");
-    auto value = GenRandomString(10);
-    DS_ASSERT_OK(client0->Set(objKey, value, param));
-    std::this_thread::sleep_for(std::chrono::milliseconds((500)));
-
-    DS_ASSERT_OK(cluster_->KillWorker(1));
-    WaitAllMembersJoinClusterTopology(1, 20);
-
     std::this_thread::sleep_for(std::chrono::milliseconds((ttl + 1) * S2MS));
-    std::string val;
-    ASSERT_EQ(client0->Get(objKey, val).GetCode(), K_NOT_FOUND);
-}
-
-TEST_P(MetadataRecoveryTest, RestartRestoreObjectWithTtl)
-{
-    std::shared_ptr<KVClient> client0;
-    std::shared_ptr<KVClient> client1;
-    InitTestKVClient(0, client0, timeoutMs_);
-    InitTestKVClient(1, client1, timeoutMs_);
-
-    constexpr int ttl = 2;
-    datasystem::SetParam param{ .ttlSecond = ttl };
-    std::string objKey = client1->GenerateKey("object_with_ttl_worker0_restart");
-    auto value = GenRandomString(10);
-    DS_ASSERT_OK(client0->Set(objKey, value, param));
-    std::this_thread::sleep_for(std::chrono::milliseconds((500)));
-
-    DS_ASSERT_OK(cluster_->KillWorker(1));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
-    WaitAllMembersJoinClusterTopology(2, 20);
-
-    InitTestKVClient(1, client1, timeoutMs_);
-    std::this_thread::sleep_for(std::chrono::milliseconds((ttl + 1) * S2MS));
-    std::string val;
-    ASSERT_EQ(client1->Get(objKey, val).GetCode(), K_NOT_FOUND);
+    std::string ttlValue;
+    ASSERT_EQ(client1->Get(ttlObjKey, ttlValue).GetCode(), K_NOT_FOUND);
 }
 
 INSTANTIATE_TEST_SUITE_P(EtcdAndCoordinator, MetadataRecoveryTest, testing::Bool(),

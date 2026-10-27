@@ -22,7 +22,6 @@
 
 #include "datasystem/cluster/control/topology_task_materializer.h"
 #include "datasystem/cluster/executor/hash_key_filter.h"
-#include "datasystem/cluster/executor/storage_scan_plan.h"
 #include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/cluster/runtime/coordination_event_dispatcher.h"
 #include "datasystem/cluster/runtime/topology_reader.h"
@@ -318,8 +317,8 @@ Status TopologyTaskExecutor::BuildPhaseAction(const TopologyExecutionFence &fenc
     return Status::OK();
 }
 
-Status TopologyTaskExecutor::BuildOpaqueScope(const TopologyExecutionFence &fence, std::unique_ptr<IKeyFilter> &filter,
-                                              std::unique_ptr<StorageScanPlan> &plan) const
+Status TopologyTaskExecutor::BuildKeyFilter(const TopologyExecutionFence &fence,
+                                            std::unique_ptr<IKeyFilter> &filter) const
 {
     CHECK_FAIL_RETURN_STATUS(!fence.ranges.empty(), K_INVALID, "empty topology callback scope");
     auto ranges = fence.ranges;
@@ -332,7 +331,6 @@ Status TopologyTaskExecutor::BuildOpaqueScope(const TopologyExecutionFence &fenc
                                  "overlapping topology callback ranges");
     }
     filter = std::make_unique<HashKeyFilter>(ranges);
-    plan = StorageScanPlan::CreateHash(ranges);
     return Status::OK();
 }
 
@@ -751,14 +749,13 @@ Status TopologyTaskExecutor::RunCallback(const TopologyExecutionFence &fence, co
     const auto start = std::chrono::steady_clock::now();
     std::shared_ptr<const TopologySnapshot> snapshot;
     std::unique_ptr<IKeyFilter> filter;
-    std::unique_ptr<StorageScanPlan> plan;
     TopologyPhaseAction action;
     auto rc = ValidateFence(fence, snapshot);
     if (rc.IsOk()) {
         rc = BuildPhaseAction(fence, snapshot->Version(), action);
     }
     if (rc.IsOk()) {
-        rc = BuildOpaqueScope(fence, filter, plan);
+        rc = BuildKeyFilter(fence, filter);
     }
     if (rc.IsOk()) {
         rc = ResolveCallbackDeadline(fence, deadline);
@@ -767,7 +764,7 @@ Status TopologyTaskExecutor::RunCallback(const TopologyExecutionFence &fence, co
         rc = Status(K_NOT_READY, "topology callback cancelled");
     }
     if (rc.IsOk()) {
-        TopologyCallbackContext context{ action, operation, deadline, cancellation, *filter, *plan };
+        TopologyCallbackContext context{ action, operation, deadline, cancellation, *filter };
         rc = InvokeCallback(fence, context, cleanup);
         if (std::chrono::steady_clock::now() >= deadline && !cancellation.IsCancelled()) {
             rc = Status(K_RPC_DEADLINE_EXCEEDED, "topology callback exceeded its deadline");

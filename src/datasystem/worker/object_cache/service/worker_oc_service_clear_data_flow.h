@@ -31,7 +31,6 @@
 #include "datasystem/common/util/thread.h"
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/object_cache/metadata_recovery_manager.h"
 #include "datasystem/worker/object_cache/object_endpoint_policy.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_delete_impl.h"
@@ -73,7 +72,6 @@ public:
      * @param[in] workerMasterApiManager Master API manager used for querying masters during cleanup.
      * @param[in] gRefProc Global-ref processor used to rebuild master refs.
      * @param[in] deleteProc Delete processor used to clear local object data.
-     * @param[in] metadataRecoveryManager Metadata recovery manager used before local cleanup.
      * @param[in] metadataRoute Metadata owner resolver that outlives this workflow.
      * @param[in] endpointPolicy Object endpoint policy that outlives this workflow.
      * @param[in] localAddress Current worker address string.
@@ -83,9 +81,8 @@ public:
         std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable,
         std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager,
         std::shared_ptr<WorkerOcServiceGlobalReferenceImpl> gRefProc,
-        std::shared_ptr<WorkerOcServiceDeleteImpl> deleteProc, MetaDataRecoveryManager *metadataRecoveryManager,
-        const worker::MetadataRouteResolver &metadataRoute, const ObjectEndpointPolicy &endpointPolicy,
-        std::string localAddress);
+        std::shared_ptr<WorkerOcServiceDeleteImpl> deleteProc, const worker::MetadataRouteResolver &metadataRoute,
+        const ObjectEndpointPolicy &endpointPolicy, std::string localAddress);
 
     /**
      * @brief Stop clear-data workflow and unsubscribe local clear-data event handlers.
@@ -255,9 +252,6 @@ private:
                                          std::vector<std::string> &unconfirmedMigrationIds,
                                          TopologyCleanupSnapshots &ordinarySnapshots);
 
-    void RecoverUnconfirmedMigrationObjects(const std::vector<std::string> &objectKeys,
-                                            std::unordered_set<std::string> &failedIds);
-
     void ClearTopologyObjects(const std::vector<std::string> &objectKeys,
                               const TopologyCleanupSnapshots &checkedSnapshots);
 
@@ -295,7 +289,6 @@ private:
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager_{ nullptr };
     std::shared_ptr<WorkerOcServiceGlobalReferenceImpl> gRefProc_{ nullptr };
     std::shared_ptr<WorkerOcServiceDeleteImpl> deleteProc_{ nullptr };
-    MetaDataRecoveryManager *metadataRecoveryManager_{ nullptr };
     const worker::MetadataRouteResolver &metadataRoute_;
     const ObjectEndpointPolicy &endpointPolicy_;
     std::string localAddress_;

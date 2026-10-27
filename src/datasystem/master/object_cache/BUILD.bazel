@@ -149,7 +149,6 @@ ds_cc_library(
         ":delete_object_mediator",
         ":master_master_oc_api",
         ":master_worker_oc_api_header",
-        "//src/datasystem/cluster:cluster_topology_scope",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/httpclient:http_client",
         "//src/datasystem/common/l2cache:l2_storage",

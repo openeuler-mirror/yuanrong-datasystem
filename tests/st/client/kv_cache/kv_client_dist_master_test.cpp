@@ -1056,26 +1056,6 @@ TEST_F(STCClientDistMasterDfxTest, DISABLED_TestReStartWorker)
     ASSERT_EQ(client_->Del("userDataKey"), Status::OK());
 }
 
-TEST_F(STCClientDistMasterDfxTest, DISABLED_LEVEL1_TestRestartWorkerAndRecoveryFromEtcd)
-{
-    StartClustersAndWaitReady();
-    std::string value = "The world is not black or white, heh; but a delicious shade of gray.";
-    for (size_t i = 0; i < 20; ++i) {
-        std::string key = "Camille" + std::to_string(i);
-        SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
-        DS_ASSERT_OK(client_->Set(key, value, param));
-    }
-
-    ShutdownEraseRocksDBAndRestartNodes();
-
-    for (size_t i = 0; i < 20; ++i) {
-        std::string key = "Camille" + std::to_string(i);
-        DS_ASSERT_OK(client_->Get(key, value));
-    }
-}
-
-
-
 class STCClientDistMasterOOMTest : public STCClientDistMasterTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override

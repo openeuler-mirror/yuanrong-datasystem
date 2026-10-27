@@ -216,8 +216,6 @@ global:
 
     # when we delete the object which is in uploading process, in this scenarios we need delay some time to retry.
     objectDelRetryDelaySec: 3600
-    # Whether data read and write from the L2 cache daemon depend on metadata. Note: If set to false, it indicates that the metadata is not stored in etcd.
-    ocIoFromL2CacheNeedMetadata: true
     # "The size of the per-thread asynchronous queue for writing to the secondary cache. With 8 threads, the system supports a maximum total capacity of 8 * l2_cache_async_write_queue_size key-value pairs pending write.
     l2CacheAsyncWriteQueueSize: 10000
     # Control whether enable fallback to L2 cache when worker failed.
@@ -296,8 +294,6 @@ global:
     rocksdbBackgroundThreads: 16
     # Config the rocksdb support none, sync or async, async by default. Optional value: 'none', 'sync', 'async'. This represents the method of writing metadata to rocksdb.
     rocksdbWriteMode: "async"
-    # Whether to recover worker metadata to master during worker restart cleanup, default is false
-    enableMetadataRecovery: "false"
     # Experimental parameter. Allow data read from a remote worker to be cached locally as a hot replica and registered
     # in metadata. This is only for hot-replica performance optimization, not a data reliability mechanism.
     enableDataReplication: "true"
