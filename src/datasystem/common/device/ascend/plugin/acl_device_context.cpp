@@ -18,6 +18,11 @@
  * Description: The AscendCL device context plugin.
  */
 
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
 #include "datasystem/common/device/ascend/plugin/acl_device_context.h"
 
 #include <runtime/dev.h>
@@ -322,3 +327,7 @@ int DSP2PScatterBatchFromRemoteHostMemDone(P2PComm comm)
 {
     return P2PScatterBatchFromRemoteHostMemDone(comm);
 }
+
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
