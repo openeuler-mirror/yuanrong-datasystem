@@ -37,6 +37,7 @@
 #include "datasystem/common/util/validator.h"
 #include "datasystem/worker/client_manager/client_manager.h"
 #include "datasystem/common/scheduling/worker_read_bandwidth_tracker.h"
+#include "datasystem/worker/object_cache/cache_hit_info.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -135,6 +136,12 @@ Status WorkerQueryAndGetImpl::ProcessAndDeliver(
     CollectStats(state);
     RETURN_IF_NOT_OK(DeliverResponse(serverApi, state));
     state.delivered = true;
+    if (state.pendingMemHits > 0) {
+        CacheHitInfo::Instance().IncMemHit(state.pendingMemHits);
+    }
+    if (state.pendingMisses > 0) {
+        CacheHitInfo::Instance().IncMissHit(state.pendingMisses);
+    }
     return Status::OK();
 }
 
@@ -354,6 +361,12 @@ Status WorkerQueryAndGetImpl::EncodeLocalHits(RequestState &state)
             }
             VLOG_IF(1, rc.IsError()) << "[ObjectKey " << objectKey
                                      << "] QueryAndGet inline data fallback: " << rc.ToString();
+        } else {
+            // A locally-resident key served inline is a memory hit; encode-failed keys fall to the
+            // replica-read phase and are counted there, so one logical Get increments exactly once.
+            // Staged until the response is delivered: a mid-request failure (miss metadata query or
+            // delivery) must not leave counts for keys the client never received.
+            ++state.pendingMemHits;
         }
     }
     if (shmBytes > 0) {
@@ -513,8 +526,12 @@ Status WorkerQueryAndGetImpl::FillMissLocations(RequestState &state) const
         const auto &objectKey = state.request.object_keys(i);
         result->mutable_location()->set_object_key(objectKey);
         auto location = locations.find(objectKey);
+        const bool noAliveReplica = location == locations.end() || location->second.object_locations_size() == 0;
         if (location != locations.end()) {
             FillLocation(location->second, *result->mutable_location());
+        }
+        if (noAliveReplica && state.request.has_data_request()) {
+            ++state.pendingMisses;
         }
     }
     return Status::OK();

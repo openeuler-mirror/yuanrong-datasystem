@@ -52,6 +52,7 @@
 #include "datasystem/common/util/timer.h"
 #include "datasystem/protos/utils.pb.h"
 #include "datasystem/worker/object_cache/object_kv.h"
+#include "datasystem/worker/object_cache/cache_hit_info.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
@@ -288,7 +289,8 @@ Status WorkerWorkerOCServiceImpl::ProcessGetObjectRemoteRpc(
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_IMPL);
     INJECT_POINT("worker.GetObjectRemote.afterRead");
     BatchRh2dContext transportContext;
-    auto getRc = ProcessSingleGetObjectRemote(req, rsp, payload, &transportContext);
+    HitSource stagedHit = HitSource::kNone;
+    auto getRc = ProcessSingleGetObjectRemote(req, rsp, payload, &transportContext, true, stagedHit);
     const bool providerUbFailureEncoded = TryEncodeProviderUbFailureResponse(getRc, rsp);
     if (!providerUbFailureEncoded) {
         RETURN_IF_NOT_OK_EXCEPT(getRc, StatusCode::K_OC_REMOTE_GET_NOT_ENOUGH);
@@ -300,6 +302,7 @@ Status WorkerWorkerOCServiceImpl::ProcessGetObjectRemoteRpc(
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_SENDPAYLOAD);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SendGetObjectRemotePayload(serverApi, rsp, payload),
                                      "GetObjectRemote send payload error");
+    CommitHitInfo(stagedHit);
     pointImpl.Record();
     const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
@@ -319,13 +322,16 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
                                                   std::vector<RpcMessage> &payload)
 {
     Raii attachHealth([this, &rsp] { AttachPublishedSelfUbHealth(ocClientWorkerSvc_, rsp); });
-    return ProcessSingleGetObjectRemote(req, rsp, payload, nullptr);
+    // Internal in-process pull (fromClientRead=false): never counted, the staged slot is discarded.
+    HitSource stagedHit = HitSource::kNone;
+    return ProcessSingleGetObjectRemote(req, rsp, payload, nullptr, false, stagedHit);
 }
 
 Status WorkerWorkerOCServiceImpl::ProcessSingleGetObjectRemote(GetObjectRemoteReqPb &req,
                                                                GetObjectRemoteRspPb &rsp,
                                                                std::vector<RpcMessage> &payload,
-                                                               BatchRh2dContext *transportContext)
+                                                               BatchRh2dContext *transportContext,
+                                                               bool fromClientRead, HitSource &pendingHit)
 {
     // Inherit the SDK traceID from the worker thread's thread_local Trace (set by
     // WorkerEntryImpl's SetTraceContextFromMeta) into the per-request context so
@@ -342,8 +348,8 @@ Status WorkerWorkerOCServiceImpl::ProcessSingleGetObjectRemote(GetObjectRemoteRe
         RETURN_IF_NOT_OK(PrepareSingleGetObjectRemoteReq(req, *transportContext));
     }
     std::vector<uint64_t> eventKeys;
-    RETURN_IF_NOT_OK(GetObjectRemoteHandler(req, rsp, payload, true, eventKeys, nullptr, nullptr, nullptr,
-                                            transportContext));
+    RETURN_IF_NOT_OK(GetObjectRemoteHandler(req, rsp, payload, true, eventKeys, fromClientRead, pendingHit, nullptr,
+                                            nullptr, nullptr, transportContext));
     auto config = GetServerLatencyTraceConfig();
     uint64_t elapsedUs = static_cast<uint64_t>(slowLogTimer.ElapsedMicroSecond());
     SLOW_LOG_IF_OR_VLOG(
@@ -418,14 +424,17 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(uint32_t paraIndex, 
                                                subReq.read_offset(), subReq.read_size()),
                                   callerAddress, FLAGS_worker_address);
     Status fallbackStatus;
-    auto status =
-        GetObjectRemoteHandler(subReq, subRsp, subPayload, false, eventKeys, batchPtr, rsp.mutable_root_info(),
-                               isGatherWrite ? nullptr : &fallbackStatus, batchRh2dContext);
+    HitSource pendingHit = HitSource::kNone;
+    auto status = GetObjectRemoteHandler(subReq, subRsp, subPayload, false, eventKeys, true, pendingHit, batchPtr,
+                                         rsp.mutable_root_info(), isGatherWrite ? nullptr : &fallbackStatus,
+                                         batchRh2dContext);
     // payload means need to FallbackTcp/NormalTcp transport
     if ((status.IsError() && subPayload.empty()) || (status.IsError() && !FLAGS_enable_transport_fallback)) {
         subRsp.mutable_error()->set_error_code(status.GetCode());
         subRsp.mutable_error()->set_error_msg(status.GetMsg());
     }
+    // Exactly one pendingHit per respPb keeps the merge-time commit aligned with the response order.
+    parallelRes[paraIndex].pendingHits.emplace_back(pendingHit);
 
     if (isGatherWrite) {
         // pre save subPayload to fallbackPayloads, for fallback when GatherWrite failed
@@ -570,6 +579,7 @@ Status WorkerWorkerOCServiceImpl::PrepareBatchRh2dContext(const GetObjectRemoteR
 Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                                          std::vector<RpcMessage> &payload, bool blocking,
                                                          std::vector<uint64_t> &eventKeys,
+                                                         bool fromClientRead, HitSource &pendingHit,
                                                          std::shared_ptr<AggregateMemory> batchPtr,
                                                          RemoteH2DRootInfoPb *batchRootInfo, Status *fallbackStatus,
                                                          BatchRh2dContext *batchRh2dContext)
@@ -580,8 +590,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteRe
     CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "objectKey is empty.");
     INJECT_POINT("worker.worker_worker_remote_get_sleep");
     INJECT_POINT("worker.worker_worker_remote_get_failure");
-    Status status = GetObjectRemoteImpl(req, rsp, payload, blocking, eventKeys, batchPtr, batchRootInfo,
-                                        fallbackStatus, batchRh2dContext);
+    Status status = GetObjectRemoteImpl(req, rsp, payload, blocking, eventKeys, fromClientRead, pendingHit, batchPtr,
+                                        batchRootInfo, fallbackStatus, batchRh2dContext);
     if (status.GetCode() == K_INVALID || status.GetCode() == K_NOT_FOUND) {
         status = Status(K_WORKER_PULL_OBJECT_NOT_FOUND, status.GetMsg());
     }
@@ -987,18 +997,36 @@ Status WorkerWorkerOCServiceImpl::HandlePayloadFallback(
     return Status::OK();
 }
 
+void WorkerWorkerOCServiceImpl::CommitHitInfo(HitSource source)
+{
+    if (source == HitSource::kMemory) {
+        CacheHitInfo::Instance().IncMemHit(1);
+    } else if (source == HitSource::kDisk) {
+        CacheHitInfo::Instance().IncDiskHit(1);
+    }
+}
+
+Status WorkerWorkerOCServiceImpl::LockEntryForRemoteGetWithTiming(const std::string &objectKey, bool tryLock,
+                                                                  uint64_t version,
+                                                                  std::shared_ptr<SafeObjType> &safeEntry)
+{
+    // Timing: SafeObject RLock blocked by drain WLock → breakdown "RemoteLockEntry: Nms".
+    Timer lockEntryTimer;
+    RETURN_IF_NOT_OK(LockEntryForRemoteGet(objectKey, tryLock, version, safeEntry));
+    GetWorkerTimeCost().Append("RemoteLockEntry", lockEntryTimer.ElapsedMilliSecond());
+    return Status::OK();
+}
+
 Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                                       std::vector<RpcMessage> &outPayload, bool blocking,
-                                                      std::vector<uint64_t> &eventKeys,
-                                                      std::shared_ptr<AggregateMemory> batchPtr,
+                                                      std::vector<uint64_t> &eventKeys, bool fromClientRead,
+                                                      HitSource &pendingHit, std::shared_ptr<AggregateMemory> batchPtr,
                                                       RemoteH2DRootInfoPb *batchRootInfo, Status *fallbackStatus,
                                                       BatchRh2dContext *batchRh2dContext)
 {
     // Outer scope (BatchGetObjectRemote/GetObjectRemote) already created ScopedRequestContext.
     // No nested scope here: workerTimeCost is a value member not inherited by inner scopes.
     PerfPoint batchImplPoint(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE_IMPL);
-    (void)eventKeys;
-    (void)blocking;
     const std::string &objectKey = req.object_key();
     const bool tryLock = req.try_lock();
     const uint64_t version = req.version();
@@ -1020,12 +1048,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
     });
     RETURN_IF_NOT_OK(rc);
 
-    // Timing: SafeObject RLock blocked by drain WLock → breakdown "RemoteLockEntry: Nms".
-    {
-        Timer lockEntryTimer;
-        RETURN_IF_NOT_OK(LockEntryForRemoteGet(objectKey, tryLock, version, safeEntry));
-        GetWorkerTimeCost().Append("RemoteLockEntry", lockEntryTimer.ElapsedMilliSecond());
-    }
+    RETURN_IF_NOT_OK(LockEntryForRemoteGetWithTiming(objectKey, tryLock, version, safeEntry));
     Raii raii([safeEntry]() { safeEntry->RUnlock(); });
     auto &entry = *safeEntry;
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!entry->stateInfo.IsCacheInvalid() && !entry->IsInvalid(), K_INVALID,
@@ -1038,9 +1061,21 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
     bool isFastTransportEnabled = isUrmaFastTransport || (IsUcpEnabled() && req.has_ucp_info());
     RETURN_IF_NOT_OK(CheckFastTransportSize(entry, expectedDataSize, objectKey, isFastTransportEnabled, rsp));
 
-    return LoadPayloadAndFillResponse(req, rsp, entry, outPayload, objectKey, offset, size, blocking, eventKeys,
-                                      batchPtr, batchRootInfo, batchRh2dContext, fallbackStatus, isFastTransportEnabled,
-                                      isUrmaFastTransport, isPipelineH2DRequest, batchImplPoint);
+    // Read before LoadPayloadAndFillResponse: the spill branch may change the entry state. countHit keeps
+    // the in-process QueryMeta inline pull (try_lock=true from the master) out of the hit-info counters so
+    // bound-mode hit_info stays unchanged; only client data-plane reads count.
+    const bool countHit = tryLock && fromClientRead;
+    const bool fromSpill = countHit && entry->IsSpilled() && entry->GetShmUnit() == nullptr;
+    Status loadRc = LoadPayloadAndFillResponse(req, rsp, entry, outPayload, objectKey, offset, size, blocking,
+                                               eventKeys, batchPtr, batchRootInfo, batchRh2dContext, fallbackStatus,
+                                               isFastTransportEnabled, isUrmaFastTransport, isPipelineH2DRequest,
+                                               batchImplPoint);
+    if (loadRc.IsOk() && countHit) {
+        // Staged here and committed by the RPC layer only after the response is delivered: a local
+        // delivery failure (Write/SendPayload error) must not count keys the client never received.
+        pendingHit = fromSpill ? HitSource::kDisk : HitSource::kMemory;
+    }
+    return loadRc;
 }
 
 Status WorkerWorkerOCServiceImpl::CheckCoordinatorState(const CheckCoordinatorStateReqPb &req,
@@ -1175,6 +1210,7 @@ Status WorkerWorkerOCServiceImpl::ProcessBatchGetObjectRemoteRpc(
         callerAddress, FLAGS_worker_address);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     BatchRh2dContext batchTransportContext;
+    std::vector<HitSource> stagedHits;
     auto prepareRc = PrepareBatchGetObjectRemoteReq(req, batchTransportContext);
     if (prepareRc.IsError()) {
         LogBatchGetObjectRemotePrepareFailed(req, callerAddress, firstObjectKey, prepareRc);
@@ -1185,13 +1221,14 @@ Status WorkerWorkerOCServiceImpl::ProcessBatchGetObjectRemoteRpc(
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::DATA_REMOTEGET_START);
     }
-    RETURN_IF_NOT_OK(BatchGetObjectRemoteImpl(req, rsp, payload, batchTransportContext));
+    RETURN_IF_NOT_OK(BatchGetObjectRemoteImpl(req, rsp, payload, stagedHits, batchTransportContext));
     TryEncodeRemoteGetLatencySummary(config, traceEnabled, rsp);
     AttachPublishedSelfUbHealth(ocClientWorkerSvc_, rsp);
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Write(rsp), "GetObjectRemote write error");
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_SENDPAYLOAD);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendPayload(payload), "GetObjectRemote send payload error");
+    CommitPendingHits(rsp, stagedHits);
     pointImpl.Record();
     LogBatchGetObjectRemoteFinish(config, req, payload, firstObjectKey, realRemainingTime, callerAddress, timer);
     point.Record();
@@ -1230,6 +1267,7 @@ Status WorkerWorkerOCServiceImpl::PrepareBatchGetObjectRemoteReq(BatchGetObjectR
 Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteReqPb &req,
                                                            BatchGetObjectRemoteRspPb &rsp,
                                                            std::vector<RpcMessage> &payload,
+                                                           std::vector<HitSource> &stagedHits,
                                                            BatchRh2dContext &batchTransportContext)
 {
     PerfPoint point(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE);
@@ -1296,19 +1334,22 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteR
     // after this single Seal call. Object-level WR failures intentionally do
     // not request retirement; their cleanup follows release semantics.
     RETURN_IF_NOT_OK(sealBatchLane());
-    return MergeParallelBatchGetResult(req, parallelRes, rsp, payload);
+    return MergeParallelBatchGetResult(req, parallelRes, rsp, payload, stagedHits);
 }
 
 Status WorkerWorkerOCServiceImpl::MergeParallelBatchGetResult(const BatchGetObjectRemoteReqPb &req,
                                                               std::vector<ParallelRes> &parallelRes,
                                                               BatchGetObjectRemoteRspPb &rsp,
-                                                              std::vector<RpcMessage> &payload)
+                                                              std::vector<RpcMessage> &payload,
+                                                              std::vector<HitSource> &stagedHits)
 {
     uint64_t index = 0;
     for (auto &loc : parallelRes) {
         for (auto &resp : loc.respPbs) {
             rsp.add_responses()->Swap(&resp);
         }
+        // Same order as the responses swapped above; committed by the RPC layer after delivery.
+        stagedHits.insert(stagedHits.end(), loc.pendingHits.begin(), loc.pendingHits.end());
 
         for (size_t kpIndex = 0; kpIndex < loc.kps.size(); ++kpIndex) {
             auto &kp = loc.kps[kpIndex];
@@ -1346,6 +1387,24 @@ Status WorkerWorkerOCServiceImpl::MergeParallelBatchGetResult(const BatchGetObje
         loc.fallbackStatuses.clear();
     }
     return Status::OK();
+}
+
+void WorkerWorkerOCServiceImpl::CommitPendingHits(const BatchGetObjectRemoteRspPb &rsp,
+                                                  const std::vector<HitSource> &stagedHits)
+{
+    if (stagedHits.empty()) {
+        return;
+    }
+    const uint64_t responseCount = static_cast<uint64_t>(rsp.responses_size());
+    const uint64_t n = responseCount < stagedHits.size() ? responseCount
+                                                         : static_cast<uint64_t>(stagedHits.size());
+    for (uint64_t i = 0; i < n; ++i) {
+        // Success responses carry error.code = K_OK (set by FillGetObjectRemoteResponse), and a
+        // missing error sub-message also reads as 0 = K_OK; check the code, not error presence.
+        if (rsp.responses(static_cast<int>(i)).error().error_code() == StatusCode::K_OK) {
+            CommitHitInfo(stagedHits[static_cast<size_t>(i)]);
+        }
+    }
 }
 
 void WorkerWorkerOCServiceImpl::SetBatchResponseError(BatchGetObjectRemoteRspPb &rsp, uint64_t begin, uint64_t count,
