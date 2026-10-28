@@ -124,6 +124,23 @@ TEST_F(FlagsConfigMonitorTest, MissingConfigFileLogsWarningOnce)
     }
 }
 
+TEST_F(FlagsConfigMonitorTest, EmptyConfigFilePathSkipsFileCheck)
+{
+    DynamicFlagConfig flagConfig;
+    flagConfig.StartConfigFileHandle("", std::chrono::steady_clock::now());
+
+    const std::string operationLog = OperationLogger::Instance().OperationLogPath();
+    Logging::ResetLoggingRuntimeForTest();
+
+    const std::string infoLog = FLAGS_log_dir + "/" + FLAGS_log_filename + ".INFO.log";
+    const std::string content = ReadFile(infoLog);
+    EXPECT_EQ(CountOccurrences(content, "Monitor config file does not exist"), 0ul);
+    if (!operationLog.empty()) {
+        const std::string opContent = ReadFile(operationLog);
+        EXPECT_THAT(opContent, testing::Not(testing::HasSubstr("CONFIG_FAILED")));
+    }
+}
+
 TEST_F(FlagsConfigMonitorTest, ConfigFileChangeAppliesModifiableFlag)
 {
     DynamicFlagConfig flagConfig;
