@@ -12,7 +12,7 @@
   - `src/datasystem/common/metrics/*`
   - `src/datasystem/cluster/*`
 - Last verified against source:
-  - `2026-04-13`
+  - `2026-10-17`
 - Related design docs:
   - `.repo_context/modules/infra/observability/diagnosis-and-operations.md`
   - `.repo_context/modules/infra/logging/design.md`
@@ -32,8 +32,8 @@
 | Symptom | First signals to inspect | Key config or files | First code entrypoints |
 | --- | --- | --- | --- |
 | worker process exits during startup | ordinary logs, crash logs | `log_dir`, metadata backend config | `src/datasystem/worker/worker_main.cpp`, `worker.cpp`, `worker_oc_server.cpp` |
-| process is alive but not ready | readiness file, startup logs | `ready_check_path`, `worker_address`, `etcd_address`, `metastore_address` | `worker_oc_server.cpp`, `worker_runtime` docs |
-| process was ready but later becomes unhealthy | liveness file, ordinary logs | `liveness_check_path`, `liveness_probe_timeout_s` | `src/datasystem/worker/worker_liveness_check.cpp` |
+| process alive, not ready | probe and startup logs | probe path, address, metadata | server and runtime docs |
+| process later becomes unhealthy | probe mtime, logs | probe path and timeout | `worker_liveness_check.cpp` |
 | request failures with little signal | ordinary logs, access logs, trace IDs | `log_monitor`, access-log files | `src/datasystem/common/log/access_recorder.cpp`, request entrypoints |
 | requests succeed but monitor logs disappear | ordinary logs, resource monitor files, init logs | `log_monitor`, `log_monitor_exporter`, `log_dir` | `logging.cpp`, `res_metric_collector.cpp`, `hard_disk_exporter.cpp` |
 | latency or throughput regression | ordinary logs, access logs, resource monitor files | queue-related runtime config, monitor interval, log flush settings | `worker_main.cpp`, `metrics_exporter.cpp`, `log_manager.cpp`, service thread pools |

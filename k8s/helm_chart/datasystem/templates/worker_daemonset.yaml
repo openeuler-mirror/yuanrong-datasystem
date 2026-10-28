@@ -94,7 +94,6 @@ spec:
         - -log_monitor_exporter={{ $.Values.global.observability.logMonitorExporter }}
         - -log_monitor_interval_ms={{ $.Values.global.observability.logMonitorIntervalMs }}
         - -enable_perf_trace_log={{ $.Values.global.log.enablePerfTraceLog }}
-        - -enable_metadata_recovery={{ $.Values.global.metadata.enableMetadataRecovery }}
         - -enable_data_replication={{ $.Values.global.metadata.enableDataReplication }}
         - -logbufsecs={{ $.Values.global.log.logBufSecs }}
         - -log_compress={{ $.Values.global.log.logCompress }}
@@ -118,12 +117,10 @@ spec:
         - -sc_shared_page_group_count={{ $.Values.global.resources.datasystemWorker.scSharedPageGroupCount }}
         - -oc_shm_threshold_percentage={{ $.Values.global.resources.datasystemWorker.ocShmThresholdPercentage }}
         - -sc_shm_threshold_percentage={{ $.Values.global.resources.datasystemWorker.scShmThresholdPercentage }}
-        - -rpc_thread_num={{ $.Values.global.rpc.rpcThreadNum }}
         - -oc_thread_num={{ $.Values.global.rpc.ocThreadNum }}
         - -sc_regular_socket_num={{ $.Values.global.rpc.scRegularSocketNum }}
         - -sc_stream_socket_num={{ $.Values.global.rpc.scStreamSocketNum }}
         - -enable_huge_tlb={{ $.Values.global.performance.enableHugeTlb }}
-        - -oc_metadata_header={{ $.Values.global.performance.enableOcMetadataHeader }}
         - -enable_fallocate={{ $.Values.global.performance.enableFallocate }}
         - -authorization_enable={{ $.Values.global.tenantAuth.authorizationEnable }}
         - -yuanrong_iam_url={{ $.Values.global.tenantAuth.yuanrong.yuanrongIamUrl }}
@@ -153,10 +150,7 @@ spec:
         - -remote_send_thread_num={{ $.Values.global.rpc.remoteSendThreadNum }}
         - -master_sc_thread_num={{ $.Values.global.rpc.masterScThreadNum }}
         - -unix_domain_socket_dir={{ $.Values.global.ipc.udsDir }}
-        - -health_check_path=$(HEALTH_CHECK_PATH)
-        - -ready_check_path=$(READY_CHECK_PATH)
-        - -liveness_check_path=$(LIVENESS_CHECK_PATH)
-        - -oc_worker_worker_direct_port={{ $.Values.global.rpc.ocWorkerWorkerDirectPort }}
+        - -health_check_path=$(WORKER_PROBE_PATH)
         - -batch_get_threshold_mb={{ $.Values.global.rpc.batchGetThresholdMb }}
         - -max_client_num={{ $.Values.global.resources.datasystemWorker.maxClientNum }}
         - -client_reconnect_wait_s={{ $.Values.global.reliability.clientReconnectWaitS }}
@@ -226,7 +220,6 @@ spec:
         - -data_migrate_urma_transport_mode={{ $.Values.global.gracefulShutdown.dataMigrateUrmaTransportMode }}
         - -ipc_through_shared_memory={{ $.Values.global.ipc.ipcThroughSharedMemory }}
         - -shared_memory_worker_port={{ $.Values.global.ipc.sharedMemoryWorkerPort }}
-        - -io_thread_nice={{ $.Values.global.rpc.ioThreadNice }}
         - -enable_sched_runtime={{ $.Values.global.performance.enableSchedRuntime }}
         - -brpc_event_dispatcher_num={{ $.Values.global.rpc.brpc.eventDispatcherNum }}
         - -brpc_server_num_threads={{ $.Values.global.rpc.brpc.brpcServerNumThreads }}
@@ -239,7 +232,6 @@ spec:
         - -async_delete={{ $.Values.global.performance.asyncDelete}}
         - -arena_per_tenant={{ $.Values.global.performance.arenaPerTenant }}
         - -shared_memory_populate={{ $.Values.global.performance.sharedMemoryPopulate }}
-        - -memory_reclamation_time_second={{ $.Values.global.performance.memoryReclamationTimeSecond }}
         - -memory_alignment={{ $.Values.global.performance.memoryAlignment }}
         - -monitor_config_file=/home/yuanrong/config/datasystem.config
         - -client_dead_timeout_s={{ $.Values.global.reliability.clientDeadTimeoutS }}
@@ -252,22 +244,17 @@ spec:
         - -enable_pipeline_h2d={{ $.Values.global.performance.enablePipelineH2d }}
         - -pipeline_h2d_thread_num={{ $.Values.global.performance.pipelineH2dThreadNum }}
         - -shared_memory_distribution_policy={{ $.Values.global.performance.sharedMemoryDistributionPolicy }}
-        - -urma_poll_size={{ $.Values.global.performance.urmaPollSize }}
         - -urma_log_threshold_us={{ $.Values.global.performance.urmaLogThresholdUs | int64 }}
-        - -urma_max_write_size_mb={{ $.Values.global.performance.urmaMaxWriteSizeMb }}
         - -urma_register_whole_arena={{ $.Values.global.performance.urmaRegisterWholeArena }}
-        - -urma_event_mode={{ $.Values.global.performance.urmaEventMode }}
         - -enable_transport_fallback={{ $.Values.global.performance.enableTransportFallback }}
         - -urma_failover_success_rate_ratio={{ $.Values.global.performance.urmaFailoverSuccessRateRatio }}
         - -urma_failover_min_sample_count={{ $.Values.global.performance.urmaFailoverMinSampleCount }}
-        - -oc_shm_transfer_threshold_kb={{ $.Values.global.performance.ocShmTransferThresholdKB }}
         - -enable_distributed_master={{ $.Values.global.reliability.enableDistributedMaster }}
         - -enable_p2p_transfer={{ $.Values.global.performance.enableP2pTransfer }}
         - -enable_worker_worker_batch_get={{ $.Values.global.performance.enableWorkerWorkerBatchGet }}
         - -enable_rdma={{ $.Values.global.performance.enableRdma }}
         - -rdma_register_whole_arena={{ $.Values.global.performance.rdmaRegisterWholeArena }}
         - -enable_stream_data_verification={{ $.Values.global.reliability.enableStreamDataVerification }}
-        - -oc_io_from_l2cache_need_metadata={{ $.Values.global.l2Cache.ocIoFromL2CacheNeedMetadata }}
         - -oc_worker_aggregate_merge_size={{ $.Values.global.performance.ocWorkerAggregateMergeSize | int64 }}
         - -oc_worker_aggregate_single_max={{ $.Values.global.performance.ocWorkerAggregateSingleMax | int64 }}
         - -oc_worker_worker_parallel_min={{ $.Values.global.performance.ocWorkerWorkerParallelMin }}
@@ -291,21 +278,17 @@ spec:
             command:
               - /bin/bash
               - -c
-              - /home/yuanrong/file_check.sh startupProbe $(LIVENESS_CHECK_PATH)
+              - /home/yuanrong/file_check.sh startupProbe $(WORKER_PROBE_PATH)
           initialDelaySeconds: 5
           periodSeconds: 5
           timeoutSeconds: 5
-          {{- if gt (div (int $.Values.global.reliability.nodeDeadTimeoutS) 5) 12 }}
-          failureThreshold: {{ div (int $.Values.global.reliability.nodeDeadTimeoutS) 5 }}
-          {{- else}}
-          failureThreshold: 12
-          {{- end }}
+          failureThreshold: {{ div (add (int $.Values.global.reliability.startupProbeTimeoutS) 4) 5 }}
         readinessProbe:
           exec:
             command:
               - /bin/bash
               - -c
-              - /home/yuanrong/file_check.sh readinessProbe $(HEALTH_CHECK_PATH) $(READY_CHECK_PATH)
+              - /home/yuanrong/file_check.sh readinessProbe $(WORKER_PROBE_PATH)
           initialDelaySeconds: 1
           periodSeconds: 5
           timeoutSeconds: 5
@@ -315,7 +298,9 @@ spec:
             command:
               - /bin/bash
               - -c
-              - /home/yuanrong/liveness_check.sh -f $(LIVENESS_CHECK_PATH) -t {{ $.Values.global.reliability.livenessProbeTimeoutS }}
+              - >-
+                /home/yuanrong/liveness_check.sh -f $(WORKER_PROBE_PATH)
+                -t {{ $.Values.global.reliability.livenessProbeTimeoutS }}
           initialDelaySeconds: 1
           periodSeconds: 5
           timeoutSeconds: 5
@@ -378,12 +363,8 @@ spec:
             value: {{ $.Values.global.etcd.etcdCertDir }}
           - name: YUANRONG_IAM_DIR
             value: {{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}
-          - name: HEALTH_CHECK_PATH
-            value: "/home/yuanrong/datasystem/health/healthy"
-          - name: READY_CHECK_PATH
-            value: "/home/yuanrong/datasystem/health/ready"
-          - name: LIVENESS_CHECK_PATH
-            value: "/home/yuanrong/datasystem/health/liveness"
+          - name: WORKER_PROBE_PATH
+            value: "/home/yuanrong/datasystem/health/worker"
           - name: STATUS_FILE_PATH
             value: "/home/yuanrong/datasystem/logs/worker/worker-status"
           - name: SCALE_IN_TAINT

@@ -353,8 +353,8 @@
   source/target generations, batch epoch, topology version, a distinct source/target generation, and a `LEAVING`
   source remain fenced. New migration, redirect, rebalance, recovery, and primary target selection still excludes
   `PRE_LEAVING`.
-- Business migration/recovery is invoked through one opaque task callback. `IKeyFilter` and `StorageScanPlan` keep token
-  representation internal, while callbacks receive stable operation identity, deadline, and cooperative cancellation.
+- Business migration/recovery is invoked through one opaque task callback. `IKeyFilter` keeps token representation
+  internal, while callbacks receive stable operation identity, deadline, and cooperative cancellation.
   `TopologyTaskExecutor` owns one mutex-protected state record per business operation; retry timing, attempt count,
   cancellation, progress-only retry, and ScaleIn stage facts cannot diverge across parallel maps. Sparse reverse indexes
   retain only operation IDs needed to scan scheduled retries without walking the full operation table and to determine
@@ -550,10 +550,9 @@
   rematerialization. Task/notify are non-authoritative and deterministic Controller reconciliation restores any such
   record; topology correctness never depends on Janitor success. The same pass removes stale ScaleIn metadata-done
   markers whose epoch is older than the active batch, or no newer than the final topology version when no batch is active.
-- Failure metadata recovery is at-least-once, idempotent, and best effort. Normal recovery failure is not retried; a
-  coordinator crash before final topology CAS may repeat it. Object recovery scans only a configured shared ETCD-backed
-  metadata store. When that backend is disabled, the scan is an empty successful recovery set; it does not fall back to
-  Worker-local RocksDB or treat Coordinator topology storage as Object Cache metadata.
+- Confirmed Failure no longer restores Object Cache metadata from ETCD. The failure callback proceeds to fenced local
+  object cleanup, while Stream Cache keeps its independent best-effort recovery path. Fast-restart and slot recovery
+  remain separate workflows and are not changed by this failure-time policy.
 - Scale-out and scale-in callbacks use bounded retries. Exhausted scale-out removes the joining member so it can restart
   and re-enter as `INITIAL`; exhausted scale-in proceeds through external bounded termination and Failure handling.
   Callback window exhaustion advances the operation record's attempt count and re-arms its next-attempt deadline with
@@ -607,9 +606,13 @@
   outside that contract: the Worker safely retains last-good routing and remains `CONTROL_DEGRADED`, but control-plane
   progress and automatic return to `NORMAL` are not guaranteed until the conflicting operation is resolved.
 - The request-level zero-failure contract covers ordinary in-memory routing and RPC connection checks, including
-  `NONE_L2_CACHE_EVICT` objects. It does not cover a Get that must recover object metadata directly from ETCD through
-  `oc_io_from_l2cache_need_metadata`; that L2 metadata fallback remains backend-dependent.
+  `NONE_L2_CACHE_EVICT` objects. Object Get never recovers metadata from ETCD, and L2 payload reads require
+  authoritative object metadata from the metadata owner. A confirmed metadata miss does not trigger a raw key-only L2
+  read; metadata-owner and route failures return their original error. When metadata exists but the selected data
+  Worker is unavailable, the existing metadata-governed L2 fallback remains available for L2-backed write modes.
 - Temporary endpoint observations stay process local. Only confirmed Failure enters the authoritative topology.
+- Object metadata recovery has one active trigger: `NodeRestartEvent`. Surviving Workers report metadata owned by the
+  restarted node through `RecoverMetadataOfRestartedWorkers`; confirmed Failure does not trigger metadata backfill.
 - In Coordinator mode, membership TTL expiry creates a per-target, process-local witness probe round. For each selected
   witness, the Controller publishes one coordinator-ID-fenced single-target event under
   `root/probe/<witness_address>` through the existing watch channel. Each received PUT is admitted independently to a

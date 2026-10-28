@@ -143,8 +143,8 @@ StatusC BufferToCString(datasystem::Optional<datasystem::Buffer> input,
         return StatusC{ datasystem::K_RUNTIME_ERROR, "Memory allocation failed" };
     }
     // Use the SDK-internal helper so the copy still happens when the buffer was
-    // returned with oc_metadata_header disabled (DisabledLock — no latch frame in
-    // the shm layout). Explicit user calls to Buffer::RLatch() continue to fail
+    // returned from a shm layout without a metadata header (DisabledLock — no
+    // latch frame). Explicit user calls to Buffer::RLatch() continue to fail
     // with K_NOT_SUPPORTED, but internal Get-and-copy paths must not.
     datasystem::Status rc = input->CopyDataWithRLatch([&] {
         *valLen = input->GetSize();

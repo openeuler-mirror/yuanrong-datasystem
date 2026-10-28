@@ -19,22 +19,28 @@
 namespace datasystem {
 
 /**
- * @brief Reset health probe, if health probe exist, delete it.
+ * @brief Prepare the worker probe path and remove any stale probe file.
  * @return K_OK on success, the error otherwise.
  */
-Status ResetHealthProbe();
+Status ResetWorkerProbe();
 
 /**
- * @brief Set health probe.
+ * @brief Publish the worker probe after startup readiness is committed.
  * @return K_OK on success, the error otherwise.
  */
-Status SetHealthProbe();
+Status PublishWorkerProbe();
 
 /**
- * @brief Revoke the process health state and remove the persisted health marker.
+ * @brief Remove the worker probe file.
  * @return K_OK on success, the error otherwise.
  */
-Status RevokeHealthProbe();
+Status RemoveWorkerProbe();
+
+/**
+ * @brief Mark the process health state as healthy.
+ * @return K_OK on success.
+ */
+Status SetHealthy();
 
 /**
  * @brief Check is healthy.

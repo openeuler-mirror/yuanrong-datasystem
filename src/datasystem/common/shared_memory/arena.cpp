@@ -59,8 +59,6 @@ DS_DEFINE_uint32_dynamic(
 DS_DEFINE_validator(arena_per_tenant, &Validator::ValidateArenaPerTenant);
 DS_DECLARE_bool(enable_huge_tlb);
 DS_DECLARE_bool(enable_fallocate);
-DS_DECLARE_uint32(ub_transport_arena_num);
-
 namespace datasystem {
 namespace memory {
 namespace {
@@ -494,8 +492,7 @@ Status ArenaManager::ComputeArenaParams(CacheType type, uint64_t maxSize, ArenaP
     params.mmapSizeForArena = mmapSize;
     params.fakeAllocateSizeForArena = maxSize;
     if (type == CacheType::UB_TRANSPORT) {
-        arenasNum = FLAGS_ub_transport_arena_num;
-        CHECK_FAIL_RETURN_STATUS(arenasNum > 0, K_RUNTIME_ERROR, "Arena number must be greater than 0");
+        arenasNum = UB_TRANSPORT_ARENA_NUM;
         CHECK_FAIL_RETURN_STATUS(mmapSize % arenasNum == 0, K_RUNTIME_ERROR,
                                  FormatString("mmapSize %lu must be divisible by arena num %u", mmapSize, arenasNum));
         params.mmapSizeForArena = mmapSize / arenasNum;

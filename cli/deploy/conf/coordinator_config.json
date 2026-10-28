@@ -39,10 +39,6 @@
     "value": "4",
     "description": "Number of coordinator watch event dispatch threads."
   },
-  "rpc_thread_num": {
-    "value": "64",
-    "description": "Config rpc server thread number, must be great equal than 0."
-  },
   "log_dir": {
     "value": "./datasystem/logs",
     "description": "If specified, logfiles are written into this directory instead of the default logging directory."

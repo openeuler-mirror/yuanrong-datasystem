@@ -424,7 +424,6 @@ public:
     {
         CoordinatorActiveFailureStopResumeTest::SetClusterSetupOptions(opts);
         opts.numWorkers = MULTI_KILL_WORKER_COUNT;
-        opts.numRpcThreads = 32;
         opts.workerGflagParams =
             " -shared_memory_size_mb=512 -ipc_through_shared_memory=false -arena_per_tenant=1"
             " -heartbeat_interval_ms=750 -node_timeout_s="

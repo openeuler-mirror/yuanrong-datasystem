@@ -740,7 +740,7 @@ class Command(BaseCommand):
         retry_count: int,
         retryable_store_lock: bool,
     ) -> int:
-        """Classify worker process exit while dscli waits for the ready file."""
+        """Classify worker process exit while dscli waits for the worker probe file."""
         return_code = process.poll()
         if return_code is None:
             return retry_count
@@ -808,13 +808,13 @@ class Command(BaseCommand):
                 env, jemalloc_prof_conf, params.get("log_dir", "")
             )
         try:
-            ready_check_path = params.get("ready_check_path")
-            if not ready_check_path:
-                raise RuntimeError("ready_check_path is empty")
-            ready_check_path = os.path.abspath(ready_check_path)
-            ready_check_path = self.valid_safe_path(ready_check_path)
-            if os.path.exists(ready_check_path) and os.path.isfile(ready_check_path):
-                os.remove(ready_check_path)
+            health_check_path = params.get("health_check_path")
+            if not health_check_path:
+                raise RuntimeError("health_check_path is empty")
+            health_check_path = os.path.abspath(health_check_path)
+            health_check_path = self.valid_safe_path(health_check_path)
+            if os.path.exists(health_check_path) and os.path.isfile(health_check_path):
+                os.remove(health_check_path)
             deadline = time.monotonic() + self._timeout
             last_store_lock_conflict = False
             store_lock_retry_count = 0
@@ -856,7 +856,7 @@ class Command(BaseCommand):
                             store_lock_retry_count = next_retry_count
                             retry_start = True
                             break
-                    if os.path.exists(ready_check_path):
+                    if os.path.exists(health_check_path):
                         self.logger.info(
                             "[  OK  ] Start worker service @ {} success, PID: {}".format(
                                 params["worker_address"], process.pid

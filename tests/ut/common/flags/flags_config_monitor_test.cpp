@@ -157,16 +157,16 @@ TEST_F(FlagsConfigMonitorTest, InvalidFlagValueRecordsConfigFailed)
 TEST_F(FlagsConfigMonitorTest, NonModifiableFlagRecordsConfigFailed)
 {
     DynamicFlagConfig flagConfig;
-    auto flagMap = flagConfig.ProcessOptions("-rpc_thread_num=32");
-    EXPECT_EQ(flagMap.count("rpc_thread_num"), 0ul);
+    auto flagMap = flagConfig.ProcessOptions("-node_timeout_s=32");
+    EXPECT_EQ(flagMap.count("node_timeout_s"), 0ul);
 
     std::pair<std::string, std::string> kv;
-    EXPECT_FALSE(flagConfig.SplitArgument("--rpc_thread_num=32", kv));
+    EXPECT_FALSE(flagConfig.SplitArgument("--node_timeout_s=32", kv));
 
     const std::string operationLog = OperationLogger::Instance().OperationLogPath();
     Logging::ResetLoggingRuntimeForTest();
     const std::string content = ReadFile(operationLog);
-    EXPECT_THAT(content, testing::HasSubstr("CONFIG_FAILED: flag 'rpc_thread_num' not modifiable"));
+    EXPECT_THAT(content, testing::HasSubstr("CONFIG_FAILED: flag 'node_timeout_s' not modifiable"));
 }
 
 TEST_F(FlagsConfigMonitorTest, MultipleFlagsRecordedSeparately)

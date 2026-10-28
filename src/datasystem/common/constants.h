@@ -73,6 +73,9 @@ static const std::string ROCKS_HASHRING_TABLE = "hashring_table";
 static const uint64_t MB_TO_BYTES = 1024 * 1024;
 static const uint64_t KB = 1024;
 
+// The data threshold to transfer obj data between client and worker via shm, unit is KB.
+static const uint64_t OC_SHM_TRANSFER_THRESHOLD_KB = 128;
+
 // worker lock id
 static const uint32_t WORKER_LOCK_ID = 0;
 

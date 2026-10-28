@@ -36,7 +36,7 @@ public:
         opts.numEtcd = 1;
         opts.numWorkers = workerCount;
         opts.enableDistributedMaster = "true";
-        opts.enableLivenessProbe = true;
+        opts.livenessProbeTimeoutS = livenessProbeTimeoutS_;
         opts.workerGflagParams =
             FormatString(" -authorization_enable=true -liveness_probe_timeout_s=%d", livenessProbeTimeoutS_);
     }
@@ -145,10 +145,9 @@ public:
         opts.numEtcd = 1;
         opts.numWorkers = workerCount;
         opts.enableDistributedMaster = "true";
-        opts.enableLivenessProbe = true;
-        opts.workerGflagParams =
-            FormatString(" -authorization_enable=true -liveness_probe_timeout_s=%d -rpc_thread_num=4 -log_monitor=true",
-                         livenessProbeTimeoutS_);
+        opts.livenessProbeTimeoutS = livenessProbeTimeoutS_;
+        opts.workerGflagParams = FormatString(
+            " -authorization_enable=true -liveness_probe_timeout_s=%d -log_monitor=true", livenessProbeTimeoutS_);
     }
 };
 

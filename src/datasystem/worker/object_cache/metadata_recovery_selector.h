@@ -35,7 +35,6 @@ public:
 
     struct SelectionRequest {
         std::vector<Range> ranges;
-        bool includeL2CacheIds{ false };
 
         bool Empty() const;
         std::string ToString() const;
@@ -45,15 +44,21 @@ public:
 
     explicit MetadataRecoverySelector(const std::shared_ptr<ObjectTable> &objectTable);
 
-    static SelectionRequest BuildSelectionRequest(const ClearDataReqPb &req, bool includeL2CacheIds);
+    static SelectionRequest BuildSelectionRequest(const ClearDataReqPb &req);
 
     Status BuildMatchFunc(const SelectionRequest &request, MatchFunc &matchFunc) const;
 
-    void Select(const MatchFunc &matchFunc, bool includeL2CacheIds, std::vector<std::string> &objectKeys) const;
+    void SelectAll(const MatchFunc &matchFunc, std::vector<std::string> &objectKeys) const;
+
+    void SelectWithoutL2Cache(const MatchFunc &matchFunc, std::vector<std::string> &objectKeys) const;
 
     Status Select(const SelectionRequest &request, std::vector<std::string> &objectKeys) const;
 
 private:
+    enum class SelectionScope { ALL, WITHOUT_L2_CACHE };
+
+    void Select(const MatchFunc &matchFunc, SelectionScope scope, std::vector<std::string> &objectKeys) const;
+
     std::shared_ptr<ObjectTable> objectTable_{ nullptr };
 };
 }  // namespace object_cache

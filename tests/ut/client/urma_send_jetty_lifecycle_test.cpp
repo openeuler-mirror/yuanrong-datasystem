@@ -32,7 +32,6 @@
 
 DS_DECLARE_bool(enable_urma);
 DS_DECLARE_uint32(urma_send_jetty_lane_pool_size);
-DS_DECLARE_uint32(urma_send_jetty_lane_refill_extra_size);
 
 namespace datasystem {
 namespace {
@@ -54,9 +53,6 @@ void ConfigureSingleLaneLifecycleTest()
 {
     FLAGS_enable_urma = true;
     FLAGS_urma_send_jetty_lane_pool_size = 1;
-    // Keep room for the retiring Jetty and its replacement at the same time, so refill is expected before the old
-    // Jetty has completed asynchronous error-state cleanup.
-    FLAGS_urma_send_jetty_lane_refill_extra_size = 1;
 }
 
 TEST(UrmaSendJettyLifecycleTest, PreFillsAcquiresReusesAndRefillsAfterFailure)

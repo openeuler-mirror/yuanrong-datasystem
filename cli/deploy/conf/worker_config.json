@@ -87,10 +87,6 @@
         "value": "32",
         "description": "The number of stream backend socket for stream cache, must be great equal than 0."
     },
-    "oc_worker_worker_direct_port": {
-        "value": "0",
-        "description": "A direct tcp/ip port for worker to workers scenarios to improve latency. Valid range is [0, 65535]. 0 indicates disabled."
-    },
     "sc_worker_worker_direct_port": {
         "value": "0",
         "description": "A direct tcp/ip port for worker to workers scenarios to improve latency. Valid range is [0, 65535]. 0 means disabled."
@@ -255,10 +251,6 @@
         "value": "200",
         "description": "Maximum number of clients that can be connected to a worker. Value range: [1, 10000]."
     },
-    "oc_metadata_header": {
-        "value": "true",
-        "description": "Whether to allocate metadata header for object cache shared memory. Set to false/0 to disable (shm latch/visibility will be unavailable)."
-    },
     "l2_cache_type": {
         "value": "none",
         "description": "Config the l2 cache type. Optional value: 'obs', 'sfs', 'distributed_disk', 'none'"
@@ -302,10 +294,6 @@
     "shared_memory_populate": {
         "value": "false",
         "description": "Avoiding page faults during copying improves runtime performance but may result in longer worker startup times (depending on shared_memory_size_mb)."
-    },
-    "memory_reclamation_time_second": {
-        "value": "600",
-        "description": "The memory reclamation time after free."
     },
     "async_delete": {
         "value": "false",
@@ -404,16 +392,8 @@
         "description": "The fixed interval in seconds between distributed disk background compact runs. The minimum value is 60 in production builds."
     },
     "health_check_path": {
-        "value": "./datasystem/probe/healthy",
-        "description": "File will create after the worker successfully."
-    },
-    "ready_check_path": {
-        "value": "./datasystem/probe/ready",
-        "description": "This file will be created after the worker service is started successfully and a connection can be established using the stub."
-    },
-    "rpc_thread_num": {
-        "value": "16",
-        "description": "Config rpc server thread number, must be great equal than 0."
+        "value": "./datasystem/probe/worker",
+        "description": "Startup commit and liveness lease file."
     },
     "minloglevel": {
         "value": "0",
@@ -479,10 +459,6 @@
         "value": "5000",
         "description": "Cross-process RPC latency threshold (microseconds) for slow-log and latencySummary. Default 5000 (5ms). Accepts a positive integer (e.g. 2000 for 2ms). 0 means disabled. When enabled, requests whose RPC sub-phases exceed this threshold will include a latencySummary in the access log."
     },
-    "io_thread_nice": {
-        "value": "0",
-        "description": "Nice value for selected IO threads. Valid range is [-20, 19]. 0 skips nice adjustment and preserves the thread's inherited nice value. Only non-zero values call setpriority; negative values usually require appropriate privileges."
-    },
     "enable_sched_runtime": {
         "value": "true",
         "description": "Enable selected worker threads to set the Linux scheduler runtime. Default is true. Set false to retain the inherited scheduler runtime."
@@ -536,8 +512,8 @@
         "description": "This is controlled by the flag of mmap(MAP_HUGETLB) which can improve memory access and reducing the overhead of page table, default is disable."
     },
     "enable_fallocate": {
-        "value": "true",
-        "description": "Due to k8s's resource calculation policies,shared memory is sometimes multiple counted , which can lead to client crashes, Using fallocate to address this issue."
+        "value": "false",
+        "description": "Due to k8s's resource calculation policies, shared memory is sometimes multiple counted, which can lead to client crashes. Using fallocate to address this issue. The process-level default is disabled; Kubernetes deployments should enable it explicitly."
     },
     "enable_lossless_data_exit_mode": {
         "value": "false",
@@ -555,10 +531,6 @@
         "value": "false",
         "description": "Option to turn on urma for OC worker to worker data transfer, default false."
     },
-    "enable_ub_numa_affinity": {
-        "value": "false",
-        "description": "Enable UB numa affinity optimization when URMA and whole-arena registration are both enabled."
-    },
     "ub_numa_rr_type": {
         "value": "1",
         "description": "UB NUMA source-chip selection granularity: 0=disabled, 1=one chip per logical write, 2=one chip per post."
@@ -567,33 +539,17 @@
         "value": "1",
         "description": "UB NUMA source-chip policy: 0=round-robin, 1=round-robin with opportunistic memory affinity."
     },
-    "ub_numa_inflight_wr_diff_threshold": {
-        "value": "15",
-        "description": "Maximum allowed source-chip inflight WR difference before selecting the less busy chip. Zero disables all inflight feedback and preserves pure round-robin selection."
-    },
     "shared_memory_distribution_policy": {
-        "value": "none",
+        "value": "interleave_all_numa",
         "description": "Shared memory NUMA distribution policy. Optional values: none, interleave_all_numa, interleave_affinity_numa. This option takes effect only when both enable_urma and urma_register_whole_arena are true."
     },
     "urma_send_lane_count_per_peer": {
         "value": "8",
         "description": "Maximum concurrent URMA send lanes occupied by one remote peer. The effective value does not exceed urma_send_jetty_lane_pool_size."
     },
-    "urma_event_mode": {
-        "value": "false",
-        "description": "Uses interrupt mode to poll completion events."
-    },
     "urma_log_threshold_us": {
         "value": "500",
-        "description": "URMA polling INFO threshold (us, urma_event_mode=false). Range [1, UINT32_MAX]; restart needed."
-    },
-    "urma_poll_size": {
-        "value": "8",
-        "description": "Number of complete record to poll at a time, 16 is the max this device can poll"
-    },
-    "urma_max_write_size_mb": {
-        "value": "4",
-        "description": "Maximum URMA write size, unit is MB. Valid range is [1, 2048]."
+        "description": "URMA polling INFO threshold (us). Range [1, UINT32_MAX]; restart needed."
     },
     "urma_register_whole_arena": {
         "value": "true",
@@ -619,10 +575,6 @@
         "value": "false",
         "description": "Enable perf trace log output."
     },
-    "oc_shm_transfer_threshold_kb": {
-        "value": "500",
-        "description": "The data threshold to transfer obj data between client and worker via shm, unit is KB"
-    },
     "remote_send_thread_num": {
         "value": "8",
         "description": "The num of threads used to send elements to remote worker."
@@ -635,10 +587,6 @@
         "value": "true",
         "description": "Experimental parameter. Allow data read from a remote worker to be cached locally as a hot replica and registered in metadata. This is only for hot-replica performance optimization; it is not a data reliability mechanism and does not guarantee data reliability or availability."
     },
-    "enable_metadata_recovery": {
-        "value": "false",
-        "description": "Whether to recover worker metadata to master during worker restart cleanup."
-    },
     "enable_rdma": {
         "value": "false",
         "description": "Option to turn on rdma for OC worker to worker data transfer, default false"
@@ -650,10 +598,6 @@
     "enable_stream_data_verification": {
         "value": "false",
         "description": "Option to verify if data from a producer is out of order"
-    },
-    "oc_io_from_l2cache_need_metadata": {
-        "value": "true",
-        "description": "Whether data read and write from the L2 cache daemon depend on metadata. Note: If set to false, it indicates that the metadata is not stored in etcd"
     },
     "enable_l2_cache_fallback": {
         "value": "true",

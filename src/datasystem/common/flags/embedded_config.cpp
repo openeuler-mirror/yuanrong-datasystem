@@ -78,21 +78,9 @@ EmbeddedConfig &EmbeddedConfig::EnableUrma(bool enable)
     return *this;
 }
 
-EmbeddedConfig &EmbeddedConfig::UrmaPollSize(int size)
-{
-    extraArgs["urma_poll_size"] = std::to_string(size);
-    return *this;
-}
-
 EmbeddedConfig &EmbeddedConfig::UrmaRegisterWholeArena(bool whole)
 {
     extraArgs["urma_register_whole_arena"] = whole ? "true" : "false";
-    return *this;
-}
-
-EmbeddedConfig &EmbeddedConfig::UrmaEventMode(bool enable)
-{
-    extraArgs["urma_event_mode"] = enable ? "true" : "false";
     return *this;
 }
 

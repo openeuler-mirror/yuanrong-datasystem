@@ -326,13 +326,6 @@ Status WorkerTopologyPhaseCallbacks::RunFailureBestEffort(const cluster::Topolog
         RecordFailureStep("get-stream-metadata", metadataManagers_.GetScMetadataManager(scMetadata), firstError,
                           context);
     }
-    if (!centralizedMetadata_ && ocMetadata != nullptr) {
-        RecordFailureStep(
-            "recover-object",
-            ocMetadata->RecoverTopologyFailure(context.action, context.keyFilter, context.storageScanPlan,
-                                               context.businessOperationId, context.deadline, context.cancellation),
-            firstError, context);
-    }
     if (!centralizedMetadata_ && streamMetadataEnabled_ && scMetadata != nullptr) {
         RecordFailureStep(
             "recover-stream",

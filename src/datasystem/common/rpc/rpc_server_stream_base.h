@@ -212,11 +212,7 @@ public:
 
     virtual Status ReceivePayload(std::vector<RpcMessage> &payload) = 0;
 
-    virtual Status SendAndTagPayload(std::vector<datasystem::RpcMessage> &buffer, bool tagPayloadFrame) = 0;
-
     virtual Status SendPayload(std::vector<datasystem::RpcMessage> &buffer) = 0;
-
-    virtual Status SendAndTagPayload(const std::vector<MemView> &payload, bool tagPayloadFrame) = 0;
 
     virtual Status SendPayload(const std::vector<MemView> &payload) = 0;
 
@@ -297,24 +293,10 @@ public:
         return Status::OK();
     }
 
-    Status SendAndTagPayload(std::vector<datasystem::RpcMessage> &buffer, bool tagPayloadFrame) override
-    {
-        (void)buffer;
-        (void)tagPayloadFrame;
-        return {StatusCode::K_INVALID, "LocalServerUnaryWriterReader doesn't support SendAndTagPayload()!"};
-    }
-
     Status SendPayload(std::vector<RpcMessage> &buffer) override
     {
         payloads_ = std::move(buffer);
         return Status::OK();
-    }
-
-    Status SendAndTagPayload(const std::vector<MemView> &payload, bool tagPayloadFrame) override
-    {
-        (void)payload;
-        (void)tagPayloadFrame;
-        return {StatusCode::K_INVALID, "LocalServerUnaryWriterReader doesn't support SendAndTagPayload()!"};
     }
 
     Status SendPayload(const std::vector<MemView> &payload) override

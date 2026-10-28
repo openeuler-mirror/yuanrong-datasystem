@@ -347,7 +347,6 @@ ds_cc_library(
         "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/worker:worker_master_api_manager_base",
         "//src/datasystem/worker/object_cache:object_endpoint_policy",
-        "//src/datasystem/worker/object_cache:metadata_recovery_manager",
         "//src/datasystem/worker/object_cache:metadata_recovery_selector",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",

@@ -3,7 +3,7 @@
 ## URMA polling log configuration
 
 - `urma_log_threshold_us` is a startup-only positive uint32 flag, default 500 microseconds.
-  It gates only the polling-mode (`urma_event_mode=false`) gap, poll-call, and sleep INFO logs in
+  It gates only the polling gap, poll-call, and sleep INFO logs in
   `UrmaManager::PollJfcWait`; elapsed time must be strictly greater. It does not change timeouts,
   polling cadence, event mode, or `enable_urma_perf`. Worker changes require restart.
 - dscli and both Helm configuration paths expose the same default; the values-based chart uses
@@ -59,6 +59,32 @@
   - global-reference decrease treats a missing worker-to-master API after a successful owner lookup as
     `K_RPC_UNAVAILABLE`; affected ids enter the existing RPC-failure path instead of being silently skipped during a
     connection rebuild window.
+  - object-cache `Exist` uses `MasterOCService.BatchExists` for keys not resolved by the unchanged local-check budget.
+    Worker uses `MetadataRouteResolver::GroupOwners` on the actual business keys, querying each owner directly rather
+    than routing through `P2P_DEFAULT_MASTER`. Multiple groups use background bthreads with the last group executed
+    inline; joins yield rather than blocking BRPC scheduler pthreads on `std::future`. Each task has its own request
+    context and result set, inherits trace context, and deducts dispatch/queue delay from the shared deadline.
+    All tasks finish before results are merged or an error returns; each may still redirect during topology changes.
+    Route or RPC failure leaves the caller's existing results unchanged. Single-group requests do not start a bthread.
+    `BatchExistsRspPb.not_exist_indices` contains sorted, unique, zero-based indices in that RPC request;
+    redirected keys remain unresolved and `meta_is_moving` invalidates the whole response until deadline-bounded retry.
+    Master retains the existing non-PENDING/readable-location or requester-only-primary semantics, without copying
+    metadata or selecting/shuffling concrete locations. `PureQueryMeta` remains for other callers and retains its
+    missing/PENDING-key warning. Sources: `worker_oc_service_get_impl.cpp`, `oc_metadata_manager.cpp`, `master_object.proto`.
+    The new RPC is appended to the service to preserve existing method indices. New workers require masters supporting
+    `BatchExists`; there is no old-master fallback. Deploy/roll back worker and master roles as a coordinated version
+    set (including co-located roles), rather than assuming arbitrary mixed-version rolling upgrades are supported.
+    Focused tests: `OCMetadataManagerTopologyTest.BatchExists*`, `WorkerOcServiceImplTest.BatchExists*`;
+    Bazel targets are `//tests/ut/master/object_cache:oc_metadata_manager_topology_test` and
+    `//tests/ut/worker:worker_oc_service_impl_test`; CMake discovers the same existing test source files.
+    `MASTER_BATCH_EXISTS`, `MASTER_BATCH_EXISTS_REDIRECT`, and `MASTER_BATCH_EXISTS_LOOKUP` measure total,
+    routing, and the lookup/readability/result loop respectively; enable Bazel `--config=perf` or CMake `ENABLE_PERF`.
+    `WORKER_EXIST_GROUP_OWNERS` measures only owner grouping, excluding group dispatch and RPC execution.
+    Manual `OCMetadataManagerTopologyTest.DISABLED_BatchExistsHandlerBenchmark` compares handler plus serialization
+    using 960 synthetic 155-byte keys, 10 warmup pairs and 100 measured pairs with alternating API order.
+    It excludes routing and transport; the `PureQueryMeta` baseline retains missing-key warnings.
+    Run the master target with `--test_filter='*DISABLED_BatchExistsHandlerBenchmark'`
+    and `--test_arg=--gtest_also_run_disabled_tests`; do not interpret fastbuild measurements as production RPC latency.
   - restart global-reference reconciliation is disabled by default in the Worker flag and dscli configuration because
     pure KVClient deployments do not maintain global references. ObjectClient deployments that use global references
     must explicitly enable `enable_reconciliation`; the Kubernetes Helm defaults continue to enable it for backward
@@ -73,9 +99,9 @@
     ids remain printable and must not expose the topology id bytes.
   - the ETCD-phase Controller role preserves each distinct `RESTARTING` membership generation before generic watch
     doorbell coalescing and forwards it to the Worker host on the Controller state thread. Surviving Workers then restore
-    locally held metadata to the restarted current owner. Fast-restart recovery is required even when the legacy
-    failure-time `enable_metadata_recovery` switch is disabled, and owner selection must use the business metadata-route
-    helper so centralized and distributed metadata modes stay aligned. The restarted Worker independently schedules
+    locally held metadata to the restarted current owner. Fast-restart recovery is independent of confirmed-Failure
+    cleanup, which does not restore Object Cache metadata. Owner selection must use the business metadata-route helper
+    so centralized and distributed metadata modes stay aligned. The restarted Worker independently schedules
     bounded reconciliation requests to every committed metadata owner, so readiness stays closed until the existing
     completion path succeeds or reaches its bounded give-up policy.
   - if Failure final already removed the old member, the later process is a fresh `INITIAL` admission and must not
@@ -169,21 +195,22 @@
     stopping states therefore cannot publish or retain startup health from a last-good Snapshot. Serving availability
     is publicly committed before its admission callback, while non-serving callbacks retain fail-close ordering. The
     Engine availability callback closes admission only for non-serving states and posts a no-I/O request to a Worker-owned
-    coordinator. A serving notification does not transiently revoke an already published health state; when recovering
-    from isolation, the previously closed admission stays closed until the coordinator serializes health-file changes,
-    performs a fresh validation, and successfully republishes the marker. The coordinator continues low-frequency
-    single-Snapshot validation after startup, so local membership or placement loss also revokes health even without
-    another availability-level transition. The health marker is written by
-    atomic temporary-file replacement; revocation directly unlinks it and treats only `ENOENT` as idempotent success.
+    coordinator. A serving notification does not transiently revoke an already healthy process; when recovering from
+    isolation, the previously closed admission stays closed until the coordinator serializes in-process health changes
+    and performs a fresh validation. The coordinator continues low-frequency single-Snapshot validation after startup,
+    so local membership or placement loss closes in-process health even without another availability-level transition.
     The startup poll has no fixed topology deadline, so a slow ScaleOut keeps the joining process alive and externally
     unready instead of failing startup. Before each health refresh, that poll also reevaluates the restart-reconciliation
     give-up deadline; expiry can therefore open only the reconciliation gate even when no new topology snapshot arrives,
-    while committed membership and placement checks still control health publication. `ReadinessProbe`
-    owns the single service-health wait even when no ready-check path is configured; brpc mode skips only the loopback
-    RPC after health opens. SIGTERM ends that wait successfully so shutdown does not turn an in-progress startup into a
-    process failure. The ready-check file is written only
-    after committed membership, a placement probe, and Worker RPC health all succeed. No Worker-local topology
-    authority is persisted.
+    while committed membership and placement checks still control health. `ReadinessProbe` owns the single
+    service-health wait; brpc mode skips only the loopback RPC after health opens. SIGTERM ends that wait successfully
+    so shutdown does not turn an in-progress startup into a process failure. When `health_check_path` is configured,
+    `ReadinessProbe` atomically publishes one empty 0600 file only after committed membership, a placement probe, and
+    Worker RPC health all succeed. The liveness thread starts afterward and only renews the existing file's mtime after
+    successful checks. A confirmed liveness failure ages the mtime beyond `liveness_probe_timeout_s` so the next
+    external probe observes failure without consuming a second timeout window; a later successful check can renew the
+    same file before restart. Topology isolation changes in-process health and admission but never mutates this file.
+    No Worker-local topology authority is persisted.
   - Coordinator-mode witness probing uses three fixed Worker-owned loops, a bounded FIFO event queue, and an in-flight
     count. Every watch PUT contributes one independent single-target request; later target events do not cancel earlier
     work. Shutdown first rejects new probe events and clears pending work, then closes Engine watch ingress, waits for
@@ -337,8 +364,8 @@
     drain begins; Gets remain available for objects that have not migrated yet. Incoming migration admission remains a
     separate gate because failure/rejoin cleanup also closes it and must be able to resume ordinary traffic after
     reconciliation.
-    Voluntary ScaleIn continues waiting for local clients and asynchronous tasks without marking the process health file
-    unhealthy while EXITING publication proceeds. The topology data-drain callback waits for both conditions before it
+    Voluntary ScaleIn continues waiting for local clients and asynchronous tasks while EXITING publication proceeds.
+    The topology data-drain callback waits for both conditions before it
     marks data drain started, rejects any remaining direct writes, or selects the local object snapshot. It does not add
     a process-wide in-flight write fence: writes already inside their processors keep the existing request-timeout and
     migration ordering behavior. This preserves the bound-client drain contract when EXITING reaches the Coordinator

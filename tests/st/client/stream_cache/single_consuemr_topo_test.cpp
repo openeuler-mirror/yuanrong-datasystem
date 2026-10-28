@@ -42,7 +42,6 @@ public:
         opts.numWorkers = DEFAULT_WORKER_NUM;
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams = " -log_monitor=true ";
-        opts.numRpcThreads = 0;
         opts.vLogLevel = DEFAULT_LOG_LEVEL;
         SCClientCommon::SetClusterSetupOptions(opts);
     }

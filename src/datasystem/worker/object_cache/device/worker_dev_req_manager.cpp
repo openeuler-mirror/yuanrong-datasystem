@@ -29,7 +29,6 @@
 #include "datasystem/worker/client_manager/client_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 
-DS_DECLARE_uint64(oc_shm_transfer_threshold_kb);
 namespace datasystem {
 namespace object_cache {
 
@@ -127,7 +126,7 @@ Status WorkerDevReqManager::AddEntryToGetDeviceObjectResponse(const std::shared_
     auto entryShmUnit = param->shmUnit;
     auto metaSize = param->metaSize;
     // Only add shm ref when we will return this shmUnit to the client.
-    if (shmEnabled && dataSize >= FLAGS_oc_shm_transfer_threshold_kb * KB) {
+    if (shmEnabled && dataSize >= OC_SHM_TRANSFER_THRESHOLD_KB * KB) {
         auto *shmInfo = resp.mutable_shm_info();
         shmInfo->set_shm_id(entryShmUnit->GetId());
         shmInfo->set_store_fd(entryShmUnit->GetFd());

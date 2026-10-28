@@ -19,6 +19,7 @@
  */
 #include "datasystem/kv_client.h"
 
+#include <algorithm>
 #include <climits>
 #include <cstddef>
 #include <cstdlib>
@@ -590,6 +591,9 @@ Status KVClient::Exist(const std::vector<std::string> &keys, std::vector<bool> &
     Status rc = impl_->Exist(keys, exists, true, false);
     METRIC_INC(metrics::KvMetricId::CLIENT_EXIST_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_EXIST_ERROR_TOTAL);
+    if (rc.IsOk()) {
+        access.ExistCount(std::count(exists.begin(), exists.end(), true));
+    }
     access.ObjectKeysRef(keys).Result(rc).Record();
     return rc;
 }

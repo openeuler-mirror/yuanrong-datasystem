@@ -38,7 +38,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numWorkers = 3;
-        opts.numRpcThreads = 1;
         opts.numEtcd = 1;
         opts.isStreamCacheCase = true;
     }

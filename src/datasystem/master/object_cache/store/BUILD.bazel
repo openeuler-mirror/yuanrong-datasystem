@@ -19,8 +19,6 @@ ds_cc_library(
         "//src/datasystem/common/kvstore/rocksdb:replica",
         "//src/datasystem/common/util:hash_algorithm",
         "//src/datasystem/common/util:request_counter",
-        "//src/datasystem/cluster:cluster_topology_scope",
-        "//src/datasystem/cluster:cluster_topology",
     ],
 )
 

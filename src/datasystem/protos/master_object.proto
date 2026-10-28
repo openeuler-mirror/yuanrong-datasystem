@@ -647,6 +647,25 @@ message PureQueryMetaRspPb {
   bool meta_is_moving = 3;
 }
 
+message BatchExistsReqPb {
+  repeated bytes object_keys = 1;
+  string source_worker = 2;
+  bool redirect = 3;
+
+  // Keep authentication fields after the signed request fields.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message BatchExistsRspPb {
+  // Sorted, unique, zero-based indices into this RPC's object_keys.
+  // Redirected keys are unresolved; no results are usable while meta_is_moving.
+  repeated uint32 not_exist_indices = 1;
+  repeated RedirectMetaInfo info = 2;
+  bool meta_is_moving = 3;
+}
+
 message CheckObjectDataLocationReqPb {
   message ObjectVersionPb {
     string object_key = 1;
@@ -962,4 +981,5 @@ service MasterOCService {
   rpc Expire(ExpireReqPb) returns (ExpireRspPb) {}
   rpc GetMetaInfo(GetMetaInfoReqPb) returns (GetMetaInfoRspPb) {}
   rpc CheckObjectDataLocation(CheckObjectDataLocationReqPb) returns (CheckObjectDataLocationRspPb) {}
+  rpc BatchExists(BatchExistsReqPb) returns (BatchExistsRspPb) {}
 }

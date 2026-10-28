@@ -120,26 +120,28 @@ Detailed follow-up docs now exist for:
     requested count (default `5000`; invalid or unset uses the default; non-positive disables it), and the current
     `RLIMIT_NOFILE` soft limit clamps the actual target. Limit-query, allocation, and open failures are best-effort and
     logged; already-opened descriptors are always closed.
-  - selected ZMQ, message-queue, and URMA IO threads can be deprioritized together via `io_thread_nice`, which
-    defaults to `0`; `0` skips `setpriority(2)`, while non-zero explicit values are applied in `ZmqServerImpl` proxy
-    execution, `ZmqEpoll`, `MsgQueMgr`, and `UrmaManager` server event handling.
+  - there is no process-level IO-thread nice setting. `Thread::SetCurrentThreadNice` skips `setpriority(2)` for `0`
+    and applies only explicit non-zero values supplied by individual callers; the URMA poll thread no longer applies a
+    configurable nice adjustment.
   - `shared_memory` contains allocator, jemalloc integration, arenas, shm units, and several mmap backends; when UB
     numa affinity is enabled it also records per-allocation NUMA ownership. Shared-memory pre-touch distribution is
     controlled by `shared_memory_distribution_policy` with values `none`, `interleave_all_numa`,
-    `interleave_affinity_numa`; for interleave policies the implementation performs 1GB chunk round-robin across
-    selected NUMA nodes, applies `SYS_mbind` with `MPOL_BIND` per chunk, and then page-touches each chunk. The
-    distribution policy takes effect when `enable_urma=true` and
+    `interleave_affinity_numa`, defaulting to `interleave_all_numa`; for interleave policies the implementation
+    performs 1GB chunk round-robin across selected NUMA nodes, applies `SYS_mbind` with `MPOL_PREFERRED` as a soft
+    preference per chunk, and then page-touches each chunk. If `mbind` fails, the implementation retries the chunk on
+    the next selected NUMA node. The distribution policy takes effect when `enable_urma=true` and
     `urma_register_whole_arena=true`. For `MemMmap`, `enable_huge_tlb=true` still selects explicit hugetlb mappings,
     while `enable_thp=true` leaves the process THP setting enabled and additionally applies `madvise(...,
 MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when the mapping is not using
     `MAP_HUGETLB`.
-    Client UB transport pools can set `ub_transport_arena_num` above `1` to split the single registered mapping into
-    equal arenas. The requested pool size is rounded up so that each arena covers whole system pages, and the aligned
-    size must remain within the 2GB client limit. When `enable_ub_numa_affinity=true` and whole-arena registration is
-    enabled, the binding plan interleaves NUMA nodes from different chips before reusing another node on the same chip,
-    while `ArenaGroup` round-robin allocation spreads buffers across those ranges; topology discovery and every NUMA
-    bind are then required initialization steps. With affinity disabled, multi-arena allocation remains enabled but
-    NUMA binding is skipped, so the default four-arena setting does not add a NUMA topology or `mbind` requirement.
+    Client UB transport pools split the single registered mapping into four equal arenas. The requested pool size is
+    rounded up so that each arena covers whole system pages, and the aligned size must remain within the 2GB client
+    limit. New Workers publish UB NUMA affinity as enabled when URMA and whole-arena registration are active. The
+    binding plan interleaves NUMA nodes from different chips before reusing another node on the same chip, while
+    `ArenaGroup` round-robin allocation spreads buffers across those ranges. A Client freezes the first Worker's wire
+    value, so an old Worker that reports affinity disabled preserves the old no-binding behavior during upgrade. NUMA
+    topology discovery or `mbind` failure logs a warning and skips the remaining bindings instead of failing Client
+    initialization.
   - `rdma` always builds fast-transport wrapper pieces and conditionally adds URMA and RDMA implementations.
   - Fast-transport `Event` completion waits use `bthread::Mutex` and `bthread::ConditionVariable`. A BRPC handler waiting for
     URMA or UCP completion therefore suspends its bthread instead of blocking the scheduler's worker pthread; completion
@@ -151,28 +153,29 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     is torn down before the next candidate. This lets a bare-metal worker start when its default bonding device
     (EID 0, from `DS_UB_DEV_EID` default `0`) is occupied by a container; previous behavior selected only the first
     `bonding*` device and failed startup when it was unavailable.
-  - URMA write chunking is capped by the smaller of device capability and `urma_max_write_size_mb`; the flag defaults
-    to `4` MB and is validated in the range `[1, 2048]` MB.
+  - URMA writes up to and including 4 MiB use one chunk; larger writes target two balanced chunks. If the device's
+    maximum write size requires more chunks, the device-derived count wins. The split remains exact, differs by at
+    most one byte, and never exceeds the device limit. Normal completion handling polls up to 16 records per call.
+    `urma_perf_interval_ms` remains configurable with a 600000 ms default; its loop still checks shutdown every 10 ms.
   - With UB NUMA affinity enabled, `ub_numa_src_chip_policy` selects the source-chip policy: `0` keeps round-robin
     behavior for ablation/rollback, while the default `1` keeps round-robin as the baseline and overrides a remote
     candidate only when the memory-affinity chip can absorb the estimated WR count for the logical write without
     becoming busier than that candidate. `ub_numa_rr_type` controls whether the decision is made per logical write or
     per post. A per-logical-write Gather advances the round-robin candidate once, then re-evaluates each WR's affinity
     from the byte-dominant source Chip across that WR's SGEs. Both policies use the existing per-chip `UrmaEvent`
-    inflight-WR counters as relaxed feedback. If the absolute chip-1/chip-2 difference is strictly greater than
-    `ub_numa_inflight_wr_diff_threshold` (default `15`), the
-    lower-depth chip overrides all other decisions; `0` disables both depth correction and opportunistic affinity,
-    preserving pure round-robin. No lock or reservation is added, so short concurrent overshoot is accepted.
-    Workers publish the policy and threshold in `RegisterClientRspPb`; a Client freezes affinity, selection granularity,
-    policy, and threshold from the first successful Worker registration and warns on later mismatches. A missing policy
-    field from an old Worker has proto value `0`, preserving its round-robin behavior.
+    inflight-WR counters as relaxed feedback. New Workers use a fixed difference threshold of `15`; above it the
+    lower-depth chip overrides all other decisions. No lock or reservation is added, so short concurrent overshoot is
+    accepted. Workers publish the policy and threshold in `RegisterClientRspPb`; a Client freezes affinity, selection
+    granularity, policy, and threshold from the first successful Worker registration and warns on later mismatches.
+    This preserves threshold `0` and disabled affinity when an old Worker reports them during rolling upgrade. A
+    missing policy field from an old Worker has proto value `0`, preserving its round-robin behavior.
   - URMA Jetty modify/flush/delete work runs on the lazy `RetireJfs` thread pool with an internal concurrency of `4`.
     Resource shutdown drains and joins this non-droppable pool before releasing the Jetty registry and provider
     dependencies.
   - URMA send-side Jetty reuse is managed by a process-level send Jetty pool under `src/datasystem/common/rdma`.
     `urma_send_jetty_lane_pool_size` is the target active pool size and must be positive; explicit provider/error
-    retirement is bounded by `urma_send_jetty_lane_refill_extra_size`, so the intended live-plus-retiring default cap
-    is `200 + 200`. Each `UrmaConnection` snapshots `urma_send_lane_count_per_peer` at construction; its effective
+    retirement has fixed headroom of 200 lanes, so the default live-plus-retiring cap is `200 + 200`. Each
+    `UrmaConnection` snapshots `urma_send_lane_count_per_peer` at construction; its effective
     normal-phase cap is the smaller of that positive value and the process pool size (default `min(8, 200)`). This
     bounds one peer without adding a flag read to lane acquisition; HALF_OPEN probes remain limited to one lane.
     An upper-layer timeout deletes its business Event immediately and records the first timeout context

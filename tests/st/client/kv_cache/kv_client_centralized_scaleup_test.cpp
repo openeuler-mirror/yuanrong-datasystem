@@ -93,6 +93,7 @@ public:
             // Fork before starting BRPC threads in the test process.
             DS_ASSERT_OK(externalCluster_->StartForkWorkerProcess());
         }
+        DS_ASSERT_OK(cluster_->StartOBS());
         DS_ASSERT_OK(cluster_->StartCoordinatorCluster());
     }
 

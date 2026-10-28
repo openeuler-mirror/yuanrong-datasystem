@@ -334,14 +334,14 @@ function check_etcd_ready()
 function check_worker_ready()
 {
   if [ $# != 1 ] ; then
-    echo "USAGE: check_worker_ready /path/to/health/check/file"
+    echo "USAGE: check_worker_ready /path/to/worker/probe/file"
     exit 1;
   fi
   local health_check_path=$1
   local check_flag=false
   for i in $(seq 1 ${WAIT_COMPONENT_READY_TIMES}); do
-    if grep -q "success" ${health_check_path}; then
-      echo "Worker is healthy."
+    if [[ -f "${health_check_path}" ]]; then
+      echo "Worker startup probe is ready."
       check_flag=true
       break
     else
@@ -421,10 +421,10 @@ function start_all()
     "${deploy_dir}/datasystem/service/worker_config.json"
 
   ${DSCLI} start -d "${root_dir}" -f "${deploy_dir}/datasystem/service/worker_config.json"
-  WORKER_HEALTH_CHECK_PATH=$(find "${root_dir}" -type f -path "*/probe/healthy" 2>/dev/null | head -1)
+  WORKER_PROBE_PATH=$(find "${root_dir}" -type f -path "*/probe/worker" 2>/dev/null | head -1)
 
   # wait worker ready
-  check_worker_ready "${WORKER_HEALTH_CHECK_PATH}"
+  check_worker_ready "${WORKER_PROBE_PATH}"
 }
 
 function stop_all()

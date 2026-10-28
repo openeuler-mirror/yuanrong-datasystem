@@ -30,7 +30,6 @@
 
 #include <brpc/channel.h>
 
-#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/net_util.h"
@@ -283,12 +282,6 @@ Status RpcStubCacheMgr::CreateBrpcChannel(const HostPort &hostPort, std::shared_
                                          FormatString("Failed to init brpc channel to %s", brpcAddr.ToString()));
     brpcChannel = std::move(channel);
     return Status::OK();
-}
-
-bool RpcStubCacheMgr::EnableOcWorkerWorkerDirectPort()
-{
-    INJECT_POINT("RpcStubCacheMgr.EnableOcWorkerWorkerDirectPort", []() { return true; });
-    return FLAGS_oc_worker_worker_direct_port > 0;
 }
 
 bool RpcStubCacheMgr::EnableScWorkerWorkerDirectPort()

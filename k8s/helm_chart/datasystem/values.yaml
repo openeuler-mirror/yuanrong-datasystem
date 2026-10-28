@@ -216,8 +216,6 @@ global:
 
     # when we delete the object which is in uploading process, in this scenarios we need delay some time to retry.
     objectDelRetryDelaySec: 3600
-    # Whether data read and write from the L2 cache daemon depend on metadata. Note: If set to false, it indicates that the metadata is not stored in etcd.
-    ocIoFromL2CacheNeedMetadata: true
     # "The size of the per-thread asynchronous queue for writing to the secondary cache. With 8 threads, the system supports a maximum total capacity of 8 * l2_cache_async_write_queue_size key-value pairs pending write.
     l2CacheAsyncWriteQueueSize: 10000
     # Control whether enable fallback to L2 cache when worker failed.
@@ -296,16 +294,11 @@ global:
     rocksdbBackgroundThreads: 16
     # Config the rocksdb support none, sync or async, async by default. Optional value: 'none', 'sync', 'async'. This represents the method of writing metadata to rocksdb.
     rocksdbWriteMode: "async"
-    # Whether to recover worker metadata to master during worker restart cleanup, default is false
-    enableMetadataRecovery: "false"
     # Experimental parameter. Allow data read from a remote worker to be cached locally as a hot replica and registered
     # in metadata. This is only for hot-replica performance optimization, not a data reliability mechanism.
     enableDataReplication: "true"
 
   rpc:
-    # A direct TCP/IP port for worker-to-worker scenarios to improve latency.
-    # Acceptable value:0, or some positive integer. 0 means disabled.
-    ocWorkerWorkerDirectPort: 0
     # A direct tcp/ip port for worker to workers scenarios to improve latency.
     # Acceptable values:0, or some positive integer. 0 means disabled.
     scWorkerWorkerDirectPort: 0
@@ -315,18 +308,11 @@ global:
 
     # The payload threshold to batch get objects, unit is MB. Setting to 0 will indicate no split.
     batchGetThresholdMb: 100
-    # Config rpc server thread number, must be greater than 0.
-    rpcThreadNum: 128
     # The number of worker service for object cache.
     ocThreadNum: 64
-    # Nice value for selected IO threads. Valid range is [-20, 19].
-    # 0 skips nice adjustment and preserves the thread's inherited nice value.
-    # Only non-zero values call setpriority; negative values usually require appropriate privileges.
-    ioThreadNice: 0
-
     # brpc is the only RPC transport (ZMQ RPC deleted). brpc owns the worker TCP port
     # exclusively (the same port as worker_address, no port offset). Per-service thread
-    # pools (rpcThreadNum, ocThreadNum, scThreadNum, etc.) still apply.
+    # pools (brpcServerNumThreads, ocThreadNum, scThreadNum, etc.) still apply.
     brpc:
       # Number of process-wide brpc event dispatchers. 0 keeps the brpc default (1).
       # Values greater than 1 shard socket I/O by fd; they do not parallelize a single listening fd.
@@ -370,6 +356,8 @@ global:
     udsDir: /home/uds
 
   reliability:
+    # Startup must cover reconciliation, topology convergence, and initialization margin.
+    startupProbeTimeoutS: 390
     # Client reconnect wait seconds, default value is 5 seconds. (Must be greater than 0)
     clientReconnectWaitS: 10
     # Maximum time interval for the worker to determine client death, value range: [3, UINT64_MAX).
@@ -413,11 +401,10 @@ global:
     # Huge pages require system-level configuration. use command "echo [pageNums] > /proc/sys/vm/nr_hugepages" to config the number of huge page.
     # If the system does not have enough physical memory to allocate huge pages, memory allocation will fail.
     enableHugeTlb: false
-    # Whether to allocate metadata header for object cache shared memory. Set to false to disable shm latch/visibility.
-    enableOcMetadataHeader: true
     #Due to Kubernetes' (k8s) resource calculation policies, shared memory is sometimes counted twice, which can lead to client crashes.
     #To address this issue, fallocate is employed to link the client and worker nodes for shared memory,
-    #thus correcting the memory calculation errors. By default, fallocate is enabled.
+    #thus correcting the memory calculation errors. The process-level default is disabled; Kubernetes deployments
+    #should keep this enabled explicitly.
     #Enabling fallocate will lower the efficiency of memory allocation
     enableFallocate: true
     # Avoiding page faults during copying improves runtime performance but may result in longer worker startup times (depending on sharedMemory).
@@ -431,8 +418,6 @@ global:
     # The arena count for each tenant. Multiple arenas can improve the performance of share memory allocation for the first time,
     # but each arena will use one more fd, value range: [1, 32]
     arenaPerTenant: 16
-    # The memory reclamation time after free, default is 600 seconds.
-    memoryReclamationTimeSecond: 600
     # The memory alignment size used by jemalloc for all memory allocations (in bytes).
     # Larger alignment can improve performance but may increase memory consumption due to fragmentation.
     memoryAlignment: 64
@@ -444,8 +429,6 @@ global:
     enableP2pTransfer: false
     # Enable worker->worker OC batch get, default false.
     enableWorkerWorkerBatchGet: false
-    # The data threshold to transfer obj data between client and worker via shm, unit is KB.
-    ocShmTransferThresholdKB: 500
     # Option to turn on urma for OC worker to worker data transfer, default false.
     enableUrma: false
     # Enable selected worker threads to set the Linux scheduler runtime. Default true.
@@ -456,20 +439,11 @@ global:
     #   - interleave_all_numa: uniformly interleave pages across all available NUMA nodes.
     #   - interleave_affinity_numa: uniformly interleave pages only across NUMA nodes covered by current process CPU affinity.
     # This option only takes effect when both enableUrma=true and urmaRegisterWholeArena=true.
-    sharedMemoryDistributionPolicy: "none"
-    # Enable UB numa affinity optimization.
-    # This option only takes effect when both enableUrma=true and urmaRegisterWholeArena=true.
-    enableUbNumaAffinity: false
-    # Number of complete record to poll at a time, 16 is the max this device can poll.
-    urmaPollSize: 8
-    # Startup-only INFO threshold in microseconds for URMA polling-mode logs (urma_event_mode=false); must be positive.
+    sharedMemoryDistributionPolicy: "interleave_all_numa"
+    # Startup-only INFO threshold in microseconds for URMA polling-mode logs; must be positive.
     urmaLogThresholdUs: 500
-    # Maximum URMA write size, unit is MB. Valid range is [1, 2048].
-    urmaMaxWriteSizeMb: 4
     # Register the whole arena as segment during init, otherwise, register each object as a segment.
     urmaRegisterWholeArena: true
-    # Uses interrupt mode to poll completion events.
-    urmaEventMode: false
     # Enable fast transport (urma/rdma) fallback to tcp transport.
     enableTransportFallback: true
     # Client-side URMA data-plane success-rate ratio threshold for worker failover. 0.0 disables URMA failover.

@@ -42,7 +42,6 @@ public:
     {
         opts.numWorkers = 3;
         opts.numEtcd = 1;
-        opts.numRpcThreads = 0;
         SCClientCommon::SetClusterSetupOptions(opts);
     }
 

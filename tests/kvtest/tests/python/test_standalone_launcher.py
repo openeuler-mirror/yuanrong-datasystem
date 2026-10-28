@@ -18,7 +18,7 @@ processes or opening real sockets:
   return 1, not 0 with a dead PID)
 * ``main()`` early-exit with port (binary exits before port opens →
   return 1, no PID on stdout)
-* ``main()`` stale ready_file cleanup before Popen
+* ``main()`` stale worker_probe_file cleanup before Popen
 
 The end-to-end fork+setsid+poll path is covered by integration tests
 (deploy_worker / deploy_coordinator standalone smoke), not here, because
@@ -113,8 +113,8 @@ class TestIsFileReady(unittest.TestCase):
         self.assertFalse(launcher.is_file_ready(None))
 
 
-class TestClearStaleReadyFile(unittest.TestCase):
-    """clear_stale_ready_file must remove an existing ready file and be a
+class TestClearStaleWorkerProbeFile(unittest.TestCase):
+    """clear_stale_worker_probe_file must remove an existing worker probe file and be a
     no-op when the file is absent. Path resolution must match
     is_file_ready (relative paths resolved against cwd) so the launcher
     deletes the same path it later polls."""
@@ -125,7 +125,7 @@ class TestClearStaleReadyFile(unittest.TestCase):
             path = tf.name
         try:
             self.assertTrue(os.path.exists(path))
-            self.assertTrue(launcher.clear_stale_ready_file(path))
+            self.assertTrue(launcher.clear_stale_worker_probe_file(path))
             self.assertFalse(os.path.exists(path))
         finally:
             if os.path.exists(path):
@@ -134,9 +134,9 @@ class TestClearStaleReadyFile(unittest.TestCase):
     def test_missing_absolute_path_is_noop(self):
         # False but does not raise.
         self.assertFalse(
-            launcher.clear_stale_ready_file('/tmp/this_should_not_exist_xyz'))
-        self.assertFalse(launcher.clear_stale_ready_file(None))
-        self.assertFalse(launcher.clear_stale_ready_file(''))
+            launcher.clear_stale_worker_probe_file('/tmp/this_should_not_exist_xyz'))
+        self.assertFalse(launcher.clear_stale_worker_probe_file(None))
+        self.assertFalse(launcher.clear_stale_worker_probe_file(''))
 
     def test_relative_path_resolved_against_cwd(self):
         # Mirror is_file_ready: relative path resolved against cwd so the
@@ -149,7 +149,7 @@ class TestClearStaleReadyFile(unittest.TestCase):
             abs_path = os.path.join(tmpdir, rel)
             with open(abs_path, 'w') as f:
                 f.write('stale\n')
-            self.assertTrue(launcher.clear_stale_ready_file(rel, cwd=tmpdir))
+            self.assertTrue(launcher.clear_stale_worker_probe_file(rel, cwd=tmpdir))
             self.assertFalse(os.path.exists(abs_path))
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
@@ -160,7 +160,7 @@ class TestClearStaleReadyFile(unittest.TestCase):
         tmpdir = tempfile.mkdtemp()
         try:
             self.assertFalse(
-                launcher.clear_stale_ready_file('absent_marker', cwd=tmpdir))
+                launcher.clear_stale_worker_probe_file('absent_marker', cwd=tmpdir))
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -208,7 +208,7 @@ class TestParseArgs(unittest.TestCase):
         args = launcher.parse_args(
             ['--binary', '/bin/true', '--log', '/tmp/x',
              '--cwd', '/tmp', '--lib-path', '/opt/lib',
-             '--ready-file', '/tmp/ready',
+             '--worker-probe-file', '/tmp/ready',
              '--port', '1234', '--host', '127.0.0.1',
              '--ready-timeout', '5', '--ready-interval', '0.25',
              '--no-signal-grace', '3',
@@ -216,7 +216,7 @@ class TestParseArgs(unittest.TestCase):
         self.assertEqual(args.binary, '/bin/true')
         self.assertEqual(args.cwd, '/tmp')
         self.assertEqual(args.lib_path, '/opt/lib')
-        self.assertEqual(args.ready_file, '/tmp/ready')
+        self.assertEqual(args.worker_probe_file, '/tmp/ready')
         self.assertEqual(args.port, 1234)
         self.assertEqual(args.host, '127.0.0.1')
         self.assertEqual(args.ready_timeout, 5.0)
@@ -262,7 +262,7 @@ class TestParseArgs(unittest.TestCase):
 
 
 class TestMainNoPortEarlyExitFails(unittest.TestCase):
-    """main() with no --port/--ready-file must detect early exits.
+    """main() with no --port/--worker-probe-file must detect early exits.
 
     Uses /bin/true (exits 0 immediately) as the binary. The launcher's
     no-signal grace-poll loop must detect the early exit via proc.poll(),
@@ -290,7 +290,7 @@ class TestMainNoPortEarlyExitFails(unittest.TestCase):
 
 
 class TestMainNoSignalGraceSuccess(unittest.TestCase):
-    """main() with no --port/--ready-file must survive the grace period
+    """main() with no --port/--worker-probe-file must survive the grace period
     and print ``PID ELAPSED`` to stdout when the binary stays alive.
 
     Uses mocks: Popen returns a process that never exits (poll → None),
@@ -373,7 +373,7 @@ class TestMainTimeoutFinalPollDetectsExit(unittest.TestCase):
             rc = launcher.main([
                 '--binary', '/bin/true',
                 '--log', log_path,
-                '--ready-file', '/tmp/nonexistent_ready',
+                '--worker-probe-file', '/tmp/nonexistent_ready',
                 '--ready-timeout', '0.5',
                 '--ready-interval', '0.1',
             ])
@@ -410,18 +410,18 @@ class TestMainEarlyExitFails(unittest.TestCase):
         self.assertEqual(stdout_buf.getvalue().strip(), '')
 
 
-class TestMainClearsStaleReadyFile(unittest.TestCase):
-    """main() must remove a stale ready_file before Popen.
+class TestMainClearsStaleWorkerProbeFile(unittest.TestCase):
+    """main() must remove a stale worker_probe_file before Popen.
 
     Regression guard for the stale-file TOCTOU: previously the readiness
     poll could hit a file left by a previous run and report ``ready`` in
     milliseconds, before the new binary reached ReadinessProbe(). The
     contract mirrors dscli ``start_worker`` (``cli/start.py:671-672``):
-    unlink the ready_file before launching, then poll for the new binary
+    unlink the worker_probe_file before launching, then poll for the new binary
     to (re)create it.
     """
 
-    def test_stale_ready_file_removed_before_popen(self):
+    def test_stale_worker_probe_file_removed_before_popen(self):
         import io
         import tempfile
         import contextlib
@@ -436,8 +436,8 @@ class TestMainClearsStaleReadyFile(unittest.TestCase):
                                 'launcher_test_stale.log')
         try:
             self.assertTrue(os.path.exists(path),
-                            'precondition: stale ready_file exists')
-            # Track call order: unlink (via clear_stale_ready_file) must
+                            'precondition: stale worker_probe_file exists')
+            # Track call order: unlink (via clear_stale_worker_probe_file) must
             # happen before Popen. Force is_file_ready to False and
             # time.monotonic past the deadline so main() returns quickly
             # without actually launching anything.
@@ -474,20 +474,20 @@ class TestMainClearsStaleReadyFile(unittest.TestCase):
                 launcher.main([
                     '--binary', '/bin/true',  # not executed (Popen mocked)
                     '--log', log_path,
-                    '--ready-file', path,
+                    '--worker-probe-file', path,
                     '--ready-timeout', '0.5',
                     '--ready-interval', '0.1',
                 ])
             # Stale file must be gone.
             self.assertFalse(os.path.exists(path),
-                             'stale ready_file must be removed before Popen')
+                             'stale worker_probe_file must be removed before Popen')
             # Popen must have been called exactly once after unlink.
             self.assertEqual(len(tracking_popen_calls), 1)
             self.assertIn('unlink', call_order)
             self.assertIn('popen', call_order)
             self.assertLess(call_order.index('unlink'),
                             call_order.index('popen'),
-                            'clear_stale_ready_file must run before Popen')
+                            'clear_stale_worker_probe_file must run before Popen')
         finally:
             if os.path.exists(path):
                 os.unlink(path)

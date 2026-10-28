@@ -74,7 +74,6 @@ public:
     {
         opts.numWorkers = 2;
         opts.masterIdx = 0;
-        opts.numRpcThreads = 0;
         opts.numEtcd = 1;
         opts.workerGflagParams = "-client_dead_timeout_s=2 -v=2 -log_monitor=true";
         SCClientCommon::SetClusterSetupOptions(opts);
@@ -1344,7 +1343,6 @@ public:
     {
         opts.numWorkers = 1;
         opts.masterIdx = 0;
-        opts.numRpcThreads = 0;
         opts.numEtcd = 1;
         opts.workerGflagParams = FormatString("-client_dead_timeout_s=%zu -v=2 -log_monitor=true", clientDeadTimeout);
         SCClientCommon::SetClusterSetupOptions(opts);
@@ -1562,7 +1560,6 @@ public:
     {
         opts.numWorkers = 1;
         opts.masterIdx = 0;
-        opts.numRpcThreads = 0;
         opts.numEtcd = 1;
         opts.workerGflagParams = FormatString("-client_dead_timeout_s=%zu -v=2 -log_monitor=true", clientDeadTimeout);
         SCClientCommon::SetClusterSetupOptions(opts);
@@ -1719,7 +1716,6 @@ public:
     {
         opts.numWorkers = 2;
         opts.masterIdx = 0;
-        opts.numRpcThreads = 0;
         opts.numEtcd = 1;
         opts.workerGflagParams = FormatString("-client_dead_timeout_s=%zu -v=2", clientDeadTimeoutSec);
         SCClientCommon::SetClusterSetupOptions(opts);

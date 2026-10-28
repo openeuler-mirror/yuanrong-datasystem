@@ -60,7 +60,6 @@
 #include "datasystem/worker/object_cache/worker_worker_peer_state_codec.h"
 
 DS_DECLARE_string(worker_address);
-DS_DECLARE_int32(oc_worker_worker_direct_port);
 DS_DECLARE_int32(oc_worker_worker_parallel_nums);
 DS_DECLARE_int32(oc_worker_worker_parallel_min);
 DS_DECLARE_uint64(oc_worker_aggregate_single_max);
@@ -393,14 +392,13 @@ Status WorkerWorkerOCServiceImpl::SendGetObjectRemotePayload(
     std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetObjectRemoteRspPb, GetObjectRemoteReqPb>> serverApi,
     const GetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload)
 {
-    const bool tagPayload = FLAGS_oc_worker_worker_direct_port > 0;
     if (rsp.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED
         || rsp.data_source() == DataTransferSource::DATA_DELAY_TRANSFER
         || rsp.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED_MEMSET_META) {
-        return serverApi->SendAndTagPayload({}, tagPayload);
+        return serverApi->SendPayload({});
     }
     if (rsp.data_source() == DataTransferSource::DATA_IN_PAYLOAD) {
-        return serverApi->SendAndTagPayload(payload, tagPayload);
+        return serverApi->SendPayload(payload);
     }
     return Status::OK();
 }
@@ -1201,8 +1199,7 @@ Status WorkerWorkerOCServiceImpl::ProcessBatchGetObjectRemoteRpc(
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Write(rsp), "GetObjectRemote write error");
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_SENDPAYLOAD);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendAndTagPayload(payload, FLAGS_oc_worker_worker_direct_port > 0),
-                                     "GetObjectRemote send payload error");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendPayload(payload), "GetObjectRemote send payload error");
     pointImpl.Record();
     LogBatchGetObjectRemoteFinish(config, req, payload, firstObjectKey, realRemainingTime, callerAddress, timer);
     point.Record();

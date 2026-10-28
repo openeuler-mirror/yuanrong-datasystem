@@ -75,7 +75,7 @@ class CliStartE2eTest(unittest.TestCase):
             "-w",
             "--worker_address", "127.0.0.1:31501",
             "--coordinator_address", "127.0.0.1:31511",
-            "--ready_check_path", str(self.home / "ready"),
+            "--health_check_path", str(self.home / "ready"),
             "--rocksdb_store_dir", str(self.home / "rocksdb"),
             "--unix_domain_socket_dir", str(self.home / "uds"),
             "--log_dir", str(self.home / "logs"),

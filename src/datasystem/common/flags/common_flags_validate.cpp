@@ -23,8 +23,6 @@
 #include "datasystem/common/rdma/urma_send_lane.h"
 #include "datasystem/common/util/validator.h"
 
-DS_DECLARE_uint64(urma_max_write_size_mb);
-
 namespace {
 bool ValidateEnableUrma(const char *flagName, bool value)
 {
@@ -50,18 +48,6 @@ bool ValidateSharedMemoryDistributionPolicy(const char *flagName, const std::str
         "Invalid %s value: %s. Optional values are 'none', 'interleave_all_numa', 'interleave_affinity_numa'.",
         flagName, value);
     return false;
-}
-
-bool ValidateUbTransportArenaNum(const char *flagName, uint32_t value)
-{
-    constexpr uint32_t kMinArenaNum = 1;
-    constexpr uint32_t kMaxArenaNum = 32;
-    if (value < kMinArenaNum || value > kMaxArenaNum) {
-        LOG(ERROR) << FormatString("The %s flag is %u, which must be between %u and %u.", flagName, value,
-                                   kMinArenaNum, kMaxArenaNum);
-        return false;
-    }
-    return true;
 }
 
 bool ValidateUbNumaRrType(const char *flagName, uint32_t value)
@@ -145,30 +131,6 @@ bool ValidateEnableRemoteH2D(const char *flagName, bool value)
 #endif
 }
 
-bool ValidateIoThreadNice(const char *flagName, int32_t value)
-{
-    constexpr int32_t kMinNice = -20;
-    constexpr int32_t kMaxNice = 19;
-    if (value < kMinNice || value > kMaxNice) {
-        LOG(ERROR) << FormatString("The %s flag is %d, which must be between %d and %d.", flagName, value, kMinNice,
-                                   kMaxNice);
-        return false;
-    }
-    return true;
-}
-
-bool ValidateUrmaMaxWriteSize(const char *flagName, uint64_t value)
-{
-    constexpr uint64_t kMinWriteSizeMb = 1;
-    constexpr uint64_t kMaxWriteSizeMb = 2 * 1024;
-    if (value < kMinWriteSizeMb || value > kMaxWriteSizeMb) {
-        LOG(ERROR) << "The " << flagName << " flag is " << value << " MB, which must be between " << kMinWriteSizeMb
-                   << " MB and " << kMaxWriteSizeMb << " MB.";
-        return false;
-    }
-    return true;
-}
-
 bool ValidatePercent(const char *flagName, uint32_t value)
 {
     constexpr uint32_t kMinPercent = 1;
@@ -220,18 +182,6 @@ bool ValidateOptionalLogName(const char *flagName, const std::string &value)
     return false;
 }
 
-bool ValidateUrmaPollSize(const char *flagName, uint32_t value)
-{
-    constexpr uint32_t kMinPollSize = 1;
-    constexpr uint32_t kMaxPollSize = 16;  // Device can poll at most 16 completion records at a time.
-    if (value < kMinPollSize || value > kMaxPollSize) {
-        LOG(ERROR) << FormatString("The %s flag is %u, which must be in [%u, %u].", flagName, value,
-                                   kMinPollSize, kMaxPollSize);
-        return false;
-    }
-    return true;
-}
-
 bool ValidateLogMonitorExporter(const char *flagName, const std::string &value)
 {
     if (value == "harddisk") {
@@ -255,7 +205,6 @@ bool ValidateWorkerDirectPort(const char *flagName, int32_t value)
 }  // namespace
 
 DS_DEFINE_validator(l2_cache_type, &Validator::ValidateL2CacheType);
-DS_DEFINE_validator(io_thread_nice, &ValidateIoThreadNice);
 DS_DEFINE_validator(node_timeout_s, &Validator::ValidateNodeTimeout);
 DS_DEFINE_validator(eviction_reserve_mem_threshold_mb, &Validator::ValidateEvictReserveMemThreshold);
 DS_DEFINE_validator(eviction_high_watermark_ratio, &Validator::ValidateWatermarkHighRatio);
@@ -265,14 +214,11 @@ DS_DEFINE_validator(spill_low_watermark_ratio, &Validator::ValidateWatermarkLowR
 DS_DEFINE_validator(enable_urma, &ValidateEnableUrma);
 DS_DEFINE_validator(ub_numa_rr_type, &ValidateUbNumaRrType);
 DS_DEFINE_validator(ub_numa_src_chip_policy, &ValidateUbNumaSrcChipPolicy);
-DS_DEFINE_validator(urma_max_write_size_mb, &ValidateUrmaMaxWriteSize);
 DS_DEFINE_validator(urma_send_jetty_lane_pool_size, &Validator::ValidateUint32);
 DS_DEFINE_validator(urma_send_lane_count_per_peer, &Validator::ValidateUint32);
-DS_DEFINE_validator(urma_send_jetty_lane_refill_extra_size, &Validator::ValidateUint32);
 DS_DEFINE_validator(urma_failover_success_rate_ratio, &ValidateUrmaFailoverSuccessRateRatio);
 DS_DEFINE_validator(urma_failover_min_sample_count, &ValidateUrmaFailoverMinSampleCount);
 DS_DEFINE_validator(shared_memory_distribution_policy, &ValidateSharedMemoryDistributionPolicy);
-DS_DEFINE_validator(ub_transport_arena_num, &ValidateUbTransportArenaNum);
 DS_DEFINE_validator(enable_remote_h2d, &ValidateEnableRemoteH2D);
 DS_DEFINE_validator(remote_h2d_link_type, &ValidateRemoteH2DLinkType);
 DS_DEFINE_validator(remote_h2d_hccs_buffer_pool, &ValidateRemoteH2DHccsBufferPool);
@@ -294,12 +240,11 @@ DS_DEFINE_validator(etcd_address, &Validator::ValidateEtcdAddresses);
 DS_DEFINE_validator(request_sample_rate, &ValidateSampleRateRange);
 DS_DEFINE_validator(access_sample_rate, &ValidateSampleRateRange);
 DS_DEFINE_validator(diagnostic_sample_rate, &ValidateSampleRateRange);
-DS_DEFINE_validator(urma_poll_size, &ValidateUrmaPollSize);
 DS_DEFINE_validator(urma_log_threshold_us, &datasystem::ValidateAndPublishUrmaLogThresholdUs);
 DS_DEFINE_validator(log_monitor_exporter, &ValidateLogMonitorExporter);
 DS_DEFINE_validator(log_monitor_interval_ms, &Validator::ValidateInt32);
-DS_DEFINE_validator(oc_worker_worker_direct_port, &ValidateWorkerDirectPort);
 DS_DEFINE_validator(sc_worker_worker_direct_port, &ValidateWorkerDirectPort);
+DS_DEFINE_validator(brpc_server_num_threads, &Validator::ValidateRpcThreadNum);
 
 namespace datasystem {
 void LinkCommonFlagsValidators()

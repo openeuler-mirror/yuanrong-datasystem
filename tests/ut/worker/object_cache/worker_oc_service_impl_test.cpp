@@ -20,6 +20,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <fcntl.h>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -58,11 +59,11 @@
 #include "datasystem/worker/client_manager/client_manager.h"
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/object_cache/device/worker_device_oc_manager.h"
-#include "datasystem/worker/worker_health_check.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_multi_publish_impl.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/worker_health_check.h"
+#include "datasystem/worker/worker_liveness_check.h"
 #include "tests/ut/worker/object_cache/test_metadata_route.h"
 #include "tests/ut/worker/object_cache/test_placement_facade.h"
 #include "ut/common.h"
@@ -79,7 +80,6 @@ using namespace datasystem::object_cache;
 DS_DECLARE_string(health_check_path);
 DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_bool(enable_leaving_intercept);
-DS_DECLARE_bool(enable_metadata_recovery);
 DS_DECLARE_bool(enable_reconciliation);
 DS_DECLARE_bool(enable_transport_fallback);
 DS_DECLARE_bool(enable_worker_worker_batch_get);
@@ -96,6 +96,19 @@ constexpr int64_t K_META_MOVING_RETRY_TIMEOUT_MS = 1'000;
 constexpr size_t K_EXPECTED_META_MOVING_RPC_CALLS = 2;
 constexpr uint64_t K_META_MOVING_SUCCESS_VERSION = 7;
 using WorkerMasterOCApiManager = worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>;
+
+class TestWorkerLivenessCheck : public worker::WorkerLivenessCheck {
+public:
+    TestWorkerLivenessCheck(const std::string &probePath, uint32_t probeTimeoutMs)
+        : WorkerLivenessCheck(nullptr, probePath, probeTimeoutMs, HostPort(), "", nullptr)
+    {
+    }
+
+    using WorkerLivenessCheck::CheckLivenessProbeFile;
+    using WorkerLivenessCheck::ExpireProbe;
+    using WorkerLivenessCheck::RemoveProbe;
+    using WorkerLivenessCheck::RenewProbe;
+};
 
 void AddDeviceRemoteGetMeta(master::QueryMetaRspPb &rsp, const std::string &objectKey, uint64_t version,
                             const HostPort &primaryAddress, DataFormat format)
@@ -281,6 +294,16 @@ public:
         response = pureQueryMetaResponse_;
         return pureQueryMetaStatus_;
     }
+
+    Status BatchExists(master::BatchExistsReqPb &req, master::BatchExistsRspPb &rsp) override
+    {
+        return batchExistsHandler_(req, rsp);
+    }
+
+    std::function<Status(master::BatchExistsReqPb &, master::BatchExistsRspPb &)> batchExistsHandler_ =
+        [](master::BatchExistsReqPb &, master::BatchExistsRspPb &) {
+            return Status(K_RUNTIME_ERROR, "Unexpected BatchExists");
+        };
 
     Status PushMetadataToMaster(master::PushMetaToMasterReqPb &req,
                                 master::PushMetaToMasterRspPb &rsp) override
@@ -625,25 +648,10 @@ public:
         return Status::OK();
     }
 
-    Status SendAndTagPayload(std::vector<RpcMessage> &payload, bool tagPayloadFrame) override
-    {
-        (void)tagPayloadFrame;
-        ++payloadSendCount_;
-        payload_ = std::move(payload);
-        return Status::OK();
-    }
-
     Status SendPayload(std::vector<RpcMessage> &payload) override
     {
         ++payloadSendCount_;
         payload_ = std::move(payload);
-        return Status::OK();
-    }
-
-    Status SendAndTagPayload(const std::vector<MemView> &payload, bool tagPayloadFrame) override
-    {
-        (void)payload;
-        (void)tagPayloadFrame;
         return Status::OK();
     }
 
@@ -734,7 +742,7 @@ public:
             topologyRuntime_.Engine(), metadataRoute_, topologyRuntime_.Engine()->Membership(), &exitRequested_,
             topologyRuntime_.Engine()->IsRestart(), false);
         dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(
-            objectTable_, globalRefTable_, nullptr, gRefProc_, deleteProc_, nullptr, metadataRoute_, *endpointPolicy_,
+            objectTable_, globalRefTable_, nullptr, gRefProc_, deleteProc_, metadataRoute_, *endpointPolicy_,
             localAddress_.ToString());
         impl_->InitServiceImpl();
     }
@@ -837,7 +845,7 @@ public:
     void InitImplClearDataFlow()
     {
         impl_->clearDataFlow_ = std::make_unique<WorkerOcServiceClearDataFlow>(
-            objectTable_, globalRefTable_, nullptr, impl_->gRefProc_, impl_->deleteProc_, nullptr, metadataRoute_,
+            objectTable_, globalRefTable_, nullptr, impl_->gRefProc_, impl_->deleteProc_, metadataRoute_,
             *endpointPolicy_, localAddress_.ToString());
     }
 
@@ -984,6 +992,20 @@ TEST_F(WorkerOcServiceImplTest, ObjectEntryOnlyAcceptsBinaryAndHeteroMetadataFor
     EXPECT_TRUE(heteroEntry->IsHetero());
 }
 
+TEST_F(WorkerOcServiceImplTest, NodeRestartAlwaysTriggersMetadataRecovery)
+{
+    const std::map<std::string, int64_t> restartFacts{ { "127.0.0.1:18482", 123 } };
+    using RecoverRestartedWorkersMethod =
+        Status (WorkerOCServiceImpl::*)(const std::map<std::string, int64_t> &);
+    BINEXPECT_CALL((RecoverRestartedWorkersMethod)&WorkerOCServiceImpl::RecoverMetadataOfRestartedWorkers, (_))
+        .WillOnce(Invoke([&restartFacts](const std::map<std::string, int64_t> &actualFacts) {
+            EXPECT_EQ(actualFacts, restartFacts);
+            return Status::OK();
+        }));
+
+    DS_ASSERT_OK(impl_->HandleNodeRestartEvent(restartFacts, true));
+}
+
 TEST_F(WorkerOcServiceImplTest, AllocationIdReservationUsesStableShmIdAndRejectsConcurrentDuplicate)
 {
     const std::string allocationId = GetStringUuid();
@@ -1093,7 +1115,7 @@ TEST_F(WorkerOcServiceImplTest, DecreaseMemoryRefDelaysOnlyMarkedShmUnit)
     Raii restoreHealth([] { SetUnhealthy(); });
     placement_.SetOwner("decrease-memory-ref", localAddress_);
     DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
-    impl_->healthPublicationEnabled_.store(true, std::memory_order_release);
+    impl_->healthStateUpdatesEnabled_.store(true, std::memory_order_release);
     impl_->reconciliationReady_.store(true, std::memory_order_release);
     DS_ASSERT_OK(impl_->RefreshStartupHealth());
 
@@ -1971,7 +1993,7 @@ TEST_F(WorkerOcServiceImplTest, HealthRemainsClosedWhileTopologyIsPending)
         std::chrono::steady_clock::now() - start);
 
     EXPECT_FALSE(IsHealthy());
-    EXPECT_FALSE(impl_->setHealthFile_.load(std::memory_order_acquire));
+    EXPECT_FALSE(impl_->startupHealthy_.load(std::memory_order_acquire));
     // This path used to poll for up to 60 seconds. Keep the assertion loose enough for loaded CI hosts while proving
     // that startup merely records a pending topology gate instead of sleeping in the service method.
     EXPECT_LT(elapsed.count(), 1'000);
@@ -1980,7 +2002,7 @@ TEST_F(WorkerOcServiceImplTest, HealthRemainsClosedWhileTopologyIsPending)
     DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
     DS_EXPECT_OK(impl_->RefreshStartupHealth());
     EXPECT_TRUE(IsHealthy());
-    EXPECT_TRUE(impl_->setHealthFile_.load(std::memory_order_acquire));
+    EXPECT_TRUE(impl_->startupHealthy_.load(std::memory_order_acquire));
 }
 
 TEST_F(WorkerOcServiceImplTest, ReconciliationAndTopologyJointlyGateHealthPublication)
@@ -1993,139 +2015,144 @@ TEST_F(WorkerOcServiceImplTest, ReconciliationAndTopologyJointlyGateHealthPublic
 
     DS_EXPECT_OK(impl_->RefreshStartupHealth());
     EXPECT_FALSE(IsHealthy());
-    EXPECT_FALSE(impl_->setHealthFile_.load(std::memory_order_acquire));
+    EXPECT_FALSE(impl_->startupHealthy_.load(std::memory_order_acquire));
 
-    impl_->healthPublicationEnabled_.store(true, std::memory_order_release);
+    impl_->healthStateUpdatesEnabled_.store(true, std::memory_order_release);
     impl_->reconciliationReady_.store(false, std::memory_order_release);
 
     DS_EXPECT_OK(impl_->RefreshStartupHealth());
     EXPECT_FALSE(IsHealthy());
-    EXPECT_FALSE(impl_->setHealthFile_.load(std::memory_order_acquire));
+    EXPECT_FALSE(impl_->startupHealthy_.load(std::memory_order_acquire));
 
     impl_->reconciliationReady_.store(true, std::memory_order_release);
     DS_EXPECT_OK(impl_->RefreshStartupHealth());
     EXPECT_TRUE(IsHealthy());
-    EXPECT_TRUE(impl_->setHealthFile_.load(std::memory_order_acquire));
+    EXPECT_TRUE(impl_->startupHealthy_.load(std::memory_order_acquire));
 }
 
-TEST_F(WorkerOcServiceImplTest, ConcurrentTopologyNotificationsPublishHealthOnce)
+TEST_F(WorkerOcServiceImplTest, ConcurrentHealthRefreshIsIdempotent)
 {
     SetUnhealthy();
     Raii restoreHealth([] { SetUnhealthy(); });
-    impl_->healthPublicationEnabled_.store(true, std::memory_order_release);
+    impl_->healthStateUpdatesEnabled_.store(true, std::memory_order_release);
     placement_.SetOwner("topology-readiness-probe", localAddress_);
     DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
     impl_->reconciliationReady_.store(true, std::memory_order_release);
 
     constexpr size_t notificationCount = 8;
-    std::atomic<size_t> publicationCount{ 0 };
-    std::promise<void> publicationEntered;
-    auto publicationEnteredFuture = publicationEntered.get_future();
-    std::promise<void> releasePublication;
-    auto releasePublicationFuture = releasePublication.get_future().share();
-    impl_->healthPublisher_ = [&] {
-        if (publicationCount.fetch_add(1, std::memory_order_relaxed) == 0) {
-            publicationEntered.set_value();
-        }
-        releasePublicationFuture.wait();
-        return SetHealthProbe();
-    };
     std::vector<std::future<Status>> notifications;
     notifications.reserve(notificationCount);
     for (size_t index = 0; index < notificationCount; ++index) {
         notifications.emplace_back(
             std::async(std::launch::async, [this] { return impl_->RefreshStartupHealth(); }));
     }
-    constexpr auto publicationEntryTimeout = std::chrono::seconds(1);
-    EXPECT_EQ(publicationEnteredFuture.wait_for(publicationEntryTimeout), std::future_status::ready);
-    releasePublication.set_value();
     for (auto &notification : notifications) {
         DS_EXPECT_OK(notification.get());
     }
 
-    EXPECT_EQ(publicationCount.load(std::memory_order_relaxed), 1UL);
     EXPECT_TRUE(IsHealthy());
-    EXPECT_TRUE(impl_->setHealthFile_.load(std::memory_order_acquire));
+    EXPECT_TRUE(impl_->startupHealthy_.load(std::memory_order_acquire));
 }
 
-TEST_F(WorkerOcServiceImplTest, FailedHealthPublicationRollsBackAndCanRetry)
+TEST_F(WorkerOcServiceImplTest, WorkerProbePublicationIsIndependentFromHealth)
 {
     SetUnhealthy();
-    const auto savedHealthCheckPath = FLAGS_health_check_path;
-    const auto testHealthCheckPath = GetTestCaseDataDir() + "/issue873-health-probe";
-    Raii restoreHealth([savedHealthCheckPath, testHealthCheckPath] {
-        (void)DeleteFile(testHealthCheckPath);
-        FLAGS_health_check_path = savedHealthCheckPath;
+    const auto savedWorkerProbePath = FLAGS_health_check_path;
+    const auto testWorkerProbePath = GetTestCaseDataDir() + "/worker-probe";
+    Raii restoreHealth([savedWorkerProbePath, testWorkerProbePath] {
+        (void)DeleteFile(testWorkerProbePath);
+        FLAGS_health_check_path = savedWorkerProbePath;
         SetUnhealthy();
     });
-    impl_->healthPublicationEnabled_.store(true, std::memory_order_release);
-    impl_->reconciliationReady_.store(true, std::memory_order_release);
-    placement_.SetOwner("topology-readiness-probe", localAddress_);
-    DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
-
-    FLAGS_health_check_path = "/proc/datasystem-issue873-health-probe";
-    EXPECT_TRUE(SetHealthProbe().IsError());
+    FLAGS_health_check_path = "/proc/datasystem-worker-probe";
+    EXPECT_TRUE(PublishWorkerProbe().IsError());
     EXPECT_FALSE(IsHealthy());
-    EXPECT_FALSE(FileExist(FLAGS_health_check_path));
 
-    FLAGS_health_check_path = testHealthCheckPath;
-    (void)DeleteFile(FLAGS_health_check_path);
-    impl_->healthPublisher_ = [] {
-        RETURN_IF_NOT_OK(SetHealthProbe());
-        RETURN_STATUS(K_IO_ERROR, "injected failure after health marker publication");
-    };
-    EXPECT_TRUE(impl_->RefreshStartupHealth().IsError());
+    FLAGS_health_check_path = testWorkerProbePath;
+    DS_ASSERT_OK(ResetWorkerProbe());
+    DS_ASSERT_OK(PublishWorkerProbe());
+    std::string probeContent;
+    DS_ASSERT_OK(ReadWholeFile(testWorkerProbePath, probeContent));
+    EXPECT_TRUE(probeContent.empty());
     EXPECT_FALSE(IsHealthy());
-    EXPECT_FALSE(FileExist(FLAGS_health_check_path));
-    EXPECT_FALSE(impl_->setHealthFile_.load(std::memory_order_acquire));
-
-    impl_->healthPublisher_ = [] { return SetHealthProbe(); };
-    DS_EXPECT_OK(impl_->RefreshStartupHealth());
+    DS_ASSERT_OK(SetHealthy());
     EXPECT_TRUE(IsHealthy());
-    EXPECT_TRUE(FileExist(FLAGS_health_check_path));
-    EXPECT_TRUE(impl_->setHealthFile_.load(std::memory_order_acquire));
+    DS_EXPECT_OK(RemoveWorkerProbe());
+    EXPECT_TRUE(IsHealthy());
 }
 
-TEST_F(WorkerOcServiceImplTest, RevokeHealthProbeReportsUnlinkFailureAndRetries)
+TEST_F(WorkerOcServiceImplTest, WorkerProbeRenewalUsesOnlyMtime)
 {
-    SetUnhealthy();
-    const auto savedHealthCheckPath = FLAGS_health_check_path;
-    const auto testDir = GetTestCaseDataDir() + "/issue873-revoke-probe";
-    const auto testHealthCheckPath = testDir + "/healthy";
+    const auto probePath = GetTestCaseDataDir() + "/liveness-worker-probe";
+    Raii cleanup([probePath] { (void)DeleteFile(probePath); });
+    DS_ASSERT_OK(AtomicWriteTextFile(probePath, "liveness check failed\n"));
+    constexpr time_t staleAgeSeconds = 10;
+    const timespec staleTimes[] = { { time(nullptr) - staleAgeSeconds, 0 }, { time(nullptr) - staleAgeSeconds, 0 } };
+    ASSERT_EQ(utimensat(AT_FDCWD, probePath.c_str(), staleTimes, 0), 0);
+    TestWorkerLivenessCheck livenessCheck(probePath, 5'000);
+    Timer timer;
+    const Status previousFailure(K_RUNTIME_ERROR, "force probe check");
+    EXPECT_TRUE(livenessCheck.CheckLivenessProbeFile(timer, previousFailure).IsError());
+
+    DS_ASSERT_OK(livenessCheck.RenewProbe());
+    std::string probeContent;
+    DS_ASSERT_OK(ReadWholeFile(probePath, probeContent));
+    EXPECT_EQ(probeContent, "liveness check failed\n");
+    DS_EXPECT_OK(livenessCheck.CheckLivenessProbeFile(timer, previousFailure));
+
+    DS_ASSERT_OK(livenessCheck.ExpireProbe());
+    EXPECT_TRUE(livenessCheck.CheckLivenessProbeFile(timer, previousFailure).IsError());
+    DS_ASSERT_OK(livenessCheck.RenewProbe());
+    DS_EXPECT_OK(livenessCheck.CheckLivenessProbeFile(timer, previousFailure));
+
+    DS_ASSERT_OK(livenessCheck.RemoveProbe());
+    EXPECT_TRUE(livenessCheck.RenewProbe().IsError());
+    EXPECT_FALSE(FileExist(probePath));
+}
+
+TEST_F(WorkerOcServiceImplTest, RemoveWorkerProbeReportsUnlinkFailureAndRetries)
+{
+    const auto savedWorkerProbePath = FLAGS_health_check_path;
+    const auto testDir = GetTestCaseDataDir() + "/remove-worker-probe";
+    const auto testWorkerProbePath = testDir + "/worker";
     DS_ASSERT_OK(CreateDir(testDir, true, 0700));
-    Raii restore([savedHealthCheckPath, testDir] {
+    Raii restore([savedWorkerProbePath, testDir] {
         (void)chmod(testDir.c_str(), 0700);
-        FLAGS_health_check_path = savedHealthCheckPath;
+        FLAGS_health_check_path = savedWorkerProbePath;
         SetUnhealthy();
     });
-    FLAGS_health_check_path = testHealthCheckPath;
-    DS_ASSERT_OK(SetHealthProbe());
-    ASSERT_TRUE(FileExist(testHealthCheckPath));
+    FLAGS_health_check_path = testWorkerProbePath;
+    DS_ASSERT_OK(PublishWorkerProbe());
+    DS_ASSERT_OK(SetHealthy());
+    ASSERT_TRUE(FileExist(testWorkerProbePath));
 
     ASSERT_EQ(chmod(testDir.c_str(), 0200), 0);
-    EXPECT_TRUE(RevokeHealthProbe().IsError());
-    EXPECT_FALSE(IsHealthy());
+    EXPECT_TRUE(RemoveWorkerProbe().IsError());
+    EXPECT_TRUE(IsHealthy());
 
     ASSERT_EQ(chmod(testDir.c_str(), 0700), 0);
-    EXPECT_TRUE(FileExist(testHealthCheckPath));
-    DS_EXPECT_OK(RevokeHealthProbe());
-    EXPECT_FALSE(FileExist(testHealthCheckPath));
-    DS_EXPECT_OK(RevokeHealthProbe());
+    EXPECT_TRUE(FileExist(testWorkerProbePath));
+    DS_EXPECT_OK(RemoveWorkerProbe());
+    EXPECT_FALSE(FileExist(testWorkerProbePath));
+    DS_EXPECT_OK(RemoveWorkerProbe());
 }
 
-TEST_F(WorkerOcServiceImplTest, TopologyWatchIsolationRevokesPublishedHealth)
+TEST_F(WorkerOcServiceImplTest, TopologyWatchIsolationLeavesWorkerProbeUnchanged)
 {
     SetUnhealthy();
-    const auto savedHealthCheckPath = FLAGS_health_check_path;
-    const auto testHealthCheckPath = GetTestCaseDataDir() + "/issue873-runtime-health-probe";
-    Raii restore([savedHealthCheckPath, testHealthCheckPath] {
-        (void)DeleteFile(testHealthCheckPath);
-        FLAGS_health_check_path = savedHealthCheckPath;
+    const auto savedWorkerProbePath = FLAGS_health_check_path;
+    const auto testWorkerProbePath = GetTestCaseDataDir() + "/runtime-worker-probe";
+    Raii restore([savedWorkerProbePath, testWorkerProbePath] {
+        (void)DeleteFile(testWorkerProbePath);
+        FLAGS_health_check_path = savedWorkerProbePath;
         SetTopologyServingAdmission(true);
         SetUnhealthy();
     });
-    FLAGS_health_check_path = testHealthCheckPath;
-    (void)DeleteFile(testHealthCheckPath);
+    FLAGS_health_check_path = testWorkerProbePath;
+    DS_ASSERT_OK(ResetWorkerProbe());
+    DS_ASSERT_OK(PublishWorkerProbe());
+    struct stat probeBefore;
+    ASSERT_EQ(stat(testWorkerProbePath.c_str(), &probeBefore), 0);
 
     std::shared_ptr<WorkerOCServiceImpl> watchedImpl;
     ObjectTopologyTestRuntime watchedRuntime;
@@ -2145,76 +2172,77 @@ TEST_F(WorkerOcServiceImplTest, TopologyWatchIsolationRevokesPublishedHealth)
     watchedImpl = std::make_shared<WorkerOCServiceImpl>(
         localAddress_, localAddress_, watchedObjectTable, nullptr, watchedEvictionManager, nullptr, nullptr, nullptr,
         watchedRuntime.Engine(), watchedRoute, watchedRuntime.Engine()->Membership(), &exitRequested_, false, false);
-    watchedImpl->healthPublicationEnabled_.store(true, std::memory_order_release);
+    watchedImpl->healthStateUpdatesEnabled_.store(true, std::memory_order_release);
     watchedImpl->reconciliationReady_.store(true, std::memory_order_release);
     DS_ASSERT_OK(watchedImpl->StartTopologyHealthCoordinator());
     watchedPlacement.SetOwner("topology-readiness-probe", localAddress_);
     DS_ASSERT_OK(watchedRuntime.StartWithActiveLocalMember(localAddress_));
 
     constexpr auto healthTransitionTimeout = std::chrono::seconds(2);
-    ASSERT_TRUE(WaitForCondition(
-        [&] { return IsHealthy() && FileExist(testHealthCheckPath); }, healthTransitionTimeout));
-    ASSERT_TRUE(watchedImpl->setHealthFile_.load(std::memory_order_acquire));
+    ASSERT_TRUE(WaitForCondition([&] { return IsHealthy(); }, healthTransitionTimeout));
+    ASSERT_TRUE(watchedImpl->startupHealthy_.load(std::memory_order_acquire));
 
     // Only the real Coordinator watch drives isolation; no explicit health refresh is made by this test.
     DS_ASSERT_OK(watchedRuntime.TriggerAuthorityConflict(localAddress_));
 
-    EXPECT_TRUE(WaitForCondition(
-        [&] {
-            return !IsHealthy() && !FileExist(testHealthCheckPath)
-                   && !watchedImpl->setHealthFile_.load(std::memory_order_acquire);
-        },
-        healthTransitionTimeout));
+    EXPECT_TRUE(
+        WaitForCondition([&] { return !IsHealthy() && !watchedImpl->startupHealthy_.load(std::memory_order_acquire); },
+                         healthTransitionTimeout));
+    struct stat probeAfter;
+    ASSERT_EQ(stat(testWorkerProbePath.c_str(), &probeAfter), 0);
+    EXPECT_EQ(probeAfter.st_ino, probeBefore.st_ino);
+    EXPECT_EQ(probeAfter.st_mtime, probeBefore.st_mtime);
 }
 
-TEST_F(WorkerOcServiceImplTest, TopologyHealthRecoveryRevalidatesBeforeRepublish)
+TEST_F(WorkerOcServiceImplTest, TopologyHealthRecoveryRevalidatesWithoutChangingWorkerProbe)
 {
     SetUnhealthy();
-    const auto savedHealthCheckPath = FLAGS_health_check_path;
-    const auto testHealthCheckPath = GetTestCaseDataDir() + "/issue873-recovery-health-probe";
-    Raii restore([savedHealthCheckPath, testHealthCheckPath] {
-        (void)DeleteFile(testHealthCheckPath);
-        FLAGS_health_check_path = savedHealthCheckPath;
+    const auto savedWorkerProbePath = FLAGS_health_check_path;
+    const auto testWorkerProbePath = GetTestCaseDataDir() + "/recovery-worker-probe";
+    Raii restore([savedWorkerProbePath, testWorkerProbePath] {
+        (void)DeleteFile(testWorkerProbePath);
+        FLAGS_health_check_path = savedWorkerProbePath;
         SetTopologyServingAdmission(true);
         SetUnhealthy();
     });
-    FLAGS_health_check_path = testHealthCheckPath;
-    (void)DeleteFile(testHealthCheckPath);
-    impl_->healthPublicationEnabled_.store(true, std::memory_order_release);
+    FLAGS_health_check_path = testWorkerProbePath;
+    DS_ASSERT_OK(ResetWorkerProbe());
+    DS_ASSERT_OK(PublishWorkerProbe());
+    struct stat probeBefore;
+    ASSERT_EQ(stat(testWorkerProbePath.c_str(), &probeBefore), 0);
+    impl_->healthStateUpdatesEnabled_.store(true, std::memory_order_release);
     impl_->reconciliationReady_.store(true, std::memory_order_release);
     DS_ASSERT_OK(impl_->StartTopologyHealthCoordinator());
 
     impl_->NotifyTopologyAvailability(true);
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     EXPECT_FALSE(IsHealthy());
-    EXPECT_FALSE(FileExist(testHealthCheckPath));
+    EXPECT_TRUE(FileExist(testWorkerProbePath));
 
     placement_.SetOwner("topology-readiness-probe", localAddress_);
     DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
     constexpr auto healthTransitionTimeout = std::chrono::seconds(2);
-    ASSERT_TRUE(WaitForCondition(
-        [&] { return IsHealthy() && FileExist(testHealthCheckPath); }, healthTransitionTimeout));
+    ASSERT_TRUE(WaitForCondition([&] { return IsHealthy(); }, healthTransitionTimeout));
 
     impl_->NotifyTopologyAvailability(false);
-    ASSERT_TRUE(WaitForCondition(
-        [&] { return !IsHealthy() && !FileExist(testHealthCheckPath); }, healthTransitionTimeout));
+    ASSERT_TRUE(WaitForCondition([&] { return !IsHealthy(); }, healthTransitionTimeout));
 
     impl_->NotifyTopologyAvailability(true);
-    EXPECT_TRUE(WaitForCondition(
-        [&] { return IsHealthy() && FileExist(testHealthCheckPath); }, healthTransitionTimeout));
+    EXPECT_TRUE(WaitForCondition([&] { return IsHealthy(); }, healthTransitionTimeout));
+    struct stat probeAfter;
+    ASSERT_EQ(stat(testWorkerProbePath.c_str(), &probeAfter), 0);
+    EXPECT_EQ(probeAfter.st_ino, probeBefore.st_ino);
+    EXPECT_EQ(probeAfter.st_mtime, probeBefore.st_mtime);
 }
 
 TEST_F(WorkerOcServiceImplTest, ServingNotificationDoesNotClosePublishedHealth)
 {
-    const auto savedHealthCheckPath = FLAGS_health_check_path;
-    Raii restore([savedHealthCheckPath] {
-        FLAGS_health_check_path = savedHealthCheckPath;
+    Raii restore([] {
         SetTopologyServingAdmission(true);
         SetUnhealthy();
     });
-    FLAGS_health_check_path.clear();
     SetTopologyServingAdmission(true);
-    DS_ASSERT_OK(SetHealthProbe());
+    DS_ASSERT_OK(SetHealthy());
     ASSERT_TRUE(IsHealthy());
     DS_ASSERT_OK(impl_->StartTopologyHealthCoordinator());
 
@@ -2261,14 +2289,14 @@ TEST_F(WorkerOcServiceImplTest, GiveUpReconciliationDoesNotBypassTopologyHealthG
         localAddress_, localAddress_, objectTable_, nullptr, evictionManager_, nullptr, nullptr, nullptr,
         topologyRuntime_.Engine(), metadataRoute_, topologyRuntime_.Engine()->Membership(), &exitRequested_, true,
         true);
-    restartImpl->healthPublicationEnabled_.store(true, std::memory_order_release);
+    restartImpl->healthStateUpdatesEnabled_.store(true, std::memory_order_release);
     constexpr int64_t elapsedReconciliationMs = 60'001;
     restartImpl->lastReconTime_ = static_cast<int64_t>(GetSteadyClockTimeStampMs()) - elapsedReconciliationMs;
 
     DS_EXPECT_OK(restartImpl->GiveUpReconciliation());
 
     EXPECT_TRUE(restartImpl->reconciliationReady_.load(std::memory_order_acquire));
-    EXPECT_FALSE(restartImpl->setHealthFile_.load(std::memory_order_acquire));
+    EXPECT_FALSE(restartImpl->startupHealthy_.load(std::memory_order_acquire));
     EXPECT_FALSE(IsHealthy());
 }
 
@@ -2293,7 +2321,7 @@ TEST_F(WorkerOcServiceImplTest, JoiningTopologyAllowsOnlyRequestAdmission)
     ASSERT_TRUE(topologyRuntime_.Engine()->HasEstablishedMemberLease());
     ASSERT_EQ(topologyRuntime_.Engine()->GetAvailability(), cluster::TopologyAvailabilityLevel::NOT_READY);
     ASSERT_TRUE(topologyRuntime_.Engine()->IsLocalJoiningOnlyNotReady());
-    impl_->healthPublicationEnabled_.store(true, std::memory_order_release);
+    impl_->healthStateUpdatesEnabled_.store(true, std::memory_order_release);
 
     BthreadReadGuard strictGuard;
     EXPECT_EQ(impl_->ValidateWorkerState(strictGuard, K_META_MOVING_RETRY_TIMEOUT_MS).GetCode(), K_NOT_READY);
@@ -2400,7 +2428,7 @@ TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterReportsMetadataRpcFailure
         [&observations](const HostPort &target, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     master::QueryMetaRspPb rsp;
     std::vector<RpcMessage> payloads;
 
@@ -2420,7 +2448,7 @@ TEST_F(WorkerOcServiceImplTest, GetLocationCleanupUsesNormalCause)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     DS_ASSERT_OK(getImpl.RemoveLocation(objectKey, UINT64_MAX));
 
@@ -2464,7 +2492,7 @@ TEST_F(WorkerOcServiceImplTest, DeviceRemoteGetReservesCleanupBudgetBeforeRetry)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
-    impl_->getProc_ = std::make_shared<WorkerOcServiceGetImpl>(param, nullptr, nullptr, nullptr, nullptr, localAddress_,
+    impl_->getProc_ = std::make_shared<WorkerOcServiceGetImpl>(param, nullptr, nullptr, nullptr, localAddress_,
                                                                nullptr);
     WorkerDeviceOcManager deviceManager(impl_.get());
     GetDeviceObjectReqPb req;
@@ -2503,7 +2531,7 @@ TEST_F(WorkerOcServiceImplTest, RollbackUnackEmptySingleResponseStopsCleanupRetr
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     getImpl.DeleteObjectsMetaUnacked({ { objectKey, rollbackVersion } });
 
@@ -2526,7 +2554,7 @@ TEST_F(WorkerOcServiceImplTest, RollbackUnackEmptyBatchResponseStopsCleanupRetry
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     getImpl.DeleteObjectsMetaUnacked({ { firstKey, rollbackVersion }, { secondKey, rollbackVersion } });
 
@@ -2556,7 +2584,7 @@ TEST_F(WorkerOcServiceImplTest, RollbackUnackRetriesBatchRpcNotSupportedFailure)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     auto param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     getImpl.DeleteObjectsMetaUnacked({ { firstKey, rollbackVersion }, { secondKey, rollbackVersion } });
 
@@ -2578,7 +2606,7 @@ TEST_F(WorkerOcServiceImplTest, DeleteObjectsMetaUnackedUsesRollbackCause)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     getImpl.DeleteObjectsMetaUnacked({ { objectKey, rollbackVersion } });
 
@@ -2670,7 +2698,7 @@ TEST_F(WorkerOcServiceImplTest, RollbackUnackRetriesTransportFailure)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     auto param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     getImpl.DeleteObjectsMetaUnacked({ { objectKey, rollbackVersion } });
 
@@ -2696,7 +2724,7 @@ TEST_F(WorkerOcServiceImplTest, RollbackUnackRetriesRpcNotSupportedFailure)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     auto param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     getImpl.DeleteObjectsMetaUnacked({ { objectKey, rollbackVersion } });
 
@@ -2726,7 +2754,7 @@ TEST_F(WorkerOcServiceImplTest, RollbackUnackRetriesExplicitFailure)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     auto param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     getImpl.DeleteObjectsMetaUnacked({ { firstKey, rollbackVersion }, { secondKey, rollbackVersion } });
 
@@ -2757,7 +2785,7 @@ TEST_F(WorkerOcServiceImplTest, RollbackUnackRetriesMissingPartialResult)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     auto param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     getImpl.DeleteObjectsMetaUnacked(
         { { acknowledgedKey, rollbackVersion }, { missingKey, rollbackVersion } });
@@ -2787,7 +2815,7 @@ TEST_F(WorkerOcServiceImplTest, RollbackUnackRetriesMetaMovingResponse)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     auto param = MakeCrudParam(apiManager);
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
 
     getImpl.DeleteObjectsMetaUnacked({ { objectKey, rollbackVersion } });
 
@@ -2808,7 +2836,7 @@ TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterReportsMetadataRpcSuccess
         [&observations](const HostPort &target, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     master::QueryMetaRspPb rsp;
     std::vector<RpcMessage> payloads;
 
@@ -2837,7 +2865,7 @@ TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterDoesNotReportLocalRetryBu
         [&observations](const HostPort &target, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     master::QueryMetaRspPb rsp;
     std::vector<RpcMessage> payloads;
 
@@ -2863,7 +2891,7 @@ TEST_F(WorkerOcServiceImplTest, RedirectGetObjectLocationsMapsMetadataRpcFailure
         [&observations](const HostPort &target, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     google::protobuf::RepeatedPtrField<RedirectMetaInfo> infos;
     auto *info = infos.Add();
     info->set_redirect_meta_address(redirectAddress.ToString());
@@ -2899,7 +2927,7 @@ TEST_F(WorkerOcServiceImplTest, GetMapOfObjectKeysDoesNotReportLocalRetryBudgetT
         [&observations](const HostPort &target, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     std::unordered_map<std::string, master::ObjectLocationInfoPb> result;
     Status lastRc;
 
@@ -2930,7 +2958,7 @@ TEST_F(WorkerOcServiceImplTest, GetMapOfObjectKeysMapsOwnerPeerDeadToMetadataOwn
         [&observations](const HostPort &target, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     std::unordered_map<std::string, master::ObjectLocationInfoPb> result;
     Status lastRc;
 
@@ -2962,7 +2990,7 @@ TEST_F(WorkerOcServiceImplTest, GetMapOfObjectKeysKeepsNonConnectionOwnerError)
         [&observations](const HostPort &target, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     std::unordered_map<std::string, master::ObjectLocationInfoPb> result;
     Status lastRc;
 
@@ -2974,6 +3002,255 @@ TEST_F(WorkerOcServiceImplTest, GetMapOfObjectKeysKeepsNonConnectionOwnerError)
     EXPECT_TRUE(result.empty());
     EXPECT_EQ(api->GetObjectLocationsCallCount(), 1);
     EXPECT_THAT(observations, ElementsAre(Pair(masterAddress.ToString(), K_RUNTIME_ERROR)));
+}
+
+TEST_F(WorkerOcServiceImplTest, BatchExistsValidatesIndicesBeforePublishingResults)
+{
+    master::BatchExistsReqPb req;
+    req.add_object_keys("present");
+    req.add_object_keys("missing");
+    req.add_object_keys("present");
+    master::BatchExistsRspPb rsp;
+    rsp.add_not_exist_indices(1);
+    std::unordered_set<std::string> exists;
+    DS_ASSERT_OK(WorkerOcServiceGetImpl::CollectBatchExistsResults(req, rsp, exists));
+    EXPECT_THAT(exists, ElementsAre("present"));
+
+    const std::vector<std::vector<uint32_t>> invalidIndices{ { 3 }, { 1, 1 }, { 2, 1 } };
+    for (const auto &indices : invalidIndices) {
+        rsp.Clear();
+        rsp.mutable_not_exist_indices()->Add(indices.begin(), indices.end());
+        exists.clear();
+        EXPECT_EQ(WorkerOcServiceGetImpl::CollectBatchExistsResults(req, rsp, exists).GetCode(), K_INVALID);
+        EXPECT_TRUE(exists.empty());
+    }
+    rsp.Clear();
+    rsp.set_meta_is_moving(true);
+    EXPECT_EQ(WorkerOcServiceGetImpl::CollectBatchExistsResults(req, rsp, exists).GetCode(), K_TRY_AGAIN);
+    EXPECT_TRUE(exists.empty());
+}
+
+TEST_F(WorkerOcServiceImplTest, BatchExistsGroupsBusinessKeysByOwner)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const HostPort otherAddress("127.0.0.1", 18482);
+    const std::vector<std::string> keys{ "a-present", "b-missing", "a-missing", "b-present", "a-present" };
+    for (const auto &key : keys) {
+        placement_.SetOwner(key, key.front() == 'a' ? localAddress_ : otherAddress);
+    }
+    auto firstApi = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    auto secondApi = std::make_shared<FakeWorkerMasterOCApi>(otherAddress);
+    int firstCalls = 0;
+    int secondCalls = 0;
+    firstApi->batchExistsHandler_ = [&firstCalls](master::BatchExistsReqPb &req, master::BatchExistsRspPb &rsp) {
+        ++firstCalls;
+        EXPECT_TRUE(req.redirect());
+        EXPECT_THAT(req.object_keys(), ElementsAre("a-present", "a-missing", "a-present"));
+        rsp.add_not_exist_indices(1);
+        return Status::OK();
+    };
+    secondApi->batchExistsHandler_ = [&secondCalls](master::BatchExistsReqPb &req, master::BatchExistsRspPb &rsp) {
+        ++secondCalls;
+        EXPECT_TRUE(req.redirect());
+        EXPECT_THAT(req.object_keys(), ElementsAre("b-missing", "b-present"));
+        rsp.add_not_exist_indices(0);
+        return Status::OK();
+    };
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(localAddress_, firstApi);
+    apiManager->SetApi(otherAddress, secondApi);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    std::unordered_set<std::string> exists{ "local-hit" };
+    DS_ASSERT_OK(getImpl.QueryExistMetadata(keys, exists));
+    EXPECT_THAT(exists, testing::UnorderedElementsAre("local-hit", "a-present", "b-present"));
+    EXPECT_EQ(firstCalls, 1);
+    EXPECT_EQ(secondCalls, 1);
+
+    std::atomic<int> calls{ 0 };
+    auto failSecondGroup = [&calls](master::BatchExistsReqPb &, master::BatchExistsRspPb &) {
+        return ++calls == 1 ? Status::OK() : Status(K_RPC_UNAVAILABLE, "injected owner failure");
+    };
+    firstApi->batchExistsHandler_ = failSecondGroup;
+    secondApi->batchExistsHandler_ = failSecondGroup;
+    exists = { "local-hit" };
+    EXPECT_EQ(getImpl.QueryExistMetadata(keys, exists).GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_EQ(calls.load(), 2);
+    EXPECT_THAT(exists, ElementsAre("local-hit"));
+}
+
+TEST_F(WorkerOcServiceImplTest, BatchExistsQueriesOwnersConcurrentlyAndJoinsFailures)
+{
+    ScopedRequestContext requestContext;
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID("exists-fanout-test", true);
+    auto *parentContext = GetRequestContext();
+    const HostPort otherAddress("127.0.0.1", 18482);
+    placement_.SetOwner("first", localAddress_);
+    placement_.SetOwner("second", otherAddress);
+    auto firstApi = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    auto secondApi = std::make_shared<FakeWorkerMasterOCApi>(otherAddress);
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(localAddress_, firstApi);
+    apiManager->SetApi(otherAddress, secondApi);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    constexpr int ownerCount = 2;
+    for (auto failureCode : { K_OK, K_RPC_UNAVAILABLE, K_RUNTIME_ERROR }) {
+        GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+        std::mutex mutex;
+        std::condition_variable cv;
+        int entered = 0;
+        std::atomic<int> finished{ 0 };
+        auto handler = [&](master::BatchExistsReqPb &req, master::BatchExistsRspPb &) {
+            EXPECT_NE(GetRequestContext(), parentContext);
+            EXPECT_EQ(Trace::Instance().GetTraceID(), "exists-fanout-test");
+            auto remaining = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+            EXPECT_GT(remaining, 0);
+            EXPECT_LE(remaining, K_META_MOVING_RETRY_TIMEOUT_MS);
+            {
+                std::unique_lock<std::mutex> lock(mutex);
+                ++entered;
+                cv.notify_all();
+                EXPECT_TRUE(cv.wait_for(lock, std::chrono::milliseconds(K_META_MOVING_RETRY_TIMEOUT_MS),
+                                        [&]() { return entered == ownerCount; }));
+            }
+            ++finished;
+            if (req.object_keys(0) == "second") {
+                return Status(failureCode, "injected fanout status");
+            }
+            return Status::OK();
+        };
+        firstApi->batchExistsHandler_ = handler;
+        secondApi->batchExistsHandler_ = handler;
+        std::unordered_set<std::string> exists{ "local-hit" };
+        EXPECT_EQ(getImpl.QueryExistMetadata({ "first", "second" }, exists).GetCode(), failureCode);
+        EXPECT_EQ(finished.load(), ownerCount);
+        if (failureCode == K_OK) {
+            EXPECT_THAT(exists, testing::UnorderedElementsAre("local-hit", "first", "second"));
+        } else {
+            EXPECT_THAT(exists, ElementsAre("local-hit"));
+        }
+        EXPECT_EQ(GetRequestContext(), parentContext);
+        EXPECT_EQ(Trace::Instance().GetTraceID(), "exists-fanout-test");
+    }
+}
+
+TEST_F(WorkerOcServiceImplTest, BatchExistsRouteFailureDoesNotDispatchOrPublishResults)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    placement_.SetOwner("routed", localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    int calls = 0;
+    api->batchExistsHandler_ = [&calls](master::BatchExistsReqPb &, master::BatchExistsRspPb &) {
+        ++calls;
+        return Status::OK();
+    };
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    std::unordered_set<std::string> exists{ "local-hit" };
+    EXPECT_EQ(getImpl.QueryExistMetadata({ "routed", "unroutable" }, exists).GetCode(), K_NOT_FOUND);
+    EXPECT_THAT(exists, ElementsAre("local-hit"));
+    DS_ASSERT_OK(getImpl.QueryExistMetadata({}, exists));
+    EXPECT_THAT(exists, ElementsAre("local-hit"));
+    EXPECT_EQ(calls, 0);
+}
+
+TEST_F(WorkerOcServiceImplTest, BatchExistsRedirectUsesSubrequestIndicesAndDoesNotPublishPartialFailure)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    const std::vector<std::string> keys{ "present", "missing", "redirect-present", "redirect-missing" };
+    for (const auto &key : keys) {
+        placement_.SetOwner(key, localAddress_);
+    }
+    const HostPort redirectAddress("127.0.0.1", 18482);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    api->batchExistsHandler_ = [&redirectAddress](master::BatchExistsReqPb &req, master::BatchExistsRspPb &rsp) {
+        EXPECT_TRUE(req.redirect());
+        rsp.add_not_exist_indices(1);
+        auto *info = rsp.add_info();
+        info->set_redirect_meta_address(redirectAddress.ToString());
+        info->add_change_meta_ids("redirect-missing");
+        info->add_change_meta_ids("redirect-present");
+        return Status::OK();
+    };
+    auto redirectApi = std::make_shared<FakeWorkerMasterOCApi>(redirectAddress);
+    redirectApi->batchExistsHandler_ = [this](master::BatchExistsReqPb &req, master::BatchExistsRspPb &rsp) {
+        EXPECT_FALSE(req.redirect());
+        EXPECT_EQ(req.source_worker(), localAddress_.ToString());
+        EXPECT_THAT(req.object_keys(), ElementsAre("redirect-missing", "redirect-present"));
+        rsp.add_not_exist_indices(0);
+        return Status::OK();
+    };
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    apiManager->SetApi(redirectAddress, redirectApi);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    std::unordered_set<std::string> exists;
+    DS_ASSERT_OK(getImpl.QueryExistMetadata(keys, exists));
+    EXPECT_THAT(exists, testing::UnorderedElementsAre("present", "redirect-present"));
+
+    redirectApi->batchExistsHandler_ = [](master::BatchExistsReqPb &, master::BatchExistsRspPb &) {
+        return Status(K_RPC_UNAVAILABLE, "injected redirect failure");
+    };
+    exists = { "local-hit" };
+    EXPECT_EQ(getImpl.QueryExistMetadata(keys, exists).GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_THAT(exists, ElementsAre("local-hit"));
+}
+
+TEST_F(WorkerOcServiceImplTest, BatchExistsRejectsInvalidRedirectResults)
+{
+    master::BatchExistsReqPb req;
+    req.add_object_keys("present");
+    master::BatchExistsRspPb rsp;
+    auto *info = rsp.add_info();
+    info->set_redirect_meta_address("127.0.0.1:18482");
+    info->add_change_meta_ids("unexpected");
+    std::unordered_set<std::string> exists;
+    EXPECT_EQ(WorkerOcServiceGetImpl::CollectBatchExistsResults(req, rsp, exists).GetCode(), K_INVALID);
+    EXPECT_TRUE(exists.empty());
+    info->set_change_meta_ids(0, "present");
+    rsp.add_not_exist_indices(0);
+    EXPECT_EQ(WorkerOcServiceGetImpl::CollectBatchExistsResults(req, rsp, exists).GetCode(), K_INVALID);
+    EXPECT_TRUE(exists.empty());
+    rsp.clear_not_exist_indices();
+    DS_ASSERT_OK(WorkerOcServiceGetImpl::CollectBatchExistsResults(req, rsp, exists));
+    EXPECT_TRUE(exists.empty());
+}
+
+TEST_F(WorkerOcServiceImplTest, BatchExistsRetriesMovingAndHonorsExpiredDeadline)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+    placement_.SetOwner("present", localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    int calls = 0;
+    api->batchExistsHandler_ = [&calls](master::BatchExistsReqPb &, master::BatchExistsRspPb &rsp) {
+        if (++calls == 1) {
+            rsp.set_meta_is_moving(true);
+            rsp.add_not_exist_indices(0);
+        }
+        return Status::OK();
+    };
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    std::unordered_set<std::string> exists;
+    DS_ASSERT_OK(getImpl.QueryExistMetadata({ "present" }, exists));
+    EXPECT_THAT(exists, ElementsAre("present"));
+    EXPECT_EQ(calls, 2);
+
+    GetRequestContext()->reqTimeoutDuration.Init(0);
+    exists.clear();
+    EXPECT_EQ(getImpl.QueryExistMetadata({ "present" }, exists).GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_TRUE(exists.empty());
+    EXPECT_EQ(calls, 2);
 }
 
 TEST_F(WorkerOcServiceImplTest, QueryObjectLocationsMapsPureMetadataOwnerPeerDead)
@@ -2995,7 +3272,7 @@ TEST_F(WorkerOcServiceImplTest, QueryObjectLocationsMapsPureMetadataOwnerPeerDea
         [&observations](const HostPort &target, const Status &status) {
             observations.emplace_back(target.ToString(), status.GetCode());
         });
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     std::unordered_map<std::string, master::ObjectLocationInfoPb> locations;
 
     auto rc = getImpl.QueryObjectLocations({ objectKey }, locations);
@@ -3027,7 +3304,7 @@ TEST_F(WorkerOcServiceImplTest, QueryObjectLocationsCarriesServingMasterTopology
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy());
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     std::unordered_map<std::string, master::ObjectLocationInfoPb> locations;
 
     DS_ASSERT_OK(getImpl.QueryObjectLocations({ objectKey }, locations));
@@ -3072,7 +3349,7 @@ TEST_F(WorkerOcServiceImplTest, QueryObjectLocationsCarriesPerResultServingMaste
     apiManager->SetApi(originalMaster, originalApi);
     apiManager->SetApi(redirectMaster, redirectApi);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy());
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
     std::unordered_map<std::string, master::ObjectLocationInfoPb> locations;
 
     DS_ASSERT_OK(getImpl.QueryObjectLocations({ directKey, redirectKey }, locations));
@@ -3097,7 +3374,7 @@ TEST_F(WorkerOcServiceImplTest, GetObjMetaInfoUsesLocalObjectBeforeStaleOwner)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy());
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, std::make_shared<AkSkManager>(0), localAddress_,
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, std::make_shared<AkSkManager>(0), localAddress_,
                                    nullptr);
     GetObjMetaInfoReqPb req;
     req.add_object_keys(objectKey);
@@ -3129,7 +3406,7 @@ TEST_F(WorkerOcServiceImplTest, GetObjMetaInfoDoesNotHideRemoteOwnerFailureAfter
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy());
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, std::make_shared<AkSkManager>(0), localAddress_,
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, std::make_shared<AkSkManager>(0), localAddress_,
                                    nullptr);
     GetObjMetaInfoReqPb req;
     req.add_object_keys(localObjectKey);
@@ -3562,9 +3839,6 @@ TEST_F(WorkerOcServiceImplTest, DeferredGetCleanupRechecksMigrationState)
 TEST_F(WorkerOcServiceImplTest, MasterDrivenCleanupRetainsUnconfirmedAndFencesOrdinaryDeletion)
 {
     Parallel::InitParallelThreadPool(1);
-    const bool oldMetadataRecovery = FLAGS_enable_metadata_recovery;
-    Raii restoreFlag([oldMetadataRecovery]() { FLAGS_enable_metadata_recovery = oldMetadataRecovery; });
-    FLAGS_enable_metadata_recovery = false;
     const std::string ordinaryObject = "ordinary-stale-copy";
     const std::string markerRaceObject = "marker-race-copy";
     const std::string versionRaceObject = "version-race-copy";
@@ -3632,10 +3906,8 @@ TEST_F(WorkerOcServiceImplTest, MasterDrivenCleanupRetainsUnconfirmedAndFencesOr
     };
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
-    MetaDataRecoveryManager recovery(
-        localAddress_, objectTable_, { [](const HostPort &) { return Status::OK(); } }, apiManager, metadataRoute_);
     dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(
-        objectTable_, globalRefTable_, apiManager, gRefProc_, deleteProc_, &recovery, metadataRoute_, *endpointPolicy_,
+        objectTable_, globalRefTable_, apiManager, gRefProc_, deleteProc_, metadataRoute_, *endpointPolicy_,
         localAddress_.ToString());
 
     ClearDataRetryIds retryIds;
@@ -3668,12 +3940,9 @@ TEST_F(WorkerOcServiceImplTest, MasterDrivenCleanupRetainsUnconfirmedAndFencesOr
     dataClearImpl_.reset();
 }
 
-TEST_F(WorkerOcServiceImplTest, TopologyCleanupOrdinaryObjectsRespectMetadataRecoveryAndSnapshotFence)
+TEST_F(WorkerOcServiceImplTest, TopologyCleanupOrdinaryObjectsDoesNotRecoverMetadata)
 {
     Parallel::InitParallelThreadPool(1);
-    const bool oldMetadataRecovery = FLAGS_enable_metadata_recovery;
-    Raii restoreFlag([oldMetadataRecovery]() { FLAGS_enable_metadata_recovery = oldMetadataRecovery; });
-    FLAGS_enable_metadata_recovery = true;
     const std::string recoveredObject = "ordinary-recovered-copy";
     const std::string changedObject = "ordinary-changed-during-recovery";
     AddReadableObject(recoveredObject);
@@ -3709,34 +3978,27 @@ TEST_F(WorkerOcServiceImplTest, TopologyCleanupOrdinaryObjectsRespectMetadataRec
     };
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
-    MetaDataRecoveryManager recovery(
-        localAddress_, objectTable_, { [](const HostPort &) { return Status::OK(); } }, apiManager, metadataRoute_);
     dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(
-        objectTable_, globalRefTable_, apiManager, gRefProc_, deleteProc_, &recovery, metadataRoute_, *endpointPolicy_,
+        objectTable_, globalRefTable_, apiManager, gRefProc_, deleteProc_, metadataRoute_, *endpointPolicy_,
         localAddress_.ToString());
 
     ClearDataRetryIds recoveredRetryIds;
     dataClearImpl_->ClearTopologyFailureMatchedObjects({ recoveredObject }, recoveredRetryIds);
-    EXPECT_EQ(pushMetaCalls, 1U);
-    EXPECT_TRUE(objectTable_->Contains(recoveredObject).IsOk());
-    EXPECT_TRUE((*entries[recoveredObject])->IsShmUnitExistsAndComplete());
+    EXPECT_EQ(pushMetaCalls, 0U);
+    EXPECT_EQ(objectTable_->Contains(recoveredObject).GetCode(), K_NOT_FOUND);
     EXPECT_TRUE(recoveredRetryIds.Empty());
 
     ClearDataRetryIds failedRetryIds;
     dataClearImpl_->ClearTopologyFailureMatchedObjects({ changedObject }, failedRetryIds);
-    EXPECT_EQ(pushMetaCalls, 2U);
-    EXPECT_TRUE(objectTable_->Contains(changedObject).IsOk());
-    EXPECT_EQ((*entries[changedObject])->GetCreateTime(), 2U);
+    EXPECT_EQ(pushMetaCalls, 0U);
+    EXPECT_EQ(objectTable_->Contains(changedObject).GetCode(), K_NOT_FOUND);
     EXPECT_TRUE(failedRetryIds.Empty());
     dataClearImpl_.reset();
 }
 
-TEST_F(WorkerOcServiceImplTest, MasterDrivenUnconfirmedRecoveryFailureEntersTopologyRetry)
+TEST_F(WorkerOcServiceImplTest, MasterDrivenUnconfirmedPayloadIsRetainedWithoutRecovery)
 {
     Parallel::InitParallelThreadPool(1);
-    const bool oldMetadataRecovery = FLAGS_enable_metadata_recovery;
-    Raii restoreFlag([oldMetadataRecovery]() { FLAGS_enable_metadata_recovery = oldMetadataRecovery; });
-    FLAGS_enable_metadata_recovery = true;
     const std::string objectKey = "unconfirmed-recovery-retry";
     AddReadableObject(objectKey);
     std::shared_ptr<SafeObjType> entry;
@@ -3757,17 +4019,15 @@ TEST_F(WorkerOcServiceImplTest, MasterDrivenUnconfirmedRecoveryFailureEntersTopo
     };
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
-    MetaDataRecoveryManager recovery(localAddress_, objectTable_, { [](const HostPort &) { return Status::OK(); } },
-                                     apiManager, metadataRoute_);
     dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(objectTable_, globalRefTable_, apiManager,
-                                                                    gRefProc_, deleteProc_, &recovery, metadataRoute_,
+                                                                    gRefProc_, deleteProc_, metadataRoute_,
                                                                     *endpointPolicy_, localAddress_.ToString());
 
     ClearDataRetryIds retryIds;
     dataClearImpl_->ClearMatchedObjects({ objectKey }, retryIds);
 
-    EXPECT_EQ(pushMetaCalls, 1U);
-    EXPECT_THAT(retryIds.topologyCheckFailedIds, UnorderedElementsAre(objectKey));
+    EXPECT_EQ(pushMetaCalls, 0U);
+    EXPECT_TRUE(retryIds.Empty());
     EXPECT_TRUE(objectTable_->Contains(objectKey).IsOk());
     EXPECT_TRUE((*entry)->HasCompleteUnconfirmedPayload());
     dataClearImpl_.reset();
@@ -3775,9 +4035,6 @@ TEST_F(WorkerOcServiceImplTest, MasterDrivenUnconfirmedRecoveryFailureEntersTopo
 
 TEST_F(WorkerOcServiceImplTest, ExpiredMigrationSkipsRecoveryAndUsesTopologyCleanup)
 {
-    const bool oldMetadataRecovery = FLAGS_enable_metadata_recovery;
-    Raii restoreFlag([oldMetadataRecovery]() { FLAGS_enable_metadata_recovery = oldMetadataRecovery; });
-    FLAGS_enable_metadata_recovery = true;
     const std::string objectKey = "expired-migration-cleanup";
     AddReadableObject(objectKey);
     std::shared_ptr<SafeObjType> entry;
@@ -3802,10 +4059,8 @@ TEST_F(WorkerOcServiceImplTest, ExpiredMigrationSkipsRecoveryAndUsesTopologyClea
     };
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
-    MetaDataRecoveryManager recovery(localAddress_, objectTable_, { [](const HostPort &) { return Status::OK(); } },
-                                     apiManager, metadataRoute_);
     dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(objectTable_, globalRefTable_, apiManager,
-                                                                    gRefProc_, deleteProc_, &recovery, metadataRoute_,
+                                                                    gRefProc_, deleteProc_, metadataRoute_,
                                                                     *endpointPolicy_, localAddress_.ToString());
 
     ClearDataRetryIds retryIds;
@@ -3819,9 +4074,6 @@ TEST_F(WorkerOcServiceImplTest, ExpiredMigrationSkipsRecoveryAndUsesTopologyClea
 
 TEST_F(WorkerOcServiceImplTest, TopologyCleanupSnapshotsAreBoundedByMasterBatch)
 {
-    const bool oldMetadataRecovery = FLAGS_enable_metadata_recovery;
-    Raii restoreFlag([oldMetadataRecovery]() { FLAGS_enable_metadata_recovery = oldMetadataRecovery; });
-    FLAGS_enable_metadata_recovery = false;
     constexpr size_t objectCount = 501;
     std::vector<std::string> objectKeys;
     objectKeys.reserve(objectCount);
@@ -3852,7 +4104,7 @@ TEST_F(WorkerOcServiceImplTest, TopologyCleanupSnapshotsAreBoundedByMasterBatch)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(objectTable_, globalRefTable_, apiManager,
-                                                                    gRefProc_, deleteProc_, nullptr, metadataRoute_,
+                                                                    gRefProc_, deleteProc_, metadataRoute_,
                                                                     *endpointPolicy_, localAddress_.ToString());
 
     ClearDataRetryIds retryIds;
@@ -3997,7 +4249,7 @@ TEST_F(WorkerOcServiceImplTest, ExitIntentRejectsClientHealthBeforeTopologyDrain
         SetUnhealthy();
     });
     SetTopologyServingAdmission(true);
-    DS_ASSERT_OK(SetHealthProbe());
+    DS_ASSERT_OK(SetHealthy());
     ASSERT_TRUE(IsHealthy());
     DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
     exitRequested_.store(true, std::memory_order_relaxed);
@@ -4018,7 +4270,7 @@ TEST_F(WorkerOcServiceImplTest, ShutdownRequestRejectsClientHealthWithoutTopolog
         SetUnhealthy();
     });
     SetTopologyServingAdmission(true);
-    DS_ASSERT_OK(SetHealthProbe());
+    DS_ASSERT_OK(SetHealthy());
     ASSERT_TRUE(IsHealthy());
     DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
 
@@ -4062,7 +4314,7 @@ TEST_F(WorkerOcServiceImplTest, DrainRejectsClientWritesWhenLeavingInterceptIsDi
     FLAGS_enable_leaving_intercept = false;
     FLAGS_skip_authenticate = true;
     SetTopologyServingAdmission(true);
-    DS_ASSERT_OK(SetHealthProbe());
+    DS_ASSERT_OK(SetHealthy());
     ASSERT_TRUE(IsHealthy());
     DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
     exitRequested_.store(true, std::memory_order_release);
@@ -4102,7 +4354,7 @@ TEST_F(WorkerOcServiceImplTest, ExitIntentRejectsRoutedCreateBeforeDataDrain)
     FLAGS_enable_leaving_intercept = false;
     FLAGS_skip_authenticate = true;
     SetTopologyServingAdmission(true);
-    DS_ASSERT_OK(SetHealthProbe());
+    DS_ASSERT_OK(SetHealthy());
     DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
     exitRequested_.store(true, std::memory_order_release);
 
@@ -4154,7 +4406,7 @@ TEST_F(WorkerOcServiceImplTest, ScaleInDrainDoesNotWaitForAdmittedClientWrite)
     });
     FLAGS_enable_leaving_intercept = false;
     SetTopologyServingAdmission(true);
-    DS_ASSERT_OK(SetHealthProbe());
+    DS_ASSERT_OK(SetHealthy());
     DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
     DS_ASSERT_OK(inject::Set(injectPoint, "pause()"));
 
@@ -4319,7 +4571,7 @@ TEST_F(WorkerOcServiceImplTest, DrainWaitsForIncomingMigrationBeforeSnapshotColl
 TEST_F(WorkerOcServiceImplTest, ValidateWorkerStateReturnsTryAgainDuringStartupReconciliation)
 {
     // worker crash and restart, reconciliation
-    DS_ASSERT_OK(ResetHealthProbe());
+    SetUnhealthy();
     ASSERT_FALSE(IsHealthy());
     FLAGS_enable_reconciliation = true;
 
@@ -4339,7 +4591,7 @@ TEST_F(WorkerOcServiceImplTest, ValidateWorkerStateReturnsTryAgainDuringStartupR
     EXPECT_EQ(rc.GetCode(), K_TRY_AGAIN);
 
     // reconciliation finish, reconciliationReady_=true, g_health=true -> K_OK
-    DS_ASSERT_OK(SetHealthProbe());
+    DS_ASSERT_OK(SetHealthy());
     restartImpl->reconciliationReady_.store(true, std::memory_order_release);
     ASSERT_TRUE(IsHealthy());
     ASSERT_FALSE(restartImpl->IsStartupReconciling());
@@ -4348,7 +4600,7 @@ TEST_F(WorkerOcServiceImplTest, ValidateWorkerStateReturnsTryAgainDuringStartupR
 TEST_F(WorkerOcServiceImplTest, ValidateWorkerStateReturnsNotReadyWhenReconciliationSkippedAndUnhealthy)
 {
     // skip reconciliation(controlBackend=false)
-    DS_ASSERT_OK(ResetHealthProbe());
+    SetUnhealthy();
     ASSERT_FALSE(IsHealthy());
     FLAGS_enable_reconciliation = true;
 
@@ -4367,12 +4619,12 @@ TEST_F(WorkerOcServiceImplTest, ValidateWorkerStateReturnsNotReadyWhenReconcilia
     Status rc = skipImpl->ValidateWorkerState(noRecon, 60000);
     EXPECT_EQ(rc.GetCode(), K_NOT_READY);
 
-    DS_ASSERT_OK(SetHealthProbe());
+    DS_ASSERT_OK(SetHealthy());
 }
 
 TEST_F(WorkerOcServiceImplTest, ValidateWorkerStateReturnsDrainingWhenScaleInExitIsUnhealthy)
 {
-    DS_ASSERT_OK(ResetHealthProbe());
+    SetUnhealthy();
     ASSERT_FALSE(IsHealthy());
     exitRequested_.store(true, std::memory_order_release);
 
@@ -4380,7 +4632,7 @@ TEST_F(WorkerOcServiceImplTest, ValidateWorkerStateReturnsDrainingWhenScaleInExi
     const Status rc = impl_->ValidateWorkerState(noRecon, K_META_MOVING_RETRY_TIMEOUT_MS);
 
     EXPECT_TRUE(client::IsWorkerDrainingForScaleIn(rc));
-    DS_ASSERT_OK(SetHealthProbe());
+    DS_ASSERT_OK(SetHealthy());
 }
 }  // namespace ut
 }  // namespace datasystem

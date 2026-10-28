@@ -43,7 +43,6 @@
 
 DS_DECLARE_bool(enable_urma);
 DS_DECLARE_uint32(urma_send_jetty_lane_pool_size);
-DS_DECLARE_uint32(urma_send_jetty_lane_refill_extra_size);
 
 namespace datasystem {
 namespace {
@@ -72,9 +71,6 @@ void ConfigureFaultTest()
 {
     FLAGS_enable_urma = true;
     FLAGS_urma_send_jetty_lane_pool_size = 1;
-    // UrmaManager is process-global and remains initialized across this target's cases. Keep headroom for every
-    // synthetic retirement in the full target while still requiring the active pool itself to be exactly one lane.
-    FLAGS_urma_send_jetty_lane_refill_extra_size = 16;
 }
 
 Status InitManagerForFaultTest(UrmaManager &manager)
@@ -499,7 +495,7 @@ TEST(UrmaSendJettyFaultTest, RepeatedCqeStatus9RefillsWithoutExceedingUniqueJett
         // Count unique registry identities. The implementation now installs one pending-retire record
         // synchronously, so a retired Jetty is not double-counted as both "retiring" and "pending".
         EXPECT_LE(GetRegisteredJettyCount(resource),
-                  FLAGS_urma_send_jetty_lane_pool_size + FLAGS_urma_send_jetty_lane_refill_extra_size);
+                  FLAGS_urma_send_jetty_lane_pool_size + URMA_SEND_LANE_REFILL_HEADROOM);
     }
 }
 
@@ -1018,7 +1014,7 @@ TEST(UrmaSendJettyFaultTest, RefillCreateFailuresKeepSurvivingLaneAndRecoverAuto
     EXPECT_EQ(degradedStats.idleCount, 1U);
     EXPECT_EQ(degradedStats.inUseCount, 0U);
     EXPECT_LE(GetRegisteredJettyCount(resource),
-              FLAGS_urma_send_jetty_lane_pool_size + FLAGS_urma_send_jetty_lane_refill_extra_size);
+              FLAGS_urma_send_jetty_lane_pool_size + URMA_SEND_LANE_REFILL_HEADROOM);
 
     std::shared_ptr<UrmaJetty> survivingJetty;
     ASSERT_TRUE(resource.AcquireJetty(survivingJetty).IsOk());

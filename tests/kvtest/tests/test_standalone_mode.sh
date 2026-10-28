@@ -98,7 +98,7 @@ cat > "$ROOT_DIR/worker_config.json" << EOF
     "log_dir": {"value": "$ROOT_DIR/worker/log"},
     "rocksdb_store_dir": {"value": "$ROOT_DIR/worker/rocksdb"},
     "rocksdb_write_mode": {"value": "none"},
-    "health_check_path": {"value": "$ROOT_DIR/worker/health"},
+    "health_check_path": {"value": "$ROOT_DIR/worker/probe"},
     "node_timeout_s": {"value": "3"},
     "node_dead_timeout_s": {"value": "6"},
     "enable_distributed_master": {"value": "true"}
@@ -175,10 +175,10 @@ echo "=== TC2: Worker from JF discovery ==="
 WORKER_PID=$!
 PIDS+=("$WORKER_PID")
 
-if wait_health "$ROOT_DIR/worker/health" 30; then
-    log_pass "Worker health file appeared"
+if wait_health "$ROOT_DIR/worker/probe" 30; then
+    log_pass "Worker probe file appeared"
 else
-    log_fail "Worker health file not appeared"
+    log_fail "Worker probe file not appeared"
 fi
 
 # Stop worker
@@ -481,7 +481,7 @@ cat > "$ROOT_DIR/worker_config2.json" << EOF
 "log_dir":{"value":"$ROOT_DIR/w2/log"},
 "rocksdb_store_dir":{"value":"$ROOT_DIR/w2/rocksdb"},
 "rocksdb_write_mode":{"value":"none"},
-"health_check_path":{"value":"$ROOT_DIR/w2/health"},
+"health_check_path":{"value":"$ROOT_DIR/w2/probe"},
 "node_timeout_s":{"value":"3"},
 "node_dead_timeout_s":{"value":"6"},
 "enable_distributed_master":{"value":"true"}}
@@ -493,10 +493,10 @@ W_PID2=$!
 PIDS+=("$W_PID2")
 
 # Wait for worker health
-if wait_health "$ROOT_DIR/w2/health" 60; then
-    log_pass "Worker health file appeared (connected to multi-replica coordinator)"
+if wait_health "$ROOT_DIR/w2/probe" 60; then
+    log_pass "Worker probe file appeared (connected to multi-replica coordinator)"
 else
-    log_fail "Worker health file not appeared"
+    log_fail "Worker probe file not appeared"
 fi
 
 # Generate kvtest pipeline config for Set/Get verification

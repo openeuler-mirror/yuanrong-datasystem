@@ -44,7 +44,6 @@ public:
         opts.numWorkers = 5;
         opts.numMasters = 1;
         opts.enableDistributedMaster = "false";
-        opts.numRpcThreads = 0;
         opts.vLogLevel = 2;
         SCClientCommon::SetClusterSetupOptions(opts);
     }

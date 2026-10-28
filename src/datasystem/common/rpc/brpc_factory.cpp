@@ -175,16 +175,7 @@ std::unique_ptr<brpc::Channel> BrpcChannelFactory::Create(const BrpcChannelConfi
     brpc::ChannelOptions opts;
     opts.timeout_ms = cfg.timeout_ms;
     opts.connect_timeout_ms = cfg.connect_timeout_ms;
-    // connection_type: POOLED (default) or SINGLE, controlled by gflag.
-    if (FLAGS_brpc_connection_type == "single") {
-        opts.connection_type = brpc::CONNECTION_TYPE_SINGLE;
-    } else if (FLAGS_brpc_connection_type == "pooled") {
-        opts.connection_type = brpc::CONNECTION_TYPE_POOLED;
-    } else {
-        LOG(WARNING) << "Unknown brpc_connection_type: \"" << FLAGS_brpc_connection_type
-                     << "\", falling back to pooled.";
-        opts.connection_type = brpc::CONNECTION_TYPE_POOLED;
-    }
+    opts.connection_type = brpc::CONNECTION_TYPE_POOLED;
     // P2-3: circuit breaker auto-isolates peers with high error rates so a
     // half-dead worker (TCP alive but handler hung) cannot drag down QPS.
     // Gated by FLAGS_brpc_enable_circuit_breaker (default false). When true,

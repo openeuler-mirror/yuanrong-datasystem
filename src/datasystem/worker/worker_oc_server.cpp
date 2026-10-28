@@ -130,11 +130,6 @@ DS_DEFINE_uint32(page_size, 1024 * 1024,
                  "Size of the page used for caching worker files. The valid range is 4096-1073741824.");
 DS_DEFINE_bool(ipc_through_shared_memory, true, "Using shared memory to exchange data between client and worker.");
 DS_DECLARE_bool(authorization_enable);
-DS_DEFINE_string(ready_check_path, "",
-                 "This file will be created after the worker service is started successfully "
-                 "and a connection can be established using the stub. It is used to "
-                 "detect whether the container is ready in the k8s scenario. In default, \"ready\" is filename"
-                 "The path length should less than 4095 characters.");
 DS_DEFINE_string(system_access_key, "", "The access key for system component AK/SK authentication.");
 DS_DEFINE_string(system_secret_key, "", "The secret key for system component AK/SK authentication.");
 DS_DEFINE_string(system_data_key, "", "The data key for system encrypte and decrypt secert key.");
@@ -143,7 +138,6 @@ DS_DEFINE_string(tenant_secret_key, "", "The secret key for tenant AK/SK authent
 DS_DEFINE_uint32(request_expire_time_s, 300,
                  "When AK/SK authentication is used, if the duration from the client to the server is longer than the "
                  "value of this parameter, the authentication fails and the service is denied.");
-DS_DEFINE_validator(ready_check_path, &Validator::ValidatePathString);
 DS_DEFINE_validator(shared_memory_size_mb, &Validator::ValidateSharedMemSize);
 DS_DEFINE_validator(sc_local_cache_memory_size_mb, &Validator::ValidateLocalCacheMemSize);
 DS_DEFINE_validator(page_size, &Validator::ValidatePageSize);
@@ -153,21 +147,16 @@ DS_DECLARE_string(unix_domain_socket_dir);
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(monitor_config_file);
 DS_DECLARE_string(worker_address);
+DS_DECLARE_string(health_check_path);
 DS_DECLARE_string(master_address);
 DS_DECLARE_string(metastore_address);
 DS_DEFINE_bool(start_metastore_service, false,
                "Start metastore service on master worker to replace external etcd server for cluster worker "
                "metadata storage, default is false.");
 DS_DEFINE_bool_dynamic(async_delete, false, "Master notify workers to delete objects asynchronously.");
-DS_DEFINE_uint32(memory_reclamation_time_second, 600, "The memory reclamation time after free.");
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_uint32(scale_in_collect_window_ms);
-DS_DEFINE_string(liveness_check_path, "",
-                 "File will create after the worker check liveness successfully"
-                 "It is used to detect whether the container is liveness in the k8s scenario."
-                 "The path length must less than 4095 characters.");
-DS_DEFINE_validator(liveness_check_path, &Validator::ValidatePathString);
 DS_DEFINE_uint32(liveness_probe_timeout_s, 150, "Liveness probe timeout in seconds.");
 DS_DEFINE_uint32(check_async_queue_empty_time_s, 1,
                  "The async queue needs to be empty for a certain period of time before worker can exist.");
@@ -203,6 +192,7 @@ constexpr int32_t DEFAULT_STREAM_SOCKET_NUM = 8;       // The default stream soc
 constexpr double DFT_TIMEOUT_MULT = 1.0;          // A default timeout multiplier iartWorkerf file cache HA is used.
 constexpr int32_t THREAD_POOL_SIZE_LIMIT = 4096;  // size limit of the thread pool
 constexpr int32_t CHECK_ASYNC_SLEEP_TIME_S = 1;   // Check async task time interval.
+constexpr int64_t MEMORY_RECLAMATION_TIME_S = 600;  // Freed memory returns to the allocator for reuse after this decay.
 constexpr int64_t WARMUP_SCAN_INTERVAL_MS = 1'000;
 constexpr int64_t WARMUP_MIN_SCAN_MS = 30'000;
 constexpr int64_t WARMUP_MAX_SCAN_MS = 110'000;
@@ -557,11 +547,6 @@ bool IsWorkerScopedSlotStoreEnabled()
     return FLAGS_l2_cache_type == "distributed_disk";
 }
 
-bool EnableOCService()
-{
-    return FLAGS_rpc_thread_num > 0;
-}
-
 bool EnableSCService()
 {
     return FLAGS_sc_regular_socket_num > 0 && FLAGS_sc_stream_socket_num > 0;
@@ -700,14 +685,13 @@ Status WorkerOCServer::InitSlotRecovery()
 
 Status WorkerOCServer::InitWorkerOCService()
 {
-    RETURN_OK_IF_TRUE(!EnableOCService());
     RETURN_IF_NOT_OK(objCacheClientWorkerSvc_->Init());
     if (rpcServer_ && rpcServer_->IsBrpc()) {
         brpcOcAdapter_ = std::make_unique<WorkerOCServiceBrpcAdapter>(*objCacheClientWorkerSvc_);
         RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcOcAdapter_.get()));
     } else {
         RpcServiceCfg cfg;
-        cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
+        cfg.numRegularSockets_ = std::max(FLAGS_brpc_server_num_threads, LIGHTWEIGHT_SERVICE_THREAD_NUM);
         cfg.numStreamSockets_ = 0;
         cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
         cfg.udsEnabled_ = FLAGS_ipc_through_shared_memory;
@@ -718,20 +702,15 @@ Status WorkerOCServer::InitWorkerOCService()
 
 Status WorkerOCServer::InitWorkerWorkerOCService()
 {
-    RETURN_OK_IF_TRUE(!EnableOCService());
     RETURN_IF_NOT_OK(objCacheWorkerWkSvc_->Init());
     if (rpcServer_ && rpcServer_->IsBrpc()) {
         brpcWorkerWorkerOcAdapter_ = std::make_unique<WorkerWorkerOCServiceBrpcAdapter>(*objCacheWorkerWkSvc_);
         RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcWorkerWorkerOcAdapter_.get()));
     } else {
         RpcServiceCfg cfg;
-        cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
+        cfg.numRegularSockets_ = std::max(FLAGS_brpc_server_num_threads, LIGHTWEIGHT_SERVICE_THREAD_NUM);
         cfg.numStreamSockets_ = 0;
         cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            Validator::ValidatePort("FLAGS_oc_worker_worker_direct_port", FLAGS_oc_worker_worker_direct_port),
-            K_INVALID, FormatString("Invalid tcp/ip port value %d", FLAGS_oc_worker_worker_direct_port));
-        cfg.tcpDirect_ = std::to_string(FLAGS_oc_worker_worker_direct_port);
         builder_.AddService(objCacheWorkerWkSvc_.get(), cfg);
     }
     return Status::OK();
@@ -739,7 +718,6 @@ Status WorkerOCServer::InitWorkerWorkerOCService()
 
 Status WorkerOCServer::InitWorkerWorkerTransportService()
 {
-    RETURN_OK_IF_TRUE(!EnableOCService());
     RETURN_IF_NOT_OK(objCacheWorkerTransSvc_->Init());
     if (rpcServer_ && rpcServer_->IsBrpc()) {
         brpcWorkerWorkerTransAdapter_ =
@@ -757,14 +735,13 @@ Status WorkerOCServer::InitWorkerWorkerTransportService()
 
 Status WorkerOCServer::InitMasterWorkerOCService()
 {
-    RETURN_OK_IF_TRUE(!EnableOCService());
     RETURN_IF_NOT_OK(objCacheWorkerMsSvc_->Init());
     if (rpcServer_ && rpcServer_->IsBrpc()) {
         brpcMasterWorkerOcAdapter_ = std::make_unique<MasterWorkerOCServiceBrpcAdapter>(*objCacheWorkerMsSvc_);
         RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterWorkerOcAdapter_.get()));
     } else {
         RpcServiceCfg cfg;
-        cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
+        cfg.numRegularSockets_ = std::max(FLAGS_brpc_server_num_threads, LIGHTWEIGHT_SERVICE_THREAD_NUM);
         cfg.numStreamSockets_ = 0;
         cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
         builder_.AddService(objCacheWorkerMsSvc_.get(), cfg);
@@ -860,7 +837,7 @@ Status WorkerOCServer::InitWorkerService()
         RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcWorkerAdapter_.get()));
     } else {
         RpcServiceCfg cfg;
-        cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
+        cfg.numRegularSockets_ = std::max(FLAGS_brpc_server_num_threads, LIGHTWEIGHT_SERVICE_THREAD_NUM);
         cfg.numStreamSockets_ = 0;
         cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
         cfg.udsEnabled_ = false;
@@ -896,7 +873,7 @@ Status WorkerOCServer::InitMasterService()
         RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterAdapter_.get()));
     } else {
         RpcServiceCfg cfg;
-        cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
+        cfg.numRegularSockets_ = std::max(FLAGS_brpc_server_num_threads, LIGHTWEIGHT_SERVICE_THREAD_NUM);
         cfg.numStreamSockets_ = 0;
         builder_.AddService(commonSvc_.get(), cfg);
     }
@@ -905,14 +882,13 @@ Status WorkerOCServer::InitMasterService()
 
 Status WorkerOCServer::InitMasterOCService()
 {
-    RETURN_OK_IF_TRUE(!EnableOCService());
     RETURN_IF_NOT_OK(objCacheMasterSvc_->Init());
     if (rpcServer_ && rpcServer_->IsBrpc()) {
         brpcMasterOcAdapter_ = std::make_unique<master::MasterOCServiceBrpcAdapter>(*objCacheMasterSvc_);
         RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterOcAdapter_.get()));
     } else {
         RpcServiceCfg cfg;
-        cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
+        cfg.numRegularSockets_ = std::max(FLAGS_brpc_server_num_threads, LIGHTWEIGHT_SERVICE_THREAD_NUM);
         cfg.numStreamSockets_ = 0;
         builder_.AddService(objCacheMasterSvc_.get(), cfg);
     }
@@ -928,7 +904,7 @@ Status WorkerOCServer::InitMasterSCService()
         RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterScAdapter_.get()));
     } else {
         RpcServiceCfg cfg;
-        cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
+        cfg.numRegularSockets_ = std::max(FLAGS_brpc_server_num_threads, LIGHTWEIGHT_SERVICE_THREAD_NUM);
         cfg.numStreamSockets_ = 0;
         cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
         builder_.AddService(streamCacheMasterSvc_.get(), cfg);
@@ -939,7 +915,6 @@ Status WorkerOCServer::InitMasterSCService()
 #ifdef WITH_TESTS
 Status WorkerOCServer::InitUtOCService()
 {
-    RETURN_OK_IF_TRUE(!EnableOCService());
     if (rpcServer_ && rpcServer_->IsBrpc()) {
         // brpc mode: register the generated UtOCServiceBrpcAdapter so the test
         // UtOCService RPCs reach a brpc handler. StOCServiceImpl multi-inherits
@@ -970,10 +945,8 @@ Status WorkerOCServer::CreateAndInitPerfService()
 
 void WorkerOCServer::EnableLocalBypass()
 {
-    if (EnableOCService()) {
-        // Pass the receiving-side ptr of the WorkerMaster service so that the sending side can implement local
-        objCacheMasterSvc_->AssignLocalWorker(objCacheWorkerMsSvc_.get());
-    }
+    // Pass the receiving-side ptr of the WorkerMaster service so that the sending side can implement local
+    objCacheMasterSvc_->AssignLocalWorker(objCacheWorkerMsSvc_.get());
 
     if (EnableSCService()) {
         // MasterSCServiceImpl uses the RpcSessionManager singleton for managing the MasterWorkerSCApi. Provide the
@@ -1005,18 +978,15 @@ void WorkerOCServer::CreateMasterServices()
     LOG(INFO) << "Start create master services";
     // create MasterServiceImpl
     commonSvc_ = std::make_unique<MasterServiceImpl>(hostPort_, akSkManager_);
-    if (EnableOCService()) {
-        // create MasterOCServiceImpl
-        resourceManager_->SetTopologyMembership(&topologyEngine_->Membership());
-        auto metadataRpcObserver = [topologyEngine = topologyEngine_.get()](const HostPort &target,
-                                                                           const Status &status) {
-            topologyEngine->ObservePeerRpcResult(target, status);
-        };
-        objCacheMasterSvc_ = std::make_unique<MasterOCServiceImpl>(hostPort_, persistenceApi_, akSkManager_,
-                                                                   metadataManagerHolder_.get(), resourceManager_.get(),
-                                                                   topologyEngine_->Membership(), hostPort_.ToString(),
-                                                                   std::move(metadataRpcObserver));
-    }
+    resourceManager_->SetTopologyMembership(&topologyEngine_->Membership());
+    auto metadataRpcObserver = [topologyEngine = topologyEngine_.get()](const HostPort &target,
+                                                                       const Status &status) {
+        topologyEngine->ObservePeerRpcResult(target, status);
+    };
+    objCacheMasterSvc_ = std::make_unique<MasterOCServiceImpl>(hostPort_, persistenceApi_, akSkManager_,
+                                                               metadataManagerHolder_.get(), resourceManager_.get(),
+                                                               topologyEngine_->Membership(), hostPort_.ToString(),
+                                                               std::move(metadataRpcObserver));
     if (EnableSCService()) {
         // create MasterSCServiceImpl
         rpcSessionManager_ = std::make_shared<RpcSessionManager>();
@@ -1108,11 +1078,9 @@ Status WorkerOCServer::CreateWorkerServices()
     auto objectTable = std::make_shared<ObjectTable>();
     auto evictionManager = std::make_shared<object_cache::WorkerOcEvictionManager>(
         objectTable, hostPort_, masterAddr_, *metadataRouteResolver_, objCacheMasterSvc_.get());
-    if (EnableOCService()) {
-        RETURN_IF_NOT_OK(InitEvictionPolicyWorkerStateStore(evictionManager));
-        CreateObjectCacheWorkerServices(objectTable, evictionManager);
-        RETURN_IF_NOT_OK(ConfigureWorkerSelfPortHealth());
-    }
+    RETURN_IF_NOT_OK(InitEvictionPolicyWorkerStateStore(evictionManager));
+    CreateObjectCacheWorkerServices(objectTable, evictionManager);
+    RETURN_IF_NOT_OK(ConfigureWorkerSelfPortHealth());
     if (EnableSCService()) {
         auto scAllocateManager = std::make_shared<stream_cache::WorkerSCAllocateMemory>(evictionManager);
         // create ClientWorkerSCService
@@ -1925,7 +1893,7 @@ Status WorkerOCServer::ConstructTopologyRuntime()
         .SetScaleInCollectWindow(std::chrono::milliseconds(FLAGS_scale_in_collect_window_ms))
         .SetMembershipRestartHandler(membershipRestartHandler)
         .SetSnapshotPublishedHandler([this](std::shared_ptr<const cluster::TopologySnapshot> snapshot) {
-            if (EnableOCService() && objCacheClientWorkerSvc_ != nullptr) {
+            if (objCacheClientWorkerSvc_ != nullptr) {
                 LOG_IF_ERROR(objCacheClientWorkerSvc_->GiveUpReconciliation(),
                              "Try to finish restart reconciliation after topology snapshot published failed");
             }
@@ -2423,6 +2391,8 @@ Status WorkerOCServer::StopMetaStoreService()
 
 Status WorkerOCServer::Init()
 {
+    SetUnhealthy();
+    RETURN_IF_NOT_OK(ResetWorkerProbe());
     ImmutableStringPool::Instance().Init();
     intern::StringPool::InitAll();
     RETURN_IF_NOT_OK(InitAkSk());
@@ -2451,10 +2421,11 @@ Status WorkerOCServer::InitRpcAndMemoryRuntime()
 
     // Init shared memory
     uint64_t sharedMemoryBytes = FLAGS_shared_memory_size_mb * 1024ul * 1024ul;  // convert mb to bytes.
-    ssize_t decayMs = FLAGS_memory_reclamation_time_second * 1000;               // convert to ms.
+    ssize_t decayMs = MEMORY_RECLAMATION_TIME_S * 1000;                          // convert to ms.
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         datasystem::memory::Allocator::Instance()->Init(sharedMemoryBytes, FLAGS_shared_memory_populate, true, decayMs,
-            FLAGS_oc_shm_threshold_percentage, FLAGS_sc_shm_threshold_percentage),
+                                                        FLAGS_oc_shm_threshold_percentage,
+                                                        FLAGS_sc_shm_threshold_percentage),
         "Init allocator failed");
     // Call base class to init common service
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CommonServer::Init(), "CommonServer init failed");
@@ -2490,7 +2461,7 @@ Status WorkerOCServer::InitClusterRuntimeAndServices()
     RETURN_IF_NOT_OK(ConstructTopologyRuntime());
     // The runtime policy rollout is part of the heat eviction feature set; clock-only clusters never
     // receive a rollout, so skip the store (and its periodic coordination-backend polling) entirely.
-    if (IsLocalMetadataMaster() && EnableOCService() && GetEvictionStrategy() == "heat") {
+    if (IsLocalMetadataMaster() && GetEvictionStrategy() == "heat") {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitEvictionPolicyRolloutStore(), "Init eviction policy rollout store failed");
     }
 
@@ -2503,8 +2474,7 @@ Status WorkerOCServer::InitClusterRuntimeAndServices()
     // Start task execution only after every callback target is fully initialized.
     RETURN_IF_NOT_OK(StartTopologyRuntime());
     RETURN_IF_NOT_OK(StartBrpcIfEnabled());
-    const bool needsRestartReconciliation =
-        topologyEngine_->IsRestart() && EnableOCService() && FLAGS_enable_reconciliation;
+    const bool needsRestartReconciliation = topologyEngine_->IsRestart() && FLAGS_enable_reconciliation;
     if (ShouldPublishReadyMembership(needsRestartReconciliation)) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(PublishReadyMembership(), "Publish Worker topology READY membership failed");
     } else {
@@ -2548,10 +2518,9 @@ Status WorkerOCServer::StartBrpcIfEnabled()
 
 Status WorkerOCServer::InitLivenessCheck()
 {
-    if (!FLAGS_liveness_check_path.empty()) {
+    if (!FLAGS_health_check_path.empty()) {
         const int secToMs = 1000;
-        // start liveiness check.
-        livenessCheck_ = std::make_unique<WorkerLivenessCheck>(this, FLAGS_liveness_check_path,
+        livenessCheck_ = std::make_unique<WorkerLivenessCheck>(this, FLAGS_health_check_path,
                                                                FLAGS_liveness_probe_timeout_s * secToMs, bindHostPort_,
                                                                hostPort_.ToString(), akSkManager_);
         RETURN_IF_NOT_OK(livenessCheck_->Init());
@@ -2579,7 +2548,7 @@ Status WorkerOCServer::InitMetadataManagerHolder()
     param.masterWorkerService = objCacheWorkerMsSvc_.get();
     param.workerWorkerService = objCacheWorkerWkSvc_.get();
     param.rpcSessionManager = rpcSessionManager_;
-    param.isOcEnabled = EnableOCService();
+    param.isOcEnabled = true;
     param.isScEnabled = EnableSCService();
     return metadataManagerHolder_->Init(param);
 }
@@ -2594,9 +2563,7 @@ void WorkerOCServer::RegisteringAllResourceCollectionCallbackFunc()
 void WorkerOCServer::RegisteringWorkerCallbackFunc()
 {
     RegisteringWorkerCommonCallbackFunc();
-    if (EnableOCService()) {
-        RegisteringObjectCacheCallbackFunc();
-    }
+    RegisteringObjectCacheCallbackFunc();
     if (EnableSCService()) {
         RegisteringStreamCacheCallbackFunc();
     }
@@ -2696,23 +2663,21 @@ void WorkerOCServer::RegisteringMasterCallbackFunc()
         return GetRpcServicesUsage("MasterOCService").ToString(FLAGS_log_monitor_interval_ms);
     });
 
-    if (EnableOCService()) {
-        if (IsLocalMetadataMaster()) {
-            // The usage of etcd asynchronous write task queue
-            instance.RegisterCollectHandler(ResMetricName::ETCD_QUEUE, [this]() {
-                auto usage = objCacheMasterSvc_->GetETCDAsyncQueueUsage();
-                return usage.empty() ? RES_ETCD_DEFAULT_USAGE : usage;
-            });
-            // The usage of master asyncPool_
-            instance.RegisterCollectHandler(ResMetricName::MASTER_ASYNC_TASKS_THREAD_POOL, [this]() {
-                auto usage = objCacheMasterSvc_->GetMasterAsyncPoolUsage(FLAGS_log_monitor_interval_ms);
-                return usage.empty() ? RES_THREAD_POOL_DEFAULT_USAGE : usage;
-            });
-        } else {
-            instance.RegisterCollectHandler(ResMetricName::ETCD_QUEUE, []() { return RES_ETCD_DEFAULT_USAGE; });
-            instance.RegisterCollectHandler(ResMetricName::MASTER_ASYNC_TASKS_THREAD_POOL,
-                                            []() { return RES_THREAD_POOL_DEFAULT_USAGE; });
-        }
+    if (IsLocalMetadataMaster()) {
+        // The usage of etcd asynchronous write task queue
+        instance.RegisterCollectHandler(ResMetricName::ETCD_QUEUE, [this]() {
+            auto usage = objCacheMasterSvc_->GetETCDAsyncQueueUsage();
+            return usage.empty() ? RES_ETCD_DEFAULT_USAGE : usage;
+        });
+        // The usage of master asyncPool_
+        instance.RegisterCollectHandler(ResMetricName::MASTER_ASYNC_TASKS_THREAD_POOL, [this]() {
+            auto usage = objCacheMasterSvc_->GetMasterAsyncPoolUsage(FLAGS_log_monitor_interval_ms);
+            return usage.empty() ? RES_THREAD_POOL_DEFAULT_USAGE : usage;
+        });
+    } else {
+        instance.RegisterCollectHandler(ResMetricName::ETCD_QUEUE, []() { return RES_ETCD_DEFAULT_USAGE; });
+        instance.RegisterCollectHandler(ResMetricName::MASTER_ASYNC_TASKS_THREAD_POOL,
+                                        []() { return RES_THREAD_POOL_DEFAULT_USAGE; });
     }
 
     if (EnableSCService()) {
@@ -2730,12 +2695,10 @@ void WorkerOCServer::RegisteringMasterCallbackFunc()
 void WorkerOCServer::RegisteringThirdComponentCallbackFunc()
 {
     auto &instance = ResMetricCollector::Instance();
-    if (EnableOCService()) {
-        // The success rate of etcd request
-        instance.RegisterCollectHandler(ResMetricName::ETCD_REQUEST_SUCCESS_RATE, [this]() {
-            return etcdStore_ == nullptr ? RES_ETCD_DEFAULT_USAGE : etcdStore_->GetEtcdRequestSuccessRate();
-        });
-    }
+    // The success rate of etcd request
+    instance.RegisterCollectHandler(ResMetricName::ETCD_REQUEST_SUCCESS_RATE, [this]() {
+        return etcdStore_ == nullptr ? RES_ETCD_DEFAULT_USAGE : etcdStore_->GetEtcdRequestSuccessRate();
+    });
     if (TESTFLAG(GetCurrentStorageType(), L2StorageType::OBS)) {
         // The success rate of obs request
         instance.RegisterCollectHandler(ResMetricName::OBS_REQUEST_SUCCESS_RATE,
@@ -2745,16 +2708,11 @@ void WorkerOCServer::RegisteringThirdComponentCallbackFunc()
 
 Status WorkerOCServer::WaitForServiceReady()
 {
-    if (EnableOCService()) {
-        constexpr auto readinessRetryInterval = std::chrono::seconds(1);
-        RETURN_IF_NOT_OK(WaitForStartupHealth(
-            [this] { return objCacheClientWorkerSvc_->GiveUpReconciliation(); },
-            [this] { return objCacheClientWorkerSvc_->RefreshStartupHealth(); }, [] { return IsHealthy(); },
-            [] { return Status::OK(); },
-            [] { return IsTermSignalReceived(); }, readinessRetryInterval));
-    } else {
-        LOG(INFO) << "Object cache worker service is disabled, skip health check.";
-    }
+    constexpr auto readinessRetryInterval = std::chrono::seconds(1);
+    RETURN_IF_NOT_OK(WaitForStartupHealth(
+        [this] { return objCacheClientWorkerSvc_->GiveUpReconciliation(); },
+        [this] { return objCacheClientWorkerSvc_->RefreshStartupHealth(); }, [] { return IsHealthy(); },
+        [] { return Status::OK(); }, [] { return IsTermSignalReceived(); }, readinessRetryInterval));
     return Status::OK();
 }
 
@@ -2794,10 +2752,6 @@ Status WorkerOCServer::MaybeStartConnectionWarmup()
 {
     if (!FLAGS_enable_urma) {
         LOG(INFO) << "[URMA_WARMUP] enable_urma=false, skip warmup.";
-        return Status::OK();
-    }
-    if (!EnableOCService()) {
-        LOG(WARNING) << "[URMA_WARMUP] object cache service is disabled, skip warmup.";
         return Status::OK();
     }
     CHECK_FAIL_RETURN_STATUS(objCacheClientWorkerSvc_ != nullptr, K_NOT_READY, "Object cache service is not ready.");
@@ -2953,10 +2907,6 @@ void WorkerOCServer::FinishUbRecoveryProbe(PeerUbAdmission *admission, const UbP
 
 Status WorkerOCServer::MaybeStartWorkerMasterRpcWarmup()
 {
-    if (!EnableOCService()) {
-        LOG(INFO) << "[MASTER_RPC_WARMUP] object cache service is disabled, skip warmup.";
-        return Status::OK();
-    }
     if (topologyEngine_ == nullptr) {
         LOG(WARNING) << "[MASTER_RPC_WARMUP] topology Engine is null, skip warmup.";
         return Status::OK();
@@ -3167,7 +3117,7 @@ void WorkerOCServer::WarmupReadyWorkerMasterRpcOnStartup()
 
 void WorkerOCServer::ScheduleTopologySnapshotWarmup(std::shared_ptr<const cluster::TopologySnapshot> snapshot)
 {
-    if (!EnableOCService() || snapshot == nullptr || masterRpcWarmupExit_) {
+    if (snapshot == nullptr || masterRpcWarmupExit_) {
         return;
     }
     std::shared_ptr<ThreadPool> warmupThreadPool;
@@ -3274,56 +3224,34 @@ Status WorkerOCServer::ReadinessProbe()
 {
     RETURN_IF_NOT_OK(WaitForServiceReady());
     RETURN_OK_IF_TRUE(IsTermSignalReceived() && topologyExitRequested_.load());
-    // delete health check flag for worker service
-    if (FLAGS_ready_check_path.empty()) {
+    if (FLAGS_health_check_path.empty()) {
         return Status::OK();
     }
-    RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(FLAGS_ready_check_path, "~/.datasystem/probe/ready", ""));
-    std::string fileDir = FLAGS_ready_check_path.substr(0, FLAGS_ready_check_path.find_last_of('/'));
-    if (!FileExist(fileDir)) {
-        // Change the permission of "~/.datasystem/probe" to 0700.
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateDir(fileDir, true, 0700), "Create ready check file failed!");
-    }
-    (void)DeleteFile(FLAGS_ready_check_path);  // Delete file if exist
     RETURN_IF_NOT_OK(WaitForTopologyReady());
-    std::ofstream outfile(FLAGS_ready_check_path);
-    outfile << "health check success\n" << std::endl;
-    outfile.close();
-    const mode_t permission = 0600;
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(chmod(FLAGS_ready_check_path.c_str(), permission) == 0, K_RUNTIME_ERROR,
-                                         FormatString("Chmod of %s error.", FLAGS_ready_check_path));
-    return Status::OK();
+    return PublishWorkerProbe();
 }
 
 Status WorkerOCServer::Start()
 {
     RETURN_IF_NOT_OK_APPEND_MSG(CommonServer::Start(), "\nWorker Start failed.");
-    RETURN_IF_NOT_OK(InitLivenessCheck());
     // The task via uds accept fd is started here.
     clientWorkerCommonSvcStatus_ = loadFunctor(*workerSvc_);
     if (IsLocalMetadataMaster()) {
         if (EnableSCService()) {
             RETURN_IF_NOT_OK_APPEND_MSG(streamCacheMasterSvc_->StartCheckMetadata(), "\nmaster Start failed.");
         }
-        if (EnableOCService()) {
-            RETURN_IF_NOT_OK_APPEND_MSG(objCacheClientWorkerSvc_->WhetherNonRestart(), "\nWorker Start failed.");
-        } else {
-            RETURN_IF_NOT_OK(WaitForTopologyReady());
-            RETURN_IF_NOT_OK(SetHealthProbe());
-        }
-    } else {
-        if (EnableOCService()) {
-            RETURN_IF_NOT_OK_APPEND_MSG(objCacheClientWorkerSvc_->WhetherNonRestart(), "\nWorker Start failed.");
-        } else {
-            RETURN_IF_NOT_OK(WaitForTopologyReady());
-            RETURN_IF_NOT_OK(SetHealthProbe());
-        }
     }
+    RETURN_IF_NOT_OK_APPEND_MSG(objCacheClientWorkerSvc_->WhetherNonRestart(), "\nWorker Start failed.");
     RETURN_IF_NOT_OK_APPEND_MSG(metrics::InitKvMetrics(), "\nWorker Start failed: metrics init.");
     RETURN_IF_NOT_OK_APPEND_MSG(MaybeStartConnectionWarmup(), "\nWorker Start failed.");
     RETURN_IF_NOT_OK_APPEND_MSG(MaybeStartWorkerMasterRpcWarmup(), "\nWorker Start failed.");
     RETURN_IF_NOT_OK_APPEND_MSG(ReadinessProbe(), "\nWorker Start failed.");
     RETURN_OK_IF_TRUE(IsTermSignalReceived() && topologyExitRequested_.load());
+    const auto livenessRc = InitLivenessCheck();
+    if (livenessRc.IsError()) {
+        LOG_IF_ERROR(RemoveWorkerProbe(), "Rollback worker probe after liveness initialization failed");
+        return livenessRc;
+    }
     RETURN_IF_NOT_OK(ResMetricCollector::Instance().Init());
     RegisteringAllResourceCollectionCallbackFunc();
     ResMetricCollector::Instance().Start();
@@ -3514,15 +3442,13 @@ Status WorkerOCServer::RestorePreShutdownWorkers(const std::string &traceId, boo
 
 Status WorkerOCServer::StartPreShutdownWorkersLocked(bool scaleIn, const std::string &traceId)
 {
-    if ((EnableOCService() || EnableSCService()) && checkAsyncTasksThread_ == nullptr) {
+    if (checkAsyncTasksThread_ == nullptr) {
         INJECT_POINT("worker.RestoreScaleIn.beforeCheckAsyncTasksThreadCreation");
         RETURN_IF_EXCEPTION_OCCURS(checkAsyncTasksThread_ = std::make_unique<Thread>([this, traceId]() {
                                        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
                                        CheckAsyncTasks();
                                    }));
         checkAsyncTasksThread_->set_name("CheckAsyncTask");
-    } else if (!EnableOCService() && !EnableSCService()) {
-        SetCheckAsyncTasksDone(true);
     }
 
     if (scaleIn && clientsExitChecker_ == nullptr) {
@@ -3669,10 +3595,6 @@ Status WorkerOCServer::Shutdown()
 
 Status WorkerOCServer::GetShmQueueUnit(uint32_t lockId, int &fd, uint64_t &mmapSize, ptrdiff_t &offset, ShmKey &id)
 {
-    if (!EnableOCService()) {
-        fd = -1;
-        return Status::OK();
-    }
     return objCacheClientWorkerSvc_->GetShmQueueUnit(lockId, fd, mmapSize, offset, id);
 }
 
@@ -3680,7 +3602,6 @@ Status WorkerOCServer::ProcessServerReboot(const ClientKey &clientId, const std:
                                            const std::string &reqToken,
                                            const google::protobuf::RepeatedPtrField<google::protobuf::Any> &msg)
 {
-    RETURN_OK_IF_TRUE(!EnableOCService());
     return objCacheClientWorkerSvc_->RecoveryClient(clientId, tenantId, reqToken, msg);
 }
 

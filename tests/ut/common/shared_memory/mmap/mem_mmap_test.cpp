@@ -21,9 +21,12 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include "ut/common.h"
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/shared_memory/mmap/allocation.h"
 #include "datasystem/common/shared_memory/mmap/mem_mmap.h"
 #include "../../../../common/binmock/binmock.h"
+
+DS_DECLARE_bool(enable_fallocate);
 
 using namespace ::testing;
 
@@ -60,6 +63,7 @@ TEST_F(MemMmapTest, CommitFailed)
     memory::MemMmap m;
     size_t sz = 1024;
     DS_ASSERT_OK(m.Initialize(sz));
+    FLAGS_enable_fallocate = true;  // Commit only reaches the fallocate branch when enabled.
     BINEXPECT_CALL(&fallocate, (_, _, _, _)).WillRepeatedly(Return(-1));
     ASSERT_TRUE(m.Commit(m.Pointer(), 0, 1));
 }

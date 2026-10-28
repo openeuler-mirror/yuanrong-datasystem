@@ -123,7 +123,6 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_task_materializer_
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_controller_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_controller_runtime_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/hash_key_filter_test\\.cpp$)
-list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/storage_scan_plan_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_task_executor_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_engine_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_runtime_composition_test\\.cpp$)
@@ -316,7 +315,6 @@ add_executable(cluster_topology_contract_ut
         cluster/topology_controller_test.cpp
         cluster/topology_controller_runtime_test.cpp
         cluster/hash_key_filter_test.cpp
-        cluster/storage_scan_plan_test.cpp
         cluster/topology_task_executor_test.cpp
         cluster/topology_engine_test.cpp
         cluster/topology_runtime_composition_test.cpp

@@ -30,6 +30,7 @@
 
 #include "datasystem/common/immutable_string/immutable_string_pool.h"
 #include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
+#include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/string_intern/string_pool.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/kv_client.h"
@@ -94,12 +95,8 @@ public:
             " -shared_memory_size_mb=5120 -enable_worker_worker_batch_get=true"
             " -batch_get_threshold_mb=20 -arena_per_tenant=1 -oc_worker_worker_parallel_nums=64"
             " -urma_send_jetty_lane_pool_size=")
-            + std::to_string(SendLanePoolSize()) + " -urma_send_jetty_lane_refill_extra_size="
-            + std::to_string(SendLaneRefillExtraSize()) + " -ipc_through_shared_memory=false";
+            + std::to_string(SendLanePoolSize()) + " -ipc_through_shared_memory=false";
         opts.workerGflagParams += " -enable_urma=true";
-        if (MaxWriteSizeMb() != 0) {
-            opts.workerGflagParams += " -urma_max_write_size_mb=" + std::to_string(MaxWriteSizeMb());
-        }
     }
 
     void SetUp() override
@@ -116,16 +113,6 @@ protected:
     virtual uint32_t SendLanePoolSize() const
     {
         return 1;
-    }
-
-    virtual uint32_t SendLaneRefillExtraSize() const
-    {
-        return 1;
-    }
-
-    virtual uint32_t MaxWriteSizeMb() const
-    {
-        return 0;
     }
 
     void WaitForWorkerInjectExecuteCount(uint32_t workerIdx, const std::string &name, uint64_t expectedCount,
@@ -594,21 +581,15 @@ public:
     }
 };
 
-class UrmaSendJettyGateStTest : public UrmaSendJettyPoolStTest {
-protected:
-    uint32_t MaxWriteSizeMb() const override
-    {
-        return 1;
-    }
-};
+class UrmaSendJettyGateStTest : public UrmaSendJettyPoolStTest {};
 
 class UrmaSendJettyPoolConcurrentStTest : public UrmaSendJettyPoolStTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         UrmaSendJettyPoolStTest::SetClusterSetupOptions(opts);
-        // The tests below must have eight worker RPC handlers inside BatchGet simultaneously; both ST defaults are four.
-        opts.numRpcThreads = 16;
+        // The tests below need eight worker handlers inside BatchGet concurrently; raise the OC business pool to
+        // 16 while the brpc server supplies the RPC workers.
         opts.numOcThreadNum = 16;
     }
 
@@ -618,10 +599,6 @@ protected:
         return 8;
     }
 
-    uint32_t SendLaneRefillExtraSize() const override
-    {
-        return 8;
-    }
 };
 
 class UrmaSendJettyPoolMaxParallelStTest : public UrmaSendJettyPoolStTest {
@@ -639,10 +616,6 @@ protected:
         return 64;
     }
 
-    uint32_t SendLaneRefillExtraSize() const override
-    {
-        return 64;
-    }
 };
 
 TEST_F(UrmaSendJettyPoolStTest, SmallPoolReusesLaneForSequentialSetAndRemoteGet)
@@ -1516,12 +1489,12 @@ TEST_F(UrmaSendJettyGateStTest, MultiChunkStatus9WaitsForPausedSecondPostPermitB
     InitTestKVClient(kSourceWorker, writer);
     InitTestKVClient(kDestinationWorker, reader, 30000, false, 30000);
 
-    // MaxWriteSizeMb() forces this payload through two WRs on the same send lane. The first
+    // The fixed balance threshold forces this payload through two WRs on the same send lane. The first
     // reaches the provider, while the second stops after acquiring its post permit. Inject status
     // 9 (UMDK ACK timeout) on the first CQE; modify must remain blocked until that second permit
     // is released. This is a cross-process barrier built from the existing inject protocol.
     const std::string key = "urma-gate-multichunk-status9";
-    const std::string value(1024 * 1024 + 64, 'g');
+    const std::string value(URMA_WRITE_BALANCE_THRESHOLD_BYTES + 64, 'g');
     DS_ASSERT_OK(writer->Set(key, value));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kPostJettyRwWithPermitInject,
                                            "1*call()->1*pause()"));

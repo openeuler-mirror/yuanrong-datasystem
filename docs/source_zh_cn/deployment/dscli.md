@@ -1371,7 +1371,6 @@ address 清理失败，需检查 `deleted_members` 中的 `error` 字段。
 | coordinator_member_failure_grace_ms | uint32 | `10000` | 否 | 成员持续失败宽限时间，单位为毫秒；必须大于内部健康检查间隔 |
 | coordinator_discovery_retry_interval_ms | uint32 | `5000` | 否 | Discovery候选重试的最小间隔，单位为毫秒；必须大于`0` |
 | watch_event_dispatch_thread | int | `4` | 否 | Coordinator 分发 Watch 事件的线程数 |
-| rpc_thread_num | int | `64` | 否 | Coordinator RPC 服务线程数 |
 | log_dir | string | `"./datasystem/logs"` | 否 | Coordinator 日志目录 |
 | log_filename | string | `"datasystem_coordinator"` | 否 | Coordinator 日志文件名前缀，非空时仅允许英文字母、数字和下划线 |
 | minloglevel | int | `0` | 是 | 最低日志级别，低于该级别的日志不会被记录 |
@@ -1431,18 +1430,14 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | worker_address | string | `"127.0.0.1:31501"` | 否 | datasystem_worker IP地址，格式为：ip:port, 例如：127.0.0.1:31501 |
 | coordinator_address | string | `""` | 否 | Coordinator 服务地址，格式为 `host:port`；使用 Coordinator 集群管理方式时必须配置 |
 | kv_events_config | string | `""` | 否 | KV event publisher JSON 配置。为空表示关闭该功能；非空时需要填写 JSON 对象字符串，字段说明参见[表1](#table_kv_events_config)。例如：`{"bind_endpoint":"tcp://0.0.0.0:5557","backend_id":"worker-0"}` |
-| oc_worker_worker_direct_port | int | `0` | 否 | 对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延。取值范围：[0, 65535] |
-| rpc_thread_num | int | `16` | 否 | 配置服务端的RPC线程数，必须为大于0的数 |
 | oc_thread_num | int | `32` | 否 | 配置服务端用于处理对象/KV缓存的业务线程数 |
-| io_thread_nice | int | `0` | 否 | 指定部分 IO 线程的 nice 值，取值范围：[-20, 19]。0 表示跳过 nice 调整并保留线程继承的 nice 值；仅非 0 值调用 `setpriority`；设置负值通常需要相应权限 |
 | enable_sched_runtime | bool | `true` | 否 | 是否允许指定 worker 线程设置 Linux 调度 runtime。当前仅用于 URMA JFC poll 线程；设置为 `false` 时保留线程继承的调度参数且不调用 `sched_setattr`。 |
+| brpc_server_num_threads | int | `64` | 否 | brpc Server 工作线程数 |
 | brpc_event_dispatcher_num | int | `0` | 否 | brpc 进程级事件分发器数量。0 表示不覆盖 brpc 默认值 1；大于 1 时按 fd 哈希分摊 socket 读写事件，可缓解大量连接同时活跃时的首包读取排队，但不会并行化单个监听 fd 的 accept。仅在进程首次初始化 brpc 前生效，修改后需要重启 Worker |
 | max_rpc_session_num | int | `2048` | 否 | 单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000] |
 | remote_send_thread_num | int | `8` | 否 | 配置服务端用于将元素发送到远程工作线程的线程数量 |
 
-`brpc_event_dispatcher_num` 与 `rpc_thread_num`、`oc_thread_num` 的职责不同。仅当大量连接在同一时段发送首包或恢复读写，TCP 建连已完成但 RPC handler 入场仍明显延迟，且业务线程池与 CPU 尚未饱和时，才建议从 2 或 4 开始灰度验证；可结合 `event_dispatcher_read_latency` 与 handler 入场时序判断。业务处理、锁竞争、服务线程池饱和或单监听 fd 的 accept 是瓶颈时，增大该值通常无效。
-
-> **升级提示：** `io_thread_nice` 的新默认值 `0` 仅影响新生成的配置文件，或启动时未显式传入该参数的场景。已有 `worker_config.json` 中的 `-15` 仍会作为显式配置在后续启动时使用；如需停用 nice 调整，请在启动 worker 前手动将其改为 `0`。
+`brpc_event_dispatcher_num` 与 `brpc_server_num_threads`、`oc_thread_num` 的职责不同。仅当大量连接在同一时段发送首包或恢复读写，TCP 建连已完成但 RPC handler 入场仍明显延迟，且业务线程池与 CPU 尚未饱和时，才建议从 2 或 4 开始灰度验证；可结合 `event_dispatcher_read_latency` 与 handler 入场时序判断。业务处理、锁竞争、服务线程池饱和或单监听 fd 的 accept 是瓶颈时，增大该值通常无效。
 
 **表1** `kv_events_config` JSON 字段说明<a id="table_kv_events_config"></a>
 
@@ -1569,7 +1564,6 @@ INFO fallback 仅适用于忽略该初始化错误的 SDK Client，并且只在 
 | rocksdb_background_threads | int | `16` | 否 | RocksDB的后台线程数，用于元数据的刷盘和压缩，必须为正整数 |
 | rocksdb_max_open_file | int | `128` | 否 | RocksDB可使用的最大打开文件个数 |
 | rocksdb_write_mode | string | `async` | 否 | 配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为`async`。可选值包括：'none'（不写）、'sync'（同步）、'async'（异步） |
-| enable_metadata_recovery | bool | `false` | 否 | 是否在 worker 重启清理阶段将本地元数据回补到 master |
 | enable_data_replication | bool | `true` | 否 | 实验性参数。是否允许跨 worker 读取到的数据在本 worker 缓存为本地热副本，并向 master 注册副本位置；关闭后 remote get 获取的数据通常仅服务当前请求，不作为普通本地副本保留。该参数仅用于热副本性能优化，不作为数据可靠性机制，不保障数据可靠性或可用性 |
 
 #### 可靠性相关配置
@@ -1600,32 +1594,29 @@ INFO fallback 仅适用于忽略该初始化错误的 SDK Client，并且只在 
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
 | enable_huge_tlb | bool | `false` | 是否开启共享内存大页内存功能，它可以提高内存访问，减少页表的开销 |
-| enable_fallocate | bool | `true` | 由于Kubernetes(k8s)的资源计算策略，共享内存有时会被计算两次，这可能会导致客户端OOM崩溃。为了解决这个问题，我们使用了fallocate来链接客户端和工作节点的共享内存，从而纠正内存计算错误。缺省情况下，fallocate是使能的。启用fallocate会降低内存分配的效率 |
+| enable_fallocate | bool | `false` | 由于Kubernetes(k8s)的资源计算策略，共享内存有时会被计算两次，这可能会导致客户端OOM崩溃。为了解决这个问题，我们使用了fallocate来链接客户端和工作节点的共享内存，从而纠正内存计算错误。进程默认不启用fallocate；Kubernetes部署应显式开启。启用fallocate会降低内存分配的效率 |
 | shared_memory_populate | bool | `false` | 是否开启共享内存预热功能，启用该功能可以加速应用运行期间的共享内存拷贝速度，但是在datasystem_worker进程启动时也会由于预热导致启动速度变慢（取决于sharedMemory的配置）。如果开启该功能，'arena_per_tenant'必须设置为1，'enable_fallocate'必须设置为false |
 | enable_thp | bool | `false` | 是否启用透明大页（Transparent Huge Page,THP）功能，启用透明大页可以提高性能，减少页表开销，但也可能导致 Pod 内存使用增加 |
 | arena_per_tenant | int | `16` | 每个租户的共享内存分配器数量。多分配器可以提高第一次分配共享内存的性能，但每个分配器会多使用一个fd，导致fd资源使用量上升。取值范围：[1, 32] |
-| memory_reclamation_time_second | int | `600` | 释放后的内存回收时间控制日志消息的最大缓冲时间（以秒为单位），未回收的内存可以提供给下次分配复用，提升分配效率 |
 | async_delete | bool | `false` | 是否异步删除对象，如果设置为 `true` 时，删除对象数据是个异步的过程，客户端不需要等待所有数据副本删除完成即可返回 |
 | enable_p2p_transfer | bool | `false` | 是否开启异构对象传输协议支持点对点传输 |
 | enable_worker_worker_batch_get | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |
 | enable_urma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输，开启后worker启动时会自动预热URMA worker-worker连接 |
-| enable_ub_numa_affinity | bool | `false` | 是否开启 UB NUMA 亲和优化。仅在 `enable_urma=true` 且 `urma_register_whole_arena=true` 时生效。Worker 集群必须保持一致；client 从首个返回 UB 配置的 worker 固化该值，后续不一致仅记录 WARNING，不会修改 client 进程配置。 |
-| ub_transport_arena_num | int | `4` | UB 传输内存池拆分的等大 Arena 数量，取值范围为 `[1, 32]`。开启 UB NUMA 亲和时，优先在不同芯片间轮询分配 Arena，再复用同一芯片内的 NUMA 节点。使用多个 Arena 时，任一 NUMA 绑定失败都会导致 client 初始化失败。 |
 | ub_numa_rr_type | int | `1` | UB NUMA 源芯片选择粒度。`0` 表示关闭源芯片选择，保持发送内存所在芯片；`1` 表示每次逻辑写选择一次，`2` 表示每个 WR Post 选择一次。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。 |
 | ub_numa_src_chip_policy | int | `1` | UB NUMA 源芯片策略。`0` 表示轮询；`1` 表示以轮询为基线，仅当发送内存的亲和芯片接收本次逻辑写的预计 WR 后仍不比轮询候选更忙时，才覆盖轮询结果。配置 `0` 可用于消融实验和快速回滚。旧 worker 未返回该字段时，新 client 按 `0` 兼容。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。 |
-| ub_numa_inflight_wr_diff_threshold | int | `15` | 两个源芯片 inflight WR 数量的最大允许差值。差值严格大于该值时，后续逻辑写改用 inflight 较低的芯片；`0` 表示关闭深度纠偏和机会式亲和覆盖，保留纯轮询。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。 |
-| shared_memory_distribution_policy | string | `none` | 共享内存在 NUMA 上的分布策略。可选值：`none`、`interleave_all_numa`、`interleave_affinity_numa`。仅在 `enable_urma=true` 且 `urma_register_whole_arena=true` 时生效。 |
+| shared_memory_distribution_policy | string | `interleave_all_numa` | 共享内存在 NUMA 上的分布策略。可选值：`none`、`interleave_all_numa`、`interleave_affinity_numa`。仅在 `enable_urma=true` 且 `urma_register_whole_arena=true` 时生效。 |
 | urma_send_lane_count_per_peer | int | `8` | 单个远端 peer 可并发占用的 URMA send lane 上限，必须大于 0；实际值不超过 `urma_send_jetty_lane_pool_size`。静态配置，修改后需重启 Worker。 |
-| urma_log_threshold_us | int | `500` | URMA 轮询模式（`urma_event_mode=false`）INFO 耗时阈值（微秒），范围 `[1, 4294967295]`，修改后重启。 |
-| urma_event_mode | bool | `false` | 是否使用中断模式轮询完成事件 |
-| urma_poll_size | int | `8` | 一次可轮询的完整记录数量，该设备最多可轮询16条记录 |
-| urma_max_write_size_mb | int | `4` | URMA 单次写入大小上限，单位为 MB，取值范围：[1, 2048] |
+| urma_log_threshold_us | int | `500` | URMA 轮询模式 INFO 耗时阈值（微秒），范围 `[1, 4294967295]`，修改后重启。 |
 | urma_register_whole_arena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
 | enable_rdma | bool | `false` | 是否开启RDMA以实现对象worker之间的数据传输 |
 | rdma_register_whole_arena | bool | `true` | 是否在RDMA初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
-| oc_shm_transfer_threshold_kb | int | `500` | 在客户端和worker之间通过共享内存传输对象数据的阈值，单位为KB |
 | memory_alignment | int | `64` | jemalloc分配内存使用的字节对齐大小。更大的对齐可能提升性能，但也会因碎片化而增加内存占用。 |
-| oc_metadata_header | bool | `true` | 是否为对象缓存共享内存分配元数据头，如果设置为`false`则关闭此功能（此时shm latch/可见性将不可用）|
+
+URMA 内部固定使用轮询完成模式（单次最多 16 条）、4 个 Client 传输 Arena、200 条 send lane refill 余量和
+15 的 inflight WR 差值阈值。4 MiB 及以下的写请求使用一个分片，更大的请求目标为两个均衡分片；如果设备
+单次写上限更小，则继续增加分片数。新 Worker 在 URMA 与整 Arena 注册同时开启时启用 NUMA 亲和；滚动升级
+期间，新 Client 仍固化首个 Worker 返回的亲和与阈值字段，以保留旧 Worker 的行为。NUMA 拓扑不可读或
+`mbind` 失败时会记录 WARNING 并跳过剩余绑定，不会中止 Client 初始化。
 
 `shared_memory_distribution_policy` 策略说明：
 
