@@ -154,7 +154,6 @@ spec:
         - -batch_get_threshold_mb={{ $.Values.global.rpc.batchGetThresholdMb }}
         - -max_client_num={{ $.Values.global.resources.datasystemWorker.maxClientNum }}
         - -client_reconnect_wait_s={{ $.Values.global.reliability.clientReconnectWaitS }}
-        - -heartbeat_interval_ms={{ $.Values.global.reliability.heartbeatIntervalMs }}
         - -system_access_key={{ $.Values.global.akSk.systemAccessKey }}
         - -system_secret_key={{ $.Values.global.akSk.systemSecretKey }}
         - -system_data_key={{ $.Values.global.akSk.systemDataKey }}
@@ -202,7 +201,6 @@ spec:
         - -etcd_key={{ $.Values.global.etcd.etcdCertDir }}/client.key
         - -etcd_passphrase_path={{ $.Values.global.etcd.etcdCertDir }}/passphrase
         {{- end }}
-        - -auto_del_dead_node={{ $.Values.global.reliability.autoDelDeadNode }}
         - -spill_directory={{ $.Values.global.spill.spillDirectory }}
         - -spill_size_limit={{ $.Values.global.spill.spillSizeLimit }}
         - -spill_thread_num={{ $.Values.global.spill.spillThreadNum }}

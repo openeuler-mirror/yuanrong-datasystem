@@ -1572,13 +1572,16 @@ INFO fallback 仅适用于忽略该初始化错误的 SDK Client，并且只在 
 |-----|------|---------|-----|-------------|
 | client_reconnect_wait_s | int | `10` | 是 | 客户端断链重连最大等待时间（单位为秒） |
 | client_dead_timeout_s | int | `120` | 否 | 客户端存活检测最大时间间隔（单位为秒）, client_dead_timeout_s >= 3 |
-| heartbeat_interval_ms | int | `1000` | 是 | 服务端与ETCD的心跳间隔时间（单位为毫秒） |
-| node_timeout_s | int | `60` | 否 | 服务端节点超时最大时间间隔（单位为秒）, node_timeout_s >= 1 |
+| node_timeout_s | int | `60` | 否 | 服务端节点超时（秒），并决定 ETCD 心跳间隔 |
 | node_dead_timeout_s | int | `300` | 是 | 服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点，该值必须大于 `node_timeout_s` |
-| hash_ring_tokens_per_member | uint32 | `4` | 否 | 首次创建哈希环时为每个 Worker 分配的 token 数，取值范围为 `1`～`4096`。该值会写入集群 topology；后续扩容和重规划使用 topology 中的集群值，修改本地配置不会改变已有集群的 token 数。 |
 | enable_reconciliation | bool | `false` | 否 | 当节点重启时是否启用全局引用计数对账功能；仅使用 KVClient 的场景无需开启，使用 ObjectClient 全局引用计数时需显式设置为 `true` |
-| auto_del_dead_node | bool | `true` | 是 | 是否启用死亡节点自动清理功能，当该值为 `true` 时，会将死亡节点剔除出集群管理，并触发被动缩容 |
 | enable_distributed_master | bool | `true` | 否 | 是否启用分布式主节点，默认值为true |
+
+`node_timeout_s` 的有效下限为 3；配置小于 3 时会被自动调整为 3。服务端与 ETCD 的心跳间隔按
+`clamp(node_timeout_s * 1000 / 3, 100, 5000)`（毫秒）自动计算。
+新建集群的哈希环固定为每个 Worker 分配 32 个 token；已有集群继续使用 topology 中
+持久化的 token 数。
+死亡节点写保护、隔离和被动缩容始终启用，不再提供关闭开关。
 
 #### 优雅退出相关配置
 

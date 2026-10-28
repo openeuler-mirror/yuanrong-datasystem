@@ -188,13 +188,13 @@ namespace {
 constexpr char LOCAL_ADDRESS[] = "127.0.0.1:10001";
 constexpr char LOCAL_ID[] = "aaaaaaaaaaaaaaaa";
 constexpr auto TEST_WAIT = std::chrono::seconds(3);
+constexpr uint32_t TEST_TOKENS_PER_MEMBER = 4;
 
 std::vector<uint32_t> MakePersistedTokens(const std::string &address)
 {
-    constexpr uint32_t tokensPerMember = 4;
     std::vector<uint32_t> tokens;
-    tokens.reserve(tokensPerMember);
-    for (uint32_t index = 0; index < tokensPerMember; ++index) {
+    tokens.reserve(TEST_TOKENS_PER_MEMBER);
+    for (uint32_t index = 0; index < TEST_TOKENS_PER_MEMBER; ++index) {
         tokens.emplace_back(HashAlgorithm::MakeToken(address, index, 0));
     }
     return tokens;
@@ -334,6 +334,7 @@ TopologyState MakeTopology(uint64_t version = 1)
     TopologyState state;
     state.clusterHasInit = true;
     state.version = version;
+    state.tokensPerMember = TEST_TOKENS_PER_MEMBER;
     state.members = { Member{ { LOCAL_ID, LOCAL_ADDRESS }, MemberState::ACTIVE, MakePersistedTokens(LOCAL_ADDRESS) } };
     return state;
 }
@@ -355,6 +356,7 @@ TopologyState MakeTopologyWithoutLocal(uint64_t version = 1)
     TopologyState state;
     state.clusterHasInit = true;
     state.version = version;
+    state.tokensPerMember = TEST_TOKENS_PER_MEMBER;
     const std::string address = "127.0.0.1:10002";
     state.members = { Member{ { std::string(16, 'b'), address }, MemberState::ACTIVE,
                               MakePersistedTokens(address) } };

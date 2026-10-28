@@ -209,7 +209,7 @@ public:
         opts.numOBS = 1;
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
-            FormatString(" -v=0 -node_timeout_s=%d -node_dead_timeout_s=%d -auto_del_dead_node=true", nodeTimeout_,
+            FormatString(" -v=0 -node_timeout_s=%d -node_dead_timeout_s=%d", nodeTimeout_,
                          nodeDeadTimeout_);
         opts.waitWorkerReady = false;
         for (size_t i = 0; i < opts.numWorkers; i++) {

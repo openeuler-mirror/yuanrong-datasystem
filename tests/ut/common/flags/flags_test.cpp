@@ -943,6 +943,17 @@ TEST_F(FlagsTest, TestGetAllFlags)
     ASSERT_GE(modCount, 2);
 }
 
+TEST_F(FlagsTest, RemovedMembershipFlagsAreNotRegistered)
+{
+    std::vector<FlagInfo> flags;
+    GetAllFlags(flags);
+    for (const auto &flag : flags) {
+        EXPECT_NE(flag.name, "hash_ring_tokens_per_member");
+        EXPECT_NE(flag.name, "heartbeat_interval_ms");
+        EXPECT_NE(flag.name, "auto_del_dead_node");
+    }
+}
+
 TEST_F(FlagsTest, ParseBoolFromStringUsesGflagRules)
 {
     ASSERT_TRUE(ParseBoolFromString("true", false));

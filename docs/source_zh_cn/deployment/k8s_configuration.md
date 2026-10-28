@@ -417,17 +417,20 @@ global:
 |-----|------|---------|-------------|
 | global.reliability.clientReconnectWaitS | int | `10` | 客户端断链重连最大等待时间（单位为秒） |
 | global.reliability.clientDeadTimeoutS | int | `120` | 客户端存活检测最大时间间隔（单位为秒） |
-| global.reliability.heartbeatIntervalMs | int | `1000` | 服务端与ETCD的心跳间隔时间（单位为毫秒） |
-| global.reliability.nodeTimeoutS | int | `60` | 服务端节点超时最大时间间隔（单位为秒） |
+| global.reliability.nodeTimeoutS | int | `60` | 服务端节点超时（秒），并决定 ETCD 心跳间隔 |
 | global.reliability.nodeDeadTimeoutS | int | `300` | 服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点，该值必须大于 `nodeTimeoutS` |
 | global.reliability.enableReconciliation | bool | `true` | 当节点重启时是否启用对账功能 |
 | global.reliability.livenessProbeTimeoutS | int | `150` | Kubernetes 存活探针超时时间配置（以秒为单位） |
 | global.reliability.startupProbeTimeoutS | int | `390` | Kubernetes 启动探针超时（秒） |
-| global.reliability.autoDelDeadNode | bool | `true` | 是否启用死亡节点自动清理功能，当该值为 `true` 时，会将死亡节点剔除出集群管理，并触发被动缩容 |
 | global.reliability.enableDistributedMaster | bool | `true` | 是否启用分布式主节点，默认值为true |
 | global.reliability.enableStreamDataVerification | bool | `false` | 是否验证生产者数据乱序，默认值为false |
 
 `startupProbeTimeoutS` 默认值由 60 秒重启对账、300 秒死亡节点判定和 30 秒初始化余量组成。
+
+服务端与 ETCD 的心跳间隔按 `clamp(nodeTimeoutS * 1000 / 3, 100, 5000)`（毫秒）自动计算。
+新建集群的哈希环固定为每个 Worker 分配 32 个 token；已有集群继续使用 topology 中
+持久化的 token 数。
+死亡节点写保护、隔离和被动缩容始终启用，不再提供关闭开关。
 
 ### 优雅退出相关配置
 

@@ -35,6 +35,7 @@ enum class TopologyCallbackPhase : uint8_t { SCALE_OUT = 0, SCALE_IN = 1, SCALE_
 
 inline constexpr size_t MAX_MEMBER_ADDRESS_BYTES = 1'024;
 inline constexpr size_t MAX_TOPOLOGY_TASK_RANGES = 4'096;
+inline constexpr uint32_t DEFAULT_HASH_RING_TOKENS_PER_MEMBER = 32;
 
 inline bool IsCommittedMemberState(MemberState state) noexcept
 {
@@ -128,7 +129,7 @@ struct TopologyState {
     uint64_t version{ 0 };
     std::vector<Member> members;
     std::optional<ActiveBatch> activeBatch;
-    uint32_t tokensPerMember{ 4 };
+    uint32_t tokensPerMember{ DEFAULT_HASH_RING_TOKENS_PER_MEMBER };
 };
 
 struct TopologyTaskRange {

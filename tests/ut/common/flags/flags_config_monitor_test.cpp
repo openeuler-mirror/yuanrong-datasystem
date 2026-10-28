@@ -18,11 +18,13 @@
  * Description: Wiki §3 config file monitor and operation log unit tests.
  */
 #include "datasystem/common/flags/flag_manager.h"
+#include "datasystem/cluster/coordination_timing.h"
 #include "datasystem/common/kvstore/etcd/etcd_keep_alive.h"
 #include "datasystem/common/flags/dynamic_flag_config.h"
 
 #include <chrono>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -42,7 +44,6 @@
 
 DS_DECLARE_int32(v);
 DS_DECLARE_int32(minloglevel);
-DS_DECLARE_int32(heartbeat_interval_ms);
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_string(log_dir);
 DS_DECLARE_string(log_filename);
@@ -89,7 +90,6 @@ protected:
         FLAGS_logbufsecs = 0;
         FLAGS_v = 0;
         FLAGS_minloglevel = 0;
-        FLAGS_heartbeat_interval_ms = 1000;
         FLAGS_node_timeout_s = 60;
         configPath_ = FLAGS_log_dir + "/datasystem.config";
         Logging::GetInstance()->Start("flags_cfg_mon", LogProcessRole::WORKER);
@@ -172,8 +172,8 @@ TEST_F(FlagsConfigMonitorTest, NonModifiableFlagRecordsConfigFailed)
 TEST_F(FlagsConfigMonitorTest, MultipleFlagsRecordedSeparately)
 {
     DynamicFlagConfig flagConfig;
-    auto flagMap = flagConfig.ProcessOptions("-v=1\n-minloglevel=2\n-heartbeat_interval_ms=3000");
-    EXPECT_EQ(flagMap.size(), 3ul);
+    auto flagMap = flagConfig.ProcessOptions("-v=1\n-minloglevel=2");
+    EXPECT_EQ(flagMap.size(), 2ul);
     EXPECT_TRUE(flagConfig.UpdateFlagParameter(flagMap).IsOk());
 
     const std::string operationLog = OperationLogger::Instance().OperationLogPath();
@@ -181,31 +181,21 @@ TEST_F(FlagsConfigMonitorTest, MultipleFlagsRecordedSeparately)
     const std::string content = ReadFile(operationLog);
     EXPECT_THAT(content, testing::HasSubstr("CONFIG_CHANGED: v="));
     EXPECT_THAT(content, testing::HasSubstr("CONFIG_CHANGED: minloglevel="));
-    EXPECT_THAT(content, testing::HasSubstr("CONFIG_CHANGED: heartbeat_interval_ms="));
 }
 
-TEST_F(FlagsConfigMonitorTest, ManifestFlagEndToEndViaConfigFile)
+TEST_F(FlagsConfigMonitorTest, KeepAliveIntervalUsesBoundedNodeTimeoutFraction)
 {
-    ASSERT_TRUE(FlagManager::GetInstance()->IsModifiableFlag("heartbeat_interval_ms"));
-    DynamicFlagConfig flagConfig;
-    WriteConfigFile(configPath_, "-heartbeat_interval_ms=2500\n");
-    flagConfig.StartConfigFileHandle(configPath_, std::chrono::steady_clock::now());
-    EXPECT_EQ(FLAGS_heartbeat_interval_ms, 2500);
-
-    const std::string operationLog = OperationLogger::Instance().OperationLogPath();
-    Logging::ResetLoggingRuntimeForTest();
-    const std::string content = ReadFile(operationLog);
-    EXPECT_THAT(content, testing::HasSubstr("CONFIG_CHANGED: heartbeat_interval_ms="));
+    EXPECT_EQ(GetMembershipKeepAliveIntervalMs(0), 100);
+    EXPECT_EQ(GetMembershipKeepAliveIntervalMs(3), 1'000);
+    EXPECT_EQ(GetMembershipKeepAliveIntervalMs(15), 5'000);
+    EXPECT_EQ(GetMembershipKeepAliveIntervalMs(60), 5'000);
+    EXPECT_EQ(GetMembershipKeepAliveIntervalMs(std::numeric_limits<uint32_t>::max()), 5'000);
 }
 
-TEST_F(FlagsConfigMonitorTest, HeartbeatIntervalRuntimeUpdateChangesEtcdRenewInterval)
+TEST_F(FlagsConfigMonitorTest, EtcdKeepAliveDerivesIntervalFromNodeTimeout)
 {
-    DynamicFlagConfig flagConfig;
-    WriteConfigFile(configPath_, "-heartbeat_interval_ms=2500\n");
-    flagConfig.StartConfigFileHandle(configPath_, std::chrono::steady_clock::now());
-
     EtcdKeepAlive keepAlive("", 0);
-    EXPECT_EQ(keepAlive.GetLeaseRenewIntervalMs(), 2500);
+    EXPECT_EQ(keepAlive.GetLeaseRenewIntervalMs(), 5'000);
 }
 
 }  // namespace ut

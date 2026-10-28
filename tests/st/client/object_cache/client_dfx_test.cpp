@@ -58,7 +58,6 @@ constexpr int kEventuallyPollIntervalMs = 100;
 constexpr int kRestartReconciliationNodeTimeoutSec = 3;
 constexpr int kRestartReconciliationNodeDeadTimeoutSec = 4;
 constexpr int kRestartReconciliationReadyTimeoutSec = 12;
-constexpr int kRestartReconciliationHeartbeatMs = 500;
 constexpr int kRestartReconciliationBlockedPeerMs = 5'000;
 constexpr int kRestartReconciliationRpcRetryTimeoutMs = 1'000;
 constexpr char kRestartReconciliationRpcRetryInject[] =
@@ -148,8 +147,7 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.workerGflagParams =
-            "-client_reconnect_wait_s=1 -ipc_through_shared_memory=true -sc_stream_socket_num=0 -node_timeout_s=1 "
-            "-heartbeat_interval_ms=500";
+            "-client_reconnect_wait_s=1 -ipc_through_shared_memory=true -sc_stream_socket_num=0 -node_timeout_s=1";
         opts.numWorkers = 3;
         opts.masterIdx = 1;
         opts.enableDistributedMaster = "false";
@@ -1021,7 +1019,7 @@ class MasterClientRecoveryDfxTest : public OCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
-        opts.workerGflagParams = "-client_reconnect_wait_s=1 -node_timeout_s=1 -heartbeat_interval_ms=500 -v=1";
+        opts.workerGflagParams = "-client_reconnect_wait_s=1 -node_timeout_s=1 -v=1";
         opts.numWorkers = 3;
         opts.masterIdx = 2;
         opts.numEtcd = 1;
@@ -1067,8 +1065,8 @@ class MasterWorkerDisconnectDfxTest : public OCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
-        opts.masterGflagParams = "-node_timeout_s=1 -node_dead_timeout_s=2 -v=3 -heartbeat_interval_ms=500";
-        opts.workerGflagParams = "-node_timeout_s=30 -heartbeat_interval_ms=500 -v=3";
+        opts.masterGflagParams = "-node_timeout_s=1 -node_dead_timeout_s=2 -v=3";
+        opts.workerGflagParams = "-node_timeout_s=30 -v=3";
         opts.numMasters = 1;
         opts.numWorkers = 2;
         opts.numEtcd = 1;
@@ -1616,11 +1614,9 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_RestartReadyAfterPeerMembershipDelete
 
     DS_ASSERT_OK(cluster_->KillWorker(0));
     const auto restartParams = FormatString(
-        " -node_timeout_s=%d -node_dead_timeout_s=%d -heartbeat_interval_ms=%d"
-        " -inject_actions=%s:call(%d)",
+        " -node_timeout_s=%d -node_dead_timeout_s=%d -inject_actions=%s:call(%d)",
         kRestartReconciliationNodeTimeoutSec, kRestartReconciliationNodeDeadTimeoutSec,
-        kRestartReconciliationHeartbeatMs, kRestartReconciliationRpcRetryInject,
-        kRestartReconciliationRpcRetryTimeoutMs);
+        kRestartReconciliationRpcRetryInject, kRestartReconciliationRpcRetryTimeoutMs);
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, restartParams));
     WaitWorkerInjectExecuteCount(1, kRestartReconciliationBlockedPeerInject, 1, "worker1 restart reconciliation rpc");
 
@@ -1719,8 +1715,7 @@ public:
         opts.numEtcd = 1;
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
-            " -v=1 -auto_del_dead_node=true -node_timeout_s=1"
-            " -node_dead_timeout_s=3 -heartbeat_interval_ms=500";
+            " -v=1 -node_timeout_s=1 -node_dead_timeout_s=3";
         opts.waitWorkerReady = false;
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(500)");
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)");
@@ -1903,8 +1898,8 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.workerGflagParams =
-            "-client_reconnect_wait_s=1 -ipc_through_shared_memory=true -node_timeout_s=1 -enable_reconciliation=false "
-            "-heartbeat_interval_ms=500";
+            "-client_reconnect_wait_s=1 -ipc_through_shared_memory=true -node_timeout_s=1 "
+            "-enable_reconciliation=false";
         auto numWorkers = 2;
         opts.numWorkers = numWorkers;
         opts.enableDistributedMaster = "true";
@@ -1920,9 +1915,9 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.workerGflagParams = FormatString(
-            "-client_reconnect_wait_s=1 -ipc_through_shared_memory=true -node_timeout_s=2 -node_dead_timeout_s=%d "
-            "-heartbeat_interval_ms=1000 -auto_del_dead_node=false",
-            nodeDeadTimeout_);
+            "-client_reconnect_wait_s=1 -ipc_through_shared_memory=true -node_timeout_s=%d "
+            "-node_dead_timeout_s=%d",
+            nodeTimeout_, nodeDeadTimeout_);
         auto numWorkers = 2;
         opts.numWorkers = numWorkers;
         opts.enableDistributedMaster = "true";
@@ -1930,7 +1925,8 @@ public:
     }
 
 protected:
-    int nodeDeadTimeout_ = 3;
+    int nodeTimeout_ = 3;
+    int nodeDeadTimeout_ = 30;
 };
 
 TEST_F(WorkerPushMetaTest, TestWorkerTimeoutAndPushMeta)
@@ -1964,10 +1960,10 @@ TEST_F(WorkerPushMetaTest, TestWorkerTimeoutAndPushMeta)
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.KeepAlive.send", "pause()"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "EtcdStore.LaunchKeepAliveThreads.loopQuickly", "call(0)"));
 
-    std::this_thread::sleep_for(std::chrono::seconds(nodeDeadTimeout_ + 1));
+    std::this_thread::sleep_for(std::chrono::seconds(nodeTimeout_ + 1));
     cluster_->ClearInjectAction(WORKER, 0, "worker.RunKeepAliveTask");
     cluster_->ClearInjectAction(WORKER, 0, "worker.KeepAlive.send");
-    std::this_thread::sleep_for(std::chrono::seconds(nodeDeadTimeout_));
+    std::this_thread::sleep_for(std::chrono::seconds(nodeTimeout_));
 
     for (size_t i = 0; i < num; ++i) {
         DS_ASSERT_OK(buffers[i]->Seal());

@@ -11,8 +11,6 @@
 #include <set>
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
-#include "datasystem/common/flags/common_flags.h"
-#include "datasystem/common/util/raii.h"
 #include "gtest/gtest.h"
 #include "ut/common.h"
 
@@ -36,14 +34,13 @@ std::set<std::string> FailureSources(const TopologyPlan &plan)
     return sources;
 }
 
-TEST(TopologyPlanBuilderTest, BootstrapsMultipleInitialMembersWithConfiguredTokenCount)
+TEST(TopologyPlanBuilderTest, BootstrapsMultipleInitialMembersWithFixedTokenCount)
 {
-    const auto savedTokensPerMember = FLAGS_hash_ring_tokens_per_member;
-    Raii restore([savedTokensPerMember] { FLAGS_hash_ring_tokens_per_member = savedTokensPerMember; });
-    FLAGS_hash_ring_tokens_per_member = 64;
     HashAlgorithm algorithm;
     TopologyPlanBuilder builder(algorithm);
     TopologyState latest;
+    EXPECT_EQ(latest.tokensPerMember, DEFAULT_HASH_RING_TOKENS_PER_MEMBER);
+    EXPECT_EQ(ScaleOutPlanInput{}.tokensPerMember, DEFAULT_HASH_RING_TOKENS_PER_MEMBER);
     latest.version = 1;
     latest.members = { MakeControlMember('a', "127.0.0.1:1", MemberState::INITIAL),
                        MakeControlMember('b', "127.0.0.1:2", MemberState::INITIAL) };
@@ -54,15 +51,13 @@ TEST(TopologyPlanBuilderTest, BootstrapsMultipleInitialMembersWithConfiguredToke
     ASSERT_EQ(next.members.size(), 2);
     EXPECT_EQ(next.members[0].state, MemberState::ACTIVE);
     EXPECT_EQ(next.members[1].state, MemberState::ACTIVE);
-    EXPECT_EQ(next.members[0].tokens.size(), 64);
-    EXPECT_EQ(next.members[1].tokens.size(), 64);
+    EXPECT_EQ(next.tokensPerMember, DEFAULT_HASH_RING_TOKENS_PER_MEMBER);
+    EXPECT_EQ(next.members[0].tokens.size(), DEFAULT_HASH_RING_TOKENS_PER_MEMBER);
+    EXPECT_EQ(next.members[1].tokens.size(), DEFAULT_HASH_RING_TOKENS_PER_MEMBER);
 }
 
 TEST(TopologyPlanBuilderTest, StartsAndFinalizesOneMultiMemberScaleOutBatch)
 {
-    const auto savedTokensPerMember = FLAGS_hash_ring_tokens_per_member;
-    Raii restore([savedTokensPerMember] { FLAGS_hash_ring_tokens_per_member = savedTokensPerMember; });
-    FLAGS_hash_ring_tokens_per_member = 64;
     HashAlgorithm algorithm;
     TopologyPlanBuilder builder(algorithm);
     TopologyState latest;

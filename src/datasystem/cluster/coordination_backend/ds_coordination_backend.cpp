@@ -29,6 +29,7 @@
 #include "datasystem/common/coordinator/coordinator_log.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
+#include "datasystem/cluster/coordination_timing.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
@@ -51,7 +52,6 @@ DS_DECLARE_uint32(node_timeout_s);
 namespace datasystem::cluster {
 namespace {
 ScopedBthreadLocal<const DsCoordinationBackend *> g_watchRegisteredCaller;
-constexpr int64_t KEEP_ALIVE_INTERVAL_DIVISOR = 3;
 constexpr int64_t PEER_RPC_FAILURE_WINDOW_DIVISOR = 2;
 constexpr uint64_t MIN_PEER_RPC_FAILURES_TO_REPORT = 3;
 constexpr int64_t MIN_INITIAL_KEEPALIVE_RETRY_MS = 10'000;
@@ -680,7 +680,7 @@ Status DsCoordinationBackend::CreateKeepAliveKeyWithRetry()
         std::min<int64_t>(static_cast<int64_t>(FLAGS_node_dead_timeout_s) * MS_PER_SECOND,
                           std::max<int64_t>(MIN_INITIAL_KEEPALIVE_RETRY_MS,
                                             static_cast<int64_t>(FLAGS_node_timeout_s) * MS_PER_SECOND
-                                                * KEEP_ALIVE_INTERVAL_DIVISOR));
+                                                * INITIAL_KEEPALIVE_RETRY_BUDGET_MULTIPLIER));
     const auto retryDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(retryBudgetMs);
     uint32_t retryAttempts = 0;
     while ((IsRetryableRpcError(createStatus) || IsCoordinatorCasConflict(createStatus))
@@ -707,7 +707,7 @@ Status DsCoordinationBackend::InitKeepAlive(const std::string &tableName, const 
     firstKeepAliveSent_.store(false, std::memory_order_release);
     exitMembershipRequested_.store(false, std::memory_order_release);
     keepAliveTtlMs_ = static_cast<int64_t>(FLAGS_node_timeout_s) * MS_PER_SECOND;
-    keepAliveIntervalMs_ = static_cast<int64_t>(FLAGS_node_timeout_s) * MS_PER_SECOND / KEEP_ALIVE_INTERVAL_DIVISOR;
+    keepAliveIntervalMs_ = GetMembershipKeepAliveIntervalMs(FLAGS_node_timeout_s);
     // Keep one process incarnation across ambiguous lease-publication retries.
     keepAliveValue_.timestamp = std::chrono::system_clock::now().time_since_epoch().count();
     keepAliveValue_.hostId = hostId;
@@ -1074,9 +1074,6 @@ void DsCoordinationBackend::LaunchKeepAliveThread()
 void DsCoordinationBackend::RunKeepAliveLoop()
 {
     int64_t intervalMs = keepAliveIntervalMs_;
-    constexpr int64_t maxIntervalMs = 5'000;
-    constexpr int64_t minIntervalMs = 100;
-    intervalMs = std::max(minIntervalMs, std::min(intervalMs, maxIntervalMs));
     KeepAliveFailureState state;
     INJECT_POINT("CoordinationBackend.KeepAlive.intervalMs", [&intervalMs](int timeMs) { intervalMs = timeMs; });
     INJECT_POINT("CoordinationBackend.KeepAlive.confirmTimes", [&state](int times) { state.confirmMinTimes = times; });

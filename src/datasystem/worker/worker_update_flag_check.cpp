@@ -25,7 +25,6 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/validator.h"
 
-DS_DECLARE_int32(heartbeat_interval_ms);
 DS_DECLARE_string(worker_address);
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
@@ -47,8 +46,6 @@ DS_DECLARE_uint32(scale_in_collect_window_ms);
 namespace {
 constexpr uint32_t kMinNodeTimeoutS = 3;
 constexpr uint32_t kMinNodeDeadTimeoutS = 3;
-constexpr uint32_t kMaxLeaseRenewIntervalMs = 60 * MS_PER_SECOND;
-constexpr uint32_t kLeaseRenewRetryTimes = 4;
 constexpr uint32_t kMaxScaleInCollectWindowMs = 5'000;
 
 uint32_t AdjustNodeDeadTimeoutS(uint32_t value)
@@ -56,11 +53,6 @@ uint32_t AdjustNodeDeadTimeoutS(uint32_t value)
     return value < kMinNodeDeadTimeoutS ? kMinNodeDeadTimeoutS : value;
 }
 
-uint32_t MaxHeartbeatIntervalMs()
-{
-    uint64_t timeoutBasedLimit = static_cast<uint64_t>(FLAGS_node_timeout_s) * MS_PER_SECOND / kLeaseRenewRetryTimes;
-    return static_cast<uint32_t>(std::min<uint64_t>(kMaxLeaseRenewIntervalMs, timeoutBasedLimit));
-}
 }  // namespace
 
 namespace datasystem {
@@ -100,10 +92,6 @@ bool WorkerFlagValidateSpecial(const std::string &flagName, const std::string &n
             return true;
         }
     }
-    if (flagName == "heartbeat_interval_ms" && StrToUint32(newVal, result)
-        && !WorkerValidateHeartbeatIntervalMs(result)) {
-        return true;
-    }
     return false;
 }
 
@@ -116,13 +104,6 @@ void AdjustNodeTimeoutFlags()
         FLAGS_node_dead_timeout_s = kMinNodeDeadTimeoutS;
     }
     AdjustScaleInCollectWindowMs();
-    uint32_t maxHeartbeatIntervalMs = MaxHeartbeatIntervalMs();
-    if (static_cast<uint32_t>(FLAGS_heartbeat_interval_ms) > maxHeartbeatIntervalMs) {
-        LOG(WARNING) << "Adjust heartbeat_interval_ms from " << FLAGS_heartbeat_interval_ms << " to "
-                     << maxHeartbeatIntervalMs
-                     << " (must be no greater than min(60000, node_timeout_s * 1000 / 4))";
-        FLAGS_heartbeat_interval_ms = static_cast<int32_t>(maxHeartbeatIntervalMs);
-    }
 }
 
 namespace {
@@ -257,17 +238,6 @@ bool WorkerValidateNodeDeadTimeoutS(const uint32_t value)
 {
     if (value <= FLAGS_node_timeout_s) {
         LOG(ERROR) << "The value of node_dead_timeout_s must be greater than the value of node_timeout_s.";
-        return false;
-    }
-    return true;
-}
-
-bool WorkerValidateHeartbeatIntervalMs(const uint32_t value)
-{
-    uint32_t maxHeartbeatIntervalMs = MaxHeartbeatIntervalMs();
-    if (value > maxHeartbeatIntervalMs) {
-        LOG(ERROR) << "The value of heartbeat_interval_ms must be no greater than min(60000, "
-                   << "node_timeout_s * 1000 / 4). current max: " << maxHeartbeatIntervalMs;
         return false;
     }
     return true;

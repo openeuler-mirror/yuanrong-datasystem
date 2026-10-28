@@ -45,7 +45,6 @@ DS_DECLARE_string(etcd_address);
 DS_DEFINE_string(metastore_address, "", "Address of metastore server");
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
-DS_DECLARE_bool(auto_del_dead_node);
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(log_dir);
 DS_DEFINE_string(host_id_env_name, "", "Environment variable name used to obtain the current host_id.");
@@ -323,12 +322,15 @@ Status EtcdStore::Put(const std::string &tableName, const std::string &key, cons
                                  "The table does not exist. tableName:" + tableName);
         tablePrefix = iter->second;
     }
-    CHECK_FAIL_RETURN_STATUS(
-        !(keepAliveTimeoutTimer_.ElapsedMilliSecond() > FLAGS_node_dead_timeout_s * MS_PER_SECOND
-          && FLAGS_auto_del_dead_node),
-        K_RUNTIME_ERROR,
-        FormatString("local node is failed, keepAliveTimeoutTimer ElapsedMilliSecond %ld,  not put data to etcd",
-                     keepAliveTimeoutTimer_.ElapsedMilliSecond()));
+    int64_t keepAliveElapsedMs = static_cast<int64_t>(keepAliveTimeoutTimer_.ElapsedMilliSecond());
+    INJECT_POINT_NO_RETURN("EtcdStore.Put.keepAliveElapsedMs",
+                           [&keepAliveElapsedMs](int64_t elapsedMs) { keepAliveElapsedMs = elapsedMs; });
+    CHECK_FAIL_RETURN_STATUS(keepAliveElapsedMs <= static_cast<int64_t>(FLAGS_node_dead_timeout_s) * MS_PER_SECOND,
+                             K_RUNTIME_ERROR,
+                             FormatString(
+                                 "local node is failed, keepAliveTimeoutTimer ElapsedMilliSecond %ld,  not put data "
+                                 "to etcd",
+                                 keepAliveElapsedMs));
     etcdserverpb::PutRequest req;
     std::string etcdKey = tablePrefix + "/" + key;
     req.set_key(etcdKey);
@@ -683,8 +685,7 @@ bool EtcdStore::ProcessKeepAliveFailure(const Status &status, int64_t &observedL
                      "additional operations are required.";
     }
     // independent timeout-based failure check
-    if (storeAvailable && keepAliveTimeoutTimer_.ElapsedMilliSecond() > FLAGS_node_dead_timeout_s * MS_PER_SECOND
-        && FLAGS_auto_del_dead_node) {
+    if (storeAvailable && keepAliveTimeoutTimer_.ElapsedMilliSecond() > FLAGS_node_dead_timeout_s * MS_PER_SECOND) {
         LOG(WARNING) << FormatString(
             "local node failed time %ld has been reached %ld, need kill local worker, Scaling down.",
             keepAliveTimeoutTimer_.ElapsedMilliSecond(), FLAGS_node_dead_timeout_s * MS_PER_SECOND);

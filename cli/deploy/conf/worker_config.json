@@ -47,10 +47,6 @@
         "value": "64",
         "description": "The memory alignment size used by jemalloc for all memory allocations (in bytes). Larger alignment can improve performance but may increase memory consumption due to fragmentation."
     },
-    "heartbeat_interval_ms": {
-        "value": "1000",
-        "description": "Time interval between worker and etcd heartbeats."
-    },
     "ipc_through_shared_memory": {
         "value": "true",
         "description": "Using shared memory to exchange data between client and worker. If this parameter is set to true, client and worker will pass control messages through Unix Domain Sockets (UDS); otherwise, they will pass control messages through TCP/IP and exchange data through TCP/IP."
@@ -298,10 +294,6 @@
     "async_delete": {
         "value": "false",
         "description": "Master notify workers to delete objects asynchronously."
-    },
-    "auto_del_dead_node": {
-        "value": "true",
-        "description": "Decide whether to remove the node from hash ring or not when node is dead"
     },
     "client_dead_timeout_s": {
         "value": "120",

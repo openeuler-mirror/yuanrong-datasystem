@@ -96,7 +96,7 @@ public:
             " -shared_memory_size_mb=5120"
             " -enable_worker_worker_batch_get=true -enable_transport_fallback=true"
             " -ipc_through_shared_memory=true -client_dead_timeout_s=1"
-            " -node_timeout_s=1 -node_dead_timeout_s=%d -heartbeat_interval_ms=500"
+            " -node_timeout_s=1 -node_dead_timeout_s=%d"
             " -client_reconnect_wait_s=1",
             NODE_DEAD_TIMEOUT_S);
 #ifdef USE_URMA
