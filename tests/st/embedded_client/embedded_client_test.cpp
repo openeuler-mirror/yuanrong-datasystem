@@ -484,7 +484,6 @@ public:
         enableObs_ = true;
         configArgs_.emplace("node_timeout_s", "3");
         configArgs_.emplace("node_dead_timeout_s", "8");
-        configArgs_.emplace("auto_del_dead_node", "true");
     }
 
     void InitTopologyStore()

@@ -45,8 +45,7 @@ public:
         opts.workerConfigs.emplace_back(hostIp, port);
         workerHostPort_ = HostPort(hostIp, port);
         opts.workerGflagParams =
-            " -shared_memory_size_mb=64 -v=1 -ipc_through_shared_memory=true -node_timeout_s=1 "
-            "-heartbeat_interval_ms=500";
+            " -shared_memory_size_mb=64 -v=1 -ipc_through_shared_memory=true -node_timeout_s=1";
 
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(400)");
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(400)");
@@ -71,8 +70,7 @@ public:
         opts.workerConfigs.emplace_back(hostIp, port);
         workerHostPort_ = HostPort(hostIp, port);
         opts.workerGflagParams =
-            " -shared_memory_size_mb=64 -v=1 -ipc_through_shared_memory=true -node_timeout_s=1 "
-            "-heartbeat_interval_ms=500";
+            " -shared_memory_size_mb=64 -v=1 -ipc_through_shared_memory=true -node_timeout_s=1";
     }
 };
 
@@ -448,7 +446,7 @@ public:
         opts.workerConfigs.emplace_back(hostIp, port1);
         workerHostPort_ = HostPort(hostIp, port);
         workerHostPort1_ = HostPort(hostIp, port1);
-        opts.workerGflagParams = " -shared_memory_size_mb=64 -v=1 -node_timeout_s=1 -heartbeat_interval_ms=500 ";
+        opts.workerGflagParams = " -shared_memory_size_mb=64 -v=1 -node_timeout_s=1 ";
 
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(400)");
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(400)");

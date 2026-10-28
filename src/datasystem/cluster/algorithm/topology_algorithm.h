@@ -20,7 +20,7 @@ using TopologyAlgorithmId = std::string;
 struct ScaleOutPlanInput {
     TopologyState current;
     std::vector<MemberIdentity> joining;
-    uint32_t tokensPerMember{ 4 };
+    uint32_t tokensPerMember{ DEFAULT_HASH_RING_TOKENS_PER_MEMBER };
 };
 struct ScaleInPlanInput {
     TopologyState current;

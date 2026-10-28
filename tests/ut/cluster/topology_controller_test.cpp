@@ -47,6 +47,7 @@ constexpr int64_t COLLECTIVE_ABSENCE_FIRST_WINDOW_SECONDS = 4;
 constexpr int64_t COLLECTIVE_ABSENCE_SECOND_WINDOW_SECONDS = 8;
 constexpr int CONTROLLER_TEST_READ_TIMEOUT_MS = 100;
 constexpr size_t MEMBER_ID_SIZE = 16;
+constexpr uint32_t TEST_TOKENS_PER_MEMBER = 4;
 constexpr size_t LARGE_BATCH_MEMBER_COUNT = 500;
 constexpr size_t LARGE_STEADY_MEMBER_COUNT = 2'000;
 constexpr size_t LARGE_EXPANDED_MEMBER_COUNT = LARGE_STEADY_MEMBER_COUNT + LARGE_BATCH_MEMBER_COUNT;
@@ -139,10 +140,9 @@ std::string EncodeMembership(MemberLifecycleState state, int64_t timestamp = 0)
 
 std::vector<uint32_t> MakeMemberTokens(const std::string &address)
 {
-    constexpr uint32_t tokenCount = 4;
     std::vector<uint32_t> tokens;
-    tokens.reserve(tokenCount);
-    for (uint32_t index = 0; index < tokenCount; ++index) {
+    tokens.reserve(TEST_TOKENS_PER_MEMBER);
+    for (uint32_t index = 0; index < TEST_TOKENS_PER_MEMBER; ++index) {
         tokens.emplace_back(HashAlgorithm::MakeToken(address, index, 0));
     }
     return tokens;
@@ -159,6 +159,7 @@ TopologyState MakeActiveTopology(size_t memberCount, uint32_t portBase)
     TopologyState topology;
     topology.version = 1;
     topology.clusterHasInit = true;
+    topology.tokensPerMember = TEST_TOKENS_PER_MEMBER;
     topology.members.reserve(memberCount);
     for (size_t index = 0; index < memberCount; ++index) {
         const auto address = "127.0.0.1:" + std::to_string(portBase + index);
@@ -385,7 +386,7 @@ Status PrepareCompletedScaleOut(FakeCoordinationBackend &backend, const Topology
                                 TopologyRepository &repository, const HashAlgorithm &algorithm,
                                 TopologyState &next)
 {
-    TopologyState current{ true, 1, {}, std::nullopt };
+    TopologyState current{ true, 1, {}, std::nullopt, TEST_TOKENS_PER_MEMBER };
     current.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE,
                                 MakeMemberTokens("127.0.0.1:1") } };
     TopologyPlan plan;
@@ -420,6 +421,7 @@ Status PrepareActiveScaleOut(FakeCoordinationBackend &backend, const TopologyKey
     TopologyState current;
     current.version = 1;
     current.clusterHasInit = true;
+    current.tokensPerMember = TEST_TOKENS_PER_MEMBER;
     current.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE,
                                 MakeMemberTokens("127.0.0.1:1") } };
     TopologyPlan plan;
@@ -456,6 +458,7 @@ TEST(TopologyControllerTest, TwoInstancesCanJoinOneCommittedEpochWithoutPersiste
     TopologyState current;
     current.version = 1;
     current.clusterHasInit = true;
+    current.tokensPerMember = TEST_TOKENS_PER_MEMBER;
     current.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE,
                                 MakeMemberTokens("127.0.0.1:1") } };
     TopologyPlan plan;
@@ -492,6 +495,7 @@ TEST(TopologyControllerTest, ProgressSlicesContinueWithoutWaitingForThePeriodicT
     TopologyState current;
     current.version = 1;
     current.clusterHasInit = true;
+    current.tokensPerMember = TEST_TOKENS_PER_MEMBER;
     current.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
     TopologyPlan plan;
     std::vector<MemberIdentity> joining = {
@@ -585,6 +589,7 @@ TEST(TopologyControllerTest, DerivedSlicesReuseOnePlanningGeneration)
     TopologyState current;
     current.version = 1;
     current.clusterHasInit = true;
+    current.tokensPerMember = TEST_TOKENS_PER_MEMBER;
     current.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE,
                                 MakeMemberTokens("127.0.0.1:1") } };
     std::vector<MemberIdentity> joining = {
@@ -1247,6 +1252,7 @@ TEST(TopologyControllerTest, ConsumedScaleOutCohortDeadlineDoesNotShortenNextCol
     TopologyState initial;
     initial.version = 1;
     initial.clusterHasInit = true;
+    initial.tokensPerMember = 1;
     initial.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
     backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
     PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::READY);
@@ -1510,6 +1516,7 @@ TEST(TopologyControllerTest, ExternalBootstrapRetriesAcrossMembershipRevisionBou
     TopologyState initial;
     initial.version = 1;
     initial.clusterHasInit = true;
+    initial.tokensPerMember = 1;
     initial.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
     backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
     PutMembership(backend, *keys, initial.members.front().identity.address, MemberLifecycleState::READY);
@@ -1539,6 +1546,7 @@ TEST(TopologyControllerTest, ExternalControllerDoesNotReconcileBeforeWatchActiva
     TopologyState initial;
     initial.version = 1;
     initial.clusterHasInit = true;
+    initial.tokensPerMember = TEST_TOKENS_PER_MEMBER;
     initial.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
     backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
     PutMembership(backend, *keys, initial.members.front().identity.address, MemberLifecycleState::EXITING);
@@ -1799,6 +1807,7 @@ TEST(TopologyControllerTest, ExternalResyncChurnUsesReconcileBackoff)
     TopologyState initial;
     initial.version = 1;
     initial.clusterHasInit = true;
+    initial.tokensPerMember = TEST_TOKENS_PER_MEMBER;
     initial.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
     backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
     PutMembership(backend, *keys, initial.members.front().identity.address, MemberLifecycleState::READY);
@@ -1854,6 +1863,7 @@ TEST(TopologyControllerTest, ExternalTopologyWatchValueAdvancesWithoutPeriodicRe
     TopologyState initial;
     initial.version = 1;
     initial.clusterHasInit = true;
+    initial.tokensPerMember = TEST_TOKENS_PER_MEMBER;
     initial.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE,
                                 MakeMemberTokens("127.0.0.1:1") } };
     backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
@@ -2041,6 +2051,7 @@ TEST(TopologyControllerTest, ExternalResetRevisionFloorRejectsQueuedStaleValue)
     TopologyState initial;
     initial.version = 1;
     initial.clusterHasInit = true;
+    initial.tokensPerMember = TEST_TOKENS_PER_MEMBER;
     initial.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE,
                                 MakeMemberTokens("127.0.0.1:1") } };
     backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
@@ -2141,6 +2152,7 @@ TopologyState MakeTwoActiveMembersScaleInInitialState()
     TopologyState latest;
     latest.version = 1;
     latest.clusterHasInit = true;
+    latest.tokensPerMember = 1;
     latest.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } },
                        Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::ACTIVE, { 2 } } };
     return latest;
@@ -2166,6 +2178,7 @@ TopologyState MakeLargeActiveTopology(size_t memberCount)
     TopologyState latest;
     latest.version = 1;
     latest.clusterHasInit = true;
+    latest.tokensPerMember = LARGE_TOKENS_PER_MEMBER;
     latest.members.reserve(memberCount);
     for (uint32_t index = 0; index < memberCount; ++index) {
         Member member{ MakeLargeIdentity(index), MemberState::ACTIVE, {} };

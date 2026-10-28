@@ -612,6 +612,7 @@ private:
         cluster::TopologyState topology;
         topology.clusterHasInit = true;
         topology.version = TOPOLOGY_VERSION;
+        topology.tokensPerMember = 4;
         topology.members = {
             cluster::Member{ { std::string(MEMBER_ID_SIZE, LOCAL_MEMBER_ID_FILL), localAddress.ToString() },
                              cluster::MemberState::ACTIVE, makeTokens(localAddress.ToString()) },

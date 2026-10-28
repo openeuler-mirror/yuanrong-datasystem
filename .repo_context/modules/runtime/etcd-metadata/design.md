@@ -155,10 +155,10 @@ Failure-sensitive steps:
 2. Grant lease with TTL `node_timeout_s`.
 3. Put the cluster-table worker row with the lease and mark the first-publication fact only after success. Initial
    `STARTING`/`RESTARTING` templates then become `RECOVERING` for later automatic lease recreation.
-4. Start stream keepalive; renewal interval is derived from node timeout and capped.
+4. Start stream keepalive; renewal interval is `clamp(node_timeout_s * 1000 / 3, 100, 5000)` milliseconds.
 5. On failure, retry lease recreation and consult backend writability.
 6. If backend appears writable while local keepalive failed, synthesize DELETE and rely on topology deletion handling.
-7. Kill local process if failure duration exceeds policy and `auto_del_dead_node=true`.
+7. Kill the local process if failure duration exceeds `node_dead_timeout_s`.
 8. Explicit READY/reconciliation, automatic recreation, and EXITING writes are serialized by the membership mutation
    mutex. The template remains RECOVERING after READY; the topology runtime owns the guarded recovery-to-READY closure.
 
@@ -218,9 +218,8 @@ Failure-sensitive steps:
 | `etcd_address` | string | external ETCD backend address | empty requires Metastore path or startup rejection |
 | `metastore_address` | string | in-process ETCD-compatible backend address | selected by `GetBackendAddress` when present |
 | `cluster_name` | string | prefixes ETCD table keys | changes key namespace |
-| `node_timeout_s` | uint32 | lease TTL and renewal timing | too small causes aggressive liveness loss |
+| `node_timeout_s` | uint32 | lease TTL and derived renewal timing | too small causes aggressive liveness loss |
 | `node_dead_timeout_s` | uint32 | keepalive death policy | too small can kill workers during transient failures |
-| `auto_del_dead_node` | bool | enables local kill after liveness timeout | false changes passive deletion behavior |
 | `enable_etcd_auth` | bool | enables TLS/auth path | inconsistent cert config breaks ETCD access |
 | `etcd_ca`, `etcd_cert`, `etcd_key`, `etcd_passphrase_path` | string | TLS material source | misconfiguration breaks sessions |
 | `etcd_target_name_override` | string | TLS hostname override | mismatch breaks TLS validation |

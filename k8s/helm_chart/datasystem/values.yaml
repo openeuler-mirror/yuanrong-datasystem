@@ -359,8 +359,6 @@ global:
     clientReconnectWaitS: 10
     # Maximum time interval for the worker to determine client death, value range: [3, UINT64_MAX).
     clientDeadTimeoutS: 120
-    # Time interval between worker and etcd heartbeats.
-    heartbeatIntervalMs: 1000
     # Maximum time interval before a node is considered lost, the unit is second. (Must be greater than or equal to 1)
     nodeTimeoutS: 60
     # Maximum time interval for the etcd to determine node death, the unit is second. (Must be greater than nodeTimeoutS)
@@ -369,8 +367,6 @@ global:
     enableReconciliation: true
     # Timeout interval of kubernetes liveness probe, default is 150 seconds.
     livenessProbeTimeoutS: 150
-    # Decide whether to remove the node from hash ring or not when node is dead
-    autoDelDeadNode: true
     # Whether to support distributed master, default is true.
     enableDistributedMaster: true
     # Option to verify if data from a producer is out of order.

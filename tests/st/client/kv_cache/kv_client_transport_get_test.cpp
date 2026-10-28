@@ -612,7 +612,7 @@ public:
     {
         KVClientTransportGetTest::SetClusterSetupOptions(opts);
         opts.workerGflagParams +=
-            " -heartbeat_interval_ms=500 -node_timeout_s=1 -node_dead_timeout_s=3";
+            " -node_timeout_s=1 -node_dead_timeout_s=3";
     }
 };
 

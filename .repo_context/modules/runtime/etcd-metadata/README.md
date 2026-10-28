@@ -168,12 +168,15 @@ Important nuance:
    The in-memory automatic-write template deliberately remains `recover` after an explicit READY publication so later
    lease recreation is observable as recovery rather than silently claiming admission.
 3. `RunKeepAliveTask` creates an ETCD lease with TTL `node_timeout_s`, creates `EtcdKeepAlive`, writes the cluster table
-   key with that lease, then runs the keepalive loop. A dedicated monotonic atomic records the first successful
-   membership publication; callers do not infer that fact from the mutable automatic-write template.
+   key with that lease, then runs the keepalive loop. The keepalive interval is derived as
+   `clamp(node_timeout_s * 1000 / 3, 100, 5000)` milliseconds. A dedicated monotonic atomic records the first
+   successful membership publication; callers do not infer that fact from the mutable automatic-write template.
 4. `EtcdKeepAlive::Run` periodically sends `LeaseKeepAlive` requests after `LivenessHealthCheckEvent` notifications.
 5. If keepalive fails longer than the lease-expiry threshold, the parent monitor keeps retrying and, after peer/store
-   evidence confirms local isolation, emits one fake DELETE event. Existing death-timer and `auto_del_dead_node` policy
-   can still terminate the locally isolated Worker with `SIGKILL`.
+   evidence confirms local isolation, emits one fake DELETE event. The death timer terminates a locally isolated Worker
+   with `SIGKILL` after `node_dead_timeout_s`; this protection cannot be disabled by configuration.
+   Ordinary `EtcdStore::Put` remains allowed at the exact timeout boundary and returns `K_RUNTIME_ERROR` only after the
+   elapsed failure time exceeds `node_dead_timeout_s`; `EtcdStoreTest.RejectsPutAfterNodeDeadTimeout` guards this edge.
 6. `UpdateNodeState` rewrites the local cluster-table value with the active lease.
 7. `InformReconciliationDone` uses the keepalive table selected by `InitKeepAlive` and turns `restart` or `recover`
    into `ready` after reconciliation.

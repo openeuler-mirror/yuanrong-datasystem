@@ -21,13 +21,13 @@
 
 namespace datasystem::cluster {
 namespace {
+constexpr uint32_t TEST_TOKENS_PER_MEMBER = 4;
 
 std::vector<uint32_t> MakeMemberTokens(const std::string &address)
 {
-    constexpr uint32_t tokenCount = 4;
     std::vector<uint32_t> tokens;
-    tokens.reserve(tokenCount);
-    for (uint32_t index = 0; index < tokenCount; ++index) {
+    tokens.reserve(TEST_TOKENS_PER_MEMBER);
+    for (uint32_t index = 0; index < TEST_TOKENS_PER_MEMBER; ++index) {
         tokens.emplace_back(HashAlgorithm::MakeToken(address, index, 0));
     }
     return tokens;
@@ -41,6 +41,7 @@ struct JanitorScenario {
         TopologyState current;
         current.version = 1;
         current.clusterHasInit = true;
+        current.tokensPerMember = TEST_TOKENS_PER_MEMBER;
         current.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE,
                                     MakeMemberTokens("127.0.0.1:1") },
                             Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::INITIAL, {} } };

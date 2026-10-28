@@ -35,7 +35,6 @@ constexpr int WAIT_GET_TIMEOUT_MS = 20'000;
 constexpr int WAIT_GET_INTERVAL_MS = 200;
 constexpr uint64_t NODE_TIMEOUT_S = 1;
 constexpr uint64_t NODE_DEAD_TIMEOUT_S = 3;
-constexpr uint64_t HEARTBEAT_INTERVAL_MS = 500;
 constexpr int S2MS = 1000;
 }  // namespace
 
@@ -50,7 +49,6 @@ public:
         opts.enableDistributedMaster = "true";
         std::stringstream ss;
         ss << "-enable_reconciliation=true "
-           << "-heartbeat_interval_ms=" << HEARTBEAT_INTERVAL_MS << " "
            << "-node_timeout_s=" << NODE_TIMEOUT_S << " "
            << "-node_dead_timeout_s=" << NODE_DEAD_TIMEOUT_S << " "
            << "-v=1 "

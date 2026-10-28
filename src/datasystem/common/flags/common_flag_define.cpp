@@ -204,16 +204,11 @@ DS_DEFINE_uint32_dynamic(urma_orphan_sweep_batch, 100,
                          "Maximum number of orphan URMA client connections removed per sweep.");
 DS_DEFINE_validator(urma_orphan_sweep_batch, [](const char *, uint32_t value) { return value > 0; });
 DS_DEFINE_uint32_dynamic(node_dead_timeout_s, 300, "maximum time interval for the master to determine node death");
-DS_DEFINE_uint32(hash_ring_tokens_per_member, 32,
-                 "Token count allocated to each Worker for new hash-ring bootstrap and scale-out plans. "
-                 "Valid range is 1-4096. This startup-only setting must be identical on every topology planner "
-                 "process in a cluster.");
 DS_DEFINE_uint32(scale_in_collect_window_ms, DEFAULT_SCALE_IN_COLLECT_WINDOW_MS,
                  "ordinary SCALE_IN batch coalescing window in milliseconds. When non-zero, the first PRE_LEAVING "
                  "candidate opens a short collect window so members exiting within it land in the same epoch; "
                  "0 disables coalescing (legacy immediate-batch behavior). Hard upper bound 5000ms.");
 DS_DEFINE_bool_dynamic(log_monitor, true, "Indicates whether to enable log monitoring, default is true.");
-DS_DEFINE_bool_dynamic(auto_del_dead_node, true, "Remove dead node from hash ring when enabled.");
 DS_DEFINE_bool(enable_huge_tlb, false,
                "enable_huge_tlb can improve memory access and reducing the overhead of page table,"
                "default is disable.");

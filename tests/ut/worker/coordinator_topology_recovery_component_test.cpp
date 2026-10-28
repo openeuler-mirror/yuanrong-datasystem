@@ -297,6 +297,7 @@ std::string BuildCanonicalTopology()
     cluster::TopologyState topology;
     topology.clusterHasInit = true;
     topology.version = TOPOLOGY_VERSION;
+    topology.tokensPerMember = tokenCount;
     topology.members = { cluster::Member{ { std::string(16, 'a'), MEMBER_ADDRESS },
                                            cluster::MemberState::ACTIVE, std::move(tokens) } };
     std::string canonical;
