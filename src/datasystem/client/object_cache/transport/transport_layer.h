@@ -181,11 +181,12 @@ public:
     Status GetHashRing(const HostPort &workerAddr, uint64_t currentVersion, GetHashRingRspPb &response);
 
     /**
-     * @brief Report whether the target worker is same-host (eligible for SHM fd-passing) per the
-     * routing topology. Local-cache Create/Set(buffer) use this to route cross-host writes through
-     * the transport layer (UB/TCP) instead of the bound-worker SHM path, matching Set(string).
+     * @brief Report effective same-host SHM eligibility for local-cache Create/Set(buffer) placement.
+     * Combines the advisor's topology hint with an eligible, established live routed SHM session:
+     * reuse requires missing/empty hostId, non-draining membership and a non-draining entry.
+     * The result can change with topology or session lifetime; callers must not cache it.
      * @param[in] workerAddr Target worker address.
-     * @return true when the advisor treats the worker as same-host (SHM_CANDIDATE).
+     * @return true when the resolved hint is SHM_CANDIDATE; false without an advisor or manager.
      */
     bool IsSameHostWorker(const HostPort &workerAddr) const;
 

@@ -136,6 +136,9 @@ public:
     Status GetOrCreate(const HostPort &workerAddr, TransportHint hint, std::shared_ptr<IDataTransporter> &out,
                        TransportPhaseLatencyRecorder *recorder = nullptr);
 
+    // Resolve automatic selection only; explicit fallback hints must bypass this method.
+    TransportHint ResolveTransportHint(const HostPort &workerAddr, TransportHint topologyHint) const;
+
     Status GetOrCreateForDataLocation(const HostPort &workerAddr, TransportHint hint, uint64_t locationTopologyVersion,
                                       std::shared_ptr<IDataTransporter> &out,
                                       TransportPhaseLatencyRecorder *recorder = nullptr);
@@ -355,9 +358,11 @@ private:
     struct EndpointAdmissionSnapshot {
         EndpointAdmissionSnapshot(uint64_t version, std::shared_ptr<const std::unordered_set<std::string>> workers,
                                   bool isProvisional, int64_t confirmedMs,
-                                  std::shared_ptr<const std::unordered_map<HostPort, std::string>> incarnations = {})
+                                  std::shared_ptr<const std::unordered_map<HostPort, std::string>> incarnations = {},
+                                  std::shared_ptr<const std::unordered_set<HostPort>> reuseCandidates = {})
             : ringVersion(version), liveWorkers(std::move(workers)), provisional(isProvisional),
-              lastConfirmedMs(confirmedMs), workerIncarnations(std::move(incarnations))
+              lastConfirmedMs(confirmedMs), workerIncarnations(std::move(incarnations)),
+              shmReuseCandidates(std::move(reuseCandidates))
         {
         }
 
@@ -368,6 +373,7 @@ private:
         // One grace window per confirmed-refresh generation; readers never rearm an expired window.
         mutable std::atomic<int64_t> degradedDeadlineMs{ 0 };
         std::shared_ptr<const std::unordered_map<HostPort, std::string>> workerIncarnations;
+        std::shared_ptr<const std::unordered_set<HostPort>> shmReuseCandidates;
     };
 
     struct WorkerTransportEntry {

@@ -1070,6 +1070,12 @@ bool ShmConnection::IsAlive() const
     return !closed_ && rpcClient_ != nullptr && rpcClient_->IsAlive();
 }
 
+bool ShmConnection::HasEstablishedSession() const
+{
+    std::lock_guard<bthread::Mutex> lock(mutex_);
+    return !closed_ && session_ != nullptr && session_->IsAlive();
+}
+
 AccessTransportKind ShmConnection::Kind() const
 {
     return AccessTransportKind::SHM;

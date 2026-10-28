@@ -115,7 +115,9 @@ Status ObjectMetadataClient::InitializeInlineRequest(const HostPort &address, co
                                                      TransportPhaseLatencyRecorder *recorder) const
 {
     context = InlineRequestContext{};
-    const auto hint = advisor_ == nullptr ? TransportHint::TCP_ONLY : advisor_->GetTransportHint(address);
+    RETURN_RUNTIME_ERROR_IF_NULL(manager_);
+    const auto hint = advisor_ == nullptr ? TransportHint::TCP_ONLY
+        : manager_->ResolveTransportHint(address, advisor_->GetTransportHint(address));
     if (hint == TransportHint::SHM_CANDIDATE) {
         RETURN_IF_NOT_OK(PrepareShmInlineRequest(address, std::move(readContext), context, recorder));
         RETURN_OK_IF_TRUE(context.mode == InlineTransportMode::SHM);
