@@ -52,9 +52,6 @@ global:
   metadata:
     # Config the rocksdb support none, sync or async, async by default. Optional value: 'none', 'sync', 'async'. This represents the method of writing metadata to rocksdb.
     rocksdbWriteMode: "none"
-    # Experimental parameter. Allow data read from a remote worker to be cached locally as a hot replica and registered
-    # in metadata. This is only for hot-replica performance optimization, not a data reliability mechanism.
-    enableDataReplication: "true"
     # Config ETCD table prefix, the value should only contain english alphabetics (a-zA-Z), numbers (0-9) only.
     clusterName: "AZ1"
   rpc:
@@ -74,8 +71,6 @@ global:
     livenessProbeTimeoutS: 150
 
   performance:
-    # Enable worker->worker OC batch get, default false.
-    enableWorkerWorkerBatchGet: true
     # Option to turn on urma for OC worker to worker data transfer, default false.
     enableUrma: true
     # The reserved memory (MB) is determined by min(shared_memory_size_mb*0.1, eviction_reserve_mem_threshold_mb). Eviction begins when memory drops below this threshold.The valid range is 100-102400.

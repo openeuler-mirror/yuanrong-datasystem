@@ -191,7 +191,6 @@ class DevObjectHeteroRH2DDistributedTest : public DevObjectHeteroRH2DTest {
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         DevObjectHeteroRH2DTest::SetClusterSetupOptions(opts);
-        opts.workerGflagParams += " -enable_worker_worker_batch_get=true ";
         opts.enableDistributedMaster = "true";
         opts.injectActions =
             "RH2D.ManageHeartbeats.heartbeat_interval_s:call(5);"

@@ -64,7 +64,6 @@ public:
         // metadata owner does not shift while we kill the primary worker.
         opts.workerGflagParams =
             "-enable_l2_cache_fallback=true "
-            "-enable_worker_worker_batch_get=false "
             "-node_timeout_s=60 -node_dead_timeout_s=120 "
             "-shared_memory_size_mb=5120 -v=2";
         opts.coordinatorGflagParams = "-node_timeout_s=60 -node_dead_timeout_s=120";
@@ -300,16 +299,9 @@ TEST_F(KVClientPeerDeadL2FallbackDisabled, LEVEL1_PeerDeadL2FallbackDisabledFast
     ASSERT_EQ(rc.GetCode(), StatusCode::K_RPC_PEER_DEAD) << rc.ToString();
 }
 
-// Batch path guard: with enable_worker_worker_batch_get=true, the same peer-dead race must
-// also fall back to L2. HandleBatchSubResponsePart2 has the same IsNonRetryableRpcError gate
-// that was fixed in parallel with the scalar path.
+// Batch path guard: the same peer-dead race must also fall back to L2. HandleBatchSubResponsePart2 has the same
+// IsNonRetryableRpcError gate that was fixed in parallel with the scalar helper retained for fallback handling.
 class KVClientPeerDeadL2FallbackBatchGet : public KVClientPeerDeadL2Fallback {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        KVClientPeerDeadL2Fallback::SetClusterSetupOptions(opts);
-        opts.workerGflagParams += " -enable_worker_worker_batch_get=true";
-    }
 };
 
 TEST_F(KVClientPeerDeadL2FallbackBatchGet, LEVEL1_PeerDeadDuringBatchGetFallsBackToL2)

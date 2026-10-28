@@ -1972,11 +1972,8 @@ TEST_F(NotifyRemoteGetMigrationTest, MixedQueryMetadataSeparatesRouteFailureFrom
     EXPECT_EQ(result.routeFailures.at(routeFailedKey).GetCode(), K_NOT_FOUND);
 }
 
-TEST_F(NotifyRemoteGetMigrationTest, PostProcessRemoteGetInNotificationClearsDeleteFlagWhenReplicationDisabled)
+TEST_F(NotifyRemoteGetMigrationTest, SpillPostProcessClearsDeleteFlagAfterPrimaryTransfer)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = false;
     const std::string objectKey = "obj1";
     const HostPort masterAddress("127.0.0.1", 18890);
     RouteObjectToMaster(objectKey, masterAddress);
@@ -2043,7 +2040,7 @@ TEST_F(NotifyRemoteGetMigrationTest, PostProcessRemoteGetInNotificationClearsDel
     impl_->PostProcessRemoteGetInNotificationImpl(lockedEntries, groupedQueryMetas, tempSuccessIds, tempNeedRetryIds,
                                                   tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas,
                                                   migratedBytes, unconfirmedObjectVersions, failedConfirmationOwners,
-                                                  false);
+                                                  true);
 
     EXPECT_EQ(replacePrimaryCalls, 1u);
     EXPECT_FALSE(entry->Get()->stateInfo.IsNeedToDelete());
@@ -2056,13 +2053,10 @@ TEST_F(NotifyRemoteGetMigrationTest, PostProcessRemoteGetInNotificationClearsDel
     untouchedEntry->WUnlock();
 }
 
-TEST_F(NotifyRemoteGetMigrationTest, ReplacePrimaryFailureMarksPayloadAndSuccessfulRetryConverges)
+TEST_F(NotifyRemoteGetMigrationTest, SpillPrimaryFailureMarksPayloadAndSuccessfulRetryConverges)
 {
     constexpr uint64_t version = 1;
     constexpr uint64_t dataSize = 1;
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = false;
     const std::string objectKey = "replace-primary-unconfirmed-payload";
     const HostPort masterAddress("127.0.0.1", 18890);
     RouteObjectToMaster(objectKey, masterAddress);
@@ -2106,7 +2100,7 @@ TEST_F(NotifyRemoteGetMigrationTest, ReplacePrimaryFailureMarksPayloadAndSuccess
     WorkerOcServiceGetImpl::MigratedObjectIdentities objectIdentities{ { objectKey, entry->Get() } };
     entry->WUnlock();
 
-    impl_->ReplacePrimaryAndPruneFailed(successIds, queryMetas, rsp, lockedEntries, objectIdentities, false);
+    impl_->ReplacePrimaryAndPruneFailed(successIds, queryMetas, rsp, lockedEntries, objectIdentities, true);
 
     EXPECT_TRUE(successIds.empty());
     EXPECT_THAT(rsp.failed_object_keys(), Contains(objectKey));
@@ -2115,18 +2109,19 @@ TEST_F(NotifyRemoteGetMigrationTest, ReplacePrimaryFailureMarksPayloadAndSuccess
     EXPECT_EQ(replacePrimaryCalls, 1U);
     auto newerMeta = queryMetas.at(objectKey).meta();
     newerMeta.set_version(version + 1);
-    EXPECT_FALSE(impl_->CanReuseUnconfirmedMigrationPayload(newerMeta, lockedEntries.begin()->second, false));
+    EXPECT_FALSE(impl_->CanReuseUnconfirmedMigrationPayload(newerMeta, lockedEntries.begin()->second, true));
     newerMeta.set_version(version);
     newerMeta.set_data_size(dataSize + 1);
-    EXPECT_FALSE(impl_->CanReuseUnconfirmedMigrationPayload(newerMeta, lockedEntries.begin()->second, false));
-    FLAGS_enable_data_replication = true;
+    EXPECT_FALSE(impl_->CanReuseUnconfirmedMigrationPayload(newerMeta, lockedEntries.begin()->second, true));
     EXPECT_FALSE(impl_->CanReuseUnconfirmedMigrationPayload(queryMetas.at(objectKey).meta(),
                                                             lockedEntries.begin()->second, false));
-    FLAGS_enable_data_replication = false;
+    EXPECT_TRUE(impl_->CanReuseUnconfirmedMigrationPayload(queryMetas.at(objectKey).meta(),
+                                                           lockedEntries.begin()->second, true));
     auto *payloadBeforeRetry = entry->Get();
 
     NotifyRemoteGetReqPb retryReq;
     retryReq.set_addr(leavingWorkerAddress_.ToString());
+    retryReq.set_is_spill(true);
     retryReq.add_object_keys(objectKey);
     retryReq.add_versions(version);
     NotifyRemoteGetRspPb retryRsp;
@@ -2143,11 +2138,8 @@ TEST_F(NotifyRemoteGetMigrationTest, ReplacePrimaryFailureMarksPayloadAndSuccess
     EXPECT_EQ(migratedBytes, 0U);
 }
 
-TEST_F(NotifyRemoteGetMigrationTest, FailedPrimaryConfirmationProtectsSameGenerationReplacement)
+TEST_F(NotifyRemoteGetMigrationTest, FailedSpillPrimaryConfirmationProtectsSameGenerationReplacement)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = false;
     const HostPort masterAddress("127.0.0.1", 18890);
     const std::string sameGeneration = "same-generation-replacement";
     const std::string newerGeneration = "newer-generation-replacement";
@@ -2180,7 +2172,7 @@ TEST_F(NotifyRemoteGetMigrationTest, FailedPrimaryConfirmationProtectsSameGenera
     ScopedRequestContext requestContext;
     GetRequestContext()->reqTimeoutDuration.Init(10'000);
 
-    impl_->ReplacePrimaryAndPruneFailed(successIds, queryMetas, rsp, lockedEntries, identities, false);
+    impl_->ReplacePrimaryAndPruneFailed(successIds, queryMetas, rsp, lockedEntries, identities, true);
 
     EXPECT_TRUE(successIds.empty());
     EXPECT_THAT(rsp.failed_object_keys(), UnorderedElementsAre(sameGeneration, newerGeneration));
@@ -2300,9 +2292,6 @@ TEST_F(NotifyRemoteGetMigrationTest, TransferFailureCleansInsertedEntriesAndBatc
 
 TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetReturnsFailedKeyWhenMasterDoesNotConfirmCopyMeta)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = true;
     const std::string objectKey = "notify_remote_get_unconfirmed";
     const HostPort masterAddress("127.0.0.1:18889");
     RouteObjectToMaster(objectKey, masterAddress);
@@ -2347,9 +2336,6 @@ TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetReturnsFailedKeyWhenMasterDo
 
 TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetAcceptsOnlyExplicitlyConfirmedCopyMeta)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = true;
     const std::string objectKey = "notify_remote_get_confirmed";
     const HostPort masterAddress("127.0.0.1:18889");
     RouteObjectToMaster(objectKey, masterAddress);
@@ -2374,9 +2360,6 @@ TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetAcceptsOnlyExplicitlyConfirm
 
 TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetFollowsCopyMetaRedirectAfterMetadataMigration)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = true;
     const std::string objectKey = "notify_remote_get_redirected";
     auto &portAllocator = st::TestPortAllocator::Instance();
     portAllocator.SetOwnerInfo("ds_ut_object", "copy-meta-redirect", GetTestCaseDataDir());
@@ -2528,13 +2511,10 @@ TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetRejectsReplacePrimaryRedirec
     EXPECT_THAT(rsp.failed_object_keys(), Contains(objectKey));
 }
 
-TEST_F(NotifyRemoteGetMigrationTest, ExpiredPrimarySwitchRemainsDeletableAndCannotRecoverMetadata)
+TEST_F(NotifyRemoteGetMigrationTest, ExpiredSpillPrimarySwitchRemainsDeletableAndCannotRecoverMetadata)
 {
     constexpr uint64_t version = 1;
     constexpr uint64_t dataSize = 1;
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = false;
     const std::string objectKey = "expired-primary-switch";
     const HostPort masterAddress("127.0.0.1", 18893);
     RouteObjectToMaster(objectKey, masterAddress);
@@ -2568,7 +2548,7 @@ TEST_F(NotifyRemoteGetMigrationTest, ExpiredPrimarySwitchRemainsDeletableAndCann
     ScopedRequestContext requestContext;
     GetRequestContext()->reqTimeoutDuration.Init(10'000);
 
-    impl_->ReplacePrimaryAndPruneFailed(successIds, queryMetas, rsp, lockedEntries, objectIdentities, false);
+    impl_->ReplacePrimaryAndPruneFailed(successIds, queryMetas, rsp, lockedEntries, objectIdentities, true);
 
     EXPECT_TRUE(successIds.empty());
     EXPECT_THAT(rsp.failed_object_keys(), Contains(objectKey));
@@ -2580,9 +2560,6 @@ TEST_F(NotifyRemoteGetMigrationTest, ExpiredPrimarySwitchRemainsDeletableAndCann
 
 TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetRejectsCopyMetaPersistenceFailure)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = true;
     const std::string objectKey = "notify_remote_get_persistence_failure";
     const HostPort masterAddress("127.0.0.1:18889");
     RouteObjectToMaster(objectKey, masterAddress);
@@ -2607,9 +2584,6 @@ TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetRejectsCopyMetaPersistenceFa
 
 TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetShortCircuitsFailedConfirmationOwner)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = true;
     const std::string objectKey = "notify_remote_get_confirmation_owner_failure";
     const HostPort masterAddress("127.0.0.1:18889");
     RouteObjectToMaster(objectKey, masterAddress);
@@ -2796,9 +2770,6 @@ TEST_F(MigrateDataServiceTest, NeedModifyPrimaryWithMetadataCallsReplacePrimary)
 
 TEST_F(NotifyRemoteGetMigrationTest, SpillCallsReplacePrimaryAndSkipsCreateMultiCopyMeta)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = true;
     const std::string objectKey = "spill_obj";
     const HostPort masterAddress("127.0.0.1", 18890);
     RouteObjectToMaster(objectKey, masterAddress);
@@ -2862,10 +2833,8 @@ TEST_F(NotifyRemoteGetMigrationTest, SpillCallsReplacePrimaryAndSkipsCreateMulti
                                                   migratedBytes, unconfirmedObjectVersions, failedConfirmationOwners,
                                                   true);
 
-    EXPECT_EQ(createMultiCopyMetaCalls, 0)
-        << "isSpill=true must skip CreateMultiCopyMeta even when enable_data_replication=true";
-    EXPECT_EQ(replacePrimaryCalls, 1)
-        << "isSpill=true must always call ReplacePrimary even when enable_data_replication=true";
+    EXPECT_EQ(createMultiCopyMetaCalls, 0) << "isSpill=true must skip CreateMultiCopyMeta";
+    EXPECT_EQ(replacePrimaryCalls, 1) << "isSpill=true must always call ReplacePrimary";
     EXPECT_FALSE(entry->Get()->stateInfo.IsNeedToDelete())
         << "isSpill=true must clear needDelete after ReplacePrimary succeeds";
     EXPECT_TRUE(entry->Get()->stateInfo.IsPrimaryCopy());
@@ -2875,9 +2844,6 @@ TEST_F(NotifyRemoteGetMigrationTest, SpillCallsReplacePrimaryAndSkipsCreateMulti
 
 TEST_F(NotifyRemoteGetMigrationTest, ConfirmCopyMetaForNotifyRemoteGetSpillSkipsCreateMultiCopyMeta)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = true;
     const std::string objectKey = "spill_copymeta_obj";
     const HostPort masterAddress("127.0.0.1", 18890);
     RouteObjectToMaster(objectKey, masterAddress);
@@ -2910,10 +2876,6 @@ TEST_F(NotifyRemoteGetMigrationTest, ConfirmCopyMetaForNotifyRemoteGetSpillSkips
 
 TEST_F(NotifyRemoteGetMigrationTest, ReportUnattemptedObjectsSpillRoutesToSkippedKeys)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = true;
-
     NotifyRemoteGetReqPb req;
     req.set_is_spill(true);
     req.add_object_keys("attempted");

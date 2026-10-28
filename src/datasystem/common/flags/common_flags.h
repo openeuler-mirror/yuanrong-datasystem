@@ -24,8 +24,6 @@ DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(hash_ring_tokens_per_member);
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_int32(log_monitor_interval_ms);
-DS_DECLARE_bool(enable_data_replication);
-DS_DECLARE_bool(enable_worker_worker_batch_get);
 DS_DECLARE_bool(enable_urma);
 DS_DECLARE_bool(enable_ub_fault_isolation);
 DS_DECLARE_uint32(ub_numa_rr_type);

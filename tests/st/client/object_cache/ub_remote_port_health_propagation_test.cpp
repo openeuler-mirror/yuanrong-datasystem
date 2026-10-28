@@ -152,8 +152,7 @@ public:
     {
         UbPortHealthRpcPropagationTest::SetClusterSetupOptions(opts);
         opts.numWorkers = 2;
-        opts.workerGflagParams += " -enable_worker_worker_batch_get=false -ipc_through_shared_memory=false"
-                                 " -enable_transport_fallback=false";
+        opts.workerGflagParams += " -ipc_through_shared_memory=false -enable_transport_fallback=false";
     }
 
     Status WaitForInjection(uint32_t worker, const std::string &point, uint64_t minimum)

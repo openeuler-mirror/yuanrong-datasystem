@@ -209,13 +209,6 @@ public:
     EmbeddedConfig &RocksdbWriteMode(int mode);
 
     /**
-     * @brief Enable experimental local data replica cache after remote get.
-     * @param[in] enable Equivalent to flag enable_data_replication.
-     * @return Reference to self for chaining.
-     */
-    EmbeddedConfig &EnableDataReplication(bool enable);
-
-    /**
      * @brief Set a single extra argument directly.
      * @param[in] name Argument name (maps to extraArgs[name]).
      * @param[in] value Argument value.

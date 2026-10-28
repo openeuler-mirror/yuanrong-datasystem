@@ -30,6 +30,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uuid_generator.h"
+#include "datasystem/worker/object_cache/worker_oc_constants.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 
 #define RETRY_IF_OUT_MEMORY(rc_, statement_, maxRetryCnt_)                      \
@@ -41,8 +42,6 @@
         } while (rc_.GetCode() == K_OUT_OF_MEMORY && currCnt_ <= maxRetryCnt_); \
         LOG(INFO) << "try get shm for payload " << currCnt_ << " times";        \
     } while (0)
-
-DS_DECLARE_uint64(oc_worker_aggregate_merge_size);
 
 namespace datasystem {
 namespace object_cache {
@@ -297,10 +296,6 @@ Status AggregateAllocate(
     // Pre-allocate aggregated chunks of shared memory as ShmOwner, to reduce the number of allocation calls.
     // By default only aggregate small objects (< 1MB), and batch up to 1024 keys and configured total size.
     // Slot migration can opt in to include large objects as well.
-    const uint64_t batchLimitKeys = 1024;
-    const uint64_t batchLimitSingleSize = 1024 * 1024;
-    const uint64_t batchLimitTotalSize = FLAGS_oc_worker_aggregate_merge_size;
-
     bool needAggregate = false;
     std::vector<uint64_t> aggreatedSizes;
     uint64_t currentBatchSize = 0;
@@ -309,14 +304,15 @@ Status AggregateAllocate(
     std::function<void(uint64_t, uint64_t, uint32_t)> aggregateCollector = [&](uint64_t dataSz, uint64_t shmSize,
                                                                                uint32_t objectIndex) {
         // Skip any object that has size beyond 1MB.
-        if (!includeLargeObjects && dataSz >= batchLimitSingleSize) {
+        if (!includeLargeObjects && dataSz >= WORKER_BATCH_GET_REQUESTER_AGGREGATE_OBJECT_SIZE_THRESHOLD) {
             return;
         }
 
         // Seal the last batch and start the new batch.
         uint64_t ceilingSize = Align4BitsCeiling(shmSize);
-        if (currentKeyCount >= batchLimitKeys
-            || ((currentBatchSize + ceilingSize) > batchLimitTotalSize && currentBatchSize > 0)) {
+        if (currentKeyCount >= WORKER_BATCH_GET_AGGREGATE_KEY_MAX_COUNT
+            || ((currentBatchSize + ceilingSize) > WORKER_BATCH_GET_AGGREGATE_GROUP_MAX_SIZE
+                && currentBatchSize > 0)) {
             aggreatedSizes.emplace_back(currentBatchSize);
             currentBatchSize = 0;
             currentKeyCount = 0;

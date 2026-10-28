@@ -47,6 +47,7 @@
 #include "datasystem/worker/object_cache/async_update_location_manager.h"
 #include "datasystem/common/shared_memory/delayed_release_shm_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
+#include "datasystem/worker/object_cache/worker_oc_constants.h"
 #include "datasystem/worker/object_cache/service/service_execution_policy.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
@@ -54,9 +55,7 @@
 
 DS_DEFINE_int64(batch_get_threshold_mb, 100, "The payload threshold to batch get objects");
 DS_DEFINE_validator(batch_get_threshold_mb, &Validator::ValidateBatchGetThreshold);
-DS_DECLARE_bool(enable_data_replication);
 DS_DECLARE_bool(enable_l2_cache_fallback);
-DS_DECLARE_int32(oc_worker_worker_parallel_min);
 
 using namespace datasystem::master;
 namespace datasystem {
@@ -82,10 +81,7 @@ constexpr size_t MAX_REMOTE_H2D_BATCH_GET_OBJECTS = 1024;
 
 size_t RemoteH2DBatchGetChunkSize()
 {
-    // Reuse oc_worker_worker_parallel_min as a lower bound for each remote H2D chunk size.
-    // A larger value here means more objects per task and therefore fewer parallel tasks.
-    const auto parallelMin = FLAGS_oc_worker_worker_parallel_min > 0 ? FLAGS_oc_worker_worker_parallel_min : 0;
-    return std::max<size_t>(MAX_REMOTE_H2D_BATCH_GET_OBJECTS, static_cast<size_t>(parallelMin));
+    return MAX_REMOTE_H2D_BATCH_GET_OBJECTS;
 }
 
 }  // namespace
@@ -440,9 +436,6 @@ void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::st
                                                        const std::vector<master::QueryMetaInfoPb> &queryMetas,
                                                        std::map<ReadKey, LockedEntity> &entries)
 {
-    if (!FLAGS_enable_data_replication) {
-        return;
-    }
     std::unordered_set<std::string> needSetDeleteObjectKeys;
     MarkNeedDeleteForDisconnectedMasters(successIds, entries, needSetDeleteObjectKeys);
 
@@ -482,9 +475,6 @@ void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::st
                                                        const QueryMetaMap &queryMetas,
                                                        std::map<ReadKey, LockedEntity> &entries)
 {
-    if (!FLAGS_enable_data_replication) {
-        return;
-    }
     std::unordered_set<std::string> needSetDeleteObjectKeys;
     MarkNeedDeleteForDisconnectedMasters(successIds, entries, needSetDeleteObjectKeys);
 
@@ -633,9 +623,7 @@ void WorkerOcServiceGetImpl::HandleBatchSubResponsePart2(Status &subRc, const st
         needEvictIds.emplace_back(objectKey, entry->GetCreateTime());
         entry->stateInfo.SetNeedToDelete(true);
         point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_SYNC_META);
-        if (FLAGS_enable_data_replication) {
-            subRc = ProcessObjectEntryAndSyncMetadata(objectKV, true);
-        }
+        subRc = ProcessObjectEntryAndSyncMetadata(objectKV, true);
         point.Record();
     }
     // Handle error as in GetObjectFromRemoteOnLock code path, move on to the next request.

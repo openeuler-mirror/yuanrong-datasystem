@@ -82,7 +82,6 @@
 #include "datasystem/common/shared_memory/allocator.h"
 
 DS_DECLARE_bool(authorization_enable);
-DS_DECLARE_bool(enable_data_replication);
 DS_DECLARE_bool(enable_transport_fallback);
 DS_DECLARE_uint32(data_migrate_rate_limit_mb);
 DS_DEFINE_bool(enable_l2_cache_fallback, true, "Control whether enable fallback to L2 cache when worker failed.");
@@ -102,7 +101,6 @@ static constexpr char URMA_WARMUP_KEY_PREFIX[] = "_urma_";
 
 static constexpr double US_PER_MS = 1000.0;
 static constexpr int64_t REMOTE_GET_CLEANUP_HEADROOM_MS = 100;
-static constexpr size_t REMOTE_GET_MAX_THREAD_NUM = 16;
 static constexpr size_t BATCH_QUERY_META_MAX_THREAD_NUM = 16;
 static constexpr size_t BATCH_REMOTE_GET_MAX_THREAD_NUM = 16;
 
@@ -274,19 +272,15 @@ WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initPar
       rateController_(std::move(rateController)),
       ubAdmission_(std::move(ubAdmission))
 {
-    remoteGetThreadPool_ = std::make_unique<ThreadPool>(1, REMOTE_GET_MAX_THREAD_NUM, "RemoteGetThreadPool");
     workerBatchQueryMetaThreadPool_ =
         std::make_unique<ThreadPool>(1, BATCH_QUERY_META_MAX_THREAD_NUM, "BatchQueryMeta");
-    if (FLAGS_enable_worker_worker_batch_get) {
-        workerBatchRemoteGetThreadPool_ =
-            std::make_unique<ThreadPool>(1, BATCH_REMOTE_GET_MAX_THREAD_NUM, "BatchRemoteGet");
-    }
+    workerBatchRemoteGetThreadPool_ =
+        std::make_unique<ThreadPool>(1, BATCH_REMOTE_GET_MAX_THREAD_NUM, "BatchRemoteGet");
 }
 
 WorkerOcServiceGetImpl::~WorkerOcServiceGetImpl()
 {
     workerBatchRemoteGetThreadPool_ = nullptr;
-    remoteGetThreadPool_ = nullptr;
     if (asyncUpdateLocationManager_) {
         asyncUpdateLocationManager_->Stop();
         asyncUpdateLocationManager_ = nullptr;
@@ -1283,10 +1277,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteWorkerAndDump(const std::strin
 {
     PerfPoint point(PerfKey::WORKER_PULL_REMOTE_DATA_FROM_WORKER);
     RETURN_IF_NOT_OK(GetObjectFromRemoteWorkerWithoutDump(address, primaryAddress, dataSize, objectKV));
-    if (FLAGS_enable_data_replication) {
-        RETURN_IF_NOT_OK(ProcessObjectEntryAndSyncMetadata(objectKV, isAsyncBatchGet));
-    }
-    return Status::OK();
+    return ProcessObjectEntryAndSyncMetadata(objectKV, isAsyncBatchGet);
 }
 
 template <typename Req>
@@ -2139,128 +2130,8 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhere(std::vector<master::QueryM
                                                       std::set<ReadKey> &needRetryIds)
 {
     PerfPoint totalPoint(PerfKey::WORKER_GET_OBJECTS_FROM_ANYWHERE);
-    if (FLAGS_enable_worker_worker_batch_get) {
-        PerfPoint stagePoint(PerfKey::WORKER_GET_OBJECTS_FROM_ANYWHERE_BATCH);
-        return GetObjectsFromAnywhereBatched(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
-    }
-    PerfPoint stagePoint(PerfKey::WORKER_GET_OBJECTS_FROM_ANYWHERE_PARALLEL);
-    return GetObjectsFromAnywhereParallelly(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
-}
-
-Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vector<master::QueryMetaInfoPb> &queryMetas,
-                                                                const std::shared_ptr<GetRequest> &request,
-                                                                std::vector<RpcMessage> &payloads,
-                                                                std::map<ReadKey, LockedEntity> &lockedEntries,
-                                                                std::unordered_set<std::string> &failedIds,
-                                                                std::set<ReadKey> &needRetryIds)
-{
-    const size_t kMinParallelRequests = 2;
-    if (queryMetas.size() < kMinParallelRequests || !ShouldUseServiceThreadPoolFanout()) {
-        return GetObjectsFromAnywhereSerially(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
-    }
-    Status lastRc = Status::OK();
-    std::vector<std::string> successIds;
-    successIds.reserve(queryMetas.size());
-
-    std::vector<std::future<Status>> futures;
-    std::atomic<bool> abortAllTasks{ false };
-    std::mutex commonMutex;
-    auto traceContext = Trace::Instance().GetContext();
-    for (size_t i = 0; i < queryMetas.size(); ++i) {
-        if (abortAllTasks.load()) {
-            break;
-        }
-
-        const auto &queryMeta = queryMetas[i];
-        const auto &meta = queryMeta.meta();
-
-        const auto dataFormat = static_cast<DataFormat>(queryMeta.meta().config().data_format());
-        if (dataFormat != DataFormat::BINARY && dataFormat != DataFormat::HETERO) {
-            lastRc = Status(K_INVALID, "object data format not match.");
-            failedIds.emplace(meta.object_key());
-            LOG(ERROR) << lastRc;
-            continue;
-        }
-
-        // Parallel sub-RPCs share the remaining budget captured at dispatch time;
-        // each future deducts its own queue delay. Do not divide by future count—
-        // parallel calls do not accumulate wall-clock time.
-        int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
-        auto dispatchTime = std::chrono::steady_clock::now();
-        futures.emplace_back(remoteGetThreadPool_->Submit([=, &queryMetas, &lockedEntries, &commonMutex, &abortAllTasks,
-                                                           &request, &payloads, &lastRc, &successIds, &needRetryIds,
-                                                           &failedIds]() {
-            TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
-            RETURN_IF_NOT_OK(InitTimeoutsFromDispatch(remainingUs, dispatchTime));
-            if (abortAllTasks.load()) {
-                return Status::OK();
-            }
-            const auto &queryMeta = queryMetas[i];
-            const auto &meta = queryMeta.meta();
-            const auto &objectKey = meta.object_key();
-            auto subIter = lockedEntries.find(ReadKey(objectKey));
-            if (subIter == lockedEntries.end()) {
-                std::lock_guard<std::mutex> lock(commonMutex);
-                LOG(INFO) << FormatString("[ObjectKey %s] Object not found in locked entries", objectKey);
-                lastRc =
-                    Status(K_NOT_FOUND, FormatString("[ObjectKey %s] Object not found in locked entries", objectKey));
-                return lastRc;
-            }
-            const auto &readKey = subIter->first;
-            std::shared_ptr<SafeObjType> &subEntry = subIter->second.safeObj;
-            Timer getFromRemoteTimer;
-            Status status = GetObjectFromAnywhereWithLock(readKey, request, subEntry, queryMeta, payloads);
-            double remoteElapsed = getFromRemoteTimer.ElapsedMilliSecond();
-
-            // Protects access to successIds, needRetryIds, failedIds, and lastRc
-            std::lock_guard<std::mutex> lock(commonMutex);
-
-            if (status.IsOk()) {
-                LOG(INFO) << FormatString("[ObjectKey %s] Get from remote success, elapsed %.3f ms.", objectKey,
-                                          remoteElapsed);
-                successIds.push_back(objectKey);
-                return status;
-            }
-            failedIds.emplace(objectKey);
-            if (status.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
-                LOG(INFO) << FormatString("[ObjectKey %s] Object not found in remote worker, elapsed %.3f ms.",
-                                          objectKey, remoteElapsed);
-                (void)needRetryIds.emplace(readKey);
-            } else if (status.GetCode() == K_OUT_OF_MEMORY) {
-                LOG(INFO) << FormatString("[ObjectKey %s] Out of memory, get remote abort, elapsed %.3f ms.", objectKey,
-                                          remoteElapsed);
-                lastRc = status;
-                abortAllTasks.store(true);
-            } else {
-                LOG(ERROR) << FormatString("[ObjectKey %s] Get from remote failed: %s, elapsed %.3f ms.", objectKey,
-                                           status.ToString(), remoteElapsed);
-                lastRc = status;
-            }
-            return status;
-        }));
-    }
-
-    int64_t waitUs = std::max<int64_t>(GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs(), 1);
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(waitUs);
-    bool timedOut = false;
-    for (auto &f : futures) {
-        if (f.wait_until(deadline) == std::future_status::timeout) {
-            abortAllTasks.store(true);
-            timedOut = true;
-        }
-    }
-    if (timedOut) {
-        for (auto &f : futures) {
-            f.wait();
-        }
-    }
-
-    if (successIds.size() != queryMetas.size()) {
-        LOG(ERROR) << "Failed to get object data from remote. " << successIds.size() << " objects pulled success: ["
-                   << VectorToString(successIds) << "], meta data num: " << queryMetas.size()
-                   << " lastRc: " << lastRc.ToString();
-    }
-    return lastRc;
+    PerfPoint stagePoint(PerfKey::WORKER_GET_OBJECTS_FROM_ANYWHERE_BATCH);
+    return GetObjectsFromAnywhereBatched(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
 }
 
 Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereSerially(const std::vector<master::QueryMetaInfoPb> &queryMetas,
@@ -2559,18 +2430,14 @@ Status WorkerOcServiceGetImpl::GetObjectFromQueryMetaResultOnLock(const std::sha
         objDatas[i++] = std::move(payloads[idx]);
     }
     RETURN_IF_NOT_OK(SaveBinaryObjectToMemory(objectKV, objDatas, evictionManager_, memCpyThreadPool_));
-    if (FLAGS_enable_data_replication) {
-        UpdateLocationParam param = { objectKey, objectKV.GetObjEntry()->GetCreateTime(),
-                                      static_cast<uint32_t>(objectKV.GetObjEntry()->stateInfo.GetDataFormat()),
-                                      Trace::Instance().GetTraceID() };
-        UpdateLocationTask task = UpdateLocationTask(param);
-        RETURN_IF_NOT_OK(asyncUpdateLocationManager_->AddTask(std::move(task)));
-        const auto &shmUnit = objectKV.GetObjEntry()->GetShmUnit();
-        if (!evictionManager_->TryOnRefillWithoutSize(objectKey)) {
-            evictionManager_->OnRefill(objectKey, shmUnit == nullptr ? 0 : shmUnit->GetMigratableSize());
-        }
-    } else {
-        objectKV.GetObjEntry()->stateInfo.SetNeedToDelete(true);
+    UpdateLocationParam param = { objectKey, objectKV.GetObjEntry()->GetCreateTime(),
+                                  static_cast<uint32_t>(objectKV.GetObjEntry()->stateInfo.GetDataFormat()),
+                                  Trace::Instance().GetTraceID() };
+    UpdateLocationTask task = UpdateLocationTask(param);
+    RETURN_IF_NOT_OK(asyncUpdateLocationManager_->AddTask(std::move(task)));
+    const auto &shmUnit = objectKV.GetObjEntry()->GetShmUnit();
+    if (!evictionManager_->TryOnRefillWithoutSize(objectKey)) {
+        evictionManager_->OnRefill(objectKey, shmUnit == nullptr ? 0 : shmUnit->GetMigratableSize());
     }
     point.Record();
     CacheHitInfo::Instance().IncRemoteHit(1);
@@ -3595,7 +3462,7 @@ WorkerOcServiceGetImpl::MigratedObjectIdentities WorkerOcServiceGetImpl::Prepare
             continue;
         }
         identities.emplace(objectKey, entry->second.safeObj->Get());
-        if ((!FLAGS_enable_data_replication || isSpill) && entry->second.safeObj->IsWLockedByCurrentThread()) {
+        if (isSpill && entry->second.safeObj->IsWLockedByCurrentThread()) {
             entry->second.safeObj->WUnlock();
         }
     }
@@ -3680,7 +3547,7 @@ void WorkerOcServiceGetImpl::ConfirmCopyMetaForNotifyRemoteGet(
     std::unordered_set<std::string> &failedConfirmationOwners, bool isSpill)
 {
     constexpr int64_t confirmationTimeoutMs = 1000;
-    if (!FLAGS_enable_data_replication || isSpill) {
+    if (isSpill) {
         confirmedIds = dataSuccessIds;
         return;
     }
@@ -3786,7 +3653,7 @@ void WorkerOcServiceGetImpl::ReplacePrimaryAndPruneFailed(std::vector<std::strin
                                                           const MigratedObjectIdentities &objectIdentities,
                                                           bool isSpill)
 {
-    if ((FLAGS_enable_data_replication && !isSpill) || successIds.empty()) {
+    if (!isSpill || successIds.empty()) {
         return;
     }
     const auto outcome = ReplacePrimaryForNotifyRemoteGet(successIds, queryMetas, rsp);
@@ -3973,7 +3840,7 @@ void WorkerOcServiceGetImpl::ClearNeedDeleteForMigratedObjects(const std::vector
                                                                const MigratedObjectIdentities &objectIdentities,
                                                                const QueryMetaMap &queryMetas, bool isSpill)
 {
-    if (!successIds.empty() && (!FLAGS_enable_data_replication || isSpill)) {
+    if (!successIds.empty() && isSpill) {
         VLOG(1) << FormatString("[NotifyRemoteGet] clear needDelete for %zu migrated objects", successIds.size());
         for (const auto &objectKey : successIds) {
             auto entryIt = lockedEntries.find(ReadKey(objectKey));
@@ -4143,7 +4010,7 @@ void WorkerOcServiceGetImpl::AttachNotifyRemoteGetUbFailure(
 bool WorkerOcServiceGetImpl::CanReuseUnconfirmedMigrationPayload(const ObjectMetaPb &meta, const LockedEntity &entry,
                                                                  bool isSpill)
 {
-    if ((FLAGS_enable_data_replication && !isSpill) || entry.safeObj == nullptr || entry.safeObj->Get() == nullptr) {
+    if (!isSpill || entry.safeObj == nullptr || entry.safeObj->Get() == nullptr) {
         return false;
     }
     const auto &object = *entry.safeObj->Get();
@@ -4248,7 +4115,7 @@ void WorkerOcServiceGetImpl::ReportUnattemptedObjects(const NotifyRemoteGetReqPb
                                                       const std::unordered_set<std::string> &attemptedObjectKeys,
                                                       NotifyRemoteGetRspPb &rsp)
 {
-    if (FLAGS_enable_data_replication && !req.is_spill()) {
+    if (!req.is_spill()) {
         return;
     }
     const auto &failedKeys = rsp.failed_object_keys();
@@ -4259,11 +4126,7 @@ void WorkerOcServiceGetImpl::ReportUnattemptedObjects(const NotifyRemoteGetReqPb
         if (attemptedObjectKeys.find(key) == attemptedObjectKeys.end()
             && failedSet.find(key) == failedSet.end()
             && skippedSet.find(key) == skippedSet.end()) {
-            if (req.is_spill()) {
-                rsp.add_skipped_object_keys(key);
-            } else {
-                rsp.add_failed_object_keys(key);
-            }
+            rsp.add_skipped_object_keys(key);
         }
     }
 }
@@ -4322,9 +4185,7 @@ Status WorkerOcServiceGetImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, 
     // Catch-all: objects in req.object_keys but not attempted (silent skipped due to version
     // mismatch, meta_is_moving, or master has no metadata) must be reported so the source does
     // not treat them as success and release.
-    // - enable_data_replication=false: add to failed_object_keys (source retries or keeps).
-    // - is_spill=true: add to skipped_object_keys (source keeps data, no release).
-    // - enable_data_replication=true, non-spill: keep existing behavior (stale objects released).
+    // Spill migration reports unattempted objects as skipped so the source keeps its data.
     ReportUnattemptedObjects(req, attemptedObjectKeys, rsp);
     UpdateNotifyRemoteGetRateLimit(req.addr(), migratedBytes, rsp);
     rsp.set_remain_bytes(memory::Allocator::Instance()->GetMemoryAvailToHighWater());
