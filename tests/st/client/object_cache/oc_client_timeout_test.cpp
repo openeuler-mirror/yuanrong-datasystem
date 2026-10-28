@@ -56,15 +56,6 @@ public:
     }
 };
 
-class OCClientTimeoutSingleRpcThreadTest : public OCClientTimeoutTest {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        OCClientTimeoutTest::SetClusterSetupOptions(opts);
-        opts.numRpcThreads = 1;
-    }
-};
-
 TEST_F(OCClientTimeoutTest, ShortTimeoutGetFailsFastWithDeadlineExceeded)
 {
     std::shared_ptr<ObjectClient> client;

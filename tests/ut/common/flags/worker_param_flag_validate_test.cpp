@@ -61,9 +61,9 @@ protected:
         savedMaxLogSize_ = FLAGS_max_log_size;
         savedLogMonitorIntervalMs_ = FLAGS_log_monitor_interval_ms;
         savedExporter_ = FLAGS_log_monitor_exporter;
-        savedOcPort_ = FLAGS_oc_worker_worker_direct_port;
         savedScPort_ = FLAGS_sc_worker_worker_direct_port;
         savedRocksdbThreads_ = FLAGS_rocksdb_background_threads;
+        savedBrpcServerThreads_ = FLAGS_brpc_server_num_threads;
     }
 
     void TearDown() override
@@ -72,18 +72,18 @@ protected:
         FLAGS_max_log_size = savedMaxLogSize_;
         FLAGS_log_monitor_interval_ms = savedLogMonitorIntervalMs_;
         FLAGS_log_monitor_exporter = savedExporter_;
-        FLAGS_oc_worker_worker_direct_port = savedOcPort_;
         FLAGS_sc_worker_worker_direct_port = savedScPort_;
         FLAGS_rocksdb_background_threads = savedRocksdbThreads_;
+        FLAGS_brpc_server_num_threads = savedBrpcServerThreads_;
     }
 
     int32_t savedV_;
     uint32_t savedMaxLogSize_;
     int32_t savedLogMonitorIntervalMs_;
     std::string savedExporter_;
-    int32_t savedOcPort_;
     int32_t savedScPort_;
     int32_t savedRocksdbThreads_;
+    int32_t savedBrpcServerThreads_;
 };
 
 // v must be in [0, 3]
@@ -107,15 +107,6 @@ TEST_F(WorkerParamFlagValidateTest, LogMonitorExporterRejectsInvalidValue)
 {
     ASSERT_FLAG_REJECTED(log_monitor_exporter, "invalid_exporter", savedExporter_);
     ASSERT_FLAG_ACCEPTED(log_monitor_exporter, "harddisk", std::string("harddisk"));
-}
-
-// oc_worker_worker_direct_port must be in [0, 65535]
-TEST_F(WorkerParamFlagValidateTest, OcWorkerDirectPortRejectsNegativeAndOverflow)
-{
-    ASSERT_FLAG_REJECTED(oc_worker_worker_direct_port, "-1", savedOcPort_);
-    ASSERT_FLAG_REJECTED(oc_worker_worker_direct_port, "65536", savedOcPort_);
-    ASSERT_FLAG_ACCEPTED(oc_worker_worker_direct_port, "0", 0);
-    ASSERT_FLAG_ACCEPTED(oc_worker_worker_direct_port, "65535", 65535);
 }
 
 // sc_worker_worker_direct_port must be in [0, 65535]
@@ -142,6 +133,14 @@ TEST_F(WorkerParamFlagValidateTest, RocksdbBackgroundThreadsRejectsNonPositive)
     ASSERT_FLAG_REJECTED(rocksdb_background_threads, "-1", savedRocksdbThreads_);
     ASSERT_FLAG_REJECTED(rocksdb_background_threads, "0", savedRocksdbThreads_);
     ASSERT_FLAG_ACCEPTED(rocksdb_background_threads, "16", 16);
+}
+
+TEST_F(WorkerParamFlagValidateTest, BrpcServerThreadsRejectsOutOfRange)
+{
+    ASSERT_FLAG_REJECTED(brpc_server_num_threads, "-1", savedBrpcServerThreads_);
+    ASSERT_FLAG_REJECTED(brpc_server_num_threads, "4097", savedBrpcServerThreads_);
+    ASSERT_FLAG_ACCEPTED(brpc_server_num_threads, "0", 0);
+    ASSERT_FLAG_ACCEPTED(brpc_server_num_threads, "4096", 4096);
 }
 }  // namespace
 }  // namespace ut

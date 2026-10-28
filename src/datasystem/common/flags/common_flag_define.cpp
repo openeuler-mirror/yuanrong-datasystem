@@ -270,9 +270,6 @@ DS_DEFINE_string(etcd_address, "", "Address of ETCD server");
 DS_DEFINE_string(coordinator_address, "",
                  "Address of datasystem coordinator service. Empty means coordinator mode is disabled.");
 DS_DEFINE_string(kv_events_config, "", "KV event publisher JSON config. Empty means disabled.");
-DS_DEFINE_int32(oc_worker_worker_direct_port, 0,
-                "Direct tcp/ip port for WorkerWorkerOCService. 0 -- disable this direction connection."
-                "Valid range is [0, 65535].");
 DS_DEFINE_int32(sc_worker_worker_direct_port, 0,
                 "Direct tcp/ip port for WorkerWorkerSCService. 0 -- disable this direction connection."
                 "Valid range is [0, 65535].");
@@ -299,9 +296,6 @@ DS_DEFINE_bool(brpc_enable_builtin_services, false,
                "Default false to keep a tight security surface (no HTTP endpoint); the /flags and "
                "/pprof endpoints allow gflag mutation and memory dumps. Set true only for debugging "
                "on a trusted network.");
-DS_DEFINE_string(brpc_connection_type, GetStringFromEnv("DATASYSTEM_BRPC_CONNECTION_TYPE", "pooled"),
-                 "brpc channel connection type: \"pooled\" (default) or \"single\". SINGLE is not "
-                 "recommended for high-QPS paths (single-socket write-lock contention).");
 DS_DEFINE_int32(brpc_max_connection_pool_size, GetInt32FromEnv("DATASYSTEM_BRPC_MAX_CONNECTION_POOL_SIZE", 8),
                 "Max idle pooled connections per remote endpoint (brpc default 100). Applied on both "
                 "server and client sides. Lower values reduce connection count but may cause "
@@ -310,11 +304,6 @@ DS_DEFINE_int32(brpc_event_dispatcher_num, GetInt32FromEnv("DATASYSTEM_BRPC_EVEN
                 "Override brpc event_dispatcher_num before global initialization. 0 keeps the brpc default (1). "
                 "Set a positive value to shard socket I/O events by fd across dispatchers. A single listening fd "
                 "is not parallelized.");
-DS_DEFINE_bool(brpc_drop_expired_request, true,
-               "Server-side interceptor: reject brpc requests whose client deadline already elapsed "
-               "while queued, before the handler runs. The client receives ERPCTIMEDOUT -> "
-               "K_RPC_DEADLINE_EXCEEDED and stops (budget gone). Default true (safe, no false "
-               "positives - only drops requests the client has certainly timed out on).");
 DS_DEFINE_bool(brpc_enable_circuit_breaker, false,
                "Enable brpc circuit breaker on client->worker channels. Default false (off); set true to "
                "let brpc auto-isolate peers with high error rates (EMA window: 1500 samples / 10% short, "

@@ -329,7 +329,7 @@ public:
 
     bool IsWorkerLiveness(uint32_t index) override;
 
-    Status AddNode(const HostPort &masterAddress, const std::string workerAddress, int workerDirectPort) override;
+    Status AddNode(const HostPort &masterAddress, const std::string workerAddress) override;
 
     Status WaitForExpectedResult(std::function<Status()> function, int timeoutSecs,
                                  StatusCode expectedStatusCode) override;

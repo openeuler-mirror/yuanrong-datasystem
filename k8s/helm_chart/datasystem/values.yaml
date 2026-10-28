@@ -299,9 +299,6 @@ global:
     enableDataReplication: "true"
 
   rpc:
-    # A direct TCP/IP port for worker-to-worker scenarios to improve latency.
-    # Acceptable value:0, or some positive integer. 0 means disabled.
-    ocWorkerWorkerDirectPort: 0
     # A direct tcp/ip port for worker to workers scenarios to improve latency.
     # Acceptable values:0, or some positive integer. 0 means disabled.
     scWorkerWorkerDirectPort: 0
@@ -311,13 +308,11 @@ global:
 
     # The payload threshold to batch get objects, unit is MB. Setting to 0 will indicate no split.
     batchGetThresholdMb: 100
-    # Config rpc server thread number, must be greater than 0.
-    rpcThreadNum: 128
     # The number of worker service for object cache.
     ocThreadNum: 64
     # brpc is the only RPC transport (ZMQ RPC deleted). brpc owns the worker TCP port
     # exclusively (the same port as worker_address, no port offset). Per-service thread
-    # pools (rpcThreadNum, ocThreadNum, scThreadNum, etc.) still apply.
+    # pools (brpcServerNumThreads, ocThreadNum, scThreadNum, etc.) still apply.
     brpc:
       # Number of process-wide brpc event dispatchers. 0 keeps the brpc default (1).
       # Values greater than 1 shard socket I/O by fd; they do not parallelize a single listening fd.

@@ -32,9 +32,8 @@
  *   to trigger the RPC completion.
  *
  *   For methods with recv_payload_option, Write() defers done->Run() so that
- *   SendPayload()/SendAndTagPayload() can write the payload to
- *   response_attachment first. The payload-send method then calls
- *   TryCompleteDeferred() to finalize the RPC.
+ *   SendPayload() can write the payload to response_attachment first. The
+ *   payload-send method then calls TryCompleteDeferred() to finalize the RPC.
  */
 #ifndef DATASYSTEM_COMMON_RPC_BRPC_SERVER_UNARY_WRITER_READER_H
 #define DATASYSTEM_COMMON_RPC_BRPC_SERVER_UNARY_WRITER_READER_H
@@ -57,7 +56,6 @@
 namespace datasystem {
 
 namespace {
-constexpr int kTagPayloadFrameWarnInterval = 100;
 constexpr int64_t MICROSECONDS_PER_MILLISECOND = 1000;
 constexpr int64_t CEIL_MILLISECONDS_ADJUSTMENT_US = MICROSECONDS_PER_MILLISECOND - 1;
 }  // namespace
@@ -293,42 +291,6 @@ public:
         return st;
     }
 
-    Status SendAndTagPayload(std::vector<RpcMessage> &buffer, bool tagPayloadFrame) override
-    {
-        if (doneConsumed_.load(std::memory_order_acquire)) {
-            return Status::OK();
-        }
-        // tagPayloadFrame is a legacy ZMQ routing concept: when true, the size
-        // frame's message type was set to PAYLOAD_SZ. Under the brpc-only path it
-        // is dead -- all payload is sent via Controller::response_attachment() with
-        // a uniform [count][size][data] framing, and there is no message-type flag.
-        if (tagPayloadFrame) {
-            LOG_EVERY_N(WARNING, kTagPayloadFrameWarnInterval) << "SendAndTagPayload tagPayloadFrame ignored -- "
-                                         "legacy frame tag not applicable to brpc attachment path";
-        }
-        auto st = AppendToResponseAttachment(buffer);
-        if (st.IsOk()) {
-            TryCompleteDeferred();
-        }
-        return st;
-    }
-
-    Status SendAndTagPayload(const std::vector<MemView> &payload, bool tagPayloadFrame) override
-    {
-        if (doneConsumed_.load(std::memory_order_acquire)) {
-            return Status::OK();
-        }
-        if (tagPayloadFrame) {
-            LOG_EVERY_N(WARNING, kTagPayloadFrameWarnInterval) << "SendAndTagPayload tagPayloadFrame ignored -- "
-                                         "legacy frame tag not applicable to brpc attachment path";
-        }
-        auto st = AppendMemViewToResponseAttachment(payload);
-        if (st.IsOk()) {
-            TryCompleteDeferred();
-        }
-        return st;
-    }
-
     /**
      * @brief Receive binary payload from brpc request attachment.
      *
@@ -418,8 +380,8 @@ public:
     /**
      * @brief Set whether this method expects the service to send payload
      * (recv_payload_option in proto). When true, Write() defers done_->Run()
-     * so SendPayload()/SendAndTagPayload() can write to response_attachment
-     * before brpc serializes the response.
+     * so SendPayload() can write to response_attachment before brpc serializes
+     * the response.
      */
     void SetHasRecvPayload(bool v) { recvPayloadOp_ = v; }
 
@@ -441,8 +403,8 @@ public:
 private:
     /**
      * @brief Complete the deferred RPC by running done_->Run().
-     * Called by SendPayload()/SendAndTagPayload() when Write() deferred
-     * completion (i.e., recvPayloadOp_ == true).
+     * Called by SendPayload() when Write() deferred completion
+     * (i.e., recvPayloadOp_ == true).
      * Uses CAS on doneConsumed_ to ensure only one path completes.
      */
     void TryCompleteDeferred()

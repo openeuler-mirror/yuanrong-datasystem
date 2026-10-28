@@ -96,7 +96,6 @@ public:
         opts.workerGflagParams += " -shared_memory_size_mb=" + std::to_string(inputParas_.sharedMemorySizeMB);
         opts.numScRegularSocket = inputParas_.regularSocketNum;
         opts.numScStreamSocket = inputParas_.streamSocketNum;
-        opts.numRpcThreads = 0;
         SCClientCommon::SetClusterSetupOptions(opts);
     }
 
@@ -369,7 +368,6 @@ public:
     {
         opts.numWorkers = numWorkers;
         opts.numEtcd = numEtcd;
-        opts.numRpcThreads = numRpcThreads;
         SCClientCommon::SetClusterSetupOptions(opts);
     }
 
@@ -645,7 +643,6 @@ protected:
     // cluster config
     int numWorkers = 3;
     int numEtcd = 1;
-    int numRpcThreads = 0;
 };
 
 // these testsuites test all scenarios in one testcase, 1 worker, 2 worker and 3 worker

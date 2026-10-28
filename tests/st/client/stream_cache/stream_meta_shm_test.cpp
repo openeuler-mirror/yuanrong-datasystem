@@ -78,7 +78,6 @@ void StreamMetaShmTest::SetClusterSetupOptions(ExternalClusterOptions &opts)
     opts.numEtcd = 1;
     opts.numWorkers = DEFAULT_WORKER_NUM;
     opts.enableDistributedMaster = "true";
-    opts.numRpcThreads = 0;
     opts.vLogLevel = DEFAULT_LOG_LEVEL;
     SCClientCommon::SetClusterSetupOptions(opts);
 }

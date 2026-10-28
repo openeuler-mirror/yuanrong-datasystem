@@ -552,7 +552,7 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, DISABLED_ScaleUpNewWorkerParticipates
    HostPort newWorkerAddr("127.0.0.1", GetFreePort());
    HostPort masterAddr;
    DS_ASSERT_OK(cluster_->GetWorkerAddr(WORKER0, masterAddr));
-   DS_ASSERT_OK(cluster_->AddNode(masterAddr, newWorkerAddr.ToString(), GetFreePort()));
+   DS_ASSERT_OK(cluster_->AddNode(masterAddr, newWorkerAddr.ToString()));
    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, WORKER2, 20));
    WaitAllNodesActiveInHashRing(3);
    InitTestKVClient(WORKER2, client2_);

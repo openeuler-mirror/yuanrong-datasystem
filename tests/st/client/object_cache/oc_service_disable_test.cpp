@@ -40,11 +40,6 @@
 
 namespace datasystem {
 namespace st {
-namespace {
-constexpr int STREAM_SERVICE_READY_TIMEOUT_MS = 5'000;
-constexpr int STREAM_SERVICE_READY_RETRY_INTERVAL_MS = 100;
-}  // namespace
-
 void OcOp(const std::shared_ptr<ObjectClient> &client, bool success)
 {
     std::string objKey = "ikun";
@@ -71,22 +66,6 @@ void ScOp(const std::shared_ptr<StreamClient> &client, bool success)
     }
 }
 
-Status SubscribeWhenReady(const std::shared_ptr<StreamClient> &client)
-{
-    Timer timer;
-    Status lastStatus;
-    do {
-        std::shared_ptr<Consumer> consumer;
-        SubscriptionConfig config("sub1", SubscriptionType::STREAM);
-        lastStatus = client->Subscribe("test1", config, consumer);
-        if (lastStatus.IsOk()) {
-            return lastStatus;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(STREAM_SERVICE_READY_RETRY_INTERVAL_MS));
-    } while (timer.ElapsedMilliSecond() < STREAM_SERVICE_READY_TIMEOUT_MS);
-    return lastStatus;
-}
-
 void KvOp(const std::shared_ptr<KVClient> &client, bool success)
 {
     std::string key = "ikun_again";
@@ -98,34 +77,6 @@ void KvOp(const std::shared_ptr<KVClient> &client, bool success)
         ASSERT_TRUE(rc.GetCode() == StatusCode::K_RUNTIME_ERROR ||
                     (rc.GetCode() == StatusCode::K_RPC_CANCELLED));
     }
-}
-
-class OcServiceDisableTest : public OCClientCommon {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        opts.numWorkers = 1;
-        opts.numRpcThreads = 0;
-        opts.numEtcd = 1;
-        opts.workerGflagParams = "-sc_stream_socket_num=1 -sc_regular_socket_num=1";
-    }
-};
-
-TEST_F(OcServiceDisableTest, TestInit)
-{
-        GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    LOG(INFO) << "Test oc client init when oc service disable.";
-    ConnectOptions opts;
-    InitConnectOpt(0, opts);
-    auto ocClient = std::make_shared<ObjectClient>(opts);
-    DS_ASSERT_OK(ocClient->Init());
-    OcOp(ocClient, false);
-    auto kVClient = std::make_shared<KVClient>(opts);
-    DS_ASSERT_OK(kVClient->Init());
-    KvOp(kVClient, false);
-    auto scClient = std::make_shared<StreamClient>(opts);
-    DS_ASSERT_OK(scClient->Init());
-    DS_ASSERT_OK(SubscribeWhenReady(scClient));
 }
 
 class ScServiceDisableTest : public OCClientCommon {
@@ -179,32 +130,5 @@ TEST_F(CommonServiceTest, TestInit)
     ScOp(scClient, true);
 }
 
-class CommonServiceDisableTest : public OCClientCommon {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        opts.numWorkers = 1;
-        opts.numRpcThreads = 0;
-        opts.numEtcd = 1;
-        opts.waitWorkerReady = false;
-    }
-};
-
-TEST_F(CommonServiceDisableTest, TestInit)
-{
-        GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    LOG(INFO) << "Test sc client init when sc service disable.";
-    ConnectOptions opts;
-    InitConnectOpt(0, opts);
-    auto ocClient = std::make_shared<ObjectClient>(opts);
-    DS_ASSERT_OK(ocClient->Init());
-    OcOp(ocClient, false);
-    auto kVClient = std::make_shared<KVClient>(opts);
-    DS_ASSERT_OK(kVClient->Init());
-    KvOp(kVClient, false);
-    auto scClient = std::make_shared<StreamClient>(opts);
-    DS_ASSERT_OK(scClient->Init());
-    ScOp(scClient, false);
-}
 }  // namespace st
 }  // namespace datasystem

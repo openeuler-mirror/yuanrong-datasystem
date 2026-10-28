@@ -2455,7 +2455,6 @@ public:
     {
         opts.numWorkers = numWorkers_;
         opts.numEtcd = numEtcd_;
-        opts.numRpcThreads = numRpcThreads_;
         SCClientCommon::SetClusterSetupOptions(opts);
     }
 
@@ -2489,7 +2488,6 @@ protected:
     // Cluster config
     int numWorkers_ = 3;
     int numEtcd_ = 1;
-    int numRpcThreads_ = 0;
 };
 
 TEST_F(StreamDfxWorkerCrashMPSC, CrossNodeProducerWorkerCrash)

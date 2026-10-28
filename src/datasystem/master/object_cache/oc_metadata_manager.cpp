@@ -33,7 +33,6 @@
 #include <utility>
 #include <vector>
 
-
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/l2cache/persistence_api.h"
@@ -85,7 +84,6 @@ DS_DEFINE_validator(rocksdb_store_dir, &Validator::ValidatePathString);
 
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_bool(async_delete);
-DS_DECLARE_int32(rpc_thread_num);
 
 DS_DECLARE_bool(enable_reconciliation);
 DS_DECLARE_bool(enable_data_replication);
@@ -96,6 +94,7 @@ static constexpr int DEBUG_LOG_LEVEL = 1;
 static constexpr int MIN_TTL_SECOND = 0;
 static constexpr int ASYNC_MIN_THREAD_NUM = 2;
 static constexpr int ASYNC_MAX_THREAD_NUM = 5;
+static constexpr int MASTER_METADATA_ASYNC_MAX_THREAD_NUM = 16;
 static constexpr uint64_t QUERY_AND_GET_MAX_PAYLOAD_SIZE = 512 * 1024UL;
 static const std::string OC_METADATA_MANAGER = "OCMetadataManager-";
 static constexpr int MSET_PENDING_TTL_US = 60'000'000;  // 60s
@@ -231,7 +230,8 @@ Status OCMetadataManager::Init()
         RETURN_IF_NOT_OK(objectStore_->AddRocksdbHealthTag());
     }
     const int minAsyncTaskThreadNum = 8;
-    asyncTaskPool_ = std::make_unique<ThreadPool>(minAsyncTaskThreadNum, FLAGS_rpc_thread_num, "AsyncTaskPool");
+    asyncTaskPool_ =
+        std::make_unique<ThreadPool>(minAsyncTaskThreadNum, MASTER_METADATA_ASYNC_MAX_THREAD_NUM, "AsyncTaskPool");
     InitSubscribeEvent();
     StartMetaMonitor();
     masterDevOcManager_ = std::make_shared<MasterDevOcManager>();

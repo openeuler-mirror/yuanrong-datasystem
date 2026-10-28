@@ -205,8 +205,6 @@ void ExternalClusterTest::SetDefaultOptions(ExternalClusterOptions &opts) const
         int port = leases[leaseIdx++].Port();
         ASSERT_NE(port, -1);
         opts.workerConfigs.emplace_back("127.0.0.1", port);
-        opts.workerOcDirectPorts.emplace_back(leases[leaseIdx++].Port());
-        ASSERT_NE(opts.workerOcDirectPorts.back(), -1);
     }
 
     // If a testcase has manually added etcd addresses already, then do not add the default ones

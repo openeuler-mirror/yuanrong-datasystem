@@ -41,7 +41,6 @@ public:
     {
         opts.numEtcd = 1;
         opts.workerGflagParams = " -page_size=" + std::to_string(pageSize_);
-        opts.numRpcThreads = 0;
         SCClientCommon::SetClusterSetupOptions(opts);
     }
 

@@ -353,7 +353,7 @@ TEST_F(STCClientDistMasterTest, DISABLED_TestAddNodeSet)
         cluster_->SetInjectAction(WORKER, i, "add.node.redirect", "10000*return()");
     }
     cluster_->GetWorkerAddr(0, masterAddr);
-    cluster_->AddNode(masterAddr, workerAddr.ToString(), GetFreePort());
+    cluster_->AddNode(masterAddr, workerAddr.ToString());
     for (int i = 0; i < 500; i++) {
         auto key = "redirect_test_" + std::to_string(i);
         DS_ASSERT_OK(client_->Set(key, value));
@@ -379,7 +379,7 @@ TEST_F(STCClientDistMasterTest, DISABLED_TestAddNodeUpdate)
     HostPort workerAddr(HOST_IP, GetFreePort());
     HostPort masterAddr;
     cluster_->GetWorkerAddr(0, masterAddr);
-    cluster_->AddNode(masterAddr, workerAddr.ToString(), GetFreePort());
+    cluster_->AddNode(masterAddr, workerAddr.ToString());
     for (int i = 0; i < 1000; i++) {
         auto key = "redirect_test_" + std::to_string(i);
         keys.emplace_back(key);
@@ -415,7 +415,7 @@ TEST_F(STCClientDistMasterTest, DISABLED_TestAddNodeGet)
     };
     std::thread thread(func);
     cluster_->GetWorkerAddr(0, masterAddr);
-    DS_ASSERT_OK(cluster_->AddNode(masterAddr, workerAddr.ToString(), GetFreePort()));
+    DS_ASSERT_OK(cluster_->AddNode(masterAddr, workerAddr.ToString()));
     for (auto &key : keys) {
         DS_ASSERT_OK(client_->Set(key, value));
     }

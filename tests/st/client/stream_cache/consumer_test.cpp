@@ -52,7 +52,6 @@ public:
     {
         opts.numEtcd = 1;
         opts.workerGflagParams = "-v=2 -page_size=" + std::to_string(pageSize_);
-        opts.numRpcThreads = 0;
         SCClientCommon::SetClusterSetupOptions(opts);
     }
 
@@ -1528,7 +1527,6 @@ public:
     {
         opts.numWorkers = numWorkers;
         opts.numEtcd = numEtcd;
-        opts.numRpcThreads = numRpcThreads;
         SCClientCommon::SetClusterSetupOptions(opts);
     }
 
@@ -1599,7 +1597,6 @@ protected:
     // cluster config
     int numWorkers = 3;
     int numEtcd = 1;
-    int numRpcThreads = 0;
 };
 
 /*
@@ -1743,7 +1740,6 @@ public:
     {
         opts.numWorkers = numWorkers;
         opts.numEtcd = numEtcd;
-        opts.numRpcThreads = numRpcThreads;
         opts.workerGflagParams = " -sc_local_cache_memory_size_mb=2 -page_size=" + std::to_string(pageSize_);
         SCClientCommon::SetClusterSetupOptions(opts);
     }
