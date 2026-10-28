@@ -4,7 +4,7 @@
 
 - Use this playbook when workers run with:
   - `enable_urma=true`
-  - `enable_worker_worker_batch_get=true`
+  - the always-on worker-to-worker Batch Get path
   - short business `requestTimeoutMs`, for example `5ms`
 - Goal:
   - consume the first worker-to-worker URMA connection cost before business traffic reaches the cluster.

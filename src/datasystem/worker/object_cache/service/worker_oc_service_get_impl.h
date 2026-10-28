@@ -645,24 +645,6 @@ private:
                                   std::unordered_set<std::string> &failedIds, std::set<ReadKey> &needRetryIds);
 
     /**
-     * @brief Get objects from anywhere parallelly.
-     * @param[in] queryMetas QueryMeta result requested from master.
-     * @param[in] readKeys read key info, contain offset, size, objKey.
-     * @param[in] request Get request instance.
-     * @param[in] payloads Get payloads that contains object data.
-     * @param[in] lockedEntries Object lock entries.
-     * @param[out] failedIds Failed get object keys.
-     * @param[out] needRetryIds Need retry get id list.
-     * @return Status of the call.
-     */
-    Status GetObjectsFromAnywhereParallelly(const std::vector<master::QueryMetaInfoPb> &queryMetas,
-                                            const std::shared_ptr<GetRequest> &request,
-                                            std::vector<RpcMessage> &payloads,
-                                            std::map<ReadKey, LockedEntity> &lockedEntries,
-                                            std::unordered_set<std::string> &failedIds,
-                                            std::set<ReadKey> &needRetryIds);
-
-    /**
      * @brief Get objects from anywhere serially.
      * @param[in] queryMetas QueryMeta result requested from master.
      * @param[in] readKeys read key info, contain offset, size, objKey.
@@ -1129,15 +1111,11 @@ private:
                                            std::unordered_set<std::string> &failedConfirmationOwners,
                                            bool isSpill);
 
-    // When enable_data_replication=false, BatchUpdateLocationHelper is a no-op so
-    // master metadata is never updated during NotifyRemoteGet migration. Call
-    // ReplacePrimary to switch master's primary to the target so Get requests route
-    // to the target after the source releases its data. Without this, data is lost.
+    // Spill migration transfers primary ownership instead of publishing a cache replica.
     ReplacePrimaryOutcome ReplacePrimaryForNotifyRemoteGet(const std::vector<std::string> &successIds,
                                                            const QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp);
 
-    // When enable_data_replication=false, call ReplacePrimary to switch master's primary
-    // to the target. Failed objects retain needDelete and are marked for topology cleanup protection.
+    // Failed spill ownership transfers retain needDelete and topology cleanup protection.
     void ReplacePrimaryAndPruneFailed(std::vector<std::string> &successIds, const QueryMetaMap &queryMetas,
                                       NotifyRemoteGetRspPb &rsp, std::map<ReadKey, LockedEntity> &lockedEntries,
                                       const MigratedObjectIdentities &objectIdentities, bool isSpill);
@@ -1193,8 +1171,6 @@ private:
     std::shared_ptr<ThreadPool> workerBatchRemoteGetThreadPool_{ nullptr };
 
     std::shared_ptr<ThreadPool> threadPool_{ nullptr };
-
-    std::unique_ptr<ThreadPool> remoteGetThreadPool_{ nullptr };
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 

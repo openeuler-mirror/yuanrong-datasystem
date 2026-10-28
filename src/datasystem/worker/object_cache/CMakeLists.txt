@@ -5,7 +5,6 @@ set(WORKER_OC_SRCS
         worker_worker_peer_state_codec.cpp
         worker_oc_service_impl.cpp
         worker_self_port_health.cpp
-        object_cache_worker_flags.cpp
         worker_request_manager.cpp
         worker_worker_oc_gather_layout.cpp
         worker_worker_oc_service_impl.cpp

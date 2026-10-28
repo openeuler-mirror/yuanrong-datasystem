@@ -53,12 +53,6 @@ bool ValidateRebalanceHeatFlags();
 bool WorkerValidateNodeDeadTimeoutS(const uint32_t value);
 
 /**
- * @brief Check whether the value of heartbeat_interval_ms is valid.
- * @param[in] value Change heartbeat_interval_ms to this value.
- */
-bool WorkerValidateHeartbeatIntervalMs(const uint32_t value);
-
-/**
  * @brief Check whether the value of scale_in_collect_window_ms is valid.
  * Valid range is [0, 5000]; 0 disables coalescing. Values outside the range are clamped to it.
  *

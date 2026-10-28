@@ -34,6 +34,7 @@ namespace {
 constexpr auto TEST_WAIT = std::chrono::seconds(1);
 constexpr auto RETRY_TICK_ADVANCE = std::chrono::seconds(2);
 constexpr int32_t TEST_AUTHORITY_READ_TIMEOUT_MS = 100;
+constexpr uint32_t TEST_TOKENS_PER_MEMBER = 4;
 constexpr size_t MAX_CALLBACK_THREADS = 16;
 constexpr size_t MAX_CALLBACK_QUEUE_CAPACITY = 1'024;
 constexpr uint32_t SIBLING_SCALE_IN_RANGE_FROM = 60;
@@ -42,7 +43,7 @@ constexpr uint32_t SIBLING_SCALE_IN_RANGE_END = 70;
 std::vector<uint32_t> MakeExecutorTokens(const std::string &address)
 {
     std::vector<uint32_t> tokens;
-    for (uint32_t index = 0; index < 4; ++index) {
+    for (uint32_t index = 0; index < TEST_TOKENS_PER_MEMBER; ++index) {
         tokens.emplace_back(HashAlgorithm::MakeToken(address, index, 0));
     }
     return tokens;
@@ -201,6 +202,7 @@ struct ExecutorScenario {
     {
         current.version = 1;
         current.clusterHasInit = true;
+        current.tokensPerMember = TEST_TOKENS_PER_MEMBER;
         TopologyPlanBuilder builder(algorithm);
         if (type == TopologyChangeType::SCALE_OUT) {
             current.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE,

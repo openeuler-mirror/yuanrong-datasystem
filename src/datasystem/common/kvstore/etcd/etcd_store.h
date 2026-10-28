@@ -555,7 +555,7 @@ private:
 
     /**
      * @brief Classify one failed keepalive attempt and publish local-isolation evidence when confirmed.
-     *        On confirmed local isolation past node_dead_timeout_s (and auto_del_dead_node), raises SIGKILL.
+     *        On confirmed local isolation past node_dead_timeout_s, raises SIGKILL.
      * @param[in] status Failed keepalive status.
      * @param[in,out] observedLeaseId Lease generation used by the current confirmation counter.
      * @param[in,out] confirmTimes Consecutive local-isolation confirmations.

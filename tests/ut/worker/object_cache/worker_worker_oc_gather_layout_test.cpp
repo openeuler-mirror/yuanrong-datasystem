@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "datasystem/worker/object_cache/worker_oc_constants.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_gather_layout.h"
 
 namespace datasystem {
@@ -239,6 +240,52 @@ TEST(WorkerWorkerOcGatherLayoutTest, ProducerAttestationIncludesMetadataAndClear
     SetAggregateGatherAttestation(true, 64, request);
     EXPECT_FALSE(request.allow_aggregate_gather());
     EXPECT_EQ(request.aggregate_gather_metadata_size(), 0u);
+}
+
+TEST(WorkerWorkerOcGatherLayoutTest, ProductionObjectLimitIncludesExactly64KiB)
+{
+    constexpr uint64_t metadataSize = 64;
+    BatchGetObjectRemoteReqPb request;
+    AllowAggregateGather(request, metadataSize);
+    AddUrmaRequest(request, WORKER_BATCH_GET_AGGREGATE_OBJECT_MAX_SIZE, 0x1000, metadataSize);
+    std::vector<AggregateGatherSubgroup> subgroups;
+
+    EXPECT_TRUE(BuildAggregateGatherPlan(request, metadataSize, WORKER_BATCH_GET_AGGREGATE_OBJECT_MAX_SIZE,
+                                         WORKER_BATCH_GET_AGGREGATE_GROUP_MAX_SIZE,
+                                         WORKER_BATCH_GET_AGGREGATE_KEY_MAX_COUNT, subgroups));
+
+    request.mutable_requests(0)->set_data_size(WORKER_BATCH_GET_AGGREGATE_OBJECT_MAX_SIZE + 1);
+    EXPECT_FALSE(BuildAggregateGatherPlan(request, metadataSize, WORKER_BATCH_GET_AGGREGATE_OBJECT_MAX_SIZE,
+                                          WORKER_BATCH_GET_AGGREGATE_GROUP_MAX_SIZE,
+                                          WORKER_BATCH_GET_AGGREGATE_KEY_MAX_COUNT, subgroups));
+}
+
+TEST(WorkerWorkerOcGatherLayoutTest, ProductionGroupLimitIncludesMetadataAndAlignment)
+{
+    constexpr uint64_t metadataSize = 64;
+    constexpr size_t fullObjectCount = 31;
+    constexpr uint64_t exactFillDataSize =
+        WORKER_BATCH_GET_AGGREGATE_GROUP_MAX_SIZE
+        - fullObjectCount * (WORKER_BATCH_GET_AGGREGATE_OBJECT_MAX_SIZE + metadataSize) - metadataSize;
+    BatchGetObjectRemoteReqPb request;
+    AllowAggregateGather(request, metadataSize);
+    uint64_t offset = metadataSize;
+    for (size_t i = 0; i < fullObjectCount; ++i) {
+        AddUrmaRequest(request, WORKER_BATCH_GET_AGGREGATE_OBJECT_MAX_SIZE, 0x1000, offset);
+        offset += WORKER_BATCH_GET_AGGREGATE_OBJECT_MAX_SIZE + metadataSize;
+    }
+    AddUrmaRequest(request, exactFillDataSize, 0x1000, offset);
+    offset += exactFillDataSize + metadataSize;
+    AddUrmaRequest(request, 1, 0x1000, offset);
+    std::vector<AggregateGatherSubgroup> subgroups;
+
+    ASSERT_TRUE(BuildAggregateGatherPlan(request, metadataSize, WORKER_BATCH_GET_AGGREGATE_OBJECT_MAX_SIZE,
+                                         WORKER_BATCH_GET_AGGREGATE_GROUP_MAX_SIZE,
+                                         WORKER_BATCH_GET_AGGREGATE_KEY_MAX_COUNT, subgroups));
+    ASSERT_EQ(subgroups.size(), 2u);
+    EXPECT_EQ(subgroups[0].requestCount, fullObjectCount + 1);
+    EXPECT_EQ(subgroups[0].byteSize, WORKER_BATCH_GET_AGGREGATE_GROUP_MAX_SIZE);
+    EXPECT_EQ(subgroups[1].requestCount, 1u);
 }
 
 }  // namespace

@@ -1564,7 +1564,6 @@ INFO fallback 仅适用于忽略该初始化错误的 SDK Client，并且只在 
 | rocksdb_background_threads | int | `16` | 否 | RocksDB的后台线程数，用于元数据的刷盘和压缩，必须为正整数 |
 | rocksdb_max_open_file | int | `128` | 否 | RocksDB可使用的最大打开文件个数 |
 | rocksdb_write_mode | string | `async` | 否 | 配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为`async`。可选值包括：'none'（不写）、'sync'（同步）、'async'（异步） |
-| enable_data_replication | bool | `true` | 否 | 实验性参数。是否允许跨 worker 读取到的数据在本 worker 缓存为本地热副本，并向 master 注册副本位置；关闭后 remote get 获取的数据通常仅服务当前请求，不作为普通本地副本保留。该参数仅用于热副本性能优化，不作为数据可靠性机制，不保障数据可靠性或可用性 |
 
 #### 可靠性相关配置
 
@@ -1572,13 +1571,16 @@ INFO fallback 仅适用于忽略该初始化错误的 SDK Client，并且只在 
 |-----|------|---------|-----|-------------|
 | client_reconnect_wait_s | int | `10` | 是 | 客户端断链重连最大等待时间（单位为秒） |
 | client_dead_timeout_s | int | `120` | 否 | 客户端存活检测最大时间间隔（单位为秒）, client_dead_timeout_s >= 3 |
-| heartbeat_interval_ms | int | `1000` | 是 | 服务端与ETCD的心跳间隔时间（单位为毫秒） |
-| node_timeout_s | int | `60` | 否 | 服务端节点超时最大时间间隔（单位为秒）, node_timeout_s >= 1 |
+| node_timeout_s | int | `60` | 否 | 服务端节点超时（秒），并决定 ETCD 心跳间隔 |
 | node_dead_timeout_s | int | `300` | 是 | 服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点，该值必须大于 `node_timeout_s` |
-| hash_ring_tokens_per_member | uint32 | `4` | 否 | 首次创建哈希环时为每个 Worker 分配的 token 数，取值范围为 `1`～`4096`。该值会写入集群 topology；后续扩容和重规划使用 topology 中的集群值，修改本地配置不会改变已有集群的 token 数。 |
 | enable_reconciliation | bool | `false` | 否 | 当节点重启时是否启用全局引用计数对账功能；仅使用 KVClient 的场景无需开启，使用 ObjectClient 全局引用计数时需显式设置为 `true` |
-| auto_del_dead_node | bool | `true` | 是 | 是否启用死亡节点自动清理功能，当该值为 `true` 时，会将死亡节点剔除出集群管理，并触发被动缩容 |
 | enable_distributed_master | bool | `true` | 否 | 是否启用分布式主节点，默认值为true |
+
+`node_timeout_s` 的有效下限为 3；配置小于 3 时会被自动调整为 3。服务端与 ETCD 的心跳间隔按
+`clamp(node_timeout_s * 1000 / 3, 100, 5000)`（毫秒）自动计算。
+新建集群的哈希环固定为每个 Worker 分配 32 个 token；已有集群继续使用 topology 中
+持久化的 token 数。
+死亡节点写保护、隔离和被动缩容始终启用，不再提供关闭开关。
 
 #### 优雅退出相关配置
 
@@ -1600,7 +1602,6 @@ INFO fallback 仅适用于忽略该初始化错误的 SDK Client，并且只在 
 | arena_per_tenant | int | `16` | 每个租户的共享内存分配器数量。多分配器可以提高第一次分配共享内存的性能，但每个分配器会多使用一个fd，导致fd资源使用量上升。取值范围：[1, 32] |
 | async_delete | bool | `false` | 是否异步删除对象，如果设置为 `true` 时，删除对象数据是个异步的过程，客户端不需要等待所有数据副本删除完成即可返回 |
 | enable_p2p_transfer | bool | `false` | 是否开启异构对象传输协议支持点对点传输 |
-| enable_worker_worker_batch_get | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |
 | enable_urma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输，开启后worker启动时会自动预热URMA worker-worker连接 |
 | ub_numa_rr_type | int | `1` | UB NUMA 源芯片选择粒度。`0` 表示关闭源芯片选择，保持发送内存所在芯片；`1` 表示每次逻辑写选择一次，`2` 表示每个 WR Post 选择一次。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。 |
 | ub_numa_src_chip_policy | int | `1` | UB NUMA 源芯片策略。`0` 表示轮询；`1` 表示以轮询为基线，仅当发送内存的亲和芯片接收本次逻辑写的预计 WR 后仍不比轮询候选更忙时，才覆盖轮询结果。配置 `0` 可用于消融实验和快速回滚。旧 worker 未返回该字段时，新 client 按 `0` 兼容。Worker 集群必须保持一致；client 固化首个返回 UB 配置的 worker 的取值。 |

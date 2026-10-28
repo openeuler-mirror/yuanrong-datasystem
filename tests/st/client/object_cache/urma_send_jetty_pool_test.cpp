@@ -34,6 +34,7 @@
 #include "datasystem/common/string_intern/string_pool.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/kv_client.h"
+#include "datasystem/worker/object_cache/worker_oc_constants.h"
 #include "oc_client_common.h"
 
 namespace datasystem {
@@ -92,9 +93,8 @@ public:
         }
         opts.vLogLevel = 2;
         opts.workerGflagParams = std::string(
-            " -shared_memory_size_mb=5120 -enable_worker_worker_batch_get=true"
-            " -batch_get_threshold_mb=20 -arena_per_tenant=1 -oc_worker_worker_parallel_nums=64"
-            " -urma_send_jetty_lane_pool_size=")
+            " -shared_memory_size_mb=5120 -batch_get_threshold_mb=20"
+            " -arena_per_tenant=1 -urma_send_jetty_lane_pool_size=")
             + std::to_string(SendLanePoolSize()) + " -ipc_through_shared_memory=false";
         opts.workerGflagParams += " -enable_urma=true";
     }
@@ -602,14 +602,6 @@ protected:
 };
 
 class UrmaSendJettyPoolMaxParallelStTest : public UrmaSendJettyPoolStTest {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        UrmaSendJettyPoolStTest::SetClusterSetupOptions(opts);
-        // Keep 8 KiB objects on the ordinary-write path so every 64-object request exercises the configured TBB cap.
-        opts.workerGflagParams += " -oc_worker_worker_parallel_min=32 -oc_worker_aggregate_single_max=4096";
-    }
-
 protected:
     uint32_t SendLanePoolSize() const override
     {
@@ -681,8 +673,8 @@ TEST_F(UrmaSendJettyPoolStTest, BatchGetWriteErrorReleasesSharedLane)
     InitTestKVClient(kSourceWorker, writer);
     InitTestKVClient(kDestinationWorker, reader, 10000, false, 10000);
 
-    // Each object exceeds oc_worker_aggregate_single_max, so this exercises ordinary per-object UrmaWrite while
-    // still using one worker-to-worker Batch Get RPC.
+    // Each object exceeds the 64 KiB aggregate limit, so this exercises ordinary per-object UrmaWrite while still
+    // using one worker-to-worker Batch Get RPC.
     constexpr uint32_t kObjectCount = 128;
     constexpr size_t kValueSize = 128 * 1024;
     std::vector<std::string> keys;
@@ -769,7 +761,7 @@ TEST_F(UrmaSendJettyPoolStTest, BatchGetGatherWriteSharesOneLaneAcrossOverlappin
     InitTestKVClient(kSourceWorker, writer);
     InitTestKVClient(kDestinationWorker, reader, 10000, false, 10000);
 
-    // Every object is below oc_worker_aggregate_single_max, while the total size creates multiple aggregate groups.
+    // Every object is below the 64 KiB aggregate limit, while the total size creates multiple aggregate groups.
     constexpr uint32_t kObjectCount = 512;
     constexpr size_t kValueSize = 8 * 1024;
     std::vector<std::string> keys;
@@ -1348,11 +1340,11 @@ TEST_F(UrmaSendJettyPoolConcurrentStTest, LEVEL1_ConcurrentBatchGetsRecoverFromI
     AssertConcurrentFaultStormRecovers(kInFlightTimeoutInject, "4*call(-1)", "urma-send-lane-timeout-storm");
 }
 
-TEST_F(UrmaSendJettyPoolMaxParallelStTest, LEVEL1_Concurrent64BatchGetsWith64ObjectsKeepLanePoolUsable)
+TEST_F(UrmaSendJettyPoolMaxParallelStTest, LEVEL1_Concurrent64BatchGetsAboveParallelThresholdKeepLanePoolUsable)
 {
     constexpr uint32_t kConcurrentRequests = 64;
-    constexpr uint32_t kObjectsPerRequest = 64;
-    constexpr size_t kParallelValueSize = 8 * 1024;
+    constexpr uint32_t kObjectsPerRequest = object_cache::WORKER_BATCH_GET_PARALLEL_THRESHOLD + 1;
+    constexpr size_t kParallelValueSize = object_cache::WORKER_BATCH_GET_AGGREGATE_OBJECT_MAX_SIZE + 1;
     std::shared_ptr<KVClient> writer;
     InitTestKVClient(kSourceWorker, writer);
 
@@ -1362,7 +1354,7 @@ TEST_F(UrmaSendJettyPoolMaxParallelStTest, LEVEL1_Concurrent64BatchGetsWith64Obj
         keys[requestIndex].reserve(kObjectsPerRequest);
         values[requestIndex].reserve(kObjectsPerRequest);
         for (uint32_t objectIndex = 0; objectIndex < kObjectsPerRequest; ++objectIndex) {
-            keys[requestIndex].emplace_back("urma-send-lane-64x64-" + std::to_string(requestIndex) + "-"
+            keys[requestIndex].emplace_back("urma-send-lane-above-threshold-" + std::to_string(requestIndex) + "-"
                                             + std::to_string(objectIndex));
             values[requestIndex].emplace_back(kParallelValueSize,
                                               static_cast<char>('a' + ((requestIndex + objectIndex) % 26)));

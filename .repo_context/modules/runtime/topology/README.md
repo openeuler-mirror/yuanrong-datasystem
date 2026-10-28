@@ -170,9 +170,10 @@
   processing order cannot change persisted collision decisions. Schema version 2 is an intentional hard protocol
   cutover and is not compatible with schema version 1 topology records or clients. The codec derives the token count from
   the topology record rather than process flags, and both persisted topology and client routing preparation reject more
-  than 640,000 total tokens. The bootstrap flag selects the initial cluster value; all later scale-out and recovery
-  planning preserves the value copied from the topology snapshot. Clients use the topology value when rebuilding their
-  routing index. Routing snapshots never recompute tokens on the foreground path.
+  than 640,000 total tokens. Bootstrap fixes the initial cluster value at 32 tokens per member; all later scale-out and
+  recovery planning preserves the value copied from the topology snapshot. Existing topology records therefore retain
+  their stored token count. Clients use the topology value when rebuilding their routing index. Routing snapshots never
+  recompute tokens on the foreground path.
 - `cluster_topology.proto` owns these topology records under protobuf package `datasystem`; coordinator and other
   unrelated protobuf contracts remain separate schemas.
 - `TopologyEngine`, `TopologyController`, and standalone `TopologyObserver` each own one serialized state loop. ETCD

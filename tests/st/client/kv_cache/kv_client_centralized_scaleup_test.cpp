@@ -48,8 +48,7 @@ public:
         opts.numWorkers = DEFAULT_WORKER_NUM;
         opts.enableDistributedMaster = "false";
         opts.workerGflagParams =
-            "-shared_memory_size_mb=5120 -v=2 -node_timeout_s=1 -node_dead_timeout_s=2"
-            " -auto_del_dead_node=true -heartbeat_interval_ms=500";
+            "-shared_memory_size_mb=5120 -v=2 -node_timeout_s=1 -node_dead_timeout_s=2";
 
         for (size_t i = 0; i < DEFAULT_WORKER_NUM; i++) {
             std::string hostIp = HOST_IP_PREFIX + std::to_string(i);

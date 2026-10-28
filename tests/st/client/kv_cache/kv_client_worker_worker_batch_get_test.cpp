@@ -52,9 +52,7 @@ public:
         opts.numWorkers = WORKER_NUM;
         opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
-        opts.workerGflagParams =
-            "-shared_memory_size_mb=100 -v=2 -log_monitor=true -max_client_num=4000 "
-            "-enable_worker_worker_batch_get=true";
+        opts.workerGflagParams = "-shared_memory_size_mb=100 -v=2 -log_monitor=true -max_client_num=4000";
     }
 
     Status InitKVClientForWorker(uint32_t workerIndex, std::shared_ptr<KVClient> &client, int32_t timeoutMs = 60000)

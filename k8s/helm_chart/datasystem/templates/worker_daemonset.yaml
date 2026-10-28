@@ -94,7 +94,6 @@ spec:
         - -log_monitor_exporter={{ $.Values.global.observability.logMonitorExporter }}
         - -log_monitor_interval_ms={{ $.Values.global.observability.logMonitorIntervalMs }}
         - -enable_perf_trace_log={{ $.Values.global.log.enablePerfTraceLog }}
-        - -enable_data_replication={{ $.Values.global.metadata.enableDataReplication }}
         - -logbufsecs={{ $.Values.global.log.logBufSecs }}
         - -log_compress={{ $.Values.global.log.logCompress }}
         {{- if not (kindIs "invalid" $.Values.global.log.requestSampleRate) }}
@@ -154,7 +153,6 @@ spec:
         - -batch_get_threshold_mb={{ $.Values.global.rpc.batchGetThresholdMb }}
         - -max_client_num={{ $.Values.global.resources.datasystemWorker.maxClientNum }}
         - -client_reconnect_wait_s={{ $.Values.global.reliability.clientReconnectWaitS }}
-        - -heartbeat_interval_ms={{ $.Values.global.reliability.heartbeatIntervalMs }}
         - -system_access_key={{ $.Values.global.akSk.systemAccessKey }}
         - -system_secret_key={{ $.Values.global.akSk.systemSecretKey }}
         - -system_data_key={{ $.Values.global.akSk.systemDataKey }}
@@ -202,7 +200,6 @@ spec:
         - -etcd_key={{ $.Values.global.etcd.etcdCertDir }}/client.key
         - -etcd_passphrase_path={{ $.Values.global.etcd.etcdCertDir }}/passphrase
         {{- end }}
-        - -auto_del_dead_node={{ $.Values.global.reliability.autoDelDeadNode }}
         - -spill_directory={{ $.Values.global.spill.spillDirectory }}
         - -spill_size_limit={{ $.Values.global.spill.spillSizeLimit }}
         - -spill_thread_num={{ $.Values.global.spill.spillThreadNum }}
@@ -251,14 +248,9 @@ spec:
         - -urma_failover_min_sample_count={{ $.Values.global.performance.urmaFailoverMinSampleCount }}
         - -enable_distributed_master={{ $.Values.global.reliability.enableDistributedMaster }}
         - -enable_p2p_transfer={{ $.Values.global.performance.enableP2pTransfer }}
-        - -enable_worker_worker_batch_get={{ $.Values.global.performance.enableWorkerWorkerBatchGet }}
         - -enable_rdma={{ $.Values.global.performance.enableRdma }}
         - -rdma_register_whole_arena={{ $.Values.global.performance.rdmaRegisterWholeArena }}
         - -enable_stream_data_verification={{ $.Values.global.reliability.enableStreamDataVerification }}
-        - -oc_worker_aggregate_merge_size={{ $.Values.global.performance.ocWorkerAggregateMergeSize | int64 }}
-        - -oc_worker_aggregate_single_max={{ $.Values.global.performance.ocWorkerAggregateSingleMax | int64 }}
-        - -oc_worker_worker_parallel_min={{ $.Values.global.performance.ocWorkerWorkerParallelMin }}
-        - -oc_worker_worker_parallel_nums={{ $.Values.global.performance.ocWorkerWorkerParallelNums }}
         - -sc_encrypt_secret_key={{ $.Values.global.security.scEncryptSecretKey }}
         command:
         - /home/yuanrong/worker_entry.sh

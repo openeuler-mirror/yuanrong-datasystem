@@ -155,11 +155,9 @@ public:
         for (const auto &addr : opts.workerConfigs) {
             workerAddress_.emplace_back(addr.ToString());
         }
-        // Enable worker->worker batch get by default.
         opts.vLogLevel = 2;
         opts.workerGflagParams =
-            " -shared_memory_size_mb=5120 -enable_worker_worker_batch_get=true"
-            " -batch_get_threshold_mb=20";
+            " -shared_memory_size_mb=5120 -batch_get_threshold_mb=20";
 #ifdef USE_URMA
         opts.workerGflagParams += " -arena_per_tenant=1 -enable_urma=true ";
 #else
@@ -841,16 +839,7 @@ TEST_F(UrmaObjectClientTest, TestMemcopyThenMutableData)
     func(bigSize);
 }
 
-class UrmaObjectClientDisableDataReplicationTest : public UrmaObjectClientTest {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        UrmaObjectClientTest::SetClusterSetupOptions(opts);
-        opts.workerGflagParams += " -enable_data_replication=false ";
-    }
-};
-
-TEST_F(UrmaObjectClientDisableDataReplicationTest, TestBatchRemoteGet)
+TEST_F(UrmaObjectClientTest, TestBatchRemoteGet)
 {
     // Test that the batch get path in urma case is working as expected.
     std::shared_ptr<KVClient> client1;
@@ -892,7 +881,7 @@ TEST_F(UrmaObjectClientDisableDataReplicationTest, TestBatchRemoteGet)
     DS_ASSERT_NOT_OK(client1->Get(keys, valuesGet));
 }
 
-TEST_F(UrmaObjectClientDisableDataReplicationTest, TestMultiLocalGet)
+TEST_F(UrmaObjectClientTest, TestMultiLocalGet)
 {
     std::shared_ptr<KVClient> client;
     InitTestKVClient(0, client);
@@ -1302,8 +1291,7 @@ public:
     {
         UrmaObjectClientTest::SetClusterSetupOptions(opts);
         opts.workerGflagParams +=
-            " -ipc_through_shared_memory=true --enable_data_replication=false "
-            "-inject_actions=worker.bind_unix_path:return(K_OK) ";
+            " -ipc_through_shared_memory=true -inject_actions=worker.bind_unix_path:return(K_OK) ";
     }
 };
 
@@ -1421,8 +1409,7 @@ public:
         opts.numWorkers -= 1;
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams +=
-            " -ipc_through_shared_memory=true --enable_data_replication=false"
-            " --enable_transport_fallback=false -client_dead_timeout_s=1"
+            " -ipc_through_shared_memory=true --enable_transport_fallback=false -client_dead_timeout_s=1"
             " -inject_actions=worker.bind_unix_path:return(K_OK) ";
     }
 };
@@ -1477,11 +1464,9 @@ public:
         for (const auto &addr : opts.workerConfigs) {
             workerAddress_.emplace_back(addr.ToString());
         }
-        // Enable worker->worker batch get by default.
         opts.vLogLevel = 2;
         opts.workerGflagParams =
-            " -shared_memory_size_mb=5120 -enable_worker_worker_batch_get=true "
-            "-arena_per_tenant=1";
+            " -shared_memory_size_mb=5120 -arena_per_tenant=1";
         // Specify mismatching enable_urma setting for the workers.
         opts.workerSpecifyGflagParams[0] += " -enable_urma=true ";
         opts.workerSpecifyGflagParams[1] += " -enable_urma=false ";

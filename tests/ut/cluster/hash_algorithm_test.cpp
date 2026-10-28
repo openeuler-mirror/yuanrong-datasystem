@@ -81,7 +81,7 @@ TEST(HashAlgorithmTest, LocatesCommittedOwnerWithRingWrapAndSkipsJoining)
     EXPECT_EQ(owner->identity.address, "127.0.0.1:1");
 }
 
-TEST(HashAlgorithmTest, BootstrapAllocatesFourUniqueDeterministicTokensPerMember)
+TEST(HashAlgorithmTest, BootstrapAllocatesDefaultUniqueDeterministicTokensPerMember)
 {
     HashAlgorithm algorithm;
     ScaleOutPlanInput input;
@@ -93,10 +93,10 @@ TEST(HashAlgorithmTest, BootstrapAllocatesFourUniqueDeterministicTokensPerMember
     ASSERT_EQ(first.next.members.size(), 2);
     std::set<uint32_t> tokens;
     for (const auto &member : first.next.members) {
-        EXPECT_EQ(member.tokens.size(), 4);
+        EXPECT_EQ(member.tokens.size(), DEFAULT_HASH_RING_TOKENS_PER_MEMBER);
         tokens.insert(member.tokens.begin(), member.tokens.end());
     }
-    EXPECT_EQ(tokens.size(), 8);
+    EXPECT_EQ(tokens.size(), first.next.members.size() * DEFAULT_HASH_RING_TOKENS_PER_MEMBER);
     // Only the first (address-ordered) bootstrap member keeps pure hash derivation; later members are
     // balanced against the accumulated ring, so their tokens need not be seed-zero derivations.
     const auto &firstMember = first.next.members.front();

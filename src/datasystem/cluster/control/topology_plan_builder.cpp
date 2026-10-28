@@ -11,11 +11,11 @@
 #include <algorithm>
 #include <unordered_set>
 
-#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem::cluster {
 namespace {
+
 bool SameIdentity(const Member &member, const MemberIdentity &identity)
 {
     return member.identity == identity;
@@ -83,7 +83,7 @@ Status TopologyPlanBuilder::BuildBootstrap(const TopologyState &latest, const st
     RETURN_IF_NOT_OK(ValidateSelected(latest, ready, MemberState::INITIAL));
     TopologyPlan built;
     RETURN_IF_NOT_OK(
-        algorithm_.BuildInitialPlacement({ TopologyState{}, ready, FLAGS_hash_ring_tokens_per_member }, built));
+        algorithm_.BuildInitialPlacement({ TopologyState{}, ready, DEFAULT_HASH_RING_TOKENS_PER_MEMBER }, built));
     std::unordered_set<std::string> readyAddresses;
     for (const auto &identity : ready) {
         readyAddresses.insert(identity.address);

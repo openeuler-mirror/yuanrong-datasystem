@@ -119,17 +119,14 @@ public:
     std::pair<Status, EtcdResponse> KeepAlive();
 
     /**
-     * @brief Obtain the current value of FLAGS_node_timeout_s and convert it to milliseconds as the lease time for etcd
-     * to retain the worker lease ID.
-     * @note The value of FLAGS_node_timeout_s can be dynamically changed by O&M personnel during worker running.
-     * @return int64_t - the current value of FLAGS_node_timeout_s, in milliseconds.
+     * @brief Obtain the configured node timeout and convert it to the ETCD lease expiration threshold.
+     * @return The lease expiration threshold in milliseconds.
      */
     static int64_t GetLeaseExpiredMs();
 
     /**
-     * @brief Obtains the latest heartbeat interval for the worker to send heartbeat information to etcd.
-     * @note The value of Flags_heartbeat_interval_ms can be dynamically changed by O&M personnel during worker running.
-     * @return int64_t - the latest heartbeat interval
+     * @brief Derive the ETCD keep-alive interval from the configured node timeout.
+     * @return The keep-alive interval in milliseconds.
      */
     int64_t GetLeaseRenewIntervalMs();
 

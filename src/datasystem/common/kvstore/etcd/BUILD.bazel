@@ -67,6 +67,7 @@ ds_cc_library(
     deps = [
         ":etcd_constants",
         ":grpc_session",
+        "//src/datasystem/cluster:coordination_timing",
         "//src/datasystem/common/util:event_subscribers",
         "//src/datasystem/common/util:file_util",
         "//src/datasystem/common/util:locks",

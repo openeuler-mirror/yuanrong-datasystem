@@ -287,6 +287,7 @@ ds_cc_test(
     tags = ["manual"],
     deps = KV_COMMON_DEPS + [
         "//src/datasystem/client/object_cache/transport:client_transport",
+        "//src/datasystem/cluster:coordination_timing",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/util:hash_algorithm",

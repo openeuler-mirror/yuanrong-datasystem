@@ -104,7 +104,6 @@ DS_DECLARE_bool(enable_reconciliation);
 DS_DECLARE_string(coordinator_address);
 DS_DEFINE_string(master_address, "", "Address of ds master and the value cannot be empty.");
 DS_DEFINE_bool(enable_distributed_master, true, "Whether to support distributed master, default is true.");
-DS_DECLARE_bool(auto_del_dead_node);
 DS_DEFINE_bool(enable_p2p_transfer, false, "Heterogeneous object transfer protocol Enables p2ptransfer");
 #ifdef WITH_TESTS
 DS_DEFINE_uint64(shared_memory_size_mb, 64,

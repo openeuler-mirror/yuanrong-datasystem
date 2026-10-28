@@ -408,7 +408,6 @@ global:
 | global.metadata.rocksdbBackgroundThreads | int | `16` | RocksDB的后台线程数，用于元数据的刷盘和压缩 |
 | global.metadata.rocksdbMaxOpenFile | int | `128` | RocksDB可使用的最大打开文件个数 |
 | global.metadata.rocksdbWriteMode | string | `async` | 配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为`async`。可选值包括：'none'（不写）、'sync'（同步）、'async'（异步） |
-| global.metadata.enableDataReplication | bool | `true` | 实验性参数。是否允许跨 worker 读取到的数据在本 worker 缓存为本地热副本，并向 master 注册副本位置；关闭后 remote get 获取的数据通常仅服务当前请求，不作为普通本地副本保留。该参数仅用于热副本性能优化，不作为数据可靠性机制，不保障数据可靠性或可用性 |
 
 
 ### 可靠性相关配置
@@ -417,17 +416,20 @@ global:
 |-----|------|---------|-------------|
 | global.reliability.clientReconnectWaitS | int | `10` | 客户端断链重连最大等待时间（单位为秒） |
 | global.reliability.clientDeadTimeoutS | int | `120` | 客户端存活检测最大时间间隔（单位为秒） |
-| global.reliability.heartbeatIntervalMs | int | `1000` | 服务端与ETCD的心跳间隔时间（单位为毫秒） |
-| global.reliability.nodeTimeoutS | int | `60` | 服务端节点超时最大时间间隔（单位为秒） |
+| global.reliability.nodeTimeoutS | int | `60` | 服务端节点超时（秒），并决定 ETCD 心跳间隔 |
 | global.reliability.nodeDeadTimeoutS | int | `300` | 服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点，该值必须大于 `nodeTimeoutS` |
 | global.reliability.enableReconciliation | bool | `true` | 当节点重启时是否启用对账功能 |
 | global.reliability.livenessProbeTimeoutS | int | `150` | Kubernetes 存活探针超时时间配置（以秒为单位） |
 | global.reliability.startupProbeTimeoutS | int | `390` | Kubernetes 启动探针超时（秒） |
-| global.reliability.autoDelDeadNode | bool | `true` | 是否启用死亡节点自动清理功能，当该值为 `true` 时，会将死亡节点剔除出集群管理，并触发被动缩容 |
 | global.reliability.enableDistributedMaster | bool | `true` | 是否启用分布式主节点，默认值为true |
 | global.reliability.enableStreamDataVerification | bool | `false` | 是否验证生产者数据乱序，默认值为false |
 
 `startupProbeTimeoutS` 默认值由 60 秒重启对账、300 秒死亡节点判定和 30 秒初始化余量组成。
+
+服务端与 ETCD 的心跳间隔按 `clamp(nodeTimeoutS * 1000 / 3, 100, 5000)`（毫秒）自动计算。
+新建集群的哈希环固定为每个 Worker 分配 32 个 token；已有集群继续使用 topology 中
+持久化的 token 数。
+死亡节点写保护、隔离和被动缩容始终启用，不再提供关闭开关。
 
 ### 优雅退出相关配置
 
@@ -452,7 +454,6 @@ global:
 | global.performance.memoryAlignment | int | `64` | Worker中jemalloc分配内存使用的字节对齐大小，取值必须为不超过4096的2次幂。Worker会在注册响应中返回该值，异构Client按连接缓存并用于多Blob组合对象的数据区对齐。将该值从64调整为其他值前，应先升级所有异构Client。更大的对齐可能提升性能，但也会因碎片化而增加内存占用。 |
 | global.performance.asyncDelete | bool | `false` | 是否异步删除对象，如果设置为 `true` 时，删除对象数据是个异步的过程，客户端不需要等待所有数据副本删除完成即可返回 |
 | global.performance.enableP2pTransfer | bool | `false` | 是否开启异构对象传输协议支持点对点传输 |
-| global.performance.enableWorkerWorkerBatchGet | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |
 | global.performance.enableUrma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输，开启后worker启动时会自动预热URMA worker-worker连接 |
 | global.performance.urmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
 | global.performance.urmaFailoverSuccessRateRatio | double | `0.5` | 客户端 URMA 数据面成功率阈值，用于触发 worker failover 评估。取值范围 `[0.0, 1.0]`，设为 `0.0` 时禁用 URMA failover。仅在 `global.performance.enableUrma=true` 时生效 |
@@ -463,10 +464,6 @@ global:
 | global.performance.enableRdma | bool | `false` | 是否为OC工作节点之间的数据传输启用RDMA |
 | global.performance.rdmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，false时将每个对象分别注册为一个段 |
 | global.performance.ucxTransportLayerSelection | string | `rc_x` | UCX使用的 RDMA传输模式。默认选用 "rc_x" 以获得最佳性能；若当前环境不支持，可改用 "rc"、"ud" 或 "dc"。各模式适用场景详见[UCX传输模式说明](https://github.com/openucx/ucx/wiki/UCX-environment-parameters) |
-| global.performance.ocWorkerAggregateMergeSize | int | `2097152` | worker响应的目标批量大小，默认值为2MB |
-| global.performance.ocWorkerAggregateSingleMax | int | `65536` | 批量处理worker最大单个项目大小，默认为64KB |
-| global.performance.ocWorkerWorkerParallelMin | int | `100` | 并行工作线程批处理响应的最小数据计数，默认值为100 |
-| global.performance.ocWorkerWorkerParallelNums | int | `16` | worker并行数量，0表示无限制 |
 
 URMA 内部固定使用轮询完成模式（单次最多 16 条）、4 个 Client 传输 Arena、200 条 send lane refill 余量和
 15 的 inflight WR 差值阈值。4 MiB 及以下的写请求使用一个分片，更大的请求目标为两个均衡分片；设备单次

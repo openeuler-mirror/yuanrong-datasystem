@@ -47,10 +47,6 @@
         "value": "64",
         "description": "The memory alignment size used by jemalloc for all memory allocations (in bytes). Larger alignment can improve performance but may increase memory consumption due to fragmentation."
     },
-    "heartbeat_interval_ms": {
-        "value": "1000",
-        "description": "Time interval between worker and etcd heartbeats."
-    },
     "ipc_through_shared_memory": {
         "value": "true",
         "description": "Using shared memory to exchange data between client and worker. If this parameter is set to true, client and worker will pass control messages through Unix Domain Sockets (UDS); otherwise, they will pass control messages through TCP/IP and exchange data through TCP/IP."
@@ -299,10 +295,6 @@
         "value": "false",
         "description": "Master notify workers to delete objects asynchronously."
     },
-    "auto_del_dead_node": {
-        "value": "true",
-        "description": "Decide whether to remove the node from hash ring or not when node is dead"
-    },
     "client_dead_timeout_s": {
         "value": "120",
         "description": "Maximum time interval for the worker to determine client death, Value range: [3, UINT64_MAX)."
@@ -314,10 +306,6 @@
     "enable_thp": {
         "value": "false",
         "description": "Control this process by enabling transparent huge pages, default is disabled. Enable Transparent Huge Pages (THP) can enhance performance and reduce page table overhead, but it may also lead to increased memory usage"
-    },
-    "enable_worker_worker_batch_get": {
-        "value": "false",
-        "description": "Enable worker->worker OC batch get, default false."
     },
     "batch_get_threshold_mb": {
         "value": "100",
@@ -583,10 +571,6 @@
         "value": "false",
         "description": "Skip authentication for worker requests"
     },
-    "enable_data_replication": {
-        "value": "true",
-        "description": "Experimental parameter. Allow data read from a remote worker to be cached locally as a hot replica and registered in metadata. This is only for hot-replica performance optimization; it is not a data reliability mechanism and does not guarantee data reliability or availability."
-    },
     "enable_rdma": {
         "value": "false",
         "description": "Option to turn on rdma for OC worker to worker data transfer, default false"
@@ -602,22 +586,6 @@
     "enable_l2_cache_fallback": {
         "value": "true",
         "description": "Control whether enable fallback to L2 cache when worker failed."
-    },
-    "oc_worker_aggregate_merge_size": {
-        "value": "2097152",
-        "description": "Target batch size for worker worker responses, default is 2MB"
-    },
-    "oc_worker_aggregate_single_max": {
-        "value": "65536",
-        "description": "Max single item size for batching worker worker batch rsp, default is 64KB"
-    },
-    "oc_worker_worker_parallel_min": {
-        "value": "100",
-        "description": "Min data count for parallel worker worker batch rsp, default is 100"
-    },
-    "oc_worker_worker_parallel_nums": {
-        "value": "16",
-        "description": "worker worker batch rsp control nums, default 0 means unlimited"
     },
     "sc_encrypt_secret_key": {
         "value": "",
