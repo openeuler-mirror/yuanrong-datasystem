@@ -771,10 +771,6 @@ function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
           DESTINATION ${DATASYSTEM_WHEEL_PATH}/docker_entryfile/daemonset)
   install(DIRECTORY ${CMAKE_SOURCE_DIR}/k8s/docker/exitpoint/
           DESTINATION ${DATASYSTEM_WHEEL_PATH}/docker_entryfile/daemonset)
-  install(DIRECTORY ${CMAKE_SOURCE_DIR}/k8s_deployment/docker/entrypoint/
-          DESTINATION ${DATASYSTEM_WHEEL_PATH}/docker_entryfile/deployment)
-  install(DIRECTORY ${CMAKE_SOURCE_DIR}/k8s_deployment/docker/exitpoint/
-          DESTINATION ${DATASYSTEM_WHEEL_PATH}/docker_entryfile/deployment)
   # Copy service binaries and default service configs to package lib path
   install(PROGRAMS ${CMAKE_INSTALL_PREFIX}/datasystem/service/datasystem_worker ${CMAKE_INSTALL_PREFIX}/datasystem/service/datasystem_coordinator
           DESTINATION ${DATASYSTEM_WHEEL_PATH})

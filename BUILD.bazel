@@ -658,32 +658,6 @@ genrule(
     ]),
 )
 
-# Deployment entrypoint files
-genrule(
-    name = "dockerentry_deployment_files",
-    srcs = [
-        "k8s_deployment/docker/entrypoint/file_check.sh",
-        "k8s_deployment/docker/entrypoint/liveness_check.sh",
-        "k8s_deployment/docker/entrypoint/utils.sh",
-        "k8s_deployment/docker/entrypoint/worker_entry.sh",
-        "k8s_deployment/docker/exitpoint/uninstall.sh",
-    ],
-    outs = [
-        "yr/datasystem/docker_entryfile/deployment/file_check.sh",
-        "yr/datasystem/docker_entryfile/deployment/liveness_check.sh",
-        "yr/datasystem/docker_entryfile/deployment/utils.sh",
-        "yr/datasystem/docker_entryfile/deployment/worker_entry.sh",
-        "yr/datasystem/docker_entryfile/deployment/uninstall.sh",
-    ],
-    cmd = " && ".join([
-        "cp $(location k8s_deployment/docker/entrypoint/file_check.sh) $(@D)/yr/datasystem/docker_entryfile/deployment/",
-        "cp $(location k8s_deployment/docker/entrypoint/liveness_check.sh) $(@D)/yr/datasystem/docker_entryfile/deployment/",
-        "cp $(location k8s_deployment/docker/entrypoint/utils.sh) $(@D)/yr/datasystem/docker_entryfile/deployment/",
-        "cp $(location k8s_deployment/docker/entrypoint/worker_entry.sh) $(@D)/yr/datasystem/docker_entryfile/deployment/",
-        "cp $(location k8s_deployment/docker/exitpoint/uninstall.sh) $(@D)/yr/datasystem/docker_entryfile/deployment/",
-    ]),
-)
-
 copy_directory(
     name = "helm_chart_files",
     src = "k8s/helm_chart",
