@@ -88,38 +88,29 @@ TEST(UrmaChipInflightTest, TracksBothSourceChipCountersForEventLifetime)
     EXPECT_EQ(chip2Counter.load(std::memory_order_relaxed), 0);
 }
 
-TEST(UrmaChipInflightTest, RejectsInvalidClientTransportNumaBinding)
+TEST(UrmaChipInflightTest, SkipsClientTransportNumaBindingWhenTopologyIsEmpty)
 {
     auto &manager = UrmaManager::Instance();
-    const uint32_t oldArenaNum = FLAGS_ub_transport_arena_num;
-    const bool oldNumaAffinity = FLAGS_enable_ub_numa_affinity;
-    const bool oldRegisterWholeArena = FLAGS_urma_register_whole_arena;
-    FLAGS_ub_transport_arena_num = 2;
-    FLAGS_enable_ub_numa_affinity = true;
-    FLAGS_urma_register_whole_arena = true;
+    EXPECT_TRUE(manager.BindClientTransportMemoryToNumaNodes(nullptr, 8192, {}).IsOk());
+}
 
-    auto rc = manager.BindClientTransportMemory(nullptr, 8192);
-
-    EXPECT_TRUE(rc.IsError());
-    FLAGS_ub_transport_arena_num = oldArenaNum;
-    FLAGS_enable_ub_numa_affinity = oldNumaAffinity;
-    FLAGS_urma_register_whole_arena = oldRegisterWholeArena;
+TEST(UrmaChipInflightTest, RejectsInvalidClientTransportNumaBindingWithKnownTopology)
+{
+    auto &manager = UrmaManager::Instance();
+    EXPECT_EQ(manager.BindClientTransportMemoryToNumaNodes(nullptr, 8192, { 0 }).GetCode(), K_INVALID);
 }
 
 TEST(UrmaChipInflightTest, SkipsClientTransportNumaBindingWhenAffinityIsDisabled)
 {
     auto &manager = UrmaManager::Instance();
-    const uint32_t oldArenaNum = FLAGS_ub_transport_arena_num;
-    const bool oldNumaAffinity = FLAGS_enable_ub_numa_affinity;
+    const bool oldNumaAffinity = manager.ubNumaAffinityEnabled_;
     const bool oldRegisterWholeArena = FLAGS_urma_register_whole_arena;
-    FLAGS_ub_transport_arena_num = 4;
-    FLAGS_enable_ub_numa_affinity = false;
+    manager.ubNumaAffinityEnabled_ = false;
     FLAGS_urma_register_whole_arena = true;
 
     EXPECT_TRUE(manager.BindClientTransportMemory(nullptr, 8192).IsOk());
 
-    FLAGS_ub_transport_arena_num = oldArenaNum;
-    FLAGS_enable_ub_numa_affinity = oldNumaAffinity;
+    manager.ubNumaAffinityEnabled_ = oldNumaAffinity;
     FLAGS_urma_register_whole_arena = oldRegisterWholeArena;
 }
 
@@ -144,9 +135,9 @@ TEST(UrmaChipInflightTest, SelectsSourceChipAccordingToRoundRobinType)
     auto &manager = UrmaManager::Instance();
     const uint32_t oldUbNumaRrType = FLAGS_ub_numa_rr_type;
     const uint32_t oldSrcChipPolicy = FLAGS_ub_numa_src_chip_policy;
-    const uint32_t oldInflightDiffThreshold = FLAGS_ub_numa_inflight_wr_diff_threshold;
+    const uint32_t oldInflightDiffThreshold = manager.ubNumaInflightWrDiffThreshold_;
     FLAGS_ub_numa_src_chip_policy = static_cast<uint32_t>(UbNumaSrcChipPolicy::ROUND_ROBIN);
-    FLAGS_ub_numa_inflight_wr_diff_threshold = 15;
+    manager.ubNumaInflightWrDiffThreshold_ = UB_NUMA_INFLIGHT_WR_DIFF_THRESHOLD;
     manager.srcChipInflightWrCounts_.at(1).value.store(0, std::memory_order_relaxed);
     manager.srcChipInflightWrCounts_.at(2).value.store(0, std::memory_order_relaxed);
     manager.affinitySrcChipIdSequence_.store(0, std::memory_order_relaxed);
@@ -185,7 +176,7 @@ TEST(UrmaChipInflightTest, SelectsSourceChipAccordingToRoundRobinType)
     EXPECT_EQ(manager.affinitySrcChipIdSequence_.load(std::memory_order_relaxed), 4);
     FLAGS_ub_numa_rr_type = oldUbNumaRrType;
     FLAGS_ub_numa_src_chip_policy = oldSrcChipPolicy;
-    FLAGS_ub_numa_inflight_wr_diff_threshold = oldInflightDiffThreshold;
+    manager.ubNumaInflightWrDiffThreshold_ = oldInflightDiffThreshold;
 }
 
 TEST(UrmaChipInflightTest, OverridesRoundRobinOnlyWhenInflightDifferenceExceedsThreshold)
@@ -193,10 +184,10 @@ TEST(UrmaChipInflightTest, OverridesRoundRobinOnlyWhenInflightDifferenceExceedsT
     auto &manager = UrmaManager::Instance();
     const uint32_t oldUbNumaRrType = FLAGS_ub_numa_rr_type;
     const uint32_t oldSrcChipPolicy = FLAGS_ub_numa_src_chip_policy;
-    const uint32_t oldInflightDiffThreshold = FLAGS_ub_numa_inflight_wr_diff_threshold;
+    const uint32_t oldInflightDiffThreshold = manager.ubNumaInflightWrDiffThreshold_;
     FLAGS_ub_numa_rr_type = 2;
     FLAGS_ub_numa_src_chip_policy = static_cast<uint32_t>(UbNumaSrcChipPolicy::ROUND_ROBIN);
-    FLAGS_ub_numa_inflight_wr_diff_threshold = 15;
+    manager.ubNumaInflightWrDiffThreshold_ = UB_NUMA_INFLIGHT_WR_DIFF_THRESHOLD;
 
     // The boundary is inclusive: a difference of exactly 15 keeps the round-robin candidate.
     manager.affinitySrcChipIdSequence_.store(0, std::memory_order_relaxed);
@@ -216,7 +207,7 @@ TEST(UrmaChipInflightTest, OverridesRoundRobinOnlyWhenInflightDifferenceExceedsT
     EXPECT_EQ(manager.GetAffinitySrcChipIdForPost(2, true, true, INVALID_CHIP_ID), 1);
 
     // Zero explicitly disables feedback and preserves the round-robin result despite imbalance.
-    FLAGS_ub_numa_inflight_wr_diff_threshold = 0;
+    manager.ubNumaInflightWrDiffThreshold_ = 0;
     manager.affinitySrcChipIdSequence_.store(0, std::memory_order_relaxed);
     manager.srcChipInflightWrCounts_.at(1).value.store(100, std::memory_order_relaxed);
     manager.srcChipInflightWrCounts_.at(2).value.store(0, std::memory_order_relaxed);
@@ -226,7 +217,7 @@ TEST(UrmaChipInflightTest, OverridesRoundRobinOnlyWhenInflightDifferenceExceedsT
     manager.srcChipInflightWrCounts_.at(2).value.store(0, std::memory_order_relaxed);
     FLAGS_ub_numa_rr_type = oldUbNumaRrType;
     FLAGS_ub_numa_src_chip_policy = oldSrcChipPolicy;
-    FLAGS_ub_numa_inflight_wr_diff_threshold = oldInflightDiffThreshold;
+    manager.ubNumaInflightWrDiffThreshold_ = oldInflightDiffThreshold;
 }
 
 TEST(UrmaChipInflightTest, UsesAffinityOnlyWhenTheLogicalWriteFitsWithoutIncreasingRoundRobinDepth)
@@ -234,10 +225,10 @@ TEST(UrmaChipInflightTest, UsesAffinityOnlyWhenTheLogicalWriteFitsWithoutIncreas
     auto &manager = UrmaManager::Instance();
     const uint32_t oldUbNumaRrType = FLAGS_ub_numa_rr_type;
     const uint32_t oldSrcChipPolicy = FLAGS_ub_numa_src_chip_policy;
-    const uint32_t oldInflightDiffThreshold = FLAGS_ub_numa_inflight_wr_diff_threshold;
+    const uint32_t oldInflightDiffThreshold = manager.ubNumaInflightWrDiffThreshold_;
     FLAGS_ub_numa_rr_type = static_cast<uint32_t>(UbNumaRrType::PER_LOGICAL_WRITE);
     FLAGS_ub_numa_src_chip_policy = static_cast<uint32_t>(UbNumaSrcChipPolicy::ROUND_ROBIN_WITH_AFFINITY);
-    FLAGS_ub_numa_inflight_wr_diff_threshold = 15;
+    manager.ubNumaInflightWrDiffThreshold_ = UB_NUMA_INFLIGHT_WR_DIFF_THRESHOLD;
 
     // Equal depths keep the RR candidate instead of herding concurrent requests onto the affinity chip.
     manager.affinitySrcChipIdSequence_.store(0, std::memory_order_relaxed);
@@ -263,7 +254,7 @@ TEST(UrmaChipInflightTest, UsesAffinityOnlyWhenTheLogicalWriteFitsWithoutIncreas
     EXPECT_EQ(manager.GetAffinitySrcChipIdForPost(1, true, true, INVALID_CHIP_ID, 2), 2);
 
     // Zero disables all depth feedback, leaving pure RR selection.
-    FLAGS_ub_numa_inflight_wr_diff_threshold = 0;
+    manager.ubNumaInflightWrDiffThreshold_ = 0;
     manager.affinitySrcChipIdSequence_.store(0, std::memory_order_relaxed);
     manager.srcChipInflightWrCounts_.at(1).value.store(100, std::memory_order_relaxed);
     manager.srcChipInflightWrCounts_.at(2).value.store(0, std::memory_order_relaxed);
@@ -273,16 +264,16 @@ TEST(UrmaChipInflightTest, UsesAffinityOnlyWhenTheLogicalWriteFitsWithoutIncreas
     manager.srcChipInflightWrCounts_.at(2).value.store(0, std::memory_order_relaxed);
     FLAGS_ub_numa_rr_type = oldUbNumaRrType;
     FLAGS_ub_numa_src_chip_policy = oldSrcChipPolicy;
-    FLAGS_ub_numa_inflight_wr_diff_threshold = oldInflightDiffThreshold;
+    manager.ubNumaInflightWrDiffThreshold_ = oldInflightDiffThreshold;
 }
 
 TEST(UrmaChipInflightTest, ReusesLogicalWriteRoundRobinCandidateWhenGatherAffinityChanges)
 {
     auto &manager = UrmaManager::Instance();
     const uint32_t oldSrcChipPolicy = FLAGS_ub_numa_src_chip_policy;
-    const uint32_t oldInflightDiffThreshold = FLAGS_ub_numa_inflight_wr_diff_threshold;
+    const uint32_t oldInflightDiffThreshold = manager.ubNumaInflightWrDiffThreshold_;
     FLAGS_ub_numa_src_chip_policy = static_cast<uint32_t>(UbNumaSrcChipPolicy::ROUND_ROBIN_WITH_AFFINITY);
-    FLAGS_ub_numa_inflight_wr_diff_threshold = 15;
+    manager.ubNumaInflightWrDiffThreshold_ = UB_NUMA_INFLIGHT_WR_DIFF_THRESHOLD;
     manager.affinitySrcChipIdSequence_.store(0, std::memory_order_relaxed);
     manager.srcChipInflightWrCounts_.at(1).value.store(6, std::memory_order_relaxed);
     manager.srcChipInflightWrCounts_.at(2).value.store(3, std::memory_order_relaxed);
@@ -299,7 +290,7 @@ TEST(UrmaChipInflightTest, ReusesLogicalWriteRoundRobinCandidateWhenGatherAffini
     manager.srcChipInflightWrCounts_.at(1).value.store(0, std::memory_order_relaxed);
     manager.srcChipInflightWrCounts_.at(2).value.store(0, std::memory_order_relaxed);
     FLAGS_ub_numa_src_chip_policy = oldSrcChipPolicy;
-    FLAGS_ub_numa_inflight_wr_diff_threshold = oldInflightDiffThreshold;
+    manager.ubNumaInflightWrDiffThreshold_ = oldInflightDiffThreshold;
 }
 
 TEST(UrmaChipInflightTest, SelectsDominantGatherSourceChipByBytes)

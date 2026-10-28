@@ -41,6 +41,7 @@
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/no_destructor.h"
 #include "datasystem/common/util/raii.h"
@@ -49,11 +50,8 @@
 #include "datasystem/common/rdma/urma_dlopen_util.h"
 #include "datasystem/utils/status.h"
 
-DS_DECLARE_bool(urma_event_mode);
-DS_DECLARE_uint64(urma_max_write_size_mb);
 DS_DECLARE_uint32(urma_send_jetty_lane_pool_size);
 DS_DECLARE_uint32(urma_send_lane_count_per_peer);
-DS_DECLARE_uint32(urma_send_jetty_lane_refill_extra_size);
 
 namespace datasystem {
 constexpr int FAILURE_LOG_RATE = 100;
@@ -982,10 +980,6 @@ Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex, bool isBondi
     }
     RETURN_IF_NOT_OK(UrmaJfce::Create(context_->Raw(), jfce_));
     RETURN_IF_NOT_OK(UrmaJfc::Create(context_->Raw(), urmaDeviceAttribute_, jfc_));
-    if (FLAGS_urma_event_mode) {
-        RETURN_IF_NOT_OK(jfc_->Rearm());
-    }
-
     constexpr uint32_t threadCount = 4;
     deleteJettyThread_ = std::make_unique<ThreadPool>(0, threadCount, "RetireJfs");
     if (SupportPipelineRH2D()) {
@@ -1065,9 +1059,7 @@ bool UrmaResource::GetJettyPriorityInfoForCTP(uint8_t &priority, uint32_t &sl) c
 
 uint64_t UrmaResource::GetMaxWriteSize() const
 {
-    constexpr uint64_t mbToBytes = 1024ul * 1024ul;
-    const uint64_t maxSize = FLAGS_urma_max_write_size_mb * mbToBytes;
-    return std::min<uint64_t>(maxSize, urmaDeviceAttribute_.dev_cap.max_write_size);
+    return urmaDeviceAttribute_.dev_cap.max_write_size;
 }
 
 void UrmaResource::Clear()
@@ -1826,7 +1818,7 @@ size_t UrmaResource::GetSendJettyPoolRefillDeficit(SendJettyPool::Stats &poolSta
     }
     const auto retiringOrPendingCount = GetRetiringOrPendingJettyCount();
     const auto targetPoolSize = static_cast<size_t>(FLAGS_urma_send_jetty_lane_pool_size);
-    const auto liveLimit = targetPoolSize + static_cast<size_t>(FLAGS_urma_send_jetty_lane_refill_extra_size);
+    const auto liveLimit = targetPoolSize + static_cast<size_t>(URMA_SEND_LANE_REFILL_HEADROOM);
     const auto liveAndRetiring = poolStats.poolSize + retiringOrPendingCount;
     if (poolStats.poolSize < targetPoolSize && liveAndRetiring < liveLimit) {
         return std::min(targetPoolSize - poolStats.poolSize, liveLimit - liveAndRetiring);

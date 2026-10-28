@@ -1154,16 +1154,9 @@ TEST_F(UrmaObjectClientTest, UrmaRemoteGetSizeChangedInvalid)
     LOG(INFO) << "Test case UrmaRemoteGetSizeChangedInvalid success";
 }
 
-class UrmaObjectClientTestEventMode : public UrmaObjectClientTest {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        UrmaObjectClientTest::SetClusterSetupOptions(opts);
-        opts.workerGflagParams += " -urma_event_mode=true";
-    }
-};
+class UrmaObjectClientPollingModeTest : public UrmaObjectClientTest {};
 
-TEST_F(UrmaObjectClientTestEventMode, DISABLED_UrmaRemoteGetSmallWithError)
+TEST_F(UrmaObjectClientPollingModeTest, DISABLED_UrmaRemoteGetSmallWithError)
 {
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.CheckCompletionRecordStatus", "1*call(0, 9)"));
 
@@ -1182,7 +1175,7 @@ TEST_F(UrmaObjectClientTestEventMode, DISABLED_UrmaRemoteGetSmallWithError)
     ASSERT_EQ(memcmp(data.data(), buffers[0]->MutableData(), SHM_SIZE), 0);
 }
 
-TEST_F(UrmaObjectClientTestEventMode, DISABLED_UrmaRemoteGetSmall)
+TEST_F(UrmaObjectClientPollingModeTest, DISABLED_UrmaRemoteGetSmall)
 {
     std::shared_ptr<ObjectClient> client1;
     std::shared_ptr<ObjectClient> client2;
@@ -1209,7 +1202,7 @@ TEST_F(UrmaObjectClientTestEventMode, DISABLED_UrmaRemoteGetSmall)
     LOG(INFO) << "Test case UrmaRemoteGetSmall success";
 }
 
-TEST_F(UrmaObjectClientTestEventMode, DISABLED_UrmaRemoteGetBig)
+TEST_F(UrmaObjectClientPollingModeTest, DISABLED_UrmaRemoteGetBig)
 {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
     std::shared_ptr<ObjectClient> client1;
@@ -1982,8 +1975,7 @@ public:
     {
         UrmaObjectClientTest::SetClusterSetupOptions(opts);
         opts.workerGflagParams +=
-            " -enable_transport_fallback=false -enable_ub_numa_affinity=true "
-            "-shared_memory_distribution_policy=interleave_affinity_numa";
+            " -enable_transport_fallback=false -shared_memory_distribution_policy=interleave_affinity_numa";
         opts.numWorkers -= 1;
     }
 };
@@ -2036,51 +2028,6 @@ TEST_F(UrmaNumaAffinityTest, ClientAndWorkerUseAffinity)
         cluster_->GetInjectActionExecuteCount(WORKER, 1, "UrmaManager.UrmaWriteNumaAffinity", executeCountWorker2));
     ASSERT_GT(executeCountClient, 0);
     ASSERT_GT(executeCountWorker1 + executeCountWorker2, 0);
-}
-
-class UrmaNumaAffinityDisabledTest : public UrmaObjectClientTest {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        UrmaObjectClientTest::SetClusterSetupOptions(opts);
-        opts.workerGflagParams +=
-            " -enable_transport_fallback=false -enable_ub_numa_affinity=false "
-            "-shared_memory_distribution_policy=interleave_affinity_numa";
-        opts.numWorkers -= 1;
-    }
-};
-
-TEST_F(UrmaNumaAffinityDisabledTest, ClientAndWorkerSkipAffinity)
-{
-    FLAGS_v = 1;
-    std::shared_ptr<KVClient> client1;
-    std::shared_ptr<KVClient> client2;
-    InitTestKVClient(0, client1);
-    InitTestKVClient(1, client2);
-    DS_ASSERT_OK(inject::Set("UrmaManager.UrmaWriteNumaAffinity", "call()"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.UrmaWriteNumaAffinity", "call()"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.UrmaWriteNumaAffinity", "call()"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.Create.begin", "1*return(K_NOT_READY)"));
-
-    const std::string value(8 * 1024 * 1024, 'a');
-    DS_ASSERT_OK(SetWhenWorkerReady(*client2, "affinity-disabled-key", value));
-    std::string getValue;
-    DS_ASSERT_OK(client1->Get("affinity-disabled-key", getValue));
-    ASSERT_EQ(value, getValue);
-
-    const uint64_t executeCountClient = inject::GetExecuteCount("UrmaManager.UrmaWriteNumaAffinity");
-    uint64_t executeCountWorker1 = 0;
-    DS_ASSERT_OK(
-        cluster_->GetInjectActionExecuteCount(WORKER, 0, "UrmaManager.UrmaWriteNumaAffinity", executeCountWorker1));
-    uint64_t executeCountWorker2 = 0;
-    DS_ASSERT_OK(
-        cluster_->GetInjectActionExecuteCount(WORKER, 1, "UrmaManager.UrmaWriteNumaAffinity", executeCountWorker2));
-    uint64_t createNotReadyCount = 0;
-    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 1, "worker.Create.begin", createNotReadyCount));
-    ASSERT_EQ(executeCountClient, 0);
-    ASSERT_EQ(executeCountWorker1, 0);
-    ASSERT_EQ(executeCountWorker2, 0);
-    ASSERT_EQ(createNotReadyCount, 1);
 }
 
 class UrmaFallbackTest : public UrmaObjectClientTest {

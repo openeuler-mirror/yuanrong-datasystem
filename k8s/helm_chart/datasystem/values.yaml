@@ -315,11 +315,6 @@ global:
     rpcThreadNum: 128
     # The number of worker service for object cache.
     ocThreadNum: 64
-    # Nice value for selected IO threads. Valid range is [-20, 19].
-    # 0 skips nice adjustment and preserves the thread's inherited nice value.
-    # Only non-zero values call setpriority; negative values usually require appropriate privileges.
-    ioThreadNice: 0
-
     # brpc is the only RPC transport (ZMQ RPC deleted). brpc owns the worker TCP port
     # exclusively (the same port as worker_address, no port offset). Per-service thread
     # pools (rpcThreadNum, ocThreadNum, scThreadNum, etc.) still apply.
@@ -450,19 +445,10 @@ global:
     #   - interleave_affinity_numa: uniformly interleave pages only across NUMA nodes covered by current process CPU affinity.
     # This option only takes effect when both enableUrma=true and urmaRegisterWholeArena=true.
     sharedMemoryDistributionPolicy: "interleave_all_numa"
-    # Enable UB numa affinity optimization.
-    # This option only takes effect when both enableUrma=true and urmaRegisterWholeArena=true.
-    enableUbNumaAffinity: false
-    # Number of complete record to poll at a time, 16 is the max this device can poll.
-    urmaPollSize: 8
-    # Startup-only INFO threshold in microseconds for URMA polling-mode logs (urma_event_mode=false); must be positive.
+    # Startup-only INFO threshold in microseconds for URMA polling-mode logs; must be positive.
     urmaLogThresholdUs: 500
-    # Maximum URMA write size, unit is MB. Valid range is [1, 2048].
-    urmaMaxWriteSizeMb: 4
     # Register the whole arena as segment during init, otherwise, register each object as a segment.
     urmaRegisterWholeArena: true
-    # Uses interrupt mode to poll completion events.
-    urmaEventMode: false
     # Enable fast transport (urma/rdma) fallback to tcp transport.
     enableTransportFallback: true
     # Client-side URMA data-plane success-rate ratio threshold for worker failover. 0.0 disables URMA failover.

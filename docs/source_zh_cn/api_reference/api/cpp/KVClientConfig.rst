@@ -157,7 +157,7 @@ KVClientConfig
 
     .. cpp:function:: Builder &UrmaLogThresholdUs(uint32_t thresholdUs)
 
-       设置 URMA 轮询模式（``urma_event_mode=false``）INFO 日志耗时阈值，涵盖轮询间隔、单次轮询和休眠耗时。
+       设置 URMA 轮询模式 INFO 日志耗时阈值，涵盖轮询间隔、单次轮询和休眠耗时。
        单位微秒，默认 ``500``，范围 ``[1, 4294967295]``；``0`` 使 ``Build`` 返回 ``StatusCode::K_INVALID``。
        耗时超过阈值时触发，仍受日志级别控制，与 ``enable_urma_perf`` 独立。
 

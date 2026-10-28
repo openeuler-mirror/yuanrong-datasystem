@@ -160,7 +160,7 @@ bool IsRegisterWholeArenaEnabled()
 bool IsUbNumaAffinityEnabled()
 {
 #ifdef USE_URMA
-    return IsUrmaEnabled() && FLAGS_enable_ub_numa_affinity && IsRegisterWholeArenaEnabled();
+    return IsUrmaEnabled() && UrmaManager::Instance().IsUbNumaAffinityConfigured() && IsRegisterWholeArenaEnabled();
 #else
     return false;
 #endif

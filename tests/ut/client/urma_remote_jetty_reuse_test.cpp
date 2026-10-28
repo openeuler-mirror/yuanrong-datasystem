@@ -45,14 +45,13 @@
 
 DS_DECLARE_bool(enable_urma);
 DS_DECLARE_uint32(urma_send_jetty_lane_pool_size);
-DS_DECLARE_uint32(urma_send_jetty_lane_refill_extra_size);
-DS_DECLARE_uint64(urma_max_write_size_mb);
 
 namespace datasystem {
 namespace {
 constexpr uint32_t kPeerHandshakePort = 18081;
 constexpr uint32_t kLocalHandshakePort = 18080;
-constexpr uint64_t kPeerBufferSize = 2 * 1024 * 1024;
+constexpr uint64_t kMiB = 1024 * 1024;
+constexpr uint64_t kPeerBufferSize = 8 * kMiB;
 constexpr uint64_t kExpectedWriteChunkCount = 2;
 constexpr uint64_t kSecondWriteChunkIndex = 2;
 constexpr uint8_t kPayloadByte = 0x5A;
@@ -332,9 +331,7 @@ Status SubmitMultiChunkWrite(UrmaManager &manager, const UrmaRemoteAddrPb &remot
 void ConfigureSingleLaneEnvironmentTest()
 {
     FLAGS_enable_urma = true;
-    FLAGS_urma_max_write_size_mb = 1;
     FLAGS_urma_send_jetty_lane_pool_size = 1;
-    FLAGS_urma_send_jetty_lane_refill_extra_size = 0;
 }
 
 TEST(UrmaRemoteJettyReuseTest, RepeatedExchangeReusesSharedRecvJetty)
@@ -385,7 +382,7 @@ TEST(UrmaRemoteJettyReuseTest, MultiChunkWriteSharesAndSettlesOneRemoteSendLane)
         GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
     }
 
-    // Keep exactly one send lane. The payload below is larger than max write size, so it must create two chunks:
+    // Keep exactly one send lane. The payload exceeds the fixed balance threshold, so it must create two chunks:
     // a second acquire would exhaust the pool, while a request-scoped acquire lets both chunks use the same lane.
     ConfigureSingleLaneEnvironmentTest();
 
@@ -407,9 +404,7 @@ TEST(UrmaRemoteJettyReuseTest, MultiChunkWriteSharesAndSettlesOneRemoteSendLane)
     ASSERT_TRUE(manager.ImportRemoteJetty(peerInfo, localJettyId).IsOk());
     ASSERT_TRUE(manager.ImportRemoteInfo(peerHandshake).IsOk());
 
-    const uint64_t maxWriteSize = manager.urmaResource_->GetMaxWriteSize();
-    ASSERT_GT(maxWriteSize, 0u);
-    const uint64_t transferSize = maxWriteSize + 64;
+    const uint64_t transferSize = URMA_WRITE_BALANCE_THRESHOLD_BYTES + 64;
     ASSERT_LE(transferSize, kPeerBufferSize);
     MmapBuffer payload(kPeerBufferSize);
     ASSERT_TRUE(payload.IsValid());
