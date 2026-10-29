@@ -117,7 +117,7 @@ constexpr size_t MMAP_SWITCH_VALUE_SIZE = 1024UL * 1024UL;
 constexpr char DATASYSTEM_MEMFD_MAP_NAME[] = "memfd:datasystem";
 constexpr char MMAP_SWITCH_WORKER_GFLAGS[] =
     "-shared_memory_size_mb=25 -v=1 -log_monitor=true -max_client_num=2000 "
-    "-node_timeout_s=1 -node_dead_timeout_s=2 -heartbeat_interval_ms=500 -client_reconnect_wait_s=1 "
+    "-node_timeout_s=1 -node_dead_timeout_s=2 -client_reconnect_wait_s=1 "
     "-enable_lossless_data_exit_mode=true";
 constexpr char MMAP_SWITCH_HOST_ID_ENV_PREFIX[] = "mmap_switch_host_id_env";
 constexpr char MMAP_SWITCH_HOST_ID_VALUE_PREFIX[] = "mmap_switch_host_id";
@@ -697,8 +697,6 @@ TEST_F(KVCacheClientTest, TestFirstStubConnectFailed)
     InitTestKVClient(0, client);
     std::shared_ptr<KVClient> client1;
     InitTestKVClient(1, client1);
-    // Only the direct-port-disable inject remains for stub-connect failure.
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "RpcStubCacheMgr.EnableOcWorkerWorkerDirectPort", "return()"));
     std::string key = "key";
     std::string value = GenRandomString(1024 * 1024);
     SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
@@ -1564,8 +1562,6 @@ TEST_F(KVCacheClientQueryMetaDeadPeerTest, QueryMetaFastFailsAfterMetadataWorker
 
     const std::string key = "query-meta-peer-dead";
     DS_ASSERT_OK(writer->Set(key, "value"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.QueryMetaDataFromEtcd_failure",
-                                           "1*return(K_RUNTIME_ERROR)"));
     DS_ASSERT_OK(cluster_->KillWorker(0));
 
     std::string value;
@@ -3830,7 +3826,7 @@ public:
         // Shorten cluster and client heartbeat windows so the test can observe topology changes quickly.
         opts.workerGflagParams =
             "-shared_memory_size_mb=25 -v=1 -log_monitor=true -max_client_num=2000 "
-            "-node_timeout_s=1 -heartbeat_interval_ms=500 -node_dead_timeout_s=2 -client_reconnect_wait_s=1";
+            "-node_timeout_s=1 -node_dead_timeout_s=2 -client_reconnect_wait_s=1";
 
         std::string hostIp = "127.0.0.1";
         for (size_t i = 0; i < opts.numWorkers; i++) {

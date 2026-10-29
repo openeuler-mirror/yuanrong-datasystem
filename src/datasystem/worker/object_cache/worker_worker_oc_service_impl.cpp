@@ -55,16 +55,12 @@
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
+#include "datasystem/worker/object_cache/worker_oc_constants.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_gather_layout.h"
 #include "datasystem/worker/object_cache/worker_worker_peer_state_codec.h"
 
 DS_DECLARE_string(worker_address);
-DS_DECLARE_int32(oc_worker_worker_direct_port);
-DS_DECLARE_int32(oc_worker_worker_parallel_nums);
-DS_DECLARE_int32(oc_worker_worker_parallel_min);
-DS_DECLARE_uint64(oc_worker_aggregate_single_max);
-DS_DECLARE_uint64(oc_worker_aggregate_merge_size);
 
 namespace datasystem {
 namespace {
@@ -393,14 +389,13 @@ Status WorkerWorkerOCServiceImpl::SendGetObjectRemotePayload(
     std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetObjectRemoteRspPb, GetObjectRemoteReqPb>> serverApi,
     const GetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload)
 {
-    const bool tagPayload = FLAGS_oc_worker_worker_direct_port > 0;
     if (rsp.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED
         || rsp.data_source() == DataTransferSource::DATA_DELAY_TRANSFER
         || rsp.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED_MEMSET_META) {
-        return serverApi->SendAndTagPayload({}, tagPayload);
+        return serverApi->SendPayload({});
     }
     if (rsp.data_source() == DataTransferSource::DATA_IN_PAYLOAD) {
-        return serverApi->SendAndTagPayload(payload, tagPayload);
+        return serverApi->SendPayload(payload);
     }
     return Status::OK();
 }
@@ -461,11 +456,12 @@ Status WorkerWorkerOCServiceImpl::PrepareAggregateMemory(BatchGetObjectRemoteReq
     info.batchStartIndex.clear();
     info.batchSizes.clear();
 
-    const uint64_t batchLimitKeys = 1024;  // must same as obj_cache_shm_unit in req side.
     std::vector<object_cache::AggregateGatherSubgroup> subgroups;
     if (!object_cache::ShouldUseAggregateGather(
             req, OsXprtPipln::IsPiplnH2DRequest(req), ocClientWorkerSvc_->GetMetadataSize(),
-            FLAGS_oc_worker_aggregate_single_max, FLAGS_oc_worker_aggregate_merge_size, batchLimitKeys, subgroups)) {
+            object_cache::WORKER_BATCH_GET_AGGREGATE_OBJECT_MAX_SIZE,
+            object_cache::WORKER_BATCH_GET_AGGREGATE_GROUP_MAX_SIZE,
+            object_cache::WORKER_BATCH_GET_AGGREGATE_KEY_MAX_COUNT, subgroups)) {
         return Status::OK();
     }
     for (const auto &subgroup : subgroups) {
@@ -1201,8 +1197,7 @@ Status WorkerWorkerOCServiceImpl::ProcessBatchGetObjectRemoteRpc(
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Write(rsp), "GetObjectRemote write error");
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_SENDPAYLOAD);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendAndTagPayload(payload, FLAGS_oc_worker_worker_direct_port > 0),
-                                     "GetObjectRemote send payload error");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendPayload(payload), "GetObjectRemote send payload error");
     pointImpl.Record();
     LogBatchGetObjectRemoteFinish(config, req, payload, firstObjectKey, realRemainingTime, callerAddress, timer);
     point.Record();
@@ -1280,9 +1275,8 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteR
 
     std::vector<ParallelRes> parallelRes;
     const bool isPipelineH2DRequest = OsXprtPipln::IsPiplnH2DRequest(req);
-    const bool useParallelBatchGet = !isPipelineH2DRequest
-                                     && req.requests_size() > FLAGS_oc_worker_worker_parallel_min
-                                     && IsFastTransportEnabled();
+    const bool useParallelBatchGet = object_cache::ShouldUseParallelWorkerBatchGet(
+        req.requests_size(), isPipelineH2DRequest, IsFastTransportEnabled());
     if (useParallelBatchGet) {
         RETURN_IF_NOT_OK(ParallelBatchGetObject(req, rsp, parallelRes, batchTransportContext));
     } else {
@@ -1462,11 +1456,9 @@ Status WorkerWorkerOCServiceImpl::ParallelBatchGetObject(
     const BatchRh2dContext &batchTransportContext)
 {
     LOG(INFO) << PIPLN_LOG_PREFIX "Enter ParallelBatchGetObject: requestCount=" << req.requests_size()
-              << ", parallelNums=" << FLAGS_oc_worker_worker_parallel_nums;
+              << ", parallelNums=" << object_cache::WORKER_BATCH_GET_PARALLELISM;
     tbb::task_arena limited;
-    if (FLAGS_oc_worker_worker_parallel_nums > 0) {
-        limited.initialize(FLAGS_oc_worker_worker_parallel_nums);
-    }
+    limited.initialize(object_cache::WORKER_BATCH_GET_PARALLELISM);
 
     AggregateInfo info;
     CHECK_FAIL_RETURN_STATUS(PrepareAggregateMemory(req, info), K_RUNTIME_ERROR, "Prepare Memory failed");

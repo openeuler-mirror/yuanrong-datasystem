@@ -50,8 +50,7 @@ using QueryMetaMap = std::unordered_map<std::string, master::QueryMetaInfoPb>;
 class WorkerOcServiceGetImpl : public WorkerOcServiceCrudCommonApi,
                                public std::enable_shared_from_this<WorkerOcServiceGetImpl> {
 public:
-    WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, EtcdStore *etcdStore,
-                           std::shared_ptr<ThreadPool> memCpyThreadPool,
+    WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, std::shared_ptr<ThreadPool> memCpyThreadPool,
                            std::shared_ptr<ThreadPool> threadPool,
                            std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
                            std::shared_ptr<MigrateDataRateController> rateController,
@@ -237,13 +236,13 @@ public:
                                  int32_t timeoutMs, UbHealthSummary &summary);
 
 private:
-    using ObjectKeysQueryMetaFailed = std::tuple<std::unordered_set<std::string>, std::unordered_set<std::string>>;
     using TbbTransportStubTable = tbb::concurrent_hash_map<std::string, std::shared_ptr<WorkerRemoteWorkerTransApi>>;
 
     struct QueryMetadataFromMasterResult {
         std::vector<master::QueryMetaInfoPb> queryMetas;
         std::vector<RpcMessage> payloads;
         std::map<std::string, uint64_t> absentObjectKeysWithVersion;
+        std::unordered_map<std::string, Status> routeFailures;
     };
 
     struct BatchQueryMetaResult {
@@ -544,31 +543,35 @@ private:
      * @brief Query the metadata of the specified objects in the master.
      * @param[in] objectKeys The object key list to be published.
      * @param[in] subTimeout Request timeout for subscribe.
-     * @param[out] resulst The meta info result of objects.
-     * @param[in] queryEtcdMeta  Whether to query etcd meta.
+     * @param[out] result The meta info result of objects.
      * @return Status of the call.
      */
     Status QueryMetadataFromMaster(const std::vector<std::string> &objectKeys, uint64_t subTimeout,
-                                   QueryMetadataFromMasterResult &result, bool queryEtcdMeta = true);
+                                   QueryMetadataFromMasterResult &result);
     Status DispatchQueryMetadataGroups(std::unordered_map<HostPort, std::vector<std::string>> &objectKeysByMaster,
                                        uint64_t subTimeout, std::vector<BatchQueryMetaResult> &batchQueryResults);
     Status ProcessQueryMetadataResults(const Status &lastRc, bool traceEnabled,
                                        const std::vector<std::string> &objectKeys,
-                                       const std::unordered_set<std::string> &routeFailedObjectKeys, bool queryEtcdMeta,
                                        std::vector<BatchQueryMetaResult> &batchQueryResults,
                                        QueryMetadataFromMasterResult &result, PerfPoint &point);
     Status MergeQueryMetadataResults(std::vector<BatchQueryMetaResult> &batchQueryResults, bool traceEnabled,
                                      QueryMetadataFromMasterResult &result,
-                                     ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed,
+                                     std::unordered_set<std::string> &objectKeysNotExist,
                                      std::map<std::string, uint64_t> &deletingObjectsWithVersion);
-    Status FinalizeAbsentQueryMetadata(const std::unordered_set<std::string> &routeFailedObjectKeys,
-                                       ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed, bool queryEtcdMeta,
-                                       std::vector<master::QueryMetaInfoPb> &queryMetas,
+    Status FinalizeAbsentQueryMetadata(const std::unordered_set<std::string> &objectKeysNotExist,
                                        std::map<std::string, uint64_t> &absentObjectKeysWithVersion,
                                        const std::map<std::string, uint64_t> &deletingObjectsWithVersion);
 
-    Status QueryExistMetadataViaPureQueryMeta(const std::vector<std::string> &objectKeys,
-                                              std::vector<master::QueryMetaInfoPb> &queryMetas);
+    Status QueryExistMetadata(const std::vector<std::string> &objectKeys,
+                              std::unordered_set<std::string> &existKeys);
+    Status DispatchExistsGroups(const std::unordered_map<HostPort, std::vector<std::string>> &groups,
+                                std::vector<std::unordered_set<std::string>> &results);
+    Status QueryExistMetadataGroup(const HostPort &masterAddress, const std::vector<std::string> &objectKeys,
+                                   std::unordered_set<std::string> &existKeys);
+    Status QueryBatchExists(const std::shared_ptr<worker::WorkerMasterOCApi> &api, master::BatchExistsReqPb &req,
+                            master::BatchExistsRspPb &rsp);
+    static Status CollectBatchExistsResults(const master::BatchExistsReqPb &req, const master::BatchExistsRspPb &rsp,
+                                           std::unordered_set<std::string> &existKeys);
     Status QueryPureMetadataGroup(const HostPort &masterAddress, const std::vector<std::string> &objectKeys,
                                   std::vector<master::QueryMetaInfoPb> &queryMetas);
     Status QueryPureMetadataRedirects(const google::protobuf::RepeatedPtrField<RedirectMetaInfo> &redirects,
@@ -584,45 +587,14 @@ private:
     Status QueryMetadataFromRedirectMaster(master::QueryMetaRspPb &rsp, uint64_t subTimeout,
                                            std::vector<RpcMessage> &payloads);
 
-    /**
-     * @brief Query metadata from etcd by complete object-key hash.
-     * @param[in] objectKeys The object keys need to get from ETCD.
-     * @param[out] queryMetas The vector stored meta info.
-     * @param[out] absentObjectKeys The keys that could not be found.
-     * @return Status of the ETCD metadata query.
-     */
-    Status QueryMetaDataFromEtcd(const std::unordered_set<std::string> &objectKeys,
-                                 std::vector<master::QueryMetaInfoPb> &queryMetas,
-                                 std::vector<std::string> &absentObjectKeys);
-
-    /**
-     * @brief Mark absent Get objects as runtime errors when they still have global references.
-     * @param[in] absentObjectKeys Object keys that remained absent after metadata subscribe.
-     * @param[in] request Get request waiting for these objects.
-     * @return Status of the call.
-     */
     Status MarkReferencedAbsentObjectsFailed(const std::map<std::string, uint64_t> &absentObjectKeys,
                                              const std::shared_ptr<GetRequest> &request);
 
-    /**
-     * @brief Collect request keys whose metadata still has global references.
-     * @param[in] rsp Global-reference query response.
-     * @param[in] responseKeyToRequestKey Mapping from response keys to original request keys.
-     * @param[out] referencedRequestKeys Referenced original request keys.
-     */
     static void CollectReferencedRequestKeys(
         const QueryGlobalRefNumRspCollectionPb &rsp,
         const std::unordered_map<std::string, std::string> &responseKeyToRequestKey,
         std::unordered_set<std::string> &referencedRequestKeys);
 
-    /**
-     * @brief Query one metadata owner and its redirects for global references.
-     * @param[in] masterAddr Metadata owner address.
-     * @param[in] objectKeys Object keys routed to the owner.
-     * @param[in] responseKeyToRequestKey Mapping from response keys to original request keys.
-     * @param[out] referencedRequestKeys Referenced original request keys.
-     * @return Status of the call.
-     */
     Status QueryReferencedRequestKeys(const HostPort &masterAddr, const std::vector<std::string> &objectKeys,
                                       const std::unordered_map<std::string, std::string> &responseKeyToRequestKey,
                                       std::unordered_set<std::string> &referencedRequestKeys);
@@ -673,24 +645,6 @@ private:
                                   std::unordered_set<std::string> &failedIds, std::set<ReadKey> &needRetryIds);
 
     /**
-     * @brief Get objects from anywhere parallelly.
-     * @param[in] queryMetas QueryMeta result requested from master.
-     * @param[in] readKeys read key info, contain offset, size, objKey.
-     * @param[in] request Get request instance.
-     * @param[in] payloads Get payloads that contains object data.
-     * @param[in] lockedEntries Object lock entries.
-     * @param[out] failedIds Failed get object keys.
-     * @param[out] needRetryIds Need retry get id list.
-     * @return Status of the call.
-     */
-    Status GetObjectsFromAnywhereParallelly(const std::vector<master::QueryMetaInfoPb> &queryMetas,
-                                            const std::shared_ptr<GetRequest> &request,
-                                            std::vector<RpcMessage> &payloads,
-                                            std::map<ReadKey, LockedEntity> &lockedEntries,
-                                            std::unordered_set<std::string> &failedIds,
-                                            std::set<ReadKey> &needRetryIds);
-
-    /**
      * @brief Get objects from anywhere serially.
      * @param[in] queryMetas QueryMeta result requested from master.
      * @param[in] readKeys read key info, contain offset, size, objKey.
@@ -734,25 +688,6 @@ private:
     Status GetObjectFromAnywhereWithLock(const ReadKey &readKey, const std::shared_ptr<GetRequest> &request,
                                          std::shared_ptr<SafeObjType> &entry,
                                          const master::QueryMetaInfoPb &queryMeta, std::vector<RpcMessage> &payloads);
-
-    /**
-     * @brief Preprocess the list of objectKeys before getting them from L2 cache without meta.
-     * @param[in] objectKeys The object keys need to get without meta.
-     * @param[in] lockedEntries Object lock entries.
-     * @param[out] failedIds Failed get object keys.
-     * @return Status of the call.
-     */
-    Status GetObjectsWithoutMeta(const std::map<std::string, uint64_t> &objectKeys,
-                                 std::map<ReadKey, LockedEntity> &lockedEntries,
-                                 std::unordered_set<std::string> &failedIds);
-
-    /**
-     * @brief Try to receive locked safe object from L2 storage.
-     * @param[in] objectKV The reserved and locked safe object and its corresponding objectKey.
-     * @param[in] minVersion The min version to get from L2 storage.
-     * @return Status of the call.
-     */
-    Status GetObjectsWithoutMetaFromL2Cache(ObjectKV &objectKV, uint64_t minVersion);
 
     /**
      * @brief Get object data from remote cache (remote worker) within the lock.
@@ -1068,21 +1003,6 @@ private:
                                        const std::vector<std::string> &objKeysToQuery,
                                        datasystem::master::QueryMetaRspPb &rsp, std::vector<RpcMessage> &payloads);
 
-    /**
-     * @brief Process the object keys that fail to query metadata If meta is stored in etcd.
-     * @param[in] routeFailedObjectKeys The objects whose metadata owner cannot be resolved.
-     * @param[in] objectKeysPuzzled The objects whose metadata location can be found, but querying the metadata
-     * fails. (Excluding objects that are confirmed to have no metadata)
-     * @param[out] queryMetas The vector stored meta info.
-     * @param[out] absentObjectKeys The objects whose metadata fails to be queried.
-     */
-    Status ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
-        const std::unordered_set<std::string> &routeFailedObjectKeys,
-        std::unordered_set<std::string> &&objectKeysNotExist,
-        const std::unordered_set<std::string> &objectKeysPuzzled,
-        std::vector<master::QueryMetaInfoPb> &queryMetas,
-        std::vector<std::string> &absentObjectKeys);
-
     void HandleGetFailureHelper(std::shared_ptr<SafeObjType> &entry);
 
     void CleanupGetFailureOnLock(std::shared_ptr<SafeObjType> &entry);
@@ -1191,15 +1111,11 @@ private:
                                            std::unordered_set<std::string> &failedConfirmationOwners,
                                            bool isSpill);
 
-    // When enable_data_replication=false, BatchUpdateLocationHelper is a no-op so
-    // master metadata is never updated during NotifyRemoteGet migration. Call
-    // ReplacePrimary to switch master's primary to the target so Get requests route
-    // to the target after the source releases its data. Without this, data is lost.
+    // Spill migration transfers primary ownership instead of publishing a cache replica.
     ReplacePrimaryOutcome ReplacePrimaryForNotifyRemoteGet(const std::vector<std::string> &successIds,
                                                            const QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp);
 
-    // When enable_data_replication=false, call ReplacePrimary to switch master's primary
-    // to the target. Failed objects retain needDelete and are marked for topology cleanup protection.
+    // Failed spill ownership transfers retain needDelete and topology cleanup protection.
     void ReplacePrimaryAndPruneFailed(std::vector<std::string> &successIds, const QueryMetaMap &queryMetas,
                                       NotifyRemoteGetRspPb &rsp, std::map<ReadKey, LockedEntity> &lockedEntries,
                                       const MigratedObjectIdentities &objectIdentities, bool isSpill);
@@ -1245,7 +1161,6 @@ private:
                                  const std::string &learnedFrom) const;
     Status ProcessRemoteReadResponse(const std::string &address, const GetObjectRemoteRspPb &response,
                                      const std::string &learnedFrom) const;
-    EtcdStore *etcdStore_;  // pointer to EtcdStore in WorkerOcServer
 
     std::shared_ptr<ThreadPool> memCpyThreadPool_{ nullptr };
 
@@ -1256,8 +1171,6 @@ private:
     std::shared_ptr<ThreadPool> workerBatchRemoteGetThreadPool_{ nullptr };
 
     std::shared_ptr<ThreadPool> threadPool_{ nullptr };
-
-    std::unique_ptr<ThreadPool> remoteGetThreadPool_{ nullptr };
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 
@@ -1271,9 +1184,6 @@ private:
     std::shared_ptr<const UbHealthSummaryApplyHook> remoteUbHealthSummaryObserver_;
 
     std::unique_ptr<AsyncUpdateLocationManager> asyncUpdateLocationManager_{ nullptr };
-
-    static constexpr size_t OBJECTS_NOT_EXIST_IDX = 0;
-    static constexpr size_t OBJECTS_PUZZLED_IDX = 1;
 
     TbbTransportStubTable tarnsportApiTable_;
 };

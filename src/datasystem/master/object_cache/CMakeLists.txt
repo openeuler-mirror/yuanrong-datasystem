@@ -36,7 +36,6 @@ set(MASTER_OC_DEPEND_LIBS
         master_heartbeat_protos
         master_object_protos
         worker_object_protos
-        cluster_topology_scope
         cluster_topology
         )
 

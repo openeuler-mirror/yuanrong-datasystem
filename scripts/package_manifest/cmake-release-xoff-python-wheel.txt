@@ -58,11 +58,6 @@ yr/datasystem/docker_entryfile/daemonset/liveness_check.sh
 yr/datasystem/docker_entryfile/daemonset/uninstall.sh
 yr/datasystem/docker_entryfile/daemonset/utils.sh
 yr/datasystem/docker_entryfile/daemonset/worker_entry.sh
-yr/datasystem/docker_entryfile/deployment/file_check.sh
-yr/datasystem/docker_entryfile/deployment/liveness_check.sh
-yr/datasystem/docker_entryfile/deployment/uninstall.sh
-yr/datasystem/docker_entryfile/deployment/utils.sh
-yr/datasystem/docker_entryfile/deployment/worker_entry.sh
 yr/datasystem/ds_tensor_client.py
 yr/datasystem/dsbench_cpp
 yr/datasystem/helm_chart/datasystem/Chart.yaml

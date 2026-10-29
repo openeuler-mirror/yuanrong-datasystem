@@ -56,7 +56,6 @@ constexpr int WAIT_SLOT_RECOVERY_TIMEOUT_MS = 20000;
 constexpr uint64_t NODE_TIMEOUT_S = 1;
 constexpr uint64_t PASSIVE_NODE_DEAD_TIMEOUT_S = 3;
 constexpr uint64_t RESTART_NODE_DEAD_TIMEOUT_S = 30;
-constexpr uint64_t HEARTBEAT_INTERVAL_MS = 500;
 constexpr int S2MS = 1000;
 constexpr uint64_t LARGE_OBJECT_BYTES = 1024UL * 1024UL;
 constexpr char CLUSTER_NAME[] = "slot_e2e_cluster";
@@ -97,9 +96,9 @@ public:
         opts.waitWorkerReady = false;
         distributedDiskPath_ = testCasePath_ + "/distributed_disk";
         DS_ASSERT_OK(CreateDir(distributedDiskPath_, true));
-        const bool autoDeleteDeadNode = IsPassiveScaleDownCase();
+        const bool isPassiveScaleDownCase = IsPassiveScaleDownCase();
         const uint64_t nodeDeadTimeoutS =
-            autoDeleteDeadNode ? PASSIVE_NODE_DEAD_TIMEOUT_S : RESTART_NODE_DEAD_TIMEOUT_S;
+            isPassiveScaleDownCase ? PASSIVE_NODE_DEAD_TIMEOUT_S : RESTART_NODE_DEAD_TIMEOUT_S;
         std::stringstream ss;
         ss << "-l2_cache_type=distributed_disk "
            << "-distributed_disk_path=" << distributedDiskPath_ << " "
@@ -108,9 +107,6 @@ public:
            << "-distributed_disk_compact_interval_s=" << (IsBackgroundCompactMutationCase() ? 1 : 3600) << " "
            << "-distributed_disk_sync_interval_ms=0 "
            << "-distributed_disk_sync_batch_bytes=1 "
-           << "-enable_metadata_recovery=true "
-           << "-auto_del_dead_node=" << (autoDeleteDeadNode ? "true " : "false ")
-           << "-heartbeat_interval_ms=" << HEARTBEAT_INTERVAL_MS << " "
            << "-node_timeout_s=" << NODE_TIMEOUT_S << " "
            << "-node_dead_timeout_s=" << nodeDeadTimeoutS << " "
            << "-v=1 "
@@ -831,9 +827,6 @@ public:
            << "-distributed_disk_compact_interval_s=3600 "
            << "-distributed_disk_sync_interval_ms=0 "
            << "-distributed_disk_sync_batch_bytes=1 "
-           << "-enable_metadata_recovery=true "
-           << "-auto_del_dead_node=false "
-           << "-heartbeat_interval_ms=" << HEARTBEAT_INTERVAL_MS << " "
            << "-node_timeout_s=" << NODE_TIMEOUT_S << " "
            << "-node_dead_timeout_s=" << RESTART_NODE_DEAD_TIMEOUT_S << " "
            << "-v=1 "
@@ -1090,9 +1083,6 @@ public:
            << "-cluster_name=" << CLUSTER_NAME << " "
            << "-distributed_disk_sync_interval_ms=0 "
            << "-distributed_disk_sync_batch_bytes=1 "
-           << "-enable_metadata_recovery=true "
-           << "-auto_del_dead_node=true "
-           << "-heartbeat_interval_ms=" << HEARTBEAT_INTERVAL_MS << " "
            << "-node_timeout_s=" << NODE_TIMEOUT_S << " "
            << "-node_dead_timeout_s=" << PASSIVE_NODE_DEAD_TIMEOUT_S << " "
            << "-v=1 "
@@ -1212,8 +1202,6 @@ public:
            << "-cluster_name=" << CLUSTER_NAME << " "
            << "-distributed_disk_sync_interval_ms=0 "
            << "-distributed_disk_sync_batch_bytes=1 "
-           << "-enable_metadata_recovery=true "
-           << "-heartbeat_interval_ms=" << HEARTBEAT_INTERVAL_MS << " "
            << "-node_timeout_s=" << NODE_TIMEOUT_S << " "
            << "-node_dead_timeout_s=" << PASSIVE_NODE_DEAD_TIMEOUT_S << " "
            << "-v=1 "
@@ -1551,9 +1539,6 @@ public:
            << "-cluster_name=" << CLUSTER_NAME << " "
            << "-distributed_disk_sync_interval_ms=0 "
            << "-distributed_disk_sync_batch_bytes=1 "
-           << "-enable_metadata_recovery=true "
-           << "-auto_del_dead_node=true "
-           << "-heartbeat_interval_ms=" << HEARTBEAT_INTERVAL_MS << " "
            << "-node_timeout_s=" << NODE_TIMEOUT_S << " "
            << "-node_dead_timeout_s=" << PASSIVE_NODE_DEAD_TIMEOUT_S << " "
            << "-v=1 "

@@ -24,7 +24,7 @@
 
 - Current production-like setup:
   - `enable_urma=true`
-  - `enable_worker_worker_batch_get=true`
+  - the always-on worker-to-worker Batch Get path
   - `request_sample_rate=0.0001` (previously `log_rate_limit=100`; historical — do not use `log_rate_limit`)
 - Requirement:
   - Set/Get P99.99 latency should stay within `2 ms`.

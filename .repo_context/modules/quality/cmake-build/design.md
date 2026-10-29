@@ -255,6 +255,8 @@ coordinator_service_impl -> coordinator_election_manager -> coordinator_raft_nod
 - `DatasystemConfig.cmake`, `DatasystemConfigVersion.cmake`, and exported targets are installed under
   `datasystem/sdk/cpp/lib/cmake/Datasystem`.
 - `package_datasystem_wheel` stages from installed service and SDK paths, so install order matters for wheel content.
+- The wheel carries only DaemonSet entrypoint files under `yr/datasystem/docker_entryfile/daemonset/`; the duplicate
+  Deployment entrypoint directory is intentionally not packaged.
 - `setup.py` prunes unused shared libraries with `ldd`, explicitly retains `libdatasystem_coordinator.so`, keeps UCX
   plugin-style libraries under `lib/ucx`, and strips the worker and coordinator binaries.
 - `scripts/build_cmake.sh` strips installed ELF artifacts but skips JSON service configuration files.

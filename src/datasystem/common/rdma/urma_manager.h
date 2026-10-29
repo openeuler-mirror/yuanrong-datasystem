@@ -263,6 +263,9 @@ public:
     static void SetClientUbNumaConfig(bool affinityEnabled, uint32_t rrType, uint32_t srcChipPolicy,
                                       uint32_t inflightWrDiffThreshold, const std::string &configSource);
 
+    /** @brief Return the process-frozen UB NUMA-affinity policy. */
+    bool IsUbNumaAffinityConfigured() const;
+
     /**
      * @brief Get client id for current process; non-empty when set by SetClientUrmaConfig (client mode).
      * @return Client id string.
@@ -298,12 +301,6 @@ public:
     {
         return FLAGS_urma_register_whole_arena;
     }
-
-    /**
-     * @brief Check we should use event mode for interrupts
-     * @return True if flag is set, else false
-     */
-    static bool IsEventModeEnabled();
 
     /**
      * @brief Get EID of the device
@@ -744,12 +741,10 @@ private:
      * @param[in] maxTryCount number of times to try polling
      * @param[out] successCompletedReqs set of successful request ids
      * @param[out] failedCompletedReqs map of failed request ids to status codes
-     * @param[in] numPollCRS number of jfcs to poll
      * @return Status of the call.
      */
     Status PollJfcWait(urma_jfc_t *jfc, const uint64_t maxTryCount, std::unordered_set<uint64_t> &successCompletedReqs,
-                       std::unordered_map<uint64_t, int> &failedCompletedReqs, UrmaWriteTrace &pollTrace,
-                       const uint64_t numPollCRS = 1);
+                       std::unordered_map<uint64_t, int> &failedCompletedReqs, UrmaWriteTrace &pollTrace);
 
     /**
      * @brief Given list of CRs, fills successful req and failed req lists
@@ -953,15 +948,14 @@ private:
     /** @brief Build allocator callbacks for the client UB transport memory pool. */
     void BuildTransportRegFunc(AllocatorFuncRegister &regFunc);
 
-    /** @brief Apply the client environment override for the transport arena count. */
-    void SetClientTransportArenaConfig();
-
     /** @brief Round the client pool so every transport arena occupies whole system pages. */
     static Status NormalizeClientTransportPoolSize(uint64_t requestedSize, uint32_t arenaNum, uint64_t pageSize,
                                                    uint64_t &effectiveSize);
 
     /** @brief Bind equal transport arena ranges to NUMA nodes. */
     Status BindClientTransportMemory(void *pointer, size_t size);
+
+    Status BindClientTransportMemoryToNumaNodes(void *pointer, size_t size, const std::vector<int> &nodeIds);
 
     Status InitLocalUrmaInfo(const HostPort &hostport);
     Status RemoveRemoteResources(const std::string &connectionKey);
@@ -1062,8 +1056,10 @@ private:
     WaitPost waitInit_;
     std::string clientId_;
     static std::atomic<bool> clientMode_;
-    // The singleton freezes the process-global UB NUMA policy on its first worker response.
+    // Client registration freezes these values before URMA runtime publication and request traffic.
     std::once_flag clientUbNumaConfigOnce_;
+    bool ubNumaAffinityEnabled_ = true;
+    uint32_t ubNumaInflightWrDiffThreshold_ = UB_NUMA_INFLIGHT_WR_DIFF_THRESHOLD;
     void *memoryBuffer_ = nullptr;
     // Arena creation is serialized by ArenaManager; this index is used only during pool initialization.
     uint32_t clientTransportSegmentIndex_ = 0;

@@ -418,6 +418,8 @@ ds_cc_test(
     deps = OC_CLIENT_COMMON_DEPS + [
         "//src/datasystem/common/immutable_string:immutable_string",
         "//src/datasystem/common/object_cache:common_object_cache",
+        "//src/datasystem/common/rdma:fast_transport_base_header",
         "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/worker/object_cache:worker_oc_constants",
     ],
 )

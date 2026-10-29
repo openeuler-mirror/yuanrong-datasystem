@@ -36,6 +36,7 @@
 #include "datasystem/client/object_cache/transport/rpc/worker_rpc_client.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/cluster/coordination_timing.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/util/hash_algorithm.h"
@@ -424,10 +425,9 @@ public:
     {
         CoordinatorActiveFailureStopResumeTest::SetClusterSetupOptions(opts);
         opts.numWorkers = MULTI_KILL_WORKER_COUNT;
-        opts.numRpcThreads = 32;
         opts.workerGflagParams =
             " -shared_memory_size_mb=512 -ipc_through_shared_memory=false -arena_per_tenant=1"
-            " -heartbeat_interval_ms=750 -node_timeout_s="
+            " -node_timeout_s="
             + std::to_string(ONLINE_NODE_TIMEOUT_S)
             + " -node_dead_timeout_s=" + std::to_string(ONLINE_NODE_DEAD_TIMEOUT_S);
 #ifdef USE_URMA
@@ -963,7 +963,9 @@ void CoordinatorActiveFailureMultiKillBase::RunMultiKillScenario(size_t targetCo
                  << " configured_reporter_worker_count=" << MULTI_KILL_REPORTER_INDICES.size()
                  << " target_count=" << targetCount << " node_timeout_s=" << ONLINE_NODE_TIMEOUT_S
                  << " node_dead_timeout_s=" << ONLINE_NODE_DEAD_TIMEOUT_S
-                 << " heartbeat_interval_ms=750 kill_gap_ms=" << killGapMs
+                 << " membership_keepalive_interval_ms="
+                 << GetMembershipKeepAliveIntervalMs(ONLINE_NODE_TIMEOUT_S)
+                 << " kill_gap_ms=" << killGapMs
                  << " last_failure_after_last_kill_ms=" << lastTrafficFailureMs - lastKillIssuedMs;
     for (size_t targetIndex = 0; targetIndex < targetCount; ++targetIndex) {
         const auto issuedMs = killIssuedMs[targetIndex].load(std::memory_order_acquire);

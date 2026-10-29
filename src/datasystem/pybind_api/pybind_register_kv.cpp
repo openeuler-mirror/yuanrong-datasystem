@@ -479,8 +479,8 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                         continue;
                     }
                     // Use the SDK-internal helper so the copy still works when the buffer was
-                    // returned with oc_metadata_header disabled (DisabledLock → no latch
-                    // needed); other latch errors still surface as None.
+                    // returned from a shm layout without a metadata header (DisabledLock → no
+                    // latch needed); other latch errors still surface as None.
                     std::string tmpData;
                     Buffer *buf = &(*buffer);
                     Status status = buf->CopyDataWithRLatch([&tmpData, buf] {

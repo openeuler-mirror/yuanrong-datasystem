@@ -19,7 +19,6 @@
 #include "datasystem/cluster/control/topology_task_materializer.h"
 #include "datasystem/cluster/coordination_backend/ds_coordination_backend.h"
 #include "datasystem/cluster/executor/key_filter.h"
-#include "datasystem/cluster/executor/storage_scan_plan_access.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/cluster/runtime/coordination_event_dispatcher.h"
 #include "datasystem/cluster/runtime/topology_reader.h"
@@ -35,6 +34,7 @@ namespace {
 constexpr auto TEST_WAIT = std::chrono::seconds(1);
 constexpr auto RETRY_TICK_ADVANCE = std::chrono::seconds(2);
 constexpr int32_t TEST_AUTHORITY_READ_TIMEOUT_MS = 100;
+constexpr uint32_t TEST_TOKENS_PER_MEMBER = 4;
 constexpr size_t MAX_CALLBACK_THREADS = 16;
 constexpr size_t MAX_CALLBACK_QUEUE_CAPACITY = 1'024;
 constexpr uint32_t SIBLING_SCALE_IN_RANGE_FROM = 60;
@@ -43,7 +43,7 @@ constexpr uint32_t SIBLING_SCALE_IN_RANGE_END = 70;
 std::vector<uint32_t> MakeExecutorTokens(const std::string &address)
 {
     std::vector<uint32_t> tokens;
-    for (uint32_t index = 0; index < 4; ++index) {
+    for (uint32_t index = 0; index < TEST_TOKENS_PER_MEMBER; ++index) {
         tokens.emplace_back(HashAlgorithm::MakeToken(address, index, 0));
     }
     return tokens;
@@ -74,9 +74,6 @@ public:
         ++scaleOutCalls;
         EXPECT_FALSE(context.businessOperationId.empty());
         EXPECT_FALSE(context.keyFilter.DebugString().empty());
-        std::vector<StorageScanSegment> segments;
-        EXPECT_TRUE(StorageScanPlanAccess::GetSegments(context.storageScanPlan, segments).IsOk());
-        EXPECT_FALSE(segments.empty());
         {
             std::lock_guard<std::mutex> lock(mutex);
             scaleOutEntered = true;
@@ -205,6 +202,7 @@ struct ExecutorScenario {
     {
         current.version = 1;
         current.clusterHasInit = true;
+        current.tokensPerMember = TEST_TOKENS_PER_MEMBER;
         TopologyPlanBuilder builder(algorithm);
         if (type == TopologyChangeType::SCALE_OUT) {
             current.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE,

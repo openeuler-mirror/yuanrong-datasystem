@@ -28,8 +28,6 @@
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/control/topology_plan_builder.h"
-#include "datasystem/common/flags/common_flags.h"
-#include "datasystem/common/util/raii.h"
 #include "datasystem/protos/cluster_topology.pb.h"
 #include "ut/common.h"
 
@@ -65,35 +63,27 @@ std::string BuildCapacityAddress(size_t index)
     return "127.0.0.1:" + std::to_string(FIRST_TEST_PORT + index);
 }
 
-void BuildLargeTopology(std::string &encoded)
+void BuildLargeTopology(uint32_t tokensPerMember, std::string &encoded)
 {
-    TopologyState latest;
-    latest.version = 1;
-    latest.members.reserve(LARGE_TOPOLOGY_MEMBER_COUNT);
     std::vector<MemberIdentity> members;
     members.reserve(LARGE_TOPOLOGY_MEMBER_COUNT);
     for (size_t index = 0; index < LARGE_TOPOLOGY_MEMBER_COUNT; ++index) {
         std::string id(16, '\0');
         std::copy_n(reinterpret_cast<const char *>(&index), sizeof(index), id.begin());
         members.emplace_back(MemberIdentity{ std::move(id), BuildCapacityAddress(index) });
-        latest.members.emplace_back(Member{ members.back(), MemberState::INITIAL, {} });
     }
 
     HashAlgorithm algorithm;
-    TopologyPlanBuilder builder(algorithm);
-    TopologyState topology;
-    DS_ASSERT_OK(builder.BuildBootstrap(latest, members, topology));
-    DS_ASSERT_OK(TopologyRepositoryCodec::EncodeTopology(topology, encoded));
+    TopologyPlan plan;
+    DS_ASSERT_OK(algorithm.BuildInitialPlacement({ TopologyState{}, members, tokensPerMember }, plan));
+    plan.next.version = 2;
+    DS_ASSERT_OK(TopologyRepositoryCodec::EncodeTopology(plan.next, encoded));
 }
 
 void ExpectLargeTopologyEncodedSize(uint32_t tokensPerMember, size_t expectedBytes)
 {
-    const auto savedTokensPerMember = FLAGS_hash_ring_tokens_per_member;
-    Raii restore([savedTokensPerMember] { FLAGS_hash_ring_tokens_per_member = savedTokensPerMember; });
-    FLAGS_hash_ring_tokens_per_member = tokensPerMember;
-
     std::string encoded;
-    BuildLargeTopology(encoded);
+    BuildLargeTopology(tokensPerMember, encoded);
     TopologyState decoded;
     DS_ASSERT_OK(TopologyRepositoryCodec::DecodeTopology(encoded, decoded));
     EXPECT_EQ(decoded.members.size(), LARGE_TOPOLOGY_MEMBER_COUNT);
@@ -105,9 +95,6 @@ void ExpectLargeTopologyEncodedSize(uint32_t tokensPerMember, size_t expectedByt
 
 TEST(TopologyRepositoryCodecTest, TopologyRoundTripIsCanonical)
 {
-    const auto savedTokensPerMember = FLAGS_hash_ring_tokens_per_member;
-    Raii restore([savedTokensPerMember] { FLAGS_hash_ring_tokens_per_member = savedTokensPerMember; });
-    FLAGS_hash_ring_tokens_per_member = 4;
     HashAlgorithm algorithm;
     ScaleOutPlanInput placementInput;
     placementInput.joining = { { std::string(16, 'b'), "127.0.0.1:2" },
@@ -142,12 +129,10 @@ INSTANTIATE_TEST_SUITE_P(TokensPerMember, LargeTopologyCodecTest, ::testing::Val
 
 TEST(TopologyRepositoryCodecTest, PersistsOnlyNonDefaultTokenSeeds)
 {
-    const auto savedTokensPerMember = FLAGS_hash_ring_tokens_per_member;
-    Raii restore([savedTokensPerMember] { FLAGS_hash_ring_tokens_per_member = savedTokensPerMember; });
-    FLAGS_hash_ring_tokens_per_member = 4;
+    constexpr uint32_t tokensPerMember = 4;
     const std::string address = "127.0.0.1:1";
     Member member{ { std::string(16, 'a'), address }, MemberState::ACTIVE, {} };
-    for (uint32_t index = 0; index < FLAGS_hash_ring_tokens_per_member; ++index) {
+    for (uint32_t index = 0; index < tokensPerMember; ++index) {
         const auto seed = index == 2 ? 1 : 0;
         member.tokens.emplace_back(HashAlgorithm::MakeToken(address, index, seed));
     }
@@ -155,6 +140,7 @@ TEST(TopologyRepositoryCodecTest, PersistsOnlyNonDefaultTokenSeeds)
     TopologyState input;
     input.clusterHasInit = true;
     input.version = 1;
+    input.tokensPerMember = tokensPerMember;
     input.members.emplace_back(member);
     std::string encoded;
     DS_ASSERT_OK(TopologyRepositoryCodec::EncodeTopology(input, encoded));
@@ -165,14 +151,14 @@ TEST(TopologyRepositoryCodecTest, PersistsOnlyNonDefaultTokenSeeds)
     ASSERT_EQ(memberPb.token_seed_overrides_size(), 1);
     EXPECT_EQ(memberPb.token_seed_overrides(0).token_index(), 2);
     EXPECT_EQ(memberPb.token_seed_overrides(0).token_seed(), 1);
-    EXPECT_EQ(pb.tokens_per_member(), FLAGS_hash_ring_tokens_per_member);
+    EXPECT_EQ(pb.tokens_per_member(), tokensPerMember);
 
     TopologyState decoded;
     DS_ASSERT_OK(TopologyRepositoryCodec::DecodeTopology(encoded, decoded));
     ASSERT_EQ(decoded.members.size(), 1);
     EXPECT_EQ(decoded.members.front().tokens, member.tokens);
     EXPECT_EQ(decoded.members.front().tokenSeedOverrides, member.tokenSeedOverrides);
-    for (uint32_t index = 0; index < FLAGS_hash_ring_tokens_per_member; ++index) {
+    for (uint32_t index = 0; index < tokensPerMember; ++index) {
         const auto seed = index == 2 ? 1 : 0;
         EXPECT_EQ(decoded.members.front().tokens[index], HashAlgorithm::MakeToken(address, index, seed));
     }
@@ -180,9 +166,6 @@ TEST(TopologyRepositoryCodecTest, PersistsOnlyNonDefaultTokenSeeds)
 
 TEST(TopologyRepositoryCodecTest, DecodesTokenCountFromTopology)
 {
-    const auto savedTokensPerMember = FLAGS_hash_ring_tokens_per_member;
-    Raii restore([savedTokensPerMember] { FLAGS_hash_ring_tokens_per_member = savedTokensPerMember; });
-    FLAGS_hash_ring_tokens_per_member = 4;
     ::datasystem::ClusterTopologyPb pb;
     pb.set_cluster_has_init(true);
     pb.set_version(1);
@@ -203,9 +186,6 @@ TEST(TopologyRepositoryCodecTest, DecodesTokenCountFromTopology)
 
 TEST(TopologyRepositoryCodecTest, RejectsTokenVectorThatDoesNotMatchStoredSeedOverrides)
 {
-    const auto savedTokensPerMember = FLAGS_hash_ring_tokens_per_member;
-    Raii restore([savedTokensPerMember] { FLAGS_hash_ring_tokens_per_member = savedTokensPerMember; });
-    FLAGS_hash_ring_tokens_per_member = 1;
     const std::string address = "127.0.0.1:1";
     TopologyState topology;
     topology.clusterHasInit = true;
@@ -218,9 +198,6 @@ TEST(TopologyRepositoryCodecTest, RejectsTokenVectorThatDoesNotMatchStoredSeedOv
 
 TEST(TopologyRepositoryCodecTest, PreservesCollisionSeedAcrossCanonicalMemberReordering)
 {
-    const auto savedTokensPerMember = FLAGS_hash_ring_tokens_per_member;
-    Raii restore([savedTokensPerMember] { FLAGS_hash_ring_tokens_per_member = savedTokensPerMember; });
-    FLAGS_hash_ring_tokens_per_member = 1;
     const std::string existingAddress = "10.2.116.157:20925";
     const std::string joiningAddress = "10.1.181.156:22028";
     ASSERT_EQ(HashAlgorithm::MakeToken(existingAddress, 0, 0), HashAlgorithm::MakeToken(joiningAddress, 0, 0));

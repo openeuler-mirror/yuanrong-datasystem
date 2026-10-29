@@ -25,6 +25,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/cluster/coordination_timing.h"
 #include "datasystem/common/util/format.h"
 
 DS_DEFINE_bool(enable_etcd_auth, false, "Enable etcd certification auth");
@@ -33,9 +34,6 @@ DS_DEFINE_string(etcd_target_name_override, "",
                  "The configuration value should be consistent with the DNS content of the Subject Alternate Names of "
                  "the TLS certificate.");
 DS_DECLARE_uint32(node_timeout_s);
-DS_DEFINE_int32_dynamic(heartbeat_interval_ms, 1000,
-                "The time interval of each heartbeat between worker and master. Timeout must larger than 0.");
-DS_DEFINE_validator(heartbeat_interval_ms, &Validator::ValidateInt32);
 DS_DEFINE_string(etcd_ca, "", "The path of encrypted root etcd certificate, default is none.");
 DS_DEFINE_string(etcd_cert, "", "The path of encrypted client's etcd certificate chain, default is none.");
 DS_DEFINE_string(etcd_key, "", "The path of encrypted client's etcd private key, default is none.");
@@ -317,6 +315,6 @@ int64_t EtcdKeepAlive::GetLeaseExpiredMs()
 int64_t EtcdKeepAlive::GetLeaseRenewIntervalMs()
 {
     INJECT_POINT("GetLeaseRenewIntervalMs", [](int64_t time) { return time; });
-    return static_cast<int64_t>(FLAGS_heartbeat_interval_ms);
+    return GetMembershipKeepAliveIntervalMs(FLAGS_node_timeout_s);
 }
 }  // namespace datasystem

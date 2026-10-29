@@ -43,7 +43,6 @@ public:
         opts.numWorkers = workerNum;
         opts.workerGflagParams = " -page_size=" + std::to_string(BIG_PAGE_SIZE)
                                  + " -shared_memory_size_mb=" + std::to_string(SMALL_SHM_SIZE_MB);
-        opts.numRpcThreads = 0;
         opts.vLogLevel = 2;
         SCClientCommon::SetClusterSetupOptions(opts);
     }

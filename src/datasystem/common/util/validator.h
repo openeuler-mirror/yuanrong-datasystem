@@ -581,7 +581,7 @@ public:
         if (value >= 0 && value <= THREAD_POOL_SIZE_LIMIT) {
             return true;
         }
-        LOG(ERROR) << FormatString("The value of %s flag is %d, which must be in (0, %d].", threadNum, value,
+        LOG(ERROR) << FormatString("The value of %s flag is %d, which must be in [0, %d].", threadNum, value,
                                    THREAD_POOL_SIZE_LIMIT);
         return false;
     }

@@ -49,7 +49,9 @@ constexpr uint32_t LEAVING_WORKER_INDEX = 1;
 constexpr int32_t CONTROL_RPC_TIMEOUT_MS = 3'000;
 constexpr int64_t EXIT_GATE_TIMEOUT_MS = 10'000;
 constexpr int64_t ROUTING_CONVERGENCE_TIMEOUT_MS = 15'000;
-constexpr uint64_t VALUE_SIZE = 1'024;
+// Keep payloads at or above the fixed 128 KiB shm transfer threshold so this
+// scenario keeps exercising the shm data path.
+constexpr uint64_t VALUE_SIZE = 128 * 1024;
 constexpr size_t KEY_SEARCH_LIMIT = 100'000;
 constexpr char CREATE_INJECT[] = "worker.Create.begin";
 constexpr char PUBLISH_INJECT[] = "worker.PublishObjectWithLock.begin";
@@ -66,7 +68,7 @@ public:
         opts.numWorkers = WORKER_COUNT;
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
-            " -shared_memory_size_mb=512 -ipc_through_shared_memory=true -oc_shm_transfer_threshold_kb=1"
+            " -shared_memory_size_mb=512 -ipc_through_shared_memory=true"
             " -arena_per_tenant=1"
             " -enable_urma=false -enable_leaving_intercept=true"
             " -enable_lossless_data_exit_mode=true -host_id_env_name=" + std::string(HOST_ID_ENV_NAME);

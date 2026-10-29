@@ -438,6 +438,7 @@ TEST_F(SimpleRouterClientTest, ReturnsOrderedTopologyCandidatesAndBinaryIdResolu
     cluster::TopologyState topology;
     topology.version = 1;
     topology.clusterHasInit = true;
+    topology.tokensPerMember = TOKENS_PER_MEMBER;
     topology.members = {
         cluster::Member{ { std::string(16, 'a'), "127.0.0.1:3001" }, cluster::MemberState::ACTIVE,
                          BuildMemberTokens("127.0.0.1:3001") },

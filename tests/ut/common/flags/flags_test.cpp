@@ -943,6 +943,17 @@ TEST_F(FlagsTest, TestGetAllFlags)
     ASSERT_GE(modCount, 2);
 }
 
+TEST_F(FlagsTest, RemovedMembershipFlagsAreNotRegistered)
+{
+    std::vector<FlagInfo> flags;
+    GetAllFlags(flags);
+    for (const auto &flag : flags) {
+        EXPECT_NE(flag.name, "hash_ring_tokens_per_member");
+        EXPECT_NE(flag.name, "heartbeat_interval_ms");
+        EXPECT_NE(flag.name, "auto_del_dead_node");
+    }
+}
+
 TEST_F(FlagsTest, ParseBoolFromStringUsesGflagRules)
 {
     ASSERT_TRUE(ParseBoolFromString("true", false));
@@ -1204,11 +1215,6 @@ TEST_F(FlagsTest, TestDoubleFlagAcceptsScientificNotation)
     FLAGS_double_flag = 1.0;
 }
 
-TEST_F(FlagsTest, UbTransportArenaNumDefaultsToFour)
-{
-    EXPECT_EQ(FLAGS_ub_transport_arena_num, 4u);
-}
-
 TEST_F(FlagsTest, UrmaSendLaneCountPerPeerMustBePositive)
 {
     const uint32_t oldLaneCount = FLAGS_urma_send_lane_count_per_peer;
@@ -1223,17 +1229,42 @@ TEST_F(FlagsTest, UrmaSendLaneCountPerPeerMustBePositive)
     FLAGS_urma_send_lane_count_per_peer = oldLaneCount;
 }
 
-TEST_F(FlagsTest, UbTransportArenaNumAccepts32AndRejects33)
+TEST_F(FlagsTest, ConvergedUrmaPolicyFlagsAreNotRegistered)
 {
-    const uint32_t oldArenaNum = FLAGS_ub_transport_arena_num;
+    const std::vector<std::string> removedFlags = {
+        "io_thread_nice",
+        "urma_poll_size",
+        "urma_event_mode",
+        "urma_max_write_size_mb",
+        "ub_transport_arena_num",
+        "enable_ub_numa_affinity",
+        "ub_numa_inflight_wr_diff_threshold",
+        "urma_send_jetty_lane_refill_extra_size",
+    };
+    for (const auto &flag : removedFlags) {
+        std::string errMsg;
+        EXPECT_FALSE(SetCommandLineOption(flag.c_str(), "1", errMsg)) << flag;
+    }
+}
+
+TEST_F(FlagsTest, UrmaPerformanceIntervalDefaultsToTenMinutes)
+{
+    constexpr uint32_t kTenMinutesMs = 600'000;
+    EXPECT_EQ(FLAGS_urma_perf_interval_ms, kTenMinutesMs);
+}
+
+TEST_F(FlagsTest, UrmaPerformanceIntervalRemainsConfigurableAndPositive)
+{
+    constexpr uint32_t kExplicitIntervalMs = 1'000;
+    const uint32_t oldIntervalMs = FLAGS_urma_perf_interval_ms;
     std::string errMsg;
 
-    ASSERT_TRUE(SetCommandLineOption("ub_transport_arena_num", "32", errMsg));
-    EXPECT_EQ(FLAGS_ub_transport_arena_num, 32u);
-    ASSERT_FALSE(SetCommandLineOption("ub_transport_arena_num", "33", errMsg));
-    EXPECT_EQ(FLAGS_ub_transport_arena_num, 32u);
+    ASSERT_TRUE(SetCommandLineOption("urma_perf_interval_ms", "1000", errMsg));
+    EXPECT_EQ(FLAGS_urma_perf_interval_ms, kExplicitIntervalMs);
+    ASSERT_FALSE(SetCommandLineOption("urma_perf_interval_ms", "0", errMsg));
+    EXPECT_EQ(FLAGS_urma_perf_interval_ms, kExplicitIntervalMs);
 
-    FLAGS_ub_transport_arena_num = oldArenaNum;
+    FLAGS_urma_perf_interval_ms = oldIntervalMs;
 }
 
 TEST_F(FlagsTest, UbNumaSourceChipPolicyDefaultsToRoundRobinWithAffinityAndRejectsUnknownValue)

@@ -27,6 +27,7 @@ namespace {
 constexpr uint32_t DEFAULT_SCALE_IN_COLLECT_WINDOW_MS = 1'000;
 constexpr uint32_t DEFAULT_URMA_SEND_LANE_COUNT_PER_PEER = 8;
 constexpr uint32_t DEFAULT_URMA_LOG_THRESHOLD_US = 500;
+constexpr uint32_t DEFAULT_URMA_PERF_INTERVAL_MS = 600'000;
 std::atomic<uint32_t> g_urmaLogThresholdUs{ DEFAULT_URMA_LOG_THRESHOLD_US };
 }  // namespace
 
@@ -75,40 +76,26 @@ DS_DEFINE_int32(log_monitor_interval_ms, 10000,
 DS_DEFINE_bool(rdma_register_whole_arena, true,
                "Register the whole arena as segment during init, otherwise, register each object as a segment.");
 DS_DEFINE_bool(enable_rdma, false, "Option to turn on rdma for OC worker to worker data transfer, default false.");
-DS_DEFINE_uint32(urma_poll_size, 8, "Number of complete record to poll at a time, 16 is the max this device can poll");
 DS_DEFINE_uint32(urma_log_threshold_us, DEFAULT_URMA_LOG_THRESHOLD_US,
-                 "URMA polling-mode INFO log threshold in microseconds (urma_event_mode=false). "
+                 "URMA polling-mode INFO log threshold in microseconds. "
                  "Valid range [1, UINT32_MAX]. Default 500; restart required.");
-DS_DEFINE_uint64(urma_max_write_size_mb, 4, "Maximum URMA write size, unit is MB. Valid range is [1, 2048].");
 DS_DEFINE_uint32(urma_send_jetty_lane_pool_size, 200,
                  "Process-level target number of reusable URMA send Jetty lanes. Each lane is leased by one logical "
                  "transfer and may carry multiple chunk WRs until that transfer settles.");
 DS_DEFINE_uint32(urma_send_lane_count_per_peer, DEFAULT_URMA_SEND_LANE_COUNT_PER_PEER,
                  "Maximum number of concurrent URMA send lanes occupied by one remote peer. The effective limit is "
                  "capped by urma_send_jetty_lane_pool_size.");
-DS_DEFINE_uint32(urma_send_jetty_lane_refill_extra_size, 200,
-                 "Maximum number of retiring or pending URMA send Jetty lanes allowed above the active pool size.");
 DS_DEFINE_bool(urma_register_whole_arena, true,
                "Register the whole arena as segment during init, otherwise, register each object as a segment.");
-DS_DEFINE_uint32(ub_transport_arena_num, 4,
-                 "Number of arenas for UB transport memory pool. Each arena owns an equal share of the pool. "
-                 "The default is 4.");
-DS_DEFINE_bool(enable_ub_numa_affinity, false,
-               "Enable UB numa affinity optimization when URMA and whole-arena registration are both enabled.");
 DS_DEFINE_uint32(ub_numa_rr_type, 1,
                  "UB NUMA source-chip selection granularity: 0=disabled, 1=one chip per logical write, "
                  "2=one chip per post.");
 DS_DEFINE_uint32(ub_numa_src_chip_policy, 1,
                  "UB NUMA source-chip policy: 0=round-robin, 1=round-robin with opportunistic memory affinity.");
-DS_DEFINE_uint32(ub_numa_inflight_wr_diff_threshold, 15,
-                 "Maximum allowed difference between source-chip inflight WR counts before selecting the less busy "
-                 "chip. Set to 0 to disable inflight feedback and preserve pure round-robin selection.");
-DS_DEFINE_string(shared_memory_distribution_policy, "none",
+DS_DEFINE_string(shared_memory_distribution_policy, "interleave_all_numa",
                  "Shared memory NUMA distribution policy. Optional values: "
                  "'none', 'interleave_all_numa', 'interleave_affinity_numa'.");
-DS_DEFINE_bool(urma_event_mode, false, "Uses interrupt mode to poll completion events.");
 DS_DEFINE_bool(enable_urma_perf, false, "Enable performance logging for URMA operations");
-DS_DEFINE_bool(enable_worker_worker_batch_get, false, "Enable worker->worker OC batch get, default false.");
 DS_DEFINE_bool(enable_remote_h2d, false, "Option to turn on Remote H2D, default false.");
 DS_DEFINE_string(remote_h2d_link_type, "ROCE", "Link type for Remote H2D: ROCE or HCCS.");
 DS_DEFINE_string(remote_h2d_hccs_buffer_pool, "0:0",
@@ -200,8 +187,8 @@ DS_DEFINE_validator(data_migrate_rate_limit_mb, [](const char *flagName, uint32_
     (void)flagName;
     return value > 0;
 });
-DS_DEFINE_uint32(urma_perf_interval_ms, 10000,
-                 "URMA performance sampling interval in milliseconds. Default is 10000 ms.");
+DS_DEFINE_uint32(urma_perf_interval_ms, DEFAULT_URMA_PERF_INTERVAL_MS,
+                 "URMA performance sampling interval in milliseconds. Default is 600000 ms.");
 DS_DEFINE_validator(urma_perf_interval_ms, [](const char *flagName, uint32_t value) {
     (void)flagName;
     return value > 0;
@@ -217,22 +204,14 @@ DS_DEFINE_uint32_dynamic(urma_orphan_sweep_batch, 100,
                          "Maximum number of orphan URMA client connections removed per sweep.");
 DS_DEFINE_validator(urma_orphan_sweep_batch, [](const char *, uint32_t value) { return value > 0; });
 DS_DEFINE_uint32_dynamic(node_dead_timeout_s, 300, "maximum time interval for the master to determine node death");
-DS_DEFINE_uint32(hash_ring_tokens_per_member, 32,
-                 "Token count allocated to each Worker for new hash-ring bootstrap and scale-out plans. "
-                 "Valid range is 1-4096. This startup-only setting must be identical on every topology planner "
-                 "process in a cluster.");
 DS_DEFINE_uint32(scale_in_collect_window_ms, DEFAULT_SCALE_IN_COLLECT_WINDOW_MS,
                  "ordinary SCALE_IN batch coalescing window in milliseconds. When non-zero, the first PRE_LEAVING "
                  "candidate opens a short collect window so members exiting within it land in the same epoch; "
                  "0 disables coalescing (legacy immediate-batch behavior). Hard upper bound 5000ms.");
 DS_DEFINE_bool_dynamic(log_monitor, true, "Indicates whether to enable log monitoring, default is true.");
-DS_DEFINE_bool_dynamic(auto_del_dead_node, true, "Remove dead node from hash ring when enabled.");
 DS_DEFINE_bool(enable_huge_tlb, false,
                "enable_huge_tlb can improve memory access and reducing the overhead of page table,"
                "default is disable.");
-DS_DEFINE_bool(enable_data_replication, true,
-               "Allow data replica cache locally; mainly for performance validation, keep enabled unless needed.");
-
 DS_DEFINE_bool(enable_memory_rebalance, false,
     "Enable master-scheduled memory rebalance across workers. The master periodically schedules tasks to migrate "
     "primary object replicas from high-usage workers to under-utilized workers.");
@@ -276,19 +255,12 @@ DS_DEFINE_bool(rebalance_keep_local_copy, false,
                "primary. Orthogonal to rebalance_strategy (works with both memory and heat). Default false for "
                "rolling-upgrade compatibility; enable only after every target understands REBALANCE_KEEP_LOCAL.");
 DS_DEFINE_uint32(node_timeout_s, 60, "maximum time interval before a node is considered lost");
-DS_DEFINE_int32(io_thread_nice, 0,
-                "Nice value for selected IO threads. Valid range is [-20, 19]. 0 skips nice adjustment and preserves "
-                "the thread's inherited nice value. Only non-zero values call setpriority; negative values usually "
-                "require appropriate privileges.");
 DS_DEFINE_bool(enable_sched_runtime, true,
                "Enable selected threads to set the Linux scheduler runtime. Default is true.");
 DS_DEFINE_string(etcd_address, "", "Address of ETCD server");
 DS_DEFINE_string(coordinator_address, "",
                  "Address of datasystem coordinator service. Empty means coordinator mode is disabled.");
 DS_DEFINE_string(kv_events_config, "", "KV event publisher JSON config. Empty means disabled.");
-DS_DEFINE_int32(oc_worker_worker_direct_port, 0,
-                "Direct tcp/ip port for WorkerWorkerOCService. 0 -- disable this direction connection."
-                "Valid range is [0, 65535].");
 DS_DEFINE_int32(sc_worker_worker_direct_port, 0,
                 "Direct tcp/ip port for WorkerWorkerSCService. 0 -- disable this direction connection."
                 "Valid range is [0, 65535].");
@@ -315,9 +287,6 @@ DS_DEFINE_bool(brpc_enable_builtin_services, false,
                "Default false to keep a tight security surface (no HTTP endpoint); the /flags and "
                "/pprof endpoints allow gflag mutation and memory dumps. Set true only for debugging "
                "on a trusted network.");
-DS_DEFINE_string(brpc_connection_type, GetStringFromEnv("DATASYSTEM_BRPC_CONNECTION_TYPE", "pooled"),
-                 "brpc channel connection type: \"pooled\" (default) or \"single\". SINGLE is not "
-                 "recommended for high-QPS paths (single-socket write-lock contention).");
 DS_DEFINE_int32(brpc_max_connection_pool_size, GetInt32FromEnv("DATASYSTEM_BRPC_MAX_CONNECTION_POOL_SIZE", 8),
                 "Max idle pooled connections per remote endpoint (brpc default 100). Applied on both "
                 "server and client sides. Lower values reduce connection count but may cause "
@@ -326,11 +295,6 @@ DS_DEFINE_int32(brpc_event_dispatcher_num, GetInt32FromEnv("DATASYSTEM_BRPC_EVEN
                 "Override brpc event_dispatcher_num before global initialization. 0 keeps the brpc default (1). "
                 "Set a positive value to shard socket I/O events by fd across dispatchers. A single listening fd "
                 "is not parallelized.");
-DS_DEFINE_bool(brpc_drop_expired_request, true,
-               "Server-side interceptor: reject brpc requests whose client deadline already elapsed "
-               "while queued, before the handler runs. The client receives ERPCTIMEDOUT -> "
-               "K_RPC_DEADLINE_EXCEEDED and stops (budget gone). Default true (safe, no false "
-               "positives - only drops requests the client has certainly timed out on).");
 DS_DEFINE_bool(brpc_enable_circuit_breaker, false,
                "Enable brpc circuit breaker on client->worker channels. Default false (off); set true to "
                "let brpc auto-isolate peers with high error rates (EMA window: 1500 samples / 10% short, "

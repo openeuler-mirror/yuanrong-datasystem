@@ -39,21 +39,11 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/thread.h"
-#include "datasystem/cluster/executor/key_filter.h"
-#include "datasystem/cluster/executor/storage_scan_plan.h"
 #include "datasystem/master/object_cache/store/meta_async_queue.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
-enum ObjectMetaStoreEventType : uint32_t {
-    GET_HASH_RANGE_NON_BLOCK,
-};
-
-using GetHashRangeNonBlockEvent =
-    EventSubscribers<GET_HASH_RANGE_NON_BLOCK,
-                     std::function<void(std::vector<std::pair<uint32_t, uint32_t>> &)>>;
-
 namespace master {
 static const std::string HEALTH_STATUS = "ready";
 // Mark whether the reference counting metadata stored in rocksdb is in or out of the cloud.
@@ -101,8 +91,6 @@ void FillNotifyWorkerOpDetailPb(const NotifyWorkerOp &op, ObjectAsyncOpDetailPb 
 class ObjectMetaStore {
 public:
     enum WriteType : uint8_t { ROCKS_ONLY = 0, ROCKS_ASYNC_ETCD = 1, ROCKS_SYNC_ETCD = 2 };
-    enum class TopologyScanTable : uint8_t { OBJECT_META = 0, GLOBAL_CACHE_DELETE, ASYNC_WORKER_OP };
-
     /**
      * @brief Construct ObjectMetaStore.
      */
@@ -215,40 +203,6 @@ public:
      * @return Status of the call
      */
     Status GetAllFromRocks(const std::string &table, std::vector<std::pair<std::string, std::string>> &outMetas);
-
-    /**
-     * @brief Get pairs from ETCD table and write to rocksdb table.
-     * @param[in] tablePrefix ETCD table prefix.
-     * @param[in] rocksTable Need write rocksdb table.
-     * @param[out] outMetas KV paris.
-     * @return Status of the call
-     */
-    Status GetFromEtcd(const std::string &tablePrefix, const std::string &rocksTable,
-                       std::vector<std::pair<std::string, std::string>> &outMetas);
-
-    /**
-     * @brief Scan object metadata candidates for one opaque topology task scope.
-     * @param[in] plan Opaque candidate scan plan derived from the task scope.
-     * @param[in] filter Final correctness predicate applied to every candidate key.
-     * @param[in] visitor Effect-free consumer invoked only for matching object keys.
-     * @return K_OK on a complete scan; storage, visitor or unsupported-plan error otherwise.
-     */
-    Status ScanTopologyScope(
-        const cluster::StorageScanPlan &plan, const cluster::IKeyFilter &filter,
-        const std::function<Status(const std::string &, const std::string &)> &visitor);
-
-    /**
-     * @brief Scan one approved metadata table for an opaque topology task scope.
-     * @param[in] plan Opaque candidate scan plan derived from the task scope.
-     * @param[in] filter Final logical object-key predicate for every candidate.
-     * @param[in] table Approved metadata table whose keys have a known logical-key encoding.
-     * @param[in] visitor Consumer invoked only after logical-key filtering.
-     * @return K_OK on a complete scan or when no shared ETCD metadata backend is enabled; storage, decoding or visitor
-     *         error otherwise. A disabled backend is an empty recovery set and does not fall back to local RocksDB.
-     */
-    Status ScanTopologyScope(
-        const cluster::StorageScanPlan &plan, const cluster::IKeyFilter &filter, TopologyScanTable table,
-        const std::function<Status(const std::string &, const std::string &)> &visitor);
 
     /**
      * @brief Add nested object relationship to nested object table.
@@ -601,19 +555,6 @@ private:
     Status EtcdAsyncAddable() const;
 
     /**
-     * @brief Get pairs from ETCD table and write to rocksdb table.
-     * @param[in] tablePrefix ETCD table prefix.
-     * @param[in] rocksTable Need write rocksdb table.
-     * @param[in] suffix ETCD table suffix.
-     * @param[in] range The range to be obtained.
-     * @param[out] metas KV paris.
-     * @return Status of the call
-     */
-    Status GetRangeFromEtcd(const std::string &tablePrefix, const std::string &rocksTable, const std::string &suffix,
-                            const std::pair<uint32_t, uint32_t> &range,
-                            std::vector<std::pair<std::string, std::string>> &metas);
-
-    /**
      * @brief Sender thread responsible for sending meta to Etcd asynchronously.
      * @param[in] threadNum The thread ID.
      * @param[in] queue Queue corresponding to sender, it save asynchronous task.
@@ -639,10 +580,7 @@ private:
     // The backend rocksdb storage.
     RocksStore *rocksStore_;
 
-    // In scenarios where etcd is more reliable than rocksdb, we need this parameter,
-    // the meaning of the parameter is as follows:
-    // If etcd is used to store metadata, in some scenarios where rocksdb may not be trusted,
-    // we can set this variable to false, and the metadata will be restored from etcd.
+    // Whether the local RocksDB state is healthy enough for startup recovery.
     std::atomic<bool> isRocksdbRunning_{ true };
 
     // The backend etcd storage.
@@ -673,7 +611,7 @@ private:
     // Timer for warn log.
     Timer timer_;
 
-    // Should data read and write from the L2CacheDaemon depend on metadata.
+    // Whether object-cache metadata writes to ETCD are enabled for this backend.
     bool enableEtcdMetaStore_{ true };
 };
 }  // namespace master

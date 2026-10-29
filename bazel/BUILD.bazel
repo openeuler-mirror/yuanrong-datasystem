@@ -195,7 +195,6 @@ py_wheel(
         "//:libdatasystem_worker_shared_file",
         "//:libdatasystem_coordinator_shared_file",
         "//:dockerentry_daemonset_files",
-        "//:dockerentry_deployment_files",
         "//:dsbench_file",
         "//:helm_chart_files",
         "//:hixl_plugin_file",

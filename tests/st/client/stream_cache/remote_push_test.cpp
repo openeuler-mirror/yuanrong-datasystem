@@ -75,7 +75,6 @@ void RemotePushTest::SetClusterSetupOptions(ExternalClusterOptions &opts)
     opts.numWorkers = 3;
     opts.numEtcd = 1;
     opts.workerGflagParams = "-shared_memory_size_mb=10000";
-    opts.numRpcThreads = 0;
     opts.vLogLevel = 2;
     SCClientCommon::SetClusterSetupOptions(opts);
 }
@@ -238,7 +237,6 @@ public:
         opts.numEtcd = 1;
         opts.workerGflagParams = "-shared_memory_size_mb=10000";
         opts.enableDistributedMaster = "true";
-        opts.numRpcThreads = 0;
         opts.vLogLevel = 0;
         SCClientCommon::SetClusterSetupOptions(opts);
     }

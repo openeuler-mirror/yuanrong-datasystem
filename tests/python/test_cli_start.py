@@ -144,7 +144,7 @@ class CliStartTest(unittest.TestCase):
         return {
             "worker_address": "127.0.0.1:31501",
             "coordinator_address": "127.0.0.1:31511",
-            "ready_check_path": "/tmp/worker.ready",
+            "health_check_path": "/tmp/worker.ready",
             "rocksdb_store_dir": "/tmp/rocksdb",
         }
 
@@ -493,7 +493,7 @@ class CliStartTest(unittest.TestCase):
         self.assertIn("rocksdb_store_dir=/tmp/rocksdb", message)
         self.assertIn("after 2 startup retries", message)
 
-    def test_start_worker_succeeds_after_store_lock_retry_when_ready_file_appears(self):
+    def test_start_worker_succeeds_after_store_lock_retry_when_worker_probe_file_appears(self):
         command = self.make_start_command()
         params = self.worker_params()
 

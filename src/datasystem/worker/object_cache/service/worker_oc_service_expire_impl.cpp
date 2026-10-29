@@ -19,7 +19,6 @@
 #include <cstdint>
 #include <utility>
 
-
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -77,6 +76,7 @@ WorkerOcServiceExpireImpl::WorkerOcServiceExpireImpl(WorkerOcServiceCrudParam &i
 
 Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
 {
+    constexpr size_t batchExpireMaxThreadNum = 16;
     ScopedRequestContext ctx;
     Timer timer;
     int64_t realTimeoutMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
@@ -100,7 +100,7 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
     const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout();
     std::unique_ptr<ThreadPool> batchExpireThreadPool;
     if (useThreadPoolFanout) {
-        size_t threadNum = std::min<size_t>(objKeysGrpByMaster.size(), FLAGS_rpc_thread_num);
+        size_t threadNum = std::min(objKeysGrpByMaster.size(), batchExpireMaxThreadNum);
         batchExpireThreadPool = std::make_unique<ThreadPool>(1, threadNum, "BatchExpireMeta");
     }
     futures.reserve(objKeysGrpByMaster.size());

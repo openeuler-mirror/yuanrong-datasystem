@@ -216,12 +216,12 @@ TEST_F(OperationLoggerTest, MasksSensitiveFlagsInConfigInit)
 TEST_F(OperationLoggerTest, WritesConfigFailedLine)
 {
     ASSERT_TRUE(InitOperationLogger("worker"));
-    OperationLogger::Instance().LogConfigFailed("rpc_thread_num", "not modifiable");
+    OperationLogger::Instance().LogConfigFailed("node_timeout_s", "not modifiable");
     ShutdownAndDrainOperationLogger();
 
     const std::string path = logDir_ + "/test_worker_operation.log";
     const std::string content = ReadFile(path);
-    EXPECT_THAT(content, testing::HasSubstr("CONFIG_FAILED: flag 'rpc_thread_num' not modifiable"));
+    EXPECT_THAT(content, testing::HasSubstr("CONFIG_FAILED: flag 'node_timeout_s' not modifiable"));
 }
 
 TEST_F(OperationLoggerTest, RotatedOperationLogFilesMatchLogManagerGlob)

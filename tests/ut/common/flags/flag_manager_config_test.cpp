@@ -182,7 +182,6 @@ TEST_F(FlagManagerConfigTest, DefaultConfigTemplatesDisableLogCompression)
 {
     ExpectJsonConfigValue("cli/deploy/conf/worker_config.json", "log_compress", "false");
     ExpectJsonConfigValue("cli/deploy/conf/coordinator_config.json", "log_compress", "false");
-    ExpectJsonConfigValue("k8s_deployment/helm_chart/worker.config", "log_compress", "false");
     const std::regex logCompressFalseLine(R"((^|\n)\s*logCompress:\s*false\s*($|\n))");
     ExpectLineMatches("k8s/helm_chart/datasystem/values.yaml", logCompressFalseLine);
 }

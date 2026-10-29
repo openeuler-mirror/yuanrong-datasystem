@@ -43,13 +43,13 @@
 
 #include "datasystem/common/rdma/fast_transport_base.h"
 
-DS_DEFINE_bool(enable_fallocate, true,
+DS_DEFINE_bool(enable_fallocate, false,
                "Due to Kubernetes' (k8s) resource calculation policies, "
                "shared memory is sometimes counted twice,"
                "which can lead to client crashes.To address this issue, "
                "fallocate is employed to link the client and worker nodes for shared memory,"
-               "Enabling fallocate will lower the efficiency of memory allocation"
-               "By default, fallocate is enabled.");
+               "Enabling fallocate will lower the efficiency of memory allocation. "
+               "Kubernetes deployments should enable it explicitly; by default, fallocate is disabled.");
 DS_DEFINE_bool(
     enable_thp, false,
     "Control this process by enabling transparent huge pages, default is disabled. Enable Transparent Huge Pages (THP) "

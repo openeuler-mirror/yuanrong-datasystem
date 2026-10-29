@@ -84,9 +84,8 @@ public:
         opts.workerGflagParams =
             " -shared_memory_size_mb=5120"
             " -arena_per_tenant=1 -enable_urma=true -ipc_through_shared_memory=false"
-            " -enable_transport_fallback=false -enable_ub_numa_affinity=true"
-            " -ub_numa_rr_type=1 -ub_numa_inflight_wr_diff_threshold=15 -ub_numa_src_chip_policy="
-            + std::to_string(sourceChipPolicy_) + " -enable_worker_worker_batch_get=true";
+            " -enable_transport_fallback=false -ub_numa_rr_type=1 -ub_numa_src_chip_policy="
+            + std::to_string(sourceChipPolicy_);
     }
 
     void SetUp() override
@@ -102,7 +101,6 @@ public:
         ASSERT_EQ(setenv("URMA_MOCK_QUEUE_CAP", "1024", 1), 0);
         ASSERT_EQ(setenv("URMA_MOCK_CHIP_1_LATENCY_US", "100", 1), 0);
         ASSERT_EQ(setenv("URMA_MOCK_CHIP_2_LATENCY_US", "0", 1), 0);
-        ASSERT_EQ(setenv("DATASYSTEM_UB_TRANSPORT_ARENA_NUM", "2", 1), 0);
         ExternalClusterTest::SetUp();
 #endif
     }
@@ -128,7 +126,6 @@ public:
         (void)unsetenv("URMA_MOCK_QUEUE_CAP");
         (void)unsetenv("URMA_MOCK_CHIP_1_LATENCY_US");
         (void)unsetenv("URMA_MOCK_CHIP_2_LATENCY_US");
-        (void)unsetenv("DATASYSTEM_UB_TRANSPORT_ARENA_NUM");
 #endif
     }
 
@@ -206,7 +203,7 @@ void LEVEL1_UrmaNumaInflightBalanceTest::RunMultiClientOneWriteTenConcurrentRead
     std::vector<std::unique_ptr<ThreadPool>> clientPools;
     clientPools.reserve(CLIENT_COUNT);
     for (size_t i = 0; i < CLIENT_COUNT; ++i) {
-        // A successful Init is also the end-to-end check that the two-arena client transport pool was created.
+        // A successful Init is also the end-to-end check that the fixed client transport arenas were created.
         ConnectOptions options;
         InitConnectOpt(i % WORKER_COUNT, options, 60000, true);
         options.fastTransportMemSize = CLIENT_TRANSPORT_MEMORY_SIZE;

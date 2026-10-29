@@ -39,9 +39,6 @@
 #include "securec.h"
 
 #include "ut/common.h"
-#define private public
-#include "datasystem/common/kvstore/etcd/etcd_store.h"
-#undef private
 #include "eviction_manager_common.h"
 #include "../../../common/binmock/binmock.h"
 #include "cluster/test_port_allocator.h"
@@ -80,9 +77,7 @@ DS_DECLARE_string(eviction_strategy);
 DS_DECLARE_double(eviction_heat_initial_counter);
 DS_DECLARE_uint32(eviction_heat_max_counter);
 DS_DECLARE_int64(batch_get_threshold_mb);
-DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 DS_DECLARE_bool(enable_l2_cache_fallback);
-DS_DECLARE_string(l2_cache_type);
 
 using namespace ::testing;
 using namespace datasystem::object_cache;
@@ -221,6 +216,7 @@ public:
         }
         return Status(K_RUNTIME_ERROR, "unsupported test master API: PureQueryMeta");
     }
+    RETURN_UNSUPPORTED_MASTER_API(BatchExists, master::BatchExistsReqPb &, master::BatchExistsRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(CheckObjectDataLocation, master::CheckObjectDataLocationReqPb &,
                                   master::CheckObjectDataLocationRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(RollbackMultiMeta, master::RollbackMultiMetaReqPb &,
@@ -1412,7 +1408,7 @@ public:
             .metadataRpcFailureReported = {} };
         rateController_ =
             std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
-        impl_ = std::make_shared<WorkerOcServiceGetImpl>(param, nullptr, nullptr, nullptr, nullptr,
+        impl_ = std::make_shared<WorkerOcServiceGetImpl>(param, nullptr, nullptr, nullptr,
                                                          HostPort("127.0.0.1:18888"), rateController_);
         TimerQueue::GetInstance()->Initialize();
     }
@@ -1540,13 +1536,10 @@ protected:
     std::shared_ptr<MigrateDataRateController> rateController_;
 };
 
-TEST_F(NotifyRemoteGetMigrationTest, ProcessObjectsNotExistInLocalPreservesRpcErrorWithoutGetRequest)
+TEST_F(NotifyRemoteGetMigrationTest, ProcessObjectsNotExistInLocalFailsClosedWhenMetadataOwnerIsDead)
 {
-    const bool oldNeedMetadata = FLAGS_oc_io_from_l2cache_need_metadata;
-    Raii restoreFlag([oldNeedMetadata]() { FLAGS_oc_io_from_l2cache_need_metadata = oldNeedMetadata; });
-    FLAGS_oc_io_from_l2cache_need_metadata = false;
-
     const std::string objectKey = "peer-dead-without-get-request";
+    BINEXPECT_CALL(&WorkerOcServiceGetImpl::GetObjectFromPersistenceAndDumpWithoutCopyMeta, (_, _, _, _)).Times(0);
     RouteObjectToMaster(objectKey, leavingWorkerAddress_);
     auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(leavingWorkerAddress_, localAddress_);
     api->queryMeta_ = [](master::QueryMetaReqPb &, uint64_t, master::QueryMetaRspPb &,
@@ -1567,14 +1560,37 @@ TEST_F(NotifyRemoteGetMigrationTest, ProcessObjectsNotExistInLocalPreservesRpcEr
     EXPECT_EQ(objectTable_->Contains(objectKey).GetCode(), K_NOT_FOUND);
 }
 
+TEST_F(NotifyRemoteGetMigrationTest, MetadataAbsentDoesNotReadRawL2Payload)
+{
+    const std::string objectKey = "metadata-absent";
+    RouteObjectToMaster(objectKey, localAddress_);
+    auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(localAddress_, localAddress_);
+    api->queryMeta_ = [&objectKey](master::QueryMetaReqPb &, uint64_t, master::QueryMetaRspPb &rsp,
+                                  std::vector<RpcMessage> &) {
+        rsp.add_not_exist_ids(objectKey);
+        rsp.add_deleting_versions(0);
+        return Status::OK();
+    };
+    workerMasterApiManager_->SetDefaultApi(api);
+    BINEXPECT_CALL(&WorkerOcServiceGetImpl::GetObjectFromPersistenceAndDumpWithoutCopyMeta, (_, _, _, _)).Times(0);
+
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(1'000);
+    std::unordered_set<std::string> failedIds;
+    std::set<ReadKey> needRetryIds;
+    std::unordered_map<std::string, uint64_t> failedKeyVersions;
+    auto rc = impl_->ProcessObjectsNotExistInLocal({ ReadKey(objectKey) }, 0, failedIds, needRetryIds,
+                                                   failedKeyVersions);
+
+    EXPECT_TRUE(rc.IsOk()) << rc.ToString();
+    EXPECT_THAT(failedIds, Contains(objectKey));
+    EXPECT_TRUE(needRetryIds.empty());
+}
+
 TEST_F(NotifyRemoteGetMigrationTest, OrdinaryRemoteGetDefersMetadataCleanupAndPreservesQueryVersion)
 {
     constexpr uint64_t queryMetaVersion = 41;
     constexpr uint64_t latestQueryMetaVersion = 42;
-    const bool oldNeedMetadata = FLAGS_oc_io_from_l2cache_need_metadata;
-    Raii restoreFlag([oldNeedMetadata]() { FLAGS_oc_io_from_l2cache_need_metadata = oldNeedMetadata; });
-    FLAGS_oc_io_from_l2cache_need_metadata = false;
-
     const std::string objectKey = "ordinary-remote-get-failure";
     RemoteGetCleanupState state;
     InstallRemoteGetFailureApi(objectKey, queryMetaVersion, latestQueryMetaVersion, state);
@@ -1786,6 +1802,25 @@ TEST_F(NotifyRemoteGetMigrationTest, GetObjectFromAnywhereAllowsNullRequestWithR
     EXPECT_TRUE(rc.IsError());
     EXPECT_EQ(objectTable_->Contains(objectKey).GetCode(), K_NOT_FOUND);
 }
+
+TEST_F(NotifyRemoteGetMigrationTest, ProcessObjectsNotExistInLocalFailsClosedWhenMetadataRouteIsUnavailable)
+{
+    const std::string objectKey = "route-failed-without-get-request";
+    BINEXPECT_CALL(&WorkerOcServiceGetImpl::GetObjectFromPersistenceAndDumpWithoutCopyMeta, (_, _, _, _)).Times(0);
+
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(1'000);
+    std::unordered_set<std::string> failedIds;
+    std::set<ReadKey> needRetryIds;
+    std::unordered_map<std::string, uint64_t> failedKeyVersions;
+    auto rc = impl_->ProcessObjectsNotExistInLocal({ ReadKey(objectKey) }, 0, failedIds, needRetryIds,
+                                                   failedKeyVersions);
+
+    EXPECT_EQ(rc.GetCode(), K_NOT_FOUND);
+    EXPECT_THAT(failedIds, Contains(objectKey));
+    EXPECT_TRUE(needRetryIds.empty());
+    EXPECT_EQ(objectTable_->Contains(objectKey).GetCode(), K_NOT_FOUND);
+}
 #endif
 
 TEST_F(NotifyRemoteGetMigrationTest, DispatchQueryMetadataGroupsKeepsPeerDeadOverOtherErrors)
@@ -1853,17 +1888,8 @@ TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataKeepsPeerDeadWhenAnotherOwnerR
     EXPECT_EQ(run().GetCode(), K_RPC_PEER_DEAD);
 }
 
-TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataRecoversPeerDeadFromEtcd)
+TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataDoesNotMakePeerDeadOwnerAnAbsentCandidate)
 {
-    const bool oldNeedMetadata = FLAGS_oc_io_from_l2cache_need_metadata;
-    const std::string oldL2CacheType = FLAGS_l2_cache_type;
-    Raii restoreFlags([oldNeedMetadata, oldL2CacheType]() {
-        FLAGS_oc_io_from_l2cache_need_metadata = oldNeedMetadata;
-        FLAGS_l2_cache_type = oldL2CacheType;
-    });
-    FLAGS_oc_io_from_l2cache_need_metadata = true;
-    FLAGS_l2_cache_type = "sfs";
-
     const std::string objectKey = "peer-dead-with-etcd-metadata";
     RouteObjectToMaster(objectKey, leavingWorkerAddress_);
     auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(leavingWorkerAddress_, localAddress_);
@@ -1871,49 +1897,23 @@ TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataRecoversPeerDeadFromEtcd)
                          std::vector<RpcMessage> &) { return Status(K_RPC_PEER_DEAD, "metadata owner is dead"); };
     workerMasterApiManager_->SetDefaultApi(api);
 
-    auto queryMeta = MakeQueryMeta();
-    queryMeta.mutable_meta()->set_object_key(objectKey);
-    queryMeta.mutable_meta()->set_primary_address(leavingWorkerAddress_.ToString());
-    queryMeta.mutable_meta()->mutable_config()->set_write_mode(
-        static_cast<uint32_t>(WriteMode::WRITE_THROUGH_L2_CACHE));
-    std::string serializedMeta;
-    ASSERT_TRUE(queryMeta.meta().SerializeToString(&serializedMeta));
-
-    EtcdStore etcdStore("unused");
-    impl_->etcdStore_ = &etcdStore;
-    etcdStore.keepAliveTimeout_.store(false);
-    BINEXPECT_CALL(&EtcdStore::RawGet, (_, _, _, _))
-        .Times(1)
-        .WillOnce(Invoke([serializedMeta](const std::string &, RangeSearchResult &res, int64_t, int32_t) {
-            res.value = serializedMeta;
-            return Status::OK();
-        }));
-
     ScopedRequestContext requestContext;
     GetRequestContext()->reqTimeoutDuration.Init(1'000);
     WorkerOcServiceGetImpl::QueryMetadataFromMasterResult result;
     auto rc = impl_->QueryMetadataFromMaster({ objectKey }, 0, result);
 
-    ASSERT_TRUE(rc.IsOk()) << rc.ToString();
-    ASSERT_EQ(result.queryMetas.size(), 1);
-    EXPECT_EQ(result.queryMetas.front().meta().object_key(), objectKey);
-    EXPECT_EQ(result.queryMetas.front().address(), leavingWorkerAddress_.ToString());
+    EXPECT_EQ(rc.GetCode(), K_RPC_PEER_DEAD);
+    EXPECT_TRUE(result.queryMetas.empty());
     EXPECT_TRUE(result.absentObjectKeysWithVersion.empty());
 }
 
-TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataPreservesPeerDeadWhenL2FallbackDisabled)
+TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataPreservesPeerDeadRegardlessOfL2Fallback)
 {
-    const bool oldNeedMetadata = FLAGS_oc_io_from_l2cache_need_metadata;
     const bool oldEnableL2CacheFallback = FLAGS_enable_l2_cache_fallback;
-    const std::string oldL2CacheType = FLAGS_l2_cache_type;
-    Raii restoreFlags([oldNeedMetadata, oldEnableL2CacheFallback, oldL2CacheType]() {
-        FLAGS_oc_io_from_l2cache_need_metadata = oldNeedMetadata;
+    Raii restoreFlags([oldEnableL2CacheFallback]() {
         FLAGS_enable_l2_cache_fallback = oldEnableL2CacheFallback;
-        FLAGS_l2_cache_type = oldL2CacheType;
     });
-    FLAGS_oc_io_from_l2cache_need_metadata = true;
     FLAGS_enable_l2_cache_fallback = false;
-    FLAGS_l2_cache_type = "sfs";
 
     const std::string objectKey = "peer-dead-with-l2-fallback-disabled";
     RouteObjectToMaster(objectKey, leavingWorkerAddress_);
@@ -1922,11 +1922,6 @@ TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataPreservesPeerDeadWhenL2Fallbac
                          std::vector<RpcMessage> &) { return Status(K_RPC_PEER_DEAD, "metadata owner is dead"); };
     workerMasterApiManager_->SetDefaultApi(api);
 
-    EtcdStore etcdStore("unused");
-    impl_->etcdStore_ = &etcdStore;
-    etcdStore.keepAliveTimeout_.store(false);
-    BINEXPECT_CALL(&EtcdStore::RawGet, (_, _, _, _)).Times(0);
-
     ScopedRequestContext requestContext;
     GetRequestContext()->reqTimeoutDuration.Init(1'000);
     WorkerOcServiceGetImpl::QueryMetadataFromMasterResult result;
@@ -1936,73 +1931,21 @@ TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataPreservesPeerDeadWhenL2Fallbac
     EXPECT_TRUE(result.queryMetas.empty());
 }
 
-TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataPreservesPeerDeadWhenEtcdFallbackFails)
+TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataReportsRouteFailureWithoutAbsentCandidate)
 {
-    const bool oldNeedMetadata = FLAGS_oc_io_from_l2cache_need_metadata;
-    const std::string oldL2CacheType = FLAGS_l2_cache_type;
-    Raii restoreFlags([oldNeedMetadata, oldL2CacheType]() {
-        FLAGS_oc_io_from_l2cache_need_metadata = oldNeedMetadata;
-        FLAGS_l2_cache_type = oldL2CacheType;
-    });
-    FLAGS_oc_io_from_l2cache_need_metadata = true;
-    FLAGS_l2_cache_type = "sfs";
-
-    const std::string objectKey = "peer-dead-with-invalid-etcd-metadata";
-    RouteObjectToMaster(objectKey, leavingWorkerAddress_);
-    auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(leavingWorkerAddress_, localAddress_);
-    api->queryMeta_ = [](master::QueryMetaReqPb &, uint64_t, master::QueryMetaRspPb &,
-                         std::vector<RpcMessage> &) { return Status(K_RPC_PEER_DEAD, "metadata owner is dead"); };
-    workerMasterApiManager_->SetDefaultApi(api);
-
-    EtcdStore etcdStore("unused");
-    impl_->etcdStore_ = &etcdStore;
-    etcdStore.keepAliveTimeout_.store(false);
-    BINEXPECT_CALL(&EtcdStore::RawGet, (_, _, _, _))
-        .Times(1)
-        .WillOnce(Invoke([](const std::string &, RangeSearchResult &res, int64_t, int32_t) {
-            res.value = "invalid-object-meta";
-            return Status::OK();
-        }));
-
-    ScopedRequestContext requestContext;
-    GetRequestContext()->reqTimeoutDuration.Init(1'000);
-    WorkerOcServiceGetImpl::QueryMetadataFromMasterResult result;
-    auto rc = impl_->QueryMetadataFromMaster({ objectKey }, 0, result);
-
-    EXPECT_EQ(rc.GetCode(), K_RPC_PEER_DEAD);
-    EXPECT_TRUE(result.queryMetas.empty());
-}
-
-TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataReturnsErrorWhenEtcdStoreUnavailable)
-{
-    const bool oldNeedMetadata = FLAGS_oc_io_from_l2cache_need_metadata;
-    const std::string oldL2CacheType = FLAGS_l2_cache_type;
-    Raii restoreFlags([oldNeedMetadata, oldL2CacheType]() {
-        FLAGS_oc_io_from_l2cache_need_metadata = oldNeedMetadata;
-        FLAGS_l2_cache_type = oldL2CacheType;
-    });
-    FLAGS_oc_io_from_l2cache_need_metadata = true;
-    FLAGS_l2_cache_type = "sfs";
     WorkerOcServiceGetImpl::QueryMetadataFromMasterResult result;
 
     auto rc = impl_->QueryMetadataFromMaster({ "route-failed-key" }, 0, result);
 
-    ASSERT_TRUE(rc.IsError());
-    EXPECT_EQ(rc.GetCode(), StatusCode::K_RUNTIME_ERROR);
+    ASSERT_TRUE(rc.IsOk()) << rc.ToString();
     EXPECT_TRUE(result.queryMetas.empty());
     EXPECT_TRUE(result.absentObjectKeysWithVersion.empty());
+    ASSERT_EQ(result.routeFailures.size(), 1U);
+    EXPECT_EQ(result.routeFailures.at("route-failed-key").GetCode(), K_NOT_FOUND);
 }
 
-TEST_F(NotifyRemoteGetMigrationTest, MixedQueryMetadataReturnsErrorWhenEtcdStoreUnavailable)
+TEST_F(NotifyRemoteGetMigrationTest, MixedQueryMetadataSeparatesRouteFailureFromMasterHit)
 {
-    const bool oldNeedMetadata = FLAGS_oc_io_from_l2cache_need_metadata;
-    const std::string oldL2CacheType = FLAGS_l2_cache_type;
-    Raii restoreFlags([oldNeedMetadata, oldL2CacheType]() {
-        FLAGS_oc_io_from_l2cache_need_metadata = oldNeedMetadata;
-        FLAGS_l2_cache_type = oldL2CacheType;
-    });
-    FLAGS_oc_io_from_l2cache_need_metadata = true;
-    FLAGS_l2_cache_type = "sfs";
     const std::string hitKey = "master-hit-key";
     const std::string routeFailedKey = "route-failed-key";
     const HostPort masterAddress("127.0.0.1", 18890);
@@ -2021,37 +1964,16 @@ TEST_F(NotifyRemoteGetMigrationTest, MixedQueryMetadataReturnsErrorWhenEtcdStore
 
     auto rc = impl_->QueryMetadataFromMaster({ hitKey, routeFailedKey }, 0, result);
 
-    ASSERT_TRUE(rc.IsError());
-    EXPECT_EQ(rc.GetCode(), StatusCode::K_RUNTIME_ERROR);
+    ASSERT_TRUE(rc.IsOk()) << rc.ToString();
     ASSERT_EQ(result.queryMetas.size(), 1);
     EXPECT_EQ(result.queryMetas.front().meta().object_key(), hitKey);
     EXPECT_TRUE(result.absentObjectKeysWithVersion.empty());
+    ASSERT_EQ(result.routeFailures.size(), 1U);
+    EXPECT_EQ(result.routeFailures.at(routeFailedKey).GetCode(), K_NOT_FOUND);
 }
 
-TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataMarksRouteFailureAbsentWhenEtcdFallbackDisabled)
+TEST_F(NotifyRemoteGetMigrationTest, SpillPostProcessClearsDeleteFlagAfterPrimaryTransfer)
 {
-    const bool oldNeedMetadata = FLAGS_oc_io_from_l2cache_need_metadata;
-    const std::string oldL2CacheType = FLAGS_l2_cache_type;
-    Raii restoreFlags([oldNeedMetadata, oldL2CacheType]() {
-        FLAGS_oc_io_from_l2cache_need_metadata = oldNeedMetadata;
-        FLAGS_l2_cache_type = oldL2CacheType;
-    });
-    FLAGS_oc_io_from_l2cache_need_metadata = true;
-    FLAGS_l2_cache_type = "sfs";
-    WorkerOcServiceGetImpl::QueryMetadataFromMasterResult result;
-
-    auto rc = impl_->QueryMetadataFromMaster({ "route-failed-key" }, 0, result, false);
-
-    ASSERT_TRUE(rc.IsOk()) << rc.ToString();
-    EXPECT_TRUE(result.queryMetas.empty());
-    EXPECT_THAT(result.absentObjectKeysWithVersion, Contains(Key("route-failed-key")));
-}
-
-TEST_F(NotifyRemoteGetMigrationTest, PostProcessRemoteGetInNotificationClearsDeleteFlagWhenReplicationDisabled)
-{
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = false;
     const std::string objectKey = "obj1";
     const HostPort masterAddress("127.0.0.1", 18890);
     RouteObjectToMaster(objectKey, masterAddress);
@@ -2118,7 +2040,7 @@ TEST_F(NotifyRemoteGetMigrationTest, PostProcessRemoteGetInNotificationClearsDel
     impl_->PostProcessRemoteGetInNotificationImpl(lockedEntries, groupedQueryMetas, tempSuccessIds, tempNeedRetryIds,
                                                   tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas,
                                                   migratedBytes, unconfirmedObjectVersions, failedConfirmationOwners,
-                                                  false);
+                                                  true);
 
     EXPECT_EQ(replacePrimaryCalls, 1u);
     EXPECT_FALSE(entry->Get()->stateInfo.IsNeedToDelete());
@@ -2131,13 +2053,10 @@ TEST_F(NotifyRemoteGetMigrationTest, PostProcessRemoteGetInNotificationClearsDel
     untouchedEntry->WUnlock();
 }
 
-TEST_F(NotifyRemoteGetMigrationTest, ReplacePrimaryFailureMarksPayloadAndSuccessfulRetryConverges)
+TEST_F(NotifyRemoteGetMigrationTest, SpillPrimaryFailureMarksPayloadAndSuccessfulRetryConverges)
 {
     constexpr uint64_t version = 1;
     constexpr uint64_t dataSize = 1;
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = false;
     const std::string objectKey = "replace-primary-unconfirmed-payload";
     const HostPort masterAddress("127.0.0.1", 18890);
     RouteObjectToMaster(objectKey, masterAddress);
@@ -2181,7 +2100,7 @@ TEST_F(NotifyRemoteGetMigrationTest, ReplacePrimaryFailureMarksPayloadAndSuccess
     WorkerOcServiceGetImpl::MigratedObjectIdentities objectIdentities{ { objectKey, entry->Get() } };
     entry->WUnlock();
 
-    impl_->ReplacePrimaryAndPruneFailed(successIds, queryMetas, rsp, lockedEntries, objectIdentities, false);
+    impl_->ReplacePrimaryAndPruneFailed(successIds, queryMetas, rsp, lockedEntries, objectIdentities, true);
 
     EXPECT_TRUE(successIds.empty());
     EXPECT_THAT(rsp.failed_object_keys(), Contains(objectKey));
@@ -2190,18 +2109,19 @@ TEST_F(NotifyRemoteGetMigrationTest, ReplacePrimaryFailureMarksPayloadAndSuccess
     EXPECT_EQ(replacePrimaryCalls, 1U);
     auto newerMeta = queryMetas.at(objectKey).meta();
     newerMeta.set_version(version + 1);
-    EXPECT_FALSE(impl_->CanReuseUnconfirmedMigrationPayload(newerMeta, lockedEntries.begin()->second, false));
+    EXPECT_FALSE(impl_->CanReuseUnconfirmedMigrationPayload(newerMeta, lockedEntries.begin()->second, true));
     newerMeta.set_version(version);
     newerMeta.set_data_size(dataSize + 1);
-    EXPECT_FALSE(impl_->CanReuseUnconfirmedMigrationPayload(newerMeta, lockedEntries.begin()->second, false));
-    FLAGS_enable_data_replication = true;
+    EXPECT_FALSE(impl_->CanReuseUnconfirmedMigrationPayload(newerMeta, lockedEntries.begin()->second, true));
     EXPECT_FALSE(impl_->CanReuseUnconfirmedMigrationPayload(queryMetas.at(objectKey).meta(),
                                                             lockedEntries.begin()->second, false));
-    FLAGS_enable_data_replication = false;
+    EXPECT_TRUE(impl_->CanReuseUnconfirmedMigrationPayload(queryMetas.at(objectKey).meta(),
+                                                           lockedEntries.begin()->second, true));
     auto *payloadBeforeRetry = entry->Get();
 
     NotifyRemoteGetReqPb retryReq;
     retryReq.set_addr(leavingWorkerAddress_.ToString());
+    retryReq.set_is_spill(true);
     retryReq.add_object_keys(objectKey);
     retryReq.add_versions(version);
     NotifyRemoteGetRspPb retryRsp;
@@ -2218,11 +2138,8 @@ TEST_F(NotifyRemoteGetMigrationTest, ReplacePrimaryFailureMarksPayloadAndSuccess
     EXPECT_EQ(migratedBytes, 0U);
 }
 
-TEST_F(NotifyRemoteGetMigrationTest, FailedPrimaryConfirmationProtectsSameGenerationReplacement)
+TEST_F(NotifyRemoteGetMigrationTest, FailedSpillPrimaryConfirmationProtectsSameGenerationReplacement)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = false;
     const HostPort masterAddress("127.0.0.1", 18890);
     const std::string sameGeneration = "same-generation-replacement";
     const std::string newerGeneration = "newer-generation-replacement";
@@ -2255,7 +2172,7 @@ TEST_F(NotifyRemoteGetMigrationTest, FailedPrimaryConfirmationProtectsSameGenera
     ScopedRequestContext requestContext;
     GetRequestContext()->reqTimeoutDuration.Init(10'000);
 
-    impl_->ReplacePrimaryAndPruneFailed(successIds, queryMetas, rsp, lockedEntries, identities, false);
+    impl_->ReplacePrimaryAndPruneFailed(successIds, queryMetas, rsp, lockedEntries, identities, true);
 
     EXPECT_TRUE(successIds.empty());
     EXPECT_THAT(rsp.failed_object_keys(), UnorderedElementsAre(sameGeneration, newerGeneration));
@@ -2375,9 +2292,6 @@ TEST_F(NotifyRemoteGetMigrationTest, TransferFailureCleansInsertedEntriesAndBatc
 
 TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetReturnsFailedKeyWhenMasterDoesNotConfirmCopyMeta)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = true;
     const std::string objectKey = "notify_remote_get_unconfirmed";
     const HostPort masterAddress("127.0.0.1:18889");
     RouteObjectToMaster(objectKey, masterAddress);
@@ -2422,9 +2336,6 @@ TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetReturnsFailedKeyWhenMasterDo
 
 TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetAcceptsOnlyExplicitlyConfirmedCopyMeta)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = true;
     const std::string objectKey = "notify_remote_get_confirmed";
     const HostPort masterAddress("127.0.0.1:18889");
     RouteObjectToMaster(objectKey, masterAddress);
@@ -2449,9 +2360,6 @@ TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetAcceptsOnlyExplicitlyConfirm
 
 TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetFollowsCopyMetaRedirectAfterMetadataMigration)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = true;
     const std::string objectKey = "notify_remote_get_redirected";
     auto &portAllocator = st::TestPortAllocator::Instance();
     portAllocator.SetOwnerInfo("ds_ut_object", "copy-meta-redirect", GetTestCaseDataDir());
@@ -2603,13 +2511,10 @@ TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetRejectsReplacePrimaryRedirec
     EXPECT_THAT(rsp.failed_object_keys(), Contains(objectKey));
 }
 
-TEST_F(NotifyRemoteGetMigrationTest, ExpiredPrimarySwitchRemainsDeletableAndCannotRecoverMetadata)
+TEST_F(NotifyRemoteGetMigrationTest, ExpiredSpillPrimarySwitchRemainsDeletableAndCannotRecoverMetadata)
 {
     constexpr uint64_t version = 1;
     constexpr uint64_t dataSize = 1;
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = false;
     const std::string objectKey = "expired-primary-switch";
     const HostPort masterAddress("127.0.0.1", 18893);
     RouteObjectToMaster(objectKey, masterAddress);
@@ -2643,7 +2548,7 @@ TEST_F(NotifyRemoteGetMigrationTest, ExpiredPrimarySwitchRemainsDeletableAndCann
     ScopedRequestContext requestContext;
     GetRequestContext()->reqTimeoutDuration.Init(10'000);
 
-    impl_->ReplacePrimaryAndPruneFailed(successIds, queryMetas, rsp, lockedEntries, objectIdentities, false);
+    impl_->ReplacePrimaryAndPruneFailed(successIds, queryMetas, rsp, lockedEntries, objectIdentities, true);
 
     EXPECT_TRUE(successIds.empty());
     EXPECT_THAT(rsp.failed_object_keys(), Contains(objectKey));
@@ -2655,9 +2560,6 @@ TEST_F(NotifyRemoteGetMigrationTest, ExpiredPrimarySwitchRemainsDeletableAndCann
 
 TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetRejectsCopyMetaPersistenceFailure)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = true;
     const std::string objectKey = "notify_remote_get_persistence_failure";
     const HostPort masterAddress("127.0.0.1:18889");
     RouteObjectToMaster(objectKey, masterAddress);
@@ -2682,9 +2584,6 @@ TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetRejectsCopyMetaPersistenceFa
 
 TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetShortCircuitsFailedConfirmationOwner)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = true;
     const std::string objectKey = "notify_remote_get_confirmation_owner_failure";
     const HostPort masterAddress("127.0.0.1:18889");
     RouteObjectToMaster(objectKey, masterAddress);
@@ -2871,9 +2770,6 @@ TEST_F(MigrateDataServiceTest, NeedModifyPrimaryWithMetadataCallsReplacePrimary)
 
 TEST_F(NotifyRemoteGetMigrationTest, SpillCallsReplacePrimaryAndSkipsCreateMultiCopyMeta)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = true;
     const std::string objectKey = "spill_obj";
     const HostPort masterAddress("127.0.0.1", 18890);
     RouteObjectToMaster(objectKey, masterAddress);
@@ -2937,10 +2833,8 @@ TEST_F(NotifyRemoteGetMigrationTest, SpillCallsReplacePrimaryAndSkipsCreateMulti
                                                   migratedBytes, unconfirmedObjectVersions, failedConfirmationOwners,
                                                   true);
 
-    EXPECT_EQ(createMultiCopyMetaCalls, 0)
-        << "isSpill=true must skip CreateMultiCopyMeta even when enable_data_replication=true";
-    EXPECT_EQ(replacePrimaryCalls, 1)
-        << "isSpill=true must always call ReplacePrimary even when enable_data_replication=true";
+    EXPECT_EQ(createMultiCopyMetaCalls, 0) << "isSpill=true must skip CreateMultiCopyMeta";
+    EXPECT_EQ(replacePrimaryCalls, 1) << "isSpill=true must always call ReplacePrimary";
     EXPECT_FALSE(entry->Get()->stateInfo.IsNeedToDelete())
         << "isSpill=true must clear needDelete after ReplacePrimary succeeds";
     EXPECT_TRUE(entry->Get()->stateInfo.IsPrimaryCopy());
@@ -2950,9 +2844,6 @@ TEST_F(NotifyRemoteGetMigrationTest, SpillCallsReplacePrimaryAndSkipsCreateMulti
 
 TEST_F(NotifyRemoteGetMigrationTest, ConfirmCopyMetaForNotifyRemoteGetSpillSkipsCreateMultiCopyMeta)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = true;
     const std::string objectKey = "spill_copymeta_obj";
     const HostPort masterAddress("127.0.0.1", 18890);
     RouteObjectToMaster(objectKey, masterAddress);
@@ -2985,10 +2876,6 @@ TEST_F(NotifyRemoteGetMigrationTest, ConfirmCopyMetaForNotifyRemoteGetSpillSkips
 
 TEST_F(NotifyRemoteGetMigrationTest, ReportUnattemptedObjectsSpillRoutesToSkippedKeys)
 {
-    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
-    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
-    FLAGS_enable_data_replication = true;
-
     NotifyRemoteGetReqPb req;
     req.set_is_spill(true);
     req.add_object_keys("attempted");

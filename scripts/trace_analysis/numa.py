@@ -488,8 +488,8 @@ def build_source_chain(source: dict) -> list[dict]:
     chain = [
         {
             "stage": "arena配置",
-            "source": "src/datasystem/common/rdma/urma_manager.cpp:SetClientTransportArenaConfig",
-            "judgment": "读取 DATASYSTEM_UB_TRANSPORT_ARENA_NUM 并设置 ub_transport_arena_num",
+            "source": "src/datasystem/common/rdma/fast_transport_base.h:UB_TRANSPORT_ARENA_NUM",
+            "judgment": "UB transport arena 数量固定为 4",
             "source_ref": head,
         },
         {

@@ -103,7 +103,7 @@ Status GetKeyNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jint timeoutMs
     std::vector<Optional<Buffer>> buffers;
     RETURN_IF_NOT_OK((*client)->Get({ key }, timeoutMs, buffers));
     // Use the SDK-internal helper so the copy still works when the buffer was
-    // returned with oc_metadata_header disabled (DisabledLock → no latch needed).
+    // returned from a shm layout without a metadata header (DisabledLock → no latch needed).
     RETURN_IF_NOT_OK(buffers[0]->CopyDataWithRLatch([&] {
         heapBuffer =
             ToHeapBuffer(env, reinterpret_cast<const char *>(buffers[0]->ImmutableData()), buffers[0]->GetSize());
@@ -138,7 +138,7 @@ Status GetKeysNativeImpl(JNIEnv *env, jlong handle, jobject keysJO, jint timeout
         for (auto &buffer : buffers) {
             if (buffer) {
                 // Use the SDK-internal helper so the copy still works when the
-                // buffer was returned with oc_metadata_header disabled.
+                // buffer was returned from a shm layout without a metadata header.
                 Status copyRc = buffer->CopyDataWithRLatch([&] {
                     byteBuffer = ToHeapBuffer(env, reinterpret_cast<const char *>(buffer->ImmutableData()),
                                               buffer->GetSize());

@@ -238,6 +238,8 @@ public:
 
     bool IsAlive() const override;
 
+    bool HasEstablishedSession() const;
+
     AccessTransportKind Kind() const override;
 
     void Teardown() override;

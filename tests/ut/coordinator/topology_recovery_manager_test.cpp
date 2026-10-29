@@ -129,6 +129,7 @@ protected:
         cluster::TopologyState topology;
         topology.clusterHasInit = true;
         topology.version = version;
+        topology.tokensPerMember = 4;
         std::vector<uint32_t> tokens;
         for (uint32_t index = 0; index < 4; ++index) {
             tokens.emplace_back(cluster::HashAlgorithm::MakeToken(address, index, 0));

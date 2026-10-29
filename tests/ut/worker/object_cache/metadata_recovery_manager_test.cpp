@@ -173,6 +173,7 @@ public:
     RETURN_UNSUPPORTED_MASTER_API(ReleaseMetaData, ReleaseMetaDataReqPb &, ReleaseMetaDataRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(ReplacePrimary, master::ReplacePrimaryReqPb &, master::ReplacePrimaryRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(PureQueryMeta, master::PureQueryMetaReqPb &, master::PureQueryMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(BatchExists, master::BatchExistsReqPb &, master::BatchExistsRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(CheckObjectDataLocation, master::CheckObjectDataLocationReqPb &,
                                   master::CheckObjectDataLocationRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(RollbackMultiMeta, master::RollbackMultiMetaReqPb &,
@@ -711,18 +712,18 @@ protected:
     std::unique_ptr<MetadataRecoverySelector> selector_;
 };
 
-TEST_F(MetadataRecoverySelectorTest, SelectShouldRespectIncludeL2Flag)
+TEST_F(MetadataRecoverySelectorTest, NamedSelectionsPreserveTopologyAndQuickRestartScopes)
 {
     AddObject("mem_only", WriteMode::NONE_L2_CACHE);
     AddObject("l2_obj", WriteMode::WRITE_THROUGH_L2_CACHE);
 
     std::vector<std::string> objectKeys;
-    selector_->Select([](const std::string &) { return true; }, false, objectKeys);
+    selector_->SelectWithoutL2Cache([](const std::string &) { return true; }, objectKeys);
     std::sort(objectKeys.begin(), objectKeys.end());
     ASSERT_THAT(objectKeys, ElementsAre("mem_only"));
 
     objectKeys.clear();
-    selector_->Select([](const std::string &) { return true; }, true, objectKeys);
+    selector_->SelectAll([](const std::string &) { return true; }, objectKeys);
     std::sort(objectKeys.begin(), objectKeys.end());
     ASSERT_THAT(objectKeys, ElementsAre("l2_obj", "mem_only"));
 }
@@ -733,13 +734,11 @@ TEST_F(MetadataRecoverySelectorTest, SelectionRequestShouldPreserveInputAndValid
     auto *range = req.add_ranges();
     range->set_from(10);
     range->set_end(20);
-    auto selectReq = MetadataRecoverySelector::BuildSelectionRequest(req, true);
+    auto selectReq = MetadataRecoverySelector::BuildSelectionRequest(req);
     ASSERT_FALSE(selectReq.Empty());
     ASSERT_EQ(selectReq.ranges.size(), 1);
     EXPECT_EQ(selectReq.ranges[0].first, 10);
     EXPECT_EQ(selectReq.ranges[0].second, 20);
-    EXPECT_TRUE(selectReq.includeL2CacheIds);
-
     std::vector<std::string> objectKeys;
     auto status = selector_->Select(selectReq, objectKeys);
     DS_ASSERT_OK(status);

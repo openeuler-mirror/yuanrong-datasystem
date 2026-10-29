@@ -49,7 +49,7 @@ from deploy_common import (
     upload_launcher,
     upload_procmon,
 )
-from deploy_common import _extract_ready_check_path
+from deploy_common import _extract_health_check_path
 
 
 class TestParseConfigOverride(unittest.TestCase):
@@ -383,11 +383,11 @@ class TestStartServiceStandaloneTiming(unittest.TestCase):
     @patch('deploy_common.upload_launcher')
     @patch('deploy_common.kubectl_exec_raw')
     @patch('deploy_common.subprocess.run')
-    def test_launcher_passes_ready_file_when_config_has_ready_check_path(
+    def test_launcher_passes_worker_probe_file_when_config_has_health_check_path(
             self, mock_run, mock_raw, mock_upload):
-        # When the worker config has ready_check_path, the launcher command
-        # must include --ready-file <path> so the launcher polls for the
-        # authoritative readiness file (worker_oc_server.cpp:2911-2933)
+        # When the worker config has health_check_path, the launcher command
+        # must include --worker-probe-file <path> so the launcher polls for the
+        # authoritative Worker startup probe
         # instead of falling back to TCP port polling.
         mock_upload.return_value = '/tmp/standalone_launcher.py'
         mock_run.return_value = MagicMock(returncode=0,
@@ -397,7 +397,7 @@ class TestStartServiceStandaloneTiming(unittest.TestCase):
         pod = self._pod()
         config = {
             'worker_address': {'value': '10.0.0.1:31501'},
-            'ready_check_path': {'value': '/tmp/ds/probe/ready'},
+            'health_check_path': {'value': '/tmp/ds/probe/ready'},
         }
         ok = start_service_standalone(
             pod, 'default', 'worker_test', '/tmp/ds', '/tmp/cfg.json',
@@ -406,17 +406,17 @@ class TestStartServiceStandaloneTiming(unittest.TestCase):
             timeout=10)
         self.assertTrue(ok)
         called_cmd = mock_run.call_args[0][0]
-        self.assertIn('--ready-file', called_cmd)
+        self.assertIn('--worker-probe-file', called_cmd)
         self.assertIn('/tmp/ds/probe/ready', called_cmd)
 
     @patch('deploy_common.upload_launcher')
     @patch('deploy_common.kubectl_exec_raw')
     @patch('deploy_common.subprocess.run')
-    def test_launcher_omits_ready_file_when_config_has_no_ready_check_path(
+    def test_launcher_omits_worker_probe_file_when_config_has_no_health_check_path(
             self, mock_run, mock_raw, mock_upload):
-        # When the worker config has no ready_check_path (coordinator or
+        # When the worker config has no health_check_path (coordinator or
         # worker with the flag unset), the launcher command must NOT
-        # include --ready-file; it falls back to --port polling.
+        # include --worker-probe-file; it falls back to --port polling.
         mock_upload.return_value = '/tmp/standalone_launcher.py'
         mock_run.return_value = MagicMock(returncode=0,
                                           stdout='1234 0.52\n',
@@ -431,7 +431,7 @@ class TestStartServiceStandaloneTiming(unittest.TestCase):
             process_name='coordinator_test', timeout=10)
         self.assertTrue(ok)
         called_cmd = mock_run.call_args[0][0]
-        self.assertNotIn('--ready-file', called_cmd)
+        self.assertNotIn('--worker-probe-file', called_cmd)
         # Still uses --port for coordinator readiness.
         self.assertIn('--port', called_cmd)
 
@@ -586,44 +586,44 @@ class TestStartServiceStandaloneCrashDetect(unittest.TestCase):
         self.assertTrue(ok)
 
 
-class TestExtractReadyCheckPath(unittest.TestCase):
-    """_extract_ready_check_path must pull ready_check_path out of a
+class TestExtractWorkerProbePath(unittest.TestCase):
+    """_extract_health_check_path must pull health_check_path out of a
     dscli-style worker config ({"value": "/path"} dict) or plain string,
     and return None when absent / empty / not a config."""
 
     def test_dict_value(self):
-        cfg = {'ready_check_path': {'value': '/tmp/probe/ready',
+        cfg = {'health_check_path': {'value': '/tmp/probe/ready',
                                      'description': '...'}}
-        self.assertEqual(_extract_ready_check_path(cfg), '/tmp/probe/ready')
+        self.assertEqual(_extract_health_check_path(cfg), '/tmp/probe/ready')
 
     def test_plain_string_value(self):
-        cfg = {'ready_check_path': '/tmp/probe/ready'}
-        self.assertEqual(_extract_ready_check_path(cfg), '/tmp/probe/ready')
+        cfg = {'health_check_path': '/tmp/probe/ready'}
+        self.assertEqual(_extract_health_check_path(cfg), '/tmp/probe/ready')
 
     def test_relative_path_preserved(self):
         # Relative paths are kept as-is; the launcher resolves them against
-        # the binary's --cwd (which mirrors the binary's FLAGS_ready_check_path
+        # the binary's --cwd (which mirrors the binary's FLAGS_health_check_path
         # resolution semantics).
-        cfg = {'ready_check_path': {'value': './probe/ready'}}
-        self.assertEqual(_extract_ready_check_path(cfg), './probe/ready')
+        cfg = {'health_check_path': {'value': './probe/ready'}}
+        self.assertEqual(_extract_health_check_path(cfg), './probe/ready')
 
     def test_empty_dict_value_returns_none(self):
-        cfg = {'ready_check_path': {'value': ''}}
-        self.assertIsNone(_extract_ready_check_path(cfg))
+        cfg = {'health_check_path': {'value': ''}}
+        self.assertIsNone(_extract_health_check_path(cfg))
 
     def test_missing_key_returns_none(self):
         cfg = {'worker_address': {'value': '10.0.0.1:31501'}}
-        self.assertIsNone(_extract_ready_check_path(cfg))
+        self.assertIsNone(_extract_health_check_path(cfg))
 
     def test_none_config_returns_none(self):
-        self.assertIsNone(_extract_ready_check_path(None))
+        self.assertIsNone(_extract_health_check_path(None))
 
     def test_empty_config_returns_none(self):
-        self.assertIsNone(_extract_ready_check_path({}))
+        self.assertIsNone(_extract_health_check_path({}))
 
     def test_non_string_non_dict_value_returns_none(self):
-        cfg = {'ready_check_path': 12345}
-        self.assertIsNone(_extract_ready_check_path(cfg))
+        cfg = {'health_check_path': 12345}
+        self.assertIsNone(_extract_health_check_path(cfg))
 
 
 class TestCheckProcess(unittest.TestCase):

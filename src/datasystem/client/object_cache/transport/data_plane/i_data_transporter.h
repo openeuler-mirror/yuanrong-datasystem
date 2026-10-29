@@ -163,6 +163,12 @@ public:
 
     virtual bool IsAlive() const = 0;
 
+    /** @brief Return whether this transporter has completed its shared-memory session registration. */
+    virtual bool HasEstablishedShmSession() const
+    {
+        return false;
+    }
+
     /** @brief Close transport-specific data-plane resources without closing the shared RPC client. */
     virtual void CloseDataPlane()
     {

@@ -19,29 +19,19 @@
 
 #include "datasystem/common/flags/flags.h"
 
-DS_DECLARE_int32(io_thread_nice);
 DS_DECLARE_bool(enable_sched_runtime);
 DS_DECLARE_uint32(node_timeout_s);
-DS_DECLARE_uint32(hash_ring_tokens_per_member);
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_int32(log_monitor_interval_ms);
-DS_DECLARE_bool(enable_data_replication);
-DS_DECLARE_bool(enable_worker_worker_batch_get);
 DS_DECLARE_bool(enable_urma);
 DS_DECLARE_bool(enable_ub_fault_isolation);
-DS_DECLARE_bool(enable_ub_numa_affinity);
 DS_DECLARE_uint32(ub_numa_rr_type);
 DS_DECLARE_uint32(ub_numa_src_chip_policy);
-DS_DECLARE_uint32(ub_numa_inflight_wr_diff_threshold);
 DS_DECLARE_string(shared_memory_distribution_policy);
 DS_DECLARE_bool(urma_register_whole_arena);
-DS_DECLARE_uint32(ub_transport_arena_num);
-DS_DECLARE_uint32(urma_poll_size);
 DS_DECLARE_uint32(urma_log_threshold_us);
 DS_DECLARE_uint32(urma_send_jetty_lane_pool_size);
 DS_DECLARE_uint32(urma_send_lane_count_per_peer);
-DS_DECLARE_uint32(urma_send_jetty_lane_refill_extra_size);
-DS_DECLARE_bool(urma_event_mode);
 DS_DECLARE_uint32(urma_perf_interval_ms);
 DS_DECLARE_uint32(urma_orphan_conn_ttl_s);
 DS_DECLARE_uint32(urma_orphan_sweep_interval_s);
@@ -90,7 +80,6 @@ DS_DECLARE_uint32(rebalance_heat_target_hot_ratio_percent);
 DS_DECLARE_bool(rebalance_keep_local_copy);
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(kv_events_config);
-DS_DECLARE_int32(oc_worker_worker_direct_port);
 DS_DECLARE_int32(sc_worker_worker_direct_port);
 DS_DECLARE_bool(enable_pipeline_h2d);
 DS_DECLARE_int32(pipeline_h2d_thread_num);
@@ -106,8 +95,6 @@ DS_DECLARE_int32(brpc_server_num_threads);
 DS_DECLARE_int32(brpc_max_concurrency);
 DS_DECLARE_bool(brpc_enable_builtin_services);
 DS_DECLARE_bool(brpc_enable_circuit_breaker);
-DS_DECLARE_bool(brpc_drop_expired_request);
-DS_DECLARE_string(brpc_connection_type);
 DS_DECLARE_int32(brpc_max_connection_pool_size);
 DS_DECLARE_int32(brpc_event_dispatcher_num);
 DS_DECLARE_bool(enable_load_aware_scheduler);

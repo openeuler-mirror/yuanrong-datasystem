@@ -46,9 +46,8 @@ public:
         opts.numWorkers = 1;  // worker num is 1
         opts.numEtcd = 1;     // only one etcd
         opts.numOcThreadNum = 1;
-        opts.numRpcThreads = 1;
         opts.workerGflagParams =
-            " -shared_memory_size_mb=64 -v=2 -log_monitor=true -rpc_thread_num=1 -oc_thread_num=1 "
+            " -shared_memory_size_mb=64 -v=2 -log_monitor=true -oc_thread_num=1 "
             "-inject_actions=client_manager.GetClientInfo:return()";
     }
 

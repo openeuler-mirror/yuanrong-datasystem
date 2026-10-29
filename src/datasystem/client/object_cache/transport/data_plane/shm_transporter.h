@@ -63,6 +63,11 @@ public:
                && shmConnection_->IsAlive();
     }
 
+    bool HasEstablishedShmSession() const override
+    {
+        return shmConnection_ != nullptr && shmConnection_->HasEstablishedSession();
+    }
+
     /**
      * @brief Acquire the endpoint shared-memory session for a routed request.
      * @param[in] context Request authentication and tenant context.

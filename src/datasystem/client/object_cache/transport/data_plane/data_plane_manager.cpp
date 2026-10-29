@@ -340,6 +340,33 @@ Status DataPlaneManager::GetOrCreate(const HostPort &workerAddr, TransportHint h
     return GetOrBuildTransporter(context, entry, out);
 }
 
+TransportHint DataPlaneManager::ResolveTransportHint(const HostPort &workerAddr, TransportHint topologyHint) const
+{
+    if (topologyHint == TransportHint::SHM_CANDIDATE) {
+        return topologyHint;
+    }
+    const auto snapshot = std::atomic_load(&endpointAdmissionSnapshot_);
+    if (snapshot == nullptr || snapshot->shmReuseCandidates == nullptr
+        || snapshot->shmReuseCandidates->count(workerAddr) == 0) {
+        return topologyHint;
+    }
+    std::shared_ptr<WorkerTransportEntry> entry;
+    {
+        EntryMap::const_accessor accessor;
+        if (entries_.find(accessor, workerAddr.ToString())) {
+            entry = accessor->second;
+        }
+    }
+    if (entry != nullptr) {
+        bthread::RWLockRdGuard lock(entry->mutex);
+        if (!entry->shmDraining && entry->shmTransporter != nullptr
+            && entry->shmTransporter->HasEstablishedShmSession()) {
+            return TransportHint::SHM_CANDIDATE;
+        }
+    }
+    return topologyHint;
+}
+
 Status DataPlaneManager::GetOrCreateForDataLocation(const HostPort &workerAddr, TransportHint hint,
                                                     uint64_t locationTopologyVersion,
                                                     std::shared_ptr<IDataTransporter> &out,
@@ -1506,7 +1533,8 @@ Status DataPlaneManager::UpdateWorkerSnapshot(const WorkerSnapshot &snapshot)
         std::make_shared<const std::unordered_map<HostPort, std::string>>(snapshot.workerIncarnations);
     auto endpointAdmission = std::make_shared<const EndpointAdmissionSnapshot>(
         snapshot.ringVersion, newLiveWorkers, snapshot.provisional,
-        snapshot.provisional ? 0 : SteadyNowMs(), workerIncarnations);
+        snapshot.provisional ? 0 : SteadyNowMs(), workerIncarnations,
+        std::make_shared<const std::unordered_set<HostPort>>(snapshot.shmReuseCandidates));
     std::atomic_store(&endpointAdmissionSnapshot_, std::move(endpointAdmission));
     ubPortHealthVerifier_.ReconcileTopology(snapshot.workerIncarnations);
     std::unordered_set<HostPort> workers;
@@ -1540,7 +1568,8 @@ void DataPlaneManager::RecordRoutingRefresh(uint64_t ringVersion)
         return;
     }
     auto refreshed = std::make_shared<const EndpointAdmissionSnapshot>(
-        current->ringVersion, current->liveWorkers, false, SteadyNowMs(), current->workerIncarnations);
+        current->ringVersion, current->liveWorkers, false, SteadyNowMs(), current->workerIncarnations,
+        current->shmReuseCandidates);
     // A concurrent publication wins; old refresh evidence must not rearm the new generation.
     (void)std::atomic_compare_exchange_strong(&endpointAdmissionSnapshot_, &current, std::move(refreshed));
 }

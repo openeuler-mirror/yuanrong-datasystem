@@ -143,6 +143,7 @@ public:
         cluster::TopologyState topology;
         topology.clusterHasInit = true;
         topology.version = 1;
+        topology.tokensPerMember = TEST_TOKENS_PER_MEMBER;
         topology.members = { cluster::Member{ { std::string(16, 'l'), address }, state,
                                               MakeTokens(address, 0) } };
         if (state == cluster::MemberState::JOINING) {
@@ -166,6 +167,7 @@ public:
         cluster::TopologyState topology;
         topology.clusterHasInit = true;
         topology.version = 1;
+        topology.tokensPerMember = TEST_TOKENS_PER_MEMBER;
         topology.members = { cluster::Member{ { std::string(16, 'l'), address }, cluster::MemberState::ACTIVE,
                                               MakeTokens(address, 1), MakeTokenSeedOverrides(1) } };
         std::unique_ptr<cluster::TopologyKeyHelper> keys;
@@ -200,12 +202,12 @@ public:
     }
 
 private:
+    static constexpr uint32_t TEST_TOKENS_PER_MEMBER = 4;
     static std::vector<uint32_t> MakeTokens(const std::string &address, uint32_t seed)
     {
-        constexpr uint32_t tokenCount = 4;
         std::vector<uint32_t> tokens;
-        tokens.reserve(tokenCount);
-        for (uint32_t index = 0; index < tokenCount; ++index) {
+        tokens.reserve(TEST_TOKENS_PER_MEMBER);
+        for (uint32_t index = 0; index < TEST_TOKENS_PER_MEMBER; ++index) {
             tokens.emplace_back(cluster::HashAlgorithm::MakeToken(address, index, seed));
         }
         return tokens;
@@ -213,10 +215,9 @@ private:
 
     static std::vector<cluster::TokenSeedOverride> MakeTokenSeedOverrides(uint32_t seed)
     {
-        constexpr uint32_t tokenCount = 4;
         std::vector<cluster::TokenSeedOverride> overrides;
-        overrides.reserve(tokenCount);
-        for (uint32_t index = 0; index < tokenCount; ++index) {
+        overrides.reserve(TEST_TOKENS_PER_MEMBER);
+        for (uint32_t index = 0; index < TEST_TOKENS_PER_MEMBER; ++index) {
             overrides.emplace_back(cluster::TokenSeedOverride{ index, seed });
         }
         return overrides;

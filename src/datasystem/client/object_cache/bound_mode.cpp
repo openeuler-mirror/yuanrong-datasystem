@@ -358,12 +358,17 @@ Status BoundMode::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
     }
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
-    RETURN_IF_NOT_OK(getWorkerApi_(workerApi, raii));
+    WorkerNode workerNode;
+    RETURN_IF_NOT_OK(getWorkerApiNode_(workerApi, raii, workerNode));
     Timer timer;
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_START);
     }
     auto rc = workerApi->Publish(bufferInfo, isShm, nestedObjectKeys, ttlSecond, existence);
+    const bool hasReplayablePayload = !isShm && !bufferInfo->ubDataSentByMemoryCopy;
+    if (rc.GetCode() == K_CLIENT_WORKER_DISCONNECT && hasReplayablePayload) {
+        rc = RecoverWorkerAndRetryPublish(workerApi, bufferInfo, nestedObjectKeys, isShm, workerNode);
+    }
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_END);
     }
@@ -375,6 +380,21 @@ Status BoundMode::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
                      elapsedMs, rc.ToString()));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, FormatString("Publish object %s", objectKey));
     return Status::OK();
+}
+
+Status BoundMode::RecoverWorkerAndRetryPublish(const std::shared_ptr<IClientWorkerApi> &workerApi,
+                                               const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
+                                               const std::unordered_set<std::string> &nestedObjectKeys, bool isShm,
+                                               WorkerNode workerNode)
+{
+    RETURN_IF_NOT_OK(RecoverWorker(workerNode));
+    const int64_t remainingUs = ApiDeadline::Instance().ApiRemainingUs();
+    if (remainingUs <= 0) {
+        return ApiDeadline::Instance().CheckApiDeadline();
+    }
+    const auto retryTimeoutMs = static_cast<int32_t>(TimeoutDuration::CeilUsToMs(remainingUs));
+    return workerApi->Publish(bufferInfo, isShm, nestedObjectKeys, bufferInfo->ttlSecond, bufferInfo->existence,
+                              retryTimeoutMs);
 }
 
 Status BoundMode::SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
@@ -752,10 +772,7 @@ Status BoundMode::RecoverWorkerAndRetryGet(const std::shared_ptr<IClientWorkerAp
     if (ingressRpcStatus != nullptr) {
         *ingressRpcStatus = Status::OK();
     }
-    auto recoveryReason = client::WorkerRecoveryReason::CLIENT_REMOVED;
-    auto recoveryStatus = workerNode == LOCAL_WORKER
-                              ? failover_->ProcessWorkerLost(recoveryReason)
-                              : failover_->ProcessStandbyWorkerLost(workerNode, recoveryReason);
+    auto recoveryStatus = RecoverWorker(workerNode);
     if (recoveryStatus.IsError()) {
         if (ingressRpcStatus != nullptr) {
             *ingressRpcStatus = recoveryStatus;
@@ -764,6 +781,15 @@ Status BoundMode::RecoverWorkerAndRetryGet(const std::shared_ptr<IClientWorkerAp
     }
     buffers.assign(objectKeys.size(), nullptr);
     return GetBuffersFromWorker(workerApi, getParam, buffers, ingressRpcStatus);
+}
+
+Status BoundMode::RecoverWorker(WorkerNode workerNode)
+{
+    RETURN_IF_NOT_OK(ApiDeadline::Instance().CheckApiDeadline());
+    INJECT_POINT("BoundMode.RecoverWorker");
+    auto reason = client::WorkerRecoveryReason::CLIENT_REMOVED;
+    return workerNode == LOCAL_WORKER ? failover_->ProcessWorkerLost(reason)
+                                      : failover_->ProcessStandbyWorkerLost(workerNode, reason);
 }
 
 Status BoundMode::GetFromLocalWorker(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs,

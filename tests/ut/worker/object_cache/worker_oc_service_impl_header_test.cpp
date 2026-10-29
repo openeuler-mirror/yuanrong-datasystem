@@ -15,7 +15,9 @@
  */
 
 /**
- * Description: UT Test for oc_metadata_header feature
+ * Description: UT Test for the always-on object cache metadata header and the
+ * DisabledLock placeholder used by shm layouts without a metadata header
+ * (transport-layer buffers and legacy-worker buffers).
  */
 
 #include <sstream>
@@ -35,10 +37,21 @@
 
 using namespace datasystem::object_cache;
 
-DS_DECLARE_bool(oc_metadata_header);
+DS_DECLARE_uint32(max_client_num);
+DS_DECLARE_uint32(memory_alignment);
 
 namespace datasystem {
 namespace ut {
+namespace {
+size_t GetExpectedMetadataSize()
+{
+    constexpr size_t K_BITS_PER_BYTE = 8;
+    const size_t bitmapSize =
+        FLAGS_max_client_num == 0 ? 0 : FLAGS_max_client_num / K_BITS_PER_BYTE + 1;
+    const size_t unalignedSize = bitmapSize + sizeof(uint32_t) + sizeof(char);
+    return (unalignedSize + FLAGS_memory_alignment - 1) & ~(FLAGS_memory_alignment - 1);
+}
+}  // namespace
 
 TEST(DisabledLockTest, WLatchReturnsNotSupported)
 {
@@ -93,62 +106,24 @@ protected:
     std::shared_ptr<WorkerOCServiceImpl> impl_;
 };
 
-TEST_F(WorkerOcMetadataHeaderUTTest, TestMetadataHeaderEnabled)
+TEST_F(WorkerOcMetadataHeaderUTTest, TestMetadataHeaderAlwaysAllocated)
 {
-    FLAGS_oc_metadata_header = true;
-    Init();
     ASSERT_NE(impl_, nullptr);
-    ASSERT_GT(impl_->GetMetadataSize(), 0);
+    ASSERT_EQ(impl_->GetMetadataSize(), GetExpectedMetadataSize());
 }
 
-TEST_F(WorkerOcMetadataHeaderUTTest, TestMetadataHeaderDisabled)
+TEST_F(WorkerOcMetadataHeaderUTTest, TestRepeatedInitKeepsHeader)
 {
-    FLAGS_oc_metadata_header = false;
-    Init();
-    ASSERT_NE(impl_, nullptr);
-    ASSERT_EQ(impl_->GetMetadataSize(), 0);
-}
-
-TEST_F(WorkerOcMetadataHeaderUTTest, TestMetadataHeaderSwitch)
-{
-    FLAGS_oc_metadata_header = false;
-    Init();
-    ASSERT_NE(impl_, nullptr);
-    ASSERT_EQ(impl_->GetMetadataSize(), 0);
-
-    FLAGS_oc_metadata_header = true;
-    Init();
-    ASSERT_NE(impl_, nullptr);
-    ASSERT_GT(impl_->GetMetadataSize(), 0);
-}
-
-TEST_F(WorkerOcMetadataHeaderUTTest, TestRepeatedInitWithoutHeader)
-{
-    FLAGS_oc_metadata_header = false;
-
     for (int i = 0; i < 10; i++) {
         Init();
         ASSERT_NE(impl_, nullptr);
         ASSERT_NE(objectTable_, nullptr);
-        ASSERT_EQ(impl_->GetMetadataSize(), 0);
+        ASSERT_EQ(impl_->GetMetadataSize(), GetExpectedMetadataSize());
     }
 }
 
-TEST_F(WorkerOcMetadataHeaderUTTest, TestRepeatedInitWithHeader)
+TEST_F(WorkerOcMetadataHeaderUTTest, TestRefreshMetaWithHeader)
 {
-    FLAGS_oc_metadata_header = true;
-
-    for (int i = 0; i < 10; i++) {
-        Init();
-        ASSERT_NE(impl_, nullptr);
-        ASSERT_NE(objectTable_, nullptr);
-        ASSERT_GT(impl_->GetMetadataSize(), 0);
-    }
-}
-
-TEST_F(WorkerOcMetadataHeaderUTTest, TestRefreshMetaWithoutHeader)
-{
-    FLAGS_oc_metadata_header = false;
     Init();
 
     ClientKey clientKey;
@@ -158,16 +133,17 @@ TEST_F(WorkerOcMetadataHeaderUTTest, TestRefreshMetaWithoutHeader)
 
 TEST_F(WorkerOcMetadataHeaderUTTest, TestConcurrentGetMetadataSize)
 {
-    FLAGS_oc_metadata_header = false;
     Init();
+    const size_t expected = GetExpectedMetadataSize();
+    ASSERT_EQ(impl_->GetMetadataSize(), expected);
 
     std::vector<std::thread> threads;
     std::atomic<int> completedThreads{0};
 
     for (int i = 0; i < 20; i++) {
-        threads.emplace_back([this, &completedThreads]() {
+        threads.emplace_back([this, &completedThreads, expected]() {
             for (int j = 0; j < 50; j++) {
-                ASSERT_EQ(impl_->GetMetadataSize(), 0);
+                ASSERT_EQ(impl_->GetMetadataSize(), expected);
             }
             completedThreads++;
         });

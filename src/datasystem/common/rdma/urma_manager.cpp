@@ -72,8 +72,6 @@
 
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 
-DS_DECLARE_uint32(urma_poll_size);
-DS_DECLARE_bool(urma_event_mode);
 DS_DECLARE_uint32(urma_perf_interval_ms);
 DS_DECLARE_bool(enable_urma_perf);
 namespace datasystem {
@@ -517,9 +515,7 @@ Status UrmaManager::InitMemoryBufferPool()
     // Parse max get data size and max set buffer size from environment
     RETURN_IF_NOT_OK(ParseEnvUint64(UB_MAX_GET_DATA_SIZE, ubMaxGetDataSize_));
     RETURN_IF_NOT_OK(ParseEnvUint64(UB_MAX_SET_BUFFER_SIZE, ubMaxSetBufferSize_));
-    SetClientTransportArenaConfig();
-
-    const uint32_t arenaNum = FLAGS_ub_transport_arena_num;
+    const uint32_t arenaNum = UB_TRANSPORT_ARENA_NUM;
     const long pageSize = getpagesize();
     uint64_t poolSize = 0;
     RETURN_IF_NOT_OK(NormalizeClientTransportPoolSize(ubTransportMemSize_.load(), arenaNum,
@@ -553,7 +549,7 @@ Status UrmaManager::NormalizeClientTransportPoolSize(uint64_t requestedSize, uin
     CHECK_FAIL_RETURN_STATUS(requestedSize > 0 && requestedSize <= MAX_TRANSPORT_MEM_SIZE, K_INVALID,
                              FormatString("ubTransportMemSize %lu is invalid, must be between 0 and %lu", requestedSize,
                                           MAX_TRANSPORT_MEM_SIZE));
-    CHECK_FAIL_RETURN_STATUS(arenaNum > 0, K_INVALID, "ub_transport_arena_num must be greater than 0");
+    CHECK_FAIL_RETURN_STATUS(arenaNum > 0, K_INVALID, "Transport arena count must be greater than 0");
     CHECK_FAIL_RETURN_STATUS(pageSize > 0 && pageSize <= MAX_TRANSPORT_MEM_SIZE / arenaNum, K_INVALID,
                              "System page size is invalid for the configured transport arena count");
 
@@ -602,37 +598,39 @@ void UrmaManager::BuildTransportRegFunc(AllocatorFuncRegister &regFunc)
     regFunc.destroyFunc = [](void *, size_t) { return Status::OK(); };
 }
 
-void UrmaManager::SetClientTransportArenaConfig()
-{
-    const char *value = std::getenv("DATASYSTEM_UB_TRANSPORT_ARENA_NUM");
-    if (value == nullptr || strlen(value) == 0) {
-        return;
-    }
-    std::string errorMsg;
-    if (SetCommandLineOption("ub_transport_arena_num", value, errorMsg)) {
-        LOG(INFO) << "ub_transport_arena_num overridden by DATASYSTEM_UB_TRANSPORT_ARENA_NUM=" << value;
-    } else {
-        LOG(ERROR) << "Invalid DATASYSTEM_UB_TRANSPORT_ARENA_NUM: " << errorMsg;
-    }
-}
-
 Status UrmaManager::BindClientTransportMemory(void *pointer, size_t size)
 {
-    const uint32_t arenaNum = FLAGS_ub_transport_arena_num;
-    if (!FLAGS_enable_ub_numa_affinity || !FLAGS_urma_register_whole_arena || arenaNum <= 1) {
+    if (!ubNumaAffinityEnabled_ || !FLAGS_urma_register_whole_arena) {
         return Status::OK();
     }
 
     std::vector<int> nodeIds;
-    RETURN_IF_NOT_OK(GetNumaNodeIds(nodeIds));
-    CHECK_FAIL_RETURN_STATUS(!nodeIds.empty(), K_RUNTIME_ERROR,
-                             "No NUMA nodes available for client transport memory binding");
+    auto rc = GetNumaNodeIds(nodeIds);
+    if (rc.IsError()) {
+        LOG(WARNING) << "Skip client transport NUMA binding because topology discovery failed: " << rc.ToString();
+        return Status::OK();
+    }
+    return BindClientTransportMemoryToNumaNodes(pointer, size, nodeIds);
+}
 
+Status UrmaManager::BindClientTransportMemoryToNumaNodes(void *pointer, size_t size,
+                                                         const std::vector<int> &nodeIds)
+{
+    if (nodeIds.empty()) {
+        LOG(WARNING) << "Skip client transport NUMA binding because no NUMA nodes are available";
+        return Status::OK();
+    }
+
+    const uint32_t arenaNum = UB_TRANSPORT_ARENA_NUM;
     Timer timer;
     std::vector<NumaBindingRange> ranges;
     RETURN_IF_NOT_OK(BuildRoundRobinNumaBindingPlan(static_cast<uint8_t *>(pointer), size, arenaNum, nodeIds, ranges));
     for (const auto &range : ranges) {
-        RETURN_IF_NOT_OK(BindMemoryToNumaNode(range.pointer, range.size, range.nodeId));
+        auto rc = BindMemoryToNumaNode(range.pointer, range.size, range.nodeId);
+        if (rc.IsError()) {
+            LOG(WARNING) << "Skip remaining client transport NUMA bindings after mbind failure: " << rc.ToString();
+            return Status::OK();
+        }
     }
     LOG(INFO) << "Binding " << arenaNum << " client transport arenas to NUMA nodes took "
               << timer.ElapsedMilliSecond() << "ms";
@@ -870,11 +868,6 @@ Status UrmaManager::GetEidIndex(urma_device_t *&urmaDevice, int &eidIndex)
         return Status::OK();
     }
     RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, "Failed to get eid index for device");
-}
-
-bool UrmaManager::IsEventModeEnabled()
-{
-    return FLAGS_urma_event_mode;
 }
 
 std::string UrmaManager::GetEid()
@@ -1194,10 +1187,6 @@ Status UrmaManager::ServerEventHandleThreadMain()
     } else if (setSchedRuntimeResult.success) {
         LOG(INFO) << "Set UrmaPollJfc sched runtime to " << GetSchedRuntimeNs() << " ns.";
     }
-    if (!Thread::SetCurrentThreadNice(FLAGS_io_thread_nice)) {
-        LOG(WARNING) << "Failed to set nice for UrmaManager server event thread, nice=" << FLAGS_io_thread_nice
-                     << ", errno=" << errno;
-    }
     // Keep the trace across poll attempts. In particular, sleepStartUs/sleepEndUs
     // describe the most recent sleep before polling, including when the next
     // PollJfcWait invocation gets a completion without sleeping first.
@@ -1207,7 +1196,7 @@ Status UrmaManager::ServerEventHandleThreadMain()
         std::unordered_set<uint64_t> successCompletedReqs;
         std::unordered_map<uint64_t, int> failedCompletedReqs;
         Status rc = PollJfcWait(urmaResource_->GetJfc(), MAX_POLL_JFC_TRY_CNT, successCompletedReqs,
-                                failedCompletedReqs, pollTrace, FLAGS_urma_poll_size);
+                                failedCompletedReqs, pollTrace);
         if (rc.IsError() && rc.GetCode() != K_TRY_AGAIN) {
             LOG_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N)
                 << "[URMA_POLL_ERROR] PollJfcWait failed: " << rc.ToString()
@@ -1589,7 +1578,7 @@ UrmaManager::SrcChipSelectionDecision UrmaManager::BuildSrcChipSelectionDecision
         INJECT_POINT_NO_RETURN("UrmaManager.SrcChipPolicy.RoundRobinWithAffinity");
 #endif
     }
-    const uint32_t threshold = FLAGS_ub_numa_inflight_wr_diff_threshold;
+    const uint32_t threshold = ubNumaInflightWrDiffThreshold_;
     SrcChipSelectionDecision decision{ candidateChipId, candidateChipId, srcChipPolicy, threshold,
                                        std::max<uint64_t>(logicalWriteWrCount, 1) };
     if (threshold == 0) {
@@ -2152,51 +2141,10 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
 
 Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
                                 std::unordered_set<uint64_t> &successCompletedReqs,
-                                std::unordered_map<uint64_t, int> &failedCompletedReqs, UrmaWriteTrace &pollTrace,
-                                const uint64_t numPollCRS)
+                                std::unordered_map<uint64_t, int> &failedCompletedReqs, UrmaWriteTrace &pollTrace)
 {
-    urma_cr_t completeRecords[numPollCRS];
-    urma_jfc_t *ev_jfc = nullptr;
+    std::array<urma_cr_t, URMA_COMPLETION_POLL_BATCH_SIZE> completeRecords;
     int cnt;
-
-    if (IsEventModeEnabled()) {
-        // wait for the event
-        cnt = ds_urma_wait_jfc(urmaResource_->GetJfce(), 1, RPC_POLL_TIME, &ev_jfc);
-        if (cnt < 0 || cnt > 1 || (cnt == 1 && urmaJfc != ev_jfc)) {
-            // This is error case
-            // cnt can be 0 or 1 and jfc should match
-            RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to wait jfc, ret = %d", cnt));
-        } else if (cnt == 0) {
-            // not found any event, just retry
-            return Status::OK();
-        }
-
-        // Got the event, now get CR for the event
-        // Event mode can poll one CR at a time
-        cnt = ds_urma_poll_jfc(urmaJfc, numPollCRS, &completeRecords[0]);
-        INJECT_POINT("UrmaManager.CheckCompletionRecordStatus", [&completeRecords]() {
-            completeRecords[0].status = URMA_CR_REM_ACCESS_ABORT_ERR;
-            return Status::OK();
-        });
-        if (cnt < 0) {
-            // this is error case
-            // cnt can be 0 or 1
-            RETURN_STATUS_LOG_ERROR(
-                K_URMA_ERROR,
-                FormatString("[URMA_POLL_JFC]: call urma_poll_jfc failed, ret:%d, CR.status:%d, suggest: %s", cnt,
-                             completeRecords[0].status, URMA_ERROR_SUGGEST));
-        } else if (cnt > 0) {
-            // Ack the event and rearm jfc to process next event
-            uint32_t ack_cnt = 1;
-            ds_urma_ack_jfc((urma_jfc_t **)&ev_jfc, &ack_cnt, 1);
-            auto status = ds_urma_rearm_jfc(urmaJfc, false);
-            if (status != URMA_SUCCESS) {
-                RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to rearm jfc, status = %d", status));
-            }
-            return CheckCompletionRecordStatus(completeRecords, cnt, successCompletedReqs, failedCompletedReqs);
-        }
-        return Status::OK();
-    }
 
     const uint32_t logThresholdUs = GetUrmaLogThresholdUs();
     // trys maxTryCount times to get an event
@@ -2210,7 +2158,7 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
                       << "us, cpuid: " << sched_getcpu() << ", suggest: " << URMA_ELAPSED_THREAD_SCHED_SUGGEST;
         }
         Timer timer;
-        cnt = ds_urma_poll_jfc(urmaJfc, numPollCRS, completeRecords);
+        cnt = ds_urma_poll_jfc(urmaJfc, URMA_COMPLETION_POLL_BATCH_SIZE, completeRecords.data());
         timer.Stop();
         auto pollElapsedUs = timer.ElapsedMicroSecond();
         pollLastStartUs_ = pollStartUs;
@@ -2246,7 +2194,8 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
         } else if (cnt > 0) {
             pollTrace.pollBeginUs = timer.GetStartTimeStampUs();
             pollTrace.pollEndUs = timer.GetEndTimeStampUs();
-            return CheckCompletionRecordStatus(completeRecords, cnt, successCompletedReqs, failedCompletedReqs);
+            return CheckCompletionRecordStatus(completeRecords.data(), cnt, successCompletedReqs,
+                                               failedCompletedReqs);
         }
         if (serverStop_.load()) {
             LOG(INFO) << "Worker exiting.";
@@ -2589,12 +2538,12 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
     uint64_t remainSize = args.size;
     const uint64_t maxWriteSize = urmaResource_->GetMaxWriteSize();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(maxWriteSize > 0, K_RUNTIME_ERROR, "URMA max write size is zero");
-    const uint64_t writeChunkCount = args.size / maxWriteSize + (args.size % maxWriteSize == 0 ? 0 : 1);
-    // Split evenly within the minimum chunk count instead of greedy max-size chunks: e.g. 8MB data
-    // with a 5MB limit becomes 4+4 (not 5+3), keeping per-post sizes balanced. ceil-division by
-    // writeChunkCount can never exceed maxWriteSize, and the hardware cap inside GetMaxWriteSize()
-    // remains the hard upper bound for every chunk.
-    const uint64_t balancedWriteChunkSize = (args.size + writeChunkCount - 1) / writeChunkCount;
+    const uint64_t targetChunkCount = args.size > URMA_WRITE_BALANCE_THRESHOLD_BYTES ? 2 : 1;
+    const uint64_t deviceChunkCount = args.size / maxWriteSize + (args.size % maxWriteSize == 0 ? 0 : 1);
+    const uint64_t writeChunkCount = std::max(targetChunkCount, deviceChunkCount);
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(writeChunkCount > 0, K_RUNTIME_ERROR, "URMA write chunk count is zero");
+    const uint64_t balancedWriteChunkSize =
+        args.size / writeChunkCount + (args.size % writeChunkCount == 0 ? 0 : 1);
     uint64_t writeChunkIndex = 0;
     Timer timer;
     std::shared_ptr<UrmaJetty> jetty;
@@ -3793,27 +3742,28 @@ void UrmaManager::SetClientUbNumaConfig(bool affinityEnabled, uint32_t rrType, u
 {
     rrType = NormalizeUbNumaRrType(rrType, configSource);
     srcChipPolicy = NormalizeUbNumaSrcChipPolicy(srcChipPolicy, configSource);
+    auto &manager = Instance();
     bool isFirstWorker = false;
-    std::call_once(Instance().clientUbNumaConfigOnce_, [&]() {
-        FLAGS_enable_ub_numa_affinity = affinityEnabled;
+    std::call_once(manager.clientUbNumaConfigOnce_, [&]() {
+        manager.ubNumaAffinityEnabled_ = affinityEnabled;
         FLAGS_ub_numa_rr_type = rrType;
         FLAGS_ub_numa_src_chip_policy = srcChipPolicy;
-        FLAGS_ub_numa_inflight_wr_diff_threshold = inflightWrDiffThreshold;
+        manager.ubNumaInflightWrDiffThreshold_ = inflightWrDiffThreshold;
         isFirstWorker = true;
         LOG(INFO) << "Set client UB NUMA config from worker " << configSource << ", affinityEnabled=" << affinityEnabled
                   << ", rrType=" << rrType << ", srcChipPolicy=" << srcChipPolicy
                   << ", inflightWrDiffThreshold=" << inflightWrDiffThreshold;
     });
     if (!isFirstWorker
-        && (FLAGS_enable_ub_numa_affinity != affinityEnabled || FLAGS_ub_numa_rr_type != rrType
+        && (manager.ubNumaAffinityEnabled_ != affinityEnabled || FLAGS_ub_numa_rr_type != rrType
             || FLAGS_ub_numa_src_chip_policy != srcChipPolicy
-            || FLAGS_ub_numa_inflight_wr_diff_threshold != inflightWrDiffThreshold)) {
+            || manager.ubNumaInflightWrDiffThreshold_ != inflightWrDiffThreshold)) {
         LOG(WARNING) << "Worker " << configSource << " reported UB NUMA config affinityEnabled=" << affinityEnabled
                      << ", rrType=" << rrType << ", srcChipPolicy=" << srcChipPolicy
                      << ", inflightWrDiffThreshold=" << inflightWrDiffThreshold
-                     << ", but the client keeps affinityEnabled=" << FLAGS_enable_ub_numa_affinity
+                     << ", but the client keeps affinityEnabled=" << manager.ubNumaAffinityEnabled_
                      << ", rrType=" << FLAGS_ub_numa_rr_type << ", srcChipPolicy=" << FLAGS_ub_numa_src_chip_policy
-                     << ", inflightWrDiffThreshold=" << FLAGS_ub_numa_inflight_wr_diff_threshold;
+                     << ", inflightWrDiffThreshold=" << manager.ubNumaInflightWrDiffThreshold_;
     }
 }
 
@@ -3832,6 +3782,11 @@ void UrmaManager::RegisterClientMapping(const std::string &entityId, const std::
     }
     previous = connectionKey;
     ++clientConnectionOwners_[connectionKey];
+}
+
+bool UrmaManager::IsUbNumaAffinityConfigured() const
+{
+    return ubNumaAffinityEnabled_;
 }
 
 Status UrmaManager::RemoveRemoteClient(ClientKey clientEntityId)

@@ -60,14 +60,10 @@ public:
         opts.numOBS = 1;
         opts.numCoordinators = 1;
         opts.enableDistributedMaster = "true";
-        // oc_io_from_l2cache_need_metadata=false: skip etcd metadata fallback (no etcd in this
-        // cluster) and enable the existing GetObjectsWithoutMeta L2-cache path for absent keys.
         // node_timeout_s=60: keep the hash ring stable during the test so the pre-filtered key's
         // metadata owner does not shift while we kill the primary worker.
         opts.workerGflagParams =
-            "-oc_io_from_l2cache_need_metadata=false "
             "-enable_l2_cache_fallback=true "
-            "-enable_worker_worker_batch_get=false "
             "-node_timeout_s=60 -node_dead_timeout_s=120 "
             "-shared_memory_size_mb=5120 -v=2";
         opts.coordinatorGflagParams = "-node_timeout_s=60 -node_dead_timeout_s=120";
@@ -263,7 +259,6 @@ public:
     {
         KVClientPeerDeadL2Fallback::SetClusterSetupOptions(opts);
         opts.workerGflagParams =
-            "-oc_io_from_l2cache_need_metadata=false "
             "-enable_l2_cache_fallback=false "
             "-node_timeout_s=60 -node_dead_timeout_s=120 "
             "-shared_memory_size_mb=5120 -v=2";
@@ -304,16 +299,9 @@ TEST_F(KVClientPeerDeadL2FallbackDisabled, LEVEL1_PeerDeadL2FallbackDisabledFast
     ASSERT_EQ(rc.GetCode(), StatusCode::K_RPC_PEER_DEAD) << rc.ToString();
 }
 
-// Batch path guard: with enable_worker_worker_batch_get=true, the same peer-dead race must
-// also fall back to L2. HandleBatchSubResponsePart2 has the same IsNonRetryableRpcError gate
-// that was fixed in parallel with the scalar path.
+// Batch path guard: the same peer-dead race must also fall back to L2. HandleBatchSubResponsePart2 has the same
+// IsNonRetryableRpcError gate that was fixed in parallel with the scalar helper retained for fallback handling.
 class KVClientPeerDeadL2FallbackBatchGet : public KVClientPeerDeadL2Fallback {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        KVClientPeerDeadL2Fallback::SetClusterSetupOptions(opts);
-        opts.workerGflagParams += " -enable_worker_worker_batch_get=true";
-    }
 };
 
 TEST_F(KVClientPeerDeadL2FallbackBatchGet, LEVEL1_PeerDeadDuringBatchGetFallsBackToL2)

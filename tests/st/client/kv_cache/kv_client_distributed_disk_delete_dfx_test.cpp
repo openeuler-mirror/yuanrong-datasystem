@@ -33,7 +33,6 @@ namespace st {
 namespace {
 constexpr int NODE_TIMEOUT_S = 2;
 constexpr int NODE_DEAD_TIMEOUT_S = 60;
-constexpr int HEARTBEAT_INTERVAL_MS = 500;
 }  // namespace
 
 class KVClientDistributedDiskDeleteDfxTest : public KVClientScaleCommon {
@@ -69,15 +68,12 @@ public:
             " -distributed_disk_path=%s"
             " -distributed_disk_sync_interval_ms=0"
             " -distributed_disk_sync_batch_bytes=1"
-            " -enable_metadata_recovery=false"
             " -enable_reconciliation=false"
             " -enable_l2_cache_fallback=false"
-            " -auto_del_dead_node=false"
-            " -heartbeat_interval_ms=%d"
             " -node_timeout_s=%d"
             " -node_dead_timeout_s=%d"
             " -v=1",
-            distributedDiskPath_, HEARTBEAT_INTERVAL_MS, NODE_TIMEOUT_S, NODE_DEAD_TIMEOUT_S);
+            distributedDiskPath_, NODE_TIMEOUT_S, NODE_DEAD_TIMEOUT_S);
     }
 
 protected:

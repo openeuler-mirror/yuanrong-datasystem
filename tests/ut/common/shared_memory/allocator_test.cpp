@@ -39,6 +39,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/shared_memory/arena.h"
 #include "datasystem/common/shared_memory/arena_group_key.h"
@@ -733,17 +734,9 @@ TEST_F(AllocatorTest, TestReuseArena)
 
 TEST_F(AllocatorTest, UbTransportCreatesEqualArenasAndAllocatesRoundRobin)
 {
-    const uint32_t oldArenaNum = FLAGS_ub_transport_arena_num;
     const bool oldRegisterWholeArena = FLAGS_urma_register_whole_arena;
-    const bool oldNumaAffinity = FLAGS_enable_ub_numa_affinity;
-    Raii restoreFlags([oldArenaNum, oldRegisterWholeArena, oldNumaAffinity] {
-        FLAGS_ub_transport_arena_num = oldArenaNum;
-        FLAGS_urma_register_whole_arena = oldRegisterWholeArena;
-        FLAGS_enable_ub_numa_affinity = oldNumaAffinity;
-    });
-    FLAGS_ub_transport_arena_num = 2;
+    Raii restoreFlags([oldRegisterWholeArena] { FLAGS_urma_register_whole_arena = oldRegisterWholeArena; });
     FLAGS_urma_register_whole_arena = false;
-    FLAGS_enable_ub_numa_affinity = false;
 
     constexpr uint64_t poolSize = 16 * 1024 * 1024;
     std::vector<std::pair<void *, size_t>> arenaMappings;
@@ -767,10 +760,11 @@ TEST_F(AllocatorTest, UbTransportCreatesEqualArenasAndAllocatesRoundRobin)
     DS_ASSERT_OK(allocator->CreateArenaGroup(DEFAULT_TENANT_ID, poolSize, arenaGroup,
                                              memory::CacheType::UB_TRANSPORT));
 
-    ASSERT_EQ(arenaMappings.size(), 2u);
-    ASSERT_EQ(arenaGroup->GetArenaIds().size(), 2u);
-    EXPECT_EQ(arenaMappings[0].second, poolSize / 2);
-    EXPECT_EQ(arenaMappings[1].second, poolSize / 2);
+    ASSERT_EQ(arenaMappings.size(), UB_TRANSPORT_ARENA_NUM);
+    ASSERT_EQ(arenaGroup->GetArenaIds().size(), UB_TRANSPORT_ARENA_NUM);
+    for (const auto &mapping : arenaMappings) {
+        EXPECT_EQ(mapping.second, poolSize / UB_TRANSPORT_ARENA_NUM);
+    }
 
     auto allocate = [&arenaGroup]() {
         void *pointer = nullptr;

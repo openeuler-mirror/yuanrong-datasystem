@@ -113,13 +113,13 @@ constexpr auto TEST_PURE_CONTROL_BUDGET = std::chrono::seconds(3);
 constexpr auto TEST_LARGE_BATCH_DEADLINE = std::chrono::seconds(5);
 constexpr size_t TEST_CLUSTER_LIMIT = 2;
 constexpr size_t TEST_JOINING_MEMBER_COUNT = 500;
+constexpr uint32_t TEST_TOKENS_PER_MEMBER = 4;
 
 std::vector<uint32_t> MakeMemberTokens(const std::string &address)
 {
-    constexpr uint32_t tokenCount = 4;
     std::vector<uint32_t> tokens;
-    tokens.reserve(tokenCount);
-    for (uint32_t index = 0; index < tokenCount; ++index) {
+    tokens.reserve(TEST_TOKENS_PER_MEMBER);
+    for (uint32_t index = 0; index < TEST_TOKENS_PER_MEMBER; ++index) {
         tokens.emplace_back(cluster::HashAlgorithm::MakeToken(address, index, 0));
     }
     return tokens;
@@ -138,6 +138,7 @@ std::shared_ptr<const cluster::TopologySnapshot> MakeActiveSnapshot(size_t membe
     cluster::TopologyState state;
     state.version = 1;
     state.clusterHasInit = true;
+    state.tokensPerMember = TEST_TOKENS_PER_MEMBER;
     for (size_t index = 0; index < memberCount; ++index) {
         const auto address = "127.0.0.1:" + std::to_string(12001 + index);
         state.members.push_back(cluster::Member{ { std::string(15, 'a') + static_cast<char>('a' + index), address },
@@ -156,6 +157,7 @@ std::shared_ptr<const cluster::TopologySnapshot> MakeSnapshot(
     cluster::TopologyState state;
     state.version = 1;
     state.clusterHasInit = true;
+    state.tokensPerMember = TEST_TOKENS_PER_MEMBER;
     for (size_t index = 0; index < states.size(); ++index) {
         const auto address = "127.0.0.1:" + std::to_string(12001 + index);
         state.members.push_back(cluster::Member{ { std::string(15, 'a') + static_cast<char>('a' + index), address },
@@ -922,7 +924,8 @@ TEST_F(TopologyControlHostTest, ActiveFailureFenceRejectsMembershipMutationBefor
     for (const auto &membership : memberships) {
         StoreMembership("blue", membership.address, membership.timestamp);
     }
-    cluster::TopologyState current{ true, snapshot->Version(), snapshot->Members(), snapshot->GetActiveBatch() };
+    cluster::TopologyState current{ true, snapshot->Version(), snapshot->Members(), snapshot->GetActiveBatch(),
+                                    snapshot->TokensPerMember() };
     std::string encoded;
     DS_ASSERT_OK(cluster::TopologyRepositoryCodec::EncodeTopology(current, encoded));
     int64_t version = 0;

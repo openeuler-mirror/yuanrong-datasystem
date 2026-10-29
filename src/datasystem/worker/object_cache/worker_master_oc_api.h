@@ -360,6 +360,8 @@ public:
 
     virtual Status PureQueryMeta(master::PureQueryMetaReqPb &req, master::PureQueryMetaRspPb &rsp) = 0;
 
+    virtual Status BatchExists(master::BatchExistsReqPb &req, master::BatchExistsRspPb &rsp) = 0;
+
     virtual Status CheckObjectDataLocation(master::CheckObjectDataLocationReqPb &req,
                                            master::CheckObjectDataLocationRspPb &rsp) = 0;
 
@@ -467,6 +469,7 @@ public:
     Status ReleaseMetaData(ReleaseMetaDataReqPb &req, ReleaseMetaDataRspPb &resp) override;
     Status ReplacePrimary(master::ReplacePrimaryReqPb &req, master::ReplacePrimaryRspPb &rsp) override;
     Status PureQueryMeta(master::PureQueryMetaReqPb &req, master::PureQueryMetaRspPb &rsp) override;
+    Status BatchExists(master::BatchExistsReqPb &req, master::BatchExistsRspPb &rsp) override;
     Status CheckObjectDataLocation(master::CheckObjectDataLocationReqPb &req,
                                    master::CheckObjectDataLocationRspPb &rsp) override;
     Status RollbackMultiMeta(master::RollbackMultiMetaReqPb &req, master::RollbackMultiMetaRspPb &rsp) override;
@@ -564,6 +567,7 @@ public:
     Status ReleaseMetaData(ReleaseMetaDataReqPb &req, ReleaseMetaDataRspPb &resp) override;
     Status ReplacePrimary(master::ReplacePrimaryReqPb &req, master::ReplacePrimaryRspPb &rsp) override;
     Status PureQueryMeta(master::PureQueryMetaReqPb &req, master::PureQueryMetaRspPb &rsp) override;
+    Status BatchExists(master::BatchExistsReqPb &req, master::BatchExistsRspPb &rsp) override;
     Status CheckObjectDataLocation(master::CheckObjectDataLocationReqPb &req,
                                    master::CheckObjectDataLocationRspPb &rsp) override;
     Status RollbackMultiMeta(master::RollbackMultiMetaReqPb &req, master::RollbackMultiMetaRspPb &rsp) override;

@@ -1057,6 +1057,20 @@ Status WorkerRemoteMasterOCApi::PureQueryMeta(master::PureQueryMetaReqPb &req, m
     return WithRpcDiag(rc, "PureQueryMeta", localHostPort_, hostPort_);
 }
 
+Status WorkerRemoteMasterOCApi::BatchExists(master::BatchExistsReqPb &req, master::BatchExistsRspPb &rsp)
+{
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+    if (remainingTime <= 0) {
+        return WithRpcDiag(Status(K_RPC_DEADLINE_EXCEEDED, "BatchExists request timeout"),
+                           "BatchExists", localHostPort_, hostPort_);
+    }
+    RpcOptions opts;
+    opts.SetTimeout(remainingTime);
+    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
+    auto rc = brpcSession_->BatchExists(opts, req, rsp);
+    return WithRpcDiag(rc, "BatchExists", localHostPort_, hostPort_);
+}
+
 Status WorkerRemoteMasterOCApi::CheckObjectDataLocation(master::CheckObjectDataLocationReqPb &req,
                                                         master::CheckObjectDataLocationRspPb &rsp)
 {
@@ -1601,6 +1615,12 @@ Status WorkerLocalMasterOCApi::PureQueryMeta(master::PureQueryMetaReqPb &req, ma
 {
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     return masterOC_->PureQueryMeta(req, rsp);
+}
+
+Status WorkerLocalMasterOCApi::BatchExists(master::BatchExistsReqPb &req, master::BatchExistsRspPb &rsp)
+{
+    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
+    return masterOC_->BatchExists(req, rsp);
 }
 
 Status WorkerLocalMasterOCApi::CheckObjectDataLocation(master::CheckObjectDataLocationReqPb &req,

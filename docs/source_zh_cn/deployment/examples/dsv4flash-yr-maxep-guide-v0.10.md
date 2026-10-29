@@ -239,7 +239,7 @@ export ETCD_PORT=2379
 export SHM_SIZE=512000
 export NODE_TIMEOUT=30
 export NODE_DEAD_TIMEOUT=60
-export LIVENESS_PATH=/workspace/liveness
+export WORKER_PROBE_PATH=/workspace/worker
 
 dscli start -t 600 -w \
   --worker_address ${HOST_IP}:${WORKER_PORT} \
@@ -247,7 +247,7 @@ dscli start -t 600 -w \
   --shared_memory_size_mb ${SHM_SIZE} \
   --node_timeout_s ${NODE_TIMEOUT} \
   --node_dead_timeout_s ${NODE_DEAD_TIMEOUT} \
-  --liveness_check_path ${LIVENESS_PATH}
+  --health_check_path ${WORKER_PROBE_PATH}
 
 echo "Yuanrong service start finished!"
 ```
@@ -263,9 +263,7 @@ echo "Yuanrong service start finished!"
 | shared_memory_size_mb | 512000 | 共享内存大小（500 GB） |
 | node_timeout_s | 30 | 节点超时时间（秒） |
 | node_dead_timeout_s | 60 | 节点死亡超时时间（秒） |
-| rpc_thread_num | 16 | 处理线程数量 |
-| enable_worker_worker_batch_get | false | 批量传输key |
-| liveness_check_path | /workspace/liveness | 存活检查路径 |
+| health_check_path | /workspace/worker | Worker 启动与存活探针路径 |
 
 > **参考文档**：[openYuanrong Datasystem 文档](https://atomgit.com/openeuler/yuanrong-datasystem)
 
@@ -1172,7 +1170,7 @@ readonly WORK_DIR=$(dirname "$(readlink -f "$0")")
 source ${WORK_DIR}/utils.sh
 
 function main() {
-    PROBE_PATH=/workspace/liveness
+    PROBE_PATH=/workspace/worker
     PROBE_TIMEOUT=30
 
     while getopts 'f:t:' OPT; do
@@ -1192,12 +1190,6 @@ function main() {
 
     if [ ! -e "${PROBE_PATH}" ]; then
         elog "liveness probe file ${PROBE_PATH} not exists!"
-        exit 1
-    fi
-
-    content="$(cat ${PROBE_PATH})"
-    if ! grep -q "liveness check success" "${PROBE_PATH}"; then
-        elog "liveness probe ${PROBE_PATH} check failed: ${content}"
         exit 1
     fi
 
@@ -1302,7 +1294,7 @@ export ETCD_PORT=2379
 export SHM_SIZE=512000
 export NODE_TIMEOUT=300
 export NODE_DEAD_TIMEOUT=600
-export LIVENESS_PATH=/workspace/liveness
+export WORKER_PROBE_PATH=/workspace/worker
 
 dscli start -t 600 -w \
   --worker_address ${HOST_IP}:${WORKER_PORT} \
@@ -1310,7 +1302,7 @@ dscli start -t 600 -w \
   --shared_memory_size_mb ${SHM_SIZE} \
   --node_timeout_s ${NODE_TIMEOUT} \
   --node_dead_timeout_s ${NODE_DEAD_TIMEOUT} \
-  --liveness_check_path ${LIVENESS_PATH} \
+  --health_check_path ${WORKER_PROBE_PATH} \
   --arena_per_tenant 1 \
   --enable_huge_tlb true
 
@@ -1362,7 +1354,7 @@ export ETCD_PORT=2379
 export SHM_SIZE=512000
 export NODE_TIMEOUT=300
 export NODE_DEAD_TIMEOUT=600
-export LIVENESS_PATH=/workspace/liveness
+export WORKER_PROBE_PATH=/workspace/worker
 
 dscli start -t 600 -w \
   --worker_address ${HOST_IP}:${WORKER_PORT} \
@@ -1370,7 +1362,7 @@ dscli start -t 600 -w \
   --shared_memory_size_mb ${SHM_SIZE} \
   --node_timeout_s ${NODE_TIMEOUT} \
   --node_dead_timeout_s ${NODE_DEAD_TIMEOUT} \
-  --liveness_check_path ${LIVENESS_PATH} \
+  --health_check_path ${WORKER_PROBE_PATH} \
   --arena_per_tenant 1 \
   --remote_h2d_device_ids "0,1,2,3,4,5,6,7" \
   --enable_huge_tlb true

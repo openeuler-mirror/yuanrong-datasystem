@@ -500,11 +500,11 @@ def main():
     parser_start.add_argument('--set', '-s', action='append', default=[],
                               help='Add/override config values (format: key=value). '
                                    'Common coordinator keys: log_dir, log_filename, '
-                                   'minloglevel, rpc_thread_num, '
+                                   'minloglevel, brpc_server_num_threads, '
                                    'watch_event_dispatch_thread, '
                                    'coordinator_rpc_stub_cache_size, '
                                    'max_log_size, max_log_file_num, '
-                                   'log_retention_day. Example: --set rpc_thread_num=128')
+                                   'log_retention_day. Example: --set brpc_server_num_threads=128')
     parser_start.add_argument('--enable-procmon', action='store_true', default=False,
                               dest='enable_procmon',
                               help='Start procmon.py for coordinator monitoring (default: disabled)')
@@ -647,7 +647,7 @@ def main():
     parser_deploy.add_argument('--set', '-s', action='append', default=[],
                                help='Add/override config values (format: key=value). '
                                     'Common coordinator keys: log_dir, log_filename, '
-                                    'minloglevel, rpc_thread_num, '
+                                    'minloglevel, brpc_server_num_threads, '
                                     'watch_event_dispatch_thread, '
                                     'coordinator_rpc_stub_cache_size, '
                                     'max_log_size, max_log_file_num, '

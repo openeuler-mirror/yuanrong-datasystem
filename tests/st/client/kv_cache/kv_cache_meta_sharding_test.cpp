@@ -16,12 +16,13 @@
 
 /**
  * Description: ST tests for 64-way sharded ExpiredObjectManager and OCMetadataManager.
- *              Validates cross-shard fairness (k-way merge), TTL lifecycle, async delete
- *              consistency, and per-worker metadata removal across all 64 MetaTableShards.
+ *              Validates cross-shard fairness (k-way merge), async delete consistency,
+ *              and per-worker metadata removal across all 64 MetaTableShards.
  */
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <atomic>
+#include <functional>
 #include <set>
 #include <thread>
 #include <vector>
@@ -108,18 +109,20 @@ protected:
         return errors;
     }
 
-    // Count keys that exist and match expected value.
-    int CountMatch(const std::vector<std::string> &keys, const std::string &expected,
-                   std::shared_ptr<KVClient> &client)
+    static std::vector<std::string> GenerateOneKeyPerShard(const std::string &label)
     {
-        int match = 0;
-        std::string out;
-        for (const auto &key : keys) {
-            if (client->Get(key, out).IsOk() && out == expected) {
-                ++match;
+        static constexpr size_t kMetaShardCount = 64;
+        std::vector<std::string> keys(kMetaShardCount);
+        size_t found = 0;
+        for (size_t i = 0; found < kMetaShardCount; ++i) {
+            std::string key = label + "_shard_" + std::to_string(i);
+            size_t shard = std::hash<std::string>{}(key) % kMetaShardCount;
+            if (keys[shard].empty()) {
+                keys[shard] = key;
+                ++found;
             }
         }
-        return match;
+        return keys;
     }
 
     // Poll until at least targetPct of keys are NOT_FOUND, or maxWaitSec elapsed.
@@ -200,48 +203,6 @@ TEST_F(KVCacheMetaShardingTest, CrossShardFairnessLargeBatch)
     }
 }
 
-// A2: CreateMetaWithTTLLifecycle
-// Full lifecycle test through 64-way sharded metadata:
-//   create -> immediate read-back -> wait for expiry -> verify deletion -> re-insert works.
-TEST_F(KVCacheMetaShardingTest, CreateMetaWithTTLLifecycle)
-{
-    const int kNumKeys = 500;
-    const uint32_t kTtlSeconds = 5;
-    const std::string kValue = "lifecycle_val";
-
-    auto keys = GenerateVariedKeys(kNumKeys, "life");
-
-    LOG(INFO) << "[A2] Phase 1: Creating " << kNumKeys << " keys with TTL=" << kTtlSeconds << "s";
-    InsertKeys(keys, kValue, kTtlSeconds, client1);
-
-    // Phase 2: Immediately verify all keys exist and return correct value.
-    LOG(INFO) << "[A2] Phase 2: Verifying all " << kNumKeys << " keys exist";
-    int found = CountMatch(keys, kValue, client1);
-    EXPECT_EQ(found, kNumKeys)
-        << "All keys must be readable immediately. Missing " << (kNumKeys - found);
-
-    // Phase 3: Wait for TTL to expire, then poll for deletion.
-    LOG(INFO) << "[A2] Phase 3: Waiting " << (kTtlSeconds + 1) << "s for TTL expiry";
-    std::this_thread::sleep_for(std::chrono::seconds(kTtlSeconds + 1));
-    int notFound = WaitForKeysDeleted(keys, client1, 0.95, 60);
-
-    // Phase 4: Verify all keys are gone (NOT_FOUND). Fallback to 80%.
-    LOG(INFO) << "[A2] Phase 4: Verifying all keys expired, NOT_FOUND=" << notFound;
-    if (notFound < kNumKeys * 0.95) {
-        EXPECT_GE(notFound, kNumKeys * 0.80)
-            << "Most keys must be NOT_FOUND after TTL. " << (kNumKeys - notFound) << " still exist.";
-    }
-
-    // Phase 5: Re-insert previously-expired key — must succeed (no stale metadata conflict).
-    std::string rekey = keys[0];
-    std::string reval = "relife_val";
-    DS_ASSERT_OK(client1->Set(rekey, reval,
-                             { .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE, .ttlSecond = 10 }));
-    std::string out;
-    EXPECT_EQ(client1->Get(rekey, out), Status::OK());
-    EXPECT_EQ(out, reval);
-}
-
 // A3: AsyncDeleteMultiShardConsistency
 // Verify that after async delete completes: no partial state remains,
 // no key found in metadata but missing from TTL tracking (or vice versa).
@@ -299,14 +260,12 @@ TEST_F(KVCacheMetaShardingTest, AsyncDeleteMultiShardConsistency)
 // connection to maximize shard coverage.
 TEST_F(KVCacheMetaShardingTest, RemoveMetaByWorkerFullShardCoverage)
 {
-    const int kKeysPerWorker = 300;
     const std::string kValue = "rmw_val";
 
-    // Generate keys with distinct prefixes per logical worker group,
-    // ensuring broad distribution across MetaTableShards.
-    auto w0Keys = GenerateVariedKeys(kKeysPerWorker, "w0");
-    auto w1Keys = GenerateVariedKeys(kKeysPerWorker, "w1");
-    auto w2Keys = GenerateVariedKeys(kKeysPerWorker, "w2");
+    auto w0Keys = GenerateOneKeyPerShard("w0");
+    auto w1Keys = GenerateOneKeyPerShard("w1");
+    auto w2Keys = GenerateOneKeyPerShard("w2");
+    const int kKeysPerWorker = static_cast<int>(w0Keys.size());
 
     // Insert via different client connections (each connected to a distinct worker).
     LOG(INFO) << "[A4] Inserting " << kKeysPerWorker << " keys per worker";

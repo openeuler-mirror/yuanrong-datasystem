@@ -43,7 +43,7 @@ public:
         opts.numOBS = 1;
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
-            "-shared_memory_size_mb=5120 -node_timeout_s=1 -node_dead_timeout_s=2 -heartbeat_interval_ms=500 -v=2 ";
+            "-shared_memory_size_mb=5120 -node_timeout_s=1 -node_dead_timeout_s=2 -v=2 ";
         opts.waitWorkerReady = false;
     }
     void SetUp() override
@@ -92,15 +92,13 @@ protected:
     std::shared_ptr<KVClient> client0_, client1_;
 };
 
-TEST_F(KVClientWorkerTimeoutStorage, LEVEL1_WorkerTimeoutAndMetaGetFromEtcd)
+TEST_F(KVClientWorkerTimeoutStorage, LEVEL1_WorkerTimeoutReadsL2WithoutMetadataRecovery)
 {
-    // 1. Let the meta of data1 and data2 choice worker1 and worker2 respectively.
     std::string objectKey = NewObjectKey();
     std::string data = randomData_.GetRandomString(10);
     SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
     DS_ASSERT_OK(client0_->Set(objectKey, data, param));
 
-    // 2. Primary worker timeout, get data from l2cache.
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
     sleep(5);  // Wait for the 2-second dead confirmation budget plus processing margin.
     std::string getValue;

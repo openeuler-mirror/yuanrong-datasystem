@@ -114,7 +114,7 @@ public:
         HostPort workerAddr(HOST_IP, GetFreePort());
         HostPort masterAddr;
         RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(0, masterAddr));
-        RETURN_IF_NOT_OK(cluster_->AddNode(masterAddr, workerAddr.ToString(), GetFreePort()));
+        RETURN_IF_NOT_OK(cluster_->AddNode(masterAddr, workerAddr.ToString()));
         RETURN_IF_NOT_OK(cluster_->WaitNodeReady(WORKER, newWorkerIdx));
         return Status::OK();
     }
@@ -955,10 +955,9 @@ public:
         opts.numWorkers = ++workerNum_;
         opts.enableDistributedMaster = "true";
         opts.vLogLevel = 1;
-        // Set up node_dead_timeout_s and auto_del_dead_node flags, so that a new meta owner master can be reselected
-        // for passive scale down purposes
+        // Use a short dead-node timeout so a new metadata owner can be selected during passive scale-down.
         opts.workerGflagParams = FormatString(
-            " -v=2 -node_timeout_s=3 -node_dead_timeout_s=%d -auto_del_dead_node=true -shared_memory_size_mb=10240",
+            " -v=2 -node_timeout_s=3 -node_dead_timeout_s=%d -shared_memory_size_mb=10240",
             NODE_DEAD_TIMEOUT);
         SCClientCommon::SetClusterSetupOptions(opts);
     }
@@ -1136,10 +1135,9 @@ public:
         // Start 3 workers
         opts.numWorkers = ++workerNum_;
         opts.enableDistributedMaster = "true";
-        // Set up node_dead_timeout_s and auto_del_dead_node flags, so that a new meta owner master can be reselected
-        // for passive scale down purposes
+        // Use a short dead-node timeout so a new metadata owner can be selected during passive scale-down.
         opts.workerGflagParams = FormatString(
-            " -v=2 -node_timeout_s=3 -node_dead_timeout_s=%d -auto_del_dead_node=true -shared_memory_size_mb=10240"
+            " -v=2 -node_timeout_s=3 -node_dead_timeout_s=%d -shared_memory_size_mb=10240"
             " -log_monitor=true -log_monitor_interval_ms=1000 "
             "-sc_metrics_log_interval_s=1",
             NODE_DEAD_TIMEOUT);
@@ -1603,10 +1601,9 @@ public:
         opts.numWorkers = ++workerNum_;
         opts.enableDistributedMaster = "true";
         opts.vLogLevel = 1;
-        // Set up node_dead_timeout_s and auto_del_dead_node flags, so that a new meta owner master can be reselected
-        // for passive scale down purposes
+        // Use a short dead-node timeout so a new metadata owner can be selected during passive scale-down.
         opts.workerGflagParams = FormatString(
-            " -v=2 -node_timeout_s=3 -node_dead_timeout_s=%d -auto_del_dead_node=true -shared_memory_size_mb=10240 "
+            " -v=2 -node_timeout_s=3 -node_dead_timeout_s=%d -shared_memory_size_mb=10240 "
             "-enable_stream_data_verification=true",
             NODE_DEAD_TIMEOUT);
         SCClientCommon::SetClusterSetupOptions(opts);

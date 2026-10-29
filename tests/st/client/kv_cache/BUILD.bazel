@@ -73,7 +73,6 @@ ds_cc_test(
         "//src/datasystem/client/kv_cache:read_only_buffer",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/util:thread_pool",
-        "@com_google_googletest//:gmock",
     ],
 )
 
@@ -108,17 +107,6 @@ ds_cc_test(
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:net_util",
-    ],
-)
-
-ds_cc_test(
-    name = "kv_cache_no_metadata_header_test",
-    srcs = ["kv_cache_no_metadata_header_test.cpp"],
-    tags = ["manual"],
-    deps = KV_COMMON_DEPS + [
-        "//src/datasystem/client/kv_cache:read_only_buffer",
-        "//src/datasystem/common/util:net_util",
-        "//src/datasystem/common/util:raii",
     ],
 )
 
@@ -299,6 +287,7 @@ ds_cc_test(
     tags = ["manual"],
     deps = KV_COMMON_DEPS + [
         "//src/datasystem/client/object_cache/transport:client_transport",
+        "//src/datasystem/cluster:coordination_timing",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/util:hash_algorithm",

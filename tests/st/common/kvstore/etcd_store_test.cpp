@@ -51,12 +51,11 @@ using namespace datasystem;
 
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(cluster_name);
-DS_DECLARE_bool(auto_del_dead_node);
 DS_DECLARE_bool(enable_etcd_auth);
-DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_string(etcd_target_name_override);
 DS_DECLARE_string(encrypt_kit);
 DS_DECLARE_string(etcd_passphrase_path);
+DS_DECLARE_uint32(node_dead_timeout_s);
 
 namespace datasystem {
 namespace st {
@@ -359,6 +358,25 @@ TEST_F(EtcdStoreTest, TestPutGetKeyValue1)
     db_->Close();  // Execute the close function for test coverage
 }
 
+TEST_F(EtcdStoreTest, RejectsPutAfterNodeDeadTimeout)
+{
+    const auto originalNodeDeadTimeoutS = FLAGS_node_dead_timeout_s;
+    Raii restoreTestState([originalNodeDeadTimeoutS] {
+        (void)inject::Clear("EtcdStore.Put.keepAliveElapsedMs");
+        FLAGS_node_dead_timeout_s = originalNodeDeadTimeoutS;
+    });
+    FLAGS_node_dead_timeout_s = 1;
+    InitTestEtcdInstance();
+    ASSERT_TRUE(db_ != nullptr && tableCreated_);
+    DS_ASSERT_OK(inject::Set("EtcdStore.Put.keepAliveElapsedMs", "call(1000)"));
+    DS_ASSERT_OK(db_->Put(tableName_, "at-timeout", "value"));
+
+    DS_ASSERT_OK(inject::Clear("EtcdStore.Put.keepAliveElapsedMs"));
+    DS_ASSERT_OK(inject::Set("EtcdStore.Put.keepAliveElapsedMs", "call(1001)"));
+    const Status rc = db_->Put(tableName_, "after-timeout", "value");
+    EXPECT_EQ(rc.GetCode(), K_RUNTIME_ERROR);
+}
+
 TEST_F(EtcdStoreTest, TestPutLease1)
 {
     LOG(INFO) << "Test EtcdStore put with lease in a table.";
@@ -642,9 +660,6 @@ TEST_F(EtcdStoreTest, TestWatchEvents3)
 TEST_F(EtcdStoreTest, TestKeepAliveFailedDueToNetworkerFailure)
 {
     FLAGS_node_timeout_s = 3;  // node timeout is 3 s
-    // This case only asserts the fake DELETE on confirmed local isolation; disable auto suicide so the
-    // test process is not SIGKILL'd by the restored rc26 keepAlive dead-timeout path.
-    FLAGS_auto_del_dead_node = false;
     datasystem::inject::Set("EtcdStore.LaunchKeepAliveThreads.loopQuickly", "call(0)");
     InitTestEtcdInstance();
     ASSERT_TRUE(db_ != nullptr && tableCreated_);

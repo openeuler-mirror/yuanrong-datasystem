@@ -28,7 +28,7 @@
   - `tests/README.md`
   - `build.sh`
 - Last verified against source:
-  - `2026-04-13`
+  - `2026-10-17`
 - Related context docs:
   - `.repo_context/modules/runtime/worker-runtime.md`
   - `.repo_context/modules/runtime/topology/README.md`
@@ -113,8 +113,7 @@
 
 | Term | Meaning in this repository | Source or note |
 | --- | --- | --- |
-| `ready check` | file-based readiness signal created after worker service startup success | `src/datasystem/worker/worker_oc_server.cpp` |
-| `liveness probe` | file-based health signal maintained by `WorkerLivenessCheck` | `src/datasystem/worker/worker_liveness_check.cpp` |
+| `Worker probe` | startup file and liveness lease | `worker_oc_server.cpp`, `worker_liveness_check.cpp` |
 | `ordinary logs` | severity-based repository logs emitted through `LOG` and `VLOG` | `src/datasystem/common/log/log.h`, `logging.cpp` |
 | `resource monitor` | periodic resource metric output persisted through `HardDiskExporter` | `src/datasystem/common/metrics/res_metric_collector.cpp` |
 | `partial observability degradation` | business logic continues while one observability path, such as monitor logs, is reduced or missing | validated from logging and metrics init behavior |
@@ -122,10 +121,11 @@
 ## Current State And Design Choice Notes
 
 - Current implementation or baseline behavior:
-  - observability is file-centric and process-local, built from ordinary logs, access logs, resource monitor files, crash output, readiness files, and liveness files.
+  - observability is file-centric and process-local, built from ordinary logs, access logs, resource monitor files,
+    crash output, and one Worker probe file.
 - Relevant constraints from current release or deployment:
   - monitor logging can be disabled or degraded without stopping the worker process;
-  - readiness and liveness are file-based rather than network endpoint-based in the currently inspected worker paths;
+  - startup readiness and liveness share one file rather than a network endpoint;
   - some failures show up first as missing evidence, not immediate process exit.
 - Similar upstream, industry, or historical approaches considered:
   - compared with externally centralized observability stacks, this repository currently relies on local evidence production plus explicit runtime health signals.
@@ -142,13 +142,13 @@
   - logging provides severity logs, access logs, trace IDs, and crash output;
   - metrics provides periodic resource monitor files;
   - topology code influences whether the node is logically healthy for traffic;
-  - readiness and liveness files provide operator-facing health artifacts.
+  - one Worker probe provides the operator-facing startup and liveness artifact.
 - Key runtime roles or processes:
   - request or service threads serving object, stream, and worker APIs;
   - background maintenance threads for logging, metrics flush, and liveness checks;
   - runtime startup and shutdown orchestration in `worker_main.cpp` and `worker.cpp`.
 - Key persistent state, if any:
-  - ordinary logs, access logs, resource monitor files, `container.log`, readiness file, and liveness file.
+  - ordinary logs, access logs, resource monitor files, `container.log`, and the Worker probe file.
 - Key control-flow or data-flow stages:
   - startup and config validation;
   - health artifact creation;
@@ -170,7 +170,8 @@
   - logging and metrics interact through shared file-exporter behavior;
   - cluster management influences whether a node is logically healthy for service.
 - Normal path summary:
-  - startup initializes logging and worker services, runtime creates readiness and liveness artifacts, request and background paths emit logs and metrics, and shutdown preserves a meaningful sequence of pre-shutdown then shutdown.
+  - startup initializes logging and worker services, publishes the Worker probe once, then liveness renews its mtime;
+    request and background paths emit logs and metrics, and shutdown preserves pre-shutdown then shutdown ordering.
 - Exceptional path summary:
   - startup may fail before readiness, liveness may fail after readiness, monitor logging may degrade independently, and cluster or backend misconfiguration may make a node unhealthy even when its process stays alive.
 
@@ -181,15 +182,16 @@
 - Internal service entrypoints:
   - `main()` in `src/datasystem/worker/worker_main.cpp`
   - `Worker::Init`, `Worker::PreShutDown`, `Worker::ShutDown`
-  - `WorkerLivenessCheck::Init`, `Run`, `SetLivenessProbe`
+  - `WorkerLivenessCheck::Init`, `Run`, `RenewProbe`
   - `Logging::Start(...)`
   - `ResMetricCollector::Init()` and `Start()`
 - External protocols, schemas, or data formats:
-  - filesystem-backed probe files for readiness and liveness;
+  - one filesystem-backed Worker probe: existence records startup commit and mtime records liveness renewal;
   - severity log files, access log lines, resource monitor lines, and crash logs;
   - topology metadata behavior through ETCD or Metastore-backed runtime paths.
 - CLI commands, config flags, or environment variables:
-  - runtime health and operations-related flags such as `ready_check_path`, `liveness_check_path`, `liveness_probe_timeout_s`, `log_monitor`, `log_monitor_exporter`, `log_monitor_interval_ms`, `log_dir`, `etcd_address`, and `metastore_address`
+  - runtime health and operations flags such as `health_check_path`, `liveness_probe_timeout_s`, `log_monitor`,
+    `log_monitor_exporter`, `log_monitor_interval_ms`, `log_dir`, `etcd_address`, and `metastore_address`
   - test and reproduction entrypoints through `build.sh`
 - Background jobs, threads, or callbacks:
   - logging background maintenance;
@@ -204,7 +206,7 @@
   - upstream operators or tests depend on these artifacts to decide whether a node is healthy;
   - downstream diagnosis depends on stable file and config semantics.
 - Backward-compatibility expectations for external consumers:
-  - readiness and liveness file semantics, log file names, and monitor file layout should be treated as operationally visible behavior.
+  - Worker probe existence/mtime semantics, log file names, and monitor file layout are operationally visible behavior.
 
 ## Core Components
 
@@ -239,12 +241,13 @@ Failure-sensitive steps:
 - startup ordering issues can leave the process alive with incomplete observability;
 - config mistakes around metadata backends can block healthy steady state.
 
-### Liveness Monitoring And Health File Updates
+### Liveness Monitoring And Worker Probe Renewal
 
 1. `WorkerLivenessCheck::Init()` creates the liveness thread and policy set.
 2. The liveness thread periodically runs service checks and optional RocksDB checks for master nodes.
-3. Success writes `"liveness check success"` to the probe file; failure writes `"liveness check failed"`.
-4. Probe-file freshness and contents are revalidated on a timer.
+3. Success renews the existing Worker probe's mtime; confirmed failure ages it beyond the configured timeout so the
+   next external probe fails without waiting through a second timeout window.
+4. Probe-file existence and mtime are revalidated on a timer; contents have no semantics.
 
 Key files:
 
@@ -259,7 +262,7 @@ Failure-sensitive steps:
 ### Diagnosis And Evidence Collection
 
 1. Start from the symptom class: startup, request failure, latency, missing evidence, or topology issue.
-2. Choose the first signal family: ordinary logs, access logs, resource monitor files, readiness or liveness files, or cluster config.
+2. Choose the first signal family: logs, access logs, resource files, the Worker probe, or cluster config.
 3. Confirm key config flags and file paths.
 4. Narrow to one primary module and select the nearest test or reproduction path.
 
@@ -285,10 +288,10 @@ Failure-sensitive steps:
   - liveness-check thread state.
 - Important on-disk or external state:
   - log directory contents;
-  - readiness and liveness files;
+  - Worker probe existence and mtime;
   - metadata backend configuration and runtime connectivity.
 - Ownership and lifecycle rules:
-  - runtime owns readiness and liveness semantics;
+  - runtime owns Worker probe publication, renewal, and removal semantics;
   - logging and metrics own evidence production;
   - operators and playbooks own evidence collection order, not the source modules.
 - Concurrency or thread-affinity rules:
@@ -309,7 +312,7 @@ Failure-sensitive steps:
   - metadata backends such as ETCD or Metastore;
   - local filesystem for logs and probe files.
 - Critical downstream services or modules:
-  - operator probes and automation reading readiness or liveness files;
+  - operator probes and automation reading Worker probe existence and mtime;
   - tooling and humans reading logs and resource monitor files;
   - playbooks and test workflows that need stable routing.
 - Failure impact from each critical dependency:
@@ -322,7 +325,7 @@ Failure-sensitive steps:
   - metadata backend selection influences cluster-health interpretation.
 - Deployment or operations dependencies:
   - writable `log_dir`;
-  - correct readiness and liveness file paths;
+  - a correct, writable `health_check_path`;
   - correct metadata backend and worker address config.
 
 ## Open Source Software Selection And Dependency Record
@@ -335,8 +338,7 @@ Failure-sensitive steps:
 
 | Config | Type | Default or source | Effect | Risk if changed |
 | --- | --- | --- | --- | --- |
-| `ready_check_path` | gflag | worker runtime flag | controls readiness artifact path | bad path makes healthy startup look unready |
-| `liveness_check_path` | gflag | worker runtime flag | controls liveness artifact path | bad path makes runtime health hard to evaluate |
+| `health_check_path` | gflag | empty | startup and liveness lease | bad path blocks updates |
 | `liveness_probe_timeout_s` | gflag | worker runtime flag | controls liveness freshness timeout | too low causes false unhealthy states, too high delays detection |
 | `log_monitor` | gflag | shared observability flag | enables monitor logs and metrics collection | missing monitor evidence may be config-driven, not runtime failure |
 | `log_monitor_exporter` | gflag | metrics collector config | chooses monitor exporter backend | invalid value prevents monitor collection |
@@ -348,11 +350,12 @@ Failure-sensitive steps:
 - Example API requests or responses to retain:
   - not applicable as a primary concern; the key external artifacts here are files and logs rather than API schemas.
 - Example configuration or deployment snippets to retain:
-  - readiness and liveness path settings should be preserved in deployment configs when probe behavior changes.
+  - `health_check_path` and `liveness_probe_timeout_s` must stay aligned across binaries and deployment assets.
 - Example operator workflows or commands to retain:
-  - inspect readiness and liveness files, then inspect ordinary logs, access logs, and resource monitor files under the configured `log_dir`.
+  - inspect Worker probe existence and mtime, then ordinary logs, access logs, and resource monitor files.
 - Upgrade, rollout, or migration examples if behavior changes:
-  - when changing health-file semantics, log naming, monitor-file layout, or cluster-backend fallback, update this doc, the signal map, and the related operations playbooks in the same task.
+  - when changing Worker probe semantics, log naming, monitor-file layout, or cluster-backend fallback, update this
+    doc, the signal map, and the related operations playbooks in the same task.
 
 ## Availability
 
@@ -365,11 +368,11 @@ Failure-sensitive steps:
   - metadata backend misconfiguration can make a whole node unhealthy despite a live process.
 - Failure domains and blast-radius limits:
   - ordinary logs, monitor files, and probe files can fail independently;
-  - readiness and liveness are separate signals;
+  - startup commit and liveness freshness are distinct observations of the same Worker probe;
   - topology issues can be broader than one node's local logs imply.
 - Health checks, readiness, and traffic removal conditions:
-  - readiness indicates worker service startup and stub connectivity success;
-  - liveness indicates periodic internal checks still pass and the probe file is fresh;
+  - Worker probe existence indicates successful startup publication;
+  - its fresh mtime indicates periodic internal checks still pass;
   - traffic should not rely on process aliveness alone.
 - Failover, switchover, or recovery entry conditions:
   - recovery often starts with process restart, config correction, or metadata-backend restoration rather than local log recovery alone.
@@ -393,7 +396,7 @@ Failure-sensitive steps:
   - the system may continue processing some work even when monitor logs or metrics degrade;
   - readiness may have succeeded earlier even though liveness later fails.
 - Recovery, replay, repair, or reconciliation strategy:
-  - collect evidence first, then repair config or restart runtime, and validate probe files plus signal files after recovery.
+  - collect evidence first, then repair config or restart runtime, and validate the Worker probe plus signal files.
 - RTO, RPO, MTTR, or equivalent recovery targets:
   - no explicit numeric targets are encoded in the inspected code.
 - What must remain true after failure:
@@ -450,17 +453,16 @@ Failure-sensitive steps:
   - inspect `build.sh` test entrypoints and the runtime files listed above;
   - inspect probe files and log directories directly on the node or test environment.
 - How to tell the module is healthy:
-  - readiness file exists when expected;
-  - liveness file is present, fresh, and contains success;
+  - the Worker probe exists after startup and has a fresh mtime; its contents are ignored;
   - logs and monitor files are updating normally;
   - no cluster-backend config contradiction is visible.
 
 ## Compatibility And Invariants
 
 - External compatibility constraints:
-  - health-file names and semantics, log file families, and monitor file layout are operationally visible.
+  - Worker probe names and semantics, log file families, and monitor file layout are operationally visible.
 - Internal invariants:
-  - readiness and liveness are different signals;
+  - probe existence records startup commit, while mtime freshness records liveness;
   - startup, pre-shutdown, and shutdown are different lifecycle phases;
   - monitor logging and resource collection can degrade without implying full process failure.
 - File format, wire format, or schema stability notes:
@@ -500,7 +502,7 @@ Failure-sensitive steps:
 | ID | Test scenario | Purpose | Preconditions | Input / steps | Expected result |
 | --- | --- | --- | --- | --- | --- |
 | `OBS-001` | startup without readiness | distinguish startup failure from liveness failure | writable log dir and a worker startup path | start worker with a known-bad required config such as metadata backend omission | worker logs show startup error, readiness is not established, and shutdown path is visible |
-| `OBS-002` | liveness failure after readiness | distinguish current health from historical readiness | worker reaches ready state and liveness probe path is configured | induce a liveness policy failure or stale probe file | readiness may have existed earlier, but liveness file indicates failure or staleness |
+| `OBS-002` | liveness fails after start | split startup/liveness | probe exists | fail check | mtime stale |
 | `OBS-003` | observability degradation without hard service failure | confirm partial-degradation interpretation | worker path with `log_monitor` or exporter issues | disable or break monitor output while keeping ordinary service startup healthy | ordinary logs continue while monitor files or resource signals degrade |
 | `OBS-004` | performance regression evidence set | validate performance diagnosis routing | worker or client perf scenario | run a representative ST or perf case and inspect logs plus monitor output | evidence shows which signal classes change first under load |
 
@@ -523,7 +525,7 @@ Failure-sensitive steps:
 
 - Likely breakpoints:
   - worker startup order;
-  - readiness or liveness file behavior;
+  - Worker probe creation, renewal, or removal behavior;
   - logging or metrics init gating;
   - metadata-backend validation.
 - Compatibility checks:
@@ -540,7 +542,7 @@ Failure-sensitive steps:
   - `src/datasystem/common/log/logging.cpp`
   - `src/datasystem/common/metrics/res_metric_collector.cpp`
 - First runtime evidence to inspect:
-  - readiness and liveness files;
+  - Worker probe existence and mtime;
   - `log_dir` contents;
   - `log_monitor` and metadata-backend config;
   - whether the process is alive, ready, live, and producing signals.
@@ -553,11 +555,11 @@ Failure-sensitive steps:
 
 - which startup paths beyond the worker binary should be documented as first-class health producers in future updates;
 - whether more topology recovery signals should be pulled into this area as dedicated subdocuments;
-- whether deployment automation already depends on stable readiness and liveness file contents beyond current code comments.
+- whether deployment automation outside this repository still assumes content-bearing probe files.
 
 ## Pending Verification
 
-- a full inventory of all worker init paths that create readiness artifacts;
+- a full inventory of all worker init paths that publish the Worker probe;
 - the most representative smoke-test subsets for startup, probe, and monitor validation;
 - whether any additional operator scripts consume the probe files directly.
 

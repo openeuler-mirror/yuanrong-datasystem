@@ -33,7 +33,20 @@ public:
 
     std::shared_ptr<IClientWorkerApi> CloneWith(HostPort hostPort, HeartbeatType heartbeatType, SensitiveValue token, Signature *signature, std::string tenantId, bool enableCrossNodeConnection, std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api, void *worker) const override { return nullptr; }
     Status Create(const std::string &objectKey, int64_t dataSize, uint32_t &version, uint64_t &metadataSize, std::shared_ptr<ShmUnitInfo> &shmBuf, std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo, int32_t requestTimeoutMs) override { return Status::OK(); }
-    Status Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond, int existence, int32_t requestTimeoutMs) override { return Status::OK(); }
+    Status Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm,
+                   const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond, int existence,
+                   int32_t requestTimeoutMs) override
+    {
+        ++publishCalls;
+        publishRequestTimeouts.emplace_back(requestTimeoutMs);
+        if (expireDeadlineOnPublish) {
+            ApiDeadline::Instance().InitUs(0);
+        }
+        if (publishCalls <= publishStatusSequence.size()) {
+            return Status(publishStatusSequence[publishCalls - 1], "injected Publish response");
+        }
+        return Status::OK();
+    }
     Status MultiPublish(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo, const PublishParam &param, MultiPublishRspPb &rsp, const std::vector<const DeviceBlobList *> &deviceBlobRefs) override { return Status::OK(); }
     Status DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys) override { return Status::OK(); }
     Status PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp) override { return Status::OK(); }
@@ -84,11 +97,15 @@ public:
         return Status::OK();
     }
     size_t getCalls = 0;
+    size_t publishCalls = 0;
+    std::vector<int32_t> publishRequestTimeouts;
+    std::vector<StatusCode> publishStatusSequence;
     StatusCode firstGetStatus = K_OK;
     StatusCode repeatedGetStatus = K_OK;
     std::vector<StatusCode> getStatusSequence;
     std::vector<StatusCode> ingressStatusSequence;
     bool populateSuccessfulGetResponse = false;
+    bool expireDeadlineOnPublish = false;
     bool expireDeadlineOnGet = false;
     std::vector<uint64_t> requestedReadOffsets;
     std::vector<uint64_t> requestedReadSizes;
@@ -268,6 +285,70 @@ TEST_F(BoundModeTest, DecreaseReferenceCntWorkerErrorPropagates)
     bound->DecreaseReferenceCnt(shmId, false, 7);
     ASSERT_EQ(mockApi->DecreaseShmRefCalls, 1);
     inject::Clear("client.DecreaseReferenceCnt");
+}
+
+TEST_F(BoundModeTest, PublishRecoversMissingClientAndRetriesReplayablePayloadOnce)
+{
+    ApiDeadlineGuard deadline(1000);
+    ASSERT_TRUE(inject::Set("BoundMode.RecoverWorker", "return(K_OK)").IsOk());
+    mockApi->publishStatusSequence = { K_CLIENT_WORKER_DISCONNECT, K_OK };
+    auto bufferInfo = std::make_shared<ObjectBufferInfo>();
+    bufferInfo->objectKey = "key";
+
+    EXPECT_TRUE(bound->Publish(bufferInfo, {}, false).IsOk());
+    EXPECT_EQ(mockApi->publishCalls, 2U);
+    ASSERT_EQ(mockApi->publishRequestTimeouts.size(), 2U);
+    EXPECT_EQ(mockApi->publishRequestTimeouts[0], 0);
+    EXPECT_GT(mockApi->publishRequestTimeouts[1], 0);
+    EXPECT_LE(mockApi->publishRequestTimeouts[1], 1000);
+    EXPECT_EQ(inject::GetExecuteCount("BoundMode.RecoverWorker"), 1U);
+    inject::Clear("BoundMode.RecoverWorker");
+}
+
+TEST_F(BoundModeTest, PublishSkipsRecoveryAfterDeadlineExpires)
+{
+    ApiDeadlineGuard deadline(1000);
+    ASSERT_TRUE(inject::Set("BoundMode.RecoverWorker", "return(K_OK)").IsOk());
+    mockApi->publishStatusSequence = { K_CLIENT_WORKER_DISCONNECT };
+    mockApi->expireDeadlineOnPublish = true;
+    auto bufferInfo = std::make_shared<ObjectBufferInfo>();
+    bufferInfo->objectKey = "key";
+
+    EXPECT_EQ(bound->Publish(bufferInfo, {}, false).GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(mockApi->publishCalls, 1U);
+    EXPECT_EQ(inject::GetExecuteCount("BoundMode.RecoverWorker"), 0U);
+    inject::Clear("BoundMode.RecoverWorker");
+}
+
+TEST_F(BoundModeTest, PublishReturnsRecoveryFailureWithoutRetry)
+{
+    ApiDeadlineGuard deadline(1000);
+    ASSERT_TRUE(inject::Set("BoundMode.RecoverWorker", "return(K_RPC_UNAVAILABLE)").IsOk());
+    mockApi->publishStatusSequence = { K_CLIENT_WORKER_DISCONNECT };
+    auto bufferInfo = std::make_shared<ObjectBufferInfo>();
+    bufferInfo->objectKey = "key";
+
+    EXPECT_EQ(bound->Publish(bufferInfo, {}, false).GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_EQ(mockApi->publishCalls, 1U);
+    EXPECT_EQ(inject::GetExecuteCount("BoundMode.RecoverWorker"), 1U);
+    inject::Clear("BoundMode.RecoverWorker");
+}
+
+TEST_F(BoundModeTest, PublishDoesNotRetryWithoutReplayablePayload)
+{
+    ApiDeadlineGuard deadline(1000);
+    mockApi->publishStatusSequence = { K_CLIENT_WORKER_DISCONNECT };
+    auto bufferInfo = std::make_shared<ObjectBufferInfo>();
+    bufferInfo->objectKey = "key";
+    bufferInfo->ubDataSentByMemoryCopy = true;
+
+    EXPECT_EQ(bound->Publish(bufferInfo, {}, false).GetCode(), K_CLIENT_WORKER_DISCONNECT);
+    EXPECT_EQ(mockApi->publishCalls, 1U);
+
+    mockApi->publishCalls = 0;
+    bufferInfo->ubDataSentByMemoryCopy = false;
+    EXPECT_EQ(bound->Publish(bufferInfo, {}, true).GetCode(), K_CLIENT_WORKER_DISCONNECT);
+    EXPECT_EQ(mockApi->publishCalls, 1U);
 }
 
 TEST_F(BoundModeTest, UbGetRetryReacquiresWorkerApiAndPreservesTerminalError)

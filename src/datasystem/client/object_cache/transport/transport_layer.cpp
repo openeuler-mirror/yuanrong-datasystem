@@ -832,13 +832,14 @@ Status TransportLayer::GetHashRing(const HostPort &workerAddr, uint64_t currentV
 
 bool TransportLayer::IsSameHostWorker(const HostPort &workerAddr) const
 {
-    // No transport layer (local-only mode) or no topology yet: fall back to false so cross-host
-    // callers route through the transport layer. The bound-worker SHM path is taken only when the
-    // advisor explicitly classifies the worker as same-host.
-    if (advisor_ == nullptr) {
+    // Use the topology hint plus eligible, established routed SHM session state to select placement.
+    // The result can change with topology or session lifetime; callers must not cache it.
+    // Without an advisor or manager, fall back to routed placement.
+    if (advisor_ == nullptr || manager_ == nullptr) {
         return false;
     }
-    return advisor_->GetTransportHint(workerAddr) == TransportHint::SHM_CANDIDATE;
+    return manager_->ResolveTransportHint(workerAddr, advisor_->GetTransportHint(workerAddr))
+           == TransportHint::SHM_CANDIDATE;
 }
 
 Status TransportLayer::Create(const HostPort &workerAddr, const std::string &objectKey, uint64_t dataSize,
@@ -849,7 +850,7 @@ Status TransportLayer::Create(const HostPort &workerAddr, const std::string &obj
     INJECT_POINT("TransportLayer.Create.beforeTransport");
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
     RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
-    const auto hint = advisor_->GetTransportHint(workerAddr);
+    const auto hint = manager_->ResolveTransportHint(workerAddr, advisor_->GetTransportHint(workerAddr));
     param.allocationId.clear();
     param.allocationIds.clear();
     if (hint != TransportHint::TCP_ONLY) {
@@ -976,7 +977,7 @@ Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param,
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
     RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
     const HostPort workerAddr = ObjectBufferInternal::GetInfo(buffer).workerAddr;
-    TransportHint hint = advisor_->GetTransportHint(workerAddr);
+    TransportHint hint = manager_->ResolveTransportHint(workerAddr, advisor_->GetTransportHint(workerAddr));
     // Create may have fallen back from same-host SHM to UB; publish that allocation through UB too.
     if (hint == TransportHint::SHM_CANDIDATE && IsUbWriteAllocation(buffer)) {
         hint = TransportHint::UB_CANDIDATE;
@@ -1106,7 +1107,7 @@ Status TransportLayer::MCreate(const HostPort &workerAddr, const std::vector<std
     INJECT_POINT("TransportLayer.MCreate.beforeTransport");
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
     RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
-    const auto hint = advisor_->GetTransportHint(workerAddr);
+    const auto hint = manager_->ResolveTransportHint(workerAddr, advisor_->GetTransportHint(workerAddr));
     param.allocationId.clear();
     param.allocationIds.clear();
     if (hint != TransportHint::TCP_ONLY) {
@@ -1198,7 +1199,7 @@ Status TransportLayer::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &bu
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
     RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
     const HostPort workerAddr = ObjectBufferInternal::GetInfo(*buffers.front()).workerAddr;
-    TransportHint hint = advisor_->GetTransportHint(workerAddr);
+    TransportHint hint = manager_->ResolveTransportHint(workerAddr, advisor_->GetTransportHint(workerAddr));
     if (hint == TransportHint::SHM_CANDIDATE
         && std::all_of(buffers.begin(), buffers.end(),
                        [](const auto &buffer) { return IsUbWriteAllocation(*buffer); })) {
@@ -1308,7 +1309,8 @@ Status TransportLayer::Release(ObjectBuffer &buffer, const TransportRequestConte
     const HostPort workerAddr = ObjectBufferInternal::GetInfo(buffer).workerAddr;
     const ShmKey shmId = ObjectBufferInternal::GetInfo(buffer).shmId;
     std::shared_ptr<IDataTransporter> transporter;
-    RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, advisor_->GetTransportHint(workerAddr), transporter));
+    const auto hint = manager_->ResolveTransportHint(workerAddr, advisor_->GetTransportHint(workerAddr));
+    RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
     return InvokeReleaseWithRetry(workerAddr, shmId, context, transporter);
 }
 
@@ -1320,7 +1322,8 @@ void TransportLayer::ScheduleRelease(const HostPort &workerAddr, const ShmKey &s
     }
     if (releasePool_ == nullptr) {
         std::shared_ptr<IDataTransporter> transporter;
-        Status rc = manager_->GetOrCreate(workerAddr, transportHint.value_or(advisor_->GetTransportHint(workerAddr)),
+        Status rc = manager_->GetOrCreate(workerAddr, (transportHint.has_value() ? *transportHint
+            : manager_->ResolveTransportHint(workerAddr, advisor_->GetTransportHint(workerAddr))),
                                           transporter);
         if (rc.IsOk()) {
             rc = InvokeReleaseWithRetry(workerAddr, shmId, context, transporter);
@@ -1332,7 +1335,8 @@ void TransportLayer::ScheduleRelease(const HostPort &workerAddr, const ShmKey &s
     auto advisor = advisor_;
     releasePool_->Execute([manager, advisor, workerAddr, shmId, context, transportHint]() {
         std::shared_ptr<IDataTransporter> transporter;
-        Status rc = manager->GetOrCreate(workerAddr, transportHint.value_or(advisor->GetTransportHint(workerAddr)),
+        Status rc = manager->GetOrCreate(workerAddr, (transportHint.has_value() ? *transportHint
+            : manager->ResolveTransportHint(workerAddr, advisor->GetTransportHint(workerAddr))),
                                          transporter);
         if (rc.IsOk()) {
             rc = TransportLayer::InvokeReleaseWithRetryOnAliveTransporter(workerAddr, shmId, context, transporter,
@@ -1418,7 +1422,8 @@ Status TransportLayer::InvokeReleaseWithRetryOnAliveTransporter(
         std::this_thread::sleep_for(std::chrono::milliseconds(kBackoffMs[attempt]));
         // Re-fetch transporter if it died (e.g. after Teardown); otherwise reuse cached one.
         if (transporter == nullptr || !transporter->IsAlive()) {
-            Status rebuildRc = manager->GetOrCreate(workerAddr, advisor->GetTransportHint(workerAddr), transporter);
+            const auto hint = manager->ResolveTransportHint(workerAddr, advisor->GetTransportHint(workerAddr));
+            Status rebuildRc = manager->GetOrCreate(workerAddr, hint, transporter);
             if (rebuildRc.IsError() && attempt == kMaxAttempts - 1) {
                 return rebuildRc;
             }

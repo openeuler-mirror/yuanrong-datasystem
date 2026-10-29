@@ -27,7 +27,6 @@
 #include <vector>
 
 #include "datasystem/common/eventloop/timer_queue.h"
-#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/object_cache/safe_object.h"
@@ -39,8 +38,6 @@
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/object_cache/metadata_recovery_selector.h"
 #include "datasystem/worker/object_cache/object_kv.h"
-
-DS_DECLARE_bool(enable_metadata_recovery);
 
 namespace datasystem {
 namespace object_cache {
@@ -134,14 +131,13 @@ WorkerOcServiceClearDataFlow::WorkerOcServiceClearDataFlow(
     std::shared_ptr<ObjectTable> objectTable, std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable,
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager,
     std::shared_ptr<WorkerOcServiceGlobalReferenceImpl> gRefProc, std::shared_ptr<WorkerOcServiceDeleteImpl> deleteProc,
-    MetaDataRecoveryManager *metadataRecoveryManager, const worker::MetadataRouteResolver &metadataRoute,
-    const ObjectEndpointPolicy &endpointPolicy, std::string localAddress)
+    const worker::MetadataRouteResolver &metadataRoute, const ObjectEndpointPolicy &endpointPolicy,
+    std::string localAddress)
     : objectTable_(std::move(objectTable)),
       globalRefTable_(std::move(globalRefTable)),
       workerMasterApiManager_(std::move(workerMasterApiManager)),
       gRefProc_(std::move(gRefProc)),
       deleteProc_(std::move(deleteProc)),
-      metadataRecoveryManager_(metadataRecoveryManager),
       metadataRoute_(metadataRoute),
       endpointPolicy_(endpointPolicy),
       localAddress_(std::move(localAddress))
@@ -294,8 +290,7 @@ uint64_t WorkerOcServiceClearDataFlow::CalculateRetryIntervalMs(uint64_t retryTi
 Status WorkerOcServiceClearDataFlow::GetMatchObjectIds(const ClearDataReqPb &req,
                                                        std::vector<std::string> &matchObjIds)
 {
-    bool includeL2CacheIds = FLAGS_enable_metadata_recovery;
-    auto selectionRequest = MetadataRecoverySelector::BuildSelectionRequest(req, includeL2CacheIds);
+    auto selectionRequest = MetadataRecoverySelector::BuildSelectionRequest(req);
     if (selectionRequest.Empty()) {
         LOG(INFO) << "range and worker ids all empty";
         return Status::OK();
@@ -426,16 +421,7 @@ void WorkerOcServiceClearDataFlow::ClearTopologyFailureMatchedObjects(const std:
         PartitionTopologyCleanupObjects(batch, ordinaryClearIds, unconfirmedMigrationIds, ordinarySnapshots);
         std::vector<std::string> needClearIds;
         FilterObjectsNeedClearByMaster(ordinaryClearIds, needClearIds, retryIds.topologyCheckFailedIds);
-        if (FLAGS_enable_metadata_recovery) {
-            auto recovery = metadataRecoveryManager_->RecoverMetadataWithSummary(needClearIds, "", true);
-            if (recovery.status.IsError()) {
-                LOG(ERROR) << "RecoverMetadataWithSummary failed, status: " << recovery.status.ToString();
-            }
-            ClearTopologyObjects(recovery.failedIds, ordinarySnapshots);
-        } else {
-            ClearTopologyObjects(needClearIds, ordinarySnapshots);
-        }
-        RecoverUnconfirmedMigrationObjects(unconfirmedMigrationIds, retryIds.topologyCheckFailedIds);
+        ClearTopologyObjects(needClearIds, ordinarySnapshots);
     }
 }
 
@@ -479,24 +465,6 @@ void WorkerOcServiceClearDataFlow::PartitionTopologyCleanupObjects(
         LOG_EVERY_N(WARNING, MIGRATION_RECOVERY_LOG_EVERY_N)
             << "Partition complete unconfirmed migration payloads during topology cleanup, object size: "
             << unconfirmedMigrationIds.size();
-    }
-}
-
-void WorkerOcServiceClearDataFlow::RecoverUnconfirmedMigrationObjects(const std::vector<std::string> &objectKeys,
-                                                                      std::unordered_set<std::string> &failedIds)
-{
-    if (objectKeys.empty() || metadataRecoveryManager_ == nullptr || !FLAGS_enable_metadata_recovery) {
-        return;
-    }
-    auto recovery = metadataRecoveryManager_->RecoverMetadataWithSummary(objectKeys, "", true);
-    failedIds.insert(recovery.failedIds.begin(), recovery.failedIds.end());
-    if (recovery.status.IsError() || !recovery.failedIds.empty()) {
-        const auto sampleEnd =
-            recovery.failedIds.begin() + std::min(recovery.failedIds.size(), GET_MASTER_ERROR_SAMPLE_LIMIT);
-        const std::vector<std::string> failedSamples(recovery.failedIds.begin(), sampleEnd);
-        LOG(ERROR) << "Recover unconfirmed migration metadata: requested=" << objectKeys.size()
-                   << ", failed=" << recovery.failedIds.size() << ", failedSamples=[" << VectorToString(failedSamples)
-                   << "], status=" << recovery.status.ToString();
     }
 }
 

@@ -567,7 +567,7 @@ public class Cluster {
     /**
      * Waiting for Worker cluster Startup.
      *
-     * @param filepath Path of the health file.
+     * @param filepath Path of the Worker probe file.
      * @param timeoutSecs Waiting time. If the node is not ready after the timeoutSecs time, an exception is thrown.
      */
     private void checkHealthFile(String filepath, int timeoutSecs) {
@@ -593,14 +593,14 @@ public class Cluster {
     }
 
     /**
-     * Delete the health file after the test is complete.
+     * Delete the Worker probe file after the test is complete.
      */
     private void deleteHealthCheckFile() {
         for (String healthFile : healthCheckFileList) {
             File file = new File(healthFile);
             if (file.exists()) {
                 if (!file.delete()) {
-                    log.warning(() -> "fail to delete the health file:" + healthFile);
+                    log.warning(() -> "fail to delete the Worker probe file:" + healthFile);
                 }
             }
         }

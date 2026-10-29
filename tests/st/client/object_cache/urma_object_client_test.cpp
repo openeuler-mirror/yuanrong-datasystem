@@ -155,11 +155,9 @@ public:
         for (const auto &addr : opts.workerConfigs) {
             workerAddress_.emplace_back(addr.ToString());
         }
-        // Enable worker->worker batch get by default.
         opts.vLogLevel = 2;
         opts.workerGflagParams =
-            " -shared_memory_size_mb=5120 -enable_worker_worker_batch_get=true"
-            " -batch_get_threshold_mb=20";
+            " -shared_memory_size_mb=5120 -batch_get_threshold_mb=20";
 #ifdef USE_URMA
         opts.workerGflagParams += " -arena_per_tenant=1 -enable_urma=true ";
 #else
@@ -841,16 +839,7 @@ TEST_F(UrmaObjectClientTest, TestMemcopyThenMutableData)
     func(bigSize);
 }
 
-class UrmaObjectClientDisableDataReplicationTest : public UrmaObjectClientTest {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        UrmaObjectClientTest::SetClusterSetupOptions(opts);
-        opts.workerGflagParams += " -enable_data_replication=false ";
-    }
-};
-
-TEST_F(UrmaObjectClientDisableDataReplicationTest, TestBatchRemoteGet)
+TEST_F(UrmaObjectClientTest, TestBatchRemoteGet)
 {
     // Test that the batch get path in urma case is working as expected.
     std::shared_ptr<KVClient> client1;
@@ -892,7 +881,7 @@ TEST_F(UrmaObjectClientDisableDataReplicationTest, TestBatchRemoteGet)
     DS_ASSERT_NOT_OK(client1->Get(keys, valuesGet));
 }
 
-TEST_F(UrmaObjectClientDisableDataReplicationTest, TestMultiLocalGet)
+TEST_F(UrmaObjectClientTest, TestMultiLocalGet)
 {
     std::shared_ptr<KVClient> client;
     InitTestKVClient(0, client);
@@ -1154,16 +1143,9 @@ TEST_F(UrmaObjectClientTest, UrmaRemoteGetSizeChangedInvalid)
     LOG(INFO) << "Test case UrmaRemoteGetSizeChangedInvalid success";
 }
 
-class UrmaObjectClientTestEventMode : public UrmaObjectClientTest {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        UrmaObjectClientTest::SetClusterSetupOptions(opts);
-        opts.workerGflagParams += " -urma_event_mode=true";
-    }
-};
+class UrmaObjectClientPollingModeTest : public UrmaObjectClientTest {};
 
-TEST_F(UrmaObjectClientTestEventMode, DISABLED_UrmaRemoteGetSmallWithError)
+TEST_F(UrmaObjectClientPollingModeTest, DISABLED_UrmaRemoteGetSmallWithError)
 {
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.CheckCompletionRecordStatus", "1*call(0, 9)"));
 
@@ -1182,7 +1164,7 @@ TEST_F(UrmaObjectClientTestEventMode, DISABLED_UrmaRemoteGetSmallWithError)
     ASSERT_EQ(memcmp(data.data(), buffers[0]->MutableData(), SHM_SIZE), 0);
 }
 
-TEST_F(UrmaObjectClientTestEventMode, DISABLED_UrmaRemoteGetSmall)
+TEST_F(UrmaObjectClientPollingModeTest, DISABLED_UrmaRemoteGetSmall)
 {
     std::shared_ptr<ObjectClient> client1;
     std::shared_ptr<ObjectClient> client2;
@@ -1209,7 +1191,7 @@ TEST_F(UrmaObjectClientTestEventMode, DISABLED_UrmaRemoteGetSmall)
     LOG(INFO) << "Test case UrmaRemoteGetSmall success";
 }
 
-TEST_F(UrmaObjectClientTestEventMode, DISABLED_UrmaRemoteGetBig)
+TEST_F(UrmaObjectClientPollingModeTest, DISABLED_UrmaRemoteGetBig)
 {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
     std::shared_ptr<ObjectClient> client1;
@@ -1309,8 +1291,7 @@ public:
     {
         UrmaObjectClientTest::SetClusterSetupOptions(opts);
         opts.workerGflagParams +=
-            " -ipc_through_shared_memory=true --enable_data_replication=false "
-            "-inject_actions=worker.bind_unix_path:return(K_OK) ";
+            " -ipc_through_shared_memory=true -inject_actions=worker.bind_unix_path:return(K_OK) ";
     }
 };
 
@@ -1428,8 +1409,7 @@ public:
         opts.numWorkers -= 1;
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams +=
-            " -ipc_through_shared_memory=true --enable_data_replication=false"
-            " --enable_transport_fallback=false -client_dead_timeout_s=1"
+            " -ipc_through_shared_memory=true --enable_transport_fallback=false -client_dead_timeout_s=1"
             " -inject_actions=worker.bind_unix_path:return(K_OK) ";
     }
 };
@@ -1484,11 +1464,9 @@ public:
         for (const auto &addr : opts.workerConfigs) {
             workerAddress_.emplace_back(addr.ToString());
         }
-        // Enable worker->worker batch get by default.
         opts.vLogLevel = 2;
         opts.workerGflagParams =
-            " -shared_memory_size_mb=5120 -enable_worker_worker_batch_get=true "
-            "-arena_per_tenant=1";
+            " -shared_memory_size_mb=5120 -arena_per_tenant=1";
         // Specify mismatching enable_urma setting for the workers.
         opts.workerSpecifyGflagParams[0] += " -enable_urma=true ";
         opts.workerSpecifyGflagParams[1] += " -enable_urma=false ";
@@ -1895,7 +1873,6 @@ public:
         UrmaObjectClientTest::SetClusterSetupOptions(opts);
         opts.numWorkers = 1;
         opts.workerConfigs.resize(opts.numWorkers);
-        opts.workerOcDirectPorts.resize(opts.numWorkers);
         opts.enableDistributedMaster = "true";
         opts.vLogLevel = 2;
         opts.workerGflagParams += " -enable_transport_fallback=false -client_dead_timeout_s=3";
@@ -1982,8 +1959,7 @@ public:
     {
         UrmaObjectClientTest::SetClusterSetupOptions(opts);
         opts.workerGflagParams +=
-            " -enable_transport_fallback=false -enable_ub_numa_affinity=true "
-            "-shared_memory_distribution_policy=interleave_affinity_numa";
+            " -enable_transport_fallback=false -shared_memory_distribution_policy=interleave_affinity_numa";
         opts.numWorkers -= 1;
     }
 };
@@ -2036,51 +2012,6 @@ TEST_F(UrmaNumaAffinityTest, ClientAndWorkerUseAffinity)
         cluster_->GetInjectActionExecuteCount(WORKER, 1, "UrmaManager.UrmaWriteNumaAffinity", executeCountWorker2));
     ASSERT_GT(executeCountClient, 0);
     ASSERT_GT(executeCountWorker1 + executeCountWorker2, 0);
-}
-
-class UrmaNumaAffinityDisabledTest : public UrmaObjectClientTest {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        UrmaObjectClientTest::SetClusterSetupOptions(opts);
-        opts.workerGflagParams +=
-            " -enable_transport_fallback=false -enable_ub_numa_affinity=false "
-            "-shared_memory_distribution_policy=interleave_affinity_numa";
-        opts.numWorkers -= 1;
-    }
-};
-
-TEST_F(UrmaNumaAffinityDisabledTest, ClientAndWorkerSkipAffinity)
-{
-    FLAGS_v = 1;
-    std::shared_ptr<KVClient> client1;
-    std::shared_ptr<KVClient> client2;
-    InitTestKVClient(0, client1);
-    InitTestKVClient(1, client2);
-    DS_ASSERT_OK(inject::Set("UrmaManager.UrmaWriteNumaAffinity", "call()"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.UrmaWriteNumaAffinity", "call()"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.UrmaWriteNumaAffinity", "call()"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.Create.begin", "1*return(K_NOT_READY)"));
-
-    const std::string value(8 * 1024 * 1024, 'a');
-    DS_ASSERT_OK(SetWhenWorkerReady(*client2, "affinity-disabled-key", value));
-    std::string getValue;
-    DS_ASSERT_OK(client1->Get("affinity-disabled-key", getValue));
-    ASSERT_EQ(value, getValue);
-
-    const uint64_t executeCountClient = inject::GetExecuteCount("UrmaManager.UrmaWriteNumaAffinity");
-    uint64_t executeCountWorker1 = 0;
-    DS_ASSERT_OK(
-        cluster_->GetInjectActionExecuteCount(WORKER, 0, "UrmaManager.UrmaWriteNumaAffinity", executeCountWorker1));
-    uint64_t executeCountWorker2 = 0;
-    DS_ASSERT_OK(
-        cluster_->GetInjectActionExecuteCount(WORKER, 1, "UrmaManager.UrmaWriteNumaAffinity", executeCountWorker2));
-    uint64_t createNotReadyCount = 0;
-    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 1, "worker.Create.begin", createNotReadyCount));
-    ASSERT_EQ(executeCountClient, 0);
-    ASSERT_EQ(executeCountWorker1, 0);
-    ASSERT_EQ(executeCountWorker2, 0);
-    ASSERT_EQ(createNotReadyCount, 1);
 }
 
 class UrmaFallbackTest : public UrmaObjectClientTest {

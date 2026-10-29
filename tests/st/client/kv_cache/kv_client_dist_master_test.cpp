@@ -353,7 +353,7 @@ TEST_F(STCClientDistMasterTest, DISABLED_TestAddNodeSet)
         cluster_->SetInjectAction(WORKER, i, "add.node.redirect", "10000*return()");
     }
     cluster_->GetWorkerAddr(0, masterAddr);
-    cluster_->AddNode(masterAddr, workerAddr.ToString(), GetFreePort());
+    cluster_->AddNode(masterAddr, workerAddr.ToString());
     for (int i = 0; i < 500; i++) {
         auto key = "redirect_test_" + std::to_string(i);
         DS_ASSERT_OK(client_->Set(key, value));
@@ -379,7 +379,7 @@ TEST_F(STCClientDistMasterTest, DISABLED_TestAddNodeUpdate)
     HostPort workerAddr(HOST_IP, GetFreePort());
     HostPort masterAddr;
     cluster_->GetWorkerAddr(0, masterAddr);
-    cluster_->AddNode(masterAddr, workerAddr.ToString(), GetFreePort());
+    cluster_->AddNode(masterAddr, workerAddr.ToString());
     for (int i = 0; i < 1000; i++) {
         auto key = "redirect_test_" + std::to_string(i);
         keys.emplace_back(key);
@@ -415,7 +415,7 @@ TEST_F(STCClientDistMasterTest, DISABLED_TestAddNodeGet)
     };
     std::thread thread(func);
     cluster_->GetWorkerAddr(0, masterAddr);
-    DS_ASSERT_OK(cluster_->AddNode(masterAddr, workerAddr.ToString(), GetFreePort()));
+    DS_ASSERT_OK(cluster_->AddNode(masterAddr, workerAddr.ToString()));
     for (auto &key : keys) {
         DS_ASSERT_OK(client_->Set(key, value));
     }
@@ -1055,26 +1055,6 @@ TEST_F(STCClientDistMasterDfxTest, DISABLED_TestReStartWorker)
     ASSERT_EQ(value, std::string(valueGet.data(), valueGet.size()));
     ASSERT_EQ(client_->Del("userDataKey"), Status::OK());
 }
-
-TEST_F(STCClientDistMasterDfxTest, DISABLED_LEVEL1_TestRestartWorkerAndRecoveryFromEtcd)
-{
-    StartClustersAndWaitReady();
-    std::string value = "The world is not black or white, heh; but a delicious shade of gray.";
-    for (size_t i = 0; i < 20; ++i) {
-        std::string key = "Camille" + std::to_string(i);
-        SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
-        DS_ASSERT_OK(client_->Set(key, value, param));
-    }
-
-    ShutdownEraseRocksDBAndRestartNodes();
-
-    for (size_t i = 0; i < 20; ++i) {
-        std::string key = "Camille" + std::to_string(i);
-        DS_ASSERT_OK(client_->Get(key, value));
-    }
-}
-
-
 
 class STCClientDistMasterOOMTest : public STCClientDistMasterTest {
 public:

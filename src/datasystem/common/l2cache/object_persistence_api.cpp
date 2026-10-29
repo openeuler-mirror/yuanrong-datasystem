@@ -127,9 +127,9 @@ Status ObjectPersistenceApi::GetWithoutVersion(const std::string &objectKey, int
     std::vector<L2CacheObjectInfo> objInfoList;
     uint64_t existMaxVersion = 0;
     RETURN_IF_NOT_OK(ListAllVersion(encodeKey + "/", timeoutMs, objInfoList, existMaxVersion));
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!objInfoList.empty(), StatusCode::K_NOT_FOUND_IN_L2CACHE,
-                                         "The object is not exist in persistence.");
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+    CHECK_FAIL_RETURN_STATUS(!objInfoList.empty(), StatusCode::K_NOT_FOUND_IN_L2CACHE,
+                             "The object is not exist in persistence.");
+    CHECK_FAIL_RETURN_STATUS(
         existMaxVersion > minVersion, StatusCode::K_NOT_FOUND_IN_L2CACHE,
         FormatString("The max version %zu in persistence should greater than the deleting version %zu.",
                      existMaxVersion, minVersion));

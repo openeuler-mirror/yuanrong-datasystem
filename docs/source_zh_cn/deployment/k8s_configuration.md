@@ -143,10 +143,7 @@ global:
 | global.ipc.ipcThroughSharedMemory | bool | `true` | datasystem-worker共享内存启用开关 |
 | global.ipc.udsDir | string | `"/home/uds"` | Unix Domain Socket (UDS) 文件存储目录。UDS文件在该路径下产生，路径最大长度不能超过80个字符。该目录将挂载到宿主机同名目录上，请确保容器具备宿主机同名目录的操作权限 |
 | global.port.datasystemWorker | int | `31501` | openYuanrong datasystem DaemonSet占用的主机端口号 |
-| global.rpc.ocWorkerWorkerDirectPort | int | `0` | 对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延 |
-| global.rpc.rpcThreadNum | int | `128` | 配置服务端的RPC线程数，必须为大于0的数 |
 | global.rpc.ocThreadNum | int | `64` | 配置服务端用于处理对象/KV缓存的业务线程数 |
-| global.rpc.ioThreadNice | int | `0` | 指定部分 IO 线程的 nice 值，取值范围：[-20, 19]。0 表示跳过 nice 调整并保留线程继承的 nice 值；仅非 0 值调用 `setpriority`；设置负值通常需要相应权限 |
 | global.rpc.brpc.eventDispatcherNum | int | `0` | brpc 进程级事件分发器数量。0 表示不覆盖 brpc 默认值 1；大于 1 时按 fd 哈希分摊 socket 读写事件，可缓解大量连接同时活跃时的首包读取排队，但不会并行化单个监听 fd 的 accept。该值仅在进程首次初始化 brpc 前生效，修改后需要重启 Worker |
 | global.rpc.brpc.brpcServerNumThreads | int | `64` | brpc 服务端工作线程数（bthread 工作线程池大小） |
 | global.rpc.brpc.brpcMaxConcurrency | int | `128` | 单个 brpc 服务的最大并发在途 RPC 数，0 表示不限制。推荐值为 `brpcServerNumThreads` 的 2 倍（如 64 线程对应 128）。超过该值时 brpc 会立即向客户端返回 ELIMIT，避免慢请求耗尽 bthread 导致 OOM。该值不得小于 `brpcServerNumThreads` |
@@ -154,7 +151,7 @@ global:
 | global.rpc.remoteSendThreadNum | int | `8` | 配置服务端用于将元素发送到远程工作线程的线程数量 |
 | global.rpc.scThreadNum | int | `128` | 配置流缓存master工作的最大线程数 |
 
-`eventDispatcherNum` 不等同于业务 RPC 线程数。仅当大量连接在同一时段发送首包或恢复读写，TCP 建连已完成但 RPC handler 入场仍明显延迟，且业务线程池与 CPU 尚未饱和时，才建议从 2 或 4 开始灰度验证；可结合 `event_dispatcher_read_latency` 与 handler 入场时序判断。若瓶颈位于业务处理、锁竞争、`rpcThreadNum`/`ocThreadNum` 线程池或单监听 fd 的 accept，增大该值通常无效；连接较少或 CPU 资源紧张时应保持默认值。
+`eventDispatcherNum` 不等同于业务 RPC 线程数。仅当大量连接在同一时段发送首包或恢复读写，TCP 建连已完成但 RPC handler 入场仍明显延迟，且业务线程池与 CPU 尚未饱和时，才建议从 2 或 4 开始灰度验证；可结合 `event_dispatcher_read_latency` 与 handler 入场时序判断。若瓶颈位于业务处理、锁竞争、`brpcServerNumThreads`/`ocThreadNum` 线程池或单监听 fd 的 accept，增大该值通常无效；连接较少或 CPU 资源紧张时应保持默认值。
 
 **样例**：
 配置一个Unix Domain Socket路径为 "/home/uds"，并使用31501作为openYuanrong datasystem DaemonSet的监听端口号
@@ -351,7 +348,6 @@ global:
 |-----|------|---------|-------------|
 | global.l2Cache.l2CacheType | string | `"none"` | 配置二级缓存类型，`none` 表示不配置二级缓存，可选择二级缓存类型：[`obs`, `sfs`, `distributed_disk`] |
 | global.l2Cache.l2CacheDeleteThreadNum | int | `32` | 配置二级缓存异步删除线程池大小，增大该值可以提升二级缓存删除并行度，同时也会提升worker的CPU消耗 |
-| global.l2Cache.ocIoFromL2CacheNeedMetadata | bool | `true` | 配置L2缓存守护进程的数据读写是否依赖元数据，设置为false，则表示元数据不存储在etcd中 |
 | global.l2Cache.enableL2CacheFallback | bool | `true` | 控制是否允许从二级缓存拉数据，当worker失败时，是否启用从二级缓存拉取数据的回退机制 |
 | global.l2Cache.l2CacheAsyncWriteQueueSize | int | `10000` | 配置二级缓存异步写队列大小 |
 | global.l2Cache.l2CacheAsyncWriteRateLimitMb | int | `200` | 配置二级缓存异步写入限速，单位 MB/s |
@@ -412,8 +408,6 @@ global:
 | global.metadata.rocksdbBackgroundThreads | int | `16` | RocksDB的后台线程数，用于元数据的刷盘和压缩 |
 | global.metadata.rocksdbMaxOpenFile | int | `128` | RocksDB可使用的最大打开文件个数 |
 | global.metadata.rocksdbWriteMode | string | `async` | 配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为`async`。可选值包括：'none'（不写）、'sync'（同步）、'async'（异步） |
-| global.metadata.enableMetadataRecovery | bool | `false` | 是否在 worker 重启清理阶段将本地元数据回补到 master |
-| global.metadata.enableDataReplication | bool | `true` | 实验性参数。是否允许跨 worker 读取到的数据在本 worker 缓存为本地热副本，并向 master 注册副本位置；关闭后 remote get 获取的数据通常仅服务当前请求，不作为普通本地副本保留。该参数仅用于热副本性能优化，不作为数据可靠性机制，不保障数据可靠性或可用性 |
 
 
 ### 可靠性相关配置
@@ -422,14 +416,20 @@ global:
 |-----|------|---------|-------------|
 | global.reliability.clientReconnectWaitS | int | `10` | 客户端断链重连最大等待时间（单位为秒） |
 | global.reliability.clientDeadTimeoutS | int | `120` | 客户端存活检测最大时间间隔（单位为秒） |
-| global.reliability.heartbeatIntervalMs | int | `1000` | 服务端与ETCD的心跳间隔时间（单位为毫秒） |
-| global.reliability.nodeTimeoutS | int | `60` | 服务端节点超时最大时间间隔（单位为秒） |
+| global.reliability.nodeTimeoutS | int | `60` | 服务端节点超时（秒），并决定 ETCD 心跳间隔 |
 | global.reliability.nodeDeadTimeoutS | int | `300` | 服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点，该值必须大于 `nodeTimeoutS` |
 | global.reliability.enableReconciliation | bool | `true` | 当节点重启时是否启用对账功能 |
 | global.reliability.livenessProbeTimeoutS | int | `150` | Kubernetes 存活探针超时时间配置（以秒为单位） |
-| global.reliability.autoDelDeadNode | bool | `true` | 是否启用死亡节点自动清理功能，当该值为 `true` 时，会将死亡节点剔除出集群管理，并触发被动缩容 |
+| global.reliability.startupProbeTimeoutS | int | `390` | Kubernetes 启动探针超时（秒） |
 | global.reliability.enableDistributedMaster | bool | `true` | 是否启用分布式主节点，默认值为true |
 | global.reliability.enableStreamDataVerification | bool | `false` | 是否验证生产者数据乱序，默认值为false |
+
+`startupProbeTimeoutS` 默认值由 60 秒重启对账、300 秒死亡节点判定和 30 秒初始化余量组成。
+
+服务端与 ETCD 的心跳间隔按 `clamp(nodeTimeoutS * 1000 / 3, 100, 5000)`（毫秒）自动计算。
+新建集群的哈希环固定为每个 Worker 分配 32 个 token；已有集群继续使用 topology 中
+持久化的 token 数。
+死亡节点写保护、隔离和被动缩容始终启用，不再提供关闭开关。
 
 ### 优雅退出相关配置
 
@@ -447,20 +447,15 @@ global:
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
 | global.performance.enableHugeTlb | bool | `false` | 是否开启共享内存大页内存功能，它可以提高内存访问，减少页表的开销 |
-| global.performance.enableFallocate | bool | `true` | 由于Kubernetes(k8s)的资源计算策略，共享内存有时会被计算两次，这可能会导致客户端OOM崩溃。为了解决这个问题，我们使用了fallocate来链接客户端和工作节点的共享内存，从而纠正内存计算错误。缺省情况下，fallocate是使能的。启用fallocate会降低内存分配的效率 |
+| global.performance.enableFallocate | bool | `true` | 由于Kubernetes(k8s)的资源计算策略，共享内存有时会被计算两次，这可能会导致客户端OOM崩溃。为了解决这个问题，我们使用了fallocate来链接客户端和工作节点的共享内存，从而纠正内存计算错误。进程默认不启用fallocate，Kubernetes部署应显式开启，本Chart默认已开启。启用fallocate会降低内存分配的效率 |
 | global.performance.sharedMemoryPopulate | bool | `false` | 是否开启共享内存预热功能，启用该功能可以加速应用运行期间的共享内存拷贝速度，但是在datasystem_worker进程启动时也会由于预热导致启动速度变慢（取决于sharedMemory的配置）。如果开启该功能，'arenaPerTenant'必须设置为1，'enableFallocate'必须设置为false |
 | global.performance.enableThp | bool | `false` | 是否启用透明大页（Transparent Huge Page,THP）功能，启用透明大页可以提高性能，减少页表开销，但也可能导致 Pod 内存使用增加 |
 | global.performance.arenaPerTenant | int | `16` | 每个租户的共享内存分配器数量。多分配器可以提高第一次分配共享内存的性能，但每个分配器会多使用一个fd，导致fd资源使用量上升。取值范围：[1, 32] |
-| global.performance.memoryReclamationTimeSecond | int | `600` | 释放后的内存回收时间（以秒为单位），未回收的内存可以提供给下次分配复用，提升分配效率 |
 | global.performance.memoryAlignment | int | `64` | Worker中jemalloc分配内存使用的字节对齐大小，取值必须为不超过4096的2次幂。Worker会在注册响应中返回该值，异构Client按连接缓存并用于多Blob组合对象的数据区对齐。将该值从64调整为其他值前，应先升级所有异构Client。更大的对齐可能提升性能，但也会因碎片化而增加内存占用。 |
 | global.performance.asyncDelete | bool | `false` | 是否异步删除对象，如果设置为 `true` 时，删除对象数据是个异步的过程，客户端不需要等待所有数据副本删除完成即可返回 |
 | global.performance.enableP2pTransfer | bool | `false` | 是否开启异构对象传输协议支持点对点传输 |
-| global.performance.enableWorkerWorkerBatchGet | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |
-| global.performance.ocShmTransferThresholdKB  | int | `500` | 在客户端和worker之间通过共享内存传输对象数据的阈值，单位为KB |
 | global.performance.enableUrma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输，开启后worker启动时会自动预热URMA worker-worker连接 |
-| global.performance.urmaPollSize | int | `8` | 一次可轮询的完整记录数量，该设备最多可轮询16条记录 |
 | global.performance.urmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
-| global.performance.urmaEventMode | bool | `false` | 是否使用中断模式轮询完成事件 |
 | global.performance.urmaFailoverSuccessRateRatio | double | `0.5` | 客户端 URMA 数据面成功率阈值，用于触发 worker failover 评估。取值范围 `[0.0, 1.0]`，设为 `0.0` 时禁用 URMA failover。仅在 `global.performance.enableUrma=true` 时生效 |
 | global.performance.urmaFailoverMinSampleCount | uint32 | `5` | 在每个 `client_dead_timeout_s` 窗口内进行 failover 评估所需的最小 URMA 数据面样本数，样本数不足时不触发 failover。仅在 `global.performance.enableUrma=true` 时生效 |
 | global.performance.enablePipelineH2d | bool | `false` | 是否开启 pipeline Host-to-Device（H2D）流水线传输，将主机侧数据准备与设备侧拷贝重叠以提升传输性能。仅在 `global.performance.enableUrma=true` 时生效，否则被忽略 |
@@ -469,11 +464,11 @@ global:
 | global.performance.enableRdma | bool | `false` | 是否为OC工作节点之间的数据传输启用RDMA |
 | global.performance.rdmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，false时将每个对象分别注册为一个段 |
 | global.performance.ucxTransportLayerSelection | string | `rc_x` | UCX使用的 RDMA传输模式。默认选用 "rc_x" 以获得最佳性能；若当前环境不支持，可改用 "rc"、"ud" 或 "dc"。各模式适用场景详见[UCX传输模式说明](https://github.com/openucx/ucx/wiki/UCX-environment-parameters) |
-| global.performance.ocWorkerAggregateMergeSize | int | `2097152` | worker响应的目标批量大小，默认值为2MB |
-| global.performance.ocWorkerAggregateSingleMax | int | `65536` | 批量处理worker最大单个项目大小，默认为64KB |
-| global.performance.ocWorkerWorkerParallelMin | int | `100` | 并行工作线程批处理响应的最小数据计数，默认值为100 |
-| global.performance.ocWorkerWorkerParallelNums | int | `16` | worker并行数量，0表示无限制 |
-| global.performance.enableOcMetadataHeader | bool | `true` | 是否开启对象缓存元数据头，设置为false将不能使用shm latch/可见性 |
+
+URMA 内部固定使用轮询完成模式（单次最多 16 条）、4 个 Client 传输 Arena、200 条 send lane refill 余量和
+15 的 inflight WR 差值阈值。4 MiB 及以下的写请求使用一个分片，更大的请求目标为两个均衡分片；设备单次
+写上限更小时会继续增加分片数。NUMA 拓扑不可读或 `mbind` 失败时会记录 WARNING 并跳过剩余绑定，
+不会中止 Client 初始化。
 
 ### AK/SK相关配置
 

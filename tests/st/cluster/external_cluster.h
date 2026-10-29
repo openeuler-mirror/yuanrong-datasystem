@@ -109,7 +109,7 @@ public:
     // Keep the old post-start grace period only for tests that explicitly need heartbeat convergence.
     bool waitAfterStart;
 
-    bool enableLivenessProbe;
+    uint32_t livenessProbeTimeoutS;
     // used by ak/sk authorize
     std::string systemAccessKey = "QTWAOYTTINDUT2QVKYUC";
     std::string systemSecretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
@@ -329,7 +329,7 @@ public:
 
     bool IsWorkerLiveness(uint32_t index) override;
 
-    Status AddNode(const HostPort &masterAddress, const std::string workerAddress, int workerDirectPort) override;
+    Status AddNode(const HostPort &masterAddress, const std::string workerAddress) override;
 
     Status WaitForExpectedResult(std::function<Status()> function, int timeoutSecs,
                                  StatusCode expectedStatusCode) override;

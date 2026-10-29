@@ -620,9 +620,6 @@ private:
 
     void WorkerLoop()
     {
-        if (!Thread::SetCurrentThreadNice(0)) {
-            LOG(WARNING) << FormatString("Failed to reset parallel %s worker nice value", direction_);
-        }
         Status initStatus;
         try {
             initStatus = deviceManager_->SetDevice(static_cast<int32_t>(deviceId_));

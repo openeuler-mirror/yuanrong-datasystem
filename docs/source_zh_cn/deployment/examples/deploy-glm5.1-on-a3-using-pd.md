@@ -311,7 +311,7 @@ export ETCD_PORT=2379
 export SHM_SIZE=512000
 export NODE_TIMEOUT=20
 export NODE_DEAD_TIMEOUT=30
-export LIVENESS_PATH=/workspace/liveness
+export WORKER_PROBE_PATH=/workspace/worker
 
 dscli start --interleave 0-7 -w \
 --worker_address ${HOST_IP}:${WORKER_PORT} \
@@ -321,7 +321,7 @@ dscli start --interleave 0-7 -w \
 --node_dead_timeout_s ${NODE_DEAD_TIMEOUT} \
 --arena_per_tenant 1 \
 --enable_huge_tlb true \
---liveness_check_path ${LIVENESS_PATH}
+--health_check_path ${WORKER_PROBE_PATH}
 ```
 
 ### 步骤 5、部署 vLLM 服务

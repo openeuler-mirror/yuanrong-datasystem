@@ -92,11 +92,10 @@ public:
         opts.numWorkers = WORKER_NUM_RETRY;
         opts.numEtcd = 1;
         opts.enableDistributedMaster = "false";
-        // enable_data_replication defaults to true: a cross-node Get caches a replica on the getter
-        // worker and the master acks it as a location, so a later Get can fetch from that replica
-        // (an address != primary_address) and reach the retry-to-primary path.
-        opts.workerGflagParams = "-shared_memory_size_mb=512 -v=2 -log_monitor=true -enable_perf_trace_log=true "
-                                 "-enable_data_replication=true";
+        // A cross-node Get caches a replica on the getter worker and the master acks it as a location, so a later Get
+        // can fetch from that replica (an address != primary_address) and reach the retry-to-primary path.
+        opts.workerGflagParams =
+            "-shared_memory_size_mb=512 -v=2 -log_monitor=true -enable_perf_trace_log=true";
     }
 
     void SetUp() override
