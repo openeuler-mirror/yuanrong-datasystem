@@ -164,6 +164,7 @@ Status WorkerOcServiceCreateImpl::FillCreateResponse(const ClientKey &clientId,
 
 Status WorkerOcServiceCreateImpl::AuthenticateCreateRequest(const CreateReqPb &req, std::string &tenantId)
 {
+    INJECT_POINT("worker.Create.auth");
     CHECK_FAIL_RETURN_STATUS(metadataRouteResolver_ != nullptr, StatusCode::K_NOT_READY,
                              "ETCD cluster manager is not provided.");
     Status rc = req.is_routed() ? worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId)

@@ -3,22 +3,6 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
-    name = "fast_migrate_transport",
-    srcs = [
-        "fast_migrate_transport.cpp",
-    ],
-    hdrs = [
-        "fast_migrate_transport.h",
-    ],
-    deps = [
-        "//src/datasystem/common/rdma:rdma_util",
-        "//src/datasystem/common/util:rpc_util",
-        "//src/datasystem/worker/object_cache/data_migrator/transport:migrate_transport",
-    ],
-)
-
-# success
-ds_cc_library(
     name = "tcp_migrate_transport",
     srcs = [
         "tcp_migrate_transport.cpp",

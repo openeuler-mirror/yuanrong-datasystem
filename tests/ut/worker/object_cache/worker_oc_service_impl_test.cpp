@@ -80,10 +80,8 @@ using namespace datasystem::object_cache;
 
 DS_DECLARE_string(health_check_path);
 DS_DECLARE_bool(enable_distributed_master);
-DS_DECLARE_bool(enable_leaving_intercept);
 DS_DECLARE_bool(enable_reconciliation);
 DS_DECLARE_bool(enable_transport_fallback);
-DS_DECLARE_string(data_migrate_urma_transport_mode);
 DS_DECLARE_uint32(arena_per_tenant);
 
 namespace datasystem {
@@ -937,7 +935,7 @@ protected:
     std::shared_ptr<WorkerOcServiceClearDataFlow> dataClearImpl_;
 };
 
-class WorkerOcRemoteGetAdmissionTest : public WorkerOcServiceImplTest {
+class WorkerOcServiceImplWithAllocatorTest : public WorkerOcServiceImplTest {
 public:
     void SetUp() override
     {
@@ -1030,6 +1028,8 @@ TEST_F(WorkerOcServiceImplTest, NodeRestartAlwaysTriggersMetadataRecovery)
 
     DS_ASSERT_OK(impl_->HandleNodeRestartEvent(restartFacts, true));
 }
+
+using WorkerOcRemoteGetAdmissionTest = WorkerOcServiceImplWithAllocatorTest;
 
 TEST_F(WorkerOcServiceImplTest, AllocationIdReservationUsesStableShmIdAndRejectsConcurrentDuplicate)
 {
@@ -1195,11 +1195,7 @@ TEST_F(WorkerOcServiceImplTest, RemoteGetTryLockMissDoesNotLeaveEmptyEntry)
 TEST_F(WorkerOcServiceImplTest, MigrationUbAdmissionUsesExistingTcpFallback)
 {
     const bool oldTransportFallback = FLAGS_enable_transport_fallback;
-    const std::string oldTransportMode = FLAGS_data_migrate_urma_transport_mode;
-    Raii restoreFlag([oldTransportFallback, oldTransportMode]() {
-        FLAGS_enable_transport_fallback = oldTransportFallback;
-        FLAGS_data_migrate_urma_transport_mode = oldTransportMode;
-    });
+    Raii restoreFlag([oldTransportFallback]() { FLAGS_enable_transport_fallback = oldTransportFallback; });
     BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
     const HostPort target("127.0.0.1", 18482);
     PeerUbAdmission admission;
@@ -1210,12 +1206,7 @@ TEST_F(WorkerOcServiceImplTest, MigrationUbAdmissionUsesExistingTcpFallback)
                           *endpointPolicy_, &exitRequested_, localAddress_, nullptr, objectTable_);
     migrator.SetUbAdmission(&admission);
     FLAGS_enable_transport_fallback = true;
-    FLAGS_data_migrate_urma_transport_mode = "write";
     EXPECT_TRUE(migrator.CheckUbAdmission(target, UbOperationKind::MIGRATION_WRITE).IsOk());
-
-    FLAGS_data_migrate_urma_transport_mode = "read";
-    EXPECT_EQ(migrator.CheckUbAdmission(target, UbOperationKind::MIGRATION_READ).GetCode(),
-              K_URMA_WORKER_UNAVAILABLE);
 
     FLAGS_enable_transport_fallback = false;
     EXPECT_EQ(migrator.CheckUbAdmission(target, UbOperationKind::MIGRATION_WRITE).GetCode(),
@@ -4298,31 +4289,50 @@ TEST_F(WorkerOcServiceImplTest, ShutdownRequestRejectsClientHealthWithoutTopolog
 TEST_F(WorkerOcServiceImplTest, IncomingMigrationGateClosureDoesNotImpersonateTopologyScaleInDrain)
 {
     ASSERT_NE(impl_->gMigrateProc_, nullptr);
-    const bool savedLeavingIntercept = FLAGS_enable_leaving_intercept;
-    Raii restore([savedLeavingIntercept] { FLAGS_enable_leaving_intercept = savedLeavingIntercept; });
-    FLAGS_enable_leaving_intercept = false;
-    exitRequested_.store(true, std::memory_order_release);
 
     constexpr std::chrono::seconds closeBudget(1);
     DS_ASSERT_OK(impl_->gMigrateProc_->CloseIncomingMigrationAdmissionAndWait(
         std::chrono::steady_clock::now() + closeBudget));
 
     EXPECT_FALSE(impl_->MigrateDataStarted());
-    DS_EXPECT_OK(impl_->VerifyClientWriteAdmission(false));
+    DS_ASSERT_OK(impl_->AcquireClientWriteAdmission());
+    impl_->ReleaseClientWriteAdmission();
 }
 
-TEST_F(WorkerOcServiceImplTest, DrainRejectsClientWritesWhenLeavingInterceptIsDisabled)
+TEST_F(WorkerOcServiceImplTest, ClientWriteAdmissionReportsDrainedOnlyAfterLastWriterReturns)
+{
+    EXPECT_FALSE(impl_->IsClientWriteAdmissionDrained());
+    DS_ASSERT_OK(impl_->AcquireClientWriteAdmission());
+    impl_->CloseClientWriteAdmission();
+    EXPECT_FALSE(impl_->IsClientWriteAdmissionDrained());
+
+    impl_->ReleaseClientWriteAdmission();
+    EXPECT_TRUE(impl_->IsClientWriteAdmissionDrained());
+}
+
+TEST_F(WorkerOcServiceImplTest, ClientWriteDrainTimesOutWhileAdmittedWriteIsRunning)
+{
+    DS_ASSERT_OK(impl_->AcquireClientWriteAdmission());
+    cluster::CancellationToken cancellation;
+
+    EXPECT_EQ(impl_->WaitClientWritesDrained(std::chrono::steady_clock::now(), cancellation).GetCode(),
+              K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(impl_->GetAdmittedClientWriteCount(), 1UL);
+    EXPECT_FALSE(impl_->IsClientWriteAdmissionDrained());
+
+    impl_->ReleaseClientWriteAdmission();
+    EXPECT_TRUE(impl_->IsClientWriteAdmissionDrained());
+}
+
+TEST_F(WorkerOcServiceImplTest, DrainRejectsClientWrites)
 {
     ASSERT_NE(impl_->gMigrateProc_, nullptr);
-    const bool savedLeavingIntercept = FLAGS_enable_leaving_intercept;
     const bool savedSkipAuthenticate = FLAGS_skip_authenticate;
-    Raii restore([savedLeavingIntercept, savedSkipAuthenticate] {
+    Raii restore([savedSkipAuthenticate] {
         FLAGS_skip_authenticate = savedSkipAuthenticate;
-        FLAGS_enable_leaving_intercept = savedLeavingIntercept;
         SetTopologyServingAdmission(true);
         SetUnhealthy();
     });
-    FLAGS_enable_leaving_intercept = false;
     FLAGS_skip_authenticate = true;
     SetTopologyServingAdmission(true);
     DS_ASSERT_OK(SetHealthy());
@@ -4345,28 +4355,24 @@ TEST_F(WorkerOcServiceImplTest, DrainRejectsClientWritesWhenLeavingInterceptIsDi
     req.set_object_key("write-after-drain");
     req.set_data_size(1);
     CreateRspPb rsp;
-    DS_ASSERT_OK(impl_->Create(req, rsp));
-    ASSERT_TRUE(rsp.has_worker_redirect());
-    EXPECT_TRUE(rsp.worker_redirect().request_not_executed());
-    EXPECT_EQ(rsp.worker_redirect().candidate_addresses_size(), 0);
+    EXPECT_EQ(impl_->Create(req, rsp).GetCode(), K_SCALE_DOWN);
+    EXPECT_FALSE(rsp.has_worker_redirect());
     EXPECT_EQ(objectTable_->GetSize(), 0);
 }
 
-TEST_F(WorkerOcServiceImplTest, ExitIntentRejectsRoutedCreateBeforeDataDrain)
+TEST_F(WorkerOcServiceImplTest, ClosedAdmissionRejectsRoutedCreateBeforeDataDrain)
 {
-    const bool savedLeavingIntercept = FLAGS_enable_leaving_intercept;
     const bool savedSkipAuthenticate = FLAGS_skip_authenticate;
-    Raii restore([savedLeavingIntercept, savedSkipAuthenticate] {
+    Raii restore([savedSkipAuthenticate] {
         FLAGS_skip_authenticate = savedSkipAuthenticate;
-        FLAGS_enable_leaving_intercept = savedLeavingIntercept;
         SetTopologyServingAdmission(true);
         SetUnhealthy();
     });
-    FLAGS_enable_leaving_intercept = false;
     FLAGS_skip_authenticate = true;
     SetTopologyServingAdmission(true);
     DS_ASSERT_OK(SetHealthy());
     DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
+    impl_->CloseClientWriteAdmission();
     exitRequested_.store(true, std::memory_order_release);
 
     ScopedRequestContext requestContext;
@@ -4405,23 +4411,25 @@ TEST_F(WorkerOcServiceImplTest, ScaleInDrainWaitsForLocalPreShutdownGateBeforeCl
     EXPECT_FALSE(impl_->MigrateDataStarted());
 }
 
-TEST_F(WorkerOcServiceImplTest, ScaleInDrainDoesNotWaitForAdmittedClientWrite)
+TEST_F(WorkerOcServiceImplWithAllocatorTest, ScaleInDrainWaitsForAdmittedClientWrite)
 {
-    const bool savedLeavingIntercept = FLAGS_enable_leaving_intercept;
     const std::string injectPoint = "worker.Create.begin";
-    Raii restore([savedLeavingIntercept, &injectPoint] {
-        FLAGS_enable_leaving_intercept = savedLeavingIntercept;
+    Raii restore([&injectPoint] {
         (void)inject::Clear(injectPoint);
         SetTopologyServingAdmission(true);
         SetUnhealthy();
     });
-    FLAGS_enable_leaving_intercept = false;
     SetTopologyServingAdmission(true);
     DS_ASSERT_OK(SetHealthy());
     DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));
+    DS_ASSERT_OK(inject::Set("worker.Create.auth", "1*return(K_OK)"));
     DS_ASSERT_OK(inject::Set(injectPoint, "pause()"));
 
+    const auto clientId = ClientKey::Intern("admitted-write-drain-client");
+    DS_ASSERT_OK(worker::ClientManager::Instance().AddClient(clientId, -1));
+    Raii removeClient([&clientId] { worker::ClientManager::Instance().RemoveClient(clientId); });
     CreateReqPb req;
+    req.set_client_id(clientId);
     req.set_object_key("admitted-write-before-scale-in-snapshot");
     req.set_data_size(1);
     CreateRspPb rsp;
@@ -4441,12 +4449,14 @@ TEST_F(WorkerOcServiceImplTest, ScaleInDrainDoesNotWaitForAdmittedClientWrite)
         return impl_->DrainTopologyScaleInData(action, "admitted-write-drain-operation",
                                                std::chrono::steady_clock::now() + drainBudget, cancellation);
     });
-    ASSERT_TRUE(WaitForCondition([this] { return impl_->MigrateDataStarted(); }, schedulingTimeout));
-    EXPECT_EQ(drainFuture.wait_for(schedulingTimeout), std::future_status::ready);
+    constexpr std::chrono::milliseconds observationWindow(100);
+    EXPECT_EQ(drainFuture.wait_for(observationWindow), std::future_status::timeout);
+    EXPECT_FALSE(impl_->MigrateDataStarted());
 
     DS_ASSERT_OK(inject::Clear(injectPoint));
-    (void)requestFuture.get();
+    DS_EXPECT_OK(requestFuture.get());
     DS_EXPECT_OK(drainFuture.get());
+    EXPECT_TRUE(impl_->MigrateDataStarted());
 }
 
 TEST_F(WorkerOcServiceImplTest, NotifyRemoteGetHoldsAdmissionUntilRequestReturns)

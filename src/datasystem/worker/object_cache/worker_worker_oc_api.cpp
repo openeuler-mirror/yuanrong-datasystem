@@ -332,28 +332,6 @@ Status WorkerRemoteWorkerOCApi::MigrateDataProbe(MigrateDataReqPb &req, MigrateD
     return WithRpcDiag(rc, "MigrateDataProbe", localHostPort_, hostPort_);
 }
 
-Status WorkerRemoteWorkerOCApi::MigrateDataDirect(MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp)
-{
-    RpcOptions opts;
-    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
-    if (remainingTime <= 0) {
-        return WithRpcDiag(Status(K_RPC_DEADLINE_EXCEEDED, __LINE__, __FILE__,
-                                  FormatString("Request timeout (%ld ms).", -remainingTime)),
-                           "MigrateDataDirect", localHostPort_, hostPort_);
-    }
-    // Prevent waiting too long when network errors.
-    constexpr int64_t maxTimeoutMs = 180'000;
-    remainingTime = std::min(remainingTime, maxTimeoutMs);
-    opts.SetTimeout(static_cast<int32_t>(remainingTime));
-    if (brpcSession_ == nullptr) {
-        return WithRpcDiag(Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "Rpc session is null"), "MigrateDataDirect",
-                           localHostPort_, hostPort_);
-    }
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    auto rc = brpcSession_->MigrateDataDirect(opts, req, rsp);
-    return WithRpcDiag(rc, "MigrateDataDirect", localHostPort_, hostPort_);
-}
-
 Status WorkerRemoteWorkerOCApi::NotifyRemoteGet(NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp)
 {
     RpcOptions opts;

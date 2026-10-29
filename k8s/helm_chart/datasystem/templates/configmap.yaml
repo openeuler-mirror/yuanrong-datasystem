@@ -29,4 +29,3 @@ data:
     -async_delete={{ .Values.global.performance.asyncDelete}}
     -urma_failover_success_rate_ratio={{ .Values.global.performance.urmaFailoverSuccessRateRatio }}
     -urma_failover_min_sample_count={{ .Values.global.performance.urmaFailoverMinSampleCount }}
-    -enable_lossless_data_exit_mode={{ .Values.global.gracefulShutdown.enableLosslessDataExitMode }}

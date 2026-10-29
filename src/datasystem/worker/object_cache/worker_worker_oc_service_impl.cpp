@@ -1089,12 +1089,6 @@ Status WorkerWorkerOCServiceImpl::MigrateData(const MigrateDataReqPb &req, Migra
     return ocClientWorkerSvc_->MigrateData(req, rsp, std::move(payloads));
 }
 
-Status WorkerWorkerOCServiceImpl::MigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp)
-{
-    ScopedRequestContext ctx;
-    return ocClientWorkerSvc_->MigrateDataDirect(req, rsp);
-}
-
 Status WorkerWorkerOCServiceImpl::CheckConnectionStable(const GetObjectRemoteReqPb &req)
 {
     const bool isUrmaRequest = IsUrmaEnabled() && req.has_urma_info();

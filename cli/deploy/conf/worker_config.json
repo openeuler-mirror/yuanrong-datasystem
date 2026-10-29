@@ -327,14 +327,6 @@
         "value": "40",
         "description": "Data migrate rate limit for every node when scale down happen."
     },
-    "data_migrate_urma_transport_mode": {
-        "value": "write",
-        "description": "URMA transport mode for background data migration. Optional values: write, read. write uses the URMA write path, and read uses the URMA read path."
-    },
-    "check_async_queue_empty_time_s": {
-        "value": "1",
-        "description": "The worker ensures a certain period of time that the asynchronous queues for sending messages to ETCD and L2 cache remain empty before it can exit properly."
-    },
     "obs_access_key": {
         "value": "",
         "description": "Pass in access key for authentication when connecting to OBS."
@@ -502,10 +494,6 @@
     "enable_fallocate": {
         "value": "false",
         "description": "Due to k8s's resource calculation policies, shared memory is sometimes multiple counted, which can lead to client crashes. Using fallocate to address this issue. The process-level default is disabled; Kubernetes deployments should enable it explicitly."
-    },
-    "enable_lossless_data_exit_mode": {
-        "value": "false",
-        "description": "Migrate data to another node before the node exits if other nodes are available. If this is the only node in the cluster, exits directly and the data will be lost."
     },
     "enable_p2p_transfer": {
         "value": "false",

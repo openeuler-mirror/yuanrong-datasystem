@@ -21,7 +21,6 @@
 #include <fstream>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -68,7 +67,6 @@ constexpr char REPLACE_PRIMARY_FAILURE_CASE_NAME[] = "ReplacePrimaryFailureKeeps
 constexpr char DISABLED_TEST_PREFIX[] = "DISABLED_";
 const std::string SOURCE_SEND_POINT = "TcpMigrateTransport.MigrateDataToRemote.delay";
 const std::string FAST_MIGRATE_SEND_POINT = "FastMigrateTransport2.MigrateDataToRemote.delay";
-const std::string FAST_MIGRATE_READ_SEND_POINT = "FastMigrateTransport.MigrateDataToRemote.delay";
 const std::string TARGET_MIGRATE_POINT = "worker.migrate_service.return";
 const std::string TARGET_MEMORY_AVAILABLE_POINT = "worker.migrate_service.memory_available";
 const std::string ASSIGN_TASK_POINT = "MemoryRebalanceScheduler.AssignTask";
@@ -80,12 +78,9 @@ const std::string SOURCE_CLOCK_OFFSET_POINT = "RebalanceExecutor.NowMsForExpiryC
 const std::string ADMISSION_CLOSED_POINT = "WorkerOcServiceMigrateImpl.CloseIncomingMigrationAdmissionAndWait.closed";
 const std::string DRAIN_TIMED_OUT_POINT = "WorkerOcServiceMigrateImpl.CloseIncomingMigrationAdmissionAndWait.timedOut";
 const std::string MIGRATE_DATA_AFTER_ADMISSION = "WorkerOcServiceMigrateImpl.MigrateData.afterAdmission";
-const std::string MIGRATE_DIRECT_AFTER_ADMISSION =
-    "WorkerOcServiceMigrateImpl.MigrateDataDirect.afterAdmission";
 const std::string URMA_CQE_ERROR_INJECT = "UrmaManager.CheckCompletionRecordStatus";
 const std::string BEFORE_TRANSPORT_SEND = "MigrateDataHandler.BeforeTransportSend";
 const std::string TRANSPORT_BATCH_STARTED = "MigrateDataHandler.TransportBatchStarted";
-const std::string REMOTE_OPERATOR_UNAVAILABLE = "DataMigrator.RemoteOperatorUnavailable";
 const std::string REDIRECT_MIGRATION_SUBMITTED = "DataMigrator.RedirectMigrationSubmitted";
 const std::string STOP_AFTER_TRANSPORT_FAILURE = "MigrateDataHandler.StopAfterTransportFailure";
 const std::string UB_PROBE_SUCCEEDED = "PeerUbAdmission.CompleteProbe.success";
@@ -140,8 +135,7 @@ bool IsUrmaScaleInCase()
 
 bool IsMetaNotFoundUrmaCase()
 {
-    return IsCurrentTestName("MetaNotFoundUrmaWriteKeepsSourceData")
-           || IsCurrentTestName("MetaNotFoundUrmaReadKeepsSourceData");
+    return IsCurrentTestName("MetaNotFoundUrmaWriteKeepsSourceData");
 }
 
 bool IsStuckProbeCase()
@@ -169,8 +163,7 @@ std::string BuildRebalanceInjectActions()
                   + FormatString("call(%lld)", static_cast<long long>(SOURCE_CLOCK_OFFSET_MS));
    }
    if (IsMetaNotFoundUrmaCase()) {
-       actions += ";FastMigrateTransport2.MigrateDataToRemote.delay:100000*call();"
-                  "FastMigrateTransport.MigrateDataToRemote.delay:100000*call()";
+       actions += ";FastMigrateTransport2.MigrateDataToRemote.delay:100000*call()";
    }
    return actions;
 }
@@ -214,16 +207,13 @@ public:
             || IsCurrentTestName(REPLACE_PRIMARY_FAILURE_CASE_NAME)) {
 #ifdef USE_URMA
             opts.workerGflagParams += " -enable_urma=true -enable_transport_fallback=false";
-            if (IsCurrentTestName("MetaNotFoundUrmaReadKeepsSourceData")) {
-                opts.workerGflagParams += " -data_migrate_urma_transport_mode=read";
-            }
 #else
             // Worker binary not built with URMA framework; test will GTEST_SKIP in the body.
             opts.workerGflagParams += " -enable_urma=false";
 #endif
         }
         if (IsStuckProbeCase()) {
-            opts.workerGflagParams += " -enable_lossless_data_exit_mode=true -node_timeout_s=5 -node_dead_timeout_s=10";
+            opts.workerGflagParams += " -node_timeout_s=5 -node_dead_timeout_s=10";
         }
        opts.injectActions = BuildRebalanceInjectActions();
    }
@@ -805,28 +795,6 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, MetaNotFoundUrmaWriteKeepsSourceData)
     AssertReadable(client2_, batch);
 }
 
-TEST_F(LEVEL1_KVClientMemoryRebalanceTest, MetaNotFoundUrmaReadKeepsSourceData)
-{
-#ifndef USE_URMA
-    GTEST_SKIP() << "Worker not built with URMA framework; skip URMA read-path test";
-#endif
-    SetInjectAction(WORKER1, QUERY_META_NOT_FOUND_POINT, "100000*call()");
-    SetInjectAction(WORKER2, QUERY_META_NOT_FOUND_POINT, "100000*call()");
-    auto sourceSendBaseline = GetInjectCount(WORKER0, FAST_MIGRATE_READ_SEND_POINT);
-    auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
-
-    auto batch = WriteObjects(client0_, "meta_not_found_urma_read", 9, 'r');
-
-    WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1, AllWorkers(), 60'000);
-    WaitForInjectCount(WORKER0, FAST_MIGRATE_READ_SEND_POINT, sourceSendBaseline + 1, 60'000);
-
-    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER1, QUERY_META_NOT_FOUND_POINT));
-    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER2, QUERY_META_NOT_FOUND_POINT));
-
-    AssertReadable(client0_, batch);
-    AssertReadable(client2_, batch);
-}
-
 TEST_F(LEVEL1_KVClientMemoryRebalanceTest, MetaNotFoundRebalanceConverges)
 {
     SetInjectAction(WORKER1, QUERY_META_NOT_FOUND_POINT, "100000*call()");
@@ -1179,10 +1147,6 @@ public:
 #else
         opts.workerGflagParams += " -enable_urma=false";
 #endif
-        const bool readMode = IsCurrentTestName("FastMigrationReadError4KeepsSourceAndQuarantinesTarget")
-                              || IsCurrentTestName("UnavailableTargetRecoversOnlyAfterDedicatedProbe");
-        opts.workerGflagParams +=
-            " -data_migrate_urma_transport_mode=" + std::string(readMode ? "read" : "write");
         opts.injectActions +=
             ";PeerUbAdmission.CheckWriteTarget.blocked:100000*call()"
             ";DataMigrator.RemoteOperatorUnavailable:100000*call()"
@@ -1194,9 +1158,6 @@ public:
 
 protected:
     struct MigrationPause {
-        bool readMode = false;
-        uint64_t target1Baseline = 0;
-        uint64_t target2Baseline = 0;
         uint64_t sourceBaseline = 0;
     };
 
@@ -1210,45 +1171,20 @@ protected:
     MigrationPause ArmNextMigrationPause()
     {
         MigrationPause pause;
-        pause.readMode = IsCurrentTestName("FastMigrationReadError4KeepsSourceAndQuarantinesTarget")
-                         || IsCurrentTestName("UnavailableTargetRecoversOnlyAfterDedicatedProbe");
-        if (pause.readMode) {
-            SetInjectAction(WORKER1, MIGRATE_DIRECT_AFTER_ADMISSION, "pause()");
-            SetInjectAction(WORKER2, MIGRATE_DIRECT_AFTER_ADMISSION, "pause()");
-            pause.target1Baseline = GetInjectCount(WORKER1, MIGRATE_DIRECT_AFTER_ADMISSION);
-            pause.target2Baseline = GetInjectCount(WORKER2, MIGRATE_DIRECT_AFTER_ADMISSION);
-        } else {
-            SetInjectAction(WORKER0, BEFORE_TRANSPORT_SEND, "pause()");
-            pause.sourceBaseline = GetInjectCount(WORKER0, BEFORE_TRANSPORT_SEND);
-        }
+        SetInjectAction(WORKER0, BEFORE_TRANSPORT_SEND, "pause()");
+        pause.sourceBaseline = GetInjectCount(WORKER0, BEFORE_TRANSPORT_SEND);
         return pause;
     }
 
-    std::optional<uint32_t> WaitForPausedMigration(const MigrationPause &pause)
+    uint32_t WaitForPausedMigration(const MigrationPause &pause)
     {
-        if (!pause.readMode) {
-            WaitForInjectCount(WORKER0, BEFORE_TRANSPORT_SEND, pause.sourceBaseline + 1);
-            return WORKER0;
-        }
-        const bool reached = WaitFor([&] {
-            return GetInjectCountIfAlive(WORKER1, MIGRATE_DIRECT_AFTER_ADMISSION) > pause.target1Baseline
-                   || GetInjectCountIfAlive(WORKER2, MIGRATE_DIRECT_AFTER_ADMISSION) > pause.target2Baseline;
-        });
-        if (!reached) {
-            return std::nullopt;
-        }
-        return GetInjectCountIfAlive(WORKER1, MIGRATE_DIRECT_AFTER_ADMISSION) > pause.target1Baseline ? WORKER1
-                                                                                                     : WORKER2;
+        WaitForInjectCount(WORKER0, BEFORE_TRANSPORT_SEND, pause.sourceBaseline + 1);
+        return WORKER0;
     }
 
-    void ReleaseMigrationPause(bool readMode)
+    void ReleaseMigrationPause()
     {
-        if (readMode) {
-            DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER1, MIGRATE_DIRECT_AFTER_ADMISSION));
-            DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER2, MIGRATE_DIRECT_AFTER_ADMISSION));
-        } else {
-            DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER0, BEFORE_TRANSPORT_SEND));
-        }
+        DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER0, BEFORE_TRANSPORT_SEND));
     }
 
     ObjectBatch TriggerError4(const std::string &prefix, uint32_t &operatorWorker)
@@ -1257,37 +1193,14 @@ protected:
         auto pause = ArmNextMigrationPause();
         auto batch = WriteObjects(client0_, prefix, 8, 'u');
         WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1);
-        auto pausedWorker = WaitForPausedMigration(pause);
-        if (!pausedWorker.has_value()) {
-            ReleaseMigrationPause(pause.readMode);
-            ADD_FAILURE() << "No migration reached the deterministic CQE injection boundary";
-            return batch;
-        }
-        operatorWorker = *pausedWorker;
+        operatorWorker = WaitForPausedMigration(pause);
         SetInjectAction(operatorWorker, URMA_CQE_ERROR_INJECT, "1*call(0, 4)");
-        ReleaseMigrationPause(pause.readMode);
+        ReleaseMigrationPause();
         WaitForInjectCount(operatorWorker, URMA_CQE_ERROR_INJECT, 1);
         ClearCqeFault();
         return batch;
     }
 };
-
-TEST_F(LEVEL1_KVClientMemoryRebalanceUbFaultTest, FastMigrationReadError4KeepsSourceAndQuarantinesTarget)
-{
-#ifdef USE_URMA
-    WaitAllNodesActiveInHashRing(3);
-    auto remoteBaseline = GetInjectCount(WORKER0, REMOTE_OPERATOR_UNAVAILABLE);
-    auto blockedBaseline = GetInjectCount(WORKER0, WRITE_TARGET_BLOCKED);
-    uint32_t operatorWorker = WORKER0;
-    auto batch = TriggerError4("p3_read_error4", operatorWorker);
-    ASSERT_NE(operatorWorker, WORKER0);
-    WaitForInjectCount(WORKER0, REMOTE_OPERATOR_UNAVAILABLE, remoteBaseline + 1);
-    WaitForInjectCount(WORKER0, WRITE_TARGET_BLOCKED, blockedBaseline + 1);
-    AssertReadable(client0_, batch);
-#else
-    GTEST_SKIP() << "Worker not built with URMA framework";
-#endif
-}
 
 TEST_F(LEVEL1_KVClientMemoryRebalanceUbFaultTest, FastMigrationWriteError4QuarantinesSourceWithoutRedirect)
 {

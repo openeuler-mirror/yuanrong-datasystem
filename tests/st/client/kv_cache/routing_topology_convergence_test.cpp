@@ -70,8 +70,8 @@ public:
         opts.workerGflagParams =
             " -shared_memory_size_mb=512 -ipc_through_shared_memory=true"
             " -arena_per_tenant=1"
-            " -enable_urma=false -enable_leaving_intercept=true"
-            " -enable_lossless_data_exit_mode=true -host_id_env_name=" + std::string(HOST_ID_ENV_NAME);
+            " -enable_urma=false"
+            " -host_id_env_name=" + std::string(HOST_ID_ENV_NAME);
     }
 
     void SetUp() override

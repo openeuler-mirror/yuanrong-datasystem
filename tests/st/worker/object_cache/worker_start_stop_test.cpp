@@ -31,7 +31,6 @@ public:
         opts.numWorkers = 1;
         opts.waitWorkerReady = false;
         opts.enableDistributedMaster = "true";
-        opts.workerGflagParams = "-check_async_queue_empty_time_s=1";
     }
 
     void SetUp() override

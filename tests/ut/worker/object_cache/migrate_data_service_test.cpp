@@ -345,7 +345,7 @@ public:
         threadPool_ = std::make_shared<ThreadPool>(MEMCOPY_THREAD_NUM);
         rateController_ =
             std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
-        impl_ = std::make_shared<TestWorkerOcServiceMigrateImpl>(param, threadPool_, nullptr, "127.0.0.1:18888",
+        impl_ = std::make_shared<TestWorkerOcServiceMigrateImpl>(param, threadPool_, "127.0.0.1:18888",
                                                                  rateController_);
         TimerQueue::GetInstance()->Initialize();
     }
@@ -663,11 +663,6 @@ TEST_F(MigrateDataServiceTest, RejectsIncomingMigrationAfterLocalScaleInStarts)
     EXPECT_EQ(impl_->MigrateData(probe, probeRsp, {}).GetCode(), StatusCode::K_NOT_READY);
     EXPECT_EQ(probeRsp.scale_down_state(), MigrateDataRspPb::DATA_MIGRATION_STARTED);
 
-    MigrateDataDirectReqPb directReq;
-    directReq.add_objects()->set_object_key("late-direct-object");
-    MigrateDataDirectRspPb directRsp;
-    EXPECT_EQ(impl_->MigrateDataDirect(directReq, directRsp).GetCode(), StatusCode::K_NOT_READY);
-    EXPECT_THAT(directRsp.failed_object_keys(), ElementsAre("late-direct-object"));
 }
 
 TEST_F(MigrateDataServiceTest, RebalanceTargetRejectsStalePolicyFence)
@@ -684,16 +679,6 @@ TEST_F(MigrateDataServiceTest, RebalanceTargetRejectsStalePolicyFence)
 
     EXPECT_EQ(impl_->CheckMigrateDataAdmission(req, rsp).GetCode(), StatusCode::K_NOT_READY);
     EXPECT_THAT(rsp.fail_ids(), ElementsAre("fenced-object"));
-
-    MigrateDataDirectReqPb directReq;
-    directReq.set_has_rebalance_policy_fence(true);
-    directReq.set_target_eviction_policy(master::EVICTION_POLICY_CLOCK);
-    directReq.set_target_eviction_policy_epoch(0);
-    directReq.set_rebalance_task_id("stale-direct-target-task");
-    directReq.add_objects()->set_object_key("fenced-direct-object");
-    MigrateDataDirectRspPb directRsp;
-    EXPECT_EQ(impl_->MigrateDataDirect(directReq, directRsp).GetCode(), StatusCode::K_NOT_READY);
-    EXPECT_THAT(directRsp.failed_object_keys(), ElementsAre("fenced-direct-object"));
 
     req.set_target_eviction_policy(master::EVICTION_POLICY_HEAT);
     DS_ASSERT_OK(impl_->CheckMigrateDataAdmission(req, rsp));
@@ -722,17 +707,6 @@ TEST_F(MigrateDataServiceTest, SocketMigrationHoldsAdmissionUntilRequestReturns)
     MigrateDataRspPb rsp;
     VerifyRequestHoldsMigrationAdmission("WorkerOcServiceMigrateImpl.MigrateData.afterAdmission", [this, &req, &rsp] {
         return impl_->MigrateData(req, rsp, {});
-    });
-}
-
-TEST_F(MigrateDataServiceTest, DirectMigrationHoldsAdmissionUntilRequestReturns)
-{
-    MigrateDataDirectReqPb req;
-    req.add_objects()->set_object_key("guarded-direct-object");
-    MigrateDataDirectRspPb rsp;
-    VerifyRequestHoldsMigrationAdmission("WorkerOcServiceMigrateImpl.MigrateDataDirect.afterAdmission",
-                                          [this, &req, &rsp] {
-        return impl_->MigrateDataDirect(req, rsp);
     });
 }
 
@@ -805,17 +779,6 @@ TEST_F(MigrateDataServiceTest, MigrateDataReturnsFailureWhenDrainTimesOut)
     });
 }
 
-TEST_F(MigrateDataServiceTest, MigrateDataDirectReturnsFailureWhenDrainTimesOut)
-{
-    MigrateDataDirectReqPb req;
-    req.add_objects()->set_object_key("drain-timeout-direct");
-    MigrateDataDirectRspPb rsp;
-    VerifyRequestReturnsFailureWhenDrainTimesOut("WorkerOcServiceMigrateImpl.MigrateDataDirect.afterAdmission",
-                                                   [this, &req, &rsp] {
-        return impl_->MigrateDataDirect(req, rsp);
-    });
-}
-
 TEST_F(MigrateDataServiceTest, TestLockNeedMigrateObjects)
 {
     uint64_t elderVersion = 0;
@@ -841,41 +804,6 @@ TEST_F(MigrateDataServiceTest, TestLockNeedMigrateObjects)
     ASSERT_TRUE(successIds.empty());
     ASSERT_EQ(failedIds.size(), lockFailCount);
     ASSERT_EQ(needModifyPrimary.size(), expireCount);
-}
-
-// Regression: when master has no meta for an object (deleted between BatchLock and QueryMasterMetadata),
-// FillMetaToObjectEntries used to treat the BatchLock-inserted placeholder as skipped and leave it in
-// objectTable_ forever (no metaTable entry -> TTL never targets it; not on eviction list -> evict never
-// picks it). The placeholder must be erased. See worker_oc_service_migrate_impl.cpp FillMetaToObjectEntries.
-TEST_F(MigrateDataServiceTest, DeletedByMasterClearsBatchLockPlaceholder)
-{
-    const uint64_t newCreateCount = 40;
-    MigrateDataReqPb req;
-    CreateObjects("New_Created_", 1, newCreateCount, 1, false, false, req);
-
-    LockedEntryMap lockedEntries;
-    LockedEntryMap needModifyPrimary;
-    std::unordered_set<std::string> successIds;
-    std::unordered_set<std::string> failedIds;
-    impl_->BatchLockForMigrateData(req.objects(), lockedEntries, successIds, failedIds, needModifyPrimary);
-    ASSERT_EQ(lockedEntries.size(), newCreateCount);
-    for (const auto &kv : lockedEntries) {
-        ASSERT_TRUE(objectTable_->Contains(kv.first).IsOk());
-    }
-
-    // Empty metas: master reports every object as deleted.
-    QueryMetaMap metas;
-    std::unordered_set<std::string> failedAfter;
-    std::unordered_set<std::string> skippedIds;
-    ObjectInfoMap needReadDataIds;
-    impl_->FillMetaToObjectEntries(lockedEntries, metas, successIds, failedAfter, needReadDataIds, skippedIds);
-
-    ASSERT_EQ(skippedIds.size(), newCreateCount);
-    ASSERT_TRUE(needReadDataIds.empty());
-    // Placeholders must be reclaimed, not leaked.
-    for (const auto &kv : lockedEntries) {
-        ASSERT_FALSE(objectTable_->Contains(kv.first).IsOk()) << "placeholder leaked: " << kv.first;
-    }
 }
 
 TEST_F(MigrateDataServiceTest, TestLockNeedMigrateObjectsFailed)
@@ -2627,40 +2555,6 @@ TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetRateLimitUsesMigratedBytes)
     ASSERT_EQ(firstRate, (maxBandwidth / 2 + firstAvailableBandwidth) / 2);
 
     ASSERT_EQ(MigrateDataRateController::CalculateSmoothedRate(firstRate, 0), 0);
-}
-
-TEST_F(MigrateDataServiceTest, MigrateDataDirectResponseSetsLimitRate)
-{
-    MigrateDataDirectReqPb req;
-    req.set_worker_addr("127.0.0.1:18889");
-    auto *object1 = req.add_objects();
-    object1->set_object_key("object1");
-    object1->set_data_size(1024);
-    auto *object2 = req.add_objects();
-    object2->set_object_key("object2");
-    object2->set_data_size(1024);
-    std::unordered_set<std::string> failedIds{ "object2" };
-    uint64_t migratedBytes = object1->data_size();
-    MigrateDataDirectRspPb rsp;
-
-    impl_->FillMigrateDataDirectResponse(req, failedIds, false, migratedBytes, rsp);
-
-    ASSERT_GT(rsp.limit_rate(), 0);
-    ASSERT_EQ(rsp.failed_object_keys_size(), 1);
-    ASSERT_EQ(rsp.failed_object_keys(0), "object2");
-}
-
-TEST_F(MigrateDataServiceTest, MigrateDataDirectResponseSetsZeroLimitRateWhenOom)
-{
-    MigrateDataDirectReqPb req;
-    req.set_worker_addr("127.0.0.1:18889");
-    std::unordered_set<std::string> failedIds;
-    MigrateDataDirectRspPb rsp;
-
-    impl_->FillMigrateDataDirectResponse(req, failedIds, true, 0, rsp);
-
-    ASSERT_EQ(rsp.limit_rate(), 0);
-    ASSERT_EQ(rsp.remain_bytes(), 0);
 }
 
 TEST_F(MigrateDataServiceTest, MetadataNotFoundSkipsObjectAndDoesNotCallReplacePrimary)

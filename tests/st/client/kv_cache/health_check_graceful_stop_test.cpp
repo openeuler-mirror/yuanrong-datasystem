@@ -64,7 +64,7 @@ public:
         ExternalClusterTest::TearDown();
     }
 
-    bool SendNonScaleInGracefulStop(uint32_t workerIndex)
+    bool SendGracefulStop(uint32_t workerIndex)
     {
         pid_t pid = externalCluster_->GetWorkerPid(workerIndex);
         return pid > 0 && ::kill(pid, SIGTERM) == 0;
@@ -91,16 +91,15 @@ protected:
     std::shared_ptr<KVClient> client_;
 };
 
-TEST_F(HealthCheckGracefulStopTest, LEVEL1_NonScaleInGracefulStopExposesScaleDown)
+TEST_F(HealthCheckGracefulStopTest, LEVEL1_DistributedMasterGracefulStopExposesScaleDown)
 {
     DS_ASSERT_OK(client_->HealthCheck());
 
-    // Do not create worker-status or enable lossless exit: this exercises the non-scale-in path.
-    ASSERT_TRUE(SendNonScaleInGracefulStop(STOPPED_WORKER_INDEX));
+    ASSERT_TRUE(SendGracefulStop(STOPPED_WORKER_INDEX));
 
     std::string observedCodes;
     Status rc = PollHealthCheckForScaleDown(observedCodes);
     EXPECT_EQ(rc.GetCode(), StatusCode::K_SCALE_DOWN)
-        << "expected K_SCALE_DOWN during non scale-in graceful stop; observed codes: " << observedCodes;
+        << "expected K_SCALE_DOWN during distributed-master graceful stop; observed codes: " << observedCodes;
 }
 }  // namespace datasystem::st

@@ -24,7 +24,6 @@
 // libraries to avoid this issue.
 
 namespace {
-constexpr uint32_t DEFAULT_SCALE_IN_COLLECT_WINDOW_MS = 1'000;
 constexpr uint32_t DEFAULT_URMA_SEND_LANE_COUNT_PER_PEER = 8;
 constexpr uint32_t DEFAULT_URMA_LOG_THRESHOLD_US = 500;
 constexpr uint32_t DEFAULT_URMA_PERF_INTERVAL_MS = 600'000;
@@ -204,10 +203,6 @@ DS_DEFINE_uint32_dynamic(urma_orphan_sweep_batch, 100,
                          "Maximum number of orphan URMA client connections removed per sweep.");
 DS_DEFINE_validator(urma_orphan_sweep_batch, [](const char *, uint32_t value) { return value > 0; });
 DS_DEFINE_uint32_dynamic(node_dead_timeout_s, 300, "maximum time interval for the master to determine node death");
-DS_DEFINE_uint32(scale_in_collect_window_ms, DEFAULT_SCALE_IN_COLLECT_WINDOW_MS,
-                 "ordinary SCALE_IN batch coalescing window in milliseconds. When non-zero, the first PRE_LEAVING "
-                 "candidate opens a short collect window so members exiting within it land in the same epoch; "
-                 "0 disables coalescing (legacy immediate-batch behavior). Hard upper bound 5000ms.");
 DS_DEFINE_bool_dynamic(log_monitor, true, "Indicates whether to enable log monitoring, default is true.");
 DS_DEFINE_bool(enable_huge_tlb, false,
                "enable_huge_tlb can improve memory access and reducing the overhead of page table,"
@@ -274,8 +269,6 @@ DS_DEFINE_uint64_dynamic(slow_log_rpc_slower_than, 5000,
                  "RPC operation latency threshold (microseconds) for slow-log and latency summary. "
                  "Default 5000 (5ms). 0 means disabled. When enabled, requests whose RPC phases exceed this threshold "
                  "will include a latency summary in the access log.");
-DS_DEFINE_bool(enable_leaving_intercept, false,
-               "Reject object-cache write requests after the local worker records topology scale-in exit intent.");
 DS_DEFINE_int32(brpc_server_num_threads, 64, "Number of brpc server worker threads.");
 DS_DEFINE_int32(brpc_max_concurrency, 128,
                 "Max concurrent in-flight RPCs per brpc server. 0=unlimited. "

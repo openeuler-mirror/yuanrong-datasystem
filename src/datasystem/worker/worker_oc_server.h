@@ -499,8 +499,9 @@ private:
 
     /**
      * @brief Check whether there are unfinished asynchronous tasks.
+     * @param[in] waitClientWrites Whether lossless exit must drain admitted client writes first.
      */
-    void CheckAsyncTasks();
+    void CheckAsyncTasks(bool waitClientWrites);
 
     /**
      * @brief Set checkAsyncTasksDone_ flag and notify waiting threads.

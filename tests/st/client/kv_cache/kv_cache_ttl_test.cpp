@@ -132,8 +132,7 @@ TEST_F(KVCacheTtlTest, LEVEL1_MasterWorkerDead)
         DS_ASSERT_OK(
             client1->Set(ids[i], values[i], { .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE, .ttlSecond = 2 }));
     }
-    // Shutdown worker.
-    cluster_->ShutdownNode(ClusterNodeType::WORKER, 0);
+    DS_ASSERT_OK(cluster_->KillWorker(0));
     std::this_thread::sleep_for(std::chrono::seconds(2));
 
     // After expired time restart worker and master

@@ -129,7 +129,7 @@ TEST_F(ListenWorkerTest, TestRPCHeartheat)
     auto workerApi = std::make_shared<ClientWorkerRemoteCommonApi>(workerHostPort_,
                                                              HeartbeatType::RPC_HEARTBEAT, "", signature_.get());
     DS_ASSERT_OK(workerApi->Init(initTimeoutMs, initTimeoutMs));
-    bool called = false;
+    std::atomic<bool> called{ false };
 
     ListenWorker listenWorker(workerApi, workerApi->heartbeatType_);
     auto callback = [&workerApi, &listenWorker, &called]() {
@@ -143,12 +143,16 @@ TEST_F(ListenWorkerTest, TestRPCHeartheat)
     DS_ASSERT_OK(listenWorker.StartListenWorker());
     listenWorker.AddCallBackFunc(workerApi.get(), callback);
     DS_ASSERT_OK(listenWorker.CheckWorkerAvailable());
-    cluster_->ShutdownNodes(WORKER);
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.PreShutDown.direct", "1*call()"));
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
     sleep(5);  // Wait until the client detects that the worker is disconnected after adjusted node timeout.
     DS_ASSERT_NOT_OK(listenWorker.CheckWorkerAvailable());
     DS_ASSERT_OK(cluster_->StartWorkers());
-    sleep(1);  // Wait until the client is successfully reconnected.
-    ASSERT_TRUE(called);
+    Timer timer;
+    while (!called.load() && timer.ElapsedMilliSecond() < 3'000) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    ASSERT_TRUE(called.load());
     DS_ASSERT_OK(listenWorker.CheckWorkerAvailable());
 }
 

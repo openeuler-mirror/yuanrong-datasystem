@@ -38,22 +38,19 @@ constexpr char kClusterName[] = "cluster-a";
 constexpr char kCoordinatorId[] = "0123456789abcdef";
 constexpr char kNextCoordinatorId[] = "fedcba9876543210";
 
-TEST(WorkerWorkerOCServiceProtocolTest, KeepsLegacyMethodIndexesStable)
+TEST(WorkerWorkerOCServiceProtocolTest, KeepsWriteMigrationMethodIndexesStable)
 {
     const auto *service = GetObjectRemoteReqPb::descriptor()->file()->FindServiceByName("WorkerWorkerOCService");
     ASSERT_NE(service, nullptr);
     const auto *batchGetObjectRemote = service->FindMethodByName("BatchGetObjectRemote");
-    const auto *migrateDataDirect = service->FindMethodByName("MigrateDataDirect");
     const auto *notifyRemoteGet = service->FindMethodByName("NotifyRemoteGet");
     const auto *getPeerHashRing = service->FindMethodByName("GetPeerHashRing");
     ASSERT_NE(batchGetObjectRemote, nullptr);
-    ASSERT_NE(migrateDataDirect, nullptr);
     ASSERT_NE(notifyRemoteGet, nullptr);
     ASSERT_NE(getPeerHashRing, nullptr);
     EXPECT_EQ(batchGetObjectRemote->index(), 4);
-    EXPECT_EQ(migrateDataDirect->index(), 5);
-    EXPECT_EQ(notifyRemoteGet->index(), 6);
-    EXPECT_EQ(getPeerHashRing->index(), 7);
+    EXPECT_EQ(notifyRemoteGet->index(), 5);
+    EXPECT_EQ(getPeerHashRing->index(), 6);
 }
 
 class FakeRoutes final {
