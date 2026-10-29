@@ -49,8 +49,6 @@ struct MetadataManagerHolderParam {
     HostPort masterAddress;
     const cluster::PlacementFacade *placement;
     const cluster::MembershipEndpointView *membership;
-    bool centralizedMetadata;
-    HostPort metadataAddress;
     std::string localAddress;
     bool isRestart;
     bool controlBackendAvailableAtStartup;
@@ -128,8 +126,6 @@ protected:
     HostPort masterAddress_;
     const cluster::PlacementFacade *placement_{ nullptr };
     const cluster::MembershipEndpointView *membership_{ nullptr };
-    bool centralizedMetadata_{ false };
-    HostPort metadataAddress_;
     std::string localAddress_;
     bool isRestart_{ false };
     bool controlBackendAvailableAtStartup_{ true };

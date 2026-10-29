@@ -75,7 +75,7 @@ public:
 protected:
     cluster::TopologySnapshotState snapshots_;
     cluster::MembershipEndpointView membership_{ snapshots_ };
-    worker::MetadataRouteResolver metadataRoute_{ nullptr, worker::MetadataRouteOptions{} };
+    worker::MetadataRouteResolver metadataRoute_{ nullptr };
     std::shared_ptr<WorkerSCAllocateMemory> allocate_;
     std::shared_ptr<ClientWorkerSCServiceImpl> svc_;
 };

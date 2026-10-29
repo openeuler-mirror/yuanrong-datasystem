@@ -20,8 +20,10 @@
 #include <algorithm>
 #include <chrono>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -29,23 +31,54 @@
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
+#include "datasystem/cluster/routing/placement_facade.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/cluster/runtime/topology_engine.h"
+#include "datasystem/cluster/runtime/topology_snapshot_state.h"
 #include "datasystem/worker/metadata_route_resolver.h"
 #include "ut/cluster/testing/fake_coordinator_service_proxy.h"
 
 namespace datasystem::ut {
 
+class TestMetadataRoute final {
+public:
+    TestMetadataRoute() : placement_(snapshots_, algorithm_, TEST_METADATA_ADDRESS), resolver_(&placement_)
+    {
+        cluster::TopologyState topology;
+        topology.clusterHasInit = true;
+        topology.version = 1;
+        topology.members = { cluster::Member{ { std::string(16, 'm'), TEST_METADATA_ADDRESS },
+                                              cluster::MemberState::ACTIVE,
+                                              { std::numeric_limits<uint32_t>::max() } } };
+        std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+        auto status = cluster::TopologySnapshot::Create(topology, 1, std::string(64, 'a'), snapshot);
+        if (status.IsOk()) {
+            cluster::SnapshotUpdateOutcome outcome;
+            status = snapshots_.Publish(std::move(snapshot), outcome);
+        }
+        if (status.IsError()) {
+            throw std::runtime_error(status.ToString());
+        }
+    }
+
+    const worker::MetadataRouteResolver &Resolver() const
+    {
+        return resolver_;
+    }
+
+private:
+    inline static constexpr char TEST_METADATA_ADDRESS[] = "127.0.0.1:31500";
+    cluster::HashAlgorithm algorithm_;
+    cluster::TopologySnapshotState snapshots_;
+    cluster::PlacementFacade placement_;
+    worker::MetadataRouteResolver resolver_;
+};
+
 inline const worker::MetadataRouteResolver &GetTestMetadataRoute()
 {
-    static const worker::MetadataRouteResolver route(nullptr, [] {
-        worker::MetadataRouteOptions options;
-        options.centralizedMode = true;
-        options.masterAddress = HostPort("127.0.0.1", 31500);
-        return options;
-    }());
-    return route;
+    static const TestMetadataRoute route;
+    return route.Resolver();
 }
 
 class TestTopologyPhaseCallbacks final : public cluster::ITopologyPhaseCallbacks {

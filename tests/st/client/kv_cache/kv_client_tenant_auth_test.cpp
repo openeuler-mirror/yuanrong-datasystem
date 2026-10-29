@@ -168,7 +168,6 @@ public:
         for (auto addr : opts.workerConfigs) {
             workerAddress_.emplace_back(addr.ToString());
         }
-        opts.enableDistributedMaster = "false";
         opts.workerGflagParams = "";
         opts.numEtcd = 1;
     }

@@ -50,7 +50,6 @@ public:
     {
         opts.numOBS = 1;
         opts.numWorkers = WORKER_NUM;
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         opts.workerGflagParams = "-shared_memory_size_mb=100 -v=2 -log_monitor=true -max_client_num=4000";
     }

@@ -36,7 +36,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = etcdNum_;
-        opts.numMasters = 0;
         opts.numWorkers = 0;
     }
 

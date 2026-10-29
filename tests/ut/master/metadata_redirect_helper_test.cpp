@@ -61,9 +61,8 @@ private:
 
 class MetadataRedirectHelperForTest final : public MetadataRedirectHelper {
 public:
-    MetadataRedirectHelperForTest(const cluster::PlacementFacade *placement, bool centralizedMetadata,
-                                  HostPort metadataAddress)
-        : MetadataRedirectHelper(placement, centralizedMetadata, std::move(metadataAddress))
+    explicit MetadataRedirectHelperForTest(const cluster::PlacementFacade *placement)
+        : MetadataRedirectHelper(placement)
     {
     }
 
@@ -108,7 +107,7 @@ TEST(MetadataRedirectHelperTest, ServesThenWaitsAndRedirectsDuringScaleInHandoff
     DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
     CountingRoutingAlgorithm algorithm;
     cluster::PlacementFacade placement(snapshots, algorithm, "127.0.0.1:1");
-    MetadataRedirectHelperForTest helper(&placement, false, HostPort());
+    MetadataRedirectHelperForTest helper(&placement);
 
     bool redirect = true;
     std::string target;
@@ -132,7 +131,7 @@ TEST(MetadataRedirectHelperTest, ServesThenWaitsAndRedirectsDuringScaleInHandoff
 
 TEST(MetadataRedirectHelperTest, RouteFailureIsReturnedWithoutChangingOutputs)
 {
-    MetadataRedirectHelperForTest helper(nullptr, false, HostPort());
+    MetadataRedirectHelperForTest helper(nullptr);
     bool redirect = true;
     std::string target = "unchanged";
     uint64_t topologyVersion = 7;
@@ -161,7 +160,7 @@ TEST(MetadataRedirectHelperTest, ScaleOutWaitEndsOnlyAfterMetadataHandoffComplet
     DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
     cluster::HashAlgorithm algorithm;
     cluster::PlacementFacade placement(snapshots, algorithm, "127.0.0.1:1");
-    MetadataRedirectHelperForTest helper(&placement, false, HostPort());
+    MetadataRedirectHelperForTest helper(&placement);
 
     helper.metaFound = true;
     CreateMetaRspPb singleResponse;
@@ -213,7 +212,7 @@ TEST(MetadataRedirectHelperTest, CallerIntentFalseSkipsRedirectEvaluation)
     DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
     CountingRoutingAlgorithm algorithm;
     cluster::PlacementFacade placement(snapshots, algorithm, "127.0.0.1:1");
-    MetadataRedirectHelperForTest helper(&placement, false, HostPort());
+    MetadataRedirectHelperForTest helper(&placement);
 
     CreateMetaRspPb singleResponse;
     bool redirect = false;
@@ -230,18 +229,6 @@ TEST(MetadataRedirectHelperTest, CallerIntentFalseSkipsRedirectEvaluation)
     EXPECT_EQ(batchResponse.info_size(), 0);
 
     EXPECT_EQ(algorithm.LocateCount(), 0U);
-}
-
-TEST(MetadataRedirectHelperTest, CentralizedMetadataDoesNotRequirePlacement)
-{
-    MetadataRedirectHelperForTest helper(nullptr, true, HostPort("127.0.0.1", 18481));
-    MetaRedirectDecision decision;
-
-    DS_ASSERT_OK(helper.EvaluateMetadataRedirect("key", decision));
-    EXPECT_FALSE(decision.redirect);
-    EXPECT_FALSE(decision.moving);
-    EXPECT_EQ(decision.targetAddress, "127.0.0.1:18481");
-    EXPECT_EQ(decision.topologyVersion, 0U);
 }
 
 }  // namespace

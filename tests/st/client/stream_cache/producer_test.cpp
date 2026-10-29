@@ -79,8 +79,6 @@ public:
         opts.numEtcd = 1;
         opts.numWorkers = NUM_WORKERS;
         opts.vLogLevel = 2;
-        opts.enableDistributedMaster = "false";
-        opts.masterIdx = 1;
         SCClientCommon::SetClusterSetupOptions(opts);
     }
 
@@ -2099,7 +2097,8 @@ TEST_F(ProducerTest, TestMultiProdClose2)
     ProducerConf producerConf{ .delayFlushTime = 20, .pageSize = 64 * KB, .maxStreamSize = 4 * MB };
 
     ASSERT_EQ(CreateClient(0, pClient), Status::OK());
-    std::string streamName("MultiProdClose2");
+    std::string streamName;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(0, "MultiProdClose2_", streamName));
 
     // Create 4 producers
     const int numProds = 4;

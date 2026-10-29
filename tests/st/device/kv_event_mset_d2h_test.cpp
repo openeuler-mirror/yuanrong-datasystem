@@ -97,7 +97,6 @@ public:
             "-arena_per_tenant=2 -kv_events_config={\"bind_endpoint\":\""
             + endpoint_ + "\",\"backend_id\":\"worker-0\",\"tenant_id\":\"default\",\"dp_rank\":0,"
                           "\"queue_capacity\":1024}";
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         FLAGS_v = 1;
     }
@@ -224,7 +223,6 @@ public:
             + endpoint_ + "\",\"backend_id\":\"worker-0\",\"tenant_id\":\"default\",\"dp_rank\":0,"
                           "\"queue_capacity\":1024}";
         opts.injectActions = "evictAction.setDelete:call()";
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         FLAGS_v = 1;
     }

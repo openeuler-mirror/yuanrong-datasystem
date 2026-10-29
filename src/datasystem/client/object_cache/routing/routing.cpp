@@ -62,10 +62,9 @@ Routing::Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> sig
         return Status::OK();
     };
     auto fetchRpc = [this](const HostPort &workerAddr, uint64_t currentVersion, ::datasystem::ClusterTopologyPb &ring,
-                           std::string &masterAddress, uint64_t &newVersion, bool &changed,
+                           uint64_t &newVersion, bool &changed,
                            std::unordered_map<std::string, std::string> &hostIdMap, int32_t timeoutMs) {
-        return FetchHashRing(workerAddr, currentVersion, ring, masterAddress, newVersion, changed, hostIdMap,
-                             timeoutMs);
+        return FetchHashRing(workerAddr, currentVersion, ring, newVersion, changed, hostIdMap, timeoutMs);
     };
     refresher_ = std::make_shared<HashRingRefresher>(router_, std::move(fetchRpc), std::move(applyRingUpdate),
                                                      HashRingRefresher::WaitFn{}, std::move(probeFallback));
@@ -103,8 +102,8 @@ Status Routing::Init(const std::string &hostId, const HostPort &initialWorkerAdd
 }
 
 Status Routing::FetchHashRing(const HostPort &workerAddr, uint64_t currentVersion,
-                              ::datasystem::ClusterTopologyPb &ring, std::string &masterAddress, uint64_t &newVersion,
-                              bool &changed, std::unordered_map<std::string, std::string> &hostIdMap, int32_t timeoutMs)
+                              ::datasystem::ClusterTopologyPb &ring, uint64_t &newVersion, bool &changed,
+                              std::unordered_map<std::string, std::string> &hostIdMap, int32_t timeoutMs)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
     GetHashRingRspPb response;
@@ -112,7 +111,6 @@ Status Routing::FetchHashRing(const HostPort &workerAddr, uint64_t currentVersio
                                              refresher_->GetHostIdsDigest(currentVersion)));
     newVersion = response.version();
     changed = response.hash_ring_changed();
-    masterAddress = response.master_address();
     if (!changed) {
         if (newVersion == currentVersion && refreshConfirmedHook_) {
             refreshConfirmedHook_(newVersion);

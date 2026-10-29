@@ -92,7 +92,6 @@ public:
     {
         opts.numEtcd = 1;
         opts.numWorkers = 2;
-        opts.enableDistributedMaster = "true";
         opts.waitWorkerReady = false;
         distributedDiskPath_ = testCasePath_ + "/distributed_disk";
         DS_ASSERT_OK(CreateDir(distributedDiskPath_, true));
@@ -814,7 +813,6 @@ public:
     {
         opts.numEtcd = 1;
         opts.numWorkers = 1;
-        opts.enableDistributedMaster = "true";
         opts.waitWorkerReady = false;
         opts.injectActions = "SlotClient.Init.SetSlotNum:return(1)";
         distributedDiskPath_ = testCasePath_ + "/distributed_disk";
@@ -1073,7 +1071,6 @@ public:
     {
         opts.numEtcd = 1;
         opts.numWorkers = 3;
-        opts.enableDistributedMaster = "true";
         opts.waitWorkerReady = false;
         distributedDiskPath_ = testCasePath_ + "/distributed_disk";
         DS_ASSERT_OK(CreateDir(distributedDiskPath_, true));
@@ -1189,7 +1186,6 @@ public:
     {
         opts.numEtcd = 1;
         opts.numWorkers = UseSmallClusterConfig() ? 2 : 3;
-        opts.enableDistributedMaster = "true";
         opts.waitWorkerReady = true;
         if (UseSmallClusterConfig()) {
             opts.injectActions = "SlotClient.Init.SetSlotNum:return(2)";
@@ -1529,7 +1525,6 @@ public:
     {
         opts.numEtcd = 1;
         opts.numWorkers = 3;
-        opts.enableDistributedMaster = "true";
         opts.waitWorkerReady = false;
         distributedDiskPath_ = testCasePath_ + "/distributed_disk";
         DS_ASSERT_OK(CreateDir(distributedDiskPath_, true));
@@ -1565,7 +1560,7 @@ protected:
     void StartWorkersAndWaitReady(const std::initializer_list<uint32_t> &workers, int waitReadySec = 20)
     {
         for (auto worker : workers) {
-            ASSERT_TRUE(externalCluster_->StartWorker(worker, HostPort(), "").IsOk()) << worker;
+            ASSERT_TRUE(externalCluster_->StartWorker(worker, "").IsOk()) << worker;
         }
         for (auto worker : workers) {
             DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, worker, waitReadySec));

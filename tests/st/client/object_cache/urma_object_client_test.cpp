@@ -149,7 +149,6 @@ public:
         opts.numWorkers = WORKER_NUM;
         opts.numEtcd = 1;
         const bool routedWarmup = caseName == "ClientInitWarmsRoutedMetaOwnerSetGet";
-        opts.enableDistributedMaster = routedWarmup ? "true" : "false";
         opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
         opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
         for (const auto &addr : opts.workerConfigs) {
@@ -1407,7 +1406,6 @@ public:
     {
         UrmaObjectClientTest::SetClusterSetupOptions(opts);
         opts.numWorkers -= 1;
-        opts.enableDistributedMaster = "true";
         opts.workerGflagParams +=
             " -ipc_through_shared_memory=true --enable_transport_fallback=false -client_dead_timeout_s=1"
             " -inject_actions=worker.bind_unix_path:return(K_OK) ";
@@ -1458,7 +1456,6 @@ public:
     {
         opts.numWorkers = WORKER_NUM;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "false";
         opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
         opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
         for (const auto &addr : opts.workerConfigs) {
@@ -1873,7 +1870,6 @@ public:
         UrmaObjectClientTest::SetClusterSetupOptions(opts);
         opts.numWorkers = 1;
         opts.workerConfigs.resize(opts.numWorkers);
-        opts.enableDistributedMaster = "true";
         opts.vLogLevel = 2;
         opts.workerGflagParams += " -enable_transport_fallback=false -client_dead_timeout_s=3";
     }

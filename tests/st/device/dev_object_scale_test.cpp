@@ -98,7 +98,7 @@ public:
     void StartWorkerAndWaitReady(std::initializer_list<uint32_t> indexes, int maxWaitTimeSec = 20)
     {
         for (auto i : indexes) {
-            ASSERT_TRUE(externalCluster_->StartWorker(i, HostPort()).IsOk()) << i;
+            ASSERT_TRUE(externalCluster_->StartWorker(i).IsOk()) << i;
         }
         for (auto i : indexes) {
             ASSERT_TRUE(cluster_->WaitNodeReady(WORKER, i, maxWaitTimeSec).IsOk()) << i;
@@ -207,7 +207,6 @@ public:
         opts.numEtcd = 1;
         opts.numWorkers = 3;  // worker num is 3
         opts.numOBS = 1;
-        opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
             FormatString(" -v=0 -node_timeout_s=%d -node_dead_timeout_s=%d", nodeTimeout_,
                          nodeDeadTimeout_);

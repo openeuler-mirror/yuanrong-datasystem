@@ -367,8 +367,6 @@ global:
     enableReconciliation: true
     # Timeout interval of kubernetes liveness probe, default is 150 seconds.
     livenessProbeTimeoutS: 150
-    # Whether to support distributed master, default is true.
-    enableDistributedMaster: true
     # Option to verify if data from a producer is out of order.
     enableStreamDataVerification: false
 

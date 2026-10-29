@@ -82,7 +82,6 @@ public:
         // SHM fd-passing path: MmapManager::ReceiveAndMmapClientFds -> GetClientFd -> RecvFdAfterNotify.
         opts.numWorkers = 1;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "false";
         opts.workerGflagParams = " -shared_memory_size_mb=256";
     }
 };

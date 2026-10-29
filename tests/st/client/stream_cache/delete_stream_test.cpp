@@ -436,8 +436,6 @@ public:
         opts.numEtcd = 1;
         opts.numWorkers = 2;
         DeleteStreamTest::SetClusterSetupOptions(opts);
-        opts.enableDistributedMaster = "false";
-        opts.masterIdx = 1;
     }
 
 protected:
@@ -491,7 +489,8 @@ TEST_F(DeleteStreamTimingTest, TestDeleteStreamTimingHole3)
     // The purpose of the testcase is to test a timing hole in DeleteStream.
     // Running both AutoDelete and Manual Delete at the same time
     DS_ASSERT_OK(CreateClient(0, client1));
-    std::string streamName = "testDelStreamTimingHoleThree";
+    std::string streamName;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(1, "testDelStreamTimingHoleThree_", streamName));
     // Create a producer and consumer
     std::string data = RandomData().GetRandomString(DEFAULT_ELEMENT_SIZE);
     Element element(reinterpret_cast<uint8_t *>(&data.front()), data.size());
@@ -532,7 +531,8 @@ TEST_F(DeleteStreamTimingTest, TestDeleteStreamTimingHole4)
 {
     // The purpose of the testcase is to test running both Auto Delete and CreateProducer
     // at the same time. AutoDelete is not finished when CreateProducer starts.
-    std::string streamName = "TestDelStreamTimingHoleFour";
+    std::string streamName;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(1, "TestDelStreamTimingHoleFour_", streamName));
     DS_ASSERT_OK(CreateClient(0, client1));
     std::string data = RandomData().GetRandomString(DEFAULT_ELEMENT_SIZE);
     Element element(reinterpret_cast<uint8_t *>(&data.front()), data.size());
@@ -572,7 +572,8 @@ TEST_F(DeleteStreamTimingTest, TestDeleteStreamTimingHole5)
     // delete-in-progress, while CreateProducer runs.
     DS_ASSERT_OK(CreateClient(0, client1));
     DS_ASSERT_OK(CreateClient(1, client2));
-    std::string streamName = "TestDelStreamTimingHole5";
+    std::string streamName;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(1, "TestDelStreamTimingHole5_", streamName));
     ThreadPool pool(TWO);
     std::string data = RandomData().GetRandomString(DEFAULT_ELEMENT_SIZE);
     Element element(reinterpret_cast<uint8_t *>(&data.front()), data.size());

@@ -163,7 +163,6 @@ public:
         FLAGS_v = 1;
         opts.numEtcd = 1;
         opts.numWorkers = WORKER_NUM;
-        opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
             " -shared_memory_size_mb=512 -ipc_through_shared_memory=false -arena_per_tenant=1";
 #ifdef USE_URMA
@@ -2568,7 +2567,6 @@ public:
     {
         opts.numEtcd = 1;
         opts.numWorkers = 3;
-        opts.enableDistributedMaster = "true";
         // Enable SHM so the worker GetObjectRemote path exercises ShmGuard::TryRLatch.
         opts.workerGflagParams =
             " -shared_memory_size_mb=512 -ipc_through_shared_memory=true -arena_per_tenant=1"

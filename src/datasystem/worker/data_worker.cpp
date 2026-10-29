@@ -59,7 +59,6 @@
 
 DS_DECLARE_string(worker_address);
 DS_DECLARE_string(bind_address);
-DS_DECLARE_string(master_address);
 DS_DECLARE_string(coordinator_address);
 DS_DECLARE_uint64(shared_memory_size_mb);
 DS_DECLARE_string(log_filename);
@@ -121,7 +120,6 @@ void SignalHandler(int signum)
 struct WorkerServerOptions {
     HostPort workerAddress;
     HostPort bindAddress;
-    HostPort masterAddress;
     Status LoadParameters()
     {
         CHECK_FAIL_RETURN_STATUS(!FLAGS_worker_address.empty(), StatusCode::K_RUNTIME_ERROR,
@@ -139,14 +137,7 @@ struct WorkerServerOptions {
         if (!s.IsOk()) {
             RETURN_STATUS(StatusCode::K_INVALID, "Bind address is invalid");
         }
-        if (!FLAGS_master_address.empty()) {
-            s = masterAddress.ParseString(FLAGS_master_address);
-            if (!s.IsOk()) {
-                RETURN_STATUS(StatusCode::K_INVALID, "Master address is invalid");
-            }
-        }
-        LOG(INFO) << "GOT MASTER ADDRESS: " << masterAddress.ToString() << " at worker: " << workerAddress.ToString()
-                  << " bind on: " << bindAddress.ToString();
+        LOG(INFO) << "Worker address: " << workerAddress.ToString() << ", bind address: " << bindAddress.ToString();
         return Status::OK();
     }
 };
@@ -381,7 +372,7 @@ Status DataWorker::InitWorker(DynamicFlagConfig &flags, const std::string &nonDe
     RETURN_IF_NOT_OK(options.LoadParameters());
     LOG_IF_ERROR(PreExpandFdPool(), "Failed to pre-expand fd pool.");
     worker_ = std::make_unique<worker::WorkerOCServer>(options.workerAddress, options.bindAddress,
-                                                       options.masterAddress, coordinatorDiscovery_);
+                                                       coordinatorDiscovery_);
     if (!isEmbeddedClient) {
         worker_->SetScaleInShutdownRequester([] { SignalHandler(0); });
     }

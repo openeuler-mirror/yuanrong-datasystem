@@ -69,7 +69,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numWorkers = 1;
-        opts.enableDistributedMaster = "true";
         opts.numOBS = 1;
         opts.numEtcd = 1;
         std::string hostIp = "127.0.0.1";

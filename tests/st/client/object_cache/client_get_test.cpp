@@ -1714,7 +1714,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         OCClientGetTest::SetClusterSetupOptions(opts);
-        opts.enableDistributedMaster = "false";
     }
 };
 
@@ -1730,14 +1729,12 @@ TEST_F(OCClientGetTest2, LEVEL1_TestRemoteGetMeetsRpcError)
     constexpr size_t localObjectCount = 1;
     std::string data = GenRandomString(SHM_SIZE);
     std::vector<std::string> objKeys;
-    objKeys.reserve(objectCount);
+    DS_ASSERT_OK(FindKeysRoutedToWorker(0, "remote_get_rpc_error_", objectCount, objKeys));
     for (size_t i = 0; i < objectCount; ++i) {
-        std::string objKey = "obj" + std::to_string(i);
-        objKeys.emplace_back(objKey);
         if (i == 0) {
-            CreateAndSealObject(client1, objKey, data);
+            CreateAndSealObject(client1, objKeys[i], data);
         } else {
-            CreateAndSealObject(client2, objKey, data);
+            CreateAndSealObject(client2, objKeys[i], data);
         }
     }
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.remote_get_failed", "20000*return(K_RPC_UNAVAILABLE)"));
@@ -1757,8 +1754,9 @@ TEST_F(OCClientGetTest2, LEVEL1_TestRemoteGetMeetsRpcError)
         ASSERT_FALSE(buffers[i]);
     }
 
-    objKeys.emplace_back("obj_not_exist1");
-    objKeys.emplace_back("obj_not_exist2");
+    std::vector<std::string> missingKeys;
+    DS_ASSERT_OK(FindKeysRoutedToWorker(0, "remote_get_rpc_error_missing_", 2, missingKeys));
+    objKeys.insert(objKeys.end(), missingKeys.begin(), missingKeys.end());
     buffers.clear();
     // Nine objects fan out concurrently under a 1000ms budget. On slow runners the remote_get_failed
     // injection still returns K_RPC_UNAVAILABLE per object, but enough requests may queue past the
@@ -1778,8 +1776,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numWorkers = 2;
-        opts.enableDistributedMaster = "false";
-        opts.masterIdx = 0;
         opts.workerGflagParams = "-shared_memory_size_mb=12";
         opts.numEtcd = 1;
     }
@@ -1834,8 +1830,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numWorkers = 3;
-        opts.enableDistributedMaster = "false";
-        opts.masterIdx = 0;
         opts.workerGflagParams = "-shared_memory_size_mb=12";
         opts.numEtcd = 1;
     }

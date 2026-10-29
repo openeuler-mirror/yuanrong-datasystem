@@ -43,12 +43,11 @@ namespace client {
 class HashRingRefresher {
 public:
     using FetchRpc = std::function<Status(const HostPort &workerAddr, uint64_t currentVersion,
-                                          ::datasystem::ClusterTopologyPb &ring, std::string &masterAddress,
-                                          uint64_t &newVersion, bool &changed,
+                                          ::datasystem::ClusterTopologyPb &ring, uint64_t &newVersion, bool &changed,
                                           std::unordered_map<std::string, std::string> &hostIdMap)>;
     using TimedFetchRpc =
         std::function<Status(const HostPort &workerAddr, uint64_t currentVersion, ::datasystem::ClusterTopologyPb &ring,
-                             std::string &masterAddress, uint64_t &newVersion, bool &changed,
+                             uint64_t &newVersion, bool &changed,
                              std::unordered_map<std::string, std::string> &hostIdMap, int32_t timeoutMs)>;
     using RingUpdateHook = std::function<Status(uint64_t newVersion,
                                                 const ::datasystem::ClusterTopologyPb &ring,

@@ -421,7 +421,6 @@ global:
 | global.reliability.enableReconciliation | bool | `true` | 当节点重启时是否启用对账功能 |
 | global.reliability.livenessProbeTimeoutS | int | `150` | Kubernetes 存活探针超时时间配置（以秒为单位） |
 | global.reliability.startupProbeTimeoutS | int | `390` | Kubernetes 启动探针超时（秒） |
-| global.reliability.enableDistributedMaster | bool | `true` | 是否启用分布式主节点，默认值为true |
 | global.reliability.enableStreamDataVerification | bool | `false` | 是否验证生产者数据乱序，默认值为false |
 
 `startupProbeTimeoutS` 默认值由 60 秒重启对账、300 秒死亡节点判定和 30 秒初始化余量组成。

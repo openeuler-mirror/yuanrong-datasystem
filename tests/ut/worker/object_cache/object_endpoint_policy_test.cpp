@@ -16,10 +16,13 @@
  */
 #include "datasystem/worker/object_cache/object_endpoint_policy.h"
 
+#include <limits>
 #include <vector>
 
 #include "gtest/gtest.h"
 
+#include "datasystem/cluster/algorithm/hash_algorithm.h"
+#include "datasystem/cluster/routing/placement_facade.h"
 #include "ut/common.h"
 
 namespace datasystem::object_cache {
@@ -32,7 +35,7 @@ std::shared_ptr<const cluster::TopologySnapshot> MakeSnapshot(
     cluster::TopologyState state;
     state.version = 1;
     state.members = { cluster::Member{ { std::string(16, 'a'), MEMBER_ADDRESS }, memberState,
-                                       { 1 } } };
+                                       { std::numeric_limits<uint32_t>::max() } } };
     // Transitional members require a matching activeBatch, otherwise
     // TopologySnapshot::Create rejects the snapshot as an unstable topology.
     if (memberState == cluster::MemberState::LEAVING) {
@@ -45,20 +48,20 @@ std::shared_ptr<const cluster::TopologySnapshot> MakeSnapshot(
     return snapshot;
 }
 
-TEST(ObjectEndpointPolicyTest, AppliesDirectoryLagOnlyAtObjectBoundary)
+TEST(ObjectEndpointPolicyTest, DirectoryLagDoesNotBypassMetadataRouting)
 {
     cluster::TopologySnapshotState snapshots;
     cluster::MembershipEndpointView membership(snapshots);
-    worker::MetadataRouteOptions options;
-    options.centralizedMode = true;
-    options.masterAddress = HostPort("127.0.0.1", 19002);
-    worker::MetadataRouteResolver resolver(nullptr, options);
+    cluster::HashAlgorithm algorithm;
+    cluster::PlacementFacade placement(snapshots, algorithm, MEMBER_ADDRESS);
+    worker::MetadataRouteResolver resolver(&placement);
     ObjectEndpointPolicy policy(resolver, membership);
+    const HostPort owner("127.0.0.1", 19002);
 
-    EXPECT_EQ(policy.CheckEndpoint(options.masterAddress, false).GetCode(), K_NOT_READY);
-    EXPECT_TRUE(policy.CheckEndpoint(options.masterAddress, true).IsOk());
+    EXPECT_EQ(policy.CheckEndpoint(owner, false).GetCode(), K_NOT_READY);
+    EXPECT_TRUE(policy.CheckEndpoint(owner, true).IsOk());
     EXPECT_EQ(policy.CheckMetaOwner("key", false).GetCode(), K_NOT_READY);
-    EXPECT_TRUE(policy.CheckMetaOwner("key", true).IsOk());
+    EXPECT_EQ(policy.CheckMetaOwner("key", true).GetCode(), K_NOT_READY);
 }
 
 TEST(ObjectEndpointPolicyTest, RejectsObservedUnreachableEndpoint)
@@ -68,10 +71,9 @@ TEST(ObjectEndpointPolicyTest, RejectsObservedUnreachableEndpoint)
     cluster::SnapshotUpdateOutcome outcome;
     DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
     cluster::MembershipEndpointView membership(snapshots);
-    worker::MetadataRouteOptions options;
-    options.centralizedMode = true;
-    options.masterAddress = HostPort("127.0.0.1", 19001);
-    worker::MetadataRouteResolver resolver(nullptr, options);
+    cluster::HashAlgorithm algorithm;
+    cluster::PlacementFacade placement(snapshots, algorithm, MEMBER_ADDRESS);
+    worker::MetadataRouteResolver resolver(&placement);
     ObjectEndpointPolicy policy(resolver, membership);
     cluster::EndpointObservation observation{ snapshot->Members().front().identity, 1,
                                               cluster::EndpointAvailability::UNREACHABLE };
@@ -87,16 +89,15 @@ TEST(ObjectEndpointPolicyTest, AllowsUnknownEndpointWhenDirectoryLagFallbackIsEn
     cluster::SnapshotUpdateOutcome outcome;
     DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
     cluster::MembershipEndpointView membership(snapshots);
-    worker::MetadataRouteOptions options;
-    options.centralizedMode = true;
-    options.masterAddress = HostPort("127.0.0.1", 19001);
-    worker::MetadataRouteResolver resolver(nullptr, options);
+    cluster::HashAlgorithm algorithm;
+    cluster::PlacementFacade placement(snapshots, algorithm, MEMBER_ADDRESS);
+    worker::MetadataRouteResolver resolver(&placement);
     ObjectEndpointPolicy policy(resolver, membership);
     cluster::MemberEndpoint endpoint;
     DS_ASSERT_OK(membership.ResolveByAddress(MEMBER_ADDRESS, endpoint));
     ASSERT_EQ(endpoint.localAvailability, cluster::EndpointAvailability::UNKNOWN);
 
-    EXPECT_TRUE(policy.CheckEndpoint(options.masterAddress, true).IsOk());
+    EXPECT_TRUE(policy.CheckEndpoint(HostPort("127.0.0.1", 19001), true).IsOk());
 }
 
 TEST(ObjectEndpointPolicyTest, AppendsRouteFailuresWithoutCreatingAnEmptyGroup)
@@ -145,8 +146,7 @@ TEST(ObjectEndpointPolicyTest, AppliesMigrationSourceAndTargetRoleMatrix)
         cluster::SnapshotUpdateOutcome outcome;
         DS_ASSERT_OK(snapshots.Publish(MakeSnapshot(testCase.state), outcome));
         cluster::MembershipEndpointView membership(snapshots);
-        worker::MetadataRouteOptions options;
-        worker::MetadataRouteResolver resolver(nullptr, options);
+        worker::MetadataRouteResolver resolver(nullptr);
         ObjectEndpointPolicy policy(resolver, membership);
         EXPECT_EQ(policy.CheckDataPlaneAdmission(address, testCase.role).IsOk(), testCase.allowed);
     }

@@ -35,7 +35,6 @@ public:
         opts.numEtcd = 1;
         opts.workerGflagParams = " -v=1";
         opts.waitWorkerReady = false;
-        opts.enableDistributedMaster = "true";
     }
 
     void SetUp() override
@@ -1053,7 +1052,6 @@ public:
         opts.numEtcd = 1;
         opts.workerGflagParams = " -node_timeout_s=3";
         opts.waitWorkerReady = false;
-        opts.enableDistributedMaster = "true";
     }
 
     const int timeoutMs_ = 5000; // 5s timeout
@@ -1092,18 +1090,16 @@ TEST_F(OCClientDistMasterDfxTest, LEVEL1_MasterTimeout)
     }
 }
 
-class OCClientCentralizedMaster : public OCClientDistMasterTest {
+class OCClientTopologyRoutingTest : public OCClientDistMasterTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         OCClientDistMasterTest::SetClusterSetupOptions(opts);
-        opts.masterIdx = 2;
-        opts.enableDistributedMaster = "false";
         opts.workerGflagParams = " -v=1";
     }
 };
 
-TEST_F(OCClientCentralizedMaster, PutGet)
+TEST_F(OCClientTopologyRoutingTest, PutGet)
 {
     InitObjectClients();
     std::string key = "key1";
@@ -1116,7 +1112,7 @@ TEST_F(OCClientCentralizedMaster, PutGet)
     ASSERT_EQ(buffers.size(), (size_t)1);
 }
 
-TEST_F(OCClientCentralizedMaster, LEVEL1_AfterRestartPutGet)
+TEST_F(OCClientTopologyRoutingTest, LEVEL1_AfterRestartPutGet)
 {
     DS_ASSERT_OK(inject::Set("ListenWorker.CheckHeartbeat.interval", "call(500)"));
     DS_ASSERT_OK(inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)"));
@@ -1124,18 +1120,21 @@ TEST_F(OCClientCentralizedMaster, LEVEL1_AfterRestartPutGet)
     InitObjectClients();
     cluster_->ShutdownNode(WORKER, 1);
     std::this_thread::sleep_for(std::chrono::seconds(2));
-    cluster_->StartNode(WORKER, 1, "");
-    cluster_->WaitNodeReady(WORKER, 1);
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
 
     std::string key = "key1";
     std::string value = "hello";
     EXPECT_EQ(objClient0_->Put(key, reinterpret_cast<const uint8_t *>(value.data()), value.size(), CreateParam(), {}),
               Status::OK());
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
     std::vector<Optional<Buffer>> buffers;
-    EXPECT_EQ(objClient1_->Get({ key }, 0, buffers), Status::OK());
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&] {
+            buffers.clear();
+            return objClient1_->Get({ key }, 0, buffers);
+        },
+        15, K_OK));
     ASSERT_EQ(buffers.size(), (size_t)1);
 }
 
@@ -1148,7 +1147,6 @@ public:
         opts.numEtcd = 1;
         opts.workerGflagParams = " -node_timeout_s=1800 -node_dead_timeout_s=864000 -client_reconnect_wait_s=5";
         opts.waitWorkerReady = false;
-        opts.enableDistributedMaster = "true";
     }
 };
 

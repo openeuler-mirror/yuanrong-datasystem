@@ -168,7 +168,7 @@ Status OCNestedManager::DecreaseNestedRefCnt(const std::string &parentObjectKey,
 Status OCNestedManager::RecoverRelationshipData(const std::string &refTable, const std::string &countTable)
 {
     std::vector<std::pair<std::string, std::string>> metas;
-    if (objectStore_->IsRocksdbRunning() || isCentralized_) {
+    if (objectStore_->IsRocksdbRunning()) {
         RETURN_IF_NOT_OK(objectStore_->GetAllFromRocks(refTable, metas));
     } else {
         LOG(WARNING) << FormatString("Table[%s] does not support using etcd as a l2_cache, just ignore it", refTable);
@@ -185,7 +185,7 @@ Status OCNestedManager::RecoverRelationshipData(const std::string &refTable, con
         }
     }
     metas.clear();
-    if (objectStore_->IsRocksdbRunning() || isCentralized_) {
+    if (objectStore_->IsRocksdbRunning()) {
         RETURN_IF_NOT_OK(objectStore_->GetAllFromRocks(countTable, metas));
     } else {
         LOG(WARNING) << FormatString("Table[%s] does not support using etcd as a l2_cache, just ignore it", countTable);

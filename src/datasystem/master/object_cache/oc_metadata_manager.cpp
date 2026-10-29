@@ -183,10 +183,9 @@ static Status WaitForClientIdRefMigration(MasterMasterOCApi &api, const GIncreas
 OCMetadataManager::OCMetadataManager(std::shared_ptr<AkSkManager> akSkManager, RocksStore *rocksStore,
                                      EtcdStore *etcdStore, std::shared_ptr<PersistenceApi> persistApi,
                                      const std::string &masterAddress, const cluster::PlacementFacade *placement,
-                                     const cluster::MembershipEndpointView *membership, bool centralizedMetadata,
-                                     HostPort metadataAddress, std::string localAddress,
+                                     const cluster::MembershipEndpointView *membership, std::string localAddress,
                                      const std::atomic<bool> *exitRequested, const std::string &workerId, bool newNode)
-    : MetadataRedirectHelper(placement, centralizedMetadata, std::move(metadataAddress)),
+    : MetadataRedirectHelper(placement),
       masterAddress_(masterAddress),
       topologyMembership_(membership),
       localAddress_(std::move(localAddress)),
@@ -197,9 +196,7 @@ OCMetadataManager::OCMetadataManager(std::shared_ptr<AkSkManager> akSkManager, R
       newNode_(newNode)
 {
     objectStore_ = std::make_shared<ObjectMetaStore>(rocksStore, etcdStore, true);
-    if (!IsCentralizedMetadata()) {
-        workerId_ = workerId;
-    }
+    workerId_ = workerId;
 }
 
 Status OCMetadataManager::Init()
@@ -210,7 +207,7 @@ Status OCMetadataManager::Init()
     }
     bool rocksdbHealthy = objectStore_->CheckHealth();
 
-    nestedRefManager_ = std::make_unique<OCNestedManager>(objectStore_, IsCentralizedMetadata());
+    nestedRefManager_ = std::make_unique<OCNestedManager>(objectStore_);
     RETURN_IF_NOT_OK(InitGlobalRef());
     asyncPool_ = std::make_unique<ThreadPool>(ASYNC_MIN_THREAD_NUM, ASYNC_MAX_THREAD_NUM, "OcAsyncTask");
     notifyWorkerManager_ =
@@ -403,7 +400,7 @@ Status OCMetadataManager::LoadRefFromRocks(const std::string &tableName,
 {
     std::vector<std::pair<std::string, std::string>> globalRefs;
 
-    if (objectStore_->IsRocksdbRunning() || IsCentralizedMetadata()) {
+    if (objectStore_->IsRocksdbRunning()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(tableName, globalRefs),
                                          "Load global ref from Rocksdb failed.");
     } else {
@@ -431,7 +428,7 @@ Status OCMetadataManager::LoadRefFromRocks(const std::string &tableName,
 {
     std::vector<std::pair<std::string, std::string>> globalRefs;
 
-    if (objectStore_->IsRocksdbRunning() || IsCentralizedMetadata()) {
+    if (objectStore_->IsRocksdbRunning()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(tableName, globalRefs),
                                          "Load global ref from Rocksdb failed.");
     } else {
@@ -2640,9 +2637,7 @@ Status OCMetadataManager::HandleLoadMeta(
     bool &isFromRocksdb)
 {
     std::set<std::string> workers;
-    if (!IsCentralizedMetadata()) {
-        RETURN_IF_NOT_OK(GetValidTopologyWorkers(workers));
-    }
+    RETURN_IF_NOT_OK(GetValidTopologyWorkers(workers));
     for (const auto &meta : metas) {
         ObjectMetaPb metaPb;
         if (!metaPb.ParseFromString(meta.second)) {
@@ -2656,7 +2651,7 @@ Status OCMetadataManager::HandleLoadMeta(
             InsertToEtcdTableInMemory(objectKey, metaPb, ETCD_META_TABLE_PREFIX, objectKey);
         }
 
-        if (IsCentralizedMetadata() || workers.find(metaCache.meta.primary_address()) != workers.end()) {
+        if (workers.find(metaCache.meta.primary_address()) != workers.end()) {
             if (metaCache.meta.primary_address().empty()) {
                 LOG(ERROR) << FormatString("[Obj: %s] primary address is empty", objectKey);
             } else {

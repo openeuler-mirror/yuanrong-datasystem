@@ -45,7 +45,6 @@
 #include "datasystem/utils/status.h"
 
 DS_DECLARE_string(etcd_address);
-DS_DECLARE_string(master_address);
 DS_DECLARE_bool(log_monitor);
 
 namespace datasystem {
@@ -72,7 +71,6 @@ public:
         opts.numEtcd = 1;
         opts.numWorkers = 1;
         opts.numOBS = 1;
-        opts.enableDistributedMaster = "false";
         opts.injectActions = "worker.Spill.Sync:return();NodeSelector.setInterval:call(200);"
                              "WorkerOCServer.heatMaintenanceIntervalMs:call(200)";
     }

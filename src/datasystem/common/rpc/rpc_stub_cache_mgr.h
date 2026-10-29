@@ -43,7 +43,7 @@
 
 namespace datasystem {
 
-// brpc listens on the port specified by --worker_address / --master_address.
+// brpc listens on the port specified by --worker_address.
 constexpr int kBrpcPortOffset = 0;
 constexpr int kBrpcConnMaxRetries = 30;
 constexpr int kBrpcConnRetryIntervalUs = 100000;

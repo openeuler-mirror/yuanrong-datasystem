@@ -69,7 +69,6 @@ public:
     {
         opts.numEtcd = 1;
         opts.numWorkers = workerNum_;
-        opts.enableDistributedMaster = "true";
         opts.workerGflagParams = FormatString(" -v=2 -node_timeout_s=%d -node_dead_timeout_s=%d -log_monitor=true",
                                               nodeTimeoutS_, nodeDeadTimeoutS_);
         SCClientCommon::SetClusterSetupOptions(opts);
@@ -112,9 +111,7 @@ public:
     {
         const int newWorkerIdx = workerNum_++;
         HostPort workerAddr(HOST_IP, GetFreePort());
-        HostPort masterAddr;
-        RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(0, masterAddr));
-        RETURN_IF_NOT_OK(cluster_->AddNode(masterAddr, workerAddr.ToString()));
+        RETURN_IF_NOT_OK(cluster_->AddNode(workerAddr.ToString()));
         RETURN_IF_NOT_OK(cluster_->WaitNodeReady(WORKER, newWorkerIdx));
         return Status::OK();
     }
@@ -953,7 +950,6 @@ public:
         opts.numEtcd = 1;
         // Start 3 workers
         opts.numWorkers = ++workerNum_;
-        opts.enableDistributedMaster = "true";
         opts.vLogLevel = 1;
         // Use a short dead-node timeout so a new metadata owner can be selected during passive scale-down.
         opts.workerGflagParams = FormatString(
@@ -1134,7 +1130,6 @@ public:
         opts.numEtcd = 1;
         // Start 3 workers
         opts.numWorkers = ++workerNum_;
-        opts.enableDistributedMaster = "true";
         // Use a short dead-node timeout so a new metadata owner can be selected during passive scale-down.
         opts.workerGflagParams = FormatString(
             " -v=2 -node_timeout_s=3 -node_dead_timeout_s=%d -shared_memory_size_mb=10240"
@@ -1599,7 +1594,6 @@ public:
         opts.numEtcd = 1;
         // Start 3 workers
         opts.numWorkers = ++workerNum_;
-        opts.enableDistributedMaster = "true";
         opts.vLogLevel = 1;
         // Use a short dead-node timeout so a new metadata owner can be selected during passive scale-down.
         opts.workerGflagParams = FormatString(

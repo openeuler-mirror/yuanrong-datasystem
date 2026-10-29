@@ -64,7 +64,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numWorkers = 3;
-        opts.masterIdx = 2;
         opts.numEtcd = 1;
         std::string hostIp = "127.0.0.1";
         opts.workerConfigs.emplace_back(hostIp, GetFreePort());

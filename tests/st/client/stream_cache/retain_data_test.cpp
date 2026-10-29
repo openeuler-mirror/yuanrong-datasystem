@@ -44,8 +44,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "false";
-        opts.masterIdx = 1;
         opts.numWorkers = WORKER_COUNT;
         opts.vLogLevel = logLevel;
         opts.workerGflagParams += FormatString(" -node_timeout_s=%d -node_dead_timeout_s=%d -client_reconnect_wait_s=2",

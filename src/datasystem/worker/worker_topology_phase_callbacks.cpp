@@ -109,9 +109,7 @@ void LogCallbackResult(const char *phase, const char *stage, const cluster::Topo
 }  // namespace
 
 WorkerTopologyPhaseCallbacks::WorkerTopologyPhaseCallbacks(WorkerTopologyPhaseCallbackDependencies dependencies)
-    : centralizedMetadata_(dependencies.centralizedMetadata),
-      localMetadataMaster_(dependencies.localMetadataMaster),
-      streamMetadataEnabled_(dependencies.streamMetadataEnabled),
+    : streamMetadataEnabled_(dependencies.streamMetadataEnabled),
       metadataManagers_(dependencies.metadataManagers),
       objectCacheServiceProvider_(std::move(dependencies.objectCacheServiceProvider)),
       readinessCheck_(std::move(dependencies.readinessCheck))
@@ -220,9 +218,6 @@ Status WorkerTopologyPhaseCallbacks::CheckContext(const cluster::TopologyCallbac
 
 Status WorkerTopologyPhaseCallbacks::MigrateMetadata(const cluster::TopologyCallbackContext &context)
 {
-    if (centralizedMetadata_) {
-        return Status::OK();
-    }
     RETURN_IF_NOT_OK(master::OCMigrateMetadataManager::Instance().MigrateTopologyMetadata(
         context.action, context.keyFilter, context.businessOperationId, context.deadline, context.cancellation));
     if (!streamMetadataEnabled_) {
@@ -317,16 +312,13 @@ Status WorkerTopologyPhaseCallbacks::RunFailureBestEffort(const cluster::Topolog
     std::shared_ptr<master::OCMetadataManager> ocMetadata;
     std::shared_ptr<master::SCMetadataManager> scMetadata;
     Status firstError;
-    const bool localMetadata = !centralizedMetadata_ || localMetadataMaster_;
-    if (localMetadata) {
-        RecordFailureStep("get-object-metadata", metadataManagers_.GetOcMetadataManager(ocMetadata), firstError,
-                          context);
-    }
-    if (localMetadata && streamMetadataEnabled_) {
+    RecordFailureStep("get-object-metadata", metadataManagers_.GetOcMetadataManager(ocMetadata), firstError,
+                      context);
+    if (streamMetadataEnabled_) {
         RecordFailureStep("get-stream-metadata", metadataManagers_.GetScMetadataManager(scMetadata), firstError,
                           context);
     }
-    if (!centralizedMetadata_ && streamMetadataEnabled_ && scMetadata != nullptr) {
+    if (streamMetadataEnabled_ && scMetadata != nullptr) {
         RecordFailureStep(
             "recover-stream",
             scMetadata->RecoverTopologyFailure(context.action, context.keyFilter, context.businessOperationId,
@@ -342,14 +334,13 @@ void WorkerTopologyPhaseCallbacks::RunFailureCleanup(const cluster::TopologyCall
                                                      const std::shared_ptr<master::SCMetadataManager> &scMetadata,
                                                      Status &firstError)
 {
-    const bool localMetadata = !centralizedMetadata_ || localMetadataMaster_;
-    if (streamMetadataEnabled_ && localMetadata && scMetadata != nullptr) {
+    if (streamMetadataEnabled_ && scMetadata != nullptr) {
         RecordFailureStep("cleanup-stream",
                           scMetadata->CleanupTopologyFailedMember(context.action, context.businessOperationId,
                                                                   context.deadline, context.cancellation),
                           firstError, context);
     }
-    if (localMetadata && ocMetadata != nullptr) {
+    if (ocMetadata != nullptr) {
         RecordFailureStep("cleanup-object",
                           ocMetadata->CleanupTopologyFailedMember(context.action, context.businessOperationId,
                                                                   context.deadline, context.cancellation),
@@ -366,7 +357,7 @@ void WorkerTopologyPhaseCallbacks::RunFailureCleanup(const cluster::TopologyCall
         RecordFailureStep("cleanup-local-data", Status(K_NOT_READY, "object-cache service is not initialized"),
                           firstError, context);
     }
-    if (!centralizedMetadata_ && ocMetadata != nullptr) {
+    if (ocMetadata != nullptr) {
         RecordFailureStep("cleanup-device",
                           ocMetadata->CleanupTopologyDeviceClientMeta(context.action, context.businessOperationId,
                                                                       context.deadline, context.cancellation),

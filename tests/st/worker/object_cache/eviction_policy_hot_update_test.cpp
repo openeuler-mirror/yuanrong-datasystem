@@ -15,8 +15,8 @@
  */
 
 /**
- * Description: Verify a centralized object-cache master can coordinate an
- * eviction-policy hot update across multiple workers without interrupting reads.
+ * Description: Verify topology-managed metadata services coordinate an eviction-policy hot update across multiple
+ * workers without interrupting reads.
  */
 
 #include <algorithm>
@@ -56,8 +56,8 @@ constexpr int ASYNC_FILL_TIMEOUT_S = 10;
 constexpr int POLL_INTERVAL_MS = 50;
 constexpr uint32_t EVICTION_FILL_OBJECT_COUNT = 16;
 constexpr size_t EVICTION_FILL_OBJECT_SIZE = 8 * 1024 * 1024;
-constexpr uint32_t MASTER_WORKER_INDEX = 0;
 constexpr uint32_t FAULT_WORKER_INDEX = 1;
+constexpr char RESOURCE_MONITOR_KEY[] = "RESOURCE_MONITOR";
 constexpr char AFTER_AUDIT_INJECT[] = "WorkerOcEvictionManager.CommitPolicyUpdate.afterAudit";
 constexpr char AFTER_CANCEL_INJECT[] = "WorkerOcEvictionManager.BeginPolicyUpdate.afterCancelRequested";
 constexpr char EVICTION_ROUND_INJECT[] = "worker.Evict";
@@ -82,8 +82,6 @@ public:
         opts.numWorkers = WORKER_COUNT;
         opts.numEtcd = 1;
         opts.numOBS = 0;
-        opts.enableDistributedMaster = "false";
-        opts.masterIdx = 0;
         opts.workerGflagParams =
             "-shared_memory_size_mb=64 -log_monitor=true -log_monitor_interval_ms=1000 "
             "-eviction_strategy=heat -enable_memory_rebalance=false -v=1";
@@ -104,6 +102,7 @@ public:
             workerAddresses_.emplace_back(workerAddress.ToString());
             expectedWorkerAddresses_.emplace(workerAddress.ToString());
         }
+        DS_ASSERT_OK(ResolveResourceManager());
         DS_ASSERT_OK(InitMasterStub());
     }
 
@@ -118,10 +117,8 @@ public:
 protected:
     Status InitMasterStub()
     {
-        HostPort masterAddress;
-        RETURN_IF_NOT_OK(cluster_->GetMetaServerAddr(masterAddress));
         BrpcChannelConfig config;
-        config.endpoint = masterAddress.ToString();
+        config.endpoint = resourceManagerAddress_.ToString();
         config.timeout_ms = RPC_TIMEOUT_MS;
         config.connect_timeout_ms = RPC_TIMEOUT_MS;
         brpcChannel_ = BrpcChannelFactory::Create(config);
@@ -129,6 +126,23 @@ protected:
                                  "Failed to create master brpc channel");
         brpcStub_ = std::make_unique<master::MasterOCService_BrpcGenericStub>(brpcChannel_.get(), RPC_TIMEOUT_MS);
         return Status::OK();
+    }
+
+    Status ResolveResourceManager()
+    {
+        RETURN_IF_NOT_OK(GetKeyRoutedWorker(RESOURCE_MONITOR_KEY, resourceManagerAddress_));
+        for (uint32_t worker = 0; worker < workerAddresses_.size(); ++worker) {
+            if (workerAddresses_[worker] == resourceManagerAddress_.ToString()) {
+                resourceManagerWorkerIndex_ = worker;
+                return Status::OK();
+            }
+        }
+        RETURN_STATUS(K_NOT_FOUND, "Resource manager is not an active test worker");
+    }
+
+    uint32_t GetResourceManagerWorkerIndex() const
+    {
+        return resourceManagerWorkerIndex_;
     }
 
     Status StartPolicyUpdate(master::EvictionPolicyPb targetPolicy, uint64_t epoch,
@@ -557,6 +571,8 @@ private:
     std::string rebalanceValue_;
     std::vector<std::string> workerAddresses_;
     std::unordered_set<std::string> expectedWorkerAddresses_;
+    HostPort resourceManagerAddress_;
+    uint32_t resourceManagerWorkerIndex_{ WORKER_COUNT };
 };
 
 class LEVEL1_EvictionPolicyHotUpdateRebalanceTest : public LEVEL1_EvictionPolicyHotUpdateTest {
@@ -640,7 +656,8 @@ TEST_F(LEVEL1_EvictionPolicyHotUpdateTest, MasterWorkerCrashAfterAuditRecoversFo
 {
     constexpr uint64_t epoch = 401;
     DS_ASSERT_OK(WriteWorkerObjects());
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, MASTER_WORKER_INDEX, AFTER_AUDIT_INJECT, "1*pause()"));
+    const auto resourceManagerWorker = GetResourceManagerWorkerIndex();
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, resourceManagerWorker, AFTER_AUDIT_INJECT, "1*pause()"));
     DS_ASSERT_OK(StartPolicyUpdate(master::EVICTION_POLICY_CLOCK, epoch, master::EVICTION_POLICY_PRECHECK,
                                    FULL_COHORT_PERCENT));
     master::GetEvictionPolicyUpdateProgressRspPb progress;
@@ -652,12 +669,12 @@ TEST_F(LEVEL1_EvictionPolicyHotUpdateTest, MasterWorkerCrashAfterAuditRecoversFo
         observedConverting, wroteDuringConversion));
     DS_ASSERT_OK(StartPolicyUpdate(master::EVICTION_POLICY_CLOCK, epoch, master::EVICTION_POLICY_COMMIT_CONVERT,
                                    FULL_COHORT_PERCENT));
-    DS_ASSERT_OK(WaitForInjectExecution(MASTER_WORKER_INDEX, AFTER_AUDIT_INJECT));
+    DS_ASSERT_OK(WaitForInjectExecution(resourceManagerWorker, AFTER_AUDIT_INJECT));
 
     auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
     ASSERT_NE(externalCluster, nullptr);
     DS_ASSERT_OK(externalCluster->RestartWorkerAndWaitReadyOneByOne(
-        { MASTER_WORKER_INDEX }, SIGKILL, RESTART_TIMEOUT_S));
+        { resourceManagerWorker }, SIGKILL, RESTART_TIMEOUT_S));
     DS_ASSERT_OK(ReconnectMasterStub());
     ReconnectClients();
 
@@ -665,8 +682,8 @@ TEST_F(LEVEL1_EvictionPolicyHotUpdateTest, MasterWorkerCrashAfterAuditRecoversFo
     DS_ASSERT_OK(WaitForWorkerStatus(
         epoch, master::EVICTION_POLICY_WORKER_ACTIVE, master::EVICTION_POLICY_CLOCK, master::EVICTION_POLICY_CLOCK,
         master::EVICTION_POLICY_COMMIT_CONVERT, FULL_COHORT_PERCENT, GetAllWorkerAddresses(), progress,
-        observedConverting, wroteDuringConversion, true, 0, MASTER_WORKER_INDEX));
-    DS_ASSERT_OK(CheckSurvivingWorkerObjectsReadable(MASTER_WORKER_INDEX));
+        observedConverting, wroteDuringConversion, true, 0, resourceManagerWorker));
+    DS_ASSERT_OK(CheckSurvivingWorkerObjectsReadable(resourceManagerWorker));
 }
 
 TEST_F(LEVEL1_EvictionPolicyHotUpdateTest, CommitDrainsRunningEvictionBeforeMigration)

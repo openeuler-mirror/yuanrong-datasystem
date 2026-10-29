@@ -4,16 +4,6 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
-    name = "metadata_route_options",
-    hdrs = [
-        "metadata_route_options.h",
-    ],
-    deps = [
-        "//src/datasystem/common/util:net_util",
-    ],
-)
-
-ds_cc_library(
     name = "metadata_route_resolver",
     srcs = [
         "metadata_route_resolver.cpp",
@@ -22,7 +12,6 @@ ds_cc_library(
         "metadata_route_resolver.h",
     ],
     deps = [
-        ":metadata_route_options",
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:status_helper",

@@ -121,7 +121,6 @@ public:
         opts.numEtcd = 0;
         opts.numCoordinators = 1;
         opts.numWorkers = WORKER_COUNT;
-        opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
             " -shared_memory_size_mb=512 -ipc_through_shared_memory=false -arena_per_tenant=1"
             " -node_timeout_s="
@@ -568,7 +567,7 @@ TEST_F(CoordinatorActiveFailureStopResumeTest, DISABLED_LEVEL1_StopThenResumeWor
     ASSERT_LE(isolatedMs, SET_RECOVERY_EXPECT_MS);
 
     const auto resumeStart = std::chrono::steady_clock::now();
-    DS_ASSERT_OK(externalCluster->StartWorker(TARGET_WORKER_INDEX, HostPort()));
+    DS_ASSERT_OK(externalCluster->StartWorker(TARGET_WORKER_INDEX));
     const bool rejoined = WaitForTargetState(MembershipPb::ACTIVE, std::chrono::milliseconds(REJOIN_TIMEOUT_MS));
     const auto rejoinMs = ElapsedMs(resumeStart);
     LOG_ACTIVE_FAILURE_MEASURE(
@@ -600,7 +599,7 @@ TEST_F(CoordinatorActiveFailureStopResumeTest, DISABLED_LEVEL1_StopThenResumeWor
     ASSERT_EQ(TargetState(), MembershipPb::FAILED);
 
     const auto resumeStart = std::chrono::steady_clock::now();
-    DS_ASSERT_OK(externalCluster->StartWorker(TARGET_WORKER_INDEX, HostPort()));
+    DS_ASSERT_OK(externalCluster->StartWorker(TARGET_WORKER_INDEX));
     ASSERT_TRUE(WaitForTargetState(MembershipPb::ACTIVE, std::chrono::milliseconds(REJOIN_TIMEOUT_MS)));
     const auto recoveredMeasure = MeasureClientRecovery(resumeStart, [&](uint64_t attempt) {
         return client->Set(std::string(ROUTE_KEY_PREFIX) + "after_resume_" + std::to_string(attempt), "resumed-value");

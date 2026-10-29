@@ -47,7 +47,7 @@ const cluster::MembershipEndpointView &TestMembership()
 
 const worker::MetadataRouteResolver &TestMetadataRoute()
 {
-    static worker::MetadataRouteResolver route(nullptr, worker::MetadataRouteOptions{});
+    static worker::MetadataRouteResolver route(nullptr);
     return route;
 }
 }  // namespace

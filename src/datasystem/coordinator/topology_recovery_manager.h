@@ -51,8 +51,7 @@ enum class TopologyCoordinationKeyKind : uint8_t {
     MEMBERSHIP,
     UB_HEALTH,
     SCALE_IN_METADATA_DONE,
-    EVICTION_POLICY_ROLLOUT,
-    MASTER_ADDRESS
+    EVICTION_POLICY_ROLLOUT
 };
 
 struct ParsedTopologyCoordinationKey {

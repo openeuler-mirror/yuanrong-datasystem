@@ -151,7 +151,7 @@ public class Cluster {
         }
 
         for (int i = 0; i < numWorkers; i++) {
-            startWorker(i, workerIpAddrs.get(0));
+            startWorker(i);
         }
     }
 
@@ -213,16 +213,14 @@ public class Cluster {
      * Start worker
      *
      * @param index      The worker index.
-     * @param masterAddr The master address.
      */
-    private void startWorker(int index, String masterAddr) {
+    private void startWorker(int index) {
         String workerCmd = resolvePath(System.getProperty("worker.bin"));
         String workDir = this.rootDir + fileSeparator + "worker" + index;
         String healthFile = workDir + fileSeparator + "health";
-        workerCmd += " -master_address=" + workerIpAddrs.get(0) + " -worker_address=" + workerIpAddrs.get(index)
+        workerCmd += " -worker_address=" + workerIpAddrs.get(index)
                 + " -rocksdb_store_dir=" + workDir + fileSeparator + "rocksdb" + " -unix_domain_socket_dir="
                 + socketDir + " -log_dir=" + workDir + fileSeparator + "log" + " -v=" + vLogLevel
-                + " --enable_distributed_master=false"
                 + " -health_check_path=" + healthFile + " " + workerGflagParams;
         if (etcdIpAddrs.size() > 0) {
             StringBuilder etcdUrl = new StringBuilder();

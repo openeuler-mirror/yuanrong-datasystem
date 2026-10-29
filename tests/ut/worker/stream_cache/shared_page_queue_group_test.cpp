@@ -57,7 +57,7 @@ public:
 protected:
     cluster::TopologySnapshotState snapshots_;
     cluster::MembershipEndpointView membership_{ snapshots_ };
-    worker::MetadataRouteResolver metadataRoute_{ nullptr, worker::MetadataRouteOptions{} };
+    worker::MetadataRouteResolver metadataRoute_{ nullptr };
     std::unique_ptr<SharedPageQueueGroup> pageQueueGroup_;
     std::shared_ptr<ClientWorkerSCServiceImpl> svc_;
 };

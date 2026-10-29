@@ -42,10 +42,8 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "false";
         opts.numWorkers = WORKER_NUM;
         opts.vLogLevel = VLOG_LEVEL;
-        opts.masterIdx = 0;
         std::string workerGflags = "-sc_local_cache_memory_size_mb=20 -log_monitor=true -sc_metrics_log_interval_s="
                                    + std::to_string(PRINT_INTERVAL) + " -sc_cache_pages=" + std::to_string(CACHE_PAGES);
         opts.workerGflagParams = workerGflags;
@@ -323,6 +321,15 @@ protected:
                                                { { streamName3, "sub1" } }, consumers, true));
     }
 
+    Status FindTwoWorkerMetricsStreamNames(const std::string &prefix, std::string &streamName1,
+                                           std::string &streamName2, std::string &streamName3)
+    {
+        RETURN_IF_NOT_OK(FindKeyRoutedToWorker(0, prefix + "_s1_", streamName1));
+        streamName2 = prefix + "_s2";
+        streamName3 = prefix + "_s3";
+        return Status::OK();
+    }
+
     void SetUp()
     {
         ExternalClusterTest::SetUp();
@@ -408,9 +415,10 @@ TEST_F(SCMetricsTest, NumRemoteProducersConsumers)
     std::unordered_map<std::string, std::vector<std::string>> sc1Metrics;
     std::vector<StreamMetric> metricsToVerify = { StreamMetric::NumLocalProducers, StreamMetric::NumRemoteProducers,
                                                   StreamMetric::NumLocalConsumers, StreamMetric::NumRemoteConsumers };
-    std::string s1 = "testMetricsRemoteProdCon_s1";
-    std::string s2 = "testMetricsRemoteProdCon_s2";
-    std::string s3 = "testMetricsRemoteProdCon_s3";
+    std::string s1;
+    std::string s2;
+    std::string s3;
+    DS_ASSERT_OK(FindTwoWorkerMetricsStreamNames("testMetricsRemoteProdCon", s1, s2, s3));
 
     std::unordered_map<std::string, std::vector<std::string>> expected1 = { { s1, { "3", "0", "2", "0" } },
                                                                             { s2, { "0", "1", "2", "0" } },
@@ -489,9 +497,10 @@ TEST_F(SCMetricsTest, LocalMemoryUsed)
     std::unordered_map<std::string, std::vector<std::string>> sc0Metrics;
     std::unordered_map<std::string, std::vector<std::string>> sc1Metrics;
     std::vector<StreamMetric> metricsToVerify = { StreamMetric::LocalMemoryUsed };
-    std::string s1 = "testMetricsLocalMemUsed_s1";
-    std::string s2 = "testMetricsLocalMemUsed_s2";
-    std::string s3 = "testMetricsLocalMemUsed_s3";
+    std::string s1;
+    std::string s2;
+    std::string s3;
+    DS_ASSERT_OK(FindTwoWorkerMetricsStreamNames("testMetricsLocalMemUsed", s1, s2, s3));
 
     // Streams with remote producer will have local memory usage
     std::unordered_map<std::string, std::vector<std::string>> expected1 = { { s1, { "0" } },
@@ -527,9 +536,10 @@ TEST_F(SCMetricsTest, NumTotalElementsSent)
     std::vector<StreamMetric> metricsToVerify = { StreamMetric::NumTotalElementsSent,
                                                   StreamMetric::NumTotalElementsReceived,
                                                   StreamMetric::NumTotalElementsAcked };
-    std::string s1 = "testMetricsTotalEleSent_s1";
-    std::string s2 = "testMetricsTotalEleSent_s2";
-    std::string s3 = "testMetricsTotalEleSent_s3";
+    std::string s1;
+    std::string s2;
+    std::string s3;
+    DS_ASSERT_OK(FindTwoWorkerMetricsStreamNames("testMetricsTotalEleSent", s1, s2, s3));
 
     std::unordered_map<std::string, std::vector<std::string>> expected1 = { { s1, { "60", "0", "0" } },
                                                                             { s2, { "0", "0", "0" } },
@@ -568,9 +578,10 @@ TEST_F(SCMetricsTest, NumTotalElementsSentProducerClose)
     std::vector<StreamMetric> metricsToVerify = { StreamMetric::NumTotalElementsSent,
                                                   StreamMetric::NumTotalElementsReceived,
                                                   StreamMetric::NumTotalElementsAcked };
-    std::string s1 = "testMetricsEleSentProdClose_s1";
-    std::string s2 = "testMetricsEleSentProdClose_s2";
-    std::string s3 = "testMetricsEleSentProdClose_s3";
+    std::string s1;
+    std::string s2;
+    std::string s3;
+    DS_ASSERT_OK(FindTwoWorkerMetricsStreamNames("testMetricsEleSentProdClose", s1, s2, s3));
 
     std::unordered_map<std::string, std::vector<std::string>> expected1 = { { s1, { "60", "0", "0" } },
                                                                             { s2, { "0", "0", "0" } },
@@ -608,9 +619,10 @@ TEST_F(SCMetricsTest, NumTotalElementsReceived)
     std::vector<StreamMetric> metricsToVerify = { StreamMetric::NumTotalElementsSent,
                                                   StreamMetric::NumTotalElementsReceived,
                                                   StreamMetric::NumTotalElementsAcked };
-    std::string s1 = "testMetricsEleRecv_s1";
-    std::string s2 = "testMetricsEleRecv_s2";
-    std::string s3 = "testMetricsEleRecv_s3";
+    std::string s1;
+    std::string s2;
+    std::string s3;
+    DS_ASSERT_OK(FindTwoWorkerMetricsStreamNames("testMetricsEleRecv", s1, s2, s3));
 
     std::unordered_map<std::string, std::vector<std::string>> expected1 = { { s1, { "60", "60", "0" } },
                                                                             { s2, { "0", "60", "0" } },
@@ -654,9 +666,10 @@ TEST_F(SCMetricsTest, NumTotalEleRecvLateConsumer)
     std::vector<StreamMetric> metricsToVerify = { StreamMetric::NumTotalElementsSent,
                                                   StreamMetric::NumTotalElementsReceived,
                                                   StreamMetric::NumTotalElementsAcked };
-    std::string s1 = "testMetricsRecvLateCon_s1";
-    std::string s2 = "testMetricsRecvLateCon_s2";
-    std::string s3 = "testMetricsRecvLateCon_s3";
+    std::string s1;
+    std::string s2;
+    std::string s3;
+    DS_ASSERT_OK(FindTwoWorkerMetricsStreamNames("testMetricsRecvLateCon", s1, s2, s3));
 
     std::unordered_map<std::string, std::vector<std::string>> expected1 = { { s1, { "60", "40", "40" } },
                                                                             { s2, { "0", "40", "40" } },
@@ -721,9 +734,10 @@ TEST_F(SCMetricsTest, NumTotalElementsAcked)
     std::vector<StreamMetric> metricsToVerify = { StreamMetric::NumTotalElementsSent,
                                                   StreamMetric::NumTotalElementsReceived,
                                                   StreamMetric::NumTotalElementsAcked };
-    std::string s1 = "testMetricsEleAcked_s1";
-    std::string s2 = "testMetricsEleAcked_s2";
-    std::string s3 = "testMetricsEleAcked_s3";
+    std::string s1;
+    std::string s2;
+    std::string s3;
+    DS_ASSERT_OK(FindTwoWorkerMetricsStreamNames("testMetricsEleAcked", s1, s2, s3));
 
     std::unordered_map<std::string, std::vector<std::string>> expected1 = { { s1, { "60", "60", "60" } },
                                                                             { s2, { "0", "60", "60" } },
@@ -765,9 +779,10 @@ TEST_F(SCMetricsTest, NumSendReceiveRequests)
     std::unordered_map<std::string, std::vector<std::string>> sc0Metrics;
     std::unordered_map<std::string, std::vector<std::string>> sc1Metrics;
     std::vector<StreamMetric> metricsToVerify = { StreamMetric::NumSendRequests, StreamMetric::NumReceiveRequests };
-    std::string s1 = "testMetricsSendRecvReq_s1";
-    std::string s2 = "testMetricsSendRecvReq_s2";
-    std::string s3 = "testMetricsSendRecvReq_s3";
+    std::string s1;
+    std::string s2;
+    std::string s3;
+    DS_ASSERT_OK(FindTwoWorkerMetricsStreamNames("testMetricsSendRecvReq", s1, s2, s3));
     // Each request executed twice, one sucess one failure
     // prodNum * eleNum * times, consNum * eleNum * times
     std::unordered_map<std::string, std::vector<std::string>> expected1 = {
@@ -946,7 +961,8 @@ TEST_F(SCMetricsTest, NumRemoteProducersConsumersBlocked)
     std::unordered_map<std::string, std::vector<std::string>> sc0Metrics;
     std::unordered_map<std::string, std::vector<std::string>> sc1Metrics;
     std::string streamName1 = "testMetricsRemoteProConBlocked_s1";
-    std::string streamName2 = "testMetricsRemoteProConBlocked_s2";
+    std::string streamName2;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(0, "testMetricsRemoteProConBlocked_s2_", streamName2));
     std::vector<StreamMetric> metricsToVerify = { StreamMetric::NumRemoteProducersBlocked,
                                                   StreamMetric::NumRemoteConsumersBlocking };
 
@@ -1084,11 +1100,12 @@ TEST_F(SCMetricsTest, NumProducersConsumersMaster)
     std::shared_ptr<StreamClient> client2;
     std::vector<std::shared_ptr<Producer>> producers;
     std::vector<std::shared_ptr<Consumer>> consumers;
-    std::unordered_map<std::string, std::vector<std::string>> sc0Metrics;
-    std::unordered_map<std::string, std::vector<std::string>> sc1Metrics;
-    std::string s1 = "TestMetricsProdConMaster_s1";
-    std::string s2 = "TestMetricsProdConMaster_s2";
-    std::string s3 = "TestMetricsProdConMaster_s3";
+    std::string s1;
+    std::string s2;
+    std::string s3;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(0, "TestMetricsProdConOwner0_s1_", s1));
+    DS_ASSERT_OK(FindKeyRoutedToWorker(1, "TestMetricsProdConOwner1_s2_", s2));
+    DS_ASSERT_OK(FindKeyRoutedToWorker(0, "TestMetricsProdConOwner0_s3_", s3));
     // StreamMetric::NumProducersMaster: Number of worker that have at least 1 producer for the stream.
     // If there are 2 or more local producer for the same stream on the same worker, that count as 1.
     std::vector<StreamMetric> metricsToVerify = {
@@ -1097,32 +1114,27 @@ TEST_F(SCMetricsTest, NumProducersConsumersMaster)
     };
 
     std::unordered_map<std::string, std::vector<std::string>> expected1 = { { s1, { "1", "2" } },
-                                                                            { s2, { "1", "2" } },
+                                                                            { s2, { "", "" } },
                                                                             { s3, { "2", "1" } } };
-
-    std::unordered_map<std::string, std::vector<std::string>> expected2 = { { s2, { "", "" } },
-                                                                            { s3, { "", "" } } };
+    std::unordered_map<std::string, std::vector<std::string>> expected2 = { { s2, { "1", "2" } }, { s3, { "", "" } } };
 
     CreateTwoWorkerMetricsScenario(client1, client2, producers, consumers, s1, s2, s3);
-    sleep(SLEEP_TIME);
-
-    GetStreamMetrics(0, "sc_metrics.log", sc0Metrics);
-    VerifyStreamMetrics(sc0Metrics, expected1, metricsToVerify);
-    GetStreamMetrics(1, "sc_metrics.log", sc1Metrics);
-    VerifyStreamMetrics(sc1Metrics, expected2, metricsToVerify);
+    auto waitMetrics = [&]() {
+        if (!TryVerifyStreamMetrics(0, "sc_metrics.log", expected1, metricsToVerify)
+            || !TryVerifyStreamMetrics(1, "sc_metrics.log", expected2, metricsToVerify)) {
+            return Status(K_NOT_READY, "metadata-owner metrics have not converged");
+        }
+        return Status::OK();
+    };
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(waitMetrics, 10, K_OK));
 
     // Close some
     const int prodIndex = 8;  // s3
     const int conIndex = 4;   // s3
     DS_ASSERT_OK(producers[prodIndex]->Close());
     DS_ASSERT_OK(consumers[conIndex]->Close());
-    sleep(SLEEP_TIME);
-    expected1 = { { s1, { "1", "2" } }, { s2, { "1", "2" } }, { s3, { "1", "0" } } };
-    expected2 = { { s2, { "", "" } }, { s3, { "", "" } } };
-    GetStreamMetrics(0, "sc_metrics.log", sc0Metrics);
-    VerifyStreamMetrics(sc0Metrics, expected1, metricsToVerify);
-    GetStreamMetrics(1, "sc_metrics.log", sc1Metrics);
-    VerifyStreamMetrics(sc1Metrics, expected2, metricsToVerify);
+    expected1 = { { s1, { "1", "2" } }, { s2, { "", "" } }, { s3, { "1", "0" } } };
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(waitMetrics, 10, K_OK));
     DS_ASSERT_OK(CloseAllProducerAndConsumer(producers, consumers));
 }
 

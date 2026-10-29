@@ -57,11 +57,10 @@ TEST_F(WorkerGetHashRingTest, MatchingVersionClearsPayload)
     (*rsp.mutable_host_id_map())["stale"] = "stale";
     (*rsp.mutable_hash_ring()->mutable_members())["stale"];
 
-    DS_ASSERT_OK(BuildGetHashRingResponse(*snapshot, TOPOLOGY_VERSION, "127.0.0.1:9000", rsp));
+    DS_ASSERT_OK(BuildGetHashRingResponse(*snapshot, TOPOLOGY_VERSION, rsp));
 
     EXPECT_FALSE(rsp.hash_ring_changed());
     EXPECT_EQ(rsp.version(), TOPOLOGY_VERSION);
-    EXPECT_EQ(rsp.master_address(), "127.0.0.1:9000");
     EXPECT_TRUE(rsp.hash_ring().members().empty());
     EXPECT_TRUE(rsp.host_id_map().empty());
 }
@@ -72,7 +71,7 @@ TEST_F(WorkerGetHashRingTest, DifferentVersionReturnsTopologyAndHostIdMap)
     DS_ASSERT_OK(MakeSnapshot(snapshot));
     GetHashRingRspPb rsp;
 
-    DS_ASSERT_OK(BuildGetHashRingResponse(*snapshot, 0, "127.0.0.1:9000", rsp));
+    DS_ASSERT_OK(BuildGetHashRingResponse(*snapshot, 0, rsp));
 
     EXPECT_TRUE(rsp.hash_ring_changed());
     EXPECT_EQ(rsp.version(), TOPOLOGY_VERSION);
@@ -101,7 +100,7 @@ TEST_F(WorkerGetHashRingTest, ResponseRetainsHeldSnapshotGeneration)
                                                    { { WORKER_A, "new-host" } }));
     GetHashRingRspPb rsp;
 
-    DS_ASSERT_OK(BuildGetHashRingResponse(*held, 1, "127.0.0.1:9000", rsp));
+    DS_ASSERT_OK(BuildGetHashRingResponse(*held, 1, rsp));
 
     EXPECT_EQ(rsp.version(), TOPOLOGY_VERSION);
     EXPECT_EQ(rsp.hash_ring().version(), TOPOLOGY_VERSION);
@@ -114,14 +113,14 @@ TEST_F(WorkerGetHashRingTest, SameVersionHostIdChangesReturnCompleteSnapshot)
     DS_ASSERT_OK(MakeSnapshot(snapshot));
     const auto original = snapshot;
     GetHashRingRspPb rsp;
-    DS_ASSERT_OK(BuildGetHashRingResponse(*snapshot, TOPOLOGY_VERSION, "", rsp, snapshot->HostIdsDigest()));
+    DS_ASSERT_OK(BuildGetHashRingResponse(*snapshot, TOPOLOGY_VERSION, rsp, snapshot->HostIdsDigest()));
     EXPECT_FALSE(rsp.hash_ring_changed());
     EXPECT_FALSE(rsp.has_hash_ring());
     EXPECT_EQ(rsp.host_ids_digest(), snapshot->HostIdsDigest());
 
     DS_ASSERT_OK(cluster::TopologySnapshot::Create(original->CopyState(), TOPOLOGY_VERSION,
                                                   original->CanonicalDigest(), snapshot, {}, true));
-    DS_ASSERT_OK(BuildGetHashRingResponse(*snapshot, TOPOLOGY_VERSION, "", rsp, original->HostIdsDigest()));
+    DS_ASSERT_OK(BuildGetHashRingResponse(*snapshot, TOPOLOGY_VERSION, rsp, original->HostIdsDigest()));
     EXPECT_TRUE(rsp.hash_ring_changed());
     EXPECT_TRUE(rsp.has_hash_ring());
     EXPECT_TRUE(rsp.host_id_map().empty());
@@ -129,10 +128,10 @@ TEST_F(WorkerGetHashRingTest, SameVersionHostIdChangesReturnCompleteSnapshot)
     const auto emptyDigest = rsp.host_ids_digest();
     EXPECT_NE(emptyDigest, original->HostIdsDigest());
 
-    DS_ASSERT_OK(BuildGetHashRingResponse(*original, TOPOLOGY_VERSION, "", rsp, emptyDigest));
+    DS_ASSERT_OK(BuildGetHashRingResponse(*original, TOPOLOGY_VERSION, rsp, emptyDigest));
     EXPECT_TRUE(rsp.hash_ring_changed());
     EXPECT_EQ(rsp.host_id_map().at(WORKER_A), "host-a");
-    DS_ASSERT_OK(BuildGetHashRingResponse(*original, TOPOLOGY_VERSION, "", rsp, original->HostIdsDigest()));
+    DS_ASSERT_OK(BuildGetHashRingResponse(*original, TOPOLOGY_VERSION, rsp, original->HostIdsDigest()));
     EXPECT_FALSE(rsp.hash_ring_changed());
     EXPECT_TRUE(rsp.host_id_map().empty());
 }
@@ -146,12 +145,12 @@ TEST_F(WorkerGetHashRingTest, UnreadyMembershipDoesNotReplaceClientHostIds)
                                                   ready->CanonicalDigest(), starting, {}, false));
     GetHashRingRspPb rsp;
     for (const auto requestedVersion : { uint64_t{ 0 }, TOPOLOGY_VERSION }) {
-        auto rc = BuildGetHashRingResponse(*starting, requestedVersion, "", rsp, ready->HostIdsDigest());
+        auto rc = BuildGetHashRingResponse(*starting, requestedVersion, rsp, ready->HostIdsDigest());
         EXPECT_EQ(rc.GetCode(), K_NOT_READY);
         EXPECT_FALSE(rsp.has_hash_ring());
         EXPECT_FALSE(rsp.hash_ring_changed());
     }
-    DS_ASSERT_OK(BuildGetHashRingResponse(*ready, 0, "", rsp));
+    DS_ASSERT_OK(BuildGetHashRingResponse(*ready, 0, rsp));
     EXPECT_EQ(rsp.host_id_map().at(WORKER_A), "host-a");
     EXPECT_EQ(rsp.host_id_map().at(WORKER_B), "host-b");
 }

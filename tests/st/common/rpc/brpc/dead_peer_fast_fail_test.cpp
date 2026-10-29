@@ -98,7 +98,6 @@ public:
     {
         opts.numWorkers = 2;
         opts.numEtcd = 1;
-        opts.masterIdx = static_cast<int32_t>(kMasterWorkerIndex);
         opts.workerGflagParams = " -shared_memory_size_mb=128 -v=1";
     }
 

@@ -49,8 +49,6 @@ using ObjectCacheServiceProvider = std::function<object_cache::WorkerOCServiceIm
  * @brief Complete Worker dependencies required by topology phase callbacks.
  */
 struct WorkerTopologyPhaseCallbackDependencies {
-    bool centralizedMetadata;
-    bool localMetadataMaster;
     bool streamMetadataEnabled;
     MetadataManagerHolder &metadataManagers;
     ObjectCacheServiceProvider objectCacheServiceProvider;
@@ -193,8 +191,6 @@ private:
                            const std::shared_ptr<master::OCMetadataManager> &ocMetadata,
                            const std::shared_ptr<master::SCMetadataManager> &scMetadata, Status &firstError);
 
-    const bool centralizedMetadata_;
-    const bool localMetadataMaster_;
     const bool streamMetadataEnabled_;
     MetadataManagerHolder &metadataManagers_;
     ObjectCacheServiceProvider objectCacheServiceProvider_;

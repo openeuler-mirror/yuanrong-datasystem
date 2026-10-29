@@ -48,7 +48,6 @@
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
 DS_DECLARE_string(etcd_address);
-DS_DECLARE_string(master_address);
 DS_DECLARE_bool(log_monitor);
 
 namespace datasystem {
@@ -67,7 +66,6 @@ public:
         opts.numEtcd = 1;
         opts.numWorkers = 1;
         opts.numOBS = 1;
-        opts.enableDistributedMaster = "false";
         opts.injectActions = "worker.Spill.Sync:return()";
     }
 
@@ -385,7 +383,8 @@ TEST_F(KVCacheClientEvict2WorkerTest, LEVEL1_TestEvictPrimaryCopyChange)
 
 TEST_F(KVCacheClientEvict2WorkerTest, TestLastLocalCopyEvictRemovesMeta)
 {
-    std::string key = client_->GenerateKey("last_local_copy_evict");
+    std::string key;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(0, "last_local_copy_evict_", key));
     SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE_EVICT };
     DS_ASSERT_OK(client_->Set(key, "value", param));
     HostPort worker0Addr, worker1Addr;

@@ -253,8 +253,6 @@ public:
      * @param[in] masterAddress The address of master.
      * @param[in] placement Borrowed metadata placement capability.
      * @param[in] membership Borrowed read-only membership capability.
-     * @param[in] centralizedMetadata Whether metadata uses one configured Master.
-     * @param[in] metadataAddress Configured centralized metadata Master address.
      * @param[in] localAddress Canonical local member address.
      * @param[in] exitRequested Process-local exit gate.
      * @param[in] workerId The worker id.
@@ -263,8 +261,7 @@ public:
     OCMetadataManager(std::shared_ptr<AkSkManager> akSkManager, RocksStore *rocksStore, EtcdStore *etcdStore,
                       std::shared_ptr<PersistenceApi> persistApi = nullptr, const std::string &masterAddress = "",
                       const cluster::PlacementFacade *placement = nullptr,
-                      const cluster::MembershipEndpointView *membership = nullptr, bool centralizedMetadata = false,
-                      HostPort metadataAddress = HostPort(), std::string localAddress = "",
+                      const cluster::MembershipEndpointView *membership = nullptr, std::string localAddress = "",
                       const std::atomic<bool> *exitRequested = nullptr, const std::string &workerId = "",
                       bool newNode = false);
 

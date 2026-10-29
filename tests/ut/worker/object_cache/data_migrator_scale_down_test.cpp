@@ -166,7 +166,7 @@ public:
 
         membership_ = std::make_unique<cluster::MembershipEndpointView>(snapshots_);
         facade_ = std::make_unique<cluster::PlacementFacade>(snapshots_, algorithm_, LOCAL_ADDR);
-        resolver_ = std::make_unique<MetadataRouteResolver>(&*facade_, MetadataRouteOptions{});
+        resolver_ = std::make_unique<MetadataRouteResolver>(&*facade_);
         policy_ = std::make_unique<ObjectEndpointPolicy>(*resolver_, *membership_);
         DS_ASSERT_OK(local_.ParseString(LOCAL_ADDR));
     }

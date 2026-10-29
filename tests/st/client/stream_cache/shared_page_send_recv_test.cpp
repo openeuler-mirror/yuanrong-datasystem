@@ -82,7 +82,6 @@ void SharedPageSendRecvTest::SetClusterSetupOptions(ExternalClusterOptions &opts
 {
     opts.numEtcd = 1;
     opts.numWorkers = DEFAULT_WORKER_NUM;
-    opts.enableDistributedMaster = "true";
     opts.vLogLevel = DEFAULT_LOG_LEVEL;
     opts.workerGflagParams = " -shared_memory_size_mb=2048 ";
 
@@ -863,7 +862,6 @@ void SharedPageSendRecvOOMTest::SetClusterSetupOptions(ExternalClusterOptions &o
 {
     opts.numEtcd = 1;
     opts.numWorkers = DEFAULT_WORKER_NUM;
-    opts.enableDistributedMaster = "true";
     opts.vLogLevel = DEFAULT_LOG_LEVEL;
     SCClientCommon::SetClusterSetupOptions(opts);
 }

@@ -132,6 +132,34 @@ void AssertEventuallyOk(Operation operation, const std::string &operationName)
     ASSERT_TRUE(rc.IsOk()) << operationName << " stayed non-OK for " << kEventuallyWaitTimeoutMs
                            << " ms, last status: " << rc.ToString();
 }
+
+Status WaitForObjectNotFound(BaseCluster &cluster, const std::shared_ptr<ObjectClient> &client,
+                             const std::string &objectKey)
+{
+    auto waitObjectDeleted = [&client, &objectKey]() {
+        std::vector<Optional<Buffer>> buffers;
+        auto rc = client->Get({ objectKey }, 1'000, buffers);
+        CHECK_FAIL_RETURN_STATUS(rc.GetCode() == K_NOT_FOUND, K_NOT_READY,
+                                 "Object cleanup has not completed, status: " + rc.ToString());
+        return Status::OK();
+    };
+    return cluster.WaitForExpectedResult(waitObjectDeleted, kEventuallyWaitTimeoutMs / 1'000, K_OK);
+}
+
+Status WaitForWorkerFailureFinalized(BaseCluster &cluster, uint32_t workerIndex, int timeoutSec)
+{
+    HostPort workerAddress;
+    RETURN_IF_NOT_OK(cluster.GetWorkerAddr(workerIndex, workerAddress));
+    const std::string failedAddress = workerAddress.ToString();
+    auto waitFinalized = [&cluster, &failedAddress]() {
+        ClusterTopologyPb topology;
+        RETURN_IF_NOT_OK(cluster.ReadClusterTopology(topology));
+        CHECK_FAIL_RETURN_STATUS(topology.members().count(failedAddress) == 0 && !topology.has_active_batch(),
+                                 K_NOT_READY, "Failure topology batch has not finalized");
+        return Status::OK();
+    };
+    return cluster.WaitForExpectedResult(waitFinalized, timeoutSec, K_OK);
+}
 }  // namespace
 
 class WorkerDfxTest : public OCClientCommon {
@@ -146,11 +174,9 @@ public:
 
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
-        opts.workerGflagParams =
-            "-client_reconnect_wait_s=1 -ipc_through_shared_memory=true -sc_stream_socket_num=0 -node_timeout_s=1";
+        opts.workerGflagParams = "-client_reconnect_wait_s=1 -ipc_through_shared_memory=true -sc_stream_socket_num=0 "
+                                 "-node_timeout_s=1 -node_dead_timeout_s=6";
         opts.numWorkers = 3;
-        opts.masterIdx = 1;
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(500)");
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)");
@@ -419,7 +445,8 @@ TEST_F(WorkerDfxTest, DISABLED_TestWorkerNotFirstGincreaseAndMasterCrash)
 TEST_F(WorkerDfxTest, LEVEL1_TestWorkerCrashRecoveryAndClientExist)
 {
     LOG(INFO) << "Test worker crash recovery and client exit before worker recovery.";
-    std::string objKey = "KingBob";
+    std::string objKey;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(1, "worker_crash_recovery_client_exit_", objKey));
     {
         std::shared_ptr<ObjectClient> client1;
         auto timeoutMs = 3000;
@@ -433,19 +460,19 @@ TEST_F(WorkerDfxTest, LEVEL1_TestWorkerCrashRecoveryAndClientExist)
         ASSERT_TRUE(failedObjectKeys.empty());
         DS_ASSERT_OK(buffer->Seal());
 
-        // Shutdown worker and exit client.
-        cluster_->ShutdownNode(WORKER, 0);
+        // Crash the worker and exit the client while its global reference is only held by the worker.
+        DS_ASSERT_OK(cluster_->QuicklyShutdownWorker(0));
     }
-    // When worker restart, it need to notify master to decrease the global
-    // reference in objectClient0_, and if buffer is not keep buffer, it will
-    // be notify to deleted.
+    // The metadata owner releases refs of the crashed worker in the failure batch. Wait for that
+    // batch before restarting, otherwise the new incarnation is treated as a restart and the refs leak.
+    constexpr int failureFinalizeTimeoutSec = 20;
+    DS_ASSERT_OK(WaitForWorkerFailureFinalized(*cluster_, 0, failureFinalizeTimeoutSec));
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
 
     std::shared_ptr<ObjectClient> client2;
     InitTestClient(1, client2);
-    std::vector<Optional<Buffer>> buffers;
-    DS_ASSERT_NOT_OK(client2->Get({ objKey }, 1'000, buffers));
+    DS_ASSERT_OK(WaitForObjectNotFound(*cluster_, client2, objKey));
     LOG(INFO) << "Test worker crash recovery and client exit before worker recovery end.";
 }
 
@@ -550,27 +577,38 @@ TEST_F(WorkerDfxTest, TestPublishFailNotVisiable)
     LOG(INFO) << "Test shm buffer publish fail and not visible";
     constexpr int32_t kRequestTimeoutMs = 3'000;
     InitTestClients(kRequestTimeoutMs);
-    std::string objKey = "Warriors";
+    std::string objKey;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(1, "publish_fail_not_visible_", objKey));
     CreateParam param;
     param.consistencyType = ConsistencyType::CAUSAL;
     uint64_t objSize = 500 * 1024ul;
     std::shared_ptr<Buffer> buffer;
     DS_ASSERT_OK(objClient0_->Create(objKey, objSize, param, buffer));
-    DS_ASSERT_OK(buffer->Publish());
 
     std::vector<Optional<Buffer>> buffers2;
-    DS_ASSERT_OK(objClient1_->Get({ objKey }, 5000, buffers2));
-    ASSERT_TRUE(NotExistsNone(buffers2));
+    auto waitUntilNotFound = [&]() {
+        buffers2.clear();
+        auto rc = objClient1_->Get({ objKey }, 1'000, buffers2);
+        CHECK_FAIL_RETURN_STATUS(rc.GetCode() == K_NOT_FOUND, K_NOT_READY,
+                                 "Object unexpectedly visible, status: " + rc.ToString());
+        return Status::OK();
+    };
+    DS_ASSERT_OK(waitUntilNotFound());
 
-    cluster_->ShutdownNode(WORKER, 1);
-
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.before_CreateMetadataToMaster",
+                                           "1*return(K_RUNTIME_ERROR)"));
     DS_ASSERT_NOT_OK(buffer->Publish());
-    DS_ASSERT_NOT_OK(buffers2[0]->RLatch());
+    DS_ASSERT_OK(waitUntilNotFound());
 
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
-
-    AssertEventuallyOk([&buffer] { return buffer->Publish(); }, "publish after worker restart");
+    DS_ASSERT_OK(buffer->Publish());
+    AssertEventuallyOk(
+        [&]() {
+            buffers2.clear();
+            return objClient1_->Get({ objKey }, 1'000, buffers2);
+        },
+        "get after publish");
+    ASSERT_TRUE(NotExistsNone(buffers2));
+    ASSERT_EQ(buffers2.size(), 1ul);
     DS_ASSERT_OK(buffers2[0]->RLatch());
 }
 
@@ -692,7 +730,8 @@ TEST_F(WorkerDfxTest, TestPublishFailReGet)
         clientVec.push_back(client);
     }
 
-    std::string objKey = "Warriors";
+    std::string objKey;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(1, "publish_fail_reget_", objKey));
     CreateParam param;
     param.consistencyType = ConsistencyType::CAUSAL;
     uint64_t objSize = 1024ul;
@@ -842,9 +881,7 @@ public:
     {
         opts.workerGflagParams = "-client_reconnect_wait_s=1 -v=1";
         opts.numWorkers = 3;
-        opts.masterIdx = masterIdx_;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "false";
         opts.disableRocksDB = false;
     }
 
@@ -867,7 +904,6 @@ protected:
     std::shared_ptr<ObjectClient> objClient0_;
     std::shared_ptr<ObjectClient> objClient01_;
     std::shared_ptr<ObjectClient> objClient1_;
-    const int masterIdx_ = 2;
 };
 
 TEST_F(MasterDfxTest, TestMasterRecoveryAndDecreaseGRef)
@@ -923,17 +959,7 @@ TEST_F(MasterDfxTest, LEVEL1_TestMasterRecoveryAndClientExit)
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 2, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 2));
 
-    // Client reference cleanup retries asynchronously while the centralized master is recovering. Wait until the
-    // object is confirmed deleted instead of treating a transient routing failure as successful cleanup.
-    constexpr int waitCleanupTimeoutSec = 15;
-    auto waitObjectDeleted = [&]() {
-        std::vector<Optional<Buffer>> buffers;
-        auto rc = objClient1_->Get({ objKey }, 1'000, buffers);
-        CHECK_FAIL_RETURN_STATUS(rc.GetCode() == K_NOT_FOUND, K_NOT_READY,
-                                 "Object cleanup has not completed, status: " + rc.ToString());
-        return Status::OK();
-    };
-    DS_ASSERT_OK(cluster_->WaitForExpectedResult(waitObjectDeleted, waitCleanupTimeoutSec, K_OK));
+    DS_ASSERT_OK(WaitForObjectNotFound(*cluster_, objClient1_, objKey));
 }
 
 TEST_F(MasterDfxTest, LEVEL1_TestMasterRecoveryAndClientExit2)
@@ -1021,9 +1047,7 @@ public:
     {
         opts.workerGflagParams = "-client_reconnect_wait_s=1 -node_timeout_s=1 -v=1";
         opts.numWorkers = 3;
-        opts.masterIdx = 2;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "false";
         opts.disableRocksDB = false;
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(60000)");
     }
@@ -1065,12 +1089,9 @@ class MasterWorkerDisconnectDfxTest : public OCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
-        opts.masterGflagParams = "-node_timeout_s=1 -node_dead_timeout_s=2 -v=3";
         opts.workerGflagParams = "-node_timeout_s=30 -v=3";
-        opts.numMasters = 1;
         opts.numWorkers = 2;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "false";
     }
 
     void InitObjectClients()
@@ -1158,7 +1179,6 @@ public:
         opts.numWorkers = WORKER_NUM;
         opts.numEtcd = 1;
         opts.waitWorkerReady = false;
-        opts.enableDistributedMaster = "true";
         opts.workerGflagParams = " -client_reconnect_wait_s=5 -node_timeout_s=5 -enable_reconciliation=true";
         opts.disableRocksDB = false;
     }
@@ -1713,7 +1733,6 @@ public:
         const uint32_t workerNum = 3;
         opts.numWorkers = workerNum;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
             " -v=1 -node_timeout_s=1 -node_dead_timeout_s=3";
         opts.waitWorkerReady = false;
@@ -1742,7 +1761,7 @@ public:
     void StartWorkerAndWaitReady(std::initializer_list<uint32_t> indexes)
     {
         for (auto i : indexes) {
-            DS_ASSERT_OK(externalCluster_->StartWorker(i, HostPort()));
+            DS_ASSERT_OK(externalCluster_->StartWorker(i));
         }
         for (auto i : indexes) {
             DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, i));
@@ -1902,7 +1921,6 @@ public:
             "-enable_reconciliation=false";
         auto numWorkers = 2;
         opts.numWorkers = numWorkers;
-        opts.enableDistributedMaster = "true";
         opts.numEtcd = 1;
         opts.disableRocksDB = false;
     }
@@ -1920,7 +1938,6 @@ public:
             nodeTimeout_, nodeDeadTimeout_);
         auto numWorkers = 2;
         opts.numWorkers = numWorkers;
-        opts.enableDistributedMaster = "true";
         opts.numEtcd = 1;
     }
 
@@ -1992,7 +2009,6 @@ public:
     {
         const int workerNum = 3;
         opts.numWorkers = workerNum;
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         opts.waitWorkerReady = false;
         const std::string hostIp = "127.0.0.1";
@@ -2004,14 +2020,10 @@ public:
         }
     }
 
-    void StartWorkerAndWaitReady(std::initializer_list<uint32_t> indexes, uint32_t masterIdx = 0,
-                                 uint32_t maxWaitTimeSec = 20)
+    void StartWorkerAndWaitReady(std::initializer_list<uint32_t> indexes, uint32_t maxWaitTimeSec = 20)
     {
-        HostPort master;
-        ASSERT_LE(masterIdx, workerAddress_.size());
-        DS_ASSERT_OK(master.ParseString(workerAddress_[masterIdx]));
         for (auto i : indexes) {
-            ASSERT_TRUE(externalCluster_->StartWorker(i, master).IsOk()) << i;
+            ASSERT_TRUE(externalCluster_->StartWorker(i).IsOk()) << i;
         }
         for (auto i : indexes) {
             ASSERT_TRUE(cluster_->WaitNodeReady(WORKER, i, maxWaitTimeSec).IsOk()) << i;
@@ -2026,7 +2038,7 @@ protected:
 TEST_F(WorkerKillTest, LEVEL1_GetAfterGDecrease)
 {
     const int workerIdx2 = 2;
-    StartWorkerAndWaitReady({ 0, 1, workerIdx2 }, 1);
+    StartWorkerAndWaitReady({ 0, 1, workerIdx2 });
     const int waitTime = 5;
     std::this_thread::sleep_for(std::chrono::seconds(waitTime));
     const int connectTimeout = 10000;
@@ -2057,7 +2069,7 @@ TEST_F(WorkerKillTest, LEVEL1_GetAfterGDecrease)
     DS_ASSERT_OK(client->GDecreaseRef({ objectKey }, failedObjectKeys));
     EXPECT_TRUE(failedObjectKeys.empty());
 
-    StartWorkerAndWaitReady({ workerIdx2 }, 1);
+    StartWorkerAndWaitReady({ workerIdx2 });
 
     DS_ASSERT_NOT_OK(client->Get({ objectKey }, 0, buffers));
 }

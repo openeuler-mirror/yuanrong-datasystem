@@ -16,12 +16,15 @@
  */
 #include "oc_client_common.h"
 
+#include <algorithm>
+
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/protos/object_posix.stub.rpc.pb.h"
@@ -36,7 +39,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numWorkers = 1;
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         opts.workerGflagParams = " -shared_memory_size_mb=100 -v=1";
     }
@@ -79,7 +81,6 @@ public:
     {
         opts.numWorkers = 3;
         opts.numOBS = 1;
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         opts.workerGflagParams = FormatString(" -shared_memory_size_mb=3000 ");
     }
@@ -88,6 +89,23 @@ public:
     {
         return client->QueryGlobalRefNum(objectKey);
     }
+
+    Status WaitUntilObjectsDeleted(const std::shared_ptr<ObjectClient> &client,
+                                   const std::vector<std::string> &objectKeys, int timeoutSec = 15)
+    {
+        auto waitDeleted = [&client, &objectKeys]() {
+            std::vector<Optional<Buffer>> buffers;
+            auto rc = client->Get(objectKeys, 0, buffers);
+            const bool hasVisibleObject = std::any_of(buffers.begin(), buffers.end(),
+                                                      [](const auto &buffer) { return static_cast<bool>(buffer); });
+            if (rc.GetCode() != K_NOT_FOUND || buffers.size() != objectKeys.size() || hasVisibleObject) {
+                return Status(K_NOT_READY, "nested objects have not all been deleted");
+            }
+            return Status::OK();
+        };
+        return cluster_->WaitForExpectedResult(waitDeleted, timeoutSec, K_OK);
+    }
+
     std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
     std::unique_ptr<Signature> signature_ = std::make_unique<Signature>(accessKey_, secretKey_);
@@ -444,8 +462,7 @@ TEST_F(OCClientRefTest, GRefExistAliveTest)
     DS_ASSERT_OK(client2->GDecreaseRef(objectKeys, failObjects));
     ASSERT_TRUE(failObjects.empty());
 
-    DS_ASSERT_NOT_OK(client2->Get({ objectKey }, 0, dataList));
-    // Get will failed
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client2, objectKeys));
 }
 
 TEST_F(OCClientRefTest, OneNodeIncOtherDealData)
@@ -471,7 +488,7 @@ TEST_F(OCClientRefTest, OneNodeIncOtherDealData)
 
     DS_ASSERT_OK(client1->GDecreaseRef(objectKeys, failObjects));
     ASSERT_TRUE(failObjects.empty());
-    DS_ASSERT_NOT_OK(client2->Get({ objectKey }, 0, dataList));
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client2, objectKeys));
 }
 
 TEST_F(OCClientRefTest, NestedNormalTest)
@@ -507,8 +524,7 @@ TEST_F(OCClientRefTest, NestedNormalTest)
 
     DS_ASSERT_OK(client->GDecreaseRef({ objectKey1 }, failObjects));
     ASSERT_TRUE(failObjects.empty());
-    dataList.clear();
-    DS_ASSERT_NOT_OK(client->Get({ objectKey1, objectKey2, objectKey3 }, 0, dataList));
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client, objectKeys));
 }
 
 TEST_F(OCClientRefTest, TestNoShmNested)
@@ -554,8 +570,7 @@ TEST_F(OCClientRefTest, TestNoShmNested)
 
     DS_ASSERT_OK(client->GDecreaseRef({ objectKey1 }, failObjects));
     ASSERT_TRUE(failObjects.empty());
-    buffers.clear();
-    DS_ASSERT_NOT_OK(client->Get({ objectKey1, objectKey2, objectKey3 }, 3000, buffers));
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client, objectKeys));
 }
 
 TEST_F(OCClientRefTest, TestPutNested)
@@ -596,8 +611,7 @@ TEST_F(OCClientRefTest, TestPutNested)
 
     DS_ASSERT_OK(client->GDecreaseRef({ objectKey1 }, failObjects));
     ASSERT_TRUE(failObjects.empty());
-    buffers.clear();
-    DS_ASSERT_NOT_OK(client->Get({ objectKey1, objectKey2, objectKey3 }, 3000, buffers));
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client, objectKeys));
 }
 
 TEST_F(OCClientRefTest, TestPutNested2)
@@ -647,7 +661,7 @@ TEST_F(OCClientRefTest, TestPutNested2)
     ASSERT_TRUE(buffers.size() == 1 && buffers[0]);
 
     DS_ASSERT_OK(client->GDecreaseRef({ objectKey1 }, failObjects));
-    DS_ASSERT_NOT_OK(client->Get({ objectKey1, objectKey2, objectKey3 }, 0, buffers));
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client, objectKeys));
 }
 
 TEST_F(OCClientRefTest, TestPutNested3)
@@ -714,7 +728,7 @@ TEST_F(OCClientRefTest, TestPutNested3)
     ASSERT_TRUE(failObjects.empty());
     DS_ASSERT_OK(client2->GDecreaseRef(objectKeys, failObjects));
     ASSERT_TRUE(failObjects.empty());
-    DS_ASSERT_NOT_OK(client->Get({ objectKey1, objectKey2, objectKey3 }, 0, buffers));
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client, objectKeys));
 }
 
 TEST_F(OCClientRefTest, TestPutNested4)
@@ -752,8 +766,7 @@ TEST_F(OCClientRefTest, TestPutNested4)
     ASSERT_TRUE(buffers.size() == 1 && buffers[0]);
 
     DS_ASSERT_OK(client2->GDecreaseRef({ objectKey1 }, failObjects));
-    DS_ASSERT_NOT_OK(client2->Get({ objectKey1, objectKey2, objectKey3 }, 0, buffers));
-    ASSERT_TRUE(buffers.size() == 3 && !buffers[0] && !buffers[1] && !buffers[2]);
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client2, objectKeys));
 }
 
 TEST_F(OCClientRefTest, TestPublishNested1)
@@ -796,8 +809,7 @@ TEST_F(OCClientRefTest, TestPublishNested1)
     ASSERT_TRUE(buffers.size() == 1 && buffers[0]);
 
     DS_ASSERT_OK(client->GDecreaseRef({ objectKey1 }, failObjects));
-    DS_ASSERT_NOT_OK(client->Get({ objectKey1, objectKey2, objectKey3 }, 0, buffers));
-    ASSERT_TRUE(buffers.size() == 3 && !buffers[0] && !buffers[1] && !buffers[2]);
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client, objectKeys));
 }
 
 TEST_F(OCClientRefTest, TestPublishNested2)
@@ -854,8 +866,7 @@ TEST_F(OCClientRefTest, TestPublishNested2)
     ASSERT_TRUE(buffers.size() == 3 && buffers[0] && buffers[1] && buffers[2]);
 
     DS_ASSERT_OK(client2->GDecreaseRef({ objectKey1 }, failObjects));
-    DS_ASSERT_NOT_OK(client2->Get({ objectKey1, objectKey2, objectKey3 }, 0, buffers));
-    ASSERT_TRUE(buffers.size() == 3 && !buffers[0] && !buffers[1] && !buffers[2]);
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client2, objectKeys));
 }
 
 TEST_F(OCClientRefTest, TestPublishNested3)
@@ -897,8 +908,7 @@ TEST_F(OCClientRefTest, TestPublishNested3)
     ASSERT_TRUE(buffers.size() == 1 && buffers[0]);
 
     DS_ASSERT_OK(client2->GDecreaseRef({ objectKey1 }, failObjects));
-    DS_ASSERT_NOT_OK(client2->Get({ objectKey1, objectKey2, objectKey3 }, 0, buffers));
-    ASSERT_TRUE(buffers.size() == 3 && !buffers[0] && !buffers[1] && !buffers[2]);
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client2, objectKeys));
 }
 
 TEST_F(OCClientRefTest, NestedChildTest)
@@ -948,7 +958,7 @@ TEST_F(OCClientRefTest, NestedChildTest)
     DS_ASSERT_OK(client3->GDecreaseRef({ objectKey1, objectKey2 }, failObjects));
     ASSERT_TRUE(failObjects.empty());
 
-    DS_ASSERT_NOT_OK(client3->Get({ objectKey1, objectKey2 }, 0, dataList));
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client3, { objectKey1, objectKey2 }));
 }
 
 TEST_F(OCClientRefTest, NestedComplexTest)
@@ -994,8 +1004,7 @@ TEST_F(OCClientRefTest, NestedComplexTest)
     DS_ASSERT_OK(client->GDecreaseRef({ firstId }, failObjects));
     ASSERT_TRUE(failObjects.empty());
 
-    dataList.clear();
-    DS_ASSERT_NOT_OK(client->Get({ firstId, lastId }, 0, dataList));
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client, { firstId, lastId }, 30));
 }
 
 TEST_F(OCClientRefTest, NestedAsyncBySameClient)
@@ -1054,7 +1063,7 @@ TEST_F(OCClientRefTest, NestedAsyncBySameClient)
     ASSERT_TRUE(failObjects.empty());
 
     LOG(INFO) << "Start test get all failed.";
-    DS_ASSERT_NOT_OK(client->Get(objectKeys, 0, dataList));
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client, objectKeys));
 }
 
 TEST_F(OCClientRefTest, NestedAsyncByDiffWork)
@@ -1117,10 +1126,8 @@ TEST_F(OCClientRefTest, NestedAsyncByDiffWork)
         DS_ASSERT_OK(clients[i]->GDecreaseRef({ objectKeys[i] }, failObjects));
         ASSERT_TRUE(failObjects.empty());
     }
-    dataList.clear();
-    DS_ASSERT_NOT_OK(clients[1]->Get(objectKeys, 0, dataList));
-    dataList.clear();
-    DS_ASSERT_NOT_OK(clients[0]->Get({ objectKeys.back() }, 0, dataList));
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(clients[1], objectKeys));
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(clients[0], { objectKeys.back() }));
 }
 
 TEST_F(OCClientRefTest, GIncDuplicateIdsAndGDecDuplicateIds)
@@ -1386,8 +1393,10 @@ TEST_F(OCClientRefTest, GDecNotificationPartiallyObjKeyFail)
     uint64_t size = 1024;
     std::string data = GenRandomString(size);
 
-    std::string objectKey1 = "key0";
-    std::string objectKey2 = "key1";
+    std::vector<std::string> objectKeys;
+    DS_ASSERT_OK(FindKeysRoutedToWorker(0, "gdec_notification_partial_", 2, objectKeys));
+    const std::string &objectKey1 = objectKeys[0];
+    const std::string &objectKey2 = objectKeys[1];
     std::vector<std::string> failedObjectKeys;
     DS_ASSERT_OK(client1->GIncreaseRef({ objectKey1, objectKey2 }, failedObjectKeys));
     DS_ASSERT_OK(client2->GIncreaseRef({ objectKey1, objectKey2 }, failedObjectKeys));
@@ -1404,6 +1413,7 @@ TEST_F(OCClientRefTest, GDecNotificationPartiallyObjKeyFail)
     std::vector<std::string> res;
     DS_ASSERT_OK(
         cluster_->SetInjectAction(WORKER, 0, "worker.DeleteObjectWithTryLock.before", "1*return(K_RUNTIME_ERROR)"));
+    Raii clearInject([this] { (void)cluster_->ClearInjectAction(WORKER, 0, "worker.DeleteObjectWithTryLock.before"); });
     DS_ASSERT_OK(client1->GDecreaseRef({ objectKey1, objectKey2 }, res));
     ASSERT_TRUE(res.empty());
 
@@ -1461,8 +1471,10 @@ TEST_F(OCClientRefTest, GDecNotificationWorkerUnHealthyFail)
     uint64_t size = 1024;
     std::string data = GenRandomString(size);
 
-    std::string objectKey1 = "key0";
-    std::string objectKey2 = "key1";
+    std::vector<std::string> objectKeys;
+    DS_ASSERT_OK(FindKeysRoutedToWorker(0, "gdec_notification_unhealthy_fail_", 2, objectKeys));
+    const std::string &objectKey1 = objectKeys[0];
+    const std::string &objectKey2 = objectKeys[1];
     std::vector<std::string> failedObjectKeys;
     DS_ASSERT_OK(client1->GIncreaseRef({ objectKey1, objectKey2 }, failedObjectKeys));
     DS_ASSERT_OK(client2->GIncreaseRef({ objectKey1, objectKey2 }, failedObjectKeys));
@@ -1477,6 +1489,7 @@ TEST_F(OCClientRefTest, GDecNotificationWorkerUnHealthyFail)
     AssertBufferEqual(*buffers[0], data);
 
     std::vector<std::string> res;
+    // The injections run in the metadata owner of these keys, so pin the keys to worker 0.
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "OCNotifyWorkerManager.CheckWorkerIsHealth.worker.unhealthy",
                                            "return(K_WORKER_ABNORMAL)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "OCNotifyWorkerManager.InsertAsyncWorkerOp.Fail",
@@ -1590,35 +1603,24 @@ TEST_F(OCClientRefTest, GIncreaseRefPartiallySuccess)
     std::shared_ptr<ObjectClient> client;
     InitTestClient(0, client);
 
-    std::string objectKey1 = NewObjectKey();
-    std::string objectKey2 = NewObjectKey();
+    std::vector<std::string> objectKeys;
+    DS_ASSERT_OK(FindKeysRoutedToWorker(0, "ginc_partial_", 3, objectKeys));
+    const std::string &objectKey1 = objectKeys[0];
+    const std::string &objectKey2 = objectKeys[1];
     std::vector<std::string> failedObjectKeys;
     DS_ASSERT_OK(client->GIncreaseRef({ objectKey1 }, failedObjectKeys));
     ASSERT_TRUE(failedObjectKeys.empty());
 
-    // master rpc failed for objectKey2
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "master.GIncrease_ref_failure",
-                                           "1*return(K_RUNTIME_ERROR)"));
-    DS_ASSERT_OK(client->GIncreaseRef({ objectKey1, objectKey2 }, failedObjectKeys));
-    ASSERT_EQ(failedObjectKeys.size(), 1ul);
-    ASSERT_EQ(failedObjectKeys[0], objectKey2);
-    failedObjectKeys.clear();
-
-    // master rpc success but objectKey2 failed
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "master.rocksdb.AddGlobalRef",
-                                           "1*return(K_KVSTORE_ERROR)"));
-    DS_ASSERT_OK(client->GIncreaseRef({ objectKey1, objectKey2 }, failedObjectKeys));
-    ASSERT_EQ(failedObjectKeys.size(), 1ul);
-    ASSERT_EQ(failedObjectKeys[0], objectKey2);
-    failedObjectKeys.clear();
-
-    // worker rpc failed for objectKey2
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.GIncrease_ref_failure",
-                                           "1*return(K_RUNTIME_ERROR)"));
-    DS_ASSERT_OK(client->GIncreaseRef({ objectKey1, objectKey2 }, failedObjectKeys));
-    ASSERT_EQ(failedObjectKeys.size(), 1ul);
-    ASSERT_EQ(failedObjectKeys[0], objectKey2);
-    failedObjectKeys.clear();
+    auto expectPartialFailure = [&](const std::string &injectName, const std::string &injectAction) {
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, injectName, injectAction));
+        Raii clearInject([this, &injectName] { (void)cluster_->ClearInjectAction(WORKER, 0, injectName); });
+        DS_ASSERT_OK(client->GIncreaseRef({ objectKey1, objectKey2 }, failedObjectKeys));
+        ASSERT_EQ(failedObjectKeys, std::vector<std::string>{ objectKey2 });
+        failedObjectKeys.clear();
+    };
+    ASSERT_NO_FATAL_FAILURE(expectPartialFailure("master.GIncrease_ref_failure", "1*return(K_RUNTIME_ERROR)"));
+    ASSERT_NO_FATAL_FAILURE(expectPartialFailure("master.rocksdb.AddGlobalRef", "1*return(K_KVSTORE_ERROR)"));
+    ASSERT_NO_FATAL_FAILURE(expectPartialFailure("worker.GIncrease_ref_failure", "1*return(K_RUNTIME_ERROR)"));
 
     // verify
     ASSERT_EQ(client->QueryGlobalRefNum(objectKey1), 1);
@@ -1632,18 +1634,15 @@ TEST_F(OCClientRefTest, GIncreaseRefPartiallySuccess)
     ASSERT_TRUE(failedObjectKeys.empty());
     ASSERT_EQ(client->QueryGlobalRefNum(objectKey1), 0);
 
-    std::string objectKey3 = NewObjectKey();
-    // Failed for Master RPC
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "master.GIncrease_ref_failure",
-                                           "2*return(K_RUNTIME_ERROR)"));
-    DS_ASSERT_NOT_OK(client->GIncreaseRef({ objectKey3 }, failedObjectKeys));
-    failedObjectKeys.clear();
-
-    // Failed for worker RPC
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.GIncrease_ref_failure",
-                                           "2*return(K_RUNTIME_ERROR)"));
-    DS_ASSERT_NOT_OK(client->GIncreaseRef({ objectKey3 }, failedObjectKeys));
-    failedObjectKeys.clear();
+    const std::string &objectKey3 = objectKeys[2];
+    auto expectRequestFailure = [&](const std::string &injectName) {
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, injectName, "2*return(K_RUNTIME_ERROR)"));
+        Raii clearInject([this, &injectName] { (void)cluster_->ClearInjectAction(WORKER, 0, injectName); });
+        DS_ASSERT_NOT_OK(client->GIncreaseRef({ objectKey3 }, failedObjectKeys));
+        failedObjectKeys.clear();
+    };
+    ASSERT_NO_FATAL_FAILURE(expectRequestFailure("master.GIncrease_ref_failure"));
+    ASSERT_NO_FATAL_FAILURE(expectRequestFailure("worker.GIncrease_ref_failure"));
 }
 
 TEST_F(OCClientRefTest, GDecreaseRefPartiallySuccess)
@@ -1651,37 +1650,26 @@ TEST_F(OCClientRefTest, GDecreaseRefPartiallySuccess)
     std::shared_ptr<ObjectClient> client;
     InitTestClient(0, client);
 
-    std::string objectKey1 = NewObjectKey();
-    std::string objectKey2 = NewObjectKey();
-    std::string objectKey3 = NewObjectKey();
+    std::vector<std::string> objectKeys;
+    DS_ASSERT_OK(FindKeysRoutedToWorker(0, "gdec_partial_", 4, objectKeys));
+    const std::string &objectKey1 = objectKeys[0];
+    const std::string &objectKey2 = objectKeys[1];
+    const std::string &objectKey3 = objectKeys[2];
     std::vector<std::string> failedObjectKeys;
     DS_ASSERT_OK(client->GIncreaseRef({ objectKey1, objectKey1, objectKey1, objectKey1, objectKey2, objectKey3 },
                                       failedObjectKeys));
     ASSERT_TRUE(failedObjectKeys.empty());
 
-    // master rpc failed for objectKey2
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "master.GDecreaseRef.before",
-                                           "1*return(K_RUNTIME_ERROR)"));
-    DS_ASSERT_OK(client->GDecreaseRef({ objectKey1, objectKey2 }, failedObjectKeys));
-    ASSERT_EQ(failedObjectKeys.size(), 1ul);
-    ASSERT_EQ(failedObjectKeys[0], objectKey2);
-    failedObjectKeys.clear();
-
-    // master rpc success but objectKey2 failed
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "master.rocksdb.RemoveGlobalRef",
-                                           "1*return(K_KVSTORE_ERROR)"));
-    DS_ASSERT_OK(client->GDecreaseRef({ objectKey1, objectKey2 }, failedObjectKeys));
-    ASSERT_EQ(failedObjectKeys.size(), 1ul);
-    ASSERT_EQ(failedObjectKeys[0], objectKey2);
-    failedObjectKeys.clear();
-
-    // worker rpc failed for objectKey2
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.GDecreaseRef.before",
-                                           "1*return(K_RUNTIME_ERROR)"));
-    DS_ASSERT_OK(client->GDecreaseRef({ objectKey1, objectKey2 }, failedObjectKeys));
-    ASSERT_EQ(failedObjectKeys.size(), 1ul);
-    ASSERT_EQ(failedObjectKeys[0], objectKey2);
-    failedObjectKeys.clear();
+    auto expectPartialFailure = [&](const std::string &injectName, const std::string &injectAction) {
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, injectName, injectAction));
+        Raii clearInject([this, &injectName] { (void)cluster_->ClearInjectAction(WORKER, 0, injectName); });
+        DS_ASSERT_OK(client->GDecreaseRef({ objectKey1, objectKey2 }, failedObjectKeys));
+        ASSERT_EQ(failedObjectKeys, std::vector<std::string>{ objectKey2 });
+        failedObjectKeys.clear();
+    };
+    ASSERT_NO_FATAL_FAILURE(expectPartialFailure("master.GDecreaseRef.before", "1*return(K_RUNTIME_ERROR)"));
+    ASSERT_NO_FATAL_FAILURE(expectPartialFailure("master.rocksdb.RemoveGlobalRef", "1*return(K_KVSTORE_ERROR)"));
+    ASSERT_NO_FATAL_FAILURE(expectPartialFailure("worker.GDecreaseRef.before", "1*return(K_RUNTIME_ERROR)"));
 
     // verify
     ASSERT_EQ(client->QueryGlobalRefNum(objectKey1), 1);
@@ -1691,25 +1679,18 @@ TEST_F(OCClientRefTest, GDecreaseRefPartiallySuccess)
     ASSERT_TRUE(failedObjectKeys.empty());
     ASSERT_EQ(client->QueryGlobalRefNum(objectKey1), 0);
 
-    std::string objectKey4 = NewObjectKey();
-    // Failed for Master RPC
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "master.GDecreaseRef.before",
-                                           "2*return(K_RUNTIME_ERROR)"));
-    DS_ASSERT_OK(client->GDecreaseRef({ objectKey3, objectKey4 }, failedObjectKeys));
-    ASSERT_EQ(failedObjectKeys.size(), 1ul);
-    ASSERT_EQ(failedObjectKeys[0], objectKey3);
-    failedObjectKeys.clear();
-    DS_ASSERT_NOT_OK(client->GDecreaseRef({ objectKey3 }, failedObjectKeys));
-    failedObjectKeys.clear();
-
-    // Failed for worker RPC
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.GDecreaseRef.before",
-                                           "2*return(K_RUNTIME_ERROR)"));
-    DS_ASSERT_OK(client->GDecreaseRef({ objectKey3, objectKey4 }, failedObjectKeys));
-    ASSERT_EQ(failedObjectKeys.size(), 1ul);
-    ASSERT_EQ(failedObjectKeys[0], objectKey3);
-    failedObjectKeys.clear();
-    DS_ASSERT_NOT_OK(client->GDecreaseRef({ objectKey3 }, failedObjectKeys));
+    const std::string &objectKey4 = objectKeys[3];
+    auto expectRequestFailure = [&](const std::string &injectName) {
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, injectName, "2*return(K_RUNTIME_ERROR)"));
+        Raii clearInject([this, &injectName] { (void)cluster_->ClearInjectAction(WORKER, 0, injectName); });
+        DS_ASSERT_OK(client->GDecreaseRef({ objectKey3, objectKey4 }, failedObjectKeys));
+        ASSERT_EQ(failedObjectKeys, std::vector<std::string>{ objectKey3 });
+        failedObjectKeys.clear();
+        DS_ASSERT_NOT_OK(client->GDecreaseRef({ objectKey3 }, failedObjectKeys));
+        failedObjectKeys.clear();
+    };
+    ASSERT_NO_FATAL_FAILURE(expectRequestFailure("master.GDecreaseRef.before"));
+    ASSERT_NO_FATAL_FAILURE(expectRequestFailure("worker.GDecreaseRef.before"));
 }
 
 TEST_F(OCClientRefTest, GDecreaseRefTryAgain)
@@ -1718,13 +1699,16 @@ TEST_F(OCClientRefTest, GDecreaseRefTryAgain)
     std::shared_ptr<ObjectClient> client2;
     InitTestClient(0, client1);
     InitTestClient(1, client2);
-    std::string objectKey1 = NewObjectKey();
-    std::string objectKey2 = NewObjectKey();
+    std::string objectKey1;
+    std::string objectKey2;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(0, "gdecrease_retry_worker0_", objectKey1));
+    DS_ASSERT_OK(FindKeyRoutedToWorker(1, "gdecrease_retry_worker1_", objectKey2));
+    std::vector<std::string> objectKeys = { objectKey1, objectKey2 };
 
     uint64_t size = 1024;
     std::string data = GenRandomString(size);
     std::vector<std::string> failedObjectKeys;
-    DS_ASSERT_OK(client1->GIncreaseRef({ objectKey1, objectKey2 }, failedObjectKeys));
+    DS_ASSERT_OK(client1->GIncreaseRef(objectKeys, failedObjectKeys));
     ASSERT_TRUE(failedObjectKeys.empty());
 
     DS_ASSERT_OK(
@@ -1739,15 +1723,15 @@ TEST_F(OCClientRefTest, GDecreaseRefTryAgain)
 
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, "worker.DeleteObjectWithTryLock.before",
                                            "1*return(K_RUNTIME_ERROR)"));
-    DS_ASSERT_OK(client1->GDecreaseRef({ objectKey1, objectKey2 }, failedObjectKeys));
+    DS_ASSERT_OK(client1->GDecreaseRef(objectKeys, failedObjectKeys));
     ASSERT_TRUE(!failedObjectKeys.empty());
 
     std::vector<std::string> failedObjectKeys2;
     DS_ASSERT_OK(client1->GDecreaseRef(failedObjectKeys, failedObjectKeys2));
     ASSERT_TRUE(failedObjectKeys2.empty());
 
-    DS_ASSERT_NOT_OK(client2->Get({ objectKey1, objectKey2 }, 0, dataList));
-    DS_ASSERT_NOT_OK(client1->Get({ objectKey1, objectKey2 }, 0, dataList));
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client2, objectKeys));
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client1, objectKeys));
 }
 
 TEST_F(OCClientRefTest, GDecreaseRefDeadLock)
@@ -1756,13 +1740,16 @@ TEST_F(OCClientRefTest, GDecreaseRefDeadLock)
     std::shared_ptr<ObjectClient> client2;
     InitTestClient(0, client1);
     InitTestClient(1, client2);
-    std::string objectKey1 = NewObjectKey();
-    std::string objectKey2 = NewObjectKey();
+    std::string objectKey1;
+    std::string objectKey2;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(0, "gdecrease_deadlock_worker0_", objectKey1));
+    DS_ASSERT_OK(FindKeyRoutedToWorker(1, "gdecrease_deadlock_worker1_", objectKey2));
+    std::vector<std::string> objectKeys = { objectKey1, objectKey2 };
 
     uint64_t size = 1024;
     std::string data = GenRandomString(size);
     std::vector<std::string> failedObjectKeys;
-    DS_ASSERT_OK(client1->GIncreaseRef({ objectKey1, objectKey2 }, failedObjectKeys));
+    DS_ASSERT_OK(client1->GIncreaseRef(objectKeys, failedObjectKeys));
     ASSERT_TRUE(failedObjectKeys.empty());
 
     DS_ASSERT_OK(
@@ -1777,11 +1764,11 @@ TEST_F(OCClientRefTest, GDecreaseRefDeadLock)
 
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, "worker.DeleteObjectWithTryLock.before",
                                            "1*return(K_WORKER_TIMEOUT)"));
-    DS_ASSERT_OK(client1->GDecreaseRef({ objectKey1, objectKey2 }, failedObjectKeys));
+    DS_ASSERT_OK(client1->GDecreaseRef(objectKeys, failedObjectKeys));
     ASSERT_TRUE(failedObjectKeys.empty());
 
-    DS_ASSERT_NOT_OK(client2->Get({ objectKey1, objectKey2 }, 0, dataList));
-    DS_ASSERT_NOT_OK(client1->Get({ objectKey1, objectKey2 }, 0, dataList));
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client2, objectKeys));
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client1, objectKeys));
 }
 
 TEST_F(OCClientRefTest, AsyncShutdownAndRetryFailedDec)
@@ -1871,7 +1858,6 @@ public:
         opts.numEtcd = 1;
         opts.workerGflagParams = " -v=1";
         opts.waitWorkerReady = false;
-        opts.enableDistributedMaster = "true";
     }
 
     void SetUp() override
@@ -2018,7 +2004,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numWorkers = 1;
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         opts.workerGflagParams = " -shared_memory_size_mb=2048 -v=1 -max_client_num=800";
     }
@@ -2039,7 +2024,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numWorkers = 2;
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         opts.workerGflagParams = " -shared_memory_size_mb=10240 -v=1";
     }
@@ -2220,7 +2204,6 @@ public:
         opts.numOBS = 1;
         opts.numEtcd = 1;
         opts.workerGflagParams = " -node_timeout_s=3";
-        opts.enableDistributedMaster = "true";
     }
 
     const int timeoutMs_ = 5000;  // 5s timeout
@@ -2287,7 +2270,6 @@ public:
     {
         opts.numWorkers = 3;
         opts.numOBS = 1;
-        opts.enableDistributedMaster = "true";
         opts.numEtcd = 1;
         opts.workerGflagParams = FormatString(" -shared_memory_size_mb=3000  -v=1");
     }
@@ -2307,7 +2289,7 @@ public:
     void StartWorkerAndWaitReady(std::initializer_list<uint32_t> indexes, int maxWaitTimeSec = 20)
     {
         for (auto i : indexes) {
-            ASSERT_TRUE(externalCluster_->StartWorker(i, HostPort()).IsOk()) << i;
+            ASSERT_TRUE(externalCluster_->StartWorker(i).IsOk()) << i;
         }
         WaitWorkerReady(indexes, maxWaitTimeSec);
     }
@@ -2516,8 +2498,7 @@ TEST_F(OCClientRefTest, TestNestedSelfReferenceRejected)
 
     DS_ASSERT_OK(client->GDecreaseRef({ objectKey1, objectKey2 }, failObjects));
     ASSERT_TRUE(failObjects.empty());
-    DS_ASSERT_NOT_OK(client->Get({ objectKey1, objectKey2 }, 0, buffers));
-    ASSERT_TRUE(buffers.size() == 2 && !buffers[0] && !buffers[1]);
+    DS_ASSERT_OK(WaitUntilObjectsDeleted(client, { objectKey1, objectKey2 }));
 }
 }  // namespace st
 }  // namespace datasystem

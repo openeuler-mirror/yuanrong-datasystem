@@ -149,7 +149,6 @@ public:
     {
         opts.numWorkers = 2;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "false";
         opts.skipWorkerPreShutdown = false;
         opts.workerGflagParams = "-slow_log_process_slower_than=1 -slow_log_rpc_slower_than=1 "
             "-log_monitor=true -log_monitor_interval_ms=1000 -shared_memory_size_mb=25 "

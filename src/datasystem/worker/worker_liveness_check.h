@@ -77,12 +77,6 @@ protected:
     Status CheckRocksDbService();
 
     /**
-     * @brief Check current node is master or not.
-     * @return true Current node is master.
-     */
-    bool IsMasterNode();
-
-    /**
      * @brief Get liveness status.
      * @param[in/out] timer check timer.
      * @param[in] lastStatus last check status.

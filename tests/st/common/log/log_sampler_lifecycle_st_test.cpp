@@ -126,7 +126,6 @@ public:
     {
         opts.numOBS = 1;
         opts.numWorkers = 1;
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         std::string hostIp = "127.0.0.1";
         opts.workerConfigs.emplace_back(hostIp, GetFreePort());

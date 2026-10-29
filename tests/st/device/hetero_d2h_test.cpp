@@ -32,7 +32,6 @@ class HeteroD2HTest : public DevTestHelper {
         opts.numWorkers = 1;
         opts.workerGflagParams =
             " -v=0 -authorization_enable=true -shared_memory_size_mb=4096 -enable_fallocate=false -arena_per_tenant=2 ";
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         FLAGS_v = 0;
     }
@@ -56,7 +55,6 @@ class HeteroD2HTestEvcit : public HeteroD2HTest {
         opts.workerGflagParams =
             "-log_monitor_interval_ms=1000 -v=2 -authorization_enable=true -shared_memory_size_mb=2096 "
             "-enable_fallocate=false -arena_per_tenant=2 ";
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         opts.enableSpill = true;
         FLAGS_v = 0;
@@ -72,7 +70,6 @@ class HeteroD2HThroughTcpTest : public DevTestHelper {
             " -ipc_through_shared_memory=false -log_monitor=true -v=1 -authorization_enable=true "
             "-shared_memory_size_mb=4096 "
             "-enable_fallocate=false -arena_per_tenant=2 ";
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         FLAGS_v = 1;
     }

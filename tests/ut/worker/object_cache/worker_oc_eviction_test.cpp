@@ -68,7 +68,6 @@ using namespace datasystem::master;
 
 DS_DECLARE_string(spill_directory);
 DS_DECLARE_uint64(spill_size_limit);
-DS_DECLARE_string(master_address);
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_double(eviction_high_watermark_ratio);
 DS_DECLARE_double(eviction_low_watermark_ratio);
@@ -1878,7 +1877,7 @@ TEST_F(EvictionManagerTest, PrimaryEndLifeSameOwnerSingleFlightDoesNotBlockHealt
     DS_ASSERT_OK(PublishPrimaryEndLifeTopology(snapshots, 1, cluster::MemberState::ACTIVE));
     PrimaryEndLifeRoutingAlgorithm algorithm;
     cluster::PlacementFacade placement(snapshots, algorithm, "127.0.0.1:31501");
-    worker::MetadataRouteResolver route(&placement, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver route(&placement);
     {
         WorkerOcEvictionManager manager(objectTable_, HostPort("127.0.0.1", 31501), ownerA, route);
         Raii releaseBlockedOwner([&] {
@@ -1995,7 +1994,7 @@ TEST_F(EvictionManagerTest, PrimaryEndLifeReroutesAfterFailedOwnerIsIsolated)
     DS_ASSERT_OK(PublishPrimaryEndLifeTopology(snapshots, 1, cluster::MemberState::ACTIVE));
     PrimaryEndLifeRoutingAlgorithm algorithm;
     cluster::PlacementFacade placement(snapshots, algorithm, "127.0.0.1:31501");
-    worker::MetadataRouteResolver route(&placement, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver route(&placement);
     {
         WorkerOcEvictionManager manager(objectTable_, HostPort("127.0.0.1", 31501), failedOwner, route);
         Raii releaseBlockedOwner([&] {

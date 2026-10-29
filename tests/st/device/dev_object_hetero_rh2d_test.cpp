@@ -126,7 +126,6 @@ public:
             "-client_dead_timeout_s=15" + Rh2dWorkerFlags();
         opts.workerSpecifyGflagParams[0] += DevIdsFlag({ 7 });
         opts.workerSpecifyGflagParams[1] += DevIdsFlag({ 5 });
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         opts.injectActions =
             "RH2D.ManageHeartbeats.heartbeat_interval_s:call(5);"
@@ -178,7 +177,6 @@ class DevObjectHeteroRH2DMismatchTest : public DevObjectHeteroRH2DTest {
             " -v=1 -authorization_enable=true -shared_memory_size_mb=4096 -enable_fallocate=false -arena_per_tenant=1 "
             "-client_dead_timeout_s=15" + Rh2dWorkerFlags();
         opts.workerSpecifyGflagParams[0] += DevIdsFlag({ 7 });
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         opts.injectActions =
             "RH2D.ManageHeartbeats.heartbeat_interval_s:call(5);"
@@ -191,7 +189,6 @@ class DevObjectHeteroRH2DDistributedTest : public DevObjectHeteroRH2DTest {
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         DevObjectHeteroRH2DTest::SetClusterSetupOptions(opts);
-        opts.enableDistributedMaster = "true";
         opts.injectActions =
             "RH2D.ManageHeartbeats.heartbeat_interval_s:call(5);"
             "RH2D.ManageHeartbeats.heartbeat_timeout_s:call(10)";
@@ -205,7 +202,6 @@ class DevObjectHeteroRH2DNoNpuTest : public DevObjectHeteroRH2DTest {
         opts.workerGflagParams =
             " -v=1 -authorization_enable=true -shared_memory_size_mb=4096 -enable_fallocate=false -arena_per_tenant=1 "
             "-client_dead_timeout_s=15" + Rh2dWorkerFlags();
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         opts.injectActions =
             "RH2D.ManageHeartbeats.heartbeat_interval_s:call(5);"
@@ -224,7 +220,6 @@ class DevObjectHeteroRH2DTwoSetWorkersTest : public DevObjectHeteroRH2DTest {
         opts.workerSpecifyGflagParams[0] += DevIdsFlag({ 7 });
         opts.workerSpecifyGflagParams[1] += DevIdsFlag({ 5 });
         opts.workerSpecifyGflagParams[2] += DevIdsFlag({ 3 });
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         FLAGS_v = 0;
     }
@@ -244,7 +239,6 @@ class DevObjectHeteroRH2DSixSetWorkersTest : public DevObjectHeteroRH2DTest {
         opts.workerSpecifyGflagParams[4] += DevIdsFlag({ 1 });
         opts.workerSpecifyGflagParams[5] += DevIdsFlag({ 0 });
         opts.workerSpecifyGflagParams[6] += DevIdsFlag({ 4 });
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         FLAGS_v = 0;
     }
@@ -259,7 +253,6 @@ class DevObjectHeteroRH2DMultiDevTest : public DevObjectHeteroRH2DTest {
             "-client_dead_timeout_s=15" + Rh2dWorkerFlags();
         opts.workerSpecifyGflagParams[0] += DevIdsFlag({ 4, 5, 6, 7 });
         opts.workerSpecifyGflagParams[1] += DevIdsFlag({ 3 });
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         FLAGS_v = 0;
     }

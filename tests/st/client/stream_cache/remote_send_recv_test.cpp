@@ -123,7 +123,6 @@ void RemoteSendRecvTest::SetClusterSetupOptions(ExternalClusterOptions &opts)
 {
     opts.numEtcd = 1;
     opts.numWorkers = 3;
-    opts.enableDistributedMaster = "false";
     opts.workerGflagParams = " -page_size=" + std::to_string(PAGE_SIZE);
     opts.vLogLevel = 2;
     SCClientCommon::SetClusterSetupOptions(opts);
@@ -984,7 +983,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         RemoteSendRecvTest::SetClusterSetupOptions(opts);
-        opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
             "-shared_memory_size_mb=512 -client_dead_timeout_s=15 -enable_stream_data_verification=true";
         opts.vLogLevel = SC_INTERNAL_LOG_LEVEL;
@@ -1484,7 +1482,6 @@ public:
     {
         opts.numEtcd = 1;
         opts.numWorkers = 3;
-        opts.enableDistributedMaster = "false";
         opts.workerGflagParams = " -sc_local_cache_memory_size_mb=1";
         opts.vLogLevel = 2;
         SCClientCommon::SetClusterSetupOptions(opts);

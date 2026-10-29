@@ -44,6 +44,7 @@ TEST(TopologyKeyHelperTest, BuildsClusterScopedKeyspaces)
     ASSERT_NE(keys, nullptr);
     EXPECT_EQ(keys->ClusterName(), "cluster_a-1.0");
     EXPECT_EQ(keys->EtcdMembershipTablePrefix(), "/cluster_a-1.0/datasystem/cluster");
+    EXPECT_EQ(keys->RolloutTable(), "/datasystem/cluster_a-1.0/control");
     EXPECT_EQ(ExactPath(keys->TopologyTable(), TopologyKeyHelper::TopologyKey()), "/datasystem/cluster_a-1.0/topology");
 
     std::string key;
@@ -74,6 +75,7 @@ TEST(TopologyKeyHelperTest, BuildsUnscopedKeyspacesForEmptyClusterName)
     ASSERT_NE(keys, nullptr);
     EXPECT_TRUE(keys->ClusterName().empty());
     EXPECT_EQ(keys->EtcdMembershipTablePrefix(), "/datasystem/cluster");
+    EXPECT_EQ(keys->RolloutTable(), "/datasystem/control");
     EXPECT_EQ(ExactPath(keys->TopologyTable(), TopologyKeyHelper::TopologyKey()), "/datasystem/topology");
 
     std::string key;

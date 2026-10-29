@@ -105,6 +105,8 @@
     must explicitly enable `enable_reconciliation`; the Kubernetes Helm defaults continue to enable it for backward
     compatibility.
   - `worker_oc_server.cpp` assembles object-cache and stream-cache related worker-side services and declares many worker runtime flags.
+  - every Worker creates and initializes its local Object Cache and Stream Cache metadata services at `worker_address`;
+    metadata ownership and redirects always come from the immutable topology placement snapshot.
   - topology Snapshot handling retains FAILED addresses for RPC-stub cleanup. When the same address later appears as
     ACTIVE, `WorkerOCServer` publishes the existing `RemoveDeadWorkerEvent` so the local metadata service removes the
     stale fault-worker entry.
@@ -116,13 +118,12 @@
     doorbell coalescing and forwards it to the Worker host on the Controller state thread. Surviving Workers then restore
     locally held metadata to the restarted current owner. Fast-restart recovery is independent of confirmed-Failure
     cleanup, which does not restore Object Cache metadata. Owner selection must use the business metadata-route helper
-    so centralized and distributed metadata modes stay aligned. The restarted Worker independently schedules
+    so recovery follows the same topology placement as ordinary requests. The restarted Worker independently schedules
     bounded reconciliation requests to every committed metadata owner, so readiness stays closed until the existing
     completion path succeeds or reaches its bounded give-up policy.
   - if Failure final already removed the old member, the later process is a fresh `INITIAL` admission and must not
     restore the removed identity's remote references as if it were the same restart generation.
 - Pending verification:
-  - precise split between `ds_master`, `ds_server`, and worker-owned service composition at runtime;
   - complete startup sequence inside `Worker::InitWorker()` after the early initialization path already inspected;
   - all interactions between `WorkerOCServer` and replica/data-migration components.
 
@@ -172,7 +173,7 @@
 ## Key Runtime Behaviors
 
 - Startup:
-  - parse and validate worker/master/bind addresses
+  - parse and validate worker/bind addresses; the local metadata endpoint is the advertised `worker_address`
   - initialize logs and worker flags; the Git commit/branch and non-default flag snapshot are emitted immediately after
     `Logging::Start()` and before `WorkerOCServer` construction
   - pre-initialize RocksDB storage
@@ -226,6 +227,9 @@
     external probe observes failure without consuming a second timeout window; a later successful check can renew the
     same file before restart. Topology isolation changes in-process health and admission but never mutates this file.
     No Worker-local topology authority is persisted.
+  - Worker service construction always creates the co-located metadata services before Worker services, initializes
+    metadata services first, and enables local bypass only after both sides exist. Shutdown still drains topology and
+    business callbacks before releasing the borrowed placement, membership, and metadata-manager dependencies.
   - Coordinator-mode witness probing uses three fixed Worker-owned loops, a bounded FIFO event queue, and an in-flight
     count. Every watch PUT contributes one independent single-target request; later target events do not cancel earlier
     work. Shutdown first rejects new probe events and clears pending work, then closes Engine watch ingress, waits for
@@ -422,11 +426,11 @@
     cleanup, and redirect retries must all preserve the same marker; ordinary requests leave the field unset.
   - the object-cache `Create`, `Publish`, `MultiCreate`, and `MultiPublish` entrypoints share one atomic admission gate.
     The high bit closes admission and the remaining bits count in-flight writes, making close-versus-admit linearizable
-    without a hot-path mutex. Distributed-master exit closes the gate before publishing exit intent; routed writes can
+    without a hot-path mutex. Topology-managed exit closes the gate before publishing exit intent; routed writes can
     use the existing redirect response, direct writes receive `K_SCALE_DOWN`, and the topology data callback waits for
     admitted writes to finish before taking its migration snapshot. This gate is deliberately separate from incoming
-    migration admission. Read-only RPCs keep their existing behavior. Centralized-master shutdown bypasses lossless
-    exit, while distributed-master shutdown always uses it.
+    migration admission. Read-only RPCs keep their existing behavior. Worker shutdown always follows the lossless
+    topology exit path.
   - Routed Create/MultiCreate requests may carry client-generated allocation UUIDs. The Worker validates each UUID,
     uses it directly as the `shmId`, and reserves it in a short-lived TBB concurrent hash set before allocating memory.
     A completed duplicate returns `K_DUPLICATED`; an in-flight duplicate returns `K_TRY_AGAIN`; neither path allocates a

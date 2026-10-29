@@ -43,7 +43,6 @@ public:
         for (auto addr : opts.workerConfigs) {
             workerAddress_.emplace_back(addr.ToString());
         }
-        opts.enableDistributedMaster = "false";
         opts.workerGflagParams =
             " -authorization_enable=true "
             "-yuanrong_iam_url=https://www.example.com";

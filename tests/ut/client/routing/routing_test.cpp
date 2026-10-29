@@ -103,7 +103,7 @@ TEST_F(RoutingFacadeTest, TestInitFetchesRingAndStartsFacade)
 {
     auto router = std::make_shared<client::WorkerRouter>("");
     std::atomic<int> fetchCount{ 0 };
-    auto fetch = [&fetchCount](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [&fetchCount](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                                uint64_t &newVersion, bool &changed,
                                std::unordered_map<std::string, std::string> &hostIdMap) {
         fetchCount.fetch_add(1);
@@ -130,7 +130,7 @@ TEST_F(RoutingFacadeTest, TestExplicitHostIdPreservesLocalityWithRemoteInitialWo
     const HostPort remoteWorker("127.0.0.1", 2000);
     auto router = std::make_shared<client::WorkerRouter>("");
     auto fetch = [&localWorker, &remoteWorker](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
-                                               std::string &, uint64_t &newVersion, bool &changed,
+                                               uint64_t &newVersion, bool &changed,
                                                std::unordered_map<std::string, std::string> &hostIdMap) {
         ring.set_tokens_per_member(1);
         auto &local = (*ring.mutable_members())[localWorker.ToString()];
@@ -161,7 +161,7 @@ TEST_F(RoutingFacadeTest, TestExplicitHostIdPreservesLocalityWithRemoteInitialWo
 TEST_F(RoutingFacadeTest, TestCallsBeforeInitFail)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");
-    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &, bool &,
+    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, uint64_t &, bool &,
                     std::unordered_map<std::string, std::string> &) { return Status::OK(); };
     auto refresher = std::make_shared<client::HashRingRefresher>(router, fetch);
     client::Routing routing(router, refresher);
@@ -188,8 +188,9 @@ TEST_F(RoutingFacadeTest, TestHostIdResolvesOnLaterRingChangeWhenFirstFetchMisse
     const HostPort remoteWorker("127.0.0.1", 2000);
     auto router = std::make_shared<client::WorkerRouter>("");
     std::atomic<int> fetchCount{ 0 };
-    auto fetch = [&localWorker, &remoteWorker, &fetchCount](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
-                                                            std::string &, uint64_t &newVersion, bool &changed,
+    auto fetch = [&localWorker, &remoteWorker, &fetchCount](const HostPort &, uint64_t,
+                                                            ::datasystem::ClusterTopologyPb &ring,
+                                                            uint64_t &newVersion, bool &changed,
                                                             std::unordered_map<std::string, std::string> &hostIdMap) {
         const int n = fetchCount.fetch_add(1) + 1;
         ring.set_tokens_per_member(1);
@@ -243,7 +244,7 @@ TEST_F(RoutingFacadeTest, TestHostIdResolvesOnLaterRingChangeWhenFirstFetchMisse
 TEST_F(RoutingFacadeTest, TestInitRejectsInvalidDependenciesAndArguments)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");
-    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &, bool &,
+    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, uint64_t &, bool &,
                     std::unordered_map<std::string, std::string> &) { return Status::OK(); };
     auto refresher = std::make_shared<client::HashRingRefresher>(router, fetch);
 
@@ -348,7 +349,7 @@ TEST_F(RoutingRpcClientTest, TestChannelCreationFailureIsReturned)
 TEST_F(RoutingFacadeTest, TestForwardsPolicyBatchAndStateUpdates)
 {
     auto router = std::make_shared<client::WorkerRouter>("");
-    auto fetch = [](const HostPort &, uint64_t currentVersion, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [](const HostPort &, uint64_t currentVersion, ::datasystem::ClusterTopologyPb &ring,
                     uint64_t &newVersion, bool &changed,
                     std::unordered_map<std::string, std::string> &hostIdMap) {
         FillRing(ring, hostIdMap);
@@ -380,7 +381,7 @@ TEST_F(RoutingFacadeTest, TestWorkerDisconnectForcesHashRingRefresh)
 {
     auto router = std::make_shared<client::WorkerRouter>("");
     std::atomic<int> fetchCount{ 0 };
-    auto fetch = [&fetchCount](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [&fetchCount](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                                uint64_t &newVersion, bool &changed,
                                std::unordered_map<std::string, std::string> &hostIdMap) {
         const int current = fetchCount.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -409,7 +410,7 @@ TEST_F(RoutingFacadeTest, TestPeerDeadEvictsWithoutForcingHashRingRefresh)
 {
     auto router = std::make_shared<client::WorkerRouter>("");
     std::atomic<int> fetchCount{ 0 };
-    auto fetch = [&fetchCount](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [&fetchCount](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                                uint64_t &newVersion, bool &changed,
                                std::unordered_map<std::string, std::string> &hostIdMap) {
         const int current = fetchCount.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -442,7 +443,7 @@ TEST_F(RoutingFacadeTest, TestPeerDeadEvictsWithoutForcingHashRingRefresh)
 TEST_F(RoutingFacadeTest, TestShutdownRejectsSubsequentCalls)
 {
     auto router = std::make_shared<client::WorkerRouter>("");
-    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                     uint64_t &newVersion, bool &changed,
                     std::unordered_map<std::string, std::string> &hostIdMap) {
         FillRing(ring, hostIdMap);

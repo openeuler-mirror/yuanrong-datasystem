@@ -149,9 +149,9 @@ Status WaitDeleteStreamFanout(FanoutCollector &collector, const DeleteStreamFano
 SCMetadataManager::SCMetadataManager(const HostPort &masterHostPort, std::shared_ptr<AkSkManager> akSkManager,
                                      std::shared_ptr<RpcSessionManager> rpcSessionManager,
                                      const cluster::PlacementFacade *placement,
-                                     const cluster::MembershipEndpointView *membership, bool centralizedMetadata,
-                                     HostPort metadataAddress, RocksStore *rocksStore, const std::string &workerId)
-    : MetadataRedirectHelper(placement, centralizedMetadata, std::move(metadataAddress)),
+                                     const cluster::MembershipEndpointView *membership, RocksStore *rocksStore,
+                                     const std::string &workerId)
+    : MetadataRedirectHelper(placement),
       masterAddress_(masterHostPort),
       topologyMembership_(membership),
       akSkManager_(std::move(akSkManager)),

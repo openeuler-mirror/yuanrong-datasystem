@@ -2093,7 +2093,6 @@ private:
     {
         opts.numWorkers = 1;
         opts.enableSpill = true;
-        opts.enableDistributedMaster = "false";
         opts.workerGflagParams =
             "-shared_memory_size_mb=32 -log_monitor=true "
             "-log_monitor_interval_ms=1000 -skip_authenticate=true -v=1 -spill_size_limit=134217728 "
@@ -2120,7 +2119,6 @@ private:
         const int memoryMb = GetPositiveEnvInt(kCombinedMemoryMbEnv, kDefaultCombinedMemoryMb);
         opts.numWorkers = 3;
         opts.enableSpill = true;
-        opts.enableDistributedMaster = "true";
         opts.workerGflagParams = FormatString(
             "-shared_memory_size_mb=%d -eviction_high_watermark_ratio=0.75 "
             "-eviction_low_watermark_ratio=0.65 -log_monitor=true "
@@ -2146,7 +2144,6 @@ public:
         opts.numEtcd = 1;
         opts.numOBS = 0;
         opts.enableSpill = true;
-        opts.enableDistributedMaster = "true";
         opts.workerGflagParams = FormatString(
             "-shared_memory_size_mb=%d -eviction_high_watermark_ratio=0.75 "
             "-eviction_low_watermark_ratio=0.65 -log_monitor=true "

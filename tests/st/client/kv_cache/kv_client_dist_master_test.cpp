@@ -44,7 +44,6 @@
 #include "client/object_cache/oc_client_common.h"
 
 DS_DECLARE_string(etcd_address);
-DS_DECLARE_string(master_address);
 
 namespace datasystem {
 namespace st {
@@ -60,7 +59,6 @@ public:
         opts.numWorkers = 3;
         opts.numOBS = 1;
         opts.workerGflagParams = "-node_timeout_s=5 -node_dead_timeout_s=8";
-        opts.enableDistributedMaster = "true";
         opts.waitWorkerReady = false;
     }
 
@@ -348,12 +346,10 @@ TEST_F(STCClientDistMasterTest, DISABLED_TestAddNodeSet)
     std::string value = "value1";
     std::vector<std::string> keys;
     HostPort workerAddr(HOST_IP, GetFreePort());
-    HostPort masterAddr;
     for (int i = 0; i < 3; i++) {
         cluster_->SetInjectAction(WORKER, i, "add.node.redirect", "10000*return()");
     }
-    cluster_->GetWorkerAddr(0, masterAddr);
-    cluster_->AddNode(masterAddr, workerAddr.ToString());
+    cluster_->AddNode(workerAddr.ToString());
     for (int i = 0; i < 500; i++) {
         auto key = "redirect_test_" + std::to_string(i);
         DS_ASSERT_OK(client_->Set(key, value));
@@ -377,9 +373,7 @@ TEST_F(STCClientDistMasterTest, DISABLED_TestAddNodeUpdate)
         DS_ASSERT_OK(client_->Set(key, value));
     }
     HostPort workerAddr(HOST_IP, GetFreePort());
-    HostPort masterAddr;
-    cluster_->GetWorkerAddr(0, masterAddr);
-    cluster_->AddNode(masterAddr, workerAddr.ToString());
+    cluster_->AddNode(workerAddr.ToString());
     for (int i = 0; i < 1000; i++) {
         auto key = "redirect_test_" + std::to_string(i);
         keys.emplace_back(key);
@@ -394,7 +388,6 @@ TEST_F(STCClientDistMasterTest, DISABLED_TestAddNodeGet)
     std::string value = "value1";
     std::vector<std::string> keys;
     HostPort workerAddr(HOST_IP, GetFreePort());
-    HostPort masterAddr;
     for (int i = 0; i < 500; i++) {
         auto key = "redirect_test_" + std::to_string(i);
         keys.emplace_back(key);
@@ -414,8 +407,7 @@ TEST_F(STCClientDistMasterTest, DISABLED_TestAddNodeGet)
         }
     };
     std::thread thread(func);
-    cluster_->GetWorkerAddr(0, masterAddr);
-    DS_ASSERT_OK(cluster_->AddNode(masterAddr, workerAddr.ToString()));
+    DS_ASSERT_OK(cluster_->AddNode(workerAddr.ToString()));
     for (auto &key : keys) {
         DS_ASSERT_OK(client_->Set(key, value));
     }
@@ -1064,7 +1056,6 @@ public:
         opts.numWorkers = 3;
         opts.numOBS = 1;
         opts.workerGflagParams = " -v=1 -shared_memory_size_mb=64";
-        opts.enableDistributedMaster = "true";
         opts.waitWorkerReady = false;
     }
 };

@@ -75,8 +75,6 @@ public:
     {
         opts.numWorkers = 1;
         opts.numEtcd = 1;
-        opts.masterIdx = 0;
-        opts.enableDistributedMaster = "false";
         opts.workerGflagParams = "-shared_memory_size_mb=128 -v=2 -log_monitor=true";
     }
 };

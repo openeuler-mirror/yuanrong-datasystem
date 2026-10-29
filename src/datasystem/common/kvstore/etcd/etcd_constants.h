@@ -34,7 +34,6 @@ static constexpr char WATCH_READ[] = "watch read";
 static constexpr char WATCH_WRITE[] = "watch run";
 static constexpr char WRITES_DONE[] = "writes done";
 static constexpr char ETCD_MEMBERSHIP_KEY_SEGMENT[] = "/cluster/";
-static constexpr char ETCD_MASTER_ADDRESS_TABLE[] = "/datasystem";
 static constexpr char ETCD_SLOT_RECOVERY_TABLE[] = "/datasystem/slot_recovery";
 // Save key without worker id metadata
 static constexpr char ETCD_META_TABLE_PREFIX[] = "/datasystem/metadata/meta_table/";

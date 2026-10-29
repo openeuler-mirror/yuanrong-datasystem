@@ -18,13 +18,16 @@
  * Description: brpc cross-worker KV remote-get coverage.
  */
 
+#include <map>
 #include <memory>
 #include <string>
 
 #include <gtest/gtest.h>
 
+#include "cluster/topology_token_helper.h"
 #include "common.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/kv_client.h"
 #include "kv_client_common.h"
@@ -45,7 +48,6 @@ public:
     {
         opts.numWorkers = WORKER_NUM;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "false";
         opts.workerGflagParams =
             "-shared_memory_size_mb=512 -v=2 -log_monitor=true -enable_perf_trace_log=true";
     }
@@ -91,7 +93,6 @@ public:
     {
         opts.numWorkers = WORKER_NUM_RETRY;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "false";
         // A cross-node Get caches a replica on the getter worker and the master acks it as a location, so a later Get
         // can fetch from that replica (an address != primary_address) and reach the retry-to-primary path.
         opts.workerGflagParams =
@@ -106,6 +107,30 @@ public:
     void TearDown() override
     {
         ExternalClusterTest::TearDown();
+    }
+
+    Status FindMetadataOwnerIndex(const std::string &key, uint32_t &ownerIndex)
+    {
+        ClusterTopologyPb topology;
+        RETURN_IF_NOT_OK(cluster_->ReadClusterTopology(topology));
+        std::map<uint32_t, std::string> tokenWorkers;
+        for (const auto &member : topology.members()) {
+            for (const auto token : RebuildTopologyMemberTokens(topology, member.first, member.second)) {
+                tokenWorkers.emplace(token, member.first);
+            }
+        }
+        CHECK_FAIL_RETURN_STATUS(!tokenWorkers.empty(), K_NOT_FOUND, "Hash ring has no worker tokens");
+        auto owner = tokenWorkers.lower_bound(MurmurHash3_32(key));
+        owner = owner == tokenWorkers.end() ? tokenWorkers.begin() : owner;
+        for (uint32_t index = 0; index < cluster_->GetWorkerNum(); ++index) {
+            HostPort address;
+            RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(index, address));
+            if (address.ToString() == owner->second) {
+                ownerIndex = index;
+                return Status::OK();
+            }
+        }
+        return Status(K_NOT_FOUND, "Metadata owner is absent from the external cluster");
     }
 };
 
@@ -125,6 +150,8 @@ TEST_F(KVClientBrpcRemoteGetRetryTest, LEVEL1_RemoteGetRetryToPrimaryAfterPayloa
     InitTestKVClient(2, getterClient, CLIENT_TIMEOUT_MS);
 
     const std::string key = "brpc_remote_get_retry_primary_" + NewObjectKey();
+    uint32_t metadataOwnerIndex = 0;
+    DS_ASSERT_OK(FindMetadataOwnerIndex(key, metadataOwnerIndex));
     const std::string value = GenRandomString(VALUE_SIZE);
     SetParam setParam{ .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0, .existence = ExistenceOpt::NONE };
     DS_ASSERT_OK(setterClient->Set(key, value, setParam));
@@ -139,11 +166,10 @@ TEST_F(KVClientBrpcRemoteGetRetryTest, LEVEL1_RemoteGetRetryToPrimaryAfterPayloa
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
     // Force the getter (worker 2) to fetch from worker 1 (the replica, not the primary on worker 0).
-    // In this non-distributed setup the master logic runs on worker 0 (central master worker), so the
-    // inject targets worker 0.
+    // The injection must target the key's topology-selected metadata owner.
     HostPort worker1Addr;
     DS_ASSERT_OK(cluster_->GetWorkerAddr(1, worker1Addr));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.select_location",
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, metadataOwnerIndex, "master.select_location",
                                            std::string("return(") + worker1Addr.ToString() + ")"));
 
     // On the getter worker (worker 2), fail RetrieveRemotePayload exactly once after the data

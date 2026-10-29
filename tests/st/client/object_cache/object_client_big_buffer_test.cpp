@@ -35,7 +35,6 @@ public:
         int numWorkers = 2;
         opts.numWorkers = numWorkers;
         opts.workerGflagParams = " -shared_memory_size_mb=8192 -v=2 -ipc_through_shared_memory=false";
-        opts.masterGflagParams = " -v=1";
         opts.numEtcd = 1;
     }
 

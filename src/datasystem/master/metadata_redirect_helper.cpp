@@ -16,13 +16,9 @@
  */
 #include "datasystem/master/metadata_redirect_helper.h"
 
-#include <utility>
-
 namespace datasystem {
 namespace master {
-MetadataRedirectHelper::MetadataRedirectHelper(const cluster::PlacementFacade *placement, bool centralizedMetadata,
-                                               HostPort metadataAddress)
-    : placement_(placement), centralizedMetadata_(centralizedMetadata), metadataAddress_(std::move(metadataAddress))
+MetadataRedirectHelper::MetadataRedirectHelper(const cluster::PlacementFacade *placement) : placement_(placement)
 {
 }
 
@@ -34,13 +30,6 @@ void MetadataRedirectHelper::Shutdown()
 Status MetadataRedirectHelper::EvaluateMetadataRedirect(std::string_view key, MetaRedirectDecision &decision) const
 {
     MetaRedirectDecision built;
-    if (centralizedMetadata_) {
-        CHECK_FAIL_RETURN_STATUS(!metadataAddress_.Empty(), K_INVALID,
-                                 "Centralized metadata Master address is empty");
-        built.targetAddress = metadataAddress_.ToString();
-        decision = std::move(built);
-        return Status::OK();
-    }
     const auto *placement = placement_.load(std::memory_order_acquire);
     CHECK_FAIL_RETURN_STATUS(placement != nullptr, K_NOT_READY, "Master metadata placement is not available");
     cluster::RedirectDecision route;
@@ -60,28 +49,19 @@ Status MetadataRedirectHelper::EvaluateMetadataRedirectBatch(
 {
     std::vector<MetaRedirectDecision> built;
     built.reserve(keys.size());
-    if (centralizedMetadata_) {
-        CHECK_FAIL_RETURN_STATUS(!metadataAddress_.Empty(), K_INVALID,
-                                 "Centralized metadata Master address is empty");
-        built.resize(keys.size());
-        for (auto &item : built) {
-            item.targetAddress = metadataAddress_.ToString();
-        }
-    } else {
-        const auto *placement = placement_.load(std::memory_order_acquire);
-        CHECK_FAIL_RETURN_STATUS(placement != nullptr, K_NOT_READY, "Master metadata placement is not available");
-        cluster::BatchRedirectDecision routes;
-        RETURN_IF_NOT_OK(placement->EvaluateRedirectBatch(keys, routes));
-        for (const auto &route : routes.decisions) {
-            MetaRedirectDecision item;
-            item.redirect = route.action == cluster::RedirectAction::REDIRECT;
-            item.moving = route.action == cluster::RedirectAction::WAIT;
-            item.scaleOutWait = item.moving && !route.redirectTargetAddress.empty();
-            item.topologyVersion = route.topologyVersion;
-            item.batchEpoch = route.batchEpoch;
-            item.targetAddress = route.GetRedirectTargetAddress();
-            built.emplace_back(std::move(item));
-        }
+    const auto *placement = placement_.load(std::memory_order_acquire);
+    CHECK_FAIL_RETURN_STATUS(placement != nullptr, K_NOT_READY, "Master metadata placement is not available");
+    cluster::BatchRedirectDecision routes;
+    RETURN_IF_NOT_OK(placement->EvaluateRedirectBatch(keys, routes));
+    for (const auto &route : routes.decisions) {
+        MetaRedirectDecision item;
+        item.redirect = route.action == cluster::RedirectAction::REDIRECT;
+        item.moving = route.action == cluster::RedirectAction::WAIT;
+        item.scaleOutWait = item.moving && !route.redirectTargetAddress.empty();
+        item.topologyVersion = route.topologyVersion;
+        item.batchEpoch = route.batchEpoch;
+        item.targetAddress = route.GetRedirectTargetAddress();
+        built.emplace_back(std::move(item));
     }
     decisions = std::move(built);
     return Status::OK();
@@ -115,17 +95,11 @@ Status MetadataRedirectHelper::ApplyMetadataAvailability(const std::string &id, 
 Status MetadataRedirectHelper::ResolveMetadataOwner(std::string_view key, HostPort &owner) const
 {
     HostPort resolved;
-    if (centralizedMetadata_) {
-        CHECK_FAIL_RETURN_STATUS(!metadataAddress_.Empty(), K_INVALID,
-                                 "Centralized metadata Master address is empty");
-        resolved = metadataAddress_;
-    } else {
-        const auto *placement = placement_.load(std::memory_order_acquire);
-        CHECK_FAIL_RETURN_STATUS(placement != nullptr, K_NOT_READY, "Master metadata placement is not available");
-        cluster::PlacementDecision route;
-        RETURN_IF_NOT_OK(placement->Locate(key, route));
-        RETURN_IF_NOT_OK(resolved.ParseString(route.committedOwnerAddress));
-    }
+    const auto *placement = placement_.load(std::memory_order_acquire);
+    CHECK_FAIL_RETURN_STATUS(placement != nullptr, K_NOT_READY, "Master metadata placement is not available");
+    cluster::PlacementDecision route;
+    RETURN_IF_NOT_OK(placement->Locate(key, route));
+    RETURN_IF_NOT_OK(resolved.ParseString(route.committedOwnerAddress));
     owner = std::move(resolved);
     return Status::OK();
 }

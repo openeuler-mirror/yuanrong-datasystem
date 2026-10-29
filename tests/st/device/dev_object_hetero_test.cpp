@@ -69,7 +69,6 @@ class DevObjectHeteroTest : public DevTestHelper {
         opts.workerGflagParams =
             " -v=1 -authorization_enable=true -shared_memory_size_mb=4096 -enable_fallocate=false -arena_per_tenant=2 "
             "-client_dead_timeout_s=15 -enable_reconciliation=true";
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         FLAGS_v = 0;
     }
@@ -1364,7 +1363,6 @@ class DisableDevObjectHeteroTest : public DevTestHelper {
         opts.workerGflagParams =
             " -v=0 -shared_memory_size_mb=2048 enable_fallocate=false -arena_per_tenant=2 "
             "-enable_fallocate=false ";
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         FLAGS_v = 0;
     }

@@ -46,10 +46,9 @@ HashRingRefresher::TimedFetchRpc AdaptFetchRpc(HashRingRefresher::FetchRpc fetch
         return {};
     }
     return [fetch = std::move(fetchRpc)](const HostPort &workerAddr, uint64_t currentVersion,
-                                         ::datasystem::ClusterTopologyPb &ring, std::string &masterAddress,
-                                         uint64_t &newVersion, bool &changed,
+                                         ::datasystem::ClusterTopologyPb &ring, uint64_t &newVersion, bool &changed,
                                          std::unordered_map<std::string, std::string> &hostIdMap, int32_t) {
-        return fetch(workerAddr, currentVersion, ring, masterAddress, newVersion, changed, hostIdMap);
+        return fetch(workerAddr, currentVersion, ring, newVersion, changed, hostIdMap);
     };
 }
 
@@ -256,14 +255,12 @@ Status HashRingRefresher::ProbeRound(const std::vector<HostPort> &workers, size_
         }
         const auto &worker = workers[(startIndex + offset) % workers.size()];
         ::datasystem::ClusterTopologyPb ring;
-        std::string masterAddress;
         uint64_t newVersion = 0;
         bool changed = false;
         std::unordered_map<std::string, std::string> hostIdMap;
 
         const uint64_t requestedVersion = currentVersion_.load(std::memory_order_acquire);
-        Status status = fetchRpc_(worker, requestedVersion, ring, masterAddress, newVersion, changed, hostIdMap,
-                                  timeoutMs);
+        Status status = fetchRpc_(worker, requestedVersion, ring, newVersion, changed, hostIdMap, timeoutMs);
         if (status.IsError()) {
             LOG(WARNING) << "[Routing] Skip failed hash ring refresh from " << worker.ToString()
                          << ", requested version: " << requestedVersion << ", status: " << status.ToString();

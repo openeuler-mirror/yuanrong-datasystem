@@ -59,7 +59,6 @@ public:
         opts.numEtcd = 0;
         opts.numOBS = 1;
         opts.numCoordinators = 1;
-        opts.enableDistributedMaster = "true";
         // node_timeout_s=60: keep the hash ring stable during the test so the pre-filtered key's
         // metadata owner does not shift while we kill the primary worker.
         opts.workerGflagParams =
@@ -101,7 +100,7 @@ public:
 
     /**
      * Find a random key (UUID) whose metadata owner is NOT the given worker.
-     * In distributed-master mode the metadata owner is determined by the coordinator hash ring.
+     * The metadata owner is determined by the coordinator hash ring.
      * By pre-filtering we ensure the metadata query succeeds (owner is alive) while the data RPC
      * targets the primary worker we are about to kill.
      */

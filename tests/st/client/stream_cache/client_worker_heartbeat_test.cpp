@@ -39,7 +39,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numWorkers = 2;
-        opts.masterIdx = 1;
         opts.numEtcd = 1;
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(500)");
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)");

@@ -1492,7 +1492,6 @@ private:
     // ScaleIn drain state separate so ordinary client writes are not permanently fenced after a successful rejoin.
     std::atomic<bool> topologyScaleInDataDrainStarted_{ false };
     const bool isRestart_;
-    const bool centralizedMetadata_;
     const bool controlBackendAvailableAtStartup_;
     // Wait for client reconnect when worker crash and recovery.
     WaitPost clientReconnectPost_;

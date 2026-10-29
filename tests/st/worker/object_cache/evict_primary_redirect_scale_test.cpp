@@ -63,7 +63,6 @@ public:
     {
         opts.numEtcd = 1;
         opts.numWorkers = 3;
-        opts.enableDistributedMaster = "true";
         opts.waitWorkerReady = true;
         opts.workerGflagParams =
             "-shared_memory_size_mb=32 -node_timeout_s=5 -node_dead_timeout_s=8 -log_monitor=true -v=2";

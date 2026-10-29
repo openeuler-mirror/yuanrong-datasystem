@@ -90,8 +90,6 @@ public:
         opts.numCoordinators = 1;
         opts.numWorkers = 2;
         opts.isObjectCache = true;
-        opts.enableDistributedMaster = "true";
-        opts.masterIdx = 0;
         opts.waitWorkerReady = true;
         opts.waitAfterStart = false;
         opts.disableRocksDB = true;

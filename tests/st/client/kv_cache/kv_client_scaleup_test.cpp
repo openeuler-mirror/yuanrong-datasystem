@@ -12,7 +12,7 @@
  */
 
 /**
- * Description: Centralized master scenario, worker scale up test.
+ * Description: Topology-managed worker scale-up test.
  */
 
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
@@ -29,7 +29,7 @@ const std::string HOST_IP_PREFIX = "127.0.0.1";
 constexpr size_t DEFAULT_WORKER_NUM = 4;
 constexpr int WORKER_READY_TIMEOUT_SEC = 60;
 constexpr int SCALEUP_TEST_TIMEOUT_SEC = 120;
-class KVClientCentralizedScaleupTest : public KVClientScaleCommon {
+class KVClientScaleupTest : public KVClientScaleCommon {
 public:
     static bool IsConcurrentScaleupCase()
     {
@@ -46,7 +46,6 @@ public:
         opts.numCoordinators = 1;
         opts.numOBS = 1;
         opts.numWorkers = DEFAULT_WORKER_NUM;
-        opts.enableDistributedMaster = "false";
         opts.workerGflagParams =
             "-shared_memory_size_mb=5120 -v=2 -node_timeout_s=1 -node_dead_timeout_s=2";
 
@@ -75,7 +74,7 @@ public:
     void StartWorkerAndWaitReady(const std::vector<uint32_t> &indexes, int expectedWorkerNum, std::string gFlag = "")
     {
         for (auto i : indexes) {
-            ASSERT_TRUE(externalCluster_->StartWorker(i, HostPort(), gFlag).IsOk());
+            ASSERT_TRUE(externalCluster_->StartWorker(i, gFlag).IsOk());
         }
         WaitWorkerReady(indexes);
         WaitTopologyReady(expectedWorkerNum);
@@ -132,7 +131,7 @@ protected:
     ExternalCluster *externalCluster_ = nullptr;
 };
 
-TEST_F(KVClientCentralizedScaleupTest, LEVEL1_ScaleUpWorkerSequentially)
+TEST_F(KVClientScaleupTest, LEVEL1_ScaleUpWorkerSequentially)
 {
     InitCluster();
 
@@ -154,7 +153,7 @@ TEST_F(KVClientCentralizedScaleupTest, LEVEL1_ScaleUpWorkerSequentially)
     DS_ASSERT_NOT_OK(client2_->Get("key3", getValue));
 }
 
-TEST_F(KVClientCentralizedScaleupTest, ScaleUpWorkerConcurrently)
+TEST_F(KVClientScaleupTest, ScaleUpWorkerConcurrently)
 {
     InitCluster(true);
 

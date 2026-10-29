@@ -86,7 +86,6 @@ public:
     {
         opts.numWorkers = WORKER_NUM;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "false";
         opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
         opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
         for (const auto &addr : opts.workerConfigs) {
@@ -2644,7 +2643,6 @@ public:
     {
         opts.numWorkers = WORKER_NUM;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "false";
         opts.disableRocksDB = false;
     }
 };
@@ -2653,7 +2651,8 @@ TEST_F(ObjectClientTest2, TestStoreError)
 {
     std::shared_ptr<ObjectClient> client;
     InitTestClient(0, client);
-    std::string objectKey = NewObjectKey();
+    std::string objectKey;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(0, "store_error_", objectKey));
     std::string data = GenRandomString(NON_SHM_SIZE);
     std::vector<std::string> failedObjectKeys;
 
@@ -2694,7 +2693,6 @@ public:
     {
         opts.numWorkers = 2;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "false";
         opts.disableRocksDB = false;
 
         opts.workerConfigs.emplace_back(HOST_IPV6, GetFreePort());

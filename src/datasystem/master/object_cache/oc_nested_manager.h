@@ -59,11 +59,10 @@ namespace datasystem {
 namespace master {
 class OCNestedManager {
 public:
-    OCNestedManager(std::shared_ptr<ObjectMetaStore> objectRockStore, bool isCentralized)
+    explicit OCNestedManager(std::shared_ptr<ObjectMetaStore> objectRockStore)
         : objectStore_(std::move(objectRockStore)),
           nestedRef_(std::make_unique<object_cache::ObjectRefInfo<std::string>>(false))
     {
-        isCentralized_ = isCentralized;
     }
 
     ~OCNestedManager() = default;
@@ -179,7 +178,6 @@ private:
     std::shared_ptr<ObjectMetaStore> objectStore_;
     std::unique_ptr<object_cache::ObjectRefInfo<std::string>> nestedRef_;  // std::string -> ObjectKey
     std::shared_timed_mutex mutex_;
-    bool isCentralized_ = false;
 };
 }  // namespace master
 }  // namespace datasystem

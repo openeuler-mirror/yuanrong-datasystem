@@ -32,7 +32,10 @@ ds_cc_test(
     name = "kv_client_brpc_remote_get_test",
     srcs = ["kv_client_brpc_remote_get_test.cpp"],
     tags = ["manual"],
-    deps = KV_COMMON_DEPS,
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/util:hash_algorithm",
+        "//tests/st/cluster:st_cluster",
+    ],
 )
 
 ds_cc_test(
@@ -190,8 +193,8 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "kv_client_centralized_scaleup_test",
-    srcs = ["kv_client_centralized_scaleup_test.cpp"],
+    name = "kv_client_scaleup_test",
+    srcs = ["kv_client_scaleup_test.cpp"],
     tags = ["manual"],
     deps = KV_COMMON_DEPS + [
         "//src/datasystem/common/kvstore/etcd:etcd_constants",

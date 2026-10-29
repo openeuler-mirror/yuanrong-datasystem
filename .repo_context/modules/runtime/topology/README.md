@@ -375,6 +375,8 @@
   shared participant-scope `target` as the per-task trigger instead of implying that one target owns the whole drain.
 - `WorkerOCServer` owns the `TopologyEngine` composition root, a fixed three-thread witness-probe pool with a bounded
   FIFO event queue and in-flight count, plus the Store/Proxy and callback resources borrowed by the Engine.
+  Every Worker also owns its local metadata services at `worker_address`; `MetadataRouteResolver` and
+  `MetadataRedirectHelper` resolve all owners and redirects from `PlacementFacade`, with no fixed-master fallback.
   `ConstructTopologyRuntime` sets classifier `nodeDeadTimeout` to
   `max(0, FLAGS_node_dead_timeout_s - FLAGS_node_timeout_s)` so confirmed failure tracks wall-clock
   `node_dead_timeout_s` after lease expiry (`node_timeout_s`), not a second full `node_timeout_s`. Its independent
@@ -412,7 +414,9 @@
   `EtcdStore::CreateTableWithExactPrefix`
   registers these paths without legacy `FLAGS_cluster_name` prefix rewriting. `TopologyEngine::Builder` owns
   registration for the shared ETCD Store; the Worker obtains the UB health table from the Engine-owned helper and
-  registers that exact sidecar prefix. `TopologyEngine` maps classified key kinds to Worker/Controller delivery policy.
+  registers that exact sidecar prefix. The eviction rollout store uses `TopologyKeyHelper::RolloutTable()` for the
+  same empty- and named-cluster physical paths. `TopologyEngine` maps classified key kinds to Worker/Controller delivery
+  policy.
 - There is no persisted Worker-local topology authority. ETCD restart recovery reads the latest legal topology and
   reconstructs deterministic work. The in-memory Coordinator backend recovers only the latest topology from Workers;
   task/notify records are treated as absent and regenerated. Candidate arbitration is cluster-scoped and resource

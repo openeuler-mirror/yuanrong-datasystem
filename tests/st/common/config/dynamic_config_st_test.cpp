@@ -115,8 +115,6 @@ void SetupMinimalCluster(ExternalClusterOptions &opts, const std::string &worker
 {
     opts.numOBS = 0;
     opts.numWorkers = 1;
-    opts.numMasters = 1;
-    opts.enableDistributedMaster = "false";
     opts.numEtcd = 1;
     opts.workerGflagParams = workerGflagParams;
 }
