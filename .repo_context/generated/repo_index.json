@@ -1,6 +1,6 @@
 {
   "repo_root": ".",
-  "generated_at_utc": "2026-10-28T09:51:40+00:00",
+  "generated_at_utc": "2026-10-29T07:55:43+00:00",
   "root_files": [
     "README.md",
     "build.sh",
@@ -489,8 +489,6 @@
         "    - conftest.py",
         "  - test_ds_pr_review_helper.py",
         "- st/",
-        "  - Testing/",
-        "    - Temporary/",
         "  - client/",
         "    - kv_cache/",
         "    - object_cache/",

@@ -509,7 +509,7 @@ protected:
         ApiDeadlineGuard deadlineGuard(timeoutMs);
         GetRequestContext()->reqTimeoutDuration.Init(timeoutMs);
         const std::vector<std::string> objectKeys{ "get-key" };
-        const std::vector<ReadParam> readParams;
+        const std::vector<object_cache::ReadRangeParam> readParams;
         object_cache::GetParam getParam{ .objectKeys = objectKeys,
                                          .subTimeoutMs = timeoutMs,
                                          .readParams = readParams,

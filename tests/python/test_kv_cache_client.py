@@ -26,7 +26,7 @@ import ctypes
 import struct
 
 from yr.datasystem.object_client import WriteMode, ObjectClient
-from yr.datasystem.kv_client import KVClient, ExistenceOpt, ReadParam
+from yr.datasystem.kv_client import KVClient, ExistenceOpt
 from yr.datasystem.util import Context
 
 is_torch_exist = True
@@ -355,36 +355,6 @@ class TestKVClientMethods(unittest.TestCase):
         rw_buffers[1].unwlatch()
         mem_view = read_only_buffers[1].immutable_data(with_latch=True, timeout_sec=1)
         self.assertEqual(mem_view.tobytes(), val_list[1].encode())
-
-    def test_read(self):
-        """
-        Features: Test read.
-        """
-        Context.set_trace_id("test_read")
-        client = KVClient(self.host, self.port)
-        client.init()
-
-        key_num = 3
-        value_size = 100 * 1024
-        append_value = "abcdefg"
-        key_list = [self.random_str() for _ in range(key_num)]
-        val_list = [self.random_str(value_size) + append_value for _ in range(key_num)]
-        write_mode = WriteMode.NONE_L2_CACHE
-        existence_opt = ExistenceOpt.NONE
-        self.assertEqual(client.mset(key_list, val_list, write_mode, 0, existence_opt), [])
-
-        read_param_list = []
-        for i in range(key_num):
-            read_param_list.append(ReadParam(key=key_list[i], offset=value_size, size=len(append_value)))
-        buffers = client.read(read_param_list)
-        self.assertEqual(len(buffers), key_num)
-        for i in range(key_num):
-            mem_view = buffers[i].immutable_data(with_latch=True, timeout_sec=1)
-            bytes_data = mem_view.tobytes()
-            result_str = bytes_data.decode('utf-8', errors='replace')
-            self.assertEqual(result_str, append_value)
-
-        self.assertEqual(client.delete(key_list), [])
 
     def test_state_get_succeed(self):
         """

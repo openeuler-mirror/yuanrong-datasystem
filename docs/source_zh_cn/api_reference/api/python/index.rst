@@ -16,7 +16,6 @@ Python
    yr.datasystem.kv_client.KVClient
    yr.datasystem.kv_client.ReadOnlyBuffer
    yr.datasystem.kv_client.SetParam
-   yr.datasystem.kv_client.ReadParam
    yr.datasystem.service_discovery.ServiceAffinityPolicy
    yr.datasystem.service_discovery.ServiceDiscoveryOptions
    yr.datasystem.service_discovery.ServiceDiscovery
@@ -146,8 +145,6 @@ KV接口
      - 获取所有给定键的值。
    * - :doc:`yr.datasystem.kv_client.KVClient.get <yr.datasystem.kv_client.KVClient.get>`
      - 获取所有给定键的值。
-   * - :doc:`yr.datasystem.kv_client.KVClient.read <yr.datasystem.kv_client.KVClient.read>`
-     - 读取指定偏移量的数据。
    * - :doc:`yr.datasystem.kv_client.KVClient.delete <yr.datasystem.kv_client.KVClient.delete>`
      - 初始化KV缓存客户端以连接到 Worker 。
    * - :doc:`yr.datasystem.kv_client.KVClient.generate_key <yr.datasystem.kv_client.KVClient.generate_key>`

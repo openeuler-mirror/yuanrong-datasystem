@@ -193,18 +193,18 @@ public:
     Status CopyOversizedBufferChunk(const std::string &objectKey, uint64_t objectSize, uint64_t offset,
                                     const std::shared_ptr<Buffer> &chunkBuffer, std::shared_ptr<Buffer> &buffer,
                                     uint64_t &copiedSize);
-    Status ProcessGetResponse(const std::vector<std::string> &objectKeys, const std::vector<ReadParam> &readParams,
+    Status ProcessGetResponse(const std::vector<std::string> &objectKeys, const std::vector<ReadRangeParam> &readParams,
                               GetRspPb &rsp, uint32_t version, std::vector<RpcMessage> &payloads,
                               std::vector<std::shared_ptr<Buffer>> &buffers, std::vector<std::string> &failedObjectKey,
                               const std::unordered_map<std::string, std::shared_ptr<ObjectBufferInfo>>
                                   &ubBufferInfos = {});
     Status GetObjectBuffers(const std::vector<std::string> &objectsNeedToGet, const GetRspPb &rsp, uint32_t version,
-                            const std::vector<ReadParam> &readParams, std::vector<RpcMessage> &payloads,
+                            const std::vector<ReadRangeParam> &readParams, std::vector<RpcMessage> &payloads,
                             std::vector<std::shared_ptr<Buffer>> &buffers, std::vector<std::string> &failedObjectKey,
                             const std::unordered_map<std::string, std::shared_ptr<ObjectBufferInfo>>
                                 &ubBufferInfos = {});
     Status SetShmObjectBufferWithMetric(const std::string &objectKey, const GetRspPb::ObjectInfoPb &info,
-                                        uint32_t version, const std::vector<ReadParam> &readParams, size_t index,
+                                        uint32_t version, const std::vector<ReadRangeParam> &readParams, size_t index,
                                         std::shared_ptr<Buffer> &bufferPtr);
     Status SetNoShmObjectBufferWithMetric(const std::string &objectKey, const GetRspPb::PayloadInfoPb &payloadInfo,
                                           uint32_t version, std::vector<RpcMessage> &payloads,
