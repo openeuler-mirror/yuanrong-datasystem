@@ -188,6 +188,64 @@ public:
     int selectedPort_ = 31502;
 };
 
+// Discovery whose first GetAllWorkers call blocks until released, for deterministic fallback-lifetime tests.
+class BlockingServiceDiscovery : public IServiceDiscovery {
+public:
+    Status Init() override
+    {
+        return Status::OK();
+    }
+
+    Status SelectWorker(std::string &workerIp, int &workerPort, bool *, bool *) override
+    {
+        workerIp = "127.0.0.1";
+        workerPort = 31001;
+        return Status::OK();
+    }
+
+    Status SelectSameNodeWorker(std::string &workerIp, int &workerPort) override
+    {
+        workerIp = "127.0.0.1";
+        workerPort = 31001;
+        return Status::OK();
+    }
+
+    Status GetAllWorkers(std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs) override
+    {
+        return GetAllWorkers(sameHostAddrs, otherAddrs, 0);
+    }
+
+    Status GetAllWorkers(std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs,
+                         int32_t timeoutMs) override
+    {
+        (void)sameHostAddrs;
+        (void)otherAddrs;
+        lastTimeoutMs.store(timeoutMs, std::memory_order_release);
+        if (!enteredExchanged.exchange(true)) {
+            enteredPromise.set_value();
+            releaseFuture.get();
+        }
+        return Status::OK();
+    }
+
+    ServiceAffinityPolicy GetAffinityPolicy() const override
+    {
+        return ServiceAffinityPolicy::PREFERRED_SAME_NODE;
+    }
+
+    bool HasHostAffinity() const override
+    {
+        return false;
+    }
+
+    std::promise<void> enteredPromise;
+    std::shared_future<void> enteredFuture{ enteredPromise.get_future() };
+    std::promise<void> releasePromise;
+    std::shared_future<void> releaseFuture{ releasePromise.get_future() };
+    std::atomic<bool> enteredExchanged{ false };
+    std::atomic<int32_t> lastTimeoutMs{ -1 };
+};
+
 class FakeMmapTableEntry : public IMmapTableEntry {
 public:
     FakeMmapTableEntry() : IMmapTableEntry(-1, 1)
@@ -4757,6 +4815,59 @@ TEST(ObjectClientImplTest, SwitchBackGatesOnDataPlaneManagerPublication)
     EXPECT_EQ(oldNode, object_cache::STANDBY1_WORKER);
     EXPECT_EQ(localAddress.Host(), "127.0.0.1");
     EXPECT_EQ(localAddress.Port(), 31502);
+}
+
+// Issue 1313 review: the routing probe fallback runs on the refresher's background thread and must
+// never hold an ObjectClientImpl strong reference. Destroying the last client reference while the
+// fallback is blocked in discovery must destruct the client on the destroyer thread (expired weak),
+// never on the refresh thread, where ~ObjectClientImpl would join the refresh thread against itself.
+TEST(ObjectClientImplTest, ProbeFallbackDoesNotExtendClientLifetimeOnRefreshThread)
+{
+    auto discovery = std::make_shared<BlockingServiceDiscovery>();
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    options.serviceDiscovery = discovery;
+    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
+    auto fallback = client->BuildProbeListFallback(HostPort("127.0.0.1", 31001));
+    std::weak_ptr<object_cache::ObjectClientImpl> weakClient = client;
+
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &, bool &,
+                    std::unordered_map<std::string, std::string> &) { return Status(K_RUNTIME_ERROR, "unreachable"); };
+    auto refresher = std::make_shared<client::HashRingRefresher>(router, fetch, nullptr, nullptr, fallback);
+    ASSERT_TRUE(refresher->StartPeriodicRefresh(20).IsOk());
+    auto routing = std::make_shared<Routing>(router, refresher);
+    std::atomic_store(&client->routing_, routing);
+
+    // Wait until the background refresh round is blocked inside the discovery query.
+    ASSERT_EQ(discovery->enteredFuture.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+
+    std::atomic<bool> destroyed{ false };
+    std::thread destroyer([&] {
+        client.reset();
+        destroyed.store(true, std::memory_order_release);
+    });
+    // The fallback closure must hold no strong reference: the client's weak_ptr expires on the
+    // destroyer thread even though the fallback is still parked in discovery on the refresh thread.
+    // (With the old weak_from_this closure the blocked call held a strong reference, so the weak
+    // pointer could not expire until the refresh thread returned.)
+    bool expiredSeen = false;
+    for (int i = 0; i < 200; ++i) {
+        if (weakClient.expired()) {
+            expiredSeen = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_TRUE(expiredSeen);
+
+    discovery->releasePromise.set_value();
+    destroyer.join();
+    EXPECT_TRUE(destroyed.load(std::memory_order_acquire));
+    // The closure must pass the bounded discovery budget (1s) into GetAllWorkers.
+    EXPECT_EQ(discovery->lastTimeoutMs.load(), 1000);
+    refresher->Stop();
 }
 
 TEST(DataPlaneManagerTest, UbRebuildCooldownDoesNotBlockDataPlaneBuild)

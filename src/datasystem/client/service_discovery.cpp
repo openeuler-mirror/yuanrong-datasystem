@@ -14,6 +14,7 @@
 
 #include "datasystem/common/coordinator/static_coordinator_discovery.h"
 
+#include <algorithm>
 #include <iterator>
 #include <memory>
 #include <unordered_map>
@@ -260,7 +261,8 @@ Status ServiceDiscovery::Init()
     return Status::OK();
 }
 
-Status ServiceDiscovery::ObtainWorkers(std::vector<std::string> &sameHost, std::vector<std::string> &other)
+Status ServiceDiscovery::ObtainWorkers(std::vector<std::string> &sameHost, std::vector<std::string> &other,
+                                       int32_t timeoutMs)
 {
     if (etcdStore_ == nullptr) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Init(), "Failed to connect to etcd.");
@@ -268,8 +270,11 @@ Status ServiceDiscovery::ObtainWorkers(std::vector<std::string> &sameHost, std::
 
     int64_t nodeRevision;
     std::vector<std::pair<std::string, std::string>> outKeyValues;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdStore_->GetAll(membershipTable_, outKeyValues, nodeRevision),
-                                     "Failed to fetch cluster info from etcd, ensure etcd service is healthy.");
+    // reqRevision zero ranges over the newest key-value store, matching the legacy 3-arg GetAll call.
+    const int32_t rpcTimeoutMs = timeoutMs > 0 ? timeoutMs : SEND_RPC_TIMEOUT_MS_DEFAULT;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        etcdStore_->GetAll(membershipTable_, 0, outKeyValues, nodeRevision, rpcTimeoutMs),
+        "Failed to fetch cluster info from etcd, ensure etcd service is healthy.");
 
     sameHost.clear();
     other.clear();
@@ -305,6 +310,13 @@ Status ServiceDiscovery::SelectSameNodeWorker(std::string &workerIp, int &worker
 Status ServiceDiscovery::GetAllWorkers(std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs)
 {
     RETURN_IF_NOT_OK(ObtainWorkers(sameHostAddrs, otherAddrs));
+    return ApplyGetAllWorkersPolicy(affinityPolicy_, HasHostAffinity(), sameHostAddrs, otherAddrs);
+}
+
+Status ServiceDiscovery::GetAllWorkers(std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs,
+                                       int32_t timeoutMs)
+{
+    RETURN_IF_NOT_OK(ObtainWorkers(sameHostAddrs, otherAddrs, timeoutMs));
     return ApplyGetAllWorkersPolicy(affinityPolicy_, HasHostAffinity(), sameHostAddrs, otherAddrs);
 }
 
@@ -348,7 +360,8 @@ Status CoordinatorServiceDiscovery::Init()
     return Status::OK();
 }
 
-Status CoordinatorServiceDiscovery::ObtainWorkers(std::vector<std::string> &sameHost, std::vector<std::string> &other)
+Status CoordinatorServiceDiscovery::ObtainWorkers(std::vector<std::string> &sameHost, std::vector<std::string> &other,
+                                                  int32_t timeoutMs)
 {
     if (coordinatorProxy_ == nullptr) {
         RETURN_IF_NOT_OK(Init());
@@ -363,8 +376,10 @@ Status CoordinatorServiceDiscovery::ObtainWorkers(std::vector<std::string> &same
 
     std::vector<KeyValueEntry> kvs;
     int64_t revision = 0;
+    const int32_t rpcTimeoutMs =
+        timeoutMs > 0 ? std::min(READ_ONLY_ROUTE_BUDGET_MS, timeoutMs) : READ_ONLY_ROUTE_BUDGET_MS;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        coordinatorProxy_->Range(clusterTablePrefix, rangeEnd, kvs, revision, READ_ONLY_ROUTE_BUDGET_MS),
+        coordinatorProxy_->Range(clusterTablePrefix, rangeEnd, kvs, revision, rpcTimeoutMs),
         "Failed to fetch cluster info from coordinator.");
 
     for (const auto &kv : kvs) {
@@ -400,6 +415,13 @@ Status CoordinatorServiceDiscovery::GetAllWorkers(std::vector<std::string> &same
                                                   std::vector<std::string> &otherAddrs)
 {
     RETURN_IF_NOT_OK(ObtainWorkers(sameHostAddrs, otherAddrs));
+    return ApplyGetAllWorkersPolicy(affinityPolicy_, HasHostAffinity(), sameHostAddrs, otherAddrs);
+}
+
+Status CoordinatorServiceDiscovery::GetAllWorkers(std::vector<std::string> &sameHostAddrs,
+                                                  std::vector<std::string> &otherAddrs, int32_t timeoutMs)
+{
+    RETURN_IF_NOT_OK(ObtainWorkers(sameHostAddrs, otherAddrs, timeoutMs));
     return ApplyGetAllWorkersPolicy(affinityPolicy_, HasHostAffinity(), sameHostAddrs, otherAddrs);
 }
 }  // namespace datasystem

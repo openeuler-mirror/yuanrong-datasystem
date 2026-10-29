@@ -30,10 +30,11 @@ namespace client {
 Routing::Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> signature,
                  HashRingRefresher::RingUpdateHook ringUpdateHook,
                  std::vector<std::shared_ptr<IWorkerFilter>> additionalFilters, int64_t refreshIntervalMs,
-                 std::function<void(uint64_t)> refreshConfirmedHook)
+                 std::function<void(uint64_t)> refreshConfirmedHook,
+                 HashRingRefresher::ProbeListFallback probeFallback)
     : Routing(std::move(channelConfig), std::move(signature), std::move(ringUpdateHook),
               std::make_shared<WorkerUbHealthRegistry>(), std::move(additionalFilters), refreshIntervalMs,
-              std::move(refreshConfirmedHook))
+              std::move(refreshConfirmedHook), std::move(probeFallback))
 {
 }
 
@@ -41,7 +42,8 @@ Routing::Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> sig
                  HashRingRefresher::RingUpdateHook ringUpdateHook,
                  std::shared_ptr<WorkerUbHealthRegistry> ubHealthRegistry,
                  std::vector<std::shared_ptr<IWorkerFilter>> additionalFilters, int64_t refreshIntervalMs,
-                 std::function<void(uint64_t)> refreshConfirmedHook)
+                 std::function<void(uint64_t)> refreshConfirmedHook,
+                 HashRingRefresher::ProbeListFallback probeFallback)
     : router_(std::make_shared<WorkerRouter>(
           "", std::move(ubHealthRegistry), std::move(additionalFilters),
           std::make_shared<ClientReadBandwidthScheduler>(ClientReadBandwidthScheduler::Config::FromFlags()))),
@@ -65,7 +67,8 @@ Routing::Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> sig
         return FetchHashRing(workerAddr, currentVersion, ring, masterAddress, newVersion, changed, hostIdMap,
                              timeoutMs);
     };
-    refresher_ = std::make_shared<HashRingRefresher>(router_, std::move(fetchRpc), std::move(applyRingUpdate));
+    refresher_ = std::make_shared<HashRingRefresher>(router_, std::move(fetchRpc), std::move(applyRingUpdate),
+                                                     HashRingRefresher::WaitFn{}, std::move(probeFallback));
 }
 
 Routing::Routing(std::shared_ptr<WorkerRouter> router, std::shared_ptr<HashRingRefresher> refresher,
@@ -202,6 +205,11 @@ bool Routing::ForceRefresh()
         return refresher_->ForceRefresh();
     }
     return false;
+}
+
+size_t Routing::MergeProbeWorkers(const std::vector<HostPort> &workers)
+{
+    return refresher_ != nullptr ? refresher_->MergeProbeWorkers(workers) : 0;
 }
 
 void Routing::Shutdown()

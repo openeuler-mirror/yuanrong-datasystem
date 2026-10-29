@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <unordered_set>
 #include <utility>
 
 #include "datasystem/common/ak_sk/hasher.h"
@@ -31,6 +32,7 @@ namespace datasystem {
 namespace client {
 namespace {
 constexpr int TOPOLOGY_PUBLISH_FAILURE_LOG_EVERY_N = 10;
+constexpr int ZERO_REACHABLE_LOG_INTERVAL_SECONDS = 30;
 
 int64_t SteadyNowMs()
 {
@@ -62,18 +64,19 @@ void LogTopologyPublishFailure(const HostPort &worker, uint64_t requestedVersion
 }  // namespace
 
 HashRingRefresher::HashRingRefresher(std::shared_ptr<WorkerRouter> router, FetchRpc fetchRpc,
-                                     RingUpdateHook ringUpdateHook, WaitFn waitFn)
+                                     RingUpdateHook ringUpdateHook, WaitFn waitFn, ProbeListFallback probeFallback)
     : HashRingRefresher(std::move(router), AdaptFetchRpc(std::move(fetchRpc)), std::move(ringUpdateHook),
-                        std::move(waitFn))
+                        std::move(waitFn), std::move(probeFallback))
 {
 }
 
 HashRingRefresher::HashRingRefresher(std::shared_ptr<WorkerRouter> router, TimedFetchRpc fetchRpc,
-                                     RingUpdateHook ringUpdateHook, WaitFn waitFn)
+                                     RingUpdateHook ringUpdateHook, WaitFn waitFn, ProbeListFallback probeFallback)
     : router_(std::move(router)),
       fetchRpc_(std::move(fetchRpc)),
       ringUpdateHook_(std::move(ringUpdateHook)),
-      waitFn_(std::move(waitFn))
+      waitFn_(std::move(waitFn)),
+      probeFallback_(std::move(probeFallback))
 {
     if (waitFn_ == nullptr) {
         waitFn_ = [](std::condition_variable &cv, std::unique_lock<std::mutex> &lock,
@@ -155,6 +158,38 @@ bool HashRingRefresher::ForceRefresh()
     return true;
 }
 
+size_t HashRingRefresher::MergeProbeWorkers(const std::vector<HostPort> &workers)
+{
+    if (workers.empty()) {
+        return 0;
+    }
+    std::lock_guard<std::mutex> lock(workerListMutex_);
+    std::unordered_set<HostPort> known(workerList_.begin(), workerList_.end());
+    size_t added = 0;
+    size_t firstAddedIndex = workerList_.size();
+    for (const auto &worker : workers) {
+        if (worker.Empty() || known.count(worker) > 0) {
+            continue;
+        }
+        if (added == 0) {
+            firstAddedIndex = workerList_.size();
+        }
+        workerList_.push_back(worker);
+        known.insert(worker);
+        ++added;
+    }
+    if (added > 0) {
+        nextWorkerIndex_ = firstAddedIndex % workerList_.size();
+    }
+    return added;
+}
+
+size_t HashRingRefresher::ProbeListSize()
+{
+    std::lock_guard<std::mutex> lock(workerListMutex_);
+    return workerList_.size();
+}
+
 std::vector<HostPort> HashRingRefresher::BeginRefreshRound(size_t &startIndex)
 {
     std::vector<HostPort> workers;
@@ -181,8 +216,40 @@ Status HashRingRefresher::DoRefresh(bool stopAware)
 {
     size_t startIndex = 0;
     const auto workers = BeginRefreshRound(startIndex);
-    const auto probeCount = stopAware ? std::min(workers.size(), MAX_BACKGROUND_PROBES_PER_ROUND) : workers.size();
+    const auto probeCount = stopAware ? std::min(workers.size(), MAX_BACKGROUND_PROBES_PER_ROUND)
+                                      : std::min(workers.size(), MAX_FOREGROUND_PROBES_PER_ROUND);
     bool reachedWorker = false;
+    // The initial pass keeps the caller's timeout contract; the same-round candidate re-probe below
+    // runs on the background RPC budget: the candidate set is wide and a live worker answers
+    // GetHashRing well within the background timeout.
+    const auto timeoutMs = stopAware ? BACKGROUND_REFRESH_RPC_TIMEOUT_MS : 0;
+    const auto rc = ProbeRound(workers, startIndex, probeCount, stopAware, timeoutMs, reachedWorker);
+    if (reachedWorker) {
+        return rc;
+    }
+    if (stopAware && !running_.load(std::memory_order_acquire)) {
+        return rc;
+    }
+    const auto candidates = probeFallback_ != nullptr ? probeFallback_() : std::vector<HostPort>{};
+    const auto merged = MergeProbeWorkers(candidates);
+    LOG_EVERY_T(WARNING, ZERO_REACHABLE_LOG_INTERVAL_SECONDS)
+        << "[Routing] No reachable worker for hash ring refresh, probe list size: " << ProbeListSize()
+        << ", merged new fallback addresses: " << merged;
+    if (candidates.empty()) {
+        return rc;
+    }
+    // Re-probe this round's discovery candidates as a priority window, including addresses that were
+    // already known (batched discovery re-reports them): two distinct workers reporting the same lower
+    // ring must be probed within one pass to confirm an epoch reset before observations expire.
+    const auto window = stopAware ? MAX_BACKGROUND_PROBES_PER_ROUND : MAX_FOREGROUND_PROBES_PER_ROUND;
+    bool candidateReached = false;
+    return ProbeRound(candidates, 0, std::min(candidates.size(), window), stopAware,
+                      BACKGROUND_REFRESH_RPC_TIMEOUT_MS, candidateReached);
+}
+
+Status HashRingRefresher::ProbeRound(const std::vector<HostPort> &workers, size_t startIndex, size_t probeCount,
+                                     bool stopAware, int32_t timeoutMs, bool &reachedWorker)
+{
     for (size_t offset = 0; offset < probeCount; ++offset) {
         if (stopAware && !running_.load(std::memory_order_acquire)) {
             break;
@@ -195,7 +262,6 @@ Status HashRingRefresher::DoRefresh(bool stopAware)
         std::unordered_map<std::string, std::string> hostIdMap;
 
         const uint64_t requestedVersion = currentVersion_.load(std::memory_order_acquire);
-        const auto timeoutMs = stopAware ? BACKGROUND_REFRESH_RPC_TIMEOUT_MS : 0;
         Status status = fetchRpc_(worker, requestedVersion, ring, masterAddress, newVersion, changed, hostIdMap,
                                   timeoutMs);
         if (status.IsError()) {
@@ -245,7 +311,12 @@ bool HashRingRefresher::TryPublishEpochReset(const HostPort &worker, uint64_t re
                                              Status &result)
 {
     const auto digest = BuildRingDigest(ring);
-    if (digest.empty() || !RecordLowerVersionAndCheckConfirmation(worker, newVersion, digest)) {
+    if (digest.empty()) {
+        return false;
+    }
+    if (!RecordLowerVersionAndCheckConfirmation(worker, newVersion, digest)) {
+        LOG(INFO) << "[Routing] Epoch reset awaiting a second worker confirmation from " << worker.ToString()
+                  << ", reset version: " << newVersion << ", digest: " << digest;
         return false;
     }
     LOG(WARNING) << "[Routing] Accept epoch-reset hash ring from " << worker.ToString()

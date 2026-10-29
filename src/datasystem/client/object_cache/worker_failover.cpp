@@ -614,6 +614,22 @@ void WorkerFailover::GetStandbyWorkersForSwitch(const std::shared_ptr<IClientWor
     ShuffleWorkerCandidates(others);
 }
 
+void WorkerFailover::PushRoutingProbeAddress(const HostPort &addr)
+{
+    if (addr.Empty()) {
+        return;
+    }
+    owner_.boundWorkerSeed_->Set(addr);
+    auto routing = std::atomic_load(&owner_.routing_);
+    if (routing == nullptr) {
+        return;
+    }
+    const size_t merged = routing->MergeProbeWorkers({ addr });
+    const bool scheduled = routing->ForceRefresh();
+    LOG(INFO) << "[Switch] Push switched worker address into routing probe list, address: " << addr.ToString()
+              << ", merged: " << merged << ", refresh scheduled: " << scheduled;
+}
+
 bool WorkerFailover::CommitStandbySwitch(WorkerNode current, WorkerNode next, uint64_t switchGeneration,
                                          const std::shared_ptr<IClientWorkerApi> &candidateWorkerApi,
                                          const std::shared_ptr<client::ListenWorker> &candidateListenWorker)
@@ -668,6 +684,7 @@ bool WorkerFailover::CommitStandbySwitch(WorkerNode current, WorkerNode next, ui
         };
         previousWorkerApi->RunWhenInvokeCountZero(std::move(func));
     }
+    PushRoutingProbeAddress(candidateWorkerApi->hostPort_);
     return true;
 }
 
@@ -775,6 +792,7 @@ WorkerFailover::StandbySwitchAttemptResult WorkerFailover::TrySwitchToLocalSameH
         MarkWorkerAvailableLocked();
     }
     NotifySwitchToExpectedWorker(localAddress);
+    PushRoutingProbeAddress(localAddress);
     LOG(INFO) << "[Switch] LOCAL_WORKER replaced with same-host worker at " << localAddress.ToString();
     return StandbySwitchAttemptResult::SWITCHED;
 }
@@ -865,6 +883,7 @@ bool WorkerFailover::CommitRestoreToLocalWorker(WorkerNode current)
         MarkWorkerAvailableLocked();
     }
     NotifySwitchToExpectedWorker(localWorkerApi->hostPort_);
+    PushRoutingProbeAddress(localWorkerApi->hostPort_);
     return true;
 }
 
@@ -1020,6 +1039,7 @@ bool WorkerFailover::CommitPreferredLocalWorker(WorkerNode oldNode, const HostPo
         }
         MarkWorkerAvailableLocked();
     }
+    PushRoutingProbeAddress(localAddress);
     return true;
 }
 

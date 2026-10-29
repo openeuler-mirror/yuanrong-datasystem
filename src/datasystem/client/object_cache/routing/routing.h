@@ -49,13 +49,15 @@ public:
             HashRingRefresher::RingUpdateHook ringUpdateHook = {},
             std::vector<std::shared_ptr<IWorkerFilter>> additionalFilters = {},
             int64_t refreshIntervalMs = DEFAULT_REFRESH_INTERVAL_MS,
-            std::function<void(uint64_t)> refreshConfirmedHook = {});
+            std::function<void(uint64_t)> refreshConfirmedHook = {},
+            HashRingRefresher::ProbeListFallback probeFallback = {});
     Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> signature,
             HashRingRefresher::RingUpdateHook ringUpdateHook,
             std::shared_ptr<WorkerUbHealthRegistry> ubHealthRegistry,
             std::vector<std::shared_ptr<IWorkerFilter>> additionalFilters = {},
             int64_t refreshIntervalMs = DEFAULT_REFRESH_INTERVAL_MS,
-            std::function<void(uint64_t)> refreshConfirmedHook = {});
+            std::function<void(uint64_t)> refreshConfirmedHook = {},
+            HashRingRefresher::ProbeListFallback probeFallback = {});
 
     // Dependency-injection seam used by focused routing tests.
     Routing(std::shared_ptr<WorkerRouter> router, std::shared_ptr<HashRingRefresher> refresher,
@@ -87,6 +89,8 @@ public:
     void UpdateState(const HostPort &addr, StatusCode status);
 
     bool ForceRefresh();
+
+    size_t MergeProbeWorkers(const std::vector<HostPort> &workers);
 
     std::shared_ptr<ClientReadBandwidthScheduler> GetBandwidthScheduler() const
     {

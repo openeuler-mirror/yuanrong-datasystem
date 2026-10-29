@@ -51,6 +51,12 @@ public:
     {
         return refresher.DoRefresh(false);
     }
+
+    static std::vector<HostPort> WorkerList(HashRingRefresher &refresher)
+    {
+        std::lock_guard<std::mutex> lock(refresher.workerListMutex_);
+        return refresher.workerList_;
+    }
 };
 }  // namespace client
 
@@ -1122,6 +1128,334 @@ TEST_F(HashRingRefresherTest, ForceRefreshPublishesNewRingWithinRetryBudget)
     // tolerating scheduler jitter on shared CI machines.
     EXPECT_LT(publishLatencyMs, 50) << "publish latency " << publishLatencyMs << "ms";
     LOG(INFO) << "ForceRefresh publish latency (in-memory lower bound): " << publishLatencyMs << "ms";
+}
+
+// Issue 1313: when every probe address dies simultaneously (full worker restart with new
+// addresses), the fallback must re-seed the probe list and republish within the same refresh
+// round instead of probing the dead list forever.
+TEST_F(HashRingRefresherTest, ZeroReachableFallbackRepublishesWithinSameRefresh)
+{
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    auto fetch = [](const HostPort &worker, uint64_t requestedVersion, ::datasystem::ClusterTopologyPb &ring,
+                    std::string &, uint64_t &newVersion, bool &changed,
+                    std::unordered_map<std::string, std::string> &hostIdMap) {
+        if (requestedVersion == 0) {
+            FillTwoWorkerRing(ring, hostIdMap);
+            newVersion = 31;
+            changed = true;
+            return Status::OK();
+        }
+        if (worker.Port() == 2000) {
+            FillRing(ring, hostIdMap, "127.0.0.1:2000");
+            newVersion = 32;
+            changed = true;
+            return Status::OK();
+        }
+        return Status(K_RUNTIME_ERROR, "worker unreachable");
+    };
+    std::atomic<int> fallbackCalls{ 0 };
+    auto fallback = [&fallbackCalls]() {
+        fallbackCalls.fetch_add(1, std::memory_order_release);
+        return std::vector<HostPort>{ HostPort("127.0.0.1", 2000) };
+    };
+    uint64_t hookVersion = 0;
+    std::atomic<int> hookCalls{ 0 };
+    auto hook = [&hookVersion, &hookCalls](uint64_t version, const ::datasystem::ClusterTopologyPb &,
+                                           const std::unordered_map<std::string, std::string> &, bool) {
+        hookVersion = version;
+        hookCalls.fetch_add(1, std::memory_order_release);
+        return Status::OK();
+    };
+    client::HashRingRefresher refresher(router, fetch, hook, {}, fallback);
+
+    DS_ASSERT_OK(refresher.InitialFetch(HostPort("127.0.0.1", 1000)));
+    ASSERT_EQ(hookCalls.load(), 1);
+    ASSERT_EQ(hookVersion, 31u);
+
+    DS_ASSERT_OK(client::HashRingRefresherTestPeer::Refresh(refresher));
+    EXPECT_EQ(hookCalls.load(), 2);
+    EXPECT_EQ(hookVersion, 32u);
+    EXPECT_EQ(fallbackCalls.load(), 1);
+    const auto workerList = client::HashRingRefresherTestPeer::WorkerList(refresher);
+    ASSERT_EQ(workerList.size(), 1u);
+    EXPECT_EQ(workerList[0], HostPort("127.0.0.1", 2000));
+    HostPort selected;
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER,
+                                      client::WorkerAccessAction::CONTROL, selected));
+    EXPECT_EQ(selected, HostPort("127.0.0.1", 2000));
+}
+
+// Without a fallback the refresh loop must keep the old ring and probe list, preserving the
+// pre-fix behavior for deployments that configure no address source.
+TEST_F(HashRingRefresherTest, ZeroReachableWithoutFallbackKeepsRingAndList)
+{
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    auto fetch = [](const HostPort &, uint64_t requestedVersion, ::datasystem::ClusterTopologyPb &ring, std::string &,
+                    uint64_t &newVersion, bool &changed,
+                    std::unordered_map<std::string, std::string> &hostIdMap) {
+        if (requestedVersion == 0) {
+            FillTwoWorkerRing(ring, hostIdMap);
+            newVersion = 31;
+            changed = true;
+            return Status::OK();
+        }
+        return Status(K_RUNTIME_ERROR, "worker unreachable");
+    };
+    std::atomic<int> hookCalls{ 0 };
+    auto hook = [&hookCalls](uint64_t, const ::datasystem::ClusterTopologyPb &,
+                             const std::unordered_map<std::string, std::string> &, bool) {
+        hookCalls.fetch_add(1, std::memory_order_release);
+        return Status::OK();
+    };
+    client::HashRingRefresher refresher(router, fetch, hook);
+
+    DS_ASSERT_OK(refresher.InitialFetch(HostPort("127.0.0.1", 1000)));
+    ASSERT_EQ(hookCalls.load(), 1);
+
+    const auto rc = client::HashRingRefresherTestPeer::Refresh(refresher);
+    EXPECT_EQ(rc.GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(hookCalls.load(), 1);
+    const auto workerList = client::HashRingRefresherTestPeer::WorkerList(refresher);
+    ASSERT_EQ(workerList.size(), 2u);
+    EXPECT_EQ(workerList[0], HostPort("127.0.0.1", 1000));
+    EXPECT_EQ(workerList[1], HostPort("127.0.0.1", 1001));
+}
+
+// Issue 1313 recovery path end to end: after a full worker restart the server-side topology
+// version resets below the client's cached version, so the re-seeded probe list must confirm
+// the epoch reset from two distinct new workers within one refresh round.
+TEST_F(HashRingRefresherTest, EpochResetConfirmedFromFallbackWorkersWithinSameRefresh)
+{
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    auto fetch = [](const HostPort &worker, uint64_t requestedVersion, ::datasystem::ClusterTopologyPb &ring,
+                    std::string &, uint64_t &newVersion, bool &changed,
+                    std::unordered_map<std::string, std::string> &hostIdMap) {
+        if (requestedVersion == 0) {
+            FillTwoWorkerRing(ring, hostIdMap);
+            newVersion = 31;
+            changed = true;
+            return Status::OK();
+        }
+        if (worker.Port() != 2000 && worker.Port() != 3000) {
+            return Status(K_RUNTIME_ERROR, "worker unreachable");
+        }
+        ring.set_tokens_per_member(1);
+        for (const auto *address : { "127.0.0.1:2000", "127.0.0.1:3000" }) {
+            auto &member = (*ring.mutable_members())[address];
+            member.set_state(::datasystem::MembershipPb::ACTIVE);
+            hostIdMap[address] = "host-a";
+        }
+        newVersion = 3;
+        changed = true;
+        return Status::OK();
+    };
+    auto fallback = []() { return std::vector<HostPort>{ HostPort("127.0.0.1", 2000), HostPort("127.0.0.1", 3000) }; };
+    uint64_t hookVersion = 0;
+    bool hookEpochReset = false;
+    std::atomic<int> hookCalls{ 0 };
+    auto hook = [&hookVersion, &hookEpochReset, &hookCalls](uint64_t version,
+                                                            const ::datasystem::ClusterTopologyPb &,
+                                                            const std::unordered_map<std::string, std::string> &,
+                                                            bool epochResetConfirmed) {
+        hookVersion = version;
+        hookEpochReset = epochResetConfirmed;
+        hookCalls.fetch_add(1, std::memory_order_release);
+        return Status::OK();
+    };
+    client::HashRingRefresher refresher(router, fetch, hook, {}, fallback);
+
+    DS_ASSERT_OK(refresher.InitialFetch(HostPort("127.0.0.1", 1000)));
+    ASSERT_EQ(hookCalls.load(), 1);
+    ASSERT_EQ(hookVersion, 31u);
+
+    DS_ASSERT_OK(client::HashRingRefresherTestPeer::Refresh(refresher));
+    EXPECT_EQ(hookCalls.load(), 2);
+    EXPECT_EQ(hookVersion, 3u);
+    EXPECT_TRUE(hookEpochReset);
+    const auto workerList = client::HashRingRefresherTestPeer::WorkerList(refresher);
+    ASSERT_EQ(workerList.size(), 2u);
+    EXPECT_EQ(workerList[0], HostPort("127.0.0.1", 2000));
+    EXPECT_EQ(workerList[1], HostPort("127.0.0.1", 3000));
+}
+
+// The fallback is an emergency path only: a reachable worker (even one reporting an unchanged
+// ring) must keep it dormant so healthy clusters never pay the discovery query.
+TEST_F(HashRingRefresherTest, ReachableWorkerDoesNotInvokeProbeFallback)
+{
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    auto fetch = [](const HostPort &, uint64_t requestedVersion, ::datasystem::ClusterTopologyPb &ring, std::string &,
+                    uint64_t &newVersion, bool &changed,
+                    std::unordered_map<std::string, std::string> &hostIdMap) {
+        FillRing(ring, hostIdMap, "127.0.0.1:1000");
+        newVersion = requestedVersion == 0 ? 1 : requestedVersion;
+        changed = requestedVersion == 0;
+        return Status::OK();
+    };
+    std::atomic<int> fallbackCalls{ 0 };
+    auto fallback = [&fallbackCalls]() {
+        fallbackCalls.fetch_add(1, std::memory_order_release);
+        return std::vector<HostPort>{ HostPort("127.0.0.1", 2000) };
+    };
+    client::HashRingRefresher refresher(router, fetch, {}, {}, fallback);
+
+    DS_ASSERT_OK(refresher.InitialFetch(HostPort("127.0.0.1", 1000)));
+    DS_ASSERT_OK(client::HashRingRefresherTestPeer::Refresh(refresher));
+    EXPECT_EQ(fallbackCalls.load(), 0);
+    const auto workerList = client::HashRingRefresherTestPeer::WorkerList(refresher);
+    ASSERT_EQ(workerList.size(), 1u);
+    EXPECT_EQ(workerList[0], HostPort("127.0.0.1", 1000));
+}
+
+TEST_F(HashRingRefresherTest, MergeProbeWorkersDeduplicates)
+{
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &, bool &,
+                    std::unordered_map<std::string, std::string> &) { return Status::OK(); };
+    client::HashRingRefresher refresher(router, fetch);
+    DS_ASSERT_OK(refresher.InitialFetch(HostPort("127.0.0.1", 1000)));
+
+    EXPECT_EQ(refresher.MergeProbeWorkers({ HostPort("127.0.0.1", 1000), HostPort("127.0.0.1", 2000),
+                                            HostPort("127.0.0.1", 2000) }),
+              1u);
+    auto workerList = client::HashRingRefresherTestPeer::WorkerList(refresher);
+    ASSERT_EQ(workerList.size(), 2u);
+    EXPECT_EQ(workerList[0], HostPort("127.0.0.1", 1000));
+    EXPECT_EQ(workerList[1], HostPort("127.0.0.1", 2000));
+
+    EXPECT_EQ(refresher.MergeProbeWorkers({ HostPort(), HostPort("127.0.0.1", 2000) }), 0u);
+    workerList = client::HashRingRefresherTestPeer::WorkerList(refresher);
+    EXPECT_EQ(workerList.size(), 2u);
+}
+
+// Issue 1313 at deployment scale: a probe list holding the full pre-restart membership (2000 dead
+// addresses) must not block the fallback from re-seeding, and the foreground refresh must recover
+// within its bounded probe window instead of sweeping the whole list serially.
+TEST_F(HashRingRefresherTest, LargeClusterProbeFallbackRepublishesWithinSameRefresh)
+{
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    std::atomic<int> fetchCalls{ 0 };
+    auto fetch = [&fetchCalls](const HostPort &worker, uint64_t requestedVersion,
+                               ::datasystem::ClusterTopologyPb &ring, std::string &, uint64_t &newVersion,
+                               bool &changed, std::unordered_map<std::string, std::string> &hostIdMap) {
+        fetchCalls.fetch_add(1, std::memory_order_release);
+        if (requestedVersion == 0) {
+            FillTwoWorkerRing(ring, hostIdMap);
+            newVersion = 31;
+            changed = true;
+            return Status::OK();
+        }
+        if (worker.Port() == 5000) {
+            FillRing(ring, hostIdMap, "127.0.0.1:5000");
+            newVersion = 32;
+            changed = true;
+            return Status::OK();
+        }
+        return Status(K_RUNTIME_ERROR, "worker unreachable");
+    };
+    auto fallback = []() { return std::vector<HostPort>{ HostPort("127.0.0.1", 5000) }; };
+    uint64_t hookVersion = 0;
+    std::atomic<int> hookCalls{ 0 };
+    auto hook = [&hookVersion, &hookCalls](uint64_t version, const ::datasystem::ClusterTopologyPb &,
+                                           const std::unordered_map<std::string, std::string> &, bool) {
+        hookVersion = version;
+        hookCalls.fetch_add(1, std::memory_order_release);
+        return Status::OK();
+    };
+    client::HashRingRefresher refresher(router, fetch, hook, {}, fallback);
+
+    DS_ASSERT_OK(refresher.InitialFetch(HostPort("127.0.0.1", 1000)));
+    ASSERT_EQ(hookCalls.load(), 1);
+    ASSERT_EQ(hookVersion, 31u);
+    std::vector<HostPort> deadWorkers;
+    deadWorkers.reserve(1998);
+    for (int port = 1002; port < 3000; ++port) {
+        deadWorkers.emplace_back("127.0.0.1", port);
+    }
+    ASSERT_EQ(refresher.MergeProbeWorkers(deadWorkers), 1998u);
+    ASSERT_EQ(client::HashRingRefresherTestPeer::WorkerList(refresher).size(), 2000u);
+
+    fetchCalls.store(0, std::memory_order_release);
+    DS_ASSERT_OK(client::HashRingRefresherTestPeer::Refresh(refresher));
+    EXPECT_EQ(hookCalls.load(), 2);
+    EXPECT_EQ(hookVersion, 32u);
+    // 4 dead probes in the first window, then the re-probe starts at the first merged address and
+    // hits the live worker on its first RPC.
+    EXPECT_EQ(fetchCalls.load(), 5);
+    const auto workerList = client::HashRingRefresherTestPeer::WorkerList(refresher);
+    ASSERT_EQ(workerList.size(), 1u);
+    EXPECT_EQ(workerList[0], HostPort("127.0.0.1", 5000));
+}
+
+// Issue 1313 with batched discovery: the fallback reports worker B first and only later B+C, while
+// the new topology version is lower than the cached one (epoch reset). The re-probe must cover the
+// current discovery candidates as a priority window — including the already-known B — so two distinct
+// workers confirm the reset within a bounded number of refresh rounds instead of crawling the old
+// dead list one address per round.
+TEST_F(HashRingRefresherTest, BatchedDiscoveryFallbackConfirmsEpochResetWithinBoundedRounds)
+{
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    std::atomic<int> fallbackCalls{ 0 };
+    auto fallback = [&fallbackCalls]() {
+        const int call = fallbackCalls.fetch_add(1, std::memory_order_release);
+        if (call == 0) {
+            return std::vector<HostPort>{ HostPort("127.0.0.1", 2000) };
+        }
+        return std::vector<HostPort>{ HostPort("127.0.0.1", 2000), HostPort("127.0.0.1", 3000) };
+    };
+    auto fetch = [](const HostPort &worker, uint64_t requestedVersion, ::datasystem::ClusterTopologyPb &ring,
+                    std::string &, uint64_t &newVersion, bool &changed,
+                    std::unordered_map<std::string, std::string> &hostIdMap) {
+        if (requestedVersion == 0) {
+            FillTwoWorkerRing(ring, hostIdMap);
+            newVersion = 31;
+            changed = true;
+            return Status::OK();
+        }
+        if (worker.Port() != 2000 && worker.Port() != 3000) {
+            return Status(K_RUNTIME_ERROR, "worker unreachable");
+        }
+        ring.set_tokens_per_member(1);
+        for (const auto *address : { "127.0.0.1:2000", "127.0.0.1:3000" }) {
+            auto &member = (*ring.mutable_members())[address];
+            member.set_state(::datasystem::MembershipPb::ACTIVE);
+            hostIdMap[address] = "host-a";
+        }
+        newVersion = 3;
+        changed = true;
+        return Status::OK();
+    };
+    uint64_t hookVersion = 0;
+    bool hookEpochReset = false;
+    std::atomic<int> hookCalls{ 0 };
+    auto hook = [&hookVersion, &hookEpochReset, &hookCalls](uint64_t version,
+                                                            const ::datasystem::ClusterTopologyPb &,
+                                                            const std::unordered_map<std::string, std::string> &,
+                                                            bool epochResetConfirmed) {
+        hookVersion = version;
+        hookEpochReset = epochResetConfirmed;
+        hookCalls.fetch_add(1, std::memory_order_release);
+        return Status::OK();
+    };
+    client::HashRingRefresher refresher(router, fetch, hook, {}, fallback);
+
+    DS_ASSERT_OK(refresher.InitialFetch(HostPort("127.0.0.1", 1000)));
+    ASSERT_EQ(hookCalls.load(), 1);
+    std::vector<HostPort> deadWorkers;
+    for (int port = 1002; port < 1010; ++port) {
+        deadWorkers.emplace_back("127.0.0.1", port);
+    }
+    ASSERT_EQ(refresher.MergeProbeWorkers(deadWorkers), 8u);
+
+    for (int round = 0; round < 5 && hookCalls.load() < 2; ++round) {
+        DS_ASSERT_OK(client::HashRingRefresherTestPeer::Refresh(refresher));
+    }
+    EXPECT_EQ(hookCalls.load(), 2);
+    EXPECT_EQ(hookVersion, 3u);
+    EXPECT_TRUE(hookEpochReset);
+    const auto workerList = client::HashRingRefresherTestPeer::WorkerList(refresher);
+    ASSERT_EQ(workerList.size(), 2u);
+    EXPECT_EQ(workerList[0], HostPort("127.0.0.1", 2000));
+    EXPECT_EQ(workerList[1], HostPort("127.0.0.1", 3000));
 }
 }  // namespace
 
