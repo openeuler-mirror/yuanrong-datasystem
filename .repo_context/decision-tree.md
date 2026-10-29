@@ -24,7 +24,7 @@ Use this file when you know the problem type but not the owning module.
 - If the change designs or extends Coordinator election or product integration:
   - read `modules/runtime/coordinator-election/design.md`
   - follow `playbooks/features/runtime/coordinator-election/implementation.md`
-- If the change concerns ETCD, Metastore, watch, keepalive, lease, CAS, or metadata-backend behavior:
+- If the change concerns ETCD, watch, keepalive, lease, CAS, or metadata-backend behavior:
   - read `modules/runtime/etcd-metadata/README.md`
   - for design or implementation changes, also read `modules/runtime/etcd-metadata/design.md` and
     `playbooks/features/runtime/etcd-metadata/implementation.md`
@@ -57,7 +57,7 @@ Use this file when you know the problem type but not the owning module.
   `AddPeer` / `RemovePeer`:
   - read `modules/runtime/coordinator-election/README.md`
   - use `modules/runtime/coordinator-election/design.md` for lifecycle and recovery invariants
-- If the failure mentions ETCD, Metastore, watch, lease, CAS, or metadata-backend availability:
+- If the failure mentions ETCD, watch, lease, CAS, or metadata-backend availability:
   - read `modules/runtime/etcd-metadata/README.md`
 - If the failure mentions topology, hash ring, worker membership, routing, scale, node readiness, controller recovery, or
   failover:
@@ -77,7 +77,7 @@ Use this file when you know the problem type but not the owning module.
   - start with `modules/runtime/coordinator-election/README.md`
   - verify invariants in `modules/runtime/coordinator-election/design.md`
   - check workflow and validation gates in `playbooks/features/runtime/coordinator-election/implementation.md`
-- ETCD or Metastore coordination review:
+- ETCD coordination review:
   - `modules/runtime/etcd-metadata/README.md`
   - `modules/runtime/etcd-metadata/design.md`
 - Topology, worker membership, routing, scale, recovery, or failover review:

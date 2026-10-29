@@ -24,7 +24,7 @@
 
 Use this playbook when a change touches:
 
-- ETCD, Metastore, RocksDB, l2cache, slot storage, or local persisted files;
+- ETCD, RocksDB, l2cache, slot storage, or local persisted files;
 - object metadata, copy metadata, topology metadata, cluster membership, or recovery incidents;
 - worker restart, passive scale-down, voluntary scale-down, scale-up, or failover;
 - compaction, cleanup, preload, spill/load, migration, transfer, or ownership handoff;
@@ -79,7 +79,7 @@ Useful searches:
 
 ```bash
 rtk rg -n "Recover|Recovery|Replay|Restart|Scale|Failover|Incident|Preload|Compact|Manifest" src tests
-rtk rg -n "RawPut|RawGet|CompareAndSwap|Put\\(|Delete\\(|Rocks|Metastore|Etcd|SlotManifest" src/datasystem
+rtk rg -n "RawPut|RawGet|CompareAndSwap|Put\\(|Delete\\(|Rocks|Etcd|SlotManifest" src/datasystem
 rtk rg -n "INJECT_POINT|WaitUntil|Restart|ScaleDown|Recover|Compact" tests
 ```
 

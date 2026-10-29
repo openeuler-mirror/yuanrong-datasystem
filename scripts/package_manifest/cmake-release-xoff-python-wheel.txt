@@ -114,7 +114,6 @@ yr/datasystem/kv_client.py
 yr/datasystem/lib/libabseil_dll.so.2407.0.0
 yr/datasystem/lib/libaddress_sorting.so.42
 yr/datasystem/lib/libcommon_flags.so
-yr/datasystem/lib/libcommon_metastore_service.so
 yr/datasystem/lib/libcrypto.so.1.1
 yr/datasystem/lib/libcurl.so.4
 yr/datasystem/lib/libdatasystem.so

@@ -62,7 +62,7 @@ Branch 仅写入普通运行日志，不写入 operation 日志。构建系统�
 | 1 | 运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| message |
 | 2 | 访问日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| status_code \| action \| cost \| data size \| request param\| response param |
 | 3 | 访问第三方日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| status_code \| action \| cost \| data size \| request param\| response param |
-| 4 | 资源日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| shm info \| spill disk info \| client nums \| object nums \| object total datasize \| WorkerOcService threadpool \| WorkerWorkerOcService threadpool \| MasterWorkerOcService threadpool \| MasterOcService threadpool \| write ETCD queue \| ETCDrequest success rate \| OBSrequest success rate \| Master AsyncTask threadpool \| stream nums \| ClientWorkerSCService threadpool \| WorkerWorkerSCService threadpool \| MasterWorkerSCService threadpool \| MasterSCService threadpool \| remote stream push success rate \| scLocalCache info \| Cache Hit Info \| brpc stream leak count \| deferred cleanup queue size |
+| 4 | 资源日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| shm info \| spill disk info \| client nums \| object nums \| object total datasize \| WorkerOcService threadpool \| WorkerWorkerOcService threadpool \| MasterWorkerOcService threadpool \| MasterOcService threadpool \| ETCDrequest success rate \| OBSrequest success rate \| Master AsyncTask threadpool \| stream nums \| ClientWorkerSCService threadpool \| WorkerWorkerSCService threadpool \| MasterWorkerSCService threadpool \| MasterSCService threadpool \| remote stream push success rate \| scLocalCache info \| Cache Hit Info \| brpc stream leak count \| deferred cleanup queue size |
 | 5 | 流缓存数据日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| sc_metric |
 | 6 | 容器运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| message |
 
@@ -93,7 +93,6 @@ Branch 仅写入普通运行日志，不写入 operation 日志。构建系统�
 | WorkerWorkerOcService threadpool | 21 | threadpool使用信息 | 
 | MasterWorkerOcService threadpool | 21 | threadpool使用信息 | 
 | MasterOcService threadpool | 21 | threadpool使用信息 |
-| write ETCD queue | 15 | 队列使用信息 | 
 | ETCDrequest success rate | 6 | 请求成功率，单位 %,保留3位有效数字 | 
 | OBSrequest success rate | 6 | 请求成功率，单位 %,保留3位有效数字 | 
 | Master AsyncTask threadpool | 21 | threadpool使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate |
@@ -145,7 +144,7 @@ Branch 仅写入普通运行日志，不写入 operation 日志。构建系统�
 | `spill_hard_disk` | `space_usage`、`physical_space_usage`、`total_limit`、`worker_spill_hard_disk_usage` | Spill 磁盘使用 |
 | `active_client_count` / `object_count` / `object_size` | （标量） | Client 数 / 对象数 / 对象总大小 |
 | `worker_oc_service_thread_pool` 等 OC 线程池组 | 线程池五元组 | 线程池状态 |
-| `etcd_queue` / `etcd_request_success_rate` | 见 schema | ETCD 队列 / 成功率 |
+| `etcd_request_success_rate` | 见 schema | ETCD 请求成功率 |
 | `master_async_tasks_thread_pool` | 线程池五元组 | Master 异步任务线程池 |
 | `oc_hit_num` | 命中统计五元组 | 缓存命中统计 |
 | `brpc_stream_leak_count` | （标量） | brpc stream 有意泄漏计数 |
@@ -311,3 +310,5 @@ Worker 使用 `--urma_log_threshold_us`，C++ Client 使用 `KVClientConfig::Bui
 实际输出受日志级别控制，与 `enable_urma_perf` 独立。Worker 修改后需重启；Client 在进程首次
 `KVClient::Init` 时生效，后续实例共享该值，不支持热更新。
 回退旧版本前删除新增 Worker 参数；使用新 Builder 方法需配套新 SDK。
+
+对象元数据退出 ETCD 后，resource.log 删除队列位置列，后续列前移；按位置解析的外部消费方需同步升级。kv_resource.log 的 v0 表示 JSON 结构版本，指标组为可选字段集合，消费方必须容忍组缺失；本次移除队列组，不改变 JSON 结构版本。仓库资源分析脚本兼容含队列列与不含队列列的日志。

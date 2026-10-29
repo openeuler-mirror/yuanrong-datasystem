@@ -77,7 +77,6 @@
 // datasystem's spdlog-based macros.
 #include "datasystem/common/log/log.h"
 #include "datasystem/worker/worker_service_impl.h"
-#include "datasystem/common/kvstore/metastore/metastore_server.h"
 #include "datasystem/worker/rebalance_executor.h"
 #ifdef WITH_TESTS
 #include "st_oc_service_impl.h"
@@ -110,7 +109,7 @@ public:
      * @brief Create a new WorkerServer object.
      * @param[in] workerAddr Worker service address.
      * @param[in] bindAddr Local bind address.
-     * @param[in] coordinatorDiscovery Candidate provider. Null selects the ETCD/metastore backend.
+     * @param[in] coordinatorDiscovery Candidate provider. Null selects the ETCD backend.
      */
     WorkerOCServer(HostPort workerAddr, HostPort bindAddr,
                    std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery);
@@ -781,18 +780,6 @@ private:
     Status StopTopologyRuntime(std::chrono::steady_clock::time_point deadline);
 
     /**
-     * @brief Start metastore service on master worker.
-     * @return Status of this call.
-     */
-    Status StartMetaStoreService();
-
-    /**
-     * @brief Stop metastore service on master worker.
-     * @return Status of this call.
-     */
-    Status StopMetaStoreService();
-
-    /**
      * @brief Check if need scale in.
      * @return True if needed.
      */
@@ -855,7 +842,7 @@ private:
     std::shared_ptr<PersistenceApi> persistenceApi_{ nullptr };
     std::unique_ptr<object_cache::SlotRecoveryOrchestrator> slotRecoveryOrchestrator_{ nullptr };
     std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery_;
-    std::string etcdOrMetastoreAddress_;
+    std::string etcdAddress_;
     std::unique_ptr<EtcdStore> etcdStore_;
     std::unique_ptr<ICoordinatorServiceProxy> coordinatorServiceProxy_;
     std::unique_ptr<cluster::UbHealthLeaseSync> ubHealthLeaseSync_;
@@ -968,7 +955,6 @@ private:
     std::mutex checkAsyncTasksDoneMutex_;
 
     std::unique_ptr<WorkerLivenessCheck> livenessCheck_;
-    std::unique_ptr<MetaStoreServer> metaStoreServer_;
 #ifdef WITH_TESTS
     std::unique_ptr<st::StOCServiceImpl> utSvc_{ nullptr };
     std::unique_ptr<UtOCServiceBrpcAdapter> brpcUtOcAdapter_{ nullptr };  // brpc adapter for utSvc_.

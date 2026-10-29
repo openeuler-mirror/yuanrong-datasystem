@@ -1,5 +1,11 @@
 # ETCD Metadata Implementation Playbook
 
+Object metadata persistence is local to RocksDB. Object metadata, locations, deletion records and pending Worker
+operations do not use ETCD tables. Worker-to-Worker TCP migration retains its business protocol; the unused ETCD
+queue protobuf field remains declared but is neither populated nor replayed. The built-in compatibility service and
+its deployment parameters have been removed. External ETCD membership, leases, Watch, topology and slot coordination
+remain supported.
+
 ## Metadata
 
 - Status:
@@ -11,7 +17,6 @@
 - Primary code paths:
   - `third_party/protos/etcd`
   - `src/datasystem/common/kvstore/etcd`
-  - `src/datasystem/common/kvstore/metastore`
 - Related module docs:
   - `.repo_context/modules/runtime/etcd-metadata/README.md`
   - `.repo_context/modules/runtime/topology/README.md`
@@ -20,7 +25,6 @@
 - Related tests or validation entrypoints:
   - `tests/st/common/kvstore/etcd_store_test.cpp`
   - `tests/st/common/kvstore/grpc_session_test.cpp`
-  - `tests/ut/common/kvstore/metastore_server_test.cpp`
   - `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`
   - `tests/ut/cluster/coordination_backend_contract_test.cpp`
 - Last verified against source:
@@ -31,15 +35,14 @@
 - Why this playbook exists:
   - ETCD metadata changes can affect worker liveness, cluster membership, topology routing, metadata durability, and scale behavior.
 - What change class it standardizes:
-  - changes to ETCD proto usage, `EtcdStore`, `GrpcSession`, CAS/transaction behavior, watch handling, keepalive, auth/TLS, or Metastore.
+  - external ETCD client, lease, watch and topology coordination changes.
 - What risks it is meant to reduce:
-  - CAS storms, lost or duplicate events, accidental lease-less membership writes, inconsistent table prefixes, and divergence between external ETCD and Metastore behavior.
+  - lost membership events, unsafe CAS updates and recovery ordering regressions.
 
 ## When To Use This Playbook
 
 - Use when:
   - modifying `src/datasystem/common/kvstore/etcd/*`;
-  - modifying `src/datasystem/common/kvstore/metastore/*`;
   - changing ETCD proto build targets or generated API usage;
   - changing `ETCD_*` constants;
   - changing topology behavior that relies on watch, keepalive, or CAS semantics.
@@ -50,7 +53,6 @@
   - changing lease, keepalive, or local worker kill policy;
   - changing watch compensation or fake-event generation;
   - changing CAS retry behavior or transaction comparison target;
-  - changing Metastore transaction/revision/watch semantics.
 
 ## Preconditions
 
@@ -65,9 +67,7 @@
   - `grpc_session.h`
   - `etcd_constants.h`
   - relevant ETCD proto file in `third_party/protos/etcd`
-  - Metastore manager/service file if using `metastore_address`
 - Required assumptions to verify before coding:
-  - whether the change affects external ETCD, built-in Metastore, or both;
   - whether callers need the same table prefixes and watch revisions;
   - whether cluster-table writes remain lease-bound;
   - whether event handlers can see duplicate or fake events;
@@ -81,7 +81,6 @@
 | CAS pressure | does writer fanout or retry cadence change? | same or fewer writes | more full-value transactions or more retries |
 | liveness | can a worker be deleted or killed differently? | state string and lease policy unchanged | keepalive timeout, fake delete, or `SIGKILL` policy change |
 | watch semantics | can events be duplicated, suppressed, or reordered? | handler contract unchanged | compensation/filter/revision changes |
-| backend parity | does Metastore still match used ETCD semantics? | same KV/Txn/Watch behavior | revision, history, lease, or transaction differences |
 | security | does auth/TLS path change? | same config and metadata behavior | new session creation path or token handling |
 
 ## Source Verification Checklist
@@ -92,17 +91,14 @@
 - [ ] confirm watch `keyVersion_` update order relative to event handler
 - [ ] confirm fake events are version-aware and handler-safe
 - [ ] confirm ETCD writability checks on DELETE paths
-- [ ] confirm Metastore implements the same subset of ETCD behavior used by callers
 - [ ] confirm shutdown cancels watch, keepalive, and outstanding RPCs
 
 ## Implementation Plan
 
-1. Classify the change as proto/build, KV operation, CAS, watch, keepalive, auth/TLS, health, election, or Metastore.
-2. Identify direct runtime consumers, especially topology.
-3. Preserve existing table prefix and lease invariants unless the change is an explicit migration.
-4. If changing CAS or watch behavior, reason about concurrent scale-up, scale-down, worker restart, and ETCD restart.
-5. If changing Metastore, verify both external ETCD and Metastore tests or document the intentional difference.
-6. Update module context when behavior, test paths, or operational limits change.
+1. Identify direct runtime consumers, especially topology.
+2. Preserve existing table prefix and lease invariants unless the change is an explicit migration.
+3. If changing CAS or watch behavior, reason about concurrent scale-up, scale-down, worker restart, and ETCD restart.
+4. Update module context when behavior, test paths, or operational limits change.
 
 ## Guardrails
 
@@ -117,20 +113,17 @@
   - CAS retry limits or transaction comparison target;
   - local fake DELETE generation policy;
   - worker kill behavior tied to keepalive failure;
-  - Metastore revision/transaction behavior.
 - Must verify in source before claiming:
   - exact ETCD service method used;
-  - whether a code path uses external ETCD, Metastore, or a static transaction session;
   - whether the caller expects raw ETCD keys or table-relative keys.
 
 ## Validation Plan
 
 - Fast checks:
-  - targeted build for `common_etcd`, `common_metastore`, or nearest Bazel target.
+  - build `common_etcd` or the affected Bazel target, then run the matching coordination tests.
 - Representative tests:
   - `tests/st/common/kvstore/etcd_store_test.cpp`
   - `tests/st/common/kvstore/grpc_session_test.cpp`
-  - `tests/ut/common/kvstore/metastore_server_test.cpp`
   - `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`
   - `tests/ut/cluster/coordination_backend_contract_test.cpp`
 - Scenario checks:
@@ -138,7 +131,6 @@
   - watch stream failure and compensation;
   - lease expiration and cluster-table DELETE;
   - ETCD restart during worker restart;
-  - Metastore transaction with compare failure and success branches;
   - auth/TLS session creation if security path is touched.
 
 ## Review Checklist
@@ -147,7 +139,6 @@
 - [ ] CAS conflict behavior is acceptable under scale/failure fanout
 - [ ] watch handlers remain safe for fake or duplicate events
 - [ ] keepalive state transitions preserve topology membership expectations
-- [ ] Metastore and external ETCD behavior were compared for affected APIs
 - [ ] context docs were updated if behavior changed
 
 ## Context Update Requirements

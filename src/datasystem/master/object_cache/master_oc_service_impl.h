@@ -299,18 +299,6 @@ public:
     void AssignLocalWorker(object_cache::MasterWorkerOCServiceImpl *masterWorkerService);
 
     /**
-     * @brief Check whether there are any requests for asynchronously writing metadata to ETCD.
-     * @return True if there are unfinished async requests.
-     */
-    bool HaveAsyncMetaRequest();
-
-    /**
-     * @brief Get the usage of ETCD async queue.
-     * @return Usage: "currentSize/totalLimit/workerL2CacheQueueUsag".
-     */
-    std::string GetETCDAsyncQueueUsage();
-
-    /**
      * @brief Get the async threadpool usage of master (interval-based, resets counters).
      * @param[in] intervalMs Collection interval in milliseconds.
      * @return Usage: "maxRunning/total/tasksDelta/maxWaiting/usage".
@@ -492,7 +480,6 @@ private:
     object_cache::MasterWorkerOCServiceImpl *masterWorkerOCService_{ nullptr };
     const cluster::MembershipEndpointView *topologyMembership_{ nullptr };
     std::string localAddress_;
-    EtcdStore *etcdStore_;
     std::unique_ptr<ThreadPool> reconciliationAsyncPool_;
     MetadataManagerHolder *metadataManagerHolder_;
     ResourceManager *resourceManager_;

@@ -71,6 +71,7 @@ struct BrpcChannelConfig {
     /// Default true. Set false per-channel for internal mesh paths where
     /// isolating a peer under momentary back-pressure would amplify failure.
     bool enable_circuit_breaker = true;
+    std::string connection_group;
 };
 
 Status InitializeBrpcChannel(const BrpcChannelConfig &cfg, brpc::Channel &channel);

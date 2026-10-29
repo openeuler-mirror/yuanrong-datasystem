@@ -175,6 +175,7 @@ Status InitializeBrpcChannel(const BrpcChannelConfig &cfg, brpc::Channel &channe
     EnsureBrpcMaxConnectionPoolSize();
     brpc::ChannelOptions opts;
     opts.timeout_ms = cfg.timeout_ms;
+    opts.connection_group = cfg.connection_group;
     opts.connect_timeout_ms = cfg.connect_timeout_ms;
     opts.connection_type = brpc::CONNECTION_TYPE_POOLED;
     // P2-3: circuit breaker auto-isolates peers with high error rates so a

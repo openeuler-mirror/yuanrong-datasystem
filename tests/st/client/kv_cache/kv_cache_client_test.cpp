@@ -905,7 +905,7 @@ TEST_F(KVCacheClientTest, TestSetFail)
     DS_ASSERT_OK(FindKeyRoutedToWorker(0, "test_set_fail_", key));
     SetParam param;
     param.writeMode = WriteMode::WRITE_THROUGH_L2_CACHE;
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "PutToEtcdStore.failed", "1*return(K_RUNTIME_ERROR)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.create_meta_failure", "1*return(K_RUNTIME_ERROR)"));
     DS_ASSERT_NOT_OK(client->Set(key, "aaaaaaa", param));
     std::string val;
     ASSERT_EQ(client->Get({ key }, val).GetCode(), K_NOT_FOUND);

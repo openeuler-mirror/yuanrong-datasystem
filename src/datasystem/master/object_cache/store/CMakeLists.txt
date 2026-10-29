@@ -1,5 +1,4 @@
 set(MASTER_OC_STORE_SRCS
-        meta_async_queue.cpp
         object_meta_store.cpp
         ${MASTER_OBJECT_CACHE_PROTO_SRCS})
 

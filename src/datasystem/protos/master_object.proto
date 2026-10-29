@@ -571,6 +571,7 @@ message MigrateNestedMetaDataRspPb {
 
 message MigrateMetadataRspPb {
   repeated Status results = 1;
+  bool supports_task_only_worker_ops = 2;
 
   enum Status {
     SUCCESSFUL = 0;

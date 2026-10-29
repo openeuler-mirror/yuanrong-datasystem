@@ -39,7 +39,7 @@ Use it to jump from a question type to the smallest useful document instead of r
 | understand worker object cache eviction, END_LIFE, spill eviction, or master metadata cleanup from eviction | `modules/runtime/object-cache-eviction/README.md` | `src/datasystem/worker/object_cache/worker_oc_eviction_manager.*`, `src/datasystem/worker/object_cache/worker_oc_spill.*`, `src/datasystem/master/object_cache/oc_metadata_manager.*` |
 | understand runtime topology, worker membership, route lookup, scale, restart, or degraded startup | `modules/runtime/topology/README.md` | `src/datasystem/cluster`, `src/datasystem/protos/cluster_topology.proto`, `src/datasystem/worker/worker_oc_server.cpp` |
 | understand the dscli cluster member cleanup command design for removing stale topology records by worker address | `docs/source_zh_cn/design_document/dscli_cluster_member_cleanup_detailed.md` | `cli/delete.py`, `src/datasystem/client/cluster_admin/cluster_admin_client.cpp`, `src/datasystem/client/cluster_query/cluster_query_client.cpp`, `src/datasystem/cluster/repository/topology_repository_codec.cpp` |
-| understand ETCD proto/client access, watch, keepalive, CAS, or Metastore behavior | `modules/runtime/etcd-metadata/README.md` | `third_party/protos/etcd`, `src/datasystem/common/kvstore/etcd`, `src/datasystem/common/kvstore/metastore` |
+| understand ETCD proto/client access, watch, keepalive, CAS behavior | `modules/runtime/etcd-metadata/README.md` | `third_party/protos/etcd`, `src/datasystem/common/kvstore/etcd` |
 | understand shared infra used across modules | `modules/infra/common-infra.md` | `src/datasystem/common/*` |
 | understand l2 cache architecture, backend boundaries, or when a change needs design-first handling | `modules/infra/l2cache/design.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/worker/worker_oc_server.cpp` |
 | understand `l2_cache_type` backend selection, flags, or `PersistenceApi` dispatch | `modules/infra/l2cache/l2-cache-type.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/common/flags/*`, `src/datasystem/worker/worker_oc_server.cpp` |
@@ -86,7 +86,7 @@ Use it to jump from a question type to the smallest useful document instead of r
 | Coordinator election | `modules/runtime/coordinator-election/README.md` | `src/datasystem/coordinator/raft`, `tests/ut/common/coordinator`, `tests/st/common/raft`, `src/datasystem/coordinator/CMakeLists.txt` |
 | object cache eviction | `modules/runtime/object-cache-eviction/README.md` | `src/datasystem/worker/object_cache/worker_oc_eviction_manager.*`, `src/datasystem/worker/object_cache/eviction_list.*`, `src/datasystem/worker/object_cache/worker_oc_spill.*` |
 | runtime topology | `modules/runtime/topology/README.md` | `src/datasystem/cluster`, `src/datasystem/protos/cluster_topology.proto`, `src/datasystem/worker/worker_oc_server.cpp` |
-| ETCD metadata backend | `modules/runtime/etcd-metadata/README.md` | `third_party/protos/etcd`, `src/datasystem/common/kvstore/etcd`, `src/datasystem/common/kvstore/metastore` |
+| ETCD coordination backend | `modules/runtime/etcd-metadata/README.md` | `third_party/protos/etcd`, `src/datasystem/common/kvstore/etcd` |
 | common infrastructure | `modules/infra/common-infra.md` | `src/datasystem/common` |
 | l2 cache and secondary storage | `modules/infra/l2cache/README.md` | `src/datasystem/common/l2cache`, `src/datasystem/worker/object_cache/slot_recovery*` |
 | l2 cache architecture | `modules/infra/l2cache/design.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/worker/worker_oc_server.cpp` |

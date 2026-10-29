@@ -269,8 +269,7 @@ TEST_F(OCClientRefTest, TestClientDisconnectFailed)
         ASSERT_EQ(m, 1);
     }
 
-    // w3到etcd网络故障 NODE_TIMEOUT_S: 5, the inject worker index is 2
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "etcd.failed.add.deleteobjecttoetcd", "2*return()"));
+
     client1.reset();
 
     sleep(10);  // sleep 10 to wait for async decrease

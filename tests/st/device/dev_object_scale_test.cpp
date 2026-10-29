@@ -88,10 +88,6 @@ public:
         if ((db_ != nullptr) && (db_->Init().IsOk())) {
             // We don't check rc here. If table to drop does not exist, it's fine.
             (void)RegisterTopologyTables(*db_);
-            (void)db_->CreateTable(std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_HASH_SUFFIX,
-                                   std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_HASH_SUFFIX);
-            (void)db_->CreateTable(std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_WORKER_SUFFIX,
-                                   std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_WORKER_SUFFIX);
         }
     }
 

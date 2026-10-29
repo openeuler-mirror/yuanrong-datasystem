@@ -35,13 +35,6 @@ static constexpr char WATCH_WRITE[] = "watch run";
 static constexpr char WRITES_DONE[] = "writes done";
 static constexpr char ETCD_MEMBERSHIP_KEY_SEGMENT[] = "/cluster/";
 static constexpr char ETCD_SLOT_RECOVERY_TABLE[] = "/datasystem/slot_recovery";
-// Save key without worker id metadata
-static constexpr char ETCD_META_TABLE_PREFIX[] = "/datasystem/metadata/meta_table/";
-static constexpr char ETCD_LOCATION_TABLE_PREFIX[] = "/datasystem/metadata/object_location_table/";
-static constexpr char ETCD_ASYNC_WORKER_OP_TABLE_PREFIX[] = "/datasystem/metadata/async_worker_op_table/";
-static constexpr char ETCD_GLOBAL_CACHE_TABLE_PREFIX[] = "/datasystem/metadata/global_cache_table/";
-static constexpr char ETCD_HASH_SUFFIX[] = "hash";
-static constexpr char ETCD_WORKER_SUFFIX[] = "worker_id";
 
 static constexpr char ETCD_NODE_EXITING[] = "exiting";
 static constexpr char ETCD_NODE_READY[] = "ready";

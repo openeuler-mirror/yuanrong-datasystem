@@ -188,10 +188,10 @@
 - External protocols, schemas, or data formats:
   - one filesystem-backed Worker probe: existence records startup commit and mtime records liveness renewal;
   - severity log files, access log lines, resource monitor lines, and crash logs;
-  - topology metadata behavior through ETCD or Metastore-backed runtime paths.
+  - topology metadata behavior through ETCD-backed runtime paths.
 - CLI commands, config flags, or environment variables:
   - runtime health and operations flags such as `health_check_path`, `liveness_probe_timeout_s`, `log_monitor`,
-    `log_monitor_exporter`, `log_monitor_interval_ms`, `log_dir`, `etcd_address`, and `metastore_address`
+    `log_monitor_exporter`, `log_monitor_interval_ms`, `log_dir`, `etcd_address`, and `coordinator_address`
   - test and reproduction entrypoints through `build.sh`
 - Background jobs, threads, or callbacks:
   - logging background maintenance;
@@ -309,7 +309,7 @@ Failure-sensitive steps:
   - health decisions depend on both process state and signal state.
 - Critical upstream services or modules:
   - worker startup and service initialization;
-  - metadata backends such as ETCD or Metastore;
+  - metadata backends such as ETCD;
   - local filesystem for logs and probe files.
 - Critical downstream services or modules:
   - operator probes and automation reading Worker probe existence and mtime;
@@ -343,7 +343,7 @@ Failure-sensitive steps:
 | `log_monitor` | gflag | shared observability flag | enables monitor logs and metrics collection | missing monitor evidence may be config-driven, not runtime failure |
 | `log_monitor_exporter` | gflag | metrics collector config | chooses monitor exporter backend | invalid value prevents monitor collection |
 | `log_dir` | gflag or env override | logging config | controls log and monitor file location | misconfigured path hides evidence |
-| `etcd_address` / `metastore_address` | gflag or config | runtime and cluster config | selects metadata backend | wrong backend config causes routing or readiness anomalies |
+| `etcd_address` / `coordinator_address` | gflag or config | runtime and cluster config | selects metadata backend | wrong backend config causes routing or readiness anomalies |
 
 ## Examples And Migration Notes
 

@@ -631,7 +631,7 @@
   Store revision. Candidate and control-epoch revalidation precede a topology CAS that checks the same global revision
   atomically under the Store write lock. A membership replacement, expiry, or any other committed Store mutation in
   between preserves the old topology and retries reconciliation; keepalive renewal does not advance the Store revision.
-- Worker startup selects the coordination backend once: a non-null `ICoordinatorDiscovery` selects Coordinator mode, while a null pointer selects ETCD/metastore. All Worker composition branches use that constructor-selected pointer instead of independently re-reading `coordinator_address`.
+- Worker startup selects the coordination backend once: a non-null `ICoordinatorDiscovery` selects Coordinator mode, while a null pointer selects ETCD. All Worker composition branches use that constructor-selected pointer instead of independently re-reading `coordinator_address`.
 - At most one change type is active at a time; one batch may contain many members. Failure has highest priority and may
   preempt ordinary work. With no active batch, a READY ScaleOut candidate starts before pending ScaleIn candidates;
   ScaleIn then resumes after the replacement becomes `ACTIVE`. ScaleIn waits for an already-running ScaleOut batch, and

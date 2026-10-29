@@ -25,7 +25,6 @@
   - `src/datasystem/common/memory/CMakeLists.txt`
   - `src/datasystem/common/kvstore/CMakeLists.txt`
   - `src/datasystem/common/kvstore/etcd/CMakeLists.txt`
-  - `src/datasystem/common/kvstore/metastore/CMakeLists.txt`
   - `src/datasystem/common/kvstore/rocksdb/CMakeLists.txt`
   - `src/datasystem/common/log/CMakeLists.txt`
   - `src/datasystem/common/metrics/CMakeLists.txt`
@@ -57,7 +56,7 @@
 | `rpc`                   | RPC plumbing, generation plugins and the current BRPC transport | builds `rpc_plugin` / `zmq_plugin`, `common_rpc_zmq`, `common_rpc_zmq_client`, `rpc_stub_cache_mgr`; CMake keeps historical zmq target names (`rpc/CMakeLists.txt`), while Bazel exposes BRPC-specific components (`rpc/BUILD.bazel`) |
 | `shared_memory`         | shared-memory allocator, arena, mmap abstractions         | builds `common_shared_memory` and `common_shm_unit_info`                             |
 | `memory`                | reusable process-memory diagnostics                                               | builds `jemalloc_stats_bvar`; roles link and own it explicitly                       |
-| `kvstore`               | metadata/backend storage families                                                | split into `etcd`, `metastore`, `rocksdb`                                            |
+| `kvstore`               | metadata/backend storage families                                                | split into `etcd`, `rocksdb`                                            |
 | `log`                   | logging, access recording, tracing, failure handling                             | builds `common_log`                                                                  |
 | `metrics`               | resource metrics and exporters                                                   | builds `common_metrics` and exporter base                                            |
 | `rdma`                  | fast transport wrappers and optional URMA/RDMA support                           | conditional build based on feature flags                                             |
@@ -99,12 +98,10 @@ Detailed follow-up docs now exist for:
 ## Storage And Metadata Backends
 
 - Verified:
-  - `kvstore` has three current backend families:
+  - `kvstore` has two current backend families:
     - `etcd`
-    - `metastore`
     - `rocksdb`
   - ETCD layer provides store, keep-alive, watch, health, and gRPC session pieces.
-  - Metastore builds a lightweight ETCD-compatible shared service with KV, lease, watch, and maintenance service implementations.
   - RocksDB layer provides local persistent store and replica-related components.
 
 ## Transport And Memory Notes
@@ -404,7 +401,7 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
   - backend changes in `kvstore` can influence cluster coordination, metadata, and recovery behavior.
 - Useful debugging orientation:
   - if a problem spans modules, check whether the common layer is the real coupling point before blaming business logic;
-  - if a bug touches ETCD, Metastore, or RocksDB persistence, keep `common-infra` and `cluster-management` docs open together.
+  - if a bug touches ETCD or RocksDB persistence, keep `common-infra` and `cluster-management` docs open together.
 
 ## Recommended Next Split
 

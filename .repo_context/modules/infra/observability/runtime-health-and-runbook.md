@@ -47,7 +47,7 @@
 3. Is that file's mtime fresh? Its content has no health meaning.
 4. Are ordinary logs updating under `log_dir`?
 5. Are resource monitor files present when `log_monitor` is enabled?
-6. Is metadata backend config (`etcd_address` or `metastore_address`) valid for this node?
+6. Is metadata backend config (`etcd_address` or `coordinator_address`) valid for this node?
 
 ## Common Operator Actions
 

@@ -9,8 +9,6 @@ ds_cc_library(
     deps = [
         "//src/datasystem/common/util:common_util",
         "//src/datasystem/common/inject:common_inject",
-        "//src/datasystem/common/kvstore/etcd:etcd_constants",
-        "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/kvstore/rocksdb:rocks_store",
         "//src/datasystem/common/object_cache:object_base",
@@ -18,11 +16,5 @@ ds_cc_library(
         "//src/datasystem/protos:master_object_cc_proto",
         "//src/datasystem/common/kvstore/rocksdb:replica",
         "//src/datasystem/common/util:hash_algorithm",
-        "//src/datasystem/common/util:request_counter",
     ],
-)
-
-alias(
-    name = "meta_async_queue",
-    actual = "object_meta_store",
 )

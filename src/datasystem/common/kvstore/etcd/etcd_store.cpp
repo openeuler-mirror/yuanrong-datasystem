@@ -42,7 +42,6 @@
 #include "etcd/api/etcdserverpb/rpc.pb.h"
 
 DS_DECLARE_string(etcd_address);
-DS_DEFINE_string(metastore_address, "", "Address of metastore server");
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_string(cluster_name);
@@ -61,9 +60,6 @@ constexpr int NETWORK_FAILURE_CONFIRM_MIN_TIMES = 3;
 
 static std::string GetBackendAddress()
 {
-    if (!FLAGS_metastore_address.empty()) {
-        return FLAGS_metastore_address;
-    }
     return FLAGS_etcd_address;
 }
 

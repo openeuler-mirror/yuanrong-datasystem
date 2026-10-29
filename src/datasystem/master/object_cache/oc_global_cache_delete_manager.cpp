@@ -22,7 +22,6 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/locks.h"
@@ -51,11 +50,10 @@ namespace datasystem {
 namespace master {
 OCGlobalCacheDeleteManager::OCGlobalCacheDeleteManager(std::shared_ptr<ObjectMetaStore> objectStore,
                                                        std::shared_ptr<PersistenceApi> persistApi,
-                                                       bool backendStoreExist, const std::string &masterAddress)
+                                                       const std::string &masterAddress)
     : persistenceApi_(persistApi),
       objectStore_(std::move(objectStore)),
-      interruptFlag_(false),
-      backendStoreExist_(backendStoreExist)
+      interruptFlag_(false)
 {
     (void)masterAddr_.ParseString(masterAddress);
 }
@@ -71,7 +69,7 @@ OCGlobalCacheDeleteManager::~OCGlobalCacheDeleteManager()
 Status OCGlobalCacheDeleteManager::Init()
 {
     supportL2Storage_ = GetCurrentStorageType();
-    RETURN_IF_NOT_OK_APPEND_MSG(RecoverDeletedIds(backendStoreExist_),
+    RETURN_IF_NOT_OK_APPEND_MSG(RecoverDeletedIds(),
                                 "Recover global cache delete ids from rocksdb failed");
     if (!IsSupportL2Storage(supportL2Storage_)) {
         LOG(INFO) << "Start without l2cache, l2 cache address is empty.";
@@ -139,7 +137,7 @@ void OCGlobalCacheDeleteManager::ProcessDeleteObjects()
 
 Status OCGlobalCacheDeleteManager::InsertDeletedObject(const std::string &objectKey, uint64_t objectVersion,
                                                        uint64_t delVersion, const std::string &targetWorkerAddress,
-                                                       bool needPersist, ObjectMetaStore::WriteType type)
+                                                       bool needPersist)
 {
     if (UseWorkerDeleteRpc() && targetWorkerAddress.empty()) {
         constexpr int times = 10;
@@ -147,10 +145,8 @@ Status OCGlobalCacheDeleteManager::InsertDeletedObject(const std::string &object
         return Status::OK();
     }
     if (needPersist) {
-        VLOG(2) << "Insert global cache delete to etcd, obejct: " << objectKey
-                << ", type: " << static_cast<uint32_t>(type);
         RETURN_IF_NOT_OK(objectStore_->AddDeletedObjectWithDelVersion(objectKey, objectVersion, delVersion,
-                                                                      targetWorkerAddress, type));
+                                                                      targetWorkerAddress));
     }
     std::lock_guard<SharedMutex> lck(mutex_);
     // The objectKey of the inserted deleteIds_ map is combined with the version to prevent objects of the old version
@@ -345,15 +341,12 @@ void OCGlobalCacheDeleteManager::GetDeletedObjects(std::map<std::string, DeleteM
     deleteIds = deleteIds_;
 }
 
-Status OCGlobalCacheDeleteManager::RecoverDeletedIds(bool isFromRocksdb)
+Status OCGlobalCacheDeleteManager::RecoverDeletedIds()
 {
-    std::vector<std::pair<std::string, std::string>> deleteObjects;
-    if (objectStore_->IsRocksdbRunning() && isFromRocksdb && objectStore_->IsRocksdbEnableWriteMeta()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(GLOBAL_CACHE_TABLE, deleteObjects),
-                                         "Load global cache delete objects from rocksdb failed.");
-    }
-
-    return RecoverTopologyDeletedIds(deleteObjects);
+    RETURN_OK_IF_TRUE(!objectStore_->IsPersistenceEnabled());
+    std::vector<std::pair<std::string, std::string>> records;
+    RETURN_IF_NOT_OK(objectStore_->GetAllFromRocks(GLOBAL_CACHE_TABLE, records));
+    return RecoverTopologyDeletedIds(records);
 }
 
 Status OCGlobalCacheDeleteManager::RecoverTopologyDeletedIds(
@@ -362,7 +355,7 @@ Status OCGlobalCacheDeleteManager::RecoverTopologyDeletedIds(
     LOG(INFO) << "Recover delete object count:" << deleteObjects.size();
     for (const auto &info : deleteObjects) {
         const std::string &key = info.first;
-        // The key structure in tables GLOBAL_CACHE_TABLE and ETCD_GLOBAL_CACHE_TABLE_PREFIX is:
+        // The key structure in GLOBAL_CACHE_TABLE is:
         // key = objectKey+"/"+version.
         auto pos = key.find_last_of('/');
         if (pos == std::string::npos) {
@@ -381,10 +374,6 @@ Status OCGlobalCacheDeleteManager::RecoverTopologyDeletedIds(
             continue;
         }
         Status status = InsertDeletedObject(objectKey, objectVersion, delVersion, targetWorkerAddress, false);
-        uint32_t hash;
-        std::string table;
-        objectStore_->GetHashAndTable(objectKey, ETCD_GLOBAL_CACHE_TABLE_PREFIX, hash, table);
-        objectStore_->InsertToEtcdKeyMap(table, key, hash, true);
         if (status.IsError()) {
             LOG(WARNING) << "Load global cache delete objects failed.";
         }
@@ -456,7 +445,7 @@ GlobalDeleteInfoMap OCGlobalCacheDeleteManager::GetDeletedInfosMatch(
     return ret;
 }
 
-void OCGlobalCacheDeleteManager::InsertDeletedObjectFromMigrateNode(const MetaForMigrationPb &objMeta)
+Status OCGlobalCacheDeleteManager::InsertDeletedObjectFromMigrateNode(const MetaForMigrationPb &objMeta)
 {
     for (const auto &delInfo : objMeta.global_cache_dels()) {
         const auto &objectKey = objMeta.object_key();
@@ -464,13 +453,10 @@ void OCGlobalCacheDeleteManager::InsertDeletedObjectFromMigrateNode(const MetaFo
         auto delVersion = delInfo.delete_version();
         VLOG(1) << FormatString("Save one global cache delete, object key: %s, object version: %d, delete version: %d",
                                 objectKey, objectVersion, delVersion);
-        (void)InsertDeletedObject(objMeta.object_key(), objectVersion, delVersion, delInfo.target_worker_address(),
-                                  false);
-        uint32_t hash;
-        std::string table;
-        objectStore_->GetHashAndTable(objMeta.object_key(), ETCD_GLOBAL_CACHE_TABLE_PREFIX, hash, table);
-        objectStore_->InsertToEtcdKeyMap(table, objectKey + "/" + std::to_string(objectVersion), hash, true);
+        RETURN_IF_NOT_OK(InsertDeletedObject(objectKey, objectVersion, delVersion,
+                                             delInfo.target_worker_address(), true));
     }
+    return Status::OK();
 }
 
 void OCGlobalCacheDeleteManager::AssignLocalWorker(object_cache::MasterWorkerOCServiceImpl *service)

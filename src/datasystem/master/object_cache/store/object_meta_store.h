@@ -17,45 +17,32 @@
 #ifndef DATASYSTEM_MASTER_OBJECT_CACHE_STORE_OBJECTMETA_STORE_H
 #define DATASYSTEM_MASTER_OBJECT_CACHE_STORE_OBJECTMETA_STORE_H
 
-#include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <set>
-#include <shared_mutex>
 #include <string>
-#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
-
-#include <securec.h>
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/locks.h"
 #include "datasystem/common/constants.h"
-#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/kvstore/rocksdb/rocks_store.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/common/util/thread_pool.h"
-#include "datasystem/common/util/thread.h"
-#include "datasystem/master/object_cache/store/meta_async_queue.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
 namespace master {
-static const std::string HEALTH_STATUS = "ready";
 // Mark whether the reference counting metadata stored in rocksdb is in or out of the cloud.
 static const std::string REMOTE_CLIENT_FLAG = "?remoteClient";
 
 static const std::string LIVENESS_CHECK = "liveness_check";
 static const std::string LIVENESS_OK = "ok";
-
-std::string Hash2Str(uint32_t hash);
-
-const int QUEUE_CAPACITY = 10000;
-const uint32_t ETCD_META_POOL_SIZE = 8;
 
 // The odd-numbered bits are used to store notifications to the masters, and the even-numbered bits are used to store
 // notifications to the workers.
@@ -90,13 +77,13 @@ void FillNotifyWorkerOpDetailPb(const NotifyWorkerOp &op, ObjectAsyncOpDetailPb 
 
 class ObjectMetaStore {
 public:
-    enum WriteType : uint8_t { ROCKS_ONLY = 0, ROCKS_ASYNC_ETCD = 1, ROCKS_SYNC_ETCD = 2 };
+
     /**
      * @brief Construct ObjectMetaStore.
      */
-    ObjectMetaStore(RocksStore *rocksStore, EtcdStore *etcdStore, bool isEnable = true);
+    explicit ObjectMetaStore(RocksStore *rocksStore, bool isEnable = true);
 
-    ~ObjectMetaStore();
+    ~ObjectMetaStore() = default;
 
     /**
      * @brief Used path backStorePath to start rocksdb in rocksStore.
@@ -126,38 +113,23 @@ public:
      * @brief Create object meta in Rocksdb.
      * @param[in] objectKey object key parameters.
      * @param[in] serializedStr serializedStr of the object meta.
-     * @param[in] type Kv write type.
      * @return Status of the call.
      */
-    Status CreateOrUpdateMeta(const std::string &objectKey, const std::string &serializedStr,
-                              WriteType type = ROCKS_ONLY);
+    Status CreateOrUpdateMeta(const std::string &objectKey, const std::string &serializedStr);
 
     /**
-     * @brief Put  a batch of objects into rocks and etcd.
+     * @brief Put a batch of objects into RocksDB.
      * @param[in] metaInfos The metaInfos of a batch of objects to insert.
-     * @param[in] type write type for object.
      * @return Status of the call.
      */
-    Status CreateOrUpdateBatchMeta(std::unordered_map<std::string, std::string> &metaInfos, WriteType type);
-
-    /**
-     * @brief Put  a batch of objects into rocks and etcd.
-     * @param[in] table the KvStore table name to get all pairs
-     * @param[in] metaInfos The metaInfos of a batch of objects to insert.
-     * @param[in] type write type for object.
-     * @param[in] needSaveToEtcd if need to save in etcd.
-     * @return Status of the call.
-     */
-    Status BatchPutToEtcdStore(const std::string &tablePrefix, std::unordered_map<std::string, std::string> &metaInfos,
-                               WriteType type, bool needSaveToEtcd);
+    Status CreateOrUpdateBatchMeta(std::unordered_map<std::string, std::string> &metaInfos);
 
     /**
      * @brief Remove object meta from Rocksdb.
      * @param[in] key The object meta key to be removed, in format of objectKey_workerAddr.
-     * @param[in] needRemoveEtcdData Indicates whether to delete etcd data.
      * @return Status of the call.
      */
-    Status RemoveMeta(const std::string &key, bool needRemoveEtcdData = true);
+    Status RemoveMeta(const std::string &key);
 
     /**
      * @brief Add object location to rocksdb.
@@ -240,21 +212,18 @@ public:
      * @param[in] workerAddr Address of worker.
      * @param[in] objectKey The id of object.
      * @param[in] op To be add operation.
-     * @param[in] type Kv write type.
      * @return Status of the call.
      */
-    Status AddAsyncWorkerOp(const std::string &workerAddr, const std::string &objectKey, const NotifyWorkerOp &op,
-                            WriteType type = ROCKS_ONLY);
+    Status AddAsyncWorkerOp(const std::string &workerAddr, const std::string &objectKey,
+                            const NotifyWorkerOp &op, bool waitForCompletion = false);
 
     /**
      * @brief Remove an operation that requires asynchronous notification to the worker.
      * @param[in] workerAddr Address of worker.
      * @param[in] objectKey The id of object.
-     * @param[in] needRemoveEtcdData Indicates whether to delete etcd data.
      * @return Status of the call.
      */
-    Status RemoveAsyncWorkerOp(const std::string &workerAddr, const std::string &objectKey,
-                               bool needRemoveEtcdData = true);
+    Status RemoveAsyncWorkerOp(const std::string &workerAddr, const std::string &objectKey);
 
     /**
      * @brief Remove op from Rocksdb by worker address.
@@ -301,21 +270,19 @@ public:
      * @brief Add global cache deleted object to Rocksdb.
      * @param[in] objectKey The id of global cache to delete.
      * @param[in] version The version of global cache to delete.
-     * @param[in] type Kv write type.
      * @return Status of the call.
      */
-    Status AddDeletedObject(const std::string &objectKey, uint64_t version, WriteType type = ROCKS_ONLY);
+    Status AddDeletedObject(const std::string &objectKey, uint64_t version);
 
     /**
      * @brief Add global cache deleted object to Rocksdb.
      * @param[in] objectKey The id of global cache to delete.
      * @param[in] version The version of the object.
      * @param[in] delVersion The version of global cache to delete.
-     * @param[in] type Kv write type.
      * @return Status of the call.
      */
     Status AddDeletedObjectWithDelVersion(const std::string &key, uint64_t version, uint64_t delVersion,
-                                          const std::string &targetWorkerAddress = "", WriteType type = ROCKS_ONLY);
+                                          const std::string &targetWorkerAddress = "");
 
     /**
      * @brief Remove the id of global cache to delete.
@@ -331,206 +298,18 @@ public:
                                          uint64_t &delVersion, std::string &targetWorkerAddress);
 
     /**
-     * @brief Get hash and table name.
-     * @param[in] objKey Object key.
-     * @param[in] tablePrefix table prefix name.
-     * @param[out] hash The hash value of the key.
-     * @param[out] table Table name.
-     */
-    void GetHashAndTable(const std::string &objKey, const std::string &tablePrefix, uint32_t &hash, std::string &table);
-
-    /**
-     * @brief Insert the id to etcdKeyMap.
-     * @param[in] table etcd table name.
-     * @param[in] key object key.
-     * @param[in] hash hash value.
-     * @param[in] isAsync is Async or not.
-     */
-    void InsertToEtcdKeyMap(const std::string &table, const std::string &key, uint32_t hash, bool isAsync);
-
-    /**
-     * @brief For test purpose only.
-     * @return True is queue is empty.
-     */
-    bool AsyncQueueEmpty();
-
-    /**
-     * @brief Obtains the usage of the queue for asynchronously writing ETCD data.
-     * @note currentSize: the number of tasks in the current queue.
-     * totalLimit:  the maximum queue capacity
-     * @return The Usage: "currentSize/totalLimit/workerL2CacheQueueUsag"
-     */
-    std::string GetETCDAsyncQueueUsage();
-
-    /**
-     * @brief Check if rocksdb is trustworthy or not.
-     * @return True if rocksdb is trustworthy.
-     */
-    bool IsRocksdbRunning()
-    {
-        return isRocksdbRunning_;
-    }
-
-    /**
-     * @brief Check whether to support metadata written to rocksdb.
-     * @return True if support metadata written to rocksdb.
-     */
-    bool IsRocksdbEnableWriteMeta();
-
-    /**
-     * @brief Change rocksdb to running.
-     */
-    void ChangeRocksdbToRunning()
-    {
-        isRocksdbRunning_ = true;
-    }
-
-    /**
-     * @brief Put a new key-value into a table in rocks store.
-     * @param[in] tableName The table name for the <key,value> to insert.
-     * @param[in] key The key to add to the table.
-     * @param[in] value The value to add to the table.
-     * @return Status of the call.
-     */
-    Status PutToRocksStore(const std::string &tableName, const std::string &key, const std::string &value)
-    {
-        return rocksStore_->Put(tableName, key, value);
-    }
-
-    /**
-     * @brief Add rocksdb health tag.
-     * @return Status of the call.
-     */
-    Status AddRocksdbHealthTag();
-
-    /**
-     * @brief Rocksdb health check.
-     * @return true Rocksdb health check success.
-     */
-    bool CheckHealth();
-
-    /**
      * @brief Liveness check rocksdb.
      * @return Status of the call.
      */
     Status LivenessCheckRocksdb();
 
-    /**
-     * @brief Get metas match function.
-     * @param[in] matchFunc Match function.
-     * @param[out] objAsyncMap Object async element map.
-     */
-    void GetMetasMatch(std::function<bool(const std::string &)> &&matchFunc,
-                       std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &objAsyncMap);
-
-    /**
-     * @brief Poll async elements by object key.
-     * @param[in] objectKey Object key.
-     * @param[out] elements Async elements.
-     */
-    void PollAsyncElementsByObjectKey(const std::string &objectKey,
-                                      std::unordered_set<std::shared_ptr<AsyncElement>> &elements);
-
-    /**
-     * @brief Insert wait async elements to object meta store.
-     * @param[in] objectKey Object key.
-     * @param[in] table Table name.
-     * @param[in] key Etcd key.
-     * @param[in] value Etcd value.
-     * @param[in] reqType Request type.
-     * @param[in] timestamp Begin timestamp.
-     * @param[in] traceId Trace ID.
-     */
-    void InsertWaitAsyncElements(const std::string &objectKey, const std::string &table, const std::string &key,
-                                 const std::string &value, AsyncElement::ReqType reqType, uint64_t timestamp,
-                                 const std::string &traceId);
-
 private:
-
-    /**
-     * @brief Check if etcd enable.
-     * @return Status of the call.
-     */
-    bool EtcdEnable() const
-    {
-        return (etcdStore_ != nullptr) && enableEtcdMetaStore_;
-    }
-
-    /**
-     * @brief Init Etcd store.
-     * @return Status of the call.
-     */
-    Status InitEtcdStore();
 
     /**
      * @brief Init rocksdb store.
      * @return Status of the call.
      */
     Status InitRocksStore();
-
-    /**
-     * @brief Print warn log if need.
-     */
-    void WarnIfNeed();
-
-    /**
-     * @brief Hash function.
-     * @param[in] key Object key.
-     * @return hash code of the full object key.
-     */
-    uint32_t HashFunction(const std::string &key);
-
-    /**
-     * @brief Add KV to etcd store.
-     * @param[in] tablePrefix ETCD table prefix.
-     * @param[in] key Key need to store.
-     * @param[in] value Value need to store
-     * @param[in] type Kv write type.
-     * @param[in] needSaveToEtcd Default is true. If false, only write to memory, not write through etcd.
-     * @return Status of the call.
-     */
-    Status PutToEtcdStore(const std::string &tablePrefix, const std::string &objKey, const std::string &key,
-                          const std::string &value, WriteType type);
-
-    /**
-     * @brief Remove key from etcd store.
-     * @param[in] objectKey Object key.
-     * @param[in] key Key need to store.
-     * @param[in] tablePrefix ETCD table prefix.
-     * @param[in] postHandler To ensure consistency, some things can only be done after successfully deleting the key in
-     * etcd.
-     * @return Status of the call.
-     */
-    Status RemoveEtcdKey(const std::string &objectKey, const std::string &key, const std::string &tablePrefix,
-                         std::function<Status()> &&postHandler = nullptr);
-
-    /**
-     * @brief Prefix search key and erase them from etcdKeyMap_
-     * @param[in] table ETCD table.
-     * @param[in] prefixKey Preifx search key.
-     * @param[out] keys Keys that match the prefix
-     */
-    void PrefixSearchAndErase(const std::string &table, const std::string &prefixKey,
-                              std::vector<std::pair<std::string, std::pair<uint32_t, bool>>> &keys);
-
-    /**
-     * @brief Prefix remove keys impl.
-     * @param[in] table ETCD table.
-     * @param[in] keys Keys that match the prefix.
-     * @param[out] failedKeys Failed keys that need to rollback.
-     * @return Status of the call.
-     */
-    Status PrefixRemoveEtcdKeyImpl(const std::string &table,
-                                   const std::vector<std::pair<std::string, std::pair<uint32_t, bool>>> &keys,
-                                   std::vector<std::pair<std::string, std::pair<uint32_t, bool>>> &failedKeys);
-
-    /**
-     * @brief Remove some Keys by Prefix from etcd store in KvStore.
-     * @param[in] prefixKey Prefix key pattern.
-     * @param[in] tablePrefix ETCD table prefix.
-     * @return Status of the call.
-     */
-    Status PrefixRemoveEtcdKey(const std::string &prefixKey, const std::string &tablePrefix);
 
     /**
      * @brief Remove key from rocks table in KvStore.
@@ -548,71 +327,8 @@ private:
      */
     Status PrefixRemoveRocksKey(const std::string &prefixKey, const std::string &table);
 
-    /**
-     * @brief Check if etcd async addable.
-     * @return Status of the call.
-     */
-    Status EtcdAsyncAddable() const;
-
-    /**
-     * @brief Sender thread responsible for sending meta to Etcd asynchronously.
-     * @param[in] threadNum The thread ID.
-     * @param[in] queue Queue corresponding to sender, it save asynchronous task.
-     */
-    void AsyncMetaOpToEtcdStorageHandler(int threadNum, const std::shared_ptr<MetaAsyncQueue> &queue);
-
-    /**
-     * @brief Add one async task to etcd store.
-     * @param[in] objectKey Object key.
-     * @param[in] table ETCD table.
-     * @param[in] etcdKey Key need to remove.
-     * @param[in] value Value need to store
-     * @param[in] requestType The request's type, see the AsyncEtcdOpElement::RequestType for details.
-     * @param[in] postHandler To ensure consistency, some things can only be done after successfully deleting the key in
-     * etcd.
-     * @return Status of the call
-     */
-    Status AddOneAsyncTaskToEtcdStore(const std::string &objectKey, const std::string &table,
-                                      const std::string &etcdKey, const std::string &value,
-                                      AsyncElement::ReqType requestType, uint64_t timestamp = 0,
-                                      const std::string &traceId = "", std::function<Status()> &&postHandler = nullptr);
-
-    // The backend rocksdb storage.
     RocksStore *rocksStore_;
-
-    // Whether the local RocksDB state is healthy enough for startup recovery.
-    std::atomic<bool> isRocksdbRunning_{ true };
-
-    // The backend etcd storage.
-    EtcdStore *etcdStore_;
-
-    // Async request max size.
-    const uint64_t maxRequestSize_;
-
-    // Current async request size.
-    std::atomic<uint64_t> asyncReqSize_{ 0 };
-
-    // Async meta op to ETCD storage
-    std::vector<std::shared_ptr<MetaAsyncQueue>> queues_;
-    std::vector<Thread> threadPool_;
-
-    // Is persistence enabled or not.
     bool isPersistenceEnabled_;
-
-    // Protects 'etcdKeyMap_'
-    SharedMutex etcdMtx_;
-
-    // Save etcd key put type, <table - <key - <hash, async>>>/
-    std::unordered_map<std::string, std::map<std::string, std::pair<uint32_t, bool>>> etcdKeyMap_;
-
-    // Indicate the object meta store is running or not.
-    std::atomic<bool> running_{ true };
-
-    // Timer for warn log.
-    Timer timer_;
-
-    // Whether object-cache metadata writes to ETCD are enabled for this backend.
-    bool enableEtcdMetaStore_{ true };
 };
 }  // namespace master
 }  // namespace datasystem

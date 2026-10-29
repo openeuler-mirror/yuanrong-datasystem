@@ -1,16 +1,20 @@
 # ETCD Metadata
 
+Object metadata persistence is local to RocksDB. Object metadata, locations, deletion records and pending Worker
+operations do not use ETCD tables. Worker-to-Worker TCP migration retains its business protocol; the unused ETCD
+queue protobuf field remains declared but is neither populated nor replayed. The built-in compatibility service and
+its deployment parameters have been removed. External ETCD membership, leases, Watch, topology and slot coordination
+remain supported.
+
 ## Scope
 
 - Path(s):
   - `third_party/protos/etcd`
   - `src/datasystem/common/kvstore/etcd`
-  - `src/datasystem/common/kvstore/metastore`
   - integration from `src/datasystem/cluster` and `src/datasystem/worker/worker_oc_server.cpp`
 - Why this module exists:
   - provide the ETCD v3 API surface used by the worker runtime;
   - wrap ETCD KV, watch, lease keepalive, transaction/CAS, health, authentication, and election RPCs behind project-local APIs;
-  - provide an in-process ETCD-compatible Metastore server for deployments using `metastore_address`;
   - host the canonical v3 topology and membership metadata backend used by runtime topology.
 - Primary source files to verify against:
   - `third_party/protos/etcd/api/etcdserverpb/rpc.proto`
@@ -22,7 +26,6 @@
   - `src/datasystem/common/kvstore/etcd/etcd_keep_alive.cpp`
   - `src/datasystem/common/kvstore/etcd/grpc_session.h`
   - `src/datasystem/common/kvstore/etcd/etcd_constants.h`
-  - `src/datasystem/common/kvstore/metastore/*`
 
 ## Responsibilities
 
@@ -37,10 +40,8 @@
   - supports ETCD auth token acquisition/refresh and TLS channel creation;
   - supports deadline-aware `GetAll` for bounded read-only operator queries;
   - exposes ETCD election helpers through `EtcdElector`;
-  - implements a built-in ETCD-compatible Metastore server for KV, Lease, Watch, and Maintenance services.
 - Pending verification:
   - all client/router-only uses of `common_etcd_client`;
-  - production deployment guidance for choosing external ETCD vs built-in Metastore;
   - whether `v3lock.proto` has any runtime caller; no local wrapper was verified in the ETCD client path.
 
 ## Companion Docs
@@ -59,14 +60,10 @@
 - Canonical module boundary:
   - external ETCD protocol definitions in `third_party/protos/etcd`;
   - project ETCD client wrappers in `src/datasystem/common/kvstore/etcd`;
-  - ETCD-compatible in-process backend in `src/datasystem/common/kvstore/metastore`.
 - Candidate sibling submodules considered:
   - `runtime.topology` remains a sibling runtime module; it owns worker lifecycle state, route lookup, and v3 topology
     ring semantics while using this module for ETCD-compatible storage and watches.
-  - object metadata tables under ETCD are runtime consumers, not owners of the ETCD client.
-- Why Metastore is included here:
-  - it registers the same ETCD gRPC services used by `EtcdStore` and is selected by `metastore_address` as an ETCD-compatible backend.
-  - it is not just a storage library; lease expiration, watch events, transactions, and maintenance status all emulate ETCD semantics for local runtime use.
+  - object metadata persistence belongs to the Master RocksDB store; this module owns external coordination access.
 
 ## Key Entry Points
 
@@ -89,10 +86,8 @@
   - `EtcdStore::Authenticate`
   - `EtcdHealth::CheckHealth`
   - `EtcdElector::Campaign`, `Leader`, `Observe`, `Resign`, `LeaseKeepAlive`
-  - `MetaStoreServer::Start`, `Stop`
 - Important constants:
   - `ETCD_MEMBERSHIP_KEY_SEGMENT`: `/cluster/`, used to enforce lease-bound membership writes across cluster namespaces
-  - `ETCD_META_TABLE_PREFIX`, `ETCD_LOCATION_TABLE_PREFIX`, `ETCD_ASYNC_WORKER_OP_TABLE_PREFIX`, `ETCD_GLOBAL_CACHE_TABLE_PREFIX`
   - worker states in ETCD values: `ready`, `exiting`, `d_rst`
 
 ## Main Dependencies
@@ -101,11 +96,10 @@
   - Worker topology composition creates exact cluster-scoped tables, initializes one membership keepalive, and sends
     the unified topology, local-notify, and membership targets over one Store-owned watch stream.
   - `TopologyRepository` reads/writes topology records through CAS and responds to backend watch events.
-  - object-cache metadata modules store metadata/location/global-cache records under ETCD metadata prefixes.
+  - object-cache metadata and auxiliary records are stored locally in RocksDB; this module is not their persistence backend.
   - CLI and tests use ETCD store helpers for inspection and fault scenarios.
 - Downstream dependencies:
   - external ETCD server when `etcd_address` is configured.
-  - built-in Metastore server when `metastore_address` is configured.
   - gRPC, protobuf, access recorder, metrics vector, thread pools, timers, signal handling, secret manager, and TLS helpers.
 - External contracts:
   - ETCD revision/version semantics drive CAS and watch filtering.
@@ -140,9 +134,6 @@ Important nuance:
 Important nuance:
 
 - Table existence is checked only in the local `tableMap_`; creating a table does not create an ETCD namespace object.
-- Object-cache metadata consumers route object, async-worker-op, and global-cache-delete metadata through the
-  `ETCD_HASH_SUFFIX` tables using the full object key hash. Object keys that end with worker UUIDs are not routed to
-  `ETCD_WORKER_SUFFIX` tables.
 
 ### Transaction And CAS
 
@@ -258,28 +249,15 @@ Important nuance:
 5. RPCs add the auth token as request metadata named `token`.
 6. `GrpcSession::SendRpc` records access metrics, applies deadlines/retry-on-unavailable behavior, and can cancel in-flight contexts on shutdown.
 
-### Built-In Metastore Backend
-
-1. `MetaStoreServer::Start(address)` registers KV, Lease, Watch, and Maintenance services on an insecure gRPC server.
-2. `KVManager` stores keys in memory, increments a revision on writes, records a small per-key history ring, and supports range queries and transactions.
-3. `LeaseManager` creates leases, tracks attached keys, and deletes keys when leases expire.
-4. `WatchManager` registers watchers, sends historical events from `KVManager::RangeHistory`, and dispatches new put/delete notifications.
-5. `MaintenanceServiceImpl` returns status using the current in-memory revision.
-
-Important nuance:
-
-- Metastore history keeps only `MAX_HISTORY_ENTRIES=5` per key/deleted key. It is not a persistent ETCD replacement unless surrounding deployment code provides durability elsewhere.
-
 ## Build And Test
 
 - Build commands:
-  - CMake: `common_etcd`, `common_etcd_client`, and `common_metastore` are pulled by higher-level build targets.
+  - CMake: `common_etcd` and `common_etcd_client` are pulled by higher-level build targets.
   - Bazel: `//src/datasystem/common/kvstore/etcd:etcd_store`
   - Bazel proto targets: `//third_party/protos/etcd:rpc_cc_grpc`, `//third_party/protos/etcd:rpc_cc_proto`, `//third_party/protos/etcd:v3election_cc_grpc`
 - Representative tests:
   - `tests/st/common/kvstore/etcd_store_test.cpp`
   - `tests/st/common/kvstore/grpc_session_test.cpp`
-  - `tests/ut/common/kvstore/metastore_server_test.cpp`
   - `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`
   - `tests/ut/cluster/coordination_backend_contract_test.cpp`
 
@@ -291,14 +269,12 @@ Important nuance:
   - changing keepalive state strings affects restart, reconciliation, voluntary exit, and passive deletion;
   - changing bootstrap revisions, canceled-watch handling, filtering, or compensation can duplicate, suppress, or
     reorder cluster events;
-  - changing Metastore transaction or history behavior can diverge from external ETCD behavior.
 - Important invariants:
   - cluster-table worker keys must be lease-bound;
   - CAS compares ETCD key version unless the alternate value-based overload is used;
   - watch local `keyVersion_` must advance only after event handlers process the event;
   - canceled watches must leave the producer and use whole-stream active compensation before re-registration;
   - DELETE cluster events are actionable only when the backend is writable;
-  - `GetBackendAddress()` favors `metastore_address` when present.
 - Observability or debugging hooks:
   - access recorder keys for ETCD Put/Get/GetAll/PrefixSearch/Delete/LeaseGrant/Authenticate;
   - `EtcdKeepAlive` and `EtcdWatch` logs;
@@ -312,8 +288,7 @@ Important nuance:
 - Watch compensation improves resilience but creates two event sources: ETCD stream events and synthesized fake events. This increases duplicate/order reasoning cost for topology handlers.
 - Keepalive failure handling still mixes transport diagnosis, local fake DELETE generation, retry, death timers, and
   `SIGKILL` fallback in the common ETCD wrapper.
-- In-memory Metastore shares ETCD-compatible APIs but has limited history and no verified persistent durability in this layer, so behavior can differ from an external ETCD cluster under restart, compaction, or long watch gaps.
-- Table prefix mappings live only in `EtcdStore` memory while data lives in ETCD/Metastore, so callers must recreate identical table mappings before accessing data.
+- Table prefix mappings live only in `EtcdStore` memory while data lives in ETCD, so callers must recreate identical table mappings before accessing data.
 - ETCD auth/TLS, router-client TLS, normal worker sessions, transaction static sessions, watch sessions, and keepalive sessions have different creation paths, which raises the risk of inconsistent backend or security behavior.
 
 ## Open Questions
@@ -321,4 +296,3 @@ Important nuance:
 - Whether `v3lock.proto` is intentionally vendored for future use or has callers outside the verified runtime path.
 - Whether `Transaction` should own a non-static session per store/backend to avoid global lifecycle coupling.
 - Whether hot runtime state should be split across multiple ETCD keys with narrower CAS domains.
-- Whether Metastore should be documented and tested as a separate deployment mode with explicit durability and scale limits.

@@ -20,6 +20,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <shared_mutex>
 #include <string>
@@ -50,7 +51,6 @@ namespace master {
 struct NotifyWorkerOpEntry {
     NotifyWorkerOp op;
     uint64_t epoch = 0;
-    ObjectMetaStore::WriteType writeType = ObjectMetaStore::WriteType::ROCKS_ONLY;
 };
 
 struct AsyncWorkerOpSnapshot {
@@ -76,13 +76,18 @@ struct DeleteApiInfo {
 };
 
 class OCMetadataManager;
+struct WorkerOpMigrationSnapshot {
+    std::string workerId;
+    AsyncWorkerOpSnapshot operation;
+};
+
 class OCNotifyWorkerManager {
 public:
 
     /**
      * @brief Construct OCNotifyWorkerManager.
      */
-    OCNotifyWorkerManager(std::shared_ptr<ObjectMetaStore> objectStore, bool backendStoreExist,
+    OCNotifyWorkerManager(std::shared_ptr<ObjectMetaStore> objectStore,
                           OCMetadataManager *ocMetadataManager);
 
     ~OCNotifyWorkerManager();
@@ -217,8 +222,7 @@ public:
      * @return Status of the call.
      */
     Status InsertAsyncWorkerOp(const std::string &workerId, const std::string &objectKey, const NotifyWorkerOp &op,
-                               bool needPersist = true,
-                               ObjectMetaStore::WriteType type = ObjectMetaStore::WriteType::ROCKS_ONLY);
+                               bool needPersist = true, bool waitForCompletion = false);
 
     /**
      * @brief Clear data from async notify worker operator table.
@@ -241,6 +245,11 @@ public:
      * @param[in] objectKey The uuid of the object.
      * @return Some async operation.
      */
+    void GetPendingObjectKeys(const std::function<bool(const std::string &)> &matches,
+                              std::unordered_set<std::string> &keys);
+    std::vector<WorkerOpMigrationSnapshot> SnapshotObjectOperations(const std::string &objectKey);
+    Status RemoveMigratedOperations(const std::vector<WorkerOpMigrationSnapshot> &snapshots);
+
     std::vector<std::pair<std::string, NotifyWorkerOp>> GetObjectAsyncWorkerOp(const std::string &objectKey);
 
     /**
@@ -326,12 +335,10 @@ public:
      * @param[in] workerId The worker address of the object.
      * @param[in] objectKeys The object keys to be remove.
      * @param[in] op The operator to be removed.
-     * @param[in] isDataMigration Indicates whether the data migration scenario is used. If the value is true, data in
-     * etcd is not deleted.
      * @return Status of the call.
      */
     Status RemoveAsyncWorkerOp(const std::string &workerId, const std::vector<std::string> &objectKeys,
-                               NotifyWorkerOpType op, bool isDataMigration = false);
+                               NotifyWorkerOpType op);
 
     /**
      * @brief erase master worker api.
@@ -340,18 +347,17 @@ public:
     void EraseMasterWorkerApi(HostPort &nodePort);
 
     /**
-     * @brief Recover cache invalid and remove meta info to EtcdKeyMap
+     * @brief Restore locally persisted Worker operations
      * @param[in] cacheInvalids The vector of worker id and object key.
      */
-    void RecoverCacheInvalidAndRemoveMeta2EtcdKeyMap(std::vector<std::pair<std::string, std::string>> &cacheInvalids);
+    void RestoreAsyncWorkerOps(std::vector<std::pair<std::string, std::string>> &cacheInvalids);
 
     /**
      * @brief Recover cache invalid and remove meta info to cache
-     * @param[in] isFromRocksdb Specifies whether to obtain data from rocksdb.
      * @param[in] extraRanges Obtains the data of specified object-key hash ranges if not empty.
      * @return Status of the call.
      */
-    Status RecoverCacheInvalidAndRemoveMeta(bool isFromRocksdb);
+    Status RecoverCacheInvalidAndRemoveMeta();
 
     /**
      * @brief Send changes to the primary copy.
@@ -400,8 +406,6 @@ private:
         std::string workerId;
         std::string objectKey;
         NotifyWorkerOp op;
-        ObjectMetaStore::WriteType writeType = ObjectMetaStore::WriteType::ROCKS_ONLY;
-        bool needRemoveEtcdData = true;
         uint64_t expectedEpoch = 0;
     };
 
@@ -479,7 +483,7 @@ private:
     /**
      * @brief Handle worker disconnection when notify worker delete a object data.
      * @param[in] address Destination worker address.
-     * @param[in] objectItem The objects tuple(objectKey, workerId, writeType) to be delete.
+     * @param[in] objectItem The objects tuple(objectKey, workerId) to be delete.
      * @param[out] asyncNotifyIds The objects that will send the delete request to the worker asynchronously.
      * @return Worker is healthy if true, otherwise false.
      */
@@ -505,7 +509,7 @@ private:
 
     /**
      * @brief Async notify worker delete objects.
-     * @param[in] asyncNotifyIds The objects tuple(objectKey, workerId, writeType) to be delete.
+     * @param[in] asyncNotifyIds The objects tuple(objectKey, workerId) to be delete.
      * @param[out] replicas2Obj Worker address and their object key.
      * @param[out] failedObjects The failed object list.
      * @return Status of the call.
@@ -558,17 +562,17 @@ private:
                                                    const std::string &objectKey, const std::string &workerId);
 
     Status InsertAsyncWorkerOpWithoutPersistence(const std::string &workerId, const std::string &objectKey,
-                                                 const NotifyWorkerOp &op, ObjectMetaStore::WriteType type);
+                                                 const NotifyWorkerOp &op);
 
     Status InsertAsyncWorkerOpWithPersistence(const std::string &workerId, const std::string &objectKey,
-                                              const NotifyWorkerOp &op, ObjectMetaStore::WriteType type);
+                                              const NotifyWorkerOp &op, bool waitForCompletion);
 
     bool PrepareAsyncWorkerOpInsert(const std::string &workerId, const std::string &objectKey,
                                     const NotifyWorkerOp &op, AsyncWorkerOpInsertSnapshot &snapshot);
 
     Status PublishPersistedAsyncWorkerOp(const std::string &workerId, const std::string &objectKey,
                                          const AsyncWorkerOpInsertSnapshot &snapshot,
-                                         ObjectMetaStore::WriteType type, bool &retry);
+                                         bool &retry);
 
     const size_t maxAsyncDeleteReplayThreadSize = 8;
     std::unique_ptr<ThreadPool> asyncDeleteReplayThreadPool_;
@@ -590,7 +594,6 @@ private:
     std::unordered_map<std::string, bool> faultWorkers_;
     object_cache::MasterWorkerOCServiceImpl *masterWorkerOCService_{ nullptr };
     HostPort masterAddr_;
-    const bool backendStoreExist_;
     OCMetadataManager *ocMetadataManager_{ nullptr };
     // for diffrent ocmetamanager to add and remove Subscriber.
     std::string subscriberPrefix_ = "";

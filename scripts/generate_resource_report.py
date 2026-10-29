@@ -22,18 +22,17 @@ Resource.log Format (pipe-separated, 7 header fields + 21 metric groups):
   $14 WORKER_WORKER_OC_THREAD      maxRunning/total/tasksDelta/maxWaiting/usage
   $15 MASTER_WORKER_OC_THREAD      maxRunning/total/tasksDelta/maxWaiting/usage
   $16 MASTER_OC_SERVICE_THREAD     maxRunning/total/tasksDelta/maxWaiting/usage
-  $17 ETCD_QUEUE                   currentSize/limit/usage
-  $18 ETCD_REQUEST_SUCCESS_RATE    float 0-1
-  $19 OBS_REQUEST_SUCCESS_RATE     float 0-1
-  $20 MASTER_ASYNC_TASKS_THREAD    maxRunning/total/tasksDelta/maxWaiting/usage
-  $21 STREAM_COUNT                 integer
-  $22 WORKER_SC_SERVICE_THREAD     maxRunning/total/tasksDelta/maxWaiting/usage
-  $23 WORKER_WORKER_SC_THREAD      maxRunning/total/tasksDelta/maxWaiting/usage
-  $24 MASTER_WORKER_SC_THREAD      maxRunning/total/tasksDelta/maxWaiting/usage
-  $25 MASTER_SC_SERVICE_THREAD     maxRunning/total/tasksDelta/maxWaiting/usage
-  $26 STREAM_REMOTE_SEND_RATE      float 0-1
-  $27 SC_LOCAL_CACHE               usage/reserved/limit/usageRate
-  $28 OC_HIT_NUM                   memHit/diskHit/l2Hit/remoteHit/miss
+  $17 ETCD_REQUEST_SUCCESS_RATE    float 0-1
+  $18 OBS_REQUEST_SUCCESS_RATE     float 0-1
+  $19 MASTER_ASYNC_TASKS_THREAD    maxRunning/total/tasksDelta/maxWaiting/usage
+  $20 STREAM_COUNT                 integer
+  $21 WORKER_SC_SERVICE_THREAD     maxRunning/total/tasksDelta/maxWaiting/usage
+  $22 WORKER_WORKER_SC_THREAD      maxRunning/total/tasksDelta/maxWaiting/usage
+  $23 MASTER_WORKER_SC_THREAD      maxRunning/total/tasksDelta/maxWaiting/usage
+  $24 MASTER_SC_SERVICE_THREAD     maxRunning/total/tasksDelta/maxWaiting/usage
+  $25 STREAM_REMOTE_SEND_RATE      float 0-1
+  $26 SC_LOCAL_CACHE               usage/reserved/limit/usageRate
+  $27 OC_HIT_NUM                   memHit/diskHit/l2Hit/remoteHit/miss
 
 Usage:
   # Basic usage
@@ -74,7 +73,6 @@ HTML Report Sections (10 charts + 1 detail table):
   3. Object Cache              - Object count and size trends
   4. Cache Hit Rate            - Hit rate trend + hit/miss stacked distribution
   5. Thread Pool Utilization   - 5 thread pools (Peak Concurrency/Total/Tasks/Queue/Utilization)
-  6. ETCD Queue                - Queue depth with limit reference line
   7. Active Clients            - Connected client count trend
   8. ETCD Success Rate         - ETCD request success rate
   9. Per-Host Memory           - Interactive per-host memory trend
@@ -105,7 +103,6 @@ _GAUGE_KEYS = [
     "mem_usage", "mem_physical", "mem_total_limit", "mem_ratio",
     "sc_mem_usage", "sc_mem_limit", "object_count", "object_size",
     "active_clients", "stream_count",
-    "etcd_queue_size", "etcd_queue_usage", "etcd_queue_limit",
     "sc_cache_usage", "sc_cache_rate",
 ]
 
@@ -168,7 +165,7 @@ def _parse_thread_pools(parts):
     pool_defs = [
         ("worker_oc", 12), ("worker_worker_oc", 13),
         ("master_worker_oc", 14), ("master_oc", 15),
-        ("async", 19),  # MASTER_ASYNC_TASKS
+        ("async", 18),  # MASTER_ASYNC_TASKS
     ]
     for name, idx in pool_defs:
         raw = parts[idx] if len(parts) > idx and parts[idx] else ""
@@ -215,6 +212,8 @@ def parse_resource_logs(log_files_by_host, since=None, until=None):
                     if until_ts and ts >= until_ts:
                         continue
 
+                    if len(parts) > 16 and "/" in parts[16]:
+                        parts.pop(16)  # Legacy logs contained an object ETCD write queue column.
                     parsed_lines += 1
                     m = {}
 
@@ -238,31 +237,25 @@ def parse_resource_logs(log_files_by_host, since=None, until=None):
                     m["object_count"] = float(parts[10]) if len(parts) > 10 and parts[10] else 0
                     m["object_size"] = float(parts[11]) if len(parts) > 11 and parts[11] else 0
 
-                    # Thread pools: $13-$16, $20 (async)
+                    # Thread pools: $13-$16, $19 (async)
                     m.update(_parse_thread_pools(parts))
 
-                    # $17 ETCD_QUEUE
-                    etcd_q = _parse_sub(parts[16]) if len(parts) > 16 else []
-                    m["etcd_queue_size"] = etcd_q[0] if len(etcd_q) > 0 else 0
-                    m["etcd_queue_limit"] = etcd_q[1] if len(etcd_q) > 1 else 0
-                    m["etcd_queue_usage"] = etcd_q[2] if len(etcd_q) > 2 else 0
+                    # $17-$18 success rates (-1 = unavailable)
+                    m["etcd_success_rate"] = float(parts[16]) if len(parts) > 16 and parts[16] else -1
+                    m["obs_success_rate"] = float(parts[17]) if len(parts) > 17 and parts[17] else -1
 
-                    # $18-$19 success rates (-1 = unavailable)
-                    m["etcd_success_rate"] = float(parts[17]) if len(parts) > 17 and parts[17] else -1
-                    m["obs_success_rate"] = float(parts[18]) if len(parts) > 18 and parts[18] else -1
+                    # $20 STREAM_COUNT
+                    m["stream_count"] = float(parts[19]) if len(parts) > 19 and parts[19] else 0
 
-                    # $21 STREAM_COUNT
-                    m["stream_count"] = float(parts[20]) if len(parts) > 20 and parts[20] else 0
-
-                    # $27 SC_LOCAL_CACHE
-                    sc = _parse_sub(parts[26]) if len(parts) > 26 else []
+                    # $26 SC_LOCAL_CACHE
+                    sc = _parse_sub(parts[25]) if len(parts) > 25 else []
                     m["sc_cache_usage"] = sc[0] if len(sc) > 0 else 0
                     m["sc_cache_reserved"] = sc[1] if len(sc) > 1 else 0
                     m["sc_cache_limit"] = sc[2] if len(sc) > 2 else 0
                     m["sc_cache_rate"] = sc[3] if len(sc) > 3 else 0
 
-                    # $28 OC_HIT_NUM (cumulative counter)
-                    hit = _parse_sub(parts[27]) if len(parts) > 27 else []
+                    # $27 OC_HIT_NUM (cumulative counter)
+                    hit = _parse_sub(parts[26]) if len(parts) > 26 else []
                     m["oc_mem_hit"] = hit[0] if len(hit) > 0 else 0
                     m["oc_disk_hit"] = hit[1] if len(hit) > 1 else 0
                     m["oc_l2_hit"] = hit[2] if len(hit) > 2 else 0
@@ -523,9 +516,6 @@ def generate_html(cluster_stats, per_host_stats, all_data, output_path, since, u
     tp_m_oc_mr, tp_m_oc_total, tp_m_oc_td, tp_m_oc_mw, tp_m_oc_usage = tp_series("master_oc")
     tp_async_mr, tp_async_total, tp_async_td, tp_async_mw, tp_async_usage = tp_series("async")
 
-    etcd_q_size = [round(s["etcd_queue_size_avg"]) for s in cluster_stats]
-    etcd_q_max = [round(s["etcd_queue_size_max"]) for s in cluster_stats]
-    etcd_q_limit = [round(s["etcd_queue_limit_avg"]) for s in cluster_stats]
 
     active_clients_avg = [round(s["active_clients_avg"]) for s in cluster_stats]
     active_clients_max = [round(s["active_clients_max"]) for s in cluster_stats]
@@ -688,15 +678,6 @@ select {{ padding: 6px 12px; border-radius: 4px; border: 1px solid #ccc; font-si
 <div id="tp_m_oc_chart" class="chart" style="height:380px"></div>
 <div id="tp_async_chart" class="chart" style="height:380px"></div>
 
-<h2>6. ETCD Queue (ETCD 请求队列)</h2>
-<div class="info">
-<b>指标说明</b>：ETCD 请求队列大小。Avg = 平均队列深度，Max = 最大队列深度，Limit = 队列容量上限（红色虚线）。<br>
-<b>正常值</b>：队列深度接近 0，远低于 Limit（80000）。<br>
-<b>异常特征</b>：队列深度持续增长；接近或达到 Limit 的 50% 以上；队列积压不消化。<br>
-<b>排查建议</b>：① 检查 ETCD 集群健康状态（etcdctl endpoint health）；② 检查 Worker 与 ETCD 之间的网络延迟；③ 检查 ETCD 磁盘 IO 是否成为瓶颈（etcd 需要 SSD）；④ 队列满时新请求会被拒绝，检查 access.log 中是否有 ETCD 相关错误。
-</div>
-<div id="etcd_chart" class="chart" style="height:380px"></div>
-
 <h2>7. Active Clients (活跃客户端数)</h2>
 <div class="info">
 <b>指标说明</b>：当前连接到 Worker 的活跃客户端数量。Avg = 所有 Worker 平均值，Max = 单 Worker 最大值。<br>
@@ -782,9 +763,6 @@ var tpAsyncTotal = __TP_ASYNC_TOTAL__;
 var tpAsyncTD = __TP_ASYNC_TD__;
 var tpAsyncMW = __TP_ASYNC_MW__;
 var tpAsyncUsage = __TP_ASYNC_USAGE__;
-var etcdQSize = __ETCD_Q_SIZE__;
-var etcdQMax = __ETCD_Q_MAX__;
-var etcdQLimit = __ETCD_Q_LIMIT__;
 var activeClientsAvg = __ACTIVE_CLIENTS_AVG__;
 var activeClientsMax = __ACTIVE_CLIENTS_MAX__;
 var etcdRate = __ETCD_RATE__;
@@ -944,23 +922,6 @@ var c5c = tpChart('tp_mw_oc_chart', '对象缓存-Master下发（管理指令下
 var c5d = tpChart('tp_m_oc_chart', '对象缓存-Master服务（Master端对象管理）', tpMOcMR, tpMOcTotal, tpMOcTD, tpMOcMW, tpMOcUsage);
 var c5e = tpChart('tp_async_chart', 'Master异步任务（后台异步操作）', tpAsyncMR, tpAsyncTotal, tpAsyncTD, tpAsyncMW, tpAsyncUsage);
 
-// 6. ETCD Queue
-var c6 = echarts.init(document.getElementById('etcd_chart'));
-c6.setOption({{
-  title: {{ text: 'ETCD Queue Size', left: 'center' }},
-  tooltip: {{ trigger: 'axis' }},
-  legend: {{ data: ['Avg','Max','Limit'], bottom: 0 }},
-  grid: {{ left: 60, right: 20, top: 40, bottom: 90 }},
-  xAxis: {{ type: 'category', data: timeLabels, axisLabel: {{ rotate: 45 }} }},
-  yAxis: {{ type: 'value' }},
-  series: [
-    {{ name: 'Avg', type: 'line', data: etcdQSize, smooth: true }},
-    {{ name: 'Max', type: 'line', data: etcdQMax, smooth: true, lineStyle: {{ type: 'dashed' }} }},
-    {{ name: 'Limit', type: 'line', data: etcdQLimit, lineStyle: {{ type: 'dotted', color: '#ee6666' }},
-      itemStyle: {{ color: '#ee6666' }}, symbol: 'none' }}
-  ]
-}});
-
 // 7. Active Clients
 var c7 = echarts.init(document.getElementById('clients_chart'));
 c7.setOption({{
@@ -1025,7 +986,7 @@ updateHostChart();
 
 // Responsive
 window.addEventListener('resize', function() {{
-  [c1,c2a,c2b,c3a,c3b,c4a,c4b,c5a,c5b,c5c,c5d,c5e,c6,c7,c8,c9].forEach(function(c) {{ c.resize(); }});
+  [c1,c2a,c2b,c3a,c3b,c4a,c4b,c5a,c5b,c5c,c5d,c5e,c7,c8,c9].forEach(function(c) {{ c.resize(); }});
 }});
 </script>
 </body>
@@ -1080,9 +1041,6 @@ window.addEventListener('resize', function() {{
         "__TP_ASYNC_TD__": js_arr(tp_async_td),
         "__TP_ASYNC_MW__": js_arr(tp_async_mw),
         "__TP_ASYNC_USAGE__": js_arr(tp_async_usage),
-        "__ETCD_Q_SIZE__": js_arr(etcd_q_size),
-        "__ETCD_Q_MAX__": js_arr(etcd_q_max),
-        "__ETCD_Q_LIMIT__": js_arr(etcd_q_limit),
         "__ACTIVE_CLIENTS_AVG__": js_arr(active_clients_avg),
         "__ACTIVE_CLIENTS_MAX__": js_arr(active_clients_max),
         "__ETCD_RATE__": js_arr(etcd_rate),
@@ -1144,7 +1102,6 @@ def main():
               3. Object Cache              (object count & size)
               4. Cache Hit Rate            (hit rate trend + hit/miss breakdown)
               5. Thread Pool Utilization   (5 pools: Peak Concurrency/Total/Tasks/Queue/Utilization)
-              6. ETCD Queue                (queue depth vs limit)
               7. Active Clients            (connected client count)
               8. ETCD Success Rate         (ETCD request success rate)
               9. Per-Host Memory           (interactive per-host selector)

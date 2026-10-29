@@ -88,8 +88,7 @@ TEST_F(KVCacheClientStorageTest, TestSetWriteBackDel)
     ASSERT_EQ(client->Set(key, value, param), Status::OK());
     std::string valueGet;
     ASSERT_EQ(client->Get(key, valueGet), Status::OK());
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "ObjectMetaStore.AsyncMetaOpToEtcdStorageHandler.Delay.MetaTable",
-                                           "call(5000)"));
+
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "global_cache_delete.delete_objects", "sleep(5000)"));
     ASSERT_EQ(client->Del(key), Status::OK());
     sleep(1);
@@ -274,41 +273,6 @@ public:
         opts.disableRocksDB = false;
     }
 };
-
-TEST_F(KVCacheClientStorageTestMultiNode, TestGlobalCacheTableNotLeakAfterRestart)
-{
-    std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client);
-    std::string value = "value";
-    SetParam param{ .writeMode = WriteMode::WRITE_BACK_L2_CACHE };
-    auto key = client->Set(value, param);
-    ASSERT_NE(key, "");
-    DS_ASSERT_OK(cluster_->SetInjectAction(
-        WORKER, 0, "ObjectMetaStore.AsyncMetaOpToEtcdStorageHandler.Delay.GlobalCacheTable.PassAdd", "call(10000)"));
-    DS_ASSERT_OK(client->Del(key));
-    int waitTimeSec = 2;
-    sleep(waitTimeSec);  // Now the data in L2 cache has been deleted, but the GlobalCacheTable has not been deleted.
-    DS_ASSERT_OK(externalCluster_->RestartWorkerAndWaitReadyOneByOne(
-        { 0 }, SIGKILL));  // Do not wait for asynchronous tasks to complete
-
-    InitTestEtcdInstance();
-    std::string tableName = ETCD_GLOBAL_CACHE_TABLE_PREFIX;
-    tableName.pop_back();
-    DS_ASSERT_OK(db_->CreateTable(tableName, tableName));
-    const int maxWaitTimeSec = 5;
-    Timer timer;
-    std::vector<std::pair<std::string, std::string>> outKeyValues;
-    while (timer.ElapsedMilliSecond() < maxWaitTimeSec * SECS_TO_MS) {
-        outKeyValues.clear();
-        DS_ASSERT_OK(db_->GetAll(tableName, outKeyValues));
-        if (outKeyValues.empty()) {
-            break;
-        }
-        const int intervalMs = 100;
-        std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
-    }
-    ASSERT_TRUE(outKeyValues.empty());
-}
 
 }  // namespace st
 }  // namespace datasystem

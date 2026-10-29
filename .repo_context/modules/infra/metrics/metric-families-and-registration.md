@@ -76,7 +76,6 @@
     - `OBJECT_COUNT`
     - `OBJECT_SIZE`
     - worker/master thread-pool families
-    - `ETCD_QUEUE`
     - `ETCD_REQUEST_SUCCESS_RATE`
     - `OBS_REQUEST_SUCCESS_RATE`
     - stream families
@@ -104,7 +103,6 @@
   - master/coordination-side registration includes:
     - master-worker object-cache thread-pool usage
     - master object-cache thread-pool usage
-    - ETCD queue usage
     - master async task thread-pool usage
     - master/worker stream service thread-pool usage
   - third-party/backend registration includes:
@@ -177,3 +175,5 @@
 - Keep this file focused on family definitions, semantic descriptions, and runtime registration alignment instead of repeating full collector or exporter architecture from `design.md`.
 - Update this file when family order, family meaning, description units, or major registration points change.
 - If a registration claim depends on a callsite not yet verified, mark it as pending rather than treating it as generally true.
+
+对象元数据退出 ETCD 后，resource.log 删除队列位置列，后续列前移；按位置解析的外部消费方需同步升级。kv_resource.log 的 v0 表示 JSON 结构版本，指标组为可选字段集合，消费方必须容忍组缺失；本次移除队列组，不改变 JSON 结构版本。仓库资源分析脚本兼容含队列列与不含队列列的日志。

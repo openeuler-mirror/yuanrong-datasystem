@@ -106,6 +106,13 @@ void OCNestedManager::RemoveRelationshipData(const std::string &parentObjectKey)
     dependencyTable_.erase(parentObjectKey);
 }
 
+void OCNestedManager::RemoveMigratedRefCount(const std::string &key)
+{
+    if (nestedRef_->RemoveAllRefs(key)) {
+        LOG_IF_ERROR(objectStore_->RemoveNestedRefCount(key), "Failed to remove migrated nested reference count");
+    }
+}
+
 void OCNestedManager::RemoveNestIdsRef(const std::vector<std::string> &nestedKeys)
 {
     VLOG(1) << "remove nested ref ids: " << VectorToString(nestedKeys);
@@ -168,11 +175,8 @@ Status OCNestedManager::DecreaseNestedRefCnt(const std::string &parentObjectKey,
 Status OCNestedManager::RecoverRelationshipData(const std::string &refTable, const std::string &countTable)
 {
     std::vector<std::pair<std::string, std::string>> metas;
-    if (objectStore_->IsRocksdbRunning()) {
-        RETURN_IF_NOT_OK(objectStore_->GetAllFromRocks(refTable, metas));
-    } else {
-        LOG(WARNING) << FormatString("Table[%s] does not support using etcd as a l2_cache, just ignore it", refTable);
-    };
+    RETURN_IF_NOT_OK(objectStore_->GetAllFromRocks(refTable, metas));
+
     Timer timer;
     std::lock_guard<std::shared_timed_mutex> lck(mutex_);
     GetMasterTimeCost().Append("RecoverRelationshipData", timer.ElapsedMilliSecond());
@@ -185,11 +189,7 @@ Status OCNestedManager::RecoverRelationshipData(const std::string &refTable, con
         }
     }
     metas.clear();
-    if (objectStore_->IsRocksdbRunning()) {
-        RETURN_IF_NOT_OK(objectStore_->GetAllFromRocks(countTable, metas));
-    } else {
-        LOG(WARNING) << FormatString("Table[%s] does not support using etcd as a l2_cache, just ignore it", countTable);
-    };
+    RETURN_IF_NOT_OK(objectStore_->GetAllFromRocks(countTable, metas));
 
     int count = 0;
     for (const auto &meta : metas) {

@@ -80,7 +80,7 @@ Goal:
 Candidates:
 
 - request/data path maps across client, worker, master, and storage layers;
-- cluster management and metastore vs ETCD flows;
+- cluster management and external ETCD coordination flows;
 - cache semantics and reliability options;
 - hetero object / transfer engine relationships;
 - module-level review checklists and failure hotspots.

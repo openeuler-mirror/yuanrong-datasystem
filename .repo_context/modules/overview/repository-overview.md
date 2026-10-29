@@ -40,7 +40,7 @@ This document captures a coarse, source-backed map of the repository. It is inte
 
 - `README.md` describes the repository as the data system component of openYuanrong.
 - The main runtime roles described there are SDK, worker, and cluster management.
-- `docs/source_zh_cn/design_document/cluster_management.md` shows that cluster management currently supports both ETCD and Metastore paths.
+- `docs/source_zh_cn/design_document/cluster_management.md` shows that cluster management currently supports ETCD and Coordinator cluster coordination.
 - `CMakeLists.txt` confirms the core build graph centers on `src/datasystem`, `dsbench`, tests, optional Java API, and optionally `transfer_engine`.
 - `AGENTS.md`, `CLAUDE.md`, and `.cursor/rules/repo-context.mdc` now route their respective AI coding tools through
   the repository-level infrastructure engineering principles before local module work.

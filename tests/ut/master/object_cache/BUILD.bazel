@@ -52,17 +52,6 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "meta_async_queue_test",
-    srcs = ["meta_async_queue_test.cpp"],
-    deps = [
-        "//src/datasystem/worker:add_miss_libs_fixme",
-        "//src/datasystem/master/object_cache/store:meta_async_queue",
-        "//src/datasystem/worker/object_cache:worker_oc_service_impl",
-        "//tests/ut:ut_common",
-    ],
-)
-
-ds_cc_test(
     name = "memory_rebalance_scheduler_test",
     srcs = ["memory_rebalance_scheduler_test.cpp"],
     deps = [
@@ -160,6 +149,7 @@ ds_cc_test(
         "//src/datasystem/master/object_cache:oc_migrate_metadata_manager",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//tests/ut:ut_common",
+        "//tests/common/binmock:binmock",
     ],
 )
 
@@ -194,7 +184,6 @@ test_suite(
         "master_dev_dead_lock_manager_test",
         "master_dev_oc_directory_test",
         "master_dev_oc_manager_test",
-        "meta_async_queue_test",
         "memory_rebalance_scheduler_test",
         "heat_rebalance_scheduler_test",
         "resource_manager_policy_rollout_test",
