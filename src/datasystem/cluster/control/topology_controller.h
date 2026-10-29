@@ -36,6 +36,7 @@ namespace datasystem::cluster {
 inline constexpr int64_t MAX_SCALE_IN_COLLECT_WINDOW_MS = 5'000;
 inline constexpr int64_t MAX_SCALE_OUT_COLLECT_WINDOW_MS = 5'000;
 inline constexpr int64_t DEFAULT_ORDINARY_COLLECT_WINDOW_MS = 3'000;
+inline constexpr int64_t DEFAULT_SCALE_IN_COLLECT_WINDOW_MS = 1'000;
 
 /**
  * @brief Select watch ownership and external-event authority.
@@ -59,7 +60,7 @@ struct TopologyControllerOptions {
     std::chrono::minutes ordinaryBatchWindow{ 3 };
     std::chrono::milliseconds reconcileTick{ 1'000 };
     std::chrono::milliseconds scaleOutCollectWindow{ DEFAULT_ORDINARY_COLLECT_WINDOW_MS };
-    std::chrono::milliseconds scaleInCollectWindow{ DEFAULT_ORDINARY_COLLECT_WINDOW_MS };
+    std::chrono::milliseconds scaleInCollectWindow{ DEFAULT_SCALE_IN_COLLECT_WINDOW_MS };
     // Absolute budget for one memberLivenessProbe call, including all targets and cleanup.
     std::chrono::seconds failureProbeTimeout{ 2 };
     std::chrono::seconds witnessProbeRoundTimeout{ 10 };

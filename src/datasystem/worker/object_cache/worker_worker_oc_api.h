@@ -231,8 +231,6 @@ public:
 
     Status MigrateDataProbe(MigrateDataReqPb &req, MigrateDataRspPb &rsp, int timeoutMs);
 
-    Status MigrateDataDirect(MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp);
-
     Status NotifyRemoteGet(NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp) override;
 
     Status QueryUbPortHealth(const std::string &expectedWorkerIncarnation,

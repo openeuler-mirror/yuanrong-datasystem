@@ -180,40 +180,6 @@ message MigrateDataRspPb {
   UbHealthSummaryPb ub_health_summary = 11;
 }
 
-message MigrateDataDirectReqPb {
-  message ObjectInfoPb {
-    string object_key = 1;
-    uint64 version = 2;
-    uint64 data_size = 3;
-    UrmaRemoteAddrPb urma_info = 4;
-  }
-  repeated ObjectInfoPb objects = 1;
-  string worker_addr = 2;
-  bool is_slot_migration = 3;
-  uint32 slot_id = 4;
-  bool is_retry = 5;
-  MigrateType type = 6;
-  bool has_type = 7;
-  bool has_rebalance_policy_fence = 8;
-  uint32 target_eviction_policy = 9;
-  uint64 target_eviction_policy_epoch = 10;
-  string rebalance_task_id = 11;
-
-  // put to the end, the previous data is used to generate AK and SK signatures.
-  uint64 timestamp = 100;
-  string signature = 101;
-  string access_key = 102;
-}
-
-message MigrateDataDirectRspPb {
-  uint64 remain_bytes = 1;
-  repeated string failed_object_keys = 2;
-  uint64 limit_rate = 3;
-  ProviderUbFailureDetailPb provider_ub_failure_detail = 4;
-  repeated string skipped_object_keys = 5;
-  UbHealthSummaryPb ub_health_summary = 6;
-}
-
 message NotifyRemoteGetReqPb {
   repeated string object_keys = 1;
   string addr = 2;
@@ -276,7 +242,6 @@ service WorkerWorkerOCService {
     option (datasystem.recv_payload_option) = true;
     option (datasystem.urma_enabled_option) = true;
   }
-  rpc MigrateDataDirect(MigrateDataDirectReqPb) returns (MigrateDataDirectRspPb) {}
   rpc NotifyRemoteGet(NotifyRemoteGetReqPb) returns (NotifyRemoteGetRspPb) {}
   rpc GetPeerHashRing(GetHashRingReqPb) returns (GetHashRingRspPb) {}
   rpc QueryUbPortHealth(QueryUbPortHealthReqPb) returns (QueryUbPortHealthRspPb) {}

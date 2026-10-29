@@ -32,13 +32,11 @@
 #include "datasystem/common/util/timer.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
-#include "datasystem/worker/object_cache/data_migrator/transport/fast_migrate_transport.h"
 #include "datasystem/worker/object_cache/data_migrator/transport/fast_migrate_transport2.h"
 #include "datasystem/worker/object_cache/data_migrator/transport/tcp_migrate_transport.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 
 DS_DECLARE_uint32(data_migrate_rate_limit_mb);
-DS_DECLARE_string(data_migrate_urma_transport_mode);
 
 namespace datasystem {
 namespace object_cache {
@@ -69,11 +67,7 @@ MigrateDataHandler::MigrateDataHandler(MigrateType type, const std::string &loca
       stoppingPtr_(stoppingPtr)
 {
     if (ShouldUseFastTransport()) {
-        if (FLAGS_data_migrate_urma_transport_mode == "read") {
-            transport_ = std::make_shared<FastMigrateTransport>();
-        } else {
-            transport_ = std::make_shared<FastMigrateTransport2>();
-        }
+        transport_ = std::make_shared<FastMigrateTransport2>();
     } else {
         transport_ = std::make_shared<TcpMigrateTransport>();
     }
@@ -87,10 +81,6 @@ bool MigrateDataHandler::ShouldUseFastTransport() const
     }
     // Fast transport cannot preserve the source copy required by REBALANCE_KEEP_LOCAL.
     if (type_ == MigrateType::REBALANCE_KEEP_LOCAL) {
-        return false;
-    }
-    if (FLAGS_data_migrate_urma_transport_mode == "read" && type_ != MigrateType::SPILL
-        && type_ != MigrateType::SCALE_DOWN) {
         return false;
     }
     return IsUrmaEnabled();

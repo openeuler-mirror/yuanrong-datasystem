@@ -376,16 +376,8 @@ global:
     # Scale in taint, format is key=value:effect.
     # Supports configuring multiple types of taints, and multiple taints are only separated by ",".
     scaleInTaint: "datasystem/offline=true:NoExecute"
-    # Decide whether to migrate data to other nodes or not when current node exits. If this is the only node in the cluster, exits directly and the data will be lost.
-    enableLosslessDataExitMode: false
-    # The worker ensures a certain period of time that the asynchronous queues for sending messages to ETCD and
-    # L2 cache remain empty before it can exit properly.
-    checkAsyncQueueEmptyTimeS: 15
     # Data migration rate limit for every node when scaling down.
     dataMigrateRateLimitMb: 40
-    # URMA transport mode for background data migration. Optional values: write, read.
-    # This option only takes effect when enableUrma=true.
-    dataMigrateUrmaTransportMode: "write"
     # Overwrite the global default terminationGracePeriodSeconds when liveness probe failed, enable when greater than 0.
     livenessProbeTerminationGracePeriodSeconds: 0
 

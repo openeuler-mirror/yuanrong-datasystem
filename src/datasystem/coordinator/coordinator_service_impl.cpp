@@ -59,7 +59,6 @@ DS_DEFINE_uint32(coordinator_topology_max_active_clusters, 8,
                  "Maximum number of active cluster topology Controller runtimes.");
 DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_uint32(node_timeout_s);
-DS_DECLARE_uint32(scale_in_collect_window_ms);
 DS_DECLARE_int32(watch_event_dispatch_thread);
 DS_DEFINE_string(coordinator_raft_initial_peers, "", "Coordinator Raft initial peers.");
 DS_DEFINE_string(coordinator_raft_data_dir, kDefaultCoordinatorRaftDataDir,
@@ -450,7 +449,6 @@ void CoordinatorServiceImpl::ConfigureTopologyHostOptions(TopologyControlHost::O
                                             ? FLAGS_node_dead_timeout_s - FLAGS_node_timeout_s
                                             : 1U;
     options.controller.nodeDeadTimeout = std::chrono::seconds(classifierAbsenceS);
-    options.controller.scaleInCollectWindow = std::chrono::milliseconds(FLAGS_scale_in_collect_window_ms);
     options.controller.eventSourceMode = cluster::TopologyEventSourceMode::EXTERNAL;
     options.controller.probeEpoch = coordinatorId_;
     options.controller.collectiveControlEpoch = [this]() { return GetCollectiveControlEpoch(); };

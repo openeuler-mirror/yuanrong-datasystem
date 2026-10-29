@@ -83,12 +83,12 @@ Status FastMigrateTransport2::MigrateDataToRemote(const Request &req, Response &
         totalDataBytes += data->Size();
     }
 
-    int64_t migrateDirectTimeoutMs = CalcMigrateDataDirectTimeoutMs(totalDataBytes);
+    int64_t fastMigrationTimeoutMs = CalcFastMigrationTimeoutMs(totalDataBytes);
     VLOG(1) << FormatString("[Migrate Data] MigrateDataToRemote total data size %lu bytes, calculated timeout %ld ms",
-                            totalDataBytes, migrateDirectTimeoutMs);
+                            totalDataBytes, fastMigrationTimeoutMs);
     NotifyRemoteGetRspPb rspPb;
     rspPb.Clear();
-    GetRequestContext()->reqTimeoutDuration.InitWithPositiveTime(migrateDirectTimeoutMs);
+    GetRequestContext()->reqTimeoutDuration.InitWithPositiveTime(fastMigrationTimeoutMs);
     Status rc = req.api->NotifyRemoteGet(reqPb, rspPb);
     CollectUbHealthSummary(rspPb, req, rsp);
     if (rspPb.has_provider_ub_failure_detail()) {

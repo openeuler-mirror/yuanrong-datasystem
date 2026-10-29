@@ -41,12 +41,10 @@ DS_DECLARE_uint32(rebalance_heat_source_hot_ratio_percent);
 DS_DECLARE_uint32(rebalance_heat_source_usage_percent_low);
 DS_DECLARE_uint32(rebalance_heat_target_usage_percent);
 DS_DECLARE_uint32(rebalance_heat_target_hot_ratio_percent);
-DS_DECLARE_uint32(scale_in_collect_window_ms);
 
 namespace {
 constexpr uint32_t kMinNodeTimeoutS = 3;
 constexpr uint32_t kMinNodeDeadTimeoutS = 3;
-constexpr uint32_t kMaxScaleInCollectWindowMs = 5'000;
 
 uint32_t AdjustNodeDeadTimeoutS(uint32_t value)
 {
@@ -103,7 +101,6 @@ void AdjustNodeTimeoutFlags()
     if (FLAGS_node_dead_timeout_s < kMinNodeDeadTimeoutS) {
         FLAGS_node_dead_timeout_s = kMinNodeDeadTimeoutS;
     }
-    AdjustScaleInCollectWindowMs();
 }
 
 namespace {
@@ -243,22 +240,4 @@ bool WorkerValidateNodeDeadTimeoutS(const uint32_t value)
     return true;
 }
 
-bool WorkerValidateScaleInCollectWindowMs(const uint32_t value)
-{
-    if (value > kMaxScaleInCollectWindowMs) {
-        LOG(ERROR) << "The value of scale_in_collect_window_ms must be no greater than " << kMaxScaleInCollectWindowMs
-                   << ". current value: " << value;
-        return false;
-    }
-    return true;
-}
-
-void AdjustScaleInCollectWindowMs()
-{
-    if (FLAGS_scale_in_collect_window_ms > kMaxScaleInCollectWindowMs) {
-        LOG(WARNING) << "Adjust scale_in_collect_window_ms from " << FLAGS_scale_in_collect_window_ms << " to "
-                     << kMaxScaleInCollectWindowMs << " (hard upper bound)";
-        FLAGS_scale_in_collect_window_ms = kMaxScaleInCollectWindowMs;
-    }
-}
 }  // namespace datasystem

@@ -196,8 +196,7 @@ TEST_F(ClientWorkerSCHeartbeatTest, TestNormalWorkerCrash)
     std::shared_ptr<Producer> producer1;
     DS_ASSERT_OK(client1->CreateProducer(producer1));
 
-    // Shutdown worker
-    cluster_->ShutdownNode(WORKER, 0);
+    DS_ASSERT_OK(cluster_->KillWorker(0));
     // Client enable test
     uint64_t queryRet = 0;
     auto rc = client1->QueryLocalProducerNum(queryRet);

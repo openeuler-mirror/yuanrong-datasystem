@@ -23,9 +23,9 @@
 #include <condition_variable>
 #include <functional>
 #include <future>
+#include <map>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -33,14 +33,9 @@
 #include <vector>
 
 #include <google/protobuf/repeated_field.h>
-#include <tbb/concurrent_hash_map.h>
-
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
-#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/util/net_util.h"
-#include "datasystem/common/util/timer.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/object_posix.pb.h"
@@ -50,14 +45,11 @@
 #include "datasystem/worker/object_cache/limiter/data_limiter.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
-#include "datasystem/worker/object_cache/worker_worker_transport_api.h"
 
 namespace datasystem {
 namespace object_cache {
 
-
 using ObjInfoPbList = google::protobuf::RepeatedPtrField<MigrateDataReqPb::ObjectInfoPb>;
-using ObjInfoPbListDirect = google::protobuf::RepeatedPtrField<MigrateDataDirectReqPb::ObjectInfoPb>;
 using ObjectInfoMap = std::unordered_map<std::string, std::pair<std::shared_ptr<SafeObjType>, bool>>;
 using QueryMetaMap = std::unordered_map<std::string, master::QueryMetaInfoPb>;
 using LockedEntryMap = std::map<std::string, std::pair<std::shared_ptr<SafeObjType>, uint64_t>>;
@@ -69,17 +61,14 @@ class WorkerOcServiceMigrateImpl : public WorkerOcServiceCrudCommonApi,
     friend class WorkerOCServiceImpl;
 
 public:
-
     /**
      * @brief Construct WorkerOcServicePublishImpl.
      * @param[in] initParam The parameter used to init WorkerOcServiceCrudCommonApi.
      * @param[in] memcpyThreadPool Memory copy thread pool.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] localAddr Local worker address.
      * @param[in] rateController Shared migration rate controller.
      */
     WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam &initParam, std::shared_ptr<ThreadPool> memcpyThreadPool,
-                               std::shared_ptr<AkSkManager> akSkManager,
                                const std::string &localAddr,
                                std::shared_ptr<MigrateDataRateController> rateController);
 
@@ -96,14 +85,6 @@ public:
      * @return K_OK on success, the error otherwise.
      */
     Status MigrateData(const MigrateDataReqPb &req, MigrateDataRspPb &rsp, std::vector<RpcMessage> payloads);
-
-    /**
-     * @brief Migrate data directly.
-     * @param[in] req Migrate data direct request.
-     * @param[out] rsp Migrate data direct response.
-     * @return Status of the call.
-     */
-    Status MigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp);
 
     /**
      * @brief Close incoming migration admission and wait for admitted requests until deadline.
@@ -246,118 +227,6 @@ private:
                                std::shared_ptr<ShmUnit> &unit);
 
     /**
-     * @brief Fill metadata to object entries.
-     * @param[in] lockedEntries Locked object list.
-     * @param[in] metas Query meta list.
-     * @param[out] successIds Success object key list.
-     * @param[out] failedIds Failed object key list.
-     * @param[out] needReadDataIds Need read data object keys.
-     */
-    Status FillMetaToObjectEntries(LockedEntryMap &lockedEntries, const QueryMetaMap &metas,
-                                   std::unordered_set<std::string> &successIds,
-                                   std::unordered_set<std::string> &failedIds, ObjectInfoMap &needReadDataIds,
-                                   std::unordered_set<std::string> &skippedIds);
-
-    /**
-     * @brief Fill data to object entries.
-     * @param[in] req Migrate data direct request.
-     * @param[in] needReadDataIds Need read data object keys.
-     * @param[out] needSendMasterIds Need send master object keys.
-     * @param[out] failedIds Failed object key list.
-     * @param[out] migratedBytes Bytes whose URMA read events have completed successfully.
-     * @return K_OK on success, the error otherwise.
-     */
-    struct ReadTask {
-        std::string objectKey;
-        uint64_t dataSize;
-        std::vector<uint64_t> eventKeys;
-        std::shared_ptr<ShmUnit> shmUnit;
-        std::shared_ptr<SafeObjType> entry;
-        bool isNewCreate{ false };
-        UrmaWriteFailure failure;
-    };
-
-    struct DirectReadOutcome {
-        const MigrateDataDirectReqPb &req;
-        const ObjectInfoMap &needReadDataIds;
-        ObjectInfoMap needSendMasterIds;
-        std::unordered_set<std::string> &failedIds;
-        uint64_t migratedBytes{ 0 };
-        std::optional<ProviderUbFailureDetailPb> failureDetail;
-    };
-
-    Status FillDataToObjectEntries(DirectReadOutcome &outcome);
-
-    /**
-     * @brief Start remote read tasks.
-     * @param[in] req Migrate data direct request.
-     * @param[in] needReadDataIds Need read data object keys.
-     * @param[in] shmIndexMapping The object id to shmOwners index mapping.
-     * @param[in] shmOwners The allocated shared memory chunks.
-     * @param[out] tasks Remote read tasks.
-     * @param[out] failedIds Failed object key list.
-     * @return K_OK on success, the error otherwise.
-     */
-    Status StartRemoteReadTasks(DirectReadOutcome &outcome, const std::vector<uint32_t> &shmIndexMapping,
-                                const std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
-                                std::vector<ReadTask> &tasks);
-
-    /**
-     * @brief Get shared memory owner by index.
-     * @param[in] idx Object index.
-     * @param[in] shmIndexMapping The object id to shmOwners index mapping.
-     * @param[in] shmOwners The allocated shared memory chunks.
-     * @return Shared memory owner or nullptr.
-     */
-    std::shared_ptr<ShmOwner> GetShmOwnerByIndex(int idx, const std::vector<uint32_t> &shmIndexMapping,
-                                                  const std::vector<std::shared_ptr<ShmOwner>> &shmOwners) const;
-
-    /**
-     * @brief Ensure the local-to-peer UB connection exists before remote read migration.
-     * @param[in] peerAddr Source worker address of the migration request.
-     * @return K_OK on success or when fast transport is disabled, the error otherwise.
-     */
-    Status EnsureWorkerPeerUrmaConnection(const std::string &peerAddr);
-
-    /**
-     * @brief Process remote read for a single object.
-     * @param[in] object Object info.
-     * @param[in] needReadIt Iterator to need read data entry.
-     * @param[in] shmUnit Shared memory unit.
-     * @param[in] metaSize Metadata size.
-     * @param[out] tasks Remote read tasks.
-     * @param[out] failedIds Failed object key list.
-     * @return K_OK on success, the error otherwise.
-     */
-    Status ProcessRemoteReadForObject(const MigrateDataDirectReqPb::ObjectInfoPb &object,
-                                      ObjectInfoMap::const_iterator needReadIt,
-                                      std::shared_ptr<ShmUnit> shmUnit, size_t metaSize,
-                                      std::vector<ReadTask> &tasks,
-                                      std::unordered_set<std::string> &failedIds);
-
-    /**
-     * @brief Wait remote read tasks.
-     * @param[in,out] tasks Remote read tasks.
-     * @param[out] needSendMasterIds Need send master object keys.
-     * @param[out] failedIds Failed object key list.
-     * @param[out] migratedBytes Bytes whose URMA read events have completed successfully.
-     * @return K_OK on success, the error otherwise.
-     */
-    Status WaitRemoteReadTasks(std::vector<ReadTask> &tasks, DirectReadOutcome &outcome);
-    void RecordDirectReadUbFailure(const ReadTask &task, DirectReadOutcome &outcome, const Status &status);
-
-    /**
-     * @brief Helper function for aggregate allocation.
-     * @param[in] req Migrate data direct request.
-     * @param[in] needReadDataIds Need read data object keys.
-     * @param[out] shmOwners The allocated shared memory chunks.
-     * @param[out] shmIndexMapping The object id to shmOwners index mapping.
-     */
-    Status AggregateAllocateHelper(const MigrateDataDirectReqPb &req, const ObjectInfoMap &needReadDataIds,
-                                   std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
-                                   std::vector<uint32_t> &shmIndexMapping);
-
-    /**
      * @brief Notify master to replace object primary copy.
      * @param[in] originAddr Original primary worker address.
      * @param[in] needSendMasterIds Need replace primary copy objects.
@@ -410,18 +279,6 @@ private:
                                  const std::unordered_set<std::string> &expiredIds,
                                  const std::unordered_set<std::string> &failedIds, bool oom, MigrateDataRspPb &rsp,
                                  const std::unordered_set<std::string> &skipIds = {});
-
-    /**
-     * @brief Fill migrate data direct response.
-     * @param[in] failedIds Failed object key list.
-     * @param[in] oom Indicate is OOM or not.
-     * @param[in] migratedBytes Bytes whose URMA read events have completed successfully.
-     * @param[out] rsp Migrate data direct response.
-     */
-    void FillMigrateDataDirectResponse(const MigrateDataDirectReqPb &req,
-                                       const std::unordered_set<std::string> &failedIds, bool oom,
-                                       uint64_t migratedBytes, MigrateDataDirectRspPb &rsp,
-                                       const std::unordered_set<std::string> &skipIds = {});
 
     /**
      * @brief For test mock purpose.
@@ -606,7 +463,7 @@ private:
      * @brief Acquire one incoming migration admission slot.
      * @return K_OK while the gate is open; K_NOT_READY after local ScaleIn drain starts.
      */
-    Status AcquireIncomingMigrationAdmission(bool requireUbAdmission = false);
+    Status AcquireIncomingMigrationAdmission();
 
     /**
      * @brief Release one incoming migration admission slot.
@@ -646,91 +503,11 @@ private:
         return objectKeys;
     }
 
-    /**
-     * @brief Prepare error response for migrate data direct.
-     * @param[in] req Migrate data direct request.
-     * @param[out] rsp Migrate data direct response.
-     * @param[in] code Status code.
-     * @param[in] message Status message.
-     * @return Status of the call.
-     */
-    Status PrepareMigrateDataDirectError(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp,
-                                         StatusCode code, const std::string &message);
-
-    /**
-     * @brief Pre-check conditions for migrate data direct.
-     * @param[in] req Migrate data direct request.
-     * @param[out] rsp Migrate data direct response.
-     * @return Status of the call.
-     */
-    Status PreCheckMigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp);
-
-    /**
-     * @brief Migrate data direct implementation.
-     * @param[in] req Migrate data direct request.
-     * @param[out] rsp Migrate data direct response.
-     * @return Status of the call.
-     */
-    Status MigrateDataDirectImpl(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp);
-
-    /**
-     * @brief Prepare locked entries and metadata for migrate data direct.
-     * @param[in] req Migrate data direct request.
-     * @param[in,out] point Performance point recorder.
-     * @param[out] lockedEntries Locked object list.
-     * @param[out] successIds Success object key list.
-     * @param[out] failedIds Failed object key list.
-     * @param[out] needModifyPrimary Need modify primary copy list.
-     * @param[out] needReadDataIds Need read data object keys.
-     * @return Status of the call.
-     */
-    Status PrepareMigrateDataDirectEntries(const MigrateDataDirectReqPb &req, PerfPoint &point,
-                                           LockedEntryMap &lockedEntries,
-                                           std::unordered_set<std::string> &successIds,
-                                           std::unordered_set<std::string> &failedIds,
-                                           LockedEntryMap &needModifyPrimary, ObjectInfoMap &needReadDataIds,
-                                           const QueryMetaMap &metas,
-                                           std::unordered_set<std::string> &skippedIds);
-
-    /**
-     * @brief Handle slot migration no-space case for migrate data direct.
-     * @param[in] req Migrate data direct request.
-     * @param[out] rsp Migrate data direct response.
-     * @param[in] needReadDataIds Need read data object keys.
-     * @param[in,out] failedIds Failed object key list.
-     * @param[in] status Fill data status.
-     * @return Status::OK if no early return is needed, the error otherwise.
-     */
-    Status HandleMigrateDataDirectNoSpace(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp,
-                                          const ObjectInfoMap &needReadDataIds,
-                                          std::unordered_set<std::string> &failedIds, Status status);
-
-    /**
-     * @brief Replace primary copies and rollback failed objects for migrate data direct.
-     * @param[in] req Migrate data direct request.
-     * @param[in,out] point Performance point recorder.
-     * @param[in] needModifyPrimary Need modify primary copy list.
-     * @param[in] needReadDataIds Need read data object keys.
-     * @param[in,out] successIds Success object key list.
-     * @param[in,out] failedIds Failed object key list.
-     * @param[in,out] needSendMasterIds Need send master object keys.
-     * @param[in,out] status Current status.
-     */
-    void ReplacePrimaryForMigrateDataDirect(const MigrateDataDirectReqPb &req, PerfPoint &point,
-                                            const LockedEntryMap &needModifyPrimary,
-                                            const ObjectInfoMap &needReadDataIds,
-                                            std::unordered_set<std::string> &successIds,
-                                            std::unordered_set<std::string> &failedIds,
-                                            ObjectInfoMap &needSendMasterIds, Status &status);
-
     std::shared_ptr<ThreadPool> memcpyThreadPool_{ nullptr };
-
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 
     std::string localAddr_;
 
     std::shared_ptr<MigrateDataRateController> rateController_;
-    PeerUbAdmission *ubAdmission_{ nullptr };
 
     // Protects incomingMigrationAdmissionPaused_ and incomingMigrationCount_. Closed remains atomic for lock-free
     // processing checks after admission.
@@ -743,9 +520,6 @@ private:
 
     std::shared_timed_mutex unitMutex_;
     std::unordered_map<std::string, std::shared_ptr<ShmUnit>> failedSlotUnits_;
-
-    using TbbTransportStubTable = tbb::concurrent_hash_map<std::string, std::shared_ptr<WorkerRemoteWorkerTransApi>>;
-    TbbTransportStubTable transportApiTable_;
 };
 }  // namespace object_cache
 }  // namespace datasystem

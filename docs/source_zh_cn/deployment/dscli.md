@@ -1586,10 +1586,7 @@ INFO fallback 仅适用于忽略该初始化错误的 SDK Client，并且只在 
 
 | 配置项 | 类型 | 默认值 | 是否支持动态修改 | 描述 |
 |-----|------|---------|-----|-------------|
-| enable_lossless_data_exit_mode | bool | `false` | 是 | 是否启用无损数据退出模式，当该值为 `true` 时，在节点退出时则会以优雅退出的方式，迁移数据和元数据，保证数据和元数据不丢失 |
-| check_async_queue_empty_time_s | int | `1` | 否 | datasystem-worker检测异步队列为空的时间，单位为秒 |
 | data_migrate_rate_limit_mb | int | `40` | 否 | 配置优雅退出数据迁移的流控（以MB/s为单位） |
-| data_migrate_urma_transport_mode | string | `write` | 否 | 配置后台迁移启用 URMA 时的数据迁移传输模式。可选值：`write` 表示使用 URMA write 路径，`read` 表示使用 URMA read 路径。仅在 `enable_urma=true` 时生效 |
 
 #### 性能相关配置
 

@@ -1158,7 +1158,7 @@ TEST_F(OCClientGetTest, LEVEL1_GetRuntimeErrorAfterWorkerStart)
         }
     }
 
-    cluster_->ShutdownNode(ClusterNodeType::WORKER, 0);
+    DS_ASSERT_OK(cluster_->KillWorker(0));
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
     std::vector<Optional<Buffer>> buffers;

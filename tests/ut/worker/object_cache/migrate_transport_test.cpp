@@ -29,7 +29,6 @@
 
 #define private public
 #include "datasystem/worker/object_cache/data_migrator/transport/fast_migrate_transport2.h"
-#include "datasystem/worker/object_cache/data_migrator/transport/fast_migrate_transport.h"
 #include "datasystem/worker/object_cache/data_migrator/transport/tcp_migrate_transport.h"
 #undef private
 
@@ -116,28 +115,6 @@ TEST(FastMigrateTransport2Test, ProcessMigrateResponseExcludesSkippedFromSuccess
     FastMigrateTransport2 transport;
     transport.ProcessMigrateResponse(reqPb, rspPb, req, rsp);
 
-    EXPECT_EQ(rsp.successKeys.size(), 1u);
-    EXPECT_TRUE(rsp.successKeys.count("k2") > 0);
-    EXPECT_TRUE(rsp.successKeys.count("k1") == 0);
-}
-
-TEST(FastMigrateTransportTest, ProcessMigrateResponsePopulatesSkipKeys)
-{
-    MigrateDataDirectReqPb reqPb;
-    auto *obj1 = reqPb.add_objects();
-    obj1->set_object_key("k1");
-    auto *obj2 = reqPb.add_objects();
-    obj2->set_object_key("k2");
-    MigrateDataDirectRspPb rspPb;
-    rspPb.add_skipped_object_keys("k1");
-
-    auto req = MakeEmptyRequest();
-    MigrateTransport::Response rsp;
-    FastMigrateTransport transport;
-    transport.ProcessMigrateResponse(reqPb, rspPb, req, rsp);
-
-    EXPECT_EQ(rsp.skipKeys.size(), 1u);
-    EXPECT_TRUE(rsp.skipKeys.count("k1") > 0);
     EXPECT_EQ(rsp.successKeys.size(), 1u);
     EXPECT_TRUE(rsp.successKeys.count("k2") > 0);
     EXPECT_TRUE(rsp.successKeys.count("k1") == 0);

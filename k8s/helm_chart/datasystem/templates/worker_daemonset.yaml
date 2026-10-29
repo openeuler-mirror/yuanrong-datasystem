@@ -214,7 +214,6 @@ spec:
         - -rebalance_usage_gap_percent={{ $.Values.global.memoryRebalance.rebalanceUsageGapPercent }}
         - -rebalance_task_report_grace_ms={{ $.Values.global.memoryRebalance.rebalanceTaskReportGraceMs }}
         - -data_migrate_rate_limit_mb={{ $.Values.global.gracefulShutdown.dataMigrateRateLimitMb }}
-        - -data_migrate_urma_transport_mode={{ $.Values.global.gracefulShutdown.dataMigrateUrmaTransportMode }}
         - -ipc_through_shared_memory={{ $.Values.global.ipc.ipcThroughSharedMemory }}
         - -shared_memory_worker_port={{ $.Values.global.ipc.sharedMemoryWorkerPort }}
         - -enable_sched_runtime={{ $.Values.global.performance.enableSchedRuntime }}
@@ -235,8 +234,6 @@ spec:
         - -enable_thp={{ $.Values.global.performance.enableThp }}
         - -enable_reconciliation={{ $.Values.global.reliability.enableReconciliation }}
         - -liveness_probe_timeout_s={{ $.Values.global.reliability.livenessProbeTimeoutS }}
-        - -check_async_queue_empty_time_s={{ $.Values.global.gracefulShutdown.checkAsyncQueueEmptyTimeS }}
-        - -enable_lossless_data_exit_mode={{ $.Values.global.gracefulShutdown.enableLosslessDataExitMode }}
         - -enable_urma={{ $.Values.global.performance.enableUrma }}
         - -enable_pipeline_h2d={{ $.Values.global.performance.enablePipelineH2d }}
         - -pipeline_h2d_thread_num={{ $.Values.global.performance.pipelineH2dThreadNum }}

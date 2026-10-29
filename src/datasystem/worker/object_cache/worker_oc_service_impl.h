@@ -337,19 +337,28 @@ public:
     Status MigrateData(const MigrateDataReqPb &req, MigrateDataRspPb &rsp, std::vector<RpcMessage> payloads);
 
     /**
-     * @brief Migrate data directly.
-     * @param[in] req Migrate data direct request.
-     * @param[out] rsp Migrate data direct response.
-     * @return Status of the call.
-     */
-    Status MigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp);
-
-    /**
      * @brief Close incoming object migration admission and wait for admitted requests until deadline.
      * @param[in] deadline Absolute monotonic drain deadline.
      * @return K_OK after the drain; K_RPC_DEADLINE_EXCEEDED if admitted requests remain.
      */
     Status CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::time_point deadline);
+
+    /**
+     * @brief Reject new client writes before the lossless-exit data snapshot is prepared.
+     */
+    void CloseClientWriteAdmission();
+
+    /**
+     * @brief Whether write admission is closed and every admitted client write has returned.
+     * @return True after the write boundary is fully drained.
+     */
+    bool IsClientWriteAdmissionDrained() const;
+
+    /**
+     * @brief Return the number of admitted client writes that have not returned yet.
+     * @return Current admitted client write count.
+     */
+    uint64_t GetAdmittedClientWriteCount() const;
     bool HasPendingRejoinCleanup() const;
     void ReopenIncomingMigrationAdmissionAfterRejoin();
     Status PauseIncomingMigrationAdmissionAndCheckDrained();
@@ -1000,7 +1009,10 @@ private:
 
     Status InitThreadResources();
     Status InitRecoveryServices();
-    Status VerifyClientWriteAdmission(bool isRouted);
+    Status AcquireClientWriteAdmission();
+    void ReleaseClientWriteAdmission();
+    Status WaitClientWritesDrained(std::chrono::steady_clock::time_point deadline,
+                                   const cluster::CancellationToken &cancellation);
 
     void FillWorkerRedirect(const std::string &selectionKey, WorkerRedirectPb &redirect) const;
     void ObserveMetadataRpc(const HostPort &target, const Status &status);
@@ -1469,6 +1481,12 @@ private:
     ObjectEndpointPolicy endpointPolicy_;
     const std::atomic<bool> *exitRequested_{ nullptr };
     std::atomic<bool> shutdownRequested_{ false };
+
+    static constexpr uint64_t CLIENT_WRITE_ADMISSION_CLOSED = 1ULL << 63;
+    static constexpr uint64_t CLIENT_WRITE_ADMISSION_COUNT_MASK = CLIENT_WRITE_ADMISSION_CLOSED - 1;
+    std::atomic<uint64_t> clientWriteAdmission_{ 0 };
+    std::mutex clientWriteDrainMutex_;
+    std::condition_variable clientWriteDrainCv_;
 
     // Closing incoming migration admission is also used by failure/rejoin cleanup. Keep the irreversible topology
     // ScaleIn drain state separate so ordinary client writes are not permanently fenced after a successful rejoin.

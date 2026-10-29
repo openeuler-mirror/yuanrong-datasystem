@@ -703,8 +703,8 @@ TEST_F(StreamClientScaleTest, LEVEL1_TestScaleDownAutoDeleteStream1)
     SubscriptionConfig config("sub1", SubscriptionType::STREAM);
     DS_ASSERT_OK(w2Client_->Subscribe(streamName, config, consumer));
 
-    // Shutdown worker 1
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
+    // Kill worker 1 to exercise involuntary scale-down cleanup.
+    DS_ASSERT_OK(cluster_->KillWorker(1));
 
     // Failure can temporarily leave the client routed to the departed metadata master. Wait for the new owner first.
     WaitAllMembersJoinClusterTopology(1);

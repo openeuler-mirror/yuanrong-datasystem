@@ -56,6 +56,7 @@ constexpr uint32_t LARGE_PORT_BASE = 20'000;
 constexpr auto LARGE_COLLECT_WINDOW = std::chrono::seconds(1);
 constexpr auto LARGE_CONTROL_BUDGET = std::chrono::seconds(3);
 constexpr auto DEFAULT_COLLECT_WINDOW = std::chrono::seconds(3);
+constexpr auto DEFAULT_SCALE_IN_WINDOW = std::chrono::seconds(1);
 constexpr size_t STALE_TOPOLOGY_PROBE_SAMPLE_COUNT = 5;
 constexpr uint32_t STALE_TOPOLOGY_OLD_PORT_BASE = 10'000;
 constexpr uint32_t STALE_TOPOLOGY_NEW_PORT_BASE = 30'000;
@@ -108,12 +109,12 @@ private:
 
 TopologyState MakeTwoActiveMembersScaleInInitialState();
 
-TEST(TopologyControllerTest, DefaultOrdinaryCollectionWindowsAreThreeSeconds)
+TEST(TopologyControllerTest, DefaultCollectionWindowsMatchLifecyclePolicy)
 {
     const TopologyControllerOptions options;
 
     EXPECT_EQ(options.scaleOutCollectWindow, DEFAULT_COLLECT_WINDOW);
-    EXPECT_EQ(options.scaleInCollectWindow, DEFAULT_COLLECT_WINDOW);
+    EXPECT_EQ(options.scaleInCollectWindow, DEFAULT_SCALE_IN_WINDOW);
 }
 
 template <typename Predicate>

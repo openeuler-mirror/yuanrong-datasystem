@@ -114,10 +114,6 @@
     query it after the temporary context exits; no other request state is copied back. A fallback Reset/Record clears
     this published result, which keeps non-KV client tracker behavior unchanged. The scope is a no-op in ZMQ mode. This
     boundary currently covers `KVClient` only; the other SDK client families remain unchanged.
-  - Public KV offset Read is removed from C++ and Python. Full-object `Get` / `get_read_only_buffers` is the public
-    read path; applications slice locally when only part of the value is needed. The internal `ReadRangeParam` remains
-    under the object-client worker API solely for oversized UB Get chunking. Worker range protocol handling and spill
-    partial reload stay unchanged for that internal path.
   - General batch APIs accept up to 10,000 keys. `Exist` accepts up to 100,000 keys, so one query can cover the
     32,768 cache blocks required by a 1 Mi-token context with 32 tokens per key.
   - Public `KVClient::Get` overloads and their Python, Java, and Go facades do not expose a per-call subscription
