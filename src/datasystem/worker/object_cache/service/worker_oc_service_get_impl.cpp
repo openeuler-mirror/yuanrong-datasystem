@@ -1030,7 +1030,8 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_QUERYMETA_START);
     }
-    Status result = QueryMetadataFromMaster(needRemoteGetObjects, subTimeout, queryMetaResult);
+    const bool skipAddLocation = IsRemoteH2DEnabled() && request != nullptr && !request->GetClientCommUuid().empty();
+    Status result = QueryMetadataFromMaster(needRemoteGetObjects, subTimeout, queryMetaResult, skipAddLocation);
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_QUERYMETA_END);
     }
@@ -1860,11 +1861,11 @@ void WorkerOcServiceGetImpl::AttemptGetObjectsLocally(const std::shared_ptr<GetR
 Status WorkerOcServiceGetImpl::QueryMetaDataFromMasterImpl(const HostPort &destMasterHostPort, uint64_t subTimeout,
                                                            const std::vector<std::string> &objKeysToQuery,
                                                            datasystem::master::QueryMetaRspPb &rsp,
-                                                           std::vector<RpcMessage> &payloads)
+                                                           std::vector<RpcMessage> &payloads, bool skipAddLocation)
 {
     PerfPoint point(PerfKey::WORKER_QUERY_META_IMPL);
     datasystem::master::QueryMetaReqPb req;
-    SetQueryMetaInfo(req, objKeysToQuery, destMasterHostPort.ToString(), true);
+    SetQueryMetaInfo(req, objKeysToQuery, destMasterHostPort.ToString(), true, skipAddLocation);
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
         workerMasterApiManager_->GetWorkerMasterApi(destMasterHostPort);
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "Get masterApi failed, cannot queryMeta");
@@ -1882,7 +1883,7 @@ Status WorkerOcServiceGetImpl::QueryMetaDataFromMasterImpl(const HostPort &destM
     auto queryStatus = RedirectRetryWhenMetasMoving(req, rsp, tmpPayloads, func);
     RETURN_IF_NOT_OK(queryStatus);
     RETURN_IF_NOT_OK(CorrectQueryMetaResponse(tmpPayloads, rsp, payloads));
-    RETURN_IF_NOT_OK(QueryMetadataFromRedirectMaster(rsp, subTimeout, payloads));
+    RETURN_IF_NOT_OK(QueryMetadataFromRedirectMaster(rsp, subTimeout, payloads, skipAddLocation));
     return Status::OK();
 }
 
@@ -1926,7 +1927,7 @@ Status WorkerOcServiceGetImpl::ProcessQueryMetadataResults(
 }
 
 Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::string> &objectKeys, uint64_t subTimeout,
-                                                       QueryMetadataFromMasterResult &result)
+                                                       QueryMetadataFromMasterResult &result, bool skipAddLocation)
 {
     PerfPoint point(PerfKey::WORKER_QUERY_META_PRE);
     auto config = GetServerLatencyTraceConfig();
@@ -1943,7 +1944,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     batchQueryResults.resize(objKeysGrpByMaster.size());
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_BATCH_BY_ADDR);
     queryMetas.reserve(queryMetas.size() + objectKeys.size());
-    Status lastRc = DispatchQueryMetadataGroups(objKeysGrpByMaster, subTimeout, batchQueryResults);
+    Status lastRc = DispatchQueryMetadataGroups(objKeysGrpByMaster, subTimeout, batchQueryResults, skipAddLocation);
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_HANDLE_RESULT);
     return ProcessQueryMetadataResults(lastRc, traceEnabled, objectKeys, batchQueryResults, result, point);
 }
@@ -1964,7 +1965,7 @@ Status WorkerOcServiceGetImpl::FinalizeAbsentQueryMetadata(
 
 Status WorkerOcServiceGetImpl::DispatchQueryMetadataGroups(
     std::unordered_map<HostPort, std::vector<std::string>> &objectKeysByMaster, uint64_t subTimeout,
-    std::vector<BatchQueryMetaResult> &batchQueryResults)
+    std::vector<BatchQueryMetaResult> &batchQueryResults, bool skipAddLocation)
 {
     std::vector<std::future<Status>> futures;
     futures.reserve(objectKeysByMaster.size());
@@ -1982,12 +1983,13 @@ Status WorkerOcServiceGetImpl::DispatchQueryMetadataGroups(
     for (auto &item : objectKeysByMaster) {
         BatchQueryMetaResult &result = batchQueryResults[idx++];
         auto *itemPtr = &item;
-        auto query = [&result, remainingUs, subTimeout, itemPtr, &traceId, dispatchTime, this]() {
+        auto query = [&result, remainingUs, subTimeout, itemPtr, &traceId, dispatchTime, skipAddLocation, this]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId, true);
             RETURN_IF_NOT_OK(InitTimeoutsFromDispatch(remainingUs, dispatchTime));
             Timer queryMetaTimer;
             auto rc =
-                QueryMetaDataFromMasterImpl(itemPtr->first, subTimeout, itemPtr->second, result.rsp, result.payloads);
+                QueryMetaDataFromMasterImpl(itemPtr->first, subTimeout, itemPtr->second, result.rsp, result.payloads,
+                                            skipAddLocation);
             if (rc.IsError()) {
                 LOG(ERROR) << FormatString("Query metadata from master[%s]: %s, elapsed %.3f ms",
                                            itemPtr->first.ToString(), rc.ToString(),
@@ -2048,7 +2050,7 @@ Status WorkerOcServiceGetImpl::MergeQueryMetadataResults(std::vector<BatchQueryM
 }
 
 Status WorkerOcServiceGetImpl::QueryMetadataFromRedirectMaster(master::QueryMetaRspPb &rsp, uint64_t subTimeout,
-                                                               std::vector<RpcMessage> &payloads)
+                                                               std::vector<RpcMessage> &payloads, bool skipAddLocation)
 {
     for (const auto &redirectInfo : rsp.info()) {
         std::vector<RpcMessage> redirectPayloads;
@@ -2058,7 +2060,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromRedirectMaster(master::QueryMeta
                                                  redirectInfo.change_meta_ids().end() };
         HostPort redirectMasterAddr;
         RETURN_IF_NOT_OK(redirectMasterAddr.ParseString(redirectInfo.redirect_meta_address()));
-        SetQueryMetaInfo(redirectQueryReq, redirectIds, redirectMasterAddr.ToString(), false);
+        SetQueryMetaInfo(redirectQueryReq, redirectIds, redirectMasterAddr.ToString(), false, skipAddLocation);
         std::shared_ptr<WorkerMasterOCApi> redirectWorkerMasterApi =
             workerMasterApiManager_->GetWorkerMasterApi(redirectMasterAddr);
         CHECK_FAIL_RETURN_STATUS(redirectWorkerMasterApi != nullptr, K_RUNTIME_ERROR,
@@ -2081,7 +2083,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromRedirectMaster(master::QueryMeta
 }
 
 void WorkerOcServiceGetImpl::SetQueryMetaInfo(master::QueryMetaReqPb &req, const std::vector<std::string> &objectKeys,
-                                              const std::string &masterAddr, bool redirect)
+                                              const std::string &masterAddr, bool redirect, bool skipAddLocation)
 {
     // Get master addr successfully, query metadata by WorkerMastrOCApi.
     const std::string queryReqId = GetStringUuid();
@@ -2092,6 +2094,7 @@ void WorkerOcServiceGetImpl::SetQueryMetaInfo(master::QueryMetaReqPb &req, const
     req.set_request_id(queryReqId);
     req.set_redirect(redirect);
     req.set_address(localAddress_.ToString());
+    req.set_skip_add_location(skipAddLocation);
 }
 
 Status WorkerOcServiceGetImpl::CorrectQueryMetaResponse(std::vector<RpcMessage> &tmpPayloads,

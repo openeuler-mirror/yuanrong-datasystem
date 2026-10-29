@@ -1322,7 +1322,7 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
             getMetaInfo(accessor, info);
             TryGetObjectData(objectKey, accessor, payloadSize, info, payloads);
             // Existing ACK locations are ready, and existing UNACK locations already track an in-flight fetch.
-            if (accessor->second.locations.find(address) == accessor->second.locations.end()) {
+            if (!req.skip_add_location() && accessor->second.locations.find(address) == accessor->second.locations.end()) {
                 accessor->second.locations[address] = AckState::UNACK;
                 RETURN_IF_NOT_OK(objectStore_->AddObjectLocation(objectKey, address));
             }

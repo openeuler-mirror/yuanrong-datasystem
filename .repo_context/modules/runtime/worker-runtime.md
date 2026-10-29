@@ -68,9 +68,11 @@
     Route or RPC failure leaves the caller's existing results unchanged. Single-group requests do not start a bthread.
     `BatchExistsRspPb.not_exist_indices` contains sorted, unique, zero-based indices in that RPC request;
     redirected keys remain unresolved and `meta_is_moving` invalidates the whole response until deadline-bounded retry.
-    Master retains the existing non-PENDING/readable-location or requester-only-primary semantics, without copying
+    Master requires non-PENDING metadata and a readable ACK location or requester-only ACK primary, without copying
     metadata or selecting/shuffling concrete locations. `PureQueryMeta` remains for other callers and retains its
     missing/PENDING-key warning. Sources: `worker_oc_service_get_impl.cpp`, `oc_metadata_manager.cpp`, `master_object.proto`.
+    `ObjectMeta::IsPrimaryWithoutCopy` ignores UNACK locations and requires an ACK at the supplied primary address.
+    A primary ACK plus remote UNACK locations therefore remains readable from the primary; an all-UNACK map does not.
     The new RPC is appended to the service to preserve existing method indices. New workers require masters supporting
     `BatchExists`; there is no old-master fallback. Deploy/roll back worker and master roles as a coordinated version
     set (including co-located roles), rather than assuming arbitrary mixed-version rolling upgrades are supported.
@@ -85,6 +87,19 @@
     It excludes routing and transport; the `PureQueryMeta` baseline retains missing-key warnings.
     Run the master target with `--test_filter='*DISABLED_BatchExistsHandlerBenchmark'`
     and `--test_arg=--gtest_also_run_disabled_tests`; do not interpret fastbuild measurements as production RPC latency.
+  - `QueryMetaReqPb.skip_add_location` controls whether a query skips requester location registration, independently of
+    transport type. RH2D Get sets it when the requesting Worker enables RH2D and the client request carries a nonempty
+    communication ID. The flag is copied through owner fanout and redirects and only suppresses requester UNACK
+    registration in memory and persistence. Metadata lookup and opportunistic local payload retrieval share the normal
+    accessor path. Existing locations remain unchanged. Ordinary Get and migration keep their registration behavior.
+    The no-SHM result still skips copy confirmation and retains deferred local-entry cleanup; a transport fallback
+    that materializes SHM uses the existing version-checked copy-confirmation path.
+    Deploy/roll back Worker and Master together: the additive field defaults to false, and an old Master does not
+    implement the opt-out (signed protobuf requests also require compatible serialization). This change does not repair
+    historical persisted locations or change the ordinary-Get location encoding.
+    Regression entrypoints: `OCMetadataManagerTopologyTest.PrimaryWithoutCopyCountsOnlyAcknowledgedLocations`,
+    `QueryMetaCanSkipRequesterLocationRegistration`, and
+    `WorkerOcServiceImplTest.QueryMetaPreservesSkipAddLocationThroughFanoutAndRedirect`, in the targets above.
   - restart global-reference reconciliation is disabled by default in the Worker flag and dscli configuration because
     pure KVClient deployments do not maintain global references. ObjectClient deployments that use global references
     must explicitly enable `enable_reconciliation`; the Kubernetes Helm defaults continue to enable it for backward
