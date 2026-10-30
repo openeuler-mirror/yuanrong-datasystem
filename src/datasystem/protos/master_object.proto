@@ -163,6 +163,7 @@ message QueryMetaReqPb {
   string request_id = 4;
   int64 timeout = 5; // rpc timeout
   bool redirect = 6;
+  bool skip_add_location = 7; // Skip requester location registration; false preserves normal copy tracking.
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

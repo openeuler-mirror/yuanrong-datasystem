@@ -213,7 +213,17 @@ struct ObjectMeta {
      */
     bool IsPrimaryWithoutCopy(const std::string &address) const
     {
-        return locations.size() == 1 && locations.begin()->first == address;
+        bool hasPrimary = false;
+        for (const auto &location : locations) {
+            if (location.second != AckState::ACK) {
+                continue;
+            }
+            if (location.first != address) {
+                return false;
+            }
+            hasPrimary = true;
+        }
+        return hasPrimary;
     }
 
     /**

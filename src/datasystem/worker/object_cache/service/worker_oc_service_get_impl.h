@@ -148,7 +148,7 @@ public:
      * @param redirect if need redirect
      */
     void SetQueryMetaInfo(master::QueryMetaReqPb &req, const std::vector<std::string> &objectKeys,
-                          const std::string &masterAddr, bool redirect);
+                          const std::string &masterAddr, bool redirect, bool skipAddLocation);
 
     /**
      * @brief Check and set status K_WORKER_PULL_OBJECT_NOT_FOUND to retry.
@@ -547,9 +547,10 @@ private:
      * @return Status of the call.
      */
     Status QueryMetadataFromMaster(const std::vector<std::string> &objectKeys, uint64_t subTimeout,
-                                   QueryMetadataFromMasterResult &result);
+                                   QueryMetadataFromMasterResult &result, bool skipAddLocation = false);
     Status DispatchQueryMetadataGroups(std::unordered_map<HostPort, std::vector<std::string>> &objectKeysByMaster,
-                                       uint64_t subTimeout, std::vector<BatchQueryMetaResult> &batchQueryResults);
+                                       uint64_t subTimeout, std::vector<BatchQueryMetaResult> &batchQueryResults,
+                                       bool skipAddLocation);
     Status ProcessQueryMetadataResults(const Status &lastRc, bool traceEnabled,
                                        const std::vector<std::string> &objectKeys,
                                        std::vector<BatchQueryMetaResult> &batchQueryResults,
@@ -585,7 +586,7 @@ private:
      * @return Status of the call.
      */
     Status QueryMetadataFromRedirectMaster(master::QueryMetaRspPb &rsp, uint64_t subTimeout,
-                                           std::vector<RpcMessage> &payloads);
+                                           std::vector<RpcMessage> &payloads, bool skipAddLocation);
 
     Status MarkReferencedAbsentObjectsFailed(const std::map<std::string, uint64_t> &absentObjectKeys,
                                              const std::shared_ptr<GetRequest> &request);
@@ -1001,7 +1002,8 @@ private:
      */
     Status QueryMetaDataFromMasterImpl(const HostPort &destMasterHostPort, uint64_t subTimeout,
                                        const std::vector<std::string> &objKeysToQuery,
-                                       datasystem::master::QueryMetaRspPb &rsp, std::vector<RpcMessage> &payloads);
+                                       datasystem::master::QueryMetaRspPb &rsp, std::vector<RpcMessage> &payloads,
+                                       bool skipAddLocation);
 
     void HandleGetFailureHelper(std::shared_ptr<SafeObjType> &entry);
 

@@ -1779,7 +1779,7 @@ TEST_F(NotifyRemoteGetMigrationTest, DispatchQueryMetadataGroupsKeepsPeerDeadOve
                                                               : Status(K_RPC_PEER_DEAD, "metadata owner is dead")));
 
         std::vector<WorkerOcServiceGetImpl::BatchQueryMetaResult> results(groups.size());
-        return impl_->DispatchQueryMetadataGroups(groups, 0, results);
+        return impl_->DispatchQueryMetadataGroups(groups, 0, results, false);
     };
 
     EXPECT_EQ(run().GetCode(), K_RPC_PEER_DEAD);

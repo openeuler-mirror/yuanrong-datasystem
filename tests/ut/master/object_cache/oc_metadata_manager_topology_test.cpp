@@ -202,6 +202,7 @@ public:
 
 class OCMetadataManagerForTopologyTest : public OCMetadataManager {
 public:
+    using OCMetadataManager::LoadObjectLocations;
     using OCMetadataManager::OCMetadataManager;
 
     void MarkMigrating(const std::string &objectKey)
@@ -465,6 +466,86 @@ TEST_F(OCMetadataManagerTopologyTest, RollbackLastNoneL2UnackAtomicFailureKeepsS
     EXPECT_FALSE(HasPersistedKey(LOCATION_TABLE, locationKey));
 }
 
+TEST_F(OCMetadataManagerTopologyTest, PrimaryWithoutCopyCountsOnlyAcknowledgedLocations)
+{
+    ObjectMeta meta;
+    meta.meta.set_primary_address(LOCAL_ADDRESS);
+    EXPECT_FALSE(meta.IsPrimaryWithoutCopy(LOCAL_ADDRESS));
+    meta.locations[LOCAL_ADDRESS] = AckState::UNACK;
+    EXPECT_FALSE(meta.IsPrimaryWithoutCopy(LOCAL_ADDRESS));
+    meta.locations[LOCAL_ADDRESS] = AckState::ACK;
+    EXPECT_TRUE(meta.IsPrimaryWithoutCopy(LOCAL_ADDRESS));
+    EXPECT_FALSE(meta.IsPrimaryWithoutCopy(TARGET_ADDRESS));
+    meta.locations[TARGET_ADDRESS] = AckState::UNACK;
+    meta.locations[SURVIVOR_ADDRESS] = AckState::UNACK;
+    EXPECT_TRUE(meta.IsPrimaryWithoutCopy(LOCAL_ADDRESS));
+    meta.locations[TARGET_ADDRESS] = AckState::ACK;
+    EXPECT_FALSE(meta.IsPrimaryWithoutCopy(LOCAL_ADDRESS));
+    meta.locations.erase(LOCAL_ADDRESS);
+    EXPECT_FALSE(meta.IsPrimaryWithoutCopy(LOCAL_ADDRESS));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, QueryMetaCanSkipRequesterLocationRegistration)
+{
+    OCMetadataManagerForTopologyTest manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS,
+                                             nullptr, nullptr, false, HostPort(), LOCAL_ADDRESS, &localExiting_,
+                                             "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    manager.notifyWorkerManager_ =
+        std::make_unique<OCNotifyWorkerManager>(manager.objectStore_, true, akSkManager_, &manager);
+    const std::vector<std::string> keys{ "rh2d-first", "rh2d-second" };
+    for (const auto &key : keys) {
+        InsertPrimaryWithCopy(manager, key);
+        TbbMetaTable::accessor accessor;
+        ASSERT_TRUE(manager.metaShards_[manager.GetShardIndex(key)].table.find(accessor, key));
+        accessor->second.locations.erase(TARGET_ADDRESS);
+        DS_ASSERT_OK(manager.objectStore_->AddObjectLocation(key, LOCAL_ADDRESS, ""));
+    }
+    QueryMetaReqPb request;
+    request.set_address(TARGET_ADDRESS);
+    request.set_skip_add_location(true);
+    request.mutable_ids()->Add(keys.begin(), keys.end());
+    constexpr size_t queryAttempts = 2;
+    for (size_t attempt = 0; attempt < queryAttempts; ++attempt) {
+        QueryMetaRspPb response;
+        std::vector<RpcMessage> payloads;
+        std::vector<std::string> missing;
+        DS_ASSERT_OK(manager.QueryMetaFromMetaTable(request, keys, response, payloads, missing));
+        ASSERT_EQ(response.query_metas_size(), keys.size());
+        EXPECT_TRUE(missing.empty());
+        EXPECT_TRUE(payloads.empty());
+        for (const auto &key : keys) {
+            EXPECT_FALSE(HasRequesterLocation(manager, key));
+            EXPECT_FALSE(HasPersistedKey(LOCATION_TABLE, std::string(TARGET_ADDRESS) + "_" + key));
+            EXPECT_TRUE(HasPersistedKey(LOCATION_TABLE, std::string(LOCAL_ADDRESS) + "_" + key));
+        }
+        for (const auto &meta : response.query_metas()) {
+            EXPECT_EQ(meta.address(), LOCAL_ADDRESS);
+            EXPECT_TRUE(meta.single_copy());
+        }
+    }
+    std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> recoveredLocations;
+    DS_ASSERT_OK(manager.LoadObjectLocations(true, recoveredLocations));
+    for (const auto &key : keys) {
+        ASSERT_EQ(recoveredLocations.at(key).size(), 1U);
+        EXPECT_EQ(recoveredLocations.at(key).front().first, LOCAL_ADDRESS);
+        EXPECT_EQ(recoveredLocations.at(key).front().second, AckState::ACK);
+    }
+
+    request.clear_skip_add_location();
+    QueryMetaRspPb response;
+    std::vector<RpcMessage> payloads;
+    std::vector<std::string> missing;
+    DS_ASSERT_OK(manager.QueryMetaFromMetaTable(request, keys, response, payloads, missing));
+    for (const auto &key : keys) {
+        EXPECT_TRUE(HasRequesterLocation(manager, key));
+        EXPECT_TRUE(HasPersistedKey(LOCATION_TABLE, std::string(TARGET_ADDRESS) + "_" + key));
+        TbbMetaTable::const_accessor accessor;
+        ASSERT_TRUE(manager.metaShards_[manager.GetShardIndex(key)].table.find(accessor, key));
+        EXPECT_EQ(accessor->second.locations.at(TARGET_ADDRESS), AckState::UNACK);
+    }
+}
+
 TEST_F(OCMetadataManagerTopologyTest, BatchExistsPreservesReadableLocationSemantics)
 {
     OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
@@ -472,7 +553,8 @@ TEST_F(OCMetadataManagerTopologyTest, BatchExistsPreservesReadableLocationSemant
     manager.notifyWorkerManager_ =
         std::make_unique<OCNotifyWorkerManager>(manager.objectStore_, true, akSkManager_, &manager);
     const std::vector<std::string> keys{
-        "remote", "missing", "pending", "empty", "local-primary", "local-copy", "unack", "invalidated", "missing"
+        "remote", "missing", "pending", "empty", "local-primary", "local-copy", "unack", "invalidated", "missing",
+        "only-unack"
     };
     for (const auto &key : keys) {
         if (key == "missing") {
@@ -493,6 +575,9 @@ TEST_F(OCMetadataManagerTopologyTest, BatchExistsPreservesReadableLocationSemant
             }
         } else if (key == "unack") {
             meta.locations[TARGET_ADDRESS] = AckState::UNACK;
+        } else if (key == "only-unack") {
+            meta.locations.clear();
+            meta.locations[LOCAL_ADDRESS] = AckState::UNACK;
         }
     }
     BINEXPECT_CALL(&OCNotifyWorkerManager::CheckExistAsyncWorkerOp, (testing::_, testing::_, testing::_))
@@ -504,7 +589,7 @@ TEST_F(OCMetadataManagerTopologyTest, BatchExistsPreservesReadableLocationSemant
     request.mutable_object_keys()->Add(keys.begin(), keys.end());
     BatchExistsRspPb response;
     DS_ASSERT_OK(manager.BatchExists(request, response));
-    EXPECT_THAT(response.not_exist_indices(), testing::ElementsAre(1, 2, 3, 5, 6, 7, 8));
+    EXPECT_THAT(response.not_exist_indices(), testing::ElementsAre(1, 2, 3, 5, 7, 8, 9));
 
     PureQueryMetaReqPb oldRequest;
     oldRequest.set_address(LOCAL_ADDRESS);
@@ -541,7 +626,7 @@ TEST_F(OCMetadataManagerTopologyTest, BatchExistsEmptyAllPresentAndAllMissing)
         TbbMetaTable::accessor accessor;
         manager.metaShards_[manager.GetShardIndex(key)].table.insert(accessor, key);
         accessor->second.meta.set_primary_address(LOCAL_ADDRESS);
-        accessor->second.locations[LOCAL_ADDRESS] = AckState::UNACK;
+        accessor->second.locations[LOCAL_ADDRESS] = AckState::ACK;
     }
     request.add_object_keys(key);
     request.add_object_keys(key);

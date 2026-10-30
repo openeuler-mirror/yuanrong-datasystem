@@ -276,10 +276,10 @@ public:
     Status QueryMeta(master::QueryMetaReqPb &request, uint64_t subTimeout, master::QueryMetaRspPb &response,
                      std::vector<RpcMessage> &payloads) override
     {
-        (void)request;
         (void)subTimeout;
         (void)payloads;
         std::lock_guard<std::mutex> lock(mutex_);
+        queryMetaRequests_.emplace_back(request);
         ++queryMetaCallCount_;
         if (queryMetaHandler_) {
             return queryMetaHandler_(queryMetaCallCount_, response);
@@ -460,6 +460,12 @@ public:
         return queryMetaCallCount_;
     }
 
+    std::vector<master::QueryMetaReqPb> QueryMetaRequests() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return queryMetaRequests_;
+    }
+
     int GetObjectLocationsCallCount() const
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -501,6 +507,7 @@ private:
     RemoveMetaHandler removeMetaHandler_;
     std::vector<master::CreateMultiMetaReqPb> createMultiMetaRequests_;
     std::vector<master::RemoveMetaReqPb> removeMetaRequests_;
+    std::vector<master::QueryMetaReqPb> queryMetaRequests_;
     int queryMetaCallCount_{ 0 };
     int getObjectLocationsCallCount_{ 0 };
     int pureQueryMetaCallCount_{ 0 };
@@ -2444,7 +2451,7 @@ TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterReportsMetadataRpcFailure
     std::vector<RpcMessage> payloads;
 
     auto rc = getImpl.QueryMetaDataFromMasterImpl(masterAddress, K_META_MOVING_RETRY_TIMEOUT_MS, { "obj" }, rsp,
-                                                  payloads);
+                                                  payloads, false);
 
     EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_EQ(api->QueryMetaCallCount(), 1);
@@ -2843,7 +2850,7 @@ TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterReportsMetadataRpcSuccess
     std::vector<RpcMessage> payloads;
 
     DS_ASSERT_OK(getImpl.QueryMetaDataFromMasterImpl(masterAddress, K_META_MOVING_RETRY_TIMEOUT_MS, { "obj" }, rsp,
-                                                     payloads));
+                                                     payloads, false));
 
     EXPECT_EQ(api->QueryMetaCallCount(), 1);
     EXPECT_THAT(observations, ElementsAre(Pair(masterAddress.ToString(), K_OK)));
@@ -2873,11 +2880,43 @@ TEST_F(WorkerOcServiceImplTest, QueryMetaDataFromMasterDoesNotReportLocalRetryBu
 
     GetRequestContext()->reqTimeoutDuration.Init(1000);
     auto rc = getImpl.QueryMetaDataFromMasterImpl(masterAddress, K_META_MOVING_RETRY_TIMEOUT_MS, { "obj" }, rsp,
-                                                  payloads);
+                                                  payloads, false);
 
     EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_EQ(api->QueryMetaCallCount(), 1);
     EXPECT_THAT(observations, ElementsAre(Pair(masterAddress.ToString(), K_OK)));
+}
+
+TEST_F(WorkerOcServiceImplTest, QueryMetaPreservesSkipAddLocationThroughFanoutAndRedirect)
+{
+    ScopedRequestContext requestContext;
+    const HostPort masterAddress("127.0.0.1", 18482);
+    const HostPort redirectAddress("127.0.0.1", 18483);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(masterAddress);
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    api->SetQueryMetaHandler([&redirectAddress](int, master::QueryMetaRspPb &response) {
+        auto *redirect = response.add_info();
+        redirect->set_redirect_meta_address(redirectAddress.ToString());
+        redirect->add_change_meta_ids("obj");
+        return Status::OK();
+    });
+    WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    std::unordered_map<HostPort, std::vector<std::string>> groups{ { masterAddress, { "obj" } } };
+    for (const bool skipAddLocation : { false, true }) {
+        GetRequestContext()->reqTimeoutDuration.Init(K_META_MOVING_RETRY_TIMEOUT_MS);
+        std::vector<WorkerOcServiceGetImpl::BatchQueryMetaResult> results(groups.size());
+        const auto previousCount = api->QueryMetaRequests().size();
+        DS_ASSERT_OK(getImpl.DispatchQueryMetadataGroups(groups, 0, results, skipAddLocation));
+        const auto requests = api->QueryMetaRequests();
+        constexpr size_t callsPerQuery = 2;
+        ASSERT_EQ(requests.size(), previousCount + callsPerQuery);
+        EXPECT_TRUE(requests[previousCount].redirect());
+        EXPECT_FALSE(requests[previousCount + 1].redirect());
+        EXPECT_EQ(requests[previousCount].skip_add_location(), skipAddLocation);
+        EXPECT_EQ(requests[previousCount + 1].skip_add_location(), skipAddLocation);
+    }
 }
 
 TEST_F(WorkerOcServiceImplTest, RedirectGetObjectLocationsMapsMetadataRpcFailure)
