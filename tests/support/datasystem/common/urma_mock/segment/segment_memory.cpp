@@ -576,9 +576,12 @@ SegmentImportResult SegmentImporter::Resolve(const SegmentImportRequest &request
     const auto &segmentMemory = SegmentMemoryManager::Instance();
     uint64_t tokenNum = ParseImportToken(request.token);
     if (tokenNum != 0) {
-        auto ep = UdsEndpointService::Instance().LookupImportEndpoint(tokenNum, request.remoteVa);
+        const bool resolvedByIdentity = HasRegisteredImportEndpoint(request.endpoint);
+        auto ep = resolvedByIdentity ? request.endpoint
+                                     : UdsEndpointService::Instance().LookupImportEndpoint(tokenNum, request.remoteVa);
         VLOG(1) << "[MockUrma] import_seg path-select token=" << tokenNum << " host=" << ep.host << " port=" << ep.port
-                << " instanceId=" << ep.instanceId << " useHostPort=" << (!ep.host.empty() && ep.port > 0)
+                << " instanceId=" << ep.instanceId << " resolvedByIdentity=" << resolvedByIdentity
+                << " useHostPort=" << (!ep.host.empty() && ep.port > 0)
                 << " useInstanceId=" << !ep.instanceId.empty();
         if (HasRegisteredImportEndpoint(ep)) {
             SegmentBacking backing;
@@ -592,7 +595,7 @@ SegmentImportResult SegmentImporter::Resolve(const SegmentImportRequest &request
             LOG(ERROR) << "[MockUrma] import_seg UDS failed for registered endpoint token=" << tokenNum
                        << " host=" << ep.host << " port=" << ep.port << " instanceId=" << ep.instanceId
                        << "; skip local alias fallback";
-            if (!HasHostPortImportEndpoint(ep)) {
+            if (!resolvedByIdentity && !HasHostPortImportEndpoint(ep)) {
                 auto refreshedEp = SegmentEndpointRegistry::Instance().Lookup(tokenNum, request.remoteVa);
                 if (HasRegisteredImportEndpoint(refreshedEp) && refreshedEp.instanceId != ep.instanceId) {
                     SegmentBacking backing;

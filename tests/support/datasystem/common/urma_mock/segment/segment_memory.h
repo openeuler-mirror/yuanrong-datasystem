@@ -160,6 +160,7 @@ struct SegmentImportRequest {
     uint64_t size = 0;      ///< Requested import size.
     std::string token;      ///< Segment token string carried by URMA metadata.
     uint64_t remoteVa = 0;  ///< Wire-visible remote virtual address.
+    ImportEndpoint endpoint;  ///< Endpoint resolved from the full URMA segment identity.
 };
 
 /**

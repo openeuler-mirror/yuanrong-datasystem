@@ -700,6 +700,7 @@ Host selection is opt-in through `--host-filter` JSON (`include`/`exclude` array
 
 
 
+
 - `ClientRpcCredentialOwnershipTest.FixedModeRejectsFirstEnableAndCloneKeepsRotationOwner` 检查固定模式、空 key 错误优先级与 Clone 后的 provider 配对。冷注册回归 `BrpcColdInitializationTest.PlainChannelRegistersCaptureBeforeAuthenticatedUse` 应通过精确 filter 的独立测试进程执行；混跑时其他认证测试可能已先注册，不能据此声称验证了首次初始化时机。这些用例应针对待交付的精简实现执行；旧大实现 `5b2a0d1c9` 的结果只属历史证据，不能代替当前实现回归。性能与旧二进制混部未实测。
 
 - `OcRpcAuthIntegrationTest.*` / `OcRpcAuthOffIntegrationTest.*` replace the obsolete skipped PB-signature compatibility
@@ -722,5 +723,23 @@ Host selection is opt-in through `--host-filter` JSON (`include`/`exclude` array
   mesh stub caches with their provider before Coordinator topology helpers can select ordinary creators; preserve
   the same provider owner across repeated fixture setup in a process. WorkerRpcClient DoInvoke mocks capture business
   PB before Channel serialization, so their assertions cover body fields, dispatch and timeouts without expecting
-  PB signatures. Fixtures use ordinary cross-process clients. Regression coverage reuses the existing ListenWorker,
-  Master/KV metadata, Hetero, RemotePush and DeadPeer cases; no new cases are needed.
+  PB signatures. Embedded OFF fixtures must also use ordinary cross-process clients. Regression coverage reuses the
+  existing ListenWorker, Master/KV metadata, Hetero, RemotePush, DeadPeer and embedded cases; no new cases are needed.
+
+## Consecutive Voluntary Scale-In Primary Handoff
+
+- `tests/st/client/object_cache/oc_client_scale_down_migrate_target_test.cpp` covers two normal voluntary scale-ins in
+  three-worker clusters over URMA mock and TCP. It verifies every original value after the second normal exit; the
+  concurrent variants also run Set/Delete/Get during the first migration and release the client before the second exit.
+  The second leaving worker is selected from live ownership, rather than assuming a fixed worker.
+- The leaving worker uses versioned, batched `GIVEUP_PRIMARY` through the existing topology-operation channel. Master
+  promotion accepts acknowledged `ACTIVE` copies, persists the primary change, then removes the source location.
+  Missing payloads, no eligible target, confirmation failures, or synchronous persistence failures retry the handoff.
+  No PB field or front-path Set/Get RPC is added. Async RocksDB retains its existing queue-submission acknowledgement
+  contract; background IO failures are logged by storage rather than returned through this callback.
+- `oc_metadata_manager_topology_test.cpp` covers candidate eligibility, source version fencing, ordinary GIVEUP
+  compatibility, partial batch ACK/retry, per-key locking, persisted-stage recovery, membership failure, and storage
+  failure/retry. `worker_oc_service_impl_test.cpp` covers 300/300/1 batching plus redirect versions, version snapshot
+  cancellation/deadline/lock handling, and drain retry retaining versioned handoff. These are unit tests, not real
+  network, power-loss, or background-IO fault tests.
+- Use the current UB mock where UB hardware is unavailable. A skipped case is not validation.

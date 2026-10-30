@@ -37,6 +37,7 @@
 #include "datasystem/common/urma_mock/objects/mock_jetty.h"
 #include "datasystem/common/urma_mock/objects/mock_seg.h"
 #include "datasystem/common/urma_mock/objects/mock_tjetty.h"
+#include "datasystem/common/urma_mock/registry/import_endpoint_registry.h"
 #include "datasystem/common/urma_mock/post_send/mock_thread_pool.h"
 
 namespace datasystem {
@@ -179,7 +180,8 @@ public:
      * @return Imported segment, or nullptr on failure.
      */
     MockSeg *ImportSeg(MockContext *ctx, uint64_t size, const std::string &token, const std::string &key,
-                       uint64_t remoteVa = 0, urma_target_seg_t **rawOut = nullptr);
+                       uint64_t remoteVa = 0, urma_target_seg_t **rawOut = nullptr,
+                       const ImportEndpoint &remoteEndpoint = {});
 
     /**
      * @brief Unimport a target segment.

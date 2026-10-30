@@ -37,6 +37,7 @@ namespace {
 constexpr char LOCAL_ADDRESS[] = "127.0.0.1:30001";
 constexpr char TARGET_ADDRESS[] = "127.0.0.1:30002";
 constexpr char SURVIVOR_ADDRESS[] = "127.0.0.1:30003";
+constexpr char ACTIVE_CANDIDATE_ADDRESS[] = "127.0.0.1:30004";
 constexpr uint64_t LOCATION_TOPOLOGY_VERSION = 11;
 constexpr uint64_t QUERY_META_OBJECT_VERSION = 101;
 constexpr int ROLLBACK_UNACK_CAUSE_WIRE_VALUE = 4;
@@ -160,10 +161,42 @@ public:
 
     bool HasRequesterLocation(OCMetadataManager &manager, const std::string &objectKey)
     {
+        return HasLocation(manager, objectKey, TARGET_ADDRESS);
+    }
+
+    bool HasLocation(OCMetadataManager &manager, const std::string &objectKey, const std::string &address)
+    {
         TbbMetaTable::const_accessor accessor;
         auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
         bthread::RWLockRdGuard lock(shard.mutex);
-        return shard.table.find(accessor, objectKey) && accessor->second.locations.count(TARGET_ADDRESS) != 0;
+        return shard.table.find(accessor, objectKey) && accessor->second.locations.count(address) != 0;
+    }
+
+    void ExpectPrimaryState(OCMetadataManager &manager, const std::string &objectKey, bool sourcePresent,
+                            const std::string &primary, uint64_t version = 0)
+    {
+        SCOPED_TRACE(objectKey);
+        TbbMetaTable::const_accessor accessor;
+        auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+        bthread::RWLockRdGuard lock(shard.mutex);
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        EXPECT_EQ(accessor->second.locations.count(LOCAL_ADDRESS), sourcePresent ? 1U : 0U);
+        EXPECT_EQ(accessor->second.locations.count(TARGET_ADDRESS), 1U);
+        EXPECT_EQ(accessor->second.meta.primary_address(), primary);
+        if (version != 0) {
+            EXPECT_EQ(accessor->second.meta.version(), version);
+        }
+    }
+
+    Status PublishHandoffTopology(cluster::TopologyState topology, cluster::TopologySnapshotState &snapshots)
+    {
+        topology.version = LOCATION_TOPOLOGY_VERSION;
+        topology.clusterHasInit = true;
+        std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+        RETURN_IF_NOT_OK(cluster::TopologySnapshot::Create(topology, LOCATION_TOPOLOGY_VERSION,
+                                                          std::string(SHA256_HEX_SIZE, 'a'), snapshot));
+        cluster::SnapshotUpdateOutcome outcome;
+        return snapshots.Publish(snapshot, outcome);
     }
 
     RemoveMetaReqPb MakeUnknownRollbackRequest(const std::string &objectKey, uint64_t version)
@@ -186,6 +219,19 @@ public:
         RemoveMetaReqPb request;
         request.set_address(TARGET_ADDRESS);
         request.set_cause(RemoveMetaReqPb::ROLLBACK_UNACK);
+        request.add_ids(objectKey);
+        auto *objectVersion = request.add_id_with_version();
+        objectVersion->set_id(objectKey);
+        objectVersion->set_version(version);
+        return request;
+    }
+
+    RemoveMetaReqPb MakeTopologyGiveUpRequest(const std::string &objectKey, uint64_t version)
+    {
+        RemoveMetaReqPb request;
+        request.set_address(LOCAL_ADDRESS);
+        request.set_cause(RemoveMetaReqPb::GIVEUP_PRIMARY);
+        request.set_topology_operation_id("scale-in-operation");
         request.add_ids(objectKey);
         auto *objectVersion = request.add_id_with_version();
         objectVersion->set_id(objectKey);
@@ -355,7 +401,7 @@ TEST_F(OCMetadataManagerTopologyTest, RollbackUnackKeepsLocationWhenPersistenceD
 
     DS_ASSERT_OK(manager.RemoveMeta(request, response));
 
-    EXPECT_TRUE(HasRequesterLocation(manager, objectKey));
+    EXPECT_TRUE(HasLocation(manager, objectKey, TARGET_ADDRESS));
     EXPECT_EQ(response.failed_ids_size(), 1);
     EXPECT_EQ(response.success_ids_size(), 0);
 }
@@ -398,7 +444,8 @@ TEST_F(OCMetadataManagerTopologyTest, RollbackNoneL2UnackKeepsMetaWithAckCopy)
 
     EXPECT_EQ(response.success_ids_size(), 1);
     EXPECT_TRUE(HasMeta(manager, objectKey));
-    EXPECT_FALSE(HasRequesterLocation(manager, objectKey));
+    EXPECT_TRUE(HasLocation(manager, objectKey, LOCAL_ADDRESS));
+    EXPECT_FALSE(HasLocation(manager, objectKey, TARGET_ADDRESS));
     EXPECT_TRUE(HasPersistedKey(META_TABLE, objectKey));
     EXPECT_TRUE(HasPersistedKey(LOCATION_TABLE, std::string(LOCAL_ADDRESS) + "_" + objectKey));
     EXPECT_FALSE(HasPersistedKey(LOCATION_TABLE, std::string(TARGET_ADDRESS) + "_" + objectKey));
@@ -860,6 +907,137 @@ TEST_F(OCMetadataManagerTopologyTest, L2PrimaryDoesNotHandOffToPreLeavingCopy)
     EXPECT_EQ(response.need_l2cache_ids_size(), 0);
 }
 
+TEST_F(OCMetadataManagerTopologyTest, TopologyGiveUpDoesNotUsePreLeavingCopyAsPrimary)
+{
+    localExiting_.store(false);
+    cluster::TopologyState topology;
+    topology.members = {
+        cluster::Member{ { std::string(MEMBER_ID_SIZE, 'a'), LOCAL_ADDRESS }, cluster::MemberState::ACTIVE, { 0 } },
+        cluster::Member{ { std::string(MEMBER_ID_SIZE, 'b'), TARGET_ADDRESS }, cluster::MemberState::PRE_LEAVING, { 1 } },
+    };
+    cluster::TopologySnapshotState snapshots;
+    DS_ASSERT_OK(PublishHandoffTopology(topology, snapshots));
+    cluster::MembershipEndpointView membership(snapshots);
+    OCMetadataManager manager(rocksStore_.get(), nullptr, LOCAL_ADDRESS, nullptr, &membership,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "topology_giveup_preleaving_target";
+    InsertVersionedRequesterLocation(manager, objectKey, QUERY_META_OBJECT_VERSION, AckState::ACK);
+    auto request = MakeTopologyGiveUpRequest(objectKey, QUERY_META_OBJECT_VERSION);
+    RemoveMetaRspPb response;
+
+    DS_ASSERT_OK(manager.RemoveMeta(request, response));
+
+    EXPECT_EQ(response.need_data_ids_size(), 1);
+    EXPECT_EQ(response.need_data_ids(0), objectKey);
+    EXPECT_EQ(response.success_ids_size(), 0);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, TopologyGiveUpSelectsOnlyActiveAcknowledgedCopy)
+{
+    localExiting_.store(false);
+    cluster::TopologyState topology;
+    topology.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_OUT, LOCATION_TOPOLOGY_VERSION };
+    topology.members = {
+        cluster::Member{ { std::string(MEMBER_ID_SIZE, 'a'), LOCAL_ADDRESS }, cluster::MemberState::ACTIVE, { 0 } },
+        cluster::Member{ { std::string(MEMBER_ID_SIZE, 'b'), TARGET_ADDRESS }, cluster::MemberState::JOINING, { 1 } },
+        cluster::Member{ { std::string(MEMBER_ID_SIZE, 'c'), SURVIVOR_ADDRESS }, cluster::MemberState::ACTIVE, { 2 } },
+        cluster::Member{ { std::string(MEMBER_ID_SIZE, 'd'), ACTIVE_CANDIDATE_ADDRESS },
+                         cluster::MemberState::ACTIVE, { 3 } },
+    };
+    cluster::TopologySnapshotState snapshots;
+    DS_ASSERT_OK(PublishHandoffTopology(topology, snapshots));
+    cluster::MembershipEndpointView membership(snapshots);
+    OCMetadataManager manager(rocksStore_.get(), nullptr, LOCAL_ADDRESS, nullptr, &membership,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "topology_active_ack_candidate";
+    InsertVersionedRequesterLocation(manager, objectKey, QUERY_META_OBJECT_VERSION, AckState::ACK);
+    {
+        TbbMetaTable::accessor accessor;
+        auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+        bthread::RWLockWrGuard lock(shard.mutex);
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        accessor->second.locations[SURVIVOR_ADDRESS] = AckState::UNACK;
+        accessor->second.locations[ACTIVE_CANDIDATE_ADDRESS] = AckState::ACK;
+    }
+    const std::unordered_map<std::string, uint64_t> versions{ { objectKey, QUERY_META_OBJECT_VERSION } };
+    RemoveMetaRspPb response;
+    std::unordered_map<std::string, std::unordered_set<std::string>> candidates;
+
+    DS_ASSERT_OK(manager.ProcessGiveUpPrimaryObject(objectKey, LOCAL_ADDRESS, response, candidates, true, &versions,
+                                                    true));
+
+    ASSERT_EQ(candidates.size(), 1U);
+    ASSERT_EQ(candidates.count(ACTIVE_CANDIDATE_ADDRESS), 1U);
+    EXPECT_EQ(candidates[ACTIVE_CANDIDATE_ADDRESS].count(objectKey), 1U);
+    EXPECT_EQ(response.need_data_ids_size(), 0);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, TopologyGiveUpMissingVersionDoesNotAcknowledgeSource)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(rocksStore_.get(), nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "topology_giveup_missing_version";
+    InsertPrimaryWithCopy(manager, objectKey);
+
+    auto request = MakeTopologyGiveUpRequest(objectKey, QUERY_META_OBJECT_VERSION);
+    request.clear_id_with_version();
+    auto *unrelatedVersion = request.add_id_with_version();
+    unrelatedVersion->set_id("unrelated-key");
+    unrelatedVersion->set_version(QUERY_META_OBJECT_VERSION);
+    RemoveMetaRspPb response;
+
+    DS_ASSERT_OK(manager.RemoveMeta(request, response));
+
+    ASSERT_EQ(response.failed_ids_size(), 1);
+    EXPECT_EQ(response.failed_ids(0), objectKey);
+    EXPECT_TRUE(HasRequesterLocation(manager, objectKey));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, TopologyGiveUpStaleVersionCleansCommittedSourceLocation)
+{
+    localExiting_.store(false);
+    cluster::TopologyState topology;
+    topology.members = {
+        cluster::Member{ { std::string(MEMBER_ID_SIZE, 'a'), LOCAL_ADDRESS }, cluster::MemberState::ACTIVE, { 0 } },
+        cluster::Member{ { std::string(MEMBER_ID_SIZE, 'b'), TARGET_ADDRESS }, cluster::MemberState::ACTIVE, { 1 } },
+    };
+    cluster::TopologySnapshotState snapshots;
+    DS_ASSERT_OK(PublishHandoffTopology(topology, snapshots));
+    cluster::MembershipEndpointView membership(snapshots);
+    OCMetadataManager manager(rocksStore_.get(), nullptr, LOCAL_ADDRESS, nullptr, &membership,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "topology_giveup_stale_version";
+    InsertVersionedRequesterLocation(manager, objectKey, QUERY_META_OBJECT_VERSION + 1, AckState::ACK);
+    {
+        TbbMetaTable::accessor accessor;
+        auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+        bthread::RWLockWrGuard lock(shard.mutex);
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        accessor->second.meta.set_primary_address(TARGET_ADDRESS);
+    }
+    DS_ASSERT_OK(rocksStore_->Put(LOCATION_TABLE, std::string(LOCAL_ADDRESS) + "_" + objectKey, "0"));
+    auto request = MakeTopologyGiveUpRequest(objectKey, QUERY_META_OBJECT_VERSION);
+    RemoveMetaRspPb response;
+
+    DS_ASSERT_OK(inject::Set("master.rocksdb.delete", "1*return(K_KVSTORE_ERROR)"));
+    EXPECT_EQ(manager.RemoveMeta(request, response).GetCode(), K_KVSTORE_ERROR);
+
+    ASSERT_NO_FATAL_FAILURE(ExpectPrimaryState(manager, objectKey, true, TARGET_ADDRESS));
+    EXPECT_TRUE(HasPersistedKey(LOCATION_TABLE, std::string(LOCAL_ADDRESS) + "_" + objectKey));
+
+    DS_ASSERT_OK(inject::Clear("master.rocksdb.delete"));
+    RemoveMetaRspPb retryResponse;
+    DS_ASSERT_OK(manager.RemoveMeta(request, retryResponse));
+    ASSERT_EQ(retryResponse.success_ids_size(), 1);
+    ASSERT_NO_FATAL_FAILURE(ExpectPrimaryState(manager, objectKey, false, TARGET_ADDRESS));
+    EXPECT_FALSE(HasPersistedKey(LOCATION_TABLE, std::string(LOCAL_ADDRESS) + "_" + objectKey));
+}
+
 TEST_F(OCMetadataManagerTopologyTest, TopologyOperationCanChangePrimaryWhileOrdinaryExitingRequestIsFenced)
 {
     OCMetadataManager manager(rocksStore_.get(), nullptr, LOCAL_ADDRESS, nullptr, nullptr,
@@ -885,6 +1063,297 @@ TEST_F(OCMetadataManagerTopologyTest, TopologyOperationCanChangePrimaryWhileOrdi
         ASSERT_TRUE(shard.table.find(accessor, objectKey));
         EXPECT_EQ(accessor->second.meta.primary_address(), TARGET_ADDRESS);
     }
+}
+
+TEST_F(OCMetadataManagerTopologyTest, OrdinaryGiveUpPrimaryKeepsNoCopySemantics)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(rocksStore_.get(), nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "ordinary_giveup_without_copy";
+    InsertPrimaryWithCopy(manager, objectKey);
+    {
+        TbbMetaTable::accessor accessor;
+        auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+        bthread::RWLockWrGuard lock(shard.mutex);
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        accessor->second.locations.erase(TARGET_ADDRESS);
+    }
+
+    RemoveMetaReqPb request;
+    request.set_address(LOCAL_ADDRESS);
+    request.set_cause(RemoveMetaReqPb::GIVEUP_PRIMARY);
+    request.add_ids(objectKey);
+    RemoveMetaRspPb response;
+
+    DS_ASSERT_OK(manager.RemoveMeta(request, response));
+
+    ASSERT_EQ(response.need_data_ids_size(), 1);
+    EXPECT_EQ(response.need_data_ids(0), objectKey);
+    EXPECT_EQ(response.success_ids_size(), 0);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, TopologyPrimaryCommitFailureKeepsSourcePrimaryForRetry)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(rocksStore_.get(), nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "topology_commit_failure";
+    InsertVersionedRequesterLocation(manager, objectKey, QUERY_META_OBJECT_VERSION, AckState::ACK);
+
+    DS_ASSERT_OK(inject::Set("master.rocksdb.put", "1*return(K_KVSTORE_ERROR)"));
+    EXPECT_EQ(manager.CommitTopologyPrimary(objectKey, LOCAL_ADDRESS, TARGET_ADDRESS, QUERY_META_OBJECT_VERSION)
+                  .GetCode(),
+              K_KVSTORE_ERROR);
+    DS_ASSERT_OK(inject::Clear("master.rocksdb.put"));
+
+    ASSERT_NO_FATAL_FAILURE(ExpectPrimaryState(manager, objectKey, true, LOCAL_ADDRESS));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, TopologyPrimaryVersionRaceCleansSourceLocation)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(rocksStore_.get(), nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "topology_version_race_cleanup";
+    InsertVersionedRequesterLocation(manager, objectKey, QUERY_META_OBJECT_VERSION + 1, AckState::ACK);
+    {
+        TbbMetaTable::accessor accessor;
+        auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+        bthread::RWLockWrGuard lock(shard.mutex);
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        accessor->second.meta.set_primary_address(TARGET_ADDRESS);
+    }
+    DS_ASSERT_OK(rocksStore_->Put(LOCATION_TABLE, std::string(LOCAL_ADDRESS) + "_" + objectKey, "0"));
+
+    DS_ASSERT_OK(manager.CommitTopologyPrimary(objectKey, LOCAL_ADDRESS, TARGET_ADDRESS, QUERY_META_OBJECT_VERSION));
+
+    EXPECT_FALSE(HasPersistedKey(LOCATION_TABLE, std::string(LOCAL_ADDRESS) + "_" + objectKey));
+    ASSERT_NO_FATAL_FAILURE(
+        ExpectPrimaryState(manager, objectKey, false, TARGET_ADDRESS, QUERY_META_OBJECT_VERSION + 1));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, TopologyRetryCleansPersistedSourceMissingFromMemory)
+{
+    localExiting_.store(false);
+    cluster::TopologyState topology;
+    topology.members = {
+        cluster::Member{ { std::string(MEMBER_ID_SIZE, 'a'), LOCAL_ADDRESS }, cluster::MemberState::ACTIVE, { 0 } },
+        cluster::Member{ { std::string(MEMBER_ID_SIZE, 'b'), TARGET_ADDRESS }, cluster::MemberState::ACTIVE, { 1 } },
+    };
+    cluster::TopologySnapshotState snapshots;
+    DS_ASSERT_OK(PublishHandoffTopology(topology, snapshots));
+    cluster::MembershipEndpointView membership(snapshots);
+    OCMetadataManager manager(rocksStore_.get(), nullptr, LOCAL_ADDRESS, nullptr, &membership,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "topology_retry_persisted_source";
+    InsertVersionedRequesterLocation(manager, objectKey, QUERY_META_OBJECT_VERSION + 1, AckState::ACK);
+    {
+        TbbMetaTable::accessor accessor;
+        auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+        bthread::RWLockWrGuard lock(shard.mutex);
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        accessor->second.meta.set_primary_address(TARGET_ADDRESS);
+        accessor->second.locations.erase(LOCAL_ADDRESS);
+    }
+    DS_ASSERT_OK(rocksStore_->Put(LOCATION_TABLE, std::string(LOCAL_ADDRESS) + "_" + objectKey, "0"));
+    auto request = MakeTopologyGiveUpRequest(objectKey, QUERY_META_OBJECT_VERSION);
+    RemoveMetaRspPb response;
+
+    DS_ASSERT_OK(manager.RemoveMeta(request, response));
+
+    ASSERT_EQ(response.success_ids_size(), 1);
+    EXPECT_FALSE(HasPersistedKey(LOCATION_TABLE, std::string(LOCAL_ADDRESS) + "_" + objectKey));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, TopologyPrimaryBatchPartialAckRetriesOnlyUnconfirmedKeys)
+{
+    localExiting_.store(false);
+    OCMetadataManager manager(rocksStore_.get(), nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    manager.notifyWorkerManager_ =
+        std::make_unique<OCNotifyWorkerManager>(manager.objectStore_, &manager);
+    const std::string first = "batch_ack", second = "batch_retry";
+    for (const auto &key : { first, second }) {
+        InsertVersionedRequesterLocation(manager, key, QUERY_META_OBJECT_VERSION, AckState::ACK);
+    }
+    const std::unordered_map<std::string, uint64_t> versions{
+        { first, QUERY_META_OBJECT_VERSION }, { second, QUERY_META_OBJECT_VERSION } };
+    std::unordered_map<std::string, std::unordered_set<std::string>> candidates{
+        { TARGET_ADDRESS, { first, second } } };
+    size_t calls = 0;
+    BINEXPECT_CALL(&OCNotifyWorkerManager::SendChangePrimaryCopy, (testing::_, testing::_, testing::_))
+        .Times(3)
+        .WillRepeatedly(testing::Invoke([&](const std::string &target,
+                                           const std::unordered_set<std::string> &ids,
+                                           std::unordered_set<std::string> &acknowledged) {
+            EXPECT_EQ(target, TARGET_ADDRESS);
+            EXPECT_EQ(ids.size(), calls == 0 ? 2U : 1U);
+            if (calls++ == 1) {
+                return Status(K_RPC_DEADLINE_EXCEEDED, "injected batch transport failure");
+            }
+            acknowledged.insert(calls == 1 ? first : second);
+            return Status::OK();
+        }));
+    RemoveMetaRspPb response;
+    manager.SendChangePrimaryCopy(candidates, response, "scale-in", LOCAL_ADDRESS, &versions);
+    ASSERT_EQ(response.success_ids_size(), 1);
+    EXPECT_EQ(response.success_ids(0), first);
+    EXPECT_EQ(response.failed_ids_size(), 0);
+    ASSERT_EQ(candidates.size(), 1U);
+    EXPECT_EQ(candidates.at(TARGET_ADDRESS), std::unordered_set<std::string>{ second });
+    EXPECT_FALSE(HasLocation(manager, first, LOCAL_ADDRESS));
+    EXPECT_TRUE(HasLocation(manager, second, LOCAL_ADDRESS));
+    EXPECT_TRUE(HasLocation(manager, first, TARGET_ADDRESS));
+
+    RemoveMetaRspPb unavailable;
+    manager.SendChangePrimaryCopy(candidates, unavailable, "scale-in", LOCAL_ADDRESS, &versions);
+    EXPECT_EQ(unavailable.success_ids_size(), 0);
+    EXPECT_TRUE(HasLocation(manager, second, LOCAL_ADDRESS));
+    EXPECT_EQ(candidates.at(TARGET_ADDRESS), std::unordered_set<std::string>{ second });
+    RemoveMetaRspPb retry;
+    manager.SendChangePrimaryCopy(candidates, retry, "scale-in", LOCAL_ADDRESS, &versions);
+    EXPECT_TRUE(candidates.empty());
+    ASSERT_EQ(retry.success_ids_size(), 1);
+    EXPECT_EQ(retry.success_ids(0), second);
+    EXPECT_EQ(retry.failed_ids_size(), 0);
+    EXPECT_FALSE(HasLocation(manager, second, LOCAL_ADDRESS));
+    EXPECT_TRUE(HasLocation(manager, second, TARGET_ADDRESS));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, TopologyPrimaryCommitAllowsSharedShardAccess)
+{
+    OCMetadataManager manager(rocksStore_.get(), nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string key = "handoff_shared_shard";
+    InsertVersionedRequesterLocation(manager, key, QUERY_META_OBJECT_VERSION, AckState::ACK);
+    std::future<Status> commit;
+    {
+        auto &shard = manager.metaShards_[manager.GetShardIndex(key)];
+        bthread::RWLockRdGuard reader(shard.mutex);
+        commit = std::async(std::launch::async, [&] {
+            return manager.CommitTopologyPrimary(key, LOCAL_ADDRESS, TARGET_ADDRESS, QUERY_META_OBJECT_VERSION);
+        });
+        EXPECT_EQ(commit.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    }
+    DS_ASSERT_OK(commit.get());
+    EXPECT_FALSE(HasLocation(manager, key, LOCAL_ADDRESS));
+    EXPECT_TRUE(HasLocation(manager, key, TARGET_ADDRESS));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, TopologyPrimaryRecoveryConvergesAtEachPersistedStage)
+{
+    localExiting_.store(false);
+    for (const std::string mode : { "sync", "async" }) {
+        for (int stage = 0; stage < 3; ++stage) {
+            SCOPED_TRACE(mode + " stage=" + std::to_string(stage));
+            const std::string path = ut::GetTestCaseDataDir() + "/handoff_" + mode + std::to_string(stage);
+            const std::string key = "recovered_handoff";
+            FLAGS_rocksdb_write_mode = mode;
+            {
+                auto store = RocksStore::GetInstance(path);
+                ASSERT_NE(store, nullptr);
+                OCMetadataManager seed(store.get(), nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                                       LOCAL_ADDRESS, &localExiting_, "workerId");
+                DS_ASSERT_OK(seed.objectStore_->Init());
+                ObjectMetaPb meta;
+                meta.set_object_key(key);
+                meta.set_version(QUERY_META_OBJECT_VERSION);
+                meta.set_primary_address(stage == 0 ? LOCAL_ADDRESS : TARGET_ADDRESS);
+                meta.mutable_config()->set_write_mode(static_cast<uint32_t>(WriteMode::NONE_L2_CACHE_EVICT));
+                DS_ASSERT_OK(store->Put(META_TABLE, key, meta.SerializeAsString()));
+                DS_ASSERT_OK(store->PutWithOrderingKey(LOCATION_TABLE, std::string(TARGET_ADDRESS) + "_" + key,
+                                                       "", key));
+                if (stage != 2) {
+                    DS_ASSERT_OK(store->PutWithOrderingKey(LOCATION_TABLE, std::string(LOCAL_ADDRESS) + "_" + key,
+                                                           "", key));
+                }
+                // Wait for this key's queued writes before closing the real database.
+                std::string persisted;
+                DS_ASSERT_OK(store->Get(META_TABLE, key, persisted));
+            }
+            auto store = RocksStore::GetInstance(path);
+            ASSERT_NE(store, nullptr);
+            OCMetadataManager recovered(store.get(), nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                                        LOCAL_ADDRESS, &localExiting_, "workerId");
+            DS_ASSERT_OK(recovered.objectStore_->Init());
+            recovered.nestedRefManager_ = std::make_unique<OCNestedManager>(recovered.objectStore_);
+            recovered.expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(LOCAL_ADDRESS, &recovered);
+            recovered.expiredObjectManager_->Init();
+            DS_ASSERT_OK(inject::Set("OCMetadataManager.GetValidTopologyWorkers",
+                                     FormatString("return(%s)", TARGET_ADDRESS)));
+            DS_ASSERT_OK(recovered.LoadMeta());
+            EXPECT_TRUE(HasLocation(recovered, key, TARGET_ADDRESS));
+            DS_ASSERT_OK(recovered.CommitTopologyPrimary(key, LOCAL_ADDRESS, TARGET_ADDRESS,
+                                                         QUERY_META_OBJECT_VERSION));
+            EXPECT_FALSE(HasLocation(recovered, key, LOCAL_ADDRESS));
+            EXPECT_TRUE(HasLocation(recovered, key, TARGET_ADDRESS));
+            std::string persisted;
+            DS_ASSERT_OK(store->Get(META_TABLE, key, persisted));
+            ObjectMetaPb meta;
+            ASSERT_TRUE(meta.ParseFromString(persisted));
+            EXPECT_EQ(meta.primary_address(), TARGET_ADDRESS);
+            EXPECT_EQ(meta.version(), QUERY_META_OBJECT_VERSION);
+            EXPECT_EQ(store->Get(LOCATION_TABLE, std::string(LOCAL_ADDRESS) + "_" + key, persisted).GetCode(),
+                      K_NOT_FOUND);
+        }
+    }
+}
+
+TEST_F(OCMetadataManagerTopologyTest, TopologyPrimaryUnavailableMembershipAndBackendFailureRetainSource)
+{
+    localExiting_.store(false);
+    cluster::TopologySnapshotState snapshots;
+    cluster::MembershipEndpointView membership(snapshots);
+    OCMetadataManager manager(rocksStore_.get(), nullptr, LOCAL_ADDRESS, nullptr, &membership,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string key = "handoff_backend_retry";
+    InsertVersionedRequesterLocation(manager, key, QUERY_META_OBJECT_VERSION, AckState::ACK);
+    auto request = MakeTopologyGiveUpRequest(key, QUERY_META_OBJECT_VERSION);
+    RemoveMetaRspPb unavailable;
+    EXPECT_EQ(manager.RemoveMeta(request, unavailable).GetCode(), K_NOT_READY);
+    EXPECT_EQ(unavailable.success_ids_size(), 0);
+    EXPECT_TRUE(HasLocation(manager, key, LOCAL_ADDRESS));
+
+    cluster::TopologyState topology;
+    topology.members = {
+        cluster::Member{ { std::string(MEMBER_ID_SIZE, 'a'), LOCAL_ADDRESS }, cluster::MemberState::ACTIVE, { 0 } },
+        cluster::Member{ { std::string(MEMBER_ID_SIZE, 'b'), TARGET_ADDRESS }, cluster::MemberState::ACTIVE, { 1 } },
+    };
+    DS_ASSERT_OK(PublishHandoffTopology(topology, snapshots));
+    BINEXPECT_CALL(&cluster::MembershipEndpointView::ResolveByAddress, (testing::_, testing::_))
+        .Times(1)
+        .WillOnce(testing::Return(Status(K_KVSTORE_ERROR, "injected topology lookup failure")));
+    RemoveMetaRspPb lookupFailure;
+    EXPECT_EQ(manager.RemoveMeta(request, lookupFailure).GetCode(), K_KVSTORE_ERROR);
+    EXPECT_EQ(lookupFailure.success_ids_size(), 0);
+    EXPECT_TRUE(HasLocation(manager, key, LOCAL_ADDRESS));
+    RELEASE_STUBS
+    const std::unordered_map<std::string, uint64_t> versions{ { key, QUERY_META_OBJECT_VERSION } };
+    std::unordered_map<std::string, std::unordered_set<std::string>> candidates;
+    RemoveMetaRspPb ready;
+    DS_ASSERT_OK(manager.ProcessGiveUpPrimaryObject(key, LOCAL_ADDRESS, ready, candidates, true, &versions, true));
+    EXPECT_EQ(candidates.at(TARGET_ADDRESS).count(key), 1U);
+
+    for (const std::string point : { "master.rocksdb.put", "master.rocksdb.delete" }) {
+        SCOPED_TRACE(point);
+        DS_ASSERT_OK(inject::Set(point, "1*return(K_KVSTORE_ERROR)"));
+        EXPECT_EQ(manager.CommitTopologyPrimary(key, LOCAL_ADDRESS, TARGET_ADDRESS, QUERY_META_OBJECT_VERSION)
+                      .GetCode(), K_KVSTORE_ERROR);
+        EXPECT_TRUE(HasLocation(manager, key, LOCAL_ADDRESS));
+        EXPECT_TRUE(HasLocation(manager, key, TARGET_ADDRESS));
+        DS_ASSERT_OK(inject::Clear(point));
+    }
+    DS_ASSERT_OK(manager.CommitTopologyPrimary(key, LOCAL_ADDRESS, TARGET_ADDRESS, QUERY_META_OBJECT_VERSION));
+    EXPECT_FALSE(HasLocation(manager, key, LOCAL_ADDRESS));
+    EXPECT_TRUE(HasLocation(manager, key, TARGET_ADDRESS));
 }
 
 TEST_F(OCMetadataManagerTopologyTest, RestartBatchRemovesAllAffectedLocationsInOneOperation)
@@ -1624,8 +2093,8 @@ TEST_F(OCMetadataManagerTopologyTest, OrdinaryTtlWithoutMetadataDoesNotCreateL2D
     localExiting_.store(false);
     OCMetadataManager manager(rocksStore_.get(), nullptr, LOCAL_ADDRESS, nullptr, nullptr,
                               LOCAL_ADDRESS, &localExiting_, "workerId");
-    manager.globalCacheDeleteManager_ = std::make_unique<OCGlobalCacheDeleteManager>(
-        manager.objectStore_, nullptr);
+    manager.globalCacheDeleteManager_ =
+        std::make_unique<OCGlobalCacheDeleteManager>(manager.objectStore_, nullptr);
     const std::string objectKey = "ordinary_ttl_without_metadata";
     DeleteObjectMediator mediator(LOCAL_ADDRESS, { { objectKey, true } });
     std::unordered_map<std::string, DeleteStruct> deleteObjects{ { objectKey, DeleteStruct{} } };
@@ -1834,7 +2303,7 @@ TEST_F(OCMetadataManagerTopologyTest, SuccessfulTtlRetryClearsFailedState)
 TEST_F(OCMetadataManagerTopologyTest, AsyncDeleteByExpiredTreatsBeingDeletedAsSuccess)
 {
     OCMetadataManager manager(rocksStore_.get(), nullptr, LOCAL_ADDRESS, nullptr, nullptr,
-                             LOCAL_ADDRESS, &localExiting_, "workerId");
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     manager.expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(LOCAL_ADDRESS, &manager);
     DS_ASSERT_OK(inject::Set("master.ExpiredObjectManager.Run", "call()"));
@@ -1842,8 +2311,8 @@ TEST_F(OCMetadataManagerTopologyTest, AsyncDeleteByExpiredTreatsBeingDeletedAsSu
     manager.notifyWorkerManager_ = std::make_unique<OCNotifyWorkerManager>(
         manager.objectStore_, &manager);
     DS_ASSERT_OK(manager.notifyWorkerManager_->Init());
-    manager.globalCacheDeleteManager_ = std::make_unique<OCGlobalCacheDeleteManager>(
-        manager.objectStore_, nullptr);
+    manager.globalCacheDeleteManager_ =
+        std::make_unique<OCGlobalCacheDeleteManager>(manager.objectStore_, nullptr);
 
     const std::string objectKey = "test_key1";
 

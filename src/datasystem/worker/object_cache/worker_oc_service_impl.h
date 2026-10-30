@@ -1023,6 +1023,10 @@ private:
     Status SelectTopologyScaleInObjects(std::vector<std::string> &copies,
                                         std::vector<std::string> &primaries) const;
 
+    Status CollectScaleInObjectVersions(
+        const std::vector<std::string> &objectKeys, std::unordered_map<std::string, uint64_t> &versions,
+        std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation);
+
     /**
      * @brief Remove task-scoped metadata and materialize data migration inputs.
      * @param[in] copies Selected local copy object ids.
@@ -1042,6 +1046,12 @@ private:
                                       const std::string &businessOperationId,
                                       std::chrono::steady_clock::time_point deadline,
                                       const cluster::CancellationToken &cancellation);
+
+    Status CompleteScaleInPrimaryHandoff(const std::vector<std::string> &objectKeys,
+                                         std::vector<std::string> &waitIds, std::vector<std::string> &l2Ids,
+                                         const std::string &operationId,
+                                         std::chrono::steady_clock::time_point deadline,
+                                         const cluster::CancellationToken &cancellation);
 
     /**
      * @brief Authorize one operation-keyed cleanup state without external work.
