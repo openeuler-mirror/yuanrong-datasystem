@@ -7,6 +7,7 @@
 
 #include <utility>
 
+#include "datasystem/common/constants.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
@@ -153,9 +154,20 @@ std::unordered_map<std::string, UbHealthSummary> UbHealthLeaseSync::DecodeLeaseS
 
 void UbHealthLeaseSync::Run()
 {
+    bool everSucceeded = false;
     while (!stopping_.load(std::memory_order_acquire)) {
         auto traceGuard = Trace::Instance().SetTraceNewID(Trace::GenerateComponentTraceId("UbHealthLeaseSync"));
-        LOG_IF_ERROR(SyncOnce(), "Refresh UB health lease snapshot failed");
+        Status rc = SyncOnce();
+        if (rc.IsOk()) {
+            everSucceeded = true;
+        } else if (!everSucceeded && rc.GetCode() == K_NOT_FOUND) {
+            LOG_EVERY_T(WARNING, LOG_TIME_LIMIT_LEVEL2)
+                << "Refresh UB health lease snapshot failed, local member not visible yet, will retry. Detail: "
+                << rc.ToString();
+        } else {
+            LOG_EVERY_T(ERROR, LOG_TIME_LIMIT_LEVEL3)
+                << "Refresh UB health lease snapshot failed. Detail: " << rc.ToString();
+        }
         std::unique_lock<std::mutex> lock(mutex_);
         cv_.wait_for(lock, interval_, [this] { return stopping_.load(std::memory_order_acquire); });
     }
