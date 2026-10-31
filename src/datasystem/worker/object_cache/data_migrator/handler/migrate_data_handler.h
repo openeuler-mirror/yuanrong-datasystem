@@ -70,7 +70,7 @@ public:
                        const std::vector<ImmutableString> &needMigrateDataIds, std::shared_ptr<ObjectTable> objectTable,
                        std::shared_ptr<WorkerRemoteWorkerOCApi> remoteApi, std::shared_ptr<SelectionStrategy> strategy,
                        const std::atomic<bool> *stoppingPtr,
-                       std::shared_ptr<MigrateProgress> progress = nullptr, bool isRetry = false, uint32_t slotId = 0,
+                       std::shared_ptr<MigrateProgress> progress = nullptr,
                        std::unordered_map<std::string, double> objectHeats = {},
                        RebalancePolicyFence rebalancePolicyFence = {});
 
@@ -95,10 +95,9 @@ public:
 
     /**
      * @brief Migrate object data to remote node.
-     * @param[in] isSlotMigration Whether this is a slot migration (no batching).
      * @return Migrate result contains ip address, status, success ids, failed ids and skip ids.
      */
-    MigrateResult MigrateDataToRemote(bool isSlotMigration = false);
+    MigrateResult MigrateDataToRemote();
 
     /**
      * @brief Set the admission check executed immediately before every transport batch.
@@ -161,9 +160,8 @@ private:
 
     /**
      * @brief Send data to remote node.
-     * @param[in] isSlotMigration Whether this is a slot migration.
      */
-    void SendDataToRemote(bool isSlotMigration = false);
+    void SendDataToRemote();
     bool PrepareTransportSend();
     bool CheckSendAdmission();
     Status EnsureRateForBatch();
@@ -226,10 +224,9 @@ private:
     /**
      * @brief Migrate data in batches.
      * @param[in] needMigrateDataIds Objects to migrate.
-     * @param[in] isSlotMigration Whether this is a slot migration.
      * @return K_OK if success, the error otherwise.
      */
-    Status MigrateDataInBatches(std::vector<std::string> &needMigrateDataIds, bool isSlotMigration);
+    Status MigrateDataInBatches(std::vector<std::string> &needMigrateDataIds);
 
     /**
      * @brief Prepare remote state before migrating.
@@ -241,9 +238,8 @@ private:
     /**
      * @brief Collect one object into the current migrate batch.
      * @param[in] objectKey Object key.
-     * @param[in] isSlotMigration Whether this is a slot migration.
      */
-    void CollectObjectForMigration(const std::string &objectKey, bool isSlotMigration);
+    void CollectObjectForMigration(const std::string &objectKey);
 
     /**
      * @brief Indicate whether to use fast transport for migration.
@@ -283,8 +279,6 @@ private:
     std::shared_ptr<SelectionStrategy> strategy_;
     std::shared_ptr<MigrateProgress> progress_{ nullptr };
     std::shared_ptr<MigrateTransport> transport_;
-    bool isRetry_{ false };
-    uint32_t slotId_{ 0 };
     // Non-empty only for heat rebalance. The transport reads this immutable batch metadata while sending.
     std::unordered_map<std::string, double> objectHeats_;
     RebalancePolicyFence rebalancePolicyFence_;

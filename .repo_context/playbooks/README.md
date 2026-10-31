@@ -47,9 +47,6 @@ playbooks/
         ├── l2cache/
         │   ├── README.md
         │   └── implementation.md
-        ├── slot/
-        │   ├── README.md
-        │   └── implementation.md
         └── logging/
             ├── README.md
             └── implementation.md
@@ -104,8 +101,6 @@ Task-oriented guidance now starts in:
 - `features/infra/README.md`
 - `features/infra/l2cache/README.md`
 - `features/infra/l2cache/implementation.md`
-- `features/infra/slot/README.md`
-- `features/infra/slot/implementation.md`
 - `features/infra/logging/README.md`
 - `features/infra/logging/implementation.md`
 

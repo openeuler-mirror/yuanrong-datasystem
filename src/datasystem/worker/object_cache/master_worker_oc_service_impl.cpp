@@ -221,15 +221,12 @@ Status MasterWorkerOCServiceImpl::DeleteNotification(const DeleteObjectReqPb &re
     return Status::OK();
 }
 
-Status MasterWorkerOCServiceImpl::DeletePersistenceObject(const DeletePersistenceObjectReqPb &req,
+Status MasterWorkerOCServiceImpl::DeletePersistenceObject(const DeletePersistenceObjectReqPb &,
                                                           DeletePersistenceObjectRspPb &rsp)
 {
     ScopedRequestContext ctx;
-    LOG(INFO) << "Delete persistence object: " << req.object_key();
-    auto rc = ocClientWorkerSvc_->DeletePersistenceObject(req, rsp);
-    rsp.mutable_last_rc()->set_error_code(rc.GetCode());
-    rsp.mutable_last_rc()->set_error_msg(rc.GetMsg());
-    VLOG(1) << "Delete persistence object done";
+    rsp.mutable_last_rc()->set_error_code(K_NOT_SUPPORTED);
+    rsp.mutable_last_rc()->set_error_msg("distributed_disk persistence delete was removed");
     return Status::OK();
 }
 

@@ -198,27 +198,6 @@ Status ObjectPersistenceApi::Del(const std::string &objectKey, uint64_t maxVerTo
     return Status::OK();
 }
 
-Status ObjectPersistenceApi::PreloadSlot(const std::string &sourceWorkerAddress, uint32_t slotId,
-                                         const SlotPreloadCallback &callback)
-{
-    (void)sourceWorkerAddress;
-    (void)slotId;
-    (void)callback;
-    return Status(K_NOT_SUPPORTED, "PreloadSlot is not supported by object persistence.");
-}
-
-Status ObjectPersistenceApi::MergeSlot(const std::string &sourceWorkerAddress, uint32_t slotId)
-{
-    (void)sourceWorkerAddress;
-    (void)slotId;
-    return Status(K_NOT_SUPPORTED, "MergeSlot is not supported by object persistence.");
-}
-
-Status ObjectPersistenceApi::CleanupLocalSlots()
-{
-    return Status::OK();
-}
-
 std::string ObjectPersistenceApi::GetL2CacheRequestSuccessRate() const
 {
     if (client_ == nullptr) {

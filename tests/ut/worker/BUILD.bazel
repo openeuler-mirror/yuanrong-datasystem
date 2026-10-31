@@ -169,6 +169,7 @@ ds_cc_test(
         "//src/datasystem/common/shared_memory:common_shared_memory",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:worker_oc_constants",
+        "//src/datasystem/worker/object_cache:master_worker_oc_service_impl",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//tests/common/binmock:binmock",
         "//tests/ut:ut_common",

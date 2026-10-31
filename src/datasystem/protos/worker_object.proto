@@ -144,9 +144,11 @@ message MigrateDataReqPb {
   string worker_addr = 2;
   uint64 bytes_send = 3;
   MigrateType type = 4;
-  bool is_slot_migration = 5;
-  bool is_retry = 6;
-  uint32 slot_id = 7;
+  reserved "is_slot_migration", "slot_id";
+  reserved 5;
+  reserved 6;
+  reserved "is_retry";
+  reserved 7;
   // Rebalance-only target fence. Old/non-rebalance senders leave has_rebalance_policy_fence false.
   bool has_rebalance_policy_fence = 8;
   uint32 target_eviction_policy = 9;

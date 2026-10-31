@@ -346,7 +346,7 @@ global:
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
-| global.l2Cache.l2CacheType | string | `"none"` | 配置二级缓存类型，`none` 表示不配置二级缓存，可选择二级缓存类型：[`obs`, `sfs`, `distributed_disk`] |
+| global.l2Cache.l2CacheType | string | `"none"` | 配置二级缓存类型，`none` 表示不配置二级缓存，可选择二级缓存类型：[`obs`, `sfs`] |
 | global.l2Cache.l2CacheDeleteThreadNum | int | `32` | 配置二级缓存异步删除线程池大小，增大该值可以提升二级缓存删除并行度，同时也会提升worker的CPU消耗 |
 | global.l2Cache.enableL2CacheFallback | bool | `true` | 控制是否允许从二级缓存拉数据，当worker失败时，是否启用从二级缓存拉取数据的回退机制 |
 | global.l2Cache.l2CacheAsyncWriteQueueSize | int | `10000` | 配置二级缓存异步写队列大小 |
@@ -386,17 +386,6 @@ global:
 
 :::
 
-:::{tab-item} Distributed Disk
-
-| 配置项 | 类型 | 默认值 | 描述 |
-|-----|------|---------|-------------|
-| global.l2Cache.distributedDisk.path | string | `""` | distributed_disk 模式下的根路径。当 `global.l2Cache.l2CacheType=distributed_disk` 时，slot root path 基于该路径构建，不再使用 `sfs_path` |
-| global.l2Cache.distributedDisk.maxDataFileSizeMb | int | `1024` | 单个 distributed_disk data 文件的最大大小，单位 MB |
-| global.l2Cache.distributedDisk.syncIntervalMs | int | `1000` | distributed_disk group commit 的最长刷盘间隔，单位毫秒 |
-| global.l2Cache.distributedDisk.syncBatchBytes | int | `33554432` | distributed_disk group commit 的批量刷盘阈值，单位字节 |
-| global.l2Cache.distributedDisk.compactIntervalS | int | `3600` | distributed_disk 后台 compact 的固定执行周期，单位秒；生产构建最小值为 60，测试构建在 `WITH_TESTS` 下最小值为 1 |
-
-:::
 
 ::::
 

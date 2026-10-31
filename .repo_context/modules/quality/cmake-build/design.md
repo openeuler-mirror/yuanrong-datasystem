@@ -191,7 +191,7 @@ root
 | Layer | Targets | Notes |
 | --- | --- | --- |
 | base proto | `utils_protos`, `utils_protos_client`, `zmq_meta_protos`, `zmq_meta_protos_client`, `rpc_option_protos` | `rpc_option_protos` is shared and installed into SDK/service. |
-| transport/object base | `share_memory_protos`, `share_memory_protos_client`, `hash_ring_protos`, `hash_ring_protos_client`, `slot_recovery_protos`, `meta_transport_protos`, `meta_transport_protos_client`, `p2p_subscribe_protos`, `p2p_subscribe_protos_client` | Generated before client/worker targets that consume message types. |
+| transport/object base | `share_memory_protos`, `share_memory_protos_client`, `hash_ring_protos`, `hash_ring_protos_client`, `meta_transport_protos`, `meta_transport_protos_client`, `p2p_subscribe_protos`, `p2p_subscribe_protos_client` | Generated before client/worker targets that consume message types. |
 | worker proto | `posix_protos`, `posix_protos_client`, `worker_object_protos`, `worker_object_protos_client`, `worker_stream_protos`, `worker_stream_protos_client` | Client and worker both depend on these. |
 | master proto | `master_object_protos`, `master_object_protos_client`, `master_stream_protos`, `master_stream_protos_client`, `master_heartbeat_protos`, `master_heartbeat_protos_client` | Worker/master dependency edge. |
 | optional test/perf proto | `generic_service_protos`, `ut_object_protos`, `perf_posix_protos`, client variants | Only under `WITH_TESTS` or `ENABLE_PERF`. |
@@ -231,7 +231,6 @@ coordinator_service_impl -> coordinator_election_manager -> coordinator_raft_nod
 | `common_rdma` | static | base transport plus optional URMA/UCX/Hetero source sets | Feature flags significantly change its source list and deps. |
 | `common_device` | static | `common_acl_device`, optional `common_cuda_device`, `common_util`, `common_inject` | Always adds Ascend subdir; plugin only when hetero NPU is on. |
 | `acl_plugin` / `cuda_plugin` | shared plugin | external device libs, protobuf, p2p-transfer for Ascend | Hash header generation depends on stripped plugin output. |
-| `common_persistence_api` | static | `common_obs`, `common_sfs_client`, `common_slot_client`, curl | L2 persistence aggregation point. |
 | `dsbench_cpp` | executable | `datasystem`, pthread, `common_util` | Included in wheel payload. |
 | `transfer_engine` / `_transfer_engine` | static library / Python extension | private `ds_spdlog::spdlog`, Threads, `dl`; optional HIXL libraries | Must not link or package glog. Standalone builds compile the same patched `libds-spdlog.so`; the private facade owns file/stderr behavior through `TRANSFER_ENGINE_*` configuration. The production data plane is HIXL-only. |
 

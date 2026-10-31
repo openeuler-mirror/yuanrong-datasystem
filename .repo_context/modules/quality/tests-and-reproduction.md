@@ -32,7 +32,7 @@
   - no new sibling module is required for `tests` as a whole today because the top-level test tree is a validation
     layer, not a production runtime module with its own persisted format or service lifecycle.
   - module-specific test families should still be referenced from their owning module docs when they are part of that
-    module's design or recovery story, such as slot and l2 cache tests.
+    module's design or recovery story, such as l2 cache tests.
 - Design/playbook assessment:
   - the CMake/gtest/CTest registration rules are stable enough to need a design note:
     `test-suite-design.md`.
@@ -57,7 +57,7 @@
 
 | Path | Role | Source-backed notes |
 | --- | --- | --- |
-| `tests/ut` | C++ unit and component tests | `tests/ut/CMakeLists.txt` builds the main UT binaries and filters stream/object/slot/flags tests into separate targets. |
+| `tests/ut` | C++ unit and component tests | `tests/ut/CMakeLists.txt` builds the main UT binaries and filters stream/object/flags tests into separate targets. |
 | `tests/st` | C++ system tests | `tests/st/CMakeLists.txt` builds cache-specific ST binaries, device LLT, cluster helpers, the standalone braft election test, and post-build runtime assets. |
 | `tests/perf` | Performance helper binaries | `tests/perf/CMakeLists.txt` adds `client`; `tests/perf/client/CMakeLists.txt` builds `peer_ub_admission_timeout_bench`. |
 | `tests/common` | Shared test support | `tests/common/CMakeLists.txt` adds `binmock`; `tests/common/binmock` provides function-stub/binmock support and has its own spec test. |
@@ -244,12 +244,11 @@ python3 -m unittest
   Keep `//tests/ut:ut_common` for tests using the `CommonTest` fixture or functions implemented in `common.cpp`;
   its fixture initialization pulls in transport and shared-memory dependencies that isolated policy tests do not need.
 - Verified from `tests/ut/CMakeLists.txt`:
-  - `ds_ut`: default UT bucket after excluding device, binmock, flags, slot store, stream cache, and object cache files.
+  - `ds_ut`: default UT bucket after excluding device, binmock, flags, stream cache, and object cache files.
     URMA-specific client UTs such as `tests/ut/client/urma_send_lane_test.cpp` are excluded when `BUILD_WITH_URMA` is
     off because their headers require the URMA SDK path.
   - `ds_ut_stream`: UT files under `**/stream_cache`.
   - `ds_ut_object`: UT files under `**/object_cache`.
-  - `ds_ut_slot_store`: `tests/ut/common/l2cache/slot_store_test.cpp`.
   - `flags_ut`: `tests/ut/common/flags/flags_test.cpp`.
 - Verified from `tests/st/CMakeLists.txt`:
   - `ds_st`: default ST bucket after excluding cluster, stream, object, KV, device, and helper files.

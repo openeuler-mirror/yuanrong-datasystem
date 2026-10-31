@@ -140,17 +140,6 @@ Status MasterRemoteWorkerOCApi::DeleteNotification(std::unique_ptr<DeleteObjectR
     return WithRpcDiag(rc, "DeleteNotification", masterHostPort_, workerHostPort_);
 }
 
-Status MasterRemoteWorkerOCApi::DeletePersistenceObject(std::unique_ptr<DeletePersistenceObjectReqPb> req,
-                                                        DeletePersistenceObjectRspPb &rsp)
-{
-    RpcOptions opts;
-    SET_RPC_TIMEOUT(&GetRequestContext()->timeoutDuration, opts);
-    Timer timer;
-    Status rc = brpcSession_->DeletePersistenceObject(opts, *req, rsp);
-    GetMasterTimeCost().Append("Master to worker rpc DeletePersistenceObject", timer.ElapsedMilliSecond());
-    return WithRpcDiag(rc, "DeletePersistenceObject", masterHostPort_, workerHostPort_);
-}
-
 Status MasterRemoteWorkerOCApi::DeleteNotificationSend(std::unique_ptr<DeleteObjectReqPb> req, int64_t &tag)
 {
     RpcOptions opts;

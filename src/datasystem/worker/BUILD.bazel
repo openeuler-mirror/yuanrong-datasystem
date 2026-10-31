@@ -186,8 +186,8 @@ ds_cc_library(
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/kvstore/etcd:etcd_constants",
         "//src/datasystem/common/kvstore/etcd:etcd_health",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/common/l2cache:persistence_api_header",
-        "//src/datasystem/common/l2cache:slot_client",
         "//src/datasystem/worker:worker_flags",
         "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/worker:rebalance_executor",
@@ -298,6 +298,7 @@ ds_cc_library(
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/kvstore/etcd:etcd_keep_alive",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/object_cache:object_base",
         "//src/datasystem/common/rpc:rpc_auth_key_manager",
@@ -361,6 +362,7 @@ ds_cc_library(
         "//src/datasystem/common/util:validator",
         "//src/datasystem/common/flags:dynamic_flag_config",
     ],
+    alwayslink = True,
 )
 
 ds_cc_library(

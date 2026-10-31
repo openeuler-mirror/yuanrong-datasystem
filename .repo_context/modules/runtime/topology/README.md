@@ -556,8 +556,8 @@
   record; topology correctness never depends on Janitor success. The same pass removes stale ScaleIn metadata-done
   markers whose epoch is older than the active batch, or no newer than the final topology version when no batch is active.
 - Confirmed Failure no longer restores Object Cache metadata from ETCD. The failure callback proceeds to fenced local
-  object cleanup, while Stream Cache keeps its independent best-effort recovery path. Fast-restart and slot recovery
-  remain separate workflows and are not changed by this failure-time policy.
+  object cleanup, while Stream Cache keeps its independent best-effort recovery path. Fast-restart recovery
+  remains a separate workflow and are not changed by this failure-time policy.
 - Scale-out and scale-in callbacks use bounded retries. Exhausted scale-out removes the joining member so it can restart
   and re-enter as `INITIAL`; exhausted scale-in proceeds through external bounded termination and Failure handling.
   Callback window exhaustion advances the operation record's attempt count and re-arms its next-attempt deadline with

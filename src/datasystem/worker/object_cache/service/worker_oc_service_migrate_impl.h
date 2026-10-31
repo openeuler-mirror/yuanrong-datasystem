@@ -142,9 +142,6 @@ private:
         std::unordered_set<std::string> failedIds;
     };
 
-    Status PrepareMigrateData(const MigrateDataReqPb &req, MigrateDataRspPb &rsp,
-                              std::unordered_map<std::string, std::shared_ptr<ShmUnit>> &units);
-
     /**
      * @brief Batch lock objects.
      * @param[in] infoList Object info list.
@@ -335,9 +332,6 @@ private:
                                  const std::vector<std::pair<const uint8_t *, uint64_t>> &payloads, uint64_t size,
                                  std::shared_ptr<ShmUnit> unit, bool retryOnOOM = false);
 
-    Status BatchAllocateObjectGroupBySlot(const MigrateDataReqPb &req,
-                                          std::unordered_map<std::string, std::shared_ptr<ShmUnit>> &units);
-
     /**
      * @brief For test mock purpose.
      * @param[in] api Worker master api.
@@ -517,9 +511,6 @@ private:
     bool incomingMigrationAdmissionPaused_{ false };
     std::atomic<bool> incomingMigrationDrainTimedOut_{ false };
     uint64_t incomingMigrationCount_{ 0 };
-
-    std::shared_timed_mutex unitMutex_;
-    std::unordered_map<std::string, std::shared_ptr<ShmUnit>> failedSlotUnits_;
 };
 }  // namespace object_cache
 }  // namespace datasystem

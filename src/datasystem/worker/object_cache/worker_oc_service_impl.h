@@ -97,7 +97,6 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_expire_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/service/worker_query_and_get_impl.h"
-#include "datasystem/worker/object_cache/slot_recovery/slot_recovery_manager.h"
 // Keep bthread headers after project RPC/log headers so brpc logging macros (CHECK_EQ etc.) are
 // established before bthread/mutex.h (which uses but does not define them) avoid redefinition pitfalls.
 #include <bthread/mutex.h>
@@ -384,26 +383,6 @@ public:
     Status MigrateData(const std::vector<std::string> &objectKeys, const std::string &taskId,
                        std::chrono::steady_clock::time_point deadline,
                        const cluster::CancellationToken &cancellation);
-
-    /**
-     * @brief Migrate L2 cache data with slot-based grouping.
-     * @param[in] needMigrateL2CacheIds L2 cache object keys to migrate.
-     * @param[in] taskId Task ID for tracking.
-     * @return Status of the call.
-     */
-    Status MigrateL2CacheData(const std::vector<std::string> &needMigrateL2CacheIds, const std::string &taskId);
-
-    /**
-     * @brief Migrate L2 cache data for a bounded topology callback.
-     * @param[in] needMigrateL2CacheIds L2 cache object keys to migrate.
-     * @param[in] taskId Fenced topology task id.
-     * @param[in] deadline Absolute callback deadline.
-     * @param[in] cancellation Cooperative callback cancellation signal.
-     * @return Status of the migration.
-     */
-    Status MigrateL2CacheData(const std::vector<std::string> &needMigrateL2CacheIds, const std::string &taskId,
-                              std::chrono::steady_clock::time_point deadline,
-                              const cluster::CancellationToken &cancellation);
 
     /**
      * @brief Handle Put/Publish request from client.
@@ -1228,8 +1207,6 @@ private:
      * @param[out] rsp The rpc response protobuf.
      * @return Status of the call.
      */
-    Status DeletePersistenceObject(const DeletePersistenceObjectReqPb &req, DeletePersistenceObjectRspPb &rsp);
-
     /**
      * @brief Delete object if memory ref count is 0, otherwise set buffer invalid.
      * @param[in] objectKey The object key.
@@ -1471,7 +1448,6 @@ private:
     std::shared_ptr<SharedMemoryRefTable> memoryRefTable_;
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable_;
     std::shared_ptr<ObjectTable> objectTable_;
-    std::shared_ptr<SlotRecoveryManager> slotRecoveryManager_{ nullptr };
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     std::shared_ptr<WorkerDeviceOcManager> workerDevOcManager_{ nullptr };
     EtcdStore *etcdStore_;                   // pointer to EtcdStore in WorkerOcServer

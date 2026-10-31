@@ -41,7 +41,6 @@ enum ClusterEventType : uint32_t {
     CLEAR_WORKER_META,
     CHECK_AND_CLEAR_DEVICE_META,
     RECOVER_MASTER_APP_REF,
-    SLOT_RECOVERY_FAILED_WORKERS,
 };
 
 using EraseFailedNodeApiEvent = EventSubscribers<ERASE_FAILED_NODE_API, std::function<void(HostPort &)>>;
@@ -59,8 +58,6 @@ using ClearWorkerMeta = EventSubscribers<CLEAR_WORKER_META, std::function<Status
 using RecoverMasterAppRefEvent =
     EventSubscribers<RECOVER_MASTER_APP_REF,
                      std::function<Status(std::function<bool(const std::string &)>, const std::string &)>>;
-using SlotRecoveryFailedWorkersEvent =
-    EventSubscribers<SLOT_RECOVERY_FAILED_WORKERS, std::function<Status(const std::vector<HostPort> &)>>;
 
 }  // namespace datasystem
 #endif

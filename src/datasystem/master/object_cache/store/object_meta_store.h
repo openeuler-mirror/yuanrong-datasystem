@@ -281,8 +281,7 @@ public:
      * @param[in] delVersion The version of global cache to delete.
      * @return Status of the call.
      */
-    Status AddDeletedObjectWithDelVersion(const std::string &key, uint64_t version, uint64_t delVersion,
-                                          const std::string &targetWorkerAddress = "");
+    Status AddDeletedObjectWithDelVersion(const std::string &key, uint64_t version, uint64_t delVersion);
 
     /**
      * @brief Remove the id of global cache to delete.
@@ -294,6 +293,7 @@ public:
 
     static std::string EncodeDeletedObjectValue(uint64_t delVersion, const std::string &targetWorkerAddress);
 
+    // Older delete records may contain a worker suffix; it is decoded but no longer used for routing.
     static bool DecodeDeletedObjectValue(const std::string &objectKey, const std::string &encodedValue,
                                          uint64_t &delVersion, std::string &targetWorkerAddress);
 

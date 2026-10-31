@@ -30,10 +30,6 @@
       "docs": [".repo_context/modules/infra/l2cache/design.md"]
     },
     {
-      "prefixes": ["src/datasystem/common/l2cache/slot_client", "src/datasystem/worker/object_cache/slot_recovery"],
-      "docs": [".repo_context/modules/infra/slot/design.md"]
-    },
-    {
       "prefixes": ["src/datasystem/common/log"],
       "docs": [".repo_context/modules/infra/logging/design.md"]
     },

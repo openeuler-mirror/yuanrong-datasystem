@@ -34,6 +34,7 @@
 #include "common_distributed_ext.h"
 #include "oc_client_common.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/file_util.h"
 #include "datasystem/protos/cluster_topology.pb.h"
 
 namespace datasystem {
@@ -369,6 +370,69 @@ TEST_F(LEVEL1_OCScaleDownMigrateTargetTest, ScaleDownMigratesDataToTokenTakeover
         << "data location violates token-takeover affinity for " << mismatches.size() << " key(s):\n"
         << JoinStrings(mismatches, "\n");
 }
+
+class LEVEL1_OCL2ScaleDownTest : public LEVEL1_OCScaleDownMigrateTargetTest,
+                                public testing::WithParamInterface<std::string> {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        LEVEL1_OCScaleDownMigrateTargetTest::SetClusterSetupOptions(opts);
+        if (GetParam() == "obs") {
+            opts.numOBS = 1;
+        } else {
+            const std::string sfsPath = GetTestCaseDataDir() + "/sfs";
+            DS_ASSERT_OK(CreateDir(sfsPath, true));
+            opts.workerGflagParams += " -l2_cache_type=sfs -sfs_path=" + sfsPath;
+        }
+    }
+};
+
+TEST_P(LEVEL1_OCL2ScaleDownTest, DISABLED_WriteBackScaleDownPreservesSingleAndReplicatedPayloads)
+{
+    ASSERT_TRUE(WaitForRingStable(3, RING_STABLE_TIMEOUT_MS));
+    ClusterTopologyPb ring;
+    DS_ASSERT_OK(cluster_->ReadClusterTopology(ring));
+    std::vector<HashedKey> ownerKeys;
+    GenKeysHashToWorker(ring, WORKER0, KEYS_PER_TOKEN_RANGE, ownerKeys, 2);
+    ASSERT_EQ(ownerKeys.size(), 2u);
+    const std::string payload(KEY_VALUE_SIZE, 'w');
+    std::shared_ptr<KVClient> source;
+    std::shared_ptr<KVClient> replica;
+    std::shared_ptr<KVClient> reader;
+    InitTestKVClient(WORKER0, source);
+    InitTestKVClient(WORKER1, replica);
+    InitTestKVClient(WORKER2, reader);
+    datasystem::SetParam param;
+    param.writeMode = WriteMode::WRITE_BACK_L2_CACHE;
+    for (const auto &key : ownerKeys) {
+        DS_ASSERT_OK(source->Set(key.key, payload, param));
+    }
+    std::string replicaValue;
+    DS_ASSERT_OK(replica->Get(ownerKeys.front().key, replicaValue));
+    ASSERT_EQ(replicaValue, payload);
+    std::vector<ObjMetaInfo> before;
+    DS_ASSERT_OK(client1_->GetObjMetaInfo("", KeysOf(ownerKeys), before));
+    ASSERT_EQ(before.size(), 2u);
+    ASSERT_GE(before.front().locations.size(), 2u);
+    ASSERT_EQ(before.back().locations.size(), 1u);
+
+    source.reset();
+    client0_.reset();
+    const pid_t leavingPid = cluster_->GetWorkerPid(WORKER0);
+    VoluntaryScaleDownInject(static_cast<int>(WORKER0));
+    ASSERT_TRUE(WaitFor([&] {
+        int status = 0;
+        return waitpid(leavingPid, &status, WNOHANG) != 0;
+    }, WORKER_EXIT_TIMEOUT_MS));
+    ASSERT_TRUE(WaitForRingStable(2, RING_STABLE_TIMEOUT_MS));
+    for (const auto &key : ownerKeys) {
+        std::string actual;
+        DS_ASSERT_OK(reader->Get(key.key, actual));
+        EXPECT_EQ(actual, payload);
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(ManualL2ScaleDown, LEVEL1_OCL2ScaleDownTest, testing::Values("sfs", "obs"));
 
 // Disabled: with the takeover targets preloaded past the FIRST-stage ratio gate, the source's MigrateData
 // connections fail with E112 before the stage ladder is ever consulted (reproduces on unfixed master too);

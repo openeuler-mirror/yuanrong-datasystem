@@ -355,10 +355,10 @@ bool ObjectMetaStore::DecodeDeletedObjectValue(const std::string &objectKey, con
 }
 
 Status ObjectMetaStore::AddDeletedObjectWithDelVersion(const std::string &objectKey, uint64_t version,
-                                                       uint64_t delVersion, const std::string &targetWorkerAddress)
+                                                       uint64_t delVersion)
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
-    std::string versionStr = EncodeDeletedObjectValue(delVersion, targetWorkerAddress);
+    std::string versionStr = EncodeDeletedObjectValue(delVersion, "");
     std::string key = objectKey + "/" + std::to_string(version);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         rocksStore_->Put(GLOBAL_CACHE_TABLE, key, versionStr),
@@ -368,7 +368,7 @@ Status ObjectMetaStore::AddDeletedObjectWithDelVersion(const std::string &object
 
 Status ObjectMetaStore::AddDeletedObject(const std::string &objectKey, uint64_t version)
 {
-    return AddDeletedObjectWithDelVersion(objectKey, version, version, "");
+    return AddDeletedObjectWithDelVersion(objectKey, version, version);
 }
 
 Status ObjectMetaStore::RemoveDeletedObject(const std::string &objectKey, uint64_t version)

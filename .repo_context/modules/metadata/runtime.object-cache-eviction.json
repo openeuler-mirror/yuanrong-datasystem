@@ -38,8 +38,7 @@
       "runtime.worker-runtime",
       "runtime.topology",
       "runtime.etcd-metadata",
-      "infra.l2cache",
-      "infra.slot"
+      "infra.l2cache"
     ],
     "split_signals": [
       "background_hot_path",

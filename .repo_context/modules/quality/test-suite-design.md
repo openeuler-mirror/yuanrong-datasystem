@@ -74,7 +74,7 @@
 | Component | Responsibility | Key files | Notes |
 | --- | --- | --- | --- |
 | Top-level test tree | Routes CMake into UT, ST, perf, and shared helpers | `tests/CMakeLists.txt` | Adds `ut`, `st`, `perf`, and `common`. |
-| UT CMake | Builds unit/component gtest binaries | `tests/ut/CMakeLists.txt` | Splits stream, object, slot-store, and flags tests out of the default `ds_ut` bucket. |
+| UT CMake | Builds unit/component gtest binaries | `tests/ut/CMakeLists.txt` | Splits stream, object, and flags tests out of the default `ds_ut` bucket. |
 | ST CMake | Builds system-test binaries and runtime helpers | `tests/st/CMakeLists.txt` | Splits stream, object, KV, device, and standalone tests; `ds_st_coordinator_backend_manual` is registered with CTest via `add_datasystem_test` and also runnable explicitly. |
 | Perf CMake | Builds performance helper binaries | `tests/perf/client/CMakeLists.txt` | Builds `peer_ub_admission_timeout_bench`. |
 | Common helpers | Provides binmock support | `tests/common/binmock` | Builds `binmock` and `binmock_spec`. |

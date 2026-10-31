@@ -49,13 +49,11 @@ DS_DEFINE_validator(l2_cache_delete_thread_num, [](const char *flagName, uint32_
 namespace datasystem {
 namespace master {
 OCGlobalCacheDeleteManager::OCGlobalCacheDeleteManager(std::shared_ptr<ObjectMetaStore> objectStore,
-                                                       std::shared_ptr<PersistenceApi> persistApi,
-                                                       const std::string &masterAddress)
+                                                       std::shared_ptr<PersistenceApi> persistApi)
     : persistenceApi_(persistApi),
       objectStore_(std::move(objectStore)),
       interruptFlag_(false)
 {
-    (void)masterAddr_.ParseString(masterAddress);
 }
 
 OCGlobalCacheDeleteManager::~OCGlobalCacheDeleteManager()
@@ -136,17 +134,10 @@ void OCGlobalCacheDeleteManager::ProcessDeleteObjects()
 }
 
 Status OCGlobalCacheDeleteManager::InsertDeletedObject(const std::string &objectKey, uint64_t objectVersion,
-                                                       uint64_t delVersion, const std::string &targetWorkerAddress,
-                                                       bool needPersist)
+                                                       uint64_t delVersion, bool needPersist)
 {
-    if (UseWorkerDeleteRpc() && targetWorkerAddress.empty()) {
-        constexpr int times = 10;
-        LOG_EVERY_T(WARNING, times) << objectKey << " may be rebuilding, ignore delete from distributed disk now";
-        return Status::OK();
-    }
     if (needPersist) {
-        RETURN_IF_NOT_OK(objectStore_->AddDeletedObjectWithDelVersion(objectKey, objectVersion, delVersion,
-                                                                      targetWorkerAddress));
+        RETURN_IF_NOT_OK(objectStore_->AddDeletedObjectWithDelVersion(objectKey, objectVersion, delVersion));
     }
     std::lock_guard<SharedMutex> lck(mutex_);
     // The objectKey of the inserted deleteIds_ map is combined with the version to prevent objects of the old version
@@ -155,9 +146,9 @@ Status OCGlobalCacheDeleteManager::InsertDeletedObject(const std::string &object
     std::string key = objectKey + "/" + std::to_string(objectVersion);
     (void)deleteIds_.emplace(
         std::move(key),
-        DeleteMeta{ .version = delVersion, .failed = false, .targetWorkerAddress = targetWorkerAddress });
+        DeleteMeta{ .version = delVersion, .failed = false });
     (void)objDeleteMap_[objectKey].emplace(std::make_pair(
-        objectVersion, GlobalDeleteInfo{ .deleteVersion = delVersion, .targetWorkerAddress = targetWorkerAddress }));
+        objectVersion, GlobalDeleteInfo{ .deleteVersion = delVersion }));
     return Status::OK();
 }
 
@@ -188,7 +179,7 @@ void OCGlobalCacheDeleteManager::DeleteObjects(const std::map<std::string, Delet
         }
         Status status;
         if (IsSupportL2Storage(supportL2Storage_)) {
-            status = DelPersistenceObj(objectKey, objectVersion, delVersion, meta.targetWorkerAddress);
+            status = DelPersistenceObj(objectKey, objectVersion, delVersion);
         }
         if (status.IsOk() || status.GetCode() == K_NOT_FOUND) {
             LOG(INFO) << "del object success. objectKey:" << key << ", version:" << delVersion;
@@ -241,51 +232,10 @@ Status OCGlobalCacheDeleteManager::RemoveDeletedObject(const std::unordered_map<
     return Status::OK();
 }
 
-bool OCGlobalCacheDeleteManager::UseWorkerDeleteRpc() const
-{
-    return supportL2Storage_ == L2StorageType::DISTRIBUTED_DISK;
-}
-
-Status OCGlobalCacheDeleteManager::GetMasterWorkerApi(const std::string &workerAddress,
-                                                      std::shared_ptr<MasterWorkerOCApi> &api)
-{
-    std::lock_guard<std::mutex> lock(apiMutex_);
-    auto it = workerApiMap_.find(workerAddress);
-    if (it != workerApiMap_.end()) {
-        api = it->second;
-        return Status::OK();
-    }
-
-    HostPort workerHostPort;
-    RETURN_IF_NOT_OK_APPEND_MSG(workerHostPort.ParseString(workerAddress), "Failed to parse target worker address");
-    api = MasterWorkerOCApi::CreateMasterWorkerOCApi(workerHostPort, masterAddr_, masterWorkerOCService_);
-    RETURN_IF_NOT_OK(api->Init());
-    workerApiMap_.emplace(workerAddress, api);
-    return Status::OK();
-}
-
 Status OCGlobalCacheDeleteManager::DelPersistenceObj(const std::string &objectKey, uint64_t objectVersion,
-                                                     uint64_t maxVersionToDel, const std::string &targetWorkerAddress)
+                                                     uint64_t maxVersionToDel)
 {
     INJECT_POINT("worker.DelPersistenceObj.beforeDel");
-    if (UseWorkerDeleteRpc()) {
-        CHECK_FAIL_RETURN_STATUS(!targetWorkerAddress.empty(), StatusCode::K_INVALID,
-                                 "Target worker address is empty for slot-backed L2 delete");
-        std::shared_ptr<MasterWorkerOCApi> api;
-        RETURN_IF_NOT_OK(GetMasterWorkerApi(targetWorkerAddress, api));
-        auto req = std::make_unique<DeletePersistenceObjectReqPb>();
-        auto &rpcReq = *req;
-        rpcReq.set_object_key(objectKey);
-        rpcReq.set_object_version(objectVersion);
-        rpcReq.set_max_version_to_delete(maxVersionToDel);
-        rpcReq.set_delete_all_version(true);
-        rpcReq.set_async_elapse(0);
-        rpcReq.set_list_incomplete_versions(false);
-        DeletePersistenceObjectRspPb rsp;
-        RETURN_IF_NOT_OK(api->DeletePersistenceObject(std::move(req), rsp));
-        return Status(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
-    }
-
     std::string key = objectKey + "/" + std::to_string(objectVersion);
     std::unique_lock<std::mutex> locker(waitDelMutex_);
     auto search = waitToCompleteDeleteObjMap_.find(key);
@@ -369,11 +319,11 @@ Status OCGlobalCacheDeleteManager::RecoverTopologyDeletedIds(
             continue;
         }
         uint64_t delVersion = 0;
-        std::string targetWorkerAddress;
-        if (!ObjectMetaStore::DecodeDeletedObjectValue(objectKey, info.second, delVersion, targetWorkerAddress)) {
+        std::string legacyTargetWorkerAddress;
+        if (!ObjectMetaStore::DecodeDeletedObjectValue(objectKey, info.second, delVersion, legacyTargetWorkerAddress)) {
             continue;
         }
-        Status status = InsertDeletedObject(objectKey, objectVersion, delVersion, targetWorkerAddress, false);
+        Status status = InsertDeletedObject(objectKey, objectVersion, delVersion, false);
         if (status.IsError()) {
             LOG(WARNING) << "Load global cache delete objects failed.";
         }
@@ -453,15 +403,9 @@ Status OCGlobalCacheDeleteManager::InsertDeletedObjectFromMigrateNode(const Meta
         auto delVersion = delInfo.delete_version();
         VLOG(1) << FormatString("Save one global cache delete, object key: %s, object version: %d, delete version: %d",
                                 objectKey, objectVersion, delVersion);
-        RETURN_IF_NOT_OK(InsertDeletedObject(objectKey, objectVersion, delVersion,
-                                             delInfo.target_worker_address(), true));
+        RETURN_IF_NOT_OK(InsertDeletedObject(objectKey, objectVersion, delVersion, true));
     }
     return Status::OK();
-}
-
-void OCGlobalCacheDeleteManager::AssignLocalWorker(object_cache::MasterWorkerOCServiceImpl *service)
-{
-    masterWorkerOCService_ = service;
 }
 
 }  // namespace master

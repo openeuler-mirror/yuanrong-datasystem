@@ -48,7 +48,6 @@ constexpr int32_t URMA_CONNECTION_LIMIT = 16384;
 static std::string ENCRYPT_KIT_PLAINTEXT = "plaintext";
 constexpr uint32_t MAX_KEY_LENGTH = 1024;
 
-
 DS_DECLARE_double(eviction_high_watermark_ratio);
 DS_DECLARE_double(eviction_low_watermark_ratio);
 DS_DECLARE_double(spill_high_watermark_ratio);
@@ -393,11 +392,17 @@ public:
      */
     static bool ValidateL2CacheType(const char *flagName, const std::string &value)
     {
-        if (value == "obs" || value == "sfs" || value == "distributed_disk" || value == "none") {
+        if (value == "obs" || value == "sfs" || value == "none") {
             return true;
         }
+        if (value == "distributed_disk") {
+            LOG(ERROR) << datasystem::FormatString(
+                "The value of %s flag is %s, but distributed_disk was removed; migrate the data and switch to "
+                "obs/sfs/none before upgrade.", flagName, value);
+            return false;
+        }
         LOG(ERROR) << datasystem::FormatString(
-            "The value of %s flag is %s, which must be 'obs'/'sfs'/'distributed_disk'/'none'.", flagName, value);
+            "The value of %s flag is %s, which must be 'obs'/'sfs'/'none'.", flagName, value);
         return false;
     }
 

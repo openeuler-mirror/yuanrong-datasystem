@@ -4,7 +4,6 @@
 features.
 
 Use this directory when a change touches backend selection, `PersistenceApi`, or OBS/SFS persistence behavior. For
-slot-format, takeover, recovery, or slot-specific DFX changes, use `../slot/implementation.md`.
 
 Current docs:
 

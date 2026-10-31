@@ -26,6 +26,7 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/kvstore/etcd/etcd_keep_alive.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/object_cache/object_base.h"

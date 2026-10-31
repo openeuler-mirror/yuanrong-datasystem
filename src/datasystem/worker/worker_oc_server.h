@@ -50,7 +50,6 @@
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
 #include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/object_endpoint_policy.h"
-#include "datasystem/worker/object_cache/slot_recovery_orchestrator.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/worker_worker_transport_service_impl.h"
@@ -821,26 +820,7 @@ private:
      */
     bool IsAsyncTasksRunning();
 
-#ifdef WITH_TESTS
-public:
-#endif
-
-    /**
-     * @brief Initialize the worker-scoped slot namespace for aggregated SFS.
-     */
-    void InitSlotWorkerNamespace();
-
-    /**
-     * @brief Initialize worker-local slot startup recovery.
-     * @return Status of the call.
-     */
-    Status InitSlotRecovery();
-#ifdef WITH_TESTS
-private:
-#endif
-
     std::shared_ptr<PersistenceApi> persistenceApi_{ nullptr };
-    std::unique_ptr<object_cache::SlotRecoveryOrchestrator> slotRecoveryOrchestrator_{ nullptr };
     std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery_;
     std::string etcdAddress_;
     std::unique_ptr<EtcdStore> etcdStore_;

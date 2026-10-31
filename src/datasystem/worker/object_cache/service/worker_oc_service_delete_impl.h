@@ -48,23 +48,7 @@ public:
      */
     Status DeleteCopyNotification(const DeleteObjectReqPb &req, DeleteObjectRspPb &rsp);
 
-    /**
-     * @brief Delete object from persistence only.
-     * @param[in] req The rpc request protobuf.
-     * @param[out] rsp The rpc response protobuf.
-     * @return Status of the call.
-     */
-    Status DeletePersistenceObject(const DeletePersistenceObjectReqPb &req, DeletePersistenceObjectRspPb &rsp);
-
 private:
-
-    /**
-     * @brief Execute persistence-only delete on the async delete thread pool.
-     * @param[in] req The rpc request protobuf.
-     * @return Status of the call.
-     */
-    Status DeletePersistenceObjectImpl(const DeletePersistenceObjectReqPb &req);
-
     /**
      * @brief The implementation of DeleteAllCopy.
      * @param[in] req The rpc request protobuf.
@@ -121,8 +105,6 @@ private:
     HostPort &localAddress_;
 
     std::shared_ptr<WorkerOcServiceGetImpl> getProc_{ nullptr };  // shared pointer to the workerocservicegetimpl
-
-    std::unique_ptr<ThreadPool> persistenceDeleteThreadPool_{ nullptr };
 };
 
 }  // namespace object_cache

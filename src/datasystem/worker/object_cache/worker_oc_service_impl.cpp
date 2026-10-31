@@ -233,7 +233,6 @@ bool IsTopologyPending(const Status &status)
     return status.GetCode() == K_NOT_READY || status.GetCode() == K_NOT_FOUND;
 }
 
-
 Status ToTopologyChangeTypePb(cluster::TopologyChangeType type, ::datasystem::TypePb &typePb)
 {
     switch (type) {
@@ -490,7 +489,6 @@ uint64_t PayloadBytes(const std::vector<RpcMessage> &payloads)
     return bytes;
 }
 
-
 void RecordMultiPublishTransportMetrics(const MultiPublishReqPb &req, uint64_t payloadBytes, bool clientShmEnabled)
 {
     const bool shmEnabled = WorkerOcServiceCrudCommonApi::ShmEnable();
@@ -587,7 +585,6 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
     memoryRefTable_ = std::make_shared<SharedMemoryRefTable>();
     globalRefTable_ = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
     asyncSendManager_ = std::make_shared<AsyncSendManager>(persistApi, evictionManager_);
-    slotRecoveryManager_ = std::make_shared<SlotRecoveryManager>();
     exitFlag_ = std::make_shared<std::atomic_bool>(false);
 
     // Set async send manager and persistence api to eviction manager
@@ -814,8 +811,6 @@ Status WorkerOCServiceImpl::InitRecoveryServices()
     InitServiceImpl();
     NodeSelector::Instance().Init(localAddress_.ToString(), membership_, exitRequested_, workerMasterApiManager_);
     getProc_->Init();
-    RETURN_IF_NOT_OK(slotRecoveryManager_->Init(localAddress_, membership_, persistenceApi_,
-                                                workerMasterApiManager_, etcdStore_, metadataRecoveryManager_.get()));
     clearDataFlow_ = std::make_unique<WorkerOcServiceClearDataFlow>(
         objectTable_, globalRefTable_, workerMasterApiManager_, gRefProc_, deleteProc_, metadataRoute_, endpointPolicy_,
         localAddress_.ToString());
@@ -1163,7 +1158,7 @@ Status WorkerOCServiceImpl::DrainTopologyScaleInData(const cluster::TopologyPhas
         std::lock_guard<SharedMutex> lock(clearIdsMutex_);
         voluntaryScaleDownClearIds_ = std::move(waitIds);
     }
-    RETURN_IF_NOT_OK(MigrateL2CacheData(l2Ids, action.taskId, deadline, cancellation));
+    RETURN_IF_NOT_OK(MigrateData(l2Ids, action.taskId, deadline, cancellation));
     CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology ScaleIn cancelled");
     return Status::OK();
 }
@@ -1421,29 +1416,6 @@ Status WorkerOCServiceImpl::MigrateData(const std::vector<std::string> &objectKe
     ConfigureDataMigrator(migrator);
     migrator.Init();
     return migrator.Migrate(objectKeys, {});
-}
-
-Status WorkerOCServiceImpl::MigrateL2CacheData(const std::vector<std::string> &needMigrateL2CacheIds,
-                                               const std::string &taskId)
-{
-    DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, membership_, endpointPolicy_,
-                          exitRequested_, localAddress_, objectTable_, taskId);
-    ConfigureDataMigrator(migrator);
-    migrator.Init();
-    return migrator.MigrateL2CacheBySlot(needMigrateL2CacheIds);
-}
-
-Status WorkerOCServiceImpl::MigrateL2CacheData(const std::vector<std::string> &needMigrateL2CacheIds,
-                                               const std::string &taskId,
-                                               std::chrono::steady_clock::time_point deadline,
-                                               const cluster::CancellationToken &cancellation)
-{
-    DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, membership_, endpointPolicy_,
-                          exitRequested_, localAddress_, objectTable_, taskId,
-                          DataMigrator::UNLIMITED_RETRY_COUNT, deadline, &cancellation);
-    ConfigureDataMigrator(migrator);
-    migrator.Init();
-    return migrator.MigrateL2CacheBySlot(needMigrateL2CacheIds);
 }
 
 void WorkerOCServiceImpl::FindObjectKeyNotInRsp(std::vector<master::QueryMetaInfoPb> &queryMetas,
@@ -2565,13 +2537,6 @@ Status WorkerOCServiceImpl::DeleteCopyNotification(const DeleteObjectReqPb &req,
     return deleteProc_->DeleteCopyNotification(req, rsp);
 }
 
-Status WorkerOCServiceImpl::DeletePersistenceObject(const DeletePersistenceObjectReqPb &req,
-                                                    DeletePersistenceObjectRspPb &rsp)
-{
-    ScopedRequestContext ctx;
-    return deleteProc_->DeletePersistenceObject(req, rsp);
-}
-
 Status WorkerOCServiceImpl::InvalidateBuffer(const InvalidateBufferReqPb &req, InvalidateBufferRspPb &rsp)
 {
     ScopedRequestContext ctx;
@@ -3037,10 +3002,6 @@ Status WorkerOCServiceImpl::WhetherNonRestart()
     } else {
         LOG(INFO) << "WORKER_STARTUP action=start_reconciliation";
         RETURN_IF_NOT_OK(ReconcileMembershipChange());
-    }
-    LOG_IF_ERROR(slotRecoveryManager_->ScheduleLocalPendingTasksFromStore(), "Recover slot failed");
-    if (isRestart) {
-        LOG_IF_ERROR(slotRecoveryManager_->HandleLocalRestart(), "Recover slot failed");
     }
     return Status::OK();
 }

@@ -23,7 +23,6 @@
   "module_boundary": {
     "related_modules": [
       "infra.l2cache",
-      "infra.slot",
       "infra.logging",
       "infra.metrics",
       "infra.observability",

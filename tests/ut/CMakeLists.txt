@@ -11,7 +11,6 @@ set(DS_UT_DEPEND_LIBS
         datasystem_static
         binmock
         generic_service_protos
-        slot_recovery_protos
         common_etcd
         common_log_proto
         common_coordinator_store
@@ -84,7 +83,6 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/rdma/urma_orphan_sweep_test[
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/device/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/binmock/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags/.*)
-list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/l2cache/slot_store_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/coordinator/coordinator_store_perf_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/coordinator/coordinator_server_options_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/coordinator/topology_control_perf_test\.cpp$)
@@ -269,9 +267,6 @@ if (BUILD_WITH_URMA_MOCK)
     target_compile_definitions(ds_ut_urma_connection_inflight PRIVATE USE_URMA USE_URMA_MOCK)
     target_link_libraries(ds_ut_urma_connection_inflight PRIVATE common_urma_mock_obj)
 endif()
-add_executable(ds_ut_slot_store
-        common/l2cache/slot_store_test.cpp
-        $<TARGET_OBJECTS:_ds_ut_main_obj>)
 add_executable(coordinator_store_perf_test
         common/coordinator/coordinator_store_perf_test.cpp
         $<TARGET_OBJECTS:_ds_ut_main_obj>
@@ -405,15 +400,6 @@ if (BUILD_WITH_URMA)
             ${DS_UT_HEAVY_LINK_END}
             -Wl,--reduce-memory-overheads)
 endif()
-target_link_libraries(ds_ut_slot_store PRIVATE
-        GTest::gtest
-        GTest::gmock
-        binmock
-        common_persistence_api
-        common_slot_client
-        common_log
-        common_util
-        common_request_context)
 target_link_libraries(coordinator_store_perf_test PRIVATE ${DS_UT_DEPEND_LIBS})
 target_link_libraries(topology_control_perf_test PRIVATE
         GTest::gtest
@@ -465,7 +451,6 @@ target_link_libraries(cluster_topology_contract_ut PRIVATE
         GTest::gmock
         cluster_topology
         ${DS_UT_COMMON_UTIL_EXTRA_LIBS})
-target_compile_definitions(ds_ut_slot_store PRIVATE ${BIN_PATH_LIST})
 
 if (BUILD_OBSERVABILITY)
     set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${_WORKER_BIN_DIR}:${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${Protobuf_LIB_PATH}:${absl_LIB_PATH}:${gflags_LIB_PATH}:${brpc_LIB_PATH}:${LOGS_ROOT}/lib:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
@@ -489,7 +474,6 @@ add_datasystem_test(cuda_host_memory_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_stream TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_object TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(oc_migrate_metadata_manager_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
-add_datasystem_test(ds_ut_slot_store TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_server_options_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_election_manager_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_membership_manager_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})

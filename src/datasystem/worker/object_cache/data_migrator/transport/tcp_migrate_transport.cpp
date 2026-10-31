@@ -73,9 +73,6 @@ Status TcpMigrateTransport::MigrateDataToRemote(const Request &req, Response &rs
     reqPb.set_worker_addr(req.localAddr);
     reqPb.set_bytes_send(req.batchSize);
     reqPb.set_type(req.type);
-    reqPb.set_is_slot_migration(req.isSlotMigration);
-    reqPb.set_is_retry(req.isRetry);
-    reqPb.set_slot_id(req.slotId);
     if (req.rebalancePolicyFence != nullptr) {
         reqPb.set_has_rebalance_policy_fence(true);
         reqPb.set_target_eviction_policy(req.rebalancePolicyFence->targetPolicy);

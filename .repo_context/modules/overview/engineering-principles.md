@@ -86,7 +86,7 @@ Persistence-sensitive changes must assess:
 - version compatibility and rollback behavior
 - compaction safety and cleanup after interruption
 - startup rebuild correctness
-- metadata/data consistency across ETCD, RocksDB, l2cache, slot storage, and local memory
+- metadata/data consistency across ETCD, RocksDB, l2cache, and local memory
 - idempotency when a retry or recovery task replays the operation
 
 Use `.repo_context/playbooks/features/recovery-and-persistence.md` when a change touches durable data, metadata,
@@ -149,7 +149,7 @@ Before implementing new logic, search for existing repository primitives:
 - status/error style and macros
 - logging and perf point helpers
 - thread pools, async queues, timers, wait posts, events
-- filesystem, RocksDB, ETCD, l2cache, and slot helpers
+- filesystem, RocksDB, ETCD, l2cache helpers
 - benchmark and perf client frameworks
 - test cluster, inject point, and recovery test utilities
 - existing request/response validation helpers

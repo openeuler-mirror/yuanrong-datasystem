@@ -23,7 +23,7 @@ Use it to jump from a question type to the smallest useful document instead of r
 | choose the default workflow for feature, bugfix, or refactor work | `playbooks/features/infra-engineering-workflow.md` | `modules/overview/engineering-principles.md`, touched source/tests |
 | assess a performance-sensitive change | `playbooks/features/performance-change.md` | `src/datasystem/client`, `src/datasystem/worker`, `src/datasystem/common/perf`, `dsbench`, `tests/perf` |
 | assess concurrency, shared state, or memory lifetime risk | `playbooks/features/concurrency-and-memory-safety.md` | touched locks, queues, callbacks, buffers, and tests |
-| assess persistence, recovery, failover, or compaction risk | `playbooks/features/recovery-and-persistence.md` | `modules/infra/slot/design.md`, `modules/runtime/topology/README.md`, touched source/tests |
+| assess persistence, recovery, failover, or compaction risk | `playbooks/features/recovery-and-persistence.md` | `modules/infra/l2cache/design.md`, `modules/runtime/topology/README.md`, touched source/tests |
 | review a PR or diff | `playbooks/reviews/pr-review-checklist.md` | touched source/tests, `.gitee/PULL_REQUEST_TEMPLATE/PULL_REQUEST_TEMPLATE.zh-cn.md` |
 | self-verify before claiming completion | `playbooks/upkeep/ai-self-verification.md` | `git status`, `git diff`, relevant test or metadata commands |
 | understand repository-local skills or decide whether a natural-language request should trigger one | `modules/overview/repository-skills.md` | `.skills/*/SKILL.md`, `.skills/*/scripts/*` |
@@ -43,9 +43,7 @@ Use it to jump from a question type to the smallest useful document instead of r
 | understand shared infra used across modules | `modules/infra/common-infra.md` | `src/datasystem/common/*` |
 | understand l2 cache architecture, backend boundaries, or when a change needs design-first handling | `modules/infra/l2cache/design.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/worker/worker_oc_server.cpp` |
 | understand `l2_cache_type` backend selection, flags, or `PersistenceApi` dispatch | `modules/infra/l2cache/l2-cache-type.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/common/flags/*`, `src/datasystem/worker/worker_oc_server.cpp` |
-| understand distributed-disk slot storage, replay, compaction, takeover, or restart recovery | `modules/infra/slot/design.md` | `src/datasystem/common/l2cache/slot_client/*`, `src/datasystem/worker/object_cache/slot_recovery*`, `tests/ut/common/l2cache/slot_store_test.cpp`, `tests/st/worker/object_cache/slot_end2end_test.cpp` |
 | design and implement a low-risk l2 cache or secondary-storage feature | `playbooks/features/infra/l2cache/implementation.md` | `modules/infra/l2cache/design.md`, `src/datasystem/common/l2cache/*`, `src/datasystem/worker/worker_oc_server.cpp` |
-| design and implement a low-risk slot storage or recovery feature | `playbooks/features/infra/slot/implementation.md` | `modules/infra/slot/design.md`, `src/datasystem/common/l2cache/slot_client/*`, `src/datasystem/worker/object_cache/slot_recovery*` |
 | understand logging architecture before adding a feature | `modules/infra/logging/design.md` | `src/datasystem/common/log/*`, `src/datasystem/common/metrics/hard_disk_exporter/*` |
 | design unified class-based random log sampling | `modules/infra/logging/log-sampler-design.md` | `src/datasystem/common/log/*`, `src/datasystem/common/log/spdlog/*`, `src/datasystem/common/metrics/hard_disk_exporter/*`, `src/datasystem/common/flags/*` |
 | design request-stage access-log latency summaries | `modules/infra/logging/request-stage-latency-trace-plan.md` | `src/datasystem/common/log/*`, `src/datasystem/client/object_cache/*`, `src/datasystem/client/kv_cache/*`, `src/datasystem/worker/object_cache/*`, `src/datasystem/master/object_cache/*`, `src/datasystem/protos/*` |
@@ -88,11 +86,9 @@ Use it to jump from a question type to the smallest useful document instead of r
 | runtime topology | `modules/runtime/topology/README.md` | `src/datasystem/cluster`, `src/datasystem/protos/cluster_topology.proto`, `src/datasystem/worker/worker_oc_server.cpp` |
 | ETCD coordination backend | `modules/runtime/etcd-metadata/README.md` | `third_party/protos/etcd`, `src/datasystem/common/kvstore/etcd` |
 | common infrastructure | `modules/infra/common-infra.md` | `src/datasystem/common` |
-| l2 cache and secondary storage | `modules/infra/l2cache/README.md` | `src/datasystem/common/l2cache`, `src/datasystem/worker/object_cache/slot_recovery*` |
+| l2 cache and secondary storage | `modules/infra/l2cache/README.md` | `src/datasystem/common/l2cache` |
 | l2 cache architecture | `modules/infra/l2cache/design.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/worker/worker_oc_server.cpp` |
 | l2 cache backend selection | `modules/infra/l2cache/l2-cache-type.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/common/flags/*` |
-| slot storage and recovery | `modules/infra/slot/README.md` | `src/datasystem/common/l2cache/slot_client/*`, `src/datasystem/worker/object_cache/slot_recovery*` |
-| slot design | `modules/infra/slot/design.md` | `src/datasystem/common/l2cache/slot_client/*`, `src/datasystem/worker/object_cache/slot_recovery*`, `tests/ut/common/l2cache/slot_store_test.cpp` |
 | logging area overview | `modules/infra/logging/README.md` | `src/datasystem/common/log` |
 | logging design | `modules/infra/logging/design.md` | `src/datasystem/common/log/*`, `src/datasystem/common/metrics/hard_disk_exporter/*` |
 | log sampler design | `modules/infra/logging/log-sampler-design.md` | `src/datasystem/common/log/*`, `src/datasystem/common/log/spdlog/*`, `src/datasystem/common/metrics/hard_disk_exporter/*` |
@@ -120,7 +116,6 @@ Use it to jump from a question type to the smallest useful document instead of r
 | test implementation workflow | `playbooks/features/quality/test-implementation.md` | `tests`, `tests/ut/CMakeLists.txt`, `tests/st/CMakeLists.txt` |
 | CMake build optimization workflow | `playbooks/features/quality/cmake-build-optimization.md` | `build.sh`, `scripts/build_cmake.sh`, `cmake/*.cmake`, `src/datasystem/**/CMakeLists.txt` |
 | l2 cache feature workflow | `playbooks/features/infra/l2cache/implementation.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/worker/worker_oc_server.cpp` |
-| slot feature workflow | `playbooks/features/infra/slot/implementation.md` | `src/datasystem/common/l2cache/slot_client/*`, `src/datasystem/worker/object_cache/slot_recovery*` |
 
 ## When To Use `generated/repo_index.md`
 

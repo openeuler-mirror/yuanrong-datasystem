@@ -39,7 +39,6 @@
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/util/net_util.h"
-#include "datasystem/common/l2cache/slot_client/slot_internal_config.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -283,48 +282,5 @@ TEST_F(DataMigratorScaleDownTest, RouteFailureKeysFallBackToStandbyInsteadOfEmpt
     EXPECT_GT(state.sendCalls.load(), 0);
 }
 
-TEST_F(DataMigratorScaleDownTest, SameSlotSiblingGroupsKeepIndependentRetryBudgets)
-{
-    MigrateMockState state;
-    const std::vector<std::string> keys{ "a1", "a2", "b1" };
-    uint32_t slot = 0;
-    std::unordered_map<std::string, std::string> slotMatchedKeys;
-    for (const auto &key : keys) {
-        for (uint32_t candidate = 0;; ++candidate) {
-            const std::string candidateKey = key + "_" + std::to_string(candidate);
-            const uint32_t candidateSlot = MurmurHash3_32(candidateKey) % DISTRIBUTED_DISK_SLOT_NUM;
-            if (key == keys.front()) {
-                slot = candidateSlot;
-                slotMatchedKeys.emplace(key, candidateKey);
-                break;
-            }
-            if (candidateSlot == slot) {
-                slotMatchedKeys.emplace(key, candidateKey);
-                break;
-            }
-        }
-    }
-    MockRemoteMigrateData(state, 100.0, slotMatchedKeys.at("a2"), slotMatchedKeys.at("b1"));
-    algorithm_.RouteKey(slotMatchedKeys.at("a1"), 2, TARGET_ADDR);
-    algorithm_.RouteKey(slotMatchedKeys.at("a2"), 2, TARGET_ADDR);
-    algorithm_.RouteKey(slotMatchedKeys.at("b1"), 3, SPARE_ADDR);
-    for (const auto &key : keys) {
-        DS_ASSERT_OK(CreateObject(slotMatchedKeys.at(key), 1024));
-    }
-    CreateMigrator(std::chrono::steady_clock::now() + std::chrono::seconds(30));
-
-    std::vector<std::string> slotKeys;
-    for (const auto &key : keys) {
-        slotKeys.emplace_back(slotMatchedKeys.at(key));
-    }
-    Status rc = migrator_->MigrateL2CacheBySlot(slotKeys);
-
-    ASSERT_TRUE(rc.IsOk()) << rc.ToString();
-    std::vector<std::string> failedKeys;
-    migrator_->GetFailedKeys(failedKeys);
-    EXPECT_EQ(failedKeys, std::vector<std::string>{ slotMatchedKeys.at("b1") });
-    EXPECT_EQ(state.b1Sends.load(), 2);
-    EXPECT_EQ(state.a2Sends.load(), 2);
-}
 }  // namespace ut
 }  // namespace datasystem

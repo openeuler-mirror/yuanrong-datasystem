@@ -26,7 +26,6 @@
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/l2cache/slot_client/slot_internal_config.h"
 #include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/util/hash_algorithm.h"
@@ -198,33 +197,6 @@ Status DataMigrator::Migrate(const std::vector<std::string> &objectKeys,
     return Status::OK();
 }
 
-std::future<MigrateDataHandler::MigrateResult> DataMigrator::MigrateToSpecificNode(
-    const std::vector<std::string> &objectKeys, const HostPort &targetAddr, std::shared_ptr<SelectionStrategy> strategy)
-{
-    if (targetAddr == localAddress_) {
-        return ConstructFailedFuture(
-            targetAddr.ToString(),
-            Status(StatusCode::K_DUPLICATED,
-                   FormatString("[Migrate Data] Target node %s is ourselves", targetAddr.ToString())),
-            objectKeys, strategy);
-    }
-
-    std::shared_ptr<WorkerRemoteWorkerOCApi> remoteWorkerStub;
-    Status rc = ConnectAndCreateRemoteApi(remoteWorkerStub, targetAddr);
-    if (rc.IsError()) {
-        return ConstructFailedFuture(targetAddr.ToString(), rc, objectKeys, strategy);
-    }
-
-    auto traceID = Trace::Instance().GetTraceID();
-    if (traceID.empty()) {
-        traceID = "migr;" + GetStringUuid();
-    }
-    return threadPool_->Submit([this, remoteWorkerStub, objectKeys, traceID, strategy]() {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-        return MigrateDataByNodeImpl(remoteWorkerStub, objectKeys, strategy, true);
-    });
-}
-
 std::future<MigrateDataHandler::MigrateResult> DataMigrator::MigrateToTargetNode(
     const std::vector<std::string> &objectKeys, const HostPort &targetAddr, std::shared_ptr<SelectionStrategy> strategy,
     TargetMigrationOptions options)
@@ -259,7 +231,7 @@ std::future<MigrateDataHandler::MigrateResult> DataMigrator::MigrateToTargetNode
             MigrateDataHandler handler(type_, localAddress_.ToString(), needMigrateDataIds, objectTable_,
                                        remoteWorkerStub, strategy,
                                        options.cancellation == nullptr ? &stopping_ : options.cancellation, progress_,
-                                       options.isRetry, options.slotId, std::move(options.objectHeats),
+                                       std::move(options.objectHeats),
                                        std::move(options.rebalancePolicyFence));
             rc = ConfigureSendAdmission(handler, targetAddr.ToString());
             if (rc.IsError()) {
@@ -267,199 +239,12 @@ std::future<MigrateDataHandler::MigrateResult> DataMigrator::MigrateToTargetNode
                 finalResult.failedIds.insert(objectKeys.begin(), objectKeys.end());
                 return finalResult;
             }
-            auto result = handler.MigrateDataToRemote(options.isSlotMigration);
+            auto result = handler.MigrateDataToRemote();
             ObserveUbHealthSummary(result);
             bool localOperator = false;
             (void)LearnStructuredUbFailure(result, localOperator);
             return result;
         });
-}
-
-Status DataMigrator::MigrateL2CacheBySlot(const std::vector<std::string> &objectKeys)
-{
-    constexpr int maxSameNodeRetryCount = 10;
-    if (objectKeys.empty()) {
-        LOG(INFO) << "[MigrateL2Cache] No L2 cache data need to migrate";
-        return Status::OK();
-    }
-
-    progress_ = CreateMigrateProgress(objectKeys.size());
-    failedKeys_.clear();
-    skippedKeys_.clear();
-
-    LOG(INFO) << FormatString("[MigrateL2Cache] Start migrating %zu L2 cache objects", objectKeys.size());
-
-    auto objectsBySlot = GroupL2CacheObjectsBySlot(objectKeys);
-
-    LOG(INFO) << FormatString("[MigrateL2Cache] Grouped into %zu slots", objectsBySlot.size());
-
-    std::string standbyWorker;
-    LOG_IF_ERROR(GetStandbyWorker(standbyWorker), "[MigrateL2Cache] Failed to select standby worker");
-
-    std::vector<SlotMigrateFuture> futures;
-    SlotRetryCounters sameNodeRetryCounts;
-    SubmitL2CacheTasksBySlot(objectsBySlot, standbyWorker, futures);
-    RETURN_IF_NOT_OK(ProcessL2CacheSlotFutures(futures, maxSameNodeRetryCount, sameNodeRetryCounts));
-
-    LOG(INFO) << FormatString("[MigrateL2Cache] Finished");
-
-    return Status::OK();
-}
-
-std::map<uint32_t, std::vector<std::string>> DataMigrator::GroupL2CacheObjectsBySlot(
-    const std::vector<std::string> &objectKeys) const
-{
-    auto slotNum = DISTRIBUTED_DISK_SLOT_NUM;
-    std::map<uint32_t, std::vector<std::string>> objectsBySlot;
-    INJECT_POINT("TestGroupL2CacheObjectsBySlot", [&slotNum, &objectsBySlot] {
-        slotNum = 1;
-        return objectsBySlot;
-    });
-    for (const auto &objectKey : objectKeys) {
-        uint32_t hash = MurmurHash3_32(objectKey);
-        uint32_t slot = hash % slotNum;
-        objectsBySlot[slot].push_back(objectKey);
-    }
-    return objectsBySlot;
-}
-
-void DataMigrator::SubmitL2CacheTasksBySlot(const std::map<uint32_t, std::vector<std::string>> &objectsBySlot,
-                                            const std::string &standbyWorker, std::vector<SlotMigrateFuture> &futures)
-{
-    for (const auto &[slot, objs] : objectsBySlot) {
-        auto grouped = metadataRoute_.GroupMigrateTargets(objs);
-        AppendRouteFailures(grouped);
-        for (const auto &[addr, keys] : grouped.groups) {
-            HostPort currentTarget = addr;
-            if ((currentTarget.Empty() || currentTarget == localAddress_) && !standbyWorker.empty()) {
-                (void)currentTarget.ParseString(standbyWorker);
-            }
-            if (currentTarget.Empty() || currentTarget == localAddress_) {
-                LOG(ERROR) << FormatString("[MigrateL2Cache] Slot %u has no available standby target, drop %zu objects",
-                                           slot, keys.size());
-                failedKeys_.insert(keys.begin(), keys.end());
-                continue;
-            }
-
-            LOG(INFO) << FormatString("[MigrateL2Cache] Slot %u (%zu objects) -> %s", slot, keys.size(),
-                                      currentTarget.ToString());
-            futures.emplace_back(slot, MigrateToTargetNode(keys, currentTarget,
-                                                           std::make_shared<ScaleDownNodeSelector>(membership_,
-                                                                                                   localAddress_),
-                                                           { .isRetry = false, .slotId = slot }));
-        }
-    }
-}
-
-bool DataMigrator::TrySubmitSameNodeRetryForL2Slot(uint32_t slot, const MigrateDataHandler::MigrateResult &result,
-                                                   int maxSameNodeRetryCount, SlotRetryCounters &sameNodeRetryCounts,
-                                                   std::vector<SlotMigrateFuture> &newFutures)
-{
-    const auto retryKey = SlotRetryCounters::key_type{ slot, result.address };
-    const bool enteredSameNodeRetry = sameNodeRetryCounts[retryKey] > 0;
-    if (result.successIds.empty() && !enteredSameNodeRetry) {
-        return false;
-    }
-
-    int retryCount = ++sameNodeRetryCounts[retryKey];
-    if (retryCount > maxSameNodeRetryCount) {
-        LOG(WARNING) << FormatString(
-            "[MigrateL2Cache] Slot %u same-node failedIds retry exceeded max(%d), stop retry on node %s and fail "
-            "%zu keys",
-            slot, maxSameNodeRetryCount, result.address.c_str(), result.failedIds.size());
-        failedKeys_.insert(result.failedIds.begin(), result.failedIds.end());
-        return true;
-    }
-
-    HostPort sameHost;
-    Status rc = sameHost.ParseString(result.address);
-    if (rc.IsError()) {
-        LOG(ERROR) << FormatString("[MigrateL2Cache] Parse node address failed for same-node retry: %s, status: %s",
-                                   result.address, rc.ToString());
-        return true;
-    }
-
-    VLOG(1) << FormatString(
-        "[MigrateL2Cache] Slot %u retry failed ids on same node %s (%d/%d), success count: %zu, failed count: %zu",
-        slot, result.address, retryCount, maxSameNodeRetryCount, result.successIds.size(), result.failedIds.size());
-    newFutures.emplace_back(
-        slot, MigrateToTargetNode(std::vector<std::string>{ result.failedIds.begin(), result.failedIds.end() },
-                                  sameHost, result.strategy, { .isRetry = true, .slotId = slot }));
-    return true;
-}
-
-void DataMigrator::TrySubmitRedirectRetryForL2Slot(uint32_t slot, MigrateDataHandler::MigrateResult &result,
-                                                   SlotRetryCounters &sameNodeRetryCounts,
-                                                   std::vector<SlotMigrateFuture> &newFutures)
-{
-    sameNodeRetryCounts[{ slot, result.address }] = 0;
-    HostPort hostPort;
-    Status rc = SelectRedirectTarget(result.address, 0, result.strategy, hostPort);
-    if (rc.IsError()) {
-        LOG(ERROR) << "[MigrateL2Cache] No admitted redirect target: " << rc;
-        failedKeys_.insert(result.failedIds.begin(), result.failedIds.end());
-        return;
-    }
-
-    LOG(INFO) << FormatString("[MigrateL2Cache] Slot %u retry with new node: %s", slot, hostPort.ToString());
-    newFutures.emplace_back(
-        slot, MigrateToTargetNode(std::vector<std::string>{ result.failedIds.begin(), result.failedIds.end() },
-                                  hostPort, result.strategy, { .isRetry = false, .slotId = slot }));
-}
-
-Status DataMigrator::ProcessL2CacheSlotFutures(std::vector<SlotMigrateFuture> &futures, int maxSameNodeRetryCount,
-                                               SlotRetryCounters &sameNodeRetryCounts)
-{
-    while (!futures.empty()) {
-        std::vector<SlotMigrateFuture> newFutures;
-        bool retryWaitCompleted = false;
-        for (auto &fut : futures) {
-            Status rc = HandleFailedResult();
-            if (rc.IsError()) {
-                LOG(ERROR) << "[Migrate Data]. Detail: " << rc.ToString();
-                return rc;
-            }
-            uint32_t slot = fut.first;
-            auto result = fut.second.get();
-            ObserveUbHealthSummary(result);
-            if (result.failedIds.empty()) {
-                LOG(INFO) << MigrateDataHandler::ResultToString(result);
-                continue;
-            }
-
-            LOG_EVERY_N(WARNING, MIGRATION_RETRY_LOG_EVERY_N)
-                << MigrateDataHandler::ResultToString(result) << ", source=" << localAddress_.ToString()
-                << ", task_id=" << taskId_ << ", slot=" << slot;
-            VLOG(1) << FormatString(
-                "[MigrateL2Cache] Slot %u migration to %s failed, status: %s, failed count: %zu", slot, result.address,
-                result.status.ToString(), result.failedIds.size());
-            bool localOperator = false;
-            const bool structuredFailure = LearnStructuredUbFailure(result, localOperator);
-            if ((structuredFailure && localOperator) || IsLocalMigrationOperatorUnavailable()) {
-                failedKeys_.insert(result.failedIds.begin(), result.failedIds.end());
-                return result.status.IsError() ? result.status
-                                               : Status(K_URMA_ERROR, "Local migration UB operator is unavailable");
-            }
-            if (structuredFailure) {
-                if (!retryWaitCompleted) {
-                    RETURN_IF_NOT_OK(WaitBeforeRetry());
-                    retryWaitCompleted = true;
-                }
-                TrySubmitRedirectRetryForL2Slot(slot, result, sameNodeRetryCounts, newFutures);
-                continue;
-            }
-            if (!retryWaitCompleted) {
-                RETURN_IF_NOT_OK(WaitBeforeRetry());
-                retryWaitCompleted = true;
-            }
-            if (TrySubmitSameNodeRetryForL2Slot(slot, result, maxSameNodeRetryCount, sameNodeRetryCounts, newFutures)) {
-                continue;
-            }
-            TrySubmitRedirectRetryForL2Slot(slot, result, sameNodeRetryCounts, newFutures);
-        }
-        futures.swap(newFutures);
-    }
-    return Status::OK();
 }
 
 std::future<MigrateDataHandler::MigrateResult> DataMigrator::ConstructFailedFuture(
@@ -478,11 +263,11 @@ std::future<MigrateDataHandler::MigrateResult> DataMigrator::ConstructFailedFutu
 
 MigrateDataHandler::MigrateResult DataMigrator::MigrateDataByNodeImpl(
     const std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub, const std::vector<std::string> &objectKeys,
-    const std::shared_ptr<SelectionStrategy> &strategy, bool isSlotMigration, uint32_t slotId)
+    const std::shared_ptr<SelectionStrategy> &strategy)
 {
     std::vector<ImmutableString> needMigrateDataIds{ objectKeys.begin(), objectKeys.end() };
     MigrateDataHandler handler(type_, localAddress_.ToString(), needMigrateDataIds, objectTable_, remoteWorkerStub,
-                               strategy, &stopping_, progress_, false, slotId);
+                               strategy, &stopping_, progress_);
     auto admissionRc = ConfigureSendAdmission(handler, remoteWorkerStub->Address());
     if (admissionRc.IsError()) {
         MigrateDataHandler::MigrateResult result;
@@ -492,7 +277,7 @@ MigrateDataHandler::MigrateResult DataMigrator::MigrateDataByNodeImpl(
         result.strategy = strategy;
         return result;
     }
-    return handler.MigrateDataToRemote(isSlotMigration);
+    return handler.MigrateDataToRemote();
 }
 
 std::future<MigrateDataHandler::MigrateResult> DataMigrator::MigrateDataByNode(
