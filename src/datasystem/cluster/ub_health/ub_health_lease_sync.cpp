@@ -160,9 +160,9 @@ void UbHealthLeaseSync::Run()
         Status rc = SyncOnce();
         if (rc.IsOk()) {
             everSucceeded = true;
-        } else if (!everSucceeded && rc.GetCode() == K_NOT_FOUND) {
+        } else if (!everSucceeded && (rc.GetCode() == K_NOT_FOUND || rc.GetCode() == K_NOT_READY)) {
             LOG_EVERY_T(WARNING, LOG_TIME_LIMIT_LEVEL2)
-                << "Refresh UB health lease snapshot failed, local member not visible yet, will retry. Detail: "
+                << "Refresh UB health lease snapshot failed, topology or local member not ready, will retry. Detail: "
                 << rc.ToString();
         } else {
             LOG_EVERY_T(ERROR, LOG_TIME_LIMIT_LEVEL3)

@@ -123,8 +123,9 @@ private:
 
 // LOG_EVERY_T keeps per-call-site state for the whole process, so the first WARNING and first ERROR of
 // the Run() loop can only be emitted once across all tests; this test therefore drives both phases in a
-// single timeline and must stay ahead of the behavioral tests below.
-TEST_F(UbHealthLeaseSyncLogTest, MemberNotVisibleStaysWarningAndSidecarFailureEscalatesToError)
+// single timeline and must stay ahead of the behavioral tests below. The single WARNING slot is spent on
+// K_NOT_READY, the dominant code of the real startup window (before the first topology Snapshot).
+TEST_F(UbHealthLeaseSyncLogTest, SnapshotNotReadyStaysWarningAndSidecarFailureEscalatesToError)
 {
     std::atomic<int> incarnationCalls{ 0 };
     std::atomic<bool> sidecarFailing{ false };
@@ -137,7 +138,7 @@ TEST_F(UbHealthLeaseSyncLogTest, MemberNotVisibleStaysWarningAndSidecarFailureEs
                 incarnation = "self-1";
                 return Status::OK();
             }
-            return Status(K_NOT_FOUND, "member address not found");
+            return Status(K_NOT_READY, "cluster topology Snapshot is not ready");
         },
         [] { return UbHealthSummary{}; },
         [](const auto &snapshot) { (void)snapshot; },
@@ -156,7 +157,7 @@ TEST_F(UbHealthLeaseSyncLogTest, MemberNotVisibleStaysWarningAndSidecarFailureEs
 
     const auto logs = CaptureLogs([&] {
         ASSERT_TRUE(sync.Start().IsOk());
-        // Phase 0: local member not visible yet (startup race); repeated failures must stay WARNING.
+        // Phase 0: startup window before the first topology Snapshot; repeated failures must stay WARNING.
         ASSERT_TRUE(WaitFor([&incarnationCalls] { return incarnationCalls.load() >= 5; },
                             std::chrono::seconds(2)));
         sidecarFailing.store(true);
@@ -166,11 +167,11 @@ TEST_F(UbHealthLeaseSyncLogTest, MemberNotVisibleStaysWarningAndSidecarFailureEs
         sync.Stop();
     });
 
-    // Startup-race failures stay WARNING-level and are throttled to a single line carrying the
-    // member-not-visible cause.
+    // Startup-window failures stay WARNING-level and are throttled to a single line carrying the
+    // not-yet-ready cause.
     EXPECT_EQ(CountLevelLines(logs, " | W | ", "Refresh UB health lease snapshot failed"), 1u) << logs;
-    EXPECT_EQ(CountLevelLines(logs, " | W | ", "member address not found"), 1u) << logs;
-    EXPECT_NE(logs.find("local member not visible yet"), std::string::npos) << logs;
+    EXPECT_EQ(CountLevelLines(logs, " | W | ", "cluster topology Snapshot is not ready"), 1u) << logs;
+    EXPECT_NE(logs.find("topology or local member not ready"), std::string::npos) << logs;
     // The single ERROR must be the sidecar failure with its own root cause (a startup-race escalation
     // would make the ERROR count exceed one), and repeated sidecar failures are throttled within 60s.
     EXPECT_EQ(CountLevelLines(logs, " | E | ", "Refresh UB health lease snapshot failed"), 1u) << logs;
