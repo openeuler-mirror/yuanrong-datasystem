@@ -98,6 +98,7 @@ struct ReadState {
     size_t inputIndex = 0;
     size_t replicaIndex = 0;
     size_t round = 1;
+    size_t notFoundReplicas = 0;
     uint64_t expectedSize = 0;
     Status lastStatus = Status(K_NOT_FOUND, "Cannot get objects from worker");
     bool hasAttempt = false;
@@ -228,6 +229,11 @@ void AdvanceUnavailableReplica(ReadState &state, const Status &itemStatus)
 
 void AdvanceRetryableReplica(ReadState &state, const Status &itemStatus)
 {
+    // Only a round in which every replica answered not-found proves the object is gone; a single
+    // trailing not-found must not outweigh earlier retryable failures of other replicas.
+    if (itemStatus.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
+        ++state.notFoundReplicas;
+    }
     ++state.replicaIndex;
     const bool replicasExhausted = state.replicaIndex >= static_cast<size_t>(state.location->object_locations_size());
     if (!replicasExhausted) {
@@ -239,8 +245,8 @@ void AdvanceRetryableReplica(ReadState &state, const Status &itemStatus)
         state.completed = true;
         return;
     }
-    if (itemStatus.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
-        state.result->status = Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "Object not found on any replica");
+    if (state.notFoundReplicas == static_cast<size_t>(state.location->object_locations_size())) {
+        state.result->status = Status(K_NOT_FOUND, "Object not found on any replica");
         state.completed = true;
         return;
     }
@@ -434,7 +440,7 @@ Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectR
         if (notFoundReplicas == location.object_locations_size()) {
             LOG(WARNING) << "[TransportGet][Data] All replicas returned not-found in one round, fast-fail as deleted. "
                          << "key: " << location.object_key() << ", round: " << round;
-            return Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "Object not found on any replica");
+            return Status(K_NOT_FOUND, "Object not found on any replica");
         }
         if (HasRefreshableLocation(refreshableLocation)) {
             return GetRefreshableLocationStatus(refreshableLocation);
@@ -652,7 +658,12 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests, bool traceEnab
                         continue;
                     }
 
-                    state.lastStatus = itemStatus;
+                    // Keep the terminal status order-independent when a round mixes failures: a
+                    // not-found answer alone is a weak signal, so it must not overwrite the more
+                    // diagnostic error of an earlier replica.
+                    if (itemStatus.GetCode() != K_WORKER_PULL_OBJECT_NOT_FOUND) {
+                        state.lastStatus = itemStatus;
+                    }
                     if (IsTransportSnapshotStaleLocation(itemStatus)
                         || IsWorkerDrainingForScaleIn(itemStatus)) {
                         RecordRefreshableLocation(itemStatus, state.refreshableLocation);
@@ -698,6 +709,7 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests, bool traceEnab
                 if (!state.completed) {
                     state.replicaIndex = 0;
                     state.exhausted = false;
+                    state.notFoundReplicas = 0;
                     ++state.round;
                 }
             }

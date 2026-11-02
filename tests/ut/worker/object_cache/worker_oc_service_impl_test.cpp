@@ -1867,6 +1867,37 @@ TEST_F(WorkerOcServiceImplTest, SyncDeleteNotificationPreservesNewerObjectVersio
     EXPECT_EQ((*entry)->GetCreateTime(), newerObjectVersion);
 }
 
+TEST_F(WorkerOcServiceImplTest, AsyncDeleteNotificationPreservesNewerObjectVersion)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(1'000);
+    const std::string objectKey = "async-delete-version-fence";
+    constexpr uint64_t olderDeleteVersion = 100;
+    constexpr uint64_t newerObjectVersion = 200;
+    AddObject(objectKey, newerObjectVersion);
+
+    DeleteObjectReqPb request;
+    DeleteObjectRspPb response;
+    request.add_object_keys(objectKey);
+    request.add_versions(olderDeleteVersion);
+    request.set_is_async(true);
+
+    DS_ASSERT_OK(deleteProc_->DeleteCopyNotification(request, response));
+    EXPECT_TRUE(response.failed_object_keys().empty());
+    std::shared_ptr<SafeObjType> entry;
+    DS_ASSERT_OK(objectTable_->Get(objectKey, entry));
+    EXPECT_EQ((*entry)->GetCreateTime(), newerObjectVersion);
+
+    DeleteObjectReqPb sameVersionRequest;
+    DeleteObjectRspPb sameVersionResponse;
+    sameVersionRequest.add_object_keys(objectKey);
+    sameVersionRequest.add_versions(newerObjectVersion);
+    sameVersionRequest.set_is_async(true);
+    DS_ASSERT_OK(deleteProc_->DeleteCopyNotification(sameVersionRequest, sameVersionResponse));
+    EXPECT_TRUE(sameVersionResponse.failed_object_keys().empty());
+    EXPECT_EQ(objectTable_->Get(objectKey, entry).GetCode(), K_NOT_FOUND);
+}
+
 TEST_F(WorkerOcServiceImplTest, DeleteNotificationRejectsOversizedBatch)
 {
     DeleteObjectReqPb request;

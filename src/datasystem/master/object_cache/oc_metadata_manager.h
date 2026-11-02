@@ -1524,6 +1524,22 @@ private:
                                      bool &firstOne);
 
     /**
+     * @brief Overwrite an existing binary-format meta transactionally: arbitrate the in-flight async
+     *        ttl delete before mutating anything, roll the previous expiry task back when the
+     *        invalidation or the nested-ref registration fails, and install the candidate ttl only
+     *        after both succeeded. Runs under the caller's meta shard read lock.
+     * @param[in] newMeta New meta of the object.
+     * @param[in] address Server address.
+     * @param[in] nestedObjectKeys Nested object keys.
+     * @param[in] version New object version.
+     * @param[in,out] prevMeta Existing meta entry, advanced in place on success.
+     * @return Status of call.
+     */
+    Status OverwriteBinaryMeta(const ObjectMetaPb &newMeta, const std::string &address,
+                               const std::set<ImmutableString> &nestedObjectKeys,
+                               int64_t version, ObjectMeta &prevMeta);
+
+    /**
      * @brief Check the object update enable or not
      * @param[in] meta meta info
      * @param[in] objectKey object key
@@ -1762,7 +1778,7 @@ private:
      * @param[in] version Object version to remove.
      * @return Status of the call.
      */
-    Status RemoveMetaLocation(const std::string &objectKey, const std::string &address, uint64_t version = UINT64_MAX);
+    Status RemoveMetaLocation(const std::string &objectKey, const std::string &address, uint64_t version);
 
     /**
      * @brief Remove object meta location.

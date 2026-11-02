@@ -19,9 +19,11 @@
 
 #include <unistd.h>
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -36,6 +38,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/file_util.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/timer.h"
@@ -479,6 +482,208 @@ TEST_F(KVCacheClientEvictWithoutSpillTest, TestNoneL2CacheEvictTypeConcurrently)
     for (auto &t : threads) {
         t.join();
     }
+}
+
+namespace {
+bool PollGetNotFoundUntil(KVClient &client, const std::string &key, int deadlineMs)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(deadlineMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::string val;
+        if (client.Get(key, val).GetCode() == StatusCode::K_NOT_FOUND) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return false;
+}
+
+bool PollWorkerLogContains(const std::string &logPath, const std::string &needle, int deadlineMs)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(deadlineMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::ifstream input(logPath);
+        if (input.is_open()) {
+            std::string line;
+            while (std::getline(input, line)) {
+                if (line.find(needle) != std::string::npos) {
+                    return true;
+                }
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    return false;
+}
+}
+
+// Two workers without spill: evictable primaries go through the END_LIFE path instead of spilling,
+// and the DELETE path can be forced deterministically for the get/re-publish race tests.
+class KVCacheClientEvictGetSetRaceTest : public KVCacheClientEvictTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        KVCacheClientEvictTest::SetClusterSetupOptions(opts);
+        opts.enableSpill = false;
+        opts.numWorkers = 2;
+        // Flush INFO logs quickly so log-based window assertions observe guard lines in time.
+        opts.workerGflagParams += " -logbufsecs=1";
+    }
+
+    void SetUp() override
+    {
+        KVCacheClientEvictTest::SetUp();
+        InitTestKVClientWithTenant(1, client1_);
+    }
+
+protected:
+    std::shared_ptr<KVClient> client1_;
+};
+
+TEST_F(KVCacheClientEvictGetSetRaceTest, TestEvictDeletePathGetNotFoundThenRepublish)
+{
+    LOG(INFO) << "Test evict DELETE path: republish advances the version and the stale RemoveMeta(EVICTION) is skipped";
+    const size_t dataSize = 4 * 1024ul * 1024ul;
+    const size_t padSize = 1024ul * 1024ul;
+    const std::string targetKey = "evict_delete_get_set_race";
+    const std::string newVal(dataSize, 'b');
+
+    // Hold only the eviction's own RemoveMeta send path, so the 3s residual-metadata window is
+    // deterministic: Del-triggered NORMAL RemoveMeta requests take a different code path and never
+    // consume this hold.
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0,
+        "WorkerOcEvictionManager.RemoveMetaFromMasterForEviction.beforeSend", "1*sleep(3000)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "evictAction.setDelete", "1*call()"));
+    Raii clearInjects([&]() {
+        (void)cluster_->ClearInjectAction(WORKER, 0,
+            "WorkerOcEvictionManager.RemoveMetaFromMasterForEviction.beforeSend");
+        (void)cluster_->ClearInjectAction(WORKER, 0, "evictAction.setDelete");
+    });
+
+    SetParam evictParam{ .writeMode = WriteMode::NONE_L2_CACHE_EVICT };
+    DS_ASSERT_OK(client_->Set(targetKey, std::string(dataSize, 'a'), evictParam));
+    std::vector<std::string> paddings;
+    for (int i = 0; i < 5; i++) {
+        std::string padKey = "protected_del_" + std::to_string(i);
+        DS_ASSERT_OK(client_->Set(padKey, std::string(padSize, 'p'),
+                                  SetParam{ .writeMode = WriteMode::NONE_L2_CACHE }));
+        paddings.push_back(std::move(padKey));
+    }
+
+    for (const auto &padKey : paddings) {
+        DS_ASSERT_OK(client_->Del(padKey));
+    }
+
+    // Re-publish while the stale RemoveMeta(EVICTION) is held at the master: the create overwrites the
+    // residual metadata with a newer version, and the stale eviction cleanup must be skipped by the
+    // version guard instead of erasing the new object's metadata.
+    DS_ASSERT_OK(client_->Set(targetKey, newVal, evictParam));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(3'500));
+    // The version guard rejecting the stale eviction ack is the observable proof the residual-meta
+    // window was really constructed; without it the case would pass even if the eviction cleanup had
+    // simply won the race.
+    const std::string worker0Log =
+        FormatString("%s/worker0/log/datasystem_worker.INFO.log", cluster_->GetRootDir());
+    ASSERT_TRUE(PollWorkerLogContains(worker0Log, "Remove meta version", 5'000))
+        << "version guard line not found, log: " << worker0Log;
+    std::string val;
+    DS_ASSERT_OK(client_->Get(targetKey, val));
+    ASSERT_EQ(val, newVal);
+    DS_ASSERT_OK(client1_->Get(targetKey, val));
+    ASSERT_EQ(val, newVal);
+}
+
+TEST_F(KVCacheClientEvictGetSetRaceTest, TestEvictDeletePathSetNxDuringResidualMetaWindow)
+{
+    LOG(INFO) << "Test evict DELETE path: SetNx is idempotent inside the residual meta window and real after cleanup";
+    const size_t dataSize = 4 * 1024ul * 1024ul;
+    const size_t padSize = 1024ul * 1024ul;
+    const std::string targetKey = "evict_delete_setnx_race";
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0,
+        "WorkerOcEvictionManager.RemoveMetaFromMasterForEviction.beforeSend", "1*sleep(3000)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "evictAction.setDelete", "1*call()"));
+    Raii clearInjects([&]() {
+        (void)cluster_->ClearInjectAction(WORKER, 0,
+            "WorkerOcEvictionManager.RemoveMetaFromMasterForEviction.beforeSend");
+        (void)cluster_->ClearInjectAction(WORKER, 0, "evictAction.setDelete");
+    });
+
+    SetParam evictParam{ .writeMode = WriteMode::NONE_L2_CACHE_EVICT };
+    DS_ASSERT_OK(client_->Set(targetKey, std::string(dataSize, 'a'), evictParam));
+    std::vector<std::string> paddings;
+    for (int i = 0; i < 5; i++) {
+        std::string padKey = "protected_setnx_" + std::to_string(i);
+        DS_ASSERT_OK(client_->Set(padKey, std::string(padSize, 'p'),
+                                  SetParam{ .writeMode = WriteMode::NONE_L2_CACHE }));
+        paddings.push_back(std::move(padKey));
+    }
+
+    for (const auto &padKey : paddings) {
+        DS_ASSERT_OK(client_->Del(padKey));
+    }
+
+    // Accepted known window: eviction deleted the local copy while the RemoveMeta(EVICTION) cleanup
+    // is still in flight (bounded by the eviction batch delay, ~10ms, plus rpc/retries). Inside the
+    // window SetNx still answers idempotent-success even though this replica's data is gone. In the
+    // production DELETE path every eviction candidate keeps a data backstop (other replicas for
+    // non-primary copies, L2 for write-through/write-back-done objects), so "key exists" is the
+    // semantically right answer there; objects without any backstop take the END_LIFE path, whose
+    // window is closed by this change. Closing this window as well would need a delete-intent
+    // notification protocol, which was evaluated and rejected as disproportionate. The K_NOT_FOUND
+    // assertion below documents the tradeoff explicitly instead of presenting it as an
+    // idempotent-success guarantee.
+    SetParam nxParam{ .writeMode = WriteMode::NONE_L2_CACHE_EVICT, .ttlSecond = 0, .existence = ExistenceOpt::NX };
+    DS_ASSERT_OK(client_->Set(targetKey, std::string(dataSize, 'x'), nxParam));
+    std::string val;
+    ASSERT_EQ(client1_->Get(targetKey, val).GetCode(), StatusCode::K_NOT_FOUND);
+
+    // After the stale RemoveMeta(EVICTION) cleans the metadata, SetNx really creates.
+    std::this_thread::sleep_for(std::chrono::milliseconds(3'500));
+    DS_ASSERT_OK(client_->Set(targetKey, std::string(dataSize, 'x'), nxParam));
+    DS_ASSERT_OK(client_->Get(targetKey, val));
+    ASSERT_EQ(val, std::string(dataSize, 'x'));
+    DS_ASSERT_OK(client1_->Get(targetKey, val));
+    ASSERT_EQ(val, std::string(dataSize, 'x'));
+}
+
+TEST_F(KVCacheClientEvictGetSetRaceTest, TestEvictEndLifeGetNotFoundThenRepublish)
+{
+    LOG(INFO) << "Test evict END_LIFE path: get fast-fails K_NOT_FOUND, immediate republish survives the async cleanup";
+    const size_t dataSize = 4 * 1024ul * 1024ul;
+    const size_t padSize = 1024ul * 1024ul;
+    const std::string targetKey = "evict_endlife_get_set_race";
+    const std::string newVal(dataSize, 'b');
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.DeleteObjectWithTryLock.before", "1*sleep(1500)"));
+    Raii clearInjects([&]() {
+        (void)cluster_->ClearInjectAction(WORKER, 0, "worker.DeleteObjectWithTryLock.before");
+    });
+
+    SetParam evictParam{ .writeMode = WriteMode::NONE_L2_CACHE_EVICT };
+    DS_ASSERT_OK(client_->Set(targetKey, std::string(dataSize, 'a'), evictParam));
+    std::vector<std::string> paddings;
+    for (int i = 0; i < 5; i++) {
+        std::string padKey = "protected_endlife_" + std::to_string(i);
+        DS_ASSERT_OK(client_->Set(padKey, std::string(padSize, 'p'),
+                                  SetParam{ .writeMode = WriteMode::NONE_L2_CACHE }));
+        paddings.push_back(std::move(padKey));
+    }
+
+    ASSERT_TRUE(PollGetNotFoundUntil(*client1_, targetKey, 10'000));
+
+    for (const auto &padKey : paddings) {
+        DS_ASSERT_OK(client_->Del(padKey));
+    }
+
+    DS_ASSERT_OK(client_->Set(targetKey, newVal, evictParam));
+
+    std::string val;
+    DS_ASSERT_OK(client_->Get(targetKey, val));
+    ASSERT_EQ(val, newVal);
+    DS_ASSERT_OK(client1_->Get(targetKey, val));
+    ASSERT_EQ(val, newVal);
 }
 }  // namespace st
 }  // namespace datasystem

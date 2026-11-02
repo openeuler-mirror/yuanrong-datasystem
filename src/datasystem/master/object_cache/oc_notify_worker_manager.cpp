@@ -685,7 +685,7 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDelete(
         std::ostringstream oss;
         for (const auto &id : successIds) {
             oss << " {" << id.first << ": {" << id.second.first << ": " << id.second.second << "}}";
-            (void)ocMetadataManager_->RemoveMetaLocation(id.first, address);
+            (void)ocMetadataManager_->RemoveMetaLocation(id.first, address, static_cast<uint64_t>(id.second.first));
         }
         VLOG(1) << FormatString("Start to remove meta location for objects[%s]", oss.str());
         replicas2Obj.erase(address);

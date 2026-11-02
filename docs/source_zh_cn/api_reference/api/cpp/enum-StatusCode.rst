@@ -19,7 +19,7 @@ StatusCode
 ``StatusCode::K_OK``                                0          表示成功
 ``StatusCode::K_DUPLICATED``                        1          表示重复
 ``StatusCode::K_INVALID``                           2          表示入参检验失败
-``StatusCode::K_NOT_FOUND``                         3          表示对象不存在
+``StatusCode::K_NOT_FOUND``                         3          表示对象不存在；多副本读路径中一轮内全部副本都报缺失时返回此码
 ``StatusCode::K_KVSTORE_ERROR``                     4          表示KV存储错误
 ``StatusCode::K_RUNTIME_ERROR``                     5          表示运行时错误，多发生于内部错误
 ``StatusCode::K_OUT_OF_MEMORY``                     6          表示内存不足

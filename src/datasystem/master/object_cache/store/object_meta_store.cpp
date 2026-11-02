@@ -612,6 +612,7 @@ Status ObjectMetaStore::AddObjectLocations(const std::unordered_map<std::string,
 
 Status ObjectMetaStore::RemoveObjectLocation(const std::string &objectKey, const std::string &workerAddr)
 {
+    INJECT_POINT("ObjectMetaStore.RemoveObjectLocation");
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
     PerfPoint point(PerfKey::MASTER_ROCKSDB_REMOVE_OBJ_LOCATION);
     std::string key = workerAddr + "_" + objectKey;
@@ -665,6 +666,7 @@ Status ObjectMetaStore::PrefixRemoveRocksKey(const std::string &prefixKey, const
 
 Status ObjectMetaStore::AddNestedRelationship(const std::string &parentObjKey, const std::string &childObjKey)
 {
+    INJECT_POINT("ObjectMetaStore.AddNestedRelationship");
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
     std::string key = parentObjKey + "_" + childObjKey;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rocksStore_->Put(NESTED_TABLE, key, childObjKey),
