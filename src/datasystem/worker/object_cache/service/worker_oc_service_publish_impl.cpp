@@ -199,6 +199,7 @@ void WorkerOcServicePublishImpl::ConstructCreateMetaRequest(const ObjectKV &obje
     configPb->set_data_format(static_cast<uint32_t>(safeObj->stateInfo.GetDataFormat()));
     configPb->set_consistency_type(static_cast<uint32_t>(safeObj->modeInfo.GetConsistencyType()));
     metaReq.set_address(localAddress_.ToString());
+    metaReq.set_redirect(true);
 }
 
 void WorkerOcServicePublishImpl::ConstructUpdateMetaRequest(const ObjectKV &objectKV, const PublishParams &params,
@@ -245,6 +246,9 @@ Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &object
         },
         [this, &metaReq, &metaResp, &rpcDispatched](std::shared_ptr<WorkerMasterOCApi> &api) {
             metaResp.Clear();
+            // RedirectRetryWhenMetaMoving leaves redirect=false after following one redirect;
+            // re-arm so every re-resolved owner gets master-side owner validation again.
+            metaReq.set_redirect(true);
             std::function<Status(CreateMetaReqPb &, CreateMetaRspPb &)> func =
                 [&api, &rpcDispatched](CreateMetaReqPb &req, CreateMetaRspPb &rsp) {
                     VLOG(1) << AppendSrcDstForLog(FormatString("Create meta to master[%s]", api->GetHostPort()),
@@ -293,6 +297,9 @@ Status WorkerOcServicePublishImpl::UpdateMetadataToMaster(const ObjectKV &object
         },
         [this, &metaReq, &metaRsp, &rpcDispatched](std::shared_ptr<WorkerMasterOCApi> &api) {
             metaRsp.Clear();
+            // RedirectRetryWhenMetaMoving leaves redirect=false after following one redirect;
+            // re-arm so every re-resolved owner gets master-side owner validation again.
+            metaReq.set_redirect(true);
             std::function<Status(UpdateMetaReqPb &, UpdateMetaRspPb &)> func =
                 [&api, &rpcDispatched](UpdateMetaReqPb &req, UpdateMetaRspPb &rsp) {
                     VLOG(1) << AppendSrcDstForLog(FormatString("Update meta to master[%s]", api->GetHostPort()),
