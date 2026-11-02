@@ -680,6 +680,7 @@ ds_cc_library(
         "worker_worker_oc_service_impl.cpp",
     ],
     deps = [
+        ":cache_hit_info",
         ":worker_oc_service_impl",
         ":worker_worker_oc_gather_layout",
         ":worker_worker_oc_service_impl_header",

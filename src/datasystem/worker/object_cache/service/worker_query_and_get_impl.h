@@ -93,6 +93,8 @@ private:
         uint64_t startUs = 0;
         uint64_t lastCheckpointUs = 0;
         uint64_t tcpPayloadSize = 0;
+        size_t pendingMemHits = 0;
+        size_t pendingMisses = 0;
         bool delivered = false;
     };
 

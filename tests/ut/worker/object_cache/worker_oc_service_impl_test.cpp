@@ -58,6 +58,7 @@
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/client_manager/client_manager.h"
 #include "datasystem/worker/cluster_event_type.h"
+#include "datasystem/worker/object_cache/cache_hit_info.h"
 #include "datasystem/worker/object_cache/device/worker_device_oc_manager.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_multi_publish_impl.h"
@@ -664,7 +665,7 @@ public:
     {
         ++writeCount_;
         rsp_ = rsp;
-        return Status::OK();
+        return writeStatus_;
     }
 
     Status Finish() override
@@ -720,6 +721,11 @@ public:
         return payload_;
     }
 
+    void SetWriteStatus(const Status &rc)
+    {
+        writeStatus_ = rc;
+    }
+
     size_t ReadCount() const
     {
         return readCount_;
@@ -742,6 +748,117 @@ private:
     size_t readCount_{ 0 };
     size_t writeCount_{ 0 };
     size_t payloadSendCount_{ 0 };
+    Status writeStatus_;
+};
+
+class TestBatchGetObjectRemoteServerApi final
+    : public ServerUnaryWriterReader<BatchGetObjectRemoteRspPb, BatchGetObjectRemoteReqPb> {
+public:
+    explicit TestBatchGetObjectRemoteServerApi(BatchGetObjectRemoteReqPb req) : req_(std::move(req))
+    {
+    }
+
+    Status SendStatus(const Status &rc) override
+    {
+        (void)rc;
+        return Status::OK();
+    }
+
+    Status Read(BatchGetObjectRemoteReqPb &req) override
+    {
+        ++readCount_;
+        req = req_;
+        return Status::OK();
+    }
+
+    Status Write(const BatchGetObjectRemoteRspPb &rsp) override
+    {
+        ++writeCount_;
+        rsp_ = rsp;
+        return writeStatus_;
+    }
+
+    Status Finish() override
+    {
+        return Status::OK();
+    }
+
+    Status ReceivePayload(std::vector<RpcMessage> &payload) override
+    {
+        payload = std::move(payload_);
+        return Status::OK();
+    }
+
+    Status SendPayload(std::vector<RpcMessage> &payload) override
+    {
+        ++payloadSendCount_;
+        payload_ = std::move(payload);
+        return Status::OK();
+    }
+
+    Status SendPayload(const std::vector<MemView> &payload) override
+    {
+        (void)payload;
+        return Status::OK();
+    }
+
+    Status GetOutMsg(RpcMsgFrames &outMsg) override
+    {
+        (void)outMsg;
+        return Status::OK();
+    }
+
+    bool EnableMsgQ() override
+    {
+        return false;
+    }
+
+    void SetRequestInProgress() override
+    {
+    }
+
+    void SetRequestComplete() override
+    {
+    }
+
+    const BatchGetObjectRemoteRspPb &Response() const
+    {
+        return rsp_;
+    }
+
+    const std::vector<RpcMessage> &Payload() const
+    {
+        return payload_;
+    }
+
+    void SetWriteStatus(const Status &rc)
+    {
+        writeStatus_ = rc;
+    }
+
+    size_t ReadCount() const
+    {
+        return readCount_;
+    }
+
+    size_t WriteCount() const
+    {
+        return writeCount_;
+    }
+
+    size_t PayloadSendCount() const
+    {
+        return payloadSendCount_;
+    }
+
+private:
+    BatchGetObjectRemoteReqPb req_;
+    BatchGetObjectRemoteRspPb rsp_;
+    std::vector<RpcMessage> payload_;
+    size_t readCount_{ 0 };
+    size_t writeCount_{ 0 };
+    size_t payloadSendCount_{ 0 };
+    Status writeStatus_;
 };
 }  // namespace
 
@@ -1383,11 +1500,12 @@ TEST_F(WorkerOcRemoteGetAdmissionTest, BatchAdmissionPinsRequestToTcpBeforeLaneA
     WorkerWorkerOCServiceImpl::BatchRh2dContext batchTransportContext;
     BatchGetObjectRemoteRspPb rsp;
     std::vector<RpcMessage> payload;
+    std::vector<WorkerWorkerOCServiceImpl::HitSource> stagedHits;
     ScopedRequestContext requestContext;
 
     DS_ASSERT_OK(remoteService.PrepareBatchGetObjectRemoteReq(req, batchTransportContext));
     ASSERT_TRUE(batchTransportContext.IsUrmaTcpFallback());
-    DS_ASSERT_OK(remoteService.BatchGetObjectRemoteImpl(req, rsp, payload, batchTransportContext));
+    DS_ASSERT_OK(remoteService.BatchGetObjectRemoteImpl(req, rsp, payload, stagedHits, batchTransportContext));
 
     ASSERT_EQ(rsp.responses_size(), static_cast<int>(objectCount));
     EXPECT_EQ(payload.size(), objectCount);
@@ -1416,6 +1534,188 @@ TEST_F(WorkerOcServiceImplTest, BatchAdmissionFailsBeforeLaneWhenFallbackDisable
     auto rc = remoteService.PrepareBatchGetObjectRemoteReq(req, batchTransportContext);
 
     EXPECT_EQ(rc.GetCode(), K_URMA_WORKER_UNAVAILABLE);
+}
+
+namespace {
+// CacheHitInfo is a process-wide counter; tests only reason about deltas against a snapshot.
+std::string ExpectedHitInfoWithMemDelta(const std::string &before, long delta)
+{
+    const auto slash = before.find('/');
+    return std::to_string(std::stol(before.substr(0, slash)) + delta) + before.substr(slash);
+}
+}  // namespace
+
+TEST_F(WorkerOcServiceImplWithAllocatorTest, BatchRemoteGetHitCommitsOnceAfterDelivery)
+{
+    constexpr uint64_t dataSize = 16;
+    AddTransferableObject("hit-batch-delivered-0", dataSize);
+    AddTransferableObject("hit-batch-delivered-1", dataSize);
+    BatchGetObjectRemoteReqPb req;
+    for (int i = 0; i < 2; ++i) {
+        auto *subReq = req.add_requests();
+        subReq->set_object_key("hit-batch-delivered-" + std::to_string(i));
+        subReq->set_data_size(dataSize);
+        subReq->set_read_size(dataSize);
+        subReq->set_try_lock(true);
+    }
+    WorkerWorkerOCServiceImpl remoteService(
+        impl_, std::make_shared<AkSkManager>(), topologyRuntime_.Engine()->Membership(),
+        []() { return true; }, []() { return cluster::ControlBackendObservation{}; });
+    auto serverApi = std::make_shared<TestBatchGetObjectRemoteServerApi>(std::move(req));
+    ScopedRequestContext requestContext;
+    const std::string hitBefore = CacheHitInfo::Instance().GetHitInfo();
+
+    const auto rc = remoteService.BatchGetObjectRemote(serverApi);
+
+    DS_ASSERT_OK(rc);
+    EXPECT_EQ(serverApi->ReadCount(), 1);
+    EXPECT_EQ(serverApi->WriteCount(), 1);
+    EXPECT_EQ(serverApi->PayloadSendCount(), 1);
+    ASSERT_EQ(serverApi->Response().responses_size(), 2);
+    for (const auto &response : serverApi->Response().responses()) {
+        EXPECT_EQ(response.error().error_code(), K_OK);
+        EXPECT_EQ(response.data_source(), DataTransferSource::DATA_IN_PAYLOAD);
+    }
+    EXPECT_EQ(CacheHitInfo::Instance().GetHitInfo(), ExpectedHitInfoWithMemDelta(hitBefore, 2));
+}
+
+TEST_F(WorkerOcServiceImplWithAllocatorTest, BatchRemoteGetHitDiscardedWhenDeliveryFails)
+{
+    constexpr uint64_t dataSize = 16;
+    AddTransferableObject("hit-batch-write-fails", dataSize);
+    BatchGetObjectRemoteReqPb req;
+    auto *subReq = req.add_requests();
+    subReq->set_object_key("hit-batch-write-fails");
+    subReq->set_data_size(dataSize);
+    subReq->set_read_size(dataSize);
+    subReq->set_try_lock(true);
+    WorkerWorkerOCServiceImpl remoteService(
+        impl_, std::make_shared<AkSkManager>(), topologyRuntime_.Engine()->Membership(),
+        []() { return true; }, []() { return cluster::ControlBackendObservation{}; });
+    auto serverApi = std::make_shared<TestBatchGetObjectRemoteServerApi>(std::move(req));
+    serverApi->SetWriteStatus(Status(K_RUNTIME_ERROR, "injected write failure"));
+    ScopedRequestContext requestContext;
+    const std::string hitBefore = CacheHitInfo::Instance().GetHitInfo();
+
+    const auto rc = remoteService.BatchGetObjectRemote(serverApi);
+
+    EXPECT_EQ(rc.GetCode(), K_RUNTIME_ERROR);
+    EXPECT_EQ(serverApi->WriteCount(), 1);
+    EXPECT_EQ(serverApi->PayloadSendCount(), 0);
+    EXPECT_EQ(CacheHitInfo::Instance().GetHitInfo(), hitBefore);
+}
+
+TEST_F(WorkerOcServiceImplWithAllocatorTest, SingleRemoteGetHitDiscardedWhenDeliveryFails)
+{
+    constexpr uint64_t dataSize = 16;
+    AddTransferableObject("hit-single-write-fails", dataSize);
+    GetObjectRemoteReqPb req;
+    req.set_object_key("hit-single-write-fails");
+    req.set_data_size(dataSize);
+    req.set_read_size(dataSize);
+    req.set_try_lock(true);
+    WorkerWorkerOCServiceImpl remoteService(
+        impl_, std::make_shared<AkSkManager>(), topologyRuntime_.Engine()->Membership(),
+        []() { return true; }, []() { return cluster::ControlBackendObservation{}; });
+    auto serverApi = std::make_shared<TestGetObjectRemoteServerApi>(std::move(req));
+    serverApi->SetWriteStatus(Status(K_RUNTIME_ERROR, "injected write failure"));
+    ScopedRequestContext requestContext;
+    const std::string hitBefore = CacheHitInfo::Instance().GetHitInfo();
+
+    const auto rc = remoteService.GetObjectRemote(serverApi);
+
+    EXPECT_EQ(rc.GetCode(), K_RUNTIME_ERROR);
+    EXPECT_EQ(serverApi->WriteCount(), 1);
+    EXPECT_EQ(serverApi->PayloadSendCount(), 0);
+    EXPECT_EQ(CacheHitInfo::Instance().GetHitInfo(), hitBefore);
+}
+
+TEST_F(WorkerOcServiceImplWithAllocatorTest, BatchUrmaWaitFailureWithFallbackDisabledDoesNotCount)
+{
+    constexpr uint64_t dataSize = 16;
+    const HostPort requester("192.0.2.41", 18481);
+    const std::string objectKey = "hit-batch-urma-wait-failure";
+    AddTransferableObject(objectKey, dataSize);
+    const bool savedFallback = FLAGS_enable_transport_fallback;
+    Raii restoreFallback([savedFallback] { FLAGS_enable_transport_fallback = savedFallback; });
+    FLAGS_enable_transport_fallback = false;
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::CheckTransportConnectionStable, (_, _, _)).WillRepeatedly(Return(Status::OK()));
+    BINEXPECT_CALL(&datasystem::AcquireUrmaSendLane, (_, _)).WillRepeatedly(testing::Invoke(
+        [](const UrmaRemoteAddrPb &, std::shared_ptr<UrmaSendLaneLease> &laneLease) {
+            laneLease = nullptr;
+            return Status::OK();
+        }));
+    BINEXPECT_CALL(&datasystem::UrmaWritePayload, (_, _, _, _, _, _, _, _, _, _, _, _, _, _))
+        .WillRepeatedly(testing::Invoke(
+            [](const UrmaRemoteAddrPb &, const uint64_t &, const uint64_t &, const uint64_t &, const uint64_t &,
+               const uint64_t &, const uint64_t &, uint8_t, uint8_t, bool, std::vector<uint64_t> &eventKeys,
+               std::shared_ptr<EventWaiter>, UrmaWriteFailure *, std::optional<UrmaLateCompletionContext>) {
+                eventKeys.push_back(0x1234);
+                return Status::OK();
+            }));
+    BINEXPECT_CALL(&datasystem::WaitFastTransportEventWithFailure, (_, _, _, _)).WillRepeatedly(testing::Invoke(
+        [](std::vector<uint64_t> &, const std::function<int64_t(void)> &,
+           const std::function<Status(Status &)> &errorHandler, UrmaWriteFailure *) {
+            Status waitRc(K_URMA_WAIT_TIMEOUT, "injected wait failure");
+            return errorHandler(waitRc);
+        }));
+    BatchGetObjectRemoteReqPb req;
+    req.add_requests()->CopyFrom(MakeUrmaRemoteGetRequest(objectKey, dataSize, requester));
+    req.mutable_requests(0)->set_try_lock(true);
+    WorkerWorkerOCServiceImpl remoteService(
+        impl_, std::make_shared<AkSkManager>(), topologyRuntime_.Engine()->Membership(),
+        []() { return true; }, []() { return cluster::ControlBackendObservation{}; });
+    auto serverApi = std::make_shared<TestBatchGetObjectRemoteServerApi>(std::move(req));
+    ScopedRequestContext requestContext;
+    const std::string hitBefore = CacheHitInfo::Instance().GetHitInfo();
+
+    const auto rc = remoteService.BatchGetObjectRemote(serverApi);
+
+    DS_ASSERT_OK(rc);
+    EXPECT_EQ(serverApi->WriteCount(), 1);
+    ASSERT_EQ(serverApi->Response().responses_size(), 1);
+    EXPECT_TRUE(serverApi->Response().responses(0).has_error());
+    EXPECT_EQ(CacheHitInfo::Instance().GetHitInfo(), hitBefore);
+}
+
+TEST_F(WorkerOcServiceImplWithAllocatorTest, BatchUrmaFallbackToTcpCountsOnce)
+{
+    constexpr uint64_t dataSize = 16;
+    const HostPort requester("192.0.2.42", 18481);
+    const std::string objectKey = "hit-batch-urma-fallback-tcp";
+    AddTransferableObject(objectKey, dataSize);
+    const bool savedFallback = FLAGS_enable_transport_fallback;
+    Raii restoreFallback([savedFallback] { FLAGS_enable_transport_fallback = savedFallback; });
+    FLAGS_enable_transport_fallback = true;
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::CheckTransportConnectionStable, (_, _, _)).WillRepeatedly(Return(Status::OK()));
+    BINEXPECT_CALL(&datasystem::AcquireUrmaSendLane, (_, _)).WillRepeatedly(testing::Invoke(
+        [](const UrmaRemoteAddrPb &, std::shared_ptr<UrmaSendLaneLease> &laneLease) {
+            laneLease = nullptr;
+            return Status::OK();
+        }));
+    BINEXPECT_CALL(&datasystem::UrmaWritePayload, (_, _, _, _, _, _, _, _, _, _, _, _, _, _))
+        .WillRepeatedly(Return(Status(K_URMA_WAIT_TIMEOUT, "injected write failure")));
+    BatchGetObjectRemoteReqPb req;
+    req.add_requests()->CopyFrom(MakeUrmaRemoteGetRequest(objectKey, dataSize, requester));
+    req.mutable_requests(0)->set_try_lock(true);
+    WorkerWorkerOCServiceImpl remoteService(
+        impl_, std::make_shared<AkSkManager>(), topologyRuntime_.Engine()->Membership(),
+        []() { return true; }, []() { return cluster::ControlBackendObservation{}; });
+    auto serverApi = std::make_shared<TestBatchGetObjectRemoteServerApi>(std::move(req));
+    ScopedRequestContext requestContext;
+    const std::string hitBefore = CacheHitInfo::Instance().GetHitInfo();
+
+    const auto rc = remoteService.BatchGetObjectRemote(serverApi);
+
+    DS_ASSERT_OK(rc);
+    EXPECT_EQ(serverApi->WriteCount(), 1);
+    EXPECT_EQ(serverApi->PayloadSendCount(), 1);
+    ASSERT_EQ(serverApi->Response().responses_size(), 1);
+    EXPECT_EQ(serverApi->Response().responses(0).error().error_code(), K_OK);
+    EXPECT_EQ(serverApi->Response().responses(0).data_source(), DataTransferSource::DATA_IN_PAYLOAD);
+    EXPECT_EQ(CacheHitInfo::Instance().GetHitInfo(), ExpectedHitInfoWithMemDelta(hitBefore, 1));
 }
 
 class TestWorkerOcServiceCrudCommonApi : public WorkerOcServiceCrudCommonApi {

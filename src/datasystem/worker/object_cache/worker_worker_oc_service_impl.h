@@ -161,12 +161,17 @@ private:
     using BatchEventPayload =
         std::pair<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>>;
 
+    enum class HitSource { kNone, kMemory, kDisk };
+
     struct ParallelRes {
         std::vector<GetObjectRemoteRspPb> respPbs;
         std::vector<BatchEventPayload> kps;
         std::vector<RpcMessage> fallbackPayloads;
         std::vector<Status> fallbackStatuses;
         std::vector<uint64_t> eventKeys;
+        // One entry per respPbs, same order: hits staged by client data-plane sub-requests,
+        // collected by MergeParallelBatchGetResult and committed by the RPC layer after delivery.
+        std::vector<HitSource> pendingHits;
         uint64_t subIndex = 0;
     };
 
@@ -204,7 +209,8 @@ private:
     };
 
     Status ProcessSingleGetObjectRemote(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
-                                        std::vector<RpcMessage> &payload, BatchRh2dContext *transportContext);
+                                        std::vector<RpcMessage> &payload, BatchRh2dContext *transportContext,
+                                        bool fromClientRead, HitSource &pendingHit);
 
     struct RemoteGetRpcExecutionContext {
         Timer &timer;
@@ -228,19 +234,29 @@ private:
                                            BatchRh2dContext &transportContext);
 
     /**
+     * @brief Commit one staged hit source into the hit_info counters.
+     * @param[in] source Staged hit source; kNone is a no-op.
+     */
+    static void CommitHitInfo(HitSource source);
+
+    /**
      * @brief Load object data in remote get provider mode.
      * @param[in] req Pb Request for RemoteGet rpc.
      * @param[out] rsp Pb Response for RemoteGet rpc.
      * @param[out] outPayload Payload buffers.
      * @param[in] blocking Whether to blocking wait for the urma_write to finish.
      * @param[out] keys The new request id to wait for if not blocking.
+     * @param[in] fromClientRead Whether the read is a client data-plane read; in-process callers (e.g. the
+     * master QueryMeta inline pull, which also sets try_lock) must pass false to keep hit_info unchanged.
+     * @param[out] pendingHit Receives the staged hit source when the read counts; the RPC layer commits
+     * it only after the response is delivered, so delivery failures leave hit_info unchanged.
      * @param[in] batchPtr Batch ptr, default is nullptr means not in aggregate path.
      * @param[in] batchRootInfo The common root info for batched requests.
      * @return Status of the call.
      */
     Status GetObjectRemoteImpl(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                std::vector<RpcMessage> &outPayload, bool blocking, std::vector<uint64_t> &eventKeys,
-                               std::shared_ptr<AggregateMemory> batchPtr = nullptr,
+                               bool fromClientRead, HitSource &pendingHit, std::shared_ptr<AggregateMemory> batchPtr,
                                RemoteH2DRootInfoPb *batchRootInfo = nullptr, Status *fallbackStatus = nullptr,
                                BatchRh2dContext *batchRh2dContext = nullptr);
 
@@ -275,6 +291,17 @@ private:
 
     Status LockEntryForRemoteGet(const std::string &objectKey, bool tryLock, uint64_t version,
                                  std::shared_ptr<SafeObjType> &safeEntry);
+
+    /**
+     * @brief Lock the entry for a remote get and append the "RemoteLockEntry" time-cost breakdown.
+     * @param[in] objectKey The object key.
+     * @param[in] tryLock Try lock object or not.
+     * @param[in] version Expected object version.
+     * @param[out] safeEntry The locked safe object entry.
+     * @return Status of the call.
+     */
+    Status LockEntryForRemoteGetWithTiming(const std::string &objectKey, bool tryLock, uint64_t version,
+                                           std::shared_ptr<SafeObjType> &safeEntry);
 
     Status CheckFastTransportSize(const SafeObjType &entry, uint64_t expectedDataSize, const std::string &objectKey,
                                   bool isFastTransportEnabled, GetObjectRemoteRspPb &rsp);
@@ -322,10 +349,13 @@ private:
      * @param[in] req Remote get batch request.
      * @param[out] rsp Remote get batch response.
      * @param[out] payload Out payloads.
+     * @param[out] stagedHits Hit sources staged per response, same order as rsp.responses(); the RPC
+     * layer commits them after the response is delivered.
      * @return Status of the call.
      */
     Status BatchGetObjectRemoteImpl(BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp,
-                                    std::vector<RpcMessage> &payload, BatchRh2dContext &batchTransportContext);
+                                    std::vector<RpcMessage> &payload, std::vector<HitSource> &stagedHits,
+                                    BatchRh2dContext &batchTransportContext);
 
     /**
      * @brief Prepare and validate a batch remote get request before execution.
@@ -342,10 +372,21 @@ private:
      * @param[in, out] parallelRes Parallel result list.
      * @param[out] rsp Remote get batch response.
      * @param[out] payload Out payloads.
+     * @param[out] stagedHits Hit sources collected in response order for the RPC layer to commit.
      * @return Status of the call.
      */
     Status MergeParallelBatchGetResult(const BatchGetObjectRemoteReqPb &req, std::vector<ParallelRes> &parallelRes,
-                                       BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload);
+                                       BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload,
+                                       std::vector<HitSource> &stagedHits);
+
+    /**
+     * @brief Commit staged hits for successful responses (error.code == K_OK; success responses do
+     * carry an error sub-message holding K_OK); called after the batch response is delivered so
+     * local delivery failures leave hit_info unchanged.
+     * @param[in] rsp Remote get batch response holding the final per-key status.
+     * @param[in] stagedHits Staged hit sources, aligned with rsp.responses().
+     */
+    static void CommitPendingHits(const BatchGetObjectRemoteRspPb &rsp, const std::vector<HitSource> &stagedHits);
 
     /**
      * @brief Set the same transport failure on every response covered by one batch event.
@@ -405,13 +446,16 @@ private:
      * @param[out] payload Out payloads.
      * @param[in] blocking Whether to blocking wait for the urma_write to finish.
      * @param[out] keys The request id to wait for if not blocking.
+     * @param[in] fromClientRead Whether the read is a client data-plane read; in-process callers (e.g. the
+     * master QueryMeta inline pull, which also sets try_lock) must pass false to keep hit_info unchanged.
      * @param[in] batchPtr Batch ptr, default is nullptr means not in aggregate path.
      * @param[in] batchRootInfo The common root info for batched requests.
      * @return Status of the call.
      */
     Status GetObjectRemoteHandler(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                   std::vector<RpcMessage> &payload, bool blocking, std::vector<uint64_t> &eventKeys,
-                                  std::shared_ptr<AggregateMemory> batchPtr = nullptr,
+                                  bool fromClientRead, HitSource &pendingHit,
+                                  std::shared_ptr<AggregateMemory> batchPtr,
                                   RemoteH2DRootInfoPb *batchRootInfo = nullptr, Status *fallbackStatus = nullptr,
                                   BatchRh2dContext *batchRh2dContext = nullptr);
 

@@ -157,6 +157,10 @@
     128 KiB 对象只增加 0.03125。Heat eviction 候选扫描把最近 100ms 访问的节点排在批次末尾，但在释放预算需要
     时仍可选中。保护复用原子 `lastAccessMs`，不增加 per-object 字段；Clock 忽略 size，
     `OnRefill==OnCacheHit==OnAdd`，行为不变。
+  - routed 模式（`enableLocalCache=false`）的命中统计点只累计 `CacheHitInfo`、不走 `OnCacheHit`/`OnRefill`：
+    `worker_query_and_get_impl.cpp` 的 owner 内联命中 `IncMemHit` 与 owner miss `IncMissHit`（仅带 data_request
+    的读），以及 `worker_worker_oc_service_impl.cpp` `GetObjectRemoteImpl` 副本直读的 `IncMemHit`/`IncDiskHit`
+    （以 `try_lock && fromClientRead` 门控，进程内 QueryMeta 内联拉取与 bound 模式 worker→worker 拉取不计数）。
   - `GetObjectNextAction` 根据 primary copy、cache type、spill 状态、L2 是否可用、远端迁移能力和本地 spill 能力选择 `DELETE`、`FREE_MEMORY`、`SPILL`、`MIGRATE`、`END_LIFE` 或 `RETAIN`。
   - `DELETE` 路径本地擦除 object table 后异步批量 `RemoveMeta`。
   - eviction manager 删除本地副本时使用 `RemoveMetaReqPb::EVICTION`；Get 失败后的 requester location 清理使用
