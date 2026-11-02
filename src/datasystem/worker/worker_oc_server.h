@@ -189,16 +189,6 @@ public:
         return objCacheMasterSvc_.get();
     }
 
-    WorkerServiceImpl *GetWorkerService()
-    {
-        return workerSvc_.get();
-    }
-
-    object_cache::WorkerOCServiceImpl *GetWorkerOCService()
-    {
-        return objCacheClientWorkerSvc_.get();
-    }
-
     /**
      * @brief Set the Flags pointer for runtime configuration updates.
      * @param[in] flags Pointer to the DynamicFlagConfig instance. Must outlive this WorkerOCServer.

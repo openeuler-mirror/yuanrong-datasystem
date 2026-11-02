@@ -666,9 +666,3 @@ add_datasystem_test(flags_config_monitor_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT
 if (BUILD_HETERO AND BUILD_HETERO_NPU)
     add_subdirectory(device/ascend)
 endif()
-
-set(EMBEDDED_CLIENT_WORKER_API_UT_DEPEND_LIBS
-        GTest::gtest
-        GTest::gmock
-        embedded_client_worker_api
-        common_util)

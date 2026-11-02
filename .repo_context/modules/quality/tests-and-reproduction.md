@@ -58,7 +58,7 @@
 | Path | Role | Source-backed notes |
 | --- | --- | --- |
 | `tests/ut` | C++ unit and component tests | `tests/ut/CMakeLists.txt` builds the main UT binaries and filters stream/object/slot/flags tests into separate targets. |
-| `tests/st` | C++ system tests | `tests/st/CMakeLists.txt` builds cache-specific ST binaries, embedded-client tests, device LLT, cluster helpers, the standalone braft election test, and post-build runtime assets. |
+| `tests/st` | C++ system tests | `tests/st/CMakeLists.txt` builds cache-specific ST binaries, device LLT, cluster helpers, the standalone braft election test, and post-build runtime assets. |
 | `tests/perf` | Performance helper binaries | `tests/perf/CMakeLists.txt` adds `client`; `tests/perf/client/CMakeLists.txt` builds `peer_ub_admission_timeout_bench`. |
 | `tests/common` | Shared test support | `tests/common/CMakeLists.txt` adds `binmock`; `tests/common/binmock` provides function-stub/binmock support and has its own spec test. |
 | `tests/python` | Python unittest suites | `scripts/build_cmake.sh` runs `python3 -m unittest` from this directory after packaging and starting services. |
@@ -68,8 +68,7 @@
 
 - Verified current C++ source scale:
   - `tests/ut`: 197 `.cpp` files, grouped under `client`, `common`, `master`, and `worker`.
-  - `tests/st`: 156 `.cpp` files, grouped under `client`, `cluster`, `common`, `device`, `embedded_client`,
-    `master`, and `worker`.
+  - `tests/st`: 179 `.cpp` files, grouped under `client`, `cluster`, `common`, `device`, `master`, and `worker`.
 
 ## CTest Registration Model
 
@@ -253,7 +252,7 @@ python3 -m unittest
   - `ds_ut_slot_store`: `tests/ut/common/l2cache/slot_store_test.cpp`.
   - `flags_ut`: `tests/ut/common/flags/flags_test.cpp`.
 - Verified from `tests/st/CMakeLists.txt`:
-  - `ds_st`: default ST bucket after excluding cluster, stream, object, KV, embedded-client, device, and helper files.
+  - `ds_st`: default ST bucket after excluding cluster, stream, object, KV, device, and helper files.
   - `ds_st_stream_cache`: ST files under `**/stream_cache`.
   - `ds_st_object_cache`: default CTest-registered ST files under `**/object_cache`, excluding the manual Coordinator backend cluster suite; the remaining topology ST coverage uses the ETCD backend.
   - `ds_st_urma_numa_inflight_balance` and `ds_st_urma_numa_inflight_balance_round_robin`: separate URMA-Mock-only
@@ -267,7 +266,6 @@ python3 -m unittest
     construction and two-arena allocation are verified separately by focused UTs.
   - `ds_st_coordinator_backend_manual`: manually executed CMake target for `coordinator_backend_cluster_test.cpp`; it covers Coordinator-backed cross-worker access, scale-out, graceful/passive scale-in, Worker restart topology propagation, Coordinator lease-path isolation, all-Worker shutdown and restart with the Coordinator continuously running followed by topology and fresh business-operation recovery, single- and multi-target Witness protection, and protected-then-real-failure removal closure, but is intentionally not registered with default CTest. Bazel exposes the matching `coordinator_backend_cluster_test` target with the `manual` tag.
   - `ds_st_kv_cache`: ST files under `**/kv_cache`.
-  - `ds_st_embedded_client`: `tests/st/embedded_client` plus cluster helper sources.
   - `ds_device_llt`: device tests; generic hetero ST sources prefer a real runtime backend when
     `DeviceManagerFactory::ProbeBackend()` finds GPU or NPU, and fall back to `AclDeviceManagerMock` only when no
     accelerator backend is detected. Ascend manager self-tests still force the Ascend/mock path when no usable Ascend
@@ -594,8 +592,6 @@ python -m unittest test_multi_key_prefetch.TestDeviceOcClientMethods.test_device
     32,768 missing keys each and logs the aggregate wall-clock latency.
 - Stream behavior:
   - check `ds_ut_stream`, `ds_st_stream_cache`, and ST paths under `tests/st/client/stream_cache`.
-- Worker embedding or in-process worker startup:
-  - inspect and run `ds_st_embedded_client`.
 - Topology, scale, failover, or ETCD behavior:
   - start with `tests/ut/cluster`, `tests/st/client/*_scale*`, `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`,
     `tests/st/cluster`, and `.repo_context/modules/runtime/topology/README.md`.

@@ -21,32 +21,26 @@
 
 #include <unistd.h>
 
-#include "datasystem/client/mmap_manager/embedded_mmap_table.h"
 #include "datasystem/client/mmap_manager/shm_mmap_table.h"
 
 namespace datasystem {
 namespace client {
-MmapManager::MmapManager(std::shared_ptr<IClientWorkerCommonApi> clientWorker, bool enableEmbeddedClient)
-    : MmapManager(std::move(clientWorker), enableEmbeddedClient, std::make_shared<HostMemoryPinManager>())
+MmapManager::MmapManager(std::shared_ptr<IClientWorkerCommonApi> clientWorker)
+    : MmapManager(std::move(clientWorker), std::make_shared<HostMemoryPinManager>())
 {
 }
 
-MmapManager::MmapManager(std::shared_ptr<IClientWorkerCommonApi> clientWorker, bool enableEmbeddedClient,
+MmapManager::MmapManager(std::shared_ptr<IClientWorkerCommonApi> clientWorker,
                          std::shared_ptr<HostMemoryPinManager> pinManager)
-    : clientWorker_(std::move(clientWorker)), enableEmbeddedClient_(enableEmbeddedClient)
+    : clientWorker_(std::move(clientWorker))
 {
-    if (!enableEmbeddedClient) {
-        mmapTable_ = std::make_unique<ShmMmapTable>(clientWorker_->enableHugeTlb_, std::move(pinManager));
-    } else {
-        mmapTable_ = std::make_unique<EmbeddedMmapTable>(clientWorker_->enableHugeTlb_);
-    }
+    mmapTable_ = std::make_unique<ShmMmapTable>(clientWorker_->enableHugeTlb_, std::move(pinManager));
 }
 
 MmapManager::MmapManager(std::shared_ptr<IShmFdProvider> fdProvider, bool enableHugeTlb,
                          std::shared_ptr<HostMemoryPinManager> pinManager)
     : fdProvider_(std::move(fdProvider)),
-      mmapTable_(std::make_unique<ShmMmapTable>(enableHugeTlb, std::move(pinManager))),
-      enableEmbeddedClient_(false)
+      mmapTable_(std::make_unique<ShmMmapTable>(enableHugeTlb, std::move(pinManager)))
 {
 }
 
@@ -71,13 +65,6 @@ void MmapManager::CloseAllFds(const std::vector<int> &clientFds)
 Status MmapManager::ReceiveAndMmapClientFds(const std::string &tenantId, const std::vector<int> &toRecvFds,
                                             const std::vector<uint64_t> &mmapSizes)
 {
-    if (enableEmbeddedClient_) {
-        for (size_t i = 0; i < toRecvFds.size(); i++) {
-            static const int unusedClientFd = 0;  // for embeddedclient, no need mmap client fd.
-            RETURN_IF_NOT_OK(mmapTable_->MmapAndStoreFd(unusedClientFd, toRecvFds[i], mmapSizes[i], tenantId));
-        }
-        return Status::OK();
-    }
     CHECK_FAIL_RETURN_STATUS(clientWorker_ != nullptr || fdProvider_ != nullptr, K_RUNTIME_ERROR,
                              "No shared-memory fd provider is configured");
     const std::string clientId = fdProvider_ != nullptr ? fdProvider_->ClientId() : clientWorker_->clientId_;

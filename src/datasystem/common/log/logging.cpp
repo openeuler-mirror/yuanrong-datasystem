@@ -319,7 +319,7 @@ bool Logging::InitLoggingWrapper(uint32_t logProcessInterval)
         return false;
     }
     accessRecorderManagerInstance_ = std::make_unique<AccessRecorderManager>(processRole_);
-    auto rc = accessRecorderManagerInstance_->Init(isEmbeddedClient_);
+    auto rc = accessRecorderManagerInstance_->Init();
     if (rc.IsError()) {
         return false;
     }
@@ -546,8 +546,7 @@ Logging::~Logging()
     }
 }
 
-void Logging::Start(const std::string &logFilename, LogProcessRole processRole, uint32_t logProcessInterval,
-                    bool isEmbeddedClient)
+void Logging::Start(const std::string &logFilename, LogProcessRole processRole, uint32_t logProcessInterval)
 {
     WriteLock lock(&mux_);
     if (IsLoggingInitialized()) {
@@ -556,7 +555,6 @@ void Logging::Start(const std::string &logFilename, LogProcessRole processRole, 
 
     processRole_ = processRole;
     isClient_ = processRole == LogProcessRole::CLIENT;
-    isEmbeddedClient_ = isEmbeddedClient;
     std::string clientLogName;
     if (isClient_) {
         GetInstance()->InitClientConfig();

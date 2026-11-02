@@ -21,7 +21,6 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/utils/coordinator_discovery.h"
-#include "datasystem/utils/embedded_config.h"
 #include "datasystem/utils/status.h"
 #define private public
 #include "datasystem/data_worker.h"

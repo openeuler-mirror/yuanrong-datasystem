@@ -209,17 +209,31 @@ target_link_options(coordinator_test PRIVATE -static-libstdc++ -static-libgcc -W
 
 # ---------------------------------------------------------------------------
 # worker_test: standalone Worker deployment test program
-# Links against libdatasystem_worker.so from the SDK.
+# Links against the service Worker library shipped alongside the SDK.
 # ---------------------------------------------------------------------------
 add_executable(worker_test src/data_worker_main.cpp src/common/jemalloc_prof.cpp)
 target_include_directories(worker_test PRIVATE
     ${DATASYSTEM_SDK_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(worker_test PRIVATE DATASYSTEM_VERSION="${BUILD_VERSION}")
+set(DATASYSTEM_WORKER_LIB_CANDIDATES
+    "${DATASYSTEM_SDK_DIR}/../datasystem/service/lib"
+    "${DATASYSTEM_SDK_DIR}/../../service/lib")
+set(DATASYSTEM_WORKER_LIB_DIR "")
+foreach(_worker_lib_dir IN LISTS DATASYSTEM_WORKER_LIB_CANDIDATES)
+    if(EXISTS "${_worker_lib_dir}/libdatasystem_worker.so")
+        set(DATASYSTEM_WORKER_LIB_DIR "${_worker_lib_dir}")
+        break()
+    endif()
+endforeach()
+set(DATASYSTEM_WORKER_LIBRARY "${DATASYSTEM_WORKER_LIB_DIR}/libdatasystem_worker.so")
+if(NOT DATASYSTEM_WORKER_LIB_DIR)
+    message(FATAL_ERROR "libdatasystem_worker.so not found next to the SDK; expected the service package library")
+endif()
 target_link_libraries(worker_test PRIVATE
-    ${DATASYSTEM_SDK_DIR}/lib/libdatasystem_worker.so
+    ${DATASYSTEM_WORKER_LIBRARY}
     pthread)
 set_target_properties(worker_test PROPERTIES
-    BUILD_RPATH "${DATASYSTEM_SDK_DIR}/lib"
+    BUILD_RPATH "${DATASYSTEM_SDK_DIR}/lib;${DATASYSTEM_WORKER_LIB_DIR}"
     INSTALL_RPATH "$ORIGIN/lib")
 target_link_options(worker_test PRIVATE -static-libstdc++ -static-libgcc -Wl,--exclude-libs,ALL)

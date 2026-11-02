@@ -198,7 +198,6 @@ access log 中的 `logSampled:true` 表示该请求的 INFO 日志可见（reque
 | Worker 命令行 | `--request_sample_rate=0.5 --access_sample_rate=0.3 --diagnostic_sample_rate=0.4` | `./datasystem_worker --request_sample_rate=0.5` |
 | K8s Helm | `values.yaml` 中设置 `requestSampleRate` / `accessSampleRate` / `diagnosticSampleRate` | 各参数独立生效 |
 | dscli | `dscli start --request_sample_rate 0.2` | — |
-| Embedded Worker | `config.RequestSampleRate(0.5).AccessSampleRate(0.3).DiagnosticSampleRate(0.4)` | 各参数独立生效 |
 | 运行时动态修改 | 修改 `datasystem.config` 中 `request_sample_rate` 等 | — |
 
 默认值均为 `1.0`（全量保留）。
@@ -292,7 +291,6 @@ latencySummary:{client.process.get:200,client.rpc.get:896,worker.process.get:768
 | Worker 命令行 | `--slow_log_process_slower_than=1000 --slow_log_rpc_slower_than=2000` | 处理>1ms或RPC>2ms时输出 |
 | K8s Helm | `values.yaml` 中设置 `slowLogProcessSlowerThan: 1000` | 同上 |
 | dscli | `dscli start --slow_log_process_slower_than 1000` | 同上 |
-| Embedded Worker | `config.SlowLogProcessSlowerThan(1000).SlowLogRpcSlowerThan(2000)` | 同上 |
 | Client 配置文件 | `DATASYSTEM_CLIENT_CONFIG_PATH` 指定文件中设置 `--client_slow_log_process_slower_than=1000` | Client 侧处理>1ms时输出 |
 | Client API | `UpdateConfig(R"({"client_slow_log_process_slower_than":"1000"})")` | 运行时动态修改 Client 侧门限 |
 | 运行时动态修改 | 修改 `datasystem.config` 中对应参数 | — |
@@ -311,5 +309,5 @@ Worker 使用 `--urma_log_threshold_us`，C++ Client 使用 `KVClientConfig::Bui
 - `[URMA_ELAPSED_THREAD_SHED]`：`nanosleep` 休眠耗时。
 
 实际输出受日志级别控制，与 `enable_urma_perf` 独立。Worker 修改后需重启；Client 在进程首次
-`KVClient::Init` 时生效，后续实例共享该值，不支持热更新。Embedded Worker 通过 `extraArgs` 设置。
+`KVClient::Init` 时生效，后续实例共享该值，不支持热更新。
 回退旧版本前删除新增 Worker 参数；使用新 Builder 方法需配套新 SDK。

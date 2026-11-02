@@ -30,37 +30,6 @@ ds_cc_library(
 )
 
 ds_cc_library(
-    name = "client_worker_local_api",
-    srcs = [
-        "client_worker_local_api.cpp",
-    ],
-    hdrs = [
-        "client_worker_local_api.h",
-    ],
-    deps = [
-        ":client_worker_base_api",
-        "//include/datasystem/hetero:hetero_headers",
-        "//include/datasystem/object:object_headers",
-        "//include/datasystem/utils:utils_headers",
-        "//src/datasystem/common/flags:ds_flags",
-        "//src/datasystem/client/worker_api:client_worker_common_api",
-        "//src/datasystem/client/worker_api:embedded_client_worker_api",
-        #"//src/datasystem/client/hetero_cache:hetero_client",
-        "//src/datasystem/common/ak_sk:signature",
-        "//src/datasystem/common/metrics:common_metrics",
-        "//src/datasystem/common/object_cache:common_object_cache",
-        "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
-        "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline_api",
-        "//src/datasystem/common/string_intern:string_ref",
-        "//src/datasystem/common/util:net_util",
-        "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/util:strings_util",
-        "//src/datasystem/protos:p2p_subscribe_cc_proto",
-    ],
-    visibility = ["//visibility:public"],
-)
-
-ds_cc_library(
     name = "client_worker_remote_api",
     srcs = [
         "client_worker_remote_api.cpp",
@@ -75,7 +44,6 @@ ds_cc_library(
         "//include/datasystem/object:object_headers",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/client/worker_api:client_worker_common_api",
-        "//src/datasystem/client/worker_api:embedded_client_worker_api",
         #"//src/datasystem/client/hetero_cache:hetero_client",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/metrics:common_metrics",
@@ -107,7 +75,6 @@ ds_cc_library(
         "//include/datasystem/object:object_headers",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/client/worker_api:client_worker_common_api",
-        "//src/datasystem/client/worker_api:embedded_client_worker_api",
         #"//src/datasystem/client/hetero_cache:hetero_client",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/string_intern:string_ref",

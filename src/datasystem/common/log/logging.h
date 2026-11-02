@@ -81,10 +81,9 @@ public:
      * @param[in] logFilename The name of log file.
      * @param[in] processRole Process role recorded in the operation log.
      * @param[in] logProcessInterval Log rolling or compress interval seconds.
-     * @param[in] isEmbeddedClient Whether the worker is embedded in a client process.
      */
     void Start(const std::string &logFilename, LogProcessRole processRole,
-               uint32_t logProcessInterval = LOG_ROLLING_COMPRESS_SECS, bool isEmbeddedClient = false);
+               uint32_t logProcessInterval = LOG_ROLLING_COMPRESS_SECS);
 
     /**
      * @brief Record process build identity in the regular and operation logs.
@@ -247,7 +246,6 @@ private:
     std::atomic<bool> init_{ false };
     static std::string &podName_;
     bool isClient_;
-    bool isEmbeddedClient_ = false;
     LogProcessRole processRole_ = LogProcessRole::WORKER;
     bool isLoggingInitialized_ = false;
 };

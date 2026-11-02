@@ -633,55 +633,7 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
     // The destructor of devOcImpl_ should occur after the client disconnect request so that the device asynchronous
     // threads can exit quickly.
     devOcImpl_.reset();
-    if (worker_ && embeddedClientWorkerApi_) {
-        embeddedClientWorkerApi_->WorkerDestroy(worker_);
-        worker_ = nullptr;
-    }
     return rc;
-}
-
-Status ObjectClientImpl::ParseEmbeddedConfig(const EmbeddedConfig &config)
-{
-    const auto &args = config.GetArgs();
-    if (args.find("system_access_key") != args.end() && args.find("system_secret_key") != args.end()) {
-        RETURN_IF_NOT_OK(signature_->SetClientAkSk(args.at("system_access_key"), args.at("system_secret_key")));
-        RETURN_RUNTIME_ERROR_IF_NULL(transportSignature_);
-        RETURN_IF_NOT_OK(
-            transportSignature_->SetClientAkSk(args.at("system_access_key"), args.at("system_secret_key")));
-    }
-    if (args.find("connectTimeoutMs") != args.end()) {
-        int result = 0;
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Uri::StrToInt(args.at("connectTimeoutMs").c_str(), result),
-                                             K_RUNTIME_ERROR, "connectTimeoutMs to int failed");
-        connectTimeoutMs_ = result;
-    }
-    if (args.find("requestTimeoutMs") != args.end()) {
-        int result = 0;
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Uri::StrToInt(args.at("requestTimeoutMs").c_str(), result),
-                                             K_RUNTIME_ERROR, "requestTimeoutMs to int failed");
-        requestTimeoutMs_ = result;
-    }
-    return Status::OK();
-}
-
-Status ObjectClientImpl::InitEmbedded(const EmbeddedConfig &config, bool &needRollbackState)
-{
-    auto rc = clientStateManager_->ProcessInit(needRollbackState);
-    if (!needRollbackState) {
-        return rc;
-    }
-    RETURN_IF_NOT_OK(ParseEmbeddedConfig(config));
-    embeddedClientWorkerApi_ = std::make_shared<datasystem::client::EmbeddedClientWorkerApi>();
-    RETURN_IF_NOT_OK(embeddedClientWorkerApi_->LoadPlugin());
-    worker_ = embeddedClientWorkerApi_->CreateWorker();
-    CHECK_FAIL_RETURN_STATUS(worker_ != nullptr, K_RUNTIME_ERROR, "create worker failed");
-    RETURN_IF_NOT_OK(embeddedClientWorkerApi_->InitEmbeddedWorker(config, worker_));
-    RETURN_IF_NOT_OK(ipAddress_.ParseString(config.GetArgs().at("worker_address")));
-    FlagsMonitor::GetInstance()->Start();
-    LOG(INFO) << "Start to init embedded client";
-    RETURN_IF_NOT_OK(InitClientWorkerConnect(false, true));
-    LogClientConfigInitSnapshot();
-    return Status::OK();
 }
 
 void ObjectClientImpl::ConstructTreadPool()
@@ -940,31 +892,26 @@ client::HashRingRefresher::ProbeListFallback ObjectClientImpl::BuildProbeListFal
     };
 }
 
-Status ObjectClientImpl::InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker,
-                                                 int32_t connectTimeoutMs, bool routedWorkerIsLocal)
+Status ObjectClientImpl::InitClientWorkerConnect(bool enableHeartbeat, int32_t connectTimeoutMs,
+                                                 bool routedWorkerIsLocal)
 {
     int32_t timeoutMs = connectTimeoutMs >= 0 ? connectTimeoutMs : connectTimeoutMs_;
     CHECK_FAIL_RETURN_STATUS(timeoutMs >= 0, K_INVALID, "The connection timeout must be a positive integer.");
-    RETURN_IF_NOT_OK(InitClientWorkerConnectAt(LOCAL_WORKER, ipAddress_, enableHeartbeat, initWithWorker, timeoutMs));
+    RETURN_IF_NOT_OK(InitClientWorkerConnectAt(LOCAL_WORKER, ipAddress_, enableHeartbeat, timeoutMs));
     // An absent SHM endpoint describes capability, while a failed fd-transfer probe disproves locality.
     const bool boundWorkerIsLocal =
         routedWorkerIsLocal && !workerApi_[LOCAL_WORKER]->DidShmLocalityProbeFail();
-    return InitClientRuntimeAt(LOCAL_WORKER, initWithWorker, true, boundWorkerIsLocal);
+    return InitClientRuntimeAt(LOCAL_WORKER, true, boundWorkerIsLocal);
 }
 
 Status ObjectClientImpl::InitClientWorkerConnectAt(WorkerNode node, const HostPort &address, bool enableHeartbeat,
-                                                   bool initWithWorker, int32_t connectTimeoutMs)
+                                                   int32_t connectTimeoutMs)
 {
     HeartbeatType heartbeatType = enableHeartbeat ? HeartbeatType::RPC_HEARTBEAT : HeartbeatType::NO_HEARTBEAT;
     workerApi_.resize(STANDBY2_WORKER + 1);
-    if (!initWithWorker) {
-        workerApi_[node] =
-            std::make_shared<ClientWorkerRemoteApi>(address, heartbeatType, token_, signature_, tenantId_,
-                                                    enableCrossNodeConnection_, deviceId_);
-    } else {
-        workerApi_[node] = std::make_shared<ClientWorkerLocalApi>(address, embeddedClientWorkerApi_, worker_,
-                                                                  heartbeatType, signature_.get(), false, deviceId_);
-    }
+    workerApi_[node] =
+        std::make_shared<ClientWorkerRemoteApi>(address, heartbeatType, token_, signature_, tenantId_,
+                                                enableCrossNodeConnection_, deviceId_);
     // Local-cache-off clients route every object operation through the transport layer even when worker failover is
     // disabled. Keep this intent separate from enableCrossNodeConnection_, whose registration/switch semantics must
     // not change merely to prepare UB for routed data.
@@ -1042,11 +989,10 @@ void ObjectClientImpl::MaybeSwitchWorkerRemovedFromRing(const ::datasystem::Clus
     (void)failover_->SubmitUnavailableWorkerSwitch(workerApi);
 }
 
-Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool initWithWorker, bool isLocalWorker,
-                                             bool routedWorkerIsLocal)
+Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool isLocalWorker, bool routedWorkerIsLocal)
 {
     auto &workerApi = workerApi_[node];
-    mmapManager_ = std::make_unique<client::MmapManager>(workerApi, initWithWorker, hostMemoryPinManager_);
+    mmapManager_ = std::make_unique<client::MmapManager>(workerApi, hostMemoryPinManager_);
     ConstructTreadPool();
     if (!enableLocalCache_ || enableClientDirectPipelineH2D_) {
         RETURN_IF_NOT_OK(InitTransportLayer());
@@ -1182,10 +1128,9 @@ Status ObjectClientImpl::InitPreferredRemoteFallback(const HostPort &remoteAddre
                                                      int32_t connectTimeoutMs)
 {
     CHECK_FAIL_RETURN_STATUS(connectTimeoutMs >= 0, K_INVALID, "The connection timeout must be a positive integer.");
-    RETURN_IF_NOT_OK(InitClientWorkerConnectAt(STANDBY1_WORKER, remoteAddress, enableHeartbeat, false,
-                                               connectTimeoutMs));
+    RETURN_IF_NOT_OK(InitClientWorkerConnectAt(STANDBY1_WORKER, remoteAddress, enableHeartbeat, connectTimeoutMs));
     currentNode_ = STANDBY1_WORKER;
-    RETURN_IF_NOT_OK(InitClientRuntimeAt(STANDBY1_WORKER, false, false, false));
+    RETURN_IF_NOT_OK(InitClientRuntimeAt(STANDBY1_WORKER, false, false));
     LOG(INFO) << "[Switch] Preferred same-node local worker is absent, use remote fallback "
               << remoteAddress.ToString();
     return Status::OK();
@@ -1306,7 +1251,7 @@ Status ObjectClientImpl::InitWorkerClientAtCurrentAddress(bool enableHeartbeat, 
         LOG(INFO) << "Start to init preferred remote fallback worker client at address: " << hostPortStr;
         rc = InitPreferredRemoteFallback(ipAddress_, enableHeartbeat, connectTimeoutMs);
     } else {
-        rc = InitClientWorkerConnect(enableHeartbeat, false, connectTimeoutMs, isSameNode);
+        rc = InitClientWorkerConnect(enableHeartbeat, connectTimeoutMs, isSameNode);
     }
     RETURN_IF_NOT_OK(rc);
     LogClientConfigInitSnapshot();
@@ -2214,7 +2159,7 @@ Status ObjectClientImpl::CheckConnection(const std::shared_ptr<client::ListenWor
                  "again." };
     }
     auto status = listenWorker->CheckWorkerAvailable();
-    if (status.IsOk() || enableLocalCache_ || embeddedClientWorkerApi_ != nullptr) {
+    if (status.IsOk() || enableLocalCache_) {
         return status;
     }
     if (workerApi == nullptr) {

@@ -365,21 +365,6 @@ ds_cc_library(
 )
 
 ds_cc_library(
-    name = "worker_service_accessor",
-    srcs = [
-        "worker_service_accessor.cpp",
-    ],
-    hdrs = [
-        "worker_service_accessor.h",
-    ],
-    deps = [
-        "//src/datasystem/worker:worker_oc_server",
-        "//src/datasystem/worker:worker_service_impl",
-        "//src/datasystem/worker/object_cache:worker_oc_service_impl",
-    ],
-)
-
-ds_cc_library(
     name = "worker",
     srcs = [
         "data_worker.cpp",
@@ -409,7 +394,6 @@ ds_cc_library(
         "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/worker:worker_flags",
         "//src/datasystem/worker:worker_oc_server",
-        "//src/datasystem/worker:worker_service_accessor",
         "//src/datasystem/worker:worker_service_impl",
         "//src/datasystem/worker:worker_update_flag_check",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
@@ -419,24 +403,6 @@ ds_cc_library(
         ],
         "//conditions:default": [],
     }),
-)
-
-ds_cc_library(
-    name = "worker_api_c_wrapper",
-    srcs = [
-        "worker_api_c_wrapper.cpp",
-    ],
-    hdrs = [
-        "worker_api_c_wrapper.h",
-    ],
-    deps = [
-        "//include/datasystem/utils:utils_headers",
-        "//src/datasystem/common/rpc:rpc_server_stream_base",
-        "//src/datasystem/worker",
-        "//src/datasystem/worker:worker_service_accessor",
-        "//src/datasystem/worker:worker_service_impl",
-        "//src/datasystem/worker/object_cache:worker_oc_service_impl",
-    ],
 )
 
 ds_cc_library(

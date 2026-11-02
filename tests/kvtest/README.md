@@ -31,6 +31,11 @@ cd tests/kvtest
 ./build.sh -b cmake --use-httplib
 ```
 
+CMake 模式会同时构建独立 Worker 部署验证程序 `worker_test`。传入 `-s` 的 SDK 必须与同一发行包中的
+`datasystem/service/lib/libdatasystem_worker.so` 一起提供：开发构建默认使用 `output/cpp` 和
+`output/datasystem/service/lib`，安装包使用 `datasystem/sdk/cpp` 和 `datasystem/service/lib`。纯 C++ SDK
+压缩包不包含独立 Worker 库，不能用于构建 `worker_test`。
+
 Bazel 模式不会在运行时加载外部 `libdatasystem.so`。需要 UB/URMA 数据面时，必须在构建 kvtest 本身时传入
 `-M on`；该选项会映射为 Bazel 的 `--config=urma`。默认值为 `off`。CMake 模式的能力由 `-s` 指定的
 预构建 SDK 决定，因此不接受 `-M on`。

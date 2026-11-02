@@ -24,7 +24,8 @@ set -euo pipefail
 #                  Useful when the build host cannot reach GitHub / gitee.
 #
 # Common options:
-#   -s, --sdk DIR     SDK directory (cmake only; default $DATASYSTEM_SDK_DIR or ../../output/cpp)
+#   -s, --sdk DIR     SDK directory (cmake only; default $DATASYSTEM_SDK_DIR or ../../output/cpp).
+#                     worker_test also requires the matching service/lib directory from the same distribution.
 #   -j, --jobs N      Parallel jobs (default $(nproc))
 #   -d, --debug       Debug build (cmake: -DCMAKE_BUILD_TYPE=Debug; bazel: --config=debug)
 #   -r, --release     Release build (default)
@@ -168,9 +169,19 @@ if [[ "$BUILD_SYSTEM" == "cmake" ]]; then
     cmake -S "$SCRIPT_DIR" -B "$BUILD_DIR" "${cmake_opts[@]}"
     cmake --build "$BUILD_DIR" -j"$JOBS"
 
-    # Copy all .so from SDK to build/lib/ (KVCache .so + third-party .so + URMA .so)
+    # Copy SDK and service shared libraries needed by the packaged test binaries.
     mkdir -p "$BUILD_DIR/lib"
     cp -fL "$SDK_DIR/lib"/*.so* "$BUILD_DIR/lib/" 2>/dev/null || true
+    worker_lib_dir=""
+    for candidate in "$SDK_DIR/../datasystem/service/lib" "$SDK_DIR/../../service/lib"; do
+        if [[ -f "$candidate/libdatasystem_worker.so" ]]; then
+            worker_lib_dir="$candidate"
+            break
+        fi
+    done
+    if [[ -n "$worker_lib_dir" ]]; then
+        cp -fL "$worker_lib_dir"/*.so* "$BUILD_DIR/lib/" 2>/dev/null || true
+    fi
 
     echo "Build OK: $BUILD_DIR/kvtest + $BUILD_DIR/coordinator_test + $BUILD_DIR/worker_test"
     echo ""

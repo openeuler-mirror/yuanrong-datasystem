@@ -694,8 +694,7 @@ WorkerFailover::StandbySwitchAttemptResult WorkerFailover::TrySwitchToStandbyWor
 {
     auto candidateWorkerApi =
         currentApi->CloneWith(standbyWorker, currentApi->heartbeatType_, owner_.token_, owner_.signature_.get(),
-                              owner_.tenantId_,
-                              owner_.enableCrossNodeConnection_, owner_.embeddedClientWorkerApi_, owner_.worker_);
+                              owner_.tenantId_, owner_.enableCrossNodeConnection_);
     if (candidateWorkerApi == nullptr) {
         LOG(ERROR) << "[Switch] Failed to clone worker API.";
         return StandbySwitchAttemptResult::CONTINUE;
@@ -985,7 +984,7 @@ Status WorkerFailover::PreparePreferredLocalWorker(const HostPort &localAddress,
     ConfigureUrmaDataPlaneFailureCallback(LOCAL_WORKER, localWorkerApi);
 
     localMmapManager =
-        std::make_unique<client::MmapManager>(localWorkerApi, false, owner_.hostMemoryPinManager_);
+        std::make_unique<client::MmapManager>(localWorkerApi, owner_.hostMemoryPinManager_);
     rc = localWorkerApi->PrepareForDecreaseShmRef(std::bind(&client::MmapManager::LookupUnitsAndMmapFd,
                                                             localMmapManager.get(), std::placeholders::_1,
                                                             std::placeholders::_2));

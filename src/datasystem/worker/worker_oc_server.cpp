@@ -3598,7 +3598,7 @@ Status WorkerOCServer::AddClient(const ClientKey &clientId, bool shmEnabled, int
         objCacheClientWorkerSvc_->InitShmRefForClient(clientId, supportMultiShmRefCount);
     }
     // SOCKET_HEARTBEAT requires a valid fd-passing socketFd. Fall back to RPC_HEARTBEAT when it is
-    // invalid (embedded client, cross-host fallback, shm connection failure, or a non-INVALID fd
+    // invalid (cross-host fallback, shm connection failure, or a non-INVALID fd
     // that the kernel no longer considers open — review 180841385: a stale/invalid fd would slip
     // past the == INVALID_SOCKET_FD guard, then AddFdEvent(EPOLL_CTL_ADD) returns EBADF, the client
     // stays in SOCKET_HEARTBEAT with no epoll monitor and IsClientLost never trips).

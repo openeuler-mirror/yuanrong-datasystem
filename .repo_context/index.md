@@ -136,4 +136,4 @@ Do not stop there if the question depends on behavior. Jump from the tree to sou
 
 - `modules/infra/common-infra.md` is still broad and should later be split further into `rpc`, `shared-memory`, `kvstore`, and `rdma-fast-transport`.
 - `modules/client/client-sdk.md` should later split into `cpp-api`, `python-binding`, and `connect-options-auth`.
-- `modules/runtime/worker-runtime.md` should later split into `startup-lifecycle`, `worker-service`, and `embedded-worker`.
+- `modules/runtime/worker-runtime.md` should later split into `startup-lifecycle` and `worker-service`.

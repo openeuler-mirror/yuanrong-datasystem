@@ -73,7 +73,6 @@ SDK 已通过 Routing 获得对象的数据 Worker。访问同一主机上的任
 - 不重写 `enableLocalCache=true` 的绑定 Worker SHM Get。
 - 不修改跨节点 UB 协议。
 - 不新增 Worker protobuf 或 Worker 端 Get 实现。
-- Embedded Client 不接入跨进程 fd-passing。
 
 ## 4. 服务边界
 

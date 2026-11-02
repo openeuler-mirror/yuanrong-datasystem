@@ -35,7 +35,6 @@
 
 #include "datasystem/common/flags/string_to_long.h"
 #include "datasystem/common/util/format.h"
-#include "datasystem/utils/embedded_config.h"
 #include "datasystem/utils/kv_client_config.h"
 
 DS_DECLARE_bool(help);
@@ -489,12 +488,6 @@ bool FlagManager::ParseCommandLineFlags(const std::unordered_map<std::string, st
 {
     std::lock_guard<std::mutex> l(mutex_);
     return ParseCommandLineFlagsFromArgsLocked(args, errMsg);
-}
-
-bool FlagManager::ParseCommandLineFlags(const EmbeddedConfig &config, std::string &errMsg)
-{
-    std::lock_guard<std::mutex> l(mutex_);
-    return ParseCommandLineFlagsFromArgsLocked(config.GetArgs(), errMsg);
 }
 
 bool FlagManager::ParseCommandLineFlags(const KVClientConfig &config, std::string &errMsg)

@@ -20,11 +20,11 @@
 #include <cstdio>
 #include <limits>
 #include <string>
+#include <unordered_map>
 
 #include "datasystem/common/flags/eviction_heat.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/util/raii.h"
-#include "datasystem/utils/embedded_config.h"
 #include "datasystem/worker/worker_update_flag_check.h"
 #include "ut/common.h"
 
@@ -183,12 +183,12 @@ TEST_F(WatermarkFlagParseTest, InvalidEvictionPairFailsAfterParse)
     EXPECT_FALSE(ValidateWatermarkFlags());
 }
 
-TEST_F(WatermarkFlagParseTest, EmbeddedConfigEvictionBelowDefaultPairValid)
+TEST_F(WatermarkFlagParseTest, ArgMapEvictionBelowDefaultPairValid)
 {
-    EmbeddedConfig config;
-    config.SetArgs({ { "eviction_high_watermark_ratio", "0.75" }, { "eviction_low_watermark_ratio", "0.70" } });
+    std::unordered_map<std::string, std::string> args = { { "eviction_high_watermark_ratio", "0.75" },
+                                                          { "eviction_low_watermark_ratio", "0.70" } };
     std::string errMsg;
-    EXPECT_TRUE(ParseCommandLineFlags(config, errMsg));
+    EXPECT_TRUE(ParseCommandLineFlags(args, errMsg));
     EXPECT_TRUE(errMsg.empty());
     EXPECT_DOUBLE_EQ(FLAGS_eviction_high_watermark_ratio, 0.75);
     EXPECT_DOUBLE_EQ(FLAGS_eviction_low_watermark_ratio, 0.70);

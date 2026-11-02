@@ -33,18 +33,16 @@ def _datasystem_sdk_tree_impl(ctx):
 	out_dir="$1"
 	build_tpl="$2"
 	libdatasystem="$3"
-	libworker="$4"
-	libcoordinator="$5"
-	out_tar="$6"
-	header_count="$7"
-	urma_libs_count="$8"
-	hixl_plugin_count="$9"
-	shift 9
+	libcoordinator="$4"
+	out_tar="$5"
+	header_count="$6"
+	urma_libs_count="$7"
+	hixl_plugin_count="$8"
+	shift 8
 
 	mkdir -p "$out_dir/cpp/lib"
 	cp -f "$build_tpl" "$out_dir/cpp/BUILD.bazel"
 	cp -f "$libdatasystem" "$out_dir/cpp/lib/libdatasystem.so"
-	cp -f "$libworker" "$out_dir/cpp/lib/libdatasystem_worker.so"
 	if [ -n "$libcoordinator" ] && [ -f "$libcoordinator" ]; then
 	    cp -f "$libcoordinator" "$out_dir/cpp/lib/libdatasystem_coordinator.so"
 	fi
@@ -99,7 +97,6 @@ def _datasystem_sdk_tree_impl(ctx):
         out_dir.path,
         ctx.file.build_tpl.path,
         ctx.file.libdatasystem.path,
-        ctx.file.libworker.path,
         coordinator_path,
         out_tar.path,
         str(len(header_args) // 2),
@@ -107,7 +104,7 @@ def _datasystem_sdk_tree_impl(ctx):
         str(len(hixl_plugin_args)),
     ] + urma_libs_args + hixl_plugin_args + header_args + cmake_args
 
-    inputs_list = [ctx.file.build_tpl, ctx.file.libdatasystem, ctx.file.libworker]
+    inputs_list = [ctx.file.build_tpl, ctx.file.libdatasystem]
     if has_coordinator:
         inputs_list.append(ctx.file.libcoordinator)
 
@@ -139,7 +136,6 @@ datasystem_sdk_tree = rule(
         "headers": attr.label_list(allow_files = True, mandatory = True),
         "build_tpl": attr.label(allow_single_file = True, mandatory = True),
         "libdatasystem": attr.label(allow_single_file = True, mandatory = True),
-        "libworker": attr.label(allow_single_file = True, mandatory = True),
         "libcoordinator": attr.label(allow_single_file = True, mandatory = False),
         "cmake_config": attr.label_list(allow_files = True, default = []),
         "audits": attr.label_list(allow_files = True, default = []),

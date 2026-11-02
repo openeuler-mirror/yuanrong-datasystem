@@ -62,15 +62,11 @@ file(GLOB_RECURSE DS_ST_KV_CACHE_SRCS CONFIGURE_DEPENDS
 list(FILTER DS_ST_KV_CACHE_SRCS EXCLUDE REGEX .*kv_client_brpc_local_cache_verify_test\\.cpp)
 list(FILTER DS_ST_KV_CACHE_SRCS EXCLUDE REGEX .*kv_client_brpc_remote_get_test\\.cpp)
 
-file(GLOB_RECURSE DS_ST_EMBEDDED_CLIENT_SRCS CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/embedded_client/*.cpp")
-
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*encrypt_util.cpp)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*hashring_parser.cpp)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/device/.*)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/cluster/.*)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/stream_cache/.*)
-list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/embedded_client/.*)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/object_cache/.*)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/kv_cache/.*)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/rpc/brpc/hello_test\\.cpp$)
@@ -129,7 +125,6 @@ add_ds_st_grouped_executable(ds_st_stream_cache _ds_st_stream_cache_obj)
 add_ds_st_grouped_executable(ds_st_object_cache _ds_st_object_cache_obj)
 add_ds_st_grouped_executable(ds_st_kv_cache _ds_st_kv_cache_obj)
 add_ds_st_grouped_executable(ds_st _ds_st_other_obj)
-add_executable(ds_st_embedded_client ${DS_ST_EMBEDDED_CLIENT_SRCS} $<TARGET_OBJECTS:_ds_st_main_obj>)
 add_executable(braft_cluster_test
         common/raft/braft_cluster_test.cpp
         $<TARGET_OBJECTS:_ds_st_main_obj>)
@@ -169,8 +164,6 @@ target_link_libraries(ds_st PRIVATE ${DS_ST_DEPEND_LIBS} cluster_admin_client cl
 target_link_libraries(ds_st_stream_cache PRIVATE ${DS_ST_DEPEND_LIBS} -Wl,--reduce-memory-overheads)
 target_link_libraries(ds_st_object_cache PRIVATE ${DS_ST_DEPEND_LIBS} binmock -Wl,--reduce-memory-overheads)
 target_link_libraries(ds_st_kv_cache PRIVATE ${DS_ST_DEPEND_LIBS} -Wl,--reduce-memory-overheads)
-target_link_libraries(ds_st_embedded_client GTest::gtest GTest::gmock common_etcd nlohmann_json::nlohmann_json
-        generic_service_protos datasystem cluster cluster_topology_protos_client)
 target_link_libraries(ds_st_coordinator_backend_manual PRIVATE
         ${DS_ST_DEPEND_LIBS} binmock static_coordinator_discovery -Wl,--reduce-memory-overheads)
 target_link_libraries(dead_peer_fast_fail_test PRIVATE
@@ -238,7 +231,6 @@ add_datasystem_test(ds_st TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_st_stream_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_st_object_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_st_kv_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
-add_datasystem_test(ds_st_embedded_client TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_st_coordinator_backend_manual TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(braft_cluster_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_raft_node_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})

@@ -29,7 +29,6 @@
 #include <string>
 
 #include "datasystem/utils/coordinator_discovery.h"
-#include "datasystem/utils/embedded_config.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -74,23 +73,11 @@ public:
     /// @return K_OK on normal exit; error code otherwise.
     Status InitAndRun(const DataWorkerOptions &options);
 
-    /// @brief Embedded-mode initialization.
-    /// @details Initializes without blocking. Caller manages lifecycle.
-    /// @param config Embedded configuration, depends only on public type EmbeddedConfig.
-    /// @return K_OK on success; error code otherwise.
-    Status InitEmbeddedWorker(const EmbeddedConfig &config);
-
     /// @brief Request shutdown of a running InitAndRun() event loop.
     /// @details Thread-safe, idempotent. Sets exit flag and wakes the event loop;
     ///          actual PreShutDown/ShutDown is performed by InitAndRun after the loop exits.
     /// @return K_OK
     Status Stop();
-
-    /// @brief Stop an embedded-mode Worker.
-    /// @details Executes PreShutDown -> ShutDown directly. Idempotent.
-    ///          Called by extern "C" WorkerDestroy for embedded lifecycle management.
-    /// @return K_OK
-    Status StopEmbeddedWorker();
 
     /// @brief Apply runtime JSON config updates to modifiable worker flags.
     /// @param configJson JSON object mapping flag names to string values.
@@ -101,7 +88,7 @@ private:
     enum class LifecycleCallbackState : uint8_t { NOT_CONFIGURED, READY, START_ATTEMPTED, STOP_INVOKED };
 
     /// @brief Initialize WorkerOCServer and start all services.
-    Status InitWorker(DynamicFlagConfig &flags, const std::string &nonDefaultFlags, bool isEmbeddedClient);
+    Status InitWorker(DynamicFlagConfig &flags, const std::string &nonDefaultFlags);
 
     /// @brief Shutdown Worker.
     Status ShutDown();
@@ -117,14 +104,14 @@ private:
     Status InvokeOnStart();
 
     /// @brief Invoke the configured stop callback once after any start attempt.
-    /// @note Must be serialized with InvokeOnStart. Embedded or destructor cleanup may call it only after concurrent
+    /// @note Must be serialized with InvokeOnStart. Destructor cleanup may call it only after concurrent
     ///       lifecycle execution has stopped.
     Status InvokeOnStop();
 
     /// @brief Preserve the first error while executing all shutdown stages.
     Status FinishShutdown(Status firstError);
 
-    /// @brief InitWorker + Register + signal handler. Caller must hold initMutex_.
+    /// @brief InitWorker followed by failure signal handler installation. Caller must hold initMutex_.
     Status DoInit(DynamicFlagConfig &flags, const std::string &nonDefaultFlags, const char *crashReporterLabel);
 
     DataWorker() = default;
