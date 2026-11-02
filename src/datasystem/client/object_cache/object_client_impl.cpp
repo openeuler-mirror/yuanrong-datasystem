@@ -149,6 +149,9 @@ static constexpr int SHM_REF_RECONCILE_INTERVAL_MS = 5 * 1000;
 namespace datasystem {
 namespace {
 constexpr int32_t HASH_RING_RPC_MIN_TIMEOUT_MS = 100;
+// Service-discovery RPC budget for the routing probe fallback. Bounds how long HashRingRefresher::Stop()
+// can block behind a background discovery query; coordinator discovery already budgets 1s, etcd defaults to 50s.
+constexpr int32_t PROBE_FALLBACK_SD_TIMEOUT_MS = 1'000;
 constexpr int BOUND_WORKER_PROBE_TIMEOUT_MS = 10;
 const std::unordered_set<std::string> KV_CLIENT_LOG_CONFIG_KEYS = {
     "log_filename",
@@ -865,6 +868,8 @@ Status ObjectClientImpl::InitRouting(const HostPort &initialWorker, bool initial
     auto hostIdUnresolvedWarned = std::make_shared<bool>(false);
     auto ringUpdateHook =
         BuildRoutingUpdateHook(initialWorker, initialWorkerIsLocal, sdkHostIdCache, hostIdUnresolvedWarned);
+    boundWorkerSeed_->Set(initialWorker);
+    auto probeFallback = BuildProbeListFallback(initialWorker);
     auto routing = std::make_shared<client::Routing>(
         std::move(channelConfig), transportSignature_, std::move(ringUpdateHook), ubHealthRegistry_,
         std::vector<std::shared_ptr<client::IWorkerFilter>>{ ubHealthFilter_ },
@@ -872,7 +877,8 @@ Status ObjectClientImpl::InitRouting(const HostPort &initialWorker, bool initial
             if (transportLayer_ != nullptr) {
                 transportLayer_->RecordRoutingRefresh(version);
             }
-        });
+        },
+        std::move(probeFallback));
     auto scheduler = routing->GetBandwidthScheduler();
     if (scheduler) {
         scheduler->SetCutInGuardNs(requestTimeoutMs_);
@@ -898,6 +904,39 @@ client::HashRingRefresher::RingUpdateHook ObjectClientImpl::BuildRoutingUpdateHo
         }
         ubHealthFilter_->ApplyTopologyIncarnations(ring);
         return Status::OK();
+    };
+}
+
+client::HashRingRefresher::ProbeListFallback ObjectClientImpl::BuildProbeListFallback(const HostPort &initialWorker)
+{
+    // Capture only state that outlives ObjectClientImpl: the refresh thread must never hold (and
+    // release) the client's last strong reference, so no shared_ptr/weak_ptr to `this` may appear here.
+    auto seed = boundWorkerSeed_;
+    auto sd = serviceDiscovery_;
+    return [seed, sd, initialWorker]() -> std::vector<HostPort> {
+        std::vector<HostPort> candidates;
+        const HostPort bound = seed->Get();
+        if (!bound.Empty()) {
+            candidates.emplace_back(bound);
+        }
+        if (sd != nullptr) {
+            std::vector<std::string> sameHost;
+            std::vector<std::string> others;
+            if (sd->GetAllWorkers(sameHost, others, PROBE_FALLBACK_SD_TIMEOUT_MS).IsOk()) {
+                for (const auto *addresses : { &sameHost, &others }) {
+                    for (const auto &address : *addresses) {
+                        HostPort worker;
+                        if (worker.ParseString(address).IsOk() && worker != bound) {
+                            candidates.emplace_back(std::move(worker));
+                        }
+                    }
+                }
+            }
+        }
+        if (initialWorker != bound) {
+            candidates.emplace_back(initialWorker);
+        }
+        return candidates;
     };
 }
 

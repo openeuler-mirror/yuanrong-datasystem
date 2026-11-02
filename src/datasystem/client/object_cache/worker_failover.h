@@ -115,6 +115,9 @@ public:
 private:
     bool IsCoordinatorReachabilityFailure(const Status &status) const;
     void MarkDiscoveryRecovered() const;
+    // Feed a freshly committed bound-worker address into the routing probe list so the refresh
+    // loop can re-seed itself after a switch. Must be called outside owner_.switchNodeMutex_.
+    void PushRoutingProbeAddress(const HostPort &addr);
 
     // Callbacks installed on owner_'s listener/workerApi capture `this`; safety relies on
     // ObjectClientImpl::ShutDown draining async switches first and clearing the URMA

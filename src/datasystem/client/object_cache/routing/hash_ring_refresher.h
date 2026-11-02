@@ -57,11 +57,14 @@ public:
     using WaitFn = std::function<void(std::condition_variable &cv, std::unique_lock<std::mutex> &lock,
                                       std::chrono::milliseconds duration,
                                       const std::function<bool()> &wakePredicate)>;
+    // Emergency address source for the refresh loop when every worker in the probe list is unreachable
+    // (e.g. a full worker restart with new addresses). Queried at most once per refresh round.
+    using ProbeListFallback = std::function<std::vector<HostPort>()>;
 
     HashRingRefresher(std::shared_ptr<WorkerRouter> router, FetchRpc fetchRpc, RingUpdateHook ringUpdateHook = {},
-                      WaitFn waitFn = {});
+                      WaitFn waitFn = {}, ProbeListFallback probeFallback = {});
     HashRingRefresher(std::shared_ptr<WorkerRouter> router, TimedFetchRpc fetchRpc, RingUpdateHook ringUpdateHook = {},
-                      WaitFn waitFn = {});
+                      WaitFn waitFn = {}, ProbeListFallback probeFallback = {});
     ~HashRingRefresher();
 
     Status InitialFetch(const HostPort &initialWorkerAddr);
@@ -70,6 +73,11 @@ public:
     bool ForceRefresh();
 
     std::string GetHostIdsDigest(uint64_t version);
+
+    // Merge externally learned worker addresses (e.g. the post-switch bound worker) into the probe list.
+    // Deduplicates and rotates the next probe round to the first newly added address. Returns the number
+    // of addresses actually appended. The list stays bounded because every published ring rebuilds it.
+    size_t MergeProbeWorkers(const std::vector<HostPort> &workers);
 
     // Cover the online 3s isolation target plus reconciliation and publication margin. Public for
     // callers that rate-limit their own forced-refresh triggers against the same window.
@@ -81,6 +89,8 @@ private:
     void RefreshLoop();
     std::vector<HostPort> BeginRefreshRound(size_t &startIndex);
     Status DoRefresh(bool stopAware);
+    Status ProbeRound(const std::vector<HostPort> &workers, size_t startIndex, size_t probeCount, bool stopAware,
+                      int32_t timeoutMs, bool &reachedWorker);
     Status DoRefreshSafely(bool stopAware);
     Status PublishHashRing(uint64_t newVersion, ::datasystem::ClusterTopologyPb &&ring,
                            std::unordered_map<std::string, std::string> &&hostIdMap, bool epochResetConfirmed);
@@ -94,6 +104,10 @@ private:
     static constexpr int64_t FORCED_REFRESH_RETRY_INTERVAL_MS = 250;
     static constexpr int32_t BACKGROUND_REFRESH_RPC_TIMEOUT_MS = 250;
     static constexpr size_t MAX_BACKGROUND_PROBES_PER_ROUND = 4;
+    // Foreground refresh (initial fetch) keeps its own window constant: same bound as background
+    // today, but the two paths tighten independently.
+    static constexpr size_t MAX_FOREGROUND_PROBES_PER_ROUND = 4;
+    size_t ProbeListSize();
 
     // Lower-version responses observed in the current or previous refresh round, keyed by worker.
     // Two different workers reporting the same lower ring within the window confirm an epoch reset.
@@ -110,6 +124,7 @@ private:
     TimedFetchRpc fetchRpc_;
     RingUpdateHook ringUpdateHook_;
     WaitFn waitFn_;
+    ProbeListFallback probeFallback_;
 
     std::mutex workerListMutex_;
     std::vector<HostPort> workerList_;

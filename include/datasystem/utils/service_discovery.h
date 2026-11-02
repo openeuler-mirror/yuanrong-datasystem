@@ -81,6 +81,22 @@ public:
     virtual Status GetAllWorkers(std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs) = 0;
 
     /**
+     * @brief Return every ready worker ("host:port") with an explicit RPC budget.
+     * The base default forwards to the budget-less overload, so custom implementations that
+     * cannot honor a deadline keep their previous behavior.
+     * @param[out] sameHostAddrs Addresses of workers whose hostId matches the local hostId.
+     * @param[out] otherAddrs    Addresses of all remaining workers.
+     * @param[in] timeoutMs RPC budget in milliseconds; zero or negative selects the implementation default.
+     * @return Status of the call.
+     */
+    virtual Status GetAllWorkers(std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs,
+                                 int32_t timeoutMs)
+    {
+        (void)timeoutMs;
+        return GetAllWorkers(sameHostAddrs, otherAddrs);
+    }
+
+    /**
      * @brief Get service affinity policy.
      * @return Service affinity policy.
      */
@@ -170,6 +186,9 @@ public:
      */
     Status GetAllWorkers(std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs) override;
 
+    Status GetAllWorkers(std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs,
+                         int32_t timeoutMs) override;
+
     /**
      * @brief Get service affinity policy.
      * @return Service affinity policy.
@@ -202,9 +221,10 @@ private:
      * is empty, every worker goes into `other`.
      * @param[out] sameHost Addresses of workers whose hostId matches the local hostId.
      * @param[out] other    Remaining ready worker addresses.
+     * @param[in] timeoutMs RPC budget in milliseconds; zero selects the etcd default budget.
      * @return Status of the call.
      */
-    Status ObtainWorkers(std::vector<std::string> &sameHost, std::vector<std::string> &other);
+    Status ObtainWorkers(std::vector<std::string> &sameHost, std::vector<std::string> &other, int32_t timeoutMs = 0);
 
     std::string etcdAddress_;
     std::string clusterName_;
@@ -256,6 +276,9 @@ public:
 
     Status GetAllWorkers(std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs) override;
 
+    Status GetAllWorkers(std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs,
+                         int32_t timeoutMs) override;
+
     ServiceAffinityPolicy GetAffinityPolicy() const override
     {
         return affinityPolicy_;
@@ -272,7 +295,7 @@ public:
     }
 
 private:
-    Status ObtainWorkers(std::vector<std::string> &sameHost, std::vector<std::string> &other);
+    Status ObtainWorkers(std::vector<std::string> &sameHost, std::vector<std::string> &other, int32_t timeoutMs = 0);
 
     std::string clusterName_;
     std::string membershipTable_;

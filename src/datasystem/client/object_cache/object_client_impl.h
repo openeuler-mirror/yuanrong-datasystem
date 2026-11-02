@@ -1047,6 +1047,8 @@ private:
         const std::shared_ptr<std::string> &sdkHostIdCache,
         const std::shared_ptr<bool> &hostIdUnresolvedWarned);
 
+    client::HashRingRefresher::ProbeListFallback BuildProbeListFallback(const HostPort &initialWorker);
+
     Status ApplyRoutingWorkerSnapshot(uint64_t ringVersion, const ::datasystem::ClusterTopologyPb &ring,
                                       const std::unordered_map<std::string, std::string> &hostIdMap,
                                       const std::string &sdkHostId, bool epochResetConfirmed = false);
@@ -1401,6 +1403,28 @@ private:
     uint64_t memcpyParallelThreshold_ = 0;
     uint64_t setMemcpyParallelThreshold_ = 4 * 1024 * 1024;
 
+    // Address snapshot of the currently bound worker, shared with the routing probe fallback. The
+    // fallback closure must never hold an ObjectClientImpl reference: releasing the last strong
+    // reference on the refresh thread would run ~ObjectClientImpl there and self-join the refresh
+    // thread inside HashRingRefresher::Stop().
+    struct BoundWorkerSeed {
+        void Set(const HostPort &address)
+        {
+            std::lock_guard<std::mutex> lock(mu);
+            addr = address;
+        }
+
+        HostPort Get() const
+        {
+            std::lock_guard<std::mutex> lock(mu);
+            return addr;
+        }
+
+        mutable std::mutex mu;
+        HostPort addr;
+    };
+
+    std::shared_ptr<BoundWorkerSeed> boundWorkerSeed_ = std::make_shared<BoundWorkerSeed>();
     std::shared_ptr<IServiceDiscovery> serviceDiscovery_ = nullptr;
 };
 }  // namespace object_cache

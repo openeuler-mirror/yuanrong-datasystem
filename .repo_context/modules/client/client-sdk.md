@@ -354,6 +354,17 @@
     SDK host ID already resolved by `IServiceDiscovery`, performs a version-0 `GetHashRing` fetch, starts periodic
     versioned refresh, and stops routing before its transport resources. A direct local connection without service
     discovery may derive the SDK host ID from that local worker; a remote initial worker is never used as the SDK host ID.
+    The refresh loop keeps a probe list rebuilt from each published ring's ACTIVE members; when a round reaches zero
+    reachable workers (full worker restart with new addresses), it queries a `ProbeListFallback` injected by
+    `ObjectClientImpl` (bound-worker seed + `IServiceDiscovery::GetAllWorkers` budgeted at 1s + initial address). The
+    closure captures only state that outlives `ObjectClientImpl` — never a client reference — so the refresh thread can
+    never release the client's last strong reference, and the discovery budget bounds how long `Stop()` blocks behind a
+    blocked query. The fallback merges candidates into the list and re-probes the current candidate set as a priority
+    window over a bounded window (4 probes per attempt for both background and foreground; the re-probe runs on the
+    background RPC timeout), so batched discovery re-reporting a known worker still gets it probed next to newly
+    discovered ones. Worker-switch commit paths in `WorkerFailover` update the bound-worker seed and push the freshly
+    bound address via `Routing::MergeProbeWorkers` plus a forced refresh, so a successful control-plane switch also
+    re-seeds the data-plane probe list instead of leaving it on dead addresses.
     Each changed topology is first validated into a versioned `WorkerSnapshot`. All topology members are retained
     regardless of membership state; any malformed endpoint rejects the whole update, while an empty topology is a
     valid cleanup-all snapshot. The transport admission set is published before the new route becomes visible.
