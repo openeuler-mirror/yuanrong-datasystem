@@ -66,7 +66,8 @@ public:
         std::unique_lock<std::mutex> lock(mutex_);
         ++calls_;
         cv_.notify_all();
-        if (!cv_.wait_for(lock, std::chrono::seconds(2), [this] { return !paused_; })) {
+        const auto pauseTimeout = UB_PORT_HEALTH_SYNC_QUERY_WAIT_TIMEOUT + std::chrono::seconds(2);
+        if (!cv_.wait_for(lock, pauseTimeout, [this] { return !paused_; })) {
             return Status(K_INTERRUPTED, "Timed out waiting to resume fake UB port query");
         }
         if (status_.IsError()) {

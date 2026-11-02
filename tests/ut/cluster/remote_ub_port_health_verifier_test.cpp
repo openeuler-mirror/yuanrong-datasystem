@@ -200,19 +200,21 @@ TEST(RemoteUbPortHealthVerifierTest, ConcurrentTriggersProduceOneInFlightQuery)
     EXPECT_EQ(tickets.load(std::memory_order_relaxed), 1u);
 }
 
-TEST(RemoteUbPortHealthVerifierTest, TriggerDuringQuerySchedulesOneRateLimitedFollowUp)
+TEST(RemoteUbPortHealthVerifierTest, TriggerDuringQueryExtendsDelayedFailureRecheck)
 {
     RemoteUbPortHealthVerifier verifier(12345, 1'000, 1'000);
     ASSERT_TRUE(verifier.RequestVerification(WORKER, INCARNATION, 100));
     auto ticket = verifier.TryBeginDue(100);
     ASSERT_TRUE(ticket.has_value());
 
-    EXPECT_TRUE(verifier.RequestVerification(WORKER, INCARNATION, 150));
+    // Repeated faults while the first query is in flight retain one tail recheck,
+    // scheduled from the last trigger instead of adding a rate-limited follow-up.
+    EXPECT_FALSE(verifier.RequestVerification(WORKER, INCARNATION, 150));
     EXPECT_FALSE(verifier.RequestVerification(WORKER, INCARNATION, 160));
     auto completion = verifier.Complete(*ticket, Summary(4, 0, 1), Status::OK(), 200);
 
     EXPECT_TRUE(completion.retryScheduled);
-    EXPECT_EQ(verifier.NextQueryDeadlineMs(), 1'200u);
+    EXPECT_EQ(verifier.NextQueryDeadlineMs(), 2'160u);
 }
 
 TEST(RemoteUbPortHealthVerifierTest, UnsupportedPeerUsesBoundedBackoff)
@@ -460,20 +462,104 @@ TEST(RemoteUbPortHealthVerifierTest, RetiredTicketCannotConsumeSameIncarnationRe
     EXPECT_TRUE(verifier.Complete(*current, Summary(4, 0, 2), Status::OK(), 3).evidenceAccepted);
 }
 
-TEST(RemoteUbPortHealthVerifierTest, SamePeerRapidTriggersRespectPerPeerMinQueryInterval)
+TEST(RemoteUbPortHealthVerifierTest, ConfirmedGoodResultKeepsOneDelayedFailureRecheck)
+{
+    RemoteUbPortHealthVerifier verifier(12345, 1'000, 1'000);
+    ASSERT_TRUE(verifier.RequestVerification(WORKER, INCARNATION, 100));
+    auto first = verifier.TryBeginDue(100);
+    ASSERT_TRUE(first.has_value());
+    EXPECT_TRUE(verifier.Complete(*first, Summary(4, 0, 1), Status::OK(), 120).evidenceAccepted);
+    EXPECT_EQ(verifier.NextQueryDeadlineMs(), 2'100u);
+    EXPECT_FALSE(verifier.TryBeginDue(2'099).has_value());
+
+    auto delayed = verifier.TryBeginDue(2'100);
+    ASSERT_TRUE(delayed.has_value());
+    EXPECT_TRUE(verifier.Complete(*delayed, Summary(4, 4, 2), Status::OK(), 2'120).evidenceAccepted);
+    EXPECT_TRUE(verifier.NextQueryDeadlineMs().has_value());
+}
+
+TEST(RemoteUbPortHealthVerifierTest, IsolationCancelsDelayedFailureRecheck)
+{
+    RemoteUbPortHealthVerifier verifier(12345, 1'000, 1'000);
+    ASSERT_TRUE(verifier.RequestVerification(WORKER, INCARNATION, 100));
+    auto first = verifier.TryBeginDue(100);
+    ASSERT_TRUE(first.has_value());
+    EXPECT_TRUE(verifier.Complete(*first, Summary(4, 4, 1), Status::OK(), 120).evidenceAccepted);
+    EXPECT_EQ(verifier.NextQueryDeadlineMs(), 1'120u);
+}
+
+TEST(RemoteUbPortHealthVerifierTest, RepeatedTriggerDebouncesDelayedFailureRecheck)
 {
     RemoteUbPortHealthVerifier verifier(12345, 1'000, 30'000);
     ASSERT_TRUE(verifier.RequestVerification(WORKER, INCARNATION, 0));
     auto ticket = verifier.TryBeginDue(0);
     ASSERT_TRUE(ticket.has_value());
     EXPECT_TRUE(verifier.Complete(*ticket, Summary(4, 0, 1), Status::OK(), 1).evidenceAccepted);
-    // A GOOD completion resets the schedule. A new trigger within lastQueryMs + retryMinMs_
-    // must be deferred to the per-peer floor instead of becoming immediately due.
+    EXPECT_EQ(verifier.NextQueryDeadlineMs(), 2'000u);
+
+    EXPECT_FALSE(verifier.RequestVerification(WORKER, INCARNATION, 500));
+    EXPECT_EQ(verifier.NextQueryDeadlineMs(), 2'500u);
+    EXPECT_FALSE(verifier.RequestVerification(WORKER, INCARNATION, 1'500));
+    EXPECT_EQ(verifier.NextQueryDeadlineMs(), 3'500u);
+    EXPECT_FALSE(verifier.TryBeginDue(3'499).has_value());
+    EXPECT_TRUE(verifier.TryBeginDue(3'500).has_value());
+}
+
+TEST(RemoteUbPortHealthVerifierTest, InFlightRepeatedTriggerDebouncesDelayedFailureRecheck)
+{
+    RemoteUbPortHealthVerifier verifier(12345, 1'000, 30'000);
+    ASSERT_TRUE(verifier.RequestVerification(WORKER, INCARNATION, 0));
+    auto ticket = verifier.TryBeginDue(0);
+    ASSERT_TRUE(ticket.has_value());
+
+    EXPECT_FALSE(verifier.RequestVerification(WORKER, INCARNATION, 500));
+    EXPECT_FALSE(verifier.RequestVerification(WORKER, INCARNATION, 1'500));
+    EXPECT_TRUE(verifier.Complete(*ticket, Summary(4, 0, 1), Status::OK(), 1'600).evidenceAccepted);
+    EXPECT_EQ(verifier.NextQueryDeadlineMs(), 3'500u);
+    EXPECT_FALSE(verifier.TryBeginDue(3'499).has_value());
+    EXPECT_TRUE(verifier.TryBeginDue(3'500).has_value());
+}
+
+TEST(RemoteUbPortHealthVerifierTest, LateFirstQueryPreservesDelayedFailureRecheck)
+{
+    RemoteUbPortHealthVerifier verifier(12345, 1'000, 30'000);
+    ASSERT_TRUE(verifier.RequestVerification(WORKER, INCARNATION, 0));
+    auto first = verifier.TryBeginDue(2'500);
+    ASSERT_TRUE(first.has_value());
+    ASSERT_EQ(verifier.peers_.at(WORKER).delayedRecheckMs, 2'000u);
+
+    EXPECT_FALSE(verifier.RequestVerification(WORKER, INCARNATION, 2'600));
+    EXPECT_FALSE(verifier.TryBeginDue(2'600).has_value());
+    EXPECT_TRUE(verifier.Complete(*first, Summary(4, 0, 1), Status::OK(), 2'700).evidenceAccepted);
+    EXPECT_EQ(verifier.NextQueryDeadlineMs(), 4'600u);
+    EXPECT_FALSE(verifier.TryBeginDue(4'599).has_value());
+    EXPECT_TRUE(verifier.TryBeginDue(4'600).has_value());
+}
+
+TEST(RemoteUbPortHealthVerifierTest, TriggerDuringTailQueryStartsAnotherDelayedFailureRecheck)
+{
+    RemoteUbPortHealthVerifier verifier(12345, 1'000, 30'000);
+    ASSERT_TRUE(verifier.RequestVerification(WORKER, INCARNATION, 0));
+    auto first = verifier.TryBeginDue(0);
+    ASSERT_TRUE(first.has_value());
+    EXPECT_TRUE(verifier.Complete(*first, Summary(4, 0, 1), Status::OK(), 1).evidenceAccepted);
+
+    auto tail = verifier.TryBeginDue(2'000);
+    ASSERT_TRUE(tail.has_value());
+    EXPECT_FALSE(verifier.peers_.at(WORKER).delayedRecheckMs.has_value());
+    EXPECT_FALSE(verifier.RequestVerification(WORKER, INCARNATION, 2'100));
+    EXPECT_FALSE(verifier.RequestVerification(WORKER, INCARNATION, 2'200));
+    EXPECT_FALSE(verifier.TryBeginDue(2'200).has_value());
+    EXPECT_TRUE(verifier.Complete(*tail, Summary(4, 0, 2), Status::OK(), 2'300).evidenceAccepted);
+    EXPECT_EQ(verifier.NextQueryDeadlineMs(), 4'200u);
+    EXPECT_FALSE(verifier.TryBeginDue(4'199).has_value());
+
+    auto nextTail = verifier.TryBeginDue(4'200);
+    ASSERT_TRUE(nextTail.has_value());
+    auto completion = verifier.Complete(*nextTail, Summary(4, 0, 3), Status::OK(), 4'300);
+    EXPECT_TRUE(completion.evidenceAccepted);
+    EXPECT_FALSE(completion.retryScheduled);
     EXPECT_FALSE(verifier.NextQueryDeadlineMs().has_value());
-    EXPECT_TRUE(verifier.RequestVerification(WORKER, INCARNATION, 2));
-    EXPECT_EQ(verifier.NextQueryDeadlineMs(), 1'000u);
-    EXPECT_FALSE(verifier.TryBeginDue(2).has_value());
-    EXPECT_TRUE(verifier.TryBeginDue(1'000).has_value());
 }
 
 }  // namespace datasystem::cluster

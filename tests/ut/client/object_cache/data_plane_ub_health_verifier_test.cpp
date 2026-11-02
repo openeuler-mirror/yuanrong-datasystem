@@ -84,7 +84,7 @@ public:
         ++queryCount;
         EXPECT_EQ(workerAddr, WORKER);
         EXPECT_EQ(expectedIncarnation, INCARNATION);
-        EXPECT_EQ(timeoutMs, UB_REMOTE_PORT_HEALTH_QUERY_INTERVAL.count());
+        EXPECT_EQ(timeoutMs, UB_REMOTE_PORT_HEALTH_RPC_TIMEOUT.count());
         if (queryStatus.IsError()) {
             return queryStatus;
         }
@@ -324,7 +324,7 @@ TEST(DataPlaneUbHealthVerifierTest, AnyHealthyPortStopsVerification)
 
     EXPECT_EQ(manager.queryCount, 1u);
     ASSERT_EQ(verified.size(), 1u);
-    EXPECT_FALSE(manager.GetUbPortHealthQueryDeadline().has_value());
+    EXPECT_TRUE(manager.GetUbPortHealthQueryDeadline().has_value());
 }
 
 TEST(DataPlaneUbHealthVerifierTest, FirstCqe9WithoutPassiveSummaryRequiresIndependentQuery)

@@ -220,7 +220,7 @@ Status WorkerOCServiceImpl::UbHealthCallbackState::QueryPortHealth(
     CHECK_FAIL_RETURN_STATUS(lease && lease.service_->getProc_ != nullptr, K_SHUTTING_DOWN,
                              "Worker UB health query owner is detached");
     return lease.service_->getProc_->QueryPeerUbPortHealth(
-        ticket.peer, ticket.incarnation, static_cast<int32_t>(UB_REMOTE_PORT_HEALTH_QUERY_INTERVAL.count()), summary);
+        ticket.peer, ticket.incarnation, static_cast<int32_t>(UB_REMOTE_PORT_HEALTH_RPC_TIMEOUT.count()), summary);
 }
 
 namespace {

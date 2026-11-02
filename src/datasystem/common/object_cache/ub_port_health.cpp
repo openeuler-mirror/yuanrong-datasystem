@@ -315,6 +315,11 @@ public:
         }
 
         std::unique_lock<bthread::Mutex> lock(mutex_);
+        return EnsureFreshLocked(maxAge, lock);
+    }
+
+    Status EnsureFreshLocked(std::chrono::milliseconds maxAge, std::unique_lock<bthread::Mutex> &lock)
+    {
         if (state_ != State::RUNNING) {
             return state_ == State::STOPPING ? Status(K_SHUTTING_DOWN, "UB port health monitor is stopping")
                                              : Status(K_NOT_READY, "UB port health monitor is not running");
@@ -327,7 +332,8 @@ public:
         if (!queryInFlight_) {
             auto snapshot = std::atomic_load(&snapshot_);
             const bool fresh = hasSuccessfulQuery_ && snapshot != nullptr && snapshot->valid
-                               && !snapshot->verificationPending && Clock::now() - lastSuccessfulQuery_ <= maxAge;
+                               && !snapshot->verificationPending && !verificationRequested_
+                               && Clock::now() - lastSuccessfulQuery_ <= maxAge;
             if (fresh) {
                 return Status::OK();
             }
@@ -335,7 +341,7 @@ public:
             verificationRequested_ = true;
             cv_.notify_all();
         }
-        const auto deadline = Clock::now() + UB_PORT_HEALTH_REFRESH_WAIT_TIMEOUT;
+        const auto deadline = Clock::now() + UB_PORT_HEALTH_SYNC_QUERY_WAIT_TIMEOUT;
         while (state_ == State::RUNNING && completedQueries_ < targetCompletion) {
             const auto remaining = std::chrono::duration_cast<std::chrono::microseconds>(deadline - Clock::now());
             if (remaining <= std::chrono::microseconds::zero()) {
@@ -354,24 +360,14 @@ public:
         if (maxAge < std::chrono::milliseconds::zero()) {
             return Status(K_INVALID, "UB port health max age must not be negative");
         }
-        std::lock_guard<bthread::Mutex> lock(mutex_);
-        if (state_ != State::RUNNING) {
-            return Status(K_NOT_READY, "UB port health monitor is not running");
-        }
+        std::unique_lock<bthread::Mutex> lock(mutex_);
+        RETURN_IF_NOT_OK(EnsureFreshLocked(maxAge, lock));
         auto snapshot = std::atomic_load(&snapshot_);
-        const bool fresh = hasSuccessfulQuery_ && snapshot != nullptr && snapshot->valid
-                           && !snapshot->verificationPending && !queryInFlight_ && !verificationRequested_
-                           && Clock::now() - lastSuccessfulQuery_ <= maxAge;
-        if (!fresh && !queryInFlight_) {
-            refreshRequested_ = true;
-            verificationRequested_ = true;
-            cv_.notify_all();
-        }
         if (snapshot == nullptr) {
             return Status(K_NOT_READY, "UB port health snapshot is not available");
         }
         summary = ToSummary(*snapshot);
-        summary.verificationPending = summary.verificationPending || !fresh;
+        summary.verificationPending = summary.verificationPending || queryInFlight_ || verificationRequested_;
         return Status::OK();
     }
 

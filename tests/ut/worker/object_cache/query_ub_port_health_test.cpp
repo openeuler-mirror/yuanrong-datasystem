@@ -336,7 +336,7 @@ TEST_F(QueryUbPortHealthTest, RejectsStaleIncarnationBeforeCallingQuery)
     EXPECT_FALSE(response.has_health_summary());
 }
 
-TEST_F(QueryUbPortHealthTest, QueryFailurePublishesExplicitUnknownWithoutSyntheticCounts)
+TEST_F(QueryUbPortHealthTest, QueryFailureReturnsErrorWithoutSyntheticCounts)
 {
     provider_->SetResult(Status(K_RPC_DEADLINE_EXCEEDED, "cached health refresh pending"), {});
     ConfigurePortHealth();
@@ -344,19 +344,17 @@ TEST_F(QueryUbPortHealthTest, QueryFailurePublishesExplicitUnknownWithoutSynthet
     request.set_expected_worker_incarnation(INCARNATION);
     QueryUbPortHealthRspPb response;
 
-    DS_ASSERT_OK(service_->QuerySelfUbPortHealth(request, response));
-    EXPECT_GE(provider_->Calls(), 1u);
-    ASSERT_TRUE(response.has_health_summary());
-    UbHealthSummary summary;
-    DS_ASSERT_OK(DecodeUbHealthSummary(response.health_summary(), summary));
-    ASSERT_TRUE(summary.portHealth.has_value());
-    EXPECT_FALSE(summary.portHealth->valid);
-    EXPECT_TRUE(summary.portHealth->verificationPending);
-    EXPECT_EQ(summary.portHealth->totalPortCount, 0u);
-    EXPECT_EQ(summary.portHealth->badPortCount, 0u);
+    EXPECT_EQ(service_->QuerySelfUbPortHealth(request, response).GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_FALSE(response.has_health_summary());
+    const auto summary = monitor_->GetSummary();
+    ASSERT_TRUE(summary.has_value());
+    EXPECT_FALSE(summary->valid);
+    EXPECT_TRUE(summary->verificationPending);
+    EXPECT_EQ(summary->totalPortCount, 0u);
+    EXPECT_EQ(summary->badPortCount, 0u);
 }
 
-TEST_F(QueryUbPortHealthTest, PendingCacheIsReturnedWithoutInventingNewCounts)
+TEST_F(QueryUbPortHealthTest, FailedRefreshPreservesConfirmedCountsWithoutReturningThemAsFresh)
 {
     provider_->SetResult(Status::OK(), { { 0, UbPortState::GOOD }, { 1, UbPortState::BAD },
                                          { 2, UbPortState::BAD }, { 3, UbPortState::GOOD } });
@@ -374,15 +372,14 @@ TEST_F(QueryUbPortHealthTest, PendingCacheIsReturnedWithoutInventingNewCounts)
     ASSERT_TRUE(provider_->WaitForCalls(completed + 1, std::chrono::seconds(1)));
     response.Clear();
 
-    DS_ASSERT_OK(service_->QuerySelfUbPortHealth(request, response));
-
-    UbHealthSummary summary;
-    DS_ASSERT_OK(DecodeUbHealthSummary(response.health_summary(), summary));
-    ASSERT_TRUE(summary.portHealth.has_value());
-    EXPECT_EQ(summary.portHealth->totalPortCount, 4u);
-    EXPECT_EQ(summary.portHealth->badPortCount, 2u);
-    EXPECT_EQ(summary.portHealth->healthEpoch, UB_PORT_HEALTH_FIRST_EPOCH);
-    EXPECT_TRUE(summary.portHealth->verificationPending);
+    EXPECT_EQ(service_->QuerySelfUbPortHealth(request, response).GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_FALSE(response.has_health_summary());
+    const auto summary = monitor_->GetSummary();
+    ASSERT_TRUE(summary.has_value());
+    EXPECT_EQ(summary->totalPortCount, 4u);
+    EXPECT_EQ(summary->badPortCount, 2u);
+    EXPECT_EQ(summary->healthEpoch, UB_PORT_HEALTH_FIRST_EPOCH);
+    EXPECT_TRUE(summary->verificationPending);
 }
 
 TEST_F(QueryUbPortHealthTest, MonitorObserverPublishesWholeAggregateWithoutPorts)
@@ -473,22 +470,77 @@ TEST_F(QueryUbPortHealthTest, CurrentPeerSummaryEnablesIndependentVerification)
     ASSERT_TRUE(state.has_value());
     EXPECT_EQ(state->state, UbAdmissionState::SUSPECT);
 }
-TEST_F(QueryUbPortHealthTest, QueryDoesNotWaitForBlockedProvider)
+
+TEST_F(QueryUbPortHealthTest, AllGoodExpiredSnapshotIsRefreshedInSameQuery)
+{
+    provider_->SetResult(Status::OK(), { { 0, UbPortState::GOOD }, { 1, UbPortState::GOOD } });
+    ConfigurePortHealth();
+    QueryUbPortHealthReqPb request;
+    request.set_expected_worker_incarnation(INCARNATION);
+    QueryUbPortHealthRspPb response;
+    DS_ASSERT_OK(service_->QuerySelfUbPortHealth(request, response));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(2100));
+    const auto callsBeforeQuery = provider_->Calls();
+    response.Clear();
+    DS_ASSERT_OK(service_->QuerySelfUbPortHealth(request, response));
+
+    UbHealthSummary summary;
+    DS_ASSERT_OK(DecodeUbHealthSummary(response.health_summary(), summary));
+    ASSERT_TRUE(summary.portHealth.has_value());
+    EXPECT_TRUE(summary.portHealth->valid);
+    EXPECT_FALSE(summary.portHealth->verificationPending);
+    EXPECT_EQ(summary.portHealth->badPortCount, 0u);
+    EXPECT_EQ(summary.portHealth->healthEpoch, UB_PORT_HEALTH_FIRST_EPOCH);
+    EXPECT_GT(provider_->Calls(), callsBeforeQuery);
+}
+
+TEST_F(QueryUbPortHealthTest, MockUbProviderReportsAllBadAfterInitialGood)
+{
+    provider_->SetResult(Status::OK(), { { 0, UbPortState::GOOD }, { 1, UbPortState::GOOD },
+                                         { 2, UbPortState::GOOD }, { 3, UbPortState::GOOD } });
+    ConfigurePortHealth();
+    QueryUbPortHealthReqPb request;
+    request.set_expected_worker_incarnation(INCARNATION);
+    QueryUbPortHealthRspPb response;
+    DS_ASSERT_OK(service_->QuerySelfUbPortHealth(request, response));
+
+    provider_->SetResult(Status::OK(), { { 0, UbPortState::BAD }, { 1, UbPortState::BAD },
+                                         { 2, UbPortState::BAD }, { 3, UbPortState::BAD } });
+    response.Clear();
+    DS_ASSERT_OK(service_->QuerySelfUbPortHealth(request, response));
+
+    UbHealthSummary summary;
+    DS_ASSERT_OK(DecodeUbHealthSummary(response.health_summary(), summary));
+    ASSERT_TRUE(summary.portHealth.has_value());
+    EXPECT_EQ(summary.portHealth->totalPortCount, 4u);
+    EXPECT_EQ(summary.portHealth->badPortCount, 4u);
+    EXPECT_FALSE(summary.portHealth->verificationPending);
+}
+
+TEST_F(QueryUbPortHealthTest, QueryWaitsForInFlightProviderAndReturnsCompletedFacts)
 {
     provider_->Pause();
     monitor_ = UbPortHealthMonitor::CreateForTest(provider_, std::chrono::seconds(1));
     DS_ASSERT_OK(service_->ConfigureSelfPortHealth(monitor_));
     DS_ASSERT_OK(monitor_->Start());
+    Raii resume([&] { provider_->Resume(); });
     ASSERT_TRUE(provider_->WaitForCalls(1));
     QueryUbPortHealthReqPb request;
     request.set_expected_worker_incarnation(INCARNATION);
     QueryUbPortHealthRspPb response;
     auto query = std::async(std::launch::async, [&] { return service_->QuerySelfUbPortHealth(request, response); });
-    const auto ready = query.wait_for(std::chrono::milliseconds(200));
+    const auto ready = query.wait_for(std::chrono::milliseconds(20));
     provider_->Resume();
-    EXPECT_EQ(ready, std::future_status::ready);
-    EXPECT_EQ(query.get().GetCode(), K_NOT_READY);
-    EXPECT_FALSE(response.has_health_summary());
+    EXPECT_EQ(ready, std::future_status::timeout);
+    DS_ASSERT_OK(query.get());
+    UbHealthSummary summary;
+    DS_ASSERT_OK(DecodeUbHealthSummary(response.health_summary(), summary));
+    ASSERT_TRUE(summary.portHealth.has_value());
+    EXPECT_TRUE(summary.portHealth->valid);
+    EXPECT_FALSE(summary.portHealth->verificationPending);
+    EXPECT_EQ(summary.portHealth->badPortCount, 1u);
+    EXPECT_EQ(provider_->Calls(), 1u);
 }
 
 }  // namespace datasystem::object_cache

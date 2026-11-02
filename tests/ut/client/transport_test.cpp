@@ -47,6 +47,7 @@
 #include <brpc/controller.h>
 #include "datasystem/protos/object_posix.brpc.stub.pb.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/object_cache/ub_port_health.h"
 
 extern char **environ;
 
@@ -824,6 +825,8 @@ public:
         return true;
     }
 
+    int ubHealthRpcTimeout = 0;
+
     int getObjectInvokeCount = 0;
     int clientGetInvokeCount = 0;
     int shmHeartbeatInvokeCount = 0;
@@ -869,6 +872,13 @@ public:
     std::function<void()> beforeShmHeartbeatReturn;
 
 protected:
+    Status DoInvokeQueryUbPortHealth(const RpcOptions &options, const QueryUbPortHealthReqPb &,
+                                     QueryUbPortHealthRspPb &) override
+    {
+        ubHealthRpcTimeout = options.GetTimeout();
+        return Status::OK();
+    }
+
     Status DoInvokeGetSocketPath(const RpcOptions &, const GetSocketPathReqPb &, GetSocketPathRspPb &) override
     {
         ++getSocketPathInvokeCount;
@@ -1651,6 +1661,24 @@ protected:
         return ObjectBufferInternal::Create(std::move(info), buffer);
     }
 };
+
+TEST(WorkerRpcClientUbHealthTest, HealthQueryIgnoresSmallBusinessTimeout)
+{
+    BrpcChannelConfig config;
+    config.timeout_ms = 20;
+    AuthBoundaryWorkerRpcClient client(MakeSignature(), config);
+    QueryUbPortHealthRspPb response;
+    const auto healthTimeout = static_cast<int32_t>(UB_REMOTE_PORT_HEALTH_RPC_TIMEOUT.count());
+    ASSERT_TRUE(client.QueryUbPortHealth("incarnation", healthTimeout, response).IsOk());
+    EXPECT_EQ(client.ubHealthRpcTimeout, healthTimeout);
+    ExistReqPb businessRequest;
+    businessRequest.add_object_keys("key");
+    ExistRspPb businessResponse;
+    ASSERT_TRUE(client.InvokeExist(20, businessRequest, businessResponse).IsOk());
+    EXPECT_LE(client.existRpcTimeout, 20);
+    EXPECT_GT(client.existRpcTimeout, 0);
+    EXPECT_EQ(client.QueryUbPortHealth("incarnation", 0, response).GetCode(), K_INVALID);
+}
 
 TEST(UbConnectionTest, PayloadOnlyClientBatchGetCapabilityDefaultsToFalse)
 {
