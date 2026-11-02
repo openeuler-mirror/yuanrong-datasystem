@@ -418,7 +418,6 @@ ds_cc_library(
         "worker_oc_eviction_manager.h",
     ],
     deps = [
-        "//src/datasystem/worker:metadata_route_options",
         "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/worker/object_cache:object_endpoint_policy",
         "//src/datasystem/common/immutable_string",
@@ -540,7 +539,6 @@ ds_cc_library(
         "worker_oc_spill.h",
     ],
     deps = [
-        "//src/datasystem/worker:metadata_route_options",
         "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/worker/object_cache:object_endpoint_policy",
         "//include/datasystem/hetero:hetero_headers",

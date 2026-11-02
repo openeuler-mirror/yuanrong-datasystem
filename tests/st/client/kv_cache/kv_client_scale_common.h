@@ -230,7 +230,7 @@ public:
             if (ResetGiveUpReconciliationTime) {
                 gflag += " -inject_actions=WorkerOCServiceImpl.GiveUpReconciliation.setHealthFile:call(5000)";
             }
-            ASSERT_TRUE(externalCluster_->StartWorker(i, HostPort(), gflag).IsOk()) << i;
+            ASSERT_TRUE(externalCluster_->StartWorker(i, gflag).IsOk()) << i;
         }
         for (auto i : indexes) {
             ASSERT_TRUE(cluster_->WaitNodeReady(WORKER, i, maxWaitTimeSec).IsOk()) << i;
@@ -246,7 +246,7 @@ public:
                                  int maxWaitTimeSec = 120)
     {
         for (auto i : indexes) {
-            ASSERT_TRUE(externalCluster_->StartWorker(i, HostPort(), workerFlags).IsOk()) << i;
+            ASSERT_TRUE(externalCluster_->StartWorker(i, workerFlags).IsOk()) << i;
         }
         for (auto i : indexes) {
             ASSERT_TRUE(cluster_->WaitNodeReady(WORKER, i, maxWaitTimeSec).IsOk()) << i;

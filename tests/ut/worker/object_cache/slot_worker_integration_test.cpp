@@ -171,8 +171,7 @@ TEST_F(SlotWorkerIntegrationTest, WorkerInitSetsSlotNamespace)
     SetSlotWorkerNamespace(DEFAULT_WORKER_NAME);
     FLAGS_l2_cache_type = "distributed_disk";
     FLAGS_worker_address = "10.2.3.4:31501";
-    auto *server = new worker::WorkerOCServer(HostPort("127.0.0.1:31501"), HostPort("127.0.0.1:31501"),
-                                              HostPort("127.0.0.1:31500"), nullptr);
+    auto *server = new worker::WorkerOCServer(HostPort("127.0.0.1:31501"), HostPort("127.0.0.1:31501"), nullptr);
     server->InitSlotWorkerNamespace();
     EXPECT_EQ(GetSlotWorkerNamespace(), SanitizeSlotWorkerNamespace(FLAGS_worker_address));
 

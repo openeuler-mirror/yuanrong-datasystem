@@ -310,8 +310,6 @@ public:
         constexpr int WORKER_NUM = 4;
         opts.numOBS = 1;
         opts.numWorkers = WORKER_NUM;
-        opts.masterIdx = 0;
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         opts.workerGflagParams = "-node_timeout_s=5 -shared_memory_size_mb=2048 -v=1";
     }

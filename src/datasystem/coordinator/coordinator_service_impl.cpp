@@ -183,8 +183,7 @@ Status ValidateTopologyCoordinationMutationKey(const ParsedTopologyCoordinationK
 
 bool UsesLeadershipOnlyAdmission(TopologyCoordinationKeyKind kind)
 {
-    return kind == TopologyCoordinationKeyKind::EVICTION_POLICY_ROLLOUT
-           || kind == TopologyCoordinationKeyKind::MASTER_ADDRESS;
+    return kind == TopologyCoordinationKeyKind::EVICTION_POLICY_ROLLOUT;
 }
 
 bool BuildEnsureMembershipPhysicalKey(const EnsureLeaderMembershipReqPb &req, std::string &physicalKey)

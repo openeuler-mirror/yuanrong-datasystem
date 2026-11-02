@@ -47,8 +47,6 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/worker_oc_server.h"
 
-DS_DECLARE_bool(enable_distributed_master);
-DS_DECLARE_string(master_address);
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_string(rocksdb_write_mode);
 DS_DECLARE_int32(sc_regular_socket_num);
@@ -67,7 +65,7 @@ WorkerLivenessCheck::WorkerLivenessCheck(WorkerOCServer *workerOcServer, std::st
       workerUuid_(std::move(workerUuid)),
       akSkManager_(std::move(akSkManager))
 {
-    if (IsMasterNode()) {
+    if (workerOcServer_ != nullptr && workerOcServer_->GetOcMetaSvc() != nullptr) {
         policies_.emplace_back(
             Policy{ "CheckRocksDbService", std::bind(&WorkerLivenessCheck::CheckRocksDbService, this) });
     }
@@ -88,16 +86,14 @@ Status WorkerLivenessCheck::Init()
     servicesNames_.emplace_back("WorkerService");
     servicesNames_.emplace_back("WorkerWorkerOCService");
     servicesNames_.emplace_back("MasterWorkerOCService");
-    if (IsMasterNode()) {
+    if (workerOcServer_ != nullptr && workerOcServer_->GetOcMetaSvc() != nullptr) {
         servicesNames_.emplace_back("MasterOCService");
     }
     if (EnableSCService()) {
         servicesNames_.emplace_back("ClientWorkerSCService");
         servicesNames_.emplace_back("WorkerWorkerSCService");
         servicesNames_.emplace_back("MasterWorkerSCService");
-        if (IsMasterNode()) {
-            servicesNames_.emplace_back("MasterSCService");
-        }
+        servicesNames_.emplace_back("MasterSCService");
     }
     LivenessHealthCheckEvent::GetInstance().AddSubscriber(
         "WORKER_LIVENESS_CHECK",
@@ -222,11 +218,6 @@ Status WorkerLivenessCheck::RemoveProbe()
                                            error, StrErr(error)));
 }
 
-bool WorkerLivenessCheck::IsMasterNode()
-{
-    return FLAGS_enable_distributed_master || FLAGS_master_address == hostPort_.ToString();
-}
-
 Status WorkerLivenessCheck::DoLivenessCheck()
 {
     for (auto &policy : policies_) {
@@ -261,7 +252,7 @@ Status WorkerLivenessCheck::CheckWorkerServices()
 Status WorkerLivenessCheck::CheckRocksDbService()
 {
     INJECT_POINT("WorkerLivenessCheck.CheckRocksDbService.failed");
-    if (!IsMasterNode() || (FLAGS_rocksdb_write_mode == "none")) {
+    if (FLAGS_rocksdb_write_mode == "none") {
         return Status::OK();
     }
     if (workerOcServer_->GetOcMetaSvc() == nullptr) {

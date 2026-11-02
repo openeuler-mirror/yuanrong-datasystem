@@ -243,27 +243,11 @@ private:
 };
 }  // namespace
 
-TEST_F(MetadataRouteResolverTest, CentralizedModeDoesNotRequirePlacement)
-{
-    worker::MetadataRouteOptions options;
-    options.centralizedMode = true;
-    options.masterAddress = HostPort("127.0.0.1", 18481);
-    worker::MetadataRouteResolver resolver(nullptr, options);
-    HostPort owner("unchanged", 1);
-
-    ASSERT_TRUE(resolver.ResolveOwner("object", owner).IsOk());
-    EXPECT_EQ(owner, options.masterAddress);
-    auto groups = resolver.GroupOwners({ "a", "b" });
-    ASSERT_EQ(groups.groups.size(), 1U);
-    EXPECT_EQ(groups.topologyVersion, 0U);
-    EXPECT_EQ(groups.groups.at(options.masterAddress), (std::vector<std::string>{ "a", "b" }));
-}
-
-TEST_F(MetadataRouteResolverTest, DistributedModeResolvesKeyAndPreservesOutputOnFailure)
+TEST_F(MetadataRouteResolverTest, ResolvesKeyAndPreservesOutputOnFailure)
 {
     ASSERT_TRUE(PublishVersion(1).IsOk());
     algorithm_.SetOwnerAddress("127.0.0.1:18482");
-    worker::MetadataRouteResolver resolver(&placement_, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver resolver(&placement_);
     HostPort owner;
 
     ASSERT_TRUE(resolver.ResolveOwner(std::string_view("key\0suffix", 10), owner).IsOk());
@@ -276,7 +260,7 @@ TEST_F(MetadataRouteResolverTest, DistributedModeResolvesKeyAndPreservesOutputOn
 
 TEST_F(MetadataRouteResolverTest, MissingPlacementPropagatesNotReady)
 {
-    worker::MetadataRouteResolver resolver(nullptr, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver resolver(nullptr);
     HostPort owner("127.0.0.1", 18500);
 
     EXPECT_EQ(resolver.ResolveOwner("key", owner).GetCode(), K_NOT_READY);
@@ -291,7 +275,7 @@ TEST_F(MetadataRouteResolverTest, BatchUsesOneSnapshotVersion)
     ASSERT_TRUE(PublishVersion(1).IsOk());
     algorithm_.SetOwnerAddress("127.0.0.1:18482");
     algorithm_.SetFirstLocateHook([this]() { EXPECT_TRUE(PublishVersion(2).IsOk()); });
-    worker::MetadataRouteResolver resolver(&placement_, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver resolver(&placement_);
 
     auto groups = resolver.GroupOwners({ "a", "b" });
 
@@ -313,7 +297,7 @@ TEST_F(MetadataRouteResolverTest, ConcurrentPublishDoesNotMixGroupedOwnerSnapsho
         firstLocateStarted.set_value();
         continueSignal.wait();
     });
-    worker::MetadataRouteResolver resolver(&placement_, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver resolver(&placement_);
     worker::MetaOwnerRouteGroups groups;
     auto route = std::async(std::launch::async, [&resolver, &groups] {
         groups = resolver.GroupOwners({ "a", "b", "c" });
@@ -337,7 +321,7 @@ TEST_F(MetadataRouteResolverTest, IndexedBatchBuildsOnlyIndexedProjection)
 {
     ASSERT_TRUE(PublishVersion(1).IsOk());
     algorithm_.SetOwnerAddress("127.0.0.1:18482");
-    worker::MetadataRouteResolver resolver(&placement_, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver resolver(&placement_);
 
     auto groups = resolver.GroupIndexedOwners({ "a", "b" });
 
@@ -350,7 +334,7 @@ TEST_F(MetadataRouteResolverTest, IndexedBatchBuildsOnlyIndexedProjection)
 TEST_F(MetadataRouteResolverTest, BatchFailureDoesNotFallbackToSingleKeyLocate)
 {
     algorithm_.SetOwnerAddress("127.0.0.1:18482");
-    worker::MetadataRouteResolver resolver(&placement_, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver resolver(&placement_);
     const std::vector<std::string> keys{ "key-0", "key-1" };
 
     auto groups = resolver.GroupOwners(keys);
@@ -371,7 +355,7 @@ TEST_F(MetadataRouteResolverTest, GroupMigrateTargetsFollowsRedirectOverrideDuri
                     .IsOk());
     algorithm_.SetOwnerAddress("127.0.0.1:18480");
     algorithm_.SetProspectiveAddress("127.0.0.1:18482");
-    worker::MetadataRouteResolver resolver(&placement_, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver resolver(&placement_);
 
     auto groups = resolver.GroupMigrateTargets({ "k0", "k1" });
 
@@ -384,7 +368,7 @@ TEST_F(MetadataRouteResolverTest, GroupMigrateTargetsFollowsRedirectOverrideDuri
 TEST_F(MetadataRouteResolverTest, GroupMigrateTargetsKeepsCommittedOwnerWithoutOverride)
 {
     ASSERT_TRUE(PublishVersion(1).IsOk());
-    worker::MetadataRouteResolver resolver(&placement_, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver resolver(&placement_);
     algorithm_.RouteToken(1, "127.0.0.1:18482");
     algorithm_.RouteToken(2, "127.0.0.1:18480");
     algorithm_.SetKeyToken("replica-key", 2);
@@ -405,7 +389,7 @@ TEST_F(MetadataRouteResolverTest, GroupMigrateTargetsIgnoresOverrideForWaitDecis
                     .IsOk());
     algorithm_.SetOwnerAddress("127.0.0.1:18480");
     algorithm_.SetProspectiveAddress("127.0.0.1:18482");
-    worker::MetadataRouteResolver resolver(&placement_, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver resolver(&placement_);
 
     auto groups = resolver.GroupMigrateTargets({ "k0" });
 
@@ -419,7 +403,7 @@ TEST_F(MetadataRouteResolverTest, GroupMigrateTargetsSplitsOversizedKeysetsIntoC
     ASSERT_TRUE(PublishVersion(1).IsOk());
     algorithm_.RouteToken(1, "127.0.0.1:18482");
     algorithm_.RouteToken(2, "127.0.0.1:18483");
-    worker::MetadataRouteResolver resolver(&placement_, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver resolver(&placement_);
     constexpr size_t keyCount = cluster::PlacementFacade::kMaxBatchKeys + 1;
     std::vector<std::string> keys;
     std::unordered_map<std::string, HostPort> expectedOwners;
@@ -446,25 +430,11 @@ TEST_F(MetadataRouteResolverTest, GroupMigrateTargetsSplitsOversizedKeysetsIntoC
     EXPECT_EQ(routed.size(), keyCount);
 }
 
-TEST_F(MetadataRouteResolverTest, GroupMigrateTargetsCentralizedModeGroupsEverythingOnMaster)
-{
-    worker::MetadataRouteOptions options;
-    options.centralizedMode = true;
-    options.masterAddress = HostPort("127.0.0.1", 18481);
-    worker::MetadataRouteResolver resolver(nullptr, options);
-
-    auto groups = resolver.GroupMigrateTargets({ "a", "b" });
-
-    EXPECT_TRUE(groups.failures.empty());
-    EXPECT_EQ(groups.groups.at(options.masterAddress), (std::vector<std::string>{ "a", "b" }));
-}
-
 TEST_F(MetadataRouteResolverTest, ApiManagerUsesBoundResolverAndKeepsAddressOverload)
 {
-    worker::MetadataRouteOptions options;
-    options.centralizedMode = true;
-    options.masterAddress = HostPort("127.0.0.1", 18482);
-    worker::MetadataRouteResolver resolver(nullptr, options);
+    ASSERT_TRUE(PublishVersion(1).IsOk());
+    algorithm_.SetOwnerAddress("127.0.0.1:18482");
+    worker::MetadataRouteResolver resolver(&placement_);
     HostPort workerAddress("127.0.0.1", 18481);
     TestMasterApiManager manager(workerAddress, resolver);
     std::shared_ptr<TestMasterApi> api;
@@ -472,7 +442,7 @@ TEST_F(MetadataRouteResolverTest, ApiManagerUsesBoundResolverAndKeepsAddressOver
     ASSERT_TRUE(manager.GetWorkerMasterApi("key", api).IsOk());
     ASSERT_NE(api, nullptr);
     EXPECT_TRUE(api->Initialized());
-    EXPECT_EQ(manager.LastAddress(), options.masterAddress);
+    EXPECT_EQ(manager.LastAddress(), HostPort("127.0.0.1", 18482));
     ASSERT_TRUE(manager.GetWorkerMasterApi(HostPort("127.0.0.1", 18483), api).IsOk());
     EXPECT_EQ(manager.LastAddress(), HostPort("127.0.0.1", 18483));
 }
@@ -485,7 +455,7 @@ TEST_F(MetadataRouteResolverTest, NewMetaResolutionAndForCreateAvoidLeavingOwner
     algorithm_.SetProspectiveAddress("127.0.0.1:18483");
     algorithm_.RouteToken(2, "127.0.0.1:18484", cluster::MemberState::ACTIVE);
     algorithm_.SetKeyToken("active-key", 2);
-    worker::MetadataRouteResolver resolver(&placement_, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver resolver(&placement_);
     HostPort owner;
 
     ASSERT_TRUE(resolver.ResolveNewMetaOwner("leaving-key", owner).IsOk());
@@ -503,18 +473,6 @@ TEST_F(MetadataRouteResolverTest, NewMetaResolutionAndForCreateAvoidLeavingOwner
     EXPECT_EQ(manager.LastAddress(), HostPort("127.0.0.1", 18482));
 }
 
-TEST_F(MetadataRouteResolverTest, NewMetaResolutionStaysOnMasterInCentralizedMode)
-{
-    worker::MetadataRouteOptions options;
-    options.centralizedMode = true;
-    options.masterAddress = HostPort("127.0.0.1", 18481);
-    worker::MetadataRouteResolver resolver(nullptr, options);
-    HostPort owner("unchanged", 1);
-
-    ASSERT_TRUE(resolver.ResolveNewMetaOwner("object", owner).IsOk());
-    EXPECT_EQ(owner, options.masterAddress);
-}
-
 TEST_F(MetadataRouteResolverTest, GroupIndexedNewMetaOwnersMixedLeavingAndActivePreservesIndexes)
 {
     ASSERT_TRUE(PublishVersion(4).IsOk());
@@ -524,7 +482,7 @@ TEST_F(MetadataRouteResolverTest, GroupIndexedNewMetaOwnersMixedLeavingAndActive
     algorithm_.RouteToken(2, "127.0.0.1:18484", cluster::MemberState::ACTIVE);
     algorithm_.SetKeyToken("active-key", 2);
     algorithm_.SetKeyToken("leaving-key", 1);
-    worker::MetadataRouteResolver resolver(&placement_, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver resolver(&placement_);
 
     auto groups = resolver.GroupIndexedNewMetaOwners({ "active-key", "leaving-key" });
     EXPECT_TRUE(groups.failures.empty());

@@ -55,7 +55,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "false";
         opts.numWorkers = WORKER_COUNT;
         opts.vLogLevel = logLevel;
         opts.workerGflagParams += FormatString(
@@ -165,8 +164,12 @@ protected:
         return cluster_->WaitForExpectedResult(waitCount, timeoutSec, K_OK);
     }
 
-    Status WaitForFailureFinalized(uint32_t failedWorkerIndex, int timeoutSec)
+    Status WaitForFailureFinalized(uint32_t failedWorkerIndex)
     {
+        constexpr int failureBatchWindowSec = 30;
+        constexpr int failureProbeTimeoutSec = 2;
+        const int timeoutSec =
+            (2 * nodeTimeout) + failureProbeTimeoutSec + failureBatchWindowSec + waitNodeTimeout;
         std::pair<HostPort, HostPort> etcdAddrs;
         RETURN_IF_NOT_OK(cluster_->GetEtcdAddrs(0, etcdAddrs));
         EtcdStore topologyDb(etcdAddrs.first.ToString());
@@ -412,8 +415,6 @@ class StreamDfxMultiTest : public StreamDfxTest {
         StreamDfxTest::SetClusterSetupOptions(opts);
         const uint32_t workerCount = 4;
         opts.numWorkers = workerCount;
-        opts.masterIdx = 3;
-        opts.enableDistributedMaster = "true";
     }
 
 protected:
@@ -698,8 +699,6 @@ public:
         StreamDfxTest::SetClusterSetupOptions(opts);
         const uint32_t workerCount = 3;
         opts.numWorkers = workerCount;
-        opts.masterIdx = 2;
-        opts.enableDistributedMaster = "false";
     }
 
 protected:
@@ -757,22 +756,27 @@ TEST_F(StreamDfxWorkerCrashTest, TestOneWorkerCrashAutoDelete)
 {
     LOG(INFO) << "TestOneWorkerCrashAutoDelete start!";
     std::shared_ptr<StreamClient> client1;
+    std::shared_ptr<StreamClient> ownerClient;
 
     DS_ASSERT_OK(InitClient(0, client1));
+    DS_ASSERT_OK(InitClient(2, ownerClient));
 
     std::vector<std::shared_ptr<Producer>> producers;
     std::vector<std::shared_ptr<Consumer>> consumers;
-    std::string streamName = "testOneWkrCrashAutoDel";
+    std::string streamName;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(2, "testOneWkrCrashAutoDel_", streamName));
     DS_ASSERT_OK(
         CreateProducerAndConsumer(client1, { { streamName, 1 } }, producers, { { streamName, "sub1" } }, consumers));
 
-    CheckCount(client1, streamName, 1, 1);
-    cluster_->ShutdownNode(ClusterNodeType::WORKER, 0);
+    CheckCount(ownerClient, streamName, 1, 1);
+    DS_ASSERT_OK(cluster_->QuicklyShutdownWorker(0));
+
+    DS_ASSERT_OK(WaitForFailureFinalized(0));
+    DS_ASSERT_OK(WaitForCount(ownerClient, streamName, 0, 0, waitNodeTimeout));
 
     DS_ASSERT_OK(cluster_->StartNode(ClusterNodeType::WORKER, 0, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 0));
-    std::this_thread::sleep_for(std::chrono::seconds(waitNodeTimeout));
-    CheckCount(client1, streamName, 0, 0);
+    DS_ASSERT_OK(WaitForCount(ownerClient, streamName, 0, 0, waitNodeTimeout));
 
     LOG(INFO) << "TestOneWorkerCrashAutoDelete finish!";
 }
@@ -939,9 +943,7 @@ public:
     {
         StreamDfxTest::SetClusterSetupOptions(opts);
         const uint32_t workerCount = 3;
-        opts.masterIdx = 2;
         opts.numWorkers = workerCount;
-        opts.enableDistributedMaster = "false";
     }
 };
 
@@ -1023,7 +1025,8 @@ TEST_F(StreamDfxMasterCrashTest, RecoveryAutoDeletePubSub)
 
     std::vector<std::shared_ptr<Producer>> producers;
     std::vector<std::shared_ptr<Consumer>> consumers;
-    std::string streamName = "testRecoveryAutoDelPubSub";
+    std::string streamName;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(2, "testRecoveryAutoDelPubSub_", streamName));
 
     DS_ASSERT_OK(
         CreateProducerAndConsumer(client1, { { streamName, 1 } }, producers, { { streamName, "sub1" } }, consumers));
@@ -1038,7 +1041,7 @@ TEST_F(StreamDfxMasterCrashTest, RecoveryAutoDeletePubSub)
     // Delete the producers and consumers on worker 0
     producers[0] = nullptr;
     consumers[0] = nullptr;
-    // Master still thinks there are two producers and consumers because of the above injected actions
+    // The metadata owner still sees two producers and consumers because of the above injected actions.
     CheckCount(client1, streamName, 2, 2);
     CheckCount(client2, streamName, 2, 2);
 
@@ -1046,11 +1049,10 @@ TEST_F(StreamDfxMasterCrashTest, RecoveryAutoDeletePubSub)
     producers[1] = nullptr;
     consumers[1] = nullptr;
 
-    cluster_->QuicklyShutdownWorker(2);
+    DS_ASSERT_OK(cluster_->QuicklyShutdownWorker(2));
     DS_ASSERT_OK(cluster_->StartNode(ClusterNodeType::WORKER, 2, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 2));
-    std::this_thread::sleep_for(std::chrono::seconds(waitNodeTimeout));
-    CheckCount(client1, streamName, 0, 0);
+    DS_ASSERT_OK(WaitForCount(client1, streamName, 0, 0, waitNodeTimeout));
     CheckCount(client2, streamName, 0, 0);
 
     LOG(INFO) << "RecoveryAutoDeletePubSub finish!";
@@ -1250,7 +1252,7 @@ TEST_F(StreamDfxMasterCrashTest, DISABLED_LEVEL1_TestQueryMetaProducerNotFound)
     // This testcase aims to test a bug fix where producer pb can be empty
     // at QueryMeta request if the client id for the producer is not found
     LOG(INFO) << "LEVEL1_TestQueryMetaProducerNotFound start!";
-    const int masterIdx = 2;
+    const int ownerIdx = 2;
 
     std::shared_ptr<StreamClient> client1;
     std::shared_ptr<StreamClient> client2;
@@ -1267,7 +1269,7 @@ TEST_F(StreamDfxMasterCrashTest, DISABLED_LEVEL1_TestQueryMetaProducerNotFound)
     DS_ASSERT_OK(CreateProducerAndConsumer(client2, { { streamName, 1 } }, producers,
                                            { { streamName, "subscription2" } }, consumers));
     CheckCount(client1, streamName, K_TWO, K_TWO);
-    cluster_->ShutdownNode(ClusterNodeType::WORKER, masterIdx);
+    cluster_->ShutdownNode(ClusterNodeType::WORKER, ownerIdx);
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.CloseConsumer.beforeSendToMaster",
                                            "1*return(K_RPC_UNAVAILABLE)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.CloseProducer.beforeSendToMaster",
@@ -1277,16 +1279,16 @@ TEST_F(StreamDfxMasterCrashTest, DISABLED_LEVEL1_TestQueryMetaProducerNotFound)
         cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "GetProducerConsumerMetadata.NotFound", "1*call()"));
     // Cleanup rocksdb so stream fields can be updated at reconciliation
     std::string rocksPath =
-        cluster_->GetRootDir() + "/worker" + std::to_string(masterIdx) + "/rocksdb/stream_meta_data";
+        cluster_->GetRootDir() + "/worker" + std::to_string(ownerIdx) + "/rocksdb/stream_meta_data";
     LOG(INFO) << "Remove rocksdb at path " << rocksPath;
     DS_ASSERT_OK(RemoveAll(rocksPath));
 
-    DS_ASSERT_OK(cluster_->StartNode(ClusterNodeType::WORKER, masterIdx, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, masterIdx));
+    DS_ASSERT_OK(cluster_->StartNode(ClusterNodeType::WORKER, ownerIdx, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, ownerIdx));
     std::this_thread::sleep_for(std::chrono::seconds(waitNodeTimeout));
-    static_cast<ExternalCluster *>(cluster_.get())->KillWorker(masterIdx);
+    static_cast<ExternalCluster *>(cluster_.get())->KillWorker(ownerIdx);
     sleep(1);
-    static_cast<ExternalCluster *>(cluster_.get())->StartNode(ClusterNodeType::WORKER, masterIdx, "");
+    static_cast<ExternalCluster *>(cluster_.get())->StartNode(ClusterNodeType::WORKER, ownerIdx, "");
     std::this_thread::sleep_for(std::chrono::seconds(waitNodeTimeout));
 
     CheckCount(client1, streamName, K_TWO, K_TWO);
@@ -1369,9 +1371,7 @@ public:
     {
         StreamDfxTest::SetClusterSetupOptions(opts);
         const uint32_t workerCount = 3;
-        opts.masterIdx = 2;
         opts.numWorkers = workerCount;
-        opts.enableDistributedMaster = "false";
         opts.disableRocksDB = false;
     }
 };
@@ -1397,15 +1397,8 @@ TEST_F(StreamDfxHeartbeatTest, LEVEL1_TestWorkerCrashTimeout)
     CheckCount(client1, streamName, 2, 2);
     DS_ASSERT_OK(cluster_->QuicklyShutdownWorker(0));
 
-    // Allow one node timeout for lease expiry, one for missing-member confirmation, the direct probe and the bounded
-    // Failure batch window. waitNodeTimeout is scheduling/polling slack, not a fixed sleep.
-    // Keep these aligned with the TopologyControllerOptions defaults.
-    constexpr int failureBatchWindowSec = 30;
-    constexpr int failureProbeTimeoutSec = 2;
-    const int failureFinalizationWaitSec =
-        (2 * nodeTimeout) + failureProbeTimeoutSec + failureBatchWindowSec + waitNodeTimeout;
     // Stream cleanup runs inside the Failure batch; do not restart the removed worker before the batch is finalized.
-    DS_ASSERT_OK(WaitForFailureFinalized(0, failureFinalizationWaitSec));
+    DS_ASSERT_OK(WaitForFailureFinalized(0));
     DS_ASSERT_OK(WaitForCount(client2, streamName, -1, 1, waitNodeTimeout));
 
     const int K_TWO = 2;
@@ -1504,8 +1497,8 @@ public:
         StreamDfxTest::SetClusterSetupOptions(opts);
         const uint32_t workerCount = 4;
         opts.numWorkers = workerCount;
-        opts.masterIdx = 3;
-        opts.workerGflagParams = "-node_timeout_s=2 -node_dead_timeout_s=60";
+        // Topology confirms a crashed member after node_dead_timeout_s, so keep it bounded for crash tests.
+        opts.workerGflagParams = "-node_timeout_s=2 -node_dead_timeout_s=6";
         opts.disableRocksDB = false;
     }
 
@@ -1812,24 +1805,29 @@ TEST_F(StreamDfxTopoTest, DISABLED_TestMasterCrashWhenCloseConsumer)
 
 TEST_F(StreamDfxTopoTest, LEVEL1_TestWorkerRestartThenClosePubSub)
 {
+    std::string streamName;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(3, "WorkerRestartClosePubSub_", streamName));
     std::shared_ptr<Producer> p1w1;
-    DS_ASSERT_OK(CreateProducer(client1_, "WorkerRestartClosePubSub", p1w1));
+    DS_ASSERT_OK(CreateProducer(client1_, streamName, p1w1));
     std::shared_ptr<Consumer> c1w1;
-    DS_ASSERT_OK(CreateConsumer(client1_, "WorkerRestartClosePubSub", "sub-w1", c1w1));
+    DS_ASSERT_OK(CreateConsumer(client1_, streamName, "sub-w1", c1w1));
 
     std::shared_ptr<Producer> p2w2;
-    DS_ASSERT_OK(CreateProducer(client2_, "WorkerRestartClosePubSub", p2w2));
+    DS_ASSERT_OK(CreateProducer(client2_, streamName, p2w2));
     std::shared_ptr<Consumer> c2w2;
-    DS_ASSERT_OK(CreateConsumer(client2_, "WorkerRestartClosePubSub", "sub-w2", c2w2));
+    DS_ASSERT_OK(CreateConsumer(client2_, streamName, "sub-w2", c2w2));
+
+    DS_ASSERT_OK(cluster_->QuicklyShutdownWorker(1));
+    DS_ASSERT_OK(WaitForFailureFinalized(1));
+    DS_ASSERT_OK(WaitForCount(client1_, streamName, 1, 1, waitNodeTimeout));
 
     DS_ASSERT_OK(cluster_->StartNode(ClusterNodeType::WORKER, 1, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 1));
-
-    std::this_thread::sleep_for(std::chrono::seconds(waitNodeTimeout));
+    DS_ASSERT_OK(WaitForCount(client1_, streamName, 1, 1, waitNodeTimeout));
 
     DS_ASSERT_OK(p1w1->Close());
     DS_ASSERT_OK(c1w1->Close());
-    DS_ASSERT_OK(client1_->DeleteStream("WorkerRestartClosePubSub"));
+    DS_ASSERT_OK(client1_->DeleteStream(streamName));
 }
 
 class StreamDfxDistMasterCrashTest : public StreamDfxTest {
@@ -1837,9 +1835,7 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         StreamDfxTest::SetClusterSetupOptions(opts);
-        opts.masterIdx = 2;
         opts.numWorkers = workerCount_;
-        opts.enableDistributedMaster = "true";
     }
 
 protected:
@@ -1983,7 +1979,6 @@ public:
         StreamDfxTest::SetClusterSetupOptions(opts);
         const uint32_t workerCount = 2;
         opts.numWorkers = workerCount;
-        opts.enableDistributedMaster = "true";
         opts.workerGflagParams = "-node_timeout_s=2 -node_dead_timeout_s=60 -v=2";
     }
 
@@ -2090,9 +2085,7 @@ public:
     {
         StreamDfxTest::SetClusterSetupOptions(opts);
         const uint32_t workerCount = 3;
-        opts.masterIdx = 2;
         opts.numWorkers = workerCount;
-        opts.enableDistributedMaster = "true";
     }
 
 protected:

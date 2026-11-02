@@ -25,14 +25,6 @@
 
 namespace datasystem::worker {
 namespace {
-Status ValidateCentralizedOwner(const MetadataRouteOptions &options)
-{
-    if (options.masterAddress.Empty()) {
-        return Status(K_INVALID, "Centralized metadata owner address is empty.");
-    }
-    return Status::OK();
-}
-
 template <typename RouteGroups>
 void RecordFailures(const std::vector<std::string> &keys, const Status &status, RouteGroups &result)
 {
@@ -77,34 +69,19 @@ void AddResolvedOwner(const std::string &key, const std::string &ownerAddress,
 }
 }  // namespace
 
-MetadataRouteResolver::MetadataRouteResolver(const cluster::PlacementFacade *placement, MetadataRouteOptions options)
-    : placement_(placement), options_(std::move(options))
+MetadataRouteResolver::MetadataRouteResolver(const cluster::PlacementFacade *placement) : placement_(placement)
 {
 }
 
 Status MetadataRouteResolver::ResolveOwner(std::string_view key, HostPort &owner) const
 {
-    HostPort resolved;
-    if (options_.centralizedMode) {
-        Status rc = ValidateCentralizedOwner(options_);
-        if (rc.IsError()) {
-            return rc;
-        }
-        resolved = options_.masterAddress;
-    } else {
-        if (placement_ == nullptr) {
-            return Status(K_NOT_READY, "Topology placement facade is not provided.");
-        }
-        cluster::PlacementDecision decision;
-        Status rc = placement_->Locate(key, decision);
-        if (rc.IsError()) {
-            return rc;
-        }
-        rc = resolved.ParseString(decision.committedOwnerAddress);
-        if (rc.IsError()) {
-            return rc;
-        }
+    if (placement_ == nullptr) {
+        return Status(K_NOT_READY, "Topology placement facade is not provided.");
     }
+    cluster::PlacementDecision decision;
+    RETURN_IF_NOT_OK(placement_->Locate(key, decision));
+    HostPort resolved;
+    RETURN_IF_NOT_OK(resolved.ParseString(decision.committedOwnerAddress));
     owner = std::move(resolved);
     return Status::OK();
 }
@@ -113,15 +90,6 @@ MetaOwnerRouteGroups MetadataRouteResolver::GroupOwners(const std::vector<std::s
 {
     MetaOwnerRouteGroups result;
     if (keys.empty()) {
-        return result;
-    }
-    if (options_.centralizedMode) {
-        Status rc = ValidateCentralizedOwner(options_);
-        if (rc.IsError()) {
-            RecordFailures(keys, rc, result);
-            return result;
-        }
-        result.groups[options_.masterAddress] = keys;
         return result;
     }
     if (placement_ == nullptr) {
@@ -159,19 +127,6 @@ IndexedMetaOwnerRouteGroups MetadataRouteResolver::GroupIndexedOwners(const std:
     if (keys.empty()) {
         return result;
     }
-    if (options_.centralizedMode) {
-        Status rc = ValidateCentralizedOwner(options_);
-        if (rc.IsError()) {
-            RecordFailures(keys, rc, result);
-            return result;
-        }
-        auto &group = result.groups[options_.masterAddress];
-        group.reserve(keys.size());
-        for (size_t index = 0; index < keys.size(); ++index) {
-            group.emplace_back(keys[index], index);
-        }
-        return result;
-    }
     if (placement_ == nullptr) {
         RecordFailures(keys, Status(K_NOT_READY, "Topology placement facade is not provided."), result);
         return result;
@@ -203,8 +158,8 @@ IndexedMetaOwnerRouteGroups MetadataRouteResolver::GroupIndexedOwners(const std:
 
 Status MetadataRouteResolver::ResolveNewMetaOwner(std::string_view key, HostPort &owner) const
 {
-    if (options_.centralizedMode || placement_ == nullptr) {
-        return ResolveOwner(key, owner);
+    if (placement_ == nullptr) {
+        return Status(K_NOT_READY, "Topology placement facade is not provided.");
     }
     cluster::PlacementDecision decision;
     RETURN_IF_NOT_OK(placement_->LocateSurvivingOwner(key, decision));
@@ -217,12 +172,16 @@ Status MetadataRouteResolver::ResolveNewMetaOwner(std::string_view key, HostPort
 IndexedMetaOwnerRouteGroups MetadataRouteResolver::GroupIndexedNewMetaOwners(
     const std::vector<std::string> &keys) const
 {
-    if (options_.centralizedMode || keys.empty() || placement_ == nullptr) {
+    if (keys.empty()) {
         return GroupIndexedOwners(keys);
+    }
+    IndexedMetaOwnerRouteGroups result;
+    if (placement_ == nullptr) {
+        RecordFailures(keys, Status(K_NOT_READY, "Topology placement facade is not provided."), result);
+        return result;
     }
     std::vector<std::string_view> keyViews(keys.begin(), keys.end());
     cluster::BatchPlacementDecision decision;
-    IndexedMetaOwnerRouteGroups result;
     Status rc = placement_->LocateSurvivingOwnerBatch(keyViews, decision);
     if (rc.IsError()) {
         RecordFailures(keys, rc, result);
@@ -250,15 +209,6 @@ MetaOwnerRouteGroups MetadataRouteResolver::GroupMigrateTargets(const std::vecto
 {
     MetaOwnerRouteGroups result;
     if (keys.empty()) {
-        return result;
-    }
-    if (options_.centralizedMode) {
-        Status rc = ValidateCentralizedOwner(options_);
-        if (rc.IsError()) {
-            RecordFailures(keys, rc, result);
-            return result;
-        }
-        result.groups[options_.masterAddress] = keys;
         return result;
     }
     if (placement_ == nullptr) {

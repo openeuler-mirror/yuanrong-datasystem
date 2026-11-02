@@ -50,16 +50,14 @@ public:
      * @param[in] rpcSessionManager Master to Worker session manager.
      * @param[in] placement Borrowed metadata placement capability.
      * @param[in] membership Borrowed read-only membership capability.
-     * @param[in] centralizedMetadata Whether metadata uses one configured Master.
-     * @param[in] metadataAddress Configured centralized metadata Master address.
      * @param[in] rocksStore The rocks store instance.
      * @param[in] workerId The worker id.
      */
     SCMetadataManager(const HostPort &masterHostPort, std::shared_ptr<AkSkManager> akSkManager,
                       std::shared_ptr<RpcSessionManager> rpcSessionManager,
                       const cluster::PlacementFacade *placement,
-                      const cluster::MembershipEndpointView *membership, bool centralizedMetadata,
-                      HostPort metadataAddress, RocksStore *rocksStore, const std::string &workerId);
+                      const cluster::MembershipEndpointView *membership, RocksStore *rocksStore,
+                      const std::string &workerId);
 
     /**
      * @brief Shutdown the sc metadata manager module.

@@ -28,7 +28,6 @@ class HeteroClientPubSubBenchTest : public DevTestHelper {
         opts.numWorkers = 1;
         opts.workerGflagParams =
             " -v=0 -authorization_enable=true -shared_memory_size_mb=4096 -enable_fallocate=false -arena_per_tenant=2 ";
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         FLAGS_v = 0;
     }

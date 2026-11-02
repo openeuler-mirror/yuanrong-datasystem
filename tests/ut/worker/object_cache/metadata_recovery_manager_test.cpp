@@ -298,7 +298,7 @@ TEST_F(MetaDataRecoveryManagerTest, BuildGroupedByMasterUsesTopologyPlacement)
     masterAddr.ParseString("127.0.0.1:18501");
     placement.SetOwner("key-ok", masterAddr);
 
-    worker::MetadataRouteResolver metadataRoute(&placement, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver metadataRoute(&placement);
     MetaDataRecoveryManager manager(localAddress_, objectTable_, clusterAccess_, workerMasterApiManager_,
                                     metadataRoute, 128, nullptr, memCpyThreadPool_, recoveredContentSaver_);
     auto grouped = manager.BuildGroupedByMaster({ "key-ok", "key-missing" }, "");
@@ -376,7 +376,7 @@ void RecoveryTraceTest::CheckRecoveryTraceId()
     auto parentGuard = Trace::Instance().SetTraceNewID(parentMode == 0 ? "" : "recovery-parent");
     const auto callerThread = std::this_thread::get_id();
     MetadataTestPlacementFacade placement;
-    worker::MetadataRouteResolver route(&placement, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver route(&placement);
     MetaDataRecoveryManager manager(localAddress_, objectTable_, clusterAccess_, workerMasterApiManager_,
                                     route, 128, nullptr, memCpyThreadPool_, recoveredContentSaver_);
     struct Observations {

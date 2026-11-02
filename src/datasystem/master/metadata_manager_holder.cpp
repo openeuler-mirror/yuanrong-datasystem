@@ -52,8 +52,6 @@ Status MetadataManagerHolder::Init(MetadataManagerHolderParam param)
     masterAddress_ = param.masterAddress;
     placement_ = param.placement;
     membership_ = param.membership;
-    centralizedMetadata_ = param.centralizedMetadata;
-    metadataAddress_ = std::move(param.metadataAddress);
     localAddress_ = std::move(param.localAddress);
     isRestart_ = param.isRestart;
     controlBackendAvailableAtStartup_ = param.controlBackendAvailableAtStartup;
@@ -64,13 +62,13 @@ Status MetadataManagerHolder::Init(MetadataManagerHolderParam param)
     isOcEnabled_ = param.isOcEnabled;
     isScEnabled_ = param.isScEnabled;
 
-    if (!isRestart_ && !centralizedMetadata_) {
+    if (!isRestart_) {
         isNewNode_ = true;
         LOG(INFO) << "Newly-added node, remove local metadata store if it exists.";
         RETURN_IF_NOT_OK(Replica::RemoveRocksFromFileSystem(dbRootPath_));
     } else {
         isNewNode_ = false;
-        LOG(INFO) << "Restart or centralized node, try recovery from local metadata store.";
+        LOG(INFO) << "Restarted node, try recovery from local metadata store.";
     }
     return Status::OK();
 }
@@ -88,7 +86,7 @@ Status MetadataManagerHolder::CreateMetaManager(const std::string &workerId, Roc
     if (isOcEnabled_) {
         auto oc = std::make_shared<master::OCMetadataManager>(
             akSkManager_, objectRocksStore, etcdStore_, persistenceApi_, masterAddress_.ToString(), placement_,
-            membership_, centralizedMetadata_, metadataAddress_, localAddress_, exitRequested_, workerId, isNewNode_);
+            membership_, localAddress_, exitRequested_, workerId, isNewNode_);
         LOG(INFO) << "Start init OCMetadataManager for " << workerId;
         RETURN_IF_NOT_OK(oc->Init());
         ocElapsed = timer.ElapsedMilliSecond();
@@ -98,8 +96,7 @@ Status MetadataManagerHolder::CreateMetaManager(const std::string &workerId, Roc
 
     if (isScEnabled_) {
         auto sc = std::make_shared<master::SCMetadataManager>(
-            masterAddress_, akSkManager_, rpcSessionManager_, placement_, membership_, centralizedMetadata_,
-            metadataAddress_, streamRocksStore, workerId);
+            masterAddress_, akSkManager_, rpcSessionManager_, placement_, membership_, streamRocksStore, workerId);
         LOG(INFO) << "Start init SCMetadataManager for " << workerId;
         timer.Reset();
         RETURN_IF_NOT_OK(sc->Init());

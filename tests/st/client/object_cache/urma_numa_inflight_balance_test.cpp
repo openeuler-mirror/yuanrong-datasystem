@@ -76,7 +76,6 @@ public:
     {
         opts.numWorkers = WORKER_COUNT;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "false";
         for (size_t i = 0; i < WORKER_COUNT; ++i) {
             opts.workerConfigs.emplace_back(HOST_IP, GetFreePort());
         }

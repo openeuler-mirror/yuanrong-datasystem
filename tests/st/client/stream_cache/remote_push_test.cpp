@@ -236,7 +236,6 @@ public:
         opts.numWorkers = workerNumber;
         opts.numEtcd = 1;
         opts.workerGflagParams = "-shared_memory_size_mb=10000";
-        opts.enableDistributedMaster = "true";
         opts.vLogLevel = 0;
         SCClientCommon::SetClusterSetupOptions(opts);
     }

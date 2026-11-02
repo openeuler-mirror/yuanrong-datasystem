@@ -972,7 +972,7 @@ protected:
 
     cluster::TopologySnapshotState snapshots_;
     cluster::MembershipEndpointView membership_{ snapshots_ };
-    worker::MetadataRouteResolver metadataRoute_{ nullptr, worker::MetadataRouteOptions{} };
+    worker::MetadataRouteResolver metadataRoute_{ nullptr };
     ObjectEndpointPolicy endpointPolicy_{ metadataRoute_, membership_ };
     std::atomic<bool> exitRequested_{ false };
     std::shared_ptr<ObjectTable> objectTable_;

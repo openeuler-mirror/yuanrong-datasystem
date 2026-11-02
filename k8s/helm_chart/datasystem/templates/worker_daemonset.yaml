@@ -80,7 +80,6 @@ spec:
       - name: ds-worker
         args:
         - -worker_address=$(WORKER_IP):$(WORKER_PORT)
-        - -master_address=
         - -bind_address=$(BIND_IP):$(WORKER_PORT)
         - -log_dir=$(WORKER_LOG_DIR)
         - -v={{ $.Values.global.log.logLevel }}
@@ -243,7 +242,6 @@ spec:
         - -enable_transport_fallback={{ $.Values.global.performance.enableTransportFallback }}
         - -urma_failover_success_rate_ratio={{ $.Values.global.performance.urmaFailoverSuccessRateRatio }}
         - -urma_failover_min_sample_count={{ $.Values.global.performance.urmaFailoverMinSampleCount }}
-        - -enable_distributed_master={{ $.Values.global.reliability.enableDistributedMaster }}
         - -enable_p2p_transfer={{ $.Values.global.performance.enableP2pTransfer }}
         - -enable_rdma={{ $.Values.global.performance.enableRdma }}
         - -rdma_register_whole_arena={{ $.Values.global.performance.rdmaRegisterWholeArena }}

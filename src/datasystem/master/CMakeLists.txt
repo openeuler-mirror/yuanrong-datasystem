@@ -50,8 +50,3 @@ set(MASTER_DEPEND_LIBS
 add_library(ds_master STATIC ${MASTER_SRCS})
 target_link_libraries(ds_master PRIVATE ${MASTER_DEPEND_LIBS})
 add_dependencies(ds_master master_heartbeat_protos)
-
-# for ut test
-if (WITH_TESTS)
-    set(_MASTER_BIN_DIR ${CMAKE_CURRENT_BINARY_DIR} CACHE STRING "path of master binary file")
-endif ()

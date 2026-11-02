@@ -48,10 +48,10 @@ public:
         rocksStore_ = RocksStore::GetInstance(ut::GetTestCaseDataDir() + "/rocksdb");
         akSkManager_ = std::make_shared<AkSkManager>(0);
         manager_ = std::make_unique<OCMetadataManager>(akSkManager_, rocksStore_.get(), nullptr, nullptr,
-                                                       LOCAL_ADDRESS, nullptr, nullptr, true, HostPort(),
+                                                       LOCAL_ADDRESS, nullptr, nullptr,
                                                        LOCAL_ADDRESS, &localExiting_, "workerId");
         DS_ASSERT_OK(manager_->objectStore_->Init());
-        manager_->nestedRefManager_ = std::make_unique<OCNestedManager>(manager_->objectStore_, true);
+        manager_->nestedRefManager_ = std::make_unique<OCNestedManager>(manager_->objectStore_);
         manager_->notifyWorkerManager_ =
             std::make_unique<OCNotifyWorkerManager>(manager_->objectStore_, true, akSkManager_, manager_.get());
         manager_->expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(LOCAL_ADDRESS, manager_.get());

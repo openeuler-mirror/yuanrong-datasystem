@@ -35,7 +35,6 @@ public:
         const int workerCount = 5;
         opts.numEtcd = 1;
         opts.numWorkers = workerCount;
-        opts.enableDistributedMaster = "true";
         opts.livenessProbeTimeoutS = livenessProbeTimeoutS_;
         opts.workerGflagParams =
             FormatString(" -authorization_enable=true -liveness_probe_timeout_s=%d", livenessProbeTimeoutS_);
@@ -52,7 +51,7 @@ public:
     void StartWorkerAndWaitReady(std::initializer_list<uint32_t> indexes, int maxWaitTimeSec = 20)
     {
         for (auto i : indexes) {
-            ASSERT_TRUE(externalCluster_->StartWorker(i, HostPort()).IsOk()) << i;
+            ASSERT_TRUE(externalCluster_->StartWorker(i).IsOk()) << i;
         }
         for (auto i : indexes) {
             ASSERT_TRUE(cluster_->WaitNodeReady(WORKER, i, maxWaitTimeSec).IsOk()) << i;
@@ -144,7 +143,6 @@ public:
         const int workerCount = 2;
         opts.numEtcd = 1;
         opts.numWorkers = workerCount;
-        opts.enableDistributedMaster = "true";
         opts.livenessProbeTimeoutS = livenessProbeTimeoutS_;
         opts.workerGflagParams = FormatString(
             " -authorization_enable=true -liveness_probe_timeout_s=%d -log_monitor=true", livenessProbeTimeoutS_);

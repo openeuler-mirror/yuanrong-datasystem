@@ -39,7 +39,7 @@ struct ExternalClusterOptions : public BaseClusterOptions {
 public:
     ExternalClusterOptions();
 
-    // Root directory of log files, which is used to store subdirectories of DsMaster and DsGCS files.
+    // Root directory for component log subdirectories.
     // Default: ./
     std::string rootDir;
 
@@ -76,9 +76,6 @@ public:
     // For example, "{1, "-v=3"}" means only worker 1 set speific param -v=3, other workers don't set the flags.
     std::map<uint32_t, std::string> workerSpecifyGflagParams;
 
-    // Parameters for starting the master
-    std::string masterGflagParams;
-
     // Parameters for starting the gcs
     std::string gcsGflagParams;
 
@@ -94,15 +91,9 @@ public:
 
     std::string etcdPrefix;
 
-    std::string enableDistributedMaster = "true";  // enable distributed master or not.
-
     std::string yuanrong_iam_url = "https://testyuanrongiam.com";
 
     bool enableSpill = false;
-
-    // Used in object cache, where master is part of worker process. We use this index to tell which worker will work
-    // as the master. workerConfigs[masterIdx] is the address of the master. masterIdx is 0 by default.
-    int32_t masterIdx;
 
     bool waitWorkerReady;
 
@@ -129,15 +120,6 @@ private:
     static const uint32_t DEFAULT_maxLogSizeMb = 100;
     static const uint32_t DEFAULT_totalLogSizeMb = 1000;
     static const uint32_t DEFAULT_logRollingSecs = 5;
-};
-
-class MasterProcess : public ServerProcess {
-public:
-    MasterProcess(const std::string &cmd, const HostPort &addr) : ServerProcess(cmd, addr)
-    {
-    }
-
-    ~MasterProcess() override = default;
 };
 
 class GCSProcess : public ServerProcess {
@@ -243,8 +225,6 @@ public:
 
     Status KillWorker(uint32_t idx);
 
-    Status ShutdownMasters();
-
     Status ShutdownEtcds();
 
     Status ShutdownCoordinators();
@@ -269,8 +249,6 @@ public:
 
     size_t GetEtcdNum() const override;
 
-    size_t GetMasterNum() const override;
-
     size_t GetGCSNum() const override;
 
     size_t GetWorkerNum() const override;
@@ -283,8 +261,6 @@ public:
 
     Status GetCoordinatorAddr(uint32_t idx, HostPort &addr) const;
 
-    Status GetMasterAddr(uint32_t idx, HostPort &addr) const override;
-
     Status GetGCSAddr(uint32_t idx, HostPort &addr) const override;
 
     Status GetWorkerAddr(uint32_t idx, HostPort &addr) const override;
@@ -295,8 +271,6 @@ public:
 
     pid_t GetEtcdPid(uint32_t idx) const override;
 
-    pid_t GetMasterPid(uint32_t idx) const override;
-
     pid_t GetGCSPid(uint32_t idx) const override;
 
     pid_t GetWorkerPid(uint32_t idx) const override;
@@ -304,8 +278,6 @@ public:
     Status StartEtcdCluster() override;
 
     Status StartCoordinatorCluster() override;
-
-    Status StartMasters() override;
 
     Status StartWorkers() override;
 
@@ -329,7 +301,7 @@ public:
 
     bool IsWorkerLiveness(uint32_t index) override;
 
-    Status AddNode(const HostPort &masterAddress, const std::string workerAddress) override;
+    Status AddNode(const std::string &workerAddress) override;
 
     Status WaitForExpectedResult(std::function<Status()> function, int timeoutSecs,
                                  StatusCode expectedStatusCode) override;
@@ -339,8 +311,7 @@ public:
         return opts_.rootDir;
     }
 
-    // address is master address for file cache, and meta server address for centralized master in object cache
-    Status StartWorker(int index, const HostPort &address, std::string gFlag = "");
+    Status StartWorker(int index, std::string gFlag = "");
 
     ExternalClusterOptions GetExternalOptions() const
     {
@@ -389,20 +360,17 @@ private:
     void AppendWorkerRuntimeFlags(int index, const std::string &rootDir, const std::string &gFlag, std::string &cmd);
 
     /**
-     * @brief Append coordinator, ETCD, master and OBS flags to a Worker launch command.
+     * @brief Append coordinator, ETCD and OBS flags to a Worker launch command.
      * @param[in] index Worker index.
-     * @param[in] address Default master address.
      * @param[in,out] cmd Worker launch command.
      * @return Status of the call.
      */
-    Status AppendWorkerBackendFlags(int index, const HostPort &address, std::string &cmd);
+    Status AppendWorkerBackendFlags(std::string &cmd);
 
 protected:
     Status StartEtcdNode(int index);
 
     Status StartCoordinatorNode(int index);
-
-    Status StartMaster(int index);
 
     Status StartOBS(int index);
 
@@ -419,17 +387,11 @@ protected:
         return opts_.waitAfterStart;
     }
 
-    // get proper master address param.
-    std::string GetProperMasterAddrParam(int index, const HostPort &defaultMasterAddr);
-
     ExternalClusterOptions opts_;
 
     std::vector<std::unique_ptr<EtcdProcess>> etcdProcesses_;
 
     std::vector<std::unique_ptr<CoordinatorProcess>> coordinatorProcesses_;
-
-    std::mutex mutex_master_;
-    std::vector<std::unique_ptr<MasterProcess>> masterProcesses_;
 
     std::vector<std::pair<std::unique_ptr<GCSProcess>, bool>> gcsProcesses_;
 

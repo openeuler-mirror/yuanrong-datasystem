@@ -571,7 +571,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestDeadWorkerClearsConcurrentAsyncWorkerOp)
 TEST_F(OCNotifyWorkerManagerTest, TestChangePrimaryCopy)
 {
     auto ocMetaManager = std::make_shared<OCMetadataManager>(
-        akSkManager_, nullptr, nullptr, nullptr, "127.0.0.1:900", nullptr, nullptr, false, HostPort(), "", nullptr,
+        akSkManager_, nullptr, nullptr, nullptr, "127.0.0.1:900", nullptr, nullptr, "", nullptr,
         "workerId");
     auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, ocMetaManager.get());
 

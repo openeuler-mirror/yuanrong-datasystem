@@ -46,7 +46,6 @@ public:
         opts.numEtcd = 1;
         opts.numOBS = 1;
         opts.numWorkers = workerNum_;
-        opts.enableDistributedMaster = enableDistributedMaster_;
         opts.workerGflagParams =
             FormatString(" -v=1 -node_timeout_s=%d -node_dead_timeout_s=%d", timeoutS_, deadTimeoutS_);
         opts.injectActions = "worker.PreShutDown.skip:return(K_OK)";
@@ -90,7 +89,6 @@ protected:
     ExternalCluster *externalCluster_ = nullptr;
     const int maxWaitTimeSec_ = 20;
     const size_t workerNum_ = 5;
-    std::string enableDistributedMaster_ = "true";
 };
 
 TEST_F(KVClientEtcdDfxTest, LEVEL1_TestEtcdRestart)
@@ -232,7 +230,7 @@ TEST_F(KVClientEtcdDfxTestAdjustNodeTimeout, TestSetHealthProbe)
     DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady({ 0, 1, 2 }));
     DS_ASSERT_OK(externalCluster_->ShutdownNode(WORKER, 1));
     DS_ASSERT_OK(externalCluster_->StartWorker(
-        1, HostPort(), " -inject_actions=worker.RunKeepAliveTask:3*return(K_RPC_UNAVAILABLE)"));
+        1, " -inject_actions=worker.RunKeepAliveTask:3*return(K_RPC_UNAVAILABLE)"));
     constexpr int recoveryWindowSec = 15;
     DS_ASSERT_OK(externalCluster_->WaitNodeReady(WORKER, 1, recoveryWindowSec));
 }
@@ -285,24 +283,6 @@ TEST_F(KVClientEtcdDfxTestAdjustNodeTimeout, TestRestartDuringEtcdCrash)
         DS_ASSERT_OK(client0->Get(key, valToGet));
         EXPECT_EQ(valToGet, val);
     }
-}
-
-class KVClientEtcdDfxCentralizedMasterTest : public KVClientEtcdDfxTest {
-public:
-    void SetUp() override
-    {
-        KVClientEtcdDfxTest::enableDistributedMaster_ = "false";
-        KVClientEtcdDfxTest::SetUp();
-    }
-};
-
-TEST_F(KVClientEtcdDfxCentralizedMasterTest, DISABLED_LEVEL1_TestRestartWorkerDuringEtcdCrash)
-{
-    DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady({ 0, 1, 2 }));
-    DS_ASSERT_OK(externalCluster_->ShutdownEtcds());
-    int maxWaitTimeSec = 10;
-    DS_ASSERT_NOT_OK(externalCluster_->RestartWorkerAndWaitReadyOneByOne({ 0 }, maxWaitTimeSec));
-    DS_ASSERT_OK(externalCluster_->StartEtcdCluster());
 }
 
 }  // namespace st

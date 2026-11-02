@@ -86,11 +86,9 @@ public:
     {
         opts.numWorkers = WORKER_NUM;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "true";
         opts.systemAccessKey = DUMMY_ACCESS_KEY;
         opts.systemSecretKey = DUMMY_SECRET_KEY;
         // Keep the initial master away from worker0 because several cases kill worker0 to force remote discovery.
-        opts.masterIdx = 1;
         // Keep local IPC enabled so same-host service discovery exercises the UDS/shared-memory path.
         opts.workerGflagParams = FormatString(
             " -shared_memory_size_mb=5120"

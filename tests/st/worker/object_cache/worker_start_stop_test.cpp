@@ -30,7 +30,6 @@ public:
         opts.numEtcd = 1;
         opts.numWorkers = 1;
         opts.waitWorkerReady = false;
-        opts.enableDistributedMaster = "true";
     }
 
     void SetUp() override

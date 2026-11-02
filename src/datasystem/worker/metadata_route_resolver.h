@@ -27,7 +27,6 @@
 #include "datasystem/cluster/routing/placement_facade.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/metadata_route_options.h"
 
 namespace datasystem::worker {
 
@@ -55,11 +54,10 @@ struct IndexedMetaOwnerRouteGroups {
 class MetadataRouteResolver final {
 public:
     /**
-     * @brief Bind immutable metadata route options and a non-owned placement capability.
-     * @param[in] placement Required only for distributed metadata mode; outlives this resolver.
-     * @param[in] options Worker-owned metadata deployment facts to consume.
+     * @brief Bind a non-owned placement capability.
+     * @param[in] placement Non-owned placement capability that outlives this resolver.
      */
-    MetadataRouteResolver(const cluster::PlacementFacade *placement, MetadataRouteOptions options);
+    explicit MetadataRouteResolver(const cluster::PlacementFacade *placement);
 
     /**
      * @brief Release non-owned route dependencies.
@@ -77,7 +75,7 @@ public:
     MetadataRouteResolver &operator=(const MetadataRouteResolver &) = delete;
 
     /**
-     * @brief Resolve one metadata owner from a key using the prebound mode.
+     * @brief Resolve one metadata owner from a key.
      * @param[in] key Binary-safe object or stream placement key.
      * @param[out] owner Resolved owner; unchanged on failure.
      * @return K_OK or topology/address status.
@@ -101,7 +99,7 @@ public:
 
     /**
      * @brief Resolve the owner for a NEW metadata key (CreateMeta): a LEAVING committed owner is skipped in
-     *        favor of the batch-final-ring owner; centralized mode equals ResolveOwner.
+     *        favor of the batch-final-ring owner.
      *        Existing keys keep ResolveOwner/GroupIndexedOwners.
      */
     Status ResolveNewMetaOwner(std::string_view key, HostPort &owner) const;
@@ -133,7 +131,6 @@ private:
     void AppendRedirectChunk(MetaOwnerRouteGroups &result, const std::vector<std::string> &chunkKeys) const;
 
     const cluster::PlacementFacade *placement_;
-    const MetadataRouteOptions options_;
 };
 
 }  // namespace datasystem::worker

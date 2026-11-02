@@ -80,7 +80,6 @@ using namespace ::testing;
 using namespace datasystem::object_cache;
 
 DS_DECLARE_string(health_check_path);
-DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_bool(enable_reconciliation);
 DS_DECLARE_bool(enable_transport_fallback);
 DS_DECLARE_uint32(arena_per_tenant);
@@ -570,7 +569,7 @@ private:
 class TestDistributedTopology final {
 public:
     TestDistributedTopology(const HostPort &localAddress, const HostPort &peerAddress)
-        : metadataRoute_(&placement_, worker::MetadataRouteOptions{}),
+        : metadataRoute_(&placement_),
           membership_(snapshots_),
           endpointPolicy_(metadataRoute_, membership_)
     {
@@ -1044,7 +1043,7 @@ protected:
     static constexpr const char *kRecoverMasterAppRefSubscriber = "WorkerOcServiceImplTest.RecoverMasterAppRef";
 
     WorkerTestPlacementFacade placement_;
-    worker::MetadataRouteResolver metadataRoute_{ &placement_, worker::MetadataRouteOptions{} };
+    worker::MetadataRouteResolver metadataRoute_{ &placement_ };
     ObjectTopologyTestRuntime topologyRuntime_;
     std::unique_ptr<ObjectEndpointPolicy> endpointPolicy_;
     std::atomic<bool> exitRequested_{ false };
@@ -2593,7 +2592,7 @@ TEST_F(WorkerOcServiceImplTest, TopologyWatchIsolationLeavesWorkerProbeUnchanged
         watchedImpl->NotifyTopologyAvailability(allowBusiness);
     }));
     WorkerTestPlacementFacade watchedPlacement;
-    worker::MetadataRouteResolver watchedRoute(&watchedPlacement, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver watchedRoute(&watchedPlacement);
     auto watchedObjectTable = std::make_shared<object_cache::ObjectTable>();
     auto watchedEvictionManager = std::make_shared<WorkerOcEvictionManager>(
         watchedObjectTable, localAddress_, localAddress_, watchedRoute, nullptr);
@@ -2701,14 +2700,11 @@ TEST_F(WorkerOcServiceImplTest, ServingNotificationDoesNotClosePublishedHealth)
 TEST_F(WorkerOcServiceImplTest, GiveUpReconciliationDoesNotBypassTopologyHealthGate)
 {
     SetUnhealthy();
-    const bool savedDistributedMaster = FLAGS_enable_distributed_master;
     const bool savedReconciliation = FLAGS_enable_reconciliation;
-    Raii restore([savedDistributedMaster, savedReconciliation] {
-        FLAGS_enable_distributed_master = savedDistributedMaster;
+    Raii restore([savedReconciliation] {
         FLAGS_enable_reconciliation = savedReconciliation;
         SetUnhealthy();
     });
-    FLAGS_enable_distributed_master = true;
     FLAGS_enable_reconciliation = true;
     placement_.SetOwner("topology-readiness-probe", localAddress_);
     DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));

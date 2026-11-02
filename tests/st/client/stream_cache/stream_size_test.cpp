@@ -36,7 +36,6 @@ public:
     {
         const int vLogLevel = 3;
         const int numWorkers = 3;
-        opts.masterIdx = 2;
         opts.numEtcd = 1;
         opts.numWorkers = numWorkers;
         opts.vLogLevel = vLogLevel;
@@ -217,26 +216,5 @@ TEST_F(StreamSizeTest, TestCreateProducerWorkerFailed)
     DS_ASSERT_OK(CreateProducer(client1_, streamName, 12 * MB, producer2));
 }
 
-class StreamSizeCentralizedTest : public StreamSizeTest {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        opts.enableDistributedMaster = "false";
-        StreamSizeTest::SetClusterSetupOptions(opts);
-    }
-};
-
-TEST_F(StreamSizeCentralizedTest, TestCreateProducerMasterFailed)
-{
-    // Master has to be centralized for this testcase to work.
-    DS_ASSERT_OK(cluster_->SetInjectAction(
-        ClusterNodeType::WORKER, 2, "master.PubIncreaseNodeImpl.beforeSendNotification", "1*return(K_RUNTIME_ERROR)"));
-
-    std::shared_ptr<Producer> producer1;
-    DS_ASSERT_NOT_OK(CreateProducer(client1_, "stream1", 10 * MB, producer1));
-
-    std::shared_ptr<Producer> producer2;
-    DS_ASSERT_OK(CreateProducer(client1_, "stream1", 12 * MB, producer2));
-}
 }  // namespace st
 }  // namespace datasystem

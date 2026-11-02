@@ -49,7 +49,6 @@ public:
     {
         opts.numWorkers = 2;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "true";
         // client_dead_timeout_s=3 shrinks the URMA success-rate window from ~60s to 3s.
         opts.workerGflagParams = " -enable_urma=true -shared_memory_size_mb=1024 -arena_per_tenant=1"
                                  " -ipc_through_shared_memory=false -client_dead_timeout_s=3";

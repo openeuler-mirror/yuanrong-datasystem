@@ -40,7 +40,6 @@ public:
         opts.numEtcd = 1;
         opts.numOBS = 1;
         opts.numWorkers = DEFAULT_WORKER_NUM;
-        opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
             "-shared_memory_size_mb=5120 -v=2 -log_async_queue_size=4096 -logbufsecs=15";
     }

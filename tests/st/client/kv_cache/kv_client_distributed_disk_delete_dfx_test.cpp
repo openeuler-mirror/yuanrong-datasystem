@@ -59,7 +59,6 @@ public:
     {
         opts.numEtcd = 1;
         opts.numWorkers = 2;
-        opts.enableDistributedMaster = "true";
         opts.waitWorkerReady = false;
         distributedDiskPath_ = GetTestCaseDataDir() + "/distributed_disk";
         DS_ASSERT_OK(CreateDir(distributedDiskPath_, true));

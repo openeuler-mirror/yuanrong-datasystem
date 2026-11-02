@@ -102,10 +102,9 @@ public:
      * @brief Create a new WorkerServer object.
      * @param[in] workerAddr Worker service address.
      * @param[in] bindAddr Local bind address.
-     * @param[in] masterAddr Local master service address.
      * @param[in] coordinatorDiscovery Candidate provider. Null selects the ETCD/metastore backend.
      */
-    WorkerOCServer(HostPort workerAddr, HostPort bindAddr, HostPort masterAddr,
+    WorkerOCServer(HostPort workerAddr, HostPort bindAddr,
                    std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery);
 
     ~WorkerOCServer() override;
@@ -756,25 +755,6 @@ private:
     Status HandleMembershipRestarts(const std::map<std::string, int64_t> &restartFacts, bool sync);
 
     /**
-     * @brief Resolve the metadata endpoint used by worker-local master services before service construction.
-     * @return Status of this call.
-     */
-    Status ResolveLocalMetadataAddress();
-
-    /**
-     * @brief Claim or read the centralized metadata address through the selected native Store/Proxy.
-     * @param[out] address Current centralized metadata address; unchanged on failure.
-     * @return K_OK after a create-or-read transaction or backend status otherwise.
-     */
-    Status ResolveCentralMetadataAddress(std::string &address);
-
-    /**
-     * @brief Check whether this process owns the metadata-master services.
-     * @return True for distributed metadata or for the selected centralized metadata process.
-     */
-    bool IsLocalMetadataMaster() const;
-
-    /**
      * @brief Start the worker-owned topology runtime.
      * @return Status of this call.
      */
@@ -910,7 +890,6 @@ private:
     bool scaleInShutdownRequested_{ false };
     std::function<void()> scaleInShutdownRequester_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
-    HostPort masterAddr_;
     std::unique_ptr<datasystem::MetadataManagerHolder> metadataManagerHolder_{ nullptr };
     std::unique_ptr<datasystem::master::ResourceManager> resourceManager_{ nullptr };
     std::shared_ptr<master::RpcSessionManager> rpcSessionManager_{ nullptr };

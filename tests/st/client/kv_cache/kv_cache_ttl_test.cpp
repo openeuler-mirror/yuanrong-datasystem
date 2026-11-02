@@ -305,7 +305,7 @@ TEST_F(KVCacheTtlTest, MultiClientTest)
     localSetRemoteGet->Run();
 }
 
-class CentralizedKVCacheTtlTest : public KVCacheTtlTest{
+class KVCacheTtlWorkerFailureTest : public KVCacheTtlTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
@@ -315,12 +315,11 @@ public:
         opts.numEtcd = 1;
         opts.workerGflagParams =
             "-node_timeout_s=5 -node_dead_timeout_s=6 -shared_memory_size_mb=2048 -v=2";
-        opts.enableDistributedMaster = "false";
     }
  
 };
  
-TEST_F(CentralizedKVCacheTtlTest, WorkerDead)
+TEST_F(KVCacheTtlWorkerFailureTest, WorkerDead)
 {
     std::string key = "k1";
     std::string value = "hello";

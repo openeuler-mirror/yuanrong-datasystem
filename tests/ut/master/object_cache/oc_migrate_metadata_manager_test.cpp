@@ -53,14 +53,15 @@ master::MetaForMigrationPb BuildMigratedMeta(const std::string &objectKey, bool 
 
 class OCMetadataManagerForMigrationTest : public master::OCMetadataManager {
 public:
-    OCMetadataManagerForMigrationTest() : OCMetadataManager(nullptr, nullptr, nullptr, nullptr, "", nullptr, nullptr,
-                                                            false, HostPort(), "", nullptr, "migration-test")
+    OCMetadataManagerForMigrationTest()
+        : OCMetadataManager(nullptr, nullptr, nullptr, nullptr, "", nullptr, nullptr, "", nullptr,
+                            "migration-test")
     {
     }
 
     OCMetadataManagerForMigrationTest(std::shared_ptr<AkSkManager> akSkManager, RocksStore *rocksStore)
         : OCMetadataManager(std::move(akSkManager), rocksStore, nullptr, nullptr, SURVIVING_WORKER_ADDRESS, nullptr,
-                            nullptr, false, HostPort(), SURVIVING_WORKER_ADDRESS, nullptr, "migration-race-test")
+                            nullptr, SURVIVING_WORKER_ADDRESS, nullptr, "migration-race-test")
     {
     }
 

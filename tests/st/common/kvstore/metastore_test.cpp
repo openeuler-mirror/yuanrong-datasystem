@@ -61,9 +61,7 @@ protected:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = 0;  // Do not start etcd, use metastore instead
-        opts.numMasters = 0;  // In object cache mode, master is integrated in worker
         opts.numWorkers = 1;  // Start 1 worker to run metastore as master
-        opts.masterIdx = 0;  // Specify the first worker as master
         opts.waitWorkerReady = true;  // Wait for worker to be ready
         // Start metastore service and skip authentication
         opts.workerSpecifyGflagParams[0] = " -start_metastore_service=true -metastore_address=" + metastoreListenAddress_ + " -skip_authenticate=true";

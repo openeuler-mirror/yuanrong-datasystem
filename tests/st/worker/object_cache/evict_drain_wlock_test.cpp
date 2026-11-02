@@ -51,8 +51,6 @@ public:
     {
         opts.numEtcd = 1;
         opts.numWorkers = 2;
-        opts.enableDistributedMaster = "false";
-        opts.masterIdx = 1;  // master on w1: w0 drain → remote RPC → inject fires.
         opts.waitWorkerReady = true;
         opts.workerGflagParams = "-shared_memory_size_mb=32 -slow_log_process_slower_than=1 -v=2";
     }

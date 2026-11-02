@@ -43,7 +43,6 @@ public:
     opts.numEtcd = 1;
     opts.numWorkers = 1;
     opts.numOBS = 1;
-    opts.enableDistributedMaster = "false";
   }
 
   void SetUp() override {

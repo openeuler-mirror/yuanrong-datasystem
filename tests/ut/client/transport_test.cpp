@@ -440,7 +440,7 @@ std::shared_ptr<Routing> MakeRouting(const std::vector<HostPort> &addresses,
     }
     router->UpdateHashRing(*prepared, *hostIdMap);
 
-    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &, bool &,
+    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, uint64_t &, bool &,
                     std::unordered_map<std::string, std::string> &) { return Status::OK(); };
     auto refresher = std::make_shared<HashRingRefresher>(router, fetch);
     auto routing = std::make_shared<Routing>(router, refresher);
@@ -969,7 +969,6 @@ protected:
         hashRingVersion = request.version();
         invokedHashRingRequest = request;
         response.set_version(request.version() + 1);
-        response.set_master_address("127.0.0.1:18888");
         response.set_hash_ring_changed(true);
         auto &worker = (*response.mutable_hash_ring()->mutable_members())["127.0.0.1:18481"];
         worker.set_state(MembershipPb_StatePb_ACTIVE);
@@ -4833,7 +4832,7 @@ TEST(ObjectClientImplTest, ProbeFallbackDoesNotExtendClientLifetimeOnRefreshThre
     std::weak_ptr<object_cache::ObjectClientImpl> weakClient = client;
 
     auto router = std::make_shared<client::WorkerRouter>("host-a");
-    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &, bool &,
+    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, uint64_t &, bool &,
                     std::unordered_map<std::string, std::string> &) { return Status(K_RUNTIME_ERROR, "unreachable"); };
     auto refresher = std::make_shared<client::HashRingRefresher>(router, fetch, nullptr, nullptr, fallback);
     ASSERT_TRUE(refresher->StartPeriodicRefresh(20).IsOk());

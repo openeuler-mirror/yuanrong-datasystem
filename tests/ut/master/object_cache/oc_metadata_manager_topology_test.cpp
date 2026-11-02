@@ -149,9 +149,9 @@ public:
         DS_ASSERT_OK(inject::Set("OCMetadataManager.GetValidTopologyWorkers",
                                  FormatString("return(%s)", TARGET_ADDRESS)));
         OCMetadataManager recovered(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
-                                    true, HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+                                    LOCAL_ADDRESS, &localExiting_, "workerId");
         DS_ASSERT_OK(recovered.objectStore_->Init());
-        recovered.nestedRefManager_ = std::make_unique<OCNestedManager>(recovered.objectStore_, true);
+        recovered.nestedRefManager_ = std::make_unique<OCNestedManager>(recovered.objectStore_);
         recovered.expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(LOCAL_ADDRESS, &recovered);
         recovered.expiredObjectManager_->Init();
         DS_ASSERT_OK(recovered.LoadMeta(true));
@@ -246,8 +246,8 @@ void MakeTargetReadable(OCMetadataManager &manager, const std::string &objectKey
 TEST_F(OCMetadataManagerTopologyTest, RollbackCauseWireValueDoesNotFallBackToNormal)
 {
     localExiting_.store(false);
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     const std::string objectKey = "unknown_rollback_cause_wire";
     InsertVersionedRequesterLocation(manager, objectKey, QUERY_META_OBJECT_VERSION, AckState::ACK);
@@ -265,8 +265,8 @@ TEST_F(OCMetadataManagerTopologyTest, RollbackCauseWireValueDoesNotFallBackToNor
 TEST_F(OCMetadataManagerTopologyTest, RollbackUnackRemovesExactVersionUnackLocation)
 {
     localExiting_.store(false);
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     const std::string objectKey = "rollback_exact_version_unack";
     InsertVersionedRequesterLocation(manager, objectKey, QUERY_META_OBJECT_VERSION, AckState::UNACK);
@@ -283,8 +283,8 @@ TEST_F(OCMetadataManagerTopologyTest, RollbackUnackRemovesExactVersionUnackLocat
 TEST_F(OCMetadataManagerTopologyTest, RollbackUnackKeepsAckAndNewerVersionLocations)
 {
     localExiting_.store(false);
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     const std::string ackKey = "rollback_same_version_ack";
     const std::string newerKey = "rollback_newer_version_unack";
@@ -307,8 +307,8 @@ TEST_F(OCMetadataManagerTopologyTest, RollbackUnackKeepsAckAndNewerVersionLocati
 TEST_F(OCMetadataManagerTopologyTest, RollbackUnackRejectsFutureVersionAndIsIdempotent)
 {
     localExiting_.store(false);
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     const std::string futureKey = "rollback_future_version";
     const std::string repeatKey = "rollback_repeated";
@@ -344,8 +344,8 @@ TEST_F(OCMetadataManagerTopologyTest, RollbackUnackRejectsFutureVersionAndIsIdem
 TEST_F(OCMetadataManagerTopologyTest, RollbackUnackKeepsLocationWhenPersistenceDeleteFails)
 {
     localExiting_.store(false);
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     const std::string objectKey = "rollback_persistence_failure";
     InsertVersionedRequesterLocation(manager, objectKey, QUERY_META_OBJECT_VERSION, AckState::UNACK);
@@ -363,8 +363,8 @@ TEST_F(OCMetadataManagerTopologyTest, RollbackUnackKeepsLocationWhenPersistenceD
 TEST_F(OCMetadataManagerTopologyTest, RollbackLastNoneL2UnackRemovesMetaAndRecoversEmpty)
 {
     localExiting_.store(false);
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     const std::string objectKey = "rollback_last_none_l2_unack";
     InsertPersistedNoneL2RequesterLocation(manager, objectKey, false);
@@ -386,8 +386,8 @@ TEST_F(OCMetadataManagerTopologyTest, RollbackLastNoneL2UnackRemovesMetaAndRecov
 TEST_F(OCMetadataManagerTopologyTest, RollbackNoneL2UnackKeepsMetaWithAckCopy)
 {
     localExiting_.store(false);
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     const std::string objectKey = "rollback_none_l2_with_ack";
     InsertPersistedNoneL2RequesterLocation(manager, objectKey, true);
@@ -407,8 +407,8 @@ TEST_F(OCMetadataManagerTopologyTest, RollbackNoneL2UnackKeepsMetaWithAckCopy)
 TEST_F(OCMetadataManagerTopologyTest, RollbackNoneL2UnackWithAckKeepsStateWhenCommittedDeleteFails)
 {
     localExiting_.store(false);
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     const std::string objectKey = "rollback_none_l2_ack_delete_failure";
     const std::string locationKey = std::string(TARGET_ADDRESS) + "_" + objectKey;
@@ -438,8 +438,8 @@ TEST_F(OCMetadataManagerTopologyTest, RollbackNoneL2UnackWithAckKeepsStateWhenCo
 TEST_F(OCMetadataManagerTopologyTest, RollbackLastNoneL2UnackAtomicFailureKeepsStateForRetry)
 {
     localExiting_.store(false);
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     const std::string objectKey = "rollback_last_none_l2_atomic_failure";
     const std::string locationKey = std::string(TARGET_ADDRESS) + "_" + objectKey;
@@ -488,8 +488,7 @@ TEST_F(OCMetadataManagerTopologyTest, PrimaryWithoutCopyCountsOnlyAcknowledgedLo
 TEST_F(OCMetadataManagerTopologyTest, QueryMetaCanSkipRequesterLocationRegistration)
 {
     OCMetadataManagerForTopologyTest manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS,
-                                             nullptr, nullptr, false, HostPort(), LOCAL_ADDRESS, &localExiting_,
-                                             "workerId");
+                                             nullptr, nullptr, LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     manager.notifyWorkerManager_ =
         std::make_unique<OCNotifyWorkerManager>(manager.objectStore_, true, akSkManager_, &manager);
@@ -548,8 +547,8 @@ TEST_F(OCMetadataManagerTopologyTest, QueryMetaCanSkipRequesterLocationRegistrat
 
 TEST_F(OCMetadataManagerTopologyTest, BatchExistsPreservesReadableLocationSemantics)
 {
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     manager.notifyWorkerManager_ =
         std::make_unique<OCNotifyWorkerManager>(manager.objectStore_, true, akSkManager_, &manager);
     const std::vector<std::string> keys{
@@ -613,8 +612,8 @@ TEST_F(OCMetadataManagerTopologyTest, BatchExistsPreservesReadableLocationSemant
 
 TEST_F(OCMetadataManagerTopologyTest, BatchExistsEmptyAllPresentAndAllMissing)
 {
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     BatchExistsReqPb request;
     BatchExistsRspPb response;
     EXPECT_EQ(manager.BatchExists(request, response).GetCode(), K_INVALID);
@@ -644,8 +643,8 @@ TEST_F(OCMetadataManagerTopologyTest, DISABLED_BatchExistsHandlerBenchmark)
     constexpr size_t warmup = 10;
     constexpr size_t iterations = 100;
     constexpr size_t percentile99 = 99;
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     manager.notifyWorkerManager_ =
         std::make_unique<OCNotifyWorkerManager>(manager.objectStore_, true, akSkManager_, &manager);
     std::vector<std::string> keys;
@@ -717,7 +716,7 @@ TEST_F(OCMetadataManagerTopologyTest, PureQueryMetaUsesMembershipVersionThatCont
     DS_ASSERT_OK(snapshots.Publish(BuildLocationEvidenceSnapshot(true), outcome));
     cluster::MembershipEndpointView membership(snapshots);
     OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, &membership,
-                              false, HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     manager.notifyWorkerManager_ =
         std::make_unique<OCNotifyWorkerManager>(manager.objectStore_, true, akSkManager_, &manager);
     const std::string objectKey = "pure-query-location-membership-evidence";
@@ -742,7 +741,7 @@ TEST_F(OCMetadataManagerTopologyTest, PureQueryMetaWithholdsVersionWhenAnyReturn
     DS_ASSERT_OK(snapshots.Publish(BuildLocationEvidenceSnapshot(false), outcome));
     cluster::MembershipEndpointView membership(snapshots);
     OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, &membership,
-                              false, HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     manager.notifyWorkerManager_ =
         std::make_unique<OCNotifyWorkerManager>(manager.objectStore_, true, akSkManager_, &manager);
     const std::string objectKey = "pure-query-location-without-membership-evidence";
@@ -761,8 +760,8 @@ TEST_F(OCMetadataManagerTopologyTest, PureQueryMetaWithholdsVersionWhenAnyReturn
 
 TEST_F(OCMetadataManagerTopologyTest, TopologyOperationCanChangePrimaryWhileOrdinaryExitingRequestIsFenced)
 {
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     const std::string objectKey = "topology_primary_handoff";
     InsertPrimaryWithCopy(manager, objectKey);
@@ -788,8 +787,8 @@ TEST_F(OCMetadataManagerTopologyTest, TopologyOperationCanChangePrimaryWhileOrdi
 
 TEST_F(OCMetadataManagerTopologyTest, RestartBatchRemovesAllAffectedLocationsInOneOperation)
 {
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     const std::string objectKey = "restart_batch_locations";
     InsertPrimaryWithCopy(manager, objectKey);
@@ -820,8 +819,8 @@ TEST_F(OCMetadataManagerTopologyTest, RestartBatchRemovesAllAffectedLocationsInO
 TEST_F(OCMetadataManagerTopologyTest, NormalLocationCleanupKeepsNoneL2MetaWithRemainingCopy)
 {
     localExiting_.store(false);
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     const std::string objectKey = "normal_cleanup_with_remaining_copy";
     InsertNoneL2PrimaryWithCopy(manager, objectKey);
@@ -846,8 +845,8 @@ TEST_F(OCMetadataManagerTopologyTest, NormalLocationCleanupKeepsNoneL2MetaWithRe
 TEST_F(OCMetadataManagerTopologyTest, EvictionRemovesNoneL2MetaWithRemainingCopy)
 {
     localExiting_.store(false);
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     const std::string objectKey = "eviction_with_remaining_copy";
     InsertNoneL2PrimaryWithCopy(manager, objectKey);
@@ -870,8 +869,8 @@ TEST_F(OCMetadataManagerTopologyTest, EvictionRemovesNoneL2MetaWithRemainingCopy
 TEST_F(OCMetadataManagerTopologyTest, NormalLocationCleanupRemovesNoneL2MetaWithoutCopies)
 {
     localExiting_.store(false);
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     const std::string objectKey = "normal_cleanup_without_copies";
     InsertNoneL2PrimaryWithCopy(manager, objectKey);
@@ -900,10 +899,10 @@ TEST_F(OCMetadataManagerTopologyTest, NormalLocationCleanupRemovesNoneL2MetaWith
 
 TEST_F(OCMetadataManagerTopologyTest, NestedMigrationPersistenceFailureIsReturnedToCaller)
 {
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
-    manager.nestedRefManager_ = std::make_unique<OCNestedManager>(manager.objectStore_, false);
+    manager.nestedRefManager_ = std::make_unique<OCNestedManager>(manager.objectStore_);
     MetaForMigrationPb metadata;
     metadata.set_object_key("nested-migration-persistence-failure");
     metadata.set_nested_ref(1);
@@ -914,8 +913,8 @@ TEST_F(OCMetadataManagerTopologyTest, NestedMigrationPersistenceFailureIsReturne
 
 TEST_F(OCMetadataManagerTopologyTest, SynchronousRestartPushReturnsDeliveryFailure)
 {
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     manager.globalRefTable_ = std::make_unique<object_cache::ObjectGlobalRefTable<ImmutableString>>();
     manager.notifyWorkerManager_ =
         std::make_unique<OCNotifyWorkerManager>(manager.objectStore_, true, akSkManager_, &manager);
@@ -946,7 +945,7 @@ TEST_F(OCMetadataManagerTopologyTest, RedirectableRemoveMetaWaitsInsteadOfFailin
     cluster::PlacementFacade placement(snapshots, algorithm, LOCAL_ADDRESS);
     cluster::MembershipEndpointView membership(snapshots);
     OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, &placement, &membership,
-                              false, HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
 
     const std::string objectKey = "topology_remove_meta_handoff";
     InsertPrimaryWithCopy(manager, objectKey);
@@ -972,8 +971,8 @@ TEST_F(OCMetadataManagerTopologyTest, RedirectableRemoveMetaWaitsInsteadOfFailin
 TEST_F(OCMetadataManagerTopologyTest, StaleEvictionRemoveMetaDoesNotErasePromotedPrimary)
 {
     localExiting_.store(false);
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     const std::string objectKey = "stale_eviction_after_primary_promotion";
     constexpr uint64_t version = 123;
@@ -1013,8 +1012,8 @@ TEST_F(OCMetadataManagerTopologyTest, StaleEvictionRemoveMetaDoesNotErasePromote
 TEST_F(OCMetadataManagerTopologyTest, EvictionRemoveMetaStillErasesNonPrimaryLocation)
 {
     localExiting_.store(false);
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     const std::string objectKey = "evicted_non_primary_location";
     constexpr uint64_t version = 456;
@@ -1069,7 +1068,7 @@ TEST_F(OCMetadataManagerTopologyTest, CreateMultiMetaRedirectsAbsentKeyDuringSca
     cluster::HashAlgorithm algorithm;
     cluster::PlacementFacade placement(snapshots, algorithm, LOCAL_ADDRESS);
     OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, &placement, nullptr,
-                              false, HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     const std::string objectKey = "scale_out_create_multi_wait";
     CreateMultiMetaReqPb request;
     request.set_address(LOCAL_ADDRESS);
@@ -1110,7 +1109,7 @@ TEST_F(OCMetadataManagerTopologyTest, ObjectRedirectProgressivelyHandlesScaleOut
     cluster::HashAlgorithm algorithm;
     cluster::PlacementFacade placement(snapshots, algorithm, LOCAL_ADDRESS);
     OCMetadataManagerForTopologyTest manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS,
-                                             &placement, nullptr, false, HostPort(), LOCAL_ADDRESS, &localExiting_,
+                                             &placement, nullptr, LOCAL_ADDRESS, &localExiting_,
                                              "workerId");
     const std::string existingKey = "scale_out_existing_local";
     const std::string movingKey = "scale_out_moving_wait";
@@ -1162,7 +1161,7 @@ TEST_F(OCMetadataManagerTopologyTest, BatchExistsPreservesIndicesAcrossScaleOutR
     cluster::HashAlgorithm algorithm;
     cluster::PlacementFacade placement(snapshots, algorithm, LOCAL_ADDRESS);
     OCMetadataManagerForTopologyTest manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS,
-                                             &placement, nullptr, false, HostPort(), LOCAL_ADDRESS, &localExiting_,
+                                             &placement, nullptr, LOCAL_ADDRESS, &localExiting_,
                                              "workerId");
     const std::string localKey = "exists-local-pending";
     const std::string redirectKey = "exists-redirect";
@@ -1212,7 +1211,7 @@ TEST_F(OCMetadataManagerTopologyTest, QueryMetaRetriesWholeBatchWhenOneScaleOutK
     cluster::HashAlgorithm algorithm;
     cluster::PlacementFacade placement(snapshots, algorithm, LOCAL_ADDRESS);
     OCMetadataManagerForTopologyTest manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS,
-                                             &placement, nullptr, false, HostPort(), LOCAL_ADDRESS, &localExiting_,
+                                             &placement, nullptr, LOCAL_ADDRESS, &localExiting_,
                                              "workerId");
     const std::string localKey = "scale_out_query_local";
     const std::string movingKey = "scale_out_query_moving";
@@ -1238,8 +1237,8 @@ TEST_F(OCMetadataManagerTopologyTest, QueryMetaRetriesWholeBatchWhenOneScaleOutK
 
 TEST_F(OCMetadataManagerTopologyTest, RecoveryPushReportsPerKeyFailureOnlyWhenRequested)
 {
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     manager.globalRefTable_ = std::make_unique<object_cache::ObjectGlobalRefTable<ImmutableString>>();
     master::PushMetaToMasterReqPb request;
     request.set_address(SURVIVOR_ADDRESS);
@@ -1284,7 +1283,7 @@ TEST_F(OCMetadataManagerTopologyTest, AsyncDeleteAllCopyMetaDoesNotQueueRedirect
     cluster::HashAlgorithm algorithm;
     cluster::PlacementFacade placement(snapshots, algorithm, LOCAL_ADDRESS);
     OCMetadataManagerForTopologyTest manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS,
-                                             &placement, nullptr, false, HostPort(), LOCAL_ADDRESS, &localExiting_,
+                                             &placement, nullptr, LOCAL_ADDRESS, &localExiting_,
                                              "workerId");
     manager.expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(LOCAL_ADDRESS, &manager);
     const std::string objectKey = "async_delete_redirected_key";
@@ -1327,7 +1326,7 @@ TEST_F(OCMetadataManagerTopologyTest, DeleteAllCopyMetaWithServerApiWritesMoving
     cluster::HashAlgorithm algorithm;
     cluster::PlacementFacade placement(snapshots, algorithm, LOCAL_ADDRESS);
     OCMetadataManagerForTopologyTest manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS,
-                                             &placement, nullptr, false, HostPort(), LOCAL_ADDRESS, &localExiting_,
+                                             &placement, nullptr, LOCAL_ADDRESS, &localExiting_,
                                              "workerId");
     manager.expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(LOCAL_ADDRESS, &manager);
     const std::string localKey = "scale_out_delete_local";
@@ -1378,7 +1377,7 @@ TEST_F(OCMetadataManagerTopologyTest, RollbackMultiMetaRetriesWholeBatchWhenOneS
     cluster::HashAlgorithm algorithm;
     cluster::PlacementFacade placement(snapshots, algorithm, LOCAL_ADDRESS);
     OCMetadataManagerForTopologyTest manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS,
-                                             &placement, nullptr, false, HostPort(), LOCAL_ADDRESS, &localExiting_,
+                                             &placement, nullptr, LOCAL_ADDRESS, &localExiting_,
                                              "workerId");
     const std::string localKey = "scale_out_rollback_local";
     const std::string movingKey = "scale_out_rollback_moving";
@@ -1402,8 +1401,8 @@ TEST_F(OCMetadataManagerTopologyTest, RollbackMultiMetaRetriesWholeBatchWhenOneS
 
 TEST_F(OCMetadataManagerTopologyTest, DeleteAllCopyMetaDoesNotDeleteMetadataThatReappeared)
 {
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     const std::string objectKey = "delete_no_meta_reappeared";
     DeleteObjectMediator mediator(LOCAL_ADDRESS, { { objectKey, true } });
     mediator.AddHashObjsWithoutMeta(objectKey);
@@ -1423,8 +1422,8 @@ TEST_F(OCMetadataManagerTopologyTest, DeleteAllCopyMetaDoesNotDeleteMetadataThat
 
 TEST_F(OCMetadataManagerTopologyTest, DeleteAllCopyMetaDoesNotDeleteObjectAlreadyClassifiedFailed)
 {
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     const std::string objectKey = "delete_preclassified_failed";
     InsertPrimaryWithCopy(manager, objectKey);
     auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
@@ -1458,8 +1457,8 @@ TEST_F(OCMetadataManagerTopologyTest, DeleteAllCopyMetaDoesNotDeleteObjectAlread
 
 TEST_F(OCMetadataManagerTopologyTest, AsyncDeleteAllCopyMetaQueuesRequestVersion)
 {
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     manager.expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(LOCAL_ADDRESS, &manager);
     const std::string objectKey = "async_delete_request_version";
     DeleteAllCopyMetaReqPb request;
@@ -1480,8 +1479,8 @@ TEST_F(OCMetadataManagerTopologyTest, AsyncDeleteAllCopyMetaQueuesRequestVersion
 
 TEST_F(OCMetadataManagerTopologyTest, FullClusterShutdownDiscardsTtlDelete)
 {
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     const std::string objectKey = "full_shutdown_ttl";
     InsertPrimaryWithCopy(manager, objectKey);
     manager.expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(LOCAL_ADDRESS, &manager);
@@ -1503,8 +1502,8 @@ TEST_F(OCMetadataManagerTopologyTest, FullClusterShutdownDiscardsTtlDelete)
 TEST_F(OCMetadataManagerTopologyTest, OrdinaryTtlWithoutMetadataDoesNotCreateL2Delete)
 {
     localExiting_.store(false);
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     manager.globalCacheDeleteManager_ = std::make_unique<OCGlobalCacheDeleteManager>(
         manager.objectStore_, nullptr, false, LOCAL_ADDRESS, akSkManager_);
     const std::string objectKey = "ordinary_ttl_without_metadata";
@@ -1521,8 +1520,8 @@ TEST_F(OCMetadataManagerTopologyTest, OrdinaryTtlWithoutMetadataDoesNotCreateL2D
 
 TEST_F(OCMetadataManagerTopologyTest, FullClusterShutdownDrainsQueuedTtlDeletesAsNoOps)
 {
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     manager.asyncPool_ = std::make_unique<ThreadPool>(1, 1, "TtlShutdownTest");
     ExpiredObjectManager expiredManager(LOCAL_ADDRESS, &manager);
     for (size_t i = 0; i < 3; ++i) {
@@ -1573,8 +1572,8 @@ TEST_F(OCMetadataManagerTopologyTest, FullClusterShutdownDrainsQueuedTtlDeletesA
 
 TEST_F(OCMetadataManagerTopologyTest, PartialShutdownOnlyKeepsLocallyOwnedTtlDelete)
 {
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     const std::string localObjectKey = "local_ttl";
     const std::string migratedObjectKey = "migrated_ttl";
     const uint64_t objectVersion = 10;
@@ -1608,8 +1607,8 @@ TEST_F(OCMetadataManagerTopologyTest, PartialShutdownOnlyKeepsLocallyOwnedTtlDel
 
 TEST_F(OCMetadataManagerTopologyTest, PartialShutdownRequeuesLocallyOwnedFailedTtlDelete)
 {
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     const std::string objectKey = "local_failed_ttl";
     InsertPrimaryWithCopy(manager, objectKey);
     auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
@@ -1662,8 +1661,8 @@ TEST_F(OCMetadataManagerTopologyTest, PartialShutdownRequeuesLocallyOwnedFailedT
 
 TEST_F(OCMetadataManagerTopologyTest, SuccessfulTtlRetryClearsFailedState)
 {
-    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
-                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
     const std::string objectKey = "successful_retry_ttl";
     InsertPrimaryWithCopy(manager, objectKey);
     auto &metaShard = manager.metaShards_[manager.GetShardIndex(objectKey)];
@@ -1715,7 +1714,7 @@ TEST_F(OCMetadataManagerTopologyTest, SuccessfulTtlRetryClearsFailedState)
 TEST_F(OCMetadataManagerTopologyTest, AsyncDeleteByExpiredTreatsBeingDeletedAsSuccess)
 {
     OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr,
-                             false, HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+                             LOCAL_ADDRESS, &localExiting_, "workerId");
     DS_ASSERT_OK(manager.objectStore_->Init());
     manager.expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(LOCAL_ADDRESS, &manager);
     DS_ASSERT_OK(inject::Set("master.ExpiredObjectManager.Run", "call()"));

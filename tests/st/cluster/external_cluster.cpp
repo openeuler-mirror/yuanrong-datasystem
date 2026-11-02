@@ -200,13 +200,7 @@ ExternalCluster::ExternalCluster(const ExternalClusterOptions &opt) : opts_(opt)
 Status ExternalCluster::ShutdownNodes(ClusterNodeType nodeType)
 {
     Status rc = Status::OK();
-    if (!opts_.isObjectCache) {
-        /* 2rd shutdown master. */
-        if (ClusterNodeType::ALL == nodeType || ClusterNodeType::MASTER == nodeType) {
-            ASSIGN_IF_NOT_OK(rc, ShutdownMasters());
-        }
-    }
-    /* 3nd shutdown worker. */
+    /* Shutdown worker. */
     if (ClusterNodeType::ALL == nodeType || ClusterNodeType::WORKER == nodeType) {
         ASSIGN_IF_NOT_OK(rc, ShutdownWorkers());
     }
@@ -261,32 +255,16 @@ Status ExternalCluster::ShutdownWorkers()
     return rc;
 }
 
-Status ExternalCluster::AddNode(const HostPort &masterAddress, const std::string workerAddress)
+Status ExternalCluster::AddNode(const std::string &workerAddress)
 {
     const int num = 1;
-    CHECK_FAIL_RETURN_STATUS(!masterAddress.Empty() && !workerAddress.empty(), K_INVALID, "address is empty");
+    CHECK_FAIL_RETURN_STATUS(!workerAddress.empty(), K_INVALID, "address is empty");
     opts_.numWorkers += 1;
     HostPort workerAddr;
     RETURN_IF_NOT_OK(workerAddr.ParseString(workerAddress));
     opts_.workerConfigs.emplace_back(workerAddr);
     workerProcesses_.emplace_back(nullptr);
-    return StartWorker(opts_.numWorkers - num, masterAddress);
-}
-
-Status ExternalCluster::ShutdownMasters()
-{
-    CHECK_FAIL_RETURN_STATUS(!opts_.isObjectCache, K_INVALID, "No master in object cache.");
-    std::lock_guard<std::mutex> lock(mutex_master_);
-    Status rc = Status::OK();
-    for (auto &masterProcess : masterProcesses_) {
-        if (masterProcess->IsProcessAlive()) {
-            ASSIGN_IF_NOT_OK_PRINT_ERROR_MSG(
-                rc, masterProcess->Shutdown(),
-                FormatString("Master process: %s shutdown failed.", masterProcess->GetAddr().ToString()));
-        }
-    }
-    masterProcesses_.clear();
-    return rc;
+    return StartWorker(opts_.numWorkers - num);
 }
 
 Status ExternalCluster::ShutdownCoordinators()
@@ -378,16 +356,7 @@ Status ExternalCluster::ShutdownNode(ClusterNodeType nodeType, uint32_t idx)
         }
     }
 
-    /* 3rd shutdown master. */
-    if (ClusterNodeType::MASTER == nodeType) {
-        CHECK_FAIL_RETURN_STATUS(!opts_.isObjectCache, K_INVALID, "No master in object cache.");
-        auto masterProcess = masterProcesses_[idx].get();
-        if (masterProcess->IsProcessAlive()) {
-            ASSIGN_IF_NOT_OK(rc, masterProcess->Shutdown());
-        }
-    }
-
-    /* 4th shutdown etcd. */
+    /* Shutdown etcd. */
     if (ClusterNodeType::ETCD == nodeType) {
         auto etcdProcess = etcdProcesses_[idx].get();
         if (etcdProcess->IsProcessAlive()) {
@@ -411,9 +380,6 @@ Status ExternalCluster::StartNode(ClusterNodeType nodeType, uint32_t idx, const 
     CHECK_FAIL_RETURN_STATUS(process != nullptr, K_NOT_FOUND, "Process is nullptr");
     if (nodeType == ClusterNodeType::WORKER) {
         (void)DeleteFile(FormatString("%s/worker%u/health", opts_.rootDir, idx));
-    } else if (nodeType == ClusterNodeType::MASTER) {
-        CHECK_FAIL_RETURN_STATUS(!opts_.isObjectCache, K_INVALID, "No master in object cache.");
-        (void)DeleteFile(FormatString("%s/master%u/health", opts_.rootDir, idx));
     }
     if (!params.empty()) {
         process->AppendCmdParams(params);
@@ -425,15 +391,6 @@ Status ExternalCluster::StartNode(ClusterNodeType nodeType, uint32_t idx, const 
 Status ExternalCluster::GetProcess(ClusterNodeType nodeType, uint32_t idx, Subprocess *&process)
 {
     switch (nodeType) {
-        case ClusterNodeType::MASTER: {
-            CHECK_FAIL_RETURN_STATUS(!opts_.isObjectCache, K_INVALID, "No master in object cache.");
-            CHECK_FAIL_RETURN_STATUS(idx < masterProcesses_.size(), K_INVALID, "Invalid index.");
-            process = masterProcesses_[idx].get();
-            if (process->IsProcessAlive()) {
-                process->Shutdown();
-            }
-            break;
-        }
         case ClusterNodeType::WORKER: {
             CHECK_FAIL_RETURN_STATUS(idx < workerProcesses_.size(), K_INVALID, "Invalid index.");
             process = workerProcesses_[idx].get();
@@ -467,12 +424,6 @@ Status ExternalCluster::GetProcess(ClusterNodeType nodeType, uint32_t idx, Subpr
 Status ExternalCluster::GetProcess(ClusterNodeType nodeType, uint32_t idx, ServerProcess *&process)
 {
     switch (nodeType) {
-        case ClusterNodeType::MASTER: {
-            CHECK_FAIL_RETURN_STATUS(!opts_.isObjectCache, K_INVALID, "No master in object cache.");
-            CHECK_FAIL_RETURN_STATUS(idx < masterProcesses_.size(), K_INVALID, "Invalid index.");
-            process = masterProcesses_[idx].get();
-            break;
-        }
         case ClusterNodeType::WORKER: {
             CHECK_FAIL_RETURN_STATUS(idx < workerProcesses_.size(), K_INVALID, "Invalid index.");
             process = workerProcesses_[idx].get();
@@ -511,14 +462,6 @@ Status ExternalCluster::GetInjectActionExecuteCount(ClusterNodeType nodeType, ui
 size_t ExternalCluster::GetEtcdNum() const
 {
     return etcdProcesses_.size();
-}
-
-size_t ExternalCluster::GetMasterNum() const
-{
-    if (opts_.isObjectCache) {
-        return 0;
-    }
-    return masterProcesses_.size();
 }
 
 size_t ExternalCluster::GetGCSNum() const
@@ -596,14 +539,6 @@ Status ExternalCluster::GetCoordinatorAddr(uint32_t idx, HostPort &addr) const
     return Status::OK();
 }
 
-Status ExternalCluster::GetMasterAddr(uint32_t idx, HostPort &addr) const
-{
-    CHECK_FAIL_RETURN_STATUS(!opts_.isObjectCache, K_INVALID, "No master in object cache.");
-    CHECK_FAIL_RETURN_STATUS(idx < masterProcesses_.size(), StatusCode::K_INVALID, "Invalid idx.");
-    addr = masterProcesses_[idx]->GetAddr();
-    return Status::OK();
-}
-
 Status ExternalCluster::GetGCSAddr(uint32_t idx, HostPort &addr) const
 {
     CHECK_FAIL_RETURN_STATUS(!opts_.isObjectCache, K_INVALID, "No GCS in object cache.");
@@ -639,15 +574,6 @@ pid_t ExternalCluster::GetEtcdPid(uint32_t idx) const
 {
     if (idx < etcdProcesses_.size()) {
         return etcdProcesses_[idx]->Pid();
-    } else {
-        return static_cast<pid_t>(-1);
-    }
-}
-
-pid_t ExternalCluster::GetMasterPid(uint32_t idx) const
-{
-    if (!opts_.isObjectCache && idx < masterProcesses_.size()) {
-        return masterProcesses_[idx]->Pid();
     } else {
         return static_cast<pid_t>(-1);
     }
@@ -831,21 +757,6 @@ Status ExternalCluster::StartCoordinatorCluster()
     return Status::OK();
 }
 
-Status ExternalCluster::StartMasters()
-{
-    CHECK_FAIL_RETURN_STATUS(!opts_.isObjectCache, K_INVALID, "No master in object cache.");
-    if (opts_.numMasters == 0) {
-        LOG(INFO) << "The value of numMasters is 0. Therefore, the master is not started.";
-        return Status::OK();
-    }
-    CHECK_FAIL_RETURN_STATUS(opts_.numMasters <= opts_.masterIpAddrs.size(), StatusCode::K_RUNTIME_ERROR,
-                             "The number of masterIpAddrs is less than numMasters.");
-    for (size_t i = 0; i < opts_.numMasters; ++i) {
-        RETURN_IF_NOT_OK(StartMaster(i));
-    }
-    return Status::OK();
-}
-
 Status ExternalCluster::StartWorkers()
 {
     if (opts_.numWorkers == 0) {
@@ -854,43 +765,14 @@ Status ExternalCluster::StartWorkers()
     }
     CHECK_FAIL_RETURN_STATUS(opts_.numWorkers <= opts_.workerConfigs.size(), StatusCode::K_RUNTIME_ERROR,
                              "The number of workerConfigs is less than numWorkers.");
-    if (!opts_.isObjectCache && opts_.masterIpAddrs.empty()) {
-        LOG(WARNING) << "master addresses is empty in file cache,  worker cannot find master!";
-        return Status::OK();
-    }
-
     bool isWait = opts_.waitWorkerReady;
     opts_.waitWorkerReady = false;
-    HostPort address;
-    if (opts_.isObjectCache) {
-        CHECK_FAIL_RETURN_STATUS(opts_.masterIdx < (int32_t)opts_.workerConfigs.size(), StatusCode::K_INVALID,
-                                 "The index for master is out of range.");
-        address = opts_.masterIdx < 0 ? HostPort() : opts_.workerConfigs[opts_.masterIdx];
-        // Start the worker with master first
-        if (opts_.masterIdx != -1) {
-            RETURN_IF_NOT_OK(StartWorker(opts_.masterIdx, address));
-        }
-    } else {
-        CHECK_FAIL_RETURN_STATUS(opts_.masterIpAddrs.size() > 0, StatusCode::K_INVALID,
-                                 "There are no master address provided.");
-        address = opts_.masterIpAddrs[0];
-    }
-    // Start the remaining masters (object cache) or all masters (file cache)
     for (size_t i = 0; i < opts_.numWorkers; ++i) {
-        if (opts_.isObjectCache && (int32_t)i == opts_.masterIdx) {
-            continue;
-        }
-        RETURN_IF_NOT_OK(StartWorker(i, address));
+        RETURN_IF_NOT_OK(StartWorker(i));
     }
     if (isWait) {
         opts_.waitWorkerReady = true;
-        if (opts_.masterIdx != -1) {
-            RETURN_IF_NOT_OK(WaitNodeReady(WORKER, opts_.masterIdx, WAIT_TIMEOUT_SECS));
-        }
         for (size_t i = 0; i < opts_.numWorkers; ++i) {
-            if (opts_.isObjectCache && (int32_t)i == opts_.masterIdx) {
-                continue;
-            }
             RETURN_IF_NOT_OK(WaitNodeReady(WORKER, i, WAIT_TIMEOUT_SECS));
         }
     }
@@ -910,12 +792,6 @@ Status ExternalCluster::WaitUntilClusterReadyOrTimeout(int timeoutSecs)
     for (size_t i = 0; i < opts_.numCoordinators; ++i) {
         allAddrs.push_back(coordinatorProcesses_[i]->GetAddr().ToString());
     }
-    if (!opts_.isObjectCache) {
-        for (size_t i = 0; i < opts_.numMasters; ++i) {
-            allAddrs.push_back(masterProcesses_[i]->GetAddr().ToString());
-        }
-    }
-
     // Check whether the RPC service is started by verifying the process listens on the IP port.
     // The same configured port is used regardless of transport, so a single
     // CheckIpPortListen suffices.
@@ -926,8 +802,7 @@ Status ExternalCluster::WaitUntilClusterReadyOrTimeout(int timeoutSecs)
         RETURN_IF_NOT_OK(CheckIpPortListen(addr, timeout));
     }
 
-    LOG(INFO) << "All processes are started successfully. numMasters:" << opts_.numMasters
-              << " numWorkers:" << opts_.numWorkers;
+    LOG(INFO) << "All processes are started successfully. numWorkers:" << opts_.numWorkers;
 
     return Status::OK();
 }
@@ -989,12 +864,6 @@ Status ExternalCluster::WaitNodeReady(ClusterNodeType nodeType, uint32_t index, 
             std::stringstream healthCheckPath;
             healthCheckPath << opts_.rootDir << "/worker" << index << "/health";
             return CheckProbeFile(healthCheckPath.str(), timeoutSecs, GetWorkerPid(index));
-        }
-        case ClusterNodeType::MASTER: {
-            CHECK_FAIL_RETURN_STATUS(!opts_.isObjectCache, K_INVALID, "No master in object cache.");
-            std::stringstream healthCheckPath;
-            healthCheckPath << opts_.rootDir << "/master" << index << "/health";
-            return CheckProbeFile(healthCheckPath.str(), timeoutSecs, GetMasterPid(index));
         }
         case ClusterNodeType::ETCD:
             return WaitEtcdReadyOrTimeout(timeoutSecs);
@@ -1146,37 +1015,6 @@ Status ExternalCluster::StartCoordinatorNode(int index)
     return Status::OK();
 }
 
-Status ExternalCluster::StartMaster(int index)
-{
-    CHECK_FAIL_RETURN_STATUS(!opts_.isObjectCache, K_INVALID, "No master in object cache.");
-    std::string masterCmd = MASTER_BIN_PATH;
-    std::string rootDir = opts_.rootDir + "/master" + std::to_string(index);
-    std::string healthFile = rootDir + "/health";
-    (void)DeleteFile(healthFile);
-    masterCmd += " -master_address=" + opts_.masterIpAddrs[index].ToString() + " -log_dir=" + rootDir + "/log"
-                 + " -rocksdb_store_dir=" + rootDir + "/rocksdb" + " -unix_domain_socket_dir=" + opts_.socketDir + " "
-                 + " -v=" + std::to_string(opts_.vLogLevel) + " -health_check_path=" + healthFile
-                 + +" -l2_cache_delete_thread_num=4 " + opts_.masterGflagParams;
-    if (GetEtcdNum() > 0) {
-        std::string etcdUrl;
-        for (size_t i = 0; i < GetEtcdNum(); ++i) {
-            std::pair<HostPort, HostPort> addrs;
-            GetEtcdAddrs(i, addrs);
-            if (!etcdUrl.empty()) {
-                etcdUrl += ",";
-            }
-            etcdUrl += addrs.first.ToString();
-        }
-        masterCmd += " -backend_store=etcd -etcd_address=" + etcdUrl + " -cluster_name=" + opts_.etcdPrefix;
-    }
-    LOG(INFO) << "Launch master [" << index << "] command: " << masterCmd;
-    auto masterProcess = std::make_unique<MasterProcess>(masterCmd, opts_.masterIpAddrs[index]);
-    RETURN_IF_NOT_OK(masterProcess->Start());
-    TestPortAllocator::Instance().RegisterChildPid(opts_.masterIpAddrs[index].Port(), masterProcess->Pid());
-    masterProcesses_.emplace_back(std::move(masterProcess));
-    return Status::OK();
-}
-
 std::string ExternalCluster::AddGFlagForWorkerStart(std::string &flag)
 {
     std::string oldFlag = opts_.workerGflagParams;
@@ -1196,14 +1034,6 @@ Status ExternalCluster::StartForkWorkerProcess()
         RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Unable to create pipe: " + StrErr(err));
     }
 
-    HostPort masterAddress;
-    if (opts_.isObjectCache && opts_.enableDistributedMaster == "false") {
-        CHECK_FAIL_RETURN_STATUS(opts_.masterIdx >= 0
-                                     && opts_.masterIdx < static_cast<int32_t>(opts_.workerConfigs.size()),
-                                 StatusCode::K_INVALID, "The index for master is out of range.");
-        masterAddress = opts_.workerConfigs[opts_.masterIdx];
-    }
-
     workerForkPid_ = fork();
     if (workerForkPid_ == -1) {
         int err = errno;
@@ -1217,7 +1047,7 @@ Status ExternalCluster::StartForkWorkerProcess()
                 LOG_IF_ERROR(ShutdownWorkers(), "Shutdown workers failed");
                 break;
             }
-            rc = StartWorker(message_, masterAddress);
+            rc = StartWorker(message_);
             if (rc.IsError()) {
                 break;
             }
@@ -1266,14 +1096,14 @@ Status ExternalCluster::FinishForkWorkerProcess()
     return Status::OK();
 }
 
-Status ExternalCluster::StartWorker(int index, const HostPort &address, std::string gFlag)
+Status ExternalCluster::StartWorker(int index, std::string gFlag)
 {
     std::string cmd = ResolveWorkerBinPath();
     CHECK_FAIL_RETURN_STATUS(FileExist(cmd), K_NOT_FOUND, "Cannot find worker binary: " + cmd);
     std::string rootDir = opts_.rootDir + "/worker" + std::to_string(index);
     (void)DeleteFile(rootDir + "/health");
     AppendWorkerRuntimeFlags(index, rootDir, gFlag, cmd);
-    RETURN_IF_NOT_OK(AppendWorkerBackendFlags(index, address, cmd));
+    RETURN_IF_NOT_OK(AppendWorkerBackendFlags(cmd));
     LOG(INFO) << "Launch worker [" << index << "] command: " << cmd;
     auto workerProcess = std::make_unique<WorkerProcess>(cmd, opts_.workerConfigs[index]);
     std::string workerName = "worker_" + std::to_string(index);
@@ -1311,8 +1141,7 @@ void ExternalCluster::AppendWorkerRuntimeFlags(int index, const std::string &roo
     cmd += " -worker_address=" + opts_.workerConfigs[index].ToString() + " -unix_domain_socket_dir=" + opts_.socketDir
            + " -log_dir=" + logDir + " -v=" + std::to_string(opts_.vLogLevel) + " -health_check_path=" + healthFile
            + " -l2_cache_delete_thread_num=4" + " -inject_actions=" + injectActions + " " + opts_.workerGflagParams
-           + " " + gFlag + " -spill_directory=" + spillDir + " -enable_distributed_master="
-           + opts_.enableDistributedMaster + " -yuanrong_iam_url=" + opts_.yuanrong_iam_url
+           + " " + gFlag + " -spill_directory=" + spillDir + " -yuanrong_iam_url=" + opts_.yuanrong_iam_url
            + " -rocksdb_background_threads=" + std::to_string(opts_.numRocksDBThreads)
            + " -oc_thread_num=" + std::to_string(opts_.numOcThreadNum)
            + " -spill_thread_num=" + std::to_string(opts_.numSpillThreadNum);
@@ -1328,7 +1157,7 @@ void ExternalCluster::AppendWorkerRuntimeFlags(int index, const std::string &roo
     }
 }
 
-Status ExternalCluster::AppendWorkerBackendFlags(int index, const HostPort &address, std::string &cmd)
+Status ExternalCluster::AppendWorkerBackendFlags(std::string &cmd)
 {
     if (opts_.numCoordinators > 0) {
         CHECK_FAIL_RETURN_STATUS(!opts_.coordinatorConfigs.empty(), K_RUNTIME_ERROR, "Coordinator address is empty.");
@@ -1354,7 +1183,6 @@ Status ExternalCluster::AppendWorkerBackendFlags(int index, const HostPort &addr
     // ETCD or Coordinator process, so every launch must carry the isolated test cluster name.
     cmd += " -cluster_name=" + opts_.etcdPrefix;
 
-    cmd += GetProperMasterAddrParam(index, address);
     if (opts_.numOBS > 0) {
         cmd += FormatString(
             " -l2_cache_type=obs "
@@ -1379,19 +1207,6 @@ Status ExternalCluster::RestartWorkerAndWaitReadyOneByOne(std::initializer_list<
         RETURN_IF_NOT_OK(WaitNodeReady(WORKER, i, maxWaitTimeSec));
     }
     return Status::OK();
-}
-
-std::string ExternalCluster::GetProperMasterAddrParam(int index, const HostPort &defaultMasterAddr)
-{
-    std::string prefix = " -master_address=";
-    if (GetEtcdNum() <= 0) {
-        return prefix + defaultMasterAddr.ToString();
-    }
-    if (GetMasterNum() == 0) {
-        (void)index;
-        return prefix + defaultMasterAddr.ToString();
-    }
-    return "";
 }
 
 Status ExternalCluster::StartOBS(int index)
@@ -1434,7 +1249,7 @@ Status ExternalCluster::StartOBS(int index)
 Status ExternalCluster::StartWorkerAndWaitReady(std::initializer_list<uint32_t> indexes, int maxWaitTimeSec)
 {
     for (auto i : indexes) {
-        RETURN_IF_NOT_OK(StartWorker(i, HostPort()));
+        RETURN_IF_NOT_OK(StartWorker(i));
     }
     for (auto i : indexes) {
         RETURN_IF_NOT_OK(WaitNodeReady(WORKER, i, maxWaitTimeSec));
@@ -1446,7 +1261,7 @@ Status ExternalCluster::StartWorkerAndWaitReady(const std::initializer_list<uint
                                                 const std::string &workerFlags, int maxWaitTimeSec)
 {
     for (auto i : indexes) {
-        RETURN_IF_NOT_OK(StartWorker(i, HostPort(), workerFlags));
+        RETURN_IF_NOT_OK(StartWorker(i, workerFlags));
     }
     for (auto i : indexes) {
         RETURN_IF_NOT_OK(WaitNodeReady(WORKER, i, maxWaitTimeSec));
@@ -1464,7 +1279,7 @@ Status ExternalCluster::StartWorkerAndWaitReady(const std::initializer_list<uint
         if (iter != workerFlags.end()) {
             flags = " " + iter->second;
         }
-        RETURN_IF_NOT_OK(StartWorker(i, HostPort(), flags));
+        RETURN_IF_NOT_OK(StartWorker(i, flags));
     }
     for (auto i : indexes) {
         RETURN_IF_NOT_OK(WaitNodeReady(WORKER, i, maxWaitTimeSec));
@@ -1481,7 +1296,6 @@ ExternalClusterOptions::ExternalClusterOptions()
       vLogLevel(1),
       logCompress(true),
       isObjectCache(true),
-      masterIdx(0),
       waitWorkerReady(true),
       waitAfterStart(false),
       livenessProbeTimeoutS(150),
@@ -1489,9 +1303,6 @@ ExternalClusterOptions::ExternalClusterOptions()
       isStreamCacheCase(false),
       disableRocksDB(true)
 {
-    if (isObjectCache) {
-        numMasters = 0;
-    }
 }
 }  // namespace st
 }  // namespace datasystem

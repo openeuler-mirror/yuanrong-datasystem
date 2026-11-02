@@ -771,7 +771,6 @@ Status MasterOCServiceImpl::IfNeedTriggerReconciliationImpl(const Reconciliation
     (void)rsp;
     ScopedRequestContext ctx;
     Timer timer;
-    // This is called by worker when centralized master is used. Do sync reconciliation.
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     HostPort workerAddr;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerAddr.ParseString(req.hostport()), "workeradd parse failed");

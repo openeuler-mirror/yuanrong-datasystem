@@ -53,9 +53,8 @@
 namespace datasystem {
 namespace st {
 enum ClusterNodeType {
-    ALL = 0,     // Operate all nodes.
-    MASTER = 1,  // Operate all master nodes.
-    WORKER = 3,  // Operate all worker nodes.
+    ALL = 0,          // Operate all nodes.
+    WORKER = 3,       // Operate all worker nodes.
     ETCD = 4,         // Operate all etcd nodes.
     OBS = 5,
     COORDINATOR = 6  // Operate all coordinator nodes.
@@ -65,8 +64,7 @@ constexpr int DEFAULT_SLEEP_FOR_TIME = 500;
 
 struct BaseClusterOptions {
     BaseClusterOptions()
-        : numMasters(DEFAULT_COMPONENT_NUM),
-          numWorkers(DEFAULT_COMPONENT_NUM),
+        : numWorkers(DEFAULT_COMPONENT_NUM),
           numRocksDBThreads(DEFAULT_THREAD_NUM),
           numOcThreadNum(DEFAULT_THREAD_NUM),
           numSpillThreadNum(DEFAULT_THREAD_NUM),
@@ -78,13 +76,8 @@ struct BaseClusterOptions {
     {
     }
 
-    // Number of masters to be started. numMasters must be less than or equal to the number of masterIpAddrs. When
-    // numMasters is less than the number of masterIpAddrs, the first numMasters IP addresses are used.
-    // No master exists in object cache.
-    uint32_t numMasters;
-
     // Number of workers to be started. numWorkers must be less than or equal to the number of workerConfigs. When
-    // numMasters is less than the number of workerConfigs, the first numWorkers IP addresses are used.
+    // numWorkers is less than the number of workerConfigs, the first numWorkers IP addresses are used.
     uint32_t numWorkers;
 
     // Number of background threads rocksdb can use for flushing and compacting.
@@ -106,10 +99,6 @@ struct BaseClusterOptions {
     // The number of stream backend socket for stream cache.
     // Default: 4
     uint32_t numScStreamSocket;
-
-    // Master ip address.
-    // Default: None. Must be specified by the user.
-    std::vector<HostPort> masterIpAddrs;
 
     // Worker ip address.
     // Default: None. Must be specified by the user.
@@ -341,11 +330,10 @@ public:
 
     /**
      * @brief Add one worker
-     * @param masterAddress master address
      * @param workerAddress worker address
      * @return
      */
-    virtual Status AddNode(const HostPort &masterAddress, const std::string workerAddress) = 0;
+    virtual Status AddNode(const std::string &workerAddress) = 0;
 
     /**
      * @brief Clear inject action for worker, master or gcs.
@@ -372,12 +360,6 @@ public:
      * @return the number of etcd.
      */
     virtual size_t GetEtcdNum() const = 0;
-
-    /**
-     * @brief Get the number of master.
-     * @return the number of master.
-     */
-    virtual size_t GetMasterNum() const = 0;
 
     /**
      * @brief Get the number of gcs.
@@ -421,14 +403,6 @@ public:
     virtual Status ReadClusterTopology(ClusterTopologyPb &topology) const = 0;
 
     /**
-     * @brief Get IP address of a master.
-     * @param[in] idx index of master.
-     * @param[out] addr return address.
-     * @return Status::OK() if success.
-     */
-    virtual Status GetMasterAddr(uint32_t idx, HostPort &addr) const = 0;
-
-    /**
      * @brief Get IP address of gcs.
      * @param[in] idx index of gcs.
      * @param[out] addr return address.
@@ -457,13 +431,6 @@ public:
      * @return return process id
      */
     virtual pid_t GetEtcdPid(uint32_t idx) const = 0;
-
-    /**
-     * @brief Get process id of master.
-     * @param[in] idx index of master.
-     * @return return process id
-     */
-    virtual pid_t GetMasterPid(uint32_t idx) const = 0;
 
     /**
      * @brief Get process id of gcs.
@@ -496,12 +463,6 @@ public:
      * @return Status::OK() if success.
      */
     virtual Status StartOBS() = 0;
-
-    /**
-     * @brief Start master nodes, called in Start method.
-     * @return Status::OK() if success.
-     */
-    virtual Status StartMasters() = 0;
 
     /**
      * @brief Start worker nodes, called in Start method.

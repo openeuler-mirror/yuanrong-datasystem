@@ -47,7 +47,6 @@ public:
         opts.numEtcd = 1;
         opts.numOBS = 1;
         opts.numWorkers = WORKER_NUM;
-        opts.enableDistributedMaster = "true";
     }
 
     void SetUp() override
@@ -272,7 +271,6 @@ public:
         opts.workerGflagParams += " -object_del_retry_delay_sec=1";
         opts.numEtcd = 1;
         opts.numWorkers = 3;  // start 3 nodes.
-        opts.enableDistributedMaster = "true";
         opts.disableRocksDB = false;
     }
 };

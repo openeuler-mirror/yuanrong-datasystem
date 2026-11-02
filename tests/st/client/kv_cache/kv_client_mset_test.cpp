@@ -36,6 +36,7 @@
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/random_data.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_pool.h"
@@ -58,7 +59,6 @@ public:
         opts.numEtcd = 1;
         opts.numOBS = 1;
         opts.numWorkers = DEFAULT_WORKER_NUM;
-        opts.enableDistributedMaster = "false";
         opts.workerGflagParams = "-shared_memory_size_mb=3000 -v=2 ";
     }
 
@@ -115,7 +115,6 @@ public:
         opts.numEtcd = 1;
         opts.numOBS = 1;
         opts.numWorkers = DEFAULT_WORKER_NUM;
-        opts.enableDistributedMaster = "false";
         opts.workerGflagParams = "-shared_memory_size_mb=3000 -v=0";
     }
 
@@ -544,34 +543,49 @@ TEST_F(KVClientMSetTest, TestMsetFailedKeys)
 TEST_F(KVClientMSetTest, TestMsetFailedKeysLastRc)
 {
     MSetParam param;
-    std::vector<std::string> keys, vals;
-    std::vector<StringView> values;
     param.existence = ExistenceOpt::NONE;
-    size_t maxElementSize = 100;
-    std::shared_ptr<KVClient> client1;
-    auto dataSize1 = 40;
-    auto worker0 = 0, worker1 = 1, worekr2 = 2;
-    GenerateKeyValues(keys, vals, maxElementSize, dataSize1);
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, worker1, "AttachShmUnitToObject.error", "1000*return(K_UNKNOWN_ERROR)"));
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, worekr2, "SaveBinaryObjectToMemory.error", "3000*return(K_RUNTIME_ERROR)"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, worker0, "master.create_meta_failure", "3000*return(K_INVALID)"));
-    std::for_each(vals.begin(), vals.end(), [&](const std::string &val) { values.emplace_back(val); });
-    std::vector<std::string> failedIds;
-    ASSERT_EQ(client1_->MSet(keys, values, failedIds, param).GetCode(), K_UNKNOWN_ERROR);
-    ASSERT_EQ(failedIds.size(), maxElementSize);
-    failedIds.clear();
-    ASSERT_EQ(client2_->MSet(keys, values, failedIds, param).GetCode(), K_RUNTIME_ERROR);
-    ASSERT_EQ(failedIds.size(), maxElementSize);
-    failedIds.clear();
-    ASSERT_EQ(client0_->MSet(keys, values, failedIds, param).GetCode(), K_INVALID);
-    ASSERT_EQ(failedIds.size(), maxElementSize);
-    for (size_t i = 0; i < keys.size(); i++) {
-        std::string valGet;
-        DS_ASSERT_NOT_OK(client0_->Get(keys[i], valGet));
-        DS_ASSERT_NOT_OK(client1_->Get(keys[i], valGet));
-    }
+    constexpr size_t maxElementSize = 100;
+    constexpr int dataSize = 40;
+    auto expectMSetFailure = [&](const std::shared_ptr<KVClient> &client, uint32_t workerIndex,
+                                 const std::string &injectName, const std::string &injectAction,
+                                 StatusCode expectedCode, const std::vector<std::string> &keys) {
+        std::vector<std::string> valuesStorage;
+        GenerateValues(valuesStorage, static_cast<int>(keys.size()), dataSize);
+        std::vector<StringView> values;
+        values.reserve(valuesStorage.size());
+        for (const auto &value : valuesStorage) {
+            values.emplace_back(value);
+        }
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, injectName, injectAction));
+        Raii clearInject(
+            [this, workerIndex, &injectName] { (void)cluster_->ClearInjectAction(WORKER, workerIndex, injectName); });
+        std::vector<std::string> failedIds;
+        ASSERT_EQ(client->MSet(keys, values, failedIds, param).GetCode(), expectedCode);
+        ASSERT_EQ(failedIds.size(), keys.size());
+        for (const auto &key : keys) {
+            ASSERT_NE(std::find(failedIds.begin(), failedIds.end(), key), failedIds.end());
+            std::string value;
+            ASSERT_EQ(client0_->Get(key, value).GetCode(), K_NOT_FOUND);
+            ASSERT_EQ(client->Get(key, value).GetCode(), K_NOT_FOUND);
+        }
+    };
+
+    std::vector<std::string> worker1Keys;
+    std::vector<std::string> unusedValues;
+    GenerateKeyValues(worker1Keys, unusedValues, maxElementSize, dataSize);
+    ASSERT_NO_FATAL_FAILURE(expectMSetFailure(client1_, 1, "AttachShmUnitToObject.error",
+                                              "1000*return(K_UNKNOWN_ERROR)", K_UNKNOWN_ERROR, worker1Keys));
+
+    std::vector<std::string> worker2Keys;
+    unusedValues.clear();
+    GenerateKeyValues(worker2Keys, unusedValues, maxElementSize, dataSize);
+    ASSERT_NO_FATAL_FAILURE(expectMSetFailure(client2_, 2, "SaveBinaryObjectToMemory.error",
+                                              "3000*return(K_RUNTIME_ERROR)", K_RUNTIME_ERROR, worker2Keys));
+
+    std::vector<std::string> owner0Keys;
+    DS_ASSERT_OK(FindKeysRoutedToWorker(0, "mset_meta_failure_", maxElementSize, owner0Keys));
+    ASSERT_NO_FATAL_FAILURE(
+        expectMSetFailure(client0_, 0, "master.create_meta_failure", "3000*return(K_INVALID)", K_INVALID, owner0Keys));
 }
 
 TEST_F(KVClientMSetTest, MSetNtxInvalidParam)

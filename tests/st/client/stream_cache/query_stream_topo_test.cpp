@@ -42,8 +42,6 @@ public:
     {
         opts.numEtcd = 1;
         opts.numWorkers = 5;
-        opts.numMasters = 1;
-        opts.enableDistributedMaster = "false";
         opts.vLogLevel = 2;
         SCClientCommon::SetClusterSetupOptions(opts);
     }

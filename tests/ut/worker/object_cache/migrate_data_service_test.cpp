@@ -580,7 +580,7 @@ public:
 
 protected:
     MigrateTestPlacementFacade placement_;
-    worker::MetadataRouteResolver metadataRoute_{ &placement_, worker::MetadataRouteOptions{} };
+    worker::MetadataRouteResolver metadataRoute_{ &placement_ };
     HostPort localAddress_{ "127.0.0.1", 18482 };
     datasystem::memory::Allocator *allocator_{ nullptr };
     std::shared_ptr<ObjectTable> objectTable_;
@@ -615,7 +615,7 @@ TEST(MetaOwnerRouteGroupsTest, BuildGroupsFromTopologyPlacementAndKeepsPerKeyFai
     masterAddr.ParseString("127.0.0.1:18481");
     placement.SetOwner("ok-key", masterAddr);
 
-    worker::MetadataRouteResolver metadataRoute(&placement, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver metadataRoute(&placement);
     auto grouped = metadataRoute.GroupOwners({ "ok-key", "missing-key" });
     ASSERT_EQ(grouped.groups.size(), size_t(1));
     auto iter = grouped.groups.find(masterAddr);
@@ -1451,7 +1451,7 @@ protected:
     }
 
     MigrateTestPlacementFacade placement_;
-    worker::MetadataRouteResolver metadataRoute_{ &placement_, worker::MetadataRouteOptions{} };
+    worker::MetadataRouteResolver metadataRoute_{ &placement_ };
     HostPort localAddress_{ "127.0.0.1", 18888 };
     HostPort leavingWorkerAddress_{ "127.0.0.1", 18889 };
     cluster::TopologySnapshotState snapshots_;

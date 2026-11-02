@@ -71,10 +71,6 @@
         "value": "",
         "description": "Environment variable name used to obtain the current host_id. Worker reports this host_id to ETCD for same-node worker affinity."
     },
-    "enable_distributed_master": {
-        "value": "true",
-        "description": "Whether to support distributed master, default is true."
-    },
     "sc_regular_socket_num": {
         "value": "32",
         "description": "The number of regular backend socket for stream cache, must be great equal than 0."

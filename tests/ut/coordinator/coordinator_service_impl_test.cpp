@@ -1107,34 +1107,22 @@ TEST_F(CoordinatorServiceImplTest, InvalidPhysicalKeysFailBeforeHeaderOrStoreAcc
     DS_ASSERT_OK(service->Shutdown());
 }
 
-TEST_F(CoordinatorServiceImplTest, MasterAddressSingletonUsesLeadershipOnlyAdmission)
+TEST_F(CoordinatorServiceImplTest, RemovedMasterAddressKeyIsRejected)
 {
     auto service = MakeService();
     DS_ASSERT_OK(InitializeRunning(*service));
-    int recoveryStateCalls = 0;
-    service->recoveryStateProvider_ = [&](const std::string &) {
-        ++recoveryStateCalls;
-        return coordinator::TopologyRecoveryState::RECOVERING;
-    };
-    const std::string key = std::string(COORDINATION_MASTER_ADDRESS_TABLE) + "/" + COORDINATION_MASTER_ADDRESS_KEY;
+    const std::string key = "/datasystem/master_address";
 
     coordinator::PutReqPb put;
     put.set_key(key);
     put.set_value("127.0.0.1:31501");
     coordinator::PutRspPb putResponse;
-    DS_ASSERT_OK(service->Put(put, putResponse));
+    EXPECT_EQ(service->Put(put, putResponse).GetCode(), K_INVALID);
 
     coordinator::RangeReqPb range;
     range.set_key(key);
     coordinator::RangeRspPb rangeResponse;
-    DS_ASSERT_OK(service->Range(range, rangeResponse));
-    ASSERT_EQ(rangeResponse.kvs_size(), 1);
-    EXPECT_EQ(rangeResponse.kvs(0).value(), put.value());
-    EXPECT_EQ(recoveryStateCalls, 0);
-
-    range.set_range_end(key + "0");
-    coordinator::RangeRspPb invalidRangeResponse;
-    EXPECT_EQ(service->Range(range, invalidRangeResponse).GetCode(), K_INVALID);
+    EXPECT_EQ(service->Range(range, rangeResponse).GetCode(), K_INVALID);
     DS_ASSERT_OK(service->Shutdown());
 }
 

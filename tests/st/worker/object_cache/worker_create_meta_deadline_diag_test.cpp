@@ -18,7 +18,7 @@
  * Description: ST that validates the end-to-end client-deadline propagation
  * through brpc.
  * Injects a 300ms master-side delay and issues a Set with a 20ms request
- * budget from worker 1 (master on worker 0, non-distributed).
+ * budget from worker 1 for a key owned by worker 0.
  *
  * If deadline propagation is working (the fix in brpc_service_generator.cpp +
  * baidu_std_protocol_deliver_timeout_ms), the master RPC sees ~20ms and the
@@ -48,11 +48,7 @@ public:
     {
         opts.numEtcd = 1;
         opts.numWorkers = 2;
-        // Non-distributed master: master lives on worker 0. A Set issued via
-        // worker 1 whose object key routes to the worker-0 master takes the
-        // Remote RPC path (WorkerRemoteMasterOCApi::CreateMeta).
-        opts.enableDistributedMaster = "false";
-        opts.masterIdx = 0;
+        // A Set issued through worker 1 for a worker-0-owned key takes the remote CreateMeta RPC path.
         opts.waitWorkerReady = true;
         opts.workerGflagParams = "-shared_memory_size_mb=1024 -v=2";
     }
@@ -71,7 +67,9 @@ public:
         InitTestKVClient(1, warmupClient, 60000);
         datasystem::SetParam param;
         param.writeMode = datasystem::WriteMode::NONE_L2_CACHE;
-        DS_ASSERT_OK(warmupClient->Set("deadline_diag_warmup_" + RandomData().GetRandomString(10), "v", param));
+        std::string warmupKey;
+        DS_ASSERT_OK(FindKeyRoutedToWorker(0, "deadline_diag_warmup_", warmupKey));
+        DS_ASSERT_OK(warmupClient->Set(warmupKey, "v", param));
         warmupClient.reset();
 
         // Client on worker 1, request budget 20ms (mirrors production config).
@@ -90,7 +88,8 @@ public:
         constexpr auto timeout = std::chrono::seconds(15);
         constexpr auto interval = std::chrono::milliseconds(100);
         const auto deadline = std::chrono::steady_clock::now() + timeout;
-        const std::string key = "worker_master_ready_" + RandomData().GetRandomString(10);
+        std::string key;
+        DS_ASSERT_OK(FindKeyRoutedToWorker(0, "worker_master_ready_", key));
         std::string value;
         Status rc = client_->Get(key, value);
         while (rc.GetCode() != StatusCode::K_NOT_FOUND && std::chrono::steady_clock::now() < deadline) {
@@ -120,7 +119,8 @@ TEST_F(WorkerCreateMetaDeadlineDiagTest, SlowMasterSetTimesOutAtClientBudget)
     // CreatePendingMeta() — only reaches the MSET/batch path, NOT single Set.
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.CreateMeta.begin", "1*sleep(300)"));
 
-    std::string key = "deadline_diag_" + RandomData().GetRandomString(10);
+    std::string key;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(0, "deadline_diag_", key));
     std::string val = "v";
     datasystem::SetParam param;
     param.writeMode = datasystem::WriteMode::NONE_L2_CACHE;

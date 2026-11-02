@@ -54,7 +54,6 @@ public:
     {
         opts.numWorkers = 1;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "true";
         opts.workerGflagParams = " -enable_urma=true -shared_memory_size_mb=128 -arena_per_tenant=1"
                                  " -ipc_through_shared_memory=false";
     }

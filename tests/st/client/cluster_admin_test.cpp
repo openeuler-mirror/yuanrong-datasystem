@@ -40,7 +40,6 @@ public:
     {
         opts.numEtcd = 2;
         opts.numWorkers = 2;
-        opts.enableDistributedMaster = "true";
         opts.workerGflagParams = "-v=1 -node_timeout_s=15";
     }
 

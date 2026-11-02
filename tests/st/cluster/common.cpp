@@ -16,11 +16,15 @@
  */
 #include "common.h"
 
+#include <utility>
+
 #include "cluster/test_port_allocator.h"
+#include "cluster/topology_token_helper.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/file_util.h"
+#include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "kill_timer.h"
 
@@ -28,6 +32,24 @@ DS_DECLARE_string(cluster_name);
 
 namespace datasystem {
 namespace st {
+namespace {
+Status BuildActiveTokenWorkers(BaseCluster &cluster, std::map<uint32_t, std::string> &tokenWorkers)
+{
+    ClusterTopologyPb topology;
+    RETURN_IF_NOT_OK(cluster.ReadClusterTopology(topology));
+    for (const auto &worker : topology.members()) {
+        if (worker.second.state() != MembershipPb::ACTIVE) {
+            continue;
+        }
+        for (const auto token : RebuildTopologyMemberTokens(topology, worker.first, worker.second)) {
+            tokenWorkers.emplace(token, worker.first);
+        }
+    }
+    CHECK_FAIL_RETURN_STATUS(!tokenWorkers.empty(), K_NOT_FOUND, "Hash ring has no active worker tokens");
+    return Status::OK();
+}
+}  // namespace
+
 void GetCurTestName(std::string &caseName, std::string &name)
 {
     const ::testing::TestInfo *curTest = ::testing::UnitTest::GetInstance()->current_test_info();
@@ -168,9 +190,6 @@ Status ExternalClusterTest::Init()
 void ExternalClusterTest::SetDefaultOptions(ExternalClusterOptions &opts) const
 {
     std::vector<std::string> roles;
-    for (uint32_t i = 0; i < opts.numMasters; ++i) {
-        roles.emplace_back("master_rpc_" + std::to_string(i));
-    }
     for (uint32_t i = 0; i < opts.numWorkers; ++i) {
         roles.emplace_back("worker_rpc_" + std::to_string(i));
         roles.emplace_back("worker_direct_" + std::to_string(i));
@@ -194,13 +213,7 @@ void ExternalClusterTest::SetDefaultOptions(ExternalClusterOptions &opts) const
     ASSERT_EQ(leases.size(), roles.size());
     size_t leaseIdx = 0;
 
-    // Launch one master and one worker.
-    for (uint32_t i = 0; i < opts.numMasters; ++i) {
-        int port = leases[leaseIdx++].Port();
-        ASSERT_NE(port, -1);
-        opts.masterIpAddrs.emplace_back("127.0.0.1", port);
-    }
-    // And launch a number of worker nodes
+    // Launch worker nodes.
     for (uint32_t i = 0; i < opts.numWorkers; ++i) {
         int port = leases[leaseIdx++].Port();
         ASSERT_NE(port, -1);
@@ -260,6 +273,54 @@ int ExternalClusterTest::GetFreePort(const int maxPort) const
     int port;
     GetFreePort(port, maxPort);
     return port;
+}
+
+Status ExternalClusterTest::FindKeyRoutedToWorker(uint32_t workerIndex, const std::string &prefix,
+                                                  std::string &key) const
+{
+    std::vector<std::string> keys;
+    RETURN_IF_NOT_OK(FindKeysRoutedToWorker(workerIndex, prefix, 1, keys));
+    key = std::move(keys.front());
+    return Status::OK();
+}
+
+Status ExternalClusterTest::FindKeysRoutedToWorker(uint32_t workerIndex, const std::string &prefix, size_t keyCount,
+                                                   std::vector<std::string> &keys) const
+{
+    keys.clear();
+    keys.reserve(keyCount);
+    HostPort targetWorker;
+    RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(workerIndex, targetWorker));
+    std::map<uint32_t, std::string> tokenWorkers;
+    RETURN_IF_NOT_OK(BuildActiveTokenWorkers(*cluster_, tokenWorkers));
+    constexpr size_t keySearchLimit = 100'000;
+    for (size_t i = 0; i < keyCount; ++i) {
+        const std::string keyPrefix = prefix + std::to_string(i) + "_";
+        for (size_t candidateIndex = 0; candidateIndex < keySearchLimit; ++candidateIndex) {
+            std::string candidate = keyPrefix + std::to_string(candidateIndex);
+            auto owner = tokenWorkers.lower_bound(MurmurHash3_32(candidate));
+            if (owner == tokenWorkers.end()) {
+                owner = tokenWorkers.begin();
+            }
+            if (owner->second == targetWorker.ToString()) {
+                keys.emplace_back(std::move(candidate));
+                break;
+            }
+        }
+        CHECK_FAIL_RETURN_STATUS(keys.size() == i + 1, K_NOT_FOUND, "Unable to find a key for the target worker");
+    }
+    return Status::OK();
+}
+
+Status ExternalClusterTest::GetKeyRoutedWorker(const std::string &key, HostPort &workerAddress) const
+{
+    std::map<uint32_t, std::string> tokenWorkers;
+    RETURN_IF_NOT_OK(BuildActiveTokenWorkers(*cluster_, tokenWorkers));
+    auto owner = tokenWorkers.lower_bound(MurmurHash3_32(key));
+    if (owner == tokenWorkers.end()) {
+        owner = tokenWorkers.begin();
+    }
+    return workerAddress.ParseString(owner->second);
 }
 
 static uint32_t g_crc32Table[256] = {

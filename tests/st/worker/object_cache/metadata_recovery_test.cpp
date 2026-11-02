@@ -46,7 +46,6 @@ public:
         opts.numEtcd = useCoordinator ? 0 : 1;
         opts.numCoordinators = useCoordinator ? 1 : 0;
         opts.numWorkers = 2;
-        opts.enableDistributedMaster = "true";
         std::stringstream ss;
         ss << "-enable_reconciliation=true "
            << "-node_timeout_s=" << NODE_TIMEOUT_S << " "

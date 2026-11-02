@@ -47,7 +47,6 @@ public:
         opts.workerGflagParams =
             " -v=0  -authorization_enable=true -shared_memory_size_mb=2048 enable_fallocate=false -arena_per_tenant=2 "
             "-enable_fallocate=false";
-        opts.enableDistributedMaster = "true";
         opts.numEtcd = 1;
         FLAGS_v = 0;
     }

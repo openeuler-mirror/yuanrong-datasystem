@@ -124,7 +124,7 @@ TEST_F(AsyncUpdateLocationTest, TestAddTask)
 TEST_F(AsyncUpdateLocationTest, AddAndLoadLocations)
 {
     auto ocMetaManager = std::make_shared<OCMetadataManagerHelper>(
-        akSkManager_, rocksStore_.get(), nullptr, nullptr, "127.0.0.1:900", nullptr, nullptr, false, HostPort(), "",
+        akSkManager_, rocksStore_.get(), nullptr, nullptr, "127.0.0.1:900", nullptr, nullptr, "",
         nullptr, "locationDbName", false);
     DS_ASSERT_OK(objectStore_->Init());
     std::string key1 = "test_object_key1";
@@ -208,7 +208,7 @@ TEST_F(AsyncUpdateLocationTest, TopologyNotReadyDoesNotBlockLocationRecovery)
     cluster::TopologySnapshotState snapshots;
     cluster::MembershipEndpointView membership(snapshots);
     auto ocMetaManager = std::make_shared<OCMetadataManagerHelper>(
-        akSkManager_, rocksStore_.get(), nullptr, nullptr, "127.0.0.1:900", nullptr, &membership, false, HostPort(),
+        akSkManager_, rocksStore_.get(), nullptr, nullptr, "127.0.0.1:900", nullptr, &membership,
         "", nullptr, "locationDbName", false);
     std::unordered_map<std::string, std::vector<std::pair<std::string, master::AckState>>> locations;
 

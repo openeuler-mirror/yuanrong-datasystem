@@ -41,7 +41,6 @@
 #include "datasystem/worker/cluster_event_type.h"
 #include "ut/common.h"
 
-DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_string(log_dir);
 
 namespace datasystem::ut {
@@ -121,7 +120,7 @@ public:
         CommonTest::SetUp();
         DS_ASSERT_OK(RpcStubCacheMgr::Instance().Init(100));
         server_ = std::make_unique<worker::WorkerOCServer>(HostPort("127.0.0.1", 31501),
-                                                          HostPort("127.0.0.1", 31501), HostPort(), nullptr);
+                                                          HostPort("127.0.0.1", 31501), nullptr);
         server_->SetScaleInShutdownRequester([this] { ++shutdownRequestCount_; });
         RemoveDeadWorkerEvent::GetInstance().AddSubscriber(SUBSCRIBER_NAME, [this](const std::string &address) {
             recoveredAddress_ = address;
@@ -305,29 +304,14 @@ TEST_F(WorkerOCServerTest, JemallocStatsRegistrationFollowsBuiltinServices)
     TryInitJemallocStatsBvar(*server_);
     ASSERT_TRUE(HasJemallocStatsBvar(*server_));
 
-    worker::WorkerOCServer duplicateServer(HostPort("127.0.0.1", 31502), HostPort("127.0.0.1", 31502), HostPort(),
-                                           nullptr);
+    worker::WorkerOCServer duplicateServer(HostPort("127.0.0.1", 31502), HostPort("127.0.0.1", 31502), nullptr);
     TryInitJemallocStatsBvar(duplicateServer);
     EXPECT_FALSE(HasJemallocStatsBvar(duplicateServer));
 }
 
-TEST_F(WorkerOCServerTest, DistributedMetadataAlwaysUsesLosslessExit)
+TEST_F(WorkerOCServerTest, MetadataAlwaysUsesLosslessExit)
 {
-    const bool savedDistributedMaster = FLAGS_enable_distributed_master;
-    auto restoreFlag = Raii([savedDistributedMaster] { FLAGS_enable_distributed_master = savedDistributedMaster; });
-    FLAGS_enable_distributed_master = true;
-
     EXPECT_TRUE(IsScaleIn());
-}
-
-TEST_F(WorkerOCServerTest, CentralizedMetadataIgnoresVoluntaryExitMarker)
-{
-    const bool savedDistributedMaster = FLAGS_enable_distributed_master;
-    auto restoreFlag = Raii([savedDistributedMaster] { FLAGS_enable_distributed_master = savedDistributedMaster; });
-    FLAGS_enable_distributed_master = false;
-    DS_ASSERT_OK(AtomicWriteTextFile(FLAGS_log_dir + "/worker-status", "voluntary scale in\n"));
-
-    EXPECT_FALSE(IsScaleIn());
 }
 
 TEST_F(WorkerOCServerTest, ActiveAddressRemovesPreviouslyFailedWorker)

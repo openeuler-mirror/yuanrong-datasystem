@@ -542,9 +542,7 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, DISABLED_ScaleUpNewWorkerParticipates
    ASSERT_EQ(GetInjectCount(WORKER0, SOURCE_SEND_POINT), 0ul);
 
    HostPort newWorkerAddr("127.0.0.1", GetFreePort());
-   HostPort masterAddr;
-   DS_ASSERT_OK(cluster_->GetWorkerAddr(WORKER0, masterAddr));
-   DS_ASSERT_OK(cluster_->AddNode(masterAddr, newWorkerAddr.ToString()));
+   DS_ASSERT_OK(cluster_->AddNode(newWorkerAddr.ToString()));
    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, WORKER2, 20));
    WaitAllNodesActiveInHashRing(3);
    InitTestKVClient(WORKER2, client2_);
@@ -1280,7 +1278,6 @@ public:
        opts.numWorkers = 1;
        opts.numEtcd = 1;
        opts.numOBS = 0;
-       opts.enableDistributedMaster = "false";
        opts.workerGflagParams =
            "-shared_memory_size_mb=8 -log_monitor=true -v=1 -spill_size_limit=67108864 "
            "-enable_memory_rebalance=" + std::string(EnableRebalance() ? "true" : "false");

@@ -196,8 +196,6 @@ public:
     {
         opts.numWorkers = 2;
         opts.numEtcd = 1;
-        opts.enableDistributedMaster = "true";
-        opts.masterIdx = 1;  // Master on worker1 so it stays alive when worker0 is killed.
         opts.disableRocksDB = false;
         opts.workerGflagParams =
             " -shared_memory_size_mb=64 -v=1"

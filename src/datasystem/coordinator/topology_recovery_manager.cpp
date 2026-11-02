@@ -170,18 +170,6 @@ Status ValidateRelativeKey(TopologyCoordinationKeyKind kind, const std::string &
 Status MatchKeyspace(const cluster::TopologyKeyHelper &keys, const std::string &physicalKey,
                      ParsedTopologyCoordinationKey &parsed, bool &matched)
 {
-    const auto &clusterName = keys.ClusterName();
-    if (clusterName.empty()) {
-        const std::string masterAddressKey =
-            std::string(COORDINATION_MASTER_ADDRESS_TABLE) + "/" + COORDINATION_MASTER_ADDRESS_KEY;
-        if (physicalKey == masterAddressKey) {
-            parsed = ParsedTopologyCoordinationKey{ clusterName, TopologyCoordinationKeyKind::MASTER_ADDRESS,
-                                                    COORDINATION_MASTER_ADDRESS_KEY };
-            matched = true;
-            return Status::OK();
-        }
-    }
-
     const std::array<std::pair<const std::string *, TopologyCoordinationKeyKind>, TOPOLOGY_KEYSPACE_KIND_COUNT>
         tables = {
         std::make_pair(&keys.TopologyTable(), TopologyCoordinationKeyKind::TOPOLOGY),

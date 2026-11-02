@@ -443,16 +443,11 @@ TEST_F(TopologyRecoveryManagerTest, ParsesAllTopologyKeyKindsInDefaultAndNamedCl
     }
 }
 
-TEST_F(TopologyRecoveryManagerTest, ParsesOnlyExactMasterAddressSingleton)
+TEST_F(TopologyRecoveryManagerTest, RejectsRemovedMasterAddressKey)
 {
-    const std::string key = std::string(COORDINATION_MASTER_ADDRESS_TABLE) + "/" + COORDINATION_MASTER_ADDRESS_KEY;
+    const std::string key = "/datasystem/master_address";
     ParsedTopologyCoordinationKey parsed;
-    DS_ASSERT_OK(manager_->ParseKey(key, parsed));
-    EXPECT_TRUE(parsed.clusterName.empty());
-    EXPECT_EQ(parsed.kind, TopologyCoordinationKeyKind::MASTER_ADDRESS);
-    EXPECT_EQ(parsed.relativeKey, COORDINATION_MASTER_ADDRESS_KEY);
-
-    EXPECT_EQ(manager_->ParseKey(key + "/child", parsed).GetCode(), K_INVALID);
+    EXPECT_EQ(manager_->ParseKey(key, parsed).GetCode(), K_INVALID);
     EXPECT_EQ(manager_->ParseKey("/datasystem/blue/master_address", parsed).GetCode(), K_INVALID);
     EXPECT_EQ(manager_->CheckReadAllowed(key, key + "0").GetCode(), K_INVALID);
 }

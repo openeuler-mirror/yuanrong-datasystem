@@ -1,6 +1,6 @@
 {
   "repo_root": ".",
-  "generated_at_utc": "2026-10-29T07:55:43+00:00",
+  "generated_at_utc": "2026-10-29T12:17:26+00:00",
   "root_files": [
     "README.md",
     "build.sh",
@@ -203,7 +203,6 @@
         "  - authenticate.h",
         "  - cluster_event_type.h",
         "  - data_worker.cpp",
-        "  - metadata_route_options.h",
         "  - metadata_route_resolver.cpp",
         "  - metadata_route_resolver.h",
         "  - rebalance_executor.cpp",

@@ -21,6 +21,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -163,6 +164,13 @@ protected:
      * @return A free port.
      */
     int GetFreePort(const int maxPort = 65'535) const;
+
+    Status FindKeyRoutedToWorker(uint32_t workerIndex, const std::string &prefix, std::string &key) const;
+
+    Status FindKeysRoutedToWorker(uint32_t workerIndex, const std::string &prefix, size_t keyCount,
+                                  std::vector<std::string> &keys) const;
+
+    Status GetKeyRoutedWorker(const std::string &key, HostPort &workerAddress) const;
 };
 
 // Obtain the test case name.

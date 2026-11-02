@@ -127,7 +127,6 @@ public:
         opts.numEtcd = IsCoordinatorTransportSetCase() ? 0 : 1;
         opts.numCoordinators = IsCoordinatorTransportSetCase() ? 1 : 0;
         opts.numWorkers = IsRemoteTransportSetCase() ? REMOTE_TRANSPORT_WORKER_NUM : WORKER_NUM;
-        opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
             " -shared_memory_size_mb=512 -ipc_through_shared_memory=false -arena_per_tenant=1";
         opts.workerGflagParams += " -host_id_env_name=" + std::string(HOST_ID_ENV_NAME);

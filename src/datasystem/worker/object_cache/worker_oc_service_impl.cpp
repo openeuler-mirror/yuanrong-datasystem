@@ -126,10 +126,8 @@ DS_DECLARE_string(l2_cache_type);
 DS_DECLARE_uint32(data_migrate_rate_limit_mb);
 DS_DECLARE_uint32(max_client_num);
 DS_DECLARE_string(worker_address);
-DS_DECLARE_string(master_address);
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(etcd_address);
-DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_uint32(memory_alignment);
 DS_DECLARE_string(kv_events_config);
 
@@ -456,14 +454,12 @@ void RunPeerUbPortHealthVerification(const PeerUbPortHealthVerificationContext &
 }  // namespace
 
 Status BuildGetHashRingResponse(const cluster::TopologySnapshot &snapshot, uint64_t requestedVersion,
-                                const std::string &masterAddress, GetHashRingRspPb &rsp,
-                                const std::string &requestedHostIdsDigest)
+                                GetHashRingRspPb &rsp, const std::string &requestedHostIdsDigest)
 {
     rsp.Clear();
     CHECK_FAIL_RETURN_STATUS(snapshot.HostIdsKnown(), K_NOT_READY,
                              "GetHashRing membership host IDs are not ready");
     rsp.set_version(snapshot.Version());
-    rsp.set_master_address(masterAddress);
     rsp.set_host_ids_digest(snapshot.HostIdsDigest());
     if (requestedVersion != 0 && requestedVersion == snapshot.Version()
         && (requestedHostIdsDigest.empty() || requestedHostIdsDigest == snapshot.HostIdsDigest())) {
@@ -580,7 +576,6 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
       endpointPolicy_(metadataRoute, membership),
       exitRequested_(exitRequested),
       isRestart_(isRestart),
-      centralizedMetadata_(!FLAGS_enable_distributed_master),
       controlBackendAvailableAtStartup_(controlBackendAvailableAtStartup),
       akSkManager_(std::move(manager))
 {
@@ -687,7 +682,7 @@ void WorkerOCServiceImpl::InitServiceImpl()
         .exitRequested = exitRequested_,
         .ubAdmission = ubAdmission_.get(),
         .metadataRpcObserver = BuildMetadataRpcObserver(topologyEngine_, exitRequested_, metadataRpcObserverAlive_),
-        .allowDirectoryLag = centralizedMetadata_,
+        .allowDirectoryLag = false,
         .metadataRpcFailureReported = BuildMetadataRpcFailureReported(topologyEngine_),
     };
     createProc_ = std::make_shared<WorkerOcServiceCreateImpl>(param, akSkManager_, localAddress_);
@@ -2786,10 +2781,6 @@ Status WorkerOCServiceImpl::GetCommittedMemberAddresses(std::vector<std::string>
 
 Status WorkerOCServiceImpl::GetExpectedReconciliationCount(int &expectedCount) const
 {
-    if (centralizedMetadata_) {
-        expectedCount = -1;
-        return Status::OK();
-    }
     std::vector<std::string> addresses;
     RETURN_IF_NOT_OK(GetCommittedMemberAddresses(addresses));
     expectedCount = static_cast<int>(addresses.size());
@@ -2959,15 +2950,11 @@ Status WorkerOCServiceImpl::RefreshStartupHealth()
 Status WorkerOCServiceImpl::ReconcileMembershipChange()
 {
     std::set<std::string> masterAddresses;
-    if (centralizedMetadata_) {
-        masterAddresses.emplace(localMasterAddress_.ToString());
-    } else {
-        std::vector<std::string> committedAddresses;
-        RETURN_IF_NOT_OK(GetCommittedMemberAddresses(committedAddresses));
-        masterAddresses.insert(committedAddresses.begin(), committedAddresses.end());
-        // The local metadata master still participates while this member is transitioning through restart admission.
-        masterAddresses.emplace(localAddress_.ToString());
-    }
+    std::vector<std::string> committedAddresses;
+    RETURN_IF_NOT_OK(GetCommittedMemberAddresses(committedAddresses));
+    masterAddresses.insert(committedAddresses.begin(), committedAddresses.end());
+    // The local metadata master still participates while this member is transitioning through restart admission.
+    masterAddresses.emplace(localAddress_.ToString());
     CHECK_FAIL_RETURN_STATUS(!masterAddresses.empty(), K_NOT_READY,
                              "No committed metadata owner is available for restart reconciliation");
     const int64_t eventTimestamp = std::chrono::system_clock::now().time_since_epoch().count();
@@ -3075,10 +3062,8 @@ Status WorkerOCServiceImpl::GiveUpReconciliation()
     if (reconciliationReady_.load(std::memory_order_acquire)) {
         return Status::OK();
     }
-    // In case of centralized master, reconciliation is triggered by starting worker. No need to wait for
-    // reconciliation requests from master.
     const bool isRestart = isRestart_;
-    if (centralizedMetadata_ || !isRestart || !controlBackendAvailableAtStartup_) {
+    if (!isRestart || !controlBackendAvailableAtStartup_) {
         return Status::OK();
     }
     if (!FLAGS_enable_reconciliation) {
@@ -3516,7 +3501,7 @@ Status WorkerOCServiceImpl::GetHashRing(const GetHashRingReqPb &req, GetHashRing
     RETURN_RUNTIME_ERROR_IF_NULL(topologyEngine_);
     std::shared_ptr<const cluster::TopologySnapshot> snapshot;
     RETURN_IF_NOT_OK(membership_.GetSnapshot(snapshot));
-    return BuildGetHashRingResponse(*snapshot, req.version(), FLAGS_master_address, rsp, req.host_ids_digest());
+    return BuildGetHashRingResponse(*snapshot, req.version(), rsp, req.host_ids_digest());
 }
 
 struct WorkerOCServiceImpl::PublishedSelfUbHealth {

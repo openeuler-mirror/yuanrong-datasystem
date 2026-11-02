@@ -71,7 +71,6 @@ public:
     {
         opts.numEtcd = ETCD_NUM;
         opts.numWorkers = TOTAL_WORKER_NUM;
-        opts.enableDistributedMaster = "true";
         std::string workerGflags =
             "-v=1 -node_timeout_s=" + std::to_string(ETCD_TIME_OUT_SECOND);
         opts.workerGflagParams = workerGflags;
@@ -167,7 +166,6 @@ public:
     {
         opts.numEtcd = 1;
         opts.numWorkers = 2;
-        opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
             "-v=1 -node_timeout_s=" + std::to_string(ETCD_TIME_OUT_SECOND);
     }
@@ -343,7 +341,6 @@ public:
     {
         opts.numEtcd = ETCD_NUM;
         opts.numWorkers = TOTAL_WORKER_NUM;
-        opts.enableDistributedMaster = "true";
         std::string workerGflags =
             "-v=1 -node_timeout_s=" + std::to_string(ETCD_TIME_OUT_SECOND);
         opts.workerGflagParams = workerGflags;

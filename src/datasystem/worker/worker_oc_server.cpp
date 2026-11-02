@@ -39,6 +39,7 @@
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/model/topology_diagnostics.h"
+#include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/encrypt/secret_manager.h"
@@ -103,8 +104,6 @@
 
 DS_DECLARE_bool(enable_reconciliation);
 DS_DECLARE_string(coordinator_address);
-DS_DEFINE_string(master_address, "", "Address of ds master and the value cannot be empty.");
-DS_DEFINE_bool(enable_distributed_master, true, "Whether to support distributed master, default is true.");
 DS_DEFINE_bool(enable_p2p_transfer, false, "Heterogeneous object transfer protocol Enables p2ptransfer");
 #ifdef WITH_TESTS
 DS_DEFINE_uint64(shared_memory_size_mb, 64,
@@ -148,7 +147,6 @@ DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(monitor_config_file);
 DS_DECLARE_string(worker_address);
 DS_DECLARE_string(health_check_path);
-DS_DECLARE_string(master_address);
 DS_DECLARE_string(metastore_address);
 DS_DEFINE_bool(start_metastore_service, false,
                "Start metastore service on master worker to replace external etcd server for cluster worker "
@@ -215,15 +213,6 @@ static const std::string WORKER_OC_SERVER = "WorkerOcServer";
 constexpr char TOPOLOGY_READINESS_PROBE_KEY[] = "topology-readiness-probe";
 
 namespace {
-std::string EvictionPolicyControlTable()
-{
-    std::string table = COORDINATION_MASTER_ADDRESS_TABLE;
-    if (!FLAGS_cluster_name.empty()) {
-        table.append("/").append(FLAGS_cluster_name);
-    }
-    table.append("/control");
-    return table;
-}
 constexpr size_t WORKER_PROBE_THREAD_COUNT = 3;
 constexpr size_t MAX_PENDING_WORKER_PROBES = 2'500;
 constexpr auto WORKER_PROBE_TIMEOUT = std::chrono::seconds(2);
@@ -577,11 +566,10 @@ static bool ValidateEtcdOrMetastoreAddress()
     return true;
 }
 
-WorkerOCServer::WorkerOCServer(HostPort workerAddr, HostPort bindAddr, HostPort masterAddr,
+WorkerOCServer::WorkerOCServer(HostPort workerAddr, HostPort bindAddr,
                                std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery)
     : CommonServer(std::move(workerAddr), std::move(bindAddr)),
-      coordinatorDiscovery_(std::move(coordinatorDiscovery)),
-      masterAddr_(std::move(masterAddr))
+      coordinatorDiscovery_(std::move(coordinatorDiscovery))
 {
 }
 
@@ -1067,12 +1055,12 @@ Status WorkerOCServer::CreateWorkerServices()
     LOG(INFO) << "Start create worker services";
 
     // create WorkerServiceImpl
-    workerSvc_ = std::make_unique<WorkerServiceImpl>(hostPort_, masterAddr_, DFT_TIMEOUT_MULT, this, akSkManager_,
+    workerSvc_ = std::make_unique<WorkerServiceImpl>(hostPort_, hostPort_, DFT_TIMEOUT_MULT, this, akSkManager_,
                                                      hostPort_.ToString(), topologyEngine_->Membership(),
                                                      topologyExitRequested_);
     auto objectTable = std::make_shared<ObjectTable>();
     auto evictionManager = std::make_shared<object_cache::WorkerOcEvictionManager>(
-        objectTable, hostPort_, masterAddr_, *metadataRouteResolver_, objCacheMasterSvc_.get());
+        objectTable, hostPort_, hostPort_, *metadataRouteResolver_, objCacheMasterSvc_.get());
     RETURN_IF_NOT_OK(InitEvictionPolicyWorkerStateStore(evictionManager));
     CreateObjectCacheWorkerServices(objectTable, evictionManager);
     RETURN_IF_NOT_OK(ConfigureWorkerSelfPortHealth());
@@ -1080,11 +1068,11 @@ Status WorkerOCServer::CreateWorkerServices()
         auto scAllocateManager = std::make_shared<stream_cache::WorkerSCAllocateMemory>(evictionManager);
         // create ClientWorkerSCService
         streamCacheClientWorkerSvc_ = std::make_shared<stream_cache::ClientWorkerSCServiceImpl>(
-            hostPort_, masterAddr_, streamCacheMasterSvc_.get(), akSkManager_, scAllocateManager,
+            hostPort_, hostPort_, streamCacheMasterSvc_.get(), akSkManager_, scAllocateManager,
             *metadataRouteResolver_, topologyEngine_->Membership());
         // create MasterWorkerSCServiceImpl
         streamCacheMasterWorkerSvc_ = std::make_shared<stream_cache::MasterWorkerSCServiceImpl>(
-            hostPort_, masterAddr_, streamCacheClientWorkerSvc_.get(), akSkManager_);
+            hostPort_, hostPort_, streamCacheClientWorkerSvc_.get(), akSkManager_);
         // create WorkerWorkerSCService
         streamCacheWorkerWorkerSvc_ =
             std::make_unique<stream_cache::WorkerWorkerSCServiceImpl>(streamCacheClientWorkerSvc_.get(), akSkManager_);
@@ -1113,7 +1101,7 @@ void WorkerOCServer::CreateObjectCacheWorkerServices(
 {
     // create WorkerOCServices
     objCacheClientWorkerSvc_ = std::make_shared<datasystem::object_cache::WorkerOCServiceImpl>(
-        hostPort_, masterAddr_, objectTable, akSkManager_, evictionManager, persistenceApi_, etcdStore_.get(),
+        hostPort_, hostPort_, objectTable, akSkManager_, evictionManager, persistenceApi_, etcdStore_.get(),
         objCacheMasterSvc_.get(), topologyEngine_.get(), *metadataRouteResolver_, topologyEngine_->Membership(),
         &topologyExitRequested_, topologyEngine_->IsRestart(), true);
     objCacheClientWorkerSvc_->RegisterLocalMetadataCleanupForRejoin([this] {
@@ -1469,13 +1457,8 @@ void WorkerOCServer::RegisterRebalanceTaskHandler()
 
 Status WorkerOCServer::CreateAllServices()
 {
-    // In case of centralized master, create either master or worker services
-    if (IsLocalMetadataMaster()) {
-        CreateMasterServices();
-        RETURN_IF_NOT_OK(CreateWorkerServices());
-    } else {
-        RETURN_IF_NOT_OK(CreateWorkerServices());
-    }
+    CreateMasterServices();
+    RETURN_IF_NOT_OK(CreateWorkerServices());
 #ifdef WITH_TESTS
     // create StOCServiceImpl
     utSvc_ = std::make_unique<st::StOCServiceImpl>(objCacheClientWorkerSvc_.get(), &topologyEngine_->Membership(),
@@ -1516,9 +1499,7 @@ Status WorkerOCServer::InitializeWorkerServices()
     // To resolve this, some of the dependencies need to be assigned after all the dependent services are created.
     // The following function must be called after the services have been created.
     // Must be called after MasterOCServiceImpl initialization.
-    if (IsLocalMetadataMaster()) {
-        EnableLocalBypass();
-    }
+    EnableLocalBypass();
     // Init the stream services and hook them up to the RPC server
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitClientWorkerSCService(), "InitClientWorkerSCService failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitMasterWorkerSCService(), "InitMasterWorkerSCService failed");
@@ -1530,13 +1511,8 @@ Status WorkerOCServer::InitializeWorkerServices()
 
 Status WorkerOCServer::InitializeAllServices()
 {
-    // In case of centralized master, initialize either master or worker services
-    if (IsLocalMetadataMaster()) {
-        RETURN_IF_NOT_OK(InitializeMasterServices());
-        RETURN_IF_NOT_OK(InitializeWorkerServices());
-    } else {
-        RETURN_IF_NOT_OK(InitializeWorkerServices());
-    }
+    RETURN_IF_NOT_OK(InitializeMasterServices());
+    RETURN_IF_NOT_OK(InitializeWorkerServices());
 #ifdef WITH_TESTS
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitUtOCService(), "InitUtOCService failed");
 #endif
@@ -1578,15 +1554,15 @@ Status WorkerOCServer::InitCoordinationBackend()
     RETURN_IF_NOT_OK(etcdStore_->Init());
     RETURN_IF_NOT_OK(
         etcdStore_->Authenticate(FLAGS_etcd_username, FLAGS_etcd_password, FLAGS_etcd_token_refresh_interval_s));
-    RETURN_IF_NOT_OK_EXCEPT(
-        etcdStore_->CreateTable(COORDINATION_MASTER_ADDRESS_TABLE, COORDINATION_MASTER_ADDRESS_TABLE), K_DUPLICATED);
     return Status::OK();
 }
 
 Status WorkerOCServer::InitEvictionPolicyRolloutStore()
 {
     CHECK_FAIL_RETURN_STATUS(resourceManager_ != nullptr, K_NOT_READY, "Resource manager is not initialized");
-    const std::string table = EvictionPolicyControlTable();
+    std::unique_ptr<cluster::TopologyKeyHelper> keys;
+    RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(FLAGS_cluster_name, keys));
+    const std::string &table = keys->RolloutTable();
     if (coordinatorServiceProxy_ == nullptr) {
         CHECK_FAIL_RETURN_STATUS(etcdStore_ != nullptr, K_NOT_READY, "ETCD Store is not initialized");
         RETURN_IF_NOT_OK_EXCEPT(etcdStore_->CreateTableWithExactPrefix(table, table), K_DUPLICATED);
@@ -1641,8 +1617,6 @@ void WorkerOCServer::CleanupRpcStubsForFailedMembers(const cluster::TopologySnap
 
 Status WorkerOCServer::ConstructTopologyCallbacks()
 {
-    const bool centralizedMetadata = !FLAGS_enable_distributed_master;
-    const bool localMetadataMaster = !centralizedMetadata || masterAddr_ == hostPort_;
     auto readinessCheck = [this](std::chrono::steady_clock::time_point deadline,
                                  const cluster::CancellationToken &cancellation) {
         while (IsClientsExist() || IsAsyncTasksRunning()) {
@@ -1655,7 +1629,7 @@ Status WorkerOCServer::ConstructTopologyCallbacks()
         return Status::OK();
     };
     topologyTaskCallbacks_ = std::make_unique<WorkerTopologyPhaseCallbacks>(WorkerTopologyPhaseCallbackDependencies{
-        centralizedMetadata, localMetadataMaster, EnableSCService(), *metadataManagerHolder_,
+        EnableSCService(), *metadataManagerHolder_,
         [this] { return objCacheClientWorkerSvc_.get(); }, std::move(readinessCheck) });
     return Status::OK();
 }
@@ -1932,13 +1906,7 @@ Status WorkerOCServer::ConstructTopologyRuntime()
     RETURN_IF_NOT_OK(builder.Build(topologyEngine_));
     RETURN_IF_NOT_OK(InitUbHealthSidecar());
     const bool isRestart = topologyEngine_->IsRestart();
-    const bool centralizedMetadata = !FLAGS_enable_distributed_master;
-    MetadataRouteOptions metadataRouteOptions;
-    metadataRouteOptions.requireAvailableTarget = true;
-    metadataRouteOptions.centralizedMode = centralizedMetadata;
-    metadataRouteOptions.masterAddress = masterAddr_;
-    metadataRouteResolver_ =
-        std::make_unique<MetadataRouteResolver>(&topologyEngine_->Placement(), std::move(metadataRouteOptions));
+    metadataRouteResolver_ = std::make_unique<MetadataRouteResolver>(&topologyEngine_->Placement());
     objectEndpointPolicy_ =
         std::make_unique<object_cache::ObjectEndpointPolicy>(*metadataRouteResolver_, topologyEngine_->Membership());
     LOG(INFO) << "CLUSTER_LIFECYCLE cluster=" << FLAGS_cluster_name
@@ -1956,68 +1924,6 @@ Status WorkerOCServer::HandleMembershipRestarts(const std::map<std::string, int6
         RETURN_IF_NOT_OK(ClearWorkerMeta::GetInstance().NotifyAll(restartedMember));
     }
     return NodeRestartEvent::GetInstance().NotifyAll(restartFacts, sync);
-}
-
-Status WorkerOCServer::ResolveLocalMetadataAddress()
-{
-    if (!FLAGS_enable_distributed_master) {
-        if (masterAddr_.Empty()) {
-            RETURN_IF_NOT_OK(ResolveCentralMetadataAddress(FLAGS_master_address));
-            RETURN_IF_NOT_OK(masterAddr_.ParseString(FLAGS_master_address));
-            LOG(INFO) << "Use centralized metadata endpoint: " << masterAddr_.ToString();
-        }
-        CHECK_FAIL_RETURN_STATUS(!masterAddr_.Empty(), K_INVALID, "master_address is required in centralized mode");
-        return Status::OK();
-    }
-
-    if (masterAddr_.Empty()) {
-        masterAddr_ = hostPort_;
-        LOG(INFO) << "Use local worker address as distributed metadata endpoint: " << masterAddr_.ToString();
-    }
-    return Status::OK();
-}
-
-bool WorkerOCServer::IsLocalMetadataMaster() const
-{
-    return FLAGS_enable_distributed_master || masterAddr_ == hostPort_;
-}
-
-Status WorkerOCServer::ResolveCentralMetadataAddress(std::string &address)
-{
-    const auto localAddress = hostPort_.ToString();
-    if (coordinatorServiceProxy_ == nullptr) {
-        CHECK_FAIL_RETURN_STATUS(etcdStore_ != nullptr, K_NOT_READY, "ETCD Store is not initialized");
-        auto rc = etcdStore_->CAS(COORDINATION_MASTER_ADDRESS_TABLE, COORDINATION_MASTER_ADDRESS_KEY, "", localAddress);
-        if (rc.IsOk()) {
-            address = localAddress;
-            return Status::OK();
-        }
-        return etcdStore_->Get(COORDINATION_MASTER_ADDRESS_TABLE, COORDINATION_MASTER_ADDRESS_KEY, address);
-    }
-    const std::string physicalKey =
-        std::string(COORDINATION_MASTER_ADDRESS_TABLE) + "/" + COORDINATION_MASTER_ADDRESS_KEY;
-    std::vector<KeyValueEntry> entries;
-    int64_t revision = 0;
-    std::string coordinatorId;
-    RETURN_IF_NOT_OK(coordinatorServiceProxy_->Range(physicalKey, "", entries, revision,
-                                                     DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &coordinatorId));
-    if (!entries.empty()) {
-        address = entries.front().value;
-        return Status::OK();
-    }
-    int64_t version = 0;
-    auto rc = coordinatorServiceProxy_->Put(physicalKey, localAddress, 0, COORDINATOR_KEY_NOT_EXISTS_VERSION, version,
-                                            revision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, nullptr, coordinatorId);
-    if (rc.IsOk()) {
-        address = localAddress;
-        return Status::OK();
-    }
-    entries.clear();
-    RETURN_IF_NOT_OK(coordinatorServiceProxy_->Range(physicalKey, "", entries, revision,
-                                                     DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, nullptr));
-    CHECK_FAIL_RETURN_STATUS(!entries.empty(), K_NOT_FOUND, "centralized metadata address is absent after CAS");
-    address = entries.front().value;
-    return Status::OK();
 }
 
 Status WorkerOCServer::InitUbHealthSidecar()
@@ -2444,15 +2350,10 @@ Status WorkerOCServer::InitClusterRuntimeAndServices()
     memory::Allocator::Instance()->SetCheckIfAllFdReleasedHandler(
         [](const std::vector<int> &workerFds) { return ClientManager::Instance().IsAllWorkerFdsReleased(workerFds); });
 
-    if (masterAddr_.Empty() && !FLAGS_master_address.empty()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(masterAddr_.ParseString(FLAGS_master_address),
-                                         "The master_address/etcd_address can not be empty at the same time.");
-    }
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ResolveLocalMetadataAddress(), "Resolve local metadata address failed");
     RETURN_IF_NOT_OK(ConstructTopologyRuntime());
     // The runtime policy rollout is part of the heat eviction feature set; clock-only clusters never
     // receive a rollout, so skip the store (and its periodic coordination-backend polling) entirely.
-    if (IsLocalMetadataMaster() && GetEvictionStrategy() == "heat") {
+    if (GetEvictionStrategy() == "heat") {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitEvictionPolicyRolloutStore(), "Init eviction policy rollout store failed");
     }
 
@@ -2530,8 +2431,6 @@ Status WorkerOCServer::InitMetadataManagerHolder()
     param.masterAddress = hostPort_;
     param.placement = &topologyEngine_->Placement();
     param.membership = &topologyEngine_->Membership();
-    param.centralizedMetadata = !FLAGS_enable_distributed_master;
-    param.metadataAddress = masterAddr_;
     param.localAddress = hostPort_.ToString();
     param.isRestart = topologyEngine_->IsRestart();
     param.controlBackendAvailableAtStartup = true;
@@ -2654,22 +2553,14 @@ void WorkerOCServer::RegisteringMasterCallbackFunc()
         return GetRpcServicesUsage("MasterOCService").ToString(FLAGS_log_monitor_interval_ms);
     });
 
-    if (IsLocalMetadataMaster()) {
-        // The usage of etcd asynchronous write task queue
-        instance.RegisterCollectHandler(ResMetricName::ETCD_QUEUE, [this]() {
-            auto usage = objCacheMasterSvc_->GetETCDAsyncQueueUsage();
-            return usage.empty() ? RES_ETCD_DEFAULT_USAGE : usage;
-        });
-        // The usage of master asyncPool_
-        instance.RegisterCollectHandler(ResMetricName::MASTER_ASYNC_TASKS_THREAD_POOL, [this]() {
-            auto usage = objCacheMasterSvc_->GetMasterAsyncPoolUsage(FLAGS_log_monitor_interval_ms);
-            return usage.empty() ? RES_THREAD_POOL_DEFAULT_USAGE : usage;
-        });
-    } else {
-        instance.RegisterCollectHandler(ResMetricName::ETCD_QUEUE, []() { return RES_ETCD_DEFAULT_USAGE; });
-        instance.RegisterCollectHandler(ResMetricName::MASTER_ASYNC_TASKS_THREAD_POOL,
-                                        []() { return RES_THREAD_POOL_DEFAULT_USAGE; });
-    }
+    instance.RegisterCollectHandler(ResMetricName::ETCD_QUEUE, [this]() {
+        auto usage = objCacheMasterSvc_->GetETCDAsyncQueueUsage();
+        return usage.empty() ? RES_ETCD_DEFAULT_USAGE : usage;
+    });
+    instance.RegisterCollectHandler(ResMetricName::MASTER_ASYNC_TASKS_THREAD_POOL, [this]() {
+        auto usage = objCacheMasterSvc_->GetMasterAsyncPoolUsage(FLAGS_log_monitor_interval_ms);
+        return usage.empty() ? RES_THREAD_POOL_DEFAULT_USAGE : usage;
+    });
 
     if (EnableSCService()) {
         // The usage of MasterWorkerOCService
@@ -3032,12 +2923,6 @@ size_t WorkerOCServer::ScheduleWorkerMasterRpcWarmupTasks(const std::vector<cons
         if (warmedAddrs != nullptr && warmedAddrs->count(address) > 0) {
             continue;
         }
-        // In centralized mode, only warmup the actual master; non-master workers
-        // do not register MasterOCServiceBrpcAdapter, so a warmup RPC to them would
-        // return "Fail to find method".
-        if (!FLAGS_enable_distributed_master && address != masterAddr_.ToString()) {
-            continue;
-        }
         if (SubmitWorkerMasterRpcWarmupTask(address, onSuccess)) {
             ++scheduledCount;
         }
@@ -3154,7 +3039,6 @@ void WorkerOCServer::WarmupTopologySnapshotMembers(const cluster::TopologySnapsh
     std::unordered_map<std::string, std::string> activeMembers;
     activeMembers.reserve(snapshot.ActiveMembers().size());
     const auto localAddress = hostPort_.ToString();
-    const auto centralizedMasterAddress = masterAddr_.ToString();
     size_t successCount = 0;
     size_t failureCount = 0;
     for (const auto *member : snapshot.ActiveMembers()) {
@@ -3162,7 +3046,7 @@ void WorkerOCServer::WarmupTopologySnapshotMembers(const cluster::TopologySnapsh
             return;
         }
         const auto &address = member->identity.address;
-        if (address == localAddress || (!FLAGS_enable_distributed_master && address != centralizedMasterAddress)) {
+        if (address == localAddress) {
             continue;
         }
         activeMembers.emplace(address, member->identity.id);
@@ -3227,10 +3111,8 @@ Status WorkerOCServer::Start()
     RETURN_IF_NOT_OK_APPEND_MSG(CommonServer::Start(), "\nWorker Start failed.");
     // The task via uds accept fd is started here.
     clientWorkerCommonSvcStatus_ = loadFunctor(*workerSvc_);
-    if (IsLocalMetadataMaster()) {
-        if (EnableSCService()) {
-            RETURN_IF_NOT_OK_APPEND_MSG(streamCacheMasterSvc_->StartCheckMetadata(), "\nmaster Start failed.");
-        }
+    if (EnableSCService()) {
+        RETURN_IF_NOT_OK_APPEND_MSG(streamCacheMasterSvc_->StartCheckMetadata(), "\nmaster Start failed.");
     }
     RETURN_IF_NOT_OK_APPEND_MSG(objCacheClientWorkerSvc_->WhetherNonRestart(), "\nWorker Start failed.");
     RETURN_IF_NOT_OK_APPEND_MSG(metrics::InitKvMetrics(), "\nWorker Start failed: metrics init.");
@@ -3254,9 +3136,7 @@ bool WorkerOCServer::IsScaleIn()
     const std::string checkFileName = "worker-status";
     checkFilePath_ =
         FLAGS_log_dir.back() == '/' ? (FLAGS_log_dir + checkFileName) : (FLAGS_log_dir + "/" + checkFileName);
-    LOG(INFO) << "[Graceful exit] Shutdown mode: "
-              << (FLAGS_enable_distributed_master ? "distributed-lossless" : "centralized-direct");
-    return FLAGS_enable_distributed_master;
+    return true;
 }
 
 bool WorkerOCServer::IsClientsExist()
@@ -3688,12 +3568,8 @@ void WorkerOCServer::CheckRule(bool isAsyncTasksRunning, int &checkNum)
 bool WorkerOCServer::IsAsyncTasksRunning()
 {
     // check etcd and persistence async task
-    if (IsLocalMetadataMaster()) {
-        return (objCacheClientWorkerSvc_ != nullptr && objCacheClientWorkerSvc_->HaveAsyncTasksRunning())
-               || (objCacheMasterSvc_ != nullptr && objCacheMasterSvc_->HaveAsyncMetaRequest())
-               || (streamCacheClientWorkerSvc_ != nullptr && streamCacheClientWorkerSvc_->HaveTasksToProcess());
-    }
     return (objCacheClientWorkerSvc_ != nullptr && objCacheClientWorkerSvc_->HaveAsyncTasksRunning())
+           || (objCacheMasterSvc_ != nullptr && objCacheMasterSvc_->HaveAsyncMetaRequest())
            || (streamCacheClientWorkerSvc_ != nullptr && streamCacheClientWorkerSvc_->HaveTasksToProcess());
 }
 

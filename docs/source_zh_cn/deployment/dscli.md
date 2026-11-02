@@ -1574,7 +1574,6 @@ INFO fallback 仅适用于忽略该初始化错误的 SDK Client，并且只在 
 | node_timeout_s | int | `60` | 否 | 服务端节点超时（秒），并决定 ETCD 心跳间隔 |
 | node_dead_timeout_s | int | `300` | 是 | 服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点，该值必须大于 `node_timeout_s` |
 | enable_reconciliation | bool | `false` | 否 | 当节点重启时是否启用全局引用计数对账功能；仅使用 KVClient 的场景无需开启，使用 ObjectClient 全局引用计数时需显式设置为 `true` |
-| enable_distributed_master | bool | `true` | 否 | 是否启用分布式主节点，默认值为true |
 
 `node_timeout_s` 的有效下限为 3；配置小于 3 时会被自动调整为 3。服务端与 ETCD 的心跳间隔按
 `clamp(node_timeout_s * 1000 / 3, 100, 5000)`（毫秒）自动计算。

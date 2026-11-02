@@ -89,7 +89,6 @@ protected:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = 1;
-        opts.numMasters = 0;
         opts.numWorkers = 0;
     }
 
@@ -1344,7 +1343,6 @@ protected:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = 3;
-        opts.numMasters = 0;
         opts.numWorkers = 0;
         FLAGS_enable_etcd_auth = true;
         GenerateEncryptedETCDCerts();

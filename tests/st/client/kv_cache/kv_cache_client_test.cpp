@@ -229,7 +229,6 @@ public:
     {
         opts.numOBS = 1;
         opts.numWorkers = 2;
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         std::string hostIp = "127.0.0.1";
         opts.workerConfigs.emplace_back(hostIp, GetFreePort());
@@ -265,6 +264,22 @@ public:
         InitTestKVClient(0, client2_);
         InitTestKVClient(0, client3_);
         InitTestKVClient(0, client4_);
+    }
+
+    Status WaitUntilKeysDeleted(const std::shared_ptr<KVClient> &client, const std::vector<std::string> &keys,
+                                int timeoutSec = 15)
+    {
+        auto waitDeleted = [&client, &keys]() {
+            std::vector<std::string> values;
+            auto rc = client->Get(keys, values);
+            const bool hasVisibleValue =
+                std::any_of(values.begin(), values.end(), [](const auto &value) { return !value.empty(); });
+            if (rc.GetCode() != K_NOT_FOUND || values.size() != keys.size() || hasVisibleValue) {
+                return Status(K_NOT_READY, "keys have not all been deleted");
+            }
+            return Status::OK();
+        };
+        return cluster_->WaitForExpectedResult(waitDeleted, timeoutSec, K_OK);
     }
 
     std::shared_ptr<KVClient> client_;
@@ -330,7 +345,6 @@ public:
     {
         opts.numOBS = 1;
         opts.numWorkers = 3;
-        opts.enableDistributedMaster = "true";
         opts.numEtcd = 0;
         // Mirror the established Coordinator Raft ST setup.  ExternalCluster
         // supplies the three peer addresses and isolated Raft directories,
@@ -388,7 +402,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         KVCacheClientTest::SetClusterSetupOptions(opts);
-        opts.enableDistributedMaster = "true";
     }
 
     void GetKeysHashToWorker(uint32_t workerIndex, size_t keyCount, std::vector<std::string> &keys)
@@ -430,7 +443,6 @@ public:
     {
         opts.numOBS = 1;
         opts.numWorkers = 2;
-        opts.enableDistributedMaster = "true";
         opts.numEtcd = 1;
         std::string hostIp = "127.0.0.1";
         for (size_t i = 0; i < opts.numWorkers; ++i) {
@@ -716,7 +728,8 @@ TEST_F(KVCacheClientTest, TestRemoteGetStatus)
 
     std::string value = "value";
     SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
-    std::string key = client1->GenerateKey();
+    std::string key;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(0, "test_remote_get_status_", key));
     ASSERT_EQ(client->Set(key, value, param), Status::OK());
     std::string valueGet, val1;
     ASSERT_EQ(client->Get(key, valueGet), Status::OK());
@@ -887,7 +900,8 @@ TEST_F(KVCacheClientTest, TestSetFail)
 {
     std::shared_ptr<KVClient> client;
     InitTestKVClient(0, client);
-    auto key = client_->GenerateKey();
+    std::string key;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(0, "test_set_fail_", key));
     SetParam param;
     param.writeMode = WriteMode::WRITE_THROUGH_L2_CACHE;
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "PutToEtcdStore.failed", "1*return(K_RUNTIME_ERROR)"));
@@ -1281,8 +1295,11 @@ TEST_F(KVCacheClientTest, DeleteTryAgain)
     std::shared_ptr<KVClient> client2;
     InitTestKVClient(0, client1);
     InitTestKVClient(1, client2);
-    std::string objectKey1 = NewObjectKey();
-    std::string objectKey2 = NewObjectKey();
+    std::string objectKey1;
+    std::string objectKey2;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(0, "delete_try_again_worker0_", objectKey1));
+    DS_ASSERT_OK(FindKeyRoutedToWorker(1, "delete_try_again_worker1_", objectKey2));
+    std::vector<std::string> objectKeys = { objectKey1, objectKey2 };
 
     uint64_t size = 1024;
     std::string data = GenRandomString(size);
@@ -1290,23 +1307,23 @@ TEST_F(KVCacheClientTest, DeleteTryAgain)
     DS_ASSERT_OK(client1->Set(objectKey1, data));
     DS_ASSERT_OK(client2->Set(objectKey2, data));
 
-    std::vector<std::string> dataList;
-    DS_ASSERT_OK(client2->Get({ objectKey1, objectKey2 }, dataList));
-    ASSERT_TRUE(dataList.size() == 2 && !dataList[0].empty() && !dataList[1].empty());
+    std::string value;
+    DS_ASSERT_OK(client1->Get(objectKey1, value));
+    ASSERT_EQ(value, data);
+    DS_ASSERT_OK(client2->Get(objectKey2, value));
+    ASSERT_EQ(value, data);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, "worker.DeleteObjectWithTryLock.before",
                                            "1*return(K_RUNTIME_ERROR)"));
     std::vector<std::string> failedObjectKeys;
-    DS_ASSERT_OK(client1->Del({ objectKey1, objectKey2 }, failedObjectKeys));
+    DS_ASSERT_OK(client1->Del(objectKeys, failedObjectKeys));
     ASSERT_TRUE(!failedObjectKeys.empty());
     std::vector<std::string> failedObjectKeys2;
     DS_ASSERT_OK(client1->Del(failedObjectKeys, failedObjectKeys2));
     ASSERT_TRUE(failedObjectKeys2.empty());
 
-    DS_ASSERT_NOT_OK(client2->Get({ objectKey1, objectKey2 }, dataList));
-    ASSERT_TRUE(dataList.size() == 2 && dataList[0].empty() && dataList[1].empty());
-    DS_ASSERT_NOT_OK(client1->Get({ objectKey1, objectKey2 }, dataList));
-    ASSERT_TRUE(dataList.size() == 2 && dataList[0].empty() && dataList[1].empty());
+    DS_ASSERT_OK(WaitUntilKeysDeleted(client2, objectKeys));
+    DS_ASSERT_OK(WaitUntilKeysDeleted(client1, objectKeys));
 }
 
 TEST_F(KVCacheClientTest, DeleteDeadLock)
@@ -1315,8 +1332,11 @@ TEST_F(KVCacheClientTest, DeleteDeadLock)
     std::shared_ptr<KVClient> client2;
     InitTestKVClient(0, client1);
     InitTestKVClient(1, client2);
-    std::string objectKey1 = NewObjectKey();
-    std::string objectKey2 = NewObjectKey();
+    std::string objectKey1;
+    std::string objectKey2;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(0, "delete_deadlock_worker0_", objectKey1));
+    DS_ASSERT_OK(FindKeyRoutedToWorker(1, "delete_deadlock_worker1_", objectKey2));
+    std::vector<std::string> objectKeys = { objectKey1, objectKey2 };
 
     uint64_t size = 1024;
     std::string data = GenRandomString(size);
@@ -1324,20 +1344,20 @@ TEST_F(KVCacheClientTest, DeleteDeadLock)
     DS_ASSERT_OK(client1->Set(objectKey1, data));
     DS_ASSERT_OK(client2->Set(objectKey2, data));
 
-    std::vector<std::string> dataList;
-    DS_ASSERT_OK(client2->Get({ objectKey1, objectKey2 }, dataList));
-    ASSERT_TRUE(dataList.size() == 2 && !dataList[0].empty() && !dataList[1].empty());
+    std::string value;
+    DS_ASSERT_OK(client1->Get(objectKey1, value));
+    ASSERT_EQ(value, data);
+    DS_ASSERT_OK(client2->Get(objectKey2, value));
+    ASSERT_EQ(value, data);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, "worker.DeleteObjectWithTryLock.before",
                                            "1*return(K_WORKER_TIMEOUT)"));
     std::vector<std::string> failedObjectKeys;
-    DS_ASSERT_OK(client1->Del({ objectKey1, objectKey2 }, failedObjectKeys));
+    DS_ASSERT_OK(client1->Del(objectKeys, failedObjectKeys));
     ASSERT_TRUE(failedObjectKeys.empty());
 
-    DS_ASSERT_NOT_OK(client2->Get({ objectKey1, objectKey2 }, dataList));
-    ASSERT_TRUE(dataList.size() == 2 && dataList[0].empty() && dataList[1].empty());
-    DS_ASSERT_NOT_OK(client1->Get({ objectKey1, objectKey2 }, dataList));
-    ASSERT_TRUE(dataList.size() == 2 && dataList[0].empty() && dataList[1].empty());
+    DS_ASSERT_OK(WaitUntilKeysDeleted(client2, objectKeys));
+    DS_ASSERT_OK(WaitUntilKeysDeleted(client1, objectKeys));
 }
 
 TEST_F(KVCacheClientTest, GetTimeoutNotAddShmUnit)
@@ -1465,7 +1485,8 @@ TEST_F(KVCacheClientTest, LEVEL1_DelSucceedsWhenTargetWorkerDiesBeforeDeleteNoti
     InitTestKVClient(kDeleteWorkerIndex, deleteClient, kRequestTimeoutMs, false, kRequestTimeoutMs);
     InitTestKVClient(kTargetWorkerIndex, targetWorkerClient, kRequestTimeoutMs, false, kRequestTimeoutMs);
 
-    const std::string key = NewObjectKey();
+    std::string key;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(kDeleteWorkerIndex, "delete_target_worker_dies_", key));
     const std::string value = GenRandomString(128);
     SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
     DS_ASSERT_OK(targetWorkerClient->Set(key, value, param));
@@ -1850,7 +1871,8 @@ TEST_F(KVCacheClientTest, TestGetKeyAlwaysMeetsCacheInvalid)
 
 TEST_F(KVCacheClientTest, TestSetGetDelTheSameKeyConcurrently)
 {
-    std::string key = "key";
+    std::string key;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(0, "set_get_del_same_key_", key));
     std::string val = "value";
 
     std::shared_ptr<KVClient> client0;
@@ -2369,7 +2391,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numWorkers = 1;
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         opts.workerGflagParams = "-shared_memory_size_mb=25 -v=1 -max_client_num=2000";
     }
@@ -2407,7 +2428,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numWorkers = num_;
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         std::string hostIp = "127.0.0.1";
         opts.workerConfigs.emplace_back(hostIp, GetFreePort());
@@ -2634,7 +2654,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numWorkers = 2;
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         opts.workerGflagParams = "-shared_memory_size_mb=100 -v=2 -log_monitor=true";
     }
@@ -2763,7 +2782,6 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numWorkers = 2;
-        opts.enableDistributedMaster = "true";
         opts.numEtcd = 1;
         opts.workerGflagParams = "-shared_memory_size_mb=100 -v=2 -log_monitor=true -node_timeout_s=2";
     }
@@ -2964,7 +2982,6 @@ public:
         opts.numCoordinators = IsCoordinatorWriteRocksdbCase() ? 1 : 0;
         opts.numOBS = 1;
         opts.numWorkers = workerCount;
-        opts.enableDistributedMaster = "true";
         opts.workerGflagParams = " -v=2 -log_monitor=true ";
         opts.disableRocksDB = false;
     }
@@ -3020,7 +3037,7 @@ public:
             if (iter != workerFlags.end()) {
                 flags = " " + iter->second;
             }
-            ASSERT_TRUE(externalCluster_->StartWorker(i, HostPort(), flags).IsOk()) << i;
+            ASSERT_TRUE(externalCluster_->StartWorker(i, flags).IsOk()) << i;
         }
         for (auto i : indexes) {
             ASSERT_TRUE(cluster_->WaitNodeReady(WORKER, i, maxWaitTimeSec).IsOk()) << i;
@@ -3451,9 +3468,7 @@ public:
     {
         opts.numOBS = 1;
         opts.numWorkers = ENV_RECOVERY_WORKER_NUM;
-        opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
-        opts.masterIdx = ENV_RECOVERY_MASTER_IDX;
         opts.workerGflagParams = FormatString("-shared_memory_size_mb=%d -v=1 -log_monitor=true -max_client_num=%d",
                                               ENV_RECOVERY_SHARED_MEMORY_SIZE_MB, ENV_RECOVERY_MAX_CLIENT_NUM);
 
@@ -3813,9 +3828,7 @@ public:
     {
         opts.numOBS = 1;
         opts.numWorkers = 3;
-        opts.enableDistributedMaster = "true";
         // Keep the distributed master on worker 1 so worker 0 can be stopped before the client is created.
-        opts.masterIdx = 1;
         opts.numEtcd = 1;
         opts.disableRocksDB = false;
         // Shorten cluster and client heartbeat windows so the test can observe topology changes quickly.
@@ -4038,7 +4051,6 @@ public:
     {
         opts.numOBS = 1;
         opts.numWorkers = 2;
-        opts.enableDistributedMaster = "true";
         opts.numEtcd = 1;
         opts.workerGflagParams = "-shared_memory_size_mb=25 -v=1 -log_monitor=true -enable_l2_cache_fallback=false ";
 

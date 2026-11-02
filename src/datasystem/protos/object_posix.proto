@@ -664,9 +664,9 @@ message GetHashRingReqPb {
 }
 
 message GetHashRingRspPb {
-  reserved 7;
+  reserved 2, 7;
+  reserved "master_address";
   .datasystem.ClusterTopologyPb hash_ring = 1;  // Populated when topology or requested host ID digest differs.
-  string master_address = 2;
   uint64 version = 3;             // Current version.
   bool hash_ring_changed = 4;     // True if hash_ring field is populated.
   map<string, string> host_id_map = 5;  // workerAddr("host:port") -> hostId, valid when hash_ring_changed=true.

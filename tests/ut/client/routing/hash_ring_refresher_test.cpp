@@ -100,7 +100,7 @@ TEST_F(HashRingRefresherTest, TestInitialFetchRunsBeforePeriodicThread)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");
     int fetchCount = 0;
-    auto fetch = [&fetchCount](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [&fetchCount](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                                uint64_t &newVersion, bool &changed,
                                std::unordered_map<std::string, std::string> &hostIdMap) {
         ++fetchCount;
@@ -127,7 +127,7 @@ TEST_F(HashRingRefresherTest, TestForceRefreshDuringFetchIsNotLost)
     int fetchCount = 0;
     bool secondFetchStarted = false;
     bool releaseSecondFetch = false;
-    auto fetch = [&](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [&](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                      uint64_t &newVersion, bool &changed,
                      std::unordered_map<std::string, std::string> &hostIdMap) {
         std::unique_lock<std::mutex> lock(mutex);
@@ -191,7 +191,7 @@ TEST_F(HashRingRefresherTest, TestConcurrentForceRefreshKeepsRetryInterval)
     std::atomic<std::condition_variable *> refresherCv{ nullptr };
     int fetchCount = 0;
     bool releaseForcedFetch = false;
-    auto fetch = [&](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [&](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                      uint64_t &newVersion, bool &changed,
                      std::unordered_map<std::string, std::string> &hostIdMap) {
         std::unique_lock<std::mutex> lock(mutex);
@@ -278,7 +278,7 @@ TEST_F(HashRingRefresherTest, TestSuccessfulRefreshUpdatesWorkerCandidates)
     std::mutex mutex;
     std::condition_variable cv;
     std::vector<std::string> fetchedWorkers;
-    auto fetch = [&](const HostPort &worker, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [&](const HostPort &worker, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                      uint64_t &newVersion, bool &changed,
                      std::unordered_map<std::string, std::string> &hostIdMap) {
         {
@@ -310,7 +310,7 @@ TEST_F(HashRingRefresherTest, ForceRefreshCoalescesOneRetryWindow)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");
     client::HashRingRefresher refresher(
-        router, [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &, bool &,
+        router, [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &,  uint64_t &, bool &,
                    std::unordered_map<std::string, std::string> &) { return Status::OK(); });
 
     EXPECT_TRUE(refresher.ForceRefresh());
@@ -322,7 +322,7 @@ TEST_F(HashRingRefresherTest, ForceRefreshSynchronizesWithWaitTransition)
     constexpr char injectPoint[] = "HashRingRefresher.RefreshLoop.beforeWait";
     auto router = std::make_shared<client::WorkerRouter>("host-a");
     client::HashRingRefresher refresher(
-        router, [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &, bool &,
+        router, [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &,  uint64_t &, bool &,
                    std::unordered_map<std::string, std::string> &) { return Status::OK(); });
 
     DS_ASSERT_OK(inject::Set(injectPoint, "pause"));
@@ -347,7 +347,7 @@ TEST_F(HashRingRefresherTest, DeadlineExtensionAtExpiryKeepsForcedRefreshCadence
     auto router = std::make_shared<client::WorkerRouter>("host-a");
     std::atomic<int> fetchCount{ 0 };
     client::HashRingRefresher refresher(
-        router, [&fetchCount](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &,
+        router, [&fetchCount](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &,  uint64_t &,
                               bool &, std::unordered_map<std::string, std::string> &) {
             fetchCount.fetch_add(1, std::memory_order_release);
             return Status::OK();
@@ -387,7 +387,7 @@ TEST_F(HashRingRefresherTest, StopSynchronizesWithWaitTransition)
     constexpr char injectPoint[] = "HashRingRefresher.RefreshLoop.afterWaitPredicateRead";
     auto router = std::make_shared<client::WorkerRouter>("host-a");
     client::HashRingRefresher refresher(
-        router, [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &, bool &,
+        router, [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &,  uint64_t &, bool &,
                    std::unordered_map<std::string, std::string> &) { return Status::OK(); });
 
     DS_ASSERT_OK(inject::Set(injectPoint, "pause"));
@@ -411,7 +411,7 @@ TEST_F(HashRingRefresherTest, StopSynchronizesWithWaitTransition)
 TEST_F(HashRingRefresherTest, TestRingUpdateHookRunsBeforeRoutePublication)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");
-    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                     uint64_t &newVersion, bool &changed,
                     std::unordered_map<std::string, std::string> &hostIdMap) {
         FillRing(ring, hostIdMap);
@@ -444,7 +444,7 @@ TEST_F(HashRingRefresherTest, TestRingUpdateHookRunsBeforeRoutePublication)
 TEST_F(HashRingRefresherTest, InvalidTopologyDoesNotRunUpdateHook)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");
-    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                     uint64_t &newVersion, bool &changed,
                     std::unordered_map<std::string, std::string> &hostIdMap) {
         FillRing(ring, hostIdMap);
@@ -475,7 +475,7 @@ TEST_F(HashRingRefresherTest, TestFailedRingUpdateHookRetainsVersionAndRetries)
     std::vector<uint64_t> requestedVersions;
     int hookCount = 0;
     auto fetch = [&mutex, &requestedVersions](const HostPort &, uint64_t currentVersion,
-                                              ::datasystem::ClusterTopologyPb &ring, std::string &,
+                                              ::datasystem::ClusterTopologyPb &ring,
                                               uint64_t &newVersion, bool &changed,
                                               std::unordered_map<std::string, std::string> &hostIdMap) {
         {
@@ -521,7 +521,7 @@ TEST_F(HashRingRefresherTest, TestStaleVersionDoesNotReplaceCurrentRing)
     std::condition_variable cv;
     std::vector<uint64_t> requestedVersions;
     int fetchCount = 0;
-    auto fetch = [&](const HostPort &, uint64_t currentVersion, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [&](const HostPort &, uint64_t currentVersion, ::datasystem::ClusterTopologyPb &ring,
                      uint64_t &newVersion, bool &changed,
                      std::unordered_map<std::string, std::string> &hostIdMap) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -564,7 +564,7 @@ TEST_F(HashRingRefresherTest, TestUnchangedResponseKeepsCurrentRing)
     std::mutex mutex;
     std::condition_variable cv;
     std::vector<uint64_t> requestedVersions;
-    auto fetch = [&](const HostPort &, uint64_t currentVersion, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [&](const HostPort &, uint64_t currentVersion, ::datasystem::ClusterTopologyPb &ring,
                      uint64_t &newVersion, bool &changed,
                      std::unordered_map<std::string, std::string> &hostIdMap) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -597,7 +597,7 @@ TEST_F(HashRingRefresherTest, TestForcedRefreshRetriesUntilRingChanges)
     std::mutex mutex;
     std::condition_variable cv;
     int fetchCount = 0;
-    auto fetch = [&](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [&](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                      uint64_t &newVersion, bool &changed,
                      std::unordered_map<std::string, std::string> &hostIdMap) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -631,7 +631,7 @@ TEST_F(HashRingRefresherTest, RepeatedFailureExtendsForcedRefreshUntilIsolationP
     std::mutex mutex;
     std::condition_variable cv;
     int fetchCount = 0;
-    auto fetch = [&](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [&](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                      uint64_t &newVersion, bool &changed, std::unordered_map<std::string, std::string> &hostIdMap) {
         std::lock_guard<std::mutex> lock(mutex);
         const auto currentFetch = ++fetchCount;
@@ -675,7 +675,7 @@ TEST_F(HashRingRefresherTest, TestAllWorkersUnreachableKeepsCurrentRing)
     std::mutex mutex;
     std::condition_variable cv;
     int fetchCount = 0;
-    auto fetch = [&](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [&](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                      uint64_t &newVersion, bool &changed,
                      std::unordered_map<std::string, std::string> &hostIdMap) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -715,7 +715,7 @@ TEST_F(HashRingRefresherTest, TestFilterNotifiedOnlyWhenRingChanges)
     std::mutex mutex;
     std::condition_variable cv;
     int fetchCount = 0;
-    auto fetch = [&](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [&](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                      uint64_t &newVersion, bool &changed,
                      std::unordered_map<std::string, std::string> &hostIdMap) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -758,7 +758,7 @@ TEST_F(HashRingRefresherTest, BackgroundRefreshContinuesPastReachableUnchangedWo
     std::mutex mutex;
     std::condition_variable cv;
     int fetchCount = 0;
-    auto fetch = [&](const HostPort &worker, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [&](const HostPort &worker, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                      uint64_t &newVersion, bool &changed, std::unordered_map<std::string, std::string> &hostIdMap,
                      int32_t timeoutMs) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -801,7 +801,7 @@ TEST_F(HashRingRefresherTest, StopWaitsForAtMostOneBoundedBackgroundRpc)
     auto router = std::make_shared<client::WorkerRouter>("host-a");
     std::promise<void> backgroundStarted;
     std::atomic<int> fetchCount{ 0 };
-    auto fetch = [&](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [&](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                      uint64_t &newVersion, bool &changed, std::unordered_map<std::string, std::string> &hostIdMap,
                      int32_t timeoutMs) {
         ++fetchCount;
@@ -833,7 +833,7 @@ TEST_F(HashRingRefresherTest, StopWaitsForAtMostOneBoundedBackgroundRpc)
 TEST_F(HashRingRefresherTest, TestInvalidRefreshIntervalFails)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");
-    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &, bool &,
+    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &,  uint64_t &, bool &,
                     std::unordered_map<std::string, std::string> &) { return Status::OK(); };
     client::HashRingRefresher refresher(router, fetch);
 
@@ -846,7 +846,7 @@ TEST_F(HashRingRefresherTest, TestInitialFetchValidatesDependencies)
     client::HashRingRefresher noFetch(router, client::HashRingRefresher::FetchRpc{});
     EXPECT_EQ(noFetch.InitialFetch(HostPort("127.0.0.1", 1000)).GetCode(), K_INVALID);
 
-    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &, bool &,
+    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &,  uint64_t &, bool &,
                     std::unordered_map<std::string, std::string> &) { return Status::OK(); };
     client::HashRingRefresher noRouter(nullptr, fetch);
     EXPECT_TRUE(noRouter.InitialFetch(HostPort("127.0.0.1", 1000)).IsError());
@@ -879,7 +879,7 @@ void FillTwoWorkerRing(::datasystem::ClusterTopologyPb &ring, std::unordered_map
 }
 
 using EpochFetchScript = std::function<Status(const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &,
-                                              std::string &, uint64_t &, bool &,
+                                               uint64_t &, bool &,
                                               std::unordered_map<std::string, std::string> &, int32_t)>;
 
 // Round 1 (InitialFetch) publishes a two-worker ring at a high version; later rounds follow script.
@@ -889,7 +889,7 @@ std::unique_ptr<client::HashRingRefresher> BuildEpochResetRefresher(std::shared_
                                                                     std::atomic<int> &hookCalls)
 {
     auto first = [script](const HostPort &workerAddr, uint64_t currentVersion,
-                          ::datasystem::ClusterTopologyPb &ring, std::string &masterAddress, uint64_t &newVersion,
+                          ::datasystem::ClusterTopologyPb &ring, uint64_t &newVersion,
                           bool &changed, std::unordered_map<std::string, std::string> &hostIdMap, int32_t timeoutMs) {
         if (currentVersion == 0) {
             FillTwoWorkerRing(ring, hostIdMap);
@@ -897,7 +897,7 @@ std::unique_ptr<client::HashRingRefresher> BuildEpochResetRefresher(std::shared_
             changed = true;
             return Status::OK();
         }
-        return script(workerAddr, currentVersion, ring, masterAddress, newVersion, changed, hostIdMap, timeoutMs);
+        return script(workerAddr, currentVersion, ring, newVersion, changed, hostIdMap, timeoutMs);
     };
     auto hook = [&hookVersion, &hookEpochReset, &hookCalls](uint64_t version, const ::datasystem::ClusterTopologyPb &,
                                                             const std::unordered_map<std::string, std::string> &,
@@ -920,7 +920,7 @@ TEST_F(HashRingRefresherTest, TestCrossConfirmedLowerVersionAcceptsEpochReset)
     uint64_t hookVersion = 0;
     bool hookEpochReset = false;
     std::atomic<int> hookCalls{ 0 };
-    auto script = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto script = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                      uint64_t &newVersion, bool &changed,
                      std::unordered_map<std::string, std::string> &hostIdMap, int32_t) {
         FillTwoWorkerRing(ring, hostIdMap);
@@ -967,7 +967,7 @@ TEST_F(HashRingRefresherTest, TestDisjointReorderedLowerVersionResponsesConfirmW
     uint64_t version = 0;
     bool reset = false;
     std::atomic<int> calls{ 0 };
-    auto script = [](const HostPort &worker, uint64_t, ClusterTopologyPb &ring, std::string &,
+    auto script = [](const HostPort &worker, uint64_t, ClusterTopologyPb &ring,
                      uint64_t &newVersion, bool &changed,
                      std::unordered_map<std::string, std::string> &hostIds, int32_t) {
         ring.set_tokens_per_member(1);
@@ -996,7 +996,7 @@ TEST_F(HashRingRefresherTest, SameVersionHostIdsAreAcknowledgedOnlyAfterSuccessf
     auto router = std::make_shared<client::WorkerRouter>("host-a");
     bool changedHost = false;
     bool reject = false;
-    auto fetch = [&](const HostPort &, uint64_t, ClusterTopologyPb &ring, std::string &,
+    auto fetch = [&](const HostPort &, uint64_t, ClusterTopologyPb &ring,
                      uint64_t &version, bool &changed, std::unordered_map<std::string, std::string> &hostIds) {
         FillTwoWorkerRing(ring, hostIds);
         for (auto &[address, host] : hostIds) {
@@ -1034,7 +1034,7 @@ TEST_F(HashRingRefresherTest, TestSingleWorkerLowerVersionIsStillIgnored)
     uint64_t hookVersion = 0;
     bool hookEpochReset = false;
     std::atomic<int> hookCalls{ 0 };
-    auto script = [](const HostPort &workerAddr, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto script = [](const HostPort &workerAddr, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                      uint64_t &newVersion, bool &changed,
                      std::unordered_map<std::string, std::string> &hostIdMap, int32_t) {
         if (workerAddr.ToString() != "127.0.0.1:1000") {
@@ -1065,7 +1065,7 @@ TEST_F(HashRingRefresherTest, TestDifferentLowerVersionsAreNotConfirmed)
     uint64_t hookVersion = 0;
     bool hookEpochReset = false;
     std::atomic<int> hookCalls{ 0 };
-    auto script = [](const HostPort &workerAddr, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto script = [](const HostPort &workerAddr, uint64_t, ::datasystem::ClusterTopologyPb &ring,
                      uint64_t &newVersion, bool &changed,
                      std::unordered_map<std::string, std::string> &hostIdMap, int32_t) {
         FillTwoWorkerRing(ring, hostIdMap);
@@ -1096,7 +1096,7 @@ TEST_F(HashRingRefresherTest, ForceRefreshPublishesNewRingWithinRetryBudget)
     auto router = std::make_shared<client::WorkerRouter>("host-a");
     std::atomic<uint64_t> currentVersion{ 1 };
     auto fetch = [&currentVersion](const HostPort &, uint64_t requested, ::datasystem::ClusterTopologyPb &ring,
-                                   std::string &, uint64_t &newVersion, bool &changed,
+                                    uint64_t &newVersion, bool &changed,
                                    std::unordered_map<std::string, std::string> &hostIdMap) {
         FillRing(ring, hostIdMap, "127.0.0.1:2000");
         const uint64_t latest = currentVersion.load(std::memory_order_acquire);
@@ -1137,7 +1137,7 @@ TEST_F(HashRingRefresherTest, ZeroReachableFallbackRepublishesWithinSameRefresh)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");
     auto fetch = [](const HostPort &worker, uint64_t requestedVersion, ::datasystem::ClusterTopologyPb &ring,
-                    std::string &, uint64_t &newVersion, bool &changed,
+                    uint64_t &newVersion, bool &changed,
                     std::unordered_map<std::string, std::string> &hostIdMap) {
         if (requestedVersion == 0) {
             FillTwoWorkerRing(ring, hostIdMap);
@@ -1190,7 +1190,7 @@ TEST_F(HashRingRefresherTest, ZeroReachableFallbackRepublishesWithinSameRefresh)
 TEST_F(HashRingRefresherTest, ZeroReachableWithoutFallbackKeepsRingAndList)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");
-    auto fetch = [](const HostPort &, uint64_t requestedVersion, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [](const HostPort &, uint64_t requestedVersion, ::datasystem::ClusterTopologyPb &ring,
                     uint64_t &newVersion, bool &changed,
                     std::unordered_map<std::string, std::string> &hostIdMap) {
         if (requestedVersion == 0) {
@@ -1228,7 +1228,7 @@ TEST_F(HashRingRefresherTest, EpochResetConfirmedFromFallbackWorkersWithinSameRe
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");
     auto fetch = [](const HostPort &worker, uint64_t requestedVersion, ::datasystem::ClusterTopologyPb &ring,
-                    std::string &, uint64_t &newVersion, bool &changed,
+                    uint64_t &newVersion, bool &changed,
                     std::unordered_map<std::string, std::string> &hostIdMap) {
         if (requestedVersion == 0) {
             FillTwoWorkerRing(ring, hostIdMap);
@@ -1283,7 +1283,7 @@ TEST_F(HashRingRefresherTest, EpochResetConfirmedFromFallbackWorkersWithinSameRe
 TEST_F(HashRingRefresherTest, ReachableWorkerDoesNotInvokeProbeFallback)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");
-    auto fetch = [](const HostPort &, uint64_t requestedVersion, ::datasystem::ClusterTopologyPb &ring, std::string &,
+    auto fetch = [](const HostPort &, uint64_t requestedVersion, ::datasystem::ClusterTopologyPb &ring,
                     uint64_t &newVersion, bool &changed,
                     std::unordered_map<std::string, std::string> &hostIdMap) {
         FillRing(ring, hostIdMap, "127.0.0.1:1000");
@@ -1309,7 +1309,7 @@ TEST_F(HashRingRefresherTest, ReachableWorkerDoesNotInvokeProbeFallback)
 TEST_F(HashRingRefresherTest, MergeProbeWorkersDeduplicates)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");
-    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, std::string &, uint64_t &, bool &,
+    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &, uint64_t &, bool &,
                     std::unordered_map<std::string, std::string> &) { return Status::OK(); };
     client::HashRingRefresher refresher(router, fetch);
     DS_ASSERT_OK(refresher.InitialFetch(HostPort("127.0.0.1", 1000)));
@@ -1335,8 +1335,8 @@ TEST_F(HashRingRefresherTest, LargeClusterProbeFallbackRepublishesWithinSameRefr
     auto router = std::make_shared<client::WorkerRouter>("host-a");
     std::atomic<int> fetchCalls{ 0 };
     auto fetch = [&fetchCalls](const HostPort &worker, uint64_t requestedVersion,
-                               ::datasystem::ClusterTopologyPb &ring, std::string &, uint64_t &newVersion,
-                               bool &changed, std::unordered_map<std::string, std::string> &hostIdMap) {
+                               ::datasystem::ClusterTopologyPb &ring, uint64_t &newVersion, bool &changed,
+                               std::unordered_map<std::string, std::string> &hostIdMap) {
         fetchCalls.fetch_add(1, std::memory_order_release);
         if (requestedVersion == 0) {
             FillTwoWorkerRing(ring, hostIdMap);
@@ -1403,7 +1403,7 @@ TEST_F(HashRingRefresherTest, BatchedDiscoveryFallbackConfirmsEpochResetWithinBo
         return std::vector<HostPort>{ HostPort("127.0.0.1", 2000), HostPort("127.0.0.1", 3000) };
     };
     auto fetch = [](const HostPort &worker, uint64_t requestedVersion, ::datasystem::ClusterTopologyPb &ring,
-                    std::string &, uint64_t &newVersion, bool &changed,
+                    uint64_t &newVersion, bool &changed,
                     std::unordered_map<std::string, std::string> &hostIdMap) {
         if (requestedVersion == 0) {
             FillTwoWorkerRing(ring, hostIdMap);

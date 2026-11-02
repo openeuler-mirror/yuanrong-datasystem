@@ -92,7 +92,6 @@
   - `MetaStoreServer::Start`, `Stop`
 - Important constants:
   - `ETCD_MEMBERSHIP_KEY_SEGMENT`: `/cluster/`, used to enforce lease-bound membership writes across cluster namespaces
-  - `ETCD_MASTER_ADDRESS_TABLE`: `/datasystem`
   - `ETCD_META_TABLE_PREFIX`, `ETCD_LOCATION_TABLE_PREFIX`, `ETCD_ASYNC_WORKER_OP_TABLE_PREFIX`, `ETCD_GLOBAL_CACHE_TABLE_PREFIX`
   - worker states in ETCD values: `ready`, `exiting`, `d_rst`
 
