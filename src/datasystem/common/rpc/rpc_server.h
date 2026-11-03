@@ -52,6 +52,8 @@ DS_DECLARE_int32(v);
 
 namespace datasystem {
 
+class BrpcAuthCapture;
+
 enum class BrpcLogPolicy : uint8_t {
     DISABLE_PROCESS_LOGGING,
     PRESERVE_PROCESS_CONFIGURATION,
@@ -223,10 +225,12 @@ public:
      * @param[in] addr IP address.
      * @param[in] port Port number.
      * @param[in] logPolicy Process-wide butil logging policy.
+     * @param[in] authCapture Optional authentication capture factory; must outlive StopBrpcServer().
      * @return Status of the call.
      */
     Status StartBrpcServer(const std::string &addr, int port,
-                           BrpcLogPolicy logPolicy = BrpcLogPolicy::DISABLE_PROCESS_LOGGING);
+                           BrpcLogPolicy logPolicy = BrpcLogPolicy::DISABLE_PROCESS_LOGGING,
+                           const BrpcAuthCapture *authCapture = nullptr);
 
     /**
      * @brief Stop the brpc server synchronously (Stop + Join + reset).

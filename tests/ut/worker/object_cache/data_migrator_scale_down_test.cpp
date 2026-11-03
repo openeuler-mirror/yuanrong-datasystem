@@ -189,9 +189,8 @@ public:
 
     void CreateMigrator(std::chrono::steady_clock::time_point deadline)
     {
-        auto akSkManager = std::make_shared<AkSkManager>(0);
         migrator_ = std::make_unique<DataMigrator>(MigrateType::SCALE_DOWN, *resolver_, *membership_, *policy_,
-                                                   nullptr, local_, akSkManager, objectTable_, "ut-scale-down-task",
+                                                   nullptr, local_, objectTable_, "ut-scale-down-task",
                                                    DataMigrator::UNLIMITED_RETRY_COUNT, deadline);
         migrator_->Init();
     }

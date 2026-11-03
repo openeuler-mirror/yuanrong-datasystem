@@ -30,6 +30,8 @@
  */
 #include "datasystem/common/rpc/plugin_generator/rpc_generator.h"
 
+#include <set>
+
 namespace datasystem {
 
 const std::string RpcGenerator::PREFIX = "    ";
@@ -71,6 +73,7 @@ bool RpcGenerator::Generate(const google::protobuf::FileDescriptor *file, const 
     // --- V8: three-output pattern ---
     // Generate the IRPC pure virtual interface (.irpc.pb.h).
     CreateInterfaceHeader(*file, generatorCtx);
+    CreateAuthProto(*file, generatorCtx);
     // Generate the brpc adapter header (.brpc.pb.h).
     CreateBrpcAdapterHeader(*file, generatorCtx);
     // Generate the brpc adapter cpp (.brpc.pb.cc).
@@ -80,6 +83,41 @@ bool RpcGenerator::Generate(const google::protobuf::FileDescriptor *file, const 
     // Generate the brpc client stub cpp (.brpc.stub.pb.cc).
     CreateBrpcStubCpp(*file, generatorCtx);
     return true;
+}
+
+void RpcGenerator::CreateAuthProto(const google::protobuf::FileDescriptor &file,
+                                   compiler::GeneratorContext *generatorCtx) const
+{
+    std::unique_ptr<io::ZeroCopyOutputStream> output(generatorCtx->Open(fileName + ".auth.proto"));
+    io::Printer printer(output.get(), '$');
+    printer.PrintRaw("syntax = \"proto3\";\n");
+    if (!file.package().empty()) {
+        printer.PrintRaw("package " + file.package() + ";\n");
+    }
+    printer.PrintRaw("option cc_generic_services = true;\n");
+    std::set<std::string> imports{file.name()};
+    for (int i = 0; i < file.service_count(); ++i) {
+        const auto *service = file.service(i);
+        for (int j = 0; j < service->method_count(); ++j) {
+            imports.insert(service->method(j)->input_type()->file()->name());
+            imports.insert(service->method(j)->output_type()->file()->name());
+        }
+    }
+    for (const auto &path : imports) {
+        printer.PrintRaw("import \"" + path + "\";\n");
+    }
+    for (int i = 0; i < file.service_count(); ++i) {
+        const auto *service = file.service(i);
+        printer.PrintRaw("service " + service->name() + "Auth {\n");
+        for (int j = 0; j < service->method_count(); ++j) {
+            const auto *method = service->method(j);
+            printer.PrintRaw("  rpc " + method->name() + "(" + (method->client_streaming() ? "stream " : "") +
+                             "." + method->input_type()->full_name() + ") returns (" +
+                             (method->server_streaming() ? "stream " : "") +
+                             "." + method->output_type()->full_name() + ");\n");
+        }
+        printer.PrintRaw("}\n");
+    }
 }
 
 void RpcGenerator::ParseNameSpace(const google::protobuf::FileDescriptor &file) const

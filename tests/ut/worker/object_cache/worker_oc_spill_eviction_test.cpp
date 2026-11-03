@@ -76,11 +76,9 @@ public:
 
         objectTable_ = std::make_shared<ObjectTable>();
         gRefTable_ = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
-        akSkManager_ = std::make_shared<AkSkManager>(0);
-        DS_ASSERT_OK(akSkManager_->SetClientAkSk(accessKey_, secretKey_));
         evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, workerAddr_, workerAddr_,
                                                                      GetTestMetadataRoute());
-        DS_ASSERT_OK(evictionManager_->Init(gRefTable_, akSkManager_));
+        DS_ASSERT_OK(evictionManager_->Init(gRefTable_));
 
         handler_ = WorkerOcSpill::Instance();
         LOG_IF_ERROR(inject::Set("worker.Spill.Sync", "return()"), "set inject point failed");
@@ -90,7 +88,6 @@ public:
     {
         evictionManager_.reset();
         gRefTable_.reset();
-        akSkManager_.reset();
         objectTable_.reset();
         WorkerOcSpill::Instance()->ResetForTest();
         CommonTest::TearDown();
@@ -444,7 +441,6 @@ protected:
 
     std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
-    std::shared_ptr<AkSkManager> akSkManager_;
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> gRefTable_;
 };
 

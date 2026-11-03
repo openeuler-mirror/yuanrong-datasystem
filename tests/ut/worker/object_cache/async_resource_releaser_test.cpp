@@ -57,11 +57,10 @@ public:
         objectTable_ = std::make_shared<ObjectTable>();
         allocator = memory::Allocator::Instance();
         allocator->Init(maxMemorySize);
-        akSkManager_ = std::make_shared<AkSkManager>(0);
         evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, LOCAL_ADDR, MASTER_ADDR,
                                                                      GetTestMetadataRoute());
         globalRefTable_ = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
-        DS_ASSERT_OK(evictionManager_->Init(globalRefTable_, akSkManager_));
+        DS_ASSERT_OK(evictionManager_->Init(globalRefTable_));
         std::weak_ptr<WorkerOcEvictionManager> weakManager = evictionManager_;
         AsyncResourceReleaser::Instance().Init(objectTable_, [weakManager](const ImmutableString &objectKey) {
             auto manager = weakManager.lock();
@@ -76,7 +75,6 @@ public:
         AsyncResourceReleaser::Instance().Shutdown();
         evictionManager_.reset();
         globalRefTable_.reset();
-        akSkManager_.reset();
         objectTable_.reset();
         allocator->ResetForTest();
         allocator = nullptr;
@@ -84,7 +82,6 @@ public:
 
 protected:
     const uint64_t dataSize_ = 16;
-    std::shared_ptr<AkSkManager> akSkManager_;
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable_;
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
 };

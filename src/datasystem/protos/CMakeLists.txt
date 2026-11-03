@@ -8,6 +8,29 @@ set(PROTO_SRC_DIR ${CMAKE_SOURCE_DIR}/src/datasystem/protos)
 add_custom_target(zmq_proto_lib_depend)
 add_custom_target(proto_lib_depend)
 
+function(GENERATE_RPC_CPP source_files header_files proto_file)
+    GENERATE_ZMQ_CPP(zmq_proto_lib_depend rpc_sources rpc_headers
+            ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${proto_file})
+    get_filename_component(file_name ${proto_file} NAME_WE)
+    set(output_prefix ${PROTO_BUILD_DIR}/datasystem/protos/${file_name})
+    set(auth_source ${output_prefix}.auth.pb.cc)
+    set(auth_header ${output_prefix}.auth.pb.h)
+    add_custom_command(
+            OUTPUT ${auth_source} ${auth_header}
+            COMMAND ${CMAKE_COMMAND} -E env "LD_LIBRARY_PATH=${Protobuf_LIB_PATH}:$ENV{LD_LIBRARY_PATH}"
+                    $<TARGET_FILE:protobuf::protoc>
+            ARGS -I ${PROTO_BUILD_DIR} -I ${CMAKE_SOURCE_DIR}/src -I ${PROTO_SRC_DIR}
+                 --cpp_out ${PROTO_BUILD_DIR} ${output_prefix}.auth.proto
+            DEPENDS ${output_prefix}.auth.proto protobuf::protoc
+            COMMENT "Compiling RPC authentication descriptors for ${proto_file}" VERBATIM)
+    add_custom_target(rpc_auth_proto_${file_name} DEPENDS ${auth_source} ${auth_header})
+    add_dependencies(zmq_proto_lib_depend rpc_auth_proto_${file_name})
+    list(APPEND rpc_sources ${auth_source})
+    list(APPEND rpc_headers ${auth_header})
+    set(${source_files} ${rpc_sources} PARENT_SCOPE)
+    set(${header_files} ${rpc_headers} PARENT_SCOPE)
+endfunction()
+
 function(GEN_GLOBAL_PROTO_LIB_DEPEND)
     set(options PUB)
     set(options CLIENT)
@@ -91,7 +114,7 @@ GEN_GLOBAL_PROTO_LIB_DEPEND_SHARED(
         LINK protobuf::libprotobuf)
 
 # Build share memory proto lib
-GENERATE_ZMQ_CPP(zmq_proto_lib_depend SHARE_MEMORY_SRCS SHARE_MEMORY_ZMQ_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/share_memory.proto)
+GENERATE_RPC_CPP(SHARE_MEMORY_SRCS SHARE_MEMORY_ZMQ_HDRS ${PROTO_SRC_DIR}/share_memory.proto)
 GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME share_memory_protos
         SOURCE ${SHARE_MEMORY_SRCS}
@@ -124,7 +147,7 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         LINK ${PROTOBUF_LIBRARIES})
 
 # Build coordinator RPC proto lib.
-GENERATE_ZMQ_CPP(zmq_proto_lib_depend COORDINATOR_PROTO_SRCS COORDINATOR_PROTO_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/coordinator.proto)
+GENERATE_RPC_CPP(COORDINATOR_PROTO_SRCS COORDINATOR_PROTO_HDRS ${PROTO_SRC_DIR}/coordinator.proto)
 GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME coordinator_protos
         SOURCE ${COORDINATOR_PROTO_SRCS}
@@ -174,8 +197,8 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         LINK ${PROTOBUF_LIBRARIES})
 
 # Compile the proto file at the first layer, for example, object_posix.proto.
-GENERATE_ZMQ_CPP(zmq_proto_lib_depend OBJECT_POSIX_SRCS OBJECT_POSIX_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/object_posix.proto)
-GENERATE_ZMQ_CPP(zmq_proto_lib_depend STREAM_POSIX_SRCS STREAM_POSIX_ZMQ_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/stream_posix.proto)
+GENERATE_RPC_CPP(OBJECT_POSIX_SRCS OBJECT_POSIX_HDRS ${PROTO_SRC_DIR}/object_posix.proto)
+GENERATE_RPC_CPP(STREAM_POSIX_SRCS STREAM_POSIX_ZMQ_HDRS ${PROTO_SRC_DIR}/stream_posix.proto)
 
 GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME posix_protos
@@ -191,8 +214,8 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
              rpc_option_protos cluster_topology_protos_client share_memory_protos_client)
 
 # Compile the proto file at the second layer, for example, posix proto.
-GENERATE_ZMQ_CPP(zmq_proto_lib_depend WORKER_OBJECT_SRCS WORKER_OBJECT_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/worker_object.proto)
-GENERATE_ZMQ_CPP(zmq_proto_lib_depend WORKER_STREAM_SRCS WORKER_STREAM_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/worker_stream.proto)
+GENERATE_RPC_CPP(WORKER_OBJECT_SRCS WORKER_OBJECT_HDRS ${PROTO_SRC_DIR}/worker_object.proto)
+GENERATE_RPC_CPP(WORKER_STREAM_SRCS WORKER_STREAM_HDRS ${PROTO_SRC_DIR}/worker_stream.proto)
 
 GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME worker_object_protos
@@ -218,9 +241,9 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         LINK ${PROTOBUF_LIBRARIES} utils_protos_client posix_protos_client rpc_option_protos)
 
 # Compile the proto file at the third layer, for example, master_object.proto, master_stream.proto
-GENERATE_ZMQ_CPP(zmq_proto_lib_depend MASTER_OBJECT_SRCS MASTER_OBJECT_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/master_object.proto)
-GENERATE_ZMQ_CPP(zmq_proto_lib_depend MASTER_STREAM_SRCS MASTER_STREAM_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/master_stream.proto)
-GENERATE_ZMQ_CPP(zmq_proto_lib_depend MASTER_HEARTBEAT_SRCS MASTER_HEARTBEAT_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/master_heartbeat.proto)
+GENERATE_RPC_CPP(MASTER_OBJECT_SRCS MASTER_OBJECT_HDRS ${PROTO_SRC_DIR}/master_object.proto)
+GENERATE_RPC_CPP(MASTER_STREAM_SRCS MASTER_STREAM_HDRS ${PROTO_SRC_DIR}/master_stream.proto)
+GENERATE_RPC_CPP(MASTER_HEARTBEAT_SRCS MASTER_HEARTBEAT_HDRS ${PROTO_SRC_DIR}/master_heartbeat.proto)
 
 GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME master_object_protos
@@ -257,7 +280,7 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
 
 if (WITH_TESTS)
     # Build generic service proto
-    GENERATE_ZMQ_CPP(zmq_proto_lib_depend GENERIC_SERVICE_SRCS GENERIC_SERVICE_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/generic_service.proto)
+    GENERATE_RPC_CPP(GENERIC_SERVICE_SRCS GENERIC_SERVICE_HDRS ${PROTO_SRC_DIR}/generic_service.proto)
     GEN_GLOBAL_PROTO_LIB_DEPEND(
             NAME generic_service_protos
             SOURCE ${GENERIC_SERVICE_SRCS}
@@ -267,14 +290,14 @@ if (WITH_TESTS)
             SOURCE ${GENERIC_SERVICE_SRCS}
             DEPEND zmq_proto_lib_depend)
 
-    GENERATE_ZMQ_CPP(zmq_proto_lib_depend UNIT_TEST_SRCS UNIT_TEST_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/ut_object.proto)
+    GENERATE_RPC_CPP(UNIT_TEST_SRCS UNIT_TEST_HDRS ${PROTO_SRC_DIR}/ut_object.proto)
     add_library(ut_object_protos STATIC ${UNIT_TEST_SRCS})
     add_dependencies(ut_object_protos zmq_proto_lib_depend)
     set_target_properties(ut_object_protos PROPERTIES COMPILE_FLAGS "-Wno-unused-parameter")
 endif()
 
 if (ENABLE_PERF)
-    GENERATE_ZMQ_CPP(zmq_proto_lib_depend PERF_SERVICE_SRCS PERF_SERVICE_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/perf_posix.proto)
+    GENERATE_RPC_CPP(PERF_SERVICE_SRCS PERF_SERVICE_HDRS ${PROTO_SRC_DIR}/perf_posix.proto)
     GEN_GLOBAL_PROTO_LIB_DEPEND(
             NAME perf_posix_protos
             SOURCE ${PERF_SERVICE_SRCS}

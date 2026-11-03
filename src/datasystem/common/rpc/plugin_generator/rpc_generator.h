@@ -306,6 +306,8 @@ private:
      */
     void CreateBrpcAdapterCpp(const google::protobuf::FileDescriptor &file,
                               compiler::GeneratorContext *generatorCtx) const;
+    void CreateAuthProto(const google::protobuf::FileDescriptor &file,
+                         compiler::GeneratorContext *generatorCtx) const;
     void GenerateBrpcAdapterCppPrologue(io::Printer &printer, const google::protobuf::FileDescriptor &file) const;
 
     /**

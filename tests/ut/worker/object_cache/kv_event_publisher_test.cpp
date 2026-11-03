@@ -20,6 +20,7 @@
 
 // brpc headers must precede datasystem logging headers because brpc uses streamable CHECK_* macros.
 #include <brpc/controller.h>
+#include "datasystem/common/ak_sk/ak_sk_manager.h"
 
 #include "datasystem/worker/object_cache/kv_event/kv_event_publisher.h"
 
@@ -583,7 +584,7 @@ TEST_F(KvEventPublisherTest, MultiPublishUpdatePublishesStoredCpuEventForEachKey
                 objectTable, localAddress, localAddress, GetTestMetadataRoute());
             auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
             auto akSkManager = std::make_shared<AkSkManager>(0);
-            DS_ASSERT_OK(evictionManager->Init(globalRefTable, akSkManager));
+            DS_ASSERT_OK(evictionManager->Init(globalRefTable));
             WorkerOcServiceCrudParam param{
                 .workerMasterApiManager = nullptr,
                 .workerRequestManager = requestManager,

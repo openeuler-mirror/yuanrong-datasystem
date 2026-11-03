@@ -55,6 +55,12 @@
 
 ## Build Entrypoints
 
+RPC companion authentication descriptors are owned by `src/datasystem/protos/CMakeLists.txt::GENERATE_RPC_CPP`.
+It reuses the existing RPC generator, then compiles its `.auth.proto` companion with protoc. The second command
+depends directly on `.auth.proto`, declared as an output of the historical `GENERATE_ZMQ_CPP` helper;
+both stages precede the global proto dependency target. The helper remains in `cmake/external_libs/libzmq.cmake`;
+its external library configuration is unchanged.
+
 | Entrypoint | Role | Source-backed notes |
 | --- | --- | --- |
 | `bash build.sh` | primary user-facing build and package command | Defaults to CMake, `Release`, `./build`, `./output`, Python on, Java/Go off, hetero on. |

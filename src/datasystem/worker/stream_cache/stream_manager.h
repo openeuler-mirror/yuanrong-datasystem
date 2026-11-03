@@ -16,6 +16,7 @@
 
 #ifndef DATASYSTEM_WORKER_STREAM_CACHE_STREAM_MANAGER_H
 #define DATASYSTEM_WORKER_STREAM_CACHE_STREAM_MANAGER_H
+#include <shared_mutex>
 #include <chrono>
 #include <string>
 #include <utility>
@@ -108,7 +109,7 @@ private:
 class StreamManager : public std::enable_shared_from_this<StreamManager> {
 public:
     explicit StreamManager(std::string streamName, RemoteWorkerManager *remoteWorkerManager,
-                           std::string localWorkerAddr, std::shared_ptr<AkSkManager> akSkManager,
+                           std::string localWorkerAddr,
                            std::weak_ptr<ClientWorkerSCServiceImpl> scSvc,
                            std::shared_ptr<WorkerSCAllocateMemory> manager,
                            std::weak_ptr<WorkerWorkerSCServiceImpl> workerWorkerSCService, uint64_t localStreamNum);
@@ -962,7 +963,6 @@ private:
     std::unordered_map<std::string, std::shared_ptr<SubWorkerDesc>> remoteSubWorkerDict_;
     // Remote pub workers. Key: remote pub worker address, Value: remote HostPort
     std::unordered_set<std::string> remotePubWorkerDict_;
-    std::shared_ptr<AkSkManager> akSkManager_;
     std::weak_ptr<ClientWorkerSCServiceImpl> scSvc_;
     std::unique_ptr<PageQueueHandler> pageQueueHandler_;
     mutable std::shared_timed_mutex ackMutex_;

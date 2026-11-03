@@ -65,6 +65,7 @@ cc_library(
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
         "//src/datasystem/common/util:common_util",
         "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:hash_algorithm",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:random_data",
         "//src/datasystem/common/util:status_helper",

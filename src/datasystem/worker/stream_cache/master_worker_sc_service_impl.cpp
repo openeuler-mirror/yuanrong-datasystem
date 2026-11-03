@@ -15,6 +15,7 @@
  */
 
 #include "datasystem/worker/stream_cache/master_worker_sc_service_impl.h"
+#include "datasystem/common/inject/inject_point.h"
 
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/log/log_helper.h"
@@ -24,12 +25,10 @@ namespace datasystem {
 namespace worker {
 namespace stream_cache {
 MasterWorkerSCServiceImpl::MasterWorkerSCServiceImpl(HostPort serverAddr, HostPort masterAddr,
-                                                     ClientWorkerSCServiceImpl *clientSvc,
-                                                     std::shared_ptr<AkSkManager> akSkManager)
+                                                     ClientWorkerSCServiceImpl *clientSvc)
     : localWorkerAddress_(std::move(serverAddr)),
       masterAddress_(std::move(masterAddr)),
-      clientWorkerSCSvc_(clientSvc),
-      akSkManager_(std::move(akSkManager))
+      clientWorkerSCSvc_(clientSvc)
 {
 }
 
@@ -89,7 +88,6 @@ Status MasterWorkerSCServiceImpl::DelRemoteConsumer(const std::shared_ptr<Stream
 Status MasterWorkerSCServiceImpl::SyncPubNode(const SyncPubNodeReqPb &req, SyncPubNodeRspPb &rsp)
 {
     (void)rsp;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     const std::string &streamName = req.stream_name();
     LOG(INFO) << FormatString("worker(%s) received SyncPubNode request, streamname: %s", localWorkerAddress_.ToString(),
                               streamName);
@@ -118,7 +116,6 @@ Status MasterWorkerSCServiceImpl::SyncConsumerNode(const SyncConsumerNodeReqPb &
 {
     INJECT_POINT("MasterWorkerSCServiceImpl.SyncConsumerNode.sleep");
     (void)rsp;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     const std::string &streamName = req.stream_name();
     LOG(INFO) << FormatString("worker(%s) received SyncConsumerNode request, streamname: %s",
                               localWorkerAddress_.ToString(), streamName);
@@ -161,7 +158,6 @@ Status MasterWorkerSCServiceImpl::SyncConsumerNode(const SyncConsumerNodeReqPb &
 Status MasterWorkerSCServiceImpl::ClearAllRemotePub(const ClearRemoteInfoReqPb &req, ClearRemoteInfoRspPb &rsp)
 {
     (void)rsp;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     const std::string &streamName = req.stream_name();
     LOG(INFO) << FormatString("worker(%s) received ClearAllRemotePub request, streamname: %s",
                               localWorkerAddress_.ToString(), streamName);
@@ -187,7 +183,6 @@ Status MasterWorkerSCServiceImpl::ClearAllRemoteConsumer(const ClearRemoteInfoRe
 Status MasterWorkerSCServiceImpl::DelStreamContext(const DelStreamContextReqPb &req, DelStreamContextRspPb &rsp)
 {
     (void)rsp;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     const auto &streamName = req.stream_name();
     bool forceDelete = req.force_delete();
     auto timeout = req.timeout();
@@ -228,7 +223,6 @@ Status MasterWorkerSCServiceImpl::QueryMetadata(
     LOG(INFO) << "worker(" << localWorkerAddress_.ToString() << ") receive QueryMetaData for all streams from master";
     GetMetadataAllStreamReqPb req;
     RETURN_IF_NOT_OK(stream->Read(req));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     Status status = clientWorkerSCSvc_->SendAllStreamMetadata(req, stream);
     if (status.IsError() && status.GetCode() != K_RPC_STREAM_END) {
         LOG(ERROR) << "Send response to stream failed: " << status.GetMsg();
@@ -240,7 +234,6 @@ Status MasterWorkerSCServiceImpl::QueryMetadata(
 
 Status MasterWorkerSCServiceImpl::QueryMetadata(const GetMetadataAllStreamReqPb &req, GetMetadataAllStreamRspPb &rsp)
 {
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     return clientWorkerSCSvc_->GetAllStreamMetadata(req, rsp);
 }
 
@@ -248,7 +241,6 @@ Status MasterWorkerSCServiceImpl::UpdateTopoNotification(const UpdateTopoNotific
                                                          UpdateTopoNotificationRsp &rsp)
 {
     (void)rsp;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     const auto &streamName = req.stream_name();
     VLOG(SC_INTERNAL_LOG_LEVEL) << FormatString("Stream:<%s> UpdateTopoNotification req:%s", streamName,
                                                 LogHelper::IgnoreSensitive(req));

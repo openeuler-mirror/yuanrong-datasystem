@@ -30,6 +30,7 @@
 
 #include <brpc/channel.h>
 
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/net_util.h"
@@ -46,6 +47,12 @@
 #include <brpc/socket.h>
 #include <brpc/socket_map.h>
 #include "datasystem/protos/coordinator.brpc.stub.pb.h"
+#include "datasystem/common/rpc/brpc_auth.h"
+#include "datasystem/protos/master_object.auth.pb.h"
+#include "datasystem/protos/master_stream.auth.pb.h"
+#include "datasystem/protos/stream_posix.auth.pb.h"
+#include "datasystem/protos/worker_object.auth.pb.h"
+#include "datasystem/protos/worker_stream.auth.pb.h"
 #include "datasystem/protos/master_object.brpc.stub.pb.h"
 #include "datasystem/protos/master_stream.brpc.stub.pb.h"
 #include "datasystem/protos/stream_posix.brpc.stub.pb.h"
@@ -61,6 +68,25 @@ namespace datasystem {
 namespace {
 constexpr int64_t SLOW_RPC_STUB_THRESHOLD_MS = 2;
 constexpr int RPC_STUB_TRANSIENT_LOG_EVERY_N = 50'000;
+
+Status CreateMeshMethodMap(std::shared_ptr<const RpcMethodMap> &methods)
+{
+    const auto servicePair = [](const google::protobuf::ServiceDescriptor *authenticated) {
+        const auto &name = authenticated->full_name();
+        constexpr size_t authSuffixLength = 4;
+        const auto *plain = google::protobuf::DescriptorPool::generated_pool()->FindServiceByName(
+            name.substr(0, name.size() - authSuffixLength));
+        return RpcMethodMap::ServicePair{plain, authenticated};
+    };
+    return RpcMethodMap::Create({servicePair(WorkerWorkerOCServiceAuth::descriptor()),
+                                servicePair(master::MasterOCServiceAuth::descriptor()),
+                                servicePair(WorkerWorkerSCServiceAuth::descriptor()),
+                                servicePair(master::MasterSCServiceAuth::descriptor()),
+                                servicePair(MasterWorkerOCServiceAuth::descriptor()),
+                                servicePair(MasterWorkerSCServiceAuth::descriptor()),
+                                servicePair(WorkerWorkerTransportServiceAuth::descriptor()),
+                                servicePair(ClientWorkerSCServiceAuth::descriptor())}, methods);
+}
 
 bool IsTcpPeerDeadError(int errorCode)
 {
@@ -127,24 +153,62 @@ void LogStubGetEvent(const char *eventName, const HostPort &hostPort, StubType t
     LOG(ERROR) << FormatString("[%s] dst=%s type=%d retry=%d error=%s trace=%s", eventName, hostPort.ToString(),
                                static_cast<int>(type), attempts, rc->ToString(), Trace::Instance().GetTraceID());
 }
+
+BrpcChannelConfig PrepareMeshChannelConfig(const HostPort &hostPort)
+{
+    HostPort brpcAddr(hostPort.Host(), hostPort.Port());
+    BrpcChannelConfig cfg;
+    cfg.endpoint = brpcAddr.ToString();
+    cfg.connect_timeout_ms = FLAGS_node_timeout_s * TO_MILLISECOND;
+    cfg.timeout_ms = FLAGS_node_timeout_s * TO_MILLISECOND;
+    // These channels carry worker<->worker / worker<->master mesh traffic
+    // (WORKER_WORKER_OC_SVC, WORKER_MASTER_OC_SVC, etc.). The circuit breaker
+    // is designed for client->server fan-out where isolating a bad endpoint is
+    // a net win. In a dense worker mesh, a healthy peer under momentary back-
+    // pressure (eviction/rebalance) can trip the breaker and get isolated,
+    // amplifying the failure. Disable it on internal mesh channels; client
+    // paths (client_worker_*) keep the default-on breaker.
+    cfg.enable_circuit_breaker = false;
+    // Same rationale as circuit breaker: brpc-level blind retry (max_retry=3
+    // by default) re-drives non-idempotent RPCs without checking error codes,
+    // risking state corruption. The old app-level RetryOnRPCError sleep-loop
+    // has been removed (R5-1). Callers that need retry must do so explicitly
+    // with per-call Controller::set_max_retry() and error-code awareness.
+    cfg.max_retry = 0;
+    return cfg;
+}
+
 }  // namespace
 
-Status RpcStubCacheMgr::Init(uint64_t maxStubCount, const HostPort &localAddress)
+Status RpcStubCacheMgr::Init(uint64_t maxStubCount, const HostPort &localAddress,
+                             std::shared_ptr<Signature> rpcCredentials)
 {
     LOG(INFO) << FormatString("Init RpcStubCacheMgr for %s, max cache num: %d", localAddress.ToString(), maxStubCount);
     std::lock_guard<std::mutex> lck(initMutex_);
     if (init_) {
+        CHECK_FAIL_RETURN_STATUS(rpcCredentials == nullptr || rpcCredentials == rpcCredentials_, K_NOT_SUPPORTED,
+                                 "RPC stub cache authentication is fixed at initialization.");
         return Status::OK();
     }
+    if (rpcCredentials != nullptr) {
+        AkSkData key;
+        RETURN_IF_NOT_OK(rpcCredentials->SnapshotClientKey(key));
+        CHECK_FAIL_RETURN_STATUS(!key.NotComplete(), K_INVALID, "Missing RPC stub cache credentials.");
+    }
 
+    std::unique_ptr<LruForRpcStubCacheMgr> cache;
     auto policy = std::make_unique<LruCountPolicy>();
     policy->SetCacheCount(maxStubCount);
     RETURN_IF_NOT_OK(LruForRpcStubCacheMgr::Builder()
                          .SetPolicy(std::move(policy))
                          .SetNumPartitions(stubPriorityNum_)
-                         .Build(&lruCache_));
+                         .Build(&cache));
+    RpcStubCreators creators;
+    RETURN_IF_NOT_OK(InitCreators(rpcCredentials, creators));
     localAddress_ = localAddress;
-    InitCreators();
+    lruCache_ = std::move(cache);
+    creators_ = std::move(creators);
+    rpcCredentials_ = std::move(rpcCredentials);
     init_ = true;
     return Status::OK();
 }
@@ -258,28 +322,20 @@ bool WaitForTcpPortAvailable(const HostPort &addr, int timeoutMs)
 Status RpcStubCacheMgr::CreateBrpcChannel(const HostPort &hostPort, std::shared_ptr<brpc::Channel> &brpcChannel)
 {
     CHECK_FAIL_RETURN_STATUS(brpcChannel == nullptr, K_RUNTIME_ERROR, "brpc channel is not nullptr");
-    HostPort brpcAddr(hostPort.Host(), hostPort.Port());
-    BrpcChannelConfig cfg;
-    cfg.endpoint = brpcAddr.ToString();
-    cfg.connect_timeout_ms = FLAGS_node_timeout_s * TO_MILLISECOND;
-    cfg.timeout_ms = FLAGS_node_timeout_s * TO_MILLISECOND;
-    // These channels carry worker<->worker / worker<->master mesh traffic
-    // (WORKER_WORKER_OC_SVC, WORKER_MASTER_OC_SVC, etc.). The circuit breaker
-    // is designed for client->server fan-out where isolating a bad endpoint is
-    // a net win. In a dense worker mesh, a healthy peer under momentary back-
-    // pressure (eviction/rebalance) can trip the breaker and get isolated,
-    // amplifying the failure. Disable it on internal mesh channels; client
-    // paths (client_worker_*) keep the default-on breaker.
-    cfg.enable_circuit_breaker = false;
-    // Same rationale as circuit breaker: brpc-level blind retry (max_retry=3
-    // by default) re-drives non-idempotent RPCs without checking error codes,
-    // risking state corruption. The old app-level RetryOnRPCError sleep-loop
-    // has been removed (R5-1). Callers that need retry must do so explicitly
-    // with per-call Controller::set_max_retry() and error-code awareness.
-    cfg.max_retry = 0;
+    const auto cfg = PrepareMeshChannelConfig(hostPort);
     auto channel = BrpcChannelFactory::Create(cfg);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(channel != nullptr, K_RPC_UNAVAILABLE,
-                                         FormatString("Failed to init brpc channel to %s", brpcAddr.ToString()));
+                                         FormatString("Failed to init brpc channel to %s", hostPort.ToString()));
+    brpcChannel = std::move(channel);
+    return Status::OK();
+}
+
+Status RpcStubCacheMgr::CreateSignedBrpcChannel(const HostPort &hostPort, const RpcSigningBinding &binding,
+                                                std::shared_ptr<brpc::Channel> &brpcChannel)
+{
+    CHECK_FAIL_RETURN_STATUS(brpcChannel == nullptr, K_RUNTIME_ERROR, "brpc channel is not nullptr");
+    std::unique_ptr<brpc::Channel> channel;
+    RETURN_IF_NOT_OK(CreateBrpcAuthChannel(PrepareMeshChannelConfig(hostPort), binding, channel));
     brpcChannel = std::move(channel);
     return Status::OK();
 }
@@ -289,10 +345,15 @@ bool RpcStubCacheMgr::EnableScWorkerWorkerDirectPort()
     return FLAGS_sc_worker_worker_direct_port > 0;
 }
 
-void RpcStubCacheMgr::InitCreators()
+Status RpcStubCacheMgr::InitCreators(const std::shared_ptr<Signature> &rpcCredentials, RpcStubCreators &creators)
 {
+    RpcSigningBinding binding;
+    if (rpcCredentials != nullptr) {
+        binding.credentials = rpcCredentials;
+        RETURN_IF_NOT_OK(CreateMeshMethodMap(binding.methods));
+    }
     // brpc path: each creator makes a brpc::Channel and a _BrpcGenericStub
-    auto makeBrpcCreator = [](StubType stubType) -> RpcStubCacheCreateFunc {
+    auto makePlainCreator = [](StubType stubType) -> RpcStubCacheCreateFunc {
         return [stubType](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
             return BrpcCreatorTemplate(
                 [&hostPort](std::shared_ptr<brpc::Channel> &brpcChannel) {
@@ -301,17 +362,31 @@ void RpcStubCacheMgr::InitCreators()
                 stubType, rpcStub);
         };
     };
-    creators_.emplace(StubType::WORKER_WORKER_OC_SVC, makeBrpcCreator(StubType::WORKER_WORKER_OC_SVC));
-    creators_.emplace(StubType::WORKER_MASTER_OC_SVC, makeBrpcCreator(StubType::WORKER_MASTER_OC_SVC));
-    creators_.emplace(StubType::WORKER_WORKER_SC_SVC, makeBrpcCreator(StubType::WORKER_WORKER_SC_SVC));
-    creators_.emplace(StubType::WORKER_MASTER_SC_SVC, makeBrpcCreator(StubType::WORKER_MASTER_SC_SVC));
-    creators_.emplace(StubType::MASTER_WORKER_OC_SVC, makeBrpcCreator(StubType::MASTER_WORKER_OC_SVC));
-    creators_.emplace(StubType::MASTER_WORKER_SC_SVC, makeBrpcCreator(StubType::MASTER_WORKER_SC_SVC));
-    creators_.emplace(StubType::MASTER_MASTER_OC_SVC, makeBrpcCreator(StubType::MASTER_MASTER_OC_SVC));
-    creators_.emplace(StubType::WORKER_WORKER_TRANS_SVC, makeBrpcCreator(StubType::WORKER_WORKER_TRANS_SVC));
-    creators_.emplace(StubType::TO_COORDINATOR_SVC, makeBrpcCreator(StubType::TO_COORDINATOR_SVC));
-    creators_.emplace(StubType::COORDINATOR_WORKER_SVC, makeBrpcCreator(StubType::COORDINATOR_WORKER_SVC));
-    creators_.emplace(StubType::CLIENT_WORKER_SC_SVC, makeBrpcCreator(StubType::CLIENT_WORKER_SC_SVC));
+    auto makeBrpcCreator = [&](StubType stubType) -> RpcStubCacheCreateFunc {
+        if (binding.credentials == nullptr || stubType == StubType::TO_COORDINATOR_SVC ||
+            stubType == StubType::COORDINATOR_WORKER_SVC) {
+            return makePlainCreator(stubType);
+        }
+        return [stubType, binding](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
+            return BrpcCreatorTemplate(
+                [&](std::shared_ptr<brpc::Channel> &channel) {
+                    return CreateSignedBrpcChannel(hostPort, binding, channel);
+                }, stubType, rpcStub);
+        };
+    };
+    creators.emplace(StubType::WORKER_WORKER_OC_SVC, makeBrpcCreator(StubType::WORKER_WORKER_OC_SVC));
+    INJECT_POINT("RpcStubCacheMgr.InitCreators");
+    creators.emplace(StubType::WORKER_MASTER_OC_SVC, makeBrpcCreator(StubType::WORKER_MASTER_OC_SVC));
+    creators.emplace(StubType::WORKER_WORKER_SC_SVC, makeBrpcCreator(StubType::WORKER_WORKER_SC_SVC));
+    creators.emplace(StubType::WORKER_MASTER_SC_SVC, makeBrpcCreator(StubType::WORKER_MASTER_SC_SVC));
+    creators.emplace(StubType::MASTER_WORKER_OC_SVC, makeBrpcCreator(StubType::MASTER_WORKER_OC_SVC));
+    creators.emplace(StubType::MASTER_WORKER_SC_SVC, makeBrpcCreator(StubType::MASTER_WORKER_SC_SVC));
+    creators.emplace(StubType::MASTER_MASTER_OC_SVC, makeBrpcCreator(StubType::MASTER_MASTER_OC_SVC));
+    creators.emplace(StubType::WORKER_WORKER_TRANS_SVC, makeBrpcCreator(StubType::WORKER_WORKER_TRANS_SVC));
+    creators.emplace(StubType::TO_COORDINATOR_SVC, makeBrpcCreator(StubType::TO_COORDINATOR_SVC));
+    creators.emplace(StubType::COORDINATOR_WORKER_SVC, makeBrpcCreator(StubType::COORDINATOR_WORKER_SVC));
+    creators.emplace(StubType::CLIENT_WORKER_SC_SVC, makeBrpcCreator(StubType::CLIENT_WORKER_SC_SVC));
+    return Status::OK();
 }
 
 void RpcStubCacheMgr::MaybeEvictStaleBrpcStub(const HostPort &hostPort, StubType type,

@@ -21,7 +21,6 @@
 #include <string>
 #include <vector>
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/master/node_manager.h"
 #include "datasystem/protos/master_heartbeat.irpc.pb.h"
@@ -37,9 +36,8 @@ public:
     /**
      * @brief Construct MasterServiceImpl.
      * @param[in] serverAddress Local Master service address.
-     * @param[in] akSkManager Authentication manager shared with the service.
      */
-    explicit MasterServiceImpl(HostPort serverAddress, std::shared_ptr<AkSkManager> akSkManager);
+    explicit MasterServiceImpl(HostPort serverAddress);
 
     ~MasterServiceImpl() override;
 
@@ -52,9 +50,6 @@ public:
     Status Heartbeat(const HeartbeatReqPb &request, HeartbeatRspPb &response) override;
 
     Status Init() override;
-
-private:
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 };
 }  // namespace master
 }  // namespace datasystem

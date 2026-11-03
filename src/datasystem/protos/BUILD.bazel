@@ -230,6 +230,8 @@ genrule(
         "coordinator.brpc.stub.pb.h",
         "coordinator.brpc.stub.pb.cc",
         "coordinator.irpc.pb.h",
+        "coordinator.auth.pb.h",
+        "coordinator.auth.pb.cc",
     ],
     cmd = """
         PROTOC=$(location @com_google_protobuf//:protoc)
@@ -240,6 +242,10 @@ genrule(
         TMPD=$$(mktemp -d)
         $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/coordinator.proto
         cp $$TMPD/datasystem/protos/coordinator.brpc.pb.h $$TMPD/datasystem/protos/coordinator.brpc.pb.cc $$TMPD/datasystem/protos/coordinator.brpc.stub.pb.h $$TMPD/datasystem/protos/coordinator.brpc.stub.pb.cc $$TMPD/datasystem/protos/coordinator.irpc.pb.h $$OUT_DIR/
+        $$PROTOC -I$$TMPD -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC \
+            --cpp_out=$$TMPD datasystem/protos/coordinator.auth.proto
+        cp $$TMPD/datasystem/protos/coordinator.auth.pb.h \
+           $$TMPD/datasystem/protos/coordinator.auth.pb.cc $$OUT_DIR/
         rm -rf $$TMPD
     """,
 )
@@ -396,6 +402,8 @@ genrule(
         "ut_object.brpc.stub.pb.h",
         "ut_object.brpc.stub.pb.cc",
         "ut_object.irpc.pb.h",
+        "ut_object.auth.pb.h",
+        "ut_object.auth.pb.cc",
     ],
     cmd = """
         PROTOC=$(location @com_google_protobuf//:protoc)
@@ -415,6 +423,10 @@ genrule(
            $$GEN/ut_object.brpc.stub.pb.h $$GEN/ut_object.brpc.stub.pb.cc \
            $$GEN/ut_object.irpc.pb.h \
            $$OUT_DIR/
+        $$PROTOC -I$$TMPD -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC \
+            --cpp_out=$$TMPD datasystem/protos/ut_object.auth.proto
+        cp $$TMPD/datasystem/protos/ut_object.auth.pb.h \
+           $$TMPD/datasystem/protos/ut_object.auth.pb.cc $$OUT_DIR/
         rm -rf $$TMPD
     """,
 )
@@ -597,6 +609,8 @@ genrule(
         "generic_service.brpc.stub.pb.h",
         "generic_service.brpc.stub.pb.cc",
         "generic_service.irpc.pb.h",
+        "generic_service.auth.pb.h",
+        "generic_service.auth.pb.cc",
     ],
     cmd = """
         PROTOC=$(location @com_google_protobuf//:protoc)
@@ -620,6 +634,10 @@ genrule(
            $$GEN/generic_service.brpc.stub.pb.h $$GEN/generic_service.brpc.stub.pb.cc \
            $$GEN/generic_service.irpc.pb.h \
            $$OUT_DIR/
+        $$PROTOC -I$$TMPD -I$$PROTO_ROOT/src \
+            --cpp_out=$$TMPD datasystem/protos/generic_service.auth.proto
+        cp $$TMPD/datasystem/protos/generic_service.auth.pb.h \
+           $$TMPD/datasystem/protos/generic_service.auth.pb.cc $$OUT_DIR/
         rm -rf $$TMPD
     """,
 )
@@ -661,6 +679,8 @@ genrule(
         "master_heartbeat.brpc.stub.pb.h",
         "master_heartbeat.brpc.stub.pb.cc",
         "master_heartbeat.irpc.pb.h",
+        "master_heartbeat.auth.pb.h",
+        "master_heartbeat.auth.pb.cc",
     ],
     cmd = """
         PROTOC=$(location @com_google_protobuf//:protoc)
@@ -671,6 +691,10 @@ genrule(
         TMPD=$$(mktemp -d)
         $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/master_heartbeat.proto
         cp $$TMPD/datasystem/protos/master_heartbeat.brpc.pb.h $$TMPD/datasystem/protos/master_heartbeat.brpc.pb.cc $$TMPD/datasystem/protos/master_heartbeat.brpc.stub.pb.h $$TMPD/datasystem/protos/master_heartbeat.brpc.stub.pb.cc $$TMPD/datasystem/protos/master_heartbeat.irpc.pb.h $$OUT_DIR/
+        $$PROTOC -I$$TMPD -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC \
+            --cpp_out=$$TMPD datasystem/protos/master_heartbeat.auth.proto
+        cp $$TMPD/datasystem/protos/master_heartbeat.auth.pb.h \
+           $$TMPD/datasystem/protos/master_heartbeat.auth.pb.cc $$OUT_DIR/
         rm -rf $$TMPD
     """,
 )
@@ -710,6 +734,8 @@ genrule(
         "share_memory.brpc.pb.h", "share_memory.brpc.pb.cc",
         "share_memory.brpc.stub.pb.h", "share_memory.brpc.stub.pb.cc",
         "share_memory.irpc.pb.h",
+        "share_memory.auth.pb.h",
+        "share_memory.auth.pb.cc",
     ],
     cmd = """
         PROTOC=$(location @com_google_protobuf//:protoc)
@@ -720,6 +746,10 @@ genrule(
         TMPD=$$(mktemp -d)
         $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/share_memory.proto
         cp $$TMPD/datasystem/protos/share_memory.brpc.pb.h $$TMPD/datasystem/protos/share_memory.brpc.pb.cc $$TMPD/datasystem/protos/share_memory.brpc.stub.pb.h $$TMPD/datasystem/protos/share_memory.brpc.stub.pb.cc $$TMPD/datasystem/protos/share_memory.irpc.pb.h $$OUT_DIR/
+        $$PROTOC -I$$TMPD -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC \
+            --cpp_out=$$TMPD datasystem/protos/share_memory.auth.proto
+        cp $$TMPD/datasystem/protos/share_memory.auth.pb.h \
+           $$TMPD/datasystem/protos/share_memory.auth.pb.cc $$OUT_DIR/
         rm -rf $$TMPD
     """,
 )
@@ -767,6 +797,8 @@ genrule(
         "worker_object.brpc.pb.h", "worker_object.brpc.pb.cc",
         "worker_object.brpc.stub.pb.h", "worker_object.brpc.stub.pb.cc",
         "worker_object.irpc.pb.h",
+        "worker_object.auth.pb.h",
+        "worker_object.auth.pb.cc",
     ],
     cmd = """
         PROTOC=$(location @com_google_protobuf//:protoc)
@@ -777,6 +809,10 @@ genrule(
         TMPD=$$(mktemp -d)
         $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/worker_object.proto
         cp $$TMPD/datasystem/protos/worker_object.brpc.pb.h $$TMPD/datasystem/protos/worker_object.brpc.pb.cc $$TMPD/datasystem/protos/worker_object.brpc.stub.pb.h $$TMPD/datasystem/protos/worker_object.brpc.stub.pb.cc $$TMPD/datasystem/protos/worker_object.irpc.pb.h $$OUT_DIR/
+        $$PROTOC -I$$TMPD -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC \
+            --cpp_out=$$TMPD datasystem/protos/worker_object.auth.proto
+        cp $$TMPD/datasystem/protos/worker_object.auth.pb.h \
+           $$TMPD/datasystem/protos/worker_object.auth.pb.cc $$OUT_DIR/
         rm -rf $$TMPD
     """,
 )
@@ -827,6 +863,8 @@ genrule(
         "master_object.brpc.pb.h", "master_object.brpc.pb.cc",
         "master_object.brpc.stub.pb.h", "master_object.brpc.stub.pb.cc",
         "master_object.irpc.pb.h",
+        "master_object.auth.pb.h",
+        "master_object.auth.pb.cc",
     ],
     cmd = """
         PROTOC=$(location @com_google_protobuf//:protoc)
@@ -837,6 +875,10 @@ genrule(
         TMPD=$$(mktemp -d)
         $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/master_object.proto
         cp $$TMPD/datasystem/protos/master_object.brpc.pb.h $$TMPD/datasystem/protos/master_object.brpc.pb.cc $$TMPD/datasystem/protos/master_object.brpc.stub.pb.h $$TMPD/datasystem/protos/master_object.brpc.stub.pb.cc $$TMPD/datasystem/protos/master_object.irpc.pb.h $$OUT_DIR/
+        $$PROTOC -I$$TMPD -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC \
+            --cpp_out=$$TMPD datasystem/protos/master_object.auth.proto
+        cp $$TMPD/datasystem/protos/master_object.auth.pb.h \
+           $$TMPD/datasystem/protos/master_object.auth.pb.cc $$OUT_DIR/
         rm -rf $$TMPD
     """,
 )
@@ -877,6 +919,8 @@ genrule(
         "stream_posix.brpc.pb.h", "stream_posix.brpc.pb.cc",
         "stream_posix.brpc.stub.pb.h", "stream_posix.brpc.stub.pb.cc",
         "stream_posix.irpc.pb.h",
+        "stream_posix.auth.pb.h",
+        "stream_posix.auth.pb.cc",
     ],
     cmd = """
         PROTOC=$(location @com_google_protobuf//:protoc)
@@ -887,6 +931,10 @@ genrule(
         TMPD=$$(mktemp -d)
         $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/stream_posix.proto
         cp $$TMPD/datasystem/protos/stream_posix.brpc.pb.h $$TMPD/datasystem/protos/stream_posix.brpc.pb.cc $$TMPD/datasystem/protos/stream_posix.brpc.stub.pb.h $$TMPD/datasystem/protos/stream_posix.brpc.stub.pb.cc $$TMPD/datasystem/protos/stream_posix.irpc.pb.h $$OUT_DIR/
+        $$PROTOC -I$$TMPD -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC \
+            --cpp_out=$$TMPD datasystem/protos/stream_posix.auth.proto
+        cp $$TMPD/datasystem/protos/stream_posix.auth.pb.h \
+           $$TMPD/datasystem/protos/stream_posix.auth.pb.cc $$OUT_DIR/
         rm -rf $$TMPD
     """,
 )
@@ -925,6 +973,8 @@ genrule(
         "perf_posix.brpc.pb.h", "perf_posix.brpc.pb.cc",
         "perf_posix.brpc.stub.pb.h", "perf_posix.brpc.stub.pb.cc",
         "perf_posix.irpc.pb.h",
+        "perf_posix.auth.pb.h",
+        "perf_posix.auth.pb.cc",
     ],
     cmd = """
         PROTOC=$(location @com_google_protobuf//:protoc)
@@ -935,6 +985,10 @@ genrule(
         TMPD=$$(mktemp -d)
         $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/perf_posix.proto
         cp $$TMPD/datasystem/protos/perf_posix.brpc.pb.h $$TMPD/datasystem/protos/perf_posix.brpc.pb.cc $$TMPD/datasystem/protos/perf_posix.brpc.stub.pb.h $$TMPD/datasystem/protos/perf_posix.brpc.stub.pb.cc $$TMPD/datasystem/protos/perf_posix.irpc.pb.h $$OUT_DIR/
+        $$PROTOC -I$$TMPD -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC \
+            --cpp_out=$$TMPD datasystem/protos/perf_posix.auth.proto
+        cp $$TMPD/datasystem/protos/perf_posix.auth.pb.h \
+           $$TMPD/datasystem/protos/perf_posix.auth.pb.cc $$OUT_DIR/
         rm -rf $$TMPD
     """,
 )
@@ -974,6 +1028,8 @@ genrule(
         "master_stream.brpc.pb.h", "master_stream.brpc.pb.cc",
         "master_stream.brpc.stub.pb.h", "master_stream.brpc.stub.pb.cc",
         "master_stream.irpc.pb.h",
+        "master_stream.auth.pb.h",
+        "master_stream.auth.pb.cc",
     ],
     cmd = """
         PROTOC=$(location @com_google_protobuf//:protoc)
@@ -984,6 +1040,10 @@ genrule(
         TMPD=$$(mktemp -d)
         $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/master_stream.proto
         cp $$TMPD/datasystem/protos/master_stream.brpc.pb.h $$TMPD/datasystem/protos/master_stream.brpc.pb.cc $$TMPD/datasystem/protos/master_stream.brpc.stub.pb.h $$TMPD/datasystem/protos/master_stream.brpc.stub.pb.cc $$TMPD/datasystem/protos/master_stream.irpc.pb.h $$OUT_DIR/
+        $$PROTOC -I$$TMPD -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC \
+            --cpp_out=$$TMPD datasystem/protos/master_stream.auth.proto
+        cp $$TMPD/datasystem/protos/master_stream.auth.pb.h \
+           $$TMPD/datasystem/protos/master_stream.auth.pb.cc $$OUT_DIR/
         rm -rf $$TMPD
     """,
 )
@@ -1023,6 +1083,8 @@ genrule(
         "worker_stream.brpc.pb.h", "worker_stream.brpc.pb.cc",
         "worker_stream.brpc.stub.pb.h", "worker_stream.brpc.stub.pb.cc",
         "worker_stream.irpc.pb.h",
+        "worker_stream.auth.pb.h",
+        "worker_stream.auth.pb.cc",
     ],
     cmd = """
         PROTOC=$(location @com_google_protobuf//:protoc)
@@ -1033,6 +1095,10 @@ genrule(
         TMPD=$$(mktemp -d)
         $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/worker_stream.proto
         cp $$TMPD/datasystem/protos/worker_stream.brpc.pb.h $$TMPD/datasystem/protos/worker_stream.brpc.pb.cc $$TMPD/datasystem/protos/worker_stream.brpc.stub.pb.h $$TMPD/datasystem/protos/worker_stream.brpc.stub.pb.cc $$TMPD/datasystem/protos/worker_stream.irpc.pb.h $$OUT_DIR/
+        $$PROTOC -I$$TMPD -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC \
+            --cpp_out=$$TMPD datasystem/protos/worker_stream.auth.proto
+        cp $$TMPD/datasystem/protos/worker_stream.auth.pb.h \
+           $$TMPD/datasystem/protos/worker_stream.auth.pb.cc $$OUT_DIR/
         rm -rf $$TMPD
     """,
 )
@@ -1081,6 +1147,8 @@ genrule(
         "object_posix.brpc.stub.pb.h",
         "object_posix.brpc.stub.pb.cc",
         "object_posix.irpc.pb.h",
+        "object_posix.auth.pb.h",
+        "object_posix.auth.pb.cc",
     ],
     cmd = """
         PROTOC=$(location @com_google_protobuf//:protoc)
@@ -1100,6 +1168,10 @@ genrule(
            $$GEN/object_posix.brpc.stub.pb.h $$GEN/object_posix.brpc.stub.pb.cc \
            $$GEN/object_posix.irpc.pb.h \
            $$OUT_DIR/
+        $$PROTOC -I$$TMPD -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC \
+            --cpp_out=$$TMPD datasystem/protos/object_posix.auth.proto
+        cp $$TMPD/datasystem/protos/object_posix.auth.pb.h \
+           $$TMPD/datasystem/protos/object_posix.auth.pb.cc $$OUT_DIR/
         rm -rf $$TMPD
     """,
 )

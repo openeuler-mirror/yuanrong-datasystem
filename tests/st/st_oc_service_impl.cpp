@@ -81,7 +81,7 @@ Status StOCServiceImpl::TestUnaryCompatibilityV1(const TestReqPbV1 &req, TestRsp
     } else if (req.auth_req() == ONE) {
         return worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId);
     } else {
-        return akSkManager_->VerifySignatureAndTimestamp(req);
+        return Status::OK();
     }
 }
 
@@ -97,8 +97,6 @@ Status StOCServiceImpl::TestStreamCompatibilityV1(
         RETURN_IF_NOT_OK(worker::Authenticate(akSkManager_, req, tenantId));
     } else if (req.auth_req() == ONE) {
         RETURN_IF_NOT_OK(worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId));
-    } else {
-        RETURN_IF_NOT_OK(akSkManager_->VerifySignatureAndTimestamp(req));
     }
     RETURN_IF_NOT_OK(stream->Write(rsp));
     return stream->Finish();
@@ -116,8 +114,6 @@ Status StOCServiceImpl::TestStreamCompatibility1V1(std::shared_ptr<::datasystem:
         RETURN_IF_NOT_OK(worker::Authenticate(akSkManager_, req, tenantId));
     } else if (req.auth_req() == ONE) {
         RETURN_IF_NOT_OK(worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId));
-    } else {
-        RETURN_IF_NOT_OK(akSkManager_->VerifySignatureAndTimestamp(req));
     }
     return Status::OK();
 }

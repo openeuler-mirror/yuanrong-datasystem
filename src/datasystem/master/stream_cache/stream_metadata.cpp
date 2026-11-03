@@ -54,7 +54,7 @@ Status SleepForClearRemotePub(std::chrono::milliseconds duration)
 }  // namespace
 
 StreamMetadata::StreamMetadata(std::string streamName, const StreamFields &streamFields,
-                               RocksStreamMetaStore *streamMetaStore, std::shared_ptr<AkSkManager> akSkManager,
+                               RocksStreamMetaStore *streamMetaStore,
                                std::shared_ptr<RpcSessionManager> rpcSessionManager,
                                const cluster::MembershipEndpointView *membership,
                                SCNotifyWorkerManager *notifyWorkerManager)
@@ -63,7 +63,6 @@ StreamMetadata::StreamMetadata(std::string streamName, const StreamFields &strea
       topoManager_(std::make_unique<TopologyManager>(streamName_)),
       streamStore_(streamMetaStore),
       alive_(true),
-      akSkManager_(std::move(akSkManager)),
       rpcSessionManager_(std::move(rpcSessionManager)),
       topologyMembership_(membership),
       notifyWorkerManager_(notifyWorkerManager)
@@ -248,7 +247,7 @@ Status StreamMetadata::PubIncreaseNodeImpl(const HostPort &pubWorkerAddress, std
     auto consumerMetaList = topoManager_->GetAllConsumerNotFromSrc(pubWorkerAddress.ToString());
     auto retainData = CheckNUpdateNeedRetainData();  // Check if we have to retain the data
     std::shared_ptr<MasterWorkerSCApi> masterWorkerApi = nullptr;
-    RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(pubWorkerAddress, masterWorkerApi, akSkManager_));
+    RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(pubWorkerAddress, masterWorkerApi));
     if (!consumerMetaList.empty()
         || (retainData == RetainDataState::State::NOT_RETAIN && streamFields_.retainForNumConsumers_)) {
         LOG(INFO) << "[RetainData] Master sending SyncConsumerNode for stream " << streamName_ << "Remote producer "
@@ -384,7 +383,7 @@ Status StreamMetadata::SubIncreaseNodeUnlocked(const ConsumerMetaPb &consumerMet
 
     if (sendToSrcNode) {
         std::shared_ptr<MasterWorkerSCApi> masterWorkerApi = nullptr;
-        RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(subWorkerAddress, masterWorkerApi, akSkManager_));
+        RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(subWorkerAddress, masterWorkerApi));
         RETURN_IF_NOT_OK_EXCEPT(ProcessClearAllRemotePub(masterWorkerApi, subWorkerAddress), K_NOT_FOUND);
     }
 
@@ -441,7 +440,7 @@ Status StreamMetadata::SubIncreaseNodeImpl(const ConsumerMetaPb &consumerMeta, c
         VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("consumer meta:<%s>, isFirstConsumer:<%d>",
                                                   LogHelper::IgnoreSensitive(consumerMeta), isFirstConsumer);
         std::shared_ptr<MasterWorkerSCApi> masterWorkerApi = nullptr;
-        RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(subWorkerAddress, masterWorkerApi, akSkManager_));
+        RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(subWorkerAddress, masterWorkerApi));
         RETURN_IF_NOT_OK_EXCEPT(masterWorkerApi->SyncPubNode(streamName_, pubNodeSet, isRecon),
                                 StatusCode::K_DUPLICATED);
         sendToSrcNode = true;
@@ -795,7 +794,7 @@ Status StreamMetadata::CheckMetadata(const GetStreamMetadataRspPb &meta, const H
     bool isAllConsumerClosed = IsAllConsumerClosed(workerAddr.ToString());
     if (!meta.is_remote_pub_empty() && isAllConsumerClosed && CheckWorkerStatus(workerAddr).IsOk()) {
         std::shared_ptr<MasterWorkerSCApi> masterWorkerApi = nullptr;
-        RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(workerAddr, masterWorkerApi, akSkManager_));
+        RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(workerAddr, masterWorkerApi));
         RETURN_IF_NOT_OK(ProcessClearAllRemotePub(masterWorkerApi, workerAddr));
     }
 

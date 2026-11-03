@@ -20,7 +20,7 @@
 #include <string>
 
 #include "common.h"
-#include "datasystem/client/worker_api/client_worker_common_api.h"
+#include "datasystem/client/object_cache/client_worker_api/client_worker_remote_api.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/util/version.h"
 #include "datasystem/common/rpc/rpc_auth_keys.h"
@@ -28,6 +28,8 @@
 #include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/protos/share_memory.pb.h"
 #include "datasystem/protos/share_memory.brpc.stub.pb.h"
+#include "datasystem/protos/share_memory.auth.pb.h"
+#include "datasystem/common/rpc/brpc_auth.h"
 
 namespace datasystem {
 namespace st {
@@ -67,7 +69,6 @@ TEST_F(RegisterClientNonShmRspTest, RegisterClientReturnsNonShmFields)
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
     const std::string accessKey = "QTWAOYTTINDUT2QVKYUC";
     const SensitiveValue secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
-    Signature signature(accessKey, secretKey);
 
     RegisterClientReqPb req;
     RegisterClientRspPb rsp;
@@ -82,7 +83,18 @@ TEST_F(RegisterClientNonShmRspTest, RegisterClientReturnsNonShmFields)
     req.set_pod_name("st");
     req.set_support_multi_shm_ref_count(false);
 
-    DS_ASSERT_OK(signature.GenerateSignature(req));
+    auto signature = std::make_shared<Signature>(accessKey, secretKey);
+    RpcSigningBinding binding;
+    binding.credentials = signature;
+    DS_ASSERT_OK(RpcMethodMap::Create(
+        {{google::protobuf::DescriptorPool::generated_pool()->FindServiceByName("datasystem.WorkerService"),
+          WorkerServiceAuth::descriptor()}}, binding.methods));
+    BrpcChannelConfig config;
+    config.endpoint = workerAddr_.ToString();
+    std::unique_ptr<brpc::Channel> authenticated;
+    DS_ASSERT_OK(CreateBrpcAuthChannel(config, std::move(binding), authenticated));
+    channel_ = std::move(authenticated);
+    stub_ = std::make_unique<WorkerService_BrpcGenericStub>(channel_.get(), 5000);
     DS_ASSERT_OK(stub_->RegisterClient(req, rsp));
 
     ASSERT_EQ(rsp.lock_id(), 0u);
@@ -92,8 +104,8 @@ TEST_F(RegisterClientNonShmRspTest, RegisterClientReturnsNonShmFields)
     ASSERT_TRUE(rsp.shm_id().empty());
     ASSERT_EQ(rsp.memory_alignment(), 4096u);
 
-    auto clientApi = std::make_shared<client::ClientWorkerRemoteCommonApi>(
-        workerAddr_, HeartbeatType::NO_HEARTBEAT, SensitiveValue(""), &signature);
+    auto clientApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(
+        workerAddr_, HeartbeatType::NO_HEARTBEAT, SensitiveValue(""), signature);
     DS_ASSERT_OK(clientApi->Init(60'000, 60'000));
     EXPECT_EQ(clientApi->GetMemoryAlignment(), 4096u);
 }

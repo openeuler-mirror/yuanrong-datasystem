@@ -21,6 +21,7 @@
 #include <utility>
 
 #include "datasystem/common/constants.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
@@ -357,12 +358,11 @@ Status SharedPageElementView::MoveBufToShmUnit()
 }
 
 // Class RemoteWorker part.
-RemoteWorker::RemoteWorker(HostPort localAddress, HostPort remoteAddress, std::shared_ptr<AkSkManager> akSkManager,
+RemoteWorker::RemoteWorker(HostPort localAddress, HostPort remoteAddress,
                            ClientWorkerSCServiceImpl *scSvc, std::string &workerInstanceId,
                            std::shared_ptr<WorkerSCAllocateMemory> scAllocateManager, RemoteWorkerManager *manager)
     : localWorkerAddr_(std::move(localAddress)),
       remoteWorkerAddr_(remoteAddress),
-      akSkManager_(std::move(akSkManager)),
       scSvc_(scSvc),
       sharedPageGroup_(std::move(remoteAddress), std::move(scAllocateManager), scSvc),
       workerInstanceId_(workerInstanceId), remoteWorkerManager_(manager)
@@ -831,7 +831,6 @@ Status RemoteWorker::FillExclusivePushReqHelper(const std::string &streamName, c
         ++it;
     } while (it != dataLst.end());
     pushReqPb.set_chunk_size(chunkSz);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(pushReqPb));
     return Status::OK();
 }
 
@@ -904,7 +903,6 @@ Status RemoteWorker::FillSharedPushReqHelper(const std::string &producerId, std:
         requestReady = true;
     } while (it != dataLst.end());
     CHECK_FAIL_RETURN_STATUS(requestReady, K_NOT_READY, "All element views are skipped, request is not ready");
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(pushReqPb));
     return Status::OK();
 }
 
@@ -1148,9 +1146,9 @@ void RemoteWorker::GetOrCreateSharedPageQueue(const std::string &namespaceUri,
 }
 
 // Class RemoteWorkerManager part
-RemoteWorkerManager::RemoteWorkerManager(ClientWorkerSCServiceImpl *scSvc, std::shared_ptr<AkSkManager> akSkManager,
+RemoteWorkerManager::RemoteWorkerManager(ClientWorkerSCServiceImpl *scSvc,
                                          std::shared_ptr<WorkerSCAllocateMemory> scAllocateManager)
-    : akSkManager_(std::move(akSkManager)), scSvc_(scSvc), scAllocateManager_(scAllocateManager)
+    : scSvc_(scSvc), scAllocateManager_(scAllocateManager)
 {
 }
 
@@ -1428,7 +1426,7 @@ Status RemoteWorkerManager::AddRemoteConsumer(const std::shared_ptr<StreamManage
         std::lock_guard<std::shared_timed_mutex> lock(mutex_);
         auto iter = remoteWorkerDict_.find(remoteWorkerAddress.ToString());
         if (iter == remoteWorkerDict_.end()) {
-            auto remoteWorker = std::make_shared<RemoteWorker>(localWorkerAddress, remoteWorkerAddress, akSkManager_,
+            auto remoteWorker = std::make_shared<RemoteWorker>(localWorkerAddress, remoteWorkerAddress,
                                                                scSvc_, workerInstanceId_, scAllocateManager_, this);
             RETURN_IF_NOT_OK(remoteWorker->Init());
             remoteWorker->RegisterRecordRemoteSendRateCallBack(

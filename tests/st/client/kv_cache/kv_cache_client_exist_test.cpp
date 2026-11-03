@@ -192,8 +192,8 @@ TEST_F(KVCacheClientExistTest, TestNotExistWhenMetadataHasNoLocations)
     DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddr));
     auto akSkManager = std::make_shared<AkSkManager>();
     DS_ASSERT_OK(akSkManager->SetClientAkSk(accessKey_, secretKey_));
-    DS_ASSERT_OK(RpcStubCacheMgr::Instance().Init(100));
-    worker::WorkerRemoteMasterOCApi masterApi(workerAddr, workerAddr, akSkManager);
+    DS_ASSERT_OK(RpcStubCacheMgr::Instance().Init(100, HostPort(), akSkManager));
+    worker::WorkerRemoteMasterOCApi masterApi(workerAddr, workerAddr);
     DS_ASSERT_OK(masterApi.Init());
 
     master::RemoveMetaReqPb removeReq;

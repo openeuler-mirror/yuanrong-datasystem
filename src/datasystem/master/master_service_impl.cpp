@@ -28,8 +28,8 @@
 
 namespace datasystem {
 namespace master {
-MasterServiceImpl::MasterServiceImpl(HostPort serverAddress, std::shared_ptr<AkSkManager> akSkManager)
-    : MasterService(std::move(serverAddress)), akSkManager_(akSkManager)
+MasterServiceImpl::MasterServiceImpl(HostPort serverAddress)
+    : MasterService(std::move(serverAddress))
 {
 }
 

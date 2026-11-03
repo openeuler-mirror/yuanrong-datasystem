@@ -21,6 +21,7 @@
 
 #include <brpc/channel.h>
 #include "datasystem/protos/stream_posix.brpc.stub.pb.h"
+#include "datasystem/protos/stream_posix.auth.pb.h"
 // brpc headers above override LOG/VLOG/DLOG via butil/logging.h.
 // Re-include log.h to restore datasystem's spdlog-based macros.
 #include "datasystem/common/log/log.h"
@@ -49,6 +50,13 @@ ClientWorkerApi::ClientWorkerApi(const HostPort &hostPort, SensitiveValue token,
 {
 }
 
+ClientWorkerApi::ClientWorkerApi(const HostPort &hostPort, SensitiveValue token,
+                                 std::shared_ptr<Signature> signature, std::string tenantId)
+    : ClientWorkerApi(hostPort, std::move(token), signature.get(), std::move(tenantId))
+{
+    rpcSignatureOwner_ = std::move(signature);
+}
+
 ClientWorkerApi::~ClientWorkerApi() = default;
 
 Status ClientWorkerApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize,
@@ -70,7 +78,10 @@ Status ClientWorkerApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs,
     // overwriting brpcChannel_ before the socket check destroys the
     // old channel while brpcRpcSession_ may still hold a raw pointer
     // to it, risking use-after-free on early return (issue #785).
-    auto newChannel = BrpcChannelFactory::Create(cfg);
+    std::unique_ptr<brpc::Channel> newChannel;
+    RETURN_IF_NOT_OK(CreateRpcChannel(cfg,
+        google::protobuf::DescriptorPool::generated_pool()->FindServiceByName("datasystem.ClientWorkerSCService"),
+        ClientWorkerSCServiceAuth::descriptor(), newChannel));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(newChannel != nullptr, StatusCode::K_RPC_UNAVAILABLE,
         FormatString("Failed to init brpc channel to %s for ClientWorkerSCService", brpcAddr.ToString()));
     // Wait for brpc health check to establish TCP connection. Fail Init
@@ -108,7 +119,6 @@ Status ClientWorkerApi::CreateProducer(const std::string &streamName, const std:
     RpcOptions opts;
     opts.SetTimeout(requestTimeoutMs_);
     CreateProducerRspPb rsp;
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK_EXCEPT(brpcRpcSession_->CreateProducer(opts, req, rsp), StatusCode::K_DUPLICATED);
     point.Record();
 
@@ -150,7 +160,6 @@ Status ClientWorkerApi::Subscribe(const std::string &streamName, const std::stri
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
 
     PerfPoint point(PerfKey::RPC_WORKER_CREATE_SUBSCRIBE);
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK_EXCEPT(brpcRpcSession_->Subscribe(opts, req, rsp), StatusCode::K_DUPLICATED);
     point.Record();
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s, C:%s] Create consumer success.", LogPrefix(), streamName,
@@ -190,7 +199,6 @@ Status ClientWorkerApi::DeleteStream(const std::string &streamName)
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
 
     PerfPoint point(PerfKey::RPC_WORKER_DELETE_STREAM);
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK(brpcRpcSession_->DeleteStream(opts, req, rsp));
     point.Record();
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] Delete stream success.", LogPrefix(), streamName);
@@ -207,7 +215,6 @@ Status ClientWorkerApi::QueryGlobalProducersNum(const std::string &streamName, u
 
     GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK(brpcRpcSession_->QueryGlobalProducersNum(req, rsp));
     producerNum = rsp.global_count();
     return Status::OK();
@@ -223,7 +230,6 @@ Status ClientWorkerApi::QueryGlobalConsumersNum(const std::string &streamName, u
     GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     req.set_client_id(clientId_);
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK(brpcRpcSession_->QueryGlobalConsumersNum(req, rsp));
     consumerNum = rsp.global_count();
     return Status::OK();
@@ -248,7 +254,6 @@ Status ClientWorkerApi::ResetStreams(const std::vector<std::string> &streamNames
         RetryOnError(
             requestTimeoutMs_,
             [this, &opts, &req, &rsp](int32_t) {
-                RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
                 return brpcRpcSession_->ResetStreams(opts, req, rsp);
             },
             []() { return Status::OK(); }, { K_RPC_CANCELLED, K_RPC_DEADLINE_EXCEEDED, K_RPC_UNAVAILABLE }),
@@ -276,7 +281,6 @@ Status ClientWorkerApi::ResumeStreams(const std::vector<std::string> &streamName
         RetryOnError(
             requestTimeoutMs_,
             [this, &opts, &req, &rsp](int32_t) {
-                RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
                 return brpcRpcSession_->ResumeStreams(opts, req, rsp);
             },
             []() { return Status::OK(); }, { K_RPC_CANCELLED, K_RPC_DEADLINE_EXCEEDED, K_RPC_UNAVAILABLE }),

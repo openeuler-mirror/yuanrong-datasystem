@@ -15,6 +15,9 @@
  * Description: Module responsible for managing the stream cache metadata on the master.
  */
 #include "datasystem/master/stream_cache/sc_metadata_manager.h"
+#include "datasystem/common/inject/inject_point.h"
+
+#include "datasystem/common/util/request_context.h"
 
 #include <chrono>
 #include <cstdint>
@@ -146,7 +149,7 @@ Status WaitDeleteStreamFanout(FanoutCollector &collector, const DeleteStreamFano
 }
 }  // namespace
 
-SCMetadataManager::SCMetadataManager(const HostPort &masterHostPort, std::shared_ptr<AkSkManager> akSkManager,
+SCMetadataManager::SCMetadataManager(const HostPort &masterHostPort,
                                      std::shared_ptr<RpcSessionManager> rpcSessionManager,
                                      const cluster::PlacementFacade *placement,
                                      const cluster::MembershipEndpointView *membership, RocksStore *rocksStore,
@@ -154,7 +157,6 @@ SCMetadataManager::SCMetadataManager(const HostPort &masterHostPort, std::shared
     : MetadataRedirectHelper(placement),
       masterAddress_(masterHostPort),
       topologyMembership_(membership),
-      akSkManager_(std::move(akSkManager)),
       rpcSessionManager_(std::move(rpcSessionManager)),
       workerId_(workerId),
       eventName_(SC_METADATA_MANAGER + workerId)
@@ -205,7 +207,7 @@ Status SCMetadataManager::Init()
     RETURN_IF_EXCEPTION_OCCURS(asyncReconciliationPool_ =
                                    std::make_unique<ThreadPool>(0, THREAD_POOL_SIZE, "MScAsyncReconcilation", false));
 
-    notifyWorkerManager_ = std::make_unique<SCNotifyWorkerManager>(streamMetaStore_, akSkManager_, rpcSessionManager_,
+    notifyWorkerManager_ = std::make_unique<SCNotifyWorkerManager>(streamMetaStore_, rpcSessionManager_,
                                                                    topologyMembership_, this);
     RETURN_IF_NOT_OK(notifyWorkerManager_->Init());
     RETURN_IF_NOT_OK(LoadMeta());
@@ -296,7 +298,7 @@ Status SCMetadataManager::SaveMigrationData(const MetaForSCMigrationPb &streamMe
     // clang-format off
     if (!streamMetaManagerDict_.emplace(
         streamName, std::make_shared<StreamMetadata>(streamName, streamFields, streamMetaStore_.get(),
-        akSkManager_, rpcSessionManager_, topologyMembership_, notifyWorkerManager_.get()))) {
+            rpcSessionManager_, topologyMembership_, notifyWorkerManager_.get()))) {
         TbbMetaHashmap::const_accessor existingAccessor;
         RETURN_IF_NOT_OK(GetStreamMetadataNoLock(streamName, existingAccessor));
         StreamMetadata *existingMetadata = existingAccessor->second.get();
@@ -609,7 +611,7 @@ Status SCMetadataManager::CloseConsumer(const CloseConsumerReqPb &req, CloseCons
 Status SCMetadataManager::SendDeleteStreamReqToWorker(const std::string &streamName, const HostPort workerNode)
 {
     std::shared_ptr<MasterWorkerSCApi> masterWorkerApi = nullptr;
-    RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(workerNode, masterWorkerApi, akSkManager_));
+    RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(workerNode, masterWorkerApi));
     RETURN_IF_NOT_OK_EXCEPT(masterWorkerApi->DelStreamContextBroadcast(streamName, false),
                             StatusCode::K_SC_STREAM_NOT_FOUND);
     return Status::OK();
@@ -644,7 +646,7 @@ Status SCMetadataManager::SendDeleteStreamReq(const std::string &streamName, std
         // Each related node maybe a worker which has not been recorded, so we should initialize rpc channel.
         int64_t tagId;
         std::shared_ptr<MasterWorkerSCApi> masterWorkerApi = nullptr;
-        RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(workerNode, masterWorkerApi, akSkManager_));
+        RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(workerNode, masterWorkerApi));
         RETURN_IF_NOT_OK(masterWorkerApi->DelStreamContextBroadcastAsyncWrite(streamName, false, tagId));
         int64_t collectorTag = nextCollectorTag++;
         Status addRc = collector.AddPeer(workerNode, collectorTag);
@@ -801,7 +803,7 @@ Status SCMetadataManager::CreateOrGetStreamMetadata(const std::string &streamNam
             return status;
         }
         accessor->second =
-            std::make_shared<StreamMetadata>(streamName, streamFields, streamMetaStore_.get(), akSkManager_,
+            std::make_shared<StreamMetadata>(streamName, streamFields, streamMetaStore_.get(),
                                              rpcSessionManager_, topologyMembership_, notifyWorkerManager_.get());
         if (FLAGS_log_monitor) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
@@ -845,7 +847,7 @@ Status SCMetadataManager::LoadMeta()
         // clang-format off
         CHECK_FAIL_RETURN_STATUS(streamMetaManagerDict_.emplace(
             streamName, std::make_shared<StreamMetadata>(streamName, streamFields, streamMetaStore_.get(),
-            akSkManager_, rpcSessionManager_, topologyMembership_, notifyWorkerManager_.get())),
+                rpcSessionManager_, topologyMembership_, notifyWorkerManager_.get())),
             StatusCode::K_RUNTIME_ERROR, "Load meta reconstruction insertion failed");
         // clang-format on
         TbbMetaHashmap::accessor accessor;
@@ -963,12 +965,11 @@ Status SCMetadataManager::CheckMetadataImpl(const HostPort &workerAddr,
 {
     LOG(INFO) << "Started CheckMetadata with worker: " << workerAddr;
     std::shared_ptr<MasterWorkerSCApi> masterWorkerApi = nullptr;
-    RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(workerAddr, masterWorkerApi, akSkManager_));
+    RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(workerAddr, masterWorkerApi));
     auto *localApi = dynamic_cast<MasterLocalWorkerSCApi *>(masterWorkerApi.get());
     GetMetadataAllStreamReqPb req;
     std::vector<GetStreamMetadataRspPb> metaRsp;
     req.set_master_address(masterAddress_.ToString());
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     if (localApi) {
         GetMetadataAllStreamRspPb rsp;
         RETURN_IF_NOT_OK_APPEND_MSG(localApi->QueryMetadata(req, rsp), "QueryMetadata send to worker failed");
@@ -1000,10 +1001,9 @@ Status SCMetadataManager::QueryTopologyMetadata(const HostPort &workerAddr,
                                                 std::vector<GetStreamMetadataRspPb> &metaRsp)
 {
     std::shared_ptr<MasterWorkerSCApi> api;
-    RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(workerAddr, api, akSkManager_));
+    RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(workerAddr, api));
     GetMetadataAllStreamReqPb req;
     req.set_master_address(masterAddress_.ToString());
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     if (auto *localApi = dynamic_cast<MasterLocalWorkerSCApi *>(api.get()); localApi != nullptr) {
         GetMetadataAllStreamRspPb rsp;
         RETURN_IF_NOT_OK_APPEND_MSG(localApi->QueryMetadata(req, rsp), "QueryMetadata send to worker failed");

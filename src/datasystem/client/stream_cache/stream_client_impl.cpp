@@ -51,7 +51,7 @@ namespace stream_cache {
 StreamClientImpl::StreamClientImpl(const std::string &clientPublicKey, const SensitiveValue &clientPrivateKey,
                                    const std::string &serverPublicKey, const std::string &accessKey,
                                    const SensitiveValue &secretKey)
-    : signature_(std::make_unique<Signature>(accessKey, secretKey))
+    : signature_(std::make_shared<Signature>(accessKey, secretKey))
 {
     (void)Provider::Instance();
     clientStateManager_ = std::make_unique<ClientStateManager>();
@@ -65,7 +65,7 @@ StreamClientImpl::StreamClientImpl(const ConnectOptions &connectOptions)
     (void)Provider::Instance();
     clientStateManager_ = std::make_unique<ClientStateManager>();
     token_ = connectOptions.token;
-    signature_ = std::make_unique<Signature>(connectOptions.accessKey, connectOptions.secretKey);
+    signature_ = std::make_shared<Signature>(connectOptions.accessKey, connectOptions.secretKey);
     tenantId_ = connectOptions.tenantId;
     connectTimeoutMs_ = connectOptions.connectTimeoutMs;
     requestTimeoutMs_ = connectOptions.requestTimeoutMs > 0 ? connectOptions.requestTimeoutMs : connectTimeoutMs_;
@@ -120,7 +120,7 @@ Status StreamClientImpl::Init(const std::string &ip, const int &port, bool &need
     CHECK_FAIL_RETURN_STATUS(Validator::ValidateHostPortString("StreamClient", hostPort.ToString()), K_INVALID,
                              FormatString("Invalid host or port: %s : %d", ip, port));
 
-    clientWorkerApi_ = std::make_shared<ClientWorkerApi>(hostPort, token_, signature_.get(), tenantId_);
+    clientWorkerApi_ = std::make_shared<ClientWorkerApi>(hostPort, token_, signature_, tenantId_);
     RETURN_IF_NOT_OK(clientWorkerApi_->Init(requestTimeoutMs_, connectTimeoutMs_));
     VLOG(SC_NORMAL_LOG_LEVEL) << "clientWorkerApi_ init success";
     mmapManager_ = std::make_unique<datasystem::client::MmapManager>(

@@ -51,11 +51,9 @@ namespace datasystem {
 namespace master {
 OCGlobalCacheDeleteManager::OCGlobalCacheDeleteManager(std::shared_ptr<ObjectMetaStore> objectStore,
                                                        std::shared_ptr<PersistenceApi> persistApi,
-                                                       bool backendStoreExist, const std::string &masterAddress,
-                                                       std::shared_ptr<AkSkManager> akSkManager)
+                                                       bool backendStoreExist, const std::string &masterAddress)
     : persistenceApi_(persistApi),
       objectStore_(std::move(objectStore)),
-      akSkManager_(std::move(akSkManager)),
       interruptFlag_(false),
       backendStoreExist_(backendStoreExist)
 {
@@ -264,7 +262,7 @@ Status OCGlobalCacheDeleteManager::GetMasterWorkerApi(const std::string &workerA
 
     HostPort workerHostPort;
     RETURN_IF_NOT_OK_APPEND_MSG(workerHostPort.ParseString(workerAddress), "Failed to parse target worker address");
-    api = MasterWorkerOCApi::CreateMasterWorkerOCApi(workerHostPort, masterAddr_, akSkManager_, masterWorkerOCService_);
+    api = MasterWorkerOCApi::CreateMasterWorkerOCApi(workerHostPort, masterAddr_, masterWorkerOCService_);
     RETURN_IF_NOT_OK(api->Init());
     workerApiMap_.emplace(workerAddress, api);
     return Status::OK();

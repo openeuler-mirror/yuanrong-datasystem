@@ -44,8 +44,8 @@
 namespace datasystem {
 namespace object_cache {
 MasterWorkerOCServiceImpl::MasterWorkerOCServiceImpl(
-    std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc, std::shared_ptr<AkSkManager> akSkManager)
-    : ocClientWorkerSvc_(clientSvc), akSkManager_(akSkManager)
+    std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc)
+    : ocClientWorkerSvc_(clientSvc)
 {
 }
 
@@ -70,7 +70,6 @@ Status MasterWorkerOCServiceImpl::UpdateNotification(const UpdateObjectReqPb &re
 {
     ScopedRequestContext ctx;
     INJECT_POINT("worker.UpdateNotification.begin");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(reqs), "AK/SK failed.");
     LOG(INFO) << "Received UpdateNotification request";
     std::vector<std::string> updateFailIds;
     for (const UpdateObjectInfoPb &req : reqs.object_infos()) {
@@ -139,7 +138,6 @@ Status MasterWorkerOCServiceImpl::MetaChange(const MetaChangeReqPb &req, MetaCha
 Status MasterWorkerOCServiceImpl::PublishMeta(const PublishMetaReqPb &req, PublishMetaRspPb &resp)
 {
     ScopedRequestContext ctx;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     (void)resp;
     LOG(INFO) << FormatString("[ObjectKey %s] Publish meta for object", req.meta().object_key());
     auto traceID = Trace::Instance().GetTraceID();
@@ -199,7 +197,6 @@ Status MasterWorkerOCServiceImpl::ClearData(const ClearDataReqPb &req, ClearData
 Status MasterWorkerOCServiceImpl::DeleteNotification(const DeleteObjectReqPb &req, DeleteObjectRspPb &rsp)
 {
     ScopedRequestContext ctx;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     VLOG(1) << FormatString("DeleteNotification, async: %d, object count: %d",
               req.is_async(), req.object_keys_size());
     if (req.is_async() && !req.require_sync_version_fence()) {
@@ -228,7 +225,6 @@ Status MasterWorkerOCServiceImpl::DeletePersistenceObject(const DeletePersistenc
                                                           DeletePersistenceObjectRspPb &rsp)
 {
     ScopedRequestContext ctx;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "Delete persistence object: " << req.object_key();
     auto rc = ocClientWorkerSvc_->DeletePersistenceObject(req, rsp);
     rsp.mutable_last_rc()->set_error_code(rc.GetCode());
@@ -241,7 +237,6 @@ Status MasterWorkerOCServiceImpl::QueryGlobalRefNumOnWorker(const QueryGlobalRef
                                                             QueryGlobalRefNumRspPb &rsp)
 {
     ScopedRequestContext ctx;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "[GRef] Query All Objs Global References Rpc Received";
     std::unordered_map<std::string, std::unordered_set<ClientKey>> refTable;
     ocClientWorkerSvc_->globalRefTable_->GetAllRef(refTable);
@@ -302,7 +297,6 @@ Status MasterWorkerOCServiceImpl::BinaryObjectCacheInvalidation(const UpdateObje
 Status MasterWorkerOCServiceImpl::PushMetaToWorker(const PushMetaToWorkerReqPb &req, PushMetaToWorkerRspPb &rsp)
 {
     ScopedRequestContext ctx;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     (void)rsp;
     LOG(INFO) << "Worker receive PushMetaToWorker request from master: " << req.source_address();
     for (auto &cacheInvalid : req.cache_invalids()) {
@@ -327,7 +321,6 @@ Status MasterWorkerOCServiceImpl::PushMetaToWorker(const PushMetaToWorkerReqPb &
         delReq.add_versions(std::numeric_limits<uint64_t>::max());
     }
     delReq.set_is_async(true);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->GenerateSignature(delReq), "GenerateSignature failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(DeleteNotification(delReq, delRsp), "worker delete notification failed");
     // We have received the metadata from master, lets reconciliation its data with
     // reconnected client and notify master to remove the not exist client metadata.
@@ -342,7 +335,6 @@ Status MasterWorkerOCServiceImpl::RequestMetaFromWorker(const RequestMetaFromWor
     ScopedRequestContext ctx;
     LOG(INFO) << FormatString("worker(%s) received RequestMetaFromWorker request: %s", localAddress_.ToString(),
                               req.address());
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocClientWorkerSvc_->FillRequestMetaByMaster(req, rsp),
                                      "worker FillRequestMetaByMaster failed");
     LOG(INFO) << "RequestMetaFromWorker done";
@@ -366,7 +358,6 @@ Status MasterWorkerOCServiceImpl::ProcessChangePrimaryCopy(const std::string &ob
 Status MasterWorkerOCServiceImpl::ChangePrimaryCopy(const ChangePrimaryCopyReqPb &req, ChangePrimaryCopyRspPb &rsp)
 {
     ScopedRequestContext ctx;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "worker(" << localAddress_.ToString() << ") receive ChangePrimaryCopy request";
     // If migrate data task (Scale-In) has been started, we should not change primary copy in this node.
     if (ocClientWorkerSvc_->MigrateDataStarted()) {
@@ -390,7 +381,6 @@ Status MasterWorkerOCServiceImpl::NotifyMasterIncNestedRefs(const NotifyMasterIn
                                                             NotifyMasterIncNestedResPb &rsp)
 {
     ScopedRequestContext ctx;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     (void)rsp;  // empty response
     std::vector<std::string> nested_objs(req.nested_object_keys().begin(), req.nested_object_keys().end());
     LOG(INFO) << "worker received NotifyMasterIncNestedRefs, nested objectkeys: " << VectorToString(nested_objs);
@@ -403,7 +393,6 @@ Status MasterWorkerOCServiceImpl::NotifyMasterDecNestedRefs(const NotifyMasterDe
                                                             NotifyMasterDecNestedResPb &rsp)
 {
     ScopedRequestContext ctx;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     (void)rsp;  // empty response
     std::vector<std::string> nested_objs(req.nested_object_keys().begin(), req.nested_object_keys().end());
     LOG(INFO) << "worker received NotifyMasterDecNestedRefs, nested objectkeys: " << VectorToString(nested_objs);

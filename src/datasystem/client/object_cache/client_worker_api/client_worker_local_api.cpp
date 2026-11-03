@@ -166,8 +166,6 @@ Status ClientWorkerLocalApi::Create(const std::string &objectKey, int64_t dataSi
     req.set_client_id(clientId_);
     req.set_data_size(dataSize);
     req.set_request_timeout(TimeoutDuration::CeilUsToMs(remainingUs));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
-                                     "Fail to generate signature when create data.");
     CreateRspPb rsp;
     RETURN_IF_NOT_OK(api_->WorkerOCCreate(workerOCService_, req, rsp));
     if (rsp.has_worker_redirect()) {
@@ -192,7 +190,6 @@ Status ClientWorkerLocalApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bu
     GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     PublishReqPb req;
     RETURN_IF_NOT_OK(PreparePublishReq(bufferInfo, nestedKeys, ttlSecond, existence, req));
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     std::vector<RpcMessage> rms;
     if (!isShm) {
         std::vector<MemView> mvs;
@@ -227,7 +224,6 @@ Status ClientWorkerLocalApi::MultiPublish(const std::vector<std::shared_ptr<Obje
                                         shmBytes };
     RETURN_IF_NOT_OK(BuildMultiPublishRequest(context));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when multi publish.");
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     std::vector<RpcMessage> rms;
     RETURN_IF_NOT_OK(MemView2RpcMessage(mvs, rms));
     RETURN_IF_NOT_OK(api_->WorkerOCMultiPublish(workerOCService_, req, rsp, std::move(rms)));
@@ -245,7 +241,6 @@ Status ClientWorkerLocalApi::DecreaseWorkerRef(const std::vector<ShmKey> &object
         req.add_object_keys(objectKey);
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when decreaseWorkerRef data.");
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     DecreaseReferenceResponse resp;
     RETURN_IF_NOT_OK(api_->WorkerOCDecreaseReference(workerOCService_, req, resp));
     RETURN_STATUS(static_cast<StatusCode>(resp.error().error_code()), resp.error().error_msg());
@@ -268,7 +263,6 @@ Status ClientWorkerLocalApi::Get(const GetParam &getParam, uint32_t &version, Ge
     const int64_t &subTimeoutMs = getParam.subTimeoutMs;
     GetReqPb req;
     RETURN_IF_NOT_OK(PreGet(getParam, subTimeoutMs, req));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req), "Fail to generate signature when get date.");
     GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     std::promise<std::pair<GetRspPb, Status>> promise;
     auto future = promise.get_future();
@@ -320,7 +314,6 @@ Status ClientWorkerLocalApi::InvalidateBuffer(const std::string &objectKey)
     req.set_client_id(clientId_);
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     InvalidateBufferRspPb rsp;
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     return api_->WorkerOCInvalidateBuffer(workerOCService_, req, rsp);
 }
 
@@ -336,7 +329,6 @@ Status ClientWorkerLocalApi::GIncreaseWorkerRef(const std::vector<std::string> &
     req.set_client_id(clientId_);
     req.set_remote_client_id(remoteClientId);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when gincreaseWorkerRef data.");
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     Status rc = api_->WorkerOCGIncreaseRef(workerOCService_, req, rsp);
     if (rc.IsError()) {
         LOG(ERROR) << "[Ref] GIncreaseWorkerRef failed with " << rc.ToString();
@@ -359,9 +351,7 @@ Status ClientWorkerLocalApi::ReleaseGRefs(const std::string &remoteClientId)
     ReleaseGRefsRspPb rsp;
     req.set_client_id(clientId_);
     req.set_remote_client_id(remoteClientId);
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when ReleaseGRefs data.");
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(api_->WorkerOCReleaseGRefs(workerOCService_, req, rsp), "ReleaseGRefs failed");
     Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
     if (recvRc.IsError()) {
@@ -383,7 +373,6 @@ Status ClientWorkerLocalApi::GDecreaseWorkerRef(const std::vector<std::string> &
     req.set_client_id(clientId_);
     req.set_remote_client_id(remoteClientId);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when GDecreaseWorkerRef data.");
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     Status rc = api_->WorkerOCGDecreaseRef(workerOCService_, req, rsp);
     if (rc.IsError()) {
         LOG(ERROR) << "[Ref] GDecreaseWorkerRef failed with " << rc.ToString();
@@ -413,7 +402,6 @@ Status ClientWorkerLocalApi::Delete(const std::vector<std::string> &objectKeys,
     }
     req.set_are_device_objects(areDeviceObjects);
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     Status rc = api_->WorkerOCDeleteAllCopy(workerOCService_, req, rsp);
     if (rc.IsError()) {
         LOG(ERROR) << "DeleteAllCopy failed with " << rc.ToString();
@@ -437,7 +425,6 @@ Status ClientWorkerLocalApi::QueryGlobalRefNum(
     GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     *req.mutable_object_keys() = { objectKeys.begin(), objectKeys.end() };
     req.set_client_id(clientId_);
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     QueryGlobalRefNumRspCollectionPb rsp;
     LOG(INFO) << "[GRef] Client Send Rpc QueryGlobalRefNum to worker";
     RETURN_IF_NOT_OK(api_->WorkerOCQueryGlobalRefNum(workerOCService_, req, rsp));
@@ -464,7 +451,6 @@ Status ClientWorkerLocalApi::PublishDeviceObject(const std::shared_ptr<DeviceBuf
         RETURN_IF_NOT_OK(MemView2RpcMessage(mvs, rms));
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when PublishDeviceObject data.");
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     PublishDeviceObjectRspPb rsp;
     return api_->WorkerOCPublishDeviceObject(workerOCService_, req, rsp, std::move(rms));
 }
@@ -497,8 +483,6 @@ Status ClientWorkerLocalApi::PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> 
     auto subReq = req.add_dev_obj_meta();
     FillDevObjMeta(bufferInfo, blobs, subReq);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when FillDevObjMeta data.");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
-                                     "Fail to generate signature when create data.");
     return api_->WorkerOCPutP2PMeta(workerOCService_, req, resp);
 }
 
@@ -517,8 +501,6 @@ Status ClientWorkerLocalApi::SendRootInfo(SendRootInfoReqPb &req, SendRootInfoRs
 {
     GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when SendRootInfo data.");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
-                                     "Fail to generate signature when creating data");
     return api_->WorkerOCSendRootInfo(workerOCService_, req, resp);
 }
 
@@ -542,8 +524,6 @@ Status ClientWorkerLocalApi::AckRecvFinish(AckRecvFinishReqPb &req)
     GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     AckRecvFinishRspPb resp;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when AckRecvFinish.");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
-                                     "Fail to generate signature when creating data");
     return api_->WorkerOCAckRecvFinish(workerOCService_, req, resp);
 }
 
@@ -556,8 +536,6 @@ Status ClientWorkerLocalApi::RemoveP2PLocation(const std::string &objectKey, int
     req.set_device_id(deviceId);
     RemoveP2PLocationRspPb resp;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when RemoveP2PLocation.");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
-                                     "Fail to generate signature when creating data.");
     return api_->WorkerOCRemoveP2PLocation(workerOCService_, req, resp);
 }
 
@@ -568,7 +546,6 @@ Status ClientWorkerLocalApi::GetObjMetaInfo(const std::string &tenantId, const s
     GetObjMetaInfoReqPb req;
     *req.mutable_object_keys() = { objectKeys.begin(), objectKeys.end() };
     req.set_tenantid(tenantId);
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     GetObjMetaInfoRspPb rsp;
     RETURN_IF_NOT_OK(api_->WorkerOCGetObjMetaInfo(workerOCService_, req, rsp));
     // fill outpara
@@ -598,8 +575,6 @@ Status ClientWorkerLocalApi::MultiCreate(bool skipCheckExistence, std::vector<Mu
         req.add_data_size(param.dataSize);
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when create data.");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
-                                     "Fail to generate signature when MultiCreate.");
     MultiCreateRspPb rsp;
     RETURN_IF_NOT_OK(api_->WorkerOCMultiCreate(workerOCService_, req, rsp));
     CHECK_FAIL_RETURN_STATUS(
@@ -626,7 +601,6 @@ Status ClientWorkerLocalApi::ReconcileShmRef(const std::unordered_set<ShmKey> &c
     for (const auto &shmId : confirmedExpiredShmIds) {
         req.add_confirmed_expired_shm_ids(shmId);
     }
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     ReconcileShmRefRspPb rsp;
     RETURN_IF_NOT_OK(api_->WorkerOCReconcileShmRef(workerOCService_, req, rsp));
     maybeExpiredShmIds.reserve(rsp.maybe_expired_shm_ids_size());
@@ -642,7 +616,6 @@ Status ClientWorkerLocalApi::QuerySize(const std::vector<std::string> &objectKey
     *req.mutable_object_keys() = { objectKeys.begin(), objectKeys.end() };
     req.set_client_id(clientId_);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when QuerySize.");
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     (void)rsp;
     RETURN_IF_NOT_OK(api_->WorkerOCQuerySize(workerOCService_, req, rsp));
     LOG(INFO) << "Finish QuerySize success.";
@@ -656,7 +629,6 @@ Status ClientWorkerLocalApi::HealthCheck(ServerState &state)
     HealthCheckReplyPb rsp;
     req.set_client_id(clientId_);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when create data.");
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     state = ServerState::NORMAL;
     return api_->WorkerOCHealthCheck(workerOCService_, req, rsp);
 }
@@ -672,7 +644,6 @@ Status ClientWorkerLocalApi::Exist(const std::vector<std::string> &keys, std::ve
     req.set_query_l2cache(queryL2Cache);
     req.set_is_local(isLocal);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token to ExistReqPb.");
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     ExistRspPb rsp;
     RETURN_IF_NOT_OK(api_->WorkerOCExist(workerOCService_, req, rsp));
     if (keys.size() != static_cast<size_t>(rsp.exists().size())) {
@@ -694,7 +665,6 @@ Status ClientWorkerLocalApi::Expire(const std::vector<std::string> &keys, uint32
     req.set_client_id(clientId_);
     req.set_ttl_second(ttlSeconds);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token to ExpireReqPb.");
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     ExpireRspPb rsp;
     RETURN_IF_NOT_OK(api_->WorkerOCExpire(workerOCService_, req, rsp));
     failedKeys.assign(rsp.failed_object_keys().begin(), rsp.failed_object_keys().end());
@@ -714,7 +684,6 @@ Status ClientWorkerLocalApi::GetMetaInfo(const std::vector<std::string> &keys, c
     req.set_is_dev_key(isDevKey);
     *req.mutable_object_keys() = { keys.begin(), keys.end() };
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token to GetMetaInfoReqPb.");
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     return api_->WorkerOCGetMetaInfo(workerOCService_, req, rsp);
 }
 

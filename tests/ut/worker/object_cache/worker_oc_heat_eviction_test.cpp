@@ -764,11 +764,9 @@ public:
 
         objectTable_ = std::make_shared<ObjectTable>();
         gRefTable_ = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
-        akSkManager_ = std::make_shared<AkSkManager>(0);
-        DS_ASSERT_OK(akSkManager_->SetClientAkSk(clientId_, clientKey_));
         evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, workerAddr_, workerAddr_,
                                                                      GetTestMetadataRoute());
-        DS_ASSERT_OK(evictionManager_->Init(gRefTable_, akSkManager_));
+        DS_ASSERT_OK(evictionManager_->Init(gRefTable_));
     }
 
     void TearDown() override
@@ -776,7 +774,6 @@ public:
         evictionManager_.reset();
         objectTable_.reset();
         gRefTable_.reset();
-        akSkManager_.reset();
         allocator->ResetForTest();
         allocator = nullptr;
         FLAGS_eviction_strategy = "clock";
@@ -848,7 +845,6 @@ public:
     HostPort workerAddr_{ "localhost", 18481 };
     std::string clientId_ = "test-client-id";
     std::string clientKey_ = "test-client-key";
-    std::shared_ptr<AkSkManager> akSkManager_;
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> gRefTable_;
 };
 

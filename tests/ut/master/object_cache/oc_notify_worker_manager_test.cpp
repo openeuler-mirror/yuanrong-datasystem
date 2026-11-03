@@ -57,7 +57,6 @@ public:
         objectStore_ = std::make_shared<ObjectMetaStore>(rocksStore_.get(), nullptr);
         objectStore_->Init();
         hostPort_.ParseString("127.0.0.1:30001");
-        akSkManager_ = std::make_shared<AkSkManager>(0);
     }
 
     void TearDown() override
@@ -72,7 +71,6 @@ public:
     std::shared_ptr<RocksStore> rocksStore_;
     std::shared_ptr<ObjectMetaStore> objectStore_;
     HostPort hostPort_;
-    std::shared_ptr<AkSkManager> akSkManager_;
     std::string rocksdbWriteMode_;
 
     std::vector<AsyncWorkerOpSnapshot> SnapshotWorkerOps(OCNotifyWorkerManager &manager, const std::string &worker)
@@ -131,7 +129,7 @@ TEST_F(OCNotifyWorkerManagerTest, DISABLED_TestAsyncSendUpdateObject)
 {
     inject::Set("OCNotifyWorkerManager.CheckWorkerIsHealth.worker.unhealthy", "return(K_WORKER_ABNORMAL)");
     inject::Set("OCNotifyWorkerManager.NoNeedRecoveryMeta", "return(K_OK)");
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     EXPECT_EQ(manager->Init(), Status::OK());
     std::string worker1 = "127.0.0.1:40001";
     std::string worker2 = "127.0.0.1:40002";
@@ -162,7 +160,7 @@ TEST_F(OCNotifyWorkerManagerTest, DISABLED_TestAsyncSendUpdateObject)
     }
 
     manager.reset();
-    manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     EXPECT_EQ(manager->Init(), Status::OK());
     {
         ObjectMeta objectMeta;
@@ -182,7 +180,7 @@ TEST_F(OCNotifyWorkerManagerTest, DISABLED_TestAsyncSendUpdateObject)
 
 TEST_F(OCNotifyWorkerManagerTest, TestInsertAsyncWorkerOpReleasesTableLockBeforePersistence)
 {
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     const std::string worker = "127.0.0.1:40001";
     const std::string objectKey = "test_insert_async_worker_op";
     NotifyWorkerOp op = { .type = NotifyWorkerOpType::CACHE_INVALID };
@@ -217,7 +215,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestInsertAsyncWorkerOpReleasesTableLockBefore
 
 TEST_F(OCNotifyWorkerManagerTest, TestInsertAsyncWorkerOpPersistenceFailureDoesNotPublish)
 {
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     const std::string worker = "127.0.0.1:40001";
     const std::string objectKey = "failed_insert_must_not_publish";
     auto op = NotifyWorkerOp::Delete(12345);
@@ -234,7 +232,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestInsertAsyncWorkerOpPersistenceFailureDoesN
 
 TEST_F(OCNotifyWorkerManagerTest, TestNoPersistInsertWaitsForPersistedInsertCommit)
 {
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     const std::string worker = "127.0.0.1:40001";
     const std::string objectKey = "serialize_recovery_insert";
     constexpr int rocksPutSleepMs = 300;
@@ -266,7 +264,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestNoPersistInsertWaitsForPersistedInsertComm
 
 TEST_F(OCNotifyWorkerManagerTest, TestAsyncDeleteReplayBatchIsBoundedAndFair)
 {
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     const std::string worker = "127.0.0.1:40001";
     constexpr size_t objectCount = 2'500;
     for (size_t i = 0; i < objectCount; ++i) {
@@ -290,7 +288,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestAsyncDeleteReplayBatchIsBoundedAndFair)
 
 TEST_F(OCNotifyWorkerManagerTest, TestAsyncWorkerDeletePreservesObjectVersion)
 {
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     const std::string worker = "127.0.0.1:40001";
     const std::string objectKey = "async_delete_version";
     constexpr uint64_t objectVersion = 12345;
@@ -310,7 +308,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestAsyncWorkerDeletePreservesObjectVersion)
     EXPECT_EQ(snapshots.front().op.delObjectVersion, objectVersion);
 
     manager.reset();
-    manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     DS_ASSERT_OK(manager->RecoverCacheInvalidAndRemoveMeta(true));
     snapshots = SnapshotWorkerOps(*manager, worker);
     ASSERT_EQ(snapshots.size(), 1);
@@ -327,7 +325,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestAsyncWorkerDeletePreservesObjectVersion)
 
 TEST_F(OCNotifyWorkerManagerTest, TestAsyncWorkerDeletePersistenceFailureKeepsReplicaPending)
 {
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     const std::string worker = "127.0.0.1:40001";
     const std::string objectKey = "async_delete_persistence_failure";
     constexpr uint64_t objectVersion = 12345;
@@ -361,7 +359,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestMigrationAsyncDeleteRoundTripPreservesVers
 
 TEST_F(OCNotifyWorkerManagerTest, TestAsyncDeleteHasPeriodicConsumer)
 {
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     const std::string worker = "127.0.0.1:40001";
     const std::string objectKey = "periodic_async_delete";
     const std::string injectPoint = "OCNotifyWorkerManager.ProcessAsyncDeleteNotifyOpImpl";
@@ -382,7 +380,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestAsyncDeleteHasPeriodicConsumer)
 
 TEST_F(OCNotifyWorkerManagerTest, TestSnapshotClearKeepsNewerAsyncWorkerOp)
 {
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     const std::string worker = "127.0.0.1:40001";
     const std::string clearedObjectKey = "snapshot_clear_old_op";
     const std::string newerObjectKey = "snapshot_clear_newer_op";
@@ -401,7 +399,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestSnapshotClearKeepsNewerAsyncWorkerOp)
 
 TEST_F(OCNotifyWorkerManagerTest, TestDeleteSnapshotClearKeepsNewerVersion)
 {
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     const std::string worker = "127.0.0.1:40001";
     const std::string objectKey = "delete_snapshot_newer_version";
     auto oldDelete = NotifyWorkerOp::Delete(12345);
@@ -419,7 +417,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestDeleteSnapshotClearKeepsNewerVersion)
 
 TEST_F(OCNotifyWorkerManagerTest, TestAsyncWorkerDeleteMergeKeepsLargestVersion)
 {
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     const std::string worker = "127.0.0.1:40001";
     const std::string objectKey = "delete_merge_largest_version";
     constexpr uint64_t newerDeleteVersion = 12346;
@@ -433,7 +431,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestAsyncWorkerDeleteMergeKeepsLargestVersion)
     EXPECT_EQ(snapshots.front().op.delObjectVersion, newerDeleteVersion);
 
     manager.reset();
-    manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     DS_ASSERT_OK(manager->RecoverCacheInvalidAndRemoveMeta(true));
     snapshots = SnapshotWorkerOps(*manager, worker);
     ASSERT_EQ(snapshots.size(), 1U);
@@ -442,7 +440,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestAsyncWorkerDeleteMergeKeepsLargestVersion)
 
 TEST_F(OCNotifyWorkerManagerTest, TestAsyncDeleteAcknowledgesOnlySuccessfulObjects)
 {
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     auto op = NotifyWorkerOp::Delete(0);
     std::vector<AsyncWorkerOpSnapshot> snapshots = { { "success", op, 1 }, { "failed", op, 2 } };
     DeleteObjectRspPb response;
@@ -460,7 +458,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestAsyncDeleteAcknowledgesOnlySuccessfulObjec
 
 TEST_F(OCNotifyWorkerManagerTest, TestClearAsyncWorkerOpKeepsRetryStateOnPersistenceFailure)
 {
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     const std::string worker = "127.0.0.1:40001";
     const std::string objectKey = "clear_persistence_failure";
     NotifyWorkerOp op = { .type = NotifyWorkerOpType::CACHE_INVALID };
@@ -484,7 +482,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestClearAsyncWorkerOpKeepsRetryStateOnPersist
 
 TEST_F(OCNotifyWorkerManagerTest, TestDeadWorkerRejectsDelayedAsyncWorkerOp)
 {
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     const std::string worker = "127.0.0.1:40001";
     const std::string objectKey = "dead_worker_delayed_op";
     NotifyWorkerOp op = { .type = NotifyWorkerOpType::CACHE_INVALID };
@@ -501,7 +499,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestDeadWorkerRejectsDelayedAsyncWorkerOp)
 
 TEST_F(OCNotifyWorkerManagerTest, TestTransientFaultWorkerRetainsAsyncWorkerOp)
 {
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     const std::string worker = "127.0.0.1:40001";
     const std::string objectKey = "transient_fault_worker_op";
     NotifyWorkerOp op = { .type = NotifyWorkerOpType::CACHE_INVALID };
@@ -514,7 +512,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestTransientFaultWorkerRetainsAsyncWorkerOp)
 
 TEST_F(OCNotifyWorkerManagerTest, TestFaultWorkerCanOnlyUpgradeToDead)
 {
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     const std::string worker = "127.0.0.1:40001";
     const std::string objectKey = "upgraded_dead_worker_op";
     NotifyWorkerOp op = { .type = NotifyWorkerOpType::CACHE_INVALID };
@@ -529,7 +527,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestFaultWorkerCanOnlyUpgradeToDead)
 
 TEST_F(OCNotifyWorkerManagerTest, TestRemoveDeadWorkerEventClearsFaultWorker)
 {
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     const std::string worker = "127.0.0.1:40001";
 
     DS_ASSERT_OK(manager->Init());
@@ -543,7 +541,7 @@ TEST_F(OCNotifyWorkerManagerTest, TestRemoveDeadWorkerEventClearsFaultWorker)
 
 TEST_F(OCNotifyWorkerManagerTest, TestDeadWorkerClearsConcurrentAsyncWorkerOp)
 {
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, nullptr);
     const std::string worker = "127.0.0.1:40001";
     const std::string objectKey = "concurrent_dead_worker_op";
     NotifyWorkerOp op = { .type = NotifyWorkerOpType::CACHE_INVALID };
@@ -571,9 +569,9 @@ TEST_F(OCNotifyWorkerManagerTest, TestDeadWorkerClearsConcurrentAsyncWorkerOp)
 TEST_F(OCNotifyWorkerManagerTest, TestChangePrimaryCopy)
 {
     auto ocMetaManager = std::make_shared<OCMetadataManager>(
-        akSkManager_, nullptr, nullptr, nullptr, "127.0.0.1:900", nullptr, nullptr, "", nullptr,
+        nullptr, nullptr, nullptr, "127.0.0.1:900", nullptr, nullptr, "", nullptr,
         "workerId");
-    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, ocMetaManager.get());
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, ocMetaManager.get());
 
     BINEXPECT_CALL(&OCNotifyWorkerManager::SendChangePrimaryCopy, (_, _, _)).WillRepeatedly(Return(Status::OK()));
     std::string newPrimaryCopy = "127.0.0.1:902";

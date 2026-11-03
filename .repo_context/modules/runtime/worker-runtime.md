@@ -46,6 +46,11 @@
   - `data_worker.cpp` owns top-level startup/shutdown orchestration, log initialization, THP handling, RocksDB pre-init, and embedded-worker entrypoints exported through C symbols.
   - Parameterized `DataWorker::InitAndRun` requires a non-null `ICoordinatorDiscovery`; that overload always selects the Coordinator backend and passes the injected Discovery to `WorkerOCServer`, while paired `onStart`/`onStop` callbacks remain optional. Command-line and embedded static startup instead use `coordinator_address` to select Coordinator versus ETCD/metastore mode and construct a static Discovery only for Coordinator mode. Coordinator proxy initialization calls its provider once, validates and caches only the first returned address, and keeps all later RPCs fixed to it. Provider updates require rebuilding the runtime object or restarting the Worker.
   - `worker_service_impl.cpp` implements common worker service behavior such as client registration, client disconnect, shared-memory FD transfer, version checks, and auth-related request handling.
+  - `authenticate.*` supplies the original method-policy table and cold-built callbacks for generic RPC entry
+    authentication. ON clears untrusted PB access_key/signature, verifies the captured MAC, then publishes validated
+    identity through those existing server-owned fields. Original native handlers retain token, tenant/session and
+    resource permissions; IRPC signatures remain unchanged. OFF registers native adapters directly. No auth TLS,
+    per-service dispatch facade, WithRpcAuth/WithTenantResolver entry, or body include template is used.
   - object-cache Create, MultiCreate, Publish, and MultiPublish handlers select authentication by request origin:
     routed requests with `is_routed=true` call `worker::AuthenticateRequest` using the signed request tenant, while
     legacy gateway requests retain the registered-client authentication path. Deploy workers with this routed-request
@@ -570,3 +575,26 @@ Coordinator WORKER adds a membership-prefix watch. `TopologyEngine::EnqueueCoord
   patched backoff can yield in RPC bthreads. The stable-route fast path remains unchanged.
 - `EvictionManagerTest.PolicyRouteContentionPreservesBthreadProgress` and
   `PolicyMigrationContentionPreservesBthreadProgress` exercise scheduler progress under contention.
+
+- ON RPC admission verifies MAC before original business preconditions; bad-MAC error precedence is an accepted
+  behavior change. The protected method set and first-request scope remain unchanged. Token takes precedence; IAM
+  receives the original request/session tenant. Native handlers retain session fallback, tenant equality, and resource
+  permissions. Identity travels in the server-owned PB after entry validation, never in TLS or RequestContext.
+- HealthCheck without a client ID and Heartbeat without a session keep their original exemptions. An exempt Heartbeat
+  receives a server-local nonempty-signature/empty-AK marker: if its client reappears before the native exist branch,
+  AuthenticateRequest rejects it before authenticated FD cleanup. This keeps a second existence snapshot from granting
+  permission. The original SystemAuthEnabled short circuit remains on the normal OFF path.
+- Master/peer/SC MAC calls are removed from business methods; native adapters and original bodies are reused.
+  MigrateSCMetadata authenticates its complete encoded PB, including notifications, through the shared RPC digest.
+  GetObjMetaInfo keeps its existing
+  system-key/authorization_enable access restriction. PerfServiceImpl implements the existing IPerfService for native
+  adapter binding; its original two methods remain. Local direct calls do not verify RPC MAC.
+
+- RPC authentication reuses configured system/tenant AK/SK and the existing `authorization_enable` tenant switch.
+  `AkSkManager::ServerAuthEnabled()` reports whether the configured verification map is nonempty; initialization
+  installs `BrpcAuthCapture` when that map is nonempty or tenant authorization is enabled. It then registers both
+  original-name and companion-name generic `BrpcAuthService` wrappers borrowing the original native adapter. Without
+  configured keys or tenant authorization, native adapters remain direct. `skip_authenticate` retains its existing
+  tenant-request bypass; direct peer/master checks still follow the configured key map. WorkerOCServer
+  owns wrappers/adapters and the capture factory until RPC Shutdown drains handlers, including partial registration failure. Cache creators are fixed immediately
+  after InitAkSk, before H2D/URMA/topology can initialize the singleton; Coordinator creators remain native.

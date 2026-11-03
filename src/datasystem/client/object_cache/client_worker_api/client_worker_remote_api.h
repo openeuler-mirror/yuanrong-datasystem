@@ -65,6 +65,10 @@ public:
                                    bool enableCrossNodeConnection = false,
                                    std::string deviceId = "");
 
+    ClientWorkerRemoteApi(HostPort hostPort, HeartbeatType heartbeatType, SensitiveValue token,
+                         std::shared_ptr<Signature> signature, std::string tenantId = "",
+                         bool enableCrossNodeConnection = false, std::string deviceId = "");
+
     ~ClientWorkerRemoteApi();
 
     /**
@@ -86,8 +90,21 @@ public:
     {
         (void)api;
         (void)worker;
-        return std::make_shared<ClientWorkerRemoteApi>(std::move(hostPort), heartbeatType, std::move(token),
-                                                       signature, tenantId, enableCrossNodeConnection);
+        if (signature != nullptr && signature != signature_) {
+            LOG(ERROR) << "Cannot clone RPC API with a different credential provider.";
+            return nullptr;
+        }
+        std::shared_ptr<ClientWorkerRemoteApi> clone;
+        if (rpcSignatureOwner_ != nullptr) {
+            clone = std::make_shared<ClientWorkerRemoteApi>(std::move(hostPort), heartbeatType, std::move(token),
+                                                           rpcSignatureOwner_, tenantId, enableCrossNodeConnection);
+        } else {
+            clone = std::make_shared<ClientWorkerRemoteApi>(std::move(hostPort), heartbeatType, std::move(token),
+                                                           signature_, tenantId, enableCrossNodeConnection);
+        }
+        clone->rpcAuthModeInitialized_ = rpcAuthModeInitialized_;
+        clone->rpcAuthEnabled_ = rpcAuthEnabled_;
+        return clone;
     };
 
     Status Create(const std::string &objectKey, int64_t dataSize, uint32_t &version, uint64_t &metadataSize,

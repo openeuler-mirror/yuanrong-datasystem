@@ -18,6 +18,7 @@
  * Description: Test interface to master
  */
 #include <vector>
+#include "datasystem/common/ak_sk/ak_sk_manager.h"
 
 #include "common.h"
 #include "datasystem/protos/master_object.pb.h"
@@ -53,8 +54,11 @@ class WorkerOCMasterTest : public ExternalClusterTest {
 public:
     void SetUp() override
     {
-        akSkManager_ = std::make_shared<AkSkManager>(0);
-        akSkManager_->SetClientAkSk(accessKey_, secretKey_);
+        // Keep the process-wide cache bound to the same provider across fixture setups.
+        static const auto credentials = std::make_shared<AkSkManager>(0);
+        akSkManager_ = credentials;
+        DS_ASSERT_OK(akSkManager_->SetClientAkSk(accessKey_, secretKey_));
+        DS_ASSERT_OK(RpcStubCacheMgr::Instance().Init(100, HostPort(), akSkManager_));
         ExternalClusterTest::SetUp();
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.query_meta.get_object_remote", "return()"));
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "master.query_meta.get_object_remote", "return()"));
@@ -80,7 +84,7 @@ public:
         EXPECT_EQ(cluster_->GetWorkerAddr(workerIndex, localAddress), Status::OK());
         int stubCacheNum = 100;
         RpcStubCacheMgr::Instance().Init(stubCacheNum);
-        auto client = WorkerMasterOCApi::CreateWorkerMasterOCApi(metaAddress, localAddress, akSkManager_);
+        auto client = WorkerMasterOCApi::CreateWorkerMasterOCApi(metaAddress, localAddress);
         EXPECT_EQ(client->Init(), Status::OK());
         return client;
     }

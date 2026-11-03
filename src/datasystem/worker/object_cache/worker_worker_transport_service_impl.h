@@ -23,7 +23,6 @@
 #include <string>
 
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/protos/worker_object.irpc.pb.h"
 #include "datasystem/protos/worker_object.service.rpc.pb.h"
@@ -41,8 +40,7 @@ public:
      * @param[in] membership Read-only topology membership view that outlives this service.
      */
     WorkerWorkerTransportServiceImpl(std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc,
-                                     HostPort localWorker, const cluster::MembershipEndpointView &membership,
-                                     std::shared_ptr<AkSkManager> akSkManager);
+                                     HostPort localWorker, const cluster::MembershipEndpointView &membership);
 
     ~WorkerWorkerTransportServiceImpl() override;
 
@@ -72,7 +70,6 @@ private:
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> ocClientWorkerSvc_;
     const HostPort localWorker_;
     const cluster::MembershipEndpointView &membership_;
-    std::shared_ptr<AkSkManager> akSkManager_;
     uint64_t recoveryProbeSegmentAddress_{ 0 };
     uint64_t recoveryProbeDataOffset_{ 0 };
 };

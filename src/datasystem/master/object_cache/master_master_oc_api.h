@@ -24,7 +24,6 @@
 #include <memory>
 #include <shared_mutex>
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
@@ -42,10 +41,8 @@ public:
      * @brief Constructor for the remote version of the api
      * @param[in] hostPort The host port of the target master
      * @param[in] localHostPort The local worker rpc service host port.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      */
-    MasterMasterOCApi(const HostPort &hostPort, const HostPort &localHostPort,
-                      std::shared_ptr<AkSkManager> akSkManager);
+    MasterMasterOCApi(const HostPort &hostPort, const HostPort &localHostPort);
 
     ~MasterMasterOCApi() = default;
 
@@ -85,28 +82,6 @@ public:
     Status RemoveMeta(const RemoveMetaReqPb &req, RemoveMetaRspPb &rsp);
 
     /**
-     * @brief A factory method to instantiate the correct derived version of the api. Remote masters will use an
-     * rpc-based api, whereas local masters can be optimized for in-process pointer based api.
-     * @param[in] hostPort The host port of the target master
-     * @param[in] localHostPort The local master host port.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
-     * @return A base class pointer to the correct derived type of api.
-     */
-    static std::shared_ptr<MasterMasterOCApi> CreateMasterMasterOCApi(const HostPort &hostPort,
-                                                                      const HostPort &localHostPort,
-                                                                      std::shared_ptr<AkSkManager> akSkManager)
-    {
-        auto api = std::make_shared<MasterMasterOCApi>(hostPort, localHostPort, akSkManager);
-        auto rc = api->Init();
-        if (rc.IsError()) {
-            LOG(ERROR) << FormatString("Init MasterMasterOCApi[%s to %s] failed: %s", localHostPort.ToString(),
-                                       hostPort.ToString(), rc.ToString());
-            return nullptr;
-        }
-        return api;
-    }
-
-    /**
      * @brief Send request to master to delete meta and get response.
      *        Master will notify other workers to delete these objects asynchronously.
      * @param[in] request The rpc request protobuf.
@@ -119,7 +94,6 @@ private:
     HostPort destHostPort_;   // The HostPort of the destination node
     HostPort localHostPort_;  // The HostPort of the local node
     std::shared_ptr<master::MasterOCService_BrpcGenericStub> brpcSession_{ nullptr };
-    std::shared_ptr<AkSkManager> akSkManager_;
 };
 }  // namespace master
 }  // namespace datasystem

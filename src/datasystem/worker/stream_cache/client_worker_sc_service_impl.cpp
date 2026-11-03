@@ -82,13 +82,13 @@ ClientWorkerSCServiceImpl::ClientWorkerSCServiceImpl(HostPort serverAddr, HostPo
       metadataRoute_(metadataRoute),
       membership_(membership)
 {
-    workerMasterApiManager_ = std::make_shared<WorkerMasterSCApiManager>(localWorkerAddress_, akSkManager_,
+    workerMasterApiManager_ = std::make_shared<WorkerMasterSCApiManager>(localWorkerAddress_,
                                                                         masterSCService, metadataRoute_);
 }
 
 Status ClientWorkerSCServiceImpl::Init()
 {
-    remoteWorkerManager_ = std::make_unique<RemoteWorkerManager>(this, akSkManager_, scAllocateManager_);
+    remoteWorkerManager_ = std::make_unique<RemoteWorkerManager>(this, scAllocateManager_);
     RETURN_IF_NOT_OK(remoteWorkerManager_->Init());
     LOG(INFO) << FormatString("[%S] Initialize success", LogPrefix());
     // Create a thread pool for async request handling in the service
@@ -1421,9 +1421,8 @@ Status ClientWorkerSCServiceImpl::CreateStreamManagerImpl(const std::string &str
     auto streamNo = ++lifetimeLocalStreamCount_;
     bool needRollback = streamMgrDict_.emplace(
         accessor, std::make_pair(streamName, std::make_shared<StreamManager>(
-                                                 streamName, remoteWorkerManager_.get(), localWorkerAddress_.ToString(),
-                                                 akSkManager_, weak_from_this(), scAllocateManager_,
-                                                 workerWorkerSCService_, streamNo)));
+            streamName, remoteWorkerManager_.get(), localWorkerAddress_.ToString(), weak_from_this(),
+            scAllocateManager_, workerWorkerSCService_, streamNo)));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         needRollback, K_DUPLICATED,
         FormatString("[%s, S:%s] Stream already exists in StreamManager", LogPrefix(), streamName));
@@ -1717,7 +1716,6 @@ Status ClientWorkerSCServiceImpl::UnblockProducer(
 {
     UnblockProducerReqPb req;
     RETURN_IF_NOT_OK(serverApi->Read(req));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     const auto &streamName = req.stream_name();
     const auto &workerAddr = req.worker_addr();
     LOG(INFO) << "UnBlocking Producer for stream: " << streamName << " From remote worker: " << workerAddr;
@@ -1735,7 +1733,6 @@ Status ClientWorkerSCServiceImpl::BlockProducer(
 {
     BlockProducerReqPb req;
     RETURN_IF_NOT_OK(serverApi->Read(req));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     const auto &streamName = req.stream_name();
     const auto &workerAddr = req.worker_addr();
     LOG(INFO) << "Blocking Producer for stream: " << streamName << " From remote worker: " << workerAddr;

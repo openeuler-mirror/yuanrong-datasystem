@@ -34,6 +34,7 @@ ds_cc_library(
         "worker_ub_health_registry.h",
     ],
     deps = [
+        "//src/datasystem/common/rpc:brpc_auth",
         ":data_placement_policy",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/ak_sk:hasher",

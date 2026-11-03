@@ -55,7 +55,7 @@ public:
 
     DataMigrator(MigrateType type, const worker::MetadataRouteResolver &metadataRoute,
                  const cluster::MembershipEndpointView &membership, const ObjectEndpointPolicy &endpointPolicy,
-                 const std::atomic<bool> *exitRequested, HostPort &localAddress, std::shared_ptr<AkSkManager> manager,
+                 const std::atomic<bool> *exitRequested, HostPort &localAddress,
                  std::shared_ptr<ObjectTable> objectTable,
                  const std::string &taskId = "", int maxRetryCount = UNLIMITED_RETRY_COUNT,
                  std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max(),
@@ -66,7 +66,6 @@ public:
           endpointPolicy_(endpointPolicy),
           exitRequested_(exitRequested),
           localAddress_(localAddress),
-          akSkManager_(std::move(manager)),
           objectTable_(std::move(objectTable)),
           taskId_(taskId),
           maxRetryCount_(maxRetryCount),
@@ -392,7 +391,6 @@ private:
     const ObjectEndpointPolicy &endpointPolicy_;
     const std::atomic<bool> *exitRequested_{ nullptr };
     HostPort &localAddress_;
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::shared_ptr<ObjectTable> objectTable_;
     std::string taskId_;
     int maxRetryCount_ = -1;

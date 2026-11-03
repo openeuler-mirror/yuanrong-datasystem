@@ -7,6 +7,7 @@ ds_cc_library(
     srcs = glob(["*.cpp"]),
     hdrs = glob(["*.h"]),
     deps = [
+        "//src/datasystem/common/rpc:brpc_auth",
         "//include/datasystem:headers",
         "//include/datasystem/object:object_headers",
         "//src/datasystem/common/ak_sk:ak_sk_manager",

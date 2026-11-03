@@ -17,6 +17,10 @@
 /** Description: Implements a reusable RPC client for one worker address. */
 
 #include "datasystem/client/object_cache/transport/rpc/worker_rpc_client.h"
+#include "datasystem/common/rpc/brpc_auth.h"
+#include "datasystem/protos/share_memory.auth.pb.h"
+#include "datasystem/protos/object_posix.auth.pb.h"
+#include "datasystem/protos/worker_object.auth.pb.h"
 
 #include <algorithm>
 #include <chrono>
@@ -82,7 +86,24 @@ Status WorkerRpcClient::Init()
     RETURN_RUNTIME_ERROR_IF_NULL(signature_);
     channelConfig_.endpoint = workerAddress_.ToString();
     channelConfig_.max_retry = 0;
-    auto channel = std::shared_ptr<brpc::Channel>(BrpcChannelFactory::Create(channelConfig_));
+    AkSkData key;
+    RETURN_IF_NOT_OK(signature_->SnapshotClientKey(key));
+    std::unique_ptr<brpc::Channel> created;
+    if (key.NotComplete()) {
+        created = BrpcChannelFactory::Create(channelConfig_);
+    } else {
+        const auto *pool = google::protobuf::DescriptorPool::generated_pool();
+        RpcSigningBinding binding;
+        binding.credentials = signature_;
+        RETURN_IF_NOT_OK(RpcMethodMap::Create({
+            {pool->FindServiceByName("datasystem.WorkerService"), WorkerServiceAuth::descriptor()},
+            {pool->FindServiceByName("datasystem.WorkerOCService"), WorkerOCServiceAuth::descriptor()},
+            {pool->FindServiceByName("datasystem.WorkerWorkerOCService"), WorkerWorkerOCServiceAuth::descriptor()},
+            {pool->FindServiceByName("datasystem.WorkerWorkerTransportService"),
+            WorkerWorkerTransportServiceAuth::descriptor()}}, binding.methods));
+        RETURN_IF_NOT_OK(CreateBrpcAuthChannel(channelConfig_, std::move(binding), created));
+    }
+    auto channel = std::shared_ptr<brpc::Channel>(std::move(created));
     CHECK_FAIL_RETURN_STATUS(channel != nullptr, K_RPC_UNAVAILABLE,
                              "Failed to create routed worker brpc channel");
     auto workerStub = std::make_shared<WorkerService_BrpcGenericStub>(channel.get(), channelConfig_.timeout_ms);
@@ -218,7 +239,6 @@ Status WorkerRpcClient::InvokeGetObject(GetObjectRemoteReqPb &request, GetObject
             "before_rpc.timeout");
     }
 
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
     INJECT_POINT("client.transport.get_object_remote", []() { return Status::OK(); });
@@ -253,7 +273,6 @@ Status WorkerRpcClient::InvokeClientGet(GetReqPb &request, GetRspPb &response, s
             "before_rpc.timeout");
     }
 
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
     INJECT_POINT("client.transport.worker_oc_get", []() { return Status::OK(); });
@@ -289,7 +308,6 @@ Status WorkerRpcClient::InvokeBatchGetObject(BatchGetObjectRemoteReqPb &request,
             "before_rpc.timeout");
     }
 
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
     INJECT_POINT("client.transport.batch_get_object_remote", []() { return Status::OK(); });
@@ -327,7 +345,6 @@ Status WorkerRpcClient::InvokeQueryAndGet(QueryAndGetReqPb &request, QueryAndGet
             "before_rpc.timeout");
     }
 
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
     INJECT_POINT("client.transport.query_and_get", []() { return Status::OK(); });
@@ -353,7 +370,6 @@ Status WorkerRpcClient::InvokeExist(int64_t subTimeoutMs, ExistReqPb &request, E
                              "Routed worker RPC client is not initialized");
     int32_t rpcTimeout;
     RETURN_IF_NOT_OK(GetRpcTimeout(subTimeoutMs, rpcTimeout));
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_EXIST);
@@ -376,7 +392,6 @@ Status WorkerRpcClient::InvokeGetHashRing(uint64_t currentVersion, GetHashRingRs
     CHECK_FAIL_RETURN_STATUS(channelConfig_.timeout_ms > 0, K_INVALID, "RPC timeout must be positive");
     GetHashRingReqPb request;
     request.set_version(currentVersion);
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(channelConfig_.timeout_ms);
     return WithRpcDiag(DoInvokeGetHashRing(options, request, response), "GetHashRing", workerAddress_);
@@ -387,7 +402,6 @@ Status WorkerRpcClient::InvokeGetSocketPath(GetSocketPathReqPb &request, GetSock
     CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE, "Routed WorkerService client is not initialized");
     int32_t rpcTimeout;
     RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
     return WithRpcDiag(DoInvokeGetSocketPath(options, request, response), "GetSocketPath", workerAddress_);
@@ -398,7 +412,6 @@ Status WorkerRpcClient::InvokeRegisterShmClient(RegisterClientReqPb &request, Re
     CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE, "Routed WorkerService client is not initialized");
     int32_t rpcTimeout;
     RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
     INJECT_POINT("client.transport.register_shm_client", []() { return Status::OK(); });
@@ -410,7 +423,6 @@ Status WorkerRpcClient::InvokeGetClientFd(GetClientFdReqPb &request, GetClientFd
     CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE, "Routed WorkerService client is not initialized");
     int32_t rpcTimeout;
     RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
     INJECT_POINT("client.transport.get_client_fd", []() { return Status::OK(); });
@@ -420,7 +432,6 @@ Status WorkerRpcClient::InvokeGetClientFd(GetClientFdReqPb &request, GetClientFd
 Status WorkerRpcClient::InvokeShmHeartbeat(HeartbeatReqPb &request, HeartbeatRspPb &response)
 {
     CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE, "Routed WorkerService client is not initialized");
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     constexpr int32_t SHM_MAINTENANCE_TIMEOUT_MS = 1000;
     options.SetTimeout(std::clamp<int64_t>(channelConfig_.timeout_ms, 1, SHM_MAINTENANCE_TIMEOUT_MS));
@@ -431,7 +442,6 @@ Status WorkerRpcClient::InvokeShmHeartbeat(HeartbeatReqPb &request, HeartbeatRsp
 Status WorkerRpcClient::InvokeDisconnectShmClient(DisconnectClientReqPb &request, DisconnectClientRspPb &response)
 {
     CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE, "Routed WorkerService client is not initialized");
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     constexpr int32_t SHM_DISCONNECT_TIMEOUT_MS = 1000;
     options.SetTimeout(std::clamp<int64_t>(channelConfig_.timeout_ms, 1, SHM_DISCONNECT_TIMEOUT_MS));
@@ -458,7 +468,6 @@ Status WorkerRpcClient::InvokeCreate(int64_t subTimeoutMs, CreateReqPb &request,
             "before_rpc.timeout");
     }
 
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_CREATE_OBJECT);
@@ -501,7 +510,6 @@ Status WorkerRpcClient::InvokeSet(int64_t subTimeoutMs, PublishReqPb &request,
             "before_rpc.timeout");
     }
 
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_PUBLISH_OBJECT);
@@ -534,7 +542,6 @@ Status WorkerRpcClient::InvokeMultiCreate(int64_t subTimeoutMs, MultiCreateReqPb
                              "Routed worker RPC client is not initialized");
     int32_t rpcTimeout;
     RETURN_IF_NOT_OK(GetRpcTimeout(std::max<int64_t>(subTimeoutMs, channelConfig_.timeout_ms), rpcTimeout));
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
     PerfPoint perfPoint(PerfKey::CLIENT_MULTI_CREATE_IPC);
@@ -556,7 +563,6 @@ Status WorkerRpcClient::InvokeMultiSet(int64_t subTimeoutMs, MultiPublishReqPb &
                              "Routed worker RPC client is not initialized");
     int32_t rpcTimeout;
     RETURN_IF_NOT_OK(GetRpcTimeout(std::max<int64_t>(subTimeoutMs, channelConfig_.timeout_ms), rpcTimeout));
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_MULTI_PUBLISH_OBJECT);
@@ -596,7 +602,6 @@ Status WorkerRpcClient::InvokeDecreaseReferences(const TransportRequestContext &
     request.set_tenant_id(context.tenantId);
     request.set_is_routed(true);
     request.set_delay_release(delayRelease);
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     int32_t rpcTimeout;
     RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));
     RpcOptions options;
@@ -671,7 +676,6 @@ Status WorkerRpcClient::QueryUbPortHealth(const std::string &expectedWorkerIncar
     CHECK_FAIL_RETURN_STATUS(timeoutMs > 0, K_INVALID, "UB port health query timeout must be positive");
     QueryUbPortHealthReqPb request;
     request.set_expected_worker_incarnation(expectedWorkerIncarnation);
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     const auto configuredTimeout = channelConfig_.timeout_ms > 0 ? channelConfig_.timeout_ms : timeoutMs;
     const auto rpcTimeout = static_cast<int32_t>(
         std::min({ static_cast<int64_t>(timeoutMs), static_cast<int64_t>(configuredTimeout),

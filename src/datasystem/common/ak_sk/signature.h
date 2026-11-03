@@ -21,6 +21,7 @@
 #define DATASYSTEM_COMMON_AK_SK_SIGNATURE_H
 
 #include <chrono>
+#include <array>
 #include <memory>
 #include <shared_mutex>
 #include <string>
@@ -36,11 +37,11 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/util/request_context.h"
-#include "datasystem/common/util/thread_local.h"
 #include "datasystem/utils/sensitive_value.h"
 
 namespace datasystem {
+
+using AkSkDigest = std::array<unsigned char, SHA256_DIGEST_LENGTH>;
 
 enum class AkSkType { CLIENT, SYSTEM, TENANT, OBS, UNKNOWN };
 
@@ -77,46 +78,9 @@ public:
      */
     Status SetClientAkSk(const std::string &accessKey, SensitiveValue secretKey);
 
-    /**
-     * @brief Generate signature and insert it to req.
-     * @param[in] req The request to be generate signature.
-     * @return Status of the call.
-     */
-    template <typename ReqType>
-    Status GenerateSignature(ReqType &req)
-    {
-        std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-        if (clientKey_.secretKey.Empty() || clientKey_.accessKey.empty()) {
-            return Status::OK();
-        }
-        if (req.signature().size() > 0 || req.access_key().size() > 0) {
-            req.clear_signature();
-            req.clear_access_key();
-        }
-        req.set_timestamp(GetSystemClockTimeStampUs());
-#ifdef WITH_TESTS
-        INJECT_POINT("AkSk.SetTimestamp", [&req](uint64_t timestamp) {
-            req.set_timestamp(timestamp);
-            return Status::OK();
-        });
-#endif
-        std::string canonicalRequest = req.SerializeAsString();
-        std::string signature;
-        RETURN_IF_NOT_OK(GetSignature(clientKey_, canonicalRequest.c_str(), canonicalRequest.size(), signature));
-        req.set_signature(signature);
-        req.set_access_key(clientKey_.accessKey);
+    Status SnapshotClientKey(AkSkData &out) const;
 
-        // New version of AK/SK generation method.
-        canonicalRequest = req.SerializeAsString();
-        std::string serializedSignature;
-        RETURN_IF_NOT_OK(
-            GetSignature(clientKey_, canonicalRequest.c_str(), canonicalRequest.size(), serializedSignature));
-        GetRequestContext()->reqAk = clientKey_.accessKey;
-        GetRequestContext()->reqSignature = std::move(serializedSignature);
-        GetRequestContext()->reqTimestamp = req.timestamp();
-        GetRequestContext()->serializedMessage.Clear();
-        return Status::OK();
-    }
+    static Status GetSignatureFromDigest(const AkSkData &key, const AkSkDigest &digest, std::string &signature);
 
     /**
      * @brief Generate signature for stringToSign.
@@ -162,15 +126,6 @@ protected:
     virtual Status CopyAkSk(const std::string &accessKey, SensitiveValue secretKey, AkSkType type, AkSkData &data);
 
     /**
-     * @brief get the signature sign by sk.
-     * @param[in] data ak/sk info.
-     * @param[in] canonicalRequest request string.
-     * @param[out] signature sign string.
-     * @return Status of the call.
-     */
-    Status GetSignature(const AkSkData &data, const char *canonicalStr, size_t canonicalSize, std::string &signature);
-
-    /**
      * @brief Hmac and encode signatureData.
      * @param[in] data ak/sk info.
      * @param[in] signatureData The signature data.
@@ -178,8 +133,8 @@ protected:
      * @param[out] signature sign string.
      * @return Status of the call.
      */
-    Status HmacAndEncode(const AkSkData &data, std::unique_ptr<unsigned char[]> &signatureData,
-                         unsigned int signatureDataSize, std::string &signature);
+    static Status HmacAndEncode(const AkSkData &data, std::unique_ptr<unsigned char[]> &signatureData,
+                               unsigned int signatureDataSize, std::string &signature);
 
     inline std::time_t GetSystemClockTimeStampUs()
     {

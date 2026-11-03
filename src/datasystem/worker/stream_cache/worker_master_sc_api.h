@@ -18,7 +18,6 @@
 #define DATASYSTEM_WORKER_STREAM_CACHE_WORKER_MASTER_SC_API_H
 #include <memory>
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/util/net_util.h"
@@ -121,27 +120,23 @@ public:
      * rpc-based api, whereas local masters can be optimized for in-process pointer based api.
      * @param[in] hostPort The host port of the target master
      * @param[in] localHostPort The local worker rpc service host port.
-     * @param[in] akSkManager default to the RPC-based version.
      * @param[in] service The local pointer to the master SC service implementation. If null, the created api must
+     * default to the RPC-based version.
      * @return A base class pointer to the correct derived type of api.
      */
-    static std::shared_ptr<WorkerMasterSCApi> CreateWorkerMasterSCApi(const HostPort &hostPort,
-                                                                      const HostPort &localHostPort,
-                                                                      std::shared_ptr<AkSkManager> akSkManager,
-                                                                      master::MasterSCServiceImpl *service = nullptr);
+    static std::shared_ptr<WorkerMasterSCApi> CreateWorkerMasterSCApi(
+        const HostPort &hostPort, const HostPort &localHostPort, master::MasterSCServiceImpl *service = nullptr);
 
 protected:
     /**
      * @brief Construct WorkerMasterSCApi. Protected constructor enforces class instantiation through the factory method
      * CreateWorkerMasterSCApi.
      * @param[in] localWorkerAddress The local worker rpc service host port
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      */
-    explicit WorkerMasterSCApi(const HostPort &localWorkerAddress, std::shared_ptr<AkSkManager> akSkManager);
+    explicit WorkerMasterSCApi(const HostPort &localWorkerAddress);
 
     HostPort localWorkerAddress_;  // The HostPort of the local worker node
         std::shared_ptr<master::MasterSCService_BrpcGenericStub> brpcSession_{ nullptr };
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 };
 
 /**
@@ -157,10 +152,8 @@ public:
      * @brief Constructor for the remote version of the api
      * @param[in] masterAddress The host port of the target master
      * @param[in] localHostPort The local worker rpc service host port
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      */
-    explicit WorkerRemoteMasterSCApi(const HostPort &masterAddress, const HostPort &localHostPort,
-                                     std::shared_ptr<AkSkManager> akSkManager);
+    explicit WorkerRemoteMasterSCApi(const HostPort &masterAddress, const HostPort &localHostPort);
     ~WorkerRemoteMasterSCApi() override = default;
     Status Init() override;
     Status CreateProducer(master::CreateProducerReqPb &req, master::CreateProducerRspPb &rsp) override;
@@ -194,10 +187,8 @@ public:
      * @brief Constructor for the local version of the api
      * @param[in] service The pointer to the master SC service implementation
      * @param[in] localHostPort The local worker service host port.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      */
-    explicit WorkerLocalMasterSCApi(master::MasterSCServiceImpl *service, const HostPort &localHostPort,
-                                    std::shared_ptr<AkSkManager> akSkManager);
+    explicit WorkerLocalMasterSCApi(master::MasterSCServiceImpl *service, const HostPort &localHostPort);
     ~WorkerLocalMasterSCApi() override = default;
     Status Init() override;
     Status CreateProducer(master::CreateProducerReqPb &req, master::CreateProducerRspPb &rsp) override;
@@ -223,11 +214,10 @@ public:
     /**
      * @brief Construct a Stream Worker-to-Master API manager with key routing bound once.
      * @param[in] hostPort Local Worker address that outlives this manager.
-     * @param[in] manager Shared authentication manager.
      * @param[in] masterSCService Optional local Stream Master service.
      * @param[in] metadataRoute Metadata resolver that outlives this manager.
      */
-    WorkerMasterSCApiManager(HostPort &hostPort, std::shared_ptr<AkSkManager> manager,
+    WorkerMasterSCApiManager(HostPort &hostPort,
                              master::MasterSCServiceImpl *masterSCService,
                              const worker::MetadataRouteResolver &metadataRoute);
 

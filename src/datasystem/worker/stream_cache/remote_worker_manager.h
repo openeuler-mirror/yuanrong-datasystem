@@ -31,7 +31,6 @@
 #include <variant>
 #include <vector>
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/metrics/metrics_vector/metrics_sc_remote_vector.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/net_util.h"
@@ -276,7 +275,7 @@ private:
 
 class RemoteWorker {
 public:
-    RemoteWorker(HostPort localAddress, HostPort remoteAddress, std::shared_ptr<AkSkManager> akSkManager,
+    RemoteWorker(HostPort localAddress, HostPort remoteAddress,
                  ClientWorkerSCServiceImpl *scSvc, std::string &workerInstanceId,
                  std::shared_ptr<WorkerSCAllocateMemory> scAllocateManager, RemoteWorkerManager *manager);
     ~RemoteWorker();
@@ -383,7 +382,6 @@ private:
     const HostPort remoteWorkerAddr_;
 
     RemoteConsumerMap remoteConsumers_;
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     ClientWorkerSCServiceImpl *scSvc_;
     SharedPageQueueGroup sharedPageGroup_;
 
@@ -495,7 +493,7 @@ private:
 
 class RemoteWorkerManager {
 public:
-    explicit RemoteWorkerManager(ClientWorkerSCServiceImpl *scSvc, std::shared_ptr<AkSkManager> akSkManager,
+    explicit RemoteWorkerManager(ClientWorkerSCServiceImpl *scSvc,
                                  std::shared_ptr<WorkerSCAllocateMemory> scAllocateManager);
     ~RemoteWorkerManager();
 
@@ -651,7 +649,6 @@ private:
     MetricsScRemoteVector remoteSendRateVec_;
     std::unordered_map<std::string, std::shared_ptr<RemoteWorker>> remoteWorkerDict_;
     mutable std::shared_timed_mutex mutex_;
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     ClientWorkerSCServiceImpl *scSvc_;
     std::unique_ptr<BufferPool> dataMap_;
     std::unique_ptr<StreamDataPool> dataPool_;  // holds all the stream pages

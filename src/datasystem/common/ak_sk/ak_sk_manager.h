@@ -42,8 +42,6 @@
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
-#include "datasystem/common/util/request_context.h"
-#include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/utils/sensitive_value.h"
 
@@ -88,67 +86,14 @@ public:
      */
     Status SetTenantAkSk(const std::string &accessKey, SensitiveValue &secretKey);
 
-    /**
-     * @brief Verify signature according to req.
-     * @param[in] req The request received from client.
-     * @return Status of the call.
-     */
-    template <typename ReqType>
-    Status VerifySignatureAndTimestamp(ReqType req)
+    Status VerifySignatureFromDigest(const std::string &signature, uint64_t timestamp, const std::string &accessKey,
+                                    const AkSkDigest &digest);
+
+    bool ServerAuthEnabled() const
     {
         std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-        if (serverKeyMap_.empty()) {
-            return Status::OK();
-        }
-        std::string inputAccessKey = req.access_key();
-        auto iter = serverKeyMap_.find(inputAccessKey);
-        if (iter == serverKeyMap_.end()) {
-            // For the security, the specific cause of the authentication failure cannot be returned to client.
-            LOG(ERROR) << "The AK/SK authorized failed, the access key of req is not found.";
-            RETURN_STATUS(K_NOT_AUTHORIZED, "The AK/SK authorized failed.");
-        }
-        auto* ctx = GetRequestContext();
-        if (!ctx->reqAk.empty() && !ctx->reqSignature.empty() && !ctx->serializedMessage.Empty()) {
-            auto signature = std::move(ctx->reqSignature);
-            auto accessKey = std::move(ctx->reqAk);
-            auto timestamp = ctx->reqTimestamp;
-            RpcMessage serializedStr = std::move(ctx->serializedMessage);
-            return VerifySignatureAndTimestamp(signature, timestamp, accessKey,
-                                               static_cast<const char *>(serializedStr.Data()), serializedStr.Size());
-        }
-        std::string inputSignature = req.signature();
-        uint64_t currentTimeUs = static_cast<uint64_t>(GetSystemClockTimeStampUs());
-        uint64_t inputTimestamp = req.timestamp();
-        req.clear_signature();
-        req.clear_access_key();
-        std::string canonicalRequest = req.SerializeAsString();
-        std::string calcSignature;
-        RETURN_IF_NOT_OK(GetSignature(iter->second, canonicalRequest.c_str(), canonicalRequest.size(), calcSignature));
-        if (inputSignature != calcSignature) {
-            // For the security, the specific cause of the authentication failure cannot be returned to client.
-            LOG(ERROR) << "The AK/SK authorized failed for signature inconsistency.";
-            RETURN_STATUS(K_NOT_AUTHORIZED, "The AK/SK authorized failed.");
-        }
-        uint64_t timeDiff =
-            currentTimeUs > inputTimestamp ? currentTimeUs - inputTimestamp : inputTimestamp - currentTimeUs;
-        if (timeDiff > static_cast<uint64_t>(requestExpireTimeSec_) * SECOND_TO_US) {
-            // For the security, the specific cause of the authentication failure cannot be returned to client.
-            LOG(ERROR) << "The AK/SK authorized timeout.";
-            RETURN_STATUS(K_NOT_AUTHORIZED, "The AK/SK authorized failed.");
-        }
-        return Status::OK();
+        return !serverKeyMap_.empty();
     }
-
-    /**
-     * @brief Verify signature according to req.
-     * @param[in] signature Request signature.
-     * @param[in] timestamp Request timestamp.
-     * @param[in] accessKey Access key.
-     * @param[in] canonicalStr Serialized request memory address.
-     * @param[in] canonicalSize Serialized request size.
-     */
-    Status VerifySignatureAndTimestamp(const std::string &signature, uint64_t timestamp, const std::string &accessKey,
-                                       const char *canonicalStr, size_t canonicalSize);
 
     bool SystemAuthEnabled() const
     {

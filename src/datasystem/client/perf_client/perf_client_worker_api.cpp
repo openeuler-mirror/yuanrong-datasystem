@@ -19,6 +19,8 @@
  */
 
 #include "datasystem/common/rpc/brpc_factory.h"
+#include "datasystem/common/rpc/brpc_auth.h"
+#include "datasystem/protos/perf_posix.auth.pb.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/client/perf_client/perf_client_worker_api.h"
 
@@ -26,7 +28,7 @@ namespace datasystem {
 PerfClientWorkerApi::PerfClientWorkerApi(const ConnectOptions &connectOptions)
 {
     hostPort_ = HostPort(connectOptions.host, connectOptions.port);
-    signature_ = std::make_unique<Signature>(connectOptions.accessKey, connectOptions.secretKey);
+    signature_ = std::make_shared<Signature>(connectOptions.accessKey, connectOptions.secretKey);
     (void)authKeys_.SetClientPublicKey(connectOptions.clientPublicKey);
     (void)authKeys_.SetClientPrivateKey(connectOptions.clientPrivateKey);
     LOG_IF_ERROR(authKeys_.SetServerKey(WORKER_SERVER_NAME, connectOptions.serverPublicKey),
@@ -40,7 +42,20 @@ Status PerfClientWorkerApi::Init()
     constexpr int32_t rpcTimeoutMs = 5000;
     cfg.timeout_ms = rpcTimeoutMs;
     cfg.connect_timeout_ms = rpcTimeoutMs;
-    std::shared_ptr<brpc::Channel> channel(BrpcChannelFactory::Create(cfg));
+    AkSkData key;
+    RETURN_IF_NOT_OK(signature_->SnapshotClientKey(key));
+    std::unique_ptr<brpc::Channel> created;
+    if (key.NotComplete()) {
+        created = BrpcChannelFactory::Create(cfg);
+    } else {
+        RpcSigningBinding binding;
+        binding.credentials = signature_;
+        RETURN_IF_NOT_OK(RpcMethodMap::Create({{
+            google::protobuf::DescriptorPool::generated_pool()->FindServiceByName("datasystem.PerfService"),
+            PerfServiceAuth::descriptor()}}, binding.methods));
+        RETURN_IF_NOT_OK(CreateBrpcAuthChannel(cfg, std::move(binding), created));
+    }
+    std::shared_ptr<brpc::Channel> channel(std::move(created));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(channel != nullptr, K_RPC_UNAVAILABLE,
                                          FormatString("Failed to init brpc channel to %s", hostPort_.ToString()));
     rpcSession_ = std::make_shared<PerfService_BrpcGenericStub>(channel.get(), rpcTimeoutMs);
@@ -53,7 +68,6 @@ Status PerfClientWorkerApi::GetPerfLog(
 {
     GetPerfLogReqPb req;
     GetPerfLogRspPb rsp;
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK(rpcSession_->GetPerfLog(req, rsp));
 
     for (const GetPerfLogRspPb::PerfLogPb &detail : rsp.perf_logs()) {
@@ -73,7 +87,6 @@ Status PerfClientWorkerApi::ResetPerfLog()
 {
     ResetPerfLogReqPb req;
     ResetPerfLogRspPb rsp;
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK(rpcSession_->ResetPerfLog(req, rsp));
     return Status::OK();
 }

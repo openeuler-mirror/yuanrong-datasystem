@@ -108,7 +108,7 @@
   - In BRPC mode, every public `KVClient` operation establishes a `ScopedClientRequestContext` before validation,
     tracing, or backend calls. Standalone calls receive a fresh bthread-local context instead of inheriting pthread
     fallback trace/deadline state after M:N migration. The fresh context selectively preserves the caller-owned tenant
-    id and trace prefix while resetting request-scoped trace ids, deadlines, latency, and auth state; calls made with an
+    id and trace prefix while resetting request-scoped trace ids, deadlines, and latency; calls made with an
     active request context preserve that context. When a standalone call actually tracks a client-to-worker transport,
     the scope publishes only its final transport kind to a separate bthread-local completed-call result so callers can
     query it after the temporary context exits; no other request state is copied back. A fallback Reset/Record clears
@@ -510,6 +510,19 @@ handler. Clearing the Router handler synchronously excludes later callback acces
 
 ## Connection And Auth Model
 
+- AK/SK wire compatibility (source-checked `2026-10-26`):
+  - SDK factories select a native Channel for incomplete credentials, or `BrpcAuthChannel` for complete credentials,
+    at initialization. The signed serializer hashes timestamp and the actual encoded request bytes, then uses native
+    RpcMeta user fields for AK/timestamp/signature; SK stays local. Business PB auth definitions remain for wire
+    compatibility, but product callers no longer write or verify those fields.
+  - The old PB reserialization fallback and RequestContext auth cache are removed. Original trace/deadline state and
+    explicitly requested SDK tenant routing context remain; they do not carry authentication proof.
+  - `tests/ut/common/rpc/brpc_auth_test.cpp` covers cross-schema raw bytes, original serializer count and compression.
+    `tests/st/client/object_cache/oc_auth_compatibility_test.cpp` now has active ON cross-worker/rotation and OFF
+    first-enable-rejection cases. Targeted integrated validation passes; the former unconditional-skip PB
+    compatibility suite is no longer the test contract.
+  - Initial mode is fixed. First enabling AK/SK on an ordinary initialized client requires rebuilding it; nonempty
+    credential rotation retains per-provider paired snapshots. No mode/provider check is added to ordinary RPCs.
 - Verified in `ConnectOptions`:
   - direct worker address via `host` + `port`
   - connection and request timeout controls; the explicit `GetSocketPath` / `RegisterClient` initialization RPCs derive
@@ -1147,6 +1160,12 @@ also enters the existing routing failure filter, which isolates the failed worke
 distinct-worker budget and API deadline bound retry. Ambiguous failures remain terminal.
 The manual Coordinator backend ST `CoordinatorWriteRedirectTest.ThreeExitingWorkersReturnLiveCandidateAndWritesSucceed`
 checks both two-step SHM Create/Publish and Set while three exiting workers are still ACTIVE in the committed ring.
+
+- RPC 凭证 owner：OC／SC／Perf SDK 的 `signature_` 使用 shared provider，OC 与 SC remote API 的共享构造路径在初始化期保留同一 owner；旧裸指针借用构造保留给本地／既有内部消费者。OC `CloneWith` 原虚签名保留，同源／默认参数继承 owner，异源返回空候选，failover 在解引用前检查。引用计数只在构造、克隆和销毁处改变，不进入逐请求读取；固定模式已在 CommonApi 初始化记录，OFF 首次启用在修改凭证前拒绝，CloneWith 继承模式；非空轮换保留各 provider 内的成对快照。生产 Channel 已配套接线；固定模式、CloneWith 和 creator 生命周期已取得定向组件证据，定向组合回归通过；性能与旧二进制混部仍是独立验证项。
+
+- `ClientWorkerRemoteCommonApi` also exposes the shared `Signature` constructor used by direct common/control clients;
+  it delegates normal construction and retains the provider before mode initialization. The raw-pointer constructor
+  does not supply authentication ownership. This is a cold construction contract, with no request-path work added.
 
 ### SHM locality during topology recovery
 

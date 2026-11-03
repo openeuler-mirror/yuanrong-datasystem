@@ -42,6 +42,8 @@
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
+struct RpcSigningBinding;
+class Signature;
 
 // brpc listens on the port specified by --worker_address.
 constexpr int kBrpcPortOffset = 0;
@@ -230,9 +232,11 @@ public:
      * @brief Init RpcStubCacheMgr.
      * @param[in] maxStubCount Maximum number of stubs to cache.
      * @param[in] localAddress ip address of this process (necessary for urma case, but optional otherwise).
+     * @param[in] rpcCredentials First Init selects ordinary or signing creators; default calls retain that choice.
      * @return Status of the call.
      */
-    Status Init(uint64_t maxStubCount, const HostPort &localAddress = HostPort());
+    Status Init(uint64_t maxStubCount, const HostPort &localAddress = HostPort(),
+                std::shared_ptr<Signature> rpcCredentials = nullptr);
 
     /**
      * @brief Get stub.
@@ -284,12 +288,14 @@ protected:
         LruCache<HashKeyForRpcStubCacheMgr, std::shared_ptr<RpcStubCacheMgrObj>, LruCountPolicy>;
     using RpcStubCacheCreateFunc = std::function<Status(const HostPort &hostPort, std::shared_ptr<RpcStubBase> &)>;
 
+    using RpcStubCreators = std::unordered_map<StubType, RpcStubCacheCreateFunc>;
+
     RpcStubCacheMgr() = default;
 
     /**
      * @brief Init stub creators.
      */
-    void InitCreators();
+    static Status InitCreators(const std::shared_ptr<Signature> &rpcCredentials, RpcStubCreators &creators);
 
     /**
      * @brief Enable worker worker direct tcp port or not.
@@ -301,6 +307,8 @@ protected:
                                  std::shared_ptr<RpcStubBase> &stub);
 
     static Status CreateBrpcChannel(const HostPort &hostPort, std::shared_ptr<brpc::Channel> &brpcChannel);
+    static Status CreateSignedBrpcChannel(const HostPort &hostPort, const RpcSigningBinding &binding,
+                                          std::shared_ptr<brpc::Channel> &brpcChannel);
 
     /**
      * @brief Brpc version of CreatorTemplate that creates a brpc::Channel and _BrpcGenericStub.
@@ -326,9 +334,10 @@ protected:
     std::mutex initMutex_;  // Avoid repeated initialization.
     bool init_ = false;
     std::unique_ptr<LruForRpcStubCacheMgr> lruCache_ = nullptr;
-    std::unordered_map<StubType, RpcStubCacheCreateFunc> creators_;
+    RpcStubCreators creators_;
     const static int stubPriorityNum_ = 2;
     HostPort localAddress_;
+    std::shared_ptr<Signature> rpcCredentials_;
 };
 };  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_STUB_CACHE_MGR_H

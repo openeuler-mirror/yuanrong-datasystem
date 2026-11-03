@@ -44,19 +44,19 @@ public:
         opts.workerConfigs.emplace_back(hostIp, port);
         workerHostPort_ = HostPort(hostIp, port);
         opts.workerGflagParams = " -shared_memory_size_mb=64 -v=1 -ipc_through_shared_memory=true";
-        signature_ = std::make_unique<Signature>(accessKey_, secretKey_);
+        signature_ = std::make_shared<Signature>(accessKey_, secretKey_);
     }
     HostPort workerHostPort_;
     std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
-    std::unique_ptr<Signature> signature_;
+    std::shared_ptr<Signature> signature_;
 };
 
 TEST_F(ClientCommonWorkerApiTest, TestGetClientFd)
 {
     int timeoutMs = 5000;
     auto clientApi = std::make_shared<ClientWorkerRemoteApi>(workerHostPort_,
-                                                             HeartbeatType::RPC_HEARTBEAT,    "", signature_.get());
+                                                             HeartbeatType::RPC_HEARTBEAT,    "", signature_);
     DS_ASSERT_OK(clientApi->Init(timeoutMs, timeoutMs));
     ASSERT_TRUE(clientApi->IsShmEnable());
 
@@ -81,7 +81,7 @@ TEST_F(ClientCommonWorkerApiTest, TestGetClientFdInvalid)
 {
     int timeoutMs = 5000;
     auto clientApi = std::make_shared<ClientWorkerRemoteApi>(
-        workerHostPort_, HeartbeatType::RPC_HEARTBEAT, "", signature_.get(), "tenant1");
+        workerHostPort_, HeartbeatType::RPC_HEARTBEAT, "", signature_, "tenant1");
     DS_ASSERT_OK(clientApi->Init(timeoutMs, timeoutMs));
     ASSERT_TRUE(clientApi->IsShmEnable());
 
@@ -93,7 +93,7 @@ TEST_F(ClientCommonWorkerApiTest, TestGetClientFdInvalid)
     DS_ASSERT_OK(clientApi->Create("objectKey", dataSize, version, metaSize, shmUnitInfo, dummy));
 
     auto clientApi2 = std::make_shared<ClientWorkerRemoteApi>(
-        workerHostPort_, HeartbeatType::RPC_HEARTBEAT, "", signature_.get(), "tenant2");
+        workerHostPort_, HeartbeatType::RPC_HEARTBEAT, "", signature_, "tenant2");
     DS_ASSERT_OK(clientApi2->Init(timeoutMs, timeoutMs));
     std::vector<int> workerFds{ shmUnitInfo->fd };
     std::vector<int> clientFds;
@@ -105,7 +105,7 @@ TEST_F(ClientCommonWorkerApiTest, TestGetMultiClientFd)
 {
     int timeoutMs = 5000;
     auto clientApi = std::make_shared<ClientWorkerRemoteApi>(workerHostPort_,
-                                                             HeartbeatType::RPC_HEARTBEAT, "", signature_.get());
+                                                             HeartbeatType::RPC_HEARTBEAT, "", signature_);
     DS_ASSERT_OK(clientApi->Init(timeoutMs, timeoutMs));
     ASSERT_TRUE(clientApi->IsShmEnable());
 

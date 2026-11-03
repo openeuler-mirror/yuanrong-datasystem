@@ -90,13 +90,11 @@ public:
     /**
      * @brief Construct a new SCNotifyWorkerManager instance.
      * @param[in] streamMetaStore The stream rocksdb store object.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] rpcSessionManager Master to Worker session manager.
      * @param[in] membership Process-local membership and endpoint view.
      * @param[in] scMetadataManager The sc metadata manager instance.
      */
     SCNotifyWorkerManager(std::shared_ptr<RocksStreamMetaStore> streamMetaStore,
-                          std::shared_ptr<AkSkManager> akSkManager,
                           std::shared_ptr<RpcSessionManager> rpcSessionManager,
                           const cluster::MembershipEndpointView *membership,
                           SCMetadataManager *scMetadataManager);
@@ -388,7 +386,6 @@ private:
 
     std::shared_ptr<RocksStreamMetaStore> streamMetaStore_{ nullptr };
 
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::shared_ptr<RpcSessionManager> rpcSessionManager_{ nullptr };
     const cluster::MembershipEndpointView *topologyMembership_{ nullptr };
     SCMetadataManager *scMetadataManager_;

@@ -25,7 +25,6 @@
 #include <utility>
 #include <vector>
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rpc/rpc_server_stream_base.h"
 #include "datasystem/protos/master_object.stub.rpc.pb.h"
@@ -229,15 +228,12 @@ public:
      * rpc-based api, whereas local masters can be optimized for in-process pointer based api.
      * @param[in] hostPort The host port of the target master
      * @param[in] localHostPort The local worker rpc service host port.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] service The local pointer to the master OC service implementation. If null, the created api must
      * default to the RPC-based version.
      * @return A base class pointer to the correct derived type of api.
      */
-    static std::shared_ptr<WorkerMasterOCApi> CreateWorkerMasterOCApi(const HostPort &hostPort,
-                                                                      const HostPort &localHostPort,
-                                                                      std::shared_ptr<AkSkManager> akSkManager,
-                                                                      master::MasterOCServiceImpl *service = nullptr);
+    static std::shared_ptr<WorkerMasterOCApi> CreateWorkerMasterOCApi(
+        const HostPort &hostPort, const HostPort &localHostPort, master::MasterOCServiceImpl *service = nullptr);
 
     /**
      * @brief Check if the asking worker needs reconciliaton. If so, trigger reconciliation.
@@ -387,15 +383,13 @@ protected:
      * @brief Construct WorkerMasterOCApi object. Protected constructor enforces class instantiation through the factory
      * method CreateWorkerMasterOCApi.
      * @param[in] localHostPort The local worker service host port.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      */
-    WorkerMasterOCApi(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager)
-        : localHostPort_(localHostPort), akSkManager_(std::move(akSkManager))
+    explicit WorkerMasterOCApi(const HostPort &localHostPort)
+        : localHostPort_(localHostPort)
     {
     }
 
     HostPort localHostPort_;  // The HostPort of the local node
-    std::shared_ptr<AkSkManager> akSkManager_;
 };
 
 /**
@@ -412,10 +406,8 @@ public:
      * @brief Constructor for the remote version of the api
      * @param[in] hostPort The host port of the target master
      * @param[in] localHostPort The local worker rpc service host port.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      */
-    explicit WorkerRemoteMasterOCApi(const HostPort &hostPort, const HostPort &localHostPort,
-                                     std::shared_ptr<AkSkManager> akSkManager);
+    explicit WorkerRemoteMasterOCApi(const HostPort &hostPort, const HostPort &localHostPort);
     ~WorkerRemoteMasterOCApi() override = default;
     Status Init() override;
     Status CreateMeta(master::CreateMetaReqPb &request, master::CreateMetaRspPb &response) override;
@@ -508,10 +500,8 @@ public:
      * @brief Constructor for the local version of the api
      * @param[in] service The pointer to the master OC service implementation
      * @param[in] localHostPort The local worker service host port.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      */
-    WorkerLocalMasterOCApi(master::MasterOCServiceImpl *service, const HostPort &localHostPort,
-                           std::shared_ptr<AkSkManager> akSkManager);
+    WorkerLocalMasterOCApi(master::MasterOCServiceImpl *service, const HostPort &localHostPort);
     ~WorkerLocalMasterOCApi() override = default;
     Status Init() override;
     Status CreateMeta(master::CreateMetaReqPb &request, master::CreateMetaRspPb &response) override;
@@ -600,16 +590,15 @@ public:
     /**
      * @brief Construct a Worker-to-Master Object API manager with prebound metadata routing.
      * @param[in] hostPort Local Worker address that outlives the manager.
-     * @param[in] manager Shared authentication manager.
      * @param[in] routeResolver Metadata resolver that outlives the manager.
      * @param[in] masterOCService Optional local Master Object service.
      */
-    WorkerMasterOcApiManager(HostPort &hostPort, std::shared_ptr<AkSkManager> manager,
+    WorkerMasterOcApiManager(HostPort &hostPort,
                              const worker::MetadataRouteResolver &routeResolver,
                              master::MasterOCServiceImpl *masterOCService);
 
     /**
-     * @brief Release shared authentication and non-owned service dependencies.
+     * @brief Release non-owned route and service dependencies.
      */
     ~WorkerMasterOcApiManager() override = default;
 

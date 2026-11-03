@@ -17,7 +17,6 @@
 #ifndef DATASYSTEM_WORKER_STREAM_CACHE_MASTER_WORKER_SC_SERVICE_IMPL_H
 #define DATASYSTEM_WORKER_STREAM_CACHE_MASTER_WORKER_SC_SERVICE_IMPL_H
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/stream_cache/consumer_meta.h"
 #include "datasystem/protos/worker_stream.irpc.pb.h"
 #include "datasystem/protos/worker_stream.service.rpc.pb.h"
@@ -35,10 +34,8 @@ public:
      * @param[in] serverAddr The worker address.
      * @param[in] masterAddr The master address.
      * @param[in] clientSvc The pointer of client call worker service.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      */
-    MasterWorkerSCServiceImpl(HostPort serverAddr, HostPort masterAddr, ClientWorkerSCServiceImpl *clientSvc,
-                              std::shared_ptr<AkSkManager> akSkManager);
+    MasterWorkerSCServiceImpl(HostPort serverAddr, HostPort masterAddr, ClientWorkerSCServiceImpl *clientSvc);
     ~MasterWorkerSCServiceImpl() override = default;
 
     /**
@@ -153,7 +150,6 @@ private:
     HostPort masterAddress_;
 
     ClientWorkerSCServiceImpl *clientWorkerSCSvc_;
-    std::shared_ptr<AkSkManager> akSkManager_;
 };
 }  // namespace stream_cache
 }  // namespace worker

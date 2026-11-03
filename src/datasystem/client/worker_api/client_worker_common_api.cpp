@@ -21,6 +21,7 @@
 
 #include <brpc/channel.h>
 #include "datasystem/protos/share_memory.brpc.stub.pb.h"
+#include "datasystem/protos/share_memory.auth.pb.h"
 
 #include <algorithm>
 #include <atomic>
@@ -47,6 +48,7 @@
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/brpc_factory.h"
+#include "datasystem/common/rpc/brpc_auth.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
@@ -308,7 +310,6 @@ Status ClientWorkerLocalCommonApi::SendHeartbeat(bool &workerReboot, bool &clien
     HeartbeatRspPb rsp;
     req.set_client_id(clientId_);
     req.set_removable(removable_.load(std::memory_order_relaxed));
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     Status status = api_->WorkerHeartbeat(workerService_, req, rsp);
     workerReboot = false;
     clientRemoved = false;
@@ -360,7 +361,6 @@ Status ClientWorkerLocalCommonApi::Disconnect(bool isDestruct)
     DisconnectClientReqPb req;
     DisconnectClientRspPb rsp;
     req.set_client_id(clientId_);
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     return api_->WorkerDisconnectClient(workerService_, req, rsp);
 }
 
@@ -387,7 +387,6 @@ Status ClientWorkerLocalCommonApi::Connect(RegisterClientReqPb &req, int32_t tim
     req.set_pod_name(Logging::PodName());
     req.set_device_id(deviceId_);
     req.set_compatibility_version(CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString());
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RegisterClientRspPb rsp;
     Status status;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(api_->WorkerRegisterClient(workerService_, req, rsp), "Register client failed");
@@ -425,6 +424,15 @@ ClientWorkerRemoteCommonApi::ClientWorkerRemoteCommonApi(HostPort hostPort,
     urmaHandshakeRetryPool_ = std::make_unique<ThreadPool>(0, 1, "urma_handshake_retry");
 }
 
+ClientWorkerRemoteCommonApi::ClientWorkerRemoteCommonApi(
+    HostPort hostPort, HeartbeatType heartbeatType, SensitiveValue token, std::shared_ptr<Signature> signature,
+    std::string tenantId, bool enableCrossNodeConnection, std::string deviceId)
+    : ClientWorkerRemoteCommonApi(std::move(hostPort), heartbeatType, std::move(token), signature.get(),
+                                  std::move(tenantId), enableCrossNodeConnection, std::move(deviceId))
+{
+    rpcSignatureOwner_ = std::move(signature);
+}
+
 ClientWorkerRemoteCommonApi::~ClientWorkerRemoteCommonApi()
 {
     stopUrmaHandshakeRetry_ = true;
@@ -445,6 +453,40 @@ void ClientWorkerRemoteCommonApi::SetRpcTimeout(int32_t timeout)
     LOG(INFO) << "The total timeout is " << timeout << " ms, single rpc timeout is " << rpcTimeoutMs_ << " ms";
 }
 
+Status ClientWorkerRemoteCommonApi::InitializeRpcAuthMode()
+{
+    if (rpcAuthModeInitialized_) {
+        return Status::OK();
+    }
+    AkSkData key;
+    if (signature_ != nullptr) {
+        RETURN_IF_NOT_OK(signature_->SnapshotClientKey(key));
+    }
+    const bool enabled = !key.NotComplete();
+    CHECK_FAIL_RETURN_STATUS(!enabled || (rpcSignatureOwner_ != nullptr && rpcSignatureOwner_.get() == signature_),
+                             K_INVALID, "RPC authentication requires an owned credential provider.");
+    rpcAuthEnabled_ = enabled;
+    rpcAuthModeInitialized_ = true;
+    return Status::OK();
+}
+
+Status ClientWorkerRemoteCommonApi::CreateRpcChannel(
+    const BrpcChannelConfig &config, const google::protobuf::ServiceDescriptor *plain,
+    const google::protobuf::ServiceDescriptor *authenticated, std::unique_ptr<brpc::Channel> &out)
+{
+    RETURN_IF_NOT_OK(InitializeRpcAuthMode());
+    if (!rpcAuthEnabled_) {
+        auto channel = BrpcChannelFactory::Create(config);
+        CHECK_FAIL_RETURN_STATUS(channel != nullptr, K_RPC_UNAVAILABLE, "Failed to initialize RPC channel.");
+        out = std::move(channel);
+        return Status::OK();
+    }
+    RpcSigningBinding binding;
+    binding.credentials = rpcSignatureOwner_;
+    RETURN_IF_NOT_OK(RpcMethodMap::Create({{plain, authenticated}}, binding.methods));
+    return CreateBrpcAuthChannel(config, std::move(binding), out);
+}
+
 Status ClientWorkerRemoteCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize,
                                          int32_t initAttemptTimeoutMs)
 {
@@ -460,6 +502,7 @@ Status ClientWorkerRemoteCommonApi::Init(int32_t requestTimeoutMs, int32_t conne
     CHECK_FAIL_RETURN_STATUS(
         requestTimeoutMs >= 0, StatusCode::K_INVALID,
         FormatString("The requestTimeoutMs(%d) should be greater than or equal to 0 milliseconds.", requestTimeoutMs));
+    RETURN_IF_NOT_OK(InitializeRpcAuthMode());
     requestTimeoutMs_ = requestTimeoutMs;
     connectTimeoutMs_ = connectTimeoutMs;
     fastTransportMemSize_ = fastTransportSize;
@@ -496,7 +539,10 @@ Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t ti
     // from the socket-availability check, the old channel would be
     // destroyed while brpcCommonStub_ still points to it — a use-after-
     // free in subsequent Disconnect() / RegisterClient calls (issue #785).
-    auto newChannel = BrpcChannelFactory::Create(cfg);
+    std::unique_ptr<brpc::Channel> newChannel;
+    RETURN_IF_NOT_OK(CreateRpcChannel(cfg,
+        google::protobuf::DescriptorPool::generated_pool()->FindServiceByName("datasystem.WorkerService"),
+        WorkerServiceAuth::descriptor(), newChannel));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         newChannel != nullptr, StatusCode::K_RPC_UNAVAILABLE,
         FormatString("Failed to init brpc channel to %s for WorkerService", brpcAddr.ToString()));
@@ -625,7 +671,6 @@ Status ClientWorkerRemoteCommonApi::FetchSocketPath(int64_t remainingMs, GetSock
     GetSocketPathReqPb req;
     RETURN_IF_NOT_OK(SetToken(req));
     req.set_tenant_id(tenantId_);
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     // This control RPC belongs to initialization. The aggregate retry budget and per-call cap
     // therefore come from the current connection attempt, not the business request timeout.
     auto rc = RetryOnError(
@@ -749,7 +794,6 @@ Status ClientWorkerRemoteCommonApi::SendHeartbeat(bool &workerReboot, bool &clie
         return Status::OK();
     });
 #endif
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     Status status = brpcCommonStub_->Heartbeat(opts, req, rsp);
     workerReboot = false;
     clientRemoved = false;
@@ -855,7 +899,6 @@ Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int
 #endif
     req.set_compatibility_version(CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString());
     RegisterClientRspPb rsp;
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     LOG(INFO) << "Start to send rpc to register client to worker, shm enable: " << IsShmEnable()
               << ", enable cross node: " << enableCrossNodeConnection_ << ", tenant id: " << tenantId_
               << ", auth: " << signature_->ToString()
@@ -897,6 +940,8 @@ Status ClientWorkerRemoteCommonApi::UpdateAkSk(const std::string &accessKey, Sen
                               GetTruncatedStr(std::to_string(hasher(secretKey.GetData()))));
     CHECK_FAIL_RETURN_STATUS(!accessKey.empty(), K_INVALID, "accessKey is empty");
     CHECK_FAIL_RETURN_STATUS(!secretKey.Empty(), K_INVALID, "secretKey is empty");
+    CHECK_FAIL_RETURN_STATUS(rpcAuthModeInitialized_ && rpcAuthEnabled_, K_NOT_SUPPORTED,
+                             "Recreate the client with complete AK/SK to enable RPC authentication.");
     return signature_->SetClientAkSk(accessKey, secretKey);
 }
 
@@ -942,7 +987,6 @@ Status ClientWorkerRemoteCommonApi::Disconnect(bool isDestruct)
     DisconnectClientRspPb rsp;
     req.set_client_id(clientId_);
     RETURN_IF_NOT_OK(SetToken(req));
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     // brpc connection teardown for DisconnectClient is a lightweight 1 s handshake RPC.
     static constexpr int32_t BRPC_DISCONNECT_RPC_TIMEOUT_MS = 1000;           // 1s, brpc lightweight handshake
     int rpcTimeoutMs = BRPC_DISCONNECT_RPC_TIMEOUT_MS;
@@ -1017,7 +1061,6 @@ Status ClientWorkerRemoteCommonApi::GetClientFd(const std::vector<int> &workerFd
     } else {
         RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     }
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
 
     // Notice: GetClientFd should not be retried. Otherwise, Fd resources may remain or the process may be suspended.
     Status status = brpcCommonStub_->GetClientFd(opts, req, rsp);

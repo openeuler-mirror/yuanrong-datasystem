@@ -68,6 +68,19 @@
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/brpc_factory.h"
+#include "datasystem/common/rpc/brpc_auth.h"
+#include "datasystem/worker/rpc_service_auth_registration.h"
+#include "datasystem/protos/share_memory.auth.pb.h"
+#include "datasystem/protos/object_posix.auth.pb.h"
+#include "datasystem/protos/worker_object.auth.pb.h"
+#include "datasystem/protos/stream_posix.auth.pb.h"
+#include "datasystem/protos/worker_stream.auth.pb.h"
+#include "datasystem/protos/master_object.auth.pb.h"
+#include "datasystem/protos/master_stream.auth.pb.h"
+#ifdef ENABLE_PERF
+#include "datasystem/protos/perf_posix.brpc.pb.h"
+#include "datasystem/protos/perf_posix.auth.pb.h"
+#endif
 #include "datasystem/common/rpc/brpc_stream_close_helper.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
@@ -275,7 +288,7 @@ bool WaitForBrpcSocketUntil(const HostPort &address, std::chrono::steady_clock::
     return false;
 }
 
-Status StartControlBackendProbe(const HostPort &localAddress, const std::shared_ptr<AkSkManager> &akSkManager,
+Status StartControlBackendProbe(const HostPort &localAddress,
                                 const cluster::MemberIdentity &peer, std::chrono::steady_clock::time_point deadline,
                                 PendingControlBackendProbe &pending)
 {
@@ -284,7 +297,7 @@ Status StartControlBackendProbe(const HostPort &localAddress, const std::shared_
     HostPort peerAddress;
     RETURN_IF_NOT_OK(peerAddress.ParseString(peer.address));
     std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api;
-    api = std::make_shared<object_cache::WorkerRemoteWorkerOCApi>(peerAddress, localAddress, akSkManager);
+    api = std::make_shared<object_cache::WorkerRemoteWorkerOCApi>(peerAddress, localAddress);
     RETURN_IF_NOT_OK(api->Init(deadline));
     CHECK_FAIL_RETURN_STATUS(
         WaitForBrpcSocketUntil(HostPort(peerAddress.Host(), peerAddress.Port()), deadline),
@@ -363,7 +376,7 @@ cluster::ControlBackendProbeResult BuildFailedProbeResult(const cluster::MemberI
 }
 
 std::vector<PendingControlBackendProbe> StartControlBackendProbes(
-    const HostPort &localAddress, const std::shared_ptr<AkSkManager> &akSkManager,
+    const HostPort &localAddress,
     const std::vector<cluster::MemberIdentity> &peers, std::chrono::steady_clock::time_point deadline,
     std::vector<cluster::ControlBackendProbeResult> &results)
 {
@@ -372,7 +385,7 @@ std::vector<PendingControlBackendProbe> StartControlBackendProbes(
     for (const auto &peer : peers) {
         PendingControlBackendProbe probe;
         probe.startedAt = std::chrono::steady_clock::now();
-        auto rc = StartControlBackendProbe(localAddress, akSkManager, peer, deadline, probe);
+        auto rc = StartControlBackendProbe(localAddress, peer, deadline, probe);
         if (rc.IsError()) {
             VLOG(1) << "Cluster-state probe start failed for " << peer.address << ": " << rc.ToString();
             results.push_back(BuildFailedProbeResult(peer, rc, probe.startedAt));
@@ -436,12 +449,12 @@ void AppendTimedOutControlBackendProbes(const std::vector<PendingControlBackendP
 }
 
 std::vector<cluster::ControlBackendProbeResult> ProbeControlBackendPeers(
-    const HostPort &localAddress, const std::shared_ptr<AkSkManager> &akSkManager,
+    const HostPort &localAddress,
     const std::vector<cluster::MemberIdentity> &peers, std::chrono::steady_clock::time_point deadline)
 {
     std::vector<cluster::ControlBackendProbeResult> results;
     results.reserve(peers.size());
-    auto pending = StartControlBackendProbes(localAddress, akSkManager, peers, deadline, results);
+    auto pending = StartControlBackendProbes(localAddress, peers, deadline, results);
     std::vector<bool> finished(pending.size(), false);
     size_t remaining = pending.size();
     while (remaining > 0 && std::chrono::steady_clock::now() < deadline) {
@@ -478,7 +491,6 @@ Status BuildPeerTopologySnapshot(const GetHashRingRspPb &rsp,
 
 struct PeerHashRingRefreshContext {
     const HostPort &localAddress;
-    const std::shared_ptr<AkSkManager> &akSkManager;
     uint64_t currentVersion;
     const std::vector<cluster::MemberIdentity> &peers;
     std::chrono::steady_clock::time_point deadline;
@@ -498,7 +510,7 @@ Status RefreshPeerHashRing(const PeerHashRingRefreshContext &context,
             lastStatus = rc;
             continue;
         }
-        object_cache::WorkerRemoteWorkerOCApi api(peerAddress, context.localAddress, context.akSkManager);
+        object_cache::WorkerRemoteWorkerOCApi api(peerAddress, context.localAddress);
         rc = api.Init();
         if (rc.IsError()) {
             lastStatus = rc;
@@ -609,6 +621,8 @@ WorkerOCServer::~WorkerOCServer()
     // exit, exception unwind) must replicate this ordering.
     // StopBrpcServer() is idempotent (resets brpcServer_ after Stop+Join), so calling
     // it here has no effect when ~RpcServer() later calls StopBrpcServer() again.
+    rpcAuthServices_.clear();
+    rpcAuthCapture_.reset();
     builder_ = RpcServer::Builder();
     if (objCacheMasterSvc_ != nullptr) {
         objCacheMasterSvc_->Shutdown();
@@ -671,7 +685,13 @@ Status WorkerOCServer::InitWorkerOCService()
     RETURN_IF_NOT_OK(objCacheClientWorkerSvc_->Init());
     if (rpcServer_ && rpcServer_->IsBrpc()) {
         brpcOcAdapter_ = std::make_unique<WorkerOCServiceBrpcAdapter>(*objCacheClientWorkerSvc_);
-        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcOcAdapter_.get()));
+        if (rpcAuthCapture_) {
+            RETURN_IF_NOT_OK(RegisterRpcAuthService(
+                *rpcServer_, *brpcOcAdapter_, *WorkerOCServiceAuth::descriptor(),
+                akSkManager_, rpcAuthServices_));
+        } else {
+            RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcOcAdapter_.get()));
+        }
     } else {
         RpcServiceCfg cfg;
         cfg.numRegularSockets_ = std::max(FLAGS_brpc_server_num_threads, LIGHTWEIGHT_SERVICE_THREAD_NUM);
@@ -688,7 +708,13 @@ Status WorkerOCServer::InitWorkerWorkerOCService()
     RETURN_IF_NOT_OK(objCacheWorkerWkSvc_->Init());
     if (rpcServer_ && rpcServer_->IsBrpc()) {
         brpcWorkerWorkerOcAdapter_ = std::make_unique<WorkerWorkerOCServiceBrpcAdapter>(*objCacheWorkerWkSvc_);
-        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcWorkerWorkerOcAdapter_.get()));
+        if (rpcAuthCapture_) {
+            RETURN_IF_NOT_OK(RegisterRpcAuthService(
+                *rpcServer_, *brpcWorkerWorkerOcAdapter_, *WorkerWorkerOCServiceAuth::descriptor(),
+                akSkManager_, rpcAuthServices_));
+        } else {
+            RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcWorkerWorkerOcAdapter_.get()));
+        }
     } else {
         RpcServiceCfg cfg;
         cfg.numRegularSockets_ = std::max(FLAGS_brpc_server_num_threads, LIGHTWEIGHT_SERVICE_THREAD_NUM);
@@ -705,7 +731,13 @@ Status WorkerOCServer::InitWorkerWorkerTransportService()
     if (rpcServer_ && rpcServer_->IsBrpc()) {
         brpcWorkerWorkerTransAdapter_ =
             std::make_unique<WorkerWorkerTransportServiceBrpcAdapter>(*objCacheWorkerTransSvc_);
-        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcWorkerWorkerTransAdapter_.get()));
+        if (rpcAuthCapture_) {
+            RETURN_IF_NOT_OK(RegisterRpcAuthService(
+                *rpcServer_, *brpcWorkerWorkerTransAdapter_, *WorkerWorkerTransportServiceAuth::descriptor(),
+                akSkManager_, rpcAuthServices_));
+        } else {
+            RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcWorkerWorkerTransAdapter_.get()));
+        }
     } else {
         RpcServiceCfg cfg;
         cfg.numRegularSockets_ = LIGHTWEIGHT_SERVICE_THREAD_NUM;
@@ -721,7 +753,13 @@ Status WorkerOCServer::InitMasterWorkerOCService()
     RETURN_IF_NOT_OK(objCacheWorkerMsSvc_->Init());
     if (rpcServer_ && rpcServer_->IsBrpc()) {
         brpcMasterWorkerOcAdapter_ = std::make_unique<MasterWorkerOCServiceBrpcAdapter>(*objCacheWorkerMsSvc_);
-        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterWorkerOcAdapter_.get()));
+        if (rpcAuthCapture_) {
+            RETURN_IF_NOT_OK(RegisterRpcAuthService(
+                *rpcServer_, *brpcMasterWorkerOcAdapter_, *MasterWorkerOCServiceAuth::descriptor(),
+                akSkManager_, rpcAuthServices_));
+        } else {
+            RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterWorkerOcAdapter_.get()));
+        }
     } else {
         RpcServiceCfg cfg;
         cfg.numRegularSockets_ = std::max(FLAGS_brpc_server_num_threads, LIGHTWEIGHT_SERVICE_THREAD_NUM);
@@ -759,7 +797,13 @@ Status WorkerOCServer::InitClientWorkerSCService()
     RETURN_IF_NOT_OK(CheckScEncryptSecretKey());
     if (rpcServer_ && rpcServer_->IsBrpc()) {
         brpcClientWorkerScAdapter_ = std::make_unique<ClientWorkerSCServiceBrpcAdapter>(*streamCacheClientWorkerSvc_);
-        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcClientWorkerScAdapter_.get()));
+        if (rpcAuthCapture_) {
+            RETURN_IF_NOT_OK(RegisterRpcAuthService(
+                *rpcServer_, *brpcClientWorkerScAdapter_, *ClientWorkerSCServiceAuth::descriptor(),
+                akSkManager_, rpcAuthServices_));
+        } else {
+            RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcClientWorkerScAdapter_.get()));
+        }
     } else {
         RpcServiceCfg cfg;
         cfg.numRegularSockets_ = FLAGS_sc_regular_socket_num;
@@ -780,7 +824,13 @@ Status WorkerOCServer::InitWorkerWorkerSCService()
                              "The number of service threads exceeds the upper limit, please adjust it");
     if (rpcServer_ && rpcServer_->IsBrpc()) {
         brpcWorkerWorkerScAdapter_ = std::make_unique<WorkerWorkerSCServiceBrpcAdapter>(*streamCacheWorkerWorkerSvc_);
-        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcWorkerWorkerScAdapter_.get()));
+        if (rpcAuthCapture_) {
+            RETURN_IF_NOT_OK(RegisterRpcAuthService(
+                *rpcServer_, *brpcWorkerWorkerScAdapter_, *WorkerWorkerSCServiceAuth::descriptor(),
+                akSkManager_, rpcAuthServices_));
+        } else {
+            RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcWorkerWorkerScAdapter_.get()));
+        }
     } else {
         RpcServiceCfg cfg;
         cfg.numRegularSockets_ = FLAGS_sc_regular_socket_num;
@@ -801,7 +851,13 @@ Status WorkerOCServer::InitMasterWorkerSCService()
     RETURN_IF_NOT_OK(streamCacheMasterWorkerSvc_->Init());
     if (rpcServer_ && rpcServer_->IsBrpc()) {
         brpcMasterWorkerScAdapter_ = std::make_unique<MasterWorkerSCServiceBrpcAdapter>(*streamCacheMasterWorkerSvc_);
-        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterWorkerScAdapter_.get()));
+        if (rpcAuthCapture_) {
+            RETURN_IF_NOT_OK(RegisterRpcAuthService(
+                *rpcServer_, *brpcMasterWorkerScAdapter_, *MasterWorkerSCServiceAuth::descriptor(),
+                akSkManager_, rpcAuthServices_));
+        } else {
+            RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterWorkerScAdapter_.get()));
+        }
     } else {
         RpcServiceCfg cfg;
         cfg.numRegularSockets_ = std::max(FLAGS_sc_regular_socket_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
@@ -817,7 +873,13 @@ Status WorkerOCServer::InitWorkerService()
     RETURN_IF_NOT_OK(workerSvc_->Init());
     if (rpcServer_ && rpcServer_->IsBrpc()) {
         brpcWorkerAdapter_ = std::make_unique<WorkerServiceBrpcAdapter>(*workerSvc_);
-        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcWorkerAdapter_.get()));
+        if (rpcAuthCapture_) {
+            RETURN_IF_NOT_OK(RegisterRpcAuthService(
+                *rpcServer_, *brpcWorkerAdapter_, *WorkerServiceAuth::descriptor(),
+                akSkManager_, rpcAuthServices_));
+        } else {
+            RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcWorkerAdapter_.get()));
+        }
     } else {
         RpcServiceCfg cfg;
         cfg.numRegularSockets_ = std::max(FLAGS_brpc_server_num_threads, LIGHTWEIGHT_SERVICE_THREAD_NUM);
@@ -868,7 +930,13 @@ Status WorkerOCServer::InitMasterOCService()
     RETURN_IF_NOT_OK(objCacheMasterSvc_->Init());
     if (rpcServer_ && rpcServer_->IsBrpc()) {
         brpcMasterOcAdapter_ = std::make_unique<master::MasterOCServiceBrpcAdapter>(*objCacheMasterSvc_);
-        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterOcAdapter_.get()));
+        if (rpcAuthCapture_) {
+            RETURN_IF_NOT_OK(RegisterRpcAuthService(
+                *rpcServer_, *brpcMasterOcAdapter_, *master::MasterOCServiceAuth::descriptor(),
+                akSkManager_, rpcAuthServices_));
+        } else {
+            RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterOcAdapter_.get()));
+        }
     } else {
         RpcServiceCfg cfg;
         cfg.numRegularSockets_ = std::max(FLAGS_brpc_server_num_threads, LIGHTWEIGHT_SERVICE_THREAD_NUM);
@@ -884,7 +952,13 @@ Status WorkerOCServer::InitMasterSCService()
     RETURN_IF_NOT_OK(streamCacheMasterSvc_->Init());
     if (rpcServer_ && rpcServer_->IsBrpc()) {
         brpcMasterScAdapter_ = std::make_unique<master::MasterSCServiceBrpcAdapter>(*streamCacheMasterSvc_);
-        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterScAdapter_.get()));
+        if (rpcAuthCapture_) {
+            RETURN_IF_NOT_OK(RegisterRpcAuthService(
+                *rpcServer_, *brpcMasterScAdapter_, *master::MasterSCServiceAuth::descriptor(),
+                akSkManager_, rpcAuthServices_));
+        } else {
+            RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterScAdapter_.get()));
+        }
     } else {
         RpcServiceCfg cfg;
         cfg.numRegularSockets_ = std::max(FLAGS_brpc_server_num_threads, LIGHTWEIGHT_SERVICE_THREAD_NUM);
@@ -917,11 +991,22 @@ Status WorkerOCServer::InitUtOCService()
 #ifdef ENABLE_PERF
 Status WorkerOCServer::CreateAndInitPerfService()
 {
-    perfService_ = std::make_unique<PerfServiceImpl>(hostPort_, akSkManager_);
-    RpcServiceCfg cfg;
-    cfg.numRegularSockets_ = RPC_NUM_BACKEND;
-    cfg.numStreamSockets_ = 0;
-    builder_.AddService(perfService_.get(), cfg);
+    perfService_ = std::make_unique<PerfServiceImpl>(hostPort_);
+    if (rpcServer_ && rpcServer_->IsBrpc()) {
+        brpcPerfAdapter_ = std::make_unique<PerfServiceBrpcAdapter>(*perfService_);
+        if (rpcAuthCapture_) {
+            RETURN_IF_NOT_OK(RegisterRpcAuthService(
+                *rpcServer_, *brpcPerfAdapter_, *PerfServiceAuth::descriptor(),
+                akSkManager_, rpcAuthServices_));
+        } else {
+            RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcPerfAdapter_.get()));
+        }
+    } else {
+        RpcServiceCfg cfg;
+        cfg.numRegularSockets_ = RPC_NUM_BACKEND;
+        cfg.numStreamSockets_ = 0;
+        builder_.AddService(perfService_.get(), cfg);
+    }
     return Status::OK();
 }
 #endif
@@ -960,13 +1045,13 @@ void WorkerOCServer::CreateMasterServices()
     using namespace datasystem::master;
     LOG(INFO) << "Start create master services";
     // create MasterServiceImpl
-    commonSvc_ = std::make_unique<MasterServiceImpl>(hostPort_, akSkManager_);
+    commonSvc_ = std::make_unique<MasterServiceImpl>(hostPort_);
     resourceManager_->SetTopologyMembership(&topologyEngine_->Membership());
     auto metadataRpcObserver = [topologyEngine = topologyEngine_.get()](const HostPort &target,
                                                                        const Status &status) {
         topologyEngine->ObservePeerRpcResult(target, status);
     };
-    objCacheMasterSvc_ = std::make_unique<MasterOCServiceImpl>(hostPort_, persistenceApi_, akSkManager_,
+    objCacheMasterSvc_ = std::make_unique<MasterOCServiceImpl>(hostPort_, persistenceApi_,
                                                                metadataManagerHolder_.get(), resourceManager_.get(),
                                                                topologyEngine_->Membership(), hostPort_.ToString(),
                                                                std::move(metadataRpcObserver));
@@ -1072,10 +1157,10 @@ Status WorkerOCServer::CreateWorkerServices()
             *metadataRouteResolver_, topologyEngine_->Membership());
         // create MasterWorkerSCServiceImpl
         streamCacheMasterWorkerSvc_ = std::make_shared<stream_cache::MasterWorkerSCServiceImpl>(
-            hostPort_, hostPort_, streamCacheClientWorkerSvc_.get(), akSkManager_);
+            hostPort_, hostPort_, streamCacheClientWorkerSvc_.get());
         // create WorkerWorkerSCService
         streamCacheWorkerWorkerSvc_ =
-            std::make_unique<stream_cache::WorkerWorkerSCServiceImpl>(streamCacheClientWorkerSvc_.get(), akSkManager_);
+            std::make_unique<stream_cache::WorkerWorkerSCServiceImpl>(streamCacheClientWorkerSvc_.get());
     }
     return Status::OK();
 }
@@ -1140,7 +1225,7 @@ void WorkerOCServer::CreateObjectCacheWorkerServices(
     });
     // create WorkerWorkerOCService
     objCacheWorkerWkSvc_ = std::make_shared<datasystem::object_cache::WorkerWorkerOCServiceImpl>(
-        objCacheClientWorkerSvc_, akSkManager_, topologyEngine_->Membership(),
+        objCacheClientWorkerSvc_, topologyEngine_->Membership(),
         [this] { return topologyEngine_ != nullptr && !topologyEngine_->IsMemberLeaseTimedOut(); },
         [this] {
             return topologyEngine_ == nullptr ? cluster::ControlBackendObservation{}
@@ -1148,10 +1233,10 @@ void WorkerOCServer::CreateObjectCacheWorkerServices(
         });
     // create MasterWorkerOCService
     objCacheWorkerMsSvc_ =
-        std::make_shared<datasystem::object_cache::MasterWorkerOCServiceImpl>(objCacheClientWorkerSvc_, akSkManager_);
+        std::make_shared<datasystem::object_cache::MasterWorkerOCServiceImpl>(objCacheClientWorkerSvc_);
     // create WorkerWorkerTransportService
     objCacheWorkerTransSvc_ = std::make_shared<datasystem::object_cache::WorkerWorkerTransportServiceImpl>(
-        objCacheClientWorkerSvc_, hostPort_, topologyEngine_->Membership(), akSkManager_);
+        objCacheClientWorkerSvc_, hostPort_, topologyEngine_->Membership());
 }
 
 void WorkerOCServer::CreateRebalanceExecutor(
@@ -1164,7 +1249,6 @@ void WorkerOCServer::CreateRebalanceExecutor(
                                              objectEndpointPolicy_.get(),
                                              &topologyExitRequested_,
                                              objCacheClientWorkerSvc_->GetUbAdmission(),
-                                             akSkManager_,
                                              objectTable,
                                              evictionManager,
                                              objCacheClientWorkerSvc_->GetWorkerMasterApiManager() };
@@ -1705,7 +1789,7 @@ void WorkerOCServer::ProbeAndReportWorker(cluster::WorkerProbeRequest request)
     const char *reason = "START_FAILED";
     const auto deadline = std::chrono::steady_clock::now() + WORKER_PROBE_TIMEOUT;
     PendingControlBackendProbe pending;
-    auto status = StartControlBackendProbe(hostPort_, akSkManager_, request.target, deadline, pending);
+    auto status = StartControlBackendProbe(hostPort_, request.target, deadline, pending);
     if (status.IsOk()) {
         reason = "TIMEOUT";
     }
@@ -1840,13 +1924,13 @@ Status WorkerOCServer::ConstructTopologyRuntime()
                                            cluster::RestartEffectMode mode) {
         return HandleMembershipRestarts(restartFacts, mode == cluster::RestartEffectMode::WAIT_FOR_COMPLETION);
     };
-    auto controlBackendProbe = [localAddress = hostPort_, akSkManager = akSkManager_](const auto &, const auto &peers,
+    auto controlBackendProbe = [localAddress = hostPort_](const auto &, const auto &peers,
                                                                                       auto deadline) {
-        return ProbeControlBackendPeers(localAddress, akSkManager, peers, deadline);
+        return ProbeControlBackendPeers(localAddress, peers, deadline);
     };
-    auto peerTopologyRefresh = [localAddress = hostPort_, akSkManager = akSkManager_](
+    auto peerTopologyRefresh = [localAddress = hostPort_](
                                    uint64_t currentVersion, const auto &peers, auto deadline, auto &peerSnapshot) {
-        return RefreshPeerHashRing({ localAddress, akSkManager, currentVersion, peers, deadline }, peerSnapshot);
+        return RefreshPeerHashRing({ localAddress, currentVersion, peers, deadline }, peerSnapshot);
     };
     builder.SetClusterName(FLAGS_cluster_name)
         .SetLocalAddress(hostPort_.ToString())
@@ -2293,6 +2377,13 @@ Status WorkerOCServer::Init()
     ImmutableStringPool::Instance().Init();
     intern::StringPool::InitAll();
     RETURN_IF_NOT_OK(InitAkSk());
+    std::shared_ptr<Signature> rpcSignature;
+    AkSkData key;
+    RETURN_IF_NOT_OK(akSkManager_->SnapshotClientKey(key));
+    if (!key.NotComplete()) {
+        rpcSignature = akSkManager_;
+    }
+    RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(FLAGS_max_rpc_session_num, hostPort_, rpcSignature));
     // The static members are destructed in the reverse order of their construction,
     // Below call guarantees that the destructor of Env is behind other Rocksdb singletons.
     (void)rocksdb::Env::Default();
@@ -2315,6 +2406,10 @@ Status WorkerOCServer::InitRpcAndMemoryRuntime()
     // triggers it lazily inside a multi-threaded context (TSAN: bthread worker pool spawn races
     // the spawning thread; silenced by //tools/tsan:default_suppressions).
     BrpcChannelFactory::EnsureGlobalInitialized();
+    if (akSkManager_->ServerAuthEnabled() || FLAGS_authorization_enable) {
+        RETURN_IF_NOT_OK(RegisterRpcAuthCapture());
+        rpcAuthCapture_ = std::make_unique<BrpcAuthCapture>();
+    }
 
     // Init shared memory
     uint64_t sharedMemoryBytes = FLAGS_shared_memory_size_mb * 1024ul * 1024ul;  // convert mb to bytes.
@@ -2333,7 +2428,6 @@ Status WorkerOCServer::InitClusterRuntimeAndServices()
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeFastTransportManager(hostPort_),
                                      "Fast transport (URMA/RDMA) init failed");
-    RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(FLAGS_max_rpc_session_num, hostPort_));
     InitSlotWorkerNamespace();
     if (IsSupportL2Storage(GetCurrentStorageType())) {
         persistenceApi_ = PersistenceApi::CreateShared();
@@ -2402,7 +2496,9 @@ Status WorkerOCServer::StartBrpcIfEnabled()
     if (rpcServer_) {
         TryInitJemallocStatsBvar();
         int brpcPort = bindHostPort_.Port();
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rpcServer_->StartBrpcServer(bindHostPort_.Host(), brpcPort),
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rpcServer_->StartBrpcServer(bindHostPort_.Host(), brpcPort,
+            BrpcLogPolicy::DISABLE_PROCESS_LOGGING,
+            rpcAuthCapture_.get()),
                                          "Failed to start brpc server");
     }
     return Status::OK();
@@ -2414,7 +2510,7 @@ Status WorkerOCServer::InitLivenessCheck()
         const int secToMs = 1000;
         livenessCheck_ = std::make_unique<WorkerLivenessCheck>(this, FLAGS_health_check_path,
                                                                FLAGS_liveness_probe_timeout_s * secToMs, bindHostPort_,
-                                                               hostPort_.ToString(), akSkManager_);
+                                                               hostPort_.ToString());
         RETURN_IF_NOT_OK(livenessCheck_->Init());
     }
     return Status::OK();
@@ -2425,7 +2521,6 @@ Status WorkerOCServer::InitMetadataManagerHolder()
     MetadataManagerHolderParam param;
     param.dbRootPath = FLAGS_rocksdb_store_dir;
     param.currWorkerId = hostPort_.ToString();
-    param.akSkManager = akSkManager_;
     param.etcdStore = etcdStore_.get();
     param.persistenceApi = persistenceApi_;
     param.masterAddress = hostPort_;

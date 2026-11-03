@@ -70,7 +70,13 @@
 namespace brpc {
 class Channel;
 }
+namespace google {
+namespace protobuf {
+class ServiceDescriptor;
+}
+}
 namespace datasystem {
+struct BrpcChannelConfig;
 class WorkerService_BrpcGenericStub;
 }
 
@@ -521,6 +527,10 @@ public:
                                          std::string tenantId = "", bool enableCrossNodeConnection = false,
                                          std::string deviceId = "");
 
+    ClientWorkerRemoteCommonApi(HostPort hostPort, HeartbeatType heartbeatType, SensitiveValue token,
+                                std::shared_ptr<Signature> signature, std::string tenantId = "",
+                                bool enableCrossNodeConnection = false, std::string deviceId = "");
+
     virtual ~ClientWorkerRemoteCommonApi();
 
     virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize = 0,
@@ -677,6 +687,14 @@ protected:
         RegisterClientRspPb rsp;
     };
     std::optional<FtHandshakeContext> pendingFtHandshake_;
+
+    Status InitializeRpcAuthMode();
+    Status CreateRpcChannel(const BrpcChannelConfig &config, const google::protobuf::ServiceDescriptor *plain,
+                            const google::protobuf::ServiceDescriptor *authenticated,
+                            std::unique_ptr<brpc::Channel> &out);
+    std::shared_ptr<Signature> rpcSignatureOwner_;
+    bool rpcAuthModeInitialized_ = false;
+    bool rpcAuthEnabled_ = false;
 
 private:
     /**

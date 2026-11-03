@@ -62,8 +62,7 @@ public:
      * @brief Construct OCGlobalCacheDeleteManager for notifying global cache to delete object.
      */
     OCGlobalCacheDeleteManager(std::shared_ptr<ObjectMetaStore> objectStore, std::shared_ptr<PersistenceApi> persistApi,
-                               bool backendStoreExist, const std::string &masterAddress,
-                               std::shared_ptr<AkSkManager> akSkManager);
+                               bool backendStoreExist, const std::string &masterAddress);
 
     ~OCGlobalCacheDeleteManager();
 
@@ -201,7 +200,6 @@ private:
     std::shared_ptr<PersistenceApi> persistenceApi_{ nullptr };
     std::shared_ptr<ObjectMetaStore> objectStore_;
     HostPort masterAddr_;
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     object_cache::MasterWorkerOCServiceImpl *masterWorkerOCService_{ nullptr };
 
     const int SEND_DELETE_L2CACHE_TIME_MS = 100;  // Time interval between two delete l2cache object.

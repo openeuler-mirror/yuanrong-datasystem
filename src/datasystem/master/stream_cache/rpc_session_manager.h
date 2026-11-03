@@ -39,11 +39,9 @@ public:
      * @brief Get RpcSession by endPoint.
      * @param[in] endPoint Worker endpoint address.
      * @param[out] rpcStub Pointer to target rpcSession.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      * @return Status of the call.
      */
-    Status GetRpcSession(const HostPort &endPoint, std::shared_ptr<MasterWorkerSCApi> &rpcStub,
-                         const std::shared_ptr<AkSkManager> &akSkManager);
+    Status GetRpcSession(const HostPort &endPoint, std::shared_ptr<MasterWorkerSCApi> &rpcStub);
 
     void SetLocalArgs(const HostPort &localMaster,
                       std::shared_ptr<worker::stream_cache::MasterWorkerSCServiceImpl> service)

@@ -583,7 +583,7 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
                                std::memory_order_relaxed);
     initOkFuture_ = initOk_.get_future();
     workerMasterApiManager_ =
-        std::make_shared<WorkerMasterOcApiManager>(localAddress_, akSkManager_, metadataRoute_, masterOCService);
+        std::make_shared<WorkerMasterOcApiManager>(localAddress_, metadataRoute_, masterOCService);
     memoryRefTable_ = std::make_shared<SharedMemoryRefTable>();
     globalRefTable_ = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
     asyncSendManager_ = std::make_shared<AsyncSendManager>(persistApi, evictionManager_);
@@ -700,7 +700,7 @@ void WorkerOCServiceImpl::InitServiceImpl()
                                                  akSkManager_, localAddress_, migrateRateController_, ubAdmission_);
     ConfigurePeerUbHealthCallbacks();
     queryAndGetProc_ =
-        std::make_shared<WorkerQueryAndGetImpl>(getProc_, memoryRefTable_, akSkManager_, localAddress_, ubAdmission_);
+        std::make_shared<WorkerQueryAndGetImpl>(getProc_, memoryRefTable_, localAddress_, ubAdmission_);
     if (auto provider = std::atomic_load(&selfUbHealthSummaryProvider_)) {
         getProc_->SetUbHealthSummaryProvider(*provider);
         queryAndGetProc_->SetUbHealthSummaryProvider(*provider);
@@ -745,7 +745,7 @@ Status WorkerOCServiceImpl::Init()
     auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(localMasterAddress_);
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "get worker master api failed, Init failed");
     RETURN_IF_NOT_OK(InitThreadResources());
-    RETURN_IF_NOT_OK(evictionManager_->Init(globalRefTable_, akSkManager_));
+    RETURN_IF_NOT_OK(evictionManager_->Init(globalRefTable_));
     RETURN_IF_NOT_OK(InitL2Cache());
     WorkerRequestManager::SetDeleteObjectsFunc([this](const std::string &objectKey, uint64_t version) -> Status {
         return DeleteObject(objectKey, version, DeleteEligibility::DEFERRED_GET_CLEANUP);
@@ -1364,7 +1364,6 @@ Status WorkerOCServiceImpl::MigrateData(const MigrateDataReqPb &req, MigrateData
 {
     ScopedRequestContext ctx;
     Raii attachHealth([this, &rsp] { AttachPublishedSelfUbHealth(*this, rsp); });
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     return gMigrateProc_->MigrateData(req, rsp, std::move(payloads));
 }
 
@@ -1406,7 +1405,7 @@ void WorkerOCServiceImpl::ResumeIncomingMigrationAdmission()
 Status WorkerOCServiceImpl::MigrateData(const std::vector<std::string> &objectKeys, const std::string &taskId)
 {
     DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, membership_, endpointPolicy_,
-                          exitRequested_, localAddress_, akSkManager_, objectTable_, taskId);
+                          exitRequested_, localAddress_, objectTable_, taskId);
     ConfigureDataMigrator(migrator);
     migrator.Init();
     return migrator.Migrate(objectKeys, {});
@@ -1417,7 +1416,7 @@ Status WorkerOCServiceImpl::MigrateData(const std::vector<std::string> &objectKe
                                         const cluster::CancellationToken &cancellation)
 {
     DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, membership_, endpointPolicy_,
-                          exitRequested_, localAddress_, akSkManager_, objectTable_, taskId,
+                          exitRequested_, localAddress_, objectTable_, taskId,
                           DataMigrator::UNLIMITED_RETRY_COUNT, deadline, &cancellation);
     ConfigureDataMigrator(migrator);
     migrator.Init();
@@ -1428,7 +1427,7 @@ Status WorkerOCServiceImpl::MigrateL2CacheData(const std::vector<std::string> &n
                                                const std::string &taskId)
 {
     DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, membership_, endpointPolicy_,
-                          exitRequested_, localAddress_, akSkManager_, objectTable_, taskId);
+                          exitRequested_, localAddress_, objectTable_, taskId);
     ConfigureDataMigrator(migrator);
     migrator.Init();
     return migrator.MigrateL2CacheBySlot(needMigrateL2CacheIds);
@@ -1440,7 +1439,7 @@ Status WorkerOCServiceImpl::MigrateL2CacheData(const std::vector<std::string> &n
                                                const cluster::CancellationToken &cancellation)
 {
     DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, membership_, endpointPolicy_,
-                          exitRequested_, localAddress_, akSkManager_, objectTable_, taskId,
+                          exitRequested_, localAddress_, objectTable_, taskId,
                           DataMigrator::UNLIMITED_RETRY_COUNT, deadline, &cancellation);
     ConfigureDataMigrator(migrator);
     migrator.Init();
@@ -3497,7 +3496,6 @@ Status WorkerOCServiceImpl::GetHashRing(const GetHashRingReqPb &req, GetHashRing
 {
     ScopedRequestContext ctx;
     RETURN_RUNTIME_ERROR_IF_NULL(akSkManager_);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     RETURN_RUNTIME_ERROR_IF_NULL(topologyEngine_);
     std::shared_ptr<const cluster::TopologySnapshot> snapshot;
     RETURN_IF_NOT_OK(membership_.GetSnapshot(snapshot));

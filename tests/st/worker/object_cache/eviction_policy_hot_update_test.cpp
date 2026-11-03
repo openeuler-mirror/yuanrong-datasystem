@@ -35,6 +35,8 @@
 #include "common.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/rpc/brpc_factory.h"
+#include "datasystem/common/rpc/brpc_auth.h"
+#include "datasystem/protos/master_object.auth.pb.h"
 #include "datasystem/common/rpc/rpc_options.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/hash_algorithm.h"
@@ -121,7 +123,14 @@ protected:
         config.endpoint = resourceManagerAddress_.ToString();
         config.timeout_ms = RPC_TIMEOUT_MS;
         config.connect_timeout_ms = RPC_TIMEOUT_MS;
-        brpcChannel_ = BrpcChannelFactory::Create(config);
+        RpcSigningBinding binding;
+        binding.credentials = std::make_shared<Signature>(ACCESS_KEY, SensitiveValue(SECRET_KEY));
+        RETURN_IF_NOT_OK(RpcMethodMap::Create(
+            {{google::protobuf::DescriptorPool::generated_pool()->FindServiceByName("datasystem.master.MasterOCService"),
+              master::MasterOCServiceAuth::descriptor()}}, binding.methods));
+        std::unique_ptr<brpc::Channel> authenticated;
+        RETURN_IF_NOT_OK(CreateBrpcAuthChannel(config, std::move(binding), authenticated));
+        brpcChannel_ = std::move(authenticated);
         CHECK_FAIL_RETURN_STATUS(brpcChannel_ != nullptr, K_RUNTIME_ERROR,
                                  "Failed to create master brpc channel");
         brpcStub_ = std::make_unique<master::MasterOCService_BrpcGenericStub>(brpcChannel_.get(), RPC_TIMEOUT_MS);
@@ -160,7 +169,6 @@ protected:
         update->set_maximum_source_objects(maximumSourceObjects);
         update->set_deadline_unix_ms(deadlineUnixMs);
         req.set_cohort_percent(cohortPercent);
-        RETURN_IF_NOT_OK(signature_.GenerateSignature(req));
 
         master::StartEvictionPolicyUpdateRspPb rsp;
         RpcOptions opts;
@@ -180,7 +188,6 @@ protected:
     {
         master::GetEvictionPolicyUpdateProgressReqPb req;
         req.set_epoch(epoch);
-        RETURN_IF_NOT_OK(signature_.GenerateSignature(req));
 
         RpcOptions opts;
         opts.SetTimeout(RPC_TIMEOUT_MS);
@@ -562,7 +569,6 @@ protected:
     }
 
 private:
-    Signature signature_{ ACCESS_KEY, SensitiveValue(SECRET_KEY) };
     std::shared_ptr<brpc::Channel> brpcChannel_;
     std::unique_ptr<master::MasterOCService_BrpcGenericStub> brpcStub_;
     std::vector<std::shared_ptr<KVClient>> clients_;

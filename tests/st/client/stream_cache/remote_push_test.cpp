@@ -66,7 +66,7 @@ protected:
     std::shared_ptr<StreamClient> producerClient_ = nullptr;
     std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
-    std::unique_ptr<Signature> signature_ = std::make_unique<Signature>(accessKey_, secretKey_);
+    std::shared_ptr<Signature> signature_ = std::make_shared<Signature>(accessKey_, secretKey_);
 };
 std::string RemotePushTest::streamName_ = "stream";
 
@@ -102,7 +102,7 @@ void RemotePushTest::InitTest()
     InitStreamClient(0, producerClient_);
     ASSERT_EQ(producerClient_->CreateProducer(streamName_, producer_, conf), Status::OK());
 
-    auto api = std::make_unique<ClientWorkerApi>(pubWorkerAddress_, "", signature_.get());
+    auto api = std::make_unique<ClientWorkerApi>(pubWorkerAddress_, "", signature_);
     ASSERT_EQ(api->Init(CLIENT_RPC_TIMEOUT, CLIENT_RPC_TIMEOUT), Status::OK());
 
     InitStreamClient(1, consumerClient_);
@@ -271,7 +271,7 @@ protected:
     std::shared_ptr<StreamClient> producerClient_ = nullptr;
     std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
-    // std::unique_ptr<Signature> signature_ = std::make_unique<Signature>(accessKey_, secretKey_);
+    // std::shared_ptr<Signature> signature_ = std::make_shared<Signature>(accessKey_, secretKey_);
     size_t maxPageCount_ = 2;
     size_t pageSize_ = 1024 * 1024;
 };

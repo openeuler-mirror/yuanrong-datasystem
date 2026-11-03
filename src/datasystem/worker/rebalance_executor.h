@@ -27,7 +27,6 @@
 #include <utility>
 #include <vector>
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/protos/master_object.pb.h"
@@ -52,7 +51,6 @@ struct RebalanceExecutorConfig {
     const object_cache::ObjectEndpointPolicy *endpointPolicy;
     const std::atomic<bool> *exitRequested;
     PeerUbAdmission *ubAdmission{ nullptr };
-    std::shared_ptr<AkSkManager> akSkManager;
     std::shared_ptr<object_cache::ObjectTable> objectTable;
     std::shared_ptr<object_cache::WorkerOcEvictionManager> evictionManager;
     std::shared_ptr<WorkerMasterApiManagerBase<WorkerMasterOCApi>> apiManager;
@@ -210,7 +208,6 @@ private:
     const object_cache::ObjectEndpointPolicy *endpointPolicy_{ nullptr };
     const std::atomic<bool> *exitRequested_{ nullptr };
     PeerUbAdmission *ubAdmission_{ nullptr };
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::shared_ptr<object_cache::ObjectTable> objectTable_{ nullptr };
     std::shared_ptr<object_cache::WorkerOcEvictionManager> evictionManager_{ nullptr };
     std::shared_ptr<WorkerMasterApiManagerBase<WorkerMasterOCApi>> apiManager_{ nullptr };

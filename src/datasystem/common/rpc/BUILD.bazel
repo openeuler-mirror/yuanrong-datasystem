@@ -137,6 +137,8 @@ ds_cc_library(
         "rpc_service_base.h",
     ],
     deps = [
+        ":brpc_auth_capture",
+        ":brpc_factory",
         ":brpc_status_util",
         ":bthread_utils",
         ":rpc_auth_key_manager",
@@ -272,6 +274,8 @@ ds_cc_library(
     srcs = ["brpc_factory.cpp"],
     hdrs = ["brpc_factory.h"],
     deps = [
+        ":brpc_auth_capture",
+        "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/log:common_log",
         "@com_github_apache_brpc//:brpc",
     ],
@@ -450,6 +454,7 @@ ds_cc_library(
         "rpc_stub_cache_mgr.h",
     ],
     deps = [
+        ":brpc_auth",
         ":brpc_factory",
         ":rpc_message",
         "//include/datasystem/utils:utils_headers",
@@ -483,5 +488,34 @@ ds_cc_library(
         "//src/datasystem/protos:stream_posix_brpc",
         "//src/datasystem/protos:worker_object_brpc",
         "//src/datasystem/protos:worker_stream_brpc",
+    ],
+)
+
+ds_cc_library(
+    name = "brpc_auth",
+    srcs = ["brpc_auth.cpp"],
+    hdrs = ["brpc_auth.h"],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        ":brpc_auth_capture",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/common/util:request_context",
+        ":brpc_factory",
+        "//src/datasystem/common/ak_sk:common_ak_sk",
+        "//src/datasystem/common/util:status_helper",
+        "@com_github_apache_brpc//:brpc",
+        "@com_google_protobuf//:protobuf",
+    ],
+)
+
+ds_cc_library(
+    name = "brpc_auth_capture",
+    srcs = ["brpc_auth_capture.cpp"],
+    hdrs = ["brpc_auth_capture.h"],
+    deps = [
+        "//src/datasystem/common/ak_sk:common_ak_sk",
+        "//src/datasystem/common/util:status_helper",
+        "@com_github_apache_brpc//:brpc",
+        "@com_google_protobuf//:protobuf",
     ],
 )

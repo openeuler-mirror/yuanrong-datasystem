@@ -17,12 +17,16 @@
 #ifndef DATASYSTEM_TESTS_ST_CLUSTER_TOPOLOGY_TOKEN_HELPER_H
 #define DATASYSTEM_TESTS_ST_CLUSTER_TOPOLOGY_TOKEN_HELPER_H
 
+#include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
+#include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/hash_ring_token.h"
 #include "datasystem/protos/cluster_topology.pb.h"
+#include "datasystem/utils/status.h"
 
 namespace datasystem::st {
 
@@ -36,6 +40,32 @@ inline std::vector<uint32_t> RebuildTopologyMemberTokens(const ClusterTopologyPb
     std::vector<uint32_t> tokens;
     MakeHashRingTokens(address, seeds, tokens);
     return tokens;
+}
+
+inline Status FindKeyForTopologyMember(const ClusterTopologyPb &topology, const std::string &address, std::string &key)
+{
+    std::map<uint32_t, std::string> tokenWorkers;
+    for (const auto &member : topology.members()) {
+        for (auto token : RebuildTopologyMemberTokens(topology, member.first, member.second)) {
+            tokenWorkers.emplace(token, member.first);
+        }
+    }
+    if (tokenWorkers.empty()) {
+        return Status(K_NOT_FOUND, "Cluster topology has no member tokens");
+    }
+    constexpr size_t keySearchLimit = 100000;
+    for (size_t i = 0; i < keySearchLimit; ++i) {
+        std::string candidate = "redirect_key_" + std::to_string(i);
+        auto owner = tokenWorkers.lower_bound(MurmurHash3_32(candidate));
+        if (owner == tokenWorkers.end()) {
+            owner = tokenWorkers.begin();
+        }
+        if (owner->second == address) {
+            key = candidate;
+            return Status::OK();
+        }
+    }
+    return Status(K_NOT_FOUND, "Unable to find a key for the topology member");
 }
 
 }  // namespace datasystem::st

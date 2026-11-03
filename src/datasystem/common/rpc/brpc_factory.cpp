@@ -19,6 +19,7 @@
  * See brpc_factory.h for the design rationale.
  */
 #include "datasystem/common/rpc/brpc_factory.h"
+#include "datasystem/common/rpc/brpc_auth_capture.h"
 
 #include <gflags/gflags.h>
 #include <mutex>
@@ -146,6 +147,7 @@ void BrpcChannelFactory::EnsureGlobalInitialized()
 {
     static std::once_flag once;
     std::call_once(once, []() {
+        LOG_IF_ERROR(RegisterRpcAuthChecksumColdOnce(), "RPC authentication capture registration failed");
         EnsureBrpcEventDispatcherNum();
         brpc::ChannelOptions opts;
         brpc::Channel ch;
@@ -157,7 +159,7 @@ void BrpcChannelFactory::EnsureGlobalInitialized()
     });
 }
 
-std::unique_ptr<brpc::Channel> BrpcChannelFactory::Create(const BrpcChannelConfig &cfg)
+Status InitializeBrpcChannel(const BrpcChannelConfig &cfg, brpc::Channel &channel)
 {
     // Pre-warm brpc global init on the calling thread before touching any
     // channel. Idempotent via std::call_once. For callers that already
@@ -166,12 +168,11 @@ std::unique_ptr<brpc::Channel> BrpcChannelFactory::Create(const BrpcChannelConfi
     // dsbench) this guarantees the once-init runs on a known thread before
     // the first Channel::Init instead of racing inside a multi-threaded
     // context. See header for the TSAN rationale.
-    EnsureGlobalInitialized();
+    BrpcChannelFactory::EnsureGlobalInitialized();
     EnsureBrpcDeliverTimeoutMs();
     EnsureBrpcMaxBodySize();
     EnsureBrpcCircuitBreakerIsolationCap();
     EnsureBrpcMaxConnectionPoolSize();
-    auto ch = std::make_unique<brpc::Channel>();
     brpc::ChannelOptions opts;
     opts.timeout_ms = cfg.timeout_ms;
     opts.connect_timeout_ms = cfg.connect_timeout_ms;
@@ -193,15 +194,24 @@ std::unique_ptr<brpc::Channel> BrpcChannelFactory::Create(const BrpcChannelConfi
     if (cfg.backup_request_ms > 0) {
         opts.backup_request_ms = cfg.backup_request_ms;
     }
-    if (ch->Init(cfg.endpoint.c_str(), &opts) != 0) {
+    if (channel.Init(cfg.endpoint.c_str(), &opts) != 0) {
         LOG(ERROR) << "Failed to create brpc channel to " << cfg.endpoint;
-        return nullptr;
+        return Status(K_RUNTIME_ERROR, "Failed to initialize BRPC channel.");
     }
     LOG_EVERY_N(INFO, BRPC_CHANNEL_CREATION_LOG_EVERY_N)
         << "BrpcChannel created: " << cfg.endpoint << " timeout=" << cfg.timeout_ms
         << "ms connect_timeout=" << cfg.connect_timeout_ms << "ms retry=" << cfg.max_retry
         << " cb=" << (opts.enable_circuit_breaker ? "on" : "off");
-    return ch;
+    return Status::OK();
+}
+
+std::unique_ptr<brpc::Channel> BrpcChannelFactory::Create(const BrpcChannelConfig &cfg)
+{
+    auto channel = std::make_unique<brpc::Channel>();
+    if (InitializeBrpcChannel(cfg, *channel).IsError()) {
+        return nullptr;
+    }
+    return channel;
 }
 
 std::unique_ptr<brpc::Controller> BrpcControllerFactory::Create(const BrpcControllerConfig &cfg)

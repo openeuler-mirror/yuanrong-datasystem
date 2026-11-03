@@ -248,6 +248,15 @@ public:
     }
 
 protected:
+    Status Init() override
+    {
+        RETURN_IF_NOT_OK(OCClientCommon::Init());
+        const auto options = static_cast<ExternalCluster &>(*cluster_).GetExternalOptions();
+        static const auto credentials = std::make_shared<AkSkManager>();
+        RETURN_IF_NOT_OK(credentials->SetClientAkSk(options.systemAccessKey, options.systemSecretKey));
+        return RpcStubCacheMgr::Instance().Init(100, HostPort(), credentials);
+    }
+
     Status GetCoordinatorAddressList(std::string &addresses, uint32_t firstIndex = 0)
     {
         addresses.clear();
@@ -1463,10 +1472,7 @@ TEST_F(CoordinatorRejoinMigrationTest, LEVEL1_RejoinedWorkerAcceptsIncomingMigra
     HostPort targetAddress;
     DS_ASSERT_OK(cluster_->GetWorkerAddr(sourceIndex, sourceAddress));
     DS_ASSERT_OK(cluster_->GetWorkerAddr(targetIndex, targetAddress));
-    auto akSk = std::make_shared<AkSkManager>(0);
-    DS_ASSERT_OK(akSk->SetClientAkSk("QTWAOYTTINDUT2QVKYUC",
-                                    "MFyfvK41ba2giqM7**********KGpownRZlmVmHc"));
-    object_cache::WorkerRemoteWorkerOCApi targetApi(targetAddress, sourceAddress, akSk);
+    object_cache::WorkerRemoteWorkerOCApi targetApi(targetAddress, sourceAddress);
     DS_ASSERT_OK(targetApi.Init());
     auto probeMigration = [&] {
         MigrateDataReqPb req;

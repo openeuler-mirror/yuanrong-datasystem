@@ -32,6 +32,7 @@
 
 #include "ut/common.h"
 #include "datasystem/common/rpc/rpc_stub_base.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/flags/common_flags.h"
@@ -88,6 +89,52 @@ private:
         }
     }
 };
+
+class RpcAuthCacheProbe : public RpcStubCacheMgr {
+public:
+    size_t CreatorCount() const { return creators_.size(); }
+    Status Create(StubType type, std::shared_ptr<RpcStubBase> &out)
+    {
+        return creators_.at(type)(HostPort("127.0.0.1", 1), out);
+    }
+};
+
+TEST_F(RpcStubCacheMgrTest, AuthenticationCreatorsFreezeOwnerAndRetainItOnlyForSignedChannels)
+{
+    auto provider = std::make_shared<Signature>("test-only-cache-access", SensitiveValue("test-only-cache-secret"));
+    {
+        RpcAuthCacheProbe retry;
+        ASSERT_TRUE(inject::Set("RpcStubCacheMgr.InitCreators", "return(K_OUT_OF_MEMORY)").IsOk());
+        Raii clear([] { (void)inject::Clear("RpcStubCacheMgr.InitCreators"); });
+        EXPECT_EQ(retry.Init(8, HostPort(), provider).GetCode(), K_OUT_OF_MEMORY);
+        EXPECT_EQ(retry.CreatorCount(), 0);
+        ASSERT_TRUE(inject::Clear("RpcStubCacheMgr.InitCreators").IsOk());
+        EXPECT_TRUE(retry.Init(8, HostPort(), provider).IsOk());
+        EXPECT_EQ(retry.CreatorCount(), 11);
+    }
+    const std::weak_ptr<Signature> weak = provider;
+    std::shared_ptr<RpcStubBase> worker;
+    std::shared_ptr<RpcStubBase> coordinator;
+    {
+        RpcAuthCacheProbe plain;
+        ASSERT_TRUE(plain.Init(8).IsOk());
+        EXPECT_EQ(plain.Init(8, HostPort(), provider).GetCode(), K_NOT_SUPPORTED);
+        RpcAuthCacheProbe authenticated;
+        ASSERT_TRUE(authenticated.Init(8, HostPort(), provider).IsOk());
+        EXPECT_TRUE(authenticated.Init(8).IsOk());
+        auto other = std::make_shared<Signature>("test-only-other-access", SensitiveValue("test-only-other-secret"));
+        EXPECT_EQ(authenticated.Init(8, HostPort(), other).GetCode(), K_NOT_SUPPORTED);
+        ASSERT_TRUE(authenticated.Create(StubType::WORKER_WORKER_OC_SVC, worker).IsOk());
+        ASSERT_TRUE(authenticated.Create(StubType::TO_COORDINATOR_SVC, coordinator).IsOk());
+        provider.reset();
+    }
+    EXPECT_TRUE(worker->GetInitStatus().IsOk());
+    EXPECT_TRUE(coordinator->GetInitStatus().IsOk());
+    EXPECT_FALSE(weak.expired());
+    worker.reset();
+    EXPECT_TRUE(weak.expired());
+    coordinator.reset();
+}
 
 TEST_F(RpcStubCacheMgrTest, BasicTest)
 {

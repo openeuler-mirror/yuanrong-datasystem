@@ -27,8 +27,6 @@ class MasterWorkerSCApiTest : public ExternalClusterTest {
 public:
     void SetUp() override
     {
-        std::shared_ptr<AkSkManager> akSkManager_ = std::make_shared<AkSkManager>(0);
-        akSkManager_->SetClientAkSk(accessKey_, secretKey_);
         ClusterTest::SetUp();
         InitMasterWorkerSCApi();
     }
@@ -48,13 +46,10 @@ protected:
         HostPort localHost("127.0.0.2", 18888);
         int stubCacheNum = 100;
         RpcStubCacheMgr::Instance().Init(stubCacheNum);
-        masterWorkerSCApi_ = MasterWorkerSCApi::CreateMasterWorkerSCApi(localHost, localHost, akSkManager_, nullptr);
+        masterWorkerSCApi_ = MasterWorkerSCApi::CreateMasterWorkerSCApi(localHost, localHost, nullptr);
     }
 
     std::shared_ptr<MasterWorkerSCApi> masterWorkerSCApi_;
-    std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
-    std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 };
 
 TEST_F(MasterWorkerSCApiTest, TestMasterWorkerDiffIp)

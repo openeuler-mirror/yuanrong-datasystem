@@ -91,6 +91,7 @@ ds_cc_test(
     srcs = ["eviction_policy_hot_update_test.cpp"],
     tags = ["manual", "level1"],
     deps = [
+        "//src/datasystem/common/rpc:brpc_auth",
         "//src/datasystem/client:datasystem",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/inject:common_inject",

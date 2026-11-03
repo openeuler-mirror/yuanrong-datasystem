@@ -76,7 +76,7 @@ class WorkerRemoteWorkerRpcDiagnosticTest : public CommonTest {};
 class MigrateTestRemoteWorkerOCApi : public WorkerRemoteWorkerOCApi {
 public:
     MigrateTestRemoteWorkerOCApi(const HostPort &remote, const HostPort &local)
-        : WorkerRemoteWorkerOCApi(remote, local, nullptr)
+        : WorkerRemoteWorkerOCApi(remote, local)
     {
     }
 
@@ -96,7 +96,7 @@ TEST_F(WorkerRemoteWorkerRpcDiagnosticTest, MigrateDataSessionNullReportsRpcDiag
 {
     HostPort local("127.0.0.1", 18480);
     HostPort remote("127.0.0.1", 18481);
-    WorkerRemoteWorkerOCApi api(remote, local, nullptr);
+    WorkerRemoteWorkerOCApi api(remote, local);
     MigrateDataReqPb req;
     MigrateDataRspPb rsp;
     std::vector<MemView> payloads;
@@ -352,7 +352,7 @@ public:
     {
         hostPort_ = HostPort("127.0.0.1", 18481);
         DS_ASSERT_OK(topologyRuntime_.Init(hostPort_));
-        remoteApi_ = std::make_shared<WorkerRemoteWorkerOCApi>(hostPort_, hostPort_, nullptr);
+        remoteApi_ = std::make_shared<WorkerRemoteWorkerOCApi>(hostPort_, hostPort_);
         objectTable_ = std::make_shared<ObjectTable>();
         strategy_ = std::make_shared<ScaleDownNodeSelector>(topologyRuntime_.Engine()->Membership(), hostPort_);
     }
@@ -1015,7 +1015,7 @@ public:
     void Init() override
     {
         hostPort_ = HostPort("127.0.0.1", 18481);
-        remoteApi_ = std::make_shared<WorkerRemoteWorkerOCApi>(hostPort_, hostPort_, nullptr);
+        remoteApi_ = std::make_shared<WorkerRemoteWorkerOCApi>(hostPort_, hostPort_);
         objectTable_ = std::make_shared<ObjectTable>();
         strategy_ = std::make_shared<SpillNodeSelector>(hostPort_);
         type_ = MigrateType::SPILL;
@@ -1060,11 +1060,10 @@ TEST_F(MigrateDataHandlerSpillTest, SpillMigrationErasesEvictionEntryAlongsideOb
     AsyncResourceReleaser::Instance().Shutdown();
     const HostPort localAddr("127.0.0.1", 18481);
     const HostPort masterAddr("127.0.0.1", 18480);
-    auto akSkManager = std::make_shared<AkSkManager>(0);
     auto evictionManager = std::make_shared<WorkerOcEvictionManager>(objectTable_, localAddr, masterAddr,
                                                                       GetTestMetadataRoute());
     auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
-    DS_ASSERT_OK(evictionManager->Init(globalRefTable, akSkManager));
+    DS_ASSERT_OK(evictionManager->Init(globalRefTable));
     Raii restore([]() { AsyncResourceReleaser::Instance().Shutdown(); });
     std::weak_ptr<WorkerOcEvictionManager> weakManager = evictionManager;
     AsyncResourceReleaser::Instance().Init(objectTable_, [weakManager](const ImmutableString &objectKey) {

@@ -246,6 +246,7 @@ ds_cc_test(
 ds_cc_test(
     name = "authenticate_test",
     srcs = ["object_cache/authenticate_test.cpp"],
+    linkstatic = True,
     deps = [
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/eventloop:common_event_loop",
@@ -257,9 +258,11 @@ ds_cc_test(
         "//src/datasystem/common/util:thread_local",
         "//src/datasystem/protos:object_posix_cc_proto",
         "//src/datasystem/protos:share_memory_cc_proto",
+        "//src/datasystem/protos:share_memory_brpc",
         "//src/datasystem/protos:ut_object_cc_proto",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker:authenticate",
+        "//src/datasystem/common/rpc:brpc_auth",
         "//tests/common/binmock",
         "//tests/ut:ut_common",
     ],

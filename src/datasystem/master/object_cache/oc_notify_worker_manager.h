@@ -83,7 +83,7 @@ public:
      * @brief Construct OCNotifyWorkerManager.
      */
     OCNotifyWorkerManager(std::shared_ptr<ObjectMetaStore> objectStore, bool backendStoreExist,
-                          std::shared_ptr<AkSkManager> akSkManager, OCMetadataManager *ocMetadataManager);
+                          OCMetadataManager *ocMetadataManager);
 
     ~OCNotifyWorkerManager();
 
@@ -591,7 +591,6 @@ private:
     object_cache::MasterWorkerOCServiceImpl *masterWorkerOCService_{ nullptr };
     HostPort masterAddr_;
     const bool backendStoreExist_;
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     OCMetadataManager *ocMetadataManager_{ nullptr };
     // for diffrent ocmetamanager to add and remove Subscriber.
     std::string subscriberPrefix_ = "";

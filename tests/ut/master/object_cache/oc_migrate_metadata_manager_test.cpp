@@ -54,13 +54,13 @@ master::MetaForMigrationPb BuildMigratedMeta(const std::string &objectKey, bool 
 class OCMetadataManagerForMigrationTest : public master::OCMetadataManager {
 public:
     OCMetadataManagerForMigrationTest()
-        : OCMetadataManager(nullptr, nullptr, nullptr, nullptr, "", nullptr, nullptr, "", nullptr,
+        : OCMetadataManager(nullptr, nullptr, nullptr, "", nullptr, nullptr, "", nullptr,
                             "migration-test")
     {
     }
 
-    OCMetadataManagerForMigrationTest(std::shared_ptr<AkSkManager> akSkManager, RocksStore *rocksStore)
-        : OCMetadataManager(std::move(akSkManager), rocksStore, nullptr, nullptr, SURVIVING_WORKER_ADDRESS, nullptr,
+    OCMetadataManagerForMigrationTest(RocksStore *rocksStore)
+        : OCMetadataManager(rocksStore, nullptr, nullptr, SURVIVING_WORKER_ADDRESS, nullptr,
                             nullptr, SURVIVING_WORKER_ADDRESS, nullptr, "migration-race-test")
     {
     }
@@ -79,7 +79,7 @@ public:
     {
         RETURN_IF_NOT_OK(objectStore_->Init());
         expiredObjectManager_ = std::make_unique<master::ExpiredObjectManager>(SURVIVING_WORKER_ADDRESS, this);
-        notifyWorkerManager_ = std::make_unique<master::OCNotifyWorkerManager>(objectStore_, true, akSkManager_, this);
+        notifyWorkerManager_ = std::make_unique<master::OCNotifyWorkerManager>(objectStore_, true, this);
         return Status::OK();
     }
 
@@ -156,14 +156,12 @@ public:
 
     void VerifyMetadataRpcObserverUsesTransportResultBoundary()
     {
-        auto akSkManager = std::make_shared<AkSkManager>();
-        migrateManager_.akSkManager_ = akSkManager;
         std::vector<StatusCode> observedStatuses;
         migrateManager_.metadataRpcObserver_ = [&](const HostPort &, const Status &status) {
             observedStatuses.push_back(status.GetCode());
         };
         auto api = std::make_unique<master::MasterMasterOCApi>(
-            HostPort("127.0.0.1", 12002), HostPort("127.0.0.1", 12001), akSkManager);
+            HostPort("127.0.0.1", 12002), HostPort("127.0.0.1", 12001));
         master::OCMigrateMetadataManager::MigrateMetaInfo info;
         info.destAddr = "127.0.0.1:12002";
         master::MigrateMetadataReqPb req;
@@ -270,7 +268,7 @@ TEST_F(OCMigrateMetadataManagerTest, MigrationDoesNotRestoreLocationCleanedByPas
     Raii restoreWriteMode([&] { FLAGS_rocksdb_write_mode = previousWriteMode; });
     auto rocksStore = RocksStore::GetInstance(GetTestCaseDataDir() + "/passive_scale_down_migration");
     auto metadataManager =
-        std::make_shared<OCMetadataManagerForMigrationTest>(std::make_shared<AkSkManager>(), rocksStore.get());
+        std::make_shared<OCMetadataManagerForMigrationTest>(rocksStore.get());
     DS_ASSERT_OK(metadataManager->PrepareMigrationReceiver());
 
     constexpr char objectKey[] = "passive_scale_down_cleanup_before_migration";

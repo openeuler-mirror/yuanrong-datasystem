@@ -25,7 +25,6 @@
 #include <string>
 #include <unordered_set>
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rpc/rpc_unary_client_impl.h"
@@ -81,9 +80,8 @@ public:
      * @brief Construct WorkerLocalWorkerOCApi.
      * @param[in] hostPort The address of remote worker node.
      * @param[in] localHostPort The address of local worker node.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      */
-    WorkerLocalWorkerOCApi(WorkerWorkerOCServiceImpl *service, std::shared_ptr<AkSkManager> akSkManager);
+    explicit WorkerLocalWorkerOCApi(WorkerWorkerOCServiceImpl *service);
 
     ~WorkerLocalWorkerOCApi() override = default;
 
@@ -130,7 +128,6 @@ public:
 
 private:
     WorkerWorkerOCServiceImpl *service_;
-    std::shared_ptr<AkSkManager> akSkManager_;
 };
 
 class WorkerRemoteWorkerOCApi : public WorkerWorkerOCApi {
@@ -139,9 +136,8 @@ public:
      * @brief Construct WorkerRemoteWorkerOCApi.
      * @param[in] hostPort The address of remote worker node.
      * @param[in] localHostPort The address of local worker node.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
      */
-    WorkerRemoteWorkerOCApi(HostPort hostPort, HostPort localHostPort, std::shared_ptr<AkSkManager> akSkManager);
+    WorkerRemoteWorkerOCApi(HostPort hostPort, HostPort localHostPort);
 
     ~WorkerRemoteWorkerOCApi() override = default;
 
@@ -243,7 +239,6 @@ private:
     std::shared_ptr<WorkerWorkerOCService_BrpcGenericStub> brpcSession_{ nullptr };
     HostPort localHostPort_;
     // session to the worker rpc service.
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 
     // Drop the cached WORKER_WORKER_OC_SVC stub and re-Init so the next RPC uses a fresh
     // brpc channel. Used after a peer-dead/blip failure against a restarting peer whose
@@ -262,12 +257,10 @@ private:
  * @brief Create a worker to worker api object to connect remote worker rpc server.
  * @param[in] endPoint The remote worker end point.
  * @param[in] localHostPort The address of local worker node.
- * @param[in] akSkManager Used to do AK/SK authenticate.
  * @param[out] workerOcApi The WorkerRemoteWorkerOCApi ptr.
  * @return Status of the call.
  */
 Status CreateRemoteWorkerApi(const std::string &endPoint, const HostPort &localHostPort,
-                             const std::shared_ptr<AkSkManager> &akSkManager,
                              std::shared_ptr<WorkerRemoteWorkerOCApi> &workerOcApi);
 }  // namespace object_cache
 }  // namespace datasystem

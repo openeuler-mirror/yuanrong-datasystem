@@ -15,6 +15,7 @@
  * Description: Migrating Data in Scaling Scenarios
  */
 #include "datasystem/master/object_cache/oc_migrate_metadata_manager.h"
+#include "datasystem/common/inject/inject_point.h"
 
 #include <algorithm>
 #include <exception>
@@ -117,12 +118,11 @@ OCMigrateMetadataManager &OCMigrateMetadataManager::Instance()
 }
 
 Status OCMigrateMetadataManager::Init(
-    const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager,
+    const HostPort &localHostPort,
     const cluster::MembershipEndpointView *membership, MetadataManagerHolder *metadataManagerHolder,
     MetadataRpcObserver metadataRpcObserver)
 {
     localHostPort_ = localHostPort;
-    akSkManager_ = std::move(akSkManager);
     {
         std::unique_lock<std::shared_mutex> lock(topologyMembershipMutex_);
         topologyMembership_ = membership;
@@ -426,7 +426,7 @@ std::pair<Status, std::vector<std::string>> OCMigrateMetadataManager::AsyncMigra
     auto createApi = [this, &info, &api]() -> Status {
         HostPort dest;
         RETURN_IF_NOT_OK(dest.ParseString(info.destAddr));
-        api = std::make_unique<MasterMasterOCApi>(dest, localHostPort_, akSkManager_);
+        api = std::make_unique<MasterMasterOCApi>(dest, localHostPort_);
         RETURN_IF_NOT_OK(api->Init());
         return Status::OK();
     };
@@ -507,9 +507,6 @@ Status OCMigrateMetadataManager::BatchMigrateMetadata(
     });
     MigrateMetadataRspPb rsp;
     auto sendStatus = CheckTopologyExecution(info);
-    if (sendStatus.IsOk()) {
-        sendStatus = akSkManager_->GenerateSignature(req);
-    }
     if (sendStatus.IsOk()) {
         INJECT_POINT("BatchMigrateMetadata.rpc.error");
         sendStatus = api->MigrateMetadata(req, rsp);

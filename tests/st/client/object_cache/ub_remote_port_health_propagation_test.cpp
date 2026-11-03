@@ -17,6 +17,7 @@
 /** Description: A/B integration tests for remote UB port-health propagation into client routing. */
 
 #include <chrono>
+#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -226,12 +227,12 @@ TEST_F(UbWorkerPeerPortHealthTest, WorkerRpcQueryUsesTheCachedPortHealthContract
     ConnectOptions source;
     InitConnectOpt(1, source);
     constexpr uint64_t stubCacheSize = 100;
-    DS_ASSERT_OK(RpcStubCacheMgr::Instance().Init(stubCacheSize, HostPort(source.host, source.port)));
     auto signature = std::make_shared<AkSkManager>();
     DS_ASSERT_OK(signature->SetClientAkSk(source.accessKey, source.secretKey));
+    DS_ASSERT_OK(RpcStubCacheMgr::Instance().Init(stubCacheSize, HostPort(source.host, source.port), signature));
     std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> peerRpc;
     DS_ASSERT_OK(object_cache::CreateRemoteWorkerApi(
-        worker_.ToString(), HostPort(source.host, source.port), signature, peerRpc));
+        worker_.ToString(), HostPort(source.host, source.port), peerRpc));
     for (uint32_t bad : { 4u, 3u, 0u }) {
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaMock.QueryPortStatus",
                                                "call(4," + std::to_string(bad) + ")"));

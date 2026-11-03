@@ -23,7 +23,6 @@
 #include <utility>
 
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -50,15 +49,13 @@ public:
      * @brief Construct MasterOCServiceImpl.
      * @param[in] serverAddress Local Master address.
      * @param[in] persistApi Persistence API.
-     * @param[in] akSkManager Authentication manager.
      * @param[in] metadataManagerHolder Metadata manager owner.
      * @param[in] resourceManager Resource manager.
      * @param[in] topologyMembership Read-only topology capability that outlives this service.
      * @param[in] localAddress Canonical address of the local migration target.
      */
     MasterOCServiceImpl(HostPort serverAddress, std::shared_ptr<PersistenceApi> persistApi,
-                        std::shared_ptr<AkSkManager> akSkManager, MetadataManagerHolder *metadataManagerHolder,
-                        master::ResourceManager *resourceManager,
+                        MetadataManagerHolder *metadataManagerHolder, master::ResourceManager *resourceManager,
                         const cluster::MembershipEndpointView &topologyMembership, std::string localAddress,
                         std::function<void(const HostPort &, const Status &)> metadataRpcObserver = {});
 
@@ -495,7 +492,6 @@ private:
     object_cache::MasterWorkerOCServiceImpl *masterWorkerOCService_{ nullptr };
     const cluster::MembershipEndpointView *topologyMembership_{ nullptr };
     std::string localAddress_;
-    std::shared_ptr<AkSkManager> akSkManager_;
     EtcdStore *etcdStore_;
     std::unique_ptr<ThreadPool> reconciliationAsyncPool_;
     MetadataManagerHolder *metadataManagerHolder_;

@@ -147,7 +147,6 @@ Status MasterSCServiceImpl::CreateProducerImpl(
     const CreateProducerReqPb &req, CreateProducerRspPb &rsp)
 {
     Timer timer(req.timeout());
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << FormatString("Master receive create producer request: <%s> with timeout: %d",
                               LogHelper::IgnoreSensitive(req.producer_meta()), req.timeout());
     Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
@@ -191,7 +190,6 @@ Status MasterSCServiceImpl::CloseProducerImpl(
 {
     Timer timer(req.timeout());
     INJECT_POINT("master.CloseProducerImpl");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::string infoMsg;
     // If there's more than one producer to close, only log the count. If there is only one, show the detail
     if (req.producer_infos_size() == 1) {
@@ -236,7 +234,6 @@ Status MasterSCServiceImpl::SubscribeImpl(
     const SubscribeReqPb &req, SubscribeRspPb &rsp)
 {
     Timer timer(req.timeout());
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << FormatString("Master receive subscribe request: <%s> with timeout: %d",
                               LogHelper::IgnoreSensitive(req.consumer_meta()), req.timeout());
     std::shared_ptr<SCMetadataManager> scMetadataManager;
@@ -276,7 +273,6 @@ Status MasterSCServiceImpl::CloseConsumerImpl(
     const CloseConsumerReqPb &req, CloseConsumerRspPb &rsp)
 {
     Timer timer(req.timeout());
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << FormatString("Master receive close consumer request: <%s> with timeout: %d",
                               LogHelper::IgnoreSensitive(req), req.timeout());
     std::shared_ptr<SCMetadataManager> scMetadataManager;
@@ -308,7 +304,6 @@ Status MasterSCServiceImpl::DeleteStream(const DeleteStreamReqPb &req, DeleteStr
 {
     GetRequestContext()->scTimeoutDuration.Init(req.timeout());
     Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<SCMetadataManager> scMetadataManager;
     INJECT_POINT("master.DeleteStream");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetScMetadataManager(scMetadataManager),
@@ -321,7 +316,6 @@ Status MasterSCServiceImpl::DeleteStream(const DeleteStreamReqPb &req, DeleteStr
 
 Status MasterSCServiceImpl::QueryGlobalProducersNum(const QueryGlobalNumReqPb &req, QueryGlobalNumRsqPb &rsp)
 {
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("Master receive query producer number request: <%s>",
                                               LogHelper::IgnoreSensitive(req));
     std::shared_ptr<SCMetadataManager> scMetadataManager;
@@ -335,7 +329,6 @@ Status MasterSCServiceImpl::QueryGlobalProducersNum(const QueryGlobalNumReqPb &r
 
 Status MasterSCServiceImpl::QueryGlobalConsumersNum(const QueryGlobalNumReqPb &req, QueryGlobalNumRsqPb &rsp)
 {
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("Master receive query consumer number request: <%s>",
                                               LogHelper::IgnoreSensitive(req));
     std::shared_ptr<SCMetadataManager> scMetadataManager;
@@ -396,14 +389,6 @@ Status MasterSCServiceImpl::MigrateSCMetadata(const MigrateSCMetadataReqPb &req,
 {
     ScopedRequestContext ctx;
     Timer timer;
-    auto copyReq = req;
-    for (int i = 0; i < copyReq.stream_metas_size(); ++i) {
-        auto *meta = copyReq.mutable_stream_metas(i);
-        if (meta != nullptr) {
-            meta->clear_notifications();
-        }
-    }
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(copyReq), "AK/SK failed.");
     RETURN_IF_NOT_OK(ValidateMigrationRequest(topologyMembership_, localAddress_, req.topology_version(),
                                               req.batch_epoch(), req.source_member_id(), req.target_member_id(),
                                               req.source_addr()));

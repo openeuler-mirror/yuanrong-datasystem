@@ -2909,7 +2909,7 @@ TEST_F(ProducerNoKeysTest, TestDuplicatedBlockedCreateRequestNoSignature)
 {
     // 1 Producer -> 1 Consumer Same Node.
     std::shared_ptr<StreamClient> client1;
-    ASSERT_EQ(CreateClient(0, client1), Status::OK());
+    ASSERT_EQ(CreateClient(0, 60000, client1), Status::OK());
     std::shared_ptr<Producer> producer;
     ProducerConf conf;
     const uint64_t maxStreamSize = 100 * MB;
