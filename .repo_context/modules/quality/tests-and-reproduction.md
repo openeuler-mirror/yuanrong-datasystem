@@ -723,5 +723,5 @@ Host selection is opt-in through `--host-filter` JSON (`include`/`exclude` array
   mesh stub caches with their provider before Coordinator topology helpers can select ordinary creators; preserve
   the same provider owner across repeated fixture setup in a process. WorkerRpcClient DoInvoke mocks capture business
   PB before Channel serialization, so their assertions cover body fields, dispatch and timeouts without expecting
-  PB signatures. Embedded OFF fixtures must also use ordinary cross-process clients. Regression coverage reuses the
-  existing ListenWorker, Master/KV metadata, Hetero, RemotePush, DeadPeer and embedded cases; no new cases are needed.
+  PB signatures. Fixtures use ordinary cross-process clients. Regression coverage reuses the existing ListenWorker,
+  Master/KV metadata, Hetero, RemotePush and DeadPeer cases; no new cases are needed.

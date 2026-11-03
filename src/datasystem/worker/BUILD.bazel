@@ -240,6 +240,7 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//src/datasystem/worker/object_cache:worker_worker_oc_service_impl",
+        "//src/datasystem/worker/object_cache:worker_worker_transport_service_impl",
         "//src/datasystem/worker/object_cache:worker_worker_peer_state_codec",
         "//src/datasystem/protos:object_posix_brpc",
         "//src/datasystem/protos:master_heartbeat_brpc",

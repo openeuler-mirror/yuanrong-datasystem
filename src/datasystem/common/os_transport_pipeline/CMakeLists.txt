@@ -33,7 +33,6 @@ if (BUILD_PIPLN_H2D)
     # CMake resolves it by repeating both archives on link lines of every consumer.
     target_link_libraries(common_rdma PUBLIC os_transport_pipeline)
     add_dependencies(os_transport_pipeline
-        worker_object_cache
         mlcachedirect_os_transport_static
     )
 endif()

@@ -74,6 +74,7 @@ ds_cc_test(
     tags = ["manual"],
     deps = KV_COMMON_DEPS + [
         "//src/datasystem/client/kv_cache:read_only_buffer",
+        "//src/datasystem/common/iam:common_iam",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/util:thread_pool",
     ],

@@ -61,6 +61,7 @@ ds_cc_library(
     deps = [
         "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
         "//src/datasystem/common/device:comm_wrapper",
+        "//src/datasystem/common/device/ascend:p2phccl_comm_wrapper",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/util:random_data",
         "//src/datasystem/common/util:thread_pool",

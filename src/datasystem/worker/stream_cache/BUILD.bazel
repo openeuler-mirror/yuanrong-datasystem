@@ -397,7 +397,7 @@ ds_cc_library(
         "producer.h",
     ],
     deps = [
-        # "//src/datasystem/common/iam:tenant_auth_manager",
+        "//src/datasystem/common/iam:common_iam",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/stream_cache:cursor",
         "//src/datasystem/common:common_constants",
@@ -414,7 +414,7 @@ ds_cc_library(
     ],
     deps = [
         "//src/datasystem/common/eventloop:common_event_loop",
-        # "//src/datasystem/common/iam:tenant_auth_manager",
+        "//src/datasystem/common/iam:common_iam",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/stream_cache:cursor",
