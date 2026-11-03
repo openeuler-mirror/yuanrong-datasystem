@@ -786,7 +786,7 @@ void DataPlaneManager::CompleteUbPortHealthVerification(
         Status rc;
         try {
             rc = QueryUbPortHealth(ticket.peer, ticket.incarnation,
-                                   static_cast<int32_t>(UB_REMOTE_PORT_HEALTH_QUERY_INTERVAL.count()), summary);
+                                   static_cast<int32_t>(UB_REMOTE_PORT_HEALTH_RPC_TIMEOUT.count()), summary);
         } catch (const std::exception &error) {
             rc = Status(K_RUNTIME_ERROR, error.what());
         } catch (...) {
@@ -1626,7 +1626,7 @@ void DataPlaneManager::Shutdown()
     ubHealthCallbackState_->Detach();
 
     // Dispatch shares lifecycleMutex_. The non-dropping four-slot pool drains raw-this tasks before dependencies;
-    // each RPC is capped at one second, so shutdown waits for at most the outstanding query wave plus pool join.
+    // each RPC uses the bounded health-query timeout, so shutdown waits for the outstanding query wave plus pool join.
     ubPortHealthQueryPool_.reset();
 
     std::vector<std::shared_ptr<WorkerTransportEntry>> entries;

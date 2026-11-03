@@ -80,6 +80,7 @@ private:
         bool isolated = false;
         bool summaryHintPending = false;
         bool triggerPending = false;
+        std::optional<uint64_t> delayedRecheckMs;
         bool verificationPending = false;
         std::optional<StatusCode> lastLoggedRetryStatus;
     };

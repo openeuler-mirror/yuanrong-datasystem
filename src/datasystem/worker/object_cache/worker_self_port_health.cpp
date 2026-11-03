@@ -107,9 +107,7 @@ Status WorkerSelfPortHealth::QueryUbPortHealth(const std::string &expectedWorker
     if (monitor == nullptr) {
         return Status(K_NOT_READY, "Worker UB port health monitor is not configured");
     }
-    // An asynchronous refresh must remain observable at the next remote verification tick, including RPC latency.
-    const auto maxAge = UB_PORT_HEALTH_PROVIDER_QUERY_INTERVAL + UB_REMOTE_PORT_HEALTH_QUERY_INTERVAL;
-    return monitor->ReadSummaryForQuery(maxAge, summary);
+    return monitor->ReadSummaryForQuery(std::chrono::milliseconds::zero(), summary);
 }
 
 void WorkerSelfPortHealth::OnUbPortHealthChanged(const UbPortHealthSummary &summary)

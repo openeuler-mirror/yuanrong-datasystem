@@ -133,6 +133,9 @@ public:
     }
 
 protected:
+    virtual Status DoInvokeQueryUbPortHealth(const RpcOptions &options, const QueryUbPortHealthReqPb &request,
+                                             QueryUbPortHealthRspPb &response);
+
     virtual Status DoInvokeGetObject(const RpcOptions &options, const GetObjectRemoteReqPb &request,
                                      GetObjectRemoteRspPb &response, std::vector<RpcMessage> &payloads);
 

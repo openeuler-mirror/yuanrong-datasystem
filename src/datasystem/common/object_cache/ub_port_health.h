@@ -35,9 +35,14 @@ constexpr uint64_t UB_PORT_HEALTH_FIRST_EPOCH = 1;
 constexpr size_t UB_HEALTH_INCARNATION_LOG_PREFIX_LENGTH = 12;
 constexpr std::chrono::milliseconds UB_PORT_HEALTH_PROVIDER_QUERY_INTERVAL{ 1'000 };
 constexpr std::chrono::milliseconds UB_REMOTE_PORT_HEALTH_QUERY_INTERVAL{ 1'000 };
+constexpr std::chrono::milliseconds UB_PORT_HEALTH_POST_FAILURE_VERIFY_DELAY{ 2'000 };
 constexpr uint64_t UB_REMOTE_PORT_HEALTH_RETRY_MIN_MS = 1'000;
 constexpr uint64_t UB_REMOTE_PORT_HEALTH_RETRY_MAX_MS = 30'000;
-constexpr std::chrono::milliseconds UB_PORT_HEALTH_REFRESH_WAIT_TIMEOUT{ 1'000 };
+constexpr std::chrono::milliseconds UB_PORT_HEALTH_REFRESH_BUDGET{ 2'000 };
+constexpr auto UB_PORT_HEALTH_SYNC_QUERY_WAIT_TIMEOUT =
+    UB_PORT_HEALTH_REFRESH_BUDGET + UB_PORT_HEALTH_PROVIDER_QUERY_INTERVAL;
+constexpr auto UB_REMOTE_PORT_HEALTH_RPC_TIMEOUT =
+    UB_PORT_HEALTH_SYNC_QUERY_WAIT_TIMEOUT + UB_REMOTE_PORT_HEALTH_QUERY_INTERVAL;
 
 std::string FormatUbHealthIncarnationPrefix(const uint8_t *incarnation, size_t size);
 std::string FormatUbHealthIncarnationPrefix(const std::string &incarnation);
@@ -184,7 +189,7 @@ public:
     Status Start();
     void Stop();
     Status EnsureFresh(std::chrono::milliseconds maxAge);
-    // Never waits for a provider query. Stale/in-flight facts are returned as pending and refresh is coalesced.
+    // Reuses fresh facts or waits for a coalesced refresh with a bounded timeout.
     Status ReadSummaryForQuery(std::chrono::milliseconds maxAge, UbPortHealthSummary &summary);
     Status AddObserver(std::weak_ptr<IUbPortHealthObserver> observer);
     // The background query publishes pending and completed observations even when the port facts stay unchanged.

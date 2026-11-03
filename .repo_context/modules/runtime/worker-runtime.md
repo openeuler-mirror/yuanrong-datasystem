@@ -287,6 +287,18 @@
     Consumers reject stale epochs, retired incarnations, and summaries whose incarnation does not match the registered
     Worker. Accepting a trusted new incarnation clears process-local evidence for that endpoint so the restarted Worker
     can be readmitted. Lease expiry alone removes only the global quarantine and retains process-local evidence.
+  - Each endpoint-and-incarnation port-health trigger keeps one delayed recheck for two seconds after the most recent
+    trigger. The first trigger still starts an immediate query; repeated triggers debounce only the delayed recheck. A
+    confirmed all-good first response does not cancel it; an all-bad response, endpoint removal, or incarnation
+    replacement does.
+    Only a due tail query consumes this deadline; a late first query or earlier retry preserves it. A new trigger
+    during an in-flight tail query establishes another last-trigger-plus-two-seconds tail.
+    The existing verifier owns this deadline and coalesces duplicate observations without adding timers or threads.
+    `WorkerSelfPortHealth::QueryUbPortHealth` forces one serialized, bounded fresh provider query before replying, and
+    returns a refresh failure rather than presenting cached facts as verified. Client and Worker verification RPCs use a
+    four-second timeout cap independent of the Client business channel timeout. The three-second monitor wait
+    includes the one-second provider start interval and a two-second refresh budget; it does not cancel or bound the
+    provider call itself. Business requests do not wait for these background verification tasks.
   - Remote Worker UB-port verification owns a fixed four-thread `worker-ub-health` pool, matching the four-query
     concurrency limit. The threads remain available until pool shutdown instead of being retired while idle and
     recreated during a later fault probe.

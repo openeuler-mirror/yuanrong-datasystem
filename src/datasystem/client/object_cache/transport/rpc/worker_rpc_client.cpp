@@ -669,6 +669,12 @@ Status WorkerRpcClient::ProbeProviderUbRecovery(const std::string &expectedWorke
 #endif
 }
 
+Status WorkerRpcClient::DoInvokeQueryUbPortHealth(const RpcOptions &options, const QueryUbPortHealthReqPb &request,
+                                                  QueryUbPortHealthRspPb &response)
+{
+    return transportStub_->QueryUbPortHealth(options, request, response);
+}
+
 Status WorkerRpcClient::QueryUbPortHealth(const std::string &expectedWorkerIncarnation,
                                           int32_t timeoutMs, QueryUbPortHealthRspPb &response)
 {
@@ -676,13 +682,10 @@ Status WorkerRpcClient::QueryUbPortHealth(const std::string &expectedWorkerIncar
     CHECK_FAIL_RETURN_STATUS(timeoutMs > 0, K_INVALID, "UB port health query timeout must be positive");
     QueryUbPortHealthReqPb request;
     request.set_expected_worker_incarnation(expectedWorkerIncarnation);
-    const auto configuredTimeout = channelConfig_.timeout_ms > 0 ? channelConfig_.timeout_ms : timeoutMs;
-    const auto rpcTimeout = static_cast<int32_t>(
-        std::min({ static_cast<int64_t>(timeoutMs), static_cast<int64_t>(configuredTimeout),
-                   static_cast<int64_t>(MAX_RPC_TIMEOUT_MS) }));
+    const auto rpcTimeout = static_cast<int32_t>(std::min<int64_t>(timeoutMs, MAX_RPC_TIMEOUT_MS));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
-    auto rc = transportStub_->QueryUbPortHealth(options, request, response);
+    auto rc = DoInvokeQueryUbPortHealth(options, request, response);
     return rc.IsError() ? WithRpcDiag(rc, "QueryUbPortHealth", workerAddress_) : Status::OK();
 }
 

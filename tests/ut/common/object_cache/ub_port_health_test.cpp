@@ -33,6 +33,7 @@
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/object_cache/ub_port_health.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/uuid_generator.h"
 
 namespace datasystem {
@@ -218,5 +219,119 @@ TEST(UbPortHealthTest, ProviderExceptionClearsInFlightAndAllowsNextQuery)
     EXPECT_EQ(snapshot->badPortCount, 0u);
     monitor->Stop();
 }
+TEST(UbPortHealthTest, QueryReusesFreshSnapshotAndRefreshesExpiredFacts)
+{
+    auto provider = std::make_shared<FakeUbPortStatusProvider>(
+        std::vector<UbPortStatus>{ { 0, UbPortState::GOOD }, { 1, UbPortState::GOOD } });
+    auto monitor = UbPortHealthMonitor::CreateForTest(provider, std::chrono::milliseconds(1));
+    ASSERT_TRUE(monitor->Start().IsOk());
+    UbPortHealthSummary summary;
+    ASSERT_TRUE(monitor->ReadSummaryForQuery(std::chrono::hours(1), summary).IsOk());
+    const auto calls = provider->Calls();
+    ASSERT_TRUE(monitor->ReadSummaryForQuery(std::chrono::hours(1), summary).IsOk());
+    EXPECT_EQ(provider->Calls(), calls);
+    EXPECT_FALSE(summary.verificationPending);
+
+    provider->SetResult(Status::OK(), { { 0, UbPortState::GOOD } });
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    ASSERT_TRUE(monitor->ReadSummaryForQuery(std::chrono::milliseconds(0), summary).IsOk());
+    EXPECT_TRUE(summary.valid);
+    EXPECT_FALSE(summary.verificationPending);
+    EXPECT_EQ(summary.totalPortCount, 1u);
+    EXPECT_EQ(summary.badPortCount, 0u);
+    EXPECT_GT(summary.healthEpoch, UB_PORT_HEALTH_FIRST_EPOCH);
+}
+
+TEST(UbPortHealthTest, ConcurrentQueriesShareInFlightRefresh)
+{
+    auto provider = std::make_shared<FakeUbPortStatusProvider>(
+        std::vector<UbPortStatus>{ { 0, UbPortState::GOOD } });
+    auto monitor = UbPortHealthMonitor::CreateForTest(provider, std::chrono::milliseconds(1));
+    provider->Pause();
+    Raii resume([&] { provider->Resume(); });
+    ASSERT_TRUE(monitor->Start().IsOk());
+    ASSERT_TRUE(provider->WaitForCalls(1));
+    UbPortHealthSummary firstSummary;
+    UbPortHealthSummary secondSummary;
+    auto first = std::async(std::launch::async, [&] {
+        return monitor->ReadSummaryForQuery(std::chrono::hours(1), firstSummary);
+    });
+    auto second = std::async(std::launch::async, [&] {
+        return monitor->ReadSummaryForQuery(std::chrono::hours(1), secondSummary);
+    });
+    EXPECT_EQ(first.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout);
+    EXPECT_EQ(second.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout);
+    provider->Resume();
+    EXPECT_TRUE(first.get().IsOk());
+    EXPECT_TRUE(second.get().IsOk());
+    EXPECT_FALSE(firstSummary.verificationPending);
+    EXPECT_FALSE(secondSummary.verificationPending);
+    EXPECT_EQ(provider->Calls(), 1u);
+}
+
+TEST(UbPortHealthTest, QueryReturnsRefreshFailureAndPreservesPendingSnapshot)
+{
+    auto provider = std::make_shared<FakeUbPortStatusProvider>(
+        std::vector<UbPortStatus>{ { 0, UbPortState::GOOD } });
+    auto monitor = UbPortHealthMonitor::CreateForTest(provider, std::chrono::milliseconds(1));
+    ASSERT_TRUE(monitor->Start().IsOk());
+    UbPortHealthSummary summary;
+    ASSERT_TRUE(monitor->ReadSummaryForQuery(std::chrono::hours(1), summary).IsOk());
+    provider->SetResult(Status(K_URMA_ERROR, "fake query failed"), {});
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+    EXPECT_EQ(monitor->ReadSummaryForQuery(std::chrono::milliseconds(0), summary).GetCode(), K_URMA_ERROR);
+
+    const auto cached = monitor->GetSummary();
+    ASSERT_TRUE(cached.has_value());
+    EXPECT_EQ(cached->badPortCount, 0u);
+    EXPECT_TRUE(cached->verificationPending);
+}
+
+TEST(UbPortHealthTest, SyncQueryBudgetCoversRateLimitAndRefresh)
+{
+    class DelayedProvider : public FakeUbPortStatusProvider {
+    public:
+        DelayedProvider() : FakeUbPortStatusProvider({ { 0, UbPortState::GOOD } })
+        {
+        }
+
+        Status QueryPortStatus(std::vector<UbPortStatus> &ports) override
+        {
+            if (Calls() != 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1400));
+            }
+            return FakeUbPortStatusProvider::QueryPortStatus(ports);
+        }
+    };
+    auto provider = std::make_shared<DelayedProvider>();
+    auto monitor = UbPortHealthMonitor::CreateForTest(provider, UB_PORT_HEALTH_PROVIDER_QUERY_INTERVAL);
+    ASSERT_TRUE(monitor->Start().IsOk());
+    ASSERT_TRUE(monitor->EnsureFresh(std::chrono::hours(1)).IsOk());
+    UbPortHealthSummary summary;
+    const auto begin = std::chrono::steady_clock::now();
+    ASSERT_TRUE(monitor->ReadSummaryForQuery(std::chrono::milliseconds::zero(), summary).IsOk());
+    EXPECT_GT(std::chrono::steady_clock::now() - begin, std::chrono::seconds(2));
+    EXPECT_TRUE(summary.valid);
+    EXPECT_FALSE(summary.verificationPending);
+    EXPECT_EQ(summary.badPortCount, 0u);
+    EXPECT_EQ(provider->Calls(), 2u);
+}
+
+TEST(UbPortHealthTest, QueryTimesOutWhileProviderRemainsBlocked)
+{
+    auto provider = std::make_shared<FakeUbPortStatusProvider>(
+        std::vector<UbPortStatus>{ { 0, UbPortState::GOOD } });
+    auto monitor = UbPortHealthMonitor::CreateForTest(provider, std::chrono::milliseconds(1));
+    provider->Pause();
+    Raii resume([&] { provider->Resume(); });
+    ASSERT_TRUE(monitor->Start().IsOk());
+    ASSERT_TRUE(provider->WaitForCalls(1));
+    UbPortHealthSummary summary;
+
+    EXPECT_EQ(monitor->ReadSummaryForQuery(std::chrono::hours(1), summary).GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    provider->Resume();
+}
+
 }  // namespace ut
 }  // namespace datasystem

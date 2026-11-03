@@ -303,14 +303,16 @@ health epoch 校验）后才建立写隔离；解除写隔离可由可信查询�
 
 | 状态或事件 | 调度行为 |
 | --- | --- |
-| 新 peer、新 incarnation，或 GOOD 后空闲状态的新验证轮次 | 首次查询立即到期；实际执行仍受并发槽限制 |
-| RPC 失败、UNKNOWN、pending、过期或冲突响应 | 验证需求仍存在时，下一次重试在 `[1000, 30000]` ms 内均匀随机 |
+| 新 peer、新 incarnation，或 GOOD 后空闲状态的新验证轮次 | 首次查询立即到期；同 endpoint/incarnation 的后续端口健康触发不增加即时查询，只将补充复查刷新为最后一次触发后 2s；实际执行仍受并发槽限制 |
+| RPC 失败、UNKNOWN、pending、过期或冲突响应 | 已隔离 peer 的恢复重试在 `[1000, 30000]` ms 内均匀随机；尚未确认隔离时按 1s 间隔继续验证，已有延后复查 deadline 可提前触发 |
 | 有效全 BAD 查询结果 | 保持隔离，并按相同随机规则继续查询恢复状态 |
-| 有效 GOOD 查询结果 | 立即清除隔离；若无新的 trigger 或摘要 hint 则停止后续查询，否则按随机规则排入下一轮 |
+| 有效 GOOD 查询结果 | 立即清除隔离；若仍有 trigger、摘要 hint 或端口健康触发后按最后一次触发延后的 2s 复查，则保留相应验证任务，否则停止查询 |
 | 不支持查询 RPC | 当前固定等待 30s，不缩短为普通随机重试 |
 | 被动摘要 hint | Client 隔离态收到同 incarnation、有效非全 BAD 摘要，且其 health epoch 严格更高，或为已缓存的同 epoch、相同计数 pending 事实的完成态时，立即恢复并取消已有 deadline；其他摘要不缩短或延后已有 deadline，新全 BAD 线索仅触发验证 |
 
-RPC timeout 与本地 `urma_user_ctl` 监控仍为 1s；30s 只约束下一次恢复查询的排程间隔，不是端到端恢复承诺。
+后台健康核验 RPC 使用独立的 4s 超时预算（仍受 RPC 全局上限限制），不受业务 `requestTimeoutMs` 截断，业务请求不等待核验完成。
+Worker 同步查询最多等待 3s，其中预留 1s provider 启动限频和 2s 刷新预算；这不是对底层 `urma_user_ctl` 调用的执行时长保证，等待超时不会取消底层查询。
+30s 只约束已隔离 peer 的下一次恢复查询排程间隔，不是端到端恢复承诺。
 随机重试区间为 `[1000, 30000]` ms：单次恢复查询的额外等待最长为 30 秒、平均约 15.5 秒。
 一个 peer 的结果不会压缩其他 peer 的 deadline。拓扑移除或 incarnation 变化会淘汰旧状态，owner 生命周期内单调递增的 generation 会拒绝迟到 ticket。
 每个 verifier 只初始化一次随机 seed，再由 seed、HostPort、incarnation 和 generation 派生延迟；测试可使用私有固定 seed/区间入口，生产接口不暴露随机策略。
