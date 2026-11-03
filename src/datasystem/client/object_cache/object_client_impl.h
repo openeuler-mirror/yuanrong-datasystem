@@ -40,13 +40,11 @@
 #include "datasystem/utils/device_blob.h"
 #include "datasystem/utils/cuda_funcs.h"
 #include "datasystem/client/client_state_manager.h"
-#include "datasystem/client/worker_api/embedded_client_worker_api.h"
 #include "datasystem/client/worker_api/listen_worker.h"
 #include "datasystem/client/mmap_manager/mmap_manager.h"
 #include "datasystem/client/object_cache/client_memory_ref_table.h"
 #include "datasystem/client/object_cache/client_mode_types.h"
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
-#include "datasystem/client/object_cache/client_worker_api/client_worker_local_api.h"
 #include "datasystem/client/object_cache/client_worker_api/client_worker_remote_api.h"
 #include "datasystem/client/hetero_cache/device/client_device_object_manager.h"
 #include "datasystem/client/hetero_cache/device/p2p_subscribe.h"
@@ -80,7 +78,6 @@
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/common/rpc/rpc_auth_keys.h"
-#include "datasystem/utils/embedded_config.h"
 #include "datasystem/utils/optional.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/string_view.h"
@@ -131,15 +128,6 @@ public:
      * @return K_OK on success; the error code otherwise.
      */
     Status ShutDown(bool &needRollbackState, bool isDestruct = false);
-
-    /**
-     * @brief Init embedded client.
-     * @param[in] config Config for embedded client.
-     * @param[in] needRollbackState If the client status is successfully changed to INTERMEDIATE,
-     * the status needs to be rolled back based on the completion status when the request is completed.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status InitEmbedded(const EmbeddedConfig &config, bool &needRollbackState);
 
     /**
      * @brief Init a object client instance.
@@ -1061,14 +1049,13 @@ private:
 
     Status InitDataPlacementPolicy();
 
-    Status InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker, int32_t connectTimeoutMs = -1,
+    Status InitClientWorkerConnect(bool enableHeartbeat, int32_t connectTimeoutMs = -1,
                                    bool routedWorkerIsLocal = true);
 
     Status InitClientWorkerConnectAt(WorkerNode node, const HostPort &address, bool enableHeartbeat,
-                                     bool initWithWorker, int32_t connectTimeoutMs);
+                                     int32_t connectTimeoutMs);
 
-    Status InitClientRuntimeAt(WorkerNode node, bool initWithWorker, bool isLocalWorker,
-                               bool routedWorkerIsLocal);
+    Status InitClientRuntimeAt(WorkerNode node, bool isLocalWorker, bool routedWorkerIsLocal);
 
     Status GetCurrentWorkerHostPort(HostPort &addr) const;
 
@@ -1219,14 +1206,6 @@ private:
                                               const MultiPublishRspPb &rsp);
 
     /**
-     * @brief Parse embedded config.
-     * @param[in] config Embedded config.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status ParseEmbeddedConfig(const EmbeddedConfig &config);
-
-
-    /**
      * @brief Check arguments and state specific to the local-worker pipeline path.
      *
      * @param[out] workerApi The local worker that handles the get request.
@@ -1327,8 +1306,6 @@ private:
     std::unique_ptr<ShmRecoveryState> shmRecoveryState_;
 
     std::unique_ptr<ClientStateManager> clientStateManager_{ nullptr };
-    std::shared_ptr<datasystem::client::EmbeddedClientWorkerApi> embeddedClientWorkerApi_{ nullptr };
-    void *worker_;
     std::shared_ptr<ThreadPool> memoryCopyThreadPool_;
     std::shared_ptr<ThreadPool> setMemoryCopyThreadPool_;
     std::shared_ptr<ThreadPool> asyncSetRPCPool_;

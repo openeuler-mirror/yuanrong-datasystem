@@ -40,11 +40,6 @@ bool ParseCommandLineFlags(const std::unordered_map<std::string, std::string> &a
     return FlagManager::GetInstance()->ParseCommandLineFlags(args, errMsg);
 }
 
-bool ParseCommandLineFlags(const EmbeddedConfig &config, std::string &errMsg)
-{
-    return FlagManager::GetInstance()->ParseCommandLineFlags(config, errMsg);
-}
-
 bool ParseCommandLineFlags(const KVClientConfig &config, std::string &errMsg)
 {
     return FlagManager::GetInstance()->ParseCommandLineFlags(config, errMsg);

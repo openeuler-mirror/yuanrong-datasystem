@@ -350,7 +350,7 @@ TEST_F(LoggingTest, TestCoordinatorDoesNotCreateAccessLogs)
     Logging::GetInstance()->Start("datasystem_coordinator", LogProcessRole::COORDINATOR, 1);
 
     auto *manager = Logging::AccessRecorderManagerInstance();
-    DS_ASSERT_OK(manager->ResetWriteLogger(false));
+    DS_ASSERT_OK(manager->ResetWriteLogger());
     DS_ASSERT_OK(manager->LogPerformance("coordinator", AccessKeyType::ACCESS, 1));
     DS_ASSERT_OK(LogManager::DoLogMonitorWrite());
     EXPECT_FALSE(FileExist(accessLogPath));
@@ -509,7 +509,7 @@ TEST_F(LoggingTest, DISABLED_TestMultiTimeCostLoggerRecord)
     FLAGS_max_log_size = 10;
     FLAGS_log_compress = false;
     (void)MultiTimeCostLogger();
-    Logging::AccessRecorderManagerInstance()->ResetWriteLogger(false);
+    Logging::AccessRecorderManagerInstance()->ResetWriteLogger();
 
     std::stringstream ssTimeCostFile;
     ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "*";
@@ -702,7 +702,7 @@ TEST_F(LoggingTest, TestAccessLogSampledMarker)
     const std::string unlimitedKey = "access-log-unlimited";
     {
         AccessRecorderManager clientManager(LogProcessRole::CLIENT);
-        DS_ASSERT_OK(clientManager.Init(false));
+        DS_ASSERT_OK(clientManager.Init());
         TraceGuard sampledGuard = Trace::Instance().SetRequestTraceUUID();
         LogSampleUserConfig sampledCfg;
         sampledCfg.requestSampleRate = 1.0;
@@ -716,7 +716,7 @@ TEST_F(LoggingTest, TestAccessLogSampledMarker)
 
     {
         AccessRecorderManager clientManager(LogProcessRole::CLIENT);
-        DS_ASSERT_OK(clientManager.Init(false));
+        DS_ASSERT_OK(clientManager.Init());
         TraceGuard rejectedGuard = Trace::Instance().SetRequestTraceUUID();
         LogSampleUserConfig rejectedCfg;
         rejectedCfg.requestSampleRate = 0.0;
@@ -729,7 +729,7 @@ TEST_F(LoggingTest, TestAccessLogSampledMarker)
 
     {
         AccessRecorderManager clientManager(LogProcessRole::CLIENT);
-        DS_ASSERT_OK(clientManager.Init(false));
+        DS_ASSERT_OK(clientManager.Init());
         TraceGuard unlimitedGuard = Trace::Instance().SetRequestTraceUUID();
         LogSampler::Instance().ResetForTest();
         DS_ASSERT_OK(clientManager.LogPerformance("unlimited", AccessKeyType::CLIENT, 1, 0, "1",
@@ -738,7 +738,7 @@ TEST_F(LoggingTest, TestAccessLogSampledMarker)
 
     {
         AccessRecorderManager workerManager(LogProcessRole::WORKER);
-        DS_ASSERT_OK(workerManager.Init(false));
+        DS_ASSERT_OK(workerManager.Init());
         TraceGuard workerGuard = Trace::Instance().SetRequestTraceUUID();
         LogSampleUserConfig workerCfg;
         workerCfg.requestSampleRate = 1.0;

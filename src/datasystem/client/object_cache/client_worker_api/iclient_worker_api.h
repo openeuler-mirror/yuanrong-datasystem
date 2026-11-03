@@ -51,7 +51,6 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/utils/string_view.h"
 
-#include "datasystem/client/worker_api/embedded_client_worker_api.h"
 #ifdef USE_URMA
 #include "datasystem/common/rdma/urma_info.h"
 #include "datasystem/common/rdma/urma_manager.h"
@@ -131,8 +130,7 @@ public:
     virtual std::shared_ptr<IClientWorkerApi> CloneWith(
         HostPort hostPort, HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
         SensitiveValue token = "", Signature *signature = nullptr, std::string tenantId = "",
-        bool enableCrossNodeConnection = false,
-        std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api = nullptr, void *worker = nullptr) const = 0;
+        bool enableCrossNodeConnection = false) const = 0;
 
     /**
      * @brief Create an object in the store-server, will only be called in shm case.

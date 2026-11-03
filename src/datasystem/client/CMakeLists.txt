@@ -8,12 +8,10 @@ list(APPEND CLIENT_SRCS
         object_cache/routing/urma_success_rate_tracker.cpp
         mmap_manager/mmap_manager.cpp
         client_flags_monitor.cpp
-        worker_api/embedded_client_worker_api.cpp
         service_discovery.cpp
         context/context.cpp
         ../common/flags/kv_client_config.cpp
         object_cache/client_worker_api/client_worker_base_api.cpp
-        object_cache/client_worker_api/client_worker_local_api.cpp
         object_cache/client_worker_api/client_worker_remote_api.cpp
         object_cache/exist_handler.cpp
         object_cache/object_client.cpp
@@ -107,7 +105,6 @@ list(APPEND CLIENT_DEPEND_LIBS
         cluster_membership_codec_client
         cluster_topology_keyspace
         remote_ub_port_health_verifier
-        dl
         client_mmap_static
         ${BRPC_LIBRARIES}
         gRPC::grpc++

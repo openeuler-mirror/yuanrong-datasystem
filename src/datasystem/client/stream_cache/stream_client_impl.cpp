@@ -124,7 +124,7 @@ Status StreamClientImpl::Init(const std::string &ip, const int &port, bool &need
     RETURN_IF_NOT_OK(clientWorkerApi_->Init(requestTimeoutMs_, connectTimeoutMs_));
     VLOG(SC_NORMAL_LOG_LEVEL) << "clientWorkerApi_ init success";
     mmapManager_ = std::make_unique<datasystem::client::MmapManager>(
-        std::dynamic_pointer_cast<IClientWorkerCommonApi>(clientWorkerApi_), false);
+        std::dynamic_pointer_cast<IClientWorkerCommonApi>(clientWorkerApi_));
     listenWorker_ = std::make_shared<ListenWorker>(clientWorkerApi_, HeartbeatType::RPC_HEARTBEAT);
     callBack_ = [this](client::WorkerRecoveryReason reason) -> Status {
         if (reason == client::WorkerRecoveryReason::RETRY_PENDING) {

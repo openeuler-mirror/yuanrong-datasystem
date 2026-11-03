@@ -1,4 +1,4 @@
-add_library(ds_flags OBJECT flag_manager.cpp flags.cpp embedded_config.cpp)
+add_library(ds_flags OBJECT flag_manager.cpp flags.cpp)
 target_link_libraries(ds_flags PRIVATE nlohmann_json::nlohmann_json)
 
 set(DYNAMIC_FLAG_CONFIG_SRCS

@@ -102,28 +102,6 @@ Status KVClient::Init(const KVClientConfig &clientConfig)
     return rc;
 }
 
-KVClient &KVClient::EmbeddedInstance()
-{
-    ConnectOptions opts;
-    opts.port = -1;
-    static KVClient instance(opts);
-    return instance;
-}
-
-Status KVClient::InitEmbedded(const EmbeddedConfig &config)
-{
-    ScopedClientRequestContext requestContext;
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-    bool needRollbackState;
-    auto &instance = KVClient::EmbeddedInstance();
-    auto rc = instance.impl_->InitEmbedded(config, needRollbackState);
-    instance.impl_->CompleteHandler(rc.IsError(), needRollbackState);
-    // No InitKvMetrics here: the embedded worker calls it inside WorkerOCServer::Start after
-    // FLAGS_log_dir is normalized; calling it first here would win the g_inited race and pin
-    // the exporter to the empty pre-config log_dir.
-    return rc;
-}
-
 void KVClient::RegisterCudaFuncs(const CudaFuncs &funcs)
 {
     datasystem::RegisterCudaFuncs(funcs);

@@ -27,7 +27,6 @@
 #include <vector>
 
 namespace datasystem {
-class EmbeddedConfig;
 class KVClientConfig;
 }
 
@@ -166,14 +165,6 @@ void ParseCommandLineFlags(int argc, char **argv);
 bool ParseCommandLineFlags(const std::unordered_map<std::string, std::string> &args, std::string &errMsg);
 
 /**
- * @brief Parse flags from embedded worker config.
- * @param[in] config Embedded worker config.
- * @param[out] errMsg Error message if parse failed.
- * @return True on success; false otherwise.
- */
-bool ParseCommandLineFlags(const EmbeddedConfig &config, std::string &errMsg);
-
-/**
  * @brief Parse flags from KV client config.
  * @param[in] config KV client config.
  * @param[out] errMsg Error message if parse failed.
@@ -192,7 +183,7 @@ void LinkCommonFlagsValidators();
 /**
  * @brief Check whether a flag was explicitly specified.
  * @param[in] name Flag name.
- * @return True if the flag was explicitly set via argv, EmbeddedConfig, or KVClientConfig.
+ * @return True if the flag was explicitly set via argv or KVClientConfig.
  */
 bool WasCommandLineFlagSpecified(const char *name);
 

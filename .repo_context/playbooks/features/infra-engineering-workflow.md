@@ -67,7 +67,7 @@ before implementation starts.
       config source, request path, background task, or boundary layer without reverse-engineering unrelated code.
 - [ ] Identify which logs, metrics, traces, error codes, request IDs, worker/master/client identity, state transitions,
       or config signals will make the change diagnosable without exposing sensitive data or adding hot-path overhead.
-- [ ] Identify every affected config, startup/runtime update, local/remote, SDK, worker, embedded, dscli, K8s/Helm, and
+- [ ] Identify every affected config, startup/runtime update, local/remote, SDK, worker, dscli, K8s/Helm, and
       documentation surface.
 - [ ] Identify affected build systems and packaging paths, including Bazel, CMake, installed/public headers, generated
       files, and package manifests.
@@ -116,7 +116,7 @@ For non-trivial changes, write down the following in the working notes, change n
 | What interface will future developers use? | API shape, naming, one recommended usage path, and misuse prevention |
 | What ownership or lifetime does the interface imply? | owned/ref/view/callback/async/thread boundary and release/completion owner |
 | How will production issues be localized? | owning module, first entrypoint, correlated signal, and sensitive-data guard |
-| What public/config/docs surfaces change? | API, embedded, dscli, K8s/Helm, docs, compatibility, or none |
+| What public/config/docs surfaces change? | API, dscli, K8s/Helm, docs, compatibility, or none |
 | What build and packaging surfaces change? | CMake, Bazel, public headers, generated files, package manifests, or none |
 | How will rollout and rollback work? | default behavior, staged enablement, compatibility, downgrade, rollback, or none |
 | If this is a production bug fix, what prevents recurrence? | symptom, root cause, regression guard, owner, and follow-up signal |
@@ -152,8 +152,8 @@ For non-trivial changes, write down the following in the working notes, change n
   request IDs, state-transition evidence, and config-source reporting when they materially reduce incident triage time.
   Avoid sensitive payloads and avoid high-cost diagnostics in hot paths.
 - Keep design and config semantics complete across relevant paths: startup, dynamic update, local/remote, SDK, worker,
-  embedded, explicit defaults, derived defaults, validation, idempotency, and compatibility.
-- Keep public interfaces and operator surfaces complete in the same change: public C++/embedded APIs, dscli, K8s/Helm,
+  explicit defaults, derived defaults, validation, idempotency, and compatibility.
+- Keep public interfaces and operator surfaces complete in the same change: public C++ APIs, dscli, K8s/Helm,
   config docs, examples, generated docs, and compatibility notes must describe effective semantics, not only names.
 - Keep build systems and packaging synchronized. When a touched area supports both CMake and Bazel, update both; do not
   rely on transitive headers or header-only dependencies when implementation objects are required.

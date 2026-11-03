@@ -577,7 +577,7 @@ int main() {
 ```
 
 `coordinatorDiscovery`在带参数启动时必须非空，带参数入口始终使用它选择并访问Coordinator后端，
-无需在配置中设置`coordinator_address`。命令行和嵌入式静态启动入口才通过`coordinator_address`选择
+无需在配置中设置`coordinator_address`。命令行静态启动入口才通过`coordinator_address`选择
 Coordinator或ETCD/metastore。`onStart`和`onStop`为可选回调，但必须同时配置或同时留空。
 
 ### 5. 编译命令

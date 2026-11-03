@@ -50,7 +50,6 @@
 #include "datasystem/common/util/validator.h"
 #include "datasystem/common/util/version.h"
 #include "datasystem/worker/worker_oc_server.h"
-#include "datasystem/worker/worker_service_accessor.h"
 #include "datasystem/worker/worker_update_flag_check.h"
 // worker_oc_server.h pulls in brpc headers which override LOG/VLOG/DLOG.
 // Re-include log.h to restore datasystem's spdlog-based macros
@@ -77,24 +76,6 @@ DS_DECLARE_int32(logfile_mode);
 #ifdef WITH_TESTS
 DS_DEFINE_string_dynamic(inject_actions, "", "Set inject action when worker start for ut.");
 #endif
-
-extern "C" {
-void *CreateWorker()
-{
-    return static_cast<void *>(datasystem::DataWorker::GetInstance());
-}
-
-void WorkerDestroy(void *w)
-{
-    auto *worker = static_cast<datasystem::DataWorker *>(w);
-    LOG_IF_ERROR(worker->StopEmbeddedWorker(), "worker stop embedded failed");
-}
-
-Status InitEmbeddedWorker(const EmbeddedConfig &config, void *w)
-{
-    return static_cast<datasystem::DataWorker *>(w)->InitEmbeddedWorker(config);
-}
-}
 
 #define SHUTDOWN_IF_NOT_OK(statement_)    \
     do {                                  \
@@ -266,7 +247,6 @@ DataWorker *DataWorker::GetInstance()
 
 Status DataWorker::ShutDown()
 {
-    worker::WorkerServiceAccessor::Instance().Unregister();
     // Release the owner before returning even when explicit shutdown reports an error. WorkerOCServer destructors
     // provide the final safe join fallback and must run before function-local runtime singletons are destroyed.
     auto worker = std::move(worker_);
@@ -327,12 +307,6 @@ Status DataWorker::Stop()
     return Status::OK();
 }
 
-Status DataWorker::StopEmbeddedWorker()
-{
-    LOG(INFO) << "DataWorker::StopEmbeddedWorker() called";
-    return FinishShutdown(Status::OK());
-}
-
 Status DataWorker::UpdateConfig(const std::string &configJson)
 {
     if (!worker_) {
@@ -341,13 +315,12 @@ Status DataWorker::UpdateConfig(const std::string &configJson)
     return worker_->UpdateConfig(configJson);
 }
 
-Status DataWorker::InitWorker(DynamicFlagConfig &flags, const std::string &nonDefaultFlags, const bool isEmbeddedClient)
+Status DataWorker::InitWorker(DynamicFlagConfig &flags, const std::string &nonDefaultFlags)
 {
     InitWorkerLogConfig();
     RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(FLAGS_log_dir, DEFAULT_LOG_DIR, "/worker"));
 
-    Logging::GetInstance()->Start(FLAGS_log_filename, LogProcessRole::WORKER, LOG_ROLLING_COMPRESS_SECS,
-                                  isEmbeddedClient);
+    Logging::GetInstance()->Start(FLAGS_log_filename, LogProcessRole::WORKER, LOG_ROLLING_COMPRESS_SECS);
 
     Logging::GetInstance()->LogProcessVersion(GIT_HASH, GIT_BRANCH);
     LOG(INFO) << "Worker non-default flags:\n" << nonDefaultFlags;
@@ -357,13 +330,11 @@ Status DataWorker::InitWorker(DynamicFlagConfig &flags, const std::string &nonDe
 #endif
 
     TrySetInjectActions();
-    if (!isEmbeddedClient) {
-        // We need to handle the SIGPIPE or worker will die when
-        // we send message to a disconnected client via UDS.
-        (void)signal(SIGPIPE, SIG_IGN);
-        (void)signal(SIGINT, SignalHandler);
-        (void)signal(SIGTERM, SignalHandler);
-    }
+    // We need to handle the SIGPIPE or worker will die when
+    // we send message to a disconnected client via UDS.
+    (void)signal(SIGPIPE, SIG_IGN);
+    (void)signal(SIGINT, SignalHandler);
+    (void)signal(SIGTERM, SignalHandler);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(LoadAllSecretKeys(), "Load secret keys failed.");
 
     LOG_IF_ERROR(DisableTHP(), "Control the thp is failed");
@@ -373,9 +344,7 @@ Status DataWorker::InitWorker(DynamicFlagConfig &flags, const std::string &nonDe
     LOG_IF_ERROR(PreExpandFdPool(), "Failed to pre-expand fd pool.");
     worker_ = std::make_unique<worker::WorkerOCServer>(options.workerAddress, options.bindAddress,
                                                        coordinatorDiscovery_);
-    if (!isEmbeddedClient) {
-        worker_->SetScaleInShutdownRequester([] { SignalHandler(0); });
-    }
+    worker_->SetScaleInShutdownRequester([] { SignalHandler(0); });
     worker_->SetFlags(&flags);
 
     LOG_IF_ERROR(PreInitRocksDB(), "Failed to initialize the rocksdb database in advance.");
@@ -399,44 +368,6 @@ Status DataWorker::InitWorker(DynamicFlagConfig &flags, const std::string &nonDe
     OperationLogger::Instance().LogConfigInit("URMA_COMPILED=" + std::string(urmaCompiled) + "\n"
                                               + flags.GetAllFlagsStr());
 
-    return Status::OK();
-}
-
-Status DataWorker::InitEmbeddedWorker(const EmbeddedConfig &config)
-{
-    std::lock_guard<std::mutex> lock(initMutex_);
-    if (started_.load()) {
-        return Status(StatusCode::K_DUPLICATED, "Worker already started");
-    }
-
-    SetVersionString(DATASYSTEM_VERSION);
-    SetUsageMessage(
-        "Provide POSIX data semantic service interfaces (data objects (KVs) and stream). "
-        "It builds the local cache capability based on the proximity computing memory space "
-        "to cache hotspot data.");
-
-    DynamicFlagConfig flags;
-    flags.SetValidateSpecial(WorkerFlagValidateSpecial);
-    FlagInfoMap defaultGflagMap = flags.GetAllFlagsToMap();
-    FLAGS_log_filename = "datasystem_worker";
-    FLAGS_logfile_mode = 0640;  // 0640: default permission for log files.
-    std::string errMsg;
-    CHECK_FAIL_RETURN_STATUS(ParseCommandLineFlags(config, errMsg), K_INVALID,
-                             FormatString("parse worker flags failed, err: %s", errMsg));
-    // The configuration file processing is triggered immediately when the worker is started.
-    flags.StartConfigFileHandle(FLAGS_monitor_config_file, std::chrono::steady_clock::now());
-    AdjustNodeTimeoutFlags();
-    CHECK_FAIL_RETURN_STATUS(ValidateWatermarkFlags(), K_INVALID, "invalid evict/spill watermark flag configuration");
-    coordinatorDiscovery_ = CreateStaticCoordinatorDiscovery(FLAGS_coordinator_address);
-    onStart_ = {};
-    onStop_ = {};
-    callbackState_ = LifecycleCallbackState::NOT_CONFIGURED;
-    auto rc = InitWorker(flags, flags.GetNonDefaultFlags(defaultGflagMap), true);
-    if (rc.IsError()) {
-        return FinishShutdown(rc);
-    }
-    worker::WorkerServiceAccessor::Instance().Register(worker_.get());
-    started_.store(true);
     return Status::OK();
 }
 
@@ -484,14 +415,13 @@ Status DataWorker::RunEventLoopAndShutdown(DynamicFlagConfig &flags)
 
 Status DataWorker::DoInit(DynamicFlagConfig &flags, const std::string &nonDefaultFlags, const char *crashReporterLabel)
 {
-    auto rc = InitWorker(flags, nonDefaultFlags, false);
+    auto rc = InitWorker(flags, nonDefaultFlags);
     if (rc.IsError()) {
         LOG(ERROR) << "Worker runtime error:" << rc.ToString();
         LOG_IF_ERROR(ShutDown(), "worker shutdown failed");
         return rc;
     }
 
-    worker::WorkerServiceAccessor::Instance().Register(worker_.get());
     InstallFailureSignalHandler(crashReporterLabel);
     started_.store(true);
     return Status::OK();

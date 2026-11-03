@@ -29,7 +29,6 @@
 
 #include "datasystem/common/flags/flags.h"
 namespace datasystem {
-class EmbeddedConfig;
 class KVClientConfig;
 /**
  * @brief Report error.
@@ -224,14 +223,6 @@ public:
      * @return True on success; false otherwise.
      */
     bool ParseCommandLineFlags(const std::unordered_map<std::string, std::string> &args, std::string &errMsg);
-
-    /**
-     * @brief Parse flags from embedded worker config.
-     * @param[in] config Embedded worker config.
-     * @param[in] errMsg errMsg if prase failed.
-     * @return return true if parse success.
-     */
-    bool ParseCommandLineFlags(const EmbeddedConfig &config, std::string &errMsg);
 
     /**
      * @brief Parse flags from KV client config.

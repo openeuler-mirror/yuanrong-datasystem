@@ -961,15 +961,15 @@ AccessRecorderManager::AccessRecorderManager(LogProcessRole processRole)
 {
 }
 
-Status AccessRecorderManager::Init(bool isEmbeddedClient)
+Status AccessRecorderManager::Init()
 {
     if (FLAGS_log_monitor && !isAccessLogDisabled_) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ResetWriteLogger(isEmbeddedClient), "AccessRecorder init failed");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ResetWriteLogger(), "AccessRecorder init failed");
     }
     return Status::OK();
 }
 
-Status AccessRecorderManager::ResetWriteLogger(bool isEmbeddedClient)
+Status AccessRecorderManager::ResetWriteLogger()
 {
     if (isAccessLogDisabled_) {
         return Status::OK();
@@ -990,9 +990,6 @@ Status AccessRecorderManager::ResetWriteLogger(bool isEmbeddedClient)
     } else {
         typeList = { std::make_pair(AccessKeyType::ACCESS, FLAGS_log_dir + "/" + ACCESS_LOG_NAME + ".log"),
                      std::make_pair(AccessKeyType::REQUEST_OUT, FLAGS_log_dir + "/" + REQUEST_OUT_LOG_NAME + ".log") };
-        if (isEmbeddedClient) {
-            typeList.emplace_back(AccessKeyType::CLIENT, FLAGS_log_dir + "/" + CLIENT_ACCESS_LOG_NAME + ".log");
-        }
     }
 
     for (const auto &kv : typeList) {

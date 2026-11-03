@@ -39,7 +39,6 @@ ds_cc_library(
 ds_cc_library(
     name = "ds_flags",
     srcs = [
-        "embedded_config.cpp",
         "flag_manager.cpp",
         "flags.cpp",
     ],

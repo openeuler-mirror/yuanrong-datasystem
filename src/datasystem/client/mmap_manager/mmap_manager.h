@@ -55,9 +55,9 @@ public:
 class MmapManager {
 public:
     // Compatibility path for StreamClient. Object-cache callers must pass the Client-wide pin manager explicitly.
-    explicit MmapManager(std::shared_ptr<IClientWorkerCommonApi> clientWorker, bool enableEmbeddedClient);
+    explicit MmapManager(std::shared_ptr<IClientWorkerCommonApi> clientWorker);
 
-    explicit MmapManager(std::shared_ptr<IClientWorkerCommonApi> clientWorker, bool enableEmbeddedClient,
+    explicit MmapManager(std::shared_ptr<IClientWorkerCommonApi> clientWorker,
                          std::shared_ptr<HostMemoryPinManager> pinManager);
 
     MmapManager(std::shared_ptr<IShmFdProvider> fdProvider, bool enableHugeTlb,
@@ -167,7 +167,6 @@ private:
     mutable bthread::RWLock mutex_;  // protect mmapTable_ without blocking a caller bthread.
     // The fd transfer channel behind GetClientFd() is single-consumer on each client-worker connection.
     bthread::Mutex fdTransferMutex_;
-    bool enableEmbeddedClient_;
 };
 }  // namespace client
 }  // namespace datasystem

@@ -61,7 +61,6 @@
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
 
-#include "datasystem/client/worker_api/embedded_client_worker_api.h"
 #include "datasystem/client/object_cache/routing/urma_success_rate_tracker.h"
 
 // PIMPL: brpc types are forward-declared so headers that include this
@@ -281,7 +280,7 @@ struct ClientWorkerCommonApiAttribute {
     std::shared_ptr<ShmUnitInfo> pipelineMsgShmUnit_;
     Signature *signature_;
     bool workerSupportMultiShmRefCount_;
-    // True for new-flow (enableHeartbeat=false: embedded/readonly) same-host clients: they were
+    // True for new-flow (enableHeartbeat=false: readonly) same-host clients: they were
     // constructed with NO_HEARTBEAT and should request worker-side SOCKET_HEARTBEAT (epoll on
     // socketFd) once shm is established. Captured at construction before Connect upgrades
     // heartbeatType_ to RPC_HEARTBEAT.
@@ -459,55 +458,6 @@ protected:
      */
     virtual Status Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection = false,
                            int32_t stateTimeoutMs = -1) = 0;
-};
-
-class ClientWorkerLocalCommonApi : virtual public IClientWorkerCommonApi {
-public:
-    explicit ClientWorkerLocalCommonApi(HostPort hostPort,
-                                        std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api,
-                                        void *worker, HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
-                                        bool enableCrossNodeConnection = false, Signature *signature = nullptr,
-                                        std::string deviceId = "");
-
-    virtual ~ClientWorkerLocalCommonApi() = default;
-
-    virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize = 0,
-                        int32_t initAttemptTimeoutMs = -1) override;
-    Status SendHeartbeat(bool &workerReboot, bool &clientRemoved, int64_t remainTime, bool &isWorkerVoluntaryScaleDown,
-                         const std::vector<int64_t> &releasedFds, std::vector<int64_t> &expiredWorkerFds) override;
-    Status GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds,
-                       const std::string &tenantId) override;
-    Status Disconnect(bool isDestruct) override;
-    Status Reconnect() override;
-    Status TryFastTransportAfterHeartbeat() override
-    {
-        return Status::OK();
-    }
-    std::vector<HostPort> GetStandbyWorkers() override;
-    Status UpdateToken(SensitiveValue &token) override;
-    Status UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey) override;
-
-protected:
-    Status SetToken(std::string &tokenRef) override
-    {
-        (void)tokenRef;
-        return Status::OK();
-    }
-
-    void SetTenantId(std::string &tenantId) override
-    {
-        (void)tenantId;
-    }
-
-    Status Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection = false,
-                   int32_t stateTimeoutMs = -1) override;
-
-    std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api_{ nullptr };
-    void *worker_{ nullptr };
-
-private:
-    void *workerService_{ nullptr };
-    std::string deviceId_;
 };
 
 class ClientWorkerRemoteCommonApi : virtual public IClientWorkerCommonApi {

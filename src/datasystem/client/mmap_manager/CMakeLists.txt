@@ -1,6 +1,4 @@
 list(APPEND CLIENT_MMAP_SRCS
-        embedded_mmap_table_entry.cpp
-        embedded_mmap_table.cpp
         host_memory_pin_manager.cpp
         immap_table.cpp
         shm_mmap_table_entry.cpp

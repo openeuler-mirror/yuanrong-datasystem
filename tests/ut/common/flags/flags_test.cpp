@@ -30,7 +30,6 @@
 #include <utility>
 #include <vector>
 
-#include "datasystem/utils/embedded_config.h"
 #include "datasystem/utils/kv_client_config.h"
 
 #include "datasystem/common/constants.h"
@@ -355,24 +354,6 @@ TEST_F(FlagsTest, HixlBufferPoolCanBeDisabledOnlyWithZeroZero)
 
     ASSERT_TRUE(SetCommandLineOption("remote_h2d_hccs_buffer_pool", "0:0", errMsg));
     ASSERT_EQ(FLAGS_remote_h2d_hccs_buffer_pool, "0:0");
-}
-
-TEST_F(FlagsTest, EmbeddedConfigKeepsArgs)
-{
-    EmbeddedConfig config;
-    config.LogDir("/tmp/ds_logs").MinLogLevel(1);
-    ASSERT_EQ(config.GetArgs().at("log_dir"), "/tmp/ds_logs");
-    ASSERT_EQ(config.GetArgs().at("minloglevel"), "1");
-}
-
-TEST_F(FlagsTest, ParseCommandLineFlagsAcceptsEmbeddedConfig)
-{
-    EmbeddedConfig config;
-    config.SetArg("str_flag", "configured");
-    std::string errMsg;
-    ASSERT_TRUE(ParseCommandLineFlags(config, errMsg));
-    ASSERT_TRUE(errMsg.empty());
-    ASSERT_EQ(FLAGS_str_flag, "configured");
 }
 
 TEST_F(FlagsTest, ParseCommandLineFlagsAcceptsArgMap)

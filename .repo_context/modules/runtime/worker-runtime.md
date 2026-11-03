@@ -35,7 +35,7 @@
 
 - Verified:
   - `datasystem_worker_bin` builds the `datasystem_worker` executable from `worker_main.cpp`.
-  - worker runtime also builds shared and static worker libraries used by tests and embedded flows.
+  - worker runtime also builds shared and static worker libraries used by the worker executable and tests.
   - worker module owns several subareas:
     - `client_manager`
     - `object_cache`
@@ -43,8 +43,8 @@
     - integration with `src/datasystem/cluster`
     - `perf_service` when enabled
   - `worker_main.cpp` initializes the singleton worker, runs a signal-driven loop, performs periodic perf ticking and config monitoring, then runs `PreShutDown` and `ShutDown`.
-  - `data_worker.cpp` owns top-level startup/shutdown orchestration, log initialization, THP handling, RocksDB pre-init, and embedded-worker entrypoints exported through C symbols.
-  - Parameterized `DataWorker::InitAndRun` requires a non-null `ICoordinatorDiscovery`; that overload always selects the Coordinator backend and passes the injected Discovery to `WorkerOCServer`, while paired `onStart`/`onStop` callbacks remain optional. Command-line and embedded static startup instead use `coordinator_address` to select Coordinator versus ETCD/metastore mode and construct a static Discovery only for Coordinator mode. Coordinator proxy initialization calls its provider once, validates and caches only the first returned address, and keeps all later RPCs fixed to it. Provider updates require rebuilding the runtime object or restarting the Worker.
+  - `data_worker.cpp` owns top-level startup/shutdown orchestration, log initialization, THP handling, and RocksDB pre-init.
+  - Parameterized `DataWorker::InitAndRun` requires a non-null `ICoordinatorDiscovery`; that overload always selects the Coordinator backend and passes the injected Discovery to `WorkerOCServer`, while paired `onStart`/`onStop` callbacks remain optional. Command-line startup instead uses `coordinator_address` to select Coordinator versus ETCD/metastore mode and constructs a static Discovery only for Coordinator mode. Coordinator proxy initialization calls its provider once, validates and caches only the first returned address, and keeps all later RPCs fixed to it. Provider updates require rebuilding the runtime object or restarting the Worker.
   - `worker_service_impl.cpp` implements common worker service behavior such as client registration, client disconnect, shared-memory FD transfer, version checks, and auth-related request handling.
   - `authenticate.*` supplies the original method-policy table and cold-built callbacks for generic RPC entry
     authentication. ON clears untrusted PB access_key/signature, verifies the captured MAC, then publishes validated
@@ -166,10 +166,6 @@
   - `src/datasystem/worker/worker_main.cpp`
 - Singleton orchestrator:
   - `DataWorker::GetInstance()`
-- Embedded worker hooks exported from `data_worker.cpp`:
-  - `CreateWorker`
-  - `WorkerDestroy`
-  - `InitEmbeddedWorker`
 - Common service implementation:
   - `WorkerServiceImpl`
 - Object/stream service assembly:
@@ -183,7 +179,7 @@
     `Logging::Start()` and before `WorkerOCServer` construction
   - pre-initialize RocksDB storage
   - set up runtime services and signal handling
-  - `DataWorker` selects the coordination backend before constructing `WorkerOCServer`: parameterized startup always passes its required injected Discovery and therefore selects Coordinator mode, while command-line and embedded static startup wrap a non-empty `coordinator_address` in internal `StaticCoordinatorDiscovery` or pass null for ETCD/metastore.
+  - `DataWorker` selects the coordination backend before constructing `WorkerOCServer`: parameterized startup always passes its required injected Discovery and therefore selects Coordinator mode, while command-line startup wraps a non-empty `coordinator_address` in internal `StaticCoordinatorDiscovery` or passes null for ETCD/metastore.
   - Coordinator routing preserves the last application-level status from a valid Coordinator response when the shared
     routing budget or discovery refresh later expires. Transport/deadline status remains authoritative only when no
     Coordinator response was observed, so a recovering control plane is not misreported as network unreachability.
@@ -471,7 +467,6 @@
     metadata/service callback targets remain alive; it then shuts down the metadata/service borrowers, resets their
     endpoint and route adapters, destroys ResourceManager and its rebalance scheduler before their borrowed membership
     view, and finally destroys Engine before Store/Proxy/callback owners.
-  - embedded mode uses exported destroy helpers
 
 ## Cluster And Metadata Notes
 
@@ -504,9 +499,9 @@
 ## Review And Bugfix Notes
 
 - Common change risks:
-  - edits in `worker_service_impl.cpp` can break both normal client registration and embedded/shared-memory flows;
+  - edits in `worker_service_impl.cpp` can break both normal client registration and shared-memory flows;
   - changes in `worker_oc_server.cpp` can affect many runtime flags and service combinations at once;
-  - worker startup/shutdown ordering is sensitive because the singleton exposes both process and embedded modes.
+  - worker startup/shutdown ordering is sensitive because the singleton owns the full process lifecycle.
 - Important invariants:
   - worker runtime expects valid worker address configuration before serving traffic;
   - `PreShutDown` is a meaningful phase distinct from `ShutDown`;
@@ -557,7 +552,6 @@
   - `ds_st_object_cache`
   - `ds_st_kv_cache`
   - `ds_st_stream_cache`
-  - `ds_st_embedded_client`
 
 ## Open Questions
 

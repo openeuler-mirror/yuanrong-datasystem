@@ -720,8 +720,7 @@ TransferEngine reuses the same patched `libds-spdlog.so` ABI but constructs its 
 ## Open Questions
 
 - whether all runtime startup paths consistently install the failure signal handler;
-- whether any downstream tooling depends on access-log field ordering beyond the code and tests already visible;
-- whether mixed client and embedded-client deployments rely on additional undocumented log naming conventions.
+- whether any downstream tooling depends on access-log field ordering beyond the code and tests already visible.
 
 ## Pending Verification
 

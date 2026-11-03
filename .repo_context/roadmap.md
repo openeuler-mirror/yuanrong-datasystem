@@ -88,7 +88,7 @@ Candidates:
 Likely next document splits:
 
 - `client-sdk.md` -> `cpp-api`, `python-binding`, `connect-options-auth`
-- `worker-runtime.md` -> `startup-lifecycle`, `worker-service`, `embedded-worker`
+- `worker-runtime.md` -> `startup-lifecycle`, `worker-service`
 - `common-infra.md` -> `rpc-and-transport`, `shared-memory`, `kvstore-backends`, `metrics-and-logging`, `device-and-rdma`
 - deepen `modules/runtime/topology/README.md`, `modules/runtime/etcd-metadata/README.md`, and
   `modules/runtime/coordinator-election/README.md` independently as their source-backed boundaries evolve

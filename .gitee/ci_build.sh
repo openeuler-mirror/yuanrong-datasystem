@@ -355,8 +355,6 @@ function run_coverage() {
         "src/datasystem/client/object_cache/object_client_impl.h"
         "src/datasystem/client/object_cache/client_worker_api/client_worker_base_api.cpp"
         "src/datasystem/client/object_cache/client_worker_api/client_worker_base_api.h"
-        "src/datasystem/client/object_cache/client_worker_api/client_worker_local_api.cpp"
-        "src/datasystem/client/object_cache/client_worker_api/client_worker_local_api.h"
         "src/datasystem/client/object_cache/client_worker_api/client_worker_remote_api.cpp"
         "src/datasystem/client/object_cache/client_worker_api/client_worker_remtoe_api.h"
         "src/datasystem/common/constants.h"

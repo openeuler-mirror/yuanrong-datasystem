@@ -182,7 +182,7 @@ Record these before implementation or in the PR body:
 | data path | protobuf only, brpc attachment, shared memory, URMA/RDMA, or mixed fallback |
 | ownership | who owns channel, stub, stream, payload buffer, and async tag |
 | timeout/retry | per-call timeout, overall deadline, retryable status codes, and idempotency |
-| local bypass | whether same-process master/worker or embedded client paths must match remote behavior |
+| local bypass | whether same-process master/worker paths must match remote behavior |
 | observability | trace propagation, RPC diagnostics, metrics, and failure logs |
 | verification | unit/component/system/perf test or reason a narrower check is sufficient |
 

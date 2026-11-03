@@ -26,7 +26,6 @@
 #include <mutex>
 #include <unordered_set>
 
-#include "datasystem/client/worker_api/embedded_client_worker_api.h"
 #include "datasystem/client/worker_api/client_worker_common_api.h"
 #include "datasystem/client/object_cache/client_worker_api/client_worker_base_api.h"
 #include "datasystem/common/ak_sk/signature.h"
@@ -84,12 +83,8 @@ public:
     std::shared_ptr<IClientWorkerApi> CloneWith(
         HostPort hostPort, HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
         SensitiveValue token = "", Signature *signature = nullptr, std::string tenantId = "",
-        bool enableCrossNodeConnection = false,
-        std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api = nullptr,
-        void *worker = nullptr) const override
+        bool enableCrossNodeConnection = false) const override
     {
-        (void)api;
-        (void)worker;
         if (signature != nullptr && signature != signature_) {
             LOG(ERROR) << "Cannot clone RPC API with a different credential provider.";
             return nullptr;

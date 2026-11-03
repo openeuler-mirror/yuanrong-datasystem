@@ -204,7 +204,7 @@
     latch rather than the SDK's initially bound Worker lock id. Transport selection/admission, session, fd-channel,
     auth, legacy reference state, and the mmap manager/table use bthread mutex/RWLock/condition-variable primitives
     because these paths can be entered from brpc/bthread execution contexts.
-  - Non-embedded shared-memory mmap entries submit CUDA host-memory registration to one client-wide serial pin worker.
+  - Shared-memory mmap entries submit CUDA host-memory registration to one client-wide serial pin worker.
     Their last-reference deleter submits unregistration, unmapping, and final entry destruction to a separate
     client-wide serial unmap worker, so the thread releasing the entry does not wait for fragmented unregistration.
     Both workers share one operation mutex, so whole-mapping registration and unregistration cannot overlap, although
@@ -262,8 +262,7 @@
     callbacks (`hostRegister`, `hostUnregister`, `getErrorString`, and `memcpyAsync`) must be non-null for registration
     to be valid. Pin, unpin, and memcpy operations each use one synchronized callback snapshot without holding the
     publication lock while invoking application code.
-  - Embedded mmap entries resolve allocator-owned worker fds to the allocator's existing address and borrow those fds;
-    they do not close them. Non-embedded mmap entries instead own the SCM_RIGHTS fd copies received from the worker.
+  - Mmap entries own the SCM_RIGHTS fd copies received from the worker and close them after mapping.
   - `client::TransportLayer` also provides internal same-worker `MCreate`/`MSet` primitives. TCP MCreate allocates local
     buffers and MSet sends one positional MultiPublish payload; UB MCreate uses one MultiCreate RPC, MSet pipelines
     non-blocking per-object URMA writes in bounded groups, and failed writes use bounded TCP payload fallback in the
@@ -469,7 +468,7 @@
     bits. The client-worker shared-memory notification retains its explicit actual chunk size, while destination offsets
     follow MLCacheDirect's fixed 2 MiB chunk unit.
 - Pending verification:
-  - exact internal ownership split between `listen_worker.cpp`, `client_worker_common_api.cpp`, and `embedded_client_worker_api.cpp` for each API family;
+  - exact internal ownership split between `listen_worker.cpp` and `client_worker_common_api.cpp` for each API family;
   - whether Java and Go clients follow the same runtime layering closely enough to share one future module document.
 
 ## Public API Surface

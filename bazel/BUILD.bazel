@@ -64,7 +64,6 @@ datasystem_sdk_tree(
     cmake_config = [":cmake_config_files"],
     headers = ["//include/datasystem:headers_srcs"],
     libdatasystem = "//:libdatasystem_file",
-    libworker = "//:libdatasystem_worker_shared_file",
     libcoordinator = "//:libdatasystem_coordinator_shared_file",
     hixl_plugins = ASCEND_HIXL_PLUGIN_TARGETS,
     urma_libs = select({

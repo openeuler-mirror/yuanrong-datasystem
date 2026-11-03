@@ -28,13 +28,11 @@ set(WORKER_SRCS
         authenticate.cpp
         rebalance_executor.cpp
         worker_service_impl.cpp
-        worker_service_accessor.cpp
         worker_oc_server.cpp
         worker_topology_phase_callbacks.cpp
         worker_liveness_check.cpp
         worker_flags.cpp
         data_worker.cpp
-        worker_api_c_wrapper.cpp
         )
 
 set(WORKER_DEPEND_LIBS
