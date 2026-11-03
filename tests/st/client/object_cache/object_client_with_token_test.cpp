@@ -69,9 +69,9 @@ public:
         connectOptions.token = token;
     }
 
-    void EndToEndSuccess(int64_t size, bool isSeal);
+    void EndToEndSuccess(int64_t size);
 
-    void EndToEndRemoteGet(int64_t size, bool isSeal);
+    void EndToEndRemoteGet(int64_t size);
 
     void CreateBufferSuccess(int64_t size, CreateParam &param);
 
@@ -93,7 +93,7 @@ public:
 };
 
 // Test create->GIncreaseRef->WLatch->Write->Publish->UnWLatch->Get->RLatch->MutableData->UnRLatch->GDecreaseRef
-void ObjectClientWithTokenTest::EndToEndSuccess(int64_t size, bool isSeal)
+void ObjectClientWithTokenTest::EndToEndSuccess(int64_t size)
 {
     std::string objectKey = NewObjectKey();
     std::shared_ptr<Buffer> buffer;
@@ -108,11 +108,7 @@ void ObjectClientWithTokenTest::EndToEndSuccess(int64_t size, bool isSeal)
     DS_ASSERT_OK(client->GIncreaseRef(objectKeys, failedObjectKeys));
     buffer->WLatch();
     buffer->MemoryCopy((void *)data.data(), size);
-    if (isSeal) {
-        buffer->Seal();
-    } else {
-        buffer->Publish();
-    }
+    buffer->Publish();
     buffer->UnWLatch();
 
     std::vector<Optional<Buffer>> buffers;
@@ -126,7 +122,7 @@ void ObjectClientWithTokenTest::EndToEndSuccess(int64_t size, bool isSeal)
     DS_ASSERT_NOT_OK(client->Get(objectKeys, 0, buffers));
 }
 
-void ObjectClientWithTokenTest::EndToEndRemoteGet(int64_t size, bool isSeal)
+void ObjectClientWithTokenTest::EndToEndRemoteGet(int64_t size)
 {
     std::string objectKey = NewObjectKey();
     std::shared_ptr<Buffer> buffer;
@@ -144,11 +140,7 @@ void ObjectClientWithTokenTest::EndToEndRemoteGet(int64_t size, bool isSeal)
     DS_ASSERT_OK(client->GIncreaseRef(objectKeys, failedObjectKeys));
     buffer->WLatch();
     buffer->MemoryCopy(data.data(), size);
-    if (isSeal) {
-        buffer->Seal();
-    } else {
-        buffer->Publish();
-    }
+    buffer->Publish();
     buffer->UnWLatch();
 
     std::vector<Optional<Buffer>> buffers;

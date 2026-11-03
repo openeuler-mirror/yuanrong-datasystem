@@ -323,11 +323,6 @@ Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
     return status;
 }
 
-Status Buffer::Seal(const std::unordered_set<std::string> &nestedKeys)
-{
-    return Publish(nestedKeys);
-}
-
 Status Buffer::WLatch(uint64_t timeoutSec)
 {
     VLOG(DEBUG_LOG_LEVEL) << "Begin to WLatch, clientId: " << clientId_ << ", isShm: " << isShm_;

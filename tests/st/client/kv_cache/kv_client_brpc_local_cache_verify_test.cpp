@@ -23,7 +23,7 @@
  *   - Get flow: single/batch, Buffer/string/ReadOnlyBuffer, not-found, timeout
  *   - MSet flow: multi-create+publish, duplicate keys, transactional, partial failure
  *   - brpc dispatch: DS_OC_DISPATCH macro verification
- *   - Error paths: empty keys, null data, size=0, duplicate create, sealed buffer
+ *   - Error paths: empty keys, null data, size=0, duplicate create
  *   - Concurrency: concurrent Set, concurrent Get+Set, brpc session swap
  *   - Integration: Create→Set→Get→Delete lifecycle, TTL expiry
  *

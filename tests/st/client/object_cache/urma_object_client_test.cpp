@@ -383,7 +383,7 @@ TEST_F(UrmaObjectClientSameHostTest, CrossWorkerShmGetWithUrmaEnabledReturnsPayl
     InitTestClient(1, client1);
     std::string objectKey = NewObjectKey();
     std::string data = GenRandomString(SHM_SIZE);
-    CreateAndSealObject(client1, objectKey, data);
+    CreateAndPublishObject(client1, objectKey, data);
     std::vector<Optional<Buffer>> dataList;
     DS_ASSERT_OK(client0->Get({ objectKey }, 0, dataList));
     ASSERT_TRUE(NotExistsNone(dataList));

@@ -143,38 +143,27 @@ public:
         return GetStringUuid();
     }
 
-    void CreateAndSealObject(std::shared_ptr<ObjectClient> client, const std::string &id, std::string &data,
-                             const std::unordered_set<std::string> &nestedKeys = {})
+    void CreateAndPublishObject(std::shared_ptr<ObjectClient> client, const std::string &id, std::string &data,
+                                const std::unordered_set<std::string> &nestedKeys = {})
     {
         std::shared_ptr<Buffer> buffer;
         CreateParam param;
         DS_ASSERT_OK(client->Create(id, data.size(), param, buffer));
         DS_ASSERT_OK(buffer->WLatch());
         DS_ASSERT_OK(buffer->MemoryCopy((void *)data.data(), data.size()));
-        DS_ASSERT_OK(buffer->Seal(nestedKeys));
+        DS_ASSERT_OK(buffer->Publish(nestedKeys));
         DS_ASSERT_OK(buffer->UnWLatch());
     }
 
-    void CreateAndSealObject(std::shared_ptr<ObjectClient> client, const std::string &id, std::vector<uint8_t> &data,
-                             const std::unordered_set<std::string> &nestedKeys = {})
+    void CreateAndPublishObject(std::shared_ptr<ObjectClient> client, const std::string &id, std::vector<uint8_t> &data,
+                                const std::unordered_set<std::string> &nestedKeys = {})
     {
         std::shared_ptr<Buffer> buffer;
         CreateParam param;
         DS_ASSERT_OK(client->Create(id, data.size(), param, buffer));
         DS_ASSERT_OK(buffer->WLatch());
         DS_ASSERT_OK(buffer->MemoryCopy(data.data(), data.size()));
-        DS_ASSERT_OK(buffer->Seal(nestedKeys));
-        DS_ASSERT_OK(buffer->UnWLatch());
-    }
-
-    void CreateAndPublishObject(std::shared_ptr<ObjectClient> client, const std::string &id, std::vector<uint8_t> &data)
-    {
-        std::shared_ptr<Buffer> buffer;
-        CreateParam param;
-        DS_ASSERT_OK(client->Create(id, data.size(), param, buffer));
-        DS_ASSERT_OK(buffer->WLatch());
-        DS_ASSERT_OK(buffer->MemoryCopy(data.data(), data.size()));
-        DS_ASSERT_OK(buffer->Publish());
+        DS_ASSERT_OK(buffer->Publish(nestedKeys));
         DS_ASSERT_OK(buffer->UnWLatch());
     }
 

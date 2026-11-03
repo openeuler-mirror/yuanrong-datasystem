@@ -52,14 +52,14 @@ public class ObjectClientExample {
             int size = 5 * 1024 * 1024;
             client.gIncreaseRef(objectIds);
             Buffer buffer = client.create(objectIds.get(0), size, createParam);
-            // buffer to memoryCopy and seal
+            // buffer to memoryCopy and publish
             String data = "abc";
             byte[] bytes = data.getBytes(StandardCharsets.UTF_8);
             ByteBuffer buffer1 = ByteBuffer.allocateDirect(bytes.length);
             buffer1.put(bytes);
             buffer.wLatch();
             buffer.memoryCopy(buffer1);
-            buffer.seal();
+            buffer.publish();
             buffer.unWLatch();
             buffer.close();
             // client to get buffer

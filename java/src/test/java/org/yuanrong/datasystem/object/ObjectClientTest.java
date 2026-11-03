@@ -112,12 +112,12 @@ public class ObjectClientTest {
                 ByteBuffer data1 = TestUtils.getRandomDirectBuffer(size1);
                 buffer1.wLatch();
                 buffer1.memoryCopy(data1);
-                buffer1.seal();
+                buffer1.publish();
                 buffer1.unWLatch();
                 ByteBuffer data2 = TestUtils.getRandomDirectBuffer(size2);
                 buffer2.wLatch();
                 buffer2.memoryCopy(data2);
-                buffer2.seal();
+                buffer2.publish();
                 buffer2.unWLatch();
 
                 List<Buffer> buffers = client.get(objectKeys, 5);
@@ -199,7 +199,7 @@ public class ObjectClientTest {
                 buffer.wLatch();
                 ByteBuffer data = TestUtils.getRandomDirectBuffer(size);
                 buffer.memoryCopy(data);
-                buffer.seal();
+                buffer.publish();
                 buffer.unWLatch();
 
                 List<Buffer> buffers = client.get(objectKeys, 5);
@@ -291,10 +291,10 @@ public class ObjectClientTest {
             }
             Buffer buffer2 = client.create(objectKeys.get(1), size, createParam);
             try {
-                // buffer2 to memoryCopy and seal
+                // buffer2 to memoryCopy and publish
                 buffer2.wLatch();
                 buffer2.memoryCopy(data);
-                buffer2.seal();
+                buffer2.publish();
                 buffer2.unWLatch();
                 buffer2.rLatch();
                 ByteBuffer bufferGet2 = buffer2.mutableData();
@@ -326,7 +326,7 @@ public class ObjectClientTest {
                 buffer.wLatch();
                 data.flip();
                 buffer.memoryCopy(data);
-                buffer.seal();
+                buffer.publish();
                 buffer.unWLatch();
             } finally {
                 buffer.close();
@@ -362,7 +362,7 @@ public class ObjectClientTest {
 
                 buffer1.wLatch();
                 buffer1.memoryCopy(buffer);
-                buffer1.seal();
+                buffer1.publish();
                 buffer1.unWLatch();
             } finally {
                 buffer1.close();
@@ -518,7 +518,7 @@ public class ObjectClientTest {
                 data.limit(limit);
                 // java.nio.HeapByteBuffer[pos=0 lim=5 cap=10]
                 buffer.memoryCopy(data);
-                buffer.seal();
+                buffer.publish();
                 List<Buffer> getBuffers = client.get(objectKeys, 5);
                 try {
                     ByteBuffer getBuffer = getBuffers.get(0).mutableData();
@@ -564,7 +564,7 @@ public class ObjectClientTest {
                 data.limit(limit);
                 // java.nio.HeapByteBuffer[pos=3 lim=6 cap=10]
                 buffer.memoryCopy(data);
-                buffer.seal();
+                buffer.publish();
 
                 List<Buffer> getBuffers = client.get(objectKeys, 5);
                 try {

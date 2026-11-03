@@ -80,13 +80,6 @@ public:
     /// \return Status of the result.
     Status Publish(const std::unordered_set<std::string> &nestedKeys = {});
 
-    /// \brief Publish data to the server, semantically identical to Publish (seal semantics removed).
-    ///
-    /// \param[in] nestedKeys Object key of the nested object.
-    ///
-    /// \return Status of the result.
-    Status Seal(const std::unordered_set<std::string> &nestedKeys = {});
-
     /// \brief A write lock is executed on the memory to protect the memory from concurrent reads and writes.
     ///
     /// \param[in] timeoutSec Try-lock timeout, seconds.

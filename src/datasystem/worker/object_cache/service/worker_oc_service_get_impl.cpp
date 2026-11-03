@@ -914,7 +914,7 @@ Status WorkerOcServiceGetImpl::PreProcessGetObject(const ReadKey &readKey, GetOb
         }
         info.params = GetObjEntryParams::Create(readKey.objectKey, *entry);
     } else {
-        // case 3: object didn't exist in local node, is not published or sealed yet.
+        // case 3: object didn't exist in local node, is not published yet.
         (void)remoteObjectKeys.emplace(readKey);
     }
     return Status::OK();
@@ -962,7 +962,7 @@ Status WorkerOcServiceGetImpl::RLockGetObjectFromMem(const ReadKey &readKey, Get
         objIsValidInMem = false;
         RETURN_STATUS(K_NOT_FOUND, FormatString("[ObjectKey %s] exists locally but expired.", readKey));
     } else {
-        // object didn't exist in local node, is not published or sealed yet.
+        // object didn't exist in local node, is not published yet.
         (void)remoteObjectKeys.emplace(readKey);
     }
     return Status::OK();

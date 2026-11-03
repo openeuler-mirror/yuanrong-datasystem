@@ -81,7 +81,7 @@ TEST_F(OCClientGetTest, GetLocalTest)
 
     std::string objKey = NewObjectKey();
     std::vector<uint8_t> data = { 65, 66, 67, 68, 69, 70 };
-    CreateAndSealObject(cliLocal, objKey, data);
+    CreateAndPublishObject(cliLocal, objKey, data);
 
     // get exist id data
     std::vector<Optional<Buffer>> dataList;
@@ -102,15 +102,15 @@ TEST_F(OCClientGetTest, GetLocalTest)
     LOG(INFO) << "time cast: " << timeCost;
     ASSERT_TRUE(timeCost >= 900 && timeCost < 1000);
 
-    // get not seal data in same client
-    std::string notSealObjKey = NewObjectKey();
-    CreateObject(cliLocal, notSealObjKey, data);
-    std::vector<Optional<Buffer>> dataListNotSeal;
-    DS_ASSERT_NOT_OK(cliLocal->Get({ notSealObjKey }, 0, dataListNotSeal));
+    // get unpublished data in same client
+    std::string unpublishedObjKey = NewObjectKey();
+    CreateObject(cliLocal, unpublishedObjKey, data);
+    std::vector<Optional<Buffer>> dataListUnpublished;
+    DS_ASSERT_NOT_OK(cliLocal->Get({ unpublishedObjKey }, 0, dataListUnpublished));
 
-    // get not seal data in different client
-    std::vector<Optional<Buffer>> dataListNotSealDiffCli(1);
-    DS_ASSERT_NOT_OK(cli2Local->Get({ notSealObjKey }, 0, dataListNotSealDiffCli));
+    // get unpublished data in different client
+    std::vector<Optional<Buffer>> dataListUnpublishedDiffCli(1);
+    DS_ASSERT_NOT_OK(cli2Local->Get({ unpublishedObjKey }, 0, dataListUnpublishedDiffCli));
 }
 
 TEST_F(OCClientGetTest, EXCLUSIVE_GetLocalTimeoutTest)
@@ -161,7 +161,7 @@ TEST_F(OCClientGetTest, EXCLUSIVE_GetLocalTimeoutTest)
     auto fut3 = threadPool.Submit([objectKeyDelayCreate, &dataDelayCreate, cliLocal, this, &fut1]() {
         fut1.get();
         LOG(INFO) << "cliLocal starts to create object";
-        CreateAndSealObject(cliLocal, objectKeyDelayCreate, dataDelayCreate);
+        CreateAndPublishObject(cliLocal, objectKeyDelayCreate, dataDelayCreate);
         LOG(INFO) << "cliLocal ends to create object";
     });
 
@@ -185,8 +185,8 @@ TEST_F(OCClientGetTest, GetLocalMultipleClientsToSingleWorkerTest)
     std::string objNotCreate = NewObjectKey();
     std::vector<uint8_t> data1 = { 65, 66, 67, 68, 69, 70 };
     std::vector<uint8_t> data2 = { 90, 91, 92, 93, 94 };
-    CreateAndSealObject(cli1Local, obj1Id, data1);
-    CreateAndSealObject(cli1Local, obj2Id, data2);
+    CreateAndPublishObject(cli1Local, obj1Id, data1);
+    CreateAndPublishObject(cli1Local, obj2Id, data2);
 
     ThreadPool threadPool(2);
     std::vector<std::string> getObjListExist = { obj1Id, obj2Id };
@@ -236,7 +236,7 @@ TEST_F(OCClientGetTest, GetRemoteObjectMeetsRPCError)
     InitTestClient(1, client1);
     std::string objKey = NewObjectKey();
     std::vector<uint8_t> data = { 65, 66, 67, 68, 69, 70 };
-    CreateAndSealObject(client1, objKey, data);
+    CreateAndPublishObject(client1, objKey, data);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.remote_get", "1*return()"));
 
@@ -255,7 +255,7 @@ TEST_F(OCClientGetTest, GetRemoteObjectShmError)
     std::string objKey = NewObjectKey();
     int64_t size = (int64_t)300 * 1024 * 1024;
     std::string data = GenPartRandomString(size);
-    CreateAndSealObject(client1, objKey, data);
+    CreateAndPublishObject(client1, objKey, data);
     std::vector<Optional<Buffer>> dataList;
     DS_ASSERT_OK(client0->Get({ objKey }, 2000, dataList));
     std::vector<std::string> objectKeys{ objKey };
@@ -264,7 +264,7 @@ TEST_F(OCClientGetTest, GetRemoteObjectShmError)
 }
 
 // Repro for "Runtime error. Invalid object data response" observed in brpc + SHM
-// cross-node Get (client on worker0 reads an object sealed on worker1). A small payload
+// cross-node Get (client on worker0 reads an object published on worker1). A small payload
 // passes under brpc; the failure is specific to large cross-node payloads (matches the
 // two brpc-skipped cases GetRemoteObjectShmError/TestMultiRemoteGet "real failure under
 // brpc"). Expected RED pre-fix; GREEN post-fix.
@@ -277,7 +277,7 @@ TEST_F(OCClientGetTest, GetRemoteObjectBrpcShmInvalidDataResponse)
     std::string objKey = NewObjectKey();
     int64_t size = (int64_t)300 * 1024 * 1024;
     std::string data = GenPartRandomString(size);
-    CreateAndSealObject(client1, objKey, data);
+    CreateAndPublishObject(client1, objKey, data);
     std::vector<Optional<Buffer>> dataList;
     DS_ASSERT_OK(client0->Get({ objKey }, 60000, dataList));
     ASSERT_TRUE(NotExistsNone(dataList));
@@ -296,8 +296,8 @@ TEST_F(OCClientGetTest, GetRemoteSingleClientToSingleWorkerConcurringlyTest)
     std::string obj2Id = NewObjectKey();
     std::vector<uint8_t> data1 = { 65, 66, 67, 68, 69, 70 };
     std::vector<uint8_t> data2 = { 90, 91, 92, 93, 94 };
-    CreateAndSealObject(cliRemote, obj1Id, data1);
-    CreateAndSealObject(cliRemote, obj2Id, data2);
+    CreateAndPublishObject(cliRemote, obj1Id, data1);
+    CreateAndPublishObject(cliRemote, obj2Id, data2);
 
     int threadNum = 20;
     std::vector<std::thread> clientThreads(threadNum);
@@ -394,8 +394,8 @@ TEST_F(OCClientGetTest, GetRemoteMultipleClientsToSingleWorkerTest)
     std::string obj3Id = NewObjectKey();
     std::vector<uint8_t> data1 = { 65, 66, 67, 68, 69, 70 };
     std::vector<uint8_t> data2 = { 90, 91, 92, 93, 94 };
-    CreateAndSealObject(cliRemote, obj1Id, data1);
-    CreateAndSealObject(cliRemote, obj2Id, data2);
+    CreateAndPublishObject(cliRemote, obj1Id, data1);
+    CreateAndPublishObject(cliRemote, obj2Id, data2);
 
     ThreadPool threadPool(3);
     std::vector<std::string> getObjList = { obj1Id, obj2Id };
@@ -459,8 +459,8 @@ TEST_F(OCClientGetTest, GetRemoteSameIdTest)
     std::string obj2Id = NewObjectKey();
     std::vector<uint8_t> data1 = { 65, 66, 67, 68, 69, 70 };
     std::vector<uint8_t> data2 = { 90, 91, 92, 93, 94 };
-    CreateAndSealObject(cliLocal, obj1Id, data1);
-    CreateAndSealObject(cliLocal, obj2Id, data2);
+    CreateAndPublishObject(cliLocal, obj1Id, data1);
+    CreateAndPublishObject(cliLocal, obj2Id, data2);
 
     std::vector<std::string> getObjList = { obj1Id, obj1Id, obj2Id };
 
@@ -494,9 +494,9 @@ TEST_F(OCClientGetTest, GetRemoteSingleClientToMultipleWorkersDelayCreateTest)
     std::string data2 = GenRandomString(SHM_SIZE);
     std::string data3 = GenRandomString(SHM_SIZE);
     std::string data4 = GenRandomString(SHM_SIZE);
-    CreateAndSealObject(cliLocal, obj1Id, data1);
-    CreateAndSealObject(cliRemote1, obj2Id, data2);
-    CreateAndSealObject(cliRemote2, obj3Id, data3);
+    CreateAndPublishObject(cliLocal, obj1Id, data1);
+    CreateAndPublishObject(cliRemote1, obj2Id, data2);
+    CreateAndPublishObject(cliRemote2, obj3Id, data3);
 
     ThreadPool threadPool(2);
     std::vector<std::string> getObjList = { obj1Id, obj2Id, obj3Id, obj4Id };
@@ -536,7 +536,7 @@ TEST_F(OCClientGetTest, GetRemoteSingleClientToMultipleWorkersDelayCreateTest)
     auto fut2 = threadPool.Submit([getObjList, obj4Id, &data4, cliRemote2, this]() {
         LOG(INFO) << "cliRemote2 starts to create object";
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        CreateAndSealObject(cliRemote2, obj4Id, data4);
+        CreateAndPublishObject(cliRemote2, obj4Id, data4);
         LOG(INFO) << "cliRemote2 ends to create object";
     });
 
@@ -566,9 +566,9 @@ TEST_F(OCClientGetTest, DISABLED_GetRemoteTimeOutDelayCreateTest)
     std::string data2 = GenRandomString(SHM_SIZE);
     std::string data3 = GenRandomString(SHM_SIZE);
     std::string data4 = GenRandomString(SHM_SIZE);
-    CreateAndSealObject(cliRemote1, obj1Id, data1);
-    CreateAndSealObject(cliRemote1, obj2Id, data2);
-    CreateAndSealObject(cliRemote1, obj3Id, data3);
+    CreateAndPublishObject(cliRemote1, obj1Id, data1);
+    CreateAndPublishObject(cliRemote1, obj2Id, data2);
+    CreateAndPublishObject(cliRemote1, obj3Id, data3);
 
     ThreadPool threadPool(5);
     std::vector<std::string> getObjList = { obj1Id, obj2Id, obj3Id };
@@ -649,7 +649,7 @@ TEST_F(OCClientGetTest, DISABLED_GetRemoteTimeOutDelayCreateTest)
     auto fut5 = threadPool.Submit([obj4Id, cliRemote1, &data4, this]() {
         LOG(INFO) << "cliRemote1 starts to create object";
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        CreateAndSealObject(cliRemote1, obj4Id, data4);
+        CreateAndPublishObject(cliRemote1, obj4Id, data4);
         LOG(INFO) << "cliRemote1 ends to create object";
     });
 
@@ -874,7 +874,7 @@ TEST_F(OCClientGetTest, OOMSubTimeoutTest)
 
     std::string objectKey = NewObjectKey();
     std::string data = GenRandomString(SHM_SIZE);
-    CreateAndSealObject(client1, objectKey, data);
+    CreateAndPublishObject(client1, objectKey, data);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, "worker.Allocator.AllocateMemory",
                                            "100*return(K_OUT_OF_MEMORY)"));
@@ -896,7 +896,7 @@ TEST_F(OCClientGetTest, ClientRetryOutOfMemory)
     std::string data = GenRandomString(SHM_SIZE);
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.Create.AllocateMemory",
                                            "1*return(K_OUT_OF_MEMORY)"));
-    CreateAndSealObject(client1, objectKey, data);
+    CreateAndPublishObject(client1, objectKey, data);
 
     std::vector<Optional<Buffer>> dataList;
     DS_ASSERT_OK(client2->Get({ objectKey }, 2000, dataList));
@@ -912,7 +912,7 @@ TEST_F(OCClientGetTest, ClientGetRetry)
 
     std::string objectKey = NewObjectKey();
     std::string data = GenRandomString(SHM_SIZE);
-    CreateAndSealObject(client1, objectKey, data);
+    CreateAndPublishObject(client1, objectKey, data);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, "WorkerOCServiceImpl.Get.Retry", "1*call()"));
 
@@ -930,7 +930,7 @@ TEST_F(OCClientGetTest, ClientGetTimeout)
 
     std::string objectKey = NewObjectKey();
     std::string data = GenRandomString(SHM_SIZE);
-    CreateAndSealObject(client1, objectKey, data);
+    CreateAndPublishObject(client1, objectKey, data);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, "WorkerOCServiceImpl.Get.Timeout", "call(0)"));
 
@@ -954,14 +954,14 @@ TEST_F(OCClientGetTest, GetFailedInWorker)
     std::vector<Optional<Buffer>> dataList;
     ASSERT_EQ(client1->Get({ objectKey1 }, 0, dataList).GetCode(), K_NOT_FOUND);
 
-    CreateAndSealObject(client1, objectKey1, data);
+    CreateAndPublishObject(client1, objectKey1, data);
 
     DS_ASSERT_OK(client1->Get({ objectKey1, objectKey2 }, 0, dataList));
     ASSERT_TRUE(dataList.size() == 2 && dataList[0] && !dataList[1]);
     AssertBufferEqual(dataList[0].value(), data);
 
-    CreateAndSealObject(client1, objectKey2, data);
-    CreateAndSealObject(client1, objectKey3, data);
+    CreateAndPublishObject(client1, objectKey2, data);
+    CreateAndPublishObject(client1, objectKey3, data);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.LoadObjectData.AddPayload",
                                            "2*return(K_RUNTIME_ERROR)"));
@@ -980,7 +980,7 @@ TEST_F(OCClientGetTest, ConcurrentGetFailedInWorker)
 
     std::string objectKey = NewObjectKey();
     std::string data = GenRandomString(SHM_SIZE);
-    CreateAndSealObject(client1, objectKey, data);
+    CreateAndPublishObject(client1, objectKey, data);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.LoadObjectData.AddPayload",
                                            "return(K_RUNTIME_ERROR)"));
@@ -1011,7 +1011,7 @@ TEST_F(OCClientGetTest, GetFailedInWorkerReturnNoWait)
 
     std::string objectKey = "obj1";
     std::string data = GenRandomString(SHM_SIZE);
-    CreateAndSealObject(client1, objectKey, data);
+    CreateAndPublishObject(client1, objectKey, data);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.LoadObjectData.AddPayload",
                                            "2*return(K_RUNTIME_ERROR)"));
@@ -1034,9 +1034,9 @@ TEST_F(OCClientGetTest, GetLocalWorkerFailed)
     std::string objectKey2 = "obj2";
     std::string objectKey3 = "obj3";
     std::string data = GenRandomString(SHM_SIZE);
-    CreateAndSealObject(client1, objectKey1, data);
-    CreateAndSealObject(client1, objectKey2, data);
-    CreateAndSealObject(client2, objectKey3, data);
+    CreateAndPublishObject(client1, objectKey1, data);
+    CreateAndPublishObject(client1, objectKey2, data);
+    CreateAndPublishObject(client2, objectKey3, data);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.PreProcessGetObject.begin",
                                            "1*return(K_RUNTIME_ERROR)"));
@@ -1068,9 +1068,9 @@ TEST_F(OCClientGetTest, TestNotFoundScenario)
         std::string objKey = "obj" + std::to_string(i);
         objKeys.emplace_back(objKey);
         if (i == 0) {
-            CreateAndSealObject(client1, objKey, data);
+            CreateAndPublishObject(client1, objKey, data);
         } else if (i == 1) {
-            CreateAndSealObject(client2, objKey, data);
+            CreateAndPublishObject(client2, objKey, data);
         }
     }
     std::vector<Optional<Buffer>> buffers;
@@ -1098,11 +1098,11 @@ TEST_F(OCClientGetTest, TestWorkerDownAndGet)
         std::string objKey = "obj" + std::to_string(i);
         objKeys.emplace_back(objKey);
         if (i < 5) {
-            CreateAndSealObject(client1, objKey, data);
+            CreateAndPublishObject(client1, objKey, data);
         } else if (i >= 5 && i < 8) {
-            CreateAndSealObject(client2, objKey, data);
+            CreateAndPublishObject(client2, objKey, data);
         } else {
-            CreateAndSealObject(client3, objKey, data);
+            CreateAndPublishObject(client3, objKey, data);
         }
     }
     std::vector<std::string> failedObjectKeys;
@@ -1150,11 +1150,11 @@ TEST_F(OCClientGetTest, LEVEL1_GetRuntimeErrorAfterWorkerStart)
         if (i < 10) {
             DS_ASSERT_OK(cliLocal->GIncreaseRef({ objKey }, failIds));
             std::string value = "vl";
-            CreateAndSealObject(cliLocal, objKey, value);
+            CreateAndPublishObject(cliLocal, objKey, value);
         } else {
             DS_ASSERT_OK(cli2Local->GIncreaseRef({ objKey }, failIds));
             std::string value = "vl";
-            CreateAndSealObject(cli2Local, objKey, value);
+            CreateAndPublishObject(cli2Local, objKey, value);
         }
     }
 
@@ -1221,7 +1221,7 @@ public:
                                 continue;
                             }
                             auto object_key = "id_" + std::to_string(i);
-                            CreateAndSealObject(client, object_key, data);
+                            CreateAndPublishObject(client, object_key, data);
                         }
                         return Status::OK();
                     }));
@@ -1294,7 +1294,7 @@ TEST_F(OCClientRemoteGetTest, LocalGetOomTest)
                                            "100*return(K_OUT_OF_MEMORY)"));
     std::string obj0 = NewObjectKey();
     std::vector<uint8_t> data0(1024 * 1024 * 8, '0');
-    CreateAndSealObject(client0, obj0, data0);
+    CreateAndPublishObject(client0, obj0, data0);
     std::vector<Optional<Buffer>> dataList;
     ASSERT_EQ(client0->Get({ obj0 }, 10000, dataList).GetCode(), K_OUT_OF_MEMORY);
 }
@@ -1317,8 +1317,8 @@ TEST_F(OCClientRemoteGetTest, EXCLUSIVE_LEVEL1_MultiRemoteGetOomTest)
     std::string obj1 = NewObjectKey();
     std::vector<uint8_t> data0(1024 * 1024 * 8, '0');
     std::vector<uint8_t> data1(1024 * 1024 * 8, '1');
-    CreateAndSealObject(client0, obj0, data0);
-    CreateAndSealObject(client1, obj1, data1);
+    CreateAndPublishObject(client0, obj0, data0);
+    CreateAndPublishObject(client1, obj1, data1);
     uint32_t max_wait_millisecond = 11000;  // 31s
 
     auto testFunc = [&](std::shared_ptr<ObjectClient> client) {
@@ -1358,8 +1358,8 @@ TEST_F(OCClientRemoteGetTest, TestGetReturnOOMBeforeAddTimer)
     InitTestClient(1, client2);
     std::vector<std::string> failedObjectKeys;
     DS_ASSERT_OK(client1->GIncreaseRef(objKeys, failedObjectKeys));
-    CreateAndSealObject(client1, objKeys[0], data);
-    CreateAndSealObject(client2, objKeys[1], data);
+    CreateAndPublishObject(client1, objKeys[0], data);
+    CreateAndPublishObject(client2, objKeys[1], data);
 
     std::vector<Optional<Buffer>> buffers;
     (void)client1->Get(objKeys, 1000, buffers);
@@ -1450,8 +1450,8 @@ TEST_F(OCClientRemoteGetTest2, LEVEL1_ObjectFreeTest)
     std::vector<uint8_t> data0(1024 * 1024 * 8, '0');
     std::vector<uint8_t> data1(1024 * 1024 * 8, '1');
 
-    CreateAndSealObject(client0, obj0, data0);
-    CreateAndSealObject(client0, obj1, data1);
+    CreateAndPublishObject(client0, obj0, data0);
+    CreateAndPublishObject(client0, obj1, data1);
 
     ThreadPool threadPool(1);
     auto fut = threadPool.Submit([&]() {
@@ -1508,8 +1508,8 @@ TEST_F(OCClientRemoteGetTest2, LEVEL1_TestResLogForClientAndObject)
     DS_ASSERT_OK(client0->GIncreaseRef({ obj0, obj1 }, failedObjectKeys));
     ASSERT_TRUE(failedObjectKeys.empty());
 
-    CreateAndSealObject(client0, obj0, data0);
-    CreateAndSealObject(client0, obj1, data1);
+    CreateAndPublishObject(client0, obj0, data0);
+    CreateAndPublishObject(client0, obj1, data1);
 
     std::vector<Optional<Buffer>> dataList;
     DS_ASSERT_OK(client1->Get({ obj0 }, 0, dataList));
@@ -1572,8 +1572,8 @@ TEST_F(OCClientRemoteGetTest2, LEVEL1_GetLocalObjectOOM)
     std::string obj1 = "key_2";
     std::vector<uint8_t> data0(1024 * 1024 * 60, '0');
     std::vector<uint8_t> data1(1024 * 1024 * 60, '1');
-    CreateAndSealObject(client0, obj0, data0);
-    CreateAndSealObject(client1, obj1, data1);
+    CreateAndPublishObject(client0, obj0, data0);
+    CreateAndPublishObject(client1, obj1, data1);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.AllocateMemory.sleepTime", "100*call(100)"));
 
@@ -1612,7 +1612,7 @@ TEST_F(OCClientRemoteGetTest3, DISABLED_LEVEL1_TestGetOOMScenario)
             std::vector<std::string> failedObjectKeys;
             DS_ASSERT_OK(client->GIncreaseRef(objKeys, failedObjectKeys));
         }
-        CreateAndSealObject(client, objKeys[i], data);
+        CreateAndPublishObject(client, objKeys[i], data);
         clients.emplace_back(std::move(client));
     }
 
@@ -1692,7 +1692,7 @@ TEST_F(MultiObjectClientTest, TestMultiRemoteGet)
     CreateParam param;
     DS_ASSERT_OK(clientVec[0]->Create(objectKey, dataSize, param, buffer));
     DS_ASSERT_OK(buffer->MemoryCopy(const_cast<char *>(data.data()), dataSize));
-    DS_ASSERT_OK(buffer->Seal());
+    DS_ASSERT_OK(buffer->Publish());
 
     ThreadPool threadPool(numClient);
     std::vector<std::future<void>> futureVec;
@@ -1734,9 +1734,9 @@ TEST_F(OCClientGetTest2, LEVEL1_TestRemoteGetMeetsRpcError)
     DS_ASSERT_OK(FindKeysRoutedToWorker(0, "remote_get_rpc_error_", objectCount, objKeys));
     for (size_t i = 0; i < objectCount; ++i) {
         if (i == 0) {
-            CreateAndSealObject(client1, objKeys[i], data);
+            CreateAndPublishObject(client1, objKeys[i], data);
         } else {
-            CreateAndSealObject(client2, objKeys[i], data);
+            CreateAndPublishObject(client2, objKeys[i], data);
         }
     }
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.remote_get_failed", "20000*return(K_RPC_UNAVAILABLE)"));

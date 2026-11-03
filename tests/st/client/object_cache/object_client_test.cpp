@@ -102,9 +102,9 @@ public:
         ASSERT_EQ(setenv("object_client_sd_host_id_env_n", "object_client_sd_host_id_n", 1), 0);
     }
 
-    void EndToEndSuccess(int64_t size, bool isSeal);
+    void EndToEndSuccess(int64_t size);
 
-    void EndToEndRemoteGet(int64_t size, bool isSeal);
+    void EndToEndRemoteGet(int64_t size);
 
     void CreateBufferSuccess(int64_t size, CreateParam &param);
 
@@ -131,7 +131,7 @@ protected:
 };
 
 // Test create->GIncreaseRef->WLatch->Write->Publish->UnWLatch->Get->RLatch->MutableData->UnRLatch->GDecreaseRef
-void ObjectClientTest::EndToEndSuccess(int64_t size, bool isSeal)
+void ObjectClientTest::EndToEndSuccess(int64_t size)
 {
     std::string objectKey = NewObjectKey();
     std::shared_ptr<Buffer> buffer;
@@ -146,11 +146,7 @@ void ObjectClientTest::EndToEndSuccess(int64_t size, bool isSeal)
     DS_ASSERT_OK(client->GIncreaseRef(objectKeys, failedObjectKeys));
     buffer->WLatch();
     buffer->MemoryCopy((void *)data.data(), size);
-    if (isSeal) {
-        buffer->Seal();
-    } else {
-        buffer->Publish();
-    }
+    buffer->Publish();
     buffer->UnWLatch();
 
     std::vector<Optional<Buffer>> buffers;
@@ -166,7 +162,7 @@ void ObjectClientTest::EndToEndSuccess(int64_t size, bool isSeal)
     DS_ASSERT_NOT_OK(client->Get(objectKeys, 0, buffers));
 }
 
-void ObjectClientTest::EndToEndRemoteGet(int64_t size, bool isSeal)
+void ObjectClientTest::EndToEndRemoteGet(int64_t size)
 {
     std::string objectKey = NewObjectKey();
     std::shared_ptr<Buffer> buffer;
@@ -184,11 +180,7 @@ void ObjectClientTest::EndToEndRemoteGet(int64_t size, bool isSeal)
     DS_ASSERT_OK(client->GIncreaseRef(objectKeys, failedObjectKeys));
     buffer->WLatch();
     buffer->MemoryCopy(data.data(), size);
-    if (isSeal) {
-        buffer->Seal();
-    } else {
-        buffer->Publish();
-    }
+    buffer->Publish();
     buffer->UnWLatch();
 
     std::vector<Optional<Buffer>> buffers;
@@ -380,26 +372,18 @@ TEST_F(ObjectClientTest, DISABLED_RepeatPutTest)
 
 TEST_F(ObjectClientTest, EndToEndSuccessAllScenarios)
 {
-    // SHM + Seal
-    EndToEndSuccess(SHM_SIZE, true);
-    // SHM + Publish
-    EndToEndSuccess(SHM_SIZE, false);
-    // NonSHM + Seal
-    EndToEndSuccess(NON_SHM_SIZE, true);
-    // NonSHM + Publish
-    EndToEndSuccess(NON_SHM_SIZE, false);
+    // SHM
+    EndToEndSuccess(SHM_SIZE);
+    // NonSHM
+    EndToEndSuccess(NON_SHM_SIZE);
 }
 
 TEST_F(ObjectClientTest, EndToEndRemoteGetScenarios)
 {
-    // SHM + Seal
-    EndToEndRemoteGet(SHM_SIZE, true);
-    // SHM + Publish
-    EndToEndRemoteGet(SHM_SIZE, false);
-    // NonSHM + Seal
-    EndToEndRemoteGet(NON_SHM_SIZE, true);
-    // NonSHM + Publish
-    EndToEndRemoteGet(NON_SHM_SIZE, false);
+    // SHM
+    EndToEndRemoteGet(SHM_SIZE);
+    // NonSHM
+    EndToEndRemoteGet(NON_SHM_SIZE);
 }
 
 TEST_F(ObjectClientTest, EndToEndWithVectorSuccess)
@@ -586,7 +570,7 @@ TEST_F(ObjectClientTest, MultiplyClientCreateOkTest)
     ASSERT_EQ(fut.get(), Status::OK());
     ASSERT_EQ(fut2.get(), Status::OK());
     DS_ASSERT_OK(data1->Publish());
-    DS_ASSERT_OK(data2->Seal());
+    DS_ASSERT_OK(data2->Publish());
 }
 
 std::string MockGetClientId()
@@ -639,13 +623,13 @@ TEST_F(ObjectClientTest, ClientStateSync)
     std::string objectKey = NewObjectKey();
     std::shared_ptr<Buffer> buffer;
     DS_ASSERT_OK(client1->Create(objectKey, SHM_SIZE, CreateParam{}, buffer));
-    DS_ASSERT_OK(buffer->Seal());
+    DS_ASSERT_OK(buffer->Publish());
 
     std::vector<std::string> getObjList{ objectKey };
     std::vector<Optional<Buffer>> dataList;
     DS_ASSERT_OK(client2->Get(getObjList, 0, dataList));
     ASSERT_TRUE(NotExistsNone(dataList));
-    DS_ASSERT_OK(dataList[0]->Seal());
+    DS_ASSERT_OK(dataList[0]->Publish());
 }
 
 TEST_F(ObjectClientTest, ExpireObjectUpdate)
@@ -782,7 +766,7 @@ TEST_F(ObjectClientTest, DISABLED_SuccessPutGetBigDataTest)
     ASSERT_TRUE(failedObjectKeys.empty());
     DS_ASSERT_OK(client->Create(objectKey, data.size(), CreateParam{}, dataBuffer));
     DS_ASSERT_OK(dataBuffer->MemoryCopy(const_cast<char *>(data.data()), data.size()));
-    DS_ASSERT_OK(dataBuffer->Seal());
+    DS_ASSERT_OK(dataBuffer->Publish());
     std::vector<Optional<Buffer>> objectBuffer;
     DS_ASSERT_OK(client->Get({ objectKey }, 5, objectBuffer));
     ASSERT_TRUE(NotExistsNone(objectBuffer));
@@ -1301,7 +1285,7 @@ TEST_F(ObjectClientTest, GRefAsyncGet)
         objKeys.emplace_back(objectKey);
         std::vector<uint8_t> data = { 65, 66, 67, 68, 69, 70 };
         std::shared_ptr<Buffer> buffer;
-        CreateAndSealObject(client2, objectKey, data);
+        CreateAndPublishObject(client2, objectKey, data);
     }
     std::vector<std::string> rObjKeys(objKeys.rbegin(), objKeys.rend());
 
@@ -1496,7 +1480,7 @@ TEST_F(ObjectClientTest, InvalidTimeoutGetTest)
 
     std::vector<uint8_t> data = { 65, 66, 67, 68, 69, 70 };
     std::shared_ptr<Buffer> buffer;
-    CreateAndSealObject(normalClient, objectKey, data);
+    CreateAndPublishObject(normalClient, objectKey, data);
 
     int64_t maxTimeout = INT32_MAX;
     std::vector<std::string> getObjList{ objectKey };
@@ -2279,7 +2263,7 @@ TEST_F(ObjectClientTest, TestObjectKeyWithWorkerUuid)
     DS_ASSERT_OK(client->GIncreaseRef(objectKeys, failedObjectKeys));
     buffer->WLatch();
     buffer->MemoryCopy((void *)data.data(), size);
-    buffer->Seal();
+    buffer->Publish();
     buffer->UnWLatch();
 
     std::vector<Optional<Buffer>> buffers;
@@ -2756,7 +2740,7 @@ TEST_F(ObjectClientTestIPv6, DISABLED_IPv6_PutGetRemote)
     DS_ASSERT_OK(client->GIncreaseRef(objectKeys, failedObjectKeys));
     buffer->WLatch();
     buffer->MemoryCopy(data.data(), size);
-    buffer->Seal();
+    buffer->Publish();
     buffer->UnWLatch();
 
     std::vector<Optional<Buffer>> buffers;

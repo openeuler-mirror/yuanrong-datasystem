@@ -7234,7 +7234,7 @@ TEST(ObjectClientTransportTest, RoutedReplayKeepsBufferUsableAfterSourceWorkerRe
     owner->alive = false;
     ASSERT_TRUE(buffer->MemoryCopy("next", 4).IsOk());
     ASSERT_TRUE(buffer->Publish().IsOk());
-    ASSERT_TRUE(buffer->Seal().IsOk());
+    ASSERT_TRUE(buffer->Publish().IsOk());
 
     ASSERT_EQ(manager->builtTransporters.size(), 2U);
     EXPECT_EQ(manager->builtTransporters[0]->setCount, 1);

@@ -201,30 +201,6 @@ class Buffer:
         if pub_status.is_error():
             raise RuntimeError(pub_status.to_string())
 
-    def seal(self, nested_object_keys=None):
-        """
-        Publish data to the server, semantically identical to publish (seal semantics removed).
-
-        Args:
-            nested_object_keys(list):  Objects that depend on objectKey.
-
-        Raises:
-            TypeError: Raise a type error if the input parameter is invalid.
-            RuntimeError: Raise a runtime error if the seal fails.
-        """
-        if nested_object_keys is None:
-            nested_object_keys = []
-        args = [["nested_object_keys", nested_object_keys, list]]
-        validator.check_args_types(args)
-        if not all(map(lambda id: isinstance(id, str), nested_object_keys)):
-            raise TypeError(
-                r"The input of nested_object_keys should be a list of strings. There exists error type."
-            )
-        self._check_buffer()
-        seal_status = self._buffer.seal(nested_object_keys)
-        if seal_status.is_error():
-            raise RuntimeError(seal_status.to_string())
-
     def invalidate_buffer(self):
         """
         Invalidate data on the current host.

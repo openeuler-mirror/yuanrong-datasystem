@@ -34,7 +34,7 @@ def object_test():
     assert client.query_global_ref_num(object_key) == 1
     buffer.wlatch()
     buffer.memory_copy(value)
-    buffer.seal()
+    buffer.publish()
     buffer.unwlatch()
     buffer_list = client.get([object_key], 0)
     assert buffer_list[0].immutable_data().tobytes() == value
@@ -87,7 +87,7 @@ int main()
     }
     buffer->WLatch();
     buffer->MemoryCopy((void *)data.data(), size);
-    buffer->Seal();
+    buffer->Publish();
     buffer->UnWLatch();
 
     std::vector<Optional<Buffer>> buffers;

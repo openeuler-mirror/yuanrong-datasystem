@@ -82,7 +82,7 @@ TEST_F(OCClientTimeoutTest, MultiHopDeadlinePropagationNotInflated)
 
     std::string objKey = ObjectKey();
     std::vector<uint8_t> data = { 'A', 'B', 'C' };
-    CreateAndSealObject(client0, objKey, data);
+    CreateAndPublishObject(client0, objKey, data);
 
     std::shared_ptr<ObjectClient> client1;
     InitTestClient(1, client1, 60000, 500);
@@ -108,7 +108,7 @@ TEST_F(OCClientTimeoutTest, ParallelGetUsesRealRemainingNotDecayed)
     std::vector<uint8_t> data = { 'A', 'B', 'C', 'D', 'E' };
     for (int i = 0; i < 5; ++i) {
         objKeys.emplace_back(ObjectKey());
-        CreateAndSealObject(client0, objKeys.back(), data);
+        CreateAndPublishObject(client0, objKeys.back(), data);
     }
 
     std::shared_ptr<ObjectClient> client1;
@@ -160,7 +160,7 @@ TEST_F(OCClientTimeoutTest, EwmaDeductReducesOverallocationAfterWarmup)
     std::vector<uint8_t> data = { 'A', 'B', 'C', 'D' };
     for (int i = 0; i < 10; ++i) {
         warmupKeys.emplace_back(ObjectKey());
-        CreateAndSealObject(client, warmupKeys.back(), data);
+        CreateAndPublishObject(client, warmupKeys.back(), data);
     }
 
     for (const auto &key : warmupKeys) {
@@ -170,7 +170,7 @@ TEST_F(OCClientTimeoutTest, EwmaDeductReducesOverallocationAfterWarmup)
     }
 
     std::string objKey = ObjectKey();
-    CreateAndSealObject(client, objKey, data);
+    CreateAndPublishObject(client, objKey, data);
 
     std::vector<Optional<Buffer>> result;
     DS_ASSERT_OK(client->Get({ objKey }, 0, result));

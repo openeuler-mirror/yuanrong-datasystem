@@ -217,7 +217,7 @@ TEST_F(WorkerDfxTest, LEVEL1_TestWorkerCrashAndOperateBuffer)
                           "MemoryCopy after worker shutdown");
     DS_ASSERT_NOT_OK(buffer->Publish());
     DS_ASSERT_NOT_OK(client1->GIncreaseRef({ objKey }, failedObjectKeys));
-    DS_ASSERT_NOT_OK(buffer->Seal());
+    DS_ASSERT_NOT_OK(buffer->Publish());
     DS_ASSERT_NOT_OK(buffer->WLatch());
     DS_ASSERT_NOT_OK(buffer->RLatch());
     DS_ASSERT_NOT_OK(buffer->UnWLatch());
@@ -243,7 +243,7 @@ TEST_F(WorkerDfxTest, TestWorkerRestartAndOperateShmBuffer)
     DS_ASSERT_OK(buffer->MemoryCopy(data.data(), data.size()));
     DS_ASSERT_OK(buffer->Publish());
     DS_ASSERT_OK(buffer->Publish());
-    DS_ASSERT_OK(buffer->Seal());
+    DS_ASSERT_OK(buffer->Publish());
     DS_ASSERT_OK(client1->Get({ objKey1 }, 0, buffers));
 
     // Then we crash the worker and try to operate the shm pointer.
@@ -259,7 +259,7 @@ TEST_F(WorkerDfxTest, TestWorkerRestartAndOperateShmBuffer)
     DS_ASSERT_OK(buffer->MemoryCopy(data.data(), data.size()));
     DS_ASSERT_OK(buffer->Publish());
     DS_ASSERT_OK(buffer->Publish());
-    DS_ASSERT_OK(buffer->Seal());
+    DS_ASSERT_OK(buffer->Publish());
     DS_ASSERT_OK(client1->Get({ objKey2 }, 0, buffers));
     buffer.reset();
 }
@@ -290,7 +290,7 @@ TEST_F(WorkerDfxTest, TestWorkerRestartAndOperateNoShmBuffer)
     DS_ASSERT_OK(buffer->MemoryCopy(data.data(), data.size()));
     DS_ASSERT_OK(buffer->Publish());
     DS_ASSERT_OK(buffer->Publish());
-    DS_ASSERT_OK(buffer->Seal());
+    DS_ASSERT_OK(buffer->Publish());
 }
 
 TEST_F(WorkerDfxTest, TestWorkerCrashRecovery)
@@ -304,7 +304,7 @@ TEST_F(WorkerDfxTest, TestWorkerCrashRecovery)
     std::vector<std::string> objectKeys;
     for (size_t i = 0; i < objNum; ++i) {
         std::string objKey = "Warriors" + std::to_string(i);
-        CreateAndSealObject(client1, objKey, data);
+        CreateAndPublishObject(client1, objKey, data);
         objectKeys.emplace_back(objKey);
     }
     std::vector<std::string> failedObjectKeys;
@@ -458,7 +458,7 @@ TEST_F(WorkerDfxTest, LEVEL1_TestWorkerCrashRecoveryAndClientExist)
         std::vector<std::string> failedObjectKeys;
         DS_ASSERT_OK(client1->GIncreaseRef({ objKey }, failedObjectKeys));
         ASSERT_TRUE(failedObjectKeys.empty());
-        DS_ASSERT_OK(buffer->Seal());
+        DS_ASSERT_OK(buffer->Publish());
 
         // Crash the worker and exit the client while its global reference is only held by the worker.
         DS_ASSERT_OK(cluster_->QuicklyShutdownWorker(0));
@@ -519,7 +519,7 @@ TEST_F(WorkerDfxTest, TestMasterCreateMetaFailure)
     datasystem::inject::Set("rpc_util.retry_on_error_after_func", "1*sleep(3000)");
     // Publish metadata requests are retryable: the one-shot injected master failure is absorbed
     // by the retry budget instead of failing the first attempt.
-    DS_ASSERT_OK(buffer->Seal());
+    DS_ASSERT_OK(buffer->Publish());
 
     std::vector<Optional<Buffer>> buffers2;
     DS_ASSERT_OK(objClient2_->Get({ objKey }, 5000, buffers2));
@@ -916,7 +916,7 @@ TEST_F(MasterDfxTest, TestMasterRecoveryAndDecreaseGRef)
     std::vector<std::string> objectKeys;
     for (size_t i = 0; i < objNum; ++i) {
         std::string objKey = "Warriors_" + std::to_string(i);
-        CreateAndSealObject(objClient0_, objKey, data);
+        CreateAndPublishObject(objClient0_, objKey, data);
         objectKeys.emplace_back(objKey);
     }
     std::vector<std::string> failedObjectKeys;
@@ -950,7 +950,7 @@ TEST_F(MasterDfxTest, LEVEL1_TestMasterRecoveryAndClientExit)
     std::vector<std::string> failedObjectKeys;
     DS_ASSERT_OK(objClient0_->GIncreaseRef({ objKey }, failedObjectKeys));
     ASSERT_TRUE(failedObjectKeys.empty());
-    DS_ASSERT_OK(buffer->Seal());
+    DS_ASSERT_OK(buffer->Publish());
 
     // Shutdown master and exit client.
     cluster_->ShutdownNode(WORKER, 2);
@@ -1139,7 +1139,7 @@ TEST_F(MasterWorkerDisconnectDfxTest, TestWorkerTimeoutAndPushMeta)
     sleep(4);
 
     for (size_t i = 0; i < num; ++i) {
-        DS_ASSERT_OK(buffers[i]->Seal());
+        DS_ASSERT_OK(buffers[i]->Publish());
     }
 
     std::vector<Optional<Buffer>> getBuffers;
@@ -1975,7 +1975,7 @@ TEST_F(WorkerPushMetaTest, TestWorkerTimeoutAndPushMeta)
     std::this_thread::sleep_for(std::chrono::seconds(nodeTimeout_));
 
     for (size_t i = 0; i < num; ++i) {
-        DS_ASSERT_OK(buffers[i]->Seal());
+        DS_ASSERT_OK(buffers[i]->Publish());
     }
 
     std::vector<Optional<Buffer>> getBuffers;
