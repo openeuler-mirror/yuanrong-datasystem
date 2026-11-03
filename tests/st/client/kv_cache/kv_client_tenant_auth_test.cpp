@@ -124,8 +124,10 @@ public:
             workerAddress_.emplace_back(addr.ToString());
         }
         opts.workerGflagParams = " -authorization_enable=false ";
-        opts.systemAccessKey = "";
-        opts.tenantAccessKey = "";
+        opts.systemAccessKey.clear();
+        opts.systemSecretKey.clear();
+        opts.tenantAccessKey.clear();
+        opts.tenantSecretKey.clear();
     }
 };
 

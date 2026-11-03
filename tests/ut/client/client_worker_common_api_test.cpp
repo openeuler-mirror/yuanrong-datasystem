@@ -28,6 +28,7 @@
 #include "datasystem/client/worker_api/listen_worker.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/raii.h"
 #include "ut/common.h"
@@ -38,10 +39,18 @@ namespace {
 
 class TestClientWorkerRemoteCommonApi : public client::ClientWorkerRemoteCommonApi {
 public:
-    explicit TestClientWorkerRemoteCommonApi(HostPort hostPort)
+    explicit TestClientWorkerRemoteCommonApi(HostPort hostPort, std::string tenantId = "")
         : client::IClientWorkerCommonApi(HostPort(hostPort), HeartbeatType::RPC_HEARTBEAT, false, nullptr),
-          client::ClientWorkerRemoteCommonApi(std::move(hostPort))
+          client::ClientWorkerRemoteCommonApi(std::move(hostPort), HeartbeatType::RPC_HEARTBEAT, {}, nullptr,
+                                              std::move(tenantId))
     {
+    }
+
+    std::string ResolveTenantId()
+    {
+        std::string tenantId;
+        SetTenantId(tenantId);
+        return tenantId;
     }
 
     void ApplyMemoryAlignment(const RegisterClientRspPb &rsp)
@@ -190,6 +199,16 @@ TEST(ClientWorkerCommonApiTest, UsesWorkerMemoryAlignmentAndFallsBackForOldWorke
     rsp.set_memory_alignment(4096);
     api.ApplyMemoryAlignment(rsp);
     EXPECT_EQ(api.GetMemoryAlignment(), 4096u);
+}
+
+TEST(ClientWorkerCommonApiTest, RequestTenantOverridesConnectionTenant)
+{
+    TestClientWorkerRemoteCommonApi api(HostPort("127.0.0.1", 1), "connection-tenant");
+    ScopedRequestContext context;
+
+    EXPECT_EQ(api.ResolveTenantId(), "connection-tenant");
+    GetRequestContext()->tenantId = "request-tenant";
+    EXPECT_EQ(api.ResolveTenantId(), "request-tenant");
 }
 
 TEST(ClientWorkerCommonApiTest, UsesFalseAsTheDefaultWorkerUrmaAffinityConfig)

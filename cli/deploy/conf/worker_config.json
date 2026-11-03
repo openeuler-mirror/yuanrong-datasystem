@@ -523,10 +523,6 @@
         "value": "8",
         "description": "The num of threads used to send elements to remote worker."
     },
-    "skip_authenticate": {
-        "value": "false",
-        "description": "Skip authentication for worker requests"
-    },
     "enable_rdma": {
         "value": "false",
         "description": "Option to turn on rdma for OC worker to worker data transfer, default false"

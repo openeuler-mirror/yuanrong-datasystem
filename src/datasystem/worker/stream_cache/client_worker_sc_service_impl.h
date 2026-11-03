@@ -23,7 +23,6 @@
 #include <utility>
 #include <vector>
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/log/log.h"
@@ -43,6 +42,7 @@
 #include "datasystem/worker/stream_cache/remote_worker_manager.h"
 #include "datasystem/worker/stream_cache/stream_producer.h"
 #include "datasystem/worker/stream_cache/worker_master_sc_api.h"
+#include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/stream_cache/worker_sc_allocate_memory.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/metadata_route_resolver.h"
@@ -187,19 +187,18 @@ private:
 class ClientWorkerSCServiceImpl : public ClientWorkerSCService, public IClientWorkerSCService,
                                   public std::enable_shared_from_this<ClientWorkerSCServiceImpl> {
 public:
-
     /**
      * @brief Construct the rpc service of ClientWorkerSCServiceImpl.
      * @param[in] serverAddr The address of worker.
      * @param[in] masterAddr The address of master.
      * @param[in] masterSCService The master service.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
+     * @param[in] requestAuthenticator Used to authenticate worker requests.
      * @param[in] manager Stream shared-memory allocation manager.
      * @param[in] metadataRoute Metadata owner resolver that outlives this service.
      * @param[in] membership Membership endpoint view that outlives this service.
      */
     ClientWorkerSCServiceImpl(HostPort serverAddr, HostPort masterAddr, master::MasterSCServiceImpl *masterSCService,
-                              std::shared_ptr<AkSkManager> akSkManager,
+                              std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator,
                               std::shared_ptr<WorkerSCAllocateMemory> manager,
                               const worker::MetadataRouteResolver &metadataRoute,
                               const cluster::MembershipEndpointView &membership);
@@ -1079,7 +1078,7 @@ private:
     std::map<std::string, std::list<SubInfo>> clientConsumers_;
     std::shared_ptr<WorkerSCAllocateMemory> scAllocateManager_;
     std::weak_ptr<WorkerWorkerSCServiceImpl> workerWorkerSCService_;
-    std::shared_ptr<AkSkManager> akSkManager_;
+    std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator_;
     std::shared_ptr<ThreadPool> threadPool_{ nullptr };
     std::shared_ptr<ThreadPool> memAllocPool_{ nullptr };
     std::shared_ptr<ThreadPool> ackPool_{ nullptr };

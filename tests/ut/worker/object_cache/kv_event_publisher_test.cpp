@@ -583,7 +583,8 @@ TEST_F(KvEventPublisherTest, MultiPublishUpdatePublishesStoredCpuEventForEachKey
             auto evictionManager = std::make_shared<WorkerOcEvictionManager>(
                 objectTable, localAddress, localAddress, GetTestMetadataRoute());
             auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
-            auto akSkManager = std::make_shared<AkSkManager>(0);
+            auto requestAuthenticator =
+                std::make_shared<const worker::RequestAuthenticator>(std::make_shared<AkSkManager>(), false);
             DS_ASSERT_OK(evictionManager->Init(globalRefTable));
             WorkerOcServiceCrudParam param{
                 .workerMasterApiManager = nullptr,
@@ -604,8 +605,8 @@ TEST_F(KvEventPublisherTest, MultiPublishUpdatePublishesStoredCpuEventForEachKey
             };
             auto memCpyThreadPool = std::make_shared<ThreadPool>(1);
             auto notifyThreadPool = std::make_shared<ThreadPool>(1);
-            WorkerOcServiceMultiPublishImpl multiPublish(param, memCpyThreadPool, notifyThreadPool, akSkManager,
-                                                         localAddress);
+            WorkerOcServiceMultiPublishImpl multiPublish(param, memCpyThreadPool, notifyThreadPool,
+                                                         requestAuthenticator, localAddress);
 
             const std::vector<std::string> objectKeys{
                 VllmPoolKey("2a", "tenant-a"),

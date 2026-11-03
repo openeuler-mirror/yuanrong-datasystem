@@ -26,7 +26,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
+#include "datasystem/worker/authenticate.h"
 #include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
 #include "datasystem/common/rpc/rpc_message.h"
@@ -41,16 +41,15 @@ namespace object_cache {
 
 class WorkerOcServicePublishImpl : public WorkerOcServiceCrudCommonApi {
 public:
-
     /**
      * @brief Construct WorkerOcServicePublishImpl.
      * @param[in] initParam The parameter used to init WorkerOcServiceCrudCommonApi.
      * @param[in] memCpyThreadPool Used to copy data to memory.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
+     * @param[in] requestAuthenticator Used to authenticate worker requests.
      * @param[in] localAddress The local worker address.
      */
     WorkerOcServicePublishImpl(WorkerOcServiceCrudParam &initParam, std::shared_ptr<ThreadPool> memCpyThreadPool,
-                               std::shared_ptr<AkSkManager> akSkManager,
+                               std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator,
                                HostPort &localAddress);
 
     /**
@@ -233,7 +232,7 @@ private:
     std::unordered_set<std::string> metadataOwnerProbesPending_;
     bool metadataOwnerProbeDrainScheduled_{ false };
 
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
+    std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator_{ nullptr };
 
     HostPort &localAddress_;
 

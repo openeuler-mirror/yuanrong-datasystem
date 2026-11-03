@@ -843,6 +843,7 @@ private:
     bool scaleInShutdownRequested_{ false };
     std::function<void()> scaleInShutdownRequester_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
+    std::shared_ptr<const RequestAuthenticator> requestAuthenticator_{ nullptr };
     std::unique_ptr<datasystem::MetadataManagerHolder> metadataManagerHolder_{ nullptr };
     std::unique_ptr<datasystem::master::ResourceManager> resourceManager_{ nullptr };
     std::unique_ptr<WorkerServiceImpl> workerSvc_{ nullptr };  // Worker common service.

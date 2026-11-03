@@ -43,26 +43,29 @@ namespace datasystem {
 namespace st {
 namespace {
 }  // namespace
-class ClientSkipAuthTest : public OCClientCommon {
+class ClientNoAuthTest : public OCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         auto workerNum = 2;
         opts.numWorkers = workerNum;
         opts.numEtcd = 1;
-        opts.workerGflagParams =
-            FormatString("-skip_authenticate=true -shared_memory_size_mb=50 -v=2 -log_monitor=true");
+        opts.systemAccessKey.clear();
+        opts.systemSecretKey.clear();
+        opts.tenantAccessKey.clear();
+        opts.tenantSecretKey.clear();
+        opts.workerGflagParams = FormatString("-shared_memory_size_mb=50 -v=2 -log_monitor=true");
     }
 
 protected:
 };
 
-TEST_F(ClientSkipAuthTest, NoAuthPutGet)
+TEST_F(ClientNoAuthTest, NoAuthPutGet)
 {
     FLAGS_v = 1;
     std::shared_ptr<ObjectClient> cliLocal, clientRemote;
-    InitTestClient(0, cliLocal);
-    InitTestClient(1, clientRemote);
+    InitTestClient(0, cliLocal, [](ConnectOptions &) {});
+    InitTestClient(1, clientRemote, [](ConnectOptions &) {});
     std::string val = "is a test ";
     std::string objKey = "key";
     CreateParam param;

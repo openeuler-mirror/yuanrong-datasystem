@@ -551,17 +551,13 @@ static constexpr uint32_t SHM_QUEUE_SLOT_NUM = 32;
 static const std::string WORKER_OC_SERVICE_IMPL = "WorkerOCServiceImpl";
 constexpr auto TOPOLOGY_HEALTH_RETRY_INTERVAL = std::chrono::seconds(1);
 
-WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAddr,
-                                         std::shared_ptr<ObjectTable> objectTable, std::shared_ptr<AkSkManager> manager,
-                                         std::shared_ptr<WorkerOcEvictionManager> evictionManager,
-                                         std::shared_ptr<PersistenceApi> persistApi, EtcdStore *etcdStore,
-                                         MasterOCServiceImpl *masterOCService,
-                                         cluster::TopologyEngine *topologyEngine,
-                                         const worker::MetadataRouteResolver &metadataRoute,
-                                         const cluster::MembershipEndpointView &membership,
-                                         const std::atomic<bool> *exitRequested,
-                                         bool isRestart,
-                                         bool controlBackendAvailableAtStartup)
+WorkerOCServiceImpl::WorkerOCServiceImpl(
+    HostPort serverAddr, HostPort masterAddr, std::shared_ptr<ObjectTable> objectTable,
+    std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator,
+    std::shared_ptr<WorkerOcEvictionManager> evictionManager, std::shared_ptr<PersistenceApi> persistApi,
+    EtcdStore *etcdStore, MasterOCServiceImpl *masterOCService, cluster::TopologyEngine *topologyEngine,
+    const worker::MetadataRouteResolver &metadataRoute, const cluster::MembershipEndpointView &membership,
+    const std::atomic<bool> *exitRequested, bool isRestart, bool controlBackendAvailableAtStartup)
     : WorkerOCService(std::move(serverAddr)),
       localMasterAddress_(std::move(masterAddr)),
       persistenceApi_(persistApi),
@@ -575,7 +571,7 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
       exitRequested_(exitRequested),
       isRestart_(isRestart),
       controlBackendAvailableAtStartup_(controlBackendAvailableAtStartup),
-      akSkManager_(std::move(manager))
+      requestAuthenticator_(std::move(requestAuthenticator))
 {
     reconciliationReady_.store(!isRestart_ || !controlBackendAvailableAtStartup_ || !FLAGS_enable_reconciliation,
                                std::memory_order_relaxed);
@@ -682,19 +678,18 @@ void WorkerOCServiceImpl::InitServiceImpl()
         .allowDirectoryLag = false,
         .metadataRpcFailureReported = BuildMetadataRpcFailureReported(topologyEngine_),
     };
-    createProc_ = std::make_shared<WorkerOcServiceCreateImpl>(param, akSkManager_, localAddress_);
+    createProc_ = std::make_shared<WorkerOcServiceCreateImpl>(param, requestAuthenticator_, localAddress_);
 
-    publishProc_ = std::make_shared<WorkerOcServicePublishImpl>(param, memCpyThreadPool_, akSkManager_,
-                                                                localAddress_);
+    publishProc_ =
+        std::make_shared<WorkerOcServicePublishImpl>(param, memCpyThreadPool_, requestAuthenticator_, localAddress_);
 
-    multiPublishProc_ = std::make_shared<WorkerOcServiceMultiPublishImpl>(param, memCpyThreadPool_,
-                                                                          threadPool_, akSkManager_, localAddress_);
+    multiPublishProc_ = std::make_shared<WorkerOcServiceMultiPublishImpl>(param, memCpyThreadPool_, threadPool_,
+                                                                          requestAuthenticator_, localAddress_);
 
     migrateRateController_ =
         std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
-    getProc_ =
-        std::make_shared<WorkerOcServiceGetImpl>(param, memCpyThreadPool_, threadPool_,
-                                                 akSkManager_, localAddress_, migrateRateController_, ubAdmission_);
+    getProc_ = std::make_shared<WorkerOcServiceGetImpl>(param, memCpyThreadPool_, threadPool_, requestAuthenticator_,
+                                                        localAddress_, migrateRateController_, ubAdmission_);
     ConfigurePeerUbHealthCallbacks();
     queryAndGetProc_ =
         std::make_shared<WorkerQueryAndGetImpl>(getProc_, memoryRefTable_, localAddress_, ubAdmission_);
@@ -703,16 +698,15 @@ void WorkerOCServiceImpl::InitServiceImpl()
         queryAndGetProc_->SetUbHealthSummaryProvider(*provider);
     }
 
-    deleteProc_ =
-        std::make_shared<WorkerOcServiceDeleteImpl>(param, akSkManager_, localAddress_, getProc_);
+    deleteProc_ = std::make_shared<WorkerOcServiceDeleteImpl>(param, requestAuthenticator_, localAddress_, getProc_);
 
-    gRefProc_ = std::make_shared<WorkerOcServiceGlobalReferenceImpl>(param, globalRefTable_,
-                                                                     akSkManager_, localAddress_);
+    gRefProc_ = std::make_shared<WorkerOcServiceGlobalReferenceImpl>(param, globalRefTable_, requestAuthenticator_,
+                                                                     localAddress_);
 
     gMigrateProc_ = std::make_shared<WorkerOcServiceMigrateImpl>(
         param, memCpyThreadPool_, GetLocalAddr().ToString(), migrateRateController_);
 
-    expireProc_ = std::make_shared<WorkerOcServiceExpireImpl>(param, akSkManager_);
+    expireProc_ = std::make_shared<WorkerOcServiceExpireImpl>(param, requestAuthenticator_);
     initOk_.set_value(Status::OK());
     setValue_ = true;
 }
@@ -835,7 +829,8 @@ Status WorkerOCServiceImpl::HealthCheck(const HealthCheckRequestPb &req, HealthC
     }
     if (not req.client_id().empty()) {
         std::string tenantId;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId),
+                                         "Authenticate failed.");
     }
     (void)resp;
     const bool exitRequested = exitRequested_ != nullptr && exitRequested_->load(std::memory_order_acquire);
@@ -968,8 +963,9 @@ Status WorkerOCServiceImpl::Publish(const PublishReqPb &req, PublishRspPb &resp,
     auto admission = AcquireClientWriteAdmission();
     if (req.is_routed() && admission.GetCode() == K_SCALE_DOWN && membership_.SupportsWriteRedirect()) {
         std::string tenantId;
-        RETURN_IF_NOT_OK(req.is_routed() ? worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId)
-                                        : worker::Authenticate(akSkManager_, req, tenantId));
+        RETURN_IF_NOT_OK(req.is_routed()
+                             ? worker::AuthenticateRequest(requestAuthenticator_, req, req.tenant_id(), tenantId)
+                             : worker::Authenticate(requestAuthenticator_, req, tenantId));
         FillWorkerRedirect(req.object_key(), *resp.mutable_worker_redirect());
         return Status::OK();
     }
@@ -1735,8 +1731,9 @@ Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
     auto admission = AcquireClientWriteAdmission();
     if (req.is_routed() && admission.GetCode() == K_SCALE_DOWN && membership_.SupportsWriteRedirect()) {
         std::string tenantId;
-        RETURN_IF_NOT_OK(req.is_routed() ? worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId)
-                                        : worker::Authenticate(akSkManager_, req, tenantId));
+        RETURN_IF_NOT_OK(req.is_routed()
+                             ? worker::AuthenticateRequest(requestAuthenticator_, req, req.tenant_id(), tenantId)
+                             : worker::Authenticate(requestAuthenticator_, req, tenantId));
         FillWorkerRedirect(req.object_key(), *resp.mutable_worker_redirect());
         return Status::OK();
     }
@@ -2395,8 +2392,8 @@ Status WorkerOCServiceImpl::DecreaseReference(const DecreaseReferenceRequest &re
     ScopedRequestContext ctx;
     Timer timer;
     std::string tenantId;
-    Status authRc = req.is_routed() ? worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId)
-                                    : worker::Authenticate(akSkManager_, req, tenantId);
+    Status authRc = req.is_routed() ? worker::AuthenticateRequest(requestAuthenticator_, req, req.tenant_id(), tenantId)
+                                    : worker::Authenticate(requestAuthenticator_, req, tenantId);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(authRc, "Authenticate failed.");
     if (req.object_keys_size() > 0) {
         VLOG(1) << FormatString("[shmId %s] [client: %s] DoDecrease", req.object_keys(0), req.client_id());
@@ -2429,7 +2426,7 @@ Status WorkerOCServiceImpl::ReconcileShmRef(const ReconcileShmRefReqPb &req, Rec
     auto clientId = ClientKey::Intern(req.client_id());
     std::string authTenantId = worker::ClientManager::Instance().GetAuthTenantIdByClientId(clientId, exist);
     CHECK_FAIL_RETURN_STATUS(exist, K_INVALID, FormatString("Client %s not found", req.client_id()));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, authTenantId, tenantId),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(requestAuthenticator_, req, authTenantId, tenantId),
                                      "Authenticate failed");
     BthreadReadGuard noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
@@ -2546,7 +2543,8 @@ Status WorkerOCServiceImpl::InvalidateBuffer(const InvalidateBufferReqPb &req, I
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId),
+                                     "Authenticate failed.");
     LOG(INFO) << FormatString("InvalidateBuffer begin, cliendId: %s, objectKey: %s", req.client_id(), req.object_key());
     (void)rsp;
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_key());
@@ -3106,7 +3104,8 @@ Status WorkerOCServiceImpl::PublishDeviceObject(const PublishDeviceObjectReqPb &
     ScopedRequestContext ctx;
     std::string tenantId;
     auto clientId = ClientKey::Intern(req.client_id());
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId),
+                                     "Authenticate failed.");
     std::vector<ShmKey> shmUnits = { ShmKey::Intern(req.shm_id()) };
     RETURN_IF_NOT_OK(
         WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(tenantId, clientId, shmUnits, memoryRefTable_));
@@ -3135,7 +3134,8 @@ Status WorkerOCServiceImpl::GetDeviceObject(
     GetDeviceObjectReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId),
+                                     "Authenticate failed.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.device_object_keys_size()),
                                          StatusCode::K_INVALID, "invalid object size");
 
@@ -3175,8 +3175,8 @@ Status WorkerOCServiceImpl::PutP2PMeta(const PutP2PMetaReqPb &req, PutP2PMetaRsp
     std::string tenantId;
     CHECK_FAIL_RETURN_STATUS(req.dev_obj_meta_size() > 0 && req.dev_obj_meta(0).locations_size() > 0, K_INVALID,
                              "The device meta and locations cannot be empty.");
-    const auto clientId = ClientKey::Intern(req.dev_obj_meta(0).locations().begin()->client_id());
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
+    const auto &clientId = req.dev_obj_meta(0).locations().begin()->client_id();
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId, clientId),
                                      "Authenticate failed.");
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
     RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, workerMasterApi));
@@ -3204,8 +3204,7 @@ Status WorkerOCServiceImpl::SubscribeReceiveEvent(
     SubscribeReceiveEventReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
     std::string tenantId;
-    auto clientId = ClientKey::Intern(req.src_client_id());
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId, req.src_client_id()),
                                      "Authenticate failed.");
     int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
@@ -3246,8 +3245,8 @@ Status WorkerOCServiceImpl::GetP2PMeta(
     std::string tenantId;
     CHECK_FAIL_RETURN_STATUS(req.dev_obj_meta_size() > 0 && req.dev_obj_meta(0).locations_size() > 0, K_INVALID,
                              "The device meta and locations cannot be empty.");
-    const auto clientId = ClientKey::Intern(req.dev_obj_meta(0).locations().begin()->client_id());
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
+    const auto &clientId = req.dev_obj_meta(0).locations().begin()->client_id();
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId, clientId),
                                      "Authenticate failed.");
     int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
@@ -3290,8 +3289,7 @@ Status WorkerOCServiceImpl::SendRootInfo(const SendRootInfoReqPb &req, SendRootI
 {
     ScopedRequestContext ctx;
     std::string tenantId;
-    auto clientId = ClientKey::Intern(req.dst_client_id());
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId, req.dst_client_id()),
                                      "Authenticate failed.");
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
     RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, workerMasterApi));
@@ -3310,8 +3308,7 @@ Status WorkerOCServiceImpl::RecvRootInfo(
     RecvRootInfoReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
     std::string tenantId;
-    auto clientId = ClientKey::Intern(req.src_client_id());
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId, req.src_client_id()),
                                      "Authenticate failed.");
     int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
@@ -3341,8 +3338,7 @@ Status WorkerOCServiceImpl::AckRecvFinish(const AckRecvFinishReqPb &req, AckRecv
 {
     ScopedRequestContext ctx;
     std::string tenantId;
-    auto clientId = ClientKey::Intern(req.dst_client_id());
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId, req.dst_client_id()),
                                      "Authenticate failed.");
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
     RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, workerMasterApi));
@@ -3370,7 +3366,8 @@ Status WorkerOCServiceImpl::GetDataInfo(
     GetDataInfoReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId),
+                                     "Authenticate failed.");
     auto objectKey = req.object_key();
     int64_t subTimeout = req.sub_timeout();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsInNonNegativeInt32(subTimeout), K_RUNTIME_ERROR,
@@ -3456,7 +3453,7 @@ Status WorkerOCServiceImpl::GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaInfo
 Status WorkerOCServiceImpl::GetHashRing(const GetHashRingReqPb &req, GetHashRingRspPb &rsp)
 {
     ScopedRequestContext ctx;
-    RETURN_RUNTIME_ERROR_IF_NULL(akSkManager_);
+    RETURN_RUNTIME_ERROR_IF_NULL(requestAuthenticator_);
     RETURN_RUNTIME_ERROR_IF_NULL(topologyEngine_);
     std::shared_ptr<const cluster::TopologySnapshot> snapshot;
     RETURN_IF_NOT_OK(membership_.GetSnapshot(snapshot));

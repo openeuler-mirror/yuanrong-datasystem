@@ -529,7 +529,8 @@ protected:
 
     void SetTenantId(std::string &tenantId) override
     {
-        tenantId = GetRequestContext()->tenantId;
+        const auto &requestTenantId = GetRequestContext()->tenantId;
+        tenantId = requestTenantId.empty() ? tenantId_ : requestTenantId;
     }
 
     Status Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection = false,

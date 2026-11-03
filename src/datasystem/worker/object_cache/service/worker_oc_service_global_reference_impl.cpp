@@ -168,12 +168,11 @@ Status WorkerOcServiceGlobalReferenceImpl::RollbackDecreaseRefForRetry(const Cli
 }
 
 WorkerOcServiceGlobalReferenceImpl::WorkerOcServiceGlobalReferenceImpl(
-    WorkerOcServiceCrudParam &initParam,
-    std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable, std::shared_ptr<AkSkManager> akSkManager,
-    HostPort &localAddress)
+    WorkerOcServiceCrudParam &initParam, std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable,
+    std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator, HostPort &localAddress)
     : WorkerOcServiceCrudCommonApi(initParam),
       globalRefTable_(std::move(globalRefTable)),
-      akSkManager_(std::move(akSkManager)),
+      requestAuthenticator_(std::move(requestAuthenticator)),
       localAddress_(localAddress)
 {
 }
@@ -251,7 +250,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseRef(const GIncreaseReqPb &re
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_GINCREASEREF);
     access.ObjectKeysRef(req.object_keys());
     std::string tenantId;
-    Status authRc = worker::Authenticate(akSkManager_, req, tenantId);
+    Status authRc = worker::Authenticate(requestAuthenticator_, req, tenantId);
     if (authRc.IsError()) {
         LOG(ERROR) << "Authenticate failed. Detail: " << authRc.ToString();
         access.Result(authRc).Record();
@@ -285,7 +284,8 @@ Status WorkerOcServiceGlobalReferenceImpl::GDecreaseRef(const GDecreaseReqPb &re
 {
     ScopedRequestContext ctx;
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId),
+                                     "Authenticate failed.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_keys_size()),
                                          StatusCode::K_INVALID, "invalid object size");
     auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
@@ -323,7 +323,8 @@ Status WorkerOcServiceGlobalReferenceImpl::GDecreaseRef(const GDecreaseReqPb &re
 Status WorkerOcServiceGlobalReferenceImpl::ReleaseGRefs(const ReleaseGRefsReqPb &req, ReleaseGRefsRspPb &resp)
 {
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId),
+                                     "Authenticate failed.");
     LOG(INFO) << "[Ref] ReleaseGRefs object list: " << req.remote_client_id();
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_RELEASEGREFS);
     access.RemoteClientId(req.remote_client_id());
@@ -356,7 +357,8 @@ Status WorkerOcServiceGlobalReferenceImpl::QueryGlobalRefNum(const QueryGlobalRe
     ScopedRequestContext ctx;
     Timer timer;
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId),
+                                     "Authenticate failed.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_keys_size()),
                                          StatusCode::K_INVALID, "invalid object size");
     auto namespaceUris = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
@@ -407,7 +409,8 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseRefWithRemoteClientId(const 
                                                                           GIncreaseRspPb &resp)
 {
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId),
+                                     "Authenticate failed.");
     ScopedRequestContext ctx;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_GINCREASEREF);
     INJECT_POINT("worker.GIncrease_ref_failure");

@@ -39,7 +39,6 @@
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/locks.h"
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/l2cache/l2_storage.h"
@@ -177,13 +176,13 @@ public:
      * @param[in] controlBackendAvailableAtStartup Whether startup exact-read reached the control backend.
      */
     WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAddr, std::shared_ptr<ObjectTable> objectTable,
-                        std::shared_ptr<AkSkManager> manager, std::shared_ptr<WorkerOcEvictionManager> evictionManager,
+                        std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator,
+                        std::shared_ptr<WorkerOcEvictionManager> evictionManager,
                         std::shared_ptr<PersistenceApi> persistApi, EtcdStore *etcdStore,
                         master::MasterOCServiceImpl *masterOCService, cluster::TopologyEngine *topologyEngine,
                         const worker::MetadataRouteResolver &metadataRoute,
-                        const cluster::MembershipEndpointView &membership,
-                        const std::atomic<bool> *exitRequested, bool isRestart,
-                        bool controlBackendAvailableAtStartup);
+                        const cluster::MembershipEndpointView &membership, const std::atomic<bool> *exitRequested,
+                        bool isRestart, bool controlBackendAvailableAtStartup);
 
     ~WorkerOCServiceImpl() override;
 
@@ -1482,7 +1481,7 @@ private:
     size_t metadataSize_{ 0 };
     // support leve2 storage type
     L2StorageType supportL2Storage_;
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
+    std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator_{ nullptr };
     std::shared_ptr<AsyncRpcRequestManager> asyncRpcManager_{ nullptr };
 
     std::shared_ptr<std::atomic_bool> exitFlag_;

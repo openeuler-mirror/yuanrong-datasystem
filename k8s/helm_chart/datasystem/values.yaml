@@ -450,9 +450,6 @@ global:
     tenantSecretKey: ""
     # Request expiration time in seconds, the maximum value is 300s.
     requestExpireTimeS: 300
-    # Skip authentication for worker requests
-    skipAuthenticate: false
-
   tenantAuth:
     # Indicates whether to enable the tenant authentication, default is false.
     # Tenant authorization is forbidden in the case of stream cache.

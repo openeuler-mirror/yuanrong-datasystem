@@ -21,7 +21,7 @@
 #include <chrono>
 #include <unordered_set>
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
+#include "datasystem/worker/authenticate.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/object/object_enum.h"
@@ -37,18 +37,17 @@ namespace object_cache {
 
 class WorkerOcServiceMultiPublishImpl : public WorkerOcServiceCrudCommonApi {
 public:
-
     /**
      * @brief Construct WorkerOcServiceMultiPublishImpl.
      * @param[in] initParam The parameter used to init WorkerOcServiceCrudCommonApi.
      * @param[in] memCpyThreadPool Used to copy data to memory.
      * @param[in] threadPool Worker pool used by publish operations.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
+     * @param[in] requestAuthenticator Used to authenticate worker requests.
      * @param[in] localAddress The local worker address.
      */
-    WorkerOcServiceMultiPublishImpl(WorkerOcServiceCrudParam &initParam,
-                                    std::shared_ptr<ThreadPool> memCpyThreadPool,
-                                    std::shared_ptr<ThreadPool> threadPool, std::shared_ptr<AkSkManager> akSkManager,
+    WorkerOcServiceMultiPublishImpl(WorkerOcServiceCrudParam &initParam, std::shared_ptr<ThreadPool> memCpyThreadPool,
+                                    std::shared_ptr<ThreadPool> threadPool,
+                                    std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator,
                                     HostPort &localAddress);
 
     /**
@@ -365,7 +364,7 @@ private:
 
     std::shared_ptr<ThreadPool> threadPool_{ nullptr };
 
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
+    std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator_{ nullptr };
 
     HostPort &localAddress_;
 };

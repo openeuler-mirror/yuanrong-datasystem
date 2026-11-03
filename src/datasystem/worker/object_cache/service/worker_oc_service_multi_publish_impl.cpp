@@ -79,12 +79,12 @@ void SetLastError(const Status &rc, CreateMultiMetaRspPb &rsp)
 
 WorkerOcServiceMultiPublishImpl::WorkerOcServiceMultiPublishImpl(
     WorkerOcServiceCrudParam &initParam, std::shared_ptr<ThreadPool> memCpyThreadPool,
-    std::shared_ptr<ThreadPool> threadPool,
-    std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress)
+    std::shared_ptr<ThreadPool> threadPool, std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator,
+    HostPort &localAddress)
     : WorkerOcServiceCrudCommonApi(initParam),
       memCpyThreadPool_(std::move(memCpyThreadPool)),
       threadPool_(std::move(threadPool)),
-      akSkManager_(std::move(akSkManager)),
+      requestAuthenticator_(std::move(requestAuthenticator)),
       localAddress_(localAddress)
 {
 }
@@ -123,8 +123,8 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishImpl(const MultiPublishReqPb
     PerfPoint point(PerfKey::WORKER_MULTI_PUBLISH_INPUT_CHECK);
     // Add namespace for objectKey.
     std::string tenantId;
-    Status authRc = req.is_routed() ? worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId)
-                                    : worker::Authenticate(akSkManager_, req, tenantId);
+    Status authRc = req.is_routed() ? worker::AuthenticateRequest(requestAuthenticator_, req, req.tenant_id(), tenantId)
+                                    : worker::Authenticate(requestAuthenticator_, req, tenantId);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(authRc, "Authenticate failed.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_info_size()),
                                          StatusCode::K_INVALID,

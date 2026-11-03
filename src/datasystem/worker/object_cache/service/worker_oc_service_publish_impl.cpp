@@ -138,12 +138,12 @@ void FillReadLoadFeedback(const Status &rc, PublishRspPb &resp)
 }
 }  // namespace
 
-WorkerOcServicePublishImpl::WorkerOcServicePublishImpl(WorkerOcServiceCrudParam &initParam,
-                                                       std::shared_ptr<ThreadPool> memCpyThreadPool,
-                                                       std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress)
+WorkerOcServicePublishImpl::WorkerOcServicePublishImpl(
+    WorkerOcServiceCrudParam &initParam, std::shared_ptr<ThreadPool> memCpyThreadPool,
+    std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator, HostPort &localAddress)
     : WorkerOcServiceCrudCommonApi(initParam),
       memCpyThreadPool_(std::move(memCpyThreadPool)),
-      akSkManager_(std::move(akSkManager)),
+      requestAuthenticator_(std::move(requestAuthenticator)),
       localAddress_(localAddress),
       metadataOwnerProbeThreadPool_(META_FAILURE_PROBE_THREAD_NUM, META_FAILURE_PROBE_THREAD_NUM, "MetaOwnerProbe")
 {
@@ -628,8 +628,8 @@ Status WorkerOcServicePublishImpl::PublishImpl(const PublishReqPb &req, PublishR
     // Step1: Add namespace for objectKeys.
     VLOG(1) << FormatString("[ObjectKey %s] is being publishing [Sz: %zu].", req.object_key(), req.data_size());
     std::string tenantId;
-    Status authRc = req.is_routed() ? worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId)
-                                    : worker::Authenticate(akSkManager_, req, tenantId);
+    Status authRc = req.is_routed() ? worker::AuthenticateRequest(requestAuthenticator_, req, req.tenant_id(), tenantId)
+                                    : worker::Authenticate(requestAuthenticator_, req, tenantId);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(authRc, "Authenticate failed.");
     std::vector<ShmKey> shmUnits = std::vector<ShmKey>{ ShmKey::Intern(req.shm_id()) };
     RETURN_IF_NOT_OK(WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(tenantId, ClientKey::Intern(req.client_id()),

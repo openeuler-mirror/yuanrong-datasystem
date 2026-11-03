@@ -53,6 +53,7 @@
     identity through those existing server-owned fields. Original native handlers retain token, tenant/session and
     resource permissions; IRPC signatures remain unchanged. OFF registers native adapters directly. No auth TLS,
     per-service dispatch facade, WithRpcAuth/WithTenantResolver entry, or body include template is used.
+  - `request_authenticator.h` owns the immutable business-request authentication policy and its fast-path templates.
   - object-cache Create, MultiCreate, Publish, and MultiPublish handlers select authentication by request origin:
     routed requests with `is_routed=true` call `worker::AuthenticateRequest` using the signed request tenant, while
     legacy gateway requests retain the registered-client authentication path. Deploy workers with this routed-request
@@ -611,10 +612,13 @@ Coordinator WORKER adds a membership-prefix watch. `TopologyEngine::EnqueueCoord
   `AkSkManager::ServerAuthEnabled()` reports whether the configured verification map is nonempty; initialization
   installs `BrpcAuthCapture` when that map is nonempty or tenant authorization is enabled. It then registers both
   original-name and companion-name generic `BrpcAuthService` wrappers borrowing the original native adapter. Without
-  configured keys or tenant authorization, native adapters remain direct. `skip_authenticate` retains its existing
-  tenant-request bypass; direct peer/master checks still follow the configured key map. WorkerOCServer
-  owns wrappers/adapters and the capture factory until RPC Shutdown drains handlers, including partial registration failure. Cache creators are fixed immediately
-  after InitAkSk, before H2D/URMA/topology can initialize the singleton; Coordinator creators remain native.
+  configured keys or tenant authorization, native adapters remain direct. Worker startup initializes IAM and creates
+  one immutable `RequestAuthenticator` before services are constructed. Business requests bypass client-table lookup
+  when both system AK/SK and IAM are disabled; otherwise they retain the existing tenant and session checks. The SDK
+  writes the request-context tenant when present and otherwise falls back to the connection tenant. WorkerOCServer
+  owns the request authenticator, wrappers/adapters, and capture factory until RPC shutdown drains handlers, including
+  partial registration failure. Cache creators are fixed immediately after InitAkSk, before H2D/URMA/topology can
+  initialize the singleton; Coordinator creators remain native.
 
 ## Object Metadata Persistence Boundary
 

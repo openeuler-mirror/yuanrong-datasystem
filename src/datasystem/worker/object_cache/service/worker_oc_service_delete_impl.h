@@ -20,6 +20,7 @@
 
 #include "datasystem/utils/status.h"
 
+#include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_get_impl.h"
 
@@ -28,9 +29,9 @@ namespace object_cache {
 
 class WorkerOcServiceDeleteImpl : public WorkerOcServiceCrudCommonApi {
 public:
-    WorkerOcServiceDeleteImpl(WorkerOcServiceCrudParam &initParam, std::shared_ptr<AkSkManager> akSkManager,
-                              HostPort &localAddress,
-                              std::shared_ptr<WorkerOcServiceGetImpl> getProc);
+    WorkerOcServiceDeleteImpl(WorkerOcServiceCrudParam &initParam,
+                              std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator,
+                              HostPort &localAddress, std::shared_ptr<WorkerOcServiceGetImpl> getProc);
 
     /**
      * @brief The rpc method used to delete the objects.
@@ -100,7 +101,7 @@ private:
      */
     Status DeleteObjectFromNotification(const std::string &objectKey, uint64_t version, bool async);
 
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
+    std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator_{ nullptr };
 
     HostPort &localAddress_;
 

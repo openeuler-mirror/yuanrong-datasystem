@@ -81,7 +81,6 @@
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/shared_memory/allocator.h"
 
-DS_DECLARE_bool(authorization_enable);
 DS_DECLARE_bool(enable_transport_fallback);
 DS_DECLARE_uint32(data_migrate_rate_limit_mb);
 DS_DEFINE_bool(enable_l2_cache_fallback, true, "Control whether enable fallback to L2 cache when worker failed.");
@@ -261,13 +260,14 @@ std::string BuildExistRedirectExtra(const google::protobuf::RepeatedPtrField<Red
 WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam,
                                                std::shared_ptr<ThreadPool> memCpyThreadPool,
                                                std::shared_ptr<ThreadPool> threadPool,
-                                               std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
+                                               std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator,
+                                               HostPort localAddress,
                                                std::shared_ptr<MigrateDataRateController> rateController,
                                                std::shared_ptr<PeerUbAdmission> ubAdmission)
     : WorkerOcServiceCrudCommonApi(initParam),
       memCpyThreadPool_(std::move(memCpyThreadPool)),
       threadPool_(std::move(threadPool)),
-      akSkManager_(std::move(akSkManager)),
+      requestAuthenticator_(std::move(requestAuthenticator)),
       localAddress_(std::move(localAddress)),
       rateController_(std::move(rateController)),
       ubAdmission_(std::move(ubAdmission))
@@ -310,7 +310,8 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
     VLOG(1) << FormatString("[Get] Receive, clientId: %s, serverApiReadCost: %.3fms, inflightRemoteGet: %d", clientId,
                             timer.ElapsedMilliSecond(), inflightGauge.Get());
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId),
+                                     "Authenticate failed.");
 
     int64_t subTimeout = req.sub_timeout();
     int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
@@ -2814,11 +2815,13 @@ void WorkerOcServiceGetImpl::FillGetObjMetaInfoRspPb(
     }
 }
 
-Status AuthenticateGetMetaUser(AkSkManager *akSkManager)
+Status AuthenticateGetMetaUser(const worker::RequestAuthenticator *requestAuthenticator)
 {
-    if (!akSkManager->SystemAuthEnabled()) {
+    CHECK_FAIL_RETURN_STATUS(requestAuthenticator != nullptr, K_INVALID,
+                             "Request authenticator has not been initialized.");
+    if (!requestAuthenticator->SystemAuthEnabled()) {
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            !FLAGS_authorization_enable, K_NOT_AUTHORIZED,
+            !requestAuthenticator->TenantAuthEnabled(), K_NOT_AUTHORIZED,
             "Only the ak/sk client can check the meta info of objects if tenant authorization is enabled.");
     }
     return Status::OK();
@@ -3045,7 +3048,7 @@ Status WorkerOcServiceGetImpl::GetObjMetaInfo(const GetObjMetaInfoReqPb &req, Ge
 {
     ScopedRequestContext ctx;
     INJECT_POINT("worker.GetObjMetaInfo");
-    RETURN_IF_NOT_OK(AuthenticateGetMetaUser(akSkManager_.get()));
+    RETURN_IF_NOT_OK(AuthenticateGetMetaUser(requestAuthenticator_.get()));
     // construct objectKey by the input tenantId
     auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(req.tenantid(), req.object_keys());
     Status lastRc;
@@ -3072,7 +3075,8 @@ Status WorkerOcServiceGetImpl::QuerySize(const QuerySizeReqPb &req, QuerySizeRsp
     auto clientId = ClientKey::Intern(req.client_id());
     LOG(INFO) << "QuerySize start from client:" << clientId;
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId),
+                                     "Authenticate failed.");
     auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
     QueryMetadataFromMasterResult queryMetaResult;
     std::vector<master::QueryMetaInfoPb> &queryMetas = queryMetaResult.queryMetas;
@@ -3279,8 +3283,8 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     auto clientId = ClientKey::Intern(req.client_id());
     VLOG(1) << "Exist start from client:" << clientId;
     std::string tenantId;
-    Status authRc = req.is_routed() ? worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId)
-                                    : worker::Authenticate(akSkManager_, req, tenantId);
+    Status authRc = req.is_routed() ? worker::AuthenticateRequest(requestAuthenticator_, req, req.tenant_id(), tenantId)
+                                    : worker::Authenticate(requestAuthenticator_, req, tenantId);
     if (authRc.IsError()) {
         LOG(ERROR) << "Authenticate failed. Detail: " << authRc.ToString();
         access.Result(authRc).Record();
@@ -3392,7 +3396,8 @@ Status WorkerOcServiceGetImpl::GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaI
     auto clientId = ClientKey::Intern(req.client_id());
     LOG(INFO) << "GetMetaInfo start from client:" << clientId;
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId),
+                                     "Authenticate failed.");
     auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
     if (!req.is_dev_key()) {
         QueryMetadataFromMasterResult queryResult;

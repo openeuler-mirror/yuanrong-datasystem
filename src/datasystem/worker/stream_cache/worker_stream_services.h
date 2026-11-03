@@ -33,6 +33,7 @@
 #include "datasystem/master/metadata_manager_holder.h"
 #include "datasystem/worker/metadata_route_resolver.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
+#include "datasystem/worker/request_authenticator.h"
 
 #include "datasystem/utils/status.h"
 
@@ -57,7 +58,8 @@ public:
     void CreateMasterServices(const HostPort &host, const std::shared_ptr<AkSkManager> &akSkManager,
                               MetadataManagerHolder *holder, const cluster::MembershipEndpointView &membership,
                               bool isRestart);
-    void CreateWorkerServices(const HostPort &host, const std::shared_ptr<AkSkManager> &akSkManager,
+    void CreateWorkerServices(const HostPort &host,
+                              const std::shared_ptr<const RequestAuthenticator> &requestAuthenticator,
                               const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager,
                               const MetadataRouteResolver &metadataRoute,
                               const cluster::MembershipEndpointView &membership);

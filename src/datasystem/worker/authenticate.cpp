@@ -22,9 +22,6 @@
 
 #include "datasystem/worker/authenticate.h"
 
-DS_DEFINE_bool(skip_authenticate, false, "hack to skip authenticate");
-
-
 namespace datasystem {
 namespace worker {
 namespace {
@@ -147,9 +144,6 @@ Status AuthenticateRpc(const RpcAuthMethod &method, AkSkManager &manager, brpc::
     // Body credentials are untrusted. Only the receiving RPC entry can publish a verified identity to business code.
     reflection->ClearField(&request, method.accessKey);
     reflection->ClearField(&request, method.signature);
-    if (FLAGS_skip_authenticate) {
-        return Status::OK();
-    }
     if (method.policy == RpcAuthPolicy::HEALTH && StringField(request, method.clientId).empty()) {
         return Status::OK();
     }
@@ -187,7 +181,7 @@ Status AuthenticateRpc(const RpcAuthMethod &method, AkSkManager &manager, brpc::
 }  // namespace
 
 Status CreateRpcAuthenticator(const google::protobuf::ServiceDescriptor &service,
-                              std::shared_ptr<AkSkManager> manager, BrpcAuthService::Authenticate &authenticate)
+                              const std::shared_ptr<AkSkManager> &manager, BrpcAuthService::Authenticate &authenticate)
 {
     CHECK_FAIL_RETURN_STATUS(manager != nullptr, K_INVALID, "AK/SK manager has not been initialized.");
     std::vector<RpcAuthMethod> methods(service.method_count());
@@ -225,9 +219,9 @@ Status CreateRpcAuthenticator(const google::protobuf::ServiceDescriptor &service
         CHECK_FAIL_RETURN_STATUS(methods[i].policy != RpcAuthPolicy::UNSET, K_INVALID,
                                  "Missing RPC authentication policy: " + service.method(i)->full_name());
     }
-    authenticate = [manager = std::move(manager), methods = std::move(methods)](
-        const google::protobuf::MethodDescriptor &method, brpc::Controller &controller,
-        google::protobuf::Message &request) {
+    authenticate = [manager, methods = std::move(methods)](const google::protobuf::MethodDescriptor &method,
+                                                           brpc::Controller &controller,
+                                                           google::protobuf::Message &request) {
         return AuthenticateRpc(methods[method.index()], *manager, controller, request);
     };
     return Status::OK();
