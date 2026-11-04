@@ -74,8 +74,10 @@ public:
 
     /**
      * @brief Register the log handler func for specific type of log.
+     * @param[in] enabled Whether to collect and emit this group to both resource logs.
      */
-    void RegisterCollectHandler(ResMetricName metricName, std::function<std::string()> collectHandler);
+    void RegisterCollectHandler(ResMetricName metricName, std::function<std::string()> collectHandler,
+                                bool enabled = true);
 
     /**
      * @brief Stop metric collector.
@@ -83,6 +85,11 @@ public:
     void Stop();
 
 private:
+    struct CollectHandlerEntry {
+        std::function<std::string()> collect;
+        bool enabled;
+    };
+
     /**
      * @brief Start logging Res message in the thread.
      */
@@ -101,7 +108,7 @@ private:
     std::unique_ptr<MetricsExporter> exporter_{ nullptr };
     std::unique_ptr<JsonLinesExporter> jsonExporter_{ nullptr };
     std::unique_ptr<Thread> collectorThread_{ nullptr };
-    std::unordered_map<int, std::function<std::string()>> collectHandler_;
+    std::unordered_map<int, CollectHandlerEntry> collectHandler_;
     bool isInit_ = false;
 };
 }  // namespace datasystem

@@ -143,8 +143,7 @@ TEST(NodeSelectorMaintenanceTest, PreReportHookHonorsMinimumIntervalDuringFastRe
 TEST(NodeSelectorMaintenanceTest, ObjectCopyWatermarkFormatsRatiosAndZeroDenominators)
 {
     ObjectCopyWatermark empty;
-    EXPECT_EQ(empty.ToMetricsString(),
-              "0/0/0/0.000000000/0.000000000/0.000000000/0/0/0/0.000000000/0.000000000");
+    EXPECT_EQ(empty.ToMetricsString(), "0/0/0/0.00/0.00/0.00/0/0/0/0.00/0.00");
 
     auto &selector = NodeSelector::Instance();
     selector.SetObjectCopyWatermark(30, 45, 2, 8, 25, 100, 200);
@@ -156,8 +155,7 @@ TEST(NodeSelectorMaintenanceTest, ObjectCopyWatermarkFormatsRatiosAndZeroDenomin
     EXPECT_EQ(snapshot.totalPrimaryCopyCount, 8u);
     EXPECT_EQ(snapshot.coldPrimaryCopyBytes, 30u);
     EXPECT_EQ(snapshot.warmPrimaryCopyBytes, 45u);
-    EXPECT_EQ(snapshot.ToMetricsString(),
-              "25/100/200/0.125000000/0.500000000/0.250000000/1/30/45/0.300000000/0.450000000");
+    EXPECT_EQ(snapshot.ToMetricsString(), "25/100/200/0.12/0.50/0.25/1/30/45/0.30/0.45");
     EXPECT_EQ(heatReport.hotPrimaryCopyCount, 9u);
     EXPECT_EQ(heatReport.totalPrimaryCopyCount, 9u);
     EXPECT_EQ(heatReport.hotPrimaryCopyBytes, 900u);

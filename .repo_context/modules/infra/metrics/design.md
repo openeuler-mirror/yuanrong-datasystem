@@ -63,7 +63,7 @@
 - Target users, callers, or operators:
   - worker and master developers registering metrics, client and runtime test authors, and operators reading resource-monitor files.
 - Typical usage time or trigger conditions:
-  - runtime startup registers handlers, collector initialization occurs when monitor logging is enabled, and periodic sampling runs throughout process lifetime.
+  - runtime startup initializes resource exporters and registers handlers; periodic sampling runs throughout process lifetime, while `log_monitor` gates text output.
 - Typical deployment or runtime environment:
   - long-lived worker or master processes writing resource-monitor files under the configured log directory.
 - How the feature is expected to be used:
@@ -76,9 +76,9 @@
   - security:
     - new metric payloads should not expose sensitive request or credential data.
   - resilience:
-    - one missing handler should degrade one column or family rather than crash the process.
+    - disabled and unregistered groups are omitted rather than reserving empty columns or failing the process.
   - reliability:
-    - metric family ordering and semantic meaning should remain stable across releases.
+    - metric group names and semantic meaning should remain stable across releases; text readers resolve names rather than column indexes.
   - availability:
     - business logic should continue even if monitor output is blank, stale, or partially degraded.
   - privacy:
@@ -91,7 +91,7 @@
 - keep metric definition, registration, collection, and persistence responsibilities separated;
 - keep metric emission asynchronous and bounded rather than synchronous on producer paths;
 - reuse exporter infrastructure across resource metrics and logging-side access-monitor outputs;
-- preserve stable family ordering and readable descriptions for operational consumers.
+- preserve clear group names and readable descriptions for operational consumers.
 
 ## Non-Goals
 
@@ -148,9 +148,9 @@
   - Coordinator initializes and ticks the same typed registry from `coordinator_runtime.cpp`. Every dispatched `CoordinatorService` RPC entrypoint increments its own request counter before handler-level validation or serving gates, so handler-rejected and redirected requests remain visible. Requests dropped by RPC framework admission before service dispatch are outside these per-method counters and remain covered by framework-level metrics. Successful business watch notifications increment sent-batch, sent-event, and serialized-`EventReqPb` byte counters in `WatchDispatcherImpl::DoNotify`; the byte counter excludes transport framing and worker reachability probes use a separate path, so probes are excluded from all three counters. `SendEventRequest` records `HandleEvent` latency and failures, while channel-map mutations publish the lock-consistent live channel count.
   - request-path latency for `set/get` style APIs is mostly surfaced through the logging/access-recorder path rather than through typed metrics families.
 - Relevant constraints from current release or deployment:
-  - collector startup is gated by `log_monitor` and exporter initialization, and each resource-write loop re-checks runtime `log_monitor`;
+  - exporter initialization gates collector startup; each collection loop re-checks runtime `log_monitor` only for text writes;
   - `HardDiskExporter` is shared with logging-side access records, so exporter changes are cross-cutting;
-  - family ordering in `res_metrics.def` is explicitly marked as order-sensitive.
+  - `res_metrics.def` and the JSON descriptor table must use matching internal indexes; these indexes are not text column identifiers.
 - Similar upstream, industry, or historical approaches considered:
   - instead of a standalone metrics service or protocol exporter, the current repository stores monitor output in local files aligned with existing logging flows.
 - Selected approach and why:
@@ -201,16 +201,17 @@
   - worker startup registers handlers for memory, disk, thread-pool, and backend success-rate metrics;
   - the collector periodically samples all registered families and emits one structured monitor line;
   - shared exporter code flushes both resource metrics and access-monitor output;
-  - an operator diagnoses blank columns caused by missing handler registration rather than complete collector failure.
+  - an operator checks startup registration and enable conditions when an expected metric group is absent.
 - Key interactions between actors and services:
   - runtime modules interact with `ResMetricCollector::RegisterCollectHandler(...)`;
+  - registration accepts `enabled = true`; Worker code computes optional-group conditions, and the collector applies the saved boolean to sampling and both text/JSON outputs;
   - `ResMetricCollector` interacts with `MetricsExporter` and `HardDiskExporter`;
   - `HardDiskExporter` interacts with filesystem utilities and logging prefix formatting;
-  - monitor-file readers depend on stable family order and file naming.
+  - monitor-file readers depend on group names, field meanings and file naming.
 - Normal path summary:
   - metrics families are defined and described, handlers are registered during runtime startup, collector samples at a configured interval, and exporter threads persist the results to disk.
 - Exceptional path summary:
-  - unsupported exporter selection prevents initialization, missing handlers yield blank columns with one warning, and file or exporter failures degrade monitor visibility without necessarily stopping service logic.
+  - unsupported exporter selection prevents initialization; unregistered groups are skipped, while malformed enabled JSON payloads produce a warning and all-zero fallback. File or exporter failures degrade monitor visibility without necessarily stopping service logic.
 
 ## Entry Points, External Interfaces, And Integration Points
 
@@ -228,7 +229,7 @@
   - `MetricsExporter::WriteMessage(...)`
   - `HardDiskExporter::FlushThread()`
 - External protocols, schemas, or data formats:
-  - monitor output is line-based text emitted by `HardDiskExporter::Send(...)` with the standard repository log prefix plus a pipe-delimited metric payload;
+  - text monitor output retains the standard repository log prefix followed by raw-value groups separated by ` | `, without adding metric names, headers or version fields;
   - metric family ordering is derived from `res_metrics.def`;
   - family descriptions and units are sourced from `metrics_description.def`.
 - CLI commands, config flags, or environment variables:
@@ -252,7 +253,7 @@
   - upstream runtime modules must register handlers before useful collection occurs;
   - downstream dependencies include filesystem access, shared logging utilities, and any tooling that parses resource monitor files.
 - Backward-compatibility expectations for external consumers:
-  - family order, family names, description meaning, file naming, and monitor file layout should be treated as operational contracts.
+  - group names, description meaning and file naming are operational contracts; text readers must allow configuration-dependent group omission and resolve values by group name.
 
 ## Core Components
 
@@ -262,7 +263,7 @@
 | `HardDiskExporter` | concrete file writer, rolling, pruning, and prefix formatting | `src/datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.h/.cpp` | shared with logging-side access output |
 | `ResMetricCollector` | periodic sampling and exporter submission | `src/datasystem/common/metrics/res_metric_collector.h/.cpp` | singleton |
 | `datasystem::metrics` typed API | fixed-id Counter/Gauge/Histogram updates and periodic `LOG(INFO)` summaries | `src/datasystem/common/metrics/metrics.h/.cpp` | no exporter, no buckets, no dynamic labels |
-| `ResMetricName` families | stable family identity and iteration order | `src/datasystem/common/metrics/res_metric_name.h`, `src/datasystem/common/metrics/res_metrics.def` | order-sensitive |
+| `ResMetricName` families | internal family indexes and collection order | `src/datasystem/common/metrics/res_metric_name.h`, `src/datasystem/common/metrics/res_metrics.def` | aligned with the schema table |
 | `metrics_description.def` | family descriptions and units | `src/datasystem/common/metrics/metrics_description.def` | human-readable semantic contract |
 | runtime registration code | binds families to live handler lambdas | `src/datasystem/worker/worker_oc_server.cpp` | major current site |
 
@@ -270,10 +271,10 @@
 
 ### Register And Collect Metrics
 
-1. Runtime startup registers handler lambdas through `RegisterCollectHandler(...)`.
-2. `ResMetricCollector::Init()` selects and initializes the exporter when monitor logging is enabled.
+1. Runtime startup calls `ResMetricCollector::Init()` to initialize JSON output and, when `log_monitor` is enabled, text output.
+2. Runtime code registers handler lambdas and their shared enable condition through `RegisterCollectHandler(...)`.
 3. `ResMetricCollector::Start()` launches periodic sampling.
-4. `CollectMetrics()` iterates families from `SHARED_MEMORY` through `RES_METRICS_END - 1`, invokes handlers, and assembles one line of output.
+4. `CollectMetrics()` iterates families from `SHARED_MEMORY` through `RES_METRICS_END - 1`, invokes only registered, enabled handlers once, and shares the results between raw-value text groups and whitelisted JSON groups.
 
 Key files:
 
@@ -284,7 +285,7 @@ Key files:
 Failure-sensitive steps:
 
 - unsupported `log_monitor_exporter` values make initialization fail;
-- missing handler registration leaves blank output columns with only a warning;
+- missing handler registration omits the group from both outputs;
 - family-definition and registration drift can create syntactically valid but semantically wrong output.
 
 ### Buffer And Persist Metric Output
@@ -320,8 +321,8 @@ Key files:
 
 Failure-sensitive steps:
 
-- reordering families can corrupt the meaning of existing columns;
-- adding definitions without registration creates misleading blanks;
+- enum and descriptor-table misalignment can assign values to the wrong group;
+- adding definitions without registration leaves the new group absent;
 - updating descriptions without matching runtime behavior can mislead operators.
 
 ## Data And State Model
@@ -347,7 +348,7 @@ Failure-sensitive steps:
 - Ordering requirements or invariants:
   - exporter must initialize before useful registration or collection occurs;
   - family definitions, descriptions, and registrations must move together;
-  - enum order in `res_metrics.def` must remain stable.
+  - enum entries and descriptor-table indexes must stay aligned when metric families are added or deleted.
 
 ## External Interaction And Dependency Analysis
 
@@ -355,7 +356,7 @@ Failure-sensitive steps:
   - runtime modules provide handler lambdas;
   - collector depends on flags, logging utilities, and the concrete exporter;
   - exporter depends on filesystem utilities and shared logging prefix formatting;
-  - operational tooling depends on the emitted file layout and family order.
+  - operational tooling resolves raw-value text columns against the actual enabled group structure and resolves JSON groups by key.
 - Critical upstream services or modules:
   - `worker_oc_server.cpp` registration logic;
   - any future runtime startup path that calls `ResMetricCollector::Init()` and `Start()`.
@@ -364,12 +365,12 @@ Failure-sensitive steps:
   - `logging` module through shared `HardDiskExporter`;
   - monitor-file readers and DFX workflows.
 - Failure impact from each critical dependency:
-  - runtime omission of registration leads to blank metrics;
+  - runtime omission of registration leaves the metric group absent;
   - filesystem issues prevent monitor persistence;
   - shared exporter regressions affect both metrics and access-monitor logs;
   - misconfigured flags can silently reduce observability while business logic continues.
 - Version, protocol, or schema coupling:
-  - `res_metrics.def` order and `metrics_description.def` semantics form a schema-like contract for monitor output;
+  - `res_metrics.def` and the JSON schema use matching internal indexes; group names and `metrics_description.def` semantics define the consumer-facing contract;
   - file naming and line layout couple this module to log readers.
 - Deployment or operations dependencies:
   - writable log directory;
@@ -420,7 +421,7 @@ Failure-sensitive steps:
   - business paths often continue despite collector or exporter failure.
 - Health checks, readiness, and traffic removal conditions:
   - there is no dedicated readiness endpoint inside this module;
-  - health is inferred from successful initialization, periodic file updates, and non-empty expected columns.
+  - health is inferred from successful initialization, periodic file updates, and the expected enabled groups being present.
 - Failover, switchover, or recovery entry conditions:
   - recovery is local and process-scoped: correct config, restore filesystem access, or restart the process rather than failing over to another exporter instance.
 - Capacity reservation or headroom assumptions:
@@ -436,14 +437,14 @@ Failure-sensitive steps:
   - file write or rotation issues;
   - semantic drift between definitions, descriptions, and registrations.
 - Data consistency, durability, or correctness requirements:
-  - family ordering and semantic mapping must stay stable;
+  - group names, semantic mapping and enum/schema alignment must stay consistent;
   - one handler must not accidentally populate the wrong family;
   - written monitor lines should preserve line integrity once flushed.
 - Retry, idempotency, deduplication, or exactly-once assumptions:
   - the module does not provide exactly-once delivery semantics for monitor lines;
   - reliability comes from periodic sampling and bounded asynchronous flush, not deduplicated transport.
 - Partial-degradation behavior:
-  - one family can degrade independently because missing handlers emit blank fields plus a warning;
+  - one family can be absent when unregistered, or degrade to an all-zero JSON fallback with a warning when its enabled handler returns malformed data;
   - exporter or filesystem failures can remove monitor visibility while business logic keeps running.
 - Recovery, replay, repair, or reconciliation strategy:
   - fix handler registration, config, or filesystem issues and restart or reinitialize the process;
@@ -451,9 +452,9 @@ Failure-sensitive steps:
 - RTO, RPO, MTTR, or equivalent recovery targets:
   - no explicit numeric recovery targets are encoded in current code or docs.
 - What must remain true after failure:
-  - family order and meaning must not shift silently;
+  - group names and meanings must not shift silently;
   - exporter failures should not corrupt unrelated ordinary logging;
-  - one misconfigured handler should not redefine neighboring columns.
+  - one misconfigured handler should not redefine another metric group.
 
 ## Resilience
 
@@ -464,10 +465,10 @@ Failure-sensitive steps:
   - backpressure is implicit through bounded buffer pool size and flush-thread pacing.
 - Dependency failure handling:
   - invalid exporter type returns `K_INVALID` during initialization;
-  - missing handlers trigger one warning and blank fields rather than process failure;
+  - unregistered and disabled handlers are skipped without a missing-handler warning; enabled malformed JSON payloads retain the warning and all-zero fallback;
   - flush thread drains remaining buffers during shutdown.
 - Graceful-degradation behavior:
-  - the module prefers blank or stale metrics over taking down the runtime;
+  - the module tolerates absent groups or degraded measurements rather than taking down the runtime;
   - business services can often continue when monitor output is impaired.
 - Safe rollback, feature-gating, or kill-switch strategy:
   - `log_monitor` is the primary feature gate;
@@ -490,7 +491,7 @@ Failure-sensitive steps:
 - Resource or isolation constraints:
   - collection cadence, flush buffering, and disk retention must stay within acceptable CPU, memory, and disk budgets.
 - Unsafe changes to avoid:
-  - reordering metric families;
+  - changing enum entries without updating the matching schema descriptors;
   - changing shared exporter behavior without reviewing logging-side coupling;
   - introducing sensitive payloads into string-based metrics.
 - Safety constraints for human, environment, or property impact:
@@ -500,14 +501,14 @@ Failure-sensitive steps:
 
 - Main logs:
   - resource monitor files emitted through `HardDiskExporter`;
-  - warning logs for missing handlers or invalid exporter config.
+  - warning logs for malformed enabled JSON payloads or invalid exporter config.
 - Metrics:
   - this module is the repository path that emits periodic resource-monitor metrics.
 - Traces or correlation fields:
   - exporter flush threads restore trace IDs via `Trace::SetTraceNewID(...)`.
 - Alerts or SLO-related signals:
   - no built-in alert definitions are encoded here;
-  - operators should watch for missing files, blank columns, or repeated invalid-exporter warnings.
+  - operators should watch for missing files, absent expected enabled groups, or malformed-payload and invalid-exporter warnings.
 - Debug hooks or inspection commands:
   - inspect handler registration in `worker_oc_server.cpp`;
   - inspect collector behavior in `res_metric_collector.cpp`;
@@ -515,25 +516,32 @@ Failure-sensitive steps:
 - How to tell the module is healthy:
   - `ResMetricCollector::Init()` succeeds;
   - resource files appear under the expected log directory;
-  - expected families show non-empty values where registration exists;
-  - no repeated warnings indicate unsupported exporter config or persistent missing handlers.
+  - expected registered, enabled groups appear under their names;
+  - no repeated warnings indicate unsupported exporter config or malformed enabled payloads.
 
 ## Compatibility And Invariants
 
 - External compatibility constraints:
-  - monitor-file readers may depend on stable family ordering, field meanings, and file naming.
+  - monitor-file readers depend on group names, field meanings and file naming; disabled groups do not retain text positions.
 - Internal invariants:
   - metrics are explicitly registered, not auto-discovered;
+  - each registered, enabled resource handler is sampled once per cycle; disabled handlers are not called and leave no field in either resource log;
+  - all eight obsolete OC/SC RPC service thread-pool metric definitions and registrations are deleted, while the real Master asynchronous pool keeps its statistics;
+  - removing legacy interval reporting does not change `GetRpcServicesSnapshot()` or liveness-check behavior;
   - collector iteration order follows `res_metrics.def`;
   - `HardDiskExporter` remains the current shared concrete backend.
 - File format, wire format, or schema stability notes:
   - `res_metrics.def` and `metrics_description.def` together form a schema-like contract for resource monitor output;
+  - both resource logs omit groups by configuration: `etcd_request_success_rate` requires a non-empty `etcd_address`; `spill_hard_disk` and `spill_io_stats` require spill enabled; `object_copy_watermark` is omitted when `FLAGS_eviction_strategy == "clock"`. Conditions are saved at registration; see `resource-collector.md` for the exact mapping;
+  - enabled JSON groups retain zero values and the existing all-zero fallback for empty or malformed handler results; consumers must distinguish disabled-group absence from zero measurements;
+  - text payload groups retain their raw-value format and enum order, separated by ` | `; disabled and unregistered groups reserve no position, so later columns move forward. Enum IDs are internal indexes aligned with the schema, rather than text column identifiers;
+  - `scripts/generate_resource_report.py` parses current Worker groups using their structure and sub-field counts, retains historical fixed-column parsing, and no longer plots removed RPC service pools;
   - output line layout is compatibility-sensitive for downstream consumers.
 - Ordering or naming stability notes:
-  - `res_metrics.def` explicitly warns not to change order;
+  - collector order follows the current enum, and descriptor indexes must match it; emitted text positions are not persistent identifiers;
   - rotated file naming must stay aligned with pruning logic.
 - Upgrade, downgrade, or mixed-version constraints:
-  - no explicit wire compatibility layer exists, so changing family order or semantics can create rollout-time interpretability issues between old and new processes.
+  - text readers must account for the actual enabled groups when reading current raw-value columns and distinguish these from historical fixed-column output; neither disabled groups nor deleted obsolete RPC metrics retain placeholder columns.
 
 ## Performance Characteristics
 
@@ -559,6 +567,7 @@ Failure-sensitive steps:
   - repository build flow via `build.sh`;
   - target-level builds for `metrics_exporter_base`, `hard_disk_exporter`, and `common_metrics`.
 - Fast verification commands:
+  - `ctest -V -R '^KVClientLogMonitorTest\.TestObjectSize$' --output-on-failure`
   - `bazel test //tests/ut/common/log:hard_disk_exporter_test`
   - `bazel test //tests/ut/worker:stream_usagemonitor_test`
   - `bazel test //tests/st/client/stream_cache:sc_metrics_test --test_tag_filters=manual`
@@ -578,7 +587,7 @@ Failure-sensitive steps:
 | ID | Test scenario | Purpose | Preconditions | Input / steps | Expected result |
 | --- | --- | --- | --- | --- | --- |
 | `MET-001` | collector init with supported exporter | confirm normal startup path | `log_monitor=true`, writable log dir, `log_monitor_exporter=harddisk` | call `ResMetricCollector::Init()` then `Start()` | collector starts and resource output file is created |
-| `MET-002` | missing handler registration | confirm graceful degradation | collector initialized, one family intentionally not registered | let one collection cycle run | output contains a blank field for that family and one warning is logged |
+| `MET-002` | missing handler registration | confirm explicit-registration behavior | collector initialized, one family intentionally not registered | let one collection cycle run | the group is absent from both logs, with no reserved text column or missing-handler warning |
 | `MET-003` | family extension flow | confirm definition/description/registration alignment | choose one new or modified family | update `res_metrics.def`, `metrics_description.def`, register handler, run collector | new family appears in expected order with meaningful payload |
 | `MET-004` | exporter rolling and pruning | confirm file lifecycle | low `max_log_size`, finite `max_log_file_num`, writable log dir | generate enough output through exporter flush | rotated files are created and oldest files are pruned per config |
 | `MET-005` | shared exporter coupling | confirm metrics change does not regress access-monitor output | logging-side access recorder path available | exercise resource metrics and access logging after exporter change | both `resource` and access-monitor style outputs remain healthy |
@@ -595,7 +604,7 @@ Failure-sensitive steps:
   - update tests or add coverage when family definitions or exporter behavior change;
   - review logging docs if `HardDiskExporter` behavior changes.
 - Review checklist:
-  - does the change preserve family order and meaning?
+  - does the change preserve group meanings and enum/schema alignment?
   - does it preserve shared exporter behavior for logging-side access output?
   - does it degrade gracefully when registration is incomplete?
 
@@ -607,9 +616,9 @@ Failure-sensitive steps:
   - rolling and pruning behavior in `hard_disk_exporter.cpp`;
   - family definitions and registration alignment.
 - Compatibility checks:
-  - family order, description meaning, file names, and monitor line layout.
+  - group names, description meaning, file names, and raw-value monitor payload layout.
 - Observability checks:
-  - resource files, blank-column behavior, exporter warnings, and logging-side access output if the exporter changed.
+  - resource files, enabled-group presence, malformed-payload warnings, and logging-side access output if the exporter changed.
 
 ### Debugging A Production Issue
 
@@ -622,9 +631,9 @@ Failure-sensitive steps:
 - First runtime evidence to inspect:
   - `log_monitor`, `log_monitor_exporter`, and `log_monitor_interval_ms`;
   - `resource` output files and rotation results;
-  - whether expected families are blank, missing, or semantically shifted.
+  - whether expected enabled groups are absent or semantically shifted.
 - Common misleading symptoms:
-  - blank columns may mean missing registration rather than exporter failure;
+  - an absent group may reflect its enable condition or missing registration rather than exporter failure;
   - missing files may be caused by `log_monitor=false` or bad directory permissions rather than collector-loop bugs;
   - a metrics exporter regression can surface first as logging-side access-output problems because the exporter is shared.
 
@@ -632,7 +641,7 @@ Failure-sensitive steps:
 
 - whether there are additional major registration sites outside `worker_oc_server.cpp` that deserve dedicated context notes;
 - whether a non-harddisk exporter backend is planned but not yet implemented;
-- whether any downstream tooling relies on current family order beyond visible code and tests.
+- whether downstream tooling outside the repository still assumes historical fixed text columns.
 
 ## Pending Verification
 

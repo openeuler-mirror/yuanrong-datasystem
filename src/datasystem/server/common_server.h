@@ -106,12 +106,6 @@ public:
      */
     virtual void AfterClientLostHandler(const ClientKey &clientId) = 0;
 
-    /**
-     * @brief Obtains the threadpool usage of RpcService (interval-based, resets counters).
-     * @param[in] serviceName The name of rpc service.
-     */
-    ThreadPool::ThreadPoolUsage GetRpcServicesUsage(const std::string &serviceName);
-
     ThreadPool::ThreadPoolUsage GetRpcServicesSnapshot(const std::string &serviceName);
 
     /**

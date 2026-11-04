@@ -36,7 +36,8 @@
 #include <utility>
 #include <vector>
 
-#include "datasystem/common/metrics/res_metric_name.h"
+#include <nlohmann/json.hpp>
+
 #include "datasystem/common/util/format.h"
 #include "datasystem/utils/status.h"
 
@@ -210,21 +211,10 @@ private:
         return true;
     }
 
-    static Status ParseMetrics(const std::vector<std::string> &metrics, uint32_t workerIndex,
-                               HeatWatermarkSample &sample)
-    {
-        const int metricIndex =
-            static_cast<int>(ResMetricName::OBJECT_COPY_WATERMARK) - static_cast<int>(ResMetricName::SHARED_MEMORY);
-        if (metricIndex < 0 || metricIndex >= static_cast<int>(metrics.size())) {
-            return Status(K_NOT_READY, "OBJECT_COPY_WATERMARK is absent from the resource log");
-        }
-        return ParseMetricValue(metrics[metricIndex], workerIndex, sample);
-    }
-
     Status ReadLatest(uint32_t workerIndex, HeatWatermarkSample &sample) const
     {
         const std::string path =
-            FormatString("%s/worker%zu/log/resource.log", clusterRootDir_, static_cast<size_t>(workerIndex));
+            FormatString("%s/worker%zu/log/kv_resource.log", clusterRootDir_, static_cast<size_t>(workerIndex));
         std::ifstream input(path);
         if (!input.is_open()) {
             return Status(K_NOT_READY, FormatString("Worker resource log is not ready: %s", path));
@@ -240,13 +230,25 @@ private:
             return Status(K_NOT_READY, FormatString("Worker resource log is empty: %s", path));
         }
 
-        auto metrics = SplitBy(lastLine, " | ");
-        constexpr size_t LOG_PREFIX_FIELD_COUNT = 7;
-        if (metrics.size() <= LOG_PREFIX_FIELD_COUNT) {
-            return Status(K_NOT_READY, "Worker resource log has no metric fields");
+        const auto record = nlohmann::json::parse(lastLine, nullptr, false);
+        if (!record.is_object() || !record.contains("metrics") || !record.at("metrics").is_object()
+            || !record.at("metrics").contains("object_copy_watermark")) {
+            return Status(K_NOT_READY, "OBJECT_COPY_WATERMARK is absent from the resource log");
         }
-        metrics.erase(metrics.begin(), metrics.begin() + LOG_PREFIX_FIELD_COUNT);
-        return ParseMetrics(metrics, workerIndex, sample);
+        const auto &watermark = record.at("metrics").at("object_copy_watermark");
+        const char *fields[] = { "hot_primary_bytes", "primary_bytes", "copy_capacity", "hot_primary_ratio",
+                                 "primary_ratio", "hot_within_primary_ratio", "copy_watermark_valid" };
+        std::string metricValue;
+        for (const auto *field : fields) {
+            if (!watermark.is_object() || !watermark.contains(field) || !watermark.at(field).is_number()) {
+                return Status(K_INVALID, "OBJECT_COPY_WATERMARK contains an invalid numeric field");
+            }
+            if (!metricValue.empty()) {
+                metricValue += '/';
+            }
+            metricValue += watermark.at(field).dump();
+        }
+        return ParseMetricValue(metricValue, workerIndex, sample);
     }
 
     const std::string clusterRootDir_;

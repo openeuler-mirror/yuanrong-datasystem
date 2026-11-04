@@ -78,8 +78,8 @@ TEST_F(ResourceJsonSchemaTest, SharedMemoryWhitelist)
 // GetResourceFieldDesc: thread-pool groups align with res_metrics.def sub-field order and are fully recorded.
 TEST_F(ResourceJsonSchemaTest, ThreadPoolGroupOrder)
 {
-    const auto &desc = GetResourceFieldDesc(ResMetricName::WORKER_OC_SERVICE_THREAD_POOL);
-    EXPECT_EQ(desc.groupName, std::string("worker_oc_service_thread_pool"));
+    const auto &desc = GetResourceFieldDesc(ResMetricName::MASTER_ASYNC_TASKS_THREAD_POOL);
+    EXPECT_EQ(desc.groupName, std::string("master_async_tasks_thread_pool"));
     ASSERT_EQ(desc.fieldNames.size(), static_cast<size_t>(5));
     EXPECT_EQ(desc.fieldNames[0], std::string("idle_num"));
     EXPECT_EQ(desc.fieldNames[1], std::string("current_total_num"));
@@ -97,7 +97,6 @@ TEST_F(ResourceJsonSchemaTest, OmittedGroups)
     EXPECT_FALSE(GetResourceFieldDesc(ResMetricName::SC_LOCAL_CACHE).recordGroup);
     EXPECT_FALSE(GetResourceFieldDesc(ResMetricName::STREAM_COUNT).recordGroup);
     EXPECT_FALSE(GetResourceFieldDesc(ResMetricName::OBS_REQUEST_SUCCESS_RATE).recordGroup);
-    EXPECT_FALSE(GetResourceFieldDesc(ResMetricName::WORKER_SC_SERVICE_THREAD_POOL).recordGroup);
     EXPECT_FALSE(GetResourceFieldDesc(ResMetricName::STREAM_REMOTE_SEND_SUCCESS_RATE).recordGroup);
 }
 
@@ -166,5 +165,6 @@ TEST_F(ResourceJsonSchemaTest, ObjectCopyWatermarkFields)
     }
     EXPECT_TRUE(desc.recordGroup);
 }
+
 }  // namespace ut
 }  // namespace datasystem

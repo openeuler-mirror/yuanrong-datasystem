@@ -204,12 +204,6 @@ void RpcServer::StopBrpcServer()
     }
 }
 
-ThreadPool::ThreadPoolUsage RpcServer::GetRpcServicesUsage(const std::string &serviceName) const
-{
-    auto it = svcMap_.find(serviceName);
-    return it != svcMap_.end() ? it->second->GetThreadPoolUsage() : ThreadPool::ThreadPoolUsage();
-}
-
 ThreadPool::ThreadPoolUsage RpcServer::GetRpcServicesSnapshot(const std::string &serviceName) const
 {
     auto it = svcMap_.find(serviceName);

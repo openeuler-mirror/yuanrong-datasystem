@@ -75,7 +75,7 @@
     - `ACTIVE_CLIENT_COUNT`
     - `OBJECT_COUNT`
     - `OBJECT_SIZE`
-    - worker/master thread-pool families
+    - the real Master async task pool
     - `ETCD_REQUEST_SUCCESS_RATE`
     - `OBS_REQUEST_SUCCESS_RATE`
     - stream families
@@ -83,7 +83,7 @@
     - `OC_HIT_NUM`
   - descriptions file also records human meanings and units for many families.
 - Review caution:
-  - `res_metrics.def` explicitly warns not to change order, so enum-order stability matters.
+  - `res_metrics.def` order must match `resource_json_schema.cpp`; text groups contain raw values in that order, with disabled and unregistered groups omitted.
 
 ## Major Registration Points
 
@@ -91,20 +91,14 @@
   - worker-side registration includes:
     - spill hard disk usage
     - shared memory usage
-    - worker object-cache service thread-pool usage
-    - worker-worker object-cache service thread-pool usage
     - active client count
     - object count and object size
     - object cache hit stats
     - stream count
-    - worker stream thread-pool usage
     - stream remote send success rate
     - stream local cache usage
   - master/coordination-side registration includes:
-    - master-worker object-cache thread-pool usage
-    - master object-cache thread-pool usage
     - master async task thread-pool usage
-    - master/worker stream service thread-pool usage
   - third-party/backend registration includes:
     - ETCD request success rate
     - OBS request success rate
@@ -137,7 +131,8 @@
 ## Compatibility And Change Notes
 
 - Stability-sensitive behavior:
-  - `res_metrics.def` explicitly marks family order as immutable for compatibility purposes;
+  - the eight obsolete OC/SC RPC service pool families are deleted; remaining enum entries and schema descriptors must stay aligned;
+  - registration saves one enabled flag controlling sampling and both resource logs; disabled and unregistered groups leave no text column or JSON key;
   - `metrics_description.def` is part of the semantic contract for operators reading the output;
   - runtime registration in `worker_oc_server.cpp` must stay aligned with both definitions and descriptions;
   - typed metric IDs in `kv_metrics.h` and descriptors in `kv_metrics.cpp` are append-only and must remain in lockstep;

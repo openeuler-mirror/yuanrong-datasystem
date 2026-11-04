@@ -49,9 +49,8 @@ DS_DECLARE_string(cluster_name);
 
 namespace datasystem {
 namespace {
-// Append one metric group to the JSON metrics object. Single-field groups flatten to a scalar;
-// multi-field groups emit an object. Empty/malformed handler output emits an all-zero structure
-// (design 2.2.5 option 3) so the group key is stable across lines.
+// Registered, enabled groups retain their JSON shape for empty or malformed samples.
+// Single-field groups flatten to a scalar; multi-field groups emit an object.
 // Returns true when the group was emitted (so the caller can track the comma separator).
 bool AppendGroupJson(std::ostringstream &os, const ResourceFieldDesc &desc, const std::string &raw,
                      bool firstGroup)
@@ -145,23 +144,17 @@ void ResMetricCollector::CollectMetrics()
         int iLimit = int(ResMetricName::RES_METRICS_END) - 1;
         while (!exitFlag_) {
             std::string metricString;
-            std::stringstream unRegisteredFunctions;
             // Cache each handler result once: some handlers reset interval counters
             // (e.g. GetAndResetIntervalStats), so text and JSON paths must share one call.
             std::vector<std::string> handlerResults(iLimit + 1);
             for (int i = int(ResMetricName::SHARED_MEMORY); i <= iLimit; i++) {
                 auto iter = collectHandler_.find(i);
-                if (iter != collectHandler_.end()) {
-                    std::string collectMetrics = iter->second();
-                    handlerResults[i] = collectMetrics;
-                    metricString += collectMetrics + " | ";
-                } else {
-                    metricString += " | ";
-                    unRegisteredFunctions << std::to_string(i) << (i == iLimit ? "" : ",");
+                if (iter == collectHandler_.end() || !iter->second.enabled) {
+                    continue;
                 }
-            }
-            if (!unRegisteredFunctions.str().empty()) {
-                LOG_FIRST_N(WARNING, 1) << "No handler found for resource log type :" << unRegisteredFunctions.str();
+                std::string collectMetrics = iter->second.collect();
+                handlerResults[i] = collectMetrics;
+                metricString += collectMetrics + " | ";
             }
             if (!metricString.empty()) {
                 metricString.pop_back();
@@ -169,7 +162,7 @@ void ResMetricCollector::CollectMetrics()
             Uri uri(__FILE__);
             LogTime logTime;
             const std::string timestamp = FormatLogTimestamp(logTime.getTm(), logTime.getUsec());
-            if (FLAGS_log_monitor && exporter_ != nullptr) {
+            if (FLAGS_log_monitor && exporter_ != nullptr && !metricString.empty()) {
                 exporter_->Send(metricString, uri, __LINE__);
                 exporter_->SubmitWriteMessage();
             }
@@ -198,6 +191,10 @@ std::string ResMetricCollector::BuildResourceJson(const std::vector<std::string>
     int iLimit = int(ResMetricName::RES_METRICS_END) - 1;
     bool firstGroup = true;
     for (int i = int(ResMetricName::SHARED_MEMORY); i <= iLimit; ++i) {
+        auto iter = collectHandler_.find(i);
+        if (iter == collectHandler_.end() || !iter->second.enabled) {
+            continue;
+        }
         const auto &desc = GetResourceFieldDesc(static_cast<ResMetricName>(i));
         if (i < static_cast<int>(handlerResults.size())) {
             if (AppendGroupJson(os, desc, handlerResults[i], firstGroup)) {
@@ -210,14 +207,15 @@ std::string ResMetricCollector::BuildResourceJson(const std::vector<std::string>
     return WrapJsonWithPodCluster(os.str(), jsonExporter_->PodName(), jsonExporter_->ClusterName(), timestamp);
 }
 
-void ResMetricCollector::RegisterCollectHandler(ResMetricName metricName, std::function<std::string()> collectHandler)
+void ResMetricCollector::RegisterCollectHandler(ResMetricName metricName, std::function<std::string()> collectHandler,
+    bool enabled)
 {
     if (exporter_ == nullptr && jsonExporter_ == nullptr) {
         LOG(WARNING) << "ResMetricCollector is not initialized; the collect handler for metric " << int(metricName)
                      << " stays dormant until the worker restarts with monitoring initialized";
         return;
     }
-    collectHandler_.emplace(int(metricName), collectHandler);
+    collectHandler_.emplace(int(metricName), CollectHandlerEntry{ std::move(collectHandler), enabled });
 }
 
 ResMetricCollector::~ResMetricCollector()

@@ -213,10 +213,21 @@ protected:
         ifs.clear();
         ifs.seekg(prev);
         std::getline(ifs, line);
-        infos = Split(line, " | ");
-        const int ignoreCount = 7;
-        ASSERT_TRUE(infos.size() == static_cast<size_t>(ResMetricName::RES_METRICS_END) + ignoreCount);
-        infos.erase(infos.begin(), infos.begin() + ignoreCount);
+        const auto fields = Split(line, " | ");
+        const size_t ignoreCount = 7;
+        // This fixture enables ETCD and stream cache, with no Spill/OBS and the default clock strategy.
+        const std::vector<ResMetricName> metricOrder = {
+            ResMetricName::SHARED_MEMORY, ResMetricName::ACTIVE_CLIENT_COUNT, ResMetricName::OBJECT_COUNT,
+            ResMetricName::OBJECT_SIZE, ResMetricName::ETCD_REQUEST_SUCCESS_RATE,
+            ResMetricName::MASTER_ASYNC_TASKS_THREAD_POOL, ResMetricName::STREAM_COUNT,
+            ResMetricName::STREAM_REMOTE_SEND_SUCCESS_RATE, ResMetricName::SC_LOCAL_CACHE, ResMetricName::OC_HIT_NUM,
+            ResMetricName::BRPC_STREAM_LEAK_COUNT, ResMetricName::DEFERRED_CLEANUP_QUEUE_SIZE,
+        };
+        ASSERT_EQ(fields.size(), metricOrder.size() + ignoreCount) << line;
+        infos.assign(static_cast<size_t>(ResMetricName::RES_METRICS_END), "");
+        for (size_t i = 0; i < metricOrder.size(); ++i) {
+            infos[static_cast<size_t>(metricOrder[i])] = fields[ignoreCount + i];
+        }
     }
 
     const int nodeTimeout = 4;  // 4s;
