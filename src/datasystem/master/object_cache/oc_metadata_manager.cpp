@@ -206,7 +206,7 @@ Status OCMetadataManager::Init()
         std::make_unique<OCNotifyWorkerManager>(objectStore_, this);
     RETURN_IF_NOT_OK(notifyWorkerManager_->Init());
     globalCacheDeleteManager_ = std::make_unique<OCGlobalCacheDeleteManager>(
-        objectStore_, persistApi_, masterAddress_);
+        objectStore_, persistApi_);
     RETURN_IF_NOT_OK(globalCacheDeleteManager_->Init());
     expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(masterAddress_, this);
     expiredObjectManager_->Init();
@@ -1503,13 +1503,6 @@ Status OCMetadataManager::ProcessGiveUpPrimaryObject(const std::string &objectKe
     RETURN_IF_NOT_OK(IsPrimaryCopyWithCopy(meta, address, isPrimaryWithoutCopy));
     VLOG(1) << FormatString("[Objects %s] Write mode: %d, is primary without other: %d", objectKey,
                             meta.meta.config().write_mode(), isPrimaryWithoutCopy);
-    if (meta.meta.primary_address() == address && meta.HasL2Cache()) {
-        response.add_need_l2cache_ids(objectKey);
-        if (meta.IsWriteBackL2Cache() || meta.IsWriteBackL2CacheEvict()) {
-            response.add_need_wait_ids(objectKey);
-        }
-        return Status::OK();
-    }
     if (isPrimaryWithoutCopy) {
         response.add_need_data_ids(objectKey);
         if (meta.IsWriteBackL2Cache() || meta.IsWriteBackL2CacheEvict()) {
@@ -2132,7 +2125,7 @@ Status OCMetadataManager::ClearMetaInfo(const std::unordered_map<std::string, De
             uint64_t objectVersion = accessor->second.meta.version();
             uint64_t delVersion = objectVersion;
             Status status = globalCacheDeleteManager_->InsertDeletedObject(
-                objectKey, objectVersion, delVersion, accessor->second.meta.primary_address(), true);
+                objectKey, objectVersion, delVersion, true);
             if (status.IsError()) {
                 LOG(ERROR) << FormatString("[ObjectKey %s] Global cache delete failed, error: %s", objectKey,
                                            status.ToString());
@@ -4018,7 +4011,6 @@ void OCMetadataManager::AssignLocalWorker(object_cache::MasterWorkerOCServiceImp
 {
     localApi_ = std::make_unique<object_cache::WorkerLocalWorkerOCApi>(workerWorkerService);
     notifyWorkerManager_->AssignLocalWorker(masterWorkerService, masterAddr);
-    globalCacheDeleteManager_->AssignLocalWorker(masterWorkerService);
     // We set initialized_ as true at the end of OCMetadataManager::AssignLocalWorker, because if
     // OCMetadataManager::AssignLocalWorker is not called, the masterAddr_ in OCNotifyWorkerManager will be empty
     // and thus OCMetadataManager is not fully initialized.
@@ -4366,7 +4358,6 @@ Status OCMetadataManager::FillMetadataForMigration(
         auto opPb = meta.add_global_cache_dels();
         opPb->set_object_version(op.first);
         opPb->set_delete_version(op.second.deleteVersion);
-        opPb->set_target_worker_address(op.second.targetWorkerAddress);
     }
     return Status::OK();
 }
@@ -4817,7 +4808,7 @@ Status OCMetadataManager::RollbackMultiMeta(const RollbackMultiMetaReqPb &req, R
                 RETURN_STATUS(K_RUNTIME_ERROR, "No object version found");
             }
             if (globalCacheDeleteManager_
-                    ->InsertDeletedObject(objKey, req.versions(i), req.versions(i), req.address(), true)
+                    ->InsertDeletedObject(objKey, req.versions(i), req.versions(i), true)
                     .IsError()) {
                 rsp.add_failed_object_keys(objKey);
             }

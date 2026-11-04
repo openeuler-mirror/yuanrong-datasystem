@@ -36,11 +36,6 @@ using namespace datasystem::worker;
 using namespace datasystem::master;
 namespace datasystem {
 namespace object_cache {
-namespace {
-constexpr size_t PERSISTENCE_DELETE_POOL_MIN_THREAD_NUM = 0;
-constexpr size_t PERSISTENCE_DELETE_POOL_MAX_THREAD_NUM = 4;
-constexpr char PERSISTENCE_DELETE_POOL_NAME[] = "PersistDelete";
-}  // namespace
 
 WorkerOcServiceDeleteImpl::WorkerOcServiceDeleteImpl(WorkerOcServiceCrudParam &initParam,
                                                      std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress,
@@ -50,8 +45,6 @@ WorkerOcServiceDeleteImpl::WorkerOcServiceDeleteImpl(WorkerOcServiceCrudParam &i
       localAddress_(localAddress),
       getProc_(std::move(getProc))
 {
-    persistenceDeleteThreadPool_ = std::make_unique<ThreadPool>(
-        PERSISTENCE_DELETE_POOL_MIN_THREAD_NUM, PERSISTENCE_DELETE_POOL_MAX_THREAD_NUM, PERSISTENCE_DELETE_POOL_NAME);
 }
 
 Status WorkerOcServiceDeleteImpl::DeleteAllCopy(const DeleteAllCopyReqPb &req, DeleteAllCopyRspPb &resp)
@@ -107,51 +100,6 @@ Status WorkerOcServiceDeleteImpl::DeleteCopyNotification(const DeleteObjectReqPb
     rsp.mutable_last_rc()->set_error_msg(lastErr.GetMsg());
     VLOG(1) << "DeleteCopyNotification end.";
     return Status::OK();
-}
-
-Status WorkerOcServiceDeleteImpl::DeletePersistenceObject(const DeletePersistenceObjectReqPb &req,
-                                                          DeletePersistenceObjectRspPb &rsp)
-{
-    (void)rsp;
-    VLOG(1) << "DeletePersistenceObject begin, request: " << LogHelper::IgnoreSensitive(req);
-    int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
-    CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-                             "DeletePersistenceObject rpc timeout before scheduling task");
-    if (!ShouldUseServiceThreadPoolFanout()) {
-        // Avoid std::future::wait_for in a brpc bthread handler.
-        auto rc = DeletePersistenceObjectImpl(req);
-        if (GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() <= 0) {
-            RETURN_STATUS_LOG_ERROR(
-                StatusCode::K_RPC_DEADLINE_EXCEEDED,
-                FormatString("DeletePersistenceObject finished after rpc deadline, objectKey=%s", req.object_key()));
-        }
-        VLOG(1) << "DeletePersistenceObject end, rc: " << rc.ToString();
-        return rc;
-    }
-    CHECK_FAIL_RETURN_STATUS(persistenceDeleteThreadPool_ != nullptr, StatusCode::K_RUNTIME_ERROR,
-                             "Persistence delete thread pool is not initialized");
-    auto traceID = Trace::Instance().GetTraceID();
-    auto future = persistenceDeleteThreadPool_->Submit([this, req, traceID]() {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-        return DeletePersistenceObjectImpl(req);
-    });
-    if (future.wait_for(std::chrono::milliseconds(remainingTimeMs)) != std::future_status::ready) {
-        auto usage = persistenceDeleteThreadPool_->GetThreadPoolUsage();
-        RETURN_STATUS_LOG_ERROR(StatusCode::K_RPC_DEADLINE_EXCEEDED,
-                                FormatString("DeletePersistenceObject timed out on async persistence delete, "
-                                             "objectKey=%s, timeoutMs=%lld, poolUsage=%s",
-                                             req.object_key(), remainingTimeMs, usage.ToString()));
-    }
-    auto rc = future.get();
-    VLOG(1) << "DeletePersistenceObject end, rc: " << rc.ToString();
-    return rc;
-}
-
-Status WorkerOcServiceDeleteImpl::DeletePersistenceObjectImpl(const DeletePersistenceObjectReqPb &req)
-{
-    auto objectVersion = req.object_version();
-    return persistenceApi_->Del(req.object_key(), req.max_version_to_delete(), req.delete_all_version(),
-                                req.async_elapse(), &objectVersion, req.list_incomplete_versions());
 }
 
 Status WorkerOcServiceDeleteImpl::DeleteObjectFromNotification(const std::string &objectKey, uint64_t version,

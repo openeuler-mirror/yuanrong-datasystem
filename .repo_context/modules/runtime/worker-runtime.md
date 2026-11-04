@@ -454,7 +454,7 @@
     Worker callback adapter coalesces concurrent disjoint tasks behind a deadline-aware process-local gate; metadata
     migration and prepared cleanup remain constrained by each task's `IKeyFilter`.
   - ScaleIn drain migration targets come from `MetadataRouteResolver::GroupMigrateTargets` (one
-    `EvaluateRedirectBatch` per chunk of at most `PlacementFacade::kMaxBatchKeys` keys; the L2 slot drain submits
+    `EvaluateRedirectBatch` per chunk of at most `PlacementFacade::kMaxBatchKeys` keys; the L2 object drain submits
     through the same grouping): a key whose committed owner is the leaving Worker follows the ScaleIn redirect
     override (its post-scale-in token takeover owner), replica keys follow their committed owner, and keys without a
     redirect override keep the address-order standby demotion (`FindNextActiveMember`) as fallback. Redirect retries

@@ -34,7 +34,6 @@ static constexpr char WATCH_READ[] = "watch read";
 static constexpr char WATCH_WRITE[] = "watch run";
 static constexpr char WRITES_DONE[] = "writes done";
 static constexpr char ETCD_MEMBERSHIP_KEY_SEGMENT[] = "/cluster/";
-static constexpr char ETCD_SLOT_RECOVERY_TABLE[] = "/datasystem/slot_recovery";
 
 static constexpr char ETCD_NODE_EXITING[] = "exiting";
 static constexpr char ETCD_NODE_READY[] = "ready";

@@ -207,7 +207,6 @@ global:
     logMonitorIntervalMs: 10000
 
   l2Cache:
-    # Config the l2 cache type support obs, sfs, distributed_disk, none by default.
     l2CacheType: "none"
 
     # l2 cache delete threads number, it affects the parallelism of L2 data deletion.
@@ -222,18 +221,6 @@ global:
     enableL2CacheFallback: true
     # Data write to l2cache rate limit for every node
     l2CacheAsyncWriteRateLimitMb: 200
-
-    distributedDisk:
-      # Root path of distributed disk storage inside the container.
-      path: ""
-      # Maximum size in MB of a single distributed disk data file.
-      maxDataFileSizeMb: 1024
-      # Maximum group commit interval in milliseconds.
-      syncIntervalMs: 1000
-      # Group commit batch threshold in bytes.
-      syncBatchBytes: 33554432
-      # Fixed interval in seconds between background compact runs.
-      compactIntervalS: 3600
 
     obs:
       # The access key for obs AK/SK authentication.

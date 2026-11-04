@@ -605,7 +605,6 @@ bool OCMigrateMetadataManager::TryFillGlobalCacheDeleteMeta(const std::string &o
         auto *deletePb = meta.add_global_cache_dels();
         deletePb->set_object_version(versions.first);
         deletePb->set_delete_version(versions.second.deleteVersion);
-        deletePb->set_target_worker_address(versions.second.targetWorkerAddress);
     }
     return true;
 }

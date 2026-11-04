@@ -609,7 +609,7 @@ TEST_F(MigrateDataHandlerTest, HeatRebalanceSerializesHeatAndKeepLocalPreservesS
     strategy_ = std::make_shared<SpillNodeSelector>(hostPort_);
     RebalancePolicyFence fence{ true, static_cast<uint32_t>(master::EVICTION_POLICY_HEAT), 23, "heat-fenced-task" };
     MigrateDataHandler handler(type_, "127.0.0.1:18888", { objectKey }, objectTable_, remoteApi_, strategy_, nullptr,
-                               nullptr, false, 0, { { objectKey, sourceHeat } }, std::move(fence));
+                               nullptr, { { objectKey, sourceHeat } }, std::move(fence));
     auto result = handler.MigrateDataToRemote();
     DS_ASSERT_OK(result.status);
     EXPECT_EQ(result.successIds.count(objectKey), size_t(1));
@@ -922,6 +922,28 @@ TEST_F(MigrateDataHandlerTest, TestFailWhenNonSpilledObjectLosesShmBeforeSend)
     ASSERT_TRUE(result.failedIds.count(objectKeys[1]) > 0);
 }
 
+TEST_F(MigrateDataHandlerTest, L2WriteModeDoesNotTurnMissingPayloadIntoMigrationSuccess)
+{
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .Times(2)
+        .WillRepeatedly(Invoke(this, &MigrateDataHandlerTest::MockMigrateSmallData1));
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("l2_sender_missing_payload_", 100, 2, objectKeys);
+    {
+        std::shared_ptr<SafeObjType> entry;
+        DS_ASSERT_OK(objectTable_->Get(objectKeys[1], entry));
+        DS_ASSERT_OK(entry->WLock());
+        (*entry)->modeInfo.SetWriteMode(WriteMode::WRITE_THROUGH_L2_CACHE);
+        (*entry)->SetShmUnit(nullptr);
+        entry->WUnlock();
+    }
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_, nullptr);
+    auto result = handler.MigrateDataToRemote();
+    EXPECT_EQ(result.successIds.count(objectKeys[1]), 0U);
+    EXPECT_EQ(result.failedIds.count(objectKeys[1]), 1U);
+    EXPECT_EQ(result.skipIds.count(objectKeys[1]), 0U);
+}
+
 TEST_F(MigrateDataHandlerTest, TestFailWhenSpilledObjectHasNoShmAndNoSpillPayload)
 {
     LOG(INFO) << "Test sender marks spilled object failed if both shm and spill payload are missing.";
@@ -1230,7 +1252,7 @@ TEST_F(MigrateDataHandlerTest, UrmaWriteRebalanceFenceUsesFastTransport)
     RebalancePolicyFence fence{ true, static_cast<uint32_t>(master::EVICTION_POLICY_CLOCK), 9,
                                 "urma-write-fenced-task" };
     MigrateDataHandler handler(MigrateType::SPILL, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi, strategy_,
-                               nullptr, nullptr, false, 0, {}, std::move(fence));
+                               nullptr, nullptr, {}, std::move(fence));
 
     auto result = handler.MigrateDataToRemote();
 

@@ -1536,7 +1536,7 @@ INFO fallback 仅适用于忽略该初始化错误的 SDK Client，并且只在 
 
 | 配置项 | 类型 | 默认值 | 是否支持动态修改 | 描述 |
 |-----|------|---------|-----|-------------|
-| l2_cache_type | string | `"none"` | 否 | 配置二级缓存类型，`none` 表示不配置二级缓存，可选择二级缓存类型：[`obs`, `sfs`, `distributed_disk`] |
+| l2_cache_type | string | `"none"` | 否 | 配置二级缓存类型，`none` 表示不配置二级缓存，可选择二级缓存类型：[`obs`, `sfs`] |
 | l2_cache_delete_thread_num | int | `32` | 否 | 配置二级缓存异步删除线程池大小，增大该值可以提升二级缓存删除并行度，同时也会提升worker的CPU消耗 |
 | l2_cache_async_write_queue_size | int | `10000` | 否 | 用于写入二级缓存的每线程异步队列大小。共有 8 个线程，支持的最大总容量为 8 * l2_cache_async_write_queue_size 个待写入的键值对 |
 | l2_cache_async_write_rate_limit_mb | int | `200` | 否 | 配置写入二级缓存异步任务速率(以MB/s为单位) |
@@ -1546,11 +1546,6 @@ INFO fallback 仅适用于忽略该初始化错误的 SDK Client，并且只在 
 | obs_bucket | string | `""` | 否 | 对象存储服务(OBS) 桶的名称 |
 | obs_https_enabled | bool | `false` | 否 | 是否启用HTTPS连接对象存储服务（OBS），默认为HTTP |
 | sfs_path | string | `""` | 否 | 挂载的SFS路径 |
-| distributed_disk_path | string | `""` | 否 | distributed_disk 模式下的根路径。当 `l2_cache_type=distributed_disk` 时，slot root path 基于该路径构建，不再使用 `sfs_path` |
-| distributed_disk_max_data_file_size_mb | uint32 | `1024` | 否 | 单个 distributed_disk data 文件的最大大小，单位 MB |
-| distributed_disk_sync_interval_ms | uint32 | `1000` | 否 | distributed_disk group commit 的最长刷盘间隔，单位毫秒 |
-| distributed_disk_sync_batch_bytes | uint64 | `33554432` | 否 | distributed_disk group commit 的批量刷盘阈值，单位字节 |
-| distributed_disk_compact_interval_s | uint32 | `3600` | 否 | distributed_disk 后台 compact 的固定执行周期，单位秒；生产构建最小值为 60，测试构建在 `WITH_TESTS` 下最小值为 1 |
 | enable_cloud_service_token_rotation | bool | `false` | 否 | 启用OBS客户端使用临时令牌访问OBS，令牌过期后，获取新的令牌并重新连接OBS |
 
 #### 元数据相关配置

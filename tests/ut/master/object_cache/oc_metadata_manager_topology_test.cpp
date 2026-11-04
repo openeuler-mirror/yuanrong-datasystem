@@ -210,7 +210,8 @@ public:
     }
 };
 
-std::shared_ptr<const cluster::TopologySnapshot> BuildLocationEvidenceSnapshot(bool includeTarget)
+std::shared_ptr<const cluster::TopologySnapshot> BuildLocationEvidenceSnapshot(
+    bool includeTarget, cluster::MemberState targetState = cluster::MemberState::ACTIVE)
 {
     cluster::TopologyState topology;
     topology.version = LOCATION_TOPOLOGY_VERSION;
@@ -220,7 +221,7 @@ std::shared_ptr<const cluster::TopologySnapshot> BuildLocationEvidenceSnapshot(b
     };
     if (includeTarget) {
         topology.members.emplace_back(cluster::Member{ { std::string(MEMBER_ID_SIZE, 'b'), TARGET_ADDRESS },
-                                                       cluster::MemberState::ACTIVE,
+                                                       targetState,
                                                        { std::numeric_limits<uint32_t>::max() } });
     }
     std::shared_ptr<const cluster::TopologySnapshot> snapshot;
@@ -755,6 +756,108 @@ TEST_F(OCMetadataManagerTopologyTest, PureQueryMetaWithholdsVersionWhenAnyReturn
     ASSERT_EQ(response.query_metas_size(), 1);
     EXPECT_EQ(response.query_metas(0).address(), TARGET_ADDRESS);
     EXPECT_EQ(response.query_metas(0).topology_version(), 0U);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, L2PrimaryUsesSurvivingCopyWithoutSourcePayload)
+{
+    cluster::TopologySnapshotState snapshots;
+    cluster::SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(BuildLocationEvidenceSnapshot(true), outcome));
+    cluster::MembershipEndpointView membership(snapshots);
+    OCMetadataManager manager(rocksStore_.get(), nullptr, LOCAL_ADDRESS, nullptr, &membership,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    for (const auto mode : { WriteMode::NONE_L2_CACHE, WriteMode::WRITE_THROUGH_L2_CACHE,
+                             WriteMode::WRITE_BACK_L2_CACHE, WriteMode::WRITE_BACK_L2_CACHE_EVICT }) {
+        const std::string objectKey = "primary_with_copy_" + std::to_string(static_cast<uint32_t>(mode));
+        InsertPrimaryWithCopy(manager, objectKey);
+        {
+            TbbMetaTable::accessor accessor;
+            auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+            ASSERT_TRUE(shard.table.find(accessor, objectKey));
+            accessor->second.meta.mutable_config()->set_write_mode(static_cast<uint32_t>(mode));
+        }
+        RemoveMetaRspPb response;
+        OCMetadataManager::PrimaryChangeMap candidates;
+        DS_ASSERT_OK(manager.ProcessGiveUpPrimaryObject(objectKey, LOCAL_ADDRESS, response, candidates, true));
+        ASSERT_EQ(candidates.size(), 1U);
+        EXPECT_EQ(candidates.at(TARGET_ADDRESS).count(objectKey), 1U);
+        EXPECT_EQ(response.need_data_ids_size(), 0);
+        EXPECT_EQ(response.need_l2cache_ids_size(), 0);
+        EXPECT_EQ(response.need_wait_ids_size(), 0);
+        {
+            TbbMetaTable::const_accessor accessor;
+            auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+            ASSERT_TRUE(shard.table.find(accessor, objectKey));
+            EXPECT_EQ(accessor->second.meta.primary_address(), LOCAL_ADDRESS);
+        }
+        DS_ASSERT_OK(manager.ChangePrimaryCopy(TARGET_ADDRESS, objectKey, "scale-in-operation"));
+        TbbMetaTable::const_accessor accessor;
+        auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        EXPECT_EQ(accessor->second.meta.primary_address(), TARGET_ADDRESS);
+        EXPECT_EQ(accessor->second.locations.count(LOCAL_ADDRESS), 0U);
+    }
+}
+
+TEST_F(OCMetadataManagerTopologyTest, L2PrimaryWithoutCopyKeepsOrdinaryMigrationAndWritebackWait)
+{
+    OCMetadataManager manager(rocksStore_.get(), nullptr, LOCAL_ADDRESS, nullptr, nullptr,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
+    for (const auto mode : { WriteMode::NONE_L2_CACHE, WriteMode::WRITE_THROUGH_L2_CACHE,
+                             WriteMode::WRITE_BACK_L2_CACHE, WriteMode::WRITE_BACK_L2_CACHE_EVICT }) {
+        const std::string objectKey = "primary_without_copy_" + std::to_string(static_cast<uint32_t>(mode));
+        InsertPrimaryWithCopy(manager, objectKey);
+        {
+            TbbMetaTable::accessor accessor;
+            auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+            ASSERT_TRUE(shard.table.find(accessor, objectKey));
+            accessor->second.meta.mutable_config()->set_write_mode(static_cast<uint32_t>(mode));
+            accessor->second.locations.erase(TARGET_ADDRESS);
+        }
+        RemoveMetaRspPb response;
+        OCMetadataManager::PrimaryChangeMap candidates;
+        DS_ASSERT_OK(manager.ProcessGiveUpPrimaryObject(objectKey, LOCAL_ADDRESS, response, candidates, true));
+        EXPECT_TRUE(candidates.empty());
+        ASSERT_EQ(response.need_data_ids_size(), 1);
+        EXPECT_EQ(response.need_data_ids(0), objectKey);
+        EXPECT_EQ(response.need_l2cache_ids_size(), 0);
+        const bool writeback = mode == WriteMode::WRITE_BACK_L2_CACHE || mode == WriteMode::WRITE_BACK_L2_CACHE_EVICT;
+        EXPECT_EQ(response.need_wait_ids_size(), writeback ? 1 : 0);
+        TbbMetaTable::const_accessor accessor;
+        auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        EXPECT_EQ(accessor->second.meta.primary_address(), LOCAL_ADDRESS);
+        EXPECT_EQ(accessor->second.locations.count(LOCAL_ADDRESS), 1U);
+    }
+}
+
+TEST_F(OCMetadataManagerTopologyTest, L2PrimaryDoesNotHandOffToPreLeavingCopy)
+{
+    cluster::TopologySnapshotState snapshots;
+    cluster::SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(BuildLocationEvidenceSnapshot(true, cluster::MemberState::PRE_LEAVING), outcome));
+    cluster::MembershipEndpointView membership(snapshots);
+    OCMetadataManager manager(rocksStore_.get(), nullptr, LOCAL_ADDRESS, nullptr, &membership,
+                              LOCAL_ADDRESS, &localExiting_, "workerId");
+    const std::string objectKey = "l2_primary_with_leaving_copy";
+    InsertPrimaryWithCopy(manager, objectKey);
+    {
+        TbbMetaTable::accessor accessor;
+        auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        accessor->second.meta.mutable_config()->set_write_mode(
+            static_cast<uint32_t>(WriteMode::WRITE_BACK_L2_CACHE_EVICT));
+    }
+    RemoveMetaRspPb response;
+    OCMetadataManager::PrimaryChangeMap candidates;
+    DS_ASSERT_OK(manager.ProcessGiveUpPrimaryObject(objectKey, LOCAL_ADDRESS, response, candidates, true));
+    EXPECT_TRUE(candidates.empty());
+    ASSERT_EQ(response.need_data_ids_size(), 1);
+    EXPECT_EQ(response.need_data_ids(0), objectKey);
+    ASSERT_EQ(response.need_wait_ids_size(), 1);
+    EXPECT_EQ(response.need_wait_ids(0), objectKey);
+    EXPECT_EQ(response.need_l2cache_ids_size(), 0);
 }
 
 TEST_F(OCMetadataManagerTopologyTest, TopologyOperationCanChangePrimaryWhileOrdinaryExitingRequestIsFenced)
@@ -1522,7 +1625,7 @@ TEST_F(OCMetadataManagerTopologyTest, OrdinaryTtlWithoutMetadataDoesNotCreateL2D
     OCMetadataManager manager(rocksStore_.get(), nullptr, LOCAL_ADDRESS, nullptr, nullptr,
                               LOCAL_ADDRESS, &localExiting_, "workerId");
     manager.globalCacheDeleteManager_ = std::make_unique<OCGlobalCacheDeleteManager>(
-        manager.objectStore_, nullptr, LOCAL_ADDRESS);
+        manager.objectStore_, nullptr);
     const std::string objectKey = "ordinary_ttl_without_metadata";
     DeleteObjectMediator mediator(LOCAL_ADDRESS, { { objectKey, true } });
     std::unordered_map<std::string, DeleteStruct> deleteObjects{ { objectKey, DeleteStruct{} } };
@@ -1740,7 +1843,7 @@ TEST_F(OCMetadataManagerTopologyTest, AsyncDeleteByExpiredTreatsBeingDeletedAsSu
         manager.objectStore_, &manager);
     DS_ASSERT_OK(manager.notifyWorkerManager_->Init());
     manager.globalCacheDeleteManager_ = std::make_unique<OCGlobalCacheDeleteManager>(
-        manager.objectStore_, nullptr, LOCAL_ADDRESS);
+        manager.objectStore_, nullptr);
 
     const std::string objectKey = "test_key1";
 

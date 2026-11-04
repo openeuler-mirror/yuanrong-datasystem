@@ -75,6 +75,7 @@
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_service_impl.h"
 #undef private
+#include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
 
 using namespace ::testing;
 
@@ -1154,6 +1155,16 @@ TEST_F(WorkerOcServiceImplTest, NodeRestartAlwaysTriggersMetadataRecovery)
 }
 
 using WorkerOcRemoteGetAdmissionTest = WorkerOcServiceImplWithAllocatorTest;
+
+TEST(DeprecatedPersistenceDeleteTest, RejectsWithoutWorkerOrStorageAccess)
+{
+    object_cache::MasterWorkerOCServiceImpl service(nullptr);
+    DeletePersistenceObjectReqPb request;
+    DeletePersistenceObjectRspPb response;
+    DS_ASSERT_OK(service.DeletePersistenceObject(request, response));
+    EXPECT_EQ(response.last_rc().error_code(), K_NOT_SUPPORTED);
+    EXPECT_FALSE(response.last_rc().error_msg().empty());
+}
 
 TEST_F(WorkerOcServiceImplTest, AllocationIdReservationUsesStableShmIdAndRejectsConcurrentDuplicate)
 {

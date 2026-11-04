@@ -47,7 +47,7 @@ MigrateDataHandler::MigrateDataHandler(MigrateType type, const std::string &loca
                                        std::shared_ptr<WorkerRemoteWorkerOCApi> remoteApi,
                                        std::shared_ptr<SelectionStrategy> strategy,
                                        const std::atomic<bool> *stoppingPtr,
-                                       std::shared_ptr<MigrateProgress> progress, bool isRetry, uint32_t slotId,
+                                       std::shared_ptr<MigrateProgress> progress,
                                        std::unordered_map<std::string, double> objectHeats,
                                        RebalancePolicyFence rebalancePolicyFence)
     : type_(type),
@@ -61,8 +61,6 @@ MigrateDataHandler::MigrateDataHandler(MigrateType type, const std::string &loca
       limiter_(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul),
       strategy_(std::move(strategy)),
       progress_(std::move(progress)),
-      isRetry_(isRetry),
-      slotId_(slotId),
       objectHeats_(std::move(objectHeats)),
       rebalancePolicyFence_(std::move(rebalancePolicyFence)),
       stoppingPtr_(stoppingPtr)
@@ -87,36 +85,34 @@ bool MigrateDataHandler::ShouldUseFastTransport() const
     return IsUrmaEnabled();
 }
 
-MigrateDataHandler::MigrateResult MigrateDataHandler::MigrateDataToRemote(bool isSlotMigration)
+MigrateDataHandler::MigrateResult MigrateDataHandler::MigrateDataToRemote()
 {
     PerfPoint point(PerfKey::WORKER_MIGRATE_TO_REMOTE);
     INJECT_POINT_NO_RETURN("MigrateDataHandler.MigrateDataToRemote.DelayMigrate",
                            [](int sleepMs) { std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs)); });
     std::vector<std::string> migrateIds(needMigrateDataIds_.begin(), needMigrateDataIds_.end());
-    lastRc_ = MigrateDataInBatches(migrateIds, isSlotMigration);
+    lastRc_ = MigrateDataInBatches(migrateIds);
     maxBatchSize_ = FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul;
     return ConstructResult(lastRc_);
 }
 
-Status MigrateDataHandler::MigrateDataInBatches(std::vector<std::string> &needMigrateDataIds,
-                                                bool isSlotMigration)
+Status MigrateDataHandler::MigrateDataInBatches(std::vector<std::string> &needMigrateDataIds)
 {
     RETURN_OK_IF_TRUE(needMigrateDataIds.empty());
-    if (!isSlotMigration) {
-        auto end = std::remove_if(needMigrateDataIds.begin(), needMigrateDataIds.end(),
-            [this](const std::string &objectKey) {
-                std::shared_ptr<SafeObjType> entry;
-                Status rc = objectTable_->Get(objectKey, entry);
-                if (rc.IsError() || entry->TryRLock().IsError()) {
-                    (void)skipIds_.emplace(objectKey);
-                    return true;
-                }
-                entry->RUnlock();
-                return false;
-            });
-        needMigrateDataIds.erase(end, needMigrateDataIds.end());
-        RETURN_OK_IF_TRUE(needMigrateDataIds.empty());
-    }
+    auto end = std::remove_if(needMigrateDataIds.begin(), needMigrateDataIds.end(),
+        [this](const std::string &objectKey) {
+            std::shared_ptr<SafeObjType> entry;
+            Status rc = objectTable_->Get(objectKey, entry);
+            if (rc.IsError() || entry->TryRLock().IsError()) {
+                (void)skipIds_.emplace(objectKey);
+                return true;
+            }
+            entry->RUnlock();
+            return false;
+        });
+    needMigrateDataIds.erase(end, needMigrateDataIds.end());
+    RETURN_OK_IF_TRUE(needMigrateDataIds.empty());
+
     RETURN_IF_NOT_OK(PrepareRemoteMigration(needMigrateDataIds));
 
     for (auto it = needMigrateDataIds.begin(); it != needMigrateDataIds.end(); ++it) {
@@ -134,14 +130,14 @@ Status MigrateDataHandler::MigrateDataInBatches(std::vector<std::string> &needMi
             (void)failedIds_.insert(it, needMigrateDataIds.end());
             return Status(StatusCode::K_NO_SPACE, "[Migrate Data] No remain bytes");
         }
-        CollectObjectForMigration(*it, isSlotMigration);
+        CollectObjectForMigration(*it);
         if (lastRc_.IsError()) {
             INJECT_POINT_NO_RETURN("MigrateDataHandler.StopAfterTransportFailure");
             failedIds_.insert(it, needMigrateDataIds.end());
             return lastRc_;
         }
     }
-    SendDataToRemote(isSlotMigration);
+    SendDataToRemote();
     return lastRc_;
 }
 
@@ -154,9 +150,9 @@ Status MigrateDataHandler::PrepareRemoteMigration(const std::vector<std::string>
     return s;
 }
 
-void MigrateDataHandler::CollectObjectForMigration(const std::string &objectKey, bool isSlotMigration)
+void MigrateDataHandler::CollectObjectForMigration(const std::string &objectKey)
 {
-    if (!isSlotMigration && IsFull()) {
+    if (IsFull()) {
         SendDataToRemote();
         if (lastRc_.IsError()) {
             return;
@@ -406,7 +402,7 @@ void MigrateDataHandler::ReleaseResources(const std::unordered_set<ImmutableStri
     }
 }
 
-void MigrateDataHandler::SendDataToRemote(bool isSlotMigration)
+void MigrateDataHandler::SendDataToRemote()
 {
     PerfPoint pointAll(PerfKey::WORKER_SEND_DATA_TO_REMOTE);
     if (datas_.empty()) {
@@ -431,9 +427,6 @@ void MigrateDataHandler::SendDataToRemote(bool isSlotMigration)
                                    .localAddr = localAddr_,
                                    .batchSize = currBatchSize_,
                                    .progress = progress_,
-                                   .isSlotMigration = isSlotMigration,
-                                   .isRetry = isRetry_,
-                                   .slotId = slotId_,
                                    .objectHeats = objectHeats_.empty() ? nullptr : &objectHeats_,
                                    .rebalancePolicyFence =
                                        rebalancePolicyFence_.enabled ? &rebalancePolicyFence_ : nullptr };

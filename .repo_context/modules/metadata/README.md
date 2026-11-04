@@ -28,7 +28,6 @@ Current canonical records:
 - `runtime.topology.json`
 - `infra.common-infra.json`
 - `infra.l2cache.json`
-- `infra.slot.json`
 - `infra.logging.json`
 - `infra.metrics.json`
 - `infra.observability.json`

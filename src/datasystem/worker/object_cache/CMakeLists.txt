@@ -21,7 +21,6 @@ set(WORKER_OC_SRCS
         metadata_recovery_manager.cpp
         metadata_recovery_selector.cpp
         rebalance_candidate_provider.cpp
-        slot_recovery_orchestrator.cpp
         object_kv.cpp
         eviction_list.cpp
         cache_hit_info.cpp
@@ -51,9 +50,7 @@ set(WORKER_OC_SRCS
         service/worker_oc_service_global_reference_impl.cpp
         service/worker_oc_service_migrate_impl.cpp
         service/worker_oc_service_batch_get_impl.cpp
-        service/worker_oc_service_expire_impl.cpp
-        slot_recovery/slot_recovery_store.cpp
-        slot_recovery/slot_recovery_manager.cpp)
+        service/worker_oc_service_expire_impl.cpp)
 
 # Lightweight library for transport API
 set(WORKER_TRANSPORT_API_SRCS
@@ -71,6 +68,7 @@ set(WORKER_TRANSPORT_API_DEPEND_LIBS
         worker_object_protos)
 
 set(WORKER_OBJECT_CACHE_DEPEND_LIBS
+        worker_flags
         ${TBB_LIBRARY}
         common_etcd
         common_log
@@ -85,12 +83,10 @@ set(WORKER_OBJECT_CACHE_DEPEND_LIBS
         common_immutable_string
         string_ref
         common_persistence_api
-        common_slot_client
         common_parallel
         master_heartbeat_protos
         posix_protos
         worker_object_protos
-        slot_recovery_protos
         master_object_protos
         cluster_topology_scope
         cluster_topology

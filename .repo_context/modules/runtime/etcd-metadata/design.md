@@ -37,7 +37,7 @@ remain supported.
 - What problem this module solves:
   - stable project-local access to ETCD v3 APIs for external ETCD coordination.
 - Who or what depends on this module:
-  - `TopologyEngine`, replica/slot recovery coordination, CLI tools, and ETCD failure tests.
+  - `TopologyEngine`, replica recovery coordination, CLI tools, and ETCD failure tests.
 
 ## Goals
 
@@ -64,7 +64,7 @@ remain supported.
   - `EtcdElector` wraps ETCD election APIs.
   - `EtcdHealth` wraps Maintenance `Status`.
 - Key persistent or backend state:
-  - ETCD key prefixes for membership, topology, operational coordination, and slot recovery.
+  - ETCD key prefixes for membership, topology, operational coordination.
 - Key in-memory state:
   - `EtcdStore::tableMap_`, auth token, lease id, keepalive value, monotonic first-publication fact, membership mutation
     mutex, timers, watch instance;
@@ -110,7 +110,7 @@ remain supported.
 - `ObjectMetaStore` stores object metadata, locations, pending Worker operations and global-delete records only in local RocksDB. It has no ETCD backend, queues or table registration.
 - Object Get requires metadata returned by the metadata owner. Startup loads enabled local RocksDB records directly and propagates storage errors; it does not choose a backend from a historical health marker. `rocksdb_write_mode=none` disables local object metadata persistence.
 - Worker TCP migration persists received auxiliary tasks before acknowledgement and removes source tasks only for acknowledged, unchanged epochs. Task-only transfers require the receiver capability acknowledgement.
-- Fast-restart metadata repair and ETCD-backed slot recovery remain independent. External ETCD retains cluster coordination; the built-in Metastore service and its deployment options are removed.
+- Fast-restart metadata repair remains independent. External ETCD retains cluster coordination; the built-in Metastore service and its deployment options are removed.
 
 ### External ETCD Access
 

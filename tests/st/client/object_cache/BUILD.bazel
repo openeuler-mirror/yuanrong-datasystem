@@ -244,6 +244,7 @@ ds_cc_test(
     tags = ["manual"],
     deps = OC_CLIENT_COMMON_DEPS + [
         "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:file_util",
     ],
 )
 

@@ -102,21 +102,6 @@ WorkerOcServiceMigrateImpl::WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam 
 {
 }
 
-Status WorkerOcServiceMigrateImpl::PrepareMigrateData(const MigrateDataReqPb &req, MigrateDataRspPb &rsp,
-                                                      std::unordered_map<std::string, std::shared_ptr<ShmUnit>> &units)
-{
-    if (req.is_slot_migration()) {
-        auto allocRc = BatchAllocateObjectGroupBySlot(req, units);
-        if (IsNoSpace(allocRc)) {
-            auto failedIds = CollectRequestObjectKeys(req.objects());
-            FillMigrateDataResponse(req, {}, {}, failedIds, true, rsp);
-            return Status(StatusCode::K_NO_SPACE, "Slot migration allocate memory failed");
-        }
-        RETURN_IF_NOT_OK(allocRc);
-    }
-    return Status::OK();
-}
-
 Status WorkerOcServiceMigrateImpl::CheckResource(const MigrateDataReqPb &req, MigrateDataRspPb &rsp)
 {
     bool oom = false;
@@ -263,9 +248,8 @@ void WorkerOcServiceMigrateImpl::ResumeIncomingMigrationAdmission()
 Status WorkerOcServiceMigrateImpl::MigrateData(const MigrateDataReqPb &req, MigrateDataRspPb &rsp,
                                                std::vector<RpcMessage> payloads)
 {
-    LOG(INFO) << FormatString("[Migrate Data] Type: %d, Count: %d, Objects: %s, is_slot_migration: %d, slot_id: %u",
-                              static_cast<int>(req.type()), req.objects_size(), VectorToString(GetObjects(req)),
-                              req.is_slot_migration(), req.slot_id());
+    LOG(INFO) << FormatString("[Migrate Data] Type: %d, Count: %d, Objects: %s",
+                              static_cast<int>(req.type()), req.objects_size(), VectorToString(GetObjects(req)));
     INJECT_POINT("worker.migrate_service.return");
     RETURN_IF_NOT_OK(CheckMigrateDataAdmission(req, rsp));
     Raii admission([this] { ReleaseIncomingMigrationAdmission(); });
@@ -295,7 +279,6 @@ Status WorkerOcServiceMigrateImpl::MigrateDataImpl(const MigrateDataReqPb &req, 
 {
     RETURN_IF_NOT_OK(CheckResource(req, rsp));
     std::unordered_map<std::string, std::shared_ptr<ShmUnit>> units;
-    RETURN_IF_NOT_OK(PrepareMigrateData(req, rsp, units));
 
     // Query master metadata before taking target object locks. Master RPC retries and redirects can take seconds;
     // holding a whole migration batch WLocked across that network path stalls foreground access to hot targets.
@@ -339,11 +322,6 @@ Status WorkerOcServiceMigrateImpl::MigrateDataImpl(const MigrateDataReqPb &req, 
 
     // 5. Fill response.
     FillMigrateDataResponse(req, successIds, expiredIds, failedIds, oom, rsp, skippedIds);
-    if ((!successIds.empty() || !expiredIds.empty()) && req.is_slot_migration() && !req.is_retry()) {
-        auto merStatus = persistenceApi_->MergeSlot(req.worker_addr(), req.slot_id());
-        LOG_IF_ERROR(merStatus, FormatString("Merge slot failed after migrate data, slotId: %u, status: %s",
-                                             req.slot_id(), merStatus.ToString()));
-    }
     LOG(INFO) << "[Migrate Data] Migrate finish, success size: " << successIds.size()
               << ", expired size: " << expiredIds.size() << ", skipped size: " << skippedIds.size()
               << ", failed size: " << failedIds.size()
@@ -856,26 +834,6 @@ Status WorkerOcServiceMigrateImpl::SaveDataWithObjectLocked(std::shared_ptr<Safe
                                                     rc.ToString());
     }
     return rc;
-}
-
-Status WorkerOcServiceMigrateImpl::BatchAllocateObjectGroupBySlot(
-    const MigrateDataReqPb &req, std::unordered_map<std::string, std::shared_ptr<ShmUnit>> &units)
-{
-    for (const auto &info : req.objects()) {
-        const auto &objectKey = info.object_key();
-        auto shmUnit = std::make_shared<ShmUnit>();
-        auto metaSize = GetMetadataSize();
-        auto needSize = info.data_size() + metaSize;
-        auto tenantId = TenantAuthManager::ExtractTenantId(objectKey);
-        auto status = shmUnit->AllocateMemory(tenantId, needSize, false, ServiceType::OBJECT);
-        if (IsNoSpace(status)) {
-            LOG(ERROR) << FormatString("[Migrate Data] %s allocate memory failed, size: %ld", objectKey, needSize);
-            return status;
-        }
-        shmUnit->id = ShmKey::Intern(GetStringUuid());
-        units[objectKey] = shmUnit;
-    }
-    return Status::OK();
 }
 
 Status WorkerOcServiceMigrateImpl::AllocateAndAssignData(

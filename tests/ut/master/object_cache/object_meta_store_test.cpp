@@ -126,7 +126,7 @@ TEST_F(ObjectMetaStoreTest, ReopeningLocalStorePreservesMetadataAndAuxiliaryReco
     DS_ASSERT_OK(ObjectMetaStore_->CreateOrUpdateMeta(key, "metadata"));
     DS_ASSERT_OK(ObjectMetaStore_->AddObjectLocation(key, "worker", "0"));
     DS_ASSERT_OK(ObjectMetaStore_->AddAsyncWorkerOp("worker", key, NotifyWorkerOp::Delete(7)));
-    DS_ASSERT_OK(ObjectMetaStore_->AddDeletedObjectWithDelVersion(key, 7, 9, "worker"));
+    DS_ASSERT_OK(ObjectMetaStore_->AddDeletedObjectWithDelVersion(key, 7, 9));
     ObjectMetaStore_.reset();
     rocksStore_.reset();
     rocksStore_ = RocksStore::GetInstance(backStorePath_);
@@ -160,6 +160,20 @@ TEST_F(ObjectMetaStoreTest, DisabledPersistenceDoesNotAccessStorage)
     DS_ASSERT_OK(disabled.AddAsyncWorkerOp("worker", "key", NotifyWorkerOp::Delete(1)));
     DS_ASSERT_OK(disabled.RemoveDeletedObject("key", 1));
 
+}
+
+TEST(DeletedObjectValueCompatibilityTest, ReadsLegacyWorkerAddressAndVersionOnlyRecords)
+{
+    uint64_t deleteVersion = 0;
+    std::string legacyAddress;
+    EXPECT_TRUE(ObjectMetaStore::DecodeDeletedObjectValue("object", "123|legacy-worker", deleteVersion, legacyAddress));
+    EXPECT_EQ(deleteVersion, 123u);
+    EXPECT_EQ(legacyAddress, "legacy-worker");
+    const std::string encoded = ObjectMetaStore::EncodeDeletedObjectValue(456, "");
+    EXPECT_EQ(encoded, "456");
+    EXPECT_TRUE(ObjectMetaStore::DecodeDeletedObjectValue("object", encoded, deleteVersion, legacyAddress));
+    EXPECT_EQ(deleteVersion, 456u);
+    EXPECT_TRUE(legacyAddress.empty());
 }
 
 TEST_F(ObjectMetaStoreTest, TestCreateQueryRemoveMeta)

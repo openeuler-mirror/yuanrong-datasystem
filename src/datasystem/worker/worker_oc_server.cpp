@@ -48,13 +48,13 @@
 #include "datasystem/common/flags/dynamic_config_updater.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/l2cache/persistence_api.h"
-#include "datasystem/common/l2cache/slot_client/slot_file_util.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/immutable_string/immutable_string_pool.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_health.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/memory/jemalloc_stats_bvar.h"
@@ -178,7 +178,6 @@ DS_DEFINE_bool(shared_memory_populate, false,
 
 DS_DECLARE_string(l2_cache_type);
 DS_DECLARE_string(sfs_path);
-DS_DECLARE_string(distributed_disk_path);
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(log_dir);
 
@@ -534,11 +533,6 @@ Status RefreshPeerHashRing(const PeerHashRingRefreshContext &context,
     return lastStatus;
 }
 
-bool IsWorkerScopedSlotStoreEnabled()
-{
-    return FLAGS_l2_cache_type == "distributed_disk";
-}
-
 bool EnableSCService()
 {
     return FLAGS_sc_regular_socket_num > 0 && FLAGS_sc_stream_socket_num > 0;
@@ -644,23 +638,6 @@ WorkerOCServer::~WorkerOCServer()
     // still alive, and before the process allocator is shut down.
     topologyEngine_.reset();
     datasystem::memory::Allocator::Instance()->Shutdown();
-}
-
-void WorkerOCServer::InitSlotWorkerNamespace()
-{
-    if (!IsWorkerScopedSlotStoreEnabled()) {
-        return;
-    }
-    SetSlotWorkerNamespace(SanitizeSlotWorkerNamespace(FLAGS_worker_address));
-}
-
-Status WorkerOCServer::InitSlotRecovery()
-{
-    RETURN_OK_IF_TRUE(!IsWorkerScopedSlotStoreEnabled());
-    RETURN_OK_IF_TRUE(etcdStore_ == nullptr);
-    slotRecoveryOrchestrator_ = std::make_unique<object_cache::SlotRecoveryOrchestrator>(FLAGS_distributed_disk_path);
-    RETURN_IF_NOT_OK(slotRecoveryOrchestrator_->Init());
-    return slotRecoveryOrchestrator_->RepairLocalSlots();
 }
 
 Status WorkerOCServer::InitWorkerOCService()
@@ -2366,7 +2343,6 @@ Status WorkerOCServer::InitClusterRuntimeAndServices()
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeFastTransportManager(hostPort_),
                                      "Fast transport (URMA/RDMA) init failed");
-    InitSlotWorkerNamespace();
     if (IsSupportL2Storage(GetCurrentStorageType())) {
         persistenceApi_ = PersistenceApi::CreateShared();
         RETURN_IF_NOT_OK(persistenceApi_->Init());
@@ -2407,7 +2383,6 @@ Status WorkerOCServer::InitClusterRuntimeAndServices()
                   << " role=worker action=defer_ready reason=" << reason << " address=" << hostPort_.ToString();
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(StartUbHealthLeaseSync(), "Start UB health lease synchronization failed");
-    RETURN_IF_NOT_OK(InitSlotRecovery());
     return Status::OK();
 }
 

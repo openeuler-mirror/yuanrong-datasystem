@@ -25,7 +25,6 @@
 #include <sstream>
 #include <string>
 
-#include "datasystem/common/l2cache/slot_client/slot_transfer.h"
 #include "datasystem/object/object_enum.h"
 
 namespace datasystem {
@@ -107,13 +106,6 @@ public:
     virtual Status Del(const std::string &objectKey, uint64_t maxVerToDelete, bool deleteAllVersion,
                        uint64_t asyncElapse = 0, const uint64_t *const objectVersion = nullptr,
                        bool listIncompleteVersions = false) = 0;
-
-    virtual Status PreloadSlot(const std::string &sourceWorkerAddress, uint32_t slotId,
-                               const SlotPreloadCallback &callback = SlotPreloadCallback{}) = 0;
-
-    virtual Status MergeSlot(const std::string &sourceWorkerAddress, uint32_t slotId) = 0;
-
-    virtual Status CleanupLocalSlots() = 0;
 
     /**
      * @brief Obtains the request success rate of l2cache.

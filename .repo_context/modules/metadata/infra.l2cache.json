@@ -30,7 +30,6 @@
   ],
   "module_boundary": {
     "related_modules": [
-      "infra.slot",
       "infra.common-infra"
     ],
     "split_signals": [

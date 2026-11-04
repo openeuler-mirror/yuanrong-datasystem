@@ -42,6 +42,10 @@ TEST_F(ValidatorTest, TestValidator1)
     EXPECT_FALSE(Validator::ValidateRealPath("FlagName", "/path/not/exist"));
     EXPECT_TRUE(Validator::ValidatePathString("FlagName", "/path/To/Dir/"));
     EXPECT_FALSE(Validator::ValidateL2CacheType("FlagName", "whatever"));
+    EXPECT_FALSE(Validator::ValidateL2CacheType("FlagName", "distributed_disk"));
+    EXPECT_TRUE(Validator::ValidateL2CacheType("FlagName", "none"));
+    EXPECT_TRUE(Validator::ValidateL2CacheType("FlagName", "obs"));
+    EXPECT_TRUE(Validator::ValidateL2CacheType("FlagName", "sfs"));
     EXPECT_TRUE(Validator::ValidateRocksdbModeType("FlagName", "async"));
     EXPECT_FALSE(Validator::ValidateRocksdbModeType("FlagName", "whatever"));
     std::vector<std::string> validPaths = { "/home/sn/ttt", "~/home/sn/ttt", "!/home/sn/ttt", "qqq/" };

@@ -44,10 +44,6 @@ public:
                              std::shared_ptr<std::stringstream> &content) override;
     Status Del(const std::string &objectKey, uint64_t maxVerToDelete, bool deleteAllVersion, uint64_t asyncElapse = 0,
                const uint64_t *const objectVersion = nullptr, bool listIncompleteVersions = false) override;
-    Status PreloadSlot(const std::string &sourceWorkerAddress, uint32_t slotId,
-                       const SlotPreloadCallback &callback) override;
-    Status MergeSlot(const std::string &sourceWorkerAddress, uint32_t slotId) override;
-    Status CleanupLocalSlots() override;
     std::string GetL2CacheRequestSuccessRate() const override;
 
 private:

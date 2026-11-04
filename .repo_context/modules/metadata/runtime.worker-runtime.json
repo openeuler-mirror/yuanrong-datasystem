@@ -23,7 +23,6 @@
   "module_boundary": {
     "related_modules": [
       "runtime.topology",
-      "infra.slot",
       "infra.observability"
     ],
     "split_signals": [

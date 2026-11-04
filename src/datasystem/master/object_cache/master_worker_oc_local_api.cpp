@@ -60,12 +60,6 @@ Status MasterLocalWorkerOCApi::DeleteNotification(std::unique_ptr<DeleteObjectRe
     return workerOC_->DeleteNotification(*req, rsp);
 }
 
-Status MasterLocalWorkerOCApi::DeletePersistenceObject(std::unique_ptr<DeletePersistenceObjectReqPb> req,
-                                                       DeletePersistenceObjectRspPb &rsp)
-{
-    return workerOC_->DeletePersistenceObject(*req, rsp);
-}
-
 Status MasterLocalWorkerOCApi::DeleteNotificationSend(std::unique_ptr<DeleteObjectReqPb> req, int64_t &tag)
 {
     // The remote version of DeleteNotification is an async call that sends to remote location with a "send",

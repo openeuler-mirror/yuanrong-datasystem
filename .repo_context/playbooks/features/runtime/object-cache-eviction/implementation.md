@@ -50,7 +50,7 @@
   - 修改 `NONE_L2_CACHE_EVICT`、write-through、write-back、disk cache type 的 eviction 语义；
   - 修改 memory eviction 单任务模型、spill 配置、batch threshold 或线程池行为。
 - Do not use when:
-  - 只修改 L2 backend 持久格式；用 L2/slot playbook。
+  - 只修改 L2 backend 持久格式；用 L2 playbook。
   - 只修改 hash-ring 扩缩容路由；用 hash-ring 或 cluster-manager playbook。
 - Escalate to design-first review when:
   - 要让 memory eviction 多任务并发；

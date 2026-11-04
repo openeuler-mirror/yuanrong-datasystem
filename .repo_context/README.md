@@ -88,7 +88,6 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 │   │   ├── infra.logging.json
 │   │   ├── infra.metrics.json
 │   │   ├── infra.observability.json
-│   │   ├── infra.slot.json
 │   │   ├── overview.repository-overview.json
 │   │   ├── overview.engineering-principles.json
 │   │   ├── overview.repository-skills.json
@@ -113,9 +112,6 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 │   │   │   ├── README.md
 │   │   │   ├── design.md
 │   │   │   ├── l2-cache-type.md
-│   │   ├── slot/
-│   │   │   ├── README.md
-│   │   │   └── design.md
 │   │   ├── logging/
 │   │   │   ├── README.md
 │   │   │   ├── design.md
@@ -182,9 +178,6 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 │           ├── l2cache/
 │           │   ├── README.md
 │           │   └── implementation.md
-│           ├── slot/
-│           │   ├── README.md
-│           │   └── implementation.md
 │           └── logging/
 │               ├── README.md
 │               └── implementation.md
@@ -226,7 +219,7 @@ The first pass is intentionally coarse. It currently covers:
 - first-pass domain documents grouped under `overview`, `client`, `runtime`, `infra`, and `quality`;
 - repository-local skill inventory and trigger routing for `.skills/`;
 - a machine-readable module metadata layer describing canonical module ids, entry docs, source roots, and split signals;
-- secondary-storage parent routing, backend selection, and a standalone slot storage and recovery module;
+- secondary-storage parent routing, backend selection, and OBS/SFS persistence;
 - an upkeep playbook for formal module-context generation and backfill;
 - feature workflow guidance for l2 cache and secondary-storage changes;
 - cross-module observability and operations guidance for diagnosis, health checks, and performance troubleshooting.

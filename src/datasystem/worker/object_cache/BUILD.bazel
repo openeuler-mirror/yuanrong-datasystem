@@ -254,7 +254,6 @@ ds_cc_library(
 ds_cc_library(
     name = "worker_oc_service_impl",
     srcs = [
-        "slot_recovery_orchestrator.cpp",
         "metadata_recovery_manager.cpp",
         "worker_oc_service_impl.cpp",
         "worker_self_port_health.cpp",
@@ -262,7 +261,6 @@ ds_cc_library(
     hdrs = [
         "get_hash_ring_response.h",
         "metadata_recovery_manager.h",
-        "slot_recovery_orchestrator.h",
         "worker_oc_service_impl.h",
         "worker_self_port_health.h",
     ],
@@ -281,7 +279,6 @@ ds_cc_library(
         "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/common/l2cache:l2_storage",
         "//src/datasystem/common/l2cache:persistence_api_header",
-        "//src/datasystem/common/l2cache:slot_client",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/object_cache:lock",
@@ -344,7 +341,6 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:metadata_recovery_manager",
         "//src/datasystem/worker/object_cache:metadata_recovery_selector",
         "//src/datasystem/worker/object_cache:object_kv",
-        "//src/datasystem/worker/object_cache/slot_recovery:slot_recovery_manager",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
         "//src/datasystem/worker:authenticate",
         "//src/datasystem/worker:cluster_event_type",
@@ -679,6 +675,7 @@ ds_cc_library(
     ],
     deps = [
         ":cache_hit_info",
+        "//src/datasystem/worker:worker_flags",
         ":worker_oc_service_impl",
         ":worker_worker_oc_gather_layout",
         ":worker_worker_oc_service_impl_header",

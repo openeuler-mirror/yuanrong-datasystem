@@ -53,8 +53,6 @@ public:
     Status UpdateNotification(UpdateObjectReqPb &req, UpdateObjectRspPb &rsp) override;
     Status ClearData(ClearDataReqPb &req, ClearDataRspPb &rsp) override;
     Status DeleteNotification(std::unique_ptr<DeleteObjectReqPb> req, DeleteObjectRspPb &rsp) override;
-    Status DeletePersistenceObject(std::unique_ptr<DeletePersistenceObjectReqPb> req,
-                                   DeletePersistenceObjectRspPb &rsp) override;
     Status DeleteNotificationSend(std::unique_ptr<DeleteObjectReqPb> req, int64_t &tag) override;
     Status DeleteNotificationReceive(int64_t tag, DeleteObjectRspPb &rsp) override;
     Status QueryGlobalRefNumOnWorker(QueryGlobalRefNumReqPb &req, QueryGlobalRefNumRspPb &rsp) override;

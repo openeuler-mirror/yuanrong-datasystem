@@ -169,13 +169,6 @@ spec:
         {{- if eq ($.Values.global.l2Cache.l2CacheType) "sfs" }}
         - -sfs_path=/opt/data/datasystem/sfs-turbo
         {{- end }}
-        {{- if eq ($.Values.global.l2Cache.l2CacheType) "distributed_disk" }}
-        - -distributed_disk_path=/home/yuanrong/datasystem/distributed_disk
-        - -distributed_disk_max_data_file_size_mb={{ $.Values.global.l2Cache.distributedDisk.maxDataFileSizeMb | int64 }}
-        - -distributed_disk_sync_interval_ms={{ $.Values.global.l2Cache.distributedDisk.syncIntervalMs | int64 }}
-        - -distributed_disk_sync_batch_bytes={{ $.Values.global.l2Cache.distributedDisk.syncBatchBytes | int64 }}
-        - -distributed_disk_compact_interval_s={{ $.Values.global.l2Cache.distributedDisk.compactIntervalS | int64 }}
-        {{- end }}
         - -enable_cloud_service_token_rotation={{ $.Values.global.l2Cache.obs.cloudServiceTokenRotation.enable }}
         - -l2_cache_type={{ $.Values.global.l2Cache.l2CacheType }}
         - -l2_cache_delete_thread_num={{ $.Values.global.l2Cache.l2CacheDeleteThreadNum }}
@@ -462,10 +455,6 @@ spec:
           mountPath: /opt/data/datasystem/sfs-turbo
           subPath: {{ $.Values.global.l2Cache.sfsTurbo.subPath }}
         {{- end }}
-        {{- if eq ($.Values.global.l2Cache.l2CacheType) "distributed_disk" }}
-        - mountPath: /home/yuanrong/datasystem/distributed_disk
-          name: distributed-disk
-        {{- end }}
       restartPolicy: Always
       securityContext:
         fsGroup: {{ $.Values.global.fsGid }}
@@ -506,10 +495,6 @@ spec:
         {{- $initCmds = append $initCmds (printf "chown -R -h yuanrong:yuanrong %s" $.Values.global.ipc.udsDir) }}
         {{- $initCmds = append $initCmds "chmod 700 /home/yuanrong/datasystem/rocksdb" }}
         {{- $initCmds = append $initCmds "chown -R -h yuanrong:yuanrong /home/yuanrong/datasystem/rocksdb" }}
-        {{- if eq ($.Values.global.l2Cache.l2CacheType) "distributed_disk" }}
-        {{- $initCmds = append $initCmds "chmod 700 /home/yuanrong/datasystem/distributed_disk" }}
-        {{- $initCmds = append $initCmds "chown -R -h yuanrong:yuanrong /home/yuanrong/datasystem/distributed_disk" }}
-        {{- end }}
         {{- if and $.Values.global.tenantAuth.authorizationEnable (eq $.Values.global.tenantAuth.iamKit "yuanrong_iam") }}
         {{- $initCmds = append $initCmds (printf "cp -rH /home/sn/yuanrong_iam/* %s" $.Values.global.tenantAuth.yuanrong.yuanrongIamDir) }}
         {{- $initCmds = append $initCmds (printf "chmod 700 %s" $.Values.global.tenantAuth.yuanrong.yuanrongIamDir) }}
@@ -558,10 +543,6 @@ spec:
         {{- end }}
         - mountPath: /home/yuanrong/datasystem/rocksdb
           name: rocksdb
-        {{- if eq ($.Values.global.l2Cache.l2CacheType) "distributed_disk" }}
-        - mountPath: /home/yuanrong/datasystem/distributed_disk
-          name: distributed-disk
-        {{- end }}
       volumes:
         {{- if $.Values.global.etcd.enableEtcdAuth }}
         - emptyDir: {}
@@ -628,12 +609,6 @@ spec:
           hostPath:
             path: {{ $.Values.global.metadata.rocksdbStoreDir }}
             type: DirectoryOrCreate
-        {{- if eq ($.Values.global.l2Cache.l2CacheType) "distributed_disk" }}
-        - name: distributed-disk
-          hostPath:
-            path: {{ $.Values.global.l2Cache.distributedDisk.path }}
-            type: DirectoryOrCreate
-        {{- end }}
         - name: datasystem-config
           configMap:
             name: datasystem-configmap

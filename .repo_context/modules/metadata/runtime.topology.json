@@ -34,7 +34,6 @@
     "related_modules": [
       "runtime.worker-runtime",
       "runtime.etcd-metadata",
-      "infra.slot",
       "runtime.object-cache-eviction"
     ],
     "split_signals": [

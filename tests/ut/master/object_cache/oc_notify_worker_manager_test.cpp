@@ -143,7 +143,7 @@ TEST_F(OCNotifyWorkerManagerTest, MigratedDeleteTaskIsPersistedBeforeAcceptance)
     const auto previousL2 = FLAGS_l2_cache_type;
     FLAGS_l2_cache_type = "none";
     Raii restoreL2([&] { FLAGS_l2_cache_type = previousL2; });
-    OCGlobalCacheDeleteManager manager(objectStore_, nullptr, "");
+    OCGlobalCacheDeleteManager manager(objectStore_, nullptr);
     DS_ASSERT_OK(manager.Init());
     MetaForMigrationPb migrated;
     migrated.set_object_key("migrated-delete");
@@ -162,7 +162,8 @@ TEST_F(OCNotifyWorkerManagerTest, MigratedDeleteTaskIsPersistedBeforeAcceptance)
     std::string target;
     ASSERT_TRUE(ObjectMetaStore::DecodeDeletedObjectValue("migrated-delete", value, deleteVersion, target));
     EXPECT_EQ(deleteVersion, 9U);
-    EXPECT_EQ(target, "worker");
+    EXPECT_TRUE(target.empty());
+    EXPECT_EQ(value, "9");
     EXPECT_EQ(manager.GetDeletingObjectCount(), 1U);
 }
 

@@ -29,7 +29,6 @@
   - `.repo_context/modules/runtime/worker-runtime.md`
   - `.repo_context/modules/runtime/topology/README.md`
   - `.repo_context/modules/infra/l2cache/README.md`
-  - `.repo_context/modules/infra/slot/design.md`
   - `.repo_context/modules/quality/tests-and-reproduction.md`
 - Related playbooks:
   - `.repo_context/playbooks/features/runtime/object-cache-eviction/implementation.md`
@@ -58,7 +57,7 @@
   - schedule thread 每 10 秒巡检 object/stream 水位；
   - spill 写入前发现 spill 空间超过高水位。
 - Typical deployment or runtime environment:
-  - 单 worker 或多 worker 集群，可能启用本地 spill、远端 memory spill、L2 cache 或 slot。
+  - 单 worker 或多 worker 集群，可能启用本地 spill、远端 memory spill、L2 cache。
 - Expected user or operator experience:
   - 前台请求在压力下仍尽可能通过后台释放空间继续执行；
   - eviction 慢时应能从日志、perf point、trace 和测试入口定位到 master RPC、spill I/O、对象锁或候选队列。
@@ -73,7 +72,7 @@
 
 ## Non-Goals
 
-- 不定义 L2 backend 的持久格式或 slot recovery 规则。
+- 不定义 L2 backend 的持久格式。
 - 不定义 hash-ring 或 cluster-manager 的 worker 路由协议。
 - 不通过 `eviction_thread_num` 暴露 memory eviction 并发调优；该 flag 已删除，主 eviction 并发仍由 `isDone_` 单任务门闩约束。
 - 不保证 `DeleteAllCopyMetaReqPb.async_delete` 会让 worker 侧 RPC 异步化。
@@ -93,7 +92,7 @@
   - ExpiredObjectManager 内部过期扫描算法。
 - Important boundaries with neighboring modules:
   - worker runtime 负责启动 manager；eviction 负责压力下的对象处置。
-  - L2/slot 负责数据可恢复性；eviction 只读取 write mode、writeback done 和 cache type。
+  - L2 负责数据可恢复性；eviction 只读取 write mode、writeback done 和 cache type。
   - master metadata 负责全局元数据；eviction 通过 `RemoveMeta` 或 `DeleteAllCopyMeta` 请求修改它。
 
 ## Terminology
@@ -174,7 +173,7 @@
   - spill 文件和 spill 文件索引；
   - master metadata；
   - ExpiredObjectManager 队列；
-  - L2/slot 中的可恢复对象数据。
+  - L2 中的可恢复对象数据。
 - Key control-flow or data-flow stages:
   - high watermark trigger -> candidate -> object lock -> action -> local/master/spill effects -> failed candidate re-add。
 

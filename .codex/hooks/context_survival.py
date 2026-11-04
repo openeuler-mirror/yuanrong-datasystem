@@ -38,10 +38,6 @@ DEFAULT_ROUTE_MAP = [
     (["src/datasystem/worker/cluster_manager"], [".repo_context/modules/runtime/cluster-manager/README.md"]),
     (["src/datasystem/worker/hash_ring"], [".repo_context/modules/runtime/hash-ring/README.md"]),
     (["src/datasystem/common/l2cache"], [".repo_context/modules/infra/l2cache/design.md"]),
-    (
-        ["src/datasystem/common/l2cache/slot_client", "src/datasystem/worker/object_cache/slot_recovery"],
-        [".repo_context/modules/infra/slot/design.md"],
-    ),
     (["src/datasystem/common/log"], [".repo_context/modules/infra/logging/design.md"]),
     (["src/datasystem/common/metrics"], [".repo_context/modules/infra/metrics/design.md"]),
     (

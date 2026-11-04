@@ -8,7 +8,5 @@ Current docs:
 
 - `l2cache/README.md`
 - `l2cache/implementation.md`
-- `slot/README.md`
-- `slot/implementation.md`
 - `logging/README.md`
 - `logging/implementation.md`

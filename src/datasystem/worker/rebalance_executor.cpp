@@ -286,7 +286,7 @@ RebalanceExecutor::MigrateResult RebalanceExecutor::MigrateToTarget(const master
         return migrateHook_(task, targetAddr, objectKeys, objectHeats);
     }
 #endif
-    object_cache::DataMigrator::TargetMigrationOptions options{ .isSlotMigration = false,
+    object_cache::DataMigrator::TargetMigrationOptions options{
                                                                  .objectHeats = objectHeats,
                                                                  .rebalancePolicyFence =
                                                                      BuildRebalancePolicyFence(task),

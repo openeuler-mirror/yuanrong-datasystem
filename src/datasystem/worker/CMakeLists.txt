@@ -18,6 +18,9 @@ add_library(metadata_route_resolver STATIC metadata_route_resolver.cpp)
 target_include_directories(metadata_route_resolver PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(metadata_route_resolver PUBLIC cluster_topology common_util)
 
+add_library(worker_flags STATIC worker_flags.cpp)
+target_link_libraries(worker_flags PRIVATE common_flags common_util)
+
 add_subdirectory(object_cache)
 add_subdirectory(stream_cache)
 add_subdirectory(client_manager)
@@ -31,7 +34,6 @@ set(WORKER_SRCS
         worker_oc_server.cpp
         worker_topology_phase_callbacks.cpp
         worker_liveness_check.cpp
-        worker_flags.cpp
         data_worker.cpp
         )
 
@@ -46,9 +48,9 @@ set(WORKER_DEPEND_LIBS
         jemalloc_stats_bvar
         common_perf
         common_flags
+        worker_flags
         common_rocksdb
         common_rpc_zmq
-        common_slot_client
         common_shared_memory
         common_util
         cluster_topology_scope
