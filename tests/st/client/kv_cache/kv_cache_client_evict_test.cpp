@@ -545,7 +545,8 @@ TEST_F(KVCacheClientEvictGetSetRaceTest, TestEvictDeletePathGetNotFoundThenRepub
     LOG(INFO) << "Test evict DELETE path: republish advances the version and the stale RemoveMeta(EVICTION) is skipped";
     const size_t dataSize = 4 * 1024ul * 1024ul;
     const size_t padSize = 1024ul * 1024ul;
-    const std::string targetKey = "evict_delete_get_set_race";
+    std::string targetKey;
+    DS_ASSERT_OK(FindKeyRoutedToWorker(0, "evict_delete_get_set_race_", targetKey));
     const std::string newVal(dataSize, 'b');
 
     // Hold only the eviction's own RemoveMeta send path, so the 3s residual-metadata window is
@@ -563,11 +564,10 @@ TEST_F(KVCacheClientEvictGetSetRaceTest, TestEvictDeletePathGetNotFoundThenRepub
     SetParam evictParam{ .writeMode = WriteMode::NONE_L2_CACHE_EVICT };
     DS_ASSERT_OK(client_->Set(targetKey, std::string(dataSize, 'a'), evictParam));
     std::vector<std::string> paddings;
-    for (int i = 0; i < 5; i++) {
-        std::string padKey = "protected_del_" + std::to_string(i);
+    DS_ASSERT_OK(FindKeysRoutedToWorker(0, "protected_del_", 5, paddings));
+    for (const auto &padKey : paddings) {
         DS_ASSERT_OK(client_->Set(padKey, std::string(padSize, 'p'),
                                   SetParam{ .writeMode = WriteMode::NONE_L2_CACHE }));
-        paddings.push_back(std::move(padKey));
     }
 
     for (const auto &padKey : paddings) {

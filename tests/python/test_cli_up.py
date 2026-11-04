@@ -53,7 +53,6 @@ def install_cli_import_stubs_if_needed():
         WORKER_NODES = "worker_nodes"
         WORKER_PORT = "worker_port"
         WORKER_CONFIG_PATH = "worker_config_path"
-        METASTORE_HEAD_NODE = "metastore_head_node"
 
     class ParallelMixin:
         pass
@@ -118,6 +117,14 @@ class CliUpTest(unittest.TestCase):
         parser = argparse.ArgumentParser(allow_abbrev=False)
         self.command.add_arguments(parser)
         return parser.parse_args(args)
+
+    def test_removed_metastore_head_node_argument_is_rejected(self):
+        from contextlib import redirect_stderr
+        import io
+
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+            self.parse_up_args(["--metastore_head_node", "unused", "-f", "cluster_config.json"])
+        self.assertEqual(raised.exception.code, 2)
 
     def test_jemalloc_prof_conf_argument_is_available(self):
         args = self.parse_up_args(

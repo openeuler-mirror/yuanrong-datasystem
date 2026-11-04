@@ -303,14 +303,6 @@ protected:
         return false;
     }
 
-    std::string MetaEtcdKeyForObject(const std::string &key) const
-    {
-        std::stringstream table;
-        table << "/" << CLUSTER_NAME << ETCD_META_TABLE_PREFIX << ETCD_HASH_SUFFIX << "/";
-        const auto hash = MurmurHash3_32(key);
-        return table.str() + master::Hash2Str(hash) + "/" + key;
-    }
-
     bool WaitUntilSlotContainsDataFileOfSize(const std::string &slotPath, size_t expectedSize) const
     {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(WAIT_GET_TIMEOUT_MS);
@@ -647,22 +639,6 @@ TEST_F(DISABLED_SlotEndToEndTest, WorkerRestartRecoversSlotAndMetadata)
     ASSERT_TRUE(WaitUntilGetSucceeds(client1, key, value));
     InitTestKVClient(0, client0);
     DS_ASSERT_OK(client0->Set(key, value, param));
-}
-
-TEST_F(DISABLED_SlotEndToEndTest, DistributedDiskDoesNotWriteMetadataToEtcd)
-{
-    std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client);
-
-    const std::string key = "tenant_slot_distributed_disk_no_etcd_meta";
-    const std::string value = "distributed_disk_value_" + GenRandomString(2048);
-    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
-    DS_ASSERT_OK(client->Set(key, value, param));
-
-    ASSERT_TRUE(WaitUntilGetSucceeds(client, key, value));
-
-    RangeSearchResult res;
-    DS_ASSERT_NOT_OK(db_->RawGet(MetaEtcdKeyForObject(key), res));
 }
 
 TEST_F(DISABLED_SlotEndToEndTest, PassiveScaleDownRecoversSlotAndMetadata)

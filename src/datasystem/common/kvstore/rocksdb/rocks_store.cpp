@@ -188,6 +188,8 @@ void RocksStore::Close()
         return;
     }
     LOG(INFO) << "Close rocksdb, dbPath:" << dbPath_;
+    // Queued writes capture the database and column-family handles; drain them before releasing either.
+    asyncThreadPool_.reset();
     for (auto &handle : tables_) {
         db_->DestroyColumnFamilyHandle(handle.second);
     }
@@ -195,9 +197,6 @@ void RocksStore::Close()
     db_->Close();
     delete db_;
     db_ = nullptr;
-    if (asyncThreadPool_) {
-        asyncThreadPool_.reset();
-    }
 }
 
 RocksdbWriteMode RocksStore::ParseRocksdbWriteMode()
@@ -287,7 +286,7 @@ Status RocksStore::Put(const std::string &tableName, const std::string &key, con
 }
 
 Status RocksStore::PutWithOrderingKey(const std::string &tableName, const std::string &key, const std::string &value,
-                                      const std::string &orderingKey)
+                                      const std::string &orderingKey, bool waitForCompletion)
 {
     RETURN_OK_IF_TRUE(disableRocksDB);
     RETURN_OK_IF_TRUE(mode_ == RocksdbWriteMode::NONE);
@@ -307,6 +306,13 @@ Status RocksStore::PutWithOrderingKey(const std::string &tableName, const std::s
         GetMasterTimeCost().Append("RocksDB Put", timer.ElapsedMilliSecond());
         return CheckAndRemoveDbPath(rc);
     } else if (mode_ == RocksdbWriteMode::ASYNC) {
+        if (waitForCompletion) {
+            auto future = asyncThreadPool_->Submit(orderingKey, [this, tableHandle, key, value, &rc]() {
+                rc = Put(tableHandle, key, value);
+            });
+            future.get();
+            return CheckAndRemoveDbPath(rc);
+        }
         // Snapshot the caller's traceID so async-write error logs (rare, but
         // important for diagnosis) inherit the request's traceID instead of
         // appearing with an empty column. Falls back to a RocksStoreAsync;<uuid>

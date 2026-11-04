@@ -20,6 +20,8 @@
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/master/object_cache/oc_notify_worker_manager.h"
 #include "ut/common.h"
+#include "../../../common/binmock/binmock.h"
+#include "datasystem/master/object_cache/oc_nested_manager.h"
 
 DS_DECLARE_string(rocksdb_write_mode);
 
@@ -53,14 +55,13 @@ master::MetaForMigrationPb BuildMigratedMeta(const std::string &objectKey, bool 
 
 class OCMetadataManagerForMigrationTest : public master::OCMetadataManager {
 public:
-    OCMetadataManagerForMigrationTest()
-        : OCMetadataManager(nullptr, nullptr, nullptr, "", nullptr, nullptr, "", nullptr,
-                            "migration-test")
+    OCMetadataManagerForMigrationTest() : OCMetadataManager(nullptr, nullptr, "", nullptr, nullptr,
+                                                            "", nullptr, "migration-test")
     {
     }
 
     OCMetadataManagerForMigrationTest(RocksStore *rocksStore)
-        : OCMetadataManager(rocksStore, nullptr, nullptr, SURVIVING_WORKER_ADDRESS, nullptr,
+        : OCMetadataManager(rocksStore, nullptr, SURVIVING_WORKER_ADDRESS, nullptr,
                             nullptr, SURVIVING_WORKER_ADDRESS, nullptr, "migration-race-test")
     {
     }
@@ -79,8 +80,24 @@ public:
     {
         RETURN_IF_NOT_OK(objectStore_->Init());
         expiredObjectManager_ = std::make_unique<master::ExpiredObjectManager>(SURVIVING_WORKER_ADDRESS, this);
-        notifyWorkerManager_ = std::make_unique<master::OCNotifyWorkerManager>(objectStore_, true, this);
+        notifyWorkerManager_ = std::make_unique<master::OCNotifyWorkerManager>(objectStore_, this);
+        nestedRefManager_ = std::make_unique<master::OCNestedManager>(objectStore_);
         return Status::OK();
+    }
+
+    Status SaveNested(const master::MetaForMigrationPb &meta)
+    {
+        return SaveNestedMigrationMetadata(meta);
+    }
+
+    uint32_t NestedCount(const std::string &key)
+    {
+        return nestedRefManager_->GetNestedKeyRef(key);
+    }
+
+    Status AddOperation(const std::string &key, uint64_t version)
+    {
+        return notifyWorkerManager_->InsertAsyncWorkerOp("worker", key, master::NotifyWorkerOp::Delete(version));
     }
 
     void MarkWorkerFault(const std::string &workerAddress, bool isDead)
@@ -129,6 +146,80 @@ public:
             nullptr, info, std::chrono::steady_clock::now() + std::chrono::seconds(1), cancellation);
         EXPECT_EQ(rc.GetCode(), K_TRY_AGAIN);
         EXPECT_TRUE(migrateManager_.futureThread_.empty());
+    }
+
+    void VerifyProbeRejectsLegacyTargetBeforeBusinessRequest()
+    {
+        auto api = std::make_unique<master::MasterMasterOCApi>(HostPort("127.0.0.1", 1), HostPort());
+        BINEXPECT_CALL(&master::MasterMasterOCApi::MigrateMetadata, (testing::_, testing::_))
+            .Times(1).WillOnce(testing::Invoke([](master::MigrateMetadataReqPb &probe,
+                                                  master::MigrateMetadataRspPb &) {
+                EXPECT_EQ(probe.object_metas_size(), 0);
+                return Status::OK();
+            }));
+        master::MigrateMetadataReqPb req;
+        auto *record = req.add_object_metas();
+        record->set_object_key("must-not-be-sent");
+        record->set_only_ref(true);
+        record->set_nested_ref(2);
+        record->add_async_ops()->set_worker_addr("worker");
+        master::OCMigrateMetadataManager::MigrateMetaInfo info;
+        std::vector<std::string> failed;
+        EXPECT_EQ(migrateManager_.BatchMigrateMetadata(api, req, nullptr, failed, info).GetCode(), K_NOT_SUPPORTED);
+        RELEASE_STUBS;
+    }
+
+    void VerifyEpochConflictDoesNotReplayNestedReferences()
+    {
+        const auto oldMode = FLAGS_rocksdb_write_mode;
+        FLAGS_rocksdb_write_mode = "sync";
+        Raii restore([&] { FLAGS_rocksdb_write_mode = oldMode; });
+        auto db = RocksStore::GetInstance(GetTestCaseDataDir() + "/epoch-source");
+        auto source = std::make_shared<OCMetadataManagerForMigrationTest>(db.get());
+        DS_ASSERT_OK(source->PrepareMigrationReceiver());
+        master::MigrateMetadataReqPb req;
+        auto *meta = req.add_object_metas();
+        meta->set_object_key("epoch-key");
+        meta->set_only_ref(true);
+        meta->set_nested_ref(2);
+        DS_ASSERT_OK(source->SaveNested(*meta));
+        DS_ASSERT_OK(source->AddOperation("epoch-key", 1));
+        master::OCMigrateMetadataManager::WorkerOpSnapshots snapshots;
+        snapshots["epoch-key"] = source->SnapshotWorkerOpsForMigration("epoch-key", *meta);
+        DS_ASSERT_OK(source->AddOperation("epoch-key", 2));
+        master::MigrateMetadataRspPb rsp;
+        rsp.add_results(master::MigrateMetadataRspPb::SUCCESSFUL);
+        rsp.set_supports_task_only_worker_ops(true);
+        master::OCMigrateMetadataManager::MigrateMetaInfo info;
+        std::vector<std::string> failed;
+        EXPECT_EQ(migrateManager_.ApplyBatchMigrationResponse(req, rsp, source, failed, info, snapshots).GetCode(),
+                  K_TRY_AGAIN);
+        master::MetaForMigrationPb retry;
+        source->FillNestedInfoForMigration("epoch-key", retry);
+        EXPECT_EQ(retry.nested_ref(), 0U);
+        auto current = source->SnapshotWorkerOpsForMigration("epoch-key", retry);
+        ASSERT_EQ(current.size(), 1U);
+        EXPECT_EQ(current.front().operation.op.delObjectVersion, 2U);
+        source->Shutdown();
+    }
+
+    void VerifyTaskOnlyMigrationRejectsLegacySuccessWithoutAcknowledgement()
+    {
+        auto metadata = std::make_shared<OCMetadataManagerForMigrationTest>();
+        metadata->PrepareFailureDependencies();
+        master::MigrateMetadataReqPb req;
+        auto *record = req.add_object_metas();
+        record->set_object_key("task-only");
+        record->set_only_ref(true);
+        record->add_async_ops()->set_worker_addr("worker");
+        master::MigrateMetadataRspPb legacy;
+        legacy.add_results(master::MigrateMetadataRspPb::SUCCESSFUL);
+        master::OCMigrateMetadataManager::MigrateMetaInfo info;
+        std::vector<std::string> failed;
+        const auto status = migrateManager_.ApplyBatchMigrationResponse(req, legacy, metadata, failed, info);
+        EXPECT_EQ(status.GetCode(), K_TRY_AGAIN);
+        EXPECT_EQ(failed, std::vector<std::string>{ "task-only" });
+        metadata->Shutdown();
     }
 
     void VerifyMetadataRpcObserverUsesParsedTargetAndStopsOnShutdown()
@@ -301,6 +392,31 @@ TEST_F(OCMigrateMetadataManagerTest, MigrationDoesNotRestoreLocationCleanedByPas
 
     metadataManager->Shutdown();
     rocksStore.reset();
+}
+
+TEST_F(OCMigrateMetadataManagerTest, ProbeRejectsLegacyTargetBeforeBusinessRequest)
+{
+    VerifyProbeRejectsLegacyTargetBeforeBusinessRequest();
+}
+
+TEST_F(OCMigrateMetadataManagerTest, EpochConflictDoesNotReplayNestedReferences)
+{
+    VerifyEpochConflictDoesNotReplayNestedReferences();
+}
+
+TEST_F(OCMigrateMetadataManagerTest, EmptyMigrationAcknowledgesCapabilityWithoutStorage)
+{
+    OCMetadataManagerForMigrationTest receiver;
+    master::MigrateMetadataReqPb req;
+    master::MigrateMetadataRspPb rsp;
+    DS_ASSERT_OK(receiver.SaveMigrationMetadata(req, rsp));
+    EXPECT_EQ(rsp.results_size(), 0);
+    EXPECT_TRUE(rsp.supports_task_only_worker_ops());
+}
+
+TEST_F(OCMigrateMetadataManagerTest, TaskOnlyMigrationRejectsLegacySuccessWithoutAcknowledgement)
+{
+    VerifyTaskOnlyMigrationRejectsLegacySuccessWithoutAcknowledgement();
 }
 
 TEST_F(OCMigrateMetadataManagerTest, MetadataRpcObserverUsesParsedTargetAndStopsOnShutdown)

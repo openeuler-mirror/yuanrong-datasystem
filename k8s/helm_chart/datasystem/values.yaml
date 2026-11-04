@@ -40,7 +40,7 @@ global:
     etcdPassword: ""
 
   # Coordinator configuration. The coordinator is an alternative coordination backend to ETCD.
-  # Only one coordination backend (coordinator, etcd, or metastore) can be active at a time.
+  # Only one coordination backend (coordinator or etcd) can be active at a time.
   # Leave coordinatorAddress empty (default) to use ETCD as the coordination backend.
   coordinator:
     # Address of datasystem coordinator service in 'host:port' format (e.g., "127.0.0.1:31511").

@@ -68,6 +68,13 @@ public:
      */
     bool RemoveRef(const T &objectKey);
 
+    bool RemoveAllRefs(const T &objectKey)
+    {
+        std::shared_lock<SharedMutex> lock(objectKeyMapMutex_);
+        typename TbbObjKeyTable::accessor accessor;
+        return objectKeys_.find(accessor, objectKey) && objectKeys_.erase(accessor);
+    }
+
     /**
      * @brief Remove the reference to the object.
      * @param[in] objectKey The object key to remove, it cannot be empty.

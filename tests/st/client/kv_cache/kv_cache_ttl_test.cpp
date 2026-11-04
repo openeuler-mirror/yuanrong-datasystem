@@ -385,7 +385,7 @@ TEST_F(KVClientL2CacheTest, TestWriteBackGetAfterDel)
     auto key = client0->Set(val, param);
     sleep(1);
     ASSERT_TRUE(!key.empty());
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "AsyncMetaOpToEtcdStorageHandler", "sleep(1000)"));
+
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "global_cache_delete.delete_objects", "sleep(3000)"));
     sleep(1);
     DS_ASSERT_OK(client0->Del(key));

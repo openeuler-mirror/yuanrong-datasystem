@@ -16,7 +16,7 @@
  */
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 
-#include <atomic>
+#include <algorithm>
 #include <cstdint>
 #include <iomanip>
 #include <memory>
@@ -28,8 +28,6 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/kvstore/etcd/etcd_constants.h"
-#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/kvstore/rocksdb/replica.h"
 #include "datasystem/common/kvstore/rocksdb/rocks_store.h"
 #include "datasystem/common/log/trace.h"
@@ -44,25 +42,10 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/request_context.h"
-#include "datasystem/master/object_cache/store/meta_async_queue.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/locks.h"
 
-DS_DECLARE_string(rocksdb_write_mode);
-DS_DECLARE_string(l2_cache_type);
-
-#define EXEC_UTIL_SUCCESS(_statement, _quietCode, _exitFlag)                 \
-    do {                                                                     \
-        Status rc = (_statement);                                            \
-        if (!(_exitFlag) && rc.GetCode() == StatusCode::K_RPC_UNAVAILABLE) { \
-            continue;                                                        \
-        }                                                                    \
-        if (rc.IsError() && rc.GetCode() != _quietCode) {                    \
-            LOG(ERROR) << "Execute ETCD op failed: " << rc.ToString();       \
-        }                                                                    \
-        break;                                                               \
-    } while (true)
 
 namespace datasystem {
 namespace master {
@@ -77,362 +60,15 @@ void FillNotifyWorkerOpDetailPb(const NotifyWorkerOp &op, ObjectAsyncOpDetailPb 
     pb.set_delete_object_version(op.delObjectVersion);
 }
 
-ObjectMetaStore::ObjectMetaStore(RocksStore *rocksStore, EtcdStore *etcdStore, bool isEnable)
-    : rocksStore_(rocksStore),
-      etcdStore_(etcdStore),
-      maxRequestSize_(static_cast<uint64_t>(QUEUE_CAPACITY) * ETCD_META_POOL_SIZE),
-      isPersistenceEnabled_(isEnable)
+ObjectMetaStore::ObjectMetaStore(RocksStore *rocksStore, bool isEnable)
+    : rocksStore_(rocksStore), isPersistenceEnabled_(isEnable)
 {
-}
-
-ObjectMetaStore::~ObjectMetaStore()
-{
-    running_ = false;
-    for (auto &thread : threadPool_) {
-        thread.join();
-    }
 }
 
 Status ObjectMetaStore::Init()
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
-    enableEtcdMetaStore_ = FLAGS_l2_cache_type != "distributed_disk";
-    RETURN_IF_NOT_OK(InitEtcdStore());
-    RETURN_IF_NOT_OK(InitRocksStore());
-    return Status::OK();
-}
-
-Status ObjectMetaStore::InitEtcdStore()
-{
-    if (!EtcdEnable()) {
-        LOG(INFO) << "Not enable etcd for meta store";
-        return Status::OK();
-    }
-
-    for (uint32_t i = 0; i < ETCD_META_POOL_SIZE; i++) {
-        queues_.emplace_back(std::make_shared<MetaAsyncQueue>(QUEUE_CAPACITY));
-    }
-    for (uint32_t i = 0; i < ETCD_META_POOL_SIZE; i++) {
-        threadPool_.emplace_back(Thread(&ObjectMetaStore::AsyncMetaOpToEtcdStorageHandler, this, i, queues_[i]));
-    }
-
-    // Hash table for normal key.
-    RETURN_IF_NOT_OK(etcdStore_->CreateTable(std::string(ETCD_META_TABLE_PREFIX) + ETCD_HASH_SUFFIX,
-                                             std::string(ETCD_META_TABLE_PREFIX) + ETCD_HASH_SUFFIX));
-    RETURN_IF_NOT_OK(etcdStore_->CreateTable(std::string(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX) + ETCD_HASH_SUFFIX,
-                                             std::string(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX) + ETCD_HASH_SUFFIX));
-    RETURN_IF_NOT_OK(etcdStore_->CreateTable(std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_HASH_SUFFIX,
-                                             std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_HASH_SUFFIX));
-
-    return Status::OK();
-}
-
-std::string Hash2Str(uint32_t hash)
-{
-    const uint32_t width = 10;
-    std::stringstream ss;
-    ss << std::setfill('0') << std::setw(width) << hash;
-    return ss.str();
-}
-
-uint32_t ObjectMetaStore::HashFunction(const std::string &key)
-{
-    return MurmurHash3_32(key);
-}
-
-void ObjectMetaStore::WarnIfNeed()
-{
-    const float oneHundredPercent = 100.0;
-    const float sixtyPercentThreshold = 60.0;
-    const float eightyPercentThreshold = 80.0;
-    const int oneHundredFreq = 10;
-    const int eightyPercentFreq = 50;
-    const int sixtyPercentFreq = 100;
-    float ratio = static_cast<float>(asyncReqSize_) / maxRequestSize_ * oneHundredPercent;
-    std::string msg = FormatString("The thread of ETCD async queue is: [%.3lf]", ratio);
-    if (ratio >= oneHundredPercent) {
-        LOG_EVERY_N(WARNING, oneHundredFreq) << msg << "%, thread full";
-    } else if (ratio >= eightyPercentThreshold) {
-        LOG_EVERY_N(WARNING, eightyPercentFreq) << msg << "%, reaches 80% threshold";
-    } else if (ratio >= sixtyPercentThreshold) {
-        LOG_EVERY_N(WARNING, sixtyPercentFreq) << msg << "%, reaches 60% threshold";
-    }
-}
-
-void ObjectMetaStore::InsertToEtcdKeyMap(const std::string &table, const std::string &key, uint32_t hash, bool isAsync)
-{
-    if (!EtcdEnable()) {
-        return;
-    }
-    std::lock_guard<SharedMutex> l(etcdMtx_);
-    auto tableIter = etcdKeyMap_.find(table);
-    if (tableIter == etcdKeyMap_.end()) {
-        std::map<std::string, std::pair<uint32_t, bool>> item{ { key, { hash, isAsync } } };
-        (void)etcdKeyMap_.emplace(table, std::move(item));
-        return;
-    }
-    auto itemIter = tableIter->second.find(key);
-    if (itemIter == tableIter->second.end()) {
-        (void)tableIter->second.emplace(key, std::make_pair(hash, isAsync));
-    }
-}
-
-void ObjectMetaStore::GetHashAndTable(const std::string &objKey, const std::string &tablePrefix, uint32_t &hash,
-                                      std::string &table)
-{
-    hash = HashFunction(objKey);
-    table = tablePrefix + ETCD_HASH_SUFFIX;
-}
-
-void ObjectMetaStore::AsyncMetaOpToEtcdStorageHandler(int threadNum, const std::shared_ptr<MetaAsyncQueue> &queue)
-{
-    while (running_) {
-        INJECT_POINT("AsyncMetaOpToEtcdStorageHandler", [] { return; });
-        std::shared_ptr<AsyncElement> element;
-        constexpr int timeoutMs = 1000;
-        bool ret = queue->Poll(element, timeoutMs);
-        if (!ret || element == nullptr) {
-            continue;
-        }
-#ifdef WITH_TESTS
-        static const auto injectFunc = [&element, this](int delayMs, const std::string &tableName, bool passAdd = false,
-                                                        bool passDel = false) {
-            if (passAdd && element->RequestType() == AsyncElement::ReqType::ADD) {
-                return;
-            }
-            if (passDel && element->RequestType() == AsyncElement::ReqType::DEL) {
-                return;
-            }
-            if (element->Table().find(tableName) != std::string::npos) {
-                Timer timer;
-                while (running_ && timer.ElapsedMilliSecond() < delayMs) {
-                    const int checkIntervalMs = 100;
-                    std::this_thread::sleep_for(std::chrono::milliseconds(checkIntervalMs));
-                }
-            }
-        };
-#endif
-        INJECT_POINT("ObjectMetaStore.AsyncMetaOpToEtcdStorageHandler.Delay.MetaTable",
-                     [](int delayS) { injectFunc(delayS, ETCD_META_TABLE_PREFIX); });
-        INJECT_POINT("ObjectMetaStore.AsyncMetaOpToEtcdStorageHandler.Delay.GlobalCacheTable.PassAdd",
-                     [](int delayS) { injectFunc(delayS, ETCD_GLOBAL_CACHE_TABLE_PREFIX, true); });
-        const auto &etcdKey = element->Key();
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(element->TraceID());
-        VLOG(1) << FormatString("handler %d get key: %s", threadNum, etcdKey);
-        uint64_t asyncElapse = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-                                                         std::chrono::steady_clock::now() - element->BeginTimestamp())
-                                                         .count());
-        switch (element->RequestType()) {
-            case AsyncElement::ReqType::ADD:
-                EXEC_UTIL_SUCCESS(etcdStore_->Put(element->Table(), etcdKey, element->Value(), nullptr,
-                                                  SEND_RPC_TIMEOUT_MS_DEFAULT, asyncElapse),
-                                  K_OK, !running_);
-                break;
-            case AsyncElement::ReqType::DEL:
-                EXEC_UTIL_SUCCESS(etcdStore_->Delete(element->Table(), etcdKey, asyncElapse), K_NOT_FOUND, !running_);
-                LOG_IF_ERROR(element->ExcutePostHandler(), "Excute post handler failed, etcd key: " + etcdKey);
-                break;
-            default:
-                LOG(WARNING) << "unknown operation: " << static_cast<uint8_t>(element->RequestType());
-                break;
-        }
-        (void)asyncReqSize_.fetch_sub(1, std::memory_order_relaxed);
-    }
-}
-
-Status ObjectMetaStore::AddOneAsyncTaskToEtcdStore(const std::string &objectKey, const std::string &table,
-                                                   const std::string &etcdKey, const std::string &value,
-                                                   AsyncElement::ReqType requestType, uint64_t timestamp,
-                                                   const std::string &traceId, std::function<Status()> &&postHandler)
-{
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!queues_.empty(), K_NOT_READY,
-                                         "It does not support executing etcd asynchronous tasks currently.");
-    WarnIfNeed();
-    auto element = timestamp == 0 ? std::make_shared<AsyncElement>(objectKey, table, etcdKey, value, requestType)
-                                  : std::make_shared<AsyncElement>(objectKey, table, etcdKey, value, requestType,
-                                                                   timestamp, traceId);
-    if (postHandler) {
-        element->SetPostHandler(std::move(postHandler));
-    }
-    auto threadIdx = MurmurHash3_32(objectKey) % ETCD_META_POOL_SIZE;
-    std::shared_ptr<AsyncElement> elderElement;
-    int incrCnt = 0;
-    queues_[threadIdx]->AppendAsyncTask(element, elderElement, incrCnt);
-    if (incrCnt > 0) {
-        (void)asyncReqSize_.fetch_add(incrCnt, std::memory_order_relaxed);
-    } else if (incrCnt < 0) {
-        (void)asyncReqSize_.fetch_sub(-incrCnt, std::memory_order_relaxed);
-    }
-    RequestCounter::GetInstance().ResetLastArrivalTime("AddOneAsyncTaskToEtcdStore");
-    if (elderElement != nullptr) {
-        LOG(WARNING) << FormatString("The queue of 'Async meta op to ETCD storage' is full, remove an operation for %s",
-                                     elderElement->Key());
-    }
-    return Status::OK();
-}
-
-Status ObjectMetaStore::PutToEtcdStore(const std::string &tablePrefix, const std::string &objKey,
-                                       const std::string &key, const std::string &value, WriteType type)
-{
-    RETURN_OK_IF_TRUE(!EtcdEnable());
-    RETURN_OK_IF_TRUE(type == WriteType::ROCKS_ONLY);
-
-    auto isAsync = [](WriteType type) { return type == WriteType::ROCKS_ASYNC_ETCD; };
-
-    uint32_t hash;
-    std::string table;
-    GetHashAndTable(objKey, tablePrefix, hash, table);
-    std::string etcdKey = Hash2Str(hash) + "/" + key;
-    if (type == WriteType::ROCKS_SYNC_ETCD) {
-        INJECT_POINT("PutToEtcdStore.failed");
-        auto &timeoutDuration = GetRequestContext()->timeoutDuration;
-        RETURN_IF_NOT_OK(etcdStore_->Put(table, etcdKey, value, timeoutDuration.CalcRemainingTime()));
-    } else if (isAsync(type)) {
-        INJECT_POINT("master.before_sub_async_send_etcd_req");
-        RETURN_IF_NOT_OK(AddOneAsyncTaskToEtcdStore(objKey, table, etcdKey, value, AsyncElement::ReqType::ADD));
-    }
-    bool isAsyncEtcd = isAsync(type);
-    InsertToEtcdKeyMap(table, key, hash, isAsyncEtcd);
-    return Status::OK();
-}
-
-Status ObjectMetaStore::BatchPutToEtcdStore(const std::string &tablePrefix,
-                                            std::unordered_map<std::string, std::string> &metaInfos, WriteType type,
-                                            bool needSaveToEtcd)
-{
-    RETURN_OK_IF_TRUE(!EtcdEnable());
-    RETURN_OK_IF_TRUE(type == WriteType::ROCKS_ONLY);
-
-    auto isAsync = [](WriteType type) { return type == WriteType::ROCKS_ASYNC_ETCD; };
-    std::unordered_map<std::string, EtcdStore::BatchInfoPutToEtcd> newMetaInfos;
-    std::string tableName;
-    for (const auto &info : metaInfos) {
-        uint32_t hash = 0;
-        std::string table;
-        GetHashAndTable(info.first, tablePrefix, hash, table);
-        std::string etcdKey = Hash2Str(hash) + "/" + info.first;
-        newMetaInfos[info.first].meta = info.second;
-        newMetaInfos[info.first].hashVal = hash;
-        newMetaInfos[info.first].tableName = table;
-        newMetaInfos[info.first].etcdKey = etcdKey;
-    }
-    if (type == WriteType::ROCKS_SYNC_ETCD && needSaveToEtcd) {
-        RETURN_IF_NOT_OK(etcdStore_->BatchPut(newMetaInfos));
-    }
-    bool isAsyncEtcd = isAsync(type);
-    for (const auto &info : newMetaInfos) {
-        if (isAsyncEtcd) {
-            RETURN_IF_NOT_OK(AddOneAsyncTaskToEtcdStore(info.first, info.second.tableName, info.second.etcdKey,
-                                                        info.second.meta, AsyncElement::ReqType::ADD));
-        }
-        InsertToEtcdKeyMap(info.second.tableName, info.first, info.second.hashVal, isAsyncEtcd);
-    }
-    return Status::OK();
-}
-
-Status ObjectMetaStore::RemoveEtcdKey(const std::string &objectKey, const std::string &key,
-                                      const std::string &tablePrefix, std::function<Status()> &&postHandler)
-{
-    RETURN_OK_IF_TRUE(!EtcdEnable());
-    uint32_t hash;
-    bool async;
-    std::string table = tablePrefix + ETCD_HASH_SUFFIX;
-    {
-        std::lock_guard<SharedMutex> l(etcdMtx_);
-        auto tableIter = etcdKeyMap_.find(table);
-        if (tableIter == etcdKeyMap_.end()) {
-            VLOG(1) << table << " not find, skip deleting the key in etcd";
-            return Status::OK();
-        }
-        auto itemIter = tableIter->second.find(key);
-        if (itemIter == tableIter->second.end()) {
-            LOG(INFO) << key << " not in etcdKeyMap_, skip deleting the key in etcd";
-            return Status::OK();
-        }
-        hash = itemIter->second.first;
-        async = itemIter->second.second;
-        (void)tableIter->second.erase(itemIter);
-    }
-    Status rc;
-    std::string etcdKey = Hash2Str(hash) + "/" + key;
-    if (async) {
-        RETURN_IF_NOT_OK(AddOneAsyncTaskToEtcdStore(objectKey, table, etcdKey, "", AsyncElement::ReqType::DEL, 0, "",
-                                                    std::move(postHandler)));
-    } else {
-        rc = etcdStore_->Delete(table, etcdKey);
-    }
-
-    if (rc.IsError() && rc.GetCode() != StatusCode::K_NOT_FOUND) {
-        std::lock_guard<SharedMutex> l(etcdMtx_);
-        (void)etcdKeyMap_[table].emplace(key, std::make_pair(hash, async));
-        return rc;
-    }
-    return postHandler != nullptr && !async ? postHandler() : Status::OK();
-}
-
-void ObjectMetaStore::PrefixSearchAndErase(const std::string &table, const std::string &prefixKey,
-                                           std::vector<std::pair<std::string, std::pair<uint32_t, bool>>> &keys)
-{
-    auto tableIter = etcdKeyMap_.find(table);
-    if (tableIter == etcdKeyMap_.end()) {
-        return;
-    }
-    auto keyBegIter = tableIter->second.upper_bound(prefixKey);
-    if (keyBegIter == tableIter->second.end()) {
-        return;
-    }
-    auto keyEndIter = tableIter->second.upper_bound(StringPlusOne(prefixKey));
-    for (auto iter = keyBegIter; iter != keyEndIter; ++iter) {
-        keys.emplace_back(iter->first, std::make_pair(iter->second.first, iter->second.second));
-    }
-    (void)tableIter->second.erase(keyBegIter, keyEndIter);
-}
-
-Status ObjectMetaStore::PrefixRemoveEtcdKeyImpl(
-    const std::string &table, const std::vector<std::pair<std::string, std::pair<uint32_t, bool>>> &keys,
-    std::vector<std::pair<std::string, std::pair<uint32_t, bool>>> &failedKeys)
-{
-    Status rc;
-    for (const auto &item : keys) {
-        uint32_t hash = item.second.first;
-        bool async = item.second.second;
-        std::string etcdKey = Hash2Str(hash) + "/" + item.first;
-        if (async) {
-            RETURN_IF_NOT_OK(AddOneAsyncTaskToEtcdStore(item.first, table, etcdKey, "", AsyncElement::ReqType::DEL));
-        } else {
-            Status s = etcdStore_->Delete(table, etcdKey);
-            if (s.IsError() && s.GetCode() != StatusCode::K_NOT_FOUND) {
-                LOG(ERROR) << FormatString("Delete key [%s] failed, error: %s", item.first, s.ToString());
-                rc = s;
-                failedKeys.emplace_back(item);
-            }
-        }
-    }
-    RETURN_OK_IF_TRUE(rc.GetCode() == StatusCode::K_NOT_FOUND);
-    return rc;
-}
-
-Status ObjectMetaStore::PrefixRemoveEtcdKey(const std::string &prefixKey, const std::string &tablePrefix)
-{
-    RETURN_OK_IF_TRUE(!EtcdEnable());
-
-    std::string hashTable = tablePrefix + ETCD_HASH_SUFFIX;
-    std::vector<std::pair<std::string, std::pair<uint32_t, bool>>> hashKeys;
-    {
-        std::lock_guard<SharedMutex> l(etcdMtx_);
-        PrefixSearchAndErase(hashTable, prefixKey, hashKeys);
-    }
-
-    RETURN_OK_IF_TRUE(hashKeys.empty());
-
-    std::vector<std::pair<std::string, std::pair<uint32_t, bool>>> failedHashKeys;
-    Status rc = PrefixRemoveEtcdKeyImpl(hashTable, hashKeys, failedHashKeys);
-
-    std::lock_guard<SharedMutex> l(etcdMtx_);
-    for (const auto &item : failedHashKeys) {
-        (void)etcdKeyMap_[hashTable].emplace(item.first, item.second);
-    }
-    return rc;
+    return InitRocksStore();
 }
 
 Status ObjectMetaStore::InitRocksStore()
@@ -441,80 +77,14 @@ Status ObjectMetaStore::InitRocksStore()
     return Replica::CreateOcTable(rocksStore_);
 }
 
-bool ObjectMetaStore::IsRocksdbEnableWriteMeta()
-{
-    return FLAGS_rocksdb_write_mode != "none";
-}
-
-Status ObjectMetaStore::AddRocksdbHealthTag()
-{
-    RETURN_IF_NOT_OK(PutToRocksStore(HEALTH_TABLE, "status", HEALTH_STATUS));
-    ChangeRocksdbToRunning();
-    return Status::OK();
-}
-
-bool ObjectMetaStore::CheckHealth()
-{
-    std::string value;
-    Status rc = rocksStore_->Get(HEALTH_TABLE, "status", value);
-    if (rc.IsError() || value != HEALTH_STATUS) {
-        LOG_IF_ERROR(rc, "check HEALTH_TABLE in rocksDb failed");
-        isRocksdbRunning_ = false;
-        return false;
-    }
-    return true;
-}
-
 Status ObjectMetaStore::LivenessCheckRocksdb()
 {
-    auto rc = PutToRocksStore(HEALTH_TABLE, LIVENESS_CHECK, LIVENESS_OK);
+    RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
+    auto rc = rocksStore_->Put(HEALTH_TABLE, LIVENESS_CHECK, LIVENESS_OK);
     if (rc.IsError()) {
         RETURN_STATUS(StatusCode::K_KVSTORE_ERROR, "Liveness check rocksdb failed");
     }
     return Status::OK();
-}
-
-void ObjectMetaStore::GetMetasMatch(
-    std::function<bool(const std::string &)> &&matchFunc,
-    std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &objAsyncMap)
-{
-    for (size_t i = 0; i < queues_.size(); ++i) {
-        uint64_t count = 0;
-        queues_[i]->PollMetasByObjectKey(std::forward<std::function<bool(const std::string &)>>(matchFunc), objAsyncMap,
-                                         count);
-        (void)asyncReqSize_.fetch_sub(count, std::memory_order_relaxed);
-    }
-    {
-        std::lock_guard<SharedMutex> l(etcdMtx_);
-        for (const auto &entry : objAsyncMap) {
-            (void)etcdKeyMap_.erase(entry.first);
-        }
-    }
-}
-
-void ObjectMetaStore::PollAsyncElementsByObjectKey(const std::string &objectKey,
-                                                   std::unordered_set<std::shared_ptr<AsyncElement>> &elements)
-{
-    if (queues_.empty()) {
-        LOG(WARNING) << "It does not support executing etcd asynchronous tasks currently.";
-        return;
-    }
-    auto idx = MurmurHash3_32(objectKey) % ETCD_META_POOL_SIZE;
-    queues_[idx]->PollAsyncElementsByObjectKey(objectKey, elements);
-    (void)asyncReqSize_.fetch_sub(elements.size(), std::memory_order_relaxed);
-    {
-        std::lock_guard<SharedMutex> l(etcdMtx_);
-        (void)etcdKeyMap_.erase(objectKey);
-    }
-}
-
-void ObjectMetaStore::InsertWaitAsyncElements(const std::string &objectKey, const std::string &table,
-                                              const std::string &key, const std::string &value,
-                                              AsyncElement::ReqType reqType, uint64_t timestamp,
-                                              const std::string &traceId)
-{
-    AddOneAsyncTaskToEtcdStore(objectKey, table, key, value, reqType, timestamp, traceId);
-    InsertToEtcdKeyMap(table, key, HashFunction(objectKey), true);
 }
 
 Status ObjectMetaStore::CreateSerializedStringForMeta(const std::string &objectKey, ObjectMetaPb &meta,
@@ -535,48 +105,25 @@ Status ObjectMetaStore::CreateSerializedStringForMeta(const std::string &objectK
     return Status::OK();
 }
 
-Status ObjectMetaStore::CreateOrUpdateMeta(const std::string &objectKey, const std::string &serializedStr,
-                                           WriteType type)
+Status ObjectMetaStore::CreateOrUpdateMeta(const std::string &objectKey, const std::string &serializedStr)
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
     PerfPoint point(PerfKey::MASTER_ROCKSDB_CREATE_META);
-    const std::string &key = objectKey;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rocksStore_->Put(META_TABLE, key, serializedStr),
-                                     FormatString("Failed to add object meta: %s", key));
-    point.Record();
-    Status rc = PutToEtcdStore(ETCD_META_TABLE_PREFIX, key, key, serializedStr, type);
-    if (rc.IsError()) {
-        LOG(ERROR) << FormatString("Failed to add object meta to etcd store: %s", key);
-    }
-    return rc;
+    return rocksStore_->Put(META_TABLE, objectKey, serializedStr);
 }
 
-Status ObjectMetaStore::CreateOrUpdateBatchMeta(std::unordered_map<std::string, std::string> &metaInfos, WriteType type)
+Status ObjectMetaStore::CreateOrUpdateBatchMeta(std::unordered_map<std::string, std::string> &metaInfos)
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
     PerfPoint point(PerfKey::MASTER_ROCKSDB_CREATE_META);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rocksStore_->BatchPut(META_TABLE, metaInfos),
-                                     FormatString("Failed to add object meta: %s", MapToString(metaInfos)));
-
-    Status rc = BatchPutToEtcdStore(ETCD_META_TABLE_PREFIX, metaInfos, type, true);
-    if (rc.IsError()) {
-        LOG(ERROR) << FormatString("Failed to add object meta to etcd store: %s", MapToString(metaInfos));
-        (void)rocksStore_->BatchDelete(META_TABLE, metaInfos);
-    }
-    return Status::OK();
+    return rocksStore_->BatchPut(META_TABLE, metaInfos);
 }
 
-Status ObjectMetaStore::RemoveMeta(const std::string &key, bool needRemoveEtcdData)
+Status ObjectMetaStore::RemoveMeta(const std::string &key)
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
     PerfPoint point(PerfKey::MASTER_ROCKSDB_CREATE_META);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(RemoveRocksKey(key, META_TABLE),
-                                     FormatString("Failed to delete meta from rocksdb: %s", key));
-    if (needRemoveEtcdData) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(RemoveEtcdKey(key, key, ETCD_META_TABLE_PREFIX),
-                                         FormatString("Failed to delete meta from etcd: %s", key));
-    }
-    return Status::OK();
+    return RemoveRocksKey(key, META_TABLE);
 }
 
 Status ObjectMetaStore::AddObjectLocation(const std::string &objectKey, const std::string &workerAddr,
@@ -709,7 +256,7 @@ Status ObjectMetaStore::GetAllFromRocks(const std::string &table,
 }
 
 Status ObjectMetaStore::AddAsyncWorkerOp(const std::string &workerAddr, const std::string &objectKey,
-                                         const NotifyWorkerOp &op, WriteType type)
+                                         const NotifyWorkerOp &op, bool waitForCompletion)
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
     std::string key = workerAddr + "_" + objectKey;
@@ -717,40 +264,21 @@ Status ObjectMetaStore::AddAsyncWorkerOp(const std::string &workerAddr, const st
     FillNotifyWorkerOpDetailPb(op, pb);
     auto val = pb.SerializeAsString();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        rocksStore_->Put(ASYNC_WORKER_OP_TABLE, key, val),
+        rocksStore_->PutWithOrderingKey(ASYNC_WORKER_OP_TABLE, key, val, key, waitForCompletion),
         FormatString("Failed to add async worker op to rocksdb: %s, op: %d", key, static_cast<uint32_t>(op.type)));
-    Status rc = PutToEtcdStore(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX, objectKey, key, val, type);
-    if (rc.IsError()) {
-        LOG(ERROR) << FormatString("Failed to add async worker op to etcd store: %s", key);
-        (void)rocksStore_->Delete(ASYNC_WORKER_OP_TABLE, key);
-    }
-    return rc;
+    return Status::OK();
 }
 
-Status ObjectMetaStore::RemoveAsyncWorkerOp(const std::string &workerAddr, const std::string &objectKey,
-                                            bool needRemoveEtcdData)
+Status ObjectMetaStore::RemoveAsyncWorkerOp(const std::string &workerAddr, const std::string &objectKey)
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
-    std::string key = workerAddr + "_" + objectKey;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(RemoveRocksKey(key, ASYNC_WORKER_OP_TABLE),
-                                     FormatString("Failed to delete async worker op from rocksdb: %s", key));
-    if (needRemoveEtcdData) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(RemoveEtcdKey(objectKey, key, ETCD_ASYNC_WORKER_OP_TABLE_PREFIX),
-                                         FormatString("Failed to delete async worker op from etcd: %s", key));
-    }
-    return Status::OK();
+    return RemoveRocksKey(workerAddr + "_" + objectKey, ASYNC_WORKER_OP_TABLE);
 }
 
 Status ObjectMetaStore::RemoveAsyncWorkerOpByWorker(const std::string &workerAddr)
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        PrefixRemoveRocksKey(workerAddr, ASYNC_WORKER_OP_TABLE),
-        FormatString("Failed to delete async worker op from rocksdb, prefix key %s", workerAddr));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        PrefixRemoveEtcdKey(workerAddr, ETCD_ASYNC_WORKER_OP_TABLE_PREFIX),
-        FormatString("Failed to delete async worker op from etcd, prefix key %s", workerAddr));
-    return Status::OK();
+    return PrefixRemoveRocksKey(workerAddr, ASYNC_WORKER_OP_TABLE);
 }
 
 Status ObjectMetaStore::AddRemoteClientRef(const std::string &remoteClientId, const std::string &masterAddr)
@@ -827,8 +355,7 @@ bool ObjectMetaStore::DecodeDeletedObjectValue(const std::string &objectKey, con
 }
 
 Status ObjectMetaStore::AddDeletedObjectWithDelVersion(const std::string &objectKey, uint64_t version,
-                                                       uint64_t delVersion, const std::string &targetWorkerAddress,
-                                                       WriteType type)
+                                                       uint64_t delVersion, const std::string &targetWorkerAddress)
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
     std::string versionStr = EncodeDeletedObjectValue(delVersion, targetWorkerAddress);
@@ -836,55 +363,19 @@ Status ObjectMetaStore::AddDeletedObjectWithDelVersion(const std::string &object
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         rocksStore_->Put(GLOBAL_CACHE_TABLE, key, versionStr),
         FormatString("Failed to add l2 cache delete to rocksdb: objectKey=%s, version=%s", objectKey, versionStr));
-    INJECT_POINT("etcd.failed.add.deleteobjecttoetcd", [&] {
-        return Status(K_RPC_UNAVAILABLE, "Failed to add l2 cache delete to etcd store: objectKey" + objectKey);
-    });
-    Status rc = PutToEtcdStore(ETCD_GLOBAL_CACHE_TABLE_PREFIX, objectKey, key, versionStr, type);
-    if (rc.IsError()) {
-        LOG(ERROR) << FormatString("Failed to add l2 cache delete to etcd store: objectKey=%s, version=%s", objectKey,
-                                   versionStr);
-        (void)rocksStore_->Delete(GLOBAL_CACHE_TABLE, key);
-    }
-    return rc;
+    return Status::OK();
 }
 
-Status ObjectMetaStore::AddDeletedObject(const std::string &objectKey, uint64_t version, WriteType type)
+Status ObjectMetaStore::AddDeletedObject(const std::string &objectKey, uint64_t version)
 {
-    return AddDeletedObjectWithDelVersion(objectKey, version, version, "", type);
+    return AddDeletedObjectWithDelVersion(objectKey, version, version, "");
 }
 
 Status ObjectMetaStore::RemoveDeletedObject(const std::string &objectKey, uint64_t version)
 {
-    std::string versionStr = std::to_string(version);
-    std::string key = objectKey + "/" + versionStr;
-
-    auto postRemoveEtcdKeyFunc = [this, key, objectKey, versionStr]() -> Status {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            RemoveRocksKey(key, GLOBAL_CACHE_TABLE),
-            FormatString("Failed to delete l2 cache from rocksdb: objectKey=%s,version=%s", objectKey, versionStr));
-        return Status::OK();
-    };
-
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        RemoveEtcdKey(objectKey, key, ETCD_GLOBAL_CACHE_TABLE_PREFIX, std::move(postRemoveEtcdKeyFunc)),
-        FormatString("Failed to delete l2 cache from etcd: objectKey=%s,version=%s", objectKey, versionStr));
-    return Status::OK();
+    RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
+    return RemoveRocksKey(objectKey + "/" + std::to_string(version), GLOBAL_CACHE_TABLE);
 }
 
-bool ObjectMetaStore::AsyncQueueEmpty()
-{
-    VLOG(2) << "Async queue size: " << asyncReqSize_;
-    return asyncReqSize_.load(std::memory_order_relaxed) == 0;
-}
-
-std::string ObjectMetaStore::GetETCDAsyncQueueUsage()
-{
-    if (maxRequestSize_ == 0) {
-        return "";
-    }
-    uint64_t currentSize = asyncReqSize_.load(std::memory_order_relaxed);
-    auto masterEtcdQueueUsage = currentSize / static_cast<float>(maxRequestSize_);
-    return FormatString("%llu/%llu/%.3f", currentSize, maxRequestSize_, masterEtcdQueueUsage);
-}
 }  // namespace master
 }  // namespace datasystem

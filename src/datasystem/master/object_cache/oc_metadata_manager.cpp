@@ -34,7 +34,6 @@
 #include <vector>
 
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/log/log.h"
@@ -63,7 +62,6 @@
 #include "datasystem/common/util/validator.h"
 #include "datasystem/master/object_cache/master_master_oc_api.h"
 #include "datasystem/master/object_cache/oc_notify_worker_manager.h"
-#include "datasystem/master/object_cache/store/meta_async_queue.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/master_object.pb.h"
@@ -82,8 +80,8 @@ DS_DEFINE_string(rocksdb_store_dir, "~/datasystem/rocksdb",
                  "in the master, so that the metadata before the restart can be re-obtained when the master restarts.");
 DS_DEFINE_validator(rocksdb_store_dir, &Validator::ValidatePathString);
 
-DS_DECLARE_string(etcd_address);
 DS_DECLARE_bool(async_delete);
+DS_DECLARE_string(rocksdb_write_mode);
 
 DS_DECLARE_bool(enable_reconciliation);
 
@@ -181,49 +179,41 @@ static Status WaitForClientIdRefMigration(MasterMasterOCApi &api, const GIncreas
 }
 
 OCMetadataManager::OCMetadataManager(RocksStore *rocksStore,
-                                     EtcdStore *etcdStore, std::shared_ptr<PersistenceApi> persistApi,
+                                     std::shared_ptr<PersistenceApi> persistApi,
                                      const std::string &masterAddress, const cluster::PlacementFacade *placement,
                                      const cluster::MembershipEndpointView *membership, std::string localAddress,
-                                     const std::atomic<bool> *exitRequested, const std::string &workerId, bool newNode)
+                                     const std::atomic<bool> *exitRequested, const std::string &workerId)
     : MetadataRedirectHelper(placement),
       masterAddress_(masterAddress),
       topologyMembership_(membership),
       localAddress_(std::move(localAddress)),
       exitRequested_(exitRequested),
       eventName_(OC_METADATA_MANAGER + workerId),
-      persistApi_(persistApi),
-      newNode_(newNode)
+      persistApi_(persistApi)
 {
-    objectStore_ = std::make_shared<ObjectMetaStore>(rocksStore, etcdStore, true);
+    const bool isEnabled = FLAGS_rocksdb_write_mode != "none";
+    objectStore_ = std::make_shared<ObjectMetaStore>(rocksStore, isEnabled);
     workerId_ = workerId;
 }
 
 Status OCMetadataManager::Init()
 {
     RETURN_IF_NOT_OK(objectStore_->Init());
-    if (newNode_) {
-        RETURN_IF_NOT_OK(objectStore_->AddRocksdbHealthTag());
-    }
-    bool rocksdbHealthy = objectStore_->CheckHealth();
-
     nestedRefManager_ = std::make_unique<OCNestedManager>(objectStore_);
     RETURN_IF_NOT_OK(InitGlobalRef());
     asyncPool_ = std::make_unique<ThreadPool>(ASYNC_MIN_THREAD_NUM, ASYNC_MAX_THREAD_NUM, "OcAsyncTask");
     notifyWorkerManager_ =
-        std::make_unique<OCNotifyWorkerManager>(objectStore_, rocksdbHealthy, this);
+        std::make_unique<OCNotifyWorkerManager>(objectStore_, this);
     RETURN_IF_NOT_OK(notifyWorkerManager_->Init());
     globalCacheDeleteManager_ = std::make_unique<OCGlobalCacheDeleteManager>(
-        objectStore_, persistApi_, rocksdbHealthy, masterAddress_);
+        objectStore_, persistApi_, masterAddress_);
     RETURN_IF_NOT_OK(globalCacheDeleteManager_->Init());
     expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(masterAddress_, this);
     expiredObjectManager_->Init();
-    RETURN_IF_NOT_OK(LoadMeta(rocksdbHealthy));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(notifyWorkerManager_->RecoverCacheInvalidAndRemoveMeta(rocksdbHealthy),
+    RETURN_IF_NOT_OK(LoadMeta());
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(notifyWorkerManager_->RecoverCacheInvalidAndRemoveMeta(),
                                      "Recover cache invalid for rocksdb failed.");
 
-    if (!objectStore_->IsRocksdbRunning()) {
-        RETURN_IF_NOT_OK(objectStore_->AddRocksdbHealthTag());
-    }
     const int minAsyncTaskThreadNum = 8;
     asyncTaskPool_ =
         std::make_unique<ThreadPool>(minAsyncTaskThreadNum, MASTER_METADATA_ASYNC_MAX_THREAD_NUM, "AsyncTaskPool");
@@ -399,13 +389,8 @@ Status OCMetadataManager::LoadRefFromRocks(const std::string &tableName,
 {
     std::vector<std::pair<std::string, std::string>> globalRefs;
 
-    if (objectStore_->IsRocksdbRunning()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(tableName, globalRefs),
-                                         "Load global ref from Rocksdb failed.");
-    } else {
-        LOG(WARNING) << FormatString("Table[%s] does not support using etcd as a l2_cache, just ignore it",
-                                     GLOBAL_REF_TABLE);
-    };
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(tableName, globalRefs),
+                                     "Load global ref from Rocksdb failed.");
 
     for (const auto &info : globalRefs) {
         std::vector<std::string> keyVec;
@@ -427,13 +412,8 @@ Status OCMetadataManager::LoadRefFromRocks(const std::string &tableName,
 {
     std::vector<std::pair<std::string, std::string>> globalRefs;
 
-    if (objectStore_->IsRocksdbRunning()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(tableName, globalRefs),
-                                         "Load global ref from Rocksdb failed.");
-    } else {
-        LOG(WARNING) << FormatString("Table[%s] does not support using etcd as a l2_cache, just ignore it",
-                                     GLOBAL_REF_TABLE);
-    };
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(tableName, globalRefs),
+                                     "Load global ref from Rocksdb failed.");
 
     for (const auto &info : globalRefs) {
         // The info format is as follows:
@@ -554,15 +534,15 @@ Status OCMetadataManager::PersistCreatedMeta(const ObjectMetaPb &newMeta, const 
                                              TbbMetaTable::accessor &accessor, ObjectMeta &metaCache)
 {
     const std::string &objectKey = newMeta.object_key();
-    ObjectMetaStore::WriteType type = WriteMode2MetaType(newMeta.config().write_mode());
+
     SetMetaInfo(newMeta, address, version, metaCache);
     accessor->second = metaCache;
-    // multi create meta save meta to rocksdb and etcd when commit meta.
+    // Multi-create persists metadata when committing the batch.
     std::string serializedStr;
     auto status = objectStore_->CreateSerializedStringForMeta(objectKey, accessor->second.meta, serializedStr);
     // Create meta info in rocksDB.
     if (status.IsOk()) {
-        status = objectStore_->CreateOrUpdateMeta(objectKey, serializedStr, type);
+        status = objectStore_->CreateOrUpdateMeta(objectKey, serializedStr);
         if (status.IsError()) {
             LOG_IF_ERROR(objectStore_->RemoveMeta(objectKey), "objectstore remove meta failed");
         }
@@ -886,7 +866,7 @@ Status OCMetadataManager::CreateMeta(const std::string &objectKey, ObjectMeta &n
     INJECT_POINT("master.create_meta_failure");
     auto &metaPb = newMeta.meta;
     const auto ttl = metaPb.ttl_second();
-    ObjectMetaStore::WriteType type = WriteMode2MetaType(metaPb.config().write_mode());
+
     size_t shardIdx = GetShardIndex(objectKey);
     bthread::RWLockRdGuard lck(metaShards_[shardIdx].mutex);
     TbbMetaTable::accessor accessor;
@@ -898,7 +878,7 @@ Status OCMetadataManager::CreateMeta(const std::string &objectKey, ObjectMeta &n
     if (objectStore_->IsPersistenceEnabled()) {
         std::string serializedStr;
         RETURN_IF_NOT_OK(objectStore_->CreateSerializedStringForMeta(objectKey, metaPb, serializedStr));
-        RETURN_IF_NOT_OK(objectStore_->CreateOrUpdateMeta(objectKey, serializedStr, type));
+        RETURN_IF_NOT_OK(objectStore_->CreateOrUpdateMeta(objectKey, serializedStr));
     }
     accessor->second = std::move(newMeta);
     accessor.release();
@@ -1022,9 +1002,9 @@ Status OCMetadataManager::CreateMultiMetaTx(const CreateMultiMetaReqPb &req, Cre
     if (false) {
         return Status::OK();
     }
-    auto type = WriteMode2MetaType(req.config().write_mode());
+
     uint64_t version = static_cast<uint64_t>(GetSystemClockTimeStampUs());
-    auto status = PublishMultiMeta(successIds, req.address(), type, version, rsp);
+    auto status = PublishMultiMeta(successIds, req.address(), version, rsp);
     if (status.IsError()) {
         RollBackMultiMetaWhenCreateFailed(successIds, req.address(), version);
     }
@@ -1032,7 +1012,7 @@ Status OCMetadataManager::CreateMultiMetaTx(const CreateMultiMetaReqPb &req, Cre
 }
 
 Status OCMetadataManager::PublishMultiMeta(const std::vector<std::string> &objectKeys, const std::string &address,
-                                           ObjectMetaStore::WriteType type, uint64_t version, CreateMultiMetaRspPb &rsp)
+                                           uint64_t version, CreateMultiMetaRspPb &rsp)
 {
     std::unordered_map<std::string, std::string> metaInfos;
     for (const auto &objKey : objectKeys) {
@@ -1058,7 +1038,7 @@ Status OCMetadataManager::PublishMultiMeta(const std::vector<std::string> &objec
     metaInfos.emplace(objKey, serializedStr);
     }
     rsp.set_version(version);
-    return objectStore_->CreateOrUpdateBatchMeta(metaInfos, type);
+    return objectStore_->CreateOrUpdateBatchMeta(metaInfos);
 }
 
 void OCMetadataManager::RollBackMultiMetaWhenCreateFailed(const std::vector<std::string> &rollBackIds,
@@ -1295,20 +1275,6 @@ std::string OCMetadataManager::SelectObjectLocation(const std::string &objectKey
         }
     }
     return "";
-}
-
-Status OCMetadataManager::GetObjectMetaType(const std::string &objectKey, ObjectMetaStore::WriteType &type)
-{
-    size_t shardIdx = GetShardIndex(objectKey);
-    bthread::RWLockRdGuard lck(metaShards_[shardIdx].mutex);
-    TbbMetaTable::const_accessor accessor;
-    if (metaShards_[shardIdx].table.find(accessor, objectKey)) {
-        auto writeMode = accessor->second.meta.config().write_mode();
-        type = WriteMode2MetaType(writeMode);
-    } else {
-        return Status(K_NOT_FOUND, "object not found");
-    }
-    return Status::OK();
 }
 
 Status OCMetadataManager::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb &rsp, std::vector<RpcMessage> &payloads)
@@ -1685,8 +1651,7 @@ Status OCMetadataManager::ChangePrimaryCopy(const std::string &primaryAddr, cons
     std::string serializedStr;
     LOG_IF_ERROR(objectStore_->CreateSerializedStringForMeta(objectKey, accessor->second.meta, serializedStr),
                  "serialize meta to rocksdb failed");
-    LOG_IF_ERROR(objectStore_->CreateOrUpdateMeta(objectKey, serializedStr,
-                                                  WriteMode2MetaType(accessor->second.meta.config().write_mode())),
+    LOG_IF_ERROR(objectStore_->CreateOrUpdateMeta(objectKey, serializedStr),
                  "Create meta to rocksdb failed");
     return Status::OK();
 }
@@ -1755,7 +1720,7 @@ Status OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, con
             (void)accessor->second.locations.erase(address);
             (void)objectStore_->RemoveObjectLocation(objectKey, address);
             if (ShouldRemoveNoneL2Meta(accessor->second, request.cause(), accessor->second.locations.size())) {
-                (void)objectStore_->RemoveMeta(objectKey, false);
+                (void)objectStore_->RemoveMeta(objectKey);
                 (void)metaShards_[shardIdx].table.erase(accessor);
             }
         }
@@ -2167,8 +2132,7 @@ Status OCMetadataManager::ClearMetaInfo(const std::unordered_map<std::string, De
             uint64_t objectVersion = accessor->second.meta.version();
             uint64_t delVersion = objectVersion;
             Status status = globalCacheDeleteManager_->InsertDeletedObject(
-                objectKey, objectVersion, delVersion, accessor->second.meta.primary_address(), true,
-                WriteMode2MetaType(accessor->second.meta.config().write_mode()));
+                objectKey, objectVersion, delVersion, accessor->second.meta.primary_address(), true);
             if (status.IsError()) {
                 LOG(ERROR) << FormatString("[ObjectKey %s] Global cache delete failed, error: %s", objectKey,
                                            status.ToString());
@@ -2198,7 +2162,7 @@ Status OCMetadataManager::ClearMetaInfo(const std::unordered_map<std::string, De
     return lastErr;
 }
 
-Status OCMetadataManager::ClearOneMetaInfo(const TbbMetaTable::const_accessor &accessor, bool isDataMigration)
+Status OCMetadataManager::ClearOneMetaInfo(const TbbMetaTable::const_accessor &accessor)
 {
     const auto &objectKey = accessor->first;
     // remove object location.
@@ -2207,7 +2171,7 @@ Status OCMetadataManager::ClearOneMetaInfo(const TbbMetaTable::const_accessor &a
                                          FormatString("[ObjectKey %s] RemoveObjectLocation failed", objectKey));
     }
     // remote meta info
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveMeta(objectKey, !isDataMigration),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->RemoveMeta(objectKey),
                                      FormatString("[ObjectKey %s] RemoveMeta failed", objectKey));
     return Status::OK();
 }
@@ -2392,8 +2356,7 @@ Status OCMetadataManager::DoBinaryCacheInvalidationUnlocked(const std::string &o
                                                                    changedMeta.newBlobSizes.end());
     std::string serializedStr;
     RETURN_IF_NOT_OK(objectStore_->CreateSerializedStringForMeta(objectKey, prevMeta.meta, serializedStr));
-    RETURN_IF_NOT_OK(objectStore_->CreateOrUpdateMeta(objectKey, serializedStr,
-                                                      WriteMode2MetaType(prevMeta.meta.config().write_mode())));
+    RETURN_IF_NOT_OK(objectStore_->CreateOrUpdateMeta(objectKey, serializedStr));
     if (updateStoredAckState) {
         // save the ack state to store
         RETURN_IF_NOT_OK(objectStore_->AddObjectLocation(objectKey, changedMeta.newAddress, ""));
@@ -2548,11 +2511,15 @@ Status OCMetadataManager::RecoverObjectLocations(
         TbbMetaTable::accessor accessor;
         size_t shardIdx = GetShardIndex(objKey);
         if (!metaShards_[shardIdx].table.find(accessor, objKey)) {
+            for (const auto &loc : locations) {
+                LOG_IF_ERROR(objectStore_->RemoveObjectLocation(objKey, loc.first),
+                             "Failed to clean orphan object location during recovery");
+            }
             continue;
         }
         for (const auto &loc : locations) {
             if (workers.find(loc.first) != workers.end()) {
-                LOG_IF_ERROR(AddLocation(accessor->second, loc.first, loc.second, objKey, accessor->second.meta),
+                LOG_IF_ERROR(AddLocation(accessor->second, loc.first, loc.second),
                              "Add location failed.");
             } else {
                 accessor->second.locations.erase(loc.first);
@@ -2564,14 +2531,13 @@ Status OCMetadataManager::RecoverObjectLocations(
 }
 
 Status OCMetadataManager::LoadObjectLocations(
-    bool isFromRocksdb, std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap)
+    std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap)
 {
     INJECT_POINT("OCNotifyWorkerManager.NoNeedRecoveryMeta");
     std::vector<std::pair<std::string, std::string>> objectLocations;
-    if (objectStore_->IsRocksdbRunning() && isFromRocksdb && objectStore_->IsRocksdbEnableWriteMeta()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(LOCATION_TABLE, objectLocations),
-                                         "Load object location from rocksdb into memory failed.");
-    }
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(LOCATION_TABLE, objectLocations),
+                                     "Load object location from rocksdb into memory failed.");
+
     for (auto &info : objectLocations) {
         // key format: WorkerAddr_ObjectKey
         std::string::size_type pos = info.first.find("_", 0);
@@ -2632,8 +2598,7 @@ void OCMetadataManager::InsertExpireObjects(ObjectMetaPb &metaPb,
 
 Status OCMetadataManager::HandleLoadMeta(
     std::vector<std::pair<std::string, std::string>> &metas,
-    std::vector<std::tuple<std::string, uint64_t, uint32_t>> &expireObjects,
-    bool &isFromRocksdb)
+    std::vector<std::tuple<std::string, uint64_t, uint32_t>> &expireObjects)
 {
     std::set<std::string> workers;
     RETURN_IF_NOT_OK(GetValidTopologyWorkers(workers));
@@ -2646,10 +2611,6 @@ Status OCMetadataManager::HandleLoadMeta(
         const std::string &objectKey = metaPb.object_key();
         ObjectMeta metaCache;
         metaCache.meta = metaPb;
-        if (isFromRocksdb) {
-            InsertToEtcdTableInMemory(objectKey, metaPb, ETCD_META_TABLE_PREFIX, objectKey);
-        }
-
         if (workers.find(metaCache.meta.primary_address()) != workers.end()) {
             if (metaCache.meta.primary_address().empty()) {
                 LOG(ERROR) << FormatString("[Obj: %s] primary address is empty", objectKey);
@@ -2671,17 +2632,17 @@ Status OCMetadataManager::HandleLoadMeta(
     return Status::OK();
 }
 
-Status OCMetadataManager::LoadMeta(bool isFromRocksdb)
+Status OCMetadataManager::LoadMeta()
 {
     std::vector<std::tuple<std::string, uint64_t, uint32_t>> expireObjects;
     std::vector<std::pair<std::string, std::string>> metas;
 
-    RETURN_IF_NOT_OK(CheckRocksdbStatusAndLoadL2Table(META_TABLE, isFromRocksdb, metas));
+    RETURN_IF_NOT_OK(objectStore_->GetAllFromRocks(META_TABLE, metas));
     std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> objLocMap;
-    RETURN_IF_NOT_OK(LoadObjectLocations(isFromRocksdb, objLocMap));
-    RETURN_IF_NOT_OK(HandleLoadMeta(metas, expireObjects, isFromRocksdb));
+    RETURN_IF_NOT_OK(LoadObjectLocations(objLocMap));
+    RETURN_IF_NOT_OK(HandleLoadMeta(metas, expireObjects));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(RecoverObjectLocations(objLocMap), "Recovery object locations into memory failed");
-    if (isFromRocksdb && objectStore_->IsRocksdbEnableWriteMeta()) {
+    if (objectStore_->IsPersistenceEnabled()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(nestedRefManager_->RecoverRelationshipData(NESTED_TABLE, NESTED_COUNT_TABLE),
                                          "Load Nested relationship for rocksdb failed.");
     }
@@ -2948,7 +2909,7 @@ void OCMetadataManager::FillNestedInfoForMigration(const std::string &objectKey,
 void OCMetadataManager::HandleNestedRefMigrateSuccess(const std::string &id)
 {
     nestedRefManager_->RemoveRelationshipData(id);
-    nestedRefManager_->RemoveNestIdsRef({ id });
+    nestedRefManager_->RemoveMigratedRefCount(id);
 }
 
 void OCMetadataManager::HandleSubDataMigrateSuccess(const MigrateMetadataReqPb &req)
@@ -3627,19 +3588,6 @@ void OCMetadataManager::GetMetasMatch(std::function<bool(const std::string &)> &
     }
 }
 
-void OCMetadataManager::GetMetasInAsyncQueueMatch(
-    std::function<bool(const std::string &)> &&matchFunc,
-    std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &objAsyncMap)
-{
-    objectStore_->GetMetasMatch(std::forward<std::function<bool(const std::string &)>>(matchFunc), objAsyncMap);
-}
-
-void OCMetadataManager::GetAsyncElementsByObjectKey(const std::string &objectKey,
-                                                    std::unordered_set<std::shared_ptr<AsyncElement>> &elements)
-{
-    objectStore_->PollAsyncElementsByObjectKey(objectKey, elements);
-}
-
 Status OCMetadataManager::RemoveMetaByWorkerForKey(const std::string &objectKey, const std::string &workerAddr)
 {
     size_t shardIdx = GetShardIndex(objectKey);
@@ -3654,7 +3602,7 @@ Status OCMetadataManager::RemoveMetaByWorkerForKey(const std::string &objectKey,
     // If the object type is NONE_L2_CACHE_EVICT and the only data location has been lost,
     // just delete it because its reliability is already poor.
     if (accessor->second.locations.empty() && accessor->second.IsNoneL2CacheEvict()) {
-        (void)objectStore_->RemoveMeta(objectKey, false);
+        (void)objectStore_->RemoveMeta(objectKey);
         (void)metaShards_[shardIdx].table.erase(accessor);
         return Status::OK();
     }
@@ -3671,8 +3619,7 @@ Status OCMetadataManager::RemoveMetaByWorkerForKey(const std::string &objectKey,
         std::string serializedStr;
         RETURN_IF_NOT_OK(
             objectStore_->CreateSerializedStringForMeta(objectKey, accessor->second.meta, serializedStr));
-        (void)objectStore_->CreateOrUpdateMeta(objectKey, serializedStr,
-                                               WriteMode2MetaType(accessor->second.meta.config().write_mode()));
+        (void)objectStore_->CreateOrUpdateMeta(objectKey, serializedStr);
     }
     return Status::OK();
 }
@@ -3776,15 +3723,13 @@ void OCMetadataManager::ModifyPrimaryCopy(const std::string &objectKey, const st
             accessor->second.meta.set_primary_address(workerId);
             std::string serializedStr;
             (void)objectStore_->CreateSerializedStringForMeta(objectKey, accessor->second.meta, serializedStr);
-            (void)objectStore_->CreateOrUpdateMeta(objectKey, serializedStr,
-                                                   WriteMode2MetaType(accessor->second.meta.config().write_mode()));
+            (void)objectStore_->CreateOrUpdateMeta(objectKey, serializedStr);
             if (!ifvoluntaryScaleDown) {
                 LOG(INFO) << FormatString("Insert async worker operation(%d) for object:%s, workerId:%s",
                                           static_cast<uint32_t>(NotifyWorkerOpType::PRIMARY_COPY_INVALID), objectKey,
                                           oldPrimaryCopy);
                 (void)notifyWorkerManager_->InsertAsyncWorkerOp(
-                    oldPrimaryCopy, objectKey, { NotifyWorkerOpType::PRIMARY_COPY_INVALID }, true,
-                    WriteMode2MetaType(accessor->second.meta.config().write_mode()));
+                    oldPrimaryCopy, objectKey, { NotifyWorkerOpType::PRIMARY_COPY_INVALID }, true);
             }
             LOG(INFO) << FormatString("The primary copy of the object(%s) is changed to %s.", objectKey, workerId);
         }
@@ -4011,8 +3956,7 @@ Status OCMetadataManager::RecoveryMetaFromWorker(const std::string &workerAddr, 
             LOG(INFO) << FormatString("Insert async worker operation(%d) for object:%s, workerId:%s",
                                       static_cast<uint32_t>(NotifyWorkerOpType::CACHE_INVALID), objectKey, workerAddr);
             return notifyWorkerManager_->InsertAsyncWorkerOp(workerAddr, objectKey,
-                                                             { NotifyWorkerOpType::CACHE_INVALID }, true,
-                                                             WriteMode2MetaType(meta.config().write_mode()));
+                                                             { NotifyWorkerOpType::CACHE_INVALID }, true);
         }
         MergeRecoveredMeta(objectKey, workerAddr, meta, accessor->second);
     } else {
@@ -4039,7 +3983,7 @@ Status OCMetadataManager::RecoveryMetaFromWorker(const std::string &workerAddr, 
         objectStore_->CreateSerializedStringForMeta(objectKey, accessor->second.meta, serializedStr),
         "serialize meta to rocksdb failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        objectStore_->CreateOrUpdateMeta(objectKey, serializedStr, WriteMode2MetaType(meta.config().write_mode())),
+        objectStore_->CreateOrUpdateMeta(objectKey, serializedStr),
         "Create meta to rocksdb failed");
     return Status::OK();
 }
@@ -4081,20 +4025,6 @@ void OCMetadataManager::AssignLocalWorker(object_cache::MasterWorkerOCServiceImp
     initialized_.store(true);
 }
 
-ObjectMetaStore::WriteType OCMetadataManager::WriteMode2MetaType(uint32_t writeMode)
-{
-    switch (writeMode) {
-        case static_cast<uint32_t>(WriteMode::NONE_L2_CACHE):
-            return ObjectMetaStore::WriteType::ROCKS_ONLY;
-        case static_cast<uint32_t>(WriteMode::WRITE_BACK_L2_CACHE):
-            return ObjectMetaStore::WriteType::ROCKS_ASYNC_ETCD;
-        case static_cast<uint32_t>(WriteMode::WRITE_THROUGH_L2_CACHE):
-            return ObjectMetaStore::WriteType::ROCKS_SYNC_ETCD;
-        default:
-            return ObjectMetaStore::WriteType::ROCKS_ONLY;
-    }
-}
-
 void OCMetadataManager::AsyncDeleteByExpired(DeleteObjectMediator &mediator)
 {
     // For those objs that do not have metadata on this node, we will notify other az masters in the asynchronous queue
@@ -4117,14 +4047,6 @@ void OCMetadataManager::AsyncDeleteByExpired(DeleteObjectMediator &mediator)
             mediator.SetStatus(rc);
         }
     }
-}
-
-bool OCMetadataManager::HaveAsyncMetaRequest()
-{
-    if (objectStore_ == nullptr) {
-        return false;
-    }
-    return !objectStore_->AsyncQueueEmpty();
 }
 
 Status OCMetadataManager::SaveMigrationData(const std::string &objectKey, ObjectMeta &metaCache, Status &status)
@@ -4167,9 +4089,9 @@ Status OCMetadataManager::SaveNestedMigrationMetadata(const MetaForMigrationPb &
     return Status::OK();
 }
 
-void OCMetadataManager::AddMigrationLocations(const MetaForMigrationPb &objMeta, const ObjectMetaPb &metaPb,
-                                              ObjectMeta &metaCache,
-                                              std::vector<std::string> &locationsToReconcile)
+Status OCMetadataManager::AddMigrationLocations(const MetaForMigrationPb &objMeta, const ObjectMetaPb &metaPb,
+                                                ObjectMeta &metaCache,
+                                                std::vector<std::string> &locationsToReconcile)
 {
     const auto &objectKey = metaPb.object_key();
     auto addLocation = [&](const std::string &location, AckState ackState) {
@@ -4177,17 +4099,18 @@ void OCMetadataManager::AddMigrationLocations(const MetaForMigrationPb &objMeta,
         if (notifyWorkerManager_ != nullptr && notifyWorkerManager_->IsWorkerDead(location)) {
             VLOG(1) << FormatString("[ObjectKey %s] Skip dead worker location %s during metadata migration", objectKey,
                                     location);
-            return;
+            return Status::OK();
         }
-        LOG_IF_ERROR(AddLocation(metaCache, location, ackState, objectKey, metaPb), "AddLocation failed.");
+        RETURN_IF_NOT_OK(AddLocation(metaCache, location, ackState));
+        return objectStore_->AddObjectLocation(objectKey, location, ackState == AckState::ACK ? "" : "0");
     };
     if (objMeta.new_locations_size() > 0) {
         for (const auto &loc : objMeta.new_locations()) {
-            addLocation(loc.location(), static_cast<AckState>(loc.ack()));
+            RETURN_IF_NOT_OK(addLocation(loc.location(), static_cast<AckState>(loc.ack())));
         }
     } else {  // Consider compatibility
         for (const auto &loc : objMeta.locations()) {
-            addLocation(loc, AckState::ACK);
+            RETURN_IF_NOT_OK(addLocation(loc, AckState::ACK));
         }
     }
     const auto &primaryAddress = metaPb.primary_address();
@@ -4196,6 +4119,7 @@ void OCMetadataManager::AddMigrationLocations(const MetaForMigrationPb &objMeta,
         == locationsToReconcile.end()) {
         locationsToReconcile.emplace_back(primaryAddress);
     }
+    return Status::OK();
 }
 
 Status OCMetadataManager::ReconcileDeadMigrationLocations(
@@ -4232,7 +4156,10 @@ bool OCMetadataManager::SaveOneMeta(const MetaForMigrationPb &objMeta, Status &s
     ObjectMeta metaCache;
     metaCache.meta = metaPb;
     std::vector<std::string> locationsToReconcile;
-    AddMigrationLocations(objMeta, metaPb, metaCache, locationsToReconcile);
+    status = AddMigrationLocations(objMeta, metaPb, metaCache, locationsToReconcile);
+    if (status.IsError()) {
+        return false;
+    }
 
     metaCache.value = static_cast<int64_t>(objMeta.value());
     INJECT_POINT_NO_RETURN("OCMetadataManager.SaveOneMeta.before_save");
@@ -4250,25 +4177,17 @@ bool OCMetadataManager::SaveOneMeta(const MetaForMigrationPb &objMeta, Status &s
     (void)expiredObjectManager_->InsertObject(objectKey, currentTime, objMeta.remain_ttl_second(),
                                               objMeta.enable_ttl());
 
-    // insert etcd map in memory.
-    InsertToEtcdTableInMemory(objectKey, metaPb, ETCD_META_TABLE_PREFIX, objectKey);
-    for (const auto &op : objMeta.async_ops()) {
-        LOG(INFO) << FormatString("Insert async worker operation(%d) for object:%s, workerId:%s",
-                                  static_cast<uint32_t>(op.async_op().op_type()), objectKey, op.worker_addr());
-        auto notifyWorkerOp = notifyWorkerManager_->ParseNotifyWorkerOpFromMigration(op.async_op());
-
-        (void)notifyWorkerManager_->InsertAsyncWorkerOp(op.worker_addr(), objectKey, notifyWorkerOp, true,
-                                                        WriteMode2MetaType(metaPb.config().write_mode()));
-    }
-
-    // global cache delete.
-    for (const auto &op : objMeta.global_cache_dels()) {
-        VLOG(1) << FormatString("Insert global cache delete for object:%s, version:%d, delete version: %d", objectKey,
-                                op.object_version(), op.delete_version());
-        (void)globalCacheDeleteManager_->InsertDeletedObject(objectKey, op.object_version(), op.delete_version(),
-                                                             op.target_worker_address(), true);
-    }
     return true;
+}
+
+Status OCMetadataManager::SaveMigrationWorkerOps(const MetaForMigrationPb &meta)
+{
+    for (const auto &op : meta.async_ops()) {
+        auto operation = notifyWorkerManager_->ParseNotifyWorkerOpFromMigration(op.async_op());
+        RETURN_IF_NOT_OK(notifyWorkerManager_->InsertAsyncWorkerOp(op.worker_addr(), meta.object_key(),
+                                                                   operation, true, true));
+    }
+    return Status::OK();
 }
 
 Status OCMetadataManager::SaveMigrationMetadata(const MigrateMetadataReqPb &req, MigrateMetadataRspPb &rsp)
@@ -4290,16 +4209,16 @@ Status OCMetadataManager::SaveMigrationMetadata(const MigrateMetadataReqPb &req,
                 continue;
             }
         }
+        status = SaveMigrationWorkerOps(objMeta);
+        if (status.IsError()) {
+            rsp.add_results(MigrateMetadataRspPb::FAILED);
+            continue;
+        }
         // insert global cache delete keys.
-        globalCacheDeleteManager_->InsertDeletedObjectFromMigrateNode(objMeta);
-        // insert wait for deleted etcd keys.
-        for (const auto &ele : objMeta.wait_async_to_l2_elements()) {
-            VLOG(1) << FormatString(
-                "Save one migrate async element, object key: %s, table: %s, key: %s, request type: %d",
-                objMeta.object_key(), ele.table(), ele.key(), ele.op());
-            objectStore_->InsertWaitAsyncElements(objMeta.object_key(), ele.table(), ele.key(), ele.value(),
-                                                  static_cast<AsyncElement::ReqType>(ele.op()), ele.timestamp(),
-                                                  ele.trace_id());
+        const auto deleteStatus = globalCacheDeleteManager_->InsertDeletedObjectFromMigrateNode(objMeta);
+        if (deleteStatus.IsError()) {
+            rsp.add_results(MigrateMetadataRspPb::FAILED);
+            continue;
         }
         if (!SaveOneMigrationObjRefData(objMeta.object_key(), objMeta, allRemoteClientIds)) {
             rsp.add_results(MigrateMetadataRspPb::FAILED);
@@ -4315,32 +4234,17 @@ Status OCMetadataManager::SaveMigrationMetadata(const MigrateMetadataReqPb &req,
 
         rsp.add_results(MigrateMetadataRspPb::SUCCESSFUL);
     }
+    rsp.set_supports_task_only_worker_ops(true);
     return Status::OK();
 }
 
-Status OCMetadataManager::AddLocation(ObjectMeta &metaCache, const std::string &addr, AckState ackState,
-                                      const std::string &objectKey, const ObjectMetaPb &metaPb)
+Status OCMetadataManager::AddLocation(ObjectMeta &metaCache, const std::string &addr, AckState ackState)
 {
     if (addr.empty()) {
         return { K_INVALID, "The location address is empty." };
     }
     metaCache.locations[addr] = ackState;
-    std::string key = addr + "_" + objectKey;
-    InsertToEtcdTableInMemory(objectKey, metaPb, ETCD_LOCATION_TABLE_PREFIX, key);
     return Status::OK();
-}
-
-void OCMetadataManager::InsertToEtcdTableInMemory(const std::string &objectKey, const ObjectMetaPb &metaPb,
-                                                  const std::string &tableName, const std::string &key)
-{
-    // insert etcd map in memory.
-    auto writeType = WriteMode2MetaType(metaPb.config().write_mode());
-    if (writeType != ObjectMetaStore::WriteType::ROCKS_ONLY) {
-        uint32_t hash;
-        std::string table;
-        objectStore_->GetHashAndTable(objectKey, tableName, hash, table);
-        objectStore_->InsertToEtcdKeyMap(table, key, hash, writeType == ObjectMetaStore::WriteType::ROCKS_ASYNC_ETCD);
-    }
 }
 
 Status OCMetadataManager::ClearDevClientMetaForScaledInWorker(const std::vector<std::string> &removeNodes)
@@ -4377,27 +4281,36 @@ bool OCMetadataManager::CheckMetaTableEmpty()
     return true;
 }
 
-void OCMetadataManager::FillWaitAsyncElements(const std::unordered_set<std::shared_ptr<AsyncElement>> &elements,
-                                              MetaForMigrationPb &meta)
+void OCMetadataManager::GetPendingWorkerOpKeys(const std::function<bool(const std::string &)> &matches,
+                                               std::unordered_set<std::string> &keys)
 {
-    for (const auto &ele : elements) {
-        if (ele == nullptr) {
-            continue;
-        }
-        VLOG(1) << "Migrate async element: " << *ele;
-        auto *eleOp = meta.add_wait_async_to_l2_elements();
-        eleOp->set_key(ele->Key());
-        eleOp->set_table(ele->Table());
-        eleOp->set_value(ele->Value());
-        eleOp->set_op(static_cast<uint32_t>(ele->RequestType()));
-        eleOp->set_timestamp(ele->BeginTimestampUs());
-        eleOp->set_trace_id(ele->TraceID());
+    if (notifyWorkerManager_ != nullptr) {
+        notifyWorkerManager_->GetPendingObjectKeys(matches, keys);
     }
 }
 
+std::vector<WorkerOpMigrationSnapshot> OCMetadataManager::SnapshotWorkerOpsForMigration(
+    const std::string &key, MetaForMigrationPb &meta)
+{
+    if (notifyWorkerManager_ == nullptr) {
+        return {};
+    }
+    auto snapshots = notifyWorkerManager_->SnapshotObjectOperations(key);
+    for (const auto &snapshot : snapshots) {
+        auto *operation = meta.add_async_ops();
+        operation->set_worker_addr(snapshot.workerId);
+        FillNotifyWorkerOpDetailPb(snapshot.operation.op, *operation->mutable_async_op());
+    }
+    return snapshots;
+}
+
+Status OCMetadataManager::CompleteWorkerOpMigration(const std::vector<WorkerOpMigrationSnapshot> &snapshots)
+{
+    return snapshots.empty() ? Status::OK() : notifyWorkerManager_->RemoveMigratedOperations(snapshots);
+}
+
 Status OCMetadataManager::FillMetadataForMigration(
-    const std::string &objectKey, MetaForMigrationPb &meta,
-    std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &asyncMap)
+    const std::string &objectKey, MetaForMigrationPb &meta)
 {
     {
         // Skip keys being deleted to prevent migration from re-creating metadata after Delete
@@ -4430,13 +4343,6 @@ Status OCMetadataManager::FillMetadataForMigration(
 
         // Marker is migrating
         migratingItems_.insert({ objectKey, true });
-        if (accessor->second.IsWriteBackL2Cache()) {
-            std::unordered_set<std::shared_ptr<AsyncElement>> elements;
-            GetAsyncElementsByObjectKey(objectKey, elements);
-            FillWaitAsyncElements(elements, meta);
-            asyncMap.emplace(objectKey, std::move(elements));
-        }
-
         // Fill metadata
         meta.set_object_key(objectKey);
         meta.set_meta(serializedStr);
@@ -4455,15 +4361,6 @@ Status OCMetadataManager::FillMetadataForMigration(
         meta.set_enable_ttl(true);
     }
 
-    auto operations = notifyWorkerManager_->GetObjectAsyncWorkerOp(objectKey);
-    for (const auto &op : operations) {
-        auto opPb = meta.add_async_ops();
-        opPb->set_worker_addr(op.first);
-        auto *opDetailPb = opPb->mutable_async_op();
-        FillNotifyWorkerOpDetailPb(op.second, *opDetailPb);
-        (void)notifyWorkerManager_->RemoveAsyncWorkerOp(op.first, { objectKey }, op.second.type, true);
-    }
-
     auto delOps = globalCacheDeleteManager_->GetDeletedInfos(objectKey);
     for (const auto &op : delOps) {
         auto opPb = meta.add_global_cache_dels();
@@ -4475,33 +4372,12 @@ Status OCMetadataManager::FillMetadataForMigration(
 }
 
 void OCMetadataManager::HandleMetaDataMigrationFailed(
-    const MetaForMigrationPb &objMeta,
-    const std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &asyncMap)
+    const MetaForMigrationPb &objMeta)
 {
     Raii cleanMigratingMarker([this, &objMeta]() { migratingItems_.erase(objMeta.object_key()); });
-    expiredObjectManager_->InsertObject(objMeta.object_key(), GetSystemClockTimeStampUs(), objMeta.remain_ttl_second(),
-                                        objMeta.enable_ttl());
-    for (auto &async_op : objMeta.async_ops()) {
-        // FillMetadataForMigration does not delete data from etcd. Therefore, type is set to ROCKS_ONLY.
-        LOG(INFO) << FormatString("Insert async worker operation(%d) for object:%s, workerId:%s",
-                                  static_cast<uint32_t>(async_op.async_op().op_type()), objMeta.object_key(),
-                                  async_op.worker_addr());
-        auto notifyWorkerOp = notifyWorkerManager_->ParseNotifyWorkerOpFromMigration(async_op.async_op());
-        (void)notifyWorkerManager_->InsertAsyncWorkerOp(async_op.worker_addr(), objMeta.object_key(), notifyWorkerOp,
-                                                        true, ObjectMetaStore::WriteType::ROCKS_ONLY);
-    }
-
-    auto it = asyncMap.find(objMeta.object_key());
-    if (it == asyncMap.end()) {
-        VLOG(2) << "Handle migrate failed obejct: " << objMeta.object_key()
-                << ", not found in async map, async map size: " << asyncMap.size();
-        return;
-    }
-    for (const auto &ele : it->second) {
-        VLOG(1) << FormatString("Handle migrate failed object %s, table: %s, key: %s pull back to object meta store",
-                                objMeta.object_key(), ele->Table(), ele->Key());
-        objectStore_->InsertWaitAsyncElements(objMeta.object_key(), ele->Table(), ele->Key(), ele->Value(),
-                                              ele->RequestType(), ele->BeginTimestampUs(), ele->TraceID());
+    if (!objMeta.only_ref()) {
+        expiredObjectManager_->InsertObject(objMeta.object_key(), GetSystemClockTimeStampUs(),
+                                            objMeta.remain_ttl_second(), objMeta.enable_ttl());
     }
 }
 
@@ -4519,7 +4395,7 @@ void OCMetadataManager::HandleMetaDataMigrationSuccess(const std::string &object
             return;
         }
 
-        Status rc = ClearOneMetaInfo(accessor, true);
+        Status rc = ClearOneMetaInfo(accessor);
         if (rc.IsError()) {
             LOG(WARNING) << "Failed to delete migrated data. rc=" << rc.ToString();
         }
@@ -4685,14 +4561,6 @@ void OCMetadataManager::RemoveHeavyOp(const std::vector<std::string> &objectKeys
     }
 }
 
-std::string OCMetadataManager::GetETCDAsyncQueueUsage()
-{
-    if (objectStore_ == nullptr) {
-        return "";
-    }
-    return objectStore_->GetETCDAsyncQueueUsage();
-}
-
 std::string OCMetadataManager::GetMasterAsyncPoolUsage(int64_t intervalMs)
 {
     if (asyncPool_ == nullptr) {
@@ -4724,17 +4592,6 @@ Status OCMetadataManager::CreateDeviceMeta(const ObjectMetaPb &newMeta, const st
     RETURN_IF_NOT_OK(objectStore_->CreateSerializedStringForMeta(objectKey, objMeta.meta, serializedStr));
     UpdateSubscribeCache(objectKey, objMeta);
     return objectStore_->CreateOrUpdateMeta(objectKey, serializedStr);
-}
-
-Status OCMetadataManager::CheckRocksdbStatusAndLoadL2Table(const std::string &rocksTable, bool isFromRocksdb,
-                                                           std::vector<std::pair<std::string, std::string>> &outMetas)
-{
-    if (objectStore_->IsRocksdbRunning() && isFromRocksdb && objectStore_->IsRocksdbEnableWriteMeta()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(rocksTable, outMetas),
-                                         "Load meta from rocksdb into memory failed.");
-        LOG(INFO) << "Load meta from rocksdb, count:" << outMetas.size();
-    }
-    return Status::OK();
 }
 
 Status OCMetadataManager::ReplacePrimary(const ReplacePrimaryReqPb &req, ReplacePrimaryRspPb &rsp)
@@ -4810,8 +4667,7 @@ void OCMetadataManager::ReplacePrimaryObject(const ReplacePrimaryReqPb &req,
     std::string serializedStr;
     LOG_IF_ERROR(objectStore_->CreateSerializedStringForMeta(objectKey, accessor->second.meta, serializedStr),
                  "serialize meta to rocksdb failed");
-    LOG_IF_ERROR(objectStore_->CreateOrUpdateMeta(objectKey, serializedStr,
-                                                  WriteMode2MetaType(accessor->second.meta.config().write_mode())),
+    LOG_IF_ERROR(objectStore_->CreateOrUpdateMeta(objectKey, serializedStr),
                  "Create meta to rocksdb failed");
 }
 

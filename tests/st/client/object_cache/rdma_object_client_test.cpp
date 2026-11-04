@@ -662,10 +662,13 @@ TEST_F(RdmaObjectClientTest, RdmaRemoteBatchGetSizeChanged)
 
 TEST_F(RdmaObjectClientTest, RdmaRemoteGetSizeChangedInvalid)
 {
+    for (int worker = 0; worker < WORKER_NUM; ++worker) {
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, worker, "ocMetaManager.noNeedGetFromLocal", "return()"));
+    }
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerOcServiceGetImpl.PrepareGetRequestHelper.changeSize",
-                                           "1*call(1023)"));
+                                           "call(1023)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "WorkerWorkerOCServiceImpl.GetObjectRemoteImpl.changeDataSize",
-                                           "1*call(0)"));
+                                           "call(0)"));
     std::shared_ptr<ObjectClient> client1;
     std::shared_ptr<ObjectClient> client2;
     InitTestClient(0, client1);
@@ -679,7 +682,14 @@ TEST_F(RdmaObjectClientTest, RdmaRemoteGetSizeChangedInvalid)
     std::vector<Optional<Buffer>> buffers1;
     DS_ASSERT_NOT_OK(client1->Get({ objectKey }, 0, buffers1));
 
-    LOG(INFO) << "Test case RdmaRemoteGetSizeChangedInvalid success";
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "WorkerOcServiceGetImpl.PrepareGetRequestHelper.changeSize"));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 1,
+                                             "WorkerWorkerOCServiceImpl.GetObjectRemoteImpl.changeDataSize"));
+    buffers1.clear();
+    DS_ASSERT_OK(client1->Get({ objectKey }, 0, buffers1));
+    ASSERT_EQ(buffers1.size(), 1U);
+    ASSERT_TRUE(buffers1[0]);
+    AssertBufferEqual(*buffers1[0], data);
 }
 
 TEST_F(RdmaObjectClientTest, RdmaParallelWrite)

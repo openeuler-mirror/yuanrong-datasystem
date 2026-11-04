@@ -160,10 +160,6 @@ DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(monitor_config_file);
 DS_DECLARE_string(worker_address);
 DS_DECLARE_string(health_check_path);
-DS_DECLARE_string(metastore_address);
-DS_DEFINE_bool(start_metastore_service, false,
-               "Start metastore service on master worker to replace external etcd server for cluster worker "
-               "metadata storage, default is false.");
 DS_DEFINE_bool_dynamic(async_delete, false, "Master notify workers to delete objects asynchronously.");
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
@@ -564,19 +560,6 @@ cluster::ControlBackendProbeResult WorkerOCServer::BuildFailedProbeResultForTest
     return BuildFailedProbeResult(peer, status, std::chrono::steady_clock::now());
 }
 #endif
-
-static bool ValidateEtcdOrMetastoreAddress()
-{
-    if (FLAGS_metastore_address.empty() && FLAGS_etcd_address.empty()) {
-        LOG(ERROR) << "At least one of etcd_address or metastore_address must be specified";
-        return false;
-    }
-    if (!FLAGS_metastore_address.empty() && !FLAGS_etcd_address.empty()) {
-        LOG(ERROR) << "Only one of etcd_address or metastore_address can be specified, not both";
-        return false;
-    }
-    return true;
-}
 
 WorkerOCServer::WorkerOCServer(HostPort workerAddr, HostPort bindAddr,
                                std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery)
@@ -1615,26 +1598,10 @@ Status WorkerOCServer::InitCoordinationBackend()
         return Status::OK();
     }
 
-    // EtcdStore is owned by WorkerOcServer. It is used by multiple services.
-    CHECK_FAIL_RETURN_STATUS(ValidateEtcdOrMetastoreAddress(), K_RUNTIME_ERROR,
-                             "Neither etcd_address nor metastore_address is specified");
-
-    // Determine which backend to use for metadata storage.
-    if (!FLAGS_metastore_address.empty()) {
-        // Use metastore as the backend.
-        etcdOrMetastoreAddress_ = FLAGS_metastore_address;
-        LOG(INFO) << "Using metastore as etcd replacement: " << etcdOrMetastoreAddress_;
-        if (FLAGS_start_metastore_service) {
-            // Start metastore service on this node (head worker).
-            RETURN_IF_NOT_OK(StartMetaStoreService());
-        }
-    } else {
-        // Use external etcd as the backend.
-        FLAGS_etcd_address = ShuffleStringWithDelimiter(FLAGS_etcd_address, ETCD_ADDR_PATTREN);
-        etcdOrMetastoreAddress_ = FLAGS_etcd_address;
-        LOG(INFO) << "Using external etcd: " << etcdOrMetastoreAddress_;
-    }
-    etcdStore_ = std::make_unique<EtcdStore>(etcdOrMetastoreAddress_);
+    CHECK_FAIL_RETURN_STATUS(!FLAGS_etcd_address.empty(), K_INVALID, "etcd_address must be specified");
+    FLAGS_etcd_address = ShuffleStringWithDelimiter(FLAGS_etcd_address, ETCD_ADDR_PATTREN);
+    etcdAddress_ = FLAGS_etcd_address;
+    etcdStore_ = std::make_unique<EtcdStore>(etcdAddress_);
     RETURN_IF_NOT_OK(etcdStore_->Init());
     RETURN_IF_NOT_OK(
         etcdStore_->Authenticate(FLAGS_etcd_username, FLAGS_etcd_password, FLAGS_etcd_token_refresh_interval_s));
@@ -2341,35 +2308,6 @@ Status WorkerOCServer::StopTopologyRuntime(std::chrono::steady_clock::time_point
     return status;
 }
 
-Status WorkerOCServer::StartMetaStoreService()
-{
-    // Use FLAGS_metastore_address if FLAGS_start_metastore_service is enabled
-    // to replace external etcd server for cluster worker metadata storage
-    if (FLAGS_metastore_address.empty()) {
-        LOG(ERROR) << "metastore_address is empty, cannot start metastore service";
-        return Status(StatusCode::K_INVALID, "metastore_address is empty");
-    }
-
-    LOG(INFO) << "Starting metastore service on master worker at " << FLAGS_metastore_address;
-
-    metaStoreServer_ = std::make_unique<MetaStoreServer>();
-    RETURN_IF_NOT_OK(metaStoreServer_->Start(FLAGS_metastore_address));
-
-    LOG(INFO) << "Metastore service started successfully to replace external etcd server";
-    return Status::OK();
-}
-
-Status WorkerOCServer::StopMetaStoreService()
-{
-    if (metaStoreServer_) {
-        LOG(INFO) << "Stopping metastore service on master worker";
-        RETURN_IF_NOT_OK(metaStoreServer_->Stop());
-        metaStoreServer_.reset();
-        LOG(INFO) << "Metastore service stopped successfully";
-    }
-    return Status::OK();
-}
-
 Status WorkerOCServer::Init()
 {
     SetUnhealthy();
@@ -2521,7 +2459,6 @@ Status WorkerOCServer::InitMetadataManagerHolder()
     MetadataManagerHolderParam param;
     param.dbRootPath = FLAGS_rocksdb_store_dir;
     param.currWorkerId = hostPort_.ToString();
-    param.etcdStore = etcdStore_.get();
     param.persistenceApi = persistenceApi_;
     param.masterAddress = hostPort_;
     param.placement = &topologyEngine_->Placement();
@@ -2648,10 +2585,6 @@ void WorkerOCServer::RegisteringMasterCallbackFunc()
         return GetRpcServicesUsage("MasterOCService").ToString(FLAGS_log_monitor_interval_ms);
     });
 
-    instance.RegisterCollectHandler(ResMetricName::ETCD_QUEUE, [this]() {
-        auto usage = objCacheMasterSvc_->GetETCDAsyncQueueUsage();
-        return usage.empty() ? RES_ETCD_DEFAULT_USAGE : usage;
-    });
     instance.RegisterCollectHandler(ResMetricName::MASTER_ASYNC_TASKS_THREAD_POOL, [this]() {
         auto usage = objCacheMasterSvc_->GetMasterAsyncPoolUsage(FLAGS_log_monitor_interval_ms);
         return usage.empty() ? RES_THREAD_POOL_DEFAULT_USAGE : usage;
@@ -2672,9 +2605,8 @@ void WorkerOCServer::RegisteringMasterCallbackFunc()
 void WorkerOCServer::RegisteringThirdComponentCallbackFunc()
 {
     auto &instance = ResMetricCollector::Instance();
-    // The success rate of etcd request
     instance.RegisterCollectHandler(ResMetricName::ETCD_REQUEST_SUCCESS_RATE, [this]() {
-        return etcdStore_ == nullptr ? RES_ETCD_DEFAULT_USAGE : etcdStore_->GetEtcdRequestSuccessRate();
+        return etcdStore_ == nullptr ? "-1" : etcdStore_->GetEtcdRequestSuccessRate();
     });
     if (TESTFLAG(GetCurrentStorageType(), L2StorageType::OBS)) {
         // The success rate of obs request
@@ -3540,8 +3472,6 @@ Status WorkerOCServer::Shutdown()
     if (streamCacheMasterSvc_) {
         streamCacheMasterSvc_->Shutdown();
     }
-    // Stop metastore service if it was started
-    RETURN_IF_NOT_OK(StopMetaStoreService());
     // Notify the pre-stop script to stop.
     errno = 0;
     std::ofstream ofs(checkFilePath_);
@@ -3662,9 +3592,7 @@ void WorkerOCServer::CheckRule(bool isAsyncTasksRunning, int &checkNum)
 
 bool WorkerOCServer::IsAsyncTasksRunning()
 {
-    // check etcd and persistence async task
     return (objCacheClientWorkerSvc_ != nullptr && objCacheClientWorkerSvc_->HaveAsyncTasksRunning())
-           || (objCacheMasterSvc_ != nullptr && objCacheMasterSvc_->HaveAsyncMetaRequest())
            || (streamCacheClientWorkerSvc_ != nullptr && streamCacheClientWorkerSvc_->HaveTasksToProcess());
 }
 

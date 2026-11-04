@@ -8,10 +8,8 @@ This file is intentionally short at first. Add terms only when they recur across
   - the datasystem runtime process serving client and cache operations on a node
 - `master`
   - metadata and coordination side used by worker/runtime flows; in distributed mode the boundary with worker-side coordination needs source confirmation per change
-- `Metastore`
-  - built-in metadata service intended to replace external ETCD deployment in some cluster modes
 - `ETCD`
-  - external metadata and coordination backend used for cluster state and related operations
+  - external coordination backend used for cluster state and related operations
 - `hash ring`
   - worker-side distribution and scaling structure used for routing and membership-related behaviors
 - `object cache`

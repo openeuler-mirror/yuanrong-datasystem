@@ -36,7 +36,7 @@
    - `log_monitor`
    - `health_check_path`
    - `liveness_probe_timeout_s`
-   - `etcd_address` or `metastore_address`
+   - `etcd_address` or `coordinator_address`
 5. Use `signal-map.md` to pick the first code entrypoint.
 
 ## Evidence Checklist

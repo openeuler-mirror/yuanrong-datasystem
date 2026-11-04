@@ -634,6 +634,40 @@ void ClientWorkerRemoteCommonApi::ProcessRemoteHeartbeatSummary(const HeartbeatR
     ConsumeHeartbeatUbHealthSummary(rsp, "Ignore invalid remote Worker UB health summary");
 }
 
+Status ClientWorkerRemoteCommonApi::SendHeartbeatRequest(const RpcOptions &opts, const HeartbeatReqPb &req,
+                                                         HeartbeatRspPb &rsp)
+{
+    Timer heartbeatTimer;
+    Status status = brpcCommonStub_->Heartbeat(opts, req, rsp);
+    INJECT_POINT("ClientWorkerRemoteCommonApi.Heartbeat.peerDead", [&status]() {
+        status = Status(K_RPC_PEER_DEAD, "injected stale heartbeat channel");
+        return Status::OK();
+    });
+    const int32_t remainingMs = opts.GetTimeout() - static_cast<int32_t>(heartbeatTimer.ElapsedMilliSecond());
+    if (status.GetCode() == K_RPC_PEER_DEAD && remainingMs > 0) {
+        // A failed pooled socket must not prevent the successful heartbeat needed to detect a restart.
+        BrpcChannelConfig probeConfig;
+        probeConfig.endpoint = hostPort_.ToString();
+        probeConfig.connection_group = "heartbeat-probe/" + hostPort_.ToString();
+        probeConfig.timeout_ms = remainingMs;
+        probeConfig.connect_timeout_ms = remainingMs;
+        probeConfig.max_retry = 0;
+        probeConfig.enable_circuit_breaker = false;
+        std::unique_ptr<brpc::Channel> probeChannel;
+        auto probeStatus = CreateRpcChannel(probeConfig,
+            google::protobuf::DescriptorPool::generated_pool()->FindServiceByName("datasystem.WorkerService"),
+            WorkerServiceAuth::descriptor(), probeChannel);
+        if (probeStatus.IsOk()) {
+            WorkerService_BrpcGenericStub probeStub(probeChannel.get(), remainingMs);
+            RpcOptions probeOptions;
+            probeOptions.SetTimeout(remainingMs);
+            rsp.Clear();
+            status = probeStub.Heartbeat(probeOptions, req, rsp);
+        }
+    }
+    return status;
+}
+
 Status ClientWorkerRemoteCommonApi::SendHeartbeat(bool &workerReboot, bool &clientRemoved, int64_t remainTimeMs,
                                                   bool &isWorkerVoluntaryScaleDown,
                                                   const std::vector<int64_t> &releasedFds,
@@ -659,7 +693,7 @@ Status ClientWorkerRemoteCommonApi::SendHeartbeat(bool &workerReboot, bool &clie
         return Status::OK();
     });
 #endif
-    Status status = brpcCommonStub_->Heartbeat(opts, req, rsp);
+    Status status = SendHeartbeatRequest(opts, req, rsp);
     workerReboot = false;
     clientRemoved = false;
     isWorkerVoluntaryScaleDown = false;

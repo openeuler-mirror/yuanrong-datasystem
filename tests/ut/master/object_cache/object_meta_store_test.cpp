@@ -31,14 +31,12 @@
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
-#include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 
-DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(rocksdb_write_mode);
 
 using namespace datasystem::master;
@@ -63,13 +61,14 @@ public:
         // set the random string len == 8
         backStorePath_ = "rocks_objectmeta_store_" + random_.GetRandomString(8);
         rocksStore_ = RocksStore::GetInstance(backStorePath_);
-        ObjectMetaStore_ = std::make_unique<ObjectMetaStore>(rocksStore_.get(), nullptr);
+        ObjectMetaStore_ = std::make_unique<ObjectMetaStore>(rocksStore_.get());
         CHECK_EQ(ObjectMetaStore_->Init(), Status::OK());
     }
 
     void TearDown()
     {
         ObjectMetaStore_.reset();
+        rocksStore_.reset();
         DS_ASSERT_OK(RemoveAll(backStorePath_));
     }
 
@@ -111,6 +110,57 @@ public:
 };
 
 RandomData ObjectMetaStoreTest::random_;
+
+TEST_F(ObjectMetaStoreTest, MigratedTaskIsReadableBeforeAcknowledgement)
+{
+    DS_ASSERT_OK(ObjectMetaStore_->AddAsyncWorkerOp("worker", "migrated", NotifyWorkerOp::Delete(7), true));
+    std::vector<std::pair<std::string, std::string>> records;
+    DS_ASSERT_OK(ObjectMetaStore_->GetAllFromRocks(ASYNC_WORKER_OP_TABLE, records));
+    ASSERT_EQ(records.size(), 1U);
+    EXPECT_EQ(records.front().first, "worker_migrated");
+}
+
+TEST_F(ObjectMetaStoreTest, ReopeningLocalStorePreservesMetadataAndAuxiliaryRecords)
+{
+    const std::string key = "persisted-object";
+    DS_ASSERT_OK(ObjectMetaStore_->CreateOrUpdateMeta(key, "metadata"));
+    DS_ASSERT_OK(ObjectMetaStore_->AddObjectLocation(key, "worker", "0"));
+    DS_ASSERT_OK(ObjectMetaStore_->AddAsyncWorkerOp("worker", key, NotifyWorkerOp::Delete(7)));
+    DS_ASSERT_OK(ObjectMetaStore_->AddDeletedObjectWithDelVersion(key, 7, 9, "worker"));
+    ObjectMetaStore_.reset();
+    rocksStore_.reset();
+    rocksStore_ = RocksStore::GetInstance(backStorePath_);
+    ObjectMetaStore_ = std::make_unique<ObjectMetaStore>(rocksStore_.get());
+    DS_ASSERT_OK(ObjectMetaStore_->Init());
+    for (const auto &table : { META_TABLE, LOCATION_TABLE, ASYNC_WORKER_OP_TABLE, GLOBAL_CACHE_TABLE }) {
+        std::vector<std::pair<std::string, std::string>> records;
+        DS_ASSERT_OK(ObjectMetaStore_->GetAllFromRocks(table, records));
+        ASSERT_EQ(records.size(), 1U) << table;
+    }
+    DS_ASSERT_OK(ObjectMetaStore_->RemoveDeletedObject(key, 7));
+    DS_ASSERT_OK(ObjectMetaStore_->RemoveAsyncWorkerOp("worker", key));
+    ObjectMetaStore_.reset();
+    rocksStore_.reset();
+    rocksStore_ = RocksStore::GetInstance(backStorePath_);
+    ObjectMetaStore_ = std::make_unique<ObjectMetaStore>(rocksStore_.get());
+    DS_ASSERT_OK(ObjectMetaStore_->Init());
+    for (const auto &table : { ASYNC_WORKER_OP_TABLE, GLOBAL_CACHE_TABLE }) {
+        std::vector<std::pair<std::string, std::string>> records;
+        DS_ASSERT_OK(ObjectMetaStore_->GetAllFromRocks(table, records));
+        EXPECT_TRUE(records.empty()) << table;
+    }
+}
+
+
+TEST_F(ObjectMetaStoreTest, DisabledPersistenceDoesNotAccessStorage)
+{
+    ObjectMetaStore disabled(nullptr, false);
+    DS_ASSERT_OK(disabled.Init());
+    DS_ASSERT_OK(disabled.CreateOrUpdateMeta("key", "value"));
+    DS_ASSERT_OK(disabled.AddAsyncWorkerOp("worker", "key", NotifyWorkerOp::Delete(1)));
+    DS_ASSERT_OK(disabled.RemoveDeletedObject("key", 1));
+
+}
 
 TEST_F(ObjectMetaStoreTest, TestCreateQueryRemoveMeta)
 {

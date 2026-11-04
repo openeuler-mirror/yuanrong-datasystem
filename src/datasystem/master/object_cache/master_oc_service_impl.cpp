@@ -787,21 +787,6 @@ void MasterOCServiceImpl::AssignLocalWorker(object_cache::MasterWorkerOCServiceI
     masterWorkerOCService_ = masterWorkerService;  // save a copy of the ptr for the SendQueryGRefReq
 }
 
-bool MasterOCServiceImpl::HaveAsyncMetaRequest()
-{
-    return metadataManagerHolder_->HaveAsyncMetaRequest();
-}
-
-std::string MasterOCServiceImpl::GetETCDAsyncQueueUsage()
-{
-    std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    Status rc = metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager);
-    if (rc.IsError()) {
-        return "";
-    }
-    return ocMetadataManager->GetETCDAsyncQueueUsage();
-}
-
 std::string MasterOCServiceImpl::GetMasterAsyncPoolUsage(int64_t intervalMs)
 {
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;

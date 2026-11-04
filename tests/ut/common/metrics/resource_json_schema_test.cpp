@@ -111,6 +111,7 @@ TEST_F(ResourceJsonSchemaTest, SingleFieldGroups)
     EXPECT_TRUE(activeClient.recordGroup);
 
     const auto &etcdRate = GetResourceFieldDesc(ResMetricName::ETCD_REQUEST_SUCCESS_RATE);
+    EXPECT_STREQ(etcdRate.groupName, "etcd_request_success_rate");
     ASSERT_EQ(etcdRate.fieldNames.size(), static_cast<size_t>(1));
     EXPECT_TRUE(etcdRate.recordGroup);
 }

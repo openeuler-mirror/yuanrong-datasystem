@@ -30,7 +30,7 @@ public:
     void SetUp()
     {
         rocksStore_ = RocksStore::GetInstance(GetTestCaseDataDir() + "/rocksdb");
-        objectStore_ = std::make_shared<master::ObjectMetaStore>(rocksStore_.get(), nullptr);
+        objectStore_ = std::make_shared<master::ObjectMetaStore>(rocksStore_.get());
         objectStore_->Init();
         hostPort_.ParseString("127.0.0.1:30001");
     }
@@ -54,10 +54,10 @@ public:
         return RecoverObjectLocations(objLocMap);
     }
 
-    Status CallLoadObjectLocations(bool isFromRocksdb,
+    Status CallLoadObjectLocations(
         std::unordered_map<std::string, std::vector<std::pair<std::string, master::AckState>>> &objLocMap)
     {
-        return LoadObjectLocations(isFromRocksdb, objLocMap);
+        return LoadObjectLocations(objLocMap);
     }
 
     void InsertObjectKey(const std::string &objectKey)
@@ -122,8 +122,8 @@ TEST_F(AsyncUpdateLocationTest, TestAddTask)
 TEST_F(AsyncUpdateLocationTest, AddAndLoadLocations)
 {
     auto ocMetaManager = std::make_shared<OCMetadataManagerHelper>(
-        rocksStore_.get(), nullptr, nullptr, "127.0.0.1:900", nullptr, nullptr, "",
-        nullptr, "locationDbName", false);
+        rocksStore_.get(), nullptr, "127.0.0.1:900", nullptr, nullptr, "",
+        nullptr, "locationDbName");
     DS_ASSERT_OK(objectStore_->Init());
     std::string key1 = "test_object_key1";
     std::string key2 = "test_object_key2";
@@ -156,7 +156,7 @@ TEST_F(AsyncUpdateLocationTest, AddAndLoadLocations)
         bool loaded = false;
         while (std::chrono::steady_clock::now() < deadline) {
             objLocMap.clear();
-            if (ocMetaManager->CallLoadObjectLocations(true, objLocMap).IsOk()
+            if (ocMetaManager->CallLoadObjectLocations(objLocMap).IsOk()
                 && locationVisible(key1, worker1) && locationVisible(key2, worker1)) {
                 loaded = true;
                 break;
@@ -185,7 +185,7 @@ TEST_F(AsyncUpdateLocationTest, AddAndLoadLocations)
         bool loaded = false;
         while (std::chrono::steady_clock::now() < deadline) {
             objLocMap.clear();
-            if (ocMetaManager->CallLoadObjectLocations(true, objLocMap).IsOk()
+            if (ocMetaManager->CallLoadObjectLocations(objLocMap).IsOk()
                 && locationVisible(key3, worker2)) {
                 loaded = true;
                 break;
@@ -206,8 +206,7 @@ TEST_F(AsyncUpdateLocationTest, TopologyNotReadyDoesNotBlockLocationRecovery)
     cluster::TopologySnapshotState snapshots;
     cluster::MembershipEndpointView membership(snapshots);
     auto ocMetaManager = std::make_shared<OCMetadataManagerHelper>(
-        rocksStore_.get(), nullptr, nullptr, "127.0.0.1:900", nullptr, &membership,
-        "", nullptr, "locationDbName", false);
+        rocksStore_.get(), nullptr, "127.0.0.1:900", nullptr, &membership, "", nullptr, "locationDbName");
     std::unordered_map<std::string, std::vector<std::pair<std::string, master::AckState>>> locations;
 
     DS_ASSERT_OK(ocMetaManager->CallRecoverObjectLocations(locations));

@@ -26,7 +26,7 @@ Use this playbook when a change touches:
 - SDK `Set/Get/MSet/MGet/Del` or object/stream APIs;
 - worker CRUD/get/remote-get/batch-get paths;
 - RDMA, P2P, shared memory, mmap, l2cache, spill/load, or preload;
-- metadata fanout, route lookup, hash-ring, ETCD/Metastore access;
+- metadata fanout, route lookup, hash-ring, ETCD access;
 - thread pools, async queues, timers, metrics, logging, or background compaction;
 - benchmark or perf instrumentation.
 
@@ -38,7 +38,7 @@ Before editing, classify the path:
 | --- | --- | --- |
 | request critical | client API, worker service handler, remote get, batch get | added latency, allocations, copies, lock hold time, RPC count |
 | data transfer | RDMA/UCX/P2P, shared memory, spill/load, l2cache get/put | buffer lifetime, flush/wait semantics, copy count, backpressure |
-| metadata critical | ETCD/Metastore, hash ring, master metadata | fanout, retry bounds, CAS/lease cost, O(N) scans |
+| metadata critical | ETCD, hash ring, master metadata | fanout, retry bounds, CAS/lease cost, O(N) scans |
 | background | eviction, compaction, async queue, metric flush | queue bounds, CPU/IO budget, foreground interference |
 | test/benchmark | `dsbench`, `tests/perf`, perf client | measurement validity, warmup, cache hit/miss shape |
 
@@ -49,7 +49,7 @@ Treat the following as review-blocking until justified:
 - request-path string formatting or large string copies;
 - per-object heap allocation in a batch path when capacity is knowable;
 - broad mutexes around IO, RPC, sleep, callbacks, or logging;
-- added synchronous filesystem/ETCD/Metastore access in a foreground path;
+- added synchronous filesystem/ETCD access in a foreground path;
 - unbounded scans, queues, retries, or background tasks;
 - high-frequency `shared_ptr` copies or shared ownership in tight loops;
 - changes that increase RDMA flush count or block on visibility without a measurement plan;

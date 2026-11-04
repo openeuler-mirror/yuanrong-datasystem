@@ -247,7 +247,6 @@ public:
     /**
      * @brief Construct a new OCMetadataManager object
      * @param[in] rocksStore pointer to RocksStore owned by WorkerOcServer
-     * @param[in] etcdStore pointer to EtcdStore owned by WorkerOcServer
      * @param[in] persistApi Provides calls to a persistence service through a cloud client.
      * @param[in] masterAddress The address of master.
      * @param[in] placement Borrowed metadata placement capability.
@@ -255,14 +254,12 @@ public:
      * @param[in] localAddress Canonical local member address.
      * @param[in] exitRequested Process-local exit gate.
      * @param[in] workerId The worker id.
-     * @param[in] newNode Whether the local Worker is joining for the first time.
      */
-    OCMetadataManager(RocksStore *rocksStore, EtcdStore *etcdStore,
+    OCMetadataManager(RocksStore *rocksStore,
                       std::shared_ptr<PersistenceApi> persistApi = nullptr, const std::string &masterAddress = "",
                       const cluster::PlacementFacade *placement = nullptr,
                       const cluster::MembershipEndpointView *membership = nullptr, std::string localAddress = "",
-                      const std::atomic<bool> *exitRequested = nullptr, const std::string &workerId = "",
-                      bool newNode = false);
+                      const std::atomic<bool> *exitRequested = nullptr, const std::string &workerId = "");
 
     ~OCMetadataManager();
 
@@ -352,26 +349,14 @@ public:
                            ObjectMetaPb &meta);
 
     /**
-     * @brief Insert to etcd memory table.
-     * @param[in] objectKey The key of object.
-     * @param[in] tableName table name.
-     * @param[in] metaPb The meta info.
-     * @param[in] key The key of etcd.
-     */
-    void InsertToEtcdTableInMemory(const std::string &objectKey, const ObjectMetaPb &metaPb,
-                                   const std::string &tableName, const std::string &key);
-
-    /**
      * @brief Create Migration Meta data
      * @param[in] metaCache meta info
      * @param[in] addr worker location
      * @param[in] ackState ack state
      * @param[in] objectKey object key
-     * @param[in] metaPb meta info
      * @return Status of the call
      */
-    Status AddLocation(ObjectMeta &metaCache, const std::string &addr, AckState ackState, const std::string &objectKey,
-                       const ObjectMetaPb &metaPb);
+    Status AddLocation(ObjectMeta &metaCache, const std::string &addr, AckState ackState);
 
     /**
      * @brief Create object copy meta info in cache and rocksdb.
@@ -424,13 +409,12 @@ public:
      * @brief Create multi meta in rocks db and etcd and update subscribe.
      * @param[in] objectKeys The object keys.
      * @param[in] address Request address.
-     * @param[in] type write type.
      * @param[in] version Metadata version.
      * @param[out] rsp The rpc response protobuf.
      * @return Status of the call
      */
     Status PublishMultiMeta(const std::vector<std::string> &objectKeys, const std::string &address,
-                            ObjectMetaStore::WriteType type, uint64_t version, CreateMultiMetaRspPb &rsp);
+                            uint64_t version, CreateMultiMetaRspPb &rsp);
 
     /**
      * @brief Create multi meta.
@@ -1063,14 +1047,6 @@ public:
                            object_cache::WorkerWorkerOCServiceImpl *workerWorkerService, const HostPort &masterAddr);
 
     /**
-     * @brief Check whether there are any requests for asynchronously writing metadata to ETCD.
-     * @return True if there are unfinished async requests.
-     */
-    bool HaveAsyncMetaRequest();
-
-    static ObjectMetaStore::WriteType WriteMode2MetaType(uint32_t writeMode);
-
-    /**
      * @brief Get object Meta type
      * @param[in] objectKey The key of object.
      * @param[in] metaCache The object meta.
@@ -1128,30 +1104,19 @@ public:
     void FillSubMetas(const std::vector<std::string> &objKeys, std::vector<SubscribeInfoPb> &subMetas);
 
     /**
-     * @brief Get object Meta type
-     * @param[in] objectKey The key of object.
-     * @param[out] The write type of object.
-     * @return status of the call.
-     */
-    Status GetObjectMetaType(const std::string &objectKey, ObjectMetaStore::WriteType &type);
-
-    /**
-     * @brief Fill wait async put etcd elements to migrate metadata request.
-     * @param[in] elements Async elements.
-     * @param[out] meta Migrate metadata request.
-     */
-    void FillWaitAsyncElements(const std::unordered_set<std::shared_ptr<AsyncElement>> &elements,
-                               MetaForMigrationPb &meta);
-
-    /**
      * @brief Fill in the data to be migrated.
      * @param[in] objectKey The object key to be midrated.
      * @param[out] meta Data to be sent
      * @return Status of the result.
      */
+    void GetPendingWorkerOpKeys(const std::function<bool(const std::string &)> &matches,
+                                std::unordered_set<std::string> &keys);
+    std::vector<WorkerOpMigrationSnapshot> SnapshotWorkerOpsForMigration(const std::string &key,
+                                                                       MetaForMigrationPb &meta);
+    Status CompleteWorkerOpMigration(const std::vector<WorkerOpMigrationSnapshot> &snapshots);
+
     Status FillMetadataForMigration(
-        const std::string &objectKey, MetaForMigrationPb &meta,
-        std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &asyncMap);
+        const std::string &objectKey, MetaForMigrationPb &meta);
 
     /**
      * @brief FillNestedDependencyObjForMigration
@@ -1184,8 +1149,7 @@ public:
      * @param[in] objMeta Metadata to be migrated
      */
     void HandleMetaDataMigrationFailed(
-        const MetaForMigrationPb &objMeta,
-        const std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &asyncMap = {});
+        const MetaForMigrationPb &objMeta);
 
     /**
      * @brief Delete the migrated metadata.
@@ -1253,21 +1217,6 @@ public:
      */
     void GetMetasMatch(std::function<bool(const std::string &)> &&matchFunc, std::vector<std::string> &objKeys,
                        bool *exitEarly = nullptr);
-
-    void GetMetasInAsyncQueueMatch(
-        std::function<bool(const std::string &)> &&matchFunc,
-        std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &objAsyncMap);
-
-    void GetAsyncElementsByObjectKey(const std::string &objectKey,
-                                     std::unordered_set<std::shared_ptr<AsyncElement>> &elements);
-
-    /**
-     * @brief Get the usage of the queue for asynchronously writing ETCD data.
-     * @note currentSize: the number of tasks in the current queue.
-     * totalLimit:  the maximum queue capacity
-     * @return The Usage: "currentSize/totalLimit/workerL2CacheQueueUsag"
-     */
-    std::string GetETCDAsyncQueueUsage();
 
     /**
      * @brief Check meta table is empty;
@@ -1461,12 +1410,11 @@ protected:
 
     /**
      * @brief Load object locations
-     * @param[in] isFromRocksdb Specifies whether to obtain data from rocksdb.
      * @param[out] objLocMap The map record object and locations.
      * @return Status of the call
      */
     Status LoadObjectLocations(
-        bool isFromRocksdb, std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap);
+        std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap);
 
 private:
     using PrimaryChangeMap = std::unordered_map<std::string, std::unordered_set<std::string>>;
@@ -1654,7 +1602,6 @@ private:
      * @brief Load meta into the cache from the object meta table.
      * @param[in] metas The meta of Objects.
      * @param[in] expireObjects Expired Objects.
-     * @param[in] isFromRocksdb Specifies whether to obtain data from rocksdb.
      * the current node should be used as the object expiration time, because the steady_clock of different machines may
      * be different. The question needs to be optimized later.
      * @param[in] extraRanges Load the data of specified hash ranges if not empty.
@@ -1662,18 +1609,16 @@ private:
      */
     Status HandleLoadMeta(
         std::vector<std::pair<std::string, std::string>> &metas,
-        std::vector<std::tuple<std::string, uint64_t, uint32_t>> &expireObjects,
-        bool &isFromRocksdb);
+        std::vector<std::tuple<std::string, uint64_t, uint32_t>> &expireObjects);
 
     /**
      * @brief Load meta into the cache from the object meta table.
-     * @param[in] isFromRocksdb Specifies whether to obtain data from rocksdb.
      * the current node should be used as the object expiration time, because the steady_clock of different machines may
      * be different. The question needs to be optimized later.
      * @param[in] extraRanges Load the data of specified hash ranges if not empty.
      * @return Status of the call.
      */
-    Status LoadMeta(bool isFromRocksdb);
+    Status LoadMeta();
 
     /**
      * @brief SendChangePrimaryCopy
@@ -1755,11 +1700,9 @@ private:
     /**
      * @brief Clear one object meta infos of server in rocksdb
      * @param[in] accessor The TBB accessor.
-     * @param[in] isDataMigration Indicates whether the data migration scenario is used. If the value is true, data in
-     * etcd is not deleted.
      * @return Status of the call.
      */
-    Status ClearOneMetaInfo(const TbbMetaTable::const_accessor &accessor, bool isDataMigration = false);
+    Status ClearOneMetaInfo(const TbbMetaTable::const_accessor &accessor);
 
     /**
      * @brief Remove subscribe cache info after the request timeout.
@@ -1986,6 +1929,8 @@ private:
      */
     Status TryToSubscribeCache(int64_t timeout, const QueryMetaReqPb &reqPb, std::list<std::string> &objectKeys);
 
+    Status SaveMigrationWorkerOps(const MetaForMigrationPb &meta);
+
     /**
      * @brief Save one obj meta.
      * @param objMeta ObjMeta info.
@@ -1994,7 +1939,7 @@ private:
      */
     bool SaveOneMeta(const MetaForMigrationPb &objMeta, Status &status);
 
-    void AddMigrationLocations(const MetaForMigrationPb &objMeta, const ObjectMetaPb &metaPb, ObjectMeta &metaCache,
+    Status AddMigrationLocations(const MetaForMigrationPb &objMeta, const ObjectMetaPb &metaPb, ObjectMeta &metaCache,
                                std::vector<std::string> &locationsToReconcile);
 
     Status ReconcileDeadMigrationLocations(const std::string &objectKey,
@@ -2058,16 +2003,6 @@ private:
         DeleteObjectMediator &delMediator, std::vector<std::string> &failedDecIds, GDecreaseRspPb &resp,
         const std::shared_ptr<ServerUnaryWriterReader<GDecreaseRspPb, GDecreaseReqPb>> &serverApi,
         const std::string &remoteClientId = "");
-
-    /**
-     * @brief Load one trusted l2_cache table from RocksDB.
-     * @param[in] rocksTable Need write rocksdb table.
-     * @param[in] isFromRocksdb Specifies whether to obtain data from rocksdb.
-     * @param[out] outMetas The output metas in table.
-     * @return Status of the call.
-     */
-    Status CheckRocksdbStatusAndLoadL2Table(const std::string &rocksTable, bool isFromRocksdb,
-                                            std::vector<std::pair<std::string, std::string>> &outMetas);
 
     /**
      * @brief Start meta monitor thread.
@@ -2158,7 +2093,6 @@ private:
     // All async task in master should execute in asyncPool_ for centralized control.
     // Each manager keep its main processes in its own life cycle to avoid asyncPool_ starvation.
     std::unique_ptr<ThreadPool> asyncPool_{ nullptr };
-    bool backendStoreExist_ = false;
 
     // Protects heavyOps_
     std::mutex heavyOpMutex_;
@@ -2175,9 +2109,6 @@ private:
     std::unique_ptr<Thread> monitor_;
     std::string workerId_;
     std::shared_ptr<PersistenceApi> persistApi_;
-
-    // Indicate the master is new added node or not.
-    const bool newNode_;
 };
 }  // namespace master
 }  // namespace datasystem

@@ -33,7 +33,7 @@
 | # | 目标 | 验收 | 阶段 |
 |---|---|---|---|
 | 1 | 提供 dscli 子命令，按 worker 地址精确清理其在协调后端中的所有拓扑残留 | 删除指定 address 的 membership/notify/probe/ub_health key + 从 topologyTable 的 members map 中移除该 address | P1 |
-| 2 | 同时支持 etcd/metastore 后端和 Coordinator 后端 | `--etcd_address` 和 `--coordinator_address` 二选一，两种后端行为一致 | P1 |
+| 2 | 同时支持 etcd 后端和 Coordinator 后端 | `--etcd_address` 和 `--coordinator_address` 二选一，两种后端行为一致 | P1 |
 | 3 | topologyTable 更新走 CAS，与 topology controller 无竞争 | CAS 冲突时 CLI 重试，不直接 Put 覆盖 | P1 |
 | 4 | tasks / scale-in-metadata-done 不由 CLI 直接删，交给 controller janitor 自动清理 | CLI 执行后 topologyTable version 推进，janitor 下一周期自动清理 stale tasks | P1 |
 | 5 | 输出结构化 JSON，与现有 dscli query 风格一致 | 每个被清理的 address 输出各 key 的删除结果 + topologyTable version | P1 |
@@ -46,7 +46,7 @@
 
 | 术语 | 含义 |
 |---|---|
-| 协调后端 | etcd、metastore 或 Coordinator，存储拓扑元数据的外部系统 |
+| 协调后端 | etcd 或 Coordinator，存储拓扑元数据的外部系统 |
 | topologyTable | 协调后端中的 `/datasystem/topology/` key，持久存储 `ClusterTopologyPb`（含 members map + hash ring token 分配） |
 | membershipTable | 协调后端中的 `/datasystem/cluster/<addr>` key，lease-bound，存储 `MembershipValue`（worker 心跳/状态） |
 | per-address table | notify（`/datasystem/notify/<addr>`）、probe（`/datasystem/probe/<addr>`）、ub_health（`/datasystem/ub_health/<addr>`），均以 address 为 key |
@@ -354,7 +354,7 @@ struct DeleteClusterMemberResult {
 
 | 参数名 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `--etcd_address` | string | 无 | etcd/metastore 后端地址，互斥于 `--coordinator_address` |
+| `--etcd_address` | string | 无 | etcd 后端地址，互斥于 `--coordinator_address` |
 | `--coordinator_address` | string | 无 | Coordinator 后端地址，互斥于 `--etcd_address` |
 | `--cluster_name` | string | "" | 控制拓扑 key 前缀，默认 "" 对应 `/datasystem/...` |
 | `--worker_address` | string（可重复） | 无（必填） | 要清理的 worker 地址，如 `192.0.2.10:20010` |

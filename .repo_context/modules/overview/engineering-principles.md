@@ -53,7 +53,7 @@ Before changing code, identify whether the path is:
 | Path type | Examples | Required assessment |
 | --- | --- | --- |
 | foreground request path | `KVClient::Set/Get`, `ObjectClientImpl::Put/Get/MSet`, worker CRUD/get paths, remote get, batch get | latency, allocations, copies, logs, lock hold time, RPC/IO, bounded loops |
-| metadata coordination path | ETCD/Metastore access, topology updates, membership state, master metadata | write ordering, CAS/lease behavior, retries, fanout, failure mode |
+| metadata coordination path | ETCD access, topology updates, membership state, master metadata | write ordering, CAS/lease behavior, retries, fanout, failure mode |
 | data movement path | shared memory, RDMA/UCX/P2P, spill/load, l2cache transfer, preload | data copies, buffer lifetime, alignment, backpressure, flush/wait semantics |
 | background path | eviction, async metadata queue, compaction, recovery, metrics/log flushing | foreground interference, queue bound, retry storm, shutdown safety |
 
@@ -86,7 +86,7 @@ Persistence-sensitive changes must assess:
 - version compatibility and rollback behavior
 - compaction safety and cleanup after interruption
 - startup rebuild correctness
-- metadata/data consistency across ETCD, Metastore, RocksDB, l2cache, slot storage, and local memory
+- metadata/data consistency across ETCD, RocksDB, l2cache, slot storage, and local memory
 - idempotency when a retry or recovery task replays the operation
 
 Use `.repo_context/playbooks/features/recovery-and-persistence.md` when a change touches durable data, metadata,
@@ -149,7 +149,7 @@ Before implementing new logic, search for existing repository primitives:
 - status/error style and macros
 - logging and perf point helpers
 - thread pools, async queues, timers, wait posts, events
-- filesystem, RocksDB, ETCD, Metastore, l2cache, and slot helpers
+- filesystem, RocksDB, ETCD, l2cache, and slot helpers
 - benchmark and perf client frameworks
 - test cluster, inject point, and recovery test utilities
 - existing request/response validation helpers

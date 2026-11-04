@@ -62,7 +62,7 @@ public:
      * @brief Construct OCGlobalCacheDeleteManager for notifying global cache to delete object.
      */
     OCGlobalCacheDeleteManager(std::shared_ptr<ObjectMetaStore> objectStore, std::shared_ptr<PersistenceApi> persistApi,
-                               bool backendStoreExist, const std::string &masterAddress);
+                               const std::string &masterAddress);
 
     ~OCGlobalCacheDeleteManager();
 
@@ -86,8 +86,7 @@ public:
      * @return Status of the call.
      */
     Status InsertDeletedObject(const std::string &objectKey, uint64_t objectVersion, uint64_t delVersion,
-                               const std::string &targetWorkerAddress = "", bool needPersist = false,
-                               ObjectMetaStore::WriteType type = ObjectMetaStore::WriteType::ROCKS_ONLY);
+                               const std::string &targetWorkerAddress = "", bool needPersist = false);
 
     /**
      * @brief Remove data from global cache table.
@@ -99,11 +98,10 @@ public:
 
     /**
      * @brief Recover global cache info table.
-     * @param[in] isFromRocksdb Specifies whether to obtain data from rocksdb.
      * @param[in] extraRanges Obtains the data of specified object-key hash ranges if not empty.
      * @return Status of the call.
      */
-    Status RecoverDeletedIds(bool isFromRocksdb);
+    Status RecoverDeletedIds();
 
     /**
      * @brief Rebuild in-memory delete state from task-scoped persisted records.
@@ -137,7 +135,7 @@ public:
      * @brief Insert delte object from migrate node.
      * @param[in] objMeta Migrate object meta.
      */
-    void InsertDeletedObjectFromMigrateNode(const MetaForMigrationPb &objMeta);
+    Status InsertDeletedObjectFromMigrateNode(const MetaForMigrationPb &objMeta);
 
     /**
      * @brief Takes a copy of the local MasterWorkerService to allow rpc bypass when master and worker are collocated.
@@ -230,8 +228,6 @@ private:
 
     // support leve2 storage type
     L2StorageType supportL2Storage_;
-
-    const bool backendStoreExist_;
 };
 }  // namespace master
 }  // namespace datasystem

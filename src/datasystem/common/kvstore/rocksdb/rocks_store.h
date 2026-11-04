@@ -100,7 +100,7 @@ public:
      * @brief Put a key-value using an explicit async ordering key.
      */
     Status PutWithOrderingKey(const std::string &tableName, const std::string &key, const std::string &value,
-                              const std::string &orderingKey);
+                              const std::string &orderingKey, bool waitForCompletion = false);
 
     /**
      * @brief Put a new key-value into a table.

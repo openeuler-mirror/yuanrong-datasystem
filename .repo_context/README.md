@@ -230,7 +230,7 @@ The first pass is intentionally coarse. It currently covers:
 - an upkeep playbook for formal module-context generation and backfill;
 - feature workflow guidance for l2 cache and secondary-storage changes;
 - cross-module observability and operations guidance for diagnosis, health checks, and performance troubleshooting.
-- detailed runtime topology packages for ETCD/Metastore metadata access, v3 topology management, membership, routing,
+- detailed runtime topology packages for ETCD metadata access, v3 topology management, membership, routing,
   and scale-transition behavior.
 
 The next recommended deep dives are recorded in `.repo_context/roadmap.md`.

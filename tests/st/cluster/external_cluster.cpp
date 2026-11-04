@@ -1179,8 +1179,7 @@ Status ExternalCluster::AppendWorkerBackendFlags(std::string &cmd)
         cmd += " -etcd_address=" + etcdUrl;
     }
 
-    // Cluster topology is constructed for every Worker, including an embedded metastore Worker with no external
-    // ETCD or Coordinator process, so every launch must carry the isolated test cluster name.
+    // Every Worker launch must carry the isolated test cluster name.
     cmd += " -cluster_name=" + opts_.etcdPrefix;
 
     if (opts_.numOBS > 0) {

@@ -46,7 +46,6 @@ Status MetadataManagerHolder::Init(MetadataManagerHolderParam param)
     LOG(INFO) << "Init metadata manager holder.";
     dbRootPath_ = std::move(param.dbRootPath);
     currentWorkerId_ = std::move(param.currWorkerId);
-    etcdStore_ = param.etcdStore;
     persistenceApi_ = param.persistenceApi;
     masterAddress_ = param.masterAddress;
     placement_ = param.placement;
@@ -84,8 +83,8 @@ Status MetadataManagerHolder::CreateMetaManager(const std::string &workerId, Roc
     double scElapsed = 0;
     if (isOcEnabled_) {
         auto oc = std::make_shared<master::OCMetadataManager>(
-            objectRocksStore, etcdStore_, persistenceApi_, masterAddress_.ToString(), placement_,
-            membership_, localAddress_, exitRequested_, workerId, isNewNode_);
+            objectRocksStore, persistenceApi_, masterAddress_.ToString(), placement_,
+            membership_, localAddress_, exitRequested_, workerId);
         LOG(INFO) << "Start init OCMetadataManager for " << workerId;
         RETURN_IF_NOT_OK(oc->Init());
         ocElapsed = timer.ElapsedMilliSecond();
@@ -122,12 +121,6 @@ Status MetadataManagerHolder::GetScMetadataManager(std::shared_ptr<master::SCMet
     RETURN_RUNTIME_ERROR_IF_NULL(scMetadataManager_);
     scMetadataManager = scMetadataManager_;
     return Status::OK();
-}
-
-bool MetadataManagerHolder::HaveAsyncMetaRequest()
-{
-    std::shared_lock<SharedMutex> locker(mutex_);
-    return ocMetadataManager_ != nullptr && ocMetadataManager_->HaveAsyncMetaRequest();
 }
 
 Status MetadataManagerHolder::CleanupLocalMetadataForRejoin(const std::string &workerAddr)

@@ -139,6 +139,22 @@ class CliStartTest(unittest.TestCase):
             error=lambda *args, **kwargs: None,
         )
 
+    def test_retained_worker_backends_are_accepted(self):
+        for backend in ("etcd_address", "coordinator_address"):
+            with self.subTest(backend=backend):
+                self.command.validate_worker_backend_params({backend: "127.0.0.1:2379"})
+
+    def test_worker_backend_selection_remains_exclusive(self):
+        with self.assertRaisesRegex(ValueError, "Only one coordination backend"):
+            self.command.validate_worker_backend_params({
+                "etcd_address": "127.0.0.1:2379",
+                "coordinator_address": "127.0.0.1:31511",
+            })
+
+    def test_metastore_only_configuration_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "coordinator_address or etcd_address"):
+            self.command.validate_worker_backend_params({"metastore_address": "127.0.0.1:2379"})
+
     @staticmethod
     def worker_params():
         return {

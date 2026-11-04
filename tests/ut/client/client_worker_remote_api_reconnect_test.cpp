@@ -45,6 +45,7 @@
 
 #include "datasystem/client/object_cache/client_worker_api/client_worker_remote_api.h"
 #include "datasystem/common/ak_sk/signature.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rpc/rpc_server.h"
 #include "datasystem/common/rpc/brpc_auth.h"
 #include "datasystem/protos/share_memory.auth.pb.h"
@@ -539,6 +540,34 @@ protected:
 // With the worker process gone, Publish keeps the K_RPC_PEER_DEAD failure class
 // (the caller must still see peer-dead, not a budget-expiry rewrite) and stays
 // bounded by the request budget.
+TEST_F(ClientWorkerRemoteApiReconnectTest, HeartbeatProbeDoesNotAcceptUnavailableWorker)
+{
+    StopFakeWorker();
+    bool reboot = true;
+    bool removed = true;
+    bool scaleDown = true;
+    std::vector<int64_t> expired;
+    auto status = api_->SendHeartbeat(reboot, removed, 200, scaleDown, {}, expired);
+    EXPECT_FALSE(status.IsOk());
+    EXPECT_FALSE(reboot);
+    EXPECT_FALSE(removed);
+}
+
+TEST_F(ClientWorkerRemoteApiReconnectTest, HeartbeatProbesRestartAfterPooledChannelFailure)
+{
+    workerService_->workerStartId_ = "ut-start-id-2";
+    const std::string point = "ClientWorkerRemoteCommonApi.Heartbeat.peerDead";
+    ASSERT_TRUE(inject::Set(point, "1*call()").IsOk());
+    bool reboot = false;
+    bool removed = false;
+    bool scaleDown = false;
+    std::vector<int64_t> expired;
+    auto status = api_->SendHeartbeat(reboot, removed, kRequestTimeoutMs, scaleDown, {}, expired);
+    EXPECT_TRUE(inject::Clear(point).IsOk());
+    ASSERT_TRUE(status.IsOk()) << status.ToString();
+    EXPECT_TRUE(reboot);
+}
+
 TEST_F(ClientWorkerRemoteApiReconnectTest, PublishFailsFastWhenWorkerDown)
 {
     StopFakeWorker();

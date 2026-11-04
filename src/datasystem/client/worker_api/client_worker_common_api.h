@@ -46,6 +46,7 @@
 #include "datasystem/common/object_cache/ub_health_summary_codec.h"
 #include "datasystem/common/token/client_access_token.h"
 #include "datasystem/common/ak_sk/signature.h"
+#include "datasystem/common/rpc/rpc_options.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/util/compatibility_manager.h"
@@ -572,6 +573,8 @@ protected:
      * @brief Close expired fds.
      */
     void CloseExpiredFd();
+    Status SendHeartbeatRequest(const RpcOptions &opts, const HeartbeatReqPb &req, HeartbeatRspPb &rsp);
+
     void ProcessRemoteHeartbeatSummary(const HeartbeatRspPb &rsp, bool &workerReboot);
 
     /**

@@ -151,7 +151,6 @@ datasystem/service/DATASYSTEM_SYM/libabseil_dll.so.2407.0.0.sym
 datasystem/service/DATASYSTEM_SYM/libaddress_sorting.so.42.0.0.sym
 datasystem/service/DATASYSTEM_SYM/libcjson.so.1.7.17.sym
 datasystem/service/DATASYSTEM_SYM/libcommon_flags.so.sym
-datasystem/service/DATASYSTEM_SYM/libcommon_metastore_service.so.sym
 datasystem/service/DATASYSTEM_SYM/libcrypto.so.1.1.sym
 datasystem/service/DATASYSTEM_SYM/libcurl.so.4.8.0.sym
 datasystem/service/DATASYSTEM_SYM/libdatasystem_coordinator.so.sym
@@ -191,7 +190,6 @@ datasystem/service/lib/libcjson.so
 datasystem/service/lib/libcjson.so.1
 datasystem/service/lib/libcjson.so.1.7.17
 datasystem/service/lib/libcommon_flags.so
-datasystem/service/lib/libcommon_metastore_service.so
 datasystem/service/lib/libcrypto.so
 datasystem/service/lib/libcrypto.so.1.1
 datasystem/service/lib/libcurl.so

@@ -16,7 +16,7 @@
 
 /**
  * Description: Cluster admin client for removing stale per-address topology records by worker address.
- *              Backed by either EtcdStore (etcd/metastore) or CoordinatorServiceProxy (Coordinator).
+ *              Backed by either EtcdStore (ETCD) or CoordinatorServiceProxy (Coordinator).
  */
 #ifndef DATASYSTEM_CLIENT_CLUSTER_ADMIN_CLUSTER_ADMIN_CLIENT_H
 #define DATASYSTEM_CLIENT_CLUSTER_ADMIN_CLUSTER_ADMIN_CLIENT_H

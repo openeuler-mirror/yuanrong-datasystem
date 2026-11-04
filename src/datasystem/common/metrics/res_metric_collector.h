@@ -44,7 +44,6 @@ inline bool EnableSCService()
     return FLAGS_sc_regular_socket_num > 0 && FLAGS_sc_stream_socket_num > 0;
 }
 
-const std::string RES_ETCD_DEFAULT_USAGE = "0/0/0";
 const std::string RES_THREAD_POOL_DEFAULT_USAGE = "0/0/0/0/0";
 
 class ResMetricCollector {

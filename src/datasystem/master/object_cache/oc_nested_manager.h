@@ -160,6 +160,8 @@ public:
      */
     void RemoveRelationshipData(const std::string &parentObjectKey);
 
+    void RemoveMigratedRefCount(const std::string &key);
+
     /**
      * @brief RemoveNestIdsRef
      * @param nestedKeys[in] nested object keys

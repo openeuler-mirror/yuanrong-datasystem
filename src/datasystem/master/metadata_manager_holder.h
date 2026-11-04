@@ -24,7 +24,6 @@
 
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/cluster/routing/placement_facade.h"
-#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/kvstore/rocksdb/rocks_store.h"
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/log/log.h"
@@ -42,7 +41,6 @@ class WorkerWorkerOCServiceImpl;
 struct MetadataManagerHolderParam {
     std::string dbRootPath;
     std::string currWorkerId;
-    EtcdStore *etcdStore;
     std::shared_ptr<PersistenceApi> persistenceApi;
     HostPort masterAddress;
     const cluster::PlacementFacade *placement;
@@ -84,8 +82,6 @@ public:
 
     Status GetScMetadataManager(std::shared_ptr<master::SCMetadataManager> &scMetadataManager);
 
-    bool HaveAsyncMetaRequest();
-
     Status CleanupLocalMetadataForRejoin(const std::string &workerAddr);
 
     void Shutdown();
@@ -118,7 +114,6 @@ protected:
 
     std::string dbRootPath_;
     std::string currentWorkerId_;
-    EtcdStore *etcdStore_ = nullptr;
     std::shared_ptr<PersistenceApi> persistenceApi_;
     HostPort masterAddress_;
     const cluster::PlacementFacade *placement_{ nullptr };

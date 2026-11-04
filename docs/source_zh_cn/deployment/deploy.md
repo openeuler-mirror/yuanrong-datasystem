@@ -30,7 +30,7 @@ openYuanrong datasystem进程部署所需的系统环境依赖如下：
 |[CANN](#安装cann非必须)|8.5|运行异构相关特性的依赖库|
 |[Python](#安装python)|3.9-3.13|openYuanrong datasystem dscli的使用依赖Python环境|
 |[dscli](#安装dscli)|-|用于部署openYuanrong datasystem的命令行工具|
-|[ETCD](#安装并部署etcd)|3.5|使用 ETCD 集群管理方式时的依赖组件；使用 Coordinator 或 Metastore 时无需部署|
+|[ETCD](#安装并部署etcd)|3.5|使用 ETCD 集群管理方式时的依赖组件；使用 Coordinator 时无需部署|
 |[SSH互信配置](#ssh互信配置)|-|仅多机部署需要，配置SSH互信用于机器间互相访问|
 
 下面给出以上依赖的安装方法。
@@ -268,7 +268,7 @@ ssh username@hostname
 - 选择 ETCD：部署前先完成[安装并部署ETCD](#安装并部署etcd)，并确认 Worker 使用 `etcd_address`。
 - 选择 Coordinator：部署前先完成[安装并部署Coordinator](#安装并部署coordinator)，并确认 Worker 使用 `coordinator_address`。
 
-Worker 的 `coordinator_address`、`etcd_address`、`metastore_address` 必须且只能配置一个；请不要同时配置 ETCD 与 Coordinator。
+Worker 的 `coordinator_address` 和 `etcd_address` 必须且只能配置一个；请不要同时配置 ETCD 与 Coordinator。
 
 #### 单机部署
 

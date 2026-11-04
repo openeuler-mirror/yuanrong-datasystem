@@ -55,8 +55,6 @@ const std::array<ResourceFieldDesc, DESC_COUNT> DESC_TABLE = {
         { true, true, true, true, true }, '/', true, "master_worker_oc_service_thread_pool" },
     ResourceFieldDesc{ { "idle_num", "current_total_num", "max_thread_num", "waiting_task_num", "thread_pool_usage" },
         { true, true, true, true, true }, '/', true, "master_oc_service_thread_pool" },
-    ResourceFieldDesc{ { "current_size", "total_limit", "etcd_queue_usage" }, { true, true, true }, '/', true,
-        "etcd_queue" },
     ResourceFieldDesc{ { "success_rate" }, { true }, '/', true, "etcd_request_success_rate" },
     ResourceFieldDesc{ {}, {}, '/', false, "obs_request_success_rate" },
     ResourceFieldDesc{ { "idle_num", "current_total_num", "max_thread_num", "waiting_task_num", "thread_pool_usage" },

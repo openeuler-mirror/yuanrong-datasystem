@@ -199,7 +199,7 @@ Coordinator 是 ETCD 的替代协调后端。当配置了 `coordinatorAddress` �
 
 > **注意事项：**
 >
-> - Coordinator 与 ETCD（以及 metastore）互斥，同一时间只能选择一个协调后端。当 `coordinatorAddress` 非空时，worker 会优先使用 Coordinator，ETCD 相关配置将被忽略。
+> - Coordinator 与 ETCD互斥，同一时间只能选择一个协调后端。当 `coordinatorAddress` 非空时，worker 会优先使用 Coordinator，ETCD 相关配置将被忽略。
 > - Coordinator 服务需独立部署（可通过 dscli 启动，参考 [dscli](../deployment/dscli.md)），Kubernetes Helm Chart 当前不包含 Coordinator 服务的部署模板。
 > - 使用 Coordinator 时，建议将 [global.etcd.etcdAddress](#etcd相关配置) 留空，并保持 [global.etcd.enableEtcdAuth](#etcd相关配置) 为 `false`，以避免不必要的 ETCD 证书挂载。
 

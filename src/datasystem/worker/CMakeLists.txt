@@ -43,7 +43,6 @@ set(WORKER_DEPEND_LIBS
         common_etcd
         common_event_loop
         common_iam
-        common_metastore_service
         jemalloc_stats_bvar
         common_perf
         common_flags

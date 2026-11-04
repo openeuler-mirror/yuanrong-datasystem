@@ -25,6 +25,8 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include <tbb/concurrent_hash_map.h>
 
@@ -34,6 +36,7 @@
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/master/object_cache/oc_global_cache_delete_manager.h"
+#include "datasystem/master/object_cache/oc_notify_worker_manager.h"
 #include "datasystem/master/metadata_manager_holder.h"
 #include "datasystem/master/object_cache/master_master_oc_api.h"
 #include "datasystem/protos/master_object.pb.h"
@@ -149,15 +152,14 @@ private:
     Status CheckMigrationTargetState(const HostPort &destAddr, bool isNetworkRecovery, Status &connectionStatus,
                                      bool &committed, bool &preLeaving) const;
 
-    using AsyncL2MetaMap =
-        std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>>;
+    using WorkerOpSnapshots = std::unordered_map<std::string, std::vector<WorkerOpMigrationSnapshot>>;
 
     struct NoMetaMigrationKeys {
         std::unordered_set<std::string> allKeys;
         std::unordered_set<std::string> objectRefs;
         std::unordered_set<std::string> objectNestedRefs;
         GlobalDeleteInfoMap globalCacheDeletes;
-        AsyncL2MetaMap asyncL2Metas;
+        std::unordered_set<std::string> pendingWorkerOps;
     };
 
     /**
@@ -231,19 +233,17 @@ private:
         std::unique_ptr<MasterMasterOCApi> &api, MigrateMetadataReqPb &req,
         const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager, std::vector<std::string> &failedObjectKeys,
         const MigrateMetaInfo &info,
-        const std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &asyncMap = {});
+        const WorkerOpSnapshots &operationSnapshots = {});
 
     /**
      * @brief Restore one failed source metadata entry and record its key once.
      * @param[in] metadata Metadata whose target migration did not commit.
      * @param[in] ocMetadataManager Source metadata owner.
      * @param[out] failedObjectKeys Failed object keys.
-     * @param[in] asyncMap Async L2 metadata associated with the batch.
      */
     void RecordBatchMigrationFailure(
         const MetaForMigrationPb &metadata, const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager,
-        std::vector<std::string> &failedObjectKeys,
-        const std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &asyncMap);
+        std::vector<std::string> &failedObjectKeys);
 
     void ObserveMetadataRpcResult(const std::string &targetAddress, const Status &status);
 
@@ -254,14 +254,13 @@ private:
      * @param[in] ocMetadataManager Source metadata owner.
      * @param[out] failedObjectKeys Failed object keys.
      * @param[in] info Topology migration execution fence.
-     * @param[in] asyncMap Async L2 metadata associated with the batch.
      * @return Status of applying the target response.
      */
     Status ApplyBatchMigrationResponse(
         const MigrateMetadataReqPb &req, const MigrateMetadataRspPb &rsp,
         const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager,
         std::vector<std::string> &failedObjectKeys, const MigrateMetaInfo &info,
-        const std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &asyncMap);
+        const WorkerOpSnapshots &operationSnapshots = {});
 
     /**
      * @brief Try fill migrate nested object references.
@@ -294,18 +293,6 @@ private:
      */
     bool TryFillGlobalCacheDeleteMeta(const std::string &objectKey, const GlobalDeleteInfoMap &globalCacheDeletes,
                                       MetaForMigrationPb &meta);
-
-    /**
-     * @brief Try fill migrate nested object references.
-     * @param[in] objectKey Object key.
-     * @param[in] asyncL2Metas Async l2 elements.
-     * @param[out] meta Need fill meta.
-     * @return True if fill success.
-     */
-    bool TryFillAsyncL2Meta(
-        const std::string &objectKey,
-        const std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &asyncL2Metas,
-        MetaForMigrationPb &meta);
 
     /**
      * @brief FillRemoteClientIds

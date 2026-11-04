@@ -523,12 +523,12 @@ class Command(BaseCommand):
         """Validate the worker coordination backend selection."""
         configured_backends = [
             name
-            for name in ("coordinator_address", "etcd_address", "metastore_address")
+            for name in ("coordinator_address", "etcd_address")
             if params.get(name)
         ]
         if not configured_backends:
             raise ValueError(
-                "Missing required: coordinator_address, etcd_address, or metastore_address must be specified"
+                "Missing required: coordinator_address or etcd_address must be specified"
             )
         if len(configured_backends) > 1:
             raise ValueError("Only one coordination backend can be specified")

@@ -44,7 +44,7 @@
     - `perf_service` when enabled
   - `worker_main.cpp` initializes the singleton worker, runs a signal-driven loop, performs periodic perf ticking and config monitoring, then runs `PreShutDown` and `ShutDown`.
   - `data_worker.cpp` owns top-level startup/shutdown orchestration, log initialization, THP handling, and RocksDB pre-init.
-  - Parameterized `DataWorker::InitAndRun` requires a non-null `ICoordinatorDiscovery`; that overload always selects the Coordinator backend and passes the injected Discovery to `WorkerOCServer`, while paired `onStart`/`onStop` callbacks remain optional. Command-line startup instead uses `coordinator_address` to select Coordinator versus ETCD/metastore mode and constructs a static Discovery only for Coordinator mode. Coordinator proxy initialization calls its provider once, validates and caches only the first returned address, and keeps all later RPCs fixed to it. Provider updates require rebuilding the runtime object or restarting the Worker.
+  - Parameterized `DataWorker::InitAndRun` requires a non-null `ICoordinatorDiscovery`; that overload always selects the Coordinator backend and passes the injected Discovery to `WorkerOCServer`, while paired `onStart`/`onStop` callbacks remain optional. Command-line startup instead uses `coordinator_address` to select Coordinator versus ETCD mode and constructs a static Discovery only for Coordinator mode. Coordinator proxy initialization calls its provider once, validates and caches only the first returned address, and keeps all later RPCs fixed to it. Provider updates require rebuilding the runtime object or restarting the Worker.
   - `worker_service_impl.cpp` implements common worker service behavior such as client registration, client disconnect, shared-memory FD transfer, version checks, and auth-related request handling.
   - `authenticate.*` supplies the original method-policy table and cold-built callbacks for generic RPC entry
     authentication. ON clears untrusted PB access_key/signature, verifies the captured MAC, then publishes validated
@@ -115,7 +115,7 @@
   - topology Snapshot handling retains FAILED addresses for RPC-stub cleanup. When the same address later appears as
     ACTIVE, `WorkerOCServer` publishes the existing `RemoveDeadWorkerEvent` so the local metadata service removes the
     stale fault-worker entry.
-  - async Worker notification cleanup commits RocksDB/ETCD removal or update before applying the matching in-memory
+  - async Worker notification cleanup commits RocksDB removal or update before applying the matching in-memory
     epoch mutation. A persistence failure keeps the in-memory entry so the caller can retry without losing recovery state.
   - topology member ids remain binary, topology-internal identities. Worker business UUIDs and public object-location
     ids remain printable and must not expose the topology id bytes.
@@ -179,7 +179,7 @@
     `Logging::Start()` and before `WorkerOCServer` construction
   - pre-initialize RocksDB storage
   - set up runtime services and signal handling
-  - `DataWorker` selects the coordination backend before constructing `WorkerOCServer`: parameterized startup always passes its required injected Discovery and therefore selects Coordinator mode, while command-line startup wraps a non-empty `coordinator_address` in internal `StaticCoordinatorDiscovery` or passes null for ETCD/metastore.
+  - `DataWorker` selects the coordination backend before constructing `WorkerOCServer`: parameterized startup always passes its required injected Discovery and therefore selects Coordinator mode, while command-line startup wraps a non-empty `coordinator_address` in internal `StaticCoordinatorDiscovery` or passes null for ETCD.
   - Coordinator routing preserves the last application-level status from a valid Coordinator response when the shared
     routing budget or discovery refresh later expires. Transport/deadline status remains authoritative only when no
     Coordinator response was observed, so a recovering control plane is not misreported as network unreachability.
@@ -203,7 +203,7 @@
     setting is exposed by `cli/deploy/conf/worker_config.json`, the DaemonSet Helm value
     `global.rpc.brpc.eventDispatcherNum`, and the Deployment image's `worker.config`; changing
     it requires a worker restart because brpc consumes it during process-wide one-shot init.
-  - `WorkerOCServer::Init()` constructs and explicitly initializes a discovery-backed Coordinator proxy from the injected provider, or selects ETCD/metastore, then configures `TopologyEngine::Builder`. Coordinator proxy `Init` requires a non-empty provider result, caches only `front()`, and ignores the remaining candidates. All subsequent RPCs use that cached address once. Changing the provider output or selected endpoint requires rebuilding the runtime object or restarting the Worker, while multi-node Coordinator availability remains the responsibility of the Coordinator Raft layer. The Engine creates and owns both role backends, the hash algorithm, Worker runtime, Controller runtime, Janitor, and optional recovery reporter. Worker code does not assemble or retain those concrete components. Callback targets are initialized before
+  - `WorkerOCServer::Init()` constructs and explicitly initializes a discovery-backed Coordinator proxy from the injected provider, or selects ETCD, then configures `TopologyEngine::Builder`. Coordinator proxy `Init` requires a non-empty provider result, caches only `front()`, and ignores the remaining candidates. All subsequent RPCs use that cached address once. Changing the provider output or selected endpoint requires rebuilding the runtime object or restarting the Worker, while multi-node Coordinator availability remains the responsibility of the Coordinator Raft layer. The Engine creates and owns both role backends, the hash algorithm, Worker runtime, Controller runtime, Janitor, and optional recovery reporter. Worker code does not assemble or retain those concrete components. Callback targets are initialized before
     `TopologyEngine::Start()`, so callbacks cannot run against partially constructed services. A missing initial topology
     keeps Engine `NOT_READY` while the co-located Controller establishes authority. The Worker publishes READY only after
     the first membership lease succeeds. Object-cache health remains closed until both startup reconciliation and
@@ -483,8 +483,8 @@
 ## Cluster And Metadata Notes
 
 - Verified:
-  - current docs and code support ETCD, Coordinator transport, and Metastore-based metadata paths.
-  - `worker_oc_server.cpp` enforces that at least one of `etcd_address` or `metastore_address` is set.
+  - current docs and code support ETCD and Coordinator cluster coordination, with local RocksDB object metadata.
+  - `WorkerOCServer` uses injected Coordinator discovery, or requires `etcd_address` in ETCD mode.
   - `WorkerOCServer` uses the constructor-selected Discovery pointer for proxy creation, Controller Store construction, watch-service construction, and `TopologyEngine` backend selection; these branches must not independently re-read `coordinator_address`.
   - `WorkerOCServer` constructs `TopologyEngine` only through its nested Builder. ETCD supplies existing role Store
     resources and Coordinator supplies a Proxy plus bind/drain ingress; Engine internally creates the role backends,
@@ -517,7 +517,7 @@
 - Important invariants:
   - worker runtime expects valid worker address configuration before serving traffic;
   - `PreShutDown` is a meaningful phase distinct from `ShutDown`;
-  - metadata backend must be ETCD or Metastore, not neither.
+  - coordination uses injected Coordinator discovery or a configured external ETCD backend.
   - changes that must finish before Kubernetes readiness should run before `ReadinessProbe()` writes the ready-check
     file; background work that only optimizes later traffic should start after core services are registered and avoid
     delaying `Worker::InitWorker()` completion.
@@ -604,3 +604,29 @@ Coordinator WORKER adds a membership-prefix watch. `TopologyEngine::EnqueueCoord
   tenant-request bypass; direct peer/master checks still follow the configured key map. WorkerOCServer
   owns wrappers/adapters and the capture factory until RPC Shutdown drains handlers, including partial registration failure. Cache creators are fixed immediately
   after InitAkSk, before H2D/URMA/topology can initialize the singleton; Coordinator creators remain native.
+
+## Object Metadata Persistence Boundary
+
+- `ObjectMetaStore` persists metadata and auxiliary state only through RocksDB. `rocksdb_write_mode=none` disables
+  local object metadata persistence; the independent L2 metadata requirement flag retains its business meaning.
+- Startup directly loads local tables; RocksDB access errors propagate. Legacy health-marker-based ETCD fallback is
+  removed, so absence of that old marker does not cause an otherwise readable local database to be rejected.
+- Worker Get queries the metadata owner and retains existing missing/dead-owner status behavior without ETCD object
+  fallback. Worker TCP migration preserves locations, references, notifications and deletion records. The receiver
+  persists auxiliary records before reporting migration success; the source retains acknowledgement ordering.
+- ETCD write queues, queue metrics and migration replay of ETCD pending elements are removed. RocksDB, object-data
+  persistence, slot recovery coordination, and business task completion remain separate lifecycle responsibilities.
+- Coordination startup selects an injected Coordinator discovery or external ETCD. Metastore service and parameters
+  are removed; CLI and Helm select only retained backends.
+
+- Pending Worker operations participate in TCP migration even without a main object metadata record. Batch-local
+  snapshots carry existing operation epochs; target persistence precedes acknowledgement, and source cleanup only
+  removes the acknowledged epoch. An acknowledged business record is finalized before task cleanup. A changed task epoch returns `K_TRY_AGAIN`;
+  retries retain only the remaining task state, without replaying the acknowledged nested references. Conflicts are
+  bounded to three attempts before returning an error to the migration owner.
+- `MigrateMetadataRspPb.supports_task_only_worker_ops` is an additive capability acknowledgement. A new source keeps
+  task-only pending operations and stops with `K_NOT_SUPPORTED` when an empty preflight request finds an old target,
+  before sending reference mutations. Upgrade the target first or allow pending tasks to drain.
+
+- Heartbeat recovery probes reuse the client RPC authentication mode and owned credential provider through
+  `CreateRpcChannel`; the stable per-Worker connection group isolates stale pooled sockets without bypassing signing.

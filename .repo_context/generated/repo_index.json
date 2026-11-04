@@ -1,6 +1,6 @@
 {
   "repo_root": ".",
-  "generated_at_utc": "2026-11-03T06:51:34+00:00",
+  "generated_at_utc": "2026-11-03T08:46:45+00:00",
   "root_files": [
     "README.md",
     "build.sh",
@@ -468,6 +468,7 @@
         "  - test_hetero_client_multi_buffer.py",
         "  - test_kv_cache_client.py",
         "  - test_oc_client.py",
+        "  - test_resource_report_schema.py",
         "  - test_sc_client.py",
         "  - test_service_discovery_api.py",
         "- scripts/",
@@ -775,7 +776,6 @@
         "- images/",
         "  - apple-touch-icon.png",
         "  - cluster-management-etcd.png",
-        "  - cluster-management-metastore.png",
         "  - deployment.png",
         "  - deployment_en.png",
         "  - favicon.png",

@@ -45,7 +45,7 @@ dscli 系统环境依赖如下：
 |-------|----|----|
 | openEuler | 22.03 | 运行openYuanrong datasystem的操作系统 |
 | [Python](#安装python) | 3.9-3.11 | openYuanrong datasystem dscli的使用依赖Python环境 |
-| [ETCD](#安装并部署etcd) | 3.5 | 使用 ETCD 集群管理方式时的依赖组件；使用 Coordinator 或 Metastore 时无需部署 |
+| [ETCD](#安装并部署etcd) | 3.5 | 使用 ETCD 集群管理方式时的依赖组件；使用 Coordinator 时无需部署 |
 | [SSH互信配置](#ssh互信配置) |- | 仅多机部署需要，配置SSH互信用于机器间互相访问 |
 
 下面给出以上依赖的安装方法。
@@ -273,7 +273,7 @@ openYuanrong datasystem 单机部署依赖 [dscli start](#dscli-start) 命令。
     # [INFO] Configuration generation completed successfully
     ```
 
-    修改 `worker_config.json`，配置 ETCD 地址，并确保 `coordinator_address` 和 `metastore_address` 为空：
+    修改 `worker_config.json`，配置 ETCD 地址，并确保 `coordinator_address` 为空：
 
     ```json
     {
@@ -369,7 +369,7 @@ openYuanrong datasystem 单机卸载依赖 [dscli stop](#dscli-stop) 命令。
 
         `cluster_config.json` 用于配置 SSH 互信和 Worker 部署节点，更多说明参见[集群配置项](#集群配置项)。
 
-    3. 编辑 `worker_config.json`，配置所有 Worker 使用的 ETCD 地址，并确保 `coordinator_address` 和 `metastore_address` 为空：
+    3. 编辑 `worker_config.json`，配置所有 Worker 使用的 ETCD 地址，并确保 `coordinator_address` 为空：
 
         ```json
         {
@@ -624,7 +624,7 @@ Coordinator 启动后，可以单独启动 Worker，也可以使用一条命令�
 
 - 通过配置项部署 Worker：
 
-    如果尚未生成配置模板，先执行 `dscli generate_config -o ./`。修改 `worker_config.json`，配置 Coordinator 地址，并确保 `etcd_address` 和 `metastore_address` 为空：
+    如果尚未生成配置模板，先执行 `dscli generate_config -o ./`。修改 `worker_config.json`，配置 Coordinator 地址，并确保 `etcd_address` 为空：
 
     ```json
     {
@@ -709,7 +709,7 @@ Coordinator 启动后，可以单独启动 Worker，也可以使用一条命令�
         }
         ```
 
-    3. 编辑 `worker_config.json`，配置所有 Worker 使用的 Coordinator 地址，并确保 `etcd_address` 和 `metastore_address` 为空：
+    3. 编辑 `worker_config.json`，配置所有 Worker 使用的 Coordinator 地址，并确保 `etcd_address` 为空：
 
         ```json
         {
@@ -1048,7 +1048,6 @@ dscli stop --worker_address 127.0.0.1:31501 --timeout 10
 |--localalloc|-l | 将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点 |
 |--enable_ums| 无 | 启用ums后，datasystem worker之间的rpc消息将通过 ub 传输 |
 |--jemalloc_prof_conf &lt;CONF&gt;|无|将 jemalloc profiling 配置转发到每个远端 Worker；每个节点都必须使用 `build.sh -x on` 构建的安装包|
-|--metastore_head_node <NODE_IP> | 无 | 指定<NODE_IP>节点的worker启动Metastore取代ETCD |
 
 
 > **绑核配置项注意事项**：
@@ -1407,7 +1406,7 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 按部署规划重新启动。
 
 `worker_config.json` 包含 datasystem_worker 的命令行参数相关配置项。启动 Worker 时，必须在
-`coordinator_address`、`etcd_address`、`metastore_address` 中配置且仅配置一个集群管理后端。
+`coordinator_address` 和 `etcd_address` 中配置且仅配置一个集群管理后端。
 
 > **注意事项：**
 >
@@ -1470,8 +1469,6 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 | etcd_passphrase_path | string | `""` | 否 | 密码短语的值，需加密并进行Base64转码 |
 | etcd_target_name_override | string | `""` | 否 | 设置用于SSL主机名校验的ETCD目标名称覆盖。该配置值应与TLS证书的Subject Alternate Names（主题备用名称）中的DNS内容保持一致 |
 | host_id_env_name | string | `""` | 否 | 用于读取当前节点 `host_id` 的环境变量名。配置后，worker 在注册到 ETCD 时会同时上报 `host_id`，供客户端按同节点策略优先选择 worker |
-| start_metastore_service | bool | `false` | 否 | 是否启用 Metastore 代替ETCD，若需要启用，仅需主节点worker设为`true`，从节点worker设为`false` |
-| metastore_address | string | `""` | 否 | 主节点worker的Metastore Service访问地址，与`start_metastore_service`搭配一起使用，主从节点均需填写，格式为：ip:port, 例如：127.0.0.1:23456 |
 
 #### Spill相关配置
 
