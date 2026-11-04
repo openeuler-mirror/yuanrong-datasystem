@@ -2494,23 +2494,18 @@ void WorkerOCServer::RegisteringWorkerCallbackFunc()
 void WorkerOCServer::RegisteringWorkerCommonCallbackFunc()
 {
     auto &instance = ResMetricCollector::Instance();
+    const bool enableSpillMetrics = object_cache::WorkerOcSpill::Instance()->IsEnabled();
     // The usage of spill
     instance.RegisterCollectHandler(ResMetricName::SPILL_HARD_DISK,
-                                    []() { return object_cache::WorkerOcSpill::Instance()->GetSpillUsage(); });
+                                    []() { return object_cache::WorkerOcSpill::Instance()->GetSpillUsage(); },
+                                    enableSpillMetrics);
     // Spill IO statistics (cumulative + rolling one-hour delta)
     instance.RegisterCollectHandler(ResMetricName::SPILL_IO_STATS,
-                                    []() { return object_cache::WorkerOcSpill::Instance()->GetSpillIoStats(); });
+                                    []() { return object_cache::WorkerOcSpill::Instance()->GetSpillIoStats(); },
+                                    enableSpillMetrics);
     // The usage of share memory
     instance.RegisterCollectHandler(ResMetricName::SHARED_MEMORY,
                                     []() { return memory::Allocator::Instance()->GetMemoryStatistics(); });
-    // The usage of WorkerOCService
-    instance.RegisterCollectHandler(ResMetricName::WORKER_OC_SERVICE_THREAD_POOL, [this]() {
-        return GetRpcServicesUsage("WorkerOCService").ToString(FLAGS_log_monitor_interval_ms);
-    });
-    // The usage of WorkerWorkerOCService
-    instance.RegisterCollectHandler(ResMetricName::WORKER_WORKER_OC_SERVICE_THREAD_POOL, [this]() {
-        return GetRpcServicesUsage("WorkerWorkerOCService").ToString(FLAGS_log_monitor_interval_ms);
-    });
     // The total number of clients
     instance.RegisterCollectHandler(ResMetricName::ACTIVE_CLIENT_COUNT,
                                     [] { return std::to_string(ClientManager::Instance().GetClientCount()); });
@@ -2544,9 +2539,10 @@ void WorkerOCServer::RegisteringObjectCacheCallbackFunc()
     });
     instance.RegisterCollectHandler(ResMetricName::OC_HIT_NUM,
                                     [this] { return objCacheClientWorkerSvc_->GetHitInfo(); });
-    instance.RegisterCollectHandler(ResMetricName::OBJECT_COPY_WATERMARK, [] {
-        return object_cache::NodeSelector::Instance().GetObjectCopyWatermark().ToMetricsString();
-    });
+    instance.RegisterCollectHandler(
+        ResMetricName::OBJECT_COPY_WATERMARK,
+        [] { return object_cache::NodeSelector::Instance().GetObjectCopyWatermark().ToMetricsString(); },
+        FLAGS_eviction_strategy != "clock");
 }
 
 void WorkerOCServer::RegisteringStreamCacheCallbackFunc()
@@ -2554,16 +2550,6 @@ void WorkerOCServer::RegisteringStreamCacheCallbackFunc()
     auto &instance = ResMetricCollector::Instance();
     instance.RegisterCollectHandler(ResMetricName::STREAM_COUNT,
                                     [this]() { return streamCacheClientWorkerSvc_->GetTotalStreamCount(); });
-
-    // The usage of WorkerSCService
-    instance.RegisterCollectHandler(ResMetricName::WORKER_SC_SERVICE_THREAD_POOL, [this]() {
-        return GetRpcServicesUsage("ClientWorkerSCService").ToString(FLAGS_log_monitor_interval_ms);
-    });
-
-    // The usage of WorkerWorkerSCService
-    instance.RegisterCollectHandler(ResMetricName::WORKER_WORKER_SC_SERVICE_THREAD_POOL, [this]() {
-        return GetRpcServicesUsage("WorkerWorkerSCService").ToString(FLAGS_log_monitor_interval_ms);
-    });
 
     instance.RegisterCollectHandler(ResMetricName::STREAM_REMOTE_SEND_SUCCESS_RATE,
                                     [this]() { return streamCacheClientWorkerSvc_->GetSCRemoteSendSuccessRate(); });
@@ -2576,38 +2562,19 @@ void WorkerOCServer::RegisteringStreamCacheCallbackFunc()
 void WorkerOCServer::RegisteringMasterCallbackFunc()
 {
     auto &instance = ResMetricCollector::Instance();
-    // The usage of MasterWorkerOCService
-    instance.RegisterCollectHandler(ResMetricName::MASTER_WORKER_OC_SERVICE_THREAD_POOL, [this]() {
-        return GetRpcServicesUsage("MasterWorkerOCService").ToString(FLAGS_log_monitor_interval_ms);
-    });
-    // The usage of MasterOcService
-    instance.RegisterCollectHandler(ResMetricName::MASTER_OC_SERVICE_THREAD_POOL, [this]() {
-        return GetRpcServicesUsage("MasterOCService").ToString(FLAGS_log_monitor_interval_ms);
-    });
-
     instance.RegisterCollectHandler(ResMetricName::MASTER_ASYNC_TASKS_THREAD_POOL, [this]() {
         auto usage = objCacheMasterSvc_->GetMasterAsyncPoolUsage(FLAGS_log_monitor_interval_ms);
         return usage.empty() ? RES_THREAD_POOL_DEFAULT_USAGE : usage;
     });
-
-    if (EnableSCService()) {
-        // The usage of MasterWorkerOCService
-        instance.RegisterCollectHandler(ResMetricName::MASTER_WORKER_SC_SERVICE_THREAD_POOL, [this]() {
-            return GetRpcServicesUsage("MasterWorkerSCService").ToString(FLAGS_log_monitor_interval_ms);
-        });
-        // The usage of MasterOcService
-        instance.RegisterCollectHandler(ResMetricName::MASTER_SC_SERVICE_THREAD_POOL, [this]() {
-            return GetRpcServicesUsage("MasterSCService").ToString(FLAGS_log_monitor_interval_ms);
-        });
-    }
 }
 
 void WorkerOCServer::RegisteringThirdComponentCallbackFunc()
 {
     auto &instance = ResMetricCollector::Instance();
-    instance.RegisterCollectHandler(ResMetricName::ETCD_REQUEST_SUCCESS_RATE, [this]() {
-        return etcdStore_ == nullptr ? "-1" : etcdStore_->GetEtcdRequestSuccessRate();
-    });
+    instance.RegisterCollectHandler(
+        ResMetricName::ETCD_REQUEST_SUCCESS_RATE,
+        [this]() { return etcdStore_ == nullptr ? "-1" : etcdStore_->GetEtcdRequestSuccessRate(); },
+        !FLAGS_etcd_address.empty());
     if (TESTFLAG(GetCurrentStorageType(), L2StorageType::OBS)) {
         // The success rate of obs request
         instance.RegisterCollectHandler(ResMetricName::OBS_REQUEST_SUCCESS_RATE,

@@ -4,35 +4,14 @@
 Parses KVCache worker resource.log files, computes per-time-interval aggregated
 resource metrics across hosts, and generates a self-contained HTML report.
 
-Resource.log Format (pipe-separated, 7 header fields + 21 metric groups):
-  $1  timestamp                    ISO 8601 with microseconds
-  $2  log_level                    I/W/E
-  $3  source                       res_metric_collector.cpp:line
-  $4  worker_id                    e.g. searchgenrecallkvworker-24-00001
-  $5  pid:tid
-  $6  trace_id                     UUID
-  $7  record_type                  model_kvcache_record
-  --- metric fields (enum order, res_metrics.def) ---
-  $8  SHARED_MEMORY                memoryUsage/physicalUsage/totalLimit/shareMemRatio/scMemUsage/scMemLimit
-  $9  SPILL_HARD_DISK              spaceUsage/physicalSpaceUsage/totalLimit/workerSpillHdUsage
-  $10 ACTIVE_CLIENT_COUNT          integer
-  $11 OBJECT_COUNT                 integer
-  $12 OBJECT_SIZE                  bytes
-  $13 WORKER_OC_SERVICE_THREAD     maxRunning/total/tasksDelta/maxWaiting/usage
-  $14 WORKER_WORKER_OC_THREAD      maxRunning/total/tasksDelta/maxWaiting/usage
-  $15 MASTER_WORKER_OC_THREAD      maxRunning/total/tasksDelta/maxWaiting/usage
-  $16 MASTER_OC_SERVICE_THREAD     maxRunning/total/tasksDelta/maxWaiting/usage
-  $17 ETCD_REQUEST_SUCCESS_RATE    float 0-1
-  $18 OBS_REQUEST_SUCCESS_RATE     float 0-1
-  $19 MASTER_ASYNC_TASKS_THREAD    maxRunning/total/tasksDelta/maxWaiting/usage
-  $20 STREAM_COUNT                 integer
-  $21 WORKER_SC_SERVICE_THREAD     maxRunning/total/tasksDelta/maxWaiting/usage
-  $22 WORKER_WORKER_SC_THREAD      maxRunning/total/tasksDelta/maxWaiting/usage
-  $23 MASTER_WORKER_SC_THREAD      maxRunning/total/tasksDelta/maxWaiting/usage
-  $24 MASTER_SC_SERVICE_THREAD     maxRunning/total/tasksDelta/maxWaiting/usage
-  $25 STREAM_REMOTE_SEND_RATE      float 0-1
-  $26 SC_LOCAL_CACHE               usage/reserved/limit/usageRate
-  $27 OC_HIT_NUM                   memHit/diskHit/l2Hit/remoteHit/miss
+Resource.log Format (pipe-separated, 7 prefix fields followed by enabled metric groups):
+  Prefix: timestamp | level | source | worker_id | pid:tid | trace_id | record_type
+  usage/physical/limit/ratio/scUsage/scLimit | ...
+  Metric values follow the enum order in res_metrics.def without field names.
+  The master async pool reports idle/current/max/waiting/usage.
+
+Disabled groups are absent; the parser identifies the Worker layout by sub-field counts.
+Historical fixed-column logs are also supported for the remaining resource metrics.
 
 Usage:
   # Basic usage
@@ -67,12 +46,12 @@ Arguments:
   --interval          Time bin interval in milliseconds (default: 60000). 1000=1s, 60000=1min, 3600000=1h
   --open              Open report in browser after generation
 
-HTML Report Sections (10 charts + 1 detail table):
+HTML Report Sections:
   1. Memory Usage Trend        - Cluster memory trend (Avg/Max/Limit)
   2. Memory Usage Ratio        - Per-hour usage ratio + per-host distribution
   3. Object Cache              - Object count and size trends
   4. Cache Hit Rate            - Hit rate trend + hit/miss stacked distribution
-  5. Thread Pool Utilization   - 5 thread pools (Peak Concurrency/Total/Tasks/Queue/Utilization)
+  5. Thread Pool Utilization   - Master async pool (Idle/Total/Max/Waiting/Utilization)
   7. Active Clients            - Connected client count trend
   8. ETCD Success Rate         - ETCD request success rate
   9. Per-Host Memory           - Interactive per-host memory trend
@@ -81,7 +60,7 @@ HTML Report Sections (10 charts + 1 detail table):
 Notes:
   - Requires internet access to load ECharts from CDN (jsdelivr.net)
   - OC_HIT_NUM is a cumulative counter; the script computes per-bin deltas
-  - Thread pool charts show interval-based metrics: Peak Concurrency, Tasks/Interval, Peak Queue, Utilization
+  - Async pool utilization is task-work time divided by thread count and sampling duration, not CPU usage.
 """
 
 import argparse
@@ -95,6 +74,7 @@ import sys
 import textwrap
 from collections import defaultdict
 from datetime import datetime
+from itertools import product
 
 _RE_IP = re.compile(r"\d+\.\d+\.\d+\.\d+")
 
@@ -106,9 +86,52 @@ _GAUGE_KEYS = [
     "sc_cache_usage", "sc_cache_rate",
 ]
 
-# Thread pool prefixes and their sub-fields
-_TP_PREFIXES = ["worker_oc", "worker_worker_oc", "master_worker_oc", "master_oc", "async"]
-_TP_SUB_FIELDS = ["maxRunning", "total", "tasksDelta", "maxWaiting", "usage"]
+_TP_SUB_FIELDS = ["idle", "total", "max", "waiting", "usage"]
+_RESOURCE_LOG_PREFIX_FIELD_COUNT = 7
+_LEGACY_METRIC_FIELD_COUNTS = (20, 21, 24, 25)
+
+_RESOURCE_FIELDS = {
+    "shared_memory": ("mem_usage", "mem_physical", "mem_total_limit", "mem_ratio", "sc_mem_usage", "sc_mem_limit"),
+    "spill_hard_disk": ("spill_space", "spill_physical", "spill_limit"),
+    "active_client_count": ("active_clients",),
+    "object_count": ("object_count",),
+    "object_size": ("object_size",),
+    "etcd_request_success_rate": ("etcd_success_rate",),
+    "obs_request_success_rate": ("obs_success_rate",),
+    "master_async_tasks_thread_pool": tuple(f"tp_async_{field}" for field in _TP_SUB_FIELDS),
+    "stream_count": ("stream_count",),
+    "sc_local_cache": ("sc_cache_usage", "sc_cache_reserved", "sc_cache_limit", "sc_cache_rate"),
+    "oc_hit_num": ("oc_mem_hit", "oc_disk_hit", "oc_l2_hit", "oc_remote_hit", "oc_miss"),
+}
+
+_LEGACY_RESOURCE_COLUMNS = {
+    7: "shared_memory", 8: "spill_hard_disk", 9: "active_client_count", 10: "object_count", 11: "object_size",
+    16: "etcd_request_success_rate", 17: "obs_request_success_rate",
+    18: "master_async_tasks_thread_pool", 19: "stream_count", 25: "sc_local_cache", 26: "oc_hit_num",
+}
+
+
+def _build_resource_layouts():
+    layouts = {}
+    for spill, etcd, obs, stream, watermark in product((False, True), repeat=5):
+        groups = [
+            ("shared_memory", 6),
+            *([("spill_hard_disk", 4)] if spill else []),
+            ("active_client_count", 1), ("object_count", 1), ("object_size", 1),
+            *([("etcd_request_success_rate", 1)] if etcd else []),
+            *([("obs_request_success_rate", 1)] if obs else []),
+            ("master_async_tasks_thread_pool", 5),
+            *([("stream_count", 1), ("stream_remote_send_success_rate", 1), ("sc_local_cache", 4)]
+              if stream else []),
+            ("oc_hit_num", 5), ("brpc_stream_leak_count", 1), ("deferred_cleanup_queue_size", 1),
+            *([("spill_io_stats", 14)] if spill else []),
+            *([("object_copy_watermark", 11)] if watermark else []),
+        ]
+        layouts[tuple(width for _, width in groups)] = tuple(name for name, _ in groups)
+    return layouts
+
+
+_RESOURCE_LAYOUTS = _build_resource_layouts()
 
 # Cumulative counter keys (OC_HIT_NUM)
 _OC_HIT_KEYS = ["oc_mem_hit", "oc_disk_hit", "oc_l2_hit", "oc_remote_hit", "oc_miss"]
@@ -159,21 +182,35 @@ def _fmt_pct(v):
     return f"{v * 100:.1f}%"
 
 
-def _parse_thread_pools(parts):
-    """Parse all thread pool fields, return dict of tp_{name}_{field} = value."""
-    m = {}
-    pool_defs = [
-        ("worker_oc", 12), ("worker_worker_oc", 13),
-        ("master_worker_oc", 14), ("master_oc", 15),
-        ("async", 18),  # MASTER_ASYNC_TASKS
-    ]
-    for name, idx in pool_defs:
-        raw = parts[idx] if len(parts) > idx and parts[idx] else ""
-        sub = _parse_sub(raw)
-        if len(sub) >= 5:
-            for i, field in enumerate(_TP_SUB_FIELDS):
-                m[f"tp_{name}_{field}"] = sub[i]
-    return m
+def _parse_metric_groups(parts):
+    values = parts[_RESOURCE_LOG_PREFIX_FIELD_COUNT:]
+    if values and not values[-1]:
+        values = values[:-1]
+    if len(values) in _LEGACY_METRIC_FIELD_COUNTS:
+        queue_offset = int(len(values) in (21, 25))
+        return {name: parts[index + (queue_offset if index >= 16 else 0)]
+                for index, name in _LEGACY_RESOURCE_COLUMNS.items()}
+    widths = tuple(len(value.split("/")) for value in values)
+    names = _RESOURCE_LAYOUTS.get(widths)
+    if names is None:
+        return {}
+    for value, width in zip(values, widths):
+        if width > 1:
+            try:
+                if not all(math.isfinite(float(field)) for field in value.split("/")):
+                    return {}
+            except ValueError:
+                return {}
+    return dict(zip(names, values))
+
+
+def _parse_resource_metrics(parts):
+    metrics = {}
+    for group, raw in _parse_metric_groups(parts).items():
+        fields = _RESOURCE_FIELDS.get(group, ())
+        values = _parse_sub(raw)
+        metrics.update(zip(fields, values))
+    return metrics
 
 
 def parse_resource_logs(log_files_by_host, since=None, until=None):
@@ -199,7 +236,7 @@ def parse_resource_logs(log_files_by_host, since=None, until=None):
                     if not line:
                         continue
                     parts = [p.strip() for p in line.split("|")]
-                    if len(parts) < 12:
+                    if len(parts) <= _RESOURCE_LOG_PREFIX_FIELD_COUNT:
                         continue
 
                     try:
@@ -212,56 +249,10 @@ def parse_resource_logs(log_files_by_host, since=None, until=None):
                     if until_ts and ts >= until_ts:
                         continue
 
-                    if len(parts) > 16 and "/" in parts[16]:
-                        parts.pop(16)  # Legacy logs contained an object ETCD write queue column.
+                    m = _parse_resource_metrics(parts)
+                    if not m:
+                        continue
                     parsed_lines += 1
-                    m = {}
-
-                    # $8 SHARED_MEMORY (6 sub-fields)
-                    mem = _parse_sub(parts[7]) if len(parts) > 7 else []
-                    m["mem_usage"] = mem[0] if len(mem) > 0 else 0
-                    m["mem_physical"] = mem[1] if len(mem) > 1 else 0
-                    m["mem_total_limit"] = mem[2] if len(mem) > 2 else 0
-                    m["mem_ratio"] = mem[3] if len(mem) > 3 else 0
-                    m["sc_mem_usage"] = mem[4] if len(mem) > 4 else 0
-                    m["sc_mem_limit"] = mem[5] if len(mem) > 5 else 0
-
-                    # $9 SPILL_HARD_DISK (4)
-                    spill = _parse_sub(parts[8]) if len(parts) > 8 else []
-                    m["spill_space"] = spill[0] if len(spill) > 0 else 0
-                    m["spill_physical"] = spill[1] if len(spill) > 1 else 0
-                    m["spill_limit"] = spill[2] if len(spill) > 2 else 0
-
-                    # $10-$12 simple values
-                    m["active_clients"] = float(parts[9]) if len(parts) > 9 and parts[9] else 0
-                    m["object_count"] = float(parts[10]) if len(parts) > 10 and parts[10] else 0
-                    m["object_size"] = float(parts[11]) if len(parts) > 11 and parts[11] else 0
-
-                    # Thread pools: $13-$16, $19 (async)
-                    m.update(_parse_thread_pools(parts))
-
-                    # $17-$18 success rates (-1 = unavailable)
-                    m["etcd_success_rate"] = float(parts[16]) if len(parts) > 16 and parts[16] else -1
-                    m["obs_success_rate"] = float(parts[17]) if len(parts) > 17 and parts[17] else -1
-
-                    # $20 STREAM_COUNT
-                    m["stream_count"] = float(parts[19]) if len(parts) > 19 and parts[19] else 0
-
-                    # $26 SC_LOCAL_CACHE
-                    sc = _parse_sub(parts[25]) if len(parts) > 25 else []
-                    m["sc_cache_usage"] = sc[0] if len(sc) > 0 else 0
-                    m["sc_cache_reserved"] = sc[1] if len(sc) > 1 else 0
-                    m["sc_cache_limit"] = sc[2] if len(sc) > 2 else 0
-                    m["sc_cache_rate"] = sc[3] if len(sc) > 3 else 0
-
-                    # $27 OC_HIT_NUM (cumulative counter)
-                    hit = _parse_sub(parts[26]) if len(parts) > 26 else []
-                    m["oc_mem_hit"] = hit[0] if len(hit) > 0 else 0
-                    m["oc_disk_hit"] = hit[1] if len(hit) > 1 else 0
-                    m["oc_l2_hit"] = hit[2] if len(hit) > 2 else 0
-                    m["oc_remote_hit"] = hit[3] if len(hit) > 3 else 0
-                    m["oc_miss"] = hit[4] if len(hit) > 4 else 0
-
                     records.append((ts, m))
 
         records.sort(key=lambda x: x[0])
@@ -344,7 +335,7 @@ def compute_cluster_stats(all_data, interval_ms=3600000):
     oc_deltas, sorted_bins = _compute_oc_deltas(all_data, interval_ms)
 
     # All gauge metric keys including thread pool sub-fields
-    tp_keys = [f"tp_{prefix}_{field}" for prefix in _TP_PREFIXES for field in _TP_SUB_FIELDS]
+    tp_keys = [f"tp_async_{field}" for field in _TP_SUB_FIELDS]
     all_gauge_keys = _GAUGE_KEYS + tp_keys
 
     # Collect samples per bin
@@ -502,19 +493,14 @@ def generate_html(cluster_stats, per_host_stats, all_data, output_path, since, u
     oc_l2_hit = [round(s["oc_l2_hit_sum"]) for s in cluster_stats]
     oc_remote_hit = [round(s["oc_remote_hit_sum"]) for s in cluster_stats]
 
-    def tp_series(prefix):
-        maxRunning = [round(s.get(f"tp_{prefix}_maxRunning_avg", 0)) for s in cluster_stats]
-        total = [round(s.get(f"tp_{prefix}_total_avg", 0)) for s in cluster_stats]
-        tasksDelta = [round(s.get(f"tp_{prefix}_tasksDelta_avg", 0)) for s in cluster_stats]
-        maxWaiting = [round(s.get(f"tp_{prefix}_maxWaiting_avg", 0)) for s in cluster_stats]
-        usage = [round(s.get(f"tp_{prefix}_usage_avg", 0), 4) for s in cluster_stats]
-        return maxRunning, total, tasksDelta, maxWaiting, usage
+    def async_series(field):
+        return [round(s.get(f"tp_async_{field}_avg", 0), 4 if field == "usage" else 0) for s in cluster_stats]
 
-    tp_oc_mr, tp_oc_total, tp_oc_td, tp_oc_mw, tp_oc_usage = tp_series("worker_oc")
-    tp_ww_oc_mr, tp_ww_oc_total, tp_ww_oc_td, tp_ww_oc_mw, tp_ww_oc_usage = tp_series("worker_worker_oc")
-    tp_mw_oc_mr, tp_mw_oc_total, tp_mw_oc_td, tp_mw_oc_mw, tp_mw_oc_usage = tp_series("master_worker_oc")
-    tp_m_oc_mr, tp_m_oc_total, tp_m_oc_td, tp_m_oc_mw, tp_m_oc_usage = tp_series("master_oc")
-    tp_async_mr, tp_async_total, tp_async_td, tp_async_mw, tp_async_usage = tp_series("async")
+    tp_async_idle = async_series("idle")
+    tp_async_total = async_series("total")
+    tp_async_max = async_series("max")
+    tp_async_waiting = async_series("waiting")
+    tp_async_usage = async_series("usage")
 
 
     active_clients_avg = [round(s["active_clients_avg"]) for s in cluster_stats]
@@ -570,8 +556,6 @@ def generate_html(cluster_stats, per_host_stats, all_data, output_path, since, u
             <td>{chr_val}</td>
             <td>{s['total_hits']:,.0f}</td>
             <td>{s['total_requests']:,.0f}</td>
-            <td>{_fmt_pct(s.get('tp_worker_oc_usage_avg', 0))}</td>
-            <td>{s.get('tp_worker_oc_waiting_avg', 0):.0f}</td>
             <td>{_fmt_pct(s.get('tp_async_usage_avg', 0))}</td>
             <td>{s.get('tp_async_waiting_avg', 0):.0f}</td>
         </tr>"""
@@ -664,18 +648,11 @@ select {{ padding: 6px 12px; border-radius: 4px; border: 1px solid #ccc; font-si
 <div id="cache_hit_chart" class="chart"></div>
 <div id="cache_detail_chart" class="chart"></div>
 
-<h2>5. Thread Pool Utilization (线程池使用)</h2>
+<h2>5. Master Async Thread Pool (Master异步线程池)</h2>
 <div class="info">
-<b>指标说明</b>：各线程池的区间累计统计（每个采集间隔内的汇总数据）。Peak Concurrency = 区间内峰值并发线程数，Total = 当前线程数，Tasks/Interval = 区间完成任务数，Peak Queue = 区间峰值排队数，Utilization = 区间真实利用率（线程工作时间占比）。<br>
-<b>5 个线程池</b>：客户端服务（处理客户端读写请求）、Worker 间通信（跨节点对象传输）、Master 下发（管理指令下发到 Worker）、Master 服务（Master 端对象管理）、Master 异步任务（后台异步操作如元数据清理、异步持久化等）。<br>
-<b>正常值</b>：Peak Concurrency &lt; Total，Peak Queue = 0，Utilization &lt; 0.8。<br>
-<b>异常特征</b>：Peak Queue &gt; 0（任务排队，处理能力不足）；Peak Concurrency 持续等于 Total（线程池满载）；Utilization &gt; 0.8（持续高压，需扩容）。<br>
-<b>排查建议</b>：① Peak Queue &gt; 0：检查下游依赖（如磁盘 IO、网络、ETCD）是否变慢；② 线程池满载：评估是否需要调大线程池参数；③ 客户端服务线程池满时，客户端请求会超时，检查 access.log 中 latency 是否升高。
+<b>指标说明</b>：Idle = 当前空闲线程数，Total = 当前线程总数，Max = 配置的线程数上限，Waiting = 当前排队任务数。<br>
+<b>Utilization</b>：本采样周期累计任务执行耗时 /（当前线程数 × 采样周期时长），不是 CPU 使用率；跨周期任务可能影响读数。
 </div>
-<div id="tp_oc_chart" class="chart" style="height:380px"></div>
-<div id="tp_ww_oc_chart" class="chart" style="height:380px"></div>
-<div id="tp_mw_oc_chart" class="chart" style="height:380px"></div>
-<div id="tp_m_oc_chart" class="chart" style="height:380px"></div>
 <div id="tp_async_chart" class="chart" style="height:380px"></div>
 
 <h2>7. Active Clients (活跃客户端数)</h2>
@@ -712,7 +689,7 @@ select {{ padding: 6px 12px; border-radius: 4px; border: 1px solid #ccc; font-si
   <th>Time</th><th>Hosts</th><th>Mem Avg</th><th>Mem Max</th><th>Mem%</th>
   <th>Obj Avg</th><th>Obj Max</th><th>Obj Size Avg</th>
   <th>Hit Rate</th><th>Hits</th><th>Requests</th>
-  <th>OC TP%</th><th>OC Wait</th><th>Async TP%</th><th>Async Wait</th>
+  <th>Async TP%</th><th>Async Wait</th>
 </tr></thead>
 <tbody>{detail_rows}</tbody>
 </table>
@@ -737,31 +714,10 @@ var ocMemHit = __OC_MEM_HIT__;
 var ocDiskHit = __OC_DISK_HIT__;
 var ocL2Hit = __OC_L2_HIT__;
 var ocRemoteHit = __OC_REMOTE_HIT__;
-var tpOcMR = __TP_OC_MR__;
-var tpOcTotal = __TP_OC_TOTAL__;
-var tpOcMR = __TP_OC_MR__;
-var tpOcTD = __TP_OC_TD__;
-var tpOcMW = __TP_OC_MW__;
-var tpOcUsage = __TP_OC_USAGE__;
-var tpWwOcMR = __TP_WW_OC_MR__;
-var tpWwOcTotal = __TP_WW_OC_TOTAL__;
-var tpWwOcTD = __TP_WW_OC_TD__;
-var tpWwOcMW = __TP_WW_OC_MW__;
-var tpWwOcUsage = __TP_WW_OC_USAGE__;
-var tpMwOcMR = __TP_MW_OC_MR__;
-var tpMwOcTotal = __TP_MW_OC_TOTAL__;
-var tpMwOcTD = __TP_MW_OC_TD__;
-var tpMwOcMW = __TP_MW_OC_MW__;
-var tpMwOcUsage = __TP_MW_OC_USAGE__;
-var tpMOcMR = __TP_M_OC_MR__;
-var tpMOcTotal = __TP_M_OC_TOTAL__;
-var tpMOcTD = __TP_M_OC_TD__;
-var tpMOcMW = __TP_M_OC_MW__;
-var tpMOcUsage = __TP_M_OC_USAGE__;
-var tpAsyncMR = __TP_ASYNC_MR__;
+var tpAsyncIdle = __TP_ASYNC_IDLE__;
 var tpAsyncTotal = __TP_ASYNC_TOTAL__;
-var tpAsyncTD = __TP_ASYNC_TD__;
-var tpAsyncMW = __TP_ASYNC_MW__;
+var tpAsyncMax = __TP_ASYNC_MAX__;
+var tpAsyncWaiting = __TP_ASYNC_WAITING__;
 var tpAsyncUsage = __TP_ASYNC_USAGE__;
 var activeClientsAvg = __ACTIVE_CLIENTS_AVG__;
 var activeClientsMax = __ACTIVE_CLIENTS_MAX__;
@@ -892,35 +848,26 @@ c4b.setOption({{
   ]
 }});
 
-// 5. Thread pools
-function tpChart(domId, title, maxRunning, total, tasksDelta, maxWaiting, usage) {{
-  var c = echarts.init(document.getElementById(domId));
-  c.setOption({{
-    title: {{ text: title, left: 'center' }},
-    tooltip: {{ trigger: 'axis' }},
-    legend: {{ data: ['Peak Concurrency','Total Threads','Tasks/Interval','Peak Queue','Utilization'], bottom: 0 }},
-    grid: {{ left: 60, right: 60, top: 50, bottom: 80 }},
-    xAxis: {{ type: 'category', data: timeLabels, axisLabel: {{ rotate: 45 }} }},
-    yAxis: [
-      {{ type: 'value', name: 'Threads / Tasks' }},
-      {{ type: 'value', name: 'Utilization', min: 0, max: 1, position: 'right', axisLabel: {{ formatter: function(v){{ return (v*100).toFixed(0)+'%'; }} }} }}
-    ],
-    series: [
-      {{ name: 'Peak Concurrency', type: 'bar', data: maxRunning, itemStyle: {{ color: '#5470c6' }} }},
-      {{ name: 'Total Threads', type: 'line', data: total, lineStyle: {{ type: 'dashed' }}, itemStyle: {{ color: '#91cc75' }} }},
-      {{ name: 'Tasks/Interval', type: 'line', data: tasksDelta, itemStyle: {{ color: '#fac858' }} }},
-      {{ name: 'Peak Queue', type: 'line', data: maxWaiting, itemStyle: {{ color: '#ee6666' }} }},
-      {{ name: 'Utilization', type: 'line', yAxisIndex: 1, data: usage, itemStyle: {{ color: '#73c0de' }}, lineStyle: {{ width: 2 }} }}
-    ]
-  }});
-  return c;
-}}
-
-var c5a = tpChart('tp_oc_chart', '对象缓存-客户端服务（处理客户端读写请求）', tpOcMR, tpOcTotal, tpOcTD, tpOcMW, tpOcUsage);
-var c5b = tpChart('tp_ww_oc_chart', '对象缓存-Worker间通信（跨节点对象传输）', tpWwOcMR, tpWwOcTotal, tpWwOcTD, tpWwOcMW, tpWwOcUsage);
-var c5c = tpChart('tp_mw_oc_chart', '对象缓存-Master下发（管理指令下发到Worker）', tpMwOcMR, tpMwOcTotal, tpMwOcTD, tpMwOcMW, tpMwOcUsage);
-var c5d = tpChart('tp_m_oc_chart', '对象缓存-Master服务（Master端对象管理）', tpMOcMR, tpMOcTotal, tpMOcTD, tpMOcMW, tpMOcUsage);
-var c5e = tpChart('tp_async_chart', 'Master异步任务（后台异步操作）', tpAsyncMR, tpAsyncTotal, tpAsyncTD, tpAsyncMW, tpAsyncUsage);
+// 5. Master async thread pool
+var c5 = echarts.init(document.getElementById('tp_async_chart'));
+c5.setOption({{
+  title: {{ text: 'Master异步任务（后台异步操作）', left: 'center' }},
+  tooltip: {{ trigger: 'axis' }},
+  legend: {{ data: ['Idle Threads','Total Threads','Max Threads','Waiting Tasks','Utilization'], bottom: 0 }},
+  grid: {{ left: 60, right: 60, top: 50, bottom: 80 }},
+  xAxis: {{ type: 'category', data: timeLabels, axisLabel: {{ rotate: 45 }} }},
+  yAxis: [
+    {{ type: 'value', name: 'Threads / Tasks' }},
+    {{ type: 'value', name: 'Utilization', min: 0, position: 'right', axisLabel: {{ formatter: function(v){{ return (v*100).toFixed(0)+'%'; }} }} }}
+  ],
+  series: [
+    {{ name: 'Idle Threads', type: 'bar', data: tpAsyncIdle, itemStyle: {{ color: '#5470c6' }} }},
+    {{ name: 'Total Threads', type: 'line', data: tpAsyncTotal, itemStyle: {{ color: '#91cc75' }} }},
+    {{ name: 'Max Threads', type: 'line', data: tpAsyncMax, lineStyle: {{ type: 'dashed' }}, itemStyle: {{ color: '#fac858' }} }},
+    {{ name: 'Waiting Tasks', type: 'line', data: tpAsyncWaiting, itemStyle: {{ color: '#ee6666' }} }},
+    {{ name: 'Utilization', type: 'line', yAxisIndex: 1, data: tpAsyncUsage, itemStyle: {{ color: '#73c0de' }} }}
+  ]
+}});
 
 // 7. Active Clients
 var c7 = echarts.init(document.getElementById('clients_chart'));
@@ -986,7 +933,7 @@ updateHostChart();
 
 // Responsive
 window.addEventListener('resize', function() {{
-  [c1,c2a,c2b,c3a,c3b,c4a,c4b,c5a,c5b,c5c,c5d,c5e,c7,c8,c9].forEach(function(c) {{ c.resize(); }});
+  [c1,c2a,c2b,c3a,c3b,c4a,c4b,c5,c7,c8,c9].forEach(function(c) {{ c.resize(); }});
 }});
 </script>
 </body>
@@ -1016,30 +963,10 @@ window.addEventListener('resize', function() {{
         "__OC_DISK_HIT__": js_arr(oc_disk_hit),
         "__OC_L2_HIT__": js_arr(oc_l2_hit),
         "__OC_REMOTE_HIT__": js_arr(oc_remote_hit),
-        "__TP_OC_MR__": js_arr(tp_oc_mr),
-        "__TP_OC_TOTAL__": js_arr(tp_oc_total),
-        "__TP_OC_TD__": js_arr(tp_oc_td),
-        "__TP_OC_MW__": js_arr(tp_oc_mw),
-        "__TP_OC_USAGE__": js_arr(tp_oc_usage),
-        "__TP_WW_OC_MR__": js_arr(tp_ww_oc_mr),
-        "__TP_WW_OC_TOTAL__": js_arr(tp_ww_oc_total),
-        "__TP_WW_OC_TD__": js_arr(tp_ww_oc_td),
-        "__TP_WW_OC_MW__": js_arr(tp_ww_oc_mw),
-        "__TP_WW_OC_USAGE__": js_arr(tp_ww_oc_usage),
-        "__TP_MW_OC_MR__": js_arr(tp_mw_oc_mr),
-        "__TP_MW_OC_TOTAL__": js_arr(tp_mw_oc_total),
-        "__TP_MW_OC_TD__": js_arr(tp_mw_oc_td),
-        "__TP_MW_OC_MW__": js_arr(tp_mw_oc_mw),
-        "__TP_MW_OC_USAGE__": js_arr(tp_mw_oc_usage),
-        "__TP_M_OC_MR__": js_arr(tp_m_oc_mr),
-        "__TP_M_OC_TOTAL__": js_arr(tp_m_oc_total),
-        "__TP_M_OC_TD__": js_arr(tp_m_oc_td),
-        "__TP_M_OC_MW__": js_arr(tp_m_oc_mw),
-        "__TP_M_OC_USAGE__": js_arr(tp_m_oc_usage),
-        "__TP_ASYNC_MR__": js_arr(tp_async_mr),
+        "__TP_ASYNC_IDLE__": js_arr(tp_async_idle),
         "__TP_ASYNC_TOTAL__": js_arr(tp_async_total),
-        "__TP_ASYNC_TD__": js_arr(tp_async_td),
-        "__TP_ASYNC_MW__": js_arr(tp_async_mw),
+        "__TP_ASYNC_MAX__": js_arr(tp_async_max),
+        "__TP_ASYNC_WAITING__": js_arr(tp_async_waiting),
         "__TP_ASYNC_USAGE__": js_arr(tp_async_usage),
         "__ACTIVE_CLIENTS_AVG__": js_arr(active_clients_avg),
         "__ACTIVE_CLIENTS_MAX__": js_arr(active_clients_max),
@@ -1101,7 +1028,7 @@ def main():
               2. Memory Usage Ratio        (usage% + per-host distribution)
               3. Object Cache              (object count & size)
               4. Cache Hit Rate            (hit rate trend + hit/miss breakdown)
-              5. Thread Pool Utilization   (5 pools: Peak Concurrency/Total/Tasks/Queue/Utilization)
+              5. Thread Pool Utilization   (Master async: Idle/Total/Max/Waiting/Utilization)
               7. Active Clients            (connected client count)
               8. ETCD Success Rate         (ETCD request success rate)
               9. Per-Host Memory           (interactive per-host selector)
@@ -1110,7 +1037,7 @@ def main():
             notes:
               - ECharts is loaded from CDN (jsdelivr.net); report needs internet.
               - OC_HIT_NUM is a cumulative counter; per-bin deltas are computed.
-              - Thread pool metrics are interval-based: peak concurrency, tasks completed, peak queue, utilization.
+              - Async pool fields are idle/current/max/waiting/usage.
         """)
     )
     parser.add_argument(

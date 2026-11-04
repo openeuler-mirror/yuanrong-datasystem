@@ -42,7 +42,7 @@ class ResourceReportSchemaTest(unittest.TestCase):
         metrics = self.parse_record(False)
         self.assertEqual(metrics["etcd_success_rate"], 0.9)
         self.assertEqual(metrics["obs_success_rate"], 0.8)
-        self.assertEqual(metrics["tp_async_maxRunning"], 5)
+        self.assertEqual(metrics["tp_async_idle"], 5)
         self.assertEqual(metrics["stream_count"], 11)
         self.assertEqual(metrics["sc_cache_usage"], 12)
         self.assertEqual(metrics["oc_miss"], 19)

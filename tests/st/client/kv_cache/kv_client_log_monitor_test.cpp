@@ -25,9 +25,13 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
+
+#include <nlohmann/json.hpp>
 
 #include "common.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -79,31 +83,29 @@ public:
                          logRefreshIntervalS_ * s2ms_);
     }
 
-    void GetResMonitorLogInfo(int index, const std::string &fileName, std::vector<std::string> &infos)
+    void GetObjectSizeFromResourceLog(int index, uint64_t &objectSize)
     {
-        std::string fullName = FormatString("%s/../worker%d/log/%s", FLAGS_log_dir.c_str(), index, fileName);
+        std::string fullName = FormatString("%s/../worker%d/log/kv_resource.log", FLAGS_log_dir.c_str(), index);
         std::ifstream ifs(fullName);
         ASSERT_TRUE(ifs.is_open());
         std::string line;
-        std::streampos prev = ifs.tellg();
-        std::streampos pos = ifs.tellg();
-        // Get the last line
+        nlohmann::json snapshot;
         while (std::getline(ifs, line)) {
-            prev = pos;
-            pos = ifs.tellg();
+            auto record = nlohmann::json::parse(line, nullptr, false);
+            if (record.is_object()) {
+                snapshot = std::move(record);
+            }
         }
-        ifs.clear();
-        ifs.seekg(prev);
-        std::getline(ifs, line);
-        infos = Split(line, " | ");
-        const int ignoreCount = 7;
-        ASSERT_EQ(infos.size(), static_cast<size_t>(ResMetricName::RES_METRICS_END) + ignoreCount);
-    };
+        ASSERT_TRUE(snapshot.contains("metrics"));
+        const auto &metrics = snapshot.at("metrics");
+        ASSERT_TRUE(metrics.contains("object_size"));
+        ASSERT_TRUE(metrics.at("object_size").is_number_unsigned());
+        objectSize = metrics.at("object_size").get<uint64_t>();
+    }
 
 protected:
     const int logRefreshIntervalS_ = 1;
     const int s2ms_ = 1'000;
-    const int objectSizeIndex_ = 11;
 };
 
 TEST_F(KVClientLogMonitorTest, TestObjectSize)
@@ -113,30 +115,29 @@ TEST_F(KVClientLogMonitorTest, TestObjectSize)
     int val2Size = 5;
     int metadataSize = 64;
     int shmQueueSize = 73744;
-    std::vector<std::string> infos;
+    uint64_t objectSize = 0;
     std::shared_ptr<KVClient> client;
     InitTestKVClient(0, client);
     DS_ASSERT_OK(client->Set(key, std::string(val1Size, 'o')));
     sleep(logRefreshIntervalS_ + 1);
-    GetResMonitorLogInfo(0, "resource.log", infos);
-    ASSERT_EQ(std::stoi(infos[objectSizeIndex_]), val1Size + metadataSize + shmQueueSize);
+    GetObjectSizeFromResourceLog(0, objectSize);
+    ASSERT_EQ(objectSize, val1Size + metadataSize + shmQueueSize);
 
     DS_ASSERT_OK(client->Set(key, std::string(val2Size, 'o')));
     sleep(logRefreshIntervalS_ + 1);
-    GetResMonitorLogInfo(0, "resource.log", infos);
-    ASSERT_EQ(std::stoi(infos[objectSizeIndex_]), val2Size + metadataSize + shmQueueSize);
+    GetObjectSizeFromResourceLog(0, objectSize);
+    ASSERT_EQ(objectSize, val2Size + metadataSize + shmQueueSize);
 
     DS_ASSERT_OK(client->Del(key));
     sleep(logRefreshIntervalS_ + 1);
-    GetResMonitorLogInfo(0, "resource.log", infos);
-    ASSERT_EQ(std::stoi(infos[objectSizeIndex_]), shmQueueSize);
+    GetObjectSizeFromResourceLog(0, objectSize);
+    ASSERT_EQ(objectSize, shmQueueSize);
 }
 
 TEST_F(KVClientLogMonitorTest, TestSetDelValResouceLog)
 {
     auto dateSize = 20;
     auto logRefreshIntervalS = 1;
-    auto objectSizeIndex = 11;
     auto key = randomData_.GetRandomString(dateSize);
     auto val = randomData_.GetRandomString(dateSize);
     std::shared_ptr<KVClient> client;
@@ -145,16 +146,15 @@ TEST_F(KVClientLogMonitorTest, TestSetDelValResouceLog)
     param.writeMode = WriteMode::WRITE_BACK_L2_CACHE;
     DS_ASSERT_OK(client->Set(key, val, param));
     sleep(logRefreshIntervalS + 1);
-    std::vector<std::string> infos;
-    GetResMonitorLogInfo(0, "resource.log", infos);
+    uint64_t objectSize = 0;
+    GetObjectSizeFromResourceLog(0, objectSize);
     int metadataSize = 64;
     int shmQueueSize = 73744;
-    ASSERT_EQ(std::stoi(infos[objectSizeIndex]), val.size() + metadataSize + shmQueueSize);
+    ASSERT_EQ(objectSize, val.size() + metadataSize + shmQueueSize);
     DS_ASSERT_OK(client->Del(key));
     sleep(logRefreshIntervalS + 1);
-    std::vector<std::string> infos1;
-    GetResMonitorLogInfo(0, "resource.log", infos1);
-    ASSERT_EQ(std::stoi(infos1[objectSizeIndex]), shmQueueSize);
+    GetObjectSizeFromResourceLog(0, objectSize);
+    ASSERT_EQ(objectSize, shmQueueSize);
 }
 }
 }

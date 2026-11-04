@@ -62,9 +62,13 @@ Branch 仅写入普通运行日志，不写入 operation 日志。构建系统�
 | 1 | 运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| message |
 | 2 | 访问日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| status_code \| action \| cost \| data size \| request param\| response param |
 | 3 | 访问第三方日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| status_code \| action \| cost \| data size \| request param\| response param |
-| 4 | 资源日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| shm info \| spill disk info \| client nums \| object nums \| object total datasize \| WorkerOcService threadpool \| WorkerWorkerOcService threadpool \| MasterWorkerOcService threadpool \| MasterOcService threadpool \| ETCDrequest success rate \| OBSrequest success rate \| Master AsyncTask threadpool \| stream nums \| ClientWorkerSCService threadpool \| WorkerWorkerSCService threadpool \| MasterWorkerSCService threadpool \| MasterSCService threadpool \| remote stream push success rate \| scLocalCache info \| Cache Hit Info \| brpc stream leak count \| deferred cleanup queue size |
+| 4 | 资源日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| shm info \| spill disk info \| client nums \| object nums \| object total datasize \| ETCDrequest success rate \| OBSrequest success rate \| Master AsyncTask threadpool \| stream nums \| remote stream push success rate \| scLocalCache info \| Cache Hit Info \| brpc stream leak count \| deferred cleanup queue size \| spill IO stats \| object copy watermark |
 | 5 | 流缓存数据日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| sc_metric |
 | 6 | 容器运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| message |
+
+资源日志的正文保持原有数值列格式，按 `res_metrics.def` 的枚举顺序输出已注册且启用指标的原始值，不增加指标名、标题或版本字段。组间以 ` | ` 分隔，组内多个数值以 `/` 分隔。上表列出全部指标组，未注册或未启用的组会整列省略，不保留占位空列，后续列的位置随之前移，读取时需按当前实际启用的指标组解析。
+
+`resource.log` 与 `kv_resource.log` 共用指标启用条件：`etcd_address` 为空时省略 ETCD 请求成功率指标；Spill 未启用时省略 `spill_hard_disk`、`spill_io_stats`；`eviction_strategy=clock` 时省略 `object_copy_watermark`。原 OC/SC RPC 框架内部线程池的八个失效指标已删除。
 
 ### 日志字段
 
@@ -89,18 +93,10 @@ Branch 仅写入普通运行日志，不写入 operation 日志。构建系统�
 | client nums | 5 | 记录已和worker成功建立连接的Client数。最大值为10000 | 
 | object nums | 9 | 记录worker已缓存对象数。按照1亿对象限制数量 | 
 | object total datasize | 13 | 记录worker已缓存对象的大小。按照1T限制大小，长度 13 Byte | 
-| WorkerOcService threadpool | 21 | WorkerOcService threadpool使用信息，线程数限制最大128；格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate<br>1) idleNum	空闲线程数；<br>2) currentTotalNum	当前正在运行任务的线程数；<br>3) MaxThreadNum	 threadpool最大可申请的线程数；<br>4) waitingTaskNum	正在等待的任务数。<br>5) rate	线程利用率，currentTotalNum/ MaxThreadNum,单位：%，保留3位有效数字 | 
-| WorkerWorkerOcService threadpool | 21 | threadpool使用信息 | 
-| MasterWorkerOcService threadpool | 21 | threadpool使用信息 | 
-| MasterOcService threadpool | 21 | threadpool使用信息 |
 | ETCDrequest success rate | 6 | 请求成功率，单位 %,保留3位有效数字 | 
 | OBSrequest success rate | 6 | 请求成功率，单位 %,保留3位有效数字 | 
 | Master AsyncTask threadpool | 21 | threadpool使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate |
 | stream nums | 9 | 记录本节点流的个数。本节点上的流：在本节点存在producer或者consumer |
-| ClientWorkerSCService threadpool | 21 | 线程池使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate |
-| WorkerWorkerSCService threadpool | 21 | 线程池使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate |
-| MasterWorkerSCService threadpool | 21 | 线程池使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate |
-| MasterSCService threadpool | 21 | 线程池使用信息，格式为：idleNum/currentTotalNum/MaxThreadNum/waitingTaskNum/rate |
 | remote stream push success rate | 6 | 请求成功率，单位 %,保留3位有效数字 |
 | scLocalCache info | 47 | 记录scLocalCache使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：usedSize/reservedSize/totalLimit/usedRate |
 |Cache Hit Info | 9 | 缓存命中统计,格式为:memHitNum/diskHitNum/l2HitNum/remoteHitNum/missNum,<br>1) memHitNum	本地内存命中次数。含 routed 模式（`enableLocalCache=false`）：metadata owner 的 QueryAndGet 内联命中、以及 client 直读副本时副本侧的服务命中（TCP/UB 数据面由 GetObjectRemote 计数；副本与 client 同主机时 SDK 走 SHM 数据面，由既有 Get 服务计数）。client 数据面直读（含 bound 模式 `enableClientDirectPipelineH2D` 直读流水线）同样由数据持有方计数。<br>2) diskHitNum	本地磁盘命中次数. routed 模式下含副本直读命中已 spill 对象。<br>3) l2HitNum	二级缓存命中次数。routed 模式下：TCP/UB 数据面恒为 0 属预期；副本与 client 同主机时走 SHM 数据面（既有 Get 服务），`enable_l2_cache_fallback` 开启（默认开）时可产生非 0 l2Hit。<br>4) remoteHitNum 远端worker命中次数。由发起 worker→worker 拉取的 worker 计数；routed 模式 client 直连副本，恒为 0 属预期。<br>5) missNum 未命中次数。routed 模式下：TCP/UB 数据面为 metadata owner 侧"元数据查无活副本"的读 key（metadata-only 查询不计）；同主机 SHM 数据面由服务副本侧按本地未命中计（既有 Get 语义）。
@@ -143,7 +139,6 @@ Branch 仅写入普通运行日志，不写入 operation 日志。构建系统�
 | `shared_memory` | `memory_usage`、`physical_memory_usage`、`total_limit`、`worker_share_memory_usage` | 共享内存使用 |
 | `spill_hard_disk` | `space_usage`、`physical_space_usage`、`total_limit`、`worker_spill_hard_disk_usage` | Spill 磁盘使用 |
 | `active_client_count` / `object_count` / `object_size` | （标量） | Client 数 / 对象数 / 对象总大小 |
-| `worker_oc_service_thread_pool` 等 OC 线程池组 | 线程池五元组 | 线程池状态 |
 | `etcd_request_success_rate` | 见 schema | ETCD 请求成功率 |
 | `master_async_tasks_thread_pool` | 线程池五元组 | Master 异步任务线程池 |
 | `oc_hit_num` | 命中统计五元组 | 缓存命中统计 |

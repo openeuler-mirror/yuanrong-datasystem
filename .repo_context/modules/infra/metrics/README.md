@@ -29,7 +29,7 @@
 
 - If the question is about overall architecture, extension points, or feature design:
   - read `design.md`
-- If the question is about periodic collection, `RegisterCollectHandler`, collector startup, or blank metric columns:
+- If the question is about periodic collection, `RegisterCollectHandler`, collector startup, or omitted metric groups:
   - read `resource-collector.md`
 - If the question is about exporter buffering, flush threads, file output, or `HardDiskExporter` behavior:
   - read `exporters-and-buffering.md`
@@ -45,6 +45,8 @@
   - `ResMetricCollector` emits text resource metrics when `log_monitor` is enabled and JSON resource snapshots
     unconditionally; `json_log_monitor` was removed and JSON output is fixed on.
   - metrics are not auto-discovered; they are registered explicitly through `RegisterCollectHandler`.
+  - only registered, enabled handlers are sampled. Disabled and unregistered groups are omitted from both logs;
+    text groups retain raw values in enum order, and JSON additionally applies the schema whitelist.
   - `worker_oc_server.cpp` is a major registration point for many resource metrics.
   - `metrics.h/.cpp` now provide a lightweight typed `datasystem::metrics` API with `Counter`, `Gauge`, `Histogram`, `ScopedTimer`, and a periodic `LOG(INFO)` summary writer for release-scoped request-path instrumentation.
   - the typed metrics log path emits one-line JSON summaries and splits oversized payloads into multiple JSON lines; tests that still prefer flat-string assertions should derive that view locally from `DumpSummaryForTest()`.
@@ -105,7 +107,7 @@
 
 - Common change risks:
   - adding a new metric family requires both registration and definition alignment;
-  - missing handler registration does not fail hard, so metrics can silently degrade into blank columns plus one warning;
+  - missing handler registration omits a group without reserving a text column; malformed enabled JSON payloads retain the all-zero fallback and warning;
   - exporter changes affect both resource metrics and access-monitor logging.
 - Good first files when metrics look wrong:
   - `res_metric_collector.cpp`

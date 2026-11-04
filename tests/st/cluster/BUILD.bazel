@@ -28,6 +28,7 @@ cc_library(
         "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:status_helper",
+        "@nlohmann_json//:json",
     ],
 )
 

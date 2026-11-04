@@ -352,6 +352,7 @@ ds_cc_test(
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:memory",
         "//src/datasystem/common/util:net_util",
+        "@nlohmann_json//:json",
     ],
 )
 
@@ -430,6 +431,7 @@ ds_cc_test(
     deps = KV_COMMON_DEPS + [
         "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/util:format",
+        "@nlohmann_json//:json",
     ],
 )
 

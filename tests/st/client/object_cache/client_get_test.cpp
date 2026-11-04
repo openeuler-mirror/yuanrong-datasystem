@@ -1423,8 +1423,10 @@ public:
         }
         infos = Split(lastLine, " | ");
         const int ignoreCount = 7;
+        // This fixture enables Spill/ETCD, disables SC/OBS and uses clock: 11 emitted groups.
+        constexpr size_t enabledMetricCount = 11;
         CHECK_FAIL_RETURN_STATUS(
-            infos.size() == static_cast<size_t>(ResMetricName::RES_METRICS_END) + ignoreCount,
+            infos.size() == enabledMetricCount + ignoreCount,
             K_RUNTIME_ERROR, FormatString("invalid log format: %s", lastLine));
         infos.erase(infos.begin(), infos.begin() + ignoreCount);
         return Status::OK();

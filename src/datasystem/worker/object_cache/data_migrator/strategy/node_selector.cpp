@@ -60,11 +60,11 @@ std::string ObjectCopyWatermark::ToMetricsString() const
     };
     return std::to_string(hotPrimaryCopyBytes) + "/" + std::to_string(totalPrimaryCopyBytes) + "/"
            + std::to_string(memoryCapacity) + "/"
-           + FormatString("%.9f/%.9f/%.9f/%d", ratio(hotPrimaryCopyBytes, memoryCapacity),
+           + FormatString("%.2f/%.2f/%.2f/%d", ratio(hotPrimaryCopyBytes, memoryCapacity),
                           ratio(totalPrimaryCopyBytes, memoryCapacity),
                           ratio(hotPrimaryCopyBytes, totalPrimaryCopyBytes), valid ? 1 : 0)
            + "/" + std::to_string(coldPrimaryCopyBytes) + "/" + std::to_string(warmPrimaryCopyBytes) + "/"
-           + FormatString("%.9f/%.9f", ratio(coldPrimaryCopyBytes, totalPrimaryCopyBytes),
+           + FormatString("%.2f/%.2f", ratio(coldPrimaryCopyBytes, totalPrimaryCopyBytes),
                           ratio(warmPrimaryCopyBytes, totalPrimaryCopyBytes));
 }
 

@@ -29,17 +29,18 @@
  * so both versions execute exactly the same key placement, warm-up, pressure, and read trace.
  * DS_TLM_VARIANT only labels the CSV (for example, baseline or heat); it does not alter behavior.
  *
- * The worker already exposes all sampled signals through resource.log:
+ * The worker exposes the sampled signals by name in kv_resource.log:
  *   - SHARED_MEMORY: memory usage/limit/watermark fill ratio;
  *   - SPILL_HARD_DISK: spill usage/limit/fill ratio;
  *   - OC_HIT_NUM: cumulative mem/disk/l2/remote/miss Get counters.
- *   - OBJECT_COPY_WATERMARK: cached hot-primary/primary bytes and capacity-relative watermarks.
+ *   - OBJECT_COPY_WATERMARK: cached primary-copy watermarks when enabled by the eviction strategy.
  * Interval hit rates are calculated from adjacent counter samples. The test gates only data
  * correctness and telemetry production; hit-rate/watermark improvements are comparison outputs,
  * not pass/fail thresholds.
  */
 
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
@@ -53,6 +54,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -71,7 +73,6 @@
 #include "cluster/external_cluster.h"
 #include "common.h"
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/metrics/res_metric_collector.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/utils/status.h"
@@ -311,28 +312,6 @@ BlockWorkloadConfig GetBlockWorkloadConfig()
         static_cast<uint64_t>(GetPositiveEnvInt(kTargetRequestQpsEnv, kDefaultTargetRequestQps)),
         static_cast<uint64_t>(GetPositiveEnvInt(kBlockRequestThreadsEnv, kDefaultBlockRequestThreads)),
         static_cast<uint64_t>(GetPositiveEnvInt(kBlockWarmupRequestsEnv, kDefaultBlockWarmupRequests)));
-}
-
-uint64_t ToU64(const std::string &value)
-{
-    errno = 0;
-    char *end = nullptr;
-    const unsigned long long parsed = std::strtoull(value.c_str(), &end, 10);
-    if (errno != 0 || end == value.c_str()) {
-        return 0;
-    }
-    return static_cast<uint64_t>(parsed);
-}
-
-double ToDouble(const std::string &value)
-{
-    errno = 0;
-    char *end = nullptr;
-    const double parsed = std::strtod(value.c_str(), &end);
-    if (errno != 0 || end == value.c_str()) {
-        return 0.0;
-    }
-    return parsed;
 }
 
 int64_t NowMs()
@@ -610,9 +589,6 @@ public:
             KVClientCommon::InitTestEtcdInstance();
         }
         for (int i = 0; i < WorkerNum(); ++i) {
-            DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, i, "hitinfo.prefix", "call()"));
-        }
-        for (int i = 0; i < WorkerNum(); ++i) {
             std::shared_ptr<KVClient> client;
             InitTestKVClient(i, client);
             clients_.emplace_back(std::move(client));
@@ -623,9 +599,6 @@ public:
     {
         if (csv_.is_open()) {
             csv_.close();
-        }
-        for (int i = 0; i < WorkerNum(); ++i) {
-            (void)cluster_->ClearInjectAction(ClusterNodeType::WORKER, i, "hitinfo.prefix");
         }
         (void)inject::Clear("ObjectClientImpl.ClientWorkerWarmup.skip");
         clients_.clear();
@@ -704,93 +677,89 @@ protected:
         return delta;
     }
 
-    bool ReadResourceMetrics(int workerIdx, std::vector<std::string> &metrics)
+    bool ReadResourceMetrics(int workerIdx, nlohmann::json &metrics)
     {
-        const std::string path = FormatString("%s/worker%d/log/resource.log", cluster_->GetRootDir(), workerIdx);
+        const std::string path = FormatString("%s/worker%d/log/kv_resource.log", cluster_->GetRootDir(), workerIdx);
         std::ifstream input(path);
         if (!input.is_open()) {
             return false;
         }
         std::string line;
-        std::string lastLine;
         while (std::getline(input, line)) {
-            if (!line.empty()) {
-                lastLine = std::move(line);
+            auto record = nlohmann::json::parse(line, nullptr, false);
+            if (record.is_object() && record.contains("event") && record.at("event") == "resource_snapshot"
+                && record.contains("metrics") && record.at("metrics").is_object()) {
+                metrics = std::move(record.at("metrics"));
             }
         }
-        if (lastLine.empty()) {
-            return false;
-        }
-        metrics = Split(lastLine, " | ");
-        constexpr size_t kLogPrefixFieldCount = 7;
-        if (metrics.size() <= kLogPrefixFieldCount) {
-            return false;
-        }
-        metrics.erase(metrics.begin(), metrics.begin() + kLogPrefixFieldCount);
-        return true;
+        return metrics.is_object();
     }
 
-    static std::string GetMetric(const std::vector<std::string> &metrics, ResMetricName metricName)
+    static bool HasNumericFields(const nlohmann::json &metric, std::initializer_list<const char *> fields)
     {
-        const int index = static_cast<int>(metricName) - static_cast<int>(ResMetricName::SHARED_MEMORY);
-        if (index < 0 || index >= static_cast<int>(metrics.size())) {
-            return "";
-        }
-        return metrics[index];
+        return metric.is_object() && std::all_of(fields.begin(), fields.end(), [&metric](const char *field) {
+            return metric.contains(field) && metric.at(field).is_number();
+        });
     }
 
     HitSample ReadSample(int workerIdx)
     {
         HitSample sample;
         sample.tsMs = NowMs();
-        std::vector<std::string> metrics;
+        nlohmann::json metrics;
         if (!ReadResourceMetrics(workerIdx, metrics)) {
             return sample;
         }
 
-        const auto sharedMemory = Split(GetMetric(metrics, ResMetricName::SHARED_MEMORY), "/");
-        if (sharedMemory.size() < 4) {
+        if (!metrics.contains("shared_memory") || !metrics.contains("oc_hit_num")) {
             return sample;
         }
-        sample.memUsage = ToU64(sharedMemory[0]);
-        sample.memLimit = ToU64(sharedMemory[2]);
-        sample.memRatio = ToDouble(sharedMemory[3]);
-
-        const auto spill = Split(GetMetric(metrics, ResMetricName::SPILL_HARD_DISK), "/");
-        if (spill.size() >= 4) {
-            sample.spillUsage = ToU64(spill[0]);
-            sample.spillLimit = ToU64(spill[2]);
-            sample.spillRatio = ToDouble(spill[3]);
+        const auto &sharedMemory = metrics.at("shared_memory");
+        const auto &hitInfo = metrics.at("oc_hit_num");
+        if (!HasNumericFields(sharedMemory, { "memory_usage", "total_limit", "worker_share_memory_usage" })
+            || !HasNumericFields(hitInfo, { "mem_hit_num", "disk_hit_num", "l2_hit_num",
+                                           "remote_hit_num", "miss_num" })) {
+            return sample;
         }
+        sample.memUsage = sharedMemory.at("memory_usage").get<uint64_t>();
+        sample.memLimit = sharedMemory.at("total_limit").get<uint64_t>();
+        sample.memRatio = sharedMemory.at("worker_share_memory_usage").get<double>();
 
-        const auto copyWatermark = Split(GetMetric(metrics, ResMetricName::OBJECT_COPY_WATERMARK), "/");
-        if (copyWatermark.size() >= 7) {
-            sample.hotPrimaryBytes = ToU64(copyWatermark[0]);
-            sample.primaryBytes = ToU64(copyWatermark[1]);
-            sample.copyCapacity = ToU64(copyWatermark[2]);
-            sample.hotPrimaryRatio = ToDouble(copyWatermark[3]);
-            sample.primaryRatio = ToDouble(copyWatermark[4]);
-            sample.hotWithinPrimaryRatio = ToDouble(copyWatermark[5]);
-            sample.copyWatermarkValid = ToU64(copyWatermark[6]) != 0;
-            if (copyWatermark.size() >= 11) {
-                sample.coldPrimaryBytes = ToU64(copyWatermark[7]);
-                sample.warmPrimaryBytes = ToU64(copyWatermark[8]);
-                sample.coldWithinPrimaryRatio = ToDouble(copyWatermark[9]);
-                sample.warmWithinPrimaryRatio = ToDouble(copyWatermark[10]);
+        if (metrics.contains("spill_hard_disk")) {
+            const auto &spill = metrics.at("spill_hard_disk");
+            if (!HasNumericFields(spill, { "space_usage", "total_limit", "worker_spill_hard_disk_usage" })) {
+                return sample;
             }
+            sample.spillUsage = spill.at("space_usage").get<uint64_t>();
+            sample.spillLimit = spill.at("total_limit").get<uint64_t>();
+            sample.spillRatio = spill.at("worker_spill_hard_disk_usage").get<double>();
         }
 
-        std::string hitInfo = GetMetric(metrics, ResMetricName::OC_HIT_NUM);
-        constexpr char kHitInfoPrefix[] = "hit_info:";
-        if (hitInfo.rfind(kHitInfoPrefix, 0) == 0) {
-            hitInfo.erase(0, sizeof(kHitInfoPrefix) - 1);
+        if (metrics.contains("object_copy_watermark")) {
+            const auto &watermark = metrics.at("object_copy_watermark");
+            if (!HasNumericFields(watermark, { "hot_primary_bytes", "primary_bytes", "copy_capacity",
+                                              "hot_primary_ratio", "primary_ratio", "hot_within_primary_ratio",
+                                              "copy_watermark_valid", "cold_primary_bytes", "warm_primary_bytes",
+                                              "cold_within_primary_ratio", "warm_within_primary_ratio" })) {
+                return sample;
+            }
+            sample.hotPrimaryBytes = watermark.at("hot_primary_bytes").get<uint64_t>();
+            sample.primaryBytes = watermark.at("primary_bytes").get<uint64_t>();
+            sample.copyCapacity = watermark.at("copy_capacity").get<uint64_t>();
+            sample.hotPrimaryRatio = watermark.at("hot_primary_ratio").get<double>();
+            sample.primaryRatio = watermark.at("primary_ratio").get<double>();
+            sample.hotWithinPrimaryRatio = watermark.at("hot_within_primary_ratio").get<double>();
+            sample.copyWatermarkValid = watermark.at("copy_watermark_valid").get<uint64_t>() != 0;
+            sample.coldPrimaryBytes = watermark.at("cold_primary_bytes").get<uint64_t>();
+            sample.warmPrimaryBytes = watermark.at("warm_primary_bytes").get<uint64_t>();
+            sample.coldWithinPrimaryRatio = watermark.at("cold_within_primary_ratio").get<double>();
+            sample.warmWithinPrimaryRatio = watermark.at("warm_within_primary_ratio").get<double>();
         }
-        const auto hitFields = Split(hitInfo, "/");
-        if (hitFields.size() < HIT_SLOT_COUNT) {
-            return sample;
-        }
+        const std::array<const char *, HIT_SLOT_COUNT> hitFields = {
+            "mem_hit_num", "disk_hit_num", "l2_hit_num", "remote_hit_num", "miss_num"
+        };
         for (size_t i = 0; i < HIT_SLOT_COUNT; ++i) {
-            sample.hit[i] = ToU64(hitFields[i]);
+            sample.hit[i] = hitInfo.at(hitFields[i]).get<uint64_t>();
         }
         sample.valid = true;
         return sample;
@@ -1478,12 +1447,14 @@ protected:
             << "Get failed during the measured workload";
         EXPECT_GT(counters.successes.load(std::memory_order_relaxed), 0UL) << "no successful Gets were observed";
         EXPECT_GT(csvRows_, 0UL) << "no telemetry rows were written";
-        EXPECT_GT(validCopyWatermarkRows_, 0UL) << "no initialized copy-watermark sample was written";
-        EXPECT_GT(positivePrimaryRows_, 0UL) << "no resident primary bytes were observed";
         EXPECT_EQ(invalidCopyWatermarkRows_, 0UL)
             << "copy watermark must satisfy hotPrimaryBytes <= primaryBytes <= copyCapacity";
         if (StrategyFromExtraFlags("eviction_strategy", "clock") == "heat") {
+            EXPECT_GT(validCopyWatermarkRows_, 0UL) << "no initialized copy-watermark sample was written";
+            EXPECT_GT(positivePrimaryRows_, 0UL) << "no resident primary bytes were observed";
             EXPECT_GT(positiveHotPrimaryRows_, 0UL) << "heat workload did not produce a hot-primary sample";
+        } else {
+            EXPECT_EQ(validCopyWatermarkRows_, 0UL) << "clock resource logs must omit copy-watermark samples";
         }
         const uint64_t aggregateHits =
             std::accumulate(aggregateTelemetry_.measureHit.begin(), aggregateTelemetry_.measureHit.end(), uint64_t{ 0 });

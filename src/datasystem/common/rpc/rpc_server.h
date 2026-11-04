@@ -252,12 +252,6 @@ public:
      * @return Listening port strings.
      */
 
-    /**
-     * @brief Obtains the threadpool usage of RpcService (interval-based, resets counters).
-     * @param[in] serviceName The name of rpc service.
-     */
-    ThreadPool::ThreadPoolUsage GetRpcServicesUsage(const std::string &serviceName) const;
-
     ThreadPool::ThreadPoolUsage GetRpcServicesSnapshot(const std::string &serviceName) const;
 
 private:

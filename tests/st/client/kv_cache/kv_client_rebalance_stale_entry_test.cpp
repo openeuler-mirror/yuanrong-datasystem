@@ -35,7 +35,6 @@
 #include "common.h"
 #include "common_distributed_ext.h"
 #include "datasystem/common/flags/common_flags.h"
-#include "datasystem/common/metrics/res_metric_name.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/protos/cluster_topology.pb.h"
@@ -55,7 +54,6 @@ constexpr size_t REPLICA_KEY_COUNT = 4;
 constexpr size_t UNREAD_KEY_COUNT = 34;
 constexpr size_t PRESSURE_KEY_COUNT = 10;
 constexpr size_t SOURCE_KEY_COUNT = REPLICA_KEY_COUNT + UNREAD_KEY_COUNT;
-constexpr size_t RESOURCE_LOG_PREFIX_FIELD_COUNT = 7;
 constexpr int POLL_INTERVAL_MS = 200;
 constexpr int RING_STABLE_TIMEOUT_MS = 45'000;
 constexpr int REPLACE_PRIMARY_TIMEOUT_MS = 30'000;
@@ -106,39 +104,6 @@ Status ParseObjectCountFromJsonLine(const std::string &line, uint64_t &count)
     }
     if (begin == end || !ParseUint64Field(line.substr(begin, end - begin), count)) {
         return Status(K_NOT_READY, "object_count field is empty or not numeric in the resource snapshot");
-    }
-    return Status::OK();
-}
-
-Status ParseObjectCountFromTextLine(const std::string &line, uint64_t &count)
-{
-    std::vector<std::string> fields;
-    size_t begin = 0;
-    while (true) {
-        const size_t pos = line.find(" | ", begin);
-        if (pos == std::string::npos) {
-            fields.emplace_back(line.substr(begin));
-            break;
-        }
-        fields.emplace_back(line.substr(begin, pos - begin));
-        begin = pos + 3;
-    }
-    const size_t metricIndex = RESOURCE_LOG_PREFIX_FIELD_COUNT
-                               + static_cast<size_t>(ResMetricName::OBJECT_COUNT)
-                               - static_cast<size_t>(ResMetricName::SHARED_MEMORY);
-    if (fields.size() <= metricIndex) {
-        return Status(K_NOT_READY,
-                      FormatString("OBJECT_COUNT field index %zu is out of range for a resource log line with %zu "
-                                   "fields",
-                                   metricIndex, fields.size()));
-    }
-    if (fields[metricIndex].empty()) {
-        return Status(K_NOT_READY, "OBJECT_COUNT field is empty in the resource log line");
-    }
-    if (!ParseUint64Field(fields[metricIndex], count)) {
-        return Status(K_NOT_READY,
-                      FormatString("OBJECT_COUNT field %s is not numeric in the resource log line",
-                                   fields[metricIndex]));
     }
     return Status::OK();
 }
@@ -313,18 +278,8 @@ protected:
     {
         const std::string logDir = FormatString("%s/../worker%u/log", FLAGS_log_dir.c_str(), workerIndex);
         std::string line;
-        Status rc = ReadLastLine(logDir + "/kv_resource.log", line);
-        if (rc.IsOk()) {
-            rc = ParseObjectCountFromJsonLine(line, count);
-            if (rc.IsOk()) {
-                return Status::OK();
-            }
-        }
-        rc = ReadLastLine(logDir + "/resource.log", line);
-        if (rc.IsError()) {
-            return rc;
-        }
-        return ParseObjectCountFromTextLine(line, count);
+        RETURN_IF_NOT_OK(ReadLastLine(logDir + "/kv_resource.log", line));
+        return ParseObjectCountFromJsonLine(line, count);
     }
 
     bool WaitForWorkerObjectCount(uint32_t workerIndex, const std::function<bool(uint64_t)> &predicate, int timeoutMs,

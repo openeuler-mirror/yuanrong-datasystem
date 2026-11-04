@@ -73,12 +73,6 @@ public:
         return thrdPool_ != nullptr ? thrdPool_->GetThreadPoolUsage() : empty;
     }
 
-    ThreadPool::ThreadPoolUsage GetThreadPoolUsage() const
-    {
-        static ThreadPool::ThreadPoolUsage empty;
-        return thrdPool_ != nullptr ? thrdPool_->GetAndResetIntervalStats() : empty;
-    }
-
 protected:
     Status InitThreadPool()
     {

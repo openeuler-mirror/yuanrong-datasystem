@@ -93,11 +93,6 @@ Status CommonServer::Shutdown()
     return Status::OK();
 }
 
-ThreadPool::ThreadPoolUsage CommonServer::GetRpcServicesUsage(const std::string &serviceName)
-{
-    return rpcServer_->GetRpcServicesUsage(serviceName);
-}
-
 ThreadPool::ThreadPoolUsage CommonServer::GetRpcServicesSnapshot(const std::string &serviceName)
 {
     return rpcServer_->GetRpcServicesSnapshot(serviceName);
