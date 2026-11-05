@@ -30,6 +30,7 @@
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/master/metadata_manager_holder.h"
+#include "datasystem/master/stream_cache/sc_metadata_manager.h"
 #include "datasystem/protos/master_stream.stub.rpc.pb.h"
 #include "datasystem/protos/master_stream.brpc.stub.pb.h"
 #include "datasystem/common/rpc/brpc_factory.h"

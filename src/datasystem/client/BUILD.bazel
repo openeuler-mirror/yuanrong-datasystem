@@ -114,11 +114,15 @@ ds_cc_library(
         "//src/datasystem/client/hetero_cache:hetero_client",
         "//src/datasystem/client/kv_cache:kv_client",
         "//src/datasystem/client/object_cache:object_client",
-        "//src/datasystem/client/stream_cache:stream_client",
         "//src/datasystem/common/object_cache:buffer",
         "//src/datasystem/common/object_cache:device_buffer",
         "//src/datasystem/common/util:status_helper",
     ] + select({
+        "//:stream_cache_enabled": [
+            "//src/datasystem/client/stream_cache:stream_client",
+        ],
+        "//conditions:default": [],
+    }) + select({
         "//:enable_pipeline_h2d": [
             "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline",
         ],

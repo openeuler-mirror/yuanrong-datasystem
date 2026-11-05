@@ -21,3 +21,14 @@ ds_cc_test(
         "//tests/ut:ut_common",
     ],
 )
+
+ds_cc_test(
+    name = "shm_lock_mixed_test",
+    srcs = ["shm_lock_mixed_test.cpp"],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/stream_cache:cursor",
+        "//src/datasystem/common/util:safe_shm_lock",
+        "//tests/ut:ut_common",
+    ],
+)

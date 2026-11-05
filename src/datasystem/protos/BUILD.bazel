@@ -8,6 +8,11 @@ PROTO_ROOT = "/src"
 
 ZMQ_PROTO_ROOT = "src"
 
+STREAM_CACHE_COMPATIBLE_WITH = select({
+    "//:stream_cache_enabled": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
 # ---------- zero layer ----------
 proto_library(
     name = "utils_proto",
@@ -146,6 +151,7 @@ proto_library(
     srcs = ["master_object.proto"],
     strip_import_prefix = PROTO_ROOT,
     deps = [
+        ":meta_transport_proto",
         "object_posix_proto",
         "p2p_subscribe_proto",
         "rpc_option_proto",
@@ -261,6 +267,7 @@ cc_library(
 
 proto_library(
     name = "worker_stream_proto",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "worker_stream.proto",
     ],
@@ -315,6 +322,7 @@ cc_proto_library(
 
 proto_library(
     name = "master_stream_proto",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = ["master_stream.proto"],
     strip_import_prefix = PROTO_ROOT,
     deps = [
@@ -342,6 +350,7 @@ cc_proto_library(
 
 proto_library(
     name = "stream_posix_proto",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = ["stream_posix.proto"],
     strip_import_prefix = PROTO_ROOT,
     deps = [
@@ -522,6 +531,7 @@ zmq_cc_proto_library(
 
 zmq_cc_proto_library(
     name = "worker_stream_zmq_cc_proto",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     extra_protos = [
         "@com_google_protobuf//:any_proto",
         ":stream_posix_proto",
@@ -552,6 +562,7 @@ zmq_cc_proto_library(
 
 zmq_cc_proto_library(
     name = "master_stream_zmq_cc_proto",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     extra_protos = [
         ":worker_stream_proto",
         ":utils_proto",
@@ -569,6 +580,7 @@ zmq_cc_proto_library(
 
 zmq_cc_proto_library(
     name = "stream_posix_zmq_cc_proto",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     extra_protos = [
         ":rpc_option_proto",
         ":utils_proto",
@@ -897,6 +909,7 @@ cc_library(
 # --- stream_posix brpc adapter (ClientWorkerSC, WorkerWorkerSC) ---
 genrule(
     name = "stream_posix_brpc_gen",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = ["stream_posix.proto", "rpc_option.proto", "utils.proto"],
     tools = [
         "@com_google_protobuf//:well_known_protos",
@@ -1006,6 +1019,7 @@ cc_library(
 # --- master_stream brpc adapter ---
 genrule(
     name = "master_stream_brpc_gen",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = ["master_stream.proto", "rpc_option.proto", "utils.proto", "worker_stream.proto", "stream_posix.proto"],
     tools = [
         "@com_google_protobuf//:well_known_protos",
@@ -1061,6 +1075,7 @@ cc_library(
 # --- worker_stream brpc adapter ---
 genrule(
     name = "worker_stream_brpc_gen",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = ["worker_stream.proto", "stream_posix.proto", "rpc_option.proto", "utils.proto"],
     tools = [
         "@com_google_protobuf//:well_known_protos",

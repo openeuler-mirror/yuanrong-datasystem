@@ -15,7 +15,6 @@ ds_cc_library(
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",
-        "//src/datasystem/master/stream_cache/store:stream_transform",
         "@rocksdb",
     ],
 )
@@ -25,7 +24,10 @@ ds_cc_library(
     srcs = [
         "rocks_store.cpp",
     ],
-    hdrs = ["rocks_store.h"],
+    hdrs = [
+        "rocks_store.h",
+        "stream_transform.h",
+    ],
     deps = [
         "//include/datasystem/object:object_headers",
         "//include/datasystem/utils:utils_headers",
@@ -42,7 +44,6 @@ ds_cc_library(
         "//src/datasystem/common/util:timer",
         "//src/datasystem/common/util:uri",
         "//src/datasystem/common/util:validator",
-        "//src/datasystem/master/stream_cache/store:stream_transform",
         "//third_party/protos/etcd:rpc_cc_proto",
         "@rocksdb",
     ],

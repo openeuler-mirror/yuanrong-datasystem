@@ -4,6 +4,10 @@ package(default_visibility = ["//visibility:public"])
 
 ds_cc_test_library(
     name = "stream_common",
+    target_compatible_with = select({
+        "//:stream_cache_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
     srcs = ["element_generator.cpp"],
     hdrs = [
         "element_generator.h",

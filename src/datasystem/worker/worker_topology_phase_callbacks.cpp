@@ -28,9 +28,8 @@
 #include "datasystem/master/metadata_manager_holder.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/master/object_cache/oc_migrate_metadata_manager.h"
-#include "datasystem/master/stream_cache/sc_metadata_manager.h"
-#include "datasystem/master/stream_cache/sc_migrate_metadata_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
+#include "datasystem/worker/stream_cache/worker_stream_services.h"
 
 namespace datasystem::worker {
 namespace {
@@ -109,7 +108,7 @@ void LogCallbackResult(const char *phase, const char *stage, const cluster::Topo
 }  // namespace
 
 WorkerTopologyPhaseCallbacks::WorkerTopologyPhaseCallbacks(WorkerTopologyPhaseCallbackDependencies dependencies)
-    : streamMetadataEnabled_(dependencies.streamMetadataEnabled),
+    : streamServices_(dependencies.streamServices),
       metadataManagers_(dependencies.metadataManagers),
       objectCacheServiceProvider_(std::move(dependencies.objectCacheServiceProvider)),
       readinessCheck_(std::move(dependencies.readinessCheck))
@@ -220,11 +219,7 @@ Status WorkerTopologyPhaseCallbacks::MigrateMetadata(const cluster::TopologyCall
 {
     RETURN_IF_NOT_OK(master::OCMigrateMetadataManager::Instance().MigrateTopologyMetadata(
         context.action, context.keyFilter, context.businessOperationId, context.deadline, context.cancellation));
-    if (!streamMetadataEnabled_) {
-        return Status::OK();
-    }
-    return master::SCMigrateMetadataManager::Instance().MigrateTopologyMetadata(
-        context.action, context.keyFilter, context.businessOperationId, context.deadline, context.cancellation);
+    return streamServices_.MigrateTopologyMetadata(context);
 }
 
 Status WorkerTopologyPhaseCallbacks::AcquireScaleInDrain(const cluster::TopologyCallbackContext &context,
@@ -310,35 +305,28 @@ void WorkerTopologyPhaseCallbacks::RecordFailureStep(const std::string &step, co
 Status WorkerTopologyPhaseCallbacks::RunFailureBestEffort(const cluster::TopologyCallbackContext &context)
 {
     std::shared_ptr<master::OCMetadataManager> ocMetadata;
-    std::shared_ptr<master::SCMetadataManager> scMetadata;
+    StreamFailureActions streamActions;
     Status firstError;
     RecordFailureStep("get-object-metadata", metadataManagers_.GetOcMetadataManager(ocMetadata), firstError,
                       context);
-    if (streamMetadataEnabled_) {
-        RecordFailureStep("get-stream-metadata", metadataManagers_.GetScMetadataManager(scMetadata), firstError,
-                          context);
+    if (streamServices_.Enabled()) {
+        RecordFailureStep("get-stream-metadata",
+                          streamServices_.PrepareFailureActions(metadataManagers_, streamActions), firstError, context);
     }
-    if (streamMetadataEnabled_ && scMetadata != nullptr) {
-        RecordFailureStep(
-            "recover-stream",
-            scMetadata->RecoverTopologyFailure(context.action, context.keyFilter, context.businessOperationId,
-                                               context.deadline, context.cancellation),
-            firstError, context);
+    if (streamActions.recover) {
+        RecordFailureStep("recover-stream", streamActions.recover(context), firstError, context);
     }
-    RunFailureCleanup(context, ocMetadata, scMetadata, firstError);
+    RunFailureCleanup(context, ocMetadata, streamActions, firstError);
     return firstError;
 }
 
 void WorkerTopologyPhaseCallbacks::RunFailureCleanup(const cluster::TopologyCallbackContext &context,
                                                      const std::shared_ptr<master::OCMetadataManager> &ocMetadata,
-                                                     const std::shared_ptr<master::SCMetadataManager> &scMetadata,
+                                                     const StreamFailureActions &streamActions,
                                                      Status &firstError)
 {
-    if (streamMetadataEnabled_ && scMetadata != nullptr) {
-        RecordFailureStep("cleanup-stream",
-                          scMetadata->CleanupTopologyFailedMember(context.action, context.businessOperationId,
-                                                                  context.deadline, context.cancellation),
-                          firstError, context);
+    if (streamActions.cleanup) {
+        RecordFailureStep("cleanup-stream", streamActions.cleanup(context), firstError, context);
     }
     if (ocMetadata != nullptr) {
         RecordFailureStep("cleanup-object",

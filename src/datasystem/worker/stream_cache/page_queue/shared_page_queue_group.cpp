@@ -31,21 +31,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 
-namespace {
-static bool ValidateGroupCount(const char *flagname, uint32_t value)
-{
-    const int32_t minValue = 1;
-    const int32_t maxValue = 64;
-    if ((value < minValue) || (value > maxValue)) {
-        LOG(ERROR) << "The " << flagname << " must be between " << minValue << " and " << maxValue << ".";
-        return false;
-    }
-    return true;
-}
-}  // namespace
-
-DS_DEFINE_uint32(sc_shared_page_group_count, 4, "the shared page count for each remote worker");
-DS_DEFINE_validator(sc_shared_page_group_count, &ValidateGroupCount);
+DS_DECLARE_uint32(sc_shared_page_group_count);
 
 namespace datasystem {
 namespace worker {

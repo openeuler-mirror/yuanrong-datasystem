@@ -45,8 +45,7 @@
 #include "datasystem/worker/stream_cache/remote_worker_manager.h"
 #include "datasystem/worker/stream_cache/stream_manager.h"
 
-DS_DEFINE_int32(remote_send_thread_num, 8, "The num of threads used to send elements to remote worker.");
-DS_DEFINE_validator(remote_send_thread_num, &Validator::ValidateThreadNum);
+DS_DECLARE_int32(remote_send_thread_num);
 
 namespace datasystem {
 namespace worker {

@@ -20,6 +20,7 @@ BASEPATH=$(cd "$(dirname $0)"; pwd)
 DATASYSTEM_HOME="$(realpath "${BASEPATH}/..")"
 echo "${DATASYSTEM_HOME}"
 BUILD_PATH=$1
+BUILD_STREAM_CACHE="${3:-off}"
 PACKAGE_PATH="$BUILD_PATH/package-go"
 
 echo "=========${DATASYSTEM_HOME}==================="
@@ -52,9 +53,11 @@ cd "${PACKAGE_PATH}/object"
 echo "go build in ${PWD}"
 go build || exit 1
 
-cd "${PACKAGE_PATH}/stream"
-echo "go build in ${PWD}"
-go build || exit 1
+if [[ "${BUILD_STREAM_CACHE}" == "on" ]]; then
+    cd "${PACKAGE_PATH}/stream"
+    echo "go build in ${PWD}"
+    go build || exit 1
+fi
 
 # compile the demo program.  This produces a binary
 cd "${PACKAGE_PATH}"

@@ -54,10 +54,9 @@
 
 DS_DECLARE_uint32(page_size);
 DS_DECLARE_uint64(client_dead_timeout_s);
-DS_DEFINE_int32(sc_thread_num, 128, "Number of threads for (non rpc) stream cache service work");
-DS_DEFINE_validator(sc_thread_num, &Validator::ValidateThreadNum);
-DS_DEFINE_uint32(sc_gc_interval_ms, 50, "Memory resource clean up interval. Default to 50ms");
-DS_DEFINE_bool(enable_stream_data_verification, false, "Option to verify if data from a producer is out of order");
+DS_DECLARE_int32(sc_thread_num);
+DS_DECLARE_uint32(sc_gc_interval_ms);
+DS_DECLARE_bool(enable_stream_data_verification);
 DS_DECLARE_uint32(sc_shared_page_size_mb);
 
 namespace datasystem {

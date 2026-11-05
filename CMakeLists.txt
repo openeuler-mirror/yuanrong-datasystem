@@ -24,6 +24,33 @@ include(CheckCXXCompilerFlag)
 include(cmake/options.cmake)
 include(cmake/util.cmake)
 
+if (BUILD_STREAM_CACHE)
+    set(STREAM_CACHE_ENABLED True)
+    set(STREAM_CACHE_ENABLED_CMAKE ON)
+else()
+    set(STREAM_CACHE_ENABLED False)
+    set(STREAM_CACHE_ENABLED_CMAKE OFF)
+endif()
+set(DATASYSTEM_PYTHON_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated/yr/datasystem")
+file(MAKE_DIRECTORY "${DATASYSTEM_PYTHON_GENERATED_DIR}")
+file(GLOB_RECURSE DATASYSTEM_PYTHON_SOURCES CONFIGURE_DEPENDS
+        RELATIVE "${CMAKE_SOURCE_DIR}/python/yr/datasystem"
+        "${CMAKE_SOURCE_DIR}/python/yr/datasystem/*.py")
+foreach(PYTHON_SOURCE IN LISTS DATASYSTEM_PYTHON_SOURCES)
+    if (NOT BUILD_STREAM_CACHE AND PYTHON_SOURCE STREQUAL "stream_client.py")
+        file(REMOVE "${DATASYSTEM_PYTHON_GENERATED_DIR}/${PYTHON_SOURCE}")
+        continue()
+    endif()
+    configure_file(
+            "${CMAKE_SOURCE_DIR}/python/yr/datasystem/${PYTHON_SOURCE}"
+            "${DATASYSTEM_PYTHON_GENERATED_DIR}/${PYTHON_SOURCE}"
+            COPYONLY)
+endforeach()
+configure_file(
+    "${CMAKE_SOURCE_DIR}/cmake/python_build_features.py.in"
+    "${DATASYSTEM_PYTHON_GENERATED_DIR}/_build_features.py"
+    @ONLY)
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Use C++17 standard.
@@ -193,6 +220,7 @@ include_directories(src)
 if (BUILD_TRANSFER_ENGINE AND BUILD_HETERO AND BUILD_HETERO_NPU)
     set(TRANSFER_ENGINE_BUILD_PYTHON ${BUILD_PYTHON_API} CACHE BOOL "" FORCE)
     set(TRANSFER_ENGINE_BUILD_TESTS ${WITH_TESTS} CACHE BOOL "" FORCE)
+    set(TRANSFER_ENGINE_PYTHON_OUTPUT_DIR "${DATASYSTEM_PYTHON_GENERATED_DIR}" CACHE PATH "Integrated Python package" FORCE)
     add_subdirectory(transfer_engine)
 endif()
 

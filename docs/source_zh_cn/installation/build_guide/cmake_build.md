@@ -168,6 +168,22 @@ cd yuanrong-datasystem
 bash build.sh -X off
 ```
 
+StreamCache 默认不编译；需要使用 Stream SDK 时显式开启：
+
+```bash
+bash build.sh -X off --stream-cache on
+bash build.sh -X off --stream-cache off
+```
+
+该开关同时控制 C++、Python、Java、Go 的 Stream 接口。直接使用 CMake 时传入
+`-DBUILD_STREAM_CACHE=ON/OFF`；复用曾开启的构建目录时，关闭必须显式传入 `OFF`。
+
+Python 源码调试或测试使用构建生成的完整包（自定义构建目录时替换 `build`）：
+
+```bash
+PYTHONPATH="$PWD/build/generated${PYTHONPATH:+:$PYTHONPATH}" python3 -c 'import yr.datasystem'
+```
+
 如需编译异构对象带昇腾的特性，需要在开始编译前需要初始化Ascend相关的环境变量，非 root 用户执行：
 ```bash
 source ${HOME}/Ascend/ascend-toolkit/set_env.sh

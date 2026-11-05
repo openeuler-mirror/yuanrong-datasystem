@@ -32,10 +32,9 @@
 #include "datasystem/worker/stream_cache/stream_data_pool.h"
 #include "datasystem/worker/stream_cache/stream_manager.h"
 
-DS_DEFINE_int32(sc_scan_num_buckets, 1024, "Number of partitions for scanning streams");
-DS_DEFINE_int32(sc_scan_interval_ms, 10, "Scan interval for remote send. Default to 10ms");
-DS_DEFINE_int32(sc_scan_thread_num, 16, "Number of threads for scanning shared memory changes");
-DS_DEFINE_validator(sc_scan_thread_num, &Validator::ValidateThreadNum);
+DS_DECLARE_int32(sc_scan_num_buckets);
+DS_DECLARE_int32(sc_scan_interval_ms);
+DS_DECLARE_int32(sc_scan_thread_num);
 
 namespace datasystem {
 namespace worker {

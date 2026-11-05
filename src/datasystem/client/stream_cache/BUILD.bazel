@@ -2,8 +2,14 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//src/datasystem:__subpackages__"])
 
+STREAM_CACHE_COMPATIBLE_WITH = select({
+    "//:stream_cache_enabled": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
 ds_cc_library(
     name = "client_worker_api",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "client_worker_api.cpp",
     ],
@@ -28,6 +34,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "consumer",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "consumer.cpp",
     ],
@@ -43,6 +50,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "producer_consumer_worker_api",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "producer_consumer_worker_api.cpp",
     ],
@@ -60,6 +68,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "producer",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "producer.cpp",
     ],
@@ -75,6 +84,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "receive_element",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = [
         "receive_element.h",
     ],
@@ -82,6 +92,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "stream_cache_impl",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "client_base_impl.cpp",
         "consumer_impl.cpp",
@@ -112,6 +123,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "stream_client",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "stream_client.cpp",
     ],

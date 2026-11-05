@@ -166,7 +166,8 @@ def zmq_cc_proto_library(
         deps = [],
         visibility = None,
         env = {},
-        extra_protos = []):
+        extra_protos = [],
+        target_compatible_with = []):
     gen_name = name + "_gen"
     zmq_proto_gen(
         name = gen_name,
@@ -176,6 +177,7 @@ def zmq_cc_proto_library(
         plugin = "@yuanrong-datasystem//src/datasystem/common/rpc/plugin_generator:zmq_plugin",  # 修改成代码中生成的target
         env = env,
         extra_protos = extra_protos,
+        target_compatible_with = target_compatible_with,
         visibility = visibility,
     )
 

@@ -2,8 +2,14 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
+STREAM_CACHE_COMPATIBLE_WITH = select({
+    "//:stream_cache_enabled": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
 ds_cc_library(
     name = "shared_page_queue_header",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = [
         "shared_page_queue.h",
     ],
@@ -15,6 +21,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "shared_page_queue",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "shared_page_queue.cpp",
     ],
@@ -39,6 +46,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "shared_page_queue_group_header",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = [
         "shared_page_queue_group.h",
     ],
@@ -50,6 +58,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "shared_page_queue_group",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "shared_page_queue_group.cpp",
     ],
@@ -69,6 +78,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "page_queue_handler_header",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = [
         "page_queue_handler.h",
     ],
@@ -83,6 +93,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "page_queue_handler",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "page_queue_handler.cpp",
     ],
@@ -109,6 +120,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "exclusive_page_queue_header",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = [
         "exclusive_page_queue.h",
     ],
@@ -126,6 +138,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "exclusive_page_queue",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "exclusive_page_queue.cpp",
     ],
@@ -159,6 +172,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "page_queue_base_header",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = [
         "page_queue_base.h",
     ],
@@ -171,6 +185,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "page_queue_base",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "page_queue_base.cpp",
     ],

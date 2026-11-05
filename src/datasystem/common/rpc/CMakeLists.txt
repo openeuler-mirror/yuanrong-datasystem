@@ -108,15 +108,19 @@ add_dependencies(common_rpc_zmq_client rpc_option_protos)
 
 set(RPC_STUB_CACHE_MGR_SRCS
         rpc_stub_cache_mgr.cpp
+        rpc_stub_cache_stream.cpp
 )
 
 set(RPC_STUB_CACHE_MGR_DEPENDS_LIBS
         coordinator_protos
         master_object_protos
         worker_object_protos
-        master_stream_protos
-        worker_stream_protos
 )
 
 add_library(rpc_stub_cache_mgr STATIC ${RPC_STUB_CACHE_MGR_SRCS})
 target_link_libraries(rpc_stub_cache_mgr PUBLIC ${RPC_STUB_CACHE_MGR_DEPENDS_LIBS})
+
+if (BUILD_STREAM_CACHE)
+    target_compile_definitions(rpc_stub_cache_mgr PRIVATE BUILD_STREAM_CACHE)
+    target_link_libraries(rpc_stub_cache_mgr PUBLIC master_stream_protos worker_stream_protos)
+endif()

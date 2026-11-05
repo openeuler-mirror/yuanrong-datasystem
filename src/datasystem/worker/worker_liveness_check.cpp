@@ -50,29 +50,24 @@
 
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_string(rocksdb_write_mode);
-DS_DECLARE_int32(sc_regular_socket_num);
-DS_DECLARE_int32(sc_stream_socket_num);
 
 namespace datasystem {
 namespace worker {
 WorkerLivenessCheck::WorkerLivenessCheck(WorkerOCServer *workerOcServer, std::string probeFileName,
-                                         uint32_t probeTimeoutMs, HostPort hostPort, std::string workerUuid)
+                                         uint32_t probeTimeoutMs, HostPort hostPort, std::string workerUuid,
+                                         bool streamCacheEnabled)
     : workerOcServer_(workerOcServer),
       probeFileName_(std::move(probeFileName)),
       probeTimeoutMs_(probeTimeoutMs),
       policies_{ { "CheckWorkerServices", std::bind(&WorkerLivenessCheck::CheckWorkerServices, this) } },
       hostPort_(std::move(hostPort)),
-      workerUuid_(std::move(workerUuid))
+      workerUuid_(std::move(workerUuid)),
+      streamCacheEnabled_(streamCacheEnabled)
 {
     if (workerOcServer_ != nullptr && workerOcServer_->GetOcMetaSvc() != nullptr) {
         policies_.emplace_back(
             Policy{ "CheckRocksDbService", std::bind(&WorkerLivenessCheck::CheckRocksDbService, this) });
     }
-}
-
-inline bool EnableSCService()
-{
-    return FLAGS_sc_regular_socket_num > 0 && FLAGS_sc_stream_socket_num > 0;
 }
 
 Status WorkerLivenessCheck::Init()
@@ -88,7 +83,7 @@ Status WorkerLivenessCheck::Init()
     if (workerOcServer_ != nullptr && workerOcServer_->GetOcMetaSvc() != nullptr) {
         servicesNames_.emplace_back("MasterOCService");
     }
-    if (EnableSCService()) {
+    if (streamCacheEnabled_) {
         servicesNames_.emplace_back("ClientWorkerSCService");
         servicesNames_.emplace_back("WorkerWorkerSCService");
         servicesNames_.emplace_back("MasterWorkerSCService");

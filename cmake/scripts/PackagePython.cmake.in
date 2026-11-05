@@ -26,15 +26,23 @@ foreach(SO_FILE ${SO_FILES})
 endforeach()
 
 # Run python setup.py bdist_wheel to generate origin wheel file.
+file(GLOB ORIGIN_WHEEL "${PYTHON_PACKAGE_PATH}/dist/*.whl")
+if(ORIGIN_WHEEL)
+    file(REMOVE ${ORIGIN_WHEEL})
+endif()
 execute_process(
-    COMMAND ${Python3_EXECUTABLE} setup.py bdist_wheel
+    COMMAND ${Python3_EXECUTABLE} setup.py bdist_wheel --dist-dir "${PYTHON_PACKAGE_PATH}/dist"
     WORKING_DIRECTORY ${PYTHON_PACKAGE_PATH}
     RESULT_VARIABLE result
 )
 if(NOT result EQUAL 0)
     message(FATAL_ERROR "build wheel failed with exit code ${result}")
 endif()
-file(GLOB ORIGIN_WHEEL "python_api/dist/*.whl")
+file(GLOB ORIGIN_WHEEL "${PYTHON_PACKAGE_PATH}/dist/*.whl")
+list(LENGTH ORIGIN_WHEEL WHEEL_COUNT)
+if(NOT WHEEL_COUNT EQUAL 1)
+    message(FATAL_ERROR "Expected one generated wheel, found ${WHEEL_COUNT}")
+endif()
 # Rename origin wheel file and move to install path.
 file(COPY ${ORIGIN_WHEEL} DESTINATION ${CMAKE_INSTALL_PATH})
 # Remove temporary package path

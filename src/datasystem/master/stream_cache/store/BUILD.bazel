@@ -2,18 +2,14 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
-ds_cc_library(
-    name = "stream_transform",
-    hdrs = [
-        "stream_transform.h",
-    ],
-    deps = [
-        "//src/datasystem/common/log:common_log_header",
-    ],
-)
+STREAM_CACHE_COMPATIBLE_WITH = select({
+    "//:stream_cache_enabled": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
 
 ds_cc_library(
     name = "rocks_stream_meta_store",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = [
         "rocks_stream_meta_store.h",
     ],

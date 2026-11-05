@@ -1,8 +1,4 @@
-#stream cache
 set(CLIENT_JNI_API_SRCS
-        stream/org_yuanrong_datasystem_stream_ConsumerImpl.cpp
-        stream/org_yuanrong_datasystem_stream_ProducerImpl.cpp
-        stream/org_yuanrong_datasystem_stream_StreamClient.cpp
         object/org_yuanrong_datasystem_object_ObjectClient.cpp
         object/org_yuanrong_datasystem_object_BufferImpl.cpp
         kv/org_yuanrong_datasystem_kv_KVClient.cpp
@@ -10,6 +6,13 @@ set(CLIENT_JNI_API_SRCS
         org_yuanrong_datasystem_Context.cpp
         jni_util.cpp
         )
+
+if (BUILD_STREAM_CACHE)
+    list(APPEND CLIENT_JNI_API_SRCS
+            stream/org_yuanrong_datasystem_stream_ConsumerImpl.cpp
+            stream/org_yuanrong_datasystem_stream_ProducerImpl.cpp
+            stream/org_yuanrong_datasystem_stream_StreamClient.cpp)
+endif()
 
 set(CLIENT_JNI_API_DEPEND_LIBS ds_flags datasystem)
 

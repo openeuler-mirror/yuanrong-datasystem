@@ -33,7 +33,6 @@
 #include "datasystem/worker/stream_cache/stream_data_pool.h"
 #include "datasystem/worker/stream_cache/stream_manager.h"
 
-DS_DEFINE_uint32(sc_cache_pages, 16, "Default number of cache pages");
 DS_DECLARE_string(sc_encrypt_secret_key);
 DS_DECLARE_string(encrypt_kit);
 DS_DECLARE_uint64(shared_memory_size_mb);

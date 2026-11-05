@@ -25,7 +25,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uri.h"
-#include "datasystem/master/stream_cache/store/stream_transform.h"
+#include "datasystem/common/kvstore/rocksdb/stream_transform.h"
 
 namespace datasystem {
 namespace master {

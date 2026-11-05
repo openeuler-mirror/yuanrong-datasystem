@@ -2,8 +2,22 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
+exports_files(
+    [
+        "worker_stream_services.cpp",
+        "worker_stream_services.h",
+    ],
+    visibility = ["//src/datasystem/worker:__pkg__"],
+)
+
+STREAM_CACHE_COMPATIBLE_WITH = select({
+    "//:stream_cache_enabled": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
 ds_cc_library(
     name = "usage_monitor_header",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = [
         "usage_monitor.h",
     ],
@@ -16,6 +30,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "usage_monitor",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "usage_monitor.cpp",
     ],
@@ -37,6 +52,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "stream_manager_header",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = [
         "stream_manager.h",
         "worker_worker_sc_service_impl.h",
@@ -71,6 +87,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "stream_manager",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "stream_manager.cpp",
         "worker_worker_sc_service_impl.cpp",
@@ -118,6 +135,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "subscription",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "subscription.cpp",
     ],
@@ -136,6 +154,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "worker_master_sc_api",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "worker_master_sc_api.cpp",
     ],
@@ -163,6 +182,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "remote_worker_manager_header",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = [
         "remote_worker_manager.h",
     ],
@@ -184,6 +204,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "remote_worker_manager",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "remote_worker_manager.cpp",
     ],
@@ -225,6 +246,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "stream_data_pool_header",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = [
         "stream_data_pool.h",
     ],
@@ -240,6 +262,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "stream_data_pool",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "stream_data_pool.cpp",
     ],
@@ -268,6 +291,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "master_worker_sc_service_impl",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "master_worker_sc_service_impl.cpp",
     ],
@@ -288,6 +312,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "buffer_pool",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "buffer_pool.cpp",
     ],
@@ -310,6 +335,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "stream_producer",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [],
     hdrs = [
         "stream_producer.h",
@@ -320,6 +346,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "client_worker_sc_service_header",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = [
         "client_worker_sc_service_impl.h",
     ],
@@ -344,6 +371,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "client_worker_sc_service_impl",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "client_worker_sc_service_impl.cpp",
     ],
@@ -390,6 +418,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "producer",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "producer.cpp",
     ],
@@ -406,6 +435,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "consumer",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "consumer.cpp",
     ],
@@ -423,6 +453,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "worker_worker_sc_service_impl_backup",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "worker_worker_sc_service_impl.cpp",
     ],
@@ -440,6 +471,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "worker_sc_allocate_memory",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "worker_sc_allocate_memory.cpp",
     ],

@@ -240,7 +240,6 @@ ds_cc_test(
     deps = [
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/common/inject:common_inject",
-        "//src/datasystem/common/stream_cache:cursor",
         "//src/datasystem/common/util:safe_shm_lock",
         "//tests/ut:ut_common",
     ],
@@ -365,6 +364,7 @@ test_suite(
         "sched_runtime_test",
         "safe_object_test",
         "shm_lock_test",
+        "//tests/ut/common/stream_cache:shm_lock_mixed_test",
         "skip_list_test",
         "status_test",
         "strings_util_test",

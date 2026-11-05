@@ -37,10 +37,15 @@ ds_cc_library(
     name = "metadata_manager_holder",
     srcs = [
         "metadata_manager_holder.cpp",
+        "//src/datasystem/master/stream_cache:metadata_manager_stream_holder.cpp",
     ],
     hdrs = [
         "metadata_manager_holder.h",
     ],
+    local_defines = select({
+        "//:stream_cache_enabled": ["BUILD_STREAM_CACHE"],
+        "//conditions:default": [],
+    }),
     deps = [
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
@@ -48,7 +53,12 @@ ds_cc_library(
         "//src/datasystem/common/l2cache:persistence_api_header",
         "//src/datasystem/common/util:common_util",
         "//src/datasystem/master/object_cache:oc_metadata_manager",
-        "//src/datasystem/master/stream_cache:sc_metadata_manager",
+    ] + select({
+        "//:stream_cache_enabled": [
+            "//src/datasystem/master/stream_cache:sc_metadata_manager",
+        ],
+        "//conditions:default": [],
+    }) + [
         "//src/datasystem/cluster:cluster_topology",
     ],
 )

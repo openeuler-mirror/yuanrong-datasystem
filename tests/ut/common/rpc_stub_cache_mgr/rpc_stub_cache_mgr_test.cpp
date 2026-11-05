@@ -103,6 +103,8 @@ TEST_F(RpcStubCacheMgrTest, AuthenticationCreatorsFreezeOwnerAndRetainItOnlyForS
 {
     auto provider = std::make_shared<Signature>("test-only-cache-access", SensitiveValue("test-only-cache-secret"));
     {
+        RpcAuthCacheProbe reference;
+        ASSERT_TRUE(reference.Init(8, HostPort(), provider).IsOk());
         RpcAuthCacheProbe retry;
         ASSERT_TRUE(inject::Set("RpcStubCacheMgr.InitCreators", "return(K_OUT_OF_MEMORY)").IsOk());
         Raii clear([] { (void)inject::Clear("RpcStubCacheMgr.InitCreators"); });
@@ -110,7 +112,7 @@ TEST_F(RpcStubCacheMgrTest, AuthenticationCreatorsFreezeOwnerAndRetainItOnlyForS
         EXPECT_EQ(retry.CreatorCount(), 0);
         ASSERT_TRUE(inject::Clear("RpcStubCacheMgr.InitCreators").IsOk());
         EXPECT_TRUE(retry.Init(8, HostPort(), provider).IsOk());
-        EXPECT_EQ(retry.CreatorCount(), 11);
+        EXPECT_EQ(retry.CreatorCount(), reference.CreatorCount());
     }
     const std::weak_ptr<Signature> weak = provider;
     std::shared_ptr<RpcStubBase> worker;

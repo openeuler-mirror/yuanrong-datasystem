@@ -11,8 +11,6 @@
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/master/object_cache/oc_migrate_metadata_manager.h"
-#include "datasystem/master/stream_cache/sc_metadata_manager.h"
-#include "datasystem/master/stream_cache/sc_migrate_metadata_manager.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/worker/worker_topology_phase_callbacks.h"
@@ -25,19 +23,10 @@ namespace {
 using MetadataMigration = Status (master::OCMigrateMetadataManager::*)(
     const cluster::TopologyPhaseAction &, const cluster::IKeyFilter &, const std::string &,
     std::chrono::steady_clock::time_point, const cluster::CancellationToken &);
-using StreamMigration = Status (master::SCMigrateMetadataManager::*)(
-    const cluster::TopologyPhaseAction &, const cluster::IKeyFilter &, const std::string &,
-    std::chrono::steady_clock::time_point, const cluster::CancellationToken &);
-using StreamFailureRecovery = Status (master::SCMetadataManager::*)(
-    const cluster::TopologyPhaseAction &, const cluster::IKeyFilter &, const std::string &,
-    std::chrono::steady_clock::time_point, const cluster::CancellationToken &);
 using ScaleInData = Status (object_cache::WorkerOCServiceImpl::*)(
     const cluster::TopologyPhaseAction &, const std::string &, std::chrono::steady_clock::time_point,
     const cluster::CancellationToken &);
 using ObjectFailureCleanup = Status (master::OCMetadataManager::*)(
-    const cluster::TopologyPhaseAction &, const std::string &, std::chrono::steady_clock::time_point,
-    const cluster::CancellationToken &);
-using StreamFailureCleanup = Status (master::SCMetadataManager::*)(
     const cluster::TopologyPhaseAction &, const std::string &, std::chrono::steady_clock::time_point,
     const cluster::CancellationToken &);
 using ScaleInCleanup = Status (object_cache::WorkerOCServiceImpl::*)(
@@ -55,21 +44,12 @@ TEST(TopologyBusinessContractTest, ExposesOnlyOpaqueTaskLevelBusinessEntryPoints
     EXPECT_TRUE((std::is_same_v<decltype(static_cast<MetadataMigration>(
                                     &master::OCMigrateMetadataManager::MigrateTopologyMetadata)),
                                 MetadataMigration>));
-    EXPECT_TRUE((std::is_same_v<decltype(static_cast<StreamMigration>(
-                                    &master::SCMigrateMetadataManager::MigrateTopologyMetadata)),
-                                StreamMigration>));
-    EXPECT_TRUE((std::is_same_v<decltype(static_cast<StreamFailureRecovery>(
-                                    &master::SCMetadataManager::RecoverTopologyFailure)),
-                                StreamFailureRecovery>));
     EXPECT_TRUE((std::is_same_v<decltype(static_cast<ScaleInData>(
                                     &object_cache::WorkerOCServiceImpl::DrainTopologyScaleInData)),
                                 ScaleInData>));
     EXPECT_TRUE((std::is_same_v<decltype(static_cast<ObjectFailureCleanup>(
                                     &master::OCMetadataManager::CleanupTopologyFailedMember)),
                                 ObjectFailureCleanup>));
-    EXPECT_TRUE((std::is_same_v<decltype(static_cast<StreamFailureCleanup>(
-                                    &master::SCMetadataManager::CleanupTopologyFailedMember)),
-                                StreamFailureCleanup>));
     EXPECT_TRUE((std::is_same_v<decltype(static_cast<ScaleInCleanup>(
                                     &object_cache::WorkerOCServiceImpl::PrepareTopologyScaleInCleanup)),
                                 ScaleInCleanup>));

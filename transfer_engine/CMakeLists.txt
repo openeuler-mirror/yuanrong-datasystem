@@ -393,13 +393,13 @@ if (TRANSFER_ENGINE_BUILD_TESTS)
             transfer_engine_integrated_python_no_ctypes_cdll
             "${CMAKE_CURRENT_SOURCE_DIR}/../python/yr/datasystem/__init__.py"
             "ctypes.CDLL")
-        if (TRANSFER_ENGINE_BUILD_PYTHON)
+        if (TRANSFER_ENGINE_BUILD_PYTHON AND NOT TRANSFER_ENGINE_STANDALONE)
             add_test(
                 NAME transfer_engine_integrated_python_parent_import_lazy
                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/python/check_parent_import_lazy.py
             )
             set_tests_properties(transfer_engine_integrated_python_parent_import_lazy PROPERTIES
-                ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/../python"
+                ENVIRONMENT "PYTHONPATH=${DATASYSTEM_PYTHON_GENERATED_DIR}/../.."
             )
         endif()
     endif()
@@ -494,8 +494,12 @@ if (TRANSFER_ENGINE_BUILD_PYTHON)
         if (DEFINED ENV{LD_LIBRARY_PATH} AND NOT "$ENV{LD_LIBRARY_PATH}" STREQUAL "")
             string(APPEND _te_python_st_ld_library_path ":$ENV{LD_LIBRARY_PATH}")
         endif()
+        set(_te_python_st_pythonpath "${CMAKE_CURRENT_SOURCE_DIR}:${CMAKE_CURRENT_SOURCE_DIR}/python")
+        if (NOT TRANSFER_ENGINE_STANDALONE)
+            set(_te_python_st_pythonpath "${DATASYSTEM_PYTHON_GENERATED_DIR}/../..:${CMAKE_CURRENT_SOURCE_DIR}")
+        endif()
         set(_te_python_st_environment
-            "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}:${CMAKE_CURRENT_SOURCE_DIR}/python"
+            "PYTHONPATH=${_te_python_st_pythonpath}"
             "LD_LIBRARY_PATH=${_te_python_st_ld_library_path}"
         )
         add_test(

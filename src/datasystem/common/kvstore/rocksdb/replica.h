@@ -76,9 +76,10 @@ public:
     /**
      * @brief Remove local object/stream metadata RocksDB directories from filesystem.
      * @param[in] dbRootPath The db root path.
+     * @param[in] includeStreamStore Whether to remove the stream metadata directory.
      * @return Status of this call.
      */
-    static Status RemoveRocksFromFileSystem(const std::string &dbRootPath);
+    static Status RemoveRocksFromFileSystem(const std::string &dbRootPath, bool includeStreamStore = true);
 };
 }  // namespace datasystem
 #endif

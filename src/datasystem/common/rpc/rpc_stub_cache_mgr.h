@@ -28,6 +28,7 @@
 
 #include <brpc/channel.h>
 
+#include "datasystem/common/rpc/brpc_auth.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/locks.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
@@ -42,9 +43,6 @@
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
-struct RpcSigningBinding;
-class Signature;
-
 // brpc listens on the port specified by --worker_address.
 constexpr int kBrpcPortOffset = 0;
 constexpr int kBrpcConnMaxRetries = 30;
@@ -338,6 +336,13 @@ protected:
     const static int stubPriorityNum_ = 2;
     HostPort localAddress_;
     std::shared_ptr<Signature> rpcCredentials_;
+
+private:
+    static Status CreateMeshMethodMap(std::shared_ptr<const RpcMethodMap> &methods);
+    static void InitStreamCreators(const RpcSigningBinding &binding, RpcStubCreators &creators);
+    static RpcStubCacheCreateFunc MakeBrpcCreator(StubType stubType, const RpcSigningBinding &binding);
+    static Status CreateStreamBrpcStub(StubType type, const std::shared_ptr<brpc::Channel> &brpcChannel,
+                                       int32_t timeoutMs, std::shared_ptr<RpcStubBase> &stub);
 };
 };  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_STUB_CACHE_MGR_H

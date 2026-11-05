@@ -1,5 +1,16 @@
 # Client SDK
 
+## StreamCache build variants
+
+- `BUILD_STREAM_CACHE` defaults OFF; SDK headers, bindings and package exports follow this value.
+- `build.sh --stream-cache on/off` selects the same feature for CMake and Bazel; the value is a separate argument.
+- Build-time Python consumers use `<build>/generated`, including `_build_features.py` and the native module.
+- Python LLT (`run_ut_python`) uses the matching installed wheel. Do not prepend `<build>/generated` there: that package
+  omits the CLI subtree and would shadow the complete wheel.
+- CMake SDK configs export `Datasystem_STREAM_CACHE_ENABLED`; example selection follows the selected SDK.
+- Maven retains its existing output paths; Stream source and test selection follows the build switch.
+- Integrated TransferEngine Python tests use the generated package; standalone tests retain their source package.
+
 ## Routed SHM read-reference handoff
 
 - `ShmTransporter::Get/BatchGet` and `ObjectMetadataClient::ApplyResults` register response references before
@@ -51,6 +62,10 @@
   - provide the user-facing client APIs for KV, Object, Stream, hetero, and context operations;
   - connect SDK calls to worker/master services through shared memory, RPC, and optional device transfer paths;
   - expose the same core capabilities across C++ and Python.
+- Public header inclusion:
+  - KV, Object, and hetero users include `datasystem/kv_client.h`, `datasystem/object_client.h`, and
+    `datasystem/hetero_client.h` directly.
+  - Stream users explicitly include `datasystem/stream_client.h`, as shown by `example/cpp/stream_client_example.cpp`.
 - Primary source files to verify against:
   - `include/datasystem/kv_client.h`
   - `include/datasystem/object_client.h`

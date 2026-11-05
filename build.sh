@@ -21,7 +21,7 @@ Usage: bash build.sh [-h] [-r] [-d] [-b cmake|bazel] [-c off/on/html] [-t off|bu
                      [-p on|off] [-S address|thread|undefined|address_undefined|off] [-o <install dir>] [-u <thread_num>]
                      [-B <build_dir>] [-J on|off] [-P on/off] [-G on/off] [-v <version>] [-X on/off|gpu|npu|all] [-e on/off]
                      [-R on/off] [-O on/off] [-I <observability install dir>] [-M off/on] [-T on/off]
-                     [-A on/off] [-U on/off] [-C on/off] [-l <llt_label>] [-i on/off] [-n on/off] [-x on/off]
+                     [-A on/off] [-U on/off] [-C on/off] [-l <llt_label>] [-i on/off] [-n on/off] [-x on/off] [--stream-cache on/off]
 
 Options:
     -h Output this help and exit.
@@ -35,6 +35,7 @@ Options:
     -j Set the number of threads for compiling source code and compiling open source software, default is 8.
     -i Incremental compilation, choose from: on/off, default: off. (cmake only)
     -n Use Ninja to speed up compilation, the default is to compile using Unix Makefiles, choose from: on/off, default: off. (cmake only)
+    --stream-cache on/off Build StreamCache, default: off.
 
     For multiple programming languages:
     -J Build Java api client, choose from: on/off, default: off.
@@ -154,8 +155,27 @@ function main() {
     echo "Can't get logical cpu count, set to default 16"
     logical_cpu_cout=16
   fi
-  while getopts 'hdro:j:t:u:c:e:p:s:l:i:n:A:B:F:S:J:G:P:v:X:R:D:C:M:U:x:m:T:b:' OPT; do
+  while getopts 'hdro:j:t:u:c:e:p:s:l:i:n:A:B:F:S:J:G:P:v:X:R:D:C:M:U:x:m:T:b:-:' OPT; do
     case "${OPT}" in
+    -)
+      case "${OPTARG}" in
+      stream-cache)
+        if [[ "${OPTIND}" -gt "$#" ]]; then
+          echo -e "Option --stream-cache requires on or off."
+          echo -e "${USAGE}"
+          exit 1
+        fi
+        BUILD_STREAM_CACHE="${!OPTIND}"
+        check_on_off "${BUILD_STREAM_CACHE}" "-stream-cache"
+        OPTIND=$((OPTIND + 1))
+        ;;
+      *)
+        echo -e "Invalid option --${OPTARG}"
+        echo -e "${USAGE}"
+        exit 1
+        ;;
+      esac
+      ;;
     d)
       BUILD_TYPE="Debug"
       ;;

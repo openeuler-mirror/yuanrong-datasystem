@@ -1,10 +1,14 @@
+def _header_sort_key(header):
+    return header.short_path
+
+
 def _datasystem_sdk_tree_impl(ctx):
     out_dir = ctx.actions.declare_directory(ctx.label.name)
     out_tar = ctx.actions.declare_file(ctx.label.name + ".tar")
     header_args = []
 
     prefix = "include/datasystem/"
-    for header in sorted(ctx.files.headers, key = lambda f: f.short_path):
+    for header in sorted(ctx.files.headers, key = _header_sort_key):
         if not header.short_path.startswith(prefix):
             fail("Header %s is not under include/datasystem/" % header.short_path)
         rel = header.short_path[len(prefix):]

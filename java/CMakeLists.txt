@@ -13,6 +13,14 @@ string(REPLACE "\n" ";" JAVA_SRCS_LIST ${JAVA_SRCS})
 set(CLIENT_API_JAR ${CMAKE_CURRENT_SOURCE_DIR}/target/datasystem-${JAVA_API_VERSION}.jar)
 set(CLIENT_API_JAR_FINAL ${CMAKE_CURRENT_SOURCE_DIR}/target/datasystem-${JAVA_API_VERSION}_${CMAKE_HOST_SYSTEM_PROCESSOR}.jar)
 
+set(JAVA_STREAM_CACHE_ENABLED false)
+if (BUILD_STREAM_CACHE)
+    set(JAVA_STREAM_CACHE_ENABLED true)
+endif()
+set(JAVA_STREAM_CACHE_CONFIG "${CMAKE_CURRENT_BINARY_DIR}/stream_cache.config")
+file(GENERATE OUTPUT "${JAVA_STREAM_CACHE_CONFIG}"
+     CONTENT "stream.cache.enabled=${JAVA_STREAM_CACHE_ENABLED}\n")
+
 set(JNI_LIB_PATH ${CMAKE_BINARY_DIR}/java/jni_lib)
 set(STRIP_GEN_HASH_SCRIPT ${CMAKE_SOURCE_DIR}/cmake/scripts/StripAndGenHash.cmake)
 
@@ -40,24 +48,29 @@ add_custom_command(OUTPUT ${JNI_LIB_PATH}/libclient_jni_api.so
 add_custom_command(OUTPUT ${CLIENT_API_JAR_FINAL}
     COMMAND mvn clean package
             -DskipTests
+            -Dstream.cache.enabled=${JAVA_STREAM_CACHE_ENABLED}
             -Dapi_version=${JAVA_API_VERSION}
             -Dcmake.build.dir=${CMAKE_BINARY_DIR}
             -Djni.lib.dir=${JNI_LIB_PATH}
             -Dcpu.architecture=${CMAKE_HOST_SYSTEM_PROCESSOR}
             -f ${CMAKE_CURRENT_SOURCE_DIR}/pom.xml
     COMMAND ${CMAKE_COMMAND} -E copy ${CLIENT_API_JAR} ${CLIENT_API_JAR_FINAL}
-    DEPENDS ${JNI_LIB_PATH}/libclient_jni_api.so ${JAVA_SRCS_LIST}
+    DEPENDS ${JNI_LIB_PATH}/libclient_jni_api.so ${JAVA_SRCS_LIST} ${JAVA_STREAM_CACHE_CONFIG}
 )
 
 add_custom_target(mvn_compile ALL DEPENDS ${CLIENT_API_JAR_FINAL})
 
 # test all java api
 if (WITH_TESTS)
-    set(JAVA_TEST_CLASSES StreamClientTest ObjectClientTest KVClientTest)
+    set(JAVA_TEST_CLASSES ObjectClientTest KVClientTest)
+    if (BUILD_STREAM_CACHE)
+        list(INSERT JAVA_TEST_CLASSES 0 StreamClientTest)
+    endif()
     foreach(JAVA_TEST_CLASS ${JAVA_TEST_CLASSES})
         add_test(NAME JavaApiTest.${JAVA_TEST_CLASS}
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
             COMMAND mvn test
+                    -Dstream.cache.enabled=${JAVA_STREAM_CACHE_ENABLED}
                     -Dapi_version=${JAVA_API_VERSION}
                     -Dcmake.build.dir=${CMAKE_BINARY_DIR}
                     -Dtest=${JAVA_TEST_CLASS}

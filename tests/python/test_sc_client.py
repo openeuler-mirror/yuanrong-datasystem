@@ -22,8 +22,10 @@ import random
 import time
 import unittest
 
-from yr.datasystem.object_client import ObjectClient
-from yr.datasystem.stream_client import StreamClient, SubconfigType
+from yr.datasystem._build_features import STREAM_CACHE_ENABLED
+
+if STREAM_CACHE_ENABLED:
+    from yr.datasystem.stream_client import StreamClient, SubconfigType
 
 
 def wait_proc(proc):
@@ -34,6 +36,7 @@ def wait_proc(proc):
     logging.info(stderr)
 
 
+@unittest.skipUnless(STREAM_CACHE_ENABLED, "StreamCache is not built")
 class TestScClientMethods(unittest.TestCase):
     """
     Features: Stream cache client python interface test.
@@ -261,33 +264,6 @@ class TestScClientMethods(unittest.TestCase):
         node1_consumer_qst.close()
         node2_producer_qst.close()
         node2_consumer_qst.close()
-
-    def test_object_client_work_success(self):
-        """object case test"""
-        host, port = TestScClientMethods.work_addr.split(":")
-        port = int(port)
-        client_os = ObjectClient(host, port)
-        client_os.init()
-        object_key = self.random_str(10)
-        value = bytearray(self.random_str(50), encoding='utf8')
-        buffer = client_os.create(object_key, len(value))
-        buffer.wlatch()
-        buffer.memory_copy(value)
-        buffer.seal()
-        buffer.unwlatch()
-
-        object_key2 = self.random_str(10)
-        value2 = bytearray(self.random_str(100), encoding='utf8')
-        buffer2 = client_os.create(object_key2, len(value2))
-        buffer2.wlatch()
-        buffer2.memory_copy(value2)
-        buffer2.seal()
-        buffer2.unwlatch()
-
-        buffer_list = client_os.get([object_key, object_key2], 5)
-
-        self.assertEqual(value, buffer_list[0].immutable_data())
-        self.assertEqual(value2, buffer_list[1].immutable_data())
 
     def test_stream_auto_send_success(self):
         """stream auto send case test"""

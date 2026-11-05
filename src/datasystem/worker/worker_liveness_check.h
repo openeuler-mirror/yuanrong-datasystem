@@ -41,7 +41,7 @@ class WorkerOCServer;
 class WorkerLivenessCheck {
 public:
     WorkerLivenessCheck(WorkerOCServer *workerOcServer, std::string probeFileName, uint32_t probeTimeoutMs,
-                        HostPort hostPort, std::string workerUuid);
+                        HostPort hostPort, std::string workerUuid, bool streamCacheEnabled);
     ~WorkerLivenessCheck();
     WorkerLivenessCheck(const WorkerLivenessCheck &) = delete;
     WorkerLivenessCheck &operator=(const WorkerLivenessCheck &) = delete;
@@ -104,6 +104,7 @@ private:
     // object if for send rpc.
     std::string livenessKey_;
     std::string workerUuid_;
+    const bool streamCacheEnabled_;
     std::vector<std::string> servicesNames_;
     std::shared_mutex lock_;
 };

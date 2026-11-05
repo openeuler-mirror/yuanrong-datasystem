@@ -190,24 +190,28 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
 
 # Compile the proto file at the first layer, for example, object_posix.proto.
 GENERATE_RPC_CPP(OBJECT_POSIX_SRCS OBJECT_POSIX_HDRS ${PROTO_SRC_DIR}/object_posix.proto)
-GENERATE_RPC_CPP(STREAM_POSIX_SRCS STREAM_POSIX_ZMQ_HDRS ${PROTO_SRC_DIR}/stream_posix.proto)
+set(POSIX_SRCS ${OBJECT_POSIX_SRCS})
+
+if (BUILD_STREAM_CACHE)
+    GENERATE_RPC_CPP(STREAM_POSIX_SRCS STREAM_POSIX_ZMQ_HDRS ${PROTO_SRC_DIR}/stream_posix.proto)
+    list(APPEND POSIX_SRCS ${STREAM_POSIX_SRCS})
+endif()
 
 GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME posix_protos
-        SOURCE ${OBJECT_POSIX_SRCS} ${STREAM_POSIX_SRCS}
+        SOURCE ${POSIX_SRCS}
         DEPEND zmq_proto_lib_depend
         LINK ${PROTOBUF_LIBRARIES} utils_protos p2p_subscribe_protos rpc_option_protos
              cluster_topology_protos share_memory_protos)
 GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         NAME posix_protos_client
-        SOURCE ${OBJECT_POSIX_SRCS} ${STREAM_POSIX_SRCS}
+        SOURCE ${POSIX_SRCS}
         DEPEND zmq_proto_lib_depend
         LINK ${PROTOBUF_LIBRARIES} utils_protos_client p2p_subscribe_protos_client
              rpc_option_protos cluster_topology_protos_client share_memory_protos_client)
 
 # Compile the proto file at the second layer, for example, posix proto.
 GENERATE_RPC_CPP(WORKER_OBJECT_SRCS WORKER_OBJECT_HDRS ${PROTO_SRC_DIR}/worker_object.proto)
-GENERATE_RPC_CPP(WORKER_STREAM_SRCS WORKER_STREAM_HDRS ${PROTO_SRC_DIR}/worker_stream.proto)
 
 GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME worker_object_protos
@@ -221,20 +225,22 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         LINK ${PROTOBUF_LIBRARIES} rpc_option_protos meta_transport_protos_client
              share_memory_protos_client)
 
-GEN_GLOBAL_PROTO_LIB_DEPEND(
-        NAME worker_stream_protos
-        SOURCE ${WORKER_STREAM_SRCS}
-        DEPEND zmq_proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES} utils_protos posix_protos rpc_option_protos)
-GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
-        NAME worker_stream_protos_client
-        SOURCE ${WORKER_STREAM_SRCS}
-        DEPEND zmq_proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES} utils_protos_client posix_protos_client rpc_option_protos)
+if (BUILD_STREAM_CACHE)
+    GENERATE_RPC_CPP(WORKER_STREAM_SRCS WORKER_STREAM_HDRS ${PROTO_SRC_DIR}/worker_stream.proto)
+    GEN_GLOBAL_PROTO_LIB_DEPEND(
+            NAME worker_stream_protos
+            SOURCE ${WORKER_STREAM_SRCS}
+            DEPEND zmq_proto_lib_depend
+            LINK ${PROTOBUF_LIBRARIES} utils_protos posix_protos rpc_option_protos)
+    GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
+            NAME worker_stream_protos_client
+            SOURCE ${WORKER_STREAM_SRCS}
+            DEPEND zmq_proto_lib_depend
+            LINK ${PROTOBUF_LIBRARIES} utils_protos_client posix_protos_client rpc_option_protos)
+endif()
 
 # Compile the proto file at the third layer, for example, master_object.proto, master_stream.proto
 GENERATE_RPC_CPP(MASTER_OBJECT_SRCS MASTER_OBJECT_HDRS ${PROTO_SRC_DIR}/master_object.proto)
-GENERATE_RPC_CPP(MASTER_STREAM_SRCS MASTER_STREAM_HDRS ${PROTO_SRC_DIR}/master_stream.proto)
 GENERATE_RPC_CPP(MASTER_HEARTBEAT_SRCS MASTER_HEARTBEAT_HDRS ${PROTO_SRC_DIR}/master_heartbeat.proto)
 
 GEN_GLOBAL_PROTO_LIB_DEPEND(
@@ -248,16 +254,19 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         DEPEND zmq_proto_lib_depend
         LINK ${PROTOBUF_LIBRARIES} posix_protos_client worker_object_protos_client)
 
-GEN_GLOBAL_PROTO_LIB_DEPEND(
-        NAME master_stream_protos
-        SOURCE ${MASTER_STREAM_SRCS}
-        DEPEND zmq_proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES} worker_stream_protos utils_protos posix_protos)
-GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
-        NAME master_stream_protos_client
-        SOURCE ${MASTER_STREAM_SRCS}
-        DEPEND zmq_proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES} worker_stream_protos_client utils_protos_client posix_protos_client)
+if (BUILD_STREAM_CACHE)
+    GENERATE_RPC_CPP(MASTER_STREAM_SRCS MASTER_STREAM_HDRS ${PROTO_SRC_DIR}/master_stream.proto)
+    GEN_GLOBAL_PROTO_LIB_DEPEND(
+            NAME master_stream_protos
+            SOURCE ${MASTER_STREAM_SRCS}
+            DEPEND zmq_proto_lib_depend
+            LINK ${PROTOBUF_LIBRARIES} worker_stream_protos utils_protos posix_protos)
+    GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
+            NAME master_stream_protos_client
+            SOURCE ${MASTER_STREAM_SRCS}
+            DEPEND zmq_proto_lib_depend
+            LINK ${PROTOBUF_LIBRARIES} worker_stream_protos_client utils_protos_client posix_protos_client)
+endif()
 
 GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME master_heartbeat_protos

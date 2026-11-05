@@ -29,7 +29,7 @@
 #include "datasystem/master/stream_cache/sc_metadata_manager.h"
 #include "datasystem/master/stream_cache/sc_migrate_metadata_manager.h"
 
-DS_DEFINE_int32(master_sc_thread_num, 128, "Max number of threads for (non rpc) master stream cache service work");
+DS_DECLARE_int32(master_sc_thread_num);
 
 namespace datasystem {
 namespace master {

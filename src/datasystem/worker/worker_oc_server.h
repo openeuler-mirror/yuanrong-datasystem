@@ -40,10 +40,9 @@
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/master/master_service_impl.h"
-#include "datasystem/master/object_cache/master_oc_service_impl.h"
 #include "datasystem/master/metadata_manager_holder.h"
+#include "datasystem/master/object_cache/master_oc_service_impl.h"
 
-#include "datasystem/master/stream_cache/master_sc_service_impl.h"
 #include "datasystem/server/common_server.h"
 #include "datasystem/cluster/runtime/topology_engine.h"
 #include "datasystem/cluster/ub_health/ub_health_lease_sync.h"
@@ -55,18 +54,13 @@
 #include "datasystem/worker/object_cache/worker_worker_transport_service_impl.h"
 #include "datasystem/worker/coordinator/coordinator_watch_service_impl.h"
 #include "datasystem/worker/metadata_route_resolver.h"
-#include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
-#include "datasystem/worker/stream_cache/master_worker_sc_service_impl.h"
-#include "datasystem/worker/stream_cache/worker_worker_sc_service_impl.h"
+#include "datasystem/worker/stream_cache/worker_stream_services.h"
 #include "datasystem/worker/worker_liveness_check.h"
 #include "datasystem/protos/object_posix.brpc.pb.h"
 #include "datasystem/protos/master_heartbeat.brpc.pb.h"
 #include "datasystem/protos/share_memory.brpc.pb.h"
 #include "datasystem/protos/worker_object.brpc.pb.h"
 #include "datasystem/protos/master_object.brpc.pb.h"
-#include "datasystem/protos/master_stream.brpc.pb.h"
-#include "datasystem/protos/stream_posix.brpc.pb.h"
-#include "datasystem/protos/worker_stream.brpc.pb.h"
 #include "datasystem/protos/coordinator.brpc.pb.h"
 #ifdef WITH_TESTS
 #include "datasystem/protos/ut_object.brpc.pb.h"
@@ -687,12 +681,6 @@ private:
     Status InitMetadataManagerHolder();
 
     /**
-     * @brief Check sc_encrypt_secret_key.
-     * @return Status of this call.
-     */
-    Status CheckScEncryptSecretKey();
-
-    /**
      * @brief Init remote coordination backend.
      * @return Status of this call.
      */
@@ -857,7 +845,6 @@ private:
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::unique_ptr<datasystem::MetadataManagerHolder> metadataManagerHolder_{ nullptr };
     std::unique_ptr<datasystem::master::ResourceManager> resourceManager_{ nullptr };
-    std::shared_ptr<master::RpcSessionManager> rpcSessionManager_{ nullptr };
     std::unique_ptr<WorkerServiceImpl> workerSvc_{ nullptr };  // Worker common service.
     WaitPost waitCond_;
     // Object cache rpc service for client request.
@@ -880,10 +867,6 @@ private:
     std::unique_ptr<WorkerWorkerTransportServiceBrpcAdapter> brpcWorkerWorkerTransAdapter_{ nullptr };
     std::unique_ptr<MasterWorkerOCServiceBrpcAdapter> brpcMasterWorkerOcAdapter_{ nullptr };
     std::unique_ptr<master::MasterOCServiceBrpcAdapter> brpcMasterOcAdapter_{ nullptr };
-    std::unique_ptr<master::MasterSCServiceBrpcAdapter> brpcMasterScAdapter_{ nullptr };
-    std::unique_ptr<ClientWorkerSCServiceBrpcAdapter> brpcClientWorkerScAdapter_{ nullptr };
-    std::unique_ptr<WorkerWorkerSCServiceBrpcAdapter> brpcWorkerWorkerScAdapter_{ nullptr };
-    std::unique_ptr<MasterWorkerSCServiceBrpcAdapter> brpcMasterWorkerScAdapter_{ nullptr };
     std::future<Status> clientWorkerCommonSvcStatus_;
     // Object cache rpc service for worker request.
     std::shared_ptr<datasystem::object_cache::WorkerWorkerOCServiceImpl> objCacheWorkerWkSvc_{ nullptr };
@@ -891,17 +874,11 @@ private:
     std::shared_ptr<datasystem::object_cache::WorkerWorkerTransportServiceImpl> objCacheWorkerTransSvc_{ nullptr };
     // Object cache rpc service for master request.
     std::shared_ptr<datasystem::object_cache::MasterWorkerOCServiceImpl> objCacheWorkerMsSvc_{ nullptr };
-    // Stream cache rpc service for client request.
-    std::shared_ptr<stream_cache::ClientWorkerSCServiceImpl> streamCacheClientWorkerSvc_{ nullptr };
-    // Stream cache rpc service for master request.
-    std::shared_ptr<stream_cache::MasterWorkerSCServiceImpl> streamCacheMasterWorkerSvc_{ nullptr };
-    // Stream cache rpc service for worker request.
-    std::shared_ptr<stream_cache::WorkerWorkerSCServiceImpl> streamCacheWorkerWorkerSvc_{ nullptr };
+    std::unique_ptr<WorkerStreamServices> streamServices_;
 
     // Master services exist in the worker for Object cache compile mode.
     std::shared_ptr<datasystem::master::MasterServiceImpl> commonSvc_{ nullptr };
     std::unique_ptr<datasystem::master::MasterOCServiceImpl> objCacheMasterSvc_{ nullptr };
-    std::unique_ptr<datasystem::master::MasterSCServiceImpl> streamCacheMasterSvc_{ nullptr };
     std::future<Status> objCacheMasterSvcStatus_;
     std::future<Status> objCacheMasterAdSvcStatus_;
     std::future<Status> streamCacheMasterSvcStatus_;

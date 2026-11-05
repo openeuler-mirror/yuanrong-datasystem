@@ -38,26 +38,15 @@
 #include "datasystem/common/util/timer.h"
 #include "datasystem/protos/coordinator.stub.rpc.pb.h"
 #include "datasystem/protos/master_object.stub.rpc.pb.h"
-#include "datasystem/protos/master_stream.stub.rpc.pb.h"
-#include "datasystem/protos/stream_posix.stub.rpc.pb.h"
 #include "datasystem/protos/worker_object.stub.rpc.pb.h"
-#include "datasystem/protos/worker_stream.stub.rpc.pb.h"
 
 // brpc stub headers
 #include <brpc/socket.h>
 #include <brpc/socket_map.h>
 #include "datasystem/protos/coordinator.brpc.stub.pb.h"
 #include "datasystem/common/rpc/brpc_auth.h"
-#include "datasystem/protos/master_object.auth.pb.h"
-#include "datasystem/protos/master_stream.auth.pb.h"
-#include "datasystem/protos/stream_posix.auth.pb.h"
-#include "datasystem/protos/worker_object.auth.pb.h"
-#include "datasystem/protos/worker_stream.auth.pb.h"
 #include "datasystem/protos/master_object.brpc.stub.pb.h"
-#include "datasystem/protos/master_stream.brpc.stub.pb.h"
-#include "datasystem/protos/stream_posix.brpc.stub.pb.h"
 #include "datasystem/protos/worker_object.brpc.stub.pb.h"
-#include "datasystem/protos/worker_stream.brpc.stub.pb.h"
 // brpc headers above override LOG/VLOG/DLOG via butil/logging.h.
 // Re-include log.h to restore datasystem's spdlog-based macros.
 #include "datasystem/common/log/log.h"
@@ -68,25 +57,6 @@ namespace datasystem {
 namespace {
 constexpr int64_t SLOW_RPC_STUB_THRESHOLD_MS = 2;
 constexpr int RPC_STUB_TRANSIENT_LOG_EVERY_N = 50'000;
-
-Status CreateMeshMethodMap(std::shared_ptr<const RpcMethodMap> &methods)
-{
-    const auto servicePair = [](const google::protobuf::ServiceDescriptor *authenticated) {
-        const auto &name = authenticated->full_name();
-        constexpr size_t authSuffixLength = 4;
-        const auto *plain = google::protobuf::DescriptorPool::generated_pool()->FindServiceByName(
-            name.substr(0, name.size() - authSuffixLength));
-        return RpcMethodMap::ServicePair{plain, authenticated};
-    };
-    return RpcMethodMap::Create({servicePair(WorkerWorkerOCServiceAuth::descriptor()),
-                                servicePair(master::MasterOCServiceAuth::descriptor()),
-                                servicePair(WorkerWorkerSCServiceAuth::descriptor()),
-                                servicePair(master::MasterSCServiceAuth::descriptor()),
-                                servicePair(MasterWorkerOCServiceAuth::descriptor()),
-                                servicePair(MasterWorkerSCServiceAuth::descriptor()),
-                                servicePair(WorkerWorkerTransportServiceAuth::descriptor()),
-                                servicePair(ClientWorkerSCServiceAuth::descriptor())}, methods);
-}
 
 bool IsTcpPeerDeadError(int errorCode)
 {
@@ -224,17 +194,8 @@ Status RpcStubCacheMgr::CreateBrpcStub(StubType type, const std::shared_ptr<brpc
         case StubType::WORKER_MASTER_OC_SVC:
             stub = std::make_shared<master::MasterOCService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
             break;
-        case StubType::WORKER_WORKER_SC_SVC:
-            stub = std::make_shared<WorkerWorkerSCService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
-            break;
-        case StubType::WORKER_MASTER_SC_SVC:
-            stub = std::make_shared<master::MasterSCService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
-            break;
         case StubType::MASTER_WORKER_OC_SVC:
             stub = std::make_shared<MasterWorkerOCService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
-            break;
-        case StubType::MASTER_WORKER_SC_SVC:
-            stub = std::make_shared<MasterWorkerSCService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
             break;
         case StubType::MASTER_MASTER_OC_SVC:
             stub = std::make_shared<master::MasterOCService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
@@ -248,9 +209,11 @@ Status RpcStubCacheMgr::CreateBrpcStub(StubType type, const std::shared_ptr<brpc
         case StubType::COORDINATOR_WORKER_SVC:
             stub = std::make_shared<coordinator::CoordinatorWatchService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
             break;
+        case StubType::WORKER_WORKER_SC_SVC:
+        case StubType::WORKER_MASTER_SC_SVC:
+        case StubType::MASTER_WORKER_SC_SVC:
         case StubType::CLIENT_WORKER_SC_SVC:
-            stub = std::make_shared<ClientWorkerSCService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
-            break;
+            return CreateStreamBrpcStub(type, brpcChannel, timeoutMs, stub);
         default:
             RETURN_STATUS(K_RUNTIME_ERROR, "Unsupport type: " + std::to_string(static_cast<int>(type)));
     }
@@ -345,15 +308,11 @@ bool RpcStubCacheMgr::EnableScWorkerWorkerDirectPort()
     return FLAGS_sc_worker_worker_direct_port > 0;
 }
 
-Status RpcStubCacheMgr::InitCreators(const std::shared_ptr<Signature> &rpcCredentials, RpcStubCreators &creators)
+RpcStubCacheMgr::RpcStubCacheCreateFunc RpcStubCacheMgr::MakeBrpcCreator(StubType stubType,
+    const RpcSigningBinding &binding)
 {
-    RpcSigningBinding binding;
-    if (rpcCredentials != nullptr) {
-        binding.credentials = rpcCredentials;
-        RETURN_IF_NOT_OK(CreateMeshMethodMap(binding.methods));
-    }
-    // brpc path: each creator makes a brpc::Channel and a _BrpcGenericStub
-    auto makePlainCreator = [](StubType stubType) -> RpcStubCacheCreateFunc {
+    if (binding.credentials == nullptr || stubType == StubType::TO_COORDINATOR_SVC ||
+        stubType == StubType::COORDINATOR_WORKER_SVC) {
         return [stubType](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
             return BrpcCreatorTemplate(
                 [&hostPort](std::shared_ptr<brpc::Channel> &brpcChannel) {
@@ -361,31 +320,31 @@ Status RpcStubCacheMgr::InitCreators(const std::shared_ptr<Signature> &rpcCreden
                 },
                 stubType, rpcStub);
         };
+    }
+    return [stubType, binding](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
+        return BrpcCreatorTemplate(
+            [&](std::shared_ptr<brpc::Channel> &channel) {
+                return CreateSignedBrpcChannel(hostPort, binding, channel);
+            }, stubType, rpcStub);
     };
-    auto makeBrpcCreator = [&](StubType stubType) -> RpcStubCacheCreateFunc {
-        if (binding.credentials == nullptr || stubType == StubType::TO_COORDINATOR_SVC ||
-            stubType == StubType::COORDINATOR_WORKER_SVC) {
-            return makePlainCreator(stubType);
-        }
-        return [stubType, binding](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
-            return BrpcCreatorTemplate(
-                [&](std::shared_ptr<brpc::Channel> &channel) {
-                    return CreateSignedBrpcChannel(hostPort, binding, channel);
-                }, stubType, rpcStub);
-        };
-    };
-    creators.emplace(StubType::WORKER_WORKER_OC_SVC, makeBrpcCreator(StubType::WORKER_WORKER_OC_SVC));
+}
+
+Status RpcStubCacheMgr::InitCreators(const std::shared_ptr<Signature> &rpcCredentials, RpcStubCreators &creators)
+{
+    RpcSigningBinding binding;
+    if (rpcCredentials != nullptr) {
+        binding.credentials = rpcCredentials;
+        RETURN_IF_NOT_OK(CreateMeshMethodMap(binding.methods));
+    }
+    creators.emplace(StubType::WORKER_WORKER_OC_SVC, MakeBrpcCreator(StubType::WORKER_WORKER_OC_SVC, binding));
     INJECT_POINT("RpcStubCacheMgr.InitCreators");
-    creators.emplace(StubType::WORKER_MASTER_OC_SVC, makeBrpcCreator(StubType::WORKER_MASTER_OC_SVC));
-    creators.emplace(StubType::WORKER_WORKER_SC_SVC, makeBrpcCreator(StubType::WORKER_WORKER_SC_SVC));
-    creators.emplace(StubType::WORKER_MASTER_SC_SVC, makeBrpcCreator(StubType::WORKER_MASTER_SC_SVC));
-    creators.emplace(StubType::MASTER_WORKER_OC_SVC, makeBrpcCreator(StubType::MASTER_WORKER_OC_SVC));
-    creators.emplace(StubType::MASTER_WORKER_SC_SVC, makeBrpcCreator(StubType::MASTER_WORKER_SC_SVC));
-    creators.emplace(StubType::MASTER_MASTER_OC_SVC, makeBrpcCreator(StubType::MASTER_MASTER_OC_SVC));
-    creators.emplace(StubType::WORKER_WORKER_TRANS_SVC, makeBrpcCreator(StubType::WORKER_WORKER_TRANS_SVC));
-    creators.emplace(StubType::TO_COORDINATOR_SVC, makeBrpcCreator(StubType::TO_COORDINATOR_SVC));
-    creators.emplace(StubType::COORDINATOR_WORKER_SVC, makeBrpcCreator(StubType::COORDINATOR_WORKER_SVC));
-    creators.emplace(StubType::CLIENT_WORKER_SC_SVC, makeBrpcCreator(StubType::CLIENT_WORKER_SC_SVC));
+    creators.emplace(StubType::WORKER_MASTER_OC_SVC, MakeBrpcCreator(StubType::WORKER_MASTER_OC_SVC, binding));
+    creators.emplace(StubType::MASTER_WORKER_OC_SVC, MakeBrpcCreator(StubType::MASTER_WORKER_OC_SVC, binding));
+    creators.emplace(StubType::MASTER_MASTER_OC_SVC, MakeBrpcCreator(StubType::MASTER_MASTER_OC_SVC, binding));
+    creators.emplace(StubType::WORKER_WORKER_TRANS_SVC, MakeBrpcCreator(StubType::WORKER_WORKER_TRANS_SVC, binding));
+    creators.emplace(StubType::TO_COORDINATOR_SVC, MakeBrpcCreator(StubType::TO_COORDINATOR_SVC, binding));
+    creators.emplace(StubType::COORDINATOR_WORKER_SVC, MakeBrpcCreator(StubType::COORDINATOR_WORKER_SVC, binding));
+    InitStreamCreators(binding, creators);
     return Status::OK();
 }
 
