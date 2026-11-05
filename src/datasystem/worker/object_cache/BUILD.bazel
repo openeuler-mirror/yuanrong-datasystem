@@ -182,6 +182,7 @@ ds_cc_library(
     deps = [
         ":cache_hit_info",
         ":worker_request_manager_header",
+        "//src/datasystem/common/iam:common_iam",
         "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline_api",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_crud_common_api",
     ],
@@ -234,6 +235,7 @@ ds_cc_library(
         "metadata_recovery_manager.h",
     ],
     deps = [
+        "//src/datasystem/common/iam:common_iam",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/parallel:common_parallel",
         "//src/datasystem/common/util:format",
@@ -766,7 +768,6 @@ ds_cc_library(
     ],
     deps = [
         ":worker_worker_transport_api_header",
-        ":worker_worker_transport_service_impl",
         "//src/datasystem/common/util:raii",
         "//src/datasystem/common/util:request_context",
     ],

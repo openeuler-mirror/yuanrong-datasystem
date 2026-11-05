@@ -43,7 +43,6 @@ ds_cc_test(
     # The test runs under CMake CI instead (see tests/st/CMakeLists.txt).
     tags = ["manual"],
     deps = [
-        "//src/datasystem/client:add_client_miss_libs_fixme",
         "//src/datasystem/client:datasystem",
         "//src/datasystem/client/object_cache/client_worker_api:client_worker_remote_api",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
