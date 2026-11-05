@@ -18,15 +18,10 @@ Service discovery python facade tests.
 from __future__ import absolute_import
 
 import importlib
-from pathlib import Path
 import sys
 import types
 import unittest
 
-
-PYTHON_ROOT = Path(__file__).resolve().parents[2] / "python"
-if str(PYTHON_ROOT) not in sys.path:
-    sys.path.insert(0, str(PYTHON_ROOT))
 
 _MISSING = object()
 _FAKE_MODULE_NAMES = [

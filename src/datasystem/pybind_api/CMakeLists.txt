@@ -2,7 +2,6 @@ add_library(ds_client_py MODULE
         pybind_register.cpp
         pybind_register_common.cpp
         pybind_register_object.cpp
-        pybind_register_stream.cpp
         pybind_register_kv.cpp
         pybind_register_perf.cpp
         pybind_register_hetero.cpp
@@ -11,11 +10,17 @@ add_library(ds_client_py MODULE
         pybind_register_cluster_query.cpp
         pybind_register_cluster_admin.cpp)
 
+if (BUILD_STREAM_CACHE)
+    target_sources(ds_client_py PRIVATE pybind_register_stream.cpp)
+endif()
+
 target_link_libraries(ds_client_py PRIVATE
         cluster_admin_client
         cluster_query_client
         datasystem
         pybind11::module)
 
-set_target_properties(ds_client_py PROPERTIES INSTALL_RPATH $ORIGIN)
+set_target_properties(ds_client_py PROPERTIES
+        INSTALL_RPATH $ORIGIN
+        LIBRARY_OUTPUT_DIRECTORY "${DATASYSTEM_PYTHON_GENERATED_DIR}/lib")
 target_link_options(ds_client_py PRIVATE "-Wl,--disable-new-dtags")

@@ -18,6 +18,19 @@
     <api_version>1.0</api_version>
   </properties>
 
+  <build>
+    <plugins>
+      <plugin>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <includes>
+            <include>org/yuanrong/datasystem/example/KVClientExample.java</include>
+          </includes>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+
   <dependencies>
     <dependency>
       <groupId>org.yuanrong.datasystem</groupId>

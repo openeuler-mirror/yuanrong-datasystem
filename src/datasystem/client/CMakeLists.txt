@@ -30,15 +30,6 @@ list(APPEND CLIENT_SRCS
         kv_cache/read_only_buffer.cpp
         kv_cache/kv_client.cpp
         hetero_cache/hetero_client.cpp
-        stream_cache/client_worker_api.cpp
-        stream_cache/client_base_impl.cpp
-        stream_cache/consumer.cpp
-        stream_cache/consumer_impl.cpp
-        stream_cache/producer.cpp
-        stream_cache/producer_impl.cpp
-        stream_cache/stream_client.cpp
-        stream_cache/stream_client_impl.cpp
-        stream_cache/producer_consumer_worker_api.cpp
         object_cache/transport/transport_advisor.cpp
         object_cache/transport/transport_phase_latency_recorder.cpp
         object_cache/transport/common/deadline_retry.cpp
@@ -70,6 +61,21 @@ list(APPEND CLIENT_SRCS
         object_cache/routing/worker_router.cpp
         object_cache/routing/worker_ub_health_registry.cpp)
 
+list(APPEND STREAM_CLIENT_SRCS
+        stream_cache/client_worker_api.cpp
+        stream_cache/client_base_impl.cpp
+        stream_cache/consumer.cpp
+        stream_cache/consumer_impl.cpp
+        stream_cache/producer.cpp
+        stream_cache/producer_impl.cpp
+        stream_cache/stream_client.cpp
+        stream_cache/stream_client_impl.cpp
+        stream_cache/producer_consumer_worker_api.cpp)
+
+if (BUILD_STREAM_CACHE)
+    list(APPEND CLIENT_SRCS ${STREAM_CLIENT_SRCS})
+endif()
+
 list(APPEND CLIENT_DEPEND_LIBS
         ${SECUREC_LIBRARY}
         ${TBB_LIBRARY}
@@ -81,7 +87,6 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_log
         common_metrics
         common_perf
-        common_sc
         common_shm_unit_info
         common_util
         common_request_context
@@ -93,7 +98,6 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_log_proto
         worker_object_protos_client
         master_object_protos_client
-        worker_stream_protos_client
         common_device
         common_shared_memory
         client_mmap_static
@@ -111,6 +115,12 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_etcd_client
         worker_transport_api
         cluster_topology_protos_client)
+
+if (BUILD_STREAM_CACHE)
+    list(APPEND CLIENT_DEPEND_LIBS
+            common_sc
+            worker_stream_protos_client)
+endif()
 
 if (BUILD_HETERO_NPU)
     list(APPEND CLIENT_DEPEND_LIBS common_acl_device)
@@ -190,12 +200,15 @@ add_dependencies(datasystem_static
         share_memory_protos_client
         posix_protos_client
         worker_object_protos_client
-        master_object_protos_client
-        worker_stream_protos_client)
+        master_object_protos_client)
 
 add_dependencies(datasystem
         share_memory_protos_client
         posix_protos_client
         worker_object_protos_client
-        master_object_protos_client
-        worker_stream_protos_client)
+        master_object_protos_client)
+
+if (BUILD_STREAM_CACHE)
+    add_dependencies(datasystem_static worker_stream_protos_client)
+    add_dependencies(datasystem worker_stream_protos_client)
+endif()

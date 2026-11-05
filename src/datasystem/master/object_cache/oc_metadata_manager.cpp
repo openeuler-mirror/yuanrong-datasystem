@@ -67,7 +67,6 @@
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
-#include "datasystem/protos/worker_stream.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/cluster_event_type.h"
 // Keep bthread headers after project RPC/log headers so brpc logging macros (CHECK_EQ etc.) are

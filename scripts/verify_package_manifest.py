@@ -67,6 +67,8 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Optional directory to write current tar and wheel manifests for review.",
     )
+    parser.add_argument("--stream-cache", choices=("off", "on"), default="off",
+                        help="Expected StreamCache build mode. Default: off")
     return parser.parse_args()
 
 
@@ -181,6 +183,19 @@ def verify_manifest(package_name: str, expected: Sequence[str], actual: Sequence
     return False
 
 
+def select_stream_manifest(items: Sequence[str], enabled: bool) -> list[str]:
+    if enabled:
+        return list(items)
+    selected_items = []
+    for item in items:
+        if "/datasystem/stream/" in item:
+            continue
+        if item.endswith(("/datasystem/stream_client.h", "/datasystem/stream_client.py")):
+            continue
+        selected_items.append(item)
+    return selected_items
+
+
 def main() -> int:
     args = parse_args()
     install_dir = args.install_dir
@@ -197,8 +212,8 @@ def main() -> int:
             write_manifest(args.dump_current / "current-tar-manifest.txt", actual_tar)
             write_manifest(args.dump_current / "current-wheel-manifest.txt", actual_wheel)
 
-        expected_tar = read_expected_manifest(args.tar_manifest)
-        expected_wheel = read_expected_manifest(args.wheel_manifest)
+        expected_tar = select_stream_manifest(read_expected_manifest(args.tar_manifest), args.stream_cache == "on")
+        expected_wheel = select_stream_manifest(read_expected_manifest(args.wheel_manifest), args.stream_cache == "on")
     except (FileNotFoundError, tarfile.TarError, zipfile.BadZipFile, ValueError) as err:
         print(f"[ERROR] {err}", file=sys.stderr)
         return 2

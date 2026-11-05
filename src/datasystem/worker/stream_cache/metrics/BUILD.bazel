@@ -2,8 +2,14 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
+STREAM_CACHE_COMPATIBLE_WITH = select({
+    "//:stream_cache_enabled": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
 ds_cc_library(
     name = "sc_metrics_monitor",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "sc_metrics.cpp",
         "sc_metrics_monitor.cpp",
@@ -28,6 +34,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "sc_metrics_header",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = [
         "sc_metrics.def",
         "sc_metrics.h",

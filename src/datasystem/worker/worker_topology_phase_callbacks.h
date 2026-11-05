@@ -25,6 +25,7 @@
 #include <string>
 
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
+#include "datasystem/worker/stream_cache/worker_stream_services.h"
 
 namespace datasystem {
 
@@ -36,7 +37,6 @@ class WorkerOCServiceImpl;
 
 namespace master {
 class OCMetadataManager;
-class SCMetadataManager;
 }  // namespace master
 
 namespace worker {
@@ -49,7 +49,7 @@ using ObjectCacheServiceProvider = std::function<object_cache::WorkerOCServiceIm
  * @brief Complete Worker dependencies required by topology phase callbacks.
  */
 struct WorkerTopologyPhaseCallbackDependencies {
-    bool streamMetadataEnabled;
+    WorkerStreamServices &streamServices;
     MetadataManagerHolder &metadataManagers;
     ObjectCacheServiceProvider objectCacheServiceProvider;
     TopologyReadinessCheck readinessCheck;
@@ -184,14 +184,14 @@ private:
      * @brief Run cleanup stages after metadata recovery has been attempted.
      * @param[in] context Fenced callback context.
      * @param[in] ocMetadata Optional local object metadata manager.
-     * @param[in] scMetadata Optional local stream metadata manager.
+     * @param[in] streamActions Optional stream recovery and cleanup actions for this callback.
      * @param[in,out] firstError First observed error.
      */
     void RunFailureCleanup(const cluster::TopologyCallbackContext &context,
                            const std::shared_ptr<master::OCMetadataManager> &ocMetadata,
-                           const std::shared_ptr<master::SCMetadataManager> &scMetadata, Status &firstError);
+                           const StreamFailureActions &streamActions, Status &firstError);
 
-    const bool streamMetadataEnabled_;
+    WorkerStreamServices &streamServices_;
     MetadataManagerHolder &metadataManagers_;
     ObjectCacheServiceProvider objectCacheServiceProvider_;
     TopologyReadinessCheck readinessCheck_;

@@ -22,15 +22,16 @@ set(DS_ST_DEPEND_LIBS
         master_object_cache_store
         master_object_cache
         worker_object_cache
-        master_stream_cache
-        worker_stream_cache
         ds_router_client_static
         cluster_topology_protos
-        master_stream_cache_store
-        master_stream_protos
         httpclient
         common_persistence_api
         common_coordinator_store)
+
+if (BUILD_STREAM_CACHE)
+    list(APPEND DS_ST_DEPEND_LIBS master_stream_cache worker_stream_cache
+            master_stream_cache_store master_stream_protos)
+endif()
 
 
 #include dirs
@@ -49,8 +50,11 @@ add_subdirectory(cluster)
 file(GLOB_RECURSE DS_TEST_ST_SRCS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 
-file(GLOB_RECURSE DS_ST_STREAM_CACHE_SRCS CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/**/stream_cache/*.cpp")
+set(DS_ST_STREAM_CACHE_SRCS)
+if (BUILD_STREAM_CACHE)
+    file(GLOB_RECURSE DS_ST_STREAM_CACHE_SRCS CONFIGURE_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/**/stream_cache/*.cpp")
+endif()
 
 file(GLOB_RECURSE DS_ST_OBJECT_CACHE_SRCS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/**/object_cache/*.cpp")
@@ -81,7 +85,6 @@ list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/st_oc_service_impl\\.cpp$)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/client/object_cache/oc_client_common\\.cpp$)
 list(FILTER DS_ST_OBJECT_CACHE_SRCS EXCLUDE REGEX .*/client/object_cache/oc_client_common\\.cpp$)
 list(FILTER DS_ST_OBJECT_CACHE_SRCS EXCLUDE REGEX .*/worker/object_cache/coordinator_backend_cluster_test\\.cpp$)
-list(FILTER DS_ST_STREAM_CACHE_SRCS EXCLUDE REGEX .*/common/stream_cache/element_generator\\.cpp$)
 
 if (NOT ENABLE_PERF)
     list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/client/perf_client/.*)
@@ -89,19 +92,22 @@ endif()
 
 set(ST_COMMON_SRCS
         client/object_cache/oc_client_common.cpp
-        st_oc_service_impl.cpp
-        common/stream_cache/element_generator.cpp)
+        st_oc_service_impl.cpp)
 
 add_library(_ds_st_main_obj OBJECT test_main.cpp)
 add_library(_ds_st_group_common_obj OBJECT ${ST_COMMON_SRCS})
-add_library(_ds_st_stream_cache_obj OBJECT ${DS_ST_STREAM_CACHE_SRCS})
+if (BUILD_STREAM_CACHE)
+    add_library(_ds_st_stream_cache_obj OBJECT ${DS_ST_STREAM_CACHE_SRCS})
+endif()
 add_library(_ds_st_object_cache_obj OBJECT ${DS_ST_OBJECT_CACHE_SRCS})
 add_library(_ds_st_kv_cache_obj OBJECT ${DS_ST_KV_CACHE_SRCS})
 add_library(_ds_st_other_obj OBJECT ${DS_TEST_ST_SRCS})
 
 target_link_libraries(_ds_st_main_obj GTest::gtest GTest::gmock)
 target_link_libraries(_ds_st_group_common_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
-target_link_libraries(_ds_st_stream_cache_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
+if (BUILD_STREAM_CACHE)
+    target_link_libraries(_ds_st_stream_cache_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
+endif()
 target_link_libraries(_ds_st_object_cache_obj nlohmann_json::nlohmann_json generic_service_protos
         datasystem_worker_static datasystem static_coordinator_discovery)
 target_link_libraries(_ds_st_kv_cache_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
@@ -120,7 +126,9 @@ function(add_ds_st_grouped_executable TARGET_NAME OBJECT_TARGET)
             $<TARGET_OBJECTS:_ds_st_group_common_obj>)
 endfunction()
 
-add_ds_st_grouped_executable(ds_st_stream_cache _ds_st_stream_cache_obj)
+if (BUILD_STREAM_CACHE)
+    add_ds_st_grouped_executable(ds_st_stream_cache _ds_st_stream_cache_obj)
+endif()
 add_ds_st_grouped_executable(ds_st_object_cache _ds_st_object_cache_obj)
 add_ds_st_grouped_executable(ds_st_kv_cache _ds_st_kv_cache_obj)
 add_ds_st_grouped_executable(ds_st _ds_st_other_obj)
@@ -160,7 +168,9 @@ endif()
 # CI runners with limited RAM. -Wl,--reduce-memory-overheads drops GNU ld RSS
 # by ~20-40% during the final link step (same pattern PR #1182 used for UT).
 target_link_libraries(ds_st PRIVATE ${DS_ST_DEPEND_LIBS} cluster_admin_client cluster_query_client -Wl,--reduce-memory-overheads)
-target_link_libraries(ds_st_stream_cache PRIVATE ${DS_ST_DEPEND_LIBS} -Wl,--reduce-memory-overheads)
+if (BUILD_STREAM_CACHE)
+    target_link_libraries(ds_st_stream_cache PRIVATE ${DS_ST_DEPEND_LIBS} -Wl,--reduce-memory-overheads)
+endif()
 target_link_libraries(ds_st_object_cache PRIVATE ${DS_ST_DEPEND_LIBS} binmock -Wl,--reduce-memory-overheads)
 target_link_libraries(ds_st_kv_cache PRIVATE ${DS_ST_DEPEND_LIBS} -Wl,--reduce-memory-overheads)
 target_link_libraries(ds_st_coordinator_backend_manual PRIVATE
@@ -227,7 +237,9 @@ if (BUILD_WITH_URMA)
 endif()
 
 add_datasystem_test(ds_st TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
-add_datasystem_test(ds_st_stream_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+if (BUILD_STREAM_CACHE)
+    add_datasystem_test(ds_st_stream_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+endif()
 add_datasystem_test(ds_st_object_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_st_kv_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_st_coordinator_backend_manual TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})

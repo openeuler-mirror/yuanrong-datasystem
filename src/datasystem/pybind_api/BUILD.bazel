@@ -30,8 +30,10 @@ pybind_library(
         "pybind_register_object.cpp",
         "pybind_register_service_discovery.cpp",
         "pybind_register_perf.cpp",
-        "pybind_register_stream.cpp",
-    ],
+    ] + select({
+        "//:stream_cache_enabled": ["pybind_register_stream.cpp"],
+        "//conditions:default": [],
+    }),
     hdrs = [
         "pybind_register.h",
     ],
@@ -41,9 +43,11 @@ pybind_library(
         "//src/datasystem/client/cluster_query:cluster_query_client",
         "//src/datasystem/client:datasystem",
         "//src/datasystem/client/perf_client:perf_client_lib",
-        "//src/datasystem/client/stream_cache:consumer",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/util:status_helper",
-    ],
+    ] + select({
+        "//:stream_cache_enabled": ["//src/datasystem/client/stream_cache:consumer"],
+        "//conditions:default": [],
+    }),
     alwayslink = True,
 )

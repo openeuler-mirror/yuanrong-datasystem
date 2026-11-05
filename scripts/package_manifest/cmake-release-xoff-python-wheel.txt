@@ -7,6 +7,7 @@ yr/datasystem/.commit_id
 yr/datasystem/README.md
 yr/datasystem/VERSION
 yr/datasystem/__init__.py
+yr/datasystem/_build_features.py
 yr/datasystem/cli/__init__.py
 yr/datasystem/cli/benchmark/__init__.py
 yr/datasystem/cli/benchmark/common.py

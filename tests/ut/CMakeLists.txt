@@ -64,7 +64,10 @@ include_directories(${PROJECT_DIR}/tests/support)
 
 # fetch ut test files and remove the files we don't care about.
 file(GLOB_RECURSE DS_TEST_UT_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
-file(GLOB_RECURSE DS_UT_STREAM_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/**/stream_cache/*.cpp")
+set(DS_UT_STREAM_SRCS)
+if (BUILD_STREAM_CACHE)
+    file(GLOB_RECURSE DS_UT_STREAM_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/**/stream_cache/*.cpp")
+endif()
 file(GLOB_RECURSE DS_UT_OBJECT_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/**/object_cache/*.cpp")
 list(FILTER DS_UT_OBJECT_SRCS EXCLUDE REGEX .*/master/object_cache/oc_migrate_metadata_manager_test\.cpp$)
 
@@ -216,10 +219,12 @@ add_ds_ut_executable(ds_ut
         common/flags/flag_manager_config_test.cpp
         $<TARGET_OBJECTS:_ds_ut_main_obj>
         $<TARGET_OBJECTS:_ds_ut_common_obj>)
-add_ds_ut_executable(ds_ut_stream
-        ${DS_UT_STREAM_SRCS}
-        $<TARGET_OBJECTS:_ds_ut_main_obj>
-        $<TARGET_OBJECTS:_ds_ut_common_obj>)
+if (BUILD_STREAM_CACHE)
+    add_ds_ut_executable(ds_ut_stream
+            ${DS_UT_STREAM_SRCS}
+            $<TARGET_OBJECTS:_ds_ut_main_obj>
+            $<TARGET_OBJECTS:_ds_ut_common_obj>)
+endif()
 add_ds_ut_executable(ds_ut_object
         ${DS_UT_OBJECT_SRCS}
         $<TARGET_OBJECTS:_ds_ut_main_obj>
@@ -334,14 +339,16 @@ target_link_libraries(ds_ut PRIVATE
         test_port_allocator
         ${DS_UT_HEAVY_LINK_END}
         -Wl,--reduce-memory-overheads)
-target_link_libraries(ds_ut_stream PRIVATE
-        ${DS_UT_HEAVY_LINK_START}
-        ${DS_UT_DEPEND_LIBS}
-        ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
-        worker_stream_cache
-        datasystem_worker_static
-        ${DS_UT_HEAVY_LINK_END}
-        -Wl,--reduce-memory-overheads)
+if (BUILD_STREAM_CACHE)
+    target_link_libraries(ds_ut_stream PRIVATE
+            ${DS_UT_HEAVY_LINK_START}
+            ${DS_UT_DEPEND_LIBS}
+            ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+            worker_stream_cache
+            datasystem_worker_static
+            ${DS_UT_HEAVY_LINK_END}
+            -Wl,--reduce-memory-overheads)
+endif()
 if (BUILD_WITH_URMA_MOCK)
     target_compile_definitions(ds_ut_object PRIVATE USE_URMA USE_URMA_MOCK)
     target_link_libraries(ds_ut_object PRIVATE common_urma_mock_obj)
@@ -471,7 +478,9 @@ endif()
 
 add_datasystem_test(ds_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(cuda_host_memory_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
-add_datasystem_test(ds_ut_stream TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+if (BUILD_STREAM_CACHE)
+    add_datasystem_test(ds_ut_stream TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+endif()
 add_datasystem_test(ds_ut_object TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(oc_migrate_metadata_manager_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_server_options_test TIMEOUT 8 TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})

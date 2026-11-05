@@ -27,6 +27,7 @@ function init_default_opts() {
 
   # Build system selector
   export BUILD_SYSTEM="cmake"
+  export BUILD_STREAM_CACHE="off"
 
   # For communication layer
   export BUILD_WITH_URMA="off"

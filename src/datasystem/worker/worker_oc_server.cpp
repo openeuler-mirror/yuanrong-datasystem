@@ -42,7 +42,6 @@
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/constants.h"
-#include "datasystem/common/encrypt/secret_manager.h"
 #include "datasystem/common/flags/eviction_heat.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/flags/dynamic_config_updater.h"
@@ -73,10 +72,7 @@
 #include "datasystem/protos/share_memory.auth.pb.h"
 #include "datasystem/protos/object_posix.auth.pb.h"
 #include "datasystem/protos/worker_object.auth.pb.h"
-#include "datasystem/protos/stream_posix.auth.pb.h"
-#include "datasystem/protos/worker_stream.auth.pb.h"
 #include "datasystem/protos/master_object.auth.pb.h"
-#include "datasystem/protos/master_stream.auth.pb.h"
 #ifdef ENABLE_PERF
 #include "datasystem/protos/perf_posix.brpc.pb.h"
 #include "datasystem/protos/perf_posix.auth.pb.h"
@@ -95,10 +91,8 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/validator.h"
-#include "datasystem/master/stream_cache/rpc_session_manager.h"
+#include "datasystem/master/metadata_manager_holder.h"
 #include "datasystem/master/object_cache/oc_migrate_metadata_manager.h"
-#include "datasystem/master/stream_cache/sc_migrate_metadata_manager.h"
-#include "datasystem/master/stream_cache/sc_metadata_manager.h"
 #include "datasystem/protos/object_posix.stub.rpc.pb.h"
 #include "datasystem/protos/worker_object.service.rpc.pb.h"
 #include "datasystem/utils/status.h"
@@ -108,12 +102,12 @@
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 #include "datasystem/worker/object_cache/worker_worker_peer_state_codec.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
-#include "datasystem/worker/stream_cache/metrics/sc_metrics_monitor.h"
-#include "datasystem/worker/stream_cache/worker_sc_allocate_memory.h"
 #include "datasystem/worker/worker_health_check.h"
 #include "datasystem/worker/worker_liveness_check.h"
 #include "datasystem/worker/rebalance_executor.h"
 #include "datasystem/worker/worker_topology_phase_callbacks.h"
+#include "datasystem/worker/stream_cache/worker_stream_services.h"
+#include "datasystem/common/log/log.h"
 
 DS_DECLARE_bool(enable_reconciliation);
 DS_DECLARE_string(coordinator_address);
@@ -153,8 +147,6 @@ DS_DEFINE_uint32(request_expire_time_s, 300,
 DS_DEFINE_validator(shared_memory_size_mb, &Validator::ValidateSharedMemSize);
 DS_DEFINE_validator(sc_local_cache_memory_size_mb, &Validator::ValidateLocalCacheMemSize);
 DS_DEFINE_validator(page_size, &Validator::ValidatePageSize);
-DS_DECLARE_int32(sc_regular_socket_num);
-DS_DECLARE_int32(sc_stream_socket_num);
 DS_DECLARE_string(unix_domain_socket_dir);
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(monitor_config_file);
@@ -165,10 +157,6 @@ DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DEFINE_uint32(liveness_probe_timeout_s, 150, "Liveness probe timeout in seconds.");
 DS_DECLARE_string(rocksdb_store_dir);
-DS_DEFINE_string(sc_encrypt_secret_key, "",
-                 "The encrypted secret key for stream cache. The key length is up to 1024 bytes and must be 32 bytes "
-                 "after decryption.");
-DS_DEFINE_validator(sc_encrypt_secret_key, &Validator::ValidateScEncryptSecretKey);
 DS_DEFINE_int32(max_rpc_session_num, 2048,
                 "Maximum number of sessions that can be cached, must be within [512, 10'000]");
 DS_DEFINE_validator(max_rpc_session_num, &Validator::ValidateMaxRpcSessionNum);
@@ -188,9 +176,7 @@ DS_DECLARE_uint32(etcd_token_refresh_interval_s);
 namespace datasystem {
 namespace worker {
 constexpr int32_t LIGHTWEIGHT_SERVICE_THREAD_NUM = 4;  // Smaller number of service threads.
-constexpr int32_t DEFAULT_STREAM_SOCKET_NUM = 8;       // The default stream socket number.
 constexpr double DFT_TIMEOUT_MULT = 1.0;          // A default timeout multiplier iartWorkerf file cache HA is used.
-constexpr int32_t THREAD_POOL_SIZE_LIMIT = 4096;  // size limit of the thread pool
 constexpr int32_t CHECK_ASYNC_SLEEP_TIME_S = 1;   // Check async task time interval.
 constexpr int64_t MEMORY_RECLAMATION_TIME_S = 600;  // Freed memory returns to the allocator for reuse after this decay.
 constexpr int32_t ASYNC_QUEUE_EMPTY_OBSERVATION_S = 1;
@@ -533,11 +519,6 @@ Status RefreshPeerHashRing(const PeerHashRingRefreshContext &context,
     return lastStatus;
 }
 
-bool EnableSCService()
-{
-    return FLAGS_sc_regular_socket_num > 0 && FLAGS_sc_stream_socket_num > 0;
-}
-
 void SleepForWarmupScanInterval(const std::atomic<bool> &exitFlag, std::condition_variable &exitCv,
                                 std::mutex &exitMutex)
 {
@@ -558,7 +539,8 @@ cluster::ControlBackendProbeResult WorkerOCServer::BuildFailedProbeResultForTest
 WorkerOCServer::WorkerOCServer(HostPort workerAddr, HostPort bindAddr,
                                std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery)
     : CommonServer(std::move(workerAddr), std::move(bindAddr)),
-      coordinatorDiscovery_(std::move(coordinatorDiscovery))
+      coordinatorDiscovery_(std::move(coordinatorDiscovery)),
+      streamServices_(std::make_unique<WorkerStreamServices>())
 {
 }
 
@@ -614,15 +596,10 @@ WorkerOCServer::~WorkerOCServer()
     brpcWorkerWorkerTransAdapter_.reset();
     brpcMasterWorkerOcAdapter_.reset();
     brpcMasterOcAdapter_.reset();
-    brpcMasterScAdapter_.reset();
-    brpcClientWorkerScAdapter_.reset();
-    brpcWorkerWorkerScAdapter_.reset();
-    brpcMasterWorkerScAdapter_.reset();
+    streamServices_->ReleaseAdapters();
     objCacheClientWorkerSvc_.reset();
     objCacheWorkerTransSvc_.reset();
-    streamCacheWorkerWorkerSvc_.reset();
-    streamCacheClientWorkerSvc_.reset();
-    streamCacheMasterSvc_.reset();
+    streamServices_->ReleaseServices();
 
     // Drain deferred cleanup queue AFTER all adapters/services have been
     // destroyed.  Adapter destructors may trigger streaming client cleanup
@@ -730,102 +707,22 @@ Status WorkerOCServer::InitMasterWorkerOCService()
     return Status::OK();
 }
 
-Status WorkerOCServer::CheckScEncryptSecretKey()
-{
-    if (FLAGS_sc_encrypt_secret_key.empty() || !SecretManager().Instance()->IsRootKeyActive()) {
-        return Status::OK();
-    }
-    std::unique_ptr<char[]> keyContent;
-    int outSize;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        SecretManager::Instance()->Decrypt(FLAGS_sc_encrypt_secret_key, keyContent, outSize),
-        "Sc encrypt secret key decrypt failed.");
-    (void)memset_s(keyContent.get(), outSize, 0, outSize);
-    const int AES_256_GCM_KEY_LEN = 32;
-    CHECK_FAIL_RETURN_STATUS(outSize == AES_256_GCM_KEY_LEN, StatusCode::K_INVALID,
-                             "The decrypted length is incorrect.");
-    return Status::OK();
-}
-
 Status WorkerOCServer::InitClientWorkerSCService()
 {
-    RETURN_OK_IF_TRUE(!EnableSCService());
-    RETURN_IF_NOT_OK(streamCacheClientWorkerSvc_->Init());
-    CHECK_FAIL_RETURN_STATUS(FLAGS_sc_stream_socket_num + FLAGS_sc_regular_socket_num <= THREAD_POOL_SIZE_LIMIT,
-                             StatusCode::K_INVALID,
-                             "The number of service threads exceeds the upper limit, please adjust it");
-    RETURN_IF_NOT_OK(CheckScEncryptSecretKey());
-    if (rpcServer_ && rpcServer_->IsBrpc()) {
-        brpcClientWorkerScAdapter_ = std::make_unique<ClientWorkerSCServiceBrpcAdapter>(*streamCacheClientWorkerSvc_);
-        if (rpcAuthCapture_) {
-            RETURN_IF_NOT_OK(RegisterRpcAuthService(
-                *rpcServer_, *brpcClientWorkerScAdapter_, *ClientWorkerSCServiceAuth::descriptor(),
-                akSkManager_, rpcAuthServices_));
-        } else {
-            RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcClientWorkerScAdapter_.get()));
-        }
-    } else {
-        RpcServiceCfg cfg;
-        cfg.numRegularSockets_ = FLAGS_sc_regular_socket_num;
-        cfg.numStreamSockets_ = 0;
-        cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
-        cfg.udsEnabled_ = FLAGS_ipc_through_shared_memory;
-        builder_.AddService(streamCacheClientWorkerSvc_.get(), cfg);
-    }
-    return Status::OK();
+    return streamServices_->InitClientWorkerSCService(rpcServer_.get(), builder_, rpcAuthCapture_ != nullptr,
+                                                      akSkManager_, rpcAuthServices_);
 }
 
 Status WorkerOCServer::InitWorkerWorkerSCService()
 {
-    RETURN_OK_IF_TRUE(!EnableSCService());
-    RETURN_IF_NOT_OK(streamCacheWorkerWorkerSvc_->Init());
-    CHECK_FAIL_RETURN_STATUS(FLAGS_sc_stream_socket_num + FLAGS_sc_regular_socket_num <= THREAD_POOL_SIZE_LIMIT,
-                             StatusCode::K_INVALID,
-                             "The number of service threads exceeds the upper limit, please adjust it");
-    if (rpcServer_ && rpcServer_->IsBrpc()) {
-        brpcWorkerWorkerScAdapter_ = std::make_unique<WorkerWorkerSCServiceBrpcAdapter>(*streamCacheWorkerWorkerSvc_);
-        if (rpcAuthCapture_) {
-            RETURN_IF_NOT_OK(RegisterRpcAuthService(
-                *rpcServer_, *brpcWorkerWorkerScAdapter_, *WorkerWorkerSCServiceAuth::descriptor(),
-                akSkManager_, rpcAuthServices_));
-        } else {
-            RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcWorkerWorkerScAdapter_.get()));
-        }
-    } else {
-        RpcServiceCfg cfg;
-        cfg.numRegularSockets_ = FLAGS_sc_regular_socket_num;
-        cfg.numStreamSockets_ = 0;
-        cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            Validator::ValidatePort("FLAGS_sc_worker_worker_direct_port", FLAGS_sc_worker_worker_direct_port),
-            K_INVALID, FormatString("Invalid tcp/ip port value %d", FLAGS_sc_worker_worker_direct_port));
-        cfg.tcpDirect_ = std::to_string(FLAGS_sc_worker_worker_direct_port);
-        builder_.AddService(streamCacheWorkerWorkerSvc_.get(), cfg);
-    }
-    return Status::OK();
+    return streamServices_->InitWorkerWorkerSCService(rpcServer_.get(), builder_, rpcAuthCapture_ != nullptr,
+                                                      akSkManager_, rpcAuthServices_);
 }
 
 Status WorkerOCServer::InitMasterWorkerSCService()
 {
-    RETURN_OK_IF_TRUE(!EnableSCService());
-    RETURN_IF_NOT_OK(streamCacheMasterWorkerSvc_->Init());
-    if (rpcServer_ && rpcServer_->IsBrpc()) {
-        brpcMasterWorkerScAdapter_ = std::make_unique<MasterWorkerSCServiceBrpcAdapter>(*streamCacheMasterWorkerSvc_);
-        if (rpcAuthCapture_) {
-            RETURN_IF_NOT_OK(RegisterRpcAuthService(
-                *rpcServer_, *brpcMasterWorkerScAdapter_, *MasterWorkerSCServiceAuth::descriptor(),
-                akSkManager_, rpcAuthServices_));
-        } else {
-            RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterWorkerScAdapter_.get()));
-        }
-    } else {
-        RpcServiceCfg cfg;
-        cfg.numRegularSockets_ = std::max(FLAGS_sc_regular_socket_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
-        cfg.numStreamSockets_ = DEFAULT_STREAM_SOCKET_NUM;
-        cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
-        builder_.AddService(streamCacheMasterWorkerSvc_.get(), cfg);
-    }
-    return Status::OK();
+    return streamServices_->InitMasterWorkerSCService(rpcServer_.get(), builder_, rpcAuthCapture_ != nullptr,
+                                                      akSkManager_, rpcAuthServices_);
 }
 
 Status WorkerOCServer::InitWorkerService()
@@ -908,25 +805,8 @@ Status WorkerOCServer::InitMasterOCService()
 
 Status WorkerOCServer::InitMasterSCService()
 {
-    RETURN_OK_IF_TRUE(!EnableSCService());
-    RETURN_IF_NOT_OK(streamCacheMasterSvc_->Init());
-    if (rpcServer_ && rpcServer_->IsBrpc()) {
-        brpcMasterScAdapter_ = std::make_unique<master::MasterSCServiceBrpcAdapter>(*streamCacheMasterSvc_);
-        if (rpcAuthCapture_) {
-            RETURN_IF_NOT_OK(RegisterRpcAuthService(
-                *rpcServer_, *brpcMasterScAdapter_, *master::MasterSCServiceAuth::descriptor(),
-                akSkManager_, rpcAuthServices_));
-        } else {
-            RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterScAdapter_.get()));
-        }
-    } else {
-        RpcServiceCfg cfg;
-        cfg.numRegularSockets_ = std::max(FLAGS_brpc_server_num_threads, LIGHTWEIGHT_SERVICE_THREAD_NUM);
-        cfg.numStreamSockets_ = 0;
-        cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
-        builder_.AddService(streamCacheMasterSvc_.get(), cfg);
-    }
-    return Status::OK();
+    return streamServices_->InitMasterSCService(rpcServer_.get(), builder_, rpcAuthCapture_ != nullptr,
+                                                akSkManager_, rpcAuthServices_);
 }
 
 #ifdef WITH_TESTS
@@ -976,11 +856,7 @@ void WorkerOCServer::EnableLocalBypass()
     // Pass the receiving-side ptr of the WorkerMaster service so that the sending side can implement local
     objCacheMasterSvc_->AssignLocalWorker(objCacheWorkerMsSvc_.get());
 
-    if (EnableSCService()) {
-        // MasterSCServiceImpl uses the RpcSessionManager singleton for managing the MasterWorkerSCApi. Provide the
-        // session manager with the fields needed to enable local bypass.
-        rpcSessionManager_->SetLocalArgs(hostPort_, streamCacheMasterWorkerSvc_);
-    }
+    streamServices_->EnableLocalBypass(hostPort_);
 }
 
 Status WorkerOCServer::InitAkSk()
@@ -1015,13 +891,8 @@ void WorkerOCServer::CreateMasterServices()
                                                                metadataManagerHolder_.get(), resourceManager_.get(),
                                                                topologyEngine_->Membership(), hostPort_.ToString(),
                                                                std::move(metadataRpcObserver));
-    if (EnableSCService()) {
-        // create MasterSCServiceImpl
-        rpcSessionManager_ = std::make_shared<RpcSessionManager>();
-        streamCacheMasterSvc_ = std::make_unique<MasterSCServiceImpl>(
-            hostPort_, akSkManager_, metadataManagerHolder_.get(), topologyEngine_->Membership(), hostPort_.ToString(),
-            topologyEngine_->IsRestart(), true);
-    }
+    streamServices_->CreateMasterServices(hostPort_, akSkManager_, metadataManagerHolder_.get(),
+                                          topologyEngine_->Membership(), topologyEngine_->IsRestart());
 }
 
 namespace {
@@ -1109,19 +980,8 @@ Status WorkerOCServer::CreateWorkerServices()
     RETURN_IF_NOT_OK(InitEvictionPolicyWorkerStateStore(evictionManager));
     CreateObjectCacheWorkerServices(objectTable, evictionManager);
     RETURN_IF_NOT_OK(ConfigureWorkerSelfPortHealth());
-    if (EnableSCService()) {
-        auto scAllocateManager = std::make_shared<stream_cache::WorkerSCAllocateMemory>(evictionManager);
-        // create ClientWorkerSCService
-        streamCacheClientWorkerSvc_ = std::make_shared<stream_cache::ClientWorkerSCServiceImpl>(
-            hostPort_, hostPort_, streamCacheMasterSvc_.get(), akSkManager_, scAllocateManager,
-            *metadataRouteResolver_, topologyEngine_->Membership());
-        // create MasterWorkerSCServiceImpl
-        streamCacheMasterWorkerSvc_ = std::make_shared<stream_cache::MasterWorkerSCServiceImpl>(
-            hostPort_, hostPort_, streamCacheClientWorkerSvc_.get());
-        // create WorkerWorkerSCService
-        streamCacheWorkerWorkerSvc_ =
-            std::make_unique<stream_cache::WorkerWorkerSCServiceImpl>(streamCacheClientWorkerSvc_.get());
-    }
+    streamServices_->CreateWorkerServices(hostPort_, akSkManager_, evictionManager,
+                                          *metadataRouteResolver_, topologyEngine_->Membership());
     return Status::OK();
 }
 
@@ -1657,7 +1517,7 @@ Status WorkerOCServer::ConstructTopologyCallbacks()
         return Status::OK();
     };
     topologyTaskCallbacks_ = std::make_unique<WorkerTopologyPhaseCallbacks>(WorkerTopologyPhaseCallbackDependencies{
-        EnableSCService(), *metadataManagerHolder_,
+        *streamServices_, *metadataManagerHolder_,
         [this] { return objCacheClientWorkerSvc_.get(); }, std::move(readinessCheck) });
     return Status::OK();
 }
@@ -2423,7 +2283,7 @@ Status WorkerOCServer::InitLivenessCheck()
         const int secToMs = 1000;
         livenessCheck_ = std::make_unique<WorkerLivenessCheck>(this, FLAGS_health_check_path,
                                                                FLAGS_liveness_probe_timeout_s * secToMs, bindHostPort_,
-                                                               hostPort_.ToString());
+                                                               hostPort_.ToString(), streamServices_->Enabled());
         RETURN_IF_NOT_OK(livenessCheck_->Init());
     }
     return Status::OK();
@@ -2444,9 +2304,9 @@ Status WorkerOCServer::InitMetadataManagerHolder()
     param.exitRequested = &topologyExitRequested_;
     param.masterWorkerService = objCacheWorkerMsSvc_.get();
     param.workerWorkerService = objCacheWorkerWkSvc_.get();
-    param.rpcSessionManager = rpcSessionManager_;
+    streamServices_->ConfigureMetadataManagerHolderParam(param);
     param.isOcEnabled = true;
-    param.isScEnabled = EnableSCService();
+    param.isScEnabled = streamServices_->Enabled();
     return metadataManagerHolder_->Init(param);
 }
 
@@ -2461,7 +2321,7 @@ void WorkerOCServer::RegisteringWorkerCallbackFunc()
 {
     RegisteringWorkerCommonCallbackFunc();
     RegisteringObjectCacheCallbackFunc();
-    if (EnableSCService()) {
+    if (streamServices_->Enabled()) {
         RegisteringStreamCacheCallbackFunc();
     }
 }
@@ -2522,16 +2382,7 @@ void WorkerOCServer::RegisteringObjectCacheCallbackFunc()
 
 void WorkerOCServer::RegisteringStreamCacheCallbackFunc()
 {
-    auto &instance = ResMetricCollector::Instance();
-    instance.RegisterCollectHandler(ResMetricName::STREAM_COUNT,
-                                    [this]() { return streamCacheClientWorkerSvc_->GetTotalStreamCount(); });
-
-    instance.RegisterCollectHandler(ResMetricName::STREAM_REMOTE_SEND_SUCCESS_RATE,
-                                    [this]() { return streamCacheClientWorkerSvc_->GetSCRemoteSendSuccessRate(); });
-
-    instance.RegisterCollectHandler(ResMetricName::SC_LOCAL_CACHE, [this]() {
-        return streamCacheWorkerWorkerSvc_->GetUsageMonitor().GetLocalMemoryUsed();
-    });
+    streamServices_->RegisterWorkerResourceMetrics(ResMetricCollector::Instance());
 }
 
 void WorkerOCServer::RegisteringMasterCallbackFunc()
@@ -3080,8 +2931,8 @@ Status WorkerOCServer::Start()
     RETURN_IF_NOT_OK_APPEND_MSG(CommonServer::Start(), "\nWorker Start failed.");
     // The task via uds accept fd is started here.
     clientWorkerCommonSvcStatus_ = loadFunctor(*workerSvc_);
-    if (EnableSCService()) {
-        RETURN_IF_NOT_OK_APPEND_MSG(streamCacheMasterSvc_->StartCheckMetadata(), "\nmaster Start failed.");
+    if (streamServices_->Enabled()) {
+        RETURN_IF_NOT_OK_APPEND_MSG(streamServices_->StartCheckMetadata(), "\nmaster Start failed.");
     }
     RETURN_IF_NOT_OK_APPEND_MSG(objCacheClientWorkerSvc_->WhetherNonRestart(), "\nWorker Start failed.");
     RETURN_IF_NOT_OK_APPEND_MSG(metrics::InitKvMetrics(), "\nWorker Start failed: metrics init.");
@@ -3411,9 +3262,7 @@ Status WorkerOCServer::Shutdown()
     if (objCacheMasterSvc_) {
         objCacheMasterSvc_->Shutdown();
     }
-    if (streamCacheMasterSvc_) {
-        streamCacheMasterSvc_->Shutdown();
-    }
+    streamServices_->ShutdownMaster();
     // Notify the pre-stop script to stop.
     errno = 0;
     std::ofstream ofs(checkFilePath_);
@@ -3448,12 +3297,8 @@ void WorkerOCServer::AfterClientLostHandler(const ClientKey &clientId)
         LOG_IF_ERROR(objCacheClientWorkerSvc_->RefreshMeta(clientId),
                      FormatString("Failed to RefreshMeta for client:%s", clientId));
     }
-    if (streamCacheClientWorkerSvc_ != nullptr) {
-        // When a client is lost it uses forceMode true when closing the producers and consumers.
-        // Any errors that occur from this close are ignored.
-        LOG_IF_ERROR(streamCacheClientWorkerSvc_->ClosePubSubForClientLost(clientId),
-                     FormatString("Failed to ClosePubSubForClient: %s ", clientId));
-    }
+    LOG_IF_ERROR(streamServices_->ClosePubSubForClientLost(clientId),
+                 FormatString("Failed to ClosePubSubForClient: %s ", clientId));
     ClientManager::Instance().RemoveClient(clientId);
 }
 
@@ -3535,7 +3380,7 @@ void WorkerOCServer::CheckRule(bool isAsyncTasksRunning, int &checkNum)
 bool WorkerOCServer::IsAsyncTasksRunning()
 {
     return (objCacheClientWorkerSvc_ != nullptr && objCacheClientWorkerSvc_->HaveAsyncTasksRunning())
-           || (streamCacheClientWorkerSvc_ != nullptr && streamCacheClientWorkerSvc_->HaveTasksToProcess());
+           || streamServices_->HaveTasksToProcess();
 }
 
 void WorkerOCServer::CheckAsyncTasks(bool waitClientWrites)

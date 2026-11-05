@@ -23,12 +23,12 @@
 #include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
 namespace {
 constexpr char OBJECT_META_NAME[] = "object_metadata";
-constexpr char STREAM_META_NAME[] = "stream_meta_data";
 }  // namespace
 
 void MetadataManager::Shutdown()
@@ -36,9 +36,7 @@ void MetadataManager::Shutdown()
     if (oc != nullptr) {
         oc->Shutdown();
     }
-    if (sc != nullptr) {
-        sc->Shutdown();
-    }
+    ShutdownStream();
 }
 
 Status MetadataManagerHolder::Init(MetadataManagerHolderParam param)
@@ -63,7 +61,7 @@ Status MetadataManagerHolder::Init(MetadataManagerHolderParam param)
     if (!isRestart_) {
         isNewNode_ = true;
         LOG(INFO) << "Newly-added node, remove local metadata store if it exists.";
-        RETURN_IF_NOT_OK(Replica::RemoveRocksFromFileSystem(dbRootPath_));
+        RETURN_IF_NOT_OK(RemoveMetadataStoresForNewNode());
     } else {
         isNewNode_ = false;
         LOG(INFO) << "Restarted node, try recovery from local metadata store.";
@@ -92,15 +90,7 @@ Status MetadataManagerHolder::CreateMetaManager(const std::string &workerId, Roc
         ocMetadataManager_ = std::move(oc);
     }
 
-    if (isScEnabled_) {
-        auto sc = std::make_shared<master::SCMetadataManager>(
-            masterAddress_, rpcSessionManager_, placement_, membership_, streamRocksStore, workerId);
-        LOG(INFO) << "Start init SCMetadataManager for " << workerId;
-        timer.Reset();
-        RETURN_IF_NOT_OK(sc->Init());
-        scElapsed = timer.ElapsedMilliSecond();
-        scMetadataManager_ = std::move(sc);
-    }
+    RETURN_IF_NOT_OK(CreateStreamMetadataManager(workerId, streamRocksStore, timer, scElapsed));
 
     LOG(INFO) << "OCMetadataManager init cost:" << ocElapsed << "ms, SCMetadataManager init cost:" << scElapsed
               << "ms for " << workerId;
@@ -131,10 +121,7 @@ Status MetadataManagerHolder::CleanupLocalMetadataForRejoin(const std::string &w
     if (ocMetadataManager_ != nullptr) {
         RETURN_IF_NOT_OK(ocMetadataManager_->CleanupLocalMetadataForRejoin(workerAddr));
     }
-    if (scMetadataManager_ != nullptr) {
-        RETURN_IF_NOT_OK(scMetadataManager_->ClearWorkerMetadata(localAddress, true));
-    }
-    return Status::OK();
+    return CleanupStreamMetadataForRejoin(localAddress);
 }
 
 Status MetadataManagerHolder::EnsureLocalMetadataManager(const std::string &workerId)
@@ -145,11 +132,7 @@ Status MetadataManagerHolder::EnsureLocalMetadataManager(const std::string &work
         RETURN_IF_NOT_OK(Replica::CreateRocksStoreInstance(objectPath, objectRocksStore_));
         RETURN_IF_NOT_OK(Replica::CreateOcTable(objectRocksStore_.get()));
     }
-    if (streamRocksStore_ == nullptr) {
-        std::string streamPath = dbRootPath_ + "/" + STREAM_META_NAME;
-        RETURN_IF_NOT_OK(Replica::CreateRocksStoreInstance(streamPath, streamRocksStore_));
-        RETURN_IF_NOT_OK(Replica::CreateScTable(streamRocksStore_.get()));
-    }
+    RETURN_IF_NOT_OK(PrepareStreamStore());
     return CreateMetaManager(workerId, objectRocksStore_.get(), streamRocksStore_.get());
 }
 
@@ -160,9 +143,7 @@ void MetadataManagerHolder::Shutdown()
     if (ocMetadataManager_ != nullptr) {
         ocMetadataManager_->Shutdown();
     }
-    if (scMetadataManager_ != nullptr) {
-        scMetadataManager_->Shutdown();
-    }
+    ShutdownStreamMetadata();
     LOG(INFO) << "Metadata manager holder shutdown, cost:" << timer.ElapsedMilliSecond() << "ms";
 }
 
@@ -197,7 +178,7 @@ bool MetadataManagerHolder::CheckMetaEmpty()
     std::shared_lock<SharedMutex> locker(mutex_);
     auto oc = ocMetadataManager_;
     auto sc = scMetadataManager_;
-    if ((oc != nullptr && !oc->CheckMetaTableEmpty()) || (sc != nullptr && !sc->CheckMetaTableEmpty())) {
+    if ((oc != nullptr && !oc->CheckMetaTableEmpty()) || !CheckStreamMetadataEmpty(sc)) {
         return false;
     }
     return true;

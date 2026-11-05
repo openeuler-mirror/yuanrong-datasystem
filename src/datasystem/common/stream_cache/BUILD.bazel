@@ -3,8 +3,14 @@
 package(default_visibility = ["//visibility:public"])
 load("//bazel:build_defs.bzl", "ds_cc_library")
 
+STREAM_CACHE_COMPATIBLE_WITH = select({
+    "//:stream_cache_enabled": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
 ds_cc_library(
     name = "util",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = ["util.h"],
     deps = [
         "//src/datasystem/protos:stream_posix_zmq_cc_proto",
@@ -16,6 +22,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "stream_meta_shm",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = ["stream_meta_shm.h"],
     srcs = [
         "stream_meta_shm.cpp",
@@ -31,6 +38,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "stream_fields",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = ["stream_fields.h"],
     deps = [
         "//include/datasystem/stream:stream_headers",
@@ -39,6 +47,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "consumer_meta",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = ["consumer_meta.h"],
     deps = [
         "//src/datasystem/common/util:format",
@@ -51,6 +60,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "cursor",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = ["cursor.h"],
     srcs = [
         "cursor.cpp",
@@ -70,6 +80,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "stream_data_page",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = ["stream_data_page.h"],
     srcs = [
         "stream_data_page.cpp",

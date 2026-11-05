@@ -4,24 +4,37 @@ package(default_visibility = ["//visibility:public"])
 SUBPACKAGE_HEADER_GROUPS = [
     "//include/datasystem/hetero:all_headers",
     "//include/datasystem/object:all_headers",
-    "//include/datasystem/stream:all_headers",
     "//include/datasystem/utils:all_headers",
 ]
 
+STREAM_HEADER_SRCS = select({
+    "//:stream_cache_enabled": [
+        "stream_client.h",
+        "//include/datasystem/stream:all_headers",
+    ],
+    "//conditions:default": [],
+})
+
 filegroup(
     name = "headers_srcs",
-    srcs = glob([
-        "**/*.h",
-        "**/*.hpp",
-    ]) + SUBPACKAGE_HEADER_GROUPS,
+    srcs = glob(
+        [
+            "**/*.h",
+            "**/*.hpp",
+        ],
+        exclude = ["stream_client.h"],
+    ) + SUBPACKAGE_HEADER_GROUPS + STREAM_HEADER_SRCS,
 )
 
 cc_library(
     name = "headers",
-    hdrs = glob([
-        "**/*.h",
-        "**/*.hpp",
-    ]) + SUBPACKAGE_HEADER_GROUPS,
+    hdrs = glob(
+        [
+            "**/*.h",
+            "**/*.hpp",
+        ],
+        exclude = ["stream_client.h"],
+    ) + SUBPACKAGE_HEADER_GROUPS + STREAM_HEADER_SRCS,
     includes = ["."],
     strip_include_prefix = "/include",
     visibility = ["//visibility:public"],

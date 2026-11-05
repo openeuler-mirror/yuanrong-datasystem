@@ -3,6 +3,10 @@ package(default_visibility = ["//visibility:public"])
 filegroup(
     name = "all_headers",
     srcs = glob(["*.h", "*.hpp"]),
+    target_compatible_with = select({
+        "//:stream_cache_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
 )
 
 cc_library(

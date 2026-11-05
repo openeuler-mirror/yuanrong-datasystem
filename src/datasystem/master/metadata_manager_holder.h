@@ -29,10 +29,15 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
-#include "datasystem/master/stream_cache/sc_metadata_manager.h"
 
 namespace datasystem {
+namespace master {
+class SCMetadataManager;
+class RpcSessionManager;
+}  // namespace master
+
 namespace object_cache {
 class MasterWorkerOCServiceImpl;
 class WorkerWorkerOCServiceImpl;
@@ -60,6 +65,9 @@ struct MetadataManager {
     std::shared_ptr<master::OCMetadataManager> oc;
     std::shared_ptr<master::SCMetadataManager> sc;
     void Shutdown();
+
+private:
+    void ShutdownStream();
 };
 
 class MetadataManagerHolder {
@@ -135,6 +143,15 @@ protected:
     SharedMutex mutex_;
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager_;
     std::shared_ptr<master::SCMetadataManager> scMetadataManager_;
+
+private:
+    Status RemoveMetadataStoresForNewNode() const;
+    Status PrepareStreamStore();
+    Status CreateStreamMetadataManager(const std::string &workerId, RocksStore *streamRocksStore,
+                                       Timer &timer, double &elapsed);
+    Status CleanupStreamMetadataForRejoin(const HostPort &localAddress);
+    bool CheckStreamMetadataEmpty(const std::shared_ptr<master::SCMetadataManager> &snapshot) const;
+    void ShutdownStreamMetadata() const;
 };
 }  // namespace datasystem
 

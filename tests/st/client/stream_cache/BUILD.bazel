@@ -303,3 +303,14 @@ ds_cc_test(
     tags = ["manual"],
     deps = SC_COMMON_DEPS,
 )
+
+ds_cc_test(
+    name = "service_disable_stream_test",
+    srcs = ["service_disable_stream_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//tests/st/client/object_cache:oc_client_common",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:random_data",
+    ],
+)

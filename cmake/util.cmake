@@ -641,6 +641,21 @@ function(STRIP_LIBS_IN_INSTALL_STAGE LIB_LIST DST_DIR)
   endforeach()
 endfunction()
 
+function(INSTALL_DATASYSTEM_PYTHON_SOURCES SOURCE_DIR DESTINATION_DIR)
+  set(PYTHON_INSTALL_PATTERNS "${ARGN}")
+  if (NOT BUILD_STREAM_CACHE)
+    list(APPEND PYTHON_INSTALL_PATTERNS PATTERN "stream_client.py" EXCLUDE)
+  endif()
+
+  install(DIRECTORY "${SOURCE_DIR}/"
+          DESTINATION "${DESTINATION_DIR}"
+          ${PYTHON_INSTALL_PATTERNS}
+          PATTERN "__pycache__" EXCLUDE)
+
+  install(FILES "${DATASYSTEM_PYTHON_GENERATED_DIR}/_build_features.py"
+          DESTINATION "${DESTINATION_DIR}/yr/datasystem")
+endfunction()
+
 # Package python whl file
 #
 # PACKAGE_NAME is the package name of python library
@@ -665,6 +680,7 @@ function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
   # Store all temporary package files, will be deleted after package finish.
   set(DATASYSTEM_WHEEL_PATH ${CMAKE_BINARY_DIR}/dist/yr/datasystem)
   set(DATASYSTEM_SETUP_PATH ${CMAKE_BINARY_DIR}/dist)
+  install(CODE "file(REMOVE_RECURSE \"${DATASYSTEM_SETUP_PATH}\")")
   set(DATASYSTEM_PACKAGE_LIBPATH ${CMAKE_SOURCE_DIR})
   if (SUPPORT_JEPROF)
     set(JEMALLOC_PROF_ENABLED True)
@@ -731,7 +747,8 @@ function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
 
   # Copy cpp include files to package lib path
   install(DIRECTORY ${CMAKE_SOURCE_DIR}/include
-          DESTINATION ${DATASYSTEM_WHEEL_PATH}/)
+          DESTINATION ${DATASYSTEM_WHEEL_PATH}/
+          ${DATASYSTEM_STREAM_HEADER_EXCLUDES})
   if (BUILD_TRANSFER_ENGINE AND EXISTS ${CMAKE_SOURCE_DIR}/transfer_engine/include/datasystem/transfer_engine)
     install(DIRECTORY ${CMAKE_SOURCE_DIR}/transfer_engine/include/datasystem/transfer_engine
             DESTINATION ${DATASYSTEM_WHEEL_PATH}/include/datasystem)
@@ -747,9 +764,8 @@ function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
           PATTERN "cmake" EXCLUDE)
 
   # Copy python sdk
-  install(DIRECTORY ${PYTHON_SDK}/
-          DESTINATION ${DATASYSTEM_SETUP_PATH}/
-          PATTERN "setup.py" EXCLUDE)
+  install_datasystem_python_sources(${PYTHON_SDK} ${DATASYSTEM_SETUP_PATH}
+                                   PATTERN "setup.py" EXCLUDE)
 
   # Copy ds cli source files to package lib path
   install(DIRECTORY ${CMAKE_SOURCE_DIR}/cli
@@ -795,6 +811,7 @@ function(PACKAGE_PYTHON PACKAGE_NAME)
 
   # Store all temporary package files, will be deleted after package finish.
   set(PYTHON_PACKAGE_PATH ${CMAKE_BINARY_DIR}/python_api)
+  install(CODE "file(REMOVE_RECURSE \"${PYTHON_PACKAGE_PATH}\")")
   # Store python source files and libraries.
   set(PYTHON_PACKAGE_LIBPATH ${PYTHON_PACKAGE_PATH}/${PACKAGE_NAME})
   # Store installed libraries, also store sym files if ENABLE_STRIP.
@@ -826,8 +843,7 @@ function(PACKAGE_PYTHON PACKAGE_NAME)
   strip_libs_in_install_stage(NEED_STRIP_LIBS PYTHON_LIBPATH)
 
   # Copy python source files to package lib path
-  install(DIRECTORY ${ARG_PYTHON_SRC_DIR}/
-          DESTINATION ${PYTHON_PACKAGE_PATH})
+  install_datasystem_python_sources(${ARG_PYTHON_SRC_DIR} ${PYTHON_PACKAGE_PATH})
   # Copy VERSION and LICENSE to package lib path
   install(FILES ${CMAKE_SOURCE_DIR}/VERSION ${CMAKE_SOURCE_DIR}/LICENSE
           DESTINATION ${PYTHON_PACKAGE_LIBPATH})

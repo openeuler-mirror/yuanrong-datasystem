@@ -1,5 +1,12 @@
 package(default_visibility = ["//visibility:public"])
 
+exports_files(["cmake/python_build_features.py.in"])
+
+config_setting(
+    name = "stream_cache_enabled",
+    define_values = {"enable_stream_cache": "true"},
+)
+
 config_setting(
     name = "enable_urma",
     define_values = {"enable_urma": "true"},

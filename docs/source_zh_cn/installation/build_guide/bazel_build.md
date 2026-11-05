@@ -39,6 +39,19 @@ bash build.sh -b bazel -d
 bash build.sh -b bazel -j 16
 ```
 
+StreamCache 默认不编译；使用以下参数显式开启或关闭：
+
+```bash
+bash build.sh -b bazel --stream-cache on
+bash build.sh -b bazel --stream-cache off
+
+bazel build --config=release --define=enable_stream_cache=true //bazel:datasystem_sdk
+bazel build --config=release --define=enable_stream_cache=false //bazel:datasystem_sdk
+```
+
+本仓库可用 `--config=stream_cache` 代替开启参数；外部源码 SDK consumer 使用
+`--define=enable_stream_cache=true`。OFF 不交付 Stream 头文件和 Python 接口。
+
 ### 编译产物
 
 编译完成后 `output/` 目录结构：

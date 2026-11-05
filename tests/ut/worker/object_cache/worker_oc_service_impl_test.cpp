@@ -99,7 +99,7 @@ using WorkerMasterOCApiManager = worker::WorkerMasterApiManagerBase<worker::Work
 class TestWorkerLivenessCheck : public worker::WorkerLivenessCheck {
 public:
     TestWorkerLivenessCheck(const std::string &probePath, uint32_t probeTimeoutMs)
-        : WorkerLivenessCheck(nullptr, probePath, probeTimeoutMs, HostPort(), "")
+        : WorkerLivenessCheck(nullptr, probePath, probeTimeoutMs, HostPort(), "", false)
     {
     }
 

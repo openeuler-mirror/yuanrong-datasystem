@@ -6,11 +6,12 @@ load("@bazel_tools//tools/build_defs/pkg:pkg.bzl", "pkg_tar")
 load("@local_ascend//:ascend_config.bzl", "ASCEND_HIXL_PLUGIN_TARGETS")
 load("@rules_cc//cc:defs.bzl", "cc_shared_library")
 load("//bazel:cann_dependency_audit.bzl", "cann_dependency_audit")
+load("//bazel:datasystem_headers.bzl", "datasystem_header_tree")
 load("//bazel:optional_copy_file.bzl", "optional_copy_file")
 
 licenses(["notice"])
 
-exports_files(["LICENSE"])
+exports_files(["LICENSE", "cmake/python_build_features.py.in"])
 
 package(default_visibility = ["//visibility:public"])
 
@@ -29,6 +30,21 @@ config_setting(
         "@platforms//os:linux",
     ],
 )
+
+config_setting(
+    name = "stream_cache_enabled",
+    define_values = {"enable_stream_cache": "true"},
+    visibility = ["//visibility:public"],
+)
+
+_STREAM_CLIENT_TARGETS = [
+    "//src/datasystem/client/stream_cache:client_worker_api",
+    "//src/datasystem/client/stream_cache:consumer",
+    "//src/datasystem/client/stream_cache:producer",
+    "//src/datasystem/client/stream_cache:producer_consumer_worker_api",
+    "//src/datasystem/client/stream_cache:stream_cache_impl",
+    "//src/datasystem/client/stream_cache:stream_client",
+]
 
 config_setting(
     name = "enable_urma",
@@ -117,12 +133,6 @@ cc_shared_library(
         "//src/datasystem/client/hetero_cache/device:device_memory_unit",
         "//src/datasystem/client/hetero_cache/device:future",
         "//src/datasystem/client/hetero_cache/device:p2p_subscribe",
-        "//src/datasystem/client/stream_cache:client_worker_api",
-        "//src/datasystem/client/stream_cache:consumer",
-        "//src/datasystem/client/stream_cache:producer",
-        "//src/datasystem/client/stream_cache:producer_consumer_worker_api",
-        "//src/datasystem/client/stream_cache:stream_cache_impl",
-        "//src/datasystem/client/stream_cache:stream_client",
         "//src/datasystem/client/perf_client:perf_client_lib",
         # tbb, spdlog, securec - required by dynamic_deps consumers
         "@tbb//:tbb",
@@ -295,7 +305,10 @@ cc_shared_library(
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/util:common_util_impl",
         "//src/datasystem/common/util:strings_util",
-    ],
+    ] + select({
+        ":stream_cache_enabled": _STREAM_CLIENT_TARGETS,
+        "//conditions:default": [],
+    }),
     user_link_flags = [
         "-Wl,--exclude-libs,ALL",
         "-Wl,--version-script,$(location export_datasystem_symbols.lds)",
@@ -326,18 +339,15 @@ cc_shared_library(
         "//src/datasystem/client/hetero_cache/device:device_memory_unit",
         "//src/datasystem/client/hetero_cache/device:future",
         "//src/datasystem/client/hetero_cache/device:p2p_subscribe",
-        "//src/datasystem/client/stream_cache:client_worker_api",
-        "//src/datasystem/client/stream_cache:consumer",
-        "//src/datasystem/client/stream_cache:producer",
-        "//src/datasystem/client/stream_cache:producer_consumer_worker_api",
-        "//src/datasystem/client/stream_cache:stream_cache_impl",
-        "//src/datasystem/client/stream_cache:stream_client",
         "//src/datasystem/client/perf_client:perf_client_lib",
         "//src/datasystem/common/object_cache:buffer",
         "@com_google_protobuf//upb:wire",
         # brpc butil provides logging::GetMinLogLevel needed by pybind client .so
         "@com_github_apache_brpc//:butil",
-    ],
+    ] + select({
+        ":stream_cache_enabled": _STREAM_CLIENT_TARGETS,
+        "//conditions:default": [],
+    }),
 )
 
 # --- Strip + Symbol for datasystem_worker ---
@@ -660,9 +670,9 @@ copy_directory(
     out = "yr/datasystem/helm_chart",
 )
 
-copy_directory(
+datasystem_header_tree(
     name = "datasystem_header_files",
-    src = "include/datasystem",
+    headers = ["//include/datasystem:headers_srcs"],
     out = "yr/datasystem/include/datasystem",
 )
 

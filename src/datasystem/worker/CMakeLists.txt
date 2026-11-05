@@ -22,7 +22,9 @@ add_library(worker_flags STATIC worker_flags.cpp)
 target_link_libraries(worker_flags PRIVATE common_flags common_util)
 
 add_subdirectory(object_cache)
-add_subdirectory(stream_cache)
+if (BUILD_STREAM_CACHE)
+    add_subdirectory(stream_cache)
+endif ()
 add_subdirectory(client_manager)
 add_subdirectory(coordinator)
 
@@ -32,6 +34,7 @@ set(WORKER_SRCS
         rebalance_executor.cpp
         worker_service_impl.cpp
         worker_oc_server.cpp
+        stream_cache/worker_stream_services.cpp
         worker_topology_phase_callbacks.cpp
         worker_liveness_check.cpp
         data_worker.cpp
@@ -66,7 +69,6 @@ set(WORKER_DEPEND_LIBS
         share_memory_protos
         common_log_proto
         worker_object_cache
-        worker_stream_cache
         rpc_stub_cache_mgr
         worker_client_manager
         worker_update_flag_check
@@ -75,6 +77,10 @@ set(WORKER_DEPEND_LIBS
         coordinator_watch_service_impl
         topology_recovery_reporter
         )
+
+if (BUILD_STREAM_CACHE)
+    list(APPEND WORKER_DEPEND_LIBS worker_stream_cache)
+endif ()
 
 if (WITH_TESTS)
     list(APPEND WORKER_SRCS "../../../tests/st/st_oc_service_impl.cpp")
@@ -113,6 +119,11 @@ add_dependencies(datasystem_worker_shared
         master_heartbeat_protos
         share_memory_protos
         posix_protos)
+
+if (BUILD_STREAM_CACHE)
+    target_compile_definitions(datasystem_worker_static PRIVATE BUILD_STREAM_CACHE)
+    target_compile_definitions(datasystem_worker_shared PRIVATE BUILD_STREAM_CACHE)
+endif ()
 
 if (BUILD_WITH_URMA)
     target_compile_definitions(datasystem_worker_static PRIVATE USE_URMA)

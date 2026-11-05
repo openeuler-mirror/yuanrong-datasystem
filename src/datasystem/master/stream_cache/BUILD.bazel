@@ -2,8 +2,19 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
+exports_files(
+    ["metadata_manager_stream_holder.cpp"],
+    visibility = ["//src/datasystem/master:__pkg__"],
+)
+
+STREAM_CACHE_COMPATIBLE_WITH = select({
+    "//:stream_cache_enabled": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
 ds_cc_library(
     name = "sc_metadata_manager",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "sc_metadata_manager.cpp",
         "sc_notify_worker_manager.cpp",
@@ -38,6 +49,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "master_sc_service_impl",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "master_sc_service_impl.cpp",
     ],
@@ -61,6 +73,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "master_worker_sc_api_header",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     hdrs = [
         "master_worker_sc_api.h",
     ],
@@ -78,6 +91,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "master_worker_sc_api",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "master_worker_sc_api.cpp",
     ],
@@ -100,6 +114,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "rpc_session_manager",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "rpc_session_manager.cpp",
     ],
@@ -113,6 +128,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "topology_manager",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "topology_manager.cpp",
     ],
@@ -130,6 +146,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "sc_migrate_metadata_manager",
+    target_compatible_with = STREAM_CACHE_COMPATIBLE_WITH,
     srcs = [
         "sc_migrate_metadata_manager.cpp",
     ],
@@ -142,6 +159,7 @@ ds_cc_library(
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/util:common_util",
         "//src/datasystem/master:metadata_manager_holder",
+        ":sc_metadata_manager",
         "@tbb",
     ],
 )

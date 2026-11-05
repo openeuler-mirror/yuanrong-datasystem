@@ -1,11 +1,26 @@
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
+load("@bazel_skylib//rules:expand_template.bzl", "expand_template")
 load("@rules_python//python:defs.bzl", "py_library")
+
+expand_template(
+    name = "build_features",
+    out = "_build_features.py",
+    substitutions = select({
+        "//:stream_cache_enabled": {"@STREAM_CACHE_ENABLED@": "True"},
+        "//conditions:default": {"@STREAM_CACHE_ENABLED@": "False"},
+    }),
+    template = "//:cmake/python_build_features.py.in",
+)
 
 py_library(
     name = "datasystem_client",
     srcs = glob(
         ["*.py"],
-    ),
+        exclude = ["stream_client.py"],
+    ) + [":build_features"] + select({
+        "//:stream_cache_enabled": ["stream_client.py"],
+        "//conditions:default": [],
+    }),
     data = [
         "//:libds_client_py_file",
     ],

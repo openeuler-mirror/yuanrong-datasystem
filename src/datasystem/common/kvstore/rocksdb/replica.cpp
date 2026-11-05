@@ -30,7 +30,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/master/stream_cache/store/stream_transform.h"
+#include "datasystem/common/kvstore/rocksdb/stream_transform.h"
 
 namespace datasystem {
 namespace {
@@ -118,13 +118,19 @@ Status Replica::CreateRocksStoreInstanceAndTable(const std::string &dbPath, std:
     return Status::OK();
 }
 
-Status Replica::RemoveRocksFromFileSystem(const std::string &dbRootPath)
+Status Replica::RemoveRocksFromFileSystem(const std::string &dbRootPath, bool includeStreamStore)
 {
     std::string objectPath = dbRootPath + "/" + OBJECT_META_NAME;
     std::string streamPath = dbRootPath + "/" + STREAM_META_NAME;
-    LOG(INFO) << "try remove path " << objectPath << " and " << streamPath;
+    if (includeStreamStore) {
+        LOG(INFO) << "try remove path " << objectPath << " and " << streamPath;
+    } else {
+        LOG(INFO) << "try remove path " << objectPath;
+    }
     RETURN_IF_NOT_OK(RemoveAll(objectPath));
-    RETURN_IF_NOT_OK(RemoveAll(streamPath));
+    if (includeStreamStore) {
+        RETURN_IF_NOT_OK(RemoveAll(streamPath));
+    }
     return Status::OK();
 }
 }  // namespace datasystem

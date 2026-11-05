@@ -19,6 +19,8 @@ import importlib.machinery
 from importlib import import_module
 from pathlib import Path
 
+from ._build_features import STREAM_EXPORTS as _STREAM_EXPORTS
+
 __all__ = [
     "Buffer",
     "ConsistencyType",
@@ -26,8 +28,6 @@ __all__ = [
     "ObjectClient",
     "KVClient",
     "Status",
-    "StreamClient",
-    "SubconfigType",
     "WriteMode",
     "Context",
     "FutureTimeoutException",
@@ -42,7 +42,7 @@ __all__ = [
     "CoordinatorServiceDiscovery",
     "CoordinatorServiceDiscoveryOptions",
     "ServiceAffinityPolicy",
-]
+] + list(_STREAM_EXPORTS)
 
 
 _PKG_DIR = Path(__file__).resolve().parent
@@ -57,8 +57,6 @@ _LAZY_EXPORTS = {
     "ObjectClient": ("yr.datasystem.object_client", "ObjectClient"),
     "WriteMode": ("yr.datasystem.object_client", "WriteMode"),
     "FutureTimeoutException": ("yr.datasystem.lib.libds_client_py", "FutureTimeoutException"),
-    "SubconfigType": ("yr.datasystem.stream_client", "SubconfigType"),
-    "StreamClient": ("yr.datasystem.stream_client", "StreamClient"),
     "KVClient": ("yr.datasystem.kv_client", "KVClient"),
     "HeteroClient": ("yr.datasystem.hetero_client", "HeteroClient"),
     "Blob": ("yr.datasystem.hetero_client", "Blob"),
@@ -75,6 +73,7 @@ _LAZY_EXPORTS = {
     "DsTensorClient": ("yr.datasystem.ds_tensor_client", "DsTensorClient"),
     "CopyRange": ("yr.datasystem.ds_tensor_client", "CopyRange"),
 }
+_LAZY_EXPORTS.update(_STREAM_EXPORTS)
 
 _TRANSFER_ENGINE_EXPORTS = {
     "TransferEngine": "TransferEngine",

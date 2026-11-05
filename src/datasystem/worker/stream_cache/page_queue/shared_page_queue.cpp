@@ -32,21 +32,7 @@
 DS_DECLARE_string(sc_encrypt_secret_key);
 DS_DECLARE_string(encrypt_kit);
 
-namespace {
-static bool ValidateSharedPageSize(const char *flagname, uint32_t value)
-{
-    const int32_t minValue = 1;
-    const int32_t maxValue = 16;
-    if ((value < minValue) || (value > maxValue)) {
-        LOG(ERROR) << "The " << flagname << " must be between " << minValue << " and " << maxValue << ".";
-        return false;
-    }
-    return true;
-}
-}  // namespace
-
-DS_DEFINE_uint32(sc_shared_page_size_mb, 4, "the shared page size");
-DS_DEFINE_validator(sc_shared_page_size_mb, &ValidateSharedPageSize);
+DS_DECLARE_uint32(sc_shared_page_size_mb);
 
 namespace datasystem {
 namespace worker {

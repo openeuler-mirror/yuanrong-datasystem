@@ -73,6 +73,7 @@ function build_datasystem_cmake() {
     "-DWITH_TESTS:BOOL=${BUILD_TESTCASE}"
     "-DBUILD_COVERAGE:BOOL=${BUILD_COVERAGE}"
     "-DENABLE_PERF:BOOL=${ENABLE_PERF}"
+    "-DBUILD_STREAM_CACHE:BOOL=${BUILD_STREAM_CACHE}"
     "-DBUILD_PYTHON_API:BOOL=${PACKAGE_PYTHON}"
     "-DBUILD_THREAD_NUM:STRING=${BUILD_THREAD_NUM}"
     "-DTRANSFER_ENGINE_BUILD_THREAD_NUM:STRING=${TRANSFER_ENGINE_BUILD_THREAD_NUM}"
@@ -235,7 +236,7 @@ function build_example() {
 
 function build_golang_client() {
   echo -e "---- Start building Golang client..."
-  bash "${DATASYSTEM_DIR}/scripts/package_go_sdk.sh" "${BUILD_DIR}" "$INSTALL_DIR" || go_die "Build Golang client failed!"
+  bash "${DATASYSTEM_DIR}/scripts/package_go_sdk.sh" "${BUILD_DIR}" "${INSTALL_DIR}" "${BUILD_STREAM_CACHE}" || go_die "Build Golang client failed!"
   echo -e "---- Build Golang client success!"
 }
 
@@ -292,7 +293,8 @@ function run_ut_python() {
   echo -e "---- running python testcases..."
   local python_test_dir="${DATASYSTEM_DIR}/tests/python"
   cd ${python_test_dir}
-  python3 -m unittest || (remove_running_pids && go_die "---- run datasystem testcases failed!")
+  python3 -m unittest || \
+    (remove_running_pids && go_die "---- run datasystem testcases failed!")
   echo -e "---- run datasystem python testcases success!"
 }
 

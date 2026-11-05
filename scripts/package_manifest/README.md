@@ -17,3 +17,6 @@ python3 scripts/verify_package_manifest.py \
 ```
 
 The verifier is read-only. It does not create, remove, rewrite, or normalize files inside the release packages.
+
+`--stream-cache off` is the default; pass `--stream-cache on` for an ON build.
+The shared baselines retain Stream paths, which the verifier excludes for OFF builds.

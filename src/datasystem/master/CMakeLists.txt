@@ -13,7 +13,11 @@ add_library(master_metadata_redirect STATIC ${MASTER_METADATA_REDIRECT_SRCS})
 target_link_libraries(master_metadata_redirect PRIVATE ${MASTER_METADATA_REDIRECT_DEPEND_LIBS})
 
 add_subdirectory(object_cache)
-add_subdirectory(stream_cache)
+set(MASTER_STREAM_DEPEND_LIBS "")
+if (BUILD_STREAM_CACHE)
+    add_subdirectory(stream_cache)
+    set(MASTER_STREAM_DEPEND_LIBS master_stream_cache)
+endif ()
 
 # Set source files
 set(MASTER_SRCS
@@ -21,6 +25,7 @@ set(MASTER_SRCS
         node_descriptor.cpp
         worker_manager.cpp
         metadata_manager_holder.cpp
+        stream_cache/metadata_manager_stream_holder.cpp
         rebalance_scheduler.cpp
         memory_rebalance_scheduler.cpp
         heat_rebalance_scheduler.cpp
@@ -39,7 +44,7 @@ set(MASTER_DEPEND_LIBS
         ds_server
         master_heartbeat_protos
         master_object_cache
-        master_stream_cache
+        ${MASTER_STREAM_DEPEND_LIBS}
         master_metadata_redirect
         rpc_stub_cache_mgr
         worker_client_manager
@@ -48,5 +53,8 @@ set(MASTER_DEPEND_LIBS
 
 # add master lib
 add_library(ds_master STATIC ${MASTER_SRCS})
+if (BUILD_STREAM_CACHE)
+    target_compile_definitions(ds_master PRIVATE BUILD_STREAM_CACHE)
+endif ()
 target_link_libraries(ds_master PRIVATE ${MASTER_DEPEND_LIBS})
 add_dependencies(ds_master master_heartbeat_protos)

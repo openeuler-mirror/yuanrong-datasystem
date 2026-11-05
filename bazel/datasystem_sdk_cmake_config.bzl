@@ -29,8 +29,9 @@ if (NOT TARGET datasystem)
 endif()
 
 set_and_check(Datasystem_INCLUDE_DIR "${{_INSTALL_PREFIX}}/include")
+set(Datasystem_STREAM_CACHE_ENABLED {stream_cache_enabled})
 set(Datasystem_FOUND TRUE)
-""",
+""".format(stream_cache_enabled = "ON" if ctx.attr.stream_cache_enabled else "OFF"),
     )
 
     ctx.actions.write(
@@ -71,5 +72,6 @@ datasystem_cmake_config = rule(
     implementation = _datasystem_cmake_config_impl,
     attrs = {
         "version": attr.string(mandatory = True),
+        "stream_cache_enabled": attr.bool(default = False),
     },
 )

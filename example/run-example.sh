@@ -39,6 +39,13 @@ export PATH=$PATH:${curr_dir}/../scripts/modules
 export PATH=$PATH:/usr/sbin
 . llt_util.sh
 run_go="$1"
+sdk_config="${ds_output_dir}/datasystem/sdk/cpp/lib/cmake/Datasystem/DatasystemConfig.cmake"
+sdk_stream=$(sed -nE 's/^set\(Datasystem_STREAM_CACHE_ENABLED (ON|OFF)\)$/\1/p' "${sdk_config}")
+case "${sdk_stream}" in
+    ON) run_stream=on ;;
+    OFF) run_stream=off ;;
+    *) go_die "The selected SDK does not declare StreamCache capability" ;;
+esac
 
 function run_go_example()
 {
@@ -64,8 +71,10 @@ function run_go_example()
     cd ${BUILD_GO_DIR}/kv
     go test
 
-    cd ${BUILD_GO_DIR}/stream
-    go test
+    if [[ "${run_stream}" == "on" ]]; then
+        cd ${BUILD_GO_DIR}/stream
+        go test
+    fi
 
     echo "Running golang state/object cache demo. Using worker ${WORKER_ADDR} on port ${WORKER_PORT}"
     ${BUILD_GO_DIR}/kv_client_example
@@ -92,7 +101,9 @@ trap cleanup EXIT INT TERM
 echo -e "---- Running cpp example..."
 export LD_LIBRARY_PATH="${ds_output_dir}/datasystem/sdk/cpp/lib:${LD_LIBRARY_PATH}"
 echo "Set LD_LIBRARY_PATH=${LD_LIBRARY_PATH} before cpp example test."
-${example_cpp_dir}/stream_client_example "127.0.0.1" "${worker_port}"
+if [[ "${run_stream}" == "on" ]]; then
+    ${example_cpp_dir}/stream_client_example "127.0.0.1" "${worker_port}"
+fi
 ${example_cpp_dir}/datasystem_example "127.0.0.1" "${worker_port}"
 ${example_cpp_dir}/object_client_example "127.0.0.1" "${worker_port}" "1000" "false"
 ${example_cpp_dir}/kv_client_example "127.0.0.1" "${worker_port}"
@@ -131,10 +142,12 @@ if [ "x$run_java" == "xon" ] ; then
     -Dversion=${java_sdk_version} \
     -Dpackaging=jar
 
-    java_demo_pom="${curr_dir}/../example"/java/stream.xml
-    mvn compile -Dapi_name=${java_sdk_name} -Dapi_version=${java_sdk_version} -f ${java_demo_pom}
-    mvn exec:java -e -Dapi_name=${java_sdk_name} -Dapi_version=${java_sdk_version} -Dexec.mainClass="org.yuanrong.datasystem.example.StreamClientExample" \
-        -Dexec.args="127.0.0.1 ${worker_port}" -f ${java_demo_pom}
+    if [[ "${run_stream}" == "on" ]]; then
+        java_demo_pom="${curr_dir}/../example"/java/stream.xml
+        mvn compile -Dapi_name=${java_sdk_name} -Dapi_version=${java_sdk_version} -f ${java_demo_pom}
+        mvn exec:java -e -Dapi_name=${java_sdk_name} -Dapi_version=${java_sdk_version} -Dexec.mainClass="org.yuanrong.datasystem.example.StreamClientExample" \
+            -Dexec.args="127.0.0.1 ${worker_port}" -f ${java_demo_pom}
+    fi
 
     java_demo_pom="${curr_dir}/../example"/java/object.xml
     mvn compile -Dapi_name=${java_sdk_name} -Dapi_version=${java_sdk_version} -f ${java_demo_pom}

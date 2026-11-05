@@ -75,6 +75,10 @@ datasystem_sdk_tree(
 datasystem_cmake_config(
     name = "cmake_config_files",
     version = DATASYSTEM_VERSION,
+    stream_cache_enabled = select({
+        "//:stream_cache_enabled": True,
+        "//conditions:default": False,
+    }),
 )
 
 config_setting(

@@ -28,6 +28,8 @@
   - `src/datasystem/worker/data_worker.cpp`
   - `src/datasystem/worker/worker_service_impl.cpp`
   - `src/datasystem/worker/worker_oc_server.cpp`
+  - `src/datasystem/worker/worker_stream_services.h`
+  - `src/datasystem/worker/worker_stream_services.cpp`
   - `src/datasystem/cluster/runtime/topology_engine.cpp`
   - `docs/source_zh_cn/design_document/cluster_management.md`
 
@@ -109,9 +111,18 @@
     pure KVClient deployments do not maintain global references. ObjectClient deployments that use global references
     must explicitly enable `enable_reconciliation`; the Kubernetes Helm defaults continue to enable it for backward
     compatibility.
-  - `worker_oc_server.cpp` assembles object-cache and stream-cache related worker-side services and declares many worker runtime flags.
-  - every Worker creates and initializes its local Object Cache and Stream Cache metadata services at `worker_address`;
-    metadata ownership and redirects always come from the immutable topology placement snapshot.
+  - `worker_oc_server.cpp` assembles object-cache services and delegates StreamCache service assembly to
+    `WorkerStreamServices`.
+  - every Worker creates and initializes its local Object Cache metadata service at `worker_address`, and its local
+    Stream Cache metadata service when StreamCache is enabled; metadata ownership and redirects always come from the
+    immutable topology placement snapshot.
+  - `worker_stream_services.cpp` provides the always-compiled definitions of 11 StreamCache Worker flags and
+    `master_sc_thread_num`, preserving their original defaults and six validators independently of StreamCache feature
+    compilation. `WorkerOCServer` directly constructs and calls `WorkerStreamServices`, retaining its flag registration
+    object file in static Worker links. The component also owns StreamCache
+    service assembly, lifecycle, metadata callbacks and resource metrics. Its OFF implementations keep those operations
+    empty and report `Enabled() == false`. Bazel owns this source in the existing `worker_oc_server` target; final
+    Worker/test assembly supplies the definitions without a reverse dependency from StreamCache leaf libraries.
   - topology Snapshot handling retains FAILED addresses for RPC-stub cleanup. When the same address later appears as
     ACTIVE, `WorkerOCServer` publishes the existing `RemoveDeadWorkerEvent` so the local metadata service removes the
     stale fault-worker entry.

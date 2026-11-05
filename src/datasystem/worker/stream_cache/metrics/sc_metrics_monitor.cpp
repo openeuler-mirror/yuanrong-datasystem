@@ -29,8 +29,6 @@
 
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_uint64(sc_local_cache_memory_size_mb);
-DS_DEFINE_uint32(sc_metrics_log_interval_s, 60, "Interval between logging stream metrics. Default to 60s");
-DS_DEFINE_validator(sc_metrics_log_interval_s, &Validator::ValidateUint32);
 DS_DECLARE_string(log_dir);
 
 const uint64_t MAX_LOCAL_CACHE_MEMORY_BYTES = FLAGS_sc_local_cache_memory_size_mb * 1024 * 1024;

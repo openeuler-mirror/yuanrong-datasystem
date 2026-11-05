@@ -32,24 +32,59 @@ set(DATASYSTEM_SDK_USER_NEW_INCLUDEDIR cpp/include)
 set(DATASYSTEM_SDK_USER_NEW_LIBPATH cpp/lib)
 set(DATASYSTEM_BAZEL_NEW_LIBPATH cpp)
 
+if (NOT BUILD_STREAM_CACHE)
+    install(CODE [[
+        foreach(header_root datasystem/sdk/cpp/include/datasystem cpp/include/datasystem)
+            file(REMOVE_RECURSE "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/${header_root}/stream")
+            file(REMOVE "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/${header_root}/stream_client.h")
+        endforeach()
+        file(REMOVE_RECURSE "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/datasystem/sdk/go/stream")
+        file(REMOVE "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/datasystem/sdk/go/include/datasystem/c_api/stream_client_c_wrapper.h")
+    ]])
+    if (NOT BUILD_GO_API)
+        install(CODE [[
+            file(REMOVE_RECURSE "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/datasystem/sdk/go")
+        ]])
+    endif()
+    if (NOT BUILD_JAVA_API)
+        install(CODE [[
+            file(GLOB stale_jars "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/datasystem/sdk/datasystem-*.jar")
+            if(stale_jars)
+                file(REMOVE ${stale_jars})
+            endif()
+        ]])
+    endif()
+endif()
+
+set(DATASYSTEM_STREAM_HEADER_EXCLUDES)
+if (NOT BUILD_STREAM_CACHE)
+    list(APPEND DATASYSTEM_STREAM_HEADER_EXCLUDES
+            PATTERN "stream_client.h" EXCLUDE
+            PATTERN "stream" EXCLUDE)
+endif()
+
 if (NOT ENABLE_PERF)
     install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/datasystem
             DESTINATION ${DATASYSTEM_SDK_USER_INCLUDEDIR}
             FILES_MATCHING
             PATTERN "*.h"
-            PATTERN "perf_client.h" EXCLUDE)
+            PATTERN "perf_client.h" EXCLUDE
+            ${DATASYSTEM_STREAM_HEADER_EXCLUDES})
 
     install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/datasystem
             DESTINATION ${DATASYSTEM_SDK_USER_NEW_INCLUDEDIR}
             FILES_MATCHING
             PATTERN "*.h"
-            PATTERN "perf_client.h" EXCLUDE)
+            PATTERN "perf_client.h" EXCLUDE
+            ${DATASYSTEM_STREAM_HEADER_EXCLUDES})
 else()
     install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/datasystem
-            DESTINATION ${DATASYSTEM_SDK_USER_INCLUDEDIR})
+            DESTINATION ${DATASYSTEM_SDK_USER_INCLUDEDIR}
+            ${DATASYSTEM_STREAM_HEADER_EXCLUDES})
 
     install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/datasystem
-            DESTINATION ${DATASYSTEM_SDK_USER_NEW_INCLUDEDIR})
+            DESTINATION ${DATASYSTEM_SDK_USER_NEW_INCLUDEDIR}
+            ${DATASYSTEM_STREAM_HEADER_EXCLUDES})
 endif ()
 
 
@@ -229,14 +264,21 @@ if (BUILD_GO_API)
 
     install(DIRECTORY ${CMAKE_SOURCE_DIR}/go
             DESTINATION ${DATASYSTEM_GO_PATH}
-            FILES_MATCHING PATTERN "*")
+            FILES_MATCHING PATTERN "*"
+            PATTERN "stream" EXCLUDE)
 
     install(FILES ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/status_definition.h
             ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/kv_client_c_wrapper.h
-            ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/stream_client_c_wrapper.h
             ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/object_client_c_wrapper.h
             ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/utilC.h
             DESTINATION ${DATASYSTEM_GO_INCLUDEDIR}/datasystem/c_api)
+
+    if (BUILD_STREAM_CACHE)
+        install(DIRECTORY ${CMAKE_SOURCE_DIR}/go/stream
+                DESTINATION ${DATASYSTEM_GO_PATH}/go)
+        install(FILES ${CMAKE_SOURCE_DIR}/src/datasystem/c_api/stream_client_c_wrapper.h
+                DESTINATION ${DATASYSTEM_GO_INCLUDEDIR}/datasystem/c_api)
+    endif()
 
     set(common_flags_INSTALL_LIBPATH ${DATASYSTEM_GO_LIBPATH})
     install_datasystem_target(common_flags)

@@ -9,6 +9,7 @@ ds_cc_test(
     deps = [
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
         "//src/datasystem/master/stream_cache:master_worker_sc_api",
+        "//src/datasystem/worker:worker_oc_server",
         "//tests/st:st_common",
     ],
 )
@@ -18,6 +19,7 @@ ds_cc_test(
     srcs = ["worker_master_sc_api_test.cpp"],
     tags = ["manual"],
     deps = [
+        "//src/datasystem/worker:worker_oc_server",
         "//src/datasystem/worker/stream_cache:worker_master_sc_api",
         "//tests/st:st_common",
     ],

@@ -22,7 +22,6 @@
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/object_client.h"
 #include "datasystem/kv_client.h"
-#include "datasystem/stream_client.h"
 
 #include <chrono>
 #include <cstdint>
@@ -53,18 +52,6 @@ void OcOp(const std::shared_ptr<ObjectClient> &client, bool success)
     }
 }
 
-void ScOp(const std::shared_ptr<StreamClient> &client, bool success)
-{
-    std::shared_ptr<Consumer> consumer;
-    SubscriptionConfig config("sub1", SubscriptionType::STREAM);
-    if (success) {
-        DS_ASSERT_OK(client->Subscribe("test1", config, consumer));
-    } else {
-        auto rc = client->Subscribe("test1", config, consumer);
-        ASSERT_TRUE(rc.GetCode() == StatusCode::K_RUNTIME_ERROR ||
-                    (rc.GetCode() == StatusCode::K_RPC_CANCELLED));
-    }
-}
 
 void KvOp(const std::shared_ptr<KVClient> &client, bool success)
 {
@@ -99,9 +86,6 @@ TEST_F(ScServiceDisableTest, TestInit)
     auto kVClient = std::make_shared<KVClient>(opts);
     DS_ASSERT_OK(kVClient->Init());
     KvOp(kVClient, true);
-    auto scClient = std::make_shared<StreamClient>(opts);
-    DS_ASSERT_OK(scClient->Init());
-    ScOp(scClient, false);
 }
 
 class CommonServiceTest : public OCClientCommon {
@@ -125,9 +109,6 @@ TEST_F(CommonServiceTest, TestInit)
     auto kVClient = std::make_shared<KVClient>(opts);
     DS_ASSERT_OK(kVClient->Init());
     KvOp(kVClient, true);
-    auto scClient = std::make_shared<StreamClient>(opts);
-    DS_ASSERT_OK(scClient->Init());
-    ScOp(scClient, true);
 }
 
 }  // namespace st

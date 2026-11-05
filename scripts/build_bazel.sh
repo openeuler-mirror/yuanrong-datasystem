@@ -61,6 +61,12 @@ function _bazel_build_configs() {
     echo "--config=release"
   fi
 
+  if is_on "${BUILD_STREAM_CACHE}"; then
+    echo "--define=enable_stream_cache=true"
+  else
+    echo "--define=enable_stream_cache=false"
+  fi
+
   # Sanitizers
   local sanitizer_lower
   sanitizer_lower=$(echo "${USE_SANITIZER}" | tr '[:upper:]' '[:lower:]')
@@ -162,6 +168,31 @@ function _bazel_test_query_expr() {
   echo "(${expr}) except attr(tags, 'manual', ${base_expr})"
 }
 
+function _bazel_select_test_targets() {
+  local query_expr
+  query_expr=$(_bazel_test_query_expr)
+  local candidates_file compatible_file
+  candidates_file=$(mktemp) || go_die "-- cannot create test target list!"
+  compatible_file=$(mktemp) || { rm -f "${candidates_file}"; go_die "-- cannot create compatible target list!"; }
+  if ! bazel query "${query_expr}" --output=label > "${candidates_file}"; then
+    rm -f "${candidates_file}" "${compatible_file}"
+    go_die "-- bazel test query failed!"
+  fi
+  if ! bazel cquery "//tests/..." "$@" --output=starlark \
+    --starlark:expr='str(target.label) if "IncompatiblePlatformProvider" not in providers(target) else ""' \
+    > "${compatible_file}"; then
+    rm -f "${candidates_file}" "${compatible_file}"
+    go_die "-- bazel compatible test query failed!"
+  fi
+  BAZEL_TEST_TARGETS=()
+  # cquery can prefix main-repository labels with @, unlike query.
+  while IFS= read -r target; do
+    [[ -n "${target}" ]] && BAZEL_TEST_TARGETS+=("${target}")
+  done < <(comm -12 <(sort -u "${candidates_file}") <(sed 's|^@@*//|//|' "${compatible_file}" | sort -u))
+  rm -f "${candidates_file}" "${compatible_file}"
+  [[ "${#BAZEL_TEST_TARGETS[@]}" -gt 0 ]] || go_die "-- bazel test query returned no compatible targets!"
+}
+
 # Build and install using bazel.
 function build_datasystem_bazel() {
   echo -e "-- building datasystem (bazel)..."
@@ -235,7 +266,7 @@ function build_datasystem_bazel() {
   echo -e "---- [TIMER] Build source: $(($(date +%s)-$baseTime_s)) seconds"
 
   # Install outputs
-  _bazel_install_outputs
+  _bazel_install_outputs "${configs[@]}"
 }
 
 # Copy bazel build outputs to INSTALL_DIR, matching CMake output structure.
@@ -265,6 +296,8 @@ function _bazel_install_outputs() {
       rm -rf "${sdk_tmp}"
       go_die "-- SDK tar did not contain expected datasystem_sdk/cpp directory"
     fi
+
+    rm -rf "${DS_DIR}/sdk/cpp" "${INSTALL_DIR}/cpp"
 
     # Copy to output/datasystem/sdk/cpp/ (for deployment)
     mkdir -p "${DS_DIR}/sdk"
@@ -376,11 +409,17 @@ function _bazel_install_outputs() {
   # --- 8. Python wheel ---
   if is_on "${PACKAGE_PYTHON}"; then
     local wheel_file
-    wheel_file=$(find -L "${bazel_bin}" -name "openyuanrong_datasystem-*.whl" -type f 2>/dev/null | head -1)
-    if [[ -n "${wheel_file}" ]]; then
-      cp -f "${wheel_file}" "${INSTALL_DIR}/"
-      echo -e "-- copied wheel: $(basename "${wheel_file}")"
+    local execution_root
+    wheel_file=$(bazel cquery "//bazel:datasystem_wheel" "$@" --output=files) \
+      || go_die "-- failed to query wheel output!"
+    execution_root=$(bazel info "$@" execution_root) \
+      || go_die "-- failed to query Bazel execution root!"
+    if [[ "${wheel_file}" != *.whl || "${wheel_file}" == *$'\n'* \
+          || ! -f "${execution_root}/${wheel_file}" ]]; then
+      go_die "-- expected one existing wheel output!"
     fi
+    cp -f "${execution_root}/${wheel_file}" "${INSTALL_DIR}/"
+    echo -e "-- copied wheel: $(basename "${wheel_file}")"
   fi
 
   # --- 9. Create tarball ---
@@ -435,31 +474,13 @@ function run_bazel_testcases() {
     return 0
   fi
 
-  local test_query_expr
-  test_query_expr=$(_bazel_test_query_expr)
-  local -a test_targets
-  local test_targets_file
+  _bazel_select_test_targets "${configs[@]}"
 
-  echo -e "-- bazel test query: ${test_query_expr}"
-  test_targets_file=$(mktemp)
-  bazel query "${test_query_expr}" --output=label > "${test_targets_file}" || {
-    rm -f "${test_targets_file}"
-    go_die "-- bazel test query failed!"
-  }
-  while IFS= read -r target; do
-    [[ -n "${target}" ]] && test_targets+=("${target}")
-  done < "${test_targets_file}"
-  rm -f "${test_targets_file}"
-
-  if [[ "${#test_targets[@]}" -eq 0 ]]; then
-    go_die "-- bazel test query returned no targets!"
-  fi
-
-  echo -e "-- bazel test targets: ${#test_targets[@]}"
+  echo -e "-- bazel test targets: ${#BAZEL_TEST_TARGETS[@]}"
   echo -e "-- bazel test command: bazel test ${configs[*]} --build_tag_filters=-manual --jobs=${TEST_PARALLEL_JOBS} " \
-    "--test_timeout=${LLT_TIMEOUT_S} <${#test_targets[@]} targets>"
+    "--test_timeout=${LLT_TIMEOUT_S} <${#BAZEL_TEST_TARGETS[@]} targets>"
   bazel test "${configs[@]}" --build_tag_filters=-manual \
-    --jobs="${TEST_PARALLEL_JOBS}" --test_timeout="${LLT_TIMEOUT_S}" "${test_targets[@]}" \
+    --jobs="${TEST_PARALLEL_JOBS}" --test_timeout="${LLT_TIMEOUT_S}" "${BAZEL_TEST_TARGETS[@]}" \
     || go_die "-- bazel test failed!"
   echo -e "---- run datasystem testcases success!"
   echo -e "---- [TIMER] Run bazel test: $(($(date +%s)-$baseTime_s)) seconds"
