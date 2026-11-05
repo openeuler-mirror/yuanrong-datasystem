@@ -881,14 +881,16 @@ public:
                                                                  topologyRuntime_.Engine()->Membership());
         evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, localAddress_, localAddress_,
                                                                      metadataRoute_, nullptr);
+        requestAuthenticator_ =
+            std::make_shared<const worker::RequestAuthenticator>(std::make_shared<AkSkManager>(), false);
         WorkerOcServiceCrudParam param = MakeCrudParam();
-        deleteProc_ = std::make_shared<WorkerOcServiceDeleteImpl>(param, nullptr, localAddress_, nullptr);
-        gRefProc_ =
-            std::make_shared<WorkerOcServiceGlobalReferenceImpl>(param, globalRefTable_, nullptr, localAddress_);
+        deleteProc_ = std::make_shared<WorkerOcServiceDeleteImpl>(param, requestAuthenticator_, localAddress_, nullptr);
+        gRefProc_ = std::make_shared<WorkerOcServiceGlobalReferenceImpl>(param, globalRefTable_, requestAuthenticator_,
+                                                                         localAddress_);
         impl_ = std::make_shared<WorkerOCServiceImpl>(
-            localAddress_, localAddress_, objectTable_, nullptr, evictionManager_, nullptr, nullptr, nullptr,
-            topologyRuntime_.Engine(), metadataRoute_, topologyRuntime_.Engine()->Membership(), &exitRequested_,
-            topologyRuntime_.Engine()->IsRestart(), false);
+            localAddress_, localAddress_, objectTable_, requestAuthenticator_, evictionManager_, nullptr, nullptr,
+            nullptr, topologyRuntime_.Engine(), metadataRoute_, topologyRuntime_.Engine()->Membership(),
+            &exitRequested_, topologyRuntime_.Engine()->IsRestart(), false);
         dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(
             objectTable_, globalRefTable_, nullptr, gRefProc_, deleteProc_, metadataRoute_, *endpointPolicy_,
             localAddress_.ToString());
@@ -1037,8 +1039,8 @@ public:
         const std::shared_ptr<WorkerMasterOCApiManager> &apiManager)
     {
         auto param = MakeCrudParam(apiManager);
-        return std::make_unique<WorkerOcServicePublishImpl>(
-            param, std::make_shared<ThreadPool>(1), std::make_shared<AkSkManager>(0), localAddress_);
+        return std::make_unique<WorkerOcServicePublishImpl>(param, std::make_shared<ThreadPool>(1),
+                                                            requestAuthenticator_, localAddress_);
     }
 
 protected:
@@ -1053,6 +1055,7 @@ protected:
     std::shared_ptr<ObjectTable> objectTable_;
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable_;
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
+    std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator_;
     WorkerRequestManager requestManager_;
     std::shared_ptr<WorkerOCServiceImpl> impl_;
     std::shared_ptr<WorkerOcServiceGlobalReferenceImpl> gRefProc_;
@@ -1928,8 +1931,8 @@ TEST_F(WorkerOcServiceImplTest, MultiPublishCreateMultiMetaFollowsRedirectToTarg
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
     auto memCpyThreadPool = std::make_shared<ThreadPool>(1);
     auto notifyThreadPool = std::make_shared<ThreadPool>(1);
-    WorkerOcServiceMultiPublishImpl multiPublish(param, memCpyThreadPool, notifyThreadPool,
-                                                 std::make_shared<AkSkManager>(0), localAddress_);
+    WorkerOcServiceMultiPublishImpl multiPublish(param, memCpyThreadPool, notifyThreadPool, requestAuthenticator_,
+                                                 localAddress_);
     master::CreateMultiMetaReqPb request;
     request.set_redirect(true);
     request.add_metas()->set_object_key(objectKey);
@@ -1964,8 +1967,8 @@ TEST_F(WorkerOcServiceImplTest, MultiPublishQualifiedMetadataDeadlineRequestsRin
         [](const HostPort &) { return true; });
     auto memCpyThreadPool = std::make_shared<ThreadPool>(1);
     auto notifyThreadPool = std::make_shared<ThreadPool>(1);
-    WorkerOcServiceMultiPublishImpl multiPublish(param, memCpyThreadPool, notifyThreadPool,
-                                                 std::make_shared<AkSkManager>(0), localAddress_);
+    WorkerOcServiceMultiPublishImpl multiPublish(param, memCpyThreadPool, notifyThreadPool, requestAuthenticator_,
+                                                 localAddress_);
     master::CreateMultiMetaReqPb request;
     request.set_redirect(true);
     request.add_metas()->set_object_key("qualified-deadline-key");
@@ -2032,8 +2035,8 @@ TEST_F(WorkerOcServiceImplTest, MultiPublishCreateMultiMetaPartitionsLocalAndMul
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
     auto memCpyThreadPool = std::make_shared<ThreadPool>(1);
     auto notifyThreadPool = std::make_shared<ThreadPool>(1);
-    WorkerOcServiceMultiPublishImpl multiPublish(param, memCpyThreadPool, notifyThreadPool,
-                                                 std::make_shared<AkSkManager>(0), localAddress_);
+    WorkerOcServiceMultiPublishImpl multiPublish(param, memCpyThreadPool, notifyThreadPool, requestAuthenticator_,
+                                                 localAddress_);
     master::CreateMultiMetaReqPb request;
     request.set_redirect(true);
     request.add_metas()->set_object_key(localKey);
@@ -2089,8 +2092,8 @@ TEST_F(WorkerOcServiceImplTest, MultiPublishCreateMultiMetaRetriesTargetWhenMovi
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager);
     auto memCpyThreadPool = std::make_shared<ThreadPool>(1);
     auto notifyThreadPool = std::make_shared<ThreadPool>(1);
-    WorkerOcServiceMultiPublishImpl multiPublish(param, memCpyThreadPool, notifyThreadPool,
-                                                 std::make_shared<AkSkManager>(0), localAddress_);
+    WorkerOcServiceMultiPublishImpl multiPublish(param, memCpyThreadPool, notifyThreadPool, requestAuthenticator_,
+                                                 localAddress_);
     master::CreateMultiMetaReqPb request;
     request.set_redirect(true);
     request.add_metas()->set_object_key(objectKey);
@@ -2126,8 +2129,8 @@ TEST_F(WorkerOcServiceImplTest, MultiPublishCreateMultiMetaRetriesWholeBatchWhen
     WorkerOcServiceCrudParam param = MakeCrudParam();
     auto memCpyThreadPool = std::make_shared<ThreadPool>(1);
     auto notifyThreadPool = std::make_shared<ThreadPool>(1);
-    WorkerOcServiceMultiPublishImpl multiPublish(param, memCpyThreadPool, notifyThreadPool,
-                                                 std::make_shared<AkSkManager>(0), localAddress_);
+    WorkerOcServiceMultiPublishImpl multiPublish(param, memCpyThreadPool, notifyThreadPool, requestAuthenticator_,
+                                                 localAddress_);
     master::CreateMultiMetaReqPb request;
     request.set_redirect(true);
     request.add_metas()->set_object_key(firstKey);
@@ -3830,8 +3833,7 @@ TEST_F(WorkerOcServiceImplTest, GetObjMetaInfoUsesLocalObjectBeforeStaleOwner)
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy());
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, std::make_shared<AkSkManager>(0), localAddress_,
-                                   nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, requestAuthenticator_, localAddress_, nullptr);
     GetObjMetaInfoReqPb req;
     req.add_object_keys(objectKey);
     GetObjMetaInfoRspPb resp;
@@ -3862,8 +3864,7 @@ TEST_F(WorkerOcServiceImplTest, GetObjMetaInfoDoesNotHideRemoteOwnerFailureAfter
     auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy());
-    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, std::make_shared<AkSkManager>(0), localAddress_,
-                                   nullptr);
+    WorkerOcServiceGetImpl getImpl(param, nullptr, nullptr, requestAuthenticator_, localAddress_, nullptr);
     GetObjMetaInfoReqPb req;
     req.add_object_keys(localObjectKey);
     req.add_object_keys(remoteObjectKey);
@@ -4056,10 +4057,6 @@ TEST_F(WorkerOcServiceImplTest, GIncreaseRefReleasesGRefLockBeforeRefMovingSleep
     const std::string objectKey = "moving-ref-client-object";
     const std::string clientId = "client-1";
 
-    bool savedSkipAuthenticate = FLAGS_skip_authenticate;
-    FLAGS_skip_authenticate = true;
-    Raii restoreSkipAuthenticate([savedSkipAuthenticate] { FLAGS_skip_authenticate = savedSkipAuthenticate; });
-
     auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
     api->SetReturnRefMovingOnce();
     const HostPort peerAddress(K_LOCAL_TEST_HOST, K_PEER_MASTER_PORT);
@@ -4070,7 +4067,7 @@ TEST_F(WorkerOcServiceImplTest, GIncreaseRefReleasesGRefLockBeforeRefMovingSleep
     apiManager->SetApi(api);
 
     WorkerOcServiceCrudParam param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy());
-    WorkerOcServiceGlobalReferenceImpl gRefProc(param, globalRefTable_, nullptr, localAddress_);
+    WorkerOcServiceGlobalReferenceImpl gRefProc(param, globalRefTable_, requestAuthenticator_, localAddress_);
 
     GIncreaseReqPb req;
     req.set_address(clientId);
@@ -4781,13 +4778,10 @@ TEST_F(WorkerOcServiceImplTest, ClientWriteDrainTimesOutWhileAdmittedWriteIsRunn
 TEST_F(WorkerOcServiceImplTest, DrainRejectsClientWrites)
 {
     ASSERT_NE(impl_->gMigrateProc_, nullptr);
-    const bool savedSkipAuthenticate = FLAGS_skip_authenticate;
-    Raii restore([savedSkipAuthenticate] {
-        FLAGS_skip_authenticate = savedSkipAuthenticate;
+    Raii restore([] {
         SetTopologyServingAdmission(true);
         SetUnhealthy();
     });
-    FLAGS_skip_authenticate = true;
     SetTopologyServingAdmission(true);
     DS_ASSERT_OK(SetHealthy());
     ASSERT_TRUE(IsHealthy());
@@ -4816,13 +4810,10 @@ TEST_F(WorkerOcServiceImplTest, DrainRejectsClientWrites)
 
 TEST_F(WorkerOcServiceImplTest, ClosedAdmissionRejectsRoutedCreateBeforeDataDrain)
 {
-    const bool savedSkipAuthenticate = FLAGS_skip_authenticate;
-    Raii restore([savedSkipAuthenticate] {
-        FLAGS_skip_authenticate = savedSkipAuthenticate;
+    Raii restore([] {
         SetTopologyServingAdmission(true);
         SetUnhealthy();
     });
-    FLAGS_skip_authenticate = true;
     SetTopologyServingAdmission(true);
     DS_ASSERT_OK(SetHealthy());
     DS_ASSERT_OK(topologyRuntime_.StartWithActiveLocalMember(localAddress_));

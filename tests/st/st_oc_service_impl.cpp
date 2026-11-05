@@ -77,9 +77,9 @@ Status StOCServiceImpl::TestUnaryCompatibilityV1(const TestReqPbV1 &req, TestRsp
     (void)rsp;
     const uint32_t ONE = 1;
     if (req.auth_req() == 0) {
-        return worker::Authenticate(akSkManager_, req, tenantId);
+        return worker::Authenticate(requestAuthenticator_, req, tenantId);
     } else if (req.auth_req() == ONE) {
-        return worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId);
+        return worker::AuthenticateRequest(requestAuthenticator_, req, req.tenant_id(), tenantId);
     } else {
         return Status::OK();
     }
@@ -94,9 +94,9 @@ Status StOCServiceImpl::TestStreamCompatibilityV1(
     std::string tenantId;
     const uint32_t ONE = 1;
     if (req.auth_req() == 0) {
-        RETURN_IF_NOT_OK(worker::Authenticate(akSkManager_, req, tenantId));
+        RETURN_IF_NOT_OK(worker::Authenticate(requestAuthenticator_, req, tenantId));
     } else if (req.auth_req() == ONE) {
-        RETURN_IF_NOT_OK(worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId));
+        RETURN_IF_NOT_OK(worker::AuthenticateRequest(requestAuthenticator_, req, req.tenant_id(), tenantId));
     }
     RETURN_IF_NOT_OK(stream->Write(rsp));
     return stream->Finish();
@@ -111,9 +111,9 @@ Status StOCServiceImpl::TestStreamCompatibility1V1(std::shared_ptr<::datasystem:
     std::string tenantId;
     const uint32_t ONE = 1;
     if (req.auth_req() == 0) {
-        RETURN_IF_NOT_OK(worker::Authenticate(akSkManager_, req, tenantId));
+        RETURN_IF_NOT_OK(worker::Authenticate(requestAuthenticator_, req, tenantId));
     } else if (req.auth_req() == ONE) {
-        RETURN_IF_NOT_OK(worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId));
+        RETURN_IF_NOT_OK(worker::AuthenticateRequest(requestAuthenticator_, req, req.tenant_id(), tenantId));
     }
     return Status::OK();
 }

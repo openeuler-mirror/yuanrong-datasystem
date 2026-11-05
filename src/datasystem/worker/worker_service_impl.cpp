@@ -81,8 +81,8 @@ namespace datasystem {
 namespace worker {
 const size_t UNBOUNDED_FD_MULTIPIER = 10;
 WorkerServiceImpl::WorkerServiceImpl(HostPort serverAddr, HostPort masterAddr, double timeoutMult, CommonServer *worker,
-                                     std::shared_ptr<AkSkManager> akSkManager, std::string workerUuid,
-                                     const cluster::MembershipEndpointView &membership,
+                                     std::shared_ptr<const RequestAuthenticator> requestAuthenticator,
+                                     std::string workerUuid, const cluster::MembershipEndpointView &membership,
                                      const std::atomic<bool> &localExiting)
     : WorkerService(std::move(serverAddr)),
       masterAddr_(std::move(masterAddr)),
@@ -90,7 +90,7 @@ WorkerServiceImpl::WorkerServiceImpl(HostPort serverAddr, HostPort masterAddr, d
       timeoutMultiplier_(timeoutMult),
       listenFd_(-1),
       shmWorkerPort_(0),
-      akSkManager_(akSkManager),
+      requestAuthenticator_(std::move(requestAuthenticator)),
       workerUuid_(std::move(workerUuid)),
       membership_(membership),
       localExiting_(localExiting),
@@ -112,7 +112,6 @@ WorkerServiceImpl::~WorkerServiceImpl()
 
 Status WorkerServiceImpl::Init()
 {
-    RETURN_IF_NOT_OK(TenantAuthManager::Instance()->Init(FLAGS_authorization_enable, akSkManager_));
     workerStartId_ = GetStringUuid();
     if (FLAGS_ipc_through_shared_memory) {
         if (FLAGS_shared_memory_worker_port > 0) {
@@ -161,11 +160,11 @@ Status WorkerServiceImpl::GetClientFd(const GetClientFdReqPb &req, GetClientFdRs
     std::string tenantId;
     std::string authTenantId = req.tenant_id();
     auto clientId = ClientKey::Intern(req.client_id());
-    if (authTenantId.empty()) {
+    if (requestAuthenticator_ != nullptr && requestAuthenticator_->RequiresAuthentication() && authTenantId.empty()) {
         bool exist;
         authTenantId = worker::ClientManager::Instance().GetAuthTenantIdByClientId(clientId, exist);
     }
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, authTenantId, tenantId),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(requestAuthenticator_, req, authTenantId, tenantId),
                                      "Authenticate failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ClientManager::Instance().GetClientSocketFd(clientId, socketFd),
                                      "worker get client socketfd failed");
@@ -186,10 +185,13 @@ Status WorkerServiceImpl::GetClientFd(const GetClientFdReqPb &req, GetClientFdRs
 Status WorkerServiceImpl::DisconnectClient(const DisconnectClientReqPb &req, DisconnectClientRspPb &rsp)
 {
     std::string tenantId;
-    bool exist;
     auto clientId = ClientKey::Intern(req.client_id());
-    std::string authTenantId = worker::ClientManager::Instance().GetAuthTenantIdByClientId(clientId, exist);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, authTenantId, tenantId),
+    std::string authTenantId;
+    if (requestAuthenticator_ != nullptr && requestAuthenticator_->RequiresAuthentication()) {
+        bool exist;
+        authTenantId = worker::ClientManager::Instance().GetAuthTenantIdByClientId(clientId, exist);
+    }
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(requestAuthenticator_, req, authTenantId, tenantId),
                                      "Authenticate failed");
     LOG(INFO) << FormatString("disconnect client: %s", clientId);
     (void)rsp;
@@ -290,7 +292,7 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
 
 Status WorkerServiceImpl::ValidateRegisterClientRequest(const RegisterClientReqPb &req, std::string &tenantId) const
 {
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(requestAuthenticator_, req, req.tenant_id(), tenantId),
                                      "Authenticate failed");
     if (localExiting_.load(std::memory_order_acquire)) {
         LOG(WARNING) << "Register client failed because the Worker is draining for ScaleIn";
@@ -402,10 +404,10 @@ Status WorkerServiceImpl::Heartbeat(const HeartbeatReqPb &req, HeartbeatRspPb &r
     std::string tenantId;
     bool exist;
     auto clientId = ClientKey::Intern(req.client_id());
-    std::string authTenantId = worker::ClientManager::Instance().GetAuthTenantIdByClientId(clientId, exist);
+    auto authTenantId = worker::ClientManager::Instance().GetAuthTenantIdByClientId(clientId, exist);
     // When exist is false, it indicates a restart scenario, skip iam and authenticate.
     if (exist) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, authTenantId, tenantId),
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(requestAuthenticator_, req, authTenantId, tenantId),
                                          "Authenticate failed");
     }
     VLOG(HEARTBEAT_LEVEL) << "Receive a heartbeat from client " << clientId;
@@ -488,7 +490,7 @@ Status WorkerServiceImpl::GetSocketPath(const GetSocketPathReqPb &req, GetSocket
 {
     INJECT_POINT("WorkerServiceImpl.GetSocketPath.begin");
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(requestAuthenticator_, req, req.tenant_id(), tenantId),
                                      "Authenticate failed");
     if (FLAGS_ipc_through_shared_memory) {
         rsp.set_path(sockPath_);

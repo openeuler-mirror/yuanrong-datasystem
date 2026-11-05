@@ -65,10 +65,11 @@ static bool IsAllocationIdValid(const std::string &allocationId)
     return true;
 }
 
-WorkerOcServiceCreateImpl::WorkerOcServiceCreateImpl(WorkerOcServiceCrudParam &initParam,
-                                                     std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress)
+WorkerOcServiceCreateImpl::WorkerOcServiceCreateImpl(
+    WorkerOcServiceCrudParam &initParam, std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator,
+    HostPort &localAddress)
     : WorkerOcServiceCrudCommonApi(initParam),
-      akSkManager_(std::move(akSkManager)),
+      requestAuthenticator_(std::move(requestAuthenticator)),
       localAddress_(localAddress)
 {
 }
@@ -167,8 +168,8 @@ Status WorkerOcServiceCreateImpl::AuthenticateCreateRequest(const CreateReqPb &r
     INJECT_POINT("worker.Create.auth");
     CHECK_FAIL_RETURN_STATUS(metadataRouteResolver_ != nullptr, StatusCode::K_NOT_READY,
                              "ETCD cluster manager is not provided.");
-    Status rc = req.is_routed() ? worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId)
-                                : worker::Authenticate(akSkManager_, req, tenantId);
+    Status rc = req.is_routed() ? worker::AuthenticateRequest(requestAuthenticator_, req, req.tenant_id(), tenantId)
+                                : worker::Authenticate(requestAuthenticator_, req, tenantId);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Authenticate failed.");
     return Status::OK();
 }
@@ -410,8 +411,8 @@ Status WorkerOcServiceCreateImpl::MultiCreate(const MultiCreateReqPb &req, Multi
     CHECK_FAIL_RETURN_STATUS(metadataRouteResolver_ != nullptr, StatusCode::K_NOT_READY,
                              "ETCD cluster manager is not provided.");
     std::string tenantId;
-    Status authRc = req.is_routed() ? worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId)
-                                    : worker::Authenticate(akSkManager_, req, tenantId);
+    Status authRc = req.is_routed() ? worker::AuthenticateRequest(requestAuthenticator_, req, req.tenant_id(), tenantId)
+                                    : worker::Authenticate(requestAuthenticator_, req, tenantId);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(authRc, "Authenticate failed.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_key_size()),
                                          StatusCode::K_INVALID, "invalid object size");

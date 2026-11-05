@@ -108,7 +108,7 @@ public:
         const bool tenantEnabled = TenantAuthManager::Instance()->AuthEnabled();
         req.clear_signature();
         req.clear_access_key();
-        if (!(tenantEnabled && !req.token().empty()) && !FLAGS_skip_authenticate) {
+        if (!(tenantEnabled && !req.token().empty())) {
             if (tenantEnabled && !proof_.signature.empty() && akSkManager->IsTenantAk(proof_.accessKey)) {
                 std::string ignored;
                 RETURN_IF_NOT_OK(TenantAuthManager::Instance()->TenantAkAuth(proof_.accessKey, "", ignored));
@@ -119,7 +119,8 @@ public:
                 req.set_signature(proof_.signature);
             }
         }
-        return worker::AuthenticateRequest(akSkManager, req, req.tenant_id(), tenantId);
+        auto authenticator = std::make_shared<const worker::RequestAuthenticator>(akSkManager, tenantEnabled);
+        return worker::AuthenticateRequest(authenticator, req, req.tenant_id(), tenantId);
     }
 
 protected:
@@ -148,17 +149,15 @@ TEST_F(AuthenticateTest, TestEnableAll)
 
 TEST_F(AuthenticateTest, RpcEntryKeepsBodyCredentialsUntrustedAndPreservesHeartbeatException)
 {
-    const bool skip = FLAGS_skip_authenticate;
     const auto iamUrl = FLAGS_yuanrong_iam_url;
-    Raii restore([skip, iamUrl] {
-        FLAGS_skip_authenticate = skip;
+    Raii restore([iamUrl] {
         FLAGS_yuanrong_iam_url = iamUrl;
         EXPECT_TRUE(TenantAuthManager::Instance()->Init(false).IsOk());
     });
-    FLAGS_skip_authenticate = false;
     FLAGS_yuanrong_iam_url = "http://127.0.0.1:1";
     auto manager = std::make_shared<AkSkManager>();
     ASSERT_TRUE(TenantAuthManager::Instance()->Init(true, manager).IsOk());
+    auto requestAuthenticator = std::make_shared<const worker::RequestAuthenticator>(manager, true);
     BrpcAuthService::Authenticate startup;
     const auto *direct = QueryAndGetReqPb::descriptor()->file()->FindServiceByName("WorkerOCService");
     ASSERT_TRUE(worker::CreateRpcAuthenticator(*direct, manager, startup).IsOk());
@@ -200,13 +199,16 @@ TEST_F(AuthenticateTest, RpcEntryKeepsBodyCredentialsUntrustedAndPreservesHeartb
     HeartbeatReqPb heartbeat;
     heartbeat.set_client_id("test-only-missing-client");
     EXPECT_TRUE(authenticate(*service->FindMethodByName("Heartbeat"), controller, heartbeat).IsOk());
-    EXPECT_EQ(worker::AuthenticateRequest(manager, heartbeat, "", tenant).GetCode(), K_NOT_AUTHORIZED);
+    EXPECT_EQ(worker::AuthenticateRequest(requestAuthenticator, heartbeat, "", tenant).GetCode(), K_NOT_AUTHORIZED);
     ASSERT_TRUE(TenantAuthManager::Instance()->Init(false).IsOk());
-    EXPECT_EQ(worker::AuthenticateRequest(manager, heartbeat, "", tenant).GetCode(), K_NOT_AUTHORIZED);
+    EXPECT_EQ(worker::AuthenticateRequest(requestAuthenticator, heartbeat, "", tenant).GetCode(), K_NOT_AUTHORIZED);
 
     class TenantService final : public WorkerServiceAuth {
     public:
-        explicit TenantService(std::shared_ptr<AkSkManager> manager) : manager_(std::move(manager)) {}
+        explicit TenantService(std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator)
+            : requestAuthenticator_(std::move(requestAuthenticator))
+        {
+        }
         void GetClientFd(google::protobuf::RpcController *controller, const GetClientFdReqPb *request,
                          GetClientFdRspPb *, google::protobuf::Closure *done) override
         {
@@ -219,7 +221,7 @@ TEST_F(AuthenticateTest, RpcEntryKeepsBodyCredentialsUntrustedAndPreservesHeartb
                     ClientKey::Intern(req.client_id()), exists);
             }
             std::string tenant;
-            const auto status = worker::AuthenticateRequest(manager_, req, effective, tenant);
+            const auto status = worker::AuthenticateRequest(requestAuthenticator_, req, effective, tenant);
             if (status.IsError()) {
                 controller->SetFailed(status.ToString());
             } else {
@@ -228,8 +230,8 @@ TEST_F(AuthenticateTest, RpcEntryKeepsBodyCredentialsUntrustedAndPreservesHeartb
         }
         std::atomic<unsigned> admitted{0};
     private:
-        std::shared_ptr<AkSkManager> manager_;
-    } native(manager);
+        std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator_;
+    } native(requestAuthenticator);
     Raii releaseStubs([] { RELEASE_STUBS });
     BINEXPECT_CALL(&worker::ClientManager::GetAuthTenantIdByClientId, (_, _))
         .WillRepeatedly([](const ClientKey &, bool &exists) {
@@ -352,6 +354,24 @@ TEST_F(AuthenticateTest, TestDisableAll)
     ASSERT_EQ(tenantId, "");
     DS_ASSERT_OK(RegisterReqCheck(akSkManager, "", "", tenantId));
     ASSERT_EQ(tenantId, "");
+}
+
+TEST_F(AuthenticateTest, NoAuthenticationFastPathUsesRequestTenant)
+{
+    auto manager = std::make_shared<AkSkManager>();
+    auto authenticator = std::make_shared<const worker::RequestAuthenticator>(manager, false);
+    ASSERT_FALSE(authenticator->RequiresAuthentication());
+
+    PublishReqPb req;
+    req.set_client_id("unregistered-client");
+    req.set_tenant_id("tenant-a");
+    std::string tenantId = "stale";
+    DS_ASSERT_OK(worker::Authenticate(authenticator, req, tenantId));
+    EXPECT_EQ(tenantId, "tenant-a");
+
+    req.clear_tenant_id();
+    DS_ASSERT_OK(worker::Authenticate(authenticator, req, tenantId));
+    EXPECT_TRUE(tenantId.empty());
 }
 
 TEST_F(AuthenticateTest, TestProtobufFilterSensitiveInfo)

@@ -861,6 +861,10 @@ void WorkerOCServer::EnableLocalBypass()
 
 Status WorkerOCServer::InitAkSk()
 {
+    CHECK_FAIL_RETURN_STATUS(FLAGS_system_access_key.empty() == FLAGS_system_secret_key.empty(), K_INVALID,
+                             "system_access_key and system_secret_key must be configured together");
+    CHECK_FAIL_RETURN_STATUS(FLAGS_tenant_access_key.empty() == FLAGS_tenant_secret_key.empty(), K_INVALID,
+                             "tenant_access_key and tenant_secret_key must be configured together");
     akSkManager_ = std::make_shared<AkSkManager>(FLAGS_request_expire_time_s);
 
     Raii raii([]() {
@@ -971,16 +975,16 @@ Status WorkerOCServer::CreateWorkerServices()
     LOG(INFO) << "Start create worker services";
 
     // create WorkerServiceImpl
-    workerSvc_ = std::make_unique<WorkerServiceImpl>(hostPort_, hostPort_, DFT_TIMEOUT_MULT, this, akSkManager_,
-                                                     hostPort_.ToString(), topologyEngine_->Membership(),
-                                                     topologyExitRequested_);
+    workerSvc_ = std::make_unique<WorkerServiceImpl>(hostPort_, hostPort_, DFT_TIMEOUT_MULT, this,
+                                                     requestAuthenticator_, hostPort_.ToString(),
+                                                     topologyEngine_->Membership(), topologyExitRequested_);
     auto objectTable = std::make_shared<ObjectTable>();
     auto evictionManager = std::make_shared<object_cache::WorkerOcEvictionManager>(
         objectTable, hostPort_, hostPort_, *metadataRouteResolver_, objCacheMasterSvc_.get());
     RETURN_IF_NOT_OK(InitEvictionPolicyWorkerStateStore(evictionManager));
     CreateObjectCacheWorkerServices(objectTable, evictionManager);
     RETURN_IF_NOT_OK(ConfigureWorkerSelfPortHealth());
-    streamServices_->CreateWorkerServices(hostPort_, akSkManager_, evictionManager,
+    streamServices_->CreateWorkerServices(hostPort_, requestAuthenticator_, evictionManager,
                                           *metadataRouteResolver_, topologyEngine_->Membership());
     return Status::OK();
 }
@@ -1006,7 +1010,7 @@ void WorkerOCServer::CreateObjectCacheWorkerServices(
 {
     // create WorkerOCServices
     objCacheClientWorkerSvc_ = std::make_shared<datasystem::object_cache::WorkerOCServiceImpl>(
-        hostPort_, hostPort_, objectTable, akSkManager_, evictionManager, persistenceApi_, etcdStore_.get(),
+        hostPort_, hostPort_, objectTable, requestAuthenticator_, evictionManager, persistenceApi_, etcdStore_.get(),
         objCacheMasterSvc_.get(), topologyEngine_.get(), *metadataRouteResolver_, topologyEngine_->Membership(),
         &topologyExitRequested_, topologyEngine_->IsRestart(), true);
     objCacheClientWorkerSvc_->RegisterLocalMetadataCleanupForRejoin([this] {
@@ -1366,7 +1370,7 @@ Status WorkerOCServer::CreateAllServices()
 #ifdef WITH_TESTS
     // create StOCServiceImpl
     utSvc_ = std::make_unique<st::StOCServiceImpl>(objCacheClientWorkerSvc_.get(), &topologyEngine_->Membership(),
-                                                   metadataManagerHolder_.get(), akSkManager_);
+                                                   metadataManagerHolder_.get(), requestAuthenticator_);
 #endif
     return Status::OK();
 }
@@ -2152,6 +2156,9 @@ Status WorkerOCServer::Init()
     ImmutableStringPool::Instance().Init();
     intern::StringPool::InitAll();
     RETURN_IF_NOT_OK(InitAkSk());
+    RETURN_IF_NOT_OK(TenantAuthManager::Instance()->Init(FLAGS_authorization_enable, akSkManager_));
+    requestAuthenticator_ =
+        std::make_shared<const RequestAuthenticator>(akSkManager_, TenantAuthManager::Instance()->AuthEnabled());
     std::shared_ptr<Signature> rpcSignature;
     AkSkData key;
     RETURN_IF_NOT_OK(akSkManager_->SnapshotClientKey(key));
@@ -2181,7 +2188,7 @@ Status WorkerOCServer::InitRpcAndMemoryRuntime()
     // triggers it lazily inside a multi-threaded context (TSAN: bthread worker pool spawn races
     // the spawning thread; silenced by //tools/tsan:default_suppressions).
     BrpcChannelFactory::EnsureGlobalInitialized();
-    if (akSkManager_->ServerAuthEnabled() || FLAGS_authorization_enable) {
+    if (akSkManager_->ServerAuthEnabled() || TenantAuthManager::Instance()->AuthEnabled()) {
         RETURN_IF_NOT_OK(RegisterRpcAuthCapture());
         rpcAuthCapture_ = std::make_unique<BrpcAuthCapture>();
     }

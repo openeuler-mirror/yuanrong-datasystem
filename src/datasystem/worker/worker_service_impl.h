@@ -28,7 +28,6 @@
 
 #include <bthread/mutex.h>
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/eventloop/event_loop.h"
 #include "datasystem/common/object_cache/peer_ub_admission.h"
 #include "datasystem/common/object_cache/ub_health_summary_codec.h"
@@ -41,27 +40,26 @@
 #include "datasystem/protos/share_memory.brpc.pb.h"
 #include "datasystem/server/common_server.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/worker/authenticate.h"
 
 namespace datasystem {
 namespace worker {
 class WorkerServiceImpl : public WorkerService, public IWorkerService, public Callable {
 public:
-
     /**
      * @brief Create a new WorkerServiceImpl object.
      * @param[in] serverAddr The address of worker.
      * @param[in] masterAddr The address of master.
      * @param[in] timeoutMult The value of timeout factor.
      * @param[in] worker The class of worker server.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
+     * @param[in] requestAuthenticator Used to authenticate worker requests.
      * @param[in] workerUuid The worker uuid.
      * @param[in] membership Read-only cluster membership view that outlives this service.
      * @param[in] localExiting Worker-owned local exit gate that outlives this service.
      */
     WorkerServiceImpl(HostPort serverAddr, HostPort masterAddr, double timeoutMult, CommonServer *worker,
-                      std::shared_ptr<AkSkManager> akSkManager, std::string workerUuid,
-                      const cluster::MembershipEndpointView &membership,
-                      const std::atomic<bool> &localExiting);
+                      std::shared_ptr<const RequestAuthenticator> requestAuthenticator, std::string workerUuid,
+                      const cluster::MembershipEndpointView &membership, const std::atomic<bool> &localExiting);
 
     ~WorkerServiceImpl() override;
 
@@ -210,7 +208,7 @@ private:
     std::string sockPath_;
     int listenFd_;
     uint32_t shmWorkerPort_;
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
+    std::shared_ptr<const RequestAuthenticator> requestAuthenticator_{ nullptr };
     std::string workerUuid_;
     const cluster::MembershipEndpointView &membership_;  // Read-only view owned by WorkerOCServer's Engine.
     const std::atomic<bool> &localExiting_;             // WorkerOCServer-owned local admission gate.

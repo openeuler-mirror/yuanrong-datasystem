@@ -68,9 +68,9 @@ void FinishExpireRequest(const worker::MetaOwnerRouteGroups &grouped, std::vecto
 }
 }  // namespace
 
-WorkerOcServiceExpireImpl::WorkerOcServiceExpireImpl(WorkerOcServiceCrudParam &initParam,
-                                                     std::shared_ptr<AkSkManager> akSkManager)
-    : WorkerOcServiceCrudCommonApi(initParam), akSkManager_(std::move(akSkManager))
+WorkerOcServiceExpireImpl::WorkerOcServiceExpireImpl(
+    WorkerOcServiceCrudParam &initParam, std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator)
+    : WorkerOcServiceCrudCommonApi(initParam), requestAuthenticator_(std::move(requestAuthenticator))
 {
 }
 
@@ -82,7 +82,8 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
     int64_t realTimeoutMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     LOG(INFO) << "Expire start from client:" << req.client_id();
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId),
+                                     "Authenticate failed.");
     auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_EXPIRE);
     access.ObjectKeysRef(objectKeys).TtlSecond(req.ttl_second());

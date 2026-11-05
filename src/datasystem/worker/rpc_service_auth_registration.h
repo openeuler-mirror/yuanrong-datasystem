@@ -28,11 +28,11 @@ namespace datasystem {
 namespace worker {
 inline Status RegisterRpcAuthService(RpcServer &server, google::protobuf::Service &native,
                                      const google::protobuf::ServiceDescriptor &authenticated,
-                                     std::shared_ptr<AkSkManager> manager,
+                                     const std::shared_ptr<AkSkManager> &manager,
                                      std::vector<std::unique_ptr<BrpcAuthService>> &owners)
 {
     BrpcAuthService::Authenticate authenticate;
-    RETURN_IF_NOT_OK(CreateRpcAuthenticator(*native.GetDescriptor(), std::move(manager), authenticate));
+    RETURN_IF_NOT_OK(CreateRpcAuthenticator(*native.GetDescriptor(), manager, authenticate));
     for (const auto *descriptor : { native.GetDescriptor(), &authenticated }) {
         std::unique_ptr<BrpcAuthService> entry;
         RETURN_IF_NOT_OK(BrpcAuthService::Create(native, *descriptor, authenticate, entry));

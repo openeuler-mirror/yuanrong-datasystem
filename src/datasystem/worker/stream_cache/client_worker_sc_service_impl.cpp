@@ -67,16 +67,15 @@ template class BlockedCreateRequest<CreateShmPageRspPb, CreateShmPageReqPb>;
 template class MemAllocRequestList<CreateShmPageRspPb, CreateShmPageReqPb>;
 template class BlockedCreateRequest<CreateLobPageRspPb, CreateLobPageReqPb>;
 template class MemAllocRequestList<CreateLobPageRspPb, CreateLobPageReqPb>;
-ClientWorkerSCServiceImpl::ClientWorkerSCServiceImpl(HostPort serverAddr, HostPort masterAddr,
-                                                     master::MasterSCServiceImpl *masterSCService,
-                                                     std::shared_ptr<AkSkManager> akSkManager,
-                                                     std::shared_ptr<WorkerSCAllocateMemory> manager,
-                                                     const worker::MetadataRouteResolver &metadataRoute,
-                                                     const cluster::MembershipEndpointView &membership)
+ClientWorkerSCServiceImpl::ClientWorkerSCServiceImpl(
+    HostPort serverAddr, HostPort masterAddr, master::MasterSCServiceImpl *masterSCService,
+    std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator,
+    std::shared_ptr<WorkerSCAllocateMemory> manager, const worker::MetadataRouteResolver &metadataRoute,
+    const cluster::MembershipEndpointView &membership)
     : localWorkerAddress_(std::move(serverAddr)),
       masterAddress_(std::move(masterAddr)),
       scAllocateManager_(std::move(manager)),
-      akSkManager_(std::move(akSkManager)),
+      requestAuthenticator_(std::move(requestAuthenticator)),
       interrupt_(false),
       metadataRoute_(metadataRoute),
       membership_(membership)
@@ -159,8 +158,7 @@ Status ClientWorkerSCServiceImpl::CreateProducerInternal(
     std::shared_ptr<ServerUnaryWriterReader<CreateProducerRspPb, CreateProducerReqPb>> serverApi)
 {
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
-                                     "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(requestAuthenticator_, req, tenantId), "Authenticate failed.");
     LOG(INFO) << "Worker received CreateProducer request: " << LogHelper::IgnoreSensitive(req);
     TimeoutDuration parentDuration = GetRequestContext()->scTimeoutDuration;
     Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
@@ -410,8 +408,7 @@ Status ClientWorkerSCServiceImpl::CloseProducerInternal(
     std::shared_ptr<ServerUnaryWriterReader<CloseProducerRspPb, CloseProducerReqPb>> serverApi)
 {
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
-                                     "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(requestAuthenticator_, req, tenantId), "Authenticate failed.");
     TimeoutDuration parentDuration = GetRequestContext()->scTimeoutDuration;
     Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
     LOG(INFO) << "Worker received CloseProducer request:" << LogHelper::IgnoreSensitive(req);
@@ -708,8 +705,7 @@ Status ClientWorkerSCServiceImpl::SubscribeInternal(
 {
     LOG(INFO) << "Worker received Subscribe request:" << LogHelper::IgnoreSensitive(req);
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
-                                     "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(requestAuthenticator_, req, tenantId), "Authenticate failed.");
     TimeoutDuration parentDuration = GetRequestContext()->scTimeoutDuration;
     Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
     PerfPoint point(PerfKey::WORKER_CREATE_SUB_ALL);
@@ -903,8 +899,7 @@ Status ClientWorkerSCServiceImpl::CloseConsumerInternal(
     std::shared_ptr<ServerUnaryWriterReader<CloseConsumerRspPb, CloseConsumerReqPb>> serverApi)
 {
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
-                                     "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(requestAuthenticator_, req, tenantId), "Authenticate failed.");
     TimeoutDuration parentDuration = GetRequestContext()->scTimeoutDuration;
     Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
     LOG(INFO) << "Worker received CloseConsumer request:" << LogHelper::IgnoreSensitive(req);
@@ -999,8 +994,7 @@ Status ClientWorkerSCServiceImpl::GetDataPage(
     GetDataPageReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
-                                     "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(requestAuthenticator_, req, tenantId), "Authenticate failed.");
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.stream_name());
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("Worker(%s) receive GetDataPage request, namespaceUri: %s",
                                               localWorkerAddress_.ToString(), namespaceUri);
@@ -1017,8 +1011,7 @@ Status ClientWorkerSCServiceImpl::GetLastAppendCursor(const LastAppendCursorReqP
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
-                                     "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(requestAuthenticator_, req, tenantId), "Authenticate failed.");
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.stream_name());
     StreamManagerMap::const_accessor accessor;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(GetStreamManager(namespaceUri, accessor), "worker get stream manager failed");
@@ -1050,8 +1043,7 @@ Status ClientWorkerSCServiceImpl::CreateShmPage(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
 
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
-                                     "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(requestAuthenticator_, req, tenantId), "Authenticate failed.");
 
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.stream_name());
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] CreateShmPage request: %s", LogPrefix(), namespaceUri,
@@ -1109,8 +1101,7 @@ Status ClientWorkerSCServiceImpl::AllocBigShmMemory(
     CreateLobPageReqPb req;
     RETURN_IF_NOT_OK(serverApi->Read(req));
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
-                                     "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(requestAuthenticator_, req, tenantId), "Authenticate failed.");
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.stream_name());
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("Worker(%s) receive AllocBigShmMemory request, namespaceUri: %s",
                                               localWorkerAddress_.ToString(), namespaceUri);
@@ -1135,8 +1126,7 @@ Status ClientWorkerSCServiceImpl::ReleaseBigShmMemory(
     ReleaseLobPageReqPb req;
     RETURN_IF_NOT_OK(serverApi->Read(req));
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
-                                     "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(requestAuthenticator_, req, tenantId), "Authenticate failed.");
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.stream_name());
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("Worker(%s) receive ReleaseBigShmMemory request, namespaceUri: %s",
                                               localWorkerAddress_.ToString(), namespaceUri);
@@ -1176,8 +1166,7 @@ Status ClientWorkerSCServiceImpl::DeleteStreamImpl(const DeleteStreamReqPb &req,
     Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
     PerfPoint point(PerfKey::WORKER_DELETE_STREAM_ALL);
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
-                                     "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(requestAuthenticator_, req, tenantId), "Authenticate failed.");
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.stream_name());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckConnection(namespaceUri), "worker check connection failed");
     LOG(INFO) << FormatString("Worker(%s) received DeleteStream request, namespaceUri: %s",
@@ -1274,8 +1263,7 @@ Status ClientWorkerSCServiceImpl::QueryGlobalProducersNumImpl(const QueryGlobalN
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
-                                     "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(requestAuthenticator_, req, tenantId), "Authenticate failed.");
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.stream_name());
     LOG(INFO) << FormatString("Worker(%s) received QueryGlobalProducersNum request, namespaceUri: %s",
                               localWorkerAddress_.ToString(), namespaceUri);
@@ -1315,8 +1303,7 @@ Status ClientWorkerSCServiceImpl::QueryGlobalConsumersNumImpl(const QueryGlobalN
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
-                                     "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(requestAuthenticator_, req, tenantId), "Authenticate failed.");
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.stream_name());
     LOG(INFO) << FormatString("Worker(%s) received QueryGlobalConsumersNum request, namespaceUri: %s",
                               localWorkerAddress_.ToString(), namespaceUri);
@@ -1838,8 +1825,7 @@ Status ClientWorkerSCServiceImpl::ResetStreams(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
 
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
-                                     "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(requestAuthenticator_, req, tenantId), "Authenticate failed.");
 
     const auto &streamNamesRepeated = req.stream_names();
     std::unordered_set<std::string> streams{ streamNamesRepeated.begin(), streamNamesRepeated.end() };
@@ -1927,8 +1913,7 @@ Status ClientWorkerSCServiceImpl::ResumeStreams(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
 
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
-                                     "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(requestAuthenticator_, req, tenantId), "Authenticate failed.");
 
     const auto &streamNamesRepeated = req.stream_names();
     std::unordered_set<std::string> streams{ streamNamesRepeated.begin(), streamNamesRepeated.end() };

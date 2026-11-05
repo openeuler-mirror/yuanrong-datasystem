@@ -344,6 +344,7 @@ ds_cc_library(
     ],
     hdrs = [
         "authenticate.h",
+        "request_authenticator.h",
     ],
     deps = [
         "//src/datasystem/common/rpc:brpc_auth",

@@ -40,13 +40,16 @@ public:
         opts.numOBS = 1;
         opts.numWorkers = workerNum;
         opts.numEtcd = 1;
+        opts.systemAccessKey.clear();
+        opts.systemSecretKey.clear();
+        opts.tenantAccessKey.clear();
+        opts.tenantSecretKey.clear();
         std::string hostIp = "127.0.0.1";
         opts.workerConfigs.emplace_back(hostIp, GetFreePort());
         for (auto addr : opts.workerConfigs) {
             workerAddress_.emplace_back(addr.ToString());
         }
-        opts.workerGflagParams =
-            "-log_monitor_interval_ms=1000 -shared_memory_size_mb=1 -skip_authenticate=true -v=1 ";
+        opts.workerGflagParams = "-log_monitor_interval_ms=1000 -shared_memory_size_mb=1 -v=1 ";
         opts.enableSpill = true;
         opts.numEtcd = 1;
     }
@@ -110,12 +113,13 @@ protected:
     int logInterval = 1;
     int kb800 = 800 * 1024;
 
-    // Routed GetHashRing/QueryAndGet authenticate via AK/SK directly (no skip_authenticate bypass),
-    // so the client must keep the system credentials set by InitConnectOpt.
+    // Keep routed requests on the same no-auth configuration as the rest of this fixture.
     void InitRoutedKVClient(uint32_t workerIndex, std::shared_ptr<KVClient> &client)
     {
         ConnectOptions options;
         InitConnectOpt(workerIndex, options);
+        options.accessKey.clear();
+        options.secretKey.Clear();
         options.enableLocalCache = false;
         options.dataPlacementPolicy = DataPlacementPolicy::PREFERRED_META_OWNER;
         client = std::make_shared<KVClient>(options);

@@ -548,6 +548,10 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         ConfigureCluster(opts);
+        opts.systemAccessKey.clear();
+        opts.systemSecretKey.clear();
+        opts.tenantAccessKey.clear();
+        opts.tenantSecretKey.clear();
         if (StrategyFromExtraFlags("eviction_strategy", "clock") == "heat") {
             opts.workerGflagParams.append(" ").append(HeatTestFlags());
         }
@@ -590,7 +594,7 @@ public:
         }
         for (int i = 0; i < WorkerNum(); ++i) {
             std::shared_ptr<KVClient> client;
-            InitTestKVClient(i, client);
+            InitTestKVClient(i, client, [](ConnectOptions &) {});
             clients_.emplace_back(std::move(client));
         }
     }
@@ -2066,7 +2070,7 @@ private:
         opts.enableSpill = true;
         opts.workerGflagParams =
             "-shared_memory_size_mb=32 -log_monitor=true "
-            "-log_monitor_interval_ms=1000 -skip_authenticate=true -v=1 -spill_size_limit=134217728 "
+            "-log_monitor_interval_ms=1000 -v=1 -spill_size_limit=134217728 "
             "-enable_memory_rebalance=false -arena_per_tenant=1";
         opts.injectActions = "NodeSelector.setInterval:call(200);WorkerOCServer.heatMaintenanceIntervalMs:call(1000);"
                              "WorkerOCServer.copyWatermarkTelemetryIntervalMs:call(1000)";
@@ -2077,7 +2081,7 @@ private:
         opts.numWorkers = 3;
         opts.workerGflagParams =
             "-shared_memory_size_mb=64 -log_monitor=true "
-            "-log_monitor_interval_ms=1000 -skip_authenticate=true -v=1 "
+            "-log_monitor_interval_ms=1000 -v=1 "
             "-enable_memory_rebalance=true -rebalance_usage_gap_percent=20 -rebalance_source_usage_percent=60 "
             "-rebalance_task_report_grace_ms=500 -data_migrate_rate_limit_mb=1024 "
             "-arena_per_tenant=1";
@@ -2093,7 +2097,7 @@ private:
         opts.workerGflagParams = FormatString(
             "-shared_memory_size_mb=%d -eviction_high_watermark_ratio=0.75 "
             "-eviction_low_watermark_ratio=0.65 -log_monitor=true "
-            "-log_monitor_interval_ms=1000 -skip_authenticate=true -v=1 -spill_size_limit=%zu "
+            "-log_monitor_interval_ms=1000 -v=1 -spill_size_limit=%zu "
             "-enable_memory_rebalance=true -rebalance_usage_gap_percent=20 "
             "-rebalance_source_usage_percent=60 -rebalance_task_report_grace_ms=500 "
             "-data_migrate_rate_limit_mb=1024 -rebalance_keep_local_copy=true -arena_per_tenant=1",
@@ -2118,7 +2122,7 @@ public:
         opts.workerGflagParams = FormatString(
             "-shared_memory_size_mb=%d -eviction_high_watermark_ratio=0.75 "
             "-eviction_low_watermark_ratio=0.65 -log_monitor=true "
-            "-log_monitor_interval_ms=1000 -skip_authenticate=true -v=1 -spill_size_limit=%zu "
+            "-log_monitor_interval_ms=1000 -v=1 -spill_size_limit=%zu "
             "-enable_memory_rebalance=true -rebalance_usage_gap_percent=20 "
             "-rebalance_source_usage_percent=60 -rebalance_task_report_grace_ms=500 "
             "-data_migrate_rate_limit_mb=2048 -rebalance_keep_local_copy=true -arena_per_tenant=1",

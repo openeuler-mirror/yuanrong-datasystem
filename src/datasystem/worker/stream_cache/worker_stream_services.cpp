@@ -195,14 +195,14 @@ void WorkerStreamServices::CreateMasterServices(
 }
 
 void WorkerStreamServices::CreateWorkerServices(
-    const HostPort &host, const std::shared_ptr<AkSkManager> &akSkManager,
+    const HostPort &host, const std::shared_ptr<const RequestAuthenticator> &requestAuthenticator,
     const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager,
     const MetadataRouteResolver &metadataRoute, const cluster::MembershipEndpointView &membership)
 {
     if (Enabled()) {
         auto scAllocateManager = std::make_shared<stream_cache::WorkerSCAllocateMemory>(evictionManager);
         impl_->streamCacheClientWorkerSvc_ = std::make_shared<stream_cache::ClientWorkerSCServiceImpl>(
-            host, host, impl_->streamCacheMasterSvc_.get(), akSkManager, scAllocateManager,
+            host, host, impl_->streamCacheMasterSvc_.get(), requestAuthenticator, scAllocateManager,
             metadataRoute, membership);
         impl_->streamCacheMasterWorkerSvc_ = std::make_shared<stream_cache::MasterWorkerSCServiceImpl>(
             host, host, impl_->streamCacheClientWorkerSvc_.get());
@@ -431,7 +431,7 @@ void WorkerStreamServices::CreateMasterServices(
 }
 
 void WorkerStreamServices::CreateWorkerServices(
-    const HostPort &, const std::shared_ptr<AkSkManager> &,
+    const HostPort &, const std::shared_ptr<const RequestAuthenticator> &,
     const std::shared_ptr<object_cache::WorkerOcEvictionManager> &,
     const MetadataRouteResolver &, const cluster::MembershipEndpointView &)
 {

@@ -90,8 +90,8 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "client_skip_auth_test",
-    srcs = ["client_skip_auth_test.cpp"],
+    name = "client_no_auth_test",
+    srcs = ["client_no_auth_test.cpp"],
     tags = ["manual"],
     deps = OC_CLIENT_COMMON_DEPS + [
         "//src/datasystem/client/object_cache:object_client",

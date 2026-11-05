@@ -18,7 +18,7 @@
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_EXPIRE_IMPL_H
 
 #include "datasystem/utils/status.h"
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
+#include "datasystem/worker/authenticate.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/protos/object_posix.service.rpc.pb.h"
@@ -29,7 +29,8 @@ namespace object_cache {
 
 class WorkerOcServiceExpireImpl : public WorkerOcServiceCrudCommonApi {
 public:
-    WorkerOcServiceExpireImpl(WorkerOcServiceCrudParam &initParam, std::shared_ptr<AkSkManager> akSkManager);
+    WorkerOcServiceExpireImpl(WorkerOcServiceCrudParam &initParam,
+                              std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator);
 
     /**
      * @brief Set expiration time for metas by objectKeys.
@@ -57,7 +58,7 @@ private:
 
     std::shared_ptr<ThreadPool> batchExpireThreadPool_{ nullptr };
 
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
+    std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator_{ nullptr };
 };
 
 }  // namespace object_cache

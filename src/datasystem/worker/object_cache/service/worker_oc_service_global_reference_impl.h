@@ -30,6 +30,7 @@
 
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/request_context.h"
+#include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 
 namespace datasystem {
@@ -39,7 +40,8 @@ class WorkerOcServiceGlobalReferenceImpl : public WorkerOcServiceCrudCommonApi {
 public:
     WorkerOcServiceGlobalReferenceImpl(WorkerOcServiceCrudParam &initParam,
                                        std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable,
-                                       std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress);
+                                       std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator,
+                                       HostPort &localAddress);
 
     /**
      * @brief Increase the global reference count of object.
@@ -348,7 +350,7 @@ private:
 
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable_;
 
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
+    std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator_{ nullptr };
 
     HostPort &localAddress_;
 };

@@ -28,7 +28,7 @@
 #include "datasystem/common/object_cache/peer_ub_admission.h"
 #include "datasystem/common/object_cache/ub_health_summary_codec.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
+#include "datasystem/worker/authenticate.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/protos/object_posix.service.rpc.pb.h"
@@ -52,8 +52,8 @@ class WorkerOcServiceGetImpl : public WorkerOcServiceCrudCommonApi,
 public:
     WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, std::shared_ptr<ThreadPool> memCpyThreadPool,
                            std::shared_ptr<ThreadPool> threadPool,
-                           std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
-                           std::shared_ptr<MigrateDataRateController> rateController,
+                           std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator,
+                           HostPort localAddress, std::shared_ptr<MigrateDataRateController> rateController,
                            std::shared_ptr<PeerUbAdmission> ubAdmission = nullptr);
 
     ~WorkerOcServiceGetImpl();
@@ -1174,7 +1174,7 @@ private:
 
     std::shared_ptr<ThreadPool> threadPool_{ nullptr };
 
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
+    std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator_{ nullptr };
 
     HostPort localAddress_;
 

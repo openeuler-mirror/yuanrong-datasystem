@@ -37,11 +37,11 @@ using namespace datasystem::master;
 namespace datasystem {
 namespace object_cache {
 
-WorkerOcServiceDeleteImpl::WorkerOcServiceDeleteImpl(WorkerOcServiceCrudParam &initParam,
-                                                     std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress,
-                                                     std::shared_ptr<WorkerOcServiceGetImpl> getProc)
+WorkerOcServiceDeleteImpl::WorkerOcServiceDeleteImpl(
+    WorkerOcServiceCrudParam &initParam, std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator,
+    HostPort &localAddress, std::shared_ptr<WorkerOcServiceGetImpl> getProc)
     : WorkerOcServiceCrudCommonApi(initParam),
-      akSkManager_(std::move(akSkManager)),
+      requestAuthenticator_(std::move(requestAuthenticator)),
       localAddress_(localAddress),
       getProc_(std::move(getProc))
 {
@@ -155,7 +155,8 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyImpl(const DeleteAllCopyReqPb &re
 {
     Timer timerCost;
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId),
+                                     "Authenticate failed.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_keys_size()),
                                          StatusCode::K_INVALID, "invalid object size");
     auto needDeleteObjs = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());

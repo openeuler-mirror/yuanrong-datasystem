@@ -30,6 +30,7 @@
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/utils/status.h"
+#include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 
 namespace datasystem {
@@ -37,7 +38,8 @@ namespace object_cache {
 
 class WorkerOcServiceCreateImpl : public WorkerOcServiceCrudCommonApi {
 public:
-    WorkerOcServiceCreateImpl(WorkerOcServiceCrudParam &initParam, std::shared_ptr<AkSkManager> akSkManager,
+    WorkerOcServiceCreateImpl(WorkerOcServiceCrudParam &initParam,
+                              std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator,
                               HostPort &localAddress);
 
     /**
@@ -139,7 +141,7 @@ private:
 
     std::atomic<uint64_t> shmIdCounter{0};
     TbbCreatingAllocationTable creatingAllocations_;
-    std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
+    std::shared_ptr<const worker::RequestAuthenticator> requestAuthenticator_{ nullptr };
 
     HostPort localAddress_;
 };
