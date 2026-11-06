@@ -1079,8 +1079,10 @@ Status WorkerOCServiceImpl::PrepareTopologyScaleInData(const std::vector<std::st
     GroupAndRemoveMeta(copies, master::RemoveMetaReqPb::NORMAL, copyFailures, migrateIds, waitIds, l2Ids,
                        businessOperationId);
     std::vector<std::string> primaryFailures;
-    GroupAndRemoveMeta(primaries, master::RemoveMetaReqPb::GIVEUP_PRIMARY, primaryFailures, migrateIds, waitIds, l2Ids,
-                       businessOperationId);
+    std::unordered_map<std::string, uint64_t> versions;
+    RETURN_IF_NOT_OK(CollectScaleInObjectVersions(primaries, versions, deadline, cancellation));
+    getProc_->GroupAndRemoveMeta(primaries, master::RemoveMetaReqPb::GIVEUP_PRIMARY, localAddress_.ToString(),
+                                 versions, primaryFailures, migrateIds, waitIds, l2Ids, businessOperationId);
 
     const int intervalMs = 500;
     int retryTime = 0;
@@ -1146,16 +1148,59 @@ Status WorkerOCServiceImpl::DrainTopologyScaleInData(const cluster::TopologyPhas
               << " migrate_count=" << migrateIds.size() << " wait_clear_count=" << waitIds.size()
               << " l2_count=" << l2Ids.size();
     RETURN_IF_NOT_OK(MigrateData(migrateIds, action.taskId, deadline, cancellation));
-    std::vector<std::string> failures;
-    GroupAndRemoveMeta(migrateIds, master::RemoveMetaReqPb::NORMAL, failures, migrateIds, waitIds, l2Ids,
-                       businessOperationId);
-    CHECK_FAIL_RETURN_STATUS(failures.empty(), K_TRY_AGAIN, "migrated metadata removal needs retry");
+    RETURN_IF_NOT_OK(CompleteScaleInPrimaryHandoff(migrateIds, waitIds, l2Ids, businessOperationId, deadline,
+                                                   cancellation));
     {
         std::lock_guard<SharedMutex> lock(clearIdsMutex_);
         voluntaryScaleDownClearIds_ = std::move(waitIds);
     }
     RETURN_IF_NOT_OK(MigrateData(l2Ids, action.taskId, deadline, cancellation));
     CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology ScaleIn cancelled");
+    return Status::OK();
+}
+
+Status WorkerOCServiceImpl::CollectScaleInObjectVersions(
+    const std::vector<std::string> &objectKeys, std::unordered_map<std::string, uint64_t> &versions,
+    std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation)
+{
+    versions.reserve(objectKeys.size());
+    for (const auto &key : objectKeys) {
+        CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "ScaleIn primary handoff cancelled");
+        CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                                 "ScaleIn primary handoff deadline exceeded");
+        std::shared_ptr<SafeObjType> entry;
+        if (objectTable_->Get(key, entry).IsError() || entry == nullptr || entry->TryRLock(true).IsError()) {
+            RETURN_STATUS(K_TRY_AGAIN, "ScaleIn primary handoff needs a local object snapshot retry");
+        }
+        Raii unlock([&entry] { entry->RUnlock(); });
+        if (entry->Get() == nullptr) {
+            RETURN_STATUS(K_TRY_AGAIN, "ScaleIn primary handoff needs a local object snapshot retry");
+        }
+        versions.emplace(key, (*entry)->GetCreateTime());
+    }
+    return Status::OK();
+}
+
+Status WorkerOCServiceImpl::CompleteScaleInPrimaryHandoff(
+    const std::vector<std::string> &objectKeys, std::vector<std::string> &waitIds, std::vector<std::string> &l2Ids,
+    const std::string &operationId, std::chrono::steady_clock::time_point deadline,
+    const cluster::CancellationToken &cancellation)
+{
+    std::unordered_map<std::string, uint64_t> versions;
+    RETURN_IF_NOT_OK(CollectScaleInObjectVersions(objectKeys, versions, deadline, cancellation));
+    std::vector<std::string> failed;
+    std::vector<std::string> needMigrate;
+    getProc_->GroupAndRemoveMeta(objectKeys, master::RemoveMetaReqPb::GIVEUP_PRIMARY, localAddress_.ToString(),
+                                 versions, failed, needMigrate, waitIds, l2Ids, operationId);
+    CHECK_FAIL_RETURN_STATUS(needMigrate.empty(), K_TRY_AGAIN,
+                             FormatString("ScaleIn primary handoff needs data migration retry, need_migrate_count=%zu",
+                                          needMigrate.size()));
+    CHECK_FAIL_RETURN_STATUS(failed.empty(), K_TRY_AGAIN,
+                             FormatString("ScaleIn primary handoff needs retry, failed_handoff_count=%zu",
+                                          failed.size()));
+    CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "ScaleIn primary handoff cancelled");
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "ScaleIn primary handoff deadline exceeded");
     return Status::OK();
 }
 

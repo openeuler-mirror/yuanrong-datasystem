@@ -1628,7 +1628,15 @@ private:
      */
     void SendChangePrimaryCopy(
         std::unordered_map<std::string, std::unordered_set<std::string>> &workerForChangePrimaryIds,
-        RemoveMetaRspPb &rsp, const std::string &topologyOperationId);
+        RemoveMetaRspPb &rsp, const std::string &topologyOperationId,
+        const std::string &source = "",
+        const std::unordered_map<std::string, uint64_t> *versions = nullptr);
+
+    void ProcessChangePrimaryCopyResults(
+        const std::string &primaryAddr, const std::unordered_set<std::string> &successIds,
+        std::unordered_map<std::string, std::unordered_set<std::string>> &workerForChangePrimaryIds,
+        RemoveMetaRspPb &rsp, const std::string &topologyOperationId, const std::string &source,
+        const std::unordered_map<std::string, uint64_t> *versions);
 
     /**
      * @brief Obtains the information about expired objects.
@@ -1762,9 +1770,24 @@ private:
      * @param[in] topologyOperation Whether a fenced topology callback initiated the transition.
      * @return K_OK or topology membership query status.
      */
-    Status ProcessGiveUpPrimaryObject(const std::string &objectKey, const std::string &address,
-                                      RemoveMetaRspPb &response, PrimaryChangeMap &workerForChangePrimaryIds,
-                                      bool topologyOperation);
+    Status GiveUpTopologyPrimary(const RemoveMetaReqPb &request, const std::string &source, RemoveMetaRspPb &response);
+
+    Status CommitTopologyPrimary(const std::string &key, const std::string &source,
+                                 const std::string &target, uint64_t version);
+
+    Status ProcessGiveUpPrimaryObject(
+        const std::string &objectKey, const std::string &address, RemoveMetaRspPb &response,
+        PrimaryChangeMap &workerForChangePrimaryIds, bool topologyOperation,
+        const std::unordered_map<std::string, uint64_t> *versions = nullptr, bool deferSourceCleanup = false);
+
+    Status SelectGiveUpPrimaryCandidate(
+        ObjectMeta &meta, const std::string &objectKey, const std::string &address,
+        PrimaryChangeMap &workerForChangePrimaryIds, const std::unordered_map<std::string, uint64_t> *versions,
+        bool deferSourceCleanup, bool &selected);
+
+    Status HandleTopologyPrimaryVersionChange(
+        ObjectMeta &meta, const std::string &objectKey, const std::string &address, RemoveMetaRspPb &response,
+        const std::unordered_map<std::string, uint64_t> *versions, bool &handled);
 
     /**
      * @brief ChangePrimaryCopy
@@ -2041,6 +2064,8 @@ private:
      * @return K_OK or membership resolution status.
      */
     Status IsTopologyMemberPreLeaving(const std::string &address, bool &isPreLeaving) const;
+
+    Status IsTopologyMemberActive(const std::string &address, bool &isActive) const;
 
     bool IsLocalExitRequested() const;
 

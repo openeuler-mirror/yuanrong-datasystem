@@ -421,6 +421,50 @@ TEST_F(UrmaMockUdsMemfdTransportTest, ImportSegRegisteredEndpointFailureDoesNotU
     ::close(remoteFd);
 }
 
+TEST_F(UrmaMockUdsMemfdTransportTest, ImportSegPrefersFullSegmentIdentityOverSameTokenVaCache)
+{
+    auto *dev = ds_urma_mock_get_device_by_name(const_cast<char *>("bonding_mock0"));
+    ASSERT_NE(dev, nullptr);
+    auto *ctxRaw = ds_urma_mock_create_context(dev, 0);
+    ASSERT_NE(ctxRaw, nullptr);
+
+    constexpr uint64_t kSegSize = 4096;
+    constexpr uint64_t kRemoteVa = 0x7f0018002000ULL;
+    constexpr uint64_t kToken = 0x51515152ULL;
+    int remoteFd = ::memfd_create("datasystem", 0);
+    ASSERT_GE(remoteFd, 0);
+    ASSERT_EQ(::ftruncate(remoteFd, static_cast<off_t>(kSegSize)), 0);
+    void *remotePtr = ::mmap(reinterpret_cast<void *>(kRemoteVa), kSegSize, PROT_READ | PROT_WRITE,
+                             MAP_SHARED | MAP_FIXED, remoteFd, 0);
+    ASSERT_NE(remotePtr, MAP_FAILED);
+
+    urma_seg_cfg_t serverCfg{};
+    serverCfg.va = kRemoteVa;
+    serverCfg.len = kSegSize;
+    serverCfg.token_value.value = kToken;
+    auto *serverSeg = ds_urma_mock_register_seg(ctxRaw, &serverCfg);
+    ASSERT_NE(serverSeg, nullptr);
+
+    auto staleEndpoint = BuildTestImportEndpoint("unreachable-peer", "127.0.0.1:1");
+    staleEndpoint.va = kRemoteVa;
+    staleEndpoint.len = kSegSize;
+    UdsEndpointService::Instance().RegisterImportEndpoint(kToken, staleEndpoint);
+
+    urma_seg_t remoteSeg = serverSeg->seg;
+    urma_token_t token{};
+    token.value = kToken;
+    urma_import_seg_flag_t flag{};
+    flag.value = URMA_IMPORT_SEG_FLAG_REMOTE_WRITE;
+    auto *imported = ds_urma_mock_import_seg(ctxRaw, &remoteSeg, &token, 0, flag);
+    ASSERT_NE(imported, nullptr);
+
+    EXPECT_EQ(ds_urma_mock_unimport_seg(imported), URMA_SUCCESS);
+    ds_urma_mock_unregister_seg(serverSeg);
+    ds_urma_mock_delete_context(ctxRaw);
+    ::munmap(remotePtr, kSegSize);
+    ::close(remoteFd);
+}
+
 TEST_F(UrmaMockUdsMemfdTransportTest, PostSendWr_CrossProcessMemfdShared)
 {
     // End-to-end: server has a memfd at kRemoteVa; client side ImportSeg via

@@ -592,10 +592,14 @@ Status WorkerOcServiceCrudCommonApi::RemoveMeta(const std::list<std::string> &ob
     }
     *request.mutable_ids() = { objectKeysRemoveList.begin(), objectKeysRemoveList.end() };
     if (!batchKeyVersions.empty()) {
-        for (const auto &objKeyVersion : batchKeyVersions) {
+        for (const auto &key : objectKeysRemoveList) {
+            const auto versionIt = batchKeyVersions.find(key);
+            if (versionIt == batchKeyVersions.end()) {
+                continue;
+            }
             auto *objKeyVersionPb = request.add_id_with_version();
-            objKeyVersionPb->set_id(objKeyVersion.first);
-            objKeyVersionPb->set_version(objKeyVersion.second);
+            objKeyVersionPb->set_id(versionIt->first);
+            objKeyVersionPb->set_version(versionIt->second);
         }
     }
     std::function<Status(master::RemoveMetaReqPb &, master::RemoveMetaRspPb &)> func =
@@ -753,7 +757,7 @@ void WorkerOcServiceCrudCommonApi::BatchRemoveMeta(const std::vector<std::string
                 failedIds.insert(failedIds.end(), objectKeysRemoveList.begin(), objectKeysRemoveList.end());
                 continue;
             }
-            if (batchKeyVersions.empty()) {
+            if (!topologyOperationId.empty() || batchKeyVersions.empty()) {
                 InitRemoveMetaRpcDeadline(!topologyOperationId.empty());
             }
             master::RemoveMetaRspPb response;
@@ -767,7 +771,7 @@ void WorkerOcServiceCrudCommonApi::BatchRemoveMeta(const std::vector<std::string
         }
     }
     if (count > 0) {
-        if (batchKeyVersions.empty()) {
+        if (!topologyOperationId.empty() || batchKeyVersions.empty()) {
             InitRemoveMetaRpcDeadline(!topologyOperationId.empty());
         }
         master::RemoveMetaRspPb response;

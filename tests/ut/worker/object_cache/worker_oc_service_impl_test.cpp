@@ -37,6 +37,9 @@
 #include <gmock/gmock.h>
 
 #include "../../../common/binmock/binmock.h"
+#define private public
+#include "datasystem/cluster/executor/topology_phase_callbacks.h"
+#undef private
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/cluster/routing/placement_facade.h"
@@ -1735,6 +1738,169 @@ public:
     using WorkerOcServiceCrudCommonApi::ValidateRollbackUnackResponse;
     using WorkerOcServiceCrudCommonApi::WorkerOcServiceCrudCommonApi;
 };
+
+void ExpectScaleInRequestVersions(
+    const master::RemoveMetaReqPb &request, const std::unordered_map<std::string, uint64_t> &versions)
+{
+    EXPECT_EQ(request.cause(), master::RemoveMetaReqPb::GIVEUP_PRIMARY);
+    EXPECT_FALSE(request.topology_operation_id().empty());
+    ASSERT_EQ(request.ids_size(), request.id_with_version_size());
+    for (int i = 0; i < request.ids_size(); ++i) {
+        const auto &item = request.id_with_version(i);
+        EXPECT_EQ(item.id(), request.ids(i));
+        auto version = versions.find(item.id());
+        ASSERT_NE(version, versions.end());
+        EXPECT_EQ(item.version(), version->second);
+    }
+}
+
+void SetScaleInBatchHandlers(
+    const std::shared_ptr<FakeWorkerMasterOCApi> &api, const std::shared_ptr<FakeWorkerMasterOCApi> &redirectApi,
+    const HostPort &peer, const std::vector<std::string> &keys,
+    const std::unordered_map<std::string, uint64_t> &versions)
+{
+    api->SetRemoveMetaHandler([&](master::RemoveMetaReqPb &req, master::RemoveMetaRspPb &rsp) {
+        ExpectScaleInRequestVersions(req, versions);
+        for (const auto &key : req.ids()) {
+            if (key != keys.front()) {
+                rsp.add_success_ids(key);
+            }
+        }
+        if (req.ids(0) == keys.front()) {
+            auto *redirect = rsp.add_info();
+            redirect->set_redirect_meta_address(peer.ToString());
+            redirect->add_change_meta_ids(keys.front());
+        }
+        return Status::OK();
+    });
+    redirectApi->SetRemoveMetaHandler([&](master::RemoveMetaReqPb &req, master::RemoveMetaRspPb &rsp) {
+        ExpectScaleInRequestVersions(req, versions);
+        EXPECT_FALSE(req.redirect());
+        EXPECT_THAT(req.ids(), ElementsAre(keys.front()));
+        rsp.add_success_ids(keys.front());
+        return Status::OK();
+    });
+}
+
+TEST_F(WorkerOcServiceImplTest, ScaleInRemoveMetaVersionsMatchBatchAndRedirectKeys)
+{
+    const HostPort peer("127.0.0.1", 18482);
+    TestDistributedTopology topology(localAddress_, peer);
+    DS_ASSERT_OK(topology.InitStatus());
+    std::vector<std::string> keys;
+    std::unordered_map<std::string, uint64_t> versions;
+    for (size_t i = 0; i < 601; ++i) {
+        keys.emplace_back("scale-in-batch-" + std::to_string(i));
+        versions.emplace(keys.back(), i + 1);
+        topology.SetOwner(keys.back(), localAddress_);
+    }
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    auto redirectApi = std::make_shared<FakeWorkerMasterOCApi>(peer);
+    SetScaleInBatchHandlers(api, redirectApi, peer, keys, versions);
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, *topology.Route());
+    apiManager->SetApi(api);
+    apiManager->SetApi(peer, redirectApi);
+    auto param = MakeCrudParam(apiManager, topology.Route(), topology.EndpointPolicy());
+    TestWorkerOcServiceCrudCommonApi common(param);
+    ScopedRequestContext context;
+    GetRequestContext()->reqTimeoutDuration.Init(5'000);
+    std::vector<std::string> failed, migrate, wait, l2;
+    common.GroupAndRemoveMeta(keys, master::RemoveMetaReqPb::GIVEUP_PRIMARY, localAddress_.ToString(), versions,
+                             failed, migrate, wait, l2, "scale-in-batch");
+    EXPECT_TRUE(failed.empty());
+    const auto requests = api->RemoveMetaRequests();
+    ASSERT_EQ(requests.size(), 3U);
+    EXPECT_EQ(requests[0].ids_size(), 300);
+    EXPECT_EQ(requests[1].ids_size(), 300);
+    EXPECT_EQ(requests[2].ids_size(), 1);
+    EXPECT_EQ(redirectApi->RemoveMetaRequests().size(), 1U);
+}
+
+TEST_F(WorkerOcServiceImplTest, ScaleInVersionSnapshotRejectsBusyCancelledAndExpiredObjects)
+{
+    const std::string key = "scale-in-snapshot";
+    AddObject(key, 7);
+    std::shared_ptr<SafeObjType> entry;
+    DS_ASSERT_OK(objectTable_->Get(key, entry));
+    DS_ASSERT_OK(entry->WLock());
+    Raii unlock([&] { entry->WUnlock(); });
+    cluster::CancellationToken cancellation;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    std::unordered_map<std::string, uint64_t> versions;
+    EXPECT_EQ(impl_->CollectScaleInObjectVersions({ key }, versions, deadline, cancellation).GetCode(), K_TRY_AGAIN);
+    EXPECT_TRUE(versions.empty());
+    EXPECT_EQ(impl_->CollectScaleInObjectVersions({ key }, versions, std::chrono::steady_clock::now(), cancellation)
+                  .GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    cancellation.Cancel();
+    EXPECT_EQ(impl_->CollectScaleInObjectVersions({ key }, versions, deadline, cancellation).GetCode(), K_NOT_READY);
+    entry->WUnlock();
+    cluster::CancellationToken active;
+    DS_ASSERT_OK(impl_->CollectScaleInObjectVersions({ key }, versions, deadline, active));
+    EXPECT_EQ(versions.at(key), 7U);
+    versions.clear();
+    EXPECT_EQ(impl_->CollectScaleInObjectVersions({ "absent" }, versions, deadline, active).GetCode(), K_TRY_AGAIN);
+}
+
+void StubScaleInMigration(bool &migrated, const std::string &key)
+{
+    using MigrateMethod =
+        Status (WorkerOCServiceImpl::*)(const std::vector<std::string> &, const std::string &,
+                                       std::chrono::steady_clock::time_point, const cluster::CancellationToken &);
+    BINEXPECT_CALL((MigrateMethod)&WorkerOCServiceImpl::MigrateData, (_, _, _, _))
+        .WillRepeatedly(Invoke([&](const std::vector<std::string> &ids, const std::string &,
+                                  std::chrono::steady_clock::time_point, const cluster::CancellationToken &) {
+            if (!ids.empty()) {
+                EXPECT_THAT(ids, ElementsAre(key));
+                migrated = true;
+            }
+            return Status::OK();
+        }));
+}
+
+TEST_F(WorkerOcServiceImplTest, ScaleInDrainRetryKeepsVersionedHandoffAfterCommitFailure)
+{
+    const std::string key = "scale-in-drain-retry";
+    AddObject(key, 7);
+    placement_.SetOwner(key, localAddress_);
+    auto api = std::make_shared<FakeWorkerMasterOCApi>(localAddress_);
+    bool migrated = false;
+    bool failCommit = true;
+    api->SetRemoveMetaHandler([&](master::RemoveMetaReqPb &req, master::RemoveMetaRspPb &rsp) {
+        ExpectScaleInRequestVersions(req, { { key, 7 } });
+        if (!migrated) {
+            rsp.add_need_data_ids(key);
+        } else if (failCommit) {
+            rsp.add_failed_ids(key);
+        } else {
+            rsp.add_success_ids(key);
+        }
+        return Status::OK();
+    });
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
+    apiManager->SetApi(api);
+    auto param = MakeCrudParam(apiManager);
+    impl_->getProc_ =
+        std::make_shared<WorkerOcServiceGetImpl>(param, nullptr, nullptr, nullptr, localAddress_, nullptr);
+    StubScaleInMigration(migrated, key);
+    ScopedRequestContext context;
+    GetRequestContext()->reqTimeoutDuration.Init(5'000);
+    cluster::TopologyPhaseAction action;
+    action.taskId = "scale-in-drain-retry";
+    cluster::CancellationToken cancellation;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        EXPECT_EQ(impl_->DrainTopologyScaleInData(action, "scale-in-drain-retry", deadline, cancellation).GetCode(),
+                  K_TRY_AGAIN);
+        std::shared_ptr<SafeObjType> entry;
+        DS_ASSERT_OK(objectTable_->Get(key, entry));
+        EXPECT_TRUE((*entry)->stateInfo.IsPrimaryCopy());
+        EXPECT_EQ((*entry)->GetCreateTime(), 7U);
+    }
+    EXPECT_EQ(api->RemoveMetaRequests().size(), 4U);
+    failCommit = false;
+    DS_ASSERT_OK(impl_->DrainTopologyScaleInData(action, "scale-in-drain-retry", deadline, cancellation));
+    EXPECT_EQ(api->RemoveMetaRequests().size(), 5U);
+}
 
 TEST_F(WorkerOcServiceImplTest, EmptyRollbackResponseIsOnlyUnsupportedCompatibilityCase)
 {

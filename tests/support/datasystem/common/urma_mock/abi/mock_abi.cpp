@@ -825,22 +825,20 @@ urma_target_seg_t *ds_urma_mock_import_seg(urma_context_t *context, urma_seg_t *
     // Token may be 0 for "import any"; allocate a fresh seg of default size.
     uint64_t size = seg ? seg->len : K_DEFAULT_IMPORT_SEG_SIZE;
     uint64_t remoteVa = seg ? seg->ubva.va : 0;
+    datasystem::urma_mock::ImportEndpoint remoteEndpoint;
     if (seg != nullptr) {
         uint64_t tokenValue = token != nullptr ? token->value : seg->token_id;
         auto &endpointService = datasystem::urma_mock::UdsEndpointService::Instance();
-        auto ep = endpointService.LookupImportEndpoint(tokenValue, remoteVa);
-        if (ep.instanceId.empty()) {
-            ep = endpointService.LookupSegmentEndpoint(*seg, tokenValue);
-            if (ep.instanceId.empty()) {
-                ep = datasystem::urma_mock::SegmentEndpointRegistry::Instance().Lookup(tokenValue, remoteVa);
-            }
-            if (!ep.instanceId.empty()) {
-                endpointService.RegisterImportEndpoint(tokenValue, ep);
-            }
+        // A token and virtual address are not a segment identity: different workers may map their
+        // business arenas at the same VA. Resolve with the EID/UASID carried by this ABI segment
+        // and pass that exact endpoint through to the importer.
+        remoteEndpoint = endpointService.LookupSegmentEndpoint(*seg, tokenValue);
+        if (remoteEndpoint.instanceId.empty()) {
+            remoteEndpoint = endpointService.LookupImportEndpoint(tokenValue, remoteVa);
         }
     }
     urma_target_seg_t *rawSeg = nullptr;
-    auto *newSeg = backend.ImportSeg(ctx, size, tok, tok, remoteVa, &rawSeg);
+    auto *newSeg = backend.ImportSeg(ctx, size, tok, tok, remoteVa, &rawSeg, remoteEndpoint);
     if (newSeg == nullptr) {
         return nullptr;
     }

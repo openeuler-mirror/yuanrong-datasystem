@@ -471,12 +471,13 @@ void MockUrmaBackend::UnimportJetty(MockTjetty *tjetty)
 // ----- Seg import (cross-process / UDS) -----
 
 MockSeg *MockUrmaBackend::ImportSeg(MockContext *ctx, uint64_t size, const std::string &token, const std::string &key,
-                                    uint64_t remoteVa, urma_target_seg_t **rawOut)
+                                    uint64_t remoteVa, urma_target_seg_t **rawOut,
+                                    const ImportEndpoint &remoteEndpoint)
 {
     if (ctx == nullptr || size == 0) {
         return nullptr;
     }
-    SegmentImportRequest request{ size, token, remoteVa };
+    SegmentImportRequest request{ size, token, remoteVa, remoteEndpoint };
     auto importResult = SegmentImporter::Instance().Resolve(request);
     if (importResult.GetKind() == SegmentImportKind::PLACEHOLDER) {
         return CreateRemotePlaceholder(*this, ctx, size, key, remoteVa, importResult.GetEndpoint(), rawOut);

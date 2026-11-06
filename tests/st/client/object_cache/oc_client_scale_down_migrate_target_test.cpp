@@ -16,9 +16,11 @@
  * token takeover owner, not to the single address-order successor.
  */
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -34,7 +36,6 @@
 #include "common_distributed_ext.h"
 #include "oc_client_common.h"
 #include "datasystem/common/util/format.h"
-#include "datasystem/common/util/file_util.h"
 #include "datasystem/protos/cluster_topology.pb.h"
 
 namespace datasystem {
@@ -433,6 +434,266 @@ TEST_P(LEVEL1_OCL2ScaleDownTest, DISABLED_WriteBackScaleDownPreservesSingleAndRe
 }
 
 INSTANTIATE_TEST_SUITE_P(ManualL2ScaleDown, LEVEL1_OCL2ScaleDownTest, testing::Values("sfs", "obs"));
+
+class LEVEL1_OCScaleDownPrimaryHandoffTest : public LEVEL1_OCScaleDownMigrateTargetTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        LEVEL1_OCScaleDownMigrateTargetTest::SetClusterSetupOptions(opts);
+        // Handoff confirmation is logged at VLOG(1); the default level would hide the evidence chain.
+        opts.vLogLevel = 1;
+        std::string suiteName;
+        GetCurTestName(suiteName, caseName_);
+        opts.workerGflagParams += " -enable_memory_rebalance=false -enable_transport_fallback=false";
+#ifdef USE_URMA
+        opts.workerGflagParams += caseName_.find("Tcp") == std::string::npos ? " -enable_urma=true"
+                                                                          : " -enable_urma=false";
+#else
+        opts.workerGflagParams += " -enable_urma=false";
+#endif
+    }
+
+    void SetUp() override
+    {
+        OCClientCommon::SetUp();
+        SetWorkerHashInjection();
+    }
+
+protected:
+    void ScaleDownNormally(uint32_t worker, uint32_t remaining, bool requireMigration,
+                           const std::function<void()> &duringMigration = {})
+    {
+        const std::string point = caseName_.find("Tcp") == std::string::npos
+                                      ? "FastMigrateTransport2.MigrateDataToRemote.delay"
+                                      : "TcpMigrateTransport.MigrateDataToRemote.delay";
+        const bool pauseMigration = requireMigration || static_cast<bool>(duringMigration);
+        const pid_t pid = cluster_->GetWorkerPid(worker);
+        ASSERT_GT(pid, 0);
+        if (pauseMigration) {
+            DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, worker, point, "pause()"));
+        }
+        VoluntaryScaleDownInject(static_cast<int>(worker));
+        if (pauseMigration) {
+            bool observed = WaitFor([&] {
+                uint64_t count = 0;
+                return cluster_->GetInjectActionExecuteCount(WORKER, worker, point, count).IsOk() && count > 0;
+            }, META_CONVERGE_TIMEOUT_MS);
+            if (observed && duringMigration) {
+                duringMigration();
+            }
+            // Release even on failure so a failed precondition cannot strand a paused drain.
+            DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, worker, point));
+            ASSERT_TRUE(observed) << "PRECONDITION: scale-in did not enter the requested migration transport";
+        }
+        int exitStatus = 0;
+        pid_t result = 0;
+        ASSERT_TRUE(WaitFor([&] {
+            result = waitpid(pid, &exitStatus, WNOHANG);
+            return result != 0;
+        }, WORKER_EXIT_TIMEOUT_MS)) << "PRECONDITION: voluntary scale-in timed out";
+        ASSERT_EQ(result, pid) << "PRECONDITION: could not obtain worker exit status";
+        ASSERT_TRUE(WIFEXITED(exitStatus)) << "PRECONDITION: worker killed by signal, status=" << exitStatus;
+        ASSERT_EQ(WEXITSTATUS(exitStatus), 0) << "PRECONDITION: abnormal worker exit";
+        ASSERT_TRUE(WaitForRingStable(remaining, RING_STABLE_TIMEOUT_MS)) << CurrentRingDebugString();
+    }
+
+    void CheckLocations(const std::vector<std::string> &keys, uint32_t observer,
+                        const std::unordered_set<std::string> &allowed, std::vector<ObjMetaInfo> &metas)
+    {
+        std::shared_ptr<ObjectClient> client;
+        InitTestClient(observer, client);
+        ASSERT_NE(client, nullptr);
+        DS_ASSERT_OK(client->GetObjMetaInfo("", keys, metas));
+        ASSERT_EQ(metas.size(), keys.size());
+        for (size_t i = 0; i < keys.size(); ++i) {
+            ASSERT_EQ(metas[i].objSize, REPRO_VALUE_SIZE) << keys[i];
+            ASSERT_EQ(metas[i].locations.size(), 1) << keys[i];
+            ASSERT_EQ(allowed.count(metas[i].locations.front()), 1) << keys[i];
+        }
+    }
+
+    void WriteSourceObjects(const std::vector<std::string> &keys, const HostPort &address)
+    {
+        std::shared_ptr<KVClient> writer;
+        InitTestKVClient(WORKER0, writer);
+        SetParam param;
+        param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
+        param.ttlSecond = 0;
+        for (const auto &key : keys) {
+            DS_ASSERT_OK(writer->Set(key, std::string(REPRO_VALUE_SIZE, 'x'), param));
+            std::string value;
+            DS_ASSERT_OK(writer->Get(key, value));
+            ASSERT_EQ(value, std::string(REPRO_VALUE_SIZE, 'x')) << key;
+        }
+        std::vector<ObjMetaInfo> initial;
+        ASSERT_NO_FATAL_FAILURE(CheckLocations(keys, WORKER0, { address.ToString() }, initial));
+        writer.reset();
+    }
+
+    void CheckOriginalValues(const std::vector<std::string> &keys, uint32_t survivor, size_t atRiskCount)
+    {
+        std::shared_ptr<KVClient> reader;
+        InitTestKVClient(survivor, reader);
+        size_t missing = 0;
+        for (const auto &key : keys) {
+            std::string value;
+            const Status rc = reader->Get(key, value);
+            if (rc.GetCode() == StatusCode::K_NOT_FOUND) {
+                ++missing;
+            }
+            EXPECT_TRUE(rc.IsOk()) << "REGRESSION: original key lost after two normal scale-ins; key=" << key
+                                   << " status=" << rc.ToString();
+            if (rc.IsOk()) {
+                EXPECT_EQ(value, std::string(REPRO_VALUE_SIZE, 'x')) << key;
+            }
+        }
+        LOG(INFO) << "REPRO_RESULT original_keys=" << keys.size() << " key_not_found=" << missing
+                  << " at_risk_keys=" << atRiskCount;
+    }
+
+    uint32_t ConcurrentScaleDownTarget(
+        const ClusterTopologyPb &ring, uint32_t hash, const std::vector<HostPort> &addresses)
+    {
+        auto tokens = BuildTokenWorkers(ring);
+        for (auto it = tokens.begin(); it != tokens.end();) {
+            if (it->second == addresses[WORKER0].ToString()) {
+                it = tokens.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        const auto owner = ExpectedOwner(tokens, hash);
+        return owner == addresses[WORKER1].ToString() ? WORKER1 : WORKER2;
+    }
+
+    void RunConsecutiveScaleDown(bool concurrentKv = false)
+    {
+        ASSERT_TRUE(WaitForRingStable(3, RING_STABLE_TIMEOUT_MS)) << CurrentRingDebugString();
+        ClusterTopologyPb ring;
+        DS_ASSERT_OK(cluster_->ReadClusterTopology(ring));
+        std::vector<HashedKey> sourceKeys;
+        GenKeysHashToWorker(ring, WORKER0, KEYS_PER_TOKEN_RANGE, sourceKeys);
+        ASSERT_FALSE(sourceKeys.empty());
+        auto keys = KeysOf(sourceKeys);
+        std::vector<HostPort> addresses(3);
+        for (uint32_t worker = WORKER0; worker <= WORKER2; ++worker) {
+            DS_ASSERT_OK(cluster_->GetWorkerAddr(worker, addresses[worker]));
+        }
+        ASSERT_NO_FATAL_FAILURE(WriteSourceObjects(keys, addresses[WORKER0]));
+        const uint32_t concurrentTarget = ConcurrentScaleDownTarget(ring, sourceKeys.back().hash, addresses);
+        std::vector<std::string> concurrentKeys;
+        std::shared_ptr<KVClient> concurrentClient;
+        std::array<std::future<Status>, 3> activity;
+        std::array<std::promise<void>, 3> started;
+        std::function<void()> duringMigration;
+        if (concurrentKv) {
+            ASSERT_GE(keys.size(), 4U);
+            concurrentKeys.assign(keys.begin(), keys.begin() + 3);
+            keys.erase(keys.begin(), keys.begin() + 3);
+            InitTestKVClient(concurrentTarget, concurrentClient);
+            duringMigration = [&] {
+                for (size_t i = 0; i < activity.size(); ++i) {
+                    activity[i] = std::async(std::launch::async, [&, i]() -> Status {
+                        started[i].set_value();
+                        if (i == 0) {
+                            SetParam param;
+                            param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
+                            return concurrentClient->Set(concurrentKeys[i], std::string(REPRO_VALUE_SIZE, 'y'), param);
+                        }
+                        if (i == 1) {
+                            return concurrentClient->Del(concurrentKeys[i]);
+                        }
+                        std::string value;
+                        RETURN_IF_NOT_OK(concurrentClient->Get(concurrentKeys[i], value));
+                        CHECK_FAIL_RETURN_STATUS(value == std::string(REPRO_VALUE_SIZE, 'x'), K_RUNTIME_ERROR,
+                                                 "Concurrent Get returned an unexpected value");
+                        return Status::OK();
+                    });
+                }
+                for (auto &signal : started) {
+                    signal.get_future().wait();
+                }
+            };
+        }
+        ASSERT_NO_FATAL_FAILURE(ScaleDownNormally(WORKER0, 2, true, duringMigration));
+        if (concurrentKv) {
+            for (auto &request : activity) {
+                ASSERT_TRUE(request.valid());
+                DS_ASSERT_OK(request.get());
+            }
+            // Do not keep a SHM client alive while the second scale-in waits for worker clients to drain.
+            concurrentClient.reset();
+            LOG(INFO) << "CONCURRENT_KV_CLIENT_RELEASED worker=" << concurrentTarget;
+        }
+
+        // Metadata inspection must not Get through a survivor: that would create extra copies and mask the loss.
+        std::vector<ObjMetaInfo> migrated;
+        ASSERT_NO_FATAL_FAILURE(CheckLocations(keys, WORKER2,
+            { addresses[WORKER1].ToString(), addresses[WORKER2].ToString() }, migrated));
+        if (concurrentKv) {
+            ASSERT_EQ(migrated.back().locations.front(), addresses[concurrentTarget].ToString())
+                << "Unchanged key did not migrate to its token takeover owner: " << keys.back();
+        }
+        const uint32_t second = concurrentKv
+                                    ? concurrentTarget
+                                    : (migrated.front().locations.front() == addresses[WORKER1].ToString()
+                                           ? WORKER1 : WORKER2);
+        const uint32_t survivor = second == WORKER1 ? WORKER2 : WORKER1;
+        std::vector<std::string> affected;
+        for (size_t i = 0; i < keys.size(); ++i) {
+            if (migrated[i].locations.front() == addresses[second].ToString()) {
+                affected.push_back(keys[i]);
+            }
+        }
+        ASSERT_FALSE(affected.empty()) << "Second scale-in must include keys migrated from worker0";
+        LOG(INFO) << "REPRO_CHECKPOINT first_migration_keys=" << keys.size()
+                  << " second_worker=" << second << " at_risk_keys=" << JoinStrings(affected);
+        ASSERT_NO_FATAL_FAILURE(ScaleDownNormally(second, 1, false));
+
+        ASSERT_NO_FATAL_FAILURE(CheckOriginalValues(keys, survivor, affected.size()));
+        if (concurrentKv) {
+            std::shared_ptr<KVClient> reader;
+            InitTestKVClient(survivor, reader);
+            std::string value;
+            DS_ASSERT_OK(reader->Get(concurrentKeys[0], value));
+            EXPECT_EQ(value, std::string(REPRO_VALUE_SIZE, 'y'));
+            EXPECT_EQ(reader->Get(concurrentKeys[1], value).GetCode(), StatusCode::K_NOT_FOUND);
+            DS_ASSERT_OK(reader->Get(concurrentKeys[2], value));
+            EXPECT_EQ(value, std::string(REPRO_VALUE_SIZE, 'x'));
+            LOG(INFO) << "CONCURRENT_KV_RESULT updated=1 deleted=1 read=1";
+        }
+    }
+
+    std::string caseName_;
+
+    static constexpr size_t REPRO_VALUE_SIZE = 8192;
+};
+
+TEST_F(LEVEL1_OCScaleDownPrimaryHandoffTest, ConsecutiveScaleDownPreservesMigratedPrimaryUrma)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "Requires URMA or UB mock; a skip is not reproduction evidence";
+#endif
+    RunConsecutiveScaleDown();
+}
+
+TEST_F(LEVEL1_OCScaleDownPrimaryHandoffTest, ConsecutiveScaleDownPreservesMigratedPrimaryTcp)
+{
+    RunConsecutiveScaleDown();
+}
+
+TEST_F(LEVEL1_OCScaleDownPrimaryHandoffTest, ConsecutiveScaleDownWithConcurrentKvUrma)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "Requires URMA or UB mock";
+#endif
+    RunConsecutiveScaleDown(true);
+}
+
+TEST_F(LEVEL1_OCScaleDownPrimaryHandoffTest, ConsecutiveScaleDownWithConcurrentKvTcp)
+{
+    RunConsecutiveScaleDown(true);
+}
 
 // Disabled: with the takeover targets preloaded past the FIRST-stage ratio gate, the source's MigrateData
 // connections fail with E112 before the stage ladder is ever consulted (reproduces on unfixed master too);

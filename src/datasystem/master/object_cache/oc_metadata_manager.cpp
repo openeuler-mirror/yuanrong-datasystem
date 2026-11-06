@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <iterator>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <shared_mutex>
 #include <sstream>
@@ -1452,6 +1453,9 @@ Status OCMetadataManager::IsPrimaryCopyWithCopy(const ObjectMeta &meta, const st
 Status OCMetadataManager::GiveUpPrimaryLocation(const RemoveMetaReqPb &request, const std::string &address,
                                                 RemoveMetaRspPb &response)
 {
+    if (!request.topology_operation_id().empty() && !request.id_with_version().empty()) {
+        return GiveUpTopologyPrimary(request, address, response);
+    }
     std::vector<std::string> notRedirectObjectKeys = { request.ids().begin(), request.ids().end() };
     PrimaryChangeMap workerForChangePrimaryIds;
     RETURN_IF_NOT_OK(FillObjectRedirectResponses(response, notRedirectObjectKeys, request.redirect()));
@@ -1479,10 +1483,71 @@ Status OCMetadataManager::GiveUpPrimaryLocation(const RemoveMetaReqPb &request, 
     return Status::OK();
 }
 
-Status OCMetadataManager::ProcessGiveUpPrimaryObject(const std::string &objectKey, const std::string &address,
-                                                     RemoveMetaRspPb &response,
-                                                     PrimaryChangeMap &workerForChangePrimaryIds,
-                                                     bool topologyOperation)
+Status OCMetadataManager::GiveUpTopologyPrimary(const RemoveMetaReqPb &request, const std::string &source,
+                                                RemoveMetaRspPb &response)
+{
+    std::vector<std::string> keys(request.ids().begin(), request.ids().end());
+    RETURN_IF_NOT_OK(FillObjectRedirectResponses(response, keys, request.redirect()));
+    RETURN_OK_IF_TRUE(response.meta_is_moving());
+    std::unordered_map<std::string, uint64_t> versions;
+    for (const auto &item : request.id_with_version()) {
+        versions.emplace(item.id(), item.version());
+    }
+    PrimaryChangeMap candidates;
+    for (const auto &key : keys) {
+        RETURN_IF_NOT_OK(ProcessGiveUpPrimaryObject(key, source, response, candidates, true, &versions, true));
+    }
+    SendChangePrimaryCopy(candidates, response, request.topology_operation_id(), source, &versions);
+    for (const auto &[target, ids] : candidates) {
+        for (const auto &key : ids) {
+            response.add_failed_ids(key);
+        }
+    }
+    return Status::OK();
+}
+
+Status OCMetadataManager::CommitTopologyPrimary(const std::string &key, const std::string &source,
+                                                const std::string &target, uint64_t version)
+{
+    auto &shard = metaShards_[GetShardIndex(key)];
+    bthread::RWLockRdGuard lock(shard.mutex);
+    TbbMetaTable::accessor accessor;
+    RETURN_OK_IF_TRUE(!shard.table.find(accessor, key));
+    auto &meta = accessor->second;
+    if (meta.meta.version() != version) {
+        if (meta.meta.primary_address() == source) {
+            return Status(K_TRY_AGAIN, "Object version changed during topology handoff");
+        }
+        RETURN_IF_NOT_OK(objectStore_->RemoveObjectLocation(key, source));
+        meta.locations.erase(source);
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(meta.meta.primary_address() == source || meta.meta.primary_address() == target,
+                             K_TRY_AGAIN, "Primary changed during topology handoff");
+    const auto location = meta.locations.find(target);
+    CHECK_FAIL_RETURN_STATUS(location != meta.locations.end() && location->second == AckState::ACK,
+                             K_TRY_AGAIN, "Primary location disappeared during topology handoff");
+    if (meta.meta.primary_address() == source) {
+        auto updated = meta.meta;
+        updated.set_primary_address(target);
+        std::string serialized;
+        RETURN_IF_NOT_OK(objectStore_->CreateSerializedStringForMeta(key, updated, serialized));
+        RETURN_IF_NOT_OK(objectStore_->CreateOrUpdateMeta(key, serialized));
+        RETURN_IF_NOT_OK(objectStore_->RemoveObjectLocation(key, source));
+        meta.meta.Swap(&updated);
+    } else {
+        RETURN_IF_NOT_OK(objectStore_->RemoveObjectLocation(key, source));
+    }
+    meta.locations.erase(source);
+    LOG(INFO) << "CLUSTER_SCALE_IN action=primary_handoff source=" << source << " target=" << target
+              << " object_key=" << key << " version=" << version;
+    return Status::OK();
+}
+
+Status OCMetadataManager::ProcessGiveUpPrimaryObject(
+    const std::string &objectKey, const std::string &address, RemoveMetaRspPb &response,
+    PrimaryChangeMap &workerForChangePrimaryIds, bool topologyOperation,
+    const std::unordered_map<std::string, uint64_t> *versions, bool deferSourceCleanup)
 {
     if (IsLocalExitRequested() && !topologyOperation) {
         LOG(WARNING) << FormatString("[ObjectKey %s] Node exiting, give up primary failed.", objectKey);
@@ -1498,6 +1563,11 @@ Status OCMetadataManager::ProcessGiveUpPrimaryObject(const std::string &objectKe
         return Status::OK();
     }
     ObjectMeta &meta = accessor->second;
+    bool handled = false;
+    RETURN_IF_NOT_OK(HandleTopologyPrimaryVersionChange(meta, objectKey, address, response, versions, handled));
+    if (handled) {
+        return Status::OK();
+    }
     bool isPrimaryWithoutCopy = false;
     RETURN_IF_NOT_OK(IsPrimaryCopyWithCopy(meta, address, isPrimaryWithoutCopy));
     VLOG(1) << FormatString("[Objects %s] Write mode: %d, is primary without other: %d", objectKey,
@@ -1509,26 +1579,121 @@ Status OCMetadataManager::ProcessGiveUpPrimaryObject(const std::string &objectKe
         }
         return Status::OK();
     }
-    for (const auto &location : meta.locations) {
-        if (location.first == address) {
-            continue;
-        }
-        bool isPreLeaving = false;
-        RETURN_IF_NOT_OK(IsTopologyMemberPreLeaving(location.first, isPreLeaving));
-        if (!isPreLeaving) {
-            workerForChangePrimaryIds[location.first].insert(objectKey);
-            (void)meta.locations.erase(address);
-            (void)objectStore_->RemoveObjectLocation(objectKey, address);
-            return Status::OK();
-        }
-    }
+    bool selected = false;
+    RETURN_IF_NOT_OK(SelectGiveUpPrimaryCandidate(meta, objectKey, address, workerForChangePrimaryIds, versions,
+                                                  deferSourceCleanup, selected));
+    RETURN_OK_IF_TRUE(selected);
     response.add_need_data_ids(objectKey);
     return Status::OK();
 }
 
+Status OCMetadataManager::HandleTopologyPrimaryVersionChange(
+    ObjectMeta &meta, const std::string &objectKey, const std::string &address, RemoveMetaRspPb &response,
+    const std::unordered_map<std::string, uint64_t> *versions, bool &handled)
+{
+    handled = false;
+    if (versions == nullptr) {
+        return Status::OK();
+    }
+    const auto version = versions->find(objectKey);
+    if (version != versions->end() && version->second == meta.meta.version()) {
+        return Status::OK();
+    }
+    handled = true;
+    if (meta.meta.primary_address() == address) {
+        response.add_failed_ids(objectKey);
+        return Status::OK();
+    }
+    RETURN_IF_NOT_OK(objectStore_->RemoveObjectLocation(objectKey, address));
+    meta.locations.erase(address);
+    response.add_success_ids(objectKey);
+    return Status::OK();
+}
+
+Status OCMetadataManager::SelectGiveUpPrimaryCandidate(
+    ObjectMeta &meta, const std::string &objectKey, const std::string &address,
+    PrimaryChangeMap &workerForChangePrimaryIds, const std::unordered_map<std::string, uint64_t> *versions,
+    bool deferSourceCleanup, bool &selected)
+{
+    selected = false;
+    for (const auto &location : meta.locations) {
+        if (location.first == address) {
+            continue;
+        }
+        bool candidate = true;
+        if (versions != nullptr) {
+            candidate = location.second == AckState::ACK;
+            if (candidate) {
+                RETURN_IF_NOT_OK(IsTopologyMemberActive(location.first, candidate));
+            }
+        } else {
+            bool isPreLeaving = false;
+            RETURN_IF_NOT_OK(IsTopologyMemberPreLeaving(location.first, isPreLeaving));
+            candidate = !isPreLeaving;
+        }
+        if (candidate) {
+            workerForChangePrimaryIds[location.first].insert(objectKey);
+            if (!deferSourceCleanup) {
+                (void)meta.locations.erase(address);
+                (void)objectStore_->RemoveObjectLocation(objectKey, address);
+            }
+            selected = true;
+            return Status::OK();
+        }
+    }
+    return Status::OK();
+}
+
+void OCMetadataManager::ProcessChangePrimaryCopyResults(
+    const std::string &primaryAddr, const std::unordered_set<std::string> &successIds,
+    std::unordered_map<std::string, std::unordered_set<std::string>> &workerForChangePrimaryIds,
+    RemoveMetaRspPb &rsp, const std::string &topologyOperationId, const std::string &source,
+    const std::unordered_map<std::string, uint64_t> *versions)
+{
+    std::map<StatusCode, size_t> failedByCode;
+    for (const auto &id : successIds) {
+        (void)workerForChangePrimaryIds[primaryAddr].erase(id);
+        Status changeStatus;
+        if (versions != nullptr) {
+            const auto version = versions->find(id);
+            changeStatus = version == versions->end()
+                               ? Status(K_TRY_AGAIN, "Scale-in primary version is missing")
+                               : CommitTopologyPrimary(id, source, primaryAddr, version->second);
+        } else {
+            changeStatus = ChangePrimaryCopy(primaryAddr, id, topologyOperationId);
+        }
+        if (changeStatus.IsOk()) {
+            rsp.add_success_ids(id);
+            continue;
+        }
+        rsp.add_failed_ids(id);
+        if (versions != nullptr && ++failedByCode[changeStatus.GetCode()] == 1) {
+            LOG(WARNING) << "CLUSTER_SCALE_IN action=primary_handoff outcome=commit_failed"
+                         << " source=" << source << " target=" << primaryAddr
+                         << " operation_prefix=" << TopologyOperationPrefix(topologyOperationId)
+                         << " object_key=" << id << " status=" << changeStatus.ToString();
+        }
+    }
+    if (!failedByCode.empty()) {
+        std::ostringstream summary;
+        size_t failedCount = 0;
+        bool firstReason = true;
+        for (const auto &[code, count] : failedByCode) {
+            summary << (firstReason ? "" : ",") << Status::StatusCodeName(code) << ":" << count;
+            firstReason = false;
+            failedCount += count;
+        }
+        LOG(WARNING) << "CLUSTER_SCALE_IN action=primary_handoff outcome=commit_failed_summary"
+                     << " source=" << source << " target=" << primaryAddr
+                     << " operation_prefix=" << TopologyOperationPrefix(topologyOperationId)
+                     << " failed_count=" << failedCount << " reason_counts=" << summary.str();
+    }
+}
+
 void OCMetadataManager::SendChangePrimaryCopy(
     std::unordered_map<std::string, std::unordered_set<std::string>> &workerForChangePrimaryIds, RemoveMetaRspPb &rsp,
-    const std::string &topologyOperationId)
+    const std::string &topologyOperationId, const std::string &source,
+    const std::unordered_map<std::string, uint64_t> *versions)
 {
     const bool topologyOperation = !topologyOperationId.empty();
     for (auto info = workerForChangePrimaryIds.begin(); info != workerForChangePrimaryIds.end();) {
@@ -1553,14 +1718,8 @@ void OCMetadataManager::SendChangePrimaryCopy(
             info++;
             continue;
         }
-        for (const auto &id : successIds) {
-            (void)workerForChangePrimaryIds[primaryAddr].erase(id);
-            if (ChangePrimaryCopy(primaryAddr, id, topologyOperationId).IsOk()) {
-                rsp.add_success_ids(id);
-            } else {
-                rsp.add_failed_ids(id);
-            }
-        }
+        ProcessChangePrimaryCopyResults(primaryAddr, successIds, workerForChangePrimaryIds, rsp,
+                                        topologyOperationId, source, versions);
         if (info->second.empty()) {
             info = workerForChangePrimaryIds.erase(info);
         } else {
@@ -2483,6 +2642,16 @@ Status OCMetadataManager::IsTopologyMemberPreLeaving(const std::string &address,
     cluster::MemberEndpoint endpoint;
     RETURN_IF_NOT_OK(topologyMembership_->ResolveByAddress(address, endpoint));
     isPreLeaving = endpoint.topologyState == cluster::MemberState::PRE_LEAVING;
+    return Status::OK();
+}
+
+Status OCMetadataManager::IsTopologyMemberActive(const std::string &address, bool &isActive) const
+{
+    CHECK_FAIL_RETURN_STATUS(topologyMembership_ != nullptr, K_NOT_READY,
+                             "Object metadata topology membership is not available");
+    cluster::MemberEndpoint endpoint;
+    RETURN_IF_NOT_OK(topologyMembership_->ResolveByAddress(address, endpoint));
+    isActive = endpoint.topologyState == cluster::MemberState::ACTIVE;
     return Status::OK();
 }
 
