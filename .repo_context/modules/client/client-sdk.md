@@ -1204,3 +1204,21 @@ checks both two-step SHM Create/Publish and Set while three exiting workers are 
 Automatic transport selection uses `DataPlaneManager::ResolveTransportHint` to prefer an established live SHM session when the worker hostId is missing and membership is non-draining. An immutable snapshot reuse-candidate set prevents overriding explicit remote locality or draining policy and avoids connection lookup for ordinary remote workers. The map accessor is released before the check takes an entry read lock and never closes data planes. An allocated transporter without a registered session is insufficient; draining and dead sessions are excluded. Explicit fallback hints bypass resolution, and UB write allocations retain their existing publish override. Topology publication is unchanged.
 
 RPC heartbeat recovery: `ClientWorkerRemoteCommonApi::SendHeartbeat` retries a peer-dead control channel once through an isolated connection group within the original heartbeat deadline. Only a successful heartbeat response can trigger existing restart/session recovery; business writes are not replayed by this probe. Regression coverage is in `tests/ut/client/client_worker_remote_api_reconnect_test.cpp`.
+
+## Failover exclusion spreads across survivors
+
+`WorkerRouter::SelectWorkerFromView` walks the token ring deterministically (first available candidate from the key's
+token slot) whenever the caller passes an empty exclusion list — primary owner placement stays stable. When callers
+pass exclusions (retry away a dead owner, `SelectWorkers` batch failover, admission redirect), the walk instead
+collects every currently available candidate (excluded/filtered/unavailable removed, HostPort-deduplicated) and
+samples one uniformly with a thread-local `mt19937`, so independent retries fan out across survivors instead of
+stampeding the deterministic ring successor. Empty candidate sets keep the `K_NO_AVAILABLE_WORKER` contract. The
+scheduler post-processing (`SelectWorkerByScheduling`), `SelectWorkerFromCandidates`, and same-node branches are
+unchanged. Hot-path impact: exclusion-free selection is untouched; the randomized path allocates one bounded
+vector+set per failover call.
+- Source: `src/datasystem/client/object_cache/routing/worker_router.cpp` (`SelectWorkerFromView` ring-walk branch).
+- Regression: `tests/ut/client/routing/worker_router_test.cpp`
+  `RoutingTest/FailoverExclusionSpreadsTrafficAcrossSurvivors`; end-to-end
+  `tests/st/client/kv_cache/fast_isolation_guard_test.cpp`
+  `FastIsolationGuardTest.LEVEL1_FailoverTrafficSpreadsToSurvivors` (manual external-cluster run against a
+  coordinator-mode cluster; the bazel sandbox cannot launch ExternalCluster tests).

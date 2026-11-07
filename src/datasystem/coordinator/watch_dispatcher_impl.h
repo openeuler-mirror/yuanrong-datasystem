@@ -26,7 +26,9 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/cluster/runtime/control_backend_state.h"
 #include "datasystem/common/coordinator/watch_dispatcher.h"
+#include "datasystem/common/rpc/brpc_status_util.h"
 
 namespace datasystem {
 namespace coordinator {
@@ -37,6 +39,33 @@ struct WorkerReachabilityProbeResult {
     Status status;
     bool rpcDispatched{ false };
 };
+
+/**
+ * @brief Map one worker reachability probe result to the control-plane probe outcome.
+ *
+ * The probe intentionally sends an invalid event, so a dispatched application error still proves
+ * the worker process is reachable; only local errors remain ERROR.
+ */
+inline cluster::ControlBackendProbeOutcome ProbeOutcomeFromWorkerReachability(
+    const WorkerReachabilityProbeResult &probe)
+{
+    auto outcome = cluster::ControlBackendProbeOutcome::CANCELLED;
+    if (probe.rpcDispatched) {
+        outcome = cluster::ControlBackendProbeOutcome::ERROR;
+        if (probe.status.IsOk()) {
+            outcome = cluster::ControlBackendProbeOutcome::RESPONSE;
+        } else if (probe.status.GetCode() == K_RPC_DEADLINE_EXCEEDED) {
+            outcome = cluster::ControlBackendProbeOutcome::DEADLINE_EXCEEDED;
+        } else if (probe.status.GetCode() == K_RPC_UNAVAILABLE || probe.status.GetCode() == K_RPC_PEER_DEAD) {
+            outcome = cluster::ControlBackendProbeOutcome::UNAVAILABLE;
+        } else if (probe.status.GetCode() == K_RPC_CANCELLED) {
+            outcome = cluster::ControlBackendProbeOutcome::CANCELLED;
+        } else if (IsBrpcServerApplicationError(probe.status)) {
+            outcome = cluster::ControlBackendProbeOutcome::SERVER_APP_ERROR;
+        }
+    }
+    return outcome;
+}
 
 class WatchDispatcherImpl : public WatchDispatcher {
 public:

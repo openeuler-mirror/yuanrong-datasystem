@@ -1283,16 +1283,50 @@ Status TopologyEngine::GetMembershipSidecar(
     return memberBackend_->GetAll(tableName, records);
 }
 
-void TopologyEngine::ObservePeerRpcResult(const HostPort &target, const Status &status)
+void TopologyEngine::ObservePeerRpcResult(const HostPort &target, const std::string &initiatedMemberId,
+                                          const Status &status)
 {
     if (status.IsOk()) {
-        memberBackend_->RecordPeerRpcSuccess(target);
+        memberBackend_->RecordPeerRpcSuccess(target, initiatedMemberId);
         return;
     }
     if (status.GetCode() == K_RPC_UNAVAILABLE || status.GetCode() == K_RPC_DEADLINE_EXCEEDED
         || status.GetCode() == K_RPC_PEER_DEAD) {
-        memberBackend_->RecordPeerRpcFailure(target);
+        // Late-RPC guard: a failure for an address already absent from the current topology
+        // (e.g. an in-flight RPC completing after the member was removed) must not re-create
+        // evidence that later topology diffs would no longer find to discard. The membership
+        // check runs inside the recording critical section so it cannot interleave with the
+        // publication path's publish-then-discard cleanup, and it also requires the observed
+        // member id to still be the one bound at RPC initiation: an outcome from a replaced
+        // incarnation must not touch its replacement's evidence.
+        const auto targetAddress = target.ToString();
+        memberBackend_->RecordPeerRpcFailure(
+            target, initiatedMemberId, [this, &targetAddress, &initiatedMemberId]() {
+                if (initiatedMemberId.empty()) {
+                    return false;
+                }
+                std::shared_ptr<const TopologySnapshot> snapshot;
+                if (snapshots_.Load(snapshot).IsError()) {
+                    return true;
+                }
+                const Member *member = nullptr;
+                return snapshot->FindMemberByAddress(targetAddress, member).IsOk() && member != nullptr
+                       && member->identity.id == initiatedMemberId;
+            });
     }
+}
+
+std::string TopologyEngine::ResolveMemberId(const HostPort &target) const
+{
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    if (snapshots_.Load(snapshot).IsError()) {
+        return {};
+    }
+    const Member *member = nullptr;
+    if (snapshot->FindMemberByAddress(target.ToString(), member).IsError() || member == nullptr) {
+        return {};
+    }
+    return member->identity.id;
 }
 
 bool TopologyEngine::IsPeerRpcFailureReported(const HostPort &target) const
@@ -1481,7 +1515,9 @@ Status TopologyEngine::FinalizeTopologyPublication(std::shared_ptr<const Topolog
                 || oldMember.identity.id != member->identity.id) {
                 HostPort target;
                 if (target.ParseString(oldMember.identity.address).IsOk()) {
-                    memberBackend_->DiscardPeerRpcFailure(target);
+                    // Scope the cleanup to the departing member id so a replacement incarnation
+                    // that already armed fresh evidence at the same address keeps it.
+                    memberBackend_->DiscardPeerRpcFailure(target, oldMember.identity.id);
                 }
             }
         }

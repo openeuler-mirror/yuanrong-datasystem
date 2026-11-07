@@ -487,17 +487,31 @@ Status WorkerRemoteMasterOCApi::UpdateMeta(master::UpdateMetaReqPb &request, mas
 }
 
 Status WorkerRemoteMasterOCApi::DeleteAllCopyMeta(master::DeleteAllCopyMetaReqPb &request,
-                                                  master::DeleteAllCopyMetaRspPb &response)
+                                                  master::DeleteAllCopyMetaRspPb &response,
+                                                  RpcAttemptObservation *attempt)
 {
     INJECT_POINT("worker.DeleteAllCopyMeta");
     RpcOptions opts;
+    Status attemptTransportStatus;
+    if (attempt != nullptr) {
+        // The generated stub fills this slot after controller result mapping and before its local
+        // post-deadline check, so the slot keeps the real transport outcome even when the stub
+        // returns a deadline for a successful-but-slow reply.
+        opts.SetAttemptStatusCapture(&attemptTransportStatus);
+    }
     auto status = RetryOnErrorRepent(
         GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime(),
-        [this, &opts, &request, &response](int32_t) {
+        [this, &opts, &request, &response, attempt, &attemptTransportStatus](int32_t) {
             CHECK_AND_SET_TIMEOUT(&GetRequestContext()->reqTimeoutDuration, request, opts);
             Timer timer;
             Status rc = brpcSession_->DeleteAllCopyMeta(opts, request, response);
             GetWorkerTimeCost().Append("Worker to master rpc DeleteAllCopyMeta", timer.ElapsedMilliSecond());
+            if (attempt != nullptr) {
+                // Only the real transport attempt writes the slot; a local budget rejection above
+                // leaves it untouched so observers do not count unsent requests as peer evidence.
+                attempt->dispatched = true;
+                attempt->lastAttemptStatus = attemptTransportStatus;
+            }
             return rc;
         },
         []() { return Status::OK(); },
@@ -1200,11 +1214,17 @@ Status WorkerLocalMasterOCApi::UpdateMeta(master::UpdateMetaReqPb &request, mast
 }
 
 Status WorkerLocalMasterOCApi::DeleteAllCopyMeta(master::DeleteAllCopyMetaReqPb &request,
-                                                 master::DeleteAllCopyMetaRspPb &response)
+                                                 master::DeleteAllCopyMetaRspPb &response,
+                                                 RpcAttemptObservation *attempt)
 {
     RpcOptions opts;
     CHECK_AND_SET_TIMEOUT(&GetRequestContext()->reqTimeoutDuration, request, opts);
-    return masterOC_->DeleteAllCopyMeta(request, response);
+    Status rc = masterOC_->DeleteAllCopyMeta(request, response);
+    if (attempt != nullptr) {
+        attempt->dispatched = true;
+        attempt->lastAttemptStatus = rc;
+    }
+    return rc;
 }
 
 Status WorkerLocalMasterOCApi::ReleaseGRefs(master::ReleaseGRefsReqPb &request, master::ReleaseGRefsRspPb &response)

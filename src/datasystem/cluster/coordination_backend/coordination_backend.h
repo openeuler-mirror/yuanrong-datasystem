@@ -256,9 +256,32 @@ public:
         (void)target;
     }
 
-    virtual void RecordPeerRpcSuccess(const HostPort &target)
+    /**
+     * @brief Record one peer RPC failure after validating target membership under the recording lock.
+     * @param[in] target Failed peer address.
+     * @param[in] initiatedMemberId Member id bound to the target at RPC initiation; the failure is
+     *            charged to this incarnation and resets any evidence left by a previous one.
+     * @param[in] isMemberPresent Validation evaluated inside the recording critical section; a false
+     *            return drops the evidence (late failure for an address that already left the
+     *            topology or whose member id was replaced after the RPC was initiated).
+     */
+    virtual void RecordPeerRpcFailure(const HostPort &target, const std::string &initiatedMemberId,
+                                      const std::function<bool()> &isMemberPresent)
+    {
+        (void)initiatedMemberId;
+        (void)isMemberPresent;
+        RecordPeerRpcFailure(target);
+    }
+
+    /**
+     * @brief Clear one peer's failure evidence when the successful RPC targeted the same incarnation.
+     * @param[in] expectedMemberId Member id bound at the RPC's initiation; an empty id is
+     *            un-attributable and never clears evidence.
+     */
+    virtual void RecordPeerRpcSuccess(const HostPort &target, const std::string &expectedMemberId = {})
     {
         (void)target;
+        (void)expectedMemberId;
     }
 
     virtual bool IsPeerRpcFailureReported(const HostPort &target) const
@@ -271,9 +294,15 @@ public:
     {
     }
 
-    virtual void DiscardPeerRpcFailure(const HostPort &target)
+    /**
+     * @brief Discard one peer's failure evidence for the departing incarnation.
+     * @param[in] expectedMemberId Member id whose evidence must go; an empty id clears
+     *            unconditionally (address removal or legacy callers).
+     */
+    virtual void DiscardPeerRpcFailure(const HostPort &target, const std::string &expectedMemberId = {})
     {
         (void)target;
+        (void)expectedMemberId;
     }
 
     /**

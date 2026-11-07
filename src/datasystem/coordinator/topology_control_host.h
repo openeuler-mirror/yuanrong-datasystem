@@ -13,6 +13,7 @@
 #include <deque>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -48,7 +49,6 @@ public:
         std::chrono::milliseconds reconcileInterval{ 100 };
         std::chrono::milliseconds startRetryInitial{ 100 };
         std::chrono::seconds startRetryMaximum{ 5 };
-        std::chrono::seconds activeFailureWindow{ 3 };
         cluster::TopologyControllerOptions controller;
         std::function<Status(std::optional<uint64_t>, const std::function<Status()> &)> activeFailureAuthorityFence;
 
@@ -122,11 +122,30 @@ public:
     void RecordWorkerFailureSummaries(const std::string &clusterName, const std::string &reporter,
                                       const std::vector<std::string> &targets);
     void RecordWorkerFailureSummaries(const std::string &clusterName, const cluster::MembershipRecord &reporter,
-                                      const std::vector<cluster::MembershipRecord> &targets);
+                                      const std::vector<cluster::MembershipRecord> &targets,
+                                      uint64_t summaryVersion = 0, int64_t membershipModRevision = 0,
+                                      const std::unordered_map<std::string, uint64_t> &generationByTarget = {});
 
+    /**
+     * @brief Active failure isolation candidates for the supplied membership view.
+     *
+     * Pruning removes entries the view has superseded. The trailing revision is the
+     * membership-table revision of the view; a reporter whose accepted renewal revision is
+     * newer keeps its baseline and votes even when absent from the view, so a stale snapshot
+     * cannot drop the fence high-water mark and resurrect old votes. Views older than every
+     * baseline are the default (max revision), preserving legacy caller semantics.
+     */
     std::vector<cluster::MemberIdentity> GetIsolationCandidates(
         const std::string &clusterName, const cluster::TopologySnapshot &latest,
-        const std::vector<cluster::MembershipRecord> &memberships, std::chrono::steady_clock::time_point now);
+        const std::vector<cluster::MembershipRecord> &memberships,
+        int64_t membershipSnapshotRevision = std::numeric_limits<int64_t>::max());
+
+    /**
+     * @brief Evidence versions for the supplied candidate targets only; an empty candidate list
+     *        takes no lock and copies nothing.
+     */
+    std::unordered_map<std::string, uint64_t> GetActiveFailureEvidenceVersions(
+        const std::string &clusterName, const std::vector<cluster::MemberIdentity> &targets);
 
     /**
      * @brief Enqueue one validated witness report for Host-thread delivery.
@@ -194,19 +213,36 @@ private:
     };
 
     struct FailureReportState {
-        std::chrono::steady_clock::time_point receiveTime;
         cluster::MemberLifecycleState reporterState{ cluster::MemberLifecycleState::READY };
         int64_t reporterTimestamp{ 0 };
         std::string reporterHostId;
         int64_t targetTimestamp{ 0 };
         std::string targetHostId;
         uint64_t clusterGeneration{ 0 };
+        uint64_t evidenceGeneration{ 0 };
     };
 
     using TargetFailureReports = std::unordered_map<std::string, FailureReportState>;
+    struct ReporterSummaryVersion {
+        int64_t reporterTimestamp{ 0 };
+        uint64_t version{ 0 };
+        // Store modification revision of the membership value the summary renewed; a lower
+        // revision identifies a handler that renewed an already-replaced membership.
+        int64_t membershipModRevision{ 0 };
+    };
     struct ClusterFailureReports {
         std::unordered_map<std::string, TargetFailureReports> byTarget;
         std::unordered_map<std::string, std::unordered_set<std::string>> targetsByReporter;
+        // Highest accepted summary version per reporter; a lower version within the same
+        // membership incarnation is a resurrected stale heartbeat whose application would
+        // overwrite newer failure evidence with old votes. A new incarnation rebases.
+        std::unordered_map<std::string, ReporterSummaryVersion> lastSummaryVersionByReporter;
+        // Grows whenever a NEW reporter votes for a target; sticky re-assertions do not.
+        // The Controller compares it to re-arm reachable-probe backoff on fresh accusations.
+        std::unordered_map<std::string, uint64_t> evidenceVersionByTarget;
+        // Monotonic cluster-local source for evidenceVersionByTarget values: deleting a target's
+        // evidence never restarts the sequence, so re-accusations stay ahead of Controller state.
+        uint64_t evidenceSequence{ 0 };
 
         bool empty() const
         {
@@ -232,8 +268,19 @@ private:
     bool UpdateFailureReports(const std::string &clusterName, const cluster::MembershipRecord &reporter,
                               const std::vector<cluster::MembershipRecord> &targets,
                               const std::unordered_set<std::string> &reportedTargets, uint64_t clusterGeneration,
-                              std::chrono::steady_clock::time_point now, std::vector<std::string> &newTargets,
-                              std::vector<std::string> &clearedTargets);
+                              uint64_t summaryVersion, int64_t membershipModRevision,
+                              const std::unordered_map<std::string, uint64_t> &generationByTarget,
+                              std::vector<std::string> &newTargets, std::vector<std::string> &clearedTargets);
+
+    bool AcceptSummaryVersionLocked(ClusterFailureReports &clusterReports, const cluster::MembershipRecord &reporter,
+                                    uint64_t summaryVersion, int64_t membershipModRevision);
+    void WireFailureReportProviders(cluster::TopologyControllerRuntime::Options &runtimeOptions,
+                                    const std::string &clusterName);
+
+    bool ApplyReportedTargets(ClusterFailureReports &clusterReports, const cluster::MembershipRecord &reporter,
+                              const std::vector<cluster::MembershipRecord> &targets, uint64_t clusterGeneration,
+                              const std::unordered_map<std::string, uint64_t> &generationByTarget,
+                              std::vector<std::string> &newTargets);
 
     static bool ClearUnreportedTargets(ClusterFailureReports &clusterReports, const cluster::MembershipRecord &reporter,
                                        const std::unordered_set<std::string> &reportedTargets,
@@ -247,14 +294,18 @@ private:
         const std::unordered_map<std::string, cluster::MembershipRecord> &eligibleReporters,
         const std::unordered_map<std::string, cluster::MembershipRecord> &membershipsByAddress,
         const std::string &target, uint64_t clusterGeneration, ClusterFailureReports &clusterReports,
-        std::unordered_map<std::string, FailureReportState> &reporters,
-        std::chrono::steady_clock::time_point now) const;
+        std::unordered_map<std::string, FailureReportState> &reporters, int64_t membershipSnapshotRevision) const;
+
+    // True when the reporter renewed its membership against a revision newer than the supplied
+    // snapshot: the snapshot's absence or staleness for this reporter must not erase evidence.
+    static bool SnapshotIsStaleForReporter(const ClusterFailureReports &clusterReports, const std::string &reporter,
+                                           int64_t membershipSnapshotRevision);
 
     std::vector<cluster::MemberIdentity> GetIsolationCandidatesLocked(
         const std::string &clusterName, const cluster::TopologySnapshot &latest,
         const std::unordered_map<std::string, cluster::MembershipRecord> &eligibleReporters,
         const std::unordered_map<std::string, cluster::MembershipRecord> &membershipsByAddress,
-        size_t failurePopulation, uint64_t clusterGeneration, std::chrono::steady_clock::time_point now);
+        size_t failurePopulation, uint64_t clusterGeneration, int64_t membershipSnapshotRevision);
 
     Status RunUnderActiveFailureCommitFence(const std::string &clusterName, const cluster::TopologySnapshot &latest,
                                             const std::vector<cluster::MembershipRecord> &memberships,

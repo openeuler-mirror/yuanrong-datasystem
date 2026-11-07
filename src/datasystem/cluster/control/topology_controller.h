@@ -112,10 +112,24 @@ struct TopologyControllerOptions {
 
     /**
      * @brief Host-supplied active failure candidates from multi-worker failure summaries.
+     *
+     * The trailing revision is the membership-table revision of the snapshot backing the
+     * MembershipRecord list: hosts compare it against a reporter's accepted renewal revision
+     * so an older snapshot can prune only entries the snapshot has actually superseded.
      */
     std::function<std::vector<MemberIdentity>(const TopologySnapshot &, const std::vector<MembershipRecord> &,
-                                              std::chrono::steady_clock::time_point)>
+                                              std::chrono::steady_clock::time_point, int64_t)>
         failureSummaryCandidateProvider;
+
+    /**
+     * @brief Per-target evidence version for the supplied candidates; grows whenever a new
+     *        reporter votes or a target's evidence generation advances.
+     *
+     * A version increase re-arms an otherwise reachable-backoff-suppressed probe immediately.
+     * An empty callback keeps the backoff schedule driven only by probe results.
+     */
+    std::function<std::unordered_map<std::string, uint64_t>(const std::vector<MemberIdentity> &)>
+        failureEvidenceVersionProvider;
 
     /**
      * @brief Revalidate active failure candidates and run their topology mutation atomically.
@@ -281,21 +295,42 @@ private:
 
     Status ReconcileDerivedSlice();
 
-    Status TryConfirmFailures(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships);
+    Status TryConfirmFailures(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships,
+                              int64_t membershipRevision);
 
     Status ProbeActiveFailureCandidates(const TopologySnapshot &latest, const std::vector<MemberIdentity> &targets,
-                                        std::vector<MemberIdentity> &confirmed, std::optional<uint64_t> &controlEpoch);
+                                        std::vector<MemberIdentity> &confirmed,
+                                        std::vector<MemberIdentity> &reachable,
+                                        std::optional<uint64_t> &controlEpoch);
 
     Status PrepareActiveFailureProbeRound(const std::vector<MemberIdentity> &targets,
                                           std::vector<MemberIdentity> &dueTargets,
                                           std::optional<uint64_t> &controlEpoch);
 
+    /**
+     * @brief Two-worker mutual-vote fence: a single confirmed side may commit only when the other
+     *        ACTIVE candidate answered reachable in the same probe round; otherwise the
+     *        confirmation is preserved and the peer's probe backoff is re-armed.
+     */
+    void ApplyAmbiguousSingleSideRule(const TopologySnapshot &latest,
+                                      const std::vector<MemberIdentity> &probeReachable,
+                                      const MemberIdentity &confirmedSide,
+                                      std::vector<MemberIdentity> &probeConfirmed);
+
     void ResetActiveFailureProbeAuthorityState();
     Status ResolveActiveFailureControlEpoch(std::optional<uint64_t> &controlEpoch);
-
+    Status ResolveActiveFailureEvidenceVersions(const std::vector<MemberIdentity> &targets,
+                                               std::unordered_map<std::string, uint64_t> &evidenceVersions);
+    void ArmActiveFailureProbeStates(const std::vector<MemberIdentity> &orderedTargets,
+                                     const std::optional<uint64_t> &controlEpoch,
+                                     const std::unordered_map<std::string, uint64_t> &evidenceVersions,
+                                     std::chrono::steady_clock::time_point now,
+                                     std::chrono::milliseconds &nextProbeDelay);
     void ApplyActiveFailureProbeResults(const TopologySnapshot &latest, const std::vector<MemberIdentity> &dueTargets,
                                         const std::vector<ControlBackendProbeResult> &results,
-                                        std::vector<MemberIdentity> &confirmed, std::optional<uint64_t> &controlEpoch);
+                                        std::vector<MemberIdentity> &confirmed,
+                                        std::vector<MemberIdentity> &reachable,
+                                        std::optional<uint64_t> &controlEpoch);
 
     Status PrepareCollectiveProbeContext(const TopologySnapshot &latest,
                                          const std::vector<MembershipRecord> &memberships,
@@ -492,6 +527,8 @@ private:
         std::optional<uint64_t> controlEpoch;
         std::chrono::steady_clock::time_point notBefore;
         uint32_t consecutiveUnreachable{ 0 };
+        uint32_t reachableBackoffSteps{ 0 };
+        uint64_t evidenceVersionSeen{ 0 };
     };
     std::unordered_map<std::string, ActiveFailureProbeState> activeFailureProbeStates_;
     size_t activeFailureProbeCursor_{ 0 };

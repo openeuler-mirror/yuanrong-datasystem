@@ -99,11 +99,14 @@ public:
      * @param[out] revision Current modification revision.
      * @param[out] ttlGeneration TTL generation after renewal.
      * @param[in] expectedModRevision Expected modification revision. Zero disables the incarnation fence.
+     * @param[out] acceptedValue Optional copy of the renewed key's current value, captured under the
+     *            store lock so callers can bind follow-up work to the incarnation the renewal accepted.
      * @return Status of the operation. K_TRY_AGAIN if the modification revision is stale.
      */
     Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs, int64_t &revision,
                      uint64_t &ttlGeneration,
-                     int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK);
+                     int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK,
+                     std::string *acceptedValue = nullptr);
 
     /**
      * @brief Get current global revision.

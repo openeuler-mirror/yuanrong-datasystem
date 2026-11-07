@@ -523,7 +523,9 @@ Status CoordinatorServiceProxyBase::CancelWatch(const std::string &watcherAddr, 
 Status CoordinatorServiceProxyBase::KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs,
                                               int32_t timeoutMs, std::string *coordinatorId,
                                               const std::string &expectedCoordinatorId, int64_t expectedModRevision,
-                                              const std::vector<std::string> &failedTargets)
+                                              const std::vector<std::string> &failedTargets,
+                                              uint64_t summaryVersion,
+                                              const std::vector<uint64_t> &failedTargetGenerations)
 {
     auto inFlight = BeginRpc(timeoutMs);
     coordinator::KeepAliveReqPb req;
@@ -532,6 +534,10 @@ Status CoordinatorServiceProxyBase::KeepAlive(const std::string &key, int64_t &t
     req.set_expected_mod_revision(expectedModRevision);
     for (const auto &target : failedTargets) {
         req.add_failed_targets(target);
+    }
+    req.set_summary_version(summaryVersion);
+    for (const auto &generation : failedTargetGenerations) {
+        req.add_failed_target_generations(generation);
     }
     coordinator::KeepAliveRspPb rsp;
     RpcOptions options;

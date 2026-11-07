@@ -146,7 +146,8 @@ public:
     }
     Status KeepAlive(const std::string &, int64_t &ttlMs, int64_t &remainingTtlMs, int32_t,
                      std::string *coordinatorId, const std::string &, int64_t,
-                     const std::vector<std::string> & = {}) override
+                     const std::vector<std::string> & = {}, uint64_t = 0,
+                     const std::vector<uint64_t> & = {}) override
     {
         if (keepAliveSucceeds_) {
             remainingTtlMs = ttlMs;

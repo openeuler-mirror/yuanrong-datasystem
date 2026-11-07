@@ -336,7 +336,19 @@ public:
     Status PutWithMembershipLease(const std::string &tableName, const std::string &key, const std::string &value);
     Status GetMembershipSidecar(const std::string &tableName,
                                 std::vector<std::pair<std::string, std::string>> &records) const;
-    void ObservePeerRpcResult(const HostPort &target, const Status &status);
+    /**
+     * @brief Charge one peer RPC outcome to the member identity observed at RPC initiation.
+     *
+     * The initiated member id is compared against the current member at the target address under
+     * the recording critical section, so an outcome from an already-replaced incarnation cannot
+     * create, clear or preserve evidence owned by its replacement.
+     */
+    void ObservePeerRpcResult(const HostPort &target, const std::string &initiatedMemberId, const Status &status);
+    /**
+     * @brief Resolve the current member id at one address from the latest published snapshot.
+     * @return Member id, or an empty string when the address is not part of the topology.
+     */
+    std::string ResolveMemberId(const HostPort &target) const;
     bool IsPeerRpcFailureReported(const HostPort &target) const;
 
     /**

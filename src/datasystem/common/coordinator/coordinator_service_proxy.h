@@ -206,13 +206,15 @@ public:
      * @param[in] expectedCoordinatorId Required Coordinator process lifetime; empty disables the fence.
      * @param[in] expectedModRevision Required membership modification revision; zero disables the fence.
      * @param[in] failedTargets Persistently failed target workers observed by the renewing member.
+     * @param[in] summaryVersion Monotonic per-worker summary version; zero disables stale-delivery rejection.
      * @return Existing KeepAlive status contract.
      */
     virtual Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs,
                              int32_t timeoutMs = DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
                              std::string *coordinatorId = nullptr, const std::string &expectedCoordinatorId = "",
                              int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK,
-                             const std::vector<std::string> &failedTargets = {}) = 0;
+                             const std::vector<std::string> &failedTargets = {}, uint64_t summaryVersion = 0,
+                             const std::vector<uint64_t> &failedTargetGenerations = {}) = 0;
 
     /**
      * @brief Run the existing read-modify-CAS retry contract.
@@ -364,7 +366,8 @@ public:
                      int32_t timeoutMs = DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, std::string *coordinatorId = nullptr,
                      const std::string &expectedCoordinatorId = "",
                      int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK,
-                     const std::vector<std::string> &failedTargets = {}) override;
+                     const std::vector<std::string> &failedTargets = {}, uint64_t summaryVersion = 0,
+                     const std::vector<uint64_t> &failedTargetGenerations = {}) override;
 
     /**
      * @copydoc ICoordinatorServiceProxy::CAS

@@ -43,6 +43,8 @@
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/rpc/bthread_utils.h"
+#include "datasystem/common/rpc/brpc_status_util.h"
+#include "datasystem/common/inject/inject_point.h"
 #define private public
 #include "datasystem/coordinator/topology_recovery_manager.h"
 #include "datasystem/coordinator/coordinator_service_impl.h"
@@ -227,6 +229,26 @@ void EnableElection(coordinator::CoordinatorServiceImpl &service)
 }
 
 class CoordinatorServiceImplTest : public CommonTest {};
+
+TEST_F(CoordinatorServiceImplTest, ProbeOutcomeFromWorkerReachabilityMapsServerAppError)
+{
+    EXPECT_EQ(coordinator::ProbeOutcomeFromWorkerReachability({ Status(K_RUNTIME_ERROR, "local"), false }),
+              cluster::ControlBackendProbeOutcome::CANCELLED);
+    EXPECT_EQ(coordinator::ProbeOutcomeFromWorkerReachability({ Status(K_RUNTIME_ERROR, "local"), true }),
+              cluster::ControlBackendProbeOutcome::ERROR);
+    EXPECT_EQ(coordinator::ProbeOutcomeFromWorkerReachability({ Status(K_RPC_DEADLINE_EXCEEDED, "timeout"), true }),
+              cluster::ControlBackendProbeOutcome::DEADLINE_EXCEEDED);
+    EXPECT_EQ(coordinator::ProbeOutcomeFromWorkerReachability({ Status(K_RPC_UNAVAILABLE, "unreachable"), true }),
+              cluster::ControlBackendProbeOutcome::UNAVAILABLE);
+    EXPECT_EQ(coordinator::ProbeOutcomeFromWorkerReachability({ Status::OK(), true }),
+              cluster::ControlBackendProbeOutcome::RESPONSE);
+    // A dispatched application error is the healthy production outcome: the worker answered
+    // before rejecting the intentionally invalid probe event, proving reachability.
+    Status appError(K_INVALID, "worker rejected probe event");
+    appError.WithExtra(kBrpcServerRespondedExtra);
+    EXPECT_EQ(coordinator::ProbeOutcomeFromWorkerReachability({ appError, true }),
+              cluster::ControlBackendProbeOutcome::SERVER_APP_ERROR);
+}
 
 
 
@@ -1023,6 +1045,338 @@ TEST_F(CoordinatorServiceImplTest, UbHealthSupportsTtlPutExactAndTableRangeAsOrd
     EXPECT_TRUE(blockedEntries.empty());
     EXPECT_EQ(recoveryStateCalls, 5);
 
+    DS_ASSERT_OK(service->Shutdown());
+}
+
+TEST_F(CoordinatorServiceImplTest, ResurrectedKeepAliveHandlerCannotUseReplacementIdentity)
+{
+    const std::string clusterName = "cluster-a";
+    auto service = MakeService();
+    DS_ASSERT_OK(InitializeRunning(*service));
+    service->recoveryStateProvider_ = [](const std::string &) { return coordinator::TopologyRecoveryState::READY; };
+    const std::string membershipKey = "/datasystem/" + clusterName + "/cluster/" + MEMBER_ADDRESS;
+    auto &host = *service->topologyControlHost_;
+    {
+        std::lock_guard<bthread::Mutex> lock(host.mutex_);
+        auto entry = std::make_unique<coordinator::TopologyControlHost::ClusterEntry>(clusterName);
+        entry->state = coordinator::TopologyControlHost::EntryState::RUNNING;
+        entry->clusterGeneration = host.nextClusterGeneration_++;
+        ++entry->mutationGeneration;
+        host.entries_.emplace(clusterName, std::move(entry));
+        // Hand-crafted entry: retire the host thread immediately so it cannot reconcile this
+        // entry into a real runtime that would then race with test teardown.
+        host.stopping_ = true;
+    }
+    auto encodeMembership = [](int64_t timestamp) {
+        cluster::MembershipValue membership;
+        membership.timestamp = timestamp;
+        membership.lifecycleState = cluster::MemberLifecycleState::READY;
+        membership.hostId = "host-a";
+        std::string encoded;
+        EXPECT_TRUE(cluster::MembershipValueCodec::Encode(membership, encoded).IsOk());
+        return encoded;
+    };
+    int64_t version = 0;
+    int64_t revision = 0;
+    DS_ASSERT_OK(service->store_->Put(membershipKey, encodeMembership(100), MEMBERSHIP_TTL_MS,
+                                      COORDINATOR_NO_VERSION_CHECK, version, revision));
+    const int64_t staleRevision = revision;
+
+    constexpr char injectPoint[] = "CoordinatorServiceImpl.KeepAlive.afterAcceptedSnapshot";
+    DS_ASSERT_OK(inject::Set(injectPoint, "2*pause()"));
+    constexpr auto handlerWaitTimeout = std::chrono::seconds(5);
+    // The hook fires under the pause mutex after the flag is armed: readiness proves both
+    // handlers are parked inside the pause critical section, not merely past the execute count.
+    std::promise<void> firstHandlerPaused;
+    std::promise<void> secondHandlerPaused;
+    size_t pausedHandlerCount = 0;
+    DS_ASSERT_OK(inject::SetPauseEnteredHook(injectPoint, [&] {
+        const auto pausedCount = ++pausedHandlerCount;
+        if (pausedCount == 1) {
+            firstHandlerPaused.set_value();
+        } else if (pausedCount == 2) {
+            secondHandlerPaused.set_value();
+        }
+    }));
+
+    // Two resurrected old-incarnation handlers park here: one with a non-empty summary and one
+    // with an empty retraction. Both bound their summary to the membership snapshot they renewed.
+    coordinator::KeepAliveReqPb staleReq;
+    staleReq.set_key(membershipKey);
+    staleReq.set_summary_version(100);
+    staleReq.add_failed_targets("127.0.0.1:31502");
+    coordinator::KeepAliveRspPb staleRsp;
+    coordinator::KeepAliveReqPb staleEmptyReq;
+    staleEmptyReq.set_key(membershipKey);
+    staleEmptyReq.set_summary_version(101);
+    coordinator::KeepAliveRspPb staleEmptyRsp;
+    // Declare both futures before the release guard: unwinding destroys the guard first, so the
+    // parked handlers are released before any future destructor can join them.
+    std::future<Status> staleHandler;
+    std::future<Status> staleEmptyHandler;
+    Raii clearInject([&] { (void)inject::Clear(injectPoint); });
+
+    staleHandler = std::async(std::launch::async, [&] { return service->KeepAlive(staleReq, staleRsp); });
+    staleEmptyHandler =
+        std::async(std::launch::async, [&] { return service->KeepAlive(staleEmptyReq, staleEmptyRsp); });
+    ASSERT_EQ(firstHandlerPaused.get_future().wait_for(handlerWaitTimeout), std::future_status::ready);
+    ASSERT_EQ(secondHandlerPaused.get_future().wait_for(handlerWaitTimeout), std::future_status::ready);
+
+    // The worker restarts: the replacement overwrites the membership value with a new revision
+    // while both old handlers are still parked on their accepted snapshots.
+    DS_ASSERT_OK(service->store_->Put(membershipKey, encodeMembership(200), MEMBERSHIP_TTL_MS,
+                                      COORDINATOR_NO_VERSION_CHECK, version, revision));
+    const int64_t replacementRevision = revision;
+    ASSERT_GT(replacementRevision, staleRevision);
+
+    coordinator::KeepAliveReqPb freshReq;
+    freshReq.set_key(membershipKey);
+    freshReq.set_summary_version(2);
+    freshReq.add_failed_targets("127.0.0.1:31502");
+    coordinator::KeepAliveRspPb freshRsp;
+    DS_ASSERT_OK(service->KeepAlive(freshReq, freshRsp));
+    {
+        std::lock_guard<bthread::Mutex> lock(host.failureReportMutex_);
+        const auto clusterIter = host.failureReportsByCluster_.find(clusterName);
+        ASSERT_NE(clusterIter, host.failureReportsByCluster_.end());
+        const auto &cluster = clusterIter->second;
+        const auto lastIter = cluster.lastSummaryVersionByReporter.find(MEMBER_ADDRESS);
+        ASSERT_NE(lastIter, cluster.lastSummaryVersionByReporter.end());
+        EXPECT_EQ(lastIter->second.version, 2U);
+        EXPECT_EQ(lastIter->second.reporterTimestamp, 200);
+        EXPECT_EQ(lastIter->second.membershipModRevision, replacementRevision);
+        ASSERT_EQ(cluster.byTarget.size(), 1U);
+        EXPECT_EQ(cluster.byTarget.count("127.0.0.1:31502"), 1U);
+    }
+
+    // Releasing both old handlers must leave the replacement's votes and version baseline
+    // untouched: the stale non-empty summary cannot re-vote, and the stale empty retraction
+    // cannot wipe the replacement's vote.
+    DS_ASSERT_OK(inject::Clear(injectPoint));
+    ASSERT_EQ(staleHandler.wait_for(handlerWaitTimeout), std::future_status::ready);
+    DS_ASSERT_OK(staleHandler.get());
+    ASSERT_EQ(staleEmptyHandler.wait_for(handlerWaitTimeout), std::future_status::ready);
+    DS_ASSERT_OK(staleEmptyHandler.get());
+    {
+        std::lock_guard<bthread::Mutex> lock(host.failureReportMutex_);
+        const auto &cluster = host.failureReportsByCluster_.at(clusterName);
+        const auto &last = cluster.lastSummaryVersionByReporter.at(MEMBER_ADDRESS);
+        EXPECT_EQ(last.version, 2U);
+        EXPECT_EQ(last.reporterTimestamp, 200);
+        EXPECT_EQ(last.membershipModRevision, replacementRevision);
+        ASSERT_EQ(cluster.byTarget.size(), 1U);
+        EXPECT_EQ(cluster.byTarget.count("127.0.0.1:31502"), 1U);
+    }
+
+    // The replacement's own summary lineage keeps working after the stale handlers drained.
+    coordinator::KeepAliveReqPb followReq;
+    followReq.set_key(membershipKey);
+    followReq.set_summary_version(3);
+    followReq.add_failed_targets("127.0.0.1:31502");
+    coordinator::KeepAliveRspPb followRsp;
+    DS_ASSERT_OK(service->KeepAlive(followReq, followRsp));
+    {
+        std::lock_guard<bthread::Mutex> lock(host.failureReportMutex_);
+        const auto &cluster = host.failureReportsByCluster_.at(clusterName);
+        const auto &last = cluster.lastSummaryVersionByReporter.at(MEMBER_ADDRESS);
+        EXPECT_EQ(last.version, 3U);
+        EXPECT_EQ(last.membershipModRevision, replacementRevision);
+        ASSERT_EQ(cluster.byTarget.size(), 1U);
+        EXPECT_EQ(cluster.byTarget.count("127.0.0.1:31502"), 1U);
+    }
+    DS_ASSERT_OK(service->Shutdown());
+}
+
+TEST_F(CoordinatorServiceImplTest, ResurrectedLegacyKeepAliveHandlerCannotUseReplacementIdentity)
+{
+    const std::string clusterName = "cluster-a";
+    auto service = MakeService();
+    DS_ASSERT_OK(InitializeRunning(*service));
+    service->recoveryStateProvider_ = [](const std::string &) { return coordinator::TopologyRecoveryState::READY; };
+    const std::string membershipKey = "/datasystem/" + clusterName + "/cluster/" + MEMBER_ADDRESS;
+    auto &host = *service->topologyControlHost_;
+    {
+        std::lock_guard<bthread::Mutex> lock(host.mutex_);
+        auto entry = std::make_unique<coordinator::TopologyControlHost::ClusterEntry>(clusterName);
+        entry->state = coordinator::TopologyControlHost::EntryState::RUNNING;
+        entry->clusterGeneration = host.nextClusterGeneration_++;
+        ++entry->mutationGeneration;
+        host.entries_.emplace(clusterName, std::move(entry));
+        host.stopping_ = true;
+    }
+    auto encodeMembership = [](int64_t timestamp) {
+        cluster::MembershipValue membership;
+        membership.timestamp = timestamp;
+        membership.lifecycleState = cluster::MemberLifecycleState::READY;
+        membership.hostId = "host-a";
+        std::string encoded;
+        EXPECT_TRUE(cluster::MembershipValueCodec::Encode(membership, encoded).IsOk());
+        return encoded;
+    };
+    int64_t version = 0;
+    int64_t revision = 0;
+    DS_ASSERT_OK(service->store_->Put(membershipKey, encodeMembership(100), MEMBERSHIP_TTL_MS,
+                                      COORDINATOR_NO_VERSION_CHECK, version, revision));
+    const int64_t staleRevision = revision;
+
+    constexpr char injectPoint[] = "CoordinatorServiceImpl.KeepAlive.afterAcceptedSnapshot";
+    DS_ASSERT_OK(inject::Set(injectPoint, "2*pause()"));
+    constexpr auto handlerWaitTimeout = std::chrono::seconds(5);
+    // The hook fires under the pause mutex after the flag is armed: readiness proves both
+    // handlers are parked inside the pause critical section, not merely past the execute count.
+    std::promise<void> firstHandlerPaused;
+    std::promise<void> secondHandlerPaused;
+    size_t pausedHandlerCount = 0;
+    DS_ASSERT_OK(inject::SetPauseEnteredHook(injectPoint, [&] {
+        const auto pausedCount = ++pausedHandlerCount;
+        if (pausedCount == 1) {
+            firstHandlerPaused.set_value();
+        } else if (pausedCount == 2) {
+            secondHandlerPaused.set_value();
+        }
+    }));
+
+    // Rolling upgrade: both resurrected pre-upgrade handlers leave summary_version unset (wire
+    // default zero). One asserts an old vote and the other retracts, both bound to the membership
+    // snapshot their renewal accepted.
+    coordinator::KeepAliveReqPb staleReq;
+    staleReq.set_key(membershipKey);
+    staleReq.add_failed_targets("127.0.0.1:31502");
+    coordinator::KeepAliveRspPb staleRsp;
+    coordinator::KeepAliveReqPb staleEmptyReq;
+    staleEmptyReq.set_key(membershipKey);
+    coordinator::KeepAliveRspPb staleEmptyRsp;
+    // Declare both futures before the release guard: unwinding destroys the guard first, so the
+    // parked handlers are released before any future destructor can join them.
+    std::future<Status> staleHandler;
+    std::future<Status> staleEmptyHandler;
+    Raii clearInject([&] { (void)inject::Clear(injectPoint); });
+
+    staleHandler = std::async(std::launch::async, [&] { return service->KeepAlive(staleReq, staleRsp); });
+    staleEmptyHandler =
+        std::async(std::launch::async, [&] { return service->KeepAlive(staleEmptyReq, staleEmptyRsp); });
+    ASSERT_EQ(firstHandlerPaused.get_future().wait_for(handlerWaitTimeout), std::future_status::ready);
+    ASSERT_EQ(secondHandlerPaused.get_future().wait_for(handlerWaitTimeout), std::future_status::ready);
+
+    // The upgraded Worker restarts: the replacement overwrites the membership value with a new
+    // revision while both legacy handlers are still parked on their accepted snapshots.
+    DS_ASSERT_OK(service->store_->Put(membershipKey, encodeMembership(200), MEMBERSHIP_TTL_MS,
+                                      COORDINATOR_NO_VERSION_CHECK, version, revision));
+    const int64_t replacementRevision = revision;
+    ASSERT_GT(replacementRevision, staleRevision);
+
+    coordinator::KeepAliveReqPb freshReq;
+    freshReq.set_key(membershipKey);
+    freshReq.set_summary_version(2);
+    freshReq.add_failed_targets("127.0.0.1:31502");
+    coordinator::KeepAliveRspPb freshRsp;
+    DS_ASSERT_OK(service->KeepAlive(freshReq, freshRsp));
+    {
+        std::lock_guard<bthread::Mutex> lock(host.failureReportMutex_);
+        const auto clusterIter = host.failureReportsByCluster_.find(clusterName);
+        ASSERT_NE(clusterIter, host.failureReportsByCluster_.end());
+        const auto &cluster = clusterIter->second;
+        const auto lastIter = cluster.lastSummaryVersionByReporter.find(MEMBER_ADDRESS);
+        ASSERT_NE(lastIter, cluster.lastSummaryVersionByReporter.end());
+        EXPECT_EQ(lastIter->second.version, 2U);
+        EXPECT_EQ(lastIter->second.reporterTimestamp, 200);
+        EXPECT_EQ(lastIter->second.membershipModRevision, replacementRevision);
+        ASSERT_EQ(cluster.byTarget.size(), 1U);
+        EXPECT_EQ(cluster.byTarget.count("127.0.0.1:31502"), 1U);
+    }
+
+    // Releasing both legacy handlers must leave the replacement's votes and baseline untouched:
+    // the accepted-revision fence runs before the zero-version sequence bypass.
+    DS_ASSERT_OK(inject::Clear(injectPoint));
+    ASSERT_EQ(staleHandler.wait_for(handlerWaitTimeout), std::future_status::ready);
+    DS_ASSERT_OK(staleHandler.get());
+    ASSERT_EQ(staleEmptyHandler.wait_for(handlerWaitTimeout), std::future_status::ready);
+    DS_ASSERT_OK(staleEmptyHandler.get());
+    {
+        std::lock_guard<bthread::Mutex> lock(host.failureReportMutex_);
+        const auto &cluster = host.failureReportsByCluster_.at(clusterName);
+        const auto &last = cluster.lastSummaryVersionByReporter.at(MEMBER_ADDRESS);
+        EXPECT_EQ(last.version, 2U);
+        EXPECT_EQ(last.reporterTimestamp, 200);
+        EXPECT_EQ(last.membershipModRevision, replacementRevision);
+        ASSERT_EQ(cluster.byTarget.size(), 1U);
+        EXPECT_EQ(cluster.byTarget.count("127.0.0.1:31502"), 1U);
+    }
+
+    coordinator::KeepAliveReqPb followReq;
+    followReq.set_key(membershipKey);
+    followReq.set_summary_version(3);
+    followReq.add_failed_targets("127.0.0.1:31502");
+    coordinator::KeepAliveRspPb followRsp;
+    DS_ASSERT_OK(service->KeepAlive(followReq, followRsp));
+    {
+        std::lock_guard<bthread::Mutex> lock(host.failureReportMutex_);
+        const auto &cluster = host.failureReportsByCluster_.at(clusterName);
+        const auto &last = cluster.lastSummaryVersionByReporter.at(MEMBER_ADDRESS);
+        EXPECT_EQ(last.version, 3U);
+        EXPECT_EQ(last.membershipModRevision, replacementRevision);
+        ASSERT_EQ(cluster.byTarget.size(), 1U);
+        EXPECT_EQ(cluster.byTarget.count("127.0.0.1:31502"), 1U);
+    }
+    DS_ASSERT_OK(service->Shutdown());
+}
+
+TEST_F(CoordinatorServiceImplTest, KeepAliveCarriesEvidenceGenerationIntoHost)
+{
+    const std::string clusterName = "cluster-a";
+    const std::string failedTarget = "127.0.0.1:31502";
+    auto service = MakeService();
+    DS_ASSERT_OK(InitializeRunning(*service));
+    service->recoveryStateProvider_ = [](const std::string &) { return coordinator::TopologyRecoveryState::READY; };
+    const std::string membershipKey = "/datasystem/" + clusterName + "/cluster/" + MEMBER_ADDRESS;
+    auto &host = *service->topologyControlHost_;
+    {
+        std::lock_guard<bthread::Mutex> lock(host.mutex_);
+        auto entry = std::make_unique<coordinator::TopologyControlHost::ClusterEntry>(clusterName);
+        entry->state = coordinator::TopologyControlHost::EntryState::RUNNING;
+        entry->clusterGeneration = host.nextClusterGeneration_++;
+        ++entry->mutationGeneration;
+        host.entries_.emplace(clusterName, std::move(entry));
+        // Hand-crafted entry: retire the host thread immediately so it cannot reconcile this
+        // entry into a real runtime that would then race with test teardown.
+        host.stopping_ = true;
+    }
+    cluster::MembershipValue membership;
+    membership.timestamp = 100;
+    membership.lifecycleState = cluster::MemberLifecycleState::READY;
+    membership.hostId = "host-a";
+    std::string encoded;
+    EXPECT_TRUE(cluster::MembershipValueCodec::Encode(membership, encoded).IsOk());
+    int64_t version = 0;
+    int64_t revision = 0;
+    DS_ASSERT_OK(service->store_->Put(membershipKey, encoded, MEMBERSHIP_TTL_MS, COORDINATOR_NO_VERSION_CHECK,
+                                      version, revision));
+
+    auto sendWave = [&](uint64_t summaryVersion, uint64_t generation) {
+        coordinator::KeepAliveReqPb req;
+        req.set_key(membershipKey);
+        req.set_summary_version(summaryVersion);
+        req.add_failed_targets(failedTarget);
+        req.add_failed_target_generations(generation);
+        coordinator::KeepAliveRspPb rsp;
+        DS_ASSERT_OK(service->KeepAlive(req, rsp));
+    };
+    auto evidenceVersion = [&]() -> uint64_t {
+        std::lock_guard<bthread::Mutex> lock(host.failureReportMutex_);
+        const auto clusterIter = host.failureReportsByCluster_.find(clusterName);
+        if (clusterIter == host.failureReportsByCluster_.end()) {
+            return 0;
+        }
+        const auto wave = clusterIter->second.evidenceVersionByTarget.find(failedTarget);
+        return wave == clusterIter->second.evidenceVersionByTarget.end() ? 0 : wave->second;
+    };
+
+    sendWave(1, 1);
+    EXPECT_EQ(evidenceVersion(), 1U);
+    sendWave(2, 1);
+    EXPECT_EQ(evidenceVersion(), 1U);
+    sendWave(3, 2);
+    EXPECT_EQ(evidenceVersion(), 2U);
     DS_ASSERT_OK(service->Shutdown());
 }
 

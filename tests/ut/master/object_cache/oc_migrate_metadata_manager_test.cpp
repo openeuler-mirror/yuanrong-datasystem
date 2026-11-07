@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <future>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 
@@ -226,29 +227,33 @@ public:
     {
         size_t calls = 0;
         HostPort observedTarget;
+        std::string observedMemberId;
         Status observedStatus;
-        migrateManager_.metadataRpcObserver_ = [&](const HostPort &target, const Status &status) {
-            ++calls;
-            observedTarget = target;
-            observedStatus = status;
-        };
+        migrateManager_.metadataRpcObserver_ =
+            [&](const HostPort &target, const std::string &initiatedMemberId, const Status &status) {
+                ++calls;
+                observedTarget = target;
+                observedMemberId = initiatedMemberId;
+                observedStatus = status;
+            };
         const Status failure(K_RPC_UNAVAILABLE, "injected migration failure");
 
-        migrateManager_.ObserveMetadataRpcResult("127.0.0.1:12002", failure);
-        migrateManager_.ObserveMetadataRpcResult("invalid-target", failure);
+        migrateManager_.ObserveMetadataRpcResult("127.0.0.1:12002", "member-old", failure);
+        migrateManager_.ObserveMetadataRpcResult("invalid-target", "member-old", failure);
 
         EXPECT_EQ(calls, 1U);
         EXPECT_EQ(observedTarget.ToString(), "127.0.0.1:12002");
+        EXPECT_EQ(observedMemberId, "member-old");
         EXPECT_EQ(observedStatus.GetCode(), K_RPC_UNAVAILABLE);
         migrateManager_.Shutdown();
-        migrateManager_.ObserveMetadataRpcResult("127.0.0.1:12002", failure);
+        migrateManager_.ObserveMetadataRpcResult("127.0.0.1:12002", "member-old", failure);
         EXPECT_EQ(calls, 1U);
     }
 
     void VerifyMetadataRpcObserverUsesTransportResultBoundary()
     {
         std::vector<StatusCode> observedStatuses;
-        migrateManager_.metadataRpcObserver_ = [&](const HostPort &, const Status &status) {
+        migrateManager_.metadataRpcObserver_ = [&](const HostPort &, const std::string &, const Status &status) {
             observedStatuses.push_back(status.GetCode());
         };
         auto api = std::make_unique<master::MasterMasterOCApi>(
@@ -301,12 +306,12 @@ public:
         auto enteredFuture = entered.get_future();
         auto releaseFuture = release.get_future().share();
         std::atomic<bool> observerTimedOut{ false };
-        migrateManager_.metadataRpcObserver_ = [&](const HostPort &, const Status &) {
+        migrateManager_.metadataRpcObserver_ = [&](const HostPort &, const std::string &, const Status &) {
             entered.set_value();
             observerTimedOut.store(releaseFuture.wait_for(OBSERVER_WAIT_TIMEOUT) != std::future_status::ready);
         };
         auto observe = std::async(std::launch::async, [&] {
-            migrateManager_.ObserveMetadataRpcResult("127.0.0.1:12002", Status::OK());
+            migrateManager_.ObserveMetadataRpcResult("127.0.0.1:12002", "member-old", Status::OK());
         });
         std::atomic<bool> released{ false };
         auto releaseObserver = [&] {
@@ -325,6 +330,101 @@ public:
         EXPECT_FALSE(observerTimedOut.load());
         ASSERT_EQ(shutdown.wait_for(OBSERVER_WAIT_TIMEOUT), std::future_status::ready);
         shutdown.get();
+    }
+
+    void VerifyShutdownWaitsForCopiedMemberIdResolver()
+    {
+        size_t resolverCalls = 0;
+        migrateManager_.memberIdResolver_ = [&resolverCalls](const HostPort &) {
+            ++resolverCalls;
+            return std::string("member-resolved");
+        };
+        constexpr char injectPoint[] = "OCMigrateMetadataManager.ResolveTargetMemberId.afterCopy";
+        DS_ASSERT_OK(inject::Set(injectPoint, "1*pause()"));
+        // The hook fires under the pause mutex after the flag is armed: readiness proves the
+        // resolver is parked inside the pause critical section, replacing the racy execute-count
+        // probe, so a release landing before the parked thread reaches its wait cannot be lost.
+        std::promise<void> resolverPaused;
+        auto resolverPausedFuture = resolverPaused.get_future();
+        DS_ASSERT_OK(inject::SetPauseEnteredHook(injectPoint, [&resolverPaused] { resolverPaused.set_value(); }));
+        // Declare the futures before the release guard: unwinding destroys the guard first, so
+        // the paused task is released before any future destructor can block on it.
+        std::future<std::string> resolve;
+        std::future<void> shutdown;
+        Raii clearInject([&] { (void)inject::Clear(injectPoint); });
+
+        resolve = std::async(std::launch::async,
+                             [&] { return migrateManager_.ResolveTargetMemberId(HostPort("127.0.0.1", 12002)); });
+        ASSERT_EQ(resolverPausedFuture.wait_for(OBSERVER_WAIT_TIMEOUT), std::future_status::ready);
+
+        shutdown = std::async(std::launch::async, [&] { migrateManager_.Shutdown(); });
+        EXPECT_EQ(shutdown.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout);
+        DS_ASSERT_OK(inject::Clear(injectPoint));
+        ASSERT_EQ(resolve.wait_for(OBSERVER_WAIT_TIMEOUT), std::future_status::ready);
+        EXPECT_EQ(resolve.get(), "member-resolved");
+        EXPECT_EQ(resolverCalls, 1U);
+        ASSERT_EQ(shutdown.wait_for(OBSERVER_WAIT_TIMEOUT), std::future_status::ready);
+        shutdown.get();
+    }
+
+    void VerifyShutdownWaitsForInFlightMemberIdResolverCall()
+    {
+        std::promise<void> entered;
+        std::promise<void> release;
+        auto enteredFuture = entered.get_future();
+        auto releaseFuture = release.get_future().share();
+        std::atomic<bool> resolverTimedOut{ false };
+        migrateManager_.memberIdResolver_ = [&](const HostPort &) {
+            entered.set_value();
+            resolverTimedOut.store(releaseFuture.wait_for(OBSERVER_WAIT_TIMEOUT) != std::future_status::ready);
+            return std::string("member-resolved");
+        };
+        // Declare both futures before the release guard: unwinding destroys the guard first, so
+        // the parked callback is released before any future destructor can join it.
+        std::future<std::string> resolve;
+        std::future<void> shutdown;
+        std::atomic<bool> released{ false };
+        auto releaseResolver = [&] {
+            if (!released.exchange(true)) {
+                release.set_value();
+            }
+        };
+        Raii releaseOnExit(releaseResolver);
+
+        resolve = std::async(std::launch::async,
+                             [&] { return migrateManager_.ResolveTargetMemberId(HostPort("127.0.0.1", 12002)); });
+        ASSERT_EQ(enteredFuture.wait_for(OBSERVER_WAIT_TIMEOUT), std::future_status::ready);
+
+        shutdown = std::async(std::launch::async, [&] { migrateManager_.Shutdown(); });
+        EXPECT_EQ(shutdown.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout);
+        releaseResolver();
+        ASSERT_EQ(resolve.wait_for(OBSERVER_WAIT_TIMEOUT), std::future_status::ready);
+        EXPECT_EQ(resolve.get(), "member-resolved");
+        EXPECT_FALSE(resolverTimedOut.load());
+        ASSERT_EQ(shutdown.wait_for(OBSERVER_WAIT_TIMEOUT), std::future_status::ready);
+        shutdown.get();
+    }
+
+    void VerifyShutdownDetachesMemberIdResolver()
+    {
+        // A throwing resolver must unwind through the in-flight barrier and leave the count at
+        // zero, so a later Shutdown can never block on a leaked callback.
+        migrateManager_.memberIdResolver_ = [](const HostPort &) -> std::string {
+            throw std::runtime_error("resolver boom");
+        };
+        EXPECT_THROW(migrateManager_.ResolveTargetMemberId(HostPort("127.0.0.1", 12002)), std::runtime_error);
+        EXPECT_EQ(migrateManager_.metadataCallbacksInFlight_, 0U);
+
+        size_t resolverCalls = 0;
+        migrateManager_.memberIdResolver_ = [&resolverCalls](const HostPort &) {
+            ++resolverCalls;
+            return std::string("member-resolved");
+        };
+        EXPECT_EQ(migrateManager_.ResolveTargetMemberId(HostPort("127.0.0.1", 12002)), "member-resolved");
+        EXPECT_EQ(resolverCalls, 1U);
+        migrateManager_.Shutdown();
+        EXPECT_EQ(migrateManager_.ResolveTargetMemberId(HostPort("127.0.0.1", 12002)), "");
+        EXPECT_EQ(resolverCalls, 1U);
     }
 
 protected:
@@ -432,6 +532,21 @@ TEST_F(OCMigrateMetadataManagerTest, MetadataRpcObserverUsesTransportResultBound
 TEST_F(OCMigrateMetadataManagerTest, ShutdownWaitsForMetadataRpcObserver)
 {
     VerifyShutdownWaitsForMetadataRpcObserver();
+}
+
+TEST_F(OCMigrateMetadataManagerTest, ShutdownWaitsForCopiedMemberIdResolver)
+{
+    VerifyShutdownWaitsForCopiedMemberIdResolver();
+}
+
+TEST_F(OCMigrateMetadataManagerTest, ShutdownWaitsForInFlightMemberIdResolverCall)
+{
+    VerifyShutdownWaitsForInFlightMemberIdResolverCall();
+}
+
+TEST_F(OCMigrateMetadataManagerTest, ShutdownDetachesMemberIdResolver)
+{
+    VerifyShutdownDetachesMemberIdResolver();
 }
 
 }  // namespace datasystem::ut

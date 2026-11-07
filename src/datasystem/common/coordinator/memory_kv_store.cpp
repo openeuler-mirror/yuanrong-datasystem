@@ -209,7 +209,7 @@ bool MemoryKvStore::DeleteIfTtlExpired(const std::string &key, int64_t revision,
 }
 
 Status MemoryKvStore::KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs, int64_t &revision,
-                                uint64_t &ttlGeneration, int64_t expectedModRevision)
+                                uint64_t &ttlGeneration, int64_t expectedModRevision, std::string *acceptedValue)
 {
     std::unique_lock lock(mutex_);
     auto it = data_.find(key);
@@ -227,6 +227,9 @@ Status MemoryKvStore::KeepAlive(const std::string &key, int64_t &ttlMs, int64_t 
     remainingTtlMs = entry.ttlMs;
     revision = entry.modRevision;
     ttlGeneration = entry.ttlGeneration;
+    if (acceptedValue != nullptr) {
+        *acceptedValue = entry.value;
+    }
     return Status::OK();
 }
 

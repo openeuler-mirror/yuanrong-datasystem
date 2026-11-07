@@ -254,6 +254,7 @@ ds_cc_library(
     ],
     deps = [
         ":rpc_constants",
+        "//include/datasystem/utils:utils_headers",
         "//src/datasystem/protos:rpc_option_cc_proto",
     ],
 )

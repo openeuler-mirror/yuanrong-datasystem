@@ -247,13 +247,18 @@ Status CoordinatorStore::CancelWatch(const std::string &watcherAddr, const std::
 }
 
 Status CoordinatorStore::KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs,
-                                   int64_t expectedModRevision)
+                                   int64_t expectedModRevision, int64_t *acceptedModRevision,
+                                   std::string *acceptedValue)
 {
     RETURN_IF_NOT_OK(CheckInitialized());
     int64_t revision = 0;
     uint64_t ttlGeneration = 0;
     RETURN_IF_NOT_OK(
-        memKvStore_->KeepAlive(key, ttlMs, remainingTtlMs, revision, ttlGeneration, expectedModRevision));
+        memKvStore_->KeepAlive(key, ttlMs, remainingTtlMs, revision, ttlGeneration, expectedModRevision,
+                               acceptedValue));
+    if (acceptedModRevision != nullptr) {
+        *acceptedModRevision = revision;
+    }
     VLOG(1) << "KeepAlive key: " << key << " ttlMs: " << ttlMs << ", remainingTtlMs: " << remainingTtlMs;
     return ttlManager_->Schedule(key, ttlMs, revision, ttlGeneration);
 }

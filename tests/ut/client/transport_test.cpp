@@ -6485,7 +6485,11 @@ protected:
         std::shared_ptr<Buffer> buffer;
         ASSERT_TRUE(Create(buffer).IsOk());
         ASSERT_NE(buffer, nullptr);
-        EXPECT_EQ(buffer->bufferInfo_->workerAddr, routeOrder[1]);
+        // Retry order is unspecified under randomized failover spread; the next target must
+        // simply avoid the isolated worker.
+        const auto &landed = buffer->bufferInfo_->workerAddr;
+        EXPECT_NE(landed, routeOrder.front());
+        EXPECT_NE(std::find(workers.begin(), workers.end(), landed), workers.end());
         ASSERT_EQ(manager->builtTransporters.size(), 2U);
         EXPECT_EQ(manager->builtTransporters.front()->createCount, CREATE_EVICTION_THRESHOLD);
         EXPECT_EQ(manager->builtTransporters.back()->createCount, 1);
@@ -6538,8 +6542,11 @@ TEST_F(RoutedCreateRedirectTest, PrefersReadyCandidateAndAvoidsLeavingWorkerOnNe
 
 TEST_F(RoutedCreateRedirectTest, EmptyCandidatesReachFourthWorkerAfterThreeRejections)
 {
-    manager->configureTransporter = [this](const HostPort &address, FakeTransporter &transporter) {
-        if (address != routeOrder.back()) {
+    // Randomized failover spread makes the retry order unspecified: whichever three distinct
+    // workers are walked first reject with empty candidate hints, and the walk keeps going
+    // until the fourth distinct worker accepts.
+    manager->configureTransporter = [built = 0](const HostPort &, FakeTransporter &transporter) mutable {
+        if (built++ < 3) {
             transporter.createStatuses.emplace_back(Reject());
         }
     };
@@ -6549,12 +6556,17 @@ TEST_F(RoutedCreateRedirectTest, EmptyCandidatesReachFourthWorkerAfterThreeRejec
     const auto rc = Create(buffer);
     ASSERT_TRUE(rc.IsOk()) << rc.ToString();
     ASSERT_NE(buffer, nullptr);
-    EXPECT_EQ(buffer->bufferInfo_->workerAddr, routeOrder.back());
+    EXPECT_EQ(buffer->bufferInfo_->workerAddr, manager->builtTransporters.back()->rpcClient->WorkerAddress());
     ASSERT_EQ(manager->builtTransporters.size(), workers.size());
-    for (size_t i = 0; i < routeOrder.size(); ++i) {
-        EXPECT_EQ(manager->builtTransporters[i]->rpcClient->WorkerAddress(), routeOrder[i]);
-        EXPECT_EQ(manager->builtTransporters[i]->createCount, 1);
+    std::vector<HostPort> visited;
+    for (const auto &transporter : manager->builtTransporters) {
+        visited.emplace_back(transporter->rpcClient->WorkerAddress());
+        EXPECT_EQ(transporter->createCount, 1);
     }
+    auto expectedCoverage = routeOrder;
+    std::sort(visited.begin(), visited.end());
+    std::sort(expectedCoverage.begin(), expectedCoverage.end());
+    EXPECT_EQ(visited, expectedCoverage);
 }
 
 TEST_F(RoutedCreateRedirectTest, AllWorkersRejectWithoutRevisitingOrAllocatingBuffer)
@@ -6639,7 +6651,11 @@ TEST_F(RoutedCreateRedirectTest, PeerDeadAffectsNextCreateWithoutReplayingCurren
     std::shared_ptr<Buffer> buffer;
     ASSERT_TRUE(Create(buffer).IsOk());
     ASSERT_NE(buffer, nullptr);
-    EXPECT_EQ(buffer->bufferInfo_->workerAddr, routeOrder[1]);
+    // Retry order is unspecified under randomized failover spread; the next target must
+    // simply avoid the isolated worker.
+    const auto &landed = buffer->bufferInfo_->workerAddr;
+    EXPECT_NE(landed, routeOrder.front());
+    EXPECT_NE(std::find(workers.begin(), workers.end(), landed), workers.end());
     ASSERT_EQ(manager->builtTransporters.size(), 2U);
     EXPECT_EQ(manager->builtTransporters.front()->createCount, 1);
     EXPECT_EQ(manager->builtTransporters.back()->createCount, 1);
@@ -6649,11 +6665,6 @@ TEST_F(RoutedCreateRedirectTest, PublicCreateBufferPeerDeadThenSetBufferUsesFall
 {
     EnablePublicCreateWithRemoteBoundWorker();
     auto routing = std::atomic_load(&client->routing_);
-    HostPort fallback;
-    ASSERT_TRUE(routing
-                    ->SelectWorker(key, DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::SET,
-                                   fallback, { workerApi->hostPort_ })
-                    .IsOk());
     manager->configureTransporter = [this](const HostPort &address, FakeTransporter &transporter) {
         if (address == workerApi->hostPort_) {
             transporter.createStatuses.emplace_back(K_RPC_PEER_DEAD, "peer unavailable");
@@ -6676,7 +6687,11 @@ TEST_F(RoutedCreateRedirectTest, PublicCreateBufferPeerDeadThenSetBufferUsesFall
     routing->router_->UpdateHashRing(*prepared, {});
     ASSERT_TRUE(client->Create(key, 4, param, buffer).IsOk());
     ASSERT_NE(buffer, nullptr);
-    EXPECT_EQ(buffer->bufferInfo_->workerAddr, fallback);
+    // The fallback target is not fixed under randomized failover spread; it must simply
+    // avoid the failed bound worker.
+    const auto &landed = buffer->bufferInfo_->workerAddr;
+    EXPECT_NE(landed, workerApi->hostPort_);
+    EXPECT_NE(std::find(workers.begin(), workers.end(), landed), workers.end());
     ASSERT_TRUE(buffer->MemoryCopy("data", 4).IsOk());
     ASSERT_TRUE(client->Set(buffer).IsOk());
     ASSERT_EQ(manager->builtTransporters.size(), 2U);
@@ -6689,11 +6704,6 @@ TEST_F(RoutedCreateRedirectTest, PublicCreateBufferPeerDeadThenSetBufferUsesFall
 TEST_F(RoutedCreateRedirectTest, PublicCreateBufferDisconnectThresholdThenSetBufferUsesFallback)
 {
     EnablePublicCreateWithRemoteBoundWorker();
-    auto routing = std::atomic_load(&client->routing_);
-    HostPort fallback;
-    ASSERT_TRUE(routing->SelectWorker(key, DataPlacementPolicy::PREFERRED_META_OWNER,
-                                      client::WorkerAccessAction::SET, fallback, { workerApi->hostPort_ })
-                    .IsOk());
     manager->configureTransporter = [this](const HostPort &address, FakeTransporter &transporter) {
         if (address == workerApi->hostPort_) {
             transporter.createStatuses.assign(CREATE_EVICTION_THRESHOLD,
@@ -6712,7 +6722,11 @@ TEST_F(RoutedCreateRedirectTest, PublicCreateBufferDisconnectThresholdThenSetBuf
     std::shared_ptr<Buffer> buffer;
     ASSERT_TRUE(client->Create(key, 4, param, buffer).IsOk());
     ASSERT_NE(buffer, nullptr);
-    EXPECT_EQ(buffer->bufferInfo_->workerAddr, fallback);
+    // The fallback target is not fixed under randomized failover spread; it must simply
+    // avoid the disconnected bound worker.
+    const auto &landed = buffer->bufferInfo_->workerAddr;
+    EXPECT_NE(landed, workerApi->hostPort_);
+    EXPECT_NE(std::find(workers.begin(), workers.end(), landed), workers.end());
     ASSERT_TRUE(buffer->MemoryCopy("data", 4).IsOk());
     ASSERT_TRUE(client->Set(buffer).IsOk());
     ASSERT_EQ(manager->builtTransporters.size(), 2U);
@@ -6755,8 +6769,10 @@ TEST_F(RoutedCreateRedirectTest, TransientFailuresDoNotEvictCreateTarget)
 
 TEST_F(RoutedCreateRedirectTest, RetriesOnlyUnsentPeerDeadOnAnotherWorker)
 {
-    manager->configureTransporter = [this](const HostPort &address, FakeTransporter &transporter) {
-        if (address != routeOrder.back()) {
+    // Randomized failover spread makes the retry order unspecified: the first three distinct
+    // workers fail with not-sent peer-dead (safe to replay), and the fourth accepts.
+    manager->configureTransporter = [built = 0](const HostPort &, FakeTransporter &transporter) mutable {
+        if (built++ < 3) {
             transporter.createStatuses.emplace_back(
                 Status(K_RPC_PEER_DEAD, "connection refused").WithExtra(kBrpcRequestNotSentExtra));
         }
@@ -6766,12 +6782,17 @@ TEST_F(RoutedCreateRedirectTest, RetriesOnlyUnsentPeerDeadOnAnotherWorker)
     std::shared_ptr<Buffer> buffer;
     ASSERT_TRUE(Create(buffer).IsOk());
     ASSERT_NE(buffer, nullptr);
-    EXPECT_EQ(buffer->bufferInfo_->workerAddr, routeOrder.back());
-    ASSERT_EQ(manager->builtTransporters.size(), routeOrder.size());
-    for (size_t i = 0; i < routeOrder.size(); ++i) {
-        EXPECT_EQ(manager->builtTransporters[i]->rpcClient->WorkerAddress(), routeOrder[i]);
-        EXPECT_EQ(manager->builtTransporters[i]->createCount, 1);
+    EXPECT_EQ(buffer->bufferInfo_->workerAddr, manager->builtTransporters.back()->rpcClient->WorkerAddress());
+    ASSERT_EQ(manager->builtTransporters.size(), workers.size());
+    std::vector<HostPort> visited;
+    for (const auto &transporter : manager->builtTransporters) {
+        visited.emplace_back(transporter->rpcClient->WorkerAddress());
+        EXPECT_EQ(transporter->createCount, 1);
     }
+    auto expectedCoverage = routeOrder;
+    std::sort(visited.begin(), visited.end());
+    std::sort(expectedCoverage.begin(), expectedCoverage.end());
+    EXPECT_EQ(visited, expectedCoverage);
 }
 
 TEST_F(RoutedCreateRedirectTest, StaleCandidateFallsBackToRemainingRoute)
@@ -6787,7 +6808,11 @@ TEST_F(RoutedCreateRedirectTest, StaleCandidateFallsBackToRemainingRoute)
     const auto rc = Create(buffer);
     ASSERT_TRUE(rc.IsOk()) << rc.ToString();
     ASSERT_NE(buffer, nullptr);
-    EXPECT_EQ(buffer->bufferInfo_->workerAddr, routeOrder[1]);
+    // The stale-candidate fallback target is not fixed under randomized failover spread; it
+    // must simply avoid the rejecting worker.
+    const auto &landed = buffer->bufferInfo_->workerAddr;
+    EXPECT_NE(landed, routeOrder.front());
+    EXPECT_NE(std::find(workers.begin(), workers.end(), landed), workers.end());
     EXPECT_EQ(manager->builtTransporters.size(), 2U);
 }
 
@@ -6806,9 +6831,10 @@ TEST(ObjectClientTransportTest, CoordinatorSetReachesFourthWorkerAfterThreeAdmis
         routeOrder.emplace_back(selected);
     }
     auto manager = std::make_shared<FakeDataPlaneManager>();
-    manager->configureTransporter = [remaining = routeOrder.back()](const HostPort &address,
-                                                                   FakeTransporter &transporter) {
-        if (address != remaining) {
+    // Randomized failover spread makes the retry order unspecified: the first three distinct
+    // workers reject admission and the walk succeeds on the fourth one, whichever it is.
+    manager->configureTransporter = [built = 0](const HostPort &, FakeTransporter &transporter) mutable {
+        if (built++ < 3) {
             WorkerRedirectPb redirect;
             redirect.set_request_not_executed(true);
             transporter.createStatuses.emplace_back(
@@ -6835,10 +6861,17 @@ TEST(ObjectClientTransportTest, CoordinatorSetReachesFourthWorkerAfterThreeAdmis
 
     EXPECT_TRUE(rc.IsOk()) << rc.ToString();
     ASSERT_EQ(manager->builtTransporters.size(), 4U);
-    for (size_t i = 0; i < routeOrder.size(); ++i) {
-        EXPECT_EQ(manager->builtTransporters[i]->rpcClient->WorkerAddress(), routeOrder[i]);
-        EXPECT_EQ(manager->builtTransporters[i]->createCount, 1);
+    // Randomized failover spread makes the retry order unspecified; the walk must cover every
+    // worker exactly once and end on the only admitting one.
+    std::vector<HostPort> visited;
+    for (const auto &transporter : manager->builtTransporters) {
+        visited.emplace_back(transporter->rpcClient->WorkerAddress());
+        EXPECT_EQ(transporter->createCount, 1);
     }
+    auto expectedCoverage = routeOrder;
+    std::sort(visited.begin(), visited.end());
+    std::sort(expectedCoverage.begin(), expectedCoverage.end());
+    EXPECT_EQ(visited, expectedCoverage);
     EXPECT_EQ(manager->builtTransporters.back()->setCount, 1);
     EXPECT_EQ(manager->builtTransporters.back()->setPayloads, std::vector<std::string>({ "data" }));
 }
@@ -6858,11 +6891,15 @@ TEST(ObjectClientTransportTest, CoordinatorSetCountsPreviouslyEvictedWorkerInRet
         routeOrder.emplace_back(selected);
     }
     auto manager = std::make_shared<FakeDataPlaneManager>();
-    manager->configureTransporter = [remaining = routeOrder.back(), disconnected = routeOrder.front()](const HostPort &address,
-                                                                   FakeTransporter &transporter) {
+    // The deterministic owner fails with a disconnect and is evicted from routing; randomized
+    // failover spread makes the remaining order unspecified, so three of the four survivors
+    // reject admission by visit position and the walk succeeds on the last distinct one — the
+    // budget still spans all five workers including the evicted owner.
+    manager->configureTransporter = [disconnected = routeOrder.front(),
+                                     built = 0](const HostPort &address, FakeTransporter &transporter) mutable {
         if (address == disconnected) {
             transporter.createStatuses.emplace_back(K_CLIENT_WORKER_DISCONNECT, "Connection closed before Create");
-        } else if (address != remaining) {
+        } else if (built++ < 3) {
             WorkerRedirectPb redirect;
             redirect.set_request_not_executed(true);
             transporter.createStatuses.emplace_back(
@@ -6889,10 +6926,17 @@ TEST(ObjectClientTransportTest, CoordinatorSetCountsPreviouslyEvictedWorkerInRet
 
     EXPECT_TRUE(rc.IsOk()) << rc.ToString();
     ASSERT_EQ(manager->builtTransporters.size(), 5U);
-    for (size_t i = 0; i < routeOrder.size(); ++i) {
-        EXPECT_EQ(manager->builtTransporters[i]->rpcClient->WorkerAddress(), routeOrder[i]);
-        EXPECT_EQ(manager->builtTransporters[i]->createCount, 1);
+    // Randomized failover spread makes the retry order unspecified; the budget must still
+    // cover every worker exactly once and end on the only admitting one.
+    std::vector<HostPort> visited;
+    for (const auto &transporter : manager->builtTransporters) {
+        visited.emplace_back(transporter->rpcClient->WorkerAddress());
+        EXPECT_EQ(transporter->createCount, 1);
     }
+    auto expectedCoverage = routeOrder;
+    std::sort(visited.begin(), visited.end());
+    std::sort(expectedCoverage.begin(), expectedCoverage.end());
+    EXPECT_EQ(visited, expectedCoverage);
     EXPECT_EQ(manager->builtTransporters.back()->setCount, 1);
     EXPECT_EQ(manager->builtTransporters.back()->setPayloads, std::vector<std::string>({ "data" }));
 }
@@ -6996,6 +7040,94 @@ TEST(ObjectClientTransportTest, CoordinatorRedirectCannotOverrideRequiredSameNod
     object_cache::SetRouteContext route;
 
     EXPECT_EQ(client.SelectSetRoute("strict-placement", {}, route, { worker }).GetCode(), K_NO_AVAILABLE_WORKER);
+}
+
+TEST(ObjectClientTransportTest, RoutedMSetRouteGroupsMoveQuarantinedOwnerCohortIntact)
+{
+    std::vector<HostPort> workers;
+    for (int i = 0; i < 10; ++i) {
+        workers.push_back(MakeAddress(31540 + i));
+    }
+    ConnectOptions options;
+    options.host = workers.front().Host();
+    options.port = workers.front().Port();
+    object_cache::ObjectClientImpl client(options);
+    client.dataPlacementPolicy_ = DataPlacementPolicy::PREFERRED_META_OWNER;
+    client.ubHealthFilter_ = std::make_shared<UbHealthFilter>();
+    std::atomic_store(&client.routing_, MakeRouting(workers));
+
+    std::vector<std::string> keys;
+    for (int i = 0; i < 200; ++i) {
+        keys.push_back("mset-migration-key-" + std::to_string(i));
+    }
+    std::vector<StringView> values(keys.size());
+    std::vector<object_cache::MSetRouteGroup> baseline;
+    ASSERT_TRUE(client.BuildMSetRouteGroups(keys, values, baseline).IsOk());
+    ASSERT_GE(baseline.size(), 2U);
+
+    size_t largest = 0;
+    for (size_t i = 1; i < baseline.size(); ++i) {
+        if (baseline[i].keys.size() > baseline[largest].keys.size()) {
+            largest = i;
+        }
+    }
+    const auto quarantined = baseline[largest].worker;
+    const auto quarantinedKeys = baseline[largest].keys;
+    ASSERT_FALSE(quarantinedKeys.empty());
+    ASSERT_TRUE(client.ubHealthFilter_->ReportWriteTargetFailure(
+        quarantined, Status(K_URMA_ERROR, "remote ack timeout"), std::nullopt, URMA_REMOTE_ACK_TIMEOUT_STATUS));
+
+    std::vector<object_cache::MSetRouteGroup> migrated;
+    ASSERT_TRUE(client.BuildMSetRouteGroups(keys, values, migrated).IsOk());
+    EXPECT_EQ(migrated.size(), baseline.size() - 1);
+
+    std::unordered_map<std::string, HostPort> placement;
+    for (const auto &group : migrated) {
+        EXPECT_NE(group.worker.ToString(), quarantined.ToString());
+        for (const auto &key : group.keys) {
+            placement[key] = group.worker;
+        }
+    }
+    EXPECT_EQ(placement.size(), keys.size());
+    const auto &cohortOwner = placement[quarantinedKeys.front()];
+    for (const auto &key : quarantinedKeys) {
+        EXPECT_EQ(placement[key].ToString(), cohortOwner.ToString());
+    }
+}
+
+TEST(ObjectClientTransportTest, RoutedMSetRetryGroupKeepsRequiredSameNodePolicy)
+{
+    std::vector<HostPort> workers;
+    for (int i = 0; i < 10; ++i) {
+        workers.push_back(MakeAddress(31560 + i));
+    }
+    const auto routing = MakeRouting(workers);
+    ASSERT_NE(routing, nullptr);
+
+    ConnectOptions options;
+    options.host = workers.front().Host();
+    options.port = workers.front().Port();
+    object_cache::ObjectClientImpl strictClient(options);
+    strictClient.dataPlacementPolicy_ = DataPlacementPolicy::REQUIRED_SAME_NODE;
+    std::atomic_store(&strictClient.routing_, routing);
+
+    object_cache::MSetRouteGroup group;
+    group.worker = workers[0];
+    group.keys = { "mset-retry-strict-key" };
+    std::vector<object_cache::MSetRouteGroup> retryGroups;
+    // No same-node survivor exists in this ring, so a REQUIRED_SAME_NODE retry must fail instead
+    // of silently degrading to a remote worker.
+    const auto rc = strictClient.BuildMSetRetryRouteGroups(group, { workers[0] }, retryGroups);
+    EXPECT_EQ(rc.GetCode(), K_NO_AVAILABLE_WORKER);
+    EXPECT_TRUE(retryGroups.empty());
+
+    object_cache::ObjectClientImpl metaOwnerClient(options);
+    metaOwnerClient.dataPlacementPolicy_ = DataPlacementPolicy::PREFERRED_META_OWNER;
+    std::atomic_store(&metaOwnerClient.routing_, routing);
+    ASSERT_TRUE(metaOwnerClient.BuildMSetRetryRouteGroups(group, { workers[0] }, retryGroups).IsOk());
+    ASSERT_EQ(retryGroups.size(), 1U);
+    EXPECT_NE(retryGroups.front().worker.ToString(), workers[0].ToString());
+    EXPECT_EQ(retryGroups.front().keys.front(), "mset-retry-strict-key");
 }
 
 TEST(ObjectClientTransportTest, RoutedPublishReplaysScaleDownOnRemainingWorker)

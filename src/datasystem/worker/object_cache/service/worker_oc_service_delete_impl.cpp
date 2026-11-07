@@ -273,9 +273,18 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyMetaFromMaster(const std::vector<
             LOG(WARNING) << "get master api failed. masterAddr=" << masterAddr.ToString();
             continue;
         }
+        // Observe only actual transport attempts: the outer helper may return a local deadline
+        // with zero RPCs sent or after fully answered meta-moving retries, which is not peer
+        // failure evidence.
         std::function<Status(DeleteAllCopyMetaReqPb &, DeleteAllCopyMetaRspPb &)> func =
-            [&workerMasterApi](DeleteAllCopyMetaReqPb &deleteReq, DeleteAllCopyMetaRspPb &deleteRsp) {
-                return workerMasterApi->DeleteAllCopyMeta(deleteReq, deleteRsp);
+            [this, &workerMasterApi](DeleteAllCopyMetaReqPb &deleteReq, DeleteAllCopyMetaRspPb &deleteRsp) {
+                auto observation = BeginMetadataRpcObservation(workerMasterApi);
+                RpcAttemptObservation attempt;
+                Status rc = workerMasterApi->DeleteAllCopyMeta(deleteReq, deleteRsp, &attempt);
+                if (attempt.dispatched) {
+                    ObserveMetadataRpc(observation, attempt.lastAttemptStatus);
+                }
+                return rc;
             };
         Status status = RedirectRetryWhenMetasMoving(deleteReq, deleteRsp, func);
         Status recvRc(static_cast<StatusCode>(deleteRsp.last_rc().error_code()), deleteRsp.last_rc().error_msg());
@@ -294,7 +303,12 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyMetaFromMaster(const std::vector<
                     workerMasterApiManager_->GetWorkerMasterApi(redirectMasterAddr);
                 CHECK_FAIL_RETURN_STATUS(redirectWorkerMasterApi != nullptr, K_RUNTIME_ERROR,
                                          "hash master get failed, DeleteAllCopyMetaFromMaster failed");
-                status = redirectWorkerMasterApi->DeleteAllCopyMeta(redirectDeleteReq, redirectDeleteRsp);
+                auto redirectObservation = BeginMetadataRpcObservation(redirectWorkerMasterApi);
+                RpcAttemptObservation attempt;
+                status = redirectWorkerMasterApi->DeleteAllCopyMeta(redirectDeleteReq, redirectDeleteRsp, &attempt);
+                if (attempt.dispatched) {
+                    ObserveMetadataRpc(redirectObservation, attempt.lastAttemptStatus);
+                }
                 recvRc =
                     Status(static_cast<StatusCode>(deleteRsp.last_rc().error_code()), deleteRsp.last_rc().error_msg());
                 RETURN_IF_NOT_OK(

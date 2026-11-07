@@ -238,12 +238,15 @@ public:
 
     Status KeepAlive(const std::string &, int64_t &ttlMs, int64_t &remainingTtlMs, int32_t, std::string *coordinatorId,
                      const std::string &expectedCoordinatorId, int64_t expectedModRevision,
-                     const std::vector<std::string> &failedTargets = {}) override
+                     const std::vector<std::string> &failedTargets = {}, uint64_t summaryVersion = 0,
+                     const std::vector<uint64_t> &failedTargetGenerations = {}) override
     {
         std::unique_lock<std::mutex> lock(mutex_);
         lastKeepAliveCoordinatorId_ = expectedCoordinatorId;
         lastKeepAliveModRevision_ = expectedModRevision;
         lastFailedTargets_ = failedTargets;
+        lastFailedTargetGenerations_ = failedTargetGenerations;
+        lastKeepAliveSummaryVersion_ = summaryVersion;
         ++keepAliveCalls_;
         keepAliveEntered_ = true;
         watchCv_.notify_all();
@@ -555,6 +558,12 @@ public:
         return lastFailedTargets_;
     }
 
+    std::vector<uint64_t> LastFailedTargetGenerations() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return lastFailedTargetGenerations_;
+    }
+
     void ReplaceMembershipIncarnation()
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -623,6 +632,8 @@ private:
     size_t identityProbes_{ 0 };
     size_t keepAliveCalls_{ 0 };
     std::vector<std::string> lastFailedTargets_;
+    std::vector<uint64_t> lastFailedTargetGenerations_;
+    uint64_t lastKeepAliveSummaryVersion_{ 0 };
     int64_t putVersion_{ 0 };
     int64_t putRevision_{ 0 };
     std::vector<KeyValueEntry> rangeEntries_;
@@ -1205,6 +1216,27 @@ TEST(DsCoordinationBackendSessionTest, PeerRpcFailureQualificationMatchesReporte
     EXPECT_FALSE(backend.IsPeerRpcFailureReported(target));
 }
 
+TEST(DsCoordinationBackendSessionTest, SparseFailureStreamStillArms)
+{
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restore([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    DeterministicCoordinatorProxy proxy;
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    const HostPort target("127.0.0.1", 12002);
+    const auto start = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
+
+    backend.RecordPeerRpcFailure(target, start);
+    backend.RecordPeerRpcFailure(target, start + std::chrono::seconds(2));
+    backend.RecordPeerRpcFailure(target, start + std::chrono::seconds(4));
+    backend.RecordPeerRpcFailure(target, start + std::chrono::seconds(6));
+
+    EXPECT_TRUE(backend.IsPeerRpcFailureReported(target));
+    const auto failedTargets = backend.GetFailedTargets(start + std::chrono::seconds(6));
+    ASSERT_EQ(failedTargets.size(), 1U);
+    EXPECT_EQ(failedTargets.front(), "127.0.0.1:12002");
+}
+
 TEST(DsCoordinationBackendSessionTest, ClearPeerRpcFailureObservationsDropsAllPreExitEvidence)
 {
     const auto savedNodeTimeout = FLAGS_node_timeout_s;
@@ -1229,7 +1261,7 @@ TEST(DsCoordinationBackendSessionTest, ClearPeerRpcFailureObservationsDropsAllPr
     EXPECT_FALSE(backend.ConsumeImmediateReportSignal());
 }
 
-TEST(DsCoordinationBackendSessionTest, PeerRpcFailureSummaryExpiresWithoutNewFailures)
+TEST(DsCoordinationBackendSessionTest, PeerRpcFailureSummarySurvivesSilenceUntilSuccess)
 {
     const auto savedNodeTimeout = FLAGS_node_timeout_s;
     FLAGS_node_timeout_s = 3;
@@ -1250,11 +1282,236 @@ TEST(DsCoordinationBackendSessionTest, PeerRpcFailureSummaryExpiresWithoutNewFai
               (std::vector<std::string>{ "127.0.0.1:12002" }));
     EXPECT_TRUE(backend.ConsumeImmediateReportSignal());
 
-    EXPECT_TRUE(backend.GetFailedTargets(start + std::chrono::milliseconds(7'501)).empty());
+    // Silence never clears evidence: only a successful peer RPC or a membership change does.
+    EXPECT_EQ(backend.GetFailedTargets(start + std::chrono::milliseconds(7'501)),
+              (std::vector<std::string>{ "127.0.0.1:12002" }));
+    EXPECT_EQ(backend.GetFailedTargets(start + std::chrono::seconds(250)),
+              (std::vector<std::string>{ "127.0.0.1:12002" }));
+
+    backend.RecordPeerRpcSuccess(target);
+    EXPECT_TRUE(backend.GetFailedTargets(start + std::chrono::seconds(251)).empty());
+    // Clearing a reported target wakes the keepalive so the shrunken summary is delivered
+    // promptly and the Coordinator retracts the vote.
+    EXPECT_TRUE(backend.ConsumeImmediateReportSignal());
     EXPECT_FALSE(backend.ConsumeImmediateReportSignal());
 }
 
-TEST(DsCoordinationBackendSessionTest, SparsePeerRpcFailuresDoNotAccumulateAcrossFailureWindow)
+TEST(DsCoordinationBackendSessionTest, ReportedTargetStaysInSummaryAfterKeepAliveDelivery)
+{
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restore([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    ASSERT_TRUE(proxy.WaitForKeepAliveRevision(1, 1, std::chrono::milliseconds(500)));
+    const auto callsBeforeReport = proxy.KeepAliveCalls();
+
+    const HostPort target("127.0.0.1", 12002);
+    const auto qualifiedAt = std::chrono::steady_clock::now();
+    const auto start = qualifiedAt - std::chrono::milliseconds(1'500);
+    backend.RecordPeerRpcFailure(target, start);
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(750));
+    backend.RecordPeerRpcFailure(target, qualifiedAt);
+
+    ASSERT_TRUE(proxy.WaitForKeepAliveRevision(1, callsBeforeReport + 1, std::chrono::milliseconds(1'000)));
+    EXPECT_EQ(proxy.LastFailedTargets(), (std::vector<std::string>{ target.ToString() }));
+
+    // Qualification rolled the accumulation at the reporting threshold, but the sticky reported
+    // flag keeps the target listed so every keepalive still asserts it.
+    EXPECT_EQ(backend.GetFailedTargets(std::chrono::steady_clock::now()),
+              (std::vector<std::string>{ target.ToString() }));
+
+    backend.RecordPeerRpcSuccess(target);
+    EXPECT_TRUE(backend.GetFailedTargets(std::chrono::steady_clock::now()).empty());
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
+}
+
+TEST(DsCoordinationBackendSessionTest, QualificationRollsEvidenceGenerationAcrossBatches)
+{
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restore([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    ASSERT_TRUE(proxy.WaitForKeepAliveRevision(1, 1, std::chrono::milliseconds(500)));
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
+
+    const HostPort target("127.0.0.1", 12002);
+    const auto batchOne = std::chrono::steady_clock::time_point(std::chrono::seconds(100));
+    backend.RecordPeerRpcFailure(target, batchOne - std::chrono::milliseconds(1'500));
+    backend.RecordPeerRpcFailure(target, batchOne - std::chrono::milliseconds(750));
+    backend.RecordPeerRpcFailure(target, batchOne);
+    EXPECT_TRUE(backend.ConsumeImmediateReportSignal());
+    std::vector<uint64_t> generations;
+    EXPECT_EQ(backend.GetFailedTargets(batchOne, &generations), (std::vector<std::string>{ target.ToString() }));
+    EXPECT_EQ(generations, (std::vector<uint64_t>{ 1 }));
+
+    ASSERT_TRUE(backend.RenewKeepAliveOnce().IsOk());
+    EXPECT_EQ(proxy.LastFailedTargets(), (std::vector<std::string>{ target.ToString() }));
+    EXPECT_EQ(proxy.LastFailedTargetGenerations(), (std::vector<uint64_t>{ 1 }));
+
+    // Repeated keepalive deliveries never reset the accumulation: the generation stays at the
+    // last qualified window until a fresh batch re-qualifies.
+    ASSERT_TRUE(backend.RenewKeepAliveOnce().IsOk());
+    EXPECT_EQ(proxy.LastFailedTargetGenerations(), (std::vector<uint64_t>{ 1 }));
+
+    const auto batchTwo = batchOne + std::chrono::seconds(10);
+    backend.RecordPeerRpcFailure(target, batchTwo - std::chrono::milliseconds(1'500));
+    backend.RecordPeerRpcFailure(target, batchTwo - std::chrono::milliseconds(750));
+    backend.RecordPeerRpcFailure(target, batchTwo);
+    EXPECT_TRUE(backend.ConsumeImmediateReportSignal());
+    EXPECT_EQ(backend.GetFailedTargets(batchTwo, &generations), (std::vector<std::string>{ target.ToString() }));
+    EXPECT_EQ(generations, (std::vector<uint64_t>{ 2 }));
+
+    ASSERT_TRUE(backend.RenewKeepAliveOnce().IsOk());
+    EXPECT_EQ(proxy.LastFailedTargetGenerations(), (std::vector<uint64_t>{ 2 }));
+}
+
+TEST(DsCoordinationBackendSessionTest, ReportedEntryRequalifiesNewBatchOnKeepAliveTime)
+{
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restore([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    ASSERT_TRUE(proxy.WaitForKeepAliveRevision(1, 1, std::chrono::milliseconds(500)));
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
+
+    const HostPort target("127.0.0.1", 12002);
+    const auto batchOne = std::chrono::steady_clock::time_point(std::chrono::seconds(100));
+    backend.RecordPeerRpcFailure(target, batchOne - std::chrono::milliseconds(1'500));
+    backend.RecordPeerRpcFailure(target, batchOne - std::chrono::milliseconds(750));
+    backend.RecordPeerRpcFailure(target, batchOne);
+    std::vector<uint64_t> generations;
+    EXPECT_EQ(backend.GetFailedTargets(batchOne, &generations), (std::vector<std::string>{ target.ToString() }));
+    ASSERT_EQ(generations.size(), 1U);
+    const uint64_t firstGeneration = generations.front();
+
+    // The generation-one summary is actually delivered; the entry itself stays sticky because no
+    // success clears it.
+    ASSERT_TRUE(backend.RenewKeepAliveOnce().IsOk());
+    EXPECT_EQ(proxy.LastFailedTargets(), (std::vector<std::string>{ target.ToString() }));
+    EXPECT_EQ(proxy.LastFailedTargetGenerations(), (std::vector<uint64_t>{ firstGeneration }));
+
+    // The next batch's three failures all land inside the window and no fourth failure ever
+    // arrives: the record path cannot re-qualify them.
+    const auto batchTwo = batchOne + std::chrono::seconds(10);
+    backend.RecordPeerRpcFailure(target, batchTwo);
+    backend.RecordPeerRpcFailure(target, batchTwo + std::chrono::milliseconds(100));
+    backend.RecordPeerRpcFailure(target, batchTwo + std::chrono::milliseconds(200));
+    EXPECT_EQ(backend.GetFailedTargets(batchTwo + std::chrono::milliseconds(200), &generations),
+              (std::vector<std::string>{ target.ToString() }));
+    EXPECT_EQ(generations, (std::vector<uint64_t>{ firstGeneration }));
+
+    // Only keepalive time advances past the window: the read path must hand the already reported
+    // entry a fresh generation so the Coordinator can re-arm its probe backoff immediately.
+    EXPECT_EQ(backend.GetFailedTargets(batchTwo + std::chrono::milliseconds(2'000), &generations),
+              (std::vector<std::string>{ target.ToString() }));
+    ASSERT_EQ(generations.size(), 1U);
+    EXPECT_GT(generations.front(), firstGeneration);
+    const uint64_t secondGeneration = generations.front();
+
+    // The rolled count keeps repeated reads stable at the new generation.
+    EXPECT_EQ(backend.GetFailedTargets(batchTwo + std::chrono::milliseconds(2'100), &generations),
+              (std::vector<std::string>{ target.ToString() }));
+    EXPECT_EQ(generations, (std::vector<uint64_t>{ secondGeneration }));
+
+    // The re-qualified wave rides the next keepalive summary unchanged.
+    ASSERT_TRUE(backend.RenewKeepAliveOnce().IsOk());
+    EXPECT_EQ(proxy.LastFailedTargets(), (std::vector<std::string>{ target.ToString() }));
+    EXPECT_EQ(proxy.LastFailedTargetGenerations(), (std::vector<uint64_t>{ secondGeneration }));
+}
+
+TEST(DsCoordinationBackendSessionTest, EvidenceGenerationSurvivesSuccessClearAcrossBatches)
+{
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restore([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveStatus(Status::OK());
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    ASSERT_TRUE(proxy.WaitForKeepAliveRevision(1, 1, std::chrono::milliseconds(500)));
+    ASSERT_TRUE(backend.ShutdownEventSources().IsOk());
+
+    const HostPort target("127.0.0.1", 12002);
+    const auto batchOne = std::chrono::steady_clock::time_point(std::chrono::seconds(100));
+    backend.RecordPeerRpcFailure(target, batchOne - std::chrono::milliseconds(1'500));
+    backend.RecordPeerRpcFailure(target, batchOne - std::chrono::milliseconds(750));
+    backend.RecordPeerRpcFailure(target, batchOne);
+    std::vector<uint64_t> generations;
+    EXPECT_EQ(backend.GetFailedTargets(batchOne, &generations), (std::vector<std::string>{ target.ToString() }));
+    EXPECT_EQ(generations, (std::vector<uint64_t>{ 1 }));
+
+    // The generation-one summary is actually delivered before the success clears the entry.
+    ASSERT_TRUE(backend.RenewKeepAliveOnce().IsOk());
+    EXPECT_EQ(proxy.LastFailedTargets(), (std::vector<std::string>{ target.ToString() }));
+    EXPECT_EQ(proxy.LastFailedTargetGenerations(), (std::vector<uint64_t>{ 1 }));
+
+    // The success erases the entry, but the retracting summary is deliberately never delivered:
+    // the Coordinator still holds the generation-one vote when the next batch qualifies.
+    backend.RecordPeerRpcSuccess(target);
+    EXPECT_TRUE(backend.GetFailedTargets(batchOne + std::chrono::seconds(1)).empty());
+
+    const auto batchTwo = batchOne + std::chrono::seconds(10);
+    backend.RecordPeerRpcFailure(target, batchTwo - std::chrono::milliseconds(1'500));
+    backend.RecordPeerRpcFailure(target, batchTwo - std::chrono::milliseconds(750));
+    backend.RecordPeerRpcFailure(target, batchTwo);
+    EXPECT_EQ(backend.GetFailedTargets(batchTwo, &generations), (std::vector<std::string>{ target.ToString() }));
+    ASSERT_EQ(generations.size(), 1U);
+    // A generation reused from the erased entry would read as a sticky re-assertion; the
+    // worker-lifetime source must put the new wave above the old value.
+    EXPECT_GT(generations.front(), 1U);
+
+    ASSERT_TRUE(backend.RenewKeepAliveOnce().IsOk());
+    EXPECT_EQ(proxy.LastFailedTargetGenerations(), generations);
+}
+
+TEST(DsCoordinationBackendSessionTest, WindowMaturedQualificationAssignsFreshGeneration)
+{
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restore([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    DeterministicCoordinatorProxy proxy;
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    const HostPort target("127.0.0.1", 12002);
+    const auto start = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
+
+    // Three failures land inside the qualification window: the record path cannot qualify them.
+    backend.RecordPeerRpcFailure(target, start);
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(100));
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(200));
+    EXPECT_TRUE(backend.GetFailedTargets(start + std::chrono::milliseconds(200)).empty());
+
+    // Only keepalive time advances beyond the window. The read-path qualification must hand out a
+    // fresh generation instead of listing the target at generation zero.
+    std::vector<uint64_t> generations;
+    EXPECT_EQ(backend.GetFailedTargets(start + std::chrono::milliseconds(2'000), &generations),
+              (std::vector<std::string>{ target.ToString() }));
+    EXPECT_EQ(generations, (std::vector<uint64_t>{ 1 }));
+
+    // The qualified entry stays sticky at that generation on later reads.
+    EXPECT_EQ(backend.GetFailedTargets(start + std::chrono::milliseconds(3'000), &generations),
+              (std::vector<std::string>{ target.ToString() }));
+    EXPECT_EQ(generations, (std::vector<uint64_t>{ 1 }));
+
+    // A later qualified batch still advances beyond it.
+    const auto nextBatch = start + std::chrono::seconds(10);
+    backend.RecordPeerRpcFailure(target, nextBatch - std::chrono::milliseconds(1'500));
+    backend.RecordPeerRpcFailure(target, nextBatch - std::chrono::milliseconds(750));
+    backend.RecordPeerRpcFailure(target, nextBatch);
+    EXPECT_EQ(backend.GetFailedTargets(nextBatch, &generations), (std::vector<std::string>{ target.ToString() }));
+    ASSERT_EQ(generations.size(), 1U);
+    EXPECT_GT(generations.front(), 1U);
+}
+
+TEST(DsCoordinationBackendSessionTest, SparsePeerRpcFailuresAccumulateAcrossFailureWindow)
 {
     const auto savedNodeTimeout = FLAGS_node_timeout_s;
     FLAGS_node_timeout_s = 3;
@@ -1266,10 +1523,140 @@ TEST(DsCoordinationBackendSessionTest, SparsePeerRpcFailuresDoNotAccumulateAcros
 
     backend.RecordPeerRpcFailure(target, start);
     backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(2'000));
-    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(4'000));
+    EXPECT_TRUE(backend.GetFailedTargets(start + std::chrono::milliseconds(2'000)).empty());
 
-    EXPECT_TRUE(backend.GetFailedTargets(start + std::chrono::milliseconds(4'000)).empty());
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(4'000));
+    const auto failedTargets = backend.GetFailedTargets(start + std::chrono::milliseconds(4'000));
+    ASSERT_EQ(failedTargets.size(), 1U);
+    EXPECT_EQ(failedTargets.front(), "127.0.0.1:12002");
+    EXPECT_TRUE(backend.ConsumeImmediateReportSignal());
     EXPECT_FALSE(backend.ConsumeImmediateReportSignal());
+}
+
+TEST(DsCoordinationBackendSessionTest, LateRpcFailureDroppedWhenTargetLeftTopology)
+{
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restore([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    DeterministicCoordinatorProxy proxy;
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    const HostPort target("127.0.0.1", 12002);
+    const auto start = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
+
+    backend.RecordPeerRpcFailure(target, start, "member-a", [] { return false; });
+    EXPECT_FALSE(backend.IsPeerRpcFailureReported(target));
+    EXPECT_TRUE(backend.GetFailedTargets(start).empty());
+    EXPECT_FALSE(backend.ConsumeImmediateReportSignal());
+
+    backend.RecordPeerRpcFailure(target, start, "member-a", [] { return true; });
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(2'000), "member-a", [] { return true; });
+    EXPECT_TRUE(backend.GetFailedTargets(start + std::chrono::milliseconds(2'000)).empty());
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(4'000), "member-a", [] { return true; });
+    EXPECT_TRUE(backend.IsPeerRpcFailureReported(target));
+    EXPECT_EQ(backend.GetFailedTargets(start + std::chrono::milliseconds(4'000)),
+              (std::vector<std::string>{ "127.0.0.1:12002" }));
+}
+
+TEST(DsCoordinationBackendSessionTest, RemovalCleanupBlocksLateFailureRecordAndLeavesNoResidue)
+{
+    DeterministicCoordinatorProxy proxy;
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    const HostPort target("127.0.0.1", 12002);
+
+    std::promise<void> recorderEntered;
+    auto recorderEnteredFuture = recorderEntered.get_future();
+    std::promise<void> release;
+    auto releaseFuture = release.get_future().share();
+    std::atomic<bool> recorderTimedOut{ false };
+    // Declare both futures before the release guard: unwinding releases the parked recorder
+    // before any future destructor can join it.
+    std::future<void> recorder;
+    std::future<void> discard;
+    std::atomic<bool> released{ false };
+    auto releaseRecorder = [&] {
+        if (!released.exchange(true)) {
+            release.set_value();
+        }
+    };
+    Raii releaseOnExit(releaseRecorder);
+
+    recorder = std::async(std::launch::async, [&] {
+        backend.RecordPeerRpcFailure(target, std::chrono::steady_clock::time_point(std::chrono::seconds(10)),
+                                     "member-a", [&]() {
+                                          // The presence callback runs under the recording lock:
+                                          // readiness proves the recorder holds rpcFailedMutex_,
+                                          // so a concurrent removal cleanup must block behind it.
+                                          recorderEntered.set_value();
+                                          recorderTimedOut.store(releaseFuture.wait_for(std::chrono::seconds(5))
+                                                                 != std::future_status::ready);
+                                          return true;
+                                      });
+    });
+    ASSERT_EQ(recorderEnteredFuture.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+
+    discard = std::async(std::launch::async, [&] { backend.DiscardPeerRpcFailure(target); });
+    ASSERT_EQ(discard.wait_for(std::chrono::milliseconds(300)), std::future_status::timeout)
+        << "removal cleanup slipped past the paused recorder";
+
+    releaseRecorder();
+    ASSERT_EQ(recorder.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    recorder.get();
+    ASSERT_EQ(discard.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    EXPECT_FALSE(recorderTimedOut.load());
+
+    EXPECT_FALSE(backend.IsPeerRpcFailureReported(target));
+    EXPECT_TRUE(backend.GetFailedTargets(std::chrono::steady_clock::now()).empty());
+}
+
+TEST(DsCoordinationBackendSessionTest, MemberIdentityBindsEvidenceToInitiatedIncarnation)
+{
+    const auto savedNodeTimeout = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+    Raii restore([savedNodeTimeout] { FLAGS_node_timeout_s = savedNodeTimeout; });
+    DeterministicCoordinatorProxy proxy;
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    const HostPort target("127.0.0.1", 12002);
+    const auto start = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
+
+    // Barrier 1: a failure whose initiated member id was already replaced must not build evidence,
+    // even while the address is still part of the topology.
+    backend.RecordPeerRpcFailure(target, start, "member-old", [] { return false; });
+    EXPECT_TRUE(backend.GetFailedTargets(start).empty());
+    EXPECT_FALSE(backend.ConsumeImmediateReportSignal());
+
+    // The departing member qualifies its own evidence first.
+    backend.RecordPeerRpcFailure(target, start, "member-old", [] { return true; });
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(2'000), "member-old",
+                                 [] { return true; });
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(4'000), "member-old",
+                                 [] { return true; });
+    EXPECT_EQ(backend.GetFailedTargets(start + std::chrono::milliseconds(4'000)),
+              (std::vector<std::string>{ "127.0.0.1:12002" }));
+
+    // A failure bound to the replacement resets the lineage: fresh counters, no sticky report.
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(4'100), "member-new",
+                                 [] { return true; });
+    EXPECT_TRUE(backend.GetFailedTargets(start + std::chrono::milliseconds(4'100)).empty());
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(5'600), "member-new",
+                                 [] { return true; });
+    backend.RecordPeerRpcFailure(target, start + std::chrono::milliseconds(5'700), "member-new",
+                                 [] { return true; });
+    EXPECT_EQ(backend.GetFailedTargets(start + std::chrono::milliseconds(5'700)),
+              (std::vector<std::string>{ "127.0.0.1:12002" }));
+
+    // Barrier 2: a resurrected success bound to the departed member must not clear the
+    // replacement's evidence.
+    backend.RecordPeerRpcSuccess(target, "member-old");
+    EXPECT_EQ(backend.GetFailedTargets(start + std::chrono::milliseconds(5'800)),
+              (std::vector<std::string>{ "127.0.0.1:12002" }));
+
+    // Barrier 3: the publication cleanup scoped to the departed member must not wipe the
+    // replacement's evidence, while the replacement's own scope still clears it.
+    backend.DiscardPeerRpcFailure(target, "member-old");
+    EXPECT_EQ(backend.GetFailedTargets(start + std::chrono::milliseconds(5'900)),
+              (std::vector<std::string>{ "127.0.0.1:12002" }));
+    backend.DiscardPeerRpcFailure(target, "member-new");
+    EXPECT_TRUE(backend.GetFailedTargets(start + std::chrono::milliseconds(6'000)).empty());
 }
 
 TEST(DsCoordinationBackendSessionTest, ContinuousPeerRpcFailuresReportAcrossFailureWindow)

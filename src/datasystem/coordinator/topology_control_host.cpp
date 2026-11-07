@@ -118,7 +118,7 @@ bool TopologyControlHost::Options::IsValid() const noexcept
            && reconcileInterval >= MIN_RECONCILE_INTERVAL && reconcileInterval <= MAX_RECONCILE_INTERVAL
            && startRetryInitial >= MIN_START_RETRY && startRetryInitial <= MAX_START_RETRY_INITIAL
            && startRetryMaximum >= startRetryInitial && startRetryMaximum <= MAX_START_RETRY
-           && activeFailureWindow.count() > 0 && controller.IsValid();
+           && controller.IsValid();
 }
 
 TopologyControlHost::ClusterEntry::ClusterEntry(std::string name) : clusterName(std::move(name))
@@ -290,7 +290,10 @@ void TopologyControlHost::RecordWorkerFailureSummaries(const std::string &cluste
 
 void TopologyControlHost::RecordWorkerFailureSummaries(const std::string &clusterName,
                                                        const cluster::MembershipRecord &reporter,
-                                                       const std::vector<cluster::MembershipRecord> &targets)
+                                                       const std::vector<cluster::MembershipRecord> &targets,
+                                                       uint64_t summaryVersion, int64_t membershipModRevision,
+                                                       const std::unordered_map<std::string, uint64_t>
+                                                           &generationByTarget)
 {
     if (reporter.address.empty()) {
         return;
@@ -304,8 +307,6 @@ void TopologyControlHost::RecordWorkerFailureSummaries(const std::string &cluste
         }
     }
     INJECT_POINT_NO_RETURN("TopologyControlHost.RecordWorkerFailureSummaries.afterGenerationCapture");
-    // Eligibility is evaluated later against one current topology and membership snapshot.
-    const auto now = options_.controller.now();
     std::unordered_set<std::string> reportedTargets;
     reportedTargets.reserve(targets.size());
     for (const auto &target : targets) {
@@ -315,8 +316,9 @@ void TopologyControlHost::RecordWorkerFailureSummaries(const std::string &cluste
     }
     std::vector<std::string> newTargets;
     std::vector<std::string> clearedTargets;
-    const bool shouldWake = UpdateFailureReports(clusterName, reporter, targets, reportedTargets, clusterGeneration,
-                                                 now, newTargets, clearedTargets);
+    const bool shouldWake =
+        UpdateFailureReports(clusterName, reporter, targets, reportedTargets, clusterGeneration, summaryVersion,
+                             membershipModRevision, generationByTarget, newTargets, clearedTargets);
     bool currentGeneration = false;
     {
         std::lock_guard<bthread::Mutex> lock(mutex_);
@@ -343,7 +345,9 @@ bool TopologyControlHost::UpdateFailureReports(const std::string &clusterName,
                                                const cluster::MembershipRecord &reporter,
                                                const std::vector<cluster::MembershipRecord> &targets,
                                                const std::unordered_set<std::string> &reportedTargets,
-                                               uint64_t clusterGeneration, std::chrono::steady_clock::time_point now,
+                                               uint64_t clusterGeneration, uint64_t summaryVersion,
+                                               int64_t membershipModRevision,
+                                               const std::unordered_map<std::string, uint64_t> &generationByTarget,
                                                std::vector<std::string> &newTargets,
                                                std::vector<std::string> &clearedTargets)
 {
@@ -364,14 +368,82 @@ bool TopologyControlHost::UpdateFailureReports(const std::string &clusterName,
     std::lock_guard<bthread::Mutex> lock(failureReportMutex_);
     auto clusterIter = failureReportsByCluster_.find(clusterName);
     if (clusterIter == failureReportsByCluster_.end()) {
-        if (reportedTargets.empty()) {
+        // A first empty summary still saves the version baseline when the renewal carried an
+        // accepted revision: a later resurrected stale heartbeat must be recognizable as stale.
+        if (reportedTargets.empty() && summaryVersion == 0 && membershipModRevision == 0) {
             return false;
         }
         clusterIter =
             failureReportsByCluster_.emplace(clusterName, decltype(failureReportsByCluster_)::mapped_type{}).first;
     }
     auto &clusterReports = clusterIter->second;
+    if (!AcceptSummaryVersionLocked(clusterReports, reporter, summaryVersion, membershipModRevision)) {
+        return false;
+    }
     shouldWake = ClearUnreportedTargets(clusterReports, reporter, reportedTargets, clusterGeneration, clearedTargets);
+    shouldWake =
+        ApplyReportedTargets(clusterReports, reporter, targets, clusterGeneration, generationByTarget, newTargets)
+        || shouldWake;
+    if (clusterReports.byTarget.empty()) {
+        // Keep the cluster entry while version bookkeeping remains: a later resurrected stale
+        // heartbeat must still be recognized as stale even after a full retraction.
+        if (clusterReports.lastSummaryVersionByReporter.empty()) {
+            failureReportsByCluster_.erase(clusterIter);
+        }
+    }
+    return shouldWake;
+}
+
+bool TopologyControlHost::AcceptSummaryVersionLocked(ClusterFailureReports &clusterReports,
+                                                     const cluster::MembershipRecord &reporter,
+                                                     uint64_t summaryVersion, int64_t membershipModRevision)
+{
+    // A legacy summary (summary_version unset, 0) skips only the within-incarnation summary
+    // ordering check; the accepted-revision and incarnation fences below still apply, so a
+    // resurrected pre-upgrade handler cannot retract or overwrite a replacement's votes.
+    auto &last = clusterReports.lastSummaryVersionByReporter[reporter.address];
+    if (membershipModRevision != 0 && last.membershipModRevision != 0) {
+        if (membershipModRevision < last.membershipModRevision) {
+            // The membership this handler renewed was already replaced by a newer revision:
+            // the resurrected handler must not overwrite or retract the replacement's votes.
+            return false;
+        }
+        if (membershipModRevision == last.membershipModRevision && summaryVersion != 0
+            && summaryVersion < last.version) {
+            // Resurrected stale heartbeat within the same membership revision: applying it
+            // would overwrite the reporter's newer summary with old votes.
+            return false;
+        }
+    } else {
+        if (reporter.timestamp < last.reporterTimestamp) {
+            // Stale heartbeat from an incarnation older than the newest one already applied: a
+            // restarted reporter owns newer evidence, and the old handler must not resurrect or
+            // retract its votes.
+            return false;
+        }
+        if (reporter.timestamp == last.reporterTimestamp && summaryVersion != 0
+            && summaryVersion < last.version) {
+            // Resurrected stale heartbeat within the same incarnation: applying it would
+            // overwrite the reporter's newer summary with old votes.
+            return false;
+        }
+    }
+    if (membershipModRevision != 0) {
+        last.membershipModRevision = membershipModRevision;
+    }
+    last.reporterTimestamp = reporter.timestamp;
+    last.version = summaryVersion;
+    return true;
+}
+
+bool TopologyControlHost::ApplyReportedTargets(ClusterFailureReports &clusterReports,
+                                               const cluster::MembershipRecord &reporter,
+                                               const std::vector<cluster::MembershipRecord> &targets,
+                                               uint64_t clusterGeneration,
+                                               const std::unordered_map<std::string, uint64_t> &generationByTarget,
+                                               std::vector<std::string> &newTargets)
+{
+    bool anyNewReporter = false;
     for (const auto &target : targets) {
         if (target.address.empty() || target.address == reporter.address) {
             continue;
@@ -383,19 +455,27 @@ bool TopologyControlHost::UpdateFailureReports(const std::string &clusterName,
         }
         const bool newReporter =
             reporterIter == reporters.end() || reporterIter->second.clusterGeneration != clusterGeneration;
-        if (newReporter) {
+        uint64_t evidenceGeneration = 0;
+        const auto generationIter = generationByTarget.find(target.address);
+        if (generationIter != generationByTarget.end()) {
+            evidenceGeneration = generationIter->second;
+        }
+        // A newly asserted reporter or an advanced per-target evidence generation marks a new
+        // accusation wave; re-assertions of the same generation stay silent.
+        const bool generationAdvanced = evidenceGeneration != 0
+                                        && (newReporter
+                                            || evidenceGeneration != reporterIter->second.evidenceGeneration);
+        if (newReporter || generationAdvanced) {
             newTargets.emplace_back(target.address);
+            clusterReports.evidenceVersionByTarget[target.address] = ++clusterReports.evidenceSequence;
         }
         reporters[reporter.address] =
-            FailureReportState{ now,           reporter.state,   reporter.timestamp, reporter.hostId, target.timestamp,
-                                target.hostId, clusterGeneration };
+            FailureReportState{ reporter.state,   reporter.timestamp, reporter.hostId, target.timestamp,
+                                target.hostId, clusterGeneration, evidenceGeneration };
         clusterReports.targetsByReporter[reporter.address].insert(target.address);
-        shouldWake = shouldWake || newReporter;
+        anyNewReporter = anyNewReporter || newReporter;
     }
-    if (clusterReports.empty()) {
-        failureReportsByCluster_.erase(clusterIter);
-    }
-    return shouldWake;
+    return anyNewReporter;
 }
 
 bool TopologyControlHost::ClearUnreportedTargets(ClusterFailureReports &clusterReports,
@@ -429,6 +509,9 @@ bool TopologyControlHost::ClearUnreportedTargets(ClusterFailureReports &clusterR
             ++previousIter;
         }
         if (targetIter->second.empty()) {
+            // The evidence entry must go before the byTarget node: the local `target` reference can
+            // dangle once the reporter index node was erased above.
+            clusterReports.evidenceVersionByTarget.erase(targetIter->first);
             clusterReports.byTarget.erase(targetIter);
         }
     }
@@ -496,12 +579,21 @@ void TopologyControlHost::RemoveTargetFromReporterIndex(ClusterFailureReports &c
     }
 }
 
+bool TopologyControlHost::SnapshotIsStaleForReporter(const ClusterFailureReports &clusterReports,
+                                                     const std::string &reporter, int64_t membershipSnapshotRevision)
+{
+    const auto baseline = clusterReports.lastSummaryVersionByReporter.find(reporter);
+    return baseline != clusterReports.lastSummaryVersionByReporter.end()
+           && baseline->second.membershipModRevision != 0
+           && baseline->second.membershipModRevision > membershipSnapshotRevision;
+}
+
 size_t TopologyControlHost::PruneAndCountFailureReporters(
     const cluster::TopologySnapshot &latest,
     const std::unordered_map<std::string, cluster::MembershipRecord> &eligibleReporters,
     const std::unordered_map<std::string, cluster::MembershipRecord> &membershipsByAddress, const std::string &target,
     uint64_t clusterGeneration, ClusterFailureReports &clusterReports,
-    std::unordered_map<std::string, FailureReportState> &reporters, std::chrono::steady_clock::time_point now) const
+    std::unordered_map<std::string, FailureReportState> &reporters, int64_t membershipSnapshotRevision) const
 {
     size_t validReports = 0;
     const cluster::Member *targetMember = nullptr;
@@ -516,7 +608,6 @@ size_t TopologyControlHost::PruneAndCountFailureReporters(
     const bool targetPresent = targetMembership != membershipsByAddress.end();
     for (auto reporterIter = reporters.begin(); reporterIter != reporters.end();) {
         const auto &reporter = reporterIter->first;
-        const bool expired = now - reporterIter->second.receiveTime > options_.activeFailureWindow;
         const auto reporterMembership = eligibleReporters.find(reporter);
         const bool reporterEligible = reporterMembership != eligibleReporters.end();
         const auto &state = reporterIter->second;
@@ -532,8 +623,20 @@ size_t TopologyControlHost::PruneAndCountFailureReporters(
                 || (state.targetTimestamp > 0
                     && (state.targetTimestamp != targetMembership->second.timestamp
                         || state.targetHostId != targetMembership->second.hostId)));
-        if (state.clusterGeneration != clusterGeneration || expired || !targetEligible || !reporterEligible
-            || reporter == target || reporterChanged || targetChanged) {
+        if (state.clusterGeneration != clusterGeneration || reporter == target) {
+            RemoveTargetFromReporterIndex(clusterReports, reporter, target);
+            reporterIter = reporters.erase(reporterIter);
+            continue;
+        }
+        if (SnapshotIsStaleForReporter(clusterReports, reporter, membershipSnapshotRevision)) {
+            // The reporter renewed against a membership newer than this snapshot: the view's
+            // absence or record mismatch must not erase accepted evidence. Keep the vote counted
+            // so candidacy stays continuous; the next reconcile with a fresh view recomputes.
+            ++validReports;
+            ++reporterIter;
+            continue;
+        }
+        if (!targetEligible || !reporterEligible || reporterChanged || targetChanged) {
             RemoveTargetFromReporterIndex(clusterReports, reporter, target);
             reporterIter = reporters.erase(reporterIter);
             continue;
@@ -546,7 +649,7 @@ size_t TopologyControlHost::PruneAndCountFailureReporters(
 
 std::vector<cluster::MemberIdentity> TopologyControlHost::GetIsolationCandidates(
     const std::string &clusterName, const cluster::TopologySnapshot &latest,
-    const std::vector<cluster::MembershipRecord> &memberships, std::chrono::steady_clock::time_point now)
+    const std::vector<cluster::MembershipRecord> &memberships, int64_t membershipSnapshotRevision)
 {
     uint64_t clusterGeneration = 0;
     auto clusterMutex = GetFailureReportClusterMutex(clusterName);
@@ -566,7 +669,30 @@ std::vector<cluster::MemberIdentity> TopologyControlHost::GetIsolationCandidates
     const auto membershipsByAddress = IndexMembershipsByAddress(memberships);
     std::lock_guard<bthread::Mutex> lock(failureReportMutex_);
     return GetIsolationCandidatesLocked(clusterName, latest, eligibleReporters, membershipsByAddress,
-                                        CountFailurePopulation(latest), clusterGeneration, now);
+                                        CountFailurePopulation(latest), clusterGeneration, membershipSnapshotRevision);
+}
+
+std::unordered_map<std::string, uint64_t> TopologyControlHost::GetActiveFailureEvidenceVersions(
+    const std::string &clusterName, const std::vector<cluster::MemberIdentity> &targets)
+{
+    if (targets.empty()) {
+        return {};
+    }
+    std::lock_guard<bthread::Mutex> lock(failureReportMutex_);
+    const auto clusterIter = failureReportsByCluster_.find(clusterName);
+    if (clusterIter == failureReportsByCluster_.end()) {
+        return {};
+    }
+    const auto &versions = clusterIter->second.evidenceVersionByTarget;
+    std::unordered_map<std::string, uint64_t> selected;
+    selected.reserve(targets.size());
+    for (const auto &target : targets) {
+        const auto versionIter = versions.find(target.address);
+        if (versionIter != versions.end()) {
+            selected.emplace(target.address, versionIter->second);
+        }
+    }
+    return selected;
 }
 
 std::shared_ptr<bthread::Mutex> TopologyControlHost::GetFailureReportClusterMutex(const std::string &clusterName)
@@ -580,7 +706,7 @@ std::vector<cluster::MemberIdentity> TopologyControlHost::GetIsolationCandidates
     const std::string &clusterName, const cluster::TopologySnapshot &latest,
     const std::unordered_map<std::string, cluster::MembershipRecord> &eligibleReporters,
     const std::unordered_map<std::string, cluster::MembershipRecord> &membershipsByAddress, size_t failurePopulation,
-    uint64_t clusterGeneration, std::chrono::steady_clock::time_point now)
+    uint64_t clusterGeneration, int64_t membershipSnapshotRevision)
 {
     std::vector<cluster::MemberIdentity> candidates;
     auto clusterIter = failureReportsByCluster_.find(clusterName);
@@ -588,12 +714,28 @@ std::vector<cluster::MemberIdentity> TopologyControlHost::GetIsolationCandidates
         return candidates;
     }
     auto &clusterReports = clusterIter->second;
+    // Evidence lifetime follows membership: an address without any membership record can no
+    // longer pass the heartbeat handler gate, so its version baseline is dead state. Drop it so
+    // long-lived clusters do not accumulate entries for churned addresses; a returning member
+    // re-bases on its new incarnation timestamp anyway. A snapshot older than the reporter's
+    // accepted renewal proves nothing about current presence: keeping the fence high-water mark
+    // there keeps resurrected heartbeats rejected until a newer view catches up.
+    for (auto versionIter = clusterReports.lastSummaryVersionByReporter.begin();
+         versionIter != clusterReports.lastSummaryVersionByReporter.end();) {
+        if (membershipsByAddress.find(versionIter->first) == membershipsByAddress.end()
+            && versionIter->second.membershipModRevision <= membershipSnapshotRevision) {
+            versionIter = clusterReports.lastSummaryVersionByReporter.erase(versionIter);
+        } else {
+            ++versionIter;
+        }
+    }
     const auto activeBatch = latest.GetActiveBatch();
     for (auto targetIter = clusterReports.byTarget.begin(); targetIter != clusterReports.byTarget.end();) {
         const auto &target = targetIter->first;
         auto &reporters = targetIter->second;
         const auto validReports = PruneAndCountFailureReporters(latest, eligibleReporters, membershipsByAddress, target,
-                                                                clusterGeneration, clusterReports, reporters, now);
+                                                                clusterGeneration, clusterReports, reporters,
+                                                                membershipSnapshotRevision);
         const cluster::Member *targetMember = nullptr;
         const bool joiningScaleOutTarget = activeBatch.has_value()
                                            && activeBatch->type == cluster::TopologyChangeType::SCALE_OUT
@@ -611,12 +753,14 @@ std::vector<cluster::MemberIdentity> TopologyControlHost::GetIsolationCandidates
             }
         }
         if (reporters.empty()) {
+            // Erase before the byTarget node dies: `target` references that node's key.
+            clusterReports.evidenceVersionByTarget.erase(target);
             targetIter = clusterReports.byTarget.erase(targetIter);
         } else {
             ++targetIter;
         }
     }
-    if (clusterReports.empty()) {
+    if (clusterReports.byTarget.empty() && clusterReports.lastSummaryVersionByReporter.empty()) {
         failureReportsByCluster_.erase(clusterIter);
     }
     return candidates;
@@ -650,7 +794,7 @@ Status TopologyControlHost::RunUnderActiveFailureCommitFence(const std::string &
             std::lock_guard<bthread::Mutex> lock(failureReportMutex_);
             candidates = GetIsolationCandidatesLocked(clusterName, latest, eligibleReporters, membershipsByAddress,
                                                       CountFailurePopulation(latest), reservation.clusterGeneration,
-                                                      options_.controller.now());
+                                                      authorityRevision);
         }
         if (!ActiveFailureCandidatesContainExpected(candidates, expected)) {
             LOG(INFO) << "CLUSTER_FAILURE_DETECT cluster=" << clusterName << " version=" << latest.Version()
@@ -990,6 +1134,30 @@ void TopologyControlHost::ReconcileStoppingEntry(const std::string &clusterName,
     FinishStoppedEntry(clusterName, entry);
 }
 
+void TopologyControlHost::WireFailureReportProviders(cluster::TopologyControllerRuntime::Options &runtimeOptions,
+                                                     const std::string &clusterName)
+{
+    runtimeOptions.controller.failureSummaryCandidateProvider =
+        [this, clusterName](const cluster::TopologySnapshot &latest,
+                            const std::vector<cluster::MembershipRecord> &memberships,
+                            std::chrono::steady_clock::time_point, int64_t membershipSnapshotRevision) {
+            return GetIsolationCandidates(clusterName, latest, memberships, membershipSnapshotRevision);
+        };
+    runtimeOptions.controller.failureEvidenceVersionProvider =
+        [this, clusterName](const std::vector<cluster::MemberIdentity> &targets) {
+            return GetActiveFailureEvidenceVersions(clusterName, targets);
+        };
+    runtimeOptions.controller.activeFailureCommitFence =
+        [this, clusterName](const cluster::TopologySnapshot &latest,
+                            const std::vector<cluster::MembershipRecord> &memberships,
+                            std::chrono::steady_clock::time_point now, std::optional<uint64_t> expectedControlEpoch,
+                            const std::vector<cluster::MemberIdentity> &expected,
+                            const std::function<Status(int64_t)> &mutation) {
+            return RunUnderActiveFailureCommitFence(clusterName, latest, memberships, now, expectedControlEpoch,
+                                                    expected, mutation);
+        };
+}
+
 Status TopologyControlHost::StartRuntime(ClusterEntry &entry)
 {
     INJECT_POINT("TopologyControlHost.StartRuntime");
@@ -1008,21 +1176,7 @@ Status TopologyControlHost::StartRuntime(ClusterEntry &entry)
     runtimeOptions.controller.initialProbeRound = (nextRuntimeGeneration_++ << 32U) + 1U;
     runtimeOptions.controller.membershipRestartHandler = {};
     runtimeOptions.controller.materializeRestartFacts = true;
-    runtimeOptions.controller.failureSummaryCandidateProvider =
-        [this, clusterName = entry.clusterName](const cluster::TopologySnapshot &latest,
-                                                const std::vector<cluster::MembershipRecord> &memberships,
-                                                std::chrono::steady_clock::time_point now) {
-            return GetIsolationCandidates(clusterName, latest, memberships, now);
-        };
-    runtimeOptions.controller.activeFailureCommitFence =
-        [this, clusterName = entry.clusterName](
-            const cluster::TopologySnapshot &latest, const std::vector<cluster::MembershipRecord> &memberships,
-            std::chrono::steady_clock::time_point now, std::optional<uint64_t> expectedControlEpoch,
-            const std::vector<cluster::MemberIdentity> &expected,
-            const std::function<Status(int64_t)> &mutation) {
-            return RunUnderActiveFailureCommitFence(clusterName, latest, memberships, now, expectedControlEpoch,
-                                                    expected, mutation);
-        };
+    WireFailureReportProviders(runtimeOptions, entry.clusterName);
     runtimeOptions.janitor = cluster::TopologyTaskJanitorOptions{
         COORDINATOR_JANITOR_INTERVAL, COORDINATOR_JANITOR_SCAN_LIMIT, COORDINATOR_JANITOR_DELETE_BATCH
     };

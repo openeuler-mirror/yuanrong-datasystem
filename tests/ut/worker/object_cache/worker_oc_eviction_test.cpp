@@ -145,10 +145,16 @@ public:
         return Status::OK();
     }
 
-    Status DeleteAllCopyMeta(master::DeleteAllCopyMetaReqPb &request,
-                             master::DeleteAllCopyMetaRspPb &response) override
+    Status DeleteAllCopyMeta(master::DeleteAllCopyMetaReqPb &request, master::DeleteAllCopyMetaRspPb &response,
+                             worker::RpcAttemptObservation *attempt = nullptr) override
     {
-        return handler_(request, response);
+        auto rc = handler_(request, response);
+        // Mirror the production contract: only an actually attempted call writes the slot.
+        if (attempt != nullptr) {
+            attempt->dispatched = true;
+            attempt->lastAttemptStatus = rc;
+        }
+        return rc;
     }
 
 private:

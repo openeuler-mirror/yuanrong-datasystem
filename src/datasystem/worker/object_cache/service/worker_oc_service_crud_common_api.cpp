@@ -201,6 +201,7 @@ WorkerOcServiceCrudCommonApi::WorkerOcServiceCrudCommonApi(WorkerOcServiceCrudPa
       endpointPolicy_(initParam.endpointPolicy),
       exitRequested_(initParam.exitRequested),
       metadataRpcObserver_(initParam.metadataRpcObserver),
+      metadataRpcMemberIdResolver_(initParam.metadataRpcMemberIdResolver),
       allowDirectoryLag_(initParam.allowDirectoryLag),
       metadataRpcFailureReported_(initParam.metadataRpcFailureReported),
       asyncPersistenceDelManager_(initParam.asyncPersistenceDelManager)
@@ -208,17 +209,36 @@ WorkerOcServiceCrudCommonApi::WorkerOcServiceCrudCommonApi(WorkerOcServiceCrudPa
     supportL2Storage_ = GetCurrentStorageType();
 }
 
-void WorkerOcServiceCrudCommonApi::ObserveMetadataRpc(const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
-                                                      const Status &status) const
+WorkerOcServiceCrudCommonApi::MetadataRpcObservation WorkerOcServiceCrudCommonApi::BeginMetadataRpcObservation(
+    const HostPort &target) const
 {
-    if (metadataRpcObserver_ == nullptr || workerMasterApi == nullptr) {
-        return;
+    MetadataRpcObservation observation;
+    observation.target = target;
+    observation.memberId =
+        metadataRpcMemberIdResolver_ == nullptr ? std::string{} : metadataRpcMemberIdResolver_(target);
+    return observation;
+}
+
+WorkerOcServiceCrudCommonApi::MetadataRpcObservation WorkerOcServiceCrudCommonApi::BeginMetadataRpcObservation(
+    const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi) const
+{
+    if (workerMasterApi == nullptr) {
+        return MetadataRpcObservation{ HostPort(), std::string() };
     }
     HostPort target;
     if (target.ParseString(workerMasterApi->GetHostPort()).IsError()) {
+        return MetadataRpcObservation{ HostPort(), std::string() };
+    }
+    return BeginMetadataRpcObservation(target);
+}
+
+void WorkerOcServiceCrudCommonApi::ObserveMetadataRpc(const MetadataRpcObservation &observation,
+                                                      const Status &status) const
+{
+    if (metadataRpcObserver_ == nullptr || observation.target.Empty()) {
         return;
     }
-    metadataRpcObserver_(target, status);
+    metadataRpcObserver_(observation.target, observation.memberId, status);
 }
 
 bool WorkerOcServiceCrudCommonApi::IsMetadataRpcFailureReported(

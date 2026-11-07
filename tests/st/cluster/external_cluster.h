@@ -225,6 +225,8 @@ public:
 
     Status KillWorker(uint32_t idx);
 
+    Status StopWorker(uint32_t idx);
+
     Status ShutdownEtcds();
 
     Status ShutdownCoordinators();

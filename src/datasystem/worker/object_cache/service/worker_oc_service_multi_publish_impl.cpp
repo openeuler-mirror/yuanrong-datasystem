@@ -382,8 +382,9 @@ Status WorkerOcServiceMultiPublishImpl::RetryCreateMultiMeta(std::shared_ptr<Wor
         CHECK_FAIL_RETURN_STATUS(GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
                                  K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
         rsp.Clear();
+        auto observation = BeginMetadataRpcObservation(api);
         auto rc = api->CreateMultiMeta(req, rsp, true);
-        ObserveMetadataRpc(api, rc);
+        ObserveMetadataRpc(observation, rc);
         RETURN_IF_NOT_OK(TranslateQualifiedMetadataDeadline(api, rc, true));
         if (rsp.meta_is_moving()) {
             int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
@@ -474,8 +475,9 @@ Status WorkerOcServiceMultiPublishImpl::SendCreateMultiMetaSubRequest(
     CreateMultiMetaRspPb response;
     do {
         response.Clear();
+        auto observation = BeginMetadataRpcObservation(api);
         auto rc = api->CreateMultiMeta(req, response, true);
-        ObserveMetadataRpc(api, rc);
+        ObserveMetadataRpc(observation, rc);
         RETURN_IF_NOT_OK(TranslateQualifiedMetadataDeadline(api, rc, true));
         if (response.meta_is_moving()) {
             int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();

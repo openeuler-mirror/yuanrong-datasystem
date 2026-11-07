@@ -123,10 +123,13 @@ public:
      * @param[out] ttlMs Original TTL.
      * @param[out] remainingTtlMs Remaining TTL.
      * @param[in] expectedModRevision Expected modification revision. Zero disables the incarnation fence.
+     * @param[out] acceptedModRevision Optional modification revision of the renewed value.
+     * @param[out] acceptedValue Optional copy of the renewed value captured under the store lock.
      * @return Status of the operation.
      */
     Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs,
-                     int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK);
+                     int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK,
+                     int64_t *acceptedModRevision = nullptr, std::string *acceptedValue = nullptr);
 
     /**
      * @brief Install an observer invoked after committed Store mutations.

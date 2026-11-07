@@ -240,6 +240,8 @@ message KeepAliveReqPb {
   bytes expected_coordinator_id = 2; // Required after the Worker observes one Coordinator process.
   int64 expected_mod_revision = 3; // Current membership incarnation; zero disables the fence.
   repeated string failed_targets = 4; // Target workers observed as persistently unreachable by this member.
+  uint64 summary_version = 5; // Monotonic per-worker summary version; stale (smaller) deliveries are rejected.
+  repeated uint64 failed_target_generations = 6; // Per-target evidence generation, index-aligned with failed_targets; zero for old Workers.
 }
 
 message KeepAliveRspPb {

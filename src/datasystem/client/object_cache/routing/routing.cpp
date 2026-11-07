@@ -173,6 +173,13 @@ Status Routing::SelectWorkers(const std::vector<std::string> &keys, DataPlacemen
     return router_->SelectWorkers(keys, policy, action, groups, exclude);
 }
 
+Status Routing::SelectFailoverWorker(DataPlacementPolicy policy, WorkerAccessAction action, HostPort &worker,
+                                     const std::vector<HostPort> &exclude)
+{
+    CHECK_FAIL_RETURN_STATUS(initialized_.load(), K_NOT_READY, "Routing is not initialized");
+    return router_->SelectFailoverWorker(policy, action, worker, exclude);
+}
+
 std::vector<HostPort> Routing::GetAvailableWorkers() const
 {
     return router_->GetAvailableWorkers();

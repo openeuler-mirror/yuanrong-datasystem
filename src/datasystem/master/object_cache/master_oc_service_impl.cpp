@@ -119,7 +119,9 @@ MasterOCServiceImpl::MasterOCServiceImpl(HostPort serverAddress, std::shared_ptr
                                          MetadataManagerHolder *metadataManagerHolder, ResourceManager *resourceManager,
                                          const cluster::MembershipEndpointView &topologyMembership,
                                          std::string localAddress,
-                                         std::function<void(const HostPort &, const Status &)> metadataRpcObserver)
+                                         std::function<void(const HostPort &, const std::string &, const Status &)>
+                                             metadataRpcObserver,
+                                         std::function<std::string(const HostPort &)> metadataRpcMemberIdResolver)
     : MasterOCService(serverAddress),
       masterAddress_(std::move(serverAddress)),
       persistenceApi_(persistApi),
@@ -127,7 +129,8 @@ MasterOCServiceImpl::MasterOCServiceImpl(HostPort serverAddress, std::shared_ptr
       localAddress_(std::move(localAddress)),
       metadataManagerHolder_(metadataManagerHolder),
       resourceManager_(resourceManager),
-      metadataRpcObserver_(std::move(metadataRpcObserver))
+      metadataRpcObserver_(std::move(metadataRpcObserver)),
+      metadataRpcMemberIdResolver_(std::move(metadataRpcMemberIdResolver))
 {
 }
 
@@ -148,7 +151,8 @@ Status MasterOCServiceImpl::Init()
     reconciliationAsyncPool_ =
         std::make_unique<ThreadPool>(ASYNC_MIN_THREAD_NUM, ASYNC_MAX_THREAD_NUM, "Reconciliation");
     RETURN_IF_NOT_OK(OCMigrateMetadataManager::Instance().Init(masterAddress_, topologyMembership_,
-                                                               metadataManagerHolder_, metadataRpcObserver_));
+                                                               metadataManagerHolder_, metadataRpcObserver_,
+                                                               metadataRpcMemberIdResolver_));
     return Status::OK();
 }
 

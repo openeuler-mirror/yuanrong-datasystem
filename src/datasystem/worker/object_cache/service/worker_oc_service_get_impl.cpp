@@ -1873,8 +1873,9 @@ Status WorkerOcServiceGetImpl::QueryMetaDataFromMasterImpl(const HostPort &destM
     std::function<Status(QueryMetaReqPb &, QueryMetaRspPb &, std::vector<RpcMessage> &)> func =
         [this, &workerMasterApi, &subTimeout](QueryMetaReqPb &req, QueryMetaRspPb &rsp,
                                               std::vector<RpcMessage> &payloads) {
+            auto observation = BeginMetadataRpcObservation(workerMasterApi);
             Status s = workerMasterApi->QueryMeta(req, subTimeout, rsp, payloads);
-            ObserveMetadataRpc(workerMasterApi, s);
+            ObserveMetadataRpc(observation, s);
             if (s.IsError()) {
                 payloads.clear();
             }
@@ -2066,9 +2067,10 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromRedirectMaster(master::QueryMeta
             workerMasterApiManager_->GetWorkerMasterApi(redirectMasterAddr);
         CHECK_FAIL_RETURN_STATUS(redirectWorkerMasterApi != nullptr, K_RUNTIME_ERROR,
                                  "hash master get failed, QueryMetadataFromMaster failed");
+        auto redirectObservation = BeginMetadataRpcObservation(redirectWorkerMasterApi);
         auto queryStatus =
             redirectWorkerMasterApi->QueryMeta(redirectQueryReq, subTimeout, redirectQueryRsp, redirectPayloads);
-        ObserveMetadataRpc(redirectWorkerMasterApi, queryStatus);
+        ObserveMetadataRpc(redirectObservation, queryStatus);
         RETURN_IF_NOT_OK(queryStatus);
         // save the result to rsp and payload
         RETURN_IF_NOT_OK(CorrectQueryMetaResponse(redirectPayloads, redirectQueryRsp, payloads));
@@ -2859,8 +2861,9 @@ Status WorkerOcServiceGetImpl::QueryObjectLocationsFromRedirectMaster(
         *redirectReq.mutable_object_keys() = { redirectInfo.change_meta_ids().begin(),
                                                redirectInfo.change_meta_ids().end() };
         redirectReq.set_redirect(false);
+        auto redirectObservation = BeginMetadataRpcObservation(redirectWorkerMasterApi);
         rc = redirectWorkerMasterApi->GetObjectLocations(redirectReq, redirectRsp);
-        ObserveMetadataRpc(redirectWorkerMasterApi, rc);
+        ObserveMetadataRpc(redirectObservation, rc);
         if (rc.IsError()) {
             rc = TranslateMetadataOwnerRpcFailure(redirectWorkerMasterApi, rc, true);
             LOG(ERROR) << FormatString("Query locations from redirect master %s failed: %s",
@@ -2893,8 +2896,9 @@ Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_s
         std::function<Status(master::GetObjectLocationsReqPb &, master::GetObjectLocationsRspPb &)> func =
             [this, &workerMasterApi, &metadataRpcFailed](master::GetObjectLocationsReqPb &req,
                                                          master::GetObjectLocationsRspPb &rsp) {
+                auto observation = BeginMetadataRpcObservation(workerMasterApi);
                 auto status = workerMasterApi->GetObjectLocations(req, rsp);
-                ObserveMetadataRpc(workerMasterApi, status);
+                ObserveMetadataRpc(observation, status);
                 metadataRpcFailed = status.IsError();
                 return status;
             };
@@ -2977,8 +2981,9 @@ Status WorkerOcServiceGetImpl::QueryPureMetadataGroup(const HostPort &masterAddr
     std::function<Status(master::PureQueryMetaReqPb &, master::PureQueryMetaRspPb &)> query =
         [this, &workerMasterApi, &metadataRpcFailed](master::PureQueryMetaReqPb &req,
                                                      master::PureQueryMetaRspPb &rsp) {
+            auto observation = BeginMetadataRpcObservation(workerMasterApi);
             auto rc = workerMasterApi->PureQueryMeta(req, rsp);
-            ObserveMetadataRpc(workerMasterApi, rc);
+            ObserveMetadataRpc(observation, rc);
             metadataRpcFailed = rc.IsError();
             return rc;
         };
@@ -3009,8 +3014,9 @@ Status WorkerOcServiceGetImpl::QueryPureMetadataRedirects(
         std::function<Status(master::PureQueryMetaReqPb &, master::PureQueryMetaRspPb &)> query =
             [this, &workerMasterApi, &metadataRpcFailed](master::PureQueryMetaReqPb &req,
                                                          master::PureQueryMetaRspPb &rsp) {
+                auto observation = BeginMetadataRpcObservation(workerMasterApi);
                 auto rc = workerMasterApi->PureQueryMeta(req, rsp);
-                ObserveMetadataRpc(workerMasterApi, rc);
+                ObserveMetadataRpc(observation, rc);
                 metadataRpcFailed = rc.IsError();
                 return rc;
             };

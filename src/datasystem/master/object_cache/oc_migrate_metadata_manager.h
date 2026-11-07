@@ -55,7 +55,7 @@ using TbbFutureThreadTable = tbb::concurrent_hash_map<std::pair<std::string, std
 
 class OCMigrateMetadataManager {
 public:
-    using MetadataRpcObserver = std::function<void(const HostPort &, const Status &)>;
+    using MetadataRpcObserver = std::function<void(const HostPort &, const std::string &, const Status &)>;
 
     struct MigrateMetaInfo {
         std::vector<std::string> objectKeys = {};
@@ -94,7 +94,8 @@ public:
      */
     Status Init(const HostPort &localHostPort,
                 const cluster::MembershipEndpointView *membership, MetadataManagerHolder *metadataManagerHolder,
-                MetadataRpcObserver metadataRpcObserver = {});
+                MetadataRpcObserver metadataRpcObserver = {},
+                std::function<std::string(const HostPort &)> memberIdResolver = {});
 
     /**
      * @brief Shutdown the oc migrage metadata module.
@@ -245,7 +246,14 @@ private:
         const MetaForMigrationPb &metadata, const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager,
         std::vector<std::string> &failedObjectKeys);
 
-    void ObserveMetadataRpcResult(const std::string &targetAddress, const Status &status);
+    void ObserveMetadataRpcResult(const std::string &targetAddress, const std::string &initiatedMemberId,
+                                  const Status &status);
+
+    /**
+     * @brief Bind one migration target to the member id it currently holds in the topology.
+     * @return Member id captured for RPC-initiation binding, or an empty string when unknown.
+     */
+    std::string ResolveTargetMemberId(const HostPort &target);
 
     /**
      * @brief Commit per-object migration results while the topology execution remains authorized.
@@ -378,8 +386,11 @@ private:
     std::atomic<bool> exitFlag_{ false };
     std::mutex metadataRpcObserverMutex_;
     std::condition_variable metadataRpcObserverCv_;
-    size_t metadataRpcObserversInFlight_{ 0 };
+    // Counts both observer and resolver callbacks taken under the mutex and still running:
+    // Shutdown drains this to zero before returning so no callback outlives its owner.
+    size_t metadataCallbacksInFlight_{ 0 };
     MetadataRpcObserver metadataRpcObserver_;
+    std::function<std::string(const HostPort &)> memberIdResolver_;
     MetadataManagerHolder *metadataManagerHolder_;
 };
 }  // namespace master

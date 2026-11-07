@@ -81,6 +81,13 @@ public:
                          std::unordered_map<HostPort, std::vector<std::string>> &groups,
                          const std::vector<HostPort> &exclude = {});
 
+    // Group-level failover: one uniformly sampled available worker for a whole failed batch,
+    // so a batch stays one RPC group per request while retries spread across requests.
+    // The placement policy keeps its deterministic-path contract: REQUIRED_SAME_NODE samples only
+    // same-node survivors and fails when they are exhausted, PREFERRED_SAME_NODE prefers them.
+    Status SelectFailoverWorker(DataPlacementPolicy policy, WorkerAccessAction action, HostPort &worker,
+                                const std::vector<HostPort> &exclude = {});
+
     std::vector<HostPort> GetAvailableSameNodeWorkers() const;
 
     std::vector<HostPort> GetAvailableWorkers() const;

@@ -66,7 +66,8 @@ private:
         HostPort owner;
         std::string objectKey;
         std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager;
-        std::function<void(const HostPort &, const Status &)> observer;
+        std::function<void(const HostPort &, const std::string &, const Status &)> observer;
+        std::function<std::string(const HostPort &)> memberIdResolver;
         std::string sourceAddress;
     };
 

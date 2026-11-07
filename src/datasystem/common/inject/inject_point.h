@@ -22,6 +22,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <shared_mutex>
 #include <string>
@@ -155,6 +156,17 @@ public:
     }
 
     /**
+     * @brief Install a hook fired under the pause mutex right after the pause flag is armed: the
+     *        moment it runs, the injecting thread is provably inside the pause critical section,
+     *        so a waiting test can treat the signal as pause-ready proof instead of the racy
+     *        execute count. The hook must not call any inject API nor block.
+     */
+    void SetPauseEnteredHook(std::function<void()> hook)
+    {
+        pauseEnteredHook_ = std::move(hook);
+    }
+
+    /**
      * @brief Get the task count.
      * @return The task count.
      */
@@ -179,6 +191,7 @@ private:
     std::atomic<uint64_t> executeCount_{ 0 };
     std::mutex mutex_;
     std::condition_variable cv_;
+    std::function<void()> pauseEnteredHook_;
 };
 
 /**
@@ -209,6 +222,12 @@ public:
      * @return Status of the call.
      */
     Status SetAction(const std::string &name, const std::string &action);
+
+    /**
+     * @brief Install the pause-entered hook for one inject point. The hook must not call any
+     *        inject API nor block: it runs with the pause mutex held.
+     */
+    Status SetPauseEnteredHook(const std::string &name, std::function<void()> hook);
 
     /**
      * @brief Get the inject point execute count.
@@ -479,6 +498,16 @@ INJECT_PARAM_EXT(std::string, std::string, std::string)
  * @endverbatim
  */
 Status Set(const std::string &name, const std::string &action);
+
+/**
+ * @brief Install a hook fired under the pause mutex right after the pause flag is armed: the
+ *        moment it runs, the injecting thread is provably inside the pause critical section.
+ *        The hook must not call any inject API nor block.
+ * @param[in] name The inject point name.
+ * @param[in] hook The pause-entered hook.
+ * @return Status of the call.
+ */
+Status SetPauseEnteredHook(const std::string &name, std::function<void()> hook);
 
 /**
  * @brief Get the inject point execute count.
