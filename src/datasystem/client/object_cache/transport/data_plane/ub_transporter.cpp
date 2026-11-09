@@ -23,6 +23,7 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -34,6 +35,7 @@
 #include "datasystem/client/object_cache/transport/rpc/mset_request_builder.h"
 #include "datasystem/client/object_cache/transport/rpc/set_request_builder.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/metrics/kv_metrics.h"
@@ -63,6 +65,39 @@ constexpr uint32_t UB_FAILURE_PRIORITY_TRANSIENT = 1;
 constexpr uint32_t UB_FAILURE_PRIORITY_TIMEOUT = 2;
 constexpr uint32_t UB_FAILURE_PRIORITY_PATH = 3;
 constexpr uint32_t UB_FAILURE_PRIORITY_PORT_UNAVAILABLE = 4;
+
+class PendingAllocationRollback {
+public:
+    PendingAllocationRollback(const std::shared_ptr<WorkerRpcClient> &rpcClient, const std::string &shmId,
+                              const TransportRequestContext &context,
+                              const std::weak_ptr<ThreadPool> &releasePool) noexcept
+        : rpcClient_(rpcClient), shmId_(shmId), context_(context), releasePool_(releasePool)
+    {
+    }
+
+    PendingAllocationRollback(const PendingAllocationRollback &) = delete;
+    PendingAllocationRollback &operator=(const PendingAllocationRollback &) = delete;
+
+    ~PendingAllocationRollback() noexcept
+    {
+        if (!committed_ && !shmId_.empty()) {
+            ShmSendBufferOwner::ReleaseReferenceAsync(rpcClient_, shmId_, context_, releasePool_);
+        }
+    }
+
+    void Commit()
+    {
+        committed_ = true;
+    }
+
+private:
+    // Borrow only within Create; asynchronous release copies its state before this guard returns.
+    const std::shared_ptr<WorkerRpcClient> &rpcClient_;
+    const std::string &shmId_;
+    const TransportRequestContext &context_;
+    const std::weak_ptr<ThreadPool> &releasePool_;
+    bool committed_{ false };
+};
 
 Status AlignUbBatchSlice(uint64_t size, uint64_t &alignedSize)
 {
@@ -681,57 +716,62 @@ void UbTransporter::CloseDataPlane()
 Status UbTransporter::Create(const HostPort &workerAddr, const std::string &key, uint64_t size,
                              const TransportCreateParam &param, std::shared_ptr<ObjectBuffer> &buffer)
 {
-    (void)buffer;
-    RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
+    try {
+        RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
+        CreateReqPb createReq;
+        RETURN_IF_NOT_OK(BuildCreateRequest(key, size, param, createReq));
 
-    CreateReqPb createReq;
-    RETURN_IF_NOT_OK(BuildCreateRequest(key, size, param, createReq));
+        CreateRspPb createRsp;
+        uint32_t workerVersion = 0;
+        RETURN_IF_NOT_OK(rpcClient_->InvokeCreate(param.subTimeoutMs, createReq, createRsp, workerVersion));
 
-    CreateRspPb createRsp;
-    uint32_t workerVersion = 0;
-    RETURN_IF_NOT_OK(rpcClient_->InvokeCreate(param.subTimeoutMs, createReq, createRsp, workerVersion));
-
-    auto info = std::make_shared<ObjectBufferInfo>();
-    info->objectKey = key;
-    info->dataSize = size;
-    info->workerAddr = workerAddr;
-    info->objectMode = ModeInfo(param.consistencyType, param.writeMode);
-    info->ubDataSentByMemoryCopy = false;
-
-    if (createRsp.has_urma_info()) {
-#ifdef USE_URMA
-        auto urmaInfo = std::make_shared<UrmaRemoteAddrPb>(createRsp.urma_info());
-        info->ubUrmaDataInfo = urmaInfo;
-
-        std::shared_ptr<UrmaManager::BufferHandle> handle;
-        RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferHandle(handle, size));
-        info->pointer = static_cast<uint8_t *>(handle->GetPointer());
-        info->ubGetBufferHandle = std::static_pointer_cast<void>(handle);
-        // The local UB pool contains payload bytes only. The worker-side metadata offset is already encoded in
-        // urmaInfo.seg_data_offset by FillRequestUrmaInfo.
-        info->metadataSize = 0;
+        PendingAllocationRollback rollback(rpcClient_, createRsp.shm_id(), param.requestContext, releasePool_);
+        INJECT_POINT("UbTransporter.Create.beforeBufferInfo");
+        auto info = std::make_shared<ObjectBufferInfo>();
+        info->objectKey = key;
+        info->dataSize = size;
+        info->workerAddr = workerAddr;
+        info->objectMode = ModeInfo(param.consistencyType, param.writeMode);
+        info->ubDataSentByMemoryCopy = false;
         info->shmId = ShmKey::Intern(createRsp.shm_id());
         info->version = workerVersion;
+        RETURN_IF_NOT_OK(PrepareCreateBuffer(createRsp, size, *info));
 
-        // Attach owner that releases via the routed worker's RPC client (not LOCAL_WORKER).
-        try {
-            info->receiveBufferOwner = std::make_shared<ShmSendBufferOwner>(
-                rpcClient_, info->shmId, param.requestContext, releasePool_, info->ubGetBufferHandle, nullptr, true);
-        } catch (const std::bad_alloc &e) {
-            LOG_IF_ERROR(rpcClient_->InvokeDecreaseReference(param.requestContext, info->shmId),
-                         "DecreaseReference after ShmSendBufferOwner OOM");
-            RETURN_STATUS(K_RUNTIME_ERROR, e.what());
-        }
-
-        return ObjectBufferInternal::Create(info, buffer);
-#else
-        static_cast<void>(buffer);
-        return Status(K_NOT_SUPPORTED, "UB Create: USE_URMA not compiled");
-#endif
+        INJECT_POINT("UbTransporter.Create.beforeOwner");
+        info->receiveBufferOwner = std::make_shared<ShmSendBufferOwner>(
+            rpcClient_, info->shmId, param.requestContext, releasePool_, info->ubGetBufferHandle, nullptr, true);
+        rollback.Commit();
+        INJECT_POINT("UbTransporter.Create.beforeObjectBuffer");
+        return ObjectBufferInternal::Create(std::move(info), buffer);
+    } catch (const std::bad_alloc &e) {
+        RETURN_STATUS(K_OUT_OF_MEMORY, e.what());
+    } catch (const std::exception &e) {
+        RETURN_STATUS(K_RUNTIME_ERROR, e.what());
+    } catch (...) {
+        RETURN_STATUS(K_RUNTIME_ERROR, "UB Create failed with an unknown exception");
     }
+}
 
-    // SHM-in-UB edge case: UB transport but worker returned no URMA info (deferred)
-    return Status(K_NOT_SUPPORTED, "UB Create: worker returned no URMA info; SHM-in-UB not yet supported");
+Status UbTransporter::PrepareCreateBuffer(const CreateRspPb &response, uint64_t size, ObjectBufferInfo &info)
+{
+    CHECK_FAIL_RETURN_STATUS(response.has_urma_info(), K_NOT_SUPPORTED,
+                             "UB Create: worker returned no URMA info; SHM-in-UB not yet supported");
+#ifdef USE_URMA
+    std::shared_ptr<UrmaManager::BufferHandle> handle;
+    RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferHandle(handle, size));
+    CHECK_FAIL_RETURN_STATUS(handle != nullptr && handle->GetPointer() != nullptr, K_RUNTIME_ERROR,
+                             "UB Create buffer handle is invalid");
+    info.ubUrmaDataInfo = std::make_shared<UrmaRemoteAddrPb>(response.urma_info());
+    info.pointer = static_cast<uint8_t *>(handle->GetPointer());
+    info.ubGetBufferHandle = std::move(handle);
+    // Worker metadata is already encoded in seg_data_offset; the local UB pool contains payload bytes only.
+    info.metadataSize = 0;
+    return Status::OK();
+#else
+    (void)size;
+    (void)info;
+    return Status(K_NOT_SUPPORTED, "UB Create: USE_URMA not compiled");
+#endif
 }
 
 void UbTransporter::ReleaseMCreateAllocations(const MultiCreateRspPb &response,

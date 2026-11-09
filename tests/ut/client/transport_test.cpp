@@ -31,6 +31,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -1582,6 +1583,69 @@ public:
     bool supportsPayloadOnlyClientBatchGet;
     std::atomic<bool> teardownDuringInvoke{ false };
     std::atomic<bool> *invokeFinished = nullptr;
+};
+
+class CreateTestUbTransporter : public UbTransporter {
+public:
+    CreateTestUbTransporter(const std::shared_ptr<WorkerRpcClient> &rpcClient,
+                            const std::shared_ptr<ThreadPool> &pool)
+        : UbTransporter(rpcClient, std::make_shared<FakeUbConnection>(), nullptr, pool)
+    {
+    }
+
+    Status allocationStatus = Status::OK();
+    bool throwBadAlloc = false;
+    bool invalidHandle = false;
+    std::weak_ptr<void> allocatedHandle;
+
+protected:
+    Status PrepareCreateBuffer(const CreateRspPb &, uint64_t size, ObjectBufferInfo &info) override
+    {
+        if (throwBadAlloc) {
+            throw std::bad_alloc();
+        }
+        RETURN_IF_NOT_OK(allocationStatus);
+        if (invalidHandle) {
+            return Status(K_RUNTIME_ERROR, "UB Create buffer handle is invalid");
+        }
+        auto storage = std::make_shared<std::vector<uint8_t>>(size);
+        info.ubUrmaDataInfo = std::make_shared<UrmaRemoteAddrPb>();
+        info.pointer = storage->data();
+        info.ubGetBufferHandle = storage;
+        allocatedHandle = storage;
+        return Status::OK();
+    }
+};
+
+class UbCreateRollbackTestPool : public ThreadPool {
+public:
+    using ThreadPool::ThreadPool;
+    using ThreadPool::ShutDown;
+};
+
+class UbCreateRollbackTest : public testing::Test {
+protected:
+    void Drain()
+    {
+        pool_->Submit([]() {}).get();
+    }
+
+    void CheckRelease(int count = 1)
+    {
+        Drain();
+        ASSERT_EQ(rpcClient_->decreaseReferenceCount, count);
+        for (int i = 0; i < count; ++i) {
+            EXPECT_EQ(rpcClient_->decreaseReferenceShmIds[i].ToString(), "test-shm-id");
+            EXPECT_EQ(rpcClient_->decreaseReferenceContexts[i].clientId, "client-1");
+            EXPECT_EQ(rpcClient_->decreaseReferenceContexts[i].token, "token-1");
+            EXPECT_EQ(rpcClient_->decreaseReferenceContexts[i].tenantId, "tenant-1");
+            EXPECT_FALSE(rpcClient_->decreaseReferenceDelayRelease[i]);
+        }
+    }
+
+    std::shared_ptr<FakeWorkerRpcClient> rpcClient_ = std::make_shared<FakeWorkerRpcClient>();
+    std::shared_ptr<UbCreateRollbackTestPool> pool_ =
+        std::make_shared<UbCreateRollbackTestPool>(1, 1, "create_rollback");
 };
 
 class TestUbTransporter : public UbTransporter {
@@ -12269,6 +12333,150 @@ TEST(UbTransporterTest, HoldingUbHandleWaitsForDelayedRelease)
     EXPECT_TRUE(heldHandle.expired());
     EXPECT_EQ(metrics::GetClientUbHoldingCount(), holdingBefore);
     EXPECT_EQ(metrics::GetClientUbReleasingCount(), releasingBefore);
+}
+
+TEST_F(UbCreateRollbackTest, LocalPoolOomReleasesWorkerAllocation)
+{
+    CreateTestUbTransporter transporter(rpcClient_, pool_);
+    transporter.allocationStatus = Status(K_OUT_OF_MEMORY, "UB pool exhausted");
+    std::shared_ptr<ObjectBuffer> buffer;
+    EXPECT_EQ(transporter.Create(MakeAddress(9000), "key", 64, MakeCreateParam(), buffer).GetCode(), K_OUT_OF_MEMORY);
+    EXPECT_EQ(buffer, nullptr);
+    CheckRelease();
+}
+
+TEST_F(UbCreateRollbackTest, HeapOomReleasesWorkerAllocation)
+{
+    CreateTestUbTransporter transporter(rpcClient_, pool_);
+    transporter.throwBadAlloc = true;
+    std::shared_ptr<ObjectBuffer> buffer;
+    EXPECT_EQ(transporter.Create(MakeAddress(9000), "key", 64, MakeCreateParam(), buffer).GetCode(), K_OUT_OF_MEMORY);
+    CheckRelease();
+}
+
+TEST_F(UbCreateRollbackTest, InvalidHandleReleasesWorkerAllocation)
+{
+    CreateTestUbTransporter transporter(rpcClient_, pool_);
+    transporter.invalidHandle = true;
+    std::shared_ptr<ObjectBuffer> buffer;
+    EXPECT_EQ(transporter.Create(MakeAddress(9000), "key", 64, MakeCreateParam(), buffer).GetCode(), K_RUNTIME_ERROR);
+    CheckRelease();
+}
+
+TEST_F(UbCreateRollbackTest, UnsupportedResponseReleasesWorkerAllocation)
+{
+    UbTransporter transporter(rpcClient_, std::make_shared<FakeUbConnection>(), nullptr, pool_);
+    rpcClient_->createResponseHasUrmaInfo = false;
+    std::shared_ptr<ObjectBuffer> buffer;
+    EXPECT_EQ(transporter.Create(MakeAddress(9000), "key", 64, MakeCreateParam(), buffer).GetCode(), K_NOT_SUPPORTED);
+    CheckRelease();
+}
+
+TEST_F(UbCreateRollbackTest, FailuresAroundOwnerHandoffReleaseExactlyOnce)
+{
+    int count = 0;
+    for (const auto &point : { "UbTransporter.Create.beforeBufferInfo", "UbTransporter.Create.beforeOwner",
+                              "UbTransporter.Create.beforeObjectBuffer" }) {
+        ASSERT_TRUE(inject::Set(point, "return(K_OUT_OF_MEMORY)").IsOk());
+        Raii clearInject([point]() { (void)inject::Clear(point); });
+        CreateTestUbTransporter transporter(rpcClient_, pool_);
+        std::shared_ptr<ObjectBuffer> buffer;
+        EXPECT_EQ(transporter.Create(MakeAddress(9000), "key", 64, MakeCreateParam(), buffer).GetCode(),
+                  K_OUT_OF_MEMORY);
+        EXPECT_TRUE(transporter.allocatedHandle.expired());
+        CheckRelease(++count);
+    }
+}
+
+TEST_F(UbCreateRollbackTest, SuccessfulCreateKeepsReferenceUntilBufferDestruction)
+{
+    CreateTestUbTransporter transporter(rpcClient_, pool_);
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(transporter.Create(MakeAddress(9000), "key", 64, MakeCreateParam(), buffer).IsOk());
+    Drain();
+    EXPECT_EQ(rpcClient_->decreaseReferenceCount, 0);
+    EXPECT_FALSE(transporter.allocatedHandle.expired());
+    buffer.reset();
+    CheckRelease();
+    EXPECT_TRUE(transporter.allocatedHandle.expired());
+}
+
+TEST_F(UbCreateRollbackTest, RpcFailureDoesNotReleaseUnknownAllocation)
+{
+    CreateTestUbTransporter transporter(rpcClient_, pool_);
+    for (const auto code : { K_OUT_OF_MEMORY, K_RPC_UNAVAILABLE }) {
+        rpcClient_->createInvokeStatus = Status(code, "Create failed");
+        std::shared_ptr<ObjectBuffer> buffer;
+        EXPECT_EQ(transporter.Create(MakeAddress(9000), "key", 64, MakeCreateParam(), buffer).GetCode(), code);
+    }
+    CheckRelease(0);
+}
+
+TEST_F(UbCreateRollbackTest, RollbackPreparationExceptionDoesNotEscape)
+{
+    const std::string point = "ShmSendBufferOwner.ReleaseReferenceAsync.beforeSubmit";
+    ASSERT_TRUE(inject::Set(point, "call()").IsOk());
+    Raii clearInject([point]() { (void)inject::Clear(point); });
+    CreateTestUbTransporter transporter(rpcClient_, pool_);
+    transporter.allocationStatus = Status(K_OUT_OF_MEMORY, "UB pool exhausted");
+    std::shared_ptr<ObjectBuffer> buffer;
+    EXPECT_EQ(transporter.Create(MakeAddress(9000), "key", 64, MakeCreateParam(), buffer).GetCode(), K_OUT_OF_MEMORY);
+    CheckRelease(0);
+}
+
+TEST_F(UbCreateRollbackTest, UnavailableReleasePoolDoesNotEscape)
+{
+    CreateTestUbTransporter transporter(rpcClient_, pool_);
+    transporter.allocationStatus = Status(K_OUT_OF_MEMORY, "UB pool exhausted");
+    pool_.reset();
+    std::shared_ptr<ObjectBuffer> buffer;
+    EXPECT_EQ(transporter.Create(MakeAddress(9000), "key", 64, MakeCreateParam(), buffer).GetCode(), K_OUT_OF_MEMORY);
+    EXPECT_EQ(rpcClient_->decreaseReferenceCount, 0);
+}
+
+TEST_F(UbCreateRollbackTest, RejectedSubmissionDoesNotEscape)
+{
+    CreateTestUbTransporter transporter(rpcClient_, pool_);
+    transporter.allocationStatus = Status(K_OUT_OF_MEMORY, "UB pool exhausted");
+    pool_->ShutDown();
+    std::shared_ptr<ObjectBuffer> buffer;
+    EXPECT_EQ(transporter.Create(MakeAddress(9000), "key", 64, MakeCreateParam(), buffer).GetCode(), K_OUT_OF_MEMORY);
+    EXPECT_EQ(rpcClient_->decreaseReferenceCount, 0);
+}
+
+TEST_F(UbCreateRollbackTest, ReleaseRetriesAreBounded)
+{
+    rpcClient_->decreaseReferenceStatus = Status(K_RPC_UNAVAILABLE, "release unavailable");
+    CreateTestUbTransporter transporter(rpcClient_, pool_);
+    transporter.allocationStatus = Status(K_OUT_OF_MEMORY, "UB pool exhausted");
+    std::shared_ptr<ObjectBuffer> buffer;
+    EXPECT_EQ(transporter.Create(MakeAddress(9000), "key", 64, MakeCreateParam(), buffer).GetCode(), K_OUT_OF_MEMORY);
+    CheckRelease(3);
+}
+
+TEST_F(UbCreateRollbackTest, ReleaseRpcExceptionDoesNotEscape)
+{
+    rpcClient_->afterDecreaseReference = [](int) { throw std::bad_alloc(); };
+    CreateTestUbTransporter transporter(rpcClient_, pool_);
+    transporter.allocationStatus = Status(K_OUT_OF_MEMORY, "UB pool exhausted");
+    std::shared_ptr<ObjectBuffer> buffer;
+    EXPECT_EQ(transporter.Create(MakeAddress(9000), "key", 64, MakeCreateParam(), buffer).GetCode(), K_OUT_OF_MEMORY);
+    CheckRelease();
+}
+
+TEST_F(UbCreateRollbackTest, TransientReleaseFailureRetriesSuccessfully)
+{
+    rpcClient_->decreaseReferenceStatus = Status(K_RPC_UNAVAILABLE, "release unavailable");
+    rpcClient_->afterDecreaseReference = [this](int count) {
+        if (count == 2) {
+            rpcClient_->decreaseReferenceStatus = Status::OK();
+        }
+    };
+    CreateTestUbTransporter transporter(rpcClient_, pool_);
+    transporter.allocationStatus = Status(K_OUT_OF_MEMORY, "UB pool exhausted");
+    std::shared_ptr<ObjectBuffer> buffer;
+    EXPECT_EQ(transporter.Create(MakeAddress(9000), "key", 64, MakeCreateParam(), buffer).GetCode(), K_OUT_OF_MEMORY);
+    CheckRelease(2);
 }
 
 TEST(UbTransporterTest, UrmaWaitTimeoutRequiresDelayedRelease)
