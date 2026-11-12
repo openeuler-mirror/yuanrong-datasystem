@@ -53,18 +53,3 @@ ds_cc_library(
         "@com_github_apache_brpc//:brpc",
     ],
 )
-
-ds_cc_library(
-    name = "urma_success_rate_tracker",
-    srcs = [
-        "urma_success_rate_tracker.cpp",
-    ],
-    hdrs = [
-        "urma_success_rate_tracker.h",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//src/datasystem/common/flags:ds_flags",
-    ],
-    alwayslink = True,
-)

@@ -43,7 +43,7 @@
 #include "datasystem/client/worker_api/listen_worker.h"
 #include "datasystem/client/mmap_manager/mmap_manager.h"
 #include "datasystem/client/object_cache/client_memory_ref_table.h"
-#include "datasystem/client/object_cache/client_mode_types.h"
+#include "datasystem/client/object_cache/object_client_types.h"
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/client/object_cache/client_worker_api/client_worker_remote_api.h"
 #include "datasystem/client/hetero_cache/device/client_device_object_manager.h"
@@ -51,6 +51,7 @@
 #include "datasystem/client/object_cache/exist_handler.h"
 #include "datasystem/client/object_cache/routing/routing.h"
 #include "datasystem/client/object_cache/routing/ub_health_filter.h"
+#include "datasystem/client/object_cache/object_control_rpc_client.h"
 #include "datasystem/client/object_cache/transport/transport_layer.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/client/object_cache/routing/worker_router.h"
@@ -86,10 +87,6 @@
 namespace datasystem {
 namespace object_cache {
 
-class RoutedMode;
-
-class BoundMode;
-
 class WorkerFailover;
 using TbbGlobalRefTable = tbb::concurrent_hash_map<std::string, int>;
 using GlobalRefInfo = std::pair<int, std::shared_ptr<TbbGlobalRefTable::accessor>>;
@@ -111,8 +108,6 @@ struct FullParam : public CreateParam {
 using P2PPeerTable = tbb::concurrent_hash_map<std::string, P2PPeer>;
 
 class __attribute((visibility("default"))) ObjectClientImpl : public std::enable_shared_from_this<ObjectClientImpl> {
-    friend class RoutedMode;
-    friend class BoundMode;
     friend class WorkerFailover;
 public:
     explicit ObjectClientImpl(const ConnectOptions &connectOptions);
@@ -693,15 +688,7 @@ public:
      */
     Status SetWorkerHealthCallback(std::function<void(const Status &)> callback, uint32_t intervalMs);
 
-    /**
-     * @brief Get transport data type between client and worker.
-     * @return Transport type.
-     */
-    std::string GetTransportType() const;
-
 private:
-    // SetFailureStage/SetRouteContext/MSetRouteGroup/WorkerNode moved to client_mode_types.h.
-
     Status BuildSetRouteContext(const HostPort &worker, SetRouteContext &routeContext);
     std::vector<HostPort> MergeWriteTargetExclusions(const std::vector<HostPort> &excludedWorkers) const;
 
@@ -712,7 +699,7 @@ private:
     Status SelectSetRouteWithoutHints(const std::string &objectKey, const std::vector<HostPort> &excludedWorkers,
                                      SetRouteContext &routeContext);
 
-    client::TransportRequestContext BuildTransportRequestContext(const SetRouteContext &routeContext) const;
+    client::TransportRequestContext BuildTransportRequestContext() const;
 
     Status PublishRoutedBuffer(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
                                const std::unordered_set<std::string> &nestedObjectKeys);
@@ -753,10 +740,6 @@ private:
     friend Buffer;
     friend DeviceBuffer;
     friend ClientDeviceObjectManager;
-
-    enum class WorkerSwitchState : uint8_t { AVAILABLE = 0, SWITCHING, NO_SWITCHABLE_WORKER };
-
-    enum class StandbySwitchAttemptResult : uint8_t { SWITCHED = 0, CONTINUE, ABORT };
 
     /**
      * @brief Init ParallelFor thread pool.
@@ -863,15 +846,11 @@ private:
      */
     bool IsBufferAlive(uint32_t version);
 
-    /**
-     * @brief Check socket network status between client and specify worker.
-     * @param[in] id The node id of worker, default is LOCAL_WORKER.
-     * @return Status of network.
-     */
-    Status CheckConnection(WorkerNode id = LOCAL_WORKER);
+    /** @brief Check the primary worker connection. */
+    Status CheckConnection();
 
     /**
-     * @brief Check a stable worker connection snapshot without holding switchNodeMutex_.
+     * @brief Check a stable worker connection snapshot.
      * @param[in] listenWorker Listener associated with the selected worker.
      * @param[in] workerApi Client API associated with the selected worker.
      * @return Status of network.
@@ -880,7 +859,7 @@ private:
                            const std::shared_ptr<IClientWorkerApi> &workerApi);
 
     /**
-     * @brief Check socket network status between client and LOCAL_WORKER.
+     * @brief Check socket network status while modifying primary-worker shared memory.
      * @return Status of network.
      */
     Status CheckConnectionWhileShmModify();
@@ -975,16 +954,15 @@ private:
      */
     Status GetAvailableWorkerApi(std::shared_ptr<IClientWorkerApi> &workerApi, std::unique_ptr<Raii> &raii);
 
-    /**
-     * @brief Get the available workerApi and its node.
-     * @param[out] workerApi The available workerApi.
-     * @param[out] raii Raii for record the invoke count.
-     * @param[out] workerNode The node selected for the workerApi.
-     * @return Status of the call.
-     */
-    Status GetAvailableWorkerApi(std::shared_ptr<IClientWorkerApi> &workerApi, std::unique_ptr<Raii> &raii,
-                                 WorkerNode &workerNode);
+    Status GetControlRpcClient(std::shared_ptr<client::ObjectControlRpcClient> &rpcClient) const;
 
+    Status GetControlWorker(const std::string &routingKey, HostPort &worker,
+                            const std::vector<HostPort> &excludedWorkers = {});
+
+    Status RunControlQuery(const std::string &routingKey, const std::function<Status(const HostPort &)> &query);
+
+    Status RunControlMutation(const std::string &routingKey,
+                              const std::function<Status(const HostPort &, bool &)> &mutation);
 
     /**
      * @brief Get the buffer info from Buffer
@@ -1002,7 +980,7 @@ private:
      */
     std::string GetClientId()
     {
-        return workerApi_[currentNode_]->clientId_;
+        return workerApi_->clientId_;
     }
 
     /**
@@ -1048,18 +1026,11 @@ private:
     Status InitClientWorkerConnect(bool enableHeartbeat, int32_t connectTimeoutMs = -1,
                                    bool routedWorkerIsLocal = true);
 
-    Status InitClientWorkerConnectAt(WorkerNode node, const HostPort &address, bool enableHeartbeat,
-                                     int32_t connectTimeoutMs);
+    Status InitClientWorkerConnectAt(const HostPort &address, bool enableHeartbeat, int32_t connectTimeoutMs);
 
-    Status InitClientRuntimeAt(WorkerNode node, bool isLocalWorker, bool routedWorkerIsLocal);
+    Status InitClientRuntime(bool routedWorkerIsLocal);
 
     Status GetCurrentWorkerHostPort(HostPort &addr) const;
-
-    /**
-     * @brief Submit an asynchronous switch away from an unavailable bound worker.
-     * @param[in] workerApi The worker API that triggered the switch.
-     * @return True if a switch task was submitted; false if it was stale, duplicate, or switching is disabled.
-     */
 
     static bool ShouldRefreshRoutingAfterFailure(StatusCode code);
 
@@ -1068,36 +1039,7 @@ private:
     bool ShouldForceRefreshRouting(
         const HostPort &owner, std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 
-    void MaybeSwitchWorkerRemovedFromRing(const ::datasystem::ClusterTopologyPb &ring);
-
-
-    /**
-     * @brief Check whether an asynchronous switch trigger still belongs to the current worker.
-     * @param[in] node The worker node slot captured by the trigger.
-     * @param[in] workerApi The worker API that reported the failure.
-     * @return True if the trigger source is still current and should switch.
-     */
-
     Status InitListenWorker();
-
-    Status InitListenWorkerAt(WorkerNode node, bool isLocalWorker);
-
-    /**
-     * @brief Build the data-plane hooks that let a standby listener check whether its endpoint is still
-     * carrying data traffic before it shuts the control connection down.
-     * @param[in] workerAddr Address of the worker the standby listener is connected to.
-     * @return Handle whose callbacks only reference the data-plane manager by weak pointer.
-     */
-    client::ListenWorker::DataPlaneDrainHandle MakeDataPlaneDrainHandle(const HostPort &workerAddr) const;
-
-    /**
-     * @brief Arm the standby drain gate on node's listener so it is not shut down while its data plane
-     * still serves metadata-owner reads.
-     * @param[in] node Worker node slot whose listener is becoming a standby.
-     */
-    void ArmStandbyDataPlaneDrain(WorkerNode node);
-
-    Status InitPreferredRemoteFallback(const HostPort &remoteAddress, bool enableHeartbeat, int32_t connectTimeoutMs);
 
     Status InitWorkerClientAtCurrentAddress(bool enableHeartbeat, bool isSameNode, int32_t connectTimeoutMs = -1);
 
@@ -1249,6 +1191,223 @@ private:
     Status PostPipelineRH2D(std::promise<AsyncResult> &promise, PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp,
                             std::vector<std::shared_ptr<Buffer>> &buffers);
 
+    std::shared_ptr<ObjectBufferInfo> MakeUbPoolBufferInfo(const std::string &objectKey, uint64_t dataSize,
+                                                           const FullParam &param, uint32_t version,
+                                                           const ShmKey &shmId);
+    Status CreateShmBuffer(const std::string &objectKey, uint64_t dataSize, const FullParam &param,
+                           const std::shared_ptr<IClientWorkerApi> &workerApi, const LatencyTraceConfig &config,
+                           bool traceEnabled, std::shared_ptr<Buffer> &newBuffer);
+    Status ConstructMultiCreateParam(const std::vector<std::string> &objectKeyList,
+                                     const std::vector<uint64_t> &dataSizeList,
+                                     std::vector<std::shared_ptr<Buffer>> &bufferList,
+                                     std::vector<MultiCreateParam> &multiCreateParamList, uint64_t &dataSizeSum);
+    Status DecreaseReferenceCntImpl(const ShmKey &shmId, bool isShm, uint32_t version);
+    Status TimedMmapLookupWithDeadline(const std::shared_ptr<ShmUnitInfo> &shmBuf, uint64_t size);
+    Status TimedMemoryCopyWithDeadline(const std::shared_ptr<Buffer> &buffer, const uint8_t *data, uint64_t size,
+                                       bool traceEnabled);
+    Status CreateLocalPutBufferInfo(const std::string &objectKey, uint64_t size, const FullParam &param,
+                                    uint32_t version, uint64_t metadataSize,
+                                    const std::shared_ptr<ShmUnitInfo> &shmBuf,
+                                    const std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo,
+                                    std::shared_ptr<ObjectBufferInfo> &objectInfo);
+    Status ProcessShmPut(const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
+                         const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond,
+                         const std::shared_ptr<IClientWorkerApi> &workerApi, int existence,
+                         SetFailureStage &failureStage, int32_t requestTimeoutMs);
+    Status CheckLocalUbSenderAdmission(const std::shared_ptr<IClientWorkerApi> &workerApi) const;
+    Status ProcessDirectSetWithoutTransport(const std::string &objectKey, const uint8_t *data, uint64_t size,
+                                            const FullParam &param,
+                                            const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond,
+                                            int existence, const SetRouteContext &routeContext,
+                                            SetFailureStage &failureStage, std::vector<HostPort> &excludedWorkers,
+                                            int32_t requestTimeoutMs);
+    Status CheckPipelineRH2DArgs(const std::vector<std::string> &objectKeys, const std::vector<Blob> &devBlob);
+    Status CheckLocalPipelineRH2DArgs(std::shared_ptr<IClientWorkerApi> &workerApi);
+    void BuildClientDirectRH2DReadRequest(const std::vector<std::string> &objectKeys,
+                                          client::ObjectReadRequest &request, std::vector<Status> &itemStatuses,
+                                          int64_t subTimeoutMs, bool queryL2Cache);
+    Status RecoverWorkerAndRetryGet(const std::shared_ptr<IClientWorkerApi> &workerApi, GetParam &getParam,
+                                    const std::vector<std::string> &objectKeys,
+                                    std::vector<std::shared_ptr<Buffer>> &buffers, Status *ingressRpcStatus);
+    Status GetFromLocalWorker(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs,
+                              std::vector<std::shared_ptr<Buffer>> &buffers, bool queryL2Cache, bool isRH2DSupported,
+                              int32_t requestTimeoutMs);
+    Status GetWithLocalPreference(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs,
+                                  std::vector<std::shared_ptr<Buffer>> &buffers, bool queryL2Cache,
+                                  bool isRH2DSupported, int32_t requestTimeoutMs, bool traceEnabled);
+    Status SetShmObjectBuffer(const std::string &objectKey, const GetRspPb::ObjectInfoPb &info, uint32_t version,
+                              std::shared_ptr<Buffer> &buffer);
+    static std::shared_ptr<ObjectBufferInfo> MakeObjectBufferInfo(
+        const std::string &objectKey, uint8_t *pointer, uint64_t size, uint64_t metaSize, const FullParam &param,
+        uint32_t version, const ShmKey &shmId = {}, const std::shared_ptr<RpcMessage> &payloadPointer = nullptr,
+        std::shared_ptr<client::IMmapTableEntry> mmapEntry = nullptr,
+        std::shared_ptr<RemoteH2DHostInfoPb> remoteHostInfo = nullptr);
+    Status GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> workerApi, GetParam &getParam,
+                                std::vector<std::shared_ptr<Buffer>> &buffers, Status *ingressRpcStatus = nullptr);
+    Status GetBuffersFromWorkerBatched(std::shared_ptr<IClientWorkerApi> workerApi, const GetParam &getParam,
+                                       std::vector<std::shared_ptr<Buffer>> &buffers,
+                                       const std::vector<ObjMetaInfo> &objMetas, uint64_t ubMaxGetSize,
+                                       AccessTransportKind *requestTransportKind, Status *ingressRpcStatus = nullptr);
+    Status GetBufferBatchFromWorker(const std::shared_ptr<IClientWorkerApi> &workerApi, const GetParam &getParam,
+                                    const std::vector<size_t> &indices, uint64_t totalSize,
+                                    std::vector<std::shared_ptr<Buffer>> &buffers, size_t &successCount,
+                                    AccessTransportKind *requestTransportKind, Status &ingressRpcStatus);
+    Status GetOversizedBufferFromWorkerByChunks(std::shared_ptr<IClientWorkerApi> workerApi, const GetParam &getParam,
+                                                size_t objectIndex, uint64_t objectSize, uint64_t ubMaxGetSize,
+                                                std::shared_ptr<Buffer> &buffer,
+                                                AccessTransportKind *requestTransportKind,
+                                                Status *ingressRpcStatus = nullptr);
+    Status GetOversizedBufferChunk(std::shared_ptr<IClientWorkerApi> workerApi, const GetParam &getParam,
+                                   const std::string &objectKey, uint64_t offset, uint64_t chunkSize,
+                                   std::shared_ptr<Buffer> &chunkBuffer, uint32_t &version,
+                                   AccessTransportKind *requestTransportKind, Status *ingressRpcStatus = nullptr);
+    Status CopyOversizedBufferChunk(const std::string &objectKey, uint64_t objectSize, uint64_t offset,
+                                    const std::shared_ptr<Buffer> &chunkBuffer, std::shared_ptr<Buffer> &buffer,
+                                    uint64_t &copiedSize);
+    Status ProcessGetResponse(
+        const std::vector<std::string> &objectKeys, const std::vector<ReadRangeParam> &readParams, GetRspPb &rsp,
+        uint32_t version, std::vector<RpcMessage> &payloads, std::vector<std::shared_ptr<Buffer>> &buffers,
+        std::vector<std::string> &failedObjectKey,
+        const std::unordered_map<std::string, std::shared_ptr<ObjectBufferInfo>> &ubBufferInfos = {});
+    Status GetObjectBuffers(
+        const std::vector<std::string> &objectsNeedToGet, const GetRspPb &rsp, uint32_t version,
+        const std::vector<ReadRangeParam> &readParams, std::vector<RpcMessage> &payloads,
+        std::vector<std::shared_ptr<Buffer>> &buffers, std::vector<std::string> &failedObjectKey,
+        const std::unordered_map<std::string, std::shared_ptr<ObjectBufferInfo>> &ubBufferInfos = {});
+    Status SetShmObjectBufferWithMetric(const std::string &objectKey, const GetRspPb::ObjectInfoPb &info,
+                                        uint32_t version, const std::vector<ReadRangeParam> &readParams, size_t index,
+                                        std::shared_ptr<Buffer> &bufferPtr);
+    Status SetNoShmObjectBufferWithMetric(
+        const std::string &objectKey, const GetRspPb::PayloadInfoPb &payloadInfo, uint32_t version,
+        std::vector<RpcMessage> &payloads,
+        const std::unordered_map<std::string, std::shared_ptr<ObjectBufferInfo>> &ubBufferInfos,
+        std::shared_ptr<Buffer> &bufferPtr);
+    Status SetRemoteHostObjectBuffer(const std::string &objectKey, const GetRspPb::ObjectInfoPb &info, uint32_t version,
+                                     std::shared_ptr<Buffer> &buffer);
+    Status SetNonShmObjectBuffer(const std::string &objectKey, const GetRspPb::PayloadInfoPb &payloadInfo, int version,
+                                 std::vector<RpcMessage> &payloads, std::shared_ptr<Buffer> &bufferPtr);
+    Status SetOffsetReadObjectBuffer(const std::string &objectKey, const GetRspPb::ObjectInfoPb &info, uint32_t version,
+                                     uint64_t offset, uint64_t size, std::shared_ptr<Buffer> &buffer);
+    std::string ConstructObjKeyWithTenantId(const std::string &objKey);
+    void GIncreaseRefRollback(const std::vector<std::string> &rollbackObjectKeys,
+                              std::map<std::string, GlobalRefInfo> &accessorTable);
+    void GDecreaseRefRollback(const std::vector<std::string> &rollbackObjectKeys,
+                              std::map<std::string, GlobalRefInfo> &accessorTable);
+    void RemoveZeroGlobalRefByRefTable(const std::vector<std::string> &checkIds,
+                                       std::map<std::string, GlobalRefInfo> &accessorTable);
+    void AddTbbLockForGlobalRefIds(const std::vector<std::string> &objectKeys,
+                                   std::map<std::string, GlobalRefInfo> &accessorTable,
+                                   std::unordered_map<std::string, std::string> &objTenantIdsToObj);
+    Status MutiCreateParallel(const bool skipCheckExistence, const FullParam &param, const uint32_t &version,
+                              std::vector<bool> &exists, std::vector<MultiCreateParam> &multiCreateParamList,
+                              std::vector<std::shared_ptr<Buffer>> &bufferList);
+    Status CreateBufferForMultiCreateParamAtIndex(size_t index, bool skipCheckExistence, const FullParam &param,
+                                                  uint32_t version, const std::vector<bool> &exists,
+                                                  std::vector<MultiCreateParam> &multiCreateParamList,
+                                                  std::vector<std::shared_ptr<Buffer>> &bufferList);
+    Status MemoryCopyParallel(bool isParallel, const std::vector<std::string> &keys,
+                              const std::vector<StringView> &vals, const FullParam &createParam,
+                              std::vector<std::shared_ptr<Buffer>> &bufferList,
+                              std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList,
+                              AccessTransportKind *requestTransportKind = nullptr);
+    Status MemoryCopyParallelWithDeadline(bool isParallel, const std::vector<std::string> &keys,
+                                          const std::vector<StringView> &vals, const FullParam &createParam,
+                                          std::vector<std::shared_ptr<Buffer>> &bufferList,
+                                          std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList,
+                                          uint64_t dataSizeSum, AccessTransportKind *requestTransportKind);
+    Status MSetCreateCopyAndPublish(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
+                                    const std::vector<std::string> &deduplicateKeys,
+                                    const std::vector<StringView> &deduplicateVals, const MSetParam &param,
+                                    const std::shared_ptr<IClientWorkerApi> &workerApi,
+                                    std::vector<std::string> &outFailedKeys, PerfPoint &point);
+
+    Status RecoverWorkerAndRetryPublish(const std::shared_ptr<IClientWorkerApi> &workerApi,
+                                        const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
+                                        const std::unordered_set<std::string> &nestedObjectKeys, bool isShm);
+
+    Status RecoverWorker();
+
+    void ObserveGetProviderUbFailure(const std::shared_ptr<IClientWorkerApi> &workerApi, const GetRspPb &rsp);
+    void HandleDirectGetFailure(const std::shared_ptr<IClientWorkerApi> &workerApi, const Status &status);
+
+    // Routed two-step Create/Publish (Component D). When local cache is off, allocate the buffer
+    // on the hash-ring-selected worker via the transport layer and bridge the result to a legacy
+    // Buffer; publish it via the transport layer on the worker pinned at Create time. The one-step
+    // equivalents are ProcessTransportPut (Create+Set) below.
+    Status CreateRoutedBuffer(const std::string &objectKey, uint64_t dataSize, const FullParam &param,
+                              std::shared_ptr<Buffer> &buffer);
+
+    // Routed two-step MultiCreate (lc=false batch). Allocates buffers on hash-ring-selected workers
+    // via transportLayer_->MCreate and bridges each ObjectBufferInfo to a legacy Buffer at its
+    // original key index. Mirrors CreateRoutedBuffer for the batch case.
+    Status MultiCreateRouted(const std::vector<std::string> &objectKeyList, const std::vector<uint64_t> &dataSizeList,
+                             const FullParam &param, std::vector<std::shared_ptr<Buffer>> &bufferList,
+                             std::vector<bool> &exists);
+
+    // Build the route context for one worker, call transportLayer_->MCreate, and bridge each
+    // returned ObjectBuffer to a legacy Buffer at its original key index. Extracted from
+    // MultiCreateRouted to keep each function within the codecheck size limit.
+    Status ProcessRoutedMCreateGroup(const HostPort &worker, const std::vector<std::string> &keys,
+                                     const std::vector<uint64_t> &sizes, const FullParam &param,
+                                     const std::unordered_map<std::string, size_t> &keyIndex,
+                                     std::vector<std::shared_ptr<Buffer>> &bufferList);
+    Status ProcessTransportPut(const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
+                               const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond,
+                               int existence, const SetRouteContext &routeContext, SetFailureStage &failureStage,
+                               client::TransportSetResult &transportResult, int32_t requestTimeoutMs);
+    void BuildTransportReadRequest(const std::vector<std::string> &objectKeys, client::ObjectReadRequest &request,
+                                   std::vector<Status> &itemStatuses, int64_t subTimeoutMs, bool queryL2Cache,
+                                   const std::vector<HostPort> &excludedWorkers = {});
+    Status BuildTransportGetResponse(client::ObjectReadItemResult &item, GetRspPb &response,
+                                     std::unordered_map<std::string, std::shared_ptr<ObjectBufferInfo>> &ubBufferInfos,
+                                     uint64_t &payloadSize);
+    Status MaterializeTransportItem(const std::string &objectKey, client::ObjectReadItemResult &item,
+                                    std::shared_ptr<Buffer> &buffer);
+    Status ApplyTransportReadResult(const std::vector<std::string> &objectKeys,
+                                    const client::ObjectReadRequest &request, client::ObjectReadResult &result,
+                                    const Status &transportStatus, std::vector<std::shared_ptr<Buffer>> &buffers,
+                                    std::vector<Status> &itemStatuses, AccessTransportKind &actualKind,
+                                    std::vector<HostPort> &excludedWorkers);
+    Status FinishTransportRead(const std::vector<Status> &itemStatuses, AccessTransportKind actualKind,
+                               const Status &transportStatus);
+    Status ReadTransportRound(const std::vector<std::string> &objectKeys, bool traceEnabled, int64_t subTimeoutMs,
+                              bool queryL2Cache, std::vector<std::shared_ptr<Buffer>> &buffers,
+                              std::vector<Status> &itemStatuses, AccessTransportKind &actualKind,
+                              Status &transportStatus, std::vector<HostPort> &excludedWorkers);
+    Status GetFromTransportLayer(const std::vector<std::string> &objectKeys,
+                                 std::vector<std::shared_ptr<Buffer>> &buffers, bool traceEnabled, int64_t subTimeoutMs,
+                                 bool queryL2Cache, std::vector<HostPort> excludedWorkers = {});
+    Status CheckMultiSetInputParamValidationNtx(const std::vector<std::string> &keys,
+                                                const std::vector<StringView> &vals,
+                                                std::vector<std::string> &outFailedKeys,
+                                                std::vector<std::string> &deduplicateKeys,
+                                                std::vector<StringView> &deduplicateVals);
+    Status MemoryCopyTransportMSetBuffers(const MSetRouteGroup &group,
+                                          const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                                          uint64_t dataSizeSum);
+    Status BuildMSetRouteGroups(const std::vector<std::string> &keys, const std::vector<StringView> &values,
+                                std::vector<MSetRouteGroup> &groups);
+    Status ProcessTransportMSet(const MSetRouteGroup &group, const MSetParam &param,
+                                const SetRouteContext &routeContext, client::TransportMSetResult &result,
+                                SetFailureStage &failureStage, PerfPoint &point);
+    Status BuildMSetRetryRouteGroups(const MSetRouteGroup &group, const std::vector<HostPort> &excludedWorkers,
+                                     std::vector<MSetRouteGroup> &groups);
+    Status ExecuteTransportMSetRetryGroups(const std::vector<MSetRouteGroup> &groups, const MSetParam &param,
+                                           const std::vector<HostPort> &excludedWorkers, size_t attempt,
+                                           std::vector<std::string> &outFailedKeys, PerfPoint &point);
+    Status ExecuteTransportMSetGroupAttempt(const MSetRouteGroup &group, const MSetParam &param,
+                                            std::vector<HostPort> excludedWorkers, size_t attempt,
+                                            std::vector<std::string> &outFailedKeys, PerfPoint &point);
+    Status ExecuteTransportMSetGroup(const MSetRouteGroup &group, const MSetParam &param,
+                                     std::vector<std::string> &outFailedKeys, PerfPoint &point);
+    Status MSetThroughTransport(const std::vector<std::string> &keys, const std::vector<StringView> &values,
+                                const MSetParam &param, std::vector<std::string> &outFailedKeys, PerfPoint &point);
+    Status RunExist(std::shared_ptr<client::Routing> routing, const std::vector<std::string> &keys,
+                    std::vector<bool> &exists, const bool queryL2Cache, const bool isLocal,
+                    const SensitiveValue &token);
+
+    std::shared_ptr<client::TransportReadContext> CreateTransportReadContext(int64_t subTimeoutMs, bool queryL2Cache);
+    void ObserveReadLoadFeedback(const SetRouteContext &routeContext, const PublishRspPb &rsp);
 
     HostPort ipAddress_;
     RpcAuthKeys authKeys_;
@@ -1257,30 +1416,15 @@ private:
     uint64_t fastTransportMemSize_;
     SensitiveValue token_;
     std::string tenantId_;
-    bool enableCrossNodeConnection_ = false;
     bool enableLocalCache_ = true;
     client::DataPlacementPolicy dataPlacementPolicy_ = client::DataPlacementPolicy::PREFERRED_SAME_NODE;
     std::shared_ptr<Signature> signature_{ nullptr };
-    std::vector<std::shared_ptr<IClientWorkerApi>> workerApi_;
-    std::atomic<WorkerNode> currentNode_{ LOCAL_WORKER };
+    std::shared_ptr<IClientWorkerApi> workerApi_;
     // One pin queue, one deferred-unmap queue, and one operation mutex for every Worker connection
     // owned by this Client.
     std::shared_ptr<client::HostMemoryPinManager> hostMemoryPinManager_;
-    // Must stay declared before the dependencies it references (mmapManager_/transportLayer_/
-    // pools/ref tables below): they are destroyed before boundMode_, whose destructor must
-    // never dereference them. ShutDown drains work before member destruction begins.
-    std::unique_ptr<RoutedMode> routedMode_;
-    std::unique_ptr<BoundMode> boundMode_;
-    // Destructed before workerApi_/listenWorker_; callbacks registered into them are cleared in ShutDown.
+    // Destructed after listenWorker_ and before workerApi_; callbacks are cleared in ShutDown.
     std::unique_ptr<WorkerFailover> failover_;
-    // Thin forwarders kept for existing callers (tests); real logic lives in WorkerFailover.
-    bool SubmitUrmaDataPlaneSwitch(WorkerNode node, std::weak_ptr<client::IClientWorkerCommonApi> weakWorkerApi);
-    bool SubmitUnavailableWorkerSwitch(const std::shared_ptr<IClientWorkerApi> &workerApi);
-    void DrainAsyncSwitchWorkerPool();
-    mutable std::mutex switchNodeMutex_;  // Protecting the process of switching workers.
-    WorkerSwitchState workerSwitchState_{ WorkerSwitchState::AVAILABLE };
-    bool switchInProgress_{ false };
-    uint64_t switchGeneration_{ 0 };
     std::unique_ptr<client::MmapManager> mmapManager_{ nullptr };
     std::unique_ptr<ClientDeviceObjectManager> devOcImpl_{ nullptr };
     std::mutex preRegisteredDeviceMemoryMutex_;
@@ -1298,7 +1442,6 @@ private:
 
     ClientMemoryRefTable memoryRefCount_;
     TbbGlobalRefTable globalRefCount_;
-    struct ShmRecoveryState;
     std::unique_ptr<ShmRecoveryState> shmRecoveryState_;
 
     std::unique_ptr<ClientStateManager> clientStateManager_{ nullptr };
@@ -1308,33 +1451,18 @@ private:
     std::shared_ptr<ThreadPool> asyncGetRPCPool_;
     std::shared_ptr<ThreadPool> asyncPipelineRH2DPool_;
     std::shared_ptr<ThreadPool> asyncGetCopyPool_;
-    std::shared_ptr<ThreadPool> asyncSwitchWorkerPool_;
-    ThreadPool *asyncSwitchWorkerPoolHandle_{ nullptr };
-    std::mutex asyncSwitchWorkerMutex_;
-    std::unordered_set<const IClientWorkerApi *> unavailableWorkerSwitchPending_;
     std::shared_ptr<ThreadPool> asyncDevDeletePool_;
     std::shared_ptr<ThreadPool> asyncReleasePool_;
     std::shared_ptr<Signature> transportSignature_;
     std::shared_ptr<const SensitiveValue> transportToken_;
     std::unique_ptr<client::TransportLayer> transportLayer_;
-    // Cached once in InitTransportLayer() (after transportLayer_ is built) and only read afterwards by the
-    // async-switch threads via MakeDataPlaneDrainHandle(). ShutDown() resets transportLayer_ before draining
-    // those threads, so those threads must never dereference transportLayer_ directly; a cached weak_ptr is
-    // safe to read and turns into "expired" (allow drain) once the transport layer is gone.
-    std::weak_ptr<client::DataPlaneManager> dataPlaneManagerWeak_;
-    // Published at the end of InitClientRuntimeAt() (release) once the data-plane setup is final: either
-    // InitTransportLayer() has built the manager (late-init path) or the client legitimately has no transport
-    // layer (SHM-only). The async switch-back path (WorkerFailover::GetPreferredLocalWorkerToRecover) gates on
-    // this flag (acquire), so ArmStandbyDataPlaneDrain() never reads dataPlaneManagerWeak_ before it is
-    // written — reading it during the early-init window would both be a data race and permanently capture an
-    // empty manager in the drain handle.
-    std::atomic<bool> dataPlaneManagerPublished_{ false };
+    std::shared_ptr<client::ObjectControlRpcClient> controlRpcClient_;
     std::shared_ptr<client::Routing> routing_;
     std::shared_ptr<client::WorkerUbHealthRegistry> ubHealthRegistry_;
     std::shared_ptr<client::UbHealthFilter> ubHealthFilter_;
 
     // Listenworker needs to be placed at the bottom to ensure that it is destructed first.
-    std::vector<std::shared_ptr<client::ListenWorker>> listenWorker_;
+    std::shared_ptr<client::ListenWorker> listenWorker_;
 
     // verify remoteClientId format.
     re2::RE2 simpleIdRe_{ "^[a-zA-Z0-9_]*$" };
@@ -1352,7 +1480,6 @@ private:
     std::atomic<bool> shmRefReconcileExitFlag_{ false };
     WaitPost shmRefReconcileExitPost_;
     std::unique_ptr<Thread> shmRefReconcileThread_{ nullptr };
-    WaitPost switchPost_;
 
     // Periodic worker health probe state. The probe thread calls HealthCheck on the current
     // connected worker at workerHealthIntervalMs_ and delivers the probe Status to
@@ -1376,11 +1503,11 @@ private:
     uint64_t memcpyParallelThreshold_ = 0;
     uint64_t setMemcpyParallelThreshold_ = 4 * 1024 * 1024;
 
-    // Address snapshot of the currently bound worker, shared with the routing probe fallback. The
+    // Address snapshot of the primary registration worker, shared with the routing probe fallback. The
     // fallback closure must never hold an ObjectClientImpl reference: releasing the last strong
     // reference on the refresh thread would run ~ObjectClientImpl there and self-join the refresh
     // thread inside HashRingRefresher::Stop().
-    struct BoundWorkerSeed {
+    struct PrimaryWorkerSeed {
         void Set(const HostPort &address)
         {
             std::lock_guard<std::mutex> lock(mu);
@@ -1397,7 +1524,7 @@ private:
         HostPort addr;
     };
 
-    std::shared_ptr<BoundWorkerSeed> boundWorkerSeed_ = std::make_shared<BoundWorkerSeed>();
+    std::shared_ptr<PrimaryWorkerSeed> primaryWorkerSeed_ = std::make_shared<PrimaryWorkerSeed>();
     std::shared_ptr<IServiceDiscovery> serviceDiscovery_ = nullptr;
 };
 }  // namespace object_cache

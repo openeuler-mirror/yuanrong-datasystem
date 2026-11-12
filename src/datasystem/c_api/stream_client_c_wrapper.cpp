@@ -36,8 +36,7 @@ StreamClient_p StreamCreateClient(const char *cWorkerHost, const int workerPort,
                                   size_t tokenLen, const char *clientPublicKey, size_t cClientPublicKeyLen,
                                   const char *clientPrivateKey, size_t clientPrivateKeyLen, const char *serverPublicKey,
                                   size_t cServerPublicKeyLen, const char *accessKey, size_t cAccessKeyLen,
-                                  const char *secretKey, size_t secretKeyLen, const char *tenantId, size_t cTenantIdLen,
-                                  const char *enableCrossNodeConnection)
+                                  const char *secretKey, size_t secretKeyLen, const char *tenantId, size_t cTenantIdLen)
 {
     datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
     if (cWorkerHost == nullptr || strlen(cWorkerHost) == 0 || workerPort < 0) {
@@ -51,7 +50,7 @@ StreamClient_p StreamCreateClient(const char *cWorkerHost, const int workerPort,
     };
     ConstructConnectOptions(timeOut, token, tokenLen, clientPublicKey, cClientPublicKeyLen, clientPrivateKey,
                             clientPrivateKeyLen, serverPublicKey, cServerPublicKeyLen, accessKey, cAccessKeyLen,
-                            secretKey, secretKeyLen, tenantId, cTenantIdLen, enableCrossNodeConnection, opts);
+                            secretKey, secretKeyLen, tenantId, cTenantIdLen, opts);
     auto clientSharedPtr = std::make_shared<datasystem::StreamClient>(opts);
     auto clientUniquePtr = std::make_unique<std::shared_ptr<datasystem::StreamClient>>(std::move(clientSharedPtr));
     return reinterpret_cast<void *>(clientUniquePtr.release());

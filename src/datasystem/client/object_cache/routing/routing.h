@@ -36,6 +36,7 @@
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -45,13 +46,13 @@ class Routing {
 public:
     static constexpr int64_t DEFAULT_REFRESH_INTERVAL_MS = 5'000;
 
-    Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> signature,
+    Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> signature, SensitiveValue clientToken = {},
             HashRingRefresher::RingUpdateHook ringUpdateHook = {},
             std::vector<std::shared_ptr<IWorkerFilter>> additionalFilters = {},
             int64_t refreshIntervalMs = DEFAULT_REFRESH_INTERVAL_MS,
             std::function<void(uint64_t)> refreshConfirmedHook = {},
             HashRingRefresher::ProbeListFallback probeFallback = {});
-    Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> signature,
+    Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> signature, SensitiveValue clientToken,
             HashRingRefresher::RingUpdateHook ringUpdateHook,
             std::shared_ptr<WorkerUbHealthRegistry> ubHealthRegistry,
             std::vector<std::shared_ptr<IWorkerFilter>> additionalFilters = {},
@@ -107,6 +108,7 @@ private:
     std::shared_ptr<WorkerRouter> router_;
     std::shared_ptr<HashRingRefresher> refresher_;
     std::shared_ptr<RoutingRpcClient> rpcClient_;
+    SensitiveValue clientToken_;
     int64_t refreshIntervalMs_;
     std::function<void(uint64_t)> refreshConfirmedHook_;
     HostPort initialWorkerAddr_;

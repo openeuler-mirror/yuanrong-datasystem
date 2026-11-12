@@ -167,7 +167,6 @@ ConnectOptions ToCppConnectOptions(JNIEnv *env, jobject connectOptionsJO)
     auto accessKey = GetStringField(env, connectOptsJC, connectOptionsJO, "accessKey");
     auto secretKey = GetSecretField(env, connectOptsJC, connectOptionsJO, "secretKey");
     auto tenantId = GetStringField(env, connectOptsJC, connectOptionsJO, "tenantID");
-    auto enableCrossNodeConnection = GetBooleanField(env, connectOptsJC, connectOptionsJO, "enableCrossNodeConnection");
     ConnectOptions connectOptions = { .host = std::move(host),
                                       .port = port,
                                       .connectTimeoutMs = connectTimeoutMs,
@@ -178,8 +177,7 @@ ConnectOptions ToCppConnectOptions(JNIEnv *env, jobject connectOptionsJO)
                                       .serverPublicKey = std::move(serverPublicKey),
                                       .accessKey = std::move(accessKey),
                                       .secretKey = std::move(secretKey),
-                                      .tenantId = std::move(tenantId),
-                                      .enableCrossNodeConnection = enableCrossNodeConnection };
+                                      .tenantId = std::move(tenantId) };
     env->DeleteLocalRef(connectOptsJC);
     return connectOptions;
 }

@@ -11,47 +11,28 @@
  * limitations under the License.
  */
 
-/**
- * Description: Client listen worker class.
- */
 #ifndef DATASYSTEM_CLIENT_LISTEN_WORKER_H
 #define DATASYSTEM_CLIENT_LISTEN_WORKER_H
 
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <shared_mutex>
-#include <thread>
+#include <string>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
-#include <sys/mman.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
-#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/client/worker_api/client_worker_common_api.h"
 #include "datasystem/common/eventloop/event_loop.h"
-#include "datasystem/common/log/log.h"
 #include "datasystem/common/util/locks.h"
-#include "datasystem/common/util/fd_pass.h"
-#include "datasystem/common/util/status_helper.h"
-#include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/thread.h"
-#include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/wait_post.h"
 
 namespace datasystem {
 namespace client {
 constexpr int INVALID_SOCKET_FD = -1;
-
-enum class SwitchTriggerReason : uint8_t {
-    WORKER_UNAVAILABLE = 0,
-    VOLUNTARY_SCALE_DOWN,
-    URMA_DATA_PLANE_FAILURE,
-    LOCAL_RESTORE,
-};
 
 enum class WorkerRecoveryReason : uint8_t {
     WORKER_REBOOT = 0,
@@ -82,367 +63,70 @@ public:
     }
 
 private:
-    std::vector<int64_t> expiredWorkerFds_;  // use only in heartbeat thread, no lock here.
+    std::vector<int64_t> expiredWorkerFds_;
     std::function<void(const std::vector<int64_t> &fds)> releaseCallBack_;
 };
 
-class ListenWorker : public std::enable_shared_from_this<ListenWorker> {
+class ListenWorker {
 public:
-    /**
-     * @brief Data-plane hooks used to decide whether a standby connection may be disconnected.
-     * The metadata-owner read path keeps an endpoint data plane alive independently of the
-     * control-plane switch, so an idle control connection does not imply an idle data plane.
-     */
-    struct DataPlaneDrainHandle {
-        // Returns true when the endpoint data plane has been unused for quietMs.
-        std::function<bool(uint64_t quietMs)> isQuiet;
-        // Drops the cached data plane for the endpoint while keeping the RPC connection.
-        std::function<void()> reset;
-    };
-
-    ListenWorker(std::shared_ptr<IClientWorkerCommonApi> clientCommonWorker, HeartbeatType type, uint32_t index = 0,
-                 ThreadPool *pool = nullptr);
+    ListenWorker(std::shared_ptr<IClientWorkerCommonApi> clientCommonWorker, HeartbeatType type,
+                 bool closeAdmissionOnScaleDown = false);
     virtual ~ListenWorker();
     ListenWorker(const ListenWorker &, HeartbeatType type) = delete;
     ListenWorker &operator=(const ListenWorker &) = delete;
 
-    /**
-     * @brief Start listen thread.
-     * @param[in] socket The socket's fd which is listened.
-     * @return Status of the call.
-     */
     Status StartListenWorker(int socket = INVALID_SOCKET_FD);
-
-    /**
-     * @brief Stop listening worker.
-     * @param[in] stopActively If it is an active shutdown scenario,
-     * we need to actively send a Disconnect request to the worker.
-     */
     void StopListenWorker(bool stopActively = false);
-
-    /**
-     * @brief Wait until the RPC heartbeat listener thread exits.
-     */
     void JoinListenWorker();
-
-    /**
-     * @brief Get the Worker status.
-     * @return Return true if worker is OK, else return false.
-     */
     Status CheckWorkerAvailable();
-
-    /**
-     * @brief Set the workerStatus_ after reconnection.
-     * @param[in] workerStatus The worker status that worker alive or not.
-     */
     void SetWorkerAvailable(bool workerStatus);
-
-    /**
-     * @brief Set the callback function.
-     * @param[in] pointer Object pointer.
-     * @param[in] callback Callback function invoked when the worker is faulty.
-     */
     void AddCallBackFunc(void *pointer, std::function<void()> callback);
-
-    /**
-     * @brief Set a worker recovery callback whose status controls request admission.
-     * @param[in] pointer Object pointer.
-     * @param[in] callback Callback that completes all mandatory recovery work before returning OK.
-     */
     void AddRecoveryCallback(void *pointer, std::function<Status(WorkerRecoveryReason)> callback);
-
-    /**
-     * @brief Remove the callback function.
-     * @param[in] pointer Object pointer.
-     */
     void RemoveCallBackFunc(void *pointer);
-
-    /**
-     * @brief Set the socketFd after reconnected.
-     * @param[in] socketFd the tcp connection fd.
-     * @return Return true if worker is OK, else return false.
-     */
-    Status UpdateSocketFd(const int socketFd);
-
-    /**
-     * @brief Set the switch worker handle.
-     * @param[in] callback The handle of switch worker.
-     */
-    void SetSwitchWorkerHandle(std::function<bool(uint32_t, SwitchTriggerReason)> callback);
-
-    /**
-     * @brief Set the isLocalWorker.
-     * @param[in] isLocalWorker The worker is local or not.
-     */
-    void SetIsLocalWorker(bool isLocalWorker);
-
-    /**
-     * @brief Check and set client timeout.
-     * @param[in] failureTime Client heart beat failure time.
-     * @param[in] nodeTimeoutMs Client timeoutMs.
-     * @param[in] status Status of heartbeat.
-     */
+    Status UpdateSocketFd(int socketFd);
     void CheckAndSetClientTimeout(int64_t failureTime, int64_t nodeTimeoutMs, const Status &status);
-
-    /**
-     * @brief Check if worker is voluntary scale down.
-     * @return T/F
-     */
     bool IsWorkerVoluntaryScaleDown();
-
-    /**
-     * @brief Set the fd reclamation handle.
-     * @param[in] callback The handle of fd reclamation.
-     */
     void SetReleaseFdCallBack(std::function<void(const std::vector<int64_t> &)> callback);
-
-    /**
-     * @brief Set the local worker recovery handle. Used from non-local listeners to
-     * re-acquire a same-node worker (including after the original local worker
-     * came back at a different address).
-     * @param[in] callback Returns true if the client switched back to a same-node worker.
-     */
-    void SetRecoverLocalWorkerHandle(std::function<bool()> callback);
-
-    /**
-     * @brief Set the timeout handle for local cleanup when heartbeat timeout happens.
-     * @param[in] callback Callback invoked once when workerAvailable_ changes from true to false due to timeout.
-     */
     void SetWorkerTimeoutHandle(std::function<void()> callback);
-
-    /**
-     * @brief Set the standby data-plane drain handle.
-     * Must be called before the connection is marked switched. Without a handle the listener keeps the
-     * legacy behaviour of draining as soon as the control connection looks idle.
-     * May be re-registered when a node is switched back to standby again (see dataPlaneDrainMutex_).
-     * @param[in] handle Data-plane hooks for this endpoint.
-     */
-    void SetDataPlaneDrainHandle(DataPlaneDrainHandle handle)
-    {
-        std::lock_guard<SharedMutex> l(dataPlaneDrainMutex_);
-        dataPlaneDrain_ = std::move(handle);
-    }
-
-    /**
-     * @brief Set standby worker is switched, it would happen when local worker is recover.
-     */
-    void SetSwitched()
-    {
-        isSwitched_ = true;
-    }
-
-    /**
-     * @brief Clear the switched flag after the client is restored to this worker, so the heartbeat path
-     * stops requesting redundant switch-backs.
-     */
-    void ResetSwitched()
-    {
-        isSwitched_ = false;
-    }
-
-    /**
-     * @brief Shutdown standby connection
-     */
-    void ShutdownStandbyConnection();
-
-    /**
-     * @brief Check whether a switched standby connection can be disconnected without breaking data traffic.
-     * The metadata-owner read path keeps an endpoint's data plane alive independently of the control-plane
-     * switch, so an idle control connection does not imply an idle data plane.
-     * @return True when the standby connection may be shut down.
-     */
-    bool CanDisconnectStandby()
-    {
-        // Worker is leaving: drain immediately, the legacy behaviour.
-        if (isWorkerVoluntaryScaleDown_.load(std::memory_order_relaxed)) {
-            return true;
-        }
-        // IsStandbyDataPlaneQuiet() copies the hook under the shared lock itself, so a concurrent
-        // re-registration (the node switched back to standby again) cannot tear the std::function while it is
-        // being invoked. This is the single definition of "a standby may be torn down": the teardown path
-        // calls back into it instead of restating the conjunction, so the invariant cannot drift.
-        return IsStandbyDataPlaneQuiet();
-    }
-
-    /**
-     * @brief Check whether this endpoint's data plane has been unused for the configured quiet window.
-     * Shared by the gate that decides to schedule a standby teardown and by the teardown itself, so both
-     * read the same hook with the same window.
-     * @return True when the data plane is quiet enough to tear down, or when no data-plane owner is
-     *         registered (SHM-only client or a client that is going away: keep the legacy behaviour).
-     */
-    bool IsStandbyDataPlaneQuiet();
-
-    /**
-     * @brief Notify the connected worker that this client no longer blocks worker exit.
-     * @return Status of the call.
-     */
     Status NotifyClientRemovable();
 
-protected:
-    std::atomic<bool> isInAsyncSwitchWorkerPool_{ false };
-
 private:
-
-    /**
-     * @brief Send heartbeat messages periodically.
-     */
     Status CheckHeartbeat();
-
-    /**
-     * @brief Handle a failed heartbeat: backoff wait, timeout check and lost-heartbeat counting.
-     */
     void HandleHeartbeatError(Timer &timer, uint64_t clientDeadTimeoutMs,
                               const std::vector<uint32_t> &heartbeatIntervalMs, int32_t &lostHeartbeatTimes,
-                              bool prevSwitchedState, uint64_t &remainTime, const Status &status);
-
-    /**
-     * @brief Handle voluntary scale-down switch, removable recovery and idle shutdown after a successful heartbeat.
-     * @return True if the heartbeat loop should skip the rest of this round.
-     */
-    bool HandleScaleDownOrIdle(bool isWorkerVoluntaryScaleDown);
-
-    /**
-     * @brief Handle recovery and pacing after a successful heartbeat.
-     * @return True if the heartbeat loop should skip the rest of this round.
-     */
+                              uint64_t &remainTime, const Status &status);
+    void HandleScaleDown(bool isWorkerVoluntaryScaleDown);
     bool ProcessHeartbeatResult(bool workerReboot, bool clientRemoved, std::vector<int64_t> expiredWorkerFds,
                                 int32_t &lostHeartbeatTimes, int intervalMs, Timer &timer, uint64_t clientDeadTimeoutMs,
                                 uint64_t &remainTime);
-
-    /**
-     * @brief Notify the heartbeat result from worker.
-     * @param[in] success True if receive the heartbeat from worker.
-     */
     void NotifyFirstHeartbeat(bool success);
-
-    /**
-     * @brief Run all client lost handler.
-     */
     Status RunAllCallback(WorkerRecoveryReason reason);
-
-    /**
-     * @brief Retry client resource recovery after a successful heartbeat.
-     */
     void TryRecoverClientResources(WorkerRecoveryReason reason);
-
     void CleanInvalidCallback();
 
-    /**
-     * @brief Check pool availability and atomically acquire isInAsyncSwitchWorkerPool_.
-     * @param[out] raii RAII guard that resets the flag on destruction. Capture in pool lambda.
-     * @return True if acquired, false if pool unavailable or already acquired.
-     */
-    bool TryAcquireAsyncSwitchPool(std::shared_ptr<Raii> &raii);
-
-    /**
-     * @brief Call switchWorkerHandle_ to switch worker.
-     */
-    void SwitchToRemoteWorker(SwitchTriggerReason reason);
-
-    /**
-     * @brief Try switch back to local worker.
-     */
-    void TrySwitchBackToLocalWorker();
-
-    /**
-     * @brief Try recover to a same-node worker while the remote fallback is healthy.
-     */
-    void TryRecoverLocalWorker();
-
-    /**
-     * @brief Check if client is switchable or not.
-     * @return True if client is switchable.
-     */
-    bool IsVoluntarySwitchable()
-    {
-        return clientCommonWorker_->enableCrossNodeConnection_ && isWorkerVoluntaryScaleDown_;
-    }
-
-    /**
-     * @brief Check if client is idle.
-     * @return True if client is idle.
-     */
-    bool IsIdle()
-    {
-        INJECT_POINT("IsIdle", [this] {
-            isLocalWorker_ = false;
-            return true;
-        });
-        return !clientCommonWorker_->HaveInvokeCount() && isSwitched_;
-    }
-
-    /**
-     * @brief Check if client is reconnectable.
-     * @return True if client is reconnectable.
-     */
-    bool IsReconnectable()
-    {
-        INJECT_POINT("IsReconnectable", [this] {
-            isLocalWorker_ = false;
-            return false;
-        });
-        return isLocalWorker_ || !IsIdle();
-    }
-
-    /**
-     * @brief Try shutdown myself if idle.
-     */
-    void TryShutdownStandbyConnection();
-
     std::shared_ptr<IClientWorkerCommonApi> clientCommonWorker_;
-
     std::atomic<bool> workerAvailable_{ true };
-    // This parameter is used to determine whether the worker needs to be actively notified
-    // after the client is disconnected.
     std::atomic<bool> stopActively_{ false };
-
     Thread workerListenedThread_;
-
     std::atomic<bool> workerListenedThreadJoined_{ false };
-
     std::atomic<int> socketFd_{ INVALID_SOCKET_FD };
-
     std::atomic<bool> stop_{ false };
-
     std::string clientId_;
-
-    // Worker fail handle callback function.
     std::unordered_map<void *, std::function<Status(WorkerRecoveryReason)>> callBackTable_;
-    SharedMutex callbackMutex_;  // Protect 'callBackTable_'.
+    SharedMutex callbackMutex_;
     std::unordered_set<void *> deletedCallbacks_;
-    SharedMutex deletedCallbackMutex_;  // Protect 'deletedCallbacks'
-    std::function<bool(uint32_t, SwitchTriggerReason)> switchWorkerHandle_;
-    SharedMutex switchWorkerHandleMutex_;  // Protect 'switchWorkerHandle_'.
-    std::atomic<bool> isSwitched_{ false };
-    std::atomic<bool> isLocalWorker_{ true };
-
-    std::unique_ptr<WaitPost> waitPost_{ nullptr };  // wait for some second to check rpc type heartbeat timeout
-
-    // Accessed only by the RPC heartbeat thread. A successful heartbeat must not reopen request admission while true.
+    SharedMutex deletedCallbackMutex_;
+    std::unique_ptr<WaitPost> waitPost_;
     bool recoveryPending_{ false };
-
-    std::atomic<bool> firstHeartbeatReceived_{ false };  // wait for first heartbeat
-    std::unique_ptr<WaitPost> firstHeartbeatWaitPost_{ nullptr };
-
+    std::atomic<bool> firstHeartbeatReceived_{ false };
+    std::unique_ptr<WaitPost> firstHeartbeatWaitPost_;
     HeartbeatType heartbeatType_;
-    // udsEventLoop_ needs to be placed at the bottom to ensure that it is destructed first.
-    std::shared_ptr<SockEventLoop> udsEventLoop_{ nullptr };  // This event loop is used for uds type heartbeat
-
+    std::shared_ptr<SockEventLoop> udsEventLoop_;
     std::atomic<bool> isWorkerVoluntaryScaleDown_{ false };
+    const bool closeAdmissionOnScaleDown_;
     FdReleaseHelper fdReleaseHelper_;
-    std::function<bool()> recoverLocalWorkerHandle_;
-    std::atomic<int64_t> lastLocalRecoveryAttemptMs_{ 0 };
     std::function<void()> workerTimeoutHandle_;
-    SharedMutex workerTimeoutHandleMutex_;  // Protect 'workerTimeoutHandle_'.
-    // Registered by the client before the connection is marked switched; the heartbeat thread only
-    // invokes it, so it must not capture any ObjectClientImpl state (see M1 in the fix design).
-    // A node can be switched back to standby multiple times, so SetDataPlaneDrainHandle may be re-invoked
-    // on a live listener while the heartbeat thread is reading it (drain deferred) — hence the mutex.
-    DataPlaneDrainHandle dataPlaneDrain_;
-    SharedMutex dataPlaneDrainMutex_;  // Protect 'dataPlaneDrain_'.
-    ThreadPool *asyncSwitchWorkerPool_;
-    const uint32_t index_;
+    SharedMutex workerTimeoutHandleMutex_;
 };
 }  // namespace client
 }  // namespace datasystem

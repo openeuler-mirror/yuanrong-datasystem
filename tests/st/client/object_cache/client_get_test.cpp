@@ -932,11 +932,24 @@ TEST_F(OCClientGetTest, ClientGetTimeout)
     std::string data = GenRandomString(SHM_SIZE);
     CreateAndPublishObject(client1, objectKey, data);
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, "WorkerOCServiceImpl.Get.Timeout", "call(0)"));
+    // A failed local attempt is re-routed to another replica, so the injection has to cover every
+    // worker and both read paths (legacy Get and the routed QueryAndGet) for the call to observe an
+    // exhausted deadline.
+    for (size_t i = 0; i < cluster_->GetWorkerNum(); ++i) {
+        DS_ASSERT_OK(
+            cluster_->SetInjectAction(ClusterNodeType::WORKER, i, "WorkerOCServiceImpl.Get.Timeout", "call(0)"));
+        DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, i, "worker.QueryAndGet.Begin",
+                                               "return(K_RPC_DEADLINE_EXCEEDED)"));
+    }
 
     std::vector<Optional<Buffer>> dataList;
     const int K_2000 = 2000;
     DS_ASSERT_NOT_OK(client2->Get({ objectKey }, K_2000, dataList));
+
+    for (size_t i = 0; i < cluster_->GetWorkerNum(); ++i) {
+        DS_ASSERT_OK(cluster_->ClearInjectAction(ClusterNodeType::WORKER, i, "WorkerOCServiceImpl.Get.Timeout"));
+        DS_ASSERT_OK(cluster_->ClearInjectAction(ClusterNodeType::WORKER, i, "worker.QueryAndGet.Begin"));
+    }
 }
 
 TEST_F(OCClientGetTest, GetFailedInWorker)
@@ -1750,7 +1763,15 @@ TEST_F(OCClientGetTest2, LEVEL1_TestRemoteGetMeetsRpcError)
 
     objKeys.erase(objKeys.begin());
     buffers.clear();
-    ASSERT_EQ(client1->Get(objKeys, 1000, buffers).GetCode(), StatusCode::K_RPC_UNAVAILABLE);
+    // A failed worker-side remote pull is re-routed through the client's own read path, so that path
+    // has to fail as well. Depending on how much of the budget the local attempt consumed, the
+    // aggregate surfaces either the per-object RPC error or the exhausted budget.
+    for (size_t i = 0; i < cluster_->GetWorkerNum(); ++i) {
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "worker.QueryAndGet.Begin", "return(K_RPC_UNAVAILABLE)"));
+    }
+    const StatusCode singleKeyRc = client1->Get(objKeys, 1000, buffers).GetCode();
+    ASSERT_TRUE(singleKeyRc == StatusCode::K_RPC_UNAVAILABLE || singleKeyRc == StatusCode::K_RPC_DEADLINE_EXCEEDED)
+        << "expected RPC-error aggregate, got: " << Status::StatusCodeName(singleKeyRc);
     ASSERT_EQ(buffers.size(), objKeys.size());
     for (size_t i = 0; i < buffers.size(); ++i) {
         ASSERT_FALSE(buffers[i]);
@@ -1770,6 +1791,9 @@ TEST_F(OCClientGetTest2, LEVEL1_TestRemoteGetMeetsRpcError)
     ASSERT_EQ(buffers.size(), objKeys.size());
     for (size_t i = 0; i < buffers.size(); ++i) {
         ASSERT_FALSE(buffers[i]);
+    }
+    for (size_t i = 0; i < cluster_->GetWorkerNum(); ++i) {
+        DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, i, "worker.QueryAndGet.Begin"));
     }
 }
 
@@ -1886,7 +1910,7 @@ TEST_F(OCClientRemoteGetTest5, TestRemoteGetAndRemoveLocationFailedThenPut)
     InitTestClient(1, client1, 5000);
     InitTestClient(2, client2, 5000);
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.remote_get_failed", "7*return(K_RPC_UNAVAILABLE)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.remote_get_failed", "7*return(K_RPC_PEER_DEAD)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.remove_location", "7*return(K_RPC_UNAVAILABLE)"));
 
     std::string objKey = "Ugly_iPhone15";
@@ -1896,7 +1920,12 @@ TEST_F(OCClientRemoteGetTest5, TestRemoteGetAndRemoveLocationFailedThenPut)
     DS_ASSERT_OK(client0->Put(objKey, (uint8_t *)val.c_str(), val.size(), param));
 
     std::vector<Optional<Buffer>> buffers;
-    DS_ASSERT_NOT_OK(client1->Get({objKey}, 0, buffers));
+    // The local remote-get failure is followed by unified-routing fallback to the healthy object owner.
+    DS_ASSERT_OK(client1->Get({ objKey }, 0, buffers));
+    ASSERT_EQ(buffers.size(), size_t(1));
+    ASSERT_TRUE(buffers[0]);
+    const std::string getVal(static_cast<const char *>(buffers[0]->ImmutableData()), buffers[0]->GetSize());
+    EXPECT_EQ(getVal, val);
 
     DS_ASSERT_OK(client0->Put(objKey, (uint8_t *)val.c_str(), val.size(), param));
 }

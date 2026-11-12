@@ -198,8 +198,6 @@ ASSERT_TRUE(serviceDiscovery->Init().IsOk());
 
 Python KVClient 使用 `service_discovery` 参数接入服务发现，不需要预先指定 Worker 的 `host` 和 `port`。
 当同时传入 `service_discovery` 与 `host`/`port` 时，KVClient 会使用 `service_discovery` 并忽略 `host`/`port`。
-若期望同一个 KVClient 在当前连接的 Worker 故障后切换到其他已发现 Worker，需要同时设置
-`enable_cross_node_connection=True`。
 
 ```python
 from yr.datasystem import (
@@ -218,7 +216,7 @@ options.affinity_policy = ServiceAffinityPolicy.PREFERRED_SAME_NODE
 service_discovery = CoordinatorServiceDiscovery(options)
 service_discovery.init()
 
-client = KVClient(service_discovery=service_discovery, enable_cross_node_connection=True)
+client = KVClient(service_discovery=service_discovery)
 client.init()
 ```
 

@@ -221,7 +221,7 @@ public:
     }
 };
 
-TEST_F(OCClientWorkerRediscoverTest, TestRediscoverLocalWorkerAfterIPChange)
+TEST_F(OCClientWorkerRediscoverTest, TestRouteAfterWorkerEndpointChange)
 {
     std::string etcdAddress = cluster_->GetEtcdAddrs();
     ServiceDiscoveryOptions sdOpts;
@@ -240,7 +240,6 @@ TEST_F(OCClientWorkerRediscoverTest, TestRediscoverLocalWorkerAfterIPChange)
     connectOptions.connectTimeoutMs = 60000;
     connectOptions.accessKey = "QTWAOYTTINDUT2QVKYUC";
     connectOptions.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
-    connectOptions.enableCrossNodeConnection = true;
     connectOptions.serviceDiscovery = serviceDiscovery;
     auto client = std::make_shared<ObjectClient>(connectOptions);
     DS_ASSERT_OK(client->Init());
@@ -254,7 +253,7 @@ TEST_F(OCClientWorkerRediscoverTest, TestRediscoverLocalWorkerAfterIPChange)
     DS_ASSERT_OK(client->Get({ objId1 }, 0, dataList1));
     ASSERT_TRUE(NotExistsNone(dataList1));
 
-    // Kill worker 0. Client detects heartbeat failure and switches to worker 1 (standby).
+    // Kill worker 0. Requests fall back to workers selected from the current hash ring.
     cluster_->ShutdownNode(WORKER, 0);
     sleep(3);
 
@@ -264,10 +263,10 @@ TEST_F(OCClientWorkerRediscoverTest, TestRediscoverLocalWorkerAfterIPChange)
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, portOverride));
     DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 0));
 
-    // Wait for the rediscovery loop to find the new worker via ServiceDiscovery.
+    // Wait for topology and service discovery to observe the restarted worker.
     sleep(10);
 
-    // Verify end-to-end: Create + Publish + Get on the rediscovered local worker.
+    // Verify end-to-end operation after the worker endpoint changes.
     std::string objId2 = NewObjectKey();
     std::shared_ptr<Buffer> data2;
     DS_ASSERT_OK(client->Create(objId2, SHM_SIZE, CreateParam{}, data2));

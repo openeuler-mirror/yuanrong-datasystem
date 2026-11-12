@@ -244,6 +244,9 @@ repeated string object_keys = 4;
 //it indicates whether the keys are used for D2H or D2D transmission,
 //and when it is true, it represents D2D transmission.
 bool is_dev_key = 5;
+// Routed SDK requests use request-level authentication.
+// Credentials may be a tenant token or an AK/SK signature.
+bool is_routed = 6;
 
 
 // put to the end, the previous data is used to generate AK and SK signatures.

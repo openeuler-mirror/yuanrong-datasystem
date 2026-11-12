@@ -176,7 +176,6 @@ public:
             ConnectOptions options;
             InitConnectOpt(index, options);
             options.enableLocalCache = true;
-            options.enableCrossNodeConnection = false;
             options.requestTimeoutMs = 1000;
             client = std::make_shared<ObjectClient>(options);
             return client->Init();
@@ -349,7 +348,6 @@ TEST_F(UbClientWritebackPortHealthTest, Cqe9ClosesClientGateUntilPartialRecovery
     ConnectOptions options;
     InitConnectOpt(0, options);
     options.enableLocalCache = false;
-    options.enableCrossNodeConnection = false;
     options.requestTimeoutMs = 3000;
     auto client = std::make_shared<ObjectClient>(options);
     DS_ASSERT_OK(client->Init());

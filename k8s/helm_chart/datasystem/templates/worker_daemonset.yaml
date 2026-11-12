@@ -232,8 +232,6 @@ spec:
         - -urma_log_threshold_us={{ $.Values.global.performance.urmaLogThresholdUs | int64 }}
         - -urma_register_whole_arena={{ $.Values.global.performance.urmaRegisterWholeArena }}
         - -enable_transport_fallback={{ $.Values.global.performance.enableTransportFallback }}
-        - -urma_failover_success_rate_ratio={{ $.Values.global.performance.urmaFailoverSuccessRateRatio }}
-        - -urma_failover_min_sample_count={{ $.Values.global.performance.urmaFailoverMinSampleCount }}
         - -enable_p2p_transfer={{ $.Values.global.performance.enableP2pTransfer }}
         - -enable_rdma={{ $.Values.global.performance.enableRdma }}
         - -rdma_register_whole_arena={{ $.Values.global.performance.rdmaRegisterWholeArena }}

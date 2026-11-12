@@ -124,7 +124,6 @@ bash tests/test_standalone_mode.sh
   "connect_options": {
     "connect_timeout_ms": 1000,
     "request_timeout_ms": 20,
-    "enable_cross_node_connection": true,
     "enable_local_cache": false,
     "data_placement_policy": "PREFERRED_META_OWNER",
     "fast_transport_mem_size": "512MB"
@@ -161,7 +160,6 @@ bash tests/test_standalone_mode.sh
 | `host_id_env_name` | string | "HOST_IP" | Worker IP 环境变量名 |
 | `connect_options.connect_timeout_ms` | int | 1000 | KVClient 连接超时（毫秒） |
 | `connect_options.request_timeout_ms` | int | 20 | KVClient 请求超时（毫秒） |
-| `connect_options.enable_cross_node_connection` | bool | true | 允许跨节点连接 standby Worker |
 | `connect_options.enable_local_cache` | bool | false | Get/MGet 走绑定 Worker；`false` 时按 metadata owner 走 Transport 层 |
 | `connect_options.data_placement_policy` | string | "PREFERRED_META_OWNER" | Set/MSet 数据放置策略 |
 | `connect_options.fast_transport_mem_size` | string | "512MB" | 快速传输内存大小，支持 KB/MB/GB 后缀 |

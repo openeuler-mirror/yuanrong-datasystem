@@ -111,93 +111,6 @@ constexpr char SKIP_WARMUP_INJECT[] = "ObjectClientImpl.ClientWorkerWarmup.skip"
 constexpr int REMOTE_INITIAL_WORKER_TIMEOUT_MS = 10'000;
 constexpr int ENV_RECOVERY_LOG_WAIT_MS = 5'000;
 constexpr int ENV_RECOVERY_LOG_POLL_MS = 100;
-constexpr int MMAP_SWITCH_WAIT_MS = 30'000;
-constexpr int MMAP_SWITCH_POLL_MS = 100;
-constexpr int MMAP_SWITCH_CONNECT_TIMEOUT_MS = 60'000;
-constexpr size_t MMAP_SWITCH_VALUE_SIZE = 1024UL * 1024UL;
-constexpr char DATASYSTEM_MEMFD_MAP_NAME[] = "memfd:datasystem";
-constexpr char MMAP_SWITCH_WORKER_GFLAGS[] =
-    "-shared_memory_size_mb=25 -v=1 -log_monitor=true -max_client_num=2000 "
-    "-node_timeout_s=3 -node_dead_timeout_s=6 -client_reconnect_wait_s=1";
-constexpr char MMAP_SWITCH_HOST_ID_ENV_PREFIX[] = "mmap_switch_host_id_env";
-constexpr char MMAP_SWITCH_HOST_ID_VALUE_PREFIX[] = "mmap_switch_host_id";
-
-std::set<std::string> GetDatasystemMemfdMappingRanges()
-{
-    std::ifstream maps("/proc/self/maps");
-    std::set<std::string> mappingRanges;
-    std::string line;
-    while (std::getline(maps, line)) {
-        if (line.find(DATASYSTEM_MEMFD_MAP_NAME) == std::string::npos) {
-            continue;
-        }
-        auto rangeEnd = line.find(' ');
-        if (rangeEnd != std::string::npos) {
-            mappingRanges.emplace(line.substr(0, rangeEnd));
-        }
-    }
-    return mappingRanges;
-}
-
-size_t CountDatasystemMemfdMappings()
-{
-    return GetDatasystemMemfdMappingRanges().size();
-}
-
-std::set<std::string> DifferenceMappings(const std::set<std::string> &lhs, const std::set<std::string> &rhs)
-{
-    std::set<std::string> diff;
-    std::set_difference(lhs.begin(), lhs.end(), rhs.begin(), rhs.end(), std::inserter(diff, diff.end()));
-    return diff;
-}
-
-bool HasAnyMapping(const std::set<std::string> &expectedMappings)
-{
-    auto currentMappings = GetDatasystemMemfdMappingRanges();
-    return std::any_of(expectedMappings.begin(), expectedMappings.end(),
-                       [&currentMappings](const std::string &mapping) {
-                           return currentMappings.find(mapping) != currentMappings.end();
-                       });
-}
-
-template <typename Predicate>
-bool WaitUntil(Predicate &&predicate, int timeoutMs = MMAP_SWITCH_WAIT_MS)
-{
-    Timer timer;
-    while (timer.ElapsedMilliSecond() < timeoutMs) {
-        if (predicate()) {
-            return true;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(MMAP_SWITCH_POLL_MS));
-    }
-    return predicate();
-}
-
-Status SetSwitchWorkerExpected(size_t slot, const HostPort &workerAddress)
-{
-    std::string expectedPoint = FormatString("client.switch_worker_expected_%zu", slot);
-    std::string matchedPoint = FormatString("client.switch_worker_expected_%zu.matched", slot);
-    RETURN_IF_NOT_OK(datasystem::inject::Set(expectedPoint, "call(" + workerAddress.ToString() + ")"));
-    return datasystem::inject::Set(matchedPoint, "call()");
-}
-
-void ClearSwitchWorkerExpectedInjects()
-{
-    datasystem::inject::Clear("client.switch_worker_expected_1");
-    datasystem::inject::Clear("client.switch_worker_expected_1.matched");
-    datasystem::inject::Clear("client.switch_worker_expected_2");
-    datasystem::inject::Clear("client.switch_worker_expected_2.matched");
-    datasystem::inject::Clear("client.standby_worker");
-    datasystem::inject::Clear("ListenWorker.CheckHeartbeat.interval");
-    datasystem::inject::Clear("ListenWorker.CheckHeartbeat.heartbeat_interval_ms");
-    datasystem::inject::Clear("ClientWorkerCommonApi.SendHeartbeat.timeoutMs");
-}
-
-uint64_t GetSwitchWorkerMatchedCount(size_t slot)
-{
-    return datasystem::inject::GetExecuteCount(FormatString("client.switch_worker_expected_%zu.matched", slot));
-}
-
 void AssertFileContainsEventually(const std::string &filePath, const std::vector<std::string> &expected)
 {
     Timer timer;
@@ -438,75 +351,6 @@ public:
     }
 };
 
-class KVCacheClientMmapSwitchTest : public OCClientCommon, public CommonDistributedExt {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        opts.numOBS = 1;
-        opts.numWorkers = 2;
-        opts.numEtcd = 1;
-        std::string hostIp = "127.0.0.1";
-        for (size_t i = 0; i < opts.numWorkers; ++i) {
-            HostPort hostPort(hostIp, GetFreePort());
-            opts.workerConfigs.emplace_back(hostPort);
-            workerAddress_.emplace_back(hostPort);
-            std::string envName = std::string(MMAP_SWITCH_HOST_ID_ENV_PREFIX) + std::to_string(i);
-            std::string envValue = std::string(MMAP_SWITCH_HOST_ID_VALUE_PREFIX) + std::to_string(i);
-            ASSERT_EQ(setenv(envName.c_str(), envValue.c_str(), 1), 0);
-            opts.workerSpecifyGflagParams[i] = FormatString("-host_id_env_name=%s", envName);
-        }
-        opts.workerGflagParams = MMAP_SWITCH_WORKER_GFLAGS;
-        datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(500)");
-        datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)");
-        datasystem::inject::Set("ClientWorkerCommonApi.SendHeartbeat.timeoutMs", "call(500)");
-    }
-
-    void SetUp() override
-    {
-        ExternalClusterTest::SetUp();
-        CommonDistributedExt::InitTestEtcdInstance();
-    }
-
-    void TearDown() override
-    {
-        ClearSwitchWorkerExpectedInjects();
-        client_.reset();
-        etcd_.reset();
-        for (size_t i = 0; i < workerAddress_.size(); ++i) {
-            (void)unsetenv((std::string(MMAP_SWITCH_HOST_ID_ENV_PREFIX) + std::to_string(i)).c_str());
-        }
-        ExternalClusterTest::TearDown();
-    }
-
-    BaseCluster *GetCluster() override
-    {
-        return cluster_.get();
-    }
-
-    void InitSwitchableClient()
-    {
-        ServiceDiscoveryOptions sdOpts;
-        sdOpts.etcdAddress = cluster_->GetEtcdAddrs();
-        sdOpts.clusterName = GetTestClusterName();
-        sdOpts.hostIdEnvName = std::string(MMAP_SWITCH_HOST_ID_ENV_PREFIX) + "0";
-        sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
-        auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
-        DS_ASSERT_OK(serviceDiscovery->Init());
-
-        ConnectOptions connectOptions;
-        connectOptions.connectTimeoutMs = MMAP_SWITCH_CONNECT_TIMEOUT_MS;
-        connectOptions.accessKey = "QTWAOYTTINDUT2QVKYUC";
-        connectOptions.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
-        connectOptions.enableCrossNodeConnection = true;
-        connectOptions.serviceDiscovery = serviceDiscovery;
-        client_ = std::make_shared<KVClient>(connectOptions);
-        DS_ASSERT_OK(client_->Init());
-    }
-
-    std::vector<HostPort> workerAddress_;
-    std::shared_ptr<KVClient> client_;
-};
-
 #ifdef BUILD_PIPLN_H2D
 TEST_F(KVCacheClientTest, MGetH2DRejectsDuplicateKeys)
 {
@@ -523,113 +367,6 @@ TEST_F(KVCacheClientTest, MGetH2DRejectsDuplicateKeys)
     ASSERT_EQ(rc.GetMsg().find(duplicatedKey), std::string::npos);
 }
 #endif
-
-TEST_F(KVCacheClientMmapSwitchTest, LEVEL1_UnmapOldWorkerSharedMemoryAfterSwitch)
-{
-    const auto baselineMappings = GetDatasystemMemfdMappingRanges();
-    InitSwitchableClient();
-    HostPort worker1Address;
-    DS_ASSERT_OK(cluster_->GetWorkerAddr(1, worker1Address));
-    DS_ASSERT_OK(SetSwitchWorkerExpected(1, worker1Address));
-    DS_ASSERT_OK(datasystem::inject::Set("client.standby_worker", "call(" + worker1Address.ToString() + ")"));
-
-    std::string value(MMAP_SWITCH_VALUE_SIZE, 'x');
-    std::string keyOnWorker0 = client_->Set(value);
-    ASSERT_FALSE(keyOnWorker0.empty());
-    ASSERT_TRUE(WaitUntil([&]() { return CountDatasystemMemfdMappings() > baselineMappings.size(); }))
-        << "client did not mmap worker0 shared memory";
-    const auto worker0Mappings = DifferenceMappings(GetDatasystemMemfdMappingRanges(), baselineMappings);
-    ASSERT_FALSE(worker0Mappings.empty());
-
-    VoluntaryScaleDownInject(0);
-    ASSERT_TRUE(WaitUntil([]() { return GetSwitchWorkerMatchedCount(1) > 0; }))
-        << "client did not switch to worker1";
-
-    std::string keyOnWorker1 = client_->Set(value);
-    ASSERT_FALSE(keyOnWorker1.empty());
-
-    ASSERT_TRUE(WaitUntil([&]() { return !HasAnyMapping(worker0Mappings); }))
-        << "old worker0 shared memory is still mapped after switching to worker1, old mappings: "
-        << worker0Mappings.size() << ", current mappings: " << CountDatasystemMemfdMappings();
-}
-
-TEST_F(KVCacheClientMmapSwitchTest, LEVEL1_DeferUnmapUntilInFlightGetCompletes)
-{
-    const auto baselineMappings = GetDatasystemMemfdMappingRanges();
-    InitSwitchableClient();
-    HostPort worker1Address;
-    DS_ASSERT_OK(cluster_->GetWorkerAddr(1, worker1Address));
-    DS_ASSERT_OK(datasystem::inject::Set("client.standby_worker", "call(" + worker1Address.ToString() + ")"));
-
-    std::string value(MMAP_SWITCH_VALUE_SIZE, 'x');
-    std::string keyOnWorker0 = client_->Set(value);
-    ASSERT_FALSE(keyOnWorker0.empty());
-    ASSERT_TRUE(WaitUntil([&]() { return CountDatasystemMemfdMappings() > baselineMappings.size(); }))
-        << "client did not mmap worker0 shared memory";
-    const auto worker0Mappings = DifferenceMappings(GetDatasystemMemfdMappingRanges(), baselineMappings);
-    ASSERT_FALSE(worker0Mappings.empty());
-
-    DS_ASSERT_OK(datasystem::inject::Set("Get.RetryOnError.retry_on_error_after_func", "1*pause()"));
-    std::string getValue;
-    auto getFuture = std::async(std::launch::async, [&]() { return client_->Get(keyOnWorker0, getValue); });
-
-    const bool getPaused = WaitUntil(
-        []() { return datasystem::inject::GetExecuteCount("Get.RetryOnError.retry_on_error_after_func") > 0; });
-    EXPECT_TRUE(getPaused) << "Get request did not pause after receiving the worker0 response";
-
-    bool switchCompleted = false;
-    if (getPaused) {
-        DS_EXPECT_OK(datasystem::inject::Set("client.switch_worker_end", "call()"));
-        VoluntaryScaleDownInject(0);
-        switchCompleted =
-            WaitUntil([]() { return datasystem::inject::GetExecuteCount("client.switch_worker_end") > 0; });
-    }
-    EXPECT_TRUE(switchCompleted) << "client did not finish switching to worker1";
-    if (switchCompleted) {
-        EXPECT_TRUE(HasAnyMapping(worker0Mappings))
-            << "old worker0 shared memory was unmapped while an old-worker Get was still pending";
-    }
-
-    DS_EXPECT_OK(datasystem::inject::Clear("Get.RetryOnError.retry_on_error_after_func"));
-    const auto getStatus = getFuture.get();
-    if (!getPaused || !switchCompleted) {
-        return;
-    }
-
-    EXPECT_TRUE(WaitUntil([&]() { return !HasAnyMapping(worker0Mappings); }))
-        << "old worker0 shared memory was not unmapped after the pending Get completed, Get status: "
-        << getStatus.ToString();
-}
-
-TEST_F(KVCacheClientMmapSwitchTest, LEVEL1_PeerDeadGetTriggersWorkerSwitchBeforeHeartbeatTimeout)
-{
-    // Keep the heartbeat fallback outside this test's observation window. The switch must be caused by the
-    // synchronous Get result, not by ListenWorker eventually noticing the dead process.
-    constexpr int kHeartbeatFallbackMs = 30'000;
-    DS_ASSERT_OK(datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval",
-                                         FormatString("call(%d)", kHeartbeatFallbackMs)));
-    DS_ASSERT_OK(datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms",
-                                         FormatString("call(%d)", kHeartbeatFallbackMs)));
-    InitSwitchableClient();
-
-    HostPort worker1Address;
-    DS_ASSERT_OK(cluster_->GetWorkerAddr(1, worker1Address));
-    DS_ASSERT_OK(SetSwitchWorkerExpected(1, worker1Address));
-    DS_ASSERT_OK(datasystem::inject::Set("client.standby_worker", "call(" + worker1Address.ToString() + ")"));
-
-    const std::string value = "peer-dead Get must trigger immediate rebind";
-    const std::string keyOnWorker0 = client_->Set(value);
-    ASSERT_FALSE(keyOnWorker0.empty());
-    DS_ASSERT_OK(cluster_->KillWorker(0));
-
-    std::string result;
-    auto getStatus = client_->Get(keyOnWorker0, result);
-    ASSERT_EQ(getStatus.GetCode(), K_RPC_PEER_DEAD) << getStatus.ToString();
-
-    constexpr int kDirectFailureSwitchMs = 5'000;
-    ASSERT_TRUE(WaitUntil([]() { return GetSwitchWorkerMatchedCount(1) > 0; }, kDirectFailureSwitchMs))
-        << "peer-dead Get did not switch the client before heartbeat fallback";
-}
 
 TEST_F(KVCacheClientTest, TestKVCacheClientInitByEnvSuccess)
 {
@@ -1364,7 +1101,7 @@ TEST_F(KVCacheClientTest, DeleteDeadLock)
 TEST_F(KVCacheClientTest, GetTimeoutNotAddShmUnit)
 {
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client, 60000, false, 3000);
+    InitTestKVClient(0, client, 60000, 3000);
     std::string objectKey1 = NewObjectKey();
 
     uint64_t size = 20 * 1024 * 1024;
@@ -1483,8 +1220,8 @@ TEST_F(KVCacheClientTest, LEVEL1_DelSucceedsWhenTargetWorkerDiesBeforeDeleteNoti
 
     std::shared_ptr<KVClient> deleteClient;
     std::shared_ptr<KVClient> targetWorkerClient;
-    InitTestKVClient(kDeleteWorkerIndex, deleteClient, kRequestTimeoutMs, false, kRequestTimeoutMs);
-    InitTestKVClient(kTargetWorkerIndex, targetWorkerClient, kRequestTimeoutMs, false, kRequestTimeoutMs);
+    InitTestKVClient(kDeleteWorkerIndex, deleteClient, kRequestTimeoutMs, kRequestTimeoutMs);
+    InitTestKVClient(kTargetWorkerIndex, targetWorkerClient, kRequestTimeoutMs, kRequestTimeoutMs);
 
     std::string key;
     DS_ASSERT_OK(FindKeyRoutedToWorker(kDeleteWorkerIndex, "delete_target_worker_dies_", key));
@@ -1571,29 +1308,6 @@ TEST_F(KVCacheClientTest, TestQueryMetaRetry)
     }
 }
 
-TEST_F(KVCacheClientQueryMetaDeadPeerTest, QueryMetaFastFailsAfterMetadataWorkerKilled)
-{
-    constexpr int32_t kConnectTimeoutMs = 60'000;
-    constexpr int32_t kRequestTimeoutMs = 30'000;
-    constexpr int64_t kFastFailMaxMs = 1'000;
-    std::shared_ptr<KVClient> writer;
-    std::shared_ptr<KVClient> reader;
-    InitTestKVClient(0, writer, kConnectTimeoutMs, false, kRequestTimeoutMs);
-    InitTestKVClient(1, reader, kConnectTimeoutMs, false, kRequestTimeoutMs);
-
-    const std::string key = "query-meta-peer-dead";
-    DS_ASSERT_OK(writer->Set(key, "value"));
-    DS_ASSERT_OK(cluster_->KillWorker(0));
-
-    std::string value;
-    Timer timer;
-    Status status = reader->Get(key, value);
-
-    ASSERT_EQ(status.GetCode(), K_RPC_PEER_DEAD) << status.ToString();
-    ASSERT_NE(status.GetMsg().find("RPC peer dead"), std::string::npos) << status.ToString();
-    ASSERT_LT(timer.ElapsedMilliSecond(), kFastFailMaxMs) << status.ToString();
-}
-
 TEST_F(KVCacheClientRoutingFailoverTest, SetGetTrafficSwitchesWithinFourSecondsAfterMetadataOwnerKilled)
 {
     constexpr uint32_t kClientWorkerIndex = 0;
@@ -1625,7 +1339,6 @@ TEST_F(KVCacheClientRoutingFailoverTest, SetGetTrafficSwitchesWithinFourSecondsA
     InitConnectOpt(kClientWorkerIndex, options, kConnectTimeoutMs);
     options.requestTimeoutMs = kRequestTimeoutMs;
     options.enableLocalCache = false;
-    options.enableCrossNodeConnection = true;
     options.dataPlacementPolicy = DataPlacementPolicy::PREFERRED_META_OWNER;
     options.serviceDiscovery = serviceDiscovery;
     auto client = std::make_shared<KVClient>(options);
@@ -1638,7 +1351,6 @@ TEST_F(KVCacheClientRoutingFailoverTest, SetGetTrafficSwitchesWithinFourSecondsA
         InitConnectOpt(workerIndex, witnessOptions, kConnectTimeoutMs);
         witnessOptions.requestTimeoutMs = kRequestTimeoutMs;
         witnessOptions.enableLocalCache = true;
-        witnessOptions.enableCrossNodeConnection = false;
         auto witness = std::make_shared<KVClient>(witnessOptions);
         DS_ASSERT_OK(witness->Init());
         witnessClients.emplace_back(std::move(witness));
@@ -1884,11 +1596,13 @@ TEST_F(KVCacheClientTest, TestSetGetDelTheSameKeyConcurrently)
 
     DS_ASSERT_OK(client1->Set(key, val));
 
-    // 1. w0 remote get failed and residual location in master.
+    // 1. w0 remote get failed and residual location in master. The client re-routes a failed local
+    // read to the object's real location, so the call still succeeds.
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.remote_get_failed", "return(K_RPC_UNAVAILABLE)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.remove_location", "return(K_RPC_UNAVAILABLE)"));
     std::string getVal;
-    DS_ASSERT_NOT_OK(client0->Get(key, getVal));
+    DS_ASSERT_OK(client0->Get(key, getVal));
+    ASSERT_EQ(val, getVal);
 
     // 2. Get the key and let it wait 1200ms after add in remote get object list and before lock.
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.after_add_remote_get_objects", "1*sleep(2000)"));
@@ -2670,7 +2384,11 @@ public:
     }
 };
 
-class KVClientDirectWorkerDeadPeerTest : public KVClientShutdownTest, public testing::WithParamInterface<bool> {
+class KVClientDirectWorkerDeadPeerTest : public KVClientShutdownTest {
+protected:
+    void FindKeyOwnedByWorker(uint32_t workerIndex, std::string &key);
+
+    void VerifyRouteAfterPrimaryWorkerKilled(bool enableLocalCache);
 };
 
 TEST_F(KVClientShutdownTest, TestAsynInitAndShutdown)
@@ -2712,19 +2430,43 @@ TEST_F(KVClientShutdownTest, TestMulInvokeShutdownWithNullPtr)
     client.reset();
 }
 
-TEST_P(KVClientDirectWorkerDeadPeerTest, SetGetExistFastFailAfterWorkerKilledWithLongRequestTimeout)
+void KVClientDirectWorkerDeadPeerTest::FindKeyOwnedByWorker(uint32_t workerIndex, std::string &key)
 {
-    // requestTimeoutMs = 30s. Killing the worker that serves this client must make the next
-    // Set/Get/Exist return immediately with K_RPC_PEER_DEAD (ECONNREFUSED/EHOSTDOWN while the peer
-    // process is gone), instead of stalling the full 30s RPC budget. This is the end-to-end
-    // guarantee of the brpc peer-dead split: a dead worker is detected instantly, not via the
-    // request timeout. The client has no standby worker configured, so it does not fail over to
-    // the other worker; all three operations must observe the dead-peer fast-fail.
+    ClusterTopologyPb topology;
+    DS_ASSERT_OK(cluster_->ReadClusterTopology(topology));
+    HostPort targetWorker;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, targetWorker));
+
+    std::map<uint32_t, std::string> tokenWorkers;
+    for (const auto &worker : topology.members()) {
+        for (auto token : RebuildTopologyMemberTokens(topology, worker.first, worker.second)) {
+            tokenWorkers.emplace(token, worker.first);
+        }
+    }
+    ASSERT_FALSE(tokenWorkers.empty());
+    for (size_t i = 0; i < 100'000; ++i) {
+        std::string candidate = "route-after-primary-failure-" + std::to_string(i);
+        auto owner = tokenWorkers.lower_bound(MurmurHash3_32(candidate));
+        if (owner == tokenWorkers.end()) {
+            owner = tokenWorkers.begin();
+        }
+        if (owner->second == targetWorker.ToString()) {
+            key = std::move(candidate);
+            return;
+        }
+    }
+    FAIL() << "Unable to find a key owned by " << targetWorker;
+}
+
+void KVClientDirectWorkerDeadPeerTest::VerifyRouteAfterPrimaryWorkerKilled(bool enableLocalCache)
+{
+    // A 30-second request budget must not pin ordinary requests to the primary registration worker.
+    // After it dies, both local-cache configurations route Set/Get/Exist through the remaining worker.
     ConnectOptions opts;
     InitConnectOpt(0, opts);
     constexpr int32_t kRequestTimeoutMs = 30000;
     opts.requestTimeoutMs = kRequestTimeoutMs;
-    opts.enableLocalCache = GetParam();
+    opts.enableLocalCache = enableLocalCache;
     auto getClient = std::make_shared<KVClient>(opts);
     auto existClient = std::make_shared<KVClient>(opts);
     auto setClient = std::make_shared<KVClient>(opts);
@@ -2732,51 +2474,42 @@ TEST_P(KVClientDirectWorkerDeadPeerTest, SetGetExistFastFailAfterWorkerKilledWit
     DS_ASSERT_OK(existClient->Init());
     DS_ASSERT_OK(setClient->Init());
 
-    // Pre-place a key on the (soon-to-be-killed) worker so Get targets a concrete dead owner.
     std::string key;
-    DS_ASSERT_OK(getClient->GenerateKey("fastfail", key));
-    DS_ASSERT_OK(getClient->Set(key, "value"));
-    std::string newKey;
-    DS_ASSERT_OK(setClient->GenerateKey("fastfail2", newKey));
+    FindKeyOwnedByWorker(1, key);
 
-    // SIGKILL the worker that owns the key and serves this client (abrupt process death, like a
-    // crash/OOM-kill — not a graceful shutdown). The listening port dies with the process, so the
-    // next connect/RPC surfaces ECONNREFUSED/EHOSTDOWN -> K_RPC_PEER_DEAD and fast-fails.
+    // SIGKILL the primary registration worker. The first connection attempt can report peer-dead;
+    // routing excludes that endpoint and continues through the other worker.
     DS_ASSERT_OK(cluster_->KillWorker(0));
 
-    // Get must fast-fail with peer-dead, not stall ~30s. One second leaves enough margin for a
-    // loaded remote test host while still catching deadline-based timeout and retry regressions.
-    constexpr int32_t kFastFailMaxMs = 1'000;
+    constexpr int32_t kRouteMaxMs = 5'000;
+    Timer setTimer;
+    Status setRc = setClient->Set(key, "value");
+    int64_t setElapsedMs = setTimer.ElapsedMilliSecond();
+    ASSERT_TRUE(setRc.IsOk()) << setRc.ToString();
+    ASSERT_LT(setElapsedMs, kRouteMaxMs) << "Set routing exceeded the bounded failover window";
+
     std::string val;
     Timer getTimer;
-    Status getRc = getClient->Get(key, val);
-    int64_t getElapsedMs = getTimer.ElapsedMilliSecond();
-    ASSERT_EQ(getRc.GetCode(), K_RPC_PEER_DEAD) << getRc.ToString();
-    ASSERT_LT(getElapsedMs, kFastFailMaxMs)
-        << "Get expected fast-fail after worker kill, elapsed=" << getElapsedMs << "ms";
+    DS_ASSERT_OK(getClient->Get(key, val));
+    ASSERT_EQ(val, "value");
+    ASSERT_LT(getTimer.ElapsedMilliSecond(), kRouteMaxMs) << "Get routing exceeded the bounded failover window";
 
-    // Exist must also fast-fail through the dead client-to-worker connection.
     std::vector<bool> exists;
     Timer existTimer;
-    Status existRc = existClient->Exist({ key }, exists);
-    int64_t existElapsedMs = existTimer.ElapsedMilliSecond();
-    ASSERT_EQ(existRc.GetCode(), K_RPC_PEER_DEAD) << existRc.ToString();
-    ASSERT_LT(existElapsedMs, kFastFailMaxMs)
-        << "Exist expected fast-fail after worker kill, elapsed=" << existElapsedMs << "ms";
-
-    // Set of a new key must also fast-fail with peer-dead, not stall ~30s.
-    Timer setTimer;
-    Status setRc = setClient->Set(newKey, "value");
-    int64_t setElapsedMs = setTimer.ElapsedMilliSecond();
-    ASSERT_EQ(setRc.GetCode(), K_RPC_PEER_DEAD) << setRc.ToString();
-    ASSERT_LT(setElapsedMs, kFastFailMaxMs)
-        << "Set expected fast-fail after worker kill, elapsed=" << setElapsedMs << "ms";
+    DS_ASSERT_OK(existClient->Exist({ key }, exists));
+    ASSERT_EQ(exists, (std::vector<bool>{ true }));
+    ASSERT_LT(existTimer.ElapsedMilliSecond(), kRouteMaxMs) << "Exist routing exceeded the bounded failover window";
 }
 
-INSTANTIATE_TEST_SUITE_P(LocalCacheModes, KVClientDirectWorkerDeadPeerTest, testing::Bool(),
-                         [](const testing::TestParamInfo<bool> &info) {
-                             return info.param ? "LocalCacheEnabled" : "LocalCacheDisabled";
-                         });
+TEST_F(KVClientDirectWorkerDeadPeerTest, SetGetExistRouteAfterPrimaryWorkerKilledWithLocalCacheDisabled)
+{
+    VerifyRouteAfterPrimaryWorkerKilled(false);
+}
+
+TEST_F(KVClientDirectWorkerDeadPeerTest, SetGetExistRouteAfterPrimaryWorkerKilledWithLocalCacheEnabled)
+{
+    VerifyRouteAfterPrimaryWorkerKilled(true);
+}
 
 class KVClientDfxTest : public OCClientCommon {
 public:
@@ -3180,7 +2913,7 @@ TEST_F(KVClientWriteRocksdbTest, EXCLUSIVE_LEVEL1_TestScaleDownFallsBackWhenEvic
     SetWorkerHashInjection();
     const std::string key = GetObjectKeyHashToWorker(etcd_.get(), 0);
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client, 60'000, true);
+    InitTestKVClient(0, client, 60'000);
     const std::string data = GenRandomString(128);
     SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE_EVICT };
     DS_ASSERT_OK(client->Set(key, data, param));
@@ -3205,7 +2938,7 @@ TEST_F(KVClientWriteRocksdbTest, EXCLUSIVE_LEVEL1_TestScaleDownFallsBackWhenEvic
     DS_ASSERT_OK(masterApi.CreateCopyMeta(copyReq, copyRsp));
 
     std::shared_ptr<KVClient> readClient;
-    InitTestKVClient(1, readClient, 60'000, true);
+    InitTestKVClient(1, readClient, 60'000);
     client.reset();
 
     VoluntaryScaleDownInject(0);
@@ -3821,229 +3554,6 @@ TEST_F(KVCacheClientServiceDiscoveryTest, TestPreferSameNode)
         func("host_id_env1", 1);
         func("host_id_env_n", -1);
     }
-}
-
-class KVCacheClientServiceDiscoverySwitchBackTest : public OCClientCommon {
-public:
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        opts.numOBS = 1;
-        opts.numWorkers = 3;
-        // Keep the distributed master on worker 1 so worker 0 can be stopped before the client is created.
-        opts.numEtcd = 1;
-        opts.disableRocksDB = false;
-        // Shorten cluster and client heartbeat windows so the test can observe topology changes quickly.
-        opts.workerGflagParams =
-            "-shared_memory_size_mb=25 -v=1 -log_monitor=true -max_client_num=2000 "
-            "-node_timeout_s=3 -node_dead_timeout_s=6 -client_reconnect_wait_s=1";
-
-        std::string hostIp = "127.0.0.1";
-        for (size_t i = 0; i < opts.numWorkers; i++) {
-            HostPort hostPort(hostIp, GetFreePort());
-            opts.workerConfigs.emplace_back(hostPort);
-            workerAddress_.emplace_back(hostPort);
-
-            // Give every worker a distinct host id. The SDK uses worker 0's host id to represent the local node.
-            std::string envName = "switch_back_host_id_env" + std::to_string(i);
-            std::string envVal = "switch_back_host_id" + std::to_string(i);
-            ASSERT_EQ(setenv(envName.c_str(), envVal.c_str(), 1), 0);
-            opts.workerSpecifyGflagParams[i] = FormatString("-host_id_env_name=%s", envName);
-        }
-
-        // Speed up the client-side heartbeat loop used by the switch-back path.
-        datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(500)");
-        datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)");
-        datasystem::inject::Set("ClientWorkerCommonApi.SendHeartbeat.timeoutMs", "call(500)");
-    }
-
-    void SetUp() override
-    {
-        ExternalClusterTest::SetUp();
-        FLAGS_log_monitor = true;
-        FLAGS_v = 1;
-        topologyDb_ = InitTestEtcdInstance();
-        ASSERT_NE(topologyDb_, nullptr);
-    }
-
-    void TearDown() override
-    {
-        ClearSwitchWorkerExpectedInjects();
-        clients_.clear();
-        client_.reset();
-        ExternalClusterTest::TearDown();
-    }
-
-    void InitClientByServiceDiscovery(const std::string &hostIdEnvName, std::shared_ptr<KVClient> &client)
-    {
-        // Use service discovery rather than an explicit worker address, matching the customer scenario.
-        ServiceDiscoveryOptions sdOpts;
-        sdOpts.etcdAddress = cluster_->GetEtcdAddrs();
-        sdOpts.clusterName = GetTestClusterName();
-        sdOpts.hostIdEnvName = hostIdEnvName;
-        sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
-        auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
-        DS_ASSERT_OK(serviceDiscovery->Init());
-
-        ConnectOptions connectOptions;
-        connectOptions.connectTimeoutMs = 60000;
-        connectOptions.requestTimeoutMs = 3000;
-        connectOptions.accessKey = "QTWAOYTTINDUT2QVKYUC";
-        connectOptions.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
-        // Enable standby/switch logic so the test verifies the best available recovery path.
-        connectOptions.enableCrossNodeConnection = true;
-        connectOptions.serviceDiscovery = serviceDiscovery;
-        client = std::make_shared<KVClient>(connectOptions);
-        DS_ASSERT_OK(client->Init());
-    }
-
-    void InitClientsByServiceDiscovery(const std::string &hostIdEnvName, size_t clientNum,
-                                       std::vector<std::shared_ptr<KVClient>> &clients)
-    {
-        clients.clear();
-        clients.reserve(clientNum);
-        for (size_t i = 0; i < clientNum; ++i) {
-            std::shared_ptr<KVClient> client;
-            InitClientByServiceDiscovery(hostIdEnvName, client);
-            clients.emplace_back(std::move(client));
-        }
-    }
-
-    Status WaitServiceDiscoverySelectsRemoteWorker(const std::string &hostIdEnvName)
-    {
-        // Before worker 0 is restarted, preferred-same-node discovery must fall back to a remote worker.
-        ServiceDiscoveryOptions sdOpts;
-        sdOpts.etcdAddress = cluster_->GetEtcdAddrs();
-        sdOpts.clusterName = GetTestClusterName();
-        sdOpts.hostIdEnvName = hostIdEnvName;
-        sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
-        auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
-        RETURN_IF_NOT_OK(serviceDiscovery->Init());
-
-        std::string workerIp;
-        int workerPort;
-        RETURN_IF_NOT_OK(serviceDiscovery->SelectWorker(workerIp, workerPort));
-        HostPort selected(workerIp, workerPort);
-        CHECK_FAIL_RETURN_STATUS(
-            selected != workerAddress_[0], K_NOT_READY,
-            FormatString("ServiceDiscovery still selects local worker %s.", workerAddress_[0].ToString()));
-        return Status::OK();
-    }
-
-    void ClearSwitchWorkerExpectedInjects()
-    {
-        datasystem::inject::Clear("client.switch_worker_expected_1");
-        datasystem::inject::Clear("client.switch_worker_expected_1.matched");
-        datasystem::inject::Clear("client.switch_worker_expected_2");
-        datasystem::inject::Clear("client.switch_worker_expected_2.matched");
-    }
-
-    Status SetSwitchWorkerExpected(size_t slot, const HostPort &workerAddress)
-    {
-        std::string expectedPoint = FormatString("client.switch_worker_expected_%zu", slot);
-        std::string matchedPoint = FormatString("client.switch_worker_expected_%zu.matched", slot);
-        RETURN_IF_NOT_OK(datasystem::inject::Set(expectedPoint, "call(" + workerAddress.ToString() + ")"));
-        return datasystem::inject::Set(matchedPoint, "call()");
-    }
-
-    uint64_t GetSwitchWorkerMatchedCount(size_t slot)
-    {
-        return datasystem::inject::GetExecuteCount(FormatString("client.switch_worker_expected_%zu.matched", slot));
-    }
-
-    Status CheckClientSetGet(const std::shared_ptr<KVClient> &client, const std::string &prefix, size_t index)
-    {
-        std::string key = FormatString("%s_%zu_%s", prefix, index, GetStringUuid());
-        std::string value = "client traffic should keep succeeding across worker switches";
-        RETURN_IF_NOT_OK(client->Set(key, value));
-        std::string result;
-        RETURN_IF_NOT_OK(client->Get(key, result));
-        CHECK_FAIL_RETURN_STATUS(result == value, K_RUNTIME_ERROR, "Unexpected value read from KVClient.");
-        return Status::OK();
-    }
-
-    Status CheckClientSwitchToExpectedWorker(const std::shared_ptr<KVClient> &client, size_t slot,
-                                             uint64_t expectedMatchedCount)
-    {
-        RETURN_IF_NOT_OK(CheckClientSetGet(client, "switch_back", 0));
-        CHECK_FAIL_RETURN_STATUS(GetSwitchWorkerMatchedCount(slot) >= expectedMatchedCount, K_NOT_READY,
-                                 FormatString("Expected switch slot %zu count >= %zu, actual %zu.", slot,
-                                              expectedMatchedCount, GetSwitchWorkerMatchedCount(slot)));
-        return Status::OK();
-    }
-
-    Status CheckClientsSwitchedToBothRemoteWorkers(size_t expectedClientNum)
-    {
-        uint64_t worker1MatchedCount = GetSwitchWorkerMatchedCount(1);
-        uint64_t worker2MatchedCount = GetSwitchWorkerMatchedCount(2);
-        bool allClientsSwitched = worker1MatchedCount + worker2MatchedCount >= expectedClientNum;
-        CHECK_FAIL_RETURN_STATUS(worker1MatchedCount > 0 && worker2MatchedCount > 0 && allClientsSwitched, K_NOT_READY,
-                                 FormatString("Switch counts are worker1=%zu, worker2=%zu, expected clients=%zu.",
-                                              worker1MatchedCount, worker2MatchedCount, expectedClientNum));
-        return Status::OK();
-    }
-
-    Status CheckClientsSetGet(const std::vector<std::shared_ptr<KVClient>> &clients)
-    {
-        for (size_t i = 0; i < clients.size(); ++i) {
-            RETURN_IF_NOT_OK(CheckClientSetGet(clients[i], "switch_spread", i));
-        }
-        return Status::OK();
-    }
-
-    Status CheckFailureFinalized(uint32_t failedWorkerIndex)
-    {
-        std::string topologyBytes;
-        RETURN_IF_NOT_OK(topologyDb_->Get(GetTopologyTableName(), "", topologyBytes));
-        ::datasystem::ClusterTopologyPb topology;
-        CHECK_FAIL_RETURN_STATUS(topology.ParseFromString(topologyBytes), K_RUNTIME_ERROR,
-                                 "Failed to parse cluster topology");
-        const auto &failedAddress = workerAddress_.at(failedWorkerIndex).ToString();
-        CHECK_FAIL_RETURN_STATUS(topology.members().count(failedAddress) == 0 && !topology.has_active_batch(),
-                                 K_NOT_READY, "Failure topology batch has not finalized");
-        return Status::OK();
-    }
-
-protected:
-    std::vector<HostPort> workerAddress_;
-    std::shared_ptr<KVClient> client_;
-    std::vector<std::shared_ptr<KVClient>> clients_;
-    std::unique_ptr<EtcdStore> topologyDb_;
-};
-
-TEST_F(KVCacheClientServiceDiscoverySwitchBackTest, TestRecoverLocalWorker)
-{
-    // Initial state: the SDK runs on node 0, but worker 0 is unavailable.
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
-        [this]() { return WaitServiceDiscoverySelectsRemoteWorker("switch_back_host_id_env0"); }, 10, K_OK));
-
-    // The client is forced to start on a remote worker because no same-node worker is ready.
-    InitClientByServiceDiscovery("switch_back_host_id_env0", client_);
-
-    // When worker 0 comes online later, the client is expected to switch back quickly without request failures.
-    ClearSwitchWorkerExpectedInjects();
-    DS_ASSERT_OK(SetSwitchWorkerExpected(1, workerAddress_[0]));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
-
-    // The client should actively recover to the local worker while normal KV traffic keeps succeeding.
-    DS_ASSERT_OK(cluster_->WaitForExpectedResult([this]() { return CheckClientSwitchToExpectedWorker(client_, 1, 1); },
-                                                 8, K_OK));
-}
-
-TEST_F(KVCacheClientServiceDiscoverySwitchBackTest, TestFailoverClientsSpreadAcrossRemainingWorkers)
-{
-    constexpr size_t clientNum = 20;
-    InitClientsByServiceDiscovery("switch_back_host_id_env0", clientNum, clients_);
-    ClearSwitchWorkerExpectedInjects();
-    DS_ASSERT_OK(SetSwitchWorkerExpected(1, workerAddress_[1]));
-    DS_ASSERT_OK(SetSwitchWorkerExpected(2, workerAddress_[2]));
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
-        [this, clientNum]() { return CheckClientsSwitchedToBothRemoteWorkers(clientNum); }, 10, K_OK));
-    // Failure probing and the topology CAS batch can lag client failover on loaded CI runners.
-    DS_ASSERT_OK(cluster_->WaitForExpectedResult([this]() { return CheckFailureFinalized(0); }, 30, K_OK));
-    DS_ASSERT_OK(CheckClientsSetGet(clients_));
 }
 
 class KVCacheClientL2FallBackTest : public OCClientCommon {

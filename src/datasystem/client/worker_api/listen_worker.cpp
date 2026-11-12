@@ -11,39 +11,29 @@
  * limitations under the License.
  */
 
-/**
- * Description: Client listen worker class.
- */
 #include "datasystem/client/worker_api/listen_worker.h"
 
-#include <atomic>
-#include <memory>
 #include <sys/socket.h>
 
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/common/util/strings_util.h"
-#include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/util/random_data.h"
-#include "datasystem/common/util/timer.h"
 
 namespace datasystem {
 namespace client {
 namespace {
 constexpr int32_t REMOVABLE_NOTIFY_RETRY_TIMEOUT_MS = 1000;
 constexpr int32_t REMOVABLE_NOTIFY_RPC_TIMEOUT_MS = 200;
-constexpr uint64_t STANDBY_DATA_PLANE_QUIET_MS = 30'000;
-}
+}  // namespace
 
 ListenWorker::ListenWorker(std::shared_ptr<IClientWorkerCommonApi> clientCommonWorker, HeartbeatType type,
-                           uint32_t index, ThreadPool *pool)
+                           bool closeAdmissionOnScaleDown)
     : clientCommonWorker_(std::move(clientCommonWorker)),
       heartbeatType_(type),
-      asyncSwitchWorkerPool_(pool),
-      index_(index)
+      closeAdmissionOnScaleDown_(closeAdmissionOnScaleDown)
 {
     waitPost_ = std::make_unique<WaitPost>();
     firstHeartbeatWaitPost_ = std::make_unique<WaitPost>();
@@ -68,26 +58,11 @@ ListenWorker::~ListenWorker()
 
 Status ListenWorker::StartListenWorker(int socketFd)
 {
-    auto toString = [](HeartbeatType type) -> std::string {
-        std::string name;
-        switch (type) {
-            case HeartbeatType::NO_HEARTBEAT:
-                name = "NO_HEARTBEAT";
-                break;
-            case HeartbeatType::SOCKET_HEARTBEAT:
-                name = "SOCKET_HEARTBEAT";
-                break;
-            case HeartbeatType::RPC_HEARTBEAT:
-                name = "RPC_HEARTBEAT";
-                break;
-        }
-        return name;
-    };
-    VLOG(1) << "Start listen worker, heartbeat type: " << toString(heartbeatType_) << ", socketFd: " << socketFd;
+    VLOG(1) << "Start listen worker, heartbeat type: " << static_cast<int>(heartbeatType_)
+            << ", socketFd: " << socketFd;
     if (heartbeatType_ == HeartbeatType::NO_HEARTBEAT) {
         return Status::OK();
     }
-
     if (heartbeatType_ == HeartbeatType::SOCKET_HEARTBEAT) {
         CHECK_FAIL_RETURN_STATUS(socketFd != INVALID_SOCKET_FD, K_RUNTIME_ERROR,
                                  "Start to listen worker failed, socket invalid.");
@@ -99,27 +74,24 @@ Status ListenWorker::StartListenWorker(int socketFd)
                 LOG(INFO) << "The client detects that the worker is disconnected, socket fd: " << socketFd_;
                 workerAvailable_ = false;
                 auto rc = RunAllCallback(WorkerRecoveryReason::CONNECTION_BROKEN);
-                if (rc.IsError()) {
-                    LOG(ERROR) << "Failed to recover client after worker connection broke: " << rc.ToString();
-                }
+                LOG_IF_ERROR(rc, "Failed to recover client after worker connection broke");
             },
             nullptr));
-    } else {
-        workerListenedThread_ = Thread(&ListenWorker::CheckHeartbeat, this);
-        workerListenedThread_.set_name("ListenWorker");
-        firstHeartbeatWaitPost_->WaitFor(clientCommonWorker_->connectTimeoutMs_);
-        INJECT_POINT("listen_worker.StartListenWorker");
-        if (!firstHeartbeatReceived_.load()) {
-            return Status(K_CLIENT_WORKER_DISCONNECT, "Cannot receive heartbeat from worker.");
-        }
+        return Status::OK();
     }
+
+    workerListenedThread_ = Thread(&ListenWorker::CheckHeartbeat, this);
+    workerListenedThread_.set_name("ListenWorker");
+    firstHeartbeatWaitPost_->WaitFor(clientCommonWorker_->connectTimeoutMs_);
+    INJECT_POINT("listen_worker.StartListenWorker");
+    CHECK_FAIL_RETURN_STATUS(firstHeartbeatReceived_.load(), K_CLIENT_WORKER_DISCONNECT,
+                             "Cannot receive heartbeat from worker.");
     return Status::OK();
 }
 
 void ListenWorker::StopListenWorker(bool stopActively)
 {
-    INJECT_POINT("listen_worker.TryShutdownStandbyConnection", []() { return; });
-    if (workerAvailable_ == true) {
+    if (workerAvailable_) {
         stopActively_ = stopActively;
     }
     stop_ = true;
@@ -153,10 +125,10 @@ Status ListenWorker::NotifyClientRemovable()
     bool isWorkerVoluntaryScaleDown = false;
     auto releasedWorkerFds = fdReleaseHelper_.GetReleasedWorkerFds();
     std::vector<int64_t> expiredWorkerFds;
-    auto sendHeartbeat = [this, &workerReboot, &clientRemoved, &isWorkerVoluntaryScaleDown,
-                          &releasedWorkerFds, &expiredWorkerFds](int32_t rpcTimeoutMs) {
-        return clientCommonWorker_->SendHeartbeat(workerReboot, clientRemoved, rpcTimeoutMs,
-                                                  isWorkerVoluntaryScaleDown, releasedWorkerFds, expiredWorkerFds);
+    auto sendHeartbeat = [this, &workerReboot, &clientRemoved, &isWorkerVoluntaryScaleDown, &releasedWorkerFds,
+                          &expiredWorkerFds](int32_t rpcTimeoutMs) {
+        return clientCommonWorker_->SendHeartbeat(workerReboot, clientRemoved, rpcTimeoutMs, isWorkerVoluntaryScaleDown,
+                                                  releasedWorkerFds, expiredWorkerFds);
     };
     RETURN_IF_NOT_OK(RetryOnError(
         REMOVABLE_NOTIFY_RETRY_TIMEOUT_MS, sendHeartbeat, []() { return Status::OK(); },
@@ -170,7 +142,7 @@ Status ListenWorker::NotifyClientRemovable()
 int64_t GetRemainTime(Timer &timer, int64_t nodeTimeoutMs)
 {
     auto elapsedTimeMs = timer.ElapsedMilliSecond();
-    return static_cast<double>(nodeTimeoutMs) > elapsedTimeMs ? static_cast<double>(nodeTimeoutMs) - elapsedTimeMs : 0;
+    return static_cast<double>(nodeTimeoutMs) > elapsedTimeMs ? nodeTimeoutMs - elapsedTimeMs : 0;
 }
 
 uint32_t GetErrorWaitInterval(Timer &timer, int64_t clientDeadTimeoutMs, uint32_t defaultInterval)
@@ -186,21 +158,15 @@ uint32_t GetErrorWaitInterval(Timer &timer, int64_t clientDeadTimeoutMs, uint32_
 
 void ListenWorker::NotifyFirstHeartbeat(bool success)
 {
-    if (firstHeartbeatReceived_.load()) {
-        return;
+    if (!firstHeartbeatReceived_.load()) {
+        firstHeartbeatReceived_.store(success);
+        firstHeartbeatWaitPost_->Set();
     }
-    firstHeartbeatReceived_.store(success);
-    firstHeartbeatWaitPost_->Set();
 }
 
 void ListenWorker::SetReleaseFdCallBack(std::function<void(const std::vector<int64_t> &)> callback)
 {
     fdReleaseHelper_.SetReleaseFdCallBack(std::move(callback));
-}
-
-void ListenWorker::SetRecoverLocalWorkerHandle(std::function<bool()> callback)
-{
-    recoverLocalWorkerHandle_ = std::move(callback);
 }
 
 void ListenWorker::SetWorkerTimeoutHandle(std::function<void()> callback)
@@ -223,17 +189,7 @@ Status ListenWorker::CheckHeartbeat()
     auto clientDeadTimeoutMs = clientCommonWorker_->clientDeadTimeoutMs_;
     auto remainTime = clientDeadTimeoutMs;
     Timer timer;
-    bool prevSwitchedState = isSwitched_;
     while (!stop_) {
-        // Reset heartbeat timer after any switch transition (to remote or back to local).
-        // Without this, the stale timer accumulated during the original
-        // disconnection would instantly exceed nodeTimeoutMs and trigger another switch.
-        if (isSwitched_ != prevSwitchedState) {
-            timer.Reset();
-            lostHeartbeatTimes = 0;
-            remainTime = clientDeadTimeoutMs;
-            prevSwitchedState = isSwitched_;
-        }
         bool workerReboot;
         bool clientRemoved;
         bool isWorkerVoluntaryScaleDown;
@@ -242,20 +198,17 @@ Status ListenWorker::CheckHeartbeat()
             clientCommonWorker_->SendHeartbeat(workerReboot, clientRemoved, remainTime, isWorkerVoluntaryScaleDown,
                                                fdReleaseHelper_.GetReleasedWorkerFds(), expiredWorkerFds);
         if (status.IsError()) {
-            HandleHeartbeatError(timer, clientDeadTimeoutMs, heartbeatIntervalMs, lostHeartbeatTimes,
-                                 prevSwitchedState, remainTime, status);
+            HandleHeartbeatError(timer, clientDeadTimeoutMs, heartbeatIntervalMs, lostHeartbeatTimes, remainTime,
+                                 status);
             continue;
         }
-        if (HandleScaleDownOrIdle(isWorkerVoluntaryScaleDown)) {
-            continue;
-        }
+        HandleScaleDown(isWorkerVoluntaryScaleDown);
         INJECT_POINT("listen_worker.reboot", [&workerReboot]() {
             workerReboot = true;
             return Status::OK();
         });
         if (ProcessHeartbeatResult(workerReboot, clientRemoved, std::move(expiredWorkerFds), lostHeartbeatTimes,
-                                   intervalMs,
-                                   timer, clientDeadTimeoutMs, remainTime)) {
+                                   intervalMs, timer, clientDeadTimeoutMs, remainTime)) {
             continue;
         }
     }
@@ -264,71 +217,48 @@ Status ListenWorker::CheckHeartbeat()
 
 void ListenWorker::HandleHeartbeatError(Timer &timer, uint64_t clientDeadTimeoutMs,
                                         const std::vector<uint32_t> &heartbeatIntervalMs, int32_t &lostHeartbeatTimes,
-                                        bool prevSwitchedState, uint64_t &remainTime, const Status &status)
+                                        uint64_t &remainTime, const Status &status)
 {
     CheckAndSetClientTimeout(timer.ElapsedMilliSecond(), clientDeadTimeoutMs, status);
     auto interval = GetErrorWaitInterval(timer, clientDeadTimeoutMs, heartbeatIntervalMs[lostHeartbeatTimes]);
     waitPost_->WaitForAndClear(interval);
-    if (isSwitched_ != prevSwitchedState) {
-        return;
-    }
     remainTime = GetRemainTime(timer, clientDeadTimeoutMs);
     CheckAndSetClientTimeout(timer.ElapsedMilliSecond(), clientDeadTimeoutMs, status);
-    lostHeartbeatTimes++;
-    if (lostHeartbeatTimes >= (int32_t)(heartbeatIntervalMs.size() - 1)) {
-        lostHeartbeatTimes = 0;
+    lostHeartbeatTimes = (lostHeartbeatTimes + 1) % (heartbeatIntervalMs.size() - 1);
+}
+
+void ListenWorker::HandleScaleDown(bool isWorkerVoluntaryScaleDown)
+{
+    if (!closeAdmissionOnScaleDown_) {
+        isWorkerVoluntaryScaleDown_ = isWorkerVoluntaryScaleDown;
+        return;
+    }
+    bool wasScalingDown = isWorkerVoluntaryScaleDown_.exchange(isWorkerVoluntaryScaleDown);
+    if (isWorkerVoluntaryScaleDown) {
+        workerAvailable_ = false;
+        if (!wasScalingDown) {
+            LOG(INFO) << "Connected worker will scale down, client id: " << clientId_;
+        }
+        if (!clientCommonWorker_->HaveInvokeCount()
+            && !clientCommonWorker_->removable_.exchange(true, std::memory_order_relaxed)) {
+            LOG(INFO) << "Client has drained in-flight requests and is removable, client id: " << clientId_;
+        }
+    } else if (wasScalingDown) {
+        clientCommonWorker_->removable_.store(false, std::memory_order_relaxed);
+        LOG(INFO) << "Connected worker cancelled scale down, client id: " << clientId_;
     }
 }
 
-bool ListenWorker::HandleScaleDownOrIdle(bool isWorkerVoluntaryScaleDown)
+bool ListenWorker::ProcessHeartbeatResult(bool workerReboot, bool clientRemoved, std::vector<int64_t> expiredWorkerFds,
+                                          int32_t &lostHeartbeatTimes, int intervalMs, Timer &timer,
+                                          uint64_t clientDeadTimeoutMs, uint64_t &remainTime)
 {
-    isWorkerVoluntaryScaleDown_ = isWorkerVoluntaryScaleDown;
-    if (IsVoluntarySwitchable()) {
-        constexpr int logInterval = 10;
-        LOG_EVERY_T(INFO, logInterval)
-            << "[Switch] Connected worker will scale down, switch worker, client id: " << clientId_;
-        SwitchToRemoteWorker(SwitchTriggerReason::VOLUNTARY_SCALE_DOWN);
-    } else if (clientCommonWorker_->removable_.exchange(false, std::memory_order_relaxed)) {
-        LOG(INFO) << "[Switch] Client " << clientId_ << " recover to normal state now";
-        return true;
-    }
-
-    // Idle means remote connection request is 0 and switched.
-    if (IsIdle()) {
-        // If we are standby connection and idle, try shutdown ourselves.
-        if (CanDisconnectStandby()) {
-            TryShutdownStandbyConnection();
-        } else {
-            // LOG_EVERY_N keeps thread-safe atomic throttle state across the multiple listener
-            // threads that reach this branch and guarantees the first deferral is visible.
-            constexpr int drainDeferLogRate = 10;
-            LOG_EVERY_N(INFO, drainDeferLogRate)
-                << "[Switch] Standby drain deferred, data plane still active, worker: "
-                << clientCommonWorker_->hostPort_.ToString() << ", client id: " << clientId_;
-        }
-        // If we are local connection and idle, we can tell local worker that we can be removed safely.
-        if (IsVoluntarySwitchable() && !clientCommonWorker_->removable_.exchange(true, std::memory_order_relaxed)) {
-            LOG(INFO) << "[Switch] Client " << clientId_ << " is removable now";
-            return true;
-        }
-    }
-    return false;
-}
-
-bool ListenWorker::ProcessHeartbeatResult(bool workerReboot, bool clientRemoved,
-                                          std::vector<int64_t> expiredWorkerFds, int32_t &lostHeartbeatTimes,
-                                          int intervalMs, Timer &timer, uint64_t clientDeadTimeoutMs,
-                                          uint64_t &remainTime)
-{
-    // For RPC heartbeats, the callback function is executed only when the heartbeat is successful again
-    // to avoid incorrect triggering due to network congestion.
     lostHeartbeatTimes = 0;
     WorkerRecoveryReason recoveryReason = WorkerRecoveryReason::RETRY_PENDING;
-    if ((workerReboot || clientRemoved) && IsReconnectable()) {
+    if (workerReboot || clientRemoved) {
         workerAvailable_ = false;
         recoveryPending_ = true;
-        recoveryReason = workerReboot ? WorkerRecoveryReason::WORKER_REBOOT
-                                      : WorkerRecoveryReason::CLIENT_REMOVED;
+        recoveryReason = workerReboot ? WorkerRecoveryReason::WORKER_REBOOT : WorkerRecoveryReason::CLIENT_REMOVED;
     }
     fdReleaseHelper_.Update(std::move(expiredWorkerFds));
     if (recoveryPending_) {
@@ -339,9 +269,7 @@ bool ListenWorker::ProcessHeartbeatResult(bool workerReboot, bool clientRemoved,
         return true;
     }
     NotifyFirstHeartbeat(true);
-    workerAvailable_ = true;
-    TryRecoverLocalWorker();
-    TrySwitchBackToLocalWorker();
+    workerAvailable_ = !closeAdmissionOnScaleDown_ || !isWorkerVoluntaryScaleDown_;
     waitPost_->WaitForAndClear(intervalMs);
     remainTime = clientDeadTimeoutMs;
     timer.Reset();
@@ -350,9 +278,6 @@ bool ListenWorker::ProcessHeartbeatResult(bool workerReboot, bool clientRemoved,
 
 void ListenWorker::TryRecoverClientResources(WorkerRecoveryReason reason)
 {
-    if (!IsReconnectable()) {
-        return;
-    }
     if (reason == WorkerRecoveryReason::RETRY_PENDING) {
         VLOG(1) << "Heartbeat success, retry client resource recovery.";
     } else {
@@ -362,33 +287,29 @@ void ListenWorker::TryRecoverClientResources(WorkerRecoveryReason reason)
     NotifyFirstHeartbeat(true);
     if (recoveryStatus.IsError()) {
         constexpr int logInterval = 10;
-        LOG_EVERY_T(ERROR, logInterval)
-            << "Client resource recovery failed, keep request admission closed: " << recoveryStatus.ToString();
+        LOG_EVERY_T(ERROR, logInterval) << "Client resource recovery failed, keep request admission closed: "
+                                        << recoveryStatus.ToString();
         return;
     }
     recoveryPending_ = false;
-    workerAvailable_ = true;
+    workerAvailable_ = !closeAdmissionOnScaleDown_ || !isWorkerVoluntaryScaleDown_;
     LOG(INFO) << "Client resources recovered, reopen request admission.";
 }
 
 void ListenWorker::CheckAndSetClientTimeout(int64_t failureTime, int64_t nodeTimeoutMs, const Status &status)
 {
-    if (failureTime >= nodeTimeoutMs) {
-        if (workerAvailable_) {
-            // If the heartbeat is not lost for the first time, the client stops sending requests.
-            LOG(WARNING) << FormatString(
-                "Lost heartbeat, set worker available to false with clientID:%s, "
-                "worker address:%s, Detail:%s.",
-                clientCommonWorker_->clientId_, clientCommonWorker_->hostPort_.ToString(), status.ToString());
-            workerAvailable_ = false;
-            NotifyFirstHeartbeat(false);
-            std::shared_lock<SharedMutex> l(workerTimeoutHandleMutex_);
-            if (workerTimeoutHandle_) {
-                recoveryPending_ = true;
-                workerTimeoutHandle_();
-            }
-        }
-        SwitchToRemoteWorker(SwitchTriggerReason::WORKER_UNAVAILABLE);
+    if (failureTime < nodeTimeoutMs || !workerAvailable_) {
+        return;
+    }
+    LOG(WARNING) << FormatString(
+        "Lost heartbeat, set worker available to false with clientID:%s, worker address:%s, Detail:%s.",
+        clientCommonWorker_->clientId_, clientCommonWorker_->hostPort_.ToString(), status.ToString());
+    workerAvailable_ = false;
+    recoveryPending_ = true;
+    NotifyFirstHeartbeat(false);
+    std::shared_lock<SharedMutex> l(workerTimeoutHandleMutex_);
+    if (workerTimeoutHandle_) {
+        workerTimeoutHandle_();
     }
 }
 
@@ -398,41 +319,22 @@ Status ListenWorker::RunAllCallback(WorkerRecoveryReason reason)
         return Status::OK();
     }
     CleanInvalidCallback();
-
-    if (reason == WorkerRecoveryReason::RETRY_PENDING) {
-        VLOG(1) << "Retry all worker recovery callbacks, local worker: " << isLocalWorker_;
-    } else {
-        LOG(INFO) << "Run all worker recovery callbacks, local worker: " << isLocalWorker_;
-    }
     auto traceId = Trace::Instance().GetTraceID();
-    auto func = [this, traceId, reason]() -> Status {
-        auto traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        std::shared_lock<SharedMutex> l(callbackMutex_);
-        Status result = Status::OK();
-        for (const auto &func : callBackTable_) {
-            if (stop_) {
-                return Status::OK();
-            }
-            if (func.second) {
-                auto rc = func.second(reason);
-                if (result.IsOk() && rc.IsError()) {
-                    result = std::move(rc);
-                }
+    auto traceGuard = Trace::Instance().SetTraceNewID(traceId);
+    std::shared_lock<SharedMutex> l(callbackMutex_);
+    Status result = Status::OK();
+    for (const auto &entry : callBackTable_) {
+        if (stop_) {
+            return Status::OK();
+        }
+        if (entry.second) {
+            auto rc = entry.second(reason);
+            if (result.IsOk() && rc.IsError()) {
+                result = std::move(rc);
             }
         }
-        return result;
-    };
-    if (asyncSwitchWorkerPool_ == nullptr || isLocalWorker_) {
-        return func();
-    } else {
-        if (reason == WorkerRecoveryReason::RETRY_PENDING) {
-            VLOG(1) << "async pool statistics: " << asyncSwitchWorkerPool_->GetStatistics();
-        } else {
-            LOG(INFO) << "async pool statistics: " << asyncSwitchWorkerPool_->GetStatistics();
-        }
-        auto future = asyncSwitchWorkerPool_->Submit(func);
-        return future.get();
     }
+    return result;
 }
 
 void ListenWorker::AddCallBackFunc(void *pointer, std::function<void()> callback)
@@ -464,113 +366,7 @@ void ListenWorker::RemoveCallBackFunc(void *pointer)
     deletedCallbacks_.emplace(pointer);
 }
 
-void ListenWorker::SetSwitchWorkerHandle(std::function<bool(uint32_t, SwitchTriggerReason)> callback)
-{
-    std::lock_guard<SharedMutex> l(switchWorkerHandleMutex_);
-    switchWorkerHandle_ = std::move(callback);
-}
-
-bool ListenWorker::TryAcquireAsyncSwitchPool(std::shared_ptr<Raii> &raii)
-{
-    if (!asyncSwitchWorkerPool_) {
-        LOG_FIRST_N(INFO, 1) << "[Switch] Async switch worker pool is null, ignore switch worker";
-        return false;
-    }
-    bool expected = false;
-    if (!isInAsyncSwitchWorkerPool_.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
-        VLOG(1) << "[Switch] Async switch worker pool has task executing";
-        return false;
-    }
-    raii = std::make_shared<Raii>([weak = weak_from_this()]() {
-        if (auto self = weak.lock()) {
-            self->isInAsyncSwitchWorkerPool_.store(false, std::memory_order_relaxed);
-        }
-    });
-    return true;
-}
-
-void ListenWorker::SwitchToRemoteWorker(SwitchTriggerReason reason)
-{
-    {
-        std::shared_lock<SharedMutex> l(switchWorkerHandleMutex_);
-        if (!switchWorkerHandle_) {
-            return;
-        }
-    }
-    std::shared_ptr<Raii> raii;
-    if (isSwitched_ || !TryAcquireAsyncSwitchPool(raii)) {
-        return;
-    }
-    auto traceId = Trace::Instance().GetTraceID();
-    asyncSwitchWorkerPool_->Execute([this, self = shared_from_this(), traceId, raii, reason]() {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        std::shared_lock<SharedMutex> l(switchWorkerHandleMutex_);
-        LOG(INFO) << "[Switch] Worker " << clientCommonWorker_->workerId_
-                  << " will be switched, client id: " << clientId_;
-        isSwitched_ = switchWorkerHandle_(index_, reason);
-    });
-}
-
-void ListenWorker::TrySwitchBackToLocalWorker()
-{
-    {
-        std::shared_lock<SharedMutex> l(switchWorkerHandleMutex_);
-        if (!switchWorkerHandle_) {
-            return;
-        }
-    }
-    std::shared_ptr<Raii> raii;
-    if (!isSwitched_ || !isLocalWorker_ || isWorkerVoluntaryScaleDown_ || !TryAcquireAsyncSwitchPool(raii)) {
-        return;
-    }
-    auto traceId = Trace::Instance().GetTraceID();
-    asyncSwitchWorkerPool_->Execute([this, self = shared_from_this(), traceId, raii]() {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        std::shared_lock<SharedMutex> l(switchWorkerHandleMutex_);
-        LOG(INFO) << "[Switch] Local worker " << clientCommonWorker_->workerId_ << " is recovering";
-        isSwitched_ = !switchWorkerHandle_(index_, SwitchTriggerReason::LOCAL_RESTORE);
-    });
-}
-
-void ListenWorker::TryRecoverLocalWorker()
-{
-    if (isLocalWorker_ || isSwitched_ || !recoverLocalWorkerHandle_) {
-        return;
-    }
-    constexpr int64_t recoverIntervalMs = 1000;
-    auto now = GetSteadyClockTimeStampMs();
-    auto last = lastLocalRecoveryAttemptMs_.load(std::memory_order_relaxed);
-    if (now - last < recoverIntervalMs) {
-        return;
-    }
-    if (!lastLocalRecoveryAttemptMs_.compare_exchange_strong(last, now, std::memory_order_relaxed)) {
-        return;
-    }
-
-    std::shared_ptr<Raii> raii;
-    if (!TryAcquireAsyncSwitchPool(raii)) {
-        return;
-    }
-    auto traceId = Trace::Instance().GetTraceID();
-    asyncSwitchWorkerPool_->Execute([this, self = shared_from_this(), traceId, raii]() {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        if (recoverLocalWorkerHandle_()) {
-            LOG(INFO) << "[Switch] Preferred same-node worker recovered, remote fallback will drain.";
-            isSwitched_ = true;
-            // One-shot wake so the heartbeat loop re-evaluates immediately. Every sleep in
-            // CheckHeartbeat must consume this with WaitForAndClear, otherwise the event stays
-            // set and the loop spins at heartbeat-RPC speed without ever sleeping again.
-            waitPost_->Set();
-        }
-    });
-}
-
-void ListenWorker::SetIsLocalWorker(bool isLocalWorker)
-{
-    isLocalWorker_ = isLocalWorker;
-}
-
-Status ListenWorker::UpdateSocketFd(const int socketFd)
+Status ListenWorker::UpdateSocketFd(int socketFd)
 {
     socketFd_ = socketFd;
     LOG(INFO) << "Start to listen new socket fd " << socketFd;
@@ -580,18 +376,13 @@ Status ListenWorker::UpdateSocketFd(const int socketFd)
             LOG(INFO) << "The client detects that the worker is disconnected, socket fd: " << socketFd_;
             workerAvailable_ = false;
             auto rc = RunAllCallback(WorkerRecoveryReason::CONNECTION_BROKEN);
-            if (rc.IsError()) {
-                LOG(ERROR) << "Failed to recover client after worker connection broke: " << rc.ToString();
-            }
+            LOG_IF_ERROR(rc, "Failed to recover client after worker connection broke");
         },
         nullptr);
-    if (status.IsError()) {
-        LOG(ERROR) << "Listen to new socket fd: " << socketFd << " failed, detail: " << status.ToString();
-    } else {
-        LOG(INFO) << "Listen to new socket fd " << socketFd << " success";
-    }
+    LOG_IF_ERROR(status, FormatString("Listen to new socket fd %d failed", socketFd));
     return status;
 }
+
 void ListenWorker::SetWorkerAvailable(bool workerStatus)
 {
     workerAvailable_ = workerStatus;
@@ -619,80 +410,6 @@ void ListenWorker::CleanInvalidCallback()
 bool ListenWorker::IsWorkerVoluntaryScaleDown()
 {
     return isWorkerVoluntaryScaleDown_;
-}
-
-bool ListenWorker::IsStandbyDataPlaneQuiet()
-{
-    // Copy the hook under the shared lock so a concurrent re-registration (the node switched back to
-    // standby again) cannot tear the std::function while it is being invoked.
-    std::function<bool(uint64_t)> isQuiet;
-    {
-        std::shared_lock<SharedMutex> l(dataPlaneDrainMutex_);
-        isQuiet = dataPlaneDrain_.isQuiet;
-    }
-    if (isQuiet == nullptr) {
-        // No data-plane owner registered: keep the legacy behaviour.
-        return true;
-    }
-    return isQuiet(STANDBY_DATA_PLANE_QUIET_MS);
-}
-
-void ListenWorker::ShutdownStandbyConnection()
-{
-    // Re-check the gate on the thread that actually tears the connection down. CanDisconnectStandby() decides
-    // on the heartbeat thread, but the teardown is queued onto the single shared async-switch thread, which
-    // also runs switch-back work (worker API init, WaitStandbyWorkerReady up to min(2 x heartbeat, 10s)); the
-    // gap between the decision and this line can therefore be seconds, not microseconds. Metadata-owner read
-    // traffic can resume on the endpoint in that window, and tearing down then would drop an in-use data plane
-    // and make the worker delete this client's URMA connection — the exact failure this gate exists to prevent,
-    // just with a narrower window. Defer instead: the heartbeat loop re-evaluates on its next round.
-    // Reuse the decision predicate rather than restating its conjunction, so "when may a standby be torn
-    // down" keeps one definition: a condition added to CanDisconnectStandby() would otherwise silently not
-    // apply here and reopen the check-then-act window. This single read also governs both the reset below and
-    // the Disconnect, so the two cannot straddle the queueing delay.
-    if (!CanDisconnectStandby()) {
-        // LOG_EVERY_N keeps thread-safe atomic throttle state across the multiple listener
-        // threads that reach this branch and guarantees the first deferral is visible.
-        constexpr int drainDeferLogRate = 10;
-        LOG_EVERY_N(INFO, drainDeferLogRate)
-            << "[Switch] Standby teardown deferred, endpoint data plane became active before disconnect, worker: "
-            << clientCommonWorker_->hostPort_.ToString() << ", client id: " << clientId_;
-        return;
-    }
-    LOG(INFO) << "[Switch] Try to shutdown idle standby client: " << clientId_;
-    // The worker drops this client's URMA connection when it processes the Disconnect below, so drop the
-    // local data plane first: otherwise the client keeps a transporter the peer no longer recognizes.
-    // Copy the reset hook under the shared lock (same race as CanDisconnectStandby: a node can be switched
-    // back to standby and re-register the handle while this runs on the async-switch pool).
-    std::function<void()> reset;
-    {
-        std::shared_lock<SharedMutex> l(dataPlaneDrainMutex_);
-        reset = dataPlaneDrain_.reset;
-    }
-    if (reset != nullptr) {
-        reset();
-    }
-    StopListenWorker(true);
-    LOG_IF_ERROR(clientCommonWorker_->Disconnect(false), "[Switch] Disconnect idle client failed");
-}
-
-void ListenWorker::TryShutdownStandbyConnection()
-{
-    std::shared_ptr<Raii> raii;
-    if (isLocalWorker_ || stop_ || !TryAcquireAsyncSwitchPool(raii)) {
-        return;
-    }
-    INJECT_POINT("TryShutdownStandbyConnection", [] { return; });
-    auto weakThis = weak_from_this();
-    auto traceId = Trace::Instance().GetTraceID();
-    asyncSwitchWorkerPool_->Execute([weakThis, traceId, raii]() {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        auto listen = weakThis.lock();
-        if (listen == nullptr) {
-            return;
-        }
-        listen->ShutdownStandbyConnection();
-    });
 }
 }  // namespace client
 }  // namespace datasystem

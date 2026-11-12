@@ -62,6 +62,8 @@ public:
      */
     static ClientManager &Instance();
 
+    uint32_t GetMaxShmLockId() const;
+
     ~ClientManager();
 
     /**
@@ -236,10 +238,11 @@ private:
 
     /**
      * @brief Get lock id for client.
+     * @param[in] auxiliary Selects the auxiliary SHM session range.
      * @param[out] lockId Lock id for client.
      * @return Status of the call.
      */
-    Status GetLockId(uint32_t &lockId);
+    Status GetLockId(bool auxiliary, uint32_t &lockId);
 
     /**
      * @brief Return unused lock id.
@@ -257,6 +260,8 @@ private:
 
     mutable std::shared_timed_mutex clientId2WorkerFdsMapMutex_;
     std::unordered_map<std::string, std::set<int>> clientId2WorkerFdsMap_;
+
+    const uint32_t primaryLockIdLimit_;
 
     // Protects 'freeLockIds_'.
     mutable std::mutex lockMutex_;

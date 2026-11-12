@@ -43,10 +43,10 @@ namespace client {
 namespace {
 Status GetRpcTimeout(int64_t maxRpcTimeoutMs, int32_t &rpcTimeoutMs)
 {
-    CHECK_FAIL_RETURN_STATUS(maxRpcTimeoutMs > 0, K_INVALID, "RPC timeout must be positive");
     const int64_t remainingUs = ApiDeadline::Instance().ApiRemainingUs();
     CHECK_FAIL_RETURN_STATUS(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
                              FormatString("API deadline exceeded, remaining %ld us.", remainingUs));
+    CHECK_FAIL_RETURN_STATUS(maxRpcTimeoutMs > 0, K_INVALID, "RPC timeout must be positive");
     const int64_t remainingMs = TimeoutDuration::CeilUsToMs(remainingUs);
     rpcTimeoutMs = static_cast<int32_t>(
         std::min({ remainingMs, maxRpcTimeoutMs, static_cast<int64_t>(MAX_RPC_TIMEOUT_MS) }));
@@ -146,11 +146,6 @@ Status WorkerRpcClient::DoInvokeQueryAndGet(const RpcOptions &options, const Que
                                             QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads)
 {
     return controlStub_->QueryAndGet(options, request, response, payloads);
-}
-
-Status WorkerRpcClient::DoInvokeExist(const RpcOptions &options, const ExistReqPb &request, ExistRspPb &response)
-{
-    return controlStub_->Exist(options, request, response);
 }
 
 Status WorkerRpcClient::DoInvokeGetHashRing(const RpcOptions &options, const GetHashRingReqPb &request,
@@ -364,24 +359,18 @@ Status WorkerRpcClient::InvokeQueryAndGet(QueryAndGetReqPb &request, QueryAndGet
     return Status::OK();
 }
 
-Status WorkerRpcClient::InvokeExist(int64_t subTimeoutMs, ExistReqPb &request, ExistRspPb &response)
+Status WorkerRpcClient::InvokeObjectRpc(int64_t subTimeoutMs, const std::string &operationName,
+                                        const google::protobuf::Message &, google::protobuf::Message &,
+                                        const ObjectRpcCall &call)
 {
-    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
-                             "Routed worker RPC client is not initialized");
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE, "Worker RPC client is not initialized");
+    CHECK_FAIL_RETURN_STATUS(static_cast<bool>(call), K_INVALID, "Worker RPC operation is empty");
+    CHECK_FAIL_RETURN_STATUS(controlStub_ != nullptr, K_RUNTIME_ERROR, "Worker object RPC stub is unavailable");
     int32_t rpcTimeout;
     RETURN_IF_NOT_OK(GetRpcTimeout(subTimeoutMs, rpcTimeout));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
-    PerfPoint perfPoint(PerfKey::RPC_CLIENT_EXIST);
-    Status rc = DoInvokeExist(options, request, response);
-    perfPoint.Record();
-    if (rc.IsError()) {
-        return WithRpcDiag(rc, "Exist", workerAddress_);
-    }
-    if (!response.redirect_extra().empty()) {
-        return Status(K_NOT_OWNER, "Exist keys redirected to new owners").WithExtra(response.redirect_extra());
-    }
-    return Status::OK();
+    return WithRpcDiag(call(*controlStub_, options), operationName, workerAddress_);
 }
 
 Status WorkerRpcClient::InvokeGetHashRing(uint64_t currentVersion, GetHashRingRspPb &response)

@@ -45,10 +45,6 @@ ConnectOptions
    * - tenantID
      - String
      - 租户 ID。默认值：""。
-   * - enableCrossNodeConnection
-     - boolean
-     - 是否允许客户端连接到备用节点，默认为 false。
-
 构造方法
 --------
 
@@ -84,14 +80,6 @@ public void setRequestTimeout(int requestTimeoutMs)
 
 参数：
     - **requestTimeoutMs** - 请求超时时间（毫秒）。
-
-public void setEnableCrossNodeConnection(boolean enableCrossNodeConnection)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-设置是否允许跨节点连接。
-
-参数：
-    - **enableCrossNodeConnection** - 是否允许连接到备用节点。
 
 public void setClientPublicKey(String clientPublicKey)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

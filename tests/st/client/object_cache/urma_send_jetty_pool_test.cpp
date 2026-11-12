@@ -254,7 +254,7 @@ protected:
         std::shared_ptr<KVClient> writer;
         std::shared_ptr<KVClient> heldReader;
         InitTestKVClient(kSourceWorker, writer);
-        InitTestKVClient(kDestinationWorker, heldReader, 10000, false, 10000);
+        InitTestKVClient(kDestinationWorker, heldReader, 10000, 10000);
         DS_ASSERT_OK(writer->Set(heldKey, heldValue));
 
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kPauseWriteAfterPostInject, "1*pause()"));
@@ -362,7 +362,7 @@ protected:
         for (auto &reader : readers) {
             // Fault injection deliberately holds worker RPCs. Leave enough headroom that queued healthy requests do not
             // turn into unrelated real request-deadline timeouts.
-            InitTestKVClient(kDestinationWorker, reader, 60000, false, 60000);
+            InitTestKVClient(kDestinationWorker, reader, 60000, 60000);
         }
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kModifyJettyInject, "8*call()"));
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kRefillAddedInject, "8*call()"));
@@ -641,7 +641,7 @@ TEST_F(UrmaSendJettyPoolStTest, BatchGetSharesOneLaneAcrossOverlappingObjects)
     std::shared_ptr<KVClient> writer;
     std::shared_ptr<KVClient> reader;
     InitTestKVClient(kSourceWorker, writer);
-    InitTestKVClient(kDestinationWorker, reader, 10000, false, 10000);
+    InitTestKVClient(kDestinationWorker, reader, 10000, 10000);
 
     // The large object disables aggregate handling for the entire request. With more than the parallel threshold,
     // the server submits individual objects from multiple TBB workers. The whole RPC must still use one send lane.
@@ -670,7 +670,7 @@ TEST_F(UrmaSendJettyPoolStTest, BatchGetWriteErrorReleasesSharedLane)
     std::shared_ptr<KVClient> writer;
     std::shared_ptr<KVClient> reader;
     InitTestKVClient(kSourceWorker, writer);
-    InitTestKVClient(kDestinationWorker, reader, 10000, false, 10000);
+    InitTestKVClient(kDestinationWorker, reader, 10000, 10000);
 
     // Each object exceeds the 64 KiB aggregate limit, so this exercises ordinary per-object UrmaWrite while still
     // using one worker-to-worker Batch Get RPC.
@@ -716,7 +716,7 @@ TEST_F(UrmaSendJettyPoolStTest, BatchGetOrdinaryWritePoolExhaustionFallsBackToTc
     std::shared_ptr<KVClient> writer;
     std::shared_ptr<KVClient> reader;
     InitTestKVClient(kSourceWorker, writer);
-    InitTestKVClient(kDestinationWorker, reader, 10000, false, 10000);
+    InitTestKVClient(kDestinationWorker, reader, 10000, 10000);
 
     constexpr uint32_t kObjectCount = 128;
     // Stay above the 64 KiB aggregate threshold while keeping the whole 128-object TCP fallback below the
@@ -740,7 +740,7 @@ TEST_F(UrmaSendJettyPoolStTest, BatchGetPoolExhaustionTcpFallbackRejectedByLimit
     std::shared_ptr<KVClient> writer;
     std::shared_ptr<KVClient> reader;
     InitTestKVClient(kSourceWorker, writer);
-    InitTestKVClient(kDestinationWorker, reader, 3000, false, 1000);
+    InitTestKVClient(kDestinationWorker, reader, 3000, 1000);
 
     const std::vector<std::string> keys{ "urma-send-lane-exhaust-limiter-reject" };
     const std::vector<std::string> values{
@@ -758,7 +758,7 @@ TEST_F(UrmaSendJettyPoolStTest, BatchGetGatherWriteSharesOneLaneAcrossOverlappin
     std::shared_ptr<KVClient> writer;
     std::shared_ptr<KVClient> reader;
     InitTestKVClient(kSourceWorker, writer);
-    InitTestKVClient(kDestinationWorker, reader, 10000, false, 10000);
+    InitTestKVClient(kDestinationWorker, reader, 10000, 10000);
 
     // Every object is below the 64 KiB aggregate limit, while the total size creates multiple aggregate groups.
     constexpr uint32_t kObjectCount = 512;
@@ -829,7 +829,7 @@ TEST_F(UrmaSendJettyPoolStTest, BatchGetAggregatePoolExhaustionFallsBackToTcpOnl
     std::shared_ptr<KVClient> writer;
     std::shared_ptr<KVClient> reader;
     InitTestKVClient(kSourceWorker, writer);
-    InitTestKVClient(kDestinationWorker, reader, 10000, false, 10000);
+    InitTestKVClient(kDestinationWorker, reader, 10000, 10000);
 
     constexpr uint32_t kObjectCount = 128;
     constexpr size_t kAggregateValueSize = 8 * 1024;
@@ -850,7 +850,7 @@ TEST_F(UrmaSendJettyPoolStTest, ProviderAdmissionPinsQuarantinedRequesterBatchGe
     std::shared_ptr<KVClient> writer;
     std::shared_ptr<KVClient> reader;
     InitTestKVClient(kSourceWorker, writer);
-    InitTestKVClient(kDestinationWorker, reader, 10000, false, 10000);
+    InitTestKVClient(kDestinationWorker, reader, 10000, 10000);
 
     const std::string faultKey = "urma-provider-admission-fault";
     const std::string faultValue(kValueSize, 'f');
@@ -983,7 +983,7 @@ TEST_F(UrmaSendJettyPoolFallbackDisabledStTest,
     std::shared_ptr<KVClient> writer;
     std::shared_ptr<KVClient> reader;
     InitTestKVClient(kSourceWorker, writer);
-    InitTestKVClient(kDestinationWorker, reader, 10000, false, 10000);
+    InitTestKVClient(kDestinationWorker, reader, 10000, 10000);
 
     const std::string faultKey = "urma-provider-admission-disabled-fault";
     const std::string blockedKey = "urma-provider-admission-disabled-blocked";
@@ -1053,8 +1053,8 @@ TEST_F(UrmaSendJettyPoolFallbackDisabledStTest,
     std::shared_ptr<KVClient> reader;
     std::shared_ptr<KVClient> heldReader;
     InitTestKVClient(kSourceWorker, writer);
-    InitTestKVClient(kDestinationWorker, reader, 3000, false, 1000);
-    InitTestKVClient(kDestinationWorker, heldReader, 10000, false, 10000);
+    InitTestKVClient(kDestinationWorker, reader, 3000, 1000);
+    InitTestKVClient(kDestinationWorker, heldReader, 10000, 10000);
 
     const std::string heldKey = "urma-send-lane-disabled-held";
     const std::string value(kValueSize, 'a');
@@ -1208,7 +1208,7 @@ TEST_F(UrmaSendJettyPoolConcurrentStTest, LEVEL1_ConcurrentBatchGetsAtCapacityOv
 
     std::vector<std::shared_ptr<KVClient>> readers(kPoolCapacity * 2);
     for (auto &reader : readers) {
-        InitTestKVClient(kDestinationWorker, reader, 20000, false, 20000);
+        InitTestKVClient(kDestinationWorker, reader, 20000, 20000);
     }
     auto runBatch = [&keys, &values](const std::shared_ptr<KVClient> &reader, uint32_t batchIndex) {
         std::vector<std::string> got;
@@ -1370,7 +1370,7 @@ TEST_F(UrmaSendJettyPoolMaxParallelStTest, LEVEL1_Concurrent64BatchGetsAbovePara
 
     std::vector<std::shared_ptr<KVClient>> readers(kConcurrentRequests);
     for (auto &reader : readers) {
-        InitTestKVClient(kDestinationWorker, reader, 30000, false, 30000);
+        InitTestKVClient(kDestinationWorker, reader, 30000, 30000);
     }
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kSendLaneReleaseInject, "128*call()"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kPoolExhaustedInject, "call()"));
@@ -1445,7 +1445,7 @@ TEST_F(UrmaSendJettyPoolStTest, CircuitBrokenPeerReconnectsBeforeLargeTcpFallbac
     std::shared_ptr<KVClient> writer;
     std::shared_ptr<KVClient> reader;
     InitTestKVClient(kSourceWorker, writer);
-    InitTestKVClient(kDestinationWorker, reader, 10000, false, 10000);
+    InitTestKVClient(kDestinationWorker, reader, 10000, 10000);
 
     const std::string key = "urma-circuit-broken-reconnect";
     const std::string value(2 * UrmaFallbackTcpLimiter::kMaxSinglePayloadBytes, 'a');
@@ -1478,7 +1478,7 @@ TEST_F(UrmaSendJettyGateStTest, MultiChunkStatus9WaitsForPausedSecondPostPermitB
     std::shared_ptr<KVClient> writer;
     std::shared_ptr<KVClient> reader;
     InitTestKVClient(kSourceWorker, writer);
-    InitTestKVClient(kDestinationWorker, reader, 30000, false, 30000);
+    InitTestKVClient(kDestinationWorker, reader, 30000, 30000);
 
     // The fixed balance threshold forces this payload through two WRs on the same send lane. The first
     // reaches the provider, while the second stops after acquiring its post permit. Inject status
@@ -1544,7 +1544,7 @@ TEST_F(UrmaSendJettyPoolStTest, CqeRetirementFlushDeleteConvergesRegistryAndRema
     std::shared_ptr<KVClient> writer;
     std::shared_ptr<KVClient> reader;
     InitTestKVClient(kSourceWorker, writer);
-    InitTestKVClient(kDestinationWorker, reader, 10000, false, 10000);
+    InitTestKVClient(kDestinationWorker, reader, 10000, 10000);
 
     const std::string faultKey = "urma-send-lane-lifecycle-fault";
     const std::string recoveryKey = "urma-send-lane-lifecycle-recovery";

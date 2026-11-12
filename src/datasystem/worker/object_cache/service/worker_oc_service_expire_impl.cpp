@@ -82,8 +82,9 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
     int64_t realTimeoutMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     LOG(INFO) << "Expire start from client:" << req.client_id();
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId),
-                                     "Authenticate failed.");
+    Status authRc = req.is_routed() ? worker::AuthenticateRequest(requestAuthenticator_, req, req.tenant_id(), tenantId)
+                                    : worker::Authenticate(requestAuthenticator_, req, tenantId);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(authRc, "Authenticate failed.");
     auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_EXPIRE);
     access.ObjectKeysRef(objectKeys).TtlSecond(req.ttl_second());

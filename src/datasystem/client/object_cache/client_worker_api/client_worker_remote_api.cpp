@@ -39,7 +39,6 @@
 
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/latency_phase.h"
-#include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/shared_memory/delayed_release_shm_manager.h"
 #include "datasystem/common/metrics/kv_metrics.h"
@@ -172,40 +171,23 @@ void FillCreateUrmaInfo(bool isUrmaEnabled, const CreateRspPb &rsp,
 #endif
 }
 
-#ifdef USE_URMA
-/**
- * @brief Check whether a Get response contains URMA payloads that fell back to TCP.
- * @param[in] rsp The server Get response.
- * @return True if any payload entry has part_index entries (indicating TCP fallback).
- */
-bool HasUrmaTcpFallbackPayload(const GetRspPb &rsp)
-{
-    for (int i = 0; i < rsp.payload_info_size(); ++i) {
-        if (rsp.payload_info(i).part_index_size() > 0) {
-            return true;
-        }
-    }
-    return false;
-}
-#endif
 }  // namespace
 
 ClientWorkerRemoteApi::ClientWorkerRemoteApi(HostPort hostPort, HeartbeatType heartbeatType,
                                              SensitiveValue token, Signature *signature, std::string tenantId,
-                                             bool enableCrossNodeConnection,
                                              std::string deviceId)
-    : client::IClientWorkerCommonApi(hostPort, heartbeatType, enableCrossNodeConnection, signature),
-      ClientWorkerBaseApi(hostPort, heartbeatType, enableCrossNodeConnection, signature),
+    : client::IClientWorkerCommonApi(hostPort, heartbeatType, true, signature),
+      ClientWorkerBaseApi(hostPort, heartbeatType, signature),
       ClientWorkerRemoteCommonApi(hostPort, heartbeatType, std::move(token), signature, std::move(tenantId),
-                                  enableCrossNodeConnection, std::move(deviceId))
+                                  true, std::move(deviceId))
 {
 }
 
 ClientWorkerRemoteApi::ClientWorkerRemoteApi(
     HostPort hostPort, HeartbeatType heartbeatType, SensitiveValue token, std::shared_ptr<Signature> signature,
-    std::string tenantId, bool enableCrossNodeConnection, std::string deviceId)
+    std::string tenantId, std::string deviceId)
     : ClientWorkerRemoteApi(std::move(hostPort), heartbeatType, std::move(token), signature.get(),
-                            std::move(tenantId), enableCrossNodeConnection, std::move(deviceId))
+                            std::move(tenantId), std::move(deviceId))
 {
     rpcSignatureOwner_ = std::move(signature);
 }
@@ -494,35 +476,6 @@ bool ClientWorkerRemoteApi::IsAllGetFailed(GetRspPb &rsp)
 }
 
 #ifdef USE_URMA
-Status ClientWorkerRemoteApi::ResolveUBGetSize(const GetParam &getParam, const std::string &tenantId,
-                                               uint64_t &totalRequiredSize, bool &fallbackToTcp)
-{
-    totalRequiredSize = getParam.ubTotalSize;
-    fallbackToTcp = false;
-    if (totalRequiredSize > 0) {
-        return Status::OK();
-    }
-    if (getParam.ubMetaResolved) {
-        fallbackToTcp = true;
-        return Status::OK();
-    }
-    std::vector<ObjMetaInfo> objMetas;
-    Status metaRc = GetObjMetaInfo(tenantId, getParam.objectKeys, objMetas);
-    if (metaRc.IsError()) {
-        return metaRc;
-    }
-    if (objMetas.size() != getParam.objectKeys.size()) {
-        fallbackToTcp = true;
-        LOG(WARNING) << "GetObjMetaInfo object count mismatch: expected " << getParam.objectKeys.size() << " but got "
-                     << objMetas.size() << ", fallback to TCP/IP payload before get.";
-        return Status::OK();
-    }
-    for (const auto &meta : objMetas) {
-        totalRequiredSize += meta.objSize;
-    }
-    return Status::OK();
-}
-
 Status ClientWorkerRemoteApi::PrepareGetUrmaBuffer(const GetParam &getParam, GetReqPb &req,
                                                    std::shared_ptr<UrmaManager::BufferHandle> &ubBufferHandle,
                                                    uint8_t *&ubBufferPtr, uint64_t &ubBufferSize)
@@ -530,14 +483,11 @@ Status ClientWorkerRemoteApi::PrepareGetUrmaBuffer(const GetParam &getParam, Get
     if (!IsUrmaEnabled() || IsShmEnable()) {
         return Status::OK();
     }
-    uint64_t totalRequiredSize = 0;
-    bool fallbackToTcp = false;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ResolveUBGetSize(getParam, req.tenant_id(), totalRequiredSize, fallbackToTcp),
-                                     "Resolve UB get size failed");
-    if (totalRequiredSize > 0) {
-        PrepareUrmaBuffer(req, ubBufferHandle, ubBufferPtr, ubBufferSize, totalRequiredSize);
-    } else if (fallbackToTcp) {
-        LOG(WARNING) << "UB meta unavailable, object key: " << VectorToString(getParam.objectKeys);
+    if (getParam.ubTotalSize > 0) {
+        PrepareUrmaBuffer(req, ubBufferHandle, ubBufferPtr, ubBufferSize, getParam.ubTotalSize);
+    } else {
+        LOG(WARNING) << "UB size was not resolved before Get, fallback to TCP/IP payload, object key: "
+                     << VectorToString(getParam.objectKeys);
     }
     return Status::OK();
 }
@@ -669,27 +619,6 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
         MergeDecodedPhasesToTrace(phases, rsp.latency_tick_dropped_count());
     }
 #ifdef USE_URMA
-    const bool hasUrmaGetAttempt = (ubBufferHandle != nullptr || getParam.ubPreAllocHandle != nullptr)
-        && req.has_urma_info();
-    if (hasUrmaGetAttempt) {
-        bool hasHardProviderFailure = false;
-        if (rsp.has_provider_ub_failure_detail()
-            && rsp.provider_ub_failure_detail().operator_worker() == hostPort_.ToString()) {
-            auto outcome = DecodeProviderUbFailureDetail(rsp.provider_ub_failure_detail(), hostPort_,
-                                                         UbOperationKind::CLIENT_GET_WRITEBACK,
-                                                         "client_get_response");
-            if (outcome.has_value()) {
-                auto failureClass = UbFailureClassifier().Classify(*outcome);
-                hasHardProviderFailure = failureClass == UbFailureClass::PORT_UNAVAILABLE_ERROR4
-                                         || failureClass == UbFailureClass::CONNECT_OR_PATH_FAILURE;
-            }
-        }
-        if (hasHardProviderFailure) {
-            RecordUrmaDataPlaneResult(false);
-        } else if (rsp.payload_info_size() > 0) {
-            RecordUrmaDataPlaneResult(!HasUrmaTcpFallbackPayload(rsp));
-        }
-    }
     if (getParam.ubPreAllocHandle == nullptr) {
         RETURN_IF_NOT_OK(FillUrmaBuffer(ubBufferHandle, rsp, payloads, ubBufferPtr, ubBufferSize));
     }
@@ -1274,51 +1203,6 @@ Status ClientWorkerRemoteApi::ReleaseGRefs(const std::string &remoteClientId)
     return Status::OK();
 }
 
-Status ClientWorkerRemoteApi::Delete(const std::vector<std::string> &objectKeys,
-                                     std::vector<std::string> &failedObjectKeys, bool areDeviceObjects)
-{
-    LOG(INFO) << FormatString("Begin to delete object, client id: %s, worker address: %s, object key: %s", clientId_,
-                              hostPort_.ToString(), VectorToString(objectKeys));
-    DeleteAllCopyReqPb req;
-    DeleteAllCopyRspPb rsp;
-    req.set_client_id(clientId_);
-    for (const auto &id : objectKeys) {
-        req.add_object_keys(id);
-    }
-    req.set_are_device_objects(areDeviceObjects);
-    RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
-    PerfPoint perfPoint(PerfKey::RPC_CLIENT_DEL_OBJECT);
-    auto rc = RetryOnError(
-        requestTimeoutMs_,
-        [this, &req, &rsp, &failedObjectKeys, &objectKeys](int32_t realRpcTimeout) {
-            failedObjectKeys.clear();
-            RpcOptions opts;
-            opts.SetTimeout(realRpcTimeout);
-            GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(opts.GetTimeout()));
-            VLOG(1) << "Start to send rpc to delete object: " << VectorToString(objectKeys);
-            Status status = DS_OC_DISPATCH(DeleteAllCopy, opts, req, rsp);
-            if (status.IsError()) {
-                status = WithRpcDiag(status, "DeleteAllCopy", hostPort_);
-            }
-            if (status.IsError()) {
-                LOG(ERROR) << "DeleteAllCopy failed with " << status.ToString();
-                failedObjectKeys = objectKeys;
-                return status;
-            }
-            status = Status(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
-            if (status.IsError()) {
-                LOG(ERROR) << "DeleteAllCopy response " << LogHelper::IgnoreSensitive(rsp);
-                failedObjectKeys = { rsp.fail_object_keys().begin(), rsp.fail_object_keys().end() };
-            }
-            return status;
-        },
-        []() { return Status::OK(); },
-        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-          StatusCode::K_RPC_UNAVAILABLE },
-        rpcTimeoutMs_);
-    return rc;
-}
-
 Status ClientWorkerRemoteApi::QueryGlobalRefNum(
     const std::vector<std::string> &objectKeys,
     std::unordered_map<std::string, std::vector<std::unordered_set<std::string>>> &gRefMap)
@@ -1532,184 +1416,6 @@ Status ClientWorkerRemoteApi::RemoveP2PLocation(const std::string &objectKey, in
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when RemoveP2PLocation.");
     PerfPoint perfPoint(PerfKey::RPC_HETERO_CLIENT_LOCAL_DELETE);
     return DS_OC_DISPATCH(RemoveP2PLocation, opts, req, resp);
-}
-
-Status ClientWorkerRemoteApi::GetObjMetaInfo(const std::string &tenantId, const std::vector<std::string> &objectKeys,
-                                             std::vector<ObjMetaInfo> &objMetas)
-{
-    GetObjMetaInfoReqPb req;
-    *req.mutable_object_keys() = { objectKeys.begin(), objectKeys.end() };
-    req.set_tenantid(tenantId);
-    GetObjMetaInfoRspPb rsp;
-    Timer rpcTimer;
-    auto status = RetryOnError(
-        static_cast<int32_t>(std::min<int64_t>(
-            TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()), MAX_RPC_TIMEOUT_MS)),
-        [this, &req, &rsp, tenantId](int32_t realRpcTimeout) {
-            RpcOptions opts;
-            opts.SetTimeout(realRpcTimeout);
-            GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
-            VLOG(1) << "Start to send rpc to get obj meta: " << VectorToString(req.object_keys()) << " of tenant "
-                    << tenantId;
-            return DS_OC_DISPATCH(GetObjMetaInfo, opts, req, rsp);
-        },
-        []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
-    if (status.IsError()) {
-        status = WithRpcDiag(status, "GetObjMetaInfo", hostPort_);
-    }
-    LogClientWorkerRpcDone("GetObjMetaInfo", objectKeys.size(), "UB",
-                           static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond()), status);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "Send GetObjMetaInfo failed.");
-    // fill outpara
-    LOG(INFO) << "Finish GetObjMetaInfo success.";
-    objMetas.reserve(objectKeys.size());
-    for (auto &i : rsp.objs_meta_info()) {
-        objMetas.emplace_back(
-            ObjMetaInfo{ i.obj_size(), std::vector<std::string>{ i.location_ids().begin(), i.location_ids().end() } });
-    }
-    return Status::OK();
-}
-
-Status ClientWorkerRemoteApi::QuerySize(const std::vector<std::string> &objectKeys, QuerySizeRspPb &rsp)
-{
-    QuerySizeReqPb req;
-    *req.mutable_object_keys() = { objectKeys.begin(), objectKeys.end() };
-    req.set_client_id(clientId_);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when QuerySize.");
-    auto status = RetryOnError(
-        requestTimeoutMs_,
-        [this, &req, &rsp](int32_t realRpcTimeout) {
-            RpcOptions opts;
-            opts.SetTimeout(realRpcTimeout);
-            GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
-            VLOG(1) << "Start to send rpc to get obj meta: " << VectorToString(req.object_keys());
-            auto rc = DS_OC_DISPATCH(QuerySize, opts, req, rsp);
-            if (rc.IsError()) {
-                return WithRpcDiag(rc, "QuerySize", hostPort_);
-            }
-            Status recvStatus = Status(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
-            if (recvStatus.GetCode() == StatusCode::K_TRY_AGAIN || IsRetryableRpcError(recvStatus)
-                || IsNonRetryableRpcError(recvStatus)) {
-                return recvStatus;
-            }
-            return Status::OK();
-        },
-        []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
-    if (status.IsError()) {
-        status = WithRpcDiag(status, "QuerySize", hostPort_);
-    }
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "Send QuerySize failed.");
-    LOG(INFO) << "Finish QuerySize success.";
-    return Status::OK();
-}
-
-Status ClientWorkerRemoteApi::Exist(const std::vector<std::string> &keys, std::vector<bool> &exists,
-                                    const bool queryL2Cache, const bool isLocal)
-{
-    const bool traceEnabled = ShouldCollectLatencyTrace(GetClientLatencyTraceConfig());
-    ExistReqPb req;
-    *req.mutable_object_keys() = { keys.begin(), keys.end() };
-    req.set_client_id(clientId_);
-    req.set_query_l2cache(queryL2Cache);
-    req.set_is_local(isLocal);
-    INJECT_POINT("Exist.QueryLocalMem", [&req]() {
-        req.set_query_l2cache(false);
-        req.set_is_local(true);
-        return Status::OK();
-    });
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token to ExistReqPb.");
-    ExistRspPb rsp;
-    PerfPoint perfPoint(PerfKey::RPC_CLIENT_EXIST);
-    Timer rpcTimer;
-    auto status = RetryOnError(
-        static_cast<int32_t>(std::min<int64_t>(
-            TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()), MAX_RPC_TIMEOUT_MS)),
-        [this, &req, &rsp](int32_t realRpcTimeout) {
-            RpcOptions opts;
-            opts.SetTimeout(realRpcTimeout);
-            GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
-            VLOG(1) << "Start to send rpc to check existence";
-            return DS_OC_DISPATCH(Exist, opts, req, rsp);
-        },
-        []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
-    if (status.IsError()) {
-        status = WithRpcDiag(status, "Exist", hostPort_);
-        if (!rsp.redirect_extra().empty()) {
-            status = status.WithExtra(rsp.redirect_extra());
-        }
-    }
-    Trace::Instance().AddCommPhaseIfEnabled(LatencySummaryPhase::CLIENT_RPC_EXIST, traceEnabled);
-    if (traceEnabled && rsp.latency_phase_us_size() > 0) {
-        MergeDecodedPhasesToTrace(
-            std::vector<uint32_t>(rsp.latency_phase_us().begin(), rsp.latency_phase_us().end()),
-            rsp.latency_tick_dropped_count());
-    }
-    if (status.IsError()) { return status; }
-    if (keys.size() != static_cast<size_t>(rsp.exists().size())) {
-        LOG(ERROR) << "Exist response size " << rsp.exists().size() << " is not equal to key size " << keys.size();
-        exists.assign(keys.size(), false);
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Exist response size mismatch.");
-    }
-    exists.assign(rsp.exists().begin(), rsp.exists().end());
-    VLOG(1) << "Check existence success.";
-    return Status::OK();
-}
-
-Status ClientWorkerRemoteApi::Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds,
-                                     std::vector<std::string> &failedKeys)
-{
-    ExpireReqPb req;
-    *req.mutable_object_keys() = { keys.begin(), keys.end() };
-    req.set_client_id(clientId_);
-    req.set_ttl_second(ttlSeconds);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token to ExpireReqPb.");
-    ExpireRspPb rsp;
-    auto status = RetryOnError(
-        requestTimeoutMs_,
-        [this, &req, &rsp](int32_t realRpcTimeout) {
-            RpcOptions opts;
-            opts.SetTimeout(realRpcTimeout);
-            GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
-            VLOG(1) << "Start to send rpc to set expire ttl time";
-            return DS_OC_DISPATCH(Expire, opts, req, rsp);
-        },
-        []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
-    if (status.IsError()) {
-        status = WithRpcDiag(status, "Expire", hostPort_);
-        LOG(ERROR) << "Expire resp error, msg:" << status.ToString();
-        return status;
-    }
-    failedKeys.assign(rsp.failed_object_keys().begin(), rsp.failed_object_keys().end());
-    if (keys.size() == static_cast<size_t>(failedKeys.size())) {
-        return Status(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
-    }
-    LOG(INFO) << FormatString("Expire objects like %s with ttl time %d success.", keys[0], ttlSeconds);
-    return Status::OK();
-}
-
-Status ClientWorkerRemoteApi::GetMetaInfo(const std::vector<std::string> &keys, const bool isDevKey,
-                                          GetMetaInfoRspPb &rsp)
-{
-    GetMetaInfoReqPb req;
-    req.set_client_id(clientId_);
-    req.set_is_dev_key(isDevKey);
-    *req.mutable_object_keys() = { keys.begin(), keys.end() };
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token to GetMetaInfoReqPb.");
-    auto status = RetryOnError(
-        requestTimeoutMs_,
-        [this, &req, &rsp](int32_t realRpcTimeout) {
-            RpcOptions opts;
-            opts.SetTimeout(realRpcTimeout);
-            GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
-            return DS_OC_DISPATCH(GetMetaInfo, opts, req, rsp);
-        },
-        []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
-    if (status.IsError()) {
-        status = WithRpcDiag(status, "GetMetaInfo", hostPort_);
-        LOG(ERROR) << "GetMetaInfo resp error, msg:" << status.ToString();
-        return status;
-    }
-    return Status::OK();
 }
 
 Status ClientWorkerRemoteApi::PrepareForDecreaseShmRef(

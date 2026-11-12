@@ -47,8 +47,7 @@ void ConstructConnectOptions(const int timeOut, const char *token, size_t tokenL
                              size_t cClientPublicKeyLen, const char *clientPrivateKey, size_t clientPrivateKeyLen,
                              const char *serverPublicKey, size_t cServerPublicKeyLen, const char *accessKey,
                              size_t cAccessKeyLen, const char *secretKey, size_t secretKeyLen, const char *tenantId,
-                             size_t cTenantIdLen, const char *enableCrossNodeConnection,
-                             datasystem::ConnectOptions &opts)
+                             size_t cTenantIdLen, datasystem::ConnectOptions &opts)
 {
     if (timeOut > 0) {
         opts.connectTimeoutMs = timeOut;
@@ -71,12 +70,6 @@ void ConstructConnectOptions(const int timeOut, const char *token, size_t tokenL
     });
     ExecHandlerIfParamValid(tenantId,
                             [&opts, tenantId, cTenantIdLen]() { opts.tenantId = std::string(tenantId, cTenantIdLen); });
-
-    // The default value of enableCrossNodeConnection is "false".
-    // If the value transferred from the Go is "true", assign a new value.
-    if (enableCrossNodeConnection != nullptr && strcmp(enableCrossNodeConnection, "true") == 0) {
-        opts.enableCrossNodeConnection = true;
-    }
 }
 
 StatusC MakeStatusC(const uint32_t &code, const std::string &str)
@@ -289,8 +282,7 @@ void *CreateObjectClient(const char *cWorkerHost, const int workerPort, const in
                          size_t tokenLen, const char *clientPublicKey, size_t cClientPublicKeyLen,
                          const char *clientPrivateKey, size_t clientPrivateKeyLen, const char *serverPublicKey,
                          size_t cServerPublicKeyLen, const char *accessKey, size_t cAccessKeyLen, const char *secretKey,
-                         size_t secretKeyLen, const char *tenantId, size_t cTenantIdLen,
-                         const char *enableCrossNodeConnection)
+                         size_t secretKeyLen, const char *tenantId, size_t cTenantIdLen)
 {
     if (cWorkerHost == nullptr || strlen(cWorkerHost) == 0 || workerPort < 0) {
         LOG(ERROR) << "Host or Port have not been provided correctly";
@@ -303,7 +295,7 @@ void *CreateObjectClient(const char *cWorkerHost, const int workerPort, const in
     };
     ConstructConnectOptions(timeOut, token, tokenLen, clientPublicKey, cClientPublicKeyLen, clientPrivateKey,
                             clientPrivateKeyLen, serverPublicKey, cServerPublicKeyLen, accessKey, cAccessKeyLen,
-                            secretKey, secretKeyLen, tenantId, cTenantIdLen, enableCrossNodeConnection, opts);
+                            secretKey, secretKeyLen, tenantId, cTenantIdLen, opts);
     auto clientSharedPtr = std::make_shared<datasystem::object_cache::ObjectClientImpl>(opts);
     auto clientUniquePtr =
         std::make_unique<std::shared_ptr<datasystem::object_cache::ObjectClientImpl>>(std::move(clientSharedPtr));

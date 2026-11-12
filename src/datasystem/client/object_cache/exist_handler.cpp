@@ -28,6 +28,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "datasystem/client/object_cache/routing/routing.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/rpc_util.h"
@@ -53,6 +54,33 @@ struct ExistCallResult {
     std::vector<bool> exists;
 };
 
+class RoutingExistProvider : public IExistRouting {
+public:
+    explicit RoutingExistProvider(std::shared_ptr<client::Routing> routing) : routing_(std::move(routing))
+    {
+    }
+
+    ~RoutingExistProvider() override = default;
+
+    Status SelectWorkers(const std::vector<std::string> &keys, client::DataPlacementPolicy policy,
+                         std::unordered_map<HostPort, std::vector<std::string>> &groups,
+                         const std::vector<HostPort> &exclude) override
+    {
+        RETURN_RUNTIME_ERROR_IF_NULL(routing_);
+        return routing_->SelectWorkers(keys, policy, client::WorkerAccessAction::CONTROL, groups, exclude);
+    }
+
+    void UpdateState(const HostPort &addr, StatusCode status) override
+    {
+        if (routing_ != nullptr) {
+            routing_->UpdateState(addr, status);
+        }
+    }
+
+private:
+    std::shared_ptr<client::Routing> routing_;
+};
+
 // Transient RPC errors that may clear up on a bounded retry (deadline exceeded,
 // unavailable, network blip, urma wait timeout). K_RPC_CANCELLED is intentionally
 // excluded: it signals brpc-internal cancellation (deadline/bthread scheduling),
@@ -65,7 +93,7 @@ bool IsExistRetryableConnectionError(const Status &rc)
 }
 
 // Reroute (switch worker) only on explicit disconnect or worker-not-ready; transient errors are
-// already retried on the same worker by DoExistTransportCallWithConnectionRetry, and
+// already retried on the same worker by DoExistRpcCallWithConnectionRetry, and
 // K_RPC_PEER_DEAD is a hard failure that does not reroute.
 bool IsExistReroutableError(const Status &rc)
 {
@@ -134,34 +162,34 @@ Status FillExistResults(const std::vector<std::string> &keys, const std::vector<
     return Status::OK();
 }
 
-ExistCallResult DoExistTransportCall(const std::shared_ptr<IExistTransport> &transport, const HostPort &worker,
-                                     const std::vector<std::string> &keys, const ExistHandlerRequest &request,
-                                     int32_t requestTimeoutMs)
+ExistCallResult DoExistRpcCall(const std::shared_ptr<client::ObjectControlRpcClient> &rpcClient,
+                               const HostPort &worker, const std::vector<std::string> &keys,
+                               const ExistHandlerRequest &request, int32_t requestTimeoutMs)
 {
     client::TransportExistRequest rpcRequest(keys, request.queryL2Cache, request.isLocal, requestTimeoutMs,
                                              request.clientId, request.tenantId, request.token);
     client::TransportExistResult result;
-    if (transport == nullptr) {
-        return { Status(K_RUNTIME_ERROR, "Exist transport is unavailable"), {} };
+    if (rpcClient == nullptr) {
+        return { Status(K_RUNTIME_ERROR, "Exist RPC client is unavailable"), {} };
     }
-    Status rc = transport->Exist(worker, rpcRequest, result);
+    Status rc = rpcClient->Exist(worker, rpcRequest, result);
     if (rc.IsError()) {
         return { rc, {} };
     }
     return { Status::OK(), std::move(result.exists) };
 }
 
-ExistCallResult DoExistTransportCallWithConnectionRetry(const std::shared_ptr<IExistTransport> &transport,
-                                                        const HostPort &worker, const std::vector<std::string> &keys,
-                                                        const ExistHandlerRequest &request)
+ExistCallResult DoExistRpcCallWithConnectionRetry(
+    const std::shared_ptr<client::ObjectControlRpcClient> &rpcClient,
+    const HostPort &worker, const std::vector<std::string> &keys, const ExistHandlerRequest &request)
 {
-    ExistCallResult result = DoExistTransportCall(transport, worker, keys, request, request.requestTimeoutMs);
+    ExistCallResult result = DoExistRpcCall(rpcClient, worker, keys, request, request.requestTimeoutMs);
     if (!IsExistRetryableConnectionError(result.rc) || request.requestTimeoutMs < EXIST_CONNECTION_PROBE_TIMEOUT_MS) {
         return result;
     }
     for (int32_t connectionRetries = 0; connectionRetries < EXIST_MAX_CONNECTION_PROBE_RETRY; ++connectionRetries) {
-        result = DoExistTransportCall(transport, worker, keys, request,
-                                      GetExistConnectionProbeTimeoutMs(request.requestTimeoutMs));
+        result = DoExistRpcCall(rpcClient, worker, keys, request,
+                                GetExistConnectionProbeTimeoutMs(request.requestTimeoutMs));
         if (!IsExistRetryableConnectionError(result.rc)) {
             return result;
         }
@@ -171,7 +199,7 @@ ExistCallResult DoExistTransportCallWithConnectionRetry(const std::shared_ptr<IE
     return result;
 }
 
-Status RunExistRedirectGroups(const std::shared_ptr<IExistTransport> &transport,
+Status RunExistRedirectGroups(const std::shared_ptr<client::ObjectControlRpcClient> &rpcClient,
                               const std::vector<ExistRedirectGroup> &redirectGroups,
                               const ExistHandlerRequest &request, const std::shared_ptr<ThreadPool> &taskPool,
                               const std::unordered_map<std::string, std::vector<size_t>> &keyIndexes,
@@ -182,8 +210,8 @@ Status RunExistRedirectGroups(const std::shared_ptr<IExistTransport> &transport,
     RETURN_RUNTIME_ERROR_IF_NULL(taskPool);
     for (const auto &group : redirectGroups) {
         try {
-            futures.emplace_back(taskPool->Submit([transport, worker = group.worker, keys = group.keys, &request]() {
-                return DoExistTransportCallWithConnectionRetry(transport, worker, keys, request);
+            futures.emplace_back(taskPool->Submit([rpcClient, worker = group.worker, keys = group.keys, &request]() {
+                return DoExistRpcCallWithConnectionRetry(rpcClient, worker, keys, request);
             }));
         } catch (const std::exception &e) {
             for (auto &f : futures) {
@@ -318,19 +346,19 @@ Status ExistRedirectResolver::ParseAddressOnlyRedirect(const Status &rc, HostPor
     return Status::OK();
 }
 
-ExistHandler::ExistHandler(std::shared_ptr<IExistRouting> routing, std::shared_ptr<IExistTransport> transport,
+ExistHandler::ExistHandler(std::shared_ptr<client::Routing> routing,
+                           std::shared_ptr<client::ObjectControlRpcClient> rpcClient,
                            std::shared_ptr<ThreadPool> taskPool)
-    : routing_(std::move(routing)),
-      transport_(std::move(transport)),
-      taskPool_(std::move(taskPool))
+    : ExistHandler(std::make_shared<RoutingExistProvider>(std::move(routing)), std::move(rpcClient),
+                   std::move(taskPool))
 {
 }
 
-// Non-owning aliasing shared_ptr: no control block allocation, but keeps the
-// shared_ptr<IExist...> member layout so Run/SelectWorkers/Exist paths are unchanged.
-ExistHandler::ExistHandler(IExistRouting *routing, IExistTransport *transport, std::shared_ptr<ThreadPool> taskPool)
-    : routing_(std::shared_ptr<IExistRouting>(std::shared_ptr<IExistRouting>{}, routing)),
-      transport_(std::shared_ptr<IExistTransport>(std::shared_ptr<IExistTransport>{}, transport)),
+ExistHandler::ExistHandler(std::shared_ptr<IExistRouting> routing,
+                           std::shared_ptr<client::ObjectControlRpcClient> rpcClient,
+                           std::shared_ptr<ThreadPool> taskPool)
+    : routing_(std::move(routing)),
+      rpcClient_(std::move(rpcClient)),
       taskPool_(std::move(taskPool))
 {
 }
@@ -353,14 +381,16 @@ void ExistHandler::UpdateRoutingState(const HostPort &addr, StatusCode status)
 Status ExistHandler::Run(const ExistHandlerRequest &request, std::vector<bool> &exists)
 {
     CHECK_FAIL_RETURN_STATUS(routing_ != nullptr, K_RUNTIME_ERROR, "Exist routing is unavailable");
-    CHECK_FAIL_RETURN_STATUS(transport_ != nullptr, K_RUNTIME_ERROR, "Exist transport is unavailable");
+    CHECK_FAIL_RETURN_STATUS(rpcClient_ != nullptr, K_RUNTIME_ERROR, "Exist RPC client is unavailable");
     excludedWorkers_.clear();  // fresh per Run; reroute skips workers that failed in this call
     auto keyIndexes = BuildExistKeyIndexes(request.keys);
     exists.assign(request.keys.size(), false);
+    // A fixed target is replaced by the caller on failure, so rerouting to it again here would repeat the failure.
+    const bool canReroute = request.singleTarget.Empty();
     Status rc;
     for (int32_t rerouteRetries = 0; rerouteRetries <= EXIST_MAX_REROUTE_RETRY; ++rerouteRetries) {
         rc = RunSelectedWorkers(request, keyIndexes, exists);
-        if (rc.IsOk() || !IsExistReroutableError(rc) || rerouteRetries >= EXIST_MAX_REROUTE_RETRY) {
+        if (rc.IsOk() || !canReroute || !IsExistReroutableError(rc)) {
             break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(EXIST_RETRY_BACKOFF_MS));
@@ -373,8 +403,12 @@ Status ExistHandler::RunSelectedWorkers(const ExistHandlerRequest &request,
                                         std::vector<bool> &exists)
 {
     std::unordered_map<HostPort, std::vector<std::string>> groups;
-    RETURN_IF_NOT_OK(SelectWorkers(request.keys, client::DataPlacementPolicy::PREFERRED_META_OWNER, groups,
-                                   excludedWorkers_));
+    if (!request.singleTarget.Empty()) {
+        groups.emplace(request.singleTarget, request.keys);
+    } else {
+        RETURN_IF_NOT_OK(SelectWorkers(request.keys, client::DataPlacementPolicy::PREFERRED_META_OWNER, groups,
+                                       excludedWorkers_));
+    }
     std::vector<std::pair<HostPort, std::vector<std::string>>> orderedGroups(groups.begin(), groups.end());
     std::sort(orderedGroups.begin(), orderedGroups.end(), [](const auto &lhs, const auto &rhs) {
         return lhs.first.ToString() < rhs.first.ToString();
@@ -391,7 +425,7 @@ Status ExistHandler::RunSelectedWorkers(const ExistHandlerRequest &request,
 
 Status ExistHandler::RunOwnerGroup(OwnerGroupWork &work)
 {
-    ExistCallResult result = DoExistTransportCallWithConnectionRetry(transport_, work.worker, work.keys, work.request);
+    ExistCallResult result = DoExistRpcCallWithConnectionRetry(rpcClient_, work.worker, work.keys, work.request);
     return ContinueOwnerGroupAfterResult(result.rc, result.exists, work);
 }
 
@@ -403,11 +437,11 @@ Status ExistHandler::RunOwnerGroupsParallel(
     RETURN_RUNTIME_ERROR_IF_NULL(taskPool_);
     std::vector<std::future<ExistCallResult>> futures;
     futures.reserve(orderedGroups.size());
-    const std::shared_ptr<IExistTransport> transport = transport_;
+    const std::shared_ptr<client::ObjectControlRpcClient> rpcClient = rpcClient_;
     for (const auto &group : orderedGroups) {
         try {
-            futures.emplace_back(taskPool_->Submit([transport, worker = group.first, keys = group.second, &request]() {
-                return DoExistTransportCallWithConnectionRetry(transport, worker, keys, request);
+            futures.emplace_back(taskPool_->Submit([rpcClient, worker = group.first, keys = group.second, &request]() {
+                return DoExistRpcCallWithConnectionRetry(rpcClient, worker, keys, request);
             }));
         } catch (const std::exception &e) {
             for (auto &future : futures) {
@@ -443,8 +477,8 @@ Status ExistHandler::ContinueOwnerGroupAfterResult(const Status &firstRc, const 
             if (redirected) {
                 return Status::OK();
             }
-            ExistCallResult result =
-                DoExistTransportCallWithConnectionRetry(transport_, work.worker, work.keys, work.request);
+            ExistCallResult result = DoExistRpcCallWithConnectionRetry(rpcClient_, work.worker, work.keys,
+                                                                       work.request);
             rc = result.rc;
             batchExists = std::move(result.exists);
             continue;
@@ -474,7 +508,7 @@ Status ExistHandler::HandleRedirect(const Status &rc, HostPort &worker, const st
     if (!resolution.missingKeys.empty()) {
         resolution.redirectGroups.emplace_back(ExistRedirectGroup{ worker, std::move(resolution.missingKeys) });
     }
-    RETURN_IF_NOT_OK(RunExistRedirectGroups(transport_, resolution.redirectGroups, request, taskPool_, keyIndexes,
+    RETURN_IF_NOT_OK(RunExistRedirectGroups(rpcClient_, resolution.redirectGroups, request, taskPool_, keyIndexes,
                                             exists));
     redirected = true;
     return Status::OK();

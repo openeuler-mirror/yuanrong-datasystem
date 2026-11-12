@@ -65,6 +65,8 @@ constexpr char kRestartReconciliationRpcRetryInject[] =
 constexpr char kRestartReconciliationBlockedPeerInject[] = "ProcessWorkerRestart";
 constexpr char kMasterCacheInvalidInject[] = "master.cache_invalid_failed";
 constexpr char kPersistentRpcDeadlineExceeded[] = "return(K_RPC_DEADLINE_EXCEEDED)";
+constexpr char kPublishObjectInject[] = "worker.PublishObjectWithLock.begin";
+constexpr int kRoutedWorkerNodeDeadTimeoutSec = 6;
 
 // Abstracts the test control-plane UtOCService stub so the test harness can talk
 // to the worker's UtOCService adapter. The worker registers
@@ -1716,9 +1718,7 @@ TEST_F(WorkerReconciliationDfxTest, DISABLED_LEVEL1_RestartAgainNoExtraReconcili
     DS_ASSERT_OK(isAllNodeReady(utSvcStub1_));
 }
 
-
-
-class StandbyWorkerDfxTest : public OCClientCommon {
+class RoutedWorkerDfxTest : public OCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
@@ -1726,7 +1726,7 @@ public:
         opts.numWorkers = workerNum;
         opts.numEtcd = 1;
         opts.workerGflagParams =
-            " -v=1 -node_timeout_s=3 -node_dead_timeout_s=6";
+            " -v=1 -node_timeout_s=3 -node_dead_timeout_s=" + std::to_string(kRoutedWorkerNodeDeadTimeoutSec);
         opts.waitWorkerReady = false;
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(500)");
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)");
@@ -1763,18 +1763,30 @@ public:
     void InitClients()
     {
         uint32_t idx = 0;
-        InitClient(idx++, client_, true);
-        InitClient(idx++, client1_, true);
-        InitClient(idx++, client2_, true);
+        InitClient(idx++, client_);
+        InitClient(idx++, client1_);
+        InitClient(idx++, client2_);
     }
 
-    void InitClient(int workerIndex, std::shared_ptr<ObjectClient> &client, bool enableCrossNodeConnection)
+    void InitClient(int workerIndex, std::shared_ptr<ObjectClient> &client)
     {
-        InitTestClient(workerIndex, client, [enableCrossNodeConnection](ConnectOptions &opts) {
-            opts.enableCrossNodeConnection = enableCrossNodeConnection;
+        InitTestClient(workerIndex, client, [](ConnectOptions &opts) {
             opts.accessKey = "QTWAOYTTINDUT2QVKYUC";
             opts.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
         });
+    }
+
+    Status EnablePublishCounting(std::initializer_list<uint32_t> indexes)
+    {
+        for (auto index : indexes) {
+            RETURN_IF_NOT_OK(cluster_->SetInjectAction(WORKER, index, kPublishObjectInject, "call()"));
+        }
+        return Status::OK();
+    }
+
+    Status GetPublishCount(uint32_t index, uint64_t &count)
+    {
+        return cluster_->GetInjectActionExecuteCount(WORKER, index, kPublishObjectInject, count);
     }
 
 protected:
@@ -1784,21 +1796,29 @@ protected:
     std::shared_ptr<ObjectClient> client2_;
 };
 
-TEST_F(StandbyWorkerDfxTest, DISABLED_TestUseStandbyWorker)
+TEST_F(RoutedWorkerDfxTest, LEVEL1_TestRouteAfterLocalWorkerFailureAndRecovery)
 {
-    LOG(INFO) << "Test worker fault and use standby worker.";
+    LOG(INFO) << "Test routing after the local worker fails.";
     StartWorkerAndWaitReady({ 0, 1, 2 });
     InitClients();
-    // Fault the worker and try to use standby worker.
-    cluster_->ShutdownNode(WORKER, 0);
-    sleep(5);
+    DS_ASSERT_OK(cluster_->KillWorker(0));
+    sleep(kRoutedWorkerNodeDeadTimeoutSec + 1);
+    DS_ASSERT_OK(EnablePublishCounting({ 1, 2 }));
 
     std::string objKey = "obj1";
     size_t objSize = 500 * 1024ul;
     std::string data(objSize, 'a');
-    // Client will use non-shm because current worker is not local worker.
+    uint64_t worker1PublishBefore = 0;
+    uint64_t worker2PublishBefore = 0;
+    DS_ASSERT_OK(GetPublishCount(1, worker1PublishBefore));
+    DS_ASSERT_OK(GetPublishCount(2, worker2PublishBefore));
     DS_ASSERT_OK(
         client_->Put(objKey, reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())), data.size(), CreateParam{}));
+    uint64_t worker1PublishCount = 0;
+    uint64_t worker2PublishCount = 0;
+    DS_ASSERT_OK(GetPublishCount(1, worker1PublishCount));
+    DS_ASSERT_OK(GetPublishCount(2, worker2PublishCount));
+    ASSERT_GT(worker1PublishCount - worker1PublishBefore + worker2PublishCount - worker2PublishBefore, 0);
 
     std::vector<Optional<Buffer>> buffers1;
     DS_ASSERT_OK(client_->Get({ objKey }, 0, buffers1));
@@ -1810,14 +1830,18 @@ TEST_F(StandbyWorkerDfxTest, DISABLED_TestUseStandbyWorker)
     ASSERT_TRUE(NotExistsNone(buffers2));
     ASSERT_BUF_EQ((*buffers2[0]), data);
 
-    // Restore the local worker
     StartWorkerAndWaitReady({ 0 });
-    sleep(5);
+    AssertEventuallyOk([this]() { return client_->HealthCheck(); }, "primary worker recovery");
+    DS_ASSERT_OK(EnablePublishCounting({ 0 }));
     std::string objKey2 = "obj2";
     std::string data2(objSize, 'b');
-    // Client will use shm because local worker is restored.
+    uint64_t localPublishBefore = 0;
+    DS_ASSERT_OK(GetPublishCount(0, localPublishBefore));
     DS_ASSERT_OK(client_->Put(objKey2, reinterpret_cast<uint8_t *>(const_cast<char *>(data2.data())), data2.size(),
                               CreateParam{}));
+    uint64_t localPublishCount = 0;
+    DS_ASSERT_OK(GetPublishCount(0, localPublishCount));
+    ASSERT_GT(localPublishCount - localPublishBefore, 0);
     std::vector<Optional<Buffer>> buffers3;
     DS_ASSERT_OK(client_->Get({ objKey2 }, 0, buffers3));
     ASSERT_TRUE(NotExistsNone(buffers3));
@@ -1829,18 +1853,22 @@ TEST_F(StandbyWorkerDfxTest, DISABLED_TestUseStandbyWorker)
     ASSERT_BUF_EQ((*buffers4[0]), data);
 }
 
-TEST_F(StandbyWorkerDfxTest, DISABLED_LEVEL1_TestStandbyWorkerFault)
+TEST_F(RoutedWorkerDfxTest, LEVEL1_TestRouteAfterTwoWorkerFailures)
 {
-    LOG(INFO) << "Test standby worker fault and use standby2 worker.";
+    LOG(INFO) << "Test routing while two workers fail in sequence.";
     StartWorkerAndWaitReady({ 0, 1, 2 });
     InitClients();
-    // Fault the worker and try to use standby worker.
-    cluster_->ShutdownNode(WORKER, 0);
-    sleep(5);
+    DS_ASSERT_OK(cluster_->KillWorker(0));
+    sleep(kRoutedWorkerNodeDeadTimeoutSec + 1);
+    DS_ASSERT_OK(EnablePublishCounting({ 1, 2 }));
 
     std::string objKey = "obj1";
     size_t objSize = 500 * 1024ul;
     std::string data(objSize, 'a');
+    uint64_t worker1PublishBefore = 0;
+    uint64_t worker2PublishBefore = 0;
+    DS_ASSERT_OK(GetPublishCount(1, worker1PublishBefore));
+    DS_ASSERT_OK(GetPublishCount(2, worker2PublishBefore));
     DS_ASSERT_OK(
         client_->Put(objKey, reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())), data.size(), CreateParam{}));
 
@@ -1849,59 +1877,30 @@ TEST_F(StandbyWorkerDfxTest, DISABLED_LEVEL1_TestStandbyWorkerFault)
     ASSERT_TRUE(NotExistsNone(buffers1));
     ASSERT_BUF_EQ((*buffers1[0]), data);
 
-    // Fault the standby worker and try to use standby2 worker.
-    cluster_->ShutdownNode(WORKER, 1);
-    sleep(5);
+    uint64_t worker1PublishCount = 0;
+    uint64_t worker2PublishCount = 0;
+    DS_ASSERT_OK(GetPublishCount(1, worker1PublishCount));
+    DS_ASSERT_OK(GetPublishCount(2, worker2PublishCount));
+    const uint64_t worker1PublishDelta = worker1PublishCount - worker1PublishBefore;
+    const uint64_t worker2PublishDelta = worker2PublishCount - worker2PublishBefore;
+    ASSERT_NE(worker1PublishDelta > 0, worker2PublishDelta > 0);
+    const uint32_t routedWorker = worker1PublishDelta > 0 ? 1 : 2;
+    const uint32_t remainingWorker = routedWorker == 1 ? 2 : 1;
+    const uint64_t remainingPublishCount = routedWorker == 1 ? worker2PublishCount : worker1PublishCount;
+    DS_ASSERT_OK(cluster_->KillWorker(routedWorker));
+    sleep(kRoutedWorkerNodeDeadTimeoutSec + 1);
 
     std::string objKey2 = "obj2";
     std::string data2(objSize, 'b');
     DS_ASSERT_OK(client_->Put(objKey2, reinterpret_cast<uint8_t *>(const_cast<char *>(data2.data())), data2.size(),
                               CreateParam{}));
+    uint64_t currentPublishCount = 0;
+    DS_ASSERT_OK(GetPublishCount(remainingWorker, currentPublishCount));
+    ASSERT_GT(currentPublishCount, remainingPublishCount);
     std::vector<Optional<Buffer>> buffers2;
     DS_ASSERT_OK(client_->Get({ objKey2 }, 0, buffers2));
     ASSERT_TRUE(NotExistsNone(buffers2));
     ASSERT_BUF_EQ((*buffers2[0]), data2);
-
-    std::vector<Optional<Buffer>> buffers3;
-    DS_ASSERT_OK(client1_->Get({ objKey2 }, 0, buffers3));
-    ASSERT_TRUE(NotExistsNone(buffers3));
-    ASSERT_BUF_EQ((*buffers3[0]), data2);
-
-    std::vector<Optional<Buffer>> buffers4;
-    DS_ASSERT_OK(client2_->Get({ objKey2 }, 0, buffers4));
-    ASSERT_TRUE(NotExistsNone(buffers4));
-    ASSERT_BUF_EQ((*buffers4[0]), data2);
-}
-
-TEST_F(StandbyWorkerDfxTest, DISABLED_LEVEL1_TestEnableCrossNodeConnectionParam)
-{
-    StartWorkerAndWaitReady({ 0, 1, 2 });
-    std::shared_ptr<ObjectClient> client0;
-    std::shared_ptr<ObjectClient> client1;
-    // Not supported standby node.
-    InitTestClient(0, client0, [](ConnectOptions &opts) {
-        opts.accessKey = "QTWAOYTTINDUT2QVKYUC";
-        opts.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
-    });
-    // Supported standby node.
-    InitTestClient(0, client1, [](ConnectOptions &opts) {
-        opts.enableCrossNodeConnection = true;
-        opts.accessKey = "QTWAOYTTINDUT2QVKYUC";
-        opts.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
-    });
-    cluster_->ShutdownNode(WORKER, 0);
-    sleep(5);
-    std::string objectKey = "obj1";
-    size_t objSize = 500 * 1024ul;
-    std::string data(objSize, 'a');
-    DS_ASSERT_NOT_OK(client0->Put(objectKey, reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())), data.size(),
-                                  CreateParam{}));
-    DS_ASSERT_OK(client1->Put(objectKey, reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())), data.size(),
-                              CreateParam{}));
-    std::vector<Optional<Buffer>> buffers1;
-    DS_ASSERT_OK(client1->Get({ objectKey }, 0, buffers1));
-    ASSERT_TRUE(NotExistsNone(buffers1));
-    ASSERT_BUF_EQ((*buffers1[0]), data);
 }
 
 class WorkerWithoutReconciliationTest : public OCClientCommon {

@@ -453,7 +453,7 @@ TEST_F(KVCacheTtlLoadTest, LEVEL1_CreateMemoryCopySetBufferTtlChurn)
     std::vector<std::shared_ptr<KVClient>> clients;
     for (uint32_t i = 0; i < 3; ++i) {
         std::shared_ptr<KVClient> client;
-        InitTestKVClient(i, client, 60000, false, 6000);
+        InitTestKVClient(i, client, 60000, 6000);
         clients.push_back(client);
     }
 

@@ -114,6 +114,29 @@ static void AssertFileContains(const std::string &path, const std::vector<std::s
            << ReadFileContent(path);
 }
 
+static std::string WorkerAccessLogPathAt(const BaseCluster &cluster, size_t idx)
+{
+    return FormatString("%s/worker%u/log/access.log", cluster.GetRootDir().c_str(), static_cast<uint32_t>(idx));
+}
+
+static void AssertAnyWorkerLogContains(const BaseCluster &cluster, const std::vector<std::string> &tokens)
+{
+    constexpr int retryTimes = 5;
+    constexpr auto retryInterval = std::chrono::milliseconds(100);
+    std::string matchedLine;
+    for (int i = 0; i < retryTimes; ++i) {
+        for (size_t idx = 0; idx < cluster.GetWorkerNum(); ++idx) {
+            const auto path = WorkerAccessLogPathAt(cluster, idx);
+            if (FindLogLineWithTokens(path, tokens, matchedLine)) {
+                LOG(INFO) << "Found matched line in " << path << ": " << matchedLine;
+                return;
+            }
+        }
+        std::this_thread::sleep_for(retryInterval);
+    }
+    FAIL() << "failed to find expected worker access log line, expected tokens: " << VectorToString(tokens);
+}
+
 class LatencySummaryStTest : public OCClientCommon {
 public:
     std::shared_ptr<KVClient> client_;
@@ -186,7 +209,9 @@ TEST_F(LatencySummaryStTest, SetAccessLogLatencySummary)
     const std::string val = "value_for_set_test";
     DS_ASSERT_OK(client_->Set(key, val));
 
-    AssertAccessLogContains(ClientAccessLogPath(), { "latencySummary:{", "client.rpc.publish:" });
+    // The routed publish phase covers the whole Set RPC including remote execution, so it is reported
+    // as the routed total phase instead of the bound-path comm phase.
+    AssertAccessLogContains(ClientAccessLogPath(), { "latencySummary:{", "client.rpc.publish_total:" });
 }
 
 TEST_F(LatencySummaryStTest, CreateAccessLogLatencySummary)
@@ -241,12 +266,13 @@ TEST_F(LatencySummaryStTest, WorkerAccessLogLatencySummary)
     client_.reset();
 
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
 
-    std::string workerLog = WorkerAccessLogPath();
-    AssertFileContains(workerLog, { "latencySummary:{", "worker.process.publish:" });
-    AssertFileContains(workerLog, { "latencySummary:{", "worker.process.get:" });
-    AssertFileContains(workerLog, { "latencySummary:{", "worker.process.publish:" });
-    AssertFileContains(workerLog, { "latencySummary:{", "worker.process.exist:" });
+    // Routed requests may be served by any worker, so every expected worker-side phase is looked up
+    // across all worker access logs instead of assuming worker0 served them.
+    AssertAnyWorkerLogContains(*cluster_, { "latencySummary:{", "worker.process.publish:" });
+    AssertAnyWorkerLogContains(*cluster_, { "latencySummary:{", "worker.process.get:" });
+    AssertAnyWorkerLogContains(*cluster_, { "latencySummary:{", "worker.process.exist:" });
 }
 
 static void AssertAccessLogNotContains(const std::string &path, const std::vector<std::string> &tokens)

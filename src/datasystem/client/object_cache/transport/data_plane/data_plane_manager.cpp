@@ -101,11 +101,6 @@ constexpr int64_t SNAPSHOT_REFRESH_GRACE_MS = 60'000;
 // Upper bound on how long admission may degrade (allow unknown endpoints) while the ring is lost.
 constexpr int64_t DEGRADED_ADMISSION_TTL_MS = 120'000;
 constexpr int64_t UB_REBUILD_COOLDOWN_MS = 1'000;
-// Minimum gap between two recordings of "this endpoint's data plane was just used". The standby drain gate
-// only needs multi-second granularity, so refreshing at most this often keeps the hot path from dirtying the
-// timestamp on every read. The recorded value therefore lags the true last use by up to this interval, so
-// IsEndpointDataPlaneQuiet() must discount this bound.
-constexpr int64_t DATA_PLANE_USE_REFRESH_INTERVAL_MS = 100;
 constexpr size_t SHM_MAINTENANCE_THREAD_COUNT = 4;
 
 int64_t SteadyNowMs()
@@ -958,7 +953,6 @@ Status DataPlaneManager::GetOrBuildTransporter(const TransportBuildContext &cont
                                  K_TRY_AGAIN, "UB data plane rebuild is already in flight");
         if (entry->HasAliveTransporter(context.expectedKind)) {
             out = entry->GetTransporter(context.expectedKind);
-            MarkDataPlaneUse(entry, out->Kind());
             return Status::OK();
         }
     }
@@ -981,7 +975,6 @@ Status DataPlaneManager::GetOrBuildTransporter(const TransportBuildContext &cont
                                  K_TRY_AGAIN, "UB data plane rebuild is already in flight");
         if (entry->HasAliveTransporter(context.expectedKind)) {
             out = entry->GetTransporter(context.expectedKind);
-            MarkDataPlaneUse(entry, out->Kind());
             return Status::OK();
         }
         Status status = EnsureRpcClientLocked(context.workerAddr, entry, context.recorder);
@@ -993,7 +986,6 @@ Status DataPlaneManager::GetOrBuildTransporter(const TransportBuildContext &cont
             return Status(K_SHUTTING_DOWN, __LINE__, __FILE__, "DataPlaneManager is shutting down");
         }
         out = entry->GetTransporter(context.expectedKind);
-        MarkDataPlaneUse(entry, out->Kind());
     }
     LogTransporterReady(context.workerAddr, out->Kind(), cachedFallbackAlongsideShm);
     return Status::OK();
@@ -1048,11 +1040,8 @@ void DataPlaneManager::ResetDataPlane(const HostPort &workerAddr)
 {
     std::shared_ptr<WorkerTransportEntry> entry;
     {
-        // Same lifecycle boundary as Shutdown() and IsEndpointDataPlaneQuiet(). The drain hook runs on the
-        // heartbeat thread and can outlive the request path, so this keeps teardown single-pass: either this
-        // reset completes before Shutdown()'s pass, or it observes the shutdown flag and no-ops. Without the
-        // boundary a drain could reset an entry after Shutdown() had already finished, i.e. a teardown that
-        // escapes the shutdown pass. Low-frequency path only; the read hot path stays lock-free.
+        // Keep reset ordered with Shutdown(): either this reset completes before the shutdown pass, or it
+        // observes the shutdown flag and no-ops. The read hot path does not take this lock.
         std::lock_guard<bthread::Mutex> lifecycleLock(lifecycleMutex_);
         if (shutdown_.load(std::memory_order_acquire)) {
             return;
@@ -1373,73 +1362,6 @@ DataPlaneManager::UbRebuildSlotGuard::~UbRebuildSlotGuard()
     if (slotOwner_ != 0 && manager_ != nullptr) {
         manager_->ReleaseUbRebuildSlot(address_, slotOwner_);
     }
-}
-
-bool DataPlaneManager::IsEndpointDataPlaneQuiet(const HostPort &workerAddr, uint64_t quietMs)
-{
-    if (quietMs == 0) {
-        return true;
-    }
-    std::shared_ptr<WorkerTransportEntry> entry;
-    {
-        // Share the lifecycle boundary with Shutdown() and ResetDataPlane() so the gate never reports on, or
-        // tears down, a manager whose shutdown pass has already completed: weak_ptr::lock() only keeps the
-        // manager object alive, it does not stop an explicit Shutdown(). Hold the accessor inside this
-        // boundary. Low-frequency drain path only; the read hot path must not take this lock.
-        std::lock_guard<bthread::Mutex> lifecycleLock(lifecycleMutex_);
-        if (shutdown_.load(std::memory_order_acquire)) {
-            return true;
-        }
-        EntryMap::const_accessor accessor;
-        if (!entries_.find(accessor, workerAddr.ToString())) {
-            return true;
-        }
-        entry = accessor->second;
-    }
-    if (entry == nullptr) {
-        return true;
-    }
-    const int64_t lastUse = entry->lastDataPlaneUseMs.load(std::memory_order_relaxed);
-    if (lastUse == 0) {
-        return true;
-    }
-    const int64_t elapsed = SteadyNowMs() - lastUse;
-    // Err towards keeping the data plane: an unusable reading (steady_clock is monotonic, so this can only
-    // be a corrupt recorded value) counts as "recently used" rather than "quiet", because the gate exists to
-    // avoid tearing down a plane that is still in use.
-    if (elapsed < 0) {
-        return false;
-    }
-    // MarkDataPlaneUse() refreshes the timestamp at most once per DATA_PLANE_USE_REFRESH_INTERVAL_MS, so a
-    // read inside that interval does not move it: the recorded value can lag the true last use by up to one
-    // interval. Discount that bound before comparing — by subtraction and after an explicit lower-bound
-    // check, so neither side can overflow — otherwise a quietMs below the interval would let the gate report
-    // "quiet" for an endpoint that served a read milliseconds ago, and the standby would be torn down while
-    // still in use (the exact 1006 this series removes). The gate is a "must not tear down too early"
-    // guarantee, so over-estimating the age is the unsafe direction and under-estimating it is safe.
-    const auto elapsedMs = static_cast<uint64_t>(elapsed);
-    constexpr uint64_t refreshMs = static_cast<uint64_t>(DATA_PLANE_USE_REFRESH_INTERVAL_MS);
-    return elapsedMs >= refreshMs && elapsedMs - refreshMs >= quietMs;
-}
-
-void DataPlaneManager::MarkDataPlaneUse(const std::shared_ptr<WorkerTransportEntry> &entry, AccessTransportKind kind)
-{
-    // TCP data planes cannot be invalidated by a worker-side teardown. Callers pass the kind that actually
-    // served the request, so a UB candidate that fell back to the cached TCP transporter does not keep the
-    // endpoint "in use": otherwise an endpoint stuck on the fallback (URMA persistently degraded) would never
-    // go quiet and its standby connection would never be reclaimed.
-    if (entry == nullptr || kind == AccessTransportKind::TCP) {
-        return;
-    }
-    // Refresh at most once per DATA_PLANE_USE_REFRESH_INTERVAL_MS. The drain gate only needs to know whether
-    // the plane was used inside a multi-second window, while an unconditional store on every read would dirty
-    // this cache line (and invalidate it on every other core reading the same entry) on the hot path.
-    const int64_t now = SteadyNowMs();
-    const int64_t last = entry->lastDataPlaneUseMs.load(std::memory_order_relaxed);
-    if (last != 0 && now >= last && now - last < DATA_PLANE_USE_REFRESH_INTERVAL_MS) {
-        return;
-    }
-    entry->lastDataPlaneUseMs.store(now, std::memory_order_relaxed);
 }
 
 void DataPlaneManager::MarkShmDraining(const HostPort &workerAddr)

@@ -94,9 +94,6 @@ void RequestClientUrmaRuntime();
 bool ShouldRequestClientUrmaRuntime(bool workerUbEnabled, bool clientMayAccessNonBoundWorker,
                                     bool endpointUsesUb);
 
-/** @brief Return whether the client may access a worker beyond its bound worker endpoint. */
-bool ClientMayAccessNonBoundWorker(bool enableLocalCache, bool enableCrossNodeConnection);
-
 /** @brief Return whether URMA is configured at startup or requested by a client handshake. */
 bool IsUrmaRuntimeConfigured();
 

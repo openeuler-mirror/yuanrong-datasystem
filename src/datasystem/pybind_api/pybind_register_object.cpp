@@ -131,7 +131,6 @@ PybindDefineRegisterer g_pybind_define_f_Client("ObjectClient", PRIORITY_LOW, []
                 .accessKey = accessKey,
                 .secretKey = secretKey,
                 .tenantId = tenantId,
-                .enableCrossNodeConnection = false,
             };
             return std::make_unique<ObjectClient>(connectOpts);
         }))

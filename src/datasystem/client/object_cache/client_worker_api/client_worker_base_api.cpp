@@ -352,11 +352,9 @@ Status ClientWorkerBaseApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferIn
             UrmaWriteFailure failure;
             Status rc = SendBufferViaSingleUbWrite(bufferInfo, data, totalSize, bufHandle, failure);
             RecordUbWriteFailure(bufferInfo, rc, failure);
-            RecordUrmaDataPlaneResult(rc.IsOk());
             return rc;
         }
         Status pipelineRc = PipelineDataTransferHelper(bufferInfo, data, totalSize, bufHandle, realSize);
-        RecordUrmaDataPlaneResult(pipelineRc.IsOk());
         RETURN_IF_NOT_OK(pipelineRc);
         METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
         return Status::OK();
@@ -402,7 +400,6 @@ Status ClientWorkerBaseApi::SendBufferViaUbFromPool(const std::shared_ptr<Object
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_UB_TRANSFER_END);
     }
-    RecordUrmaDataPlaneResult(rc.IsOk());
     if (rc.IsOk()) {
         bufferInfo->ubDataSentByMemoryCopy = true;
         METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, bufferInfo->dataSize);

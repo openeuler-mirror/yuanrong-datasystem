@@ -31,7 +31,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strconv"
 	"sync"
 	"unsafe"
 
@@ -139,14 +138,10 @@ func CreateClient(param common.ConnectArguments) KVClient {
 	cTenantID := C.CString(param.TenantID)
 	cTenantIDLen := C.ulong(len(param.TenantID))
 	defer C.free(unsafe.Pointer(cTenantID))
-	// EnableCrossNodeConnection
-	cEnableCrossNodeConnection := C.CString(strconv.FormatBool(param.EnableCrossNodeConnection))
-	defer C.free(unsafe.Pointer(cEnableCrossNodeConnection))
-
 	var ret KVClient
 	ret.client = C.KVCreateClient(cWorkerHost, cWorkerPort, cWorkerTimeout, cWorkerToken, cWorkerTokenLen,
 		cClientPublicKey, cClientPublicKeyLen, cClientPrivateKey, cClientPrivateKeyLen, cServerPublicKey, cServerPublicKeyLen,
-		cAccessKey, cAccessKeyLen, cSecretKey, cSecretKeyLen, cTenantID, cTenantIDLen, cEnableCrossNodeConnection)
+		cAccessKey, cAccessKeyLen, cSecretKey, cSecretKeyLen, cTenantID, cTenantIDLen)
 	ret.mutex = new(sync.RWMutex)
 	return ret
 }

@@ -155,8 +155,9 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyImpl(const DeleteAllCopyReqPb &re
 {
     Timer timerCost;
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId),
-                                     "Authenticate failed.");
+    Status authRc = req.is_routed() ? worker::AuthenticateRequest(requestAuthenticator_, req, req.tenant_id(), tenantId)
+                                    : worker::Authenticate(requestAuthenticator_, req, tenantId);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(authRc, "Authenticate failed.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_keys_size()),
                                          StatusCode::K_INVALID, "invalid object size");
     auto needDeleteObjs = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());

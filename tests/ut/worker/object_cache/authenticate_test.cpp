@@ -147,6 +147,32 @@ TEST_F(AuthenticateTest, TestEnableAll)
     DS_ASSERT_NOT_OK(RegisterReqCheck(akSkManager, "", "", tenantId));
 }
 
+TEST_F(AuthenticateTest, GetHashRingAuthenticatesTenantTokenIdentity)
+{
+    const auto iamUrl = FLAGS_yuanrong_iam_url;
+    FLAGS_yuanrong_iam_url = "http://127.0.0.1:1";
+    Raii restore([iamUrl] {
+        FLAGS_yuanrong_iam_url = iamUrl;
+        EXPECT_TRUE(TenantAuthManager::Instance()->Init(false).IsOk());
+    });
+    auto manager = std::make_shared<AkSkManager>();
+    DS_ASSERT_OK(inject::Set("worker.auth", "return(token1,tenant1)"));
+    ASSERT_TRUE(TenantAuthManager::Instance()->Init(true, manager).IsOk());
+
+    BrpcAuthService::Authenticate rpcEntry;
+    const auto *service = GetHashRingReqPb::descriptor()->file()->FindServiceByName("WorkerOCService");
+    ASSERT_TRUE(worker::CreateRpcAuthenticator(*service, manager, rpcEntry).IsOk());
+    GetHashRingReqPb request;
+    request.set_token("token1");
+    brpc::Controller controller;
+    DS_ASSERT_OK(rpcEntry(*service->FindMethodByName("GetHashRing"), controller, request));
+
+    auto requestAuthenticator = std::make_shared<const worker::RequestAuthenticator>(manager, true);
+    std::string tenantId;
+    DS_ASSERT_OK(worker::AuthenticateRequest(requestAuthenticator, request, "", tenantId));
+    EXPECT_EQ(tenantId, "tenant1");
+}
+
 TEST_F(AuthenticateTest, RpcEntryKeepsBodyCredentialsUntrustedAndPreservesHeartbeatException)
 {
     const auto iamUrl = FLAGS_yuanrong_iam_url;
@@ -171,14 +197,15 @@ TEST_F(AuthenticateTest, RpcEntryKeepsBodyCredentialsUntrustedAndPreservesHeartb
                                unsignedRegistration).IsOk());
     EXPECT_TRUE(startup(*direct->FindMethodByName("QueryAndGet"), unsignedCall, unsignedDirect).IsOk());
     GetHashRingReqPb unsignedRing;
-    EXPECT_TRUE(startup(*direct->FindMethodByName("GetHashRing"), unsignedCall, unsignedRing).IsOk());
+    EXPECT_EQ(startup(*direct->FindMethodByName("GetHashRing"), unsignedCall, unsignedRing).GetCode(),
+              K_RUNTIME_ERROR);
     EXPECT_EQ(manager->VerifySignatureFromDigest("", 0, "", AkSkDigest{}).GetCode(), K_NOT_AUTHORIZED);
     ASSERT_TRUE(manager->SetServerAkSk(AkSkType::TENANT, "test-only-loaded-access",
                                        SensitiveValue("test-only-loaded-secret")).IsOk());
     EXPECT_EQ(startup(*direct->FindMethodByName("QueryAndGet"), unsignedCall, unsignedDirect).GetCode(),
               K_NOT_AUTHORIZED);
     EXPECT_EQ(startup(*direct->FindMethodByName("GetHashRing"), unsignedCall, unsignedRing).GetCode(),
-              K_NOT_AUTHORIZED);
+              K_RUNTIME_ERROR);
     EXPECT_FALSE(unsignedTenant(*workerService->FindMethodByName("RegisterClient"), unsignedCall,
                                unsignedRegistration).IsOk());
     ASSERT_TRUE(manager->SetServerAkSk(AkSkType::SYSTEM, "test-only-access",

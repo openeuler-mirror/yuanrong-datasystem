@@ -373,6 +373,9 @@ message DeleteAllCopyReqPb {
   string token = 3;
   bool are_device_objects = 4;
   string tenant_id = 5;
+  // Routed SDK requests use request-level authentication.
+  // Credentials may be a tenant token or an AK/SK signature.
+  bool is_routed = 6;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -597,6 +600,9 @@ message QuerySizeReqPb {
   string token = 2;
   string tenant_id = 3;
   repeated string object_keys = 4;
+  // Routed SDK requests use request-level authentication.
+  // Credentials may be a tenant token or an AK/SK signature.
+  bool is_routed = 5;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -638,6 +644,9 @@ message ExpireReqPb {
   string token = 3;
   string tenant_id = 4;
   uint32 ttl_second = 5;
+  // Routed SDK requests use request-level authentication.
+  // Credentials may be a tenant token or an AK/SK signature.
+  bool is_routed = 6;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -653,6 +662,7 @@ message ExpireRspPb {
 // SDK periodically fetches the cluster topology from a worker for client-side routing.
 message GetHashRingReqPb {
   uint64 version = 1;  // Client's current version, 0 for full fetch.
+  string token = 2;    // Tenant token used to authenticate a topology fetch.
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

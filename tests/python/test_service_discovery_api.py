@@ -202,7 +202,7 @@ class TestServiceDiscoveryApi(unittest.TestCase):
         service_discovery = discovery_module.CoordinatorServiceDiscovery(options)
         service_discovery.init()
 
-        kv_module.KVClient(service_discovery=service_discovery, enable_cross_node_connection=True)
+        kv_module.KVClient(service_discovery=service_discovery)
 
         native_discovery = service_discovery.native_discovery
         self.assertTrue(service_discovery.initialized)
@@ -221,7 +221,7 @@ class TestServiceDiscoveryApi(unittest.TestCase):
         service_discovery = discovery_module.ServiceDiscovery(options)
         service_discovery.init()
 
-        kv_module.KVClient(service_discovery=service_discovery, enable_cross_node_connection=True)
+        kv_module.KVClient(service_discovery=service_discovery)
 
         self.assertEqual(len(FakeNativeKVClient.instances), 1)
         self.assertIs(FakeNativeKVClient.instances[0].args[-3], service_discovery.native_discovery)
@@ -235,7 +235,7 @@ class TestServiceDiscoveryApi(unittest.TestCase):
         self.assertEqual(len(FakeNativeKVClient.instances), 1)
         self.assertEqual(FakeNativeKVClient.instances[0].args[0], "worker-address")
         self.assertEqual(FakeNativeKVClient.instances[0].args[1], 1234)
-        self.assertEqual(len(FakeNativeKVClient.instances[0].args), 15)
+        self.assertEqual(len(FakeNativeKVClient.instances[0].args), 14)
 
     def test_kv_client_rejects_uninitialized_discovery(self):
         discovery_module = importlib.import_module("yr.datasystem.service_discovery")
@@ -246,7 +246,7 @@ class TestServiceDiscoveryApi(unittest.TestCase):
         service_discovery = discovery_module.CoordinatorServiceDiscovery(options)
 
         with self.assertRaisesRegex(RuntimeError, "call init\\(\\) before creating KVClient"):
-            kv_module.KVClient(service_discovery=service_discovery, enable_cross_node_connection=True)
+            kv_module.KVClient(service_discovery=service_discovery)
 
     def test_kv_client_discovery_with_host_port_warning(self):
         discovery_module = importlib.import_module("yr.datasystem.service_discovery")
@@ -262,20 +262,7 @@ class TestServiceDiscoveryApi(unittest.TestCase):
                 host="worker-address",
                 port=1234,
                 service_discovery=service_discovery,
-                enable_cross_node_connection=True,
             )
-
-    def test_kv_client_discovery_warns_without_cross_node_connection(self):
-        discovery_module = importlib.import_module("yr.datasystem.service_discovery")
-        kv_module = importlib.import_module("yr.datasystem.kv_client")
-
-        options = discovery_module.CoordinatorServiceDiscoveryOptions()
-        options.service_address = "coordinator-address"
-        service_discovery = discovery_module.CoordinatorServiceDiscovery(options)
-        service_discovery.init()
-
-        with self.assertWarnsRegex(RuntimeWarning, "enable_cross_node_connection is False"):
-            kv_module.KVClient(service_discovery=service_discovery)
 
     def test_kv_client_discovery_host_port_mismatch(self):
         kv_module = importlib.import_module("yr.datasystem.kv_client")

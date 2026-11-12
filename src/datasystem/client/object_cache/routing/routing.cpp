@@ -27,18 +27,18 @@
 
 namespace datasystem {
 namespace client {
-Routing::Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> signature,
+Routing::Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> signature, SensitiveValue clientToken,
                  HashRingRefresher::RingUpdateHook ringUpdateHook,
                  std::vector<std::shared_ptr<IWorkerFilter>> additionalFilters, int64_t refreshIntervalMs,
                  std::function<void(uint64_t)> refreshConfirmedHook,
                  HashRingRefresher::ProbeListFallback probeFallback)
-    : Routing(std::move(channelConfig), std::move(signature), std::move(ringUpdateHook),
+    : Routing(std::move(channelConfig), std::move(signature), std::move(clientToken), std::move(ringUpdateHook),
               std::make_shared<WorkerUbHealthRegistry>(), std::move(additionalFilters), refreshIntervalMs,
               std::move(refreshConfirmedHook), std::move(probeFallback))
 {
 }
 
-Routing::Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> signature,
+Routing::Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> signature, SensitiveValue clientToken,
                  HashRingRefresher::RingUpdateHook ringUpdateHook,
                  std::shared_ptr<WorkerUbHealthRegistry> ubHealthRegistry,
                  std::vector<std::shared_ptr<IWorkerFilter>> additionalFilters, int64_t refreshIntervalMs,
@@ -48,6 +48,7 @@ Routing::Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> sig
           "", std::move(ubHealthRegistry), std::move(additionalFilters),
           std::make_shared<ClientReadBandwidthScheduler>(ClientReadBandwidthScheduler::Config::FromFlags()))),
       rpcClient_(std::make_shared<RoutingRpcClient>(std::move(channelConfig), std::move(signature))),
+      clientToken_(std::move(clientToken)),
       refreshIntervalMs_(refreshIntervalMs),
       refreshConfirmedHook_(std::move(refreshConfirmedHook))
 {
@@ -108,7 +109,7 @@ Status Routing::FetchHashRing(const HostPort &workerAddr, uint64_t currentVersio
     RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
     GetHashRingRspPb response;
     RETURN_IF_NOT_OK(rpcClient_->GetHashRing(workerAddr, currentVersion, response, timeoutMs,
-                                             refresher_->GetHostIdsDigest(currentVersion)));
+                                             refresher_->GetHostIdsDigest(currentVersion), clientToken_));
     newVersion = response.version();
     changed = response.hash_ring_changed();
     if (!changed) {

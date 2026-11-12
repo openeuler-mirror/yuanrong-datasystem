@@ -36,7 +36,6 @@
 #include "datasystem/client/object_cache/transport/metadata/object_metadata_client.h"
 #include "datasystem/client/object_cache/transport/object_buffer_internal.h"
 #include "datasystem/client/object_cache/transport/object_read/replica_reader.h"
-#include "datasystem/client/object_cache/transport/rpc/exist_request_builder.h"
 #include "datasystem/client/object_cache/transport/rpc/mset_request_builder.h"
 #include "datasystem/client/object_cache/transport/transport_advisor.h"
 #include "datasystem/common/flags/common_flags.h"
@@ -352,6 +351,7 @@ TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared
       releasePool_(std::move(options.releasePool)),
       ambiguousCreateCleanupPool_(
           std::make_shared<ThreadPool>(0, AMBIGUOUS_CREATE_CLEANUP_THREAD_NUM, "ambiguous-create-cleanup")),
+      boundWorker_(std::move(options.boundWorker)),
       allowUbRuntimeFailure_(options.allowUbRuntimeFailure)
 {
     localUbSenderState_ = std::make_shared<LocalUbSenderState>();
@@ -374,6 +374,7 @@ TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared
                                                   std::move(options.verifiedUbHealthSummaryHook),
                                                   [this] { NotifyReconcile(); },
                                                   std::move(supportsPortHealthVerification));
+    rpcDispatcher_ = std::make_shared<WorkerRpcDispatcher>(manager_);
     ConfigureUbHealthTriggers();
     auto retry = std::make_shared<DeadlineRetry>(std::move(options.retryAdmissionCheck));
     auto ubFailureHandler = [this](const HostPort &provider, const ProviderUbFailureDetailPb &detail) {
@@ -413,12 +414,14 @@ TransportLayer::TransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManage
       releasePool_(std::move(releasePool)),
       ambiguousCreateCleanupPool_(
           std::make_shared<ThreadPool>(0, AMBIGUOUS_CREATE_CLEANUP_THREAD_NUM, "ambiguous-create-cleanup")),
-      healthFilter_(readSourceFilter == nullptr ? std::make_shared<UbHealthFilter>() : std::move(readSourceFilter))
+      healthFilter_(readSourceFilter == nullptr ? std::make_shared<UbHealthFilter>() : std::move(readSourceFilter)),
+      boundWorker_()
 {
     localUbSenderState_ = std::make_shared<LocalUbSenderState>();
     localUbSenderState_->reconcileMutex = reconcileMutex_;
     localUbSenderState_->reconcileCv = reconcileCv_;
     localUbSenderState_->healthFilter = healthFilter_;
+    rpcDispatcher_ = std::make_shared<WorkerRpcDispatcher>(manager_);
 }
 
 bool TransportLayer::ReportProviderUbFailure(const HostPort &provider, const ProviderUbFailureDetailPb &detail)
@@ -777,50 +780,6 @@ Status TransportLayer::Get(const ObjectReadRequest &input, ObjectReadResult &out
     return status;
 }
 
-Status TransportLayer::Exist(const HostPort &workerAddr, const TransportExistRequest &input,
-                             TransportExistResult &output)
-{
-    ExistReqPb request;
-    RETURN_IF_NOT_OK(BuildExistRequest(input, request));
-
-    auto runExist = [&](ExistRspPb &rsp) -> Status {
-        std::shared_ptr<WorkerRpcClient> rpcClient;
-        RETURN_IF_NOT_OK(manager_->GetOrCreateRpcClient(workerAddr, rpcClient));
-        return rpcClient->InvokeExist(input.subTimeoutMs, request, rsp);
-    };
-
-    ExistRspPb response;
-    Status rc = runExist(response);
-    if (IsRetryableRpcError(rc)) {
-        LOG(WARNING) << "Rebuild RPC client for worker " << workerAddr.ToString() << " after Exist failed: " << rc;
-        manager_->Teardown(workerAddr);
-        rc = runExist(response);
-        if (rc.IsError()) {
-            LOG(WARNING) << "Exist still failed after rebuilding RPC client for worker " << workerAddr.ToString()
-                         << ": " << rc;
-            return rc;
-        }
-    } else if (IsNonRetryableRpcError(rc)) {
-        LOG(WARNING) << "Tear down dead RPC peer for worker " << workerAddr.ToString()
-                     << " after Exist failed without retry: " << rc;
-        manager_->Teardown(workerAddr);
-        return rc;
-    } else if (rc.IsError()) {
-        return rc;
-    }
-
-    if (!response.redirect_extra().empty()) {
-        return Status(K_NOT_OWNER, "Exist keys redirected to new owners").WithExtra(response.redirect_extra());
-    }
-
-    if (static_cast<size_t>(response.exists_size()) != input.objectKeys.size()) {
-        return Status(K_RUNTIME_ERROR, FormatString("Exist response size mismatch: expected %zu keys, got %d results",
-                                                    input.objectKeys.size(), response.exists_size()));
-    }
-    output.exists.assign(response.exists().begin(), response.exists().end());
-    return Status::OK();
-}
-
 Status TransportLayer::GetHashRing(const HostPort &workerAddr, uint64_t currentVersion, GetHashRingRspPb &response)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
@@ -832,14 +791,21 @@ Status TransportLayer::GetHashRing(const HostPort &workerAddr, uint64_t currentV
 
 bool TransportLayer::IsSameHostWorker(const HostPort &workerAddr) const
 {
-    // Use the topology hint plus eligible, established routed SHM session state to select placement.
-    // The result can change with topology or session lifetime; callers must not cache it.
+    if (workerAddr == boundWorker_ && boundWorkerShmEnabled_.load(std::memory_order_acquire)) {
+        return true;
+    }
+    // Routed workers use the topology hint plus eligible, established SHM session state.
     // Without an advisor or manager, fall back to routed placement.
     if (advisor_ == nullptr || manager_ == nullptr) {
         return false;
     }
     return manager_->ResolveTransportHint(workerAddr, advisor_->GetTransportHint(workerAddr))
            == TransportHint::SHM_CANDIDATE;
+}
+
+void TransportLayer::UpdateBoundWorkerShmCapability(bool enabled)
+{
+    boundWorkerShmEnabled_.store(enabled, std::memory_order_release);
 }
 
 Status TransportLayer::Create(const HostPort &workerAddr, const std::string &objectKey, uint64_t dataSize,

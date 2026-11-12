@@ -31,6 +31,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/string_intern/string_ref.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/uuid_generator.h"
 
 DS_DECLARE_uint32(max_client_num);
@@ -419,8 +420,8 @@ TEST_F(ClientManagerTest, AddClientStoresCompatibilityVersion)
 }
 
 // A routed same-host shared-memory session registered on behalf of an already counted
-// primary client must not inflate active_client_count, while keeping its table entry (lockId /
-// pipeline queue / lost-handler lifecycle all stay managed).
+// primary client must not inflate active_client_count, while keeping its table entry
+// (pipeline queue / lost-handler lifecycle stay managed).
 TEST_F(ClientManagerTest, TestAuxiliaryClientCount)
 {
     FLAGS_max_client_num = 10;
@@ -482,6 +483,52 @@ TEST_F(ClientManagerTest, AddClientDuplicateAuxiliaryIdFailsAndRollsBack)
     DS_ASSERT_OK(clientMgr.AddClient(clientId, false, -1, "", false, "", "", CompatibilityVersion(), lockId));
     ASSERT_EQ(clientMgr.GetClientCount(), 1u);
     clientMgr.RemoveClient(clientId);
+    ASSERT_EQ(clientMgr.GetClientCount(), 0u);
+}
+
+TEST_F(ClientManagerTest, AuxiliaryShmLockIdsPreservePrimaryCapacity)
+{
+    constexpr uint32_t sessionLimit = 4;
+    const uint32_t previousLimit = FLAGS_max_client_num;
+    FLAGS_max_client_num = sessionLimit;
+    Raii restoreLimit([previousLimit] { FLAGS_max_client_num = previousLimit; });
+    ClientManager clientMgr;
+    DS_ASSERT_OK(clientMgr.Init());
+    uint32_t lockId = 0;
+    for (uint32_t i = 0; i < sessionLimit; ++i) {
+        const ClientKey clientId = ClientKey::Intern("aux" + std::to_string(i));
+        DS_ASSERT_OK(clientMgr.AddClient(clientId, true, -1, "", false, "", "", CompatibilityVersion(),
+                                         lockId, nullptr, true));
+        EXPECT_EQ(lockId, sessionLimit + i + 1);
+        uint32_t storedLockId = 0;
+        DS_ASSERT_OK(clientMgr.GetClientInfo(clientId)->GetLockId(storedLockId));
+        EXPECT_EQ(storedLockId, lockId);
+    }
+    EXPECT_EQ(clientMgr.GetClientCount(), 0u);
+    const ClientKey extraAux = ClientKey::Intern("extra-aux");
+    EXPECT_FALSE(clientMgr.AddClient(extraAux, true, -1, "", false, "", "", CompatibilityVersion(),
+                                     lockId, nullptr, true));
+    for (uint32_t i = 0; i < sessionLimit; ++i) {
+        DS_ASSERT_OK(clientMgr.AddClient(ClientKey::Intern("primary" + std::to_string(i)), true, -1, "", false, "",
+                                         "", CompatibilityVersion(), lockId));
+        EXPECT_EQ(lockId, i + 1);
+    }
+    EXPECT_EQ(clientMgr.GetClientCount(), sessionLimit);
+    clientMgr.RemoveClient(ClientKey::Intern("aux0"));
+    EXPECT_FALSE(clientMgr.AddClient(ClientKey::Intern("overflow"), true, -1, "", false, "", "", CompatibilityVersion(),
+                                     lockId));
+    EXPECT_FALSE(clientMgr.AddClient(ClientKey::Intern("aux1"), true, -1, "", false, "", "", CompatibilityVersion(),
+                                     lockId, nullptr, true));
+    DS_ASSERT_OK(clientMgr.AddClient(extraAux, true, -1, "", false, "", "", CompatibilityVersion(),
+                                     lockId, nullptr, true));
+    EXPECT_EQ(lockId, sessionLimit + 1);
+    clientMgr.RemoveClient(extraAux);
+    for (uint32_t i = 1; i < sessionLimit; ++i) {
+        clientMgr.RemoveClient(ClientKey::Intern("aux" + std::to_string(i)));
+    }
+    for (uint32_t i = 0; i < sessionLimit; ++i) {
+        clientMgr.RemoveClient(ClientKey::Intern("primary" + std::to_string(i)));
+    }
     ASSERT_EQ(clientMgr.GetClientCount(), 0u);
 }
 }  // namespace ut

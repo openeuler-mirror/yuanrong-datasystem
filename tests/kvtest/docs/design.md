@@ -823,7 +823,6 @@ JSON 配置文件，使用 nlohmann/json 解析。
 | `notify_interval_us` | int | 0 | ≥ 0（0=并行） | 通知间隔（微秒） |
 | `notify_queue_max` | int | 65536 | ≥ 0（0=无上限） | 每个 notify 池的待处理任务上限；超出即丢弃并计数 |
 | `enable_jitter` | bool | true | - | 在 lane 内启用随机偏移避免请求同步；false = 严格按 slot 栅格触发 |
-| `enable_cross_node_connection` | bool | true | - | 允许跨节点 failover |
 | `enable_local_cache` | bool | false | - | 控制 Get/MGet 读路径：true 走绑定 Worker，false 按 metadata owner 走 Transport 层；同机副本且 SHM 可用时仍可使用 SHM |
 | `data_placement_policy` | string | "PREFERRED_META_OWNER" | PREFERRED_SAME_NODE / REQUIRED_SAME_NODE / PREFERRED_META_OWNER | Set/MSet 数据放置策略 |
 | `metrics_interval_ms` | int | 3000 | > 0 | 指标采集间隔 |

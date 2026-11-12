@@ -87,9 +87,9 @@ const PolicySpec POLICY_SPECS[] = {
       "Create Publish Get DecreaseReference ReconcileShmRef GIncreaseRef GDecreaseRef DeleteAllCopy "
       "InvalidateBuffer ReleaseGRefs QueryGlobalRefNum PublishDeviceObject GetDeviceObject MultiPublish "
       "PutP2PMeta SubscribeReceiveEvent GetP2PMeta SendRootInfo RecvRootInfo GetDataInfo AckRecvFinish "
-      "MultiCreate QuerySize Exist Expire GetMetaInfo" },
+      "MultiCreate QuerySize Exist Expire GetMetaInfo GetHashRing" },
     { "WorkerOCService", RpcAuthPolicy::DIRECT,
-      "QueryAndGet GetHashRing" },
+      "QueryAndGet" },
     { "WorkerOCService", RpcAuthPolicy::NONE,
       "IncrSeqNo GetSeqNo DelSeqNo Lpush Lpop Lindex Llen Hget Hset Hdel Hgetall RemoveP2PLocation" },
     { "WorkerOCService", RpcAuthPolicy::SYSTEM,

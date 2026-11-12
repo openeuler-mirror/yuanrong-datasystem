@@ -319,17 +319,6 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "ub_urma_failover_switch_test",
-    srcs = ["ub_urma_failover_switch_test.cpp"],
-    tags = ["manual", "urma_mock"],
-    deps = [
-        ":oc_client_common",
-        "//src/datasystem/common/inject:common_inject",
-        "//tests/st:st_common",
-    ],
-)
-
-ds_cc_test(
     name = "ub_client_worker_isolate_recovery_test",
     srcs = ["ub_client_worker_isolate_recovery_test.cpp"],
     tags = ["manual", "urma_mock"],

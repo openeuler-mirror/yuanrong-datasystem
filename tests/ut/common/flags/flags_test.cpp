@@ -965,8 +965,6 @@ TEST_F(FlagsTest, ModifiableFlagsMatchReviewedInventory)
         "spill_file_open_limit",
         "spill_size_limit",
         "test_modifiable_flag",
-        "urma_failover_min_sample_count",
-        "urma_failover_success_rate_ratio",
         "urma_orphan_conn_ttl_s",
         "urma_orphan_sweep_batch",
         "urma_orphan_sweep_interval_s",

@@ -194,17 +194,16 @@ protected:
     void WaitForLeavingGate()
     {
         Status lastRc(K_NOT_READY, "Worker has not entered the exit gate");
-        const std::string gateValue(VALUE_SIZE, 'g');
         const auto deadline =
             std::chrono::steady_clock::now() + std::chrono::milliseconds(EXIT_GATE_TIMEOUT_MS);
         while (std::chrono::steady_clock::now() < deadline) {
-            lastRc = gateClient_->Set("u6_leaving_gate_probe", gateValue);
+            lastRc = gateClient_->HealthCheck();
             if (lastRc.GetCode() == K_SCALE_DOWN) {
                 return;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
-        FAIL() << "Worker did not expose K_SCALE_DOWN through the real exit gate: " << lastRc.ToString();
+        FAIL() << "Worker did not expose K_SCALE_DOWN through the direct health check: " << lastRc.ToString();
     }
 
     void PreparePublishRequests(std::shared_ptr<Buffer> &publishBuffer,
@@ -323,7 +322,7 @@ TEST_F(RoutingTopologyConvergenceTest, HostIdOnlyUpdatesRestoreExistingClientLoc
         publishedVersion.store(version);
         return Status::OK();
     };
-    client::Routing routing(MakeRpcConfig(), signature, hook, {}, 50);
+    client::Routing routing(MakeRpcConfig(), signature, SensitiveValue{}, hook, {}, 50);
     DS_ASSERT_OK(routing.Init(HOST_ID_VALUE, worker, true));
     ASSERT_TRUE(WaitForLocality(routing, advisor, worker, true));
     const auto version = publishedVersion.load();

@@ -42,9 +42,8 @@ namespace datasystem {
 namespace object_cache {
 class ClientWorkerBaseApi : public IClientWorkerApi {
 public:
-    explicit ClientWorkerBaseApi(HostPort hostPort, HeartbeatType heartbeatType, bool enableCrossNodeConnection,
-                                 Signature *signature)
-        : IClientWorkerApi(std::move(hostPort), heartbeatType, enableCrossNodeConnection, signature)
+    explicit ClientWorkerBaseApi(HostPort hostPort, HeartbeatType heartbeatType, Signature *signature)
+        : IClientWorkerApi(std::move(hostPort), heartbeatType, signature)
     {
     }
 

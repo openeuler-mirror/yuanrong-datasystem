@@ -50,10 +50,9 @@ struct ConnectOptions {
     std::string accessKey = "";
     SensitiveValue secretKey = "";
     std::string tenantId = "";
-    bool enableCrossNodeConnection = false;
-    // true: Get/MGet use the bound Worker path; false: Get/MGet query metadata owners through TransportLayer.
+    // true: prefer the same-node worker and route on failure; false: route requests directly.
     bool enableLocalCache = true;
-    // Used only by Set/MSet when enableLocalCache is false; it never changes Get/MGet routing.
+    // Controls routed write placement, including fallback when the preferred same-node worker is unavailable.
     DataPlacementPolicy dataPlacementPolicy = DataPlacementPolicy::PREFERRED_SAME_NODE;
     bool enableRemoteH2D = false;
     bool enableClientDirectPipelineH2D = false;

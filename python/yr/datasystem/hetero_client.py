@@ -88,7 +88,6 @@ class HeteroClient:
         access_key(str): The access key used by AK/SK authorize.
         secret_key(str): The secret key for AK/SK authorize.
         tenant_id(str): The tenant ID.
-        enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
         req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
         connect_timeout_ms.
         enable_remote_h2d(bool): Whether the remote h2d feature is enabled or not, default off.
@@ -109,7 +108,6 @@ class HeteroClient:
         access_key="",
         secret_key="",
         tenant_id="",
-        enable_cross_node_connection=False,
         req_timeout_ms=0,
         enable_remote_h2d=False
     ):
@@ -126,7 +124,6 @@ class HeteroClient:
             access_key(str): The access key used by AK/SK authorize.
             secret_key(str): The secret key for AK/SK authorize.
             tenant_id(str): The tenant ID.
-            enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
             req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
             connect_timeout_ms.
             enable_remote_h2d(bool): Whether the remote h2d feature is enabled or not, default off.
@@ -145,7 +142,6 @@ class HeteroClient:
             ["access_key", access_key, str],
             ["secret_key", secret_key, str],
             ["tenant_id", tenant_id, str],
-            ["enable_cross_node_connection", enable_cross_node_connection, bool],
             ["enable_remote_h2d", enable_remote_h2d, bool],
         ]
         validator.check_args_types(args)
@@ -160,7 +156,6 @@ class HeteroClient:
             access_key,
             secret_key,
             tenant_id,
-            enable_cross_node_connection,
             req_timeout_ms,
             enable_remote_h2d
         )

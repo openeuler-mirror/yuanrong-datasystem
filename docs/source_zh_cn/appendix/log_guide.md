@@ -257,8 +257,10 @@ latencySummary:{client.process.get:200,client.rpc.get:896,worker.process.get:768
 | `client.process.direct_materialize` | 直读结果校验并转换为 SDK Buffer 的耗时 |
 | `client.process.set` | 客户端 Set/Put 处理耗时（总耗时扣除子 RPC） |
 | `client.rpc.create` | 客户端→worker Create RPC 耗时（Set/Put 的 Create 子阶段） |
+| `client.rpc.create_total` | 走路由（routed）路径时客户端 Create RPC 端到端墙钟耗时，包含远端 worker 执行时间 |
 | `client.process.memory_copy` | 客户端 Set/Put 数据拷贝到共享内存耗时 |
 | `client.rpc.publish` | 客户端→worker Publish RPC 耗时 |
+| `client.rpc.publish_total` | 走路由（routed）路径时客户端 Publish RPC 端到端墙钟耗时，包含远端 worker 执行时间 |
 | `client.urma.ub_transfer` | 客户端 UB（Urma-based 用户态 RDMA）数据传输耗时 |
 | `client.process.create` | 客户端 Create 处理耗时（总耗时扣除 RPC） |
 | `client.process.exist` | 客户端 Exist 处理耗时（总耗时扣除 RPC） |

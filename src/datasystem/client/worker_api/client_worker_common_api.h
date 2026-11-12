@@ -25,12 +25,10 @@
 #include <functional>
 #include <mutex>
 #include <optional>
-#include <shared_mutex>
 #include <string>
 #include <memory>
 #include <thread>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -38,8 +36,6 @@
 // Include log.h early so the datasystem spdlog-based LOG macro is in scope
 // before any brpc/butil header can #undef it.
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/util/locks.h"
-
 #include <bthread/mutex.h>
 
 #include "datasystem/common/heartbeat_type.h"
@@ -61,8 +57,6 @@
 #include "datasystem/protos/share_memory.stub.rpc.pb.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
-
-#include "datasystem/client/object_cache/routing/urma_success_rate_tracker.h"
 
 // PIMPL: brpc types are forward-declared so headers that include this
 // file (e.g. Python extension) do not transitively pull in brpc/glib.
@@ -99,12 +93,12 @@ inline int32_t CalculateConnectAttemptTimeoutMs(int32_t connectTimeoutMs)
 namespace client {
 
 struct ClientWorkerCommonApiAttribute {
-    ClientWorkerCommonApiAttribute(HostPort hostPort, HeartbeatType heartbeatType, bool enableCrossNodeConnection,
+    ClientWorkerCommonApiAttribute(HostPort hostPort, HeartbeatType heartbeatType, bool enableCrossNode,
                                    Signature *signature)
         : socketFd_(-1),
           heartbeatType_(heartbeatType),
           hostPort_(std::move(hostPort)),
-          enableCrossNodeConnection_(enableCrossNodeConnection),
+          enableCrossNode_(enableCrossNode),
           signature_(signature),
           workerSupportMultiShmRefCount_(true),
           newFlowShm_(heartbeatType == HeartbeatType::NO_HEARTBEAT)
@@ -263,7 +257,6 @@ struct ClientWorkerCommonApiAttribute {
         CompatibilityManager::Instance().GetBaselineCompatibilityVersion()
     };
     HostPort hostPort_;
-    bool isUseStandbyWorker_ = false;
     int64_t heartBeatIntervalMs_{ MIN_HEARTBEAT_INTERVAL_MS };
     uint64_t clientDeadTimeoutMs_{ 0 };
     int32_t connectTimeoutMs_{ 0 };
@@ -272,9 +265,9 @@ struct ClientWorkerCommonApiAttribute {
     std::atomic_bool removable_{ false };
     std::atomic_bool healthy_{ false };
     UbHealthSummaryCache ubHealthSummaryCache_;
-    bool enableCrossNodeConnection_{ false };
-    // Unlike enableCrossNodeConnection_, this records data-plane reachability. Local-cache-off clients can also
-    // access workers beyond the bound endpoint, even when worker failover is disabled.
+    bool enableCrossNode_{ false };
+    // Data-plane reachability is independent of the registration failover policy.
+    // Object clients can access workers beyond their primary registration endpoint.
     bool mayAccessNonBoundWorker_{ false };
     bool workerEnableP2Ptransfer_ = false;
     std::shared_ptr<ShmUnitInfo> decShmUnit_;
@@ -308,9 +301,9 @@ private:
 
 class IClientWorkerCommonApi : public ClientWorkerCommonApiAttribute {
 public:
-    IClientWorkerCommonApi(HostPort hostPort, HeartbeatType heartbeatType, bool enableCrossNodeConnection,
+    IClientWorkerCommonApi(HostPort hostPort, HeartbeatType heartbeatType, bool enableCrossNode,
                            Signature *signature)
-        : ClientWorkerCommonApiAttribute(std::move(hostPort), heartbeatType, enableCrossNodeConnection, signature)
+        : ClientWorkerCommonApiAttribute(std::move(hostPort), heartbeatType, enableCrossNode, signature)
     {
     }
 
@@ -371,12 +364,6 @@ public:
     virtual Status TryFastTransportAfterHeartbeat() = 0;
 
     /**
-     * @brief Get the standby worker.
-     * @return HostPort The standby worker.
-     */
-    virtual std::vector<HostPort> GetStandbyWorkers() = 0;
-
-    /**
      * @brief Update token for yr iam
      * @param[in] Token message for auth certification
      * @return K_OK on success; the error code otherwise.
@@ -390,33 +377,6 @@ public:
      * @return K_OK on success; the error code otherwise.
      */
     virtual Status UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey) = 0;
-
-    /**
-     * @brief Record a URMA data-plane request result into the success-rate tracker.
-     * @param[in] success Whether the URMA request succeeded.
-     */
-    virtual void RecordUrmaDataPlaneResult(bool success)
-    {
-        (void)success;
-    }
-
-    /**
-     * @brief Mark the current URMA data-plane switch attempt as finished.
-     * @param[in] success Whether the worker switch succeeded.
-     */
-    virtual void FinishUrmaDataPlaneSwitchAttempt(bool success)
-    {
-        (void)success;
-    }
-
-    /**
-     * @brief Set the callback invoked when URMA data-plane failover is triggered.
-     * @param[in] callback A function that attempts the worker switch and returns true on success.
-     */
-    virtual void SetUrmaDataPlaneFailureCallback(std::function<bool()> callback)
-    {
-        (void)callback;
-    }
 
 protected:
     virtual Status SetToken(std::string &token) = 0;
@@ -469,18 +429,18 @@ public:
      * @param[in] heartbeatType The type of heartbeat.
      * @param[in] signature Used to do AK/SK authenticate.
      * @param[in] tenantId TenantId of client user.
-     * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
+     * @param[in] enableCrossNode Indicates whether the client can connect to another node.
      * @param[in] deviceId pipeline h2d device id
      */
     explicit ClientWorkerRemoteCommonApi(HostPort hostPort,
                                          HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
                                          SensitiveValue token = "", Signature *signature = nullptr,
-                                         std::string tenantId = "", bool enableCrossNodeConnection = false,
+                                         std::string tenantId = "", bool enableCrossNode = false,
                                          std::string deviceId = "");
 
     ClientWorkerRemoteCommonApi(HostPort hostPort, HeartbeatType heartbeatType, SensitiveValue token,
                                 std::shared_ptr<Signature> signature, std::string tenantId = "",
-                                bool enableCrossNodeConnection = false, std::string deviceId = "");
+                                bool enableCrossNode = false, std::string deviceId = "");
 
     virtual ~ClientWorkerRemoteCommonApi();
 
@@ -493,12 +453,10 @@ public:
     Status Disconnect(bool isDestruct) override;
     Status Reconnect() override;
     Status TryFastTransportAfterHeartbeat() override;
-    std::vector<HostPort> GetStandbyWorkers() override;
     Status UpdateToken(SensitiveValue &token) override;
     Status UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey) override;
-    void RecordUrmaDataPlaneResult(bool success) override;
-    void FinishUrmaDataPlaneSwitchAttempt(bool success) override;
-    void SetUrmaDataPlaneFailureCallback(std::function<bool()> callback) override;
+
+    static int32_t CalculateSingleRpcTimeout(int32_t totalTimeoutMs);
 
     bool IsWorkerSupportMultiShmRefCount() const
     {
@@ -593,9 +551,6 @@ protected:
     virtual void PostRegisterClient(int32_t timeoutMs, const RegisterClientRspPb &rsp);
 
     static constexpr int32_t retryTimes_ = 3;
-    // Protect 'standbyWorkerAddrs_'
-    SharedMutex standbyWorkerMutex_;
-    std::unordered_set<HostPort> standbyWorkerAddrs_;
     HostPort masterAddress_;
     std::string workerStartId_;  // To judge whether the worker is restarted.
 
@@ -631,8 +586,6 @@ protected:
     std::unique_ptr<ThreadPool> urmaHandshakeRetryPool_{ nullptr };
     std::atomic_bool stopUrmaHandshakeRetry_{ false };
     std::string deviceId_;
-    UrmaSuccessRateTracker urmaSuccessRateTracker_;
-    std::function<bool()> urmaDataPlaneFailureCallback_;
     std::vector<std::shared_ptr<ShmUnitInfo>> pipelineDataShmUnits_;
 
     struct FtHandshakeContext {
@@ -729,14 +682,6 @@ private:
      * @param[in] rsp Register respond.
      */
     void ConstructPipelineDataShmUnits(const RegisterClientRspPb &rsp);
-
-    /**
-     * @brief Save standby worker.
-     * @param[in] standbyWorker The standby worker.
-     * @param[in] availableWorkers The available workers.
-     */
-    void SaveStandbyWorker(const std::string standbyWorker,
-                           const ::google::protobuf::RepeatedPtrField<std::string> &availableWorkers);
 
     Status FastTransportHandshake(int32_t timeoutMs, uint32_t workerVersion);
 

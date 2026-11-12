@@ -29,6 +29,7 @@
 #include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/object_posix.brpc.stub.pb.h"
+#include "datasystem/utils/sensitive_value.h"
 
 namespace datasystem {
 namespace client {
@@ -44,7 +45,8 @@ public:
     Status Init();
 
     Status GetHashRing(const HostPort &workerAddr, uint64_t currentVersion, GetHashRingRspPb &response,
-                       int32_t timeoutMs = 0, const std::string &hostIdsDigest = "");
+                       int32_t timeoutMs = 0, const std::string &hostIdsDigest = "",
+                       const SensitiveValue &token = {});
 
     void Shutdown();
 

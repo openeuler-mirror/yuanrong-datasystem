@@ -99,6 +99,7 @@ Status WorkerQueryAndGetImpl::QueryAndGet(
     state.startUs = GetSteadyTimeUs();
     state.lastCheckpointUs = state.startUs;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_QUERY_AND_GET);
+    INJECT_POINT("worker.QueryAndGet.Begin");
     Status rc = ReadAndAuthenticate(serverApi, state.request);
     state.stats.preprocessUs = RecordPhase(state);
     if (rc.IsOk()) {

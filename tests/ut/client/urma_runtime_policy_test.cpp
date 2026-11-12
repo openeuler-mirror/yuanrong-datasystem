@@ -21,14 +21,6 @@
 namespace datasystem {
 namespace {
 
-TEST(UrmaRuntimePolicyTest, DeterminesWhetherClientMayAccessNonBoundWorker)
-{
-    EXPECT_TRUE(ClientMayAccessNonBoundWorker(false, false));
-    EXPECT_TRUE(ClientMayAccessNonBoundWorker(false, true));
-    EXPECT_TRUE(ClientMayAccessNonBoundWorker(true, true));
-    EXPECT_FALSE(ClientMayAccessNonBoundWorker(true, false));
-}
-
 TEST(UrmaRuntimePolicyTest, DoesNotRequestRuntimeWithoutWorkerUbCapability)
 {
     EXPECT_FALSE(ShouldRequestClientUrmaRuntime(false, false, false));

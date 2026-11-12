@@ -28,10 +28,8 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <ctime>
 #include <exception>
 #include <mutex>
-#include <shared_mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -53,7 +51,6 @@
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/string_intern/string_ref.h"
-#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/compatibility_manager.h"
 #include "datasystem/common/util/fd_pass.h"
 #include "datasystem/common/util/format.h"
@@ -70,28 +67,9 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/worker_worker_transport_api.h"
 
-DS_DECLARE_double(urma_failover_success_rate_ratio);
-DS_DECLARE_uint32(urma_failover_min_sample_count);
-
 namespace datasystem {
 namespace {
 static constexpr int64_t MIN_WAIT_MS = 1;
-
-int32_t CalculateSingleRpcTimeout(int32_t totalTimeoutMs)
-{
-    constexpr int32_t rpcMaxTimeout = 600000;    // 10min
-    constexpr int32_t shorterSplitTime = 30000;  // 30s
-    constexpr int32_t longerSplitTime = 90000;   // 90s
-    constexpr int32_t retryTimes = 3;
-
-    if (totalTimeoutMs <= shorterSplitTime) {
-        return totalTimeoutMs;
-    } else if (totalTimeoutMs <= longerSplitTime) {
-        return shorterSplitTime;
-    } else {
-        return std::min(totalTimeoutMs / retryTimes, rpcMaxTimeout);
-    }
-}
 
 const char *ShmEnableTypeName(ShmEnableType type)
 {
@@ -123,19 +101,6 @@ int32_t BoundFdPassingTimeoutMs(int32_t connectTimeoutMs)
 }  // namespace
 
 namespace client {
-std::string FormatUrmaSwitchWindowStats(const std::string &clientId, const std::string &workerAddress,
-                                        const UrmaSuccessRateTracker &tracker,
-                                        const UrmaSuccessRateTracker::WindowStats &windowStats, uint64_t windowLengthMs)
-{
-    return FormatString(
-        "[Switch] URMA data-plane settled window, client id: %s, worker address: %s, "
-        "success: %llu, failure: %llu, total: %llu, success rate ratio: %g, min sample count: %u, "
-        "window length ms: %llu, backoff level: %u, next allowed switch time ms: %llu",
-        clientId, workerAddress, windowStats.successCount, windowStats.failureCount, windowStats.totalCount,
-        FLAGS_urma_failover_success_rate_ratio, FLAGS_urma_failover_min_sample_count, windowLengthMs,
-        tracker.GetBackoffLevel(), tracker.GetNextAllowedSwitchTimeMs());
-}
-
 namespace {
 void MaybeApplyLogSampleConfig(const LogSampleConfigPb &config, const std::string &source)
 {
@@ -277,9 +242,9 @@ ClientWorkerCommonApiAttribute::~ClientWorkerCommonApiAttribute() = default;
 ClientWorkerRemoteCommonApi::ClientWorkerRemoteCommonApi(HostPort hostPort,
                                                          HeartbeatType heartbeatType, SensitiveValue token,
                                                          Signature *signature, std::string tenantId,
-                                                         bool enableCrossNodeConnection,
+                                                         bool enableCrossNode,
                                                          std::string deviceId)
-    : IClientWorkerCommonApi(std::move(hostPort), heartbeatType, enableCrossNodeConnection, signature),
+    : IClientWorkerCommonApi(std::move(hostPort), heartbeatType, enableCrossNode, signature),
       tenantId_(std::move(tenantId)),
       deviceId_(std::move(deviceId))
 {
@@ -291,9 +256,9 @@ ClientWorkerRemoteCommonApi::ClientWorkerRemoteCommonApi(HostPort hostPort,
 
 ClientWorkerRemoteCommonApi::ClientWorkerRemoteCommonApi(
     HostPort hostPort, HeartbeatType heartbeatType, SensitiveValue token, std::shared_ptr<Signature> signature,
-    std::string tenantId, bool enableCrossNodeConnection, std::string deviceId)
+    std::string tenantId, bool enableCrossNode, std::string deviceId)
     : ClientWorkerRemoteCommonApi(std::move(hostPort), heartbeatType, std::move(token), signature.get(),
-                                  std::move(tenantId), enableCrossNodeConnection, std::move(deviceId))
+                                  std::move(tenantId), enableCrossNode, std::move(deviceId))
 {
     rpcSignatureOwner_ = std::move(signature);
 }
@@ -310,6 +275,20 @@ ClientWorkerRemoteCommonApi::~ClientWorkerRemoteCommonApi()
     if (recvPageThread_.joinable()) {
         recvPageThread_.join();
     }
+}
+
+int32_t ClientWorkerRemoteCommonApi::CalculateSingleRpcTimeout(int32_t totalTimeoutMs)
+{
+    constexpr int32_t shorterSplitTime = 30000;  // 30s
+    constexpr int32_t longerSplitTime = 90000;   // 90s
+    constexpr int32_t retryTimes = 3;
+    if (totalTimeoutMs <= shorterSplitTime) {
+        return totalTimeoutMs;
+    }
+    if (totalTimeoutMs <= longerSplitTime) {
+        return shorterSplitTime;
+    }
+    return std::min(totalTimeoutMs / retryTimes, MAX_RPC_TIMEOUT_MS);
 }
 
 void ClientWorkerRemoteCommonApi::SetRpcTimeout(int32_t timeout)
@@ -446,7 +425,7 @@ Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t ti
 
     CloseSocketFd();
 
-    shmEnableType_ = isUseStandbyWorker_ ? ShmEnableType::NONE : shmEnableType;
+    shmEnableType_ = shmEnableType;
     socketFd_ = socketFd;
     if (isConnectSuccess) {
         heartbeatType_ = heartbeatType_ == HeartbeatType::NO_HEARTBEAT ? HeartbeatType::RPC_HEARTBEAT : heartbeatType_;
@@ -584,46 +563,6 @@ Status ClientWorkerRemoteCommonApi::HandShakeConnect(int64_t remainingMs, const 
     return Status::OK();
 }
 
-void ClientWorkerRemoteCommonApi::SaveStandbyWorker(
-    const std::string standbyWorker, const ::google::protobuf::RepeatedPtrField<std::string> &availableWorkers)
-{
-    if (!enableCrossNodeConnection_) {
-        return;
-    }
-    std::lock_guard<SharedMutex> l(standbyWorkerMutex_);
-    standbyWorkerAddrs_.clear();
-    for (const auto &addr : availableWorkers) {
-        HostPort workerAddr;
-        if (workerAddr.ParseString(addr).IsError()) {
-            VLOG(HEARTBEAT_LEVEL) << FormatString("Standby worker address %s is invalid.", addr);
-            continue;
-        }
-        (void)standbyWorkerAddrs_.emplace(workerAddr);
-    }
-    if (!standbyWorker.empty()) {
-        HostPort workerAddr;
-        if (workerAddr.ParseString(standbyWorker).IsOk()) {
-            (void)standbyWorkerAddrs_.emplace(workerAddr);
-        } else {
-            VLOG(HEARTBEAT_LEVEL) << FormatString("Standby worker address %s is invalid.", standbyWorker);
-        }
-    }
-}
-
-std::vector<HostPort> ClientWorkerRemoteCommonApi::GetStandbyWorkers()
-{
-    std::vector<HostPort> workers;
-    {
-        std::shared_lock<SharedMutex> l(standbyWorkerMutex_);
-        for (const auto &addr : standbyWorkerAddrs_) {
-            workers.emplace_back(addr);
-        }
-    }
-    static std::mt19937 gen(std::chrono::system_clock::now().time_since_epoch().count());
-    std::shuffle(workers.begin(), workers.end(), gen);
-    return workers;
-}
-
 void ClientWorkerRemoteCommonApi::ProcessRemoteHeartbeatSummary(const HeartbeatRspPb &rsp, bool &workerReboot)
 {
     workerReboot = !workerStartId_.empty() && rsp.worker_start_id() != workerStartId_;
@@ -701,7 +640,6 @@ Status ClientWorkerRemoteCommonApi::SendHeartbeat(bool &workerReboot, bool &clie
         ProcessRemoteHeartbeatSummary(rsp, workerReboot);
         clientRemoved = rsp.client_removed();
         isWorkerVoluntaryScaleDown = rsp.is_voluntary_scale_down();
-        SaveStandbyWorker(rsp.standby_worker(), rsp.available_workers());
         expiredWorkerFds = { rsp.expired_worker_fds().begin(), rsp.expired_worker_fds().end() };
         SetHealthy(!rsp.unhealthy());
         if (rsp.has_log_sample_config()) {
@@ -786,7 +724,7 @@ Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int
     req.set_socket_heartbeat(newFlowShm_);
     req.set_shm_enabled(IsShmEnable());
     req.set_tenant_id(tenantId_);
-    req.set_enable_cross_node(enableCrossNodeConnection_);
+    req.set_enable_cross_node(enableCrossNode_);
     req.set_pod_name(Logging::PodName());
     req.set_support_multi_shm_ref_count(true);
     req.set_device_id(deviceId_);
@@ -799,7 +737,7 @@ Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int
     req.set_compatibility_version(CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString());
     RegisterClientRspPb rsp;
     LOG(INFO) << "Start to send rpc to register client to worker, shm enable: " << IsShmEnable()
-              << ", enable cross node: " << enableCrossNodeConnection_ << ", tenant id: " << tenantId_
+              << ", enable cross node: " << enableCrossNode_ << ", tenant id: " << tenantId_
               << ", auth: " << signature_->ToString()
               << ", client support multi shm ref count:" << req.support_multi_shm_ref_count();
     auto rc = RetryOnError(
@@ -842,38 +780,6 @@ Status ClientWorkerRemoteCommonApi::UpdateAkSk(const std::string &accessKey, Sen
     CHECK_FAIL_RETURN_STATUS(rpcAuthModeInitialized_ && rpcAuthEnabled_, K_NOT_SUPPORTED,
                              "Recreate the client with complete AK/SK to enable RPC authentication.");
     return signature_->SetClientAkSk(accessKey, secretKey);
-}
-
-void ClientWorkerRemoteCommonApi::RecordUrmaDataPlaneResult(bool success)
-{
-    UrmaSuccessRateTracker::WindowStats windowStats;
-    if (!urmaSuccessRateTracker_.RecordUrmaResult(success, clientDeadTimeoutMs_, GetSteadyClockTimeStampMs(),
-                                                  &windowStats)) {
-        if (windowStats.totalCount > 0) {
-            VLOG(1) << FormatUrmaSwitchWindowStats(clientId_, hostPort_.ToString(), urmaSuccessRateTracker_,
-                                                   windowStats, clientDeadTimeoutMs_)
-                    << ", switch trigger: false";
-        }
-        return;
-    }
-    LOG(INFO) << FormatUrmaSwitchWindowStats(clientId_, hostPort_.ToString(), urmaSuccessRateTracker_, windowStats,
-                                             clientDeadTimeoutMs_)
-              << ", switch trigger: true";
-    if (urmaDataPlaneFailureCallback_ == nullptr || !urmaDataPlaneFailureCallback_()) {
-        LOG(ERROR) << "[Switch] Submit URMA data-plane failure worker switch failed, client id: " << clientId_
-                   << ", worker address: " << hostPort_.ToString();
-        urmaSuccessRateTracker_.FinishSwitchAttempt(false, GetSteadyClockTimeStampMs());
-    }
-}
-
-void ClientWorkerRemoteCommonApi::FinishUrmaDataPlaneSwitchAttempt(bool success)
-{
-    urmaSuccessRateTracker_.FinishSwitchAttempt(success, GetSteadyClockTimeStampMs());
-}
-
-void ClientWorkerRemoteCommonApi::SetUrmaDataPlaneFailureCallback(std::function<bool()> callback)
-{
-    urmaDataPlaneFailureCallback_ = std::move(callback);
 }
 
 Status ClientWorkerRemoteCommonApi::Disconnect(bool isDestruct)
@@ -1092,7 +998,6 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
     SetHealthy(!rsp.unhealthy());
     workerSupportMultiShmRefCount_ = rsp.support_multi_shm_ref_count();
     SetHeartbeatProperties(timeoutMs, rsp);
-    SaveStandbyWorker(rsp.standby_worker(), rsp.available_workers());
     ConstructDecShmUnit(rsp);
     LOG(INFO) << "[URMA_INIT] post_register addr=" << hostPort_.ToString() << " clientId=" << clientId_
               << " ver=" << workerVersion << " shm=" << IsShmEnable() << " ft=" << rsp.fast_transport_mode()

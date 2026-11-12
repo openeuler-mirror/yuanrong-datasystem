@@ -132,11 +132,6 @@ bool IsClientUbFaultIsolationEnabled()
 }  // namespace datasystem
 
 DS_DEFINE_bool(enable_transport_fallback, true, "Enable the fast transport fallback to tcp transport.");
-DS_DEFINE_double_dynamic(urma_failover_success_rate_ratio, 0.5,
-                 "Client-side URMA data-plane success-rate ratio threshold for worker failover. If the window success "
-                 "rate is below this ratio, the client tries to switch worker. 0.0 disables URMA failover.");
-DS_DEFINE_uint32_dynamic(urma_failover_min_sample_count, 5,
-                 "Minimum URMA data-plane samples per client_dead_timeout_s window before failover evaluation.");
 DS_DEFINE_uint32(
     eviction_reserve_mem_threshold_mb, 10240,
     "The reserved memory (MB) is determined by min(shared_memory_size_mb*0.1, eviction_reserve_mem_threshold_mb). "

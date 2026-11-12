@@ -1482,7 +1482,6 @@ def _build_config(mode, args):
         'connect_options': {
             'connect_timeout_ms': 1000,
             'request_timeout_ms': args.request_timeout_ms,
-            'enable_cross_node_connection': True,
             'enable_local_cache': args.enable_local_cache,
             'data_placement_policy': args.data_placement_policy,
             'fast_transport_mem_size': '512MB',

@@ -72,7 +72,7 @@ public:
     int selectWorkersCount = 0;
 };
 
-class FakeExistTransport : public IExistTransport {
+class FakeObjectControlRpcClient : public client::ObjectControlRpcClient {
 public:
     struct CallResult {
         Status status;
@@ -129,7 +129,7 @@ public:
     {
         taskPool_ = std::make_shared<ThreadPool>(0, 2, "exist_test_rpc");
         routing_ = std::make_shared<FakeExistRouting>();
-        transport_ = std::make_shared<FakeExistTransport>();
+        transport_ = std::make_shared<FakeObjectControlRpcClient>();
     }
 
     void TearDown() override
@@ -148,7 +148,7 @@ public:
 
 protected:
     std::shared_ptr<FakeExistRouting> routing_;
-    std::shared_ptr<FakeExistTransport> transport_;
+    std::shared_ptr<FakeObjectControlRpcClient> transport_;
     std::shared_ptr<ThreadPool> taskPool_;
     int32_t requestTimeoutMs_ = 1000;
     std::string clientId_ = "exist-test-client";

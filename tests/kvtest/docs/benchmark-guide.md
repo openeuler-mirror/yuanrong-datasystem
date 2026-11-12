@@ -294,7 +294,6 @@ ServiceDiscovery 发现并固定一个非本机 Worker；`get_remote_direct` 可
   "connect_options": {
     "connect_timeout_ms": 5000,
     "request_timeout_ms": 50,
-    "enable_cross_node_connection": true,
     "enable_local_cache": true,
     "data_placement_policy": "PREFERRED_SAME_NODE",
     "fast_transport_mem_size": "1GB"
@@ -306,7 +305,6 @@ ServiceDiscovery 发现并固定一个非本机 Worker；`get_remote_direct` 可
 |------|--------|------|
 | `connect_timeout_ms` | 1000 | 连接超时（毫秒） |
 | `request_timeout_ms` | 20 | 请求超时（毫秒） |
-| `enable_cross_node_connection` | `true` | 允许跨节点 Get 拉取，**跨节点模式必须为 `true`** |
 | `enable_local_cache` | `false` | Get/MGet 走绑定 Worker；设为 `false` 时按 metadata owner 走 Transport 层 |
 | `data_placement_policy` | `PREFERRED_META_OWNER` | Set/MSet 数据放置策略 |
 | `fast_transport_mem_size` | "512MB" | 快速传输内存大小 |
@@ -694,7 +692,7 @@ Set 的有效并发数取配置并发与成功数的较小值；无成功 Set �
 | `set_param.ttl_second must be 0 when cleanup_method=none` | 持续覆盖工作集配置了 TTL | 将 `ttl_second` 设为 0 |
 | `set_api must be 'string_view', 'create_buffer', or 'create_buffer_raw'` | set_api 值非法 | 使用 `"string_view"` / `"create_buffer"` / `"create_buffer_raw"` |
 | Set 成功数 < keys_per_round | Worker 内存不足或请求超时 | 增大 `worker_memory_mb` 或检查 Worker 状态 |
-| 跨节点 Get 全部失败 | Worker 间网络不通 | 检查 UB/网络连通性，确认 `enable_cross_node_connection` |
+| 跨节点 Get 全部失败 | Worker 间网络不通 | 检查 UB/网络连通性 |
 | `set_ratio must be in (0.0, 1.0) for mixed mode` | set_ratio 值非法 | 使用 0.0 < set_ratio < 1.0 的值（必须保证至少 1 个 Get 线程） |
 | `Unknown mixed_key_strategy` | mixed_key_strategy 值非法 | 使用 `"same_keys"` / `"read_prev"` / `"independent"` |
 | `independent strategy is incompatible with cleanup_method=ttl` | independent+ttl 组合不支持 | 改用 `"cleanup_method": "del"` 或换用 `"same_keys"`/`"read_prev"` 策略 |

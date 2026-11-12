@@ -82,11 +82,6 @@ public class ConnectOptions {
     private String tenantID = "";
 
     /**
-     * Indicates whether the client can connect to the standby node.
-     */
-    private boolean enableCrossNodeConnection = false;
-
-    /**
      * Empty constructors for ConnectOptions.
      */
     public ConnectOptions() {
@@ -111,10 +106,6 @@ public class ConnectOptions {
 
     public void setRequestTimeout(int requestTimeoutMs) {
         this.requestTimeoutMs = requestTimeoutMs;
-    }
-
-    public void setEnableCrossNodeConnection(boolean enableCrossNodeConnection) {
-        this.enableCrossNodeConnection = enableCrossNodeConnection;
     }
 
     public void setToken(byte[] token) {
@@ -164,7 +155,6 @@ public class ConnectOptions {
         return port == otherConnectOptions.port
                 && connectTimeoutMs == otherConnectOptions.connectTimeoutMs
                 && requestTimeoutMs == otherConnectOptions.requestTimeoutMs
-                && enableCrossNodeConnection == otherConnectOptions.enableCrossNodeConnection
                 && host.equals(otherConnectOptions.host)
                 && Arrays.equals(token, otherConnectOptions.token)
                 && clientPublicKey.equals(otherConnectOptions.clientPublicKey)
@@ -178,6 +168,6 @@ public class ConnectOptions {
     @Override
     public int hashCode() {
         return Objects.hash(host, port, token, clientPublicKey, clientPrivateKey, serverPublicKey, accessKey, secretKey,
-                            tenantID, enableCrossNodeConnection);
+                            tenantID);
     }
 }

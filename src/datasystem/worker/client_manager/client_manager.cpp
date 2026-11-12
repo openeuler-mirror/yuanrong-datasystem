@@ -34,6 +34,9 @@ constexpr uint32_t CLIENT_HEARTBEAT_INTERVAL_SECOND = 3;  // 3s
 
 namespace datasystem {
 namespace worker {
+namespace {
+constexpr uint32_t SHM_LOCK_ID_CAPACITY_MULTIPLIER = 2;
+}
 
 ClientManager &ClientManager::Instance()
 {
@@ -104,7 +107,7 @@ Status ClientManager::AddClient(const ClientKey &clientId, bool shmEnabled, int 
     // Ensure callers never observe a stale lockId on failure paths.
     lockId = 0;
     if (shmEnabled) {
-        RETURN_IF_NOT_OK(GetLockId(lockId));
+        RETURN_IF_NOT_OK(GetLockId(auxiliary, lockId));
     }
     Status status;
     std::shared_lock<std::shared_timed_mutex> lck(mutex_);
@@ -112,7 +115,9 @@ Status ClientManager::AddClient(const ClientKey &clientId, bool shmEnabled, int 
     auto clientInfo = std::make_shared<ClientInfo>(socketFd, clientId, uniqueCount, shmEnabled, tenantId,
                                                    enableCrossNode, podName, std::move(deviceId), compatibilityVersion,
                                                    auxiliary);
-    clientInfo->SetLockId(lockId);
+    if (shmEnabled) {
+        clientInfo->SetLockId(lockId);
+    }
 
     // allocate pipeline queue
     if (shmEnabled && pipelineQueueId) {
@@ -315,19 +320,26 @@ Status ClientManager::CheckClientId(const ClientKey &clientId) const
     return Status::OK();
 }
 
-ClientManager::ClientManager()
+ClientManager::ClientManager() : primaryLockIdLimit_(FLAGS_max_client_num)
 {
     uint32_t i = 0;  // index start from 1
-    std::generate_n(std::inserter(freeLockIds_, freeLockIds_.begin()), FLAGS_max_client_num, [&i]() { return ++i; });
+    std::generate_n(std::inserter(freeLockIds_, freeLockIds_.begin()), GetMaxShmLockId(), [&i]() { return ++i; });
 }
 
-Status ClientManager::GetLockId(uint32_t &lockId)
+uint32_t ClientManager::GetMaxShmLockId() const
+{
+    return primaryLockIdLimit_ * SHM_LOCK_ID_CAPACITY_MULTIPLIER;
+}
+
+Status ClientManager::GetLockId(bool auxiliary, uint32_t &lockId)
 {
     std::lock_guard<std::mutex> l(lockMutex_);
-    if (freeLockIds_.empty()) {
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Client number upper to the limit");
+    const auto slot = auxiliary ? freeLockIds_.upper_bound(primaryLockIdLimit_) : freeLockIds_.begin();
+    if (slot == freeLockIds_.end() || (!auxiliary && *slot > primaryLockIdLimit_)) {
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, auxiliary ? "Auxiliary SHM session number upper to the limit"
+                                                              : "Client number upper to the limit");
     }
-    lockId = *freeLockIds_.begin();
+    lockId = *slot;
     INJECT_POINT("worker.clientManager.getLockId", [&lockId](uint32_t newLockId) {
         lockId = newLockId;
         return Status::OK();
@@ -343,7 +355,7 @@ void ClientManager::ReturnLockId(uint32_t lockId)
         return;
     }
     std::lock_guard<std::mutex> l(lockMutex_);
-    if (lockId > FLAGS_max_client_num) {
+    if (lockId > GetMaxShmLockId()) {
         LOG(WARNING) << "lock id " << lockId << " is invalid, ignore it.";
         return;
     }

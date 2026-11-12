@@ -441,8 +441,6 @@ global:
 | global.performance.enableP2pTransfer | bool | `false` | 是否开启异构对象传输协议支持点对点传输 |
 | global.performance.enableUrma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输，开启后worker启动时会自动预热URMA worker-worker连接 |
 | global.performance.urmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
-| global.performance.urmaFailoverSuccessRateRatio | double | `0.5` | 客户端 URMA 数据面成功率阈值，用于触发 worker failover 评估。取值范围 `[0.0, 1.0]`，设为 `0.0` 时禁用 URMA failover。仅在 `global.performance.enableUrma=true` 时生效 |
-| global.performance.urmaFailoverMinSampleCount | uint32 | `5` | 在每个 `client_dead_timeout_s` 窗口内进行 failover 评估所需的最小 URMA 数据面样本数，样本数不足时不触发 failover。仅在 `global.performance.enableUrma=true` 时生效 |
 | global.performance.enablePipelineH2d | bool | `false` | 是否开启 pipeline Host-to-Device（H2D）流水线传输，将主机侧数据准备与设备侧拷贝重叠以提升传输性能。仅在 `global.performance.enableUrma=true` 时生效，否则被忽略 |
 | global.performance.pipelineH2dThreadNum | int | `64` | pipeline H2D 工作线程数。取值范围 [8, 128]，超出该范围会在运行时回退为默认值 64 |
 | global.performance.enableTransportFallback | bool | `true` | 是否开启快速传输（urma/rdma）回退到tcp传输的功能，默认值为true |

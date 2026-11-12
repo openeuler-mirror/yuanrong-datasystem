@@ -204,7 +204,7 @@ void LEVEL1_UrmaNumaInflightBalanceTest::RunMultiClientOneWriteTenConcurrentRead
     for (size_t i = 0; i < CLIENT_COUNT; ++i) {
         // A successful Init is also the end-to-end check that the fixed client transport arenas were created.
         ConnectOptions options;
-        InitConnectOpt(i % WORKER_COUNT, options, 60000, true);
+        InitConnectOpt(i % WORKER_COUNT, options, 60000);
         options.fastTransportMemSize = CLIENT_TRANSPORT_MEMORY_SIZE;
         clients[i] = std::make_shared<KVClient>(options);
         DS_ASSERT_OK(clients[i]->Init());
