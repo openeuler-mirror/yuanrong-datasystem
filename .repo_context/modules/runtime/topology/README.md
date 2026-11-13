@@ -558,6 +558,18 @@
 - Confirmed Failure no longer restores Object Cache metadata from ETCD. The failure callback proceeds to fenced local
   object cleanup, while Stream Cache keeps its independent best-effort recovery path. Fast-restart recovery
   remains a separate workflow and are not changed by this failure-time policy.
+- Failure task materialization groups owner-change ranges by failed member and sends the same complete scope to every
+  `ACTIVE` member, including survivors that inherit none of those ranges. Each executor handles its own local copies;
+  future metadata ownership does not restrict cache cleanup. Scopes retain the existing per-task range limit,
+  deterministic task IDs, exact execution fences, and task/notify reconciliation. Object cleanup still checks the current
+  master and object snapshot before deletion and retries failed metadata checks asynchronously; task completion records
+  callback submission rather than completion of all asynchronous deletes. Stream metadata queries independently filter
+  by the requesting master, so wider task scopes do not authorize recovery at a non-owner. `INITIAL`, `JOINING`,
+  `PRE_LEAVING`, `LEAVING`, and `FAILED` members are not Failure task executors.
+- Local Failure selection collects matching owned keys in a temporary deque while iterating the object table, then
+  reserves the asynchronous request vector for the matched count and moves keys after releasing the table iterator's
+  write lock. Queued requests no longer reserve space for the entire object table. Selection summaries report scanned
+  and matched counts and elapsed time at most once every five seconds per process; each task still scans the table.
 - Scale-out and scale-in callbacks use bounded retries. Exhausted scale-out removes the joining member so it can restart
   and re-enter as `INITIAL`; exhausted scale-in proceeds through external bounded termination and Failure handling.
   Callback window exhaustion advances the operation record's attempt count and re-arms its next-attempt deadline with

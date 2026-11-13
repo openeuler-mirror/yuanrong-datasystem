@@ -261,10 +261,19 @@ Status TopologyTaskMaterializer::BuildExpected(const TopologySnapshot &latest, c
     ExpectedDerivedState built;
     const auto type = latest.GetActiveBatch()->type;
     const auto epoch = latest.GetActiveBatch()->epoch;
+    std::map<std::string, TopologyOwnerChange> failureScopes;
     for (const auto &change : plan.ownerChanges) {
         RETURN_IF_NOT_OK(ValidateOwnerChange(latest, type, change));
-        AppendTaskChunks(type, epoch, change, built.tasks);
+        if (type == TopologyChangeType::FAILURE) {
+            auto &scope = failureScopes[change.source->address];
+            scope.source = change.source;
+            scope.target = change.target;
+            scope.ranges.insert(scope.ranges.end(), change.ranges.begin(), change.ranges.end());
+        } else {
+            AppendTaskChunks(type, epoch, change, built.tasks);
+        }
     }
+    RETURN_IF_NOT_OK(AppendFailureTaskChunks(latest, epoch, failureScopes, built.tasks));
     for (auto &task : built.tasks) {
         const auto taskId = BuildTaskId(task);
         CHECK_FAIL_RETURN_STATUS(taskId.size() > ID_HASH_CHARS, K_RUNTIME_ERROR, "build task digest failed");
@@ -292,6 +301,25 @@ Status TopologyTaskMaterializer::BuildExpected(const TopologySnapshot &latest, c
         << " type_name=" << TopologyChangeTypeName(type) << " epoch=" << epoch
         << " task_count=" << built.tasks.size() << " notify_count=" << built.notifiesByAddress.size();
     expected = std::move(built);
+    return Status::OK();
+}
+
+Status TopologyTaskMaterializer::AppendFailureTaskChunks(
+    const TopologySnapshot &latest, uint64_t epoch, std::map<std::string, TopologyOwnerChange> &failureScopes,
+    std::vector<TopologyTask> &tasks) const
+{
+    for (auto &[failedAddress, scope] : failureScopes) {
+        (void)failedAddress;
+        RETURN_IF_NOT_OK(ValidateOwnerChange(latest, TopologyChangeType::FAILURE, scope));
+        for (const auto &member : latest.Members()) {
+            if (member.state != MemberState::ACTIVE) {
+                continue;
+            }
+            // Cached copies can exist on any survivor, independently of the next metadata owner.
+            scope.target = member.identity;
+            AppendTaskChunks(TopologyChangeType::FAILURE, epoch, scope, tasks);
+        }
+    }
     return Status::OK();
 }
 
