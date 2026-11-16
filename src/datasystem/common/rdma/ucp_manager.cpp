@@ -37,6 +37,10 @@
 #include <iostream>
 #include <shared_mutex>
 
+#ifdef WITH_TESTS
+#include "datasystem/common/inject/inject_point.h"
+#endif
+
 constexpr uint32_t DEFAULT_UCP_WORKER_NUM = 2;
 constexpr uint64_t MAX_MSG_SIZE = 512 * 1024 * 1024;
 constexpr char UCP_WORKER_NUM_ENV[] = "DATASYSTEM_UCP_SEND_WORKER_NUM";
@@ -316,15 +320,18 @@ Status UcpManager::CheckUcpConnectionStable(const std::string &hostAddress, cons
             return Status::OK();
         }
         oldInstanceId = instanceTable_[hostAddress];
+        if (!instanceId.empty() && !oldInstanceId.empty() && oldInstanceId != instanceId) {
+            instanceTable_[hostAddress] = instanceId;
+        }
     }
+#ifdef WITH_TESTS
+    INJECT_POINT_NO_RETURN("UcpManager.CheckUcpConnectionStable.AfterRead");
+#endif
     if (!instanceId.empty() && !oldInstanceId.empty() && oldInstanceId != instanceId) {
         LOG(WARNING) << "Ucp connection is stale; remove endpoints for " << hostAddress << "; reset instance id from "
                      << oldInstanceId << " to " << instanceId;
-        HostPort remoteAddress;
-        (void)remoteAddress.ParseString(hostAddress);
-        (void)RemoveEndpoint(remoteAddress);
-        std::unique_lock<std::mutex> lock(instanceTableMutex_);
-        instanceTable_[hostAddress] = instanceId;
+        // The instance was claimed under the table lock; do not erase it during endpoint cleanup.
+        (void)workerPool_->RemoveByIp(hostAddress);
     } else {
         VLOG(1) << "Successfully checked that ucp connection is stable";
     }

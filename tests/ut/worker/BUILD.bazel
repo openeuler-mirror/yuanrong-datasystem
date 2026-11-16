@@ -648,11 +648,23 @@ ds_cc_test(
     ],
 )
 
+ds_cc_test(
+    name = "async_rpc_request_manager_test",
+    srcs = ["object_cache/async_rpc_request_manager_test.cpp"],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/worker/object_cache:async_rpc_request_manager",
+        "//tests/ut:ut_common",
+    ],
+)
+
 # 汇总测试套件
 test_suite(
     name = "all_worker_tests",
     tests = [
         "async_resource_releaser_test",
+        "async_rpc_request_manager_test",
         "async_updatelocation_test",
         "authenticate_test",
         "client_manager_test",
