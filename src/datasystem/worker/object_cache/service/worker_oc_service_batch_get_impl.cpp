@@ -645,7 +645,8 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
     const std::string &address, Status &checkConnectStatus, std::list<GetObjectInfo> &infos,
     const std::shared_ptr<GetRequest> &request, const Status &status, BatchGetObjectRemoteRspPb &rspPb,
     std::vector<RpcMessage> &payloads, std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
-    std::unordered_set<std::string> &failedIds, std::list<GetObjectInfo> &failedInfos, bool &dataSizeChange)
+    std::unordered_set<std::string> &failedIds, std::list<GetObjectInfo> &failedInfos, bool &dataSizeChange,
+    bool countHit)
 {
     PerfPoint all(PerfKey::WORKER_HANDLE_BATCH_GET_RESPONSE);
     if (infos.empty()) {
@@ -732,7 +733,9 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
             iter++;
         }
         UpdateLastBatchError(subRc, lastRc);
-        if (subRc.IsOk()) {
+        // countHit is false only for NotifyRemoteGet scale-in migration pulls, which are invisible to clients
+        // and must not be counted in hit_info. Client and device remote pulls always keep counting.
+        if (subRc.IsOk() && countHit) {
             isFromL2 ? CacheHitInfo::Instance().IncL2Hit(1) : CacheHitInfo::Instance().IncRemoteHit(1);
         }
         point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_OTHER);
@@ -841,7 +844,7 @@ Status WorkerOcServiceGetImpl::SendBatchGetRemoteRequest(const std::string &addr
 Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(const std::string &address,
                                                               std::list<GetObjectInfo> &infos,
                                                               const std::shared_ptr<GetRequest> &request,
-                                                              BatchGetObjectOutput output)
+                                                              BatchGetObjectOutput output, bool countHit)
 {
     auto &successIds = output.successIds;
     auto &needRetryIds = output.needRetryIds;
@@ -894,7 +897,7 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(const std::string 
         point.Record();
         point.RecordAndReset(PerfKey::WORKER_BATCH_GET_HANDLE_RESPONSE);
         lastRc = ProcessBatchResponse(address, checkConnectStatus, infos, request, rc, rspPb, payloads, successIds,
-                                      needRetryIds, failedIds, failedMetas, dataSizeChange);
+                                      needRetryIds, failedIds, failedMetas, dataSizeChange, countHit);
     } while (dataSizeChange);
     return lastRc;
 }
@@ -902,11 +905,11 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(const std::string 
 Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteOnLock(const std::string &address,
                                                               std::list<GetObjectInfo> &infos,
                                                               const std::shared_ptr<GetRequest> &request,
-                                                              BatchGetObjectOutput output)
+                                                              BatchGetObjectOutput output, bool countHit)
 {
     PerfPoint point(PerfKey::WORKER_PULL_REMOTE_DATA);
     // Construct and send request for batch remote get.
-    return BatchGetObjectFromRemoteWorker(address, infos, request, output);
+    return BatchGetObjectFromRemoteWorker(address, infos, request, output, countHit);
 }
 
 Status WorkerOcServiceGetImpl::AggregateAllocateHelper(std::list<GetObjectInfo> &infos,

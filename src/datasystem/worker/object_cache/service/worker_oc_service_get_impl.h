@@ -723,8 +723,10 @@ private:
         std::optional<ProviderUbFailureDetailPb> *ubFailureDetail = nullptr;
     };
 
+    // countHit records hit_info counters on success; false only for NotifyRemoteGet migration pulls.
     Status BatchGetObjectFromRemoteOnLock(const std::string &address, std::list<GetObjectInfo> &infos,
-                                          const std::shared_ptr<GetRequest> &request, BatchGetObjectOutput output);
+                                          const std::shared_ptr<GetRequest> &request, BatchGetObjectOutput output,
+                                          bool countHit = true);
 
     /**
      * @brief Helper function to split query meta  based off address and threshold.
@@ -765,8 +767,10 @@ private:
      * @param[out] failedMetas Failed get object metas.
      * @return Status of the call.
      */
+    // countHit records hit_info counters on success; false only for NotifyRemoteGet migration pulls.
     Status BatchGetObjectFromRemoteWorker(const std::string &address, std::list<GetObjectInfo> &infos,
-                                          const std::shared_ptr<GetRequest> &request, BatchGetObjectOutput output);
+                                          const std::shared_ptr<GetRequest> &request, BatchGetObjectOutput output,
+                                          bool countHit = true);
 
     struct BatchGetRemoteRequestContext {
         const std::string &address;
@@ -884,12 +888,13 @@ private:
      * @param[out] failedMetas Failed get object metas.
      * @return Status of the call.
      */
+    // countHit records hit_info counters on success; false only for NotifyRemoteGet migration pulls.
     Status ProcessBatchResponse(const std::string &address, Status &checkConnectStatus, std::list<GetObjectInfo> &infos,
                                 const std::shared_ptr<GetRequest> &request, const Status &status,
                                 BatchGetObjectRemoteRspPb &rspPb, std::vector<RpcMessage> &payloads,
                                 std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
                                 std::unordered_set<std::string> &failedIds, std::list<GetObjectInfo> &failedInfos,
-                                bool &dataSizeChange);
+                                bool &dataSizeChange, bool countHit = true);
 
     /**
      * @brief Try to get object from L2 cache when object not found in other worker.
