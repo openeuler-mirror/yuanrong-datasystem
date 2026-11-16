@@ -951,15 +951,11 @@ private:
 
     Status WarmupOneClientWorkerConnection(const std::string &key, const std::string &value,
                                            const SetParam &setParam, TimeoutDuration &warmupBudget,
-                                           std::vector<Optional<Buffer>> &buffers,
-                                           std::vector<std::string> &warmupKeys);
+                                           std::vector<Optional<Buffer>> &buffers);
 
     Status WarmupSameNodeClientWorkerConnections(const std::string &keyPrefix, const std::string &value,
                                                  const SetParam &setParam, TimeoutDuration &warmupBudget,
-                                                 std::vector<Optional<Buffer>> &buffers,
-                                                 std::vector<std::string> &warmupKeys, size_t &warmedCount);
-
-    void CleanupWarmupObjects(const std::vector<std::string> &warmupKeys);
+                                                 std::vector<Optional<Buffer>> &buffers, size_t &warmedCount);
 
     Status Set(const std::string &key, const StringView &val, const SetParam &setParam,
                int32_t requestTimeoutMs);

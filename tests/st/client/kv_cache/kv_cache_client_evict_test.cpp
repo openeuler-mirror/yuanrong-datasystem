@@ -36,6 +36,7 @@
 
 #include "client/object_cache/oc_client_common.h"
 #include "common.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/file_util.h"
@@ -532,7 +533,24 @@ public:
 
     void SetUp() override
     {
-        KVCacheClientEvictTest::SetUp();
+        ExternalClusterTest::SetUp();
+
+        std::string suiteName;
+        std::string caseName;
+        GetCurTestName(suiteName, caseName);
+        const bool skipWarmup = caseName == "TestEvictDeletePathGetNotFoundThenRepublish"
+                                || caseName == "TestEvictDeletePathSetNxDuringResidualMetaWindow";
+        constexpr char skipWarmupInject[] = "ObjectClientImpl.ClientWorkerWarmup.skip";
+        if (skipWarmup) {
+            DS_ASSERT_OK(inject::Set(skipWarmupInject, "call()"));
+        }
+        Raii restoreWarmup([&]() {
+            if (skipWarmup) {
+                (void)inject::Clear(skipWarmupInject);
+            }
+        });
+
+        InitTestKVClientWithTenant(0, client_);
         InitTestKVClientWithTenant(1, client1_);
     }
 

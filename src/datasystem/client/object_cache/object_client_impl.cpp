@@ -5019,8 +5019,7 @@ void ObjectClientImpl::WarmupClientWorkerConnection()
 
 Status ObjectClientImpl::WarmupOneClientWorkerConnection(const std::string &key, const std::string &value,
                                                          const SetParam &setParam, TimeoutDuration &warmupBudget,
-                                                         std::vector<Optional<Buffer>> &buffers,
-                                                         std::vector<std::string> &warmupKeys)
+                                                         std::vector<Optional<Buffer>> &buffers)
 {
     int32_t remainingMs = static_cast<int32_t>(warmupBudget.CalcRealRemainingTime());
     CHECK_FAIL_RETURN_STATUS(remainingMs > 0, K_RPC_DEADLINE_EXCEEDED,
@@ -5030,7 +5029,6 @@ Status ObjectClientImpl::WarmupOneClientWorkerConnection(const std::string &key,
         LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] set failed, key=%s, status=%s", key, rc.ToString());
         return rc;
     }
-    warmupKeys.emplace_back(key);
     INJECT_POINT_NO_RETURN("ObjectClientImpl.ClientWorkerWarmup.SetDone");
     buffers.clear();
     remainingMs = static_cast<int32_t>(warmupBudget.CalcRealRemainingTime());
@@ -5070,8 +5068,7 @@ Status EvaluateSameNodeWarmupResult(const std::vector<HostPort> &availableWorker
 
 Status ObjectClientImpl::WarmupSameNodeClientWorkerConnections(
     const std::string &keyPrefix, const std::string &value, const SetParam &setParam,
-    TimeoutDuration &warmupBudget, std::vector<Optional<Buffer>> &buffers,
-    std::vector<std::string> &warmupKeys, size_t &warmedCount)
+    TimeoutDuration &warmupBudget, std::vector<Optional<Buffer>> &buffers, size_t &warmedCount)
 {
     constexpr size_t maxWarmedCount = 20;
     std::unordered_set<HostPort> warmedWorkers;
@@ -5103,7 +5100,7 @@ Status ObjectClientImpl::WarmupSameNodeClientWorkerConnections(
         } while (rc.IsOk() && warmedWorkers.find(selectedWorker) != warmedWorkers.end()
                  && warmupBudget.CalcRealRemainingTime() > 0);
         if (rc.IsOk()) {
-            rc = WarmupOneClientWorkerConnection(key, value, setParam, warmupBudget, buffers, warmupKeys);
+            rc = WarmupOneClientWorkerConnection(key, value, setParam, warmupBudget, buffers);
         }
         if (rc.IsOk()) {
             warmedWorkers.emplace(selectedWorker);
@@ -5116,20 +5113,6 @@ Status ObjectClientImpl::WarmupSameNodeClientWorkerConnections(
     RETURN_RUNTIME_ERROR_IF_NULL(routing);
     const auto availableWorkers = routing->GetAvailableSameNodeWorkers();
     return EvaluateSameNodeWarmupResult(availableWorkers, warmedWorkers, maxWarmedCount, firstFailure);
-}
-
-void ObjectClientImpl::CleanupWarmupObjects(const std::vector<std::string> &warmupKeys)
-{
-    if (warmupKeys.empty()) {
-        return;
-    }
-    std::vector<std::string> failedObjectKeys;
-    auto rc = Delete(warmupKeys, failedObjectKeys);
-    INJECT_POINT_NO_RETURN("ObjectClientImpl.ClientWorkerWarmup.DeleteDone");
-    if (rc.IsError() || !failedObjectKeys.empty()) {
-        LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] cleanup failed, key=%s, status=%s, failed=%s",
-                                     warmupKeys.front(), rc.ToString(), VectorToString(failedObjectKeys));
-    }
 }
 
 Status ObjectClientImpl::DoWarmupClientWorkerConnection()
@@ -5147,9 +5130,6 @@ Status ObjectClientImpl::DoWarmupClientWorkerConnection()
         static const std::string sameNodeValue(256 * 1024, '0');
         static const std::string metaOwnerValue = "0";
         const auto &sameNodeWarmupValue = IsUrmaEnabled() ? sameNodeValue : metaOwnerValue;
-        std::vector<std::string> warmupKeys;
-        warmupKeys.reserve(sameNodeCount + metaOwnerCount);
-        Raii cleanupWarmupObjects([this, &warmupKeys]() { CleanupWarmupObjects(warmupKeys); });
         const auto savedPolicy = dataPlacementPolicy_;
         Raii restorePolicy([&]() { dataPlacementPolicy_ = savedPolicy; });
         SetParam setParam;
@@ -5166,19 +5146,17 @@ Status ObjectClientImpl::DoWarmupClientWorkerConnection()
         if (enableLocalCache_) {
             for (size_t i = 0; i < sameNodeCount; ++i) {
                 RETURN_IF_NOT_OK(WarmupOneClientWorkerConnection(
-                    warmupKeyPrefix + "_" + std::to_string(i), sameNodeWarmupValue, setParam, warmupBudget, buffers,
-                    warmupKeys));
+                    warmupKeyPrefix + "_" + std::to_string(i), sameNodeWarmupValue, setParam, warmupBudget, buffers));
             }
         } else {
             sameNodeRc = WarmupSameNodeClientWorkerConnections(warmupKeyPrefix, sameNodeWarmupValue, setParam,
-                                                               warmupBudget, buffers, warmupKeys, warmedCount);
+                                                               warmupBudget, buffers, warmedCount);
         }
         // Phase 2: meta-owner (hash-ring owner, may be cross-node RPC).
         dataPlacementPolicy_ = client::DataPlacementPolicy::PREFERRED_META_OWNER;
         for (size_t i = 0; i < metaOwnerCount; ++i) {
             RETURN_IF_NOT_OK(WarmupOneClientWorkerConnection(
-                warmupKeyPrefix + "_m" + std::to_string(i), metaOwnerValue, setParam, warmupBudget, buffers,
-                warmupKeys));
+                warmupKeyPrefix + "_m" + std::to_string(i), metaOwnerValue, setParam, warmupBudget, buffers));
         }
         LOG(INFO) << FormatString("[CLIENT_WORKER_WARMUP] finished, prefix=%s, sameNode=%zu, metaOwner=%zu",
                                   warmupKeyPrefix, warmedCount, metaOwnerCount);
