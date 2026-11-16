@@ -19,6 +19,7 @@
 #include <cmath>
 
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/flags/eviction_heat.h"
 #include "datasystem/common/flags/eviction_watermark.h"
@@ -26,8 +27,6 @@
 #include "datasystem/common/util/validator.h"
 
 DS_DECLARE_string(worker_address);
-DS_DECLARE_uint32(node_timeout_s);
-DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_string(eviction_strategy);
 DS_DECLARE_double(eviction_heat_half_life_primary_s);
 DS_DECLARE_double(eviction_heat_half_life_local_s);
@@ -42,66 +41,7 @@ DS_DECLARE_uint32(rebalance_heat_source_usage_percent_low);
 DS_DECLARE_uint32(rebalance_heat_target_usage_percent);
 DS_DECLARE_uint32(rebalance_heat_target_hot_ratio_percent);
 
-namespace {
-constexpr uint32_t kMinNodeTimeoutS = 3;
-constexpr uint32_t kMinNodeDeadTimeoutS = 3;
-
-uint32_t AdjustNodeDeadTimeoutS(uint32_t value)
-{
-    return value < kMinNodeDeadTimeoutS ? kMinNodeDeadTimeoutS : value;
-}
-
-}  // namespace
-
 namespace datasystem {
-
-bool StrToUint32(const std::string &str, uint32_t &result)
-{
-    try {
-        size_t pos = 0;
-        unsigned long value = std::stoul(str, &pos);
-        if (pos != str.size()) {
-            return false;
-        }
-        if (value > std::numeric_limits<uint32_t>::max()) {
-            return false;
-        }
-
-        result = static_cast<uint32_t>(value);
-        return true;
-    } catch (const std::invalid_argument &) {
-        return false;
-    } catch (const std::out_of_range &) {
-        return false;
-    }
-    return true;
-}
-
-bool WorkerFlagValidateSpecial(const std::string &flagName, const std::string &newVal)
-{
-    uint32_t result = 0;
-    if (flagName == "node_dead_timeout_s" && StrToUint32(newVal, result)) {
-        uint32_t adjusted = AdjustNodeDeadTimeoutS(result);
-        if (!WorkerValidateNodeDeadTimeoutS(result)) {
-            return true;
-        }
-        if (adjusted != result) {
-            FLAGS_node_dead_timeout_s = adjusted;
-            return true;
-        }
-    }
-    return false;
-}
-
-void AdjustNodeTimeoutFlags()
-{
-    if (FLAGS_node_timeout_s < kMinNodeTimeoutS) {
-        FLAGS_node_timeout_s = kMinNodeTimeoutS;
-    }
-    if (FLAGS_node_dead_timeout_s < kMinNodeDeadTimeoutS) {
-        FLAGS_node_dead_timeout_s = kMinNodeDeadTimeoutS;
-    }
-}
 
 namespace {
 bool ValidateFiniteHeatFlag(const char *flagName, double value, bool allowZero)
@@ -228,15 +168,6 @@ bool ValidateWatermarkFlags()
         return false;
     }
     RefreshRebalanceHeatFactors();
-    return true;
-}
-
-bool WorkerValidateNodeDeadTimeoutS(const uint32_t value)
-{
-    if (value <= FLAGS_node_timeout_s) {
-        LOG(ERROR) << "The value of node_dead_timeout_s must be greater than the value of node_timeout_s.";
-        return false;
-    }
     return true;
 }
 

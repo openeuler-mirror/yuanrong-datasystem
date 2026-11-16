@@ -42,7 +42,7 @@ public:
         opts.numEtcd = 1;
         opts.numOBS = 1;
         opts.workerGflagParams =
-            "-shared_memory_size_mb=5120 -node_timeout_s=1 -node_dead_timeout_s=2 -v=2 ";
+            "-shared_memory_size_mb=5120 -node_timeout_s=3 -node_dead_timeout_s=6 -v=2 ";
         opts.waitWorkerReady = false;
     }
     void SetUp() override

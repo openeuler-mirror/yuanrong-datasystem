@@ -241,9 +241,9 @@ public:
         opts.waitAfterStart = false;
         opts.disableRocksDB = true;
         opts.workerGflagParams =
-            " -shared_memory_size_mb=64 -node_timeout_s=2 -node_dead_timeout_s=4"
+            " -shared_memory_size_mb=64 -node_timeout_s=3 -node_dead_timeout_s=6"
             " -enable_reconciliation=false";
-        opts.coordinatorGflagParams = " -v=1 -node_dead_timeout_s=4";
+        opts.coordinatorGflagParams = " -v=1 -node_timeout_s=3 -node_dead_timeout_s=6";
         coordinatorCount_ = opts.numCoordinators;
     }
 
@@ -1273,7 +1273,7 @@ public:
         opts.workerGflagParams =
             " -shared_memory_size_mb=64 -node_timeout_s=8 -node_dead_timeout_s=12"
             " -enable_reconciliation=true";
-        opts.coordinatorGflagParams = " -v=1 -node_dead_timeout_s=12";
+        opts.coordinatorGflagParams = " -v=1 -node_timeout_s=3 -node_dead_timeout_s=12";
         coordinatorCount_ = opts.numCoordinators;
     }
 };
@@ -2500,7 +2500,7 @@ public:
             " -shared_memory_size_mb=64 -node_timeout_s=3 -node_dead_timeout_s=30"
             " -enable_reconciliation=true -client_reconnect_wait_s=5"
             " -ipc_through_shared_memory=false -host_id_env_name=JD_HOST_IP";
-        opts.coordinatorGflagParams = " -v=1 -node_dead_timeout_s=30";
+        opts.coordinatorGflagParams = " -v=1 -node_timeout_s=3 -node_dead_timeout_s=30";
     }
 
     void TearDown() override

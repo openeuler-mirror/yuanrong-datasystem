@@ -185,6 +185,12 @@ global:
     # When enabled, requests whose RPC sub-phases exceed this threshold will include
     # a latencySummary in the access log.
     slowLogRpcSlowerThan: 5000
+    # Client-side in-process processing latency threshold (microseconds) for slow-log.
+    # Default 2000 (2ms). Accepts a positive integer. 0 means disabled.
+    clientSlowLogProcessSlowerThan: 2000
+    # Client-side cross-process RPC latency threshold (microseconds) for slow-log.
+    # Default 5000 (5ms). Accepts a positive integer. 0 means disabled.
+    clientSlowLogRpcSlowerThan: 5000
     # Prefix of log filename. Only letters, digits, and underscores are allowed when non-empty.
     logFilename: ""
     # Interval between logging stream metrics
@@ -344,11 +350,14 @@ global:
     startupProbeTimeoutS: 390
     # Client reconnect wait seconds, default value is 5 seconds. (Must be greater than 0)
     clientReconnectWaitS: 10
-    # Maximum time interval for the worker to determine client death, value range: [3, UINT64_MAX).
+    # Maximum time interval for the worker to determine client death, value range: [3, UINT64_MAX/1000).
     clientDeadTimeoutS: 120
-    # Maximum time interval before a node is considered lost, the unit is second. (Must be greater than or equal to 1)
+    # Maximum time interval before a node is considered lost, the unit is second.
+    # (Must be greater than or equal to 3, otherwise startup fails)
     nodeTimeoutS: 60
-    # Maximum time interval for the etcd to determine node death, the unit is second. (Must be greater than nodeTimeoutS)
+    # Maximum time interval before a node is considered dead, shared by heartbeat-based death
+    # detection and etcd keepalive timeout, the unit is second.
+    # (Must be greater than nodeTimeoutS and greater than or equal to 3, otherwise startup fails)
     nodeDeadTimeoutS: 300
     # Control whether to enable reconciliation, default is true.
     enableReconciliation: true
@@ -418,6 +427,12 @@ global:
     urmaFailoverSuccessRateRatio: 0.5
     # Minimum URMA data-plane samples per client_dead_timeout_s window before failover evaluation.
     urmaFailoverMinSampleCount: 5
+    # Time-to-live (seconds) for URMA orphan connections before they are swept.
+    urmaOrphanConnTtlS: 600
+    # Interval (seconds) between URMA orphan connection sweeps.
+    urmaOrphanSweepIntervalS: 60
+    # Maximum number of URMA orphan connections swept per batch.
+    urmaOrphanSweepBatch: 100
     # Enable pipeline Host-to-Device (H2D) transfer to overlap host-side data preparation
     # with device-side copies. Only effective when enableUrma is true; otherwise ignored.
     enablePipelineH2d: false

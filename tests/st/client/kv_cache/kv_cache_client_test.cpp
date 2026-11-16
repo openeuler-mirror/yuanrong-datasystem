@@ -118,7 +118,7 @@ constexpr size_t MMAP_SWITCH_VALUE_SIZE = 1024UL * 1024UL;
 constexpr char DATASYSTEM_MEMFD_MAP_NAME[] = "memfd:datasystem";
 constexpr char MMAP_SWITCH_WORKER_GFLAGS[] =
     "-shared_memory_size_mb=25 -v=1 -log_monitor=true -max_client_num=2000 "
-    "-node_timeout_s=1 -node_dead_timeout_s=2 -client_reconnect_wait_s=1";
+    "-node_timeout_s=3 -node_dead_timeout_s=6 -client_reconnect_wait_s=1";
 constexpr char MMAP_SWITCH_HOST_ID_ENV_PREFIX[] = "mmap_switch_host_id_env";
 constexpr char MMAP_SWITCH_HOST_ID_VALUE_PREFIX[] = "mmap_switch_host_id";
 
@@ -2784,7 +2784,7 @@ public:
     {
         opts.numWorkers = 2;
         opts.numEtcd = 1;
-        opts.workerGflagParams = "-shared_memory_size_mb=100 -v=2 -log_monitor=true -node_timeout_s=2";
+        opts.workerGflagParams = "-shared_memory_size_mb=100 -v=2 -log_monitor=true -node_timeout_s=3";
     }
 
     void SetUp() override
@@ -3835,7 +3835,7 @@ public:
         // Shorten cluster and client heartbeat windows so the test can observe topology changes quickly.
         opts.workerGflagParams =
             "-shared_memory_size_mb=25 -v=1 -log_monitor=true -max_client_num=2000 "
-            "-node_timeout_s=1 -node_dead_timeout_s=2 -client_reconnect_wait_s=1";
+            "-node_timeout_s=3 -node_dead_timeout_s=6 -client_reconnect_wait_s=1";
 
         std::string hostIp = "127.0.0.1";
         for (size_t i = 0; i < opts.numWorkers; i++) {

@@ -398,6 +398,12 @@ ArenaManager::ArenaManager(bool populate, bool scaling, ssize_t decayMs)
     if (populate || FLAGS_enable_huge_tlb || NeedRegisterWholeArena()) {
         // Adding multiple arenas per tenant allows parallel physical memory binding operations across different arenas.
         // For scenarios requiring pre-allocation of physical memory, a single arena is sufficient.
+        if (FLAGS_arena_per_tenant != 1 || FLAGS_enable_fallocate) {
+            LOG(WARNING) << FormatString(
+                "Physical-memory pre-allocation forces arena_per_tenant=1 (was %u) and enable_fallocate=false (was "
+                "%d).",
+                FLAGS_arena_per_tenant, static_cast<int>(FLAGS_enable_fallocate));
+        }
         FLAGS_arena_per_tenant = 1;
         // Since physical memory has already been pre-allocated, there is no need to trigger fallocate during the commit
         // phase.

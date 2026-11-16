@@ -98,6 +98,14 @@ public:
     void LogConfigApiFailed(const std::string &operation, const std::string &reason);
 
     /**
+     * @brief Mask credential-like flag values before writing them into logs.
+     * @param[in] flagName Flag name.
+     * @param[in] value Raw flag value.
+     * @return "xxx" when flagName is in the sensitive-flag list; value otherwise.
+     */
+    static std::string MaskSensitiveFlagValue(const std::string &flagName, const std::string &value);
+
+    /**
      * @brief Get operation audit log file path.
      * @return ${log_dir}/${log_filename}_operation.log
      */
@@ -143,6 +151,13 @@ private:
     std::string logPath_;
     mutable std::mutex mutex_;
 };
+
+/**
+ * @brief Whether the given gflag name is in the sensitive-flag list (credential-like flags).
+ * @param[in] flagName Flag name without leading dashes.
+ * @return True when the flag value must be masked in logs or erased from argv.
+ */
+bool IsSensitiveFlagName(const std::string &flagName);
 
 }  // namespace datasystem
 

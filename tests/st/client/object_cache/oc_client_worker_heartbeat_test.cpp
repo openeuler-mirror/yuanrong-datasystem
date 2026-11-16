@@ -35,7 +35,7 @@ public:
     {
         opts.numWorkers = WORKER_NUM;
         opts.numEtcd = 1;
-        opts.workerGflagParams = "-node_timeout_s=1 -enable_reconciliation=true";
+        opts.workerGflagParams = "-node_timeout_s=3 -enable_reconciliation=true";
         opts.disableRocksDB = false;
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(500)");
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)");
@@ -156,7 +156,7 @@ public:
         opts.numWorkers = 1;
         opts.numEtcd = 1;
         opts.workerGflagParams =
-            "-node_timeout_s=1 -rocksdb_write_mode=none -enable_reconciliation=false";
+            "-node_timeout_s=3 -rocksdb_write_mode=none -enable_reconciliation=false";
         opts.disableRocksDB = true;
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(500)");
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)");
@@ -200,8 +200,8 @@ public:
         opts.workerGflagParams =
             " -shared_memory_size_mb=64 -v=1"
             " -ipc_through_shared_memory=true"
-            " -node_timeout_s=1"
-            " -node_dead_timeout_s=2 ";
+            " -node_timeout_s=3"
+            " -node_dead_timeout_s=6 ";
 
         // Assign distinct hostIds so ServiceDiscovery can distinguish same-node vs remote workers.
         std::string hostIp = "127.0.0.1";

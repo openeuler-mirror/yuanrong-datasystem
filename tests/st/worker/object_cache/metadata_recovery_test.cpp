@@ -33,8 +33,8 @@ namespace st {
 namespace {
 constexpr int WAIT_GET_TIMEOUT_MS = 20'000;
 constexpr int WAIT_GET_INTERVAL_MS = 200;
-constexpr uint64_t NODE_TIMEOUT_S = 1;
-constexpr uint64_t NODE_DEAD_TIMEOUT_S = 3;
+constexpr uint64_t NODE_TIMEOUT_S = 3;
+constexpr uint64_t NODE_DEAD_TIMEOUT_S = 6;
 constexpr int S2MS = 1000;
 }  // namespace
 
@@ -54,7 +54,8 @@ public:
            << "-enable_l2_cache_fallback=false";
         opts.workerGflagParams = ss.str();
         if (useCoordinator) {
-            opts.coordinatorGflagParams = "-node_dead_timeout_s=" + std::to_string(NODE_DEAD_TIMEOUT_S);
+            opts.coordinatorGflagParams = "-node_timeout_s=" + std::to_string(NODE_TIMEOUT_S) +
+                                          " -node_dead_timeout_s=" + std::to_string(NODE_DEAD_TIMEOUT_S);
         }
     }
 

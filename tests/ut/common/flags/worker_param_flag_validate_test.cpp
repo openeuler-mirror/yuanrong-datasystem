@@ -142,6 +142,32 @@ TEST_F(WorkerParamFlagValidateTest, BrpcServerThreadsRejectsOutOfRange)
     ASSERT_FLAG_ACCEPTED(brpc_server_num_threads, "0", 0);
     ASSERT_FLAG_ACCEPTED(brpc_server_num_threads, "4096", 4096);
 }
+
+// node_timeout_s/node_dead_timeout_s must pass the strict startup validation.
+TEST_F(WorkerParamFlagValidateTest, ValidateNodeTimeoutFlagsRejectsInvalidCombinations)
+{
+    auto savedNodeTimeoutS = FLAGS_node_timeout_s;
+    auto savedNodeDeadTimeoutS = FLAGS_node_dead_timeout_s;
+
+    FLAGS_node_timeout_s = 60;
+    FLAGS_node_dead_timeout_s = 300;
+    EXPECT_TRUE(ValidateNodeTimeoutFlags());
+
+    FLAGS_node_timeout_s = 2;
+    FLAGS_node_dead_timeout_s = 300;
+    EXPECT_FALSE(ValidateNodeTimeoutFlags());
+
+    FLAGS_node_timeout_s = 300;
+    FLAGS_node_dead_timeout_s = 60;
+    EXPECT_FALSE(ValidateNodeTimeoutFlags());
+
+    FLAGS_node_timeout_s = 60;
+    FLAGS_node_dead_timeout_s = 2;
+    EXPECT_FALSE(ValidateNodeTimeoutFlags());
+
+    FLAGS_node_timeout_s = savedNodeTimeoutS;
+    FLAGS_node_dead_timeout_s = savedNodeDeadTimeoutS;
+}
 }  // namespace
 }  // namespace ut
 }  // namespace datasystem

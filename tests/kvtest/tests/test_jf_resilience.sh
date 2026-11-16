@@ -122,6 +122,7 @@ cat > "$ROOT_DIR/coordinator_config.json" << EOF
     "coordinator_raft_heartbeat_interval_ms": {"value": "500"},
     "coordinator_raft_election_timeout_ms": {"value": "3000"},
     "log_dir": {"value": "$ROOT_DIR/coord/log"},
+    "node_timeout_s": {"value": "3"},
     "node_dead_timeout_s": {"value": "6"}
 }
 EOF

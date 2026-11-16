@@ -373,8 +373,8 @@ protected:
     {
         opts.numEtcd = 1;
         opts.numWorkers = 2;
-        opts.workerGflagParams = " -shared_memory_size_mb=100 -authorization_enable=false -node_timeout_s=1 "
-                                  "-node_dead_timeout_s=2 ";
+        opts.workerGflagParams = " -shared_memory_size_mb=100 -authorization_enable=false -node_timeout_s=3 "
+                                  "-node_dead_timeout_s=6 ";
         opts.systemAccessKey = "";
         opts.systemSecretKey = "";
     }

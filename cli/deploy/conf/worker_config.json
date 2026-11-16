@@ -265,11 +265,11 @@
     },
     "node_timeout_s": {
         "value": "60",
-        "description": "Maximum time interval before a node is considered lost. must be greater than or equal to 1."
+        "description": "Maximum time interval before a node is considered lost. must be greater than or equal to 3, otherwise startup fails."
     },
     "node_dead_timeout_s": {
         "value": "300",
-        "description": "Maximum time interval for the etcd to determine node death."
+        "description": "Maximum time interval before a node is considered dead, shared by heartbeat-based death detection and etcd keepalive timeout. must be greater than node_timeout_s and greater than or equal to 3, otherwise startup fails; dynamic update with an invalid value is rejected. Dynamic update takes effect in the worker process only; the coordinator process does not support dynamic update of this parameter and requires a restart."
     },
     "arena_per_tenant": {
         "value": "16",
@@ -285,7 +285,7 @@
     },
     "client_dead_timeout_s": {
         "value": "120",
-        "description": "Maximum time interval for the worker to determine client death, Value range: [3, UINT64_MAX)."
+        "description": "Maximum time interval for the worker to determine client death, Value range: [3, UINT64_MAX/1000)."
     },
     "monitor_config_file": {
         "value": "./datasystem/config/datasystem.config",

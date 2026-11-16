@@ -22,8 +22,10 @@
 
 #include <chrono>
 #include <functional>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/util/status_helper.h"
@@ -125,6 +127,10 @@ public:
 
     /**
      * @brief Dynamically update the value of the flag parameter.
+     * @details All-or-nothing: every flag in the batch is pre-validated (dry-run, no writes)
+     *          before any value is committed; if any flag fails validation, nothing is applied
+     *          and K_INVALID is returned. A summary log reports the updated, skipped, and failed
+     *          flags of the batch. Flags must be dynamically modifiable.
      * @param[in] flagMap The flag parameter and value parsed from the configuration file
      * @return K_OK on success; the error code otherwise.
      */
@@ -137,13 +143,17 @@ public:
     void TrimSpace(std::string &value);
 
     /**
-     * @brief  Set handler to validateSpecial.
+     * @brief  Set the reject-only special-validation handler for dynamic flag updates.
+     * @details Contract: the handler returns true to REJECT the proposed value (the whole update batch then
+     *          fails validation) and false to accept it. The handler must not modify flag values by itself;
+     *          clamping-style handlers are not supported by this injection point.
      * @param[in] validator  Value to set.
      */
     void SetValidateSpecial(const std::function<bool(const std::string &, const std::string &)> &validator);
 
     /**
      * @brief Dry-run special validation for one pending dynamic update.
+     * @details Assumes the reject-only contract documented on SetValidateSpecial.
      * @param[in] flagMap Pending flag updates.
      * @param[in] flagName Flag name to validate.
      * @param[in] newVal Proposed new value.
@@ -166,11 +176,6 @@ public:
 
 private:
     using clock = std::chrono::steady_clock;
-
-    const std::unordered_set<std::string> excludeGflags_{ "system_access_key", "system_secret_key",
-                                                          "system_data_key",   "sc_encrypt_secret_key",
-                                                          "tenant_access_key", "tenant_secret_key",
-                                                          "obs_access_key",    "obs_secret_key" };
 
     // Setting the interval for checking the configuration file. (Default: 10s)
     const uint64_t TRIGGER_CONFIG_CHECK_NANO_INTERVAL = 10UL * 1000UL * 1000UL * 1000UL;
@@ -211,10 +216,49 @@ private:
     /// @return True if the special validation passes.
     bool ValidateSpecial(const std::string &flagName, const std::string &newVal);
 
+    /// @brief Outcome record for one flag in a dynamic update batch.
+    struct FlagUpdateRecord {
+        std::string name;
+        /// PASSED records carry masked "old-->new"; skipped/failed records carry the reason.
+        std::string detail;
+    };
+
+    /// @brief Outcome of the dry-run validation pass for one dynamic update batch.
+    struct FlagBatchValidation {
+        std::vector<FlagUpdateRecord> passed;
+        std::vector<FlagUpdateRecord> skipped;
+        std::vector<FlagUpdateRecord> failed;
+        bool hasSamplerFlags{ false };
+    };
+
+    static void SortRecordsByName(std::vector<FlagUpdateRecord> &records);
+    static std::string JoinPassedRecords(const std::vector<FlagUpdateRecord> &records);
+    static std::string JoinRecordsWithReason(const std::vector<FlagUpdateRecord> &records);
+
+    Status ValidateFlagBatch(const std::map<std::string, std::string> &orderedFlagMap,
+                             const std::unordered_map<std::string, std::string> &flagMap,
+                             FlagBatchValidation &validated);
+
+    void ValidateOneFlag(const std::unordered_map<std::string, std::string> &flagMap, const std::string &flagName,
+                         const std::string &newVal, FlagBatchValidation &validated);
+
+    Status CommitFlagBatch(const std::unordered_map<std::string, std::string> &flagMap,
+                           const std::map<std::string, std::string> &orderedFlagMap,
+                           const FlagBatchValidation &validated);
+
     Status UpdateSingleFlag(const std::unordered_map<std::string, std::string> &flagMap,
                             const std::string &flagName, const std::string &newVal);
 
-    void RollbackFlagValues(const std::unordered_map<std::string, std::string> &prevVals);
+    /// @brief Restore the previous values of already-committed flags; returns the names that failed to restore.
+    std::vector<std::string> RollbackFlagValues(const std::unordered_map<std::string, std::string> &prevVals);
+
+    /// @brief Roll back the partially committed batch, log the true rollback outcome, and return the failure
+    ///        status: failStatus on a clean rollback, K_INVALID carrying the rollback failure detail otherwise.
+    Status AbortCommit(const std::string &reason, const std::unordered_map<std::string, std::string> &prevVals,
+                       const Status &failStatus);
+
+    /// @brief Mask sensitive flag values (OperationLogger sensitive list) before writing them into summary logs.
+    std::string MaskFlagValue(const std::string &flagName, const std::string &value) const;
 
     bool ValidateAndCommitSamplerFlags(const std::unordered_map<std::string, std::string> &flagMap);
 

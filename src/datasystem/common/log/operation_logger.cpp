@@ -38,18 +38,20 @@ DS_DECLARE_string(log_filename);
 DS_DECLARE_uint32(max_log_size);
 
 namespace datasystem {
+
+// Backs OperationLogger::MaskSensitiveFlagValue, IsSensitiveFlagName, and the masking helpers below.
+const std::unordered_set<std::string> kSensitiveFlagNames = {
+    "system_access_key", "system_secret_key", "system_data_key", "sc_encrypt_secret_key",
+    "tenant_access_key", "tenant_secret_key", "obs_access_key", "obs_secret_key",
+    "etcd_password", "etcd_key", "yuanrong_iam_passphrase", "yuanrong_iam_key",
+};
+
 namespace {
 constexpr char OPERATION_LOGGER_NAME[] = "ds_operation_logger";
 constexpr uint32_t HIGHEST_MAX_LOG_SIZE = 4096;
 constexpr std::size_t HIGHEST_SPDLOG_MAX_FILE_NUM = 200000;
 constexpr std::size_t K_GFLAG_NAME_PREFIX_LEN = 2;
 constexpr char ROLE_CLIENT[] = "client";
-
-const std::unordered_set<std::string> kSensitiveFlagNames = {
-    "system_access_key", "system_secret_key", "system_data_key", "sc_encrypt_secret_key",
-    "tenant_access_key", "tenant_secret_key", "obs_access_key", "obs_secret_key",
-    "etcd_password", "etcd_key", "yuanrong_iam_passphrase", "yuanrong_iam_key",
-};
 
 uint32_t GetMaxLogSizeMb()
 {
@@ -82,14 +84,6 @@ std::string FormatMaskedFlagLine(const std::string &line)
         return line + '\n';
     }
     return "--" + flagName + "=xxx\n";
-}
-
-std::string MaskSensitiveFlagValue(const std::string &flagName, const std::string &value)
-{
-    if (kSensitiveFlagNames.count(flagName) == 0) {
-        return value;
-    }
-    return "xxx";
 }
 
 std::string MaskSensitiveFlagsSnapshot(const std::string &snapshot)
@@ -153,6 +147,19 @@ std::string FlagNameFromLine(const std::string &line)
     return line.substr(K_GFLAG_NAME_PREFIX_LEN, eqPos - K_GFLAG_NAME_PREFIX_LEN);
 }
 }  // namespace
+
+std::string OperationLogger::MaskSensitiveFlagValue(const std::string &flagName, const std::string &value)
+{
+    if (kSensitiveFlagNames.count(flagName) == 0) {
+        return value;
+    }
+    return "xxx";
+}
+
+bool IsSensitiveFlagName(const std::string &flagName)
+{
+    return kSensitiveFlagNames.count(flagName) > 0;
+}
 
 OperationLogger &OperationLogger::Instance()
 {
@@ -262,8 +269,8 @@ void OperationLogger::LogConfigChanged(const std::string &name, const std::strin
     WriteLogWithRole(ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ }, true, name,
         [&name, &oldVal, &newVal](const std::string &role) {
             (void)role;
-            return "CONFIG_CHANGED: " + name + "=" + MaskSensitiveFlagValue(name, oldVal) + " --> "
-                + MaskSensitiveFlagValue(name, newVal);
+            return "CONFIG_CHANGED: " + name + "=" + OperationLogger::MaskSensitiveFlagValue(name, oldVal) + " --> "
+                + OperationLogger::MaskSensitiveFlagValue(name, newVal);
         });
 }
 
