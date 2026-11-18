@@ -1595,6 +1595,8 @@ def _build_config(mode, args):
         cfg['mixed_key_strategy'] = args.mixed_key_strategy
         cfg['mset_batch_size'] = args.mset_batch_size
         cfg['mget_batch_size'] = args.mget_batch_size
+        if args.remote_worker_host:
+            cfg['remote_worker'] = {'host': args.remote_worker_host, 'port': args.remote_worker_port}
     else:
         # Pipeline / Cache
         writer_pipeline = _parse_pipeline(args.pipeline)
@@ -1901,6 +1903,12 @@ def _add_gen_config_args(p):
                    help='Benchmark test mode (required for benchmark mode)')
     p.add_argument('--worker-memory-mb', type=int, default=0,
                    help='Worker shared memory in MB (required for benchmark mode)')
+    p.add_argument('--remote-worker-host', default='',
+                   help='Remote Worker host for benchmark modes that require remote_worker '
+                        '(mset_remote/mget_remote_direct/get_cross_node/etc.); empty means '
+                        'ServiceDiscovery (only valid for modes that allow it)')
+    p.add_argument('--remote-worker-port', type=int, default=31501,
+                   help='Remote Worker port (default: 31501)')
     p.add_argument('--num-clients', type=int, default=1,
                    help='Measured KVClient processes per benchmark instance (default: 1)')
     p.add_argument('--set-api', default='string_view',
