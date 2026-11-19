@@ -61,7 +61,6 @@ constexpr char GLOBAL_SUMMARY_COMMITTED_INJECT[] = "PeerUbAdmission.ReplaceGloba
 constexpr char UB_HEALTH_BEFORE_PUBLISH_INJECT[] = "UbHealthLeaseSync.beforePublish";
 constexpr char CLIENT_WARMUP_SET_DONE[] = "ObjectClientImpl.ClientWorkerWarmup.SetDone";
 constexpr char CLIENT_WARMUP_GET_DONE[] = "ObjectClientImpl.ClientWorkerWarmup.GetDone";
-constexpr char CLIENT_WARMUP_DELETE_DONE[] = "ObjectClientImpl.ClientWorkerWarmup.DeleteDone";
 constexpr char CLIENT_WARMUP_SKIP[] = "ObjectClientImpl.ClientWorkerWarmup.skip";
 constexpr char ROUTED_WARMUP_HOST_ID_ENV[] = "DS_TEST_ROUTED_WARMUP_HOST_ID";
 constexpr uint64_t CLIENT_WARMUP_OBJECT_COUNT = 100;
@@ -184,7 +183,6 @@ public:
     {
         (void)inject::Clear(CLIENT_WARMUP_SET_DONE);
         (void)inject::Clear(CLIENT_WARMUP_GET_DONE);
-        (void)inject::Clear(CLIENT_WARMUP_DELETE_DONE);
         (void)inject::Clear(CLIENT_WARMUP_SKIP);
         (void)inject::Clear("UrmaManager.ForceNumaAffinityForMock");
         (void)inject::Clear("UrmaManager.CheckCompletionRecordStatus");
@@ -274,7 +272,6 @@ public:
     {
         DS_ASSERT_OK(inject::Set(CLIENT_WARMUP_SET_DONE, "call()"));
         DS_ASSERT_OK(inject::Set(CLIENT_WARMUP_GET_DONE, "call()"));
-        DS_ASSERT_OK(inject::Set(CLIENT_WARMUP_DELETE_DONE, "call()"));
 
         ConnectOptions options;
         InitConnectOpt(0, options);
@@ -285,7 +282,6 @@ public:
 
         EXPECT_EQ(inject::GetExecuteCount(CLIENT_WARMUP_SET_DONE), CLIENT_WARMUP_OBJECT_COUNT);
         EXPECT_EQ(inject::GetExecuteCount(CLIENT_WARMUP_GET_DONE), CLIENT_WARMUP_OBJECT_COUNT);
-        EXPECT_EQ(inject::GetExecuteCount(CLIENT_WARMUP_DELETE_DONE), 1u);
     }
 };
 

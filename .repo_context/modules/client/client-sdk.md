@@ -99,8 +99,7 @@
     covers both `enableLocalCache=true` and `false`, and the meta-owner phase exercises the normal worker outbound path
     without a separate probe protocol. The same-node phase retains its 256 KiB data-plane probes when URMA is enabled;
     other transports use the one-byte connection probe so enabling their warmup does not reserve allocator arenas in
-    low-capacity workers. Successfully created warmup objects are batch-deleted before initialization returns; their
-    five-second TTL remains a cleanup fallback if that best-effort deletion fails.
+    low-capacity workers. The Master cleans up successfully created warmup objects when their five-second TTL expires.
   - `datasystem` shared library is built from `src/datasystem/client/*` and is the main user-facing client library.
   - Public client entrypoints are the direct `KVClient`, `ObjectClient`, `StreamClient`, and `HeteroClient` classes; callers construct and initialize only the semantics they use.
   - `ConnectOptions` is the common connection/auth/config carrier for C++ clients.

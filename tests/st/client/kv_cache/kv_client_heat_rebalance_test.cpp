@@ -40,7 +40,9 @@
 #include "cluster/external_cluster.h"
 #include "cluster/heat_watermark_collector.h"
 #include "common.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/kv_client.h"
 
 namespace datasystem {
@@ -139,6 +141,21 @@ public:
     {
         ExternalClusterTest::SetUp();
         InitTestEtcdInstance();
+
+        std::string suiteName;
+        std::string caseName;
+        GetCurTestName(suiteName, caseName);
+        const bool skipWarmup = caseName == "NoTriggerWhenNoHotPrimary";
+        constexpr char skipWarmupInject[] = "ObjectClientImpl.ClientWorkerWarmup.skip";
+        if (skipWarmup) {
+            DS_ASSERT_OK(inject::Set(skipWarmupInject, "call()"));
+        }
+        Raii restoreWarmup([&]() {
+            if (skipWarmup) {
+                (void)inject::Clear(skipWarmupInject);
+            }
+        });
+
         InitTestKVClient(WORKER0, client0_);
         InitTestKVClient(WORKER1, client1_);
         InitTestKVClient(WORKER2, client2_);
