@@ -1557,6 +1557,30 @@ std::string ExpectedHitInfoWithMemDelta(const std::string &before, long delta)
     const auto slash = before.find('/');
     return std::to_string(std::stol(before.substr(0, slash)) + delta) + before.substr(slash);
 }
+
+// Changes one field of the formatted hit info string: 0 mem, 1 disk, 2 l2, 3 remote, 4 miss.
+std::string ExpectedHitInfoWithDelta(const std::string &before, size_t field, long delta)
+{
+    std::vector<std::string> fields;
+    size_t start = 0;
+    while (true) {
+        const auto pos = before.find('/', start);
+        fields.push_back(before.substr(start, pos == std::string::npos ? std::string::npos : pos - start));
+        if (pos == std::string::npos) {
+            break;
+        }
+        start = pos + 1;
+    }
+    fields.at(field) = std::to_string(std::stol(fields.at(field)) + delta);
+    std::string out;
+    for (size_t i = 0; i < fields.size(); ++i) {
+        if (i != 0) {
+            out += '/';
+        }
+        out += fields[i];
+    }
+    return out;
+}
 }  // namespace
 
 TEST_F(WorkerOcServiceImplWithAllocatorTest, BatchRemoteGetHitCommitsOnceAfterDelivery)
@@ -1730,6 +1754,101 @@ TEST_F(WorkerOcServiceImplWithAllocatorTest, BatchUrmaFallbackToTcpCountsOnce)
     EXPECT_EQ(serverApi->Response().responses(0).error().error_code(), K_OK);
     EXPECT_EQ(serverApi->Response().responses(0).data_source(), DataTransferSource::DATA_IN_PAYLOAD);
     EXPECT_EQ(CacheHitInfo::Instance().GetHitInfo(), ExpectedHitInfoWithMemDelta(hitBefore, 1));
+}
+
+TEST_F(WorkerOcServiceImplWithAllocatorTest, MigrationPullDoesNotCountHitInfo)
+{
+    constexpr uint64_t dataSize = 16;
+    const std::string objectKey = "migration-pull-no-count";
+    const HostPort dataWorker("192.0.2.40", 18481);
+    ReadKey readKey(objectKey, 0, dataSize);
+    master::QueryMetaInfoPb queryMeta;
+    auto *meta = queryMeta.mutable_meta();
+    meta->set_object_key(objectKey);
+    meta->set_data_size(dataSize);
+    meta->set_version(1);
+    meta->set_primary_address(dataWorker.ToString());
+    std::map<ReadKey, WorkerOcServiceGetImpl::LockedEntity> lockedEntries;
+    std::unordered_set<std::string> failObjects;
+    DS_ASSERT_OK(impl_->getProc_->BatchLockForGet({readKey}, lockedEntries, failObjects));
+    ASSERT_EQ(lockedEntries.count(readKey), 1u);
+    auto &lockedEntity = lockedEntries.at(readKey);
+    std::list<WorkerOcServiceGetImpl::GetObjectInfo> infos;
+    infos.push_back({&readKey, &lockedEntity, &queryMeta});
+    BatchGetObjectRemoteRspPb rsp;
+    auto *subResp = rsp.add_responses();
+    subResp->set_data_size(dataSize);
+    subResp->set_data_source(DataTransferSource::DATA_IN_PAYLOAD);
+    std::vector<RpcMessage> payloads;
+    RpcMessage payload;
+    DS_ASSERT_OK(payload.CopyString(std::string(dataSize, 'x')));
+    payloads.emplace_back(std::move(payload));
+    std::vector<std::string> successIds;
+    std::vector<ReadKey> needRetryIds;
+    std::unordered_set<std::string> failedIds;
+    std::list<WorkerOcServiceGetImpl::GetObjectInfo> failedInfos;
+    bool dataSizeChange = false;
+    Status checkConnectStatus;
+    // Production wires this via Init at worker startup; the fixture skips it, and ClockEvictionStrategy
+    // holds a reference to gRefTable_, so wiring here is enough without touching strategy state.
+    DS_ASSERT_OK(evictionManager_->Init(globalRefTable_));
+    const std::string hitBefore = CacheHitInfo::Instance().GetHitInfo();
+
+    // countHit=false mirrors FetchNotifyRemoteGetGroup, i.e. a scale-in migration pull.
+    const auto rc = impl_->getProc_->ProcessBatchResponse(dataWorker.ToString(), checkConnectStatus, infos, nullptr,
+                                                          Status::OK(), rsp, payloads, successIds, needRetryIds,
+                                                          failedIds, failedInfos, dataSizeChange, false);
+
+    DS_ASSERT_OK(rc);
+    ASSERT_EQ(successIds.size(), 1u);
+    EXPECT_EQ(CacheHitInfo::Instance().GetHitInfo(), hitBefore);
+}
+
+TEST_F(WorkerOcServiceImplWithAllocatorTest, NullRequestRemotePullStillCounts)
+{
+    constexpr uint64_t dataSize = 16;
+    const std::string objectKey = "device-null-request-pull";
+    const HostPort dataWorker("192.0.2.42", 18481);
+    ReadKey readKey(objectKey, 0, dataSize);
+    master::QueryMetaInfoPb queryMeta;
+    auto *meta = queryMeta.mutable_meta();
+    meta->set_object_key(objectKey);
+    meta->set_data_size(dataSize);
+    meta->set_version(1);
+    meta->set_primary_address(dataWorker.ToString());
+    std::map<ReadKey, WorkerOcServiceGetImpl::LockedEntity> lockedEntries;
+    std::unordered_set<std::string> failObjects;
+    DS_ASSERT_OK(impl_->getProc_->BatchLockForGet({readKey}, lockedEntries, failObjects));
+    ASSERT_EQ(lockedEntries.count(readKey), 1u);
+    auto &lockedEntity = lockedEntries.at(readKey);
+    std::list<WorkerOcServiceGetImpl::GetObjectInfo> infos;
+    infos.push_back({&readKey, &lockedEntity, &queryMeta});
+    BatchGetObjectRemoteRspPb rsp;
+    auto *subResp = rsp.add_responses();
+    subResp->set_data_size(dataSize);
+    subResp->set_data_source(DataTransferSource::DATA_IN_PAYLOAD);
+    std::vector<RpcMessage> payloads;
+    RpcMessage payload;
+    DS_ASSERT_OK(payload.CopyString(std::string(dataSize, 'x')));
+    payloads.emplace_back(std::move(payload));
+    std::vector<std::string> successIds;
+    std::vector<ReadKey> needRetryIds;
+    std::unordered_set<std::string> failedIds;
+    std::list<WorkerOcServiceGetImpl::GetObjectInfo> failedInfos;
+    bool dataSizeChange = false;
+    Status checkConnectStatus;
+    DS_ASSERT_OK(evictionManager_->Init(globalRefTable_));
+    const std::string hitBefore = CacheHitInfo::Instance().GetHitInfo();
+
+    // Device remote pulls also pass a null GetRequest (ProcessObjectsNotExistInLocal default), but they are
+    // client-visible reads and must keep counting remoteHit.
+    const auto rc = impl_->getProc_->ProcessBatchResponse(dataWorker.ToString(), checkConnectStatus, infos, nullptr,
+                                                          Status::OK(), rsp, payloads, successIds, needRetryIds,
+                                                          failedIds, failedInfos, dataSizeChange);
+
+    DS_ASSERT_OK(rc);
+    ASSERT_EQ(successIds.size(), 1u);
+    EXPECT_EQ(CacheHitInfo::Instance().GetHitInfo(), ExpectedHitInfoWithDelta(hitBefore, 3, 1));
 }
 
 class TestWorkerOcServiceCrudCommonApi : public WorkerOcServiceCrudCommonApi {

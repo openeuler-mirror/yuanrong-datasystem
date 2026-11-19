@@ -3888,7 +3888,7 @@ Status WorkerOcServiceGetImpl::FetchNotifyRemoteGetGroup(const std::string &addr
     Status lastRc;
     const std::shared_ptr<GetRequest> fakeRequest = nullptr;
     for (auto &infoPair : infoList) {
-        auto rc = BatchGetObjectFromRemoteOnLock(address, infoPair.first, fakeRequest, output);
+        auto rc = BatchGetObjectFromRemoteOnLock(address, infoPair.first, fakeRequest, output, false);
         RecordBatchGetObjectError(std::move(rc), lastRc);
     }
     return lastRc;
