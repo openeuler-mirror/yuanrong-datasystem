@@ -21,6 +21,7 @@
 
 DS_DECLARE_bool(enable_sched_runtime);
 DS_DECLARE_uint32(node_timeout_s);
+DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_int32(log_monitor_interval_ms);
 DS_DECLARE_bool(enable_urma);
@@ -98,6 +99,37 @@ DS_DECLARE_int32(brpc_event_dispatcher_num);
 DS_DECLARE_bool(enable_load_aware_scheduler);
 
 namespace datasystem {
+/**
+ * @brief Strict validation for node_timeout_s: value must be >= 3.
+ * @param[in] value Candidate value.
+ * @return True if valid; logs on violation.
+ */
+bool ValidateNodeTimeoutS(uint32_t value);
+
+/**
+ * @brief Strict validation for node_dead_timeout_s: value must be >= 3 and > node_timeout_s.
+ * @param[in] value Candidate value.
+ * @return True if valid; logs on violation.
+ */
+bool ValidateNodeDeadTimeoutS(uint32_t value);
+
+/**
+ * @brief Validate the current node_timeout_s/node_dead_timeout_s combination. Both rules are
+ *        evaluated so a single call reports every violation; intended for server startup fail-fast.
+ * @return True if the combination is valid; logs on violation.
+ */
+bool ValidateNodeTimeoutFlags();
+
+/**
+ * @brief Reject-only special validator for dynamic node_dead_timeout_s updates. Returns true
+ *        ("special-handled", i.e. rejected) when flagName is node_dead_timeout_s and the parsed
+ *        value violates ValidateNodeDeadTimeoutS; false for any other flag or unparsable value.
+ * @param[in] flagName Flag name.
+ * @param[in] newVal Candidate value.
+ * @return True when the update must be rejected.
+ */
+bool NodeDeadTimeoutFlagValidateSpecial(const std::string &flagName, const std::string &newVal);
+
 // Polling readers use the published value because the first KV Init can follow another Client's URMA startup.
 uint32_t GetUrmaLogThresholdUs();
 bool ValidateAndPublishUrmaLogThresholdUs(const char *flagName, uint32_t value);

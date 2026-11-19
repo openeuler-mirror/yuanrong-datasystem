@@ -1530,6 +1530,44 @@ Coordinator 按该成员列表启动 Raft 选主。启用选主后，`coordinato
 JSON exporter 初始化失败时，Worker 启动失败，不会进入 INFO fallback。
 INFO fallback 仅适用于忽略该初始化错误的 SDK Client，并且只在 `log_monitor` 开启时生效。
 
+> **动态更新语义**：动态修改参数有两条入口 —— `monitor_config_file` 指向的动态配置文件（文件变更时生效）
+> 与 UpdateConfig API。两条入口语义一致：先对**整批**参数做预校验（信任表、取值范围、参数间约束），
+> 全部合法才提交（全有全无）；任一参数非法时**整批不生效**，并在日志中输出汇总
+> （成功的、跳过的、失败的原因），Operation 日志逐条记录 CONFIG_CHANGED / CONFIG_FAILED。
+> 仅“是否支持动态修改”为“是”的参数可出现在动态配置文件中。
+
+#### 支持动态修改的参数总表
+
+下表为当前全部支持动态修改的参数（与源码 `DS_DEFINE_*_dynamic` 注册保持一致，`inject_actions` 仅测试注入用，不提供给生产部署）：
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|-----|------|---------|-----|
+| v | int | `0` | VLOG 冗余日志级别，取值 [0, 3] |
+| minloglevel | int | `0` | 记录冗余日志的最低级别 |
+| log_compress | bool | `false` | 历史日志压缩 |
+| log_monitor | bool | `true` | 控制 resource.log（不控制 JSON 输出） |
+| max_log_file_num | uint32 | `5` | 每个级别保留的日志文件数，0 表示不限制 |
+| request_sample_rate | double | `1.0` | 请求日志采样率 [0.0, 1.0] |
+| access_sample_rate | double | `1.0` | access 日志采样率 [0.0, 1.0] |
+| diagnostic_sample_rate | double | `1.0` | diagnostic 日志采样率 [0.0, 1.0] |
+| slow_log_process_slower_than | uint64 | `2000` | worker 处理阶段慢日志阈值（微秒），0 禁用 |
+| slow_log_rpc_slower_than | uint64 | `5000` | worker 跨进程 RPC 慢日志阈值（微秒），0 禁用 |
+| client_slow_log_process_slower_than | uint64 | `2000` | client 处理阶段慢日志阈值（微秒） |
+| client_slow_log_rpc_slower_than | uint64 | `5000` | client 跨进程 RPC 慢日志阈值（微秒） |
+| node_dead_timeout_s | uint32 | `300` | 节点死亡判定最大间隔（秒），>= 3 且 > `node_timeout_s` |
+| client_reconnect_wait_s | uint32 | `10` | 客户端断链重连最大等待（秒） |
+| async_delete | bool | `false` | Master 异步通知 Worker 删除对象 |
+| arena_per_tenant | uint32 | `16` | 每 tenant 的 arena 数量，[1, 32]；动态更新仅对新建租户生效，租户容量上限按启动时取值计算；预占内存场景被内部约束为 1 |
+| spill_size_limit | uint64 | `0` | spill 目录容量上限（字节），0 表示 95% 目录可用空间 |
+| spill_file_max_size_mb | uint64 | `200` | 单 spill 文件大小上限（MB），[200, 10240] |
+| spill_file_open_limit | uint64 | `512` | spill 打开文件数上限，>= 8 |
+| urma_failover_success_rate_ratio | double | `0.5` | URMA failover 评估成功率比值 [0.0, 1.0] |
+| urma_failover_min_sample_count | uint32 | `5` | URMA failover 评估最小样本数 |
+| urma_orphan_conn_ttl_s | uint32 | `600` | URMA 孤儿连接存活时间（秒） |
+| urma_orphan_sweep_interval_s | uint32 | `60` | URMA 孤儿连接清扫周期（秒） |
+| urma_orphan_sweep_batch | uint32 | `100` | URMA 孤儿连接单批清扫数量 |
+| inject_actions | string | `""` | 测试注入点（仅 UT 使用，生产不配置） |
+
 > **升级提示**：日志压缩默认关闭后，新部署或升级集群的历史日志不会再自动压缩，日志磁盘占用可能增加且滚动更快。如需保持历史压缩行为，请显式配置 `log_compress` 为 `true`；同时建议根据不压缩场景重新评估 `max_log_file_num` 和 `max_log_size` 的容量设置。
 
 #### 二级缓存相关配置
@@ -1563,12 +1601,13 @@ INFO fallback 仅适用于忽略该初始化错误的 SDK Client，并且只在 
 |-----|------|---------|-----|-------------|
 | client_reconnect_wait_s | int | `10` | 是 | 客户端断链重连最大等待时间（单位为秒） |
 | client_dead_timeout_s | int | `120` | 否 | 客户端存活检测最大时间间隔（单位为秒）, client_dead_timeout_s >= 3 |
-| node_timeout_s | int | `60` | 否 | 服务端节点超时（秒），并决定 ETCD 心跳间隔 |
-| node_dead_timeout_s | int | `300` | 是 | 服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点，该值必须大于 `node_timeout_s` |
+| node_timeout_s | int | `60` | 否 | 服务端节点超时（秒），并决定成员管理 keepalive 续约间隔（ETCD lease 续约与 coordinator 成员 keepalive 共用同一派生值）；有效下限为 3，不合法时进程启动失败 |
+| node_dead_timeout_s | int | `300` | 是 | 服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点；该值必须大于 `node_timeout_s` 且不小于 3，不合法时进程启动失败，动态修改非法值时该次更新被整批拒绝（动态修改仅 worker 进程生效；coordinator 进程不支持该参数动态更新，需重启生效） |
 | enable_reconciliation | bool | `false` | 否 | 当节点重启时是否启用全局引用计数对账功能；仅使用 KVClient 的场景无需开启，使用 ObjectClient 全局引用计数时需显式设置为 `true` |
 
-`node_timeout_s` 的有效下限为 3；配置小于 3 时会被自动调整为 3。服务端与 ETCD 的心跳间隔按
-`clamp(node_timeout_s * 1000 / 3, 100, 5000)`（毫秒）自动计算。
+`node_timeout_s` 与 `node_dead_timeout_s` 的有效下限均为 3，且 `node_dead_timeout_s` 必须大于
+`node_timeout_s`；参数不合法时进程**启动直接失败，不做自动调整**。节点成员管理 keepalive（ETCD lease
+续约与 coordinator 成员 keepalive）按 `clamp(node_timeout_s * 1000 / 3, 100, 5000)`（毫秒）自动计算。
 新建集群的哈希环固定为每个 Worker 分配 32 个 token；已有集群继续使用 topology 中
 持久化的 token 数。
 死亡节点写保护、隔离和被动缩容始终启用，不再提供关闭开关。

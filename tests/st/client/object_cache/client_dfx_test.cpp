@@ -175,7 +175,7 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.workerGflagParams = "-client_reconnect_wait_s=1 -ipc_through_shared_memory=true -sc_stream_socket_num=0 "
-                                 "-node_timeout_s=1 -node_dead_timeout_s=6";
+                                 "-node_timeout_s=3 -node_dead_timeout_s=6";
         opts.numWorkers = 3;
         opts.numEtcd = 1;
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(500)");
@@ -1045,7 +1045,7 @@ class MasterClientRecoveryDfxTest : public OCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
-        opts.workerGflagParams = "-client_reconnect_wait_s=1 -node_timeout_s=1 -v=1";
+        opts.workerGflagParams = "-client_reconnect_wait_s=1 -node_timeout_s=3 -v=1";
         opts.numWorkers = 3;
         opts.numEtcd = 1;
         opts.disableRocksDB = false;
@@ -1726,7 +1726,7 @@ public:
         opts.numWorkers = workerNum;
         opts.numEtcd = 1;
         opts.workerGflagParams =
-            " -v=1 -node_timeout_s=1 -node_dead_timeout_s=3";
+            " -v=1 -node_timeout_s=3 -node_dead_timeout_s=6";
         opts.waitWorkerReady = false;
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(500)");
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)");
@@ -1909,7 +1909,7 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.workerGflagParams =
-            "-client_reconnect_wait_s=1 -ipc_through_shared_memory=true -node_timeout_s=1 "
+            "-client_reconnect_wait_s=1 -ipc_through_shared_memory=true -node_timeout_s=3 "
             "-enable_reconciliation=false";
         auto numWorkers = 2;
         opts.numWorkers = numWorkers;

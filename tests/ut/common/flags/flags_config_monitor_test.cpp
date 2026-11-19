@@ -48,6 +48,8 @@ DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_string(log_dir);
 DS_DECLARE_string(log_filename);
 DS_DECLARE_int32(logbufsecs);
+DS_DECLARE_bool(log_compress);
+DS_DECLARE_double(request_sample_rate);
 
 namespace datasystem {
 namespace ut {
@@ -169,6 +171,125 @@ TEST_F(FlagsConfigMonitorTest, InvalidFlagValueRecordsConfigFailed)
     Logging::ResetLoggingRuntimeForTest();
     const std::string content = ReadFile(operationLog);
     EXPECT_THAT(content, testing::HasSubstr("CONFIG_FAILED: flag 'minloglevel'"));
+}
+
+TEST_F(FlagsConfigMonitorTest, MixedBatchWithInvalidValueIsRejectedAtomically)
+{
+    DynamicFlagConfig flagConfig;
+    auto oldV = FLAGS_v;
+    auto oldLogCompress = FLAGS_log_compress;
+    const std::string operationLog = OperationLogger::Instance().OperationLogPath();
+    const std::string infoLog = FLAGS_log_dir + "/" + FLAGS_log_filename + ".INFO.log";
+    size_t opLogBaseSize = 0;
+    size_t infoLogBaseSize = 0;
+    {
+        std::ifstream probe(operationLog, std::ios::binary | std::ios::ate);
+        opLogBaseSize = probe.tellg() < 0 ? 0 : static_cast<size_t>(probe.tellg());
+    }
+    {
+        std::ifstream probe(infoLog, std::ios::binary | std::ios::ate);
+        infoLogBaseSize = probe.tellg() < 0 ? 0 : static_cast<size_t>(probe.tellg());
+    }
+
+    WriteConfigFile(configPath_, "-v=2\n-minloglevel=invalid\n-log_compress=false\n");
+    flagConfig.StartConfigFileHandle(configPath_, std::chrono::steady_clock::now());
+
+    EXPECT_EQ(FLAGS_v, oldV);
+    EXPECT_EQ(FLAGS_log_compress, oldLogCompress);
+
+    Logging::ResetLoggingRuntimeForTest();
+    const std::string content = ReadFile(operationLog);
+    const std::string delta = opLogBaseSize < content.size() ? content.substr(opLogBaseSize) : "";
+    EXPECT_THAT(delta, testing::HasSubstr("CONFIG_FAILED: flag 'minloglevel'"));
+    EXPECT_THAT(delta, testing::Not(testing::HasSubstr("CONFIG_CHANGED")));
+
+    const std::string infoContent = ReadFile(infoLog);
+    const std::string infoDelta = infoLogBaseSize < infoContent.size() ? infoContent.substr(infoLogBaseSize) : "";
+    EXPECT_THAT(infoDelta, testing::HasSubstr("Dynamic flag update rejected (all-or-nothing)"));
+    EXPECT_THAT(infoDelta, testing::HasSubstr("not-applied(passed): log_compress=0-->false, v=0-->2"));
+    EXPECT_THAT(infoDelta, testing::HasSubstr("failed: minloglevel("));
+}
+
+TEST_F(FlagsConfigMonitorTest, ConfigFileBatchSummaryLogsUpdatedAndSkipped)
+{
+    DynamicFlagConfig flagConfig;
+    const std::string infoLog = FLAGS_log_dir + "/" + FLAGS_log_filename + ".INFO.log";
+    size_t infoLogBaseSize = 0;
+    {
+        std::ifstream probe(infoLog, std::ios::binary | std::ios::ate);
+        infoLogBaseSize = probe.tellg() < 0 ? 0 : static_cast<size_t>(probe.tellg());
+    }
+
+    WriteConfigFile(configPath_, "-max_log_file_num=5\n-v=2\n");
+    flagConfig.StartConfigFileHandle(configPath_, std::chrono::steady_clock::now());
+    EXPECT_EQ(FLAGS_v, 2);
+
+    Logging::ResetLoggingRuntimeForTest();
+    const std::string content = ReadFile(infoLog);
+    const std::string delta = infoLogBaseSize < content.size() ? content.substr(infoLogBaseSize) : "";
+    EXPECT_THAT(delta, testing::HasSubstr("Dynamic flag update summary: total=2, updated=1, skipped=1, failed=0"));
+    EXPECT_THAT(delta, testing::HasSubstr("updated: v=0-->2"));
+    EXPECT_THAT(delta, testing::HasSubstr("skipped: max_log_file_num(value unchanged)"));
+}
+
+TEST_F(FlagsConfigMonitorTest, UnchangedSamplerFlagRecordsNoConfigChanged)
+{
+    DynamicFlagConfig flagConfig;
+    const std::string infoLog = FLAGS_log_dir + "/" + FLAGS_log_filename + ".INFO.log";
+    size_t infoLogBaseSize = 0;
+    {
+        std::ifstream probe(infoLog, std::ios::binary | std::ios::ate);
+        infoLogBaseSize = probe.tellg() < 0 ? 0 : static_cast<size_t>(probe.tellg());
+    }
+
+    WriteConfigFile(configPath_, "-request_sample_rate=0.7\n");
+    flagConfig.StartConfigFileHandle(configPath_, std::chrono::steady_clock::now());
+    EXPECT_DOUBLE_EQ(FLAGS_request_sample_rate, 0.7);
+
+    WriteConfigFile(configPath_, "-request_sample_rate=0.7\n");
+    flagConfig.StartConfigFileHandle(configPath_, std::chrono::steady_clock::now());
+    EXPECT_DOUBLE_EQ(FLAGS_request_sample_rate, 0.7);
+
+    const std::string operationLog = OperationLogger::Instance().OperationLogPath();
+    Logging::ResetLoggingRuntimeForTest();
+    if (!operationLog.empty()) {
+        const std::string opContent = ReadFile(operationLog);
+        EXPECT_THAT(opContent, testing::HasSubstr("CONFIG_CHANGED: request_sample_rate=1 --> 0.7"));
+        EXPECT_THAT(opContent, testing::Not(testing::HasSubstr("request_sample_rate=0.7 --> 0.7")));
+    }
+
+    const std::string infoContent = ReadFile(infoLog);
+    const std::string infoDelta = infoLogBaseSize < infoContent.size() ? infoContent.substr(infoLogBaseSize) : "";
+    EXPECT_THAT(infoDelta,
+                testing::HasSubstr("Dynamic flag update summary: total=1, updated=0, skipped=1, failed=0"));
+    EXPECT_THAT(infoDelta, testing::HasSubstr("skipped: request_sample_rate(value unchanged)"));
+}
+
+TEST_F(FlagsConfigMonitorTest, SamplerCommitFailureLogsBatchRolledBack)
+{
+    DynamicFlagConfig flagConfig;
+    flagConfig.SetBatchCommitHandler([](const auto &) { return false; });
+    const auto oldLogCompress = FLAGS_log_compress;
+    FLAGS_log_compress = false;
+
+    // log_only_write_info_file defaults to true, so the ERROR-severity record is written into the INFO file.
+    const std::string infoLog = FLAGS_log_dir + "/" + FLAGS_log_filename + ".INFO.log";
+    size_t infoLogBaseSize = 0;
+    {
+        std::ifstream probe(infoLog, std::ios::binary | std::ios::ate);
+        infoLogBaseSize = probe.tellg() < 0 ? 0 : static_cast<size_t>(probe.tellg());
+    }
+
+    auto flagMap = flagConfig.ProcessOptions("-log_compress=true\n-request_sample_rate=0.7\n");
+    EXPECT_TRUE(flagConfig.UpdateFlagParameter(flagMap).IsError());
+    EXPECT_FALSE(FLAGS_log_compress);
+
+    Logging::ResetLoggingRuntimeForTest();
+    const std::string content = ReadFile(infoLog);
+    const std::string delta = infoLogBaseSize < content.size() ? content.substr(infoLogBaseSize) : "";
+    EXPECT_THAT(delta, testing::HasSubstr("failed to update sampler flags; batch rolled back"));
+
+    FLAGS_log_compress = oldLogCompress;
 }
 
 TEST_F(FlagsConfigMonitorTest, NonModifiableFlagRecordsConfigFailed)

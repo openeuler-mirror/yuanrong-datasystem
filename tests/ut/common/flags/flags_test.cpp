@@ -23,6 +23,7 @@
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/flags/common_flags.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
@@ -933,6 +934,45 @@ TEST_F(FlagsTest, RemovedMembershipFlagsAreNotRegistered)
         EXPECT_NE(flag.name, "heartbeat_interval_ms");
         EXPECT_NE(flag.name, "auto_del_dead_node");
     }
+}
+
+// Drift guard for the dynamically-modifiable flag inventory: the k8s datasystem.config
+// template (configmap.yaml) and the dscli dynamic-parameter doc table mirror this list.
+// Any addition/removal of a DS_DEFINE_*_dynamic flag must update those artifacts too.
+TEST_F(FlagsTest, ModifiableFlagsMatchReviewedInventory)
+{
+    std::vector<std::string> modifiable;
+    FlagManager::GetInstance()->GetModifiableFlagNames(modifiable);
+    std::sort(modifiable.begin(), modifiable.end());
+    static const std::vector<std::string> expected = {
+        "access_sample_rate",
+        "arena_per_tenant",
+        "async_delete",
+        "client_reconnect_wait_s",
+        "client_slow_log_process_slower_than",
+        "client_slow_log_rpc_slower_than",
+        "diagnostic_sample_rate",
+        "inject_actions",
+        "log_compress",
+        "log_monitor",
+        "max_log_file_num",
+        "minloglevel",
+        "node_dead_timeout_s",
+        "request_sample_rate",
+        "slow_log_process_slower_than",
+        "slow_log_rpc_slower_than",
+        "spill_file_max_size_mb",
+        "spill_file_open_limit",
+        "spill_size_limit",
+        "test_modifiable_flag",
+        "urma_failover_min_sample_count",
+        "urma_failover_success_rate_ratio",
+        "urma_orphan_conn_ttl_s",
+        "urma_orphan_sweep_batch",
+        "urma_orphan_sweep_interval_s",
+        "v",
+    };
+    EXPECT_EQ(modifiable, expected);
 }
 
 TEST_F(FlagsTest, ParseBoolFromStringUsesGflagRules)

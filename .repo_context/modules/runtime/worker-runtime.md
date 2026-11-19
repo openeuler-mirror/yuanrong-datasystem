@@ -189,6 +189,11 @@
   - parse and validate worker/bind addresses; the local metadata endpoint is the advertised `worker_address`
   - initialize logs and worker flags; the Git commit/branch and non-default flag snapshot are emitted immediately after
     `Logging::Start()` and before `WorkerOCServer` construction
+  - node-timeout flags are strictly validated after CLI/config parsing (`ValidateNodeTimeoutFlags` in
+    `common_flags_validate.cpp`): `node_timeout_s >= 3`, `node_dead_timeout_s >= 3` and `node_dead_timeout_s >
+    node_timeout_s`; violations fail startup — there is no auto-adjust/clamp path anymore (the former
+    `AdjustNodeTimeoutFlags` was removed). Dynamic update of `node_dead_timeout_s` is reject-only via
+    `WorkerFlagValidateSpecial` (no clamping)
   - pre-initialize RocksDB storage
   - set up runtime services and signal handling
   - `DataWorker` selects the coordination backend before constructing `WorkerOCServer`: parameterized startup always passes its required injected Discovery and therefore selects Coordinator mode, while command-line startup wraps a non-empty `coordinator_address` in internal `StaticCoordinatorDiscovery` or passes null for ETCD.

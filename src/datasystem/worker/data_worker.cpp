@@ -29,6 +29,7 @@
 
 #include "datasystem/common/coordinator/static_coordinator_discovery.h"
 #include "datasystem/common/encrypt/secret_manager.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/flags/flag_manager.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/kvstore/rocksdb/rocks_store.h"
@@ -442,13 +443,14 @@ Status DataWorker::InitAndRun(int argc, char **argv)
             "It builds the local cache capability based on the proximity computing memory space "
             "to cache hotspot data.");
 
-        flags.SetValidateSpecial(WorkerFlagValidateSpecial);
+        flags.SetValidateSpecial(NodeDeadTimeoutFlagValidateSpecial);
         FlagInfoMap defaultGflagMap = flags.GetAllFlagsToMap();
         FLAGS_logfile_mode = 0640;
         LinkCommonFlagsValidators();
         ParseCommandLineFlags(argc, argv);
         flags.StartConfigFileHandle(FLAGS_monitor_config_file, std::chrono::steady_clock::now());
-        AdjustNodeTimeoutFlags();
+        CHECK_FAIL_RETURN_STATUS(ValidateNodeTimeoutFlags(), K_INVALID,
+                                 "invalid node_timeout_s/node_dead_timeout_s configuration");
         CHECK_FAIL_RETURN_STATUS(ValidateWatermarkFlags(), K_INVALID,
                                  "invalid evict/spill watermark flag configuration");
         RETURN_IF_NOT_OK(flags.EraseInfo(argc, argv));
@@ -488,7 +490,7 @@ Status DataWorker::InitAndRun(const DataWorkerOptions &options)
             "It builds the local cache capability based on the proximity computing memory space "
             "to cache hotspot data.");
 
-        flags.SetValidateSpecial(WorkerFlagValidateSpecial);
+        flags.SetValidateSpecial(NodeDeadTimeoutFlagValidateSpecial);
         FlagInfoMap defaultGflagMap = flags.GetAllFlagsToMap();
         FLAGS_logfile_mode = 0640;
 
@@ -498,7 +500,8 @@ Status DataWorker::InitAndRun(const DataWorkerOptions &options)
                                  FormatString("Parse config file %s error: %s", options.configFilePath, errMsg));
 
         flags.StartConfigFileHandle(FLAGS_monitor_config_file, std::chrono::steady_clock::now());
-        AdjustNodeTimeoutFlags();
+        CHECK_FAIL_RETURN_STATUS(ValidateNodeTimeoutFlags(), K_INVALID,
+                                 "invalid node_timeout_s/node_dead_timeout_s configuration");
         CHECK_FAIL_RETURN_STATUS(ValidateWatermarkFlags(), K_INVALID,
                                  "invalid evict/spill watermark flag configuration");
         coordinatorDiscovery_ = options.coordinatorDiscovery;

@@ -17,7 +17,9 @@
 #include "datasystem/common/flags/common_flags.h"
 
 #include <cmath>
+#include <limits>
 #include <sstream>
+#include <string>
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/rdma/urma_send_lane.h"
@@ -246,6 +248,66 @@ DS_DEFINE_validator(sc_worker_worker_direct_port, &ValidateWorkerDirectPort);
 DS_DEFINE_validator(brpc_server_num_threads, &Validator::ValidateRpcThreadNum);
 
 namespace datasystem {
+namespace {
+constexpr uint32_t K_MIN_NODE_TIMEOUT_S = 3;
+constexpr uint32_t K_MIN_NODE_DEAD_TIMEOUT_S = 3;
+}
+
+bool ValidateNodeTimeoutS(const uint32_t value)
+{
+    if (value >= K_MIN_NODE_TIMEOUT_S) {
+        return true;
+    }
+    LOG(ERROR) << FormatString(
+        "The value of node_timeout_s flag is %u, which must be greater than or equal to %u.", value,
+        K_MIN_NODE_TIMEOUT_S);
+    return false;
+}
+
+bool ValidateNodeDeadTimeoutS(const uint32_t value)
+{
+    if (value < K_MIN_NODE_DEAD_TIMEOUT_S) {
+        LOG(ERROR) << FormatString(
+            "The value of node_dead_timeout_s flag is %u, which must be greater than or equal to %u.", value,
+            K_MIN_NODE_DEAD_TIMEOUT_S);
+        return false;
+    }
+    if (value <= FLAGS_node_timeout_s) {
+        LOG(ERROR) << FormatString(
+            "The value of node_dead_timeout_s flag is %u, which must be greater than the value of node_timeout_s "
+            "flag (%u).",
+            value, FLAGS_node_timeout_s);
+        return false;
+    }
+    return true;
+}
+
+bool ValidateNodeTimeoutFlags()
+{
+    const bool timeoutOk = ValidateNodeTimeoutS(FLAGS_node_timeout_s);
+    const bool deadTimeoutOk = ValidateNodeDeadTimeoutS(FLAGS_node_dead_timeout_s);
+    return timeoutOk && deadTimeoutOk;
+}
+
+bool NodeDeadTimeoutFlagValidateSpecial(const std::string &flagName, const std::string &newVal)
+{
+    uint32_t result = 0;
+    if (flagName != "node_dead_timeout_s") {
+        return false;
+    }
+    try {
+        size_t pos = 0;
+        const unsigned long value = std::stoul(newVal, &pos);
+        if (pos != newVal.size() || value > std::numeric_limits<uint32_t>::max()) {
+            return false;
+        }
+        result = static_cast<uint32_t>(value);
+    } catch (const std::logic_error &) {
+        return false;
+    }
+    return !ValidateNodeDeadTimeoutS(result);
+}
+
 void LinkCommonFlagsValidators()
 {
 }

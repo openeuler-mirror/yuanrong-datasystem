@@ -94,9 +94,9 @@ public:
         opts.waitAfterStart = false;
         opts.disableRocksDB = true;
         opts.workerGflagParams =
-            " -shared_memory_size_mb=64 -node_timeout_s=2 -node_dead_timeout_s=4"
+            " -shared_memory_size_mb=64 -node_timeout_s=3 -node_dead_timeout_s=6"
             " -enable_reconciliation=false";
-        opts.coordinatorGflagParams = " -v=1 -node_dead_timeout_s=4";
+        opts.coordinatorGflagParams = " -v=1 -node_timeout_s=3 -node_dead_timeout_s=6";
 
         ASSERT_EQ(setenv(COORDINATOR_SD_HOST_ID_ENV0, COORDINATOR_SD_HOST_ID_VALUE0, 1), 0);
         ASSERT_EQ(setenv(COORDINATOR_SD_HOST_ID_ENV1, COORDINATOR_SD_HOST_ID_VALUE1, 1), 0);

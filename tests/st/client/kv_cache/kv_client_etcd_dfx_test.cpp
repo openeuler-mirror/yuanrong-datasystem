@@ -84,8 +84,8 @@ protected:
         ASSERT_EQ(failedKeys.size(), 0);
     }
 
-    int timeoutS_ = 2;
-    int deadTimeoutS_ = 3;
+    int timeoutS_ = 3;
+    int deadTimeoutS_ = 6;
     ExternalCluster *externalCluster_ = nullptr;
     const int maxWaitTimeSec_ = 20;
     const size_t workerNum_ = 5;

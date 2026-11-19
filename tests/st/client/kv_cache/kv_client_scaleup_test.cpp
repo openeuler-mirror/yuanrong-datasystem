@@ -47,7 +47,7 @@ public:
         opts.numOBS = 1;
         opts.numWorkers = DEFAULT_WORKER_NUM;
         opts.workerGflagParams =
-            "-shared_memory_size_mb=5120 -v=2 -node_timeout_s=1 -node_dead_timeout_s=2";
+            "-shared_memory_size_mb=5120 -v=2 -node_timeout_s=3 -node_dead_timeout_s=6";
 
         for (size_t i = 0; i < DEFAULT_WORKER_NUM; i++) {
             std::string hostIp = HOST_IP_PREFIX + std::to_string(i);

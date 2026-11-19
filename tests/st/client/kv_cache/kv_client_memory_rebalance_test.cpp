@@ -831,7 +831,7 @@ public:
             "-shared_memory_size_mb=64 -log_monitor=true -enable_memory_rebalance=true "
             "-rebalance_usage_gap_percent=30 -rebalance_source_usage_percent=70 "
             "-rebalance_task_report_grace_ms=500 -data_migrate_rate_limit_mb=1024 "
-            "-node_dead_timeout_s=5";
+            "-node_timeout_s=3 -node_dead_timeout_s=5";
         // Global injects: NO NodeSelector.setInterval → workers 1/2 report at default 30s.
         // 30s >> 5s threshold → entries age past 5s → cleared without fix.
         opts.injectActions =

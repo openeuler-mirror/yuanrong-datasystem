@@ -99,6 +99,9 @@ CoordinatorRuntime::CoordinatorRuntime() : runtimeFlags_(std::make_unique<Dynami
                                            configUpdater_(std::make_unique<DynamicConfigUpdater>(
                                                *runtimeFlags_, IsCoordinatorRuntimeApplicableFlag))
 {
+    // Reject-only guard so runtime UpdateConfig cannot accept node_dead_timeout_s values that
+    // startup validation would refuse (the coordinator consumes it for worker active windows).
+    runtimeFlags_->SetValidateSpecial(NodeDeadTimeoutFlagValidateSpecial);
 }
 
 CoordinatorRuntime::~CoordinatorRuntime() noexcept
@@ -129,6 +132,8 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
             FlagManager::GetInstance()->ParseConfigFile(options->configFilePath, errMsg), K_INVALID,
             FormatString("Parse config file %s error: %s", options->configFilePath, errMsg));
     }
+    CHECK_FAIL_RETURN_STATUS(ValidateNodeTimeoutFlags(), K_INVALID,
+                             "invalid node_timeout_s/node_dead_timeout_s configuration");
     RETURN_IF_NOT_OK(InitWatchDispatcherBthreadPool());
 
     const std::string logFilename = FLAGS_log_filename.empty() ? "datasystem_coordinator" : FLAGS_log_filename;

@@ -22,11 +22,14 @@
 #include <string>
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 
 #include "ut/common.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/worker/worker_update_flag_check.h"
+#include "datasystem/common/flags/common_flags.h"
+#define private public
 #include "datasystem/common/flags/dynamic_flag_config.h"
+#undef private
 
 DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_uint32(node_timeout_s);
@@ -34,8 +37,9 @@ DS_DECLARE_bool(log_compress);
 DS_DECLARE_uint32(arena_per_tenant);
 DS_DECLARE_uint32(log_async_queue_size);
 DS_DECLARE_uint32(max_log_file_num);
-DS_DECLARE_int32(logbufsecs);
 DS_DECLARE_bool(log_monitor);
+DS_DECLARE_int32(minloglevel);
+DS_DECLARE_double(request_sample_rate);
 
 namespace datasystem {
 namespace ut {
@@ -83,11 +87,100 @@ TEST_F(FlagsTest, TestUpdateFlagParameter)
     DynamicFlagConfig flagConfig;
     std::unordered_map<std::string, std::string> flagMap{ { "v", "3" },
                                                           { "max_log_file_num", "20" },
-                                                          { "logbufsecs", "15" } };
+                                                          { "log_compress", "true" } };
     EXPECT_TRUE(flagConfig.UpdateFlagParameter(flagMap).IsOk());
     EXPECT_EQ(FLAGS_v, 3);
     EXPECT_EQ(FLAGS_max_log_file_num, 20ul);
-    EXPECT_EQ(FLAGS_logbufsecs, 15);  // 15s
+    EXPECT_TRUE(FLAGS_log_compress);
+}
+
+TEST_F(FlagsTest, TestUpdateFlagParameterRejectsWholeBatchOnInvalidValue)
+{
+    DynamicFlagConfig flagConfig;
+    auto oldV = FLAGS_v;
+    auto oldMaxLogFileNum = FLAGS_max_log_file_num;
+    std::unordered_map<std::string, std::string> flagMap{ { "v", "3" },
+                                                          { "max_log_file_num", "20" },
+                                                          { "minloglevel", "invalid" } };
+    auto status = flagConfig.UpdateFlagParameter(flagMap);
+    EXPECT_TRUE(status.IsError());
+    EXPECT_THAT(status.GetMsg(), testing::HasSubstr("minloglevel"));
+    EXPECT_EQ(FLAGS_v, oldV);
+    EXPECT_EQ(FLAGS_max_log_file_num, oldMaxLogFileNum);
+}
+
+TEST_F(FlagsTest, TestUpdateFlagParameterSkipsUnchangedValue)
+{
+    DynamicFlagConfig flagConfig;
+    auto oldLogMonitor = FLAGS_log_monitor;
+    std::unordered_map<std::string, std::string> flagMap{
+        { "log_monitor", oldLogMonitor ? "1" : "0" }
+    };
+    EXPECT_TRUE(flagConfig.UpdateFlagParameter(flagMap).IsOk());
+    EXPECT_EQ(FLAGS_log_monitor, oldLogMonitor);
+}
+
+TEST_F(FlagsTest, TestUpdateFlagParameterCommitFailureRollsBackBatch)
+{
+    DynamicFlagConfig flagConfig;
+    flagConfig.SetBatchCommitHandler([](const auto &) { return false; });
+    auto oldLogCompress = FLAGS_log_compress;
+    auto oldRequestSampleRate = FLAGS_request_sample_rate;
+    FLAGS_log_compress = false;
+    FLAGS_request_sample_rate = 1.0;
+
+    std::unordered_map<std::string, std::string> flagMap{ { "log_compress", "true" },
+                                                          { "request_sample_rate", "0.7" } };
+    auto status = flagConfig.UpdateFlagParameter(flagMap);
+    EXPECT_TRUE(status.IsError());
+    EXPECT_THAT(status.GetMsg(), testing::HasSubstr("failed to update sampler flags"));
+    EXPECT_FALSE(FLAGS_log_compress);
+    EXPECT_DOUBLE_EQ(FLAGS_request_sample_rate, 1.0);
+
+    FLAGS_log_compress = oldLogCompress;
+    FLAGS_request_sample_rate = oldRequestSampleRate;
+}
+
+TEST_F(FlagsTest, TestUpdateFlagParameterSkipsFilteredFlags)
+{
+    DynamicFlagConfig flagConfig;
+    flagConfig.SetIsToHandle([](const auto &, const std::string &flagName) { return flagName != "log_compress"; });
+    auto oldLogCompress = FLAGS_log_compress;
+    auto oldMaxLogFileNum = FLAGS_max_log_file_num;
+    FLAGS_log_compress = false;
+    FLAGS_max_log_file_num = 0;
+
+    std::unordered_map<std::string, std::string> flagMap{ { "log_compress", "true" },
+                                                          { "max_log_file_num", "5" } };
+    EXPECT_TRUE(flagConfig.UpdateFlagParameter(flagMap).IsOk());
+    EXPECT_FALSE(FLAGS_log_compress);
+    EXPECT_EQ(FLAGS_max_log_file_num, 5ul);
+
+    FLAGS_log_compress = oldLogCompress;
+    FLAGS_max_log_file_num = oldMaxLogFileNum;
+}
+
+TEST_F(FlagsTest, TestMaskFlagValueUsesOperationLoggerSensitiveList)
+{
+    DynamicFlagConfig flagConfig;
+    EXPECT_EQ(flagConfig.MaskFlagValue("etcd_password", "secret"), "xxx");
+    EXPECT_EQ(flagConfig.MaskFlagValue("log_compress", "1"), "1");
+}
+
+TEST_F(FlagsTest, TestEraseInfoCoversSensitiveFlagList)
+{
+    DynamicFlagConfig flagConfig;
+    char arg0[] = "worker";
+    char arg1[] = "--etcd_password=secret";
+    char arg2[] = "-yuanrong_iam_key";
+    char arg3[] = "iam-secret";
+    char arg4[] = "--log_dir=/tmp";
+    char *argv[] = { arg0, arg1, arg2, arg3, arg4 };
+    EXPECT_TRUE(flagConfig.EraseInfo(5, argv).IsOk());
+    EXPECT_STREQ(argv[1], "--etcd_password");
+    EXPECT_STREQ(argv[2], "-yuanrong_iam_key");
+    EXPECT_STREQ(argv[3], "");
+    EXPECT_STREQ(argv[4], "--log_dir=/tmp");
 }
 
 TEST_F(FlagsTest, TestValidateFlagName)
@@ -159,36 +252,75 @@ TEST_F(FlagsTest, TestProcessOptionsUpdatesRuntimeLogControlFlags)
     FLAGS_log_monitor = oldLogMonitor;
 }
 
-TEST_F(FlagsTest, TestWorkerFlagValidateSpecial)
+TEST_F(FlagsTest, TestNodeDeadTimeoutFlagValidateSpecial)
 {
-    std::string flagName = "node_dead_timeout_s";
-    std::string newVal = "50";
-    EXPECT_TRUE(WorkerFlagValidateSpecial(flagName, newVal));
-}
-
-TEST_F(FlagsTest, TestNodeDeadTimeoutMustBeGreaterThanNodeTimeout)
-{
+    DynamicFlagConfig flagConfig;
+    flagConfig.SetValidateSpecial(NodeDeadTimeoutFlagValidateSpecial);
     auto oldNodeTimeoutS = FLAGS_node_timeout_s;
     auto oldNodeDeadTimeoutS = FLAGS_node_dead_timeout_s;
-    FLAGS_node_timeout_s = 3;
-    FLAGS_node_dead_timeout_s = 30;
 
-    EXPECT_FALSE(WorkerValidateNodeDeadTimeoutS(3));
-    EXPECT_TRUE(WorkerValidateNodeDeadTimeoutS(4));
+    FLAGS_node_timeout_s = 60;
+    std::string flagName = "node_dead_timeout_s";
+    EXPECT_TRUE(NodeDeadTimeoutFlagValidateSpecial(flagName, "50"));
+    EXPECT_EQ(FLAGS_node_dead_timeout_s, oldNodeDeadTimeoutS);
+
+    FLAGS_node_timeout_s = 1;
+    EXPECT_TRUE(NodeDeadTimeoutFlagValidateSpecial(flagName, "2"));
+    EXPECT_EQ(FLAGS_node_dead_timeout_s, oldNodeDeadTimeoutS);
+
+    EXPECT_FALSE(NodeDeadTimeoutFlagValidateSpecial(flagName, "30"));
+    EXPECT_EQ(FLAGS_node_dead_timeout_s, oldNodeDeadTimeoutS);
+
+    FLAGS_node_dead_timeout_s = 4;
+    std::unordered_map<std::string, std::string> validBatch{ { "node_dead_timeout_s", "30" } };
+    EXPECT_TRUE(flagConfig.UpdateFlagParameter(validBatch).IsOk());
+    EXPECT_EQ(FLAGS_node_dead_timeout_s, 30ul);
+
+    std::unordered_map<std::string, std::string> rejectBatch{ { "node_dead_timeout_s", "2" } };
+    EXPECT_TRUE(flagConfig.UpdateFlagParameter(rejectBatch).IsError());
+    EXPECT_EQ(FLAGS_node_dead_timeout_s, 30ul);
 
     FLAGS_node_timeout_s = oldNodeTimeoutS;
     FLAGS_node_dead_timeout_s = oldNodeDeadTimeoutS;
 }
 
-TEST_F(FlagsTest, TestAdjustNodeTimeoutFlagsClampsMinimumTimeouts)
+TEST_F(FlagsTest, TestNodeDeadTimeoutMustBeGreaterThanNodeTimeout)
+{
+    auto oldNodeTimeoutS = FLAGS_node_timeout_s;
+    FLAGS_node_timeout_s = 3;
+
+    EXPECT_FALSE(ValidateNodeDeadTimeoutS(3));
+    EXPECT_TRUE(ValidateNodeDeadTimeoutS(4));
+
+    FLAGS_node_timeout_s = 1;
+    EXPECT_FALSE(ValidateNodeDeadTimeoutS(2));
+
+    FLAGS_node_timeout_s = oldNodeTimeoutS;
+}
+
+TEST_F(FlagsTest, TestValidateNodeTimeoutFlags)
 {
     auto oldNodeTimeoutS = FLAGS_node_timeout_s;
     auto oldNodeDeadTimeoutS = FLAGS_node_dead_timeout_s;
-    FLAGS_node_timeout_s = 1;
-    FLAGS_node_dead_timeout_s = 1;
-    AdjustNodeTimeoutFlags();
-    EXPECT_EQ(FLAGS_node_timeout_s, 3);
-    EXPECT_EQ(FLAGS_node_dead_timeout_s, 3);
+
+    FLAGS_node_timeout_s = 3;
+    FLAGS_node_dead_timeout_s = 4;
+    EXPECT_TRUE(ValidateNodeTimeoutFlags());
+    EXPECT_TRUE(ValidateNodeTimeoutS(3));
+    EXPECT_FALSE(ValidateNodeTimeoutS(2));
+
+    FLAGS_node_timeout_s = 60;
+    FLAGS_node_dead_timeout_s = 300;
+    EXPECT_TRUE(ValidateNodeTimeoutFlags());
+
+    FLAGS_node_timeout_s = 300;
+    FLAGS_node_dead_timeout_s = 60;
+    EXPECT_FALSE(ValidateNodeTimeoutFlags());
+
+    FLAGS_node_timeout_s = 2;
+    FLAGS_node_dead_timeout_s = 300;
+    EXPECT_FALSE(ValidateNodeTimeoutFlags());
+
     FLAGS_node_timeout_s = oldNodeTimeoutS;
     FLAGS_node_dead_timeout_s = oldNodeDeadTimeoutS;
 }

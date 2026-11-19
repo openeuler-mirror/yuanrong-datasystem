@@ -1509,7 +1509,7 @@ public:
         const uint32_t workerCount = 4;
         opts.numWorkers = workerCount;
         // Topology confirms a crashed member after node_dead_timeout_s, so keep it bounded for crash tests.
-        opts.workerGflagParams = "-node_timeout_s=2 -node_dead_timeout_s=6";
+        opts.workerGflagParams = "-node_timeout_s=3 -node_dead_timeout_s=6";
         opts.disableRocksDB = false;
     }
 
@@ -1990,7 +1990,7 @@ public:
         StreamDfxTest::SetClusterSetupOptions(opts);
         const uint32_t workerCount = 2;
         opts.numWorkers = workerCount;
-        opts.workerGflagParams = "-node_timeout_s=2 -node_dead_timeout_s=60 -v=2";
+        opts.workerGflagParams = "-node_timeout_s=3 -node_dead_timeout_s=60 -v=2";
     }
 
     void SetUp() override

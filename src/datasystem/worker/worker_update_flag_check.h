@@ -26,10 +26,6 @@
 
 namespace datasystem {
 
-bool WorkerFlagValidateSpecial(const std::string &flagName, const std::string &newVal);
-
-void AdjustNodeTimeoutFlags();
-
 bool ValidateWatermarkFlags();
 
 /**
@@ -45,12 +41,6 @@ bool ValidateHeatFlags();
  *        Returns false (and logs) on any invalid value.
  */
 bool ValidateRebalanceHeatFlags();
-
-/**
- * @brief Check whether the value of node_dead_timeout_s is valid.
- * @param[in] value Change node_dead_timeout_s to this value.
- */
-bool WorkerValidateNodeDeadTimeoutS(const uint32_t value);
 
 }  // namespace datasystem
 #endif
