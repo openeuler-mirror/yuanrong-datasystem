@@ -694,7 +694,8 @@ HandleNotify(body):
 
 - 每 `metrics_interval_ms`（默认 3s）flush 一次
 - 每个 Op 独立统计
-- CSV 列：`timestamp, op, count, avg_ms, p90_ms, p99_ms, p99.9_ms, p99.99_ms, min_ms, max_ms, qps, throughput_MB_s`
+- CSV 列：`timestamp, op, count, avg_ms, p90_ms, p99_ms, p99.9_ms, p99.99_ms, min_ms, max_ms, qps, throughput_MB_s, total_req, succ_req, succ_rate`
+- cache 模式下追加的 `cache_summary` 行同样保持 15 列，末三列依次为累计 cache 请求数、命中数、命中率
 
 #### 全局汇总（WriteSummary 输出到 summary_{id}_{timestamp}.txt）
 

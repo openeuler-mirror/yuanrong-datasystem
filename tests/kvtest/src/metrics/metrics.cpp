@@ -87,7 +87,8 @@ void MetricsCollector::Start() {
     {
         std::ofstream f(metricsFile_, std::ios::trunc);
         if (f.is_open()) {
-            f << "timestamp,op,count,avg_ms,p90_ms,p99_ms,p99.9_ms,p99.99_ms,min_ms,max_ms,qps,throughput_MB_s\n";
+            f << "timestamp,op,count,avg_ms,p90_ms,p99_ms,p99.9_ms,p99.99_ms,min_ms,max_ms,qps,throughput_MB_s,"
+                 "total_req,succ_req,succ_rate\n";
         }
     }
 
@@ -133,11 +134,19 @@ void MetricsCollector::FlushWindow() {
     for (auto &m : ops_) {
         std::vector<double> latencies;
         uint64_t bytes = 0;
+        double succ_rate = 0.0;
+        uint64_t total_count = 0;
+        uint64_t succ_count = 0;
         {
             std::lock_guard<std::mutex> lock(m->windowMutex);
             latencies.swap(m->windowLatencies);
             bytes = m->windowBytes;
             m->windowBytes = 0;
+            succ_count = m->successCount.load();
+            total_count = m->totalCount.load();
+            if (total_count > 0) {
+                succ_rate = static_cast<double>(succ_count) / static_cast<double>(total_count);
+            }
         }
         if (latencies.empty()) continue;
 
@@ -159,7 +168,8 @@ void MetricsCollector::FlushWindow() {
           << std::fixed << std::setprecision(3)
           << "," << avg << "," << p90 << "," << p99 << "," << p999 << "," << p9999
           << "," << minV << "," << maxV << "," << qps
-          << "," << throughputMB << "\n";
+          << "," << throughputMB << "," << total_count << "," << succ_count
+          << "," << std::setprecision(7) << succ_rate << "\n";
     }
 
     // Cache mode: append hit_rate summary line
@@ -178,7 +188,7 @@ void MetricsCollector::FlushWindow() {
         double hitRate = total > 0 ? static_cast<double>(hits) / total : 0.0;
         f << ts.str() << ",cache_summary," << total
           << std::fixed << std::setprecision(4)
-          << ",0,0,0,0,0,0,0,0,0," << hitRate << "\n";
+          << ",0,0,0,0,0,0,0,0,0," << total << "," << hits << "," << hitRate << "\n";
     }
 
     f.flush();
