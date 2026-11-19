@@ -1481,7 +1481,7 @@ def _build_config(mode, args):
         'data_sizes': [s.strip() for s in args.data_sizes.split(',')],
         'connect_options': {
             'connect_timeout_ms': 1000,
-            'request_timeout_ms': 20,
+            'request_timeout_ms': args.request_timeout_ms,
             'enable_cross_node_connection': True,
             'enable_local_cache': args.enable_local_cache,
             'data_placement_policy': args.data_placement_policy,
@@ -1940,6 +1940,8 @@ def _add_gen_config_args(p):
                    choices=['PREFERRED_SAME_NODE', 'REQUIRED_SAME_NODE', 'PREFERRED_META_OWNER'],
                    default='PREFERRED_META_OWNER', dest='data_placement_policy',
                    help='Set/MSet data placement policy (default: PREFERRED_META_OWNER).')
+    p.add_argument('--request-timeout-ms', type=int, default=20,
+                   help='Client request timeout in ms (default: 20)')
     # CPU / NUMA affinity
     p.add_argument('--cpu-affinity', default='',
                    help='CPU affinity, e.g. "0-7" or "0,2,4,6" (default: auto-detect)')

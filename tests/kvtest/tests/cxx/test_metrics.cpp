@@ -126,19 +126,51 @@ TEST(FlushWindow_CsvFormat) {
     ASSERT_TRUE(lines.size() >= 2);
     // First line is header
     ASSERT_TRUE(lines[0].find("timestamp,op,") == 0);
-    // Data line has 11 commas (12 fields)
-    // Find the setStringView data line (skip cache_summary)
+    ASSERT_TRUE(lines[0].find("total_req,succ_req,succ_rate") != std::string::npos);
+    // Data line has 14 commas (15 fields), with total/succ counts and rate at the tail
     bool foundData = false;
     for (size_t i = 1; i < lines.size(); i++) {
         if (lines[i].find("setStringView") != std::string::npos) {
-            int commas = 0;
-            for (char c : lines[i]) if (c == ',') commas++;
-            ASSERT_EQ(commas, 11);
+            std::stringstream ss(lines[i]);
+            std::string field;
+            std::vector<std::string> fields;
+            while (std::getline(ss, field, ',')) fields.push_back(field);
+            ASSERT_EQ(fields.size(), static_cast<size_t>(15));
+            ASSERT_EQ(fields[12], "1");
+            ASSERT_EQ(fields[13], "1");
+            double succRate = std::stod(fields[14]);
+            ASSERT_TRUE(succRate > 0.999 && succRate <= 1.0);
             foundData = true;
             break;
         }
     }
     ASSERT_TRUE(foundData);
+    std::filesystem::remove_all(dir);
+}
+
+TEST(FlushWindow_CacheSummaryAligned) {
+    auto dir = MakeTempDir();
+    MetricsCollector m(0, 100, dir, true);
+    m.Start();
+    m.RecordCacheHit();
+    m.RecordCacheMiss();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    m.Stop();
+    auto lines = ReadFileLines(dir + "/latency_timeseries.csv");
+    bool foundSummary = false;
+    for (auto &line : lines) {
+        if (line.find("cache_summary") == std::string::npos) continue;
+        std::stringstream ss(line);
+        std::string field;
+        std::vector<std::string> fields;
+        while (std::getline(ss, field, ',')) fields.push_back(field);
+        ASSERT_EQ(fields.size(), static_cast<size_t>(15));
+        ASSERT_EQ(fields[12], "2");
+        ASSERT_EQ(fields[13], "1");
+        ASSERT_NEAR(std::stod(fields[14]), 0.5, 1e-4);
+        foundSummary = true;
+    }
+    ASSERT_TRUE(foundSummary);
     std::filesystem::remove_all(dir);
 }
 
