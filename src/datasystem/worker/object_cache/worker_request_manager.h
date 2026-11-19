@@ -291,7 +291,7 @@ public:
     void RemoveGetRequest(const std::shared_ptr<GetRequest> &request);
 
     /**
-     * @brief Update request info after object sealed.
+     * @brief Update request info after object published.
      * @param[in] objectKV The safe object and its corresponding objectKey.
      * @return Status of the call.
      */

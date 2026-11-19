@@ -65,7 +65,7 @@ TEST_F(ObjectClientBigBufferTest, EXCLUSIVE_TestPutAndLocalGetBigData)
     DS_ASSERT_OK(client->GIncreaseRef(objectKeys, failedObjectKeys));
     buffer->WLatch();
     buffer->MemoryCopy((void *)data.data(), size);
-    buffer->Seal();
+    buffer->Publish();
     buffer->UnWLatch();
     
     std::vector<Optional<Buffer>> buffers;

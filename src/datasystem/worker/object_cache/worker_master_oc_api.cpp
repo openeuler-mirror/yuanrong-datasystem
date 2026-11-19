@@ -56,7 +56,7 @@ static constexpr int64_t RESOURCE_REPORT_RPC_TIMEOUT_MS = 3 * 1000;
 // Hard cap on worker->master RPCs so a slow master cannot pin a worker bthread
 // for the 10min MAX_RPC_TIMEOUT_MS, even on degenerate paths where
 // reqTimeoutDuration is uninitialized (returns 60s default).
-// Applied to both seal and non-seal CreateMeta paths.
+// Applied to CreateMeta paths.
 static constexpr int64_t WORKER_TO_MASTER_RPC_HARD_CAP_MS = 3 * 1000;  // 3s
 
 #define CHECK_AND_SET_TIMEOUT(timeoutDuration_, request_, opts_)                              \

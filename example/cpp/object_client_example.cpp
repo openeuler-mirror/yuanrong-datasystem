@@ -32,13 +32,12 @@ static std::shared_ptr<Buffer> buffer_;
 
 static std::string DEFAULT_IP = "127.0.0.1";
 static constexpr int DEFAULT_PORT = 9088;
-static constexpr int PARAMETERS_NUM = 5;
+static constexpr int PARAMETERS_NUM = 4;
 static constexpr int64_t SHM_SIZE = 600 * 1024;
 
-static void Write(int64_t size, bool isSeal)
+static void Write(int64_t size)
 {
     std::cout << "Writing data to a buffer" << std::endl;
-    std::cout << std::boolalpha << "Immutable data: " << isSeal << std::endl;
     std::string objectKey = "123456789";
     std::string data(size, 'x');
     std::vector<std::string> failedIds;
@@ -47,18 +46,14 @@ static void Write(int64_t size, bool isSeal)
     std::cout << "Create: " << status.ToString() << std::endl;
     buffer_->WLatch();
     buffer_->MemoryCopy((void *)data.data(), size);
-    if (isSeal) {
-        buffer_->Seal();
-    } else {
-        buffer_->Publish();
-    }
+    buffer_->Publish();
     buffer_->UnWLatch();
     std::cout << "Write succeeds." << std::endl;
 }
 
-static void Read(int64_t size, bool isSeal)
+static void Read(int64_t size)
 {
-    Write(size, isSeal);
+    Write(size);
     std::cout << "Reading data from a buffer" << std::endl;
     std::string objectKey = "123456789";
     std::vector<std::string> objKeys = { objectKey };
@@ -79,7 +74,7 @@ static void Read(int64_t size, bool isSeal)
 
 static void Modify(int64_t size)
 {
-    Write(size, false);
+    Write(size);
     std::cout << "Modifying data in the buffer" << std::endl;
     std::string objectKey = "123456789";
     std::vector<std::string> objKeys = { objectKey };
@@ -106,9 +101,9 @@ static void Modify(int64_t size)
     std::cout << "Modify succeeds !!!" << std::endl;
 }
 
-static void Delete(int64_t size, bool isSeal)
+static void Delete(int64_t size)
 {
-    Write(size, isSeal);
+    Write(size);
     std::cout << "Deleting...." << std::endl;
     std::string objectKey = "123456789";
     std::vector<std::string> objKeys = { objectKey };
@@ -117,12 +112,12 @@ static void Delete(int64_t size, bool isSeal)
     std::cout << "GDecreaseRef: " << status.ToString() << std::endl;
 }
 
-void Start(int64_t size, bool isSeal)
+void Start(int64_t size)
 {
-    Write(size, isSeal);
-    Read(size, isSeal);
+    Write(size);
+    Read(size);
     Modify(size);
-    Delete(size, isSeal);
+    Delete(size);
 }
 
 int InitClient(const ConnectOptions &connectOpts)
@@ -150,31 +145,27 @@ void CloseClient()
 
 int main(int argc, char *argv[])
 {
-    const int authParametersNum = 8;
+    const int authParametersNum = 7;
     std::string ip;
     int port = 0;
     int index = 0;
     int size;
-    bool isSeal;
     std::string clientPublicKey, clientPrivateKey, serverPublicKey;
 
     if (argc == 1) {
         ip = DEFAULT_IP;
         port = DEFAULT_PORT;
         size = SHM_SIZE;
-        isSeal = false;
     } else if (argc == PARAMETERS_NUM) {
         ip = argv[++index];
         port = atoi(argv[++index]);
         size = atoi(argv[++index]);
-        isSeal = (std::string(argv[++index]) == "true");
     } else if (argc == authParametersNum) {
         // example call:
-        // ./object_example 127.0.0.1 18482 true false <client public key> <client private key> <worker public key>
+        // ./object_example 127.0.0.1 18482 600 <client public key> <client private key> <worker public key>
         ip = argv[++index];
         port = atoi(argv[++index]);
         size = atoi(argv[++index]);
-        isSeal = (std::string(argv[++index]) == "true");
         clientPublicKey = argv[++index];
         clientPrivateKey = argv[++index];
         serverPublicKey = argv[++index];
@@ -195,7 +186,7 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    Start(size, isSeal);
+    Start(size);
     CloseClient();
     return 0;
 }

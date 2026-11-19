@@ -177,7 +177,7 @@ public:
     }
 
     template <typename F>
-    void PublishOrSeal(Buffer &buffer, size_t createSz, F f, bool assert = true)
+    void WriteAndPublish(Buffer &buffer, size_t createSz, F f, bool assert = true)
     {
         RandomData randomData;
         auto bytes = randomData.RandomBytes(createSz);
@@ -200,7 +200,7 @@ public:
         DS_ASSERT_OK(client->Create(objKey, createSz, createParam, buffer));
         std::vector<std::string> failedIds;
         DS_ASSERT_OK(client->GIncreaseRef({ objKey }, failedIds));
-        PublishOrSeal(*buffer, createSz, [&buffer]() -> Status { return buffer->Publish(); });
+        WriteAndPublish(*buffer, createSz, [&buffer]() -> Status { return buffer->Publish(); });
     }
 
     static uint64_t ToHashInt(const std::vector<uint8_t> &bytes)
@@ -328,7 +328,7 @@ TEST_F(OCClientPublishTest, TestCacheInvalidPublish)
         DS_ASSERT_OK(client2->Get({ objKey }, timeOut, buffers));
         ASSERT_TRUE(NotExistsNone(buffers));
         auto &buf = buffers[0];
-        PublishOrSeal(buf.value(), sz, [&buf]() -> Status { return buf->Publish(); });
+        WriteAndPublish(buf.value(), sz, [&buf]() -> Status { return buf->Publish(); });
     }
 
     // 3rd: Expect publish success after invalidation.
@@ -691,7 +691,7 @@ TEST_F(OCClientPublishTest, VarySzMultiPub)
             ASSERT_FALSE(buf->MemoryCopy(bytes.data(), bytes.size()) == Status::OK());
         }
         ASSERT_EQ(Status::OK(), client2->Create(objKey, largeSz, createParam, bufferPtr));
-        PublishOrSeal(*bufferPtr, largeSz, [&bufferPtr]() -> Status { return bufferPtr->Publish(); });
+        WriteAndPublish(*bufferPtr, largeSz, [&bufferPtr]() -> Status { return bufferPtr->Publish(); });
     }
 
     {
@@ -712,40 +712,8 @@ TEST_F(OCClientPublishTest, VarySzMultiPub)
         }
         std::shared_ptr<Buffer> bufferPtr;
         ASSERT_EQ(Status::OK(), client2->Create(objKey, smallSz, createParam, bufferPtr));
-        PublishOrSeal(*bufferPtr, smallSz, [&bufferPtr]() -> Status { return bufferPtr->Publish(); });
+        WriteAndPublish(*bufferPtr, smallSz, [&bufferPtr]() -> Status { return bufferPtr->Publish(); });
     }
-}
-
-TEST_F(OCClientPublishTest, SealForwardingShimSemantics)
-{
-    std::shared_ptr<ObjectClient> client1;
-    InitTestClient(0, client1);
-    int64_t sz = 100'000;
-
-    // Seal forwards to Publish: Create -> Seal -> Get reads the data.
-    std::shared_ptr<Buffer> buffer1;
-    RandomData randomData;
-    auto bytes1 = randomData.RandomBytes(sz);
-    {
-        DS_ASSERT_OK(client1->Create(objKey, sz, createParam, buffer1));
-        DS_ASSERT_OK(buffer1->WLatch());
-        datasystem::Raii unlatch([&buffer1]() { buffer1->UnWLatch(); });
-        DS_ASSERT_OK(buffer1->MemoryCopy(bytes1.data(), bytes1.size()));
-        DS_ASSERT_OK(buffer1->Seal());
-    }
-    GetAndVerify(client1, bytes1);
-
-    // Seal no longer pins the object: a later Publish overwrites it.
-    std::shared_ptr<Buffer> buffer2;
-    auto bytes2 = randomData.RandomBytes(sz);
-    {
-        DS_ASSERT_OK(client1->Create(objKey, sz, createParam, buffer2));
-        DS_ASSERT_OK(buffer2->WLatch());
-        datasystem::Raii unlatch([&buffer2]() { buffer2->UnWLatch(); });
-        DS_ASSERT_OK(buffer2->MemoryCopy(bytes2.data(), bytes2.size()));
-        DS_ASSERT_OK(buffer2->Publish());
-    }
-    GetAndVerify(client1, bytes2);
 }
 }  // namespace st
 }  // namespace datasystem

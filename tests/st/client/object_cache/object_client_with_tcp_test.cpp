@@ -50,9 +50,9 @@ public:
         opts.workerGflagParams = " -shared_memory_size_mb=5120 -v=2 -ipc_through_shared_memory=false";
     }
 
-    void EndToEndSuccess(int64_t size, bool isSeal);
+    void EndToEndSuccess(int64_t size);
 
-    void EndToEndRemoteGet(int64_t size, bool isSeal);
+    void EndToEndRemoteGet(int64_t size);
 
     void CreateBufferSuccess(int64_t size, CreateParam &param);
 
@@ -65,7 +65,7 @@ public:
 };
 
 // Test create->GIncreaseRef->WLatch->Write->Publish->UnWLatch->Get->RLatch->MutableData->UnRLatch->GDecreaseRef
-void ObjectClientWithTCPTest::EndToEndSuccess(int64_t size, bool isSeal)
+void ObjectClientWithTCPTest::EndToEndSuccess(int64_t size)
 {
     std::string objectKey = NewObjectKey();
     std::shared_ptr<Buffer> buffer;
@@ -80,11 +80,7 @@ void ObjectClientWithTCPTest::EndToEndSuccess(int64_t size, bool isSeal)
     DS_ASSERT_OK(client->GIncreaseRef(objectKeys, failedObjectKeys));
     buffer->WLatch();
     buffer->MemoryCopy((void *)data.data(), size);
-    if (isSeal) {
-        buffer->Seal();
-    } else {
-        buffer->Publish();
-    }
+    buffer->Publish();
     buffer->UnWLatch();
 
     std::vector<Optional<Buffer>> buffers;
@@ -98,7 +94,7 @@ void ObjectClientWithTCPTest::EndToEndSuccess(int64_t size, bool isSeal)
     DS_ASSERT_NOT_OK(client->Get(objectKeys, 0, buffers));
 }
 
-void ObjectClientWithTCPTest::EndToEndRemoteGet(int64_t size, bool isSeal)
+void ObjectClientWithTCPTest::EndToEndRemoteGet(int64_t size)
 {
     std::string objectKey = NewObjectKey();
     std::shared_ptr<Buffer> buffer;
@@ -116,11 +112,7 @@ void ObjectClientWithTCPTest::EndToEndRemoteGet(int64_t size, bool isSeal)
     DS_ASSERT_OK(client->GIncreaseRef(objectKeys, failedObjectKeys));
     buffer->WLatch();
     buffer->MemoryCopy(data.data(), size);
-    if (isSeal) {
-        buffer->Seal();
-    } else {
-        buffer->Publish();
-    }
+    buffer->Publish();
     buffer->UnWLatch();
 
     std::vector<Optional<Buffer>> buffers;
@@ -156,14 +148,14 @@ void ObjectClientWithTCPTest::CreateBufferSuccess(int64_t size, CreateParam &par
     ASSERT_EQ(size, buffer->GetSize());
 }
 
-TEST_F(ObjectClientWithTCPTest, EndToEndSuccessWithNonShmSealSuccess)
+TEST_F(ObjectClientWithTCPTest, EndToEndSuccessWithNonShmPubSuccess)
 {
-    EndToEndSuccess(NON_SHM_SIZE, true);
+    EndToEndSuccess(NON_SHM_SIZE);
 }
 
 TEST_F(ObjectClientWithTCPTest, LEVEL1_EndToEndRemoteGetWithNonShmPubSuccess)
 {
-    EndToEndRemoteGet(NON_SHM_SIZE, false);
+    EndToEndRemoteGet(NON_SHM_SIZE);
 }
 
 TEST_F(ObjectClientWithTCPTest, GetAndModifySuccess)
@@ -233,7 +225,7 @@ TEST_F(ObjectClientWithTCPTest, MultiplyClientCreateOkTest)
     ASSERT_EQ(fut.get(), Status::OK());
     ASSERT_EQ(fut2.get(), Status::OK());
     DS_ASSERT_OK(data1->Publish());
-    DS_ASSERT_OK(data2->Seal());
+    DS_ASSERT_OK(data2->Publish());
 }
 }  // namespace st
 }  // namespace datasystem

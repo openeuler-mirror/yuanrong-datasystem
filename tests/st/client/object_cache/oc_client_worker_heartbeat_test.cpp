@@ -65,8 +65,8 @@ TEST_F(OCClientWorkerHeartbeatTest, LEVEL1_MultiClientOneWorkerRestartTest)
     std::vector<std::string> failedObjKeys;
     DS_ASSERT_OK(cliLocal->GIncreaseRef({ obj1Id }, failedObjKeys));
     DS_ASSERT_OK(cliLocal2->GIncreaseRef({ obj2Id }, failedObjKeys));
-    CreateAndSealObject(cliLocal, obj1Id, data1);
-    CreateAndSealObject(cliLocal2, obj2Id, data2);
+    CreateAndPublishObject(cliLocal, obj1Id, data1);
+    CreateAndPublishObject(cliLocal2, obj2Id, data2);
 
     // Shutdown worker
     cluster_->ShutdownNodes(WORKER);
@@ -79,8 +79,8 @@ TEST_F(OCClientWorkerHeartbeatTest, LEVEL1_MultiClientOneWorkerRestartTest)
     DS_ASSERT_OK(cliLocal->GDecreaseRef({ obj1Id }, failedObjKeys));
     DS_ASSERT_OK(cliLocal2->GDecreaseRef({ obj2Id }, failedObjKeys));
     // Create object
-    CreateAndSealObject(cliLocal, obj1Id, data1);
-    CreateAndSealObject(cliLocal2, obj2Id, data2);
+    CreateAndPublishObject(cliLocal, obj1Id, data1);
+    CreateAndPublishObject(cliLocal2, obj2Id, data2);
 
     ThreadPool getPool(2);
     std::vector<std::string> getObj1 = { obj2Id };
@@ -119,8 +119,8 @@ TEST_F(OCClientWorkerHeartbeatTest, OneClientShutdownTest)
     std::string obj2Id = NewObjectKey();
     std::vector<uint8_t> data1 = { 65, 66, 67, 68, 69, 70 };
     std::vector<uint8_t> data2 = { 65, 66, 67, 68, 69, 70 };
-    CreateAndSealObject(cliLocal, obj1Id, data1);
-    CreateAndSealObject(cliLocal, obj2Id, data2);
+    CreateAndPublishObject(cliLocal, obj1Id, data1);
+    CreateAndPublishObject(cliLocal, obj2Id, data2);
 
     std::vector<std::string> objectKeys;
     objectKeys.push_back(obj1Id);
@@ -173,7 +173,7 @@ TEST_F(OCClientWorkerHeartbeatNoRocksDBTest, TestWorkerRestartWithoutRocksDB)
     std::string objId = NewObjectKey();
     std::shared_ptr<Buffer> data;
     DS_ASSERT_OK(client->Create(objId, SHM_SIZE, CreateParam{}, data));
-    DS_ASSERT_OK(data->Seal());
+    DS_ASSERT_OK(data->Publish());
 
     // Shutdown and restart worker (no RocksDB recovery).
     cluster_->ShutdownNodes(WORKER);
@@ -187,7 +187,7 @@ TEST_F(OCClientWorkerHeartbeatNoRocksDBTest, TestWorkerRestartWithoutRocksDB)
     DS_ASSERT_OK(client->Create(objId2, SHM_SIZE, CreateParam{}, data2));
     ASSERT_NE(data2, nullptr);
     ASSERT_EQ(SHM_SIZE, data2->GetSize());
-    DS_ASSERT_OK(data2->Seal());
+    DS_ASSERT_OK(data2->Publish());
 }
 
 class OCClientWorkerRediscoverTest : public OCClientCommon {
@@ -245,11 +245,11 @@ TEST_F(OCClientWorkerRediscoverTest, TestRediscoverLocalWorkerAfterIPChange)
     auto client = std::make_shared<ObjectClient>(connectOptions);
     DS_ASSERT_OK(client->Init());
 
-    // Verify the client works: Create + Seal + Get.
+    // Verify the client works: Create + Publish + Get.
     std::string objId1 = NewObjectKey();
     std::shared_ptr<Buffer> data1;
     DS_ASSERT_OK(client->Create(objId1, SHM_SIZE, CreateParam{}, data1));
-    DS_ASSERT_OK(data1->Seal());
+    DS_ASSERT_OK(data1->Publish());
     std::vector<Optional<Buffer>> dataList1;
     DS_ASSERT_OK(client->Get({ objId1 }, 0, dataList1));
     ASSERT_TRUE(NotExistsNone(dataList1));
@@ -267,13 +267,13 @@ TEST_F(OCClientWorkerRediscoverTest, TestRediscoverLocalWorkerAfterIPChange)
     // Wait for the rediscovery loop to find the new worker via ServiceDiscovery.
     sleep(10);
 
-    // Verify end-to-end: Create + Seal + Get on the rediscovered local worker.
+    // Verify end-to-end: Create + Publish + Get on the rediscovered local worker.
     std::string objId2 = NewObjectKey();
     std::shared_ptr<Buffer> data2;
     DS_ASSERT_OK(client->Create(objId2, SHM_SIZE, CreateParam{}, data2));
     ASSERT_NE(data2, nullptr);
     ASSERT_EQ(SHM_SIZE, data2->GetSize());
-    DS_ASSERT_OK(data2->Seal());
+    DS_ASSERT_OK(data2->Publish());
     std::vector<Optional<Buffer>> dataList2;
     DS_ASSERT_OK(client->Get({ objId2 }, 0, dataList2));
     ASSERT_TRUE(NotExistsNone(dataList2));

@@ -74,8 +74,8 @@ public:
     {
         return client->QueryGlobalRefNum(objectKey);
     }
-    void EndToEndSuccess(int64_t size, bool isSeal);
-    void EndToEndRemoteGet(int64_t size, bool isSeal);
+    void EndToEndSuccess(int64_t size);
+    void EndToEndRemoteGet(int64_t size);
     void InitObjectClients()
     {
         InitTestClient(0, objClient0_);
@@ -94,7 +94,7 @@ protected:
 */
 
 // Test create->WLatch->Write->Publish->UnWLatch->Get->RLatch->MutableData->UnRLatch->Delete
-void OCClientDistMasterTest::EndToEndSuccess(int64_t size, bool isSeal)
+void OCClientDistMasterTest::EndToEndSuccess(int64_t size)
 {
     std::string objectKey = ObjectKeyWithOwner(0, uuidMap_);
     std::shared_ptr<Buffer> buffer;
@@ -107,11 +107,7 @@ void OCClientDistMasterTest::EndToEndSuccess(int64_t size, bool isSeal)
 
     buffer->WLatch();
     buffer->MemoryCopy((void *)data.data(), size);
-    if (isSeal) {
-        buffer->Seal();
-    } else {
-        buffer->Publish();
-    }
+    buffer->Publish();
     buffer->UnWLatch();
 
     std::vector<Optional<Buffer>> buffers;
@@ -125,7 +121,7 @@ void OCClientDistMasterTest::EndToEndSuccess(int64_t size, bool isSeal)
     buffers[0]->UnRLatch();
 }
 
-void OCClientDistMasterTest::EndToEndRemoteGet(int64_t size, bool isSeal)
+void OCClientDistMasterTest::EndToEndRemoteGet(int64_t size)
 {
     std::string objectKey = ObjectKeyWithOwner(2, uuidMap_);
     std::shared_ptr<Buffer> buffer;
@@ -141,11 +137,7 @@ void OCClientDistMasterTest::EndToEndRemoteGet(int64_t size, bool isSeal)
 
     buffer->WLatch();
     buffer->MemoryCopy(data.data(), size);
-    if (isSeal) {
-        buffer->Seal();
-    } else {
-        buffer->Publish();
-    }
+    buffer->Publish();
     buffer->UnWLatch();
 
     std::vector<Optional<Buffer>> buffers;
@@ -166,44 +158,24 @@ void OCClientDistMasterTest::EndToEndRemoteGet(int64_t size, bool isSeal)
     buffer1[0]->UnRLatch();
 }
 
-TEST_F(OCClientDistMasterTest, EndToEndSuccessWithShmSealSuccess)
-{
-    EndToEndSuccess(SHM_SIZE, true);
-}
-
 TEST_F(OCClientDistMasterTest, EndToEndSuccessWithShmPubSuccess)
 {
-    EndToEndSuccess(SHM_SIZE, false);
-}
-
-TEST_F(OCClientDistMasterTest, EndToEndSuccessWithNonShmSealSuccess)
-{
-    EndToEndSuccess(NON_SHM_SIZE, true);
+    EndToEndSuccess(SHM_SIZE);
 }
 
 TEST_F(OCClientDistMasterTest, EndToEndSuccessWithNonShmPubSuccess)
 {
-    EndToEndSuccess(NON_SHM_SIZE, false);
-}
-
-TEST_F(OCClientDistMasterTest, EndToEndRemoteGetWithShmSealSuccess)
-{
-    EndToEndRemoteGet(SHM_SIZE, true);
+    EndToEndSuccess(NON_SHM_SIZE);
 }
 
 TEST_F(OCClientDistMasterTest, EndToEndRemoteGetWithShmPubSuccess)
 {
-    EndToEndRemoteGet(SHM_SIZE, false);
-}
-
-TEST_F(OCClientDistMasterTest, EndToEndRemoteGetWithNonShmSealSuccess)
-{
-    EndToEndRemoteGet(NON_SHM_SIZE, true);
+    EndToEndRemoteGet(SHM_SIZE);
 }
 
 TEST_F(OCClientDistMasterTest, LEVEL1_EndToEndRemoteGetWithNonShmPubSuccess)
 {
-    EndToEndRemoteGet(NON_SHM_SIZE, false);
+    EndToEndRemoteGet(NON_SHM_SIZE);
 }
 
 /*
@@ -217,7 +189,7 @@ TEST_F(OCClientDistMasterTest, GetRemoteTest)
     InitTestClient(0, cliLocal);
     std::string obj1Id = ObjectKeyWithOwner(0, uuidMap_);
     std::vector<uint8_t> data = { 65, 66, 67, 68, 69, 70 };
-    CreateAndSealObject(cliLocal, obj1Id, data);
+    CreateAndPublishObject(cliLocal, obj1Id, data);
 
     // Remote GET immutable object from a client in Node 1
     LOG(INFO) << "cliRemote starts to get immutable object";
@@ -232,10 +204,10 @@ TEST_F(OCClientDistMasterTest, GetRemoteTest)
 
     // Remote GET mutable object from a client in Node 1
     LOG(INFO) << "cliRemote starts to get mutable object";
-    std::string notSealObjKey = ObjectKeyWithOwner(0, uuidMap_);
-    CreateAndPublishObject(cliLocal, notSealObjKey, data);
-    std::vector<Optional<Buffer>> dataListNotSeal;
-    DS_ASSERT_OK(cliRemote->Get({ notSealObjKey }, 0, dataListNotSeal));
+    std::string mutableObjKey = ObjectKeyWithOwner(0, uuidMap_);
+    CreateAndPublishObject(cliLocal, mutableObjKey, data);
+    std::vector<Optional<Buffer>> dataListMutable;
+    DS_ASSERT_OK(cliRemote->Get({ mutableObjKey }, 0, dataListMutable));
 }
 
 TEST_F(OCClientDistMasterTest, GetRemoteTestIDNotExists)
@@ -266,8 +238,8 @@ TEST_F(OCClientDistMasterTest, GetRemoteSameIdTest)
     std::string obj2Id = ObjectKeyWithOwner(0, uuidMap_);
     std::vector<uint8_t> data1 = { 65, 66, 67, 68, 69, 70 };
     std::vector<uint8_t> data2 = { 90, 91, 92, 93, 94 };
-    CreateAndSealObject(cliLocal, obj1Id, data1);
-    CreateAndSealObject(cliLocal, obj2Id, data2);
+    CreateAndPublishObject(cliLocal, obj1Id, data1);
+    CreateAndPublishObject(cliLocal, obj2Id, data2);
 
     // Do remote GET from a client in Node 1
     std::shared_ptr<ObjectClient> cliRemote;
@@ -327,7 +299,7 @@ TEST_F(OCClientDistMasterTest, EXCLUSIVE_GetRemoteTimeoutTest)
     auto fut3 = threadPool.Submit([objectKeyDelayCreate, &dataDelayCreate, cliLocal, this]() {
         LOG(INFO) << "cliLocal starts to create object";
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        CreateAndSealObject(cliLocal, objectKeyDelayCreate, dataDelayCreate);
+        CreateAndPublishObject(cliLocal, objectKeyDelayCreate, dataDelayCreate);
         LOG(INFO) << "cliLocal ends to create object";
     });
 
@@ -350,8 +322,8 @@ TEST_F(OCClientDistMasterTest, GetRemoteMultipleClientsToSingleLocalWorkerTest)
     std::string objNotCreate = ObjectKeyWithOwner(0, uuidMap_);
     std::vector<uint8_t> data1 = { 65, 66, 67, 68, 69, 70 };
     std::vector<uint8_t> data2 = { 90, 91, 92, 93, 94 };
-    CreateAndSealObject(cli1Local, obj1Id, data1);
-    CreateAndSealObject(cli1Local, obj2Id, data2);
+    CreateAndPublishObject(cli1Local, obj1Id, data1);
+    CreateAndPublishObject(cli1Local, obj2Id, data2);
 
     ThreadPool threadPool(2);
     std::vector<std::string> getObjListExist = { obj1Id, obj2Id };
@@ -408,8 +380,8 @@ TEST_F(OCClientDistMasterTest, GetRemoteSingleClientToSingleWorkerConcurrentlyTe
     std::string obj2Id = ObjectKeyWithOwner(1, uuidMap_);
     std::vector<uint8_t> data1 = { 65, 66, 67, 68, 69, 70 };
     std::vector<uint8_t> data2 = { 90, 91, 92, 93, 94 };
-    CreateAndSealObject(cliRemote, obj1Id, data1);
-    CreateAndSealObject(cliRemote, obj2Id, data2);
+    CreateAndPublishObject(cliRemote, obj1Id, data1);
+    CreateAndPublishObject(cliRemote, obj2Id, data2);
 
     int threadNum = 20;
     std::vector<std::thread> clientThreads(threadNum);
@@ -451,8 +423,8 @@ TEST_F(OCClientDistMasterTest, GetRemoteMultipleClientsToSingleWorkerTest)
     std::string obj3Id = ObjectKeyWithOwner(2, uuidMap_);
     std::vector<uint8_t> data1 = { 65, 66, 67, 68, 69, 70 };
     std::vector<uint8_t> data2 = { 90, 91, 92, 93, 94 };
-    CreateAndSealObject(cliRemote, obj1Id, data1);
-    CreateAndSealObject(cliRemote, obj2Id, data2);
+    CreateAndPublishObject(cliRemote, obj1Id, data1);
+    CreateAndPublishObject(cliRemote, obj2Id, data2);
 
     ThreadPool threadPool(3);
     std::vector<std::string> getObjList = { obj1Id, obj2Id };
@@ -512,9 +484,9 @@ TEST_F(OCClientDistMasterTest, GetRemoteSingleClientToMultipleWorkersTest)
     std::vector<uint8_t> data2 = { 90, 91, 92, 93, 94 };
     std::vector<uint8_t> data3 = { 80, 81, 82, 83 };
 
-    CreateAndSealObject(cliLocal, obj1Id, data1);
-    CreateAndSealObject(cliRemote1, obj2Id, data2);
-    CreateAndSealObject(cliRemote2, obj3Id, data3);
+    CreateAndPublishObject(cliLocal, obj1Id, data1);
+    CreateAndPublishObject(cliRemote1, obj2Id, data2);
+    CreateAndPublishObject(cliRemote2, obj3Id, data3);
 
     std::vector<std::string> getObjList = { obj1Id, obj2Id, obj3Id };
 
@@ -547,9 +519,9 @@ TEST_F(OCClientDistMasterTest, DISABLED_GetRemoteSingleClientToMultipleWorkersDe
     std::vector<uint8_t> data2 = { 90, 91, 92, 93, 94 };
     std::vector<uint8_t> data3 = { 80, 81, 82, 83 };
     std::vector<uint8_t> data4 = { 70, 71, 72 };
-    CreateAndSealObject(cliLocal, obj1Id, data1);
-    CreateAndSealObject(cliRemote1, obj2Id, data2);
-    CreateAndSealObject(cliRemote2, obj3Id, data3);
+    CreateAndPublishObject(cliLocal, obj1Id, data1);
+    CreateAndPublishObject(cliRemote1, obj2Id, data2);
+    CreateAndPublishObject(cliRemote2, obj3Id, data3);
 
     ThreadPool threadPool(2);
     std::vector<std::string> getObjList = { obj1Id, obj2Id, obj3Id, obj4Id };
@@ -581,7 +553,7 @@ TEST_F(OCClientDistMasterTest, DISABLED_GetRemoteSingleClientToMultipleWorkersDe
     // create data in remote node after 1000 milliseconds
     auto fut2 = threadPool.Submit([getObjList, obj4Id, &data4, cliRemote2, this]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        CreateAndSealObject(cliRemote2, obj4Id, data4);
+        CreateAndPublishObject(cliRemote2, obj4Id, data4);
     });
 
     fut1.get();
@@ -607,9 +579,9 @@ TEST_F(OCClientDistMasterTest, EXCLUSIVE_GetRemoteTimeOutDelayCreateTest)
     std::vector<uint8_t> data2 = { 90, 91, 92, 93, 94 };
     std::vector<uint8_t> data3 = { 80, 81, 82, 83 };
     std::vector<uint8_t> data4 = { 70, 71, 72 };
-    CreateAndSealObject(cliRemote1, obj1Id, data1);
-    CreateAndSealObject(cliRemote1, obj2Id, data2);
-    CreateAndSealObject(cliRemote1, obj3Id, data3);
+    CreateAndPublishObject(cliRemote1, obj1Id, data1);
+    CreateAndPublishObject(cliRemote1, obj2Id, data2);
+    CreateAndPublishObject(cliRemote1, obj3Id, data3);
 
     ThreadPool threadPool(5);
     std::vector<std::string> getObjList = { obj1Id, obj2Id, obj3Id };
@@ -677,7 +649,7 @@ TEST_F(OCClientDistMasterTest, EXCLUSIVE_GetRemoteTimeOutDelayCreateTest)
     auto fut5 = threadPool.Submit([obj4Id, cliRemote2, &data4, this]() {
         LOG(INFO) << "cliRemote2 starts to create object";
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        CreateAndSealObject(cliRemote2, obj4Id, data4);
+        CreateAndPublishObject(cliRemote2, obj4Id, data4);
         LOG(INFO) << "cliRemote2 ends to create object";
     });
 
@@ -817,21 +789,21 @@ TEST_F(OCClientDistMasterTest, NestedNormalTest)
     InitTestClient(0, client0);
     std::string objectKey0 = ObjectKeyWithOwner(0, uuidMap_);
     std::vector<uint8_t> data0 = { 65, 66, 67, 68, 69, 70 };
-    CreateAndSealObject(client0, objectKey0, data0);
+    CreateAndPublishObject(client0, objectKey0, data0);
 
     // Create ObjB on Node1 that depend on ObjA
     std::shared_ptr<ObjectClient> client1;
     InitTestClient(1, client1);
     std::string objectKey1 = ObjectKeyWithOwner(1, uuidMap_);
     std::vector<uint8_t> data1 = { 55, 56, 57, 58, 59, 60 };
-    CreateAndSealObject(client1, objectKey1, data1, { objectKey0 });
+    CreateAndPublishObject(client1, objectKey1, data1, { objectKey0 });
 
     // Create ObjC on Node2 that depend on ObjA
     std::shared_ptr<ObjectClient> client2;
     InitTestClient(2, client2);
     std::string objectKey2 = ObjectKeyWithOwner(2, uuidMap_);
     std::vector<uint8_t> data2 = { 55, 56, 57, 58, 59, 60 };
-    CreateAndSealObject(client2, objectKey2, data2, { objectKey0 });
+    CreateAndPublishObject(client2, objectKey2, data2, { objectKey0 });
 
     // Increase Reference Count for all objects
     std::vector<std::string> failObjects;
@@ -928,7 +900,7 @@ TEST_F(OCClientDistMasterTest, GRefAsyncIncrease)
     std::string objectKey = ObjectKeyWithOwner(1, uuidMap_);
     std::vector<uint8_t> data = { 65, 66, 67, 68, 69, 70 };
     std::vector<std::string> objectKeys = { objectKey };
-    CreateAndSealObject(client1, objectKey, data);
+    CreateAndPublishObject(client1, objectKey, data);
 
     std::vector<Optional<Buffer>> dataList;
 
@@ -992,7 +964,7 @@ TEST_F(OCClientDistMasterTest, TestWorkerTimeoutAndPushMeta)
     sleep(10);
 
     for (size_t i = 0; i < num; ++i) {
-        DS_ASSERT_OK(buffers[i]->Seal());
+        DS_ASSERT_OK(buffers[i]->Publish());
     }
 
     std::vector<Optional<Buffer>> getBuffers;

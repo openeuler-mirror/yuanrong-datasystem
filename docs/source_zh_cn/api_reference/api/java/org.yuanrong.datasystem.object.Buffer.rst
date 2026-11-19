@@ -21,19 +21,6 @@ public void publish(List<String> nestedKeys)
 参数：
     - **nestedKeys** - 嵌套对象的对象键。
 
-public void seal()
-~~~~~~~~~~~~~~~~~~
-
-发布数据到服务器，语义等同 publish（封存语义已移除）。
-
-public void seal(List<String> nestedKeys)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-发布数据到服务器，语义等同 publish（封存语义已移除）。
-
-参数：
-    - **nestedKeys** - 嵌套对象的对象键。
-
 public void wLatch()
 ~~~~~~~~~~~~~~~~~~~~
 

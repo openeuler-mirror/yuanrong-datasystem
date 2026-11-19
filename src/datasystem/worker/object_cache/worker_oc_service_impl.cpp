@@ -1536,7 +1536,7 @@ void WorkerOCServiceImpl::FillMetadata(const std::string &objectKey, const HostP
     }
     Raii unLockRaii([&currSafeObj]() { currSafeObj->RUnlock(); });
     if ((*currSafeObj)->IsBinary() && (*currSafeObj)->IsInvalid()) {
-        // Objects that have not been published or sealed do not need to be updated
+        // Objects that have not been published do not need to be updated
         return;
     }
     if ((*currSafeObj)->IsBinary()) {

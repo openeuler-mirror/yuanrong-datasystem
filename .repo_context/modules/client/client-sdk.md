@@ -837,7 +837,7 @@ handler. Clearing the Router handler synchronously excludes later callback acces
     owner groups. The MSet metadata route loop is bounded by both the API deadline and 10 attempts. MSet keys whose
     metadata was not created are never transitioned to the published state and are returned through
     `failed_object_keys` when either retry budget is exhausted. All metadata requests are retryable after route
-    failures; every publish path (including the `Buffer::Seal` forwarding shim) uses the same retryable Publish
+    failures; every publish path uses the same retryable Publish
     metadata flow.
   - An absent worker rejected by transport snapshot admission returns `K_NOT_READY`, not object-level `K_NOT_FOUND`. Because
     no RPC was sent, routed Set and MSet may safely exclude that worker and rebuild the request on a current route.

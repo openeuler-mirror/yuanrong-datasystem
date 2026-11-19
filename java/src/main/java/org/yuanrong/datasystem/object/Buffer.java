@@ -38,18 +38,6 @@ public interface Buffer {
     void publish(List<String> nestedKeys);
 
     /**
-     * Publish data to the server, semantically identical to publish (seal semantics removed).
-     */
-    void seal();
-
-    /**
-     * Publish data to the server, semantically identical to publish (seal semantics removed).
-     *
-     * @param nestedKeys Object key of the nested object.
-     */
-    void seal(List<String> nestedKeys);
-
-    /**
      * A write lock is executed on the memory to protect the memory from concurrent reads and writes.
      */
     void wLatch();

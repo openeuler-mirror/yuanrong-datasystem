@@ -200,7 +200,7 @@ TEST_F(LatencySummaryStTest, CreateAccessLogLatencySummary)
     DS_ASSERT_OK(buffer->WLatch());
     const std::string val(createSize, 'x');
     DS_ASSERT_OK(buffer->MemoryCopy(val.data(), val.size()));
-    DS_ASSERT_OK(buffer->Seal());
+    DS_ASSERT_OK(buffer->Publish());
     DS_ASSERT_OK(buffer->UnWLatch());
 
     AssertAccessLogContains(ClientAccessLogPath(),
@@ -232,7 +232,7 @@ TEST_F(LatencySummaryStTest, WorkerAccessLogLatencySummary)
     DS_ASSERT_OK(client_->Create(createKey, 64, SetParam{}, buffer));
     DS_ASSERT_OK(buffer->WLatch());
     DS_ASSERT_OK(buffer->MemoryCopy("value_for_worker_create", 22));
-    DS_ASSERT_OK(buffer->Seal());
+    DS_ASSERT_OK(buffer->Publish());
     DS_ASSERT_OK(buffer->UnWLatch());
 
     std::vector<bool> exists;

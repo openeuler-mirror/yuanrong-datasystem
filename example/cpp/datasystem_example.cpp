@@ -40,10 +40,9 @@ static constexpr int FAILED = -1;
 
 static std::shared_ptr<Buffer> buffer_;
 
-static int Write(const std::shared_ptr<ObjectClient> &client, const std::string &writeId, std::string data, bool isSeal)
+static int Write(const std::shared_ptr<ObjectClient> &client, const std::string &writeId, std::string data)
 {
     std::cout << "Writing data to a buffer" << std::endl;
-    std::cout << std::boolalpha << "Immutable data: " << isSeal << std::endl;
     std::vector<std::string> failedIds;
     Status status = client->GIncreaseRef({ writeId }, failedIds);
     if (status.IsError()) {
@@ -59,14 +58,10 @@ static int Write(const std::shared_ptr<ObjectClient> &client, const std::string 
 
     buffer_->WLatch();
     buffer_->MemoryCopy((void *)data.data(), data.size());
-    if (isSeal) {
-        status = buffer_->Seal();
-    } else {
-        status = buffer_->Publish();
-    }
+    status = buffer_->Publish();
     buffer_->UnWLatch();
     if (status.IsError()) {
-        std::cerr << "Publish or Seal object failed, detail: " << status.ToString() << std::endl;
+        std::cerr << "Publish object failed, detail: " << status.ToString() << std::endl;
         return FAILED;
     }
     std::cout << "Write succeeds." << std::endl;
@@ -130,7 +125,7 @@ int RunObjectTest(const std::shared_ptr<ObjectClient> &client)
     std::string writeData("Hello object client");
     std::string modifyData("Hello modify object");
 
-    if (Write(client, writeObjectKey, writeData, false) != SUCCESS) {
+    if (Write(client, writeObjectKey, writeData) != SUCCESS) {
         return FAILED;
     }
 

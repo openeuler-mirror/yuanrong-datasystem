@@ -105,7 +105,7 @@ TEST_F(OCClientUpdateTest, LEVEL1_UpdateStringTest)
     DS_ASSERT_OK(client->Get(getObjList, 0, dataList));
     ASSERT_TRUE(NotExistsNone(dataList));
     DS_ASSERT_OK(dataList[0]->MemoryCopy(const_cast<char *>(updateTest.data()), updateTest.length()));
-    DS_ASSERT_OK(dataList[0]->Seal());
+    DS_ASSERT_OK(dataList[0]->Publish());
 
     // get local update
     std::vector<Optional<Buffer>> updateData;
@@ -206,7 +206,7 @@ TEST_F(OCClientUpdateTest, UpdateFailedTest)
     ASSERT_EQ(dataList[0]->MemoryCopy(nullptr, 1).GetCode(), K_INVALID);
     ASSERT_EQ(dataList[0]->MemoryCopy(const_cast<char *>(updateTest.data()), updateTest.length()).GetCode(), K_INVALID);
     // data in buffer is uncompleted
-    DS_ASSERT_OK(dataList[0]->Seal());
+    DS_ASSERT_OK(dataList[0]->Publish());
 }
 
 TEST_F(OCClientUpdateTest, BufferInvalidedTest)
@@ -232,7 +232,7 @@ TEST_F(OCClientUpdateTest, BufferInvalidedTest)
     DS_ASSERT_OK(client2->Get(getObjList, 0, dataList));
 
     // client1 update
-    DS_ASSERT_OK(data->Seal());
+    DS_ASSERT_OK(data->Publish());
     DS_ASSERT_OK(client2->Get(getObjList, 0, dataList));
     ASSERT_TRUE(NotExistsNone(dataList));
 }
@@ -289,7 +289,7 @@ TEST_F(OCClientUpdateTest, MultiUpdateTest)
     // use worker0Buffer recover updated data by worker1 before
     DS_ASSERT_OK(workerOBuffer->MemoryCopy(const_cast<char *>(worker0_data.data()), worker0_data.length()));
     // worker0 update data
-    DS_ASSERT_OK(workerOBuffer->Seal());
+    DS_ASSERT_OK(workerOBuffer->Publish());
     // worker0 get updated data
     std::vector<Optional<Buffer>> updateData2;
     DS_ASSERT_OK(client2->Get(getObjList, 0, updateData2));
@@ -328,7 +328,7 @@ TEST_F(OCClientUpdateTest, UpdateDataTest)
     DS_ASSERT_OK(client3->Get(getObjList, 0, dataList));
     ASSERT_TRUE(NotExistsNone(dataList));
     DS_ASSERT_OK(dataList[0]->MemoryCopy(const_cast<char *>(worker1_data.data()), worker1_data.length()));
-    DS_ASSERT_OK(dataList[0]->Seal());
+    DS_ASSERT_OK(dataList[0]->Publish());
     std::vector<Optional<Buffer>> updateData;
     DS_ASSERT_OK(client2->Get(getObjList, 0, updateData));
     ASSERT_TRUE(NotExistsNone(updateData));

@@ -62,7 +62,7 @@ TEST_F(OCClientGetMemAllocOptimizeTest, DISABLED_GetLocalTest)
 
     std::string objKey = NewObjectKey();
     std::vector<uint8_t> data = { 65, 66, 67, 68, 69, 70 };
-    CreateAndSealObject(cliLocal, objKey, data);
+    CreateAndPublishObject(cliLocal, objKey, data);
 
     // get exist id data
     std::vector<Optional<Buffer>> dataList;
@@ -76,13 +76,13 @@ TEST_F(OCClientGetMemAllocOptimizeTest, DISABLED_GetLocalTest)
     DS_ASSERT_NOT_OK(cliLocal->Get({ notExistObjKey }, 0, dataListNotExist));
     int timeoutMs = 1000;
     DS_ASSERT_NOT_OK(cliLocal->Get({ notExistObjKey }, timeoutMs, dataListNotExist));
-    std::string notSealObjKey = NewObjectKey();
-    CreateObject(cliLocal, notSealObjKey, data);
-    std::vector<Optional<Buffer>> dataListNotSeal;
-    DS_ASSERT_NOT_OK(cliLocal->Get({ notSealObjKey }, 0, dataListNotSeal));
-    // get not seal data in different client
-    std::vector<Optional<Buffer>> dataListNotSealDiffCli(1);
-    DS_ASSERT_NOT_OK(cli2Local->Get({ notSealObjKey }, 0, dataListNotSealDiffCli));
+    std::string unpublishedObjKey = NewObjectKey();
+    CreateObject(cliLocal, unpublishedObjKey, data);
+    std::vector<Optional<Buffer>> dataListUnpublished;
+    DS_ASSERT_NOT_OK(cliLocal->Get({ unpublishedObjKey }, 0, dataListUnpublished));
+    // get unpublished data in different client
+    std::vector<Optional<Buffer>> dataListUnpublishedDiffCli(1);
+    DS_ASSERT_NOT_OK(cli2Local->Get({ unpublishedObjKey }, 0, dataListUnpublishedDiffCli));
 }
 
 TEST_F(OCClientGetMemAllocOptimizeTest, DISABLED_RegisterClient)

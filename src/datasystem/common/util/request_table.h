@@ -147,7 +147,7 @@ public:
     }
 
     /**
-     * @brief Update request info after object sealed.
+     * @brief Update request info after object published.
      * @param[in] objectKey The object key.
      * @param[in] entryParam The object entry parameter.
      * @param[in] lastRc The last error.

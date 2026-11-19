@@ -105,7 +105,7 @@ private:
     /**
      * @brief Verify the validity of the object release.
      * @param[in] req Publish request meta.
-     * @param[in] safeObj The object to be sealed.
+     * @param[in] safeObj The object to be published.
      * @return Status of the call.
      */
     static Status VertifyObjectReleaseValidity(const PublishReqPb &req, const SafeObjType &safeObj);
@@ -116,7 +116,7 @@ private:
      * @param[in] req Publish request meta.
      * @param[in] clientId Client id.
      * @param[in] shmUnitId Shm id used by client.
-     * @param[in/out] objectKV The object to be sealed and its corresponding objectKey.
+     * @param[in/out] objectKV The object to be published and its corresponding objectKey.
      * @return Status of the call.
      */
     Status PrepareForPublish(const PublishReqPb &req, const ClientKey &clientId, const ShmKey &shmUnitId,
@@ -136,7 +136,7 @@ private:
 
     /**
      * @brief Create a new object metadata to master.
-     * @param[in] objectKV The object to be sealed and its corresponding objectKey.
+     * @param[in] objectKV The object to be published and its corresponding objectKey.
      * @param[in] params The params of Publish request.
      * @param[out] version The new version from master.
      * @return Status of the call.

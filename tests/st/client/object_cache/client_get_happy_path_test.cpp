@@ -40,7 +40,7 @@ TEST_F(OCClientHappyPathTest, GetWithEnvVarExactSize)
 
     std::string objKey = NewObjectKey();
     std::string data = GenRandomString(1024);
-    CreateAndSealObject(cli, objKey, data);
+    CreateAndPublishObject(cli, objKey, data);
 
     setenv("DATASYSTEM_UB_GET_DATA_SIZE_BYTES", "1024", 1);
 
@@ -58,7 +58,7 @@ TEST_F(OCClientHappyPathTest, GetWithEnvVarLargerSize)
 
     std::string objKey = NewObjectKey();
     std::string data = GenRandomString(1024);
-    CreateAndSealObject(cli, objKey, data);
+    CreateAndPublishObject(cli, objKey, data);
 
     // Configure 2x larger than actual to verify buffer oversizing doesn't break Get.
     setenv("DATASYSTEM_UB_GET_DATA_SIZE_BYTES", "2048", 1);
@@ -77,7 +77,7 @@ TEST_F(OCClientHappyPathTest, GetWithEnvVarSmallerSize)
 
     std::string objKey = NewObjectKey();
     std::string data = GenRandomString(1024);
-    CreateAndSealObject(cli, objKey, data);
+    CreateAndPublishObject(cli, objKey, data);
 
     // Configure smaller than actual to trigger TCP fallback.
     setenv("DATASYSTEM_UB_GET_DATA_SIZE_BYTES", "512", 1);
@@ -96,7 +96,7 @@ TEST_F(OCClientHappyPathTest, GetWithoutEnvVar)
 
     std::string objKey = NewObjectKey();
     std::string data = GenRandomString(1024);
-    CreateAndSealObject(cli, objKey, data);
+    CreateAndPublishObject(cli, objKey, data);
 
     // Env var not set — must fall through to normal GetObjMetaInfo path.
     std::vector<Optional<Buffer>> dataList;
@@ -113,7 +113,7 @@ TEST_F(OCClientHappyPathTest, GetWithEmptyEnvVar)
 
     std::string objKey = NewObjectKey();
     std::string data = GenRandomString(1024);
-    CreateAndSealObject(cli, objKey, data);
+    CreateAndPublishObject(cli, objKey, data);
 
     setenv("DATASYSTEM_UB_GET_DATA_SIZE_BYTES", "", 1);
 
@@ -131,7 +131,7 @@ TEST_F(OCClientHappyPathTest, GetWithInvalidEnvVar)
 
     std::string objKey = NewObjectKey();
     std::string data = GenRandomString(1024);
-    CreateAndSealObject(cli, objKey, data);
+    CreateAndPublishObject(cli, objKey, data);
 
     setenv("DATASYSTEM_UB_GET_DATA_SIZE_BYTES", "not_a_number", 1);
 

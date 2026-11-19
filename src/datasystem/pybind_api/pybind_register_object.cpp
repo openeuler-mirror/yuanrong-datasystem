@@ -270,13 +270,6 @@ PybindDefineRegisterer g_pybind_define_f_Buffer("Buffer", PRIORITY_LOW, [](const
                  return buffer.Publish(nestedObjectKeys);
              })
 
-        .def("seal",
-             [](Buffer &buffer, const std::vector<std::string> &refIds) {
-                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-                 std::unordered_set<std::string> nestedObjectKeys = { refIds.begin(), refIds.end() };
-                 return buffer.Seal(nestedObjectKeys);
-             })
-
         .def("invalidate_buffer",
              [](Buffer &buffer) {
                  TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();

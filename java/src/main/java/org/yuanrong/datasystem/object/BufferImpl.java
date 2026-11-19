@@ -84,28 +84,6 @@ class BufferImpl implements Buffer {
     }
 
     @Override
-    public void seal() {
-        rLock.lock();
-        try {
-            ensureOpen();
-            sealNative(bufferPtr, null);
-        } finally {
-            rLock.unlock();
-        }
-    }
-
-    @Override
-    public void seal(List<String> nestedKeys) {
-        rLock.lock();
-        try {
-            ensureOpen();
-            sealNative(bufferPtr, nestedKeys);
-        } finally {
-            rLock.unlock();
-        }
-    }
-
-    @Override
     public void wLatch() {
         rLock.lock();
         try {
@@ -277,8 +255,6 @@ class BufferImpl implements Buffer {
     }
 
     private static native void publishNative(long bufferPtr, List<String> nestedKeys);
-
-    private static native void sealNative(long bufferPtr, List<String> nestedKeys);
 
     private static native void wLatchNative(long bufferPtr, int timeoutSec);
 

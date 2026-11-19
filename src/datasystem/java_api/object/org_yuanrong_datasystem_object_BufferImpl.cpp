@@ -44,22 +44,6 @@ JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_object_BufferImpl_publishNat
     }
 }
 
-JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_object_BufferImpl_sealNative(JNIEnv *env, jclass, jlong handle,
-                                                                             jobject nestedObjectKeysJO)
-{
-    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    VLOG(LOG_LEVEL) << "JNICALL BufferImpl.seal";
-    auto buffer = reinterpret_cast<std::shared_ptr<Buffer> *>(handle);
-    // get nestedObjectKeys passed from java
-    if (nestedObjectKeysJO == nullptr) {
-        JNI_CHECK_RESULT(env, (*buffer)->Seal(), (void)0);
-    } else {
-        std::unordered_set<std::string> nestedObjectKeys;
-        GetJavaStringListVal(env, nestedObjectKeysJO, nestedObjectKeys);
-        JNI_CHECK_RESULT(env, (*buffer)->Seal(nestedObjectKeys), (void)0);
-    }
-}
-
 JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_object_BufferImpl_wLatchNative(JNIEnv *env, jclass, jlong handle,
                                                                                jint timeoutSec)
 {
