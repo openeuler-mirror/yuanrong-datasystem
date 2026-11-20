@@ -20,8 +20,10 @@
 #include "datasystem/client/object_cache/transport/data_plane/shm_send_buffer_owner.h"
 
 #include <chrono>
+#include <new>
 #include <thread>
 
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/util/rpc_util.h"
@@ -51,6 +53,29 @@ ShmSendBufferOwner::ShmSendBufferOwner(std::shared_ptr<WorkerRpcClient> rpcClien
 ShmSendBufferOwner::~ShmSendBufferOwner()
 {
     Release();
+}
+
+void ShmSendBufferOwner::ReleaseReferenceAsync(const std::shared_ptr<WorkerRpcClient> &rpcClient,
+                                               const std::string &shmId, const TransportRequestContext &context,
+                                               const std::weak_ptr<ThreadPool> &releasePool) noexcept
+{
+    try {
+        if (shmId.empty()) {
+            return;
+        }
+        if (rpcClient == nullptr || !rpcClient->IsAlive() || releasePool.expired()) {
+            LOG(WARNING) << "Skip Create rollback because RPC client or release pool is unavailable, shmId=" << shmId;
+            return;
+        }
+        INJECT_POINT_NO_RETURN("ShmSendBufferOwner.ReleaseReferenceAsync.beforeSubmit",
+                               []() { throw std::bad_alloc(); });
+        ShmSendBufferOwner owner(rpcClient, ShmKey::Intern(shmId), context, releasePool);
+        owner.Release();
+    } catch (const std::exception &e) {
+        LOG(WARNING) << "Prepare Create rollback failed, shmId=" << shmId << ": " << e.what();
+    } catch (...) {
+        LOG(WARNING) << "Prepare Create rollback failed, shmId=" << shmId;
+    }
 }
 
 void ShmSendBufferOwner::Release()
@@ -119,7 +144,19 @@ void ShmSendBufferOwner::Release()
                         std::this_thread::sleep_for(std::chrono::milliseconds(backoffMs[attempt]));
                     }
                     ApiDeadlineGuard deadlineGuard(WRITE_REFERENCE_RELEASE_TIMEOUT_MS);
-                    rc = rpcClient->InvokeDecreaseReference(context, shmId, delayRelease);
+                    try {
+                        rc = rpcClient->InvokeDecreaseReference(context, shmId, delayRelease);
+                    } catch (const std::exception &e) {
+                        LOG(WARNING) << "Release routed write reference failed: " << e.what()
+                                     << "; region will be reclaimed by worker client-lost";
+                        finish();
+                        return;
+                    } catch (...) {
+                        LOG(WARNING) << "Release routed write reference failed with an unknown exception"
+                                     << "; region will be reclaimed by worker client-lost";
+                        finish();
+                        return;
+                    }
                     if (rc.IsOk()) {
                         finish();
                         return;

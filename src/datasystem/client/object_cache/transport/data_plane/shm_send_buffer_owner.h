@@ -25,6 +25,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <string>
 
 #include "datasystem/client/object_cache/transport/rpc/worker_rpc_client.h"
 #include "datasystem/common/object_cache/ireceive_buffer_owner.h"
@@ -40,7 +41,7 @@ public:
     /** @param rpcClient The routed worker's RPC client (releases shmId on the correct worker).
      *  @param shmId The shmId allocated by Create on the routed worker.
      *  @param context Request context (clientId/token/tenantId for the DecreaseReference RPC).
-     *  @param releasePool Async pool for retry; empty = synchronous fallback.
+     *  @param releasePool Async pool for retry; empty delegates cleanup to worker client-lost handling.
      *  @param lifecycleHandle Optional shared_ptr that keeps a mapping/handle alive until Release
      *         completes (e.g. mmapEntry for SHM, UB pool handle for UB).
      *  @param livenessCheck Optional function for data-plane liveness gate (e.g. ShmSession::IsAlive
@@ -52,6 +53,10 @@ public:
                        std::function<bool()> livenessCheck = nullptr,
                        bool releaseUbHandleBeforeAsync = false);
     ~ShmSendBufferOwner() override;
+
+    static void ReleaseReferenceAsync(const std::shared_ptr<WorkerRpcClient> &rpcClient, const std::string &shmId,
+                                      const TransportRequestContext &context,
+                                      const std::weak_ptr<ThreadPool> &releasePool) noexcept;
 
     void Release() override;
     bool ManagesWorkerReference() const override;

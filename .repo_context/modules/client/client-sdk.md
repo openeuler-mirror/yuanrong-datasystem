@@ -57,6 +57,22 @@ companion. The source currently implements the following consolidation boundary:
 - Maven retains its existing output paths; Stream source and test selection follows the build switch.
 - Integrated TransferEngine Python tests use the generated package; standalone tests retain their source package.
 
+## Single-key UB Create rollback
+
+- After successful Worker Create, `UbTransporter::Create` installs a stack-only rollback guard before allocating
+  local buffer metadata or interning the returned shm ID. Local UB allocation failure, invalid handles, unsupported
+  responses and owner-construction failure schedule release through the routed Worker's `ShmSendBufferOwner`.
+- Once the owner is attached, the guard transfers responsibility to it before `ObjectBufferInternal::Create`.
+  Failed final buffer construction releases through owner destruction; successful buffers retain their reference.
+- The guard borrows synchronous call state; the asynchronous release task owns copies. Create and release RPC exceptions
+  are contained. Existing bounded retries remain; unavailable pools, rejected submissions,
+  persistent heap exhaustion and exhausted retries still depend on Worker client-lost cleanup.
+- RPC-result ambiguity remains owned by `TransportLayer` allocation-ID cleanup. MCreate and UB delayed-write buffer
+  lifetime policies are unchanged. No public API, configuration, wire format or persistent state changes are required.
+- Regression: `UbCreateRollbackTest.*` in `tests/ut/client/transport_test.cpp` exercises the actual UB Create control
+  flow with fake local allocation and RPCs, including ownership transfer and cleanup failures. It does not verify DMA
+  or prove that Worker physical memory is reclaimed; those require separate integration validation.
+
 ## Routed SHM read-reference handoff
 
 - `ShmTransporter::Get/BatchGet` and `ObjectMetadataClient::ApplyResults` register response references before

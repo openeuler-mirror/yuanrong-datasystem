@@ -101,6 +101,8 @@ public:
     void CloseDataPlane() override;
 
 protected:
+    virtual Status PrepareCreateBuffer(const CreateRspPb &response, uint64_t size, ObjectBufferInfo &info);
+
     /** @brief Write one ObjectBuffer payload through UB. Overridable for deterministic transport tests. */
     virtual Status WritePayload(ObjectBufferInfo &info);
     /** @brief Submit one non-blocking payload write. Overridable for deterministic transport tests. */
