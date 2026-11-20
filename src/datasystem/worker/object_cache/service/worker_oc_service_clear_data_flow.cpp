@@ -20,6 +20,8 @@
 #include "datasystem/cluster/executor/key_filter.h"
 
 #include <algorithm>
+#include <chrono>
+#include <deque>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -48,6 +50,7 @@ constexpr int CLEAR_DATA_THREAD_NUM = 1;
 constexpr size_t CHECK_OBJECT_DATA_LOCATION_BATCH = 500;
 constexpr size_t GET_MASTER_ERROR_SAMPLE_LIMIT = 3;
 constexpr uint32_t MIGRATION_RECOVERY_LOG_EVERY_N = 100;
+constexpr int TOPOLOGY_SCAN_LOG_INTERVAL_S = 5;
 const std::string WORKER_OC_SERVICE_CLEAR_DATA_FLOW = "WorkerOcServiceClearDataFlow";
 
 void InsertFailedIds(const std::vector<std::string> &objectKeys, std::unordered_set<std::string> &failedIds)
@@ -166,12 +169,25 @@ Status WorkerOcServiceClearDataFlow::SubmitTopologyFailureCleanup(
     CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
                              "topology data cleanup deadline exceeded");
     OwnedTopologyClearRequest request{ action, businessOperationId, {} };
-    request.objectIds.reserve(objectTable_->GetSize());
-    for (const auto &entry : *objectTable_) {
-        if (filter.Contains(entry.first)) {
-            request.objectIds.emplace_back(entry.first);
+    const auto scanStart = std::chrono::steady_clock::now();
+    size_t scanned = 0;
+    {
+        std::deque<std::string> matchedObjectIds;
+        for (const auto &entry : *objectTable_) {
+            ++scanned;
+            if (filter.Contains(entry.first)) {
+                matchedObjectIds.emplace_back(entry.first);
+            }
+        }
+        request.objectIds.reserve(matchedObjectIds.size());
+        for (auto &objectId : matchedObjectIds) {
+            request.objectIds.emplace_back(std::move(objectId));
         }
     }
+    LOG_EVERY_T(INFO, TOPOLOGY_SCAN_LOG_INTERVAL_S)
+        << "Topology cleanup scan, operation: " << businessOperationId << ", scanned: " << scanned
+        << ", matched: " << request.objectIds.size() << ", elapsed ms: "
+        << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - scanStart).count();
     SubmitOwnedTopologyCleanup(std::move(request));
     return Status::OK();
 }

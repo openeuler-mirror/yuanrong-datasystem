@@ -8,7 +8,10 @@
  */
 #include "datasystem/cluster/control/topology_task_materializer.h"
 
+#include <algorithm>
+#include <map>
 #include <set>
+#include <utility>
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/control/topology_plan_builder.h"
@@ -214,17 +217,26 @@ TEST(TopologyTaskMaterializerTest, RebuildsFailureTasksForTwoCrashedScaleInMembe
     ASSERT_TRUE(rc.IsOk()) << rc.ToString();
     ASSERT_FALSE(first.tasks.empty());
     std::set<std::string> taskSources;
+    std::set<std::pair<std::string, std::string>> cleanupParticipants;
     for (const auto &task : first.tasks) {
         ASSERT_TRUE(std::holds_alternative<TopologyDeleteTask>(task));
         const auto &deletion = std::get<TopologyDeleteTask>(task);
         EXPECT_EQ(confirmed.count(deletion.failedAddress), 1);
         taskSources.insert(deletion.failedAddress);
+        cleanupParticipants.emplace(deletion.failedAddress, deletion.executorAddress);
         const Member *executor = nullptr;
         DS_ASSERT_OK(snapshot->FindMemberByAddress(deletion.executorAddress, executor));
         ASSERT_NE(executor, nullptr);
         EXPECT_EQ(executor->state, MemberState::ACTIVE);
     }
     EXPECT_EQ(taskSources, confirmed);
+    for (const auto &failedAddress : confirmed) {
+        for (const auto &member : snapshot->Members()) {
+            if (member.state == MemberState::ACTIVE) {
+                EXPECT_EQ(cleanupParticipants.count({ failedAddress, member.identity.address }), 1);
+            }
+        }
+    }
 
     ExpectedDerivedState second;
     DS_ASSERT_OK(materializer.RebuildExpected(*snapshot, algorithm, second));
@@ -244,6 +256,63 @@ TEST(TopologyTaskMaterializerTest, RebuildsFailureTasksForTwoCrashedScaleInMembe
         EXPECT_EQ(iter->second.activeBatch->type, notify.activeBatch->type);
         EXPECT_EQ(iter->second.activeBatch->epoch, notify.activeBatch->epoch);
         EXPECT_EQ(iter->second.taskIds, notify.taskIds);
+    }
+}
+
+TEST(TopologyTaskMaterializerTest, SendsCompleteFailureScopeToEveryActiveMember)
+{
+    TopologyState state;
+    state.version = 5;
+    state.clusterHasInit = true;
+    state.activeBatch = ActiveBatch{ TopologyChangeType::FAILURE, 5 };
+    state.members = {
+        MakeMaterializerMember('a', 1, MemberState::FAILED, { 10 }),
+        MakeMaterializerMember('b', 2, MemberState::ACTIVE, { 50 }),
+        MakeMaterializerMember('c', 3, MemberState::ACTIVE, { 100 }),
+        MakeMaterializerMember('d', 4, MemberState::ACTIVE, { 150 }),
+        MakeMaterializerMember('e', 5, MemberState::JOINING, { 200 }),
+        MakeMaterializerMember('f', 6, MemberState::PRE_LEAVING, { 250 }),
+        MakeMaterializerMember('g', 7, MemberState::LEAVING, { 300 }),
+    };
+    TopologyPlan plan;
+    plan.next = state;
+    plan.ownerChanges = {
+        { state.members[0].identity, state.members[1].identity, { { 20, 30 } } },
+        { state.members[0].identity, state.members[2].identity, { { 0, 10 } } },
+    };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(state, 1, std::string(64, 'a'), snapshot));
+    TopologyTaskMaterializer materializer;
+    ExpectedDerivedState first;
+    DS_ASSERT_OK(materializer.BuildExpected(*snapshot, plan, first));
+    ASSERT_EQ(first.tasks.size(), 3);
+    ASSERT_EQ(first.notifyRecipients.size(), 3);
+    for (const auto &task : first.tasks) {
+        const auto &deletion = std::get<TopologyDeleteTask>(task);
+        EXPECT_EQ(deletion.failedAddress, state.members[0].identity.address);
+        const Member *executor = nullptr;
+        DS_ASSERT_OK(snapshot->FindMemberByAddress(deletion.executorAddress, executor));
+        ASSERT_NE(executor, nullptr);
+        EXPECT_EQ(executor->state, MemberState::ACTIVE);
+        ASSERT_EQ(deletion.recoveryRanges.size(), 2);
+        EXPECT_EQ(deletion.recoveryRanges[0].range, (TokenRange{ 0, 10 }));
+        EXPECT_EQ(deletion.recoveryRanges[1].range, (TokenRange{ 20, 30 }));
+        for (const auto &range : deletion.recoveryRanges) {
+            EXPECT_EQ(range.ownerAddress, deletion.executorAddress);
+            EXPECT_FALSE(range.finished);
+        }
+        EXPECT_EQ(first.notifiesByAddress.at(deletion.executorAddress).taskIds,
+                  (std::vector<std::string>{ deletion.taskId }));
+        std::string bytes;
+        DS_ASSERT_OK(TopologyRepositoryCodec::EncodeDeleteTask(deletion, bytes));
+    }
+    std::swap(plan.ownerChanges[0], plan.ownerChanges[1]);
+    ExpectedDerivedState second;
+    DS_ASSERT_OK(materializer.BuildExpected(*snapshot, plan, second));
+    ASSERT_EQ(first.tasks.size(), second.tasks.size());
+    for (size_t index = 0; index < first.tasks.size(); ++index) {
+        EXPECT_EQ(std::get<TopologyDeleteTask>(first.tasks[index]).taskId,
+                  std::get<TopologyDeleteTask>(second.tasks[index]).taskId);
     }
 }
 
@@ -366,6 +435,52 @@ TEST(TopologyTaskMaterializerTest, SplitsLargeCanonicalScopeAtTaskRangeLimit)
     }
     std::sort(rangeCounts.begin(), rangeCounts.end());
     EXPECT_EQ(rangeCounts, (std::vector<size_t>{ 1, FIRST_TASK_RANGES }));
+}
+
+TEST(TopologyTaskMaterializerTest, SplitsCombinedFailureScopeForEveryExecutor)
+{
+    TopologyState state;
+    state.version = 6;
+    state.clusterHasInit = true;
+    state.activeBatch = ActiveBatch{ TopologyChangeType::FAILURE, 6 };
+    state.members = {
+        MakeMaterializerMember('a', 1, MemberState::FAILED, { 1 }),
+        MakeMaterializerMember('b', 2, MemberState::ACTIVE, { 2 }),
+        MakeMaterializerMember('c', 3, MemberState::ACTIVE, { 3 }),
+    };
+    TopologyPlan plan;
+    plan.next = state;
+    plan.ownerChanges = {
+        { state.members[0].identity, state.members[1].identity, {} },
+        { state.members[0].identity, state.members[2].identity, {} },
+    };
+    for (uint32_t token = 0; token <= MAX_TOPOLOGY_TASK_RANGES; ++token) {
+        plan.ownerChanges[token % plan.ownerChanges.size()].ranges.push_back({ token, token });
+    }
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(state, 1, std::string(64, 'a'), snapshot));
+    TopologyTaskMaterializer materializer;
+    ExpectedDerivedState expected;
+    DS_ASSERT_OK(materializer.BuildExpected(*snapshot, plan, expected));
+    ASSERT_EQ(expected.tasks.size(), 4);
+    std::map<std::string, std::set<uint32_t>> tokensByExecutor;
+    for (const auto &task : expected.tasks) {
+        const auto &deletion = std::get<TopologyDeleteTask>(task);
+        EXPECT_LE(deletion.recoveryRanges.size(), MAX_TOPOLOGY_TASK_RANGES);
+        std::string bytes;
+        DS_ASSERT_OK(TopologyRepositoryCodec::EncodeDeleteTask(deletion, bytes));
+        for (const auto &range : deletion.recoveryRanges) {
+            EXPECT_EQ(range.range.from, range.range.end);
+            EXPECT_TRUE(tokensByExecutor[deletion.executorAddress].insert(range.range.from).second);
+        }
+    }
+    ASSERT_EQ(tokensByExecutor.size(), 2);
+    for (const auto &[address, tokens] : tokensByExecutor) {
+        EXPECT_EQ(tokens.size(), MAX_TOPOLOGY_TASK_RANGES + 1);
+        EXPECT_EQ(*tokens.begin(), 0);
+        EXPECT_EQ(*tokens.rbegin(), MAX_TOPOLOGY_TASK_RANGES);
+        EXPECT_EQ(expected.notifiesByAddress.at(address).taskIds.size(), 2);
+    }
 }
 
 }  // namespace

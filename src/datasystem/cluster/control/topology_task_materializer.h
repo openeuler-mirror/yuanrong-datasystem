@@ -58,6 +58,10 @@ public:
     static std::string BuildTaskId(const TopologyTask &task);
 
 private:
+    Status AppendFailureTaskChunks(const TopologySnapshot &latest, uint64_t epoch,
+                                   std::map<std::string, TopologyOwnerChange> &failureScopes,
+                                   std::vector<TopologyTask> &tasks) const;
+
     friend class TopologyTaskExecutor;
 };
 

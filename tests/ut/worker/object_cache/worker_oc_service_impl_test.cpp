@@ -27,6 +27,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <sys/stat.h>
 #include <thread>
 #include <unordered_map>
@@ -4871,6 +4872,51 @@ TEST_F(WorkerOcServiceImplTest, TopologyCleanupSnapshotDoesNotDeleteReinsertedKe
     EXPECT_TRUE(objectTable_->Contains(key).IsOk());
     snapshots.clear();
     EXPECT_TRUE(oldEntry.expired());
+}
+
+TEST_F(WorkerOcServiceImplTest, TopologyCleanupSubmitsOnlyMatchedLocalKeys)
+{
+    class KeyFilter : public cluster::IKeyFilter {
+    public:
+        bool Contains(std::string_view key) const override
+        {
+            return keys.count(std::string(key)) != 0;
+        }
+        std::string DebugString() const override
+        {
+            return "test-key-filter";
+        }
+        std::unordered_set<std::string> keys;
+    } filter;
+    std::unordered_set<std::string> allKeys;
+    constexpr size_t OBJECT_COUNT = 64;
+    for (size_t index = 0; index < OBJECT_COUNT; ++index) {
+        const auto key = "cleanup-selection-" + std::to_string(index);
+        AddObject(key);
+        allKeys.insert(key);
+        if (index % 2 == 0) {
+            filter.keys.insert(key);
+        }
+    }
+    using Request = WorkerOcServiceClearDataFlow::OwnedTopologyClearRequest;
+    BINEXPECT_CALL(&WorkerOcServiceClearDataFlow::SubmitOwnedTopologyCleanup, (_))
+        .Times(3)
+        .WillRepeatedly(Invoke([&filter](Request request) {
+            EXPECT_EQ(request.businessOperationId, "selection-test");
+            EXPECT_EQ(request.objectIds.size(), filter.keys.size());
+            EXPECT_EQ((std::unordered_set<std::string>{ request.objectIds.begin(), request.objectIds.end() }),
+                      filter.keys);
+        }));
+    cluster::TopologyPhaseAction action;
+    action.failed = cluster::MemberIdentity{ std::string(16, 'a'), "127.0.0.1:18482" };
+    cluster::CancellationToken cancellation;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    DS_ASSERT_OK(dataClearImpl_->SubmitTopologyFailureCleanup(action, filter, "selection-test", deadline, cancellation));
+    filter.keys = allKeys;
+    DS_ASSERT_OK(dataClearImpl_->SubmitTopologyFailureCleanup(action, filter, "selection-test", deadline, cancellation));
+    filter.keys.clear();
+    DS_ASSERT_OK(dataClearImpl_->SubmitTopologyFailureCleanup(action, filter, "selection-test", deadline, cancellation));
+    EXPECT_EQ(objectTable_->GetSize(), OBJECT_COUNT);
 }
 
 TEST_F(WorkerOcServiceImplTest, ClearDataRetryImplShouldRouteFailedIdsToRetryStages)
