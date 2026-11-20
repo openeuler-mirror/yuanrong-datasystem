@@ -128,6 +128,39 @@ bool ValidateNodeTimeoutFlags();
  */
 bool NodeDeadTimeoutFlagValidateSpecial(const std::string &flagName, const std::string &newVal);
 
+/**
+ * @brief Sample-rate validator shared by DS_DEFINE_validator registrations and explicit startup
+ *        checks. Referencing any symbol of common_flags_validate.cpp pulls its whole object file
+ *        (all DS_DEFINE_validator static initializers) into the link, so shared validator
+ *        implementations live in common_flags_strict.cpp instead.
+ * @param[in] flagName Flag name used in the error log.
+ * @param[in] value Candidate value; must be a finite value in [0.0, 1.0].
+ * @return True if valid; logs on violation.
+ */
+bool ValidateSampleRateRange(const char *flagName, double value);
+
+/**
+ * @brief log_filename validator shared by DS_DEFINE_validator registrations and explicit startup
+ *        checks; empty is allowed, otherwise only a-z, A-Z, 0-9 and underscore are accepted.
+ * @param[in] flagName Flag name used in the error log.
+ * @param[in] value Candidate value.
+ * @return True if valid; logs on violation.
+ */
+bool ValidateOptionalLogName(const char *flagName, const std::string &value);
+
+/**
+ * @brief Startup-time validation of common flags consumed by the shared logging/brpc/metrics
+ *        runtime (request/access/diagnostic_sample_rate, log_filename, brpc_server_num_threads,
+ *        log_monitor_interval_ms). Every rule is evaluated so one call reports all violations.
+ *        Intended for entries that cannot rely on DS_DEFINE_validator registration, e.g. hosts
+ *        loading libdatasystem_coordinator.so where the registrar TU is deliberately not linked;
+ *        such entries should also register these validators before parsing config so rejection
+ *        happens before values are written; extend this list whenever a shared-runtime-consumed
+ *        flag gains a validation rule.
+ * @return True if valid; logs on violation.
+ */
+bool ValidateCommonStartupFlags();
+
 // Polling readers use the published value because the first KV Init can follow another Client's URMA startup.
 uint32_t GetUrmaLogThresholdUs();
 bool ValidateAndPublishUrmaLogThresholdUs(const char *flagName, uint32_t value);

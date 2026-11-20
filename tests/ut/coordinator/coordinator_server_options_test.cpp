@@ -40,6 +40,7 @@
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/flags/config_monitor_state.h"
 #include "datasystem/common/flags/dynamic_flag_config.h"
+#include "datasystem/common/flags/flag_manager.h"
 #include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/operation_logger.h"
@@ -661,6 +662,54 @@ TEST(CoordinatorServerOptionsTest, FacadeRejectsEmptyConfigPath)
     const auto status = CoordinatorServer::GetInstance()->InitAndRun(options);
 
     ExpectInvalidWithMessage(status, "configFilePath must not be empty");
+}
+
+TEST(CoordinatorServerOptionsTest, RejectsIllegalSampleRateConfigBeforeLoggingStart)
+{
+    ScopedTempDirectory tempDirectory;
+    CreateNonEmptyFile(tempDirectory.Child("bad-sampler-config.json"), R"({"request_sample_rate": {"value": "2"}})");
+    CreateNonEmptyFile(tempDirectory.Child("recovery-config.json"), R"({"brpc_server_num_threads": {"value": "64"}})");
+    const auto savedRequestSampleRate = FLAGS_request_sample_rate;
+
+    CoordinatorRuntime runtime;
+    CoordinatorOptions options;
+    options.coordinatorDiscovery = std::make_shared<FakeCoordinatorDiscovery>();
+    options.expectedMemberCount = 1;
+    options.configFilePath = tempDirectory.Child("bad-sampler-config.json");
+    auto status = runtime.InitAndRun(options);
+
+    EXPECT_EQ(status.GetCode(), K_INVALID);
+    EXPECT_EQ(FLAGS_request_sample_rate, savedRequestSampleRate);
+    std::string errMsg;
+    EXPECT_TRUE(FlagManager::GetInstance()->ParseConfigFile(tempDirectory.Child("recovery-config.json"), errMsg))
+        << errMsg;
+    EXPECT_EQ(FLAGS_request_sample_rate, savedRequestSampleRate);
+
+    FLAGS_request_sample_rate = savedRequestSampleRate;
+}
+
+TEST(CoordinatorServerOptionsTest, RejectsNonPositiveLogMonitorIntervalConfig)
+{
+    ScopedTempDirectory tempDirectory;
+    CreateNonEmptyFile(tempDirectory.Child("zero-interval-config.json"), R"({"log_monitor_interval_ms": {"value": "0"}})");
+    CreateNonEmptyFile(tempDirectory.Child("negative-interval-config.json"),
+                       R"({"log_monitor_interval_ms": {"value": "-1"}})");
+    const auto savedLogMonitorIntervalMs = FLAGS_log_monitor_interval_ms;
+
+    for (const auto &configPath :
+         std::vector<std::string>{ tempDirectory.Child("zero-interval-config.json"),
+                                   tempDirectory.Child("negative-interval-config.json") }) {
+        CoordinatorRuntime runtime;
+        CoordinatorOptions options;
+        options.coordinatorDiscovery = std::make_shared<FakeCoordinatorDiscovery>();
+        options.expectedMemberCount = 1;
+        options.configFilePath = configPath;
+        auto status = runtime.InitAndRun(options);
+        EXPECT_EQ(status.GetCode(), K_INVALID) << configPath;
+        EXPECT_EQ(FLAGS_log_monitor_interval_ms, savedLogMonitorIntervalMs) << configPath;
+    }
+
+    FLAGS_log_monitor_interval_ms = savedLogMonitorIntervalMs;
 }
 
 TEST(CoordinatorServerOptionsTest, DefaultRaftFlagSnapshotCapturesEveryRuntimeFlag)

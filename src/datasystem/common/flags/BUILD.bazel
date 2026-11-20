@@ -60,6 +60,7 @@ ds_cc_library(
     name = "dynamic_flag_config",
     srcs = [
         "common_flag_define.cpp",
+        "common_flags_strict.cpp",
         "common_flags_validate.cpp",
         "config_monitor_state.cpp",
         "dynamic_config_updater.cpp",
