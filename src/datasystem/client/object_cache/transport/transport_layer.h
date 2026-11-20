@@ -37,6 +37,7 @@
 #include "datasystem/client/object_cache/transport/object_read/object_read_types.h"
 #include "datasystem/client/object_cache/transport/rpc/mset_request_builder.h"
 #include "datasystem/client/object_cache/transport/rpc/set_request_builder.h"
+#include "datasystem/client/object_cache/transport/rpc/worker_rpc_dispatcher.h"
 #include "datasystem/client/object_cache/transport/transport_advisor.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/object_cache/object_base.h"
@@ -57,6 +58,8 @@ namespace client {
 
 struct TransportLayerOptions {
     BrpcChannelConfig channelConfig;
+    // Endpoint bound to the client session; its SHM capability is verified during the worker handshake.
+    HostPort boundWorker = HostPort();
     std::shared_ptr<ThreadPool> releasePool;
     std::shared_ptr<HostMemoryPinManager> hostMemoryPinManager;
     bool enableClientDirectPipelineH2D = false;
@@ -79,24 +82,11 @@ struct TransportLayerOptions {
 class TransportLayer {
 public:
     explicit TransportLayer(std::shared_ptr<Signature> signature, std::shared_ptr<ThreadPool> taskPool,
-                            uint64_t fastTransportMemSize, TransportLayerOptions options = {});
+                            uint64_t fastTransportMemSize, TransportLayerOptions options = TransportLayerOptions());
     ~TransportLayer();
 
     /** @brief Initialize transport runtime resources before data-plane connections are created. */
     Status Init();
-
-    /**
-     * @brief Get a weak reference to the data-plane manager owned by this layer.
-     * Returned as a weak_ptr rather than a shared_ptr so the "callers only observe it weakly" contract is
-     * expressed by the type: the only legitimate use is registering standby drain hooks, and a caller that
-     * extended the manager's lifetime past a client shutdown would let the heartbeat thread reach a manager
-     * that has already been shut down (ShutDown() resets transportLayer_ before draining those threads).
-     * Expiry is the signal to fall back to the legacy drain behaviour.
-     */
-    std::weak_ptr<DataPlaneManager> GetDataPlaneManager() const
-    {
-        return manager_;
-    }
 
     /** @brief Reject a new client-local UB write when every process-local UB port is confirmed BAD. */
     Status CheckLocalUbSenderAdmission() const;
@@ -135,14 +125,11 @@ public:
     Status AcquireDirectUbEndpointLease(const HostPort &workerAddr,
                                         std::unique_ptr<DataPlaneManager::DataPlaneLease> &lease);
 
-    /**
-     * @brief Execute Exist and rebuild the RPC connection once when the channel is unavailable.
-     * @param[in] workerAddr Address returned by the routing layer.
-     * @param[in] input Logical Exist request.
-     * @param[out] output Exist results.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status Exist(const HostPort &workerAddr, const TransportExistRequest &input, TransportExistResult &output);
+    /** @return Dispatcher sharing this transport runtime's endpoint connections. */
+    std::shared_ptr<WorkerRpcDispatcher> GetRpcDispatcher() const
+    {
+        return rpcDispatcher_;
+    }
 
     /**
      * @brief Create an ObjectBuffer with transport-native memory.
@@ -182,13 +169,17 @@ public:
 
     /**
      * @brief Report effective same-host SHM eligibility for local-cache Create/Set(buffer) placement.
-     * Combines the advisor's topology hint with an eligible, established live routed SHM session:
-     * reuse requires missing/empty hostId, non-draining membership and a non-draining entry.
-     * The result can change with topology or session lifetime; callers must not cache it.
+     * The bound worker uses verified handshake capability; routed workers use topology and session state.
      * @param[in] workerAddr Target worker address.
-     * @return true when the resolved hint is SHM_CANDIDATE; false without an advisor or manager.
+     * @return true when the worker can use SHM; false without the required transport state.
      */
     bool IsSameHostWorker(const HostPort &workerAddr) const;
+
+    /**
+     * @brief Update the verified SHM capability of the bound worker.
+     * @param[in] enabled True when the bound worker's SHM FD probe succeeded.
+     */
+    void UpdateBoundWorkerShmCapability(bool enabled);
 
     /**
      * @brief Publish worker admission synchronously and schedule latest-wins connection cleanup asynchronously.
@@ -311,6 +302,7 @@ private:
         const std::shared_ptr<TransportAdvisor> &advisor);
 
     std::shared_ptr<DataPlaneManager> manager_;
+    std::shared_ptr<WorkerRpcDispatcher> rpcDispatcher_;
     std::shared_ptr<TransportAdvisor> advisor_;
     std::shared_ptr<ThreadPool> releasePool_;
     std::shared_ptr<ThreadPool> ambiguousCreateCleanupPool_;
@@ -318,6 +310,8 @@ private:
     std::unique_ptr<ObjectReadFlow> objectRead_;
     std::shared_ptr<UbPortHealthMonitor> localPortHealthMonitor_;
     std::weak_ptr<IUbPortHealthObserver> localPortHealthObserver_;
+    const HostPort boundWorker_;
+    std::atomic<bool> boundWorkerShmEnabled_{ false };
     bool allowUbRuntimeFailure_{ false };
     std::shared_ptr<LocalUbSenderState> localUbSenderState_;
     // ApplyWorkerSnapshot serializes admission publication with shutdown through reconcileMutex_.

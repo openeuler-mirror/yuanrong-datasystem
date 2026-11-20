@@ -20,7 +20,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
-#include <cstring>
 #include <memory>
 #include <string>
 #include <thread>
@@ -29,11 +28,7 @@
 #include "common.h"
 #include "cluster/external_cluster.h"
 #include "oc_client_common.h"
-#include "datasystem/common/util/file_util.h"
 #include "datasystem/utils/service_discovery.h"
-
-DS_DECLARE_string(log_dir);
-DS_DECLARE_string(log_filename);
 
 namespace datasystem {
 namespace st {
@@ -49,37 +44,8 @@ constexpr int COORDINATOR_SD_SELECT_LOOP_COUNT = 5;
 constexpr int COORDINATOR_SD_EMPTY_CLUSTER_CONNECT_TIMEOUT_MS = 4000;
 constexpr int COORDINATOR_SD_EMPTY_CLUSTER_RECOVERY_WAIT_S = 10;
 constexpr int COORDINATOR_SD_CONNECT_TIMEOUT_MS = 60000;
-constexpr int COORDINATOR_SD_BACKOFF_WINDOW_S = 20;
-constexpr int COORDINATOR_SD_BACKOFF_MAX_PROBES = 6;
-constexpr int COORDINATOR_SD_BACKOFF_MIN_PROBES = 3;
-constexpr int32_t COORDINATOR_SD_BACKOFF_INITIAL_MS = 1000;
-constexpr int32_t COORDINATOR_SD_BACKOFF_CAP_MS = 8000;
-constexpr int COORDINATOR_SD_RECOVERY_WAIT_S = 25;
 constexpr auto COORDINATOR_RESTART_WAIT = std::chrono::seconds(10);
 constexpr auto COORDINATOR_RETRY_INTERVAL = std::chrono::milliseconds(100);
-
-std::vector<int32_t> ExtractDiscoveryBackoffValues(const std::string &logContent, size_t offset)
-{
-    std::vector<int32_t> values;
-    constexpr char marker[] = "Discovery unreachable, back off ";
-    auto pos = logContent.find(marker, offset);
-    while (pos != std::string::npos) {
-        auto digitsBegin = pos + strlen(marker);
-        auto digitsEnd = logContent.find("ms", digitsBegin);
-        if (digitsEnd == std::string::npos) {
-            break;
-        }
-        bool allDigits = digitsEnd > digitsBegin;
-        for (auto i = digitsBegin; i < digitsEnd; ++i) {
-            allDigits = allDigits && logContent[i] >= '0' && logContent[i] <= '9';
-        }
-        if (allDigits) {
-            values.emplace_back(atoi(logContent.substr(digitsBegin, digitsEnd - digitsBegin).c_str()));
-        }
-        pos = logContent.find(marker, digitsEnd);
-    }
-    return values;
-}
 }  // namespace
 
 class CoordinatorServiceDiscoveryTest : public OCClientCommon {
@@ -402,65 +368,5 @@ TEST_F(CoordinatorServiceDiscoveryTest, SelectSameNodeWorkerRequiresMatchingHost
     ASSERT_TRUE(serviceDiscovery->SelectSameNodeWorker(workerIp, workerPort).IsError());
 }
 
-// A client whose host matches no worker keeps probing same-node discovery through the
-// coordinator on every heartbeat. When the coordinator is lost, those probes must back off
-// exponentially instead of hammering the coordinator address every second.
-TEST_F(CoordinatorServiceDiscoveryTest, CoordinatorLossBacksOffHeartbeatDiscoveryProbes)
-{
-    std::shared_ptr<KVClient> client;
-    InitKVClientWithCoordinatorServiceDiscovery(client, ServiceAffinityPolicy::PREFERRED_SAME_NODE,
-                                                COORDINATOR_SD_HOST_ID_ENV_MISSING);
-    const std::string key = "coordinator_sd_backoff_key";
-    const std::string value = "coordinator_sd_backoff_value";
-    DS_ASSERT_OK(client->Set(key, value));
-
-    const auto clientInfoLog = JoinPath(FLAGS_log_dir, FLAGS_log_filename + ".INFO.log");
-    std::string logContent;
-    DS_ASSERT_OK(ReadWholeFile(clientInfoLog, logContent));
-    const auto logOffsetBeforeLoss = logContent.size();
-
-    auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
-    ASSERT_NE(externalCluster, nullptr);
-    DS_ASSERT_OK(externalCluster->ShutdownNode(COORDINATOR, 0));
-
-    // Probe rhythm after the loss: 1s, 2s, 4s, 8s, 8s gaps. In a 20s window at most
-    // COORDINATOR_SD_BACKOFF_MAX_PROBES probes may run; without the backoff every heartbeat
-    // (1s) fires one. The data plane through the fallback worker must stay healthy.
-    std::this_thread::sleep_for(std::chrono::seconds(COORDINATOR_SD_BACKOFF_WINDOW_S));
-    std::string valueGet;
-    DS_ASSERT_OK(client->Get(key, valueGet));
-    ASSERT_EQ(valueGet, value);
-
-    DS_ASSERT_OK(ReadWholeFile(clientInfoLog, logContent));
-    const auto backoffValues = ExtractDiscoveryBackoffValues(logContent, logOffsetBeforeLoss);
-    ASSERT_GE(backoffValues.size(), static_cast<size_t>(COORDINATOR_SD_BACKOFF_MIN_PROBES));
-    ASSERT_LE(backoffValues.size(), static_cast<size_t>(COORDINATOR_SD_BACKOFF_MAX_PROBES));
-    for (size_t i = 0; i < backoffValues.size(); ++i) {
-        ASSERT_GE(backoffValues[i], COORDINATOR_SD_BACKOFF_INITIAL_MS);
-        ASSERT_LE(backoffValues[i], COORDINATOR_SD_BACKOFF_CAP_MS);
-        if (i > 0) {
-            ASSERT_GE(backoffValues[i], backoffValues[i - 1]);
-        }
-    }
-
-    // The regression point is the ORIGINAL backoffed client, not a fresh discovery object:
-    // after the coordinator restarts, its deferred probes must resume and reopen the gate,
-    // bounded by one max backoff window on top of the restart wait.
-    DS_ASSERT_OK(cluster_->StartNode(COORDINATOR, 0, ""));
-    constexpr char recoveryMarker[] = "Discovery recovered, backoff reset";
-    const auto recoveryDeadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(COORDINATOR_SD_RECOVERY_WAIT_S);
-    bool gateReopened = false;
-    while (std::chrono::steady_clock::now() < recoveryDeadline) {
-        if (ReadWholeFile(clientInfoLog, logContent).IsOk()
-            && logContent.find(recoveryMarker, logOffsetBeforeLoss) != std::string::npos) {
-            gateReopened = true;
-            break;
-        }
-        std::this_thread::sleep_for(COORDINATOR_RETRY_INTERVAL);
-    }
-    ASSERT_TRUE(gateReopened);
-    DS_ASSERT_OK(client->Set(key, "coordinator_sd_backoff_value_after_restart"));
-}
 }  // namespace st
 }  // namespace datasystem

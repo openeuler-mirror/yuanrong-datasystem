@@ -61,16 +61,13 @@ void ExecHandlerIfParamValid(const char *str, std::function<void()> handler);
  * @param[in] secretKeyLen The secret key length.
  * @param[in] tenantId The tenant ID.
  * @param[in] cTenantIdLen The length of cTenantId
- * @param[in] tenantId The tenant ID.
- * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
  * @param[out] opts The ConnectOptions object.
  */
 void ConstructConnectOptions(const int timeOut, const char *token, size_t tokenLen, const char *clientPublicKey,
                              size_t cClientPublicKeyLen, const char *clientPrivateKey, size_t clientPrivateKeyLen,
                              const char *serverPublicKey, size_t cServerPublicKeyLen, const char *accessKey,
                              size_t cAccessKeyLen, const char *secretKey, size_t secretKeyLen, const char *tenantId,
-                             size_t cTenantIdLen, const char *enableCrossNodeConnection,
-                             datasystem::ConnectOptions &opts);
+                             size_t cTenantIdLen, datasystem::ConnectOptions &opts);
 
 /**
  * @brief Make c struct Status
@@ -150,15 +147,13 @@ StatusC InitCreateParam(const std::string &consistencyType, datasystem::object_c
  * @param[in] secretKeyLen The secret key length.
  * @param[in] tenantId The tenant ID.
  * @param[in] cTenantIdLen The length of cTenantId
- * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
  * @return Return the pointer of KVClient/ObjectClient.
  */
 void *CreateObjectClient(const char *cWorkerHost, const int workerPort, const int timeOut, const char *token,
                          size_t tokenLen, const char *clientPublicKey, size_t cClientPublicKeyLen,
                          const char *clientPrivateKey, size_t clientPrivateKeyLen, const char *serverPublicKey,
                          size_t cServerPublicKeyLen, const char *accessKey, size_t cAccessKeyLen, const char *secretKey,
-                         size_t secretKeyLen, const char *tenantId, size_t cTenantIdLen,
-                         const char *enableCrossNodeConnection);
+                         size_t secretKeyLen, const char *tenantId, size_t cTenantIdLen);
 
 /**
  * @brief Executes the initialization of the connection to the worker

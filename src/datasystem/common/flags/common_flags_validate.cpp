@@ -145,26 +145,6 @@ bool ValidatePercent(const char *flagName, uint32_t value)
     return true;
 }
 
-bool ValidateUrmaFailoverSuccessRateRatio(const char *flagName, double value)
-{
-    constexpr double kMinSuccessRateRatio = 0.0;
-    constexpr double kMaxSuccessRateRatio = 1.0;
-    if (!std::isfinite(value) || value < kMinSuccessRateRatio || value > kMaxSuccessRateRatio) {
-        LOG(ERROR) << FormatString("The %s flag is %g, which must be between 0.0 and 1.0.", flagName, value);
-        return false;
-    }
-    return true;
-}
-
-bool ValidateUrmaFailoverMinSampleCount(const char *flagName, uint32_t value)
-{
-    if (value == 0) {
-        LOG(ERROR) << FormatString("The %s flag must be greater than 0, got %u.", flagName, value);
-        return false;
-    }
-    return true;
-}
-
 bool ValidateSampleRateRange(const char *flagName, double value)
 {
     if (!std::isfinite(value) || value < 0.0 || value > 1.0) {
@@ -218,8 +198,6 @@ DS_DEFINE_validator(ub_numa_rr_type, &ValidateUbNumaRrType);
 DS_DEFINE_validator(ub_numa_src_chip_policy, &ValidateUbNumaSrcChipPolicy);
 DS_DEFINE_validator(urma_send_jetty_lane_pool_size, &Validator::ValidateUint32);
 DS_DEFINE_validator(urma_send_lane_count_per_peer, &Validator::ValidateUint32);
-DS_DEFINE_validator(urma_failover_success_rate_ratio, &ValidateUrmaFailoverSuccessRateRatio);
-DS_DEFINE_validator(urma_failover_min_sample_count, &ValidateUrmaFailoverMinSampleCount);
 DS_DEFINE_validator(shared_memory_distribution_policy, &ValidateSharedMemoryDistributionPolicy);
 DS_DEFINE_validator(enable_remote_h2d, &ValidateEnableRemoteH2D);
 DS_DEFINE_validator(remote_h2d_link_type, &ValidateRemoteH2DLinkType);

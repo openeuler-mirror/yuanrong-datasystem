@@ -65,8 +65,8 @@ public:
         for (size_t i = 0; i < 2; i++) {
             DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, i));
         }
-        InitTestKVClient(0, client0_, 60000, false, 60000);  // w0: data + eviction.
-        InitTestKVClient(1, client1_, 60000, false, 60000);  // w1: cross-worker Get.
+        InitTestKVClient(0, client0_, 60000, 60000);  // w0: data + eviction.
+        InitTestKVClient(1, client1_, 60000, 60000);  // w1: cross-worker Get.
     }
 
     void TearDown() override

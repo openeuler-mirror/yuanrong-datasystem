@@ -178,7 +178,7 @@ protected:
     void InitHealthyWorkerClient(uint32_t workerIndex)
     {
         std::shared_ptr<KVClient> client;
-        InitTestKVClient(workerIndex, client, CONNECT_TIMEOUT_MS, false, REQUEST_TIMEOUT_MS);
+        InitTestKVClient(workerIndex, client, CONNECT_TIMEOUT_MS, REQUEST_TIMEOUT_MS);
         clients_.emplace_back(std::move(client));
     }
 
@@ -208,7 +208,7 @@ protected:
         DS_ASSERT_OK(serviceDiscovery->Init());
 
         ConnectOptions connectOptions;
-        InitConnectOpt(0, connectOptions, CONNECT_TIMEOUT_MS, true);
+        InitConnectOpt(0, connectOptions, CONNECT_TIMEOUT_MS);
         connectOptions.requestTimeoutMs = REQUEST_TIMEOUT_MS;
         connectOptions.enableLocalCache = enableLocalCache;
         connectOptions.serviceDiscovery = serviceDiscovery;

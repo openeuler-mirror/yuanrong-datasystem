@@ -29,7 +29,6 @@ import "C"
 
 import (
 	"fmt"
-	"strconv"
 	"sync"
 	"unsafe"
 
@@ -178,14 +177,9 @@ func CreateClient(param common.ConnectArguments) StreamClient {
 	cTenantID := C.CString(param.TenantID)
 	cTenantIDLen := C.ulong(len(param.TenantID))
 	defer C.free(unsafe.Pointer(cTenantID))
-	// EnableCrossNodeConnection
-	cEnableCrossNodeConnection := C.CString(strconv.FormatBool(param.EnableCrossNodeConnection))
-	defer C.free(unsafe.Pointer(cEnableCrossNodeConnection))
-
 	ret.client = C.StreamCreateClient(cWorkerHost, cWorkerPort, cWorkerTimeout, cWorkerToken, cWorkerTokenLen,
-		cClientPublicKey, cClientPublicKeyLen, cClientPrivateKey, cClientPrivateKeyLen, cServerPublicKey, 
-		cServerPublicKeyLen, cAccessKey, cAccessKeyLen, cSecretKey, cSecretKeyLen, cTenantID, cTenantIDLen, 
-		cEnableCrossNodeConnection)
+		cClientPublicKey, cClientPublicKeyLen, cClientPrivateKey, cClientPrivateKeyLen, cServerPublicKey,
+		cServerPublicKeyLen, cAccessKey, cAccessKeyLen, cSecretKey, cSecretKeyLen, cTenantID, cTenantIDLen)
 	ret.mutex = new(sync.RWMutex)
 	return ret
 }

@@ -47,6 +47,7 @@ ds_cc_library(
         "rpc/exist_request_builder.cpp",
         "rpc/mset_request_builder.cpp",
         "rpc/set_request_builder.cpp",
+        "rpc/worker_rpc_dispatcher.cpp",
         "rpc/worker_rpc_client.cpp",
     ],
     defines = [
@@ -80,6 +81,7 @@ ds_cc_library(
         "rpc/exist_types.h",
         "rpc/mset_request_builder.h",
         "rpc/set_request_builder.h",
+        "rpc/worker_rpc_dispatcher.h",
         "rpc/worker_rpc_client.h",
     ],
     visibility = ["//visibility:public"],

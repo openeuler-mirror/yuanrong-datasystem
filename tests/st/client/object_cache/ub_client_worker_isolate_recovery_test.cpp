@@ -72,7 +72,6 @@ public:
         ConnectOptions options;
         InitConnectOpt(0, options);
         options.enableLocalCache = false;
-        options.enableCrossNodeConnection = false;
         options.requestTimeoutMs = 3000;
         client_ = std::make_shared<ObjectClient>(options);
         DS_ASSERT_OK(client_->Init());

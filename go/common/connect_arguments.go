@@ -31,5 +31,4 @@ type ConnectArguments struct {
 	AccessKey                 string
 	SecretKey                 []byte
 	TenantID                  string
-	EnableCrossNodeConnection bool
 }

@@ -308,14 +308,6 @@ public:
         uint64_t slotOwner_;
     };
 
-    /**
-     * @brief Check whether an endpoint's data plane has been unused for at least quietMs.
-     * @param[in] workerAddr Target worker address.
-     * @param[in] quietMs Idle window in milliseconds; 0 means "do not check".
-     * @return True when the endpoint has no entry, no recorded non-TCP use, or has been quiet for quietMs.
-     */
-    bool IsEndpointDataPlaneQuiet(const HostPort &workerAddr, uint64_t quietMs);
-
     /** @brief Permanently reject SHM rebuilds for the current endpoint entry after scale-in is observed. */
     void MarkShmDraining(const HostPort &workerAddr);
 
@@ -410,9 +402,6 @@ private:
         // the release a no-op if this entry was dropped and recreated while the handshake was in flight.
         // Read path only — GetOrCreate never consults it, so writers and direct leases are unaffected.
         std::atomic<uint64_t> ubRebuildSlotOwner{ 0 };
-        // Approximate last time a non-TCP data plane was selected for this endpoint (steady-clock ms).
-        // Relaxed atomic: a monotonic best-effort signal for standby drain decisions, not a precise counter.
-        std::atomic<int64_t> lastDataPlaneUseMs{ 0 };
         // Access under the EntryMap accessor so location admission is ordered with reconcile deletion.
         uint64_t locationAdmissionVersion = 0;
     };
@@ -465,15 +454,6 @@ private:
     void FailUbPortHealthQueryDispatch(const cluster::RemoteUbQueryTicket &ticket,
                                        const std::string &message) noexcept;
     void ApplyUbPortHealthCapabilityCheck(const cluster::RemoteUbQueryTicket &ticket, Status &rc) const;
-
-    /**
-     * @brief Record that a non-TCP data plane actually served a request for this endpoint, for drain decisions.
-     * @param[in] entry Endpoint entry that served the data plane.
-     * @param[in] kind Kind of the transporter that served the request — the actual one (out->Kind()), not the
-     *                 requested one: a UB candidate served by the cached TCP fallback must not hold the standby
-     *                 drain back, since a worker-side URMA deletion cannot invalidate a TCP transporter.
-     */
-    void MarkDataPlaneUse(const std::shared_ptr<WorkerTransportEntry> &entry, AccessTransportKind kind);
 
     Status BuildUbTransporter(const HostPort &workerAddr, const std::shared_ptr<WorkerRpcClient> &rpcClient,
                               TransportPhaseLatencyRecorder *recorder, std::shared_ptr<IDataTransporter> &out);

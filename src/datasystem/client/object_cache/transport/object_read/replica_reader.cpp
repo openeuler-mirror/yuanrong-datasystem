@@ -60,6 +60,12 @@ Status MakeStaleTransportSnapshotStatus(const Status &status)
     return Status(K_NOT_READY, std::string(STALE_TRANSPORT_SNAPSHOT_MESSAGE) + ": " + status.ToString());
 }
 
+// A sole replica cannot be replaced by refreshing the same metadata snapshot.
+bool IsSoleReplicaPeerDead(const Status &status, int replicaCount)
+{
+    return replicaCount == 1 && IsNonRetryableRpcError(status);
+}
+
 struct TcpFallbackAttempt {
     std::optional<TransportHint> hint;
     bool deterministicDenial{ false };
@@ -122,6 +128,13 @@ void RecordRefreshableLocation(const Status &status, RefreshableLocationState &s
     if (IsTransportSnapshotStaleLocation(status)) {
         state.hasStaleLocation = true;
         state.staleLocationStatus = status;
+    }
+}
+
+void RecordUnavailableReplicaLocation(const Status &status, int replicaCount, RefreshableLocationState &state)
+{
+    if (!IsSoleReplicaPeerDead(status, replicaCount)) {
+        RecordRefreshableLocation(status, state);
     }
 }
 
@@ -425,7 +438,7 @@ Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectR
             }
             if (rc.GetCode() == K_RPC_UNAVAILABLE) {
                 RecordRefreshableLocation(Status(K_NOT_READY, STALE_TRANSPORT_SNAPSHOT_MESSAGE), refreshableLocation);
-            } else {
+            } else if (!IsSoleReplicaPeerDead(rc, location.object_locations_size())) {
                 RecordRefreshableLocation(rc, refreshableLocation);
             }
             if (IsLastUnavailableReplica(rc, replicaIndex, location.object_locations_size())) {
@@ -671,7 +684,8 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests, bool traceEnab
                         continue;
                     }
                     if (chunk.deterministicDenial || IsReadSourceUnavailable(itemStatus)) {
-                        RecordRefreshableLocation(itemStatus, state.refreshableLocation);
+                        RecordUnavailableReplicaLocation(itemStatus, state.location->object_locations_size(),
+                                                         state.refreshableLocation);
                         AdvanceUnavailableReplica(state, itemStatus);
                         continue;
                     }

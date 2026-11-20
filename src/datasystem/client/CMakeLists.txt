@@ -5,7 +5,6 @@ add_subdirectory(cluster_admin)
 list(APPEND CLIENT_SRCS
         worker_api/client_worker_common_api.cpp
         worker_api/listen_worker.cpp
-        object_cache/routing/urma_success_rate_tracker.cpp
         mmap_manager/mmap_manager.cpp
         client_flags_monitor.cpp
         service_discovery.cpp
@@ -17,8 +16,6 @@ list(APPEND CLIENT_SRCS
         object_cache/object_client.cpp
         object_cache/object_client_impl.cpp
         object_cache/worker_failover.cpp
-        object_cache/bound_mode.cpp
-        object_cache/routed_mode.cpp
         object_cache/direct_receive_buffer_owner.cpp
         object_cache/client_memory_ref_table.cpp
         hetero_cache/device/client_device_object_manager.cpp
@@ -49,7 +46,9 @@ list(APPEND CLIENT_SRCS
         object_cache/transport/data_plane/ub_transporter.cpp
         object_cache/transport/rpc/exist_request_builder.cpp
         object_cache/transport/rpc/mset_request_builder.cpp
+        object_cache/object_control_rpc_client.cpp
         object_cache/transport/rpc/set_request_builder.cpp
+        object_cache/transport/rpc/worker_rpc_dispatcher.cpp
         object_cache/transport/rpc/worker_rpc_client.cpp
         object_cache/routing/broken_filter.cpp
         object_cache/routing/client_read_bandwidth_scheduler.cpp

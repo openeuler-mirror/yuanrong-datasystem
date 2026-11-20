@@ -124,11 +124,6 @@ bool ShouldRequestClientUrmaRuntime(bool workerUbEnabled, bool clientMayAccessNo
     return workerUbEnabled && (clientMayAccessNonBoundWorker || endpointUsesUb);
 }
 
-bool ClientMayAccessNonBoundWorker(bool enableLocalCache, bool enableCrossNodeConnection)
-{
-    return !enableLocalCache || enableCrossNodeConnection;
-}
-
 bool IsUrmaRuntimeConfigured()
 {
 #ifdef USE_URMA

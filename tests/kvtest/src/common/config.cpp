@@ -215,8 +215,6 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
             cfg.notifyQueueMax = j["notify_queue_max"];
         if (j.contains("enable_jitter"))
             cfg.enableJitter = j["enable_jitter"];
-        if (j.contains("enable_cross_node_connection"))
-            cfg.enableCrossNodeConnection = j["enable_cross_node_connection"];
         if (j.contains("batch_keys_count"))
             cfg.batchKeysCount = j["batch_keys_count"];
         if (j.contains("mset_batch_size"))
@@ -419,8 +417,6 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
                 cfg.connectTimeoutMs = co["connect_timeout_ms"];
             if (co.contains("request_timeout_ms"))
                 cfg.requestTimeoutMs = co["request_timeout_ms"];
-            if (co.contains("enable_cross_node_connection"))
-                cfg.enableCrossNodeConnection = co["enable_cross_node_connection"];
             if (co.contains("enable_local_cache"))
                 cfg.enableLocalCache = co["enable_local_cache"];
             if (co.contains("data_placement_policy")) {

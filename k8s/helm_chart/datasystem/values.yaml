@@ -423,10 +423,6 @@ global:
     urmaRegisterWholeArena: true
     # Enable fast transport (urma/rdma) fallback to tcp transport.
     enableTransportFallback: true
-    # Client-side URMA data-plane success-rate ratio threshold for worker failover. 0.0 disables URMA failover.
-    urmaFailoverSuccessRateRatio: 0.5
-    # Minimum URMA data-plane samples per client_dead_timeout_s window before failover evaluation.
-    urmaFailoverMinSampleCount: 5
     # Time-to-live (seconds) for URMA orphan connections before they are swept.
     urmaOrphanConnTtlS: 600
     # Interval (seconds) between URMA orphan connection sweeps.

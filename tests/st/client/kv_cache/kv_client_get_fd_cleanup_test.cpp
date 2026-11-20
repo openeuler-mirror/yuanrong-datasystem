@@ -20,6 +20,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -30,6 +31,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/kv_client.h"
+#include "datasystem/object_client.h"
 
 DS_DECLARE_string(host_id_env_name);
 
@@ -199,6 +201,34 @@ protected:
     std::string previousHostFlag_;
     std::optional<std::string> previousHostValue_;
 };
+
+TEST_F(KVClientGetFdCleanupTest, AuxiliaryShmDisconnectReleasesObjectLatch)
+{
+    const std::string key = NewObjectKey();
+    DS_ASSERT_OK(writer_->Set(key, std::string(VALUE_SIZE, 'g')));
+    std::shared_ptr<ObjectClient> observer;
+    InitTestClient(0, observer);
+    std::vector<Optional<Buffer>> observerBuffers;
+    DS_ASSERT_OK(observer->Get({ key }, 0, observerBuffers));
+    ASSERT_EQ(observerBuffers.size(), 1u);
+    ASSERT_TRUE(observerBuffers.front());
+    ConnectOptions options;
+    InitConnectOpt(0, options);
+    options.enableLocalCache = false;
+    ObjectClient routedReader(options);
+    DS_ASSERT_OK(routedReader.Init());
+    const uint64_t registrations = inject::GetExecuteCount(REGISTER);
+    std::vector<Optional<Buffer>> routedBuffers;
+    DS_ASSERT_OK(routedReader.Get({ key }, 0, routedBuffers));
+    ASSERT_GT(inject::GetExecuteCount(REGISTER), registrations);
+    ASSERT_EQ(routedBuffers.size(), 1u);
+    ASSERT_TRUE(routedBuffers.front());
+    DS_ASSERT_OK(routedBuffers.front()->WLatch(1));
+    ASSERT_EQ(observerBuffers.front()->RLatch(1).GetCode(), K_RUNTIME_ERROR);
+    DS_ASSERT_OK(routedReader.ShutDown());
+    DS_ASSERT_OK(observerBuffers.front()->RLatch(3));
+    DS_ASSERT_OK(observerBuffers.front()->UnRLatch());
+}
 
 TEST_F(KVClientGetFdCleanupTest, LEVEL2_FailedGetsDoNotExhaustWorkerShm)
 {

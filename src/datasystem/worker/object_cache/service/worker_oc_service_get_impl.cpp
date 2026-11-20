@@ -3075,8 +3075,9 @@ Status WorkerOcServiceGetImpl::QuerySize(const QuerySizeReqPb &req, QuerySizeRsp
     auto clientId = ClientKey::Intern(req.client_id());
     LOG(INFO) << "QuerySize start from client:" << clientId;
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId),
-                                     "Authenticate failed.");
+    Status authRc = req.is_routed() ? worker::AuthenticateRequest(requestAuthenticator_, req, req.tenant_id(), tenantId)
+                                    : worker::Authenticate(requestAuthenticator_, req, tenantId);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(authRc, "Authenticate failed.");
     auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
     QueryMetadataFromMasterResult queryMetaResult;
     std::vector<master::QueryMetaInfoPb> &queryMetas = queryMetaResult.queryMetas;
@@ -3396,8 +3397,9 @@ Status WorkerOcServiceGetImpl::GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaI
     auto clientId = ClientKey::Intern(req.client_id());
     LOG(INFO) << "GetMetaInfo start from client:" << clientId;
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(requestAuthenticator_, req, tenantId),
-                                     "Authenticate failed.");
+    Status authRc = req.is_routed() ? worker::AuthenticateRequest(requestAuthenticator_, req, req.tenant_id(), tenantId)
+                                    : worker::Authenticate(requestAuthenticator_, req, tenantId);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(authRc, "Authenticate failed.");
     auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
     if (!req.is_dev_key()) {
         QueryMetadataFromMasterResult queryResult;

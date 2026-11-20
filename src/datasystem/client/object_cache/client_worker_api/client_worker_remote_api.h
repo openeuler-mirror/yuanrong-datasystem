@@ -55,18 +55,16 @@ public:
      * @param[in] heartbeatType The type of heartbeat.
      * @param[in] signature Used to do AK/SK authenticate.
      * @param[in] tenantId The tenant id.
-     * @param[in] enableCrossNodeConnection Indicates whether the client can connect to the standby node.
      * @param[in] deviceId pipeline h2d device id
      */
     explicit ClientWorkerRemoteApi(HostPort hostPort,
                                    HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
                                    SensitiveValue token = "", Signature *signature = nullptr, std::string tenantId = "",
-                                   bool enableCrossNodeConnection = false,
                                    std::string deviceId = "");
 
     ClientWorkerRemoteApi(HostPort hostPort, HeartbeatType heartbeatType, SensitiveValue token,
                          std::shared_ptr<Signature> signature, std::string tenantId = "",
-                         bool enableCrossNodeConnection = false, std::string deviceId = "");
+                         std::string deviceId = "");
 
     ~ClientWorkerRemoteApi();
 
@@ -82,8 +80,7 @@ public:
 
     std::shared_ptr<IClientWorkerApi> CloneWith(
         HostPort hostPort, HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
-        SensitiveValue token = "", Signature *signature = nullptr, std::string tenantId = "",
-        bool enableCrossNodeConnection = false) const override
+        SensitiveValue token = "", Signature *signature = nullptr, std::string tenantId = "") const override
     {
         if (signature != nullptr && signature != signature_) {
             LOG(ERROR) << "Cannot clone RPC API with a different credential provider.";
@@ -92,10 +89,10 @@ public:
         std::shared_ptr<ClientWorkerRemoteApi> clone;
         if (rpcSignatureOwner_ != nullptr) {
             clone = std::make_shared<ClientWorkerRemoteApi>(std::move(hostPort), heartbeatType, std::move(token),
-                                                           rpcSignatureOwner_, tenantId, enableCrossNodeConnection);
+                                                           rpcSignatureOwner_, tenantId);
         } else {
             clone = std::make_shared<ClientWorkerRemoteApi>(std::move(hostPort), heartbeatType, std::move(token),
-                                                           signature_, tenantId, enableCrossNodeConnection);
+                                                           signature_, tenantId);
         }
         clone->rpcAuthModeInitialized_ = rpcAuthModeInitialized_;
         clone->rpcAuthEnabled_ = rpcAuthEnabled_;
@@ -121,8 +118,6 @@ public:
     Status ReleaseGRefs(const std::string &remoteClientId) override;
     Status GDecreaseWorkerRef(const std::vector<std::string> &finishDecIds, std::vector<std::string> &failedObjectKeys,
                               const std::string &remoteClientId = "") override;
-    Status Delete(const std::vector<std::string> &objectKeys, std::vector<std::string> &failedObjectKeys,
-                  bool areDeviceObjects = false) override;
     Status QueryGlobalRefNum(
         const std::vector<std::string> &objectKeys,
         std::unordered_map<std::string, std::vector<std::unordered_set<std::string>>> &gRefMap) override;
@@ -140,17 +135,9 @@ public:
     Status GetBlobsInfo(const std::string &devObjKey, int32_t timeoutMs, std::vector<Blob> &blobs) override;
     Status AckRecvFinish(AckRecvFinishReqPb &req) override;
     Status RemoveP2PLocation(const std::string &objectKey, int32_t deviceId) override;
-    Status GetObjMetaInfo(const std::string &tenantId, const std::vector<std::string> &objectKeys,
-                          std::vector<ObjMetaInfo> &objMetas) override;
     Status MultiCreate(bool skipCheckExistence, std::vector<MultiCreateParam> &createParams, uint32_t &version,
                        std::vector<bool> &exists, bool &useShmTransfer) override;
-    Status QuerySize(const std::vector<std::string> &objectKeys, QuerySizeRspPb &rsp) override;
     Status HealthCheck(ServerState &state) override;
-    Status Exist(const std::vector<std::string> &keys, std::vector<bool> &exists, const bool queryL2Cache,
-                 const bool isLocal) override;
-    Status Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds,
-                  std::vector<std::string> &failedKeys) override;
-    Status GetMetaInfo(const std::vector<std::string> &keys, const bool isDevKey, GetMetaInfoRspPb &metaInfos) override;
     Status ReconnectWorker(const std::vector<std::string> &gRefIds) override;
     /**
      * @brief Drop the cached OC brpc session (channel + stub) and build a fresh one.
@@ -176,8 +163,6 @@ public:
 
 private:
 #ifdef USE_URMA
-    Status ResolveUBGetSize(const GetParam &getParam, const std::string &tenantId, uint64_t &totalRequiredSize,
-                            bool &fallbackToTcp);
     Status PrepareGetUrmaBuffer(const GetParam &getParam, GetReqPb &req,
                                 std::shared_ptr<UrmaManager::BufferHandle> &ubBufferHandle, uint8_t *&ubBufferPtr,
                                 uint64_t &ubBufferSize);

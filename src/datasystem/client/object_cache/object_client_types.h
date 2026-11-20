@@ -14,23 +14,19 @@
  * limitations under the License.
  */
 
-/**
- * Description: Shared data types for the client mode classes (BoundMode/RoutedMode/WorkerFailover)
- * split out of ObjectClientImpl, so the mode headers no longer depend on nested types of
- * ObjectClientImpl (breaks the circular include on the type level).
- */
-
-#ifndef DATASYSTEM_CLIENT_OBJECT_CACHE_CLIENT_MODE_TYPES_H
-#define DATASYSTEM_CLIENT_OBJECT_CACHE_CLIENT_MODE_TYPES_H
+#ifndef DATASYSTEM_CLIENT_OBJECT_CACHE_OBJECT_CLIENT_TYPES_H
+#define DATASYSTEM_CLIENT_OBJECT_CACHE_OBJECT_CLIENT_TYPES_H
 
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include <bthread/mutex.h>
+
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
-#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/utils/string_view.h"
 
 namespace datasystem {
@@ -40,7 +36,6 @@ enum class SetFailureStage { CREATE, TRANSFER, PUBLISH };
 
 struct SetRouteContext {
     HostPort worker;
-    std::shared_ptr<IClientWorkerApi> clientApi;
     std::shared_ptr<IClientWorkerApi> directWorkerApi;
     std::unique_ptr<Raii> invokeGuard;
 };
@@ -51,9 +46,19 @@ struct MSetRouteGroup {
     std::vector<StringView> values;
 };
 
-enum WorkerNode : uint32_t { LOCAL_WORKER = 0, STANDBY1_WORKER, STANDBY2_WORKER };
+struct ShmRecoveryState {
+    enum class Stage : uint8_t {
+        IDLE = 0,
+        CLEANUP_REQUIRED,
+        REGISTER_REQUIRED,
+        REBUILD_REQUIRED,
+    };
+
+    bthread::Mutex mutex;
+    Stage stage{ Stage::IDLE };
+};
 
 }  // namespace object_cache
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_CLIENT_OBJECT_CACHE_CLIENT_MODE_TYPES_H
+#endif  // DATASYSTEM_CLIENT_OBJECT_CACHE_OBJECT_CLIENT_TYPES_H

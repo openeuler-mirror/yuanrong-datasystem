@@ -73,7 +73,7 @@ public:
         warmupClient.reset();
 
         // Client on worker 1, request budget 20ms (mirrors production config).
-        InitTestKVClient(1, client_, 60000, false, 20);
+        InitTestKVClient(1, client_, 60000, 20);
         WaitWorkerMasterRpcReady();
     }
 

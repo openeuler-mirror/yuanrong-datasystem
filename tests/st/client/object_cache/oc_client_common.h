@@ -67,8 +67,7 @@ public:
         DS_ASSERT_OK(client->Init());
     }
 
-    void InitConnectOpt(uint32_t workerIndex, ConnectOptions &connectOptions, int32_t timeoutMs = 60000,
-                        bool enableCrossNode = false)
+    void InitConnectOpt(uint32_t workerIndex, ConnectOptions &connectOptions, int32_t timeoutMs = 60000)
     {
         HostPort workerAddress;
         ASSERT_TRUE(workerIndex < cluster_->GetWorkerNum());
@@ -76,14 +75,13 @@ public:
         connectOptions = { .host = workerAddress.Host(), .port = workerAddress.Port(), .connectTimeoutMs = timeoutMs };
         connectOptions.accessKey = "QTWAOYTTINDUT2QVKYUC";
         connectOptions.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
-        connectOptions.enableCrossNodeConnection = enableCrossNode;
     }
 
     void InitTestKVClient(uint32_t workerIndex, std::shared_ptr<KVClient> &client, int32_t timeoutMs = 60000,
-                          bool enableCrossNode = false, int32_t requestTimeoutMs = 0)
+                          int32_t requestTimeoutMs = 0)
     {
         ConnectOptions connectOptions;
-        InitConnectOpt(workerIndex, connectOptions, timeoutMs, enableCrossNode);
+        InitConnectOpt(workerIndex, connectOptions, timeoutMs);
         connectOptions.requestTimeoutMs = requestTimeoutMs;
         client = std::make_shared<KVClient>(connectOptions);
         DS_ASSERT_OK(client->Init());

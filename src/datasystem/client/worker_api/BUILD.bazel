@@ -17,7 +17,6 @@ ds_cc_library(
     visibility = ["//visibility:public"],
     deps = [
         "//src/datasystem/common/rpc:brpc_auth",
-        "//src/datasystem/client/object_cache/routing:urma_success_rate_tracker",
         "//src/datasystem/common/rpc:brpc_factory",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/eventloop:common_event_loop",

@@ -1891,7 +1891,6 @@ TEST_F(ObjectClientTest, TestInitSwitchesAwayFromKilledSameNodeWorker)
     InitConnectOpt(0, connectOptions);
     connectOptions.serviceDiscovery = serviceDiscovery;
     connectOptions.connectTimeoutMs = 9000;
-    connectOptions.enableCrossNodeConnection = true;
     auto client = std::make_shared<ObjectClient>(connectOptions);
     DS_ASSERT_OK(client->Init());
 
@@ -1921,7 +1920,6 @@ TEST_F(ObjectClientTest, TestInitRequiredSameNodeNoCandidateReturnsDeadlineExcee
     InitConnectOpt(0, connectOptions);
     connectOptions.serviceDiscovery = serviceDiscovery;
     connectOptions.connectTimeoutMs = 4000;
-    connectOptions.enableCrossNodeConnection = true;
     auto client = std::make_shared<ObjectClient>(connectOptions);
     auto rc = client->Init();
     ASSERT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
@@ -1930,11 +1928,8 @@ TEST_F(ObjectClientTest, TestInitRequiredSameNodeNoCandidateReturnsDeadlineExcee
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1, 30));
 }
 
-// enableCrossNodeConnection gates RUNTIME worker switching only; it must NOT block
-// Init-stage preferred-remote fallback. With PREFERRED_SAME_NODE + the only same-node
-// worker killed + cross-node=false, Init must still succeed by falling back to a
-// remote worker.
-TEST_F(ObjectClientTest, TestInitPreferredRemoteFallbackUnaffectedByCrossNodeFalse)
+// PREFERRED_SAME_NODE falls back to a remote worker when the only same-node worker is unavailable.
+TEST_F(ObjectClientTest, TestInitPreferredRemoteFallback)
 {
     ASSERT_EQ(setenv("object_client_sd_host_id_env_1", "object_client_sd_host_id_1", 1), 0);
     std::string etcdAddress = cluster_->GetEtcdAddrs();
@@ -1952,7 +1947,6 @@ TEST_F(ObjectClientTest, TestInitPreferredRemoteFallbackUnaffectedByCrossNodeFal
     InitConnectOpt(0, connectOptions);
     connectOptions.serviceDiscovery = serviceDiscovery;
     connectOptions.connectTimeoutMs = 9000;
-    connectOptions.enableCrossNodeConnection = false;
     auto client = std::make_shared<ObjectClient>(connectOptions);
     DS_ASSERT_OK(client->Init());
 
@@ -2188,6 +2182,11 @@ TEST_F(ObjectClientTest, MaxClientCreateAndCloseTest)
 {
     const int maxClientDefaultNum = 200;
     const int loopTimes = 3;
+    // Only client-capacity accounting is under test here. The per-Init warmup issues ~300 data-plane
+    // RPCs per client (~0.25s each) and would dominate the runtime; the auxiliary-session exemption
+    // from max_client_num is covered by ClientManagerTest.AuxiliaryClientDoesNotConsumeMaxClientSlot.
+    DS_ASSERT_OK(inject::Set(SKIP_WARMUP_INJECT, "call()"));
+    Raii clearWarmupInject([] { (void)inject::Clear(SKIP_WARMUP_INJECT); });
     for (int i = 0; i < loopTimes; i++) {
         std::vector<std::shared_ptr<ObjectClient>> clientVec;
         clientVec.reserve(maxClientDefaultNum);

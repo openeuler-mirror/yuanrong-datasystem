@@ -156,7 +156,8 @@ TEST_F(ObjectClientTenantTest, TestCacheInvalid)
     std::shared_ptr<ObjectClient> client3;
     DS_ASSERT_OK(
         cluster_->SetInjectAction(WORKER, 0, "worker.auth", "1*return(token1,tenant1)->1*return(token2,tenant2)"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.auth", "1*return(token2,tenant2)"));
+    DS_ASSERT_OK(
+        cluster_->SetInjectAction(WORKER, 1, "worker.auth", "1*return(token1,tenant1)->1*return(token2,tenant2)"));
     InitTestClient(0, client1, [](ConnectOptions &opts) { opts.token = "token1"; });
     InitTestClient(0, client2, [](ConnectOptions &opts) { opts.token = "token1"; });
     InitTestClient(1, client3, [](ConnectOptions &opts) { opts.token = "token2"; });

@@ -162,7 +162,6 @@ class KVClient:
         access_key="",
         secret_key="",
         tenant_id="",
-        enable_cross_node_connection=False,
         req_timeout_ms=0,
         fast_transport_mem_size=DEFAULT_FAST_TRANSPORT_MEM_SIZE,
         service_discovery=None,
@@ -183,7 +182,6 @@ class KVClient:
             access_key(str): The access key used by AK/SK authorize.
             secret_key(str): The secret key for AK/SK authorize.
             tenant_id(str): The tenant ID.
-            enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
             req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same
             with connect_timeout_ms.
             fast_transport_mem_size(int): The memory pool size in bytes used by client fast transport. Default is
@@ -191,8 +189,7 @@ class KVClient:
             service_discovery(ServiceDiscovery|CoordinatorServiceDiscovery): The service discovery instance for
             discovering available workers. If provided, the native client will use service discovery to find worker
             addresses instead of using the provided host and port. Call service_discovery.init() before creating
-            KVClient. To allow an initialized client to switch to another discovered worker after the connected worker
-            fails, set enable_cross_node_connection to True.
+            KVClient.
             enable_local_cache(bool): Indicates whether to enable the local client cache. Default is True. When False,
             Get/MGet query metadata owners through the transport layer instead of using the bound worker path.
             data_placement_policy(DataPlacementPolicy): Set/MSet data placement policy. Only takes effect when
@@ -212,7 +209,6 @@ class KVClient:
             ["access_key", access_key, str],
             ["secret_key", secret_key, str],
             ["tenant_id", tenant_id, str],
-            ["enable_cross_node_connection", enable_cross_node_connection, bool],
             ["fast_transport_mem_size", fast_transport_mem_size, int],
             ["enable_local_cache", enable_local_cache, bool],
             ["data_placement_policy", data_placement_policy, type(DataPlacementPolicy.PREFERRED_SAME_NODE)],
@@ -237,16 +233,8 @@ class KVClient:
             port_provided = port > 0
             if host_provided != port_provided:
                 raise RuntimeError("host and port must be provided together, or use service_discovery")
-        else:
-            if not service_discovery.initialized:
-                raise RuntimeError("service_discovery is not initialized, call init() before creating KVClient")
-            if not enable_cross_node_connection:
-                warnings.warn(
-                    "service_discovery is set but enable_cross_node_connection is False. "
-                    "Failover to another discovered worker will not occur on connection failure.",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
+        elif not service_discovery.initialized:
+            raise RuntimeError("service_discovery is not initialized, call init() before creating KVClient")
 
         # Positional order matches the pybind KVClient constructors: the
         # service_discovery (std::shared_ptr<IServiceDiscovery>) slot sits
@@ -264,7 +252,6 @@ class KVClient:
             access_key,
             secret_key,
             tenant_id,
-            enable_cross_node_connection,
             req_timeout_ms,
             fast_transport_mem_size,
         ]

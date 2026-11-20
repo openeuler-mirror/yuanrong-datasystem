@@ -25,7 +25,8 @@
 #include <vector>
 
 #include "datasystem/client/object_cache/routing/data_placement_policy.h"
-#include "datasystem/client/object_cache/transport/rpc/exist_types.h"
+#include "datasystem/client/object_cache/object_control_rpc_client.h"
+#include "datasystem/client/object_cache/routing/routing.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/utils/sensitive_value.h"
@@ -43,13 +44,6 @@ public:
     virtual void UpdateState(const HostPort &addr, StatusCode status) = 0;
 };
 
-class IExistTransport {
-public:
-    virtual ~IExistTransport() = default;
-    virtual Status Exist(const HostPort &workerAddr, const client::TransportExistRequest &input,
-                         client::TransportExistResult &output) = 0;
-};
-
 struct ExistHandlerRequest {
     std::vector<std::string> keys;
     bool queryL2Cache;
@@ -58,6 +52,7 @@ struct ExistHandlerRequest {
     std::string clientId;
     std::string tenantId;
     SensitiveValue token;
+    HostPort singleTarget{};
 };
 
 struct ExistRedirectGroup {
@@ -92,14 +87,12 @@ private:
 
 class ExistHandler {
 public:
-    ExistHandler(std::shared_ptr<IExistRouting> routing, std::shared_ptr<IExistTransport> transport,
+    ExistHandler(std::shared_ptr<client::Routing> routing,
+                 std::shared_ptr<client::ObjectControlRpcClient> rpcClient,
                  std::shared_ptr<ThreadPool> taskPool);
 
-    // Production constructor: wraps non-owning routing/transport pointers (aliased
-    // shared_ptr) so the hot Exist path avoids two make_shared adapter allocations.
-    // Callers must keep routing/transport alive for the handler's lifetime (Run is
-    // synchronous, so stack-allocated adapters in RunExist are safe).
-    ExistHandler(IExistRouting *routing, IExistTransport *transport, std::shared_ptr<ThreadPool> taskPool);
+    ExistHandler(std::shared_ptr<IExistRouting> routing, std::shared_ptr<client::ObjectControlRpcClient> rpcClient,
+                 std::shared_ptr<ThreadPool> taskPool);
 
     ~ExistHandler() = default;
 
@@ -140,7 +133,7 @@ private:
                           std::vector<bool> &exists, int32_t &redirectRetries, bool &redirected);
 
     std::shared_ptr<IExistRouting> routing_;
-    std::shared_ptr<IExistTransport> transport_;
+    std::shared_ptr<client::ObjectControlRpcClient> rpcClient_;
     std::shared_ptr<ThreadPool> taskPool_;
     ExistRedirectResolver redirectResolver_;
     // Per-Run workers that failed and must be skipped on reroute. BrokenFilter no longer evicts

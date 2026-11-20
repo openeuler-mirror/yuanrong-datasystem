@@ -1460,11 +1460,11 @@ TEST_F(KVClientTransportGetWithAllWorkersShmTest, GetIgnoresSameNodeWritePlaceme
     }
 }
 
-TEST_F(KVClientTransportGetTest, LocalCacheGetStaysOnBoundWorkerWhenCrossNodeConnectionIsEnabled)
+TEST_F(KVClientTransportGetTest, LocalCacheGetStaysOnBoundWorker)
 {
     reader_.reset();
     ConnectOptions options;
-    InitConnectOpt(TRANSPORT_CLIENT_WORKER_INDEX, options, CLIENT_TIMEOUT_MS, true);
+    InitConnectOpt(TRANSPORT_CLIENT_WORKER_INDEX, options, CLIENT_TIMEOUT_MS);
     options.enableLocalCache = true;
     options.dataPlacementPolicy = DataPlacementPolicy::PREFERRED_META_OWNER;
     reader_ = std::make_shared<KVClient>(options);

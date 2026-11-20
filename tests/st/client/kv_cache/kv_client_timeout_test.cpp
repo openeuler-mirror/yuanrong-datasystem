@@ -49,9 +49,16 @@ public:
 TEST_F(KVClientTimeoutTest, KVGetShortTimeoutFailsFastWithDeadlineExceeded)
 {
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client, 60000, false, 500);
+    InitTestKVClient(0, client, 60000, 500);
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerOCServiceImpl.Get.Timeout", "call(0)"));
+    // A failed local attempt is re-routed to another replica, so the injection has to cover every
+    // worker and both read paths (legacy Get and the routed QueryAndGet) for the call to observe an
+    // exhausted deadline.
+    for (size_t i = 0; i < cluster_->GetWorkerNum(); ++i) {
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "WorkerOCServiceImpl.Get.Timeout", "call(0)"));
+        DS_ASSERT_OK(
+            cluster_->SetInjectAction(WORKER, i, "worker.QueryAndGet.Begin", "return(K_RPC_DEADLINE_EXCEEDED)"));
+    }
 
     std::string key = ObjectKey();
     std::string val;
@@ -63,13 +70,16 @@ TEST_F(KVClientTimeoutTest, KVGetShortTimeoutFailsFastWithDeadlineExceeded)
     EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_LT(elapsedMs, 5000);
 
-    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "WorkerOCServiceImpl.Get.Timeout"));
+    for (size_t i = 0; i < cluster_->GetWorkerNum(); ++i) {
+        DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, i, "WorkerOCServiceImpl.Get.Timeout"));
+        DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, i, "worker.QueryAndGet.Begin"));
+    }
 }
 
 TEST_F(KVClientTimeoutTest, KVMSetShortTimeoutDeadlineExceeded)
 {
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client, 60000, false, 500);
+    InitTestKVClient(0, client, 60000, 500);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.before_CreateMultiMetaToMaster", "1*sleep(600)"));
 
@@ -96,9 +106,13 @@ TEST_F(KVClientTimeoutTest, KVMSetShortTimeoutDeadlineExceeded)
 TEST_F(KVClientTimeoutTest, KVExistShortTimeoutDeadlineExceeded)
 {
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client, 60000, false, 500);
+    InitTestKVClient(0, client, 60000, 500);
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "Exist.Sleep", "1*sleep(600)"));
+    // Exist is routed straight to the meta owner, not to the client's local worker, so every worker
+    // has to be slowed down for the call to observe an exhausted deadline.
+    for (size_t i = 0; i < cluster_->GetWorkerNum(); ++i) {
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "Exist.Sleep", "1*sleep(600)"));
+    }
 
     std::string key = ObjectKey();
     std::vector<bool> exists;
@@ -110,7 +124,9 @@ TEST_F(KVClientTimeoutTest, KVExistShortTimeoutDeadlineExceeded)
     EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_LT(elapsedMs, 5000);
 
-    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "Exist.Sleep"));
+    for (size_t i = 0; i < cluster_->GetWorkerNum(); ++i) {
+        DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, i, "Exist.Sleep"));
+    }
 }
 
 TEST_F(KVClientTimeoutTest, Set3msCreateSlowExhaustsSharedBudget)
@@ -118,7 +134,7 @@ TEST_F(KVClientTimeoutTest, Set3msCreateSlowExhaustsSharedBudget)
     // A 5ms Create delay deterministically exhausts the 3ms shared budget before the master RPC.
     // Verifies budget is shared across the Set chain, not reinflated on retry.
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client, 60000, false, 3);
+    InitTestKVClient(0, client, 60000, 3);
 
     constexpr int createDelayMs = 5;
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.before_CreateMultiMetaToMaster",
@@ -151,7 +167,7 @@ TEST_F(KVClientTimeoutTest, ShortTimeoutThresholdDecayBoundary)
     // rejects before the injection fires. Either path yields K_RPC_DEADLINE_EXCEEDED.
     {
         std::shared_ptr<KVClient> client;
-        InitTestKVClient(0, client, 60000, false, 1);
+        InitTestKVClient(0, client, 60000, 1);
 
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0,
             "worker.before_CreateMultiMetaToMaster", "1*sleep(1)"));
@@ -179,7 +195,7 @@ TEST_F(KVClientTimeoutTest, ShortTimeoutThresholdDecayBoundary)
     // overhead may consume the entire 10ms budget, so either completion or deadline exhaustion is valid.
     {
         std::shared_ptr<KVClient> client;
-        InitTestKVClient(0, client, 60000, false, 10);
+        InitTestKVClient(0, client, 60000, 10);
 
         std::vector<std::string> keys;
         std::vector<StringView> values;
@@ -202,7 +218,7 @@ TEST_F(KVClientTimeoutTest, ShortTimeoutThresholdDecayBoundary)
     // minOnceRpcTimeoutMs=10 prevents retry after the first timeout.
     {
         std::shared_ptr<KVClient> client;
-        InitTestKVClient(0, client, 60000, false, 11);
+        InitTestKVClient(0, client, 60000, 11);
 
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.CreateMultiMeta.begin", "1*sleep(11)"));
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "master.CreateMultiMeta.begin", "1*sleep(11)"));
@@ -231,7 +247,7 @@ TEST_F(KVClientTimeoutTest, ShortTimeoutThresholdDecayBoundary)
 TEST_F(KVClientTimeoutTest, RetryDoesNotReinflateSharedBudget)
 {
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client, 60000, false, 50);
+    InitTestKVClient(0, client, 60000, 50);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0,
         "worker.before_CreateMultiMetaToMaster", "1*sleep(48)"));
@@ -272,7 +288,7 @@ TEST_F(KVClientTimeoutTest, KVMSetMemoryCopySlowDeadlineExceeded)
     // (mirrors single Set's TimedMemoryCopyWithDeadline) so MSet fails fast instead
     // of completing a slow copy silently.
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client, 60000, false, 3);
+    InitTestKVClient(0, client, 60000, 3);
 
     DS_ASSERT_OK(inject::Set("ObjectClientImpl.MemoryCopyParallel.slow", "1*sleep(20)"));
 

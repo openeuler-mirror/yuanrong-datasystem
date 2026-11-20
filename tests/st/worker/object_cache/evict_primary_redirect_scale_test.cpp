@@ -80,7 +80,7 @@ public:
         for (size_t i = 0; i < 3; ++i) {
             DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, i));
         }
-        InitTestKVClient(1, client_, 60'000, false, 60'000);
+        InitTestKVClient(1, client_, 60'000, 60'000);
         ObtainTokens();
         InitWorkersInfoMap({ 0, 1, 2 });
     }

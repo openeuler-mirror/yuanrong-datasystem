@@ -50,5 +50,5 @@ yr.datasystem.service_discovery.CoordinatorServiceDiscovery
         service_discovery = CoordinatorServiceDiscovery(options)
         service_discovery.init()
 
-        client = KVClient(service_discovery=service_discovery, enable_cross_node_connection=True)
+        client = KVClient(service_discovery=service_discovery)
         client.init()

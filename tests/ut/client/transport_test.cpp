@@ -57,7 +57,6 @@ extern char **environ;
 #include "datasystem/client/object_cache/transport/metadata/object_metadata_client.h"
 #undef private
 
-#include "datasystem/client/object_cache/routed_mode.h"
 #include "datasystem/client/object_cache/worker_failover.h"
 #include "datasystem/client/object_cache/transport/data_plane/data_plane_manager.h"
 #include "datasystem/client/worker_api/client_worker_common_api.h"
@@ -562,15 +561,39 @@ public:
         return queryAndGetStatus;
     }
 
-    Status InvokeExist(int64_t, ExistReqPb &request, ExistRspPb &response) override
+    Status InvokeObjectRpc(int64_t, const std::string &operationName,
+                           const google::protobuf::Message &request,
+                           google::protobuf::Message &response, const ObjectRpcCall &) override
     {
-        ++existInvokeCount;
-        invokedExistRequests.push_back(request);
-        if (existInvokeStatus.IsError()) {
-            return existInvokeStatus;
-        }
-        for (int i = 0; i < request.object_keys_size(); ++i) {
-            response.add_exists(true);
+        if (operationName == "Exist") {
+            const auto &existRequest = static_cast<const ExistReqPb &>(request);
+            auto &existResponse = static_cast<ExistRspPb &>(response);
+            ++existInvokeCount;
+            invokedExistRequests.push_back(existRequest);
+            if (existInvokeStatus.IsError()) {
+                return existInvokeStatus;
+            }
+            for (int i = 0; i < existRequest.object_keys_size(); ++i) {
+                existResponse.add_exists(true);
+            }
+        } else if (operationName == "DeleteAllCopy") {
+            invokedDeleteRequests.push_back(static_cast<const DeleteAllCopyReqPb &>(request));
+            if (deleteInvokeStatus.IsError()) {
+                return deleteInvokeStatus;
+            }
+            static_cast<DeleteAllCopyRspPb &>(response).mutable_last_rc()->set_error_code(K_OK);
+        } else if (operationName == "GetObjMetaInfo") {
+            invokedGetObjMetaInfoRequests.push_back(static_cast<const GetObjMetaInfoReqPb &>(request));
+        } else if (operationName == "QuerySize") {
+            invokedQuerySizeRequests.push_back(static_cast<const QuerySizeReqPb &>(request));
+            static_cast<QuerySizeRspPb &>(response).mutable_last_rc()->set_error_code(querySizeResponseCode);
+        } else if (operationName == "Expire") {
+            invokedExpireRequests.push_back(static_cast<const ExpireReqPb &>(request));
+            static_cast<ExpireRspPb &>(response).mutable_last_rc()->set_error_code(K_OK);
+        } else if (operationName == "GetMetaInfo") {
+            invokedGetMetaInfoRequests.push_back(static_cast<const GetMetaInfoReqPb &>(request));
+        } else {
+            return Status(K_INVALID, "Unexpected object RPC operation: " + operationName);
         }
         return Status::OK();
     }
@@ -715,11 +738,18 @@ public:
     int existInvokeCount = 0;
     Status getObjectStatus = Status::OK();
     Status existInvokeStatus = Status::OK();
+    Status deleteInvokeStatus = Status::OK();
+    StatusCode querySizeResponseCode = K_OK;
     StatusCode getObjectResponseCode = K_OK;
     int64_t getObjectDataSize = 4;
     bool getObjectResponseInPayload = false;
     std::vector<GetObjectRemoteReqPb> getObjectRequests;
     std::vector<ExistReqPb> invokedExistRequests;
+    std::vector<DeleteAllCopyReqPb> invokedDeleteRequests;
+    std::vector<GetObjMetaInfoReqPb> invokedGetObjMetaInfoRequests;
+    std::vector<QuerySizeReqPb> invokedQuerySizeRequests;
+    std::vector<ExpireReqPb> invokedExpireRequests;
+    std::vector<GetMetaInfoReqPb> invokedGetMetaInfoRequests;
     int batchGetObjectCount = 0;
     Status batchGetObjectStatus = Status::OK();
     std::vector<BatchGetObjectRemoteReqPb> batchGetObjectRequests;
@@ -825,7 +855,29 @@ public:
         return true;
     }
 
+    Status InvokeTestExist(int64_t subTimeoutMs, ExistReqPb &request, ExistRspPb &response)
+    {
+        // InvokeObjectRpc is the shared control primitive, so it requires an initialized control stub
+        // even though the injected call below never dereferences it.
+        if (!controlStubReady_) {
+            RETURN_IF_NOT_OK(Init());
+            controlStubReady_ = true;
+        }
+        return InvokeObjectRpc(
+            subTimeoutMs, "Exist", request, response,
+            [this, &request, &response](WorkerOCService_BrpcGenericStub &, const RpcOptions &options) {
+                ++existInvokeCount;
+                existRpcTimeout = options.GetTimeout();
+                invokedExistRequest = request;
+                for (int i = 0; i < request.object_keys_size(); ++i) {
+                    response.add_exists(true);
+                }
+                return Status::OK();
+            });
+    }
+
     int ubHealthRpcTimeout = 0;
+    bool controlStubReady_ = false;
 
     int getObjectInvokeCount = 0;
     int clientGetInvokeCount = 0;
@@ -956,17 +1008,6 @@ protected:
         ++metadataInvokeCount;
         metadataRpcTimeout = options.GetTimeout();
         invokedMetadataRequest = request;
-        return Status::OK();
-    }
-
-    Status DoInvokeExist(const RpcOptions &options, const ExistReqPb &request, ExistRspPb &response) override
-    {
-        ++existInvokeCount;
-        existRpcTimeout = options.GetTimeout();
-        invokedExistRequest = request;
-        for (int i = 0; i < request.object_keys_size(); ++i) {
-            response.add_exists(true);
-        }
         return Status::OK();
     }
 
@@ -1235,6 +1276,7 @@ public:
         }
         auto client = std::make_shared<FakeWorkerRpcClient>(address);
         client->queryAndGetHandler = queryAndGetHandler;
+        client->deleteInvokeStatus = deleteInvokeStatus;
         if (!existInvokeStatuses.empty()) {
             client->existInvokeStatus = existInvokeStatuses.front();
             existInvokeStatuses.erase(existInvokeStatuses.begin());
@@ -1335,6 +1377,7 @@ public:
     std::vector<Status> rpcBuildStatuses;
     std::vector<Status> transportBuildStatuses;
     std::vector<Status> existInvokeStatuses;
+    Status deleteInvokeStatus = Status::OK();
     std::vector<std::vector<Status>> transporterGetStatuses;
     std::vector<std::vector<Status>> transporterCreateStatuses;
     std::vector<std::vector<Status>> transporterSetStatuses;
@@ -1674,7 +1717,7 @@ TEST(WorkerRpcClientUbHealthTest, HealthQueryIgnoresSmallBusinessTimeout)
     ExistReqPb businessRequest;
     businessRequest.add_object_keys("key");
     ExistRspPb businessResponse;
-    ASSERT_TRUE(client.InvokeExist(20, businessRequest, businessResponse).IsOk());
+    ASSERT_TRUE(client.InvokeTestExist(20, businessRequest, businessResponse).IsOk());
     EXPECT_LE(client.existRpcTimeout, 20);
     EXPECT_GT(client.existRpcTimeout, 0);
     EXPECT_EQ(client.QueryUbPortHealth("incarnation", 0, response).GetCode(), K_INVALID);
@@ -1839,7 +1882,7 @@ TEST(WorkerRpcClientTest, DispatchesReadRequestsWithoutBodySignatures)
     existRequest.set_client_id("client-1");
     existRequest.set_tenant_id("tenant-1");
     ExistRspPb existResponse;
-    ASSERT_TRUE(client.InvokeExist(800, existRequest, existResponse).IsOk());
+    ASSERT_TRUE(client.InvokeTestExist(800, existRequest, existResponse).IsOk());
     EXPECT_EQ(client.existInvokeCount, 1);
     EXPECT_EQ(client.existRpcTimeout, 800);
     EXPECT_EQ(client.invokedExistRequest.client_id(), "client-1");
@@ -2457,7 +2500,7 @@ TEST(WorkerRpcClientTest, ExistUsesSubTimeoutBelowChannelTimeout)
     request.add_object_keys("key");
     ExistRspPb response;
 
-    ASSERT_TRUE(client.InvokeExist(1000, request, response).IsOk());
+    ASSERT_TRUE(client.InvokeTestExist(1000, request, response).IsOk());
 
     EXPECT_EQ(client.existRpcTimeout, 1000);
 }
@@ -2675,7 +2718,7 @@ TEST(WorkerRpcClientTest, BoundsRpcTimeoutByApiDeadline)
     ExistReqPb existRequest;
     existRequest.add_object_keys("key");
     ExistRspPb existResponse;
-    ASSERT_TRUE(client.InvokeExist(1000, existRequest, existResponse).IsOk());
+    ASSERT_TRUE(client.InvokeTestExist(1000, existRequest, existResponse).IsOk());
     EXPECT_EQ(client.existInvokeCount, 1);
     EXPECT_GT(client.existRpcTimeout, 0);
     EXPECT_LE(client.existRpcTimeout, 100);
@@ -2705,7 +2748,7 @@ TEST(WorkerRpcClientTest, ExpiredApiDeadlineDoesNotSendRpc)
 
     ExistReqPb existRequest;
     ExistRspPb existResponse;
-    EXPECT_EQ(client.InvokeExist(100, existRequest, existResponse).GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(client.InvokeTestExist(100, existRequest, existResponse).GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_EQ(client.existInvokeCount, 0);
 }
 
@@ -2752,6 +2795,96 @@ TEST(ExistRequestBuilderTest, BuildsRequestWithAuthFields)
     EXPECT_EQ(request.tenant_id(), "tenant-1");
     EXPECT_EQ(request.token(), "token-1");
     EXPECT_TRUE(request.is_routed());
+}
+
+TEST(WorkerRpcDispatcherTest, InvokeUsesSelectedWorkerClient)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    TestTransportLayer layer(manager);
+    const auto worker = MakeAddress(9200);
+    ApiDeadlineGuard deadline(1000);
+    bool invoked = false;
+    RpcAttempt attempt = layer.GetRpcDispatcher()->Invoke(
+        worker, "ControlQuery", [&](WorkerRpcClient &rpcClient) {
+            invoked = true;
+            EXPECT_EQ(rpcClient.WorkerAddress(), worker);
+            return Status::OK();
+        });
+
+    ASSERT_TRUE(attempt.status.IsOk());
+    EXPECT_EQ(attempt.executionState, RpcExecutionState::RESPONSE_RECEIVED);
+    EXPECT_TRUE(invoked);
+    auto rpcClient = manager->lastRpcClient;
+    ASSERT_NE(rpcClient, nullptr);
+}
+
+TEST(ObjectControlRpcClientTest, BuildsTypedRequestsOnSharedEndpointPath)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    TestTransportLayer layer(manager);
+    ObjectControlRpcClient rpcClient(layer.GetRpcDispatcher());
+    const auto worker = MakeAddress(9204);
+    const TransportRequestContext context{ "client-1", "token-1", "tenant-1" };
+    const std::vector<std::string> keys{ "key-1" };
+    ApiDeadlineGuard deadline(1000);
+    DeleteAllCopyRspPb deleteResponse;
+    QuerySizeRspPb querySizeResponse;
+    ExpireRspPb expireResponse;
+    GetMetaInfoRspPb metaInfoResponse;
+    std::vector<ObjMetaInfo> objectMetas;
+
+    ASSERT_TRUE(rpcClient.Delete(worker, context, keys, false, true, deleteResponse).IsOk());
+    ASSERT_TRUE(rpcClient.GetObjMetaInfo(worker, context.tenantId, keys, objectMetas).IsOk());
+    ASSERT_TRUE(rpcClient.QuerySize(worker, context, keys, querySizeResponse).IsOk());
+    ASSERT_TRUE(rpcClient.Expire(worker, context, keys, 60, expireResponse).IsOk());
+    ASSERT_TRUE(rpcClient.GetMetaInfo(worker, context, keys, false, true, metaInfoResponse).IsOk());
+
+    auto endpoint = manager->lastRpcClient;
+    ASSERT_NE(endpoint, nullptr);
+    ASSERT_EQ(endpoint->invokedDeleteRequests.size(), 1u);
+    EXPECT_EQ(endpoint->invokedDeleteRequests.front().client_id(), context.clientId);
+    EXPECT_EQ(endpoint->invokedDeleteRequests.front().token(), context.token);
+    EXPECT_EQ(endpoint->invokedDeleteRequests.front().tenant_id(), context.tenantId);
+    EXPECT_TRUE(endpoint->invokedDeleteRequests.front().is_routed());
+    ASSERT_EQ(endpoint->invokedGetObjMetaInfoRequests.size(), 1u);
+    EXPECT_EQ(endpoint->invokedGetObjMetaInfoRequests.front().tenantid(), context.tenantId);
+    ASSERT_EQ(endpoint->invokedQuerySizeRequests.size(), 1u);
+    EXPECT_TRUE(endpoint->invokedQuerySizeRequests.front().is_routed());
+    ASSERT_EQ(endpoint->invokedExpireRequests.size(), 1u);
+    EXPECT_EQ(endpoint->invokedExpireRequests.front().ttl_second(), 60u);
+    ASSERT_EQ(endpoint->invokedGetMetaInfoRequests.size(), 1u);
+    EXPECT_TRUE(endpoint->invokedGetMetaInfoRequests.front().is_routed());
+}
+
+TEST(WorkerRpcDispatcherTest, ReportsConnectionFailureBeforeDispatch)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->rpcBuildStatuses = { Status(K_RPC_UNAVAILABLE, "connection failed") };
+    TestTransportLayer layer(manager);
+    const auto worker = MakeAddress(9201);
+    ApiDeadlineGuard deadline(1000);
+    RpcAttempt attempt =
+        layer.GetRpcDispatcher()->Invoke(worker, "ControlMutation", [](WorkerRpcClient &) { return Status::OK(); });
+
+    EXPECT_EQ(attempt.status.GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_EQ(attempt.executionState, RpcExecutionState::NOT_SENT);
+    EXPECT_EQ(manager->rpcBuildCount, 1);
+}
+
+TEST(WorkerRpcDispatcherTest, ReportsAmbiguousFailureAfterDispatch)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    TestTransportLayer layer(manager);
+    const auto worker = MakeAddress(9202);
+    ApiDeadlineGuard deadline(1000);
+    RpcAttempt attempt = layer.GetRpcDispatcher()->Invoke(
+        worker, "ControlMutation",
+        [](WorkerRpcClient &) { return Status(K_RPC_UNAVAILABLE, "request outcome is unknown"); });
+
+    EXPECT_EQ(attempt.status.GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_EQ(attempt.executionState, RpcExecutionState::MAY_HAVE_EXECUTED);
+    ASSERT_NE(manager->lastRpcClient, nullptr);
+    EXPECT_EQ(manager->rpcBuildCount, 1);
 }
 
 TEST(WorkerRpcClientTest, HashRingRefreshUsesControlTimeoutOutsideApiDeadline)
@@ -4610,40 +4743,16 @@ TEST(ObjectMetadataClientTest, UndispatchedUbLeaseRacesPreserveWorkerReconnect)
     EXPECT_TRUE(bufferProvider->lastOwner.expired());
 }
 
-// Sampling interval of DataPlaneManager::MarkDataPlaneUse (DATA_PLANE_USE_REFRESH_INTERVAL_MS), mirrored here
-// so the quiet-gate assertions can name the ages they rely on.
-constexpr int64_t kSamplingIntervalMs = 100;
-// Deliberately shorter than the sampling interval: that combination is what the gate has to compensate for.
-constexpr uint64_t kQuietWindowMs = 50;
-constexpr int64_t kRecordedAgeLagsSample = 70;
-constexpr int64_t kRecordedAgeNearBoundary = 120;
-constexpr int64_t kRecordedAgeAtBoundary = static_cast<int64_t>(kQuietWindowMs) + kSamplingIntervalMs;
-constexpr uint64_t kDefaultQuietWindowMs = 30'000;
-constexpr int64_t kDefaultQuietWindowAge = static_cast<int64_t>(kDefaultQuietWindowMs) + kSamplingIntervalMs;
-
 int64_t SteadyNowMsForTest()
 {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
         .count();
 }
 
-// Grants deterministic control over the recorded "last data plane use" timestamp: the sample is only
-// refreshed once per DATA_PLANE_USE_REFRESH_INTERVAL_MS, so reproducing a specific age with real sleeps would
-// race the sampling interval and make the boundary assertions flaky.
 class DataPlaneManagerQuietTestPeer {
 public:
     DataPlaneManagerQuietTestPeer() = delete;
     ~DataPlaneManagerQuietTestPeer() = delete;
-
-    static bool SetLastDataPlaneUseMs(DataPlaneManager &manager, const HostPort &address, int64_t ms)
-    {
-        DataPlaneManager::EntryMap::const_accessor accessor;
-        if (!manager.entries_.find(accessor, address.ToString())) {
-            return false;
-        }
-        accessor->second->lastDataPlaneUseMs.store(ms, std::memory_order_relaxed);
-        return true;
-    }
 
     // Expire (or re-arm) the read-path rebuild cooldown without waiting for the fixed one-second window, so the
     // "UB resumes once the cooldown elapses" path can be asserted deterministically.
@@ -4677,104 +4786,6 @@ public:
     }
 };
 
-TEST(DataPlaneManagerTest, EndpointQuietWindow)
-{
-    auto manager = std::make_shared<FakeDataPlaneManager>();
-    const auto address = MakeAddress(41);
-    // No entry at all: treat as quiet so a standby without a data plane is not blocked.
-    EXPECT_TRUE(manager->IsEndpointDataPlaneQuiet(address, 1));
-    // quietMs == 0 disables the check entirely.
-    EXPECT_TRUE(manager->IsEndpointDataPlaneQuiet(address, 0));
-
-    std::shared_ptr<IDataTransporter> transporter;
-    ASSERT_TRUE(manager->GetOrCreate(address, TransportHint::UB_CANDIDATE, transporter).IsOk());
-    EXPECT_TRUE(manager->IsEndpointDataPlaneQuiet(address, 0));
-    EXPECT_FALSE(manager->IsEndpointDataPlaneQuiet(address, std::numeric_limits<uint64_t>::max()));
-}
-
-TEST(DataPlaneManagerTest, EndpointQuietWindowCompensatesDataPlaneUseSampling)
-{
-    auto manager = std::make_shared<FakeDataPlaneManager>();
-    const auto address = MakeAddress(41);
-    std::shared_ptr<IDataTransporter> transporter;
-    ASSERT_TRUE(manager->GetOrCreate(address, TransportHint::UB_CANDIDATE, transporter).IsOk());
-    const int64_t now = SteadyNowMsForTest();
-
-    // The recorded timestamp lags the true last use by up to one sampling interval: kRecordedAgeLagsSample of
-    // recorded age can mean the endpoint served a read 10 ms ago (used at 1000 ms, sampled away at 1040/1060
-    // ms, checked at 1070 ms). A kQuietWindowMs window must not call that quiet — without the sampling
-    // compensation it would, and the standby would be torn down while still carrying traffic.
-    ASSERT_TRUE(DataPlaneManagerQuietTestPeer::SetLastDataPlaneUseMs(*manager, address, now - kRecordedAgeLagsSample));
-    EXPECT_FALSE(manager->IsEndpointDataPlaneQuiet(address, kQuietWindowMs));
-    ASSERT_TRUE(
-        DataPlaneManagerQuietTestPeer::SetLastDataPlaneUseMs(*manager, address, now - kRecordedAgeNearBoundary));
-    EXPECT_FALSE(manager->IsEndpointDataPlaneQuiet(address, kQuietWindowMs));
-    // Recorded age of kQuietWindowMs + kSamplingIntervalMs leaves at least kQuietWindowMs of proven idleness.
-    ASSERT_TRUE(DataPlaneManagerQuietTestPeer::SetLastDataPlaneUseMs(*manager, address, now - kRecordedAgeAtBoundary));
-    EXPECT_TRUE(manager->IsEndpointDataPlaneQuiet(address, kQuietWindowMs));
-
-    // The default window keeps its meaning: an endpoint used right now is never quiet, and one idle for the
-    // window plus the sampling bound is.
-    ASSERT_TRUE(DataPlaneManagerQuietTestPeer::SetLastDataPlaneUseMs(*manager, address, now));
-    EXPECT_FALSE(manager->IsEndpointDataPlaneQuiet(address, kDefaultQuietWindowMs));
-    ASSERT_TRUE(DataPlaneManagerQuietTestPeer::SetLastDataPlaneUseMs(*manager, address, now - kDefaultQuietWindowAge));
-    EXPECT_TRUE(manager->IsEndpointDataPlaneQuiet(address, kDefaultQuietWindowMs));
-
-    // quietMs == 0 stays a rollback switch that bypasses the gate entirely.
-    ASSERT_TRUE(DataPlaneManagerQuietTestPeer::SetLastDataPlaneUseMs(*manager, address, now));
-    EXPECT_TRUE(manager->IsEndpointDataPlaneQuiet(address, 0));
-}
-
-TEST(DataPlaneManagerTest, TcpOnlyEndpointIsAlwaysQuiet)
-{
-    auto manager = std::make_shared<FakeDataPlaneManager>();
-    const auto address = MakeAddress(41);
-    std::shared_ptr<IDataTransporter> transporter;
-    ASSERT_TRUE(manager->GetOrCreate(address, TransportHint::TCP_ONLY, transporter).IsOk());
-    // TCP-only endpoints carry no data plane that a worker-side teardown can invalidate, so they must not
-    // hold back a standby drain.
-    EXPECT_TRUE(manager->IsEndpointDataPlaneQuiet(address, std::numeric_limits<uint64_t>::max()));
-}
-
-TEST(ListenWorkerDrainTest, CanDisconnectStandbyGatesOnDataPlane)
-{
-    auto workerApi =
-        std::make_shared<ClientWorkerRemoteCommonApi>(MakeAddress(41), HeartbeatType::RPC_HEARTBEAT, "", nullptr);
-    auto listenWorker = std::make_shared<ListenWorker>(workerApi, HeartbeatType::RPC_HEARTBEAT, 1, nullptr);
-    listenWorker->SetIsLocalWorker(false);
-
-    // No handle registered: keep the legacy behaviour so a missing registration never blocks a drain.
-    EXPECT_TRUE(listenWorker->CanDisconnectStandby());
-
-    bool quiet = false;
-    int resetCount = 0;
-    listenWorker->SetDataPlaneDrainHandle({ [&quiet](uint64_t) { return quiet; }, [&resetCount]() { ++resetCount; } });
-    quiet = false;
-    EXPECT_FALSE(listenWorker->CanDisconnectStandby()) << "Active data plane must defer the standby drain";
-    quiet = true;
-    EXPECT_TRUE(listenWorker->CanDisconnectStandby());
-    // Evaluating the gate is a query: neither answer may touch the data plane. Without this assertion a
-    // regression that reset the plane from the predicate would keep the case green.
-    EXPECT_EQ(resetCount, 0) << "Evaluating the drain gate must not reset the data plane";
-}
-
-TEST(ListenWorkerDrainTest, CanDisconnectStandbyUsesFixedQuietWindow)
-{
-    auto workerApi =
-        std::make_shared<ClientWorkerRemoteCommonApi>(MakeAddress(41), HeartbeatType::RPC_HEARTBEAT, "", nullptr);
-    auto listenWorker = std::make_shared<ListenWorker>(workerApi, HeartbeatType::RPC_HEARTBEAT, 1, nullptr);
-    listenWorker->SetIsLocalWorker(false);
-
-    uint64_t requestedQuietMs = 0;
-    listenWorker->SetDataPlaneDrainHandle({ [&requestedQuietMs](uint64_t quietMs) {
-                                               requestedQuietMs = quietMs;
-                                               return true;
-                                           },
-                                            []() {} });
-    EXPECT_TRUE(listenWorker->CanDisconnectStandby());
-    EXPECT_EQ(requestedQuietMs, 30'000u);
-}
-
 TEST(DataPlaneManagerTest, UbRebuildCooldownIsFixedAtOneSecond)
 {
     auto manager = std::make_shared<FakeDataPlaneManager>();
@@ -4790,64 +4801,6 @@ TEST(DataPlaneManagerTest, UbRebuildCooldownIsFixedAtOneSecond)
     EXPECT_LE(deadline, after + cooldownMs);
 }
 
-TEST(ListenWorkerDrainTest, TeardownReChecksQuietGateBeforeDisconnect)
-{
-    auto workerApi =
-        std::make_shared<ClientWorkerRemoteCommonApi>(MakeAddress(41), HeartbeatType::RPC_HEARTBEAT, "", nullptr);
-    auto listenWorker = std::make_shared<ListenWorker>(workerApi, HeartbeatType::RPC_HEARTBEAT, 1, nullptr);
-    listenWorker->SetIsLocalWorker(false);
-
-    bool quiet = true;
-    int resetCount = 0;
-    listenWorker->SetDataPlaneDrainHandle({ [&quiet](uint64_t) { return quiet; }, [&resetCount]() { ++resetCount; } });
-    ASSERT_TRUE(listenWorker->CanDisconnectStandby());
-    // The teardown is queued onto the shared async-switch pool, which also runs switch-back work, so the gate
-    // decision can be seconds old by the time it executes. Read traffic that resumed in that window must abort
-    // the teardown rather than drop a data plane that is in use again.
-    quiet = false;
-    listenWorker->ShutdownStandbyConnection();
-    EXPECT_EQ(resetCount, 0) << "A data plane that became active again must not be reset and disconnected";
-
-    quiet = true;
-    listenWorker->ShutdownStandbyConnection();
-    EXPECT_EQ(resetCount, 1);
-}
-
-TEST(ObjectClientImplTest, SwitchBackGatesOnDataPlaneManagerPublication)
-{
-    ConnectOptions options;
-    options.host = "127.0.0.1";
-    options.port = 31501;
-    options.serviceDiscovery = std::make_shared<FakeServiceDiscovery>();
-    object_cache::ObjectClientImpl client(options);
-
-    // Simulate the remote-fallback state: currentNode_ is a standby node backed by a worker API.
-    client.currentNode_.store(object_cache::STANDBY1_WORKER);
-    client.workerApi_.resize(object_cache::STANDBY2_WORKER + 1);
-    client.workerApi_[object_cache::STANDBY1_WORKER] =
-        std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(41));
-
-    object_cache::WorkerNode oldNode = object_cache::LOCAL_WORKER;
-    HostPort localAddress;
-    HeartbeatType heartbeatType = HeartbeatType::NO_HEARTBEAT;
-
-    // Before the data-plane manager is published, switch-back must be deferred: reading the un-published weak_ptr
-    // would race on the member and permanently capture an empty manager in the drain handle.
-    client.dataPlaneManagerPublished_.store(false, std::memory_order_release);
-    EXPECT_FALSE(client.failover_->GetPreferredLocalWorkerToRecover(oldNode, localAddress, heartbeatType));
-
-    // Once published, the gate opens and switch-back proceeds to select the same-node worker.
-    client.dataPlaneManagerPublished_.store(true, std::memory_order_release);
-    EXPECT_TRUE(client.failover_->GetPreferredLocalWorkerToRecover(oldNode, localAddress, heartbeatType));
-    EXPECT_EQ(oldNode, object_cache::STANDBY1_WORKER);
-    EXPECT_EQ(localAddress.Host(), "127.0.0.1");
-    EXPECT_EQ(localAddress.Port(), 31502);
-}
-
-// Issue 1313 review: the routing probe fallback runs on the refresher's background thread and must
-// never hold an ObjectClientImpl strong reference. Destroying the last client reference while the
-// fallback is blocked in discovery must destruct the client on the destroyer thread (expired weak),
-// never on the refresh thread, where ~ObjectClientImpl would join the refresh thread against itself.
 TEST(ObjectClientImplTest, ProbeFallbackDoesNotExtendClientLifetimeOnRefreshThread)
 {
     auto discovery = std::make_shared<BlockingServiceDiscovery>();
@@ -5704,7 +5657,7 @@ TEST(ObjectClientTransportTest, ReadTransportRoundPreservesMixedItemStatusesWhen
     auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
     workerApi->clientId_ = "transport-round-test-client";
-    client->workerApi_.emplace_back(workerApi);
+    client->workerApi_ = workerApi;
     client->transportLayer_ = std::move(transportLayer);
     std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
 
@@ -5715,7 +5668,7 @@ TEST(ObjectClientTransportTest, ReadTransportRoundPreservesMixedItemStatusesWhen
     Status transportStatus;
     std::vector<HostPort> excludedWorkers;
 
-    ASSERT_TRUE(client->routedMode_
+    ASSERT_TRUE(client
                     ->ReadTransportRound(objectKeys, false, 1000, false, buffers, itemStatuses, actualKind,
                                          transportStatus, excludedWorkers)
                     .IsOk());
@@ -5760,13 +5713,13 @@ TEST(ObjectClientTransportTest, DrainingLocationRetriesOnlyPendingKeys)
     auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
     workerApi->clientId_ = "draining-retry-test-client";
-    client->workerApi_.emplace_back(workerApi);
+    client->workerApi_ = workerApi;
     client->transportLayer_ = std::move(transportLayer);
     std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
 
     const std::vector<std::string> objectKeys{ "draining", "stable" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
-    ASSERT_TRUE(client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false).IsOk());
+    ASSERT_TRUE(client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false).IsOk());
     ASSERT_EQ(metadata->keyGroups.size(), 2u);
     EXPECT_EQ(metadata->keyGroups[0], objectKeys);
     EXPECT_EQ(metadata->keyGroups[1], std::vector<std::string>({ "draining" }));
@@ -5813,12 +5766,12 @@ TEST(ObjectClientTransportTest, DrainingMetadataOwnerRetriesThroughSurvivorBefor
         auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
         auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
         workerApi->clientId_ = "draining-owner-failover-test-client";
-        client->workerApi_.emplace_back(workerApi);
+        client->workerApi_ = workerApi;
         client->transportLayer_ = std::move(transportLayer);
         std::atomic_store(&client->routing_, routing);
 
         std::vector<std::shared_ptr<Buffer>> buffers(1);
-        auto getStatus = client->routedMode_->GetFromTransportLayer({ objectKey }, buffers, false, 1000, false);
+        auto getStatus = client->GetFromTransportLayer({ objectKey }, buffers, false, 1000, false);
         ASSERT_TRUE(getStatus.IsOk()) << getStatus.ToString();
         ASSERT_EQ(metadata->addresses.size(), 2u);
         EXPECT_EQ(metadata->addresses[0], drainingOwner);
@@ -5853,13 +5806,13 @@ TEST(ObjectClientTransportTest, NoAvailableWorkerFailsWithoutRetryOrRefresh)
     auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
     workerApi->clientId_ = "route-unavailable-fail-fast-client";
-    client->workerApi_.emplace_back(workerApi);
+    client->workerApi_ = workerApi;
     client->transportLayer_ = std::move(transportLayer);
     auto routing = MakeSingleWorkerRouting(ownerAddress, { rejectOnce });
     std::atomic_store(&client->routing_, routing);
     const std::vector<std::string> objectKeys{ "route-a", "route-b" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
-    auto status = client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    auto status = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
     EXPECT_EQ(status.GetCode(), K_NO_AVAILABLE_WORKER);
     EXPECT_EQ(rejectOnce->Checks(), 1u);
     EXPECT_EQ(routing->refresher_->forceRefreshDeadlineMs_.load(), 0);
@@ -5869,7 +5822,7 @@ TEST(ObjectClientTransportTest, NoAvailableWorkerFailsWithoutRetryOrRefresh)
     EXPECT_EQ(buffers[0], nullptr);
     EXPECT_EQ(buffers[1], nullptr);
 
-    ASSERT_TRUE(client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false).IsOk());
+    ASSERT_TRUE(client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false).IsOk());
     EXPECT_EQ(rejectOnce->Checks(), 3u);
     EXPECT_EQ(routing->refresher_->forceRefreshDeadlineMs_.load(), 0);
     ASSERT_EQ(metadata->keyGroups.size(), 1u);
@@ -5891,7 +5844,7 @@ TEST(ObjectClientTransportTest, PeerDeadMetadataOwnerRetriesRoutedRead)
     auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
     workerApi->clientId_ = "peer-dead-metadata-retry-test-client";
-    client->workerApi_.emplace_back(workerApi);
+    client->workerApi_ = workerApi;
     std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
     auto metadata = std::make_shared<FakeObjectMetadataClient>();
     std::atomic<int> metadataAttempts{ 0 };
@@ -5920,7 +5873,7 @@ TEST(ObjectClientTransportTest, PeerDeadMetadataOwnerRetriesRoutedRead)
 
     const std::vector<std::string> objectKeys{ "peer-dead" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
-    ASSERT_TRUE(client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false).IsOk());
+    ASSERT_TRUE(client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false).IsOk());
     EXPECT_EQ(metadataAttempts.load(), 2);
     EXPECT_EQ(metadata->keyGroups.size(), 2u);
     EXPECT_EQ(metadata->addresses, std::vector<HostPort>({ ownerAddress, refreshedOwnerAddress }));
@@ -5945,13 +5898,13 @@ TEST(ObjectClientTransportTest, DrainingLocationStopsAfterThreeFastRetries)
     auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
     workerApi->clientId_ = "draining-budget-test-client";
-    client->workerApi_.emplace_back(workerApi);
+    client->workerApi_ = workerApi;
     client->transportLayer_ = std::move(transportLayer);
     std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
 
     const std::vector<std::string> objectKeys{ "draining" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
-    Status rc = client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
     EXPECT_EQ(rc.GetCode(), K_NOT_READY);
     EXPECT_NE(rc.GetMsg().find("Worker is draining for ScaleIn"), std::string::npos);
     EXPECT_EQ(metadata->keyGroups.size(), 4u);
@@ -5979,13 +5932,13 @@ TEST(ObjectClientTransportTest, AlternatingRefreshableErrorsKeepConsumedRetryBud
     auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
     workerApi->clientId_ = "alternating-refresh-budget-test-client";
-    client->workerApi_.emplace_back(workerApi);
+    client->workerApi_ = workerApi;
     client->transportLayer_ = std::move(transportLayer);
     std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
 
     const std::vector<std::string> objectKeys{ "alternating" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
-    Status rc = client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
     EXPECT_EQ(rc.GetCode(), K_NOT_READY);
     EXPECT_EQ(attempts.load(), 7);
     EXPECT_EQ(metadata->keyGroups.size(), 7u);
@@ -6010,13 +5963,13 @@ TEST(ObjectClientTransportTest, StaleLocationStopsAfterFiveRetries)
     auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
     workerApi->clientId_ = "stale-budget-test-client";
-    client->workerApi_.emplace_back(workerApi);
+    client->workerApi_ = workerApi;
     client->transportLayer_ = std::move(transportLayer);
     std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
 
     const std::vector<std::string> objectKeys{ "stale" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
-    Status rc = client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
     EXPECT_EQ(rc.GetCode(), K_RPC_UNAVAILABLE);
     EXPECT_FALSE(IsTransportSnapshotStaleLocation(rc)) << rc.ToString();
     EXPECT_NE(rc.GetMsg().find(STALE_TRANSPORT_SNAPSHOT_MESSAGE), std::string::npos) << rc.ToString();
@@ -6059,12 +6012,12 @@ TEST(ObjectClientTransportTest, UnsentMetadataFailuresTryDistinctOwners)
     auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
     workerApi->clientId_ = "alternate-metadata-owner-test-client";
-    client->workerApi_.emplace_back(workerApi);
+    client->workerApi_ = workerApi;
     client->transportLayer_ = std::move(transportLayer);
     std::atomic_store(&client->routing_, MakeRouting({ MakeAddress(41), MakeAddress(42), MakeAddress(43) }));
 
     std::vector<std::shared_ptr<Buffer>> buffers(1);
-    ASSERT_TRUE(client->routedMode_->GetFromTransportLayer({ objectKey }, buffers, false, 1000, false).IsOk());
+    ASSERT_TRUE(client->GetFromTransportLayer({ objectKey }, buffers, false, 1000, false).IsOk());
     ASSERT_EQ(metadata->addresses.size(), 3u);
     EXPECT_NE(metadata->addresses[0], metadata->addresses[1]);
     EXPECT_NE(metadata->addresses[0], metadata->addresses[2]);
@@ -6101,13 +6054,13 @@ TEST(ObjectClientTransportTest, StaleLocationSlowReadDeadlineReturnsPublicDeadli
     auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
     workerApi->clientId_ = "stale-slow-read-deadline-test-client";
-    client->workerApi_.emplace_back(workerApi);
+    client->workerApi_ = workerApi;
     client->transportLayer_ = std::move(transportLayer);
     std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
 
     const std::vector<std::string> objectKeys{ "stale" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
-    Status rc = client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
     EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED) << rc.ToString();
     EXPECT_FALSE(IsTransportSnapshotStaleLocation(rc)) << rc.ToString();
     EXPECT_NE(rc.GetMsg().find(STALE_TRANSPORT_SNAPSHOT_MESSAGE), std::string::npos) << rc.ToString();
@@ -6133,13 +6086,13 @@ TEST(ObjectClientTransportTest, BatchStaleLocationBudgetReturnsPublicAvailabilit
     auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
     workerApi->clientId_ = "batch-stale-budget-test-client";
-    client->workerApi_.emplace_back(workerApi);
+    client->workerApi_ = workerApi;
     client->transportLayer_ = std::move(transportLayer);
     std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
 
     const std::vector<std::string> objectKeys{ "stale-a", "stale-b" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
-    Status rc = client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
     EXPECT_EQ(rc.GetCode(), K_RPC_UNAVAILABLE) << rc.ToString();
     EXPECT_FALSE(IsTransportSnapshotStaleLocation(rc)) << rc.ToString();
     EXPECT_NE(rc.GetMsg().find(STALE_TRANSPORT_SNAPSHOT_MESSAGE), std::string::npos) << rc.ToString();
@@ -6169,13 +6122,13 @@ TEST(ObjectClientTransportTest, BatchStaleLocationSlowReadDeadlineReturnsPublicD
     auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
     workerApi->clientId_ = "batch-stale-slow-read-deadline-test-client";
-    client->workerApi_.emplace_back(workerApi);
+    client->workerApi_ = workerApi;
     client->transportLayer_ = std::move(transportLayer);
     std::atomic_store(&client->routing_, MakeSingleWorkerRouting(ownerAddress));
 
     const std::vector<std::string> objectKeys{ "stale-a", "stale-b" };
     std::vector<std::shared_ptr<Buffer>> buffers(objectKeys.size());
-    Status rc = client->routedMode_->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
+    Status rc = client->GetFromTransportLayer(objectKeys, buffers, false, 1000, false);
     EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED) << rc.ToString();
     EXPECT_FALSE(IsTransportSnapshotStaleLocation(rc)) << rc.ToString();
     EXPECT_NE(rc.GetMsg().find(STALE_TRANSPORT_SNAPSHOT_MESSAGE), std::string::npos) << rc.ToString();
@@ -6196,7 +6149,7 @@ TEST(ObjectClientTransportTest, BatchExternalOwnersMaterializeIntoIndependentSdk
     auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
     workerApi->clientId_ = "materialization-test-client";
-    client->workerApi_.emplace_back(workerApi);
+    client->workerApi_ = workerApi;
     ObjectReadItemResult first;
     first.objectKey = "one";
     first.data.response.set_data_size(4);
@@ -6212,8 +6165,8 @@ TEST(ObjectClientTransportTest, BatchExternalOwnersMaterializeIntoIndependentSdk
     std::shared_ptr<Buffer> firstBuffer;
     std::shared_ptr<Buffer> secondBuffer;
 
-    ASSERT_TRUE(client->routedMode_->MaterializeTransportItem("one", first, firstBuffer).IsOk());
-    ASSERT_TRUE(client->routedMode_->MaterializeTransportItem("two", second, secondBuffer).IsOk());
+    ASSERT_TRUE(client->MaterializeTransportItem("one", first, firstBuffer).IsOk());
+    ASSERT_TRUE(client->MaterializeTransportItem("two", second, secondBuffer).IsOk());
     first = ObjectReadItemResult{};
     second = ObjectReadItemResult{};
     owner.reset();
@@ -6245,10 +6198,9 @@ protected:
         options.host = "127.0.0.1";
         options.port = 31501;
         client = std::make_shared<object_cache::ObjectClientImpl>(options);
-        client->enableCrossNodeConnection_ = true;
         auto api = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
         api->clientId_ = "string-get-copy-test";
-        client->workerApi_.emplace_back(api);
+        client->workerApi_ = api;
         metadata = std::make_shared<FakeObjectMetadataClient>();
         metadata->inlineKinds["key"] = AccessTransportKind::TCP;
         auto transport = std::make_unique<TestTransportLayer>(std::make_shared<FakeDataPlaneManager>());
@@ -6273,7 +6225,7 @@ protected:
         meta.workerAddr = MakeAddress(31501);
         item.data.externalMeta = meta;
         std::shared_ptr<Buffer> materialized;
-        ASSERT_TRUE(client->routedMode_->MaterializeTransportItem(item.objectKey, item, materialized).IsOk());
+        ASSERT_TRUE(client->MaterializeTransportItem(item.objectKey, item, materialized).IsOk());
         buffer = Optional<Buffer>(std::move(*materialized));
         owner->failure = std::move(failure);
     }
@@ -6310,7 +6262,7 @@ TEST_F(StringGetCopyTest, DisconnectAndDeprecatedMappingRereadOnlyAffectedKey)
     EXPECT_TRUE(value.empty());
 }
 
-TEST_F(StringGetCopyTest, DoesNotRetryUnrelatedErrorsDisabledFailoverOrExpiredDeadline)
+TEST_F(StringGetCopyTest, DoesNotRetryUnrelatedErrorsOrExpiredDeadline)
 {
     ApiDeadlineGuard deadline(1000);
     std::string value;
@@ -6320,9 +6272,6 @@ TEST_F(StringGetCopyTest, DoesNotRetryUnrelatedErrorsDisabledFailoverOrExpiredDe
     MakeShmBuffer(Status(K_RUNTIME_ERROR, "buffer is not visible"));
     EXPECT_EQ(client->CopyGetBufferToString("key", 0, buffer, value).GetCode(), K_RUNTIME_ERROR);
     MakeShmBuffer(Status(K_RPC_UNAVAILABLE, "disconnected"));
-    client->enableCrossNodeConnection_ = false;
-    EXPECT_EQ(client->CopyGetBufferToString("key", 0, buffer, value).GetCode(), K_RPC_UNAVAILABLE);
-    client->enableCrossNodeConnection_ = true;
     ApiDeadline::Instance().InitUs(0);
     EXPECT_EQ(client->CopyGetBufferToString("key", 0, buffer, value).GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_TRUE(metadata->keyGroups.empty());
@@ -6365,7 +6314,7 @@ TEST(ObjectClientTransportTest, RoutedShmBufferUsesTargetSessionLockId)
     auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
     workerApi->clientId_ = "materialization-test-client";
-    client->workerApi_.emplace_back(workerApi);
+    client->workerApi_ = workerApi;
     ObjectReadItemResult item;
     item.objectKey = "routed-shm";
     item.data.response.set_data_size(DATA_SIZE);
@@ -6380,7 +6329,7 @@ TEST(ObjectClientTransportTest, RoutedShmBufferUsesTargetSessionLockId)
     item.data.externalMeta = meta;
     std::shared_ptr<Buffer> buffer;
 
-    ASSERT_TRUE(client->routedMode_->MaterializeTransportItem(item.objectKey, item, buffer).IsOk());
+    ASSERT_TRUE(client->MaterializeTransportItem(item.objectKey, item, buffer).IsOk());
     ASSERT_NE(buffer, nullptr);
     ASSERT_NE(buffer->bufferInfo_, nullptr);
     EXPECT_TRUE(buffer->bufferInfo_->useSessionLockId);
@@ -6400,7 +6349,7 @@ protected:
         client = std::make_shared<object_cache::ObjectClientImpl>(options);
         workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(workers.front());
         workerApi->clientId_ = "create-redirect-test";
-        client->workerApi_.emplace_back(workerApi);
+        client->workerApi_ = workerApi;
         client->enableLocalCache_ = false;
         client->dataPlacementPolicy_ = DataPlacementPolicy::PREFERRED_META_OWNER;
         manager = std::make_shared<FakeDataPlaneManager>();
@@ -6430,7 +6379,7 @@ protected:
     {
         object_cache::FullParam param;
         param.ttlSecond = 10;
-        auto rc = client->routedMode_->CreateRoutedBuffer(key, 4, param, buffer);
+        auto rc = client->CreateRoutedBuffer(key, 4, param, buffer);
         if (rc.IsOk()) {
             allocations.emplace_back(buffer->bufferInfo_);
         }
@@ -6444,9 +6393,7 @@ protected:
         client->transportLayer_ = std::make_unique<TestTransportLayer>(
             manager, std::make_shared<FixedTransportAdvisor>(TransportHint::TCP_ONLY));
         workerApi->SetHealthy(true);
-        client->listenWorker_.resize(object_cache::STANDBY2_WORKER + 1);
-        client->listenWorker_[object_cache::LOCAL_WORKER] = std::make_shared<client::ListenWorker>(
-            workerApi, HeartbeatType::NO_HEARTBEAT, object_cache::LOCAL_WORKER, nullptr);
+        client->listenWorker_ = std::make_shared<client::ListenWorker>(workerApi, HeartbeatType::NO_HEARTBEAT);
         bool initNeedsCompletion = false;
         ASSERT_TRUE(client->clientStateManager_->ProcessInit(initNeedsCompletion).IsOk());
         client->clientStateManager_->CompleteHandler(false, initNeedsCompletion);
@@ -6810,7 +6757,7 @@ TEST(ObjectClientTransportTest, CoordinatorSetReachesFourthWorkerAfterThreeAdmis
     object_cache::ObjectClientImpl client(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(workers.front());
     workerApi->clientId_ = "coordinator-set-admission-test";
-    client.workerApi_.emplace_back(workerApi);
+    client.workerApi_ = workerApi;
     client.enableLocalCache_ = false;
     client.dataPlacementPolicy_ = DataPlacementPolicy::PREFERRED_META_OWNER;
     client.transportLayer_ = std::make_unique<TestTransportLayer>(manager);
@@ -6864,7 +6811,7 @@ TEST(ObjectClientTransportTest, CoordinatorSetCountsPreviouslyEvictedWorkerInRet
     object_cache::ObjectClientImpl client(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(workers.front());
     workerApi->clientId_ = "coordinator-set-admission-test";
-    client.workerApi_.emplace_back(workerApi);
+    client.workerApi_ = workerApi;
     client.enableLocalCache_ = false;
     client.dataPlacementPolicy_ = DataPlacementPolicy::PREFERRED_META_OWNER;
     client.transportLayer_ = std::make_unique<TestTransportLayer>(manager);
@@ -6949,7 +6896,7 @@ TEST(ObjectClientTransportTest, CoordinatorRedirectPrefersReadyWorkerAndQuaranti
     object_cache::ObjectClientImpl client(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(boundWorker);
     workerApi->clientId_ = "write-hint-test";
-    client.workerApi_.emplace_back(workerApi);
+    client.workerApi_ = workerApi;
     client.enableLocalCache_ = false;
     auto routing = MakeRouting({ boundWorker, readyWorker });
     std::atomic_store(&client.routing_, routing);
@@ -6978,7 +6925,7 @@ TEST(ObjectClientTransportTest, CoordinatorRedirectCannotOverrideRequiredSameNod
     object_cache::ObjectClientImpl client(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(worker);
     workerApi->clientId_ = "write-hint-placement-test";
-    client.workerApi_.emplace_back(workerApi);
+    client.workerApi_ = workerApi;
     client.enableLocalCache_ = false;
     client.dataPlacementPolicy_ = DataPlacementPolicy::REQUIRED_SAME_NODE;
     std::atomic_store(&client.routing_, MakeSingleWorkerRouting(worker));
@@ -7003,7 +6950,7 @@ TEST(ObjectClientTransportTest, RoutedPublishReplaysScaleDownOnRemainingWorker)
     object_cache::ObjectClientImpl client(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(leavingWorker);
     workerApi->clientId_ = "routed-publish-scale-down-test";
-    client.workerApi_.emplace_back(workerApi);
+    client.workerApi_ = workerApi;
     client.enableLocalCache_ = false;
     client.transportLayer_ = std::make_unique<TestTransportLayer>(manager);
     std::atomic_store(&client.routing_, MakeSingleWorkerRouting(remainingWorker));
@@ -7059,7 +7006,7 @@ TEST(ObjectClientTransportTest, RoutedPublishPeerDeadIsolatesTargetWithoutReplay
     object_cache::ObjectClientImpl client(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(owner);
     workerApi->clientId_ = "routed-publish-peer-dead-test";
-    client.workerApi_.emplace_back(workerApi);
+    client.workerApi_ = workerApi;
     client.enableLocalCache_ = false;
     client.transportLayer_ = std::make_unique<TestTransportLayer>(manager);
     std::atomic_store(&client.routing_, routing);
@@ -7104,7 +7051,7 @@ TEST(ObjectClientTransportTest, CoordinatorRoutedPublishPreservesCandidateAndSha
     object_cache::ObjectClientImpl client(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(leavingWorker);
     workerApi->clientId_ = "routed-publish-scale-down-test";
-    client.workerApi_.emplace_back(workerApi);
+    client.workerApi_ = workerApi;
     client.enableLocalCache_ = false;
     client.transportLayer_ = std::make_unique<TestTransportLayer>(manager);
     std::atomic_store(&client.routing_, MakeRouting({ leavingWorker, MakeAddress(31515), remainingWorker }));
@@ -7150,10 +7097,8 @@ TEST(ObjectClientTransportTest, RoutedCreateSetPreservesTtlAndExistence)
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(worker);
     workerApi->clientId_ = "routed-create-set-options-test";
     workerApi->SetHealthy(true);
-    client->workerApi_.emplace_back(workerApi);
-    client->listenWorker_.resize(object_cache::STANDBY2_WORKER + 1);
-    client->listenWorker_[object_cache::LOCAL_WORKER] = std::make_shared<client::ListenWorker>(
-        workerApi, HeartbeatType::NO_HEARTBEAT, object_cache::LOCAL_WORKER, nullptr);
+    client->workerApi_ = workerApi;
+    client->listenWorker_ = std::make_shared<client::ListenWorker>(workerApi, HeartbeatType::NO_HEARTBEAT);
     client->transportLayer_ = std::make_unique<TestTransportLayer>(
         manager, std::make_shared<FixedTransportAdvisor>(TransportHint::TCP_ONLY));
     std::atomic_store(&client->routing_, MakeSingleWorkerRouting(worker));
@@ -7206,10 +7151,8 @@ TEST(ObjectClientTransportTest, RoutedReplayKeepsBufferUsableAfterSourceWorkerRe
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(leavingWorker);
     workerApi->clientId_ = "routed-publish-rebind-test";
     workerApi->SetHealthy(true);
-    client->workerApi_.emplace_back(workerApi);
-    client->listenWorker_.resize(object_cache::STANDBY2_WORKER + 1);
-    client->listenWorker_[object_cache::LOCAL_WORKER] = std::make_shared<client::ListenWorker>(
-        workerApi, HeartbeatType::NO_HEARTBEAT, object_cache::LOCAL_WORKER, nullptr);
+    client->workerApi_ = workerApi;
+    client->listenWorker_ = std::make_shared<client::ListenWorker>(workerApi, HeartbeatType::NO_HEARTBEAT);
     client->enableLocalCache_ = false;
     client->transportLayer_ = std::make_unique<TestTransportLayer>(manager);
     std::atomic_store(&client->routing_, MakeSingleWorkerRouting(remainingWorker));
@@ -7261,7 +7204,7 @@ TEST(ObjectClientTransportTest, RoutedMultiPublishReplaysScaleDownOnRemainingWor
     object_cache::ObjectClientImpl client(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(leavingWorker);
     workerApi->clientId_ = "routed-multi-publish-scale-down-test";
-    client.workerApi_.emplace_back(workerApi);
+    client.workerApi_ = workerApi;
     client.enableLocalCache_ = false;
     client.transportLayer_ = std::make_unique<TestTransportLayer>(manager);
     auto routing = MakeRouting({ leavingWorker, remainingWorker });
@@ -7329,7 +7272,7 @@ TEST(ObjectClientTransportTest, RoutedMultiPublishPeerDeadIsolatesTargetWithoutR
     object_cache::ObjectClientImpl client(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(owner);
     workerApi->clientId_ = "routed-multi-publish-peer-dead-test";
-    client.workerApi_.emplace_back(workerApi);
+    client.workerApi_ = workerApi;
     client.enableLocalCache_ = false;
     client.transportLayer_ = std::make_unique<TestTransportLayer>(manager);
     std::atomic_store(&client.routing_, routing);
@@ -7386,10 +7329,8 @@ TEST(ObjectClientTransportTest, LocalCacheSetRouteSkipsQuarantinedBoundWorker)
     object_cache::ObjectClientImpl client(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(boundWorker);
     workerApi->clientId_ = "local-cache-write-target-test";
-    client.workerApi_.emplace_back(workerApi);
-    client.listenWorker_.resize(object_cache::STANDBY2_WORKER + 1);
-    client.listenWorker_[object_cache::LOCAL_WORKER] = std::make_shared<client::ListenWorker>(
-        workerApi, HeartbeatType::NO_HEARTBEAT, object_cache::LOCAL_WORKER, nullptr);
+    client.workerApi_ = workerApi;
+    client.listenWorker_ = std::make_shared<client::ListenWorker>(workerApi, HeartbeatType::NO_HEARTBEAT);
     client.enableLocalCache_ = true;
     client.dataPlacementPolicy_ = DataPlacementPolicy::PREFERRED_SAME_NODE;
     client.ubHealthFilter_ = std::make_shared<client::UbHealthFilter>();
@@ -7418,10 +7359,8 @@ TEST(ObjectClientTransportTest, LocalCacheSetRouteKeepsHealthyShmPathForUbQuaran
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(boundWorker);
     workerApi->clientId_ = "local-cache-shm-write-target-test";
     workerApi->shmEnableType_ = ShmEnableType::UDS;
-    client.workerApi_.emplace_back(workerApi);
-    client.listenWorker_.resize(object_cache::STANDBY2_WORKER + 1);
-    client.listenWorker_[object_cache::LOCAL_WORKER] = std::make_shared<client::ListenWorker>(
-        workerApi, HeartbeatType::NO_HEARTBEAT, object_cache::LOCAL_WORKER, nullptr);
+    client.workerApi_ = workerApi;
+    client.listenWorker_ = std::make_shared<client::ListenWorker>(workerApi, HeartbeatType::NO_HEARTBEAT);
     client.enableLocalCache_ = true;
     client.dataPlacementPolicy_ = DataPlacementPolicy::PREFERRED_SAME_NODE;
     client.ubHealthFilter_ = std::make_shared<client::UbHealthFilter>();
@@ -7445,6 +7384,44 @@ TEST(ObjectClientTransportTest, LocalCacheSetRouteKeepsHealthyShmPathForUbQuaran
     EXPECT_EQ(retryRoute.directWorkerApi, nullptr);
 }
 
+TEST(ObjectClientTransportTest, LocalCacheSetRouteUsesRoutingWhenLocalWorkerIsUnavailable)
+{
+    const auto localWorker = MakeAddress(31505);
+    const auto routedWorker = MakeAddress(31506);
+    ConnectOptions options;
+    options.host = localWorker.Host();
+    options.port = localWorker.Port();
+    object_cache::ObjectClientImpl client(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(localWorker);
+    workerApi->clientId_ = "unavailable-local-route-test";
+    client.workerApi_ = workerApi;
+    client.listenWorker_ = std::make_shared<client::ListenWorker>(workerApi, HeartbeatType::NO_HEARTBEAT);
+    client.listenWorker_->SetWorkerAvailable(false);
+    client.enableLocalCache_ = true;
+    auto routing = MakeRouting({ localWorker, routedWorker });
+    std::atomic_store(&client.routing_, routing);
+
+    std::string keyOwnedByLocal;
+    for (size_t i = 0; i < 1000 && keyOwnedByLocal.empty(); ++i) {
+        const auto candidate = "fallback-" + std::to_string(i);
+        HostPort selected;
+        ASSERT_TRUE(routing
+                        ->SelectWorker(candidate, DataPlacementPolicy::PREFERRED_SAME_NODE,
+                                       client::WorkerAccessAction::SET, selected)
+                        .IsOk());
+        if (selected == localWorker) {
+            keyOwnedByLocal = candidate;
+        }
+    }
+    ASSERT_FALSE(keyOwnedByLocal.empty());
+
+    object_cache::SetRouteContext route;
+    ASSERT_TRUE(client.SelectSetRoute(keyOwnedByLocal, {}, route).IsOk());
+
+    EXPECT_EQ(route.worker, routedWorker);
+    EXPECT_EQ(route.directWorkerApi, nullptr);
+}
+
 TEST(ObjectClientTransportTest, MultiCreateExcludesQuarantinedWriteTarget)
 {
     const auto quarantinedWorker = MakeAddress(31505);
@@ -7462,8 +7439,8 @@ TEST(ObjectClientTransportTest, MultiCreateExcludesQuarantinedWriteTarget)
     std::atomic_store(&client.routing_, MakeSingleWorkerRouting(quarantinedWorker));
     std::vector<std::shared_ptr<Buffer>> buffers;
     std::vector<bool> exists;
-    const auto rc = client.routedMode_->MultiCreateRouted(
-        { "multi-create-quarantine" }, { 4 }, object_cache::FullParam{}, buffers, exists);
+    const auto rc =
+        client.MultiCreateRouted({ "multi-create-quarantine" }, { 4 }, object_cache::FullParam{}, buffers, exists);
     EXPECT_EQ(rc.GetCode(), K_NO_AVAILABLE_WORKER);
     EXPECT_TRUE(manager->builtTransporters.empty());
 }
@@ -7477,7 +7454,7 @@ TEST(ObjectClientTransportTest, MultiCreatePeerFailuresIsolateTargetForNextReque
     auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(workers.front());
     workerApi->clientId_ = "multi-create-peer-failure";
-    client->workerApi_.emplace_back(workerApi);
+    client->workerApi_ = workerApi;
     client->enableLocalCache_ = false;
     client->dataPlacementPolicy_ = DataPlacementPolicy::PREFERRED_META_OWNER;
     auto manager = std::make_shared<FakeDataPlaneManager>();
@@ -7504,8 +7481,7 @@ TEST(ObjectClientTransportTest, MultiCreatePeerFailuresIsolateTargetForNextReque
         ApiDeadlineGuard deadline(1000);
         std::vector<std::shared_ptr<Buffer>> buffers;
         std::vector<bool> exists;
-        EXPECT_EQ(client->routedMode_->MultiCreateRouted({ key }, { 4 }, object_cache::FullParam{}, buffers, exists)
-                      .GetCode(),
+        EXPECT_EQ(client->MultiCreateRouted({ key }, { 4 }, object_cache::FullParam{}, buffers, exists).GetCode(),
                   K_RPC_PEER_DEAD);
         EXPECT_TRUE(buffers.empty());
         ASSERT_EQ(manager->builtTransporters.size(), 1U);
@@ -7517,8 +7493,7 @@ TEST(ObjectClientTransportTest, MultiCreatePeerFailuresIsolateTargetForNextReque
     ApiDeadlineGuard deadline(1000);
     std::vector<std::shared_ptr<Buffer>> buffers;
     std::vector<bool> exists;
-    ASSERT_TRUE(client->routedMode_->MultiCreateRouted({ key }, { 4 }, object_cache::FullParam{}, buffers, exists)
-                    .IsOk());
+    ASSERT_TRUE(client->MultiCreateRouted({ key }, { 4 }, object_cache::FullParam{}, buffers, exists).IsOk());
     ASSERT_EQ(buffers.size(), 1U);
     EXPECT_EQ(buffers.front()->bufferInfo_->workerAddr, fallback);
     ASSERT_EQ(manager->builtTransporters.size(), 2U);
@@ -7552,53 +7527,6 @@ TEST(ObjectClientTransportTest, RejectsInvalidWritePlacementPolicyFromConnectOpt
     EXPECT_EQ(client.InitDataPlacementPolicy().GetCode(), K_INVALID);
 }
 
-TEST(ObjectClientTransportTest, ShutdownWaitsForAsyncWorkerSwitchTasks)
-{
-    ConnectOptions options;
-    options.host = "127.0.0.1";
-    options.port = 31501;
-    object_cache::ObjectClientImpl client(options);
-    client.asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "switch_shutdown_test");
-    client.asyncSwitchWorkerPoolHandle_ = client.asyncSwitchWorkerPool_.get();
-    client.enableLocalCache_ = true;
-    client.enableCrossNodeConnection_ = true;
-    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
-    workerApi->clientId_ = "switch-shutdown-test-client";
-    client.workerApi_.emplace_back(workerApi);
-
-    std::promise<void> taskStarted;
-    std::promise<void> releaseTask;
-    auto releaseFuture = releaseTask.get_future().share();
-    client.asyncSwitchWorkerPool_->Execute([&taskStarted, releaseFuture]() {
-        taskStarted.set_value();
-        releaseFuture.wait();
-    });
-    taskStarted.get_future().wait();
-    EXPECT_TRUE(client.SubmitUnavailableWorkerSwitch(workerApi));
-    EXPECT_TRUE(client.SubmitUrmaDataPlaneSwitch(object_cache::LOCAL_WORKER, workerApi));
-    {
-        std::lock_guard<std::mutex> lock(client.asyncSwitchWorkerMutex_);
-        EXPECT_EQ(client.unavailableWorkerSwitchPending_.size(), 1U);
-    }
-
-    bool initNeedsCompletion = false;
-    ASSERT_TRUE(client.clientStateManager_->ProcessInit(initNeedsCompletion).IsOk());
-    client.clientStateManager_->CompleteHandler(false, initNeedsCompletion);
-    auto shutdownFuture = std::async(std::launch::async, [&client]() {
-        bool shutdownNeedsCompletion = false;
-        auto rc = client.ShutDown(shutdownNeedsCompletion, true);
-        client.clientStateManager_->CompleteHandler(rc.IsError(), shutdownNeedsCompletion);
-        return rc;
-    });
-
-    EXPECT_EQ(shutdownFuture.wait_for(std::chrono::milliseconds(100)), std::future_status::timeout);
-    releaseTask.set_value();
-    EXPECT_TRUE(shutdownFuture.get().IsOk());
-    EXPECT_EQ(client.asyncSwitchWorkerPool_, nullptr);
-    EXPECT_EQ(client.asyncSwitchWorkerPoolHandle_, nullptr);
-    EXPECT_TRUE(client.unavailableWorkerSwitchPending_.empty());
-}
-
 TEST(ObjectClientTransportTest, LateHealthSummaryDoesNotAccessDestroyedClient)
 {
     class SummaryWorkerApi : public object_cache::ClientWorkerRemoteApi {
@@ -7619,9 +7547,9 @@ TEST(ObjectClientTransportTest, LateHealthSummaryDoesNotAccessDestroyedClient)
     options.port = 31501;
     auto client = std::make_unique<object_cache::ObjectClientImpl>(options);
     auto api = std::make_shared<SummaryWorkerApi>(MakeAddress(31501));
-    client->workerApi_.emplace_back(api);
+    client->workerApi_ = api;
     client->transportLayer_ = std::make_unique<TestTransportLayer>(std::make_shared<FakeDataPlaneManager>());
-    client->failover_->ConfigureUrmaDataPlaneFailureCallback(object_cache::LOCAL_WORKER, api);
+    client->failover_->ConfigureUbHealthCallback(api);
     auto copiedCallback = api->SnapshotCallback();
     ASSERT_NE(copiedCallback, nullptr);
     auto retainedFilter = client->ubHealthFilter_;
@@ -7641,25 +7569,20 @@ TEST(ObjectClientTransportTest, LateHealthSummaryDoesNotAccessDestroyedClient)
     EXPECT_FALSE(retainedFilter->GetLocalObservation(summary.worker).has_value());
 }
 
-TEST(ObjectClientTransportTest, DirectGetRecoveryFailureForcesRingRefreshWithoutEagerSwitch)
+TEST(ObjectClientTransportTest, DirectGetRecoveryFailureForcesRingRefresh)
 {
     ConnectOptions options;
     options.host = "127.0.0.1";
     options.port = 31501;
     object_cache::ObjectClientImpl client(options);
-    client.enableCrossNodeConnection_ = true;
-    client.asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "direct_get_refresh_test");
-    client.asyncSwitchWorkerPoolHandle_ = client.asyncSwitchWorkerPool_.get();
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
-    client.workerApi_.emplace_back(workerApi);
+    client.workerApi_ = workerApi;
     auto routing = MakeSingleWorkerRouting(MakeAddress(31501));
     std::atomic_store(&client.routing_, routing);
 
-    client.routedMode_->HandleDirectGetFailure(workerApi, Status(K_RPC_DEADLINE_EXCEEDED, "request timed out"));
+    client.HandleDirectGetFailure(workerApi, Status(K_RPC_DEADLINE_EXCEEDED, "request timed out"));
 
     EXPECT_GT(routing->refresher_->forceRefreshDeadlineMs_.load(), 0);
-    std::lock_guard<std::mutex> lock(client.asyncSwitchWorkerMutex_);
-    EXPECT_TRUE(client.unavailableWorkerSwitchPending_.empty());
 }
 
 TEST(ObjectClientTransportTest, DirectGetNonRecoveryFailureDoesNotForceRingRefresh)
@@ -7669,11 +7592,11 @@ TEST(ObjectClientTransportTest, DirectGetNonRecoveryFailureDoesNotForceRingRefre
     options.port = 31501;
     object_cache::ObjectClientImpl client(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
-    client.workerApi_.emplace_back(workerApi);
+    client.workerApi_ = workerApi;
     auto routing = MakeSingleWorkerRouting(MakeAddress(31501));
     std::atomic_store(&client.routing_, routing);
 
-    client.routedMode_->HandleDirectGetFailure(workerApi, Status(K_NOT_FOUND, "missing object"));
+    client.HandleDirectGetFailure(workerApi, Status(K_NOT_FOUND, "missing object"));
 
     EXPECT_EQ(routing->refresher_->forceRefreshDeadlineMs_.load(), 0);
 }
@@ -7731,116 +7654,7 @@ TEST(ObjectClientTransportTest, SetCreatePeerDeadKeepsSafeRetryWithoutForcingRin
     EXPECT_EQ(selected, fallback);
 }
 
-TEST(ObjectClientTransportTest, RoutedClientPeerDeadRefreshesRingWithoutBoundWorkerSwitch)
-{
-    ConnectOptions options;
-    options.host = "127.0.0.1";
-    options.port = 31501;
-    object_cache::ObjectClientImpl client(options);
-    client.enableLocalCache_ = false;
-    client.enableCrossNodeConnection_ = true;
-    client.asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "routed_peer_dead_no_switch_test");
-    client.asyncSwitchWorkerPoolHandle_ = client.asyncSwitchWorkerPool_.get();
-    const auto routing = MakeRouting({ MakeAddress(31501), MakeAddress(31502) });
-    const std::string key = "direct-get-peer-failure";
-    HostPort owner;
-    ASSERT_TRUE(routing->SelectWorker(key, DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::GET,
-                                      owner)
-                    .IsOk());
-    HostPort fallback;
-    ASSERT_TRUE(routing->SelectWorker(key, DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::GET,
-                                      fallback, { owner })
-                    .IsOk());
-    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(owner);
-    client.workerApi_.emplace_back(workerApi);
-    std::atomic_store(&client.routing_, routing);
-
-    client.routedMode_->HandleDirectGetFailure(workerApi, Status(K_RPC_PEER_DEAD, "routed worker down"));
-
-    EXPECT_GT(routing->refresher_->forceRefreshDeadlineMs_.load(), 0);
-    EXPECT_FALSE(client.SubmitUnavailableWorkerSwitch(workerApi));
-    HostPort selected;
-    ASSERT_TRUE(routing->SelectWorker(key, DataPlacementPolicy::PREFERRED_META_OWNER, client::WorkerAccessAction::GET,
-                                      selected)
-                    .IsOk());
-    EXPECT_EQ(selected, fallback);
-    std::lock_guard<std::mutex> lock(client.asyncSwitchWorkerMutex_);
-    EXPECT_TRUE(client.unavailableWorkerSwitchPending_.empty());
-}
-
-TEST(ObjectClientTransportTest, AuthoritativeRingRemovalQueuesBoundWorkerSwitchOnlyAfterRoutingInit)
-{
-    ConnectOptions options;
-    options.host = "127.0.0.1";
-    options.port = 31501;
-    object_cache::ObjectClientImpl client(options);
-    client.enableLocalCache_ = true;
-    client.enableCrossNodeConnection_ = true;
-    client.asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "ring_removal_switch_test");
-    client.asyncSwitchWorkerPoolHandle_ = client.asyncSwitchWorkerPool_.get();
-    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
-    client.workerApi_.emplace_back(workerApi);
-
-    std::promise<void> taskStarted;
-    std::promise<void> releaseTask;
-    auto releaseFuture = releaseTask.get_future().share();
-    client.asyncSwitchWorkerPool_->Execute([&taskStarted, releaseFuture]() {
-        taskStarted.set_value();
-        releaseFuture.wait();
-    });
-    taskStarted.get_future().wait();
-
-    ::datasystem::ClusterTopologyPb ringWithoutBoundWorker;
-    (*ringWithoutBoundWorker.mutable_members())[MakeAddress(31502).ToString()].set_state(
-        ::datasystem::MembershipPb::ACTIVE);
-    client.MaybeSwitchWorkerRemovedFromRing(ringWithoutBoundWorker);
-    {
-        std::lock_guard<std::mutex> lock(client.asyncSwitchWorkerMutex_);
-        EXPECT_TRUE(client.unavailableWorkerSwitchPending_.empty());
-    }
-
-    std::atomic_store(&client.routing_, MakeSingleWorkerRouting(MakeAddress(31502)));
-    client.MaybeSwitchWorkerRemovedFromRing(ringWithoutBoundWorker);
-    client.MaybeSwitchWorkerRemovedFromRing(ringWithoutBoundWorker);
-    {
-        std::lock_guard<std::mutex> lock(client.asyncSwitchWorkerMutex_);
-        EXPECT_EQ(client.unavailableWorkerSwitchPending_.size(), 1U);
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(client.switchNodeMutex_);
-        client.workerApi_[client.currentNode_] =
-            std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31502));
-    }
-    releaseTask.set_value();
-    client.DrainAsyncSwitchWorkerPool();
-    EXPECT_TRUE(client.unavailableWorkerSwitchPending_.empty());
-}
-
-TEST(ObjectClientTransportTest, AuthoritativeRingRemovalDoesNotSwitchRoutedClient)
-{
-    ConnectOptions options;
-    options.host = "127.0.0.1";
-    options.port = 31501;
-    object_cache::ObjectClientImpl client(options);
-    client.enableLocalCache_ = false;
-    client.enableCrossNodeConnection_ = true;
-    client.asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "routed_ring_no_switch_test");
-    client.asyncSwitchWorkerPoolHandle_ = client.asyncSwitchWorkerPool_.get();
-    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
-    client.workerApi_.emplace_back(workerApi);
-    std::atomic_store(&client.routing_, MakeSingleWorkerRouting(MakeAddress(31502)));
-    ::datasystem::ClusterTopologyPb ring;
-    (*ring.mutable_members())[MakeAddress(31501).ToString()].set_state(::datasystem::MembershipPb::FAILED);
-
-    client.MaybeSwitchWorkerRemovedFromRing(ring);
-    EXPECT_FALSE(client.SubmitUnavailableWorkerSwitch(workerApi));
-
-    std::lock_guard<std::mutex> lock(client.asyncSwitchWorkerMutex_);
-    EXPECT_TRUE(client.unavailableWorkerSwitchPending_.empty());
-}
-
-TEST(ObjectClientTransportTest, RoutedExistIgnoresBoundWorkerFailFastState)
+TEST(ObjectClientTransportTest, RoutedExistDoesNotDependOnLocalWorkerAdmission)
 {
     const auto owner = MakeAddress(31502);
     ConnectOptions options;
@@ -7849,12 +7663,12 @@ TEST(ObjectClientTransportTest, RoutedExistIgnoresBoundWorkerFailFastState)
     object_cache::ObjectClientImpl client(options);
     auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
     workerApi->clientId_ = "routed-exist-client";
-    client.workerApi_.emplace_back(workerApi);
+    client.workerApi_ = workerApi;
     client.enableLocalCache_ = false;
-    client.enableCrossNodeConnection_ = true;
-    client.workerSwitchState_ = object_cache::ObjectClientImpl::WorkerSwitchState::NO_SWITCHABLE_WORKER;
     auto manager = std::make_shared<FakeDataPlaneManager>();
     client.transportLayer_ = std::make_unique<TestTransportLayer>(manager);
+    std::atomic_store(&client.controlRpcClient_,
+                      std::make_shared<ObjectControlRpcClient>(client.transportLayer_->GetRpcDispatcher()));
     std::atomic_store(&client.routing_, MakeSingleWorkerRouting(owner));
     bool initNeedsCompletion = false;
     ASSERT_TRUE(client.clientStateManager_->ProcessInit(initNeedsCompletion).IsOk());
@@ -7867,69 +7681,119 @@ TEST(ObjectClientTransportTest, RoutedExistIgnoresBoundWorkerFailFastState)
     ASSERT_NE(manager->lastRpcClient, nullptr);
     EXPECT_EQ(manager->lastRpcClient->WorkerAddress(), owner);
     EXPECT_EQ(manager->lastRpcClient->existInvokeCount, 1);
-    EXPECT_TRUE(client.unavailableWorkerSwitchPending_.empty());
 }
 
-TEST(ObjectClientTransportTest, ActiveBoundWorkerDoesNotQueueAuthoritativeRingSwitch)
+TEST(ObjectClientTransportTest, ControlRpcRetainsClientAcrossShutdown)
 {
+    class PausingDispatcher : public WorkerRpcDispatcher {
+    public:
+        PausingDispatcher(std::shared_ptr<DataPlaneManager> manager, std::promise<void> &entered,
+                          std::shared_future<void> resume)
+            : WorkerRpcDispatcher(std::move(manager)), entered_(entered), resume_(std::move(resume))
+        {
+        }
+
+        RpcAttempt Invoke(const HostPort &workerAddr, const std::string &operationName,
+                          const std::function<Status(WorkerRpcClient &)> &operation) override
+        {
+            entered_.set_value();
+            if (resume_.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+                return { Status(K_RUNTIME_ERROR, "Timed out waiting for control RPC to resume"),
+                         RpcExecutionState::NOT_SENT };
+            }
+            return WorkerRpcDispatcher::Invoke(workerAddr, operationName, operation);
+        }
+
+    private:
+        std::promise<void> &entered_;
+        std::shared_future<void> resume_;
+    };
+
+    const HostPort worker = MakeAddress(31501);
     ConnectOptions options;
-    options.host = "127.0.0.1";
-    options.port = 31501;
+    options.host = worker.Host();
+    options.port = worker.Port();
+    options.enableLocalCache = false;
     object_cache::ObjectClientImpl client(options);
-    client.enableLocalCache_ = true;
-    client.enableCrossNodeConnection_ = true;
-    client.asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "active_ring_switch_test");
-    client.asyncSwitchWorkerPoolHandle_ = client.asyncSwitchWorkerPool_.get();
-    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
-    client.workerApi_.emplace_back(workerApi);
-    std::atomic_store(&client.routing_, MakeSingleWorkerRouting(MakeAddress(31501)));
-    ::datasystem::ClusterTopologyPb ring;
-    (*ring.mutable_members())[MakeAddress(31501).ToString()].set_state(::datasystem::MembershipPb::ACTIVE);
-
-    client.MaybeSwitchWorkerRemovedFromRing(ring);
-
-    std::lock_guard<std::mutex> lock(client.asyncSwitchWorkerMutex_);
-    EXPECT_TRUE(client.unavailableWorkerSwitchPending_.empty());
-}
-
-TEST(ObjectClientTransportTest, NonActiveBoundWorkerQueuesAuthoritativeRingSwitch)
-{
-    ConnectOptions options;
-    options.host = "127.0.0.1";
-    options.port = 31501;
-    object_cache::ObjectClientImpl client(options);
-    client.enableLocalCache_ = true;
-    client.enableCrossNodeConnection_ = true;
-    client.asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "non_active_ring_switch_test");
-    client.asyncSwitchWorkerPoolHandle_ = client.asyncSwitchWorkerPool_.get();
-    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501));
-    client.workerApi_.emplace_back(workerApi);
-    std::atomic_store(&client.routing_, MakeSingleWorkerRouting(MakeAddress(31502)));
-
-    std::promise<void> taskStarted;
-    std::promise<void> releaseTask;
-    auto releaseFuture = releaseTask.get_future().share();
-    client.asyncSwitchWorkerPool_->Execute([&taskStarted, releaseFuture]() {
-        taskStarted.set_value();
-        releaseFuture.wait();
+    client.workerApi_ = std::make_shared<object_cache::ClientWorkerRemoteApi>(worker);
+    client.workerApi_->clientId_ = "control-rpc-client";
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    client.transportLayer_ = std::make_unique<TestTransportLayer>(manager);
+    std::atomic_store(&client.routing_, MakeSingleWorkerRouting(worker));
+    std::promise<void> entered;
+    std::future<void> enteredFuture = entered.get_future();
+    std::promise<void> resume;
+    auto dispatcher = std::make_shared<PausingDispatcher>(manager, entered, resume.get_future().share());
+    auto control = std::make_shared<ObjectControlRpcClient>(std::move(dispatcher));
+    std::weak_ptr<ObjectControlRpcClient> controlLifetime = control;
+    std::atomic_store(&client.controlRpcClient_, std::move(control));
+    bool transition = false;
+    ASSERT_TRUE(client.clientStateManager_->ProcessInit(transition).IsOk());
+    client.clientStateManager_->CompleteHandler(false, transition);
+    auto result = std::async(std::launch::async, [&client] {
+        std::vector<std::string> failed;
+        return client.Delete({ "key" }, failed);
     });
-    taskStarted.get_future().wait();
-    ::datasystem::ClusterTopologyPb ring;
-    (*ring.mutable_members())[MakeAddress(31501).ToString()].set_state(::datasystem::MembershipPb::FAILED);
-
-    client.MaybeSwitchWorkerRemovedFromRing(ring);
     {
-        std::lock_guard<std::mutex> lock(client.asyncSwitchWorkerMutex_);
-        EXPECT_EQ(client.unavailableWorkerSwitchPending_.size(), 1U);
+        Raii resumeRpc([&resume] { resume.set_value(); });
+        ASSERT_EQ(enteredFuture.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+        const Status shutdownStatus = client.ShutDown(transition, true);
+        client.clientStateManager_->CompleteHandler(shutdownStatus.IsError(), transition);
+        EXPECT_TRUE(shutdownStatus.IsOk());
+        EXPECT_EQ(std::atomic_load(&client.controlRpcClient_), nullptr);
+        EXPECT_FALSE(controlLifetime.expired());
     }
+    EXPECT_EQ(result.get().GetCode(), K_SHUTTING_DOWN);
+    EXPECT_TRUE(controlLifetime.expired());
+}
 
-    {
-        std::lock_guard<std::mutex> lock(client.switchNodeMutex_);
-        client.workerApi_[client.currentNode_] =
-            std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31502));
-    }
-    releaseTask.set_value();
-    client.DrainAsyncSwitchWorkerPool();
+TEST(ObjectClientTransportTest, DeviceDeleteRetriesSameWorkerWithBoundedRpcTimeout)
+{
+    class TimeoutOnceDispatcher : public WorkerRpcDispatcher {
+    public:
+        using WorkerRpcDispatcher::WorkerRpcDispatcher;
+
+        RpcAttempt Invoke(const HostPort &workerAddr, const std::string &operationName,
+                          const std::function<Status(WorkerRpcClient &)> &operation) override
+        {
+            attemptedWorkers.push_back(workerAddr);
+            const auto remainingUs = ApiDeadline::Instance().ApiRemainingUs();
+            EXPECT_GT(remainingUs, 0);
+            EXPECT_LE(remainingUs, std::chrono::microseconds(std::chrono::seconds(30)).count());
+            if (attemptedWorkers.size() == 1) {
+                return { Status(K_RPC_DEADLINE_EXCEEDED, "Device delete timed out"),
+                         RpcExecutionState::MAY_HAVE_EXECUTED };
+            }
+            return WorkerRpcDispatcher::Invoke(workerAddr, operationName, operation);
+        }
+
+        std::vector<HostPort> attemptedWorkers;
+    };
+
+    const auto primary = MakeAddress(31501);
+    ConnectOptions options;
+    options.requestTimeoutMs = 60'000;
+    object_cache::ObjectClientImpl client(options);
+    client.workerApi_ = std::make_shared<object_cache::ClientWorkerRemoteApi>(primary);
+    client.workerApi_->clientId_ = "device-delete-client";
+    client.listenWorker_ = std::make_shared<client::ListenWorker>(client.workerApi_, HeartbeatType::NO_HEARTBEAT);
+    client.devOcImpl_ = std::make_unique<object_cache::ClientDeviceObjectManager>(&client);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto dispatcher = std::make_shared<TimeoutOnceDispatcher>(manager);
+    std::atomic_store(&client.controlRpcClient_, std::make_shared<ObjectControlRpcClient>(dispatcher));
+    bool transition = false;
+    ASSERT_TRUE(client.clientStateManager_->ProcessInit(transition).IsOk());
+    client.clientStateManager_->CompleteHandler(false, transition);
+
+    std::vector<std::string> failed;
+    ASSERT_TRUE(client.DeleteDevObjects({ "key" }, failed).IsOk());
+    EXPECT_TRUE(failed.empty());
+    EXPECT_EQ(dispatcher->attemptedWorkers, std::vector<HostPort>({ primary, primary }));
+    ASSERT_NE(manager->lastRpcClient, nullptr);
+    const auto &requests = manager->lastRpcClient->invokedDeleteRequests;
+    ASSERT_EQ(requests.size(), 1);
+    EXPECT_TRUE(requests.front().are_device_objects());
+    EXPECT_FALSE(requests.front().is_routed());
 }
 
 TEST(ObjectReadFlowTest, QueriesMultipleOwnersInParallelAndPreservesPartialSuccess)
@@ -8092,7 +7956,7 @@ TEST(ObjectClientTransportTest, TransportMSetParallelMemoryCopyPreservesPayload)
     }
 
     ApiDeadlineGuard deadline(5'000);
-    ASSERT_TRUE(client.routedMode_->MemoryCopyTransportMSetBuffers(group, buffers, valueSize * values.size()).IsOk());
+    ASSERT_TRUE(client.MemoryCopyTransportMSetBuffers(group, buffers, valueSize * values.size()).IsOk());
     for (size_t i = 0; i < values.size(); ++i) {
         EXPECT_EQ(memcmp(buffers[i]->ImmutableData(), values[i].data(), valueSize), 0);
     }
@@ -9758,6 +9622,23 @@ TEST(ReplicaReaderTest, PeerDeadReplicaReturnsForMetadataRefreshAfterAllReplicas
 {
     ApiDeadlineGuard deadline(1000);
     auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterGetStatuses = { { Status(K_RPC_PEER_DEAD, "dead replica") },
+                                        { Status(K_RPC_PEER_DEAD, "dead replica") } };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
+    auto location = MakeReplicaLocation("key", 4, { MakeAddress(35), MakeAddress(36) });
+    ObjectReadItemResult result;
+
+    Status rc = reader.Read(location, result, MakeReadContext());
+    EXPECT_TRUE(IsTransportSnapshotStaleLocation(rc)) << rc.ToString();
+    EXPECT_NE(rc.GetMsg().find("dead replica"), std::string::npos);
+    EXPECT_EQ(manager->transportBuildCount, 2);
+}
+
+TEST(ReplicaReaderTest, SolePeerDeadReplicaReturnsOriginalError)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
     manager->transporterGetStatuses = { { Status(K_RPC_PEER_DEAD, "dead replica") } };
     auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
     ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
@@ -9765,7 +9646,8 @@ TEST(ReplicaReaderTest, PeerDeadReplicaReturnsForMetadataRefreshAfterAllReplicas
     ObjectReadItemResult result;
 
     Status rc = reader.Read(location, result, MakeReadContext());
-    EXPECT_TRUE(IsTransportSnapshotStaleLocation(rc)) << rc.ToString();
+    EXPECT_EQ(rc.GetCode(), K_RPC_PEER_DEAD) << rc.ToString();
+    EXPECT_FALSE(IsTransportSnapshotStaleLocation(rc)) << rc.ToString();
     EXPECT_NE(rc.GetMsg().find("dead replica"), std::string::npos);
     EXPECT_EQ(manager->transportBuildCount, 1);
 }
@@ -10510,12 +10392,34 @@ TEST(ReplicaReaderTest, BatchPeerDeadReplicaCompletesForMetadataRefreshAfterAllR
     };
     auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
     ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
-    auto location = MakeReplicaLocation("key", 1, { MakeAddress(90) });
+    auto location = MakeReplicaLocation("key", 1, { MakeAddress(90), MakeAddress(91) });
     ObjectReadItemResult result;
 
     Status rc = reader.ReadBatch({ MakeReplicaReadRequest(&location, &result) });
     EXPECT_TRUE(IsTransportSnapshotStaleLocation(rc)) << rc.ToString();
     EXPECT_TRUE(IsTransportSnapshotStaleLocation(result.status)) << result.status.ToString();
+    EXPECT_NE(result.status.GetMsg().find("dead replica"), std::string::npos);
+    EXPECT_EQ(manager->transportBuildCount, 2);
+}
+
+TEST(ReplicaReaderTest, BatchSolePeerDeadReplicaReturnsOriginalError)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [](const HostPort &, FakeTransporter &transporter) {
+        transporter.getHandler = [](const DataGetRequest &, DataGetResult &) {
+            return Status(K_RPC_PEER_DEAD, "dead replica");
+        };
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
+    auto location = MakeReplicaLocation("key", 1, { MakeAddress(90) });
+    ObjectReadItemResult result;
+
+    Status rc = reader.ReadBatch({ MakeReplicaReadRequest(&location, &result) });
+    EXPECT_EQ(rc.GetCode(), K_RPC_PEER_DEAD) << rc.ToString();
+    EXPECT_EQ(result.status.GetCode(), K_RPC_PEER_DEAD) << result.status.ToString();
+    EXPECT_FALSE(IsTransportSnapshotStaleLocation(result.status)) << result.status.ToString();
     EXPECT_NE(result.status.GetMsg().find("dead replica"), std::string::npos);
     EXPECT_EQ(manager->transportBuildCount, 1);
 }

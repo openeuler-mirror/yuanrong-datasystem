@@ -119,9 +119,8 @@ struct PiplnRh2dParam {
 
 class IClientWorkerApi : virtual public client::IClientWorkerCommonApi {
 public:
-    explicit IClientWorkerApi(HostPort hostPort, HeartbeatType heartbeatType, bool enableCrossNodeConnection,
-                              Signature *signature)
-        : client::IClientWorkerCommonApi(std::move(hostPort), heartbeatType, enableCrossNodeConnection, signature)
+    explicit IClientWorkerApi(HostPort hostPort, HeartbeatType heartbeatType, Signature *signature)
+        : client::IClientWorkerCommonApi(std::move(hostPort), heartbeatType, true, signature)
     {
     }
 
@@ -129,8 +128,7 @@ public:
 
     virtual std::shared_ptr<IClientWorkerApi> CloneWith(
         HostPort hostPort, HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
-        SensitiveValue token = "", Signature *signature = nullptr, std::string tenantId = "",
-        bool enableCrossNodeConnection = false) const = 0;
+        SensitiveValue token = "", Signature *signature = nullptr, std::string tenantId = "") const = 0;
 
     /**
      * @brief Create an object in the store-server, will only be called in shm case.
@@ -242,16 +240,6 @@ public:
                                       const std::string &remoteClientId = "") = 0;
 
     /**
-     * @brief Delete the given objects.
-     * @param[in] objectKeys The vector of the object key.
-     * @param[out] failedObjectKeys The vector of the failed delete object key list.
-     * @param[in] areDeviceObjects The objectKeys are device objects.
-     * @return Status of the call.
-     */
-    virtual Status Delete(const std::vector<std::string> &objectKeys, std::vector<std::string> &failedObjectKeys,
-                          bool areDeviceObjects = false) = 0;
-
-    /**
      * @brief Query all objects global references in the cluster.
      * @param[in] objectKeys The specific objects id that to query.
      * @param[out] gRefMap The global references distribution.
@@ -354,19 +342,6 @@ public:
     virtual Status RemoveP2PLocation(const std::string &objectKey, int32_t deviceId) = 0;
 
     /**
-     * @brief Get meta info of the given objects
-     * @param[in] tenantId The tenant that the objs belong to.
-     * @param[in] objectKeys The vector of the object key.
-     * @param[out] objMetas The vector of the return metas.
-     * @return K_OK on any object success.
-     *         K_INVALID: the vector of keys is empty or include invalid key.
-     *         K_RPC_UNAVAILABLE: Disconnect from worker or master.
-     *         K_NOT_AUTHORIZED: The client is not authorized for the tenantId.
-     */
-    virtual Status GetObjMetaInfo(const std::string &tenantId, const std::vector<std::string> &objectKeys,
-                                  std::vector<ObjMetaInfo> &objMetas) = 0;
-
-    /**
      * @brief Create multiple objects in the store-server.
      * @param[in]  skipCheckExistence Whether skip existence check.
      * @param[out] createParams The params for create operation.
@@ -379,57 +354,11 @@ public:
                                std::vector<bool> &exists, bool &useShmTransfer) = 0;
 
     /**
-     * @brief Invoke worker client to query the size of objectKeys (include the objectKeys of other AZ).
-     * @param[in] objectKeys The objectKeys need to query size.
-     * @param[out] rsp The response getting from worker.
-     * @return K_OK on success; the error code otherwise.
-     *         K_INVALID: The objectKeys are empty or invalid.
-     *         K_NOT_FOUND: All objectKeys not found.
-     *         K_RPC_UNAVAILABLE: Network error.
-     *         K_NOT_READY: Worker not ready.
-     *         K_RUNTIME_ERROR: Can not get objectKey size from worker.
-     */
-    virtual Status QuerySize(const std::vector<std::string> &objectKeys, QuerySizeRspPb &rsp) = 0;
-
-    /**
      * @brief Worker health check.
      * @param[out] state The state of ds service.
      * @return K_OK on any object success; the error code otherwise.
      */
     virtual Status HealthCheck(ServerState &state) = 0;
-
-    /**
-     * @brief Check whether the keys exist in the data system..
-     * @param[in] keys keys The keys to be checked..
-     * @param[in] exists The existence of the corresponding key.
-     * @param[in] queryL2Cache  whether query L2Cache.
-     * @param[in] isLocal Is a local query or not.
-     * @return K_OK if at least one key is successfully processed; the error code otherwise.
-     */
-    virtual Status Exist(const std::vector<std::string> &keys, std::vector<bool> &exists, const bool queryL2Cache,
-                         const bool isLocal) = 0;
-
-    /**
-     * @brief Sets expiration time for key list (in seconds)
-     * @param[in] key The keys to set expiration for.
-     * @param[in] ttlSeconds TTL in seconds.
-     * @param[out] failedKeys Returns failed keys if setting failed.
-     * @return K_OK if at least one key is successfully processed; the error code otherwise.
-     */
-    virtual Status Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds,
-                          std::vector<std::string> &failedKeys) = 0;
-
-    /**
-     * @brief Get device meta info of the keys.
-     * @param[in] keys The keys to be queried. Constraint: The number of keys cannot exceed 10000.
-     * @param[in] isDevKey It indicates whether the keys are used for D2H or D2D transmission, and when it is true, it
-     * represents D2D transmission.
-     * @param[out] metaInfos device meta info of the keys
-     * @param[out] failKeys The failed keys
-     * @return K_OK if at least one key is successfully processed; the error code otherwise.
-     */
-    virtual Status GetMetaInfo(const std::vector<std::string> &keys, const bool isDevKey,
-                               GetMetaInfoRspPb &metaInfos) = 0;
 
     /**
      * @brief Reconnect worker.

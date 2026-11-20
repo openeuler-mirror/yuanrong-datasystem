@@ -42,7 +42,7 @@ ConnectOptions BuildKvConnectOptions(const std::string &host, int32_t port, int3
                                      const std::string &token, const std::string &clientPublicKey,
                                      const std::string &clientPrivateKey, const std::string &serverPublicKey,
                                      const std::string &accessKey, const std::string &secretKey,
-                                     const std::string &tenantId, bool enableCrossNodeConnection, bool enableLocalCache,
+                                     const std::string &tenantId, bool enableLocalCache,
                                      DataPlacementPolicy dataPlacementPolicy, int32_t reqTimeoutMs,
                                      uint64_t fastTransportMemSize,
                                      std::shared_ptr<IServiceDiscovery> serviceDiscovery)
@@ -58,7 +58,6 @@ ConnectOptions BuildKvConnectOptions(const std::string &host, int32_t port, int3
                            .accessKey = accessKey,
                            .secretKey = secretKey,
                            .tenantId = tenantId,
-                           .enableCrossNodeConnection = enableCrossNodeConnection,
                            .enableLocalCache = enableLocalCache,
                            .dataPlacementPolicy = dataPlacementPolicy,
                            .serviceDiscovery = serviceDiscovery,
@@ -234,36 +233,36 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
         .def(py::init([](const std::string &host, int32_t port, int32_t connectTimeoutMs, const std::string &token,
                          const std::string &clientPublicKey, const std::string &clientPrivateKey,
                          const std::string &serverPublicKey, const std::string &accessKey, const std::string &secretKey,
-                         const std::string &tenantId, const bool enableCrossNodeConnection, int32_t reqTimeoutMs,
+                         const std::string &tenantId, int32_t reqTimeoutMs,
                          uint64_t fastTransportMemSize, const bool enableLocalCache,
                          const DataPlacementPolicy dataPlacementPolicy) {
             auto connectOpts = BuildKvConnectOptions(host, port, connectTimeoutMs, token, clientPublicKey,
                                                      clientPrivateKey, serverPublicKey, accessKey, secretKey, tenantId,
-                                                     enableCrossNodeConnection, enableLocalCache, dataPlacementPolicy,
-                                                     reqTimeoutMs, fastTransportMemSize, nullptr);
+                                                     enableLocalCache, dataPlacementPolicy, reqTimeoutMs,
+                                                     fastTransportMemSize, nullptr);
             return std::make_unique<ObjectClientImpl>(connectOpts);
         }),
         py::arg("host"), py::arg("port"), py::arg("connectTimeoutMs"), py::arg("token"),
         py::arg("clientPublicKey"), py::arg("clientPrivateKey"), py::arg("serverPublicKey"), py::arg("accessKey"),
-        py::arg("secretKey"), py::arg("tenantId"), py::arg("enableCrossNodeConnection"), py::arg("reqTimeoutMs"),
-        py::arg("fastTransportMemSize"), py::arg("enableLocalCache") = true,
+        py::arg("secretKey"), py::arg("tenantId"), py::arg("reqTimeoutMs"), py::arg("fastTransportMemSize"),
+        py::arg("enableLocalCache") = true,
         py::arg("dataPlacementPolicy") = DataPlacementPolicy::PREFERRED_SAME_NODE)
         .def(py::init([](const std::string &host, int32_t port, int32_t connectTimeoutMs, const std::string &token,
                          const std::string &clientPublicKey, const std::string &clientPrivateKey,
                          const std::string &serverPublicKey, const std::string &accessKey, const std::string &secretKey,
-                         const std::string &tenantId, const bool enableCrossNodeConnection, int32_t reqTimeoutMs,
+                         const std::string &tenantId, int32_t reqTimeoutMs,
                          uint64_t fastTransportMemSize, std::shared_ptr<IServiceDiscovery> serviceDiscovery,
                          const bool enableLocalCache, const DataPlacementPolicy dataPlacementPolicy) {
             auto connectOpts = BuildKvConnectOptions(host, port, connectTimeoutMs, token, clientPublicKey,
                                                      clientPrivateKey, serverPublicKey, accessKey, secretKey, tenantId,
-                                                     enableCrossNodeConnection, enableLocalCache, dataPlacementPolicy,
-                                                     reqTimeoutMs, fastTransportMemSize, serviceDiscovery);
+                                                     enableLocalCache, dataPlacementPolicy, reqTimeoutMs,
+                                                     fastTransportMemSize, serviceDiscovery);
             return std::make_unique<ObjectClientImpl>(connectOpts);
         }),
         py::arg("host"), py::arg("port"), py::arg("connectTimeoutMs"), py::arg("token"),
         py::arg("clientPublicKey"), py::arg("clientPrivateKey"), py::arg("serverPublicKey"), py::arg("accessKey"),
-        py::arg("secretKey"), py::arg("tenantId"), py::arg("enableCrossNodeConnection"), py::arg("reqTimeoutMs"),
-        py::arg("fastTransportMemSize"), py::arg("serviceDiscovery"), py::arg("enableLocalCache") = true,
+        py::arg("secretKey"), py::arg("tenantId"), py::arg("reqTimeoutMs"), py::arg("fastTransportMemSize"),
+        py::arg("serviceDiscovery"), py::arg("enableLocalCache") = true,
         py::arg("dataPlacementPolicy") = DataPlacementPolicy::PREFERRED_SAME_NODE)
         .def("Init",
              [](ObjectClientImpl &client) {

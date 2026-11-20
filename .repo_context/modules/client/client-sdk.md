@@ -1,5 +1,51 @@
 # Client SDK
 
+## ObjectClient routing consolidation
+
+The target design is recorded in `docs/source_zh_cn/design_document/object_client_unified_routing.md` and its review
+companion. The source currently implements the following consolidation boundary:
+
+- Business methods live in `ObjectClientImpl` without a broad file split. The implementation removes
+  BoundMode/RoutedMode and standby switching, and reuses Routing plus endpoint transport/session ownership.
+- ObjectClient keeps one primary registration session and one ListenWorker for heartbeat, recovery admission,
+  FD notifications and shutdown. Router/Transport connections do not add listeners. SHM auxiliary sessions retain
+  their own maintenance. Routing removes the global LOCAL admission gate for remote operations, while
+  session-specific checks remain.
+- Exist, Delete, QuerySize, Expire, GetObjMetaInfo and GetMetaInfo have one typed implementation in
+  `ObjectControlRpcClient` for both local-preference and routed targets. Tenant-bearing routed calls set
+  `is_routed=true`; device Delete and GetMetaInfo keep their fixed primary target and device flags. The legacy
+  IClientWorkerApi and ClientWorkerRemoteApi no longer declare or implement these RPCs.
+- Device Delete keeps the legacy bounded retries on the primary worker, including the per-attempt RPC timeout.
+- `WorkerRpcDispatcher` acquires DataPlaneManager's endpoint-cached WorkerRpcClient, records `NOT_SENT`,
+  `MAY_HAVE_EXECUTED` or `RESPONSE_RECEIVED`, and tears down a failed cached peer.
+  `WorkerRpcClient::InvokeObjectRpc` is the
+  stable WorkerOCService call primitive. New business RPCs add no operation-specific WorkerRpcClient,
+  WorkerRpcDispatcher, TransportLayer or legacy client-worker method.
+- Control calls retain one atomically acquired RPC client snapshot per request. ObjectClientImpl revokes the
+  published snapshot before stopping routing and transport. The endpoint manager rejects acquisition during shutdown,
+  and the dispatcher retains any endpoint already acquired until its RPC returns.
+- ObjectClientImpl owns target selection, retry policy and result aggregation. `enableLocalCache` affects target
+  selection before the typed control implementation runs. RunControlQuery and ExistHandler own routed query retries;
+  fixed-primary queries retain bounded same-target retries. RunControlMutation may select another worker only when
+  endpoint acquisition failed before dispatch, so a dispatched Delete or Expire is not replayed. Exist sends the whole
+  batch to one target: with `enableLocalCache` it goes through RunControlQuery, which prefers the bound worker and
+  switches worker on failure; without `enableLocalCache` it keeps per-metadata-owner fan-out.
+- The local-ingress URMA Get path resolves object metadata through the same GetObjMetaInfo implementation before
+  entering ClientWorkerRemoteApi::Get. ClientWorkerRemoteApi retains session, data-path and resource-lifecycle
+  responsibilities without an internal metadata RPC fallback.
+- Primary and auxiliary identities, resource generations, connection snapshot lifetime and cleanup access remain
+  distinct even though their ordinary control RPC implementation is shared.
+- WorkerFailover retains primary registration/reference recovery, SHM cleanup and queue rebuild. The implementation
+  removes its global switching state and preserves UB health feedback independently of switching.
+- Scope excludes historical bug fixes and extra features, including device host publish workflow changes.
+  Adapt callers where removed mode/slot/switch interfaces or RPC consolidation require it, preserving semantics.
+  Reuse transport optimizations and credential snapshots; no data-transfer rewrite or credential fanout redesign.
+  Preserve unsupported UpdateAkSk with local cache disabled.
+- Preserve LOCAL-only global-reference semantics and resource-bound Buffer operations. With local cache enabled,
+  prefer LOCAL and fall back to routing/direct replica reads; otherwise route directly. Read-only control requests
+  may choose another worker after a routing or connection failure. Delete and Expire change workers only when the RPC
+  has not been dispatched. Existing implementation facts below remain current.
+
 ## StreamCache build variants
 
 - `BUILD_STREAM_CACHE` defaults OFF; SDK headers, bindings and package exports follow this value.
@@ -94,8 +140,8 @@
     meta-owner objects. The sequence remains serial because startup experiments found no tail-latency benefit from
     16-way warmup. Warmup shares one fixed 500 ms budget and passes its remaining time into Create, Publish, and Get, so
     a 20 ms business `requestTimeoutMs` cannot abort the initialization warmup. Runtime calls keep their original
-    timeout because the override defaults to zero. Warmup runs for every transport mode and is independent of both
-    URMA runtime enablement and the `enableCrossNodeConnection` failover option. The existing placement-policy split
+    timeout because the override defaults to zero. Warmup runs for every transport mode and is independent of
+    URMA runtime enablement. The existing placement-policy split
     covers both `enableLocalCache=true` and `false`, and the meta-owner phase exercises the normal worker outbound path
     without a separate probe protocol. The same-node phase retains its 256 KiB data-plane probes when URMA is enabled;
     other transports use the one-byte connection probe so enabling their warmup does not reserve allocator arenas in
@@ -288,14 +334,14 @@
     existence check is an early allocation filter; the final MultiPublish carries NX so the Worker object table and
     metadata owner arbitrate concurrent writers atomically. NX-existing keys remain successful no-ops, while mixing
     non-placeholder Buffers with different existence options in one MSet is rejected before any publish.
-  - With `enableLocalCache=false`, `ObjectClientImpl` initializes `client::Routing`; Set/MSet select workers through
-    the per-client `ConnectOptions::dataPlacementPolicy`, which defaults to `PREFERRED_SAME_NODE`. Get/MGet always
-    build metadata-owner transport requests independent of that write policy; the transport flow then reads
-    metadata-selected replicas and may use same-host SHM. With `enableLocalCache=true`, Get/MGet stay on the bound
-    Worker path even if routing was initialized for cross-node failover.
-    Unavailable workers are excluded during bounded pre-Publish retries. With local cache enabled, both APIs preserve
-    the legacy current-worker data path and do not initialize Routing. When URMA is enabled, they initialize the
-    TransportLayer runtime to share one process-local UB port-health admission gate. A raw provider/CQE status 4 from
+  - `ObjectClientImpl` initializes `Routing` and `TransportLayer` for both local-cache settings. With
+    `enableLocalCache=true`, ordinary operations prefer the healthy LOCAL session and route through the hash ring when
+    LOCAL is absent, recovering, draining or disconnected. With `enableLocalCache=false`, ordinary operations route
+    directly. Set/MSet follow `ConnectOptions::dataPlacementPolicy`; Get/MGet resolve metadata-selected replicas and
+    may still use same-host SHM. Unavailable workers are excluded during bounded retries. LOCAL-only reference,
+    Buffer-resource and device operations retain the main-session admission check.
+    The shared TransportLayer runtime also owns the process-local UB port-health admission gate. A raw provider/CQE
+    status 4 from
     a client UB write requests an asynchronous `urma_user_ctl` port query; it does not itself quarantine the sender.
     Only a valid all-BAD result closes the eight Host data entry paths: `Create`, `Put`, `Get`, buffer `Set`, buffer
     `MSet`, `MCreate`, key/value `MSet`, and `Publish`; rejection uses `K_URMA_WORKER_UNAVAILABLE`. This node-level gate
@@ -303,11 +349,13 @@
     BAD, it rejects all Host object data APIs rather than allowing a request that will later require the unavailable
     local UB endpoint. The foreground request that supplied CQE 4 keeps its existing fallback/result semantics because
     the port query is asynchronous; cleanup of that request uses TCP rather than the failed UB path.
-  - With `enableLocalCache=true` and `enableCrossNodeConnection=true`, `ObjectClientImpl` constructs its
-    `TransportLayer` before client initialization completes even when the initially selected same-host Worker does not
-    advertise URMA. A later same-host SHM-to-remote UB failover therefore reuses an already-published transport object
-    and Routing's full Worker snapshot; the switch path does not lazily replace `transportLayer_`. This preserves the
-    existing UB sender admission path without adding locking to Set/Get. This
+    The bound primary Worker keeps its verified SHM fd-transfer capability in TransportLayer, so local-cache operations
+    retain the direct SHM path without inferring locality from the topology hostId map. Worker loss and timeout clear
+    the capability; recovery publishes it again only after registration and local SHM resource rebuild complete.
+  - `ObjectClientImpl` constructs its `TransportLayer` before initialization completes even when the initially
+    selected same-host Worker does not advertise URMA. Request-level fallback therefore reuses the published transport
+    object and Routing's full Worker snapshot. This preserves the existing UB sender admission path without adding
+    locking to Set/Get. This
     eager construction is transport-neutral for a non-URMA initial Worker: `DataPlaneManager` initializes its generic
     lifecycle without activating the process-local UB runtime. For this compatibility path, later UB activation remains
     owned by a Worker handshake that advertises UB; client-direct pipeline initialization continues to request UB setup
@@ -322,23 +370,17 @@
     A stack-owned operation token tracks admitted UB Create/Set/MCreate/MSet work; shutdown closes new operations in
     the same modification order and drains existing tokens through a bthread-compatible mutex/CV pair before
     destroying the data plane.
-  - Client CQE-9 write-target isolation applies to UB writes in routed-only and local-cache modes. A quarantined bound
-    Worker remains eligible when its same-host SHM capability keeps the Set off UB; a bound Worker without SHM
+  - Client CQE-9 write-target isolation applies to UB writes with either local-cache setting. A quarantined primary
+    Worker remains eligible when its same-host SHM capability keeps the Set off UB; a primary Worker without SHM
     capability joins the routing exclusion set and Set selects another eligible Worker. Request-local retry exclusions
     still override the same-host preference. The fault-free route path uses an atomic empty-observation fast path, and
     UB Set reads peer
     generations from an immutable topology cache instead of taking the admission write lock per request. Late CQE-9
     attribution runs on a dedicated executor, keeping its state-machine locks, formatting, and logging off the URMA
     polling thread.
-  - Disabling local cache changes data placement, but the client identity and recovery lifecycle remain bound to the
-    bootstrap Worker. Routed retry backoff checks that bound endpoint, and routed `Exist` performs the same check before
-    dispatch because the operation can otherwise succeed entirely through another Worker. The check uses a 10 ms
-    non-blocking TCP probe and classifies only explicit `ECONNREFUSED`, `ENOTCONN`, or `EHOSTDOWN` results as
-    `K_RPC_PEER_DEAD`; timeouts and local probe failures remain unknown and do not poison the client. The successful
-    Set/Get hot paths do not add an active probe; routed `Exist` pays one bounded probe to preserve the bound-client
-    liveness contract. An explicit peer-dead result also wakes the existing HashRing refresher without changing the
-    returned error, replaying the operation, or switching Workers speculatively. The eventual versioned ring remains
-    authoritative for rebinding the client.
+  - The client identity and main registration recovery lifecycle remain attached to the bootstrap Worker. Ordinary
+    requests select a target independently through Routing; they do not probe the bootstrap endpoint as a global
+    liveness gate. Explicit endpoint failures update the routing filter and can request a bounded hash-ring refresh.
   - Routed transport requests carry the gateway client id, token snapshot, thread tenant context, and shared transport
     `Signature`. Target workers authenticate routed Create, Publish, and cleanup requests by signature without requiring
     endpoint-local client registration. UB allocations are released asynchronously after the final Publish attempt, or
@@ -369,15 +411,14 @@
     discovery may derive the SDK host ID from that local worker; a remote initial worker is never used as the SDK host ID.
     The refresh loop keeps a probe list rebuilt from each published ring's ACTIVE members; when a round reaches zero
     reachable workers (full worker restart with new addresses), it queries a `ProbeListFallback` injected by
-    `ObjectClientImpl` (bound-worker seed + `IServiceDiscovery::GetAllWorkers` budgeted at 1s + initial address). The
+    `ObjectClientImpl` (primary-worker seed + `IServiceDiscovery::GetAllWorkers` budgeted at 1s + initial address). The
     closure captures only state that outlives `ObjectClientImpl` — never a client reference — so the refresh thread can
     never release the client's last strong reference, and the discovery budget bounds how long `Stop()` blocks behind a
     blocked query. The fallback merges candidates into the list and re-probes the current candidate set as a priority
     window over a bounded window (4 probes per attempt for both background and foreground; the re-probe runs on the
     background RPC timeout), so batched discovery re-reporting a known worker still gets it probed next to newly
-    discovered ones. Worker-switch commit paths in `WorkerFailover` update the bound-worker seed and push the freshly
-    bound address via `Routing::MergeProbeWorkers` plus a forced refresh, so a successful control-plane switch also
-    re-seeds the data-plane probe list instead of leaving it on dead addresses.
+    discovered ones. `WorkerFailover` requests a refresh after main-session recovery; it does not replace the primary
+    worker identity.
     Each changed topology is first validated into a versioned `WorkerSnapshot`. All topology members are retained
     regardless of membership state; any malformed endpoint rejects the whole update, while an empty topology is a
     valid cleanup-all snapshot. The transport admission set is published before the new route becomes visible.
@@ -410,7 +451,7 @@
     host-id map and current master address. The initial fetch uses the configured SDK timeout. Periodic and forced
     refreshes rotate across the active Worker list, cap each RPC at 250 ms and each round at four endpoints, and keep
     probing after a reachable unchanged response so a lagging Worker cannot hide a newer ring published by another
-    Worker. Metadata-owner-unavailable Set failures at either Create or Publish, and an explicitly dead bound Worker,
+    Worker. Metadata-owner-unavailable Set failures at either Create or Publish, and an explicitly dead target Worker,
     open the existing six-second forced-refresh window; retries inside that window use a 250 ms interval. Force requests
     coalesce through the refresher deadline and never replay an ambiguous Create. Shutdown checks cancellation between
     probes, so it waits for at most one bounded refresh RPC.
@@ -436,9 +477,8 @@
     have independent quotas; when the tracking map exceeds 64 entries, expired entries are reclaimed. A refresher
     result of false means its global wakeup was coalesced, not that the request had no effect: it can still extend the
     global retry deadline. The owner quota therefore measures attempts rather than new wakeups.
-  - A direct local-cache Get that observes `K_RPC_PEER_DEAD` submits one deduplicated switch task per concrete Worker API
-    to the existing single-thread switch pool. Client shutdown first stops heartbeat producers, atomically closes that
-    pool to new peer-dead submissions, and drains queued tasks before Worker APIs and pending-switch state are released.
+  - A direct local-cache Get reports target failures to Routing. Safe reads may continue through the transport path for
+    missing keys; the client does not submit a global worker-switch task.
   - Stream uses its own `client::stream_cache::StreamClientImpl`.
   - `ListenWorker` closes request admission before invoking recovery callbacks for a changed `worker_start_id` or a
     worker-reported missing client. Recovery callbacks return `Status`; successful heartbeats do not reopen admission
@@ -447,16 +487,12 @@
     reconnecting. During recovery, new requests fail with `K_RPC_UNAVAILABLE`.
     If an idempotent Object Get reaches a Worker whose in-memory client registration was lost, the remote Object client
     re-registers the existing client ID during recovery, refreshes the client ID in the request, and retries that Get within
-    the existing retry path. A bound Publish rejected with `K_CLIENT_WORKER_DISCONNECT` before execution also runs the
+    the existing retry path. A primary-session Publish rejected with `K_CLIENT_WORKER_DISCONNECT` before execution also
     existing client recovery and retries once when the request carries its complete payload. SHM Publish and UB Publish
     whose data transfer already completed are not replayed because their Worker-resident data is lost across restart.
     Recovery is skipped after the API deadline expires, and the retry is bounded by the remaining deadline.
-    Other non-idempotent Create/Publish failures are not replayed by this branch.
-    For local-cache cross-node clients, a direct Get that receives `K_RPC_PEER_DEAD` from the currently bound Worker
-    also queues a switch on the existing single-thread switch pool, deduplicated by the exact Worker API instance.
-    The failed request still returns its original status; the background task retains and revalidates the exact Worker
-    slot and API before switching, so a stale failure cannot move a client that has already rebound or suppress a
-    peer-dead trigger from the replacement Worker. Submission failures clear the per-instance pending marker.
+    Other non-idempotent Create/Publish failures are not replayed by this branch. Direct Get failures update the
+    request-level routing state without changing the primary registration identity.
   - Python bindings are not a separate reimplementation; they bind to C++ classes and helper types through `libds_client_py`.
   - `src/datasystem/client/cluster_query` is a dscli-only read facade with protobuf hidden behind its native
     boundary. It reads one explicitly selected ETCD or Coordinator backend, decodes raw facts locally, and
@@ -542,18 +578,11 @@ handler. Clearing the Router handler synchronously excludes later callback acces
     their timeout from the current connection-attempt budget, while the long-lived channel default and runtime business
     RPCs use `requestTimeoutMs`
   - token auth, curve key fields, AK/SK fields, tenant id
-  - cross-node and exclusive connection toggles
-  - `ConnectOptions::enableCrossNodeConnection` gates RUNTIME worker switching only (heartbeat-driven
-    `SwitchWorkerHandle` installation, URMA data-plane failure callback, `SaveStandbyWorker` standby
-    address retention, voluntary scale-down handling). It does NOT gate Init-stage connection
-    establishment or `InitPreferredRemoteFallback`: under `PREFERRED_SAME_NODE` with the same-node
-    worker unavailable, Init still admits a remote fallback worker and succeeds even when
-    cross-node connection is disabled; only later runtime switch-over is blocked. The flag that
-    prevents Init-stage remote fallback is `affinityPolicy = REQUIRED_SAME_NODE`, not
-    `enableCrossNodeConnection`.
+  - exclusive connection toggle
+  - `affinityPolicy = REQUIRED_SAME_NODE` forbids a remote initialization candidate.
   - local-cache routing toggle and Set/MSet placement policy are independent fields on
     `ConnectOptions`. `enableLocalCache=false` routes Get/MGet through the transport layer
-    (instead of the bound worker) and supports single- and multi-key full-object `Get` with per-key
+    and supports single- and multi-key full-object `Get` with per-key
     partial results and without RH2D (L2 loading follows the `Get` `queryL2Cache` parameter, default
     true). `dataPlacementPolicy` (default `PREFERRED_SAME_NODE`) controls Set/MSet placement and
     only takes effect when `enableLocalCache=false`; callers may pick `PREFERRED_META_OWNER` to route
@@ -627,10 +656,9 @@ handler. Clearing the Router handler synchronously excludes later callback acces
 - Python exposes both ETCD-backed `ServiceDiscovery` and coordinator-backed `CoordinatorServiceDiscovery`. When a
   `KVClient` is constructed with either discovery wrapper, the Python layer passes the native `IServiceDiscovery`
   object from the wrapper's public `native_discovery` property into the pybind `KVClient` constructor so the C++
-  `ObjectClientImpl` owns initial worker selection and later failover rediscovery through
+  `ObjectClientImpl` owns initial worker selection and later route rediscovery through
   `ConnectOptions.serviceDiscovery`. Python callers must call `service_discovery.init()` before constructing
-  `KVClient`. Existing-client failover to another discovered Worker still follows the shared client contract: callers
-  must set `enable_cross_node_connection=True` / `ConnectOptions::enableCrossNodeConnection=true`.
+  `KVClient`. Ordinary requests can route to discovered Workers.
 - Ascend `MSetD2H` can opt into bounded Direct descriptor parallelism with `DS_D2H_PARALLEL_WORKER_NUM>1`.
   Object-level FFTS parallelism defaults to four workers for requests meeting `DS_D2H_FFTS_PARALLEL_MIN_BYTES`
   (default 48 MiB), and
@@ -733,7 +761,7 @@ handler. Clearing the Router handler synchronously excludes later callback acces
   - direct-read metadata and replica retries share the caller's API deadline. The metadata phase queries the selected
     metadata-owner Worker first. Metadata-owner connection, dispatch-deadline, peer-dead, client-disconnect, and
     owner-unavailable failures report the failed endpoint and return a stale topology/location signal immediately
-    instead of retrying that fixed owner. The outer `RoutedMode::GetFromTransportLayer` retry then forces the
+    instead of retrying that fixed owner. The outer `ObjectClientImpl::GetFromTransportLayer` retry then forces the
     existing hash-ring refresher before it re-routes and re-queries metadata only for affected keys with deadline-bounded
     backoff. The data phase polls replicas from one fixed metadata location snapshot: stale-snapshot errors and
     draining errors try the remaining replicas first, and a data-replica `K_RPC_PEER_DEAD` is treated the same way. If
@@ -822,9 +850,9 @@ handler. Clearing the Router handler synchronously excludes later callback acces
     switches to a different candidate instead of re-selecting a dead worker still shown READY
     inside the etcd lease window. The set is a function-local `unordered_set<HostPort>`, not a
     member, so it is cleared when Init returns (no cross-Init persistence, no permanent
-    blacklist); a worker that restarts is selectable in the next Init call or via the runtime
-    `RecoverPreferredLocalWorker` path. Under `REQUIRED_SAME_NODE` remote fallback is never
-    admitted even when all same-node candidates are excluded.
+    blacklist); a worker that restarts is selectable in the next Init call and re-enters ordinary routing after a
+    topology refresh. Under `REQUIRED_SAME_NODE` remote fallback is never admitted even when all same-node candidates
+    are excluded.
   - Routed Set and MSet use the remaining SDK `ApiDeadline` for transport Create and Publish RPCs. brpc delivers the
     selected RPC timeout to the target worker, whose generated unary adapter initializes `reqTimeoutDuration` before
     entering the object-cache handler. Nested request contexts inherit that deadline, so metadata-owner retry loops and
@@ -931,11 +959,6 @@ handler. Clearing the Router handler synchronously excludes later callback acces
     it definitely unsent. Get admission and the Client-local CQE-status-`4` sender circuit remain independent. The
     transport reconcile thread restores a quarantined target only after an exact Client-to-Worker UB WRITE probe and
     current topology-incarnation fencing succeed.
-  - standby failover candidate order is randomized per switch attempt, so when one worker fails a batch of clients can spread across the remaining ready workers instead of stampeding to the first candidate in a shared list.
-  - preferred same-node Worker replacement moves the retired listener and mmap manager out while holding the switch
-    mutex, then lets them destruct after releasing the mutex so listener shutdown never joins while holding the switch
-    mutex.
-  - after a standby switch publishes the new current worker, cleanup of the previous worker's mmap fds captured at switch commit runs immediately when that worker API has no pending invocations; otherwise cleanup is deferred until its invocation count reaches zero. Cleanup removes only the captured fds, so mappings added for another worker before the deferred callback runs are preserved.
   - Python `DsTensorClient` depends on `HeteroClient`; tensor features are not an independent transport stack.
 - Useful debug points:
   - `src/datasystem/client/object_cache/object_client_impl.cpp`
@@ -1063,13 +1086,14 @@ handler. Clearing the Router handler synchronously excludes later callback acces
 - `src/datasystem/client/object_cache/routing/broken_filter.*` isolates `K_RPC_PEER_DEAD` for five seconds immediately.
   `K_CLIENT_WORKER_DISCONNECT` still requires 100 failures within five seconds. Ring updates preserve unexpired
   connection isolation, while clearing `K_SCALE_DOWN` isolation and incomplete disconnect bursts through a CAS update.
-- `object_client_impl.cpp` and `routed_mode.cpp` report Create, MCreate, Publish, MSet and Get connection failures
-  through the existing `Routing::UpdateState`. The local-cache write shortcut consults the same `BrokenFilter`.
+- `object_client_impl.cpp` reports Create, MCreate, Publish, MSet and Get connection failures through
+  `Routing::UpdateState`. The local-cache write shortcut consults the same `BrokenFilter`.
   Failure feedback does not grant additional Create or Publish replay permission.
-- `client_worker_api/iclient_worker_api.h` exposes an optional Get ingress-status output used by `bound_mode.cpp`.
+- `client_worker_api/iclient_worker_api.h` exposes an optional Get ingress-status output used by ObjectClientImpl's
+  LOCAL-first read path.
   Downstream response failures retain their public status without being attributed to the ingress Worker.
   An ingress session-invalid disconnect still triggers the existing re-registration and Get retry path.
-- Regression coverage lives in `tests/ut/client/{transport,bound_mode,client_worker_remote_api_reconnect}_test.cpp`,
+- Regression coverage lives in `tests/ut/client/{transport,client_worker_remote_api_reconnect}_test.cpp`,
   `tests/ut/client/routing/*_test.cpp` and `tests/st/client/kv_cache/kv_cache_client_test.cpp`.
 
 ## Read-path transport failure handling
@@ -1108,27 +1132,6 @@ handler. Clearing the Router handler synchronously excludes later callback acces
   request key has no connection at all, so an address-keyed hit never masks a stale instance id. A connection reached
   through the fallback reports `K_URMA_NEED_CONNECT` (never `K_URMA_TRY_AGAIN`) when it is circuit-broken, because
   `K_URMA_TRY_AGAIN` is outside both the worker-side remap and the read path's self-heal and would hard-fail a read.
-
-## Standby connection drain gating
-
-- After the preferred same-node worker recovers, the client keeps the old standby control connection until its data
-  plane has been idle for the fixed 30000 ms quiet window. The gate exists because the
-  standby worker can still be the **meta owner** of objects: metadata-owner reads are routed to it through per-address
-  stubs and never touch `workerApi_[REMOTE]`, so an idle control connection says nothing about the data plane. Tearing
-  the connection down makes the worker delete this client's URMA connection in `RefreshMeta`, and the next routed read
-  fails the entry precheck with `K_URMA_NEED_CONNECT` (1006).
-- Predicate: `ListenWorker::CanDisconnectStandby()`. Voluntary scale-down drains immediately (legacy behaviour);
-  otherwise the registered drain handle decides using the fixed quiet window. The teardown path calls the same
-  predicate again (`ShutdownStandbyConnection`) instead of restating its conditions: the teardown runs on the shared
-  async-switch thread and can start seconds after the decision, during which read traffic can resume on the endpoint.
-- Ordering: the teardown resets the client's own data-plane entry **before** sending `Disconnect`, so the client never
-  keeps a transporter for a connection the peer is about to drop. A new SDK can recover the resulting 1006 from an
-  old or new Worker without a protocol extension; old SDK behaviour is unchanged.
-- Last-use recording is sampled: `MarkDataPlaneUse` refreshes `lastDataPlaneUseMs` at most once per
-  `DATA_PLANE_USE_REFRESH_INTERVAL_MS` (100 ms) so the read hot path does not dirty the entry on every request, and it
-  records the transporter kind that **actually served** the request, so a UB candidate served by the cached TCP
-  fallback does not hold the drain back. `IsEndpointDataPlaneQuiet` discounts the sampling bound, so the effective wait
-  is the fixed window plus up to one interval and never shorter than it. The compensation is unconditional.
 
 ## Read-path UB rebuild coordination
 

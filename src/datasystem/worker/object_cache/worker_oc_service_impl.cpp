@@ -2050,9 +2050,10 @@ Status WorkerOCServiceImpl::RefreshMeta(const ClientKey &clientId)
     }
     // Release the queue lock form client.
     uint32_t lockId;
-    if (clientInfo->GetLockId(lockId).IsOk()) {
+    const bool holdsLockId = clientInfo->GetLockId(lockId).IsOk();
+    if (holdsLockId && !clientInfo->Auxiliary()) {
         LOG_IF_ERROR(TryUnShmQueueLatch(lockId), "Failed to clear locked id");
-    };
+    }
     // 0th: Release the object buffer resource
     std::vector<ShmKey> shmIds;
     memoryRefTable_->GetClientRefIds(clientId, shmIds);
@@ -2060,7 +2061,7 @@ Status WorkerOCServiceImpl::RefreshMeta(const ClientKey &clientId)
         std::shared_ptr<ShmUnit> shmUnit;
         auto stat = memoryRefTable_->GetShmUnit(shmId, shmUnit);
         if (stat.IsOk()) {
-            if (metadataSize_ > 0) {
+            if (metadataSize_ > 0 && holdsLockId) {
                 TryUnlatch(shmUnit->pointer, lockId);
             }
         }
@@ -2743,8 +2744,7 @@ void WorkerOCServiceImpl::TryUnlatch(void *pointer, int lockId)
     uint8_t addMask = 1 << (lockId % BYTES);
     uint8_t subMask = 0xFF ^ addMask;
 
-    if (*recorder & addMask) {
-        *recorder &= subMask;
+    if (__atomic_fetch_and(recorder, subMask, __ATOMIC_SEQ_CST) & addMask) {
         uint32_t lockVal = __atomic_load_n(flag, __ATOMIC_RELAXED);
         if (lockVal == WRITE_LOCK_NUM) {
             uint32_t expectedVal = WRITE_LOCK_NUM;
@@ -2761,8 +2761,8 @@ void WorkerOCServiceImpl::TryUnlatch(void *pointer, int lockId)
 void WorkerOCServiceImpl::InitMetaSize()
 {
     constexpr int alignment = 0x8;
-    // Worker set lockId_ = 0(shm_guard), so we need client_nums + 1 bits slot.
-    metadataSize_ = FLAGS_max_client_num == 0 ? 0 : FLAGS_max_client_num / alignment + 1;
+    const uint32_t maxLockId = ClientManager::Instance().GetMaxShmLockId();
+    metadataSize_ = maxLockId == 0 ? 0 : maxLockId / alignment + 1;
     metadataSize_ += sizeof(uint32_t) + sizeof(char);
     auto alignCeiling = [](uintptr_t addr, uintptr_t alignment) { return (addr + alignment - 1) & ~(alignment - 1); };
     metadataSize_ = alignCeiling(metadataSize_, FLAGS_memory_alignment);
@@ -3500,6 +3500,11 @@ Status WorkerOCServiceImpl::GetHashRing(const GetHashRingReqPb &req, GetHashRing
     ScopedRequestContext ctx;
     RETURN_RUNTIME_ERROR_IF_NULL(requestAuthenticator_);
     RETURN_RUNTIME_ERROR_IF_NULL(topologyEngine_);
+    // The RPC entry only checks that a token is present, so the token itself must be verified here.
+    if (!req.token().empty()) {
+        std::string tenantId;
+        RETURN_IF_NOT_OK(worker::AuthenticateRequest(requestAuthenticator_, req, "", tenantId));
+    }
     std::shared_ptr<const cluster::TopologySnapshot> snapshot;
     RETURN_IF_NOT_OK(membership_.GetSnapshot(snapshot));
     return BuildGetHashRingResponse(*snapshot, req.version(), rsp, req.host_ids_digest());

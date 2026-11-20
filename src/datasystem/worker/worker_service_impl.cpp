@@ -275,7 +275,7 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     uint64_t mmapSize = 0;
     ptrdiff_t offset = 0;
     ShmKey id;
-    if (req.shm_enabled()) {
+    if (req.shm_enabled() && !auxiliarySession) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker_->GetShmQueueUnit(lockId, fd, mmapSize, offset, id),
                                          "worker process get ShmQ unit failed");
     }

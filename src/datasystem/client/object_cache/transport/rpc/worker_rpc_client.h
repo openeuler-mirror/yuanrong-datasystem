@@ -20,8 +20,10 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include <bthread/mutex.h>
@@ -46,6 +48,8 @@ namespace client {
 
 class WorkerRpcClient {
 public:
+    using ObjectRpcCall = std::function<Status(WorkerOCService_BrpcGenericStub &, const RpcOptions &)>;
+
     WorkerRpcClient(HostPort workerAddress, std::shared_ptr<Signature> signature,
                     BrpcChannelConfig channelConfig = {});
     virtual ~WorkerRpcClient();
@@ -68,8 +72,10 @@ public:
     virtual Status InvokeQueryAndGet(QueryAndGetReqPb &request, QueryAndGetRspPb &response,
                                      std::vector<RpcMessage> &payloads, bool *rpcDispatched = nullptr);
 
-    /** @brief Sign and invoke Exist through the cached control connection. */
-    virtual Status InvokeExist(int64_t subTimeoutMs, ExistReqPb &request, ExistRspPb &response);
+    /** @brief Invoke one WorkerOCService call through this endpoint. */
+    virtual Status InvokeObjectRpc(int64_t subTimeoutMs, const std::string &operationName,
+                                   const google::protobuf::Message &request,
+                                   google::protobuf::Message &response, const ObjectRpcCall &call);
 
     /** @brief Sign and invoke Create through the cached control connection. */
     virtual Status InvokeCreate(int64_t subTimeoutMs, CreateReqPb &request, CreateRspPb &response,
@@ -147,8 +153,6 @@ protected:
 
     virtual Status DoInvokeQueryAndGet(const RpcOptions &options, const QueryAndGetReqPb &request,
                                        QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads);
-
-    virtual Status DoInvokeExist(const RpcOptions &options, const ExistReqPb &request, ExistRspPb &response);
 
     virtual Status DoInvokeCreate(const RpcOptions &options, const CreateReqPb &request,
                                   CreateRspPb &response);

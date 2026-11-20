@@ -533,6 +533,9 @@
   - worker startup/shutdown ordering is sensitive because the singleton owns the full process lifecycle.
 - Important invariants:
   - worker runtime expects valid worker address configuration before serving traffic;
+  - primary and routed auxiliary SHM sessions use separate lock ID ranges of `max_client_num` slots each.
+    Both ranges are represented in object lock metadata. Only primary sessions use the SHM decrement-reference queue.
+    On client loss, the worker releases the session's object latches before returning its lock ID.
   - `PreShutDown` is a meaningful phase distinct from `ShutDown`;
   - coordination uses injected Coordinator discovery or a configured external ETCD backend.
   - changes that must finish before Kubernetes readiness should run before `ReadinessProbe()` writes the ready-check

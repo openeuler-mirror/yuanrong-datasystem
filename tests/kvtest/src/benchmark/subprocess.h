@@ -291,7 +291,6 @@ inline std::shared_ptr<datasystem::KVClient> CreateClientForRole(
     bool useSD = RoleUsesServiceDiscovery(role, cfg);
     ConnectOptions opts;
     opts.connectTimeoutMs = cfg.connectTimeoutMs;
-    opts.enableCrossNodeConnection = cfg.enableCrossNodeConnection;
     opts.enableLocalCache = cfg.enableLocalCache;
     opts.dataPlacementPolicy = cfg.dataPlacementPolicy;
     opts.fastTransportMemSize = cfg.fastTransportMemSize;

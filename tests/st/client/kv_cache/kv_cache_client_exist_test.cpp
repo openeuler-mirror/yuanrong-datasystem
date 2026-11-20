@@ -280,7 +280,7 @@ TEST_F(KVCacheClientExistTest, TestRetryExistKeys)
     std::string value0 = "value0";
     ASSERT_EQ(client_->Set(key0, value0), Status::OK());
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.before_query_meta", "return(K_RPC_UNAVAILABLE)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.before_query_meta", "1*return(K_RPC_UNAVAILABLE)"));
 
     std::vector<bool> exists;
     ASSERT_EQ(client_->Exist({ key0, key1, key2 }, exists).GetCode(), StatusCode::K_OK);

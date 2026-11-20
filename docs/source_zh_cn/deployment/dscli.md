@@ -1561,8 +1561,6 @@ INFO fallback 仅适用于忽略该初始化错误的 SDK Client，并且只在 
 | spill_size_limit | uint64 | `0` | spill 目录容量上限（字节），0 表示 95% 目录可用空间 |
 | spill_file_max_size_mb | uint64 | `200` | 单 spill 文件大小上限（MB），[200, 10240] |
 | spill_file_open_limit | uint64 | `512` | spill 打开文件数上限，>= 8 |
-| urma_failover_success_rate_ratio | double | `0.5` | URMA failover 评估成功率比值 [0.0, 1.0] |
-| urma_failover_min_sample_count | uint32 | `5` | URMA failover 评估最小样本数 |
 | urma_orphan_conn_ttl_s | uint32 | `600` | URMA 孤儿连接存活时间（秒） |
 | urma_orphan_sweep_interval_s | uint32 | `60` | URMA 孤儿连接清扫周期（秒） |
 | urma_orphan_sweep_batch | uint32 | `100` | URMA 孤儿连接单批清扫数量 |

@@ -498,7 +498,6 @@ TEST_F(KVClientTransportSetTest, LocalCacheBufferSetPreservesTtlOnCrossHostWorke
     ConnectOptions options;
     InitConnectOpt(REMOTE_TRANSPORT_CLIENT_WORKER_INDEX, options);
     options.enableLocalCache = true;
-    options.enableCrossNodeConnection = true;
     auto crossHostClient = std::make_shared<KVClient>(options);
     DS_ASSERT_OK(crossHostClient->Init());
     ASSERT_NO_FATAL_FAILURE(AssertBufferSetTtl(crossHostClient, "cross_host_buffer_ttl", ExpectedTransport()));
@@ -1236,13 +1235,11 @@ private:
 // transport layer and record the real medium (UB under USE_URMA, TCP otherwise).
 TEST_F(KVClientTransportSetLocalCacheScmTcpTest, LocalCacheBufferSetRoutesCrossHostWorkerToTransport)
 {
-    // enableLocalCache=true + enableCrossNodeConnection=true bound to worker 1 (cross-host hostId).
-    // enableCrossNodeConnection forces InitRouting so sameHostWorkers is built from the hostId
-    // topology, not the SCMTCP IsShmEnable() fallback that would misclassify worker 1 as same-host.
+    // enableLocalCache=true connects initially to worker 1 (cross-host hostId). Routing is always initialized,
+    // so sameHostWorkers comes from the hostId topology rather than the SCMTCP IsShmEnable() fallback.
     std::shared_ptr<KVClient> crossHostClient;
     InitTestKVClient(ROUTED_CLIENT_WORKER_INDEX, crossHostClient, [](ConnectOptions &opts) {
         opts.enableLocalCache = true;
-        opts.enableCrossNodeConnection = true;
     });
     const std::string key = "transport_local_cache_scm_tcp_cross_host";
     const std::string value(VALUE_SIZE, 'u');
@@ -1253,22 +1250,20 @@ TEST_F(KVClientTransportSetLocalCacheScmTcpTest, LocalCacheBufferSetRoutesCrossH
     DS_ASSERT_OK(crossHostClient->Set(buffer));
     ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
     // Verify round-trip from the same cross-host client so the assertion is not affected by
-    // another client's enableCrossNodeConnection / routing configuration.
+    // another client's routing configuration.
     std::string actual;
     DS_ASSERT_OK(crossHostClient->Get(key, actual));
     ASSERT_EQ(actual, value);
 }
 
-// Same-host control: the bound worker's hostId matches the SDK hostId, so Create keeps the SHM
-// bound-worker path and Set(buffer) records SHM. Uses enableCrossNodeConnection=true so the
-// advisor sameHostWorkers set is hostId-based (same path as the cross-host case), and worker 0's
+// Same-host control: the primary worker's hostId matches the SDK hostId, so Create keeps the SHM
+// local path and Set(buffer) records SHM. Routing uses the hostId-based sameHostWorkers set, and worker 0's
 // matching hostId keeps it on the SHM path.
 TEST_F(KVClientTransportSetLocalCacheScmTcpTest, LocalCacheBufferSetSameHostWorkerRecordsShm)
 {
     std::shared_ptr<KVClient> sameHostClient;
     InitTestKVClient(READER_WORKER_INDEX, sameHostClient, [](ConnectOptions &opts) {
         opts.enableLocalCache = true;
-        opts.enableCrossNodeConnection = true;
     });
     const std::string key = "transport_local_cache_scm_tcp_same_host";
     const std::string value(VALUE_SIZE, 'h');

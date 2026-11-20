@@ -1,7 +1,7 @@
 yr.datasystem.hetero_client.HeteroClient
 ========================================
 
-.. py:class:: yr.datasystem.hetero_client.HeteroClient(host, port, connect_timeout_ms=9000, token="", client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_cross_node_connection=False, req_timeout_ms=0, enable_remote_h2d=False)
+.. py:class:: yr.datasystem.hetero_client.HeteroClient(host, port, connect_timeout_ms=9000, token="", client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", req_timeout_ms=0, enable_remote_h2d=False)
 
     异构对象客户端。
 
@@ -16,7 +16,6 @@ yr.datasystem.hetero_client.HeteroClient
         - **access_key** (str) - AK/SK 授权使用的访问密钥。默认值： ``""`` 。
         - **secret_key** (str) - AK/SK 授权的密钥。默认值： ``""`` 。
         - **tenant_id** (str) - 租户 ID。默认值： ``""`` 。
-        - **enable_cross_node_connection** (bool) - 如果为 ``True`` ，允许客户端在与当前数据系统 Worker 连接异常时自动切换到备用节点。默认值： ``False`` 。
         - **req_timeout_ms** (int) - 请求超时时间，单位为毫秒。当 req_timeout_ms<=0 时，req_timeout_ms 与 connect_timeout_ms 相同。默认值： ``0`` 。
         - **enable_remote_h2d** (bool) - 如果为 ``True`` ，启用异构场景远端共享内存到NPU内存的数据传输功能。默认值： ``False`` 。
 

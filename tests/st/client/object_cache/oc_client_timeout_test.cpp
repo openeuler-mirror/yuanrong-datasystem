@@ -60,7 +60,14 @@ TEST_F(OCClientTimeoutTest, ShortTimeoutGetFailsFastWithDeadlineExceeded)
     std::shared_ptr<ObjectClient> client;
     InitTestClient(0, client, 60000, 500);
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerOCServiceImpl.Get.Timeout", "call(0)"));
+    // A failed local attempt is re-routed to another replica, so the injection has to cover every
+    // worker and both read paths (legacy Get and the routed QueryAndGet) for the call to observe an
+    // exhausted deadline.
+    for (size_t i = 0; i < cluster_->GetWorkerNum(); ++i) {
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "WorkerOCServiceImpl.Get.Timeout", "call(0)"));
+        DS_ASSERT_OK(
+            cluster_->SetInjectAction(WORKER, i, "worker.QueryAndGet.Begin", "return(K_RPC_DEADLINE_EXCEEDED)"));
+    }
 
     std::string objKey = ObjectKey();
     std::vector<Optional<Buffer>> result;
@@ -72,7 +79,10 @@ TEST_F(OCClientTimeoutTest, ShortTimeoutGetFailsFastWithDeadlineExceeded)
     EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_LT(elapsedMs, 5000);
 
-    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "WorkerOCServiceImpl.Get.Timeout"));
+    for (size_t i = 0; i < cluster_->GetWorkerNum(); ++i) {
+        DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, i, "WorkerOCServiceImpl.Get.Timeout"));
+        DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, i, "worker.QueryAndGet.Begin"));
+    }
 }
 
 TEST_F(OCClientTimeoutTest, MultiHopDeadlinePropagationNotInflated)
@@ -127,7 +137,7 @@ TEST_F(OCClientTimeoutTest, ParallelGetUsesRealRemainingNotDecayed)
 TEST_F(OCClientTimeoutTest, MSetDeadlineExceededReturnsStatusNotSilent)
 {
     std::shared_ptr<KVClient> kvClient;
-    InitTestKVClient(0, kvClient, 60000, false, 500);
+    InitTestKVClient(0, kvClient, 60000, 500);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.before_CreateMultiMetaToMaster", "1*sleep(600)"));
 
@@ -204,7 +214,7 @@ TEST_F(OCClientTimeoutTest, GetObjMetaInfoIndependentDeadlineExceeded)
 TEST_F(OCClientTimeoutTest, Level1_RpcResponseTimeoutReturnsDeadlineExceeded)
 {
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client, 60000, false, 10);
+    InitTestKVClient(0, client, 60000, 10);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.before_CreateMultiMetaToMaster", "1*sleep(100)"));
 

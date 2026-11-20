@@ -930,7 +930,7 @@ protected:
                           DataPlacementPolicy policy = DataPlacementPolicy::PREFERRED_META_OWNER)
     {
         ConnectOptions options;
-        InitConnectOpt(workerIndex, options, FAULT_CONNECT_TIMEOUT_MS, true);
+        InitConnectOpt(workerIndex, options, FAULT_CONNECT_TIMEOUT_MS);
         options.enableLocalCache = enableLocalCache;
         options.requestTimeoutMs = FAULT_REQUEST_TIMEOUT_MS;
         options.dataPlacementPolicy = policy;
@@ -1249,7 +1249,7 @@ TEST_P(StaleTopologyBootstrapTest, EntireCommittedRingCanBootstrapFromReadyRepla
     }
 
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(STALE_TOPOLOGY_MEMBER_COUNT, client, 10'000, false, 10'000);
+    InitTestKVClient(STALE_TOPOLOGY_MEMBER_COUNT, client, 10'000, 10'000);
     ASSERT_NE(client, nullptr);
     const auto key = NewObjectKey();
     const std::string expectedValue = "replacement-topology-value";
@@ -1422,13 +1422,6 @@ TEST_F(CoordinatorBackendClusterTest, IsolatedWorkerRemovedThenColdRejoinsWithou
     EXPECT_TRUE(cluster_->CheckWorkerProcess(0));
     EXPECT_TRUE(cluster_->CheckWorkerProcess(1));
 
-    std::shared_ptr<KVClient> isolatedClient;
-    InitKVClient(1, isolatedClient);
-    ASSERT_NE(isolatedClient, nullptr);
-    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
-        [&isolatedClient] { return isolatedClient->Set("isolated_worker_removed_key", "during_isolation"); },
-        WAIT_SCALE_TIMEOUT_SEC, K_NOT_READY));
-
     DS_ASSERT_OK(cluster_->ClearInjectAction(ClusterNodeType::WORKER, 1, COORDINATOR_KEEPALIVE_INJECT_NAME));
     keepAliveFailureInjected = false;
     DS_ASSERT_OK(cluster_->ClearInjectAction(ClusterNodeType::WORKER, 1, WITNESS_PROBE_FAILURE_INJECT));
@@ -1436,8 +1429,10 @@ TEST_F(CoordinatorBackendClusterTest, IsolatedWorkerRemovedThenColdRejoinsWithou
     AssertWorkersInCluster({ 0, 1 }, WAIT_SCALE_TIMEOUT_SEC);
 
     std::shared_ptr<KVClient> client0;
+    std::shared_ptr<KVClient> client1;
     InitKVClient(0, client0);
-    DS_ASSERT_OK(SetKeyEventually(*isolatedClient, "isolated_worker_rejoined_key", "after_rejoin"));
+    InitKVClient(1, client1);
+    DS_ASSERT_OK(SetKeyEventually(*client1, "isolated_worker_rejoined_key", "after_rejoin"));
     std::string value;
     DS_ASSERT_OK(client0->Get("isolated_worker_rejoined_key", value));
     EXPECT_EQ(value, "after_rejoin");
@@ -1500,9 +1495,6 @@ TEST_F(CoordinatorRejoinMigrationTest, LEVEL1_RejoinedWorkerAcceptsIncomingMigra
     std::shared_ptr<KVClient> targetKvClient;
     InitKVClient(targetIndex, targetKvClient);
     ASSERT_NE(targetKvClient, nullptr);
-    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
-        [&] { return targetKvClient->Set("rejoin_migration_isolated", "isolated"); },
-        WAIT_SCALE_TIMEOUT_SEC, K_NOT_READY));
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, targetIndex, COORDINATOR_KEEPALIVE_INJECT_NAME));
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, targetIndex, WITNESS_PROBE_FAILURE_INJECT));
     ASSERT_NO_FATAL_FAILURE(AssertWorkersInCluster({ sourceIndex, targetIndex }));
@@ -1627,7 +1619,7 @@ TEST_F(CoordinatorJoiningWindowTest, RoutedSetSucceedsWhileTargetStillSeesJoinin
     }, WAIT_SCALE_TIMEOUT_SEC, K_OK));
 
     ConnectOptions options;
-    InitConnectOpt(0, options, 1'000, true);
+    InitConnectOpt(0, options, 1'000);
     auto signature = std::make_shared<Signature>(options.accessKey, options.secretKey);
     BrpcChannelConfig config;
     config.timeout_ms = 1'000;
@@ -2544,7 +2536,6 @@ protected:
         connectOptions.connectTimeoutMs = COORDINATOR_SD_CONNECT_TIMEOUT_MS;
         connectOptions.accessKey = "QTWAOYTTINDUT2QVKYUC";
         connectOptions.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
-        connectOptions.enableCrossNodeConnection = true;
         connectOptions.serviceDiscovery = serviceDiscovery;
         client = std::make_shared<KVClient>(connectOptions);
         return client->Init();

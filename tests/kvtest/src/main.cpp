@@ -478,7 +478,6 @@ static int RunServerMode(const Config &cfg)
     connOpts.serviceDiscovery = sd;
     connOpts.connectTimeoutMs = cfg.connectTimeoutMs;
     connOpts.requestTimeoutMs = cfg.requestTimeoutMs;
-    connOpts.enableCrossNodeConnection = cfg.enableCrossNodeConnection;
     connOpts.enableLocalCache = cfg.enableLocalCache;
     connOpts.dataPlacementPolicy = cfg.dataPlacementPolicy;
     connOpts.fastTransportMemSize = cfg.fastTransportMemSize;

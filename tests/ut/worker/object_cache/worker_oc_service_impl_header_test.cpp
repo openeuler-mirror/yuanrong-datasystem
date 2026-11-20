@@ -32,12 +32,13 @@
 #include "ut/common.h"
 #include "datasystem/common/object_cache/lock.h"
 #include "datasystem/common/object_cache/safe_table.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/protos/worker_object.pb.h"
+#include "datasystem/worker/client_manager/client_manager.h"
 #include "tests/ut/worker/object_cache/test_metadata_route.h"
 
 using namespace datasystem::object_cache;
 
-DS_DECLARE_uint32(max_client_num);
 DS_DECLARE_uint32(memory_alignment);
 
 namespace datasystem {
@@ -46,8 +47,8 @@ namespace {
 size_t GetExpectedMetadataSize()
 {
     constexpr size_t K_BITS_PER_BYTE = 8;
-    const size_t bitmapSize =
-        FLAGS_max_client_num == 0 ? 0 : FLAGS_max_client_num / K_BITS_PER_BYTE + 1;
+    const uint32_t maxLockId = worker::ClientManager::Instance().GetMaxShmLockId();
+    const size_t bitmapSize = maxLockId == 0 ? 0 : maxLockId / K_BITS_PER_BYTE + 1;
     const size_t unalignedSize = bitmapSize + sizeof(uint32_t) + sizeof(char);
     return (unalignedSize + FLAGS_memory_alignment - 1) & ~(FLAGS_memory_alignment - 1);
 }
@@ -109,6 +110,11 @@ protected:
 TEST_F(WorkerOcMetadataHeaderUTTest, TestMetadataHeaderAlwaysAllocated)
 {
     ASSERT_NE(impl_, nullptr);
+    ASSERT_EQ(impl_->GetMetadataSize(), GetExpectedMetadataSize());
+    const uint32_t previousAlignment = FLAGS_memory_alignment;
+    Raii restoreAlignment([previousAlignment] { FLAGS_memory_alignment = previousAlignment; });
+    FLAGS_memory_alignment = alignof(uint32_t);
+    impl_->InitMetaSize();
     ASSERT_EQ(impl_->GetMetadataSize(), GetExpectedMetadataSize());
 }
 

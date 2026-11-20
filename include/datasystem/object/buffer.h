@@ -33,8 +33,6 @@
 namespace datasystem {
 namespace object_cache {
 class ObjectClientImpl;
-class BoundMode;
-class RoutedMode;
 class Lock;
 }  // namespace object_cache
 namespace kv_cache {
@@ -149,8 +147,6 @@ public:
 
 private:
     friend class datasystem::object_cache::ObjectClientImpl;
-    friend class datasystem::object_cache::BoundMode;
-    friend class datasystem::object_cache::RoutedMode;
     friend class KVClient;
     friend class WorkerOCServiceImpl;
 

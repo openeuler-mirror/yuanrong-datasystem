@@ -93,7 +93,7 @@ TEST_F(KVClientRequestTimeoutFdPassingTest, GetHonorsRequestTimeoutWhenFdPassing
     // Writer sets data and never reads, so it never triggers the read-side fd-passing. Created and
     // exercised before the inject is applied so its Set is not slowed by the fd-delay injection.
     std::shared_ptr<KVClient> writer;
-    InitTestKVClient(0, writer, 60000, false, 0);
+    InitTestKVClient(0, writer, 60000, 0);
     const std::string key = ObjectKey();
     const std::string value(VALUE_SIZE, 'a');
     DS_ASSERT_OK(writer->Set(key, value));
@@ -105,7 +105,7 @@ TEST_F(KVClientRequestTimeoutFdPassingTest, GetHonorsRequestTimeoutWhenFdPassing
     // Fresh reader with a 20 ms request budget. Its first Get has a cold fd (fdProvider_ null) so
     // ReceiveAndMmapClientFds takes the GetClientFd path that the fix bounds by ApiDeadline.
     std::shared_ptr<KVClient> reader;
-    InitTestKVClient(0, reader, 60000, false, REQUEST_TIMEOUT_MS);
+    InitTestKVClient(0, reader, 60000, REQUEST_TIMEOUT_MS);
 
     Timer timer;
     std::string out;

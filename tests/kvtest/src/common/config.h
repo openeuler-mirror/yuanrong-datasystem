@@ -88,7 +88,6 @@ struct Config {
     int notifyIntervalUs = 0;               // delay between peer notifications in microseconds, 0 = parallel
     size_t notifyQueueMax = 65536;          // cap on pending notify tasks per pool, 0 = unbounded
     bool enableJitter = true;               // randomize sleep to stagger requests
-    bool enableCrossNodeConnection = true;  // allow failover to standby workers on other nodes
     bool enableLocalCache = false;          // enable SDK client local cache, default false
     std::optional<uint32_t> urmaSendLaneCountPerPeer;
     datasystem::DataPlacementPolicy dataPlacementPolicy = datasystem::DataPlacementPolicy::PREFERRED_META_OWNER;
