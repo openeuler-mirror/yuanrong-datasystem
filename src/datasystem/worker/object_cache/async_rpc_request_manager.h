@@ -28,12 +28,15 @@
 #include <memory>
 #include <utility>
 
+#ifdef WITH_TESTS
+#include "datasystem/common/inject/inject_point.h"
+#endif
+
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/rpc/rpc_server_stream_base.h"
 #include "datasystem/common/util/queue/blocking_queue.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
-#include "datasystem/common/util/wait_post.h"
 #include "datasystem/protos/master_object.stub.rpc.pb.h"
 #include "datasystem/protos/master_object.brpc.stub.pb.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
@@ -41,7 +44,6 @@
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
-constexpr int32_t TEN_SECONDS_MS = 10000;
 class AsyncRpcRequest {
 public:
     explicit AsyncRpcRequest(uint32_t timeoutMs) : timeoutMs_(timeoutMs)
@@ -364,13 +366,11 @@ public:
     void AddRequest(std::shared_ptr<AsyncRpcRequest> request)
     {
         requestQueue_.Push(std::move(request));
-        waitQueueNotEmpty_.Set();
     }
 
     ~AsyncRpcRequestManager()
     {
         interruptFlag_ = true;
-        waitQueueNotEmpty_.Set();
         requestQueue_.Abort();
         if (pool_) {
             pool_.reset();
@@ -380,10 +380,7 @@ public:
 private:
     void ReadLoop()
     {
-        // later will check and findout if it is need to add internal
         while (!interruptFlag_) {
-            waitQueueNotEmpty_.WaitFor(TEN_SECONDS_MS);
-
             std::shared_ptr<AsyncRpcRequest> request;
             if (requestQueue_.Pop(request).IsError() || request == nullptr) {
                 continue;
@@ -396,14 +393,12 @@ private:
             } else {
                 requestQueue_.Push(std::move(request));
             }
-
-            if (requestQueue_.Empty()) {
-                waitQueueNotEmpty_.Clear();
-            }
+#ifdef WITH_TESTS
+            INJECT_POINT_NO_RETURN("AsyncRpcRequestManager.ProcessedRequest");
+#endif
         }
     }
 
-    WaitPost waitQueueNotEmpty_;
     std::atomic<bool> interruptFlag_{ false };
     BlockingQueue<std::shared_ptr<AsyncRpcRequest>> requestQueue_;
     std::unique_ptr<ThreadPool> pool_;

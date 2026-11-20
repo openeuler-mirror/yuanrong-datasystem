@@ -82,6 +82,12 @@ Detailed follow-up docs now exist for:
 - `modules/infra/metrics/exporters-and-buffering.md`
 - `modules/infra/metrics/metric-families-and-registration.md`
 
+## Device Allocation And UCP Instance Changes
+
+- `MemMgrBase::Allocate` keeps `memPoolLock_` during allocation, but releases it during OOM retry waits so another task can call `Free`. Callers retain exclusive ownership of their task's pool across the synchronous call. Retry counts, wait duration, and skip-retry behavior are unchanged.
+- `UcpManager::CheckUcpConnectionStable` claims a changed nonempty instance ID under `instanceTableMutex_` before cleaning endpoints outside the lock. Concurrent checks for the same new ID skip duplicate cleanup. This path must not call `RemoveEndpoint`, which also erases the instance record. The claim is not a cleanup-completion barrier and does not order different instance generations or explicit disconnects.
+- `AsyncRpcRequestManager` uses `BlockingQueue::Pop` for idle waiting and `Abort` for shutdown. Pending requests still requeue for polling; no extra polling delay is introduced. See `worker/object_cache/async_rpc_request_manager.h` and `common/util/queue/blocking_queue.h` under `src/datasystem`.
+
 ## URMA Orphan Client Cleanup
 
 - Workers run a dedicated sweep thread; each tick scans the complete map and removes at most

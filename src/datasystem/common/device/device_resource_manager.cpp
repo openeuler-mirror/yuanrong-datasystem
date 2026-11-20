@@ -110,7 +110,7 @@ Status MemMgrBase::Init()
 
 Status MemMgrBase::Allocate(const std::vector<BufferMetaInfo> &bMeta, std::vector<ShmUnit> &memoryPool, bool skipRetry)
 {
-    std::lock_guard<std::mutex> lock(memPoolLock_);
+    std::unique_lock<std::mutex> lock(memPoolLock_);
     uint64_t batchSize = bMeta.size();
     uint64_t maxAllocateSize = 0;
     if (type_ == AllocateType::DEV_DEVICE) {
@@ -128,7 +128,9 @@ Status MemMgrBase::Allocate(const std::vector<BufferMetaInfo> &bMeta, std::vecto
         Status rc = Status::OK();
         do {
             if (rc.IsError()) {
+                lock.unlock();
                 waitPost_->WaitFor(intervalMs);
+                lock.lock();
             }
 
             size_t allocSize = (type_ == AllocateType::DEV_DEVICE) ? maxAllocateSize : bMeta[i].size;

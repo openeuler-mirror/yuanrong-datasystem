@@ -125,6 +125,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "device_resource_manager",
+    visibility = ["//visibility:public"],
     srcs = [
         "device_resource_manager.cpp",
     ],
