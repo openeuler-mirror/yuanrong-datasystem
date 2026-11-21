@@ -248,3 +248,5 @@ Rules for updating baselines:
 - Whether CI currently treats Bazel and CMake as equal release paths is outside this CMake-specific module.
 - A machine-generated full target graph would be useful for compile-speed work; this context records the verified
   high-value graph manually.
+
+The source-embedded Host KV client exposes `Datasystem::client_static`. Its isolated build reuses the third-party recipes in `cmake/dependency.cmake`. See the [consumer contract](../../../../docs/source_zh_cn/installation/build_guide/cmake_build.md).

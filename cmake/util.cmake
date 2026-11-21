@@ -4,7 +4,7 @@ set(DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 
 set(THIRDPARTY_SAFE_FLAGS "-fPIC -D_FORTIFY_SOURCE=2 -O2 -fstack-protector-strong -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,--build-id=none -Wl,-z,relro,-z,noexecstack,-z,now ${EXT_FLAGS}")
 
-if (CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "aarch64" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER "9.1.0")
+if (NOT DS_BUILD_STATIC_SDK AND CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "aarch64" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER "9.1.0")
     set(EXT_FLAGS "-mtune=tsv110 -march=armv8-a")
     message("Add compiler flags ${EXT_FLAGS} for aarch64")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EXT_FLAGS}")
@@ -45,6 +45,9 @@ function(__EXEC_COMMAND)
   set(multi_value_args COMMAND)
   cmake_parse_arguments(ARG "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
 
+  if (DS_BUILD_STATIC_SDK AND "${ARG_COMMAND}" MATCHES ";-j[0-9;]")
+    set(CMAKE_EXECUTE_PROCESS_COMMAND_ECHO STDOUT)
+  endif()
   execute_process(COMMAND ${ARG_COMMAND}
       WORKING_DIRECTORY ${ARG_WORKING_DIRECTORY}
       RESULT_VARIABLE _RET)
@@ -243,6 +246,18 @@ function(ADD_THIRDPARTY_LIB LIB_NAME)
   cmake_parse_arguments(ARG "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
 
   string(TOLOWER ${LIB_NAME} _LIB_NAME_LOWER)
+  if (DS_BUILD_STATIC_SDK)
+    ds_static_sdk_dependency_options("${LIB_NAME}")
+    set(ARG_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${ARG_CXX_FLAGS}")
+    set(ARG_C_FLAGS "${CMAKE_C_FLAGS} ${ARG_C_FLAGS}")
+    list(APPEND ARG_EXTRA_MSGS "${CMAKE_CXX_COMPILER}" "${CMAKE_C_COMPILER}")
+    if (NOT ARG_TOOLCHAIN OR ARG_TOOLCHAIN STREQUAL "cmake")
+      list(APPEND ARG_CONF_OPTIONS
+          "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}" "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}")
+    elseif (ARG_TOOLCHAIN STREQUAL "configure")
+      list(APPEND ARG_CONF_OPTIONS "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}")
+    endif()
+  endif()
 
   if(NOT ARG_TOOLCHAIN)
     set(ARG_TOOLCHAIN "cmake")
@@ -301,6 +316,9 @@ function(ADD_THIRDPARTY_LIB LIB_NAME)
       else()
         set(${LIB_NAME}_LIB_PATH ${${LIB_NAME}_ROOT}/lib)
       endif()
+      if (DS_BUILD_STATIC_SDK)
+        set_property(GLOBAL APPEND PROPERTY DS_STATIC_SDK_PREFIXES "${${LIB_NAME}_ROOT}")
+      endif()
       set(${LIB_NAME}_LIB_PATH ${${LIB_NAME}_LIB_PATH} PARENT_SCOPE)
       set(${LIB_NAME}_ROOT "${${LIB_NAME}_ROOT}" PARENT_SCOPE)
       if (DEFINED EXPORT_TO_USER_ENV_FILE)
@@ -319,7 +337,14 @@ function(ADD_THIRDPARTY_LIB LIB_NAME)
   endif()
 
   # Fetch the package first.
+  if (DS_BUILD_STATIC_SDK)
+    set(FETCHCONTENT_BASE_DIR "${CMAKE_BINARY_DIR}/_deps/static-sdk/${_LIB_NAME_LOWER}")
+    file(REMOVE_RECURSE "${FETCHCONTENT_BASE_DIR}")
+  endif()
   download_lib_pkg(${_LIB_NAME_LOWER} ${ARG_URL} ${ARG_SHA256})
+  if (DS_BUILD_STATIC_SDK)
+    ds_static_sdk_prepare_source("${LIB_NAME}" "${${_LIB_NAME_LOWER}_SOURCE_DIR}")
+  endif()
 
   # Apply the patches if need.
   foreach(_PATCH ${ARG_PATCHES})
@@ -330,6 +355,9 @@ function(ADD_THIRDPARTY_LIB LIB_NAME)
                     WORKING_DIRECTORY ${${_LIB_NAME_LOWER}_SOURCE_DIR}
                     RESULT_VARIABLE _RET)
     if(NOT _RET EQUAL "0")
+      if (DS_BUILD_STATIC_SDK)
+        message(FATAL_ERROR "Required static SDK patch ${_PATCH} failed, error: ${_RET}")
+      endif()
       message("Patch ${_PATCH} failed, error: ${_RET}")
     endif()
   endforeach()
@@ -343,16 +371,33 @@ function(ADD_THIRDPARTY_LIB LIB_NAME)
     if (NOT MAKE_PROGRAM)
       message(FATAL_ERROR "make program not found! Please install make.")
     endif()
-    if (ARG_CXX_FLAGS)
+    if (ARG_CXX_FLAGS AND NOT DS_BUILD_STATIC_SDK)
       list(APPEND ${LIB_NAME}_MAKE_CXXFLAGS "CXXFLAGS=${ARG_CXX_FLAGS}")
     endif()
-    if (ARG_C_FLAGS)
+    if (ARG_C_FLAGS AND NOT DS_BUILD_STATIC_SDK)
       list(APPEND ${LIB_NAME}_MAKE_CFLAGS "CFLAGS=${ARG_C_FLAGS}")
     endif()
     if (ARG_LINK_FLAGS)
       list(APPEND ${LIB_NAME}_MAKE_LDFLAGS "LDFLAGS=${ARG_LINK_FLAGS}")
     endif()
-    __exec_command(COMMAND ${MAKE_PROGRAM}
+    if (DS_BUILD_STATIC_SDK)
+      # TBB clears MAKEOVERRIDES; environment flags survive its recursive make.
+      set(_ds_make_command ${CMAKE_COMMAND} -E env
+          "CXXFLAGS=${ARG_CXX_FLAGS}" "CFLAGS=${ARG_C_FLAGS}" "LDFLAGS=" "${MAKE_PROGRAM}")
+      list(APPEND ${LIB_NAME}_MAKE_CXXFLAGS
+          "CPLUS=${CMAKE_CXX_COMPILER}" "CONLY=${CMAKE_C_COMPILER}" extra_inc=big_iron.inc
+          tbb_build_prefix=ds_static_sdk "tbb_build_dir=${${_LIB_NAME_LOWER}_SOURCE_DIR}/build" tbb)
+      if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        list(APPEND ${LIB_NAME}_MAKE_CXXFLAGS compiler=clang)
+      elseif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        list(APPEND ${LIB_NAME}_MAKE_CXXFLAGS compiler=gcc)
+      else()
+        message(FATAL_ERROR "Static TBB requires a GCC or Clang toolchain")
+      endif()
+    else()
+      set(_ds_make_command "${MAKE_PROGRAM}")
+    endif()
+    __exec_command(COMMAND ${_ds_make_command}
                           ${${LIB_NAME}_MAKE_CFLAGS}
                           ${${LIB_NAME}_MAKE_CXXFLAGS}
                           ${${LIB_NAME}_MAKE_LDFLAGS}
@@ -362,7 +407,14 @@ function(ADD_THIRDPARTY_LIB LIB_NAME)
     file(COPY ${${_LIB_NAME_LOWER}_SOURCE_DIR}/include/tbb
          DESTINATION ${${LIB_NAME}_ROOT}/include)
     # Copy libs
-    file(GLOB_RECURSE _LIBS_LIST "${${_LIB_NAME_LOWER}_SOURCE_DIR}/*lib*.so*")
+    if (DS_BUILD_STATIC_SDK)
+      set(_LIBS_LIST "${${_LIB_NAME_LOWER}_SOURCE_DIR}/build/ds_static_sdk_release/libtbb.a")
+      if (NOT EXISTS "${_LIBS_LIST}")
+        message(FATAL_ERROR "TBB static build did not produce libtbb.a")
+      endif()
+    else()
+      file(GLOB_RECURSE _LIBS_LIST "${${_LIB_NAME_LOWER}_SOURCE_DIR}/*lib*.so*")
+    endif()
     foreach(_LIB ${_LIBS_LIST})
       file(COPY "${_LIB}" DESTINATION ${${LIB_NAME}_ROOT}/lib)
     endforeach()
@@ -378,6 +430,10 @@ function(ADD_THIRDPARTY_LIB LIB_NAME)
     endif()
     list(APPEND ARG_CONF_OPTIONS "-DCMAKE_INSTALL_PREFIX=${${LIB_NAME}_ROOT}")
 
+    if (DS_BUILD_STATIC_SDK AND CMAKE_VERSION VERSION_GREATER_EQUAL 4.0)
+      # Pinned projects such as brpc still declare the CMake 2.8 policy baseline.
+      list(APPEND ARG_CONF_OPTIONS -DCMAKE_POLICY_VERSION_MINIMUM=3.5)
+    endif()
     __exec_command(COMMAND ${CMAKE_COMMAND} -G ${CMAKE_GENERATOR}
                             ${ARG_CONF_OPTIONS}
                             ${${_LIB_NAME_LOWER}_SOURCE_DIR}/${ARG_CONF_PATH}
@@ -415,16 +471,21 @@ function(ADD_THIRDPARTY_LIB LIB_NAME)
                    WORKING_DIRECTORY ${${_LIB_NAME_LOWER}_SOURCE_DIR})
 
     # make -j && make install
-    if (NOT CMAKE_MAKE_PROGRAM)
+    set(_ds_configure_make "${CMAKE_MAKE_PROGRAM}")
+    if (DS_BUILD_STATIC_SDK)
+      unset(_ds_configure_make)
+      find_program(_ds_configure_make NAMES gmake make REQUIRED)
+    endif()
+    if (NOT _ds_configure_make)
       message(FATAL_ERROR "make program not found!")
     endif()
-    __exec_command(COMMAND ${CMAKE_MAKE_PROGRAM}
+    __exec_command(COMMAND ${_ds_configure_make}
                            ${${LIB_NAME}_MAKE_CFLAGS}
                            ${${LIB_NAME}_MAKE_CXXFLAGS}
                            ${${LIB_NAME}_MAKE_LDFLAGS}
                            -j ${BUILD_THREAD_NUM}
                    WORKING_DIRECTORY ${${_LIB_NAME_LOWER}_SOURCE_DIR})
-    __exec_command(COMMAND ${CMAKE_MAKE_PROGRAM} install
+    __exec_command(COMMAND ${_ds_configure_make} install
                    WORKING_DIRECTORY ${${_LIB_NAME_LOWER}_SOURCE_DIR})
   else()
     message(FATAL_ERROR "Unrecognized toolchain: ${ARG_TOOLCHAIN}")
@@ -433,6 +494,9 @@ function(ADD_THIRDPARTY_LIB LIB_NAME)
   # Write install text to root dir for verify purpose.
   file(WRITE "${_VERIFY_FILE}" "${${LIB_NAME}_CONF_TXT}")
 
+  if (DS_BUILD_STATIC_SDK)
+    set_property(GLOBAL APPEND PROPERTY DS_STATIC_SDK_PREFIXES "${${LIB_NAME}_ROOT}")
+  endif()
   # For output package variables.
   if (EXISTS ${${LIB_NAME}_ROOT}/lib64)
     set(${LIB_NAME}_LIB_PATH ${${LIB_NAME}_ROOT}/lib64)
@@ -952,6 +1016,65 @@ function(INSTALL_FILE_PATTERN)
   endforeach()
 endfunction()
 
+function(ds_proto_include_args output)
+    get_target_property(_includes protobuf::libprotobuf INTERFACE_INCLUDE_DIRECTORIES)
+    set(_args)
+    foreach(_include ${_includes})
+        if (_include MATCHES "^\\$<BUILD_INTERFACE:(.*)>$")
+            set(_include "${CMAKE_MATCH_1}")
+        elseif (_include MATCHES "^\\$<INSTALL_INTERFACE:")
+            continue()
+        endif()
+        if (_include AND NOT _include MATCHES "-NOTFOUND$")
+            list(APPEND _args -I "${_include}")
+        endif()
+    endforeach()
+    set(${output} ${_args} PARENT_SCOPE)
+endfunction()
+
+# protoc writes unescaped paths to depfiles. Resolve imports during configuration for
+# paths containing spaces and generators without depfile support.
+function(ds_proto_dependencies proto depfile out_args out_deps)
+    if (NOT "${proto};${depfile};${ARGN}" MATCHES "[ \t]" AND (CMAKE_GENERATOR MATCHES "Ninja" OR
+        (CMAKE_GENERATOR MATCHES "Makefiles" AND CMAKE_VERSION VERSION_GREATER_EQUAL 3.20) OR
+        (CMAKE_GENERATOR MATCHES "^(Visual Studio|Xcode)" AND CMAKE_VERSION VERSION_GREATER_EQUAL 3.21)))
+        set(${out_args} "--dependency_out=${depfile}" PARENT_SCOPE)
+        set(${out_deps} DEPFILE "${depfile}" PARENT_SCOPE)
+        return()
+    endif()
+    set(_pending "${proto}")
+    set(_visited)
+    while (_pending)
+        list(GET _pending 0 _file)
+        list(REMOVE_AT _pending 0)
+        if (_file IN_LIST _visited)
+            continue()
+        endif()
+        list(APPEND _visited "${_file}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_file}")
+        file(STRINGS "${_file}" _imports REGEX "^[ \t]*import[ \t]")
+        foreach(_import IN LISTS _imports)
+            if (_import MATCHES [=["([^"]+[.]proto)"]=])
+                set(_name "${CMAKE_MATCH_1}")
+                foreach(_dir IN LISTS ARGN)
+                    if (EXISTS "${_dir}/${_name}")
+                        list(APPEND _pending "${_dir}/${_name}")
+                        break()
+                    endif()
+                endforeach()
+            endif()
+        endforeach()
+    endwhile()
+    set(${out_args} "" PARENT_SCOPE)
+    set(${out_deps} DEPENDS ${_visited} PARENT_SCOPE)
+endfunction()
+
+function(ds_protoc_command output)
+    set(${output} ${CMAKE_COMMAND} -E env
+        "LD_LIBRARY_PATH=${gRPC_LIB_PATH}:${Protobuf_LIB_PATH}:${absl_LIB_PATH}:$ENV{LD_LIBRARY_PATH}"
+        "$<TARGET_FILE:protobuf::protoc>" PARENT_SCOPE)
+endfunction()
+
 # Generate protobuf cc files.
 #
 # SRCS is the output variable of the protobuf source files.
@@ -972,6 +1095,10 @@ endfunction()
 #
 #   PROTO_DEPEND <target>
 #       If the generated cc files need to depend some target this variable must be set.
+cmake_policy(PUSH)
+if (POLICY CMP0116)
+  cmake_policy(SET CMP0116 NEW)
+endif()
 function(GENERATE_PROTO_CPP SRCS HDRS TARGET_DIR)
   set(options)
   set(one_value_args SOURCE_ROOT PROTO_DEPEND)
@@ -988,6 +1115,9 @@ function(GENERATE_PROTO_CPP SRCS HDRS TARGET_DIR)
 
   set(${SRCS})
   set(${HDRS})
+
+  ds_protoc_command(_ds_protoc)
+  ds_proto_include_args(_ds_proto_include_args)
 
   # Import paths will be set per proto file in the loop below
 
@@ -1017,14 +1147,15 @@ function(GENERATE_PROTO_CPP SRCS HDRS TARGET_DIR)
     list(APPEND ${HDRS} "${_OUTPUT_DIR}/${_PROTO_NAME}.pb.h")
 
     # 3. --cpp_out 指向 TARGET_DIR (即 build/src)
-    set(_PROTO_IMPORT_ARGS -I "${CMAKE_SOURCE_DIR}/src" -I "${ARG_SOURCE_ROOT}")
+    set(_PROTO_IMPORT_ARGS -I "${CMAKE_SOURCE_DIR}/src" -I "${ARG_SOURCE_ROOT}" ${_ds_proto_include_args})
 
+    ds_proto_dependencies("${_ABS_FILE}" "${_OUTPUT_DIR}/${_PROTO_NAME}.pb.d" _dep_arg _dep_rule ${_PROTO_IMPORT_ARGS})
     add_custom_command(
             OUTPUT "${_OUTPUT_DIR}/${_PROTO_NAME}.pb.cc" "${_OUTPUT_DIR}/${_PROTO_NAME}.pb.h"
-            COMMAND ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${Protobuf_LIB_PATH}:$ENV{LD_LIBRARY_PATH}
-            $<TARGET_FILE:protobuf::protoc>
-            ARGS ${_PROTO_IMPORT_ARGS} --cpp_out=${TARGET_DIR} ${_ABS_FILE} # 注意这里用 TARGET_DIR
-            DEPENDS ${_ABS_FILE}
+            COMMAND ${_ds_protoc}
+            ARGS ${_PROTO_IMPORT_ARGS} ${_dep_arg} --cpp_out=${TARGET_DIR} ${_ABS_FILE} # 注意这里用 TARGET_DIR
+            DEPENDS ${_ABS_FILE} protobuf::protoc
+            ${_dep_rule}
             COMMENT "Running c++ protocol buffer compiler on ${_PROTO_FILE}" VERBATIM)
 
     if (ARG_PROTO_DEPEND)
@@ -1039,3 +1170,5 @@ function(GENERATE_PROTO_CPP SRCS HDRS TARGET_DIR)
   set(${SRCS} ${${SRCS}} PARENT_SCOPE)
   set(${HDRS} ${${HDRS}} PARENT_SCOPE)
 endfunction()
+
+cmake_policy(POP)

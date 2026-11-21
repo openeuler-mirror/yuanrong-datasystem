@@ -41,9 +41,25 @@ add_thirdparty_lib(Jemalloc
   TOOLCHAIN configure
   PRE_CONFIGURE ${jemalloc_AUTOGEN})
 
+if (DS_BUILD_STATIC_SDK)
+    set(JEMALLOC_INCLUDE_DIR "${Jemalloc_ROOT}/include")
+    set(JEMALLOC_PIC_LIBRARY "")
+    foreach(_libdir lib lib64)
+        if (EXISTS "${Jemalloc_ROOT}/${_libdir}/libjemalloc_pic.a")
+            set(JEMALLOC_PIC_LIBRARY "${Jemalloc_ROOT}/${_libdir}/libjemalloc_pic.a")
+            break()
+        endif()
+    endforeach()
+    if (NOT JEMALLOC_PIC_LIBRARY OR NOT EXISTS "${JEMALLOC_INCLUDE_DIR}/jemalloc/jemalloc.h")
+        message(FATAL_ERROR "Prefixed jemalloc PIC archive/headers missing under ${Jemalloc_ROOT}")
+    endif()
+    include_directories("${JEMALLOC_INCLUDE_DIR}")
+    set(ENV{LDFLAGS} "${_ORG_LD_FLAGS}")
+    return()
+endif()
+
 set(Jemalloc_DIR ${Jemalloc_ROOT})
 find_package(Jemalloc ${jemalloc_VERSION} REQUIRED)
-
 include_directories(${JEMALLOC_INCLUDE_DIR})
 
 # build jemalloc shared library

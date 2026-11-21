@@ -13,6 +13,7 @@ endif()
 project(Datasystem DESCRIPTION "DataSystem for Distributed Data Cache" LANGUAGES CXX C)
 
 # Version specified
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" DATASYSTEM_VERSION)
 add_compile_definitions(DATASYSTEM_VERSION="${DATASYSTEM_VERSION}")
 message(STATUS "Datasystem version is ${DATASYSTEM_VERSION}")
@@ -22,6 +23,10 @@ include(CheckCXXCompilerFlag)
 
 # Options for build.
 include(cmake/options.cmake)
+if (DS_BUILD_STATIC_SDK)
+    include(cmake/static-sdk/client.cmake)
+    return()
+endif()
 include(cmake/util.cmake)
 
 if (BUILD_STREAM_CACHE)

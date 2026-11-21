@@ -16,5 +16,9 @@ add_library(common_encrypt_client STATIC ${ENCRYPT_SRCS})
 target_link_libraries(common_encrypt_client PRIVATE ${ENCRYPT_DEPEND_LIBS})
 
 
-add_library(common_encrypt STATIC ${ENCRYPT_SRCS})
-target_link_libraries(common_encrypt PRIVATE ${ENCRYPT_DEPEND_LIBS})
+if (DS_BUILD_STATIC_SDK)
+    add_library(common_encrypt ALIAS common_encrypt_client)
+else()
+    add_library(common_encrypt STATIC ${ENCRYPT_SRCS})
+    target_link_libraries(common_encrypt PRIVATE ${ENCRYPT_DEPEND_LIBS})
+endif()

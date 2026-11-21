@@ -125,6 +125,9 @@ find_package(gRPC ${gRPC_VERSION} REQUIRED)
 get_property(gRPC_INCLUDE_DIR TARGET gRPC::grpc++ PROPERTY INTERFACE_INCLUDE_DIRECTORIES)
 include_directories(SYSTEM ${gRPC_INCLUDE_DIR})
 
+if (POLICY CMP0116)
+    cmake_policy(SET CMP0116 NEW)
+endif()
 # Generate gRPC protobuf cc files.
 #
 # SRCS is the output variable of the protobuf source files.
@@ -179,22 +182,22 @@ function(GENERATE_GRPC_CPP SRCS HDRS TARGET_DIR)
         get_filename_component(_PROTO_DIR  ${_PROTO_FILE} PATH)
         file(RELATIVE_PATH _REL_DIR ${ARG_SOURCE_ROOT} ${_ABS_DIR})
         file(MAKE_DIRECTORY ${TARGET_DIR}/${_REL_DIR})
-        list(APPEND ${SRCS} ${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.pb.cc)
         list(APPEND ${SRCS} ${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.grpc.pb.cc)
-        list(APPEND ${HDRS} ${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.pb.h)
         list(APPEND ${HDRS} ${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.grpc.pb.h)
-        get_property(_GRPC_CPP_PLUGIN TARGET gRPC::grpc_cpp_plugin PROPERTY IMPORTED_LOCATION_RELEASE)
+        ds_protoc_command(_ds_protoc)
+        ds_proto_include_args(_ds_proto_include_args)
+        ds_proto_dependencies("${_ABS_FILE}" "${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.grpc.d" _dep_arg _dep_rule
+            ${_PROTO_IMPORT_ARGS} ${_ds_proto_include_args} "${_PROTO_DIR}")
         add_custom_command(
             OUTPUT "${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.grpc.pb.cc" "${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.grpc.pb.h"
-            COMMAND ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${gRPC_LIB_PATH}:${Protobuf_LIB_PATH}:${absl_LIB_PATH}:$ENV{LD_LIBRARY_PATH}
-                    $<TARGET_FILE:protobuf::protoc>
-            ARGS ${_PROTO_IMPORT_ARGS}
+            COMMAND ${_ds_protoc}
+            ARGS ${_PROTO_IMPORT_ARGS} ${_ds_proto_include_args}
                  -I ${_PROTO_DIR}
-                 --grpc_out ${TARGET_DIR}
-                 --cpp_out ${TARGET_DIR}
+                 ${_dep_arg} --grpc_out ${TARGET_DIR}
                  --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
                  ${_ABS_FILE}
-            DEPENDS ${_ABS_FILE}
+            DEPENDS ${_ABS_FILE} protobuf::protoc gRPC::grpc_cpp_plugin
+            ${_dep_rule}
             COMMENT "Running c++ grpc protocol compiler on ${_PROTO_FILE}" VERBATIM)
 
         if (ARG_PROTO_DEPEND)

@@ -1,0 +1,25 @@
+--- a/src/brpc/server.cpp
++++ b/src/brpc/server.cpp
+@@ -796,2 +796,6 @@
+-static AdaptiveMaxConcurrency g_default_max_concurrency_of_method(0);
++static AdaptiveMaxConcurrency& DefaultMaxConcurrencyOfMethod() {
++    // Its constructor reads AdaptiveMaxConcurrency::UNLIMITED from another translation unit.
++    static AdaptiveMaxConcurrency value(0);
++    return value;
++}
+ static bool g_default_ignore_eovercrowded(false);
+@@ -2246,3 +2250,3 @@
+         _failed_to_set_max_concurrency_of_method = true;
+-        return g_default_max_concurrency_of_method;
++        return DefaultMaxConcurrencyOfMethod();
+     }
+@@ -2291,3 +2295,3 @@
+     _failed_to_set_max_concurrency_of_method = true;
+-    return g_default_max_concurrency_of_method;
++    return DefaultMaxConcurrencyOfMethod();
+ }
+@@ -2306,3 +2310,3 @@
+         _failed_to_set_max_concurrency_of_method = true;
+-        return g_default_max_concurrency_of_method;
++        return DefaultMaxConcurrencyOfMethod();
+     }

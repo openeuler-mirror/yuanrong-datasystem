@@ -1,6 +1,8 @@
 add_subdirectory(mmap_manager)
-add_subdirectory(cluster_query)
-add_subdirectory(cluster_admin)
+if (NOT DS_BUILD_STATIC_SDK)
+    add_subdirectory(cluster_query)
+    add_subdirectory(cluster_admin)
+endif()
 
 list(APPEND CLIENT_SRCS
         worker_api/client_worker_common_api.cpp
@@ -135,9 +137,11 @@ if (ENABLE_PERF)
     list(APPEND CLIENT_DEPEND_LIBS perf_posix_protos_client)
 endif ()
 
-# static library for ut.
 add_library(datasystem_static STATIC ${CLIENT_SRCS})
 target_link_libraries(datasystem_static PRIVATE "${CLIENT_DEPEND_LIBS}")
+if (DS_BUILD_STATIC_SDK)
+    return()
+endif()
 
 # shared library for user.
 add_library(datasystem SHARED ${CLIENT_SRCS})

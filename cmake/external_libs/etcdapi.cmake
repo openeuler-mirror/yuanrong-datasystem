@@ -17,6 +17,10 @@ generate_grpc_cpp(ETCD_GRPC_PROTO_SRCS ETCD_GRPC_PROTO_HDRS ${CMAKE_CURRENT_BINA
 
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/third_party/protos)
 
-add_library(etcdapi_proto SHARED ${ETCD_PROTO_SRCS} ${ETCD_GRPC_PROTO_SRCS})
+set(_DS_ETCD_LIBRARY_TYPE SHARED)
+if (DS_BUILD_STATIC_SDK)
+    set(_DS_ETCD_LIBRARY_TYPE STATIC)
+endif()
+add_library(etcdapi_proto ${_DS_ETCD_LIBRARY_TYPE} ${ETCD_PROTO_SRCS} ${ETCD_GRPC_PROTO_SRCS})
 target_link_libraries(etcdapi_proto ${PROTOBUF_LIBRARIES} gRPC::grpc++)
 target_include_directories(etcdapi_proto PUBLIC ${Protobuf_INCLUDE_DIRS})
