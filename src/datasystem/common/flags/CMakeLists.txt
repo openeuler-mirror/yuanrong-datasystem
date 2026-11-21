@@ -3,6 +3,7 @@ target_link_libraries(ds_flags PRIVATE nlohmann_json::nlohmann_json)
 
 set(DYNAMIC_FLAG_CONFIG_SRCS
         dynamic_flag_config.cpp
+        common_flags_strict.cpp
         common_flags_validate.cpp
         config_monitor_state.cpp
         dynamic_config_updater.cpp)

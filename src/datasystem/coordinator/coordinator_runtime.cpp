@@ -35,6 +35,7 @@
 #include "datasystem/common/signal/signal.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/validator.h"
 #include "datasystem/common/util/version.h"
 #include "datasystem/coordinator/coordinator_service_impl.h"
 
@@ -126,6 +127,15 @@ Status CoordinatorRuntime::InitAndRun(const CoordinatorOptions &options)
 
 Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
 {
+    // The coordinator .so does not link the registrar TU: register the shared-runtime validators
+    // before parsing config so rejection is atomic (no stale values on same-process retry).
+    // Same-function re-registration is a silent no-op in executable builds.
+    RegisterValidator(&FLAGS_request_sample_rate, &ValidateSampleRateRange);
+    RegisterValidator(&FLAGS_access_sample_rate, &ValidateSampleRateRange);
+    RegisterValidator(&FLAGS_diagnostic_sample_rate, &ValidateSampleRateRange);
+    RegisterValidator(&FLAGS_log_filename, &ValidateOptionalLogName);
+    RegisterValidator(&FLAGS_brpc_server_num_threads, &Validator::ValidateRpcThreadNum);
+    RegisterValidator(&FLAGS_log_monitor_interval_ms, &Validator::ValidateInt32);
     if (options != nullptr && !options->configFilePath.empty()) {
         std::string errMsg;
         CHECK_FAIL_RETURN_STATUS(
@@ -134,6 +144,8 @@ Status CoordinatorRuntime::InitAndRunInternal(const CoordinatorOptions *options)
     }
     CHECK_FAIL_RETURN_STATUS(ValidateNodeTimeoutFlags(), K_INVALID,
                              "invalid node_timeout_s/node_dead_timeout_s configuration");
+    CHECK_FAIL_RETURN_STATUS(ValidateCommonStartupFlags(), K_INVALID,
+                             "invalid common flag configuration (log sampler rates / log filename / rpc threads)");
     RETURN_IF_NOT_OK(InitWatchDispatcherBthreadPool());
 
     const std::string logFilename = FLAGS_log_filename.empty() ? "datasystem_coordinator" : FLAGS_log_filename;

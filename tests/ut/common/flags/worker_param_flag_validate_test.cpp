@@ -168,6 +168,57 @@ TEST_F(WorkerParamFlagValidateTest, ValidateNodeTimeoutFlagsRejectsInvalidCombin
     FLAGS_node_timeout_s = savedNodeTimeoutS;
     FLAGS_node_dead_timeout_s = savedNodeDeadTimeoutS;
 }
+
+TEST_F(WorkerParamFlagValidateTest, ValidateCommonStartupFlagsRejectsInvalidValues)
+{
+    const auto savedRequestSampleRate = FLAGS_request_sample_rate;
+    const auto savedAccessSampleRate = FLAGS_access_sample_rate;
+    const auto savedDiagnosticSampleRate = FLAGS_diagnostic_sample_rate;
+    const auto savedLogFilename = FLAGS_log_filename;
+    const auto savedBrpcServerNumThreads = FLAGS_brpc_server_num_threads;
+    const auto savedLogMonitorIntervalMs = FLAGS_log_monitor_interval_ms;
+
+    FLAGS_request_sample_rate = 0.5;
+    FLAGS_access_sample_rate = 0.5;
+    FLAGS_diagnostic_sample_rate = 0.5;
+    FLAGS_log_filename = "coord_log";
+    FLAGS_brpc_server_num_threads = 64;
+    FLAGS_log_monitor_interval_ms = 10000;
+    EXPECT_TRUE(ValidateCommonStartupFlags());
+
+    FLAGS_request_sample_rate = 2.0;
+    EXPECT_FALSE(ValidateCommonStartupFlags());
+    FLAGS_request_sample_rate = 0.5;
+
+    FLAGS_log_filename = "bad/name";
+    EXPECT_FALSE(ValidateCommonStartupFlags());
+    FLAGS_log_filename = "coord_log";
+
+    FLAGS_brpc_server_num_threads = -1;
+    EXPECT_FALSE(ValidateCommonStartupFlags());
+    FLAGS_brpc_server_num_threads = 64;
+
+    FLAGS_log_monitor_interval_ms = 0;
+    EXPECT_FALSE(ValidateCommonStartupFlags());
+    FLAGS_log_monitor_interval_ms = -1;
+    EXPECT_FALSE(ValidateCommonStartupFlags());
+    FLAGS_log_monitor_interval_ms = 10000;
+
+    FLAGS_request_sample_rate = 2.0;
+    FLAGS_access_sample_rate = 2.0;
+    FLAGS_diagnostic_sample_rate = 2.0;
+    FLAGS_log_filename = "bad/name";
+    FLAGS_brpc_server_num_threads = -1;
+    FLAGS_log_monitor_interval_ms = 0;
+    EXPECT_FALSE(ValidateCommonStartupFlags());
+
+    FLAGS_request_sample_rate = savedRequestSampleRate;
+    FLAGS_access_sample_rate = savedAccessSampleRate;
+    FLAGS_diagnostic_sample_rate = savedDiagnosticSampleRate;
+    FLAGS_log_filename = savedLogFilename;
+    FLAGS_brpc_server_num_threads = savedBrpcServerNumThreads;
+    FLAGS_log_monitor_interval_ms = savedLogMonitorIntervalMs;
+}
 }  // namespace
 }  // namespace ut
 }  // namespace datasystem
