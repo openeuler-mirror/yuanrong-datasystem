@@ -1104,7 +1104,16 @@ Status ExternalCluster::StartWorker(int index, std::string gFlag)
     (void)DeleteFile(rootDir + "/health");
     AppendWorkerRuntimeFlags(index, rootDir, gFlag, cmd);
     RETURN_IF_NOT_OK(AppendWorkerBackendFlags(cmd));
-    LOG(INFO) << "Launch worker [" << index << "] command: " << cmd;
+    std::string logCmd = cmd;
+    for (const std::string flag : { "-obs_access_key=", "-obs_secret_key=" }) {
+        size_t pos = 0;
+        while ((pos = logCmd.find(flag, pos)) != std::string::npos) {
+            pos += flag.size();
+            const auto end = logCmd.find(' ', pos);
+            logCmd.replace(pos, end == std::string::npos ? std::string::npos : end - pos, "******");
+        }
+    }
+    LOG(INFO) << "Launch worker [" << index << "] command: " << logCmd;
     auto workerProcess = std::make_unique<WorkerProcess>(cmd, opts_.workerConfigs[index]);
     std::string workerName = "worker_" + std::to_string(index);
     workerProcess->SetEnv({ std::make_pair("POD_NAME", workerName) });
