@@ -63,6 +63,8 @@ constexpr int FAILURE_LOG_RATE = 100;
 namespace client {
 namespace {
 constexpr int32_t PROVIDER_UB_RECOVERY_PROBE_TIMEOUT_MS = 3'000;
+// A raw provider return seen on synchronous post failure. Verify the peer before isolating it.
+constexpr int URMA_POST_ERROR_STATUS = 4096;
 // SHM-off fallback is a steady-state path (every write on a SHM-disabled same-host worker); throttle the
 // diagnostic so it does not flood the log. Matches the read-path/DataPlaneExecutor convention.
 constexpr int TRANSPORT_DIAG_LOG_RATE = 100;
@@ -577,8 +579,15 @@ void TransportLayer::PrepareLocalUbLateCompletion(ObjectBufferInfo &bufferInfo, 
 bool TransportLayer::ReportWriteTargetUbFailure(const LocalUbSenderFailureView &failure)
 {
     if (!IsClientUbFaultIsolationEnabled() || healthFilter_ == nullptr || failure.kind != AccessTransportKind::UB
-        || failure.status.IsOk() || !failure.cqeStatus.has_value()
-        || *failure.cqeStatus != URMA_REMOTE_ACK_TIMEOUT_STATUS) {
+        || failure.status.IsOk()) {
+        return false;
+    }
+    if (failure.status.GetCode() == K_URMA_ERROR && !failure.cqeStatus.has_value()
+        && (!failure.providerStatus.has_value() || failure.providerStatus == URMA_POST_ERROR_STATUS)) {
+        localUbSenderState_->RequestProbe(failure.workerAddr, ClientUbProbeScope::REMOTE_WORKER);
+        return false;
+    }
+    if (!failure.cqeStatus.has_value() || *failure.cqeStatus != URMA_REMOTE_ACK_TIMEOUT_STATUS) {
         return false;
     }
     // The WR completion observer owns CQE9 probing. The aggregate Set/MSet status is not a second observation.

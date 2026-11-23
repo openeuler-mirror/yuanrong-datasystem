@@ -204,7 +204,7 @@ public:
         std::unique_lock<bthread::Mutex> lock(setMutex);
         const int callIndex = ++setCount;
         if (result != nullptr) {
-            result->publishAttempted = true;
+            result->publishAttempted = setPublishAttempted;
         }
         setCv.notify_all();
         if (coordinateConcurrentSets) {
@@ -221,6 +221,7 @@ public:
         if (!setUbFailureReports.empty()) {
             auto &info = ObjectBufferInternal::GetMutableInfo(buffer);
             info.ubFailureReportRc = setUbFailureReports.front();
+            info.ubProviderStatus = setUbProviderStatus;
             setUbFailureReports.erase(setUbFailureReports.begin());
             if (!setUbCqeStatuses.empty()) {
                 const auto cqeStatus = setUbCqeStatuses.front();
@@ -323,11 +324,13 @@ public:
     std::vector<Status> getStatuses;
     std::optional<int> getProviderCqeStatus;
     std::vector<Status> setUbFailureReports;
+    std::optional<int> setUbProviderStatus;
     std::vector<std::optional<int>> setUbCqeStatuses;
     Status mSetUbFailureReportRc{ Status::OK() };
     std::optional<int> mSetUbCqeStatus;
     Status mSetStatus{ Status::OK() };
     bool coordinateConcurrentSets{ false };
+    bool setPublishAttempted{ true };
     bool releaseSecondSet{ false };
     bthread::Mutex setMutex;
     bthread::ConditionVariable setCv;
@@ -336,6 +339,12 @@ public:
 class FakeDataPlaneManager : public DataPlaneManager {
 public:
     FakeDataPlaneManager() : DataPlaneManager(MakeSignature(), ConnectOptions{}.fastTransportMemSize)
+    {
+    }
+
+    explicit FakeDataPlaneManager(UbHealthSummaryApplyHook verifiedHook)
+        : DataPlaneManager(MakeSignature(), ConnectOptions{}.fastTransportMemSize, {}, nullptr, false, 1, nullptr,
+                           false, true, nullptr, {}, std::move(verifiedHook))
     {
     }
 
@@ -1914,6 +1923,68 @@ TEST(TransportLayerAdmissionTest, SynchronousCqe9ReportsSafeWriteTargetReplay)
     EXPECT_FALSE(result.publishAttempted);
     EXPECT_TRUE(filter->IsWriteTargetAvailable(worker));
     EXPECT_TRUE(layer.CheckLocalUbSenderAdmission().IsOk());
+}
+
+TEST(TransportLayerAdmissionTest, SynchronousRemoteUbErrorSchedulesHealthVerification)
+{
+    const auto worker = MakeAddress(58);
+    constexpr char incarnation[] = "worker-incarnation";
+    class PostFailureDataPlaneManager final : public FakeDataPlaneManager {
+    public:
+        using FakeDataPlaneManager::FakeDataPlaneManager;
+        ~PostFailureDataPlaneManager() override { Shutdown(); }
+
+        Status QueryUbPortHealth(const HostPort &peer, const std::string &incarnation, int32_t timeoutMs,
+                                 UbHealthSummary &summary) override
+        {
+            EXPECT_EQ(peer, MakeAddress(58));
+            EXPECT_EQ(incarnation, "worker-incarnation");
+            EXPECT_EQ(timeoutMs, UB_REMOTE_PORT_HEALTH_RPC_TIMEOUT.count());
+            ++queryCount;
+            summary.worker = peer;
+            summary.incarnation = incarnation;
+            summary.epoch = 1;
+            summary.writable = false;
+            summary.portHealth = UbPortHealthSummary{ true, 4, 4, 1, false };
+            return Status::OK();
+        }
+
+        std::atomic<int> queryCount{ 0 };
+    };
+    auto filter = std::make_shared<UbHealthFilter>();
+    auto manager = std::make_shared<PostFailureDataPlaneManager>(
+        [filter](const UbHealthSummary &summary) { EXPECT_TRUE(filter->ApplySummary(summary, summary.incarnation)); });
+    ClusterTopologyPb topology;
+    (*topology.mutable_members())[worker.ToString()].set_id(incarnation);
+    filter->ApplyTopologyIncarnations(topology);
+    TestTransportLayer layer(manager, std::make_shared<FixedTransportAdvisor>(TransportHint::UB_CANDIDATE), filter,
+                             true);
+    WorkerSnapshot snapshot;
+    snapshot.ringVersion = 1;
+    snapshot.remoteTransportAddrs = { worker };
+    snapshot.workerIncarnations = { { worker, incarnation } };
+    ASSERT_TRUE(manager->UpdateWorkerSnapshot(snapshot).IsOk());
+
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(layer.Create(worker, "sync-ub-error", 4, MakeCreateParam(), buffer).IsOk());
+    ASSERT_EQ(manager->builtTransporters.size(), 1U);
+    auto transporter = manager->builtTransporters.front();
+    transporter->setUbFailureReports = { Status(K_URMA_ERROR, "synchronous UB post failed, ret=4096") };
+    transporter->setUbProviderStatus = 4096;
+    transporter->setPublishAttempted = false;
+    transporter->setStatuses = { Status(K_URMA_ERROR, "publish was not sent") };
+
+    TransportSetResult result;
+    EXPECT_EQ(layer.Set(*buffer, MakeSetParam(), result).GetCode(), K_URMA_ERROR);
+    EXPECT_FALSE(result.publishAttempted);
+    EXPECT_FALSE(result.writeTargetQuarantined);
+    EXPECT_EQ(transporter->GetSetCount(), 1);
+    EXPECT_TRUE(filter->IsWriteTargetAvailable(worker));
+    ASSERT_TRUE(manager->GetUbPortHealthQueryDeadline().has_value()) << "SET did not schedule a health query";
+    manager->RunDueUbPortHealthVerification();
+    ASSERT_TRUE(WaitUntil([&] { return filter->GetUnavailableWriteTargets() == std::vector<HostPort>{ worker }; }));
+    EXPECT_FALSE(filter->IsWriteTargetAvailable(worker));
+    EXPECT_EQ(manager->queryCount.load(), 1);
 }
 
 TEST(TransportLayerAdmissionTest, MSetCqe9ReportsSafeWriteTargetReplay)

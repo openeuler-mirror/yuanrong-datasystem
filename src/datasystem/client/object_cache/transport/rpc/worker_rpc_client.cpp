@@ -463,6 +463,9 @@ Status WorkerRpcClient::InvokeCreate(int64_t subTimeoutMs, CreateReqPb &request,
     const bool traceEnabled = IsClientLatencyTraceActive();
     const auto rpcStart = traceEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     Status rc = DoInvokeCreate(options, request, response);
+    if (response.has_ub_health_summary()) {
+        ObserveUbHealthSummary(response.ub_health_summary());
+    }
     RecordRpcTotalLatency(LatencySummaryPhase::CLIENT_RPC_CREATE_TOTAL, traceEnabled, rpcStart);
     if (rc.IsError()) {
         return WithRpcDiag(
@@ -536,6 +539,9 @@ Status WorkerRpcClient::InvokeMultiCreate(int64_t subTimeoutMs, MultiCreateReqPb
     PerfPoint perfPoint(PerfKey::CLIENT_MULTI_CREATE_IPC);
     INJECT_POINT("WorkerRpcClient.InvokeMultiCreate.beforeRpc");
     Status rc = DoInvokeMultiCreate(options, request, response);
+    if (response.has_ub_health_summary()) {
+        ObserveUbHealthSummary(response.ub_health_summary());
+    }
     if (rc.IsError()) {
         return WithRpcDiag(rc, "MultiCreate", workerAddress_);
     }

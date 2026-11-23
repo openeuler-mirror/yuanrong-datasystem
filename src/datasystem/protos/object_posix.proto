@@ -82,6 +82,7 @@ message CreateRspPb {
   UrmaRemoteAddrPb urma_info = 6;
   repeated uint32 latency_phase_us = 20;
   uint32 latency_tick_dropped_count = 21; // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
+  UbHealthSummaryPb ub_health_summary = 22;
 }
 
 message MultiCreateReqPb {
@@ -108,6 +109,7 @@ message MultiCreateReqPb {
 message MultiCreateRspPb {
   repeated CreateRspPb results = 1;
   repeated bool exists = 2;
+  UbHealthSummaryPb ub_health_summary = 3;
 }
 
 // For the meaning of the value, see 'ExistenceOpt' enum class.

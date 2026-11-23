@@ -1772,6 +1772,7 @@ bool WorkerOCServiceImpl::IsStartupReconciling() const
 Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
 {
     ScopedRequestContext ctx;
+    Raii attachHealth([this, &resp] { AttachPublishedSelfUbHealth(*this, resp); });
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_CREATE_LATENCY);
     auto admission = AcquireClientWriteAdmission();
     if (req.is_routed() && admission.GetCode() == K_SCALE_DOWN && membership_.SupportsWriteRedirect()) {
@@ -1799,6 +1800,7 @@ Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
 Status WorkerOCServiceImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreateRspPb &resp)
 {
     ScopedRequestContext ctx;
+    Raii attachHealth([this, &resp] { AttachPublishedSelfUbHealth(*this, resp); });
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_CREATE_LATENCY);
     Status returnStatus;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_MULTI_CREATE);
