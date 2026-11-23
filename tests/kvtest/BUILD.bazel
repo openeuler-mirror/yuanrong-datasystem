@@ -218,6 +218,7 @@ cc_library(
     name = "jf_lib",
     hdrs = [
         "src/common/jf_service_discovery.h",
+        "src/common/config_update_http_server.h",
         "src/vendor/httplib.h",
         "src/vendor/nlohmann_json.hpp",
     ],

@@ -1,5 +1,6 @@
 #include "common/jf_service_discovery.h"
 #include "common/jemalloc_prof.h"
+#include "common/config_update_http_server.h"
 
 #include <algorithm>
 #include <chrono>
@@ -42,6 +43,8 @@ struct Args {
     std::string configPath;
     std::string jfAddr;
     std::string serviceName = "kvcache_coordinator";
+    // 0 = disabled（默认不开启 update-config HTTP server）；显式指定端口才开启。
+    int updateConfigPort = 0;
     bool showVersion = false;
 };
 
@@ -67,6 +70,8 @@ static bool ParseArgs(int argc, char **argv, Args &args)
             args.jfAddr = next();
         else if (arg == "--service")
             args.serviceName = next();
+        else if (arg == "--update-config-port")
+            args.updateConfigPort = std::stoi(next());
         else {
             fprintf(stderr, "Unknown arg: %s\n", arg.c_str());
             return false;
@@ -145,6 +150,12 @@ int main(int argc, char **argv)
     DataWorkerOptions options;
     options.configFilePath = args.configPath;
     options.coordinatorDiscovery = discovery;
+
+    kvtest::ConfigUpdateHttpServer updateServer(args.updateConfigPort, [](const std::string &configJson) {
+        auto status = DataWorker::GetInstance()->UpdateConfig(configJson);
+        return kvtest::BuildUpdateConfigResponse(static_cast<uint32_t>(status.GetCode()), status.ToString());
+    });
+    updateServer.Start();
 
     auto status = WaitDiscoveryThenRun(options, discovery);
     if (status.IsError()) {

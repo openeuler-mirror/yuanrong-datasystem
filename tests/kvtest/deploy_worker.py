@@ -36,6 +36,7 @@ from deploy_common import (
     find_default_whl,
     get_pods,
     kubectl_exec,
+    kubectl_exec_raw,
     log_error,
     log_info,
     read_remote_log_dir,
@@ -188,11 +189,15 @@ def cmd_start_standalone(args, pods):
     def do_op(pod):
         cfg = json.loads(json.dumps(config_template))
         cfg[ADDRESS_KEY] = {'value': f'{pod["ip"]}:{args.port}'}
+        extra = ''
+        if getattr(args, 'update_config_port', 0):
+            extra = f'--update-config-port {args.update_config_port}'
         ok = False
         try:
             ok = start_service_standalone(
                 pod, args.namespace, PROCESS_NAME_STANDALONE, remote_dir,
-                args.remote_config, args.jf, args.service, '',
+                args.remote_config, args.jf, args.service,
+                extra,
                 config=cfg,
                 enable_procmon=args.enable_procmon,
                 port=args.port,
@@ -236,6 +241,45 @@ def cmd_check(args, pods):
 def cmd_exec(args, pods):
     """Execute command in pods."""
     return cmd_exec_shared(args, pods, args.timeout)
+
+
+def cmd_update_config(args, pods):
+    """POST a runtime config update to each standalone pod's /update_config endpoint.
+
+    The endpoint is served by the worker_test binary on ``--update-port``
+    (standalone mode only; dscli mode has no such endpoint). Each pod's JSON
+    response {"code":..., "message":...} is parsed; a non-zero code or an
+    unreachable endpoint marks that pod failed.
+    """
+    body = args.json
+    if args.json_file:
+        with open(args.json_file) as f:
+            body = f.read()
+    if body is None:
+        log_error('ERROR: one of --json or --json-file is required')
+        return 1
+
+    def do_op(pod):
+        curl = (
+            'curl -s -m 10 -X POST http://127.0.0.1:{port}/update_config '
+            '-H "Content-Type: application/json" --data-raw {body}'
+        ).format(port=args.update_port, body=shlex.quote(body))
+        out = kubectl_exec_raw(pod, args.namespace, curl, timeout=args.timeout)
+        name = pod['name']
+        if not out:
+            log_error(f'  {name} ({pod["ip"]}) -> endpoint unreachable')
+            return False
+        try:
+            resp = json.loads(out)
+        except ValueError:
+            log_error(f'  {name} ({pod["ip"]}) -> invalid response: {out!r}')
+            return False
+        code = resp.get('code')
+        message = resp.get('message', '')
+        log_info(f'  {name} ({pod["ip"]}) -> code={code} {message}')
+        return code == 0
+
+    return do_for_all_pods(pods, do_op, 'Updating runtime config')
 
 
 def cmd_check_commit(args, pods):
@@ -492,6 +536,8 @@ def main():
                               help='Max seconds to wait for a worker to become '
                                    'ready after launch (default: 90, matches '
                                    'dscli start). Standalone mode only.')
+    parser_start.add_argument('--update-config-port', type=int, default=0,
+                              help='Standalone config-update HTTP port (default: 0 = disabled)')
 
     # Stop subcommand
     parser_stop = subparsers.add_parser('stop', parents=[parent_parser],
@@ -531,6 +577,16 @@ def main():
                                         help='Execute command in pods')
     parser_exec.add_argument('--cmd', '-c', required=True,
                              help='Command to execute (required)')
+
+    # Update-config subcommand
+    parser_update_config = subparsers.add_parser('update-config', parents=[parent_parser],
+                                                 help='POST a runtime config update to each standalone pod')
+    parser_update_config.add_argument('--json', '-j', default=None,
+                                      help='JSON config update to POST (e.g. {"minloglevel":"2"})')
+    parser_update_config.add_argument('--json-file', default=None,
+                                      help='Read JSON config update from a file')
+    parser_update_config.add_argument('--update-port', type=int, default=31503,
+                                      help='Standalone config-update HTTP port (default: 31503)')
 
     # Check-commit subcommand
     parser_check_commit = subparsers.add_parser('check-commit', parents=[parent_parser],
@@ -650,6 +706,8 @@ def main():
                                help='Max seconds to wait for a worker to become '
                                     'ready after launch (default: 90, matches '
                                     'dscli start). Standalone mode only.')
+    parser_deploy.add_argument('--update-config-port', type=int, default=0,
+                               help='Standalone config-update HTTP port (default: 0 = disabled)')
 
     args = parser.parse_args()
 
@@ -727,6 +785,8 @@ def main():
         return cmd_check(args, pods)
     elif args.action == 'exec':
         return cmd_exec(args, pods)
+    elif args.action == 'update-config':
+        return cmd_update_config(args, pods)
     elif args.action == 'check-commit':
         return cmd_check_commit(args, pods)
     elif args.action == 'collect':
