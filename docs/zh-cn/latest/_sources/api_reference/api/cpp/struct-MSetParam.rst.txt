@@ -24,6 +24,3 @@ MSetParam
         ``ExistenceOpt::NONE`` 表示不做存在性检查；
         ``ExistenceOpt::NX`` 表示 key 不存在时写入；key 已存在时返回成功且不覆盖。重复Set同一key时需保证value一致。
 
-    .. cpp:member:: CacheType cacheType = CacheType::MEMORY
-
-        配置缓存介质，默认为内存缓存介质。

@@ -1,0 +1,1403 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="dscli命令行工具" href="dscli.html"><link rel="prev" title="部署" href="index.html">
+        <link rel="prefetch" href="../_static/logo-small.png" as="image">
+
+    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
+        <title>部署指南 - openYuanrong datasystem documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=33406c05" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  --color-brand-primary: #3498db;
+  --color-brand-content: #3498db;
+  --color-api-background: #f8f9fa;
+  --color-api-name: #2c3e50;
+  --color-api-pre-name: #2c3e50;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  --color-brand-primary: #5dade2;
+  --color-brand-content: #5dade2;
+  --color-api-background: #2d3748;
+  --color-api-name: #e2e8f0;
+  --color-api-pre-name: #e2e8f0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  --color-brand-primary: #5dade2;
+  --color-brand-content: #5dade2;
+  --color-api-background: #2d3748;
+  --color-api-name: #e2e8f0;
+  --color-api-pre-name: #e2e8f0;
+  
+      }
+    }
+  }
+</style>
+<style>
+/* 版本切换器样式 */
+.sidebar-version-switcher {
+  padding: 10px 15px;
+  border-top: 1px solid var(--color-sidebar-border);
+  border-bottom: 1px solid var(--color-sidebar-border);
+  background-color: var(--color-sidebar-background);
+}
+
+.sidebar-version-switcher-label {
+  font-size: 0.8em;
+  color: var(--color-sidebar-caption-text);
+  margin-bottom: 5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+#version-selector {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--color-brand-primary);
+  border-radius: 4px;
+  background-color: var(--color-background-primary);
+  color: var(--color-brand-primary);
+  font-size: 0.9em;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+#version-selector:hover {
+  border-color: var(--color-brand-content);
+  box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.3);
+}
+
+#version-selector:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.5);
+}
+</style>
+</head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">openYuanrong datasystem  documentation</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+<div class="sidebar-brand">
+  <a class="sidebar-brand-text" href="../index.html">
+    
+      <img src="../_static/logo-small.png" class="sidebar-logo" alt="Logo">
+    
+  </a>
+  <a href="https://gitcode.com/openeuler/yuanrong-datasystem" target="_blank" class="sidebar-brand-name">openYuanrong datasystem</a>
+</div>
+
+<!-- Version Switcher in Sidebar -->
+<div class="sidebar-version-switcher">
+  <select id="version-selector" onchange="switchVersion(this.value)">
+    <option value="https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/zh-cn/latest/">Latest</option>
+    <option value="https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/zh-cn/0.7.0/">0.7.0</option>
+    <option value="https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/zh-cn/0.6.0/">0.6.0</option>
+  </select>
+</div>
+
+<script>
+function switchVersion(url) {
+  if (url && url !== '#') {
+    // 获取当前页面路径，替换版本前缀
+    var currentPath = window.location.pathname;
+    var newUrl = url + currentPath.split('/').slice(5).join('/');
+    window.location.href = newUrl;
+  }
+}
+
+// 设置当前版本的选中状态
+document.addEventListener('DOMContentLoaded', function() {
+  var selector = document.getElementById('version-selector');
+  if (selector) {
+    var currentHref = window.location.href;
+    var options = selector.options;
+
+    for (var i = 0; i < options.length; i++) {
+      if (currentHref.includes(options[i].value)) {
+        selector.selectedIndex = i;
+        break;
+      }
+    }
+  }
+});
+</script>
+
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../index.html">概述</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../quick_start/quick_start.html">入门</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../installation/index.html">安装</a><input aria-label="Toggle navigation of 安装" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../installation/installation_linux.html">安装指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../installation/build_guide/cmake_build.html">基于Cmake自定义编译</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../installation/build_guide/bazel_build.html">基于 Bazel 自定义编译</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../installation/build_guide/build_for_bazel.html">Bazel二进制集成SDK</a></li>
+</ul>
+</li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="index.html">部署</a><input aria-label="Toggle navigation of 部署" checked="" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">部署指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dscli.html">dscli命令行工具</a></li>
+<li class="toctree-l2"><a class="reference internal" href="k8s_configuration.html">kubernetes部署配置项</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dsbench.html">dsbench性能测试工具</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="examples/index.html">示例</a><input aria-label="Toggle navigation of 示例" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="examples/deploy-glm5.1-on-a3-using-pd.html">在 Atlas 800 A3 上使用 PD 分离方式部署 GLM-5.1-w8a8</a></li>
+<li class="toctree-l3"><a class="reference internal" href="examples/dsv4flash-yr-A2-single-deployment-guide.html">基于 openYuanrong 的 DeepSeek-V4-Flash-w8a8-mtp 8机 A2 大EP PD分离部署</a></li>
+<li class="toctree-l3"><a class="reference internal" href="examples/dsv4flash-yr-maxep-guide-v0.10.html">基于 openYuanrong 的 DeepSeek-V4-Flash-w8a8-mtp 8机 A2 大EP PD分离部署</a></li>
+<li class="toctree-l3"><a class="reference internal" href="examples/glm5-dualnode-hybrid-guide.html">基于 openYuanrong 的 GLM-5 W4A8 单实例部署</a></li>
+<li class="toctree-l3"><a class="reference internal" href="examples/glm5-maxep-guide-v0.10.html">基于 openYuanrong 的 GLM-5 W8A8 8机 A2 大EP PD分离部署</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../best_practices/index.html">最佳实践</a><input aria-label="Toggle navigation of 最佳实践" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_reliabilty.html">可靠性最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_kvcache.html">vLLM Ascend使用OpenYuanrong作为多级缓存最佳实践</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../design_document/index.html">设计文档</a><input aria-label="Toggle navigation of 设计文档" class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" role="switch" type="checkbox"/><label for="toctree-checkbox-5"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../design_document/cluster_management.html">集群管理</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../design_document/shm_get_fd_passing.html">同节点多 Worker SHM Get fd-passing 方案设计</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../design_document/cann_dynamic_loading.html">CANN 运行时依赖隔离概要设计</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../design_document/cann_dynamic_loading_detailed.html">子模块：HIXL 动态加载（CANN 运行时依赖隔离）</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../design_document/dscli_cluster_member_cleanup_detailed.html">子模块：dscli 集群成员清理命令（按 worker 地址精确清理拓扑残留）</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../api_reference/index.html">API 参考</a><input aria-label="Toggle navigation of API 参考" class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" role="switch" type="checkbox"/><label for="toctree-checkbox-6"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../api_reference/example/index.html">编程示例</a><input aria-label="Toggle navigation of 编程示例" class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" role="switch" type="checkbox"/><label for="toctree-checkbox-7"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../api_reference/example/hetero.html">HeteroClient编程示例</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api_reference/example/kv.html">KVClient编程示例</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api_reference/example/object.html">ObjectClient编程示例</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../api_reference/api/index.html">API</a><input aria-label="Toggle navigation of API" class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" role="switch" type="checkbox"/><label for="toctree-checkbox-8"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../api_reference/api/python/index.html">Python</a><input aria-label="Toggle navigation of Python" class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" role="switch" type="checkbox"/><label for="toctree-checkbox-9"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.html">yr.datasystem.DsClient</a><input aria-label="Toggle navigation of yr.datasystem.DsClient" class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" role="switch" type="checkbox"/><label for="toctree-checkbox-10"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.init.html">yr.datasystem.DsClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.hetero.html">yr.datasystem.DsClient.hetero</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.kv.html">yr.datasystem.DsClient.kv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.object.html">yr.datasystem.DsClient.object</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.html">yr.datasystem.DsTensorClient</a><input aria-label="Toggle navigation of yr.datasystem.DsTensorClient" class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" role="switch" type="checkbox"/><label for="toctree-checkbox-11"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.init.html">yr.datasystem.DsTensorClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.mset_d2h.html">yr.datasystem.DsTensorClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.mget_h2d.html">yr.datasystem.DsTensorClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.async_mset_d2h.html">yr.datasystem.DsTensorClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.async_mget_h2d.html">yr.datasystem.DsTensorClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.delete.html">yr.datasystem.DsTensorClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_send.html">yr.datasystem.DsTensorClient.dev_send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_recv.html">yr.datasystem.DsTensorClient.dev_recv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.exist.html">yr.datasystem.DsTensorClient.exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_mset.html">yr.datasystem.DsTensorClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_mget.html">yr.datasystem.DsTensorClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_mget_into_tensor.html">yr.datasystem.DsTensorClient.dev_mget_into_tensor</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_local_delete.html">yr.datasystem.DsTensorClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_delete.html">yr.datasystem.DsTensorClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.async_dev_delete.html">yr.datasystem.DsTensorClient.async_dev_delete</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.html">yr.datasystem.hetero_client.HeteroClient</a><input aria-label="Toggle navigation of yr.datasystem.hetero_client.HeteroClient" class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" role="switch" type="checkbox"/><label for="toctree-checkbox-12"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.init.html">yr.datasystem.hetero_client.HeteroClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.mget_h2d.html">yr.datasystem.hetero_client.HeteroClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.mget_h2d_from_multi_buffers.html">yr.datasystem.hetero_client.HeteroClient.mget_h2d_from_multi_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.pre_register_device_memory.html">yr.datasystem.hetero_client.HeteroClient.pre_register_device_memory</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.mset_d2h.html">yr.datasystem.hetero_client.HeteroClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.mset_d2h_from_multi_buffers.html">yr.datasystem.hetero_client.HeteroClient.mset_d2h_from_multi_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.async_mget_h2d.html">yr.datasystem.hetero_client.HeteroClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.async_mset_d2h.html">yr.datasystem.hetero_client.HeteroClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.delete.html">yr.datasystem.hetero_client.HeteroClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_publish.html">yr.datasystem.hetero_client.HeteroClient.dev_publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_subscribe.html">yr.datasystem.hetero_client.HeteroClient.dev_subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_mset.html">yr.datasystem.hetero_client.HeteroClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_mget.html">yr.datasystem.hetero_client.HeteroClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_local_delete.html">yr.datasystem.hetero_client.HeteroClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_delete.html">yr.datasystem.hetero_client.HeteroClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.async_dev_delete.html">yr.datasystem.hetero_client.HeteroClient.async_dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.generate_key.html">yr.datasystem.hetero_client.HeteroClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.get_meta_info.html">yr.datasystem.hetero_client.HeteroClient.get_meta_info</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.batch_is_exist.html">yr.datasystem.hetero_client.HeteroClient.batch_is_exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.exist.html">yr.datasystem.hetero_client.HeteroClient.exist</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Blob.html">yr.datasystem.hetero_client.Blob</a><input aria-label="Toggle navigation of yr.datasystem.hetero_client.Blob" class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" role="switch" type="checkbox"/><label for="toctree-checkbox-13"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Blob.set_dev_ptr.html">yr.datasystem.hetero_client.Blob.set_dev_ptr</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Blob.set_size.html">yr.datasystem.hetero_client.Blob.set_size</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.DeviceBlobList.html">yr.datasystem.hetero_client.DeviceBlobList</a><input aria-label="Toggle navigation of yr.datasystem.hetero_client.DeviceBlobList" class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" role="switch" type="checkbox"/><label for="toctree-checkbox-14"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.DeviceBlobList.append_blob.html">yr.datasystem.hetero_client.DeviceBlobList.append_blob</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.DeviceBlobList.set_dev_idx.html">yr.datasystem.hetero_client.DeviceBlobList.set_dev_idx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.DeviceBlobList.get_blob_list.html">yr.datasystem.hetero_client.DeviceBlobList.get_blob_list</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Future.html">yr.datasystem.hetero_client.Future</a><input aria-label="Toggle navigation of yr.datasystem.hetero_client.Future" class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" role="switch" type="checkbox"/><label for="toctree-checkbox-15"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Future.get.html">yr.datasystem.hetero_client.Future.get</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.MetaInfo.html">yr.datasystem.hetero_client.MetaInfo</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.html">yr.datasystem.kv_client.KVClient</a><input aria-label="Toggle navigation of yr.datasystem.kv_client.KVClient" class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" role="switch" type="checkbox"/><label for="toctree-checkbox-16"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.init.html">yr.datasystem.kv_client.KVClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.set.html">yr.datasystem.kv_client.KVClient.set</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.set_value.html">yr.datasystem.kv_client.KVClient.set_value</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.mset.html">yr.datasystem.kv_client.KVClient.mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.mcreate.html">yr.datasystem.kv_client.KVClient.mcreate</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.mset_buffer.html">yr.datasystem.kv_client.KVClient.mset_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.mget_buffer.html">yr.datasystem.kv_client.KVClient.get_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.msettx.html">yr.datasystem.kv_client.KVClient.msettx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.get_read_only_buffers.html">yr.datasystem.kv_client.KVClient.get_read_only_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.get.html">yr.datasystem.kv_client.KVClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.read.html">yr.datasystem.kv_client.KVClient.read</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.delete.html">yr.datasystem.kv_client.KVClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.generate_key.html">yr.datasystem.kv_client.KVClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.exist.html">yr.datasystem.kv_client.KVClient.exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.expire.html">yr.datasystem.kv_client.KVClient.expire</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.health_check.html">yr.datasystem.kv_client.KVClient.health_check</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.html">yr.datasystem.kv_client.ReadOnlyBuffer</a><input aria-label="Toggle navigation of yr.datasystem.kv_client.ReadOnlyBuffer" class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" role="switch" type="checkbox"/><label for="toctree-checkbox-17"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.immutable_data.html">yr.datasystem.kv_client.ReadOnlyBuffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.rlatch.html">yr.datasystem.kv_client.ReadOnlyBuffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.unrlatch.html">yr.datasystem.kv_client.ReadOnlyBuffer.unrlatch</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.SetParam.html">yr.datasystem.kv_client.SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadParam.html">yr.datasystem.kv_client.ReadParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.ServiceAffinityPolicy.html">yr.datasystem.service_discovery.ServiceAffinityPolicy</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.ServiceDiscoveryOptions.html">yr.datasystem.service_discovery.ServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.ServiceDiscovery.html">yr.datasystem.service_discovery.ServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.CoordinatorServiceDiscoveryOptions.html">yr.datasystem.service_discovery.CoordinatorServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.CoordinatorServiceDiscovery.html">yr.datasystem.service_discovery.CoordinatorServiceDiscovery</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.html">yr.datasystem.object_client.ObjectClient</a><input aria-label="Toggle navigation of yr.datasystem.object_client.ObjectClient" class="toctree-checkbox" id="toctree-checkbox-18" name="toctree-checkbox-18" role="switch" type="checkbox"/><label for="toctree-checkbox-18"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.init.html">yr.datasystem.object_client.ObjectClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.create.html">yr.datasystem.object_client.ObjectClient.create</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.put.html">yr.datasystem.object_client.ObjectClient.put</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.get.html">yr.datasystem.object_client.ObjectClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.g_increase_ref.html">yr.datasystem.object_client.ObjectClient.g_increase_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.g_decrease_ref.html">yr.datasystem.object_client.ObjectClient.g_decrease_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.query_global_ref_num.html">yr.datasystem.object_client.ObjectClient.query_global_ref_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.generate_object_id.html">yr.datasystem.object_client.ObjectClient.generate_object_id</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.html">yr.datasystem.object_client.Buffer</a><input aria-label="Toggle navigation of yr.datasystem.object_client.Buffer" class="toctree-checkbox" id="toctree-checkbox-19" name="toctree-checkbox-19" role="switch" type="checkbox"/><label for="toctree-checkbox-19"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.wlatch.html">yr.datasystem.object_client.Buffer.wlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.unwlatch.html">yr.datasystem.object_client.Buffer.unwlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.rlatch.html">yr.datasystem.object_client.Buffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.unrlatch.html">yr.datasystem.object_client.Buffer.unrlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.mutable_data.html">yr.datasystem.object_client.Buffer.mutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.immutable_data.html">yr.datasystem.object_client.Buffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.memory_copy.html">yr.datasystem.object_client.Buffer.memory_copy</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.publish.html">yr.datasystem.object_client.Buffer.publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.seal.html">yr.datasystem.object_client.Buffer.seal</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.invalidate_buffer.html">yr.datasystem.object_client.Buffer.invalidate_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.get_size.html">yr.datasystem.object_client.Buffer.get_size</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ConsistencyType.html">yr.datasystem.object_client.ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.WriteMode.html">yr.datasystem.object_client.WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.CacheType.html">yr.datasystem.object_client.CacheType</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.html">yr.datasystem.stream_client.StreamClient</a><input aria-label="Toggle navigation of yr.datasystem.stream_client.StreamClient" class="toctree-checkbox" id="toctree-checkbox-20" name="toctree-checkbox-20" role="switch" type="checkbox"/><label for="toctree-checkbox-20"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.init.html">yr.datasystem.stream_client.StreamClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.create_producer.html">yr.datasystem.stream_client.StreamClient.create_producer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.subscribe.html">yr.datasystem.stream_client.StreamClient.subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.delete_stream.html">yr.datasystem.stream_client.StreamClient.delete_stream</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.query_global_producer_num.html">yr.datasystem.stream_client.StreamClient.query_global_producer_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.query_global_consumer_num.html">yr.datasystem.stream_client.StreamClient.query_global_consumer_num</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Producer.html">yr.datasystem.stream_client.Producer</a><input aria-label="Toggle navigation of yr.datasystem.stream_client.Producer" class="toctree-checkbox" id="toctree-checkbox-21" name="toctree-checkbox-21" role="switch" type="checkbox"/><label for="toctree-checkbox-21"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Producer.send.html">yr.datasystem.stream_client.Producer.send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Producer.close.html">yr.datasystem.stream_client.Producer.close</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.html">yr.datasystem.stream_client.Consumer</a><input aria-label="Toggle navigation of yr.datasystem.stream_client.Consumer" class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" role="switch" type="checkbox"/><label for="toctree-checkbox-22"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.receive.html">yr.datasystem.stream_client.Consumer.receive</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.receive_any.html">yr.datasystem.stream_client.Consumer.receive_any</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.ack.html">yr.datasystem.stream_client.Consumer.close</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.close.html">yr.datasystem.stream_client.Consumer.close</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.SubconfigType.html">yr.datasystem.stream_client.SubconfigType</a></li>
+</ul>
+</li>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../api_reference/api/cpp/index.html">C++</a><input aria-label="Toggle navigation of C++" class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" role="switch" type="checkbox"/><label for="toctree-checkbox-23"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/KVClientConfig.html">KVClientConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/HeteroClient.html">HeteroClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/ObjectClient.html">ObjectClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Consumer.html">Consumer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-MSetParam.html">MSetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ProducerConf.html">ProducerConf</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-SubscriptionConfig.html">SubscriptionConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-Blob.html">Blob</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-DeviceBlobList.html">DeviceBlobList</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-MetaInfo.html">MetaInfo</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-AsyncResult.html">AsyncResult</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ObjMetaInfo.html">ObjMetaInfo</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-CacheType.html">CacheType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-StreamMode.html">StreamMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-SubscriptionType.html">SubscriptionType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/SensitiveValue.html">SensitiveValue</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/StringView.html">StringView</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Optional.html">Optional</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Status.html">Status</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Future.html">Future</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-StatusCode.html">StatusCode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/IServiceDiscovery.html">IServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/ServiceDiscovery.html">ServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/ICoordinatorDiscovery.html">ICoordinatorDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/CoordinatorServiceDiscovery.html">CoordinatorServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ServiceDiscoveryOptions.html">ServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-CoordinatorServiceDiscoveryOptions.html">CoordinatorServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-ServiceAffinityPolicy.html">ServiceAffinityPolicy</a></li>
+</ul>
+</li>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../api_reference/api/java/index.html">Java</a><input aria-label="Toggle navigation of Java" class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" role="switch" type="checkbox"/><label for="toctree-checkbox-24"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.kv.KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.object.ObjectClient.html">ObjectClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.Consumer.html">Consumer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.object.Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.kv.SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.object.CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.Context.html">Context</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.DataSystemException.html">DataSystemException</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.SubscriptionType.html">SubscriptionType</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor_guide/contribution.html">贡献者指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor_guide/ai_development_workflow.html">AI 开发流程</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../appendix/index.html">附录</a><input aria-label="Toggle navigation of 附录" class="toctree-checkbox" id="toctree-checkbox-25" name="toctree-checkbox-25" role="switch" type="checkbox"/><label for="toctree-checkbox-25"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/log_guide.html">openYuanrong datasystem 日志</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/cluster_log_diagnosis_guide.html">集群日志定位指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/client_env_guide.html">Client环境变量</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/hugepage_guide.html">大页内存配置指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/brpc_health_probe.html">brpc 健康探针与诊断接口</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/trace_triage_methodology.html">DataSystem 慢时延与错误 Trace 分析方法论</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../FAQ/FAQ.html">FAQ</a></li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section class="tex2jax_ignore mathjax_ignore" id="id1">
+<h1>部署指南<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h1>
+<!-- TOC -->
+<ul class="simple">
+<li><p><a class="reference internal" href="#worker">裸进程部署worker</a></p>
+<ul>
+<li><p><a class="reference internal" href="#id2">部署环境准备</a></p></li>
+<li><p><a class="reference internal" href="#id14">集群部署</a></p>
+<ul>
+<li><p><a class="reference internal" href="#id15">单机部署</a></p></li>
+<li><p><a class="reference internal" href="#id18">多机部署</a></p></li>
+</ul>
+</li>
+<li><p><a class="reference internal" href="#id19">快速验证</a></p></li>
+<li><p><a class="reference internal" href="#id20">集群卸载</a></p>
+<ul>
+<li><p><a class="reference internal" href="#id21">单机卸载</a></p></li>
+<li><p><a class="reference internal" href="#id22">多机卸载</a></p></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p><a class="reference internal" href="#kubernetesworker">Kubernetes部署worker</a></p>
+<ul>
+<li><p><a class="reference internal" href="#id23">部署环境准备</a></p></li>
+<li><p><a class="reference internal" href="#id25">集群部署</a></p></li>
+<li><p><a class="reference internal" href="#id26">快速验证</a></p></li>
+<li><p><a class="reference internal" href="#id27">集群卸载</a></p></li>
+</ul>
+</li>
+</ul>
+<!-- /TOC -->
+<p>本文档介绍如何将openYuanrong datasystem通过裸进程或者Kubernetes的方式进行部署worker组件。</p>
+<section id="worker">
+<h2>裸进程部署worker<a class="headerlink" href="#worker" title="Link to this heading">¶</a></h2>
+<section id="id2">
+<h3>部署环境准备<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<p>openYuanrong datasystem进程部署所需的系统环境依赖如下：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>软件名称</p></th>
+<th class="head"><p>版本</p></th>
+<th class="head"><p>作用</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>openEuler</p></td>
+<td><p>22.03/24.04</p></td>
+<td><p>推荐运行openYuanrong datasystem的操作系统</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#cann">CANN</a></p></td>
+<td><p>8.5</p></td>
+<td><p>运行异构相关特性的依赖库</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#python">Python</a></p></td>
+<td><p>3.9-3.13</p></td>
+<td><p>openYuanrong datasystem dscli的使用依赖Python环境</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#dscli">dscli</a></p></td>
+<td><p>-</p></td>
+<td><p>用于部署openYuanrong datasystem的命令行工具</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#etcd">ETCD</a></p></td>
+<td><p>3.5</p></td>
+<td><p>使用 ETCD 集群管理方式时的依赖组件；使用 Coordinator 或 Metastore 时无需部署</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#ssh">SSH互信配置</a></p></td>
+<td><p>-</p></td>
+<td><p>仅多机部署需要，配置SSH互信用于机器间互相访问</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>下面给出以上依赖的安装方法。</p>
+</section>
+<section id="cann">
+<h3>安装CANN（非必须）<a class="headerlink" href="#cann" title="Link to this heading">¶</a></h3>
+<p>CANN的安装依赖Python环境，请确保您在开始安装CANN之前环境中的Python已经就绪。</p>
+<p>在<a class="reference external" href="https://www.hiascend.com/developer/download/community/result?module=cann&amp;amp;cann=8.2.RC1">Ascend官网</a>下载CANN run包，安装 run 包：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>chmod<span class="w"> </span>+x<span class="w"> </span>./Ascend-cann-toolkit_&lt;version&gt;_linux-&lt;arch&gt;.run
+./Ascend-cann-toolkit_&lt;version&gt;_linux-&lt;arch&gt;.run<span class="w"> </span>--install<span class="w"> </span>--quiet
+</pre></div>
+</div>
+<p>安装完成后，若显示如下信息，则说明软件安装成功：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>Toolkit:<span class="w">  </span>Ascend-cann-toolkit_&lt;version&gt;_linux-&lt;arch&gt;<span class="w"> </span>install<span class="w"> </span>success
+</pre></div>
+</div>
+<p>如果用户未指定安装路径，则软件会安装到默认路径下，默认安装路径如下：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>用户身份</p></th>
+<th class="head"><p>默认路径</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>root</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/usr/local/Ascend</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>非 root</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">$HOME/Ascend</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>加载环境变量（非 root 示例）：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span><span class="si">${</span><span class="nv">HOME</span><span class="si">}</span>/Ascend/ascend-toolkit/set_env.sh
+</pre></div>
+</div>
+</section>
+<section id="python">
+<h3>安装Python<a class="headerlink" href="#python" title="Link to this heading">¶</a></h3>
+<p><a class="reference external" href="https://www.python.org/">Python</a>可通过Conda进行安装。</p>
+<p>安装Miniconda：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/tmp
+curl<span class="w"> </span>-O<span class="w"> </span>https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/Miniconda3-py311_23.10.0-1-Linux-<span class="k">$(</span>arch<span class="k">)</span>.sh
+bash<span class="w"> </span>Miniconda3-py311_23.10.0-1-Linux-<span class="k">$(</span>arch<span class="k">)</span>.sh<span class="w"> </span>-b
+<span class="nb">cd</span><span class="w"> </span>-
+.<span class="w"> </span>~/miniconda3/etc/profile.d/conda.sh
+conda<span class="w"> </span>init<span class="w"> </span>bash
+</pre></div>
+</div>
+<p>安装完成后，可以为Conda设置清华源加速下载，参考<a class="reference external" href="https://mirrors.tuna.tsinghua.edu.cn/help/anaconda/">此处</a>。</p>
+<p>创建虚拟环境，以Python 3.11.4为例：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>conda<span class="w"> </span>create<span class="w"> </span>-n<span class="w"> </span>openYuanrong-datasystem_py311<span class="w"> </span><span class="nv">python</span><span class="o">=</span><span class="m">3</span>.11.4<span class="w"> </span>-y
+conda<span class="w"> </span>activate<span class="w"> </span>openYuanrong-datasystem_py311
+</pre></div>
+</div>
+<p>可以通过以下命令查看Python版本。</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>--version
+</pre></div>
+</div>
+</section>
+<section id="dscli">
+<h3>安装dscli<a class="headerlink" href="#dscli" title="Link to this heading">¶</a></h3>
+<p>dscli命令行工具集成在openYuanrong datasystem的wheel包 <code class="docutils literal notranslate"><span class="pre">openyuanrong_datasystem-&lt;version&gt;-cp311-cp311-manylinux_2_34_&lt;arch&gt;.whl</span></code>中，安装openYuanrong datasystem请参考<a class="reference internal" href="../installation/installation_linux.html"><span class="std std-doc">安装openYuanrong datasystem</span></a>。</p>
+<p>安装完成后，运行如下命令：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>-h
+</pre></div>
+</div>
+<p>如果输出dscli帮助文档说明安装成功。</p>
+</section>
+<section id="etcd">
+<h3>安装并部署ETCD<a class="headerlink" href="#etcd" title="Link to this heading">¶</a></h3>
+<section id="id3">
+<h4>1. 下载 ETCD 二进制文件<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
+<p>从 <a class="reference external" href="https://github.com/etcd-io/etcd/releases">ETCD GitHub Releases</a> 下载最新版本的二进制包：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">ETCD_VERSION</span><span class="o">=</span><span class="s2">&quot;v3.5.12&quot;</span><span class="w">  </span>
+wget<span class="w"> </span>https://github.com/etcd-io/etcd/releases/download/<span class="si">${</span><span class="nv">ETCD_VERSION</span><span class="si">}</span>/etcd-<span class="si">${</span><span class="nv">ETCD_VERSION</span><span class="si">}</span>-linux-amd64.tar.gz
+</pre></div>
+</div>
+</section>
+<section id="id4">
+<h4>2. 解压并安装<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h4>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>tar<span class="w"> </span>-xvf<span class="w"> </span>etcd-<span class="si">${</span><span class="nv">ETCD_VERSION</span><span class="si">}</span>-linux-amd64.tar.gz
+<span class="nb">cd</span><span class="w"> </span>etcd-<span class="si">${</span><span class="nv">ETCD_VERSION</span><span class="si">}</span>-linux-amd64
+<span class="c1"># 复制可执行文件到系统路径</span>
+sudo<span class="w"> </span>cp<span class="w"> </span>etcd<span class="w"> </span>etcdctl<span class="w"> </span>/usr/local/bin/
+</pre></div>
+</div>
+</section>
+<section id="id5">
+<h4>3. 验证安装<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h4>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>etcd<span class="w"> </span>--version
+etcdctl<span class="w"> </span>version
+</pre></div>
+</div>
+<p>如果能输出版本号说明安装成功。</p>
+</section>
+<section id="id6">
+<h4>4. 部署ETCD<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h4>
+<blockquote>
+<div><p>注意：
+此章节仅给出了最简单的ETCD部署方式，更多ETCD部署方式请参考<a class="reference external" href="https://etcd.io/docs/current/op-guide/clustering/">ETCD官网部署教程</a></p>
+</div></blockquote>
+<p>以部署一个端口号为 2379 的单节点ETCD为例，运行命令如下：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>etcd<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--name<span class="w"> </span>etcd-single<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--data-dir<span class="w"> </span>/tmp/etcd-data<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--listen-client-urls<span class="w"> </span>http://0.0.0.0:2379<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--advertise-client-urls<span class="w"> </span>http://0.0.0.0:2379<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--listen-peer-urls<span class="w"> </span>http://0.0.0.0:2380<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--initial-advertise-peer-urls<span class="w"> </span>http://0.0.0.0:2380<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--initial-cluster<span class="w"> </span>etcd-single<span class="o">=</span>http://0.0.0.0:2380<span class="w"> </span><span class="p">&amp;</span>
+</pre></div>
+</div>
+<p>参数说明：</p>
+<ul class="simple">
+<li><p>–name：节点名称，单机可以随便命名。</p></li>
+<li><p>–data-dir：数据存储目录。</p></li>
+<li><p>–listen-client-urls：监听客户端请求的地址（0.0.0.0 允许所有 IP 访问）。</p></li>
+<li><p>–advertise-client-urls：对外暴露的客户端访问地址。</p></li>
+<li><p>–listen-peer-urls：监听其他 etcd 节点通信的 URL（集群内部端口）。</p></li>
+<li><p>–initial-advertise-peer-urls：向其他节点宣告的访问地址（集群内部通信地址）。</p></li>
+<li><p>–initial-cluster：初始集群成员列表（格式：节点名=节点peerURL）。</p></li>
+</ul>
+<p>部署完成之后通过 <code class="docutils literal notranslate"><span class="pre">etcdctl</span></code> 命令访问 ETCD 集群验证：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>etcdctl<span class="w"> </span>--endpoints<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span><span class="w"> </span>put<span class="w"> </span>key<span class="w"> </span><span class="s2">&quot;value&quot;</span>
+etcdctl<span class="w"> </span>--endpoints<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span><span class="w"> </span>get<span class="w"> </span>key
+</pre></div>
+</div>
+<p>命令行操作能正常写入/读取数据说明部署ETCD成功。</p>
+</section>
+</section>
+<section id="coordinator">
+<h3>安装并部署Coordinator<a class="headerlink" href="#coordinator" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">datasystem_coordinator</span></code> 和 <code class="docutils literal notranslate"><span class="pre">dscli</span></code> 随 openYuanrong datasystem 完整发行版安装，无需额外安装第三方协调组件。安装 openYuanrong datasystem 和 dscli 的方法参见<a class="reference internal" href="#dscli">安装dscli</a>。</p>
+<p>Coordinator 支持快速部署和通过配置项部署两种方式。</p>
+<section id="id7">
+<h4>快速部署<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h4>
+<p>指定 Coordinator 服务地址并启动：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--coordinator_args<span class="w"> </span>--coordinator_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31511&quot;</span>
+<span class="c1"># [INFO] [  OK  ] Start coordinator service @ 127.0.0.1:31511 success, PID: 38100</span>
+</pre></div>
+</div>
+<p>输出 OK 说明 Coordinator 部署成功。</p>
+<p>通过服务地址停止 Coordinator：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>--coordinator_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31511&quot;</span>
+</pre></div>
+</div>
+</section>
+<section id="id8">
+<h4>通过配置项部署<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h4>
+<p>生成配置模板：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>generate_config<span class="w"> </span>-o<span class="w"> </span>./
+<span class="c1"># [INFO] Configuration file cluster_config.json has been generated to /home/test/cluster_config.json</span>
+<span class="c1"># [INFO] Configuration file worker_config.json has been generated to /home/test/worker_config.json</span>
+<span class="c1"># [INFO] Configuration file coordinator_config.json has been generated to /home/test/coordinator_config.json</span>
+<span class="c1"># [INFO] Configuration generation completed successfully</span>
+</pre></div>
+</div>
+<p>按需修改 <code class="docutils literal notranslate"><span class="pre">coordinator_config.json</span></code> 中的 Coordinator 服务地址：</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;coordinator_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;127.0.0.1:31511&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>使用配置文件启动 Coordinator：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--coordinator_config_path<span class="w"> </span>./coordinator_config.json
+<span class="c1"># [INFO] [  OK  ] Start coordinator service @ 127.0.0.1:31511 success, PID: 38100</span>
+</pre></div>
+</div>
+<p>输出 OK 说明 Coordinator 部署成功。</p>
+<p>使用同一配置文件停止 Coordinator：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>stop<span class="w"> </span>--config_path<span class="w"> </span>./coordinator_config.json
+</pre></div>
+</div>
+<p>Coordinator 的完整启停方式和配置项说明参见 <a class="reference internal" href="dscli.html#openyuanrong-datasystemcoordinator"><span class="std std-ref">使用Coordinator部署</span></a>和 <a class="reference internal" href="dscli.html#id23"><span class="std std-ref">Coordinator配置项</span></a>。</p>
+</section>
+<section id="id9">
+<h4>Coordinator 多节点部署<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h4>
+<p>如需部署多个 Coordinator 并启用 Raft 选主，使用 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_initial_peers</span></code> 配置静态初始成员列表。该参数为空时，Coordinator 按单节点无选主模式启动；配置多个 <code class="docutils literal notranslate"><span class="pre">host:port</span></code> 成员时，各 Coordinator 节点必须使用相同的 peers 列表、本机唯一的 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code>，并为 <code class="docutils literal notranslate"><span class="pre">coordinator_raft_data_dir</span></code> 配置节点独占的本地目录。首次启动多个 Coordinator 时，应并发或近同时启动各节点，避免只启动单个节点后长时间等待。详细三节点示例参见 <a class="reference internal" href="dscli.html#id11"><span class="std std-ref">Coordinator 多节点部署</span></a>。</p>
+</section>
+</section>
+<section id="ssh">
+<h3>SSH互信配置<a class="headerlink" href="#ssh" title="Link to this heading">¶</a></h3>
+<p>SSH互信可以让服务器之间无需密码即可登录，多机集群部署必须配置SSH互信，步骤如下：</p>
+<section id="id10">
+<h4>1. 安装SSH服务<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h4>
+<p>确保所有需要配置互信的服务器上都已经安装并运行了SSH服务：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sudo<span class="w"> </span>yum<span class="w"> </span>install<span class="w"> </span>openssh-server<span class="w">     </span>
+sudo<span class="w"> </span>systemctl<span class="w"> </span>start<span class="w"> </span>sshd
+sudo<span class="w"> </span>systemctl<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>sshd
+</pre></div>
+</div>
+</section>
+<section id="id11">
+<h4>2. 生成SSH密钥对（在所有节点上执行）<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h4>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ssh-keygen<span class="w"> </span>-t<span class="w"> </span>rsa<span class="w"> </span>-b<span class="w"> </span><span class="m">4096</span>
+</pre></div>
+</div>
+<p>按Enter接受默认位置（~/.ssh/id_rsa），然后设置空密码（直接按Enter两次）。</p>
+</section>
+<section id="id12">
+<h4>3. 将公钥复制到所有节点<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h4>
+<p>在主节点上查看公钥：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cat<span class="w"> </span>~/.ssh/id_rsa.pub
+</pre></div>
+</div>
+<p>将显示的公钥内容添加到所有节点的<code class="docutils literal notranslate"><span class="pre">~/.ssh/authorized_keys</span></code>文件中：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>mkdir<span class="w"> </span>-p<span class="w"> </span>~/.ssh
+chmod<span class="w"> </span><span class="m">700</span><span class="w"> </span>~/.ssh
+touch<span class="w"> </span>~/.ssh/authorized_keys
+chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>~/.ssh/authorized_keys
+<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;公钥内容&quot;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>~/.ssh/authorized_keys
+</pre></div>
+</div>
+</section>
+<section id="id13">
+<h4>4. 测试SSH互信<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h4>
+<p>从一个节点尝试SSH到其他节点，不需要输入密码：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ssh<span class="w"> </span>username@hostname
+</pre></div>
+</div>
+<p>当无需密码能够正常跳转到其他节点时说明SSH互信配置成功。</p>
+</section>
+</section>
+<section id="id14">
+<h3>集群部署<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
+<p>本节介绍 Worker 对接 ETCD 或 Coordinator 的单机和多机部署方式。两种方式只能选择其一：</p>
+<ul class="simple">
+<li><p>选择 ETCD：部署前先完成<a class="reference internal" href="#etcd">安装并部署ETCD</a>，并确认 Worker 使用 <code class="docutils literal notranslate"><span class="pre">etcd_address</span></code>。</p></li>
+<li><p>选择 Coordinator：部署前先完成<a class="reference internal" href="#coordinator">安装并部署Coordinator</a>，并确认 Worker 使用 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code>。</p></li>
+</ul>
+<p>Worker 的 <code class="docutils literal notranslate"><span class="pre">coordinator_address</span></code>、<code class="docutils literal notranslate"><span class="pre">etcd_address</span></code>、<code class="docutils literal notranslate"><span class="pre">metastore_address</span></code> 必须且只能配置一个；请不要同时配置 ETCD 与 Coordinator。</p>
+<section id="id15">
+<h4>单机部署<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h4>
+<p>单机部署支持快速部署和通过配置项部署两种方式。</p>
+<section id="id16">
+<h5>快速部署<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h5>
+<ul>
+<li><p>对接 ETCD</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--worker_args<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--etcd_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
+<span class="c1"># [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100</span>
+</pre></div>
+</div>
+</li>
+<li><p>对接 Coordinator</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--worker_args<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span><span class="w"> </span>--coordinator_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31511&quot;</span>
+<span class="c1"># [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100</span>
+</pre></div>
+</div>
+</li>
+</ul>
+<p>输出 OK 说明 Worker 部署成功。更多快速部署方式参见 dscli 的 <a class="reference internal" href="dscli.html#openyuanrong-datasystemetcd"><span class="std std-ref">ETCD部署</span></a>和 <a class="reference internal" href="dscli.html#openyuanrong-datasystemcoordinator"><span class="std std-ref">Coordinator部署</span></a>章节。</p>
+</section>
+<section id="id17">
+<h5>通过配置项部署<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h5>
+<p>生成配置模板：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>generate_config<span class="w"> </span>-o<span class="w"> </span>./
+<span class="c1"># [INFO] Configuration file cluster_config.json has been generated to /home/test/cluster_config.json</span>
+<span class="c1"># [INFO] Configuration file worker_config.json has been generated to /home/test/worker_config.json</span>
+<span class="c1"># [INFO] Configuration file coordinator_config.json has been generated to /home/test/coordinator_config.json</span>
+<span class="c1"># [INFO] Configuration generation completed successfully</span>
+</pre></div>
+</div>
+<p>根据集群管理后端修改 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code>，并确保另外两个后端地址为空。</p>
+<ul>
+<li><p>对接 ETCD</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;etcd_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</li>
+<li><p>对接 Coordinator</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;coordinator_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;127.0.0.1:31511&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</li>
+</ul>
+<p>配置完成后，启动 Worker：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>start<span class="w"> </span>--worker_config_path<span class="w"> </span>./worker_config.json
+<span class="c1"># [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100</span>
+</pre></div>
+</div>
+<p>输出 OK 说明 Worker 部署成功。更多配置项部署方式参见 dscli 的 <a class="reference internal" href="dscli.html#openyuanrong-datasystemetcd"><span class="std std-ref">ETCD部署</span></a>和 <a class="reference internal" href="dscli.html#openyuanrong-datasystemcoordinator"><span class="std std-ref">Coordinator部署</span></a>章节。</p>
+</section>
+</section>
+<section id="id18">
+<h4>多机部署<a class="headerlink" href="#id18" title="Link to this heading">¶</a></h4>
+<p>在当前目录生成 <code class="docutils literal notranslate"><span class="pre">cluster_config.json</span></code>、<code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 和 <code class="docutils literal notranslate"><span class="pre">coordinator_config.json</span></code>：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>generate_config<span class="w"> </span>-o<span class="w"> </span>./
+<span class="c1"># [INFO] Configuration file cluster_config.json has been generated to /home/test/cluster_config.json</span>
+<span class="c1"># [INFO] Configuration file worker_config.json has been generated to /home/test/worker_config.json</span>
+<span class="c1"># [INFO] Configuration file coordinator_config.json has been generated to /home/test/coordinator_config.json</span>
+<span class="c1"># [INFO] Configuration generation completed successfully</span>
+</pre></div>
+</div>
+<p>编辑 <code class="docutils literal notranslate"><span class="pre">cluster_config.json</span></code>：</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// ssh互信</span>
+<span class="w">    </span><span class="nt">&quot;ssh_auth&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">&quot;ssh_private_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;~/.ssh/id_rsa&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">&quot;ssh_user_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;test_user&quot;</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="c1">// Worker配置文件，在第一步生成</span>
+<span class="w">    </span><span class="nt">&quot;worker_config_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;./worker_config.json&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;worker_nodes&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s2">&quot;127.0.0.2&quot;</span>
+<span class="w">    </span><span class="p">],</span>
+<span class="w">    </span><span class="nt">&quot;worker_port&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">31501</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>根据集群管理后端修改 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code>，该配置会应用到所有 Worker。</p>
+<ul>
+<li><p>对接 ETCD</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;etcd_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;127.0.0.1:2379&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</li>
+<li><p>对接 Coordinator</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;coordinator_address&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;127.0.0.1:31511&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</li>
+</ul>
+<p>确保另外两个后端地址为空，然后部署 Worker 集群：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>up<span class="w"> </span>-f<span class="w"> </span>./cluster_config.json
+<span class="c1"># [INFO] Start worker service @ 127.0.0.1:31501 success.</span>
+<span class="c1"># [INFO] Start worker service @ 127.0.0.2:31501 success.</span>
+</pre></div>
+</div>
+<p>当输出如上信息时，说明 Worker 集群部署成功。</p>
+<blockquote>
+<div><p>注意事项：</p>
+<ul class="simple">
+<li><p>对接 Coordinator 时，本节只部署 Worker，不会启动 Coordinator。请提前按照<a class="reference internal" href="#coordinator">安装并部署Coordinator</a>完成 Coordinator 部署。</p></li>
+<li><p>多机集群部署依赖节点间的 SSH 互信，具体操作参见<a class="reference internal" href="#ssh">SSH互信配置</a>。</p></li>
+<li><p>所有部署节点都需要安装 dscli，安装方法参见<a class="reference internal" href="#dscli">安装dscli</a>。</p></li>
+</ul>
+</div></blockquote>
+<p>更多配置项部署方式参见 dscli 的 <a class="reference internal" href="dscli.html#openyuanrong-datasystemetcd"><span class="std std-ref">ETCD部署</span></a>和 <a class="reference internal" href="dscli.html#openyuanrong-datasystemcoordinator"><span class="std std-ref">Coordinator部署</span></a>章节。</p>
+</section>
+</section>
+<section id="id19">
+<h3>快速验证<a class="headerlink" href="#id19" title="Link to this heading">¶</a></h3>
+<p>Python 脚本快速验证：</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">yr.datasystem.ds_client</span><span class="w"> </span><span class="kn">import</span> <span class="n">DsClient</span>
+
+<span class="n">client</span> <span class="o">=</span> <span class="n">DsClient</span><span class="p">(</span><span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span> <span class="mi">31501</span><span class="p">)</span>
+<span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>当脚本执行未发生异常时说明openYuanrong datasystem的客户端能正常连接上当前节点的ds-worker，部署成功。</p>
+</section>
+<section id="id20">
+<h3>集群卸载<a class="headerlink" href="#id20" title="Link to this heading">¶</a></h3>
+<section id="id21">
+<h4>单机卸载<a class="headerlink" href="#id21" title="Link to this heading">¶</a></h4>
+<p>单机集群卸载有两种方式：快速卸载以及通过配置项卸载</p>
+<ul>
+<li><p>卸载快速部署的集群</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 卸载指定ds-worker IP的集群</span>
+dscli<span class="w"> </span>stop<span class="w"> </span>--worker_address<span class="w"> </span><span class="s2">&quot;127.0.0.1:31501&quot;</span>
+<span class="c1"># [INFO] [  OK  ] Stop worker service @ 127.0.0.1:31501 normally, PID: 38100</span>
+</pre></div>
+</div>
+<p>当命令输出的日志为OK时说明卸载成功。</p>
+</li>
+<li><p>卸载配置项部署的集群</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 卸载使用配置项部署的集群</span>
+dscli<span class="w"> </span>stop<span class="w"> </span>--config_path<span class="w"> </span>./worker_config.json
+<span class="c1"># [INFO] [  OK  ] Stop worker service @ 127.0.0.1:31501 normally, PID: 38100</span>
+</pre></div>
+</div>
+<p>输出OK说明卸载成功。</p>
+</li>
+</ul>
+</section>
+<section id="id22">
+<h4>多机卸载<a class="headerlink" href="#id22" title="Link to this heading">¶</a></h4>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>down<span class="w"> </span>-f<span class="w"> </span>./cluster_config.json<span class="w">                     </span>
+<span class="c1"># [INFO] Stop worker service @ 127.0.0.1:31501 success.</span>
+<span class="c1"># [INFO] Stop worker service @ 127.0.0.2:31501 success.</span>
+</pre></div>
+</div>
+<p>当输出如上信息时说明集群卸载成功。</p>
+</section>
+</section>
+</section>
+<section id="kubernetesworker">
+<h2>Kubernetes部署worker<a class="headerlink" href="#kubernetesworker" title="Link to this heading">¶</a></h2>
+<section id="id23">
+<h3>部署环境准备<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h3>
+<p>openYuanrong datasystem Kubernetes部署所需的依赖如下：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>软件名称</p></th>
+<th class="head"><p>推荐版本</p></th>
+<th class="head"><p>作用</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>openEuler</p></td>
+<td><p>22.03</p></td>
+<td><p>支持运行Kubernetes与Docker的操作系统</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#kubectl">kubectl</a></p></td>
+<td><p>-</p></td>
+<td><p>Kubernetes命令行工具，用于与Kubernetes集群交互</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#kubernetes">Kubernetes</a></p></td>
+<td><p>-</p></td>
+<td><p>Kubernetes集群，用于编排和管理openYuanrong datasystem的容器</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#helm">Helm</a></p></td>
+<td><p>-</p></td>
+<td><p>支持openYuanrong datasystem Kubernetes工程化部署的核心工具</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#docker">Docker</a></p></td>
+<td><p>-</p></td>
+<td><p>提供容器化平台，支持openYuanrong datasystem容器化部署和运行</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#etcd">ETCD</a></p></td>
+<td><p>3.5</p></td>
+<td><p>openYuanrong datasystem集群管理依赖组件</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#openyuanrong-datasystem">openYuanrong datasystem镜像</a></p></td>
+<td><p>-</p></td>
+<td><p>openYuanrong datasystem服务端组件镜像</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#openyuanrong-datasystem-helm-chart">openYuanrong datasystem helm chart</a></p></td>
+<td><p>-</p></td>
+<td><p>openYuanrong datasystem helm chart包</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>下面给出以上软件的获取及安装方法。</p>
+<section id="kubectl">
+<h4>安装kubectl<a class="headerlink" href="#kubectl" title="Link to this heading">¶</a></h4>
+<p>安装详情请参考官方文档：<a class="reference external" href="https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/">Install and Set Up kubectl on Linux</a></p>
+</section>
+<section id="kubernetes">
+<h4>安装Kubernetes<a class="headerlink" href="#kubernetes" title="Link to this heading">¶</a></h4>
+<p>安装详情请参考官方文档：<a class="reference external" href="https://kubernetes.io/zh-cn/docs/setup/production-environment/tools/">使用部署工具安装 Kubernetes</a></p>
+</section>
+<section id="helm">
+<h4>安装Helm<a class="headerlink" href="#helm" title="Link to this heading">¶</a></h4>
+<p>安装详情请参考官方文档：<a class="reference external" href="https://helm.sh/docs/intro/install/">Installing Helm</a></p>
+</section>
+<section id="docker">
+<h4>安装Docker<a class="headerlink" href="#docker" title="Link to this heading">¶</a></h4>
+<p>安装详情请参考官方文档：<a class="reference external" href="https://docs.docker.com/engine/install/">Install Docker Engine</a></p>
+</section>
+<section id="id24">
+<h4>安装并部署ETCD<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h4>
+<p>安装详情请参考 <a class="reference internal" href="#etcd">安装并部署ETCD</a> 章节。</p>
+</section>
+<section id="openyuanrong-datasystem">
+<h4>获取openYuanrong datasystem镜像<a class="headerlink" href="#openyuanrong-datasystem" title="Link to this heading">¶</a></h4>
+<ul>
+<li><p>源码编译构建镜像</p>
+<p>如果需要从源码构建镜像，需要先完成 <a class="reference internal" href="../installation/installation_linux.html"><span class="std std-doc">源码编译</span></a>。源码编译完成之后执行如下命令：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>yuanrong-datasystem/k8s/docker
+bash<span class="w"> </span>docker_build.sh<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-b<span class="w"> </span>&lt;base_image_name&gt;:&lt;base_image_tag&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-n<span class="w"> </span>&lt;image_name&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-t<span class="w"> </span>&lt;image_tag&gt;
+</pre></div>
+</div>
+<p>参数说明：</p>
+<ul class="simple">
+<li><p>base_image_name: 基础镜像名</p></li>
+<li><p>base_image_tag: 基础镜像Tag</p></li>
+<li><p>image_name: 生成的镜像名</p></li>
+<li><p>image_tag: 生成的镜像Tag</p></li>
+</ul>
+<p>执行完成之后会在yuanrong-datasystem/k8s/docker目录下生成一个build目录，build目录中会生成一个 <code class="docutils literal notranslate"><span class="pre">datasystem.tar</span></code> 文件，即为镜像压缩文件；与此同时本地的docker仓库中也会保存 <code class="docutils literal notranslate"><span class="pre">&lt;image_name&gt;:&lt;image_tag&gt;</span></code> 的镜像。</p>
+</li>
+</ul>
+</section>
+<section id="openyuanrong-datasystem-helm-chart">
+<h4>获取openYuanrong datasystem helm chart包<a class="headerlink" href="#openyuanrong-datasystem-helm-chart" title="Link to this heading">¶</a></h4>
+<ul>
+<li><p>通过 dscli 命令行工具获取：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>dscli<span class="w"> </span>generate_helm_chart<span class="w"> </span>-o<span class="w"> </span>/tmp
+</pre></div>
+</div>
+<p>请注意命令运行成功后会在”/tmp”目录下生成helm chart目录。</p>
+</li>
+<li><p>通过源码获取：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>-b<span class="w"> </span><span class="si">${</span><span class="nv">version</span><span class="si">}</span><span class="w"> </span>https://gitcode.com/openeuler/yuanrong-datasystem.git
+cp<span class="w"> </span>-r<span class="w"> </span>yuanrong-datasystem/docker/chart/datasystem<span class="w"> </span>/tmp
+</pre></div>
+</div>
+</li>
+</ul>
+</section>
+</section>
+<section id="id25">
+<h3>集群部署<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h3>
+<p>openYuanrong datasystem通过 <code class="docutils literal notranslate"><span class="pre">/tmp/datasystem/values.yaml</span></code> 文件进行集群相关配置，其中必配项如下：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="c1"># 其他配置项...</span>
+
+<span class="w">  </span><span class="c1"># 镜像仓地址，不涉及可以留空</span>
+<span class="w">  </span><span class="nt">imageRegistry</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">  </span><span class="c1"># 镜像名字和镜像tag，&lt;VERSION&gt;需要替换为对应的版本号</span>
+<span class="w">  </span><span class="nt">images</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">datasystem</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openyuanrong-datasystem:0.5.0&quot;</span>
+<span class="w">  </span><span class="c1"># ETCD相关配置</span>
+<span class="w">  </span><span class="nt">etcd</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">etcdAddress</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;127.0.0.1:2379&quot;</span>
+</pre></div>
+</div>
+<blockquote>
+<div><p>注意事项：</p>
+<ul class="simple">
+<li><p>镜像仓地址与镜像名称获取请参考：[获取openYuanrong datasystem镜像](#获取openYuanrong datasystem镜像)。</p></li>
+<li><p>ETCD集群的部署与IP地址获取请参考：<a class="reference internal" href="#etcd">安装并部署ETCD</a>。</p></li>
+</ul>
+</div></blockquote>
+<p>配置完成后，通过 helm 命令即可轻松完成部署，命令如下：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>helm<span class="w"> </span>install<span class="w"> </span>yr_datasystem<span class="w"> </span>/tmp/datasystem
+<span class="c1"># NAME: yr_datasystem</span>
+<span class="c1"># LAST DEPLOYED: Tue Apr 22 14:31:34 2025</span>
+<span class="c1"># NAMESPACE: default</span>
+<span class="c1"># STATUS: deployed</span>
+<span class="c1"># REVISION: 1</span>
+<span class="c1"># TEST SUITE: None</span>
+</pre></div>
+</div>
+<p>部署后可以通过 kubectl 命令查看集群状态：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-o<span class="w"> </span>wide
+<span class="c1"># NAME                   READY   STATUS       RESTARTS      AGE    IP           NODE </span>
+<span class="c1"># ...</span>
+<span class="c1"># ds-worker-5cw42        1/1     Running      1 (2s ago)    13s   127.0.0.1   Running</span>
+<span class="c1"># ds-worker-4wv63        1/1     Running      1 (10s ago)   23s   127.0.0.2   Running</span>
+</pre></div>
+</div>
+<p>当Pod处于Running状态时说明Pod处于就绪状态，可以正常对外提供服务，部署成功。</p>
+<p>更多部署参数配置请参考：<a class="reference internal" href="k8s_configuration.html"><span class="std std-doc">Kubernetes配置项</span></a></p>
+</section>
+<section id="id26">
+<h3>快速验证<a class="headerlink" href="#id26" title="Link to this heading">¶</a></h3>
+<p>openYuanrong datasystem会默认以DaemonSet的方式在每个节点都部署一个 <code class="docutils literal notranslate"><span class="pre">ds-worker</span></code> Pod，默认监听 <code class="docutils literal notranslate"><span class="pre">&lt;主机IP&gt;:31501</span></code>，可通过如下 Python 脚本快速验证：</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">yr.datasystem.ds_client</span><span class="w"> </span><span class="kn">import</span> <span class="n">DsClient</span>
+
+<span class="n">client</span> <span class="o">=</span> <span class="n">DsClient</span><span class="p">(</span><span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span> <span class="mi">31501</span><span class="p">)</span>
+<span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>当脚本执行未发生异常时说明openYuanrong datasystem的客户端能正常连接上当前节点的 <code class="docutils literal notranslate"><span class="pre">ds-worker</span></code> Pod，部署成功。</p>
+</section>
+<section id="id27">
+<h3>集群卸载<a class="headerlink" href="#id27" title="Link to this heading">¶</a></h3>
+<p>集群通过 helm 命令即可轻松完成卸载，卸载命令如下：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>helm<span class="w"> </span>uninstall<span class="w"> </span>yr_datasystem
+</pre></div>
+</div>
+<p>执行完命令后通过 kubectl 命令再次查看集群状态：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-o<span class="w"> </span>wide
+<span class="c1"># NAME                   READY   STATUS       RESTARTS      AGE    IP           NODE </span>
+<span class="c1"># Pod列表中不存在ds-worker Pod</span>
+</pre></div>
+</div>
+<p>当openYuanrong datasystem所有的ds-worker Pod都退出时说明集群卸载成功。</p>
+</section>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="dscli.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">dscli命令行工具</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="index.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">部署</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2026, openEuler openYuanrong datasystem
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">部署指南</a><ul>
+<li><a class="reference internal" href="#worker">裸进程部署worker</a><ul>
+<li><a class="reference internal" href="#id2">部署环境准备</a></li>
+<li><a class="reference internal" href="#cann">安装CANN（非必须）</a></li>
+<li><a class="reference internal" href="#python">安装Python</a></li>
+<li><a class="reference internal" href="#dscli">安装dscli</a></li>
+<li><a class="reference internal" href="#etcd">安装并部署ETCD</a><ul>
+<li><a class="reference internal" href="#id3">1. 下载 ETCD 二进制文件</a></li>
+<li><a class="reference internal" href="#id4">2. 解压并安装</a></li>
+<li><a class="reference internal" href="#id5">3. 验证安装</a></li>
+<li><a class="reference internal" href="#id6">4. 部署ETCD</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#coordinator">安装并部署Coordinator</a><ul>
+<li><a class="reference internal" href="#id7">快速部署</a></li>
+<li><a class="reference internal" href="#id8">通过配置项部署</a></li>
+<li><a class="reference internal" href="#id9">Coordinator 多节点部署</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#ssh">SSH互信配置</a><ul>
+<li><a class="reference internal" href="#id10">1. 安装SSH服务</a></li>
+<li><a class="reference internal" href="#id11">2. 生成SSH密钥对（在所有节点上执行）</a></li>
+<li><a class="reference internal" href="#id12">3. 将公钥复制到所有节点</a></li>
+<li><a class="reference internal" href="#id13">4. 测试SSH互信</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id14">集群部署</a><ul>
+<li><a class="reference internal" href="#id15">单机部署</a><ul>
+<li><a class="reference internal" href="#id16">快速部署</a></li>
+<li><a class="reference internal" href="#id17">通过配置项部署</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id18">多机部署</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id19">快速验证</a></li>
+<li><a class="reference internal" href="#id20">集群卸载</a><ul>
+<li><a class="reference internal" href="#id21">单机卸载</a></li>
+<li><a class="reference internal" href="#id22">多机卸载</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><a class="reference internal" href="#kubernetesworker">Kubernetes部署worker</a><ul>
+<li><a class="reference internal" href="#id23">部署环境准备</a><ul>
+<li><a class="reference internal" href="#kubectl">安装kubectl</a></li>
+<li><a class="reference internal" href="#kubernetes">安装Kubernetes</a></li>
+<li><a class="reference internal" href="#helm">安装Helm</a></li>
+<li><a class="reference internal" href="#docker">安装Docker</a></li>
+<li><a class="reference internal" href="#id24">安装并部署ETCD</a></li>
+<li><a class="reference internal" href="#openyuanrong-datasystem">获取openYuanrong datasystem镜像</a></li>
+<li><a class="reference internal" href="#openyuanrong-datasystem-helm-chart">获取openYuanrong datasystem helm chart包</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id25">集群部署</a></li>
+<li><a class="reference internal" href="#id26">快速验证</a></li>
+<li><a class="reference internal" href="#id27">集群卸载</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=6dbb43f8"></script>
+    <script>let toggleHintShow = 'Click to show';</script>
+    <script>let toggleHintHide = 'Click to hide';</script>
+    <script>let toggleOpenOnPrint = 'true';</script>
+    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
+    <script src="../_static/custom.js?v=f6e2bf52"></script>
+    </body>
+</html>

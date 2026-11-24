@@ -30,8 +30,6 @@ yr.datasystem.object_client.Buffer
          - 将 `value` 中的数据拷贝到Buffer中
        * - :doc:`publish <yr.datasystem.object_client.Buffer.publish>`
          - 将Buffer中的数据发布到数据系统中。
-       * - :doc:`seal <yr.datasystem.object_client.Buffer.seal>`
-         - 将Buffer中的数据发布到数据系统中，发布成功之后Buffer所对应的对象的值将无法再被修改。
        * - :doc:`invalidate_buffer <yr.datasystem.object_client.Buffer.invalidate_buffer>`
          - 使当前主机上的Buffer数据无效化。
        * - :doc:`get_size <yr.datasystem.object_client.Buffer.get_size>`
@@ -49,6 +47,5 @@ yr.datasystem.object_client.Buffer
     yr.datasystem.object_client.Buffer.immutable_data
     yr.datasystem.object_client.Buffer.memory_copy
     yr.datasystem.object_client.Buffer.publish
-    yr.datasystem.object_client.Buffer.seal
     yr.datasystem.object_client.Buffer.invalidate_buffer
     yr.datasystem.object_client.Buffer.get_size

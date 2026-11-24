@@ -398,7 +398,7 @@ lscpu | grep -i numa
 
 在RH2D场景支持批量化获取，在这个基础上通过启用worker到worker的对象数据批量获取可以进一步减少请求耗时。
 
-部署时开启worker到worker的对象数据批量获取的命令如下：
+worker 到 worker 的对象数据批量获取已默认启用，部署命令如下：
 
 ::::{tab-set}
 
@@ -409,8 +409,7 @@ dscli start -w \
     --worker_address "${node_address}" \
     --etcd_address "${etcd_address}" \
     --arena_per_tenant 1 \
-    --remote_h2d_device_ids "0" \
-    --enable_worker_worker_batch_get true
+    --remote_h2d_device_ids "0"
 ```
 
 :::

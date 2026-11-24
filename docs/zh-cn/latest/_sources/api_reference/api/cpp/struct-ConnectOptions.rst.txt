@@ -67,10 +67,6 @@ ConnectOptions
 
         租户 ID。默认值：""
 
-    .. cpp:member:: bool enableCrossNodeConnection = false;
-
-        如果为 true，允许客户端在与当前数据系统Worker 连接异常时自动切换到备用节点。默认值：false
-
     .. cpp:member:: bool enableLocalCache = true;
 
         控制 Get/MGet 的读路径。为 ``true`` 时，Get/MGet 固定走当前绑定 Worker 的 legacy 路径；为

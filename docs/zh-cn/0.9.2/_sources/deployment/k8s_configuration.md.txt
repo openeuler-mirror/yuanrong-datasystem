@@ -1,0 +1,612 @@
+# kubernetes部署配置项
+
+<!-- TOC -->
+
+- [kubernetes部署配置项](#kubernetes部署配置项)
+  - [最小化配置项](#最小化配置项)
+  - [详细配置项](#详细配置项)
+    - [镜像相关配置](#镜像相关配置)
+    - [命名空间相关配置](#命名空间相关配置)
+    - [资源相关配置](#资源相关配置)
+    - [IPC/RPC相关配置](#ipcrpc相关配置)
+    - [ETCD相关配置](#etcd相关配置)
+    - [Coordinator相关配置](#coordinator相关配置)
+    - [Spill相关配置](#spill相关配置)
+    - [Memory Rebalance相关配置](#memory-rebalance相关配置)
+    - [日志与可观测相关配置](#日志与可观测相关配置)
+    - [二级缓存相关配置](#二级缓存相关配置)
+    - [元数据相关配置](#元数据相关配置)
+    - [可靠性相关配置](#可靠性相关配置)
+    - [优雅退出相关配置](#优雅退出相关配置)
+    - [性能相关配置](#性能相关配置)
+    - [AK/SK相关配置](#aksk相关配置)
+    - [Kubernetes亲和性相关配置](#kubernetes亲和性相关配置)
+    - [挂载路径相关配置](#挂载路径相关配置)
+    - [混合部署相关配置](#混合部署相关配置)
+    - [Kubernetes精细化控制配置](#kubernetes精细化控制配置)
+  - [约束](#约束)
+    - [共享内存生命周期相关约束](#共享内存生命周期相关约束)
+
+<!-- /TOC -->
+
+本文档描述了openYuanrong datasystem Kubernetes快速启动以及详细配置项说明。
+
+## 最小化配置项
+
+本节描述了在Kubernetes部署openYuanrong datasystem的必须配置项，最小化配置项如下表所示：
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| [global.imageRegistry](#镜像相关配置) | string | `""` | 镜像仓库 url |
+| [global.images.datasystem](#镜像相关配置) | string | `"yr_datasystem:v0.1"` | 镜像名称和镜像标签 |
+| [global.etcd.etcdAddress](#etcd相关配置) | string | `""` | ETCD 服务端访问地址，openYuanrong datasystem的集群管理依赖ETCD |
+
+**样例**：
+```yaml
+global:
+  # 镜像：openyuanrong_datasystem:0.5.0
+  imageRegistry: ""
+
+  images:
+    datasystem: "openyuanrong-datasystem:0.5.0"
+
+  etcd:
+    etcdAddress: "127.0.0.1:2379"
+```
+
+部署openYuanrong datasystem请参考：[openYuanrong datasystem Kubernetes部署](../deployment/deploy.md#kubernetes部署worker)。
+
+默认情况下，每个 openYuanrong datasystem DaemonSet 最大可使用 2GB 共享内存空间用于缓存数据，如果需要调整该值，可以通过 [global.resources.datasystemWorker.sharedMemory](#资源相关配置) 调整。
+
+> **注意事项：**
+>
+> [global.resources.datasystemWorker.sharedMemory](#资源相关配置) 的大小必须小于 [global.resources.datasystemWorker.requests.memory](#资源相关配置)
+
+```yaml
+global:
+  # 镜像：openyuanrong_datasystem:0.5.0
+  imageRegistry: ""
+
+  images:
+    datasystem: "openyuanrong-datasystem:0.5.0"
+
+  etcd:
+    etcdAddress: "127.0.0.1:2379"
+
+  resources:
+    datasystemWorker:
+      limits:
+        cpu: "3"
+        # 该值必须大于等于 datasystemWorker.requests.memory
+        memory: "5Gi"
+      requests:
+        cpu: "3"
+        # 该值必须大于 sharedMemory
+        memory: "5Gi"
+      # 将共享内存最大使用容量调整为4GB
+      sharedMemory: 4096
+```
+
+> **注意事项：**
+>
+> - openYuanrong datasystem依赖ETCD进行集群管理，请确保部署前ETCD服务处于可用状态。
+> - openYuanrong datasystem默认占用端口号 `31501`，请确保Kubernetes集群中每个节点的31501端口处于空闲状态，或者通过[global.port.datasystemWorker](#ipcrpc相关配置)更换默认端口号。
+> - 请确保Kubernetes集群中每个节点拥有至少3核4G的资源剩余，或者通过[资源相关配置](#资源相关配置)减少默认的资源需求。
+> - openYuanrong datasystem Pod内容器默认会挂载以下宿主机目录，请确保容器运行用户具备以下目录的可读可写可访问权限（rwx）：
+>   | 配置项 | 宿主机目录 | 作用 |
+>   |-----------|--------|------|
+>   | [global.log.logDir](#日志与可观测相关配置)  | /home/sn/datasystem/logs | 日志持久化目录 |
+>   | [global.ipc.udsDir](#ipcrpc相关配置) | /home/uds | Unix Domain Socket目录，用于启用共享内存免拷贝能力 |
+>   |[global.metadata.rocksdbStoreDir](#元数据相关配置) |  /home/sn/datasystem/rocksdb | 元数据持久化目录 |
+>   | - | /dev/shm | 共享内存目录 |
+
+## 详细配置项
+
+### 镜像相关配置
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.imageRegistry | string | `""` | 镜像仓库 url |
+| global.images.datasystem | string | `"yr_datasystem:v0.1"` | 镜像名称和镜像标签 |
+
+**样例**：
+```yaml
+global:
+  # 镜像：openyuanrong_datasystem:0.5.0
+  imageRegistry: ""
+  images:
+    datasystem: "openyuanrong-datasystem:0.5.0"
+```
+
+### 命名空间相关配置
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.namespace | string | `"default"` | 命名空间名称 |
+| global.autoCreatedNamespace | bool | `false` | 是否自动创建不存在的命名空间 |
+
+### 资源相关配置
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.resources.datasystemWorker.limits.cpu | string | `"3"` | openYuanrong datasystem单个DaemonSet占用的最大CPU核数 |
+| global.resources.datasystemWorker.limits.memory | string | `"4Gi"` | openYuanrong datasystem单个DaemonSet占用的最大内存量 |
+| global.resources.datasystemWorker.requests.cpu | string | `"3"` | openYuanrong datasystem单个DaemonSet初始化时需要的CPU核数，该值的大小必须小于等于 `global.resources.datasystemWorker.limits.cpu` |
+| global.resources.datasystemWorker.requests.memory | string | `"3Gi"` | openYuanrong datasystem单个DaemonSet初始化时需要的内存量，该值的大小必须小于等于 `global.resources.datasystemWorker.limits.memory` |
+| global.resources.datasystemWorker.maxClientNum | int | `200` | openYuanrong datasystem单个DaemonSet最大可同时连接的客户端数 |
+| global.resources.datasystemWorker.sharedMemory | int | `2048` | openYuanrong datasystem单个DaemonSet可使用的共享内存资源大小（以MB为单位），该值的大小必须小于 `global.resources.datasystemWorker.requests.memory` |
+
+### IPC/RPC相关配置
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.ipc.ipcThroughSharedMemory | bool | `true` | datasystem-worker共享内存启用开关 |
+| global.ipc.udsDir | string | `"/home/uds"` | Unix Domain Socket (UDS) 文件存储目录。UDS文件在该路径下产生，路径最大长度不能超过80个字符。该目录将挂载到宿主机同名目录上，请确保容器具备宿主机同名目录的操作权限 |
+| global.port.datasystemWorker | int | `31501` | openYuanrong datasystem DaemonSet占用的主机端口号 |
+| global.rpc.ocWorkerWorkerDirectPort | int | `0` | 对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延 |
+| global.rpc.ocWorkerWorkerPoolSize | int | `3` | datasystem-worker间用于数据传输的并行连接数，用于提升节点间数据传输的吞吐量，只有当 `ocWorkerWorkerDirectPort` 指定为非0值时该配置才生效 |
+| global.rpc.payloadNocopyThreshold | string | `"104857600"` | datasystem-worker间数据传输时免数据拷贝的阈值（以字节为单位） |
+| global.rpc.rpcThreadNum | int | `128` | 配置服务端的RPC线程数，必须为大于0的数 |
+| global.rpc.ocThreadNum | int | `64` | 配置服务端用于处理对象/KV缓存的业务线程数 |
+| global.rpc.ioThreadNice | int | `0` | 指定部分 IO 线程的 nice 值，取值范围：[-20, 19]。0 表示跳过 nice 调整并保留线程继承的 nice 值；仅非 0 值调用 `setpriority`；设置负值通常需要相应权限 |
+| global.rpc.brpc.eventDispatcherNum | int | `0` | brpc 进程级事件分发器数量。0 表示不覆盖 brpc 默认值 1；大于 1 时按 fd 哈希分摊 socket 读写事件，可缓解大量连接同时活跃时的首包读取排队，但不会并行化单个监听 fd 的 accept。该值仅在进程首次初始化 brpc 前生效，修改后需要重启 Worker |
+| global.rpc.brpc.brpcServerNumThreads | int | `64` | brpc 服务端工作线程数（bthread 工作线程池大小） |
+| global.rpc.brpc.brpcMaxConcurrency | int | `128` | 单个 brpc 服务的最大并发在途 RPC 数，0 表示不限制。推荐值为 `brpcServerNumThreads` 的 2 倍（如 64 线程对应 128）。超过该值时 brpc 会立即向客户端返回 ELIMIT，避免慢请求耗尽 bthread 导致 OOM。该值不得小于 `brpcServerNumThreads` |
+| global.rpc.maxRpcSessionNum | int | `2048` | 单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000] |
+| global.rpc.streamIdleTimes | int | `300` | 配置流的空闲时间。默认值为300秒（5分钟） |
+| global.rpc.remoteSendThreadNum | int | `8` | 配置服务端用于将元素发送到远程工作线程的线程数量 |
+| global.rpc.scThreadNum | int | `128` | 配置流缓存master工作的最大线程数 |
+
+`eventDispatcherNum` 不等同于业务 RPC 线程数。仅当大量连接在同一时段发送首包或恢复读写，TCP 建连已完成但 RPC handler 入场仍明显延迟，且业务线程池与 CPU 尚未饱和时，才建议从 2 或 4 开始灰度验证；可结合 `event_dispatcher_read_latency` 与 handler 入场时序判断。若瓶颈位于业务处理、锁竞争、`rpcThreadNum`/`ocThreadNum` 线程池或单监听 fd 的 accept，增大该值通常无效；连接较少或 CPU 资源紧张时应保持默认值。
+
+**样例**：
+配置一个Unix Domain Socket路径为 "/home/uds"，并使用31501作为openYuanrong datasystem DaemonSet的监听端口号
+```yaml
+global:
+  port:
+    datasystemWorker: 31501
+
+  ipc:
+    ipcThroughSharedMemory: true
+    udsDir: /home/uds
+```
+
+### ETCD相关配置
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.etcd.etcdAddress | string | `""` | ETCD 服务端访问地址，格式为：ip:port, 例如：127.0.0.1:23456 |
+| global.etcd.enableEtcdAuth | bool | `false` | 是否启用 ETCD 认证 |
+| global.etcd.etcdCa | string | `""` | CA明文证书，使用Base64编码 |
+| global.etcd.etcdCert | string | `""` | 客户端明文证书，使用Base64转码 |
+| global.etcd.etcdKey | string | `""` | 客户端私钥。需进行Base64转码，是否加密取决于是否设置了密码短语 |
+| global.etcd.etcdCertDir | string | `"/home/sn/datasystem/etcd_cert_dir"` | 已加密 etcd 证书的挂载路径，`global.etcd.enableEtcdAuth` 为 `true` 必须指定此参数 |
+| global.etcd.passphraseValue | string | `""` | 密码短语的值，需加密并进行Base64转码 |
+| global.etcd.etcdMetaPoolSize | int | `8` | ETCD元数据异步队列大小，用于将KV接口 `WRITE_BACK_L2_CACHE` 可靠性配置的key的元数据异步写入ETCD持久化 |
+| global.etcd.etcdTargetNameOverride | string | `""` | 设置用于SSL主机名校验的ETCD目标名称覆盖。该配置值应与TLS证书的Subject Alternate Names（主题备用名称）中的DNS内容保持一致 |
+
+**样例**：
+```yaml
+global:
+  # 连接一个无需认证鉴权的ETCD服务
+  etcd:
+    etcdAddress: "127.0.0.1:2379"
+    enableEtcdAuth: false
+    etcdTargetNameOverride: ""
+    etcdCa: ""
+    etcdCert: ""
+    etcdKey: ""
+    etcdCertDir: ""
+    passphraseValue: ""
+    etcdMetaPoolSize: 8
+```
+
+### Coordinator相关配置
+
+Coordinator 是 ETCD 的替代协调后端。当配置了 `coordinatorAddress` 时，datasystem-worker 将连接 Coordinator 服务进行集群协调（如节点发现、心跳、拓扑管理等），而不再使用 ETCD。
+
+> **注意事项：**
+>
+> - Coordinator 与 ETCD（以及 metastore）互斥，同一时间只能选择一个协调后端。当 `coordinatorAddress` 非空时，worker 会优先使用 Coordinator，ETCD 相关配置将被忽略。
+> - Coordinator 服务需独立部署（可通过 dscli 启动，参考 [dscli](../deployment/dscli.md)），Kubernetes Helm Chart 当前不包含 Coordinator 服务的部署模板。
+> - 使用 Coordinator 时，建议将 [global.etcd.etcdAddress](#etcd相关配置) 留空，并保持 [global.etcd.enableEtcdAuth](#etcd相关配置) 为 `false`，以避免不必要的 ETCD 证书挂载。
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.coordinator.coordinatorAddress | string | `""` | Coordinator 服务地址，格式为 `host:port`（例如 `127.0.0.1:31511`）。为空时使用 ETCD 作为协调后端（默认） |
+
+**样例**：
+配置 worker 连接地址为 `127.0.0.1:31511` 的 Coordinator 服务作为协调后端
+```yaml
+global:
+  coordinator:
+    coordinatorAddress: "127.0.0.1:31511"
+```
+
+### Spill相关配置
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.spill.spillDirectory | string | `""` | 配置缓存溢出功能的本地磁盘路径，为空表示禁用缓存溢出功能。当配置该路径后，溢出的缓存数据将保存在该路径下的 `datasystem_spill_data` 目录下 |
+| global.spill.spillSizeLimit | string | `"0"` | 配置缓存溢出的最大容量（以字节为单位） |
+| global.spill.spillThreadNum | int | `8` | 表示溢出数据写文件的最大并行度，线程数越多会消耗越多的CPU和I/O资源 |
+| global.spill.spillIoMode | string | `"buffered"` | Spill写盘模式。`buffered`使用缓冲I/O；`direct_io_uring`使用异步Direct I/O，不能直接使用Direct I/O的对象会自动回退到缓冲I/O |
+| global.spill.spillFileMaxSizeMb | int | `200` | 单个溢出文件的最大大小（以MB为单位），对于小于此值的对象，会聚合存储于同一个文件中，对于超过此值的对象，将以单个对象单独存为一个文件 |
+| global.spill.spillFileOpenLimit | int | `512` | 溢出文件的最大打开文件描述符数量。若已打开文件数超过此值，系统将临时关闭部分文件以防止超出系统最大限制。在系统资源有限的情况下，应适当调低此数值 |
+| global.spill.spillEnableReadahead | bool | `true` | 是否启用磁盘预读功能，当预读功能被禁用时，可以缓解KV语义 `Read` 接口偏移读取导致的读放大问题 |
+| global.spill.evictionReserveMemThresholdMB | int | `10240` | 内存预留阈值（MB），实际取值 min(shared_memory_size_mb × 0.1, evictionReserveMemThresholdMB)；与 evictionHighWatermarkRatio 共同决定驱逐触发线。有效范围 100-102400 |
+| global.spill.evictionHighWatermarkRatio | float | `0.9` | 内存占用率高水位（比例 0.0-1.0，相对可用共享内存）。当占用内存达到 max(比例 × 共享内存, 共享内存 - evictionReserveMemThresholdMB) 时触发驱逐。有效范围 0.02-1.0，须大于 evictionLowWatermarkRatio |
+| global.spill.evictionLowWatermarkRatio | float | `0.8` | 内存占用率低水位（比例 0.0-1.0），后台驱逐运行直至占用率降至该比例及以下。有效范围 0.01-0.99，须小于 evictionHighWatermarkRatio |
+| global.spill.spillHighWatermarkRatio | float | `0.8` | Spill 目录占用率高水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.02-1.0，须大于 spillLowWatermarkRatio |
+| global.spill.spillLowWatermarkRatio | float | `0.6` | Spill 目录占用率低水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.01-0.99，须小于 spillHighWatermarkRatio |
+
+- **样例1**：
+
+    Spill目录为 "/opt/spill/yr_datasystem_spill"，大小为10GB。
+
+    ```yaml
+    global:
+      spill:
+        spillDirectory: "/opt/spill/yr_datasystem_spill"
+        spillSizeLimit: "10737418240"
+        spillThreadNum: 8
+        spillIoMode: buffered
+        spillFileMaxSizeMb: 200
+        spillFileOpenLimit: 512
+        spillEnableReadahead: true
+    ```
+
+- **样例2**：
+
+    Spill目录为 "/opt/spill/yr_datasystem_spill"，需要使用宿主机的SSD盘提升Spill性能（宿主机的SSD路径假设为："/data/ssd"），大小同样为10GB。这种场景下需要配合[挂载路径相关配置](#挂载路径相关配置)一起使用。
+
+    ```yaml
+    global:
+      spill:
+        spillDirectory: "/opt/spill/yr_datasystem_spill"
+        spillSizeLimit: "10737418240"
+        spillThreadNum: 8
+        spillIoMode: direct_io_uring
+        spillFileMaxSizeMb: 200
+        spillFileOpenLimit: 512
+        spillEnableReadahead: true
+
+    mount:
+      # 宿主机挂载目录，该场景下即为宿主机的SSD路径
+    - hostPath: "/data/ssd/yr_datasystem_spill"
+      # 容器内挂载目录，需要和 `spillDirectory` 保持一致
+      mountPath: "/opt/spill/yr_datasystem_spill"
+    ```
+
+### Memory Rebalance相关配置
+
+Memory Rebalance 用于在 worker 之间均衡 Object/KV 缓存使用的共享内存。开启后，master 根据各 worker 上报的资源使用情况，选择内存使用率较高的 worker 作为 source，选择内存使用率较低且仍有可用共享内存的 worker 作为 target，并向 source worker 下发对象迁移任务，从而降低单个 worker 的共享内存压力。
+
+该能力默认关闭。当集群中没有满足迁移条件的 target worker 时，Memory Rebalance 不会产生迁移任务，worker 会继续按照既有驱逐、Spill 和二级缓存策略处理内存压力。因此，Memory Rebalance 适合用于多 worker 集群内存使用不均衡的场景，但不能替代 Spill 或二级缓存可靠性配置。
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.memoryRebalance.enabled | bool | `false` | 是否开启由 master 调度的内存均衡能力。设置为 `true` 后，master 会尝试将高共享内存使用率 worker 上的对象迁移到低使用率 worker，以均衡集群内 object cache 的共享内存压力 |
+| global.memoryRebalance.rebalanceSourceUsagePercent | int | `80` | source worker 的共享内存使用率阈值（百分比）。使用率达到或超过该值的 ready worker 才会被选为内存均衡迁移源。该参数为双重语义：同一百分比同时作为 target worker 的迁移上限，当 target 投影使用率达到该值时停止后续迁移批次。默认值 80% 与 eviction 低水位一致；调高该值会让 target 上限向 eviction 高水位（默认 90%）靠拢，更易触发驱逐。取值范围：1-100 |
+| global.memoryRebalance.rebalanceUsageGapPercent | int | `20` | source 与 target worker 之间的最小共享内存使用率差值（百分比）。仅当差值不小于该值时才下发迁移任务。取值范围：1-100 |
+| global.memoryRebalance.rebalanceTaskReportGraceMs | int | `30000` | 均衡任务上报的宽限时间（毫秒），超过该时间未上报则任务视为超时并触发重试 |
+
+**样例**：
+
+```yaml
+global:
+  memoryRebalance:
+    enabled: true
+    rebalanceSourceUsagePercent: 80
+    rebalanceUsageGapPercent: 20
+    rebalanceTaskReportGraceMs: 30000
+```
+
+> 兼容性说明：`rebalanceCooldownS` 与 `rebalanceMaxMigrateBytesPerRound` 已移除，冷却时长固定为 60s。单次任务迁移上限由原 1GB/轮改为 300MB/批的连续反馈回路：master 在 30s 调度周期内钉死总迁移预算（`min(usageGap/2, headroomToWatermark, targetAvail)`），worker 每完成一批 300MB 迁移即上报目标剩余内存，master 据此决策继续发放下一批或停止（预算耗尽或目标达水位线，即 `rebalance_source_usage_percent`，默认 80%）。升级前请从自定义 `workerGflagParams`/`extraArgs` 及历史 `values.yaml` 中移除这两项，否则 worker 会因识别到未知 flag 而启动失败。
+
+### 日志与可观测相关配置
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.log.logDir | string | `"/home/sn/datasystem/logs"` | 日志目录，服务端产生的日志将保存到此目录中，该路径会被自动挂载到宿主机同名路径下 |
+| global.log.logLevel | int | `0` | 冗余日志级别，0表示不开启冗余日志，取值范围：[0, 3] |
+| global.log.logAsync | bool | `true` | 是否开启异步刷新日志功能 |
+| global.log.logAsyncQueueSize | int | `65536` | 异步日志的消息队列大小 |
+| global.log.logCompress | bool | `false` | 是否开启日志压缩功能，当开启时会将历史日志压缩为gzip格式 |
+| global.log.logBufSecs | int | `10` | 日志消息的最大缓冲时间（以秒为单位） |
+| global.log.logFilename | string | `""` | 日志前缀名，当值为空时前缀名为 `datasystem_worker` |
+| global.log.logRetentionDay | int | `0` | 日志保留天数，当该值大于0时，最后修改时间早于 `logRetentionDay` 的日志文件将会被删除；当该值为0时表示禁用该功能 |
+| global.log.maxLogFileNum | int | `25` | 最大日志文件个数，当日志文件个数超过该值时，会将最旧的日志文件删除，通过日志滚动机制保证日志文件最大个数小于等于该值 |
+| global.log.maxLogSize | int | `400` | 单个日志文件最大大小（以MB为单位） |
+| global.observability.logMonitor | bool | `true` | 是否开启接口性能与资源观测日志 |
+| global.observability.logMonitorExporter | string | `"harddisk"` | 指定观测日志导出类型，当前仅支持按 `harddisk` 类型导出观测数据，即将观测数据保存到 `logDir` 路径下 |
+| global.observability.logMonitorIntervalMs | int | `10000` | 观测日志收集导出的间隔时间（以毫秒为单位） |
+| global.log.minLogLevel | int | `0` | 设置记录冗余日志的最低级别，低于这个级别的日志不会被记录 |
+| global.log.enableUcxLog | bool | `false` | 是否开启UCX RDMA日志，保存在`${logDir}/worker/ucx.log`当中 |
+| global.log.ucxLogLevel | string | `ERROR` | 设置UCX日志级别，可选值包括`FATAL`、`ERROR`、`WARN`、`INFO`、`DEBUG`、`TRACE`。建议生产环境使用 `ERROR` 或 `WARN`，调试时使用 `DEBUG`或`TRACE` |
+| global.log.slowLogProcessSlowerThan | uint64 | `2000` | 处理阶段时延阈值（微秒），用于慢日志和latencySummary输出。默认2000μs(2ms)。填写正整数（如 `1000` 表示 1ms 阶段）。设为0可禁用。启用后，处理阶段耗时（总耗时减去子RPC耗时）超过此阈值的请求将在access log中输出latencySummary |
+| global.log.slowLogRpcSlowerThan | uint64 | `5000` | 跨进程RPC阶段时延阈值（微秒），用于慢日志和latencySummary输出。默认5000μs(5ms)。填写正整数（如 `2000` 表示 2ms 阶段）。设为0可禁用。启用后，RPC子阶段耗时超过此阈值的请求将在access log中输出latencySummary |
+
+> **升级提示**：`global.log.logCompress` 默认关闭后，新部署或升级集群的历史日志不会再自动压缩，日志磁盘占用可能增加且滚动更快。如需保持历史压缩行为，请显式配置 `global.log.logCompress: true`；同时建议根据不压缩场景重新评估 `global.log.maxLogFileNum` 和 `global.log.maxLogSize` 的容量设置。
+
+**样例**：
+```yaml
+global:
+  # 配置日志路径为 '/home/sn/datasystem/openeuler_datasystem/logs'，日志前缀名为 'openeuler_datasystem'
+  log:
+    logDir: /home/sn/datasystem/openeuler_datasystem/logs
+    logAsyncQueueSize: 65536
+    logLevel: 0
+    maxLogSize: 400
+    maxLogFileNum: 25
+    logRetentionDay: 0
+    logAsync: true
+    logBufSecs: 10
+    # 默认关闭日志压缩功能，可设置为 true 将历史日志压缩成gzip格式节约磁盘空间
+    logCompress: false
+    # 日志前缀名，配置为 'openeuler_datasystem'
+    logFilename: "openeuler_datasystem"
+```
+
+### 二级缓存相关配置
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.l2Cache.l2CacheType | string | `"none"` | 配置二级缓存类型，`none` 表示不配置二级缓存，可选择二级缓存类型：[`obs`, `sfs`, `distributed_disk`] |
+| global.l2Cache.l2CacheDeleteThreadNum | int | `32` | 配置二级缓存异步删除线程池大小，增大该值可以提升二级缓存删除并行度，同时也会提升worker的CPU消耗 |
+| global.l2Cache.ocIoFromL2CacheNeedMetadata | bool | `true` | 配置L2缓存守护进程的数据读写是否依赖元数据，设置为false，则表示元数据不存储在etcd中 |
+| global.l2Cache.enableL2CacheFallback | bool | `true` | 控制是否允许从二级缓存拉数据，当worker失败时，是否启用从二级缓存拉取数据的回退机制 |
+| global.l2Cache.l2CacheAsyncWriteQueueSize | int | `10000` | 配置二级缓存异步写队列大小 |
+| global.l2Cache.l2CacheAsyncWriteRateLimitMb | int | `200` | 配置二级缓存异步写入限速，单位 MB/s |
+
+::::{tab-set}
+
+:::{tab-item} OBS
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.l2Cache.obs.obsAccessKey | string | `""` | 对象存储服务(OBS) AK/SK认证的访问密钥(Access Key) |
+| global.l2Cache.obs.obsSecretKey | string | `""` | 对象存储服务(OBS) AK/SK认证的密钥(Secret Key) |
+| global.l2Cache.obs.obsEndpoint | string | `""` | 对象存储服务(OBS) 访问域名 |
+| global.l2Cache.obs.obsBucket | string | `""` | 对象存储服务(OBS) 桶的名称 |
+| global.l2Cache.obs.obsHttpsEnabled | bool | `false` | 是否启用HTTPS连接对象存储服务（OBS），默认为HTTP |
+| global.l2Cache.obs.cloudServiceTokenRotation.enable | bool | `false` | 是否使用CCMS凭据轮换模式访问OBS，默认值为 `false`。若启用此模式，则至少需指定 `iamHostName`（IAM服务地址）、`identityProvider`（身份提供商）、`projectId`（项目ID）及 `regionId`（区域ID）。 |
+| global.l2Cache.obs.cloudServiceTokenRotation.iamHostName | string | `""` | 需要获取的IAM token的域名。例如：iam.cn-beijing-4.myhuaweicloud.com |
+| global.l2Cache.obs.cloudServiceTokenRotation.identityProvider | string | `""` | 为 openYuanrong datasystem 提供权限的 Provider。例如：csms-datasystem |
+| global.l2Cache.obs.cloudServiceTokenRotation.projectId | string | `""` | 对象存储服务(OBS) 的项目ID。例如：fb6a00ff7ae54a5fbb8ff855d0841d00。 |
+| global.l2Cache.obs.cloudServiceTokenRotation.regionId | string | `""` | 对象存储服务(OBS) 的区域ID。例如：cn-north-7 |
+| global.l2Cache.obs.cloudServiceTokenRotation.enableTokenByAgency | bool | `false` | 是否通过委托代理访问其他账号的对象存储服务(OBS)，默认值为 `false`。若设为 `true`，需指定 `tokenAgencyName` 和 `tokenAgencyDomain`。 |
+| global.l2Cache.obs.cloudServiceTokenRotation.tokenAgencyDomain | string | `""` | 用于代理访问其他账号的委托方域名。例如：obs_access |
+| global.l2Cache.obs.cloudServiceTokenRotation.tokenAgencyName | string | `""` | 用于代理访问其他账号的委托名称。例如：op_svc_cff |
+
+:::
+
+:::{tab-item} SFS
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.l2Cache.sfsTurbo.endpoint | string | `""` | sfs-turbo 的接入点，例如：127.0.0.1 |
+| global.l2Cache.sfsTurbo.subPath | string | `""` | 挂载到 datasystem-worker 的 sfs-turbo 子路径。若未指定该参数，默认挂载 sfs-turbo 的根目录 "/" |
+| global.l2Cache.sfsTurbo.id | string | `"0"` | 指定 sfs-turbo 的 ID，该 ID 可在 sfs-turbo 页面查看 |
+| global.l2Cache.sfsTurbo.projectId | string | `"0"` | 指定sfs-turbo的企业项目ID，该ID可在sfs-turbo页面查看 |
+| global.l2Cache.sfsTurbo.capacity | string | `"500Gi"` | 指定 sfs-turbo 的最大可用容量，该值必须要小于 sfs-turbo 的实际可用大小 |
+
+:::
+
+:::{tab-item} Distributed Disk
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.l2Cache.distributedDisk.path | string | `""` | distributed_disk 模式下的根路径。当 `global.l2Cache.l2CacheType=distributed_disk` 时，slot root path 基于该路径构建，不再使用 `sfs_path` |
+| global.l2Cache.distributedDisk.maxDataFileSizeMb | int | `1024` | 单个 distributed_disk data 文件的最大大小，单位 MB |
+| global.l2Cache.distributedDisk.syncIntervalMs | int | `1000` | distributed_disk group commit 的最长刷盘间隔，单位毫秒 |
+| global.l2Cache.distributedDisk.syncBatchBytes | int | `33554432` | distributed_disk group commit 的批量刷盘阈值，单位字节 |
+| global.l2Cache.distributedDisk.compactIntervalS | int | `3600` | distributed_disk 后台 compact 的固定执行周期，单位秒；生产构建最小值为 60，测试构建在 `WITH_TESTS` 下最小值为 1 |
+
+:::
+
+::::
+
+### 元数据相关配置
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.metadata.enableMetaReplica | bool | `false` | 已废弃的兼容参数，当前配置值会被忽略 |
+| global.metadata.rocksdbStoreDir | string | `"/home/sn/datasystem/rocksdb"` | 配置元数据持久化目录，元数据通过RocksDB持久化在磁盘中 |
+| global.metadata.rocksdbBackgroundThreads | int | `16` | RocksDB的后台线程数，用于元数据的刷盘和压缩 |
+| global.metadata.rocksdbMaxOpenFile | int | `128` | RocksDB可使用的最大打开文件个数 |
+| global.metadata.rocksdbWriteMode | string | `async` | 配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为`async`。可选值包括：'none'（不写）、'sync'（同步）、'async'（异步） |
+| global.metadata.enableMetadataRecovery | bool | `false` | 是否在 worker 重启清理阶段将本地元数据回补到 master |
+| global.metadata.enableDataReplication | bool | `true` | 实验性参数。是否允许跨 worker 读取到的数据在本 worker 缓存为本地热副本，并向 master 注册副本位置；关闭后 remote get 获取的数据通常仅服务当前请求，不作为普通本地副本保留。该参数仅用于热副本性能优化，不作为数据可靠性机制，不保障数据可靠性或可用性 |
+
+
+### 可靠性相关配置
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.reliability.clientReconnectWaitS | int | `10` | 客户端断链重连最大等待时间（单位为秒） |
+| global.reliability.clientDeadTimeoutS | int | `120` | 客户端存活检测最大时间间隔（单位为秒） |
+| global.reliability.heartbeatIntervalMs | int | `1000` | 服务端与ETCD的心跳间隔时间（单位为毫秒） |
+| global.reliability.nodeTimeoutS | int | `60` | 服务端节点超时最大时间间隔（单位为秒） |
+| global.reliability.nodeDeadTimeoutS | int | `300` | 服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点，该值必须大于 `nodeTimeoutS` |
+| global.reliability.enableReconciliation | bool | `true` | 当节点重启时是否启用对账功能 |
+| global.reliability.livenessProbeTimeoutS | int | `150` | Kubernetes 存活探针超时时间配置（以秒为单位） |
+| global.reliability.addNodeWaitTimeS | int | `60` | 新节点加入哈希环的等待超时时间（以秒为单位） |
+| global.reliability.autoDelDeadNode | bool | `true` | 是否启用死亡节点自动清理功能，当该值为 `true` 时，会将死亡节点剔除出集群管理，并触发被动缩容 |
+| global.reliability.enableDistributedMaster | bool | `true` | 是否启用分布式主节点，默认值为true |
+| global.reliability.enableStreamDataVerification | bool | `false` | 是否验证生产者数据乱序，默认值为false |
+
+### 优雅退出相关配置
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.gracefulShutdown.scaleInTaint | string | `"datasystem/offline=true:NoExecute"` | 识别优雅退出的污点，格式为 `key=value:effect`。当节点打上与 `scaleInTaint` 相匹配的污点时，该节点上的 datasystem-worker 会触发主动缩容优雅退出 |
+| global.gracefulShutdown.enableLosslessDataExitMode | bool | `false` | 是否启用无损数据退出模式，当该值为 `true` 时，在节点退出时则会以优雅退出的方式，迁移数据和元数据，保证数据和元数据不丢失 |
+| global.gracefulShutdown.checkAsyncQueueEmptyTimeS | int | `1` | datasystem-worker检测异步队列为空的时间，单位为秒 |
+| global.gracefulShutdown.dataMigrateRateLimitMb | int | `40` | 配置优雅退出数据迁移的流控（以MB/s为单位） |
+| global.gracefulShutdown.dataMigrateUrmaTransportMode | string | `write` | 配置后台迁移启用 URMA 时的数据迁移传输模式。可选值：`write` 表示使用 URMA write 路径，`read` 表示使用 URMA read 路径。仅在 `global.performance.enableUrma=true` 时生效 |
+| global.gracefulShutdown.livenessProbeTerminationGracePeriodSeconds | int | `0` | 优雅退出的最大处理时间（以秒为单位），0表示无限时间；当该值大于0时，如果优雅退出时间超过该值，Kubernetes会强制清除datasystem-worker Pod |
+
+### 性能相关配置
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.performance.enableHugeTlb | bool | `false` | 是否开启共享内存大页内存功能，它可以提高内存访问，减少页表的开销 |
+| global.performance.enableFallocate | bool | `true` | 由于Kubernetes(k8s)的资源计算策略，共享内存有时会被计算两次，这可能会导致客户端OOM崩溃。为了解决这个问题，我们使用了fallocate来链接客户端和工作节点的共享内存，从而纠正内存计算错误。缺省情况下，fallocate是使能的。启用fallocate会降低内存分配的效率 |
+| global.performance.sharedMemoryPopulate | bool | `false` | 是否开启共享内存预热功能，启用该功能可以加速应用运行期间的共享内存拷贝速度，但是在datasystem_worker进程启动时也会由于预热导致启动速度变慢（取决于sharedMemory的配置）。如果开启该功能，'arenaPerTenant'必须设置为1，'enableFallocate'必须设置为false |
+| global.performance.enableThp | bool | `false` | 是否启用透明大页（Transparent Huge Page,THP）功能，启用透明大页可以提高性能，减少页表开销，但也可能导致 Pod 内存使用增加 |
+| global.performance.arenaPerTenant | int | `16` | 每个租户的共享内存分配器数量。多分配器可以提高第一次分配共享内存的性能，但每个分配器会多使用一个fd，导致fd资源使用量上升。取值范围：[1, 32] |
+| global.performance.memoryReclamationTimeSecond | int | `600` | 释放后的内存回收时间（以秒为单位），未回收的内存可以提供给下次分配复用，提升分配效率 |
+| global.performance.memoryAlignment | int | `64` | Worker中jemalloc分配内存使用的字节对齐大小，取值必须为不超过4096的2次幂。Worker会在注册响应中返回该值，异构Client按连接缓存并用于多Blob组合对象的数据区对齐。将该值从64调整为其他值前，应先升级所有异构Client。更大的对齐可能提升性能，但也会因碎片化而增加内存占用。 |
+| global.performance.asyncDelete | bool | `false` | 是否异步删除对象，如果设置为 `true` 时，删除对象数据是个异步的过程，客户端不需要等待所有数据副本删除完成即可返回 |
+| global.performance.enableP2pTransfer | bool | `false` | 是否开启异构对象传输协议支持点对点传输 |
+| global.performance.enableWorkerWorkerBatchGet | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |
+| global.performance.ocShmTransferThresholdKB  | int | `500` | 在客户端和worker之间通过共享内存传输对象数据的阈值，单位为KB |
+| global.performance.enableUrma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输，开启后worker启动时会自动预热URMA worker-worker连接 |
+| global.performance.urmaPollSize | int | `8` | 一次可轮询的完整记录数量，该设备最多可轮询16条记录 |
+| global.performance.urmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
+| global.performance.urmaConnectionSize | int | `0` | [已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建 |
+| global.performance.urmaEventMode | bool | `false` | 是否使用中断模式轮询完成事件 |
+| global.performance.urmaFailoverSuccessRateRatio | double | `0.5` | 客户端 URMA 数据面成功率阈值，用于触发 worker failover 评估。取值范围 `[0.0, 1.0]`，设为 `0.0` 时禁用 URMA failover。仅在 `global.performance.enableUrma=true` 时生效 |
+| global.performance.urmaFailoverMinSampleCount | uint32 | `5` | 在每个 `client_dead_timeout_s` 窗口内进行 failover 评估所需的最小 URMA 数据面样本数，样本数不足时不触发 failover。仅在 `global.performance.enableUrma=true` 时生效 |
+| global.performance.enablePipelineH2d | bool | `false` | 是否开启 pipeline Host-to-Device（H2D）流水线传输，将主机侧数据准备与设备侧拷贝重叠以提升传输性能。仅在 `global.performance.enableUrma=true` 时生效，否则被忽略 |
+| global.performance.pipelineH2dThreadNum | int | `64` | pipeline H2D 工作线程数。取值范围 [8, 128]，超出该范围会在运行时回退为默认值 64 |
+| global.performance.enableTransportFallback | bool | `true` | 是否开启快速传输（urma/rdma）回退到tcp传输的功能，默认值为true |
+| global.performance.sharedDiskDirectory | string | `""` | 磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存 |
+| global.performance.sharedDiskSize | int | `0` | 共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存 |
+| global.performance.sharedDiskArenaPerTenant  | int | `8` | 每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32] |
+| global.performance.enableRdma | bool | `false` | 是否为OC工作节点之间的数据传输启用RDMA |
+| global.performance.rdmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，false时将每个对象分别注册为一个段 |
+| global.performance.ucxTransportLayerSelection | string | `rc_x` | UCX使用的 RDMA传输模式。默认选用 "rc_x" 以获得最佳性能；若当前环境不支持，可改用 "rc"、"ud" 或 "dc"。各模式适用场景详见[UCX传输模式说明](https://github.com/openucx/ucx/wiki/UCX-environment-parameters) |
+| global.performance.ocWorkerAggregateMergeSize | int | `2097152` | worker响应的目标批量大小，默认值为2MB |
+| global.performance.ocWorkerAggregateSingleMax | int | `65536` | 批量处理worker最大单个项目大小，默认为64KB |
+| global.performance.ocWorkerWorkerParallelMin | int | `100` | 并行工作线程批处理响应的最小数据计数，默认值为100 |
+| global.performance.ocWorkerWorkerParallelNums | int | `16` | worker并行数量，0表示无限制 |
+| global.performance.enableOcMetadataHeader | bool | `true` | 是否开启对象缓存元数据头，设置为false将不能使用shm latch/可见性 |
+
+### AK/SK相关配置
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.akSk.systemAccessKey | string | `""` | 系统访问密钥 |
+| global.akSk.systemSecretKey | string | `""` | 系统密钥 |
+| global.akSk.systemDataKey | string | `""` | 系统数据秘钥 |
+| global.akSk.tenantAccessKey | string | `""` | 租户访问密钥 |
+| global.akSk.tenantSecretKey | string | `""` | 租户密钥 |
+| global.akSk.requestExpireTimeS | int | `300` | 请求过期时间，单位为秒，最大值为300 |
+
+### Kubernetes亲和性相关配置
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.affinity.nodeSelector | object | `{}` | 亲和标签，控制Pod调度到符合特定条件的Node节点 |
+| global.affinity.nodeAffinity | object | `{}` | 亲和标签，精确控制Pod调度到符合特定条件的Node节点，相比 `nodeSelector` 支持更强大的高级调度策略 |
+| global.affinity.tolerations | list | `[]` | 污点容忍标签，Pod被动接受节点的排斥，不会被驱逐 |
+
+### 挂载路径相关配置
+
+挂载路径相关配置一般与[Spill相关配置](#spill相关配置)相配合使用。
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.mount.hostPath | string | `""` | 主机路径 |
+| global.mount.mountPath | string | `""` | 容器内挂载路径 |
+
+**样例**：
+```yaml
+global:
+  mount:
+    # Spill挂载路径1
+    - hostPath: "/data/ssd1/yr_datasystem_spill"
+      mountPath: "/opt/spill/yr_datasystem_spill1"
+    # Spill挂载路径2
+    - hostPath: "/data/ssd2/yr_datasystem_spill"
+      mountPath: "/opt/spill/yr_datasystem_spill2"
+```
+
+
+### 混合部署相关配置
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.multiSpec | list | `[]` | 混合部署支持，默认情况下所有openYuanrong datasystem的DaemonSet Pod都是相同规格的，如果需要配置不同规格的Pod，需要使用该配置，该配置需要与节点亲和性标签一起配合使用 |
+
+**样例**：
+```yaml
+global:
+  # ...
+  multiSpec:
+  # 在亲和性标签为 `mid` 的节点部署第一种规格的Pod
+  - name: "ds-worker-mid"
+    affinityLabel: "mid"
+    resources:
+      limits:
+        cpu: "3"
+        memory: "4Gi"
+      requests:
+        cpu: "3"
+        memory: "4Gi"
+    workerResources:
+      sharedMemory: 1024
+  # 在亲和性标签为 `small` 的节点部署第二种规格的Pod
+  - name: "ds-worker-small"
+    affinityLabel: "small"
+    resources:
+      limits:
+        cpu: "2"
+        memory: "3Gi"
+      requests:
+        cpu: "1"
+        memory: "2Gi"
+    workerResources:
+      sharedMemory: 1024
+  # 在亲和性标签为 `big` 的节点部署第三种规格的Pod
+  - name: "ds-worker-big"
+    affinityLabel: "big"
+    resources:
+      limits:
+        cpu: "5"
+        memory: "6Gi"
+      requests:
+        cpu: "4"
+        memory: "5Gi"
+    workerResources:
+      sharedMemory: 2048
+```
+
+
+### Kubernetes精细化控制配置
+
+## 约束
+
+### 共享内存生命周期相关约束
+
+在 Kubernetes 部署场景下，Client 与 Worker 之间通过共享内存进行本地零拷贝访问时，需要额外关注共享内存生命周期对 Pod 内存计量的影响。
+
+当 Client 仍持有某段共享内存的本地映射时，即使对应的旧 Worker 进程已经退出，这段共享内存也不会被内核立即回收。如果此时马上重启 Worker，新 Worker 在启动阶段会重新申请配置的共享内存；对于开启 UB 或开启共享内存大页的场景，这部分共享内存会在部署 Worker 时被实际申请。此时，旧 Worker 遗留但尚未释放的共享内存与新 Worker 新申请的共享内存会同时计入 Pod 内存使用量，可能导致 Pod 触发 OOM，进而使新 Worker 被 Kubernetes 杀死。
+
+该约束在以下场景中更容易触发：
+
+- Client 和 Worker 部署在不同 Pod，Client 持续连接本地 Worker 执行 Set/Get。
+- 业务仍持有共享内存 buffer 映射时，旧 Worker 被 `kill -9` 或异常退出。
+- 旧 Worker 退出后立即启动新 Worker。
+- 部署启用了 UB，或启用了共享内存大页。
+
+建议遵循以下约束：
+
+- 如果业务场景要求 Worker 可快速重启，应避免在 Client 长时间持有大块共享内存映射时直接重启本地 Worker。
+- 在需要提升可用性的场景，建议 Client 启用备用节点连接能力，使本地 Worker 重启失败时，Client 可切换到备用节点继续执行请求。
+- `global.resources.datasystemWorker.sharedMemory` 除了需要小于 `global.resources.datasystemWorker.requests.memory` 外，在资源充足的情况下，还建议控制在 Pod 内存上限的 `1/2` 以下，以便为 Worker 故障重启窗口中的共享内存重叠占用预留空间。
+
+需要注意：
+
+- 该问题的本质是共享内存生命周期约束，而不是 Worker 启动流程本身的普通配置错误。
+- 只有在 Client 释放对应共享内存引用后，旧 Worker 遗留的共享内存才可能被内核回收；在此之前，重复重启 Worker 仍可能持续触发 OOM。
+- 是否开启 UB、共享内存大页、以及共享内存容量配置，都会影响该问题出现的概率和严重程度。
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.annotations | object | `{}` | Kubernetes 元注解 |
+| global.enableNonPreemptive | bool | `false` | 配置priorityClass。如果该值为false，则默认priorityClass为system-cluster-key。如果为true，则会创建一个preemptionPolicy Never的priorityClass |
+| global.fsGid | string | `"1002"` | fsGroup配置。容器的所有进程也是附加组ID的一部分 |
+| global.security.scEncryptSecretKey | string | `1800` | 流缓存的加密密钥，密钥长度最多为1024字节，解密后必须为32字节 |
